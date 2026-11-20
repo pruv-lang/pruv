@@ -1,0 +1,315 @@
+// M8 resident accounting state. Turn order slots are live when their ordinal matches.
+pub struct Budget {
+  id: String,
+  state: i64,
+  unlimited: i64,
+  reason: i64,
+  limit_delegations: i64,
+  limit_commands: i64,
+  limit_reviews: i64,
+  limit_checks: i64,
+  delegations: i64,
+  commands: i64,
+  reviews: i64,
+  checks: i64,
+  tools: i64,
+  failures: i64,
+  retries: i64,
+}
+pub struct Turn { ordinal: i64, activities: HashMap<String, i64>, activity_order: Vec<String> }
+pub struct St {
+  sessions: HashMap<String, Budget>, session_order: Vec<String>,
+  turns: HashMap<String, Turn>, turn_order: Vec<String>
+}
+pub struct Key { s: String, offset: i64, budget_id: bool }
+pub struct Reply { words: Vec<i64>, keys: Vec<Key> }
+
+fn owned_text(key: str) -> String ! alloc {
+  return string_push_str(string_new(), key);
+}
+
+fn empty_reply() -> Reply ! alloc {
+  return Reply { words: vec_new::<i64>(), keys: vec_new::<Key>() };
+}
+
+fn emit(inout reply: Reply, value: i64) -> () ! alloc {
+  if len(reply.words) < 1099511627776 {
+    reply.words = vec_push::<i64>(move reply.words, value);
+  }
+}
+
+fn emit_key(inout reply: Reply, key: str, budget_id: bool) -> () ! alloc {
+  if len(reply.keys) < 1099511627776 {
+    let offset: i64 = len(reply.words);
+    reply.keys = vec_push::<Key>(move reply.keys, Key { s: owned_text(key), offset: offset, budget_id: budget_id });
+  }
+}
+
+// `what[key] ?? 0` for key slot k (0..4)
+fn amount(what: [i64], k: i64) -> i64
+  requires len(what) == 10 && 0 <= k && k <= 4
+{
+  if what[2 * k] != 2 { return 0; }
+  return what[2 * k + 1];
+}
+
+// u + a when both and the sum are JS safe integers, else BAD (the ResourceBound signal)
+fn bad() -> i64 { return -4611686018427387904; }
+
+fn sum(u: i64, a: i64) -> i64
+{
+  if u < -9007199254740991 || u > 9007199254740991 { return bad(); }
+  if a < -9007199254740991 || a > 9007199254740991 { return bad(); }
+  let r: i64 = u + a;
+  if r < -9007199254740991 || r > 9007199254740991 { return bad(); }
+  return r;
+}
+
+fn charge(inout b: Budget, what: [i64]) -> i64
+  requires len(what) == 10
+{
+  let s: i64 = b.state;
+  if s == 2 { return 1; }
+  if s == 1 {
+    let r: i64 = b.reason;
+    if r < 0 { return 17; }
+    if r > 4 { return 2; }
+    return 16 + r;
+  }
+  if s != 0 { return 2; }
+  let unl: bool = b.unlimited == 1;
+  // each amount is read once; keys in BUDGET_COUNT_KEYS order, then retries
+  let a0: i64 = amount(what, 0);
+  let a1: i64 = amount(what, 1);
+  let a2: i64 = amount(what, 2);
+  let a3: i64 = amount(what, 3);
+  let a4: i64 = amount(what, 4);
+  // limit checks: the first key over its limit refuses (32 + k); a ResourceBound on the way answers 5
+  if !unl {
+    if a0 > 0 { let t0: i64 = sum(b.delegations, a0); if t0 == bad() { return 5; } if t0 > b.limit_delegations { return 33; } }
+    if a1 > 0 { let t1: i64 = sum(b.commands, a1); if t1 == bad() { return 5; } if t1 > b.limit_commands { return 34; } }
+    if a2 > 0 { let t2: i64 = sum(b.reviews, a2); if t2 == bad() { return 5; } if t2 > b.limit_reviews { return 35; } }
+    if a3 > 0 { let t3: i64 = sum(b.checks, a3); if t3 == bad() { return 5; } if t3 > b.limit_checks { return 36; } }
+  }
+  // all sums first, then the writes (atomic: a ResourceBound leaves the record untouched)
+  let v0: i64 = sum(b.delegations, a0);
+  let v1: i64 = sum(b.commands, a1);
+  let v2: i64 = sum(b.reviews, a2);
+  let v3: i64 = sum(b.checks, a3);
+  let v4: i64 = sum(b.retries, a4);
+  if v0 == bad() || v1 == bad() || v2 == bad() || v3 == bad() || v4 == bad() { return 5; }
+  b.delegations = v0;
+  b.commands = v1;
+  b.reviews = v2;
+  b.checks = v3;
+  b.retries = v4;
+  return 0;
+}
+
+pub fn t_put(inout st: St, sid: str, bid: str, words: [i64]) -> i64 ! alloc {
+  if len(words) != 14 { return 2; }
+  if words[0] < -1 || words[0] > 2 || words[1] < 0 || words[1] > 1 ||
+     words[2] < -1 || words[2] > 4 { return 2; }
+  if len(st.sessions) >= 1099511627776 { return 5; }
+  match map_get::<String, Budget>(st.sessions, sid) {
+    Some(existing) => {}
+    None => {
+      if len(st.session_order) >= 1099511627776 { return 5; }
+      st.session_order = vec_push::<String>(move st.session_order, owned_text(sid));
+    }
+  }
+  st.sessions = map_insert::<String, Budget>(move st.sessions, owned_text(sid), Budget {
+    id: owned_text(bid),
+    state: words[0],
+    unlimited: words[1],
+    reason: words[2],
+    limit_delegations: words[3],
+    limit_commands: words[4],
+    limit_reviews: words[5],
+    limit_checks: words[6],
+    delegations: words[7],
+    commands: words[8],
+    reviews: words[9],
+    checks: words[10],
+    tools: words[11],
+    failures: words[12],
+    retries: words[13],
+  });
+  return 0;
+}
+
+fn emit_budget(inout reply: Reply, b: Budget) -> () ! alloc {
+  emit(inout reply, 0); // The driver fills the wire length when encoding the budget ID.
+  emit(inout reply, b.state);
+  emit(inout reply, b.unlimited);
+  emit(inout reply, b.reason);
+  emit(inout reply, b.limit_delegations);
+  emit(inout reply, b.limit_commands);
+  emit(inout reply, b.limit_reviews);
+  emit(inout reply, b.limit_checks);
+  emit(inout reply, b.delegations);
+  emit(inout reply, b.commands);
+  emit(inout reply, b.reviews);
+  emit(inout reply, b.checks);
+  emit(inout reply, b.tools);
+  emit(inout reply, b.failures);
+  emit(inout reply, b.retries);
+  emit_key(inout reply, string_to_str(b.id), true);
+}
+
+fn current(b: Budget, bid: str) -> bool {
+  return b.state >= 0 && string_eq(b.id, bid);
+}
+
+pub fn t_account(inout st: St, code: i64, sid: str, bid: str, what: [i64]) -> i64 {
+  if code != 1 && code != 2 { return 2; }
+  if code == 1 && len(what) != 10 { return 2; }
+  let mut status: i64 = code % 2;
+  match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+    Some(b) => { status = account(inout b, code, bid, what); }
+    None => {}
+  }
+  return status;
+}
+
+fn account(inout b: Budget, code: i64, bid: str, what: [i64]) -> i64
+  requires (code == 1 || code == 2) && (code != 1 || len(what) == 10)
+{
+  if !current(b, bid) { return code % 2; }
+  if code == 1 { return charge(inout b, what); }
+  let value: i64 = sum(b.failures, 1);
+  if value == bad() { return 5; }
+  b.failures = value;
+  return 0;
+}
+
+// The caller checks deduplication before reaching either insertion path.
+fn insert_activity(inout tool: Turn, key: str) -> i64 ! alloc {
+  let ordinal: i64 = len(tool.activity_order);
+  if ordinal >= 1099511627776 || len(tool.activities) >= 1099511627776 { return -1; }
+  tool.activity_order = vec_push::<String>(move tool.activity_order, owned_text(key));
+  tool.activities = map_insert::<String, i64>(move tool.activities, owned_text(key), ordinal);
+  return 1;
+}
+
+fn add_tool(inout st: St, key: str, activity: str) -> i64 ! alloc {
+  let mut fresh: bool = false;
+  let mut value: i64 = 0;
+  match map_get_mut::<String, Turn>(inout st.turns, key) {
+    Some(tool) => { value = insert_activity(inout tool, activity); }
+    None => { fresh = true; }
+  }
+  if value < 0 { return 2; }
+  if !fresh { return value; }
+  let ordinal: i64 = len(st.turn_order);
+  if ordinal >= 1099511627776 || len(st.turns) >= 1099511627776 { return 2; }
+  let mut tool: Turn = Turn { ordinal: ordinal, activities: map_new::<String, i64>(),
+                              activity_order: vec_new::<String>() };
+  let added: i64 = insert_activity(inout tool, activity);
+  if added != 1 { return 2; }
+  st.turn_order = vec_push::<String>(move st.turn_order, owned_text(key));
+  st.turns = map_insert::<String, Turn>(move st.turns, owned_text(key), move tool);
+  return added;
+}
+
+fn emit_tools(inout reply: Reply, tool: Turn) -> () ! alloc {
+  emit(inout reply, len(tool.activities));
+  let n: i64 = len(tool.activity_order);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(tool.activity_order)
+    decreases n - i
+  {
+    match map_get::<String, i64>(tool.activities, vec_get::<String>(tool.activity_order, i)) {
+      Some(ordinal) => {
+        if ordinal == i { emit_key(inout reply, vec_get::<String>(tool.activity_order, i), false); }
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+}
+
+fn emit_turns(inout reply: Reply, st: St) -> () ! alloc {
+  emit(inout reply, len(st.turns));
+  let n: i64 = len(st.turn_order);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(st.turn_order)
+    decreases n - i
+  {
+    match map_get::<String, Turn>(st.turns, vec_get::<String>(st.turn_order, i)) {
+      Some(item) => {
+        if item.ordinal == i {
+          emit_key(inout reply, vec_get::<String>(st.turn_order, i), false);
+          emit_tools(inout reply, item);
+        }
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+}
+
+pub fn t_tool(inout st: St, sid: str, bid: str, key: str, activity: str) -> i64 ! alloc {
+  match map_get::<String, Turn>(st.turns, key) {
+    Some(turn) => {
+      match map_get::<String, i64>(turn.activities, activity) {
+        Some(existing) => { return 0; }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  // Refuse before consuming the key. A stale budget still consumes it.
+  let mut value: i64 = bad();
+  match map_get::<String, Budget>(st.sessions, sid) {
+    Some(b) => {
+      if current(b, bid) {
+        value = sum(b.tools, 1);
+        if value == bad() { return 5; }
+      }
+    }
+    None => {}
+  }
+  let added: i64 = add_tool(inout st, key, activity);
+  if added != 1 { return 5; }
+  if value != bad() {
+    match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+      Some(b) => { b.tools = value; }
+      None => {}
+    }
+  }
+  return 0;
+}
+
+pub fn t_forget(inout st: St, key: str) -> i64 {
+  let removed: bool = map_remove::<String, Turn>(inout st.turns, key);
+  return 0;
+}
+
+fn emit_sessions(inout reply: Reply, st: St) -> () ! alloc {
+  emit(inout reply, len(st.sessions));
+  let mut i: i64 = 0;
+  while i < len(st.session_order)
+    invariant 0 <= i && i <= len(st.session_order)
+    decreases len(st.session_order) - i
+  {
+    match map_get::<String, Budget>(st.sessions, vec_get::<String>(st.session_order, i)) {
+      Some(b) => {
+        emit_key(inout reply, vec_get::<String>(st.session_order, i), false);
+        emit_budget(inout reply, b);
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+}
+
+pub fn t_observe(inout st: St) -> Reply ! alloc {
+  let mut reply: Reply = empty_reply();
+  emit_sessions(inout reply, st);
+  emit(inout reply, 0); // No clocks in M8.
+  emit_turns(inout reply, st);
+  return reply;
+}

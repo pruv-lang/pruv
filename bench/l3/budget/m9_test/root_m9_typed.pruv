@@ -1,0 +1,363 @@
+// Resident M9 state. Ordinals distinguish live entries from deleted order slots.
+pub struct Budget {
+  id: String, state: i64, unlimited: bool, minutes: i64,
+  active_ms: i64, since_kind: i64, since: i64, ordinal: i64
+}
+pub struct Clock {
+  owner: String, ordinal: i64, has_since: bool, since: i64, armed: bool,
+  active: i64, runs: HashMap<String, i64>, order: Vec<String>
+}
+// A run map value is 2 * its insertion ordinal + its waiting flag.
+pub struct St {
+  sessions: HashMap<String, Budget>, session_order: Vec<String>,
+  clocks: HashMap<String, Clock>, clock_order: Vec<String>
+}
+pub struct Effect { tag: i64, requested: i64, effective: i64 }
+pub struct CallReply { status: i64, effects: Vec<Effect> }
+pub struct Key { s: String, offset: i64, packed: bool }
+pub struct Observation { words: Vec<i64>, keys: Vec<Key> }
+
+fn owned(s: str) -> String ! alloc {
+  return string_push_str(string_new(), s);
+}
+
+pub fn t_put(inout st: St, sid: str, bid: str, state: i64, unlimited: bool,
+             minutes: i64, active_ms: i64, since_kind: i64, since: i64) -> i64 ! alloc {
+  let mut ordinal: i64 = len(st.session_order);
+  match map_get::<String, Budget>(st.sessions, sid) {
+    Some(b) => { ordinal = b.ordinal; }
+    None => {
+      if len(st.session_order) >= 1099511627776 || len(st.sessions) >= 1099511627776 { return 2; }
+      st.session_order = vec_push::<String>(move st.session_order, owned(sid));
+    }
+  }
+  if len(st.sessions) >= 1099511627776 { return 2; }
+  st.sessions = map_insert::<String, Budget>(move st.sessions, owned(sid),
+    Budget { id: owned(bid), state: state, unlimited: unlimited, minutes: minutes,
+      active_ms: active_ms, since_kind: since_kind, since: since, ordinal: ordinal });
+  return 0;
+}
+
+fn bounded(x: i64) -> i64
+  ensures -9007199254740991 <= result && result <= 9007199254740991
+{
+  if x < -9007199254740991 { return -9007199254740991; }
+  if x > 9007199254740991 { return 9007199254740991; }
+  return x;
+}
+
+fn limit(b: Budget) -> i64
+  ensures -9000000000000000000 <= result && result <= 9000000000000000000
+{
+  let mut minutes: i64 = b.minutes;
+  if minutes < -150000000000000 { minutes = -150000000000000; }
+  if minutes > 150000000000000 { minutes = 150000000000000; }
+  return minutes * 60000;
+}
+
+fn effect(inout r: CallReply, tag: i64, requested: i64, effective: i64) -> () ! alloc {
+  if len(r.effects) < 1099511627776 {
+    r.effects = vec_push::<Effect>(move r.effects, Effect { tag: tag, requested: requested, effective: effective });
+  }
+}
+
+fn disarm(inout c: Clock, inout r: CallReply, tag: i64) -> () ! alloc {
+  if c.armed { effect(inout r, tag, 0, 0); }
+  c.armed = false;
+}
+
+fn settle(inout b: Budget, inout c: Clock, sid: str, now: i64, inout r: CallReply) -> () ! alloc {
+  if !string_eq(c.owner, sid) { return; }
+  disarm(inout c, inout r, 13);
+  if !c.has_since { return; }
+  let elapsed: i64 = bounded(now) - bounded(c.since);
+  if elapsed > 0 { b.active_ms = bounded(bounded(b.active_ms) + elapsed); }
+  else { b.active_ms = bounded(b.active_ms); }
+  c.has_since = false;
+  c.since = 0;
+  b.since_kind = 0;
+  b.since = 0;
+}
+
+fn begin(inout b: Budget, inout c: Clock, now: i64) -> () {
+  let t: i64 = bounded(now);
+  c.has_since = true;
+  c.since = t;
+  b.since_kind = 2;
+  b.since = t;
+}
+
+fn arm(inout b: Budget, inout c: Clock, sid: str, now: i64, inout r: CallReply) -> () ! alloc {
+  if b.unlimited { return; }
+  let left: i64 = limit(b) - bounded(b.active_ms);
+  if left <= 0 {
+    c.armed = false;
+    settle(inout b, inout c, sid, now, inout r);
+    r.status = 4;
+    return;
+  }
+  let mut delay: i64 = left;
+  if left > 2147483647 { delay = 1; }
+  c.armed = true;
+  effect(inout r, 12, left, delay);
+}
+
+fn refresh(inout b: Budget, inout c: Clock, sid: str, now: i64, inout r: CallReply) -> () ! alloc {
+  let consuming: bool = b.state == 0 && c.active > 0;
+  if consuming == c.has_since { return; }
+  if consuming {
+    begin(inout b, inout c, now);
+    arm(inout b, inout c, sid, now, inout r);
+  } else { settle(inout b, inout c, sid, now, inout r); }
+}
+
+fn bump(inout c: Clock, delta: i64) -> () {
+  if 0 <= c.active && c.active <= 1099511627776 && -1 <= delta && delta <= 1 {
+    c.active = c.active + delta;
+  }
+}
+
+fn change_run(inout c: Clock, code: i64, key: str, waiting: bool) -> bool ! alloc {
+  let mut delta: i64 = 0;
+  let mut changed: bool = false;
+  let mut found: bool = false;
+  match map_get_mut::<String, i64>(inout c.runs, key) {
+    Some(run) => {
+      found = true;
+      if 0 <= *run && *run < 2199023255552 {
+        let was: bool = *run % 2 == 1;
+        if code == 3 {
+          if !was { delta = -1; }
+          changed = true;
+        } else if was != waiting {
+          *run = 2 * (*run / 2);
+          delta = 1;
+          if waiting {
+            *run = *run + 1;
+            delta = -1;
+          }
+          changed = true;
+        }
+      }
+    }
+    None => {}
+  }
+  if code == 3 && found {
+    let removed: bool = map_remove::<String, i64>(inout c.runs, key);
+    if len(c.runs) == 0 { vec_clear::<String>(inout c.order); }
+  }
+  if code == 1 && !found {
+    let ordinal: i64 = len(c.order);
+    if ordinal >= 1099511627776 || len(c.runs) >= 1099511627776 { return false; }
+    c.order = vec_push::<String>(move c.order, owned(key));
+    c.runs = map_insert::<String, i64>(move c.runs, owned(key), 2 * ordinal);
+    delta = 1;
+  }
+  bump(inout c, delta);
+  return code == 1 || changed;
+}
+
+fn current(st: St, sid: str, bid: str) -> bool {
+  match map_get::<String, Budget>(st.sessions, sid) {
+    Some(b) => { return b.state >= 0 && string_eq(b.id, bid); }
+    None => { return false; }
+  }
+}
+
+pub fn t_call(inout st: St, code: i64, sid: str, bid: str, run: str,
+              waiting: bool, now: i64) -> CallReply ! alloc {
+  let mut r: CallReply = CallReply { status: 0, effects: vec_new::<Effect>() };
+  if code < 1 || code > 7 { r.status = 2; return r; }
+  let valid: bool = current(st, sid, bid);
+  if code == 1 && !valid { return r; }
+  if code == 1 {
+    let mut missing: bool = false;
+    match map_get::<String, Clock>(st.clocks, bid) {
+      Some(c) => {}
+      None => { missing = true; }
+    }
+    if missing {
+      let ordinal: i64 = len(st.clock_order);
+      if ordinal >= 1099511627776 || len(st.clocks) >= 1099511627776 { r.status = 2; return r; }
+      st.clock_order = vec_push::<String>(move st.clock_order, owned(bid));
+      st.clocks = map_insert::<String, Clock>(move st.clocks, owned(bid),
+        Clock { owner: owned(sid), ordinal: ordinal, has_since: false, since: 0, armed: false,
+          active: 0, runs: map_new::<String, i64>(), order: vec_new::<String>() });
+    }
+  }
+  match map_get_mut::<String, Clock>(inout st.clocks, bid) {
+    Some(c) => {
+      let mut update: bool = code == 7;
+      if code == 1 || code == 2 || code == 3 {
+        update = change_run(inout c, code, run, code == 2 && waiting);
+      }
+      if code == 4 { disarm(inout c, inout r, 14); }
+      if valid {
+        match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+          Some(b) => {
+            if update { refresh(inout b, inout c, sid, now, inout r); }
+            if code == 4 && b.state == 0 && !b.unlimited {
+              settle(inout b, inout c, sid, now, inout r);
+              if bounded(b.active_ms) < limit(b) && len(c.runs) > 0 {
+                begin(inout b, inout c, now);
+                arm(inout b, inout c, sid, now, inout r);
+              } else { r.status = 4; }
+            }
+            if code == 6 {
+              settle(inout b, inout c, sid, now, inout r);
+              b.state = 2;
+            }
+          }
+          None => {}
+        }
+      }
+      if code == 5 || code == 6 { disarm(inout c, inout r, 13); }
+    }
+    None => {
+      if valid && (code == 4 || code == 6) {
+        match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+          Some(b) => {
+            if code == 6 { b.state = 2; }
+            else if b.state == 0 && !b.unlimited { r.status = 4; }
+          }
+          None => {}
+        }
+      }
+    }
+  }
+  if code == 5 || code == 6 {
+    let removed: bool = map_remove::<String, Clock>(inout st.clocks, bid);
+    if len(st.clocks) == 0 { vec_clear::<String>(inout st.clock_order); }
+  }
+  return r;
+}
+
+fn word(inout o: Observation, value: i64) -> () ! alloc {
+  if len(o.words) < 1099511627776 {
+    o.words = vec_push::<i64>(move o.words, value);
+  }
+}
+
+fn key(inout o: Observation, value: str, packed: bool) -> () ! alloc {
+  if len(o.keys) < 1099511627776 {
+    let offset: i64 = len(o.words);
+    o.keys = vec_push::<Key>(move o.keys, Key { s: owned(value), offset: offset, packed: packed });
+  }
+}
+
+fn observe_sessions(st: St, inout o: Observation) -> () ! alloc {
+  word(inout o, len(st.sessions));
+  let n: i64 = len(st.session_order);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(st.session_order)
+    decreases n - i
+  {
+    match map_get::<String, Budget>(st.sessions, vec_get::<String>(st.session_order, i)) {
+      Some(b) => {
+        key(inout o, vec_get::<String>(st.session_order, i), false);
+        word(inout o, 0); // The host fills the packed record length.
+        word(inout o, b.state);
+        if b.unlimited { word(inout o, 1); } else { word(inout o, 0); }
+        word(inout o, b.minutes);
+        word(inout o, b.active_ms);
+        word(inout o, b.since_kind);
+        word(inout o, b.since);
+        key(inout o, string_to_str(b.id), true);
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+}
+
+fn observe_clock(c: Clock, inout o: Observation) -> () ! alloc {
+  key(inout o, string_to_str(c.owner), false);
+  if c.has_since { word(inout o, 1); } else { word(inout o, 0); }
+  word(inout o, c.since);
+  if c.armed { word(inout o, 1); } else { word(inout o, 0); }
+  word(inout o, c.active);
+  word(inout o, len(c.runs));
+  let n: i64 = len(c.order);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(c.order)
+    decreases n - i
+  {
+    match map_get::<String, i64>(c.runs, vec_get::<String>(c.order, i)) {
+      Some(run) => {
+        if run >= 0 && run / 2 == i {
+          key(inout o, vec_get::<String>(c.order, i), false);
+          if run % 2 == 1 { word(inout o, 1); } else { word(inout o, 0); }
+        }
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+}
+
+pub fn t_observe(inout st: St) -> Observation ! alloc {
+  let mut o: Observation = Observation { words: vec_new::<i64>(), keys: vec_new::<Key>() };
+  observe_sessions(st, inout o);
+  word(inout o, len(st.clocks));
+  let n: i64 = len(st.clock_order);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(st.clock_order)
+    decreases n - i
+  {
+    match map_get::<String, Clock>(st.clocks, vec_get::<String>(st.clock_order, i)) {
+      Some(c) => {
+        if c.ordinal == i {
+          key(inout o, vec_get::<String>(st.clock_order, i), false);
+          observe_clock(c, inout o);
+        }
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+  word(inout o, 0);
+  return o;
+}
+
+fn recount(c: Clock) -> i64
+  ensures 0 <= result && result <= 1099511627776
+{
+  let n: i64 = len(c.order);
+  let mut i: i64 = 0;
+  let mut active: i64 = 0;
+  while i < n
+    invariant 0 <= active && active <= i && i <= n && n == len(c.order) && n <= 1099511627776
+    decreases n - i
+  {
+    match map_get::<String, i64>(c.runs, vec_get::<String>(c.order, i)) {
+      Some(run) => {
+        if run >= 0 && run / 2 == i && run % 2 == 0 { active = active + 1; }
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+  return active;
+}
+
+pub fn t_i2(inout st: St) -> i64 {
+  let n: i64 = len(st.clock_order);
+  let mut i: i64 = 0;
+  let mut bad: i64 = 0;
+  while i < n
+    invariant 0 <= bad && bad <= i && i <= n && n == len(st.clock_order) && n <= 1099511627776
+    decreases n - i
+  {
+    match map_get::<String, Clock>(st.clocks, vec_get::<String>(st.clock_order, i)) {
+      Some(c) => {
+        if c.ordinal == i && recount(c) != c.active { bad = bad + 1; }
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+  return bad;
+}

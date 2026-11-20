@@ -74,9 +74,16 @@ fn dec(b: &[u8], out: &mut Vec<i64>) {
 }
 
 struct World<const CHECK_I2: bool> {
+    #[cfg(not(m9_typed))]
     st: Vec<i64>,
+    #[cfg(m9_typed)]
+    st: sol::St,
+    #[cfg(m9_typed)]
+    keys: [String; 3],
     out: Vec<i64>,
+    #[cfg(not(m9_typed))]
     bv: Vec<i64>,
+    #[cfg(not(m9_typed))]
     tmp: Vec<i64>,
     fx: Vec<i64>,
     now: i64,
@@ -150,7 +157,8 @@ fn enc_key(op: &[i64], p: usize, out: &mut Vec<u8>) {
 }
 
 impl<const CHECK_I2: bool> World<CHECK_I2> {
-    fn new() -> Self {
+    #[cfg(not(m9_typed))]
+    fn new_state() -> Vec<i64> {
         let mut st = vec![0i64; 256];
         let r = sol::t_init(&mut st);
         if r > 0 {
@@ -160,10 +168,18 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
                 std::process::exit(2);
             }
         }
+        st
+    }
+
+    fn new() -> Self {
         World {
-            st,
+            st: Self::new_state(),
+            #[cfg(m9_typed)]
+            keys: Default::default(),
             out: vec![0; 4096],
+            #[cfg(not(m9_typed))]
             bv: vec![0; 8],
+            #[cfg(not(m9_typed))]
             tmp: vec![0; 256],
             fx: vec![0; 16],
             now: 1700000000000,
@@ -179,6 +195,7 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
         }
     }
 
+    #[cfg(not(m9_typed))]
     fn grow(&mut self, n: usize) {
         let want = n; // N from Pruv (bud_store::need, N >= 2*len): the host makes no sizing choice (L3 P13b)
         let mut fresh = vec![0i64; want];
@@ -189,6 +206,7 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
         self.st = fresh;
     }
 
+    #[cfg(not(m9_typed))]
     fn put(&mut self, op: &[i64]) {
         for _ in 0..4 {
             let r = sol::t_put(&mut self.st, op, &mut self.out);
@@ -210,9 +228,19 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
         std::process::exit(2);
     }
 
+    #[cfg(not(m9_typed))]
+    fn i2(&mut self) -> i64 {
+        sol::t_i2(&self.st)
+    }
+
+    #[cfg(not(m9_typed))]
+    fn live(&self) -> (i64, usize) {
+        (sol::t_live(&self.st), self.st.len())
+    }
+
     fn check_i2(&mut self) {
         self.i2_checks += 1;
-        let bad = sol::t_i2(&self.st);
+        let bad = self.i2();
         if bad != 0 {
             self.i2_bad += 1;
             self.log.push(format!("I2 {}", bad));
@@ -224,9 +252,8 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
         self.call_k(op, None)
     }
 
-    // `key`: the budgetId bytes of op when the host already has them (a timer callback keeps its captured ref's
-    // scheduler key); otherwise they are encoded from the op's packed record.
-    fn call_k(&mut self, op: &[i64], key: Option<&[u8]>) -> i64 {
+    #[cfg(not(m9_typed))]
+    fn invoke(&mut self, op: &[i64]) -> i64 {
         let mut r = 0;
         for _ in 0..4 {
             self.fx[0] = 0;
@@ -240,6 +267,12 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
             }
             break;
         }
+        r
+    }
+
+    // `key`: a timer callback already holds its captured ref's scheduler key.
+    fn call_k(&mut self, op: &[i64], key: Option<&[u8]>) -> i64 {
+        let r = self.invoke(op);
         if r < 0 || r == 2 || r == 3 {
             if !self.quiet {
                 self.log.push(format!("X {}", r));
@@ -386,18 +419,27 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
         }
     }
 
-    fn observe(&mut self) -> String {
+    #[cfg(not(m9_typed))]
+    fn observation(&mut self) -> Result<&[i64], i64> {
         let need = std::cmp::max(4096, 2 * self.st.len());
         if self.out.len() < need {
             self.out.resize(need, 0);
         }
         let r = sol::t_observe(&self.st, &mut self.out);
         if r != 0 {
-            return format!("O X {}", r);
+            return Err(r);
         }
         let n = self.out[0].max(0) as usize;
+        Ok(&self.out[1..1 + n])
+    }
+
+    fn observe(&mut self) -> String {
+        let words = match self.observation() {
+            Ok(words) => words,
+            Err(r) => return format!("O X {}", r),
+        };
         let mut s = String::from("O");
-        for x in &self.out[1..1 + n] {
+        for x in words {
             s.push(' ');
             s.push_str(&x.to_string());
         }
@@ -475,7 +517,8 @@ fn run_q() {
                 }
             }
             "inspect" => {
-                w.log.push(format!("L {} {}", sol::t_live(&w.st), w.st.len()));
+                let (live, capacity) = w.live();
+                w.log.push(format!("L {} {}", live, capacity));
                 let snapshot = w.observe();
                 w.log.push(format!("V {}", snapshot));
             }
