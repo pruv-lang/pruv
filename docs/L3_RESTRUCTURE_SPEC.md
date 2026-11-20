@@ -8987,7 +8987,7 @@ One audit (Codex gpt-6.2-astra, delegation 98cae418) on 79862ea; must-fix findin
 
 Q after 4adc42e (worker run, rs and py): 300 exact / 0 cut / 0 fail, 428 raises + 598 decides, H01-H10 and the four
 audit cases exact against the flat lane, `same` 53194 bytes identical.
-Recheck: one recheck of 4adc42e (Codex gpt-6.2 astra) was still running at commit time; any must-fix it finds is remaining work, not a new fix pass (the one fix attempt is used).
+Recheck (Codex gpt-6.2 astra, static read of 4adc42e against the flat lane and the reference, no runs): findings 1, 2, 3, 4, 6 and the `begin` `since_text` clear are fixed; no new must-fix. Finding 5 stays open (gap 1).
 
 ### P31T4.7 Remaining (step 2, not started)
 
