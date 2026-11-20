@@ -7,7 +7,7 @@ pub struct Ordinal { value: i64 }
 pub struct St {
   sessions: HashMap<String, crate::bud_tstate::Budget>,
   ordinals: HashMap<String, Ordinal>, next_session: i64,
-  clock_state: crate::bud_tstate::ClockState, out: crate::bud_tstate::Out, unit: Vec<i64>
+  clock_state: crate::bud_tstate::ClockState, out: crate::bud_tstate::Out
 }
 
 fn take_budget(budget: crate::bud_tstate::Budget) -> crate::bud_tstate::Budget ! alloc
@@ -32,8 +32,9 @@ pub fn t_put(inout st: St, sid: str, budget: crate::bud_tstate::Budget) -> i64 !
   return 0;
 }
 
-fn apply_charge(inout st: St, sid: str, bid: str, now: i64, what: [i64]) -> crate::bud_tstate::Reply ! alloc, io
+pub fn t_charge(inout st: St, sid: str, bid: str, now: i64, charge: crate::bud_tstate::Charge) -> crate::bud_tstate::Reply ! alloc, io
 {
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
   let mut reply: crate::bud_tstate::Reply = crate::bud_tstate::Reply { status: 0, value: 5, a: 2, b: 0 };
   match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid) {
     Some(b) => {
@@ -43,8 +44,8 @@ fn apply_charge(inout st: St, sid: str, bid: str, now: i64, what: [i64]) -> crat
           reason = b.halt_reason;
           if reason < 0 { reason = 1; }
         }
-        if b.state == 0 && len(what) == 10 {
-          let charged: i64 = crate::bud_tstate::charge(inout b, what);
+        if b.state == 0 {
+          let charged: i64 = crate::bud_tstate::charge_typed(inout b, charge);
           if charged < 0 { reply.status = 2; }
           if charged > 0 {
             reason = charged;
@@ -63,16 +64,75 @@ fn apply_charge(inout st: St, sid: str, bid: str, now: i64, what: [i64]) -> crat
   return reply;
 }
 
-pub fn t_call(inout st: St, sid: str, bid: str, run: str, code: i64,
-              now: i64, flag: i64, what: [i64]) -> crate::bud_tstate::Reply ! alloc, io
+pub fn t_view(inout st: St, sid: str, bid: str, code: i64) -> crate::bud_tstate::Reply ! alloc
 {
   vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
-  if code == 1 || code == 2 || code == 5 { return crate::bud_tlife::view(inout st.sessions, inout st.out, sid, bid, code); }
-  if code == 6 { return crate::bud_tlife::maybe_close(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, now); }
-  if code == 7 { return apply_charge(inout st, sid, bid, now, what); }
-  if code >= 8 && code <= 11 { return crate::bud_tlife::run_event(inout st.sessions, inout st.clock_state, inout st.out, sid, bid, run, code, now, flag); }
-  if code == 12 { return crate::bud_tlife::explicit_halt(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, bid, now, flag); }
-  if code == 13 { return crate::bud_tdecide::raise(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, bid, now, flag, st.unit); }
-  if code == 14 { return crate::bud_tdecide::decide(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, bid, now, flag, st.unit); }
+  return crate::bud_tlife::view(inout st.sessions, inout st.out, sid, bid, code);
+}
+
+pub fn t_close(inout st: St, sid: str, now: i64) -> crate::bud_tstate::Reply ! alloc, io
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  return crate::bud_tlife::maybe_close(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, now);
+}
+
+pub fn t_run(inout st: St, sid: str, bid: str, run: str, code: i64, now: i64, flag: i64) -> crate::bud_tstate::Reply ! alloc, io
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  return crate::bud_tlife::run_event(inout st.sessions, inout st.clock_state, inout st.out, sid, bid, run, code, now, flag);
+}
+
+pub fn t_halt(inout st: St, sid: str, bid: str, now: i64, flag: i64) -> crate::bud_tstate::Reply ! alloc, io
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  return crate::bud_tlife::explicit_halt(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, bid, now, flag);
+}
+
+pub fn t_raise(inout st: St, sid: str, bid: str, now: i64, size: i64, unit: crate::bud_tstate::UnitAnswer) -> crate::bud_tstate::Reply ! alloc, io
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  return crate::bud_tdecide::raise(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, bid, now, size, unit);
+}
+
+pub fn t_decide(inout st: St, sid: str, bid: str, now: i64, flag: i64, unit: crate::bud_tstate::UnitAnswer) -> crate::bud_tstate::Reply ! alloc, io
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  return crate::bud_tdecide::decide(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, bid, now, flag, unit);
+}
+
+// Test-only packet decoding and rejection, shared with the direct-entry test lane.
+pub fn t_charge_words(what: [i64]) -> Option<crate::bud_tstate::Charge>
+{
+  if len(what) != 10 { return None::<crate::bud_tstate::Charge>; }
+  return Some::<crate::bud_tstate::Charge>(crate::bud_tstate::charge_words(what));
+}
+
+pub fn t_unit_answer(unit: [i64]) -> crate::bud_tstate::UnitAnswer
+{
+  return crate::bud_tstate::unit_answer(unit);
+}
+
+pub fn t_invalid(inout st: St) -> crate::bud_tstate::Reply ! alloc
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
   return crate::bud_tstate::Reply { status: 2, value: 0, a: 0, b: 0 };
+}
+
+// Test-only adapter for the packet driver.
+pub fn t_call(inout st: St, sid: str, bid: str, run: str, code: i64,
+              now: i64, flag: i64, what: [i64], unit: [i64]) -> crate::bud_tstate::Reply ! alloc, io
+{
+  if code == 1 || code == 2 || code == 5 { return t_view(inout st, sid, bid, code); }
+  if code == 6 { return t_close(inout st, sid, now); }
+  if code == 7 {
+    match t_charge_words(what) {
+      Some(c) => { return t_charge(inout st, sid, bid, now, c); }
+      None => { return t_invalid(inout st); }
+    }
+  }
+  if code >= 8 && code <= 11 { return t_run(inout st, sid, bid, run, code, now, flag); }
+  if code == 12 { return t_halt(inout st, sid, bid, now, flag); }
+  if code == 13 { return t_raise(inout st, sid, bid, now, flag, t_unit_answer(unit)); }
+  if code == 14 { return t_decide(inout st, sid, bid, now, flag, t_unit_answer(unit)); }
+  return t_invalid(inout st);
 }

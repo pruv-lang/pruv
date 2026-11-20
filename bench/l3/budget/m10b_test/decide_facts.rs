@@ -1,5 +1,5 @@
 // P31 synchronous releaseHeld fact for decide/extend. The host answers whether a held continuation was released
-// (0 = none, 1 = released); every decision about it is made in bud_decide.pruv. The comparison lane queues the
+// (0 = none, 1 = released); every decision about it is made in bud_tdecide.pruv. The comparison lane queues the
 // oracle's answers and records each query (effect position, session ref, budget id, answer).
 
 use std::cell::{Cell, RefCell};
