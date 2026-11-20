@@ -1,5 +1,5 @@
 use record_text::{parse_put, perf_put, unit_record, Put};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
@@ -282,15 +282,11 @@ impl World {
             append_text(&mut words, &clock.owner);
             words.extend([i64::from(clock.has_since), clock.since, i64::from(clock.armed), clock.active]);
             words.push(clock.runs.len() as i64);
-            let mut seen = HashSet::new();
-            let runs: Vec<_> = clock.run_order.iter().rev()
-                .filter_map(|run| {
-                    let waiting = clock.runs.get(run)?;
-                    seen.insert(run).then_some((run, waiting))
-                }).collect();
-            for (run, waiting) in runs.into_iter().rev() {
+            let mut runs: Vec<_> = clock.runs.iter().collect();
+            runs.sort_unstable_by_key(|(_, seq)| seq.abs());
+            for (run, seq) in runs {
                 append_text(&mut words, run);
-                words.push(i64::from(*waiting));
+                words.push(i64::from(*seq < 0));
             }
         }
         let mut line = String::from("O");

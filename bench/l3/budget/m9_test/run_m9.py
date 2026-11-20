@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """L3-10 M9 runner: clock paths of the request budget (bud_clock.pruv) against the TS oracle.
 
-  python3 bench/l3/budget/m9_test/run_m9.py q    [--pruvc PATH | --gen GEN.rs] [--budlib DIR] [--cases F] [--oracle F]
+  python3 bench/l3/budget/m9_test/run_m9.py q    [--typed [--py]] [--pruvc PATH | --gen GEN.rs] [--cases F] [--oracle F]
   python3 bench/l3/budget/m9_test/run_m9.py derive [--family q3|q4] [--cases F]
   python3 bench/l3/budget/m9_test/run_m9.py dc [--count N] [--seed S]
-  python3 bench/l3/budget/m9_test/run_m9.py perf [--pruvc PATH | --gen GEN.rs] [--rounds N]
+  python3 bench/l3/budget/m9_test/run_m9.py perf [--typed [--py]] [--pruvc PATH | --gen GEN.rs] [--rounds N]
+  python3 bench/l3/budget/m9_test/run_m9.py churn --typed [--py]
 
 q: converts each Q3 case (work/m9/cases.jsonl) into the driver program, runs it, and compares with the oracle output
 (work/m9/oracle.jsonl). Compared: the timer event sequence (set token + requested delay, clear token, fire token,
@@ -30,6 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BUD = os.path.dirname(HERE)
 ROOT = os.path.abspath(os.path.join(BUD, "..", "..", ".."))
 WORK = os.path.join(BUD, "work", "m9")
+TYPED_WORK = os.path.join(HERE, "target", "m9")
 BUDLIB_WORK = os.path.join(WORK, "budlib")
 PRUVC_DEFAULT = os.path.join(ROOT, "pruvc-rs", "target", "release", "pruvc")
 STATE = {"open": 0, "halted": 1, "closed": 2}
@@ -41,32 +43,64 @@ def rustc():
     return shutil.which("rustc") or os.path.expanduser("~/.cargo/bin/rustc")
 
 
+def shared_checkout():
+    if not os.path.isfile(os.path.join(ROOT, ".git")) or not shutil.which("git"):
+        return ROOT
+    result = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                            cwd=ROOT, capture_output=True, text=True)
+    return os.path.dirname(result.stdout.strip()) if result.returncode == 0 else ROOT
+
+
+def compiler(args, root, gen, typed):
+    if typed and args.py:
+        checkout = shared_checkout()
+        python = os.path.join(checkout, ".venv", "bin", "python")
+        script = os.path.join(checkout, "pruvc", "pruvc.py")
+        return [python if os.path.isfile(python) else sys.executable, "-B", script, root, "-o", gen, "--backend", "rust"]
+    pruvc = args.pruvc or PRUVC_DEFAULT
+    if args.pruvc is None and not os.path.isfile(pruvc):
+        pruvc = os.path.join(shared_checkout(), os.path.relpath(PRUVC_DEFAULT, ROOT))
+    if typed:
+        return [pruvc, root, "-o", gen, "--emit", "rs"]
+    return [pruvc, root, "-o", gen, "--lib", args.budlib or "bench/l3/budget", "--lib", "bench/l3/lib"]
+
+
 def build(args):
+    typed = getattr(args, "typed", False)
     if args.out:
         work = os.path.abspath(args.out)
+    elif typed:
+        work = TYPED_WORK
     elif args.budlib is None:
         work = os.path.abspath(WORK)
     else:
         # a --budlib build without --out gets its own directory, so concurrent campaigns never share binaries (P23 H6)
         os.makedirs(BUDLIB_WORK, exist_ok=True)
         work = tempfile.mkdtemp(prefix="run-", dir=BUDLIB_WORK)
+    if typed:
+        work = os.path.join(work, "typed_py" if args.py else "typed")
+    suffix = "_typed" if typed else ""
     os.makedirs(work, exist_ok=True)
     gen = os.path.join(work, "gen.rs")
     if args.gen:
         if os.path.abspath(args.gen) != gen:
             shutil.copyfile(args.gen, gen)
     else:
-        c = subprocess.run([args.pruvc, "bench/l3/budget/m9_test/root_m9.pruv", "-o", gen,
-                            "--lib", args.budlib or "bench/l3/budget", "--lib", "bench/l3/lib"],
+        c = subprocess.run(compiler(args, os.path.join(HERE, f"root_m9{suffix}.pruv"), gen, typed),
                            cwd=ROOT, capture_output=True, text=True)
         if c.returncode != 0:
             sys.exit("pruvc failed:\n" + c.stdout[-2000:] + c.stderr[-2000:])
     main = os.path.join(work, "main_m9.rs")
     with open(main, "w") as f:
         f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n#[path = "gen.rs"] mod sol;\n')
-        f.write(open(os.path.join(HERE, "driver_m9.rs")).read())
-    exe = os.path.join(work, "driver_m9")
-    c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, main], capture_output=True,
+        driver = json.dumps(os.path.join(HERE, f"driver_m9{suffix}.rs"), ensure_ascii=False)
+        f.write(f"include!({driver});\n")
+    churn = typed and getattr(args, "cmd", None) == "churn"
+    exe = os.path.join(work, "churn_m9" if churn else "driver_m9")
+    cfg = ["--cfg", "m9_typed"] if typed else []
+    if churn:
+        cfg.append("--test")
+    c = subprocess.run([rustc(), *cfg, "-C", "opt-level=3", "--edition", "2021", "-o", exe, main], capture_output=True,
                        text=True)
     if c.returncode != 0:
         sys.exit("rustc failed:\n" + c.stderr[-4000:])
@@ -409,6 +443,10 @@ def cmd_q(args):
     return check_q(args, build(args))
 
 
+def cmd_churn(args):
+    return subprocess.run([build(args), "--exact", "churn_order"]).returncode
+
+
 def check_q(args, exe, report=print):
     cases = [json.loads(l) for l in open(args.cases)]
     oracle = {}
@@ -666,10 +704,15 @@ def cmd_perf(args):
     if c.returncode != 0:
         sys.exit("rustc failed (hand):\n" + c.stderr[-3000:])
     env = dict(os.environ)
-    env.update(TS_ENV())
-    ts = [NODE, "--experimental-strip-types", "--no-warnings", "--import", os.path.join(BUD, "reference-hooks.mjs"),
-          os.path.join(HERE, "perf_ts.mjs")]
-    sides = {"pruv": [exe, "perf"], "hand": [hand], "ts": ts}
+    if args.typed:
+        flat_args = vars(args) | {"typed": False, "py": False, "gen": None, "out": args.out or TYPED_WORK}
+        flat = build(argparse.Namespace(**flat_args))
+        sides = {"typed": [exe, "perf"], "flat": [flat, "perf"], "hand": [hand]}
+    else:
+        env.update(TS_ENV())
+        ts = [NODE, "--experimental-strip-types", "--no-warnings", "--import", os.path.join(BUD, "reference-hooks.mjs"),
+              os.path.join(HERE, "perf_ts.mjs")]
+        sides = {"pruv": [exe, "perf"], "hand": [hand], "ts": ts}
     res = {}
     for rd in range(args.rounds):
         for size in (10, 50, 100):
@@ -687,6 +730,15 @@ def cmd_perf(args):
     # overlap (min Pruv above max hand) is a hold and makes the command fail (P23 audit)
     want = {(i, s) for i in ("refresh", "drop", "close") for s in (10, 50, 100)}
     want |= {(i, 1) for i in ("cycle", "fire", "stale", "staleu")}
+    if args.typed:
+        print("item | size | typed ns | flat ns | hand Rust ns")
+        for item, size in sorted(want):
+            sample = res.get((item, size), {})
+            if any(len(sample.get(side, [])) != args.rounds for side in sides):
+                sys.exit(f"missing or duplicate perf samples for {item}/{size}")
+            medians = " | ".join(f"{statistics.median(sample[side]):.1f}" for side in sides)
+            print(f"{item} | {size} | {medians}")
+        return 0
     missing = sorted(k for k in want if not {"pruv", "hand"} <= set(res.get(k, {})))
     holds = []
     print("item | size | Pruv ns | hand Rust ns | TS ns | Pruv/hand | overlap")
@@ -710,8 +762,10 @@ def cmd_perf(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["q", "perf", "derive", "dc"])
-    ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
+    ap.add_argument("cmd", choices=["q", "perf", "derive", "dc", "churn"])
+    ap.add_argument("--pruvc")
+    ap.add_argument("--typed", action="store_true", help="use the resident typed state lane")
+    ap.add_argument("--py", action="store_true", help="compile the typed lane with the Python Rust backend")
     ap.add_argument("--budlib")
     ap.add_argument("--out", help="directory for generated Rust and driver binaries")
     ap.add_argument("--family", choices=["q3", "q4"], default="q3")
@@ -719,14 +773,25 @@ def main():
     ap.add_argument("--seed", type=int, default=20261117)
     ap.add_argument("--gen")
     ap.add_argument("--cases")
-    ap.add_argument("--oracle", default=os.path.join(WORK, "oracle.jsonl"))
+    ap.add_argument("--oracle")
     ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--reps", type=int, default=200000)
     a = ap.parse_args()
+    if a.typed and (a.cmd not in ("q", "perf", "churn") or a.budlib):
+        ap.error("--typed supports q, perf and churn without --budlib")
+    if a.cmd == "churn" and not a.typed:
+        ap.error("churn requires --typed")
+    if a.py and (not a.typed or a.pruvc or a.gen):
+        ap.error("--py requires --typed without --pruvc or --gen")
+    fixtures = WORK
+    if a.typed and a.cmd == "q" and not os.path.isdir(fixtures):
+        fixtures = os.path.join(shared_checkout(), os.path.relpath(WORK, ROOT))
     if a.cases is None:
         filename = "cases_q4.jsonl" if a.cmd == "derive" and a.family == "q4" else "cases.jsonl"
-        a.cases = os.path.join(WORK, filename)
-    sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "dc": cmd_dc}[a.cmd](a))
+        a.cases = os.path.join(fixtures, filename)
+    if a.oracle is None:
+        a.oracle = os.path.join(fixtures, "oracle.jsonl")
+    sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "dc": cmd_dc, "churn": cmd_churn}[a.cmd](a))
 
 
 if __name__ == "__main__":

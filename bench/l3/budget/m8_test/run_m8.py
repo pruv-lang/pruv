@@ -2,6 +2,9 @@
 """L3-10 M8 runner: activity accounting of the request budget (bud_charge.pruv, bud_tools.pruv) against the TS oracle.
 
   python3 bench/l3/budget/m8_test/run_m8.py q    [--pruvc PATH | --gen GEN.rs] [--cases F] [--oracle F] [--hand16 | --hand NAME]
+  python3 bench/l3/budget/m8_test/run_m8.py q --typed [--py] [--cases F] [--oracle F]
+  python3 bench/l3/budget/m8_test/run_m8.py perf --typed [--py] [--sizes 100,500 | --profile S|M|SM] [--reps N]
+  python3 bench/l3/budget/m8_test/run_m8.py churn --typed [--py]
   python3 bench/l3/budget/m8_test/run_m8.py derive  (writes work/m8/cases_acct.jsonl + oracle_acct.jsonl)
   python3 bench/l3/budget/m8_test/run_m8.py perf [--pruvc PATH | --gen GEN.rs] [--rounds N] [--reps N] [--no-instr]
                                                  [--sizes 100,500 | --profile S|M|SM]
@@ -24,13 +27,19 @@ Classes:
   known-difference none in M8 (the class is kept for the table).
   fail             anything else.
 """
-import argparse, json, os, shutil, statistics, subprocess, sys
+import argparse, json, os, shutil, statistics, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUD = os.path.dirname(HERE)
 ROOT = os.path.abspath(os.path.join(BUD, "..", "..", ".."))
 WORK = os.path.join(BUD, "work", "m8")
-PRUVC_DEFAULT = "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
+BUILD = WORK
+COMPILER_REPO = "/Users/spica4345/Projects/pruv"
+PRUVC_DEFAULT = os.path.join(COMPILER_REPO, "pruvc-rs", "target", "release", "pruvc")
+PY_COMPILER = [
+    os.path.join(COMPILER_REPO, ".venv", "bin", "python"),
+    os.path.join(COMPILER_REPO, "pruvc", "pruvc.py"),
+]
 LIBS = ["--lib", "bench/l3/budget", "--lib", "bench/l3/lib"]
 STATE = {"open": 0, "halted": 1, "closed": 2}
 REASONS = ["time", "delegations", "commands", "reviews", "checks"]
@@ -47,23 +56,29 @@ def rustc():
     return shutil.which("rustc") or os.path.expanduser("~/.cargo/bin/rustc")
 
 
-def build(args):
-    os.makedirs(WORK, exist_ok=True)
-    gen = os.path.join(WORK, "gen.rs")
-    if args.gen:
+def build(args, typed=False):
+    os.makedirs(BUILD, exist_ok=True)
+    suffix = ("_typed_py" if args.py else "_typed") if typed else ""
+    gen = os.path.join(BUILD, "gen%s.rs" % suffix)
+    if args.gen and (typed or not getattr(args, "typed", False)):
         shutil.copyfile(args.gen, gen)
     else:
-        c = subprocess.run([args.pruvc, "bench/l3/budget/m8_test/root_m8.pruv", "-o", gen] + LIBS, cwd=ROOT,
-                           capture_output=True, text=True)
+        root = os.path.relpath(os.path.join(HERE, "root_m8%s.pruv" % ("_typed" if typed else "")), ROOT)
+        cmd = PY_COMPILER if typed and args.py else [args.pruvc]
+        backend = ["--backend", "rust"] if typed and args.py else ["--emit", "rs"] if typed else LIBS
+        c = subprocess.run(cmd + [root, "-o", gen] + backend, cwd=ROOT, capture_output=True, text=True)
         if c.returncode != 0:
             sys.exit("pruvc failed:\n" + c.stdout[-2000:] + c.stderr[-2000:])
-    main = os.path.join(WORK, "main_m8.rs")
+    main = os.path.join(BUILD, "main_m8%s.rs" % suffix)
+    driver = os.path.join(HERE, "driver_m8%s.rs" % ("_typed" if typed else ""))
     with open(main, "w") as f:
-        f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n#[path = "gen.rs"] mod sol;\n')
-        # the product host's state buffer (StateBuf, L3 P13c), as in m34_test/run.py for driver_m4.rs
-        f.write('include!("%s");\n' % os.path.join(BUD, "state_buf.rs").replace("\\", "/"))
-        f.write(open(os.path.join(HERE, "driver_m8.rs")).read())
-    exe = os.path.join(WORK, "driver_m8")
+        f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n'
+                '#[path = "gen%s.rs"] mod sol;\n' % suffix)
+        if not typed:
+            f.write('include!("%s");\n' % os.path.join(BUD, "state_buf.rs").replace("\\", "/"))
+        with open(driver) as source:
+            f.write(source.read())
+    exe = os.path.join(BUILD, "driver_m8%s" % suffix)
     argv = [rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, main]
     c = subprocess.run(argv, capture_output=True, text=True)
     if c.returncode != 0:
@@ -94,8 +109,8 @@ def build_hand(name):
     """Compiles the hand baseline <name> (see HANDS) into work/m8/<name> and returns the path."""
     name = hand_name(name)
     src, extra = HANDS[name]
-    os.makedirs(WORK, exist_ok=True)
-    exe = os.path.join(WORK, name)
+    os.makedirs(BUILD, exist_ok=True)
+    exe = os.path.join(BUILD, name)
     argv = [rustc(), "-C", "opt-level=3", "--edition", "2021"] + extra + ["-o", exe, os.path.join(HERE, src)]
     c = subprocess.run(argv, capture_output=True, text=True)
     if c.returncode != 0:
@@ -389,8 +404,8 @@ def fixture_cases(groups):
             c["script"] = [dict(e, args=enc(e["args"])) for e in c["script"]]
             cases.append(c)
     obs = run_oracle(cases)
-    os.makedirs(WORK, exist_ok=True)
-    cp, op = os.path.join(WORK, "fixtures_cases.jsonl"), os.path.join(WORK, "fixtures_oracle.jsonl")
+    os.makedirs(BUILD, exist_ok=True)
+    cp, op = os.path.join(BUILD, "fixtures_cases.jsonl"), os.path.join(BUILD, "fixtures_oracle.jsonl")
     with open(cp, "w") as f:
         for c in cases:
             f.write(json.dumps(c, ensure_ascii=False) + "\n")
@@ -663,7 +678,7 @@ def cmd_q(args):
     if args.fixtures:
         args.cases, args.oracle = fixture_cases(args.fixtures)
     hand = "hand_m8_u16" if args.hand16 else args.hand
-    exe = build_hand(hand) if hand else build(args)
+    exe = build_hand(hand) if hand else build(args, typed=args.typed)
     cases = [json.loads(l) for l in open(args.cases)]
     oracle = {}
     for l in open(args.oracle):
@@ -892,10 +907,60 @@ def cmd_perf(args):
     return 0
 
 
+def cmd_perf_typed(args):
+    sys.path.insert(0, BUD)
+    from run_meta import PROFILES
+
+    sizes = PROFILES[args.profile] if args.profile else tuple(map(int, args.sizes.split(",")))
+    if args.reps <= 0 or any(size <= 0 for size in sizes):
+        sys.exit("perf requires positive sizes and reps")
+    sides = [
+        ("typed", [build(args, typed=True), "perf"]),
+        ("flat", [build(args), "perf"]),
+        ("hand16w", [build_hand("hand_m8_u16"), "perfw"]),
+    ]
+    samples = {}
+    for round_ in range(5):
+        index = round_ % len(sides)
+        for size in sizes:
+            checksums = {}
+            for lane, cmd in sides[index:] + sides[:index]:
+                run = subprocess.run(cmd + [str(size), str(args.reps)], capture_output=True, text=True, cwd=HERE)
+                if run.returncode:
+                    sys.exit("%s perf failed:\n%s" % (lane, run.stderr[-2000:]))
+                checksums[lane] = {}
+                for line in run.stdout.splitlines():
+                    fields = line.split()
+                    if fields[0] == "chk":
+                        _, item, n, value = fields
+                        checksums[lane][item, int(n)] = value
+                    else:
+                        item, n, ns = fields
+                        samples.setdefault((item, int(n), lane), []).append(float(ns))
+            expected = {(item, size) for item in TIME_ITEMS}
+            if (checksums["flat"].keys() != expected or checksums["typed"] != checksums["flat"]
+                    or checksums["hand16w"] != checksums["flat"]):
+                sys.exit("perf checksum mismatch at size %d, round %d: %r" % (size, round_ + 1, checksums))
+    print("Median ns/call over 5 rounds, %d reps, packed wire input; all checksums matched" % args.reps)
+    print("item | size | typed | flat | hand16w")
+    for size in sizes:
+        for item in TIME_ITEMS:
+            values = [statistics.median(samples[item, size, lane]) for lane, _ in sides]
+            print("%s | %d | %.1f | %.1f | %.1f" % (item, size, *values))
+    return 0
+
+
+def cmd_churn_typed(args):
+    exe = build(args, typed=True)
+    return subprocess.run([exe, "churn"], cwd=HERE).returncode
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["q", "perf", "derive", "controls"])
+    ap.add_argument("cmd", choices=["q", "perf", "churn", "derive", "controls"])
     ap.add_argument("--fixtures", help="q: run these fixture groups (e.g. C,D) through the oracle instead of --cases")
+    ap.add_argument("--typed", action="store_true", help="q, perf or churn: use resident typed state")
+    ap.add_argument("--py", action="store_true", help="--typed: use the Python compiler Rust backend")
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--gen")
     ap.add_argument("--cases", default=os.path.join(WORK, "cases.jsonl"))
@@ -913,7 +978,29 @@ def main():
     ap.add_argument("--mem-runs", type=int, default=5)
     ap.add_argument("--only", help="perf: comma-separated lanes to time (default all); pruv is always kept")
     a = ap.parse_args()
-    sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "controls": cmd_controls}[a.cmd](a))
+    if a.py and not a.typed:
+        ap.error("--py requires --typed")
+    typed_dispatch = {"q": cmd_q, "perf": cmd_perf_typed, "churn": cmd_churn_typed}
+    if a.cmd == "churn" and not a.typed:
+        ap.error("churn requires --typed")
+    if a.typed and (a.cmd not in typed_dispatch or a.hand16 or a.hand):
+        ap.error("--typed requires q, perf or churn and cannot use --hand or --hand16")
+    dispatch = {"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "controls": cmd_controls}
+    if a.typed:
+        global BUILD
+        with tempfile.TemporaryDirectory(prefix=".m8-typed-", dir=HERE) as build_dir:
+            BUILD = build_dir
+            env_tmp = os.environ.get("TMPDIR")
+            os.environ["TMPDIR"] = build_dir
+            try:
+                rc = typed_dispatch[a.cmd](a)
+            finally:
+                if env_tmp is None:
+                    os.environ.pop("TMPDIR")
+                else:
+                    os.environ["TMPDIR"] = env_tmp
+        sys.exit(rc)
+    sys.exit(dispatch[a.cmd](a))
 
 
 if __name__ == "__main__":
