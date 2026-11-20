@@ -50,6 +50,17 @@ pub fn bounded(x: i64) -> i64
   return x;
 }
 
+pub struct SettledTime { active_ms: i64, added_ms: i64 }
+
+pub fn settle_time(active_ms: i64, since: i64, now: i64) -> SettledTime
+{
+  let mut added_ms: i64 = bounded(now) - bounded(since);
+  if added_ms < 0 { added_ms = 0; }
+  return SettledTime {
+    active_ms: bounded(bounded(active_ms) + added_ms), added_ms: added_ms
+  };
+}
+
 pub fn time_left(b: Budget) -> i64
 {
   let mut limit: i64 = b.limits.time;
@@ -69,8 +80,8 @@ pub fn settle(inout b: Budget, inout c: Clock, sid: str, now: i64, inout o: Out)
   if !string_eq(c.owner, sid) { return; }
   disarm(inout c, inout o);
   if !c.has_since { return; }
-  let elapsed: i64 = bounded(now) - bounded(c.since);
-  if elapsed > 0 { b.active_ms = bounded(bounded(b.active_ms) + elapsed); }
+  let time: SettledTime = settle_time(b.active_ms, c.since, now);
+  b.active_ms = time.active_ms;
   c.since = 0;
   c.has_since = false;
   b.active_since = -1;

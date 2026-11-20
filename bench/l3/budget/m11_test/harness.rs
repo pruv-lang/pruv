@@ -556,6 +556,24 @@ fn main() {
                     let w = world.as_mut().unwrap();
                     res(w.call(&|st, out| sol::m11_load(st, &a[0], &a[1], out)))
                 }
+                #[cfg(m11_typed)]
+                "malformed-load" => {
+                    let a = args(&rest);
+                    let w = world.as_mut().unwrap();
+                    format!("err {}", sol::malformed_load(&mut w.st, &a[0], &a[1]))
+                }
+                #[cfg(m11_typed)]
+                "native-id" => {
+                    let w = world.as_mut().unwrap();
+                    let (id, sid) = rest.split_once(' ').unwrap();
+                    let mut out = Vec::new();
+                    assert_eq!(sol::query_text(&w.st, 1, Some(id), Some(sid), &mut out), 0);
+                    assert_ne!(out, [2, 1, 1]);
+                    assert_eq!(sol::set_text(&mut w.st, Some(id), Some(sid),
+                        &full_card(), &[], &perf_by(), NOW0, &mut out), 0);
+                    assert_eq!(out[3], 1);
+                    "same".to_string()
+                }
                 "set" => {
                     let a = args(&rest);
                     let now = a[0][0];
@@ -568,6 +586,21 @@ fn main() {
                     let w = world.as_mut().unwrap();
                     let op = a[0][0];
                     res(w.call(&|st, out| sol::m11_query(st, op, &a[1], &a[2], out)))
+                }
+                #[cfg(m11_typed)]
+                "set-id" => {
+                    let a = args(&rest);
+                    let w = world.as_mut().unwrap();
+                    let id = &a[1];
+                    let (card, lang, by) = (bytes_of(&a[3]), bytes_of(&a[4]), bytes_of(&a[5]));
+                    res(w.call(&|st, out| sol::set_id(st, id, &a[2], &card, &lang, &by, a[0][0], out)))
+                }
+                #[cfg(m11_typed)]
+                "q-id" => {
+                    let a = args(&rest);
+                    let w = world.as_mut().unwrap();
+                    let id = &a[1];
+                    res(w.call(&|st, out| sol::query_id(st, a[0][0], id, &a[2], out)))
                 }
                 "dump" => {
                     let w = world.as_mut().unwrap();

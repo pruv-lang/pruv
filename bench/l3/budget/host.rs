@@ -1158,9 +1158,17 @@ pub trait Core {
     }
 }
 
-pub struct ResidentState<C: Core> {
+pub trait TypedCore {
+    type State;
+    type Operation<'a>;
+    type Reply;
+
+    fn apply(&self, state: &mut Self::State, op: Self::Operation<'_>) -> Self::Reply;
+}
+
+pub struct ResidentState<C, S = StateBuf> {
     core: C,
-    st: StateBuf,
+    st: S,
     out: Vec<i64>,
     pub grows: u64,
     pub grow_ns: u128,
@@ -1170,6 +1178,30 @@ pub struct ResidentState<C: Core> {
     pub outsmall: u64,
     // Test hook: refuse the next `fail_allocs` grow allocations (allocation-failure injection).
     pub fail_allocs: u32,
+}
+
+impl<C: TypedCore> ResidentState<C, C::State> {
+    pub fn from_typed(core: C, st: C::State) -> Self {
+        Self {
+            core,
+            st,
+            out: Vec::new(),
+            grows: 0,
+            grow_ns: 0,
+            grow_alloc_words: 0,
+            grow_copy_words: 0,
+            outsmall: 0,
+            fail_allocs: 0,
+        }
+    }
+
+    pub fn typed_state(&self) -> &C::State {
+        &self.st
+    }
+
+    pub fn step_typed(&mut self, op: C::Operation<'_>) -> C::Reply {
+        self.core.apply(&mut self.st, op)
+    }
 }
 
 // Aborts the process if dropped while unwinding (see step_inner).

@@ -1,18 +1,13 @@
 # M11 typed resident state
 
-The typed lane keeps each session's budget V words in a `Vec<i64>` inside `HashMap<String, Sess>`. Pruv does the
-lookup, the card judgment, the store and the insertion ordinals. The Rust harness owns the state, converts between
-UTF-16 keys and the Q wire format, and serializes the dump in the ordinal order Pruv assigned.
+The Rust harness owns the Pruv session map. A session stores typed budget properties, the ID and state indexes used for lookup, and the admitted card input with its validated field offsets and timestamp. Pruv handles lookup, card judgment, mutation, and insertion ordinals.
 
-A `Vec<i64>` field cannot be passed directly as an `[i64]` argument of `bud_card`, so Pruv copies it into an `[i64]`
-(`budget_words`). Typed perf includes this copy and the key conversion. Repro: `work/p31t7/w2/repro_vec_slice.pruv`
-(not committed; see Appendix P31T (attempt 7) in docs/L3_RESTRUCTURE_SPEC.md).
+The direct lane passes IDs as text after Pruv admits packed keys. The archived adapter decodes V words and projects typed replies to the same fixture format. The direct lane uses the same output projection for Q comparisons.
 
-Run from `bench/l3/budget`:
+Run from the repository root with `PRUVC_RS` pointing at the fresh Rust compiler.
 
 ```sh
-python3 m11_test/run_m11.py --typed --pairs py,rs
-python3 m11_test/run_m11.py --pairs py,rs
-python3 m11_test/run_m11.py --perf --typed
-python3 m11_test/run_m11.py --perf
+M11_LANE=direct python3 bench/l3/budget/m11_test/run_m11.py --typed --pairs rs,py
+M11_LANE=adapter python3 bench/l3/budget/m11_test/run_m11.py --typed --pairs rs,py --no-build
+python3 bench/l3/budget/m11_test/run_m11.py --typed --pairs rs --no-build --perf-cells work/p32b/d67_perf_cells.json
 ```

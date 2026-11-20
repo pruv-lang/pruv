@@ -442,7 +442,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P31F | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Root package before P31T attempt 6 (main decision 2026-11-20 after P31T attempt 5, Appendix P31T (attempt 5) P31T5.5 / P31T5.6; starts after R03L merges, same files). (1) A field path of an inout parameter (`inout st.out`) as the inout argument of a user function when it is disjoint from every live borrow (the R-6e-8 sibling rule extended from `map_get_mut` arms to user calls), SPEC.md:679; (2) `Vec<String>` fields in struct entry results (R-6f-3), SPEC.md:640; (3) iteration over `HashMap<String, S | i64 | bool>` (keys and values borrowed, order unspecified, so the per-map order vectors of M8 / M9 can go), SPEC.md:497-503; (4) record values in nested String-keyed maps (`HashMap<String, R>` field of a map-held record), SPEC.md:509-514. Positive and negative tests in both compilers, SPEC rules, the P31T5.5 repro and one small example per gap vs hand Rust at M / L (no clone, no extra lookup, no bounds check). Done when: the four repros compile and verify on both compilers, generated Rust matches hand Rust line by line, full suites green, M / L cells at or below hand Rust or moved to debt per rule 5. Then P31T attempt 6: `Reply.effects` in `St.out` reset by `vec_clear` (D25, D28, D29), drop the order vectors (D36, D37), the shared modules bud_map / bud_store / bud_lifecycle / bud_decide and M5-M7, M10-M12, and the four P31T5.7 SHOULD-FIX follow-ups (M10b ordinal exhaustion, M9 Q fixture path, M9 typed DC capacity check, py compiler path selection). Done (Appendix P31F): R-6g-3 disjoint field paths of `inout` parameters, locals and element bindings as `inout` arguments of user functions (Rust `&mut x.f`, no `mem::take`), R-6f-3 `Vec<String>` fields in entry result structs (moved to the host), R-6e-13 read-only `for (k, v) in P` over `HashMap<String, i64 | bool | S>` (`P.iter()`, borrowed key, order unspecified, verifier assumes no order or count), R-6e-6 `HashMap<String, R>` record maps in map-held records (insert / remove / get / get_mut through the record); LLVM rejects; P31T5.5 repro `step` emits into `&mut st.out` inside a `get_mut` arm with no clone; py and rs byte-identical. perf_gate FAIL on fixed shares and noise (D38-D40), every time cell 0.71-1.04x. Full suites rs 4578/4578, py 4566/4566; json, mcp, qwen, supervisor pass; m10b h 10/10 exact. P31T attempt 6 not started. |
 | P31G | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Root package before the next P31T attempt (closes the P31T attempt-7 language gaps). R-6e-15 `string_from` (D46), R-6e-16 field move with restoration (D41, D43), R-6e-4 whole binder replacement (D41), R-6e-17 `Vec<i64 | bool>` place as a read-only `[i64 | bool]` argument (D44), R-6g-4 scalar `inout i64 | bool`, R-6f-4 `take String` entry parameter; gap 4 (state struct entry result) queued as D60 (P31G-Q1, R-6f-5). Merged c6acaf5. See Appendix P31G. |
 | P31T | B/bud_map.pruv, bud_store.pruv, bud_lifecycle.pruv, bud_decide.pruv and their consumers (M4-M12, M10b) | After P31L, P31S and P31K (first attempt 2026-11-20 stopped with no change: language gap, see P31S; second attempt 2026-11-20 stopped with no budget change: text-keyed aggregate maps and nested record collections, Appendix P31T, proposed root row P31K; third attempt 2026-11-20 after P31K stopped with no budget change: two sibling root-state map records cannot be borrowed mutably at once, and entries cannot return a struct holding `Vec` effects, Appendix P31T (attempt 3), proposed root row P31D; fourth attempt 2026-11-20 after P31D partly done: step 1 M10b lane on a typed resident state, commits 79862ea / c2c7cb3 / 4adc42e, Q unchanged rs and py, perf_gate FAIL on extend and end M / L (now §7.5 D28 / D29), step 2 (shared modules and M4-M11 consumers, M12) not done, two new language gaps, Appendix P31T (attempt 4); fifth attempt 2026-11-20 after P31N partly done: step 1 M10b on vec_clear / string_eq / trusted `Vec<String>` / nested runs map, ce4fc30, Q unchanged rs and py, perf_gate still FAIL on extend and end M / L (D28 / D29, gap 1: an inout parameter's field cannot be an inout argument, SPEC.md:679); step 2 typed lanes for M4 (b687b89) and M8 / M9 (458bb89), Q unchanged rs and py, M4 fixed debt D35, M8 / M9 perf_gate FAIL on toolforget and drop / close M / L (D36 / D37, gap 3: String-keyed maps have no iteration, SPEC.md:497-503); gap 2 (`Vec<String>` in entry result structs, SPEC.md:640) and gap 4 (record values in nested String-keyed maps, SPEC.md:509-514) worked around; audit must-fix (order vectors grow under churn) fixed by compaction in the M4 / M8 / M9 typed lanes and rechecked; shared modules and M5-M7, M10-M12 not moved, Appendix P31T (attempt 5); sixth attempt 2026-11-20 after P31F partly done: step 1 M10b effects in resident `St.out` (R-6g-3, R-6e-10), extend passes (D28 closed), end still 1.06-1.10x at M / L (D29, two lookups, proposed root row P31R `map_take`); step 2 M4 / M8 / M9 typed order vectors dropped for insertion ordinals and read-only map iteration (R-6e-13, R-6f-3, R-6e-6), M8 toolforget passes (D36 gating part closed), M9 drop / close still 1.10-1.22x at M / L after one fix attempt (D37); step 3 four SHOULD-FIX items done; Q unchanged rs and py on all four lanes; perf_gate FAIL (6 of 68 cells, all moved to debt); step 4 (shared modules and M5-M7, M10-M12) queued, Appendix P31T (attempt 6); attempt 7 (2026-11-20): attempt-6 SHOULD-FIX items done, typed shared modules `bud_tstate` / `bud_tlife` / `bud_tdecide` with M10b moved onto them, M7 / M10 / M11 typed resident lanes (M5 / M6 hold no resident state, M12 queued), Q unchanged rs and py on all lanes, perf_gate FAIL (3 of 79 cells: M10 halt M 1.185x after one fix attempt, M10b end M / L 1.10x / 1.07x = D29; all moved to debt D41-D45), seven language gaps with repros (gap 7 = P31R `map_take`), Appendix P31T (attempt 7); attempt 8 (2026-11-20) after P31R: M10b end and M9 drop / close as one `map_take` (D42 / D37 still 1.08-1.14x at M / L after one fix attempt each), the six attempt-7 SHOULD-FIX rows with fair harnesses, D41 / D43-D45 re-measured, M12 typed lane (all ten lifecycle ops and auto-continue), Q unchanged rs and py on all lanes, perf_gate FAIL with every failing cell in debt, Appendix P31T (attempt 8); ninth and closing attempt 2026-11-20: M12 typed lane in place on typed `Budget` fields with clock order / tool state / one `dispose` in Pruv (D49 down from 168-14243x to 2.1-2.9x, D50 audit items fixed), P31G rules on M10 / M7 / M9 / M10b / M11 (D47 closed, M11 D44 / D52 closed at 0.50-0.95x), shared fair M9 harness (D37), D51 closed as a hand divergence from the TS reference, new gap row D63 (inout map whole reassignment), Q unchanged rs and py on all lanes, perf_gate FAIL (103 cells, 16 fail, 45 debt) with every failing cell in debt, Appendix P31T (attempt 9)). Typed session record (struct with owned fields) replacing the flat framed `[i64]` record and packed-key double lookups (D14, D25), shrink-in-place record write for extend / close (D28, D29, P31.8), struct replies with `Vec` effects instead of framed `[i64]` (D19-D24). Every consumer's Q unchanged on rs and py; re-measure D14, D19-D25, D28-D29 cells against hand Rust and close the rows that reach <= 1.0x. |
-| P32 | B/host.rs,roots/bindings,bud_test_abi.pruv,m34/m5–m11 shims | P split per operation/narrow family; direct/adapter grid, malformed admission, one decision engine. Partly done 2026-11-21 (Appendix P32): M10b family moved (typed direct entries `t_view/t_close/t_charge(Charge)/t_run/t_halt/t_raise(UnitAnswer)/t_decide(UnitAnswer)`, test-only adapter `t_call` decodes once; flat `bud_decide.pruv` and `root_m10b.pruv` retired; `bud_tstate::charge_typed` + `bud_tdecide` the single raise/decide/charge engine; Q exact rs/py on both lanes; malformed admission in Pruv). T10 family moved too (D64 closed). T7 entries moved (D65 entry part closed, P32.9; view cells now D72). T8 account entries moved (D66 status part closed, P32.10). Remaining families queued as D65 (running answer), D66 (engine merge, put record), D67-D71 |
+| P32 | B/host.rs,roots/bindings,bud_test_abi.pruv,m34/m5–m11 shims | P split per operation/narrow family; direct/adapter grid, malformed admission, one decision engine. Partly done 2026-11-21 (Appendix P32): M10b family moved (typed direct entries `t_view/t_close/t_charge(Charge)/t_run/t_halt/t_raise(UnitAnswer)/t_decide(UnitAnswer)`, test-only adapter `t_call` decodes once; flat `bud_decide.pruv` and `root_m10b.pruv` retired; `bud_tstate::charge_typed` + `bud_tdecide` the single raise/decide/charge engine; Q exact rs/py on both lanes; malformed admission in Pruv). T10 family moved too (D64 closed). T7 entries moved (D65 entry part closed, P32.9; view cells now D72). T8 account entries moved (D66 status part closed, P32.10). Remaining families queued as D65 (running answer), D66 (engine merge, put record), D67-D71. Attempt 2 2026-11-21 (Appendix P32 (attempt 2)): D67 T11, D68 T12, D69 T4 m4_op, D70 one settle, D71 key admission moved (Q exact rs/py on both lanes, malformed tests at the typed constructors); D65 running answer and D66 rest not moved; one audit (10 must-fix): 9 fixed with regression tests, M11 byte storage left as gap D81; compiler gaps D73-D75, D81, perf debts D76-D80; perf_gate FAIL (93 cells, 13 fail, 71 debt) |
 | P33 | Both codegens/hot contracts: residual L4/L5 only | C inline attribute/size heuristic and local proof gates; P touched families, M11 compile CPU/binary size and parity. Partly done in P13i2a: `#[inline(always)]` and `#[inline]` fn attributes (explicit directive over R-7-3 promotion); size heuristic/local proof gates still open. |
 | P34 | One measured §4 opportunity per subpackage | P touched families/collisions and raw/admitted complete operations; saving ledger, same-structure hand (ii), assembly evidence for any proof win. |
 | P35 | B/compare.py,check_oracle.py,future judge,notes | P focused KD/final-observation checks; missing/unsupported paths remain open; full grid inventory ready. |
@@ -591,14 +591,23 @@ fixed in one package before R12.
 | D62 | P31G R-6e-4 binder replace L (n = 1e5 rows, 1e7 calls) peak RSS 14319616 vs 12697600 (1.128x); R-6e-17 vec-as-slice time M / L 13.00 / 15.05 vs 12.99 / 14.87 ms (1.001x / 1.012x; first run 1.005x / 1.044x). Gating, perf_gate FAIL | P31G (Appendix P31G.4), one re-measure attempt used. R-6e-4 L: both builds are bimodal between 12.7 MB and 14.3 MB (8 samples at 3e6 calls: hand four of each, gen all high; a rebuild with only the entry guard added to hand gave gen five high / three low and hand three high / five low), a macOS malloc region step that follows binary layout, not the `*row = Row { .. }` line (same as hand). R-6e-17: gen `count_pos` is the hand loop with `get_unchecked` (proved) and `s.blob.as_slice()` (no copy); the samples overlap (gen 13.0-15.1, hand 12.99-16.8 ms in run 1). No source-level fix |
 | D63 | P31T9 gap: an `inout` `HashMap` parameter cannot be reassigned as a whole (`m = map_insert::<K, V>(move m, ..)` gives `type/immutable` "inout parameter m cannot be reassigned as a whole" on rs and py), while a field of an inout struct can (`st.m = map_insert(move st.m, ..)`). A value taken with `map_take` therefore cannot be put back through a shared module's map-typed inout parameter. Blocks the M7 close single lookup (D43) | P31T9 (Appendix P31T (attempt 9)): repro `work/p31t9/gap_inout_map/repro.pruv` (rs.out / py.out beside it). Proposed root row: allow whole reassignment of an `inout` map / Vec parameter by a value moved from itself (`m = op(move m, ..)`, same rule as struct fields), or add an in-place `map_put(inout m, k, v)` catalog operation. Open |
 | D64 | P32 queued family: T10 (`m10_test/root_m10_typed.pruv:55`) still takes `what` words and charges through the `bud_tstate::charge(words)` wrapper | Next P32 family: direct `t_charge(St, S, S, I, Charge)` / view / close / run / halt like M10b, `t_call` as adapter (decode once, length != 10 -> status 2). Engine is already `charge_typed`. Closed 2026-11-21 (Appendix P32.8): T10 has direct `t_view/t_close/t_charge(Charge)/t_run/t_halt`, `t_call` is the adapter; Q exact on both lanes rs/py; halt perf cells unchanged (D41) |
-| D65 | P32 queued family: T7 lifecycle (`m7_test/root_m7_typed.pruv:143`) takes a 6-word unit and an op code; halt ordering / running-ID answer duplicates between `bud_halt.pruv` and `bud_tlife.pruv` (Rust `m7_test/bud_facts.rs:228,260` answers) | Direct attach / replace / reopen / maybe_close entries with a typed unit (`UnitAnswer`), adapter decodes once. Entry part closed 2026-11-21 (Appendix P32.9): direct `t_view/t_close/t_attach(AttachUnit)/t_replace(AttachUnit)`, `t_call` is the adapter (`t_attach_unit`, length != 6 -> `t_invalid`); Q exact on both lanes rs/py. Running-ID answer duplication (`bud_facts.rs:228,260` decodes the host answer in Rust) still Open; it is the host-fact fake answer codec, which the P32 brief keeps out of scope (no hostfact edits), so it needs a host-fact package |
-| D66 | P32 queued family: T8 charge / tools (`m8_test/root_m8_typed.pruv:108,165`) takes 14-word records; the Rust driver maps charge status 33..36 -> 6 (`driver_m8_typed.rs:140-157`), a Q status chosen outside Pruv | Typed `Budget` / `Charge` arguments, the status mapping moved into Pruv, charge through `charge_typed`. Partly closed (P32.10): typed `Charge` direct entry `t_charge` returning `Answer { status, result }` (33..36 -> 6 now in Pruv), direct `t_fail`, test-only adapter `t_call`, driver maps no status. Open: the M8 `charge` is still its own engine, not `bud_tstate::charge_typed` (different result codes 16+r / 33..36 and the JS safe-integer ResourceBound 5), and `t_put` still takes the 14-word record |
-| D67 | P32 queued family: T11 card (`m11_test/root_m11_typed.pruv:30,317,370,391`) passes V-word refs, blobs and `out W` | Typed refs / results on the entries, V words only in the adapter. Open |
-| D68 | P32 queued family: T12 (`m12_test/root_m12_typed.pruv`) rebuilds V words inside the typed root (`decode_key`, `v_units`, `wire_units`) for load / session / set_card / query / auto | Typed entries; V words only in the adapter. Open |
-| D69 | P32 queued family: T4 `m4_op(St, I, S, S, W)` (`m4_test/root_m4_typed.pruv:301`) is partly typed (data words per op); `host.rs` `Core` / `ResidentState` (host.rs:1152-1242) is a Rust interface over the M4 / M5 flat state | Typed op entries per op; host Core follows. Open |
-| D70 | P32 queued decision pair: clock settle differs out of range between `bud_clock.pruv` and `bud_tstate.pruv` (typed writes active_ms only when elapsed > 0), and `host.rs:865-871` clamps a delay below 1 to 1 in Rust | One settle in Pruv, the delay clamp decided in Pruv. P32 note: the two settles also clamp to different bounds (`bud_clock` `sc` +-2^53, `bud_tstate` `bounded` +-(2^53-1)); the JS reference that would pick one is not in this repo and the p13e Q cases do not reach an out-of-range `activeMs`, so the merge needs oracle cases first. Open |
-| D71 | P32 queued decision pair: Rust key decoders (`driver_m4_typed.rs:19`, driver_m8_typed.rs, `driver_m10b.rs` `take_key`) reject a bad packed key before Pruv (None -> status 2), duplicating `bud_keys.pruv` admission | Keys stay a codec at the test edge; pass the key words to Pruv admission (or record the codec boundary) so the rejection is made once. Open |
+| D65 | P32 queued family: T7 lifecycle (`m7_test/root_m7_typed.pruv:143`) takes a 6-word unit and an op code; halt ordering / running-ID answer duplicates between `bud_halt.pruv` and `bud_tlife.pruv` (Rust `m7_test/bud_facts.rs:228,260` answers) | Direct attach / replace / reopen / maybe_close entries with a typed unit (`UnitAnswer`), adapter decodes once. Entry part closed 2026-11-21 (Appendix P32.9): direct `t_view/t_close/t_attach(AttachUnit)/t_replace(AttachUnit)`, `t_call` is the adapter (`t_attach_unit`, length != 6 -> `t_invalid`); Q exact on both lanes rs/py. Running-ID answer duplication (`bud_facts.rs:228,260` decodes the host answer in Rust) still Open; it is the host-fact fake answer codec, which the P32 brief keeps out of scope (no hostfact edits), so it needs a host-fact package. P32b (attempt 2): not moved. The shared `bud_tlife.pruv` halt binds `::bud_facts::running_count` / `running_take` directly and M10b builds the same `bud_facts.rs`, so the raw-answer admission needs a `bud_tlife` signature change across M7 and M10b; repro `work/p32b/d65b_gap.pruv`; baseline typed Q rs/py direct/adapter 113 exact / 187 deferred / 0 fail. Open |
+| D66 | P32 queued family: T8 charge / tools (`m8_test/root_m8_typed.pruv:108,165`) takes 14-word records; the Rust driver maps charge status 33..36 -> 6 (`driver_m8_typed.rs:140-157`), a Q status chosen outside Pruv | Typed `Budget` / `Charge` arguments, the status mapping moved into Pruv, charge through `charge_typed`. Partly closed (P32.10): typed `Charge` direct entry `t_charge` returning `Answer { status, result }` (33..36 -> 6 now in Pruv), direct `t_fail`, test-only adapter `t_call`, driver maps no status. Open: the M8 `charge` is still its own engine, not `bud_tstate::charge_typed` (different result codes 16+r / 33..36 and the JS safe-integer ResourceBound 5), and `t_put` still takes the 14-word record. P32b (attempt 2): not attempted (budget). Open |
+| D67 | P32 queued family: T11 card (`m11_test/root_m11_typed.pruv:30,317,370,391`) passes V-word refs, blobs and `out W` | Typed refs / results on the entries, V words only in the adapter. Closed 2026-11-21 (Appendix P32 (attempt 2)): T11 sessions held typed in Pruv (`HashMap<String, Sess>`, `resident_words` removed), setCard/query take `str` IDs and return typed results through `bud_card::judge`, keys admitted by `bud_keys::admit_key`, V words only in the adapter; Q exact 213 / prefix 87 on rs/py, direct and adapter. Audit fixes: the Pruv constructor checks every node's tag, child count, end and forward progress; `[]` absent / `[0]` empty / truncated key -> status 2; V ref admission and budgetId extraction in Pruv; one UTF-16 key conversion shared with native `str`. Cards are still stored widened to `Vec<i64>` (gap D81). Gap D73, D81; perf D76 |
+| D68 | P32 queued family: T12 (`m12_test/root_m12_typed.pruv`) rebuilds V words inside the typed root (`decode_key`, `v_units`, `wire_units`) for load / session / set_card / query / auto | Typed entries; V words only in the adapter. Closed 2026-11-21 (Appendix P32 (attempt 2)): `load/session/set_card/query/auto` take `str` IDs and return typed results, `set_card` judges through `bud_card::judge`, `auto` returns `AutoOwner`; Q7/Q7P/L/crafted/lifecycle 300/300/10/8/7 on rs/py, direct and adapter (typed built with `--no-verify`: the full Z3 build does not finish). `life` / `fire_timer` keep the V path. Audit fixes: native `str` budget IDs go through the same lossless key encoding as V/JB IDs (`native_key`); a prepared `BudgetInput` carries a ticket and cross-state load returns status 2; packed key length/padding admitted in Pruv (`admit_packed_key`) on both lanes. Perf D77 |
+| D69 | P32 queued family: T4 `m4_op(St, I, S, S, W)` (`m4_test/root_m4_typed.pruv:301`) is partly typed (data words per op); `host.rs` `Core` / `ResidentState` (host.rs:1152-1242) is a Rust interface over the M4 / M5 flat state | Typed op entries per op; host Core follows. Closed 2026-11-21 (Appendix P32 (attempt 2)): 18 typed M4 op entries returning `Reply { outcome, records }`, the Q driver holds the generated `St`; Q 300/300 and stats 1922/1922 on rs/py, direct and adapter, raw output byte-equal to the baseline. Audit fixes: native `str` and packed keys share one key encoding (UTF-8, lone surrogates escaped after U+E000; native entries admit through `native_key`), trailing words after the last key are rejected in Pruv (`frame_end`); malformed tests cover native-write/packed-read, lone surrogate and U+E000 escape. Host `Core` / `ResidentState` for the flat M5 state stays. Gap D74; perf D79 |
+| D70 | P32 queued decision pair: clock settle differs out of range between `bud_clock.pruv` and `bud_tstate.pruv` (typed writes active_ms only when elapsed > 0), and `host.rs:865-871` clamps a delay below 1 to 1 in Rust | One settle in Pruv, the delay clamp decided in Pruv. P32 note: the two settles also clamp to different bounds (`bud_clock` `sc` +-2^53, `bud_tstate` `bounded` +-(2^53-1)); the JS reference that would pick one is not in this repo and the p13e Q cases do not reach an out-of-range `activeMs`, so the merge needs oracle cases first. Settle part closed 2026-11-21 (Appendix P32 (attempt 2)): word and typed clocks both call `bud_tstate::settle_time`, saturating at +-(2^53-1) (6 boundary oracle cases); delay clamp still in `host.rs` (gap D75). Audit fix: the M9 `--typed` path also calls `settle_time`, clock-bounds 6/6 on both paths. Open for D75 only |
+| D71 | P32 queued decision pair: Rust key decoders (`driver_m4_typed.rs:19`, driver_m8_typed.rs, `driver_m10b.rs` `take_key`) reject a bad packed key before Pruv (None -> status 2), duplicating `bud_keys.pruv` admission | Keys stay a codec at the test edge; pass the key words to Pruv admission (or record the codec boundary) so the rejection is made once. Closed 2026-11-21 (Appendix P32 (attempt 2)): `bud_keys::admit_key(inout KeyAdmission, words, last, js_text)` decides count, padding, count past rest, trailing words and surrogate mapping; the m4, m8, m10b and m11 drivers only copy the admitted bytes out. M8 exact 185/250, M10b exact 260/500, M4 300/300 on rs/py, direct and adapter. Audit fixes: M10b admits inner text frames, byte ranges and end position in Pruv before Rust reads (the 25-word empty-SID put that panicked now returns status 2); M8 and M10b decide the declared `put` length in Pruv, M8 failure extra-arg check is one Pruv function for both lanes |
 | D72 | P32.9 typed M7 view cells (current / ishalted / reopenmiss, fixed kind, not gating): direct lane 0.95-1.08x of hand16 (13.2-13.7 vs 12.6-12.9 ns/op), pre-P32.9 build 0.84-0.91x (10.7-11.9 ns); adapter 0.85-1.13x | P32.9 (Appendix P32.9): the Pruv work per view call is the same as before (`t_view` = `vec_clear` + `bud_tlife::view`, the old `t_call` code 1/2/5 branch). One fix attempt (driver `Op` chosen when the call is built, one match, `Call` no larger than before) did not move the cells. Unconfirmed cause: the entry is now its own `pub fn` reached from the driver instead of a branch inside `t_call`, so the call boundary and code layout differ; next: compare the generated `t_view` / old `t_call` assembly. Open |
+| D73 | P32b gap (D67): fresh pruvc-rs `entry_signature` rejects a `pub fn` argument whose struct has a `[u8]` field, and a `take` struct argument (`work/p32b/d67_gap.pruv`) | Needs a compiler change (outside P32 scope). Open |
+| D74 | P32b gap (D69): an `enum` carrying owned collections cannot be returned from a `pub fn` entry (`work/p32b/d69_gap.pruv`) | M4 replies use a `Reply` struct with a value-only `Outcome` enum plus record vectors. Needs a compiler change. Open |
+| D75 | P32b gap (D70): the timer delay clamp (`host.rs` delay < 1 -> 1) cannot call a Pruv decision from `budget_host`: that crate does not include the generated module, E0433 (`work/p32b/d70_gap.pruv`) | Needs a crate build change linking the generated module into the host crate. Open |
+| D76 | P32b perf (D67): T11 setCard direct vs hand 787.8 / 733.5 ns/call (M, 1.074x), 793.0 / 733.6 (L, 1.081x), proportional, FAIL; after the audit fixes 988.9 / 922.7 (M, 1.072x), 975.9 / 853.4 (L, 1.144x) | Cause not isolated within the budget; next: compare generated `set_card` + `bud_card::judge` with hand line by line. Open |
+| D77 | P32b perf (D68): M12 typed direct after one fix (D68b: allocs/op C 5->4, T 4->1.008, S 5->2.008) still FAIL: R M 2.42x (2.37x after the audit fixes), C M 2.90x (2.94x), F L 1.46x time / 1.46x allocs, D L 1.60x / 1.47x, O M 1.09x; line-by-line causes in `work/p32b/d68b_result.md` (R: 11 allocs/op from harness key decode, budget-ID String, JB field keys and text copies vs hand 1; C: 4 input allocs) | Next: borrow IDs as `str` through the harness, reuse JB field keys. Caveat: D68b marked T/S/B/A/H cells `fixed` although A/H grow with n; re-classify at the next measurement. Open |
+| D78 | P32b perf (D71): M10b extend direct vs hand 421.4 / 409.3 ns/op (M, 1.030x), 773.8 / 746.7 (L, 1.036x), FAIL; after the audit fixes 399.1 / 386.7 (M, 1.032x), 714.5 / 713.4 (L, 1.002x) | Key admission is outside the timed window; the gap predates P32b. Cause not isolated. Open |
+| D79 | P32b perf (D69): M4 typed sessions direct vs hand 39.2 / 16.2 ns/op (M, 2.42x), 40.3 / 16.0 (L, 2.52x) after one fix (session_put refills the stored Vec in place, 65 -> 40 ns), FAIL; tools 0.92x. After the audit key fix (native `str` entries escape-check and admit the key) sessions rose to 88.6 / 17.7 (M, 5.0x); one fix (`needs_escape` scan, plain keys go straight to the `*_admitted` entry without building a new String) brought it back to 41.5 / 16.3 (M, 2.55x), 40.8 / 16.2 (L, 2.52x); tools 50.0 / 55.8 (M, 0.90x), 48.3 / 54.3 (L, 0.89x) | Line by line for one get: hand does one hash lookup and `extend_from_slice` into a caller buffer; generated does a byte scan for U+E000 (`needs_escape`), the hash lookup, `blob_copy` (one Vec allocation per get) and `reply()` (a `Reply` with 7 empty Vecs per op). Needs a caller-held `inout Reply` entry shape. Open |
+| D80 | P32b fixed / S debts: M8 charge/failure/tool cells 1.12-1.98x (fixed; charge M 1.73x after the audit fixes), M10b time n=50 2.29x (S), RSS 1.02-1.08x (M4) and 1.30-1.32x (M10b time S) | Recorded in `work/p32b/perf_cells.json`; not gating. Open |
+| D81 | P32b gap (D67 audit #7): M11 `Sess` keeps admitted card / by bytes widened to `Vec<i64>`; `HashMap<String, Sess>` with a `[u8]` field fails `type/foreign_owned_type`, with `Vec<u8>` fails `parse/element_storage_type` (`work/p32b/fix_m11_gap.pruv`) | Needs a compiler change to hold byte vectors in map values. Open |
 
 Queued with the debt list (not product perf):
 
@@ -9948,6 +9957,170 @@ Perf (`run_m8.py perf --typed --profile SM`, 5 rounds each, three runs alternati
 | toolforget | 100 / 500 | 0.80-0.82 / 0.81-0.82 | 0.79-0.82 / 0.80-0.82 | 0.81 / 0.82 |
 
 All checksums matched in every run. `python3 tools/perf_gate.py work/p32/d66/perf_cells.json` -> VERDICT: PASS (30 cells, 0 fail, 24 debt; toolforget is the only proportional cell; the fixed cells stay D36, noted there). No audit for this family: it repeats the audited M10b / T10 entry shape; the moved status table is checked by Q and the malformed probe.
+
+## Appendix P32 (attempt 2): T11, T12, M4 op, one settle, Pruv key admission
+
+Date 2026-11-21, branch `lair/read-in-the-main-repo-494c` (base `cd034ef`). Brief: `.lair-delegation-notes/p32b_brief.md` (local). Families D67-D71 moved; D65 (running answer) stopped on a gap; D66 rest not attempted.
+
+### P32b.1 Families moved
+
+| family | direct typed entries | one decision engine | adapter (test edge only) |
+|---|---|---|---|
+| D67 T11 (`m11_test/root_m11_typed.pruv`) | `load`, `set_card`, `query` take `str` IDs; sessions held typed in Pruv as `HashMap<String, Sess>` | `bud_card::judge` | `harness_typed.rs` decodes the archived V fixture once, encodes the typed result |
+| D68 T12 (`m12_test/root_m12_typed.pruv`) | `load`, `session`, `set_card`, `query`, `auto` (returns `AutoOwner`) | `bud_card::judge` (set_card), `bud_tstate` clocks | `harness_typed.rs` V lane; `life` / `fire_timer` keep the V path (D77 note) |
+| D69 T4 m4_op (`m34_test/root_m4_typed.pruv`) | 18 op entries, `Reply { outcome: Outcome, records }` | the typed root itself (one op table) | `driver_m4_typed.rs` `adapter()` decodes one packet, calls `step_typed`, encodes |
+| D70 settle (`bud_tstate.pruv`, `bud_clock.pruv`) | word and typed clocks both call `bud_tstate::settle_time` | `settle_time` (saturating at +-(2^53-1), negative elapsed -> 0) | n/a; delay clamp still in `host.rs` (D75) |
+| D71 key admission (`bud_keys.pruv`) | `bud_keys::admit_key(inout KeyAdmission, words, last, js_text)` | `admit_key` decides count, padding, count past rest, trailing words, surrogate mapping | m4, m8, m10b, m11 drivers copy the admitted bytes out |
+
+### P32b.2 Q grid (rs / py x direct / adapter)
+
+| driver | rs direct | rs adapter | py direct | py adapter | baseline |
+|---|---|---|---|---|---|
+| M11 typed (D67) | 213 exact / 87 prefix | same | same | same | equal to `work/p32b/d67_base` |
+| M12 typed (D68, `--no-verify` build) | Q7 300, Q7P 300, L 10, crafted 8, lifecycle 7 | same | same | same | flat rs also 300/300/10/8/7 |
+| M4 typed (D69) | 300/300, stats 1922/1922, churn ok | same | same | same | raw output byte-equal to baseline |
+| M9 (D70) | 26 matching, clock bounds 6/6 (word and `--typed`) | n/a | same | n/a | KNOWN DIFFERENCE for the changed bounds cases |
+| M10b (D70, D71) | 300/300; key exact 260/500 | same | same | same | equal |
+| M8 (D71) | exact 185/250 | same | same | same | equal |
+| M7 typed (D65 baseline only) | 113 exact / 187 deferred | same | same | same | unchanged |
+
+### P32b.3 Malformed tests
+
+- M4 `driver_m4_typed malformed`: count, padding, count past rest, trailing word, lone surrogate mapping, stale / reused keys (through `bud_keys::admit_key`).
+- M8 `run_m8.py check_malformed_keys` and M10b `run_m10b.py check_malformed_keys`: length -1, padding, truncated, extra word.
+- M11 `harness_typed.rs` `malformed-load`: malformed typed columns at the generated constructor.
+- M12 `typed-malformed`: `sol::malformed_typed()` at the typed constructors.
+
+### P32b.4 Retired flat paths
+
+- M11 `resident_words` (V words held per session) removed; sessions live in Pruv.
+- Rust `take_key` / key decoders in m4, m8, m10b replaced by `bud_keys::admit_key`.
+- The second settle formula in the word clock path (now `settle_time`).
+- M4 typed: per-op packet decoding inside the decision path (only the adapter decodes).
+
+### P32b.5 Generated vs hand (M4 `session_put` replace, after the one perf fix)
+
+Generated (`work/m34/gen_m4_typed.rs:373-381`, rs):
+
+```rust
+match st.sessions.get_mut(key) {
+    Some(session) => {
+        session.blob.clear();
+        let mut i: i64 = 0i64;
+        while (i < (blob.len() as i64)) {
+            session.blob.push((unsafe { *blob.get_unchecked((i) as usize) }));
+            i = (i + 1i64);
+        }
+    }
+```
+
+Hand (`perf_headroom/host/src/bin/m4_hand.rs:122-125`):
+
+```rust
+let existed = if let Some(v) = self.sessions.get_mut(&self.k1[..]) {
+    v.clear();
+    v.extend_from_slice(blob);
+    true
+```
+
+The put path now matches hand in allocation; after the audit key fix and the `needs_escape` fast path the remaining 2.5x is `session_get` (`blob_copy` per get) and `reply()` (7 empty Vecs per op), D79.
+
+### P32b.6 M/L time and RSS (direct vs hand, 5 alternating runs unless noted)
+
+| cell | axis | size | kind | direct | hand | unit | ratio |
+|---|---|---|---|---|---|---|---|
+| D68 M12 T M (1000) | time | M | fixed | 384.3 | 127.2 | ns/op | 3.021x |
+| D68 M12 T M (1000) | allocs | M | fixed | 1.0078125 | 0.0 | alloc/op | 0.000x |
+| D68 M12 T L (10000) | time | L | fixed | 653.8 | 161.6 | ns/op | 4.046x |
+| D68 M12 T L (10000) | allocs | L | fixed | 1.0078125 | 0.0 | alloc/op | 0.000x |
+| D68 M12 S M (1000) | time | M | fixed | 573.6 | 189.6 | ns/op | 3.025x |
+| D68 M12 S M (1000) | allocs | M | fixed | 2.0078125 | 1.0 | alloc/op | 2.008x |
+| D68 M12 S L (10000) | time | L | fixed | 793.9 | 217.1 | ns/op | 3.657x |
+| D68 M12 S L (10000) | allocs | L | fixed | 2.0078125 | 1.0 | alloc/op | 2.008x |
+| D68 M12 F L (100) | time | L | proportional | 19559.9 | 13415.4 | ns/op | 1.458x |
+| D68 M12 F L (100) | allocs | L | proportional | 168.0 | 115.0 | alloc/op | 1.461x |
+| D68 M12 D L (100) | time | L | proportional | 28199.9 | 17634.1 | ns/op | 1.599x |
+| D68 M12 D L (100) | allocs | L | proportional | 268.0 | 182.0 | alloc/op | 1.473x |
+| D68 M12 O M (1000) | time | M | proportional | 37651.7 | 34507.8 | ns/op | 1.091x |
+| D68 M12 O M (1000) | allocs | M | fixed | 10.0 | 6.0 | alloc/op | 1.667x |
+| D68 M12 O L (5000) | time | L | proportional | 197948.6 | 204973.3 | ns/op | 0.966x |
+| D68 M12 O L (5000) | allocs | L | fixed | 10.0 | 6.0 | alloc/op | 1.667x |
+| D68 M12 B L (10000) | time | L | fixed | 17316.4 | 4602.2 | ns/op | 3.763x |
+| D68 M12 B L (10000) | allocs | L | fixed | 13.0 | 6.0 | alloc/op | 2.167x |
+| D68 M12 A M (1000) | time | M | fixed | 25818.4 | 4452.5 | ns/op | 5.799x |
+| D68 M12 A M (1000) | allocs | M | fixed | 190.0 | 82.0 | alloc/op | 2.317x |
+| D68 M12 A L (10000) | time | L | fixed | 51548.8 | 5146.5 | ns/op | 10.016x |
+| D68 M12 A L (10000) | allocs | L | fixed | 190.0 | 82.0 | alloc/op | 2.317x |
+| D68 M12 H M (1000) | time | M | fixed | 33362.0 | 2266.3 | ns/op | 14.721x |
+| D68 M12 H M (1000) | allocs | M | fixed | 128.0 | 8.0 | alloc/op | 16.000x |
+| D68 M12 H L (10000) | time | L | fixed | 41639.3 | 3733.1 | ns/op | 11.154x |
+| D68 M12 H L (10000) | allocs | L | fixed | 128.0 | 8.0 | alloc/op | 16.000x |
+| D68 M12 U M (1000) | time | M | fixed | 43502.6 | 3265.0 | ns/op | 13.324x |
+| D68 M12 U M (1000) | allocs | M | fixed | 222.0 | 40.0 | alloc/op | 5.550x |
+| D68 M12 U L (10000) | time | L | fixed | 72946.0 | 5165.4 | ns/op | 14.122x |
+| D68 M12 U L (10000) | allocs | L | fixed | 222.0 | 40.0 | alloc/op | 5.550x |
+| D71 M8 failure | time | M | fixed | 59.9 | 32.0 | ns/call | 1.872x |
+| D71 M8 tooldup | time | M | fixed | 98.2 | 55.8 | ns/call | 1.760x |
+| D71 M8 toolnew | time | M | fixed | 172.0 | 153.8 | ns/call | 1.118x |
+| D71 M8 toolforget | time | M | proportional | 4383.2 | 5345.0 | ns/call | 0.820x |
+| D67 T11 setCard chain | time | M | proportional | 988.9 | 922.7 | ns/call | 1.072x |
+| D67 T11 setCard chain | time | L | proportional | 975.9 | 853.4 | ns/call | 1.144x |
+| D68 M12 R M (1000) | time | M | proportional | 1437.8 | 607.0 | ns/op | 2.369x |
+| D68 M12 R M (1000) | allocs | M | fixed | 11.0 | 1.0 | alloc/op | 11.000x |
+| D68 M12 R L (10000) | time | L | proportional | 3361.5 | 4580.2 | ns/op | 0.734x |
+| D68 M12 R L (10000) | allocs | L | fixed | 11.0 | 1.0 | alloc/op | 11.000x |
+| D68 M12 C M (1000) | time | M | proportional | 712.8 | 242.3 | ns/op | 2.942x |
+| D68 M12 C M (1000) | allocs | M | fixed | 4.0 | 0.0 | alloc/op | 0.000x |
+| D68 M12 C L (10000) | time | L | proportional | 1158.8 | 1783.2 | ns/op | 0.650x |
+| D68 M12 C L (10000) | allocs | L | fixed | 4.0 | 0.0 | alloc/op | 0.000x |
+| D71 M8 charge | time | M | fixed | 68.3 | 39.5 | ns/call | 1.729x |
+| D71 M10b extend | time | M | proportional | 399.1 | 386.7 | ns/op | 1.032x |
+| D71 M10b extend | time | L | proportional | 714.5 | 713.4 | ns/op | 1.002x |
+| D69/D71 M4 sessions direct | time | M | proportional | 41.5 | 16.3 | ns/op | 2.546x |
+| D69/D71 M4 sessions RSS | rss | M | fixed | 1966080 | 1933312 | bytes | 1.017x |
+| D69/D71 M4 sessions direct | time | L | proportional | 40.8 | 16.2 | ns/op | 2.519x |
+| D69/D71 M4 sessions RSS | rss | L | fixed | 2146304 | 2064384 | bytes | 1.040x |
+| D69/D71 M4 tools direct | time | M | proportional | 50.0 | 55.8 | ns/op | 0.896x |
+| D69/D71 M4 tools RSS | rss | M | fixed | 2129920 | 1966080 | bytes | 1.083x |
+| D69/D71 M4 tools direct | time | L | proportional | 48.3 | 54.3 | ns/op | 0.890x |
+| D69/D71 M4 tools RSS | rss | L | fixed | 2326528 | 2146304 | bytes | 1.084x |
+
+S and fixed cells are in `work/p32b/perf_cells.json` (debt rows D80). Adapter cost is recorded in the per-family perf notes and does not gate (M4 adapter 131.5 / 150.4 ns/op at sessions M / tools M).
+
+`python3 tools/perf_gate.py work/p32b/perf_cells.json` -> VERDICT: FAIL (93 cells, 13 fail, 71 debt). The 13 failing cells each had one fix attempt and are debt rows D76 (T11), D77 (M12 F L, D L, O M, R M, C M), D78 (M10b extend), D79 (M4 sessions) (raw samples in `work/p32b/*perf*.txt`, local only).
+
+### P32b.7 Audit
+
+One read-only audit (Codex gpt-6.2-astra) on the uncommitted diff: 10 must-fix, 2 should.
+
+| # | where | fix |
+|---|---|---|
+| 1 | M11 constructor accepted a non-object root, dump looped | Pruv checks every node's tag, child count, end and forward progress; test rejects and keeps the existing session |
+| 2 | M10b empty-SID 25-word put panicked in Rust | Pruv admits inner text frames, byte ranges and end before Rust reads; put returns status 2, next call works |
+| 3 | M11 truncated packed ID read as "missing" | `[]` absent, `[0]` empty, malformed -> status 2 on set and query |
+| 4 | M11 V ref admission moved into Rust | ref structure admission and budgetId extraction in Pruv, base rules restored |
+| 5 | supplementary chars: native `str` vs packed key differed (M4, M11, M12) | one key encoding (UTF-8, lone surrogates escaped after U+E000) on both lanes; native-write/packed-read and lone-surrogate tests |
+| 6 | M12 prepared BudgetInput loadable into another state | input carries a ticket; cross-state load -> status 2 |
+| 7 | M11 Sess stores card/by as `Vec<i64>` | not fixed: compiler gap D81 |
+| 8 | Rust decided M4 trailing words, M8/M10b put length, M12 packed key length; M8 failure arg check duplicated | each moved into a Pruv admission function used by both lanes |
+| 9 | M9 `--typed` used a local settle formula | calls `settle_time`; clock-bounds 6/6 on both paths |
+| 10 | M4 churn did not pass env | `run.py` passes `env=env` |
+
+Should items: M4 note updated; M12 native `prepare_budget` check added (`prepared_budget_checks`). Q after the fixes: M4 300/300 + stats 1922/1922 + churn + admission; M11 213/87; M12 300/300/10/8/7; M8 185/250; M10b 260/500; on rs/py, direct and adapter, unchanged from before the fixes. No recheck delegation (budget).
+
+### P32b.8 Budget
+
+19 delegations of 20 (implementation and fixes: Codex gpt-6.2-sol; audit: Codex gpt-6.2-astra; two early Claude sonnet attempts returned empty). The 2.5 h budget was exceeded by the audit fix round; D65 rest and D66 rest were not attempted.
+
+### P32b.9 Gaps and queued families
+
+- D73 `entry_signature`: `[u8]`-field struct args and `take` struct args (`work/p32b/d67_gap.pruv`).
+- D74 enum with owned collections cannot be returned from a `pub fn` (`work/p32b/d69_gap.pruv`).
+- D75 host delay clamp cannot reach Pruv from `budget_host` (E0433, `work/p32b/d70_gap.pruv`).
+- D65 running answer: `bud_tlife.pruv` binds `::bud_facts::running_count` / `running_take`; needs a shared signature change for M7 and M10b (`work/p32b/d65b_gap.pruv`).
+- D66 rest (M8 onto `charge_typed`, typed `t_put`): not attempted.
+- D81 M11 `Sess` byte storage: `HashMap<String, Sess>` with `[u8]` / `Vec<u8>` fields does not compile (`work/p32b/fix_m11_gap.pruv`).
+- Perf debts D76-D80.
 
 ## Appendix P31K: text-keyed aggregate maps, one-level nesting, map_remove and vec_at_mut (both compilers)
 

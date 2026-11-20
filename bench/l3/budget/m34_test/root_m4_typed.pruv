@@ -1,10 +1,62 @@
 // Resident M4 state uses monotonic ordinals local to each map.
 // Refuse insertion before incrementing a counter to 2^40.
-pub struct Run { ordinal: i64, waiting: i64 }
+mod ent_u16;
+mod bud_keys;
+
+// Both inputs use UTF-8 with U+E000 as the escape marker for lone surrogates.
+pub fn admit_key(inout key: crate::bud_keys::KeyAdmission, words: [i64]) -> i64 ! alloc {
+  return crate::bud_keys::admit_key(inout key, words, false, true);
+}
+
+// Native UTF-8 already pairs supplementary characters. Escape literal U+E000
+// the same way as packed admission does.
+fn native_key(text: str) -> String ! alloc
+  requires len(text) <= 549755813888
+{
+  let mut key: String = string_new();
+  let mut start: i64 = 0;
+  let mut i: i64 = 0;
+  while i < len(text)
+    invariant 0 <= start && start <= i && i <= len(text)
+    invariant is_char_boundary(text, start) && len(key) <= 2 * start
+    decreases len(text) - i
+  {
+    if i < len(text) - 2 && text[i] == 238 && text[i + 1] == 128 && text[i + 2] == 128
+      && is_char_boundary(text, i) && is_char_boundary(text, i + 3) {
+      key = string_push_str(move key, substr(text, start, i));
+      key = string_push_str(move key, "");
+      start = i + 3;
+      i = start;
+    } else {
+      i = i + 1;
+    }
+  }
+  key = string_push_str(move key, substr(text, start, len(text)));
+  return move key;
+}
+
+// True when native text contains literal U+E000 and must be escaped.
+fn needs_escape(text: str) -> bool {
+  let mut i: i64 = 0;
+  while i < len(text) - 2
+    invariant 0 <= i && i <= len(text)
+    decreases len(text) - i
+  {
+    if text[i] == 238 && text[i + 1] == 128 && text[i + 2] == 128 { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+pub fn frame_end(words: [i64]) -> bool {
+  return len(words) == 0;
+}
+
+pub struct Run { ordinal: i64, waiting: bool }
 pub struct Activity { ordinal: i64 }
 pub struct Sess { ordinal: i64, blob: Vec<i64> }
 pub struct Clock {
-  ordinal: i64, owner: String, since_present: i64, since: i64, armed: i64, deadline: i64,
+  ordinal: i64, owner: String, timing: ClockTiming,
   runs: HashMap<String, Run>, next_runs: i64
 }
 pub struct Tool { ordinal: i64, activities: HashMap<String, Activity>, next_activities: i64 }
@@ -14,33 +66,33 @@ pub struct St {
   tools: HashMap<String, Tool>, next_tools: i64
 }
 
-// The Q reply shape determines where keys go in the output.
-pub struct Reply { status: i64, words: Vec<i64>, keys: Vec<String> }
+pub enum Outcome { Invalid, Changed(value: bool), Count(value: i64), Missing, MissingClock, Found }
+pub struct ClockTiming { present: bool, since: i64, armed: bool, deadline: i64 }
+pub enum ClockInput { Invalid, Valid(value: ClockTiming) }
+pub enum WaitingInput { Invalid, Valid(value: bool) }
+pub struct Named { ordinal: i64, key: String }
+pub struct SessionView { ordinal: i64, key: String, blob: Vec<i64> }
+pub struct RunView { parent: i64, ordinal: i64, key: String, waiting: bool }
+pub struct ClockView {
+  ordinal: i64, key: String, owner: String, timing: ClockTiming, run_count: i64
+}
+pub struct ActivityView { parent: i64, ordinal: i64, key: String }
+pub struct Reply {
+  outcome: Outcome, blob: Vec<i64>, names: Vec<Named>,
+  sessions: Vec<SessionView>, clocks: Vec<ClockView>, runs: Vec<RunView>,
+  activities: Vec<ActivityView>
+}
+
+fn reply(outcome: Outcome) -> Reply ! alloc
+  ensures len(result.clocks) == 0
+{
+  return Reply { outcome: outcome, blob: vec_new::<i64>(), names: vec_new::<Named>(),
+    sessions: vec_new::<SessionView>(), clocks: vec_new::<ClockView>(), runs: vec_new::<RunView>(),
+    activities: vec_new::<ActivityView>() };
+}
 
 fn owned_text(key: str) -> String ! alloc {
   return string_push_str(string_new(), key);
-}
-
-fn empty_reply(status: i64) -> Reply ! alloc {
-  return Reply { status: status, words: vec_new::<i64>(), keys: vec_new::<String>() };
-}
-
-fn emit(inout reply: Reply, value: i64) -> () ! alloc {
-  if len(reply.words) < 1099511627776 {
-    reply.words = vec_push::<i64>(move reply.words, value);
-  }
-}
-
-fn emit_key(inout reply: Reply, key: str) -> () ! alloc {
-  if len(reply.keys) < 1099511627776 {
-    reply.keys = vec_push::<String>(move reply.keys, owned_text(key));
-  }
-}
-
-fn one(value: i64) -> Reply ! alloc {
-  let mut reply: Reply = empty_reply(0);
-  emit(inout reply, value);
-  return reply;
 }
 
 fn blob_copy(blob: [i64]) -> Vec<i64> ! alloc {
@@ -56,59 +108,24 @@ fn blob_copy(blob: [i64]) -> Vec<i64> ! alloc {
   return move result;
 }
 
-fn emit_blob(inout reply: Reply, session: Sess) -> () ! alloc {
-  let n: i64 = len(session.blob);
-  emit(inout reply, n);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(session.blob)
-    decreases n - i
-  {
-    emit(inout reply, vec_get::<i64>(session.blob, i));
-    i = i + 1;
-  }
+
+fn clock_view(key: str, clock: Clock) -> ClockView ! alloc {
+  return ClockView { ordinal: clock.ordinal, key: owned_text(key), owner: owned_text(string_to_str(clock.owner)),
+    timing: clock.timing, run_count: len(clock.runs) };
 }
 
-fn emit_clock(inout reply: Reply, clock: Clock) -> () ! alloc {
-  emit_key(inout reply, string_to_str(clock.owner));
-  emit(inout reply, clock.since_present);
-  emit(inout reply, clock.since);
-  emit(inout reply, clock.armed);
-  emit(inout reply, clock.deadline);
-}
-
-fn emit_runs(inout reply: Reply, clock: Clock) -> () ! alloc {
-  emit(inout reply, len(clock.runs));
+fn append_runs(inout output: Reply, clock: Clock) -> () ! alloc {
   for (key, item) in clock.runs {
-    emit(inout reply, item.ordinal);
-    emit_key(inout reply, key);
-    emit(inout reply, item.waiting);
+    if len(output.runs) < 1099511627776 {
+      output.runs = vec_push::<RunView>(move output.runs,
+        RunView { parent: clock.ordinal, ordinal: item.ordinal, key: owned_text(key), waiting: item.waiting });
+    }
   }
 }
 
-fn emit_tools(inout reply: Reply, tool: Tool) -> () ! alloc {
-  emit(inout reply, len(tool.activities));
-  for (key, item) in tool.activities {
-    emit(inout reply, item.ordinal);
-    emit_key(inout reply, key);
-  }
-}
-
-fn emit_sessions(inout reply: Reply, st: St, details: bool) -> () ! alloc {
-  emit(inout reply, len(st.sessions));
-  for (key, item) in st.sessions {
-    emit(inout reply, item.ordinal);
-    emit_key(inout reply, key);
-    if details { emit_blob(inout reply, item); }
-  }
-}
-
-fn emit_clocks(inout reply: Reply, st: St, details: bool) -> () ! alloc {
-  emit(inout reply, len(st.clocks));
-  for (key, item) in st.clocks {
-    emit(inout reply, item.ordinal);
-    emit_key(inout reply, key);
-    if details { emit_clock(inout reply, item); emit_runs(inout reply, item); }
+fn append_name(inout output: Reply, ordinal: i64, key: str) -> () ! alloc {
+  if len(output.names) < 1099511627776 {
+    output.names = vec_push::<Named>(move output.names, Named { ordinal: ordinal, key: owned_text(key) });
   }
 }
 
@@ -121,15 +138,6 @@ fn count_runs(st: St) -> i64 {
   }
   return count;
 }
-fn emit_tools_map(inout reply: Reply, st: St, details: bool) -> () ! alloc {
-  emit(inout reply, len(st.tools));
-  for (key, item) in st.tools {
-    emit(inout reply, item.ordinal);
-    emit_key(inout reply, key);
-    if details { emit_tools(inout reply, item); }
-  }
-}
-
 fn count_activities(st: St) -> i64 {
   let mut count: i64 = 0;
   for (key, item) in st.tools invariant 0 <= count {
@@ -139,82 +147,84 @@ fn count_activities(st: St) -> i64 {
   }
   return count;
 }
-fn session_put(inout st: St, key: str, blob: [i64]) -> Reply ! alloc {
+pub fn session_put(inout st: St, key: str, blob: [i64]) -> Reply ! alloc {
+  if len(key) > 549755813888 { return reply(Outcome::Invalid); }
+  if !needs_escape(key) { return session_put_admitted(inout st, key, blob); }
+  let key_key: String = native_key(key);
+  return session_put_admitted(inout st, string_to_str(key_key), blob);
+}
+
+pub fn session_put_admitted(inout st: St, key: str, blob: [i64]) -> Reply ! alloc {
   let mut fresh: bool = false;
   match map_get_mut::<String, Sess>(inout st.sessions, key) {
-    Some(session) => { session.blob = blob_copy(blob); }
+    Some(session) => {
+      // Replace in place: reuse the stored buffer instead of allocating a fresh copy.
+      vec_clear::<i64>(inout session.blob);
+      let mut i: i64 = 0;
+      while i < len(blob)
+        invariant 0 <= i && i <= len(blob) && len(session.blob) == i
+        decreases len(blob) - i
+      {
+        session.blob = vec_push::<i64>(move session.blob, blob[i]);
+        i = i + 1;
+      }
+    }
     None => { fresh = true; }
   }
-  if !fresh { return one(0); }
+  if !fresh { return reply(Outcome::Changed(false)); }
   let ordinal: i64 = st.next_sessions;
-  if ordinal < 0 || ordinal >= 1099511627775 || len(st.sessions) >= 1099511627776 { return empty_reply(2); }
+  if ordinal < 0 || ordinal >= 1099511627775 || len(st.sessions) >= 1099511627776 { return reply(Outcome::Invalid); }
   st.next_sessions = ordinal + 1;
   st.sessions = map_insert::<String, Sess>(move st.sessions, owned_text(key),
     Sess { ordinal: ordinal, blob: blob_copy(blob) });
-  return one(1);
+  return reply(Outcome::Changed(true));
 }
 
-fn session_get(st: St, key: str) -> Reply ! alloc {
-  let mut reply: Reply = empty_reply(0);
-  match map_get::<String, Sess>(st.sessions, key) {
-    Some(session) => { emit(inout reply, 1); emit_blob(inout reply, session); }
-    None => { emit(inout reply, 0); }
-  }
-  return reply;
+pub fn clock_put(inout st: St, key: str, owner: str) -> Reply ! alloc {
+  if len(key) > 549755813888 || len(owner) > 549755813888 { return reply(Outcome::Invalid); }
+  if !needs_escape(key) && !needs_escape(owner) { return clock_put_admitted(inout st, key, owner); }
+  let key_key: String = native_key(key);
+  let owner_key: String = native_key(owner);
+  return clock_put_admitted(inout st, string_to_str(key_key), string_to_str(owner_key));
 }
 
-fn clock_put(inout st: St, key: str, owner: str) -> Reply ! alloc {
+pub fn clock_put_admitted(inout st: St, key: str, owner: str) -> Reply ! alloc {
   let mut fresh: bool = false;
   match map_get_mut::<String, Clock>(inout st.clocks, key) {
     Some(clock) => { clock.owner = owned_text(owner); }
     None => { fresh = true; }
   }
-  if !fresh { return one(0); }
+  if !fresh { return reply(Outcome::Changed(false)); }
   let ordinal: i64 = st.next_clocks;
-  if ordinal < 0 || ordinal >= 1099511627775 || len(st.clocks) >= 1099511627776 { return empty_reply(2); }
+  if ordinal < 0 || ordinal >= 1099511627775 || len(st.clocks) >= 1099511627776 { return reply(Outcome::Invalid); }
   st.next_clocks = ordinal + 1;
   st.clocks = map_insert::<String, Clock>(move st.clocks, owned_text(key),
-    Clock { ordinal: ordinal, owner: owned_text(owner), since_present: 0, since: 0, armed: 0,
-            deadline: 0, runs: map_new::<String, Run>(), next_runs: 0 });
-  return one(1);
+    Clock { ordinal: ordinal, owner: owned_text(owner),
+            timing: ClockTiming { present: false, since: 0, armed: false, deadline: 0 },
+            runs: map_new::<String, Run>(), next_runs: 0 });
+  return reply(Outcome::Changed(true));
 }
 
-fn clock_set(inout st: St, key: str, present: i64, since: i64, armed: i64, deadline: i64) -> Reply ! alloc {
-  if (present != 0 && present != 1) || (armed != 0 && armed != 1) { return empty_reply(2); }
+pub fn clock_set(inout st: St, key: str, timing: ClockTiming) -> Reply ! alloc {
+  if len(key) > 549755813888 { return reply(Outcome::Invalid); }
+  if !needs_escape(key) { return clock_set_admitted(inout st, key, timing); }
+  let key_key: String = native_key(key);
+  return clock_set_admitted(inout st, string_to_str(key_key), timing);
+}
+
+pub fn clock_set_admitted(inout st: St, key: str, timing: ClockTiming) -> Reply ! alloc {
   let mut found: i64 = 0;
   match map_get_mut::<String, Clock>(inout st.clocks, key) {
     Some(clock) => {
-      clock.since_present = present;
-      clock.since = since;
-      clock.armed = armed;
-      clock.deadline = deadline;
+      clock.timing = timing;
       found = 1;
     }
     None => {}
   }
-  return one(found);
+  return reply(Outcome::Changed(found == 1));
 }
 
-fn clock_read(st: St, code: i64, key: str) -> Reply ! alloc {
-  let mut reply: Reply = empty_reply(0);
-  match map_get::<String, Clock>(st.clocks, key) {
-    Some(clock) => {
-      emit(inout reply, 1);
-      if code == 8 {
-        emit_clock(inout reply, clock);
-        emit(inout reply, len(clock.runs));
-      } else {
-        emit_runs(inout reply, clock);
-      }
-    }
-    None => { emit(inout reply, 0); }
-  }
-  return reply;
-}
-
-fn run_set(inout clock: Clock, key: str, waiting: i64) -> i64 ! alloc
-  requires waiting == 0 || waiting == 1
-{
+fn run_set(inout clock: Clock, key: str, waiting: bool) -> i64 ! alloc {
   let mut fresh: bool = false;
   match map_get_mut::<String, Run>(inout clock.runs, key) {
     Some(run) => { run.waiting = waiting; }
@@ -228,26 +238,6 @@ fn run_set(inout clock: Clock, key: str, waiting: i64) -> i64 ! alloc
   return 1;
 }
 
-fn run_change(inout st: St, code: i64, key: str, run: str, waiting: i64) -> Reply ! alloc {
-  if code == 9 && waiting != 0 && waiting != 1 { return empty_reply(2); }
-  let mut value: i64 = 0;
-  match map_get_mut::<String, Clock>(inout st.clocks, key) {
-    Some(clock) => {
-      if code == 9 {
-        value = run_set(inout clock, run, waiting);
-      } else {
-        if map_remove::<String, Run>(inout clock.runs, run) {
-          value = 1;
-        }
-      }
-    }
-    None => { if code == 9 { value = 2; } }
-  }
-  if value < 0 { return empty_reply(2); }
-  return one(value);
-}
-
-// Activities are append-only until their entire turn is removed.
 fn activity_note(inout tool: Tool, key: str) -> i64 ! alloc {
   let mut seen: bool = false;
   match map_get::<String, Activity>(tool.activities, key) {
@@ -262,85 +252,263 @@ fn activity_note(inout tool: Tool, key: str) -> i64 ! alloc {
   return 1;
 }
 
-fn tool_note(inout st: St, key: str, activity: str) -> Reply ! alloc {
+pub fn tool_note(inout st: St, key: str, activity: str) -> Reply ! alloc {
+  if len(key) > 549755813888 || len(activity) > 549755813888 { return reply(Outcome::Invalid); }
+  if !needs_escape(key) && !needs_escape(activity) { return tool_note_admitted(inout st, key, activity); }
+  let key_key: String = native_key(key);
+  let activity_key: String = native_key(activity);
+  return tool_note_admitted(inout st, string_to_str(key_key), string_to_str(activity_key));
+}
+
+pub fn tool_note_admitted(inout st: St, key: str, activity: str) -> Reply ! alloc {
   let mut fresh: bool = false;
   let mut value: i64 = 0;
   match map_get_mut::<String, Tool>(inout st.tools, key) {
     Some(tool) => { value = activity_note(inout tool, activity); }
     None => { fresh = true; }
   }
-  if value < 0 { return empty_reply(2); }
-  if !fresh { return one(value); }
+  if value < 0 { return reply(Outcome::Invalid); }
+  if !fresh { return reply(Outcome::Changed(value == 1)); }
   let ordinal: i64 = st.next_tools;
-  if ordinal < 0 || ordinal >= 1099511627775 || len(st.tools) >= 1099511627776 { return empty_reply(2); }
+  if ordinal < 0 || ordinal >= 1099511627775 || len(st.tools) >= 1099511627776 { return reply(Outcome::Invalid); }
   let mut tool: Tool = Tool { ordinal: ordinal, activities: map_new::<String, Activity>(),
                               next_activities: 0 };
   let added: i64 = activity_note(inout tool, activity);
   st.next_tools = ordinal + 1;
   st.tools = map_insert::<String, Tool>(move st.tools, owned_text(key), move tool);
-  return one(added);
+  return reply(Outcome::Changed(added == 1));
 }
 
-fn tool_read(st: St, code: i64, key: str) -> Reply ! alloc {
-  let mut reply: Reply = empty_reply(0);
+
+pub fn session_get(st: St, key: str) -> Reply ! alloc {
+  if len(key) > 549755813888 { return reply(Outcome::Invalid); }
+  if !needs_escape(key) { return session_get_admitted(st, key); }
+  let key_key: String = native_key(key);
+  return session_get_admitted(st, string_to_str(key_key));
+}
+
+pub fn session_get_admitted(st: St, key: str) -> Reply ! alloc {
+  match map_get::<String, Sess>(st.sessions, key) {
+    Some(session) => {
+      let mut output: Reply = reply(Outcome::Found);
+      output.blob = blob_copy(session.blob);
+      return output;
+    }
+    None => { return reply(Outcome::Missing); }
+  }
+}
+
+pub fn session_remove(inout st: St, key: str) -> Reply ! alloc {
+  if len(key) > 549755813888 { return reply(Outcome::Invalid); }
+  if !needs_escape(key) { return session_remove_admitted(inout st, key); }
+  let key_key: String = native_key(key);
+  return session_remove_admitted(inout st, string_to_str(key_key));
+}
+
+pub fn session_remove_admitted(inout st: St, key: str) -> Reply ! alloc {
+  return reply(Outcome::Changed(map_remove::<String, Sess>(inout st.sessions, key)));
+}
+
+pub fn session_list(st: St) -> Reply ! alloc {
+  let mut output: Reply = reply(Outcome::Found);
+  for (key, item) in st.sessions { append_name(inout output, item.ordinal, key); }
+  return output;
+}
+
+pub fn clock_remove(inout st: St, key: str) -> Reply ! alloc {
+  if len(key) > 549755813888 { return reply(Outcome::Invalid); }
+  if !needs_escape(key) { return clock_remove_admitted(inout st, key); }
+  let key_key: String = native_key(key);
+  return clock_remove_admitted(inout st, string_to_str(key_key));
+}
+
+pub fn clock_remove_admitted(inout st: St, key: str) -> Reply ! alloc {
+  return reply(Outcome::Changed(map_remove::<String, Clock>(inout st.clocks, key)));
+}
+
+pub fn clock_get(st: St, key: str) -> Reply ! alloc {
+  if len(key) > 549755813888 { return reply(Outcome::Invalid); }
+  if !needs_escape(key) { return clock_get_admitted(st, key); }
+  let key_key: String = native_key(key);
+  return clock_get_admitted(st, string_to_str(key_key));
+}
+
+pub fn clock_get_admitted(st: St, key: str) -> Reply ! alloc {
+  match map_get::<String, Clock>(st.clocks, key) {
+    Some(clock) => {
+      let mut output: Reply = reply(Outcome::Found);
+      output.clocks = vec_push::<ClockView>(move output.clocks, clock_view(key, clock));
+      return output;
+    }
+    None => { return reply(Outcome::Missing); }
+  }
+}
+
+pub fn run_put(inout st: St, key: str, run: str, waiting: bool) -> Reply ! alloc {
+  if len(key) > 549755813888 || len(run) > 549755813888 { return reply(Outcome::Invalid); }
+  if !needs_escape(key) && !needs_escape(run) { return run_put_admitted(inout st, key, run, waiting); }
+  let key_key: String = native_key(key);
+  let run_key: String = native_key(run);
+  return run_put_admitted(inout st, string_to_str(key_key), string_to_str(run_key), waiting);
+}
+
+pub fn run_put_admitted(inout st: St, key: str, run: str, waiting: bool) -> Reply ! alloc {
+  let mut value: i64 = 2;
+  match map_get_mut::<String, Clock>(inout st.clocks, key) {
+    Some(clock) => { value = run_set(inout clock, run, waiting); }
+    None => {}
+  }
+  if value < 0 { return reply(Outcome::Invalid); }
+  if value == 2 { return reply(Outcome::MissingClock); }
+  return reply(Outcome::Changed(value == 1));
+}
+
+// Q admission converts untyped fields into the arguments accepted by the entries.
+pub fn clock_input(fields: [i64]) -> ClockInput {
+  if len(fields) != 4 { return ClockInput::Invalid; }
+  if (fields[0] != 0 && fields[0] != 1) || (fields[2] != 0 && fields[2] != 1) {
+    return ClockInput::Invalid;
+  }
+  return ClockInput::Valid(ClockTiming { present: fields[0] == 1, since: fields[1],
+    armed: fields[2] == 1, deadline: fields[3] });
+}
+
+pub fn waiting_input(fields: [i64]) -> WaitingInput {
+  if len(fields) != 1 { return WaitingInput::Invalid; }
+  if fields[0] != 0 && fields[0] != 1 { return WaitingInput::Invalid; }
+  return WaitingInput::Valid(fields[0] == 1);
+}
+
+pub fn blob_input(declared: i64, blob: [i64]) -> bool {
+  return declared == len(blob);
+}
+
+pub fn run_remove(inout st: St, key: str, run: str) -> Reply ! alloc {
+  if len(key) > 549755813888 || len(run) > 549755813888 { return reply(Outcome::Invalid); }
+  if !needs_escape(key) && !needs_escape(run) { return run_remove_admitted(inout st, key, run); }
+  let key_key: String = native_key(key);
+  let run_key: String = native_key(run);
+  return run_remove_admitted(inout st, string_to_str(key_key), string_to_str(run_key));
+}
+
+pub fn run_remove_admitted(inout st: St, key: str, run: str) -> Reply ! alloc {
+  let mut found: bool = false;
+  match map_get_mut::<String, Clock>(inout st.clocks, key) {
+    Some(clock) => { found = map_remove::<String, Run>(inout clock.runs, run); }
+    None => {}
+  }
+  return reply(Outcome::Changed(found));
+}
+
+pub fn run_list(st: St, key: str) -> Reply ! alloc {
+  if len(key) > 549755813888 { return reply(Outcome::Invalid); }
+  if !needs_escape(key) { return run_list_admitted(st, key); }
+  let key_key: String = native_key(key);
+  return run_list_admitted(st, string_to_str(key_key));
+}
+
+pub fn run_list_admitted(st: St, key: str) -> Reply ! alloc {
+  match map_get::<String, Clock>(st.clocks, key) {
+    Some(clock) => {
+      let mut output: Reply = reply(Outcome::Found);
+      append_runs(inout output, clock);
+      return output;
+    }
+    None => { return reply(Outcome::Missing); }
+  }
+}
+
+pub fn clock_list(st: St) -> Reply ! alloc {
+  let mut output: Reply = reply(Outcome::Found);
+  for (key, item) in st.clocks { append_name(inout output, item.ordinal, key); }
+  return output;
+}
+
+pub fn tool_remove(inout st: St, key: str) -> Reply ! alloc {
+  if len(key) > 549755813888 { return reply(Outcome::Invalid); }
+  if !needs_escape(key) { return tool_remove_admitted(inout st, key); }
+  let key_key: String = native_key(key);
+  return tool_remove_admitted(inout st, string_to_str(key_key));
+}
+
+pub fn tool_remove_admitted(inout st: St, key: str) -> Reply ! alloc {
+  return reply(Outcome::Changed(map_remove::<String, Tool>(inout st.tools, key)));
+}
+
+pub fn tool_count(st: St, key: str) -> Reply ! alloc {
+  if len(key) > 549755813888 { return reply(Outcome::Invalid); }
+  if !needs_escape(key) { return tool_count_admitted(st, key); }
+  let key_key: String = native_key(key);
+  return tool_count_admitted(st, string_to_str(key_key));
+}
+
+pub fn tool_count_admitted(st: St, key: str) -> Reply ! alloc {
+  match map_get::<String, Tool>(st.tools, key) {
+    Some(tool) => { return reply(Outcome::Count(len(tool.activities))); }
+    None => { return reply(Outcome::Count(0)); }
+  }
+}
+
+pub fn activity_list(st: St, key: str) -> Reply ! alloc {
+  if len(key) > 549755813888 { return reply(Outcome::Invalid); }
+  if !needs_escape(key) { return activity_list_admitted(st, key); }
+  let key_key: String = native_key(key);
+  return activity_list_admitted(st, string_to_str(key_key));
+}
+
+pub fn activity_list_admitted(st: St, key: str) -> Reply ! alloc {
+  let mut output: Reply = reply(Outcome::Found);
   match map_get::<String, Tool>(st.tools, key) {
     Some(tool) => {
-      if code == 15 { emit(inout reply, len(tool.activities)); }
-      else { emit_tools(inout reply, tool); }
+      for (activity, item) in tool.activities { append_name(inout output, item.ordinal, activity); }
     }
-    None => { emit(inout reply, 0); }
+    None => {}
   }
-  return reply;
+  return output;
 }
 
-fn removed(value: bool) -> Reply ! alloc {
-  if value { return one(1); }
-  return one(0);
+pub fn tool_list(st: St) -> Reply ! alloc {
+  let mut output: Reply = reply(Outcome::Found);
+  for (key, item) in st.tools { append_name(inout output, item.ordinal, key); }
+  return output;
 }
 
-pub fn m4_op(inout st: St, code: i64, key: str, other: str, data: [i64]) -> Reply ! alloc {
-  if code == 1 { return session_put(inout st, key, data); }
-  if code == 2 { return session_get(st, key); }
-  if code == 3 {
-    let found: bool = map_remove::<String, Sess>(inout st.sessions, key);
-    return removed(found);
+pub fn live_count(st: St) -> Reply ! alloc {
+  let roots: i64 = len(st.sessions) + len(st.clocks) + len(st.tools);
+  let runs: i64 = count_runs(st);
+  let activities: i64 = count_activities(st);
+  if 0 <= runs && runs <= 4611683819404132351 && 0 <= activities && activities <= 4611683819404132351 {
+    return reply(Outcome::Count(roots + runs + activities));
   }
-  if code == 5 { return clock_put(inout st, key, other); }
-  if code == 6 {
-    let found: bool = map_remove::<String, Clock>(inout st.clocks, key);
-    return removed(found);
-  }
-  if code == 7 && len(data) == 4 {
-    return clock_set(inout st, key, data[0], data[1], data[2], data[3]);
-  }
-  if code == 8 || code == 11 { return clock_read(st, code, key); }
-  if code == 9 && len(data) == 1 { return run_change(inout st, code, key, other, data[0]); }
-  if code == 10 { return run_change(inout st, code, key, other, 0); }
-  if code == 13 { return tool_note(inout st, key, other); }
-  if code == 14 {
-    let found: bool = map_remove::<String, Tool>(inout st.tools, key);
-    return removed(found);
-  }
-  if code == 15 || code == 16 { return tool_read(st, code, key); }
-  let mut reply: Reply = empty_reply(0);
-  if code == 4 { emit_sessions(inout reply, st, false); }
-  else if code == 12 { emit_clocks(inout reply, st, false); }
-  else if code == 17 { emit_tools_map(inout reply, st, false); }
-  else if code == 18 {
-    let roots: i64 = len(st.sessions) + len(st.clocks) + len(st.tools);
-    let runs: i64 = count_runs(st);
-    let activities: i64 = count_activities(st);
-    if 0 <= runs && runs <= 4611683819404132351 && 0 <= activities && activities <= 4611683819404132351 {
-      emit(inout reply, roots + runs + activities);
-    } else { reply.status = 2; }
-  } else { reply.status = 2; }
-  return reply;
+  return reply(Outcome::Invalid);
 }
 
-pub fn m4_observe(inout st: St) -> Reply ! alloc {
-  let mut reply: Reply = empty_reply(0);
-  emit_sessions(inout reply, st, true);
-  emit_clocks(inout reply, st, true);
-  emit_tools_map(inout reply, st, true);
-  return reply;
+fn append_activities(inout output: Reply, tool: Tool) -> () ! alloc {
+  for (key, item) in tool.activities {
+    if len(output.activities) < 1099511627776 {
+      output.activities = vec_push::<ActivityView>(move output.activities,
+        ActivityView { parent: tool.ordinal, ordinal: item.ordinal, key: owned_text(key) });
+    }
+  }
+}
+
+pub fn m4_observe(st: St) -> Reply ! alloc {
+  let mut output: Reply = reply(Outcome::Found);
+  for (key, item) in st.sessions {
+    if len(output.sessions) < 1099511627776 {
+      output.sessions = vec_push::<SessionView>(move output.sessions,
+        SessionView { ordinal: item.ordinal, key: owned_text(key), blob: blob_copy(item.blob) });
+    }
+  }
+  for (key, item) in st.clocks {
+    if len(output.clocks) < 1099511627776 {
+      output.clocks = vec_push::<ClockView>(move output.clocks, clock_view(key, item));
+    }
+    append_runs(inout output, item);
+  }
+  for (key, item) in st.tools {
+    append_name(inout output, item.ordinal, key);
+    append_activities(inout output, item);
+  }
+  return output;
 }

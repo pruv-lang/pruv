@@ -61,14 +61,16 @@ def compiler_path(explicit, default):
 
 
 def compiler(args, root, gen, typed):
-    if typed and args.py:
+    libs = ["--lib", args.budlib or "bench/l3/budget", "--lib", "bench/l3/lib"]
+    if getattr(args, "py", False):
         python = os.path.join(shared_checkout(), ".venv", "bin", "python")
         script = compiler_path(args.pruvc, PRUVC_PY_DEFAULT)
-        return [python if os.path.isfile(python) else sys.executable, "-B", script, root, "-o", gen, "--backend", "rust"]
+        return [python if os.path.isfile(python) else sys.executable, "-B", script, root, "-o", gen,
+                "--backend", "rust"] + libs
     pruvc = compiler_path(args.pruvc, PRUVC_DEFAULT)
     if typed:
-        return [pruvc, root, "-o", gen, "--emit", "rs"]
-    return [pruvc, root, "-o", gen, "--lib", args.budlib or "bench/l3/budget", "--lib", "bench/l3/lib"]
+        return [pruvc, root, "-o", gen, "--emit", "rs"] + libs
+    return [pruvc, root, "-o", gen] + libs
 
 
 def build(args):
@@ -449,6 +451,38 @@ def cmd_q(args):
     return check_q(args, build(args))
 
 
+def check_clock_bounds(exe):
+    # The M9 driver takes raw i64 clock values, including the ones excluded
+    # by the TS oracle's safe-integer domain.
+    safe = 2**53 - 1
+    sid, bid, run = key("s"), key("b"), key("r")
+    cases = [(active, safe if active > 0 else -safe + 2)
+             for active in (safe, safe + 1, safe + 3, -safe, -safe - 1, -safe - 3)]
+    lines = []
+    for active, _ in cases:
+        rec = [0, 1, 1, active, 0, 0] + bid
+        lines.extend([f"case {active}", "put " + " ".join(map(str, sid + [len(rec)] + rec)),
+                      "now 1700000000000",
+                      "call " + " ".join(map(str, [1] + sid + bid + run + [0])),
+                      "adv 2", "call " + " ".join(map(str, [3] + sid + bid + run + [0])), "end"])
+    result = subprocess.run([exe, "q"], input="\n".join(lines) + "\n",
+                            capture_output=True, text=True, check=True)
+    runs = parse_driver(result.stdout)
+    failures = 0
+    for active, expected in cases:
+        record = runs[str(active)]
+        sessions, _, _ = parse_obs(record["obs"])
+        got = sessions[tuple(units("s"))][3]
+        ok = got == expected and not any(line.startswith("X") for line in record["log"])
+        print(f"activeMs {active}: got {got}, expected {expected} ({'ok' if ok else 'fail'})")
+        failures += not ok
+    return int(failures != 0)
+
+
+def cmd_clock_bounds(args):
+    return check_clock_bounds(build(args))
+
+
 def cmd_churn(args):
     return subprocess.run([build(args), "--exact", "churn_order"]).returncode
 
@@ -774,10 +808,10 @@ def cmd_perf(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["q", "perf", "derive", "dc", "churn"])
+    ap.add_argument("cmd", choices=["q", "perf", "derive", "dc", "churn", "clock-bounds"])
     ap.add_argument("--pruvc", help="compiler executable, or Python compiler script with --py")
     ap.add_argument("--typed", action="store_true", help="use the resident typed state lane")
-    ap.add_argument("--py", action="store_true", help="compile the typed lane with the Python Rust backend")
+    ap.add_argument("--py", action="store_true", help="compile with the Python Rust backend")
     ap.add_argument("--budlib")
     ap.add_argument("--out", help="directory for generated Rust and driver binaries")
     ap.add_argument("--family", choices=["q3", "q4"], default="q3")
@@ -789,12 +823,12 @@ def main():
     ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--reps", type=int, default=200000)
     a = ap.parse_args()
-    if a.typed and (a.cmd not in ("q", "perf", "churn", "dc") or a.budlib):
-        ap.error("--typed supports q, perf, churn and dc without --budlib")
+    if a.typed and (a.cmd not in ("q", "perf", "churn", "dc", "clock-bounds") or a.budlib):
+        ap.error("--typed supports q, perf, churn, dc and clock-bounds without --budlib")
     if a.cmd == "churn" and not a.typed:
         ap.error("churn requires --typed")
-    if a.py and (not a.typed or a.gen):
-        ap.error("--py requires --typed without --gen")
+    if a.py and a.gen:
+        ap.error("--py requires a compiler invocation without --gen")
     def fixture(filename):
         local = os.path.join(WORK, filename)
         if a.cmd != "q" or os.path.isfile(local):
@@ -804,7 +838,8 @@ def main():
         a.cases = fixture("cases_q4.jsonl" if a.cmd == "derive" and a.family == "q4" else "cases.jsonl")
     if a.oracle is None:
         a.oracle = fixture("oracle.jsonl")
-    sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "dc": cmd_dc, "churn": cmd_churn}[a.cmd](a))
+    sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "dc": cmd_dc, "churn": cmd_churn,
+              "clock-bounds": cmd_clock_bounds}[a.cmd](a))
 
 
 if __name__ == "__main__":

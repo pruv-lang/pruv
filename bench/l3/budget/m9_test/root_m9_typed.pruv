@@ -1,3 +1,5 @@
+mod bud_tstate;
+
 // Resident M9 state. Ordinals preserve insertion order for observation.
 pub struct Budget {
   id: String, state: i64, unlimited: bool, minutes: i64,
@@ -69,9 +71,8 @@ fn settle(inout b: Budget, inout c: Clock, sid: str, now: i64, inout o: Out) -> 
   if !string_eq(c.owner, sid) { return; }
   disarm(inout c, inout o, 13);
   if !c.has_since { return; }
-  let elapsed: i64 = bounded(now) - bounded(c.since);
-  if elapsed > 0 { b.active_ms = bounded(bounded(b.active_ms) + elapsed); }
-  else { b.active_ms = bounded(b.active_ms); }
+  let time: crate::bud_tstate::SettledTime = crate::bud_tstate::settle_time(b.active_ms, c.since, now);
+  b.active_ms = time.active_ms;
   c.has_since = false;
   c.since = 0;
   b.since_kind = 0;

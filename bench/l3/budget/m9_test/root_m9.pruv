@@ -4,6 +4,7 @@ mod bud_store;
 mod bud_map;
 mod bud_world;
 mod bud_clock;
+mod bud_tstate;
 
 // L3-10 M9 test root (test only, not product): drives bud_clock over the M4 world.
 // PLACEHOLDER budget record: until M7 defines the record, a session's blob holds
