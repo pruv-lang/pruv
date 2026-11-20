@@ -21,7 +21,7 @@ fn reason_text(reason: i64) -> String ! alloc
   return string_new();
 }
 
-fn apply_charge(inout st: St, sid: str, bid: str, now: i64, what: [i64]) -> crate::bud_tstate::Reply ! alloc, io
+fn apply_charge(inout st: St, sid: str, bid: str, now: i64, charge: crate::bud_tstate::Charge) -> crate::bud_tstate::Reply ! alloc, io
 {
   let mut reply: crate::bud_tstate::Reply = crate::bud_tstate::Reply { status: 0, value: 5, a: 2, b: 0 };
   match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid) {
@@ -32,8 +32,8 @@ fn apply_charge(inout st: St, sid: str, bid: str, now: i64, what: [i64]) -> crat
           reason = b.halt_reason;
           if reason < 0 { reason = 1; }
         }
-        if b.state == 0 && len(what) == 10 {
-          let charged: i64 = crate::bud_tstate::charge(inout b, what);
+        if b.state == 0 {
+          let charged: i64 = crate::bud_tstate::charge_typed(inout b, charge);
           if charged < 0 { reply.status = 2; }
           if charged > 0 {
             reason = charged;
@@ -52,22 +52,67 @@ fn apply_charge(inout st: St, sid: str, bid: str, now: i64, what: [i64]) -> crat
   return reply;
 }
 
+pub fn t_view(inout st: St, sid: str, bid: str, code: i64) -> crate::bud_tstate::Reply ! alloc
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  return crate::bud_tlife::view(inout st.sessions, inout st.out, sid, bid, code);
+}
+
+pub fn t_close(inout st: St, sid: str, now: i64) -> crate::bud_tstate::Reply ! alloc, io
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  return crate::bud_tlife::maybe_close(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, now);
+}
+
+pub fn t_charge(inout st: St, sid: str, bid: str, now: i64, charge: crate::bud_tstate::Charge) -> crate::bud_tstate::Reply ! alloc, io
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  let reply: crate::bud_tstate::Reply = apply_charge(inout st, sid, bid, now, charge);
+  st.charge_reason = string_new();
+  if reply.a == 1 { st.charge_reason = reason_text(reply.b); }
+  return reply;
+}
+
+pub fn t_run(inout st: St, sid: str, bid: str, run: str, code: i64, now: i64, flag: i64) -> crate::bud_tstate::Reply ! alloc, io
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  return crate::bud_tlife::run_event(inout st.sessions, inout st.clock_state, inout st.out, sid, bid, run, code, now, flag);
+}
+
+pub fn t_halt(inout st: St, sid: str, bid: str, now: i64, flag: i64) -> crate::bud_tstate::Reply ! alloc, io
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  return crate::bud_tlife::explicit_halt(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, bid, now, flag);
+}
+
+// Test-only packet decoding and rejection, shared with the direct-entry test lane.
+pub fn t_charge_words(what: [i64]) -> Option<crate::bud_tstate::Charge>
+{
+  if len(what) != 10 { return None::<crate::bud_tstate::Charge>; }
+  return Some::<crate::bud_tstate::Charge>(crate::bud_tstate::charge_words(what));
+}
+
+pub fn t_invalid(inout st: St) -> crate::bud_tstate::Reply ! alloc
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  return crate::bud_tstate::Reply { status: 2, value: 0, a: 0, b: 0 };
+}
+
+// Test-only adapter for the packet driver: decodes once and calls the direct entry.
 pub fn t_call(inout st: St, sid: str, bid: str, run: str, code: i64,
               now: i64, flag: i64, what: [i64]) -> crate::bud_tstate::Reply ! alloc, io
 {
-  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
-  if code == 1 || code == 2 || code == 5 { return crate::bud_tlife::view(inout st.sessions, inout st.out, sid, bid, code); }
-  if code == 6 { return crate::bud_tlife::maybe_close(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, now); }
-  if code == 7 && len(what) != 10 { return crate::bud_tstate::Reply { status: 2, value: 0, a: 0, b: 0 }; }
+  if code == 1 || code == 2 || code == 5 { return t_view(inout st, sid, bid, code); }
+  if code == 6 { return t_close(inout st, sid, now); }
   if code == 7 {
-    let reply: crate::bud_tstate::Reply = apply_charge(inout st, sid, bid, now, what);
-    st.charge_reason = string_new();
-    if reply.a == 1 { st.charge_reason = reason_text(reply.b); }
-    return reply;
+    match t_charge_words(what) {
+      Some(c) => { return t_charge(inout st, sid, bid, now, c); }
+      None => { return t_invalid(inout st); }
+    }
   }
-  if code >= 8 && code <= 11 { return crate::bud_tlife::run_event(inout st.sessions, inout st.clock_state, inout st.out, sid, bid, run, code, now, flag); }
-  if code == 12 { return crate::bud_tlife::explicit_halt(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, bid, now, flag); }
-  return crate::bud_tstate::Reply { status: 2, value: 0, a: 0, b: 0 };
+  if code >= 8 && code <= 11 { return t_run(inout st, sid, bid, run, code, now, flag); }
+  if code == 12 { return t_halt(inout st, sid, bid, now, flag); }
+  return t_invalid(inout st);
 }
 
 // Replacement preserves the insertion ordinal.

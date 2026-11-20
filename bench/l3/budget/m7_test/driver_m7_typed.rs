@@ -9,6 +9,14 @@ use sol::pruv_m_t_2_10_bud_tstate_10_ClockState as ClockState;
 use sol::pruv_m_t_2_10_bud_tstate_6_Limits as Limits;
 use sol::pruv_m_t_2_10_bud_tstate_3_Out as Out;
 use sol::pruv_m_t_2_10_bud_tstate_5_Reply as Reply;
+use sol::AttachUnit;
+
+// M7_LANE=direct calls the typed direct entries with the unit decoded once (sol::t_attach_unit) when the call is
+// built; any other value calls the test-only adapter sol::t_call, which decodes the unit words on every call.
+fn direct_lane() -> bool {
+    static LANE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *LANE.get_or_init(|| std::env::var("M7_LANE").as_deref() == Ok("direct"))
+}
 
 // Q codec follows the M10b typed lane's JavaScript text encoding.
 fn take_key(words: &mut &[i64]) -> Option<String> {
@@ -135,11 +143,28 @@ mod sol {
     }
 }
 
+// The call's entry, chosen once when the call is built: the adapter keeps the raw unit words; the direct lane keeps
+// only the unit decoded by sol::t_attach_unit (None -> the Pruv rejection entry t_invalid).
+enum Op { Adapter([i64; 6]), View, Close, Attach(AttachUnit), Replace(AttachUnit), Invalid }
+
+impl Op {
+    fn new(code: i64, unit: [i64; 6]) -> Self {
+        if !direct_lane() { return Op::Adapter(unit); }
+        match (code, sol::t_attach_unit(&unit)) {
+            (1 | 2 | 5, _) => Op::View,
+            (6, _) => Op::Close,
+            (3, Some(u)) => Op::Attach(u),
+            (4, Some(u)) => Op::Replace(u),
+            _ => Op::Invalid,
+        }
+    }
+}
+
 struct Call {
     code: i64,
     origin: i64,
     size: i64,
-    unit: [i64; 6],
+    op: Op,
     sid: String,
     bid: String,
 }
@@ -153,12 +178,20 @@ impl Call {
         if !keys.is_empty() { return None; }
         Some(Self {
             code: words[0], origin: words[1], size: words[2],
-            unit: words[3..9].try_into().ok()?, sid, bid,
+            op: Op::new(words[0], words[3..9].try_into().ok()?), sid, bid,
         })
     }
 
+    #[inline(always)]
     fn dispatch(&self, st: &mut sol::St, uuid: &str, now: i64) -> Reply {
-        sol::t_call(st, &self.sid, &self.bid, uuid, self.code, now, self.origin, self.size, &self.unit)
+        match &self.op {
+            Op::Adapter(unit) => sol::t_call(st, &self.sid, &self.bid, uuid, self.code, now, self.origin, self.size, unit),
+            Op::View => sol::t_view(st, &self.sid, &self.bid, self.code),
+            Op::Close => sol::t_close(st, &self.sid, now),
+            Op::Attach(unit) => sol::t_attach(st, &self.sid, uuid, now, self.origin, self.size, *unit),
+            Op::Replace(unit) => sol::t_replace(st, &self.sid, uuid, now, self.origin, self.size, *unit),
+            Op::Invalid => sol::t_invalid(st),
+        }
     }
 
     fn result_words(&self, st: &sol::St, reply: &Reply) -> Vec<i64> {
@@ -329,7 +362,7 @@ fn run_perf(args: &[String]) {
     let last = size - 1;
     let unit = [120, 24, 3, 2, 1, 0];
     let make_call = |i: usize, code, origin, size, with_bid| Call {
-        code, origin, size, unit, sid: sids[i].clone(),
+        code, origin, size, op: Op::new(code, unit), sid: sids[i].clone(),
         bid: if with_bid { bid(i) } else { String::new() },
     };
     let setup = |state| {

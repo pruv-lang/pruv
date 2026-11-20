@@ -10,6 +10,7 @@ use sol::pruv_m_t_2_10_bud_tstate_6_Budget as Budget;
 use sol::pruv_m_t_2_10_bud_tstate_10_ClockState as ClockState;
 use sol::pruv_m_t_2_10_bud_tstate_6_Limits as Limits;
 use sol::pruv_m_t_2_10_bud_tstate_3_Out as Out;
+use sol::pruv_m_t_2_10_bud_tstate_5_Reply as Reply;
 
 struct Timer {
     token: u64,
@@ -26,6 +27,8 @@ struct World {
     by_bid: HashMap<String, u64>,
     log: Vec<String>,
     silent: bool,
+    // Direct lane: the driver calls the typed entries; adapter lane: `t_call` decodes words.
+    direct: bool,
 }
 
 fn take_key(words: &mut &[i64]) -> Option<String> {
@@ -148,6 +151,7 @@ impl World {
             },
             now: 1700000000000, seq: 0, active: Vec::new(), by_bid: HashMap::new(),
             log: Vec::new(), silent: false,
+            direct: std::env::var("M10_LANE").as_deref() == Ok("direct"),
         }
     }
 
@@ -177,10 +181,30 @@ impl World {
         self.call_typed(body[0], body[11], &sid, &bid, &run, &body[1..11])
     }
 
+    #[inline(always)]
+    fn dispatch(&mut self, code: i64, flag: i64, sid: &str, bid: &str, run: &str, what: &[i64]) -> Reply {
+        let st = &mut self.st;
+        let now = self.now;
+        if !self.direct {
+            return sol::t_call(st, sid, bid, run, code, now, flag, what);
+        }
+        match code {
+            1 | 2 | 5 => sol::t_view(st, sid, bid, code),
+            6 => sol::t_close(st, sid, now),
+            7 => match sol::t_charge_words(what) {
+                Some(charge) => sol::t_charge(st, sid, bid, now, charge),
+                None => sol::t_invalid(st),
+            },
+            8..=11 => sol::t_run(st, sid, bid, run, code, now, flag),
+            12 => sol::t_halt(st, sid, bid, now, flag),
+            _ => sol::t_invalid(st),
+        }
+    }
+
     fn call_typed(&mut self, code: i64, flag: i64, sid: &str, bid: &str, run: &str, what: &[i64]) -> i64 {
         let quiet_before = bud_facts::calls();
         let running_before = bud_facts::running_calls();
-        let reply = sol::t_call(&mut self.st, sid, bid, run, code, self.now, flag, what);
+        let reply = self.dispatch(code, flag, sid, bid, run, what);
         let mut running = running_before;
         let effects = &self.st.out.fx;
         let close_bid = (code == 6 && effects.iter().any(|e| matches!(e.tag, 12..=14)))

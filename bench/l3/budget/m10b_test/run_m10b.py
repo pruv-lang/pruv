@@ -2,6 +2,7 @@
 """Compare budget raise and decide with the TypeScript oracle and benchmark against hand Rust."""
 import argparse
 from collections import Counter
+import difflib
 import json
 import os
 from pathlib import Path
@@ -33,8 +34,8 @@ def build_decide_facts(work, facts):
     return rlib
 
 
-def generate(compiler, target, facts, root="root_m10b_typed.pruv"):
-    root = HERE / root
+def generate(compiler, target, facts):
+    root = HERE / "root_m10b_typed.pruv"
     cmd = [m10.PY_DEFAULT, m10.PRUVC_PY] if compiler == "py" else [compiler]
     backend = ["--backend", "rust"] if compiler == "py" else []
     checked(cmd + [str(root), "-o", str(target)] + backend + m10.LIBS
@@ -249,60 +250,66 @@ def derive(args):
     return 0
 
 
-def check_audit_controls(args, exe, facts, fixture):
-    # Reuse the flat M10 host for these operations. The malformed frame is in the
-    # run key, so the host can still read the first two keys after t_call rejects it.
-    work = exe.parent
-    generate("py" if args.py else args.pruvc, work / "flat.rs", facts, "root_m10b.pruv")
-    main = work / "flat_main.rs"
-    codec = json.dumps(str(Path(m10.M7) / "record_text.rs"))
-    driver = json.dumps(str(Path(m10.HERE) / "driver_m10.rs"))
-    main.write_text('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n'
-                    '#[path = "flat.rs"] mod sol;\n'
-                    f'#[path = {codec}] mod record_text;\ninclude!({driver});\n')
-    flat = work / "driver_flat"
-    checked([m10.rustc(), "-O", "--edition", "2021", "--extern", f"bud_facts={facts}",
-             "--extern", f"decide_facts={build_decide_facts(work, facts)}", "-o", flat, main])
+def check_audit_controls(exe):
+    def obs(line):
+        # parse_obs reads a missing timer section as no timers, so require the separator first.
+        if "| T" not in line:
+            raise SystemExit(f"audit controls: O line without timer section: {line!r}")
+        return f"O {m10.parse_obs(line)!r}\n"
 
-    ref, run = fixture["script"][0]["args"]
+    def observed(stdout):
+        # The flat and typed hosts encode inactive fields and tool counts differently.
+        return [obs(line) if line.startswith("O ") else line
+                for line in stdout.splitlines(keepends=True)]
 
-    def wire(req, body):
-        return f"call {req} " + " ".join(map(str, body))
-
-    def call(req, op, *values):
-        return wire(req, m10.call_body(op, [ref, *values]))
-
-    started = call("start", "runStarted", run)
-    waiting = call("wait", "runWaiting", run, True)
-    fire = [11] + [0] * 11 + m10.key(ref["sessionId"]) + m10.key(ref["budgetId"]) + [0]
-    probe = m10.call_body("runStarted", [ref, "x"])
-    session = fixture["world"]["sessions"][0]
-    budget = session["budget"]
-    charge_session = {**session, "budget": {**budget, "used": {**budget["used"], "delegations": -9007199254740991}}}
-    cases = (
-        ("audit-1-waiting-timer", session, [started, "now 1700000000005", waiting, wire("fire", fire)]),
-        ("audit-2-negative-start", session, ["now -1", started, "now 4", waiting, "now -1",
-                                             call("resume", "runWaiting", run, False)]),
-        ("audit-3-charge-order", charge_session, ["rdi 0", call("charge", "charge", {"delegations": -1, "commands": 4})]),
-        ("audit-4-key-frames", session, [wire("padding", probe[:-1] + [probe[-1] | 1]),
-                                         wire("truncated", probe[:-1]), wire("trailing", probe + [0])]),
-    )
-
-    def observed(driver, source):
-        log = checked([driver, "q"], input=source).stdout.splitlines(keepends=True)
-        # Decode state observations so inactive wire fields and the flat tool count
-        # do not affect comparison. Compare call results and effects verbatim.
-        return [f"O {m10.parse_obs(line)!r}\n" if line.startswith("O ") else line for line in log]
-
-    for name, put, calls in cases:
-        source = "\n".join([f"case {name}", m10.put_line(put), *calls, "end"]) + "\n"
-        expected = observed(flat, source)
-        actual = observed(exe, source)
+    for case in json.loads((HERE / "audit_controls.golden.json").read_text()):
+        source = case["input"]
+        name = source.splitlines()[0].removeprefix("case ")
+        expected = observed(case["stdout"])
+        actual = observed(checked([exe, "q"], input=source).stdout)
         if actual != expected:
-            import difflib
-            diff = "".join(difflib.unified_diff(expected, actual, fromfile="flat", tofile="typed"))
+            diff = "".join(difflib.unified_diff(expected, actual, fromfile="golden", tofile="typed"))
             raise SystemExit(f"{name}:\n{diff}")
-        print(f"{name} exact (flat)")
+        print(f"{name} exact (golden)")
+
+
+def check_typed_malformed(exe, raise_fixture, decide_fixture):
+    def check(prefix, tail, expected):
+        source = "\n".join(prefix[:-1] + ["audit", *tail, "end"]) + "\n"
+        log = checked([exe, "q"], input=source).stdout.split("@ probe\n", 1)[1].splitlines()
+        actual = [line for line in log[:-1] if not line.startswith("O ")]
+        if actual != expected:
+            raise SystemExit(f"typed malformed {tail}: expected {expected}, got {actual}")
+
+    active, _ = program({**raise_fixture, "script": raise_fixture["script"][:1]})
+    halted, _ = program({**decide_fixture, "script": decide_fixture["script"][:-1]})
+    ref = m10.jv_decode(raise_fixture["script"][2]["args"][0])
+
+    def frame(code, flag, what, sid, bid):
+        return " ".join(map(str, [code, *what, flag, *m10.key(sid), *m10.key(bid), 0]))
+
+    for width in (9, 11):
+        body = frame(7, 0, [2, 1] + [0] * (width - 2), ref["sessionId"], ref["budgetId"])
+        check(active, [f"call-what probe {width} {body}"], ["A 2 0 true", "X 2"])
+
+    raise_body = frame(13, 2, [0] * 10, ref["sessionId"], ref["budgetId"])
+    decide_body = " ".join(map(str, call_body(decide_fixture["script"][-1])))
+    for unit in ("0 120 24 3 2", "0 120 24 3 2 1 0", "1 120 24 3 2 1"):
+        for prefix, body in ((active, raise_body), (halted, decide_body)):
+            check(prefix, ["unit " + unit, "call probe " + body], ["A 2 0 true", "E unit " + unit, "X 2"])
+
+    charge = [2, 1] + [0] * 8
+    unknown = frame(7, 0, charge, "missing-session", ref["budgetId"])
+    check(active, ["call probe " + unknown], ["A 0 0 true", "V 5 2 0"])
+
+    session = raise_fixture["world"]["sessions"][0]
+    # Replace the original budget under the same session before charging its old bid.
+    replacement = {**session, "budget": {**session["budget"], "id": "replacement-budget"}}
+    stale, _ = program({**raise_fixture, "world": {**raise_fixture["world"], "sessions": [session, replacement]},
+                        "script": []})
+    old_bid = frame(7, 0, charge, ref["sessionId"], ref["budgetId"])
+    check(stale, ["call probe " + old_bid], ["A 0 0 true", "V 5 2 0"])
+    print("typed malformed PASS")
 
 
 def check_raise_controls(exe, fixture):
@@ -379,11 +386,14 @@ def check_decide_controls(exe, fixture):
 
 
 def run_cases(args, cases, observations, fixtures=False):
-    exe, facts = build(args)
+    exe, _ = build(args)
     if fixtures and any(case["id"] == "H10" for case in cases):
         fixture = next(case for case in cases if case["id"] == "H10")
         check_raise_controls(exe, fixture)
-        check_audit_controls(args, exe, facts, fixture)
+        check_audit_controls(exe)
+        from common import load_group
+        decide_fixture = next(case for case in load_group("G") if case["id"] == "G10")
+        check_typed_malformed(exe, fixture, decide_fixture)
     if fixtures and any(case["id"] == "G10" for case in cases):
         check_decide_controls(exe, next(case for case in cases if case["id"] == "G10"))
     inputs, cuts = [], {}
@@ -507,6 +517,7 @@ def main():
     parser.add_argument("cmd", choices=commands)
     parser.add_argument("--pruvc", default=m10.PRUVC_DEFAULT)
     parser.add_argument("--py", action="store_true")
+    parser.add_argument("--lane", choices=("direct", "adapter"), default="adapter")
     parser.add_argument("--set", choices=("raise", "decide"), default="decide")
     parser.add_argument("--group", default="H")
     parser.add_argument("--cases")
@@ -516,6 +527,7 @@ def main():
     parser.add_argument("--items", default="time,limits,unlimited,extend,end")
     args = parser.parse_args()
     WORK.mkdir(parents=True, exist_ok=True)
+    os.environ["M10B_LANE"] = args.lane
     os.environ["TMPDIR"] = str(WORK)
     return commands[args.cmd](args)
 

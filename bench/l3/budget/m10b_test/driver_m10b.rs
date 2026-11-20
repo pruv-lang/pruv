@@ -11,6 +11,7 @@ use sol::pruv_m_t_2_10_bud_tstate_6_Effect as Effect;
 use sol::pruv_m_t_2_10_bud_tstate_6_Limits as Limits;
 use sol::pruv_m_t_2_10_bud_tstate_3_Out as Out;
 use sol::pruv_m_t_2_10_bud_tstate_5_Reply as Reply;
+use sol::pruv_m_t_2_10_bud_tstate_10_UnitAnswer as UnitAnswer;
 
 struct Timer {
     token: u64,
@@ -21,6 +22,10 @@ struct Timer {
 
 struct World {
     st: sol::St,
+    unit: Vec<i64>,
+    // The unit words decoded once by Pruv when they are staged (direct lane).
+    answer: UnitAnswer,
+    direct: bool,
     now: i64,
     seq: u64,
     active: Vec<Timer>,
@@ -138,8 +143,10 @@ impl World {
                 next_session: 0,
                 clock_state: ClockState { clocks: HashMap::new(), next_clock: 0 },
                 out: Out { fx: Vec::new() },
-                unit: Vec::new(),
             },
+            unit: Vec::new(),
+            answer: sol::t_unit_answer(&[]),
+            direct: std::env::var("M10B_LANE").as_deref() == Ok("direct"),
             now: 1700000000000, seq: 0, active: Vec::new(), by_bid: HashMap::new(),
             log: Vec::new(), silent: false, audit: false,
         }
@@ -159,26 +166,62 @@ impl World {
         if !self.silent { self.log.push(line); }
     }
 
-    fn call(&mut self, body: &[i64]) -> i64 {
-        let keys = body.get(12..).and_then(|mut keys| {
+    fn set_unit(&mut self, unit: Vec<i64>) {
+        self.answer = sol::t_unit_answer(&unit);
+        self.unit = unit;
+    }
+
+    fn call(&mut self, body: &[i64], what_len: usize) -> i64 {
+        let flag_at = 1 + what_len;
+        let keys = body.get(flag_at + 1..).and_then(|mut keys| {
             let sid = take_key(&mut keys)?;
             let bid = take_key(&mut keys)?;
             let run = take_key(&mut keys)?;
             keys.is_empty().then_some((sid, bid, run))
         });
         let Some((sid, bid, run)) = keys else {
-            if std::mem::take(&mut self.audit) { self.note("A 2 0 true".to_owned()); }
+            // No Pruv call happened, so no audit line: tests can tell this from a Pruv rejection.
+            self.audit = false;
             self.note("X 2".to_owned());
             return 2;
         };
-        self.call_typed(body[0], body[11], &sid, &bid, &run, &body[1..11])
+        self.call_typed(body[0], body[flag_at], &sid, &bid, &run, &body[1..flag_at])
+    }
+
+    // Inlined so the measured call sees its constant code, as the single `t_call` did before the lane switch.
+    #[inline(always)]
+    fn dispatch(&mut self, code: i64, flag: i64, sid: &str, bid: &str, run: &str, what: &[i64]) -> Reply {
+        let st = &mut self.st;
+        let now = self.now;
+        if !self.direct {
+            return sol::t_call(st, sid, bid, run, code, now, flag, what, &self.unit);
+        }
+        match code {
+            1 | 2 | 5 => sol::t_view(st, sid, bid, code),
+            6 => sol::t_close(st, sid, now),
+            7 => match sol::t_charge_words(what) {
+                Some(charge) => sol::t_charge(st, sid, bid, now, charge),
+                None => sol::t_invalid(st),
+            },
+            8..=11 => sol::t_run(st, sid, bid, run, code, now, flag),
+            12 => sol::t_halt(st, sid, bid, now, flag),
+            13 | 14 => {
+                let unit = self.answer;
+                if code == 13 {
+                    sol::t_raise(st, sid, bid, now, flag, unit)
+                } else {
+                    sol::t_decide(st, sid, bid, now, flag, unit)
+                }
+            }
+            _ => sol::t_invalid(st),
+        }
     }
 
     fn call_typed(&mut self, code: i64, flag: i64, sid: &str, bid: &str, run: &str, what: &[i64]) -> i64 {
         let quiet_before = bud_facts::calls();
         let running_before = bud_facts::running_calls();
         let before = self.audit.then(|| self.observe());
-        let reply = sol::t_call(&mut self.st, sid, bid, run, code, self.now, flag, what);
+        let reply = self.dispatch(code, flag, sid, bid, run, what);
         if let Some(before) = before {
             let unchanged = before == self.observe();
             self.note(format!("A {} {} {}",
@@ -197,7 +240,7 @@ impl World {
         for i in 0..=effects.len() {
             let i = i as i64;
             if !self.silent && unit_at == Some(i) {
-                let words = self.st.unit.iter().map(i64::to_string).collect::<Vec<_>>().join(" ");
+                let words = self.unit.iter().map(i64::to_string).collect::<Vec<_>>().join(" ");
                 self.log.push(format!("E unit {words}"));
             }
             while releases.peek().is_some_and(|q| q.fxn == i) {
@@ -378,7 +421,7 @@ fn run_q() {
                 w.audit = true;
             }
             "quiet" => bud_facts::set_answers(&nums(&p[1..]), 0),
-            "unit" => w.st.unit = nums(&p[1..]),
+            "unit" => w.set_unit(nums(&p[1..])),
             "rel" => decide_facts::push(&nums(&p[1..])),
             "rdi" => {
                 let a = nums(&p[1..]);
@@ -391,9 +434,10 @@ fn run_q() {
                 w.log.push("@ -".to_string());
                 w.advance(p[1].parse::<i64>().unwrap());
             }
-            "call" => {
+            "call" | "call-what" => {
                 w.log.push(format!("@ {}", p[1]));
-                w.call(&nums(&p[2..]));
+                let (what_len, start) = if p[0] == "call-what" { (p[2].parse().unwrap(), 3) } else { (10, 2) };
+                w.call(&nums(&p[start..]), what_len);
             }
             "end" => {
                 for l in w.log.drain(..) {
@@ -440,7 +484,7 @@ fn body(code: i64, flag: i64, run: &str) -> Vec<i64> {
 }
 
 fn perform_perf(world: &mut World, code: i64, size: i64, timer: &mut Option<i64>) -> Reply {
-    let reply = sol::t_call(&mut world.st, SID, BID, "", code, world.now, size, &[0; 10]);
+    let reply = world.dispatch(code, size, SID, BID, "", &[0; 10]);
     let mut stopped = None;
     for effect in &world.st.out.fx {
         match effect.tag {
@@ -469,7 +513,7 @@ fn run_perf_decide(setup: &Setup) {
     for i in 0..setup.d {
         ids.extend(key(&format!("d{i:04}")));
     }
-    world.st.unit = setup.unit.to_vec();
+    world.set_unit(setup.unit.to_vec());
     let halt = body(12, 2, "");
     let mut timer = None;
     let mut runs = false;
@@ -478,21 +522,21 @@ fn run_perf_decide(setup: &Setup) {
             world.put(&put);
             for i in 1..setup.d {
                 let run = format!("d{i:04}");
-                assert_eq!(world.call(&body(8, 0, &run)), 0);
-                assert_eq!(world.call(&body(9, 1, &run)), 0);
+                assert_eq!(world.call(&body(8, 0, &run), 10), 0);
+                assert_eq!(world.call(&body(9, 1, &run), 10), 0);
             }
-            assert_eq!(world.call(&body(8, 0, "d0000")), 0);
+            assert_eq!(world.call(&body(8, 0, "d0000"), 10), 0);
             runs = setup.size >= 0;
         } else {
             // the last extend restarted the interval: end it before the record is put back halted
-            assert_eq!(world.call(&body(9, 1, "d0000")), 0);
+            assert_eq!(world.call(&body(9, 1, "d0000"), 10), 0);
             world.put(&put);
-            assert_eq!(world.call(&body(9, 0, "d0000")), 0);
+            assert_eq!(world.call(&body(9, 0, "d0000"), 10), 0);
         }
         // the halt takes its staged answer; stage it again (outside the measurement)
         bud_facts::set_running(vec![ids.clone()]);
         bud_facts::set_running_calls(0);
-        assert_eq!(world.call(&halt), 0);
+        assert_eq!(world.call(&halt, 10), 0);
         world.by_bid.clear();
         world.active.clear();
         timer = None;
@@ -522,10 +566,10 @@ fn run_perf(args: &[String]) {
     world.put(&put);
     for i in 1..setup.d {
         let run = format!("d{i:04}");
-        assert_eq!(world.call(&body(8, 0, &run)), 0);
-        assert_eq!(world.call(&body(9, 1, &run)), 0);
+        assert_eq!(world.call(&body(8, 0, &run), 10), 0);
+        assert_eq!(world.call(&body(9, 1, &run), 10), 0);
     }
-    assert_eq!(world.call(&body(8, 0, "d0000")), 0);
+    assert_eq!(world.call(&body(8, 0, "d0000"), 10), 0);
     let pause = body(9, 1, "d0000");
     let resume = body(9, 0, "d0000");
     let raise = body(13, setup.size, "");
@@ -535,7 +579,7 @@ fn run_perf(args: &[String]) {
         ids.extend(key(&format!("d{i:04}")));
     }
     bud_facts::set_running(vec![ids]);
-    world.st.unit = setup.unit.to_vec();
+    world.set_unit(setup.unit.to_vec());
     let mut op = Vec::with_capacity(raise.len() + 2);
     op.push(raise[0]);
     op.push(0);
@@ -544,9 +588,9 @@ fn run_perf(args: &[String]) {
     let mut timer = None;
     benchmark::measure(setup.reps, || {
         // Put back the original budget and re-enter its active interval outside the measurement.
-        assert_eq!(world.call(&pause), 0);
+        assert_eq!(world.call(&pause, 10), 0);
         world.put(&put);
-        assert_eq!(world.call(&resume), 0);
+        assert_eq!(world.call(&resume, 10), 0);
         world.now += 1;
         // The resume armed the budget's timer; the slot holds the same expiry as the hand lane's (120-minute limit).
         timer = Some(world.now - 1 + 120 * 60_000);

@@ -3,6 +3,14 @@ pub struct Limits {
   time: i64, delegations: i64, commands: i64, reviews: i64, checks: i64
 }
 
+pub struct Amount { number: bool, value: i64 }
+
+pub struct Charge {
+  delegations: Amount, commands: Amount, reviews: Amount, checks: Amount, retries: Amount
+}
+
+pub struct UnitAnswer { status: i64, limits: Limits }
+
 pub struct Budget {
   id: String, state: i64, unlimited: bool, unlimited_kind: i64,
   limits: Limits, active_ms: i64, active_since: i64, since_kind: i64,
@@ -79,12 +87,32 @@ pub fn begin(inout b: Budget, inout c: Clock, now: i64) -> () ! alloc
   b.since_text = string_new();
 }
 
-pub fn amount(what: [i64], i: i64) -> i64
-  requires len(what) == 10 && 0 <= i && i <= 4
+fn amount(a: Amount) -> i64
 {
-  let value: i64 = what[2 * i + 1];
-  if what[2 * i] != 2 { return 0; }
-  return value;
+  if !a.number { return 0; }
+  return a.value;
+}
+
+pub fn charge_words(what: [i64]) -> Charge
+  requires len(what) == 10
+{
+  return Charge {
+    delegations: Amount { number: what[0] == 2, value: what[1] },
+    commands: Amount { number: what[2] == 2, value: what[3] },
+    reviews: Amount { number: what[4] == 2, value: what[5] },
+    checks: Amount { number: what[6] == 2, value: what[7] },
+    retries: Amount { number: what[8] == 2, value: what[9] }
+  };
+}
+
+pub fn unit_answer(unit: [i64]) -> UnitAnswer
+{
+  if len(unit) == 6 && unit[0] == 0 {
+    return UnitAnswer { status: 0, limits: Limits {
+      time: unit[1], delegations: unit[2], commands: unit[3], reviews: unit[4], checks: unit[5]
+    } };
+  }
+  return UnitAnswer { status: 1, limits: Limits { time: 0, delegations: 0, commands: 0, reviews: 0, checks: 0 } };
 }
 
 pub fn bumped(old: i64, amount: i64) -> i64
@@ -100,15 +128,20 @@ pub fn bumped(old: i64, amount: i64) -> i64
   return total;
 }
 
-// 0 means charged, 1..4 name the first over-limit counter, and -1 means invalid.
 pub fn charge(inout b: Budget, what: [i64]) -> i64
   requires len(what) == 10
 {
-  let a0: i64 = amount(what, 0);
-  let a1: i64 = amount(what, 1);
-  let a2: i64 = amount(what, 2);
-  let a3: i64 = amount(what, 3);
-  let a4: i64 = amount(what, 4);
+  return charge_typed(inout b, charge_words(what));
+}
+
+// 0 means charged, 1..4 name the first over-limit counter, and -1 means invalid.
+pub fn charge_typed(inout b: Budget, c: Charge) -> i64
+{
+  let a0: i64 = amount(c.delegations);
+  let a1: i64 = amount(c.commands);
+  let a2: i64 = amount(c.reviews);
+  let a3: i64 = amount(c.checks);
+  let a4: i64 = amount(c.retries);
   let delegations: i64 = bumped(b.delegations, a0);
   let commands: i64 = bumped(b.commands, a1);
   let reviews: i64 = bumped(b.reviews, a2);

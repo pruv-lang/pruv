@@ -23,6 +23,10 @@ pub struct St {
   turns: HashMap<String, Turn>, next_turn: i64
 }
 pub struct Reply { words: Vec<i64>, keys: Vec<String> }
+// A decoded charge: the amount of each BUDGET_COUNT_KEYS key, then retries (a non-number amount is 0).
+pub struct Charge { delegations: i64, commands: i64, reviews: i64, checks: i64, retries: i64 }
+// A charge answer: the wire status (0 ok, 2 invalid, 5 ResourceBound, 6 halted at a limit) and the charge result.
+pub struct Answer { status: i64, result: i64 }
 
 fn owned_text(key: str) -> String ! alloc {
   return string_push_str(string_new(), key);
@@ -64,9 +68,7 @@ fn sum(u: i64, a: i64) -> i64
   return r;
 }
 
-fn charge(inout b: Budget, what: [i64]) -> i64
-  requires len(what) == 10
-{
+fn charge(inout b: Budget, c: Charge) -> i64 {
   let s: i64 = b.state;
   if s == 2 { return 1; }
   if s == 1 {
@@ -77,12 +79,11 @@ fn charge(inout b: Budget, what: [i64]) -> i64
   }
   if s != 0 { return 2; }
   let unl: bool = b.unlimited == 1;
-  // each amount is read once; keys in BUDGET_COUNT_KEYS order, then retries
-  let a0: i64 = amount(what, 0);
-  let a1: i64 = amount(what, 1);
-  let a2: i64 = amount(what, 2);
-  let a3: i64 = amount(what, 3);
-  let a4: i64 = amount(what, 4);
+  let a0: i64 = c.delegations;
+  let a1: i64 = c.commands;
+  let a2: i64 = c.reviews;
+  let a3: i64 = c.checks;
+  let a4: i64 = c.retries;
   // limit checks: the first key over its limit refuses (32 + k); a ResourceBound on the way answers 5
   if !unl {
     if a0 > 0 { let t0: i64 = sum(b.delegations, a0); if t0 == bad() { return 5; } if t0 > b.limit_delegations { return 33; } }
@@ -103,6 +104,25 @@ fn charge(inout b: Budget, what: [i64]) -> i64
   b.checks = v3;
   b.retries = v4;
   return 0;
+}
+
+// The charge words decoded once: [key tag, amount] x (delegations, commands, reviews, checks, retries).
+pub fn t_charge_words(what: [i64]) -> Option<Charge> {
+  if len(what) != 10 { return None::<Charge>; }
+  return Some::<Charge>(Charge { delegations: amount(what, 0), commands: amount(what, 1), reviews: amount(what, 2),
+                       checks: amount(what, 3), retries: amount(what, 4) });
+}
+
+// The wire status of a charge result: 2 / 5 pass through, a limit refusal 33..36 halts (6), the rest succeed.
+fn answer(result: i64) -> Answer {
+  let mut status: i64 = 0;
+  if result == 2 || result == 5 { status = result; }
+  if result >= 33 && result <= 36 { status = 6; }
+  return Answer { status: status, result: result };
+}
+
+pub fn t_invalid() -> Answer {
+  return Answer { status: 2, result: 0 };
 }
 
 pub fn t_put(inout st: St, sid: str, bid: str, words: [i64]) -> i64 ! alloc {
@@ -162,26 +182,47 @@ fn current(b: Budget, bid: str) -> bool {
   return b.state >= 0 && string_eq(b.id, bid);
 }
 
-pub fn t_account(inout st: St, code: i64, sid: str, bid: str, what: [i64]) -> i64 {
-  if code != 1 && code != 2 { return 2; }
-  if code == 1 && len(what) != 10 { return 2; }
-  let mut status: i64 = code % 2;
+fn charge_at(inout b: Budget, bid: str, c: Charge) -> i64 {
+  if !current(b, bid) { return 1; }
+  return charge(inout b, c);
+}
+
+pub fn t_charge(inout st: St, sid: str, bid: str, c: Charge) -> Answer {
+  let mut result: i64 = 1;
   match map_get_mut::<String, Budget>(inout st.sessions, sid) {
-    Some(b) => { status = account(inout b, code, bid, what); }
+    Some(b) => { result = charge_at(inout b, bid, c); }
+    None => {}
+  }
+  return answer(result);
+}
+
+fn fail_at(inout b: Budget, bid: str) -> i64 {
+  if !current(b, bid) { return 0; }
+  let value: i64 = sum(b.failures, 1);
+  if value == bad() { return 5; }
+  b.failures = value;
+  return 0;
+}
+
+pub fn t_fail(inout st: St, sid: str, bid: str) -> i64 {
+  let mut status: i64 = 0;
+  match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+    Some(b) => { status = fail_at(inout b, bid); }
     None => {}
   }
   return status;
 }
 
-fn account(inout b: Budget, code: i64, bid: str, what: [i64]) -> i64
-  requires (code == 1 || code == 2) && (code != 1 || len(what) == 10)
-{
-  if !current(b, bid) { return code % 2; }
-  if code == 1 { return charge(inout b, what); }
-  let value: i64 = sum(b.failures, 1);
-  if value == bad() { return 5; }
-  b.failures = value;
-  return 0;
+// Test-only adapter for the account codes: decodes the words once and calls the direct entry; no budget decision.
+pub fn t_call(inout st: St, code: i64, sid: str, bid: str, what: [i64]) -> Answer {
+  if code == 1 {
+    match t_charge_words(what) {
+      Some(c) => { return t_charge(inout st, sid, bid, c); }
+      None => { return t_invalid(); }
+    }
+  }
+  if code == 2 && len(what) == 0 { return Answer { status: t_fail(inout st, sid, bid), result: 0 }; }
+  return t_invalid();
 }
 
 // The caller checks deduplication before reaching either insertion path.

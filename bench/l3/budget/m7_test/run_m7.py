@@ -6,7 +6,8 @@
   python3 bench/l3/budget/m7_test/run_m7.py same   (Python pruvc vs Rust pruvc: byte-identical Rust)
   python3 bench/l3/budget/m7_test/run_m7.py perf   [--rounds N] [--reps N] [--profile S|M|SM | --sizes 100,500,1000] [--no-instr]
 
-q, same and perf accept --typed to use String-keyed resident budgets. M7_WORK overrides the artifact directory.
+q, same and perf accept --typed to use String-keyed resident budgets; --lane adapter|direct (env M7_LANE) picks the
+typed driver lane (adapter: test-only t_call; direct: typed entries with the unit decoded once). M7_WORK overrides the artifact directory.
 q --hand16 runs hand_m7_u16.rs (typed UTF-16 hand Rust, q mode) on the same program instead of the Pruv driver, through the
 same classification. perf lanes: pruv (driver_m7), hand16 (hand_m7_u16), hand (hand_m7, UTF-8 String, informational), ts.
 perf also writes work/m7/perf.json with run_meta.run_meta(...) and the rows (ns, retired instructions, ratios).
@@ -991,7 +992,10 @@ def main():
     ap.add_argument("--oracle", default=None)
     ap.add_argument("--rounds", type=int, default=None)  # perf 5, boundary 7
     ap.add_argument("--reps", type=int, default=200000)
+    ap.add_argument("--lane", choices=["adapter", "direct"], default="adapter",
+                    help="--typed driver lane: adapter (test-only sol::t_call) or direct (typed entries, unit decoded once)")
     a = ap.parse_args()
+    os.environ["M7_LANE"] = a.lane
     if a.typed and (a.hand16 or a.cmd not in ("q", "same", "perf")):
         ap.error("--typed requires q, same or perf and cannot be combined with --hand16")
     a.cases = a.cases or input_path("cases.jsonl")
