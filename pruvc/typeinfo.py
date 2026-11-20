@@ -29,8 +29,9 @@ def is_scalar_vec(ty: Type) -> bool:
 
 
 def is_nested_collection_field(ty: Type) -> bool:
-    return ty in (Type("vec", (Type("string"),)), Type("hashmap", (I64, BOOL)),
-                  Type("hashmap", (Type("string"), BOOL)))
+    return (ty == Type("vec", (Type("string"),))
+            or ty.owner is None and ty.name == "hashmap" and len(ty.args) == 2
+            and ty.args[0] in (I64, Type("string")) and ty.args[1] in (I64, BOOL))
 
 
 def is_owned_field_type(ty: Type) -> bool:

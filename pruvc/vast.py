@@ -91,7 +91,7 @@ class Var(Expr):
 
 @dataclass
 class Unary(Expr):
-    op: str            # "-" | "!"
+    op: str            # "-" | "!" | "*"
     operand: Expr
     ty: Optional[Type] = None
 
@@ -234,6 +234,7 @@ class Let(Stmt):
 class Assign(Stmt):
     name: str
     value: Expr
+    deref: bool = False
 
 @dataclass
 class IndexAssign(Stmt):

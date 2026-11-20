@@ -226,7 +226,7 @@ pub struct Let {
     pub refine: Option<Refinement>,
 }
 #[derive(Debug, Clone, PartialEq)]
-pub struct Assign { pub line: i64, pub col: i64, pub name: String, pub value: Expr }
+pub struct Assign { pub line: i64, pub col: i64, pub name: String, pub value: Expr, pub deref: bool }
 #[derive(Debug, Clone, PartialEq)]
 /// elem_refine: (lo, hi, origin_what) — set by refine.rs only when storing into a refined array that has an element range.
 pub struct IndexAssign {

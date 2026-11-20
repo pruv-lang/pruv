@@ -2820,7 +2820,8 @@ class Gen:
             s.refs.discard(st.name)    # G9: a local is an owned value, never a reference
         elif isinstance(st, Assign):
             s.moving = s.last_copy(st)
-            s.emit(ind, "%s = %s;" % (st.name, s.own_e(st.value)))
+            target = "*" + st.name if st.name in s.inouts else st.name
+            s.emit(ind, "%s = %s;" % (target, s.own_e(st.value)))
             s.moving = set()
         elif isinstance(st, FieldAssign):
             vty = st.value.ty
@@ -3101,6 +3102,8 @@ class Gen:
             return "&" + e.name
         if isinstance(e, Var):
             return e.name
+        if isinstance(e, Call) and e.name == "vec_get" and e.name not in s.fmap and e.ty == STR:
+            return s.e(e)
         return "&" + s.e(e)
 
     def cref(s, x):
@@ -3130,7 +3133,31 @@ class Gen:
             place, key = e.args
             k = s.borrowed_map_key(key) if low[0].name == "string" else "&" + s.e(key)
             return "%s.remove(%s).is_some()" % (s.e(place.expr), k)
+        if e.name == "vec_clear":
+            s.fg.record_inline_catalog(e.name, src)
+            return "%s.clear()" % s.e(e.args[0].expr)
+        if e.name == "string_eq":
+            s.fg.record_inline_catalog(e.name, src)
+            operands = []
+            for arg in e.args:
+                if isinstance(arg, StrLit):
+                    operands.append("%s.as_bytes()" % str_lit(arg.value))
+                elif arg.ty == ARRAY_U8:
+                    operands.append("&(%s)[..]" % s.e(arg))
+                else:
+                    operands.append("(%s).as_bytes()" % s.e(arg))
+            return "(%s == %s)" % tuple(operands)
         # A bound proof can depend on an unchecked user foreign postcondition.
+        if e.name == "vec_get" and e.ty == STR:
+            s.fg.record_inline_catalog(e.name, src)
+            v, i = map(s.e, e.args)
+            if s.unchecked_catalog():
+                return "(unsafe { (%s).get_unchecked((%s) as usize) }.as_str())" % (v, i)
+            index = "<usize as ::std::convert::TryFrom<i64>>::try_from(%s).unwrap_or(usize::MAX)" % i
+            if s.verified:
+                return "((%s)[%s].as_str())" % (v, index)
+            return ('((%s).get(%s).unwrap_or_else(|| pruv_g6_req("vec_get", "0 <= i && i < len(v)")).as_str())'
+                    % (v, index))
         if e.name == "vec_get" and s.is_ext(low[-1]):
             s.fg.record_inline_catalog(e.name, src)
             v, i = map(s.e, e.args)

@@ -746,7 +746,7 @@ impl<'a> Mono<'a> {
                 })
             }
             Stmt::Assign(x) => {
-                Stmt::Assign(Assign { line: x.line, col: x.col, name: x.name.clone(), value: self.cp_e(&x.value)? })
+                Stmt::Assign(Assign { line: x.line, col: x.col, name: x.name.clone(), value: self.cp_e(&x.value)?, deref: x.deref })
             }
             Stmt::IndexAssign(x) => {
                 let index = self.cp_e(&x.index)?;

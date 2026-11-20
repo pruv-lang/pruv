@@ -1,0 +1,31 @@
+// spec: R-6e-6 accept
+struct Clock { owner: String, since_ms: i64, runs: HashMap<String, i64> }
+struct St { clocks: HashMap<String, Clock> }
+
+fn update(inout st: St, k: str, query: str, take key: String) -> bool ! alloc {
+  let mut removed: bool = false;
+  match map_get_mut::<String, Clock>(inout st.clocks, k) {
+    Some(c) => {
+      let owner_len: i64 = len(c.owner);
+      let since: i64 = c.since_ms;
+      match map_get::<String, i64>(c.runs, query) {
+        Some(v) => { assert is_some(map_lookup::<String, i64>(c.runs, query)); }
+        None => { }
+      }
+      match map_get_mut::<String, i64>(inout c.runs, query) {
+        Some(v) => {
+          if *v < 9223372036854775807 { *v = *v + 1; }
+        }
+        None => { }
+      }
+      if len(c.runs) < 1099511627776 {
+        c.runs = map_insert::<String, i64>(move c.runs, move key, 1);
+      }
+      removed = map_remove::<String, i64>(inout c.runs, query);
+      assert !is_some(map_lookup::<String, i64>(c.runs, query));
+      assert len(c.owner) == owner_len && c.since_ms == since;
+    }
+    None => { }
+  }
+  return removed;
+}

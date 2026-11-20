@@ -1,0 +1,1 @@
+{"gen_contains": ["(s).as_bytes()", "(t).as_bytes()", "&(bytes)[..]", ".get_unchecked("], "gen_absent": [".clone()", "to_string"]}

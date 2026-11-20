@@ -5390,6 +5390,8 @@ def g6_llvm_error(prog):
 
     for f in prog.functions:
         if f.foreign is not None:
+            if needs_rust(f.ret):
+                return err(f.line, f.col, "a trusted Vec<String> result")
             ok = (f.ret in (I64, BOOL, UNIT) or _owned_result(f.ret)) and all(
                 p.type in (I64, BOOL, ARRAY, ARRAY_U8, ARRAY_BOOL, STR) and not p.take for p in f.params)
             if not ok:
@@ -5410,10 +5412,10 @@ def g6_llvm_error(prog):
                 rust_only.append((n.line, n.col, "this collection type"))
             if ty is not None and not _g6_type_ok(ty):
                 bad.append((n.line, n.col))
-            if isinstance(n, Call) and n.name in CATALOG and n.name not in CATALOG_CONTRACT_ONLY and n.inst:
-                if n.name in ("map_remove", "vec_at_mut"):
+            if isinstance(n, Call) and n.name in CATALOG and n.name not in CATALOG_CONTRACT_ONLY:
+                if n.name in ("map_remove", "vec_at_mut", "vec_clear", "string_eq"):
                     rust_only.append((n.line, n.col, n.name))
-                if not all(_g6_scalar(a) for a in n.inst["args"]):
+                if n.inst and not all(_g6_scalar(a) for a in n.inst["args"]):
                     bad.append((n.line, n.col))
 
         foreign_shim._walk(f.body, visit)

@@ -1,0 +1,67 @@
+// P31N small example: a clock record keeps its run counters in a HashMap<String, i64> field
+// that is updated in place (R-6e-6, R-6e-4). halt takes the running ids as an owned Vec<String>
+// from a trusted fn (R-6d-1) and loops over borrowed elements (R-6e-9); it reuses the effect
+// buffer with vec_clear (R-6e-10) and checks the owner with string_eq (R-6e-11).
+pub struct Clock { owner: String, since_ms: i64, runs: HashMap<String, i64> }
+pub struct St { clocks: HashMap<String, Clock>, out: Vec<i64> }
+
+trusted rust fn running_ids(sid: str) -> Vec<String> ! alloc
+  ensures len(result) <= 16 = "::p31n_facts::running_ids";
+
+// Count one step of run `name` on clock sid. 0 = counted, 1 = unknown clock, 2 = new run, 4 = full.
+pub fn tick(inout st: St, sid: str, name: str, now: i64) -> i64 ! alloc
+{
+  let mut res: i64 = 1;
+  match map_get_mut::<String, Clock>(inout st.clocks, sid) {
+    Some(c) => {
+      c.since_ms = now;
+      match map_get_mut::<String, i64>(inout c.runs, name) {
+        Some(v) => {
+          if v < 1000000000000 { v = v + 1; }
+          res = 0;
+        }
+        None => {
+          if len(c.runs) < 1000000 {
+            let mut k: String = string_new();
+            k = string_push_str(move k, name);
+            c.runs = map_insert::<String, i64>(move c.runs, move k, 1);
+            res = 2;
+          } else {
+            res = 4;
+          }
+        }
+      }
+    }
+    None => { }
+  }
+  return res;
+}
+
+// Stop every running id of session sid on clock sid if `who` owns it. Returns the number of
+// counters removed; st.out holds the positions of the removed ids (cleared first, capacity kept).
+pub fn halt(inout st: St, sid: str, who: str) -> i64 ! alloc
+{
+  let ids: Vec<String> = running_ids(sid);
+  vec_clear::<i64>(inout st.out);
+  let mut removed: i64 = 0;
+  match map_get_mut::<String, Clock>(inout st.clocks, sid) {
+    Some(c) => {
+      if string_eq(c.owner, who) {
+        let mut i: i64 = 0;
+        while i < len(ids)
+          invariant 0 <= i && i <= len(ids) && len(ids) <= 16 && 0 <= removed && removed <= i && len(st.out) == removed
+          decreases len(ids) - i
+        {
+          let gone: bool = map_remove::<String, i64>(inout c.runs, vec_get::<String>(ids, i));
+          if gone {
+            st.out = vec_push::<i64>(move st.out, i);
+            removed = removed + 1;
+          }
+          i = i + 1;
+        }
+      }
+    }
+    None => { }
+  }
+  return removed;
+}

@@ -6204,7 +6204,10 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
     let rust_type = |key: &str| needs_rust(&crate::gtype::GType::from_key(key));
     for f in &prog.functions {
         if f.foreign.is_some() {
-            // G6b: catalog String or exactly Vec<i64> results are boxed handles
+            if rust_type(&f.ret) {
+                return Some(rust_error(f.line, f.col, "a trusted Vec<String> result"));
+            }
+            // G6b: catalog String and Vec<i64> results are boxed handles
             let owned = crate::gtype::GType::try_from_key(&f.ret).map(|t| crate::foreign::owned_result(&t)).unwrap_or(false);
             let ok = (matches!(f.ret.as_str(), "i64" | "bool" | "unit") || owned)
                 && f.params.iter().all(|p| {
@@ -6240,6 +6243,8 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
                     match c.name.as_str() {
                         "map_remove" => rust_only.push((c.line, c.col, "map_remove")),
                         "vec_at_mut" => rust_only.push((c.line, c.col, "vec_at_mut")),
+                        "vec_clear" => rust_only.push((c.line, c.col, "vec_clear")),
+                        "string_eq" => rust_only.push((c.line, c.col, "string_eq")),
                         "map_get_mut" => bad.push((c.line, c.col)),
                         _ => {}
                     }

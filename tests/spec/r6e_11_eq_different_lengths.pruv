@@ -1,0 +1,7 @@
+// spec: R-6e-11 reject
+fn bad(a: str, b: [u8]) -> bool
+  requires len(a) != len(b)
+  ensures result
+{
+  return string_eq(a, b);
+}

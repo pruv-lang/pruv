@@ -1,0 +1,4 @@
+// spec: R-6d-1 reject
+trusted rust fn words() -> Vec<String> ! alloc
+  ensures len(result[0]) == 0
+  = "::std::vec::Vec::new";

@@ -3696,7 +3696,8 @@ impl<'a> Gen<'a> {
                 let v = self.own_e(&x.value);
                 self.moving.clear();
                 let v = v?;
-                self.emit(ind, &format!("{} = {};", x.name, v));
+                let target = if self.inouts.contains(&x.name) { format!("*{}", x.name) } else { x.name.clone() };
+                self.emit(ind, &format!("{} = {};", target, v));
             }
             Stmt::FieldAssign(x) => {
                 if let Expr::Call(call) = &x.value {
@@ -3985,6 +3986,9 @@ impl<'a> Gen<'a> {
             }
             return Ok(x.name.clone());
         }
+        if matches!(e, Expr::Call(x) if x.name == "vec_get" && x.ty.as_deref() == Some("str") && !self.fmap.contains_key(&x.name)) {
+            return self.e(e);
+        }
         Ok(format!("&{}", self.e(e)?))
     }
 
@@ -4013,6 +4017,24 @@ impl<'a> Gen<'a> {
         }
     }
 
+    fn string_eq(&mut self, call: &Call) -> R<String> {
+        let mut operands = Vec::with_capacity(2);
+        for arg in &call.args {
+            let operand = if let Expr::StrLit(lit) = arg {
+                format!("{}.as_bytes()", lit_str(&lit.value))
+            } else {
+                let value = self.e(arg)?;
+                if expr_ty(arg).as_deref() == Some("array_u8") {
+                    format!("&({value})[..]")
+                } else {
+                    format!("({value}).as_bytes()")
+                }
+            };
+            operands.push(operand);
+        }
+        Ok(format!("({} == {})", operands[0], operands[1]))
+    }
+
     /// executable catalog operation -> call of its private boundary helper
     fn catalog_call(&mut self, x: &Call) -> R<String> {
         let cat = catalog_fn(&x.name).ok_or_else(|| repr_str(&x.name))?;
@@ -4027,6 +4049,29 @@ impl<'a> Gen<'a> {
                 };
                 return Ok(format!("{}.remove({}).is_some()", self.e(&place.expr)?, key));
             }
+        }
+        if x.name == "vec_clear" {
+            self.fg_mut()?.record_inline_catalog(&x.name, &src);
+            if let Expr::InoutArg(place) = &x.args[0] {
+                return Ok(format!("{}.clear()", self.e(&place.expr)?));
+            }
+        }
+        if x.name == "string_eq" {
+            self.fg_mut()?.record_inline_catalog(&x.name, &src);
+            return self.string_eq(x);
+        }
+        if x.name == "vec_get" && x.ty.as_deref() == Some("str") {
+            self.fg_mut()?.record_inline_catalog(&x.name, &src);
+            let v = self.e(&x.args[0])?;
+            let i = self.e(&x.args[1])?;
+            if self.unchecked_collections() {
+                return Ok(format!("(unsafe {{ ({v}).get_unchecked(({i}) as usize) }}.as_str())"));
+            }
+            let index = format!("<usize as ::std::convert::TryFrom<i64>>::try_from({i}).unwrap_or(usize::MAX)");
+            if self.verified {
+                return Ok(format!("(({v})[{index}].as_str())"));
+            }
+            return Ok(format!(r#"(({v}).get({index}).unwrap_or_else(|| pruv_g6_req("vec_get", "0 <= i && i < len(v)")).as_str())"#));
         }
         // A bound proof can depend on an unchecked user foreign postcondition.
         if x.name == "vec_get" && self.unchecked_collections() {
@@ -4141,6 +4186,12 @@ impl<'a> Gen<'a> {
             body.push(format!(
                 "if (result.len() as u128) > (1u128 << 40) {{ pruv_g6_repr({}); }}",
                 rstr(&format!("{}: result length", disp))
+            ));
+        }
+        if f.ret == "vec<string>" {
+            body.push(format!(
+                "if result.iter().any(|s| (s.len() as u128) > (1u128 << 40)) {{ pruv_g6_repr({}); }}",
+                rstr(&format!("{}: result element length", disp))
             ));
         }
         if ens {

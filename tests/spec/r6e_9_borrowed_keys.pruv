@@ -1,0 +1,21 @@
+// spec: R-6e-9 accept
+struct Clock { count: i64 }
+struct Rec { words: Vec<String> }
+
+fn query(r: Rec, inout clocks: HashMap<String, Clock>) -> bool
+  requires len(r.words) > 0
+{
+  let mut found: bool = false;
+  match map_get::<String, Clock>(clocks, vec_get::<String>(r.words, 0)) {
+    Some(c) => { found = c.count == 0; }
+    None => { }
+  }
+  match map_get_mut::<String, Clock>(inout clocks, vec_get::<String>(r.words, 0)) {
+    Some(c) => { c.count = 1; }
+    None => { }
+  }
+  if len(vec_get::<String>(r.words, 0)) == 0 {
+    return map_remove::<String, Clock>(inout clocks, vec_get::<String>(r.words, 0));
+  }
+  return found;
+}

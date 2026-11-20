@@ -967,6 +967,12 @@ class Parser:
                     s.next()
             s.expect("}")
             return Match(L, C, scr, arms)
+        if s.at("*") and s.at("=", 2):
+            s.next()
+            n = s.ident().val
+            s.expect("=")
+            v = s.expr(); s.expect(";")
+            return Assign(L, C, n, v, deref=True)
         if t.kind == "id" and s.at("=", 1):
             n = s.next().val; s.next()
             v = s.expr(); s.expect(";")
@@ -1056,7 +1062,7 @@ class Parser:
         return l
 
     def unary(s):
-        if s.at("-") or s.at("!"):
+        if s.at("-") or s.at("!") or s.at("*"):
             t = s.next()
             o = s.unary()
             if t.val == "-" and isinstance(o, IntLit):

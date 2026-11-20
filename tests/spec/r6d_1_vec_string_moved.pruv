@@ -1,0 +1,10 @@
+// spec: R-6d-1 reject
+trusted rust fn words() -> Vec<String> ! alloc
+  ensures len(result) <= 4
+  = "::std::vec::Vec::new";
+
+fn f() -> i64 ! alloc {
+  let v: Vec<String> = words();
+  let w: Vec<String> = move v;
+  return len(v);
+}

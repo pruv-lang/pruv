@@ -1,0 +1,2 @@
+// spec: R-6e-11 reject
+fn bad(n: i64, s: str) -> bool { return string_eq(n, s); }

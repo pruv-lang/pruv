@@ -188,7 +188,7 @@ pub(crate) fn key_is_scalar_vec(key: &str) -> bool {
 }
 
 pub(crate) fn key_is_nested_collection_field(key: &str) -> bool {
-    matches!(key, "vec<string>" | "hashmap<string,bool>" | "hashmap<i64,bool>")
+    matches!(key, "vec<string>" | "hashmap<string,bool>" | "hashmap<i64,bool>" | "hashmap<string,i64>" | "hashmap<i64,i64>")
 }
 
 /// Collection types permitted as owned fields of non-generic declarations.

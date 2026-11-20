@@ -163,6 +163,7 @@ class Checker:
         prog.uses_inout = s.uses_inout            # G5 A0: lets the staging guard skip its walk for inout-free programs
         s.ckind = "code"          # G5: kind of the expression being checked: requires/ensures/decreases/invariant/assert/code
         s.boundary = None         # statement boundary for the statement-only builtins
+        s.statement_call = None
         s.in_par = False
         s.funcs = {}
         for f in prog.functions:
@@ -205,6 +206,7 @@ class Checker:
     def run(s):
         refine_expand(s.prog)  # STAGE1 A: validate refinement annotations, desugar them into contracts/asserts
         s.declare_types()      # names, duplicates
+        s.collection_records = set()
         s.normalize_types()    # G6: Vec/HashMap/String become catalog types unless the program declares them
         s.arg_decls = {n: (len(d.tparams), []) for n, d in s.decls.items()}
         s.check_tparams()      # G3: type-parameter lists (type_parameter, generic_bound, generic_main)
@@ -308,6 +310,8 @@ class Checker:
             name = {"Vec": "vec", "HashMap": "hashmap", "String": "string", "File": "file",
                     "Process": "process", "ProcessArgs": "process_args", "Socket": "socket",
                     "Listener": "listener", "Loop": "loop"}[name]
+        if name in ("vec", "hashmap") and args and args[-1].owner is None and not args[-1].args:
+            s.collection_records.add(args[-1].name)
         if name == ty.name and args == ty.args:
             return ty
         if name == "array" and len(args) == 1:
@@ -371,6 +375,10 @@ class Checker:
         targs = getattr(e, "targs", None)
         if targs is not None:
             e.targs = [s.norm_type(t) for t in targs]
+            if (isinstance(e, Call) and e.name in CATALOG and e.name not in s.funcs
+                    and e.name.startswith(("vec_", "map_")) and e.targs
+                    and e.targs[-1].owner is None and not e.targs[-1].args):
+                s.collection_records.add(e.targs[-1].name)
         for k in expr_kids(e):
             s.norm_expr(k)
 
@@ -522,7 +530,7 @@ class Checker:
             terr(e, "type_arity", "%s expects %d type argument(s), got %d" % (what, len(tparams), len(targs)),
                  "give exactly one type argument per type parameter")
         catalog_collection = (isinstance(e, Call) and e.name not in s.funcs and (
-            e.name in ("vec_new", "vec_push", "vec_get", "vec_at_mut",
+            e.name in ("vec_new", "vec_push", "vec_get", "vec_at_mut", "vec_clear",
                        "map_new", "map_get", "map_get_mut", "map_insert", "map_remove")
             or e.name == "map_lookup" and targs[0] == STRING))
         if catalog_collection:
@@ -553,6 +561,8 @@ class Checker:
                         f.type.name == "vec" or f.type.name == "hashmap" and f.type.args[0] in (I64, STRING)
                     ) and not f.type.args[-1].args and f.type.args[-1].name in s.aggregates
                     nested_field = isinstance(d, StructDecl) and is_nested_collection_field(f.type)
+                    if nested_field and f.type.name == "hashmap" and f.type.args[-1] == I64:
+                        nested_field = d.name in s.collection_records
                     if not state_field and any(n in s.nested_records for n in dependencies(f.type)):
                         terr(f, "foreign_owned_type", "a record with nested collection fields cannot be a direct field")
                     if contains_collection(f.type) and (
@@ -754,12 +764,13 @@ class Checker:
         for f in s.prog.functions:
             for p in f.params:
                 if p.mode is not None and not (is_array(p.type) or is_nongeneric_struct(p.type, s.decls)
-                                               or p.type.name in ("vec", "hashmap") and p.type.owner is None
+                                               or p.type.name == "vec" and p.type.owner is None
+                                               or p.type.name == "hashmap" and p.type.owner is None
                                                and p.type.args[-1].name in s.aggregates
                                                and not p.type.args[-1].args):
                     terr(_mode_at(f, p), "inout_type", "inout parameter %s cannot have the type %s" %
                          (p.name, type_name(p.type)),
-                         "use an array, a non-generic struct, or a map or vector of aggregate records, or remove inout")
+                         "use an array, a non-generic struct, or a vector or a map of aggregate records, or remove inout")
 
     def is_result_record(s, ty):
         """R-6f-3: a non-generic struct whose fields are plain values, Vec<i64>/Vec<bool> or Vec<E> of an owned
@@ -964,7 +975,7 @@ class Checker:
         for e, conditional in calls:
             f = s.funcs.get(e.name)
             marked = ([arg for arg in e.args if isinstance(arg, InoutArg)]
-                      if f is not None or e.name == "map_remove" else [])
+                      if f is not None or e.name in ("map_remove", "vec_clear") else [])
             if marked:
                 for arg in marked:
                     root, _ = field_place(arg.expr)
@@ -989,6 +1000,7 @@ class Checker:
         f = s.f
         s.ckind = "code"
         s.boundary = None
+        s.statement_call = st.expr if isinstance(st, ExprStmt) else None
         s.field_move = None
         if s.map_borrows and isinstance(st, Return):
             terr(st, "foreign_contract", "cannot return inside a mutable collection Some arm")
@@ -1011,7 +1023,10 @@ class Checker:
         elif isinstance(st, Assign):
             v = s.lookup(st, st.name, scope)
             s.check_borrow(st, st.name, [])
-            if not v[1]:
+            scalar_binder = v[2] == "map_mut" and v[0] in (I64, BOOL)
+            if st.deref and not scalar_binder:
+                terr(st, "type_mismatch", "dereference requires a mutable scalar collection binder")
+            if not (v[1] or scalar_binder):
                 if v[2] == "inout":      # G5 A0: element stores are allowed, replacing the binding is not
                     terr(st, "immutable", "inout parameter %s cannot be reassigned as a whole" % st.name,
                          "store elements with %s[i] = v, or copy into a `let mut` local" % st.name)
@@ -1494,10 +1509,10 @@ class Checker:
         if isinstance(value, Call) and value.name == "alloc" and is_array(expected):
             s.alloc_hint = (value, expected)
 
-    def expect_array(s, e, scope, c, coll=False):
+    def expect_array(s, e, scope, c, coll=False, *, borrow_element=False):
         """the argument must be an array of any element type (G2 B0: or a str); same diagnostic as expect(e, ARRAY, ...)
         coll (G6): a Vec/HashMap/String is accepted too"""
-        t = s.expr(e, scope, c)
+        t = s.expr(e, scope, c, borrow_element=borrow_element)
         if t.owner is not None:
             terr(e, "generic_operation", "%s is an abstract type parameter, not an array" % type_name(t),
                  "only [T] with T: Element can be indexed, measured or copied")
@@ -1524,10 +1539,10 @@ class Checker:
         return scope[name]
 
     # ---- expressions ----
-    def expect(s, e, ty, scope, contract=False, op=None):
+    def expect(s, e, ty, scope, contract=False, op=None, *, borrow_element=False):
         """op: what the operand is used for (arithmetic, comparison, ...) when the operation needs a concrete
         type: an abstract type parameter there is a generic_operation error rather than a plain mismatch"""
-        t = s.expr(e, scope, contract)
+        t = s.expr(e, scope, contract, borrow_element=borrow_element)
         if t != ty:
             if op is not None and t.owner is not None:
                 terr(e, "generic_operation", "%s is not allowed on the abstract type %s" % (op, t.name),
@@ -1535,12 +1550,12 @@ class Checker:
             terr(e, "type_mismatch", "expected %s, found %s" % (type_name(ty), type_name(t)))
         return t
 
-    def expr(s, e, scope, contract=False):
-        t = s._expr(e, scope, contract)
+    def expr(s, e, scope, contract=False, *, borrow_element=False):
+        t = s._expr(e, scope, contract, borrow_element)
         e.ty = t
         return t
 
-    def _expr(s, e, scope, c):
+    def _expr(s, e, scope, c, borrow_element):
         if s.ckind == "cost" and (isinstance(e, Spent)
                 or isinstance(e, Var) and e.name == "result"
                 or isinstance(e, Call) and e.name == "old"):
@@ -1567,10 +1582,21 @@ class Checker:
             if e.name == "result" and "result" not in scope:
                 terr(e, "result_scope", "`result` is only allowed in ensures")
             binding = s.lookup(e, e.name, scope)
-            if binding[2] == "map_mut":
+            if binding[2] == "map_mut" and binding[0] not in (I64, BOOL):
                 e.map_mut_view = True
             return binding[0]
         if isinstance(e, Unary):
+            if e.op == "*":
+                x = e.operand
+                if not isinstance(x, Var):
+                    terr(e, "type_mismatch", "dereference requires a mutable scalar collection binder")
+                ty, _, mode = s.lookup(e, x.name, scope)
+                if mode != "map_mut" or ty not in (I64, BOOL):
+                    terr(e, "type_mismatch", "dereference requires a mutable scalar collection binder")
+                # Scalar binders already read through the reference in subsequent passes.
+                e.__class__ = Var
+                e.__dict__ = vars(x).copy()
+                return ty
             if e.op == "-":
                 s.expect(e.operand, I64, scope, c, op="unary minus"); return I64
             s.expect(e.operand, BOOL, scope, c, op="a boolean operation"); return BOOL
@@ -1705,7 +1731,7 @@ class Checker:
             terr(e, "inout_argument", "the `inout` marker is only valid on an argument of a function whose parameter is inout",
                  "remove `inout`")
         if isinstance(e, Call):
-            t = s.call(e, scope, c)
+            t = s.call(e, scope, c, borrow_element)
             x = s.x_pending
             if x is not None:     # P06: a contract call to a user function becomes its expansion, in place
                 s.x_pending = None
@@ -1839,7 +1865,7 @@ class Checker:
             arg.ty = STR
             return
         if actual is None:
-            actual = s.expr(arg, scope, c)
+            actual = s.expr(arg, scope, c, borrow_element=True)
         if actual == STR or actual == STRING and isinstance(arg, (Var, FieldAccess, VariantField)):
             return
         terr(arg, "type_mismatch", "expected str or a borrowed String read, found %s" % type_name(actual))
@@ -1860,13 +1886,13 @@ class Checker:
                 if f is CATALOG.get(n) and n in BORROWED_MAP_KEY and want == STRING:
                     s.check_text_key(arg, scope, c)
                 else:
-                    s.expect(arg, want, scope, c)
+                    s.expect(arg, want, scope, c, borrow_element=f is not CATALOG.get(n) and want == STR)
                 continue
             if not isinstance(arg, InoutArg):
                 terr(arg, "inout_argument", "parameter %s of %s is inout: the argument needs the `inout` marker" % (p.name, n),
                      "write `inout name` with a `let mut` local array or an inout parameter")
             op = arg.expr
-            collection_place = f is CATALOG.get(n) and n in MUTABLE_COLLECTION_MATCH + ("map_remove",)
+            collection_place = f is CATALOG.get(n) and n in MUTABLE_COLLECTION_MATCH + ("map_remove", "vec_clear")
             place, path = field_place(op) if collection_place else (op, ())
             if not isinstance(place, Var):
                 what = ("a field" if isinstance(op, FieldAccess) else "an element" if isinstance(op, Index)
@@ -2093,7 +2119,7 @@ class Checker:
                 return x_sized(site, f, x_join(st, cond, t, el))
             i += 1
 
-    def call(s, e, scope, c):
+    def call(s, e, scope, c, borrow_element):
         n, a = e.name, e.args
 
         def arity(k):
@@ -2105,7 +2131,7 @@ class Checker:
         if is_old:
             return s.old_call(e, scope)
         if n == "len":
-            arity(1); s.expect_array(a[0], scope, c, coll=True); return I64   # G6: also Vec/HashMap/String
+            arity(1); s.expect_array(a[0], scope, c, coll=True, borrow_element=True); return I64   # G6: also Vec/HashMap/String
         if n == "alloc":
             if c: terr(e, "effect_in_contract", "alloc not allowed in contracts")
             arity(2); s.expect(a[0], I64, scope, c)
@@ -2191,6 +2217,8 @@ class Checker:
             return rt
         catalog = n in CATALOG and n not in s.funcs       # G6: fixed standard catalog (G6_SPEC 10.3)
         if catalog:
+            if n == "vec_clear" and e is not s.statement_call and not c:
+                terr(e, "inout_context", "vec_clear must be a whole expression statement")
             if n in MUTABLE_COLLECTION_MATCH and e is not s.match_call:
                 terr(e, "foreign_contract", "%s is only allowed as a direct match scrutinee" % n)
             if n in CATALOG_CONTRACT_ONLY:
@@ -2218,7 +2246,15 @@ class Checker:
         else:
             m = {}
         arity(len(f.params))
-        if n in CATALOG_CONTRACT_ONLY:
+        if catalog and n == "string_eq":
+            for arg in a:
+                if isinstance(arg, StrLit):
+                    arg.ty = STR
+                    continue
+                got = s.expr(arg, scope, c, borrow_element=True)
+                if got not in (STRING, STR, ARRAY_U8) or isinstance(arg, Move):
+                    terr(arg, "type_mismatch", "expected String, str or [u8], found %s" % type_name(got))
+        elif n in CATALOG_CONTRACT_ONLY:
             s.observer_args(e, f, m, scope, c)
         elif any(p.mode is not None for p in f.params) or not catalog and any(isinstance(x, InoutArg) for x in a):
             s.inout_args(e, f, m, scope, c)     # G5 A0: marker, place, type and same-call exclusivity
@@ -2228,10 +2264,14 @@ class Checker:
                 if catalog and n in BORROWED_MAP_KEY and want == STRING:
                     s.check_text_key(arg, scope, c)
                 else:
-                    s.expect(arg, want, scope, c)
+                    s.expect(arg, want, scope, c, borrow_element=not catalog and want == STR)
         if catalog:
             if n == "vec_get" and e.targs[0] == STRING:
-                terr(e, "foreign_owned_type", "Vec<String> elements cannot be read with vec_get")
+                if not borrow_element:
+                    terr(e, "foreign_owned_type", "a Vec<String> element must be a direct borrowed text argument")
+                if not isinstance(field_place(a[0])[0], Var):
+                    terr(a[0], "foreign_borrow", "a borrowed Vec<String> element needs a vector place")
+                return STR
             if n == "vec_at_mut" and e.targs[0].name not in s.aggregates:
                 terr(e, "foreign_owned_type", "vec_at_mut requires an owned aggregate element")
             if n == "map_remove" and e.targs[0] not in (I64, STRING):

@@ -1,0 +1,6 @@
+// spec: R-6e-11 reject
+struct Rec { text: String }
+
+fn drain(take r: Rec) -> String ! alloc { return string_new(); }
+
+fn bad(take r: Rec) -> bool ! alloc { return string_eq(r.text, drain(move r)); }

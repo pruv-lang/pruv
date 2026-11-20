@@ -40,7 +40,7 @@ pub struct CatFn {
 }
 
 /// CATALOG_NAMES of foreign.py (insertion order).
-pub const CATALOG_NAMES: [&str; 98] = [
+pub const CATALOG_NAMES: [&str; 100] = [
     "vec_new",
     "vec_push",
     "vec_get",
@@ -48,6 +48,8 @@ pub const CATALOG_NAMES: [&str; 98] = [
     "map_get",
     "map_get_mut",
     "map_remove",
+    "vec_clear",
+    "string_eq",
     "vec_at_mut",
     "map_insert",
     "string_new",
@@ -278,6 +280,14 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
         "map_remove" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("m", map_of(k(), v()), false), p("k", k(), false)],
             ret: GType::bool(), effects: vec![], tparams: tp_kv(),
+        },
+        "vec_clear" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("v", vec_of(t()), false)], ret: GType::unit(),
+            effects: vec![], tparams: tp_t(),
+        },
+        "string_eq" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("a", GType::str(), false), p("b", GType::str(), false)],
+            ret: GType::bool(), effects: vec![], tparams: vec![],
         },
         "vec_at_mut" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("v", vec_of(t()), false), p("i", GType::i64(), false)],
@@ -604,10 +614,10 @@ fn scalar_opt(t: &GType) -> bool {
         && (t.args.is_empty() || t.args[0] == GType::i64() || t.args[0] == GType::bool())
 }
 
-/// G6b: catalog String or exactly Vec<i64> (structural: no nominal owner)
+/// G6b: catalog String, Vec<i64> or Vec<String> (structural: no nominal owner)
 pub fn owned_result(t: &GType) -> bool {
     t.owner.is_none()
-        && (*t == GType::new("string", vec![]) || *t == GType::new("vec", vec![GType::i64()]))
+        && (*t == GType::new("string", vec![]) || matches!(t.to_key().as_str(), "vec<i64>" | "vec<string>"))
 }
 
 fn allowed_result(t: &GType) -> bool {
@@ -659,7 +669,7 @@ pub fn check_foreign_decl(f: &Function, externs: &[String]) -> Res<()> {
             fc,
             "foreign_signature",
             format!("result type {} is not allowed on a trusted rust fn", format_type(&ret)),
-            "return i64, bool, (), Option<i64|bool>, Result<i64|bool>, String or Vec<i64>; convert other results in a Rust adapter",
+            "return i64, bool, (), Option<i64|bool>, Result<i64|bool>, String, Vec<i64> or Vec<String>; convert other results in a Rust adapter",
         ));
     }
     for prm in &f.params {
@@ -1391,6 +1401,24 @@ impl<'a> Ownership<'a> {
                             t.entry(v.name.clone()).or_insert("borrow");
                         }
                     }
+                    // R-6e-11: a field or a vec_get element of a place borrows the place's root
+                    Expr::FieldAccess(_) | Expr::Call(_) if e.name == "string_eq" => {
+                        let root = match arg {
+                            Expr::Call(c) if c.name == "vec_get" && !c.args.is_empty() => crate::check::place_root(&c.args[0]),
+                            Expr::Call(_) => None,
+                            _ => crate::check::place_root(arg),
+                        };
+                        if let Some(root) = root {
+                            if self.track.as_ref().and_then(|t| t.get(root)) == Some(&"move") {
+                                return Err(err(arg.line(), arg.col(), "foreign_borrow", "borrowed and moved in one call",
+                                    format!("do not pass {} both read-only and with move in one call", root)));
+                            }
+                            if let Some(t) = self.track.as_mut() {
+                                t.entry(root.to_string()).or_insert("borrow");
+                            }
+                        }
+                        self.expr(arg, st)?;
+                    }
                     _ => self.expr(arg, st)?,
                 }
             }
@@ -1421,7 +1449,7 @@ fn g6_expr(e: &Expr, out: &mut Cands) {
         Expr::Move(m) => out.push((m.line, m.col)),
         Expr::Call(c) => {
             if let Some(t) = &c.ty {
-                if key_contains_collection(t) {
+                if key_contains_collection(t) || c.name == "string_eq" {
                     out.push((c.line, c.col));
                 }
             }
@@ -1902,7 +1930,7 @@ mod tests {
 
     #[test]
     fn catalog_shapes() {
-        assert_eq!(CATALOG_NAMES.len(), 98);
+        assert_eq!(CATALOG_NAMES.len(), 100);
         for n in CATALOG_NAMES.iter() {
             assert!(catalog_fn(n).is_some());
         }

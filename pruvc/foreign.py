@@ -6,7 +6,7 @@ passes through unchanged."""
 import re
 
 from vast import *
-from typeinfo import TypeTable, fn_owner, is_collection, contains_collection, is_owned_field_type, is_nested_collection_field, type_name, is_nongeneric_struct
+from typeinfo import TypeTable, fn_owner, is_collection, contains_collection, is_owned_field_type, is_nested_collection_field, type_name, is_nongeneric_struct, field_place
 from refine import _kids as expr_kids
 
 
@@ -62,6 +62,9 @@ _add("map_get_mut", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], mk_opt
 CATALOG["map_get_mut"].params[0].mode = "inout"
 _add("map_remove", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], BOOL))
 CATALOG["map_remove"].params[0].mode = "inout"
+_add("vec_clear", _T, lambda T: ([_p("v", _vec(T))], UNIT))
+CATALOG["vec_clear"].params[0].mode = "inout"
+_add("string_eq", [], lambda: ([_p("a", STR), _p("b", STR)], BOOL))
 _add("vec_at_mut", _T, lambda T: ([_p("v", _vec(T)), _p("i", I64)], mk_option(T)))
 CATALOG["vec_at_mut"].params[0].mode = "inout"
 
@@ -246,8 +249,8 @@ def _scalar_opt(t):
 
 
 def _owned_result(t):
-    """G6b: catalog String or exactly Vec<i64> (structural: no nominal owner)"""
-    return t.owner is None and (t == STRING or t == _vec(I64))
+    """G6b: catalog String, Vec<i64> or Vec<String> (structural: no nominal owner)"""
+    return t.owner is None and t in (STRING, _vec(I64), _vec(STRING))
 
 
 def _allowed_result(t):
@@ -270,7 +273,7 @@ def check_foreign_decl(f, externs):
              "declare one concrete trusted rust fn per type")
     if not _allowed_result(f.ret):
         _err(f, "foreign_signature", "result type %s is not allowed on a trusted rust fn" % type_name(f.ret),
-             "return i64, bool, (), Option<i64|bool>, Result<i64|bool>, String or Vec<i64>; convert other results in a Rust adapter")
+             "return i64, bool, (), Option<i64|bool>, Result<i64|bool>, String, Vec<i64> or Vec<String>; convert other results in a Rust adapter")
     for p in f.params:
         if p.mode is not None:     # G5 A0: rejected whether or not the declaration is ever called
             _err(_Pos(p.mode_pos[0], p.mode_pos[1], getattr(p, "file", None) or getattr(f, "file", None)),
@@ -600,6 +603,11 @@ class _Ownership:
 
     def call_args(s, e, st, takes, track):
         for arg, take in zip(e.args, takes):
+            root = arg
+            if e.name == "string_eq":   # R-6e-11: a field or a vec_get element of a place borrows the place's root
+                inner = arg.args[0] if isinstance(arg, Call) and arg.name == "vec_get" and arg.args else arg
+                if isinstance(inner, FieldAccess) or (inner is not arg and isinstance(inner, Var)):
+                    root = field_place(inner)[0]
             if take:
                 if isinstance(arg, Move):
                     s.move(arg, st, True, track)
@@ -614,12 +622,12 @@ class _Ownership:
                     s.expr(arg, st, True)
             elif isinstance(arg, Move):
                 s.move(arg, st, False, track)
-            elif isinstance(arg, Var) and (is_collection(arg.ty) or arg.name in st):
-                if track.get(arg.name) == "move":
+            elif isinstance(root, Var) and (root is not arg or is_collection(root.ty) or root.name in st):
+                if track.get(root.name) == "move":
                     _err(arg, "foreign_borrow", "borrowed and moved in one call",
-                         "do not pass %s both read-only and with move in one call" % arg.name)
-                s.use(arg, st)
-                track.setdefault(arg.name, "borrow")
+                         "do not pass %s both read-only and with move in one call" % root.name)
+                s.expr(arg, st)
+                track.setdefault(root.name, "borrow")
             else:
                 s.expr(arg, st)
 
@@ -645,7 +653,7 @@ def _g6_candidates(node, out):
         out.append((node.line, node.col, "a mutable collection place"))
     elif isinstance(node, Move):
         out.append((node.line, node.col, "move"))
-    elif isinstance(node, Call) and node.ty is not None and contains_collection(node.ty):
+    elif isinstance(node, Call) and node.ty is not None and (contains_collection(node.ty) or node.name == "string_eq"):
         out.append((node.line, node.col, "a collection value"))
     for fname in node.__dataclass_fields__:
         _g6_candidates(getattr(node, fname), out)

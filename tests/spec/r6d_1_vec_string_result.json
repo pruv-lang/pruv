@@ -1,0 +1,1 @@
+{"gen_contains": [".as_str()", "result.len() as u128"], "gen_absent": [".get_unchecked(", ".clone()"]}
