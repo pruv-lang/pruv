@@ -484,7 +484,7 @@ fn tree_count(t: Tree) -> i64
   evaluated once and may not mention the root of `P` (`type/inout_alias`). In the `Some(r)` arm `r` is an
   inout view of the element. The arm may read and assign its fields, use R-6e-2 on `r.f` and pass `inout r`.
   It may not return, reassign, move or store `r`. The root of `P` may not be mentioned in the arm
-  (`type/recursive_borrow`). The arm may not contain `return`, `break` or `continue` (`type/foreign_contract`).
+  (`type/recursive_borrow`), except through a field path disjoint from `P` (R-6e-8). The arm may not contain `return`, `break` or `continue` (`type/foreign_contract`).
   The `None` arm is unrestricted. Rust emits `match P.get_mut(&k)` with one lookup. The verifier gives `r`
   the stored element when `k` is present and writes the final `r` back at arm exit. The `None` arm leaves `P`
   unchanged. When the R-6d-2 condition holds (verified build, foreign checks not `all`, no trusted Rust
@@ -523,6 +523,19 @@ fn tree_count(t: Tree) -> i64
   element type is an owned aggregate struct; other collection types stay `type/inout_type`. Rust emits `match P.get_mut(<usize as ::std::convert::TryFrom<i64>>::try_from(i).unwrap_or(usize::MAX))`, so no target truncates `i` (the qualified `TryFrom` path compiles in every Rust edition). The verifier selects `Some` when
   `0 <= i < len(P)` and writes the final binder back to that index with unchanged length.
   These operations and the new collection types require the Rust backend.
+- R-6e-8 **Disjoint field borrows.** Inside the `Some` arm of `map_get_mut` or `vec_at_mut` on the field
+  path `P = x.f1...fn`, the arm may use any other field path `x.g1...gm` of the same root that is
+  disjoint from `P`: neither path is a prefix of the other. It may read and assign it, pass it as an
+  `inout` place, and start a nested `map_get_mut` or `vec_at_mut` arm on it, nested to any depth over
+  pairwise disjoint paths. A use of `x` as a whole, of `P` itself, of a prefix of `P` or of a path
+  through `P` stays `type/recursive_borrow`. Inout arguments of one call still follow the whole-name
+  rule (section 6g): `f(inout x.f, inout x.g)` is `type/inout_argument`. Rust emits nested
+  `match x.f.get_mut(..)` arms over sibling fields with no clone (Rust's disjoint field borrows).
+  The verifier writes the final `r` back into the arm-exit value of `x` along `P` only, so writes to
+  disjoint paths in the arm are kept and `P` is unchanged by them.
+  A `match` on an extended field path `Q` of an `inout` parameter or of an element binding holds `Q`
+  the same way while its arms run: assigning, moving or passing `inout` a path that overlaps `Q` (or
+  the whole root) is `type/recursive_borrow`, and disjoint sibling paths stay usable.
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate. Putting an existing value into an owning place (`let`, assignment, constructor field,
@@ -573,7 +586,7 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   end of the file, and any `#[` inside a body, is `parse/attribute_position`.
 - **Host entries.** In explicit mode only root `pub` non-generic functions are host entries. A parameter of
   collection, recursive or buffer-field type, or an `inout` parameter (section 6g, Host limits), is
-  `type/entry_signature`, subject to R-6e-5, R-6e-6 and R-6f-2. The same restriction applies to results, subject to R-6f-1. Ordinary entries can be
+  `type/entry_signature`, subject to R-6e-5, R-6e-6 and R-6f-2. The same restriction applies to results, subject to R-6f-1 and R-6f-3. Ordinary entries can be
   exported through `--rust-bindings` and the LLVM
   `pruv_abi_<name>` interface. Child `pub` functions are for Pruv callers only. An optional root `main`
   must be `pub fn main() -> ()`. A child `main` is an ordinary function.
@@ -589,6 +602,14 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   a `PruvStore<S>`. `raw_entries` "c", `--rust-bindings` and the LLVM backend reject it with
   `codegen/unsupported_type` naming the entry. `requires` on `st` are checked at entry and skipped under
   `--trust-callers`, like other entry `requires`.
+- R-6f-3 **Struct entry results.** In explicit mode a root `pub` non-generic function may return a
+  non-generic struct `R` that has at least one collection field, whose fields are plain values (no
+  `[T]` or `str` buffer anywhere),
+  `Vec<i64>`, `Vec<bool>` or `Vec<E>` for an owned aggregate `E` (R-6e-3) without R-6e-6 nested
+  collection fields. The Rust entry returns `R` by value (`pub fn e(..) -> R`, fields `pub`), so the host
+  owns the moved-out result without a copy. A `HashMap` field, a nested-collection element and deeper
+  nesting remain `type/entry_signature`. Like R-6f-1 it has no C ABI: the LLVM backend rejects `R`
+  with `codegen/unsupported_type`. Legacy mode is unchanged.
 - **Proof.** Every function is verified, including private and unused ones; a caller sees the callee's contract and,
   for a function that can be expanded (section 6, L3 P07, R-6-1), the fact `result == <body>` at its call, from any
   module. It sees no other part of the body. Recursion and recursive types may span modules. Host entries check `requires` at run

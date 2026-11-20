@@ -320,7 +320,7 @@ struct Checker {
     /// Location of the field move allowed in the current field assignment.
     field_move: Option<(i64, i64)>,
     read_context: Option<usize>,
-    map_roots: Vec<String>,
+    map_roots: Vec<(String, Vec<String>)>,
     // ---- G9 A0 metadata ----
     /// recursive type SCCs (names in declaration order), SCC-number order
     type_sccs: Vec<Vec<String>>,
@@ -338,6 +338,8 @@ struct Checker {
     call_log: Vec<(String, i64, i64, Option<Vec<GType>>, String)>,
     /// root variable names of the enclosing match arms on extended scrutinees
     active_roots: Vec<String>,
+    /// R-6e-8: (root, field path) of enclosing matches on extended places of inout roots
+    match_paths: Vec<(String, Vec<String>)>,
     cur_cost: bool,
     s5_errors: Vec<(String, PruvError)>,
     par_groups: Vec<Vec<Expr>>,
@@ -440,6 +442,16 @@ fn place_root(e: &Expr) -> Option<&str> {
         Expr::FieldAccess(f) => place_root(&f.base),
         _ => None,
     }
+}
+
+fn field_place(mut e: &Expr) -> (&Expr, Vec<String>) {
+    let mut path = Vec::new();
+    while let Expr::FieldAccess(f) = e {
+        path.push(f.field.clone());
+        e = &f.base;
+    }
+    path.reverse();
+    (e, path)
 }
 
 fn mentions(e: &Expr, name: &str) -> bool {
@@ -602,6 +614,7 @@ impl Checker {
             fn_sccs: Vec::new(),
             call_log: Vec::new(),
             active_roots: Vec::new(),
+            match_paths: Vec::new(),
             cur_cost: false,
             s5_errors: Vec::new(),
             par_groups: Vec::new(),
@@ -1804,7 +1817,34 @@ impl Checker {
         Ok(())
     }
 
-    /// Host entries allow plain signatures and concrete Vec<i64>/Vec<bool> results.
+    fn is_result_record(&self, ty: &GType) -> bool {
+        let Some(TypeDecl::Struct(d)) = self.decls.get(&ty.name) else { return false };
+        if ty.owner.is_some() || !ty.args.is_empty() || !d.tparams.is_empty() {
+            return false;
+        }
+        d.fields.iter().any(|f| GType::from_key(&f.ty).is_collection())
+            && d.fields.iter().all(|f| {
+                if crate::gtype::key_is_scalar_vec(&f.ty) {
+                    return true;
+                }
+                let ft = GType::from_key(&f.ty);
+                if let ("vec", [element]) = (ft.name.as_str(), ft.args.as_slice()) {
+                    if ft.owner.is_none() {
+                        return self.owned_aggregate(element)
+                            && matches!(self.decls.get(&element.name), Some(TypeDecl::Struct(d))
+                                if d.fields.iter().all(|f| {
+                                    !crate::gtype::key_is_nested_collection_field(&f.ty)
+                                        && (crate::gtype::key_is_owned_field(&f.ty)
+                                            || is_value(&GType::from_key(&f.ty), &|n| self.value_decl(n)))
+                                }));
+                    }
+                }
+                !ft.contains_collection() && !ft.is_array() && ft != strt()
+                    && dependencies(&ft).iter().all(|n| !self.extended.contains(n))
+            })
+    }
+
+    /// Host entries allow plain signatures, scalar vectors and eligible record results.
     fn check_entries(&self, prog: &Program) -> Res<()> {
         fn new_collection(ty: &GType) -> bool {
             matches!(ty.to_key().as_str(), "vec<string>" | "hashmap<i64,bool>")
@@ -1839,7 +1879,7 @@ impl Checker {
             {
                 return Err(terr(f.line, f.col, "entry_signature", format!("host entry {} must take inout state {} first", f.name, p.name), ""));
             }
-            if !crate::gtype::key_is_scalar_vec(&f.ret) {
+            if !crate::gtype::key_is_scalar_vec(&f.ret) && !self.is_result_record(&GType::from_key(&f.ret)) {
                 sig.push(("the result".to_string(), f.ret.as_str()));
             }
             for (what, key) in sig {
@@ -2092,8 +2132,10 @@ impl Checker {
         Ok(())
     }
 
-    fn lookup(&self, line: i64, col: i64, name: &str, scope: &Scope) -> Res<Entry> {
-        if self.map_roots.iter().any(|root| root == name) {
+    fn lookup(&self, line: i64, col: i64, name: &str, scope: &Scope, path: &[String]) -> Res<Entry> {
+        if self.map_roots.iter().any(|(root, held)| {
+            root == name && (path.starts_with(held) || held.starts_with(path))
+        }) {
             return Err(terr(line, col, "recursive_borrow", format!("cannot use {name} inside a mutable collection Some arm"), ""));
         }
         match scope.get(name) {
@@ -2222,7 +2264,7 @@ impl Checker {
                 scope.insert(s.name.clone(), Entry { ty: sty, mutable: s.mutable, kind: "local" });
             }
             Stmt::Assign(s) => {
-                let v = self.lookup(s.line, s.col, &s.name, scope)?;
+                let v = self.lookup(s.line, s.col, &s.name, scope, &[])?;
                 self.check_borrow(s.line, s.col, &s.name, &[])?; // G9 A0
                 if !v.mutable {
                     if matches!(v.kind, "inout" | "map_inout") {
@@ -2247,7 +2289,7 @@ impl Checker {
                 self.own(&s.value, scope)?;
             }
             Stmt::IndexAssign(s) => {
-                let v = self.lookup(s.line, s.col, &s.name, scope)?;
+                let v = self.lookup(s.line, s.col, &s.name, scope, &[])?;
                 if v.ty == strt() {
                     return Err(terr(
                         s.line,
@@ -2277,7 +2319,7 @@ impl Checker {
                 self.check_inout_context(&[&s.index, &s.value], InoutContext::PlaceAssignment(&s.name))?;
             }
             Stmt::FieldAssign(s) => {
-                let v = self.lookup(s.line, s.col, &s.name, scope)?;
+                let v = self.lookup(s.line, s.col, &s.name, scope, &s.fields)?;
                 self.check_borrow(s.line, s.col, &s.name, &s.fields)?; // G9 A0
                 let mut cur = v.ty.clone();
                 for fname in &s.fields {
@@ -2657,16 +2699,18 @@ impl Checker {
             && t.args.first().is_some_and(|ty| self.is_extended(ty));
         self.check_inout_context(&[&m.scrutinee], InoutContext::Value)?;
         let user = self.is_enum(&t);
-        let root = if let Some(call) = map_call.filter(|_| map_mut) {
-            match &call.args[0] {
-                Expr::InoutArg(arg) => place_root(&arg.expr).map(str::to_string),
-                _ => None,
-            }
-        } else if let Some(call) = map_call.filter(|_| map_borrow) {
+        let mutable_place = map_call.filter(|_| map_mut).and_then(|call| {
+            let Expr::InoutArg(arg) = &call.args[0] else { return None };
+            let (root, path) = field_place(&arg.expr);
+            let Expr::Var(v) = root else { return None };
+            Some((v.name.clone(), path))
+        });
+        let root = if let Some(call) = map_call.filter(|_| map_borrow) {
             place_root(&call.args[0]).map(str::to_string)
         } else {
             self.match_root(&m.scrutinee, &t, scope)
         }; // G9 A0: root variable of an extended scrutinee path
+        let mpath = self.match_inout_path(&m.scrutinee, &t, scope);
         if t.owner.is_some() {
             return Err(terr(
                 line,
@@ -2755,19 +2799,26 @@ impl Checker {
                     else if bt.is_array() || *bt == strt() { "param" } else { "local" };
                 sc.insert(b.clone(), Entry { ty: bt.clone(), mutable: false, kind });
             }
-            let active = root.as_ref().filter(|_| !(map_mut || map_borrow) || a.ctor == "Some");
+            let active = root.as_ref().filter(|_| !map_borrow || a.ctor == "Some");
+            let borrowed = mutable_place.as_ref().filter(|_| a.ctor == "Some");
             if let Some(r) = active {
                 self.active_roots.push(r.clone());
-                if map_mut {
-                    self.map_roots.push(r.clone());
-                }
+            }
+            if let Some(place) = borrowed {
+                self.map_roots.push(place.clone());
+            }
+            if let Some(mp) = &mpath {
+                self.match_paths.push(mp.clone());
             }
             self.block(&mut a.body, &mut sc)?;
+            if mpath.is_some() {
+                self.match_paths.pop();
+            }
+            if borrowed.is_some() {
+                self.map_roots.pop();
+            }
             if active.is_some() {
                 self.active_roots.pop();
-                if map_mut {
-                    self.map_roots.pop();
-                }
             }
         }
         Ok(())
@@ -2825,8 +2876,32 @@ impl Checker {
         None
     }
 
+    /// R-6e-8: (root, field path) of a match scrutinee place over an extended type rooted at an inout or
+    /// element binding, else None.
+    fn match_inout_path(&self, scrut: &Expr, t: &GType, scope: &Scope) -> Option<(String, Vec<String>)> {
+        if !self.is_extended(t) {
+            return None;
+        }
+        let mut e: &Expr = scrut;
+        let mut fields: Vec<String> = Vec::new();
+        while let Expr::FieldAccess(x) = e {
+            fields.insert(0, x.field.clone());
+            e = &x.base;
+        }
+        if let Expr::Var(v) = e {
+            if scope.get(&v.name).is_some_and(|x| x.kind == "inout" || x.kind == "map_inout") {
+                return Some((v.name.clone(), fields));
+            }
+        }
+        None
+    }
+
+    fn match_path_held(&self, name: &str, path: &[String]) -> bool {
+        self.match_paths.iter().any(|(root, held)| root == name && (path.starts_with(held) || held.starts_with(path)))
+    }
+
     fn check_borrow(&self, line: i64, col: i64, name: &str, fields: &[String]) -> Res<()> {
-        if self.active_roots.iter().any(|r| r == name) {
+        if self.active_roots.iter().any(|r| r == name) || self.match_path_held(name, fields) {
             let mut parts: Vec<&str> = vec![name];
             parts.extend(fields.iter().map(|f| f.as_str()));
             return Err(terr(
@@ -2942,12 +3017,16 @@ impl Checker {
     }
 
     fn expr(&mut self, e: &mut Expr, scope: &Scope, contract: bool) -> Res<GType> {
-        let t = self.expr_inner(e, scope, contract)?;
+        self.expr_with_path(e, scope, contract, &[])
+    }
+
+    fn expr_with_path(&mut self, e: &mut Expr, scope: &Scope, contract: bool, path: &[String]) -> Res<GType> {
+        let t = self.expr_inner(e, scope, contract, path)?;
         set_ty(e, &t);
         Ok(t)
     }
 
-    fn expr_inner(&mut self, e: &mut Expr, scope: &Scope, c: bool) -> Res<GType> {
+    fn expr_inner(&mut self, e: &mut Expr, scope: &Scope, c: bool, path: &[String]) -> Res<GType> {
         if self.ckind == "cost" && (matches!(e, Expr::Spent(_))
             || matches!(e, Expr::Var(v) if v.name == "result")
             || matches!(e, Expr::Call(v) if v.name == "old")) {
@@ -2984,7 +3063,7 @@ impl Checker {
                 if x.name == "result" && !scope.contains_key("result") {
                     return Err(terr(x.line, x.col, "result_scope", "`result` is only allowed in ensures", ""));
                 }
-                Ok(self.lookup(x.line, x.col, &x.name, scope)?.ty)
+                Ok(self.lookup(x.line, x.col, &x.name, scope, path)?.ty)
             }
             Expr::Unary(x) => {
                 if x.op == "-" {
@@ -3085,7 +3164,7 @@ impl Checker {
                     if c || self.field_move != Some((x.line, x.col)) {
                         return Err(field_move_error(x));
                     }
-                    let mut ty = self.lookup(x.line, x.col, &x.name, scope)?.ty;
+                    let mut ty = self.lookup(x.line, x.col, &x.name, scope, &x.fields)?.ty;
                     for field in &x.fields {
                         ty = self.field_type(x.line, x.col, &ty, field)?;
                     }
@@ -3101,7 +3180,7 @@ impl Checker {
                         "contracts read parameters and locals directly; remove `move`",
                     ));
                 }
-                Ok(self.lookup(x.line, x.col, &x.name, scope)?.ty)
+                Ok(self.lookup(x.line, x.col, &x.name, scope, &[])?.ty)
             }
             Expr::Index(x) => {
                 let at = self.expect_array(&mut x.array, scope, c, true)?;
@@ -3193,7 +3272,17 @@ impl Checker {
                 Ok(ety)
             }
             Expr::FieldAccess(x) => {
-                let bt = self.read_expr(&mut x.base, scope, c, &["vec_get"])?;
+                let bt = if !path.is_empty() {
+                    self.expr_with_path(&mut x.base, scope, c, path)?
+                } else {
+                    let (root, mut fields) = field_place(&x.base);
+                    if matches!(root, Expr::Var(_)) {
+                        fields.push(x.field.clone());
+                        self.expr_with_path(&mut x.base, scope, c, &fields)?
+                    } else {
+                        self.read_expr(&mut x.base, scope, c, &["vec_get"])?
+                    }
+                };
                 if bt.owner.is_some() {
                     return Err(terr(
                         x.line,
@@ -3555,11 +3644,10 @@ impl Checker {
                     "name a `let mut` local array or an inout parameter of this function",
                 ));
             }
-            let mut place = arg.expr.as_ref();
-            while let Expr::FieldAccess(f) = place { place = &f.base; }
+            let (place, path) = field_place(&arg.expr);
             let Expr::Var(op) = place else { return Err(terr(aline, acol, "internal", "unknown expression", "")) };
             let name = op.name.clone();
-            let v = self.lookup(op.line, op.col, &name, scope)?;
+            let v = self.lookup(op.line, op.col, &name, scope, &path)?;
             if v.kind == "local" && !v.mutable {
                 return Err(terr(
                     aline,
@@ -3599,7 +3687,7 @@ impl Checker {
                     "pass an array of exactly the parameter's element type",
                 ));
             }
-            if self.active_roots.iter().any(|r| *r == name) {
+            if self.active_roots.iter().any(|r| *r == name) || self.match_path_held(&name, &path) {
                 // G9: mutable access while a match view of the root is active
                 return Err(terr(
                     aline,
@@ -3677,7 +3765,7 @@ impl Checker {
                         ))
                     }
                 };
-                let v = self.lookup(op.line, op.col, &op.name, scope)?;
+                let v = self.lookup(op.line, op.col, &op.name, scope, &[])?;
                 if v.kind == "local" && !v.mutable {
                     return Err(terr(
                         aline,
@@ -3709,7 +3797,7 @@ impl Checker {
                         "",
                     ));
                 }
-                if self.active_roots.iter().any(|r| *r == op.name) {
+                if self.active_roots.iter().any(|r| *r == op.name) || self.match_path_held(&op.name, &[]) {
                     return Err(terr(
                         aline,
                         acol,
@@ -3802,7 +3890,7 @@ impl Checker {
                     ))
                 }
             };
-            let v = self.lookup(op.line, op.col, &op.name, scope)?;
+            let v = self.lookup(op.line, op.col, &op.name, scope, &[])?;
             if v.kind == "local" && !v.mutable {
                 return Err(terr(
                     aline,
@@ -3834,7 +3922,7 @@ impl Checker {
                     "",
                 ));
             }
-            if self.active_roots.iter().any(|r| *r == op.name) {
+            if self.active_roots.iter().any(|r| *r == op.name) || self.match_path_held(&op.name, &[]) {
                 return Err(terr(
                     aline,
                     acol,

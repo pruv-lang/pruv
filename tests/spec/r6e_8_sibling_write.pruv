@@ -1,0 +1,13 @@
+// spec: R-6e-8 accept
+struct Rec { count: i64 }
+struct St { n: i64, records: Vec<Rec> }
+fn f(inout st: St) -> i64
+  requires len(st.records) >= 1
+  ensures result == 10
+{
+  match vec_at_mut::<Rec>(inout st.records, 0) {
+    Some(r) => { r.count = 7; st.n = 3; r.count = r.count + st.n - 3; }
+    None => { st.n = 3; }
+  }
+  return st.n + vec_get::<Rec>(st.records, 0).count;
+}

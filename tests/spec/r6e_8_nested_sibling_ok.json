@@ -1,0 +1,1 @@
+{"gen_contains": ["st.inner.recs.get_mut("], "gen_absent": [".clone()", "mem::take"]}

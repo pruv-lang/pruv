@@ -1,0 +1,15 @@
+// spec: R-6e-8 accept
+struct Rec { count: i64 }
+struct St { a: Vec<Rec>, b: Vec<Rec> }
+fn f(inout st: St) -> i64 {
+  match vec_at_mut::<Rec>(inout st.a, 0) {
+    Some(x) => {
+      match vec_at_mut::<Rec>(inout st.b, 0) {
+        Some(y) => { y.count = x.count; x.count = 1; }
+        None => { }
+      }
+    }
+    None => { }
+  }
+  return 0;
+}

@@ -1,0 +1,15 @@
+// spec: R-6e-8 reject
+enum Blob { Empty, Ints(items: [i64]) }
+struct Rec { n: i64 }
+struct St { a: Vec<Rec>, b: Blob }
+fn f(inout st: St) -> () {
+  match vec_at_mut::<Rec>(inout st.a, 0) {
+    Some(r) => {
+      match st.b {
+        Blob::Ints(items) => { st.b = Blob::Empty; r.n = len(items); }
+        Blob::Empty => { }
+      }
+    }
+    None => { }
+  }
+}

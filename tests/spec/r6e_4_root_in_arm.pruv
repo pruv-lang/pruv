@@ -1,10 +1,10 @@
 // spec: R-6e-4 reject
 struct Record { hits: i64, log: Vec<i64> }
 struct St { count: i64, recs: HashMap<i64, Record> }
-
+fn g(st: St) -> i64 { return st.count; }
 fn touch(inout st: St, k: i64) -> i64 {
   match map_get_mut::<i64, Record>(inout st.recs, k) {
-    Some(r) => { r.hits = st.count; }
+    Some(r) => { r.hits = g(st); }
     None => { }
   }
   return 0;

@@ -1,0 +1,15 @@
+// spec: R-6e-8 reject
+struct B { active_ms: i64 }
+struct St { sessions: HashMap<i64, B>, clocks: HashMap<i64, B> }
+fn f(inout st: St, k: i64) -> i64 {
+  match map_get_mut::<i64, B>(inout st.sessions, k) {
+    Some(b) => {
+      match map_get_mut::<i64, B>(inout st.sessions, k) {
+        Some(c) => { c.active_ms = b.active_ms; }
+        None => { }
+      }
+    }
+    None => { }
+  }
+  return 0;
+}
