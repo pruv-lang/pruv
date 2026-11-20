@@ -1,0 +1,1 @@
+{"backend":"llvm","gen_contains":["store ptr null, ptr %l0.a.a","store i64 0, ptr %l0.a.b","store i64 0, ptr %l0.a.c"],"gen_regex_absent":["(?s)^define internal void @wrap__pruv_body\\([^\\n]*\\n(?:(?!^}).)*call[^\\n]*@(?:pruv_copy|llvm\\.memcpy)"]}

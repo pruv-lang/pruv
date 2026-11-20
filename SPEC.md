@@ -202,6 +202,23 @@ Allowed only in `requires`, `ensures`, `invariant`, `assert`:
     that only the body proves fails at the call (`verify/assert` for an `assert`). An `opaque fn` (section 6o) gives
     none either. Tests: [accept](tests/spec/r6_1_body_facts/root.pruv),
     [reject](tests/spec/r6_1_body_facts_requires/root.pruv).
+  - R-6-2 **Named predicates** (`pred fn`, L3 R03L): `pred fn p(x: T, ...) -> bool { return <expr>; }` names one
+    contract expression. Its body is exactly one `return` of a `bool` expression checked as a contract, so it may use
+    `forall`, `exists`, aggregates and field reads; a parameter may also be a non-generic struct, read through its
+    fields. It has no effects, `requires`, `ensures`, `decreases`, `cost` or type parameters, and every rule above
+    applies to its body (otherwise `type/pred_signature`). A pred is only a contract: each use in `requires`,
+    `ensures`, `invariant`, `assert` or `decreases` is replaced by its body at the arguments, so the verifier proves
+    an `ensures p(result)` from the code and checks a `requires p(d)` at every call, exactly as if the body were
+    written there; nothing about a pred is assumed. `pub pred fn` exports it, and another module uses it by path
+    (`crate::m::p(x)`) like a function. A call in code is `type/pred_in_code`. A pred has no code, so the
+    back ends never see it. A function body with a quantifier or a struct parameter that is called in code gives no
+    body fact (L3 P07) either. An argument that uses a name the body binds with `forall`/`exists` is
+    `type/call_in_contract`. Tests: [accept](tests/spec/r6_2_pred.pruv),
+    [unproved requires](tests/spec/r6_2_pred_unproved.pruv),
+    [false ensures](tests/spec/r6_2_pred_false_ensures.pruv), [call in code](tests/spec/r6_2_pred_in_code.pruv),
+    [effects and statements](tests/spec/r6_2_pred_effect.pruv),
+    [effect call](tests/spec/r6_2_pred_effect_call.pruv), [nested binder](tests/spec/r6_2_pred_nested_binder.pruv),
+    [pub pred](tests/spec/r6_2_pred_pub.pruv).
   - Anything else is `type` error `call_in_contract` "function F cannot be expanded in a contract: REASON". A call in
     a `cost` clause stays unsupported. A `pub` function's `requires`/`ensures`/`decreases` may expand only `pub`
     functions (`type/public_interface`, section 6f), because the body becomes part of the public contract.
@@ -571,6 +588,23 @@ fn tree_count(t: Tree) -> i64
   `type/foreign_borrow`.
   Tests: [accept](tests/spec/r6e_11_string_eq.pruv), [reject](tests/spec/r6e_11_eq_non_text.pruv),
   [reject](tests/spec/r6e_11_eq_moved_elem.pruv).
+- R-6e-12 **Moving an array.** `move x` transfers an owned array local or a `take` array
+  parameter into a struct field, enum payload, local initializer, assignment, return, or
+  `take` argument. Array fields and indexed elements cannot be moved. Moving a plain or
+  `inout` array parameter is `type/array_alias`; declare it `take` or make a copy.
+  A `take x: [T]` parameter requires an explicit `move` argument.
+  The source is dead until reassigned. A read after a definite or possible move is
+  `type/foreign_move`, and a loop must restore a moved binding on every continuing path
+  (`type/foreign_loop_move`). Returning an owned local array as `return x` remains legal.
+  Rust uses `Vec<T>` for a `take` array parameter and emits the moved value directly without copying.
+  The verifier charges zero units for the move itself. LLVM moves local arrays by emptying
+  the source slot and rejects `take` array parameters with `codegen/unsupported_type`.
+  Tests: [field and payload](tests/spec/r6e_12_field_move.pruv),
+  [take parameter](tests/spec/r6e_12_take_param.pruv), [LLVM](tests/spec/r6e_12_llvm_move.pruv),
+  [use after move](tests/spec/r6e_12_use_after_move.pruv), [borrowed parameter](tests/spec/r6e_12_borrowed_param.pruv),
+  [inout parameter](tests/spec/r6e_12_inout_param.pruv), [bare field initializer](tests/spec/r6e_12_bare_var.pruv),
+  [move in dead code](tests/spec/r6e_12_dead_move.pruv), [take parameter in a contract](tests/spec/r6e_12_take_contract_index.pruv),
+  [move in a loop condition](tests/spec/r6e_12_loop_cond_move.pruv).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate. Putting an existing value into an owning place (`let`, assignment, constructor field,
@@ -1657,6 +1691,8 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/parallel_call` | type | a `par` branch that is not a call to a Pruv function |
 | `type/parallel_foreign` | type | a `par` branch reaches a trusted or catalog operation |
 | `type/parallel_nested` | type | a `par` branch reaches another `par` group |
+| `type/pred_in_code` | type | code calls a `pred fn` (R-6-2) |
+| `type/pred_signature` | type | a `pred fn` that is not one pure bool contract expression (R-6-2) |
 | `type/print_type` | type | `print` of a value that is not i64 or bool |
 | `type/private_item` | type | a path names a private item of another module |
 | `type/proc_unconsumed` | type | a temporary `Process` is never consumed |

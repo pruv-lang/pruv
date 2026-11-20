@@ -1,0 +1,6 @@
+// spec: R-6e-12 reject
+struct D { a: [i64] }
+
+fn wrap(inout a: [i64]) -> D {
+  return D { a: move a };
+}

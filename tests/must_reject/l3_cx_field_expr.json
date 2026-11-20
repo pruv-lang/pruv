@@ -1,1 +1,1 @@
-{"stage": "type", "code": "call_in_contract", "line": 5, "col": 30, "message": "function p cannot be expanded in a contract: its body has an expression other than literals, names, operators, indexing and calls"}
+{"stage": "type", "code": "call_in_contract", "line": 4, "col": 31, "message": "function mk cannot be expanded in a contract: it does not return bool or i64"}

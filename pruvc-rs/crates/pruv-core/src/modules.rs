@@ -204,6 +204,53 @@ pub struct G4 {
 }
 
 
+impl G4 {
+    /// Keep item indices aligned with the checked program after predicate expansion.
+    pub(crate) fn remove_preds(&mut self, functions: &[Function]) {
+        if !functions.iter().any(|f| f.pred) {
+            return;
+        }
+        let mut next = 0;
+        let indices: Vec<_> = functions.iter().map(|f| {
+            if f.pred {
+                None
+            } else {
+                let index = next;
+                next += 1;
+                Some(index)
+            }
+        }).collect();
+        let remap = |items: &mut Vec<Item>| {
+            items.retain_mut(|item| match item {
+                Item::Ty(_) => true,
+                Item::Fn(i) => match indices[*i] {
+                    Some(index) => {
+                        *i = index;
+                        true
+                    }
+                    None => false,
+                },
+            });
+        };
+        remap(&mut self.items);
+        for module in &mut self.modules {
+            remap(&mut module.items);
+            module.funcs.retain(|_, index| {
+                if let Some(mapped) = indices[*index] {
+                    *index = mapped;
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+        let removed: HashSet<_> = functions.iter().filter(|f| f.pred).map(|f| f.name.as_str()).collect();
+        self.entries.retain(|name| !removed.contains(name.as_str()));
+        let mut functions = functions.iter();
+        self.fn_meta.retain(|_| !functions.next().unwrap().pred);
+    }
+}
+
 pub struct Loaded {
     pub prog: Program,
     /// Some in explicit mode
@@ -1575,7 +1622,8 @@ fn entries(prog: &Program, g4: &mut G4) -> Res<()> {
             }
             g4.main = Some(f.name.clone());
         }
-        if g4.fn_meta[i].is_pub && f.tparams.is_empty() && f.foreign.is_none() {
+        // R03L: a pred is never a host entry
+        if g4.fn_meta[i].is_pub && f.tparams.is_empty() && f.foreign.is_none() && !f.pred {
             g4.fn_meta[i].host_entry = true;
             out.push(f.name.clone());
         }

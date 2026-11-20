@@ -114,11 +114,11 @@ def _move_token(src, end, toks):
 #   mod   at top level (brace depth 0), at the start of an item (first token, after `}` or `;`, or after `pub`), and
 #         followed by a name, a string or `{` (so `mod x;`, `mod "p";`, `mod x { }` reach the module-syntax errors)
 #   pub   at top level, at the start of an item (or after another `pub`), followed by
-#         fn/struct/enum/mod/trusted/rust/opaque/pub
+#         fn/struct/enum/mod/trusted/rust/opaque/pred/pub
 #   crate right before `::`, not after fn/let/mut/struct/enum and not after `.` or `::`
 _G4_SKIP = r"(?:[ \t\r\n]|//[^\n]*(?=\n|\Z))*"
 _G4_MOD_AHEAD = re.compile(_G4_SKIP + r"[A-Za-z_\"{]")
-_G4_PUB_AHEAD = re.compile(_G4_SKIP + r"(?:fn|struct|enum|mod|pub|trusted|rust|opaque)(?![A-Za-z0-9_])")
+_G4_PUB_AHEAD = re.compile(_G4_SKIP + r"(?:fn|struct|enum|mod|pub|trusted|rust|opaque|pred)(?![A-Za-z0-9_])")
 _G4_CRATE_AHEAD = re.compile(_G4_SKIP + r"::")
 
 
@@ -314,6 +314,13 @@ class Parser:
                 f = s.function()
                 f.pub = pub is not None
                 f.opaque = True
+                p.functions.append(f)
+                p.items.append(f)
+            elif s.peek().kind == "id" and s.peek().val == "pred" and s.at("fn", 1):
+                s.next()                  # R03L: `pred fn` is a contract-only predicate, expanded where it is used
+                f = s.function()
+                f.pub = pub is not None
+                f.pred = True
                 p.functions.append(f)
                 p.items.append(f)
             elif s.peek().kind == "id" and s.peek().val == "rust" and s.at("fn", 1):

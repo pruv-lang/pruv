@@ -1,0 +1,16 @@
+// spec: R-6e-12 accept
+struct D { a: [i64] }
+enum Payload { Data(a: [bool]) }
+
+fn wrap_field() -> D ! alloc {
+  let a: [i64] = alloc(4, 0);
+  return D { a: move a };
+}
+
+fn wrap_payload() -> Payload ! alloc {
+  let mut a: [bool] = alloc(4, true);
+  let b: [bool] = move a;
+  a = alloc(2, false);
+  assert len(a) == 2;
+  return Payload::Data(move b);
+}

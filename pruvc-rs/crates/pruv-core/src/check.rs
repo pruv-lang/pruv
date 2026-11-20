@@ -296,6 +296,7 @@ struct FuncInfo {
     foreign: bool,
     /// P13o: an `opaque fn` (a contract call stays an uninterpreted application until `reveal`)
     opaque: bool,
+    pred: bool,
 }
 
 struct Checker {
@@ -383,6 +384,8 @@ pub fn check_explicit(
     c.explicit = true;
     c.host_entry = g4.fn_meta.iter().map(|m| m.host_entry).collect();
     c.run(prog)?;
+    g4.remove_preds(&prog.functions);
+    prog.functions.retain(|f| !f.pred);
     Ok(c.tt)
 }
 
@@ -396,6 +399,7 @@ pub fn check_with_externs(prog: &mut Program, externs: &[String]) -> Result<Type
     let mut c = Checker::new(prog, externs, &[])?;
     prog.uses_inout = Some(c.uses_inout); // G5 A0: lets the staging guard skip its walk for inout-free programs
     c.run(prog)?;
+    prog.functions.retain(|f| !f.pred);
     Ok(c.tt)
 }
 
@@ -589,6 +593,7 @@ impl Checker {
                     tparams: f.tparams.clone(),
                     foreign: f.foreign.is_some(),
                     opaque: f.opaque,
+                    pred: f.pred,
                 }),
             );
         }
@@ -706,7 +711,9 @@ impl Checker {
             self.ckind = "ensures";
             match self.x_template(f.line, f.col, &f.name, &fi) {
                 Ok(xa) => {
-                    if fi.ret == boolt() || !x_has_bit(&xa) {
+                    if !f.pred && (fi.ret == boolt() || !x_has_bit(&xa))
+                        && (f.opaque || !(x_has_quant(&xa) || fi.params.iter().any(|p| x_record(p, &self.decls))))
+                    {
                         f.x_auto = Some(xa);
                     }
                 }
@@ -2068,18 +2075,35 @@ impl Checker {
             if pt == unitt() {
                 return Err(terr(f.line, f.col, "unit_param", format!("parameter {} cannot have type ()", p.name), ""));
             }
-            if p.take && !pt.is_collection() && !self.owned_aggregate(&pt) {
+            if p.take && !pt.is_array() && !pt.is_collection() && !self.owned_aggregate(&pt) {
                 return Err(terr(
                     f.line,
                     f.col,
                     "foreign_move",
-                    "take is only for collection parameters",
-                    format!("remove `take` from {}; scalars, arrays and str are passed by value or borrowed", p.name),
+                    "take is only for array, collection or aggregate parameters",
+                    format!("remove `take` from {}; scalars and str are passed by value or borrowed", p.name),
                 ));
             }
             // G5 A0: an inout parameter allows element stores but, like every parameter, never whole reassignment
-            let kind = if p.mode_pos.is_some() { "inout" } else { "param" };
+            let kind = if p.mode_pos.is_some() { "inout" } else if p.take { "take" } else { "param" };
             scope.insert(p.name.clone(), Entry { ty: pt, mutable: false, kind });
+        }
+        if f.pred {
+            if ret == boolt() && f.effects.is_empty() && f.requires.is_empty() && f.ensures.is_empty()
+                && f.decreases.is_none() && f.tparams.is_empty() && f.cost.is_none()
+            {
+                if let [Stmt::Return(r)] = f.body.as_mut_slice() {
+                    if let Some(value) = &mut r.value {
+                        self.ckind = "ensures";
+                        self.expect(value, &boolt(), &scope, true, None)?;
+                        self.ckind = "code";
+                        return Ok(());
+                    }
+                }
+            }
+            return Err(terr(f.line, f.col, "pred_signature",
+                format!("pred {} must return bool with no effects, contracts or type parameters and a body of one `return <expr>;`", f.name),
+                format!("write `pred fn {}(..) -> bool {{ return <contract expression>; }}`", f.name)));
         }
         self.used_effects = BTreeSet::new();
         self.ckind = "requires";
@@ -2144,7 +2168,7 @@ impl Checker {
             }
         }
         let aggregates = self.decls.keys().filter(|n| self.owned_aggregate(&GType::from_key(n))).cloned().collect();
-        check_ownership(f, &self.takes, &aggregates)?; // G6: liveness of collection bindings (after typing)
+        check_ownership(f, &self.takes, &aggregates)?; // Check ownership and liveness after typing.
         Ok(())
     }
 
@@ -2951,7 +2975,7 @@ impl Checker {
 
     /// Arrays are moved or borrowed explicitly: a new array comes only from alloc/copy/a call.
     fn array_source(&self, line: i64, col: i64, value: &Expr, scope: &Scope, allow_local_var: bool, ty: &GType) -> Res<()> {
-        if matches!(value, Expr::Call(_) | Expr::StrLit(_)) {
+        if matches!(value, Expr::Call(_) | Expr::StrLit(_)) || matches!(value, Expr::Move(_)) && ty.is_array() {
             return Ok(());
         }
         if let Expr::Var(v) = value {
@@ -2980,7 +3004,7 @@ impl Checker {
             if *ty == strt() {
                 "a str value here must come from a string literal, copy(), substr() or a function call"
             } else {
-                "an array value here must come from alloc(), copy() or a function call"
+                "an array value here must come from move, alloc(), copy() or a function call"
             },
             "write copy(x) to make an explicit copy (needs `! alloc`)",
         ))
@@ -3224,12 +3248,19 @@ impl Checker {
             Expr::Move(x) => {
                 self.check_borrow(x.line, x.col, &x.name, &x.fields)?;
                 if !x.fields.is_empty() {
-                    if c || self.field_move != Some((x.line, x.col)) {
-                        return Err(field_move_error(x));
-                    }
                     let mut ty = self.lookup(x.line, x.col, &x.name, scope, &x.fields)?.ty;
                     for field in &x.fields {
+                        if !self.is_struct(&ty) {
+                            return Err(field_move_error(x));
+                        }
                         ty = self.field_type(x.line, x.col, &ty, field)?;
+                    }
+                    if ty.is_array() {
+                        return Err(terr(x.line, x.col, "array_alias", "an array field cannot be moved",
+                            "use copy() to make an independent array"));
+                    }
+                    if self.field_move != Some((x.line, x.col)) {
+                        return Err(field_move_error(x));
                     }
                     return Ok(ty);
                 }
@@ -3243,10 +3274,24 @@ impl Checker {
                         "contracts read parameters and locals directly; remove `move`",
                     ));
                 }
-                Ok(self.lookup(x.line, x.col, &x.name, scope, &[])?.ty)
+                let entry = self.lookup(x.line, x.col, &x.name, scope, &[])?;
+                if entry.ty.is_array() && !matches!(entry.kind, "local" | "take") {
+                    if matches!(entry.kind, "param" | "inout") {
+                        return Err(terr(x.line, x.col, "array_alias",
+                            format!("parameter {} is a borrowed array and cannot be moved", x.name),
+                            format!("declare `take {}: {}` or use copy({})", x.name, tn(&entry.ty), x.name)));
+                    }
+                    return Err(terr(x.line, x.col, "array_alias", "only an owned array binding can be moved",
+                        "use copy() to make an independent array"));
+                }
+                Ok(entry.ty)
             }
             Expr::Index(x) => {
                 let at = self.expect_array(&mut x.array, scope, c, true)?;
+                if matches!(&*x.array, Expr::Move(_)) && at.is_array() {
+                    return Err(terr(x.array.line(), x.array.col(), "array_alias", "an array element cannot be moved",
+                        "read the element without move"));
+                }
                 if at.name == "hashmap" && at.owner.is_none() {
                     return Err(terr(
                         x.array.line(),
@@ -4081,7 +4126,13 @@ impl Checker {
     /// statements allow it (checked before any body is typed, so every template starts from source).
     fn x_prepare(&mut self, prog: &Program) -> Res<()> {
         for f in &prog.functions {
-            let r = x_sig_reason(f).or_else(|| x_scan_block(f, &f.body, &self.funcs));
+            let r = x_sig_reason(f, &self.decls).or_else(|| x_scan_block(f, &f.body, &self.funcs));
+            if f.pred {
+                if let Some(reason) = &r {
+                    return Err(terr(f.line, f.col, "pred_signature",
+                        format!("pred {} must expand in a contract: {}", f.name, reason), X_FIX));
+                }
+            }
             let not_bool = GType::from_key(&f.ret) != boolt();
             if f.opaque && (r.is_some() || not_bool) {
                 // P13o: an opaque function is an expandable predicate
@@ -4419,6 +4470,7 @@ impl Checker {
                 tparams: cf.tparams.clone(),
                 foreign: false,
                 opaque: false,
+                pred: false,
             })
         } else {
             match self.funcs.get(&n) {
@@ -4541,7 +4593,15 @@ impl Checker {
         }
         if let Some(takes) = self.takes.get(&n) {
             for ((arg, param), take) in e.args.iter().zip(&f.params).zip(takes) {
-                if !*take || !self.is_struct(&substitute(param, &m)) {
+                let pt = substitute(param, &m);
+                if *take && pt.is_array() && !matches!(arg, Expr::Move(_)) {
+                    let fix = match arg {
+                        Expr::Var(v) => format!("write move {}", v.name),
+                        _ => "bind the array to a local, then move it".into(),
+                    };
+                    return Err(terr(arg.line(), arg.col(), "foreign_move", "missing move in a consuming argument", fix));
+                }
+                if !*take || !self.is_struct(&pt) {
                     continue;
                 }
                 let valid = match arg {
@@ -4559,6 +4619,10 @@ impl Checker {
                         "a take struct argument needs a constructor, call result or move", ""));
                 }
             }
+        }
+        if !c && f.pred {
+            return Err(terr(line, col, "pred_in_code", format!("pred {} is only allowed in contracts", n),
+                "use it in requires, ensures, invariant or assert, or write a fn for code"));
         }
         if c && !f.effects.is_empty() {
             return Err(terr(
@@ -4587,6 +4651,17 @@ impl Checker {
             }
             // P06: expand the call (docs/L3_RESTRUCTURE_SPEC.md appendix P06)
             let tpl = self.x_template(line, col, &n, &f)?;
+            if x_has_quant(&tpl) {
+                let mut names = HashSet::new();
+                for arg in &e.args {
+                    x_names(arg, &mut names);
+                }
+                if let Some(q) = x_captured_quant(&tpl, &names) {
+                    return Err(terr(line, col, "call_in_contract",
+                        format!("function {} cannot be expanded in a contract: an argument uses the name {} that its body binds in {}", n, q.var, q.kind),
+                        format!("rename {} in the argument or in the body of {}", q.var, n)));
+                }
+            }
             let x = x_instantiate(&tpl, &f.pnames, &e.args, line, col);
             x_sized(line, col, &n, &x)?;
             self.x_pending = Some(x);
@@ -4615,18 +4690,47 @@ const X_FIX: &str = "keep it loop-free with no requires (immutable lets, if/retu
 /// nodes in one template or one expansion
 const X_MAX: usize = 4096;
 const X_R_STMT: &str = "its body has a statement other than an immutable i64 or bool let, if and return";
-const X_R_EXPR: &str = "its body has an expression other than literals, names, operators, indexing and calls";
+const X_R_EXPR: &str = "its body has an expression other than literals, names, operators, indexing, field reads, quantifiers, aggregates and calls";
 
-fn x_sig_reason(f: &Function) -> Option<String> {
+fn x_has_quant(e: &Expr) -> bool {
+    matches!(e, Expr::Quant(_)) || crate::refine::kids(e).into_iter().any(x_has_quant)
+}
+
+fn x_names(e: &Expr, names: &mut HashSet<String>) {
+    if let Expr::Var(v) = e {
+        names.insert(v.name.clone());
+    }
+    for child in crate::refine::kids(e) {
+        x_names(child, names);
+    }
+}
+
+fn x_captured_quant<'a>(e: &'a Expr, names: &HashSet<String>) -> Option<&'a Quant> {
+    if let Expr::Quant(q) = e {
+        if names.contains(&q.var) {
+            return Some(q);
+        }
+    }
+    crate::refine::kids(e).into_iter().find_map(|child| x_captured_quant(child, names))
+}
+
+fn x_record(ty: &GType, decls: &HashMap<String, TypeDecl>) -> bool {
+    ty.owner.is_none() && ty.args.is_empty() && matches!(decls.get(&ty.name), Some(TypeDecl::Struct(_)))
+}
+
+fn x_sig_reason(f: &Function, decls: &HashMap<String, TypeDecl>) -> Option<String> {
     if !f.tparams.is_empty() {
         return Some("it is generic".into());
     }
-    if f.params.iter().any(|p| p.mode_pos.is_some()) {
-        return Some("it has an inout parameter".into());
+    if f.params.iter().any(|p| p.mode_pos.is_some() || p.take) {
+        return Some("it has an inout or take parameter".into());
     }
     let ok = [i64t(), boolt(), GType::array(), GType::array_u8(), GType::array_bool()];
-    if f.params.iter().any(|p| !ok.contains(&GType::from_key(&p.ty))) {
-        return Some("its parameters are not all i64, bool or arrays of i64, u8 or bool".into());
+    if f.params.iter().any(|p| {
+        let ty = GType::from_key(&p.ty);
+        !ok.contains(&ty) && !x_record(&ty, decls)
+    }) {
+        return Some("its parameters are not all i64, bool, arrays of i64, u8 or bool, or structs".into());
     }
     let ret = GType::from_key(&f.ret);
     if ret != i64t() && ret != boolt() {
@@ -4683,6 +4787,9 @@ fn x_scan_expr(e: &Expr, funcs: &HashMap<String, Rc<FuncInfo>>) -> Option<String
         Expr::Unary(u) => x_scan_expr(&u.operand, funcs),
         Expr::Binary(b) => x_scan_expr(&b.left, funcs).or_else(|| x_scan_expr(&b.right, funcs)),
         Expr::Index(x) => x_scan_expr(&x.array, funcs).or_else(|| x_scan_expr(&x.index, funcs)),
+        Expr::FieldAccess(_) | Expr::Quant(_) => {
+            crate::refine::kids(e).into_iter().find_map(|child| x_scan_expr(child, funcs))
+        }
         Expr::Call(c) => {
             if funcs.contains_key(&c.name) || c.name == "len" || is_bit_builtin(&c.name) || c.name == "load_be" {
                 c.args.iter().find_map(|a| x_scan_expr(a, funcs))
@@ -4700,6 +4807,8 @@ fn x_size(e: &Expr) -> usize {
         Expr::Binary(b) => 1 + x_size(&b.left) + x_size(&b.right),
         Expr::Index(x) => 1 + x_size(&x.array) + x_size(&x.index),
         Expr::Call(c) => 1 + c.args.iter().map(x_size).sum::<usize>(),
+        Expr::FieldAccess(x) => 1 + x_size(&x.base),
+        Expr::Quant(x) => 1 + x_size(&x.lo) + x_size(&x.hi) + x_size(&x.body),
         _ => 1,
     }
 }
@@ -4726,6 +4835,21 @@ fn x_subst(e: &Expr, env: &HashMap<String, Expr>) -> Expr {
         Expr::Index(x) => Expr::Index(Index {
             line: x.line, col: x.col, array: Box::new(x_subst(&x.array, env)), index: Box::new(x_subst(&x.index, env)),
             ty: x.ty.clone(),
+        }),
+        Expr::FieldAccess(x) => Expr::FieldAccess(FieldAccess {
+            base: Box::new(x_subst(&x.base, env)), ..x.clone()
+        }),
+        Expr::Quant(x) => Expr::Quant(Quant {
+            lo: Box::new(x_subst(&x.lo, env)),
+            hi: Box::new(x_subst(&x.hi, env)),
+            // R03L: a name bound by the quantifier is never replaced inside its body
+            body: Box::new(if env.contains_key(&x.var) {
+                let mut inner = env.clone();
+                inner.remove(&x.var);
+                x_subst(&x.body, &inner)
+            } else {
+                x_subst(&x.body, env)
+            }), ..x.clone()
         }),
         Expr::Call(c) => Expr::Call(Call {
             line: c.line, col: c.col, name: c.name.clone(), args: c.args.iter().map(|a| x_subst(a, env)).collect(),
@@ -4775,6 +4899,21 @@ fn x_instantiate(tpl: &Expr, pnames: &[String], args: &[Expr], line: i64, col: i
         Expr::Index(x) => Expr::Index(Index {
             line, col, array: Box::new(x_instantiate(&x.array, pnames, args, line, col)),
             index: Box::new(x_instantiate(&x.index, pnames, args, line, col)), ty: x.ty.clone(),
+        }),
+        Expr::FieldAccess(x) => Expr::FieldAccess(FieldAccess {
+            line, col, base: Box::new(x_instantiate(&x.base, pnames, args, line, col)), ..x.clone()
+        }),
+        Expr::Quant(x) => Expr::Quant(Quant {
+            line, col,
+            lo: Box::new(x_instantiate(&x.lo, pnames, args, line, col)),
+            hi: Box::new(x_instantiate(&x.hi, pnames, args, line, col)),
+            // R03L: a name bound by the quantifier is never replaced inside its body
+            body: Box::new(if pnames.contains(&x.var) {
+                let inner: Vec<String> = pnames.iter().map(|p| if *p == x.var { String::new() } else { p.clone() }).collect();
+                x_instantiate(&x.body, &inner, args, line, col)
+            } else {
+                x_instantiate(&x.body, pnames, args, line, col)
+            }), ..x.clone()
         }),
         Expr::Call(c) => Expr::Call(Call {
             line, col, name: c.name.clone(), args: c.args.iter().map(|a| x_instantiate(a, pnames, args, line, col)).collect(),

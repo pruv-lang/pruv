@@ -22,6 +22,11 @@ CONTRACT_ONLY = {"is_some": ("option", BOOL), "some_val": ("option", "payload"),
 BIT_BUILTINS = {"band": ("&", "and"), "bor": ("|", "or"), "bxor": ("^", "xor"),
                 "wrapping_shl": ("<<", "shl"), "ushr": (">>", "lshr"),
                 "wrapping_add": ("wrapping_add", "add"), "wrapping_mul": ("wrapping_mul", "mul")}
+def x_has_quant(e):
+    """R03L: does the expression have a quantifier anywhere"""
+    return isinstance(e, Quant) or any(x_has_quant(k) for k in expr_kids(e))
+
+
 def x_has_bit(e):
     """P07: does the expression call a bit builtin anywhere"""
     if isinstance(e, Call) and e.name in BIT_BUILTINS:
@@ -235,6 +240,9 @@ class Checker:
         s.check_costs()
         s.record_g9()
         s.x_auto()             # P07: code calls of an expandable function know its body (result == expansion)
+        if any(f.pred for f in s.prog.functions):   # R03L (R-6-2): every pred use is expanded; no pred reaches a back end
+            s.prog.functions = [f for f in s.prog.functions if not f.pred]
+            s.prog.items = [i for i in s.prog.items if not getattr(i, "pred", False)]
 
     def check_costs(s):
         """Ordinary typing wins, followed by cost/spent diagnostics and direct call effects."""
@@ -896,11 +904,22 @@ class Checker:
                 terr(f, "dup_param", "duplicate parameter %s" % p.name)
             if p.type == UNIT:
                 terr(f, "unit_param", "parameter %s cannot have type ()" % p.name)
-            if p.take and not (is_collection(p.type) or p.type.name in s.aggregates):
-                terr(f, "foreign_move", "take is only for collection parameters",
-                     "remove `take` from %s; scalars, arrays and str are passed by value or borrowed" % p.name)
+            if p.take and not (is_array(p.type) or is_collection(p.type) or p.type.name in s.aggregates):
+                terr(f, "foreign_move", "take is only for array, collection or aggregate parameters",
+                     "remove `take` from %s; scalars and str are passed by value or borrowed" % p.name)
             # G5 A0: an inout parameter allows element stores but, like every parameter, never whole reassignment
             scope[p.name] = (p.type, False, "inout" if p.mode is not None else "take" if p.take else "param")
+        if f.pred:      # R03L (R-6-2): a pred body is one bool contract expression, never code
+            if (f.ret != BOOL or f.effects or f.requires or f.ensures or f.decreases is not None or f.tparams
+                    or f.cost is not None or not (len(f.body) == 1 and isinstance(f.body[0], Return)
+                                                  and f.body[0].value is not None)):
+                terr(f, "pred_signature", "pred %s must return bool with no effects, contracts or type parameters "
+                     "and a body of one `return <expr>;`" % f.name,
+                     "write `pred fn %s(..) -> bool { return <contract expression>; }`" % f.name)
+            s.ckind = "ensures"
+            s.expect(f.body[0].value, BOOL, dict(scope), contract=True)
+            s.ckind = "code"
+            return
         s.used_effects = set()
         s.field_move = None
         s.ckind = "requires"
@@ -932,7 +951,7 @@ class Checker:
                 terr(f, "missing_effect", "function %s uses effect `%s` but does not declare it" % (f.name, e),
                      "add `! %s` after the return type" % ", ".join(sorted(set(f.effects) | s.used_effects)),
                      stage="effect")
-        check_ownership(f, s.funcs, s.decls)      # G6: liveness of collection bindings (after typing)
+        check_ownership(f, s.funcs, s.decls)      # Check ownership and liveness after typing.
 
     def ends_in_return(s, stmts):
         if not stmts:
@@ -1418,8 +1437,8 @@ class Checker:
                          "keep only the outer par group; call the inner helpers one after another")
 
     def array_source(s, st, value, scope, allow_local_var=False):
-        """arrays are moved/borrowed explicitly: new arrays come only from alloc/copy/calls"""
-        if isinstance(value, (Call, StrLit)):
+        """Arrays in owning positions need a fresh result or an explicit move."""
+        if isinstance(value, (Call, StrLit)) or (isinstance(value, Move) and is_array(value.ty)):
             return
         if isinstance(value, Var) and scope.get(value.name, (None, None, ""))[2] == "inout":   # G5 A0
             terr(st, "array_alias", "inout parameter %s is a borrowed array: it cannot be stored or returned" % value.name,
@@ -1429,7 +1448,7 @@ class Checker:
         if value.ty == STR:   # G2 B0
             terr(st, "array_alias", "a str value here must come from a string literal, copy(), substr() or a function call",
                  "write copy(x) to make an explicit copy (needs `! alloc`)")
-        terr(st, "array_alias", "an array value here must come from alloc(), copy() or a function call",
+        terr(st, "array_alias", "an array value here must come from move, alloc(), copy() or a function call",
              "write copy(x) to make an explicit copy (needs `! alloc`)")
 
     # ---- G9 A0: ownership of extended values, active-match borrows ----
@@ -1640,18 +1659,30 @@ class Checker:
         if isinstance(e, Move):   # G6: liveness and position rules are checked by foreign.check_ownership
             s.check_borrow(e, e.name, tuple(e.fields))
             if e.fields:
-                if e is not s.field_move:
-                    _field_move_error(e)
                 ty = s.lookup(e, e.name, scope, tuple(e.fields))[0]
                 for field in e.fields:
+                    if not s.tt.is_struct(ty):
+                        _field_move_error(e)
                     ty = s.field_type(e, ty, field)
+                if is_array(ty):
+                    terr(e, "array_alias", "an array field cannot be moved", "use copy() to make an independent array")
+                if e is not s.field_move:
+                    _field_move_error(e)
                 return ty
             if c:
                 terr(e, "foreign_move", "move only where ownership is consumed",
                      "contracts read parameters and locals directly; remove `move`")
-            return s.lookup(e, e.name, scope)[0]
+            ty, _, kind = s.lookup(e, e.name, scope)
+            if is_array(ty) and kind not in ("local", "take"):
+                if kind in ("param", "inout"):
+                    terr(e, "array_alias", "parameter %s is a borrowed array and cannot be moved" % e.name,
+                         "declare `take %s: %s` or use copy(%s)" % (e.name, type_name(ty), e.name))
+                terr(e, "array_alias", "only an owned array binding can be moved", "use copy() to make an independent array")
+            return ty
         if isinstance(e, Index):
             at = s.expect_array(e.array, scope, c, coll=True)
+            if isinstance(e.array, Move) and is_array(at):
+                terr(e.array, "array_alias", "an array element cannot be moved", "read the element without move")
             if at.name == "hashmap" and at.owner is None:
                 terr(e.array, "type_mismatch", "expected %s, found %s" % (type_name(ARRAY), type_name(at)))
             s.expect(e.index, I64, scope, c)
@@ -2044,8 +2075,10 @@ class Checker:
         """the reason each function cannot be expanded in a contract, or a raw copy of its body when its signature
         and statements allow it (checked before any body is typed, so every template starts from source)"""
         for f in s.prog.functions:
-            r = x_sig_reason(f) or x_scan_block(f, f.body, 0, s.funcs)
+            r = x_sig_reason(f, s.decls) or x_scan_block(f, f.body, 0, s.funcs)
             s.x_raw[f.name] = r if r is not None else copy.deepcopy(f.body)
+            if f.pred and r is not None:      # R03L (R-6-2): a pred always expands
+                terr(f, "pred_signature", "pred %s must expand in a contract: %s" % (f.name, r), X_FIX)
             if f.opaque and (r is not None or f.ret != BOOL):   # P13o: an opaque function is an expandable predicate
                 terr(f, "opaque_signature", "opaque function %s %s" % (
                     f.name, "must return bool" if r is None else "must expand in a contract: " + r),
@@ -2068,6 +2101,8 @@ class Checker:
             try:
                 xa = s.x_template(f, f)
                 f.x_auto = xa if f.ret == BOOL or not x_has_bit(xa) else None
+                if f.pred or not f.opaque and (x_has_quant(xa) or any(x_record(p.type, s.decls) for p in f.params)):
+                    f.x_auto = None     # R03L: a record or quantified predicate gives contracts only, no code fact
             except PruvError:
                 s.x_busy = set()
                 if f.opaque:        # P13o: an opaque body is its definition, so it must build
@@ -2295,10 +2330,16 @@ class Checker:
             s.used_effects.update(f.effects)
             return substitute(f.ret, m)
         for arg, p in zip(a, f.params):
+            if p.take and is_array(substitute(p.type, m)) and not isinstance(arg, Move):
+                terr(arg, "foreign_move", "missing move in a consuming argument",
+                     "write move %s" % arg.name if isinstance(arg, Var) else "bind the array to a local, then move it")
             if p.take and substitute(p.type, m).name in s.aggregates:
                 if not (isinstance(arg, (StructLit, Call)) or isinstance(arg, Move) and not arg.fields
                         and scope[arg.name][2] in ("local", "take")):
                     terr(arg, "foreign_move", "a take struct argument needs a constructor, call result or move")
+        if not c and f.pred:    # R03L (R-6-2)
+            terr(e, "pred_in_code", "pred %s is only allowed in contracts" % n,
+                 "use it in requires, ensures, invariant or assert, or write a fn for code")
         if c and f.effects:
             terr(e, "effect_in_contract", "function %s has effects; not allowed in contracts" % n)
         if c:
@@ -2324,16 +2365,22 @@ X_FIX = ("keep it loop-free with no requires (immutable lets, if/return over i64
 X_MAX = 4096          # nodes in one template or one expansion
 X_PARAM_TYPES = (I64, BOOL, ARRAY, ARRAY_U8, ARRAY_BOOL)
 X_R_STMT = "its body has a statement other than an immutable i64 or bool let, if and return"
-X_R_EXPR = "its body has an expression other than literals, names, operators, indexing and calls"
+X_R_EXPR = ("its body has an expression other than literals, names, operators, indexing, field reads, quantifiers, "
+            "aggregates and calls")
 
 
-def x_sig_reason(f):
+def x_record(t, decls):
+    """R03L: a non-generic struct type, the record parameter of a named predicate"""
+    return is_user_type(t) and not t.args and isinstance(decls.get(t.name), StructDecl)
+
+
+def x_sig_reason(f, decls):
     if f.tparams:
         return "it is generic"
-    if any(p.mode is not None for p in f.params):
-        return "it has an inout parameter"
-    if any(p.type not in X_PARAM_TYPES for p in f.params):
-        return "its parameters are not all i64, bool or arrays of i64, u8 or bool"
+    if any(p.mode is not None or p.take for p in f.params):
+        return "it has an inout or take parameter"
+    if any(p.type not in X_PARAM_TYPES and not x_record(p.type, decls) for p in f.params):
+        return "its parameters are not all i64, bool, arrays of i64, u8 or bool, or structs"
     if f.ret not in (I64, BOOL):
         return "it does not return bool or i64"
     if f.requires:
@@ -2384,6 +2431,14 @@ def x_scan_expr(e, funcs):
     if isinstance(e, Index):
         r = x_scan_expr(e.array, funcs)
         return r if r is not None else x_scan_expr(e.index, funcs)
+    if isinstance(e, FieldAccess):      # R03L: a field read of a struct parameter
+        return x_scan_expr(e.base, funcs)
+    if isinstance(e, Quant):     # R03L: a quantified fact or an aggregate (sum, count, max, min)
+        for k in (e.lo, e.hi, e.body):
+            r = x_scan_expr(k, funcs)
+            if r is not None:
+                return r
+        return None
     if isinstance(e, Call):
         if e.name in funcs or e.name == "len" or e.name in BIT_BUILTINS or e.name == "load_be":
             for a in e.args:
@@ -2404,6 +2459,10 @@ def x_size(e):
         return 1 + x_size(e.array) + x_size(e.index)
     if isinstance(e, Call):
         return 1 + sum(x_size(a) for a in e.args)
+    if isinstance(e, FieldAccess):
+        return 1 + x_size(e.base)
+    if isinstance(e, Quant):
+        return 1 + x_size(e.lo) + x_size(e.hi) + x_size(e.body)
     return 1
 
 
@@ -2413,23 +2472,29 @@ def x_sized(site, f, e):
     return e
 
 
-def x_map(e, leaf):
-    """a fresh copy of the expansion expression e; leaf(Var) gives the replacement of a name or None to copy it"""
-    if isinstance(e, Var):
+def x_map(e, leaf, bound=frozenset()):
+    """a fresh copy of the expansion expression e; leaf(Var) gives the replacement of a free name or None to copy it
+    (R03L: a name bound by a quantifier inside e is never replaced)"""
+    if isinstance(e, Var) and e.name not in bound:
         r = leaf(e)
         if r is not None:
             return r
     n = copy.copy(e)
     if isinstance(e, Unary):
-        n.operand = x_map(e.operand, leaf)
+        n.operand = x_map(e.operand, leaf, bound)
     elif isinstance(e, Binary):
-        n.left = x_map(e.left, leaf)
-        n.right = x_map(e.right, leaf)
+        n.left = x_map(e.left, leaf, bound)
+        n.right = x_map(e.right, leaf, bound)
     elif isinstance(e, Index):
-        n.array = x_map(e.array, leaf)
-        n.index = x_map(e.index, leaf)
+        n.array = x_map(e.array, leaf, bound)
+        n.index = x_map(e.index, leaf, bound)
     elif isinstance(e, Call):
-        n.args = [x_map(a, leaf) for a in e.args]
+        n.args = [x_map(a, leaf, bound) for a in e.args]
+    elif isinstance(e, FieldAccess):
+        n.base = x_map(e.base, leaf, bound)
+    elif isinstance(e, Quant):
+        n.lo, n.hi = x_map(e.lo, leaf, bound), x_map(e.hi, leaf, bound)
+        n.body = x_map(e.body, leaf, bound | {e.var})
     return n
 
 
@@ -2461,23 +2526,41 @@ def x_instantiate(tpl, f, site):
     call site's position (the arguments keep theirs)"""
     args = {p.name: a for p, a in zip(f.params, site.args)}
 
-    def at(e):
-        if isinstance(e, Var) and e.name in args:
+    def at(e, bound=frozenset()):
+        if isinstance(e, Var) and e.name in args and e.name not in bound:
             return x_map(args[e.name], lambda _: None)
         n = copy.copy(e)
         n.line, n.col = site.line, site.col
         if site.file is not None or n.file is not None:
             n.file = site.file
         if isinstance(e, Unary):
-            n.operand = at(e.operand)
+            n.operand = at(e.operand, bound)
         elif isinstance(e, Binary):
-            n.left, n.right = at(e.left), at(e.right)
+            n.left, n.right = at(e.left, bound), at(e.right, bound)
         elif isinstance(e, Index):
-            n.array, n.index = at(e.array), at(e.index)
+            n.array, n.index = at(e.array, bound), at(e.index, bound)
         elif isinstance(e, Call):
-            n.args = [at(a) for a in e.args]
+            n.args = [at(a, bound) for a in e.args]
+        elif isinstance(e, FieldAccess):
+            n.base = at(e.base, bound)
+        elif isinstance(e, Quant):
+            if e.var in free:   # R03L: the bound name would capture a name of an argument
+                terr(site, "call_in_contract", X_MSG % (f.name, "an argument uses the name %s that its body binds in "
+                     "%s" % (e.var, e.kind)), "rename %s in the argument or in the body of %s" % (e.var, f.name))
+            n.lo, n.hi, n.body = at(e.lo, bound), at(e.hi, bound), at(e.body, bound | {e.var})
         return n
+    free = set()
+    for a in site.args:
+        x_names(a, free)
     return x_sized(site, f, at(tpl))
+
+
+def x_names(e, out):
+    """R03L: every name read in e (bound names included: a superset of its free names is enough to rule out capture)"""
+    if isinstance(e, Var):
+        out.add(e.name)
+    for k in expr_kids(e):
+        x_names(k, out)
 
 
 def opaque_inline(prog):

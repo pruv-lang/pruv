@@ -1,8 +1,8 @@
 //! G6 A0 (docs/G6_SPEC.md section 10; counterpart of foreign.py): the fixed standard catalog, validation of
-//! `trusted rust fn` declarations, the ownership/liveness checker for collection bindings, and the A0 guard `first_g6_use`.
+//! `trusted rust fn` declarations, the ownership/liveness checker for owned bindings, and the A0 guard `first_g6_use`.
 //!
-//! Everything here runs after (or inside) type checking and only looks at typed ASTs; a program without G6 syntax
-//! passes through unchanged. Messages, fixes and positions are those of foreign.py character for character.
+//! Everything here runs after (or inside) type checking and only looks at typed ASTs.
+//! Messages, fixes and positions are those of foreign.py character for character.
 
 use crate::ast::*;
 use crate::diagnostic::PruvError;
@@ -827,6 +827,10 @@ fn join(a: Option<St>, b: Option<St>) -> Option<St> {
     Some(out)
 }
 
+fn key_is_array(key: &str) -> bool {
+    GType::try_from_key(key).is_ok_and(|ty| ty.is_array())
+}
+
 fn is_coll(ty: &Option<String>) -> bool {
     match ty {
         Some(k) => key_is_collection(k),
@@ -932,7 +936,7 @@ impl<'a> Ownership<'a> {
         match x {
             Stmt::Let(l) => {
                 self.consume(&l.value, &mut st, "let")?;
-                if key_is_collection(&l.ty) || self.aggregates.contains(&l.ty) {
+                if key_is_array(&l.ty) || key_is_collection(&l.ty) || self.aggregates.contains(&l.ty) {
                     st.set(&l.name, V::Live);
                     declared.push(l.name.clone());
                     if let Some(kind) = must_kind(&l.ty) {
@@ -959,6 +963,7 @@ impl<'a> Ownership<'a> {
             Stmt::IndexAssign(a) => {
                 self.expr(&a.index, &mut st)?;
                 self.expr(&a.value, &mut st)?;
+                self.use_(&a.name, a.line, a.col, &st)?;
                 Ok(Some(st))
             }
             Stmt::FieldAssign(a) => {
@@ -974,7 +979,12 @@ impl<'a> Ownership<'a> {
             }
             Stmt::While(w) => {
                 let entry = st.clone();
+                // R03L: an invariant holds before the condition runs
+                for clause in w.invariants.iter() {
+                    self.array_reads(clause, &st)?;
+                }
                 self.expr(&w.cond, &mut st)?;
+                self.array_reads(&w.decreases, &st)?;
                 let end = self.block(&w.body, st.clone())?;
                 if let Some(end) = &end {
                     for (n, v) in entry.iter() {
@@ -1035,9 +1045,24 @@ impl<'a> Ownership<'a> {
                 }
                 Ok(out)
             }
-            // Assert: contract, not subject to liveness
-            Stmt::Assert(_) => Ok(Some(st)),
+            Stmt::Assert(a) => {
+                self.array_reads(&a.cond, &st)?;
+                Ok(Some(st))
+            }
         }
+    }
+
+    /// Check array reads in proof clauses without applying executable call rules.
+    fn array_reads(&self, e: &Expr, st: &St) -> Res<()> {
+        if let Expr::Var(v) = e {
+            if v.ty.as_deref().is_some_and(key_is_array) {
+                self.use_(&v.name, v.line, v.col, st)?;
+            }
+        }
+        for child in expr_kids(e) {
+            self.array_reads(child, st)?;
+        }
+        Ok(())
     }
 
     /// Check owning positions in unreachable code without tracking liveness.
@@ -1088,6 +1113,16 @@ impl<'a> Ownership<'a> {
     }
 
     fn dead_expr(&self, e: &Expr, owned: bool) -> Res<()> {
+        if matches!(e, Expr::Move(_)) && !owned {
+            // R03L: unreachable code keeps the consuming-position rule
+            return Err(err(
+                e.line(),
+                e.col(),
+                "foreign_move",
+                "move only where ownership is consumed",
+                "use move for a take argument, a let initializer, an assignment or return",
+            ));
+        }
         if owned {
             Self::check_field_alias(e)?;
             if let Expr::Var(v) = e {
@@ -1164,7 +1199,8 @@ impl<'a> Ownership<'a> {
             return self.use_(&e.name, e.line, e.col, st);
         }
         let (line, col) = (e.line, e.col);
-        if !is_coll(&e.ty) && !e.ty.as_ref().is_some_and(|t| self.aggregates.contains(t)) {
+        if !is_coll(&e.ty) && !e.ty.as_deref().is_some_and(key_is_array)
+            && !(e.ty.as_ref().is_some_and(|t| self.aggregates.contains(t)) && st.contains(&e.name)) {
             return Err(err(
                 line,
                 col,
@@ -1283,12 +1319,17 @@ impl<'a> Ownership<'a> {
         match e {
             Expr::Spent(_) => Ok(()),
             Expr::Var(v) => {
-                if is_coll(&v.ty) || v.ty.as_ref().is_some_and(|t| self.aggregates.contains(t)) {
+                if is_coll(&v.ty) || v.ty.as_deref().is_some_and(key_is_array)
+                    || v.ty.as_ref().is_some_and(|t| self.aggregates.contains(t)) {
                     self.use_(&v.name, v.line, v.col, st)?;
                 }
                 Ok(())
             }
             Expr::Move(m) => self.mv(m, st, false, false),
+            Expr::Index(x) if matches!(&*x.array, Expr::Var(v) if v.ty.as_deref().is_some_and(key_is_array)) => {
+                self.expr(&x.index, st)?;
+                self.expr(&x.array, st)
+            }
             Expr::Call(c) => {
                 self.call(c, st)?;
                 if !owned {
@@ -1446,7 +1487,8 @@ fn key_contains_collection(key: &str) -> bool {
 
 fn g6_expr(e: &Expr, out: &mut Cands) {
     match e {
-        Expr::Move(m) => out.push((m.line, m.col)),
+        Expr::Move(m) if !m.ty.as_deref().is_some_and(key_is_array) => out.push((m.line, m.col)),
+        Expr::Move(_) => {}
         Expr::Call(c) => {
             if let Some(t) = &c.ty {
                 if key_contains_collection(t) || c.name == "string_eq" {
@@ -1560,7 +1602,7 @@ pub fn first_g6_use(prog: &Program) -> Option<(i64, i64, String)> {
             return Some((f.line, f.col, format!("trusted rust fn {}", f.name)));
         }
         for p in &f.params {
-            if p.take || key_contains_collection(&p.ty) {
+            if (p.take && !key_is_array(&p.ty)) || key_contains_collection(&p.ty) {
                 return Some((f.line, f.col, format!("parameter {}", p.name)));
             }
         }

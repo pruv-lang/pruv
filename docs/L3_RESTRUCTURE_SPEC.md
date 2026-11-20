@@ -509,7 +509,7 @@ Queue order is explicit; R IDs identify packages and need not sort numerically. 
 | R00 mcp early source part | A: accepted-tool copy/visit counters; C: P05M pre-sized output and inout writes | 0–500 accepted tools, linear records+payload copy slope; no G2/G3 dependency. R04 continues later. |
 | R02 entry/lib | A: replay/copy counters and hand lane; B: one owned progress root; C: completion/effect handoff using source spans | entry + req consumer regressions; at-most-once effects; only actual async boundaries need continuation tests. |
 | R03 json/pkgs | A: parse/publication/access/copy split; B: local Document/NodeId bounds; C: source/tape byte handoff. **Partly done (docs/L3_R03.md):** A hand lane `json/hand/hand_json.rs` (0 mismatches on 116 + 6344 + 1200 cases) and S/M/L baseline; B `json/b_root.pruv` proves the stop/skip/span/id bounds from flat parse facts and drops those per-access checks (parent/kind checks kept, G2/G3); C not started (next step, blocked on G4 and the publication rescan). perf_gate FAIL: M/L 2.2–2.9x time, 2.0–2.8x RSS, one fix tried (no-copy Document, rejected by G4); proposed debt D31–D34, gaps G1–G4 | Narrow A0–A5/Q/mutant families and affected consumers, external tape/ID admission; full suites at closure. |
-| R03L json language roots | Both compilers, SPEC.md, tests/. Before R03 C (main decision 2026-11-20 after R03 partly done, docs/L3_R03.md §7). G4: move an owned array parameter into a record field without a copy, and a borrowed `[u8]` source field; G1: named record predicate (`pred tape_ok(d)`) established once by parse and assumed by accessors; G3: user-named triggers or lemma form for nested array-index quantifiers; G2: built-in count range split lemma. Positive and negative tests both compilers, SPEC rules | The docs/L3_R03.md §7 repros compile and verify on both compilers; then R03 C (source/tape handoff, delete `check_tape` rescan, in-scanner UTF-8) re-measures D31-D33. |
+| R03L json language roots | Both compilers, SPEC.md, tests/. Before R03 C (main decision 2026-11-20 after R03 partly done, docs/L3_R03.md §7). G4: move an owned array parameter into a record field without a copy, and a borrowed `[u8]` source field; G1: named record predicate (`pred tape_ok(d)`) established once by parse and assumed by accessors; G3: user-named triggers or lemma form for nested array-index quantifiers; G2: built-in count range split lemma. Positive and negative tests both compilers, SPEC rules. **Done for G4 and G1 (Appendix R03L, docs/L3_R03.md §9):** R-6e-12 array `move` / `take` params (borrowed `[u8]` source field not done: source still copied once, R03 C), R-6-2 `pred fn` (expanded, not trusted); json tape now moved, `wrap_document` deleted, accessors use the preds. G3 and G2 not done, queued as R03L-G3 / R03L-G2 (Appendix R03L.5) | The docs/L3_R03.md §7 repros compile and verify on both compilers; then R03 C (source/tape handoff, delete `check_tape` rescan, in-scanner UTF-8) re-measures D31-D33. |
 | R04 mcp remaining | A: rebaseline after R00; B: cursor/ToolRecord local bounds; C: any remaining measured byte handoff | pages/fingerprint/cap/pair-safe cut and 500 accepted tools; no double credit for P05M. |
 | R05 qwen | A: matched IO/window/density/collision grid; B: one document/chain transition; C: selected-turn span handoff | Existing index, branch/cycle/duplicate semantics and collision bounds preserved. |
 | R06 grok | A: dense-event memory/list/history; B: one framing/event-span root; C: one output handoff | Slow fixtures/read-timeout ordering and memory/complete grids. |
@@ -561,7 +561,7 @@ fixed in one package before R12.
 | D28 | P31T4 typed M10b decide extend, D = 10 / 50 / 100: 220.4 / 468.2 / 807.3 vs hand 157.6 / 409.4 / 753.7 ns/op (1.40x / 1.14x / 1.07x; flat lane was 1.30x / 0.63x / 0.42x); 2 vs 1 allocations per op. Gating (proportional M / L), perf_gate FAIL | P31T4 (Appendix P31T4.3), one fix attempt used (c2c7cb3 scalar `unit_at` plus 4adc42e's stopDel items: 1.21x / 1.09x -> 1.14x / 1.07x). Cause by line: the strip path runs `halt` (root_m10b_typed.pruv:92-115), which builds `b.stopped` with one `running_id` trusted call per running delegation, a fresh `String` each (the fact decodes into a temporary `Vec<u16>`, m7_test/bud_facts.rs:235) plus `vec_push` growth, where hand takes the host's `Vec<String>` once (hand_m10b.rs:284); a trusted fn cannot return `Vec<String>` (R-6d-1). Every new run allocates two strings (`runs` key and the `run_order` copy, root_m10b_typed.pruv:296-298) because `HashMap<String, i64>` cannot be a nested record field (R-6e-6, `type/foreign_owned_type`). Fix: `Vec<String>` trusted results and nested `HashMap<String, i64>` fields (language rows), then drop `run_order` |
 | D29 | P31T4 typed M10b decide end, D = 10 / 50 / 100: 270.1 / 841.6 / 1562.6 vs hand 157.3 / 455.1 / 839.9 ns/op (1.72x / 1.85x / 1.86x; flat lane was 1.74x / 1.12x / 0.89x); 1 vs 0 allocations per op (flat 3). Gating (proportional M / L), perf_gate FAIL | P31T4 (Appendix P31T4.3), one fix attempt used (as D28; end did not move). Cause by line: the slope is about 16 ns per id against hand 8 and flat 6: `halt`'s per-id `running_id` `String` and `vec_push` (root_m10b_typed.pruv:92-115, R-6d-1 as D28), the decide-end `map_remove` of the clock drops each run twice (`runs` and `run_order`, R-6e-6), and the fresh `Reply.effects` `Vec` (D25). The flat lane kept the stopped ids as words in its record and never built strings, so the typed lane is slower than the flat one from D = 50 on. Fix: as D28 |
 | D30 | P31T4 typed M10b decide peak RSS (fresh process per sample): extend 2.20-2.24 vs hand 1.74-1.79 MB, end 2.21-2.36 vs 1.80-1.82 MB (1.23-1.30x; flat 1.32-1.41x), nearly flat in D | P31T4 (Appendix P31T (attempt 4)): fixed share, the D27 cause |
-| D31 | R03 json M/L parse and query time 2.2-2.9x, RSS 2.03x (M) / 2.82x (L), allocs +6. Gating, perf_gate FAIL | R03 (docs/L3_R03.md §6), one fix attempt used (no-copy Document, rejected by G4). Cause by line: `pkgs/json/json.pruv:75` `JsonDocument { source: copy(source), tape: copy(tape) }` copies the source and the tape at publication, both alive with the originals at peak; hand moves the tape and borrows the source. Fix: R03L G4, then R03 C source handoff |
+| D31 | R03 json M/L parse and query time 2.2-2.9x, RSS 2.03x (M) / 2.82x (L), allocs +6. Gating, perf_gate FAIL | R03 (docs/L3_R03.md §6), one fix attempt used (no-copy Document, rejected by G4). Cause by line: `pkgs/json/json.pruv:75` `JsonDocument { source: copy(source), tape: copy(tape) }` copies the source and the tape at publication, both alive with the originals at peak; hand moves the tape and borrows the source. Fix: R03L G4, then R03 C source handoff. **Tape share closed by R03L (Appendix R03L.3):** `parse::scan_document` moves the truncated tape into the Document; L RSS 121.27 -> 93.80 MB (2.08x), M 16.59 -> 13.21 MB (1.55x), allocs L 22 -> 21/22 vs 16/17; time unchanged (1.90-2.68x, D32/D33). Remaining share: the source copy `copy(input)` in `pkgs/parse/parse.pruv` `scan_document` (L allocated bytes 109.03 vs 100.66 MB, the 8 MiB input), R03 C |
 | D32 | same cells, time share | R03 (docs/L3_R03.md §6). Cause by line: `pkgs/parse/parse.pruv:218` `publication_ok` -> `pkgs/json/json.pruv:168` `check_tape` re-walks the tape with a per-record descendant scan; hand records span/skip/count when a container closes. Fix: prove the tape facts inside `scan` (R03L G1 + G3) and delete the rescan |
 | D33 | same cells, time share | R03 (docs/L3_R03.md §6). Cause by line: `pkgs/parse/parse.pruv:259` whole-input `validate_utf8` before `scan` reads every byte twice; hand validates non-ASCII inside the string scanner. Fix: move the UTF-8 check into the scanner, keeping error kind 4 priority |
 | D34 | R03 json S cells, time 1.97-1.99x, RSS 1.15x, allocs 15-16 vs 9-10 | R03: S (<1 ms) share of D31-D33 plus the larger binary; not gating |
@@ -9389,3 +9389,101 @@ Debt (section 7.5 candidates):
 - The LLVM backend rejects the new features (`codegen/unsupported_type`); trusted `Vec<String>` is Rust-backend only.
 - `HashMap<String, i64>` / `HashMap<i64, i64>` fields only in records used as a collection element or value.
 - A7, A8 (P31N.4).
+
+## Appendix R03L: array move into a record and named predicates for json (both compilers)
+
+Main decision 2026-11-20 (docs/L3_R03.md §7): close R03 gaps G4 and G1 before R03 C. G3 and G2 were optional
+within the 2.5 h budget and are queued (R03L.5). R03 C (rescan removal, in-scanner UTF-8, D32/D33) is not started.
+
+### R03L.1 Rules (SPEC.md)
+
+- R-6e-12 (G4): `move x` transfers an owned array local or a `take x: [T]` parameter into a struct field, enum
+  payload, local initializer, assignment, return or `take` argument with no copy. Array fields and indexed elements
+  cannot be moved; moving a plain or `inout` array parameter is `type/array_alias`. A `take` parameter needs an
+  explicit `move` argument. A read after a definite or possible move is `type/foreign_move`; a loop must restore a
+  moved binding on every continuing path (`type/foreign_loop_move`). Rust takes `Vec<T>` and emits the value
+  directly; the verifier charges zero units for the move. LLVM moves local arrays by emptying the source slot and
+  rejects `take` array parameters (`codegen/unsupported_type`).
+- R-6-2 (G1): `pred fn p(x: T, ..) -> bool { return <expr>; }` names one contract expression (quantifiers,
+  aggregates, struct field reads allowed; no effects, contracts, cost or type parameters, else
+  `type/pred_signature`). Each use in `requires` / `ensures` / `invariant` / `assert` / `decreases` is replaced by
+  the body at the arguments, so `ensures p(result)` is proved from the code and `requires p(d)` is checked at every
+  call; nothing is assumed. `pub pred fn` is used across modules by path. A call in code is `type/pred_in_code`.
+  An argument using a name the body binds is `type/call_in_contract`.
+- Rust in-place `truncate`: when over half the capacity is unused after `truncate`, emit `shrink_to_fit` so a moved
+  buffer does not keep its growth slack (both compilers, byte-identical output). LLVM keeps the capacity (R03L.5).
+
+Implementation: py first (`pruvc/check.py`, `codegen.py`, `foreign.py`, `llvmgen.py`, `modules.py`, `vast.py`,
+`vparser.py`), then the Rust port of the same places (`pruv-core` abi / ast / bindings / check / codegen / foreign
+/ lexer / llvmgen / modules / mono / parser, `pruvc` driver). b_root Rust output is byte-identical between the
+compilers.
+
+### R03L.2 Tests
+
+New `tests/spec` (both compilers through `tests/spec_trace.py`): `r6_2_pred` (accept), `r6_2_pred_unproved`,
+`r6_2_pred_false_ensures`, `r6_2_pred_in_code`, `r6_2_pred_effect`, `r6_2_pred_effect_call`,
+`r6_2_pred_nested_binder`, `r6_2_pred_pub`; `r6e_12_field_move`, `r6e_12_take_param`, `r6e_12_llvm_move` (accept),
+`r6e_12_use_after_move`, `r6e_12_borrowed_param`, `r6e_12_inout_param`, `r6e_12_bare_var`, `r6e_12_dead_move`,
+`r6e_12_take_contract_index`, `r6e_12_loop_cond_move`. `tests/must_reject/l3_cx_field_expr`, `l3_cx_inout`,
+`l3_cx_param_option`, `l3_cx_param_struct`: expectations updated to the R-6e-12 codes (same programs still
+rejected). `tests/run_all_rows.txt` matches `--list-rows` (4572 rows).
+
+Runs before commit: full suite rs 4572/4572, py 4560/4560 (0 FAIL); cargo test ok; diff_rust fuzz all same; m3
+parse / check / trace / trace_infer ok. json `run_a0..a5` (37, 324, 114, 454, 6344, 83) all pass on all pairs,
+`run_q` 20213 cases 0 mismatches, r03_b 6344 and r03_equal 0 mismatches; mcp 22/22, qwen 26/26, grok test_impl
+254/254 and opencode test_impl 199/199 on all 4 pairs (a first run under load 10+ had 16 / 20 TypeScript-reference
+timing failures, "ts=False impl=True" with the TS self-check also failing; rerun at load 4 passed with no change).
+
+### R03L.3 json: generated vs hand, M/L numbers
+
+`parse` now calls `scan_document`, which builds the `JsonDocument` itself; `json::wrap_document` (copied source and
+tape) is deleted; parse `ensures` and the b_root accessors' `requires` use `crate::json::doc_shape`, `doc_kinds`,
+`doc_spans`, `doc_skips`, `doc_parents`, `doc_array_counts`.
+
+| generated (b_root, Rust) | hand (`bench/l3/json/hand/hand_json.rs:388`) |
+|---|---|
+| `let done = { ..; pruv_t.truncate(6 * records); if pruv_t.capacity() / 2 > pruv_t.len() { pruv_t.shrink_to_fit(); } pruv_t };` | tape kept as built |
+| `JsonParse::Parsed(JsonDocument { source: input.to_vec(), tape: done })` | `Document { source: input, tape }` |
+
+`run_r03_measure.py --root b_root.pruv` (2026-11-20 16:14, load about 4, 7 samples), pruv / hand:
+
+| cell | time ms | peak RSS MB | allocs | R03 RSS MB |
+|---|---|---|---|---|
+| M parse | 2.43 / 1.06 (2.29x) | 13.21 / 8.55 (1.54x) | 18 / 13 | 16.59 / 8.16 (2.03x) |
+| M chain1 / 10 / 100 | 2.22 / 2.09 / 2.19 vs 1.01 / 1.02 / 1.15 (1.90-2.21x) | 13.21-13.22 / 8.55 (1.55x) | 19 / 14 | |
+| L parse | 22.51 / 8.41 (2.68x) | 93.80 / 45.04 (2.08x) | 21 / 16 | 121.27 / 42.95 (2.82x) |
+| L chain1 / 10 / 100 | 21.49 / 22.05 / 21.77 vs 8.30 / 8.38 / 8.29 (2.59-2.63x) | 93.80-93.81 / 45.04 (2.08x) | 22 / 17 | |
+
+The tape copy is gone (L peak RSS -27.5 MB, one allocation less). L allocated bytes 109.03 vs 100.66 MB: the 8.37 MB
+difference is the source copy, the remaining D31 share. Time did not move: D32 rescan and D33 double UTF-8 read.
+`python3 tools/perf_gate.py work/r03l/perf_cells.json`: VERDICT: FAIL (36 cells, 24 fail, 12 debt). The one fix
+attempt for these cells is the R03L tape move; the remaining gated M/L cells stay on D31 (source), D32, D33, all
+R03 C. S cells (time 1.85-1.92x, RSS 1.15x, 14-15 vs 9-10 allocs) stay on D34.
+
+### R03L.4 Audit (one review and one recheck, Codex gpt-6.2-astra ultra, read-only)
+
+Review found six MUST-FIX items, all fixed with a test each:
+1. pred expansion captured a quantifier binder (substitution now skips bound names; `r6_2_pred_nested_binder`).
+2. a `pub pred fn` was listed as a host entry (modules skip preds; `r6_2_pred_pub`).
+3. a contract check indexing a `take` array param moved it (contract reads borrow; `r6e_12_take_contract_index`).
+4. loop invariants were checked after a condition that can move (invariants first; `r6e_12_loop_cond_move`).
+5. a `move` into a read-only argument passed in dead code (`dead_expr` rejects it; `r6e_12_dead_move`).
+6. in-place truncate kept the whole allocation (Rust `shrink_to_fit`; LLVM is debt, R03L.5).
+The recheck closed 1-6 with no new MUST-FIX. Two advisories were not taken and are queued (R03L.5).
+
+### R03L.5 Budget, queue and debt
+
+Budget 2.5 h (14:23-16:53): finished inside it. Delegations 14 of 24: research 1 (Codex gpt-6.2-astra),
+implementation 3 (write, Codex gpt-6.2-sol, account 2: G4 py, G1 Rust port, G4 Rust port), audit 1 + recheck 1
+(Codex gpt-6.2-astra ultra, account 2), command jobs 8 (builds, full suites, consumers). Proof judgment and the
+final measurement were done by the main session.
+
+| Row | Item | Note |
+|---|---|---|
+| R03L-G3 | user-named triggers or lemma form for nested array-index quantifiers | not started (budget); needed by D32 (prove tape facts inside `scan`) |
+| R03L-G2 | built-in count range split lemma | not started; `array_at` keeps its -4 parent/kind check |
+| R03L-D1 | LLVM in-place `truncate` keeps the source capacity | Rust shrinks (R03L.1); LLVM path keeps the cap on purpose (llvmgen P3 comment) |
+| R03L-D2 | `pkgs/parse/parse.pruv` `scan` (used by `pkgs/lines`) still copies its tape | lines is outside this slice; switch to a moving form when lines is touched |
+| R03L-D3 | audit advisory: the LLVM `take` rejection names the fn differently in py (`crate::wrap`) and Rust (`wrap`, before mono) | same code `codegen/unsupported_type`; message text only |
+| R03L-D4 | audit advisory: a `pub pred fn` body skips the public interface check (`pub pred fn e(x) { return hidden(x); }` with private `hidden` is accepted by both compilers) | not changed; expansion is still sound, only the visibility rule is open |
+| R03L-D5 | borrowed `[u8]` source field (rest of G4) | not done; source copied once, R03 C |

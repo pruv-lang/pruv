@@ -1764,9 +1764,7 @@ class FnGen:
             if e.name in s.ret_cand:
                 s.ret_moved[x.a] = None     # the return's cleanup skips the slot
             else:
-                s.ins("store ptr null, ptr %s" % x.a)
-                s.ins("store i64 0, ptr %s" % x.b)
-                s.ins("store i64 0, ptr %s" % x.c)      # P3: the emptied owner also forgets its cap
+                s.empty_array_slot(x)
             return v
         sl, vn, k, _dead = x.mv
         if e.name in s.ret_cand:
@@ -1775,6 +1773,11 @@ class FnGen:
         else:
             s.ins("store %s zeroinitializer, ptr %s" % (ARR, g9_gep(s, lty(sl.ty), sl.a, k)))
         return x
+
+    def empty_array_slot(s, x):
+        s.ins("store ptr null, ptr %s" % x.a)
+        s.ins("store i64 0, ptr %s" % x.b)
+        s.ins("store i64 0, ptr %s" % x.c)
 
     def body(s):
         s.bind_params()
@@ -2322,9 +2325,12 @@ class FnGen:
                 return s.clone_val(v)
             return v
         if isinstance(e, Move):   # G6 A3: load the owner slot, then null it
-            kind, x = s.lookup(e.name)
+            _, x = s.lookup(e.name)
             v = s.load(x)
-            s.ins("store ptr null, ptr %s" % x.a)
+            if is_array(e.ty):
+                s.empty_array_slot(x)
+            else:
+                s.ins("store ptr null, ptr %s" % x.a)
             return v
         if isinstance(e, Unary):
             x = s.ev(e.operand)
@@ -5442,6 +5448,10 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     from check import opaque_inline
     opaque_inline(prog)     # P13o: contract applications of opaque functions become their bodies
     for f in prog.functions:
+        if any(p.take and is_array(p.type) for p in f.params):
+            raise PruvError("codegen", f.line, f.col, "unsupported_type",
+                            "%s has a take array parameter, which needs the Rust backend" % getattr(f, "disp", f.name),
+                            "use the Rust backend", file=getattr(f, "file", None))
         if any(p.mode == "inout" and not is_array(p.type) for p in f.params):
             raise PruvError("codegen", f.line, f.col, "unsupported_type",
                             "%s has an inout %s parameter, which needs the Rust backend" %

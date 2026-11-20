@@ -1,0 +1,13 @@
+// spec: R-6-2 reject
+// a pred is contract-only: code cannot call it
+struct Doc { tape: [i64], n: i64 }
+
+pred fn tape_ok(d: Doc) -> bool {
+  return len(d.tape) == 2 * d.n;
+}
+
+fn check(d: Doc) -> bool {
+  return tape_ok(d);
+}
+
+fn main() -> i64 { return 0; }

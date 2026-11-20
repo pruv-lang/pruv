@@ -286,6 +286,26 @@ pub(crate) fn struct_inout_abi_error(
     None
 }
 
+/// The LLVM calling convention cannot transfer ownership of an array parameter.
+pub fn take_array_abi_error(
+    prog: &Program,
+    g4: Option<&crate::modules::G4>,
+) -> Option<crate::diagnostic::PruvError> {
+    for (i, f) in prog.functions.iter().enumerate() {
+        if f.params.iter().any(|p| p.take && GType::from_key(&p.ty).is_array()) {
+            let name = prog.explicit.as_ref().and_then(|e| e.fns.get(i)).map(|m| m.disp.as_str())
+                .or_else(|| g4.and_then(|g| g.fn_meta.get(i)).map(|m| m.src_name.as_str()))
+                .unwrap_or(&f.name);
+            return Some(crate::diagnostic::PruvError::new(
+                "codegen", f.line, f.col, "unsupported_type",
+                format!("{name} has a take array parameter, which needs the Rust backend"),
+                "use the Rust backend",
+            ));
+        }
+    }
+    None
+}
+
 /// Both the LLVM backend and its bindings require a C ABI for host entries.
 pub fn owned_collection_abi_error(
     prog: &Program,
@@ -294,7 +314,7 @@ pub fn owned_collection_abi_error(
     let err = |line, col, message| {
         crate::diagnostic::PruvError::new("codegen", line, col, "unsupported_type", message, "use the Rust backend")
     };
-    if let Some(e) = struct_inout_abi_error(prog, false) {
+    if let Some(e) = take_array_abi_error(prog, g4).or_else(|| struct_inout_abi_error(prog, false)) {
         return Some(e);
     }
     for d in &prog.types {
@@ -1343,7 +1363,7 @@ mod tests {
             line: 1, col: 1, name: name.into(),
             params: params.into_iter().map(|(n, t)| Param { name: n.into(), ty: t.into(), refine: None, take: false, mode_pos: None }).collect(),
             ret: ret.into(), effects: vec![], requires: vec![], ensures: vec![], body: vec![], ret_refine: None, tparams: vec![],
-            foreign: None, cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, attribute: None,
+            foreign: None, cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
         }
     }
 

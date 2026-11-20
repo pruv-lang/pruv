@@ -1208,7 +1208,8 @@ struct Gen<'a> {
     /// names borrowed as the scrutinee of an enclosing match_ext arm
     pinned: HashSet<String>,
     /// enclosing blocks being emitted: (names declared so far, names named later, loop body)
-    frames: Vec<(HashSet<String>, HashSet<String>, bool)>,
+    frames: Vec<(HashSet<String>, HashSet<String>, bool, bool)>,
+    take_arrays: HashSet<String>,
     /// G9 A2: types whose runtime contract helpers (size / equality) are needed
     need_size: HashSet<String>,
     need_eq: HashSet<String>,
@@ -1361,6 +1362,7 @@ impl<'a> Gen<'a> {
             moving: HashSet::new(),
             pinned: HashSet::new(),
             frames: Vec::new(),
+            take_arrays: HashSet::new(),
             need_size: HashSet::new(),
             need_eq: HashSet::new(),
             need_bits: HashSet::new(),
@@ -1771,6 +1773,7 @@ impl<'a> Gen<'a> {
             return Ok(()); // G6: a trusted rust fn has no body; its boundary helper is emitted on first use
         }
         self.params = f.params.iter().map(|p| p.name.clone()).collect();
+        self.take_arrays = f.params.iter().filter(|p| p.take && is_array_name(&p.ty)).map(|p| p.name.clone()).collect();
         if self.g5 {
             self.inouts = f.params.iter().filter(|p| p.mode_pos.is_some()).map(|p| p.name.clone()).collect();
         }
@@ -1839,7 +1842,9 @@ impl<'a> Gen<'a> {
         self.emit(0, &format!("{}fn {}({}){} {{", vis, body_name, ps, ret));
         self.cost = !self.verified && f.cost.is_some();
         if self.cost {
-            let args = join_map(&f.params, ", ", |p| p.name.clone());
+            let args = join_map(&f.params, ", ", |p| {
+                if self.take_arrays.contains(&p.name) { format!("&{}", p.name) } else { p.name.clone() }
+            });
             self.emit(1, &format!("let pruv_cost: i128 = {}__pruv_cost({});", f.name, args));
             self.emit(1, "let mut pruv_spent: u128 = 0;");
         }
@@ -1942,7 +1947,10 @@ impl<'a> Gen<'a> {
         "if pruv_cost < 0 || pruv_spent > pruv_cost as u128 { panic!(\"pruv: cost exceeded\"); }"
     }
 
-    fn cost_call(name: &str, args: &[String]) -> String {
+    fn cost_call(&self, name: &str, args: &[String]) -> String {
+        let args: Vec<_> = self.fmap[name].params.iter().zip(args).map(|(p, arg)| {
+            if p.take && is_array_name(&p.ty) { format!("&{arg}") } else { arg.clone() }
+        }).collect();
         format!("let pruv_units = {}__pruv_cost({}); if pruv_units < 0 {{ panic!(\"pruv: cost exceeded\"); }} {}",
             name, args.join(", "), Self::cost_add("(pruv_units as u128).checked_add(1).unwrap_or_else(|| panic!(\"pruv: cost exceeded\"))"))
     }
@@ -2220,6 +2228,8 @@ impl<'a> Gen<'a> {
 
     fn carr(&mut self, e: &Expr) -> R<String> {
         match e {
+            // R03L: an owned take array is read through a borrow
+            Expr::Var(x) if self.take_arrays.contains(&x.name) => Ok(format!("(&{})", x.name)),
             Expr::Var(x) => Ok(x.name.clone()),
             Expr::StrLit(x) => Ok(lit_str(&x.value)), // G2 B2
             // G9: a buffer field of a real (extended) value
@@ -3383,10 +3393,11 @@ impl<'a> Gen<'a> {
             crate::refine::stmt_names(std::slice::from_ref(&stmts[i]), &mut n);
             later[i] = n;
         }
-        self.frames.push((decls.iter().cloned().collect(), HashSet::new(), lp));
+        self.frames.push((decls.iter().cloned().collect(), HashSet::new(), lp, false));
         for (i, st) in stmts.iter().enumerate() {
             let top = self.frames.len() - 1;
             self.frames[top].1 = std::mem::take(&mut later[i + 1]);
+            self.frames[top].3 = matches!(stmts.get(i + 1), Some(Stmt::Return(_)));
             let r = self.stmt(st, ind);
             if r.is_err() {
                 self.frames.pop();
@@ -3409,7 +3420,7 @@ impl<'a> Gen<'a> {
         if self.refs.contains(name) || self.params.contains(name) || self.pinned.contains(name) {
             return false;
         }
-        for (decls, later, lp) in self.frames.iter().rev() {
+        for (decls, later, lp, _) in self.frames.iter().rev() {
             if later.contains(name) {
                 return false;
             }
@@ -3423,22 +3434,29 @@ impl<'a> Gen<'a> {
         false
     }
 
+    // A following return can end the lifetime even inside a loop body.
+    fn return_next(&self, name: &str) -> bool {
+        !self.refs.contains(name) && !self.params.contains(name) && !self.pinned.contains(name)
+            && self.frames.last().is_some_and(|(_, later, _, returns)| *returns && !later.contains(name))
+    }
+
     /// a let / assignment whose value is copy(v) of an owned local v at its last use moves v (see dead_after)
     fn last_copy(&self, target: &str, e: &Expr) -> HashSet<String> {
         let mut out = HashSet::new();
-        if !self.ext.is_empty() && !self.cost {
+        if !self.cost {
             if let Expr::Call(c) = e {
                 if c.name == "truncate" && c.args.len() == 2 {
                     if let Expr::Var(v) = &c.args[0] {
                         // the length argument naming the array again (e.g. len(truncate(a, 1))) keeps it borrowed: no move
                         let mut m_names = HashSet::new();
                         crate::refine::expr_names(&c.args[1], &mut m_names);
-                        if v.name != target && self.dead_after(&v.name) && !m_names.contains(&v.name) {
+                        if self.vars.contains_key(&v.name) && v.name != target
+                            && (self.dead_after(&v.name) || self.return_next(&v.name)) && !m_names.contains(&v.name) {
                             out.insert(v.name.clone());
                         }
                     }
                 }
-                if c.name == "copy" && c.args.len() == 1 {
+                if !self.ext.is_empty() && c.name == "copy" && c.args.len() == 1 {
                     if let Expr::Var(v) = &c.args[0] {
                         if v.name != target && self.dead_after(&v.name) {
                             out.insert(v.name.clone());
@@ -3919,7 +3937,7 @@ impl<'a> Gen<'a> {
                 }
             }
             if self.cost {
-                self.emit(d, &Self::cost_call(&call.name, &args));
+                self.emit(d, &self.cost_call(&call.name, &args));
             }
             prepared.push(format!("{}({});", n, args.join(", ")));
         }
@@ -3981,7 +3999,7 @@ impl<'a> Gen<'a> {
             if self.inouts.contains(&x.name) {
                 return Ok(format!("&*{}", x.name)); // G5: a shared reborrow of an inout parameter
             }
-            if !self.params.contains(&x.name) {
+            if !self.params.contains(&x.name) || self.take_arrays.contains(&x.name) {
                 return Ok(format!("&{}", x.name));
             }
             return Ok(x.name.clone());
@@ -4423,7 +4441,8 @@ impl<'a> Gen<'a> {
                     return Ok(self.cost_buffer(result));
                 }
                 if n == "truncate" {
-                    // truncate of an owned local at its last use shortens the local in place; otherwise copy the prefix
+                    // truncate of an owned local at its last use shortens the local in place; otherwise copy the prefix (R03L: a shortened
+                    // vector with over half its capacity unused releases the rest)
                     if !self.cost {
                         if let a0 @ Expr::Var(v) = arg(a, 0)? {
                             if self.moving.contains(&v.name) {
@@ -4435,7 +4454,7 @@ impl<'a> Gen<'a> {
                                     "if pruv_m < 0 || (pruv_m as u64) > (pruv_t.len() as u64) { pruv_oob(pruv_m, pruv_t.len()) } "
                                 };
                                 return Ok(format!(
-                                    "{{ let pruv_m: i64 = {}; let mut pruv_t = {}; {}pruv_t.truncate(pruv_m as usize); pruv_t }}",
+                                    "{{ let pruv_m: i64 = {}; let mut pruv_t = {}; {}pruv_t.truncate(pruv_m as usize); if pruv_t.capacity() / 2 > pruv_t.len() {{ pruv_t.shrink_to_fit(); }} pruv_t }}",
                                     m0, t0, chk
                                 ));
                             }
@@ -4666,6 +4685,8 @@ impl<'a> Gen<'a> {
                         } else {
                             self.mut_ref(&nm)
                         });
+                    } else if is_move && expr_ty(xa).as_deref().is_some_and(is_array_name) {
+                        args.push(self.e(xa)?);
                     } else if self.g6 && (is_move || coll) {
                         let take = is_move || callee.map_or(false, |c| c.params.get(i).map_or(false, |p| p.take));
                         if take {
@@ -4695,7 +4716,7 @@ impl<'a> Gen<'a> {
                         captured.push(format!("let pruv_cost_arg_{} = {};", i, arg));
                     }
                     args = (0..args.len()).map(|i| format!("pruv_cost_arg_{}", i)).collect();
-                    captured.push(Self::cost_call(n, &args));
+                    captured.push(self.cost_call(n, &args));
                 }
                 if self.small_call == x as *const Call as usize {
                     let extra: String = args.iter().map(|a| format!(", {}", a)).collect();
@@ -5498,7 +5519,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, attribute: None,
+            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
         };
         Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
     }
@@ -5549,7 +5570,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, attribute: None,
+            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
         };
         Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
     }
@@ -5629,7 +5650,7 @@ mod tests {
             foreign: None,
             cost: None,
             decreases: None,
-            small_bound: None, x_auto: None, opaque: false, attribute: None,
+            small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
         }
     }
 

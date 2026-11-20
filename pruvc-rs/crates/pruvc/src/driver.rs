@@ -407,6 +407,11 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
             Err(pruv_core::mono::MonoError::Internal(m)) => return Err(Fail::Internal(m)),
         }
     }
+    if plan_prog.is_some() && (!matches!(a.kind, Kind::Rs) || a.also_llvm.is_some()) {
+        if let Some(e) = pruv_core::bindings::take_array_abi_error(&prog, g4.as_ref()) {
+            return Err(Fail::Lang(vec![e]));
+        }
+    }
     let gprog: &Program = plan_prog.as_ref().unwrap_or(&prog);
     // G2: even after verify, reject array types that do not yet have a code-generation layer.
     // A4, A5: [u8] and [bool] are allowed on every path (rust, llvm, ll, obj, exe, also_llvm).
