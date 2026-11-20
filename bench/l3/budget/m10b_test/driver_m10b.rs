@@ -125,7 +125,10 @@ fn budget_words(b: &sol::Budget) -> Vec<i64> {
 impl World {
     fn new() -> Self {
         Self {
-            st: sol::St { sessions: HashMap::new(), clocks: HashMap::new(), next_clock: 0 },
+            st: sol::St {
+                sessions: HashMap::new(), clocks: HashMap::new(), next_clock: 0,
+                out: sol::Out { fx: Vec::new() },
+            },
             now: 1700000000000, seq: 0, active: Vec::new(), by_bid: HashMap::new(),
             log: Vec::new(), silent: false, audit: false,
         }
@@ -164,17 +167,18 @@ impl World {
         if let Some(before) = before {
             let unchanged = before == self.observe();
             self.note(format!("A {} {} {}",
-                reply.status, reply.effects.len(), unchanged));
+                reply.status, self.st.out.fx.len(), unchanged));
             self.audit = false;
         }
         let mut units = bud_facts::take_unit_log().into_iter().peekable();
         let mut releases = decide_facts::take_log().into_iter().peekable();
         let mut running = running_before;
-        let close_bid = (code == 6 && reply.effects.iter().any(|e| matches!(e.tag, 12..=14)))
+        let effects = &self.st.out.fx;
+        let close_bid = (code == 6 && effects.iter().any(|e| matches!(e.tag, 12..=14)))
             .then(|| self.st.sessions[sid].id.clone());
         let timer_bid = close_bid.as_deref().unwrap_or(bid);
         let mut stopped = None;
-        for i in 0..=reply.effects.len() {
+        for i in 0..=effects.len() {
             let i = i as i64;
             while units.peek().is_some_and(|(position, _)| *position == i) {
                 let (_, words) = units.next().unwrap();
@@ -202,7 +206,7 @@ impl World {
             if i == 0 && !self.silent {
                 for q in quiet_before..bud_facts::calls() { self.log.push(bud_facts::quiet_log(q)); }
             }
-            if let Some(effect) = reply.effects.get(i as usize) {
+            if let Some(effect) = effects.get(i as usize) {
                 let line = match effect.tag {
                     12 => {
                         self.seq += 1;
@@ -426,7 +430,7 @@ fn body(code: i64, flag: i64, run: &str) -> Vec<i64> {
 fn perform_perf(world: &mut World, code: i64, size: i64, timer: &mut Option<i64>) -> sol::Reply {
     let reply = sol::t_call(&mut world.st, SID, BID, "", code, world.now, size, &[0; 10]);
     let mut stopped = None;
-    for effect in &reply.effects {
+    for effect in &world.st.out.fx {
         match effect.tag {
             12 => *timer = Some(world.now + effect.b),
             13 => *timer = None,
@@ -441,8 +445,8 @@ fn perform_perf(world: &mut World, code: i64, size: i64, timer: &mut Option<i64>
     reply
 }
 
-fn effect_words(reply: &sol::Reply) -> i64 {
-    reply.effects.iter().map(|e| match e.tag { 12 | 38 => 3, 33 => 2, _ => 1 }).sum()
+fn effect_words(effects: &[sol::Effect]) -> i64 {
+    effects.iter().map(|e| match e.tag { 12 | 38 => 3, 33 => 2, _ => 1 }).sum()
 }
 
 fn run_perf_decide(setup: &Setup) {
@@ -490,7 +494,7 @@ fn run_perf_decide(setup: &Setup) {
         let allocs = allocations() - before;
         assert_eq!(reply.status, 0);
         assert_eq!((reply.value, reply.a), (6, 0));
-        assert_eq!(effect_words(&reply), setup.effect_words);
+        assert_eq!(effect_words(&world.st.out.fx), setup.effect_words);
         (elapsed, allocs)
     });
 }
@@ -547,7 +551,7 @@ fn run_perf(args: &[String]) {
         world.active.clear();
         assert_eq!(reply.status, 0);
         assert_eq!(reply.value, 2);
-        assert_eq!(effect_words(&reply), setup.effect_words);
+        assert_eq!(effect_words(&world.st.out.fx), setup.effect_words);
         (elapsed, allocs)
     });
 }

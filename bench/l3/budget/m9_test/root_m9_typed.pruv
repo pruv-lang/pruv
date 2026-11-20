@@ -1,21 +1,20 @@
-// Resident M9 state. Ordinals distinguish live entries from deleted order slots.
+// Resident M9 state. Ordinals preserve insertion order for observation.
 pub struct Budget {
   id: String, state: i64, unlimited: bool, minutes: i64,
   active_ms: i64, since_kind: i64, since: i64, ordinal: i64
 }
+pub struct Run { ordinal: i64, waiting: bool }
 pub struct Clock {
   owner: String, ordinal: i64, has_since: bool, since: i64, armed: bool,
-  active: i64, runs: HashMap<String, i64>, order: Vec<String>
+  active: i64, runs: HashMap<String, Run>, next_run: i64
 }
-// A run map value is 2 * its insertion ordinal + its waiting flag.
 pub struct St {
-  sessions: HashMap<String, Budget>, session_order: Vec<String>,
-  clocks: HashMap<String, Clock>, clock_order: Vec<String>
+  sessions: HashMap<String, Budget>, next_session: i64,
+  clocks: HashMap<String, Clock>, next_clock: i64, out: Out
 }
 pub struct Effect { tag: i64, requested: i64, effective: i64 }
-pub struct CallReply { status: i64, effects: Vec<Effect> }
-pub struct Key { s: String, offset: i64, packed: bool }
-pub struct Observation { words: Vec<i64>, keys: Vec<Key> }
+pub struct Out { fx: Vec<Effect> }
+pub struct Observation { words: Vec<i64>, keys: Vec<String> }
 
 fn owned(s: str) -> String ! alloc {
   return string_push_str(string_new(), s);
@@ -23,12 +22,12 @@ fn owned(s: str) -> String ! alloc {
 
 pub fn t_put(inout st: St, sid: str, bid: str, state: i64, unlimited: bool,
              minutes: i64, active_ms: i64, since_kind: i64, since: i64) -> i64 ! alloc {
-  let mut ordinal: i64 = len(st.session_order);
+  let mut ordinal: i64 = st.next_session;
   match map_get::<String, Budget>(st.sessions, sid) {
     Some(b) => { ordinal = b.ordinal; }
     None => {
-      if len(st.session_order) >= 1099511627776 || len(st.sessions) >= 1099511627776 { return 2; }
-      st.session_order = vec_push::<String>(move st.session_order, owned(sid));
+      if st.next_session >= 1099511627776 { return 2; }
+      st.next_session = st.next_session + 1;
     }
   }
   if len(st.sessions) >= 1099511627776 { return 2; }
@@ -55,20 +54,20 @@ fn limit(b: Budget) -> i64
   return minutes * 60000;
 }
 
-fn effect(inout r: CallReply, tag: i64, requested: i64, effective: i64) -> () ! alloc {
-  if len(r.effects) < 1099511627776 {
-    r.effects = vec_push::<Effect>(move r.effects, Effect { tag: tag, requested: requested, effective: effective });
+fn effect(inout o: Out, tag: i64, requested: i64, effective: i64) -> () ! alloc {
+  if len(o.fx) < 1099511627776 {
+    o.fx = vec_push::<Effect>(move o.fx, Effect { tag: tag, requested: requested, effective: effective });
   }
 }
 
-fn disarm(inout c: Clock, inout r: CallReply, tag: i64) -> () ! alloc {
-  if c.armed { effect(inout r, tag, 0, 0); }
+fn disarm(inout c: Clock, inout o: Out, tag: i64) -> () ! alloc {
+  if c.armed { effect(inout o, tag, 0, 0); }
   c.armed = false;
 }
 
-fn settle(inout b: Budget, inout c: Clock, sid: str, now: i64, inout r: CallReply) -> () ! alloc {
+fn settle(inout b: Budget, inout c: Clock, sid: str, now: i64, inout o: Out) -> () ! alloc {
   if !string_eq(c.owner, sid) { return; }
-  disarm(inout c, inout r, 13);
+  disarm(inout c, inout o, 13);
   if !c.has_since { return; }
   let elapsed: i64 = bounded(now) - bounded(c.since);
   if elapsed > 0 { b.active_ms = bounded(bounded(b.active_ms) + elapsed); }
@@ -87,28 +86,30 @@ fn begin(inout b: Budget, inout c: Clock, now: i64) -> () {
   b.since = t;
 }
 
-fn arm(inout b: Budget, inout c: Clock, sid: str, now: i64, inout r: CallReply) -> () ! alloc {
-  if b.unlimited { return; }
+fn arm(inout b: Budget, inout c: Clock, sid: str, now: i64, inout o: Out) -> i64 ! alloc {
+  if b.unlimited { return 0; }
   let left: i64 = limit(b) - bounded(b.active_ms);
   if left <= 0 {
     c.armed = false;
-    settle(inout b, inout c, sid, now, inout r);
-    r.status = 4;
-    return;
+    settle(inout b, inout c, sid, now, inout o);
+    return 4;
   }
   let mut delay: i64 = left;
   if left > 2147483647 { delay = 1; }
   c.armed = true;
-  effect(inout r, 12, left, delay);
+  effect(inout o, 12, left, delay);
+  return 0;
 }
 
-fn refresh(inout b: Budget, inout c: Clock, sid: str, now: i64, inout r: CallReply) -> () ! alloc {
+fn refresh(inout b: Budget, inout c: Clock, sid: str, now: i64, inout o: Out) -> i64 ! alloc {
   let consuming: bool = b.state == 0 && c.active > 0;
-  if consuming == c.has_since { return; }
+  if consuming == c.has_since { return 0; }
   if consuming {
     begin(inout b, inout c, now);
-    arm(inout b, inout c, sid, now, inout r);
-  } else { settle(inout b, inout c, sid, now, inout r); }
+    return arm(inout b, inout c, sid, now, inout o);
+  }
+  settle(inout b, inout c, sid, now, inout o);
+  return 0;
 }
 
 fn bump(inout c: Clock, delta: i64) -> () {
@@ -117,69 +118,39 @@ fn bump(inout c: Clock, delta: i64) -> () {
   }
 }
 
-fn compact_runs(inout c: Clock) -> () ! alloc {
-  let n: i64 = len(c.order);
-  if n <= 2 * len(c.runs) + 16 { return; }
-  let mut order: Vec<String> = vec_new::<String>();
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(c.order) && len(order) <= i && n <= 1099511627776
-    decreases n - i
-  {
-    let key: String = owned(vec_get::<String>(c.order, i));
-    match map_get_mut::<String, i64>(inout c.runs, key) {
-      Some(entry) => {
-        if *entry >= 0 && *entry / 2 == i {
-          *entry = 2 * len(order) + (*entry % 2);
-          order = vec_push::<String>(move order, move key);
-        }
-      }
-      None => {}
-    }
-    i = i + 1;
-  }
-  c.order = move order;
-}
-
-fn change_run(inout c: Clock, code: i64, key: str, waiting: bool) -> bool ! alloc {
+// -1 means capacity exhausted, 1 requests a refresh.
+fn change_run(inout c: Clock, code: i64, key: str, waiting: bool) -> i64 ! alloc {
   let mut delta: i64 = 0;
   let mut changed: bool = false;
   let mut found: bool = false;
-  match map_get_mut::<String, i64>(inout c.runs, key) {
+  match map_get_mut::<String, Run>(inout c.runs, key) {
     Some(run) => {
       found = true;
-      if 0 <= *run && *run < 2199023255552 {
-        let was: bool = *run % 2 == 1;
-        if code == 3 {
-          if !was { delta = -1; }
-          changed = true;
-        } else if was != waiting {
-          *run = 2 * (*run / 2);
-          delta = 1;
-          if waiting {
-            *run = *run + 1;
-            delta = -1;
-          }
-          changed = true;
-        }
+      if code == 3 {
+        if !run.waiting { delta = -1; }
+        changed = true;
+      } else if run.waiting != waiting {
+        run.waiting = waiting;
+        delta = 1;
+        if waiting { delta = -1; }
+        changed = true;
       }
     }
     None => {}
   }
   if code == 3 && found {
-    let removed: bool = map_remove::<String, i64>(inout c.runs, key);
-    if len(c.runs) == 0 { vec_clear::<String>(inout c.order); }
-    if removed { compact_runs(inout c); }
+    let removed: bool = map_remove::<String, Run>(inout c.runs, key);
   }
   if code == 1 && !found {
-    let ordinal: i64 = len(c.order);
-    if ordinal >= 1099511627776 || len(c.runs) >= 1099511627776 { return false; }
-    c.order = vec_push::<String>(move c.order, owned(key));
-    c.runs = map_insert::<String, i64>(move c.runs, owned(key), 2 * ordinal);
+    let ordinal: i64 = c.next_run;
+    if ordinal >= 1099511627776 || len(c.runs) >= 1099511627776 { return -1; }
+    c.next_run = ordinal + 1;
+    c.runs = map_insert::<String, Run>(move c.runs, owned(key), Run { ordinal: ordinal, waiting: false });
     delta = 1;
   }
   bump(inout c, delta);
-  return code == 1 || changed;
+  if code == 1 || changed { return 1; }
+  return 0;
 }
 
 fn current(st: St, sid: str, bid: str) -> bool {
@@ -189,36 +160,13 @@ fn current(st: St, sid: str, bid: str) -> bool {
   }
 }
 
-fn compact_clocks(inout st: St) -> () ! alloc {
-  let n: i64 = len(st.clock_order);
-  if n <= 2 * len(st.clocks) + 16 { return; }
-  let mut order: Vec<String> = vec_new::<String>();
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(st.clock_order) && len(order) <= i && n <= 1099511627776
-    decreases n - i
-  {
-    let key: String = owned(vec_get::<String>(st.clock_order, i));
-    match map_get_mut::<String, Clock>(inout st.clocks, key) {
-      Some(entry) => {
-        if entry.ordinal == i {
-          entry.ordinal = len(order);
-          order = vec_push::<String>(move order, move key);
-        }
-      }
-      None => {}
-    }
-    i = i + 1;
-  }
-  st.clock_order = move order;
-}
-
 pub fn t_call(inout st: St, code: i64, sid: str, bid: str, run: str,
-              waiting: bool, now: i64) -> CallReply ! alloc {
-  let mut r: CallReply = CallReply { status: 0, effects: vec_new::<Effect>() };
-  if code < 1 || code > 7 { r.status = 2; return r; }
+              waiting: bool, now: i64) -> i64 ! alloc {
+  vec_clear::<Effect>(inout st.out.fx);
+  let mut status: i64 = 0;
+  if code < 1 || code > 7 { return 2; }
   let valid: bool = current(st, sid, bid);
-  if code == 1 && !valid { return r; }
+  if code == 1 && !valid { return 0; }
   if code == 1 {
     let mut missing: bool = false;
     match map_get::<String, Clock>(st.clocks, bid) {
@@ -226,48 +174,50 @@ pub fn t_call(inout st: St, code: i64, sid: str, bid: str, run: str,
       None => { missing = true; }
     }
     if missing {
-      let ordinal: i64 = len(st.clock_order);
-      if ordinal >= 1099511627776 || len(st.clocks) >= 1099511627776 { r.status = 2; return r; }
-      st.clock_order = vec_push::<String>(move st.clock_order, owned(bid));
+      let ordinal: i64 = st.next_clock;
+      if ordinal >= 1099511627776 || len(st.clocks) >= 1099511627776 { return 2; }
+      st.next_clock = ordinal + 1;
       st.clocks = map_insert::<String, Clock>(move st.clocks, owned(bid),
         Clock { owner: owned(sid), ordinal: ordinal, has_since: false, since: 0, armed: false,
-          active: 0, runs: map_new::<String, i64>(), order: vec_new::<String>() });
+          active: 0, runs: map_new::<String, Run>(), next_run: 0 });
     }
   }
   match map_get_mut::<String, Clock>(inout st.clocks, bid) {
     Some(c) => {
       let mut update: bool = code == 7;
       if code == 1 || code == 2 || code == 3 {
-        update = change_run(inout c, code, run, code == 2 && waiting);
+        let change: i64 = change_run(inout c, code, run, code == 2 && waiting);
+        if change < 0 { status = 2; }
+        update = change == 1;
       }
-      if code == 4 { disarm(inout c, inout r, 14); }
+      if code == 4 { disarm(inout c, inout st.out, 14); }
       if valid {
         match map_get_mut::<String, Budget>(inout st.sessions, sid) {
           Some(b) => {
-            if update { refresh(inout b, inout c, sid, now, inout r); }
+            if update { status = refresh(inout b, inout c, sid, now, inout st.out); }
             if code == 4 && b.state == 0 && !b.unlimited {
-              settle(inout b, inout c, sid, now, inout r);
+              settle(inout b, inout c, sid, now, inout st.out);
               if bounded(b.active_ms) < limit(b) && len(c.runs) > 0 {
                 begin(inout b, inout c, now);
-                arm(inout b, inout c, sid, now, inout r);
-              } else { r.status = 4; }
+                status = arm(inout b, inout c, sid, now, inout st.out);
+              } else { status = 4; }
             }
             if code == 6 {
-              settle(inout b, inout c, sid, now, inout r);
+              settle(inout b, inout c, sid, now, inout st.out);
               b.state = 2;
             }
           }
           None => {}
         }
       }
-      if code == 5 || code == 6 { disarm(inout c, inout r, 13); }
+      if code == 5 || code == 6 { disarm(inout c, inout st.out, 13); }
     }
     None => {
       if valid && (code == 4 || code == 6) {
         match map_get_mut::<String, Budget>(inout st.sessions, sid) {
           Some(b) => {
             if code == 6 { b.state = 2; }
-            else if b.state == 0 && !b.unlimited { r.status = 4; }
+            else if b.state == 0 && !b.unlimited { status = 4; }
           }
           None => {}
         }
@@ -276,10 +226,8 @@ pub fn t_call(inout st: St, code: i64, sid: str, bid: str, run: str,
   }
   if code == 5 || code == 6 {
     let removed: bool = map_remove::<String, Clock>(inout st.clocks, bid);
-    if len(st.clocks) == 0 { vec_clear::<String>(inout st.clock_order); }
-    if removed { compact_clocks(inout st); }
   }
-  return r;
+  return status;
 }
 
 fn word(inout o: Observation, value: i64) -> () ! alloc {
@@ -288,126 +236,63 @@ fn word(inout o: Observation, value: i64) -> () ! alloc {
   }
 }
 
-fn key(inout o: Observation, value: str, packed: bool) -> () ! alloc {
+fn key(inout o: Observation, value: str) -> () ! alloc {
   if len(o.keys) < 1099511627776 {
-    let offset: i64 = len(o.words);
-    o.keys = vec_push::<Key>(move o.keys, Key { s: owned(value), offset: offset, packed: packed });
-  }
-}
-
-fn observe_sessions(st: St, inout o: Observation) -> () ! alloc {
-  word(inout o, len(st.sessions));
-  let n: i64 = len(st.session_order);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(st.session_order)
-    decreases n - i
-  {
-    match map_get::<String, Budget>(st.sessions, vec_get::<String>(st.session_order, i)) {
-      Some(b) => {
-        key(inout o, vec_get::<String>(st.session_order, i), false);
-        word(inout o, 0); // The host fills the packed record length.
-        word(inout o, b.state);
-        if b.unlimited { word(inout o, 1); } else { word(inout o, 0); }
-        word(inout o, b.minutes);
-        word(inout o, b.active_ms);
-        word(inout o, b.since_kind);
-        word(inout o, b.since);
-        key(inout o, string_to_str(b.id), true);
-      }
-      None => {}
-    }
-    i = i + 1;
-  }
-}
-
-fn observe_clock(c: Clock, inout o: Observation) -> () ! alloc {
-  key(inout o, string_to_str(c.owner), false);
-  if c.has_since { word(inout o, 1); } else { word(inout o, 0); }
-  word(inout o, c.since);
-  if c.armed { word(inout o, 1); } else { word(inout o, 0); }
-  word(inout o, c.active);
-  word(inout o, len(c.runs));
-  let n: i64 = len(c.order);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(c.order)
-    decreases n - i
-  {
-    match map_get::<String, i64>(c.runs, vec_get::<String>(c.order, i)) {
-      Some(run) => {
-        if run >= 0 && run / 2 == i {
-          key(inout o, vec_get::<String>(c.order, i), false);
-          if run % 2 == 1 { word(inout o, 1); } else { word(inout o, 0); }
-        }
-      }
-      None => {}
-    }
-    i = i + 1;
+    o.keys = vec_push::<String>(move o.keys, owned(value));
   }
 }
 
 pub fn t_observe(inout st: St) -> Observation ! alloc {
-  let mut o: Observation = Observation { words: vec_new::<i64>(), keys: vec_new::<Key>() };
-  observe_sessions(st, inout o);
-  word(inout o, len(st.clocks));
-  let n: i64 = len(st.clock_order);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(st.clock_order)
-    decreases n - i
-  {
-    match map_get::<String, Clock>(st.clocks, vec_get::<String>(st.clock_order, i)) {
-      Some(c) => {
-        if c.ordinal == i {
-          key(inout o, vec_get::<String>(st.clock_order, i), false);
-          observe_clock(c, inout o);
-        }
-      }
-      None => {}
-    }
-    i = i + 1;
+  let mut o: Observation = Observation { words: vec_new::<i64>(), keys: vec_new::<String>() };
+  word(inout o, len(st.sessions));
+  for (sid, b) in st.sessions {
+    key(inout o, sid);
+    key(inout o, string_to_str(b.id));
+    word(inout o, b.ordinal);
+    word(inout o, b.state);
+    if b.unlimited { word(inout o, 1); } else { word(inout o, 0); }
+    word(inout o, b.minutes);
+    word(inout o, b.active_ms);
+    word(inout o, b.since_kind);
+    word(inout o, b.since);
   }
-  word(inout o, 0);
+  word(inout o, len(st.clocks));
+  for (bid, c) in st.clocks {
+    key(inout o, bid);
+    key(inout o, string_to_str(c.owner));
+    word(inout o, c.ordinal);
+    if c.has_since { word(inout o, 1); } else { word(inout o, 0); }
+    word(inout o, c.since);
+    if c.armed { word(inout o, 1); } else { word(inout o, 0); }
+    word(inout o, c.active);
+    word(inout o, len(c.runs));
+    for (run_key, run) in c.runs {
+      key(inout o, run_key);
+      word(inout o, run.ordinal);
+      if run.waiting { word(inout o, 1); } else { word(inout o, 0); }
+    }
+  }
   return o;
 }
 
 fn recount(c: Clock) -> i64
   ensures 0 <= result && result <= 1099511627776
 {
-  let n: i64 = len(c.order);
-  let mut i: i64 = 0;
   let mut active: i64 = 0;
-  while i < n
-    invariant 0 <= active && active <= i && i <= n && n == len(c.order) && n <= 1099511627776
-    decreases n - i
+  for (run_key, run) in c.runs
+    invariant 0 <= active && active <= 1099511627776
   {
-    match map_get::<String, i64>(c.runs, vec_get::<String>(c.order, i)) {
-      Some(run) => {
-        if run >= 0 && run / 2 == i && run % 2 == 0 { active = active + 1; }
-      }
-      None => {}
-    }
-    i = i + 1;
+    if !run.waiting && active < 1099511627776 { active = active + 1; }
   }
   return active;
 }
 
 pub fn t_i2(inout st: St) -> i64 {
-  let n: i64 = len(st.clock_order);
-  let mut i: i64 = 0;
   let mut bad: i64 = 0;
-  while i < n
-    invariant 0 <= bad && bad <= i && i <= n && n == len(st.clock_order) && n <= 1099511627776
-    decreases n - i
+  for (bid, c) in st.clocks
+    invariant 0 <= bad && bad <= 1099511627776
   {
-    match map_get::<String, Clock>(st.clocks, vec_get::<String>(st.clock_order, i)) {
-      Some(c) => {
-        if c.ordinal == i && recount(c) != c.active { bad = bad + 1; }
-      }
-      None => {}
-    }
-    i = i + 1;
+    if recount(c) != c.active && bad < 1099511627776 { bad = bad + 1; }
   }
   return bad;
 }

@@ -10,10 +10,10 @@ the clock ordinal and the run ordinals preserve the order of the TypeScript
 observations, including removal and reinsertion, without a separate order list.
 
 Pruv updates the records through borrowed text keys, removes closed clocks
-with `map_remove`, and returns a `Reply` with a `Vec<Effect>`. Rust performs the
-effects, schedules timer callbacks, and converts the Q wire format at ingress
-and egress. The text codec preserves isolated UTF-16 surrogates using escaped
-Unicode scalars so keys remain lossless inside Rust strings.
+with `map_remove`, and returns a scalar `Reply`. Rust reads effects from
+`St.out.fx`, schedules timer callbacks, and converts the Q wire format at
+ingress and egress. The text codec preserves isolated UTF-16 surrogates using
+escaped Unicode scalars so keys remain lossless inside Rust strings.
 
 The synchronous halt path settles the clock, records the effect position, and
 calls the host's `running_count` once. It takes all IDs in order via one
@@ -29,8 +29,8 @@ Rust, proof caches and binaries in `.m10b-work/`. The H and G controls still
 check rejected inputs for effects and state changes. The old packed arena's
 Grow injection has no counterpart in the typed state.
 
-Each call still builds a fresh `Reply.effects` vector. A buffer kept in `St`
-cannot be reused, because helpers would need it as an inout field argument
-(`type/inout_argument`, SPEC 6g), and a record holding `Vec<Effect>` cannot sit
-in a map or vector to reach it through a binder. That costs one allocation per
-call on the effect paths; see Appendix P31T (attempt 5) in the restructure spec.
+`t_call` clears the resident effect vector with `vec_clear` before dispatch.
+R-6g-3 lets helpers borrow `inout st.out` alongside a live session or clock
+borrow. This reuses the buffer's capacity across calls (D25, D28, D29).
+New runs and clocks return status 2 when insertion would advance their
+ordinal counter to 2^40. Updates to existing runs remain available at the cap.

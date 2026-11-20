@@ -1,5 +1,5 @@
 // The driver owns a generated St, translates packed wire keys, and prints the
-// same results as driver_m8. Accounting and observation order remain in Pruv.
+// same results as driver_m8. Pruv owns accounting and supplies insertion ordinals.
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
@@ -39,27 +39,58 @@ fn utf16_units(key: &str) -> impl Iterator<Item = u16> + '_ {
     })
 }
 
+fn append_observed_key(out: &mut Vec<i64>, key: &str) {
+    out.push(key.chars().count() as i64);
+    out.extend(utf16_units(key).map(i64::from));
+}
+
 fn observe_words(st: &mut sol::St) -> Vec<i64> {
     let reply = sol::t_observe(st);
-    let mut words = reply.words;
-    let mut out = Vec::with_capacity(words.len());
-    let mut previous = 0;
-    for key in reply.keys {
-        let offset = key.offset as usize;
-        if key.budget_id {
-            let len_at = offset - 15;
-            words[len_at] = 15 + key.s.chars().count().div_ceil(4) as i64;
-        }
-        out.extend_from_slice(&words[previous..offset]);
-        if key.budget_id {
-            append_packed_key(&mut out, utf16_units(&key.s));
-        } else {
-            out.push(key.s.chars().count() as i64);
-            out.extend(utf16_units(&key.s).map(i64::from));
-        }
-        previous = offset;
+    let mut words = reply.words.iter().copied();
+    let mut keys = reply.keys.iter().map(String::as_str);
+    let mut out = Vec::with_capacity(reply.words.len());
+
+    let session_count = words.next().unwrap();
+    let mut sessions = Vec::new();
+    for _ in 0..session_count {
+        let ordinal = words.next().unwrap();
+        let sid = keys.next().unwrap();
+        let bid = keys.next().unwrap();
+        let budget: [i64; 14] = std::array::from_fn(|_| words.next().unwrap());
+        sessions.push((ordinal, sid, bid, budget));
     }
-    out.extend_from_slice(&words[previous..]);
+    sessions.sort_unstable_by_key(|session| session.0);
+    out.push(session_count);
+    for (_, sid, bid, budget) in sessions {
+        append_observed_key(&mut out, sid);
+        out.push(15 + bid.chars().count().div_ceil(4) as i64);
+        out.extend(budget);
+        append_packed_key(&mut out, utf16_units(bid));
+    }
+
+    out.push(words.next().unwrap()); // Clock count.
+    let turn_count = words.next().unwrap();
+    let mut turns = Vec::new();
+    for _ in 0..turn_count {
+        let ordinal = words.next().unwrap();
+        let turn = keys.next().unwrap();
+        let activity_count = words.next().unwrap();
+        let mut activities = Vec::new();
+        for _ in 0..activity_count {
+            activities.push((words.next().unwrap(), keys.next().unwrap()));
+        }
+        turns.push((ordinal, turn, activities));
+    }
+    turns.sort_unstable_by_key(|turn| turn.0);
+    out.push(turn_count);
+    for (_, turn, mut activities) in turns {
+        append_observed_key(&mut out, turn);
+        activities.sort_unstable_by_key(|activity| activity.0);
+        out.push(activities.len() as i64);
+        for (_, activity) in activities {
+            append_observed_key(&mut out, activity);
+        }
+    }
     out
 }
 
@@ -73,9 +104,9 @@ impl World {
         Self {
             st: sol::St {
                 sessions: Default::default(),
-                session_order: Vec::new(),
+                next_session: 0,
                 turns: Default::default(),
-                turn_order: Vec::new(),
+                next_turn: 0,
             },
             keys: Default::default(),
         }
@@ -432,42 +463,56 @@ fn run_churn() {
     let mut w = World::new();
     let st = &mut w.st;
     assert_eq!(sol::t_put(st, "session", "budget", &[0; 14]), 0);
-    // Leave a stale slot before the retained turn so compaction must renumber it.
     assert_eq!(sol::t_tool(st, "session", "budget", "temp", "first"), 0);
     assert_eq!(sol::t_tool(st, "session", "budget", "keep", "first"), 0);
     assert_eq!(sol::t_tool(st, "session", "budget", "keep", "second"), 0);
     assert_eq!(sol::t_forget(st, "temp"), 0);
 
-    let mut max_turn_order = 0;
-    let mut max_activity_order = 0;
-    for _ in 0..10_000 {
+    for ordinal in 2..10_002 {
         for activity in ["first", "second", "third"] {
             assert_eq!(sol::t_tool(st, "session", "budget", "temp", activity), 0);
         }
         let temp = &st.turns["temp"];
-        assert_eq!(temp.activity_order, ["first", "second", "third"]);
-        assert!(temp.activity_order.len() <= 2 * temp.activities.len() + 16);
-        max_activity_order = max_activity_order.max(temp.activity_order.len());
+        assert_eq!(temp.ordinal, ordinal);
+        assert_eq!(temp.next_activity, 3);
+        assert_eq!(temp.activities.len(), 3);
+        assert_eq!(temp.activities["first"], 0);
+        assert_eq!(temp.activities["second"], 1);
+        assert_eq!(temp.activities["third"], 2);
         assert_eq!(sol::t_forget(st, "temp"), 0);
-
         assert_eq!(st.turns.len(), 1);
-        assert!(st.turn_order.len() <= 2 * st.turns.len() + 16);
-        max_turn_order = max_turn_order.max(st.turn_order.len());
-        let keep = &st.turns["keep"];
-        assert!(keep.activity_order.len() <= 2 * keep.activities.len() + 16);
-        assert!(st.session_order.len() <= 2 * st.sessions.len() + 16);
     }
 
-    assert_eq!(st.turns["keep"].ordinal, 0);
-    // A reinserted key must appear at the end even when its stale slots survive.
+    assert_eq!(st.turns["keep"].ordinal, 1);
     assert_eq!(sol::t_tool(st, "session", "budget", "temp", "third"), 0);
-    let reply = sol::t_observe(st);
-    let keys: Vec<_> = reply.keys.iter().map(|key| key.s.as_str()).collect();
-    assert_eq!(keys, ["session", "budget", "keep", "first", "second", "temp", "third"]);
+    let mut expected = vec![0, 2]; // Clocks, then turns.
+    append_observed_key(&mut expected, "keep");
+    expected.push(2);
+    append_observed_key(&mut expected, "first");
+    append_observed_key(&mut expected, "second");
+    append_observed_key(&mut expected, "temp");
+    expected.push(1);
+    append_observed_key(&mut expected, "third");
+    assert!(observe_words(st).ends_with(&expected));
     assert_eq!(sol::t_forget(st, "keep"), 0);
     assert_eq!(sol::t_forget(st, "temp"), 0);
-    assert!(st.turn_order.is_empty());
-    println!("churn: 10000 cycles, max turn slots {max_turn_order}/18 after forget, max activity slots {max_activity_order}, session slots {}", st.session_order.len());
+    assert!(st.turns.is_empty());
+    assert_eq!(st.next_turn, 10_003);
+
+    const CAP: i64 = 1 << 40;
+    st.next_session = CAP;
+    assert_eq!(sol::t_put(st, "session", "budget", &[0; 14]), 0);
+    assert_eq!(st.sessions["session"].ordinal, 0);
+    assert_eq!(sol::t_put(st, "new", "budget", &[0; 14]), 5);
+    st.next_turn = CAP - 1;
+    assert_eq!(sol::t_tool(st, "session", "budget", "last", "first"), 0);
+    assert_eq!(st.turns["last"].ordinal, CAP - 1);
+    assert_eq!(sol::t_tool(st, "session", "budget", "new", "first"), 5);
+    st.turns.get_mut("last").unwrap().next_activity = CAP;
+    assert_eq!(sol::t_tool(st, "session", "budget", "last", "first"), 0);
+    assert_eq!(sol::t_tool(st, "session", "budget", "last", "second"), 5);
+    assert_eq!(st.sessions["session"].tools, 1);
+    println!("churn: 10000 cycles, reinsertion order and ordinal capacity checked");
 }
 
 fn main() {
