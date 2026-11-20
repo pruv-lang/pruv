@@ -66,6 +66,8 @@ _add("map_take", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], mk_option
 CATALOG["map_take"].params[0].mode = "inout"
 _add("vec_clear", _T, lambda T: ([_p("v", _vec(T))], UNIT))
 CATALOG["vec_clear"].params[0].mode = "inout"
+_add("vec_extend_from_slice", _T, lambda T: ([_p("v", _vec(T)), _p("s", mk_array(T))], UNIT), ["alloc"])   # D95
+CATALOG["vec_extend_from_slice"].params[0].mode = "inout"
 _add("string_eq", [], lambda: ([_p("a", STR), _p("b", STR)], BOOL))
 _add("vec_at_mut", _T, lambda T: ([_p("v", _vec(T)), _p("i", I64)], mk_option(T)))
 CATALOG["vec_at_mut"].params[0].mode = "inout"
@@ -347,10 +349,20 @@ def _handle_lost(node, kind, msg):
          "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership")
 
 
+def _ctor_moves(e):
+    """whole-binding moves nested inside an argument, through constructors and calls (D85)"""
+    for k in expr_kids(e):
+        if isinstance(k, Move) and not k.fields:
+            yield k
+        else:
+            yield from _ctor_moves(k)
+
+
 class _Ownership:
-    def __init__(s, funcs, types):
+    def __init__(s, funcs, types, aggregates):
         s.funcs = funcs
         s.types = types
+        s.aggregates = aggregates   # owned aggregate struct names (the checker's s.aggregates; Rust port aggregates)
         s.bor = set()
         s.arm_bor = []   # binders of the enclosing user-enum arms (Rust port arm_bor)
         s.track = None   # name -> "move" | "borrow" of the outermost call being checked (shared by nested calls)
@@ -565,11 +577,14 @@ class _Ownership:
             _err(e, "foreign_move", "binding may have been moved",
                  "%s is moved on some paths; make every path leave it live, or do not use it afterwards" % e.name)
 
+    def aggregate(s, ty):
+        return ty is not None and ty.owner is None and not ty.args and ty.name in s.aggregates
+
     def move(s, e, st, consuming, track):
         if e.fields:
             s.use(e, st)
             return       # The type checker enforces restoration. The root stays live.
-        if not (is_array(e.ty) or is_collection(e.ty) or (is_nongeneric_struct(e.ty, s.types) and e.name in st)):
+        if not (is_array(e.ty) or is_collection(e.ty) or (s.aggregate(e.ty) and e.name in st)):
             _err(e, "foreign_move", "move of a non-collection value",
                  "move applies to Vec, HashMap and String bindings only; use the value directly")
         n = e.name
@@ -634,7 +649,8 @@ class _Ownership:
         else:
             for k in expr_kids(e):
                 if isinstance(e, (StructLit, EnumCtor)) and (
-                        is_collection(k.ty) or isinstance(k, Move) and is_array(k.ty)):
+                        is_collection(k.ty) or isinstance(k, Move) and (
+                            is_array(k.ty) or is_nongeneric_struct(k.ty, s.types))):   # D85: owned aggregate field init
                     s.consume(k, st, "let")
                 else:
                     s.expr(k, st)
@@ -670,6 +686,11 @@ class _Ownership:
                             and _mentions(other, arg.name)):
                         _err(e.args[max(i, j)], "foreign_borrow", "borrowed and moved in one call",
                              "do not pass %s both read-only and with move in one call" % arg.name)
+            for m in _ctor_moves(arg):   # D85: a move inside a constructor argument conflicts with any other mention
+                for j, other in enumerate(e.args):
+                    if i != j and _mentions(other, m.name):
+                        _err(e.args[max(i, j)], "foreign_borrow", "borrowed and moved in one call",
+                             "do not pass %s both read-only and with move in one call" % m.name)
 
     def call_args(s, e, st, takes, track):
         s.check_call_move_alias(e)
@@ -703,9 +724,9 @@ class _Ownership:
                 s.expr(arg, st)
 
 
-def check_ownership(f, funcs, types):
+def check_ownership(f, funcs, types, aggregates):
     """ownership/liveness of one typed, non-foreign function; funcs: name -> Function of the program"""
-    _Ownership(funcs, types).run(f)
+    _Ownership(funcs, types, aggregates).run(f)
 
 
 # ---------------------------------------------------------------------------

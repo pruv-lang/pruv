@@ -1,0 +1,13 @@
+// spec: R-6e-12 accept
+struct S { words: Vec<i64>, n: i64 }
+struct St { s: S, k: i64 }
+
+fn wrap(take s: S, k: i64) -> St {
+  return St { s: move s, k: k };
+}
+
+fn caller() -> i64 ! alloc {
+  let s: S = S { words: vec_new::<i64>(), n: 1 };
+  let st: St = wrap(move s, 2);
+  return st.k;
+}

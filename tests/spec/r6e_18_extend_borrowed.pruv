@@ -1,0 +1,2 @@
+// spec: R-6e-18 reject
+fn bad(v: [i64], s: [i64]) -> () ! alloc { vec_extend_from_slice::<i64>(inout v, s); }

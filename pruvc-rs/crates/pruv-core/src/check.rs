@@ -321,6 +321,8 @@ struct Checker {
     /// Location of the field move allowed in the current field assignment.
     field_move: Option<(i64, i64)>,
     collection_records: std::cell::RefCell<HashSet<String>>,
+    nested_records: HashSet<String>,
+    holder_records: HashSet<String>,
     read_context: Option<usize>,
     statement_call: Option<usize>,
     borrowed_text: Option<usize>,
@@ -446,7 +448,7 @@ fn set_ty(e: &mut Expr, t: &GType) {
 /// G5: does the full syntax of e (every operand, reachable or not) mention the binding `name`?
 fn collection_catalog(name: &str) -> bool {
     matches!(name, "vec_new" | "vec_push" | "vec_get" | "map_new" | "map_insert"
-        | "map_get" | "map_get_mut" | "map_remove" | "map_take" | "vec_at_mut" | "vec_clear")
+        | "map_get" | "map_get_mut" | "map_remove" | "map_take" | "vec_at_mut" | "vec_clear" | "vec_extend_from_slice")
 }
 
 pub(crate) fn place_root(e: &Expr) -> Option<&str> {
@@ -635,6 +637,8 @@ impl Checker {
             takes,
             field_move: None,
             collection_records: Default::default(),
+            nested_records: HashSet::new(),
+            holder_records: HashSet::new(),
             read_context: None,
             statement_call: None,
             borrowed_text: None,
@@ -695,6 +699,7 @@ impl Checker {
         }
         self.arg_decls = self.decls.iter().map(|(n, d)| (n.clone(), d.tparams().len())).collect();
         self.check_tparams(prog)?; // G3: type-parameter lists (type_parameter, generic_bound, generic_main)
+        self.compute_holder_records();
         self.resolve_types(prog)?;
         self.type_graph(&prog.types)?; // G9 A0: type SCCs, generic/recursive field rules
         self.inhabitance(&prog.types)?; // G9 A0: every declaration needs a finite value
@@ -1225,6 +1230,9 @@ impl Checker {
                 if text_key && *v != i64t() && *v != boolt() && !self.owned_aggregate(v) {
                     return Err(terr(line, col, "foreign_owned_type", "String-keyed maps require i64, bool or owned aggregate values", ""));
                 }
+                if !text_key && *k != i64t() && v.owner.is_none() && v.args.is_empty() && self.holder_records.contains(&v.name) {
+                    return Err(terr(line, col, "foreign_owned_type", "aggregate HashMap values with owned fields require i64 or String keys", "")); // D90
+                }
                 if !text_key && *k != i64t() && v.owner.is_none() {
                     if let Some(TypeDecl::Struct(d)) = self.decls.get(&v.name) {
                         if d.tparams.is_empty()
@@ -1441,6 +1449,9 @@ impl Checker {
             !self.funcs.contains_key(*n) && (collection_catalog(n)
                 || *n == "map_lookup" && targs[0].to_key() == "string"));
         if let Some(name) = catalog_collection {
+            if name == "vec_extend_from_slice" && targs[0] != i64t() && targs[0] != boolt() {
+                return Err(terr(line, col, "foreign_owned_type", "vec_extend_from_slice requires i64 or bool elements", ""));
+            }
             let ty = if name.starts_with("vec_") { "vec" } else { "hashmap" };
             self.check_type(line, col, &GType::new(ty, targs.clone()))?;
         }
@@ -1490,7 +1501,9 @@ impl Checker {
                         ));
                     }
                     self.check_type(f.line, f.col, &ft)?;
-                    if !self.state_collection(&ft) && self.depends_on_nested_record(&ft) {
+                    let holder_field = self.holder_records.contains(d.name())
+                        && !self.holder_records.contains(&ft.name) && self.nested_child_type(&ft);
+                    if !self.state_collection(&ft) && !holder_field && self.depends_on_nested_record(&ft) {
                         return Err(terr(f.line, f.col, "foreign_owned_type", "a record with nested collection fields cannot be a direct field", ""));
                     }
                     let nested_field = matches!(d, TypeDecl::Struct(_))
@@ -1733,7 +1746,8 @@ impl Checker {
     /// An extended type may not be a type argument (type_argument) or a G6 collection payload (foreign_owned_type).
     fn owned_aggregate(&self, ty: &GType) -> bool {
         ty.owner.is_none() && ty.args.is_empty()
-            && matches!(self.decls.get(&ty.name), Some(TypeDecl::Struct(d))
+            && (self.holder_records.contains(&ty.name)
+                || matches!(self.decls.get(&ty.name), Some(TypeDecl::Struct(d))
                 if d.tparams.is_empty() && !self.type_sccs.iter().any(|s| s.contains(&ty.name))
                     && d.fields.iter().all(|f| {
                         let t = GType::from_key(&f.ty);
@@ -1742,7 +1756,7 @@ impl Checker {
                             || self.collection_records.borrow().contains(&ty.name) && self.record_map_field(&t)
                             || (!t.contains_collection() && !t.is_array() && t != strt()
                                 && dependencies(&t).iter().all(|n| !self.extended.contains(n)))
-                    }))
+                    })))
     }
 
     fn record_map_field(&self, ty: &GType) -> bool {
@@ -1753,11 +1767,43 @@ impl Checker {
             }))
     }
 
-    fn depends_on_nested_record(&self, ty: &GType) -> bool {
-        dependencies(ty).iter().any(|name| matches!(self.decls.get(name), Some(TypeDecl::Struct(d))
-            if d.fields.iter().any(|f| crate::gtype::key_is_nested_collection_field(&f.ty)
+    fn compute_holder_records(&mut self) {
+        self.nested_records = self.decls.iter().filter_map(|(name, decl)| {
+            let TypeDecl::Struct(d) = decl else { return None };
+            d.fields.iter().any(|f| crate::gtype::key_is_nested_collection_field(&f.ty)
                 || self.collection_records.borrow().contains(name)
-                    && self.record_map_field(&GType::from_key(&f.ty)))))
+                    && self.record_map_field(&GType::from_key(&f.ty)))
+                .then(|| name.clone())
+        }).collect();
+        self.holder_records = self.decls.iter().filter_map(|(name, decl)| {
+            let TypeDecl::Struct(d) = decl else { return None };
+            (d.tparams.is_empty() && !self.nested_records.contains(name)
+                && d.fields.iter().any(|f| self.nested_child_type(&GType::from_key(&f.ty)))
+                && d.fields.iter().all(|f| {
+                    let ty = GType::from_key(&f.ty);
+                    self.nested_child_type(&ty)
+                        || crate::gtype::key_is_owned_field(&f.ty)
+                        || f.ty == "array_u8"
+                        || is_value(&ty, &|n| self.value_decl(n))
+                })).then(|| name.clone())
+        }).collect();
+        self.nested_records.extend(self.holder_records.iter().cloned());
+    }
+
+    fn nested_child_type(&self, ty: &GType) -> bool {
+        ty.owner.is_none() && ty.args.is_empty() && self.nested_records.contains(&ty.name)
+            && matches!(self.decls.get(&ty.name), Some(TypeDecl::Struct(d))
+                if d.tparams.is_empty() && d.fields.iter().all(|f| {
+                    let ft = GType::from_key(&f.ty);
+                    crate::gtype::key_is_owned_field(&f.ty)
+                        || f.ty == "array_u8"
+                        || self.collection_records.borrow().contains(&ty.name) && self.record_map_field(&ft)
+                        || is_value(&ft, &|n| self.value_decl(n))
+                }))
+    }
+
+    fn depends_on_nested_record(&self, ty: &GType) -> bool {
+        dependencies(ty).iter().any(|name| self.nested_records.contains(name))
     }
 
     fn state_collection(&self, ty: &GType) -> bool {
@@ -2339,7 +2385,7 @@ impl Checker {
         let mut effect_before = false;
         for (call, conditional) in calls {
             let f = self.funcs.get(&call.name);
-            if f.is_some() || matches!(call.name.as_str(), "map_remove" | "map_take" | "vec_clear") {
+            if f.is_some() || matches!(call.name.as_str(), "map_remove" | "map_take" | "vec_clear" | "vec_extend_from_slice") {
                 let marked: Vec<&crate::ast::InoutArg> = call
                     .args
                     .iter()
@@ -3960,7 +4006,7 @@ impl Checker {
     fn inout_args(&mut self, e: &mut Call, f: &FuncInfo, m: &Mapping, scope: &Scope, c: bool) -> Res<()> {
         let n = e.name.clone();
         let user_call = self.funcs.contains_key(&n);
-        let collection_place = !user_call && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "map_take" | "vec_clear");
+        let collection_place = !user_call && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "map_take" | "vec_clear" | "vec_extend_from_slice");
         let mut marked = Vec::new();
         for i in 0..e.args.len().min(f.params.len()) {
             let want = substitute(&f.params[i], m);
@@ -4711,8 +4757,8 @@ impl Checker {
         if cat.is_some() && n == "map_take" && self.read_context != call_site {
             return Err(terr(line, col, "foreign_contract", "map_take is only allowed as a direct match scrutinee", ""));
         }
-        if cat.is_some() && n == "vec_clear" && !c && self.statement_call != call_site {
-            return Err(terr(line, col, "inout_context", "vec_clear must be a whole expression statement", ""));
+        if cat.is_some() && matches!(n.as_str(), "vec_clear" | "vec_extend_from_slice") && !c && self.statement_call != call_site {
+            return Err(terr(line, col, "inout_context", format!("{n} must be a whole expression statement"), ""));
         }
         let f: Rc<FuncInfo> = if let Some(cf) = &cat {
             if is_catalog_contract_only(&n) {
@@ -4740,7 +4786,7 @@ impl Checker {
                 col: 0,
                 params: cf.params.iter().map(|p| p.ty.clone()).collect(),
                 pnames: cf.params.iter().map(|p| p.name.to_string()).collect(),
-                inout: (0..cf.params.len()).map(|i| i == 0 && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "map_take" | "vec_clear")).collect(),
+                inout: (0..cf.params.len()).map(|i| i == 0 && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "map_take" | "vec_clear" | "vec_extend_from_slice")).collect(),
                 ret: cf.ret.clone(),
                 effects: cf.effects.clone(),
                 tparams: cf.tparams.clone(),

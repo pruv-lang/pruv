@@ -1,3 +1,4 @@
 // spec: R-6e-6 reject
 struct Rec { items: Vec<String> }
 struct Parent { child: Rec }
+struct Outer { p: Parent }

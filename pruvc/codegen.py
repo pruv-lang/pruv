@@ -3185,6 +3185,14 @@ class Gen:
         if e.name == "vec_clear":
             s.fg.record_inline_catalog(e.name, src)
             return "%s.clear()" % s.e(e.args[0].expr)
+        if e.name == "vec_extend_from_slice":   # D95
+            s.fg.record_inline_catalog(e.name, src)
+            place, src_arr = s.e(e.args[0].expr), s.e(e.args[1])
+            if s.unchecked_catalog():
+                return "%s.extend_from_slice(&(%s)[..])" % (place, src_arr)
+            return ('{ let pruv_s = &(%s)[..]; if ((%s.len() as u64) + (pruv_s.len() as u64)) > (1u64 << 40) '
+                    '{ pruv_g6_req("vec_extend_from_slice", "len(v) + len(s) <= 2^40"); } %s.extend_from_slice(pruv_s) }'
+                    % (src_arr, place, place))
         if e.name == "string_eq":
             s.fg.record_inline_catalog(e.name, src)
             operands = []
@@ -3312,11 +3320,14 @@ class Gen:
                     s.field_value(a, "%s::%s.%s" % (e.enum_name, e.variant, fd.name)) for a, fd in zip(e.args, vf)))
             return "%s(%s)" % (ctor, ", ".join(s.e(a) for a in e.args)) if e.args else ctor
         if isinstance(e, FieldAccess):
-            b = e.base
+            b, path = e.base, [e.field]
+            while isinstance(b, FieldAccess):   # D90: a nested field path stays one place inside the block
+                path.insert(0, b.field)
+                b = b.base
             if (isinstance(b, Call) and b.name == "vec_get" and b.name not in s.fmap and s.is_ext(b.ty)
                     and s.unchecked_catalog()):
                 s.fg.record_inline_catalog(b.name, tuple(b.inst.get("src_args", b.inst["args"])))
-                f = "(*(%s).get_unchecked((%s) as usize)).%s" % (s.e(b.args[0]), s.e(b.args[1]), e.field)
+                f = "(*(%s).get_unchecked((%s) as usize)).%s" % (s.e(b.args[0]), s.e(b.args[1]), ".".join(path))
                 return "(unsafe { &%s })" % f if e.ty is not None and (is_collection(e.ty) or is_array(e.ty)) else "(unsafe { %s })" % f
             return "%s.%s" % (s.e(e.base), e.field)
         if isinstance(e, Call):

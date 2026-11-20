@@ -162,7 +162,7 @@ def _vec_resize_params(prog):
             for i, arg in enumerate(node.args):
                 if isinstance(arg, InoutArg) and isinstance(arg.expr, Var) and arg.expr.name in params:
                     source = (fn.name, params[arg.expr.name])
-                    if node.name == "vec_clear":
+                    if node.name in ("vec_clear", "vec_extend_from_slice"):
                         resizes.add(source)
                     else:
                         forwarded.setdefault((node.name, i), set()).add(source)
@@ -2338,6 +2338,20 @@ class FnVerifier:
             empty = mk_arr(v.a, z3.IntVal(0), v.name, v.elem)
             st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, empty)
             return None
+        if n == "vec_extend_from_slice":   # D95: old prefix kept, suffix equals the slice
+            v, src = args
+            need(v.n + src.n <= MAX_LEN)
+            root, path = field_place(e.args[0].expr)
+            r = s.fresh(n, e.args[0].expr.ty)
+            k = z3.Int("vec_extend!q%d" % s.k)
+            s.k += 1
+            s.assume(st, g, z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < v.n),
+                                                      z3.Select(r.a, k) == z3.Select(v.a, k))))
+            s.assume(st, g, z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < src.n),
+                                                      z3.Select(r.a, v.n + k) == z3.Select(src.a, k))))
+            out = mk_arr(r.a, v.n + src.n, v.name, v.elem)
+            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, out)
+            return None
         if n == "string_eq":
             a, b = args
             r = s.fresh(n, BOOL)
@@ -3058,7 +3072,7 @@ class FnVerifier:
         if calls or s.snap:
             whole = s.whole_assigned(w.body, set()) if calls else set()
             resizes = s.call_writes(w.body, set(), select=lambda call, i:
-                                    call.name == "vec_clear" or (call.name, i) in s.model.vec_resize_params)
+                                    call.name in ("vec_clear", "vec_extend_from_slice") or (call.name, i) in s.model.vec_resize_params)
             names |= calls
             keep = frozenset(n for n in names if n in s.snap or n in calls - (whole | resizes))
         # one arbitrary iteration; the invariants held (and were defined) at its start

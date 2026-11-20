@@ -4144,6 +4144,19 @@ impl<'a> Gen<'a> {
                 return Ok(format!("{}.clear()", self.e(&place.expr)?));
             }
         }
+        if x.name == "vec_extend_from_slice" {
+            self.fg_mut()?.record_inline_catalog(&x.name, &src);
+            if let Expr::InoutArg(place) = &x.args[0] {
+                let (p, src_arr) = (self.e(&place.expr)?, self.e(&x.args[1])?);
+                if self.unchecked_collections() {
+                    return Ok(format!("{}.extend_from_slice(&({})[..])", p, src_arr));
+                }
+                return Ok(format!(
+                    "{{ let pruv_s = &({})[..]; if (({}.len() as u64) + (pruv_s.len() as u64)) > (1u64 << 40) {{ pruv_g6_req(\"vec_extend_from_slice\", \"len(v) + len(s) <= 2^40\"); }} {}.extend_from_slice(pruv_s) }}",
+                    src_arr, p, p
+                ));
+            }
+        }
         if x.name == "string_eq" {
             self.fg_mut()?.record_inline_catalog(&x.name, &src);
             return self.string_eq(x);
@@ -4443,15 +4456,22 @@ impl<'a> Gen<'a> {
                 Ok(format!("{}({})", ctor, parts.join(", ")))
             }
             Expr::FieldAccess(x) => {
-                if let Expr::Call(call) = x.base.as_ref() {
+                // D90: a nested field path stays one place inside the block
+                let mut base = x.base.as_ref();
+                let mut path = vec![x.field.as_str()];
+                while let Expr::FieldAccess(inner) = base {
+                    path.insert(0, inner.field.as_str());
+                    base = inner.base.as_ref();
+                }
+                if let Expr::Call(call) = base {
                     if call.name == "vec_get" && !self.fmap.contains_key(&call.name)
-                        && self.is_ext(expr_ty(&x.base).as_deref()) && self.unchecked_collections()
+                        && self.is_ext(expr_ty(base).as_deref()) && self.unchecked_collections()
                     {
                         let (_, types) = crate::foreign_shim::inst_types(call);
                         self.fg_mut()?.record_inline_catalog(&call.name, &types);
                         let v = self.e(&call.args[0])?;
                         let i = self.e(&call.args[1])?;
-                        let field = format!("(*({}).get_unchecked(({}) as usize)).{}", v, i, x.field);
+                        let field = format!("(*({}).get_unchecked(({}) as usize)).{}", v, i, path.join("."));
                         return Ok(if expr_ty(e).as_deref().is_some_and(|ty| {
                             key_is_collection(ty) || GType::from_key(ty).is_array()
                         }) {
