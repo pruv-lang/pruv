@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Harness for the L3-10 M3/M4 milestones.
 
-  python3 bench/l3/budget/m34_test/run.py m3|m4|m4raw|perf|keys|admit [--pruvc PATH] [--seed N] [--count N]
+  python3 bench/l3/budget/m34_test/run.py m3|m4|m4raw|m4typed|perf|keys|admit [--pruvc PATH] [--seed N] [--count N]
+  python3 bench/l3/budget/m34_test/run.py m4typed --py
   python3 bench/l3/budget/m34_test/run.py m4 --only m4llvm|m4llvmraw|m4c|m4cb|m4nv|m4llvmnv   (or the lane name as the mode;
                                                   mode `lanes` runs every lane; see M4_LANES for what each builds)
 
@@ -32,8 +33,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(HERE))))    # m34_test -> repo root
-WORK = os.path.join(ROOT, "bench", "l3", "budget", "work", "m34")
-PRUVC_DEFAULT = os.path.join(ROOT, "pruvc-rs", "target", "release", "pruvc.exe" if os.name == "nt" else "pruvc")
+WORK = os.path.abspath(os.environ.get("M34_WORK", os.path.join(ROOT, "bench", "l3", "budget", "work", "m34")))
+PRUVC_REL = os.path.join("pruvc-rs", "target", "release", "pruvc.exe" if os.name == "nt" else "pruvc")
 LIBS = ["--lib", "bench/l3/budget", "--lib", "bench/l3/lib"]
 
 sys.path.insert(0, HERE)
@@ -67,6 +68,31 @@ def find_rustc():
 def pruvc_cmd(pruvc):
     """The compiler command prefix: a .py path (the Python compiler) runs under this interpreter."""
     return [sys.executable, pruvc] if pruvc.endswith(".py") else [pruvc]
+
+
+def shared_checkout():
+    """Locate build tools in the main checkout when running in a linked worktree."""
+    if not os.path.isfile(os.path.join(ROOT, ".git")) or not shutil.which("git"):
+        return ROOT
+    c = run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=ROOT)
+    return os.path.dirname(c.stdout.strip()) if c.returncode == 0 else ROOT
+
+
+def default_pruvc():
+    local = os.path.join(ROOT, PRUVC_REL)
+    return local if os.path.isfile(local) else os.path.join(shared_checkout(), PRUVC_REL)
+
+
+PRUVC_DEFAULT = default_pruvc()  # perf_headroom/host/run.py reads this name
+
+
+def typed_python():
+    venv_exe = os.path.join(".venv", "Scripts", "python.exe") if os.name == "nt" else ".venv/bin/python"
+    for checkout in (ROOT, shared_checkout()):
+        exe = os.path.join(checkout, venv_exe)
+        if os.path.isfile(exe):
+            return exe
+    return sys.executable
 
 
 # m4raw modules (root_m4.pruv's `mod` lines), copied from the --lib dirs into the manifest package directory.
@@ -199,7 +225,7 @@ def build_runtime():
     return rt
 
 
-def build(pruvc, tag):
+def build(pruvc, tag, use_py=False):
     """tag m3|keys|<m4 lane, see M4_LANES>: pruvc root -> gen_<tag>.rs (llvm lanes: gen_<tag>.ll + bindings gen_<tag>.rs,
     clang -> .o, linked with runtime.o), then rustc main_<tag>.rs + driver. m4raw/m4llvmraw: manifest raw_entries "crate"
     (driver over sol::pruv_raw::PruvStore); m4c: raw_entries "c" (driver_m4c.rs world calls the sol::pruv_c extern "C"
@@ -216,7 +242,8 @@ def build(pruvc, tag):
     if not rustc:
         raise ToolError("rustc not found")
     os.makedirs(WORK, exist_ok=True)
-    gen = os.path.join(WORK, "gen_%s.rs" % tag)
+    artifact = tag + ("_py" if use_py else "")
+    gen = os.path.join(WORK, "gen_%s.rs" % artifact)
     llvm = bool(lane) and lane["backend"] == "llvm"
     ll = os.path.join(WORK, "gen_%s.ll" % tag)
     if lane and (lane["raw"] or lane["eq"]):
@@ -228,7 +255,11 @@ def build(pruvc, tag):
         args = [root_rel, "-o", ll if llvm else gen] + LIBS
     if llvm:
         args += ["--backend", "llvm", "--rust-bindings", gen]
-    c = run(pruvc_cmd(pruvc) + args, cwd=ROOT)
+    cmd = pruvc_cmd(pruvc)
+    if use_py:
+        cmd = [typed_python(), pruvc]
+        args += ["--backend", "rust"]
+    c = run(cmd + args, cwd=ROOT)
     if c.returncode != 0:
         raise ToolError("pruvc failed on %s (%s, exit %d):\n%s" % (root_rel, tag, c.returncode, tail(c)))
     link = []
@@ -250,7 +281,7 @@ def build(pruvc, tag):
         if driver.count(BATCH_LOOP_ANCHOR) != 1:
             raise ToolError("driver_m4.rs: the timed loop of perf() changed, cannot patch the m4cb batch loop")
         driver = driver.replace(BATCH_LOOP_ANCHOR, BATCH_LOOP_PATCH)
-    main = os.path.join(WORK, "main_%s.rs" % tag)
+    main = os.path.join(WORK, "main_%s.rs" % artifact)
     with open(main, "w") as fh:
         fh.write('#![allow(dead_code, unused_imports)]\n#[path = "%s"] mod sol;\n' % gen.replace("\\", "/"))
         if base == "m4":
@@ -259,7 +290,7 @@ def build(pruvc, tag):
         if lane and tag not in WORLD_LANES:
             fh.write("type Store<T> = %s;\n" % ("sol::pruv_raw::PruvStore<T>" if lane["raw"] == "crate" else "Plain<T>"))
         fh.write(driver)
-    exe = os.path.join(WORK, "driver_%s_bin" % tag + (".exe" if os.name == "nt" else ""))
+    exe = os.path.join(WORK, "driver_%s_bin" % artifact + (".exe" if os.name == "nt" else ""))
     c = run([rustc, "-C", "opt-level=3", "--edition", "2021", "-o", exe, main] + link)
     if c.returncode != 0:
         raise ToolError("rustc failed (%s):\n%s" % (tag, tail(c)))
@@ -368,14 +399,17 @@ def bound_probe(exe, tag):
 
 
 def cmd_m4(args, tag="m4"):
-    exe = build(args.pruvc, tag)
+    typed = tag == "m4typed"
+    pruvc = os.path.join(ROOT, "pruvc", "pruvc.py") if args.py else (args.pruvc or default_pruvc())
+    exe = build(pruvc, "m4_typed" if typed else tag, use_py=args.py)
     progs = gen_m4.gen_programs(args.seed, args.count)
     bad = []
-    err = bound_probe(exe, tag)
-    if err:
-        bad.append((-1, -1, "(length bound probe)", "refused over 2^40", err))
-    else:
-        print("%s: length bound probe ok (state / op / out over 2^40 refused before allocating)" % tag)
+    if not typed:
+        err = bound_probe(exe, tag)
+        if err:
+            bad.append((-1, -1, "(length bound probe)", "refused over 2^40", err))
+        else:
+            print("%s: length bound probe ok (state / op / out over 2^40 refused before allocating)" % tag)
     grows_total = 0
     with_grow = 0
     stats_checks = 0
@@ -387,25 +421,26 @@ def cmd_m4(args, tag="m4"):
             bad.append((pi, 0, "(driver)", "exit 0", "exit %d: %s" % (c.returncode, tail(c))))
             continue
         out = c.stdout.splitlines()
-        g = 0
-        imps = [x for x in out if x.startswith("import ")]
-        while out and (out[-1].startswith("grows ") or out[-1].startswith("final_len ") or out[-1].startswith("import ")):
-            if out[-1].startswith("grows "):
-                g = int(out[-1].split()[1])
-            out.pop()
-        # m4_import (L3 P13a.10): exactly one import line per program; 0 with at least the 3 roots visited; the
-        # corrupt copy (entry 0's state word broken) 2 on the Rust lanes, "-" on the C lanes (no host buffer there)
-        want_bad = "-" if tag in WORLD_LANES else "2"
-        if len(imps) != 1:
-            bad.append((pi, -1, "(import)", "one import line", "%d import lines" % len(imps)))
-        else:
-            imp = imps[0].split()
-            if len(imp) != 4 or imp[1] != "0" or int(imp[2]) < 3 or imp[3] != want_bad:
-                bad.append((pi, -1, "(import)", "import 0 >=3 " + want_bad, imps[0]))
+        if not typed:
+            g = 0
+            imps = [x for x in out if x.startswith("import ")]
+            while out and (out[-1].startswith("grows ") or out[-1].startswith("final_len ") or out[-1].startswith("import ")):
+                if out[-1].startswith("grows "):
+                    g = int(out[-1].split()[1])
+                out.pop()
+            # m4_import (L3 P13a.10): exactly one import line per program; 0 with at least the 3 roots visited; the
+            # corrupt copy (entry 0's state word broken) 2 on the Rust lanes, "-" on the C lanes (no host buffer there)
+            want_bad = "-" if tag in WORLD_LANES else "2"
+            if len(imps) != 1:
+                bad.append((pi, -1, "(import)", "one import line", "%d import lines" % len(imps)))
             else:
-                import_checks += 1
-        grows_total += g
-        with_grow += 1 if g else 0
+                imp = imps[0].split()
+                if len(imp) != 4 or imp[1] != "0" or int(imp[2]) < 3 or imp[3] != want_bad:
+                    bad.append((pi, -1, "(import)", "import 0 >=3 " + want_bad, imps[0]))
+                else:
+                    import_checks += 1
+            grows_total += g
+            with_grow += 1 if g else 0
         if len(out) != len(pr["expected"]):
             bad.append((pi, -1, "(line count)", "%d lines" % len(pr["expected"]), "%d lines" % len(out)))
             continue
@@ -413,7 +448,11 @@ def cmd_m4(args, tag="m4"):
         for li, (inp, e, a) in enumerate(zip(pr["lines"], pr["expected"], out)):
             if e.startswith("stats "):
                 stats_checks += 1
-                err, prev_len = check_stats(e, a, prev_len)
+                if typed:
+                    want = " ".join(e.split()[:2])
+                    err = None if a == want else "expected " + want
+                else:
+                    err, prev_len = check_stats(e, a, prev_len)
                 if err:
                     stats_bad += 1
                     bad.append((pi, li, inp, e + "   [" + err + "]", a))
@@ -421,13 +460,16 @@ def cmd_m4(args, tag="m4"):
             elif e != a:
                 bad.append((pi, li, inp, e, a))
                 break
-    ok_progs = len(progs) - len(set(b[0] for b in bad))
+    ok_progs = len(progs) - len({b[0] for b in bad if b[0] >= 0})
     print("%s: %d/%d pass (seed %d)" % (tag, ok_progs, len(progs), args.seed))
-    print("%s: grows total %d across %d/%d programs" % (tag, grows_total, with_grow, len(progs)))
-    print("%s: size formula / header-bound checks on stats lines: %d/%d ok" % (tag, stats_checks - stats_bad, stats_checks))
-    print("%s: import admission checks: %d/%d programs" % (tag, import_checks, len(progs)))
-    if grows_total == 0:
-        print("%s: WARNING no grow was exercised" % tag)
+    if typed:
+        print("%s: live entry checks on stats lines: %d/%d ok" % (tag, stats_checks - stats_bad, stats_checks))
+    else:
+        print("%s: grows total %d across %d/%d programs" % (tag, grows_total, with_grow, len(progs)))
+        print("%s: size formula / header-bound checks on stats lines: %d/%d ok" % (tag, stats_checks - stats_bad, stats_checks))
+        print("%s: import admission checks: %d/%d programs" % (tag, import_checks, len(progs)))
+        if grows_total == 0:
+            print("%s: WARNING no grow was exercised" % tag)
     for pi, li, inp, e, a in bad[:5]:
         print("MISMATCH program %d line %d: %s" % (pi, li, inp[:200]))
         print("  expected: %s" % e[:600])
@@ -639,16 +681,23 @@ def cmd_perf(args):
 
 def main():
     ap = argparse.ArgumentParser(description="L3-10 M3/M4 test harness")
-    ap.add_argument("mode", choices=["m3", "perf", "keys", "admit", "lanes"] + sorted(M4_LANES))
+    ap.add_argument("mode", choices=["m3", "m4typed", "perf", "keys", "admit", "lanes"] + sorted(M4_LANES))
     ap.add_argument("--only", choices=sorted(M4_LANES), default=None,
                     help="m4 mode: run only this lane (same as giving the lane name as the mode); mode `lanes` runs all")
-    ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
+    ap.add_argument("--pruvc", default=None)
+    ap.add_argument("--py", action="store_true", help="m4typed: compile with the Python compiler's Rust backend")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--count", type=int, default=300)
     ap.add_argument("--runs", type=int, default=5, help="perf: runs per measurement, median is used")
     ap.add_argument("--axes", default="sessions,tools", help="perf: comma list of sessions,tools,clocks")
     args = ap.parse_args()
+    if args.py and (args.mode != "m4typed" or args.pruvc is not None):
+        ap.error("--py requires m4typed without --pruvc")
+    if not args.py and args.pruvc is None:
+        args.pruvc = default_pruvc()
     try:
+        if args.mode == "m4typed":
+            return cmd_m4(args, "m4typed")
         if args.mode in M4_LANES:
             return cmd_m4(args, args.only or args.mode)
         if args.mode == "lanes":
