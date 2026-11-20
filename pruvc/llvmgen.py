@@ -2799,7 +2799,7 @@ class FnGen:
 
     def catalog_call(s, e, owned):
         n = e.name
-        if n in ("map_get_mut", "map_remove", "vec_at_mut"):
+        if n in ("map_get_mut", "map_remove", "map_take", "vec_at_mut"):
             raise PruvError("codegen", e.line, e.col, "unsupported_type",
                             "%s in %s needs the Rust backend" % (n, getattr(s.f, "disp", s.f.name)),
                             "use the Rust backend", file=getattr(e, "file", None))
@@ -5421,7 +5421,7 @@ def g6_llvm_error(prog):
             if ty is not None and not _g6_type_ok(ty):
                 bad.append((n.line, n.col))
             if isinstance(n, Call) and n.name in CATALOG and n.name not in CATALOG_CONTRACT_ONLY:
-                if n.name in ("map_remove", "vec_at_mut", "vec_clear", "string_eq"):
+                if n.name in ("map_remove", "map_take", "vec_at_mut", "vec_clear", "string_eq"):
                     rust_only.append((n.line, n.col, n.name))
                 if n.inst and not all(_g6_scalar(a) for a in n.inst["args"]):
                     bad.append((n.line, n.col))

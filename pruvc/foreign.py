@@ -62,6 +62,8 @@ _add("map_get_mut", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], mk_opt
 CATALOG["map_get_mut"].params[0].mode = "inout"
 _add("map_remove", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], BOOL))
 CATALOG["map_remove"].params[0].mode = "inout"
+_add("map_take", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], mk_option(V)))
+CATALOG["map_take"].params[0].mode = "inout"
 _add("vec_clear", _T, lambda T: ([_p("v", _vec(T))], UNIT))
 CATALOG["vec_clear"].params[0].mode = "inout"
 _add("string_eq", [], lambda: ([_p("a", STR), _p("b", STR)], BOOL))
@@ -177,7 +179,7 @@ _add("map_updated", _KV, lambda K, V: ([_p("after", _map(K, V)), _p("before", _m
                                        BOOL))
 CATALOG_NAMES = tuple(CATALOG)
 MUTABLE_COLLECTION_MATCH = ("map_get_mut", "vec_at_mut")
-BORROWED_MAP_KEY = ("map_get", "map_get_mut", "map_remove", "map_lookup")
+BORROWED_MAP_KEY = ("map_get", "map_get_mut", "map_remove", "map_take", "map_lookup")
 CATALOG_CONTRACT_ONLY = ("map_lookup", "map_updated")
 FILE_OBSERVERS = ("file_ok", "file_readable", "file_writable", "file_size", "file_byte")
 # G10 proc A0: the observers allowed in contracts; every other proc_* operation (effects, allocating proc_bytes)
@@ -443,12 +445,22 @@ class _Ownership:
             return st
         if isinstance(x, Match):
             s.expr(x.scrutinee, st)
+            sc = x.scrutinee
+            map_take = isinstance(sc, Call) and sc.name == "map_take" and sc.name not in s.funcs
             out = None
             first = True
             for a in x.arms:
                 borrowed = s.arm_borrowed(a)
                 s.bor.update(borrowed)
-                r = s.block(a.body, dict(st))
+                inner = dict(st)
+                if map_take:
+                    for b in a.binders:
+                        inner[b] = "live"
+                        s.proc.pop(b, None)
+                r = s.block(a.body, inner)
+                if map_take and r is not None:
+                    for b in a.binders:
+                        r.pop(b)
                 s.bor.difference_update(borrowed)
                 out = r if first else _join(out, r)
                 first = False

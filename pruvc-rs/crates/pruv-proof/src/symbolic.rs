@@ -3771,16 +3771,21 @@ impl<'a> FnVerifier<'a> {
                     vty: m.vty.clone(),
                 }))
             }
-            "map_remove" => {
+            "map_remove" | "map_take" => {
                 let mut m = argv(0)?.try_map()?.clone();
                 let k = self.map_key(&m.kty, argv(1)?)?;
                 let has = m.d.select(&k);
                 self.assume(st, g, has.implies(&m.n.gt_i(0)));
+                let result = if n == "map_take" {
+                    self.map_lookup(&m, &k, rty.as_ref())?
+                } else {
+                    Val::Bool(has.clone())
+                };
                 m.d = m.d.store(&k, &z.bool_val(false));
                 m.n = m.n.sub(&z.ite(&has, &z.int(1), &z.int(0)));
                 let Expr::InoutArg(place) = &x.args[0] else { return Err("missing inout place".into()) };
                 self.store_collection_place(&place.expr, &mut st.env, Val::Map(m))?;
-                Ok(Val::Bool(has))
+                Ok(result)
             }
             "map_updated" => {
                 let aft = argv(0)?.try_map()?.clone();

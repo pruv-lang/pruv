@@ -2937,9 +2937,10 @@ class Gen:
         elif isinstance(st, Match):
             sc = st.scrutinee
             from foreign import MUTABLE_COLLECTION_MATCH
-            collection_call = (isinstance(sc, Call) and sc.name not in s.fmap
-                               and sc.name in MUTABLE_COLLECTION_MATCH + ("map_get",))
-            ty = sc.inst["args"][-1] if collection_call else None
+            catalog_match = isinstance(sc, Call) and sc.name not in s.fmap
+            collection_call = catalog_match and sc.name in MUTABLE_COLLECTION_MATCH + ("map_get",)
+            map_take = catalog_match and sc.name == "map_take"
+            ty = sc.inst["args"][-1] if collection_call or map_take else None
             mutable_map = collection_call and sc.name in MUTABLE_COLLECTION_MATCH
             map_view = collection_call and s.is_ext(ty)
             if collection_call and sc.name == "map_get" and is_string_record_map(sc.args[0].ty):
@@ -2974,10 +2975,13 @@ class Gen:
             s.emit(ind, "match %s {" % scrutinee)
             for a in st.arms:
                 name = a.ctor if a.enum_name is None else "%s::%s" % (a.enum_name, a.ctor)
-                pat = name if not a.binders else "%s(%s)" % (name, ", ".join(a.binders))
+                binders = ", ".join(a.binders)
+                if map_take and name == "Some":
+                    binders = "mut " + binders
+                pat = name if not a.binders else "%s(%s)" % (name, binders)
                 s.emit(ind + 1, "%s => {" % pat)
                 saved_inouts, saved_refs, saved_vt = set(s.inouts), set(s.refs), dict(s.vt)
-                if collection_call and a.binders:
+                if (collection_call or map_take) and a.binders:
                     b = a.binders[0]
                     s.vt[b] = ty
                     if mutable_map:
@@ -3159,11 +3163,12 @@ class Gen:
         cat = CATALOG[e.name]
         low = tuple(e.inst["args"]) if e.inst else ()
         src = tuple(e.inst.get("src_args", low)) if e.inst else ()
-        if e.name == "map_remove":
+        if e.name in ("map_remove", "map_take"):
             s.fg.record_inline_catalog(e.name, src)
             place, key = e.args
             k = s.borrowed_map_key(key) if low[0].name == "string" else "&" + s.e(key)
-            return "%s.remove(%s).is_some()" % (s.e(place.expr), k)
+            removed = "%s.remove(%s)" % (s.e(place.expr), k)
+            return removed + ".is_some()" if e.name == "map_remove" else removed
         if e.name == "vec_clear":
             s.fg.record_inline_catalog(e.name, src)
             return "%s.clear()" % s.e(e.args[0].expr)

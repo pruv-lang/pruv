@@ -1,0 +1,1 @@
+{"gen_contains":["match m.remove(&k) {","match m.remove(k) {","Some(mut v) => {"]}

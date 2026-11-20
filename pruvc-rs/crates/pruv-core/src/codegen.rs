@@ -3486,7 +3486,7 @@ impl<'a> Gen<'a> {
             return None;
         }
         let (types, _) = crate::foreign_shim::inst_types(call);
-        (matches!(call.name.as_str(), "map_get_mut" | "vec_at_mut") || (call.name == "map_get"
+        (matches!(call.name.as_str(), "map_get_mut" | "map_take" | "vec_at_mut") || (call.name == "map_get"
             && (types.get(1).is_some_and(|t| self.is_ext(Some(&t.to_key())))
                 || self.nested_record_map_read(&call.args[0])))).then_some(call)
     }
@@ -3506,6 +3506,7 @@ impl<'a> Gen<'a> {
     fn match_map(&mut self, stmt: &Match, ind: usize) -> R<()> {
         let call = self.map_match_call(stmt).unwrap();
         let vector = call.name == "vec_at_mut";
+        let take = call.name == "map_take";
         let mutable = vector || call.name == "map_get_mut";
         let place = match &call.args[0] {
             Expr::InoutArg(arg) => arg.expr.as_ref(),
@@ -3528,7 +3529,7 @@ impl<'a> Gen<'a> {
             key = "pruv_key".to_string();
         }
         let depth = ind + usize::from(scoped);
-        let method = if mutable { "get_mut" } else { "get" };
+        let method = if take { "remove" } else if mutable { "get_mut" } else { "get" };
         let receiver = if matches!(place, Expr::Var(_) | Expr::FieldAccess(_)) { receiver } else { format!("({})", receiver) };
         let key = if vector { format!("<usize as ::std::convert::TryFrom<i64>>::try_from({key}).unwrap_or(usize::MAX)") } else if text_key { key } else { format!("&{key}") };
         self.emit(depth, &format!("match {}.{}({}) {{", receiver, method, key));
@@ -3536,14 +3537,18 @@ impl<'a> Gen<'a> {
         for arm in &stmt.arms {
             let pattern = if let Some(name) = arm.binders.first() {
                 self.vars.insert(name.clone(), ty.clone());
-                self.refs.insert(name.clone());
-                if mutable {
-                    self.inouts.insert(name.clone());
+                if take {
+                    format!("Some(mut {})", name)
+                } else {
+                    self.refs.insert(name.clone());
+                    if mutable {
+                        self.inouts.insert(name.clone());
+                    }
+                    if !self.is_ext(Some(&ty)) {
+                        self.map_views.insert(name.clone());
+                    }
+                    format!("Some({})", name)
                 }
-                if !self.is_ext(Some(&ty)) {
-                    self.map_views.insert(name.clone());
-                }
-                format!("Some({})", name)
             } else {
                 "None".to_string()
             };

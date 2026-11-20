@@ -1,0 +1,14 @@
+// spec: R-6e-14 reject
+struct Clock { used: i64 }
+struct St { clocks: HashMap<String, Clock> }
+fn bad(inout st: St, k: str) -> () {
+  match map_get_mut::<String, Clock>(inout st.clocks, k) {
+    Some(c) => {
+      match map_take::<String, Clock>(inout st.clocks, k) {
+        Some(v) => { c.used = v.used; }
+        None => {}
+      }
+    }
+    None => {}
+  }
+}

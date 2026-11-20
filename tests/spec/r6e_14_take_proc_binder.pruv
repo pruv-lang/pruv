@@ -1,0 +1,14 @@
+// spec: R-6e-14 accept
+fn ok(take h: Process, flag: bool, take source: HashMap<i64, i64>) -> i64 ! proc, alloc {
+  if flag {
+    let v: Process = move h;
+    let r: Result<i64> = proc_wait(move v);
+  } else {
+    let r: Result<i64> = proc_wait(move h);
+  }
+  let mut m: HashMap<i64, i64> = move source;
+  match map_take::<i64, i64>(inout m, 1) {
+    Some(v) => { return v; }
+    None => { return 0; }
+  }
+}

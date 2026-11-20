@@ -1,0 +1,28 @@
+// spec: R-6e-14 accept
+pub struct Clock { armed: bool, used: i64 }
+pub struct St { clocks: HashMap<String, Clock> }
+
+pub fn end(inout st: St, bid: str) -> i64 {
+  match map_take::<String, Clock>(inout st.clocks, bid) {
+    Some(c) => { if c.armed { return c.used; } return 0; }
+    None => { return -1; }
+  }
+}
+
+fn proof() -> i64 ! alloc
+  ensures result == 7
+{
+  let key: String = string_push_str(string_new(), "a");
+  let query: str = string_to_str(key);
+  let mut m: HashMap<String, Clock> = map_insert::<String, Clock>(
+    map_new::<String, Clock>(), move key, Clock { armed: true, used: 7 });
+  let before: i64 = len(m);
+  match map_take::<String, Clock>(inout m, query) {
+    Some(c) => {
+      assert len(m) == before - 1;
+      assert !is_some(map_lookup::<String, Clock>(m, query));
+      return c.used;
+    }
+    None => { return -1; }
+  }
+}
