@@ -1,0 +1,4 @@
+// spec: R-6e-15 accept
+fn copy_text(t: str) -> String ! alloc {
+  return string_from(t);
+}

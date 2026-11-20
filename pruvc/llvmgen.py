@@ -2809,7 +2809,7 @@ class FnGen:
         args = []
         for p, x in zip(cat.params, e.args):   # arguments once, in source order; take arguments are owned values
             args += s.g6_arg(s.ev(x, bool(p.take)))
-        if n in ("vec_new", "map_new", "string_new", "vec_push", "map_insert", "string_push_str",
+        if n in ("vec_new", "map_new", "string_from", "string_new", "vec_push", "map_insert", "string_push_str",
                  "file_open_read", "file_create", "file_read_all", "file_write_str", "file_write_bytes",
                  "proc_args_new", "proc_args_push", "proc_spawn", "proc_spawn_env", "proc_write_str", "proc_write_bytes",
                  "proc_close_stdin", "proc_read", "proc_read_all",

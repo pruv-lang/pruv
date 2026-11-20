@@ -288,6 +288,9 @@ def _cat_adapter(helper, op, low):
                    "pruv_g6_guard(|| { let pruv_k: %s = %s; let pruv_v: %s = %s; "
                    "pruv_g6_upd::<%s, _>(m, |pruv_o| %s(pruv_o, pruv_k, pruv_v)) })" % (
                        rty(K), _cin(K, "k"), rty(V), _cin(V, "v"), C, helper))
+    if op == "string_from":
+        return _fn(S, "p: *const u8, n: i64", "PruvH",
+                   "pruv_g6_guard(|| pruv_g6_new(%s(pruv_g6_str(p, n))))" % helper)
     if op == "string_push_str":
         return _fn(S, "s: PruvH, p: *const u8, n: i64", "PruvH",
                    "pruv_g6_guard(|| { let pruv_t: &str = pruv_g6_str(p, n); "

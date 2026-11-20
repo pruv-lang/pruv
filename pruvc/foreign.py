@@ -72,6 +72,7 @@ CATALOG["vec_at_mut"].params[0].mode = "inout"
 
 _add("map_insert", _KV, lambda K, V: ([_p("m", _map(K, V), True), _p("k", K), _p("v", V)], _map(K, V)), ["alloc"])
 _add("string_new", [], lambda: ([], STRING), ["alloc"])
+_add("string_from", [], lambda: ([_p("text", STR)], STRING), ["alloc"])
 _add("string_push_str", [], lambda: ([_p("s", STRING, True), _p("text", STR)], STRING), ["alloc"])
 _add("string_byte", [], lambda: ([_p("s", STRING), _p("i", I64)], I64))
 _add("string_to_str", [], lambda: ([_p("s", STRING)], STR), ["alloc"])

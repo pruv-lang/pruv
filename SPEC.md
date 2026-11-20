@@ -403,7 +403,8 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   `String` hold values. Collections cannot be stored in `Option`, `Result` or arrays. R-6e-1, R-6e-3 and R-6e-6
   describe collection fields and the permitted nesting. Operations (`vec_*` and `map_*` take explicit type arguments, `string_*` and `len` take none): `vec_new`, `vec_push`,
   `vec_get`, `map_new`, `map_insert`, `map_get` (returns `Option<V>`), `string_new`, `string_push_str`, `string_byte`,
-  `string_to_str` (copies into a `str`), `vec_clear`, `string_eq`, and `len`. Allocating operations need `! alloc`. In contracts only: `v[i]`, `s[i]`,
+  `string_to_str` (copies into a `str`), `string_from` (copies a `str` into a new `String`), `vec_clear`, `string_eq`, and `len`.
+  Allocating operations need `! alloc`. In contracts only: `v[i]`, `s[i]`,
   `map_lookup::<K, V>(m, k)` and `map_updated::<K, V>(after, before, k, v)` (the whole new map: k set, size, others kept).
   A map whose values grow in a loop (counters, histograms) needs either a saturating update (`if c < LIMIT { c + 1 }`)
   (preferred) or an invariant bounding every value (quantifying over all keys is expensive and may time out); an
@@ -666,6 +667,14 @@ fn tree_count(t: Tree) -> i64
   [key type](tests/spec/r6e_14_take_key.pruv), [LLVM](tests/spec/r6e_14_take_llvm.pruv),
   [other field](tests/spec/r6e_14_take_other_field.pruv), [scalar read view](tests/spec/r6e_14_take_in_scalar_get.pruv)
   and [binder name reuse](tests/spec/r6e_14_take_proc_binder.pruv).
+- R-6e-15 **Owned text from a borrow.** `string_from(t) -> String` needs `! alloc` and takes
+  the same `str` argument as the text parameter of `string_push_str`. The verifier checks
+  `len(t) <= 2^40` and establishes that the fresh result has length `len(t)` and matches every byte
+  of `t`. Rust uses `t.to_string()` for the sole copy. LLVM calls the same helper through the
+  collection bridge and returns a fresh owned handle.
+  Tests cover [copying text](tests/spec/r6e_15_string_from.pruv),
+  [missing effect](tests/spec/r6e_15_from_no_alloc.pruv), [non-text argument](tests/spec/r6e_15_from_non_text.pruv),
+  [false postcondition](tests/spec/r6e_15_from_wrong_ensures.pruv), and [LLVM lowering](tests/spec/r6e_15_from_llvm.pruv).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate. Putting an existing value into an owning place (`let`, assignment, constructor field,

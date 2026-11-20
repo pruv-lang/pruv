@@ -549,6 +549,17 @@ impl ForeignGen {
                 body.push("pruv_r".to_string());
                 Ok(self.fn_text(name, "", Some(STRING), &body))
             }
+            "string_from" => {
+                let mut body = self.req_line("(text.len() as u64) <= (1u64 << 40)", "len(text) <= 2^40");
+                body.push(format!("let pruv_r: {} = text.to_string();", STRING));
+                body.extend(self.ens_line("pruv_r.len() == text.len()", "len(result) == len(text)"));
+                if self.ens {
+                    body.push("pruv_g6_charge(&mut pruv_budget, text.len());".to_string());
+                }
+                body.extend(self.ens_line("pruv_r.as_bytes() == text.as_bytes()", "bytes of result equal bytes of text"));
+                body.push("pruv_r".to_string());
+                Ok(self.fn_text(name, "text: &str", Some(STRING), &body))
+            }
             "string_push_str" => {
                 let mut body =
                     self.req_line("(s.len() as u64) + (text.len() as u64) <= (1u64 << 40)", "len(s) + len(text) <= 2^40");

@@ -256,6 +256,15 @@ class ForeignGen:
             body += s._ens("pruv_r.len() == 0", "len(result) == 0")
             body += ["pruv_r"]
             return s._fn(name, "", STRING, body)
+        if op == "string_from":
+            body = s._req("(text.len() as u64) <= (1u64 << 40)", "len(text) <= 2^40")
+            body += ["let pruv_r: %s = text.to_string();" % STRING]
+            body += s._ens("pruv_r.len() == text.len()", "len(result) == len(text)")
+            if s.ens:
+                body += ["pruv_g6_charge(&mut pruv_budget, text.len());"]
+            body += s._ens("pruv_r.as_bytes() == text.as_bytes()", "bytes of result equal bytes of text")
+            body += ["pruv_r"]
+            return s._fn(name, "text: &str", STRING, body)
         if op == "string_push_str":
             body = s._req("(s.len() as u64) + (text.len() as u64) <= (1u64 << 40)", "len(s) + len(text) <= 2^40")
             body += s._snap(STRING, "s")

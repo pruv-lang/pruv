@@ -1,0 +1,1 @@
+{"flags": ["--foreign-checks", "all"], "gen_contains": ["pruv_g6_string_from", "text.to_string()", "pruv_r.as_bytes() == text.as_bytes()"], "gen_absent": [".clone()"]}

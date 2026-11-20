@@ -40,7 +40,7 @@ pub struct CatFn {
 }
 
 /// CATALOG_NAMES of foreign.py (insertion order).
-pub const CATALOG_NAMES: [&str; 101] = [
+pub const CATALOG_NAMES: [&str; 102] = [
     "vec_new",
     "vec_push",
     "vec_get",
@@ -54,6 +54,7 @@ pub const CATALOG_NAMES: [&str; 101] = [
     "vec_at_mut",
     "map_insert",
     "string_new",
+    "string_from",
     "string_push_str",
     "string_byte",
     "string_to_str",
@@ -301,6 +302,12 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
             tparams: tp_kv(),
         },
         "string_new" => CatFn { requires: vec![], ensures: vec![], params: vec![], ret: string_t(), effects: alloc(), tparams: vec![] },
+        "string_from" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("text", GType::str(), false)],
+            ret: string_t(),
+            effects: alloc(),
+            tparams: vec![],
+        },
         "string_push_str" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("s", string_t(), true), p("text", GType::str(), false)],
             ret: string_t(),
@@ -2021,7 +2028,7 @@ mod tests {
 
     #[test]
     fn catalog_shapes() {
-        assert_eq!(CATALOG_NAMES.len(), 101);
+        assert_eq!(CATALOG_NAMES.len(), 102);
         for n in CATALOG_NAMES.iter() {
             assert!(catalog_fn(n).is_some());
         }
