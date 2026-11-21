@@ -415,7 +415,7 @@ pub fn window(win: [u8], omitted: bool, title: str, model: str) -> [i64] ! alloc
   let n: i64 = len(win);
   let mut st: [i64] = crate::turns::new_state();
   let mut sl: [i64] = crate::turns::new_slots();
-  let mut buf: [u8] = crate::turns::new_buffer();
+  let mut buf: [u8] = crate::turns::empty_buffer();
   let mut bad: i64 = 0;
   let mut j: i64 = 0;
   let mut p: i64 = crate::framing::scan_start(win, omitted);
