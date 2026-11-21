@@ -195,6 +195,11 @@ def fixtures():
         window(f'depth {n}', L(user('before'), deep, asst('after')))
         add(f'depth {n}', 'head', 0, L(deep))
         add(f'depth {n}', 'tail', 0, L(b'{"timestamp":1,"x":' + b'[' * n + b'0' + b']' * n + b'}'))
+    window('terminal array projection preserves the last key', L(
+        b'{"type":"user","message":{"content":"shadowed"},"type":[[-1.5e+2]]}',
+        b'{"type":"user","message":{"content":"accepted"},"x":[[-1.5e+2]]}',
+        b'{"type":"user","message":{"content":"malformed"},"x":[[01]]}',
+        asst('ok')))
     window('duplicate keys last wins', b'{"type":"user","type":"assistant","message":{"content":"x"}}\n'
            b'{"type":"user","message":{"content":"first"},"message":{"content":"last"}}\n'
            b'{"type":"assistant","message":{"model":"m","content":"r1"},"message":{"model":"n","content":"r2"}}\n')
