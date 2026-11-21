@@ -146,8 +146,7 @@ fn add_reserve(r: i64, sp: crate::access::Span, cap: i64) -> i64
   // has at least two bytes), so the reserve counts inner bytes only (R04: the quotes were 6 spare words per tool).
   let mut m: i64 = 0;
   if sp.status == 0 { m=sp.end-sp.start; if m >= 2 { m=m-2; } if m > cap { m=cap; } }
-  let mut s: i64 = r+m; if s > 100000000 { s=100000000; }
-  return s;
+  return add_raw(r,m);
 }
 fn add_raw(r: i64, m: i64) -> i64
   requires 0 <= r && r <= 100000000 && 0 <= m && m <= 16000000
