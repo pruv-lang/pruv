@@ -107,6 +107,10 @@ impl Banks {
 pub trait Sol {
     fn begin(&self, cfg: &[i64], cfg_text: &[u8]) -> Vec<i64>;
     fn step(&self, cfg: &[i64], cfg_text: &[u8], ctl: &[i64], banks: &Banks, event: &[i64], completion: &[u8]) -> Vec<i64>;
+    // R07 B: the same cfg that begin admitted (begin answered a step packet); no per-step environment walk
+    fn step_admitted(&self, cfg: &[i64], cfg_text: &[u8], ctl: &[i64], banks: &Banks, event: &[i64], completion: &[u8]) -> Vec<i64> {
+        self.step(cfg, cfg_text, ctl, banks, event, completion)
+    }
 }
 
 pub fn run<S: Sol>(sol: &S) {
@@ -2101,6 +2105,9 @@ fn run_one<S: Sol>(sol: &S, v: &Value) -> String {
     let begin = sol.begin(&cfg.words, &cfg.text);
     let mut ctl: Vec<i64>;
     let mut first: Option<Vec<i64>> = None;
+    // begin admitted this cfg iff it answered a step packet (a refused cfg is a done packet: no step follows);
+    // `cfg` is owned here and never changes during the case
+    let admitted = begin.len() != CTL_WORDS;
     if begin.len() == CTL_WORDS {
         ctl = begin;
     } else if begin.len() >= HEADER && begin[0] == MAGIC_STEP {
@@ -2120,6 +2127,7 @@ fn run_one<S: Sol>(sol: &S, v: &Value) -> String {
         }
         let pkt = match first.take() {
             Some(p) => p,
+            None if admitted => sol.step_admitted(&cfg.words, &cfg.text, &ctl, &banks, &event, &comp),
             None => sol.step(&cfg.words, &cfg.text, &ctl, &banks, &event, &comp),
         };
         let st = parse_step(&pkt);
