@@ -129,7 +129,7 @@ impl Analysis {
                     let v = self.expr(e, &scope); if v.is_some() { self.join(v, self.lookup.get(&StorageKey::Result(self.function.clone())).copied()); }
                 } }
                 Stmt::IndexAssign(x) => {
-                    if let Some(n) = scope.get(&x.name).copied().flatten() { self.out.objects.insert((std::any::type_name::<IndexAssign>(), x as *const IndexAssign as usize), self.keys[n].clone()); }
+                    if let Some(n) = scope.get(&x.name).copied().flatten().filter(|_| x.fields.is_empty()) { self.out.objects.insert((std::any::type_name::<IndexAssign>(), x as *const IndexAssign as usize), self.keys[n].clone()); }
                     self.expr(&x.index, &scope); self.expr(&x.value, &scope);
                 }
                 Stmt::If(x) => { self.expr(&x.cond, &scope); self.block(&x.then, &scope); self.block(&x.els, &scope); }

@@ -1038,6 +1038,14 @@ class Parser:
                 s.next()
                 v = s.expr(); s.expect(";")
                 return FieldAssign(L, C, n, path, v)
+            if s.at("["):
+                # LG4: element write through a field place `p.a.b[i] = e;` (one index level)
+                s.next()
+                idx = s.expr(); s.expect("]")
+                if s.at("="):
+                    s.next()
+                    v = s.expr(); s.expect(";")
+                    return IndexAssign(L, C, n, idx, v, None, tuple(path))
             s.i = save
         e = s.expr()
         s.expect(";")

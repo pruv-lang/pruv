@@ -1492,7 +1492,7 @@ impl Parser {
                 self.bump();
                 let v = self.expr()?;
                 self.expect(";")?;
-                return Ok(Stmt::IndexAssign(IndexAssign { line: l, col: c, name: n, index: idx, value: v, elem_refine: None }));
+                return Ok(Stmt::IndexAssign(IndexAssign { line: l, col: c, name: n, index: idx, value: v, elem_refine: None, fields: Vec::new() }));
             }
             self.i = save;
         }
@@ -1510,6 +1510,18 @@ impl Parser {
                 let v = self.expr()?;
                 self.expect(";")?;
                 return Ok(Stmt::FieldAssign(FieldAssign { line: l, col: c, name: n, fields: path, value: v }));
+            }
+            if self.at("[", 0) {
+                // LG4: element write through a field place `p.a.b[i] = e;` (one index level)
+                self.bump();
+                let idx = self.expr()?;
+                self.expect("]")?;
+                if self.at("=", 0) {
+                    self.bump();
+                    let v = self.expr()?;
+                    self.expect(";")?;
+                    return Ok(Stmt::IndexAssign(IndexAssign { line: l, col: c, name: n, index: idx, value: v, elem_refine: None, fields: path }));
+                }
             }
             self.i = save;
         }

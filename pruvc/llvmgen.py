@@ -1046,6 +1046,18 @@ class FnGen:
             ty = s.tt.fields(ty)[i].type
         return ptr
 
+    def field_ptr_ty(s, sl, path):
+        """LG4: (address of the field reached by `path` from the extended root slot sl, its declared type); a boxed
+        intermediate edge is loaded (as inout_struct_ptr does)"""
+        ptr, ty = sl.a, sl.ty
+        for field in path:
+            i = s.tt.field_index(ty, field)
+            ptr = g9_gep(s, lty(ty), ptr, i)
+            if s.fb(ty, None, field):
+                ptr = s.op("load ptr, ptr %s" % ptr)
+            ty = s.tt.fields(ty)[i].type
+        return ptr, ty
+
     def getf(s, base, ty, idx, fd, variant, c=False):
         """field value of the aggregate `base` (type ty) at storage index idx; a boxed field is a VIEW of the child
         node (a shallow load, never dropped through this value)"""
@@ -1948,7 +1960,18 @@ class FnGen:
             kind, sl = s.lookup(st.name)
             i = s.ev(st.index)      # index first, then value, in every mode
             v = s.ev(st.value)
-            a = sl if kind == "ssa" else s.load(sl)     # G5 A3: an inout parameter is a pointer view, stored through
+            if st.fields:
+                # LG4: `p.a.b[i] = e`: address of the buffer field along the path from the root slot (a local slot or
+                # the pointer of an inout struct parameter), then the data pointer and length are read from it
+                if kind != "slot":
+                    raise Exception("llvmgen: element store through non-local %s" % st.name)
+                gp, fty = s.field_ptr_ty(sl, st.fields)
+                dp = s.op("load ptr, ptr %s" % gp)
+                lp = s.op("getelementptr inbounds %s, ptr %s, i32 0, i32 1" % (ARR, gp))
+                ln = s.op("load i64, ptr %s" % lp)
+                a = V("arr", dp, ln, elem_ty(fty))
+            else:
+                a = sl if kind == "ssa" else s.load(sl)     # G5 A3: an inout parameter is a pointer view, stored through
             g = s.index_ptr(a, i)
             if a.layout != "i64":
                 ty = storage_ty(a)
@@ -2361,6 +2384,12 @@ class FnGen:
                     return v
                 return s.clone_val(v)
             return v
+        if isinstance(e, Move) and e.fields:    # LG4: move an owned buffer field out; the field becomes (null, 0, 0)
+            _, x = s.lookup(e.name)
+            gp, fty = s.field_ptr_ty(x, e.fields)
+            old = s.op("load %s, ptr %s" % (ARR, gp))
+            s.ins("store %s zeroinitializer, ptr %s" % (ARR, gp))
+            return s.unpack(old, fty, False)
         if isinstance(e, Move):   # G6 A3: load the owner slot, then null it
             _, x = s.lookup(e.name)
             v = s.load(x)

@@ -497,7 +497,11 @@ fn tree_count(t: Tree) -> i64
   you add up per-node values.
 - **Buffer fields.** `[i64]`, `[u8]`, `[bool]` and `str` may be fields of non-generic structs and payloads. Initialize
   or replace them with a fresh buffer (`alloc`, a literal string) or `copy(view)`; return a field buffer with `copy`.
-  `p.bytes[i] = v` is not allowed: copy the field into a mutable local, change it, and assign the field back.
+  `p.a[i] = v` writes one element of an array field in place, including through a nested path `p.s.a[i] = v`.
+  The root `p` must be a `let mut` local or an `inout` struct parameter and the field type `[i64]`, `[u8]` or
+  `[bool]` (`str` fields are `type/immutable_string`). The obligations and codes are those of `x[i] = v`
+  (`verify/index_oob`, `verify/elem_range` for `[u8]`); the length and the other fields are unchanged. With a
+  proved index both backends write without a runtime check; `--no-verify` keeps the bounds and byte guards.
 - R-6e-1 **Owned collection fields.** Non-generic structs and enum payloads may have `Vec<i64>`, `Vec<bool>`
   and `String` fields. Other collection fields are `type/foreign_owned_type` except as provided in
   R-6e-3, R-6e-5 and R-6e-6. Generic structs and enums cannot have collection fields.
@@ -673,7 +677,7 @@ fn tree_count(t: Tree) -> i64
   `type/foreign_move`; a struct of scalar and value fields only is a value aggregate and may be moved.
   Tests: [accept](tests/spec/r6e_12_take_aggregate.pruv),
   [reject](tests/spec/r6e_12_take_aggregate_after_move.pruv),
-  [reject plain record](tests/spec/r6e_12_move_plain_record.pruv). Array fields and indexed elements cannot be moved. Moving a plain or
+  [reject plain record](tests/spec/r6e_12_move_plain_record.pruv). Indexed elements cannot be moved; array fields move only under R-6e-16. Moving a plain or
   `inout` array parameter is `type/array_alias`; declare it `take` or make a copy.
   A `take x: [T]` parameter requires an explicit `move` argument.
   The source is dead until reassigned. A read after a definite or possible move is
@@ -748,7 +752,8 @@ fn tree_count(t: Tree) -> i64
   [missing effect](tests/spec/r6e_15_from_no_alloc.pruv), [non-text argument](tests/spec/r6e_15_from_non_text.pruv),
   [false postcondition](tests/spec/r6e_15_from_wrong_ensures.pruv), and [LLVM lowering](tests/spec/r6e_15_from_llvm.pruv).
 - R-6e-16 **Moving a field out.** For a receiver `p` mutable under R-6e-2, `p.g = move p.f;`
-  moves an owned `String`, `Vec<i64>` or `Vec<bool>` field to a disjoint field path of the same
+  moves an owned `String`, `Vec<i64>` or `Vec<bool>` field, or a buffer field `[i64]`, `[u8]` or `[bool]`,
+  to a disjoint field path of the same
   root and type. `let t: T = move p.f;` moves the field into an ordinary owned local of its type.
   Both forms support nested struct field paths. The immediately next statement in the same block
   must assign to exactly the moved path `p.f`. Its right-hand side may be an owning expression
@@ -762,7 +767,9 @@ fn tree_count(t: Tree) -> i64
   of R-6e-8 and R-6e-13.
   Rust emits `::std::mem::take(&mut p.f)` without cloning. The verifier reads the old field into
   the destination at zero cost and retains its symbolic source value until the restore.
-  Owned collection fields require the Rust backend.
+  Owned collection fields require the Rust backend. Buffer fields also lower to LLVM: the move copies the
+  field's `{ptr, len, cap}` into the destination and stores the empty array into the field without freeing,
+  and the restore is an ordinary field replacement. Any other array field move is `type/array_alias`.
   Tests cover [field transfer](tests/spec/r6e_16_move_field.pruv),
   [swapping](tests/spec/r6e_16_swap.pruv), [mutable collection views](tests/spec/r6e_16_in_get_mut.pruv),
   [missing restoration](tests/spec/r6e_16_not_restored.pruv) and [held paths](tests/spec/r6e_16_held_borrow.pruv).

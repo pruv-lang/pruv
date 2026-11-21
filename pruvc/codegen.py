@@ -2881,6 +2881,33 @@ class Gen:
             if s.boxed and s.path_boxed(st.name, st.fields):
                 stored = "::std::boxed::Box::new(pruv_v)"    # the assigned field is a recursive (Box) edge
             s.emit(ind, "{ %s%s; %s.%s = %s; }" % (decl, s.own_e(st.value), st.name, ".".join(st.fields), stored))
+        elif isinstance(st, IndexAssign) and st.fields:
+            # LG4: `p.a.b[i] = e` on the place `p.a.b` (auto-deref through `&mut S` and Box edges)
+            place = "%s.%s" % (st.name, ".".join(st.fields))
+            fty = s.vt.get(st.name)
+            for fname in st.fields:
+                decl = s.table.decls.get(fty.name) if fty is not None else None
+                fty = next((fd.type for fd in decl.fields if fd.name == fname), None) if isinstance(decl, StructDecl) else None
+            if is_bool_array(fty):
+                if s.verified:
+                    s.emit(ind, "{ let pruv_i: i64 = %s; let pruv_x: bool = %s; unsafe { *%s.get_unchecked_mut(pruv_i as usize) = pruv_x; } }" %
+                           (s.e(st.index), s.e(st.value), place))
+                else:
+                    s.emit(ind, "{ let pruv_i: i64 = %s; let pruv_x: bool = %s; pruv_set_bool(&mut %s, pruv_i, pruv_x); }" %
+                           (s.e(st.index), s.e(st.value), place))
+            elif is_u8_array(fty):
+                if s.verified:
+                    s.emit(ind, "{ let pruv_i: i64 = %s; let pruv_x: i64 = %s; unsafe { *%s.get_unchecked_mut(pruv_i as usize) = pruv_x as u8; } }" %
+                           (s.e(st.index), s.e(st.value), place))
+                else:
+                    s.emit(ind, "{ let pruv_i: i64 = %s; let pruv_x: i64 = %s; pruv_set_u8(&mut %s, pruv_i, pruv_x); }" %
+                           (s.e(st.index), s.e(st.value), place))
+            elif s.verified:
+                s.emit(ind, "{ let pruv_i: i64 = %s; let pruv_x: i64 = %s; unsafe { *%s.get_unchecked_mut(pruv_i as usize) = pruv_x; } }" %
+                       (s.e(st.index), s.e(st.value), place))
+            else:
+                s.emit(ind, "{ let pruv_i: i64 = %s; let pruv_x: i64 = %s; pruv_set(&mut %s, pruv_i, pruv_x); }" %
+                       (s.e(st.index), s.e(st.value), place))
         elif isinstance(st, IndexAssign):
             if is_bool_array(s.vt.get(st.name)):  # G2 A5
                 if s.verified:

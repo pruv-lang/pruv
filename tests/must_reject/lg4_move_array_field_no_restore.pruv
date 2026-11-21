@@ -1,0 +1,8 @@
+struct P { n: i64, a: [u8] }
+
+fn run() -> () ! alloc {
+  let b: [u8] = alloc(2, 0);
+  let mut p: P = P { n: 1, a: move b };
+  let t: [u8] = move p.a;
+  p.n = 2;
+}

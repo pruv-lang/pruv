@@ -1,0 +1,43 @@
+struct S { n: i64, a: [u8], w: [i64] }
+struct D { sub: S, tag: i64 }
+
+fn poke(inout s: S, i: i64, v: i64) -> ()
+  requires 0 <= i && i < len(s.a) && i < len(s.w) && 0 <= v && v <= 255 && len(s.a) == 3 && len(s.w) == 3
+  ensures s.a[i] == v && s.w[i] == v + 100 && len(s.a) == 3 && len(s.w) == 3
+{
+  s.a[i] = v;
+  s.w[i] = v + 100;
+}
+
+fn run() -> () ! io, alloc {
+  let a: [u8] = alloc(3, 0);
+  let mut s: S = S { n: 5, a: move a, w: alloc(3, 1) };
+  s.a[1] = 200;
+  s.w[2] = 77;
+  print(s.a[0]);
+  print(s.a[1]);
+  print(s.a[2]);
+  print(s.w[0]);
+  print(s.w[1]);
+  print(s.w[2]);
+  print(s.n);
+  poke(inout s, 0, 9);
+  print(s.a[0]);
+  print(s.w[0]);
+  print(s.a[1]);
+  print(s.w[2]);
+
+  let b: [u8] = alloc(3, 0);
+  let mut d: D = D { sub: S { n: 6, a: move b, w: alloc(3, 2) }, tag: 42 };
+  d.sub.a[1] = 33;
+  d.sub.w[0] = 44;
+  poke(inout d.sub, 2, 250);
+  print(d.sub.a[0]);
+  print(d.sub.a[1]);
+  print(d.sub.a[2]);
+  print(d.sub.w[0]);
+  print(d.sub.w[1]);
+  print(d.sub.w[2]);
+  print(d.sub.n);
+  print(d.tag);
+}

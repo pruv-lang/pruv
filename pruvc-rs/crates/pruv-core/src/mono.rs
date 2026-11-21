@@ -763,6 +763,7 @@ impl<'a> Mono<'a> {
                     index,
                     value,
                     elem_refine: x.elem_refine.clone(),
+                    fields: x.fields.clone(),
                 })
             }
             Stmt::If(x) => {

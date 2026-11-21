@@ -311,6 +311,9 @@ pub fn stmt(s: &Stmt) -> Json {
             if let Some((lo, hi, what)) = &x.elem_refine {
                 f.push(("elem_refine", Json::Arr(vec![js(lo), js(hi), js(what)])));
             }
+            if !x.fields.is_empty() {
+                f.push(("fields", strs(&x.fields)));   // LG4: written only for `p.a[i] = v` (as Move.fields)
+            }
             node("IndexAssign", Some((x.line, x.col)), f)
         }
         Stmt::If(x) => if_node(x),

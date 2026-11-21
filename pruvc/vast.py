@@ -245,6 +245,8 @@ class IndexAssign(Stmt):
     # set only by refine.py on a store into a refined array with an element range:
     # [lo, hi, origin_what] (ints, str). verify proves `lo <= value <= hi` after the index_oob obligation.
     elem_refine: Optional[list] = None
+    # LG4: `s.a.b[i] = v` -> name="s", fields=("a", "b"); empty for the plain `x[i] = v`
+    fields: tuple = ()
 
 @dataclass
 class If(Stmt):

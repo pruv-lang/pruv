@@ -1,0 +1,22 @@
+// LG4 G-R03D-1: close writes slot 6*r+4, which can lie in the counted range, so the old count must not carry over.
+fn close(inout tape: [i64], r: i64, e: i64) -> bool
+  ensures len(tape) == len(old(tape))
+  ensures result ==> (0 <= r && 6 * r + 6 <= len(tape))
+  ensures result ==> (forall i in 0..len(tape): (i != 6 * r + 4 ==> tape[i] == old(tape)[i]))
+  ensures !result ==> (forall i in 0..len(tape): tape[i] == old(tape)[i])
+{
+  if r < 0 || r >= 1048576 { return false; }
+  if len(tape) - 6 * r < 6 { return false; }
+  tape[6 * r + 4] = e;
+  return true;
+}
+fn probe(inout tape: [i64], q: i64, j: i64, x: i64, c: i64) -> i64
+  requires 0 <= q && q < j && 6 * j <= len(tape) && len(tape) <= 6291456
+  requires 0 <= x && x < 1048576
+  requires c == count(k in q + 1..j: tape[6 * k + 4] == q)
+{
+  let ok: bool = close(inout tape, x, 5);
+  assert c == count(k in q + 1..j: tape[6 * k + 4] == q);
+  return c;
+}
+fn main() -> i64 { return 0; }

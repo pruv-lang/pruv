@@ -123,7 +123,7 @@ OPTIONAL_FIELDS = {
     "Function": ("ret_refine",),
     "Let": ("refine",),
     "Assert": ("origin_code", "origin_what"),
-    "IndexAssign": ("elem_refine",),
+    "IndexAssign": ("elem_refine", "fields"),   # LG4: fields written only when non-empty (as dump.rs)
     "Quant": ("triggers",),   # R-6-3: written only when non-empty (as dump.rs)
 }
 # abstract bases / value types of vast.py that are not nodes
@@ -247,7 +247,7 @@ def ser(v):
         out[f] = ser(getattr(v, f))
     for f in OPTIONAL_FIELDS.get(name, ()):
         x = getattr(v, f)
-        if name in ("Move", "Quant"):
+        if name in ("Move", "Quant") or (name, f) == ("IndexAssign", "fields"):
             x = list(x) if x else None
         if x is not None:
             out[f] = ser(x)
