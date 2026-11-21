@@ -12,15 +12,24 @@ enum Block { Piece(text: str), Ignore, Veto, Broken(kind: i64) }
 pub fn parse_line(data: [u8], start: i64, end: i64) -> Line ! alloc
   requires 0 <= start && start <= end && end <= len(data)
 {
-  let parsed: crate::json::JsonParse = crate::lines::parse_range(data, start, end);
-  match parsed {
-    crate::json::JsonParse::Parsed(d) => {
-      if crate::access::kind(d, crate::access::root(d)) == 6 { return Line::Object(d); }
+  // DB16: lines::parse_range inlined over a borrowed view (R-6g-5). Validation and the scan read
+  // data[start..end) in place; only an object line copies its bytes, once, and takes the tape by move.
+  // Every non-InternalInvariant failure of parse_range maps to Skip, so its error positions are not built.
+  let n: i64 = end - start;
+  if n > crate::json::limit_input_bytes() { return Line::Skip; }
+  if crate::lex::validate_utf8(data, start, end) >= 0 { return Line::Skip; }
+  let checked: crate::parse::Checked = crate::parse::scan(subview(data, start, end));
+  match checked {
+    crate::parse::Checked::Rejected(position, kind) => {
+      if kind == crate::json::err_internal_invariant() { return Line::Defect(position); }
       return Line::Skip;
     }
-    crate::json::JsonParse::Failed(error) => {
-      if error.kind == crate::json::err_internal_invariant() { return Line::Defect(error.position); }
-      return Line::Skip;
+    crate::parse::Checked::Tape(tape) => {
+      if !crate::json::check_tape(tape, n) { return Line::Defect(0); }
+      if len(tape) < 6 || tape[0] != 6 { return Line::Skip; }
+      let mut owned: [u8] = alloc(n, 0);
+      copy_range(inout owned, 0, data, start, n);
+      return Line::Object(crate::json::JsonDocument { source: move owned, tape: copy(tape) });
     }
   }
 }
