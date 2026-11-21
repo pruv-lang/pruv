@@ -1223,6 +1223,7 @@ struct Gen<'a> {
     printed: bool,
     /// P2 batch 4: load_be used in a runtime contract (pruv_cload_be helper)
     need_load_be: bool,
+    need_load_le: bool,
     /// G9 A2: the diagnostic raised by g9_unsupported (the R error is only a marker)
     diag: Option<PruvError>,
     /// G4 A2 (explicit visibility mode, docs/G4_SPEC.md 4): only host entries are `pub`. Verified: just the entries that have
@@ -1373,6 +1374,7 @@ impl<'a> Gen<'a> {
             need_shift: HashSet::new(),
             printed: false,
             need_load_be: false,
+            need_load_le: false,
             diag: None,
             lg: HashSet::new(),
             body_named: HashSet::new(),
@@ -2848,13 +2850,19 @@ impl<'a> Gen<'a> {
                     let i0 = self.c(arg(a, 1)?)?;
                     return Ok(format!("pruv_cboundary({}, {})", s0, i0));
                 }
-                if n == "load_be" {
-                    // P2 batch 4: bounds checked inside the helper
-                    self.need_load_be = true;
+                if matches!(n, "load_be" | "load_le") {
+                    if n == "load_le" {
+                        self.need_load_le = true;
+                    } else {
+                        self.need_load_be = true;
+                    }
                     let nb = crate::check::word_width(arg(a, 2)?).unwrap_or(0);
                     let a0 = self.carr(arg(a, 0)?)?;
                     let a1 = self.c(arg(a, 1)?)?;
-                    return Ok(format!("pruv_cload_be({}, {}, {})", a0, a1, nb));
+                    return Ok(format!("pruv_c{}({}, {}, {})", n, a0, a1, nb));
+                }
+                if n == "utf8_valid" {
+                    return Ok(format!("::core::str::from_utf8({}).is_ok()", self.carr(arg(a, 0)?)?));
                 }
                 if bit_rust(n).is_some() {
                     // P2: i128 arguments checked inside i64 by the helper
@@ -4685,8 +4693,8 @@ impl<'a> Gen<'a> {
                         head, name, name, name
                     ));
                 }
-                if n == "load_be" {
-                    // P2 batch 4: big-endian word of a[i..i+nb]; unchecked slice when verified
+                if matches!(n, "load_be" | "load_le") {
+                    let order = &n[n.len() - 2..];
                     let nb = crate::check::word_width(arg(a, 2)?).unwrap_or(0);
                     let chk = if self.verified {
                         String::new()
@@ -4700,20 +4708,20 @@ impl<'a> Gen<'a> {
                         format!("&pruv_a[{}]", rng)
                     };
                     let tail = if nb == 8 {
-                        format!("i64::from_be_bytes(<[u8; 8] as ::std::convert::TryFrom<&[u8]>>::try_from({}).unwrap())", sl)
+                        format!("i64::from_{}_bytes(<[u8; 8] as ::std::convert::TryFrom<&[u8]>>::try_from({}).unwrap())", order, sl)
                     } else {
+                        let byte_range = if order == "le" { format!("..{}", nb) } else { format!("{}..", 8 - nb) };
                         format!(
-                            "let mut pruv_w = [0u8; 8]; pruv_w[{}..].copy_from_slice({}); u64::from_be_bytes(pruv_w) as i64",
-                            8 - nb,
-                            sl
+                            "let mut pruv_w = [0u8; 8]; pruv_w[{}].copy_from_slice({}); u64::from_{}_bytes(pruv_w) as i64",
+                            byte_range, sl, order
                         )
                     };
                     let a0 = self.arr_ref(arg(a, 0)?)?;
                     let a1 = self.e(arg(a, 1)?)?;
                     return Ok(format!("{{ let pruv_a: &[u8] = {}; let pruv_i: i64 = {}; {}{} }}", a0, a1, chk, tail));
                 }
-                if n == "store_be" {
-                    // P2 batch 4: low 8*nb bits of w, big-endian, into a[i..i+nb]
+                if matches!(n, "store_be" | "store_le") {
+                    let order = &n[n.len() - 2..];
                     let nb = crate::check::word_width(arg(a, 3)?).unwrap_or(0);
                     let name = match arg(a, 0)? {
                         Expr::InoutArg(ia) => match ia.expr.as_ref() {
@@ -4738,13 +4746,10 @@ impl<'a> Gen<'a> {
                     };
                     let a1 = self.e(arg(a, 1)?)?;
                     let a2 = self.e(arg(a, 2)?)?;
+                    let byte_range = if order == "le" { format!("..{}", nb) } else { format!("{}..", 8 - nb) };
                     return Ok(format!(
-                        "{{ let pruv_i: i64 = {}; let pruv_w: i64 = {}; {}{}.copy_from_slice(&(pruv_w as u64).to_be_bytes()[{}..]); }}",
-                        a1,
-                        a2,
-                        chk,
-                        dst,
-                        8 - nb
+                        "{{ let pruv_i: i64 = {}; let pruv_w: i64 = {}; {}{}.copy_from_slice(&(pruv_w as u64).to_{}_bytes()[{}]); }}",
+                        a1, a2, chk, dst, order, byte_range
                     ));
                 }
                 if n == "print" {
@@ -4778,6 +4783,20 @@ impl<'a> Gen<'a> {
                     let a0 = self.e(arg(a, 0)?)?;
                     let a1 = self.e(arg(a, 1)?)?;
                     return Ok(format!("({} {} {})", a0, op, a1));
+                }
+                if n == "utf8_valid" {
+                    return Ok(format!("::core::str::from_utf8({}).is_ok()", self.arr_ref(arg(a, 0)?)?));
+                }
+                if n == "str_from_utf8" {
+                    let b = self.arr_ref(arg(a, 0)?)?;
+                    if self.verified {
+                        return Ok(format!("{{ let pruv_b: &[u8] = {}; unsafe {{ ::std::string::String::from_utf8_unchecked(pruv_b.to_vec()) }} }}", b));
+                    }
+                    return Ok(format!(concat!(
+                        "{{ let pruv_b: &[u8] = {}; match ::core::str::from_utf8(pruv_b) {{ ",
+                        "Ok(pruv_s) => ::std::string::String::from(pruv_s), ",
+                        "Err(_) => panic!(\"pruv: invalid UTF-8 (len {{}})\", pruv_b.len()), }} }}"
+                    ), b));
                 }
                 if n == "substr" {
                     // G2 B2: argument evaluation order s -> lo -> hi
@@ -5158,6 +5177,11 @@ fn gen_rust_concrete_core(
         .collect();
     drop(g.out.splice(mark..mark, shift_texts));
     // P2 batch 4: the load_be contract helper, when a runtime contract used it
+    if g.need_load_le {
+        let helper = CONTRACT_LOAD_HELPER.replace("pruv_cload_be", "pruv_cload_le")
+            .replace("for k in 0..n", "for k in (0..n).rev()");
+        drop(g.out.splice(mark..mark, vec![helper]));
+    }
     if g.need_load_be {
         drop(g.out.splice(mark..mark, vec![CONTRACT_LOAD_HELPER.to_string()]));
     }

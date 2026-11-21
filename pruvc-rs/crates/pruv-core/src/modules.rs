@@ -25,9 +25,9 @@ use std::path::{Path, PathBuf};
 type Res<T> = Result<T, PruvError>;
 
 /// vparser / check names that a function may not carry (check.py BUILTIN_FNS).
-const BUILTIN_FNS: [&str; 20] = [
+const BUILTIN_FNS: [&str; 24] = [
     "len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "band", "bor", "bxor", "wrapping_shl",
-    "ushr", "wrapping_add", "wrapping_mul", "load_be", "store_be",
+    "ushr", "wrapping_add", "wrapping_mul", "load_be", "store_be", "load_le", "store_le", "utf8_valid", "str_from_utf8",
     "eq_range", // L3-10: eq_range
     "resize",   // P05G
     "copy_range", // L-copy-range

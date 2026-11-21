@@ -1,0 +1,7 @@
+// spec: R-6b-1 reject
+fn convert(inout b: [u8]) -> str ! alloc
+  requires 1 <= len(b) && utf8_valid(b)
+{
+  b[0] = 128;
+  return str_from_utf8(b);
+}

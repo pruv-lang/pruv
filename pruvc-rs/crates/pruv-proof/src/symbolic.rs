@@ -251,7 +251,7 @@ fn partial_here(e: &Expr, kind: PKind) -> bool {
         Expr::Index(_) => true,
         Expr::Binary(b) => b.op == "/" || b.op == "%",
         Expr::Call(c) => {
-            is_tag_fn(&c.name) || c.name == "file_byte" || is_bit_z3(&c.name) || c.name == "load_be" || is_proc_dom(&c.name)
+            is_tag_fn(&c.name) || c.name == "file_byte" || is_bit_z3(&c.name) || matches!(c.name.as_str(), "load_be" | "load_le") || is_proc_dom(&c.name)
                 || is_net_dom(&c.name) || is_async_dom(&c.name)
         }
         Expr::Quant(q) => q.kind == "max" || q.kind == "min",
@@ -2436,8 +2436,7 @@ impl<'a> FnVerifier<'a> {
                 self.post_refine(e, &[0], st, g)?;
                 return Ok(Val::Unit);
             }
-            "load_be" => {
-                // P2 batch 4: big-endian word of the nb bytes a[i..i+nb]
+            "load_be" | "load_le" => {
                 let av = arg(0)?.try_arr()?.clone();
                 let i = arg(1)?.try_ast()?.clone();
                 let nb = lit_width(&x.args[2]);
@@ -2453,9 +2452,10 @@ impl<'a> FnVerifier<'a> {
                         None,
                     );
                 }
-                let mut cat = av.a.select(&i.add_i(0)).int2bv(8);
+                let offset = |k| if n == "load_le" { nb - 1 - k } else { k };
+                let mut cat = av.a.select(&i.add_i(offset(0))).int2bv(8);
                 for k in 1..nb {
-                    let b = av.a.select(&i.add_i(k)).int2bv(8);
+                    let b = av.a.select(&i.add_i(offset(k))).int2bv(8);
                     cat = cat.concat(&b);
                 }
                 let u = cat.bv2int(false);
@@ -2470,8 +2470,7 @@ impl<'a> FnVerifier<'a> {
                 };
                 return Ok(Val::Int(r));
             }
-            "store_be" => {
-                // P2 batch 4: nb array stores a[i+k] := band(ushr(w, 8*(nb-1-k)), 255)
+            "store_be" | "store_le" => {
                 let av = arg(0)?.try_arr()?.clone();
                 let i = arg(1)?.try_ast()?.clone();
                 let w = arg(2)?.try_ast()?.clone();
@@ -2489,7 +2488,7 @@ impl<'a> FnVerifier<'a> {
                 let wb = w.int2bv(64);
                 let mut arr = av.a.clone();
                 for k in 0..nb {
-                    let sh = (8 * (nb - 1 - k)) as u32;
+                    let sh = (8 * if n == "store_le" { k } else { nb - 1 - k }) as u32;
                     let byte = wb.extract(sh + 7, sh).bv2int(false);
                     arr = arr.store(&i.add_i(k), &byte);
                 }
@@ -2570,6 +2569,25 @@ impl<'a> FnVerifier<'a> {
                     }
                 }
                 return Ok(Val::Int(r));
+            }
+            "utf8_valid" => {
+                let b = arg(0)?.try_arr()?;
+                return Ok(Val::Bool(self.model.utf8_valid(&b.n, &b.a)));
+            }
+            "str_from_utf8" => {
+                let b = arg(0)?.try_arr()?;
+                let ob = self.model.utf8_valid(&b.n, &b.a);
+                self.prove_core(&st, g, &ob, pos(e), "utf8_invalid",
+                    &format!("valid UTF-8 bytes in {}", b.name), None);
+                let res_v = self.try_fresh("str_from_utf8", &Ty::Str)?;
+                let res = res_v.try_arr()?;
+                self.assume(st, g, res.n.eq(&b.n));
+                let k = self.z.int_const("str!k");
+                let rng = self.z.and(&[k.ge_i(0), k.lt(&res.n)]);
+                let body = res.a.select(&k).eq(&b.a.select(&k));
+                let fa = self.z.forall(std::slice::from_ref(&k), &rng.implies(&body), &[]);
+                self.assume(st, g, fa);
+                return Ok(res_v);
             }
             "substr" => {
                 // G2 B1: range → bounds → new result → length assumption → byte-relation assumption.
@@ -3988,7 +4006,7 @@ impl<'a> FnVerifier<'a> {
                     let i = self.ev_ast(&x.args[1], st, g, false, env)?;
                     parts.push(Some(self.z.and(&[i.ge_i(0), i.lt(&sv.try_sock()?.buf.n)])));
                 }
-                if wo && x.name == "load_be" {
+                if wo && matches!(x.name.as_str(), "load_be" | "load_le") {
                     // P2 batch 4: the word lies inside the array
                     let arr = self.ev(&x.args[0], st, g, false, env)?;
                     let arr = arr.try_arr()?.clone();

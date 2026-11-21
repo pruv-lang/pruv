@@ -1,0 +1,24 @@
+// G-R05-2: a local [u8] moves into a result struct field without copy (R-6e-12); the caller knows its length
+// and elements from the callee's ensures.
+struct W { tag: i64, bytes: [u8] }
+
+fn build(n: i64) -> W ! alloc
+  requires 1 <= n && n <= 16
+  ensures len(result.bytes) == n && result.bytes[0] == 7 && result.tag == n
+{
+  let mut b: [u8] = alloc(n, 0);
+  b[0] = 7;
+  let mut i: i64 = 1;
+  while i < n invariant 1 <= i && i <= n && len(b) == n && b[0] == 7 decreases n - i
+  { b[i] = i; i = i + 1; }
+  return W { tag: n, bytes: move b };
+}
+
+fn run() -> () ! io, alloc {
+  let w: W = build(5);
+  print(w.tag);
+  print(len(w.bytes));
+  let mut k: i64 = 0;
+  while k < len(w.bytes) invariant 0 <= k && k <= len(w.bytes) decreases len(w.bytes) - k
+  { print(w.bytes[k]); k = k + 1; }
+}

@@ -312,6 +312,8 @@ CONTRACT_LOAD_HELPER = (
     "fn pruv_cload_be(a: &[u8], i: i128, n: usize) -> i128 { if i < 0 || i > (a.len() as i128) - (n as i128) "
     "{ pruv_ud(\"array index out of range\") } let mut w: u64 = 0; "
     "for k in 0..n { w = (w << 8) | (a[(i as usize) + k] as u64); } ((w as i64) as i128) }\n")
+CONTRACT_LOAD_LE_HELPER = CONTRACT_LOAD_HELPER.replace("pruv_cload_be", "pruv_cload_le").replace(
+    "for k in 0..n", "for k in (0..n).rev()")
 # P2 batch 2: shifts need 0 <= k < 64; --no-verify uses these helpers (included only when used, table order)
 SHIFT_SAFE = {n: {"<<": "pruv_shl", ">>": "pruv_ushr"}[rust] for n, rust in BIT_RUST.items() if rust in ("<<", ">>")}
 SAFE_SHIFT_HELPER = (
@@ -1564,6 +1566,7 @@ class Gen:
         s.need_bits = set()  # P2: band/bor/bxor used in a runtime contract (filled while contracts are generated)
         s.need_shift = set()  # P2 batch 2: shifts used in code under --no-verify (pruv_shl / pruv_ushr helpers)
         s.printed = False  # P13a.10: print lowers to println!, which panics when stdout fails (raw_unwind_free)
+        s.need_load_le = False
         s.need_load_be = False  # P2 batch 4: load_be used in a runtime contract (pruv_cload_be helper)
         # T0 (TIDY_SPEC 4.8 item 4): `lg` = functions without a requires whose public Rust item takes an array or str
         # (legacy: every non-private function; explicit mode: host entries). Like a function with a requires, such a
@@ -2427,9 +2430,14 @@ class Gen:
                                                                   s.c(a[2]), s.c(a[3]))
             if n == "is_char_boundary":  # G2 B2
                 return "pruv_cboundary(%s, %s)" % (s.carr(a[0]), s.c(a[1]))
-            if n == "load_be":   # P2 batch 4: bounds checked inside the helper
-                s.need_load_be = True
-                return "pruv_cload_be(%s, %s, %d)" % (s.carr(a[0]), s.c(a[1]), a[2].value)
+            if n in ("load_be", "load_le"):
+                if n == "load_le":
+                    s.need_load_le = True
+                else:
+                    s.need_load_be = True
+                return "pruv_c%s(%s, %s, %d)" % (n, s.carr(a[0]), s.c(a[1]), a[2].value)
+            if n == "utf8_valid":
+                return "::core::str::from_utf8(%s).is_ok()" % s.carr(a[0])
             if n in BIT_RUST:   # P2: i128 arguments checked inside i64 by the helper
                 s.need_bits.add(n)
                 return "pruv_c%s(%s, %s)" % (n, s.c(a[0]), s.c(a[1]))
@@ -3445,27 +3453,31 @@ class Gen:
                 return ("%sif pruv_i < 0 || pruv_n < 0 || pruv_i > (%s.len() as i64) - pruv_n { pruv_oob(pruv_i, %s.len()) } "
                         "if pruv_j < 0 || pruv_j > (pruv_cs.len() as i64) - pruv_n { pruv_oob(pruv_j, pruv_cs.len()) } "
                         "%s[%s].copy_from_slice(&pruv_cs[%s]); }" % (head, name, name, name, ri, rj))
-            if n == "load_be":   # P2 batch 4: big-endian word of a[i..i+nb]; unchecked slice when verified
+            if n in ("load_be", "load_le"):
+                order = n[-2:]
                 nb = a[2].value
                 chk = "" if s.verified else ("if pruv_i < 0 || (pruv_i as u64) + %d > (pruv_a.len() as u64) "
                                              "{ pruv_oob(pruv_i, pruv_a.len()) } " % nb)
                 rng = "(pruv_i as usize)..((pruv_i as usize) + %d)" % nb
                 sl = "unsafe { pruv_a.get_unchecked(%s) }" % rng if s.verified else "&pruv_a[%s]" % rng
                 if nb == 8:
-                    word = ("i64::from_be_bytes(<[u8; 8] as ::std::convert::TryFrom<&[u8]>>::try_from(%s).unwrap())" % sl)
+                    word = ("i64::from_%s_bytes(<[u8; 8] as ::std::convert::TryFrom<&[u8]>>::try_from(%s).unwrap())" % (order, sl))
                     tail = word
                 else:
-                    tail = ("let mut pruv_w = [0u8; 8]; pruv_w[%d..].copy_from_slice(%s); u64::from_be_bytes(pruv_w) as i64"
-                            % (8 - nb, sl))
+                    byte_range = "..%d" % nb if order == "le" else "%d.." % (8 - nb)
+                    tail = ("let mut pruv_w = [0u8; 8]; pruv_w[%s].copy_from_slice(%s); u64::from_%s_bytes(pruv_w) as i64"
+                            % (byte_range, sl, order))
                 return "{ let pruv_a: &[u8] = %s; let pruv_i: i64 = %s; %s%s }" % (s.arr_ref(a[0]), s.e(a[1]), chk, tail)
-            if n == "store_be":  # P2 batch 4: low 8*nb bits of w, big-endian, into a[i..i+nb]
+            if n in ("store_be", "store_le"):
+                order = n[-2:]
                 nb, name = a[3].value, a[0].expr.name
                 chk = "" if s.verified else ("if pruv_i < 0 || (pruv_i as u64) + %d > (%s.len() as u64) "
                                              "{ pruv_oob(pruv_i, %s.len()) } " % (nb, name, name))
                 rng = "(pruv_i as usize)..((pruv_i as usize) + %d)" % nb
                 dst = "unsafe { %s.get_unchecked_mut(%s) }" % (name, rng) if s.verified else "%s[%s]" % (name, rng)
-                return ("{ let pruv_i: i64 = %s; let pruv_w: i64 = %s; %s%s.copy_from_slice(&(pruv_w as u64).to_be_bytes()[%d..]); }"
-                        % (s.e(a[1]), s.e(a[2]), chk, dst, 8 - nb))
+                byte_range = "..%d" % nb if order == "le" else "%d.." % (8 - nb)
+                return ("{ let pruv_i: i64 = %s; let pruv_w: i64 = %s; %s%s.copy_from_slice(&(pruv_w as u64).to_%s_bytes()[%s]); }"
+                        % (s.e(a[1]), s.e(a[2]), chk, dst, order, byte_range))
             if n == "print":
                 s.printed = True
                 return 'println!("{}", %s)' % s.e(a[0])
@@ -3480,6 +3492,15 @@ class Gen:
                 return "(%s).%s(%s)" % (s.e(a[0]), n, s.e(a[1]))
             if n in BIT_RUST:  # P2: no overflow possible, same text with and without --no-verify
                 return "(%s %s %s)" % (s.e(a[0]), BIT_RUST[n], s.e(a[1]))
+            if n == "utf8_valid":
+                return "::core::str::from_utf8(%s).is_ok()" % s.arr_ref(a[0])
+            if n == "str_from_utf8":
+                b = s.arr_ref(a[0])
+                if s.verified:
+                    return "{ let pruv_b: &[u8] = %s; unsafe { ::std::string::String::from_utf8_unchecked(pruv_b.to_vec()) } }" % b
+                return ('{ let pruv_b: &[u8] = %s; match ::core::str::from_utf8(pruv_b) { '
+                        'Ok(pruv_s) => ::std::string::String::from(pruv_s), '
+                        'Err(_) => panic!("pruv: invalid UTF-8 (len {})", pruv_b.len()), } }') % b
             if n == "substr":  # G2 B2
                 if not s.verified:
                     return "pruv_substr(%s, %s, %s)" % (s.arr_ref(a[0]), s.e(a[1]), s.e(a[2]))
@@ -3824,6 +3845,8 @@ def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=N
     # P2 batch 2: --no-verify shift helpers used by the code, in table order
     g.out[mark:mark] = [SAFE_SHIFT_HELPER % (SHIFT_SAFE[n], BIT_RUST[n]) for n in SHIFT_SAFE if n in g.need_shift]
     # P2 batch 4: the load_be contract helper, when a runtime contract used it
+    if g.need_load_le:
+        g.out[mark:mark] = [CONTRACT_LOAD_LE_HELPER]
     if g.need_load_be:
         g.out[mark:mark] = [CONTRACT_LOAD_HELPER]
     manifest = None

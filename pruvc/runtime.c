@@ -84,6 +84,7 @@ _Noreturn void pruv_panic_elem(int64_t v, const char *range);
 _Noreturn void pruv_panic_repr(int64_t v, const char *what);
 void pruv_check_bool(const uint8_t *data, int64_t len);
 _Noreturn void pruv_panic_slice(const char *what, int64_t lo, int64_t hi, int64_t len);
+_Noreturn void pruv_panic_utf8(int64_t len);
 int32_t pruv_str_boundary(const uint8_t *data, int64_t len, int64_t i);
 void *pruv_substr(const uint8_t *data, int64_t len, int64_t lo, int64_t hi);
 void pruv_check_utf8(const uint8_t *data, int64_t len);
@@ -450,6 +451,11 @@ void pruv_check_bool(const uint8_t *data, int64_t len) {
     for (int64_t k = 0; k < len; k++)
         if (data[k] > 1)
             pruv_panic_repr((int64_t)data[k], "bool 0..=1");
+}
+
+_Noreturn void pruv_panic_utf8(int64_t len) {
+    fprintf(stderr, "pruv: invalid UTF-8 (len %" PRId64 ")\n", len);
+    exit(101);
 }
 
 int32_t pruv_str_boundary(const uint8_t *data, int64_t len, int64_t i) {
