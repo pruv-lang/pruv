@@ -1,0 +1,22 @@
+// G-DB16-1: the match that moved a binder consumed its scrutinee, so a later read is a use after move
+enum Tape { Bytes(tape: [u8]) }
+
+fn make() -> Tape ! alloc {
+  let b: [u8] = alloc(2, 1);
+  return Tape::Bytes(move b);
+}
+
+fn run() -> i64 ! alloc {
+  let e: Tape = make();
+  let mut n: i64 = 0;
+  match e {
+    Tape::Bytes(tape) => {
+      let t: [u8] = move tape;
+      n = len(t);
+    }
+  }
+  match e {
+    Tape::Bytes(tape) => { n = n + len(tape); }
+  }
+  return n;
+}

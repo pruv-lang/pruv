@@ -1,0 +1,10 @@
+// G-R09-4: a record whose field is moved without a restore on one path may be moved after the join
+struct D { n: i64, a: [i64] }
+
+fn run(flag: bool) -> i64 ! alloc {
+  let mut d: D = D { n: 1, a: alloc(2, 3) };
+  if flag {
+    let t: [i64] = move d.a;
+  }
+  return d.n;
+}

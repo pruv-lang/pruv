@@ -1,0 +1,1 @@
+{"backends": ["rust", "llvm"], "flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["5", "3", "2", "8"], "alloc_balance": true}

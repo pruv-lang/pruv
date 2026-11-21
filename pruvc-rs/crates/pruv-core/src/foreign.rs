@@ -871,6 +871,13 @@ pub type Takes = HashMap<String, Vec<bool>>;
 struct Ownership<'a> {
     funcs: &'a Takes,
     aggregates: &'a HashSet<String>,
+    /// G-DB16-1 / G-R09-4: non-generic user enum and struct names (such a local is tracked so a binder move or a
+    /// consuming field move can consume it)
+    enums: &'a HashSet<String>,
+    /// G-DB16-1: (enum, variant) -> field type keys of the program's non-generic user enums
+    variants: &'a HashMap<(String, String), Vec<String>>,
+    /// G-R09-4: position of the `move d.a` of a `let` that no next statement restores
+    consumed_field: Option<(i64, i64)>,
     map_binders: Vec<String>,
     bor: HashSet<String>,
     /// binders of the user-enum match arms being checked (payload views; only owned collection fields are collections)
@@ -939,8 +946,18 @@ impl<'a> Ownership<'a> {
     fn block(&mut self, stmts: &[Stmt], st: St) -> Res<Option<St>> {
         let mut declared: Vec<String> = Vec::new();
         let mut cur: Option<St> = Some(st);
-        for x in stmts {
+        for (i, x) in stmts.iter().enumerate() {
             if let Some(s) = cur.take() {
+                self.consumed_field = None;
+                if let Stmt::Let(l) = x {
+                    if let Expr::Move(m) = &l.value {
+                        let restored = matches!(stmts.get(i + 1), Some(Stmt::FieldAssign(r))
+                            if r.name == m.name && r.fields == m.fields);
+                        if !m.fields.is_empty() && !restored {
+                            self.consumed_field = Some((m.line, m.col)); // G-R09-4
+                        }
+                    }
+                }
                 cur = self.stmt(x, s, &mut declared)?;
             } else {
                 self.dead_stmt(x)?;
@@ -978,7 +995,10 @@ impl<'a> Ownership<'a> {
         match x {
             Stmt::Let(l) => {
                 self.consume(&l.value, &mut st, "let")?;
-                if key_is_array(&l.ty) || key_is_collection(&l.ty) || self.aggregates.contains(&l.ty) {
+                self.consumed_field = None;
+                if key_is_array(&l.ty) || key_is_collection(&l.ty) || self.aggregates.contains(&l.ty)
+                    || self.enums.contains(&l.ty)
+                {
                     st.set(&l.name, V::Live);
                     declared.push(l.name.clone());
                     if let Some(kind) = must_kind(&l.ty) {
@@ -1064,6 +1084,11 @@ impl<'a> Ownership<'a> {
                     if matches!(c.name.as_str(), "map_get_mut" | "vec_at_mut") && !self.funcs.contains_key(&c.name));
                 let take = matches!(&m.scrutinee, Expr::Call(c)
                     if c.name == "map_take" && !self.funcs.contains_key(&c.name));
+                let consuming = match &m.scrutinee {
+                    Expr::Var(sv) if st.contains(&sv.name) && !self.bor.contains(&sv.name)
+                        && crate::codegen::match_moves_binder(m) => Some(sv.name.clone()),
+                    _ => None,
+                };
                 for a in &m.arms {
                     let n = self.push_arm(a);
                     let saved = self.map_binders.len();
@@ -1077,10 +1102,28 @@ impl<'a> Ownership<'a> {
                             self.proc.remove(binder);
                         }
                     }
+                    // G-DB16-1: the checker admits `move binder` of an array binder only for a plain owned enum
+                    // scrutinee that no arm names. A match where some arm moves a binder takes the scrutinee by
+                    // value: it is consumed on entry to every arm, and its array binders are tracked owners of the arm
+                    let mut srcs: Vec<String> = Vec::new();
+                    if let (Some(sc), Some(en)) = (&consuming, &a.enum_name) {
+                        arm_state.set(sc, V::Dead);
+                        let fields = self.variants.get(&(en.clone(), a.ctor.clone())).cloned().unwrap_or_default();
+                        srcs = a.binders.iter().zip(&fields).filter(|(_, t)| key_is_array(t))
+                            .map(|(b, _)| b.clone()).collect();
+                        for b in &srcs {
+                            arm_state.set(b, V::Live);
+                        }
+                    }
                     let r = self.block(&a.body, arm_state);
                     self.map_binders.truncate(saved);
                     self.arm_bor.truncate(self.arm_bor.len() - n);
                     let mut r = r?;
+                    if let Some(state) = r.as_mut() {
+                        for b in &srcs {
+                            state.pop(b);
+                        }
+                    }
                     if let (true, Some(state)) = (take, &mut r) {
                         for binder in &a.binders {
                             state.pop(binder);
@@ -1101,7 +1144,10 @@ impl<'a> Ownership<'a> {
     /// Check array reads in proof clauses without applying executable call rules.
     fn array_reads(&self, e: &Expr, st: &St) -> Res<()> {
         if let Expr::Var(v) = e {
-            if v.ty.as_deref().is_some_and(key_is_array) {
+            // LG8: a record or enum root consumed by a field or binder move is checked too
+            if v.ty.as_deref().is_some_and(key_is_array)
+                || (st.contains(&v.name) && v.ty.as_ref().is_some_and(|t| self.enums.contains(t)))
+            {
                 self.use_(&v.name, v.line, v.col, st)?;
             }
         }
@@ -1256,8 +1302,12 @@ impl<'a> Ownership<'a> {
 
     fn mv(&mut self, e: &Move, st: &mut St, consuming: bool, tracked: bool) -> Res<()> {
         if !e.fields.is_empty() {
-            // The type checker enforces restoration. The root stays live.
-            return self.use_(&e.name, e.line, e.col, st);
+            self.use_(&e.name, e.line, e.col, st)?;
+            if self.consumed_field == Some((e.line, e.col)) {
+                st.set(&e.name, V::Dead); // G-R09-4: no restore follows, so the record is wholly moved
+            }
+            // Otherwise the type checker enforces restoration. The root stays live.
+            return Ok(());
         }
         let (line, col) = (e.line, e.col);
         if !is_coll(&e.ty) && !e.ty.as_deref().is_some_and(key_is_array)
@@ -1301,7 +1351,9 @@ impl<'a> Ownership<'a> {
                 "use move for a take argument, a let initializer, an assignment or return",
             ));
         }
-        if self.bor.contains(n) || !st.contains(n) {
+        // G-DB16-1: an untracked array binder of an enum arm is a legal move source (like Python, which only rejects `bor`)
+        let arm_array = e.ty.as_deref().is_some_and(key_is_array) && self.arm_bor.iter().any(|b| b == n);
+        if self.bor.contains(n) || (!st.contains(n) && !arm_array) {
             // G10 specifies foreign_borrow; the established G6 diagnostic stays for the other types.
             let code = if matches!(e.ty.as_deref(), Some("file") | Some("process") | Some("socket") | Some("listener") | Some("loop")) { "foreign_borrow" } else { "foreign_move" };
             return Err(err(
@@ -1381,7 +1433,8 @@ impl<'a> Ownership<'a> {
             Expr::Spent(_) => Ok(()),
             Expr::Var(v) => {
                 if is_coll(&v.ty) || v.ty.as_deref().is_some_and(key_is_array)
-                    || v.ty.as_ref().is_some_and(|t| self.aggregates.contains(t)) {
+                    || v.ty.as_ref().is_some_and(|t| self.aggregates.contains(t) || self.enums.contains(t))
+                    || st.contains(&v.name) {
                     self.use_(&v.name, v.line, v.col, st)?;
                 }
                 Ok(())
@@ -1572,8 +1625,12 @@ fn ctor_moves<'e>(e: &'e Expr, out: &mut Vec<&'e Move>) {
 }
 
 /// ownership/liveness of one typed, non-foreign function; funcs: name -> `take` flags of the program's functions
-pub fn check_ownership(f: &Function, funcs: &Takes, aggregates: &HashSet<String>) -> Res<()> {
-    Ownership { funcs, aggregates, map_binders: Vec::new(), bor: HashSet::new(), arm_bor: Vec::new(), track: None, proc: HashMap::new(), decl: HashMap::new() }.run(f)
+pub fn check_ownership(f: &Function, funcs: &Takes, aggregates: &HashSet<String>, enums: &HashSet<String>,
+                       variants: &HashMap<(String, String), Vec<String>>) -> Res<()> {
+    Ownership {
+        funcs, aggregates, enums, variants, map_binders: Vec::new(), bor: HashSet::new(), arm_bor: Vec::new(), track: None,
+        proc: HashMap::new(), decl: HashMap::new(), consumed_field: None,
+    }.run(f)
 }
 
 // ---------------------------------------------------------------------------

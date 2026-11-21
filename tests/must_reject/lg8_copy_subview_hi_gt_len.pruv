@@ -1,0 +1,4 @@
+fn f(b: [i64], n: i64) -> i64 ! alloc {
+  let c: [i64] = copy(subview(b, 0, n));
+  return len(c);
+}

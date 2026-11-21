@@ -2220,7 +2220,7 @@ class FnGen:
         # P3: payload binders of a match on an owned extended local that no arm names again may move out on a return
         own = None
         sc = st.scrutinee
-        if isinstance(sc, Var) and not s.cost:
+        if isinstance(sc, Var) and (not s.cost or codegen.match_moves_binder(st)):   # G-DB16-1: a binder move also under cost
             kind, x = s.lookup(sc.name)
             named = set()
             for a in st.arms:
@@ -2417,7 +2417,13 @@ class FnGen:
             s.ins("store %s zeroinitializer, ptr %s" % (ARR, gp))
             return s.unpack(old, fty, False)
         if isinstance(e, Move):   # G6 A3: load the owner slot, then null it
-            _, x = s.lookup(e.name)
+            kind, x = s.lookup(e.name)
+            if kind == "ssa" and x.k == "arr" and x.mv is not None:
+                # G-DB16-1: moving an array binder of a match on an owned local takes the descriptor and empties the
+                # field of the scrutinee (null, 0, 0), so the scrutinee's drop frees nothing twice
+                sl, _vn, k, _dead = x.mv
+                s.ins("store %s zeroinitializer, ptr %s" % (ARR, g9_gep(s, lty(sl.ty), sl.a, k)))
+                return x
             v = s.load(x)
             if is_array(e.ty):
                 s.empty_array_slot(x)
@@ -5639,7 +5645,7 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
                             "%s has a take array parameter, which needs the Rust backend" % getattr(f, "disp", f.name),
                             "use the Rust backend", file=getattr(f, "file", None))
         if any(p.mode == "inout" and not is_array(p.type) and p.type not in (I64, BOOL)
-               and (f.host_entry or not is_agg(p.type))
+               and (f.host_entry or not (is_agg(p.type) or is_scalar_vec(p.type)))     # G-LG7-1: internal inout Vec<i64>/Vec<bool> passes its handle
                for p in f.params):
             kind = "struct"
             if any(p.mode == "inout" and is_collection(p.type) for p in f.params):

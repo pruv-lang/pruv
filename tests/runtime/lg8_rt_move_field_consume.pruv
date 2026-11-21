@@ -1,0 +1,12 @@
+// G-R09-4: `let t = move d.a;` of a mutable owned record needs no restore; it moves d wholly.
+struct D { n: i64, a: [i64] }
+
+fn run() -> () ! io, alloc {
+  let mut d: D = D { n: 5, a: alloc(3, 8) };
+  d.a[1] = 2;
+  print(d.n);
+  let t: [i64] = move d.a;
+  print(len(t));
+  print(t[1]);
+  print(t[0]);
+}

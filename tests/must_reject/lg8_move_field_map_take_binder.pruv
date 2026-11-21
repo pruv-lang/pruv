@@ -1,0 +1,13 @@
+// G-R09-4: the consuming field move is only for a `let mut` local record, not a map_take binder
+struct Packet { bytes: [u8] }
+
+fn bad(take source: HashMap<i64, Packet>) -> i64 {
+  let mut m: HashMap<i64, Packet> = move source;
+  match map_take::<i64, Packet>(inout m, 1) {
+    Some(d) => {
+      let t: [u8] = move d.bytes;
+      return len(t);
+    }
+    None => { return 0; }
+  }
+}

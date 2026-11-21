@@ -1,0 +1,8 @@
+// G-R09-4: a field moved out without a restore consumes the record, so a later read of it is a use after move
+struct D { n: i64, a: [i64] }
+
+fn run() -> i64 ! alloc {
+  let mut d: D = D { n: 1, a: alloc(2, 3) };
+  let t: [i64] = move d.a;
+  return d.n + len(t);
+}

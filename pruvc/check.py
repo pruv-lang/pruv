@@ -9,7 +9,7 @@ from typeinfo import (TypeTable, BUILTIN_TYPE_NAMES, type_name, is_user_type, is
                       program_uses_inout, is_owned_field_type, is_scalar_vec, is_nongeneric_struct,
                       field_place, is_nested_collection_field, is_string_record_map, is_vec_slice_arg)
 from refine import expand as refine_expand
-from refine import _kids as expr_kids
+from refine import _kids as expr_kids, _stmt_names
 from foreign import (CATALOG, CATALOG_NAMES, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS, ASYNC_OBSERVERS, ASYNC_OPS,
                      check_foreign_decl, check_ownership, STRING, MUTABLE_COLLECTION_MATCH, BORROWED_MAP_KEY)  # G6 A0 / G10 A0
 
@@ -244,6 +244,8 @@ class Checker:
         s.boundary = None         # statement boundary for the statement-only builtins
         s.statement_call = None
         s.restore_array = None
+        s.match_movable = set()   # G-DB16-1: array binders of the enclosing arms that may be moved (see Match)
+        s.arm_binders = set()     # G-DB16-1: every binder of an enclosing match arm (a view, never an owner)
         s.in_par = False
         s.in_view = False         # LG6: checking the operands of a subview(...) argument
         s.funcs = {}
@@ -1405,9 +1407,21 @@ class Checker:
                 if missing:
                     terr(st, "match_arms", "match is missing arm(s): %s" % ", ".join(
                         "%s::%s" % (t.name, n) for n in missing))
+            # G-DB16-1: an array binder may be moved when the scrutinee is a plain owned local enum value that
+            # no arm names again; the move then consumes the scrutinee (foreign.py marks it moved)
+            movable_scrut = False
+            if user and not t.args and isinstance(st.scrutinee, Var) and st.scrutinee.name not in s.arm_binders:
+                skind = scope.get(st.scrutinee.name, (None, None, None))[2]
+                if skind == "local":
+                    named = set()
+                    for a in st.arms:
+                        _stmt_names(a.body, named)
+                    movable_scrut = st.scrutinee.name not in named
             for a in st.arms:
                 sc = dict(scope)
                 node = a if user else st
+                saved_movable, saved_binders = s.match_movable, s.arm_binders
+                s.arm_binders = saved_binders | set(a.binders)
                 if user:
                     ftypes = [ft for _, ft in s.fields_of(t, a.ctor)]
                     if len(a.binders) != len(ftypes):
@@ -1423,6 +1437,8 @@ class Checker:
                         terr(node, "shadow", "%s is already defined" % b, "use a new name")
                     # G9 A0: a buffer payload is a read view (like a parameter): returning it needs copy()
                     sc[b] = (bt, map_take and a.ctor == "Some", "param" if (is_array(bt) or bt == STR) else "local")
+                if movable_scrut:
+                    s.match_movable = saved_movable | {b for b, bt in zip(a.binders, ftypes) if is_array(bt)}
                 if root is not None:
                     s.active_roots.append(root)
                 if mpath is not None:
@@ -1458,6 +1474,7 @@ class Checker:
                     s.active_roots.pop()
                 if mpath is not None:
                     s.match_paths.pop()
+                s.match_movable, s.arm_binders = saved_movable, saved_binders
         else:
             terr(st, "internal", "unknown statement")
 
@@ -1766,8 +1783,13 @@ class Checker:
             return None
         s.check_borrow(e, e.name, e.fields)
         _, mutable, kind = s.lookup(e, e.name, scope, e.fields)
-        if not (mutable or kind in ("inout", "map_mut")) or not (
-                ty == STRING or is_scalar_vec(ty) or ty in (ARRAY, ARRAY_U8, ARRAY_BOOL)):
+        typed = ty == STRING or is_scalar_vec(ty) or ty in (ARRAY, ARRAY_U8, ARRAY_BOOL)
+        restored = (isinstance(next_stmt, FieldAssign) and next_stmt.name == e.name
+                    and tuple(next_stmt.fields) == tuple(e.fields))
+        if (ty in (ARRAY, ARRAY_U8, ARRAY_BOOL) and not restored and isinstance(st, Let) and len(e.fields) == 1
+                and kind == "local" and mutable and e.name not in s.arm_binders):
+            return e     # G-R09-4: `let t = move d.a;` of a `let mut` local record consumes d; foreign.py marks d moved
+        if not (mutable or kind in ("inout", "map_mut")) or not typed:
             _field_move_error(e)
         if isinstance(st, FieldAssign) and (st.name != e.name or _paths_overlap(st.fields, e.fields)):
             _field_move_error(e)
@@ -1966,7 +1988,8 @@ class Checker:
                      "contracts read parameters and locals directly; remove `move`")
             ty, _, kind = s.lookup(e, e.name, scope)
             if (is_array(ty) and kind not in ("local", "take")
-                    and not (kind == "inout" and e.name == s.restore_array)):
+                    and not (kind == "inout" and e.name == s.restore_array)
+                    and e.name not in s.match_movable):    # G-DB16-1: array binder of a consuming match
                 if kind in ("param", "inout"):
                     terr(e, "array_alias", "parameter %s is a borrowed array and cannot be moved" % e.name,
                          "declare `take %s: %s` or use copy(%s)" % (e.name, type_name(ty), e.name))
@@ -2243,6 +2266,30 @@ class Checker:
             e.ty = want
         else:
             s.expect(e, want, scope, c, borrow_element=want == STR, borrow_vector=borrow)
+
+    def copy_subview_arg(s, e, scope, c):
+        """LG8: subview(a, lo, hi) as the only direct argument of the builtin copy; the array type is the source's"""
+        if e.targs is not None:
+            terr(e, "type_arity", "builtin subview takes no type arguments", "remove the `::<...>`")
+        if len(e.args) != 3:
+            terr(e, "arity", "subview takes 3 argument(s), got %d" % len(e.args))
+        root = e.args[0]
+        while isinstance(root, FieldAccess):
+            root = root.base
+        s.in_view = True
+        try:
+            at = s.expect_array(e.args[0], scope, c)   # a view nested in the source is reported where it is
+            if not isinstance(root, Var):
+                s.in_view = False
+                s.view_context(e)
+            if not is_array(at):
+                terr(e.args[0], "type_mismatch", "expected %s, found %s" % (type_name(ARRAY), type_name(at)))
+            s.expect(e.args[1], I64, scope, c)
+            s.expect(e.args[2], I64, scope, c)
+        finally:
+            s.in_view = False
+        e.ty = at
+        return at
 
     def inout_args(s, e, f, m, scope, c):
         """arguments of a resolved call to a user function whose signature has an inout parameter (or that carries a
@@ -2542,6 +2589,8 @@ class Checker:
             elif n in s.funcs:
                 continue
             if isinstance(arg, Call) and arg.name == "subview":
+                if n == "copy" and n not in s.funcs and len(a) == 1 and not c and arg is a[0] and not s.in_view:
+                    continue   # LG8: copy(subview(a, lo, hi))
                 s.view_context(arg)
         is_old = n == "old" and s.uses_inout and n not in s.funcs   # G5 A0: contextual builtin
         if e.targs is not None and n not in s.funcs and (n in BUILTIN_FNS or n in CONTRACT_ONLY or is_old):
@@ -2560,7 +2609,11 @@ class Checker:
             return h[1] if h is not None and h[0] is e else ARRAY
         if n == "copy":
             if c: terr(e, "effect_in_contract", "copy not allowed in contracts")
-            arity(1); at = s.expect_array(a[0], scope, c)
+            arity(1)
+            if isinstance(a[0], Call) and a[0].name == "subview":
+                at = s.copy_subview_arg(a[0], scope, c)   # LG8
+            else:
+                at = s.expect_array(a[0], scope, c)
             s.used_effects.add("alloc"); return at
         if n == "truncate":   # the first m elements of an array as a new array (moves the array at its last use)
             if c: terr(e, "effect_in_contract", "truncate not allowed in contracts")

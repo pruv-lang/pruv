@@ -1,0 +1,22 @@
+// G-DB16-1: a binder moved on one path of its arm is not live after the join
+enum Tape { Bytes(tape: [u8]) }
+
+fn make() -> Tape ! alloc {
+  let b: [u8] = alloc(2, 1);
+  return Tape::Bytes(move b);
+}
+
+fn run(flag: bool) -> i64 ! alloc {
+  let e: Tape = make();
+  let mut n: i64 = 0;
+  match e {
+    Tape::Bytes(tape) => {
+      if flag {
+        let t: [u8] = move tape;
+        n = len(t);
+      }
+      n = n + len(tape);
+    }
+  }
+  return n;
+}

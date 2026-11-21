@@ -3308,7 +3308,8 @@ impl<'a> FnGen<'a> {
         let end = self.label("endmatch");
         // P3: payload binders of a match on an owned extended local that no arm names again may move out on a return
         let mut own: Option<Slot> = None;
-        if let (Expr::Var(scv), false) = (&st.scrutinee, self.cost) {
+        // G-DB16-1: a binder move also needs the owner under cost metering
+        if let (Expr::Var(scv), true) = (&st.scrutinee, !self.cost || crate::codegen::match_moves_binder(st)) {
             let bd = self.lookup(&scv.name)?;
             let mut named = HashSet::new();
             for a in &st.arms {
@@ -3646,7 +3647,21 @@ impl<'a> FnGen<'a> {
             }
             Expr::Move(x) => {
                 // G6 A3: load the owner slot, then null it
-                let sl = self.lookup(&x.name)?.val().clone();
+                let bound = self.lookup(&x.name)?;
+                if let Bind::Ssa(v) = &bound {
+                    if v.k == Kind::Arr {
+                        if let Some(mv) = &v.mv {
+                            // G-DB16-1: moving an array binder of a match on an owned local takes the descriptor and
+                            // empties the field of the scrutinee (null, 0, 0), so the scrutinee's drop frees nothing twice
+                            let (sl, _vn, k, _dead) = (**mv).clone();
+                            let lt = lty(need_ty(&sl.ty)?);
+                            let g = g9_gep(self, &lt, &sl.a, k)?;
+                            self.ins(format!("store {} zeroinitializer, ptr {}", ARR, g))?;
+                            return Ok(v.clone());
+                        }
+                    }
+                }
+                let sl = bound.val().clone();
                 let v = self.load(&sl)?;
                 if x.ty.as_deref().is_some_and(is_array_name) {
                     self.empty_array_slot(&sl)?;
@@ -4308,7 +4323,10 @@ impl<'a> FnGen<'a> {
                     // The caller's array pointer and length stay borrowed.
                     let v = self.ev(&ix.expr, false)?;
                     args.push(format!("ptr {}", v.a));
-                    args.push(format!("i64 {}", v.b));
+                    if v.k != Kind::Coll {
+                        // G-LG7-1: an inout Vec passes only its opaque handle
+                        args.push(format!("i64 {}", v.b));
+                    }
                 }
                 continue;
             }
