@@ -142,8 +142,17 @@ fn add_reserve(r: i64, sp: crate::access::Span, cap: i64) -> i64
   requires sp.status == 0 ==> (0 <= sp.start && sp.start <= sp.end && sp.end <= 16777216)
   ensures 0 <= result && result <= 100000000
 {
+  // A string token's units fit in its bytes between the quotes (put_units skips one byte at each end when the token
+  // has at least two bytes), so the reserve counts inner bytes only (R04: the quotes were 6 spare words per tool).
   let mut m: i64 = 0;
-  if sp.status == 0 { m=sp.end-sp.start; if m > cap { m=cap; } }
+  if sp.status == 0 { m=sp.end-sp.start; if m >= 2 { m=m-2; } if m > cap { m=cap; } }
+  let mut s: i64 = r+m; if s > 100000000 { s=100000000; }
+  return s;
+}
+fn add_raw(r: i64, m: i64) -> i64
+  requires 0 <= r && r <= 100000000 && 0 <= m && m <= 16000000
+  ensures 0 <= result && result <= 100000000
+{
   let mut s: i64 = r+m; if s > 100000000 { s=100000000; }
   return s;
 }
@@ -193,7 +202,7 @@ pub fn plan(p: [i64], d: crate::json::JsonDocument, tools: i64, count: i64, obje
           res[o+8]=0; res[o+9]=0;
           if rs.status == 0 {
             res[o+8]=rs.start; res[o+9]=rs.end;
-            if rs.end-rs.start <= 16000000 { r=add_reserve(r,rs,16000000); }
+            if rs.end-rs.start <= 16000000 { r=add_raw(r,rs.end-rs.start); }
           }
           cnt=cnt+1;
         }
@@ -251,7 +260,7 @@ fn put_units(src: [u8], start: i64, end: i64, inout q: [i64], at: i64, cap: i64)
 // is stored directly (jstr::step returns exactly that byte as one unit). The unit before the cut is read back from q.
 fn put_units_room(src: [u8], start: i64, end: i64, inout q: [i64], at: i64, cap: i64) -> i64
   requires 0 <= start && start <= end && end <= len(src) && end <= 16777216 && 2 <= cap && 0 <= at && at <= 100000000 && cap <= 16000000
-  requires at + cap <= len(q) || at + (end - start) <= len(q)
+  requires at + cap <= len(q) || at + (end - start) <= len(q) || (end - start >= 2 && at + (end - start - 2) <= len(q))
   ensures 0 <= result && result <= cap
   ensures forall k in 0..len(q): k < at ==> q[k] == old(q)[k]
 {
@@ -261,7 +270,7 @@ fn put_units_room(src: [u8], start: i64, end: i64, inout q: [i64], at: i64, cap:
   let mut k: i64 = 0; let mut spill: i64 = -1;
   while p < stop && k < cap
     invariant start <= p0 && p0 <= p && p <= stop && stop <= end && 0 <= k && k <= cap && k <= p - p0
-    invariant at + cap <= len(q) || at + (end - start) <= len(q)
+    invariant at + cap <= len(q) || at + (stop - p0) <= len(q)
     invariant forall x in 0..len(q): x < at ==> q[x] == old(q)[x]
     decreases stop-p
   {
@@ -311,7 +320,8 @@ fn put_field(src: [u8], s: i64, e: i64, cap: i64, nonempty: bool, inout q: [i64]
     // One room test per field instead of one per unit; it holds whenever len(q) == len(p)+reserve (see above), so
     // the checked put_units runs only when the buffer was clamped to 100000000 words.
     let mut n: i64 = 0;
-    if cursor + cap <= len(q) || cursor + (e - s) <= len(q) { n = put_units_room(src,s,e,inout q,cursor,cap); }
+    let mut inner: i64 = e - s; if inner >= 2 { inner = inner - 2; }
+    if cursor + cap <= len(q) || cursor + inner <= len(q) { n = put_units_room(src,s,e,inout q,cursor,cap); }
     else { n = put_units(src,s,e,inout q,cursor,cap); }
     if (!nonempty || n > 0) && n <= 100000000-cursor && n <= len(q)-cursor {
       q[slot]=cursor; q[slot+1]=n; return cursor+n;
