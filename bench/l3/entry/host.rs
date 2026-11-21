@@ -241,36 +241,105 @@ impl Refs {
 // packet encoding
 
 struct Enc {
-    pool: Vec<i64>,
+    // The string pool as WTF-8 bytes (DB8 wire format) plus the unit count; slots stay in UTF-16 unit offsets.
+    bytes: Vec<u8>,
+    nu: usize,
     rec: Vec<i64>,
     tables: Vec<Vec<i64>>,
 }
 
+// Pool mark for truncation: a later low surrogate may rewrite the last 3 bytes (join into a 4-byte form).
+struct PoolMark {
+    len: usize,
+    nu: usize,
+    tail: [u8; 3],
+}
+
 impl Enc {
     fn new() -> Enc {
-        Enc { pool: Vec::new(), rec: Vec::new(), tables: Vec::new() }
+        Enc { bytes: Vec::new(), nu: 0, rec: Vec::new(), tables: Vec::new() }
+    }
+    fn pool_mark(&self) -> PoolMark {
+        let len = self.bytes.len();
+        let mut tail = [0u8; 3];
+        if len >= 3 {
+            tail.copy_from_slice(&self.bytes[len - 3..]);
+        }
+        PoolMark { len, nu: self.nu, tail }
+    }
+    fn pool_restore(&mut self, m: PoolMark) {
+        if m.len >= 3 {
+            self.bytes.truncate(m.len - 3);
+            self.bytes.extend_from_slice(&m.tail);
+        } else {
+            self.bytes.truncate(m.len);
+        }
+        self.nu = m.nu;
+    }
+    // Appends UTF-16 units as WTF-8, joining a pair split across pushes into one 4-byte scalar.
+    fn push_units(&mut self, u: &[u16]) {
+        self.bytes.reserve(u.len());
+        let mut i = 0;
+        while i < u.len() {
+            let x = u[i] as u32;
+            if x < 0x80 {
+                self.bytes.push(x as u8);
+            } else if x < 0x800 {
+                self.bytes.push(0xC0 | (x >> 6) as u8);
+                self.bytes.push(0x80 | (x & 0x3F) as u8);
+            } else if (0xD800..0xDC00).contains(&x) && i + 1 < u.len() && (0xDC00..0xE000).contains(&(u[i + 1] as u32)) {
+                let c = 0x10000 + ((x - 0xD800) << 10) + (u[i + 1] as u32 - 0xDC00);
+                self.push4(c);
+                i += 1;
+            } else if (0xDC00..0xE000).contains(&x) && self.ends_lone_high() {
+                let n = self.bytes.len();
+                let hi = 0xD000 | (((self.bytes[n - 2] & 0x3F) as u32) << 6) | (self.bytes[n - 1] & 0x3F) as u32;
+                self.bytes.truncate(n - 3);
+                self.push4(0x10000 + ((hi - 0xD800) << 10) + (x - 0xDC00));
+            } else {
+                self.bytes.push(0xE0 | (x >> 12) as u8);
+                self.bytes.push(0x80 | ((x >> 6) & 0x3F) as u8);
+                self.bytes.push(0x80 | (x & 0x3F) as u8);
+            }
+            i += 1;
+        }
+        self.nu += u.len();
+    }
+    fn push4(&mut self, c: u32) {
+        self.bytes.push(0xF0 | (c >> 18) as u8);
+        self.bytes.push(0x80 | ((c >> 12) & 0x3F) as u8);
+        self.bytes.push(0x80 | ((c >> 6) & 0x3F) as u8);
+        self.bytes.push(0x80 | (c & 0x3F) as u8);
+    }
+    fn ends_lone_high(&self) -> bool {
+        let n = self.bytes.len();
+        n >= 3 && self.bytes[n - 3] == 0xED && (0xA0..=0xAF).contains(&self.bytes[n - 2])
+    }
+    // Old-format pool: one i64 per UTF-16 unit (REQ keeps this form).
+    fn units(&self) -> Vec<i64> {
+        wtf8_units(&self.bytes).expect("encoder produced invalid WTF-8").into_iter().map(i64::from).collect()
     }
     fn str_vs(&mut self, u: &[u16]) -> [i64; 3] {
-        let off = self.pool.len() as i64;
-        self.pool.extend(u.iter().map(|&x| x as i64));
+        let off = self.nu as i64;
+        self.push_units(u);
         [6, off, u.len() as i64]
     }
     fn text_vs(&mut self, s: &str) -> [i64; 3] {
-        let off = self.pool.len();
-        self.pool.extend(s.encode_utf16().map(i64::from));
-        [6, off as i64, (self.pool.len() - off) as i64]
+        let off = self.nu;
+        self.bytes.extend_from_slice(s.as_bytes());
+        self.nu += s.encode_utf16().count();
+        [6, off as i64, (self.nu - off) as i64]
     }
     fn units_vs(&mut self, v: &Value) -> R<[i64; 3]> {
         let units = v.as_array().ok_or_else(|| HostErr::Case("u16 needs an array".into()))?;
-        let off = self.pool.len();
-        self.pool.reserve(units.len());
+        let mut u: Vec<u16> = Vec::with_capacity(units.len());
         for unit in units {
             match unit.as_u64() {
-                Some(n) if n <= 65535 => self.pool.push(n as i64),
+                Some(n) if n <= 65535 => u.push(n as u16),
                 _ => return ce("u16 unit out of range"),
             }
         }
-        Ok([6, off as i64, units.len() as i64])
+        Ok(self.str_vs(&u))
     }
     fn value_vs(&mut self, refs: &mut Refs, v: Option<&Value>) -> R<[i64; 3]> {
         match v {
@@ -317,9 +386,25 @@ fn put(out: &mut Vec<i64>, vs: [i64; 3]) {
     out.extend_from_slice(&vs);
 }
 
-fn packet_header(kind: i64, op_id: i64, seq: i64, op: i64, e: &Enc) -> Vec<i64> {
-    let mut lens: Vec<usize> = vec![e.pool.len(), e.rec.len()];
-    for t in &e.tables {
+// Section 0 on the wire: [nu, W_1..W_m], 7 bytes per word big-endian, zero padded.
+fn pool_words(bytes: &[u8], nu: usize) -> usize {
+    1 + (bytes.len() + 6) / 7
+}
+
+fn push_pool_words(w: &mut Vec<i64>, bytes: &[u8], nu: usize) {
+    w.push(nu as i64);
+    for ch in bytes.chunks(7) {
+        let mut x: u64 = 0;
+        for j in 0..7 {
+            x = (x << 8) | *ch.get(j).unwrap_or(&0) as u64;
+        }
+        w.push(x as i64);
+    }
+}
+
+fn packet_header(kind: i64, op_id: i64, seq: i64, op: i64, lens0: usize, e_rec: usize, tables: &[Vec<i64>]) -> Vec<i64> {
+    let mut lens: Vec<usize> = vec![lens0, e_rec];
+    for t in tables {
         lens.push(t.len());
     }
     let nsec = lens.len();
@@ -334,8 +419,8 @@ fn packet_header(kind: i64, op_id: i64, seq: i64, op: i64, e: &Enc) -> Vec<i64> 
 }
 
 fn mk_packet(kind: i64, op_id: i64, seq: i64, op: i64, e: &Enc) -> Vec<i64> {
-    let mut w = packet_header(kind, op_id, seq, op, e);
-    w.extend_from_slice(&e.pool);
+    let mut w = packet_header(kind, op_id, seq, op, pool_words(&e.bytes, e.nu), e.rec.len(), &e.tables);
+    push_pool_words(&mut w, &e.bytes, e.nu);
     w.extend_from_slice(&e.rec);
     for t in &e.tables {
         w.extend_from_slice(t);
@@ -343,17 +428,128 @@ fn mk_packet(kind: i64, op_id: i64, seq: i64, op: i64, e: &Enc) -> Vec<i64> {
     w
 }
 
-fn mk_packet_owned(kind: i64, op_id: i64, seq: i64, op: i64, enc: Enc) -> Vec<i64> {
-    let mut w = packet_header(kind, op_id, seq, op, &enc);
-    let Enc { pool, rec, tables } = enc;
+// Old-format packet (section 0 = one word per unit); REQ's entry packets keep this form.
+fn mk_packet_units(kind: i64, op_id: i64, seq: i64, op: i64, e: &Enc) -> Vec<i64> {
+    let pool = e.units();
+    let mut w = packet_header(kind, op_id, seq, op, pool.len(), e.rec.len(), &e.tables);
     w.extend_from_slice(&pool);
-    drop(pool);
+    w.extend_from_slice(&e.rec);
+    for t in &e.tables {
+        w.extend_from_slice(t);
+    }
+    w
+}
+
+// D-DB4-2: the byte pool is dropped as soon as it is packed, then rec and each table are dropped as they are copied.
+fn mk_packet_owned(kind: i64, op_id: i64, seq: i64, op: i64, enc: Enc) -> Vec<i64> {
+    let Enc { bytes, nu, rec, tables } = enc;
+    let mut w = packet_header(kind, op_id, seq, op, pool_words(&bytes, nu), rec.len(), &tables);
+    push_pool_words(&mut w, &bytes, nu);
+    drop(bytes);
     w.extend_from_slice(&rec);
     drop(rec);
     for table in tables {
         w.extend_from_slice(&table);
     }
     w
+}
+
+// Strict WTF-8 -> UTF-16 units. None on bad UTF-8, overlong forms, > U+10FFFF, or a split pair written as two 3-byte forms.
+fn wtf8_units(b: &[u8]) -> Option<Vec<u16>> {
+    let mut out: Vec<u16> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    let cont = |k: usize| -> Option<u32> {
+        let c = *b.get(k)?;
+        if c & 0xC0 == 0x80 { Some((c & 0x3F) as u32) } else { None }
+    };
+    while i < b.len() {
+        let c = b[i] as u32;
+        if c < 0x80 {
+            out.push(c as u16);
+            i += 1;
+        } else if (0xC2..0xE0).contains(&c) {
+            out.push((((c & 0x1F) << 6) | cont(i + 1)?) as u16);
+            i += 2;
+        } else if (0xE0..0xF0).contains(&c) {
+            let x = ((c & 0x0F) << 12) | (cont(i + 1)? << 6) | cont(i + 2)?;
+            if x < 0x800 {
+                return None;
+            }
+            if (0xDC00..0xE000).contains(&x) && matches!(out.last(), Some(&h) if (0xD800..0xDC00).contains(&h)) {
+                return None;
+            }
+            out.push(x as u16);
+            i += 3;
+        } else if (0xF0..0xF5).contains(&c) {
+            let x = ((c & 0x07) << 18) | (cont(i + 1)? << 12) | (cont(i + 2)? << 6) | cont(i + 3)?;
+            if !(0x10000..=0x10FFFF).contains(&x) {
+                return None;
+            }
+            let y = x - 0x10000;
+            out.push(0xD800 + (y >> 10) as u16);
+            out.push(0xDC00 + (y & 0x3FF) as u16);
+            i += 4;
+        } else {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+// Decodes wire section 0 back to units (words of Pruv output; any violation is an internal error).
+fn decode_pool(sec: &[i64]) -> R<Vec<i64>> {
+    if sec.is_empty() {
+        return ie("pool section is empty");
+    }
+    let nu = sec[0];
+    let words = &sec[1..];
+    if nu < 0 {
+        return ie("pool unit count is negative");
+    }
+    let mut bytes: Vec<u8> = Vec::with_capacity(words.len() * 7);
+    for &x in words {
+        if !(0..(1i64 << 56)).contains(&x) {
+            return ie("pool word out of range");
+        }
+        for j in 0..7 {
+            bytes.push(((x >> (8 * (6 - j))) & 0xff) as u8);
+        }
+    }
+    // padding: the true byte length is the one that decodes to nu units with only zero bytes after it
+    let units = match wtf8_prefix(&bytes, nu as usize) {
+        Some((u, used)) => {
+            if bytes[used..].iter().any(|&c| c != 0) || bytes.len() - used >= 7 {
+                return ie("pool padding is not zero or has the wrong word count");
+            }
+            u
+        }
+        None => return ie("pool is not valid WTF-8 of the stated unit count"),
+    };
+    Ok(units.into_iter().map(i64::from).collect())
+}
+
+// Decodes exactly nu units from the start of b; returns (units, bytes used).
+fn wtf8_prefix(b: &[u8], nu: usize) -> Option<(Vec<u16>, usize)> {
+    // find the end: scan scalars until nu units are produced
+    let mut units = 0usize;
+    let mut i = 0usize;
+    while units < nu {
+        let c = *b.get(i)?;
+        let (n, u) = if c < 0x80 { (1, 1) } else if c < 0xE0 { (2, 1) } else if c < 0xF0 { (3, 1) } else { (4, 2) };
+        i += n;
+        units += u;
+        if i > b.len() {
+            return None;
+        }
+    }
+    if units != nu {
+        return None;
+    }
+    let u = wtf8_units(&b[..i])?;
+    if u.len() != nu {
+        return None;
+    }
+    Some((u, i))
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -365,9 +561,18 @@ struct Pkt<'a> {
     seq: i64,
     op: i64,
     secs: Vec<&'a [i64]>,
+    // Section 0 as UTF-16 units (decoded from the wire bytes, or borrowed for old-format packets).
+    pool: std::borrow::Cow<'a, [i64]>,
 }
 
 fn parse_pkt(w: &[i64]) -> R<Pkt<'_>> {
+    let mut p = parse_pkt_units(w)?;
+    p.pool = std::borrow::Cow::Owned(decode_pool(p.secs[0])?);
+    Ok(p)
+}
+
+// Old format: section 0 is one word per unit (REQ entry packets).
+fn parse_pkt_units(w: &[i64]) -> R<Pkt<'_>> {
     if w.len() < 7 {
         return ie(format!("core packet too short ({} words)", w.len()));
     }
@@ -405,7 +610,8 @@ fn parse_pkt(w: &[i64]) -> R<Pkt<'_>> {
     if rest != 0 {
         return ie("core packet section lengths do not cover the payload");
     }
-    Ok(Pkt { kind: w[1], op_id: w[2], seq: w[3], op: payload[0], secs })
+    let pool = std::borrow::Cow::Borrowed(secs[0]);
+    Ok(Pkt { kind: w[1], op_id: w[2], seq: w[3], op: payload[0], secs, pool })
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -474,7 +680,7 @@ impl Pkt<'_> {
         }
     }
     fn string_units(&self, start: i64, len: i64) -> R<&[i64]> {
-        let pool = self.secs[0];
+        let pool: &[i64] = &self.pool;
         if start < 0 || len < 0 || (start as u64) + (len as u64) > pool.len() as u64 {
             return ie("string slot outside the pool");
         }
@@ -1121,10 +1327,10 @@ fn enc_session(enc: &mut Enc, refs: &mut Refs, v: &Value, out: &mut Vec<i64>) ->
             if let [entry] = a.as_slice() {
                 let pair = entry.as_array().filter(|p| p.len() == 2)
                     .ok_or_else(|| HostErr::Case("engineThreads entry must be [key, bound]".into()))?;
-                let pool_end = enc.pool.len();
+                let pool_mark = enc.pool_mark();
                 let kv = enc.key_vs(&pair[0])?;
                 if matches!(&pair[1], Value::Object(b) if b.len() == 1 && b.contains_key("absent")) {
-                    enc.pool.truncate(pool_end);
+                    enc.pool_restore(pool_mark);
                 } else {
                     put(&mut rows, kv);
                     enc_bound(enc, refs, &pair[1], &mut rows)?;
@@ -1278,7 +1484,7 @@ fn encode_index(refs: &mut Refs, args: Value) -> R<Enc> {
     };
     let count = sessions.len();
     let mut enc = Enc::new();
-    enc.pool.reserve(24 * count);
+    enc.bytes.reserve(24 * count);
     let sec = enc.reserve();
     let mut rows = Vec::with_capacity(30 * count);
     for session in sessions {
@@ -1900,9 +2106,9 @@ fn corrupt(w: &mut Vec<i64>, how: &str) {
         "unit" => {
             let at = sec_start(w, 0);
             if w[7] > 0 {
-                w[at] = 65536;
+                w[at] = -1;
             } else {
-                w.insert(at, 65536);
+                w.insert(at, -1);
                 w[7] = 1;
                 w[4] += 1;
             }
@@ -2245,11 +2451,13 @@ mod tests {
         let mut w = base.clone();
         pad_to(&mut w, 5000);
         assert_eq!(w.len(), 5000);
-        let p = parse_pkt(&w).unwrap();
+        // the host output decoder is strict: padding is accepted only on the Pruv input path (wire_in)
+        assert!(parse_pkt(&w).is_err());
+        let p = parse_pkt(&base).unwrap();
         assert_eq!(p.val(1, 0).unwrap(), V::Str(u16s("/d")));
         let mut w = base.clone();
         corrupt(&mut w, "unit");
-        assert!(parse_pkt(&w).is_ok());
+        assert!(parse_pkt(&w).is_err());
         let mut w = base.clone();
         corrupt(&mut w, "length");
         assert!(parse_pkt(&w).is_err());
@@ -2275,7 +2483,7 @@ mod tests {
     }
     fn mk_done(e: &Enc, op_id: i64, op: i64) -> Vec<i64> {
         // done: pool, record, empty state, empty rows
-        let mut e2 = Enc { pool: e.pool.clone(), rec: e.rec.clone(), tables: vec![Vec::new(), Vec::new()] };
+        let mut e2 = Enc { bytes: e.bytes.clone(), nu: e.nu, rec: e.rec.clone(), tables: vec![Vec::new(), Vec::new()] };
         e2.tables[0] = Vec::new();
         mk_packet(3, op_id, 0, op, &e2)
     }

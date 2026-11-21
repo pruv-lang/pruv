@@ -265,19 +265,19 @@ impl Leaf {
                 put(&mut enc.rec, vs);
             }
         }
-        Ok((enc.pool, enc.rec))
+        Ok((enc.units(), enc.rec))
     }
 
     // Serves one child entry await (an L3-8 entry packet, kind 1) and returns the completion entry packet (kind 2).
     pub fn serve_child(&mut self, child: &[i64]) -> Result<Vec<i64>, String> {
-        let p = parse_pkt(child).map_err(he)?;
+        let p = parse_pkt_units(child).map_err(he)?;
         if p.kind != 1 {
             return Err("internal: child packet is not an await".to_string());
         }
         let code = p.word(1, 0).map_err(he)?;
         if code == 9 {
             let enc = self.serve_reader(&p)?;
-            return Ok(mk_packet(2, p.op_id, p.seq, p.op, &enc));
+            return Ok(mk_packet_units(2, p.op_id, p.seq, p.op, &enc));
         }
         if code == 8 {
             // isTemporary: world.isTemporary[id] (default false); the entry host's prim line becomes an oracle event
@@ -314,10 +314,10 @@ impl Leaf {
                     self.h.trace.push(l);
                 }
             }
-            return Ok(mk_packet(2, p.op_id, p.seq, p.op, &enc));
+            return Ok(mk_packet_units(2, p.op_id, p.seq, p.op, &enc));
         }
         let enc = self.h.serve(&p).map_err(he)?;
-        Ok(mk_packet(2, p.op_id, p.seq, p.op, &enc))
+        Ok(mk_packet_units(2, p.op_id, p.seq, p.op, &enc))
     }
 
     pub fn take_events(&mut self) -> Vec<Ev> {
@@ -461,7 +461,7 @@ impl Leaf {
                     let mut e2 = Enc::new();
                     self.h.throw_rec(&mut e2, &sp).map_err(he)?;
                     h.abort_o = Some(format!("{{\"throw\":{{\"ref\":{}}}}}", jstr_s(&sp.name_ref)));
-                    h.abort_comp = Some(mk_packet(2, p.op_id, p.seq, p.op, &e2));
+                    h.abort_comp = Some(mk_packet_units(2, p.op_id, p.seq, p.op, &e2));
                 }
                 self.pending_hold = Some(h);
             }
@@ -563,7 +563,7 @@ impl Leaf {
                     let mut e2 = Enc::new();
                     self.h.throw_rec(&mut e2, &sp).map_err(he)?;
                     h.abort_o = Some(format!("{{\"throw\":{{\"ref\":{}}}}}", jstr_s(&sp.name_ref)));
-                    h.abort_comp = Some(mk_packet(2, p.op_id, p.seq, p.op, &e2));
+                    h.abort_comp = Some(mk_packet_units(2, p.op_id, p.seq, p.op, &e2));
                 }
                 self.pending_hold = Some(h);
             }
@@ -741,7 +741,7 @@ impl Leaf {
                     let mut r2 = Vec::new();
                     enc_session(&mut e2, &mut self.h.refs, &sj, &mut r2).map_err(he)?;
                     e2.rec = r2;
-                    s5 = mk_packet(0, op, 0, op, &e2);
+                    s5 = mk_packet_units(0, op, 0, op, &e2);
                 }
             }
             16 => {
@@ -883,7 +883,7 @@ impl Leaf {
             }
             c => return Err(format!("internal: unknown host call {}", c)),
         }
-        Ok((enc.pool, enc.rec, s5))
+        Ok((enc.units(), enc.rec, s5))
     }
 
 
@@ -954,7 +954,7 @@ impl Leaf {
         }
         enc.rec.push(ab);
         put(&mut enc.rec, rs);
-        Ok(Step::Reply((enc.pool, enc.rec, Vec::new())))
+        Ok(Step::Reply((enc.units(), enc.rec, Vec::new())))
     }
 
 
@@ -1584,7 +1584,7 @@ impl Leaf {
             }
             None => return Err("case: a created session id must be a string".to_string()),
         }
-        Ok((enc.pool, enc.rec, Vec::new()))
+        Ok((enc.units(), enc.rec, Vec::new()))
     }
 
     // The n-th entry (last repeats) of the raw world queue at `path`, or None when the world has none.
@@ -1927,7 +1927,7 @@ impl Leaf {
             Host::ok_str(&mut enc, &u16s(&v));
             o = format!("{{\"ok\":{}}}", jstr_s(&v));
         }
-        Ok((enc.pool, enc.rec, o))
+        Ok((enc.units(), enc.rec, o))
     }
 
     // The prim records of the calls served since the last call (JSON arrays such as ["accounts","claude"]).
@@ -1937,7 +1937,7 @@ impl Leaf {
 
     // Renders a done packet's record (section 1) into (terminal, value JSON). `secs` are the request-packet sections.
     pub fn render_done(&self, secs: Vec<Vec<i64>>) -> Result<(String, String), String> {
-        let p = Pkt { kind: 3, op_id: 0, seq: 0, op: 0, secs: secs.iter().map(Vec::as_slice).collect() };
+        let p = Pkt { kind: 3, op_id: 0, seq: 0, op: 0, secs: secs.iter().map(Vec::as_slice).collect(), pool: std::borrow::Cow::Borrowed(secs.first().map(Vec::as_slice).unwrap_or(&[])) };
         self.render_done_in(&p).map_err(he)
     }
 
