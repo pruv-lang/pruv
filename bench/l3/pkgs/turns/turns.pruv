@@ -50,6 +50,14 @@ pub fn new_buffer() -> [u8] ! alloc
   return alloc(1049344, 0);
 }
 
+// An empty buffer for owners that always grow before the first begin (DB7). The first begin then makes the one
+// 13 MiB buffer, whose untouched pages stay unmapped, instead of zeroing 1 MiB and copying it on the first grow.
+pub fn empty_buffer() -> [u8] ! alloc
+  ensures len(result) == 0
+{
+  return alloc(0, 0);
+}
+
 // A copy of buf at the full 200 slots, so it fits slot begun % 200; the old bytes are kept. It jumps straight to the
 // full size: doubling through 32, 64 and 128 slots zeroed and copied about 40 MiB on a full ring, against 13 MiB here.
 pub fn grow(buf: [u8], begun: i64) -> [u8] ! alloc
