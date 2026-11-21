@@ -701,8 +701,11 @@ fixed in one package before R12.
 | D-DB10-4 | lean split | A lean run that fails is run a second time on the full path to get the old error text. If the error is a panic, the panic message is printed to stderr twice. Results are unchanged. |
 | D-DB10-5 | time M, L | Measured at load 6-9 (7 rounds). A quiet-host run (load < 4) is still owed (carries D-DB4-4). |
 | D-DB10-6 | wire canonicity | Not done. Whole zero words after the data (the `pad_to` exact-limit padding) are still accepted. Moving the padding changes the `exact_limit` packet expectation, and that is outside this lane. Carries D-DB8-4. DB12: open (exact_limit padding still in section 0; carried as D-DB12-2) |
-| D-DB12-1 | entry/req readers | Pruv readers still read one `i64` per UTF-16 unit and the root `wire_in` / `wire_out` still expand and pack whole packets. Moving to bytes needs a new slot coordinate shared by the entry host, the req host, the op 9 state layout and `req_list` ordering (see "Why the byte-pool readers did not land"). Carries D-DB10-1 and D-DB8-1. |
-| D-DB12-2 | wire canonicity | Whole zero words after the pool data are still accepted (exact-limit padding). Carries D-DB10-6 and D-DB8-4. |
+| D-DB12-1 | entry/req readers | Pruv readers still read one `i64` per UTF-16 unit and the root `wire_in` / `wire_out` still expand and pack whole packets. Moving to bytes needs a new slot coordinate shared by the entry host, the req host, the op 9 state layout and `req_list` ordering (see "Why the byte-pool readers did not land"). Carries D-DB10-1 and D-DB8-1. DB13: open (design and inventory in docs/L3_DB13.md; coordinate not moved, carried as D-DB13-1) |
+| D-DB12-2 | wire canonicity | Whole zero words after the pool data are still accepted (exact-limit padding). Carries D-DB10-6 and D-DB8-4. DB13: open (blocked on the byte pool inside Pruv; carried as D-DB13-2) |
+| D-DB13-1 | entry/req slot coordinate | The slot coordinate is still UTF-16 units and `wire_in` / `wire_out` still expand and pack whole packets. Design, consumer mapping, inventory and a 4-stage plan are above. Carries D-DB12-1 (and D-DB10-1, D-DB8-1). |
+| D-DB13-2 | wire canonicity | Whole zero words after the pool data are still accepted. Blocked on D-DB13-1 stage 3 (see "D-DB12-2"). Carries D-DB12-2 (and D-DB10-6, D-DB8-4). |
+| D-DB13-3 | req direct pool access | `req_child::in1..in4`, `req_value::units`, `req_list::scmp` / `pack`, `req/host.rs` `accept` and `req/root.pruv` read or size the pool directly instead of through entry accessors, so the coordinate is spread over req call sites (stage 2). |
 
 
 #### 7.5.1 Language gap list (fast mode, 2026-11-21)
