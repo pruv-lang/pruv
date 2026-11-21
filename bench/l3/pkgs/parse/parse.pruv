@@ -502,3 +502,129 @@ pub fn parse(input: [u8]) -> crate::json::JsonParse ! alloc
     crate::json::JsonParse::Parsed(document) => { return failure(0, 18); }
   }
 }
+
+// ---- scan_into: scan a borrowed span into caller-owned scratch (no allocation) ----
+
+// token_at over input[p..end] (end instead of len(input)).
+fn token_at_span(input: [u8], p: i64, end: i64, key: bool) -> Token
+  requires 0 <= p && p < end && end <= len(input)
+  ensures p <= result.end && result.end <= end
+  ensures result.error == 0 ==> p < result.end
+{
+  let c: i64 = input[p];
+  if c == 91 { return token_result(p + 1, 5, 0); }
+  if c == 123 { return token_result(p + 1, 6, 0); }
+  if c == 34 {
+    if key { return string_token(input, p, end, 7); }
+    return string_token(input, p, end, 4);
+  }
+  if c == 116 || c == 102 || c == 110 {
+    let r: crate::lex::Scan = crate::lex::scan_literal(input, p, end);
+    if c == 116 { return token_result(r.position, 2, r.kind); }
+    if c == 102 { return token_result(r.position, 1, r.kind); }
+    return token_result(r.position, 0, r.kind);
+  }
+  if c == 45 || (48 <= c && c <= 57) {
+    let r: crate::lex::Scan = crate::lex::scan_number(input, p, end);
+    return token_result(r.position, 3, r.kind);
+  }
+  return token_result(p, -1, 6);
+}
+
+// Pass outcome of scan_into (positions are relative to lo):
+//   kind == 0: accepted, `records` records are in tape[0 .. 6 * records) (records may be 0 only if the tape is corrupt; callers check it);
+//   kind > 0: rejected with that error kind at `position`, exactly as `scan` of a copy of the span;
+//   kind == -1: the scratch tape is too small, kind == -2: the scratch stack is too small (nothing is promised about the scratch then).
+// The stack scratch needs 4 * 129 = 516 slots (frame 0 plus 128 containers).
+fn span_reject(p: i64, k: i64, n: i64) -> Pass
+  requires 0 <= p && p <= n && 1 <= k
+  ensures result.kind == k && result.position == p && 0 <= result.position && result.position <= n
+{ return Pass { position: p, kind: k, records: 0 }; }
+
+pub fn scan_into(input: [u8], lo: i64, hi: i64, inout tape: [i64], inout stack: [i64]) -> Pass
+  requires 0 <= lo && lo <= hi && hi <= len(input) && hi - lo <= 16777216
+  ensures len(tape) == len(old(tape)) && len(stack) == len(old(stack))
+  ensures result.kind == 0 ==> (0 <= result.records && result.records <= 1048576 && 6 * result.records <= len(tape))
+  ensures result.kind > 0 ==> (0 <= result.position && result.position <= hi - lo)
+  ensures result.kind <= 0 ==> (result.kind == 0 || result.kind == -1 || result.kind == -2)
+{
+  let n: i64 = hi - lo;
+  if len(stack) < 516 { return Pass { position: 0, kind: -2, records: 0 }; }
+  stack[0] = 0; stack[1] = 6; stack[2] = -1; stack[3] = 0;
+  let mut depth: i64 = 0;
+  let mut records: i64 = 0;
+  let mut p: i64 = lo;
+  while p <= hi
+    invariant lo <= p && p <= hi && hi <= len(input) && n == hi - lo && n <= 16777216 && 0 <= lo
+    invariant 0 <= depth && depth <= 128 && len(stack) >= 516
+    invariant 0 <= records && records <= 1048576
+    invariant 6 * records <= len(tape)
+    decreases hi - p + 1
+  {
+    p = crate::lex::skip_whitespace(input, p, hi);
+    let state: i64 = stack[4 * depth + 1];
+    let parent: i64 = stack[4 * depth + 2];
+    let container: i64 = stack[4 * depth];
+    if depth == 0 && state == 2 {
+      if p == hi { return Pass { position: n, kind: 0, records: records }; }
+      return span_reject(p - lo, 11, n);
+    }
+    if p == hi { return span_reject(p - lo, 5, n); }
+    let c: i64 = input[p];
+    let matches: bool = depth > 0 && ((container == 5 && c == 93) || (container == 6 && c == 125));
+    if matches && (state == 1 || state == 4) { return span_reject(p - lo, 10, n); }
+    let closing: bool = matches && (state == 0 || state == 3 || state == 2);
+    if closing {
+      if depth == 0 { return span_reject(p - lo, 18, n); }
+      let count: i64 = stack[4 * depth + 3];
+      let closed: bool = close_record(inout tape, parent, p + 1 - lo, records, count);
+      if !closed { return span_reject(p - lo, 18, n); }
+      depth = depth - 1;
+      p = p + 1;
+    } else {
+      if state == 2 {
+        if c != 44 { return span_reject(p - lo, 9, n); }
+        if depth == 0 { return span_reject(p - lo, 18, n); }
+        stack[4 * depth + 1] = comma_state(container);
+        p = p + 1;
+      } else {
+        if state == 5 {
+          if c != 58 { return span_reject(p - lo, 8, n); }
+          if depth == 0 { return span_reject(p - lo, 18, n); }
+          stack[4 * depth + 1] = 6;
+          p = p + 1;
+        } else {
+          let key: bool = state == 3 || state == 4;
+          if key && c != 34 { return span_reject(p - lo, 7, n); }
+          let start: i64 = p;
+          let token: Token = token_at_span(input, p, hi, key);
+          if token.error < 0 { return span_reject(p - lo, 18, n); }
+          if token.error != 0 { return span_reject(token.end - lo, token.error, n); }
+          let kind: i64 = token.kind;
+          let end: i64 = token.end;
+          if kind < 0 { return span_reject(p - lo, 6, n); }
+          if records == 1048576 { return span_reject(p - lo, 2, n); }
+          if (kind == 5 || kind == 6) && depth == 128 { return span_reject(p - lo, 3, n); }
+          if len(tape) - 6 * records < 6 { return Pass { position: 0, kind: -1, records: 0 }; }
+          let written: bool = write_record(inout tape, records, kind, start - lo, end - lo, parent);
+          if !written { return span_reject(p - lo, 18, n); }
+          stack[4 * depth + 1] = value_state(key);
+          let count: i64 = stack[4 * depth + 3];
+          if count < 0 || count >= 1048576 { return span_reject(p - lo, 18, n); }
+          stack[4 * depth + 3] = count + value_increment(key);
+          if kind == 5 || kind == 6 {
+            if depth >= 128 { return span_reject(p - lo, 3, n); }
+            depth = depth + 1;
+            stack[4 * depth] = kind;
+            stack[4 * depth + 1] = initial_state(kind);
+            stack[4 * depth + 2] = records;
+            stack[4 * depth + 3] = 0;
+          }
+          records = records + 1;
+          p = end;
+        }
+      }
+    }
+  }
+  return span_reject(n, 18, n);
+}
