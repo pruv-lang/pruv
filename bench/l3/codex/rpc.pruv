@@ -1,5 +1,5 @@
 // Codex app-server conversation (withRpcChild with jsonrpc false, withCodex) on the G10 event loop.
-// The caller owns the receive state: st [5], line (up to 8388608 bytes), chunk [65536], tb [2050], ts [12] (see transport::receive)
+// The caller owns the receive state: st [5], line (up to 8388608 bytes), chunk [65536], tb [2050], ts [12] (see receive below)
 // and the control array ctl [8]:
 //   ctl[0] failure code (0 none; 2 internal, 3 not-found, 4 codex-unsupported, 5 timeout, 6 read-failed, 7 engine-missing)
 //   ctl[1] stage (0 pre-spawn, 1 spawn, 2 initialize, 3 thread/list, 4 thread/read, 5 thread/turns/list, 6 result)

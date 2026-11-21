@@ -314,7 +314,22 @@ pub fn string_text(source: [u8], start: i64, end: i64) -> Text ! alloc
 pub fn adapter_probe(data: [u8]) -> str ! alloc
 { let s: String = utf8_to_string(data); return string_to_str(s); }
 
-// Decode a scanner-validated quoted span. Raw UTF-8 bytes already have the correct encoding.
+// DB21 (D-DB15-1): the content of a quoted span that scan_into marked plain (no backslash, tape slot 5 == 1),
+// copied once with no count pass. The mark is trusted at run time (G-DB21-2).
+pub fn string_utf8_plain(source: [u8], start: i64, end: i64) -> [u8] ! alloc
+  requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
+  ensures len(result) <= 3 * (end - start)
+  ensures forall i in 0..len(result): (0 <= result[i] && result[i] <= 255)
+{
+  let mut first: i64 = start;
+  let mut stop: i64 = start;
+  if end - start >= 2 { first = start + 1; stop = end - 1; }
+  let need: i64 = stop - first;
+  let mut out: [u8] = alloc(need, 0);
+  copy_range(inout out, 0, source, first, need);
+  return out;
+}
+
 pub fn string_utf8_scanned(source: [u8], start: i64, end: i64) -> [u8] ! alloc
   requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
   ensures len(result) <= 3 * (end - start)
@@ -386,6 +401,16 @@ pub fn string_text_scanned(source: [u8], start: i64, end: i64) -> Text ! alloc
   ensures is_variant(result, Text::Decoded) ==> len(variant_field(result, Text::Decoded, text)) <= 3 * (end - start)
 {
   let bytes: [u8] = string_utf8_scanned(source, start, end);
+  let owned: String = utf8_to_string(bytes);
+  if len(owned) != len(bytes) { return Text::InternalInvariant(crate::json::err_internal_invariant()); }
+  return Text::Decoded(string_to_str(owned));
+}
+
+pub fn string_text_plain(source: [u8], start: i64, end: i64) -> Text ! alloc
+  requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
+  ensures is_variant(result, Text::Decoded) ==> len(variant_field(result, Text::Decoded, text)) <= 3 * (end - start)
+{
+  let bytes: [u8] = string_utf8_plain(source, start, end);
   let owned: String = utf8_to_string(bytes);
   if len(owned) != len(bytes) { return Text::InternalInvariant(crate::json::err_internal_invariant()); }
   return Text::Decoded(string_to_str(owned));

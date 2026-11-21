@@ -97,7 +97,7 @@ fn rec_ok(tape: [i64], input_length: i64, r: i64) -> bool
   ensures result ==> (0 <= tape[6 * r] && tape[6 * r] <= 7)
   ensures result ==> (0 <= tape[6 * r + 1] && tape[6 * r + 1] < tape[6 * r + 2] && tape[6 * r + 2] <= input_length)
   ensures result ==> (r < tape[6 * r + 3] && tape[6 * r + 3] <= len(tape) / 6)
-  ensures result ==> ((tape[6 * r] <= 4 || tape[6 * r] == 7) ==> (tape[6 * r + 3] == r + 1 && tape[6 * r + 5] == 0))
+  ensures result ==> ((tape[6 * r] <= 4 || tape[6 * r] == 7) ==> (tape[6 * r + 3] == r + 1 && (tape[6 * r + 5] == 0 || (tape[6 * r + 5] == 1 && (tape[6 * r] == 4 || tape[6 * r] == 7)))))
   ensures result ==> (r == 0 ==> (tape[6 * r + 4] == -1 && tape[6 * r + 3] == len(tape) / 6 && tape[6 * r] != 7))
   ensures result ==> (r > 0 ==> (0 <= tape[6 * r + 4] && tape[6 * r + 4] < r && (tape[6 * tape[6 * r + 4]] == 5 || tape[6 * tape[6 * r + 4]] == 6) && r < tape[6 * tape[6 * r + 4] + 3] && tape[6 * r + 3] <= tape[6 * tape[6 * r + 4] + 3] && tape[6 * tape[6 * r + 4] + 1] <= tape[6 * r + 1] && tape[6 * r + 2] <= tape[6 * tape[6 * r + 4] + 2]))
 {
@@ -112,7 +112,7 @@ fn rec_ok(tape: [i64], input_length: i64, r: i64) -> bool
   if kind < 0 || kind > 7 { return false; }
   if s < 0 || s >= e || e > input_length { return false; }
   if sk <= r || sk > m { return false; }
-  if (kind <= 4 || kind == 7) && (sk != r + 1 || cnt != 0) { return false; }
+  if (kind <= 4 || kind == 7) && (sk != r + 1 || (cnt != 0 && (cnt != 1 || kind < 4))) { return false; }
   if r == 0 {
     if par != -1 || sk != m || kind == 7 { return false; }
     return true;
@@ -183,7 +183,7 @@ pub fn check_tape(tape: [i64], input_length: i64) -> bool
   ensures result ==> (forall t in 0..len(tape) / 6: (0 <= tape[6 * t] && tape[6 * t] <= 7))
   ensures result ==> (forall t in 0..len(tape) / 6: (0 <= tape[6 * t + 1] && tape[6 * t + 1] < tape[6 * t + 2] && tape[6 * t + 2] <= input_length))
   ensures result ==> (forall t in 0..len(tape) / 6: (t < tape[6 * t + 3] && tape[6 * t + 3] <= len(tape) / 6))
-  ensures result ==> (forall t in 0..len(tape) / 6: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && tape[6 * t + 5] == 0)))
+  ensures result ==> (forall t in 0..len(tape) / 6: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && (tape[6 * t + 5] == 0 || (tape[6 * t + 5] == 1 && (tape[6 * t] == 4 || tape[6 * t] == 7))))))
   ensures result ==> (forall t in 0..len(tape) / 6: (t == 0 ==> (tape[6 * t + 4] == -1 && tape[6 * t + 3] == len(tape) / 6 && tape[6 * t] != 7)))
   ensures result ==> (forall t in 0..len(tape) / 6: (t > 0 ==> (0 <= tape[6 * t + 4] && tape[6 * t + 4] < t && (tape[6 * tape[6 * t + 4]] == 5 || tape[6 * tape[6 * t + 4]] == 6) && t < tape[6 * tape[6 * t + 4] + 3] && tape[6 * t + 3] <= tape[6 * tape[6 * t + 4] + 3] && tape[6 * tape[6 * t + 4] + 1] <= tape[6 * t + 1] && tape[6 * t + 2] <= tape[6 * tape[6 * t + 4] + 2])))
   ensures result ==> (forall t in 0..len(tape) / 6: (forall j in t + 1..tape[6 * t + 3]: (j < len(tape) / 6 && tape[6 * j + 1] >= tape[6 * t + 1] && tape[6 * j + 2] <= tape[6 * t + 2] && tape[6 * j + 3] <= tape[6 * t + 3] && tape[6 * j + 4] >= t)))
@@ -203,7 +203,7 @@ pub fn check_tape(tape: [i64], input_length: i64) -> bool
     invariant forall t in 0..i: (0 <= tape[6 * t] && tape[6 * t] <= 7)
     invariant forall t in 0..i: (0 <= tape[6 * t + 1] && tape[6 * t + 1] < tape[6 * t + 2] && tape[6 * t + 2] <= input_length)
     invariant forall t in 0..i: (t < tape[6 * t + 3] && tape[6 * t + 3] <= len(tape) / 6)
-    invariant forall t in 0..i: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && tape[6 * t + 5] == 0))
+    invariant forall t in 0..i: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && (tape[6 * t + 5] == 0 || (tape[6 * t + 5] == 1 && (tape[6 * t] == 4 || tape[6 * t] == 7)))))
     invariant forall t in 0..i: (t == 0 ==> (tape[6 * t + 4] == -1 && tape[6 * t + 3] == len(tape) / 6 && tape[6 * t] != 7))
     invariant forall t in 0..i: (t > 0 ==> (0 <= tape[6 * t + 4] && tape[6 * t + 4] < t && (tape[6 * tape[6 * t + 4]] == 5 || tape[6 * tape[6 * t + 4]] == 6) && t < tape[6 * tape[6 * t + 4] + 3] && tape[6 * t + 3] <= tape[6 * tape[6 * t + 4] + 3] && tape[6 * tape[6 * t + 4] + 1] <= tape[6 * t + 1] && tape[6 * t + 2] <= tape[6 * tape[6 * t + 4] + 2]))
     decreases m - i
@@ -218,7 +218,7 @@ pub fn check_tape(tape: [i64], input_length: i64) -> bool
     invariant forall t in 0..m: (0 <= tape[6 * t] && tape[6 * t] <= 7)
     invariant forall t in 0..m: (0 <= tape[6 * t + 1] && tape[6 * t + 1] < tape[6 * t + 2] && tape[6 * t + 2] <= input_length)
     invariant forall t in 0..m: (t < tape[6 * t + 3] && tape[6 * t + 3] <= len(tape) / 6)
-    invariant forall t in 0..m: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && tape[6 * t + 5] == 0))
+    invariant forall t in 0..m: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && (tape[6 * t + 5] == 0 || (tape[6 * t + 5] == 1 && (tape[6 * t] == 4 || tape[6 * t] == 7)))))
     invariant forall t in 0..m: (t == 0 ==> (tape[6 * t + 4] == -1 && tape[6 * t + 3] == len(tape) / 6 && tape[6 * t] != 7))
     invariant forall t in 0..m: (t > 0 ==> (0 <= tape[6 * t + 4] && tape[6 * t + 4] < t && (tape[6 * tape[6 * t + 4]] == 5 || tape[6 * tape[6 * t + 4]] == 6) && t < tape[6 * tape[6 * t + 4] + 3] && tape[6 * t + 3] <= tape[6 * tape[6 * t + 4] + 3] && tape[6 * tape[6 * t + 4] + 1] <= tape[6 * t + 1] && tape[6 * t + 2] <= tape[6 * tape[6 * t + 4] + 2]))
     invariant forall t in 0..r: (forall j in t + 1..tape[6 * t + 3]: (j < len(tape) / 6 && tape[6 * j + 1] >= tape[6 * t + 1] && tape[6 * j + 2] <= tape[6 * t + 2] && tape[6 * j + 3] <= tape[6 * t + 3] && tape[6 * j + 4] >= t))
