@@ -227,39 +227,35 @@ fn eng_put(w: [i64], e: i64, l: i64, inout o: [i64], at: i64) -> i64 ! alloc
 
 pub fn index_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
 {
-  let w: [i64] = copy(cx0.blob);
+  return index_from_blob(cx0, cx0.blob);
+}
+
+fn index_from_blob(cx0: crate::ent_state::Ctx, w: [i64]) -> crate::ent_state::Ctx ! alloc
+{
   let om: [i64] = crate::ent_packet::new_meta(w);
   let r0: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(w, 1), 33554432);
   let sec: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, r0 + 1), 1000000);
   let ns: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, r0 + 2), 559240);
   let base: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(w, sec), 33554432);
-  let e: [i64] = crate::ent_u16::empty();
-  // sessions needing the predicate
+  // Collect predicate IDs in session order, then use only the populated prefix.
+  let mut ids: [i64] = alloc(3 * ns, 0);
   let mut nt: i64 = 0;
   let mut i: i64 = 0;
   while i < ns
-    invariant 0 <= i && i <= ns && ns <= 559240 && 0 <= nt && nt <= i && 0 <= base && base <= 33554432
+    invariant 0 <= i && i <= ns && ns <= 559240 && 0 <= nt && nt <= i && 0 <= base && base <= 33554432 && len(ids) == 3 * ns
     decreases ns - i
   {
-    if !temp_true(w, base + 30 * i) { nt = nt + 1; }
+    let p: i64 = base + 30 * i;
+    if !temp_true(w, p) {
+      put_id(inout ids, 3 * nt, w, p);
+      nt = nt + 1;
+    }
     i = i + 1;
   }
   let mut cx: crate::ent_state::Ctx = cx0;
   let mut rbase: i64 = 0;
   if nt > 0 {
-    let mut tab: [i64] = alloc(3 * nt, 0);
-    let mut j: i64 = 0;
-    let mut m: i64 = 0;
-    while j < ns
-      invariant 0 <= j && j <= ns && ns <= 559240 && 0 <= m && m <= j && nt <= 559240 && len(tab) == 3 * nt && 0 <= base && base <= 33554432
-      decreases ns - j
-    {
-      if !temp_true(w, base + 30 * j) {
-        put_id(inout tab, 3 * m, w, base + 30 * j);
-        m = m + 1;
-      }
-      j = j + 1;
-    }
+    let tab: [i64] = truncate(ids, 3 * nt);
     let mut rq: [i64] = crate::ent_u16::zeros(4);
     crate::ent_u16::wr(inout rq, 0, 8);
     crate::ent_packet::put_vs(inout rq, 1, 7, 4, nt);

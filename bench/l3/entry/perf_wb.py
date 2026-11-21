@@ -22,19 +22,20 @@ def run(h, line):
     p = subprocess.run([str(h)], input=line + "\n", capture_output=True, text=True, timeout=3000)
     return time.time() - t, p.stdout
 
-tables = True
-args = sys.argv[1:]
-if args and args[0] == 'keys':   # keys only: no forks/engineThreads tables (isolates R2)
-    tables = False
-    args = args[1:]
-for s in [int(a) for a in args] or [500, 1000, 2000]:
-    line = case(s, tables)
-    tn, on = run(HERE / 'work/dev/harness', line)
-    old = HERE / 'work/harness_old'
-    tag = 'keys-only ' if not tables else 'tables '
-    if old.exists():
-        to, oo = run(old, line)
-        print(tag + 'sessions=%d old=%.2fs new=%.2fs identical=%s len=%d' % (s, to, tn, oo == on, len(on)))
-    else:
-        print(tag + 'sessions=%d new=%.2fs len=%d' % (s, tn, len(on)))
-    if '"terminal":"ok"' not in on: print(on[:300])
+if __name__ == "__main__":
+    tables = True
+    args = sys.argv[1:]
+    if args and args[0] == 'keys':   # keys only: no forks/engineThreads tables (isolates R2)
+        tables = False
+        args = args[1:]
+    for s in [int(a) for a in args] or [500, 1000, 2000]:
+        line = case(s, tables)
+        tn, on = run(HERE / 'work/dev/harness', line)
+        old = HERE / 'work/harness_old'
+        tag = 'keys-only ' if not tables else 'tables '
+        if old.exists():
+            to, oo = run(old, line)
+            print(tag + 'sessions=%d old=%.2fs new=%.2fs identical=%s len=%d' % (s, to, tn, oo == on, len(on)))
+        else:
+            print(tag + 'sessions=%d new=%.2fs len=%d' % (s, tn, len(on)))
+        if '"terminal":"ok"' not in on: print(on[:300])
