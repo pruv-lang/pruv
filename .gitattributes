@@ -6,3 +6,5 @@ tests/parse_edge/str_err_escape_quote_at_eof.pruv -text
 tests/parse_edge/str_err_del.pruv -text
 # L2: the WHATWG EUC-KR index is checked by SHA-256, so keep its bytes on every checkout
 bench/l0/data/index-euc-kr.txt -text
+# LG2: pruvc-rs include_str!s this file; Windows CRLF checkout would put \r into the Rust IR only
+pruvc/utf8_valid.ll text eol=lf
