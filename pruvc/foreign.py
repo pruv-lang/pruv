@@ -6,7 +6,7 @@ passes through unchanged."""
 import re
 
 from vast import *
-from typeinfo import TypeTable, fn_owner, is_array, is_collection, contains_collection, is_owned_field_type, is_nested_collection_field, type_name, is_nongeneric_struct, field_place
+from typeinfo import TypeTable, fn_owner, is_array, is_collection, contains_collection, is_owned_field_type, is_nested_collection_field, type_name, is_nongeneric_struct, field_place, is_owned_result, is_owned_value
 from refine import _kids as expr_kids
 
 
@@ -398,7 +398,7 @@ class _Ownership:
 
     def run(s, f):
         s.bor = {p.name for p in f.params
-                 if not p.take and (is_collection(p.type) or is_nongeneric_struct(p.type, s.types))}
+                 if not p.take and (is_owned_value(p.type) or is_nongeneric_struct(p.type, s.types))}
         s.proc = dict((p.name, _must_kind(p.type)) for p in f.params if p.take and _must_kind(p.type) is not None)
         st = s.block(f.body, dict((p.name, "live") for p in f.params if p.take))
         if st is not None:     # fallthrough: a live take must-consume parameter is a lost duty
@@ -429,7 +429,7 @@ class _Ownership:
             s.consumed_field = _consumed_field(v, nxt)
             s.consume(x.value, st, "let")
             s.consumed_field = None
-            if (is_array(x.type) or is_collection(x.type) or is_nongeneric_struct(x.type, s.types)
+            if (is_array(x.type) or is_owned_value(x.type) or is_nongeneric_struct(x.type, s.types)
                     or s.enum_value(x.type)):     # G-DB16-1: an enum local is tracked so a binder move can consume it
                 st[x.name] = "live"
                 declared.append(x.name)
@@ -494,8 +494,12 @@ class _Ownership:
                 s.expr(c, st)
             return st
         if isinstance(x, Match):
-            s.expr(x.scrutinee, st)
             sc = x.scrutinee
+            owned_result = is_owned_result(sc.ty)
+            if owned_result and isinstance(sc, (Var, Move)):
+                s.move(sc, st, True, s.track)
+            else:
+                s.expr(sc, st, owned_result)
             map_take = isinstance(sc, Call) and sc.name == "map_take" and sc.name not in s.funcs
             out = None
             first = True
@@ -516,7 +520,11 @@ class _Ownership:
                 # that no arm names. A match where some arm moves a binder takes the scrutinee by value: it is
                 # consumed on entry to every arm, and its array binders are tracked owners of the arm
                 srcs = ()
-                if consuming and a.enum_name is not None:
+                if owned_result and a.ctor == "Err":
+                    srcs = a.binders
+                    for b in srcs:
+                        inner[b] = "live"
+                elif consuming and a.enum_name is not None:
                     inner[sc.name] = "dead"
                     decl = s.types.get(a.enum_name)
                     variant = next(v for v in decl.variants if v.name == a.ctor)
@@ -544,7 +552,7 @@ class _Ownership:
         if e is None:
             return
         if isinstance(e, Var) and (is_array(e.ty) or (e.name in st and e.ty is not None and (
-                is_nongeneric_struct(e.ty, s.types) or s.enum_value(e.ty)))):
+                is_owned_result(e.ty) or is_nongeneric_struct(e.ty, s.types) or s.enum_value(e.ty)))):
             s.use(e, st)     # LG8: a record or enum root consumed by a field or binder move
         for k in expr_kids(e):
             s.array_reads(k, st)
@@ -567,8 +575,12 @@ class _Ownership:
             for stmt in x.body:
                 s.dead_stmt(stmt)
         elif isinstance(x, (If, While, Match)):
-            s.dead_expr(x.scrutinee if isinstance(x, Match) else x.cond)
             if isinstance(x, Match):
+                sc = x.scrutinee
+                owned_result = is_owned_result(sc.ty)
+                if owned_result and isinstance(sc, Var) and sc.name in s.bor:
+                    s.move(sc, {}, True, None)
+                s.dead_expr(sc, owned_result)
                 for a in x.arms:
                     borrowed = s.arm_borrowed(a)
                     s.bor.update(borrowed)
@@ -579,6 +591,7 @@ class _Ownership:
                     s.bor.difference_update(borrowed)
                     del s.arm_bor[len(s.arm_bor) - len(views):]
                 return
+            s.dead_expr(x.cond)
             for body in ((x.then, x.els) if isinstance(x, If) else (x.body,)):
                 for stmt in body:
                     s.dead_stmt(stmt)
@@ -593,7 +606,7 @@ class _Ownership:
             s.move(e, live, True, None)
         if owned:
             s.check_field_alias(e)
-            if isinstance(e, Var) and is_collection(e.ty) and (e.name in s.bor or e.name in s.arm_bor):
+            if isinstance(e, Var) and is_owned_value(e.ty) and (e.name in s.bor or e.name in s.arm_bor):
                 _err(e, "foreign_borrow", "borrowed alias", "%s is a read parameter and cannot be aliased" % e.name)
         if isinstance(e, Call):
             s.check_call_move_alias(e)
@@ -601,11 +614,16 @@ class _Ownership:
                 s.dead_expr(arg, take)
         else:
             for k in expr_kids(e):
+                if isinstance(e, Ctor) and e.name == "Err" and e.ty is not None and is_owned_result(e.ty):
+                    if isinstance(k, Var) and k.name in s.bor:
+                        s.move(k, {}, True, None)
+                    s.dead_expr(k, True)
+                    continue
                 s.dead_expr(k, isinstance(e, (StructLit, EnumCtor)))
 
     @staticmethod
     def check_field_alias(e):
-        if isinstance(e, (FieldAccess, VariantField)) and is_collection(e.ty):
+        if isinstance(e, (FieldAccess, VariantField)) and is_owned_value(e.ty):
             _err(e, "foreign_borrow", "borrowed alias", "the field is a read view and cannot be aliased")
 
     def arm_views(s, a):
@@ -635,12 +653,12 @@ class _Ownership:
         return ty is not None and ty.owner is None and not ty.args and ty.name in s.aggregates
 
     def move(s, e, st, consuming, track):
-        if e.fields:
+        if isinstance(e, Move) and e.fields:
             s.use(e, st)
             if e is s.consumed_field:    # G-R09-4: no restore follows, so the record is wholly moved
                 st[e.name] = "dead"
             return       # Otherwise the type checker enforces restoration. The root stays live.
-        if not (is_array(e.ty) or is_collection(e.ty) or (s.aggregate(e.ty) and e.name in st)):
+        if not (is_array(e.ty) or is_owned_value(e.ty) or (s.aggregate(e.ty) and e.name in st)):
             _err(e, "foreign_move", "move of a non-collection value",
                  "move applies to Vec, HashMap and String bindings only; use the value directly")
         n = e.name
@@ -665,7 +683,7 @@ class _Ownership:
         """let initializer / assignment / return value"""
         if isinstance(e, Move):
             s.move(e, st, True, s.track)
-        elif isinstance(e, Var) and is_collection(e.ty):
+        elif isinstance(e, Var) and is_owned_value(e.ty):
             s.use(e, st)
             if e.name in s.bor:
                 if pos == "return":
@@ -695,6 +713,11 @@ class _Ownership:
                 s.call(e, st)
                 _handle_lost(e, kind, "temporary %s is not consumed" % kind)
             s.call(e, st)
+        elif isinstance(e, Ctor) and e.name == "Err" and is_owned_result(e.ty):
+            if isinstance(e.arg, (Var, Move)):
+                s.move(e.arg, st, True, s.track)
+            else:
+                s.expr(e.arg, st, True)
         elif isinstance(e, Binary) and e.op in ("&&", "||"):
             s.expr(e.left, st)
             before = dict(st)
@@ -751,6 +774,9 @@ class _Ownership:
     def call_args(s, e, st, takes, track):
         s.check_call_move_alias(e)
         for arg, take in zip(e.args, takes):
+            if getattr(e, "take_result_error", False):
+                s.move(arg, st, True, track)
+                continue
             root = arg
             if e.name == "string_eq":   # R-6e-11: a field or a vec_get element of a place borrows the place's root
                 inner = arg.args[0] if isinstance(arg, Call) and arg.name == "vec_get" and arg.args else arg
@@ -759,7 +785,7 @@ class _Ownership:
             if take:
                 if isinstance(arg, Move):
                     s.move(arg, st, True, track)
-                elif isinstance(arg, Var) and is_collection(arg.ty):
+                elif isinstance(arg, Var) and is_owned_value(arg.ty):
                     s.use(arg, st)
                     if arg.name in s.bor:
                         _err(arg, "foreign_move", "moving a borrowed parameter",
@@ -770,7 +796,7 @@ class _Ownership:
                     s.expr(arg, st, True)
             elif isinstance(arg, Move):
                 s.move(arg, st, False, track)
-            elif isinstance(root, Var) and (root is not arg or is_collection(root.ty) or root.name in st):
+            elif isinstance(root, Var) and (root is not arg or is_owned_value(root.ty) or root.name in st):
                 if track.get(root.name) == "move":
                     _err(arg, "foreign_borrow", "borrowed and moved in one call",
                          "do not pass %s both read-only and with move in one call" % root.name)

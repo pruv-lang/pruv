@@ -1351,7 +1351,9 @@ impl Model {
             Ty::I64 | Ty::Opt | Ty::Res => false,
             Ty::Param(_) => true,
             Ty::Inst(g) if g.name == "result" => match g.result_error() {
-                Some(e) => self.wf_trivial(&Ty::from_gtype(&g.args[0]))? && self.wf_trivial(&Ty::from_gtype(e))?,
+                Some(e) => !Self::is_buf(&Ty::from_gtype(e))
+                    && self.wf_trivial(&Ty::from_gtype(&g.args[0]))?
+                    && self.wf_trivial(&Ty::from_gtype(e))?,
                 None => false,
             },
             Ty::Inst(g) if g.name == "option" => self.wf_trivial(&Ty::from_gtype(&g.args[0]))?,

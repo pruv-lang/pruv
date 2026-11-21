@@ -400,14 +400,15 @@ let o: Option<bool> = Some::<bool>(true);   // also None::<bool>, Ok::<bool>(x),
   on a `T`. (`match` on an `Option<T>` or `Choice<A, B>` is fine; the payload variable is a `T`.)
 - `Result<T>` keeps an `i64` error code: `Err::<T>(code)`.
 - **Typed errors (LG10 E1).** `Result<T, E>` carries an error value of type `E`. `Result<T>` means exactly
-  `Result<T, i64>`: the two spellings are the same type with the same code, proof and ABI. In E1, `E` may be `i64`,
-  `bool`, or a value struct or enum (also a generic application that is a value). Any other `E` (`String`, `str`,
-  arrays, collections, a record holding a buffer, `Option`, `Result`, `u8`, `()`, a type parameter) is
+  `Result<T, i64>`: the two spellings are the same type with the same code, proof and ABI. `E` may be `i64`,
+  `bool`, a value struct or enum (also a generic application that is a value), or an owned `String` (LG11 E2, below).
+  Any other `E` (`str`, arrays, collections, a record holding a buffer, `Option`, `Result`, `u8`, `()`, a type
+  parameter) is
   `type/result_error_type`. Constructors name `E`: `Ok::<T, E>(v)`, `Err::<T, E>(e)` with `e: E`; `Ok::<T>`,
   `Err::<T>` and unqualified `Ok`/`Err` keep `E = i64` (no inference of `E`). In `match`, `Err(e)` binds `e: E`, and
   the contract selector `err_val(r)` has type `E`. `Result<T, A>` and `Result<T, B>` are different types
   (`type/type_mismatch`). The proof models the error payload with its own sort and well-formedness, and the
-  recursive size counts it. There is no `?` operator. The LLVM backend does not support `E != i64` yet
+  recursive size counts it. The LLVM backend does not support `E != i64` yet
   (`codegen/unsupported_type`, use the Rust backend).
   ```
   struct ParseErr { pos: i64, code: i64 }
@@ -416,6 +417,37 @@ let o: Option<bool> = Some::<bool>(true);   // also None::<bool>, Ok::<bool>(x),
   {
     if c >= 48 && c <= 57 { return Ok::<i64, ParseErr>(c - 48); }
     return Err::<i64, ParseErr>(ParseErr { pos: 0, code: c });
+  }
+  ```
+- **The `?` operator (LG11).** `e?` takes a `Result<T, E>` and yields its Ok value, or returns its error from the
+  enclosing function. It is allowed only as the whole right-hand side of a statement: `let [mut] x: T = e?;`,
+  `x = e?;` or `e?;`. Anywhere else (inside another expression, a `return`, an argument, a condition, a contract) is
+  `type/try_position`. The operand must be a `Result` (`type/try_operand`), the function must return a
+  `Result<U, E'>` (`type/try_return`), and the errors must be the same type, `E == E'` (`type/try_error_type`; there
+  is no error conversion). The statement and the rest of its block mean exactly
+  `match e { Ok(v) => { let x: T = v; <rest> } Err(err) => { return Err::<U, E>(err); } }` with fresh names, so the
+  proof checks the postconditions on the early-return path as for the hand-written `match`, and both backends compile
+  the same `match`. The LLVM backend supports `?` for `E = i64`.
+  ```
+  fn quarter(x: i64) -> Result<i64>
+    requires x >= 0
+  {
+    let h: i64 = half(x)?;
+    let q: i64 = half(h)?;
+    return Ok(q);
+  }
+  ```
+- **Owned `String` errors (LG11 E2).** `E` may be an owned `String`. A `Result<T, String>` is owned like a `String`:
+  `Err::<T, String>(s)` moves `s`, the `Err(e)` arm of a `match` moves the error into `e` (the matched local is used
+  up), `?` moves it into the early return, and use after a move is `type/foreign_move`. In contracts `err_val(r)` is a
+  `String` (`len(err_val(result))`). The LLVM backend rejects `E = String` (`codegen/unsupported_type`). Records that
+  hold a buffer (E3) and `T = String` on the Ok side stay rejected.
+  ```
+  fn need_pos(x: i64) -> Result<i64, String> ! alloc
+    ensures !is_ok(result) ==> len(err_val(result)) == 12
+  {
+    if x > 0 { return Ok::<i64, String>(x); }
+    return Err::<i64, String>(string_from("not positive"));
   }
   ```
 - `alloc`, `copy`, indexing and stores work on `[T]` (`T: Element`) as on `[i64]`; the verifier knows that
@@ -480,7 +512,8 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   Under the same conditions `vec_push::<T>(vec_new::<T>(), x)` is emitted as `::std::vec![x]` (one element at
   exact capacity, no length check, since an empty vector meets `len(v) < 2^40`); both uses stay listed.
 - **Collections.** `Vec<T>`, `HashMap<K, V>` (`K` is `i64`, `bool` or `String` under R-6e-5) and
-  `String` hold values. Collections cannot be stored in `Option`, `Result` or arrays. R-6e-1, R-6e-3 and R-6e-6
+  `String` hold values. Collections cannot be stored in `Option`, `Result` or arrays, except an owned `String` as the
+  error of a `Result<T, String>` (LG11 E2). R-6e-1, R-6e-3 and R-6e-6
   describe collection fields and the permitted nesting. Operations (`vec_*` and `map_*` take explicit type arguments, `string_*` and `len` take none): `vec_new`, `vec_push`,
   `vec_get`, `map_new`, `map_insert`, `map_get` (returns `Option<V>`), `string_new`, `string_push_str`, `string_byte`,
   `string_to_str` (copies into a `str`), `string_from` (copies a `str` into a new `String`), `vec_clear`, `string_eq`, and `len`.
@@ -2110,7 +2143,11 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/refinement_base` | type | a refinement on a type it cannot apply to |
 | `type/refinement_bounds` | type | refinement bounds outside i64, or an empty range |
 | `type/reserved` | type | a function named like a builtin |
-| `type/result_error_type` | type | a `Result<T, E>` error type `E` that E1 does not support (section 6c) |
+| `type/result_error_type` | type | a `Result<T, E>` error type `E` that E1/E2 do not support (section 6c) |
+| `type/try_position` | type | a `?` that is not the whole right-hand side of a let, an assignment or an expression statement (section 6c) |
+| `type/try_operand` | type | a `?` operand that is not a `Result` (section 6c) |
+| `type/try_return` | type | a `?` in a function that does not return a `Result` (section 6c) |
+| `type/try_error_type` | type | a `?` whose error type differs from the function's error type (section 6c) |
 | `type/result_scope` | type | `result` used outside `ensures` where it is not a declared name (R-1-1) |
 | `type/return_type` | type | a `return` that does not match the result type |
 | `type/reveal_target` | type | `reveal` of something that is not an opaque function (R-6o-3) |

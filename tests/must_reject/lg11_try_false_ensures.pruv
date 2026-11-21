@@ -1,0 +1,12 @@
+fn half(x: i64) -> Result<i64> {
+  if x > 0 { return Ok(x); }
+  return Err(x);
+}
+
+// the early-return path of `?` returns Err, so the postcondition fails there
+fn g(x: i64) -> Result<i64>
+  ensures is_ok(result)
+{
+  let h: i64 = half(x)?;
+  return Ok(h);
+}

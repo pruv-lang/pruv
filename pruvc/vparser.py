@@ -15,7 +15,7 @@ TOKEN_RE = re.compile(r"""
  (?P<ws>[ \t\r]+) | (?P<nl>\n) | (?P<comment>//[^\n]*)
 |(?P<int>[0-9][0-9_]*)
 |(?P<id>[A-Za-z_][A-Za-z0-9_]*)
-|(?P<op>==>|==|!=|<=|>=|<<|&&|\|\||->|=>|::|\.\.|\.|\||\#\[|[-+*/%<>=!&^~(){}\[\],:;])
+|(?P<op>==>|==|!=|<=|>=|<<|&&|\|\||->|=>|::|\.\.|\.|\||\#\[|[-+*/%<>=!&^~?(){}\[\],:;])
 """, re.X)
 
 
@@ -415,6 +415,7 @@ class Parser:
             if s.peek().kind == "eof":
                 s.parallel_syntax(s.peek(), "unclosed par block", "add '}'")
             m = s.peek()
+            start = s.i
             try:
                 e = s.expr()
             except PruvError as ex:
@@ -423,7 +424,7 @@ class Parser:
                 raise PruvError("parse", ex.line, ex.col, "parallel_syntax",
                                 "malformed par block: " + ex.message,
                                 "write semicolon-terminated calls: `par { f(inout a); g(inout b); }`")
-            if not isinstance(e, Call):
+            if not isinstance(e, Call) and not any(t.kind == "op" and t.val == "?" for t in s.t[start:s.i]):
                 s.parallel_syntax(m, "a par block member must be a call", "write only calls, e.g. `f(inout a);`")
             if not s.at(";"):
                 s.parallel_syntax(s.peek(), "a par block call must end with ';'", "insert ';' after the call")
@@ -1053,7 +1054,7 @@ class Parser:
             fields = s.peek(2).kind == "id" and s.at(":", 3)
             continued = (s.at("}", 2) and s.peek(3).val in
                          ("{", "invariant", "decreases", "[", ".", "==>", "||", "&&",
-                          "==", "!=", "<", "<=", ">", ">=", "+", "-", "*", "/", "%"))
+                          "==", "!=", "<", "<=", ">", ">=", "+", "-", "*", "/", "%", "?"))
             deref_assign = continued and s.at("*", 3) and s.peek(4).kind == "id" and s.at("=", 5)
             if not fields and (not continued or deref_assign):
                 s.next()
@@ -1170,6 +1171,9 @@ class Parser:
                 s.next()
                 f = s.ident()
                 e = FieldAccess(e.line, e.col, e, f.val)
+            elif s.at("?"):
+                s.next()
+                e = Unary(e.line, e.col, "?", e)
             else:
                 break
         return e

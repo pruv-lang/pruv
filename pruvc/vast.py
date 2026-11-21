@@ -97,7 +97,7 @@ class Var(Expr):
 
 @dataclass
 class Unary(Expr):
-    op: str            # "-" | "!" | "*"
+    op: str            # "-" | "!" | "*" | "~" | "?" (postfix, lowered by the checker)
     operand: Expr
     ty: Optional[Type] = None
 

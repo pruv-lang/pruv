@@ -1262,7 +1262,7 @@ impl Parser {
                         "write semicolon-terminated calls: `par { f(inout a); g(inout b); }`")
                 } else { ex }
             })?;
-            if !matches!(e, Expr::Call(_)) {
+            if !matches!(e, Expr::Call(_)) && !matches!(&e, Expr::Unary(u) if u.op == "?") {
                 return Err(PruvError::new("parse", m.line, m.col, "parallel_syntax",
                     "a par block member must be a call", "write only calls, e.g. `f(inout a);`"));
             }
@@ -1768,7 +1768,10 @@ impl Parser {
         let mut e = self.primary()?;
         let mut chain = 0; // a postfix chain that piles up to the left, like a[i][j].f, is counted as depth too
         loop {
-            if self.at("[", 0) {
+            if self.at("?", 0) {
+                self.bump();
+                e = Expr::Unary(Unary { line: e.line(), col: e.col(), op: "?".into(), operand: Box::new(e), ty: None });
+            } else if self.at("[", 0) {
                 let t = self.next();
                 let i = self.expr()?;
                 self.expect("]")?;

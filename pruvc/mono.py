@@ -353,6 +353,8 @@ class _Mono:
             return node
         new = type(node)(**dict((n, self.cp(getattr(node, n))) for n in fields))
         if isinstance(node, Call):
+            if getattr(node, "take_result_error", False):
+                new.take_result_error = True
             if node.old is not None:
                 # G5 A1: a resolved old(a) keeps its operand-parameter metadata (parameter names survive module
                 # resolution and generic substitution, so the defining parameter is the same name)

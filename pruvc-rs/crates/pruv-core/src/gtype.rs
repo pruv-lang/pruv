@@ -111,6 +111,15 @@ impl GType {
         self.owner.is_none() && collection_arity(&self.name).is_some()
     }
 
+    pub(crate) fn has_string_error(&self) -> bool {
+        self.result_error().is_some_and(|e| e.owner.is_none() && e.name == "string" && e.args.is_empty())
+    }
+
+    /// A collection or a Result carrying an owned String.
+    pub(crate) fn is_collection_owner(&self) -> bool {
+        self.is_collection() || self.has_string_error()
+    }
+
     /// G6 A0: this is a collection type or has one anywhere inside its type arguments.
     pub fn contains_collection(&self) -> bool {
         self.is_collection() || self.args.iter().any(|a| a.contains_collection())
@@ -196,6 +205,10 @@ pub fn key_is_collection(key: &str) -> bool {
         Ok(t) => t.is_collection(),
         Err(_) => false,
     }
+}
+
+pub(crate) fn key_is_collection_owner(key: &str) -> bool {
+    GType::try_from_key(key).is_ok_and(|ty| ty.is_collection_owner())
 }
 
 /// Concrete Vec results that can be exposed by a Rust host entry.
