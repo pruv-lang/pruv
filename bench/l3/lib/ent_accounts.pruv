@@ -2,18 +2,18 @@
 // Also the input check for ops 1, 5 and 6, which packet::input_check does not cover.
 
 // /^acc_[a-f0-9]{16}$/ : exactly 20 units, so a trailing line terminator is rejected by the length
-pub fn valid_account_id(w: [i64], p: i64) -> bool
+pub fn valid_account_id(w: [i64], p: i64) -> bool ! alloc
 {
   if crate::ent_u16::rd(w, p) != 6 { return false; }
   if crate::ent_value::str_len(w, p) != 20 { return false; }
-  let s: i64 = crate::ent_value::str_start(w, p);
-  if crate::ent_u16::rd(w, s) != 97 || crate::ent_u16::rd(w, s + 1) != 99 || crate::ent_u16::rd(w, s + 2) != 99 || crate::ent_u16::rd(w, s + 3) != 95 { return false; }
+  let units: [i64] = crate::ent_value::str_units(w, p);
+  if crate::ent_u16::rd(units, 0) != 97 || crate::ent_u16::rd(units, 1) != 99 || crate::ent_u16::rd(units, 2) != 99 || crate::ent_u16::rd(units, 3) != 95 { return false; }
   let mut i: i64 = 4;
   while i < 20
-    invariant 4 <= i && i <= 20 && 0 <= s && s <= 67108864
+    invariant 4 <= i && i <= 20
     decreases 20 - i
   {
-    let u: i64 = crate::ent_u16::rd(w, s + i);
+    let u: i64 = crate::ent_u16::rd(units, i);
     if !((u >= 48 && u <= 57) || (u >= 97 && u <= 102)) { return false; }
     i = i + 1;
   }
@@ -82,6 +82,7 @@ pub fn account_home_begin(input: [i64]) -> [i64] ! alloc
   let home: [i64] = account_home(crate::ent_value::str_units(input, r0), crate::ent_value::str_units(input, r0 + 3), crate::ent_value::str_units(input, r0 + 6));
   let mut rec: [i64] = crate::ent_u16::zeros(4);
   crate::ent_u16::wr(inout rec, 0, 0);
-  crate::ent_packet::put_vs(inout rec, 1, 6, 0, len(home));
-  return crate::ent_packet::mk_packet(3, id, 0, 5, home, rec, e, e, e, 0);
+  let mut pool: [i64] = crate::ent_value::pool_new();
+  crate::ent_value::pool_put(inout pool, inout rec, 1, home);
+  return crate::ent_packet::mk_packet(3, id, 0, 5, pool, rec, e, e, e, 0);
 }

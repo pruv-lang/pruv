@@ -122,8 +122,8 @@ fn gt0(w: [i64], p: i64) -> bool
   return false;
 }
 
-// the recipe: toff/tlen locate the title and soff/slen the slot name in the pool the call carries; base moves the view strings
-pub fn recipe(p: [i64], rec: [i64], rows: [i64], wk: [i64], found: i64, cr: [i64], toff: i64, tlen: i64, soff: i64, slen: i64, base: i64) -> [i64] ! alloc
+// the recipe: slots carries the title and slot name over the suffix pool; suffix_base and base locate the suffix and view pools
+pub fn recipe(p: [i64], rec: [i64], rows: [i64], wk: [i64], found: i64, cr: [i64], slots: [i64], suffix_base: i64, base: i64) -> [i64] ! alloc
   requires 0 <= found && found <= 16777216
   ensures len(result) >= 0
 {
@@ -131,14 +131,14 @@ pub fn recipe(p: [i64], rec: [i64], rows: [i64], wk: [i64], found: i64, cr: [i64
   let mut o: [i64] = crate::ent_u16::zeros(29 + 16 * n);
   crate::req_value::copy_slot(inout o, 0, wk, 21);
   let mut fl: i64 = 0;
-  if crate::ent_u16::rd(rows, 18 * found + 9) == 6 && crate::ent_u16::rd(rows, 18 * found + 11) > 0 { fl = fl + 1; }
+  if crate::ent_u16::rd(rows, 18 * found + 9) == 6 && crate::ent_value::pstr_len(rows, 18 * found + 9) > 0 { fl = fl + 1; }
   if crate::req_value::is_str_lit(p, rec, 33, "fork") && !crate::req_value::is_str_lit(p, rows, 18 * found + 3, "grok") { fl = fl + 2; }
   if crate::req_value::truthy(cr, 4) { fl = fl + 4; }
   if crate::req_value::truthy(cr, 7) { fl = fl + 8; }
   if n > 0 { fl = fl + 16; }
   crate::ent_u16::wr(inout o, 3, fl);
-  crate::req_value::put(inout o, 4, 6, soff, slen);
-  crate::req_value::put(inout o, 7, 6, toff, tlen);
+  crate::req_value::copy_slot_off(inout o, 4, slots, 3, suffix_base);
+  crate::req_value::copy_slot_off(inout o, 7, slots, 0, suffix_base);
   crate::req_value::copy_slot_off(inout o, 10, cr, 7, base);
   crate::req_value::copy_slot(inout o, 13, rec, 24);
   crate::req_value::copy_slot(inout o, 16, rec, 30);

@@ -135,18 +135,21 @@ pub fn threads_item(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
   let mut el2: [i64] = alloc(n, 0);
   let mut tp2: [i64] = alloc(n, 0);
   let n2: i64 = ses_pairs(cx.blob, om, crate::ent_packet::nsec(cx.blob), r0, inout ep2, inout el2, inout tp2, 0, 1);
-  let pl: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_len(cx.blob, 0), 16777216);
+  let mut pool: [i64] = crate::ent_dispatch::blob_pool(cx.blob);
+  let codex: [i64] = crate::ent_u16::lit("codex");
+  let codex_off: i64 = crate::ent_value::pool_add(inout pool, codex);
+  let codex_len: i64 = crate::ent_value::slot_len_of(codex);
   let mut tab: [i64] = alloc(6 * n, 0);
   let mut i: i64 = 0;
   while i < n
-    invariant 0 <= i && i <= n && n <= 2796202 && len(tab) == 6 * n && len(ep2) == n && len(el2) == n && len(tp2) == n && 0 <= pl && pl <= 16777216
+    invariant 0 <= i && i <= n && n <= 2796202 && len(tab) == 6 * n && len(ep2) == n && len(el2) == n && len(tp2) == n
     decreases n - i
   {
     let e: i64 = crate::ent_u16::rd(ep2, i);
     let l: i64 = crate::ent_u16::rd(el2, i);
     let t: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(tp2, i), 4294967296);
     if e < 0 {
-      crate::ent_packet::put_vs(inout tab, 6 * i, 6, pl, 5);
+      crate::ent_packet::put_vs(inout tab, 6 * i, 6, codex_off, codex_len);
     } else if l >= 0 {
       crate::ent_packet::put_vs(inout tab, 6 * i, 6, crate::ent_u16::rd(cx.blob, crate::ent_u16::clamp(e, 4294967296) + 1), l);
     } else {
@@ -155,7 +158,6 @@ pub fn threads_item(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
     let b: i64 = crate::ent_u16::put_range(inout tab, 6 * i + 3, cx.blob, t, 3);
     i = i + 1;
   }
-  let pool: [i64] = crate::ent_u16::cat(crate::ent_dispatch::blob_pool(cx.blob), crate::ent_u16::lit("codex"));
   let mut rec: [i64] = crate::ent_u16::zeros(4);
   crate::ent_packet::put_vs(inout rec, 1, 7, 4, n);
   let e: [i64] = crate::ent_u16::empty();
@@ -185,8 +187,7 @@ pub fn excluded_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! allo
   let base: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, sec), 33554432);
   let mut rec: [i64] = crate::ent_u16::zeros(4);
   let a: i64 = crate::ent_u16::put_range(inout rec, 1, cx.ent, base, 3);
-  let s0: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, 0), 33554432);
-  let pool: [i64] = crate::ent_u16::slice(cx.ent, s0, s0 + crate::ent_u16::clamp(crate::ent_packet::sec_len(cx.ent, 0), 16777216));
+  let pool: [i64] = crate::ent_dispatch::blob_pool(cx.ent);
   return crate::ent_state::set_done(cx, pool, rec, e, 0);
 }
 
@@ -499,9 +500,8 @@ pub fn index_complete(w: [i64], head: i64, id: i64, seq: i64, answer: [i64], pro
     let vp: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(val, h), 4294967296);
     if !full && crate::ent_u16::rd(w, vp) == 6 {
       // the first pass checked the span; the copy stays total either way
-      let va: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, vp + 1), 16777216);
-      let vb: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, vp + 2), 16777216);
-      let z: i64 = crate::ent_u16::put_range(inout out, 12 + vc, w, ps + va, vb);
+      let vb: i64 = crate::ent_value::str_len(w, vp);
+      let z: i64 = crate::ent_u16::put_range(inout out, 12 + vc, w, crate::ent_value::str_start_at(w, vp, ps), vb);
       crate::ent_packet::put_vs(inout out, at + 3, 6, vc, vb);
       vc = crate::ent_u16::clamp(vc + vb, 16777216);
     } else {

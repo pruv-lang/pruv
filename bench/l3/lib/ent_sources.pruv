@@ -51,18 +51,22 @@ fn emit_row(cx0: crate::ent_state::Ctx, src: [i64], eng: [i64], kind: [i64], has
             nt: i64, na: i64, nb: i64, nu: [i64], home: [i64]) -> crate::ent_state::Ctx ! alloc
 {
   let mut cx: crate::ent_state::Ctx = cx0;
-  let ls: i64 = len(src);
-  let le: i64 = len(eng);
-  let lk: i64 = len(kind);
-  let la: i64 = len(acct);
-  let ln: i64 = len(nu);
-  let lh: i64 = len(home);
-  let o1: i64 = ls;
-  let o2: i64 = o1 + le;
-  let o3: i64 = o2 + lk;
-  let o4: i64 = o3 + la;
-  let o5: i64 = o4 + ln;
-  let pool: [i64] = crate::ent_u16::cat(crate::ent_u16::cat(crate::ent_u16::cat(src, eng), crate::ent_u16::cat(kind, acct)), crate::ent_u16::cat(nu, home));
+  let ls: i64 = crate::ent_value::slot_len_of(src);
+  let le: i64 = crate::ent_value::slot_len_of(eng);
+  let lk: i64 = crate::ent_value::slot_len_of(kind);
+  let la: i64 = crate::ent_value::slot_len_of(acct);
+  let ln: i64 = crate::ent_value::slot_len_of(nu);
+  let lh: i64 = crate::ent_value::slot_len_of(home);
+  let se: [i64] = crate::ent_value::pool_cat(src, eng);
+  let ka: [i64] = crate::ent_value::pool_cat(kind, acct);
+  let nh: [i64] = crate::ent_value::pool_cat(nu, home);
+  let seka: [i64] = crate::ent_value::pool_cat(se, ka);
+  let pool: [i64] = crate::ent_value::pool_cat(seka, nh);
+  let o1: i64 = crate::ent_value::pool_base(src, eng);
+  let o2: i64 = crate::ent_value::pool_base(se, ka);
+  let o3: i64 = o2 + crate::ent_value::pool_base(kind, acct);
+  let o4: i64 = crate::ent_value::pool_base(seka, nh);
+  let o5: i64 = o4 + crate::ent_value::pool_base(nu, home);
   let mut rec: [i64] = crate::ent_u16::zeros(18);
   crate::ent_packet::put_vs(inout rec, 0, 6, 0, ls);
   crate::ent_packet::put_vs(inout rec, 3, 6, o1, le);
@@ -248,7 +252,7 @@ fn drive(cx0: crate::ent_state::Ctx, aseq: i64, dseq: i64, s00: i64) -> [i64] ! 
   let mut cx: crate::ent_state::Ctx = cx0;
   let mut s0: i64 = s00;
   let mut racc: [i64] = crate::ent_u16::empty();
-  let mut pacc: [i64] = crate::ent_u16::empty();
+  let mut pacc: [i64] = crate::ent_value::pool_new();
   let mut iter: i64 = 0;
   while iter < 64
     invariant 0 <= iter && iter <= 64
@@ -257,10 +261,10 @@ fn drive(cx0: crate::ent_state::Ctx, aseq: i64, dseq: i64, s00: i64) -> [i64] ! 
     cx = phase_item(cx);
     if cx.stalled == 0 && cx.bad == 0 && crate::ent_u16::clamp(cx.pos, 4294967296) != len(cx.lg) { cx = crate::ent_state::fail(cx); }
     if cx.done != 2 { iter = 64; } else {
-      let lp: i64 = len(pacc);
+      let lp: i64 = crate::ent_value::pool_base(pacc, cx.opool);
       let r: [i64] = rebase(cx.orec, lp);
       racc = crate::ent_u16::cat(racc, r);
-      pacc = crate::ent_u16::cat(pacc, cx.opool);
+      pacc = crate::ent_value::pool_cat(pacc, cx.opool);
       let e: [i64] = crate::ent_u16::empty();
       cx = crate::ent_state::ctx_new(1, cx.op_id, cx.blob, e, cx.ck);
       s0 = aseq;
@@ -275,12 +279,12 @@ fn drive(cx0: crate::ent_state::Ctx, aseq: i64, dseq: i64, s00: i64) -> [i64] ! 
     if aseq >= 268435456 || s0 >= 268435456 { return crate::ent_packet::boundary(1, cx.op_id, 1); }
     let ckp: crate::ent_state::Ctx = crate::ent_state::set_ck(cx, 0, crate::ent_u16::clamp(crate::ent_state::get_ck(cx, 0), 15) + 16 * crate::ent_u16::clamp(s0, 268435455));
     let st: [i64] = crate::ent_state::encode_state(1, cx.rcode, cx.raux, ckp.ck, cx.blob, cx.lg);
-    let pool: [i64] = crate::ent_u16::cat(cx.rpool, pacc);
-    return crate::ent_packet::mk_packet(1, cx.op_id, aseq, 1, pool, cx.rrec, st, rebase(racc, len(cx.rpool)), cx.rtab, cx.rntab);
+    let pool: [i64] = crate::ent_value::pool_cat(cx.rpool, pacc);
+    return crate::ent_packet::mk_packet(1, cx.op_id, aseq, 1, pool, cx.rrec, st, rebase(racc, crate::ent_value::pool_base(cx.rpool, pacc)), cx.rtab, cx.rntab);
   }
   if cx.done != 0 {
-    let pool: [i64] = crate::ent_u16::cat(cx.opool, pacc);
-    return crate::ent_packet::mk_packet(3, cx.op_id, dseq, 1, pool, cx.orec, e, rebase(racc, len(cx.opool)), cx.otab, cx.ontab);
+    let pool: [i64] = crate::ent_value::pool_cat(cx.opool, pacc);
+    return crate::ent_packet::mk_packet(3, cx.op_id, dseq, 1, pool, cx.orec, e, rebase(racc, crate::ent_value::pool_base(cx.opool, pacc)), cx.otab, cx.ontab);
   }
   return crate::ent_packet::boundary(1, cx.op_id, 2);
 }

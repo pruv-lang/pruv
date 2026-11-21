@@ -125,6 +125,15 @@ pub fn w_sess(w: [i64], t: [i64], m: i64, n: i64, base: i64) -> [i64] ! alloc
 
 // ---- storage records ----
 
+// Write into the preallocated pack without copying the accumulated pool.
+fn pack_put(inout o: [i64], start: i64, at: i64, slot: i64, units: [i64]) -> i64
+  requires 0 <= start && start <= 2147483647 && 0 <= at && at <= 2147483647
+  ensures len(o) == len(old(o))
+{
+  crate::req_value::put(inout o, slot, 6, at - start, crate::ent_value::slot_len_of(units));
+  return crate::ent_u16::put_all(inout o, at, units);
+}
+
 // the pack of count slots of w from word from (strings read from pool); empty when the units reach 2^30
 pub fn pack(pool: [i64], w: [i64], from: i64, count: i64) -> [i64] ! alloc
   requires 0 <= from && from <= 850000000 && 0 <= count && count <= 33554432
@@ -136,7 +145,7 @@ pub fn pack(pool: [i64], w: [i64], from: i64, count: i64) -> [i64] ! alloc
     invariant 0 <= k && k <= count && count <= 33554432 && 0 <= from && from <= 850000000 && 0 <= tot && tot <= 1073741823
     decreases count - k
   {
-    let ul: i64 = crate::ent_u16::clamp(len(crate::req_value::units(pool, w, from + 3 * k)), 1073741823);
+    let ul: i64 = crate::ent_u16::clamp(crate::ent_value::slot_len_of(crate::req_value::units(pool, w, from + 3 * k)), 1073741823);
     tot = crate::ent_u16::clamp(tot + ul, 1073741823);
     k = k + 1;
   }
@@ -153,8 +162,7 @@ pub fn pack(pool: [i64], w: [i64], from: i64, count: i64) -> [i64] ! alloc
     let q: i64 = from + 3 * k;
     if crate::ent_u16::rd(w, q) == 6 {
       let u: [i64] = crate::req_value::units(pool, w, q);
-      crate::req_value::put(inout o, 3 * k, 6, at - hd - 1, len(u));
-      let na: i64 = crate::ent_u16::put_all(inout o, at, u);
+      let na: i64 = pack_put(inout o, hd + 1, at, 3 * k, u);
       at = crate::ent_u16::clamp(na, 2147483647);
     } else {
       crate::req_value::copy_slot(inout o, 3 * k, w, q);
@@ -408,18 +416,29 @@ pub fn wset(inout w: [i64], p: i64, v: i64) -> ()
 
 // ---- the done value {items: [...]} ----
 
-fn key(inout o: [i64], at: i64, kb: i64, off: i64, n: i64) -> ()
-  requires 0 <= kb && kb <= 1000000000 && 0 <= off && off <= 1000 && 0 <= n && n <= 1000
-  ensures len(o) == len(old(o))
+fn make_keys(inout slots: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
 {
-  crate::req_value::put(inout o, at, 6, kb + off, n);
+  let mut keys: [i64] = crate::ent_value::pool_new();
+  crate::ent_value::pool_put_lit(inout keys, inout slots, 0, "items");
+  crate::ent_value::pool_put_lit(inout keys, inout slots, 3, "thread");
+  crate::ent_value::pool_put_lit(inout keys, inout slots, 6, "title");
+  crate::ent_value::pool_put_lit(inout keys, inout slots, 9, "updatedAt");
+  crate::ent_value::pool_put_lit(inout keys, inout slots, 12, "size");
+  crate::ent_value::pool_put_lit(inout keys, inout slots, 15, "messages");
+  crate::ent_value::pool_put_lit(inout keys, inout slots, 18, "path");
+  crate::ent_value::pool_put_lit(inout keys, inout slots, 21, "boundSessionId");
+  crate::ent_value::pool_put_lit(inout keys, inout slots, 24, "maybeOpen");
+  return keys;
 }
 
 // the done pool: the request pool followed by the key literals
 pub fn fin_pool(pool: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  return crate::ent_u16::cat(pool, crate::ent_u16::lit("itemsthreadtitleupdatedAtsizemessagespathboundSessionIdmaybeOpen"));
+  let mut slots: [i64] = crate::ent_u16::zeros(27);
+  let keys: [i64] = make_keys(inout slots);
+  return crate::ent_value::pool_cat(pool, keys);
 }
 
 // done record [0, V] with V = object slot over section 6
@@ -491,22 +510,11 @@ fn scmp(pool: [i64], w: [i64], p: i64, q: i64) -> i64 ! alloc
   if ta < tb { return -1; }
   if ta > tb { return 1; }
   if ta == 6 {
-    let u: [i64] = crate::req_value::units(pool, w, p);
-    let v: [i64] = crate::req_value::units(pool, w, q);
-    let nu: i64 = len(u);
-    let nv: i64 = len(v);
-    let mut i: i64 = 0;
-    while i < nu && i < nv
-      invariant 0 <= i && i <= nu && nu == len(u) && nv == len(v)
-      decreases nu - i
-    {
-      if u[i] < v[i] { return -1; }
-      if u[i] > v[i] { return 1; }
-      i = i + 1;
+    let size: i64 = crate::ent_value::pool_words(pool);
+    if crate::req_value::str_ok(size, w, p) && crate::req_value::str_ok(size, w, q) {
+      return crate::ent_value::pstr_cmp(pool, w, p, q);
     }
-    if nu < nv { return -1; }
-    if nu > nv { return 1; }
-    return 0;
+    return cmp_units(crate::req_value::units(pool, w, p), crate::req_value::units(pool, w, q));
   }
   let a1: i64 = crate::ent_u16::rd(w, p + 1);
   let b1: i64 = crate::ent_u16::rd(w, q + 1);
@@ -516,6 +524,26 @@ fn scmp(pool: [i64], w: [i64], p: i64, q: i64) -> i64 ! alloc
   let b2: i64 = crate::ent_u16::rd(w, q + 2);
   if a2 < b2 { return -1; }
   if a2 > b2 { return 1; }
+  return 0;
+}
+
+// The shared slot comparator assumes that both spans fit. Retain clipped comparison for malformed records.
+fn cmp_units(a: [i64], b: [i64]) -> i64
+  ensures -1 <= result && result <= 1
+{
+  let na: i64 = len(a);
+  let nb: i64 = len(b);
+  let mut i: i64 = 0;
+  while i < na && i < nb
+    invariant 0 <= i && i <= na && na == len(a) && nb == len(b)
+    decreases na - i
+  {
+    if a[i] < b[i] { return -1; }
+    if a[i] > b[i] { return 1; }
+    i = i + 1;
+  }
+  if na < nb { return -1; }
+  if na > nb { return 1; }
   return 0;
 }
 
@@ -623,8 +651,10 @@ pub fn fin_tabs(pool: [i64], w: [i64]) -> [i64] ! alloc
     k = k + 1;
   }
   let mut o: [i64] = crate::ent_u16::zeros(total);
-  let kb: i64 = crate::ent_u16::clamp(len(pool), 1000000000);
-  key(inout o, 0, kb, 0, 5);
+  let mut keys: [i64] = crate::ent_u16::zeros(27);
+  let kp: [i64] = make_keys(inout keys);
+  let kb: i64 = crate::ent_u16::clamp(crate::ent_value::pool_base(pool, kp), 1000000000);
+  crate::req_value::copy_slot_off(inout o, 0, keys, 0, kb);
   crate::req_value::put(inout o, 3, 7, 7, m);
   let mut at: i64 = 6 + 3 * m;
   let ord: [i64] = sess_order(pool, w);
@@ -637,39 +667,39 @@ pub fn fin_tabs(pool: [i64], w: [i64]) -> [i64] ! alloc
     let c: i64 = cnt(w, i);
     crate::req_value::put(inout o, 6 + 3 * i, 8, 8 + i, c);
     let mut q: i64 = at;
-    key(inout o, q, kb, 5, 6);
+    crate::req_value::copy_slot_off(inout o, q, keys, 3, kb);
     crate::req_value::copy_slot(inout o, q + 3, w, p + 9);
     q = q + 6;
-    key(inout o, q, kb, 11, 5);
+    crate::req_value::copy_slot_off(inout o, q, keys, 6, kb);
     crate::req_value::copy_slot(inout o, q + 3, w, title_at(pool, w, ord, i));
     q = q + 6;
     if present(w, p + 12) {
-      key(inout o, q, kb, 16, 9);
+      crate::req_value::copy_slot_off(inout o, q, keys, 9, kb);
       crate::req_value::copy_slot(inout o, q + 3, w, p + 12);
       q = q + 6;
     }
     if present(w, p + 15) {
-      key(inout o, q, kb, 25, 4);
+      crate::req_value::copy_slot_off(inout o, q, keys, 12, kb);
       crate::req_value::copy_slot(inout o, q + 3, w, p + 15);
       q = q + 6;
     }
     if present(w, p + 18) {
-      key(inout o, q, kb, 29, 8);
+      crate::req_value::copy_slot_off(inout o, q, keys, 15, kb);
       crate::req_value::copy_slot(inout o, q + 3, w, p + 18);
       q = q + 6;
     }
     if present(w, p + 21) {
-      key(inout o, q, kb, 37, 4);
+      crate::req_value::copy_slot_off(inout o, q, keys, 18, kb);
       crate::req_value::copy_slot(inout o, q + 3, w, p + 21);
       q = q + 6;
     }
     if has_bound(w, i) {
-      key(inout o, q, kb, 41, 14);
+      crate::req_value::copy_slot_off(inout o, q, keys, 21, kb);
       crate::req_value::copy_slot(inout o, q + 3, w, p + 27);
       q = q + 6;
     }
     if crate::req_value::truthy(w, p + 24) {
-      key(inout o, q, kb, 55, 9);
+      crate::req_value::copy_slot_off(inout o, q, keys, 24, kb);
       crate::req_value::put(inout o, q + 3, 3, 0, 0);
       q = q + 6;
     }

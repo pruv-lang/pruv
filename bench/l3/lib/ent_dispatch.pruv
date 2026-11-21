@@ -84,28 +84,30 @@ pub fn rethrow(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
   }
   // MUTANT M12: has_detail is true (a non-Error detail is the stringified value "undefined")
   let has_detail: bool = is_err;
-  let mut dl: i64 = 0;
-  if has_detail {
-    dl = 9;
-    if is_err { dl = crate::ent_value::str_len(cx.ent, rp + 13); }
-  }
-  let mut pool: [i64] = crate::ent_u16::zeros(11 + dl);
-  let p0: i64 = crate::ent_value::put_lit(inout pool, 0, "read-failed");
+  let mut pool: [i64] = crate::ent_value::pool_new();
   let mut rec: [i64] = crate::ent_u16::zeros(10);
   crate::ent_u16::wr(inout rec, 0, 2);
-  crate::ent_packet::put_vs(inout rec, 1, 6, 0, 11);
+  crate::ent_value::pool_put_lit(inout pool, inout rec, 1, "read-failed");
   if has_detail {
     if is_err {
-      let q: i64 = crate::ent_u16::put_range(inout pool, 11, cx.ent, crate::ent_value::str_start(cx.ent, rp + 13), dl);
+      crate::ent_value::pool_put(inout pool, inout rec, 4, crate::ent_value::str_units(cx.ent, rp + 13));
     } else {
-      let q: i64 = crate::ent_value::put_lit(inout pool, 11, "undefined");
+      crate::ent_value::pool_put_lit(inout pool, inout rec, 4, "undefined");
     }
-    crate::ent_packet::put_vs(inout rec, 4, 6, 11, dl);
   } else {
     crate::ent_packet::put_vs(inout rec, 4, 0, 0, 0);
   }
   let c: i64 = crate::ent_u16::put_range(inout rec, 7, cx.ent, rp + 1, 3);
   return crate::ent_state::set_done(cx, pool, rec, e, 0);
+}
+
+// Copy a title prefix into the preallocated pool without copying the whole pool.
+fn put_title_prefix(inout pool: [i64], off: i64, inout tab: [i64], at: i64, w: [i64], p: i64, cut: i64) -> ()
+  requires 0 <= off && off <= 4294967296
+  ensures len(pool) == len(old(pool)) && len(tab) == len(old(tab))
+{
+  crate::ent_packet::put_vs(inout tab, at, 6, off, cut);
+  let end: i64 = crate::ent_u16::put_range(inout pool, off, w, crate::ent_value::str_start(w, p), cut);
 }
 
 // ---- op 3: list_external ----
@@ -142,8 +144,7 @@ fn list_recipe(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
     let a: i64 = crate::ent_u16::put_range(inout tab, tb + 1, cx.ent, rb, 3);
     if crate::ent_value::str_len(cx.ent, rb + 3) > 200 {
       crate::ent_u16::wr(inout tab, tb, 1);
-      crate::ent_packet::put_vs(inout tab, tb + 4, 6, 200 * k, cut);
-      let b: i64 = crate::ent_u16::put_range(inout pool, 200 * k, cx.ent, crate::ent_value::str_start(cx.ent, rb + 3), cut);
+      put_title_prefix(inout pool, 200 * k, inout tab, tb + 4, cx.ent, rb + 3, cut);
       k = k + 1;
     } else {
       crate::ent_u16::wr(inout tab, tb, 0);

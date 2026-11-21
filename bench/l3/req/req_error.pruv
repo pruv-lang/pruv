@@ -1,9 +1,8 @@
 // L3-9 request ABI v1 (ABI.md 3.2 done record): terminal records. tags: 1 original thrown identity V, 2 WireError (key V,
 // message V), 5 core code (0 InvalidPacket, 1 InputTooLarge, 2 InternalInvariant).
 
-// pool of the sourceUnknown wire error: key "wireWork.engineImport.sourceUnknown" (35 units), then the message (12 units)
-// built from code units (the text is not ASCII).
-pub fn unknown_pool() -> [i64] ! alloc
+// Assemble the sourceUnknown record with the key followed by the non-ASCII message.
+fn unknown(inout r: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0
 {
   let mut m: [i64] = crate::ent_u16::zeros(12);
@@ -19,16 +18,25 @@ pub fn unknown_pool() -> [i64] ! alloc
   crate::ent_u16::wr(inout m, 9, 52376);
   crate::ent_u16::wr(inout m, 10, 50556);
   crate::ent_u16::wr(inout m, 11, 46);
-  return crate::ent_u16::cat(crate::ent_u16::lit("wireWork.engineImport.sourceUnknown"), m);
+  let mut pool: [i64] = crate::ent_value::pool_new();
+  crate::ent_u16::wr(inout r, 0, 2);
+  crate::ent_value::pool_put_lit(inout pool, inout r, 1, "wireWork.engineImport.sourceUnknown");
+  crate::ent_value::pool_put(inout pool, inout r, 4, m);
+  return pool;
+}
+
+pub fn unknown_pool() -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let mut r: [i64] = crate::ent_u16::zeros(7);
+  return unknown(inout r);
 }
 
 pub fn unknown_rec() -> [i64] ! alloc
   ensures len(result) >= 0
 {
   let mut r: [i64] = crate::ent_u16::zeros(7);
-  crate::ent_u16::wr(inout r, 0, 2);
-  crate::req_value::put(inout r, 1, 6, 0, 35);
-  crate::req_value::put(inout r, 4, 6, 35, 12);
+  let pool: [i64] = unknown(inout r);
   return r;
 }
 

@@ -371,12 +371,7 @@ impl<'a, S: Req> Case<'a, S> {
                     self.flush_events(idx);
                     vec![cp, cr, empty.clone(), empty.clone(), empty, s5]
                 } else if rp.w[10] == 2 {
-                    // checkFolder: the folder is the request record's slot 27 (string slot over the request pool)
-                    let (pool, rec) = (&rp.secs[0], &rp.secs[1]);
-                    if rec.len() < 30 || rec[27] != 6 || (rec[28] + rec[29]) as usize > pool.len() {
-                        return Err("internal: checkFolder await without a string folder slot".to_string());
-                    }
-                    let units: Vec<u16> = pool[rec[28] as usize..(rec[28] + rec[29]) as usize].iter().map(|&x| x as u16).collect();
+                    let units = eh::folder_units(&rp.secs[0], &rp.secs[1])?;
                     self.flush_prims(idx);
                     let (cp, cr, o) = self.leaf.serve_folder(&units)?;
                     let (n, i) = (self.reqs[idx].name.clone(), self.reqs[idx].inst.clone());

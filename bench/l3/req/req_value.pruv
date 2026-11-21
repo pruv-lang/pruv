@@ -30,10 +30,7 @@ pub fn units(pool: [i64], w: [i64], p: i64) -> [i64] ! alloc
   requires 0 <= p && p <= 1000000000
   ensures len(result) >= 0
 {
-  if crate::ent_u16::rd(w, p) != 6 { return crate::ent_u16::empty(); }
-  let a: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 1), 1073741823);
-  let n: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 2), 1073741823);
-  return crate::ent_u16::slice(pool, a, a + n);
+  return crate::ent_value::pstr_units(pool, w, p);
 }
 
 // the slot at p is a string slot equal to the ASCII literal s
@@ -41,7 +38,18 @@ pub fn is_str_lit(pool: [i64], w: [i64], p: i64, s: str) -> bool ! alloc
   requires 0 <= p && p <= 1000000000
 {
   if crate::ent_u16::rd(w, p) != 6 { return false; }
-  return crate::ent_u16::eq_lit(units(pool, w, p), s);
+  // Some replies reach this predicate before slot validation. Preserve the clipped-slice behavior there.
+  if needs_clip(pool, w, p) {
+    return crate::ent_u16::eq_lit(units(pool, w, p), s);
+  }
+  return crate::ent_value::pstr_eq_lit(pool, w, p, s);
+}
+
+fn needs_clip(pool: [i64], w: [i64], p: i64) -> bool
+  requires 0 <= p && p <= 1000000000
+{
+  let off: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 1), 1073741823);
+  return off + crate::ent_value::pstr_len(w, p) > crate::ent_value::pool_words(pool);
 }
 
 // rows of 3-word slots grouped as 18-word rows (6 slots): every string slot moves up by base
@@ -50,19 +58,23 @@ pub fn rebase(rows: [i64], base: i64) -> [i64] ! alloc
 {
   let mut o: [i64] = crate::ent_u16::slice(rows, 0, len(rows));
   let n: i64 = len(o);
-  let b: i64 = crate::ent_u16::clamp(base, 1073741823);
   let mut i: i64 = 0;
   while i < n
-    invariant 0 <= i && i <= n + 2 && n == len(o) && 0 <= b && b <= 1073741823
+    invariant 0 <= i && i <= n + 2 && n == len(o)
     decreases n + 2 - i
   {
     if crate::ent_u16::rd(o, i) == 6 {
-      let nv: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(o, i + 1), 1073741823) + b;
+      let nv: i64 = rebased_off(crate::ent_u16::rd(o, i + 1), base);
       crate::ent_u16::wr(inout o, i + 1, nv);
     }
     i = i + 3;
   }
   return o;
+}
+
+fn rebased_off(off: i64, base: i64) -> i64
+{
+  return crate::ent_u16::clamp(off, 1073741823) + crate::ent_u16::clamp(base, 1073741823);
 }
 
 // copy slot p of src to slot q of o; a string slot moves up by base
@@ -72,7 +84,7 @@ pub fn copy_slot_off(inout o: [i64], q: i64, src: [i64], p: i64, base: i64) -> (
 {
   let t: i64 = crate::ent_u16::rd(src, p);
   let mut a: i64 = crate::ent_u16::rd(src, p + 1);
-  if t == 6 { a = crate::ent_u16::clamp(a, 1073741823) + crate::ent_u16::clamp(base, 1073741823); }
+  if t == 6 { a = rebased_off(a, base); }
   crate::ent_packet::put_vs(inout o, q, t, a, crate::ent_u16::rd(src, p + 2));
 }
 
@@ -92,7 +104,7 @@ pub fn truthy(w: [i64], p: i64) -> bool
     if hi / 1048576 == 2047 && (hi % 1048576 != 0 || a != 0) { return false; }
     return true;
   }
-  if t == 6 { return b > 0; }
+  if t == 6 { return crate::ent_value::pstr_len(w, p) > 0; }
   if t == 7 || t == 8 || t == 9 || t == 11 { return true; }
   return false;
 }
@@ -103,7 +115,12 @@ pub fn slot_eq(pa: [i64], a: [i64], ia: i64, pb: [i64], b: [i64], ib: i64) -> bo
 {
   let ta: i64 = crate::ent_u16::rd(a, ia);
   if ta != crate::ent_u16::rd(b, ib) { return false; }
-  if ta == 6 { return crate::ent_u16::eq(units(pa, a, ia), units(pb, b, ib)); }
+  if ta == 6 {
+    if needs_clip(pa, a, ia) || needs_clip(pb, b, ib) {
+      return crate::ent_u16::eq(units(pa, a, ia), units(pb, b, ib));
+    }
+    return crate::ent_value::pstr_eq(pa, a, ia, pb, b, ib);
+  }
   return crate::ent_u16::rd(a, ia + 1) == crate::ent_u16::rd(b, ib + 1) && crate::ent_u16::rd(a, ia + 2) == crate::ent_u16::rd(b, ib + 2);
 }
 

@@ -308,3 +308,153 @@ pub fn key_put_at(w: [i64], p0: i64, pool: i64, inout o: [i64], at0: i64) -> i64
   }
   return at;
 }
+
+// ---- DB14: string pool coordinate helpers ----
+// Every writer and reader of string slots goes through these, so the slot coordinate (today UTF-16 units of a unit
+// pool, slot [6, unit_off, unit_len]) is decided here and in the packet checks only (D-DB13-1 stage 3 flips the bodies).
+// A "pool" below is a section-0 pool as an array; a "pslot" is a string slot whose pool is a separate array.
+
+// a fresh empty pool
+pub fn pool_new() -> [i64] ! alloc
+  ensures len(result) == 0
+{
+  return crate::ent_u16::empty();
+}
+
+// words the pool occupies as section 0 (section length; every limit on section sizes uses this)
+pub fn pool_words(pool: [i64]) -> i64
+  ensures result == len(pool)
+{
+  return len(pool);
+}
+
+// slot length of the unit string s once it is in a pool
+pub fn slot_len_of(s: [i64]) -> i64
+  ensures result == len(s)
+{
+  return len(s);
+}
+
+// append the unit string s to pool; returns the slot offset of s in the new pool
+pub fn pool_add(inout pool: [i64], s: [i64]) -> i64 ! alloc
+  ensures 0 <= result
+{
+  let off: i64 = len(pool);
+  pool = crate::ent_u16::cat(pool, s);
+  return off;
+}
+
+// append the unit string s to pool and write its slot [6, off, len] at o[at]
+pub fn pool_put(inout pool: [i64], inout o: [i64], at: i64, s: [i64]) -> () ! alloc
+  ensures len(o) == len(old(o))
+{
+  let off: i64 = pool_add(inout pool, s);
+  crate::ent_packet::put_vs(inout o, at, 6, off, slot_len_of(s));
+}
+
+// pool_put of an ASCII literal
+pub fn pool_put_lit(inout pool: [i64], inout o: [i64], at: i64, s: str) -> () ! alloc
+  ensures len(o) == len(old(o))
+{
+  pool_put(inout pool, inout o, at, crate::ent_u16::lit(s));
+}
+
+// pool a followed by pool b; slots into b move up by pool_base(a, b)
+pub fn pool_cat(a: [i64], b: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  return crate::ent_u16::cat(a, b);
+}
+
+pub fn pool_base(a: [i64], b: [i64]) -> i64
+  ensures result == len(a)
+{
+  return len(a);
+}
+
+// logical size of a packet in the words the limits and the op 9 state numbers count (the expanded packet length)
+pub fn pkt_size(w: [i64]) -> i64
+  ensures result == len(w)
+{
+  return len(w);
+}
+
+// readers of a pslot (pool, w, p): units, length, literal and slot equality, and the UTF-16 order of two strings
+pub fn pstr_len(w: [i64], p: i64) -> i64
+  requires 0 <= p && p <= 1000000000
+  ensures 0 <= result && result <= 1073741823
+{
+  return crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 2), 1073741823);
+}
+
+pub fn pstr_units(pool: [i64], w: [i64], p: i64) -> [i64] ! alloc
+  requires 0 <= p && p <= 1000000000
+  ensures len(result) >= 0
+{
+  if crate::ent_u16::rd(w, p) != 6 { return crate::ent_u16::empty(); }
+  let a: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 1), 1073741823);
+  return crate::ent_u16::slice(pool, a, a + pstr_len(w, p));
+}
+
+// pslot equals the ASCII literal s (false when not a string slot)
+pub fn pstr_eq_lit(pool: [i64], w: [i64], p: i64, s: str) -> bool
+  requires 0 <= p && p <= 1000000000
+{
+  if crate::ent_u16::rd(w, p) != 6 { return false; }
+  let n: i64 = len(s);
+  if n != pstr_len(w, p) { return false; }
+  let st: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 1), 1073741823);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(s) && 0 <= st && st <= 1073741823
+    decreases n - i
+  {
+    if crate::ent_u16::rd(pool, st + i) != s[i] { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// two string pslots have equal units
+pub fn pstr_eq(pa: [i64], a: [i64], ia: i64, pb: [i64], b: [i64], ib: i64) -> bool
+  requires 0 <= ia && ia <= 1000000000 && 0 <= ib && ib <= 1000000000
+{
+  let n: i64 = pstr_len(a, ia);
+  if n != pstr_len(b, ib) { return false; }
+  let s1: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(a, ia + 1), 1073741823);
+  let s2: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(b, ib + 1), 1073741823);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && 0 <= s1 && s1 <= 1073741823 && 0 <= s2 && s2 <= 1073741823
+    decreases n - i
+  {
+    if crate::ent_u16::rd(pa, s1 + i) != crate::ent_u16::rd(pb, s2 + i) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// UTF-16 code unit order of the string pslots p and q of w over one pool: -1, 0 or 1
+pub fn pstr_cmp(pool: [i64], w: [i64], p: i64, q: i64) -> i64
+  requires 0 <= p && p <= 1000000000 && 0 <= q && q <= 1000000000
+  ensures -1 <= result && result <= 1
+{
+  let nu: i64 = pstr_len(w, p);
+  let nv: i64 = pstr_len(w, q);
+  let su: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 1), 1073741823);
+  let sv: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, q + 1), 1073741823);
+  let mut i: i64 = 0;
+  while i < nu && i < nv
+    invariant 0 <= i && i <= nu && 0 <= su && su <= 1073741823 && 0 <= sv && sv <= 1073741823
+    decreases nu - i
+  {
+    let a: i64 = crate::ent_u16::rd(pool, su + i);
+    let b: i64 = crate::ent_u16::rd(pool, sv + i);
+    if a < b { return -1; }
+    if a > b { return 1; }
+    i = i + 1;
+  }
+  if nu < nv { return -1; }
+  if nu > nv { return 1; }
+  return 0;
+}
