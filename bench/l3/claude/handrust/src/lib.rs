@@ -1,28 +1,10 @@
-//! Hand-written plain-Rust Claude JSONL "window" import (speed baseline against the Pruv version).
-//! Target: the same packet as `oracle.py::window_packet(data, cut_before)`.
-//!
-//! Approach: one pass over byte slices, `serde_json::from_slice::<Value>` per line (features
-//! `arbitrary_precision` for raw number text such as "-0" / "1e999", `unbounded_depth` for the depth fallback).
-//! Handled so the packet still equals the oracle (slow path, only after serde rejected a line):
-//!   * lone surrogate escapes ("\ud800", "\udc00", "\ud83dA"): rewritten to "�" in a scratch copy, then
-//!     parsed again (the oracle maps lone surrogates in values to U+FFFD).
-//!   * container depth exactly 128: serde's limit rejects 128 nested containers, the oracle accepts them. The
-//!     fallback scans the nesting depth (string aware); > 128 -> line ignored, == 128 -> parsed without the limit.
-//!   * duplicate keys: serde's map keeps the last one, like the oracle; an earlier deeper value still counts for depth.
-//!
-//! Known remaining differences (none expected on real transcripts):
-//!   1. With `arbitrary_precision`, a JSON object whose only key is "$serde_json::private::Number" is read by serde
-//!      as a number (or rejected) instead of an object. The oracle sees a plain object.
-//!   2. Keys containing lone surrogates are rewritten too, so two distinct such keys collapse into one
-//!      (only matters for keys the import never looks up, so it is invisible in the packet).
-//!   3. The depth fallback relies on serde reporting "recursion limit exceeded" in its error text.
-//!   4. The oracle decodes the 8 KiB drop prefix with Python's replacement decoder, this uses `from_utf8_lossy`;
-//!      both replace by maximal subparts and the replacement char matches no pattern, so results are the same.
+//! Safe hand-written Claude JSONL packet baseline for head, tail, and window.
 
-use serde_json::{Map, Value};
 use std::borrow::Cow;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
+use std::str;
 
+const EDGE: usize = 65_536;
 const WINDOW: usize = 8_388_608;
 const LINE: usize = 1_048_576;
 const DROP: usize = 8192;
@@ -206,9 +188,9 @@ fn iso_str(s: &str) -> Stamp {
     None
 }
 
-fn iso(v: Option<&Value>) -> Stamp {
+fn iso(v: Option<&Value<'_>>) -> Stamp {
     match v? {
-        Value::Number(n) => iso_number(&n.to_string()),
+        Value::Number(n) => iso_number(n),
         Value::String(s) => iso_str(s),
         _ => None,
     }
@@ -315,169 +297,229 @@ fn dropped_user(head: &[u8]) -> bool {
             || key_colon_val(b, b"\"isSidechain\"", b"true"))
 }
 
-// ---------------- line parsing with serde_json and the slow-path fallbacks ----------------
-fn hex4(b: &[u8]) -> Option<u32> {
-    if b.len() < 4 {
-        return None;
-    }
-    let mut n = 0u32;
-    for &c in &b[..4] {
-        n = n * 16 + (c as char).to_digit(16)?;
-    }
-    Some(n)
+// Objects and raw number tokens are distinct even for serde_json's private
+// number key. Keys use WTF-8 for lone surrogates; values use U+FFFD.
+type Object<'a> = BTreeMap<Cow<'a, [u8]>, Value<'a>>;
+
+enum Value<'a> {
+    Null,
+    Bool(bool),
+    Number(&'a str),
+    String(Cow<'a, str>),
+    Array(Vec<Value<'a>>),
+    Object(Object<'a>),
 }
 
-/// Copies `src` into `out`, turning lone surrogate escapes into "�". Returns whether anything changed.
-fn rewrite_lone_surrogates(src: &[u8], out: &mut Vec<u8>) -> bool {
-    let mut changed = false;
-    let mut in_str = false;
-    let mut i = 0;
-    out.reserve(src.len());
-    while i < src.len() {
-        let c = src[i];
-        if !in_str {
-            if c == b'"' {
-                in_str = true;
-            }
-            out.push(c);
-            i += 1;
-            continue;
-        }
-        match c {
-            b'"' => {
-                in_str = false;
-                out.push(c);
-                i += 1;
-            }
-            b'\\' => {
-                if src.get(i + 1) == Some(&b'u') {
-                    if let Some(n) = hex4(&src[i + 2..]) {
-                        if (0xD800..0xDC00).contains(&n) {
-                            let pair = src.get(i + 6) == Some(&b'\\')
-                                && src.get(i + 7) == Some(&b'u')
-                                && matches!(src.get(i + 8..).and_then(hex4), Some(m) if (0xDC00..0xE000).contains(&m));
-                            if pair {
-                                out.extend_from_slice(&src[i..i + 12]);
-                                i += 12;
-                            } else {
-                                out.extend_from_slice(b"\\ufffd");
-                                changed = true;
-                                i += 6;
-                            }
-                        } else if (0xDC00..0xE000).contains(&n) {
-                            out.extend_from_slice(b"\\ufffd");
-                            changed = true;
-                            i += 6;
-                        } else {
-                            out.extend_from_slice(&src[i..i + 6]);
-                            i += 6;
-                        }
-                        continue;
-                    }
-                }
-                out.push(c);
-                if let Some(&d) = src.get(i + 1) {
-                    out.push(d);
-                }
-                i += 2;
-            }
-            _ => {
-                out.push(c);
-                i += 1;
-            }
-        }
-    }
-    changed
-}
+struct Parser<'a>(&'a str);
 
-/// Container nesting deeper than `limit` (string aware; exact for valid JSON).
-fn deeper_than(src: &[u8], limit: usize) -> bool {
-    let (mut d, mut in_str, mut esc) = (0usize, false, false);
-    for &c in src {
-        if in_str {
-            if esc {
-                esc = false;
-            } else if c == b'\\' {
-                esc = true;
-            } else if c == b'"' {
-                in_str = false;
-            }
+impl<'a> Parser<'a> {
+    fn peek(&self) -> Option<u8> {
+        self.0.as_bytes().first().copied()
+    }
+
+    fn eat(&mut self, token: &str) -> bool {
+        if let Some(rest) = self.0.strip_prefix(token) {
+            self.0 = rest;
+            true
         } else {
-            match c {
-                b'"' => in_str = true,
-                b'{' | b'[' => {
-                    d += 1;
-                    if d > limit {
-                        return true;
+            false
+        }
+    }
+
+    fn ws(&mut self) {
+        self.0 = self.0.trim_start_matches([' ', '\t', '\r', '\n']);
+    }
+
+    fn hex4(&mut self) -> Option<u32> {
+        let digits = self.0.get(..4)?;
+        if !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        self.0 = &self.0[4..];
+        u32::from_str_radix(digits, 16).ok()
+    }
+
+    fn escape(&mut self, out: &mut Vec<u8>, key: bool) -> Option<()> {
+        let b = self.peek()?;
+        if !b.is_ascii() {
+            return None;
+        }
+        self.0 = &self.0[1..];
+        match b {
+            b'"' | b'\\' | b'/' => out.push(b),
+            b'b' => out.push(8),
+            b'f' => out.push(12),
+            b'n' => out.push(b'\n'),
+            b'r' => out.push(b'\r'),
+            b't' => out.push(b'\t'),
+            b'u' => {
+                let mut cp = self.hex4()?;
+                if (0xD800..0xDC00).contains(&cp) {
+                    let rest = self.0;
+                    if self.eat("\\u") {
+                        let low = self.hex4()?;
+                        if (0xDC00..0xE000).contains(&low) {
+                            cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                        } else {
+                            self.0 = rest;
+                        }
                     }
                 }
-                b'}' | b']' => d = d.saturating_sub(1),
-                _ => {}
+                if let Some(c) = char::from_u32(cp) {
+                    out.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes());
+                } else if key {
+                    out.extend_from_slice(&[
+                        0xED, (0x80 | ((cp >> 6) & 0x3F)) as u8, (0x80 | (cp & 0x3F)) as u8,
+                    ]);
+                } else {
+                    out.extend_from_slice("\u{FFFD}".as_bytes());
+                }
+            }
+            _ => return None,
+        }
+        Some(())
+    }
+
+    fn string(&mut self, key: bool) -> Option<Cow<'a, [u8]>> {
+        if !self.eat("\"") {
+            return None;
+        }
+        let mut decoded = None::<Vec<u8>>;
+        loop {
+            let end = self.0.bytes().position(|b| matches!(b, b'"' | b'\\' | 0..=31))?;
+            let chunk = &self.0.as_bytes()[..end];
+            let mark = self.0.as_bytes()[end];
+            self.0 = &self.0[end + 1..];
+            match mark {
+                b'"' => return Some(match decoded {
+                    Some(mut buf) => {
+                        buf.extend_from_slice(chunk);
+                        Cow::Owned(buf)
+                    }
+                    None => Cow::Borrowed(chunk),
+                }),
+                b'\\' => {
+                    let buf = decoded.get_or_insert_with(Vec::new);
+                    buf.extend_from_slice(chunk);
+                    self.escape(buf, key)?;
+                }
+                _ => return None,
             }
         }
     }
-    false
+
+    fn digits(&mut self) -> bool {
+        let n = self.0.bytes().take_while(u8::is_ascii_digit).count();
+        self.0 = &self.0[n..];
+        n != 0
+    }
+
+    fn number(&mut self) -> Option<&'a str> {
+        let start = self.0;
+        self.eat("-");
+        if !self.eat("0") && !self.digits() {
+            return None;
+        }
+        if self.eat(".") && !self.digits() {
+            return None;
+        }
+        if self.eat("e") || self.eat("E") {
+            if !self.eat("+") {
+                self.eat("-");
+            }
+            if !self.digits() {
+                return None;
+            }
+        }
+        Some(&start[..start.len() - self.0.len()])
+    }
+
+    fn items(&mut self, end: &str, mut item: impl FnMut(&mut Self) -> Option<()>) -> Option<()> {
+        self.ws();
+        if self.eat(end) {
+            return Some(());
+        }
+        loop {
+            item(self)?;
+            self.ws();
+            if self.eat(end) {
+                return Some(());
+            }
+            if !self.eat(",") {
+                return None;
+            }
+            self.ws();
+        }
+    }
+
+    fn object(&mut self, depth: usize) -> Option<Object<'a>> {
+        if depth > 128 || !self.eat("{") {
+            return None;
+        }
+        let mut obj = BTreeMap::new();
+        self.items("}", |p| {
+            let key = p.string(true)?;
+            p.ws();
+            if !p.eat(":") {
+                return None;
+            }
+            obj.insert(key, p.value(depth + 1)?);
+            Some(())
+        })?;
+        Some(obj)
+    }
+
+    fn value(&mut self, depth: usize) -> Option<Value<'a>> {
+        self.ws();
+        Some(match self.peek()? {
+            b'{' => Value::Object(self.object(depth)?),
+            b'[' if depth <= 128 => {
+                self.eat("[");
+                let mut items = Vec::new();
+                self.items("]", |p| {
+                    items.push(p.value(depth + 1)?);
+                    Some(())
+                })?;
+                Value::Array(items)
+            }
+            b'"' => Value::String(match self.string(false)? {
+                Cow::Borrowed(bytes) => Cow::Borrowed(str::from_utf8(bytes).ok()?),
+                Cow::Owned(bytes) => Cow::Owned(String::from_utf8(bytes).ok()?),
+            }),
+            b'-' | b'0'..=b'9' => Value::Number(self.number()?),
+            b't' if self.eat("true") => Value::Bool(true),
+            b'f' if self.eat("false") => Value::Bool(false),
+            b'n' if self.eat("null") => Value::Null,
+            _ => return None,
+        })
+    }
 }
 
-/// serde's recursion limit rejects 128 nested containers; the oracle allows exactly 128.
-fn parse_deep(src: &[u8], err: &serde_json::Error) -> Option<Value> {
-    if !err.to_string().contains("recursion limit") || deeper_than(src, 128) {
-        return None;
-    }
-    let mut de = serde_json::Deserializer::from_slice(src);
-    de.disable_recursion_limit();
-    let mut it = de.into_iter::<Value>();
-    let v = it.next()?.ok()?;
-    if it.next().is_some() {
-        return None;
-    }
-    Some(v)
-}
-
-fn parse_slow(line: &[u8], first_err: serde_json::Error, scratch: &mut Vec<u8>) -> Option<Value> {
-    scratch.clear();
-    if line.windows(2).any(|w| w == b"\\u") && rewrite_lone_surrogates(line, scratch) {
-        let src = &scratch[..];
-        return match serde_json::from_slice::<Value>(src) {
-            Ok(v) => Some(v),
-            Err(e) => parse_deep(src, &e),
-        };
-    }
-    parse_deep(line, &first_err)
-}
-
-fn parse_line(line: &[u8], scratch: &mut Vec<u8>) -> Option<Map<String, Value>> {
-    match line.iter().find(|&&b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r')) {
-        Some(&b'{') => {}
-        _ => return None,
-    }
-    let v = match serde_json::from_slice::<Value>(line) {
-        Ok(v) => v,
-        Err(e) => parse_slow(line, e, scratch)?,
-    };
-    match v {
-        Value::Object(m) => Some(m),
-        _ => None,
-    }
+fn parse_line(line: &[u8]) -> Option<Object<'_>> {
+    let mut parser = Parser(str::from_utf8(line).ok()?);
+    parser.ws();
+    let object = parser.object(1)?;
+    parser.ws();
+    parser.0.is_empty().then_some(object)
 }
 
 // ---------------- entry classification ----------------
-fn get_str<'a>(m: &'a Map<String, Value>, k: &str) -> Option<&'a str> {
-    match m.get(k) {
-        Some(Value::String(s)) => Some(s.as_str()),
+fn get_str<'a>(m: &'a Object<'_>, k: &str) -> Option<&'a str> {
+    match m.get(k.as_bytes()) {
+        Some(Value::String(s)) => Some(s.as_ref()),
         _ => None,
     }
 }
 
-fn is_true(m: &Map<String, Value>, k: &str) -> bool {
-    matches!(m.get(k), Some(Value::Bool(true)))
+fn is_true(m: &Object<'_>, k: &str) -> bool {
+    matches!(m.get(k.as_bytes()), Some(Value::Bool(true)))
 }
 
-fn task_origin(e: &Map<String, Value>) -> bool {
-    matches!(e.get("origin"), Some(Value::Object(o)) if get_str(o, "kind") == Some("task-notification"))
+fn task_origin(e: &Object<'_>) -> bool {
+    matches!(e.get(b"origin".as_slice()), Some(Value::Object(o)) if get_str(o, "kind") == Some("task-notification"))
 }
 
-fn is_human_text(e: &Map<String, Value>, text: &str) -> bool {
+fn is_human_text(e: &Object<'_>, text: &str) -> bool {
     let t = es_trim(text);
     if t.is_empty() {
         return false;
@@ -491,18 +533,18 @@ fn is_human_text(e: &Map<String, Value>, text: &str) -> bool {
         && task_origin(e))
 }
 
-fn human_text<'a>(e: &'a Map<String, Value>) -> Option<Cow<'a, str>> {
+fn human_text<'a>(e: &'a Object<'_>) -> Option<Cow<'a, str>> {
     if get_str(e, "type") != Some("user") || is_true(e, "isMeta") || is_true(e, "isSidechain") {
         return None;
     }
-    let content = match e.get("message") {
-        Some(Value::Object(m)) => m.get("content"),
+    let content = match e.get(b"message".as_slice()) {
+        Some(Value::Object(m)) => m.get(b"content".as_slice()),
         _ => None,
     };
     match content {
         Some(Value::String(s)) => {
             if is_human_text(e, s) {
-                Some(Cow::Borrowed(s.as_str()))
+                Some(Cow::Borrowed(s.as_ref()))
             } else {
                 None
             }
@@ -516,9 +558,9 @@ fn human_text<'a>(e: &'a Map<String, Value>) -> Option<Cow<'a, str>> {
                 match get_str(o, "type") {
                     Some("tool_result") => return None,
                     Some("text") => {
-                        if let Some(Value::String(t)) = o.get("text") {
+                        if let Some(Value::String(t)) = o.get(b"text".as_slice()) {
                             match count {
-                                0 => first = Some(t.as_str()),
+                                0 => first = Some(t.as_ref()),
                                 1 => {
                                     joined.push_str(first.unwrap_or(""));
                                     joined.push_str("\n\n");
@@ -551,7 +593,7 @@ fn human_text<'a>(e: &'a Map<String, Value>) -> Option<Cow<'a, str>> {
 }
 
 /// First of `keys` holding a string that is not blank.
-fn pick<'a>(e: &'a Map<String, Value>, k1: &str, k2: &str) -> Option<&'a str> {
+fn pick<'a>(e: &'a Object<'_>, k1: &str, k2: &str) -> Option<&'a str> {
     for k in [k1, k2] {
         if let Some(s) = get_str(e, k) {
             if !es_trim(s).is_empty() {
@@ -678,35 +720,50 @@ impl Collector {
 }
 
 #[derive(Default)]
-struct State {
+struct RankedTitle {
     rank: u8,
-    title: String,
+    text: String,
+}
+
+impl RankedTitle {
+    fn update(&mut self, e: &Object<'_>) {
+        let (rank, key) = match get_str(e, "type") {
+            Some("custom-title") => (3, "customTitle"),
+            Some("ai-title") => (2, "aiTitle"),
+            Some("summary") => (1, "summary"),
+            _ => return,
+        };
+        if rank >= self.rank {
+            if let Some(t) = pick(e, key, "title") {
+                self.rank = rank;
+                self.text.clear();
+                self.text.push_str(t);
+            }
+        }
+    }
+
+    fn finish(&self) -> Option<String> {
+        (self.rank > 0).then(|| one_line(&self.text, 120))
+    }
+}
+
+#[derive(Default)]
+struct State {
+    title: RankedTitle,
     model: Vec<u8>,
 }
 
-fn consume(e: &Map<String, Value>, col: &mut Collector, st: &mut State) {
+fn consume(e: &Object<'_>, col: &mut Collector, st: &mut State) {
     let ty = get_str(e, "type");
-    let (rank, key) = match ty {
-        Some("custom-title") => (3u8, "customTitle"),
-        Some("ai-title") => (2, "aiTitle"),
-        Some("summary") => (1, "summary"),
-        _ => (0, ""),
-    };
-    if rank > 0 && rank >= st.rank {
-        if let Some(t) = pick(e, key, "title") {
-            st.rank = rank;
-            st.title.clear();
-            st.title.push_str(t);
-        }
-    }
+    st.title.update(e);
     if let Some(prompt) = human_text(e) {
-        col.begin(&prompt, iso(e.get("timestamp")));
+        col.begin(&prompt, iso(e.get(b"timestamp".as_slice())));
         return;
     }
     if ty != Some("assistant") || is_true(e, "isSidechain") {
         return;
     }
-    let msg = match e.get("message") {
+    let msg = match e.get(b"message".as_slice()) {
         Some(Value::Object(m)) => Some(m),
         _ => None,
     };
@@ -720,15 +777,15 @@ fn consume(e: &Map<String, Value>, col: &mut Collector, st: &mut State) {
             st.model.extend_from_slice(m.as_bytes());
         }
     }
-    match msg.and_then(|m| m.get("content")) {
-        Some(Value::String(s)) => col.answer(s, iso(e.get("timestamp"))),
+    match msg.and_then(|m| m.get(b"content".as_slice())) {
+        Some(Value::String(s)) => col.answer(s, iso(e.get(b"timestamp".as_slice()))),
         Some(Value::Array(blocks)) => {
-            let at = iso(e.get("timestamp"));
+            let at = iso(e.get(b"timestamp".as_slice()));
             for b in blocks {
                 let Value::Object(o) = b else { continue };
                 match get_str(o, "type") {
                     Some("text") => {
-                        if let Some(Value::String(t)) = o.get("text") {
+                        if let Some(Value::String(t)) = o.get(b"text".as_slice()) {
                             col.answer(t, at);
                         }
                     }
@@ -748,6 +805,79 @@ fn put(text: &mut Vec<u8>, b: &[u8]) -> [i64; 2] {
     [start, b.len() as i64]
 }
 
+fn put_optional(text: &mut Vec<u8>, value: Option<&[u8]>) -> [i64; 2] {
+    value.map_or([-1, 0], |b| put(text, b))
+}
+
+fn edge_packet(mode: i64, fields: [Option<&[u8]>; 4]) -> Vec<i64> {
+    let mut text = Vec::new();
+    let refs = fields.map(|field| put_optional(&mut text, field));
+    let mut out = Vec::with_capacity(18 + text.len());
+    out.extend_from_slice(&[0, 14, 0, text.len() as i64, 1, mode, 0, 0]);
+    out.extend(refs.into_iter().flatten());
+    out.extend_from_slice(&[-1, 0]);
+    out.extend(text.into_iter().map(i64::from));
+    out
+}
+
+fn edge_lines(data: &[u8], include_final: bool) -> impl Iterator<Item = Object<'_>> {
+    data.split_inclusive(|&b| b == b'\n').filter_map(move |line| {
+        if let Some(raw) = line.strip_suffix(b"\n") {
+            parse_line(raw.strip_suffix(b"\r").unwrap_or(raw))
+        } else if include_final {
+            parse_line(line)
+        } else {
+            None
+        }
+    })
+}
+
+fn skip_first(data: &[u8], cut_before: bool) -> &[u8] {
+    if cut_before {
+        data.iter().position(|&b| b == b'\n').map_or(&[], |i| &data[i + 1..])
+    } else {
+        data
+    }
+}
+
+pub fn head_packet(data: &[u8], cut_after: i64) -> Vec<i64> {
+    if data.len() > EDGE {
+        return vec![1, 0];
+    }
+    let (mut title, mut cwd, mut entrypoint) = (None, None, None);
+    for e in edge_lines(data, cut_after == 0) {
+        if cwd.is_none() {
+            cwd = get_str(&e, "cwd").map(str::to_owned);
+        }
+        if entrypoint.is_none() {
+            entrypoint = get_str(&e, "entrypoint").map(str::to_owned);
+        }
+        if title.is_none() {
+            title = human_text(&e).map(|t| one_line(&t, 120));
+        }
+        if title.is_some() && cwd.is_some() && entrypoint.is_some() {
+            break;
+        }
+    }
+    edge_packet(0, [title, cwd, entrypoint, None].each_ref().map(|s| s.as_deref().map(str::as_bytes)))
+}
+
+pub fn tail_packet(data: &[u8], cut_before: i64) -> Vec<i64> {
+    if data.len() > EDGE {
+        return vec![1, 0];
+    }
+    let mut title = RankedTitle::default();
+    let mut last = None;
+    for e in edge_lines(skip_first(data, cut_before != 0), true) {
+        if let Some(at) = iso(e.get(b"timestamp".as_slice())) {
+            last = Some(at);
+        }
+        title.update(&e);
+    }
+    let title = title.finish();
+    edge_packet(1, [title.as_deref().map(str::as_bytes), None, None, last.as_ref().map(|s| s.as_slice())])
+}
+
 pub fn window_packet(data: &[u8], cut_before: i64) -> Vec<i64> {
     if data.len() > WINDOW {
         return vec![1, 0];
@@ -755,15 +885,9 @@ pub fn window_packet(data: &[u8], cut_before: i64) -> Vec<i64> {
     let cut = cut_before != 0;
     let mut col = Collector::new();
     let mut st = State::default();
-    let mut scratch: Vec<u8> = Vec::new();
 
-    let mut pos = 0usize;
-    if cut {
-        pos = match data.iter().position(|&b| b == b'\n') {
-            Some(i) => i + 1,
-            None => data.len(),
-        };
-    }
+    let data = skip_first(data, cut);
+    let mut pos = 0;
     while pos < data.len() {
         let rest = &data[pos..];
         match rest.iter().position(|&b| b == b'\n') {
@@ -781,7 +905,7 @@ pub fn window_packet(data: &[u8], cut_before: i64) -> Vec<i64> {
                     }
                 } else {
                     let line = if raw.last() == Some(&b'\r') { &raw[..raw.len() - 1] } else { raw };
-                    if let Some(e) = parse_line(line, &mut scratch) {
+                    if let Some(e) = parse_line(line) {
                         consume(&e, &mut col, &mut st);
                     }
                 }
@@ -792,10 +916,10 @@ pub fn window_packet(data: &[u8], cut_before: i64) -> Vec<i64> {
 
     let n = col.kept();
     let trimmed = n < col.begun;
-    let title = if st.rank > 0 { one_line(&st.title, 120) } else { String::new() };
+    let title = st.title.finish();
 
     let mut text: Vec<u8> = Vec::new();
-    let title_ref = if title.is_empty() { [-1, 0] } else { put(&mut text, title.as_bytes()) };
+    let title_ref = put_optional(&mut text, title.as_deref().map(str::as_bytes));
     let model_ref = if st.model.is_empty() { [-1, 0] } else { put(&mut text, &st.model) };
     let mut turns: Vec<i64> = Vec::with_capacity(n * 10);
     for d in col.drafts.iter().skip(col.drafts.len() - n) {
