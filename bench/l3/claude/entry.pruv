@@ -25,6 +25,93 @@ pub fn parse_line(data: [u8], start: i64, end: i64) -> Line ! alloc
   }
 }
 
+fn number_byte(c: i64) -> bool {
+  return (48 <= c && c <= 57) || c == 45 || c == 43 || c == 46 || c == 101 || c == 69;
+}
+
+// Locate a terminal chain of singleton arrays around a JSON number. The caller
+// checks that it is a root member before accepting the empty-array projection.
+fn terminal_array(data: [u8], start: i64, end: i64) -> i64
+  requires 0 <= start && start <= end && end <= len(data)
+  ensures result == -1 || (start <= result && result + 3 <= end)
+{
+  if end - start < 8 { return -1; }
+  if data[end - 1] != 125 || data[end - 2] != 93 || data[end - 3] != 93 { return -1; }
+  let mut close: i64 = end - 1;
+  while close > start && data[close - 1] == 93
+    invariant start <= close && close <= end - 1
+    decreases close - start
+  { close = close - 1; }
+  let depth: i64 = end - 1 - close;
+  if depth < 2 || depth > 127 { return -1; }
+  let mut number: i64 = close;
+  while number > start && number_byte(data[number - 1])
+    invariant start <= number && number <= close
+    decreases number - start
+  {
+    number = number - 1;
+  }
+  let token: crate::lex::Scan = crate::lex::scan_number(data, number, close);
+  if token.kind != 0 || token.position != close || number - start < depth { return -1; }
+  let first: i64 = number - depth;
+  let mut i: i64 = first;
+  while i < number
+    invariant start <= first && first <= i && i <= number && number <= close && close <= end - 3
+    decreases number - i
+  {
+    if data[i] != 91 { return -1; }
+    i = i + 1;
+  }
+  return first;
+}
+
+fn scan_shortened(data: [u8], start: i64, end: i64) -> Line ! alloc
+  requires 0 <= start && start <= end && end <= len(data) && end - start <= 1048576
+  requires end - start >= 3
+{
+  let n: i64 = end - start;
+  let mut owned: [u8] = alloc(n, 0);
+  copy_range(inout owned, 0, data, start, n - 3);
+  owned[n - 3] = 91;
+  owned[n - 2] = 93;
+  owned[n - 1] = 125;
+  if !utf8_valid(owned) { return Line::Skip; }
+  let checked: crate::parse::Checked = crate::parse::scan(owned);
+  match checked {
+    crate::parse::Checked::Rejected(position, kind) => {
+      if kind == crate::json::err_internal_invariant() { return Line::Defect(position); }
+      return Line::Skip;
+    }
+    crate::parse::Checked::Tape(tape) => {
+      if !crate::json::check_tape(tape, n) { return Line::Defect(0); }
+      if len(tape) < 12 || tape[0] != 6 { return Line::Skip; }
+      let last: i64 = len(tape) - 6;
+      if tape[last] != 5 || tape[last + 1] != n - 3 || tape[last + 4] != 0 {
+        return Line::Skip;
+      }
+      return Line::Object(crate::json::JsonDocument { source: move owned, tape: copy(tape) });
+    }
+  }
+}
+
+pub fn window_line(data: [u8], start: i64, end: i64) -> Line ! alloc
+  requires 0 <= start && start <= end && end <= len(data)
+{
+  if end - start > 1048576 { return parse_line(data, start, end); }
+  let first: i64 = terminal_array(data, start, end);
+  if first >= 0 {
+    // Root members are read as scalars or objects. Preserve the array kind
+    // so that this member can still shadow an earlier occurrence of its key.
+    let shortened: Line = scan_shortened(data, start, first + 3);
+    match shortened {
+      Line::Object(d) => { return Line::Object(d); }
+      Line::Skip => {}
+      Line::Defect(p) => {}
+    }
+  }
+  return parse_line(data, start, end);
+}
+
 // Field present with kind string -> its decoded text; missing or another kind -> Missing.
 pub fn string_field(doc: crate::json::JsonDocument, id: i64, key: str) -> Field ! alloc
   ensures is_variant(result, Field::Value) ==> len(variant_field(result, Field::Value, text)) <= 50331648
@@ -197,6 +284,13 @@ pub fn human_text(doc: crate::json::JsonDocument) -> Field ! alloc
   let user: i64 = field_is(doc, root, "type", "user");
   if user < 0 { return Field::Defect(user); }
   if user == 0 { return Field::Missing; }
+  return user_text(doc);
+}
+
+// The caller has already classified the entry as a user message.
+pub fn user_text(doc: crate::json::JsonDocument) -> Field ! alloc
+{
+  let root: i64 = crate::access::root(doc);
   let meta: i64 = is_true(doc, root, "isMeta");
   if meta < 0 { return Field::Defect(meta); }
   if meta == 1 { return Field::Missing; }
@@ -259,6 +353,12 @@ pub fn title_of(doc: crate::json::JsonDocument) -> Title ! alloc
   ensures is_variant(result, Title::Ranked) ==> (1 <= variant_field(result, Title::Ranked, rank) && variant_field(result, Title::Ranked, rank) <= 3)
 {
   let ty: i64 = string_id(doc, crate::access::root(doc), "type");
+  return title_for_type(doc, ty);
+}
+
+pub fn title_for_type(doc: crate::json::JsonDocument, ty: i64) -> Title ! alloc
+  ensures is_variant(result, Title::Ranked) ==> (1 <= variant_field(result, Title::Ranked, rank) && variant_field(result, Title::Ranked, rank) <= 3)
+{
   if ty == -1 { return Title::NoTitle; }
   if ty < 0 { return Title::Defect(ty); }
   let a: i64 = crate::access::string_is(doc, ty, "custom-title");
