@@ -155,14 +155,14 @@ pub fn parse_line(line: [u8], n: i64) -> crate::json::JsonParse ! alloc
 pub fn step(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64]) -> Loop ! async, proc, alloc
   requires len(ctl) == 16
   requires len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
-  requires len(line) == 8388608
+  requires 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line)
   requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
   ensures len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
   ensures len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
-  ensures len(line) == 8388608
+  ensures 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line) && ctl[6] <= len(line)
   ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
 {
-  let mut q: Loop = crate::transport::receive(move l, slot, overall, -1, true, 8388608, inout st, inout line, inout chunk, inout tb, inout ts);
+  let mut q: Loop = crate::transport::receive_grow(move l, slot, overall, -1, true, 8388608, inout st, inout line, inout chunk, inout tb, inout ts);
   let n: i64 = st[0];
   ctl[5] = 0;
   ctl[6] = 0;
@@ -170,7 +170,7 @@ pub fn step(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [
     ctl[0] = 6;
     if n == -1 { ctl[0] = 5; }
     if n == -4 { ctl[7] = st[3]; }
-  } else if n >= 0 && n <= 8388608 {
+  } else if n >= 0 && n <= len(line) {
     ctl[5] = 1;
     ctl[6] = n;
   }
@@ -291,11 +291,11 @@ fn on_reply(d: crate::json::JsonDocument, id: i64, inout ctl: [i64], inout aux: 
 fn pump(take l: Loop, slot: i64, overall: i64, id: i64, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64], inout aux: [u8]) -> Loop ! async, proc, alloc
   requires len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && 1 <= id && id <= 2 && len(aux) == 8389120
   requires len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
-  requires len(line) == 8388608
+  requires 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line)
   requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
   ensures len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && len(aux) == 8389120
   ensures len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
-  ensures len(line) == 8388608
+  ensures 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line)
   ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
 {
   let mut q: Loop = move l;
@@ -304,7 +304,7 @@ fn pump(take l: Loop, slot: i64, overall: i64, id: i64, inout ctl: [i64], inout 
   while ctl[0] == 0 && !done && events < 1000000
     invariant 0 <= events && events <= 1000000 && len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && len(aux) == 8389120
     invariant len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
-    invariant len(line) == 8388608 && 1 <= id && id <= 2
+    invariant 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line) && 1 <= id && id <= 2
     invariant len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
     decreases 1000000 - events
   {
@@ -334,11 +334,11 @@ fn pump(take l: Loop, slot: i64, overall: i64, id: i64, inout ctl: [i64], inout 
 fn drain(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64]) -> Loop ! async, proc, alloc
   requires len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
   requires len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
-  requires len(line) == 8388608
+  requires 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line)
   requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
   ensures len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
   ensures len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
-  ensures len(line) == 8388608
+  ensures 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line)
   ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
 {
   let mut q: Loop = move l;
@@ -346,7 +346,7 @@ fn drain(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64
   while ctl[0] == 0 && st[2] < st[4] && n < 70000
     invariant 0 <= n && n <= 70000 && len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
     invariant len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
-    invariant len(line) == 8388608
+    invariant 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line)
     invariant len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
     decreases 70000 - n
   {
@@ -411,7 +411,7 @@ pub fn load_check(binary: str, home: str, folder: str, thread: str, timeout_ms: 
   let slot: i64 = ctl[2];
   let overall: i64 = ctl[3];
   let mut st: [i64] = alloc(5, 0);
-  let mut line: [u8] = alloc(8388608, 0);
+  let mut line: [u8] = alloc(4096, 0);
   let mut chunk: [u8] = alloc(65536, 0);
   let mut tb: [i64] = crate::tail::tail_buf(1024);
   let mut ts: [i64] = crate::tail::tail_state(1024);
