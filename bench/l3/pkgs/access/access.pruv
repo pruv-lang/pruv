@@ -288,3 +288,14 @@ pub fn number(doc: crate::json::JsonDocument, id: i64) -> Number
   if !exact { v = 0; } if neg { v = -v; }
   return Number { status: 0, start: s.start, end: s.end, has_integer: exact, integer: v, negative_zero: nz };
 }
+
+// The document must come from a parser that validated string tokens.
+pub fn string_text_scanned(doc: crate::json::JsonDocument, id: i64) -> crate::jstr::Text ! alloc
+  ensures is_variant(result, crate::jstr::Text::Decoded) ==> (0 <= id && id < len(doc.tape) / 6 && len(variant_field(result, crate::jstr::Text::Decoded, text)) <= 3 * (doc.tape[6 * id + 2] - doc.tape[6 * id + 1]))
+{
+  let k: i64 = kind(doc, id);
+  if k != 4 { if k < 0 { return crate::jstr::Text::InternalInvariant(k); } return crate::jstr::Text::InternalInvariant(-2); }
+  let s: Span = raw_span(doc, id);
+  if s.status != 0 { return crate::jstr::Text::InternalInvariant(s.status); }
+  return crate::jstr::string_text_scanned(doc.source, s.start, s.end);
+}

@@ -177,23 +177,22 @@ fn feed_user(d: crate::json::JsonDocument, inout st: [i64], inout sl: [i64], ino
   // synthetic_reason neither missing nor null (false, 0 and "" included) => the entry is skipped
   let sr: i64 = crate::access::field(d, 0, "synthetic_reason");
   if sr >= 0 && crate::access::kind(d, sr) != 0 { return 0; }  // MUT:M09 => if sr >= 0 && crate::access::kind(d, sr) == 4 { return 0; }
-  let txt: str = content(d, crate::access::field(d, 0, "content"));
-  let tr: crate::text::Span = crate::text::trim_span(txt);
-  let q: [i64] = query_range(txt, tr.lo, tr.hi);
-  let mut prompt: str = copy(txt);
+  let mut prompt: str = content(d, crate::access::field(d, 0, "content"));
+  let tr: crate::text::Span = crate::text::trim_span(prompt);
+  let q: [i64] = query_range(prompt, tr.lo, tr.hi);
   if q[0] >= 0 {
     // user_query wins over everything: only the inner text is used (outer whitespace discarded)
     let n: i64 = q[1] - q[0];
-    if n < 0 || n > len(txt) { return -1; }
+    if n < 0 || n > len(prompt) { return -1; }
     let mut bb: [u8] = alloc(n, 0);
-    copy_text_range(inout bb, txt, q[0], n);
+    copy_text_range(inout bb, prompt, q[0], n);
     let inner: str = crate::jstr::adapter_probe(bb);
     if len(inner) != n { return -1; }
     prompt = copy(inner);  // MUT:M08 => prompt = crate::text::trim(inner);
   } else {
     // <user_info> start without a prompt_index (missing or null) is Grok head text
     let pi: i64 = crate::access::field(d, 0, "prompt_index");
-    if (pi < 0 || crate::access::kind(d, pi) == 0) && has_at(txt, tr.lo, "<user_info>") { return 0; }
+    if (pi < 0 || crate::access::kind(d, pi) == 0) && has_at(prompt, tr.lo, "<user_info>") { return 0; }
   }
   if crate::text::is_blank(prompt) { return 0; }
   if len(prompt) > 100000000 { return -1; }
