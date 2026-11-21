@@ -658,6 +658,7 @@ fixed in one package before R12.
 | D-R02-3 | scope | B (one owned progress root) and C (completion/effect handoff by source spans) are not done. The wire still replays from the start on each step. Removing replay needs a trusted resident state that still rejects forged state (`forge_test.py` covers op 1 and op 6). The at-most-once effect and continuation tests were not extended past the existing entry/req suites. DB2: closed (one owned progress root checked once at begin; forged state rejected, forge 23/23) |
 | D-DB2-1 | RSS M 1.296x, L 1.420x | Hand holds the JSON as bytes. Pruv still holds text as one `i64` per UTF-16 unit (D-R02-1 not done), so the L input is 438,723 words (3.5 MB). Each resident copy costs 8 bytes per unit: the input, the await (`entry_api.pruv:106-108` allocates `30 + lp + lb + lt`, and `lb` is the whole blob, so the pool is in the await twice: request section and state blob), `prev` read back from the driver, and the done packet (`ent_bound.pruv:292`), which is allocated while the input and await are still held. Generated Rust mirrors this one-to-one (`sol.rs` `index_begin_checked`: `vec![0; total]`). `harness.rs:29` also sizes `progress` at `input.len() / 30 + 1` words. Fix: the byte pool (D-DB2-2). Also emit the await without the second pool copy, and size `progress` from the session count. |
 | D-DB2-2 | RSS (see D-DB2-1) | D-R02-1 is not done. A `[u8]` UTF-8 pool with spans changes the packet shared by entry and req (`host.rs` `encode_utf16`/`mk_packet`, `bench/l3/req` consumer, `ent_packet` readers). It also needs a lone-surrogate encoding (WTF-8) to keep v1 semantics. That is a wire change across two lanes, larger than one fix try in the 2 h cap. |
+| D-R03D-1 | debt | json `a4_root` M/L stays about 2x hand Rust (time), 1.5-2.1x (RSS) | unchanged from the R03 baseline: the two fixes meant to close it (D32 drop the `check_tape` rescan, D31 borrow the source instead of copying it) are blocked by G-R03D-1 and G-R03D-2; G3 changes only verifier patterns, not generated code | land G-R03D-1 then delete `check_tape`; land G-R03D-2 then drop the source copy; re-measure with `bench/l3/json/run_r03_measure.py` |
 
 
 #### 7.5.1 Language gap list (fast mode, 2026-11-21)
@@ -693,6 +694,8 @@ Gaps found in R bundles, worked around and batched into one language bundle when
 | G-R09-4 | An array field cannot be moved out of a record (`col.text`), and the LLVM backend has no `take` for `[T]`. | `finish` copies `col.text` into the wire once instead of handing it over. |
 | G-R09-5 | The LLVM backend has no `inout` state records, and root entries cannot take `inout`. | Read state stays as loose `[i64]`/`[u8]` arrays (`hs`, `ht`, `hb`, `pl`, `pb`, `fs`, `fb`) allocated per call in `codex_read_wire`. |
 | G-R02-1 | A `take` array parameter moved into a struct field is rejected by the LLVM backend with `codegen/unsupported_type`. Minimal case: `struct D { a: [i64] }` and `fn wrap(take a: [i64]) -> D { return D { a: move a }; }`. | `ent_state.pruv:178` `ctx_new(blob, lg)` | `blob` and `lg` are still copied into `Ctx` on every begin/step. Only arrays made inside the function are moved. DB2: closed (workaround: offset readers, no blob move into Ctx; compiler unchanged) |
+| G-R03D-1 | gap | R03C-D32 in-scan tape proof | aggregate (`count`) is an uninterpreted function of the array term; after any `inout` call the tape is a new term that is only pointwise equal (the probe's `assert` line, both compilers) | aggregate frame lemma in both verifiers: when an `ensures` proves every slot read by the body unchanged on `lo..hi`, equate the two aggregates; then stack-frame invariants in `scan_document` (open containers = stack frames, skip pending) |
+| G-R03D-2 | gap | R03C-D31 / R03L-D5 borrowed source | no lifetime syntax; `[u8]` fields are owned; local-buffer callers above outlive nothing | language rule for a borrowed field with one lifetime parameter, propagated to enums/structs that hold it; LLVM host entry stays rejected |
 
 Queued with the debt list (not product perf):
 
@@ -10783,13 +10786,13 @@ final measurement were done by the main session.
 
 | Row | Item | Note |
 |---|---|---|
-| R03L-G3 | user-named triggers or lemma form for nested array-index quantifiers | not started (budget); needed by D32 (prove tape facts inside `scan`); R03 C kept it queued (R03C-D32) |
-| R03L-G2 | built-in count range split lemma | not started; `array_at` keeps its -4 parent/kind check |
+| R03L-G3 | user-named triggers or lemma form for nested array-index quantifiers | not started (budget); needed by D32 (prove tape facts inside `scan`); R03 C kept it queued (R03C-D32) R03D: closed (SPEC R-6-3, both compilers). |
+| R03L-G2 | built-in count range split lemma | not started; `array_at` keeps its -4 parent/kind check R03D: not started (not needed: G-R03D-1 blocks D32 first). |
 | R03L-D1 | LLVM in-place `truncate` keeps the source capacity | Rust shrinks (R03L.1); LLVM path keeps the cap on purpose (llvmgen P3 comment) |
 | R03L-D2 | `pkgs/parse/parse.pruv` `scan` (used by `pkgs/lines`) still copies its tape | lines is outside this slice; switch to a moving form when lines is touched |
 | R03L-D3 | audit advisory: the LLVM `take` rejection names the fn differently in py (`crate::wrap`) and Rust (`wrap`, before mono) | same code `codegen/unsupported_type`; message text only |
 | R03L-D4 | audit advisory: a `pub pred fn` body skips the public interface check (`pub pred fn e(x) { return hidden(x); }` with private `hidden` is accepted by both compilers) | not changed; expansion is still sound, only the visibility rule is open |
-| R03L-D5 | borrowed `[u8]` source field (rest of G4) | not done; R03 C chose it as the least surface and queued it (R03C-D31) |
+| R03L-D5 | borrowed `[u8]` source field (rest of G4) | not done; R03 C chose it as the least surface and queued it (R03C-D31) R03D: open, moved to G-R03D-2. |
 
 ## Appendix R03C: json source / tape handoff (partly done, 2026-11-20)
 
@@ -10834,8 +10837,8 @@ main session (Claude Opus 5.5).
 
 | Row | Item | Note |
 |---|---|---|
-| R03C-D32 | prove the tape facts inside `scan_document` and delete `check_tape` | needs stack invariants over open containers, a `count` frame fact across `close_record` stores and R03L-G3 in both compilers; about 24% of L parse |
-| R03C-D31 | hold the source without `copy(input)` | borrowed `[u8]` field (lifetime on `JsonDocument` / `JsonParse`, both compilers, Rust + LLVM, SPEC borrow rule); owned move rejected (host `&[u8]` ABI still copies, LLVM rejects `take` arrays); about 1.1 ms, 8 MiB at L |
+| R03C-D32 | prove the tape facts inside `scan_document` and delete `check_tape` | needs stack invariants over open containers, a `count` frame fact across `close_record` stores and R03L-G3 in both compilers; about 24% of L parse R03D: open, moved to G-R03D-1. |
+| R03C-D31 | hold the source without `copy(input)` | borrowed `[u8]` field (lifetime on `JsonDocument` / `JsonParse`, both compilers, Rust + LLVM, SPEC borrow rule); owned move rejected (host `&[u8]` ABI still copies, LLVM rejects `take` arrays); about 1.1 ms, 8 MiB at L R03D: open, moved to G-R03D-2. |
 
 ## Appendix P31F: language roots for the P31T5.5 repro (both compilers)
 
