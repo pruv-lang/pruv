@@ -1,149 +1,188 @@
 // Qwen currentChain. Byte-position marks avoid retaining parsed JSON documents.
-// Build newest-first hash buckets once; exact UUID comparison resolves collisions.
-fn bucket(key: str, size: i64) -> i64
+// R05 B: one parse per line. scan decodes each uuid and parentUuid once into a byte arena; the chain walk compares
+// arena bytes and never re-parses a line. Newest-first hash buckets; exact UUID comparison resolves collisions.
+// Slot layout, 6 per uuid entry: line start, next slot (newest-first), uuid offset, uuid length,
+// parent offset, parent length (-1 missing, -2 parentUuid defect: bad only when the entry matches a key).
+fn bucket(arena: [u8], off: i64, n: i64, size: i64) -> i64
   requires 0 < size && size <= 16777219
+  requires 0 <= off && 0 <= n && off + n <= len(arena)
   ensures 0 <= result && result < size
 {
   let mut h: i64 = 0;
   let mut i: i64 = 0;
-  while i < len(key)
-    invariant 0 <= i && i <= len(key) && 0 <= h && h < size
-    decreases len(key) - i
+  while i < n
+    invariant 0 <= i && i <= n && off + n <= len(arena) && 0 <= off && 0 <= h && h < size
+    decreases n - i
   {
-    h = (h * 257 + key[i]) % size;
+    h = (h * 257 + arena[off + i]) % size;
     i = i + 1;
   }
   return h;
 }
-pub struct Found { uuid: str, parent: str, found: bool, bad: bool }
-pub fn scan(data: [u8], cut: bool, inout marks: [u8], inout heads: [i64], inout slots: [i64]) -> Found ! alloc
-  requires len(data) <= 8388608 && len(marks) == len(data)
-  requires 0 < len(heads) && len(heads) <= 16777219 && len(slots) <= 25165827
-  ensures len(marks) == len(old(marks))
+
+fn put(inout arena: [u8], at: i64, s: str) -> ()
+  requires 0 <= at && at <= len(arena) && len(s) <= len(arena) - at
+  ensures len(arena) == len(old(arena))
+{
+  let n: i64 = len(s);
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n == len(s) && 0 <= at && at <= len(arena) && n <= len(arena) - at && len(arena) == len(old(arena))
+    decreases n - j
+  {
+    let b: i64 = s[j];
+    arena[at + j] = b;
+    j = j + 1;
+  }
+}
+
+// Same bytes at two arena spans.
+fn same_span(arena: [u8], a: i64, an: i64, b: i64, bn: i64) -> bool
+  requires 0 <= a && 0 <= an && a + an <= len(arena) && 0 <= b && 0 <= bn && b + bn <= len(arena)
+{
+  if an != bn { return false; }
+  let mut i: i64 = 0;
+  while i < an
+    invariant 0 <= i && i <= an && an == bn && a + an <= len(arena) && b + bn <= len(arena) && 0 <= a && 0 <= b
+    decreases an - i
+  {
+    if arena[a + i] != arena[b + i] { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// leaf: slot of the leaf entry, or -1.
+pub struct Found { leaf: i64, found: bool, bad: bool }
+pub fn scan(data: [u8], cut: bool, inout arena: [u8], inout heads: [i64], inout slots: [i64]) -> Found ! alloc
+  requires len(data) <= 8388608 && len(arena) == len(data)
+  requires 0 < len(heads) && len(heads) <= 16777219 && len(slots) <= 50331654
+  ensures len(arena) == len(old(arena))
   ensures len(heads) == len(old(heads)) && len(slots) == len(old(slots))
 {
-  let mut uuid: str = "";
-  let mut parent: str = "";
+  let mut leaf: i64 = -1;
   let mut found: bool = false;
   let mut role_seen: bool = false;
   let mut used: i64 = 0;
+  let mut aused: i64 = 0;
   let mut off: i64 = crate::framing::skip_first(data, cut);
   while off < len(data)
-    invariant 0 <= off && off <= len(data) && len(data) <= 8388608 && len(marks) == len(data)
-    invariant 0 <= used && used <= len(slots) && len(slots) <= 25165827
+    invariant 0 <= off && off <= len(data) && len(data) <= 8388608 && len(arena) == len(data)
+    invariant 0 <= used && used <= len(slots) && len(slots) <= 50331654
+    invariant 0 <= aused && aused <= len(arena)
     invariant 0 < len(heads) && len(heads) <= 16777219
     decreases len(data) - off
   {
     let step: crate::framing::Frame = crate::framing::window_next(data, off);
     match step {
       crate::framing::Frame::Entry(s, e, n) => {
-        if s < 0 || s >= len(data) || e < s || e > len(data) || n <= off || n > len(data) { return Found { uuid: copy(uuid), parent: copy(parent), found: false, bad: true }; }
+        if s < 0 || s >= len(data) || e < s || e > len(data) || n <= off || n > len(data) { return Found { leaf: -1, found: false, bad: true }; }
         let line: crate::entry::Line = crate::entry::parse_line(data, s, e);
         match line {
           crate::entry::Line::Object(d) => {
             let f: crate::entry::Field = crate::entry::string_field(d, 0, "uuid");
             match f {
               crate::entry::Field::Value(u) => {
-                if len(u) > 0 {
-                  if used + 3 > len(slots) { return Found { uuid: "", parent: "", found: false, bad: true }; }
-                  let b: i64 = bucket(u, len(heads));
-                  slots[used] = s;
-                  slots[used + 1] = e;
-                  slots[used + 2] = heads[b];
-                  heads[b] = used;
-                  used = used + 3;
-                }
                 let role: bool = crate::entry::field_is(d, 0, "type", "user") == 1 || crate::entry::field_is(d, 0, "type", "assistant") == 1 || crate::entry::field_is(d, 0, "type", "tool_result") == 1;
-                if len(u) > 0 && (role || !role_seen) {
-                  found = true;
-                  uuid = copy(u);
-                  parent = "";
+                if len(u) > 0 {
+                  if used + 6 > len(slots) { return Found { leaf: -1, found: false, bad: true }; }
+                  if len(u) > len(arena) - aused { return Found { leaf: -1, found: false, bad: true }; }
+                  let uo: i64 = aused;
+                  put(inout arena, uo, u);
+                  aused = aused + len(u);
+                  let mut po: i64 = aused;
+                  let mut pl: i64 = -1;
                   let p: crate::entry::Field = crate::entry::string_field(d, 0, "parentUuid");
                   match p {
-                    crate::entry::Field::Value(v) => { parent = copy(v); }
-                    crate::entry::Field::Missing => { parent = ""; }
-                    crate::entry::Field::Defect(k) => { return Found { uuid: copy(uuid), parent: copy(parent), found: false, bad: true }; }
+                    crate::entry::Field::Value(v) => {
+                      if len(v) > len(arena) - aused { return Found { leaf: -1, found: false, bad: true }; }
+                      put(inout arena, po, v);
+                      aused = aused + len(v);
+                      pl = len(v);
+                    }
+                    crate::entry::Field::Missing => { pl = -1; }
+                    crate::entry::Field::Defect(k) => { pl = -2; }
                   }
+                  let b: i64 = bucket(arena, uo, len(u), len(heads));
+                  slots[used] = s;
+                  slots[used + 1] = heads[b];
+                  slots[used + 2] = uo;
+                  slots[used + 3] = len(u);
+                  slots[used + 4] = po;
+                  slots[used + 5] = pl;
+                  heads[b] = used;
+                  if role || !role_seen {
+                    // A leaf candidate reads its parent strictly.
+                    if pl == -2 { return Found { leaf: -1, found: false, bad: true }; }
+                    found = true;
+                    leaf = used;
+                  }
+                  used = used + 6;
+                  if role { role_seen = true; }
                 }
-                if len(u) > 0 && role { role_seen = true; }
               }
               crate::entry::Field::Missing => { found = found; }
-              crate::entry::Field::Defect(k) => { return Found { uuid: copy(uuid), parent: copy(parent), found: false, bad: true }; }
+              crate::entry::Field::Defect(k) => { return Found { leaf: -1, found: false, bad: true }; }
             }
           }
           crate::entry::Line::Skip => { found = found; }
-          crate::entry::Line::Defect(k) => { return Found { uuid: copy(uuid), parent: copy(parent), found: false, bad: true }; }
+          crate::entry::Line::Defect(k) => { return Found { leaf: -1, found: false, bad: true }; }
         }
         off = n;
       }
-      crate::framing::Frame::Dropped(s, e, n) => { if n <= off || n > len(data) { return Found { uuid: copy(uuid), parent: copy(parent), found: false, bad: true }; } off = n; }
+      crate::framing::Frame::Dropped(s, e, n) => { if n <= off || n > len(data) { return Found { leaf: -1, found: false, bad: true }; } off = n; }
       crate::framing::Frame::Done => { off = len(data); }
     }
   }
-  return Found { uuid: copy(uuid), parent: copy(parent), found: found, bad: false };
+  return Found { leaf: leaf, found: found, bad: false };
 }
 
 // First match supplies the last-write parent; mark all duplicates.
 // Existing marks detect cycles without copying or comparing the whole bitmap.
-pub struct Hit { parent: str, found: bool, changed: bool, bad: bool }
-fn lookup(data: [u8], key: str, heads: [i64], slots: [i64], inout marks: [u8]) -> Hit ! alloc
-  requires len(marks) == len(data)
-  requires 0 < len(heads) && len(heads) <= 16777219 && len(slots) <= 25165827
+pub struct Hit { poff: i64, plen: i64, found: bool, changed: bool, bad: bool }
+fn lookup(arena: [u8], koff: i64, klen: i64, heads: [i64], slots: [i64], inout marks: [u8]) -> Hit
+  requires 0 <= koff && 0 <= klen && koff + klen <= len(arena)
+  requires 0 < len(heads) && len(heads) <= 16777219 && len(slots) <= 50331654
   ensures len(marks) == len(old(marks))
 {
-  let mut at: i64 = heads[bucket(key, len(heads))];
+  let mut at: i64 = heads[bucket(arena, koff, klen, len(heads))];
   let mut left: i64 = len(slots);
   let mut found: bool = false;
   let mut changed: bool = false;
-  let mut parent: str = "";
+  let mut poff: i64 = 0;
+  let mut plen: i64 = 0;
   while at >= 0 && left > 0
-    invariant 0 <= left && left <= len(slots) && len(slots) <= 25165827
-    invariant len(marks) == len(data)
+    invariant 0 <= left && left <= len(slots) && len(slots) <= 50331654
+    invariant len(marks) == len(old(marks))
     decreases left
   {
-    if at > len(slots) - 3 { return Hit { parent: "", found: false, changed: false, bad: true }; }
+    if at > len(slots) - 6 { return Hit { poff: 0, plen: 0, found: false, changed: false, bad: true }; }
     let s: i64 = slots[at];
-    let e: i64 = slots[at + 1];
-    if s < 0 || s >= len(data) || e < s || e > len(data) { return Hit { parent: "", found: false, changed: false, bad: true }; }
-    let line: crate::entry::Line = crate::entry::parse_line(data, s, e);
-    match line {
-      crate::entry::Line::Object(d) => {
-        let u: crate::entry::Field = crate::entry::string_field(d, 0, "uuid");
-        match u {
-          crate::entry::Field::Value(v) => {
-            if crate::text::same(v, key) {
-              if marks[s] == 0 { changed = true; }
-              marks[s] = 1;
-              let p: crate::entry::Field = crate::entry::string_field(d, 0, "parentUuid");
-              match p {
-                crate::entry::Field::Value(vp) => { if !found { parent = copy(vp); } }
-                crate::entry::Field::Missing => { parent = copy(parent); }
-                crate::entry::Field::Defect(k) => { return Hit { parent: "", found: false, changed: false, bad: true }; }
-              }
-              found = true;
-            }
-          }
-          crate::entry::Field::Missing => { found = found; }
-          crate::entry::Field::Defect(k) => { return Hit { parent: "", found: false, changed: false, bad: true }; }
-        }
-      }
-      crate::entry::Line::Skip => { found = found; }
-      crate::entry::Line::Defect(k) => { return Hit { parent: "", found: false, changed: false, bad: true }; }
+    let uo: i64 = slots[at + 2];
+    let ul: i64 = slots[at + 3];
+    if s < 0 || s >= len(marks) || uo < 0 || ul < 0 || ul > len(arena) - uo { return Hit { poff: 0, plen: 0, found: false, changed: false, bad: true }; }
+    if same_span(arena, uo, ul, koff, klen) {
+      if marks[s] == 0 { changed = true; }
+      marks[s] = 1;
+      let pl: i64 = slots[at + 5];
+      if pl == -2 { return Hit { poff: 0, plen: 0, found: false, changed: false, bad: true }; }
+      if !found && pl >= 0 { poff = slots[at + 4]; plen = pl; }
+      found = true;
     }
-    let next: i64 = slots[at + 2];
-    if next >= at { return Hit { parent: "", found: false, changed: false, bad: true }; }
+    let next: i64 = slots[at + 1];
+    if next >= at { return Hit { poff: 0, plen: 0, found: false, changed: false, bad: true }; }
     at = next;
     left = left - 1;
   }
-  return Hit { parent: copy(parent), found: found, changed: changed, bad: false };
+  return Hit { poff: poff, plen: plen, found: found, changed: changed, bad: false };
 }
 
-pub struct Chain { marks: [u8], active: bool, cut: bool, bad: bool }
-pub fn select(data: [u8], cut: bool) -> Chain ! alloc
-  requires len(data) <= 8388608
-  ensures len(result.marks) == len(data)
+// marks is caller-owned (len(data), zero): no bitmap copy into or out of a result struct.
+pub struct Chain { active: bool, cut: bool, bad: bool }
+pub fn select(data: [u8], cut: bool, inout marks: [u8]) -> Chain ! alloc
+  requires len(data) <= 8388608 && len(marks) == len(data)
+  ensures len(marks) == len(old(marks))
 {
-  let mut marks: [u8] = alloc(len(data), 0);
   // One frame per newline, plus a possible unterminated final line.
   let mut capacity: i64 = 1;
   let mut i: i64 = 0;
@@ -156,27 +195,39 @@ pub fn select(data: [u8], cut: bool) -> Chain ! alloc
     i = i + 1;
   }
   let mut heads: [i64] = alloc(capacity * 2 + 1, -1);
-  let mut slots: [i64] = alloc(capacity * 3, -1);
-  let leaf: Found = scan(data, cut, inout marks, inout heads, inout slots);
-  let mut key: str = copy(leaf.uuid);
-  let mut parent: str = copy(leaf.parent);
+  let mut slots: [i64] = alloc(capacity * 6, -1);
+  let mut arena: [u8] = alloc(len(data), 0);
+  let leaf: Found = scan(data, cut, inout arena, inout heads, inout slots);
+  if leaf.bad { return Chain { active: leaf.found, cut: false, bad: true }; }
+  let mut koff: i64 = 0;
+  let mut klen: i64 = 0;
+  let mut poff: i64 = 0;
+  let mut plen: i64 = 0;
+  if leaf.found {
+    let at: i64 = leaf.leaf;
+    if at < 0 || at > len(slots) - 6 { return Chain { active: leaf.found, cut: false, bad: true }; }
+    koff = slots[at + 2];
+    klen = slots[at + 3];
+    if slots[at + 5] >= 0 { poff = slots[at + 4]; plen = slots[at + 5]; }
+  }
   let mut lost: bool = false;
   let mut count: i64 = 0;
   let mut done: bool = !leaf.found;
   while !done && count < len(data)
     invariant len(marks) == len(data) && len(data) <= 8388608 && 0 <= count && count <= len(data)
-    invariant 0 < len(heads) && len(heads) <= 16777219 && len(slots) <= 25165827
+    invariant 0 < len(heads) && len(heads) <= 16777219 && len(slots) <= 50331654
     decreases len(data) - count
   {
-    let f: Hit = lookup(data, key, heads, slots, inout marks);
-    if f.bad { return Chain { marks: copy(marks), active: leaf.found, cut: lost, bad: true }; }
+    if koff < 0 || klen < 0 || klen > len(arena) - koff { return Chain { active: leaf.found, cut: lost, bad: true }; }
+    let f: Hit = lookup(arena, koff, klen, heads, slots, inout marks);
+    if f.bad { return Chain { active: leaf.found, cut: lost, bad: true }; }
     // The initial parent belongs to the leaf entry itself, not the last duplicate UUID.
-    if count > 0 { parent = copy(f.parent); }
+    if count > 0 { poff = f.poff; plen = f.plen; }
     if !f.found { lost = true; done = true; }
-    if !f.changed || len(parent) == 0 { done = true; }
-    key = copy(parent);
+    if !f.changed || plen == 0 { done = true; }
+    koff = poff;
+    klen = plen;
     count = count + 1;
   }
-  return Chain { marks: copy(marks), active: leaf.found, cut: lost, bad: leaf.bad };
+  return Chain { active: leaf.found, cut: lost, bad: leaf.bad };
 }
-
