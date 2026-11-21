@@ -1,0 +1,29 @@
+// R10 core lane root: data split into consecutive chunk-byte pieces, piece k to stream 1 (k even) or 2 (k odd),
+// each pushed as a range (no copy), then flushed; returns the tail bytes. Empty result when t or chunk is invalid.
+mod btail;
+
+pub fn core(t: i64, data: [u8], chunk: i64) -> [u8] ! alloc
+{
+  if t < 1 || t > 65536 || chunk < 1 { let e: [u8] = alloc(0, 0); return e; }
+  let mut ts: [i64] = crate::btail::tail_state(t);
+  let mut buf: [u8] = crate::btail::tail_buf(t);
+  let n: i64 = len(data);
+  let mut lo: i64 = 0;
+  let mut s: i64 = 1;
+  while lo < n
+    invariant 0 <= lo && lo <= n
+    invariant s == 1 || s == 2
+    invariant len(ts) == 13 && ts[1] == t
+    invariant len(buf) == 6 * t + 4
+    invariant 0 <= ts[0] && ts[0] <= 6 * t && 0 <= ts[12] && ts[12] <= 2 * t
+    decreases n - lo
+  {
+    let mut hi: i64 = n;
+    if n - lo > chunk { hi = lo + chunk; }
+    crate::btail::tail_push_range(inout buf, inout ts, s, data, lo, hi);
+    s = 3 - s;
+    lo = hi;
+  }
+  crate::btail::tail_flush(inout buf, inout ts);
+  return crate::btail::tail_bytes(buf, ts);
+}

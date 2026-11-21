@@ -2,7 +2,7 @@
 // See docs/COMMAND_SUPERVISOR_SPEC.md for the order of operations, the packet and the policies P1-P8.
 mod args;
 mod capfile;
-mod tail;
+mod btail;
 mod packet;
 
 fn close_sock(take s: Socket) -> () ! net, alloc
@@ -56,45 +56,45 @@ fn proc_state(l: Loop, p: i64) -> i64
 
 // One chunk into the file and the tail. A chunk longer than one read or a total near 2^62 cannot occur with
 // reads of at most 65536 bytes inside the event bounds; it is skipped so the counters stay in range.
-fn take(take f: File, inout cw: [i64], inout buf: [i64], inout ts: [i64], s: i64, data: [u8]) -> File ! fs, alloc
+fn take(take f: File, inout cw: [i64], inout buf: [u8], inout ts: [i64], s: i64, data: [u8]) -> File ! fs, alloc
   requires len(cw) == 5
   requires 0 <= cw[3] && cw[3] <= 1099511627776
   requires 0 <= cw[0] && cw[0] <= cw[3]
   requires 0 <= cw[4] && cw[4] <= 4611686018427387904
   requires 0 <= cw[1] && cw[1] <= 1
   requires 0 <= cw[2] && cw[2] <= 2
-  requires len(ts) == 12
+  requires len(ts) == 13
   requires 1 <= ts[1] && ts[1] <= 65536
-  requires len(buf) == 2 * ts[1] + 2
-  requires 0 <= ts[0] && ts[0] <= 2 * ts[1]
+  requires len(buf) == 6 * ts[1] + 4
+  requires 0 <= ts[0] && ts[0] <= 6 * ts[1] && 0 <= ts[12] && ts[12] <= 2 * ts[1]
   requires s == 1 || s == 2
   ensures len(cw) == 5 && cw[3] == old(cw)[3]
   ensures 0 <= cw[0] && cw[0] <= cw[3]
   ensures 0 <= cw[4] && cw[4] <= 4611686018427387904
   ensures 0 <= cw[1] && cw[1] <= 1
   ensures 0 <= cw[2] && cw[2] <= 2
-  ensures len(ts) == 12 && ts[1] == old(ts)[1]
-  ensures len(buf) == 2 * ts[1] + 2
-  ensures 0 <= ts[0] && ts[0] <= 2 * ts[1]
+  ensures len(ts) == 13 && ts[1] == old(ts)[1]
+  ensures len(buf) == 6 * ts[1] + 4
+  ensures 0 <= ts[0] && ts[0] <= 6 * ts[1] && 0 <= ts[12] && ts[12] <= 2 * ts[1]
 {
   if len(data) > 65536 || cw[4] > 4611686018427387904 - 65536 { return move f; }
   let g: File = crate::capfile::cap_take(move f, inout cw, data);
-  crate::tail::tail_push(inout buf, inout ts, s, data);
+  crate::btail::tail_push(inout buf, inout ts, s, data);
   return move g;
 }
 
 // Close the file, flush the decoders and build the packet. Kind 3 carries the file fields only.
-fn report(take f: File, inout cw: [i64], inout buf: [i64], inout ts: [i64], opened: bool,
+fn report(take f: File, inout cw: [i64], inout buf: [u8], inout ts: [i64], opened: bool,
           kind: i64, exit: i64, known: i64, stopped: i64, reaped: i64) -> [i64] ! fs, alloc
   requires len(cw) == 5
   requires 0 <= cw[2] && cw[2] <= 2
-  requires len(ts) == 12
+  requires len(ts) == 13
   requires 1 <= ts[1] && ts[1] <= 65536
-  requires len(buf) == 2 * ts[1] + 2
-  requires 0 <= ts[0] && ts[0] <= 2 * ts[1]
+  requires len(buf) == 6 * ts[1] + 4
+  requires 0 <= ts[0] && ts[0] <= 6 * ts[1] && 0 <= ts[12] && ts[12] <= 2 * ts[1]
 {
   crate::capfile::cap_finish(move f, inout cw);
-  crate::tail::tail_flush(inout buf, inout ts);
+  crate::btail::tail_flush(inout buf, inout ts);
   let mut h: [i64] = crate::packet::header(0, kind);
   h[2] = exit;
   h[3] = known;
@@ -106,7 +106,7 @@ fn report(take f: File, inout cw: [i64], inout buf: [i64], inout ts: [i64], open
   if kind == 1 {
     h[9] = cw[4];
     h[10] = cw[0];
-    let tb: [u8] = crate::tail::tail_bytes(buf, ts);
+    let tb: [u8] = crate::btail::tail_bytes(buf, ts);
     return crate::packet::packet(h, tb);
   }
   let none: [u8] = alloc(0, 0);
@@ -133,8 +133,8 @@ pub fn supervise(shell: str, argv: str, cwd: str, out: str, file_limit: i64, tai
   let mut f: File = file_create(out);
   let opened: bool = file_writable(f);
   let mut cw: [i64] = crate::capfile::cap_state(file_limit, !opened);
-  let mut ts: [i64] = crate::tail::tail_state(tail_chars);
-  let mut buf: [i64] = crate::tail::tail_buf(tail_chars);
+  let mut ts: [i64] = crate::btail::tail_state(tail_chars);
+  let mut buf: [u8] = crate::btail::tail_buf(tail_chars);
 
   let pa: ProcessArgs = crate::args::build_args(argv);
   let p0: Process = proc_spawn(shell, pa, cwd);
@@ -206,9 +206,9 @@ pub fn supervise(shell: str, argv: str, cwd: str, out: str, file_limit: i64, tai
     invariant 0 <= cw[4] && cw[4] <= 4611686018427387904
     invariant 0 <= cw[1] && cw[1] <= 1
     invariant 0 <= cw[2] && cw[2] <= 2
-    invariant len(ts) == 12 && ts[1] == tail_chars
-    invariant len(buf) == 2 * tail_chars + 2
-    invariant 0 <= ts[0] && ts[0] <= 2 * tail_chars
+    invariant len(ts) == 13 && ts[1] == tail_chars
+    invariant len(buf) == 6 * tail_chars + 4
+    invariant 0 <= ts[0] && ts[0] <= 6 * tail_chars && 0 <= ts[12] && ts[12] <= 2 * tail_chars
     decreases 10000000 - events
   {
     events = events + 1;
@@ -304,9 +304,9 @@ pub fn supervise(shell: str, argv: str, cwd: str, out: str, file_limit: i64, tai
       invariant 0 <= cw[4] && cw[4] <= 4611686018427387904
       invariant 0 <= cw[1] && cw[1] <= 1
       invariant 0 <= cw[2] && cw[2] <= 2
-      invariant len(ts) == 12 && ts[1] == tail_chars
-      invariant len(buf) == 2 * tail_chars + 2
-      invariant 0 <= ts[0] && ts[0] <= 2 * tail_chars
+      invariant len(ts) == 13 && ts[1] == tail_chars
+      invariant len(buf) == 6 * tail_chars + 4
+      invariant 0 <= ts[0] && ts[0] <= 6 * tail_chars && 0 <= ts[12] && ts[12] <= 2 * tail_chars
       decreases 10000000 - n
     {
       n = n + 1;

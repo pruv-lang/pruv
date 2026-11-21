@@ -1,0 +1,286 @@
+// R10 C: byte tail. Two WHATWG UTF-8 decoders (one per stream) feed one buffer of valid UTF-8 bytes; the UTF-16
+// length of the buffer is cached, so no code point is widened to UTF-16 units (G4).
+//
+// ts layout (len 13): [0] bytes in buf, [1] T = tail_chars,
+//   stream 1 decoder at 2..7, stream 2 decoder at 7..12: needed, seen, cp, lower, upper,
+//   [12] UTF-16 units of the bytes in buf.
+// buf has 6T+4 slots and holds at most 6T bytes between calls. When an appended code point takes the units past 2T
+// (or the bytes past 6T), whole code points leave the front until at most T units and 3T bytes remain. The output is
+// the longest suffix of whole code points with at most T units: the TS tail (last T units, a cut low surrogate
+// dropped, policy P5), since a suffix of at most T units only ever loses its front when more text arrives.
+
+pub fn tail_state(t: i64) -> [i64] ! alloc
+  requires 1 <= t && t <= 65536
+  ensures len(result) == 13
+  ensures result[0] == 0 && result[1] == t && result[12] == 0
+{
+  let mut ts: [i64] = alloc(13, 0);
+  ts[1] = t;
+  ts[5] = 128;
+  ts[6] = 191;
+  ts[10] = 128;
+  ts[11] = 191;
+  return ts;
+}
+
+pub fn tail_buf(t: i64) -> [u8] ! alloc
+  requires 1 <= t && t <= 65536
+  ensures len(result) == 6 * t + 4
+{
+  let b: [u8] = alloc(6 * t + 4, 0);
+  return b;
+}
+
+// Start of the longest front-trimmed rest with at most T units and 3T bytes; ts[12] becomes the units of the rest.
+// The width of a code point comes from its lead byte (buf holds valid UTF-8); the last step is clamped to the end.
+fn drop_front(buf: [u8], inout ts: [i64]) -> i64
+  requires len(ts) == 13
+  requires 1 <= ts[1] && ts[1] <= 65536
+  requires 0 <= ts[0] && ts[0] <= len(buf)
+  requires 0 <= ts[12] && ts[12] <= 4611686018427387904
+  ensures forall k in 0..12: ts[k] == old(ts)[k]
+  ensures 0 <= result && result <= ts[0]
+  ensures ts[0] - result <= 3 * ts[1]
+  ensures 0 <= ts[12] && ts[12] <= ts[1]
+{
+  let n: i64 = ts[0];
+  let t: i64 = ts[1];
+  let mut u: i64 = ts[12];
+  let mut i: i64 = 0;
+  while i < n && (u > t || n - i > 3 * t)
+    invariant 0 <= i && i <= n
+    invariant n == ts[0] && t == ts[1]
+    invariant ts[12] - 2 * i <= u && u <= ts[12]
+    decreases n - i
+  {
+    let b: i64 = buf[i];
+    let mut w: i64 = 1;
+    let mut d: i64 = 1;
+    if b >= 240 {
+      w = 4;
+      d = 2;
+    } else if b >= 224 {
+      w = 3;
+    } else if b >= 192 {
+      w = 2;
+    }
+    if w > n - i { w = n - i; }
+    i = i + w;
+    u = u - d;
+  }
+  if i == n || u < 0 { u = 0; }
+  ts[12] = u;
+  return i;
+}
+
+// Drops the front as above and moves the rest to the start of buf.
+fn trim(inout buf: [u8], inout ts: [i64]) -> ()
+  requires len(ts) == 13
+  requires 1 <= ts[1] && ts[1] <= 65536
+  requires len(buf) == 6 * ts[1] + 4
+  requires 0 <= ts[0] && ts[0] <= len(buf)
+  requires 0 <= ts[12] && ts[12] <= 2 * ts[1] + 2
+  ensures len(buf) == 6 * ts[1] + 4
+  ensures forall k in 1..12: ts[k] == old(ts)[k]
+  ensures 0 <= ts[0] && ts[0] <= 3 * ts[1] && 0 <= ts[12] && ts[12] <= ts[1]
+{
+  let n: i64 = ts[0];
+  let s: i64 = drop_front(buf, inout ts);
+  let m: i64 = n - s;
+  let mut k: i64 = 0;
+  // copy_range rejects an aliased source (G-R10-1), so the overlapping move is a loop.
+  while k < m
+    invariant 0 <= k && k <= m
+    invariant m == n - s && 0 <= s && n <= len(buf)
+    invariant len(buf) == 6 * ts[1] + 4 && ts[1] == old(ts)[1]
+    decreases m - k
+  {
+    buf[k] = buf[s + k];
+    k = k + 1;
+  }
+  ts[0] = m;
+}
+
+// Appends one code point (anything outside the scalar values becomes U+FFFD) as UTF-8.
+fn put_cp(inout buf: [u8], inout ts: [i64], cp0: i64) -> ()
+  requires len(ts) == 13
+  requires 1 <= ts[1] && ts[1] <= 65536
+  requires len(buf) == 6 * ts[1] + 4
+  requires 0 <= ts[0] && ts[0] <= 6 * ts[1] && 0 <= ts[12] && ts[12] <= 2 * ts[1]
+  ensures len(buf) == 6 * ts[1] + 4
+  ensures forall k in 1..12: ts[k] == old(ts)[k]
+  ensures 0 <= ts[0] && ts[0] <= 6 * ts[1] && 0 <= ts[12] && ts[12] <= 2 * ts[1]
+{
+  let mut cp: i64 = cp0;
+  if cp < 0 || cp > 1114111 || (cp >= 55296 && cp <= 57343) { cp = 65533; }
+  let n: i64 = ts[0];
+  let t: i64 = ts[1];
+  let mut m: i64 = n + 1;
+  let mut u: i64 = ts[12] + 1;
+  if cp < 128 {
+    buf[n] = cp;
+  } else if cp < 2048 {
+    buf[n] = 192 + cp / 64;
+    buf[n + 1] = 128 + cp % 64;
+    m = n + 2;
+  } else if cp < 65536 {
+    buf[n] = 224 + cp / 4096;
+    buf[n + 1] = 128 + (cp / 64) % 64;
+    buf[n + 2] = 128 + cp % 64;
+    m = n + 3;
+  } else {
+    buf[n] = 240 + cp / 262144;
+    buf[n + 1] = 128 + (cp / 4096) % 64;
+    buf[n + 2] = 128 + (cp / 64) % 64;
+    buf[n + 3] = 128 + cp % 64;
+    m = n + 4;
+    u = u + 1;
+  }
+  ts[0] = m;
+  ts[12] = u;
+  if u > 2 * t || m > 6 * t { trim(inout buf, inout ts); }
+}
+
+fn reset(inout ts: [i64], base: i64) -> ()
+  requires len(ts) == 13
+  requires base == 2 || base == 7
+  ensures forall k in 0..13: (k < base || k >= base + 5) ==> ts[k] == old(ts)[k]
+{
+  ts[base] = 0;
+  ts[base + 1] = 0;
+  ts[base + 2] = 0;
+  ts[base + 3] = 128;
+  ts[base + 4] = 191;
+}
+
+// One byte through the decoder at ts[base..base+5] (WHATWG UTF-8 decoder, maximal-subpart replacement).
+fn dec_byte(inout buf: [u8], inout ts: [i64], base: i64, b: i64) -> ()
+  requires len(ts) == 13
+  requires 1 <= ts[1] && ts[1] <= 65536
+  requires len(buf) == 6 * ts[1] + 4
+  requires 0 <= ts[0] && ts[0] <= 6 * ts[1] && 0 <= ts[12] && ts[12] <= 2 * ts[1]
+  requires base == 2 || base == 7
+  requires 0 <= b && b <= 255
+  ensures len(buf) == 6 * ts[1] + 4
+  ensures ts[1] == old(ts)[1]
+  ensures 0 <= ts[0] && ts[0] <= 6 * ts[1] && 0 <= ts[12] && ts[12] <= 2 * ts[1]
+{
+  if ts[base] != 0 {
+    if b < ts[base + 3] || b > ts[base + 4] {
+      // Not a continuation here: one U+FFFD for the pending sequence, then the byte starts over.
+      reset(inout ts, base);
+      put_cp(inout buf, inout ts, 65533);
+    } else {
+      ts[base + 3] = 128;
+      ts[base + 4] = 191;
+      // A pending code point has at most 15 bits (3 lead bits + two continuations), so the mask is a no-op.
+      let c: i64 = band(ts[base + 2], 32767) * 64 + b % 64;
+      let seen: i64 = band(ts[base + 1], 3) + 1;
+      if seen >= ts[base] {
+        reset(inout ts, base);
+        put_cp(inout buf, inout ts, c);
+      } else {
+        ts[base + 1] = seen;
+        ts[base + 2] = c;
+      }
+      return;
+    }
+  }
+  if b <= 127 {
+    put_cp(inout buf, inout ts, b);
+  } else if b >= 194 && b <= 223 {
+    ts[base] = 1;
+    ts[base + 1] = 0;
+    ts[base + 2] = b % 32;
+  } else if b >= 224 && b <= 239 {
+    if b == 224 { ts[base + 3] = 160; }
+    if b == 237 { ts[base + 4] = 159; }
+    ts[base] = 2;
+    ts[base + 1] = 0;
+    ts[base + 2] = b % 16;
+  } else if b >= 240 && b <= 244 {
+    if b == 240 { ts[base + 3] = 144; }
+    if b == 244 { ts[base + 4] = 143; }
+    ts[base] = 3;
+    ts[base + 1] = 0;
+    ts[base + 2] = b % 8;
+  } else {
+    put_cp(inout buf, inout ts, 65533);
+  }
+}
+
+// Decodes data[lo..hi] of stream s (1 or 2) into the tail.
+pub fn tail_push_range(inout buf: [u8], inout ts: [i64], s: i64, data: [u8], lo: i64, hi: i64) -> ()
+  requires len(ts) == 13
+  requires 1 <= ts[1] && ts[1] <= 65536
+  requires len(buf) == 6 * ts[1] + 4
+  requires 0 <= ts[0] && ts[0] <= 6 * ts[1] && 0 <= ts[12] && ts[12] <= 2 * ts[1]
+  requires s == 1 || s == 2
+  requires 0 <= lo && lo <= hi && hi <= len(data)
+  ensures len(buf) == 6 * ts[1] + 4
+  ensures ts[1] == old(ts)[1]
+  ensures 0 <= ts[0] && ts[0] <= 6 * ts[1] && 0 <= ts[12] && ts[12] <= 2 * ts[1]
+{
+  let mut base: i64 = 2;
+  if s == 2 { base = 7; }
+  let mut i: i64 = lo;
+  while i < hi
+    invariant lo <= i && i <= hi
+    invariant len(buf) == 6 * ts[1] + 4
+    invariant ts[1] == old(ts)[1]
+    invariant 0 <= ts[0] && ts[0] <= 6 * ts[1] && 0 <= ts[12] && ts[12] <= 2 * ts[1]
+    decreases hi - i
+  {
+    dec_byte(inout buf, inout ts, base, data[i]);
+    i = i + 1;
+  }
+}
+
+pub fn tail_push(inout buf: [u8], inout ts: [i64], s: i64, data: [u8]) -> ()
+  requires len(ts) == 13
+  requires 1 <= ts[1] && ts[1] <= 65536
+  requires len(buf) == 6 * ts[1] + 4
+  requires 0 <= ts[0] && ts[0] <= 6 * ts[1] && 0 <= ts[12] && ts[12] <= 2 * ts[1]
+  requires s == 1 || s == 2
+  ensures len(buf) == 6 * ts[1] + 4
+  ensures ts[1] == old(ts)[1]
+  ensures 0 <= ts[0] && ts[0] <= 6 * ts[1] && 0 <= ts[12] && ts[12] <= 2 * ts[1]
+{
+  tail_push_range(inout buf, inout ts, s, data, 0, len(data));
+}
+
+// End of input: an incomplete sequence becomes one U+FFFD, stream 1 first.
+pub fn tail_flush(inout buf: [u8], inout ts: [i64]) -> ()
+  requires len(ts) == 13
+  requires 1 <= ts[1] && ts[1] <= 65536
+  requires len(buf) == 6 * ts[1] + 4
+  requires 0 <= ts[0] && ts[0] <= 6 * ts[1] && 0 <= ts[12] && ts[12] <= 2 * ts[1]
+  ensures len(buf) == 6 * ts[1] + 4
+  ensures ts[1] == old(ts)[1]
+  ensures 0 <= ts[0] && ts[0] <= 6 * ts[1] && 0 <= ts[12] && ts[12] <= 2 * ts[1]
+{
+  if ts[2] != 0 {
+    reset(inout ts, 2);
+    put_cp(inout buf, inout ts, 65533);
+  }
+  if ts[7] != 0 {
+    reset(inout ts, 7);
+    put_cp(inout buf, inout ts, 65533);
+  }
+}
+
+// The longest suffix of whole code points with at most T units, as UTF-8 bytes.
+pub fn tail_bytes(buf: [u8], ts: [i64]) -> [u8] ! alloc
+  requires len(ts) == 13
+  requires 1 <= ts[1] && ts[1] <= 65536
+  requires len(buf) == 6 * ts[1] + 4
+  requires 0 <= ts[0] && ts[0] <= 6 * ts[1] && 0 <= ts[12] && ts[12] <= 2 * ts[1]
+  ensures len(result) <= 3 * ts[1]
+{
+  let mut st: [i64] = copy(ts);
+  let s: i64 = drop_front(buf, inout st);
+  let n: i64 = ts[0];
+  let mut out: [u8] = alloc(n - s, 0);
+  copy_range(inout out, 0, buf, s, n - s);
+  return out;
+}
