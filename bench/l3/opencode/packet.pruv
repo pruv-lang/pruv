@@ -795,8 +795,35 @@ pub fn done_simple(ctl: [i64], stage: i64, cls: i64, code: i64) -> [i64] ! alloc
   ensures len(result) >= 76
 {
   if stage < 0 || stage > 28 || cls < 1 || cls > 4 || code < 0 || code > 6 { return invariant_step(ctl); }
-  let e: [i64] = simple_error(ctl_mode(ctl), stage, cls, code);
-  return done_wrap(ctl, e);
+  // the result_shape class/code pairing rule; a bad pair takes the old checked path unchanged
+  if (cls == 1 && (code < 1 || code > 4)) || (cls == 3 && code != 5 && code != 6) || ((cls == 2 || cls == 4) && code != 0) {
+    return done_wrap(ctl, simple_error(ctl_mode(ctl), stage, cls, code));
+  }
+  // DB5 (D-R07-3): one allocation, the same 116 words as done_wrap(ctl, simple_error(ctl_mode(ctl), stage, cls, code)).
+  // That path always passes step_args_ok (action 1, no patches/requests, ctl_final terminal words, a 40-word status-1
+  // header with in-range enums), so the shape holds by construction and the runtime re-check is skipped.
+  let mut p: [i64] = alloc(116, 0);
+  p[0] = 1329812273;
+  p[1] = 1;
+  p[2] = 1;
+  p[3] = 64;
+  p[8] = 40;
+  put_words(inout p, 12, ctl);
+  p[12] = 1;
+  p[14] = 999;
+  p[16] = 0;
+  p[17] = 0;
+  p[18] = 2;
+  p[76] = 1329812017;
+  p[77] = 1;
+  p[78] = 1;
+  p[79] = ctl_mode(ctl);
+  p[86] = -1; p[88] = -1; p[90] = -1; p[92] = -1;
+  p[95] = stage;
+  p[96] = cls;
+  p[97] = code;
+  p[99] = -1; p[101] = -1; p[103] = -1;
+  return p;
 }
 // CoreError / InternalInvariant at `stage`
 pub fn done_internal(ctl: [i64], stage: i64) -> [i64] ! alloc

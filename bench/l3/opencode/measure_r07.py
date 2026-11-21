@@ -58,7 +58,9 @@ def measure(pruv, hand, name, lane, size, env, steps, rounds):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--quick', action='store_true', help='run one round at size M')
-    quick = parser.parse_args().quick
+    parser.add_argument('--rounds', type=int, default=7, help='alternating rounds per cell (default 7)')
+    args = parser.parse_args()
+    quick = args.quick
     for pair in PAIRS:
         root = test_impl.WORK / pair / 'root_gen.rs'
         assert root.is_file() and (pair != 'rs_llvm' or root.with_suffix('.ll').is_file()), (
@@ -77,7 +79,7 @@ def main():
     sizes = [('M', 1000, 20000)]
     if not quick:
         sizes.append(('L', 4000, 80000))
-    rounds = 1 if quick else 7
+    rounds = 1 if quick else args.rounds
     cells = []
     print(f'{"case":25} S {"axis":4} {"Pruv":>12} {"hand":>12} {"Pruv/hand":>9}', flush=True)
     for pair in PAIRS:
@@ -102,6 +104,8 @@ def main():
                                                 'step_admitted', size, 1000, steps, rounds)
             if checked_digests != admitted_digests:
                 raise RuntimeError(f'{label} {size}: checked and admitted step digests differ')
+            if checked_digests['pruv'] != checked_digests['hand']:
+                raise RuntimeError(f'{label} {size}: Pruv and hand step packets differ')
             cells.extend(begin + checked + admitted)
 
     (WORK / 'perf_cells.json').write_text(json.dumps({'source': 'opencode/r07', 'cells': cells}, indent=2) + '\n')

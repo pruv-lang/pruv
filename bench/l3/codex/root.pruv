@@ -32,7 +32,7 @@ pub fn codex_list(binary: str, argv: str, cwd: str, folder: str, timeout_ms: i64
   let slot: i64 = ctl[2];
   let overall: i64 = ctl[3];
   let mut st: [i64] = alloc(5, 0);
-  let mut line: [u8] = alloc(8388608, 0);
+  let mut line: crate::util::ByteBuffer = crate::util::byte_buffer(8388608);
   let mut chunk: [u8] = alloc(65536, 0);
   let mut tb: [i64] = crate::tail::tail_buf(1024);
   let mut ts: [i64] = crate::tail::tail_state(1024);
@@ -53,16 +53,16 @@ pub fn codex_list(binary: str, argv: str, cwd: str, folder: str, timeout_ms: i64
     let mut events: i64 = 0;
     while ctl[0] == 0 && !done && events < 1000000
       invariant 0 <= events && events <= 1000000 && len(p) >= 3
-      invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= 8388608
-      invariant len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
-      invariant len(line) == 8388608
+      invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
+      invariant len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+      invariant len(line.data) <= 8388608
       invariant len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
       decreases 1000000 - events
     {
       events = events + 1;
       l = crate::rpc::step(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
       if ctl[0] == 0 && ctl[5] == 1 {
-        let parsed: crate::json::JsonParse = crate::rpc::parse_line(line, ctl[6]);
+        let parsed: crate::json::JsonParse = crate::rpc::parse_line(line.data, ctl[6]);
         match parsed {
           crate::json::JsonParse::Failed(e) => { }
           crate::json::JsonParse::Parsed(d) => {
@@ -114,13 +114,13 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
   let slot: i64 = ctl[2];
   let overall: i64 = ctl[3];
   let mut st: [i64] = alloc(5, 0);
-  let mut line: [u8] = alloc(8388608, 0);
+  let mut line: crate::util::ByteBuffer = crate::util::byte_buffer(4096);
   let mut chunk: [u8] = alloc(65536, 0);
   let mut tb: [i64] = crate::tail::tail_buf(1024);
   let mut ts: [i64] = crate::tail::tail_state(1024);
   let mut hs: [i64] = alloc(8, 0);
   let mut ht: [i64] = alloc(2000, 0);
-  let mut hb: [u8] = alloc(8700000, 0);
+  let mut hb: crate::util::ByteBuffer = crate::util::byte_buffer(4096);
   let mut pl: [i64] = alloc(64, 0);
   pl[0] = -1;
   let mut pb: [u8] = alloc(18024, 0);
@@ -146,16 +146,16 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
     let mut events: i64 = 0;
     while ctl[0] == 0 && !done && events < 1000000
       invariant 0 <= events && events <= 1000000
-      invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= 8388608
-      invariant len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
-      invariant len(line) == 8388608
+      invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
+      invariant len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+      invariant len(line.data) <= 8388608
       invariant len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
       decreases 1000000 - events
     {
       events = events + 1;
       l = crate::rpc::step(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
       if ctl[0] == 0 && ctl[5] == 1 {
-        let parsed: crate::json::JsonParse = crate::rpc::parse_line(line, ctl[6]);
+        let parsed: crate::json::JsonParse = crate::rpc::parse_line(line.data, ctl[6]);
         match parsed {
           crate::json::JsonParse::Failed(e) => { }
           crate::json::JsonParse::Parsed(d) => {
@@ -209,12 +209,12 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
   let mut fin: bool = false;
   while ctl[0] == 0 && !fin && page < 40
     invariant id == 2 + page && 0 <= page && page <= 40
-    invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= 8388608
-    invariant len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
-    invariant len(line) == 8388608
+    invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
+    invariant len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+    invariant len(line.data) <= 8388608
     invariant len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
-    invariant len(hs) == 8 && len(ht) == 2000 && len(hb) == 8700000 && len(pl) == 64 && len(pb) == 18024 && len(fs) == 3 && len(fb) == 32768
-    invariant 0 <= hs[0] && hs[0] <= 200 && 0 <= hs[1] && hs[1] <= 8700000 && 0 <= hs[2] && hs[2] <= 2097152
+    invariant len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024 && len(fs) == 3 && len(fb) == 32768
+    invariant 0 <= hs[0] && hs[0] <= 200 && 0 <= hs[1] && hs[1] <= len(hb.data) && 0 <= hs[2] && hs[2] <= 2097152
     invariant -1 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000 && (pl[63] == 0 || pl[63] == 1)
     invariant 0 <= fs[0] && fs[0] <= fs[1] && fs[1] <= 32768 && (fs[2] == 0 || fs[2] == 1)
     decreases 40 - page
@@ -232,13 +232,13 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
     let mut events: i64 = 0;
     while ctl[0] == 0 && !done && events < 1000000
       invariant 0 <= events && events <= 1000000
-      invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= 8388608
-      invariant len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
-      invariant len(line) == 8388608
+      invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
+      invariant len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+      invariant len(line.data) <= 8388608
       invariant len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
       invariant id == 2 + page && 0 <= page && page <= 40
-      invariant len(hs) == 8 && len(ht) == 2000 && len(hb) == 8700000 && len(pl) == 64 && len(pb) == 18024 && len(fs) == 3 && len(fb) == 32768
-      invariant 0 <= hs[0] && hs[0] <= 200 && 0 <= hs[1] && hs[1] <= 8700000 && 0 <= hs[2] && hs[2] <= 2097152
+      invariant len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024 && len(fs) == 3 && len(fb) == 32768
+      invariant 0 <= hs[0] && hs[0] <= 200 && 0 <= hs[1] && hs[1] <= len(hb.data) && 0 <= hs[2] && hs[2] <= 2097152
       invariant -1 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000 && (pl[63] == 0 || pl[63] == 1)
       invariant 0 <= fs[0] && fs[0] <= fs[1] && fs[1] <= 32768 && (fs[2] == 0 || fs[2] == 1)
       decreases 1000000 - events
@@ -246,7 +246,7 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
       events = events + 1;
       l = crate::rpc::step(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
       if ctl[0] == 0 && ctl[5] == 1 {
-        let parsed: crate::json::JsonParse = crate::rpc::parse_line(line, ctl[6]);
+        let parsed: crate::json::JsonParse = crate::rpc::parse_line(line.data, ctl[6]);
         match parsed {
           crate::json::JsonParse::Failed(e) => { }
           crate::json::JsonParse::Parsed(d) => {
@@ -288,7 +288,7 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
   let code: i64 = ctl[0];
   let stage: i64 = ctl[1];
   if code == 0 {
-    let wire: [u8] = crate::read::finish(hs, ht, hb, pl, pb, title, model, more);
+    let wire: [u8] = crate::read::finish(hs, ht, hb.data, pl, pb, title, model, more);
     crate::transport::close(move l, slot);
     return wire;
   }
