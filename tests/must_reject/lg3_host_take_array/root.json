@@ -1,0 +1,1 @@
+{"stage": "codegen", "code": "unsupported_type", "file": "root.pruv", "message": "crate::consume has a take array parameter, which needs the Rust backend"}

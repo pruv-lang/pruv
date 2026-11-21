@@ -425,9 +425,10 @@ def g4_reject_jobs():
     expected stage/code come from the project's root.json."""
     jobs = []
     P = _g4()
-    # G5/G8 and L3 (P06 visibility misuse) project rejections follow the same convention.
+    # G5/G8, L3 visibility and LG3 LLVM ABI rejections follow the same convention.
     for f in sorted(glob.glob(os.path.join(ROOT, "tests/must_reject/g[458]_*/root.pruv")) +
-                    glob.glob(os.path.join(ROOT, "tests/must_reject/l3_*/root.pruv"))):
+                    glob.glob(os.path.join(ROOT, "tests/must_reject/l3_*/root.pruv")) +
+                    glob.glob(os.path.join(ROOT, "tests/must_reject/lg3_*/root.pruv"))):
         rel = rel_sample(f)
         name = "must_reject/" + rel[len("tests/must_reject/"):]
         proj = os.path.basename(os.path.dirname(f))
@@ -445,7 +446,9 @@ def g4_reject_jobs():
 
         def fn(f=f, proj=proj, want=want, flags=flags):
             root = P.copy_project(f, os.path.join(WORK, "g4mr_" + proj))
-            for backend in (("rust", "llvm") if proj.startswith(("g8_", "l3_")) else ("rust",)):
+            backends = ("llvm",) if proj.startswith("lg3_") else (
+                ("rust", "llvm") if proj.startswith(("g8_", "l3_")) else ("rust",))
+            for backend in backends:
                 c = pruvc(root, os.path.join(WORK, "g4mr_%s_%s.out" % (proj, backend)), flags, backend)
                 if c.returncode != 1:
                     return False, "exit %d (expected 1) %s" % (c.returncode, c.stdout + c.stderr)

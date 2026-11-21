@@ -257,13 +257,21 @@ fn rs_de(tt: &TypeTable, ty: &str, arr: &str, off: i64) -> Result<String, String
     }
 }
 
-/// Non-array inout parameters have a Rust-only calling convention.
+/// Non-array inout parameters have no host ABI. LLVM supports internal inout structs.
 pub fn struct_inout_abi_error(
-    prog: &Program, entries_only: bool, _g4: Option<&crate::modules::G4>,
+    prog: &Program, entries_only: bool, g4: Option<&crate::modules::G4>,
 ) -> Option<crate::diagnostic::PruvError> {
+    struct_inout_abi_error_at(prog, entries_only, g4).map(|(_, e)| e)
+}
+
+fn struct_inout_abi_error_at(
+    prog: &Program, entries_only: bool, g4: Option<&crate::modules::G4>,
+) -> Option<(usize, crate::diagnostic::PruvError)> {
     for (i, f) in prog.functions.iter().enumerate() {
         let meta = prog.explicit.as_ref().and_then(|e| e.fns.get(i));
-        if entries_only && !meta.is_some_and(|m| m.host_entry) {
+        let host = meta.is_some_and(|m| m.host_entry)
+            || g4.and_then(|g| g.fn_meta.get(i)).is_some_and(|m| m.host_entry);
+        if entries_only && !host {
             continue;
         }
         if f.params.iter().any(|p| p.mode_pos.is_some() && !GType::from_key(&p.ty).is_array()) {
@@ -276,34 +284,56 @@ pub fn struct_inout_abi_error(
                     "collection"
                 } else if f.params.iter().any(|p| p.mode_pos.is_some() && matches!(p.ty.as_str(), "i64" | "bool")) {
                     "scalar"
-                } else {
+                } else if host {
                     "struct"
+                } else {
+                    continue;
                 };
                 (format!("{name} has an inout {kind} parameter, which needs the Rust backend"), "use the Rust backend")
             };
-            return Some(crate::diagnostic::PruvError::new(
+            return Some((i, crate::diagnostic::PruvError::new(
                 "codegen", f.line, f.col, "unsupported_type", message, fix,
-            ));
+            )));
         }
     }
     None
 }
 
-/// The LLVM calling convention cannot transfer ownership of an array parameter.
+/// The host ABI cannot transfer ownership of an array parameter.
 pub fn take_array_abi_error(
     prog: &Program,
     g4: Option<&crate::modules::G4>,
 ) -> Option<crate::diagnostic::PruvError> {
+    take_array_abi_error_at(prog, g4).map(|(_, e)| e)
+}
+
+/// The LLVM parameter check in declaration order, as Python gen_llvm: per function, take array first, then inout.
+pub fn llvm_param_abi_error(
+    prog: &Program,
+    g4: Option<&crate::modules::G4>,
+) -> Option<crate::diagnostic::PruvError> {
+    match (take_array_abi_error_at(prog, g4), struct_inout_abi_error_at(prog, false, g4)) {
+        (Some((i, a)), Some((j, b))) => Some(if i <= j { a } else { b }),
+        (a, b) => a.or(b).map(|(_, e)| e),
+    }
+}
+
+fn take_array_abi_error_at(
+    prog: &Program,
+    g4: Option<&crate::modules::G4>,
+) -> Option<(usize, crate::diagnostic::PruvError)> {
     for (i, f) in prog.functions.iter().enumerate() {
-        if f.params.iter().any(|p| p.take && GType::from_key(&p.ty).is_array()) {
-            let name = prog.explicit.as_ref().and_then(|e| e.fns.get(i)).map(|m| m.disp.as_str())
-                .or_else(|| g4.and_then(|g| g.fn_meta.get(i)).map(|m| m.src_name.as_str()))
-                .unwrap_or(&f.name);
-            return Some(crate::diagnostic::PruvError::new(
+        let meta = prog.explicit.as_ref().and_then(|e| e.fns.get(i));
+        let host = meta.is_some_and(|m| m.host_entry)
+            || g4.and_then(|g| g.fn_meta.get(i)).is_some_and(|m| m.host_entry);
+        if host && f.params.iter().any(|p| p.take && GType::from_key(&p.ty).is_array()) {
+            // before the plan, f.name already holds the source identity (crate::m::f), as Python's disp
+            let name = meta.map_or(f.name.as_str(), |m| m.disp.as_str());
+            return Some((i, crate::diagnostic::PruvError::new(
                 "codegen", f.line, f.col, "unsupported_type",
                 format!("{name} has a take array parameter, which needs the Rust backend"),
                 "use the Rust backend",
-            ));
+            )));
         }
     }
     None
@@ -317,7 +347,7 @@ pub fn owned_collection_abi_error(
     let err = |line, col, message| {
         crate::diagnostic::PruvError::new("codegen", line, col, "unsupported_type", message, "use the Rust backend")
     };
-    if let Some(e) = take_array_abi_error(prog, g4).or_else(|| struct_inout_abi_error(prog, false, g4)) {
+    if let Some(e) = llvm_param_abi_error(prog, g4) {
         return Some(e);
     }
     for d in &prog.types {
@@ -461,6 +491,7 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
                 && f.foreign.is_none()
                 && !(f.params.iter().any(|p| crate::llvmgen::is_collection(&p.ty)) || crate::llvmgen::is_collection(&f.ret))
                 && !crate::llvmgen::has_ext_sig(f, &tt)
+                && !crate::llvmgen::has_take_array(f)
                 // an inout entry has a binding only as an explicit-mode host entry (legacy inout fns stay internal)
                 && (!crate::llvmgen::has_inout(f) || (explicit && hosts.get(*i).copied().unwrap_or(false)))
         })
