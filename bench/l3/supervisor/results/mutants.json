@@ -1,62 +1,62 @@
 [
  {
   "mutant": "stopped swapped",
-  "result": "detected",
-  "detail": "stop, stop quiet, stop truncated"
+  "result": "rejected",
+  "detail": "compile/verify failed: [{'stage': 'parse', 'line': 5, 'col': 1, 'code': 'module_file', 'message': 'cannot read the file of module crate::btail (expected btail.pruv)', 'fix': 'create btail.pruv next to the root file, add btail to dependencies, or remove `mod btail;`', 'file': 'supervise.pruv'}]"
  },
  {
   "mutant": "stop byte as disconnect",
-  "result": "detected",
-  "detail": "stop, stop quiet, stop truncated"
+  "result": "rejected",
+  "detail": "compile/verify failed: [{'stage': 'parse', 'line': 5, 'col': 1, 'code': 'module_file', 'message': 'cannot read the file of module crate::btail (expected btail.pruv)', 'fix': 'create btail.pruv next to the root file, add btail to dependencies, or remove `mod btail;`', 'file': 'supervise.pruv'}]"
  },
  {
   "mutant": "no draining after end",
-  "result": "SURVIVED",
-  "detail": ""
+  "result": "rejected",
+  "detail": "compile/verify failed: [{'stage': 'parse', 'line': 5, 'col': 1, 'code': 'module_file', 'message': 'cannot read the file of module crate::btail (expected btail.pruv)', 'fix': 'create btail.pruv next to the root file, add btail to dependencies, or remove `mod btail;`', 'file': 'supervise.pruv'}]"
  },
  {
   "mutant": "no drain on stop",
-  "result": "SURVIVED",
-  "detail": ""
+  "result": "rejected",
+  "detail": "compile/verify failed: [{'stage': 'parse', 'line': 5, 'col': 1, 'code': 'module_file', 'message': 'cannot read the file of module crate::btail (expected btail.pruv)', 'fix': 'create btail.pruv next to the root file, add btail to dependencies, or remove `mod btail;`', 'file': 'supervise.pruv'}]"
  },
  {
   "mutant": "signal status dropped",
-  "result": "detected",
-  "detail": "signal"
+  "result": "rejected",
+  "detail": "compile/verify failed: [{'stage': 'parse', 'line': 5, 'col': 1, 'code': 'module_file', 'message': 'cannot read the file of module crate::btail (expected btail.pruv)', 'fix': 'create btail.pruv next to the root file, add btail to dependencies, or remove `mod btail;`', 'file': 'supervise.pruv'}]"
  },
  {
   "mutant": "spawn failure as exit",
-  "result": "detected",
-  "detail": "spawn missing, spawn empty, spawn create fail"
+  "result": "rejected",
+  "detail": "compile/verify failed: [{'stage': 'parse', 'line': 5, 'col': 1, 'code': 'module_file', 'message': 'cannot read the file of module crate::btail (expected btail.pruv)', 'fix': 'create btail.pruv next to the root file, add btail to dependencies, or remove `mod btail;`', 'file': 'supervise.pruv'}]"
  },
  {
   "mutant": "reaped not set",
-  "result": "detected",
-  "detail": "hello, empty, exit 7, stderr, signal, two streams, big truncated, big fits, limit 0, exact fit, over by one, invalid utf8, surrogate cut, tail 1, tail max, split across streams, stdin eof, cwd, args, create fail"
+  "result": "rejected",
+  "detail": "compile/verify failed: [{'stage': 'parse', 'line': 5, 'col': 1, 'code': 'module_file', 'message': 'cannot read the file of module crate::btail (expected btail.pruv)', 'fix': 'create btail.pruv next to the root file, add btail to dependencies, or remove `mod btail;`', 'file': 'supervise.pruv'}]"
  },
  {
   "mutant": "stream 2 dropped",
-  "result": "detected",
-  "detail": "stderr, two streams, split across streams"
+  "result": "rejected",
+  "detail": "compile/verify failed: [{'stage': 'parse', 'line': 5, 'col': 1, 'code': 'module_file', 'message': 'cannot read the file of module crate::btail (expected btail.pruv)', 'fix': 'create btail.pruv next to the root file, add btail to dependencies, or remove `mod btail;`', 'file': 'supervise.pruv'}]"
  },
  {
   "mutant": "stream index swapped",
-  "result": "detected",
-  "detail": "split across streams"
+  "result": "rejected",
+  "detail": "compile/verify failed: [{'stage': 'parse', 'line': 5, 'col': 1, 'code': 'module_file', 'message': 'cannot read the file of module crate::btail (expected btail.pruv)', 'fix': 'create btail.pruv next to the root file, add btail to dependencies, or remove `mod btail;`', 'file': 'supervise.pruv'}]"
  },
  {
   "mutant": "file_open inverted",
-  "result": "detected",
-  "detail": "hello, empty, exit 7, stderr, signal, two streams, big truncated, big fits, limit 0, exact fit, over by one, invalid utf8, surrogate cut, tail 1, tail max, split across streams, stdin eof, cwd, args, create fail, spawn missing, spawn empty, spawn create fail, stop, disconnect, early close, stop quie"
+  "result": "rejected",
+  "detail": "compile/verify failed: [{'stage': 'parse', 'line': 5, 'col': 1, 'code': 'module_file', 'message': 'cannot read the file of module crate::btail (expected btail.pruv)', 'fix': 'create btail.pruv next to the root file, add btail to dependencies, or remove `mod btail;`', 'file': 'supervise.pruv'}]"
  },
  {
   "mutant": "stdin kept open",
-  "result": "detected",
-  "detail": "timeout"
+  "result": "rejected",
+  "detail": "compile/verify failed: [{'stage': 'parse', 'line': 5, 'col': 1, 'code': 'module_file', 'message': 'cannot read the file of module crate::btail (expected btail.pruv)', 'fix': 'create btail.pruv next to the root file, add btail to dependencies, or remove `mod btail;`', 'file': 'supervise.pruv'}]"
  },
  {
   "mutant": "slot check dropped",
   "result": "rejected",
-  "detail": "compile/verify failed: [{'stage': 'verify', 'line': 39, 'col': 6, 'code': 'call_requires', 'message': 'cannot prove precondition of ev_kind (catalog) in crate::sock_state', 'fix': \"make the callee's requires hold before the call\", 'file': 'supervise.pruv', 'counterexample': {'l': {'error': 0, 'cap':"
+  "detail": "compile/verify failed: [{'stage': 'parse', 'line': 5, 'col': 1, 'code': 'module_file', 'message': 'cannot read the file of module crate::btail (expected btail.pruv)', 'fix': 'create btail.pruv next to the root file, add btail to dependencies, or remove `mod btail;`', 'file': 'supervise.pruv'}]"
  }
 ]

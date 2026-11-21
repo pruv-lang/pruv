@@ -20,7 +20,7 @@ pub fn cap_take(take f: File, inout cw: [i64], data: [u8]) -> File ! fs, alloc
   requires 0 <= cw[3] && cw[3] <= 1099511627776
   requires 0 <= cw[0] && cw[0] <= cw[3]
   requires 0 <= cw[4] && cw[4] <= 4611686018427387904
-  requires len(data) <= 65536
+  requires len(data) <= 1048576
   requires 0 <= cw[1] && cw[1] <= 1
   requires 0 <= cw[2] && cw[2] <= 2
   ensures len(cw) == 5
@@ -45,8 +45,13 @@ pub fn cap_take(take f: File, inout cw: [i64], data: [u8]) -> File ! fs, alloc
     cw[1] = 1;
   }
   if n == 0 { return move f; }
-  let part: [u8] = truncate(copy(data), n);
-  let g: File = file_write_bytes(move f, part);
+  let mut g: File = move f;
+  if n == len(data) {
+    g = file_write_bytes(move g, data);
+  } else {
+    let part: [u8] = truncate(copy(data), n);
+    g = file_write_bytes(move g, part);
+  }
   if file_writable(g) {
     cw[0] = cw[0] + n;
   } else {
