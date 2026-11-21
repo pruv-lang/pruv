@@ -26,8 +26,14 @@ pub fn tail_packet(data: [u8], cut_before: i64) -> [i64] ! alloc
 
 pub fn window_packet(data: [u8], cut_before: i64) -> [i64] ! alloc
 {
-  let r: crate::boundary::ImportResult = crate::import::read_window(data, cut_before != 0);
-  return crate::boundary::pack_result(r);
+  let w: [u8] = crate::import::window_wire(data, cut_before != 0);
+  return crate::boundary::wire_packet(w);
+}
+
+// R05 C byte output: the window wire as is (layout in boundary.pruv put_word).
+pub fn window_bytes(data: [u8], cut_before: i64) -> [u8] ! alloc
+{
+  return crate::import::window_wire(data, cut_before != 0);
 }
 
 mod chain;

@@ -15,7 +15,7 @@ MUTANTS=[
  ('model','import.pruv','root, "model"','root, "absentModel"'),
  ('chain-cut','chain.pruv','lost = true; done = true;','lost = false; done = true;'),
  ('chain-filter','chain.pruv','active: leaf.found, cut: lost, bad: leaf.bad','active: false, cut: lost, bad: leaf.bad'),
- ('leaf-parent','chain.pruv','if count > 0 { parent = copy(f.parent); }','if count >= 0 { parent = copy(f.parent); }'),
+ ('leaf-parent','chain.pruv','if count > 0 { poff = f.poff; plen = f.plen; }','if count >= 0 { poff = f.poff; plen = f.plen; }'),
  ('last-title','import.pruv','return rank >= best;','return rank > best;'),
  ('turn-cap','pkgs/turns/turns.pruv','if avail > 200 { avail = 200; }','if avail > 199 { avail = 199; }'),
 ]

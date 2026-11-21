@@ -421,22 +421,27 @@ pub fn consume_entry(doc: crate::json::JsonDocument, inout st: [i64], inout sl: 
   return Effect::Done(rank, copy(title), copy(model));
 }
 
-fn publish_turns(meta: [i64], turns: [i64], text: [u8]) -> crate::boundary::ImportResult ! alloc
+fn wfail_at(start: i64, end: i64, p: i64) -> [u8] ! alloc
+  requires 0 <= start && start <= end
 {
-  if !crate::boundary::check_output(meta, turns, text) { return fail_zero(); }
-  let o: crate::boundary::ImportOutput = crate::boundary::make_output(meta, turns, text);
-  return crate::boundary::ImportResult::Imported(o);
+  if p >= 0 && p <= end - start { return crate::boundary::wire_fail(crate::boundary::code_internal_invariant(), start + p); }
+  return crate::boundary::wire_fail(crate::boundary::code_internal_invariant(), start);
 }
 
-pub fn read_window(data: [u8], cut_before: bool) -> crate::boundary::ImportResult ! alloc
+fn wfail_zero() -> [u8] ! alloc
+{
+  return crate::boundary::wire_fail(crate::boundary::code_internal_invariant(), 0);
+}
+
+pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
 {
   if len(data) > crate::boundary::limit_window_bytes() {
-    return crate::boundary::ImportResult::Failed(crate::boundary::code_input_too_large(), 0);
+    return crate::boundary::wire_fail(crate::boundary::code_input_too_large(), 0);
   }
-  let chain: crate::chain::Chain = crate::chain::select(data, cut_before);
-  if chain.bad { return fail_zero(); }
-  let selected: [u8] = copy(chain.marks);
-  if len(selected) != len(data) { return fail_zero(); }
+  let mut selected: [u8] = alloc(len(data), 0);
+  let chain: crate::chain::Chain = crate::chain::select(data, cut_before, inout selected);
+  if chain.bad { return wfail_zero(); }
+  if len(selected) != len(data) { return wfail_zero(); }
   let mut started: bool = false;
   let mut pending: bool = false;
   let mut st: [i64] = crate::turns::new_state();
@@ -459,7 +464,7 @@ pub fn read_window(data: [u8], cut_before: bool) -> crate::boundary::ImportResul
     let step: crate::framing::Frame = crate::framing::window_next(data, offset);
     match step {
       crate::framing::Frame::Entry(start, end, next) => {
-        if start < 0 || start > end || end > len(data) || next <= offset || next > len(data) { return fail_zero(); }
+        if start < 0 || start > end || end > len(data) || next <= offset || next > len(data) { return wfail_zero(); }
         let line: crate::entry::Line = crate::entry::parse_line(data, start, end);
         match line {
           crate::entry::Line::Object(d) => {
@@ -467,9 +472,9 @@ pub fn read_window(data: [u8], cut_before: bool) -> crate::boundary::ImportResul
             match t {
               crate::entry::Title::Ranked(r, v) => { best = copy(v); best_rank = 1; }
               crate::entry::Title::NoTitle => { idle = true; }
-              crate::entry::Title::Defect(e) => { return fail_zero(); }
+              crate::entry::Title::Defect(e) => { return wfail_zero(); }
             }
-            if start >= len(selected) { return fail_zero(); }
+            if start >= len(selected) { return wfail_zero(); }
             if !chain.active || selected[start] == 1 {
               if !started && pending { crate::turns::skip_user(inout st); }
               started = true;
@@ -485,18 +490,18 @@ pub fn read_window(data: [u8], cut_before: bool) -> crate::boundary::ImportResul
                 }
                 if len(mid) > 0 { model = copy(mid); }
               }
-              Effect::Defect(kind) => { return fail_at(start, end, 0); }
+              Effect::Defect(kind) => { return wfail_at(start, end, 0); }
             }
             }
             pending = false;
           }
           crate::entry::Line::Skip => { idle = true; }
-          crate::entry::Line::Defect(p) => { return fail_at(start, end, p); }
+          crate::entry::Line::Defect(p) => { return wfail_at(start, end, p); }
         }
         offset = next;
       }
       crate::framing::Frame::Dropped(s, e, n) => {
-        if s < 0 || s > e || e > len(data) || e - s > 8192 || n <= offset || n > len(data) { return fail_zero(); }
+        if s < 0 || s > e || e > len(data) || e - s > 8192 || n <= offset || n > len(data) { return wfail_zero(); }
         let mut head: [u8] = alloc(e - s, 0);
         crate::bytes::copy_span(inout head, 0, data, s, e);
         if crate::text::dropped_user(head) { pending = true; if started { crate::turns::skip_user(inout st); } }
@@ -505,26 +510,51 @@ pub fn read_window(data: [u8], cut_before: bool) -> crate::boundary::ImportResul
       crate::framing::Frame::Done => { offset = len(data); }
     }
   }
-  if len(best) > 100000000000 { return fail_zero(); }
+  if len(best) > 100000000000 { return wfail_zero(); }
   let title: str = crate::text::one_line(best, 120);
   let tl: i64 = len(title);
   let ml: i64 = len(model);
-  if tl > 4096 || ml > 3145728 { return fail_zero(); }
+  if tl > 4096 || ml > 3145728 { return wfail_zero(); }
   let base: i64 = tl + ml;
   let col: crate::turns::Collected = crate::turns::finish(st, sl, buf, base);
   let nt: i64 = len(col.turns);
   let nx: i64 = len(col.text);
-  if nt < 0 || nt > 2000 || nx < 0 || nx > 2106752 { return fail_zero(); }
-  if col.kept < 0 || col.kept > 200 || nt != 10 * col.kept { return fail_zero(); }
+  if nt < 0 || nt > 2000 || nx < 0 || nx > 2106752 { return wfail_zero(); }
+  if col.kept < 0 || col.kept > 200 || nt != 10 * col.kept { return wfail_zero(); }
   let total: i64 = base + nx;
-  let mut packed: [u8] = alloc(total, 0);
-  put_str(inout packed, 0, title);
-  put_str(inout packed, tl, model);
-  crate::bytes::copy_span(inout packed, base, col.text, 0, nx);
   let mut m: [i64] = meta_new(2);
   if cut_before || col.trimmed == 1 || chain.cut { m[2] = 1; }
   m[3] = col.kept;
   if tl > 0 { m[4] = 0; m[5] = tl; }
   if ml > 0 { m[12] = tl; m[13] = ml; }
-  return publish_turns(m, col.turns, packed);
+  // R05 C: one check, then the selected turn spans and text go straight into the output wire.
+  if !crate::boundary::check_shape(m, col.turns, total) { return wfail_zero(); }
+  let hl: i64 = 8 * (18 + nt);
+  let mut w: [u8] = alloc(hl + total, 0);
+  let mut ok: bool = true;
+  if !crate::boundary::put_word(inout w, 0, 0) { ok = false; }
+  if !crate::boundary::put_word(inout w, 8, 14) { ok = false; }
+  if !crate::boundary::put_word(inout w, 16, nt) { ok = false; }
+  if !crate::boundary::put_word(inout w, 24, total) { ok = false; }
+  let mut i: i64 = 0;
+  while i < 14
+    invariant 0 <= i && i <= 14 && len(m) == 14 && len(w) == hl + total && hl == 8 * (18 + nt) && 0 <= nt && 0 <= total
+    decreases 14 - i
+  {
+    if !crate::boundary::put_word(inout w, 32 + 8 * i, m[i]) { ok = false; }
+    i = i + 1;
+  }
+  let mut j: i64 = 0;
+  while j < nt
+    invariant 0 <= j && j <= nt && nt == len(col.turns) && len(w) == hl + total && hl == 8 * (18 + nt) && 0 <= total
+    decreases nt - j
+  {
+    if !crate::boundary::put_word(inout w, 144 + 8 * j, col.turns[j]) { ok = false; }
+    j = j + 1;
+  }
+  if !ok { return wfail_zero(); }
+  put_str(inout w, hl, title);
+  put_str(inout w, hl + tl, model);
+  crate::bytes::copy_span(inout w, hl + base, col.text, 0, nx);
+  return w;
 }

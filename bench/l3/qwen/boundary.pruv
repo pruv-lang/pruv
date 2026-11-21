@@ -138,6 +138,61 @@ fn tiled(meta: [i64], turns: [i64], n: i64, m: i64) -> bool
   return cur == n;
 }
 
+// Shape check over a text length: the wire path checks before its single buffer exists (R05 C).
+pub fn check_shape(meta: [i64], turns: [i64], n: i64) -> bool
+  requires 0 <= n
+  ensures result ==> len(meta) == 14
+  ensures result ==> meta[0] == 1
+  ensures result ==> (0 <= meta[1] && meta[1] <= 2)
+  ensures result ==> (meta[2] == 0 || meta[2] == 1)
+  ensures result ==> (0 <= meta[3] && meta[3] <= 200)
+  ensures result ==> len(turns) == 10 * meta[3]
+  ensures result ==> n <= 5646080
+  ensures result ==> (forall i in 0..meta[3]: (0 <= turns[10 * i] && turns[10 * i] <= n && 0 <= turns[10 * i + 1] && turns[10 * i + 1] <= 32768 && turns[10 * i] + turns[10 * i + 1] <= n && 0 <= turns[10 * i + 2] && turns[10 * i + 2] <= n && 0 <= turns[10 * i + 3] && turns[10 * i + 3] <= 32768 && turns[10 * i + 2] + turns[10 * i + 3] <= n && turns[10 * i + 8] >= 0 && (turns[10 * i + 9] == 0 || turns[10 * i + 9] == 1)))
+  ensures result ==> (forall i in 0..meta[3]: ((turns[10 * i + 5] == 0 || turns[10 * i + 5] == 24) && (turns[10 * i + 7] == 0 || turns[10 * i + 7] == 24)))
+  ensures result ==> (forall i in 0..meta[3]: (((turns[10 * i + 4] == -1 && turns[10 * i + 5] == 0) || (0 <= turns[10 * i + 4] && turns[10 * i + 4] <= n && 0 <= turns[10 * i + 5] && turns[10 * i + 5] <= n - turns[10 * i + 4])) && ((turns[10 * i + 6] == -1 && turns[10 * i + 7] == 0) || (0 <= turns[10 * i + 6] && turns[10 * i + 6] <= n && 0 <= turns[10 * i + 7] && turns[10 * i + 7] <= n - turns[10 * i + 6]))))
+  ensures result ==> sum(i in 0..meta[3]: turns[10 * i + 1] + turns[10 * i + 3]) <= 2097152
+  ensures result ==> (meta[1] != 2 ==> (meta[2] == 0 && meta[3] == 0 && meta[12] == -1))
+  ensures result ==> (meta[1] != 0 ==> (meta[6] == -1 && meta[8] == -1))
+  ensures result ==> (meta[1] != 1 ==> meta[10] == -1)
+  ensures result ==> (meta[10] != -1 ==> meta[11] == 24)
+  ensures result ==> ((meta[4] == -1 && meta[5] == 0) || (0 <= meta[4] && meta[4] <= n && 0 <= meta[5] && meta[5] <= n - meta[4]))
+  ensures result ==> ((meta[6] == -1 && meta[7] == 0) || (0 <= meta[6] && meta[6] <= n && 0 <= meta[7] && meta[7] <= n - meta[6]))
+  ensures result ==> ((meta[8] == -1 && meta[9] == 0) || (0 <= meta[8] && meta[8] <= n && 0 <= meta[9] && meta[9] <= n - meta[8]))
+  ensures result ==> ((meta[10] == -1 && meta[11] == 0) || (0 <= meta[10] && meta[10] <= n && 0 <= meta[11] && meta[11] <= n - meta[10]))
+  ensures result ==> ((meta[12] == -1 && meta[13] == 0) || (0 <= meta[12] && meta[12] <= n && 0 <= meta[13] && meta[13] <= n - meta[12]))
+{
+  if len(meta) != 14 { return false; }
+  if meta[0] != 1 { return false; }
+  let mode: i64 = meta[1];
+  if mode < 0 || mode > 2 { return false; }
+  if meta[2] != 0 && meta[2] != 1 { return false; }
+  if mode != 2 && meta[2] != 0 { return false; }
+  let m: i64 = meta[3];
+  if m < 0 || m > 200 { return false; }
+  if mode != 2 && m != 0 { return false; }
+  if len(turns) != 10 * m { return false; }
+  if n > 5646080 { return false; }
+  // title: any mode
+  if !ref_ok(meta[4], meta[5], n) { return false; }
+  // cwd and entrypoint: head only
+  if !ref_ok(meta[6], meta[7], n) { return false; }
+  if mode != 0 && meta[6] != -1 { return false; }
+  if !ref_ok(meta[8], meta[9], n) { return false; }
+  if mode != 0 && meta[8] != -1 { return false; }
+  // lastAt: tail only, exactly 24 bytes when present
+  if !ref_ok(meta[10], meta[11], n) { return false; }
+  if mode != 1 && meta[10] != -1 { return false; }
+  if meta[10] != -1 && meta[11] != 24 { return false; }
+  // model: window only
+  if !ref_ok(meta[12], meta[13], n) { return false; }
+  if mode != 2 && meta[12] != -1 { return false; }
+  if !turns_ok(turns, n, m) { return false; }
+  if !tiled(meta, turns, n, m) { return false; }
+  return true;
+}
+
+
 pub fn check_output(meta: [i64], turns: [i64], text: [u8]) -> bool
   ensures result ==> len(meta) == 14
   ensures result ==> meta[0] == 1
@@ -160,35 +215,86 @@ pub fn check_output(meta: [i64], turns: [i64], text: [u8]) -> bool
   ensures result ==> ((meta[10] == -1 && meta[11] == 0) || (0 <= meta[10] && meta[10] <= len(text) && 0 <= meta[11] && meta[11] <= len(text) - meta[10]))
   ensures result ==> ((meta[12] == -1 && meta[13] == 0) || (0 <= meta[12] && meta[12] <= len(text) && 0 <= meta[13] && meta[13] <= len(text) - meta[12]))
 {
-  if len(meta) != 14 { return false; }
-  if meta[0] != 1 { return false; }
-  let mode: i64 = meta[1];
-  if mode < 0 || mode > 2 { return false; }
-  if meta[2] != 0 && meta[2] != 1 { return false; }
-  if mode != 2 && meta[2] != 0 { return false; }
-  let m: i64 = meta[3];
-  if m < 0 || m > 200 { return false; }
-  if mode != 2 && m != 0 { return false; }
-  if len(turns) != 10 * m { return false; }
-  let n: i64 = len(text);
-  if n > 5646080 { return false; }
-  // title: any mode
-  if !ref_ok(meta[4], meta[5], n) { return false; }
-  // cwd and entrypoint: head only
-  if !ref_ok(meta[6], meta[7], n) { return false; }
-  if mode != 0 && meta[6] != -1 { return false; }
-  if !ref_ok(meta[8], meta[9], n) { return false; }
-  if mode != 0 && meta[8] != -1 { return false; }
-  // lastAt: tail only, exactly 24 bytes when present
-  if !ref_ok(meta[10], meta[11], n) { return false; }
-  if mode != 1 && meta[10] != -1 { return false; }
-  if meta[10] != -1 && meta[11] != 24 { return false; }
-  // model: window only
-  if !ref_ok(meta[12], meta[13], n) { return false; }
-  if mode != 2 && meta[12] != -1 { return false; }
-  if !turns_ok(turns, n, m) { return false; }
-  if !tiled(meta, turns, n, m) { return false; }
-  return true;
+  return check_shape(meta, turns, len(text));
+}
+
+// R05 C byte wire: one [u8] instead of a widened [i64] packet. Words are 8 bytes little-endian of v + 1
+// (so -1 encodes as 0); the top byte must be zero. Success: words [0, 14, nturns, ntext, meta[14], turns], then
+// the raw text bytes. Failure: words [code, position], code != 0.
+pub fn put_word(inout w: [u8], at: i64, v: i64) -> bool
+  requires 0 <= at && at <= len(w) - 8
+  ensures len(w) == len(old(w))
+{
+  if v < -1 || v > 72057594037927934 { return false; }
+  let mut u: i64 = v + 1;
+  let mut i: i64 = 0;
+  while i < 8
+    invariant 0 <= i && i <= 8 && 0 <= u && 0 <= at && at <= len(w) - 8 && len(w) == len(old(w))
+    decreases 8 - i
+  {
+    w[at + i] = u % 256;
+    u = u / 256;
+    i = i + 1;
+  }
+  return u == 0;
+}
+
+pub fn get_word(w: [u8], at: i64) -> i64
+  requires 0 <= at && at <= len(w) - 8
+  ensures -2 <= result
+{
+  if w[at + 7] != 0 { return -2; }
+  let mut u: i64 = w[at + 6];
+  u = u * 256 + w[at + 5];
+  u = u * 256 + w[at + 4];
+  u = u * 256 + w[at + 3];
+  u = u * 256 + w[at + 2];
+  u = u * 256 + w[at + 1];
+  u = u * 256 + w[at + 0];
+  return u - 1;
+}
+
+pub fn wire_fail(code: i64, position: i64) -> [u8] ! alloc
+  ensures len(result) == 16
+{
+  let mut w: [u8] = alloc(16, 0);
+  let mut c: i64 = code;
+  if c <= 0 || c > 1000000 { c = 2; }
+  let mut p: i64 = position;
+  if p < 0 || p > 1000000000000 { p = 0; }
+  let a: bool = put_word(inout w, 0, c);
+  let b: bool = put_word(inout w, 8, p);
+  return w;
+}
+
+// Host compatibility: decode a wire into the widened packet window_packet always returned.
+pub fn wire_packet(w: [u8]) -> [i64] ! alloc
+{
+  if len(w) < 16 { return pair(2, 0); }
+  let code: i64 = get_word(w, 0);
+  if code != 0 {
+    if code < 0 { return pair(2, 0); }
+    return pair(code, get_word(w, 8));
+  }
+  if len(w) < 32 { return pair(2, 0); }
+  let nt: i64 = get_word(w, 16);
+  let nx: i64 = get_word(w, 24);
+  if get_word(w, 8) != 14 || nt < 0 || nt > 2000 || nx < 0 || nx > 5646080 { return pair(2, 0); }
+  let hl: i64 = 8 * (18 + nt);
+  if len(w) != hl + nx { return pair(2, 0); }
+  let mut out: [i64] = alloc(18 + nt + nx, 0);
+  out[1] = 14; out[2] = nt; out[3] = nx;
+  let mut i: i64 = 0;
+  while i < 14 + nt
+    invariant 0 <= i && i <= 14 + nt && len(out) == 18 + nt + nx && len(w) == hl + nx && hl == 8 * (18 + nt) && 0 <= nt && 0 <= nx
+    decreases 14 + nt - i
+  { out[4 + i] = get_word(w, 32 + 8 * i); i = i + 1; }
+  let mut k: i64 = 0;
+  while k < nx
+    invariant 0 <= k && k <= nx && len(out) == 18 + nt + nx && len(w) == hl + nx && hl == 8 * (18 + nt) && 0 <= nt
+    decreases nx - k
+  { out[18 + nt + k] = w[hl + k]; k = k + 1; }
+  return out;
 }
 
 // Widened packet: [0, 14, turn slots, text bytes, ...meta, ...turns, ...text].
