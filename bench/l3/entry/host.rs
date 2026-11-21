@@ -316,7 +316,7 @@ fn put(out: &mut Vec<i64>, vs: [i64; 3]) {
     out.extend_from_slice(&vs);
 }
 
-fn mk_packet(kind: i64, op_id: i64, seq: i64, op: i64, e: &Enc) -> Vec<i64> {
+fn packet_header(kind: i64, op_id: i64, seq: i64, op: i64, e: &Enc) -> Vec<i64> {
     let mut lens: Vec<usize> = vec![e.pool.len(), e.rec.len()];
     for t in &e.tables {
         lens.push(t.len());
@@ -329,10 +329,28 @@ fn mk_packet(kind: i64, op_id: i64, seq: i64, op: i64, e: &Enc) -> Vec<i64> {
     for l in &lens {
         w.push(*l as i64);
     }
+    w
+}
+
+fn mk_packet(kind: i64, op_id: i64, seq: i64, op: i64, e: &Enc) -> Vec<i64> {
+    let mut w = packet_header(kind, op_id, seq, op, e);
     w.extend_from_slice(&e.pool);
     w.extend_from_slice(&e.rec);
     for t in &e.tables {
         w.extend_from_slice(t);
+    }
+    w
+}
+
+fn mk_packet_owned(kind: i64, op_id: i64, seq: i64, op: i64, enc: Enc) -> Vec<i64> {
+    let mut w = packet_header(kind, op_id, seq, op, &enc);
+    let Enc { pool, rec, tables } = enc;
+    w.extend_from_slice(&pool);
+    drop(pool);
+    w.extend_from_slice(&rec);
+    drop(rec);
+    for table in tables {
+        w.extend_from_slice(&table);
     }
     w
 }
@@ -2066,8 +2084,7 @@ fn run_case<S: Sol>(sol: &S, mut v: Value) -> Result<String, String> {
     }.map_err(mk)?;
     drop(v);
     let op_id: i64 = 1;
-    let input = mk_packet(0, op_id, 0, op, &enc);
-    drop(enc);
+    let input = mk_packet_owned(0, op_id, 0, op, enc);
     let mut h = Host {
         refs,
         script,

@@ -13,6 +13,20 @@ struct Index {
     emitted: Rc<Vec<i64>>,
 }
 
+fn index_progress_len(input: &[i64]) -> usize {
+    let session_count = || {
+        let nsec = usize::try_from(*input.get(6)?).ok()?;
+        let pool_len = usize::try_from(*input.get(7)?).ok()?;
+        let count_at = 9usize.checked_add(nsec)?.checked_add(pool_len)?;
+        Some((*input.get(count_at)?).clamp(0, 559_240) as usize)
+    };
+    let max_sessions = input.len() / 30;
+    match session_count() {
+        Some(ns) => ns.min(max_sessions) + 1,
+        None => input.len().min(16_777_216) / 30 + 1,
+    }
+}
+
 struct G {
     report_prev: bool,
     index: RefCell<Option<Index>>,
@@ -26,11 +40,11 @@ impl entry_host::Sol for G {
         if input.get(5) != Some(&9) {
             return Rc::new(sol::entry_begin(input));
         }
-        let mut progress = vec![0; input.len().min(16_777_216) / 30 + 1];
+        let mut progress = vec![0; index_progress_len(input)];
         let emitted = Rc::new(sol::index_begin(&mut progress, input));
         #[cfg(entry_forge)]
         let emitted = if let Some(other) = self.forge.index_input(input) {
-            let mut other_progress = vec![0; progress.len()];
+            let mut other_progress = vec![0; index_progress_len(&other)];
             Rc::new(sol::index_begin(&mut other_progress, &other))
         } else {
             emitted
