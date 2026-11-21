@@ -497,7 +497,7 @@ fn wtf8_units(b: &[u8]) -> Option<Vec<u16>> {
 }
 
 // Decodes wire section 0 back to units (words of Pruv output; any violation is an internal error).
-fn decode_pool(sec: &[i64]) -> R<Vec<i64>> {
+fn decode_pool(sec: &[i64]) -> R<Vec<u16>> {
     if sec.is_empty() {
         return ie("pool section is empty");
     }
@@ -525,7 +525,7 @@ fn decode_pool(sec: &[i64]) -> R<Vec<i64>> {
         }
         None => return ie("pool is not valid WTF-8 of the stated unit count"),
     };
-    Ok(units.into_iter().map(i64::from).collect())
+    Ok(units)
 }
 
 // Decodes exactly nu units from the start of b; returns (units, bytes used).
@@ -561,13 +561,18 @@ struct Pkt<'a> {
     seq: i64,
     op: i64,
     secs: Vec<&'a [i64]>,
-    // Section 0 as UTF-16 units (decoded from the wire bytes, or borrowed for old-format packets).
-    pool: std::borrow::Cow<'a, [i64]>,
+    // Section 0 as UTF-16 units: decoded from the wire bytes into u16, or borrowed words for old-format packets.
+    pool: Pool<'a>,
+}
+
+enum Pool<'a> {
+    Words(&'a [i64]),
+    Units(Vec<u16>),
 }
 
 fn parse_pkt(w: &[i64]) -> R<Pkt<'_>> {
     let mut p = parse_pkt_units(w)?;
-    p.pool = std::borrow::Cow::Owned(decode_pool(p.secs[0])?);
+    p.pool = Pool::Units(decode_pool(p.secs[0])?);
     Ok(p)
 }
 
@@ -610,7 +615,7 @@ fn parse_pkt_units(w: &[i64]) -> R<Pkt<'_>> {
     if rest != 0 {
         return ie("core packet section lengths do not cover the payload");
     }
-    let pool = std::borrow::Cow::Borrowed(secs[0]);
+    let pool = Pool::Words(secs[0]);
     Ok(Pkt { kind: w[1], op_id: w[2], seq: w[3], op: payload[0], secs, pool })
 }
 
@@ -654,11 +659,8 @@ impl Pkt<'_> {
             6 => {
                 let units = self.string_units(a, b)?;
                 let mut out = Vec::with_capacity(units.len());
-                for x in units {
-                    if !(0..=65535).contains(x) {
-                        return ie("pool word is not a UTF-16 unit");
-                    }
-                    out.push(*x as u16);
+                for x in units.iter() {
+                    out.push(*x);
                 }
                 Ok(V::Str(out))
             }
@@ -679,12 +681,28 @@ impl Pkt<'_> {
             _ => ie(format!("unknown value tag {}", tag)),
         }
     }
-    fn string_units(&self, start: i64, len: i64) -> R<&[i64]> {
-        let pool: &[i64] = &self.pool;
-        if start < 0 || len < 0 || (start as u64) + (len as u64) > pool.len() as u64 {
+    fn string_units(&self, start: i64, len: i64) -> R<std::borrow::Cow<'_, [u16]>> {
+        let n = match &self.pool {
+            Pool::Words(w) => w.len(),
+            Pool::Units(u) => u.len(),
+        };
+        if start < 0 || len < 0 || (start as u64) + (len as u64) > n as u64 {
             return ie("string slot outside the pool");
         }
-        Ok(&pool[start as usize..(start + len) as usize])
+        let r = start as usize..(start + len) as usize;
+        match &self.pool {
+            Pool::Units(u) => Ok(std::borrow::Cow::Borrowed(&u[r])),
+            Pool::Words(w) => {
+                let mut out = Vec::with_capacity(r.len());
+                for x in &w[r] {
+                    if !(0..=65535).contains(x) {
+                        return ie("pool word is not a UTF-16 unit");
+                    }
+                    out.push(*x as u16);
+                }
+                Ok(std::borrow::Cow::Owned(out))
+            }
+        }
     }
 
     fn render_at(&self, refs: &Refs, sec: usize, off: usize, out: &mut String) -> R<()> {
@@ -1495,6 +1513,25 @@ fn encode_index(refs: &mut Refs, args: Value) -> R<Enc> {
     Ok(enc)
 }
 
+// Same encoding as encode_index, from the session texts one at a time (lean_split).
+fn encode_index_raw(refs: &mut Refs, sessions: Vec<&str>) -> R<Enc> {
+    let count = sessions.len();
+    let mut enc = Enc::new();
+    enc.bytes.reserve(24 * count);
+    let sec = enc.reserve();
+    let mut rows = Vec::with_capacity(30 * count);
+    for r in sessions {
+        let session: Value = match serde_json::from_str(r) {
+            Ok(v) => v,
+            Err(e) => return Err(HostErr::Core(format!("session text: {}", e))),
+        };
+        enc_session(&mut enc, refs, &session, &mut rows)?;
+    }
+    enc.fill(sec, rows);
+    put(&mut enc.rec, [7, sec as i64, count as i64]);
+    Ok(enc)
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // host state: serving requests (DESIGN 3.2)
 
@@ -2254,7 +2291,7 @@ fn drive<S: Sol>(sol: &S, h: &mut Host, op: i64, op_id: i64, input: Vec<i64>, pr
     }
 }
 
-fn run_case<S: Sol>(sol: &S, mut v: Value) -> Result<String, String> {
+fn run_case<S: Sol>(sol: &S, mut v: Value, raw_sessions: Option<Vec<&str>>) -> Result<String, String> {
     let obj = match v.as_object_mut() {
         Some(o) => o,
         None => return Err("case: line is not a JSON object".to_string()),
@@ -2282,7 +2319,9 @@ fn run_case<S: Sol>(sol: &S, mut v: Value) -> Result<String, String> {
     let script = parse_script(obj.get("script"), obj.get("forward")).map_err(mk)?;
     let probe = parse_probe(obj.get("probe")).map_err(mk)?;
     let mut refs = Refs::new();
-    let enc = if op == 9 {
+    let enc = if let Some(list) = raw_sessions {
+        encode_index_raw(&mut refs, list)
+    } else if op == 9 {
         let args = obj.remove("args").unwrap_or(Value::Null);
         encode_index(&mut refs, args)
     } else {
@@ -2327,7 +2366,159 @@ fn run_case<S: Sol>(sol: &S, mut v: Value) -> Result<String, String> {
     Ok(s)
 }
 
+// A bound_session_index line keeps its args as text, so the host never holds the whole session list as a JSON tree
+// (at L that tree alone was 18 MB, more than the hand run). One byte scan finds the value spans; serde_json then
+// parses every span, so each piece is checked as before. A line this split does not fit takes the plain path, so
+// errors read as before.
+fn ws(b: &[u8], mut i: usize) -> usize {
+    while i < b.len() && matches!(b[i], b' ' | b'\t' | b'\n' | b'\r') {
+        i += 1;
+    }
+    i
+}
+
+// End of the JSON value starting at b[i] (i is not whitespace). Only finds the boundary; serde checks the span.
+fn skip_value(b: &[u8], i: usize) -> Option<usize> {
+    fn string_end(b: &[u8], mut i: usize) -> Option<usize> {
+        i += 1;
+        loop {
+            match *b.get(i)? {
+                b'\\' => i += 2,
+                b'"' => return Some(i + 1),
+                _ => i += 1,
+            }
+        }
+    }
+    match *b.get(i)? {
+        b'"' => string_end(b, i),
+        b'{' | b'[' => {
+            let mut depth = 0usize;
+            let mut i = i;
+            loop {
+                match *b.get(i)? {
+                    b'"' => {
+                        i = string_end(b, i)?;
+                        continue;
+                    }
+                    b'{' | b'[' => depth += 1,
+                    b'}' | b']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(i + 1);
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+        }
+        _ => {
+            let mut i = i;
+            while i < b.len() && !matches!(b[i], b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r') {
+                i += 1;
+            }
+            Some(i)
+        }
+    }
+}
+
+// The members of the object at b[i..]: (key, value text) in order, and the index after the closing brace.
+fn members(t: &str, i: usize) -> Option<(Vec<(String, &str)>, usize)> {
+    let b = t.as_bytes();
+    if b.get(i) != Some(&b'{') {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut i = ws(b, i + 1);
+    if b.get(i) == Some(&b'}') {
+        return Some((out, i + 1));
+    }
+    loop {
+        if b.get(i) != Some(&b'"') {
+            return None;
+        }
+        let ke = skip_value(b, i)?;
+        let key: String = serde_json::from_str(&t[i..ke]).ok()?;
+        i = ws(b, ke);
+        if b.get(i) != Some(&b':') {
+            return None;
+        }
+        i = ws(b, i + 1);
+        let ve = skip_value(b, i)?;
+        out.push((key, &t[i..ve]));
+        i = ws(b, ve);
+        match b.get(i) {
+            Some(b',') => i = ws(b, i + 1),
+            Some(b'}') => return Some((out, i + 1)),
+            _ => return None,
+        }
+    }
+}
+
+// The element texts of the array t (None if t is not an array of this shape).
+fn elements(t: &str) -> Option<Vec<&str>> {
+    let b = t.as_bytes();
+    if b.first() != Some(&b'[') {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut i = ws(b, 1);
+    if b.get(i) == Some(&b']') {
+        return if ws(b, i + 1) == b.len() { Some(out) } else { None };
+    }
+    loop {
+        let e = skip_value(b, i)?;
+        out.push(&t[i..e]);
+        i = ws(b, e);
+        match b.get(i) {
+            Some(b',') => i = ws(b, i + 1),
+            Some(b']') => return if ws(b, i + 1) == b.len() { Some(out) } else { None },
+            _ => return None,
+        }
+    }
+}
+
+fn lean_split(line: &str) -> Option<(Value, Vec<&str>)> {
+    let b = line.as_bytes();
+    let (top, end) = members(line, ws(b, 0))?;
+    if ws(b, end) != b.len() {
+        return None;
+    }
+    let mut obj = serde_json::Map::new();
+    let mut args = None;
+    for (k, t) in top {
+        if k == "args" {
+            args = Some(t);
+        } else {
+            obj.insert(k, serde_json::from_str(t).ok()?);
+        }
+    }
+    if obj.get("op").and_then(|o| o.as_str()) != Some("bound_session_index") {
+        return None;
+    }
+    let (am, ae) = members(args?, 0)?;
+    if ae != args?.len() {
+        return None;
+    }
+    let mut sessions = None;
+    for (k, t) in am {
+        if k == "sessions" {
+            sessions = Some(t);
+        } else {
+            serde_json::from_str::<Value>(t).ok()?;
+        }
+    }
+    Some((Value::Object(obj), elements(sessions?)?))
+}
+
 fn run_one<S: Sol>(sol: &S, line: &str) -> String {
+    if let Some((v, sessions)) = lean_split(line) {
+        let id = serde_json::to_string(v.get("id").unwrap_or(&Value::Null)).unwrap_or_else(|_| "null".to_string());
+        // Any error takes the plain path again, which reports it exactly as before (a bad session text first).
+        if let Ok(Ok(body)) = catch_unwind(AssertUnwindSafe(|| run_case(sol, v, Some(sessions)))) {
+            return format!("{{\"id\":{},{}}}", id, body);
+        }
+    }
     let v: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(e) => return format!("{{\"id\":null,\"error\":{}}}", jstr_s(&format!("case: bad JSON: {}", e))),
@@ -2336,7 +2527,7 @@ fn run_one<S: Sol>(sol: &S, line: &str) -> String {
         Some(x) => serde_json::to_string(x).unwrap_or_else(|_| "null".to_string()),
         None => "null".to_string(),
     };
-    match catch_unwind(AssertUnwindSafe(|| run_case(sol, v))) {
+    match catch_unwind(AssertUnwindSafe(|| run_case(sol, v, None))) {
         Ok(Ok(body)) => format!("{{\"id\":{},{}}}", id, body),
         Ok(Err(msg)) => format!("{{\"id\":{},\"error\":{}}}", id, jstr_s(&msg)),
         Err(_) => format!("{{\"id\":{},\"error\":\"case: host panic\"}}", id),
