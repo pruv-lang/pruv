@@ -8,7 +8,8 @@
 // Tape record r occupies slots 6*r .. 6*r+6:
 //   0 kind   1 source start (inclusive)   2 source end (exclusive)
 //   3 skip (record after the subtree)     4 parent record (-1 for the root)
-//   5 child count (array elements / object members, 0 otherwise)
+//   5 child count (array elements / object members); on a string or key, 1 when scan_into saw no backslash
+//     (a run-time mark trusted by access::string_text_scanned, not checked against source, G-DB21-2), else 0
 // Kinds: 0 null, 1 false, 2 true, 3 number, 4 string, 5 array, 6 object, 7 key.
 
 // ---- kinds ----
