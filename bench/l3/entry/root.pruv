@@ -29,5 +29,12 @@ pub fn index_begin(inout progress: [i64], input: [i64]) -> [i64] ! alloc
 
 pub fn index_step(inout progress: [i64], input: [i64], prev: [i64], emitted: [i64], completion: [i64]) -> [i64] ! alloc
 {
+  // DB12: the adapter passes back the emitted await as both prev and emitted; equal wire words decode to equal packets,
+  // so decode it once (different words still decode separately and entry_api compares them as before).
+  let n: i64 = len(prev);
+  if n == len(emitted) && eq_range(prev, 0, emitted, 0, n) {
+    let e: [i64] = crate::ent_wire::wire_in(emitted);
+    return crate::ent_wire::wire_out(crate::entry_api::index_step(inout progress, crate::ent_wire::wire_in(input), e, e, crate::ent_wire::wire_in(completion)));
+  }
   return crate::ent_wire::wire_out(crate::entry_api::index_step(inout progress, crate::ent_wire::wire_in(input), crate::ent_wire::wire_in(prev), crate::ent_wire::wire_in(emitted), crate::ent_wire::wire_in(completion)));
 }
