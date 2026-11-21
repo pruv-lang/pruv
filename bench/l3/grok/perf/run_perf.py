@@ -67,7 +67,7 @@ def build(pruvc):
            "dependencies": {k: {"path": "../../../pkgs/" + k, "version": "0.1"} for k in DEPS}}
     json.dump(man, open(os.path.join(WORK, "perf_root.pruv.json"), "w"))
     rlib = os.path.join(WORK, "libpruv_str.rlib")
-    sh([rustc(), "--crate-name", "pruv_str", "--crate-type", "rlib", os.path.join(GROK, "str_adapter.rs"), "-o", rlib],
+    sh([rustc()] + RUSTC_FLAGS + ["--crate-name", "pruv_str", "--crate-type", "rlib", os.path.join(GROK, "str_adapter.rs"), "-o", rlib],
        what="rustc str_adapter")
     gen = os.path.join(WORK, "gen.rs")
     if os.path.exists(gen):

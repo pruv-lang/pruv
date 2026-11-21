@@ -77,13 +77,15 @@ fn main() {
             }
             let sum = fold(&run(row, &win, false));
             t.sort_unstable();
-            println!("{} {} {} {} {}", t[(t.len() - 1) / 2], t[0], t[t.len() - 1], t.len(), sum);
+            let n = t.len();
+            let med = if n % 2 == 0 { (t[n / 2 - 1] + t[n / 2]) / 2 } else { t[n / 2] };
+            println!("{} {} {} {} {}", med, t[0], t[t.len() - 1], t.len(), sum);
         }
         "rss" => {
             let row = a[2].as_str();
             let win = std::fs::read(&a[3]).unwrap();
             let r = run(row, black_box(&win), false);
-            black_box(r.len());
+            black_box(&r);
         }
         _ => {
             eprintln!("usage: perf_driver check|time|rss ...");
