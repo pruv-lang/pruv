@@ -103,7 +103,7 @@ pub fn str_at(d: crate::json::JsonDocument, id: i64) -> str ! alloc
   ensures len(result) <= 50331648
 {
   let none: str = "";
-  let t: crate::jstr::Text = crate::access::string_text(d, id);
+  let t: crate::jstr::Text = crate::access::string_text_scanned(d, id);
   match t {
     crate::jstr::Text::Decoded(x) => {
       if len(x) > 50331648 { return copy(none); }

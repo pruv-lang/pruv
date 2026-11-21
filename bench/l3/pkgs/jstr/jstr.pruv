@@ -313,3 +313,80 @@ pub fn string_text(source: [u8], start: i64, end: i64) -> Text ! alloc
 }
 pub fn adapter_probe(data: [u8]) -> str ! alloc
 { let s: String = utf8_to_string(data); return string_to_str(s); }
+
+// Decode a scanner-validated quoted span. Raw UTF-8 bytes already have the correct encoding.
+pub fn string_utf8_scanned(source: [u8], start: i64, end: i64) -> [u8] ! alloc
+  requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
+  ensures len(result) <= 3 * (end - start)
+  ensures forall i in 0..len(result): (0 <= result[i] && result[i] <= 255)
+{
+  let mut p: i64 = start;
+  let mut stop: i64 = start;
+  if end - start >= 2 { p = start + 1; stop = end - 1; }
+  let first: i64 = p;
+  let mut need: i64 = 0;
+  let mut plain: bool = true;
+  while p < stop
+    invariant start <= first && first <= p && p <= end && start <= stop && stop <= end
+    invariant end <= len(source) && end <= 16777216
+    invariant 0 <= need && need <= 3 * (p - start)
+    decreases stop - p
+  {
+    let c: i64 = source[p];
+    if c != 92 { need = need + 1; p = p + 1; }
+    else {
+      plain = false;
+      let s: Scalar = scalar(source, p, stop);
+      need = need + width(s.value);
+      p = s.next;
+    }
+  }
+  // Without escapes, the decoded bytes are the raw UTF-8 span.
+  let mut out: [u8] = alloc(need, 0);
+  if plain && need == stop - first {
+    copy_range(inout out, 0, source, first, need);
+    return out;
+  }
+  p = first;
+  let mut used: i64 = 0;
+  while p < stop
+    invariant start <= p && p <= end && start <= stop && stop <= end
+    invariant end <= len(source) && end <= 16777216
+    invariant len(out) == need && need <= 3 * (end - start)
+    invariant 0 <= used && used <= need
+    decreases stop - p
+  {
+    let c: i64 = source[p];
+    if c != 92 {
+      if used >= need { return out; }
+      out[used] = c; used = used + 1; p = p + 1;
+    } else {
+      let s: Scalar = scalar(source, p, stop);
+      let v: i64 = s.value;
+      let w: i64 = width(v);
+      if used + w > need { return out; }
+      if w == 1 { out[used] = v; }
+      if w == 2 { out[used] = 192 + v / 64; out[used + 1] = 128 + v % 64; }
+      if w == 3 {
+        out[used] = 224 + v / 4096; out[used + 1] = 128 + (v / 64) % 64; out[used + 2] = 128 + v % 64;
+      }
+      if w == 4 {
+        out[used] = 240 + v / 262144; out[used + 1] = 128 + (v / 4096) % 64;
+        out[used + 2] = 128 + (v / 64) % 64; out[used + 3] = 128 + v % 64;
+      }
+      used = used + w;
+      p = s.next;
+    }
+  }
+  return out;
+}
+
+pub fn string_text_scanned(source: [u8], start: i64, end: i64) -> Text ! alloc
+  requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
+  ensures is_variant(result, Text::Decoded) ==> len(variant_field(result, Text::Decoded, text)) <= 3 * (end - start)
+{
+  let bytes: [u8] = string_utf8_scanned(source, start, end);
+  let owned: String = utf8_to_string(bytes);
+  if len(owned) != len(bytes) { return Text::InternalInvariant(crate::json::err_internal_invariant()); }
+  return Text::Decoded(string_to_str(owned));
+}
