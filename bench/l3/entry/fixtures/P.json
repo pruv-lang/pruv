@@ -1719,7 +1719,322 @@
      ],
      "driver": null
     }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t"
+      }
+     }
+    },
+    "probe": {
+     "at": 0,
+     "corrupt": "exact_limit_phys"
+    },
+    "id": "P10/exact-limit-phys-begin",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       "t"
+      ]
+     ],
+     "trace": [],
+     "driver": null
+    }
+   },
+   {
+    "op": "import_sources",
+    "args": {
+     "env": {}
+    },
+    "probe": {
+     "at": 1,
+     "corrupt": "exact_limit_phys"
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "one"
+        }
+       ]
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_fedcba9876543210",
+         "name": "two"
+        }
+       ]
+      }
+     }
+    },
+    "id": "P10/exact-limit-phys-step",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      {
+       "source": "claude:home",
+       "engine": "claude",
+       "kind": "home",
+       "home": "/home/test/.claude"
+      },
+      {
+       "source": "claude:acc_0123456789abcdef",
+       "engine": "claude",
+       "kind": "account",
+       "account": "acc_0123456789abcdef",
+       "accountName": "one",
+       "home": "/data/engine-homes/claude/acc_0123456789abcdef"
+      },
+      {
+       "source": "codex:home",
+       "engine": "codex",
+       "kind": "home",
+       "home": "/home/test/.codex"
+      },
+      {
+       "source": "codex:acc_fedcba9876543210",
+       "engine": "codex",
+       "kind": "account",
+       "account": "acc_fedcba9876543210",
+       "accountName": "two",
+       "home": "/data/engine-homes/codex/acc_fedcba9876543210"
+      },
+      {
+       "source": "grok:home",
+       "engine": "grok",
+       "kind": "home",
+       "home": "/home/test/.grok"
+      },
+      {
+       "source": "opencode:home",
+       "engine": "opencode",
+       "kind": "home",
+       "home": "/home/test/.local/share/opencode"
+      },
+      {
+       "source": "qwen:home",
+       "engine": "qwen",
+       "kind": "home",
+       "home": "/home/test/.qwen"
+      }
+     ],
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes/codex/acc_fedcba9876543210"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes/codex"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes"
+      ],
+      [
+       "realpath",
+       "/data"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "stat",
+       "/data/engine-homes/codex/acc_fedcba9876543210"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "stat",
+       "/data/engine-homes/codex/acc_fedcba9876543210"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ]
+     ],
+     "driver": null
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t"
+      }
+     }
+    },
+    "probe": {
+     "at": 0,
+     "corrupt": "oversize_phys"
+    },
+    "id": "P10/oversize-phys-begin",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InputTooLarge"
+     },
+     "trace": [],
+     "driver": null
+    }
+   },
+   {
+    "op": "import_sources",
+    "args": {
+     "env": {}
+    },
+    "probe": {
+     "at": 1,
+     "corrupt": "oversize_phys"
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "one"
+        }
+       ]
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_fedcba9876543210",
+         "name": "two"
+        }
+       ]
+      }
+     }
+    },
+    "id": "P10/oversize-phys-step",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InputTooLarge"
+     },
+     "trace": [
+      [
+       "homedir"
+      ]
+     ],
+     "driver": null
+    }
    }
   ]
+ },
+ {
+  "id": "P11",
+  "name": "packet-extra-pool-word",
+  "op": "session_threads",
+  "args": {
+   "session": {
+    "id": "s",
+    "externalThread": {
+     "engine": "claude",
+     "thread": "t"
+    }
+   }
+  },
+  "probe": {
+   "at": 0,
+   "corrupt": "extra_word"
+  },
+  "expect": {
+   "terminal": "boundary_error",
+   "value": {
+    "code": "InvalidPacket"
+   },
+   "trace": [],
+   "driver": null
+  },
+  "mutant": "M17"
  }
 ]

@@ -264,16 +264,16 @@ def probe_derivable(at, trace, probe_script=None):
 
 
 def probe_expect(probe, oracle_res, probe_script=None):
-    """Expected boundary result of a probe case. exact_limit expects the oracle; reentry expects InvalidPacket with the full
-    trace; other corruptions expect InvalidPacket (InputTooLarge for oversize) with the requests served before step `at`.
+    """Exact-limit probes expect the oracle; reentry expects InvalidPacket with the full trace.
+    Other corruptions expect InvalidPacket (InputTooLarge for oversize probes) with the requests served before step `at`.
     Raises AssertionError when the probe is beyond the derivable requests."""
     c, k = probe['corrupt'], probe['at']
     trace = oracle_res['trace']
-    if c == 'exact_limit':
+    if c in ('exact_limit', 'exact_limit_phys'):
         return {'terminal': oracle_res['terminal'], 'value': oracle_res['value'], 'trace': trace, 'driver': None}
     if c == 'reentry':
         return {'terminal': 'boundary_error', 'value': {'code': 'InvalidPacket'}, 'trace': trace, 'driver': None}
-    code = 'InputTooLarge' if c == 'oversize' else 'InvalidPacket'
+    code = 'InputTooLarge' if c in ('oversize', 'oversize_phys') else 'InvalidPacket'
     slots = _probe_slots(trace, probe_script)
     if not (k <= len(slots) and None not in slots[:k]):
         raise AssertionError(f'probe at {k} is beyond the derivable requests of the case')

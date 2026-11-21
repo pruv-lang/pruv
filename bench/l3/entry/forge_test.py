@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""WA forged-replay regression tests (R1) and deep-path request count (R3).
+"""WA forged-replay (R1), exact pool length and deep-path request count (R3) tests.
 
 Runs work/dev/forge_harness (see forge.rs, forge_build.sh) once per scenario. The harness tampers with the prev
-packet of one entry_step call. Honest controls must finish with terminal ok; every forgery must end in
+packet of one entry_step call. Host probes forge the input or a step completion's pool. Honest controls
+must finish with terminal ok; every forgery must end in
 terminal boundary_error / InvalidPacket.  Usage: python3 forge_test.py
 """
 import json, os, subprocess, sys
@@ -86,6 +87,14 @@ def deep_stats(n, rel=False):
 
 def main():
     fails = 0
+    for corrupt in ('extra_word', 'missing_word'):
+        for at, phase in [(0, 'begin'), (1, 'step')]:
+            case = dict(C01, probe={'at': at, 'corrupt': corrupt})
+            out, _ = run(case)
+            got = (out.get('terminal'), out.get('value'))
+            ok = got == BAD and len(out['trace']) == at
+            fails += not ok
+            print('%-4s %s-%s -> %s' % ('ok' if ok else 'FAIL', corrupt, phase, got))
     # The synthetic separator takes one byte but no logical UTF-16 unit.
     for name, session, units in [
         ('C3 separated surrogates', {'id': {'u16': [0xD800]}, 'temporary': {'u16': [0xDC00]}}, 2),

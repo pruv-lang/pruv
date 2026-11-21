@@ -8,6 +8,7 @@
 //                        calls, otherwise the 1-based step number). Used by forge_test.py to capture real await packets.
 //   FORGE_TAMPER  JSON   {"at":N,"world":[..]?,"prev":[..]?,"comp":[..]?,"comp5_fill":m?}  replace the named arguments of the N-th step call
 //                        (global, 1-based). The mutation itself is computed by forge_test.py from a dumped honest run.
+//                        {"at":0,"input":[..]} replaces the begin input.
 // The harness also prints, at exit of each step, nothing to stdout (stdout belongs to req_host::run).
 use std::cell::Cell;
 use std::io::Write;
@@ -81,6 +82,9 @@ impl G {
 
 impl req_host::Req for G {
     fn begin(&self, world: &[i64], input: &[i64]) -> Vec<i64> {
+        let forged = self.tamper.as_ref().filter(|t| t["at"].as_u64() == Some(0))
+            .and_then(|t| t.get("input")).map(words);
+        let input = forged.as_deref().unwrap_or(input);
         let out = sol::req_begin(world, input);
         self.dump(0, "begin", world, &[], input, &out);
         out

@@ -1,5 +1,5 @@
 // Section 0 is [nu, nb, W_1..W_m] on both sides of the entry boundary.
-// Validate WTF-8 in place, including zero byte padding and optional trailing zero words.
+// Validate WTF-8 in place, including zero byte padding. The pool length is exact: l0 = 2 + ceil(nb/7) (D-DB18-2).
 // Return -1 past the stream or for a word outside the seven-byte range.
 fn byte_at(w: [i64], p: i64, k: i64, nb: i64) -> i64
   requires 0 <= p && p <= 33554432 && 0 <= k && k <= 4294967296
@@ -87,6 +87,9 @@ pub fn pool_ok(w: [i64], p0: i64, l0: i64) -> bool
   let nb: i64 = crate::ent_u16::rd(w, p0 + 1);
   let cap: i64 = 7 * (l0 - 2);
   if nu < 0 || nu > 16777216 || nb < nu || nb > cap || nb > 3 * nu + nu / 2 { return false; }
+  // MUTANT M17: the exact pool length check is dropped (trailing zero words are accepted again).
+  // No trailing zero words and no missing word: the pool is exactly as long as its bytes need.
+  if l0 != 2 + (nb + 6) / 7 { return false; }
   // Equal counts imply an ASCII-only stream. Check all seven high bits in each word.
   if nb == nu { return ascii_pool_ok(w, p0, l0, nb); }
   let mut u: i64 = 0;
@@ -165,36 +168,13 @@ fn padding_ok(w: [i64], p0: i64, l0: i64, nb: i64) -> bool
     if byte_at(w, p0, k, end) != 0 { return false; }
     k = k + 1;
   }
-  let mut j: i64 = 2 + used;
-  while j < l0
-    invariant 2 <= j && j <= l0 && l0 <= 16777216 && 0 <= p0 && p0 <= 33554432
-    decreases l0 - j
-  {
-    if crate::ent_u16::rd(w, p0 + j) != 0 { return false; }
-    j = j + 1;
-  }
   return true;
 }
 
-// Ignore the optional all-zero words accepted by wire_in when comparing awaits.
+// Pools have one canonical length (pool_ok checks l0 exactly), so equal awaits are equal word for word.
 pub fn same_packet(a: [i64], b: [i64]) -> bool
 {
   let na: i64 = len(a);
-  let nb: i64 = len(b);
-  if na == nb && eq_range(a, 0, b, 0, na) { return wire_in(b); }
-  if !shape_ok(a) || !shape_ok(b) { return false; }
-  if na < 9 || nb < 9 || a[4] != na - 5 || b[4] != nb - 5 { return false; }
-  let sa: i64 = a[6];
-  let sb: i64 = b[6];
-  if sa < 2 || sa > na - 7 || sb != sa || sb > nb - 7 { return false; }
-  let p: i64 = 7 + sa;
-  let la: i64 = a[7];
-  let lb: i64 = b[7];
-  if la < 2 || la > na - p || lb < 2 || lb > nb - p { return false; }
-  if na - la != nb - lb || !pool_ok(a, p, la) || !pool_ok(b, p, lb) { return false; }
-  if !eq_range(a, 0, b, 0, 4) || !eq_range(a, 5, b, 5, 2) || !eq_range(a, 8, b, 8, sa - 1) { return false; }
-  let bytes: i64 = crate::ent_value::pool_bytes(a, p);
-  let words: i64 = crate::ent_value::pool_capacity(bytes);
-  if words > la || words > lb || !eq_range(a, p, b, p, words) { return false; }
-  return eq_range(a, p + la, b, p + lb, na - p - la);
+  if na != len(b) || !eq_range(a, 0, b, 0, na) { return false; }
+  return wire_in(b);
 }

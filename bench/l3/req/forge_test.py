@@ -46,7 +46,9 @@ def capture(id):
         obs = run(case(id), dump=f)
         recs = [json.loads(l) for l in open(f)]
         os.remove(f)
-        _cache[id] = (obs, {d['n']: d for d in recs if d['kind'] == 'step'})
+        packets = {d['n']: d for d in recs if d['kind'] == 'step'}
+        packets[0] = next(d for d in recs if d['kind'] == 'begin')
+        _cache[id] = (obs, packets)
     return _cache[id]
 
 
@@ -67,6 +69,38 @@ def build(pk, sections):
 
 def sec_edit(pk, i, fn):
     s = secs(pk); s = [list(x) for x in s]; s[i] = fn(s[i]); return build(pk, s)
+
+
+def extra_pool_word(pool):
+    return pool + [0]
+
+
+def missing_pool_word(pool):
+    assert len(pool) > 2, 'expected a packed data word'
+    return pool[:-1]
+
+
+def comp_pool(fn):
+    def m(w, p, c, steps, n):
+        return w, p, sec_edit(c, 0, fn)
+    return m
+
+
+def begin_pool(id, fn):
+    _, packets = capture(id)
+    begin = packets[0]
+    forged = sec_edit(begin['comp'], 0, fn)
+    with tempfile.TemporaryDirectory() as tmp:
+        dump = os.path.join(tmp, 'begin.jsonl')
+        obs = run(case(id), {'at': 0, 'input': forged}, dump=dump)
+        with open(dump) as f:
+            out = json.loads(next(f))['out']
+    if len(out) < 4 or out[0] != 1381057073:
+        return False
+    world_end = 4 + out[2]
+    pk = out[world_end:]
+    return (out[4:world_end] == begin['world'] and len(pk) >= HDR and pk[2] == 3
+            and secs(pk)[1] == [5, 0] and rejected(obs) and n_rejects(obs) == 1)
 
 
 def req_rows(obs, rid=None):
@@ -98,8 +132,9 @@ def tamper_run(id, n, mut):
     return run(case(id), {'at': n, 'world': w, 'prev': p, 'comp': c})
 
 
-def core_refused(id, n, mut):
-    """re-run the forgery with a dump and check what sol::req_step itself returned for the forged step n."""
+def core_refused(id, n, mut, strict=False):
+    """re-run the forgery with a dump and check what sol::req_step itself returned for the forged step n.
+    strict: only an explicit reject record (5, 0) counts, not a malformed core output."""
     obs, steps = capture(id)
     d = steps[n]
     w, p, c = mut(list(d['world']), list(d['prev']), list(d['comp']), steps, n)
@@ -107,7 +142,7 @@ def core_refused(id, n, mut):
     run(case(id), {'at': n, 'world': w, 'prev': p, 'comp': c}, dump=f)
     out = [json.loads(l) for l in open(f) if json.loads(l)['n'] == n and json.loads(l)['kind'] == 'step'][0]['out']
     os.remove(f)
-    if len(out) < 4 or out[0] != 1381057073: return 'core'
+    if len(out) < 4 or out[0] != 1381057073: return False if strict else 'core'
     ww = out[2]; world, pk = out[4:4 + ww], out[4 + ww:]
     if ww >= 3 and world[2] == w[2] + 1:
         # a complete, self-consistent old triple (world included) is fresh to the core; only the driver's freshness
@@ -115,6 +150,8 @@ def core_refused(id, n, mut):
         return 'stale' if world[2] != d['world'][2] + 1 else False
     if len(pk) < HDR or pk[2] != 3: return False
     rec = secs(pk)[1]
+    if strict:
+        return 'core' if rec == [5, 0] else False
     return 'core' if len(rec) >= 2 and rec[0] == 5 and rec[1] == 0 else False
 
 
@@ -330,6 +367,8 @@ F = [
      'C3 call 33 lastPlan covers the 0xFF separator'),
     ('F61', 'O01', 16, comp_split_string([0, 6, 3, 1], [2, 7, 0xEDA080FFEDB080]),
      'C3 call 32 sessionId is the 0xFF separator alone'),
+    ('F62', 'O01', 16, comp_pool(extra_pool_word), 'completion pool has an extra zero word'),
+    ('F63', 'O01', 16, comp_pool(missing_pool_word), 'completion pool is missing a word'),
 ]
 # the call budget (ABI.md 10): (id, case, step, world word 9 set to, effects the refused step must end with)
 BUDGET = [
@@ -353,7 +392,7 @@ def main():
         try:
             obs = tamper_run(cs, n, mut)
             base = capture(cs)[0]
-            core = core_refused(cs, n, mut)
+            core = core_refused(cs, n, mut, strict=id in ('F62', 'F63'))
             same = without_rejects(obs) == base and n_rejects(obs) == 1
             ok = bool(core) and same
             if ok: got = 'InvalidPacket' if core == 'core' else 'InvalidPacket(driver-stale)'
@@ -361,6 +400,14 @@ def main():
         except Exception as e:
             got, ok = 'ERROR %s' % e, False
         rows.append((id, 'InvalidPacket', got, ok, '%s step %d: %s' % (cs, n, region)))
+    for id, fn, region in [('F64', extra_pool_word, 'extra zero word'), ('F65', missing_pool_word, 'missing word')]:
+        if want and id not in want: continue
+        try:
+            ok = begin_pool('O01', fn)
+            got = 'InvalidPacket' if ok else 'core did not return InvalidPacket with unchanged world'
+        except Exception as e:
+            got, ok = 'ERROR %s' % e, False
+        rows.append((id, 'InvalidPacket', got, ok, 'O01 begin: pool has a %s' % region))
     for id, cs, n, v, tail in BUDGET:
         if want and id not in want: continue
         try:
