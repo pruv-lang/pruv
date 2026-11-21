@@ -1435,24 +1435,22 @@ impl<'a> FnGen<'a> {
     }
 
     // ---------- slots / scopes ----------
-    fn array_slot(&mut self, a: String, ty: &str) -> Slot {
-        let b = format!("{a}.len");
-        let c = format!("{a}.cap");
-        self.allocas.push(format!("{b} = getelementptr inbounds {ARR}, ptr {a}, i32 0, i32 1"));
-        self.allocas.push(format!("{c} = getelementptr inbounds {ARR}, ptr {a}, i32 0, i32 2"));
+    fn array_slot(&mut self, a: String, ty: &str) -> R<Slot> {
+        let b = g9_gep(self, ARR, &a, 1)?;
+        let c = g9_gep(self, ARR, &a, 2)?;
         let mut slot = V::with_b(Kind::Arr, a, b);
         slot.c = Some(c);
         slot.ty = elem_ty(ty);
-        slot
+        Ok(slot)
     }
 
-    pub fn new_slot(&mut self, name: &str, ty: &str) -> Slot {
+    pub fn new_slot(&mut self, name: &str, ty: &str) -> R<Slot> {
         let kind = vkind(ty);
         let base = format!("%l{}.{}", self.nslot, mangle(name));
         self.nslot += 1;
         let a = format!("{}.a", base);
         let b = format!("{}.b", base);
-        match kind {
+        Ok(match kind {
             Kind::I64 => {
                 self.allocas.push(format!("{} = alloca i64", a));
                 V::new(Kind::I64, a)
@@ -1469,7 +1467,8 @@ impl<'a> FnGen<'a> {
             }
             Kind::Arr if self.resize_slots.contains(name) => {
                 self.allocas.push(format!("{a} = alloca {ARR}"));
-                self.array_slot(a, ty)
+                // The packed slot's len / cap addresses are taken where the slot is made (as the Python backend does).
+                return self.array_slot(a, ty);
             }
             Kind::Arr => {
                 self.allocas.push(format!("{} = alloca ptr", a));
@@ -1490,7 +1489,7 @@ impl<'a> FnGen<'a> {
                 self.allocas.push(format!("{} = alloca i64", b));
                 V::with_b(Kind::Opt, a, b)
             }
-        }
+        })
     }
 
     pub fn load(&mut self, sl: &Slot) -> R<V> {
@@ -2144,9 +2143,9 @@ impl<'a> FnGen<'a> {
     fn hold(&mut self, v: &V) -> R<Slot> {
         let sl = if v.k == Kind::Agg || v.k == Kind::Coll {
             let ty = need_ty(&v.ty)?.to_string();
-            self.new_slot("hold", &ty)
+            self.new_slot("hold", &ty)?
         } else {
-            let mut sl = self.new_slot("hold", "array");
+            let mut sl = self.new_slot("hold", "array")?;
             sl.ty = v.ty.clone();
             sl
         };
@@ -2610,7 +2609,7 @@ impl<'a> FnGen<'a> {
         for (i, p) in f.params.iter().enumerate() {
             let n = mangle(&p.name);
             if p.mode_pos.is_some() && is_array_name(&p.ty) && self.m.resize_params.contains(&(f.name.clone(), i)) {
-                let slot = self.array_slot(format!("%p.{n}"), &p.ty);
+                let slot = self.array_slot(format!("%p.{n}"), &p.ty)?;
                 names.insert(p.name.clone(), Bind::Slot(slot));
             } else if p.mode_pos.is_some() && matches!(p.ty.as_str(), "bool" | "i64") {
                 let slot = V::new(vkind(&p.ty), format!("%p.{n}"));
@@ -2624,7 +2623,7 @@ impl<'a> FnGen<'a> {
                 }
                 if p.take && is_array_name(&p.ty) {
                     av.c = Some(format!("%p.{}.c", n));
-                    let sl = self.new_slot(&p.name, &p.ty);
+                    let sl = self.new_slot(&p.name, &p.ty)?;
                     self.store(&sl, &av)?;
                     names.insert(p.name.clone(), Bind::Slot(sl.clone()));
                     owned.push(sl);
@@ -2640,7 +2639,7 @@ impl<'a> FnGen<'a> {
                 self.bridge = true;
                 if p.take {
                     // consuming parameter: an owner slot (the callee drops it unless it is moved out)
-                    let sl = self.new_slot(&p.name, &p.ty);
+                    let sl = self.new_slot(&p.name, &p.ty)?;
                     self.ins(format!("store ptr %p.{}.h, ptr {}", n, sl.a))?;
                     names.insert(p.name.clone(), Bind::Slot(sl.clone()));
                     owned.push(sl);
@@ -2929,7 +2928,7 @@ impl<'a> FnGen<'a> {
             val = v.a.clone();
             ety = format!("i{}", size * 8);
         }
-        let sl = self.new_slot(&x.name, &x.ty);
+        let sl = self.new_slot(&x.name, &x.ty)?;
         let buf = format!("{}.stk", &sl.a[..sl.a.len() - 2]);
         self.allocas.push(format!("{} = alloca [{} x {}], align {}", buf, n, ety, size));
         if n == 0 {
@@ -2964,7 +2963,7 @@ impl<'a> FnGen<'a> {
                 // P3: a borrowed literal local binds the read-only global directly: no copy, never freed
                 self.begin_temps();
                 let v = self.ev(&x.value, false)?;
-                let sl = self.new_slot(&x.name, &x.ty);
+                let sl = self.new_slot(&x.name, &x.ty)?;
                 self.store(&sl, &v)?;
                 let sc = self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?;
                 sc.names.insert(x.name.clone(), Bind::Slot(sl));
@@ -2990,7 +2989,7 @@ impl<'a> FnGen<'a> {
                 self.g6_call(&crate::foreign_shim::unbox_adapter_sym(&f.name), "void", &args)?;
                 let dp = self.op(format!("load ptr, ptr {}", d))?;
                 let ln = self.op(format!("load i64, ptr {}", l))?;
-                let sl = self.new_slot(&x.name, STR);
+                let sl = self.new_slot(&x.name, STR)?;
                 let mut rv = V::with_b(Kind::Arr, dp, ln);
                 rv.ty = Some(STR.to_string());
                 self.store(&sl, &rv)?;
@@ -3007,7 +3006,7 @@ impl<'a> FnGen<'a> {
                 self.moving.clear();
                 self.take_let.clear();
                 let v = v?;
-                let sl = self.new_slot(&x.name, &x.ty);
+                let sl = self.new_slot(&x.name, &x.ty)?;
                 self.store(&sl, &v)?;
                 // an owner released when the scope ends (G9 A3: also an extended local)
                 let owner = sl.k == Kind::Arr || sl.k == Kind::Coll || (sl.k == Kind::Agg && self.is_ext_opt(&sl.ty));
@@ -4052,8 +4051,12 @@ impl<'a> FnGen<'a> {
             let dv = self.ev(target, false)?;
             let iv = self.ev(arg(a, 1)?, false)?;
             let within = n == "copy_within";
+            // LG5: a copy_range whose source is the destination place reuses its loaded view and copies by memmove
+            let overlap = within || crate::check::same_place(target, arg(a, 2)?);
             let (sv, jv, cnt) = if within {
                 (dv.clone(), self.ev(arg(a, 2)?, false)?, self.ev(arg(a, 3)?, false)?)
+            } else if overlap {
+                (dv.clone(), self.ev(arg(a, 3)?, false)?, self.ev(arg(a, 4)?, false)?)
             } else {
                 (self.ev(arg(a, 2)?, false)?, self.ev(arg(a, 3)?, false)?, self.ev(arg(a, 4)?, false)?)
             };
@@ -4085,11 +4088,7 @@ impl<'a> FnGen<'a> {
             let pd = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", tyd, dv.a, iv.a))?;
             let ps = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", tys, sv.a, jv.a))?;
             let nb = if tyd == "i8" { cnt.a.clone() } else { self.op(format!("mul nuw nsw i64 {}, 8", cnt.a))? };
-            let intrinsic = if within || crate::check::same_place(target, arg(a, 2)?) {
-                "memmove"
-            } else {
-                "memcpy"
-            };
+            let intrinsic = if overlap { "memmove" } else { "memcpy" };
             self.ins(format!("call void @llvm.{intrinsic}.p0.p0.i64(ptr {}, ptr {}, i64 {}, i1 false)", pd, ps, nb))?;
             return Ok(V::unit());
         }
@@ -4522,7 +4521,7 @@ impl<'a> FnGen<'a> {
         for (i, p) in f.params.iter().enumerate() {
             let n = mangle(&p.name);
             if p.mode_pos.is_some() && is_array_name(&p.ty) && self.m.resize_params.contains(&(f.name.clone(), i)) {
-                let slot = self.array_slot(format!("%p.{n}"), &p.ty);
+                let slot = self.array_slot(format!("%p.{n}"), &p.ty)?;
                 let v = self.load(&slot)?;
                 self.cenv.insert(p.name.clone(), v);
             } else if p.mode_pos.is_some() && matches!(p.ty.as_str(), "bool" | "i64") {
