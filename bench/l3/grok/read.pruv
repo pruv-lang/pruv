@@ -326,22 +326,6 @@ pub fn advance(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], rows: [
 
 // ---- window: framing events in order -> collector -> read packet ----
 
-fn put_str(inout dst: [u8], at: i64, s: str) -> ()
-  requires 0 <= at && at <= len(dst) && len(s) <= len(dst) - at
-  ensures len(dst) == len(old(dst))
-{
-  let n: i64 = len(s);
-  let mut j: i64 = 0;
-  while j < n
-    invariant 0 <= j && j <= n && n == len(s) && 0 <= at && at <= len(dst) && n <= len(dst) - at && len(dst) == len(old(dst))
-    decreases n - j
-  {
-    let b: i64 = s[j];
-    dst[at + j] = b;
-    j = j + 1;
-  }
-}
-
 // One line span: parse it (a failed parse is a skipped line; kind 18 is an internal failure) and hand the object to entry::feed.
 // Returns feed's code: 0 handled, 1 grow buf and call again, negative internal failure.
 fn line_step(win: [u8], lo: i64, hi: i64, inout st: [i64], inout sl: [i64], inout buf: [u8]) -> i64 ! alloc
@@ -366,7 +350,7 @@ fn line_step(win: [u8], lo: i64, hi: i64, inout st: [i64], inout sl: [i64], inou
   }
 }
 
-// The packet of a finished collector. Turn text first (base 0, so turns::finish' base bound always holds), then the title, then the model.
+// The packet of a finished collector, written in one copy by packet::result3 (R06 C). Turn text first (base 0, so turns::finish' base bound always holds), then the title, then the model.
 fn assemble(col: crate::turns::Collected, title: str, model: str, omitted: bool) -> [i64] ! alloc
   requires len(title) <= 1000000 && len(model) <= 20000000
   ensures len(result) >= 28
@@ -378,10 +362,6 @@ fn assemble(col: crate::turns::Collected, title: str, model: str, omitted: bool)
   }
   let tl: i64 = len(title);
   let ml: i64 = len(model);
-  let mut packed: [u8] = alloc(nx + tl + ml, 0);
-  crate::bytes::copy_span(inout packed, 0, col.text, 0, nx);
-  put_str(inout packed, nx, title);
-  put_str(inout packed, nx + tl, model);
   let mut m: [i64] = crate::packet::meta_new(1);
   if omitted || col.trimmed == 1 { m[2] = 1; }  // MUT:M12 => if omitted { m[2] = 1; }
   m[3] = col.kept;
@@ -394,7 +374,7 @@ fn assemble(col: crate::turns::Collected, title: str, model: str, omitted: bool)
     m[6] = nx + tl;
     m[7] = ml;
   }
-  return crate::packet::result(m, col.turns, packed);
+  return crate::packet::result3(m, col.turns, col.text, title, model);
 }
 
 // One framing event: 0 = consumed, 2 = grow the buffer and call again (state unchanged), 1 = corrupt event or a failed
