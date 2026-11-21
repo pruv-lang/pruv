@@ -663,7 +663,7 @@ pub fn finish2(st: [i64], sl: [i64], inout bk: Store, base: i64) -> Collected ! 
     // plan lays draft j out at [tl - p[3+j], tl - p[2+j]); that and the record offset are checked here.
     let e: i64 = p[3 + j];
     if e < 0 || e > tl || plen + rlen + 24 * cp + 24 * dp > e || o < 0 || o > dl - plen - rlen {
-      return Collected { turns: copy(turns), text: copy(text), kept: kept, trimmed: tr, total: p[1] };
+      return Collected { turns: move turns, text: move text, kept: kept, trimmed: tr, total: p[1] };
     }
     let lo: i64 = tl - e;
     crate::bytes::copy_span(inout text, lo, bk.data, o, o + plen + rlen);
@@ -696,5 +696,5 @@ pub fn finish2(st: [i64], sl: [i64], inout bk: Store, base: i64) -> Collected ! 
     turns[10 * t + 9] = sl[8 * w + 4];
     j = j + 1;
   }
-  return Collected { turns: copy(turns), text: copy(text), kept: kept, trimmed: tr, total: p[1] };
+  return Collected { turns: move turns, text: move text, kept: kept, trimmed: tr, total: p[1] };
 }
