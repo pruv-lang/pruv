@@ -111,7 +111,10 @@ def measure(pruv, hand, pair, lane, label, size, chunk, tail, rounds, gen):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--quick', action='store_true', help='run one round at 16 MiB')
-    quick = parser.parse_args().quick
+    parser.add_argument('--rounds', type=int, default=0, help='alternating rounds (default 1 with --quick, else 7)')
+    parser.add_argument('--lane', choices=('all', 'core', 'whole'), default='all', help='lanes to measure')
+    options = parser.parse_args()
+    quick = options.quick
     core_root = HERE / 'core_root.pruv'
     supervise_root = HERE / 'supervise.pruv'
     if not core_root.is_file():
@@ -126,7 +129,7 @@ def main():
                             WORK / 'hand_whole')
     gen = build_rust(g2.RUSTC, run, GEN.replace('@PATTERN@', pattern), WORK / 'gen')
     sizes = [('M', 16 << 20)] if quick else [('M', 16 << 20), ('L', 64 << 20)]
-    rounds = 1 if quick else 7
+    rounds = options.rounds or (1 if quick else 7)
     cells = []
     print(f'{"case":34} S {"axis":4} {"Pruv":>12} {"hand":>12} {"Pruv/hand":>9}', flush=True)
     for compiler, backend in PAIRS:
@@ -138,10 +141,11 @@ def main():
         pruv_whole = common.build(g2, run, compiler, backend, supervise_root, directory / 'whole',
                                   whole_main, 'r10_whole', common.manifest_flags(supervise_root))
         for label, size in sizes:
-            for chunk in (4, 65536):
+            for chunk in (4, 65536) if options.lane != 'whole' else ():
                 for tail in (4096, 65536):
                     cells.extend(measure(pruv_core, hand_core, pair, 'core', label, size, chunk, tail, rounds, gen))
-            cells.extend(measure(pruv_whole, hand_whole, pair, 'whole', label, size, 65536, 4096, rounds, gen))
+            if options.lane != 'core':
+                cells.extend(measure(pruv_whole, hand_whole, pair, 'whole', label, size, 65536, 4096, rounds, gen))
 
     (WORK / 'perf_cells.json').write_text(json.dumps({'source': 'supervisor/r10', 'cells': cells}, indent=2) + '\n')
 

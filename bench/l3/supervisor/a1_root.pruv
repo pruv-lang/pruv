@@ -5,14 +5,14 @@ pub fn run(t: i64, script: [i64]) -> [i64] ! alloc
 {
   let mut bad: [i64] = alloc(1, -1);
   if t < 1 || t > 65536 { return bad; }
-  let mut ts: [i64] = crate::btail::tail_state(t);
+  let mut ts: crate::btail::Tail = crate::btail::tail_state(t);
   let mut buf: [u8] = crate::btail::tail_buf(t);
   let mut i: i64 = 0;
   while i < len(script)
     invariant 0 <= i && i <= len(script)
-    invariant len(ts) == 13 && ts[1] == t
+    invariant ts.acc.t == t
     invariant len(buf) == 6 * t + 4
-    invariant 0 <= ts[0] && ts[0] <= 6 * t && 0 <= ts[12] && ts[12] <= 2 * t
+    invariant 0 <= ts.acc.n && ts.acc.n <= 6 * t && 0 <= ts.acc.u && ts.acc.u <= 2 * t
     decreases len(script) - i
   {
     if i + 2 > len(script) { return bad; }

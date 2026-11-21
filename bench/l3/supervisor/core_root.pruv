@@ -5,7 +5,7 @@ mod btail;
 pub fn core(t: i64, data: [u8], chunk: i64) -> [u8] ! alloc
 {
   if t < 1 || t > 65536 || chunk < 1 { let e: [u8] = alloc(0, 0); return e; }
-  let mut ts: [i64] = crate::btail::tail_state(t);
+  let mut ts: crate::btail::Tail = crate::btail::tail_state(t);
   let mut buf: [u8] = crate::btail::tail_buf(t);
   let n: i64 = len(data);
   let mut lo: i64 = 0;
@@ -13,9 +13,9 @@ pub fn core(t: i64, data: [u8], chunk: i64) -> [u8] ! alloc
   while lo < n
     invariant 0 <= lo && lo <= n
     invariant s == 1 || s == 2
-    invariant len(ts) == 13 && ts[1] == t
+    invariant ts.acc.t == t
     invariant len(buf) == 6 * t + 4
-    invariant 0 <= ts[0] && ts[0] <= 6 * t && 0 <= ts[12] && ts[12] <= 2 * t
+    invariant 0 <= ts.acc.n && ts.acc.n <= 6 * t && 0 <= ts.acc.u && ts.acc.u <= 2 * t
     decreases n - lo
   {
     let mut hi: i64 = n;
