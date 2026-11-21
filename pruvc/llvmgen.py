@@ -3212,8 +3212,10 @@ class FnGen:
 
     # ---------- G9 A3: contract operands over REAL values ----------
     def g9_unsupported(s, e, what):
+        # LG15 (G-LG12-5): name the clause being evaluated (a kept cost clause or a runtime requires)
+        clause = "kept cost clause" if getattr(s, "in_cost_clause", False) else "runtime requires"
         return PruvError("codegen", e.line, e.col, "unsupported_type",
-                         "%s is not supported in a runtime requires by the llvm codegen layer yet" % what,
+                         "%s is not supported in a %s by the llvm codegen layer yet" % (what, clause),
                          "compare tags with is_variant and fields with variant_field, or move the check into the body")
 
     def tag_ptr(s, ty, p):
@@ -3641,7 +3643,22 @@ class FnGen:
                     return V("i128", s.op("sext i64 %s to i128" % r))
                 return V("i128", s.op("%s i128 %s, %s" % (BIT_LLVM[n], x.a, y.a)))
             if n in ("is_some", "is_ok", "some_val", "ok_val", "err_val") and is_owned_result(a[0].ty):
-                raise s.g9_unsupported(e, "a Result<_, String> operand")      # LG12 E2: no i128 mirror of the String
+                # LG15 (G-LG12-4/5): no i128 mirror of the String; the REAL storage { i1, L(T), ptr } is read lazily
+                # through cx (a parameter or a field path), like the Rust backend reads its parameter
+                oty = a[0].ty
+                X = oty.args[0]
+                if n not in ("is_ok", "ok_val", "err_val") or (n == "ok_val" and X not in (I64, BOOL)):
+                    raise s.g9_unsupported(e, "a Result<_, String> operand")
+                p = s.cx(a[0])
+                tag = s.op("load i1, ptr %s" % g9_gep(s, lty(oty), p, 0))
+                if n == "is_ok":
+                    return V("i1", tag)
+                if n == "ok_val":
+                    s.guard(tag, und("ok_val of Err"), False)
+                    x = s.op("load %s, ptr %s" % (lty(X), g9_gep(s, lty(oty), p, 1)))
+                    return s.to_c(V(vkind(X), x), X)
+                s.guard(tag, und("err_val of Ok"), True)
+                return V("coll", s.op("load ptr, ptr %s" % g9_gep(s, lty(oty), p, 2)), None, result_error(oty))
             if n in ("is_some", "is_ok"):
                 o = s.cev(a[0])
                 if o.k == "agg":  # G3: tag of a new Option/Result
@@ -3986,6 +4003,7 @@ def entry_of(m, funcs, f, trust, budget=1 << 30, cost=False, verified=False):
             g.guard(c.a, lambda a=msg_fn, b=msg_ex: g.ins("call void @pruv_panic_requires(ptr %s, ptr %s)" % (a, b)),
                     False)
     if cost:
+        g.in_cost_clause = True     # LG15 (G-LG12-5): g9_unsupported names the cost clause
         value = g.cregion(lambda: g.cev(f.cost))
         g.term("ret i128 %s" % value.a)
         params = [(t, n) for t, n in params if n != "%out"]

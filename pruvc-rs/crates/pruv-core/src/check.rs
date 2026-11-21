@@ -434,10 +434,12 @@ fn ends_in_return(stmts: &[Stmt]) -> bool {
 /// to right, then the node itself) with the paths of the operands to bind to fresh temporaries first, or None when e has
 /// no `?` that can be lowered. An operand evaluated before the `?` that is not pure (a call, a constructor, a move, an
 /// index, arithmetic) is bound to a temporary when the whole operand holds no `inout` argument and no quantifier and
-/// moves no binding mentioned elsewhere in e (LG14, G-LG13-1); its type is checked by Checker::try_temps. A `?` inside
-/// the right operand of && / || / ==>, inside a quantifier, after an operand that cannot be bound, or whose operand
-/// passes `inout` while the statement reads a binding outside that operand stays for check_try_position. Python
-/// `find_try`.
+/// moves no binding mentioned elsewhere in e (LG14, G-LG13-1); its type is checked by Checker::try_temps. A `?` only
+/// in the right operand of && / || gives the path of that operator node instead (LG15, G-LG13-2; lowered by
+/// Checker::try_short) unless the statement passes `inout` or the node holds a quantifier or a subview or moves a name
+/// mentioned outside it (or mentions one moved outside it). A `?` inside a quantifier, after an operand that cannot be
+/// bound, or whose operand passes `inout` while the statement reads a binding outside that operand stays for
+/// check_try_position. Python `find_try`.
 fn find_try(e: &Expr) -> Option<(Vec<usize>, Vec<Vec<usize>>)> {
     fn is_try(e: &Expr) -> bool {
         matches!(e, Expr::Unary(u) if u.op == "?")
@@ -485,13 +487,38 @@ fn find_try(e: &Expr) -> Option<(Vec<usize>, Vec<Vec<usize>>)> {
         }
         if let Expr::Binary(b) = e {
             if matches!(b.op.as_str(), "&&" | "||" | "==>") {
+                let before = *seen;
                 path.push(0);
                 if visit(&b.left, root, seen, path)? {
                     return Ok(true);
                 }
                 path.pop();
                 if any(&b.right, &is_try) {
-                    return Err(());
+                    if b.op == "==>" {
+                        // ==> is contract-only; lowering it would hide type/contract_only
+                        return Err(());
+                    }
+                    // LG15 (G-LG13-2): the whole operator is lowered to a nested if (Checker::try_short), so it runs
+                    // before the rest of the statement; it must not pass inout, hold a quantifier or a subview, or
+                    // move a name the rest of the statement mentions (or mention one it moves)
+                    if any(root, &|x| matches!(x, Expr::InoutArg(_)))
+                        || any(e, &|x| matches!(x, Expr::Quant(_)) || matches!(x, Expr::Call(c) if c.name == "subview")) {
+                        return Err(());
+                    }
+                    fn bad(m: &Expr, e: &Expr, root: &Expr) -> bool {
+                        let hit = match m {
+                            Expr::Move(x) => mentions(root, &x.name) > mentions(e, &x.name)
+                                || moves_of(root, &x.name) > moves_of(e, &x.name),
+                            Expr::Var(x) => moves_of(root, &x.name) > moves_of(e, &x.name),
+                            _ => false,
+                        };
+                        hit || crate::refine::kids(m).into_iter().any(|k| bad(k, e, root))
+                    }
+                    if bad(e, e, root) {
+                        return Err(());
+                    }
+                    *seen = before;
+                    return Ok(true);
                 }
                 fn all(e: &Expr, seen: &mut bool) {
                     note(e, seen);
@@ -2708,10 +2735,27 @@ impl Checker {
                 _ => None,
             };
             if let Some((path, temps)) = site.and_then(find_try) {
+                let short = {
+                    let (_, _, mut node) = Self::try_site_mut(&mut stmts[i]);
+                    for &k in &path {
+                        node = kid_mut(node, k);
+                    }
+                    matches!(node, Expr::Binary(_))
+                };
+                if short {
+                    // LG15: checked on the statement before its temporaries
+                    self.try_short_check(&mut stmts[i], &path, scope)?;
+                }
                 if !temps.is_empty() {
                     // LG14 (G-LG13-1): bind the earlier operands first
                     let lets = self.try_temps(&mut stmts[i], temps, scope)?;
                     stmts.splice(i..i, lets);
+                    continue;
+                }
+                if short {
+                    // LG15 (G-LG13-2): the operator becomes a nested if
+                    let lowered = self.try_short(&mut stmts[i], &path, scope)?;
+                    stmts.splice(i..i, lowered);
                     continue;
                 }
                 let rest = stmts.split_off(i + 1);
@@ -2729,9 +2773,10 @@ impl Checker {
     fn try_position_error(line: i64, col: i64) -> PruvError {
         terr(line, col, "try_position",
             "`?` is only allowed in the value of a let, a local assignment or a return, an expression statement or an if \
-             condition, and not in the right operand of && / || / ==>, in a quantifier or after an operand evaluated before \
-             it that cannot be bound to a temporary (one with inout, a quantifier, a move of a name used again or a type \
-             that is not a value)",
+             condition, and not in a quantifier, in the right operand of ==>, in the right operand of && / || when \
+             the statement passes inout or the operator holds a quantifier or a subview or moves a name used outside it \
+             (or uses one moved outside it, or a binding of a type that is not a value used again), or after an operand evaluated before it that cannot be bound to a temporary (one with inout, \
+             a quantifier, a move of a name used again or a type that is not a value)",
             "bind the value with `let x: T = e?;` first")
     }
 
@@ -2780,6 +2825,68 @@ impl Checker {
             lets.push(Stmt::Let(Let { line, col, name, mutable: false, ty: t.to_key(), value: k, refine: None }));
         }
         Ok(lets)
+    }
+
+    /// LG15 (G-LG13-2): `let mut __pruv_try_tN: bool = D; if C { __pruv_try_tN = R; }` for the operator node `L op R`
+    /// at path whose right operand R holds the statement's first `?`, with the node replaced by the fresh local in
+    /// stmt: D, C = false, L for &&; true, !L for ||. The assignment is a lowered position, so the `?` in R is lowered
+    /// there and runs only when R runs, as in the hand-written nested if. A binding of a type that is not a value type
+    /// mentioned in the operator and mentioned again in the statement is type/try_position: splitting the statement
+    /// would hide a borrow or an implicit move between the two mentions. Python `try_short`.
+    /// LG15: type/try_position when the operator at path mentions a binding whose declared type is not a value type
+    /// and the statement mentions it again. Called on the statement before its LG14 temporaries are bound (a
+    /// temporary would hide a borrow in an earlier operand) and again before the lowering.
+    fn try_short_check(&mut self, stmt: &mut Stmt, path: &[usize], scope: &Scope) -> Res<()> {
+        let (line, col, mut node) = Self::try_site_mut(stmt);
+        let root = node.clone();
+        for &k in path {
+            node = kid_mut(node, k);
+        }
+        fn names(e: &Expr, out: &mut Vec<String>) {
+            match e {
+                Expr::Var(x) => out.push(x.name.clone()),
+                Expr::Move(x) => out.push(x.name.clone()),
+                _ => {}
+            }
+            for k in crate::refine::kids(e) {
+                names(k, out);
+            }
+        }
+        let mut used = Vec::new();
+        names(node, &mut used);
+        let mut all = Vec::new();
+        names(&root, &mut all);
+        for n in used {
+            if let Some(entry) = scope.get(&n) {
+                if all.iter().filter(|x| **x == n).count() > 1 && !is_value(&entry.ty, &|d| self.value_decl(d)) {
+                    return Err(Self::try_position_error(line, col));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn try_short(&mut self, stmt: &mut Stmt, path: &[usize], scope: &Scope) -> Res<Vec<Stmt>> {
+        self.try_short_check(stmt, path, scope)?;
+        let (line, col, mut node) = Self::try_site_mut(stmt);
+        for &k in path {
+            node = kid_mut(node, k);
+        }
+        let name = format!("{TRY_TEMP}{}", self.try_count);
+        self.try_count += 1;
+        let Expr::Binary(b) = std::mem::replace(node, Expr::Var(Var { line, col, name: name.clone(), ty: None }))
+        else { unreachable!() };
+        let cond = if b.op == "||" {
+            Expr::Unary(Unary { line, col, op: "!".into(), operand: b.left, ty: None })
+        } else {
+            *b.left
+        };
+        let init = Expr::BoolLit(BoolLit { line, col, value: b.op != "&&", ty: None });
+        Ok(vec![
+            Stmt::Let(Let { line, col, name: name.clone(), mutable: true, ty: boolt().to_key(), value: init, refine: None }),
+            Stmt::If(If { line, col, cond, then: vec![Stmt::Assign(Assign { line, col, name, value: *b.right, deref: false })],
+                els: Vec::new() }),
+        ])
     }
 
     fn lower_try(&mut self, mut stmt: Stmt, mut rest: Vec<Stmt>, path: Vec<usize>, scope: &mut Scope)

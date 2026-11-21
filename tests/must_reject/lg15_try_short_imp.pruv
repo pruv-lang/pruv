@@ -1,0 +1,10 @@
+// LG15 audit: `==>` is contract-only, so a `?` in its right operand is not lowered to a nested if (that would hide
+// type/contract_only); the statement stays rejected with the same code in both compilers
+fn check(x: i64) -> Result<bool> {
+  if x > 0 { return Ok::<bool>(true); }
+  return Err::<bool>(x);
+}
+
+fn f(x: i64) -> Result<bool> {
+  return Ok::<bool>(x != 1 ==> check(x)?);
+}

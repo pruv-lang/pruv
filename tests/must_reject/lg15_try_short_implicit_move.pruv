@@ -1,0 +1,5 @@
+// LG15 audit: a String passed by value inside the right operand moves it implicitly, and the statement reads it after
+// the operator; the lowered operator would run as an if before that read, so it stays try_position in both compilers
+fn f(take s: String) -> Result<bool, String> {
+  return Ok::<bool, String>((true && Err::<bool, String>(s)?) == (len(s) > 0));
+}

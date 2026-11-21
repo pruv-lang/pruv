@@ -1,0 +1,14 @@
+// LG15 audit: a borrow and a move of the same String in the operator: splitting the operator into an if condition
+// and a match would hide foreign_borrow, so it stays try_position in both compilers
+fn consume(take s: String) -> Result<bool> {
+  if len(s) > 0 { return Ok::<bool>(true); }
+  return Err::<bool>(0);
+}
+
+fn id(b: bool) -> bool {
+  return b;
+}
+
+fn f(take s: String) -> Result<bool> {
+  return Ok::<bool>(id(len(s) > 0 && consume(move s)?));
+}

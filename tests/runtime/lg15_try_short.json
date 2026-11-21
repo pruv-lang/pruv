@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"], ["--trust-callers"]], "exit": 0, "stdout_lines": ["9999999999", "1010200", "601", "101012401"], "gen_contains": ["__pruv_try_t0"]}

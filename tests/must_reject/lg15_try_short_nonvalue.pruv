@@ -1,0 +1,12 @@
+struct Rec { n: i64 }
+struct St { a: Vec<Rec>, n: i64 }
+fn f(inout st: St) -> Result<bool> {
+  match vec_at_mut::<Rec>(inout st.a, 0) {
+    Some(x) => {
+      let b: bool =
+        st.n == st.n && Ok::<bool>(true)?;
+    }
+    None => { }
+  }
+  return Ok::<bool>(true);
+}

@@ -425,11 +425,23 @@ let o: Option<bool> = Some::<bool>(true);   // also None::<bool>, Ok::<bool>(x),
   enclosing function. It may stand anywhere inside the value of a `let`, of an assignment to a local, of a `return`,
   inside an expression statement or inside an `if` condition (LG13), for example `return Ok(f(x)? + 1);`,
   `g(f(x)?);`, `if f(x)? { .. }` or `let y: i64 = a + (f(x)? + f(y)?);`. It is `type/try_position` in any other
-  statement (a `while` condition, a field or index assignment, an assignment through a reference, a contract), in the
-  right operand of `&&`, `||` or `==>`, inside a quantifier, in a `return` of a `pred fn` (checked before
+  statement (a `while` condition, a field or index assignment, an assignment through a reference, a contract),
+  inside a quantifier (also inside one in the right operand of `&&` or `||`), in the right operand of `==>` (a
+  contract-only operator, so it is not lowered), in a `return` of a `pred fn` (checked before
   `type/pred_signature`, LG14), and when its operand passes an `inout` argument while the statement reads a local
   outside the operand. When an assignment `x = ..` passes `x` itself `inout` in a statement that has a `?`, it is
-  `type/inout_context` (LG14). **Earlier operands (LG14).** When something other than a local, a literal other than a
+  `type/inout_context` (LG14). **Short-circuit operands (LG15).** A `?` only in the right operand `R` of `L && R` or
+  `L || R` runs only when `R` runs: the operator is first lowered to `let mut t: bool = D; if C { t = R; }` with a
+  fresh local `t` replacing the operator in the statement, where `D, C` is `false, L` for `&&` and `true, !L` for
+  `||`; the `?` in `R` is then lowered inside the `if` by the rules here. So
+  `if x > 3 && f(x)? { .. }` means exactly the hand-written `let mut t: bool = false; if x > 3 { t = f(x)?; } if t {
+  .. }`, with the same proof and the same code on both backends. This is `type/try_position` when the statement, as left
+  after its earlier operands are bound and its earlier `?` are lowered, passes any `inout` argument, when the operator
+  contains a quantifier or a `subview`, when it moves a name the statement mentions outside it or mentions a name the
+  statement moves outside it, or when it mentions a binding whose declared type is not a value type and that the
+  statement, counted before any earlier operand is bound to a temporary, mentions again (the operator now runs before
+  the rest of the statement, and a borrow and an implicit move of that binding would be split between the `if`
+  condition and the `?`); a `?` in the left operand is lowered as usual. **Earlier operands (LG14).** When something other than a local, a literal other than a
   string, a field access, `!` or a comparison or logical operator is evaluated before the `?` in the same statement (a
   call, constructor, move, index, arithmetic, unary `-` or string literal), each such earlier operand on the way from
   the statement to the `?` is first bound to a fresh immutable local, left to right: `return Ok(g(x) + f(x)?);` means
@@ -463,8 +475,11 @@ let o: Option<bool> = Some::<bool>(true);   // also None::<bool>, Ok::<bool>(x),
   `String` (`len(err_val(result))`). The LLVM backend (LG12) lays out `Result<T, String>` as `{ i1, T, ptr }` with
   the String handle null on Ok and after a move, and drops a live handle on every path; it supports every value
   `T` (`i64`, `bool`, a value struct or enum, an `Option` of a value; LG13) for a local, parameter, result or
-  temporary. It rejects `is_ok` / `ok_val` / `err_val` on it in a runtime-checked `requires` or in a `cost` clause that is
-  kept (`--no-verify`) (`codegen/unsupported_type`). On both backends a `Result<T, String>` inside a record, enum or
+  temporary. In a runtime-checked `requires` and in a `cost` clause that is kept (`--no-verify`) it reads `is_ok`,
+  `ok_val` (for `T` = `i64` or `bool`) and `err_val` (a `String`, for example `len(err_val(r))`) of a parameter from the
+  real storage, with the same result as the Rust backend (LG15); `ok_val` of another `T` or an operand that is not a
+  parameter is `codegen/unsupported_type`, whose message names the clause
+  (`runtime requires` or `kept cost clause`). On both backends a `Result<T, String>` inside a record, enum or
   another generic type is `type/foreign_owned_type` (as the error type of another `Result` it is
   `type/result_error_type`), and one in a host entry signature (no C ABI) is `type/entry_signature`. Records that
   hold a buffer (E3) and `T = String` on the Ok side stay rejected.
@@ -2170,7 +2185,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/refinement_bounds` | type | refinement bounds outside i64, or an empty range |
 | `type/reserved` | type | a function named like a builtin |
 | `type/result_error_type` | type | a `Result<T, E>` error type `E` that E1/E2 do not support (section 6c) |
-| `type/try_position` | type | a `?` outside the value of a let, a local assignment, a return, an expression statement or an if condition, in the right operand of `&&` / `\|\|` / `==>`, in a quantifier or a `pred fn` return, after an operand evaluated before it that cannot be bound to a temporary (in a statement that passes `inout`, or one that has a quantifier or `subview`, moves a name used again, mentions a name moved elsewhere in the statement or is not of a value type, LG14), or with an `inout` argument in its operand while the statement reads a local outside it (section 6c) |
+| `type/try_position` | type | a `?` outside the value of a let, a local assignment, a return, an expression statement or an if condition, in a quantifier, in the right operand of `==>`, in the right operand of `&&` / `\|\|` when the statement passes `inout` or the operator has a quantifier or `subview`, moves a name used outside it, mentions one moved outside it or mentions a non-value binding used again (LG15) or a `pred fn` return, after an operand evaluated before it that cannot be bound to a temporary (in a statement that passes `inout`, or one that has a quantifier or `subview`, moves a name used again, mentions a name moved elsewhere in the statement or is not of a value type, LG14), or with an `inout` argument in its operand while the statement reads a local outside it (section 6c) |
 | `type/try_operand` | type | a `?` operand that is not a `Result` (section 6c) |
 | `type/try_return` | type | a `?` in a function that does not return a `Result` (section 6c) |
 | `type/try_error_type` | type | a `?` whose error type differs from the function's error type (section 6c) |
