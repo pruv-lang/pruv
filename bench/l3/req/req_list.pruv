@@ -188,6 +188,8 @@ fn pack_bound(w: [i64], from: i64, count: i64) -> i64
     }
     k = k + 1;
   }
+  // DB27 (D-DB22-3): pack refuses a saturated sum with an empty result, so that branch reserves nothing.
+  if tot >= 1073741823 { return 0; }
   return crate::ent_u16::clamp(3 * count + 1 + crate::ent_value::pool_capacity(tot), 1073741823);
 }
 

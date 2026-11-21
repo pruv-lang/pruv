@@ -1966,15 +1966,14 @@ fn pair_table(h: &Host, p: &Pkt, v: &V) -> R<String> {
     let mut out = String::with_capacity(16 * n + 2);
     out.push('[');
     for i in 0..n {
-        let a = p.val(sec, i * 6)?;
-        let b = p.val(sec, i * 6 + 3)?;
         if i != 0 {
             out.push(',');
         }
+        // render_at writes a plain ASCII string in place, the same text render_v gives.
         out.push('[');
-        out.push_str(&render_v(&h.refs, &a)?);
+        p.render_at(&h.refs, sec, i * 6, &mut out)?;
         out.push(',');
-        out.push_str(&render_v(&h.refs, &b)?);
+        p.render_at(&h.refs, sec, i * 6 + 3, &mut out)?;
         out.push(']');
     }
     out.push(']');
@@ -2479,16 +2478,42 @@ fn skip_value(b: &[u8], i: usize) -> Option<usize> {
     }
 }
 
-// The members of the object at b[i..]: (key, value text) in order, and the index after the closing brace.
-fn members(t: &str, i: usize) -> Option<(Vec<(String, &str)>, usize)> {
+// The element texts of the array at b[i..] and the index after its closing bracket (None if not of this shape).
+fn elements_at(t: &str, i: usize) -> Option<(Vec<&str>, usize)> {
     let b = t.as_bytes();
-    if b.get(i) != Some(&b'{') {
+    if b.get(i) != Some(&b'[') {
         return None;
     }
     let mut out = Vec::new();
     let mut i = ws(b, i + 1);
-    if b.get(i) == Some(&b'}') {
+    if b.get(i) == Some(&b']') {
         return Some((out, i + 1));
+    }
+    loop {
+        let e = skip_value(b, i)?;
+        out.push(&t[i..e]);
+        i = ws(b, e);
+        match b.get(i) {
+            Some(b',') => i = ws(b, i + 1),
+            Some(b']') => return Some((out, i + 1)),
+            _ => return None,
+        }
+    }
+}
+
+// The args object at b[i..] read in the same scan: the last "sessions" element texts and the index after the
+// closing brace. Other members are checked by serde. None if this args would not split (missing or bad sessions,
+// a bad member); the caller then only skips it, so a replaced duplicate is not checked, as before.
+fn args_at(t: &str, i: usize) -> Option<(Vec<&str>, usize)> {
+    let b = t.as_bytes();
+    if b.get(i) != Some(&b'{') {
+        return None;
+    }
+    // Some(Some(v)): the last sessions split; Some(None): the last sessions did not.
+    let mut sessions: Option<Option<Vec<&str>>> = None;
+    let mut i = ws(b, i + 1);
+    if b.get(i) == Some(&b'}') {
+        return None;
     }
     loop {
         if b.get(i) != Some(&b'"') {
@@ -2501,71 +2526,86 @@ fn members(t: &str, i: usize) -> Option<(Vec<(String, &str)>, usize)> {
             return None;
         }
         i = ws(b, i + 1);
-        let ve = skip_value(b, i)?;
-        out.push((key, &t[i..ve]));
+        let ve = if key == "sessions" {
+            match elements_at(t, i) {
+                Some((v, e)) => {
+                    sessions = Some(Some(v));
+                    e
+                }
+                None => {
+                    sessions = Some(None);
+                    skip_value(b, i)?
+                }
+            }
+        } else {
+            let ve = skip_value(b, i)?;
+            serde_json::from_str::<Value>(&t[i..ve]).ok()?;
+            ve
+        };
         i = ws(b, ve);
         match b.get(i) {
             Some(b',') => i = ws(b, i + 1),
-            Some(b'}') => return Some((out, i + 1)),
+            Some(b'}') => return Some((sessions??, i + 1)),
             _ => return None,
         }
     }
 }
 
-// The element texts of the array t (None if t is not an array of this shape).
-fn elements(t: &str) -> Option<Vec<&str>> {
-    let b = t.as_bytes();
-    if b.first() != Some(&b'[') {
-        return None;
-    }
-    let mut out = Vec::new();
-    let mut i = ws(b, 1);
-    if b.get(i) == Some(&b']') {
-        return if ws(b, i + 1) == b.len() { Some(out) } else { None };
-    }
-    loop {
-        let e = skip_value(b, i)?;
-        out.push(&t[i..e]);
-        i = ws(b, e);
-        match b.get(i) {
-            Some(b',') => i = ws(b, i + 1),
-            Some(b']') => return if ws(b, i + 1) == b.len() { Some(out) } else { None },
-            _ => return None,
-        }
-    }
-}
-
+// One scan of the line: the top members, the args members and the session spans are each passed once
+// (the old split skipped args and sessions, then scanned them again).
 fn lean_split(line: &str) -> Option<(Value, Vec<&str>)> {
     let b = line.as_bytes();
-    let (top, end) = members(line, ws(b, 0))?;
-    if ws(b, end) != b.len() {
+    let mut i = ws(b, 0);
+    if b.get(i) != Some(&b'{') {
         return None;
     }
     let mut obj = serde_json::Map::new();
-    let mut args = None;
-    for (k, t) in top {
-        if k == "args" {
-            args = Some(t);
-        } else {
-            obj.insert(k, serde_json::from_str(t).ok()?);
+    // Some(Some(v)): the last args split; Some(None): the last args did not.
+    let mut args: Option<Option<Vec<&str>>> = None;
+    i = ws(b, i + 1);
+    if b.get(i) != Some(&b'}') {
+        loop {
+            if b.get(i) != Some(&b'"') {
+                return None;
+            }
+            let ke = skip_value(b, i)?;
+            let key: String = serde_json::from_str(&line[i..ke]).ok()?;
+            i = ws(b, ke);
+            if b.get(i) != Some(&b':') {
+                return None;
+            }
+            i = ws(b, i + 1);
+            let ve = if key == "args" {
+                match args_at(line, i) {
+                    Some((v, e)) => {
+                        args = Some(Some(v));
+                        e
+                    }
+                    None => {
+                        args = Some(None);
+                        skip_value(b, i)?
+                    }
+                }
+            } else {
+                let ve = skip_value(b, i)?;
+                obj.insert(key, serde_json::from_str(&line[i..ve]).ok()?);
+                ve
+            };
+            i = ws(b, ve);
+            match b.get(i) {
+                Some(b',') => i = ws(b, i + 1),
+                Some(b'}') => break,
+                _ => return None,
+            }
         }
+    }
+    if ws(b, i + 1) != b.len() {
+        return None;
     }
     if obj.get("op").and_then(|o| o.as_str()) != Some("bound_session_index") {
         return None;
     }
-    let (am, ae) = members(args?, 0)?;
-    if ae != args?.len() {
-        return None;
-    }
-    let mut sessions = None;
-    for (k, t) in am {
-        if k == "sessions" {
-            sessions = Some(t);
-        } else {
-            serde_json::from_str::<Value>(t).ok()?;
-        }
-    }
-    Some((Value::Object(obj), elements(sessions?)?))
+    Some((Value::Object(obj), args??))
 }
 
 fn run_one<S: Sol>(sol: &S, line: &str) -> String {

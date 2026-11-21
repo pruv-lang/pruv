@@ -10,8 +10,8 @@
                                                  [--sizes 100,500 | --profile S|M|SM]
 perf lanes: pruv, hand16, hand16w, fxmix, fxmixw, oa, oaw, hand (old), ts (see cmd_perf); writes work/m8/perf_meta.json.
 
-q: converts each Q2 case (work/m8/cases.jsonl) into the driver program, runs it, and compares with the oracle output
-(work/m8/oracle.jsonl). Compared per call: the return value of every charge ({ok} / {ok:false, reason}) and that the
+q: converts each Q2 case (m8_test/cases_q2.jsonl, committed: q_gen.py --families Q2 --count 300 --seed 20261117) into the
+driver program, runs it, and compares with the oracle output (m8_test/oracle_q2.jsonl, committed: oracle.py on those cases). Compared per call: the return value of every charge ({ok} / {ok:false, reason}) and that the
 void methods (noteFailure, noteTool, forgetTurn) return undefined. For cases that run to the end: every final
 session's budget presence, state, halt reason and counters (delegations, commands, reviews, checks, tools, failures,
 retries), and toolSeen (turns in order, activities in order).
@@ -1007,8 +1007,8 @@ def main():
     ap.add_argument("--pypruvc", type=os.path.abspath, default=PYPRUVC_DEFAULT,
                     help="--typed --py: path to pruvc.py")
     ap.add_argument("--gen")
-    ap.add_argument("--cases", default=os.path.join(WORK, "cases.jsonl"))
-    ap.add_argument("--oracle", default=os.path.join(WORK, "oracle.jsonl"))
+    ap.add_argument("--cases", default=os.path.join(HERE, "cases_q2.jsonl"))
+    ap.add_argument("--oracle", default=os.path.join(HERE, "oracle_q2.jsonl"))
     ap.add_argument("--rounds", type=int, default=7)
     ap.add_argument("--no-instr", action="store_true")
     ap.add_argument("--hand16", action="store_true", help="q: run hand_m8_u16 instead of the Pruv driver")
