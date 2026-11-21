@@ -1,0 +1,43 @@
+fn grow(inout v: Vec<i64>, n: i64) -> () ! alloc
+  requires 0 <= n && n <= 1000
+{
+  vec_reserve::<i64>(inout v, n);
+}
+
+fn sum2(inout v: Vec<i64>) -> i64 ! alloc
+  requires len(v) > 1
+{
+  return vec_get::<i64>(v, 1);
+}
+
+fn pass_on(inout v: Vec<i64>, n: i64) -> i64 ! alloc
+  requires len(v) > 1 && 0 <= n && n <= 1000
+{
+  let s: i64 = sum2(inout v);
+  grow(inout v, n);
+  return s;
+}
+
+fn flip(inout b: Vec<bool>, n: i64) -> () ! alloc
+  requires 0 <= n && n <= 1000
+{
+  vec_reserve::<bool>(inout b, n);
+}
+
+fn run(n: i64) -> () ! io, alloc
+  requires 0 <= n && n <= 1000
+{
+  let mut v: Vec<i64> = vec_new::<i64>();
+  v = vec_push::<i64>(move v, 7);
+  v = vec_push::<i64>(move v, 8);
+  let s: i64 = pass_on(inout v, n);
+  print(s);
+  v = vec_push::<i64>(move v, 9);
+  print(len(v));
+
+  let mut bits: Vec<bool> = vec_new::<bool>();
+  bits = vec_push::<bool>(move bits, true);
+  flip(inout bits, n);
+  bits = vec_push::<bool>(move bits, false);
+  print(len(bits));
+}

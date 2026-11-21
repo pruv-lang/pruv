@@ -1,0 +1,28 @@
+// LG8: copy(subview(a, lo, hi)) is an owned array of hi - lo elements; writing the copy leaves the source unchanged.
+
+fn run() -> () ! io, alloc {
+  let mut b: [i64] = alloc(5, 0);
+  b[0] = 1;
+  b[1] = 11;
+  b[2] = 21;
+  b[3] = 31;
+  b[4] = 41;
+  let e: [i64] = copy(subview(b, 2, 2));
+  print(len(e));
+  let mut p: [i64] = copy(subview(b, 1, 4));
+  print(len(p));
+  print(p[0]);
+  print(p[2]);
+  p[0] = 99;
+  print(p[0]);
+  print(b[1]);
+  let mut u: [u8] = alloc(4, 7);
+  u[3] = 200;
+  let mut q: [u8] = copy(subview(u, 2, 4));
+  print(len(q));
+  print(q[0]);
+  print(q[1]);
+  q[0] = 1;
+  print(q[0]);
+  print(u[2]);
+}

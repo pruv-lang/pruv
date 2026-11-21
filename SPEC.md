@@ -712,6 +712,18 @@ fn tree_count(t: Tree) -> i64
   [inout parameter](tests/spec/r6e_12_inout_param.pruv), [bare field initializer](tests/spec/r6e_12_bare_var.pruv),
   [move in dead code](tests/spec/r6e_12_dead_move.pruv), [take parameter in a contract](tests/spec/r6e_12_take_contract_index.pruv),
   [move in a loop condition](tests/spec/r6e_12_loop_cond_move.pruv).
+- R-6e-12a **Moving an array out of a match binder (G-DB16-1).** `move b` of an array-typed binder `b` of a
+  user-enum arm is allowed when the scrutinee is a plain name (not a field path or call) of a non-generic enum
+  that is an owned local (not a `take`, plain or `inout` parameter, and not another arm's binder), and no arm of that
+  `match` names the scrutinee. A `match` where some arm moves a binder consumes its scrutinee on entry to every arm:
+  the scrutinee is moved inside each arm and after the `match`, and inside an arm its array binders are owned
+  bindings (a use after their own move is `type/foreign_move`). A later read of the scrutinee is `type/foreign_move` ("use after move" / "binding may have been moved"), and in a loop the scrutinee must be
+  live again (`type/foreign_loop_move`). Every other `move` of a binder stays `type/array_alias`. Rust matches the
+  scrutinee by value, also under cost metering, so `b` is an owned `Vec<T>` moved as is. LLVM takes the binder's
+  `{ptr, len, cap}` and stores the empty array into that field of the scrutinee's slot, so its drop frees nothing twice.
+  Tests: [runtime](tests/runtime/lg8_rt_match_move.pruv),
+  [use after](tests/must_reject/lg8_match_move_use_after.pruv),
+  [borrowed scrutinee](tests/must_reject/lg8_match_move_borrowed.pruv).
 - R-6e-13 **Read-only text-keyed map iteration.** The statement
   `for (k, v) in P invariant <bool>* { body }` iterates over a binding or field path `P` of type
   `HashMap<String, V>`, with `V` equal to `i64`, `bool` or an owned aggregate (including R-6e-6
@@ -779,7 +791,15 @@ fn tree_count(t: Tree) -> i64
   allowed for field replacement and may not mention `p`. It may also be a move from a disjoint
   same-typed field of `p`, in which case the following statement must restore that field in turn.
   For example, `let t: String = move p.f; p.f = move p.g; p.g = move t;` swaps two fields.
-  Outside R-6e-2 and these two forms, field moves are `type/foreign_move`. A missing or invalid
+  Consuming form (G-R09-4): `let t: T = move d.f;` of a buffer field `[i64]`, `[u8]` or `[bool]` (not a `String` or
+  `Vec` field, which keep the restore rule) with one field step may stand without a restore when `d` is a `let mut` local record. A `move` of a
+  field of a `take` record parameter is `type/foreign_move` even with a restore (on LLVM the parameter is a read-only
+  view of the caller's slot), and so is the consuming form on a match binder (also a `map_take` binder). It
+  moves `d` wholly: a later use of `d` is `type/foreign_move` "use after move" ("binding may have been moved" on some
+  paths, `type/foreign_loop_move` for a loop that does not restore it); assigning `d` again revives it. A restore in the
+  next statement keeps the form above. Nested paths, `inout` and plain roots, `p.g = move p.f;` and `f(move d.a)` keep
+  the errors below.
+  Outside R-6e-2 and these forms, field moves are `type/foreign_move`. A missing or invalid
   restore, or a move between overlapping paths, has the same code and the message
   "a field moved out must be reassigned by the next statement". Moving a path held by an active
   match, collection borrow or map iteration is `type/recursive_borrow` under the overlap rules
@@ -820,7 +840,7 @@ fn tree_count(t: Tree) -> i64
   [accept](tests/spec/r6e_19_vec_reserve.pruv), [reject](tests/spec/r6e_19_reserve_unbounded.pruv).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
-  and do not allocate. Putting an existing value into an owning place (`let`, assignment, constructor field,
+  and do not allocate (the one exception: R-6e-12a moves an array binder out of a consumed scrutinee). Putting an existing value into an owning place (`let`, assignment, constructor field,
   `return`) copies it and needs `! alloc`; a fresh constructor or call result moves without a copy. Any constructor
   of a recursive value needs `! alloc`. While a `match` arm views part of a mutable local, that local cannot be
   changed (`type/recursive_borrow`). Whole-value `==`/`!=` on values that contain arrays, strings or owned collections is rejected
@@ -971,9 +991,10 @@ set_at(inout w, 0, 7);
   that function's `ensures`, `invariant` and `assert` (`type/old_context`, `type/old_argument` otherwise: locals,
   ordinary parameters, fields, elements and nested `old` are rejected). It always means function entry. In `requires`
   a parameter is its entry value; in `ensures` an `inout` parameter is its final value. `len(a) == len(old(a))` is
-  always known. `old` is a proof object: no copy, no run-time check. Arrays still cannot be compared with `==`.
-- **Frame.** After `f(inout a, ...)` the caller knows only what `f`'s `ensures` says about `a`: fresh contents, same
-  length. An unconstrained element is arbitrary, even if the body never writes it, so state the frame
+  always known for a fixed-length `inout` parameter (one the callee never reassigns as a whole); for a resizable one
+  (LG5) only `ensures` relate `len(a)` and `len(old(a))`. `old` is a proof object: no copy, no run-time check. Arrays still cannot be compared with `==`.
+- **Frame.** After `f(inout a, ...)` the caller knows only what `f`'s `ensures` says about `a`: fresh contents, and the
+  same length when the parameter is fixed-length (a resizable parameter's length comes only from `ensures`). An unconstrained element is arbitrary, even if the body never writes it, so state the frame
   (`k != i ==> a[k] == old(a)[k]`). Other variables keep their values. The `requires` are proved on the pre-call
   arrays and `old` refers to them. `ensures` of an `inout` function are always applied at the call.
 - R-6g-1 **Inout calls in expressions.** A user function call with an `inout` argument may occur at any
@@ -1033,8 +1054,8 @@ set_at(inout w, 0, 7);
   `tests/must_reject/lg5_scalar_inout_ensures.pruv`.
 - **Generics.** `fn swap<T: Element>(inout a: [T], ...)` works like any G3 function; `swap::<i64>(inout w, i, j)`
   (`examples/g5_generic_swap.pruv`). It is specialized per element type, also across modules.
-- **Loops.** A loop that passes an array as `inout` treats it as changed: an `inout` parameter keeps its length, a
-  local keeps its length unless the loop can also reassign it. State what the loop preserves in `invariant`s
+- **Loops.** A loop that passes an array as `inout` treats it as changed: an `inout` parameter or a local keeps its
+  length unless the loop can also reassign it as a whole (LG5) or the callee's parameter is resizable. State what the loop preserves in `invariant`s
   (`old` may be used there); `--infer` may miss such invariants but never keeps a false one.
 - **Refinements.** An annotation on an `inout` parameter is an entry `requires` only, not an output guarantee; state
   that in `ensures`. A refined local passed `inout` must satisfy its refinement again right after the call
@@ -1073,6 +1094,7 @@ set_at(inout w, 0, 7);
   parameter whose array type matches `b`. Anywhere else is `type/view_context`: a `let` or assignment, a `return`,
   a struct literal, a contract, an argument of a builtin or foreign function, an `inout` position, or anywhere
   inside the three operands of another `subview` (also through a nested call); the error is at the inner `subview`. `subview` is a builtin name (`type/reserved`); the shorter `view` was not taken because existing programs define functions named `view`.
+  Exception (LG8): `copy(subview(b, lo, hi))` is allowed, with the `subview` as the only direct argument of the builtin `copy`; it yields an owned array of `hi - lo` elements with the same obligations as above (`0 <= lo <= hi <= len(b)`, `verify/index_oob`). Every other builtin (for example `len(subview(...))`) still rejects.
 - R-6g-7 **Proof.** At the call the verifier proves `0 <= lo`, `lo <= hi` and `hi <= len(b)`
   (`verify/index_oob`). The callee's parameter `v` then has exactly `len(v) == hi - lo` and
   `v[i] == b[lo + i]` for every `i` in range, so the callee's `requires` are proved from `b`.

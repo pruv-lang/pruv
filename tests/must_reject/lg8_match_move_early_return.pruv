@@ -1,0 +1,26 @@
+// G-DB16-1: a match that moves a binder on any path takes the scrutinee by value, so it is consumed on every path
+enum Tape { Bytes(tape: [u8]) }
+
+fn make() -> Tape ! alloc {
+  let b: [u8] = alloc(2, 1);
+  return Tape::Bytes(move b);
+}
+
+fn tape_len(e: Tape) -> i64 {
+  match e {
+    Tape::Bytes(tape) => { return len(tape); }
+  }
+}
+
+fn run(flag: bool) -> i64 ! alloc {
+  let e: Tape = make();
+  match e {
+    Tape::Bytes(tape) => {
+      if flag {
+        let t: [u8] = move tape;
+        return len(t);
+      }
+    }
+  }
+  return tape_len(e);
+}

@@ -280,7 +280,10 @@ fn struct_inout_abi_error_at(
             let (message, fix) = if entries_only {
                 (format!("host entry {name} takes an inout struct, which has no C ABI"), "use Rust raw_entries crate or unsafe")
             } else {
-                let kind = if f.params.iter().any(|p| p.mode_pos.is_some() && crate::gtype::key_is_collection(&p.ty)) {
+                // G-LG7-1: an internal inout Vec<i64> / Vec<bool> passes its handle; a host entry keeps rejecting
+                let kind = if f.params.iter().any(|p| p.mode_pos.is_some() && crate::gtype::key_is_collection(&p.ty)
+                    && (host || !crate::gtype::key_is_scalar_vec(&p.ty)))
+                {
                     "collection"
                 } else if host {
                     "struct"

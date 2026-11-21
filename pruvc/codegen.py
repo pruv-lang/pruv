@@ -92,6 +92,24 @@ from inline_policy import PIN_INLINE, PIN_ALWAYS, inline_policy
 from check import BIT_BUILTINS, array_resize_params, array_resize_args, same_place
 from refine import _kids as expr_kids, _stmt_names, _expr_names
 
+
+def _moves_name(node, names):
+    """G-DB16-1: does the syntax tree `node` (a statement list, statement or expression) hold `move x` of a name in names"""
+    if isinstance(node, (list, tuple)):
+        return any(_moves_name(x, names) for x in node)
+    if not hasattr(node, "__dataclass_fields__") or isinstance(node, Type):
+        return False
+    if isinstance(node, Move) and not node.fields and node.name in names:
+        return True
+    return any(_moves_name(getattr(node, f), names) for f in node.__dataclass_fields__)
+
+
+def match_moves_binder(st):
+    """G-DB16-1: an arm of the user-enum match `st` moves one of its own binders (the checker only admits that for an
+    array binder of a plain owned scrutinee that no arm names): the match consumes its scrutinee"""
+    return any(a.enum_name is not None and a.binders and _moves_name(a.body, set(a.binders)) for a in st.arms)
+
+
 ALLOW = ("#[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, "
          "dead_code, unreachable_code, unreachable_patterns, "
          "unconditional_panic, arithmetic_overflow)]")
@@ -3087,7 +3105,8 @@ class Gen:
         # Consuming match: a match on an owned local that no arm and no later statement names again (dead_after) is
         # that local's last use, so it is matched by value and payloads bind as owned values a return or copy moves.
         sc = st.scrutinee
-        consume = isinstance(sc, Var) and not s.cost and s.dead_after(sc.name)
+        # G-DB16-1: an arm that moves an array binder (`move tape`) consumes the scrutinee, also under cost metering
+        consume = isinstance(sc, Var) and (match_moves_binder(st) or (not s.cost and s.dead_after(sc.name)))
         if consume:
             named = set()
             for a in st.arms:
@@ -3467,6 +3486,8 @@ class Gen:
                     return s.e(a[0])
                 if is_str(a[0].ty):  # G2 B2
                     return "%s.to_owned()" % s.e(a[0])
+                if isinstance(a[0], Call) and a[0].name == "subview":   # LG8: copy(subview(a, lo, hi))
+                    return "(%s).to_vec()" % s.e(a[0])
                 return "%s.to_vec()" % s.e(a[0])
             if n == "truncate":
                 # truncate of an owned local at its last use shortens the local in place; otherwise copy the prefix (R03L: a shortened

@@ -1,0 +1,44 @@
+// G-DB16-1: `move tape` of an array binder of a match on an owned local enum moves the payload out of the scrutinee,
+// which is consumed. A binder that is not moved is dropped with the scrutinee.
+enum Tape { Empty, Bytes(tape: [u8]), Ints(items: [i64]) }
+
+fn make_bytes() -> Tape ! alloc {
+  let mut b: [u8] = alloc(3, 7);
+  b[0] = 9;
+  b[2] = 5;
+  return Tape::Bytes(move b);
+}
+
+fn make_ints() -> Tape ! alloc {
+  let mut a: [i64] = alloc(2, 4);
+  a[1] = 6;
+  return Tape::Ints(move a);
+}
+
+fn run() -> () ! io, alloc {
+  let e: Tape = make_bytes();
+  match e {
+    Tape::Empty => { print(100); }
+    Tape::Bytes(tape) => {
+      let t: [u8] = move tape;
+      print(len(t));
+      if len(t) > 2 {
+        print(t[0]);
+        print(t[2]);
+      }
+    }
+    Tape::Ints(items) => { print(101); }
+  }
+  let f: Tape = make_ints();
+  match f {
+    Tape::Empty => { print(100); }
+    Tape::Bytes(tape) => { print(102); }
+    Tape::Ints(items) => {
+      let u: [i64] = move items;
+      print(len(u));
+      if len(u) > 1 {
+        print(u[1]);
+      }
+    }
+  }
+}

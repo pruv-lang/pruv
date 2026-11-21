@@ -1,3 +1,0 @@
-fn reserve(inout v: Vec<i64>) -> () ! alloc {
-  vec_reserve::<i64>(inout v, 8);
-}

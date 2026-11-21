@@ -19,6 +19,24 @@ use crate::pyrepr::repr_str;
 use crate::typeinfo::{array_elem_name, is_array_name, uses_array_type, uses_str, TypeTable};
 use std::collections::{HashMap, HashSet};
 
+/// G-DB16-1: an arm of the user-enum match `x` moves one of its own binders (`move tape`; the checker only admits that
+/// for an array binder of a plain owned scrutinee that no arm names): the match consumes its scrutinee
+pub(crate) fn match_moves_binder(x: &Match) -> bool {
+    x.arms.iter().any(|a| {
+        let mut found = false;
+        if a.enum_name.is_some() && !a.binders.is_empty() {
+            crate::foreign_shim::walk_stmts(&a.body, &mut |node| {
+                if let crate::foreign_shim::Node::Expr(Expr::Move(m)) = node {
+                    if m.fields.is_empty() && a.binders.iter().any(|b| *b == m.name) {
+                        found = true;
+                    }
+                }
+            });
+        }
+        found
+    })
+}
+
 pub type R<T> = Result<T, String>;
 
 pub const ALLOW: &str = "#[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]";
@@ -3666,7 +3684,8 @@ impl<'a> Gen<'a> {
         // Consuming match: a match on an owned local that no arm and no later statement names again (dead_after) is
         // that local's last use, so it is matched by value and payloads bind as owned values a return or copy moves.
         let mut consume = match &x.scrutinee {
-            Expr::Var(v) => !self.cost && self.dead_after(&v.name),
+            // G-DB16-1: an arm that moves an array binder consumes the scrutinee, also under cost metering
+            Expr::Var(v) => match_moves_binder(x) || (!self.cost && self.dead_after(&v.name)),
             _ => false,
         };
         if consume {
@@ -4695,6 +4714,11 @@ impl<'a> Gen<'a> {
                     if expr_ty(arg(a, 0)?).as_deref() == Some("str") {
                         // G2 B2
                         let result = format!("{}.to_owned()", self.e(arg(a, 0)?)?);
+                        return Ok(self.cost_buffer(result));
+                    }
+                    if matches!(arg(a, 0)?, Expr::Call(x) if x.name == "subview") {
+                        // LG8: copy(subview(a, lo, hi))
+                        let result = format!("({}).to_vec()", self.e(arg(a, 0)?)?);
                         return Ok(self.cost_buffer(result));
                     }
                     let result = format!("{}.to_vec()", self.e(arg(a, 0)?)?);

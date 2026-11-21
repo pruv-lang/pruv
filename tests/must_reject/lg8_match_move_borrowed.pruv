@@ -1,0 +1,11 @@
+// G-DB16-1: the scrutinee is a plain parameter (a borrowed view), so moving its array binder stays array_alias
+enum Tape { Bytes(tape: [u8]) }
+
+fn run(e: Tape) -> i64 {
+  match e {
+    Tape::Bytes(tape) => {
+      let t: [u8] = move tape;
+      return len(t);
+    }
+  }
+}

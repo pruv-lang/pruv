@@ -321,6 +321,10 @@ struct Checker {
     /// Location of the field move allowed in the current field assignment.
     field_move: Option<(i64, i64)>,
     array_replace: Option<String>,
+    /// G-DB16-1: array binders of the enclosing match arms that may be moved (consuming match on an owned local)
+    match_movable: HashSet<String>,
+    /// G-DB16-1: every binder of an enclosing match arm (a view, never an owner)
+    arm_binders: HashSet<String>,
     collection_records: std::cell::RefCell<HashSet<String>>,
     nested_records: HashSet<String>,
     holder_records: HashSet<String>,
@@ -740,6 +744,8 @@ impl Checker {
             takes,
             field_move: None,
             array_replace: None,
+            match_movable: HashSet::new(),
+            arm_binders: HashSet::new(),
             collection_records: Default::default(),
             nested_records: HashSet::new(),
             holder_records: HashSet::new(),
@@ -2405,6 +2411,27 @@ impl Checker {
             }
         }
         let aggregates = self.decls.keys().filter(|n| self.owned_aggregate(&GType::from_key(n))).cloned().collect();
+        // G-DB16-1 / G-R09-4: non-generic user enums and structs, tracked as owned locals so a binder move or a
+        // consuming field move can consume them
+        let enums: HashSet<String> = self
+            .decls
+            .iter()
+            .filter(|(_, d)| match d {
+                TypeDecl::Enum(e) => e.tparams.is_empty(),
+                TypeDecl::Struct(s) => s.tparams.is_empty(),
+            })
+            .map(|(n, _)| n.clone())
+            .collect();
+        let variants: HashMap<(String, String), Vec<String>> = self
+            .decls
+            .iter()
+            .filter_map(|(n, d)| match d {
+                TypeDecl::Enum(e) if e.tparams.is_empty() => Some((n, e)),
+                _ => None,
+            })
+            .flat_map(|(n, e)| e.variants.iter()
+                .map(move |v| ((n.clone(), v.name.clone()), v.fields.iter().map(|f| f.ty.clone()).collect())))
+            .collect();
         // For ownership analysis a replaced array starts live, like a take
         // parameter. Only the RHS that restores it may consume it.
         let mut moved = HashSet::new();
@@ -2422,9 +2449,9 @@ impl Checker {
             for p in &mut owned.params {
                 p.take |= p.mode_pos.is_some() && GType::from_key(&p.ty).is_array() && moved.contains(&p.name);
             }
-            check_ownership(&owned, &self.takes, &aggregates)?;
+            check_ownership(&owned, &self.takes, &aggregates, &enums, &variants)?;
         } else {
-            check_ownership(f, &self.takes, &aggregates)?;
+            check_ownership(f, &self.takes, &aggregates, &enums, &variants)?;
         }
         Ok(())
     }
@@ -2453,9 +2480,22 @@ impl Checker {
         }
         self.check_borrow(m.line, m.col, &m.name, &m.fields)?;
         let source = self.lookup(m.line, m.col, &m.name, scope, &m.fields)?;
+        let typed = matches!(ty.to_key().as_str(), "string" | "vec<i64>" | "vec<bool>")
+            || (ty.args.is_empty() && matches!(ty.name.as_str(), "array" | "array_u8" | "array_bool"));
+        let restored = matches!(next, Some(Stmt::FieldAssign(r)) if r.name == m.name && r.fields == m.fields);
+        if ty.args.is_empty()
+            && matches!(ty.name.as_str(), "array" | "array_u8" | "array_bool")
+            && !restored
+            && target.is_none()
+            && m.fields.len() == 1
+            && source.kind == "local" && source.mutable
+            && !self.arm_binders.contains(&m.name)
+        {
+            // G-R09-4: `let t = move d.a;` of a `let mut` local record consumes d; foreign.rs marks d moved
+            return Ok(Some((m.line, m.col)));
+        }
         if !(source.mutable || matches!(source.kind, "inout" | "map_inout"))
-            || !(matches!(ty.to_key().as_str(), "string" | "vec<i64>" | "vec<bool>")
-                || (ty.args.is_empty() && matches!(ty.name.as_str(), "array" | "array_u8" | "array_bool")))
+            || !typed
             || target.is_some_and(|(name, fields)| name != m.name || paths_overlap(fields, &m.fields))
         {
             return Err(field_move_error(m));
@@ -3236,9 +3276,28 @@ impl Checker {
                 return Err(terr(line, col, "match_arms", format!("match is missing arm(s): {}", missing.join(", ")), ""));
             }
         }
+        // G-DB16-1: an array binder may be moved when the scrutinee is a plain owned local enum value that
+        // no arm names again; the move then consumes the scrutinee (foreign.rs marks it moved)
+        let mut movable_scrut = false;
+        if user && t.args.is_empty() {
+            if let Expr::Var(v) = &m.scrutinee {
+                if !self.arm_binders.contains(&v.name)
+                    && scope.get(&v.name).is_some_and(|e| e.kind == "local")
+                {
+                    let mut named: HashSet<String> = HashSet::new();
+                    for a in &m.arms {
+                        crate::refine::stmt_names(&a.body, &mut named);
+                    }
+                    movable_scrut = !named.contains(&v.name);
+                }
+            }
+        }
         for a in m.arms.iter_mut() {
             let mut sc = scope.clone();
             let (nl, nc) = if user { (a.line, a.col) } else { (line, col) };
+            let saved_movable = self.match_movable.clone();
+            let saved_binders = self.arm_binders.clone();
+            self.arm_binders.extend(a.binders.iter().cloned());
             let ftypes: Vec<GType> = if user {
                 let v: Vec<GType> = self.fields_of(&t, Some(a.ctor.as_str()))?.into_iter().map(|(_, ft)| ft).collect();
                 if a.binders.len() != v.len() {
@@ -3264,6 +3323,13 @@ impl Checker {
                 let kind = if map_mut { "map_inout" } else if map_borrow { "map_view" }
                     else if bt.is_array() || *bt == strt() { "param" } else { "local" };
                 sc.insert(b.clone(), Entry { ty: bt.clone(), mutable: map_take, kind });
+            }
+            if movable_scrut {
+                for (b, bt) in a.binders.iter().zip(ftypes.iter()) {
+                    if bt.is_array() {
+                        self.match_movable.insert(b.clone());
+                    }
+                }
             }
             let active = root.as_ref().filter(|_| !map_borrow || a.ctor == "Some");
             let borrowed = mutable_place.as_ref().filter(|_| a.ctor == "Some");
@@ -3294,6 +3360,8 @@ impl Checker {
             if active.is_some() {
                 self.active_roots.pop();
             }
+            self.match_movable = saved_movable;
+            self.arm_binders = saved_binders;
         }
         Ok(())
     }
@@ -3423,6 +3491,36 @@ impl Checker {
         terr(e.line, e.col, "view_context",
             "subview(...) is only allowed as a direct argument to a non-inout array parameter of a function call",
             "pass it straight to a function, or use copy_range to make an owned array")
+    }
+
+    /// LG8: subview(a, lo, hi) as the only direct argument of the builtin copy; the array type is the source's
+    fn copy_subview_arg(&mut self, x: &mut Call, scope: &Scope, c: bool) -> Res<GType> {
+        if x.targs.is_some() {
+            return Err(terr(x.line, x.col, "type_arity", "builtin subview takes no type arguments", "remove the `::<...>`"));
+        }
+        if x.args.len() != 3 {
+            return Err(terr(x.line, x.col, "arity", format!("subview takes 3 argument(s), got {}", x.args.len()), ""));
+        }
+        let rooted = place_root(&x.args[0]).is_some();
+        self.in_view = true;
+        let r = (|| -> Res<GType> {
+            let at = self.expect_array(&mut x.args[0], scope, c, false)?; // a view nested in the source is reported where it is
+            if !rooted {
+                self.in_view = false;
+                return Err(Self::view_context(x));
+            }
+            if !at.is_array() {
+                return Err(terr(x.args[0].line(), x.args[0].col(), "type_mismatch",
+                    format!("expected {}, found {}", tn(&GType::array()), tn(&at)), ""));
+            }
+            self.expect(&mut x.args[1], &i64t(), scope, c, None)?;
+            self.expect(&mut x.args[2], &i64t(), scope, c, None)?;
+            Ok(at)
+        })();
+        self.in_view = false;
+        let at = r?;
+        x.ty = Some(at.to_key());
+        Ok(at)
     }
 
     fn expect_user_arg(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, c: bool, borrow_vector: bool) -> Res<()> {
@@ -3812,6 +3910,7 @@ impl Checker {
                 let entry = self.lookup(x.line, x.col, &x.name, scope, &[])?;
                 if entry.ty.is_array() && !matches!(entry.kind, "local" | "take")
                     && self.array_replace.as_deref() != Some(x.name.as_str())
+                    && !self.match_movable.contains(&x.name) // G-DB16-1: array binder of a consuming match
                 {
                     if matches!(entry.kind, "param" | "inout") {
                         return Err(terr(x.line, x.col, "array_alias",
@@ -4865,6 +4964,10 @@ impl Checker {
             };
             if let Expr::Call(x) = arg {
                 if x.name == "subview" {
+                    // LG8: copy(subview(a, lo, hi))
+                    if n == "copy" && alen == 1 && !c && !self.in_view && !self.funcs.contains_key(&n) {
+                        continue;
+                    }
                     return Err(Self::view_context(x));
                 }
             }
@@ -4907,7 +5010,15 @@ impl Checker {
                     return Err(terr(line, col, "effect_in_contract", "copy not allowed in contracts", ""));
                 }
                 arity(1)?;
-                let at = self.expect_array(&mut e.args[0], scope, c, false)?;
+                let at = if let Expr::Call(x) = &mut e.args[0] {
+                    if x.name == "subview" {
+                        self.copy_subview_arg(x, scope, c)? // LG8
+                    } else {
+                        self.expect_array(&mut e.args[0], scope, c, false)?
+                    }
+                } else {
+                    self.expect_array(&mut e.args[0], scope, c, false)?
+                };
                 self.used_effects.insert("alloc".to_string());
                 return Ok(at);
             }

@@ -376,6 +376,12 @@ class _Ownership:
         s.track = None   # name -> "move" | "borrow" of the outermost call being checked (shared by nested calls)
         s.proc = {}      # G10 A0: must-consume bindings, name -> "Process" | "Socket" | "Listener"; never File etc.
         s.decl = {}      # name -> the Let that declared it (location of a scope-end proc_unconsumed / net_unconsumed)
+        s.nxt = None     # G-R09-4: the statement after the one being checked in its block
+        s.consumed_field = None   # G-R09-4: the `move d.a` of a `let` that no next statement restores
+
+    def enum_value(s, ty):
+        decl = s.types.get(ty.name)
+        return ty.owner is None and not ty.args and isinstance(decl, EnumDecl) and not decl.tparams
 
     def run(s, f):
         s.bor = {p.name for p in f.params
@@ -389,10 +395,11 @@ class _Ownership:
 
     def block(s, stmts, st):
         declared = []
-        for x in stmts:
+        for i, x in enumerate(stmts):
             if st is None:
                 s.dead_stmt(x)
             else:
+                s.nxt = stmts[i + 1] if i + 1 < len(stmts) else None
                 st = s.stmt(x, st, declared)
         if st is not None:
             for n in declared:
@@ -404,8 +411,15 @@ class _Ownership:
 
     def stmt(s, x, st, declared):
         if isinstance(x, Let):
+            nxt = s.nxt
+            v = x.value
+            if (isinstance(v, Move) and v.fields and not (
+                    isinstance(nxt, FieldAssign) and nxt.name == v.name and tuple(nxt.fields) == tuple(v.fields))):
+                s.consumed_field = v
             s.consume(x.value, st, "let")
-            if is_array(x.type) or is_collection(x.type) or is_nongeneric_struct(x.type, s.types):
+            s.consumed_field = None
+            if (is_array(x.type) or is_collection(x.type) or is_nongeneric_struct(x.type, s.types)
+                    or s.enum_value(x.type)):     # G-DB16-1: an enum local is tracked so a binder move can consume it
                 st[x.name] = "live"
                 declared.append(x.name)
                 kind = _must_kind(x.type)
@@ -472,6 +486,9 @@ class _Ownership:
             map_take = isinstance(sc, Call) and sc.name == "map_take" and sc.name not in s.funcs
             out = None
             first = True
+            import codegen
+            consuming = (isinstance(sc, Var) and sc.name in st and sc.name not in s.bor
+                         and codegen.match_moves_binder(x))
             for a in x.arms:
                 borrowed = s.arm_borrowed(a)
                 s.bor.update(borrowed)
@@ -482,7 +499,21 @@ class _Ownership:
                     for b in a.binders:
                         inner[b] = "live"
                         s.proc.pop(b, None)
+                # G-DB16-1: the checker admits `move binder` of an array binder only for a plain owned enum scrutinee
+                # that no arm names. A match where some arm moves a binder takes the scrutinee by value: it is
+                # consumed on entry to every arm, and its array binders are tracked owners of the arm
+                srcs = ()
+                if consuming and a.enum_name is not None:
+                    inner[sc.name] = "dead"
+                    decl = s.types.get(a.enum_name)
+                    variant = next(v for v in decl.variants if v.name == a.ctor)
+                    srcs = [b for b, fd in zip(a.binders, variant.fields) if is_array(fd.type)]
+                    for b in srcs:
+                        inner[b] = "live"
                 r = s.block(a.body, inner)
+                if r is not None:
+                    for b in srcs:
+                        r.pop(b, None)
                 if map_take and r is not None:
                     for b in a.binders:
                         r.pop(b)
@@ -499,8 +530,9 @@ class _Ownership:
         """Check array reads in proof clauses without applying executable call rules."""
         if e is None:
             return
-        if isinstance(e, Var) and is_array(e.ty):
-            s.use(e, st)
+        if isinstance(e, Var) and (is_array(e.ty) or (e.name in st and e.ty is not None and (
+                is_nongeneric_struct(e.ty, s.types) or s.enum_value(e.ty)))):
+            s.use(e, st)     # LG8: a record or enum root consumed by a field or binder move
         for k in expr_kids(e):
             s.array_reads(k, st)
 
@@ -576,14 +608,15 @@ class _Ownership:
         return {b for b, fd in zip(a.binders, variant.fields) if is_owned_field_type(fd.type)}
 
     # ---- uses ----
-    def use(s, e, st):
-        v = st.get(e.name)
+    def use(s, e, st, name=None):
+        name = e.name if name is None else name
+        v = st.get(name)
         if v == "dead":
             _err(e, "foreign_move", "use after move",
-                 "%s was moved earlier; reassign it before using it again, or avoid the move" % e.name)
+                 "%s was moved earlier; reassign it before using it again, or avoid the move" % name)
         if v == "maybe":
             _err(e, "foreign_move", "binding may have been moved",
-                 "%s is moved on some paths; make every path leave it live, or do not use it afterwards" % e.name)
+                 "%s is moved on some paths; make every path leave it live, or do not use it afterwards" % name)
 
     def aggregate(s, ty):
         return ty is not None and ty.owner is None and not ty.args and ty.name in s.aggregates
@@ -591,7 +624,9 @@ class _Ownership:
     def move(s, e, st, consuming, track):
         if e.fields:
             s.use(e, st)
-            return       # The type checker enforces restoration. The root stays live.
+            if e is s.consumed_field:    # G-R09-4: no restore follows, so the record is wholly moved
+                st[e.name] = "dead"
+            return       # Otherwise the type checker enforces restoration. The root stays live.
         if not (is_array(e.ty) or is_collection(e.ty) or (s.aggregate(e.ty) and e.name in st)):
             _err(e, "foreign_move", "move of a non-collection value",
                  "move applies to Vec, HashMap and String bindings only; use the value directly")
