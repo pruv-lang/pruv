@@ -160,3 +160,26 @@ pub fn elements(d: crate::json::JsonDocument, c: i64) -> [i64] ! alloc
   if k != n { return empty; }
   return ids;
 }
+
+// A field can be replaced through inout when its byte storage needs to grow.
+pub struct ByteBuffer { data: [u8] }
+
+pub fn byte_buffer(n: i64) -> ByteBuffer ! alloc
+  requires 0 <= n && n <= 8700000
+  ensures len(result.data) == n
+{
+  let data: [u8] = alloc(n, 0);
+  return ByteBuffer { data: move data };
+}
+
+// Grow a byte buffer to fit a pending write without exceeding its caller's limit.
+pub fn grow_bytes(buf: [u8], needed: i64, cap: i64) -> [u8] ! alloc
+  requires len(buf) < needed && needed <= cap && cap <= 8700000
+  ensures needed <= len(result) && len(result) <= cap
+  ensures forall k in 0..len(buf): result[k] == buf[k]
+{
+  let mut next: i64 = 2 * len(buf);
+  if next < needed { next = needed; }
+  if next > cap { next = cap; }
+  return resize(buf, next, 0);
+}

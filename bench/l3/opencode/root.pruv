@@ -65,11 +65,12 @@ fn str_clean(t: [u8], s: i64, l: i64, no_eq: bool) -> bool
   return true;
 }
 
-// effective-environment table: refs inside t and nonempty keys on every step; keys without NUL or '=', values without
-// NUL and unique keys (quadratic) only when uniq, i.e. once at begin: the configuration is immutable across a case
-fn env_ok(cfg: [i64], t: [u8], n: i64, uniq: bool) -> bool
+// effective-environment table: refs inside t and nonempty keys; keys without NUL or '=', values without NUL and unique
+// keys only when uniq, i.e. once at begin: the configuration is immutable across a case
+fn env_ok(cfg: [i64], t: [u8], n: i64, uniq: bool) -> bool ! alloc
   requires 0 <= n && n <= 536870903 && len(cfg) == 32 + 4 * n
 {
+  if uniq { return keys_unique(cfg, t, n); }
   let mut i: i64 = 0;
   while i < n
     invariant 0 <= i && i <= n && n <= 536870903 && len(cfg) == 32 + 4 * n
@@ -82,20 +83,74 @@ fn env_ok(cfg: [i64], t: [u8], n: i64, uniq: bool) -> bool
     let vl: i64 = cfg[b + 3];
     if ks < 0 || vs < 0 || kl < 1 { return false; }
     if !crate::packet::ref_ok(ks, kl, len(t)) || !crate::packet::ref_ok(vs, vl, len(t)) { return false; }
-    if uniq && (!str_clean(t, ks, kl, true) || !str_clean(t, vs, vl, false)) { return false; }
-    let mut j: i64 = 0;
-    if !uniq { j = i; }
-    while j < i
-      invariant 0 <= j && j <= i && i < n && n <= 536870903 && len(cfg) == 32 + 4 * n && 0 <= ks && 0 <= kl && kl <= len(t) - ks
-      decreases i - j
+    i = i + 1;
+  }
+  return true;
+}
+
+// DB5 (D-R07-1): the begin pass. One loop per row checks the refs, scans the key once (NUL, '=' and an FNV-1a hash
+// together), scans the value for NUL, then places the row number in an open-addressing table (power-of-two size > 2N,
+// linear probing, slot = band(hash, size-1)): O(E) expected instead of comparing every key with every earlier key.
+fn keys_unique(cfg: [i64], t: [u8], n: i64) -> bool ! alloc
+  requires 0 <= n && n <= 536870903 && len(cfg) == 32 + 4 * n
+{
+  let mut size: i64 = 1;
+  while size <= 2 * n
+    invariant 1 <= size && size <= 4 * n + 2 && n <= 536870903
+    decreases 4 * n + 2 - size
+  {
+    size = size * 2;
+  }
+  let mask: i64 = size - 1;
+  let mut tab: [i64] = alloc(size, -1);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= 536870903 && len(cfg) == 32 + 4 * n && mask == size - 1 && 1 <= size && len(tab) == size
+    decreases n - i
+  {
+    let b: i64 = 32 + 4 * i;
+    let ks: i64 = cfg[b];
+    let kl: i64 = cfg[b + 1];
+    let vs: i64 = cfg[b + 2];
+    let vl: i64 = cfg[b + 3];
+    if ks < 0 || vs < 0 || kl < 1 { return false; }
+    if !crate::packet::ref_ok(ks, kl, len(t)) || !crate::packet::ref_ok(vs, vl, len(t)) { return false; }
+    if !str_clean(t, vs, vl, false) { return false; }
+    let mut h: i64 = -3750763034362895579;
+    let mut k: i64 = 0;
+    while k < kl
+      invariant 0 <= k && k <= kl && 0 <= ks && kl <= len(t) - ks
+      decreases kl - k
     {
-      let b2: i64 = 32 + 4 * j;
-      let s2: i64 = cfg[b2];
-      let l2: i64 = cfg[b2 + 1];
-      if s2 < 0 || !crate::packet::ref_ok(s2, l2, len(t)) { return false; }
-      if key_same(t, ks, kl, s2, l2) { return false; }
-      j = j + 1;
+      let c: i64 = t[ks + k];
+      if c == 0 || c == 61 { return false; }
+      h = wrapping_mul(bxor(h, c), 1099511628211);
+      k = k + 1;
     }
+    let mut at: i64 = band(h, mask);
+    let mut probes: i64 = 0;
+    let mut placed: bool = false;
+    while !placed && probes < size
+      invariant 0 <= at && at < size && 0 <= probes && probes <= size && len(tab) == size && mask == size - 1
+      invariant 0 <= i && i < n && n <= 536870903 && len(cfg) == 32 + 4 * n && 0 <= ks && 0 <= kl && kl <= len(t) - ks
+      decreases size - probes
+    {
+      let r: i64 = tab[at];
+      if r < 0 {
+        tab[at] = i;
+        placed = true;
+      } else {
+        if r >= n { return false; }
+        let b2: i64 = 32 + 4 * r;
+        let s2: i64 = cfg[b2];
+        let l2: i64 = cfg[b2 + 1];
+        if s2 < 0 || !crate::packet::ref_ok(s2, l2, len(t)) { return false; }
+        if key_same(t, ks, kl, s2, l2) { return false; }
+        at = band(at + 1, mask);
+      }
+      probes = probes + 1;
+    }
+    if !placed { return false; }
     i = i + 1;
   }
   return true;
@@ -103,8 +158,18 @@ fn env_ok(cfg: [i64], t: [u8], n: i64, uniq: bool) -> bool
 
 // cfg: 32+4N words (32+4N <= 2^31-1), version 1, mode 0..5, timeouts 1..2^31-1, env mode 0/1, refs absent or inside cfg_text, N
 // matches the length, direct plan ref present iff mode 5, reserved words 21..31 zero, valid environment table.
-fn cfg_ok(cfg: [i64], t: [u8], uniq: bool) -> bool
+fn cfg_ok(cfg: [i64], t: [u8], uniq: bool) -> bool ! alloc
   ensures result ==> (len(cfg) >= 32 && len(cfg) <= 2147483647 && 0 <= cfg[1] && cfg[1] <= 5 && len(t) <= 2147483647)
+{
+  if !cfg_head_ok(cfg, t) { return false; }
+  let n: i64 = (len(cfg) - 32) / 4;
+  return env_ok(cfg, t, n, uniq);
+}
+
+// the O(1) header part of cfg_ok; the checked step runs cfg_ok(uniq=false): this plus the O(E) refs-only row loop
+fn cfg_head_ok(cfg: [i64], t: [u8]) -> bool
+  ensures result ==> (len(cfg) >= 32 && len(cfg) <= 2147483647 && 0 <= cfg[1] && cfg[1] <= 5 && len(t) <= 2147483647)
+  ensures result ==> (len(cfg) - 32) % 4 == 0
 {
   if len(cfg) < 32 || len(cfg) > 2147483647 || len(t) > 2147483647 { return false; }
   if (len(cfg) - 32) % 4 != 0 { return false; }
@@ -132,7 +197,7 @@ fn cfg_ok(cfg: [i64], t: [u8], uniq: bool) -> bool
     if cfg[z] != 0 { return false; }
     z = z + 1;
   }
-  return env_ok(cfg, t, n, uniq);
+  return true;
 }
 
 // two-word refs of ctl (words 24,26,..,36): absent (-1,0) or inside the text bank when tl >= 0 (tl < 0: structure only)
@@ -385,16 +450,16 @@ fn step_body(
   requires len(cfg) >= 32 && len(cfg) <= 2147483647 && 0 <= cfg[1] && cfg[1] <= 5 && len(cfg_text) <= 2147483647
   ensures len(result) >= 76
 {
-  let blank: [i64] = crate::packet::ctl_init(cfg[1], 999);
-  if len(ctl) != 64 { return crate::packet::done_internal(blank, 28); }
+  // DB5 (D-R07-3): the blank control is built only on the paths that answer with it
+  if len(ctl) != 64 { return crate::packet::done_internal(crate::packet::ctl_init(cfg[1], 999), 28); }
   if !banks_ok(query_words, query_bytes, rows, text, document, saved_result, completion) {
-    return crate::packet::done_simple(blank, 0, 3, 5);
+    return crate::packet::done_simple(crate::packet::ctl_init(cfg[1], 999), 0, 3, 5);
   }
-  if !ctl_ok_at(ctl, 0, cfg[1], len(text)) { return crate::packet::done_internal(blank, 28); }
+  if !ctl_ok_at(ctl, 0, cfg[1], len(text)) { return crate::packet::done_internal(crate::packet::ctl_init(cfg[1], 999), 28); }
   if !crate::packet::event_shape(event, len(completion)) { return crate::packet::done_internal(ctl, 28); }
   // terminal reentry; the empty event only after begin/continue; a completion only for the pending request, once
   let ex: i64 = ctl[6];
-  if ex == 2 || ctl[2] == 999 { return crate::packet::done_internal(blank, 28); }
+  if ex == 2 || ctl[2] == 999 { return crate::packet::done_internal(crate::packet::ctl_init(cfg[1], 999), 28); }
   let empty_ev: bool = crate::packet::event_empty(event);
   if ex == 0 {
     if !empty_ev { return crate::packet::done_internal(ctl, 28); }

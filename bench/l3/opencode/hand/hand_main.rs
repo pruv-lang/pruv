@@ -49,16 +49,23 @@ fn main() {
         }
         "step_checked" | "step_admitted" => {
             assert!(sol::begin(&cfg, &text), "begin must admit the config");
+            // the control begin answers with (ctl_init(3, 600))
             let mut ctl = [0; 64];
             ctl[..4].copy_from_slice(&[1, 3, 600, 1]);
+            for k in [8, 9, 10, 11, 12, 24, 26, 28, 30, 32, 34, 36] {
+                ctl[k] = -1;
+            }
             let mut event = [0; 16];
             event[..2].copy_from_slice(&[1, 1]);
+            let checked = lane == "step_checked";
+            let first = sol::step(checked, &cfg, &text, &ctl, &event);
+            assert_eq!(first.get(2), Some(&1), "reentry must be rejected");
 
             let mut digest = OFFSET;
             let started = Instant::now();
             for _ in 0..steps {
-                let code = sol::step(black_box(cfg.len()), black_box(&ctl), black_box(&event));
-                digest = fold_word(digest, code);
+                let packet = sol::step(black_box(checked), black_box(&cfg), black_box(&text), black_box(&ctl), black_box(&event));
+                digest = packet.into_iter().fold(digest, |hash, word| fold_word(hash, word as u64));
             }
             (started.elapsed().as_nanos(), digest)
         }
