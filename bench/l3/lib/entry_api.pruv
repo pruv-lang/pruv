@@ -87,10 +87,10 @@ pub fn index_begin(inout progress: [i64], input: [i64]) -> [i64] ! alloc
 
 fn index_begin_checked(inout progress: [i64], blob: [i64]) -> [i64] ! alloc
 {
-  if len(progress) <= len(blob) / 30 { return bad_pkt(blob, 1); }
   let rec: i64 = crate::ent_packet::sec_start(blob, 1);
   let sec: i64 = crate::ent_u16::rd(blob, rec + 1);
   let ns: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(blob, rec + 2), 559240);
+  if len(progress) <= ns { return bad_pkt(blob, 1); }
   let base: i64 = crate::ent_packet::sec_start(blob, sec);
   let tab: [i64] = crate::ent_bound::index_collect(blob, base, ns, inout progress);
   let nt: i64 = crate::ent_u16::rd(progress, 0);
@@ -98,11 +98,31 @@ fn index_begin_checked(inout progress: [i64], blob: [i64]) -> [i64] ! alloc
   if nt == 0 {
     return crate::ent_bound::index_complete(blob, 0, id, 0, crate::ent_u16::empty(), progress);
   }
-  // Write the final packet directly: request pool, record, state header, blob, table.
-  let lp: i64 = crate::ent_packet::sec_len(blob, 0);
+  let pool: i64 = crate::ent_packet::sec_start(blob, 0);
+  let pl: i64 = crate::ent_packet::sec_len(blob, 0);
   let lb: i64 = len(blob);
   let lt: i64 = len(tab);
   if lb > 16777216 || lt > 16777216 { return bad_pkt(blob, 2); }
+  // Keep the existing size limit based on the checked input pool.
+  if 30 + pl + lb + lt > 16777216 { return bad_pkt(blob, 2); }
+  if pool + pl > lb { return bad_pkt(blob, 1); }
+  // Count the text units so the compact pool can be written into the await directly.
+  // Ids may share one range; once the sum passes the input pool, copy that pool once instead.
+  let mut lp: i64 = 0;
+  let mut i: i64 = 0;
+  while pl > 0 && lp <= pl && i + 2 < lt
+    invariant 0 <= i && i <= lt && lt == len(tab) && lt <= 16777216 && 0 <= pl && pl <= 16777216 && 0 <= lp && lp <= pl + pl
+    decreases lt - i
+  {
+    if tab[i] == 6 {
+      let n: i64 = tab[i + 2];
+      if n < 0 || n > pl { return bad_pkt(blob, 1); }
+      lp = lp + n;
+    }
+    i = i + 3;
+  }
+  let compact: bool = lp <= pl;
+  if !compact { lp = pl; }
   let total: i64 = 30 + lp + lb + lt;
   if total > 16777216 { return bad_pkt(blob, 2); }
   let mut out: [i64] = alloc(total, 0);
@@ -119,9 +139,6 @@ fn index_begin_checked(inout progress: [i64], blob: [i64]) -> [i64] ! alloc
   crate::ent_u16::wr(inout out, 11, lt);
   let r: i64 = 12 + lp;
   let st: i64 = r + 4;
-  let pool: i64 = crate::ent_packet::sec_start(blob, 0);
-  if pool + lp > lb { return bad_pkt(blob, 1); }
-  copy_range(inout out, 12, blob, pool, lp);
   let rq: [i64] = crate::ent_bound::index_request(nt);
   let a: i64 = crate::ent_u16::put_all(inout out, r, rq);
   crate::ent_u16::wr(inout out, st, crate::ent_state::magic());
@@ -132,7 +149,25 @@ fn index_begin_checked(inout progress: [i64], blob: [i64]) -> [i64] ! alloc
   crate::ent_u16::wr(inout out, st + 4, base);
   crate::ent_u16::wr(inout out, st + 12, lb);
   copy_range(inout out, st + 14, blob, 0, lb);
-  copy_range(inout out, st + 14 + lb, tab, 0, lt);
+  let t: i64 = st + 14 + lb;
+  copy_range(inout out, t, tab, 0, lt);
+  if !compact { copy_range(inout out, 12, blob, pool, pl); }
+  let mut at: i64 = 0;
+  let mut j: i64 = 0;
+  while compact && pl > 0 && j + 2 < lt
+    invariant 0 <= j && j <= lt && lt == len(tab) && 0 <= at && at <= lp && len(out) == t + lt
+    decreases lt - j
+  {
+    if tab[j] == 6 {
+      let start: i64 = tab[j + 1];
+      let n: i64 = tab[j + 2];
+      if start < 0 || start > pl || n < 0 || n > pl - start || n > lp - at { return bad_pkt(blob, 1); }
+      copy_range(inout out, 12 + at, blob, pool + start, n);
+      out[t + j + 1] = at;
+      at = at + n;
+    }
+    j = j + 3;
+  }
   return out;
 }
 

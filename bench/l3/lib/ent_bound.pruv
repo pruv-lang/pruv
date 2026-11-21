@@ -233,7 +233,7 @@ fn eng_put(w: [i64], pool: i64, e: i64, l: i64, inout o: [i64], at: i64) -> i64 
 
 // One slot for each possible session plus the predicate count at position 0.
 pub fn index_collect(w: [i64], base: i64, ns: i64, inout progress: [i64]) -> [i64] ! alloc
-  requires 0 <= base && base <= 33554432 && 0 <= ns && ns <= 559240
+  requires 0 <= base && base <= 33554432 && 0 <= ns && ns <= 559240 && ns < len(progress)
   ensures len(result) >= 0
 {
   // Collect predicate IDs in session order, then use only the populated prefix.
@@ -241,18 +241,18 @@ pub fn index_collect(w: [i64], base: i64, ns: i64, inout progress: [i64]) -> [i6
   let mut nt: i64 = 0;
   let mut i: i64 = 0;
   while i < ns
-    invariant 0 <= i && i <= ns && ns <= 559240 && 0 <= nt && nt <= i && 0 <= base && base <= 33554432 && len(ids) == 3 * ns
+    invariant 0 <= i && i <= ns && ns <= 559240 && 0 <= nt && nt <= i && 0 <= base && base <= 33554432 && len(ids) == 3 * ns && ns < len(progress)
     decreases ns - i
   {
     let p: i64 = base + 30 * i;
     if !temp_true(w, p) {
       put_id(inout ids, 3 * nt, w, p);
-      crate::ent_u16::wr(inout progress, nt + 1, p);
+      progress[nt + 1] = p;
       nt = nt + 1;
     }
     i = i + 1;
   }
-  crate::ent_u16::wr(inout progress, 0, nt);
+  progress[0] = nt;
   return truncate(ids, 3 * nt);
 }
 
