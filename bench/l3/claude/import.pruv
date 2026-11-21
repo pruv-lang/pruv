@@ -292,9 +292,8 @@ pub fn tail_info(data: [u8], cut_before: bool) -> [i64] ! alloc
 //   I3(s)   0 <= prompt <= 32768, 0 <= reply <= budget <= 32768, 0 <= tools <= 1e15, flags 0/1
 //   I4(s)   ring ordering of the draft ordinals
 
-// An accepted entry contributes a model token (-1 for none) and an optional
-// replacement arena. Defect reports an internal accessor failure.
-pub enum Effect { Done(model_id: i64, grown: [u8]), Defect(kind: i64) }
+// An accepted entry contributes a model token (-1 for none). Defect reports an internal accessor failure.
+pub enum Effect { Done(model_id: i64), Defect(kind: i64) }
 enum Stamp { At(text: str), Bad(kind: i64) }
 
 // isoOf(entry.timestamp): the 24-byte canonical text, or "" when missing or unsupported.
@@ -317,36 +316,31 @@ fn stamp_of(doc: crate::json::JsonDocument) -> Stamp ! alloc
 // The content blocks of an assistant message in order: string-valued text blocks call answer, tool_use blocks
 // call tool (whatever their name/id), everything else is ignored. 0 on success, -4 on a defect. The collector
 // state keeps its current slot and ordinal; answer/tool only update that slot and its arena extent.
-struct BlockResult { code: i64, grown: [u8] }
-
-fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: str, inout st: [i64], inout sl: [i64], inout buf: [u8], limit: i64) -> BlockResult ! alloc
+fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: str, inout st: [i64], inout sl: [i64], inout buf: [u8], limit: i64) -> i64 ! alloc
   requires 0 <= c && c < len(doc.tape) / 6
   requires crate::turns::reply_room(st, sl, limit) && limit <= 1000000000000
   requires len(at) == 0 || len(at) == 24
   requires crate::turns::spans(st, sl, len(buf)) && 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
   requires crate::turns::fields(sl)
   requires forall s in 0..200: ((st[0] <= s ==> sl[1600 + s] == -1) && (st[0] > s ==> (0 <= sl[1600 + s] && sl[1600 + s] < st[0] && st[0] - 200 <= sl[1600 + s] && sl[1600 + s] % 200 == s)))
-  ensures len(buf) == len(old(buf))
-  ensures len(result.grown) == 0 ==> crate::turns::spans(st, sl, len(buf))
-  ensures len(result.grown) > 0 ==> crate::turns::spans(st, sl, len(result.grown))
+  ensures len(old(buf)) <= len(buf)
+  ensures crate::turns::spans(st, sl, len(buf))
   ensures st[4] <= limit
   ensures st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
   ensures crate::turns::fields(sl)
   ensures forall s in 0..200: ((st[0] <= s ==> sl[1600 + s] == -1) && (st[0] > s ==> (0 <= sl[1600 + s] && sl[1600 + s] < st[0] && st[0] - 200 <= sl[1600 + s] && sl[1600 + s] % 200 == s)))
 {
-  let mut grown: [u8] = alloc(0, 0);
-  if len(doc.tape) > 6291456 { return BlockResult { code: -4, grown: move grown }; }
+  if len(doc.tape) > 6291456 { return -4; }
   let stop: i64 = doc.tape[6 * c + 3];
-  if stop <= c || stop > len(doc.tape) / 6 { return BlockResult { code: -4, grown: move grown }; }
+  if stop <= c || stop > len(doc.tape) / 6 { return -4; }
   let mut idle: bool = false;
   let mut j: i64 = c + 1;
   while j < stop
     invariant 0 <= c && c < j && j <= stop && stop <= len(doc.tape) / 6 && len(doc.tape) <= 6291456
     invariant crate::turns::reply_room(st, sl, limit) && limit <= 1000000000000
     invariant len(at) == 0 || len(at) == 24
-    invariant len(buf) == len(old(buf))
-    invariant len(grown) == 0 ==> crate::turns::spans(st, sl, len(buf))
-    invariant len(grown) > 0 ==> crate::turns::spans(st, sl, len(grown))
+    invariant len(old(buf)) <= len(buf)
+    invariant crate::turns::spans(st, sl, len(buf))
     invariant 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
     invariant st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
     invariant crate::turns::fields(sl)
@@ -354,40 +348,35 @@ fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: str, inout st: [i64
     decreases stop - j
   {
     let next: i64 = doc.tape[6 * j + 3];
-    if next <= j || next > stop || doc.tape[6 * j + 4] != c { return BlockResult { code: -4, grown: move grown }; }
+    if next <= j || next > stop || doc.tape[6 * j + 4] != c { return -4; }
     let bk: i64 = crate::access::kind(doc, j);
-    if bk < 0 { return BlockResult { code: -4, grown: move grown }; }
+    if bk < 0 { return -4; }
     if bk == 6 {
       let ty: i64 = crate::entry::string_id(doc, j, "type");
-      if ty < -1 { return BlockResult { code: -4, grown: move grown }; }
+      if ty < -1 { return -4; }
       if ty >= 0 {
         let txt: i64 = crate::access::string_is(doc, ty, "text");
-        if txt < 0 { return BlockResult { code: -4, grown: move grown }; }
+        if txt < 0 { return -4; }
         if txt == 1 {
           let tx: crate::entry::Field = crate::entry::string_field(doc, j, "text");
           match tx {
             crate::entry::Field::Value(x) => {
-              if len(x) > 50331648 { return BlockResult { code: -4, grown: move grown }; }
-              if len(grown) > 0 {
-                let next_buf: [u8] = crate::turns::answer(inout st, inout sl, inout grown, x, at, limit);
-                if len(next_buf) > 0 { grown = move next_buf; }
-              } else {
-                grown = crate::turns::answer(inout st, inout sl, inout buf, x, at, limit);
-              }
+              if len(x) > 50331648 { return -4; }
+              crate::turns::answer(inout st, inout sl, inout buf, x, at, limit);
             }
             crate::entry::Field::Missing => { idle = true; }
-            crate::entry::Field::Defect(e) => { return BlockResult { code: -4, grown: move grown }; }
+            crate::entry::Field::Defect(e) => { return -4; }
           }
         } else {
           let tu: i64 = crate::access::string_is(doc, ty, "tool_use");
-          if tu < 0 { return BlockResult { code: -4, grown: move grown }; }
+          if tu < 0 { return -4; }
           if tu == 1 { crate::turns::tool(inout st, inout sl); }
         }
       } else { idle = true; }
     }
     j = next;
   }
-  return BlockResult { code: 0, grown: move grown };
+  return 0;
 }
 
 // The loop body of claude.ts readClaude for one parsed object (the root of doc):
@@ -401,15 +390,13 @@ pub fn consume_entry(doc: crate::json::JsonDocument, ty: i64, inout st: [i64], i
   requires crate::turns::spans(st, sl, len(buf)) && 0 <= st[0] && st[0] < 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
   requires crate::turns::fields(sl) && st[4] <= 1000000000000 - 32792
   requires forall s in 0..200: ((st[0] <= s ==> sl[1600 + s] == -1) && (st[0] > s ==> (0 <= sl[1600 + s] && sl[1600 + s] < st[0] && st[0] - 200 <= sl[1600 + s] && sl[1600 + s] % 200 == s)))
-  ensures len(buf) == len(old(buf))
-  ensures (is_variant(result, Effect::Done) && len(variant_field(result, Effect::Done, grown)) == 0) ==> crate::turns::spans(st, sl, len(buf))
-  ensures (is_variant(result, Effect::Done) && len(variant_field(result, Effect::Done, grown)) > 0) ==> crate::turns::spans(st, sl, len(variant_field(result, Effect::Done, grown)))
+  ensures len(old(buf)) <= len(buf)
+  ensures crate::turns::spans(st, sl, len(buf))
   ensures st[4] <= old(st)[4] + 32792
   ensures old(st)[0] <= st[0] && st[0] <= old(st)[0] + 1 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
   ensures crate::turns::fields(sl)
   ensures forall s in 0..200: ((st[0] <= s ==> sl[1600 + s] == -1) && (st[0] > s ==> (0 <= sl[1600 + s] && sl[1600 + s] < st[0] && st[0] - 200 <= sl[1600 + s] && sl[1600 + s] % 200 == s)))
 {
-  let mut grown: [u8] = alloc(0, 0);
   let root: i64 = crate::access::root(doc);
   // the entry's timestamp (absent = "")
   let mut at: str = "";
@@ -420,7 +407,7 @@ pub fn consume_entry(doc: crate::json::JsonDocument, ty: i64, inout st: [i64], i
   }
   if len(at) != 0 && len(at) != 24 { return Effect::Defect(-4); }
   // 2. human prompt
-  if ty == -1 { return Effect::Done(-1, move grown); }
+  if ty == -1 { return Effect::Done(-1); }
   if ty < 0 { return Effect::Defect(ty); }
   let user: i64 = crate::access::string_is(doc, ty, "user");
   if user < 0 { return Effect::Defect(user); }
@@ -429,22 +416,22 @@ pub fn consume_entry(doc: crate::json::JsonDocument, ty: i64, inout st: [i64], i
     match h {
       crate::entry::Field::Value(p) => {
         if len(p) > 50331648 { return Effect::Defect(-4); }
-        grown = crate::turns::begin(inout st, inout sl, inout buf, p, at);
-        return Effect::Done(-1, move grown);
+        crate::turns::begin(inout st, inout sl, inout buf, p, at);
+        return Effect::Done(-1);
       }
-      crate::entry::Field::Missing => { return Effect::Done(-1, move grown); }
+      crate::entry::Field::Missing => { return Effect::Done(-1); }
       crate::entry::Field::Defect(e) => { return Effect::Defect(e); }
     }
   }
   // 3. assistant entries
   let asst: i64 = crate::access::string_is(doc, ty, "assistant");
   if asst < 0 { return Effect::Defect(asst); }
-  if asst == 0 { return Effect::Done(-1, move grown); }
+  if asst == 0 { return Effect::Done(-1); }
   let side: i64 = crate::entry::is_true(doc, root, "isSidechain");
   if side < 0 { return Effect::Defect(side); }
-  if side == 1 { return Effect::Done(-1, move grown); }
+  if side == 1 { return Effect::Done(-1); }
   let msg: i64 = crate::entry::object_field(doc, root, "message");
-  if msg == -1 { return Effect::Done(-1, move grown); }
+  if msg == -1 { return Effect::Done(-1); }
   if msg < 0 { return Effect::Defect(msg); }
   let mut model_id: i64 = crate::entry::string_id(doc, msg, "model");
   if model_id < -1 { return Effect::Defect(model_id); }
@@ -454,12 +441,12 @@ pub fn consume_entry(doc: crate::json::JsonDocument, ty: i64, inout st: [i64], i
     if synthetic == 1 {
       let api: i64 = crate::entry::is_true(doc, root, "isApiErrorMessage");
       if api < 0 { return Effect::Defect(api); }
-      if api != 1 { return Effect::Done(-1, move grown); }
+      if api != 1 { return Effect::Done(-1); }
       model_id = -1;
     }
   }
   let c: i64 = crate::access::field(doc, msg, "content");
-  if c == -1 || c == -2 { return Effect::Done(model_id, move grown); }
+  if c == -1 || c == -2 { return Effect::Done(model_id); }
   if c < 0 { return Effect::Defect(c); }
   let k: i64 = crate::access::kind(doc, c);
   if k < 0 { return Effect::Defect(k); }
@@ -470,17 +457,16 @@ pub fn consume_entry(doc: crate::json::JsonDocument, ty: i64, inout st: [i64], i
       crate::jstr::Text::Decoded(v) => {
         if len(v) > 50331648 { return Effect::Defect(-4); }
         let limit: i64 = st[4] + 32792;
-        grown = crate::turns::answer(inout st, inout sl, inout buf, v, at, limit);
+        crate::turns::answer(inout st, inout sl, inout buf, v, at, limit);
       }
     }
-    return Effect::Done(model_id, move grown);
+    return Effect::Done(model_id);
   }
-  if k != 5 { return Effect::Done(model_id, move grown); }
+  if k != 5 { return Effect::Done(model_id); }
   let limit: i64 = st[4] + 32792;
-  let r: BlockResult = answer_blocks(doc, c, at, inout st, inout sl, inout buf, limit);
-  if r.code < 0 { return Effect::Defect(r.code); }
-  grown = copy(r.grown);
-  return Effect::Done(model_id, move grown);
+  let code: i64 = answer_blocks(doc, c, at, inout st, inout sl, inout buf, limit);
+  if code < 0 { return Effect::Defect(code); }
+  return Effect::Done(model_id);
 }
 
 // claude.ts readClaude over at most 8388608 bytes of the file end; cut_before: the window starts after offset 0.
@@ -533,7 +519,7 @@ pub fn read_window(data: [u8], cut_before: bool) -> [i64] ! alloc
             }
             let eff: Effect = consume_entry(d, ty, inout st, inout sl, inout buf);
             match eff {
-              Effect::Done(model_id, replacement) => {
+              Effect::Done(model_id) => {
                 if model_id >= 0 {
                   let same: i64 = crate::access::string_is(d, model_id, model);
                   if same < 0 { return fail_at(start, end, 0); }
@@ -548,7 +534,6 @@ pub fn read_window(data: [u8], cut_before: bool) -> [i64] ! alloc
                     }
                   }
                 }
-                if len(replacement) > 0 { buf = copy(replacement); }
                 if st[0] > 200 { crate::turns::reclaim(inout st, inout sl, inout buf); }
               }
               Effect::Defect(kind) => { return fail_at(start, end, 0); }

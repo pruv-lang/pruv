@@ -245,11 +245,12 @@ def main():
     ap.add_argument('--pairs', default='py/rust,py/llvm,rs/rust,rs/llvm')
     ap.add_argument('--quick', action='store_true', help='one fresh-process round, rs/rust only')
     ap.add_argument('--out', type=Path, default=DEFAULT_OUT, help='path for perf_cells.json')
+    ap.add_argument('--rounds', type=int, default=7, help='fresh-process rounds per cell (15 on a loaded host)')
     args = ap.parse_args()
     inputs = [(name, data) for name, data in build_inputs() if args.only in name]
     if not inputs:
         ap.error('--only matched no inputs')
-    rounds = 1 if args.quick else 7
+    rounds = 1 if args.quick else args.rounds
     pairs = ['rs/rust'] if args.quick else args.pairs.split(',')
     if not all(p in ('py/rust', 'py/llvm', 'rs/rust', 'rs/llvm') for p in pairs):
         ap.error('unknown compiler/backend pair')
