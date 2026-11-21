@@ -1,4 +1,4 @@
-"""Mutant runner for the L3-9 request handlers: each mutant M01..M16 (spec section 11) is a small edit of the Pruv sources
+"""Mutant runner for the L3-9 request handlers: each mutant M01..M17 is a small edit of the Pruv sources
 (or, for the two host-side rules, of the Rust host leaf), built on rs/rust only.
 
   python3 q_mutants.py [--only M08,M09] [--jobs N]
@@ -7,9 +7,10 @@ For a mutant: copy bench/l3/req/*.pruv and bench/l3/lib to work/mut/Mxx/ (and, f
 leaf.rs), apply the (file, old, new) edits (every old text must occur exactly once; a Pruv site also carries a
 `// MUTANT Mxx:` marker comment in the product source), verify + compile with the rs compiler, link harness.rs, run the killer
 fixture (the fixture whose `killer` key is the mutant id) through the mutant harness and compare with the pinned-TypeScript oracle
-using the piece's own compare.compare_batch.
-Classes: killed (a killer is unexplained-different, not by crash / InternalInvariant), verification-rejected (pruvc verify fails),
-survived, site-missing (old text not found / no killer fixture), build-error (compile or link failed), crash (runner failed or
+using the piece's own compare.compare_batch. Probe mutants instead link forge.rs and check whether the core still refuses forged packets.
+Classes: killed (an unexplained fixture difference excluding crash / InternalInvariant, or a forgery no longer refused),
+verification-rejected (pruvc verify fails), survived, site-missing (old text not found / no killer fixture or probe),
+build-error (compile or link failed), crash (runner failed or
 only crash / InternalInvariant answers). Exit 0 only if every selected mutant is killed or verification-rejected.
 Output: work/mut/report.json and a table. M10 and M11 only exist in the Rust host (the window timer length and the thrown-name
 classification are host duties), so they edit the host leaf copy."""
@@ -24,8 +25,9 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 import compare
+import forge_test
 import test_impl
-from common import HERE, load_all, strip_case
+from common import HERE, load_all
 from oracle import run_oracle
 
 MUT = HERE / 'work' / 'mut'
@@ -106,7 +108,12 @@ MUTANTS = {
              '    if u79 >= 55296 && u79 <= 56319 { cut = 79; }\n')],
     # the thread slot name ignores the account
     'M16': [('req_fill.pruv', '  if len(acc) > 0 { return crate::ent_u16::cat(', '  if false && len(acc) > 0 { return crate::ent_u16::cat(')],
+    # an extra pool word passes the shared core length check
+    'M17': [('lib/ent_wire.pruv', '  if l0 != 2 + (nb + 6) / 7 { return false; }',
+             '  if l0 < 2 + (nb + 6) / 7 { return false; }')],
 }
+
+PROBES = {'M17': ['F62', 'F64']}
 
 VERIFY_WORDS = re.compile(r'verif|prove|proof|ensures|requires|invariant|decreases|overflow|out of bounds|assert|obligation|termination', re.I)
 
@@ -131,10 +138,12 @@ def apply(mid, d):
 def sites(mid):
     """['file:line', ...] of the `// MUTANT Mxx:` markers in the product sources (host mutants have none: leaf.rs is read-only)."""
     out = []
-    for f in sorted(HERE.glob('*.pruv')):
+    sources = {f.name: f for f in HERE.glob('*.pruv')}
+    sources.update({name: HERE.parent / name for name, _, _ in MUTANTS[mid] if name.startswith('lib/')})
+    for name, f in sorted(sources.items()):
         for i, line in enumerate(f.read_text(encoding='utf-8').split('\n'), 1):
             if f'// MUTANT {mid}:' in line:
-                out.append(f'{f.name}:{i}')
+                out.append(f'{name}:{i}')
     return out
 
 
@@ -176,6 +185,26 @@ def build_host_copy(d):
     return deps, max(libs, key=lambda p: p.stat().st_mtime)
 
 
+def run_probes(probes, exe):
+    accepted, other = [], []
+    for probe in probes:
+        if probe == 'F64':
+            v = forge_test.begin_pool('O01', forge_test.extra_pool_word, harness=exe, verdict=True)
+        else:
+            _, case_id, step, mutate, _ = next(row for row in forge_test.F if row[0] == probe)
+            v = forge_test.core_refused(case_id, step, mutate, strict=True, harness=exe, verdict=True)
+        if v == 'accepted':
+            accepted.append(probe)
+        elif v != 'refused':
+            other.append(probe)
+    # only a well-formed core packet that accepts the forgery counts as a kill; malformed core output is 'other'
+    if accepted:
+        return 'killed', 'core accepted ' + ', '.join(accepted)
+    if other:
+        return 'other', 'malformed core output on ' + ', '.join(other)
+    return 'survived', 'core refused all probes'
+
+
 def run_one(mid, g, host, cases, oracle):
     d = MUT / mid
     if d.exists():
@@ -190,9 +219,10 @@ def run_one(mid, g, host, cases, oracle):
     if why:
         rec.update(status='site-missing', detail=why)
         return rec
+    probes = PROBES.get(mid, [])
     idx = [i for i, c in enumerate(cases) if c.get('killer') == mid]
-    rec['killers'] = [cases[i]['id'] for i in idx]
-    if not idx:
+    rec['killers'] = probes or [cases[i]['id'] for i in idx]
+    if not idx and not probes:
         rec.update(status='site-missing', detail='no killer fixture carries this mutant id')
         return rec
     mine = [cases[i] for i in idx]
@@ -206,11 +236,23 @@ def run_one(mid, g, host, cases, oracle):
             return rec
         deps, lib = build_host_copy(d) if any(f == LEAF for f, _, _ in MUTANTS[mid]) else host
         main = out / 'main.rs'
-        main.write_text((HERE / 'harness.rs').read_text(encoding='utf-8').replace('@SOL@', built['rs']), encoding='utf-8')
-        exe = d / 'harness'
-        test_impl.sh([g.RUSTC, '-O', '--edition', '2021', main, '-o', exe, '--extern', f'req_host={lib}', '-L', f'dependency={deps}'])
+        source = 'forge.rs' if probes else 'harness.rs'
+        main.write_text((HERE / source).read_text(encoding='utf-8').replace('@SOL@', built['rs']), encoding='utf-8')
+        exe = d / ('forge_harness' if probes else 'harness')
+        cmd = [g.RUSTC, '-O', '--edition', '2021', main, '-o', exe, '--extern', f'req_host={lib}']
+        if probes:
+            serde_json = max(deps.glob('libserde_json-*.rlib'), key=lambda p: p.stat().st_mtime)
+            cmd.extend(['--extern', f'serde_json={serde_json}'])
+        test_impl.sh(cmd + ['-L', f'dependency={deps}'])
     except Exception as exc:
         rec.update(status='build-error', detail=str(exc).replace('\n', ' ')[:400])
+        return rec
+    if probes:
+        try:
+            status, detail = run_probes(probes, exe)
+        except Exception as exc:
+            status, detail = 'crash', str(exc)[:400]
+        rec.update(status=status, detail=detail)
         return rec
     got = test_impl.run_runner(exe, mine)
     if isinstance(got, BaseException):
@@ -246,8 +288,9 @@ def main(argv=None):
         if unknown:
             raise SystemExit('unknown mutant ' + ','.join(unknown))
         ids = sorted(want)
-    cases = [c for c in load_all() if c.get('killer') in ids]
-    oracle = run_oracle(cases)
+    fixture_ids = set(ids).difference(PROBES)
+    cases = [c for c in load_all() if c.get('killer') in fixture_ids] if fixture_ids else []
+    oracle = run_oracle(cases) if cases else []
     g = test_impl.configure()
     host = test_impl.build_host()
     MUT.mkdir(parents=True, exist_ok=True)

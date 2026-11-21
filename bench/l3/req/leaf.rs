@@ -566,8 +566,10 @@ impl Leaf {
 
     // The host calls of the list and open handlers (ck 3). `pool`, `rec`, `wk`, `rows` are sections 0, 1, 4, 3 of the await
     // packet and `call` is its section 5. Returns (completion pool, completion record, completion section 5).
-    pub fn serve_call(&mut self, pool: &[i64], rec: &[i64], wk: &[i64], rows: &[i64], call: &[i64], now: i64) -> Result<(Vec<i64>, Vec<i64>, Vec<i64>), String> {
+    pub fn serve_call(&mut self, pool_sec: &[i64], rec: &[i64], wk: &[i64], rows: &[i64], call: &[i64], now: i64) -> Result<(Vec<i64>, Vec<i64>, Vec<i64>), String> {
         let code = *call.first().ok_or("internal: empty host call")?;
+        // D-DB20-2: the packet pool is decoded at the first string read and reused (refusal order as before).
+        let pool = &LazyPool::new(pool_sec);
         let arg = |k: usize| -> Result<i64, String> { call.get(k).copied().ok_or("internal: host call argument missing".to_string()) };
         let cur = self.cur;
         let mut enc = Enc::new();
@@ -1236,7 +1238,7 @@ impl Leaf {
     }
 
     // Host call 27: opening.has, the busy check, opening.add, the listener and timer, the read options.
-    fn open_acquire(&mut self, pool: &[i64], rec: &[i64], wk: &[i64], rows: &[i64], call: &[i64]) -> Result<(Vec<i64>, Vec<i64>, Vec<i64>), String> {
+    fn open_acquire(&mut self, pool: &LazyPool<'_>, rec: &[i64], wk: &[i64], rows: &[i64], call: &[i64]) -> Result<(Vec<i64>, Vec<i64>, Vec<i64>), String> {
         let cur = self.cur;
         let info = self.info()?;
         if wk.len() != 54 || rec.len() < 39 {
@@ -1326,7 +1328,7 @@ impl Leaf {
     }
 
     // The value of the slot at q of the call words (the inverse of oj_slot); an absent slot reads as undefined.
-    fn slot_oj(&self, pool: &[i64], call: &[i64], q: usize) -> Result<Oj, String> {
+    fn slot_oj(&self, pool: &LazyPool<'_>, call: &[i64], q: usize) -> Result<Oj, String> {
         let w = |k: usize| call.get(q + k).copied().ok_or("internal: recipe slot out of range".to_string());
         Ok(match w(0)? {
             0 | 10 => oj_undef(),
@@ -1345,14 +1347,14 @@ impl Leaf {
     }
 
     // The units of the string slot at q of the call words.
-    fn slot_units(pool: &[i64], call: &[i64], q: usize) -> Result<Vec<u16>, String> {
+    fn slot_units(pool: &LazyPool<'_>, call: &[i64], q: usize) -> Result<Vec<u16>, String> {
         if call.get(q).copied() != Some(6) {
             return Err("internal: recipe string slot expected".to_string());
         }
         units_at(pool, call[q + 1], call[q + 2])
     }
 
-    fn open_create(&mut self, pool: &[i64], rec: &[i64], wk: &[i64], rows: &[i64], call: &[i64], now: i64) -> Result<(Vec<i64>, Vec<i64>, Vec<i64>), String> {
+    fn open_create(&mut self, pool: &LazyPool<'_>, rec: &[i64], wk: &[i64], rows: &[i64], call: &[i64], now: i64) -> Result<(Vec<i64>, Vec<i64>, Vec<i64>), String> {
         let cur = self.cur;
         let (release, at) = Self::parse_eb(call, 2)?;
         let ext_id = *call.get(at + 1).ok_or("internal: create call without a reference")?;
@@ -1599,7 +1601,7 @@ impl Leaf {
 
     // Host call 34: the grokHomeFor dependency (the account Pruv decided on, undefined when none). The ok value is kept as the
     // facts the copy needs; a rejection is a thrown reply.
-    fn grok_home(&mut self, pool: &[i64], call: &[i64]) -> Result<(Vec<i64>, Vec<i64>, Vec<i64>), String> {
+    fn grok_home(&mut self, pool: &LazyPool<'_>, call: &[i64]) -> Result<(Vec<i64>, Vec<i64>, Vec<i64>), String> {
         let cur = self.cur;
         let acct = match call.get(2) {
             Some(6) => jstr(&units_at(pool, call[3], call[4])?),
@@ -1664,7 +1666,7 @@ impl Leaf {
     // Host call 35: the copyGrokSession dependency (the world's copy entry), with the verify callback it runs (the loadCheck
     // dependency under a new timed window). A verify failure other than AbortError is wrapped the way the real copy wraps it.
     // The copy entry and the loadCheck entry may be deferred; the reply is then given when they settle.
-    fn grok_copy(&mut self, pool: &[i64], rec: &[i64], wk: &[i64]) -> Result<Step, String> {
+    fn grok_copy(&mut self, pool: &LazyPool<'_>, rec: &[i64], wk: &[i64]) -> Result<Step, String> {
         let cur = self.cur;
         let info = self.info()?;
         let (source, ghome) = match self.opens.get(&cur) {

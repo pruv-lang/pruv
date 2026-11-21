@@ -826,6 +826,58 @@ pub fn encode_pool(s: [i64]) -> [i64] ! alloc
   return o;
 }
 
+// DB22 (D-DB18-3 P3): encode UTF-16 units straight into an existing pool, with the same bytes, separator and header
+// as append_span(o, dest, encode_pool(s), 0, 0, pool_bytes(encode_pool(s), 0), len(s)), without the temp pool.
+// The equivalence holds for len(s) <= 16777216 (units past that are not encoded); the only caller (ent_bound) caps
+// every key at 16000000 units.
+pub fn append_units(inout o: [i64], dest: i64, s: [i64]) -> i64
+  requires 0 <= dest && dest <= 2147483647
+  ensures len(o) == len(old(o)) && 0 <= result && result <= 1073741824
+{
+  let nb: i64 = pool_bytes(o, dest);
+  let n: i64 = crate::ent_u16::clamp(len(s), 16777216);
+  let kb: i64 = slot_len_of(s);
+  let mut base: i64 = nb;
+  if n > 0 && ends_high(o, dest, nb) && low(crate::ent_u16::rd(s, 0)) { base = nb + 1; }
+  if kb > 1073741823 - base { return nb; }
+  if base > nb { emit(inout o, dest, nb, 255); }
+  let mut i: i64 = 0;
+  let mut k: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n + 1 && n <= 16777216 && 0 <= k && k <= 3 * i && 0 <= base && base <= 1073741824 && 0 <= dest && dest <= 2147483647 && len(o) == len(old(o))
+    decreases n - i
+  {
+    let c: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(s, i), 65535);
+    let width: i64 = unit_width(s, i, n);
+    let at: i64 = base + k;
+    if width == 1 { emit(inout o, dest, at, crate::ent_u16::clamp(c, 127)); }
+    if width == 2 {
+      emit(inout o, dest, at, 192 + (c / 64) % 32);
+      emit(inout o, dest, at + 1, 128 + c % 64);
+    }
+    if width == 3 {
+      emit(inout o, dest, at, 224 + c / 4096);
+      emit(inout o, dest, at + 1, 128 + (c / 64) % 64);
+      emit(inout o, dest, at + 2, 128 + c % 64);
+    }
+    if width == 4 {
+      let d: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(s, i + 1), 65535);
+      let cp: i64 = 65536 + crate::ent_u16::clamp(c - 55296, 1023) * 1024 + crate::ent_u16::clamp(d - 56320, 1023);
+      emit(inout o, dest, at, 240 + cp / 262144);
+      emit(inout o, dest, at + 1, 128 + (cp / 4096) % 64);
+      emit(inout o, dest, at + 2, 128 + (cp / 64) % 64);
+      emit(inout o, dest, at + 3, 128 + cp % 64);
+      i = i + 1;
+    }
+    i = i + 1;
+    k = k + width;
+  }
+  let nu: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(o, dest), 1073741823);
+  crate::ent_u16::wr(inout o, dest, nu + crate::ent_u16::clamp(crate::ent_u16::clamp(len(s), 1073741823), kb));
+  crate::ent_u16::wr(inout o, dest + 1, base + kb);
+  return base;
+}
+
 pub fn pool_base(a: [i64], b: [i64]) -> i64
   ensures 0 <= result && result <= 1073741824
 {
@@ -880,6 +932,30 @@ pub fn pstr_len(pool: [i64], w: [i64], p: i64) -> i64
   ensures 0 <= result && result <= 1073741823
 {
   return pstr_len_at(pool, 0, w, p);
+}
+
+// DB22 (D-DB18-3 P5): read a string slot in form-aligned parts so a caller that needs only a head of the text does
+// not decode the whole span. Parts that start at form boundaries decode to the same units as the whole span.
+pub fn pstr_part_bytes(w: [i64], p: i64) -> i64
+  ensures 0 <= result && result <= 1073741823
+{
+  if tag_at(w, p) != 6 { return 0; }
+  return slot_bytes(w, p);
+}
+
+pub fn pstr_chunk_bytes(pool: [i64], w: [i64], p: i64, from: i64, limit: i64) -> i64
+  ensures 0 <= result && result <= 1073741823
+{
+  if tag_at(w, p) != 6 { return 0; }
+  let at: i64 = crate::ent_u16::clamp(from, 1073741823);
+  return prefix_bytes(pool, 0, slot_off(w, p) + at, slot_bytes(w, p) - at, limit);
+}
+
+pub fn pstr_part(pool: [i64], w: [i64], p: i64, from: i64, n: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  if tag_at(w, p) != 6 { return crate::ent_u16::empty(); }
+  return decode_span(pool, 0, slot_off(w, p) + crate::ent_u16::clamp(from, 1073741823), crate::ent_u16::clamp(n, 1073741823));
 }
 
 pub fn pstr_units(pool: [i64], w: [i64], p: i64) -> [i64] ! alloc

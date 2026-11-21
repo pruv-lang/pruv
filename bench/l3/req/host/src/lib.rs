@@ -6,13 +6,28 @@ mod eh {
     include!("../../../entry/host.rs");
     include!("../../leaf.rs");
 
-    fn units_at(pool: &[i64], off: i64, len: i64) -> Result<Vec<u16>, String> {
-        decode_pool(pool).and_then(|pool| pool.string_units(off, len)).map_err(he)
+    // D-DB20-2: the packet pool, decoded at the first string read and then reused for the rest of the packet.
+    struct LazyPool<'a> {
+        sec: &'a [i64],
+        cell: std::cell::OnceCell<Result<Pool<'a>, String>>,
+    }
+
+    impl<'a> LazyPool<'a> {
+        fn new(sec: &'a [i64]) -> Self {
+            LazyPool { sec, cell: std::cell::OnceCell::new() }
+        }
+    }
+
+    fn units_at(pool: &LazyPool<'_>, off: i64, len: i64) -> Result<Vec<u16>, String> {
+        match pool.cell.get_or_init(|| decode_pool(pool.sec).map_err(he)) {
+            Ok(p) => p.string_units(off, len).map_err(he),
+            Err(e) => Err(e.clone()),
+        }
     }
 
     pub(super) fn folder_units(pool: &[i64], rec: &[i64]) -> Result<Vec<u16>, String> {
         let units = match rec.get(27..30) {
-            Some([6, off, len]) => units_at(pool, *off, *len).ok(),
+            Some([6, off, len]) => units_at(&LazyPool::new(pool), *off, *len).ok(),
             _ => None,
         };
         units.ok_or_else(|| "internal: checkFolder await without a string folder slot".to_string())

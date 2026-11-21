@@ -144,24 +144,51 @@ pub fn pack(pool: [i64], w: [i64], from: i64, count: i64) -> [i64] ! alloc
   }
   if tot >= 1073741823 { return crate::ent_u16::empty(); }
   let hd: i64 = 3 * count;
-  let mut compact: [i64] = alloc(crate::ent_value::pool_capacity(tot), 0);
+  // DB22 (D-DB18-3 P4): the compact pool is built in place after the slots, then cut to its exact length
+  // (no finish slice and no slots + pool concatenation).
+  let words: i64 = crate::ent_value::pool_capacity(tot);
+  let mut o: [i64] = alloc(hd + 1 + words, 0);
   let mut slots: [i64] = alloc(hd + 1, 0);
   k = 0;
   while k < count
-    invariant 0 <= k && k <= count && count <= 33554432 && 0 <= from && from <= 850000000
+    invariant 0 <= k && k <= count && count <= 33554432 && 0 <= from && from <= 850000000 && hd == 3 * count
     decreases count - k
   {
     let q: i64 = from + 3 * k;
     if crate::ent_u16::rd(w, q) == 6 {
-      crate::ent_value::append_slot(inout compact, 0, pool, 0, w, q, inout slots, 3 * k);
+      crate::ent_value::append_slot(inout o, hd + 1, pool, 0, w, q, inout slots, 3 * k);
     } else {
       crate::req_value::copy_slot(inout slots, 3 * k, w, q);
     }
     k = k + 1;
   }
-  let packed: [i64] = crate::ent_value::pool_finish(compact, 0);
-  crate::ent_value::packed_pool_write_size(inout slots, hd, len(packed));
-  return crate::ent_u16::cat(slots, packed);
+  let pw: i64 = crate::ent_value::pool_capacity(crate::ent_value::pool_bytes(o, hd + 1));
+  crate::ent_value::packed_pool_write_size(inout slots, hd, pw);
+  let a: i64 = crate::ent_u16::put_range(inout o, 0, slots, 0, hd);
+  crate::ent_u16::wr(inout o, hd, pw);
+  if hd + 1 + pw < len(o) { o = truncate(o, hd + 1 + pw); }
+  return o;
+}
+
+// An upper bound of len(pack(pool, w, from, count)): the slots, the size word and the pool words at one byte more
+// per string slot (the most a lone-surrogate separator adds).
+fn pack_bound(w: [i64], from: i64, count: i64) -> i64
+  requires 0 <= from && from <= 850000000 && 0 <= count && count <= 33554432
+  ensures 0 <= result && result <= 1073741823
+{
+  let mut tot: i64 = 0;
+  let mut k: i64 = 0;
+  while k < count
+    invariant 0 <= k && k <= count && count <= 33554432 && 0 <= from && from <= 850000000 && 0 <= tot && tot <= 1073741823
+    decreases count - k
+  {
+    let p: i64 = from + 3 * k;
+    if crate::ent_u16::rd(w, p) == 6 {
+      tot = crate::ent_u16::clamp(tot + crate::ent_value::slot_bytes(w, p) + 1, 1073741823);
+    }
+    k = k + 1;
+  }
+  return crate::ent_u16::clamp(3 * count + 1 + crate::ent_value::pool_capacity(tot), 1073741823);
 }
 
 // The storage op 60 that creates block B for the m items of the full working set w (over pool) and the T pack tp:
@@ -172,18 +199,35 @@ pub fn blk(pool: [i64], w: [i64], m: i64, tp: [i64]) -> [i64] ! alloc
 {
   let lt: i64 = crate::ent_u16::clamp(len(tp), 1073741823);
   let mut ln: [i64] = crate::ent_u16::zeros(m);
-  let mut tot: i64 = lt;
+  // DB22 (D-DB18-3 P4): every record pack is built once. The block is allocated at an upper bound (exact slots,
+  // pool words at one byte per slot more) and cut to the written length; the bound falls back to two passes only
+  // when it reaches the 2^30 limit, where the exact total decides.
+  let mut ub: i64 = lt;
   let mut k: i64 = 0;
   while k < m
-    invariant 0 <= k && k <= m && m <= 16777216 && 0 <= tot && tot <= 1073741823
+    invariant 0 <= k && k <= m && m <= 16777216 && 0 <= ub && ub <= 1073741823
     decreases m - k
   {
-    let l: i64 = crate::ent_u16::clamp(len(pack(pool, w, ib(k), 10)) + 3, 1073741823);
-    crate::ent_u16::wr(inout ln, k, l);
-    tot = crate::ent_u16::clamp(tot + l, 1073741823);
+    ub = crate::ent_u16::clamp(ub + pack_bound(w, ib(k), 10) + 3, 1073741823);
     k = k + 1;
   }
-  if tot >= 1073741823 { return crate::ent_u16::empty(); }
+  let one_pass: bool = ub < 1073741823;
+  let mut tot: i64 = lt;
+  if !one_pass {
+    k = 0;
+    while k < m
+      invariant 0 <= k && k <= m && m <= 16777216 && 0 <= tot && tot <= 1073741823
+      decreases m - k
+    {
+      let l: i64 = crate::ent_u16::clamp(len(pack(pool, w, ib(k), 10)) + 3, 1073741823);
+      crate::ent_u16::wr(inout ln, k, l);
+      tot = crate::ent_u16::clamp(tot + l, 1073741823);
+      k = k + 1;
+    }
+    if tot >= 1073741823 { return crate::ent_u16::empty(); }
+  } else {
+    tot = ub;
+  }
   let mut o: [i64] = crate::ent_u16::zeros(8 + tot);
   crate::ent_u16::wr(inout o, 1, lt);
   crate::ent_u16::wr(inout o, 2, crate::req_world::dig(tp, -1));
@@ -197,10 +241,13 @@ pub fn blk(pool: [i64], w: [i64], m: i64, tp: [i64]) -> [i64] ! alloc
     decreases m - k
   {
     crate::ent_u16::wr(inout off, k, at);
-    let b: i64 = crate::ent_u16::put_all(inout o, 8 + at, pack(pool, w, ib(k), 10));
+    let pk: [i64] = pack(pool, w, ib(k), 10);
+    if one_pass { crate::ent_u16::wr(inout ln, k, crate::ent_u16::clamp(len(pk) + 3, 1073741823)); }
+    let b: i64 = crate::ent_u16::put_all(inout o, 8 + at, pk);
     at = crate::ent_u16::clamp(at + crate::ent_u16::clamp(crate::ent_u16::rd(ln, k), 1073741823), 1073741823);
     k = k + 1;
   }
+  if one_pass && 8 + at < len(o) { o = truncate(o, 8 + at); }
   // backward: every record ends with the place and digest of the next one
   let mut noff: i64 = 0;
   let mut nlen: i64 = 0;

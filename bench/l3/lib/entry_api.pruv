@@ -108,7 +108,7 @@ fn index_begin_checked(inout progress: [i64], blob: [i64], raw: i64) -> [i64] ! 
   let ns: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(blob, rec + 2), 559240);
   if len(progress) <= ns { return bad_pkt(blob, 1); }
   let base: i64 = crate::ent_packet::sec_start(blob, sec);
-  let tab: [i64] = crate::ent_bound::index_collect(blob, base, ns, inout progress);
+  let mut tab: [i64] = crate::ent_bound::index_collect(blob, base, ns, inout progress);
   let nt: i64 = crate::ent_u16::rd(progress, 0);
   let id: i64 = crate::ent_u16::rd(blob, 2);
   if nt == 0 {
@@ -137,15 +137,20 @@ fn index_begin_checked(inout progress: [i64], blob: [i64], raw: i64) -> [i64] ! 
     i = i + 3;
   }
   let mut strings: [i64] = crate::ent_u16::empty();
-  let mut ids: [i64] = copy(tab);
+  // DB22 (D-DB18-3 P2): rewrite the ID table slots in place instead of cloning it (same steps as append_slot).
   if units <= pl {
     let mut compact: [i64] = alloc(crate::ent_value::pool_capacity(4 * units), 0);
     let mut j: i64 = 0;
     while j + 2 < lt
-      invariant 0 <= j && j <= lt && lt == len(tab) && lt <= 16777216 && len(ids) == lt
+      invariant 0 <= j && j <= lt && lt == len(tab) && lt <= 16777216
       decreases lt - j
     {
-      if tab[j] == 6 { crate::ent_value::append_slot(inout compact, 0, blob, pool, tab, j, inout ids, j); }
+      if tab[j] == 6 {
+        let off: i64 = crate::ent_u16::clamp(crate::ent_value::pstr_off(tab, crate::ent_u16::clamp(j, 4294967296)), 1073741823);
+        let nb: i64 = crate::ent_u16::clamp(crate::ent_value::slot_bytes(tab, j), crate::ent_u16::clamp(crate::ent_value::pool_bytes(blob, pool) - off, 1073741823));
+        let at: i64 = crate::ent_value::append_span(inout compact, 0, blob, pool, off, nb, crate::ent_value::span_units(blob, pool, off, nb));
+        crate::ent_packet::put_vs(inout tab, j, 6, at, nb);
+      }
       j = j + 3;
     }
     strings = crate::ent_value::pool_finish(compact, 0);
@@ -159,7 +164,7 @@ fn index_begin_checked(inout progress: [i64], blob: [i64], raw: i64) -> [i64] ! 
   st[12] = pl;
   st[13] = raw;
   let empty: [i64] = crate::ent_u16::empty();
-  return crate::ent_packet::mk_packet(1, id, 1, 9, strings, crate::ent_bound::index_request(nt), st, empty, ids, 1);
+  return crate::ent_packet::mk_packet(1, id, 1, 9, strings, crate::ent_bound::index_request(nt), st, empty, tab, 1);
 }
 
 // The adapter retains the actual emitted packet and the input given to index_begin. Read the input in place,

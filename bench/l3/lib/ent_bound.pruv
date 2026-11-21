@@ -458,9 +458,9 @@ pub fn index_complete(w: [i64], head: i64, id: i64, seq: i64, answer: [i64], pro
     let start: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(ko, e3), 16000000);
     let nk: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(kl, e3), 16000000);
     if start + nk > len(keys) { return crate::ent_packet::boundary(9, id, 0); }
-    let key: [i64] = crate::ent_value::encode_pool(subview(keys, start, start + nk));
-    let at: i64 = crate::ent_value::append_span(inout key_pool, 0, key, 0, 0, crate::ent_value::pool_bytes(key, 0), nk);
-    crate::ent_packet::put_vs(inout tab, 6 * h, 6, at, crate::ent_value::pool_bytes(key, 0));
+    // DB22 (D-DB18-3 P3): encode the key straight into key_pool; no temp pool per key.
+    let at: i64 = crate::ent_value::append_units(inout key_pool, 0, subview(keys, start, start + nk));
+    crate::ent_packet::put_vs(inout tab, 6 * h, 6, at, crate::ent_value::pool_bytes(key_pool, 0) - at);
 
     let vp: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(val, h), 4294967296);
     if !full && crate::ent_u16::rd(w, vp) == 6 {
