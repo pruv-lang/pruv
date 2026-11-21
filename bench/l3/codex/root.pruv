@@ -97,11 +97,18 @@ pub fn codex_list(binary: str, argv: str, cwd: str, folder: str, timeout_ms: i64
 pub fn codex_read(binary: str, argv: str, cwd: str, folder: str, thread: str, timeout_ms: i64) -> [i64] ! async, net, proc, alloc
   ensures len(result) >= 3
 {
+  let wire: [u8] = codex_read_wire(binary, argv, cwd, folder, thread, timeout_ms);
+  return crate::packet::wire_packet(wire);
+}
+
+pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: str, timeout_ms: i64) -> [u8] ! async, net, proc, alloc
+  ensures len(result) >= 24
+{
   let empty: [u8] = alloc(0, 0);
   // an invalid thread never spawns
-  if len(thread) > 1000000 { return crate::packet::fail(3, 0, empty); }
-  if !crate::names::valid_thread(thread) { return crate::packet::fail(3, 0, empty); }
-  if len(folder) > 1000000 { return crate::packet::fail(1, 0, empty); }
+  if len(thread) > 1000000 { return crate::packet::wire_fail(3, 0, empty); }
+  if !crate::names::valid_thread(thread) { return crate::packet::wire_fail(3, 0, empty); }
+  if len(folder) > 1000000 { return crate::packet::wire_fail(1, 0, empty); }
   let mut ctl: [i64] = alloc(8, 0);
   let mut l: Loop = crate::rpc::start(binary, argv, cwd, timeout_ms, inout ctl);
   let slot: i64 = ctl[2];
@@ -280,12 +287,12 @@ pub fn codex_read(binary: str, argv: str, cwd: str, folder: str, thread: str, ti
   }
   let code: i64 = ctl[0];
   let stage: i64 = ctl[1];
-  let mut p: [i64] = crate::packet::fail(2, 6, empty);
   if code == 0 {
-    p = crate::read::finish(hs, ht, hb, pl, pb, title, model, more);
+    let wire: [u8] = crate::read::finish(hs, ht, hb, pl, pb, title, model, more);
+    crate::transport::close(move l, slot);
+    return wire;
   }
   crate::transport::close(move l, slot);
-  if code != 0 && len(detail) <= 100000000 { return crate::packet::fail(code, stage, detail); }
-  if code != 0 { return crate::packet::fail(code, stage, empty); }
-  return p;
+  if len(detail) <= 100000000 { return crate::packet::wire_fail(code, stage, detail); }
+  return crate::packet::wire_fail(code, stage, empty);
 }

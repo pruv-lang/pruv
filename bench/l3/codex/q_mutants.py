@@ -14,7 +14,7 @@ from common import HERE, WORK, fake_binary, request_for, read_log, run_lines, ch
 
 MUTANTS = [
     ('wrong-id-accepted', 'rpc.pruv', 'number.status == 0 && crate::util::id_is(crate::util::raw(d, mid), id)', 'number.status == 0'),
-    ('initialized-omitted', 'rpc.pruv', 'else { q = crate::transport::send(move q, slot, crate::util::to_bytes("{\\"method\\":\\"initialized\\",\\"params\\":{}}\\n")); }', 'else { }'),
+    ('initialized-omitted', 'rpc.pruv', 'else { q = crate::transport::send(move q, slot, crate::util::to_bytes("{\\"method\\":\\"initialized\\",\\"params\\":{}}\\n"), ms); }', 'else { }'),
     ('unsupported-mapping-lost', 'root.pruv', 'if cls == 1 { ctl[0] = 4; }', 'if cls == 1 { ctl[0] = 6; }'),
     ('not-found-alternative-dropped', 'rpc.pruv', 'if lit_at(u, n, i, "no rollout") { return true; }', 'if lit_at(u, n, i, "no rollout!") { return true; }'),
     ('list-admission-bypassed', 'list.pruv', 'if len(idv) > 0 && crate::names::valid_thread(idv) {', 'if len(idv) > 0 {'),

@@ -225,16 +225,16 @@ fn put_str(inout dst: [u8], at: i64, s: str) -> ()
 }
 
 // The result packet of a finished read. Text layout: title, model, lastPlan at (24), plan item blob, then the turn texts.
-pub fn finish(hs: [i64], ht: [i64], hb: [u8], pl: [i64], pb: [u8], title: str, model: str, more: bool) -> [i64] ! alloc
+pub fn finish(hs: [i64], ht: [i64], hb: [u8], pl: [i64], pb: [u8], title: str, model: str, more: bool) -> [u8] ! alloc
   requires len(hs) == 8 && len(ht) == 2000 && len(hb) == 8700000 && len(pl) == 64 && len(pb) == 18024
   requires 0 <= hs[0] && hs[0] <= 200
   requires -1 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000 && (pl[63] == 0 || pl[63] == 1)
-  ensures len(result) >= 3
+  ensures len(result) >= 24
 {
   let empty: [u8] = alloc(0, 0);
   let tl: i64 = len(title);
   let ml: i64 = len(model);
-  if tl > 1000 || ml > 1000 { return crate::packet::fail(2, 6, empty); }
+  if tl > 1000 || ml > 1000 { return crate::packet::wire_fail(2, 6, empty); }
   let items: i64 = pl[0];
   let mut pitems: i64 = 0;
   let mut alen: i64 = 0;
@@ -252,15 +252,9 @@ pub fn finish(hs: [i64], ht: [i64], hb: [u8], pl: [i64], pb: [u8], title: str, m
   let nt: i64 = len(col.turns);
   let nx: i64 = len(col.text);
   if bad[0] != 0 || nt < 0 || nt > 2000 || nx < 0 || nx > 2106752 || col.kept < 0 || col.kept > 200 || nt != 10 * col.kept {
-    return crate::packet::fail(2, 6, empty);
+    return crate::packet::wire_fail(2, 6, empty);
   }
   let total: i64 = base + nx;
-  let mut packed: [u8] = alloc(total, 0);
-  put_str(inout packed, 0, title);
-  put_str(inout packed, tl, model);
-  if alen == 24 { crate::bytes::copy_span(inout packed, tl + ml, pb, 18000, 18024); }
-  if blob > 0 { crate::bytes::copy_span(inout packed, tl + ml + alen, pb, 0, blob); }
-  crate::bytes::copy_span(inout packed, base, col.text, 0, nx);
   let mut m: [i64] = crate::packet::meta_new(1);
   if more || col.trimmed == 1 { m[2] = 1; }
   m[3] = col.kept;
@@ -284,10 +278,18 @@ pub fn finish(hs: [i64], ht: [i64], hb: [u8], pl: [i64], pb: [u8], title: str, m
     decreases pitems - q
   {
     let o: i64 = pl[2 + 2 * q];
-    if o < 0 || o > 18000 { return crate::packet::fail(2, 6, empty); }
+    if o < 0 || o > 18000 { return crate::packet::wire_fail(2, 6, empty); }
     rows[nt + 2 * q] = tl + ml + alen + o;
     rows[nt + 2 * q + 1] = pl[3 + 2 * q];
     q = q + 1;
   }
-  return crate::packet::read_ok(m, rows, packed);
+  let mut wire: [u8] = crate::packet::wire_read(m, rows, total);
+  if len(wire) == 24 { return wire; }
+  let header: i64 = 8 * (20 + rl);
+  put_str(inout wire, header, title);
+  put_str(inout wire, header + tl, model);
+  if alen == 24 { crate::bytes::copy_span(inout wire, header + tl + ml, pb, 18000, 18024); }
+  if blob > 0 { crate::bytes::copy_span(inout wire, header + tl + ml + alen, pb, 0, blob); }
+  crate::bytes::copy_span(inout wire, header + base, col.text, 0, nx);
+  return wire;
 }
