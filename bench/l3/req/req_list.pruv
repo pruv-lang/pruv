@@ -125,15 +125,6 @@ pub fn w_sess(w: [i64], t: [i64], m: i64, n: i64, base: i64) -> [i64] ! alloc
 
 // ---- storage records ----
 
-// Write into the preallocated pack without copying the accumulated pool.
-fn pack_put(inout o: [i64], start: i64, at: i64, slot: i64, units: [i64]) -> i64
-  requires 0 <= start && start <= 2147483647 && 0 <= at && at <= 2147483647
-  ensures len(o) == len(old(o))
-{
-  crate::req_value::put(inout o, slot, 6, at - start, crate::ent_value::slot_len_of(units));
-  return crate::ent_u16::put_all(inout o, at, units);
-}
-
 // the pack of count slots of w from word from (strings read from pool); empty when the units reach 2^30
 pub fn pack(pool: [i64], w: [i64], from: i64, count: i64) -> [i64] ! alloc
   requires 0 <= from && from <= 850000000 && 0 <= count && count <= 33554432
@@ -152,7 +143,7 @@ pub fn pack(pool: [i64], w: [i64], from: i64, count: i64) -> [i64] ! alloc
   if tot >= 1073741823 { return crate::ent_u16::empty(); }
   let hd: i64 = 3 * count;
   let mut o: [i64] = crate::ent_u16::zeros(hd + 1 + tot);
-  crate::ent_u16::wr(inout o, hd, tot);
+  crate::ent_value::packed_pool_write_size(inout o, hd, tot);
   let mut at: i64 = hd + 1;
   k = 0;
   while k < count
@@ -162,7 +153,7 @@ pub fn pack(pool: [i64], w: [i64], from: i64, count: i64) -> [i64] ! alloc
     let q: i64 = from + 3 * k;
     if crate::ent_u16::rd(w, q) == 6 {
       let u: [i64] = crate::req_value::units(pool, w, q);
-      let na: i64 = pack_put(inout o, hd + 1, at, 3 * k, u);
+      let na: i64 = crate::ent_value::packed_pool_put(inout o, hd + 1, at, 3 * k, u);
       at = crate::ent_u16::clamp(na, 2147483647);
     } else {
       crate::req_value::copy_slot(inout o, 3 * k, w, q);
@@ -284,8 +275,7 @@ pub fn pack_units(r: [i64], count: i64) -> [i64] ! alloc
   requires 0 <= count && count <= 33554432
   ensures len(result) >= 0
 {
-  let u: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(r, 3 * count), 1073741823);
-  return crate::ent_u16::slice(r, 3 * count + 1, 3 * count + 1 + u);
+  return crate::ent_value::packed_pool_read(r, 3 * count);
 }
 
 // a record read back: [pack of 10 slots, next] with the pack's unit count matching its length
@@ -293,7 +283,7 @@ pub fn rec_ok(r: [i64]) -> bool
 {
   let n: i64 = len(r);
   if n < 34 { return false; }
-  return crate::ent_u16::rd(r, 30) == n - 34;
+  return crate::ent_value::packed_pool_ends_at(r, 30, n - 3);
 }
 
 // the result chain read back (op 65 reply [0, count, (len, element)...]): m elements of pack shape whose chain digest
@@ -313,7 +303,7 @@ pub fn chain_ok(crec: [i64], m: i64, d0: i64) -> bool ! alloc
     if pos >= n { return false; }
     let l: i64 = crate::ent_u16::rd(crec, pos);
     if l < 31 || l > n - pos - 1 { return false; }
-    if crate::ent_u16::rd(crec, pos + 31) != l - 31 { return false; }
+    if !crate::ent_value::packed_pool_ends_at(crec, pos + 31, pos + 1 + l) { return false; }
     d = crate::req_world::dig(crate::ent_u16::cat(crate::ent_u16::one(d), crate::ent_u16::slice(crec, pos + 1, pos + 1 + l)), -1);
     pos = pos + 1 + l;
     k = k + 1;
@@ -338,7 +328,7 @@ pub fn w_full(w: [i64], crec: [i64], m: i64, base: i64) -> [i64] ! alloc
   hset(inout o, 2, 0);
   hset(inout o, 3, 0);
   let mut pos: i64 = 2;
-  let mut ub: i64 = crate::ent_u16::clamp(base, 1073741823);
+  let mut ub: i64 = crate::ent_value::pool_clamp_base(base);
   let mut k: i64 = 0;
   while k < m
     invariant 0 <= k && k <= m && m <= 16777216 && 0 <= pos && pos <= 999999000 && 0 <= ub && ub <= 1073741823
@@ -352,7 +342,7 @@ pub fn w_full(w: [i64], crec: [i64], m: i64, base: i64) -> [i64] ! alloc
       crate::req_value::copy_slot_off(inout o, ib(k) + 3 * x, crec, pos + 1 + 3 * x, ub);
       x = x + 1;
     }
-    ub = crate::ent_u16::clamp(ub + crate::ent_u16::clamp(crate::ent_u16::rd(crec, pos + 31), 1073741823), 1073741823);
+    ub = crate::ent_u16::clamp(ub + crate::ent_value::packed_pool_words(crec, pos + 31), 1073741823);
     pos = crate::ent_u16::clamp(pos + 1 + crate::ent_u16::clamp(crate::ent_u16::rd(crec, pos), 1073741823), 999999000);
     k = k + 1;
   }
@@ -371,7 +361,7 @@ pub fn chain_units(crec: [i64], m: i64) -> [i64] ! alloc
     invariant 0 <= k && k <= m && m <= 16777216 && 0 <= pos && pos <= 999999000 && 0 <= tot && tot <= 1073741823
     decreases m - k
   {
-    tot = crate::ent_u16::clamp(tot + crate::ent_u16::clamp(crate::ent_u16::rd(crec, pos + 31), 1073741823), 1073741823);
+    tot = crate::ent_u16::clamp(tot + crate::ent_value::packed_pool_words(crec, pos + 31), 1073741823);
     pos = crate::ent_u16::clamp(pos + 1 + crate::ent_u16::clamp(crate::ent_u16::rd(crec, pos), 1073741823), 999999000);
     k = k + 1;
   }
@@ -383,8 +373,7 @@ pub fn chain_units(crec: [i64], m: i64) -> [i64] ! alloc
     invariant 0 <= k && k <= m && m <= 16777216 && 0 <= pos && pos <= 999999000 && 0 <= at && at <= 1073741823
     decreases m - k
   {
-    let u: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(crec, pos + 31), 1073741823);
-    let n1at: i64 = crate::ent_u16::put_range(inout o, at, crec, pos + 32, u);
+    let n1at: i64 = crate::ent_value::packed_pool_copy(inout o, at, crec, pos + 31);
     at = crate::ent_u16::clamp(n1at, 1073741823);
     pos = crate::ent_u16::clamp(pos + 1 + crate::ent_u16::clamp(crate::ent_u16::rd(crec, pos), 1073741823), 999999000);
     k = k + 1;
@@ -511,7 +500,7 @@ fn scmp(pool: [i64], w: [i64], p: i64, q: i64) -> i64 ! alloc
   if ta > tb { return 1; }
   if ta == 6 {
     let size: i64 = crate::ent_value::pool_words(pool);
-    if crate::req_value::str_ok(size, w, p) && crate::req_value::str_ok(size, w, q) {
+    if crate::ent_value::pslot_ok(size, w, p) && crate::ent_value::pslot_ok(size, w, q) {
       return crate::ent_value::pstr_cmp(pool, w, p, q);
     }
     return cmp_units(crate::req_value::units(pool, w, p), crate::req_value::units(pool, w, q));

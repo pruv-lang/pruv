@@ -95,10 +95,10 @@ MUTANTS = {
              '  return open_cont(world, h, false, owner, seq, p, rec, rows, w2);\n')],
     # the race rm of the copied path is dropped (the open completes without call 36)
     'M14': [('root.pruv',
-             '        return emit_call(world, h, false, owner, seq, 33, 3, crate::ent_u16::cat(p, crate::req_packet::sec(comp, 0)), rec, rows, w3, call2(36, 0));\n',
+             '        return emit_call(world, h, false, owner, seq, 33, 3, crate::ent_value::pool_cat(p, cpool), rec, rows, w3, call2(36, 0));\n',
              f'        let mut cr3: [i64] = {U}zeros(4);\n'
              f'        crate::req_value::copy_slot(inout cr3, 1, w3, 21);\n'
-             f'        return open_done(world, h, false, seq, {U}cat(p, crate::req_packet::sec(comp, 0)), cr3, true);\n')],
+             '        return open_done(world, h, false, seq, crate::ent_value::pool_cat(p, cpool), cr3, true);\n')],
     # a trailing high surrogate is dropped from the 80-unit title cut
     'M15': [('req_fill.pruv',
              '  let t: [i64] = crate::ent_u16::slice(crate::ent_u16::trim(collapse(raw)), 0, 80);\n',
@@ -151,18 +151,23 @@ def host_sites(mid):
 
 
 def build_host_copy(d):
-    """The req_host crate on the mutated leaf.rs: lib.rs includes the unchanged entry host.rs / host.rs by absolute path."""
+    """Build the production host wrapper with only leaf.rs replaced by the mutant."""
     hc = d / 'hostcrate'
     (hc / 'src').mkdir(parents=True)
     shutil.copy(HERE / 'host' / 'Cargo.toml', hc / 'Cargo.toml')
     shutil.copy(HERE / 'host' / 'Cargo.lock', hc / 'Cargo.lock')
-    entry = (HERE.parent / 'entry' / 'host.rs').resolve()
-    (hc / 'src' / 'lib.rs').write_text(
-        '#[allow(dead_code)]\nmod eh {\n'
-        f'    include!("{entry}");\n'
-        f'    include!("{d / LEAF}");\n'
-        '}\n'
-        f'include!("{(HERE / "host.rs").resolve()}");\n', encoding='utf-8')
+    wrapper = (HERE / 'host' / 'src' / 'lib.rs').read_text(encoding='utf-8')
+    includes = {
+        '../../../entry/host.rs': HERE.parent / 'entry' / 'host.rs',
+        '../../leaf.rs': d / LEAF,
+        '../../host.rs': HERE / 'host.rs',
+    }
+    for relative, path in includes.items():
+        old = f'include!("{relative}");'
+        if wrapper.count(old) != 1:
+            raise RuntimeError(f'expected one {old} in the host wrapper')
+        wrapper = wrapper.replace(old, f'include!({json.dumps(str(path.resolve()), ensure_ascii=False)});')
+    (hc / 'src' / 'lib.rs').write_text(wrapper, encoding='utf-8')
     target = d / 'hosttarget'
     test_impl.sh([test_impl.tool('cargo'), 'build', '--locked', '--offline', '--release', '--manifest-path', hc / 'Cargo.toml', '--target-dir', target])
     deps = target / 'release/deps'

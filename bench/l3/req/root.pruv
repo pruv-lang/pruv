@@ -300,13 +300,13 @@ fn store3(a: i64, b: i64, c: i64, d: i64) -> [i64] ! alloc
 fn item_end(world: [i64], h: [i64], isnew: bool, owner: i64, seq: i64, p: [i64], rec: [i64], rows: [i64], wk: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  let base: i64 = crate::ent_u16::clamp(crate::req_list::hget(wk, 26), 1073741823);
+  let base: i64 = crate::req_list::hget(wk, 26);
   let e: [i64] = crate::req_list::pack(p, wk, 24, 10);
   if len(e) == 0 { return core_req(world, h, isnew, seq, 1); }
   let mut w2: [i64] = copy(wk);
   crate::req_list::hset(inout w2, 25, crate::req_list::chain_dig(crate::req_list::hget(wk, 25), e));
   let call: [i64] = crate::ent_u16::cat(call2(60, crate::req_list::hget(wk, 24)), e);
-  return emit_call(world, h, isnew, owner, seq, 13, 4, crate::ent_u16::slice(p, 0, base), rec, rows, w2, call);
+  return emit_call(world, h, isnew, owner, seq, 13, 4, crate::ent_value::pool_prefix(p, base), rec, rows, w2, call);
 }
 
 // the next stored item record (pc 12), or the result chain read at the finish (pc 14)
@@ -446,7 +446,7 @@ fn open_bound(world: [i64], h: [i64], isnew: bool, owner: i64, seq: i64, p: [i64
 // the target account of a Grok open is the default one: none, "" or "default"
 fn acct_default(p: [i64], rec: [i64]) -> bool ! alloc
 {
-  return crate::req_value::nullish(rec, 36) || (crate::ent_u16::rd(rec, 36) == 6 && crate::ent_u16::rd(rec, 38) == 0) || crate::req_value::is_str_lit(p, rec, 36, "default");
+  return crate::req_value::nullish(rec, 36) || crate::ent_value::pslot_is_empty(rec, 36) || crate::req_value::is_str_lit(p, rec, 36, "default");
 }
 
 // the rows with the account the new session gets (accountOf): a Grok open takes the chosen target account (none by default), the others the source's
@@ -471,13 +471,12 @@ fn open_acct(world: [i64], h: [i64], isnew: bool, owner: i64, seq: i64, p: [i64]
 {
   let found: i64 = crate::ent_u16::clamp(crate::req_list::hget(wk, 4), 16777216);
   if crate::req_value::is_str_lit(p, rows, 18 * found + 3, "grok") {
-    let isdef: bool = crate::req_value::nullish(rec, 36) || (crate::ent_u16::rd(rec, 36) == 6 && crate::ent_u16::rd(rec, 38) == 0) || crate::req_value::is_str_lit(p, rec, 36, "default");
+    let isdef: bool = acct_default(p, rec);
     // MUTANT M07: the Grok target account check is skipped
     if !isdef {
       let mut c: [i64] = crate::ent_u16::zeros(3);
       crate::ent_u16::wr(inout c, 0, 31);
-      crate::ent_u16::wr(inout c, 1, crate::ent_u16::rd(rec, 37));
-      crate::ent_u16::wr(inout c, 2, crate::ent_u16::rd(rec, 38));
+      crate::ent_value::pslot_host_words(inout c, 1, rec, 36);
       return emit_call(world, h, isnew, owner, seq, 22, 3, p, rec, rows, wk, c);
     }
   }
@@ -665,7 +664,7 @@ fn open_step(world: [i64], h: [i64], owner: i64, seq: i64, pc: i64, comp: [i64])
     if crate::ent_u16::rd(crec, 1) == 1 && !crate::req_value::is_str_lit(p, rows, 18 * found + 3, "grok") { return open_fail(world, h, false, owner, seq, p, rec, rows, wk, crec, 2, 1); }
     if crate::req_value::is_str_lit(p, rows, 18 * found + 3, "grok") {
       let mut ac: [i64] = crate::ent_u16::zeros(3);
-      let isdef: bool = crate::req_value::nullish(rec, 36) || (crate::ent_u16::rd(rec, 36) == 6 && crate::ent_u16::rd(rec, 38) == 0) || crate::req_value::is_str_lit(p, rec, 36, "default");
+      let isdef: bool = acct_default(p, rec);
       if !isdef { crate::req_value::copy_slot(inout ac, 0, rec, 36); }
       return emit_call(world, h, false, owner, seq, 30, 3, p, rec, rows, wk, crate::ent_u16::cat(call2(34, 0), ac));
     }
@@ -756,7 +755,7 @@ fn list_step(world: [i64], h: [i64], owner: i64, seq: i64, pc: i64, comp: [i64])
     if n < 0 || n > 16777216 || 21 * m + 6 * n > 16777216 || crate::ent_u16::rd(crec, 0) != 0 || len(crec) != 2 + 21 * m + 6 * n { return bad(world, h); }
     let cp: [i64] = crate::req_packet::sec(comp, 0);
     if !crate::req_value::slots_ok(crate::ent_value::pool_words(cp), crec, 2, 7 * m + 2 * n, true) { return bad(world, h); }
-    let base: i64 = crate::ent_u16::clamp(crate::req_list::hget(wk, 2), 1073741823);
+    let base: i64 = crate::ent_value::pool_clamp_base(crate::req_list::hget(wk, 2));
     let p3: [i64] = crate::ent_value::pool_cat(p, cp);
     let mut w2: [i64] = crate::req_list::w_fill(wk, crec, m, n, crate::ent_value::pool_base(p, cp));
     crate::req_list::hset(inout w2, 2, 0);
@@ -767,7 +766,7 @@ fn list_step(world: [i64], h: [i64], owner: i64, seq: i64, pc: i64, comp: [i64])
     let bi: [i64] = crate::req_list::blk(p3, w2, m, tp);
     if len(tp) == 0 || len(bi) == 0 { return core_req(world, h, false, seq, 1); }
     let wo: [i64] = crate::req_list::w_one(w2, bi, m, n, base);
-    return emit_call(world, h, false, owner, seq, 11, 4, crate::ent_u16::slice(p, 0, base), rec, rows, wo, crate::ent_u16::slice(bi, 6, len(bi)));
+    return emit_call(world, h, false, owner, seq, 11, 4, crate::ent_value::pool_prefix(p, base), rec, rows, wo, crate::ent_u16::slice(bi, 6, len(bi)));
   }
   if pc == 6 {
     if len(crec) != 2 || crate::ent_u16::rd(crec, 0) != 0 { return bad(world, h); }
@@ -808,7 +807,7 @@ fn list_step(world: [i64], h: [i64], owner: i64, seq: i64, pc: i64, comp: [i64])
         let mut w3: [i64] = copy(wk);
         crate::req_value::copy_slot_off(inout w3, 21, crec, 1, crate::ent_value::pool_base(p, cpool));
         // MUTANT M14: the race rm of the copied path is dropped
-        return emit_call(world, h, false, owner, seq, 33, 3, crate::ent_u16::cat(p, crate::req_packet::sec(comp, 0)), rec, rows, w3, call2(36, 0));
+        return emit_call(world, h, false, owner, seq, 33, 3, crate::ent_value::pool_cat(p, cpool), rec, rows, w3, call2(36, 0));
       }
       // MUTANT M03: the last bound match wins (the search goes on after a hit, the last id is kept)
       return open_done(world, h, false, seq, crate::req_packet::sec(comp, 0), crec, true);
@@ -865,7 +864,7 @@ fn list_step(world: [i64], h: [i64], owner: i64, seq: i64, pc: i64, comp: [i64])
     let n: i64 = crate::ent_u16::clamp(crate::req_list::hget(wk, 1), 16777216);
     let t: [i64] = crate::ent_u16::slice(crec, 1, len(crec));
     if crate::ent_u16::rd(crec, 0) != 0 || len(t) != crate::ent_u16::rd(crate::req_packet::sec(h, 5), 3) || crate::req_world::dig(t, -1) != crate::req_list::hget(wk, 2) { return bad(world, h); }
-    if len(t) < 6 * n + 1 || crate::ent_u16::rd(t, 6 * n) != len(t) - 6 * n - 1 { return bad(world, h); }
+    if !crate::ent_value::packed_pool_ends_at(t, 6 * n, len(t)) { return bad(world, h); }
     let tp: [i64] = crate::req_list::pack_units(t, 2 * n);
     let mut w5: [i64] = crate::req_list::w_sess(wk, t, m, n, crate::ent_value::pool_base(p, tp));
     crate::req_list::hset(inout w5, 2, 0);
@@ -902,7 +901,7 @@ fn after_folder(world: [i64], h: [i64], isnew: bool, owner: i64, seq: i64, cpool
   // MUTANT M02: always the folder fallback text instead of the Error message
   if crate::ent_u16::rd(crec, 7) == 3 {
     if crate::ent_u16::rd(crec, 13) != 6 { return bad(world, h); }
-    crate::req_value::put(inout r, 4, 6, crate::ent_u16::clamp(crate::ent_value::pool_base(key, cpool), 1073741823) + crate::ent_u16::clamp(crate::ent_u16::rd(crec, 14), 1073741823), crate::ent_value::pstr_len(crec, 13));
+    crate::ent_value::pslot_copy_off_clamped(inout r, 4, crec, 13, crate::ent_value::pool_base(key, cpool));
     return done_req(world, h, isnew, seq, crate::ent_value::pool_cat(key, cpool), r, crate::ent_u16::empty(), crate::ent_u16::empty());
   }
   crate::ent_value::pool_put(inout key, inout r, 4, crate::req_error::folder_default());

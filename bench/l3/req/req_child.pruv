@@ -2,14 +2,6 @@
 // 1 for op 1 (fresh sources), 2 for op 2 (first match). The child packet is the L3-8 entry packet (bench/l3/lib).
 // Rows in section 3 of each child packet are only that step's new rows; the parent accepts each once, in order.
 
-// Copy section 0 into the final packet without allocating another pool.
-fn put_pool(inout o: [i64], at: i64, pool: [i64]) -> ()
-  requires 0 <= at && at <= 4294967296
-  ensures len(o) == len(old(o))
-{
-  let end: i64 = crate::ent_u16::put_range(inout o, at, pool, 0, crate::ent_value::pool_words(pool));
-}
-
 // op 1 input: pool, the 24-word record [dataDir, env x7]. The entry input envelope has exactly two sections (pool, record):
 // sections >= 2 are table sections and every one must be claimed by a slot.
 pub fn in1(pool: [i64], rec: [i64]) -> [i64] ! alloc
@@ -27,7 +19,7 @@ pub fn in1(pool: [i64], rec: [i64]) -> [i64] ! alloc
   crate::ent_u16::wr(inout o, 6, 2);
   crate::ent_u16::wr(inout o, 7, lp);
   crate::ent_u16::wr(inout o, 8, 24);
-  put_pool(inout o, 9, pool);
+  crate::ent_value::pool_copy_all(inout o, 9, pool);
   let b: i64 = crate::ent_u16::put_all(inout o, 9 + lp, r);
   return o;
 }
@@ -61,7 +53,7 @@ pub fn in2(pool: [i64], rec: [i64], rows: [i64]) -> [i64] ! alloc
   crate::ent_u16::wr(inout o, 7, lp);
   crate::ent_u16::wr(inout o, 8, 6);
   crate::ent_u16::wr(inout o, 9, 3 * n);
-  put_pool(inout o, 10, pool);
+  crate::ent_value::pool_copy_all(inout o, 10, pool);
   let b: i64 = crate::ent_u16::put_all(inout o, 10 + lp, r);
   let c: i64 = crate::ent_u16::put_all(inout o, 16 + lp, tab);
   return o;
@@ -83,7 +75,7 @@ pub fn in3(pool: [i64], rec: [i64]) -> [i64] ! alloc
   crate::ent_u16::wr(inout o, 6, 2);
   crate::ent_u16::wr(inout o, 7, lp);
   crate::ent_u16::wr(inout o, 8, 12);
-  put_pool(inout o, 9, pool);
+  crate::ent_value::pool_copy_all(inout o, 9, pool);
   let b: i64 = crate::ent_u16::put_all(inout o, 9 + lp, r);
   return o;
 }
@@ -104,7 +96,7 @@ pub fn in4(pool: [i64], rec: [i64]) -> [i64] ! alloc
   crate::ent_u16::wr(inout o, 6, 2);
   crate::ent_u16::wr(inout o, 7, lp);
   crate::ent_u16::wr(inout o, 8, 15);
-  put_pool(inout o, 9, pool);
+  crate::ent_value::pool_copy_all(inout o, 9, pool);
   let b: i64 = crate::ent_u16::put_all(inout o, 9 + lp, r);
   return o;
 }

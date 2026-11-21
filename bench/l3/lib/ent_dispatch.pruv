@@ -101,15 +101,6 @@ pub fn rethrow(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
   return crate::ent_state::set_done(cx, pool, rec, e, 0);
 }
 
-// Copy a title prefix into the preallocated pool without copying the whole pool.
-fn put_title_prefix(inout pool: [i64], off: i64, inout tab: [i64], at: i64, w: [i64], p: i64, cut: i64) -> ()
-  requires 0 <= off && off <= 4294967296
-  ensures len(pool) == len(old(pool)) && len(tab) == len(old(tab))
-{
-  crate::ent_packet::put_vs(inout tab, at, 6, off, cut);
-  let end: i64 = crate::ent_u16::put_range(inout pool, off, w, crate::ent_value::str_start(w, p), cut);
-}
-
 // ---- op 3: list_external ----
 fn list_recipe(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
 {
@@ -144,7 +135,7 @@ fn list_recipe(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
     let a: i64 = crate::ent_u16::put_range(inout tab, tb + 1, cx.ent, rb, 3);
     if crate::ent_value::str_len(cx.ent, rb + 3) > 200 {
       crate::ent_u16::wr(inout tab, tb, 1);
-      put_title_prefix(inout pool, 200 * k, inout tab, tb + 4, cx.ent, rb + 3, cut);
+      crate::ent_value::put_title_prefix(inout pool, 200 * k, inout tab, tb + 4, cx.ent, rb + 3, cut);
       k = k + 1;
     } else {
       crate::ent_u16::wr(inout tab, tb, 0);
