@@ -22,7 +22,7 @@ pub fn copy_slot(inout o: [i64], q: i64, src: [i64], p: i64) -> ()
   requires 0 <= q && q <= 1000000000 && 0 <= p && p <= 1000000000
   ensures len(o) == len(old(o))
 {
-  crate::ent_packet::put_vs(inout o, q, crate::ent_u16::rd(src, p), crate::ent_u16::rd(src, p + 1), crate::ent_u16::rd(src, p + 2));
+  crate::ent_value::pslot_copy(inout o, q, src, p);
 }
 
 // the units of the string slot at p of w, read from pool (empty when the slot is not a string slot)
@@ -39,42 +39,17 @@ pub fn is_str_lit(pool: [i64], w: [i64], p: i64, s: str) -> bool ! alloc
 {
   if crate::ent_u16::rd(w, p) != 6 { return false; }
   // Some replies reach this predicate before slot validation. Preserve the clipped-slice behavior there.
-  if needs_clip(pool, w, p) {
+  if crate::ent_value::pslot_needs_clip(pool, w, p) {
     return crate::ent_u16::eq_lit(units(pool, w, p), s);
   }
   return crate::ent_value::pstr_eq_lit(pool, w, p, s);
-}
-
-fn needs_clip(pool: [i64], w: [i64], p: i64) -> bool
-  requires 0 <= p && p <= 1000000000
-{
-  let off: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 1), 1073741823);
-  return off + crate::ent_value::pstr_len(w, p) > crate::ent_value::pool_words(pool);
 }
 
 // rows of 3-word slots grouped as 18-word rows (6 slots): every string slot moves up by base
 pub fn rebase(rows: [i64], base: i64) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  let mut o: [i64] = crate::ent_u16::slice(rows, 0, len(rows));
-  let n: i64 = len(o);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n + 2 && n == len(o)
-    decreases n + 2 - i
-  {
-    if crate::ent_u16::rd(o, i) == 6 {
-      let nv: i64 = rebased_off(crate::ent_u16::rd(o, i + 1), base);
-      crate::ent_u16::wr(inout o, i + 1, nv);
-    }
-    i = i + 3;
-  }
-  return o;
-}
-
-fn rebased_off(off: i64, base: i64) -> i64
-{
-  return crate::ent_u16::clamp(off, 1073741823) + crate::ent_u16::clamp(base, 1073741823);
+  return crate::ent_value::pslots_rebase(rows, base);
 }
 
 // copy slot p of src to slot q of o; a string slot moves up by base
@@ -82,10 +57,7 @@ pub fn copy_slot_off(inout o: [i64], q: i64, src: [i64], p: i64, base: i64) -> (
   requires 0 <= q && q <= 1000000000 && 0 <= p && p <= 1000000000
   ensures len(o) == len(old(o))
 {
-  let t: i64 = crate::ent_u16::rd(src, p);
-  let mut a: i64 = crate::ent_u16::rd(src, p + 1);
-  if t == 6 { a = rebased_off(a, base); }
-  crate::ent_packet::put_vs(inout o, q, t, a, crate::ent_u16::rd(src, p + 2));
+  crate::ent_value::pslot_copy_off(inout o, q, src, p, base);
 }
 
 // JavaScript truthiness of the slot at p (tag 5: not +0, -0 or NaN; tag 6: not empty; objects, arrays, refs true)
@@ -116,7 +88,7 @@ pub fn slot_eq(pa: [i64], a: [i64], ia: i64, pb: [i64], b: [i64], ib: i64) -> bo
   let ta: i64 = crate::ent_u16::rd(a, ia);
   if ta != crate::ent_u16::rd(b, ib) { return false; }
   if ta == 6 {
-    if needs_clip(pa, a, ia) || needs_clip(pb, b, ib) {
+    if crate::ent_value::pslot_needs_clip(pa, a, ia) || crate::ent_value::pslot_needs_clip(pb, b, ib) {
       return crate::ent_u16::eq(units(pa, a, ia), units(pb, b, ib));
     }
     return crate::ent_value::pstr_eq(pa, a, ia, pb, b, ib);
@@ -129,15 +101,15 @@ pub fn slot_eq(pa: [i64], a: [i64], ia: i64, pb: [i64], b: [i64], ib: i64) -> bo
 pub fn slot_ok(plen: i64, w: [i64], p: i64, absent: bool) -> bool
   requires 0 <= p && p <= 1000000000
 {
-  if p + 3 > len(w) { return false; }
   let t: i64 = crate::ent_u16::rd(w, p);
+  if t == 6 { return crate::ent_value::pslot_ok(plen, w, p); }
+  if p + 3 > len(w) { return false; }
   let a: i64 = crate::ent_u16::rd(w, p + 1);
   let b: i64 = crate::ent_u16::rd(w, p + 2);
   if t == 0 || t == 1 || t == 2 || t == 3 { return a == 0 && b == 0; }
   if t == 10 { return absent && a == 0 && b == 0; }
   if t == 4 { return b == 0; }
   if t == 5 { return 0 <= a && a <= 4294967295 && 0 <= b && b <= 4294967295; }
-  if t == 6 { return 0 <= a && 0 <= b && a <= plen && b <= plen - a; }
   if t == 9 { return a > 0 && b == 0; }
   return false;
 }
@@ -156,11 +128,4 @@ pub fn slots_ok(plen: i64, w: [i64], from: i64, count: i64, absent: bool) -> boo
     k = k + 1;
   }
   return true;
-}
-
-// a well-formed string slot
-pub fn str_ok(plen: i64, w: [i64], p: i64) -> bool
-  requires 0 <= p && p <= 1000000000
-{
-  return crate::ent_u16::rd(w, p) == 6 && slot_ok(plen, w, p, false);
 }

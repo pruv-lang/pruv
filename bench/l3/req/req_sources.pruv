@@ -115,7 +115,7 @@ pub fn tabs(pool: [i64], rows: [i64]) -> [i64] ! alloc
     if crate::req_value::is_str_lit(pool, rows, p + 6, "account") && !crate::req_value::nullish(rows, p + 12) {
       crate::req_value::copy_slot(inout o, q + 3, rows, p + 12);
     } else {
-      crate::req_value::put(inout o, q + 3, 6, 0, 0);
+      crate::ent_value::pslot_empty(inout o, q + 3);
     }
     at = at + 6 * k;
     i = i + 1;

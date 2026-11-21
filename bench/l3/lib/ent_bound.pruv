@@ -151,7 +151,7 @@ pub fn threads_item(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
     if e < 0 {
       crate::ent_packet::put_vs(inout tab, 6 * i, 6, codex_off, codex_len);
     } else if l >= 0 {
-      crate::ent_packet::put_vs(inout tab, 6 * i, 6, crate::ent_u16::rd(cx.blob, crate::ent_u16::clamp(e, 4294967296) + 1), l);
+      crate::ent_value::pstr_put_prefix(inout tab, 6 * i, cx.blob, crate::ent_u16::clamp(e, 4294967296), l);
     } else {
       let a: i64 = crate::ent_u16::put_range(inout tab, 6 * i, cx.blob, crate::ent_u16::clamp(e, 4294967296), 3);
     }
@@ -192,22 +192,6 @@ pub fn excluded_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! allo
 }
 
 // ---- op 9 ----
-fn pool_eq(pool: [i64], a: i64, b: i64, n: i64) -> bool
-{
-  let mut i: i64 = 0;
-  let nn: i64 = crate::ent_u16::clamp(n, 16777216);
-  let aa: i64 = crate::ent_u16::clamp(a, 4294967296);
-  let bb: i64 = crate::ent_u16::clamp(b, 4294967296);
-  while i < nn
-    invariant 0 <= i && i <= nn && nn <= 16777216 && 0 <= aa && aa <= 4294967296 && 0 <= bb && bb <= 4294967296
-    decreases nn - i
-  {
-    if crate::ent_u16::rd(pool, aa + i) != crate::ent_u16::rd(pool, bb + i) { return false; }
-    i = i + 1;
-  }
-  return true;
-}
-
 // units of the engine part of the key
 fn eng_len(w: [i64], e: i64, l: i64) -> i64
   ensures -1 <= result && result <= 16777216
@@ -225,7 +209,7 @@ fn eng_put(w: [i64], pool: i64, e: i64, l: i64, inout o: [i64], at: i64) -> i64 
     return r;
   }
   if l >= 0 {
-    let r: i64 = crate::ent_u16::put_range(inout o, crate::ent_u16::clamp(at, 4294967296), w, crate::ent_value::str_start_at(w, e, pool), l);
+    let r: i64 = crate::ent_value::pool_copy_into(w, pool, e, l, inout o, crate::ent_u16::clamp(at, 4294967296));
     return r;
   }
   let r: i64 = crate::ent_value::key_put_at(w, e, pool, inout o, at);
@@ -401,18 +385,7 @@ pub fn index_complete(w: [i64], head: i64, id: i64, seq: i64, answer: [i64], pro
   {
     let fo: i64 = crate::ent_u16::rd(ko, f);
     let fl: i64 = crate::ent_u16::rd(kl, f);
-    let fln: i64 = crate::ent_u16::clamp(fl, 16777216);
-    let fo0: i64 = crate::ent_u16::clamp(fo, 4294967296);
-    // hash of the key units (clamped into 0..2^32 so the arithmetic stays far from overflow)
-    let mut hh: i64 = fln;
-    let mut q: i64 = 0;
-    while q < fln
-      invariant 0 <= q && q <= fln && fln <= 16777216 && 0 <= hh && hh < 2147483629 && 0 <= fo0 && fo0 <= 4294967296
-      decreases fln - q
-    {
-      hh = (hh * 1000003 + crate::ent_u16::clamp(crate::ent_u16::rd(keys, fo0 + q), 4294967296)) % 2147483629;
-      q = q + 1;
-    }
+    let hh: i64 = crate::ent_value::pool_hash(keys, fo, fl);
     let mut s: i64 = hh % tsz;
     let mut hit: i64 = 0 - 1;
     let mut done: bool = false;
@@ -426,7 +399,7 @@ pub fn index_complete(w: [i64], head: i64, id: i64, seq: i64, answer: [i64], pro
         done = true;
       } else {
         let e2: i64 = crate::ent_u16::rd(keep, g);
-        if crate::ent_u16::rd(kl, e2) == fl && pool_eq(keys, crate::ent_u16::rd(ko, e2), fo, fl) {
+        if crate::ent_u16::rd(kl, e2) == fl && crate::ent_value::pool_eq(keys, crate::ent_u16::rd(ko, e2), fo, fl) {
           hit = g;
           done = true;
         } else {
@@ -462,8 +435,8 @@ pub fn index_complete(w: [i64], head: i64, id: i64, seq: i64, answer: [i64], pro
   {
     let vp: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(val, h0), 4294967296);
     if crate::ent_u16::rd(w, vp) == 6 {
-      let va: i64 = crate::ent_u16::rd(w, vp + 1);
-      let vb: i64 = crate::ent_u16::rd(w, vp + 2);
+      let va: i64 = crate::ent_value::pstr_off(w, vp);
+      let vb: i64 = crate::ent_value::pstr_raw_len(w, vp);
       if va < 0 || vb < 0 || va > pl || vb > pl - va { return crate::ent_packet::boundary(9, id, 0); }
       if vb > pl - vsum { full = true; } else { vsum = vsum + vb; }
     }
@@ -485,8 +458,8 @@ pub fn index_complete(w: [i64], head: i64, id: i64, seq: i64, answer: [i64], pro
   out[7] = lp;
   out[8] = 4;
   out[11] = 6 * m;
-  copy_range(inout out, 12 + vsum, keys, 0, sum);
-  if full { let z0: i64 = crate::ent_u16::put_range(inout out, 12, w, ps, pl); }
+  crate::ent_value::pool_copy_range(inout out, 12 + vsum, keys, 0, 0, sum);
+  if full { let z0: i64 = crate::ent_value::pool_copy_prefix(inout out, 12, w, ps, pl); }
   crate::ent_packet::put_vs(inout out, 13 + lp, 7, 4, m);
   let mut vc: i64 = 0;
   let mut h: i64 = 0;
@@ -501,7 +474,7 @@ pub fn index_complete(w: [i64], head: i64, id: i64, seq: i64, answer: [i64], pro
     if !full && crate::ent_u16::rd(w, vp) == 6 {
       // the first pass checked the span; the copy stays total either way
       let vb: i64 = crate::ent_value::str_len(w, vp);
-      let z: i64 = crate::ent_u16::put_range(inout out, 12 + vc, w, crate::ent_value::str_start_at(w, vp, ps), vb);
+      let z: i64 = crate::ent_value::pool_copy_into(w, ps, vp, vb, inout out, 12 + vc);
       crate::ent_packet::put_vs(inout out, at + 3, 6, vc, vb);
       vc = crate::ent_u16::clamp(vc + vb, 16777216);
     } else {

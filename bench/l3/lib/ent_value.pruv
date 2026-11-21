@@ -309,6 +309,129 @@ pub fn key_put_at(w: [i64], p0: i64, pool: i64, inout o: [i64], at0: i64) -> i64
   return at;
 }
 
+// ---- DB17: entry slot helpers ----
+
+// Read the stored span without clamping, so validators can reject invalid coordinates.
+pub fn pstr_off(w: [i64], p: i64) -> i64
+  requires 0 <= p && p <= 4294967296
+{
+  return crate::ent_u16::rd(w, p + 1);
+}
+
+pub fn pstr_raw_len(w: [i64], p: i64) -> i64
+  requires 0 <= p && p <= 4294967296
+{
+  return crate::ent_u16::rd(w, p + 2);
+}
+
+// Rebase a slot already written into the destination.
+pub fn pstr_set_off(inout o: [i64], p: i64, off: i64) -> ()
+  requires 0 <= p && p + 1 < len(o)
+  ensures len(o) == len(old(o))
+{
+  o[p + 1] = off;
+}
+
+// Write a prefix slot that shares its source pool.
+pub fn pstr_put_prefix(inout o: [i64], at: i64, w: [i64], p: i64, n: i64) -> ()
+  requires 0 <= p && p <= 4294967296
+  ensures len(o) == len(old(o))
+{
+  crate::ent_packet::put_vs(inout o, at, 6, pstr_off(w, p), n);
+}
+
+// Copy a slot prefix into a preallocated buffer using total reads and writes.
+pub fn pool_copy_into(w: [i64], pool: i64, p: i64, n: i64, inout o: [i64], at: i64) -> i64
+  requires 0 <= at && at <= 4294967296
+  ensures len(o) == len(old(o)) && at <= result && result <= at + 1073741824
+{
+  return crate::ent_u16::put_range(inout o, at, w, str_start_at(w, p, pool), n);
+}
+
+// Copy a packet pool prefix with the same total range semantics as a slot copy.
+pub fn pool_copy_prefix(inout o: [i64], at: i64, w: [i64], pool: i64, n: i64) -> i64
+  requires 0 <= at && at <= 4294967296 && 0 <= pool && pool <= 4294967296
+  ensures len(o) == len(old(o)) && at <= result && result <= at + 1073741824
+{
+  return crate::ent_u16::put_range(inout o, at, w, pool, n);
+}
+
+// Bulk copy a checked pool span into a preallocated buffer.
+pub fn pool_copy_range(inout o: [i64], at: i64, w: [i64], pool: i64, off: i64, n: i64) -> ()
+  requires 0 <= at && 0 <= pool && 0 <= off && 0 <= n
+  requires pool <= len(w) && off <= len(w) - pool && n <= len(w) - pool - off
+  requires at <= len(o) && n <= len(o) - at
+  ensures len(o) == len(old(o))
+{
+  copy_range(inout o, at, w, pool + off, n);
+}
+
+pub fn pool_eq(pool: [i64], a: i64, b: i64, n: i64) -> bool
+{
+  let mut i: i64 = 0;
+  let nn: i64 = crate::ent_u16::clamp(n, 16777216);
+  let aa: i64 = crate::ent_u16::clamp(a, 4294967296);
+  let bb: i64 = crate::ent_u16::clamp(b, 4294967296);
+  while i < nn
+    invariant 0 <= i && i <= nn && nn <= 16777216 && 0 <= aa && aa <= 4294967296 && 0 <= bb && bb <= 4294967296
+    decreases nn - i
+  {
+    if crate::ent_u16::rd(pool, aa + i) != crate::ent_u16::rd(pool, bb + i) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+pub fn pool_hash(keys: [i64], fo: i64, fl: i64) -> i64
+  ensures 0 <= result && result < 2147483629
+{
+  let fln: i64 = crate::ent_u16::clamp(fl, 16777216);
+  let fo0: i64 = crate::ent_u16::clamp(fo, 4294967296);
+  // hash of the key units (clamped into 0..2^32 so the arithmetic stays far from overflow)
+  let mut hh: i64 = fln;
+  let mut q: i64 = 0;
+  while q < fln
+    invariant 0 <= q && q <= fln && fln <= 16777216 && 0 <= hh && hh < 2147483629 && 0 <= fo0 && fo0 <= 4294967296
+    decreases fln - q
+  {
+    hh = (hh * 1000003 + crate::ent_u16::clamp(crate::ent_u16::rd(keys, fo0 + q), 4294967296)) % 2147483629;
+    q = q + 1;
+  }
+  return hh;
+}
+
+pub fn packet_pool_ok(w: [i64]) -> bool
+{
+  let p0: i64 = crate::ent_packet::sec_start(w, 0);
+  let l0: i64 = crate::ent_packet::sec_len(w, 0);
+  let mut k: i64 = 0;
+  while k < l0
+    invariant 0 <= k && k <= l0 && 0 <= p0 && p0 <= 33554432 && l0 <= 16777216
+    decreases l0 - k
+  {
+    let u: i64 = crate::ent_u16::rd(w, p0 + k);
+    if u < 0 || u > 65535 { return false; }
+    k = k + 1;
+  }
+  return true;
+}
+
+// The logical size differs from the physical layout only in section 0.
+pub fn logical_pool_words(w: [i64]) -> i64
+  ensures 0 <= result && result <= 16777216
+{
+  return pkt_size(w) - len(w) + crate::ent_packet::sec_len(w, 0);
+}
+
+// Copy a title prefix into the preallocated pool without copying the whole pool.
+pub fn put_title_prefix(inout pool: [i64], off: i64, inout tab: [i64], at: i64, w: [i64], p: i64, cut: i64) -> ()
+  requires 0 <= off && off <= 4294967296
+  ensures len(pool) == len(old(pool)) && len(tab) == len(old(tab))
+{
+  crate::ent_packet::put_vs(inout tab, at, 6, off, cut);
+  let end: i64 = pool_copy_into(w, crate::ent_packet::sec_start(w, 0), p, cut, inout pool, off);
+}
+
 // ---- DB14: string pool coordinate helpers ----
 // Every writer and reader of string slots goes through these, so the slot coordinate (today UTF-16 units of a unit
 // pool, slot [6, unit_off, unit_len]) is decided here and in the packet checks only (D-DB13-1 stage 3 flips the bodies).
@@ -457,4 +580,161 @@ pub fn pstr_cmp(pool: [i64], w: [i64], p: i64, q: i64) -> i64
   if nu < nv { return -1; }
   if nu > nv { return 1; }
   return 0;
+}
+
+// ---- DB17: req slot helpers ----
+
+// Copy a whole pool into a preallocated packet.
+pub fn pool_copy_all(inout o: [i64], at: i64, pool: [i64]) -> ()
+  requires 0 <= at && at <= 4294967296
+  ensures len(o) == len(old(o))
+{
+  let end: i64 = crate::ent_u16::put_range(inout o, at, pool, 0, pool_words(pool));
+}
+
+pub fn pool_clamp_base(base: i64) -> i64
+  ensures 0 <= result && result <= 1073741823
+{
+  return crate::ent_u16::clamp(base, 1073741823);
+}
+
+pub fn pool_prefix(pool: [i64], base: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  return crate::ent_u16::slice(pool, 0, pool_clamp_base(base));
+}
+
+// A stored pack places its pool word count immediately before the pool.
+pub fn packed_pool_write_size(inout w: [i64], size_at: i64, words: i64) -> ()
+  ensures len(w) == len(old(w))
+{
+  crate::ent_u16::wr(inout w, size_at, words);
+}
+
+pub fn packed_pool_words(w: [i64], size_at: i64) -> i64
+  ensures 0 <= result && result <= 1073741823
+{
+  return crate::ent_u16::clamp(crate::ent_u16::rd(w, size_at), 1073741823);
+}
+
+pub fn packed_pool_ends_at(w: [i64], size_at: i64, end: i64) -> bool
+{
+  return 0 <= size_at && size_at < end && crate::ent_u16::rd(w, size_at) == end - size_at - 1;
+}
+
+pub fn packed_pool_read(w: [i64], size_at: i64) -> [i64] ! alloc
+  requires 0 <= size_at && size_at <= 1000000000
+  ensures len(result) >= 0
+{
+  let start: i64 = size_at + 1;
+  return crate::ent_u16::slice(w, start, start + packed_pool_words(w, size_at));
+}
+
+// Copy the packed pool into a preallocated destination using total reads.
+pub fn packed_pool_copy(inout o: [i64], at: i64, w: [i64], size_at: i64) -> i64
+  requires 0 <= at && at <= 4294967296 && 0 <= size_at && size_at <= 1000000000
+  ensures len(o) == len(old(o)) && at <= result && result <= at + 1073741824
+{
+  return crate::ent_u16::put_range(inout o, at, w, size_at + 1, packed_pool_words(w, size_at));
+}
+
+// Write a string and its slot into a preallocated pack. start is the pool's absolute start.
+pub fn packed_pool_put(inout o: [i64], start: i64, at: i64, slot: i64, units: [i64]) -> i64
+  requires 0 <= start && start <= 2147483647 && 0 <= at && at <= 2147483647
+  ensures len(o) == len(old(o))
+{
+  crate::ent_packet::put_vs(inout o, slot, 6, at - start, slot_len_of(units));
+  return crate::ent_u16::put_all(inout o, at, units);
+}
+
+pub fn pslot_empty(inout o: [i64], at: i64) -> ()
+  ensures len(o) == len(old(o))
+{
+  crate::ent_packet::put_vs(inout o, at, 6, 0, 0);
+}
+
+// Test the stored length exactly, including for an unvalidated slot.
+pub fn pslot_is_empty(w: [i64], p: i64) -> bool
+  requires 0 <= p && p <= 1000000000
+{
+  return tag_at(w, p) == 6 && crate::ent_u16::rd(w, p + 2) == 0;
+}
+
+// Copy the two slot coordinates into a host call without copying the pool.
+pub fn pslot_host_words(inout call: [i64], at: i64, w: [i64], p: i64) -> ()
+  requires 0 <= at && at <= 1000000000 && 0 <= p && p <= 1000000000
+  ensures len(call) == len(old(call))
+{
+  crate::ent_u16::wr(inout call, at, crate::ent_u16::rd(w, p + 1));
+  crate::ent_u16::wr(inout call, at + 1, crate::ent_u16::rd(w, p + 2));
+}
+
+// Same-pool copies preserve all slot words, including incomplete slots.
+pub fn pslot_copy(inout o: [i64], q: i64, w: [i64], p: i64) -> ()
+  requires 0 <= q && q <= 1000000000 && 0 <= p && p <= 1000000000
+  ensures len(o) == len(old(o))
+{
+  crate::ent_packet::put_vs(inout o, q, tag_at(w, p), crate::ent_u16::rd(w, p + 1), crate::ent_u16::rd(w, p + 2));
+}
+
+fn rebased_pool_off(off: i64, base: i64) -> i64
+{
+  return crate::ent_u16::clamp(off, 1073741823) + pool_clamp_base(base);
+}
+
+// Copy any slot, rebasing the offset of a string without changing its length word.
+pub fn pslot_copy_off(inout o: [i64], q: i64, w: [i64], p: i64, base: i64) -> ()
+  requires 0 <= q && q <= 1000000000 && 0 <= p && p <= 1000000000
+  ensures len(o) == len(old(o))
+{
+  let t: i64 = tag_at(w, p);
+  let mut a: i64 = crate::ent_u16::rd(w, p + 1);
+  if t == 6 { a = rebased_pool_off(a, base); }
+  crate::ent_packet::put_vs(inout o, q, t, a, crate::ent_u16::rd(w, p + 2));
+}
+
+// Copy a string slot from a reply whose length was historically clamped.
+pub fn pslot_copy_off_clamped(inout o: [i64], q: i64, w: [i64], p: i64, base: i64) -> ()
+  requires 0 <= p && p <= 1000000000
+  ensures len(o) == len(old(o))
+{
+  let off: i64 = rebased_pool_off(crate::ent_u16::rd(w, p + 1), base);
+  crate::ent_packet::put_vs(inout o, q, 6, off, pstr_len(w, p));
+}
+
+// Copy a slot array and rebase its string offsets in place.
+pub fn pslots_rebase(w: [i64], base: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let mut o: [i64] = crate::ent_u16::slice(w, 0, len(w));
+  let n: i64 = len(o);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n + 2 && n == len(o)
+    decreases n + 2 - i
+  {
+    if tag_at(o, i) == 6 {
+      let off: i64 = rebased_pool_off(crate::ent_u16::rd(o, i + 1), base);
+      crate::ent_u16::wr(inout o, i + 1, off);
+    }
+    i = i + 3;
+  }
+  return o;
+}
+
+pub fn pslot_needs_clip(pool: [i64], w: [i64], p: i64) -> bool
+  requires 0 <= p && p <= 1000000000
+{
+  let off: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 1), 1073741823);
+  return off + pstr_len(w, p) > pool_words(pool);
+}
+
+// A complete string slot whose raw span is within the pool.
+pub fn pslot_ok(plen: i64, w: [i64], p: i64) -> bool
+  requires 0 <= p && p <= 1000000000
+{
+  if p + 3 > len(w) || tag_at(w, p) != 6 { return false; }
+  let a: i64 = crate::ent_u16::rd(w, p + 1);
+  let b: i64 = crate::ent_u16::rd(w, p + 2);
+  return 0 <= a && 0 <= b && a <= plen && b <= plen - a;
 }

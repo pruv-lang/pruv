@@ -123,6 +123,7 @@ pub fn pool_used(w: [i64], meta: [i64]) -> [i64] ! alloc
 pub fn env_check(w: [i64]) -> i64
 {
   if crate::ent_value::pkt_size(w) > 16777216 { return 2; }
+  // Physical packet words for the envelope and section bounds.
   let n: i64 = len(w);
   if n < 7 { return 1; }
   if w[0] != 1 { return 1; }
@@ -144,18 +145,7 @@ pub fn env_check(w: [i64]) -> i64
     rest = rest - l;
     i = i + 1;
   }
-  if rest != 0 { return 1; }
-  let p0: i64 = sec_start(w, 0);
-  let l0: i64 = sec_len(w, 0);
-  let mut k: i64 = 0;
-  while k < l0
-    invariant 0 <= k && k <= l0 && 0 <= p0 && p0 <= 33554432 && l0 <= 16777216
-    decreases l0 - k
-  {
-    let u: i64 = crate::ent_u16::rd(w, p0 + k);
-    if u < 0 || u > 65535 { return 1; }
-    k = k + 1;
-  }
+  if rest != 0 || !crate::ent_value::packet_pool_ok(w) { return 1; }
   return 0;
 }
 
@@ -222,7 +212,7 @@ pub fn vs_ok(w: [i64], p0: i64, mask: i64, width0: i64, meta: [i64]) -> i64
     return 0;
   }
   if tag == 6 {
-    let pl: i64 = sec_len(w, 0);
+    let pl: i64 = crate::ent_value::logical_pool_words(w);
     if a < 0 || b < 0 || a > pl || b > pl - a { return 0; }
     return 2;
   }
@@ -385,7 +375,7 @@ pub fn input_check(w: [i64]) -> i64 ! alloc
     return -1;
   }
   if is_bad(meta) || !all_claimed(w, meta) { return -1; }
-  return crate::ent_u16::clamp(crate::ent_u16::rd(meta, 0), sec_len(w, 0));
+  return crate::ent_u16::clamp(crate::ent_u16::rd(meta, 0), crate::ent_value::logical_pool_words(w));
 }
 
 // error observation E (6 slots = 18 words) at p: valueRef {9}, isEngineImportError {2,3}, isError {2,3}, name any,
@@ -495,7 +485,7 @@ pub fn comp_check(w: [i64], rcode: i64, aux: i64) -> i64 ! alloc
     return -1;
   }
   if is_bad(meta) || !all_claimed(w, meta) { return -1; }
-  return crate::ent_u16::clamp(crate::ent_u16::rd(meta, 0), sec_len(w, 0));
+  return crate::ent_u16::clamp(crate::ent_u16::rd(meta, 0), crate::ent_value::logical_pool_words(w));
 }
 
 // ---- builders ----
