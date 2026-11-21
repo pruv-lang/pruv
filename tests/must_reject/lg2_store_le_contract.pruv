@@ -1,0 +1,3 @@
+fn f(inout b: [u8]) -> ()
+  requires store_le(inout b, 0, 0, 1) == 0
+{}

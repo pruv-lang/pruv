@@ -123,6 +123,8 @@ it can never be silently dropped.
 - `store_be(inout a, i, w, n);`: a whole expression statement (`a` a mutable `[u8]`). It
   writes the low `8n` bits of `w: i64` big-endian into `a[i..i+n]` and leaves the other elements unchanged. `n` and the
   obligation are as for `load_be`. Not allowed in contracts.
+- `load_le(a, i, n)` and `store_le(inout a, i, w, n);` follow the same rules as `load_be` and `store_be`,
+  respectively, using little-endian byte order (byte `a[i+k]` has weight `256^k`). Both names are reserved.
 - `eq_range(a, i, b, j, n)`: `a` and `b` of one type, `[i64]` or `[u8]` (else `type_mismatch`); `i, j, n: i64`; a
   `bool`, true iff `a[i+k] == b[j+k]` for every `k` in `0..n` (true for `n == 0`). Code only (`effect_in_contract` in a
   contract), name reserved. The verifier must prove, in this order, `0 <= i`, `0 <= j`, `0 <= n`, `i + n <= len(a)`,
@@ -183,7 +185,7 @@ Allowed only in `requires`, `ensures`, `invariant`, `assert`:
   `some_val(o)` needs `is_some(o)`, `ok_val(r)` needs `is_ok(r)`, `err_val(r)` needs `!is_ok(r)`, `max`/`min` need
   `lo < hi`, and each argument of `band`/`bor`/`bxor` must be inside i64 (contract integers are unbounded and are
   never truncated: `band(9223372036854775807 + 1, 255)` is outside the domain); `wrapping_shl`/`ushr` need both
-  arguments inside i64 and `k` in `0..64` (guard with `k >= 0 && k < 64 && ushr(x, k) >= 0`). `wrapping_add`/`wrapping_mul` need both arguments inside i64; `load_be(a, i, n)` needs `0 <= i && i + n <= len(a)`. The builtins have the same 64-bit
+  arguments inside i64 and `k` in `0..64` (guard with `k >= 0 && k < 64 && ushr(x, k) >= 0`). `wrapping_add`/`wrapping_mul` need both arguments inside i64; `load_be(a, i, n)` and `load_le(a, i, n)` need `0 <= i && i + n <= len(a)`. The builtins have the same 64-bit
   two's-complement meaning in contracts as in code. Evaluation is left to right with short-circuit `&&` `||` `==>`; `forall`/`exists` go up from `lo` and stop
   at the first false/true k, so only the k they reach need a defined body; aggregates need it for every k in range.
   This holds in `requires` (each clause from the earlier ones only: write `requires 0 <= i && i < len(a)` before
@@ -196,7 +198,7 @@ Allowed only in `requires`, `ensures`, `invariant`, `assert`:
     `bool`, `[i64]`, `[u8]`, `[bool]` and returns `bool` or `i64`.
   - Its body has only immutable `i64`/`bool` lets (no refinement), `if` and `return`; only a `bool` function may
     branch, and every branch ends in `return`. Expressions are literals, names, operators, `a[i]`, and calls of
-    `len`, the bit builtins, `load_be` and other functions that follow these rules (no recursion).
+    `len`, the bit builtins, `load_be`, `load_le`, `utf8_valid` and other functions that follow these rules (no recursion).
   - Lets are substituted into their uses and early returns become `&&`/`||`, so the result is one contract
     expression placed at the call (its diagnostics point at the call). It is at most 4096 nodes.
   - Contract domain and arithmetic apply to the result as to any contract (the guards of the body's own `if`s guard
@@ -289,7 +291,7 @@ return a parameter with `copy`). Refinements: `[u8 | L..=U; <=N]` with `0 <= L <
   returning `[u8]`/`[bool]`. Anywhere else (a call argument, inside `copy(...)` or `len(...)`) it is `[i64]`; bind it to a
   typed local first. `copy(a)` keeps the type of `a`.
 - `[bool]` stores and the fill value of `alloc` for `[bool]` must be `bool` (no 0/1 integers).
-- Array types must match exactly: no passing `[u8]` where `[i64]` is expected, no `[u8]`↔`str` conversion.
+- Array types must match exactly. Between `[u8]` and `str`, the only conversion is `str_from_utf8`.
 - Elements of `[u8]` parameters, call results and loop-changed arrays are known to be in `0..=255`. Count true elements
   with `count(k in 0..len(b): b[k])`; `sum` needs an i64 body (`sum(k in ..: b[k])` on `[bool]` is a type error).
 
@@ -304,15 +306,22 @@ return a parameter with `copy`). Refinements: `[u8 | L..=U; <=N]` with `0 <= L <
 - `substr(s, lo, hi)` (needs `alloc`, code only) copies bytes `lo..hi`. The verifier proves `0 <= lo <= hi <= len(s)`
   (`string_slice_range`) and then `is_char_boundary(s, lo) && is_char_boundary(s, hi)` (`utf8_boundary`; also when
   `lo == hi`). It knows `len(result) == hi - lo` and `result[k] == s[lo + k]`.
+- `utf8_valid(b: [u8]) -> bool` (code and contracts) is true iff the bytes in `b[0..len(b)]` are valid UTF-8.
+  The verifier treats it as an uninterpreted predicate of the array value. Other argument types give
+  `type_mismatch`.
+- `str_from_utf8(b: [u8]) -> str` (R-6b-1, needs `alloc`, code only) copies the bytes into a fresh string. The verifier
+  proves `utf8_valid(b)` (`utf8_invalid`), then knows `len(result) == len(b)` and `result[k] == b[k]` for
+  `0 <= k < len(b)`. Both names are reserved.
 - Not available: `==`/`!=` on whole strings (compare `len` and bytes with `forall`), `print` of a string, `str` in
   `Option`/`Result`/struct fields, char/code-point indexing. Character counts are written with boundaries, e.g.
   `count(t in 0..len(s): is_char_boundary(s, t))` counts the characters of `s`.
 - The verifier models a `str` as bytes `0..=255`; it does **not** know UTF-8 rules (e.g. that byte 0 is not a
   continuation byte unless you check it), and a counterexample string may be invalid UTF-8.
 
-**Run time.** Proof mode removes the element-range and substring checks. `--no-verify` (safe mode) checks them and panics with exit 101:
+**Run time.** Proof mode removes the element-range, substring and UTF-8 conversion checks. `--no-verify` (safe mode) checks them and panics with exit 101:
 `pruv: element out of range: v (u8 0..=255)`, `pruv: string slice out of bounds: lo..hi (len n)`,
-`pruv: UTF-8 boundary error: lo..hi (len n)` (range is checked before boundaries). Raw `--rust-bindings` entries check
+`pruv: UTF-8 boundary error: lo..hi (len n)` (range is checked before boundaries), or
+`pruv: invalid UTF-8 (len n)`. Raw `--rust-bindings` entries check
 `str` UTF-8 and `[bool]` 0/1 bytes before the body (`pruv: invalid representation`) in both modes, also with
 `--trust-callers`. Before those checks every raw array or `str` parameter must have a length in `0..=2^40` (bytes for
 `str`): a negative length or one above 2^40 stops the program with exit 101 and `pruv: invalid representation: n (array
@@ -933,7 +942,7 @@ set_at(inout w, 0, 7);
   Rust and LLVM evaluate the call in place. Expressions evaluate left to right, with arguments evaluated
   before the call they belong to. The verifier may model inout calls in fresh temporaries before the statement,
   in their original evaluation order. The existing checks on whole-expression calls still apply. The builtins
-  `copy_range` and `store_be` remain whole expression statements, and the rules for `par` are unchanged.
+  `copy_range`, `store_be` and `store_le` remain whole expression statements, and the rules for `par` are unchanged.
 - R-6g-2 **Struct inout parameters.** `inout x: S` is allowed for a non-generic struct `S`, emitted as
   `x: &mut S`. The callee may assign fields of `x` (also nested), use R-6e-2 on `x.f`, pass `x.f` to
   `map_get_mut` and forward `inout x`. Whole reassignment `x = e` is `type/immutable`. A generic struct is
@@ -974,14 +983,16 @@ set_at(inout w, 0, 7);
   other internal calls follow the existing safe-mode rules. Rust emits
   `&mut [T]`; LLVM passes the existing pointer and length with `noalias nocapture` and no `readonly`, and never frees
   it. Neither allocates or copies for the parameter. Programs without `inout` compile exactly as before.
-- **Host limits.** An `inout` function is never host-visible: no exported ABI entry, no typed variant, no
-  `--rust-bindings` entry. In explicit mode a root `pub` non-generic function with `inout` is `type/entry_signature`
-  (private, child-`pub` and generic functions may use it; in legacy mode it is automatically internal),
-  except the R-6f-2 typed state entry; a
+- **Host limits.** In explicit mode a root `pub` non-generic function may take `inout` array parameters
+  (`[i64]`, `[u8]`, `[bool]`) on both back ends: Rust emits `&mut [T]`, the LLVM ABI symbol takes the pointer and
+  length, and `--rust-bindings` forwards `b: &mut [T]` (section 7; `tests/runtime/g5_r19_resident_entry`). The host
+  supplies the buffer and keeps its length. A scalar `inout` entry parameter is `type/entry_signature`; an `inout`
+  struct is allowed only as the R-6f-2 typed state entry. In legacy mode an `inout` function is automatically
+  internal (private, child-`pub` and generic functions may always use `inout`); a
   `trusted rust fn` with `inout` is `type/foreign_signature`. Give the host an ordinary function that owns a
   `copy` of its input, calls the `inout` helpers on it and returns it.
 - **Not supported.** Elements as `inout` places,
-  `str`, collection types outside R-6e-7, or generic struct `inout` parameters (non-generic structs are R-6g-2), `old` of anything but an array `inout` parameter, mutable host entries other than R-6f-2.
+  `str`, collection types outside R-6e-7, or generic struct `inout` parameters (non-generic structs are R-6g-2), `old` of anything but an array `inout` parameter, mutable host entries other than `inout` arrays and R-6f-2.
 - **New error codes:** `inout_syntax`, `inout_type`, `inout_argument`, `inout_alias`, `inout_context`, `old_context`,
   `old_argument`; reused: `immutable`, `array_alias`, `recursive_borrow`, `entry_signature`, `foreign_signature`,
   `reserved`, `refinement_assign`.
@@ -1976,6 +1987,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `verify/shift_range` | verify | a shift count not proved in `0..64` |
 | `verify/string_slice_range` | verify | `substr` bounds not proved in `0 <= lo <= hi <= len(s)` |
 | `verify/utf8_boundary` | verify | a `substr` cut not proved at a character boundary |
+| `verify/utf8_invalid` | verify | bytes passed to `str_from_utf8` not proved valid UTF-8 |
 | `verify/variant_domain` | verify | a `variant_field` lookup not guarded by its variant |
 | `verify/verify_unknown` | verify | the solver gave up on one obligation (see below) |
 | `codegen/foreign_target` | codegen | a program with foreign or file operations sent to native emission without the Rust host build |

@@ -50,7 +50,7 @@ pub(crate) fn is_bit_builtin(n: &str) -> bool {
 }
 
 /// P2 batch 4: byte-word access on [u8] (check.py WORD_BUILTINS).
-pub(crate) const WORD_BUILTINS: [&str; 2] = ["load_be", "store_be"];
+pub(crate) const WORD_BUILTINS: [&str; 4] = ["load_be", "store_be", "load_le", "store_le"];
 
 pub(crate) fn is_word_builtin(n: &str) -> bool {
     WORD_BUILTINS.contains(&n)
@@ -584,7 +584,7 @@ impl Checker {
             if funcs.contains_key(&name) {
                 return Err(terr(f.line, f.col, "dup_fn", format!("function {} defined twice", name), ""));
             }
-            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within")
+            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within")
                 || is_bit_builtin(&name)
                 || is_word_builtin(&name)
                 || contract_only(&name).is_some()
@@ -2811,7 +2811,7 @@ impl Checker {
                     format!("{} returns {}: a par branch must return ()", n, tn(&f.ret)),
                     "call a unit Pruv helper and pass results back through whole inout arrays"));
             }
-        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range", "resize", "copy_range", "copy_within"].contains(&n.as_str())
+        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within"].contains(&n.as_str())
             || is_bit_builtin(n)
             || is_word_builtin(n)
             || contract_only(n).is_some() || is_catalog(n) || (n == "old" && self.uses_inout)
@@ -4161,14 +4161,14 @@ impl Checker {
     fn word_call(&mut self, e: &mut Call, scope: &Scope, c: bool) -> Res<GType> {
         let n = e.name.clone();
         let (line, col) = (e.line, e.col);
-        let store = n == "store_be";
+        let store = matches!(n.as_str(), "store_be" | "store_le");
         let k = if store { 4 } else { 3 };
         if e.args.len() != k {
             return Err(terr(line, col, "arity", format!("{} takes {} argument(s), got {}", n, k, e.args.len()), ""));
         }
         if store {
             if c {
-                return Err(terr(line, col, "effect_in_contract", "store_be not allowed in contracts", ""));
+                return Err(terr(line, col, "effect_in_contract", format!("{} not allowed in contracts", n), ""));
             }
             let (aline, acol) = (e.args[0].line(), e.args[0].col());
             let name: String;
@@ -4180,8 +4180,8 @@ impl Checker {
                             aline,
                             acol,
                             "inout_argument",
-                            "the array of store_be needs the `inout` marker",
-                            "write `store_be(inout name, i, w, n)` with a `let mut` local array or an inout parameter",
+                            format!("the array of {} needs the `inout` marker", n),
+                            format!("write `{}(inout name, i, w, n)` with a `let mut` local array or an inout parameter", n),
                         ))
                     }
                 };
@@ -4258,8 +4258,8 @@ impl Checker {
                     line,
                     col,
                     "inout_context",
-                    "store_be must be a whole expression statement",
-                    "write `store_be(inout a, i, w, n);` as a statement",
+                    format!("{} must be a whole expression statement", n),
+                    format!("write `{}(inout a, i, w, n);` as a statement", n),
                 ));
             }
         } else {
@@ -4561,7 +4561,7 @@ impl Checker {
             }
             Ok(())
         };
-        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within")
+        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within")
             || is_bit_builtin(&n)
             || is_word_builtin(&n);
         let is_old = n == "old" && self.uses_inout && !self.funcs.contains_key(&n); // G5 A0: contextual builtin
@@ -4673,6 +4673,18 @@ impl Checker {
                 self.expect(&mut e.args[3], &i64t(), scope, c, None)?;
                 self.expect(&mut e.args[4], &i64t(), scope, c, None)?;
                 return Ok(boolt());
+            }
+            "utf8_valid" | "str_from_utf8" => {
+                if c && n == "str_from_utf8" {
+                    return Err(terr(line, col, "effect_in_contract", "str_from_utf8 not allowed in contracts", ""));
+                }
+                arity(1)?;
+                self.expect(&mut e.args[0], &GType::array_u8(), scope, c, None)?;
+                if n == "utf8_valid" {
+                    return Ok(boolt());
+                }
+                self.used_effects.insert("alloc".to_string());
+                return Ok(strt());
             }
             "substr" => {
                 if c {
@@ -5141,7 +5153,7 @@ fn x_scan_expr(e: &Expr, funcs: &HashMap<String, Rc<FuncInfo>>) -> Option<String
             crate::refine::kids(e).into_iter().find_map(|child| x_scan_expr(child, funcs))
         }
         Expr::Call(c) => {
-            if funcs.contains_key(&c.name) || c.name == "len" || is_bit_builtin(&c.name) || c.name == "load_be" {
+            if funcs.contains_key(&c.name) || c.name == "len" || is_bit_builtin(&c.name) || matches!(c.name.as_str(), "load_be" | "load_le" | "utf8_valid") {
                 c.args.iter().find_map(|a| x_scan_expr(a, funcs))
             } else {
                 Some(format!("it calls {}", c.name))

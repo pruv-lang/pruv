@@ -216,6 +216,7 @@ class Model:
         # covers equal terms; different terms may have equal or distinct IDs.
         # No injectivity or byte-content axioms are assumed. When the same bytes
         # are built differently the resulting loss is in proof completeness.
+        s.utf8_valid_decl = None
         s.strkey = None     # declared on first String-key use so other programs keep their solver input
         s.size_f, s.wf_f, s.fixed_memo = {}, {}, {}
         if meta is not None:
@@ -332,6 +333,14 @@ class Model:
             s.strkey = z3.Function("strkey", z3.IntSort(),
                                    z3.ArraySort(z3.IntSort(), z3.IntSort()), z3.IntSort())
         return s.strkey(key.n, key.a)
+
+    def utf8_valid(s, b):
+        if s.utf8_valid_decl is None:
+            s.utf8_valid_decl = z3.Function("utf8_valid!", z3.IntSort(), b.a.sort(), z3.BoolSort())
+        # Array tails outside the logical length are unobservable.
+        k = z3.Int("utf8!k")
+        contents = z3.Lambda([k], z3.If(z3.And(k >= 0, k < b.n), z3.Select(b.a, k), 0))
+        return s.utf8_valid_decl(b.n, contents)
 
     def map_fields(s, ty):
         if ty not in s.maps:
@@ -682,7 +691,7 @@ def _partial_here(e, kind):
     if isinstance(e, Binary):
         return e.op in ("/", "%")
     if isinstance(e, Call):
-        return (e.name in _TAG_FNS or e.name == "file_byte" or e.name in BIT_Z3 or e.name == "load_be"
+        return (e.name in _TAG_FNS or e.name == "file_byte" or e.name in BIT_Z3 or e.name in ("load_be", "load_le")
                 or e.name in _PROC_DOM    # G10 proc A1: the stream / index domains of the Process observers
                 or e.name in _NET_DOM or e.name in _ASYNC_DOM)    # G10 net A1: the index domain of net_byte
     if isinstance(e, Quant):
@@ -1079,6 +1088,7 @@ FIX = {
     "opaque_total": "an opaque body must be defined for every argument: guard each partial operation inside the body (for example i < len(a) && a[i] > 0)",
     "contract_domain": "guard the partial operation earlier in the same contract or in an earlier clause: index range, divisor != 0, is_some/is_ok before some_val/ok_val/err_val, lo < hi before max/min",
     "elem_range": "store or fill only values in 0..=255 into a [u8] array: bound the value with requires, an if, or a loop invariant",
+    "utf8_invalid": "guard str_from_utf8(b) with utf8_valid(b) in a requires clause or an if",
     "string_slice_range": "keep 0 <= lo <= hi <= len(s) for substr(s, lo, hi): bound lo and hi with requires, an if, or a loop invariant (a counterexample str may not be valid UTF-8)",
     "utf8_boundary": "cut a str only at character boundaries: require or check is_char_boundary(s, lo) and is_char_boundary(s, hi) (a counterexample str may not be valid UTF-8)",
 }
@@ -1744,7 +1754,7 @@ class FnVerifier:
                 sv = s.ev(e.args[0], st, g, False, env)
                 i = s.ev(e.args[1], st, g, False, env)
                 parts.append(z3.And(i >= 0, i < sv.buf.n))
-            if wo and e.name == "load_be":      # P2 batch 4: the word lies inside the array
+            if wo and e.name in ("load_be", "load_le"):      # P2 batch 4: the word lies inside the array
                 arr = s.ev(e.args[0], st, g, False, env)
                 i = s.ev(e.args[1], st, g, False, env)
                 parts.append(z3.And(i >= 0, i + e.args[2].value <= arr.n))
@@ -1976,16 +1986,18 @@ class FnVerifier:
                 s.assume(st, g, u8_dom(nv))
             s.post_refine(e, [0], st, g)
             return None
-        if n == "load_be":      # P2 batch 4: big-endian word of the n bytes a[i..i+n]
+        if n in ("load_be", "load_le"):
             av, i = args[0], args[1]
             nb = e.args[2].value
             if code:
                 s.prove(st, g, z3.And(i >= 0, i + nb <= av.n), e, "index_oob",
                         "word in bounds for %s[i..i+%d]" % (av.name, nb))
             bs = [z3.Int2BV(z3.Select(av.a, i + k), 8) for k in range(nb)]
+            if n == "load_le":
+                bs.reverse()
             u = z3.BV2Int(bs[0] if nb == 1 else z3.Concat(*bs))
             return z3.If(u < 2 ** 63, u, u - 2 ** 64) if nb == 8 else u
-        if n == "store_be":     # P2 batch 4: nb array stores a[i+k] := band(ushr(w, 8*(nb-1-k)), 255)
+        if n in ("store_be", "store_le"):
             av, i, w = args[0], args[1], args[2]
             nb = e.args[3].value
             s.prove(st, g, z3.And(i >= 0, i + nb <= av.n), e, "index_oob",
@@ -1993,7 +2005,7 @@ class FnVerifier:
             wb = z3.Int2BV(w, 64)
             arr = av.a
             for k in range(nb):
-                sh = 8 * (nb - 1 - k)
+                sh = 8 * (k if n == "store_le" else nb - 1 - k)
                 arr = z3.Store(arr, i + k, z3.BV2Int(z3.Extract(sh + 7, sh, wb)))
             name = e.args[0].expr.name
             st.env[name] = mk_arr(arr, av.n, name, av.elem)
@@ -2025,6 +2037,17 @@ class FnVerifier:
                 elif n in ("bor", "bxor"):    # P2 batch 3: wrapping_add / wrapping_mul get no extra facts
                     s.assume(st, g, z3.Implies(z3.And(x >= 0, y >= 0), z3.And(r >= 0, r <= x + y)))
             return r
+        if n == "utf8_valid":
+            return s.model.utf8_valid(args[0])
+        if n == "str_from_utf8":
+            b = args[0]
+            s.prove(st, g, s.model.utf8_valid(b), e, "utf8_invalid", "valid UTF-8 bytes in %s" % b.name)
+            res = s.fresh("str_from_utf8", STR)
+            s.assume(st, g, res.n == b.n)
+            k = z3.Int("str!k")
+            s.assume(st, g, z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < res.n),
+                                                       z3.Select(res.a, k) == z3.Select(b.a, k))))
+            return res
         if n == "substr":   # G2 B1 (G2_SPEC 4.4): range -> boundary -> fresh result
             sv, lo, hi = args
             s.prove(st, g, z3.And(lo >= 0, lo <= hi, hi <= sv.n), e, "string_slice_range",

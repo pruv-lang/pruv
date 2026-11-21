@@ -1,0 +1,21 @@
+// spec: R-6b-1 accept
+fn convert(b: [u8]) -> str ! alloc
+  requires utf8_valid(b)
+  ensures len(result) == len(b)
+  ensures forall i in 0..len(b): result[i] == b[i]
+{ return str_from_utf8(b); }
+
+fn measure(s: str) -> i64
+  ensures result == len(s)
+{ return len(s); }
+
+fn f(a: [u8], b: [u8]) -> i64 ! alloc
+  requires len(a) == len(b)
+  requires forall i in 0..len(b): a[i] == b[i]
+  requires utf8_valid(a)
+  ensures result == len(b)
+{
+  let s: str = convert(b);
+  assert len(s) == len(b);
+  return measure(str_from_utf8(b));
+}

@@ -1,0 +1,45 @@
+fn dump(s: str) -> () ! io {
+  print(len(s));
+  let mut i: i64 = 0;
+  while i < len(s) invariant 0 <= i && i <= len(s) decreases len(s) - i {
+    print(s[i]);
+    i = i + 1;
+  }
+}
+
+fn show(b: [u8]) -> () ! io, alloc {
+  print(utf8_valid(b));
+  if utf8_valid(b) {
+    let s: str = str_from_utf8(b);
+    dump(s);
+  }
+}
+
+fn run() -> () ! io, alloc {
+  let mut ascii: [u8] = alloc(2, 65);
+  ascii[1] = 127;
+  show(ascii);
+  let mut two: [u8] = alloc(2, 194);
+  two[1] = 162;
+  show(two);
+  let mut three: [u8] = alloc(3, 226);
+  three[1] = 130; three[2] = 172;
+  show(three);
+  let mut four: [u8] = alloc(4, 240);
+  four[1] = 159; four[2] = 152; four[3] = 128;
+  show(four);
+  let mut overlong: [u8] = alloc(2, 192);
+  overlong[1] = 128;
+  show(overlong);
+  let mut surrogate: [u8] = alloc(3, 237);
+  surrogate[1] = 160; surrogate[2] = 128;
+  show(surrogate);
+  let mut truncated: [u8] = alloc(2, 226);
+  truncated[1] = 130;
+  show(truncated);
+  let mut too_high: [u8] = alloc(4, 244);
+  too_high[1] = 144; too_high[2] = 128; too_high[3] = 128;
+  show(too_high);
+  let empty: [u8] = alloc(0, 0);
+  show(empty);
+}

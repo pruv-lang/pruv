@@ -41,6 +41,7 @@ temporaries are freed at the end of the statement/condition (only on the execute
 """
 import dataclasses
 import re
+from pathlib import Path
 from vast import *
 import codegen
 from codegen import show
@@ -712,6 +713,8 @@ class Mod:
         s.g6_take = False       # P3 M3: some string_to_str takes the String buffer (pruv_g6_v1_string_take)
         s.g6_unbox = set()      # P3 M5: trusted String functions lowered through the unboxed adapter <f>__str
         s.g6_bridge = False     # G6 A3: some function references @pruv_g6_bridge_v1
+        s.uses_utf8_valid = False
+        s.uses_utf8_panic = False
         s.bswap = set()         # P2 batch 4: widths of the llvm.bswap declarations the byte-word accesses used
         s.shrink = False        # P3: some external array-return wrapper normalizes cap to len with @pruv_shrink_v2
         s.overlap = False       # mutable host entries: some wrapper calls @pruv_overlap (DECLS_OVERLAP is emitted)
@@ -2239,14 +2242,15 @@ class FnGen:
         """pointer to byte k of the word at g"""
         return g if k == 0 else s.op("getelementptr inbounds i8, ptr %s, i64 %d" % (g, k))
 
-    def load_word(s, g, nb):
-        """big-endian i64 of the nb bytes at g"""
+    def load_word(s, g, nb, little):
+        """Read nb bytes at g as an i64 in the requested byte order."""
         if nb in (2, 4, 8):
             x = s.op("load i%d, ptr %s, align 1" % (8 * nb, g))
-            x = s.bswap(8 * nb, x)
+            if not little:
+                x = s.bswap(8 * nb, x)
             return x if nb == 8 else s.op("zext i%d %s to i64" % (8 * nb, x))
         acc = None
-        for k in range(nb):
+        for k in (range(nb - 1, -1, -1) if little else range(nb)):
             p = s.byte_at(g, k)
             b = s.op("load i8, ptr %s" % p)
             b = s.op("zext i8 %s to i64" % b)
@@ -2256,25 +2260,27 @@ class FnGen:
             acc = b
         return acc
 
-    def store_word(s, g, w, nb):
-        """the low 8*nb bits of w, big-endian, at g: one store for nb in {1,2,4,8}, else pieces of 4/2/1 bytes high to low"""
+    def store_word(s, g, w, nb, little):
+        """Store the low 8*nb bits of w at g in 8/4/2/1-byte pieces."""
         off = 0
         while off < nb:
             left = nb - off
             p = 4 if left >= 4 else 2 if left >= 2 else 1
             if nb in (1, 2, 4, 8):
                 p = nb
-            sh = 8 * (left - p)
+            sh = 8 * (off if little else left - p)
             x = w if sh == 0 else s.op("lshr i64 %s, %d" % (w, sh))
             if p == 8:
-                x = s.bswap(64, x)
+                if not little:
+                    x = s.bswap(64, x)
                 s.ins("store i64 %s, ptr %s, align 1" % (x, s.byte_at(g, off)))
             elif p == 1:
                 x = s.op("trunc i64 %s to i8" % x)
                 s.ins("store i8 %s, ptr %s" % (x, s.byte_at(g, off)))
             else:
                 x = s.op("trunc i64 %s to i%d" % (x, 8 * p))
-                x = s.bswap(8 * p, x)
+                if not little:
+                    x = s.bswap(8 * p, x)
                 s.ins("store i%d %s, ptr %s, align 1" % (8 * p, x, s.byte_at(g, off)))
             off += p
 
@@ -2694,20 +2700,32 @@ class FnGen:
                 s.place(ljoin)
                 r = s.op("phi i1 [ %s, %%%s ], [ %s, %%%s ]" % (rm, lmem, rl, lend))
             return V("i1", r)
-        if n == "load_be":   # P2 batch 4: array, then index
+        if n in ("load_be", "load_le"):   # P2 batch 4: array, then index
             arr = s.ev(a[0])
             i = s.ev(a[1])
             nb = a[2].value
             g = s.word_ptr(arr, i, nb)
-            return V("i64", s.load_word(g, nb))
-        if n == "store_be":   # P2 batch 4: index, value, then the array
+            return V("i64", s.load_word(g, nb, n == "load_le"))
+        if n in ("store_be", "store_le"):   # P2 batch 4: index, value, then the array
             i = s.ev(a[1])
             w = s.ev(a[2])
             arr = s.ev(a[0].expr)
             nb = a[3].value
             g = s.word_ptr(arr, i, nb)
-            s.store_word(g, w.a, nb)
+            s.store_word(g, w.a, nb, n == "store_le")
             return V("unit")
+        if n == "utf8_valid":
+            b = s.ev(a[0])
+            s.m.uses_utf8_valid = True
+            return V("i1", s.op("call i1 @pruv_utf8_valid(ptr %s, i64 %s)" % (b.a, b.b)))
+        if n == "str_from_utf8":
+            b = s.ev(a[0])
+            if not s.verified:
+                s.m.uses_utf8_valid = s.m.uses_utf8_panic = True
+                ok = s.op("call i1 @pruv_utf8_valid(ptr %s, i64 %s)" % (b.a, b.b))
+                s.guard(ok, lambda: s.ins("call void @pruv_panic_utf8(i64 %s)" % b.b), False)
+            p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 1, i64 1)" % (b.a, b.b))
+            return s.temp_arr(V("arr", p, b.b, STR), owned)
         if n == "substr":  # G2 B2: s, lo, hi in order
             sv = s.ev(a[0])
             lo = s.ev(a[1])
@@ -3292,6 +3310,10 @@ class FnGen:
                 return V("i128", s.op("zext i64 %s to i128" % x.b))
             if n in CATALOG_CONTRACT_ONLY:   # G6 A3: map_lookup / map_updated: not evaluable on LLVM yet
                 raise PruvError("codegen", e.line, e.col, "unsupported_type", G6_UNSUPPORTED_MSG, G6_UNSUPPORTED_FIX)
+            if n == "utf8_valid":
+                b = s.cev(a[0])
+                s.m.uses_utf8_valid = True
+                return V("i1", s.op("call i1 @pruv_utf8_valid(ptr %s, i64 %s)" % (b.a, b.b)))
             if n == "is_char_boundary":  # G2 B2
                 sv = s.cev(a[0])
                 iv = s.cev(a[1])
@@ -3301,7 +3323,7 @@ class FnGen:
                 u = s.op("select i1 %s, i64 %s, i64 -1" % (ok, t))
                 r = s.op("call i32 @pruv_str_boundary(ptr %s, i64 %s, i64 %s)" % (sv.a, sv.b, u))
                 return V("i1", s.op("icmp ne i32 %s, 0" % r))
-            if n == "load_be":   # P2 batch 4: 0 <= i && i + nb <= len(a) in i128, then the word
+            if n in ("load_be", "load_le"):   # P2 batch 4: 0 <= i && i + nb <= len(a) in i128, then the word
                 arr = s.cev(a[0])
                 i = s.cev(a[1])
                 nb = a[2].value
@@ -3313,7 +3335,7 @@ class FnGen:
                 s.guard(ok, und("array index out of range"), False)
                 ii = s.op("trunc i128 %s to i64" % i.a)
                 g = s.op("getelementptr inbounds i8, ptr %s, i64 %s" % (arr.a, ii))
-                return V("i128", s.op("sext i64 %s to i128" % s.load_word(g, nb)))
+                return V("i128", s.op("sext i64 %s to i128" % s.load_word(g, nb, n == "load_le")))
             if n in BIT_LLVM:   # P2: both i128 arguments must be inside i64; then the op on i128 is exact
                 x = s.cev(a[0])
                 y = s.cev(a[1])
@@ -5603,6 +5625,10 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         if m.memmove else "") + (
         "declare i32 @memcmp(ptr nocapture, ptr nocapture, i64) nounwind readonly\n" if m.memcmp else "") + (
         g6decls + "\n" + "\n".join(chunks))  # G2 A5/B2, G3, G6 A3, G9 A3; P2 batch 4: llvm.bswap when used
+    if m.uses_utf8_valid:
+        ir += Path(__file__).with_name("utf8_valid.ll").read_text()
+    if m.uses_utf8_panic:
+        ir += "declare void @pruv_panic_utf8(i64) noreturn cold nounwind\n"
     if m.par_trampolines:
         ir = "%pruv_g7_job = type { ptr, ptr }\n" + "\n".join(m.par_types) + "\n" + ir
         ir += "declare void @pruv_g7_v1_run(ptr, i64) nounwind\n"

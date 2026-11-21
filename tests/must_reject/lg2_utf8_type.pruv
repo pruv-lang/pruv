@@ -1,0 +1,3 @@
+fn f(s: str) -> bool {
+  return utf8_valid(s);
+}

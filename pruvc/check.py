@@ -34,8 +34,8 @@ def x_has_bit(e):
 
 
 # P2 batch 4: byte-word access on [u8]: load_be(a, i, n) and the statement-only store_be(inout a, i, w, n)
-WORD_BUILTINS = ("load_be", "store_be")
-BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range", "resize", "copy_range", "copy_within") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range; L-copy-range
+WORD_BUILTINS = ("load_be", "store_be", "load_le", "store_le")
+BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range; L-copy-range
 RESERVED_TYPE_NAMES = ("Option", "Result", "Some", "None", "Ok", "Err")
 TYPE_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9_]*\Z")
 FIELD_NAME_RE = re.compile(r"[a-z][A-Za-z0-9_]*\Z")
@@ -2161,16 +2161,16 @@ class Checker:
         store_be(inout a, i, w, n) -> (); n is an integer literal 1..=8 (a non-literal or out-of-range n is
         type/type_mismatch, a wrong argument count type/arity)"""
         n, a = e.name, e.args
-        store = n == "store_be"
+        store = n in ("store_be", "store_le")
         k = 4 if store else 3
         if len(a) != k:
             terr(e, "arity", "%s takes %d argument(s), got %d" % (n, k, len(a)))
         if store:
-            if c: terr(e, "effect_in_contract", "store_be not allowed in contracts")
+            if c: terr(e, "effect_in_contract", "%s not allowed in contracts" % n)
             arg = a[0]
             if not isinstance(arg, InoutArg):
-                terr(arg, "inout_argument", "the array of store_be needs the `inout` marker",
-                     "write `store_be(inout name, i, w, n)` with a `let mut` local array or an inout parameter")
+                terr(arg, "inout_argument", "the array of %s needs the `inout` marker" % n,
+                     "write `%s(inout name, i, w, n)` with a `let mut` local array or an inout parameter" % n)
             op = arg.expr
             if not isinstance(op, Var):
                 terr(arg, "inout_argument", "an inout argument must be the whole name of a local array or an inout "
@@ -2196,7 +2196,8 @@ class Checker:
                 terr(arg, "inout_alias", "%s is passed inout and also used elsewhere in the arguments of this call" % op.name,
                      "compute the other value first, e.g. `let n: i64 = len(%s);`, then pass n" % op.name)
             if e is not s.boundary:
-                terr(e, "inout_context", "store_be must be a whole expression statement", "write `store_be(inout a, i, w, n);` as a statement")
+                terr(e, "inout_context", "%s must be a whole expression statement" % n,
+                     "write `%s(inout a, i, w, n);` as a statement" % n)
         else:
             s.expect(a[0], ARRAY_U8, scope, c)
             s.expect(a[1], I64, scope, c)
@@ -2422,6 +2423,13 @@ class Checker:
             s.expect(a[3], I64, scope, c)
             s.expect(a[4], I64, scope, c)
             return BOOL
+        if n in ("utf8_valid", "str_from_utf8"):
+            if c and n == "str_from_utf8":
+                terr(e, "effect_in_contract", "str_from_utf8 not allowed in contracts")
+            arity(1); s.expect(a[0], ARRAY_U8, scope, c)
+            if n == "utf8_valid":
+                return BOOL
+            s.used_effects.add("alloc"); return STR
         if n == "substr":   # G2 B0
             if c: terr(e, "effect_in_contract", "substr not allowed in contracts")
             arity(3); s.expect(a[0], STR, scope, c); s.expect(a[1], I64, scope, c); s.expect(a[2], I64, scope, c)
@@ -2653,7 +2661,7 @@ def x_scan_expr(e, funcs):
                 return r
         return None
     if isinstance(e, Call):
-        if e.name in funcs or e.name == "len" or e.name in BIT_BUILTINS or e.name == "load_be":
+        if e.name in funcs or e.name == "len" or e.name in BIT_BUILTINS or e.name in ("load_be", "load_le", "utf8_valid"):
             for a in e.args:
                 r = x_scan_expr(a, funcs)
                 if r is not None:

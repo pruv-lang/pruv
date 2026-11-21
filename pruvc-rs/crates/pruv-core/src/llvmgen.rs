@@ -911,6 +911,8 @@ pub struct Mod {
     pub need_eq: BTreeSet<String>,
     /// P2 batch 4: widths of the llvm.bswap declarations the byte-word accesses used
     pub bswap: BTreeSet<u32>,
+    pub uses_utf8_valid: bool,
+    pub uses_utf8_panic: bool,
     /// P3: some external array-return wrapper normalizes cap to len with @pruv_shrink_v2
     pub shrink: bool,
     /// some host wrapper of an inout entry calls @pruv_overlap (module gets DECLS_OVERLAP)
@@ -954,6 +956,8 @@ impl Mod {
             need_size: BTreeSet::new(),
             need_eq: BTreeSet::new(),
             bswap: BTreeSet::new(),
+            uses_utf8_valid: false,
+            uses_utf8_panic: false,
             shrink: false,
             overlap: false,
             stack: crate::stack::StackPlan::default(),
@@ -1078,6 +1082,7 @@ pub enum Fail {
     Cost,
     Panic1(&'static str, String),
     Oob(String, String),
+    Utf8(String),
     Requires(String, String),
     /// u8 element range violation: (value SSA, range text). The string is registered when the fail block is emitted.
     Elem(String, &'static str),
@@ -1355,6 +1360,7 @@ impl<'a> FnGen<'a> {
                 let s = self.m.string(msg);
                 self.ins(format!("call void @{}(ptr {})", func, s))
             }
+            Fail::Utf8(n) => self.ins(format!("call void @pruv_panic_utf8(i64 {})", n)),
             Fail::Oob(i, n) => self.ins(format!("call void @pruv_panic_oob(i64 {}, i64 {})", i, n)),
             Fail::Requires(a, b) => self.ins(format!("call void @pruv_panic_requires(ptr {}, ptr {})", a, b)),
             Fail::Elem(v, range) => {
@@ -3358,17 +3364,17 @@ impl<'a> FnGen<'a> {
         }
     }
 
-    /// big-endian i64 of the nb bytes at g
-    fn load_word(&mut self, g: &str, nb: i64) -> R<String> {
+    /// Read nb bytes at g as an i64 in the requested byte order.
+    fn load_word(&mut self, g: &str, nb: i64, little: bool) -> R<String> {
         if nb == 2 || nb == 4 || nb == 8 {
             let bits = (8 * nb) as u32;
             let x = self.op(format!("load i{}, ptr {}, align 1", bits, g))?;
-            let x = self.bswap(bits, &x)?;
+            let x = if little { x } else { self.bswap(bits, &x)? };
             return if nb == 8 { Ok(x) } else { self.op(format!("zext i{} {} to i64", bits, x)) };
         }
         let mut acc: Option<String> = None;
         for k in 0..nb {
-            let p = self.byte_at(g, k)?;
+            let p = self.byte_at(g, if little { nb - 1 - k } else { k })?;
             let b = self.op(format!("load i8, ptr {}", p))?;
             let mut b = self.op(format!("zext i8 {} to i64", b))?;
             if let Some(a) = acc {
@@ -3380,8 +3386,8 @@ impl<'a> FnGen<'a> {
         acc.ok_or_else(|| IDX_ERR.to_string())
     }
 
-    /// the low 8*nb bits of w, big-endian, at g: one store for nb in {1,2,4,8}, else pieces of 4/2/1 bytes high to low
-    fn store_word(&mut self, g: &str, w: &str, nb: i64) -> R<()> {
+    /// Store the low 8*nb bits of w at g in 8/4/2/1-byte pieces.
+    fn store_word(&mut self, g: &str, w: &str, nb: i64, little: bool) -> R<()> {
         let mut off: i64 = 0;
         while off < nb {
             let left = nb - off;
@@ -3389,10 +3395,10 @@ impl<'a> FnGen<'a> {
             if nb == 1 || nb == 2 || nb == 4 || nb == 8 {
                 p = nb;
             }
-            let sh = 8 * (left - p);
+            let sh = 8 * if little { off } else { left - p };
             let x = if sh == 0 { w.to_string() } else { self.op(format!("lshr i64 {}, {}", w, sh))? };
             if p == 8 {
-                let x = self.bswap(64, &x)?;
+                let x = if little { x } else { self.bswap(64, &x)? };
                 let ptr = self.byte_at(g, off)?;
                 self.ins(format!("store i64 {}, ptr {}, align 1", x, ptr))?;
             } else if p == 1 {
@@ -3402,7 +3408,7 @@ impl<'a> FnGen<'a> {
             } else {
                 let bits = (8 * p) as u32;
                 let x = self.op(format!("trunc i64 {} to i{}", x, bits))?;
-                let x = self.bswap(bits, &x)?;
+                let x = if little { x } else { self.bswap(bits, &x)? };
                 let ptr = self.byte_at(g, off)?;
                 self.ins(format!("store i{} {}, ptr {}, align 1", bits, x, ptr))?;
             }
@@ -4029,16 +4035,16 @@ impl<'a> FnGen<'a> {
             }
             return Ok(V::new(Kind::I1, r));
         }
-        if n == "load_be" {
+        if matches!(n, "load_be" | "load_le") {
             // P2 batch 4: array, then index
             let arr = self.ev(arg(a, 0)?, false)?;
             let i = self.ev(arg(a, 1)?, false)?;
             let nb = crate::check::word_width(arg(a, 2)?).unwrap_or(0);
             let g = self.word_ptr(&arr, &i, nb)?;
-            let r = self.load_word(&g, nb)?;
+            let r = self.load_word(&g, nb, n == "load_le")?;
             return Ok(V::new(Kind::I64, r));
         }
-        if n == "store_be" {
+        if matches!(n, "store_be" | "store_le") {
             // P2 batch 4: index, value, then the array
             let i = self.ev(arg(a, 1)?, false)?;
             let w = self.ev(arg(a, 2)?, false)?;
@@ -4049,8 +4055,27 @@ impl<'a> FnGen<'a> {
             let arr = self.ev(target, false)?;
             let nb = crate::check::word_width(arg(a, 3)?).unwrap_or(0);
             let g = self.word_ptr(&arr, &i, nb)?;
-            self.store_word(&g, &w.a, nb)?;
+            self.store_word(&g, &w.a, nb, n == "store_le")?;
             return Ok(V::unit());
+        }
+        if n == "utf8_valid" {
+            let b = self.ev(arg(a, 0)?, false)?;
+            self.m.uses_utf8_valid = true;
+            let ok = self.op(format!("call i1 @pruv_utf8_valid(ptr {}, i64 {})", b.a, b.b))?;
+            return Ok(V::new(Kind::I1, ok));
+        }
+        if n == "str_from_utf8" {
+            let b = self.ev(arg(a, 0)?, false)?;
+            if !self.verified {
+                self.m.uses_utf8_valid = true;
+                self.m.uses_utf8_panic = true;
+                let ok = self.op(format!("call i1 @pruv_utf8_valid(ptr {}, i64 {})", b.a, b.b))?;
+                self.guard(&ok, Fail::Utf8(b.b.clone()), false)?;
+            }
+            let p = self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 1, i64 1)", b.a, b.b))?;
+            let mut rv = V::with_b(Kind::Arr, p, b.b);
+            rv.ty = Some(STR.to_string());
+            return self.temp_arr(rv, owned);
         }
         if n == "substr" {
             // G2 B2: argument order s -> lo -> hi
@@ -4966,6 +4991,12 @@ impl<'a> FnGen<'a> {
                     // G6 A3: map_lookup / map_updated: not evaluable on LLVM yet
                     return Err(g6_diag_err(x.line, x.col));
                 }
+                if n == "utf8_valid" {
+                    let b = self.cev(arg(a, 0)?)?;
+                    self.m.uses_utf8_valid = true;
+                    let ok = self.op(format!("call i1 @pruv_utf8_valid(ptr {}, i64 {})", b.a, b.b))?;
+                    return Ok(V::new(Kind::I1, ok));
+                }
                 if n == "is_char_boundary" {
                     // G2 B2
                     let s = self.cev(arg(a, 0)?)?;
@@ -4978,7 +5009,7 @@ impl<'a> FnGen<'a> {
                     let c = self.op(format!("icmp ne i32 {}, 0", r))?;
                     return Ok(V::new(Kind::I1, c));
                 }
-                if n == "load_be" {
+                if matches!(n, "load_be" | "load_le") {
                     // P2 batch 4: 0 <= i && i + nb <= len(a) in i128, then the word
                     let arr = self.cev(arg(a, 0)?)?;
                     let i = self.cev(arg(a, 1)?)?;
@@ -4991,7 +5022,7 @@ impl<'a> FnGen<'a> {
                     self.guard(&ok, und("array index out of range".to_string()), false)?;
                     let ii = self.op(format!("trunc i128 {} to i64", i.a))?;
                     let g = self.op(format!("getelementptr inbounds i8, ptr {}, i64 {}", arr.a, ii))?;
-                    let w = self.load_word(&g, nb)?;
+                    let w = self.load_word(&g, nb, n == "load_le")?;
                     let r = self.op(format!("sext i64 {} to i128", w))?;
                     return Ok(V::new(Kind::I128, r));
                 }
@@ -6730,6 +6761,12 @@ fn gen_llvm_body(
         g6decls,
         chunks.join("\n")
     );
+    if m.uses_utf8_valid {
+        ir.push_str(include_str!("../../../../pruvc/utf8_valid.ll"));
+    }
+    if m.uses_utf8_panic {
+        ir.push_str("declare void @pruv_panic_utf8(i64) noreturn cold nounwind\n");
+    }
     if !m.par_trampolines.is_empty() {
         ir = format!("%pruv_g7_job = type {{ ptr, ptr }}\n{}\n{}", m.par_types.join("\n"), ir);
         ir.push_str("declare void @pruv_g7_v1_run(ptr, i64) nounwind\n");

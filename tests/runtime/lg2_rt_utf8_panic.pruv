@@ -1,0 +1,5 @@
+fn run() -> () ! alloc, io {
+  let b: [u8] = alloc(1, 128);
+  let s: str = str_from_utf8(b);
+  print(len(s));
+}

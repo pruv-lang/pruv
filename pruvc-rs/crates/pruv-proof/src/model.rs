@@ -501,6 +501,7 @@ pub struct Model {
     bufs: RefCell<HashMap<String, BufFns>>,
     maps: RefCell<HashMap<String, (Sort, StructFns)>>,
     strkey: RefCell<Option<FuncDecl>>,
+    utf8_valid_decl: RefCell<Option<FuncDecl>>,
     buf_names: RefCell<HashSet<String>>,
     /// lazily declared uninterpreted `size!<Name>` / `wf!<Name>` functions
     size_f: RefCell<HashMap<String, FuncDecl>>,
@@ -663,6 +664,7 @@ impl Model {
             bufs: RefCell::new(HashMap::new()),
             maps: RefCell::new(HashMap::new()),
             strkey: RefCell::new(None),
+            utf8_valid_decl: RefCell::new(None),
             buf_names: RefCell::new(HashSet::new()),
             size_f: RefCell::new(HashMap::new()),
             wf_f: RefCell::new(HashMap::new()),
@@ -1388,6 +1390,19 @@ impl Model {
     /// `Model.try_sort_of` (Python `sort_of` raises `KeyError(name)` when there is no sort).
     pub fn map_key_sort(&self, ty: &GType) -> Result<Sort, String> {
         if ty.to_key() == "string" { Ok(self.int_sort.clone()) } else { self.try_sort_of(&Ty::from_gtype(ty)) }
+    }
+
+    pub fn utf8_valid(&self, len: &Ast, bytes: &Ast) -> Ast {
+        let mut decl = self.utf8_valid_decl.borrow_mut();
+        let pred = decl.get_or_insert_with(|| {
+            self.z.func_decl("utf8_valid!", &[self.int_sort.clone(), bytes.sort()], &self.bool_sort)
+        });
+        // Array tails outside the logical length are unobservable.
+        let k = self.z.int_const("utf8!k");
+        let in_range = self.z.and(&[k.ge_i(0), k.lt(len)]);
+        let byte = self.z.ite(&in_range, &bytes.select(&k), &self.z.int(0));
+        let contents = self.z.lambda(std::slice::from_ref(&k), &byte);
+        pred.apply(&[len.clone(), contents])
     }
 
     pub fn text_map_key(&self, len: &Ast, bytes: &Ast) -> Ast {
