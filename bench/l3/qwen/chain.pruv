@@ -49,6 +49,31 @@ fn put(inout arena: [u8], at: i64, s: str) -> ()
   }
 }
 
+// DB23 (G-R05-5): string_field's outcome for doc[id].key written straight into arena[at..], with no copy into a
+// fresh str. Result: decoded length >= 0 (written), -1 Missing, -2 Defect (string_field's Field::Defect), -3 no room.
+fn put_field(doc: crate::json::JsonDocument, id: i64, key: str, inout arena: [u8], at: i64) -> i64 ! alloc
+  requires 0 <= at && at <= len(arena)
+  ensures len(arena) == len(old(arena))
+  ensures result >= -3 && (result >= 0 ==> result <= len(arena) - at)
+{
+  let f: i64 = crate::access::field(doc, id, key);
+  if f == -1 || f == -2 { return -1; }
+  if f < 0 { return -2; }
+  let k: i64 = crate::access::kind(doc, f);
+  if k < 0 { return -2; }
+  if k != 4 { return -1; }
+  let t: crate::jstr::Text = crate::access::string_text(doc, f);
+  match t {
+    crate::jstr::Text::InternalInvariant(e) => { return -2; }
+    crate::jstr::Text::Decoded(v) => {
+      if len(v) > 50331648 { return -2; }
+      if len(v) > len(arena) - at { return -3; }
+      put(inout arena, at, v);
+      return len(v);
+    }
+  }
+}
+
 // Same bytes at two arena spans.
 fn same_span(arena: [u8], a: i64, an: i64, b: i64, bn: i64) -> bool
   requires 0 <= a && 0 <= an && a + an <= len(arena) && 0 <= b && 0 <= bn && b + bn <= len(arena)
@@ -79,6 +104,9 @@ pub fn scan(data: [u8], cut: bool, inout arena: [u8], inout heads: [i64], inout 
   let mut used: i64 = 0;
   let mut aused: i64 = 0;
   let mut ord: i64 = 0;
+  // DB23: one parse scratch for the whole scan (tape 4096 records, stack 516).
+  let mut tape: [i64] = alloc(24576, 0);
+  let mut stack: [i64] = alloc(516, 0);
   let mut off: i64 = crate::framing::skip_first(data, cut);
   while off < len(data)
     invariant 0 <= off && off <= len(data) && len(data) <= 8388608 && len(arena) == len(data)
@@ -91,54 +119,39 @@ pub fn scan(data: [u8], cut: bool, inout arena: [u8], inout heads: [i64], inout 
     match step {
       crate::framing::Frame::Entry(s, e, n) => {
         if s < 0 || s >= len(data) || e < s || e > len(data) || n <= off || n > len(data) { return Found { leaf: -1, found: false, bad: true }; }
-        let line: crate::entry::Line = crate::entry::parse_line(data, s, e);
+        let line: crate::entry::Line = crate::entry::parse_line_span(data, s, e, inout tape, inout stack);
         match line {
           crate::entry::Line::Object(d) => {
-            let f: crate::entry::Field = crate::entry::string_field(d, 0, "uuid");
-            match f {
-              crate::entry::Field::Value(u) => {
-                // DB6: one "type" key lookup, then three literal compares on that value.
-                let ty: i64 = crate::entry::string_id(d, 0, "type");
-                let role: bool = ty >= 0 && (crate::access::string_is(d, ty, "user") == 1 || crate::access::string_is(d, ty, "assistant") == 1 || crate::access::string_is(d, ty, "tool_result") == 1);
-                if len(u) > 0 {
-                  if used + 6 > len(slots) { return Found { leaf: -1, found: false, bad: true }; }
-                  if len(u) > len(arena) - aused { return Found { leaf: -1, found: false, bad: true }; }
-                  let uo: i64 = aused;
-                  put(inout arena, uo, u);
-                  aused = aused + len(u);
-                  let mut po: i64 = aused;
-                  let mut pl: i64 = -1;
-                  let p: crate::entry::Field = crate::entry::string_field(d, 0, "parentUuid");
-                  match p {
-                    crate::entry::Field::Value(v) => {
-                      if len(v) > len(arena) - aused { return Found { leaf: -1, found: false, bad: true }; }
-                      put(inout arena, po, v);
-                      aused = aused + len(v);
-                      pl = len(v);
-                    }
-                    crate::entry::Field::Missing => { pl = -1; }
-                    crate::entry::Field::Defect(k) => { pl = -2; }
-                  }
-                  let b: i64 = bucket(arena, uo, len(u), len(heads) - 1);
-                  slots[used] = ord;
-                  slots[used + 1] = heads[b];
-                  slots[used + 2] = uo;
-                  slots[used + 3] = len(u);
-                  slots[used + 4] = po;
-                  slots[used + 5] = pl;
-                  heads[b] = used;
-                  if role || !role_seen {
-                    // A leaf candidate reads its parent strictly.
-                    if pl == -2 { return Found { leaf: -1, found: false, bad: true }; }
-                    found = true;
-                    leaf = used;
-                  }
-                  used = used + 6;
-                  if role { role_seen = true; }
-                }
+            // DB23: uuid decoded straight into the arena (no string_field copy); a zero-length uuid adds no slot.
+            let ul: i64 = put_field(d, 0, "uuid", inout arena, aused);
+            if ul == -2 || ul == -3 { return Found { leaf: -1, found: false, bad: true }; }
+            if ul > 0 {
+              // DB6: one "type" key lookup, then three literal compares on that value.
+              let ty: i64 = crate::entry::string_id(d, 0, "type");
+              let role: bool = ty >= 0 && (crate::access::string_is(d, ty, "user") == 1 || crate::access::string_is(d, ty, "assistant") == 1 || crate::access::string_is(d, ty, "tool_result") == 1);
+              if used + 6 > len(slots) { return Found { leaf: -1, found: false, bad: true }; }
+              let uo: i64 = aused;
+              aused = aused + ul;
+              let po: i64 = aused;
+              let pl: i64 = put_field(d, 0, "parentUuid", inout arena, aused);
+              if pl == -3 { return Found { leaf: -1, found: false, bad: true }; }
+              if pl >= 0 { aused = aused + pl; }
+              let b: i64 = bucket(arena, uo, ul, len(heads) - 1);
+              slots[used] = ord;
+              slots[used + 1] = heads[b];
+              slots[used + 2] = uo;
+              slots[used + 3] = ul;
+              slots[used + 4] = po;
+              slots[used + 5] = pl;
+              heads[b] = used;
+              if role || !role_seen {
+                // A leaf candidate reads its parent strictly.
+                if pl == -2 { return Found { leaf: -1, found: false, bad: true }; }
+                found = true;
+                leaf = used;
               }
-              crate::entry::Field::Missing => { found = found; }
-              crate::entry::Field::Defect(k) => { return Found { leaf: -1, found: false, bad: true }; }
+              used = used + 6;
+              if role { role_seen = true; }
             }
           }
           crate::entry::Line::Skip => { found = found; }

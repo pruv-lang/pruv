@@ -299,13 +299,13 @@ fn stamp_of(doc: crate::json::JsonDocument) -> Stamp ! alloc
   return Stamp::At(copy(s));
 }
 
-fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: str, inout st: [i64], inout sl: [i64], inout buf: [u8]) -> i64 ! alloc
+fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: str, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
   requires 0 <= c && c < len(doc.tape) / 6
   requires len(at) == 0 || len(at) == 24
-  requires len(st) == 4 && len(sl) == 1600 && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf)) && 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
+  requires len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-  ensures len(st) == 4 && len(sl) == 1600 && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+  ensures len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
   ensures st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
   ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
@@ -318,7 +318,7 @@ fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: str, inout st: [i64
   while j < stop
     invariant 0 <= c && c < j && j <= stop && stop <= len(doc.tape) / 6 && len(doc.tape) <= 6291456
     invariant len(at) == 0 || len(at) == 24
-    invariant len(st) == 4 && len(sl) == 1600 && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf)) && 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
+    invariant len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
     invariant st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
@@ -326,9 +326,9 @@ fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: str, inout st: [i64
   {
     let next: i64 = doc.tape[6 * j + 3];
     if next <= j || next > stop || doc.tape[6 * j + 4] != c { return -4; }
-    let bk: i64 = crate::access::kind(doc, j);
-    if bk < 0 { return -4; }
-    if bk == 6 {
+    let bkind: i64 = crate::access::kind(doc, j);
+    if bkind < 0 { return -4; }
+    if bkind == 6 {
       let thought: i64 = crate::entry::is_true(doc, j, "thought");
       if thought < 0 { return -4; }
       if thought != 1 {
@@ -336,7 +336,7 @@ fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: str, inout st: [i64
         match tx {
           crate::entry::Field::Value(x) => {
             if len(x) > 50331648 { return -4; }
-            crate::turns::answer(inout st, inout sl, inout buf, x, at);
+            crate::turns::answer2(inout st, inout sl, inout bk, x, at);
           }
           crate::entry::Field::Missing => {
             let call: i64 = crate::entry::object_field(doc, j, "functionCall");
@@ -352,11 +352,11 @@ fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: str, inout st: [i64
   return 0;
 }
 
-pub fn consume_entry(doc: crate::json::JsonDocument, inout st: [i64], inout sl: [i64], inout buf: [u8]) -> Effect ! alloc
-  requires len(st) == 4 && len(sl) == 1600 && 65584 * (st[0] % 200) + 65584 <= len(buf) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf)) && 0 <= st[0] && st[0] < 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
+pub fn consume_entry(doc: crate::json::JsonDocument, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> Effect ! alloc
+  requires len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[0] && st[0] < 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-  ensures len(st) == 4 && len(sl) == 1600 && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+  ensures len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
   ensures old(st)[0] <= st[0] && st[0] <= old(st)[0] + 1 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
   ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
@@ -388,7 +388,7 @@ pub fn consume_entry(doc: crate::json::JsonDocument, inout st: [i64], inout sl: 
   match h {
     crate::entry::Field::Value(p) => {
       if len(p) > 50331648 { return Effect::Defect(-4); }
-      crate::turns::begin(inout st, inout sl, inout buf, p, at);
+      crate::turns::begin2(inout st, inout sl, inout bk, p, at);
       return Effect::Done(rank, copy(title), copy(nothing));
     }
     crate::entry::Field::Missing => { idle = true; }
@@ -416,7 +416,7 @@ pub fn consume_entry(doc: crate::json::JsonDocument, inout st: [i64], inout sl: 
   let k: i64 = crate::access::kind(doc, c);
   if k < 0 { return Effect::Defect(k); }
   if k != 5 { return Effect::Done(rank, copy(title), copy(model)); }
-  let r: i64 = answer_blocks(doc, c, at, inout st, inout sl, inout buf);
+  let r: i64 = answer_blocks(doc, c, at, inout st, inout sl, inout bk);
   if r < 0 { return Effect::Defect(r); }
   return Effect::Done(rank, copy(title), copy(model));
 }
@@ -447,17 +447,21 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
   let mut pending: bool = false;
   let mut st: [i64] = crate::turns::new_state();
   let mut sl: [i64] = crate::turns::new_slots();
-  let mut buf: [u8] = crate::turns::new_buffer();
+  // DB23: content-sized turn store instead of the 13 MB fixed-stride buffer.
+  let mut bk: crate::turns::Store = crate::turns::new_store();
   let mut best: str = "";
   let mut best_rank: i64 = 0;
   let mut model: str = "";
   let mut idle: bool = false;
+  // DB23: one parse scratch for the whole window (tape 4096 records, stack 516).
+  let mut tape: [i64] = alloc(24576, 0);
+  let mut stack: [i64] = alloc(516, 0);
   let mut offset: i64 = crate::framing::skip_first(data, cut_before);
   while offset < len(data)
     invariant 0 <= ordinal && ordinal <= offset
     invariant 0 <= offset && offset <= len(data) && len(data) <= 8388608
     invariant 0 <= best_rank && best_rank <= 3
-    invariant len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf)) && 0 <= st[0] && st[0] <= offset && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
+    invariant len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[0] && st[0] <= offset && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
     decreases len(data) - offset
@@ -466,7 +470,7 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
     match step {
       crate::framing::Frame::Entry(start, end, next) => {
         if start < 0 || start > end || end > len(data) || next <= offset || next > len(data) { return wfail_zero(); }
-        let line: crate::entry::Line = crate::entry::parse_line(data, start, end);
+        let line: crate::entry::Line = crate::entry::parse_line_span(data, start, end, inout tape, inout stack);
         match line {
           crate::entry::Line::Object(d) => {
             let t: crate::entry::Title = crate::entry::title_of(d);
@@ -479,8 +483,7 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
             if !chain.active || selected[ordinal] == 1 {
               if !started && pending { crate::turns::skip_user(inout st); }
               started = true;
-            if 65584 * (st[0] % 200) + 65584 > len(buf) { buf = crate::turns::grow(buf, st[0]); }
-            let eff: Effect = consume_entry(d, inout st, inout sl, inout buf);
+            let eff: Effect = consume_entry(d, inout st, inout sl, inout bk);
             match eff {
               Effect::Done(rank, cand, mid) => {
                 if rank >= 1 && rank <= 3 {
@@ -518,7 +521,7 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
   let ml: i64 = len(model);
   if tl > 4096 || ml > 3145728 { return wfail_zero(); }
   let base: i64 = tl + ml;
-  let col: crate::turns::Collected = crate::turns::finish(st, sl, buf, base);
+  let col: crate::turns::Collected = crate::turns::finish2(st, sl, inout bk, base);
   let nt: i64 = len(col.turns);
   let nx: i64 = len(col.text);
   if nt < 0 || nt > 2000 || nx < 0 || nx > 2106752 { return wfail_zero(); }
