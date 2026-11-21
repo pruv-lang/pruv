@@ -1,0 +1,13 @@
+// LG14 (G-LG13-6): the assignment target is passed inout in the same statement as a `?`; inout_context
+fn set(inout x: i64) -> Result<i64>
+  requires x <= 100
+{
+  x = 1;
+  return Ok(0);
+}
+
+fn f() -> Result<i64> {
+  let mut x: i64 = 0;
+  x = set(inout x)? + 1;
+  return Ok(x);
+}

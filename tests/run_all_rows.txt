@@ -731,6 +731,7 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg12_try_enum.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg13_e2_value_ok.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg13_try_expr.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg14_try_temps.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg2_rt_u8_field_move.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg2_rt_utf8.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg2_rt_utf8_panic.pruv"}
@@ -1058,6 +1059,7 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg12_e2_paths.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg12_try_enum.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg13_try_expr.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg14_try_temps.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/r04.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/refine_array_edges.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/refine_edges.pruv"}
@@ -1412,6 +1414,7 @@
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg12_try_enum.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg13_e2_value_ok.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg13_try_expr.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg14_try_temps.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg2_rt_u8_field_move.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg2_rt_utf8.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg2_rt_words_le.pruv"}
@@ -2243,6 +2246,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg12_try_enum.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg13_e2_value_ok.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg13_try_expr.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg14_try_temps.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg2_rt_u8_field_move.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg2_rt_utf8.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg2_rt_utf8_panic.pruv"}
@@ -2574,6 +2578,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg12_e2_paths.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg12_try_enum.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg13_try_expr.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg14_try_temps.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/r04.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/refine_array_edges.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/refine_edges.pruv"}
@@ -2932,6 +2937,7 @@
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg12_try_enum.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg13_e2_value_ok.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg13_try_expr.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg14_try_temps.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg2_rt_u8_field_move.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg2_rt_utf8.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg2_rt_words_le.pruv"}
@@ -4694,6 +4700,18 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg13_try_and_right.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg13_try_field_assign.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg13_try_inout_read.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg14_try_after_quant.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg14_try_inout_assign.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg14_try_inout_assign_read.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg14_try_move_reused.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg14_try_pred.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg14_try_pred_ctor.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg14_try_temp_borrow_move.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg14_try_temp_inout_read.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg14_try_temp_io_inout.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg14_try_temp_nested_inout.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg14_try_temp_string.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg14_try_temp_subview.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg2_load_le_index.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg2_load_le_width.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg2_store_le_contract.pruv"}

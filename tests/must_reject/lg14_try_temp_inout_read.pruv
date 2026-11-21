@@ -1,0 +1,6 @@
+// LG14 audit: an operand read before a `?` in a statement that passes the same name inout stays try_position
+fn use3(n: i64, k: i64, inout x: i64) -> i64 { x = k; return n; }
+fn f() -> Result<i64> {
+  let mut x: i64 = 1;
+  return Ok(use3(x + 0, Ok(0)?, inout x));
+}

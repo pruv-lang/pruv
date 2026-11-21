@@ -1,0 +1,5 @@
+// LG14 audit: a borrow before a `?` of a name the statement moves later stays try_position
+fn consume(n: i64, v: i64, take s: String) -> i64 { return n; }
+fn f(take s: String) -> Result<i64> {
+  return Ok(consume(len(s), Ok(0)?, move s));
+}

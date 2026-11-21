@@ -1,0 +1,7 @@
+// LG14 audit: an io call before a `?` whose statement passes inout stays try_position
+fn noisy() -> i64 ! io { print(1); return 0; }
+fn set(inout x: i64) -> Result<i64> { x = 1; return Ok(0); }
+fn f() -> Result<i64> ! io {
+  let mut x: i64 = 0;
+  return Ok(noisy() + set(inout x)?);
+}

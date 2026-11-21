@@ -1,0 +1,2 @@
+// LG14 audit: a `?` on a constructor in a pred return is try_position in both compilers
+pred fn p() -> bool { return Ok::<bool>(true)?; }
