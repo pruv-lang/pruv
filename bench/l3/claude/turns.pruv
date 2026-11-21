@@ -110,19 +110,19 @@ pub fn reclaim(inout st: [i64], inout sl: [i64], inout buf: [u8]) -> ()
   st[4] = used;
 }
 
-// An empty result leaves ownership with the caller. Growth replaces the array, retaining all offsets.
-fn reserve(buf: [u8], need: i64) -> [u8] ! alloc
+// Grow the arena only as needed, retaining all existing offsets and bytes.
+fn reserve(inout buf: [u8], need: i64) -> () ! alloc
   requires 0 <= need && need <= 1000000000000
-  ensures len(result) == 0 ==> need <= len(buf)
-  ensures len(result) > 0 ==> (need <= len(result) && len(buf) < len(result))
-  ensures len(result) > 0 ==> (forall k in 0..len(buf): result[k] == buf[k])
+  ensures need <= len(buf)
+  ensures len(old(buf)) <= len(buf)
+  ensures forall k in 0..len(old(buf)): buf[k] == old(buf)[k]
 {
   let cap: i64 = len(buf);
-  if need <= cap { return alloc(0, 0); }
+  if need <= cap { return; }
   let mut next: i64 = 2 * cap;
   if next < need { next = need; }
   if next > 1000000000000 { next = 1000000000000; }
-  return resize(buf, next, 0);
+  buf = resize(buf, next, 0);
 }
 
 // dst[at..at+n) = src[0..n); everything else unchanged.
@@ -170,16 +170,15 @@ fn write_piece(inout dst: [u8], at: i64, sep: i64, text: str, n: i64) -> ()
 // begin: new current draft in slot begun % 200 (evicting the oldest), prompt clipped to 32768 bytes (longest
 // whole-scalar prefix), clipped set when the original exceeded the cap or lost_before was set, lost_before
 // cleared, reply/budget/tools/completedAt reset, optional createdAt stored.
-pub fn begin(inout st: [i64], inout sl: [i64], inout buf: [u8], prompt: str, created: str) -> [u8] ! alloc
+pub fn begin(inout st: [i64], inout sl: [i64], inout buf: [u8], prompt: str, created: str) -> () ! alloc
   requires spans(st, sl, len(buf)) && st[4] <= 1000000000000 - 32792
   requires 0 <= st[0] && st[0] < 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
   requires fields(sl)
   requires forall s in 0..200: ((st[0] <= s ==> sl[1600 + s] == -1) && (st[0] > s ==> (0 <= sl[1600 + s] && sl[1600 + s] < st[0] && st[0] - 200 <= sl[1600 + s] && sl[1600 + s] % 200 == s)))
   requires len(prompt) <= 100000000
   requires len(created) == 0 || len(created) == 24
-  ensures len(buf) == len(old(buf))
-  ensures len(result) == 0 ==> spans(st, sl, len(buf))
-  ensures len(result) > 0 ==> spans(st, sl, len(result))
+  ensures len(old(buf)) <= len(buf)
+  ensures spans(st, sl, len(buf))
   ensures st[0] == old(st)[0] + 1 && st[1] == 1 && st[2] == 0 && st[3] == old(st)[0] % 200
   ensures fields(sl)
   ensures forall s in 0..200: ((st[0] <= s ==> sl[1600 + s] == -1) && (st[0] > s ==> (0 <= sl[1600 + s] && sl[1600 + s] < st[0] && st[0] - 200 <= sl[1600 + s] && sl[1600 + s] % 200 == s)))
@@ -203,12 +202,8 @@ pub fn begin(inout st: [i64], inout sl: [i64], inout buf: [u8], prompt: str, cre
   let n: i64 = len(cp);
   let start: i64 = st[4];
   let end: i64 = start + n + len(created);
-  let mut grown: [u8] = reserve(buf, end);
-  if len(grown) > 0 {
-    write_begin(inout grown, start, cp, created);
-  } else {
-    write_begin(inout buf, start, cp, created);
-  }
+  reserve(inout buf, end);
+  write_begin(inout buf, start, cp, created);
   let has: i64 = len(created) / 24;
   let mut cl: i64 = 0;
   if len(prompt) > 32768 || st[2] == 1 { cl = 1; }
@@ -226,7 +221,6 @@ pub fn begin(inout st: [i64], inout sl: [i64], inout buf: [u8], prompt: str, cre
   st[1] = 1;
   st[2] = 0;
   st[3] = w;
-  return grown;
 }
 
 fn write_begin(inout dst: [u8], start: i64, prompt: str, created: str) -> ()
@@ -272,16 +266,15 @@ pub fn tool(inout st: [i64], inout sl: [i64]) -> ()
 // it fits the remaining budget, else its longest whole-scalar prefix is appended, the budget counter saturates
 // at 32768 and clipped is set. The counter is separate from the actual reply length (a multibyte cut leaves
 // unused bytes that later calls must not fill).
-pub fn answer(inout st: [i64], inout sl: [i64], inout buf: [u8], text: str, at: str, limit: i64) -> [u8] ! alloc
+pub fn answer(inout st: [i64], inout sl: [i64], inout buf: [u8], text: str, at: str, limit: i64) -> () ! alloc
   requires spans(st, sl, len(buf)) && reply_room(st, sl, limit) && limit <= 1000000000000
   requires 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
   requires fields(sl)
   requires forall s in 0..200: ((st[0] <= s ==> sl[1600 + s] == -1) && (st[0] > s ==> (0 <= sl[1600 + s] && sl[1600 + s] < st[0] && st[0] - 200 <= sl[1600 + s] && sl[1600 + s] % 200 == s)))
   requires len(text) <= 100000000
   requires len(at) == 0 || len(at) == 24
-  ensures len(buf) == len(old(buf)) && reply_room(st, sl, limit)
-  ensures len(result) == 0 ==> spans(st, sl, len(buf))
-  ensures len(result) > 0 ==> spans(st, sl, len(result))
+  ensures len(old(buf)) <= len(buf) && reply_room(st, sl, limit)
+  ensures spans(st, sl, len(buf))
   ensures st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
   ensures fields(sl)
   ensures forall s in 0..200: ((st[0] <= s ==> sl[1600 + s] == -1) && (st[0] > s ==> (0 <= sl[1600 + s] && sl[1600 + s] < st[0] && st[0] - 200 <= sl[1600 + s] && sl[1600 + s] % 200 == s)))
@@ -294,7 +287,7 @@ pub fn answer(inout st: [i64], inout sl: [i64], inout buf: [u8], text: str, at: 
   ensures st[1] == 1 && len(at) == 0 ==> sl[8 * st[3] + 6] == old(sl)[8 * st[3] + 6]
   ensures st[1] == 1 && len(text) > 0 && old(sl)[8 * st[3] + 1] > 0 && len(text) + 2 <= 32768 - old(sl)[8 * st[3] + 2] ==> sl[8 * st[3] + 1] == old(sl)[8 * st[3] + 1] + 2 + len(text)
 {
-  if st[1] == 0 { return alloc(0, 0); }
+  if st[1] == 0 { return; }
   let c: i64 = st[3];
   let rl: i64 = sl[8 * c + 1];
   let used: i64 = sl[8 * c + 2];
@@ -325,18 +318,13 @@ pub fn answer(inout st: [i64], inout sl: [i64], inout buf: [u8], text: str, at: 
   if len(at) == 24 { has = 1; }
   let stamp: i64 = st[4] - 24 * was;
   let end: i64 = stamp + added + 24 * has;
-  let mut grown: [u8] = reserve(buf, end);
-  if len(grown) > 0 {
-    write_answer(inout grown, stamp, sep, text, take, at, was, has);
-  } else {
-    write_answer(inout buf, stamp, sep, text, take, at, was, has);
-  }
+  reserve(inout buf, end);
+  write_answer(inout buf, stamp, sep, text, take, at, was, has);
   sl[8 * c + 1] = rl + added;
   sl[8 * c + 2] = budget;
   sl[8 * c + 4] = clipped;
   sl[8 * c + 6] = has;
   st[4] = end;
-  return grown;
 }
 
 // The completed stamp sits immediately after the reply, including when the reply is empty.

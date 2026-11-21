@@ -74,7 +74,7 @@ MUTANTS = [
   'let used: i64 = sl[8 * c + 2];', 'let used: i64 = sl[8 * c + 1];'),
  (11, 'turns.pruv', 'block replies (and completedAt) after the prompt was clipped',
   '  let c: i64 = st[3];\n  let rl: i64 = sl[8 * c + 1];',
-  '  let c: i64 = st[3];\n  if sl[8 * c + 4] == 1 { return alloc(0, 0); }\n  let rl: i64 = sl[8 * c + 1];'),
+  '  let c: i64 = st[3];\n  if sl[8 * c + 4] == 1 { return; }\n  let rl: i64 = sl[8 * c + 1];'),
  (12, 'turns.pruv', 'reverse the suffix order in write_turns (newest turn first)',
   'let t: i64 = kept - 1 - j;', 'let t: i64 = j;'),
  (13, 'turns.pruv', 'plan uses >= at the inclusive 2097152 total cap',
@@ -89,7 +89,7 @@ MUTANTS = [
   'sl[8 * c + 3] = t + 1;', 'sl[8 * ((c + 1) % 200) + 3] = t + 1;'),
  (18, 'turns.pruv', 'stop updating completedAt once the reply budget is full',
   '  let c: i64 = st[3];\n  let rl: i64 = sl[8 * c + 1];',
-  '  let c: i64 = st[3];\n  if sl[8 * c + 2] >= 32768 { return alloc(0, 0); }\n  let rl: i64 = sl[8 * c + 1];'),
+  '  let c: i64 = st[3];\n  if sl[8 * c + 2] >= 32768 { return; }\n  let rl: i64 = sl[8 * c + 1];'),
 ]
 
 # Notes only; the real outcome is always measured.
