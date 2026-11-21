@@ -1,0 +1,14 @@
+// G-LG8-5: `let y = move pk` of a record with buffer fields empties the whole slot; `return move p` of a take record
+struct Packet { bytes: [u8], n: i64, more: [u8] }
+fn keep(take p: Packet) -> Packet {
+  return move p;
+}
+fn run() -> () ! io, alloc {
+  let b1: [u8] = alloc(7, 0);
+  let m1: [u8] = alloc(3, 9);
+  let pk: Packet = Packet { bytes: move b1, n: 4, more: move m1 };
+  let y: Packet = move pk;
+  print(len(y.more));
+  let z: Packet = keep(move y);
+  print(len(z.bytes));
+}

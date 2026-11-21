@@ -1,0 +1,9 @@
+// LG9 (G-DB15-2): the scrutinee is a plain parameter (a borrowed view), so `return x` of its str binder needs copy(x)
+enum T { A(s: str), B(n: i64) }
+
+fn get(t: T) -> str ! alloc {
+  match t {
+    T::A(x) => { return x; }
+    T::B(n) => { return copy("no"); }
+  }
+}

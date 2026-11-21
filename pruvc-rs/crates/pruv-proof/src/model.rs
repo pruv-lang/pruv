@@ -1436,7 +1436,14 @@ impl Model {
         let in_range = self.z.and(&[k.ge_i(0), k.lt(len)]);
         let byte = self.z.ite(&in_range, &bytes.select(&k), &self.z.int(0));
         let contents = self.z.lambda(std::slice::from_ref(&k), &byte);
-        pred.apply(&[len.clone(), contents])
+        let opaque = pred.apply(&[len.clone(), contents]);
+        // LG9 (G-DB15-1): bytes that are all below 128 are valid UTF-8 (ASCII), so a byte-level proof establishes
+        // the predicate. Sound: `utf8_valid(b) == ascii(b) || utf8_valid!(b)` holds with utf8_valid! read as the
+        // real check, because ascii(b) implies it.
+        let a = self.z.int_const("utf8!a");
+        let a_range = self.z.and(&[a.ge_i(0), a.lt(len)]);
+        let ascii = self.z.forall(std::slice::from_ref(&a), &a_range.implies(&bytes.select(&a).lt_i(128)), &[]);
+        self.z.or(&[ascii, opaque])
     }
 
     pub fn text_map_key(&self, len: &Ast, bytes: &Ast) -> Ast {

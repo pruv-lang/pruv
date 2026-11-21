@@ -1,0 +1,8 @@
+// LG9 (G-LG8-1): the consuming argument form needs every other argument to leave d alone
+struct D { n: i64, a: [i64] }
+fn alen2(take a: [i64], n: i64) -> i64 { return len(a) + n; }
+fn run() -> i64 ! alloc {
+  let mut d: D = D { n: 1, a: alloc(2, 3) };
+  let k: i64 = alen2(move d.a, d.n);
+  return k;
+}

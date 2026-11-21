@@ -1,0 +1,7 @@
+// LG9 (G-LG8-1): a field move into a parameter without take is still rejected
+struct D { n: i64, a: [i64] }
+fn alen(a: [i64]) -> i64 { return len(a); }
+fn run() -> i64 ! alloc {
+  let mut d: D = D { n: 1, a: alloc(2, 3) };
+  return alen(move d.a);
+}

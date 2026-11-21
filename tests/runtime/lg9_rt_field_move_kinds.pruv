@@ -1,0 +1,39 @@
+// LG9 (G-LG8-1): consuming field moves of String and Vec fields, as a let initializer, as a take argument and as
+// a returned take argument. Records with String / Vec fields are Rust-backend only.
+struct D { n: i64, s: String, v: Vec<i64> }
+
+fn mk(n: i64) -> D ! alloc {
+  let mut s: String = string_new();
+  s = string_push_str(move s, "abc");
+  let mut v: Vec<i64> = vec_new::<i64>();
+  v = vec_push::<i64>(move v, 4);
+  v = vec_push::<i64>(move v, 9);
+  return D { n: n, s: move s, v: move v };
+}
+
+fn slen(take s: String) -> i64 {
+  return len(s);
+}
+
+fn vlen(take v: Vec<i64>) -> () ! io {
+  print(len(v));
+}
+
+fn from_take(take d: D) -> i64 {
+  return slen(move d.s);
+}
+
+fn run() -> () ! io, alloc {
+  let mut d1: D = mk(1);
+  let s: String = move d1.s;
+  print(len(s));
+  let mut d2: D = mk(2);
+  let v: Vec<i64> = move d2.v;
+  print(len(v));
+  let mut d3: D = mk(3);
+  let k: i64 = slen(move d3.s);
+  print(k);
+  let mut d4: D = mk(4);
+  vlen(move d4.v);
+  print(from_take(mk(5)));
+}

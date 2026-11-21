@@ -1,0 +1,39 @@
+// LG9 (G-LG8-1): consuming moves of array fields through a nested path, straight into a take parameter (let
+// initializer, call statement, return), from a local record and from a take record parameter
+struct Inner { a: [i64], k: i64 }
+struct D { n: i64, sub: Inner }
+struct P { n: i64, b: [u8] }
+
+fn mk(n: i64) -> D ! alloc {
+  return D { n: n, sub: Inner { a: alloc(3, 6), k: 2 } };
+}
+
+fn alen(take a: [i64]) -> i64 {
+  return len(a);
+}
+
+fn bshow(take b: [u8]) -> () ! io {
+  print(len(b));
+}
+
+fn plen(take p: P) -> i64 {
+  return blen(move p.b);
+}
+
+fn blen(take b: [u8]) -> i64 {
+  return len(b);
+}
+
+fn run() -> () ! io, alloc {
+  let mut d1: D = mk(1);
+  let a: [i64] = move d1.sub.a;
+  print(len(a));
+  let mut d2: D = mk(2);
+  let k: i64 = alen(move d2.sub.a);
+  print(k);
+  let b4: [u8] = alloc(4, 0);
+  let mut p: P = P { n: 1, b: move b4 };
+  bshow(move p.b);
+  let b5: [u8] = alloc(5, 0);
+  print(plen(P { n: 2, b: move b5 }));
+}

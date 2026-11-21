@@ -1,0 +1,6 @@
+// LG9 (G-DB15-1): the ASCII fact needs every byte below 128; a bound of 129 does not prove utf8_valid.
+fn mk(b: [u8]) -> str ! alloc
+  requires forall k in 0..len(b): b[k] < 129
+{
+  return str_from_utf8(b);
+}

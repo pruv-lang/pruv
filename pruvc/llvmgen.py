@@ -824,6 +824,7 @@ def sig_text(params, f):
     mut = {"%%p.%s%s" % (mangle(p.name), ".a" if is_arr(p.type) and not inout_slot_param(p) else "")
            for p in f.params if p.mode == "inout"}
     take = {"%%p.%s.a" % mangle(p.name) for p in f.params if p.take and is_array(p.type)}
+    take |= {"%%p.%s" % mangle(p.name) for p in f.params if p.take and is_agg(p.type)}   # LG9: owned record storage
     return ", ".join("%s %s" % (("ptr noalias nocapture" if n in mut else "ptr noalias nocapture readonly")
                                 if t == "ptr" and n != "%out" and not n.endswith(".h") and n not in take else t, n)
                      for t, n in params)
@@ -1716,6 +1717,10 @@ class FnGen:
                     names[p.name] = ("ssa", V("coll", "%%p.%s.h" % n, None, p.type))
             elif p.mode == "inout" and is_agg(p.type):
                 names[p.name] = ("slot", Slot("agg", "%%p.%s" % n, None, p.type))
+            elif s.is_ext(p.type) and p.take:   # LG9: the callee owns the storage; dropped at exit unless moved out
+                sl = Slot("agg", "%%p.%s" % n, None, p.type)
+                names[p.name] = ("slot", sl)
+                owned.append(sl)
             elif s.is_ext(p.type):   # G9 A3: a read view of caller-owned storage; never dropped here
                 pv = s.op("load %s, ptr %%p.%s" % (lty(p.type), n))
                 names[p.name] = ("ssa", V("agg", pv, None, p.type, "%%p.%s" % n))
@@ -2064,14 +2069,19 @@ class FnGen:
                 s.ins("store i64 0, ptr %s" % sl.b)
                 s.ins("store i64 0, ptr %s" % sl.c)
             elif st.value is not None:
-                s.ret_cand = s.ret_movable(st.value)
-                s.ret_take = s.ret_takable(st.value)
-                v = s.ev(st.value, True)
+                val = st.value
+                if isinstance(val, Var) and val.ty == STR and s.lookup(val.name)[0] == "ssa":
+                    # LG9 (G-DB15-2): `return x` of a str match binder (the checker admits it only for a consuming
+                    # match) is `return copy(x)`, which moves the payload out of the owned scrutinee (ret_movable)
+                    val = Call(val.line, val.col, "copy", [val], STR)
+                s.ret_cand = s.ret_movable(val)
+                s.ret_take = s.ret_takable(val)
+                v = s.ev(val, True)
                 s.ret_cand = {}
                 s.ret_take = set()
-                if v.k == "arr" and isinstance(st.value, Var):
+                if v.k == "arr" and isinstance(val, Var):
                     # moving a local array out: empty its slot so the cleanup below does not free it
-                    sl = s.lookup(st.value.name)[1]
+                    sl = s.lookup(val.name)[1]
                     s.ins("store ptr null, ptr %s" % sl.a)
                     s.ins("store i64 0, ptr %s" % sl.b)
                     s.ins("store i64 0, ptr %s" % sl.c)
@@ -2427,6 +2437,11 @@ class FnGen:
             v = s.load(x)
             if is_array(e.ty):
                 s.empty_array_slot(x)
+            elif x.k == "agg" and s.is_ext(x.ty):
+                # LG9 (G-LG8-5): an extended record owns every buffer field; the whole slot becomes zero (its drop
+                # then frees nothing) and the moved value is no longer backed by the emptied slot
+                s.ins("store %s zeroinitializer, ptr %s" % (lty(x.ty), x.a))
+                v.p = None
             else:
                 s.ins("store ptr null, ptr %s" % x.a)
             return v
@@ -2880,6 +2895,9 @@ class FnGen:
         for p, x in zip(f.params, a):
             if isinstance(x, InoutArg) and inout_slot_param(p):
                 args.append("ptr %s" % s.inout_place_ptr(x.expr))
+                continue
+            if s.is_ext(p.type) and p.take:   # LG9: the callee owns (and drops) fresh storage holding an owned value
+                args.append("ptr %s" % s.spill(s.ev(x, True)))
                 continue
             if s.is_ext(p.type):   # G9 A3: a read argument is a pointer to valid caller-owned storage
                 args.append("ptr %s" % s.view_ptr(x))

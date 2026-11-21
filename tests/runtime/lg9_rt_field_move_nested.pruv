@@ -1,0 +1,25 @@
+// LG9 (G-LG8-1): a consuming move of a nested buffer field `move d.in.b` consumes the whole local record d.
+struct In { k: i64, b: [u8] }
+struct Out { n: i64, inn: In }
+
+fn mk(n: i64) -> Out ! alloc {
+  let mut b: [u8] = alloc(3, 2);
+  b[1] = 8;
+  return Out { n: n, inn: In { k: n, b: move b } };
+}
+
+fn total(take b: [u8]) -> i64 {
+  return len(b);
+}
+
+fn run() -> () ! io, alloc {
+  let mut d: Out = mk(1);
+  let t: [u8] = move d.inn.b;
+  print(len(t));
+  if len(t) > 1 {
+    print(t[1]);
+  }
+  let mut e: Out = mk(2);
+  let r: i64 = total(move e.inn.b);
+  print(r);
+}

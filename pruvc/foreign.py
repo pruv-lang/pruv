@@ -274,6 +274,19 @@ def _allowed_param(t):
     return t in (I64, BOOL, ARRAY, ARRAY_U8, ARRAY_BOOL, STR) or _scalar_opt(t)
 
 
+
+def _consumed_field(v, nxt):
+    """G-R09-4 / LG9 (G-LG8-1): the `move d.a` that consumes d: the let initializer itself, or the one field move
+    passed directly as a call argument (the type checker admits it only for a take parameter), with no restore of
+    that field by the next statement"""
+    if isinstance(v, Call):
+        moves = [a for a in v.args if isinstance(a, Move) and a.fields]
+        v = moves[0] if len(moves) == 1 else None
+    if (isinstance(v, Move) and v.fields and not (
+            isinstance(nxt, FieldAssign) and nxt.name == v.name and tuple(nxt.fields) == tuple(v.fields))):
+        return v
+    return None
+
 class _Pos:
     def __init__(s, line, col, file=None):
         s.line, s.col, s.file = line, col, file
@@ -413,9 +426,7 @@ class _Ownership:
         if isinstance(x, Let):
             nxt = s.nxt
             v = x.value
-            if (isinstance(v, Move) and v.fields and not (
-                    isinstance(nxt, FieldAssign) and nxt.name == v.name and tuple(nxt.fields) == tuple(v.fields))):
-                s.consumed_field = v
+            s.consumed_field = _consumed_field(v, nxt)
             s.consume(x.value, st, "let")
             s.consumed_field = None
             if (is_array(x.type) or is_collection(x.type) or is_nongeneric_struct(x.type, s.types)
@@ -474,7 +485,9 @@ class _Ownership:
                     _handle_lost(x, s.proc[n], "%s %s is not consumed before return" % (s.proc[n], n))
             return None
         if isinstance(x, ExprStmt):
+            s.consumed_field = _consumed_field(x.expr, s.nxt)    # LG9 (G-LG8-1): `f(move d.a);`
             s.expr(x.expr, st)
+            s.consumed_field = None
             return st
         if isinstance(x, Par):      # G7 A0: each branch is an ordinary call
             for c in x.calls:

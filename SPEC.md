@@ -338,16 +338,22 @@ return a parameter with `copy`). Refinements: `[u8 | L..=U; <=N]` with `0 <= L <
   (`string_slice_range`) and then `is_char_boundary(s, lo) && is_char_boundary(s, hi)` (`utf8_boundary`; also when
   `lo == hi`). It knows `len(result) == hi - lo` and `result[k] == s[lo + k]`.
 - `utf8_valid(b: [u8]) -> bool` (code and contracts) is true iff the bytes in `b[0..len(b)]` are valid UTF-8.
-  The verifier treats it as an uninterpreted predicate of the array value. Other argument types give
-  `type_mismatch`.
+  The verifier treats it as an uninterpreted predicate of the array value, with one byte-level fact (LG9,
+  G-DB15-1): `(forall k in 0..len(b): b[k] < 128)` implies `utf8_valid(b)` (ASCII bytes are valid UTF-8; the model
+  is `ascii(b) || utf8_valid!(b)`, sound because ascii implies the real check). So a scanner that proves every
+  byte of a span is below 128 can pass it to `str_from_utf8` without a runtime check. Multi-byte sequences are not
+  modelled: a span with bytes `>= 128` still needs a `utf8_valid` guard. Other argument types give
+  `type_mismatch`. Tests: [ASCII proof](tests/runtime/lg9_rt_utf8_ascii.pruv),
+  [bound 129](tests/must_reject/lg9_utf8_ascii_partial.pruv).
 - `str_from_utf8(b: [u8]) -> str` (R-6b-1, needs `alloc`, code only) copies the bytes into a fresh string. The verifier
   proves `utf8_valid(b)` (`utf8_invalid`), then knows `len(result) == len(b)` and `result[k] == b[k]` for
   `0 <= k < len(b)`. Both names are reserved.
 - Not available: `==`/`!=` on whole strings (compare `len` and bytes with `forall`), `print` of a string, `str` in
   `Option`/`Result`/struct fields, char/code-point indexing. Character counts are written with boundaries, e.g.
   `count(t in 0..len(s): is_char_boundary(s, t))` counts the characters of `s`.
-- The verifier models a `str` as bytes `0..=255`; it does **not** know UTF-8 rules (e.g. that byte 0 is not a
-  continuation byte unless you check it), and a counterexample string may be invalid UTF-8.
+- The verifier models a `str` as bytes `0..=255`; apart from the ASCII fact of `utf8_valid` it does **not** know
+  UTF-8 rules (e.g. that byte 0 is not a continuation byte unless you check it), and a counterexample string may be
+  invalid UTF-8.
 
 **Run time.** Proof mode removes the element-range, substring and UTF-8 conversion checks. `--no-verify` (safe mode) checks them and panics with exit 101:
 `pruv: element out of range: v (u8 0..=255)`, `pruv: string slice out of bounds: lo..hi (len n)`,
@@ -691,7 +697,11 @@ fn tree_count(t: Tree) -> i64
   parameter into a struct field, enum payload, local initializer, assignment, return, or
   `take` argument. The same holds for an owned local or `take` parameter of a non-generic struct
   type (an R-6e-1 aggregate or an R-6e-6 record) moved into a struct field or enum payload, as in
-  `return St { s: move s };`; Rust stores it directly without cloning. A struct with an array field
+  `return St { s: move s };`; Rust stores it directly without cloning. On LLVM (LG9, G-LG8-5) a `take`
+  parameter of an R-6e-6 record (`{ptr, i64, i64}` buffer fields) is a pointer to storage the callee owns: the
+  caller passes a fresh spilled copy of the moved value, zeroes the moved source slot, and the callee drops the
+  record at exit unless it moved it out (a borrowed record parameter stays a read-only view of the caller's slot).
+  Tests: [take record](tests/runtime/lg9_rt_take_record.pruv), [record move](tests/runtime/lg9_rt_record_move.pruv). A struct with an array field
   other than `[u8]` (for example `S { xs: [i64] }`) is not an owned aggregate, so `move` of it is
   `type/foreign_move`; a struct of scalar and value fields only is a value aggregate and may be moved.
   Tests: [accept](tests/spec/r6e_12_take_aggregate.pruv),
@@ -724,6 +734,13 @@ fn tree_count(t: Tree) -> i64
   Tests: [runtime](tests/runtime/lg8_rt_match_move.pruv),
   [use after](tests/must_reject/lg8_match_move_use_after.pruv),
   [borrowed scrutinee](tests/must_reject/lg8_match_move_borrowed.pruv).
+  LG9 (G-DB15-2): under the same conditions, `return x` of a `str` binder `x` of that arm is allowed without
+  `copy(x)` and means exactly `return copy(x)`: it needs `alloc`, and the verifier and both backends treat it as that
+  copy (the checker rewrites the value into the `copy(x)` call, so both backends and the cost bound count the
+  copy). Otherwise returning a binder stays `type/array_alias`.
+  Tests: [runtime](tests/runtime/lg9_rt_match_str_return.pruv),
+  [parameter scrutinee](tests/must_reject/lg9_match_str_return_param.pruv),
+  [named scrutinee](tests/must_reject/lg9_match_str_return_named.pruv).
 - R-6e-13 **Read-only text-keyed map iteration.** The statement
   `for (k, v) in P invariant <bool>* { body }` iterates over a binding or field path `P` of type
   `HashMap<String, V>`, with `V` equal to `i64`, `bool` or an owned aggregate (including R-6e-6
@@ -791,14 +808,23 @@ fn tree_count(t: Tree) -> i64
   allowed for field replacement and may not mention `p`. It may also be a move from a disjoint
   same-typed field of `p`, in which case the following statement must restore that field in turn.
   For example, `let t: String = move p.f; p.f = move p.g; p.g = move t;` swaps two fields.
-  Consuming form (G-R09-4): `let t: T = move d.f;` of a buffer field `[i64]`, `[u8]` or `[bool]` (not a `String` or
-  `Vec` field, which keep the restore rule) with one field step may stand without a restore when `d` is a `let mut` local record. A `move` of a
-  field of a `take` record parameter is `type/foreign_move` even with a restore (on LLVM the parameter is a read-only
-  view of the caller's slot), and so is the consuming form on a match binder (also a `map_take` binder). It
-  moves `d` wholly: a later use of `d` is `type/foreign_move` "use after move" ("binding may have been moved" on some
+  Consuming form (G-R09-4, extended by LG9 G-LG8-1/G-LG8-3): `let t: T = move d.f;` of any field type this rule
+  moves (`String`, `Vec<i64>`, `Vec<bool>`, `[i64]`, `[u8]`, `[bool]`), at any nested struct field path, may stand
+  without a restore when `d` is a `let mut` local record or a `take` record parameter (which the callee owns). The
+  same holds for `f(move d.f)` as a `let` initializer, a call statement or a `return` value when the field move is
+  the direct argument of a `take` parameter of `f`, it is the only field move of the call, and no other argument
+  names `d` (otherwise the field move keeps its non-consuming errors, e.g. `type/array_alias` for
+  `let n = f(move d.a, d.n);`, while `return f(move d.a, d.n);` gives `type/foreign_move` from the return check). The consuming form on a match binder (also a `map_take` binder) and on a plain or `inout` root stays
+  `type/foreign_move`. It moves `d` wholly: a later use of `d` is
+  `type/foreign_move` "use after move" ("binding may have been moved" on some
   paths, `type/foreign_loop_move` for a loop that does not restore it); assigning `d` again revives it. A restore in the
-  next statement keeps the form above. Nested paths, `inout` and plain roots, `p.g = move p.f;` and `f(move d.a)` keep
-  the errors below.
+  next statement keeps the form above. `p.g = move p.f;` and moves from `inout` and plain roots keep
+  the errors below. Rust emits `::std::mem::take(&mut d.f)` (the root is declared `mut`, also for a `take`
+  parameter). LLVM lowers buffer fields at any path as above; `String`/`Vec` fields need the Rust backend.
+  Tests: [take field](tests/runtime/lg9_rt_take_field_move.pruv), [field kinds](tests/runtime/lg9_rt_field_move_kinds.pruv),
+  [take argument](tests/runtime/lg9_rt_field_move_arg.pruv), [use after](tests/must_reject/lg9_move_field_arg_use_after.pruv),
+  [other argument](tests/must_reject/lg9_move_field_arg_other_mention.pruv),
+  [borrowed root](tests/must_reject/lg9_move_field_arg_borrowed.pruv).
   Outside R-6e-2 and these forms, field moves are `type/foreign_move`. A missing or invalid
   restore, or a move between overlapping paths, has the same code and the message
   "a field moved out must be reassigned by the next statement". Moving a path held by an active

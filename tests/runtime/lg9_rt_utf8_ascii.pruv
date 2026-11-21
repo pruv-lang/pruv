@@ -1,0 +1,25 @@
+// LG9 (G-DB15-1): a byte-level proof that every byte is below 128 establishes utf8_valid, so str_from_utf8 needs
+// no runtime UTF-8 check in proof mode.
+fn ascii_prefix(b: [u8]) -> i64
+  ensures 0 <= result && result <= len(b)
+  ensures forall k in 0..result: b[k] < 128
+{
+  let mut i: i64 = 0;
+  while i < len(b) && b[i] < 128
+    invariant 0 <= i && i <= len(b)
+    invariant forall k in 0..i: b[k] < 128
+    decreases len(b) - i
+  {
+    i = i + 1;
+  }
+  return i;
+}
+
+fn run() -> () ! io, alloc {
+  let mut b: [u8] = alloc(4, 65);
+  b[2] = 200;
+  let n: i64 = ascii_prefix(b);
+  let head: [u8] = copy(subview(b, 0, n));
+  let s: str = str_from_utf8(head);
+  print(len(s));
+}

@@ -1,0 +1,13 @@
+// G-LG8-3: a consuming field move from a take record parameter; the callee drops only the fields left behind
+struct Packet { bytes: [u8], n: i64, more: [u8] }
+fn unpack(take p: Packet) -> [u8] {
+  let b: [u8] = move p.bytes;
+  return move b;
+}
+fn run() -> () ! io, alloc {
+  let b1: [u8] = alloc(7, 0);
+  let m1: [u8] = alloc(3, 9);
+  let pk: Packet = Packet { bytes: move b1, n: 4, more: move m1 };
+  let out: [u8] = unpack(move pk);
+  print(len(out));
+}
