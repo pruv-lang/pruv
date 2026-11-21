@@ -1134,7 +1134,7 @@ class Checker:
         for e, conditional in calls:
             f = s.funcs.get(e.name)
             marked = ([arg for arg in e.args if isinstance(arg, InoutArg)]
-                      if f is not None or e.name in ("map_remove", "map_take", "vec_clear", "vec_reserve", "vec_extend_from_slice") else [])
+                      if f is not None or e.name in ("map_remove", "map_take", "vec_clear", "vec_reserve", "vec_extend_from_slice", "ev_read_into", "ev_proc_read_into") else [])
             if marked:
                 for arg in marked:
                     root, path = field_place(arg.expr)
@@ -1903,12 +1903,17 @@ class Checker:
                 return ty
             if e.op == "-":
                 s.expect(e.operand, I64, scope, c, op="unary minus"); return I64
+            if e.op == "~":
+                s.expect(e.operand, I64, scope, c); return I64
             s.expect(e.operand, BOOL, scope, c, op="a boolean operation"); return BOOL
         if isinstance(e, Binary):
             op = e.op
             if op in ("+", "-", "*", "/", "%"):
                 s.expect(e.left, I64, scope, c, op="arithmetic")
                 s.expect(e.right, I64, scope, c, op="arithmetic"); return I64
+            if op in ("&", "|", "^", "<<", ">>"):
+                s.expect(e.left, I64, scope, c)
+                s.expect(e.right, I64, scope, c); return I64
             if op in ("<", "<=", ">", ">="):
                 s.expect(e.left, I64, scope, c, op="ordering")
                 s.expect(e.right, I64, scope, c, op="ordering"); return BOOL

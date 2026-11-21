@@ -316,6 +316,34 @@ CONTRACT_LOAD_LE_HELPER = CONTRACT_LOAD_HELPER.replace("pruv_cload_be", "pruv_cl
     "for k in 0..n", "for k in (0..n).rev()")
 # P2 batch 2: shifts need 0 <= k < 64; --no-verify uses these helpers (included only when used, table order)
 SHIFT_SAFE = {n: {"<<": "pruv_shl", ">>": "pruv_ushr"}[rust] for n, rust in BIT_RUST.items() if rust in ("<<", ">>")}
+SHIFT_OPS = {"<<": "shl", ">>": "shr"}
+SHIFT_OP_HELPER = (
+    "#[inline]\n"
+    "fn pruv_%s_chk(a: i64, k: i64) -> i64 { if k < 0 || k >= 64 "
+    "{ pruv_ovf(\"shift count outside 0..64\") } %s }\n")
+SHIFT_OP_BODY = {
+    "<<": 'let r = a.wrapping_shl(k as u32); if (r >> k) != a { pruv_ovf("overflow in <<") } r',
+    ">>": "a >> k",
+}
+CONTRACT_OPS = {"&": "and", "|": "or", "^": "xor", **SHIFT_OPS}
+CONTRACT_OP_HELPER = (
+    "#[inline]\n"
+    "fn pruv_c%s_op(a: i128, b: i128) -> i128 { "
+    "if a < (i64::MIN as i128) || a > (i64::MAX as i128) { pruv_ud(\"argument outside i64 in %s\") } "
+    "%s let r = a %s b; %s r }\n")
+
+
+def contract_op_helper(op):
+    if op in SHIFT_OPS:
+        check = 'if b < 0 || b >= 64 { pruv_ud("shift count outside 0..64 in %s") }' % op
+    else:
+        check = ('if b < (i64::MIN as i128) || b > (i64::MAX as i128) '
+                 '{ pruv_ud("argument outside i64 in %s") }') % op
+    result_check = ('if r < (i64::MIN as i128) || r > (i64::MAX as i128) '
+                    '{ pruv_ud("overflow in <<") }') if op == "<<" else ""
+    return CONTRACT_OP_HELPER % (CONTRACT_OPS[op], op, check, op, result_check)
+
+
 SAFE_SHIFT_HELPER = (
     "#[allow(dead_code)]\n"
     "#[inline]\n"
@@ -2250,7 +2278,7 @@ class Gen:
                 return conv(e.ty if e.ty is not None else I64, name)
             return name
         if isinstance(e, Unary):
-            if e.op == "!":
+            if e.op in ("!", "~"):
                 return "(!%s)" % s.c(e.operand)
             return "pruv_cneg(%s)" % s.c(e.operand)
         if isinstance(e, Binary):
@@ -2265,6 +2293,9 @@ class Gen:
                 return "(!%s || %s)" % (s.c(e.left), s.c(e.right))
             if op in CONTRACT_ARITH:
                 return "%s(%s, %s)" % (CONTRACT_ARITH[op], s.c(e.left), s.c(e.right))
+            if op in CONTRACT_OPS:
+                s.need_bits.add(op)
+                return "pruv_c%s_op(%s, %s)" % (CONTRACT_OPS[op], s.c(e.left), s.c(e.right))
             return "(%s %s %s)" % (s.c(e.left), op, s.c(e.right))
         if isinstance(e, Index):
             if e.array.ty is not None and e.array.ty.owner is None and e.array.ty.name == "vec":   # G6: checked read
@@ -3300,8 +3331,10 @@ class Gen:
         if e.name == "string_to_str" and not s.cost and isinstance(e.args[0], Var) and e.args[0].name in s.moving:
             return s.e(e.args[0])
         args = []
-        for p, x in zip(cat.params, e.args):
-            if e.name == "map_get" and p.name == "k" and low[0].name == "string":
+        for i, (p, x) in enumerate(zip(cat.params, e.args)):
+            if p.mode == "inout" and isinstance(x, InoutArg):
+                args.append(s.inout_ref(x.expr, e.name, i))
+            elif e.name == "map_get" and p.name == "k" and low[0].name == "string":
                 args.append(s.borrowed_map_key(x))
             elif is_collection(p.type):
                 args.append(s.e(x) if p.take else s.cref(x))
@@ -3334,10 +3367,13 @@ class Gen:
         if isinstance(e, Unary):
             if not s.verified and e.op == "-":
                 return "pruv_neg(%s)" % s.e(e.operand)
-            return "(%s%s)" % (e.op, s.e(e.operand))
+            return "(%s%s)" % ("!" if e.op == "~" else e.op, s.e(e.operand))
         if isinstance(e, Binary):
             if not s.verified and e.op in SAFE_ARITH:
                 return "%s(%s, %s)" % (SAFE_ARITH[e.op], s.e(e.left), s.e(e.right))
+            if not s.verified and e.op in SHIFT_OPS:
+                s.need_shift.add(e.op)
+                return "pruv_%s_chk(%s, %s)" % (SHIFT_OPS[e.op], s.e(e.left), s.e(e.right))
             return "(%s %s %s)" % (s.e(e.left), e.op, s.e(e.right))
         if isinstance(e, StrLit):  # G2 B2
             return "::std::string::String::from(%s)" % str_lit(e.value)
@@ -3910,6 +3946,9 @@ def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=N
                         else CONTRACT_BIT_HELPER % (n, n, BIT_RUST[n]) for n in BIT_RUST if n in g.need_bits]
     # P2 batch 2: --no-verify shift helpers used by the code, in table order
     g.out[mark:mark] = [SAFE_SHIFT_HELPER % (SHIFT_SAFE[n], BIT_RUST[n]) for n in SHIFT_SAFE if n in g.need_shift]
+    g.out[mark:mark] = [SHIFT_OP_HELPER % (name, SHIFT_OP_BODY[op])
+                        for op, name in SHIFT_OPS.items() if op in g.need_shift]
+    g.out[mark:mark] = [contract_op_helper(op) for op in CONTRACT_OPS if op in g.need_bits]
     # P2 batch 4: the load_be contract helper, when a runtime contract used it
     if g.need_load_le:
         g.out[mark:mark] = [CONTRACT_LOAD_LE_HELPER]
@@ -3982,15 +4021,18 @@ fn pruv_ev_spawn<F: FnOnce()+Send+'static>(f: F) -> Option<::std::thread::JoinHa
     let guard=PruvEvThread::new();
     ::std::thread::Builder::new().spawn(move || { let _guard=guard; f(); }).ok()
 }
+const PRUV_EV_READ_CAP: usize = 1048576;
 fn pruv_ev_reader(mut s: ::std::net::TcpStream, sh: ::std::sync::Arc<PruvEvShared>, i: usize) {
     let result=::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
         //@hook read { let mut q=sh.state.lock().unwrap(); q[i].err=3; sh.cv.notify_all(); return; }
+        let mut b = vec![0u8; 65536];
         loop {
             let mut q=sh.state.lock().unwrap();
-            while q[i].bytes[0].len()>=1048576 && !q[i].closing { q=sh.cv.wait(q).unwrap(); }
+            while q[i].bytes[0].len()>=PRUV_EV_READ_CAP && !q[i].closing { q=sh.cv.wait(q).unwrap(); }
             if q[i].closing { return; }
-            let mut b=vec![0;65536.min(1048576-q[i].bytes[0].len())]; drop(q);
-            let r=::std::io::Read::read(&mut s,&mut b);
+            let limit = b.len().min(PRUV_EV_READ_CAP - q[i].bytes[0].len());
+            drop(q);
+            let r = ::std::io::Read::read(&mut s, &mut b[..limit]);
             let mut q=sh.state.lock().unwrap(); if q[i].closing { return; }
             match r { Ok(0)=>q[i].ended[0]=true, Ok(n)=>q[i].bytes[0].extend(&b[..n]), Err(e) if e.kind()==::std::io::ErrorKind::Interrupted=>continue, Err(_)=>q[i].err=3 }
             sh.cv.notify_all(); if q[i].ended[0] || q[i].err!=0 { return; }
@@ -4084,10 +4126,53 @@ fn pruv_ev_wait(mut l: pruv_Loop, ms: i64) -> pruv_Loop {
     }
 }
 fn pruv_ev_read(mut l: pruv_Loop, slot: i64, stream: i64, max: i64, proc: bool) -> pruv_Loop {
-    l.last=-1;l.buf.clear();if !pruv_ev_valid(&l,slot,if proc{3}else{1}) || !(1..=(1i64<<40)).contains(&max) || !(1..=2).contains(&stream){pruv_ev_fail(&mut l,1);return l;}let i=slot as usize;let k=(stream-1) as usize;if l.public[i].failed{return l;}
-    let sh=l.shared.clone();let mut q=sh.state.lock().unwrap();let n=(max as usize).min(1048576).min(q[i].bytes[k].len());
-    if n>0 {l.buf.extend(q[i].bytes[k].drain(..n));}else if q[i].err!=0 {let e=q[i].err;drop(q);pruv_ev_mark(&mut l,i,e);return l;}else if q[i].ended[k] {l.public[i].ends[k]=true;l.public[i].eof=l.public[i].ends[0] && (!proc || l.public[i].ends[1]);if l.public[i].eof{q[i].reported=true;}}
-    sh.cv.notify_all();drop(q);l
+    l.buf.clear();
+    if !(1..=(1i64<<40)).contains(&max) { pruv_ev_fail(&mut l, 1); return l; }
+    pruv_ev_read_queue(l, slot, stream, max.min(1048576) as usize, proc, None).0
+}
+fn pruv_ev_read_into(l: pruv_Loop, slot: i64, stream: i64, dst: &mut [u8], n: &mut i64, proc: bool) -> pruv_Loop {
+    let (l, count) = pruv_ev_read_queue(l, slot, stream, dst.len(), proc, Some(dst));
+    *n = count as i64;
+    l
+}
+fn pruv_ev_read_queue(mut l: pruv_Loop, slot: i64, stream: i64, max: usize, proc: bool, dst: Option<&mut [u8]>) -> (pruv_Loop, usize) {
+    l.last = -1;
+    if !pruv_ev_valid(&l, slot, if proc { 3 } else { 1 }) || !(1..=2).contains(&stream) {
+        pruv_ev_fail(&mut l, 1);
+        return (l, 0);
+    }
+    let i = slot as usize;
+    let k = (stream - 1) as usize;
+    if l.public[i].failed { return (l, 0); }
+    let sh = l.shared.clone();
+    let mut q = sh.state.lock().unwrap();
+    let bytes = &mut q[i].bytes[k];
+    let n = max.min(bytes.len());
+    if n > 0 {
+        if let Some(dst) = dst {
+            let (front, back) = bytes.as_slices();
+            let first = n.min(front.len());
+            dst[..first].copy_from_slice(&front[..first]);
+            dst[first..n].copy_from_slice(&back[..n - first]);
+            drop(bytes.drain(..n));
+        } else {
+            l.buf.extend(bytes.drain(..n));
+        }
+        sh.cv.notify_all();
+    } else if bytes.is_empty() {
+        if q[i].err != 0 {
+            let e = q[i].err;
+            drop(q);
+            pruv_ev_mark(&mut l, i, e);
+            return (l, 0);
+        }
+        if q[i].ended[k] {
+            l.public[i].ends[k] = true;
+            l.public[i].eof = l.public[i].ends[0] && (!proc || l.public[i].ends[1]);
+            if l.public[i].eof { q[i].reported = true; }
+        }
+    }
+    (l, n)
 }
 fn pruv_ev_write(mut l: pruv_Loop, slot: i64, data: &[u8], action: i64) -> pruv_Loop {
     l.last=-1;let proc=action>=2; if !pruv_ev_valid(&l,slot,if proc{3}else{1}) || !l.public[slot as usize].open {pruv_ev_fail(&mut l,1);return l;}let i=slot as usize;let mut code=0;
@@ -4164,19 +4249,42 @@ type PruvEvRoute = ::std::sync::Arc<::std::sync::Mutex<(::std::sync::Arc<PruvEvS
 struct PruvEvRx { route: PruvEvRoute }
 struct PruvEvTx { route: PruvEvRoute, discard: ::std::sync::Arc<::std::sync::atomic::AtomicBool> }
 impl PruvEvTx {
-    fn send(&self, msg: PruvProcMsg) -> Result<(),()> {
+    fn send(&self, msg: Result<Option<&[u8]>, ()>) {
         loop {
-            let route=self.route.lock().unwrap();let (shared,i,k,attached)=&*route;let sh=shared.clone();let mut q=sh.state.lock().unwrap();
-            if let PruvProcMsg::Chunk(ref b)=msg {
-                if self.discard.load(::std::sync::atomic::Ordering::SeqCst) || q[*i].closing{return Ok(());}
-                if *attached && q[*i].bytes[*k].len()+b.len()>1048576 {let sh=sh.clone();drop(route);q=sh.cv.wait_timeout(q,::std::time::Duration::from_millis(10)).unwrap().0;drop(q);continue;}
+            let route = self.route.lock().unwrap();
+            let (sh, i, k, attached) = &*route;
+            let sh = sh.clone();
+            let mut q = sh.state.lock().unwrap();
+            match msg {
+                Ok(Some(bytes)) => {
+                    if self.discard.load(::std::sync::atomic::Ordering::SeqCst) || q[*i].closing { return; }
+                    // Keep the in-flight batch in the reader buffer until there is room for it.
+                    if *attached && q[*i].bytes[*k].len() + bytes.len() > PRUV_EV_READ_CAP {
+                        drop(route);
+                        drop(sh.cv.wait_timeout(q, ::std::time::Duration::from_millis(10)).unwrap());
+                        continue;
+                    }
+                    q[*i].bytes[*k].extend(bytes);
+                }
+                Ok(None) => q[*i].ended[*k] = true,
+                Err(()) => q[*i].err = 7,
             }
-            match msg {PruvProcMsg::Chunk(b)=>q[*i].bytes[*k].extend(b),PruvProcMsg::Eof=>q[*i].ended[*k]=true,PruvProcMsg::Err=>q[*i].err=7}
-            sh.cv.notify_all();return Ok(());
+            sh.cv.notify_all();
+            return;
         }
     }
 }
-impl Drop for PruvEvTx {fn drop(&mut self){let r=self.route.lock().unwrap();let (sh,i,k,_)=&*r;let mut q=sh.state.lock().unwrap();if !q[*i].ended[*k] && q[*i].err==0{q[*i].err=7;}sh.cv.notify_all();}}
+impl Drop for PruvEvTx {
+    fn drop(&mut self) {
+        let route = self.route.lock().unwrap();
+        let (sh, i, k, _) = &*route;
+        let mut q = sh.state.lock().unwrap();
+        if !q[*i].ended[*k] && q[*i].err == 0 {
+            q[*i].err = 7;
+            sh.cv.notify_all();
+        }
+    }
+}
 impl PruvEvRx {
     fn attach(&mut self, target: ::std::sync::Arc<PruvEvShared>, slot: usize, stream: usize) {
         let mut route=self.route.lock().unwrap();let (sh,i,k,_)=&*route;let mut old=sh.state.lock().unwrap();let mut q=target.state.lock().unwrap();
@@ -4285,22 +4393,18 @@ fn pruv_proc_fail(p: &mut pruv_Process, code: i64) {
     p.stderr_eof = false;
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
-fn pruv_proc_reader<R: ::std::io::Read>(mut r: R, tx: PruvEvTx, stream: i64, discard: ::std::sync::Arc<::std::sync::atomic::AtomicBool>) {
+fn pruv_proc_reader<R: ::std::io::Read>(mut r: R, tx: PruvEvTx, stream: i64) {
     let mut buf: ::std::vec::Vec<u8> = vec![0u8; 8192];
-    //@hook read1 if stream == 1 { let _ = tx.send(PruvProcMsg::Err); while let Ok(n) = ::std::io::Read::read(&mut r, &mut buf) { if n == 0 { break; } } return; }
-    //@hook read2 if stream == 2 { let _ = tx.send(PruvProcMsg::Err); while let Ok(n) = ::std::io::Read::read(&mut r, &mut buf) { if n == 0 { break; } } return; }
-    //@async_hook proc_io { let _=tx.send(PruvProcMsg::Err); return; }
+    //@hook read1 if stream == 1 { tx.send(Err(())); while let Ok(n) = ::std::io::Read::read(&mut r, &mut buf) { if n == 0 { break; } } return; }
+    //@hook read2 if stream == 2 { tx.send(Err(())); while let Ok(n) = ::std::io::Read::read(&mut r, &mut buf) { if n == 0 { break; } } return; }
+    //@async_hook proc_io { tx.send(Err(())); return; }
     loop {
         match ::std::io::Read::read(&mut r, &mut buf) {
-            Ok(0) => { let _ = tx.send(PruvProcMsg::Eof); return; }
-            Ok(n) => {
-                // discard mode (wait / kill / setup failure): keep reading to EOF but queue nothing more
-                if discard.load(::std::sync::atomic::Ordering::SeqCst) { continue; }
-                if tx.send(PruvProcMsg::Chunk(buf[..n].to_vec())).is_err() { return; }
-            }
+            Ok(0) => { tx.send(Ok(None)); return; }
+            Ok(n) => tx.send(Ok(Some(&buf[..n]))),
             Err(e) => {
                 if e.kind() == ::std::io::ErrorKind::Interrupted { continue; }
-                let _ = tx.send(PruvProcMsg::Err);
+                tx.send(Err(()));
                 return;
             }
         }
@@ -4313,8 +4417,7 @@ fn pruv_proc_collector<R: ::std::io::Read + Send + 'static>(r: R, stream: i64) -
     let route=::std::sync::Arc::new(::std::sync::Mutex::new((shared,0,0,false)));
     let rx=PruvEvRx {route:route.clone()};
     let tx=PruvEvTx {route,discard:discard.clone()};
-    let flag = discard.clone();
-    let join = match ::std::thread::Builder::new().spawn(move || { let _guard=PruvEvThread::new(); pruv_proc_reader(r, tx, stream, flag) }) {
+    let join = match ::std::thread::Builder::new().spawn(move || { let _guard=PruvEvThread::new(); pruv_proc_reader(r, tx, stream) }) {
         Ok(h) => h,
         Err(_) => return None,
     };

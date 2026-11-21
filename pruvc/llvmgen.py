@@ -70,6 +70,7 @@ def sym_prefix(pkg):
 
 SIGNED_MIN128 = -170141183460469231731687303715884105728
 BIT_LLVM = {n: llvm for n, (_rust, llvm) in codegen.BIT_BUILTINS.items()}   # P2: bit builtin -> LLVM instruction (from check.BIT_BUILTINS)
+BIT_OP_LLVM = {"&": "and", "|": "or", "^": "xor", "<<": "shl", ">>": "ashr"}
 EQR_LOOP_MAX = 4   # P17a: a dynamic-length eq_range below this many elements uses the inline loop, else memcmp
 OPT = "{ i1, i64 }"
 COPT = "{ i1, i128 }"       # Option/Result stored inside a contract aggregate (%pruv_c_*)
@@ -1108,7 +1109,7 @@ class FnGen:
                 s.ins("call void @pruv_drop__%s(ptr %s)" % (ft.name, g))
                 s.ins("store %s %s, ptr %s" % (lty(ft), v.a, g))
             else:
-                s.ins("store %s %s, ptr %s" % (st(ft), s.pack(v, ft, False), g))
+                s.store_field(g, ft, v)
 
     def free_val(s, v):
         # The *_nn wrappers let the optimizer drop the call when the moved-out slot is null.
@@ -1452,6 +1453,9 @@ class FnGen:
         if is_arr(ty):  # G9 A3: a buffer field is stored as { ptr, i64, i64 } (data, len, cap)
             return s.agg(v)
         return v.a
+
+    def store_field(s, ptr, ty, v):
+        s.ins("store %s %s, ptr %s" % (st(ty), s.pack(v, ty, False), ptr))
 
     def unpack(s, x, ty, c):
         n = ty.name
@@ -1963,9 +1967,13 @@ class FnGen:
                 s.assign_path(sl, st.fields, v)
                 s.end_temps()
                 return
-            v = s.ev(st.value)              # right side first, then root load -> insertvalue chain -> store
-            root = s.load(sl)
-            s.store(sl, s.set_path(root, sl.ty, st.fields, v))
+            v = s.ev(st.value)
+            if s.tt.is_struct(sl.ty):
+                gp, fty = s.field_ptr_ty(sl, st.fields)
+                s.store_field(gp, fty, v)
+            else:
+                root = s.load(sl)
+                s.store(sl, s.set_path(root, sl.ty, st.fields, v))
             s.end_temps()
         elif isinstance(st, IndexAssign):
             s.begin_temps()
@@ -2420,6 +2428,8 @@ class FnGen:
             x = s.ev(e.operand)
             if e.op == "!":
                 return V("i1", s.op("xor i1 %s, true" % x.a))
+            if e.op == "~":
+                return V("i64", s.op("xor i64 %s, -1" % x.a))
             if s.verified:
                 return V("i64", s.op("sub nsw i64 0, %s" % x.a))
             return V("i64", s.checked("i64", "ssub", "unary -", "0", x.a))
@@ -2463,6 +2473,14 @@ class FnGen:
                 return s.fresh(s.mk_enum(e, lambda x: s.ev(x, True), False), owned)
             return s.mk_enum(e, s.ev, False)
         if isinstance(e, FieldAccess):
+            if e.ty in (I64, BOOL):
+                root, path = field_place(e)
+                if isinstance(root, Var):
+                    kind, sl = s.lookup(root.name)
+                    if kind == "slot" and not s.is_ext(sl.ty) and s.tt.is_struct(sl.ty):
+                        gp, fty = s.field_ptr_ty(sl, path)
+                        x = s.op("load %s, ptr %s" % (st(fty), gp))
+                        return s.unpack(x, fty, False)
             b = s.ev(e.base)
             ty = b.ty if b.ty is not None else e.base.ty
             i = s.tt.field_index(ty, e.field)
@@ -2472,6 +2490,10 @@ class FnGen:
                 return s.clone_val(v)
             return v
         raise Exception("llvmgen: contract-only expression in code: %r" % e)
+
+    def check_shift_count(s, count):
+        ok = s.op("icmp ult i64 %s, 64" % count)
+        s.guard(ok, s.panic1("pruv_panic_arith", "shift count outside 0..64"), False)
 
     def ev_binary(s, e):
         op = e.op
@@ -2486,6 +2508,15 @@ class FnGen:
             return V("i1", s.shortcircuit(l.a, rhs, op == "||"))
         l = s.ev(e.left)
         r = s.ev(e.right)
+        if op in BIT_OP_LLVM:
+            if not s.verified and op in ("<<", ">>"):
+                s.check_shift_count(r.a)
+            v = s.op("%s i64 %s, %s" % (BIT_OP_LLVM[op], l.a, r.a))
+            if not s.verified and op == "<<":
+                back = s.op("ashr i64 %s, %s" % (v, r.a))
+                bad = s.op("icmp ne i64 %s, %s" % (back, l.a))
+                s.guard(bad, s.panic1("pruv_panic_arith", "overflow in <<"), True)
+            return V("i64", v)
         if op in ("+", "-", "*"):
             name = {"+": "add", "-": "sub", "*": "mul"}[op]
             if s.verified:
@@ -2650,8 +2681,7 @@ class FnGen:
             x = s.ev(a[0])
             y = s.ev(a[1])
             if not s.verified and n in ("wrapping_shl", "ushr"):   # P2 batch 2: check the count before shifting
-                ok = s.op("icmp ult i64 %s, 64" % y.a)
-                s.guard(ok, s.panic1("pruv_panic_arith", "shift count outside 0..64"), False)
+                s.check_shift_count(y.a)
             return V("i64", s.op("%s i64 %s, %s" % (BIT_LLVM[n], x.a, y.a)))
         if n in ("copy_range", "copy_within"):
             within = n == "copy_within"
@@ -2920,7 +2950,12 @@ class FnGen:
         sym = foreign_shim.adapter_sym(foreign_shim.helper_name(n, src))
         args = []
         for p, x in zip(cat.params, e.args):   # arguments once, in source order; take arguments are owned values
-            args += s.g6_arg(s.ev(x.expr if n == "vec_reserve" and isinstance(x, InoutArg) else x, bool(p.take)))
+            if isinstance(x, InoutArg):
+                if p.mode == "inout" and p.type == I64:
+                    args.append(("ptr", s.inout_place_ptr(x.expr)))
+                    continue
+                x = x.expr
+            args += s.g6_arg(s.ev(x, bool(p.take)))
         if n == "vec_reserve":
             s.g6_call(sym, "void", args)
             return V("unit")
@@ -2929,7 +2964,7 @@ class FnGen:
                  "proc_args_new", "proc_args_push", "proc_spawn", "proc_spawn_env", "proc_write_str", "proc_write_bytes",
                  "proc_close_stdin", "proc_read", "proc_read_all",
                  "net_connect", "net_listen", "net_accept", "net_write_str", "net_write_bytes",
-                 "net_shutdown_write", "net_set_timeout", "net_read", "net_read_all", 'ev_new', 'ev_add_socket', 'ev_add_listener', 'ev_add_process', 'ev_add_timer', 'ev_wait', 'ev_read', 'ev_write', 'ev_shutdown_write', 'ev_accept', 'ev_proc_read', 'ev_proc_write', 'ev_proc_close_stdin', 'ev_proc_wait', 'ev_proc_wait_for', 'ev_proc_write_for', 'ev_remove'):
+                 "net_shutdown_write", "net_set_timeout", "net_read", "net_read_all", 'ev_new', 'ev_add_socket', 'ev_add_listener', 'ev_add_process', 'ev_add_timer', 'ev_wait', 'ev_read', 'ev_read_into', 'ev_proc_read_into', 'ev_write', 'ev_shutdown_write', 'ev_accept', 'ev_proc_read', 'ev_proc_write', 'ev_proc_close_stdin', 'ev_proc_wait', 'ev_proc_wait_for', 'ev_proc_write_for', 'ev_remove'):
             r = s.g6_call(sym, "ptr", args)     # a fresh box, or the very same box pointer of a consuming update
             return s.temp_arr(V("coll", r, None, e.ty), owned)
         if n in ("vec_get", "string_byte", "file_close", "file_ok", "file_readable",
@@ -3222,6 +3257,8 @@ class FnGen:
             x = s.cev(e.operand)
             if e.op == "!":
                 return V("i1", s.op("xor i1 %s, true" % x.a))
+            if e.op == "~":
+                return V("i128", s.op("xor i128 %s, -1" % x.a))
             return V("i128", s.checked("i128", "ssub", "unary -", "0", x.a))
         if isinstance(e, Binary):
             op = e.op
@@ -3242,6 +3279,21 @@ class FnGen:
                 return V("i1", eq)
             l = s.cev(e.left)
             r = s.cev(e.right)
+            if op in BIT_OP_LLVM:
+                shift = op in ("<<", ">>")
+                for x in (l,) if shift else (l, r):
+                    t = s.op("add i128 %s, 9223372036854775808" % x.a)
+                    ok = s.op("icmp ult i128 %s, 18446744073709551616" % t)
+                    s.guard(ok, und("argument outside i64 in " + op), False)
+                if shift:
+                    ok = s.op("icmp ult i128 %s, 64" % r.a)
+                    s.guard(ok, und("shift count outside 0..64 in " + op), False)
+                v = s.op("%s i128 %s, %s" % (BIT_OP_LLVM[op], l.a, r.a))
+                if op == "<<":
+                    t = s.op("add i128 %s, 9223372036854775808" % v)
+                    ok = s.op("icmp ult i128 %s, 18446744073709551616" % t)
+                    s.guard(ok, und("overflow in <<"), False)
+                return V("i128", v)
             if op in ("+", "-", "*"):
                 name = {"+": "sadd", "-": "ssub", "*": "smul"}[op]
                 return V("i128", s.checked("i128", name, op, l.a, r.a))

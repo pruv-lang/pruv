@@ -82,6 +82,7 @@ it can never be silently dropped.
 ## 5. Expressions
 - Literals `123`, `true`, `false`; variables; `f(a, b)`; `a[i]`; `len(a)` (i64).
 - Arithmetic `+ - * / %` on i64. `/` and `%` require proving divisor `> 0` and dividend `>= 0`.
+- Bitwise `& | ^ << >>` and unary `~` on i64.
 - Comparison `== != < <= > >=` (i64, and `== !=` on bool). In contracts `== !=` also work on Option/Result.
   Arrays can never be compared with `==`; compare `len` and elements with `forall`.
 - Logic `&& || !` (short-circuit). Unary `-`.
@@ -112,6 +113,16 @@ it can never be silently dropped.
   names reserved. Known facts (code): `ushr(x, 0) == x`, `wrapping_shl(x, 0) == x`; `x >= 0 ==> 0 <= ushr(x, k) <= x`;
   `k > 0 ==> ushr(x, k) >= 0`; for a literal `c` in 1..63, `ushr(x, c) <= 2^(64-c) - 1`, so `t[ushr(x, 60)]` is in
   bounds for `len(t) >= 16`. Concrete constant expressions are decided exactly.
+- `a & b`, `a | b`, `a ^ b` have the same signed 64-bit meaning as `band`, `bor`, `bxor`. `~a` is the
+  complement, equal to `-a - 1` in mathematical integers. These operators have no overflow obligation.
+  In code, a mask literal `m = 2^k - 1` for `1 <= k <= 62` on either side of `&` gives the verifier
+  `a >= 0 ==> (a & m) == a % 2^k`. In contracts both arguments of `& | ^` must be inside i64.
+- `a << k` is the exact signed product by `2^k`; `a >> k` is the arithmetic right shift (sign fill),
+  equal to division by `2^k` rounded down, e.g. `-7 >> 1 == -4`. In code both shifts require
+  `0 <= k < 64` (`shift_range`), then `<<` requires its result inside i64 (`overflow`). In contracts
+  both shifts require `a` inside i64 and `0 <= k < 64`; `<<` also requires its result inside i64
+  (`contract_domain`). Contract `~a` is the total mathematical operation `-a - 1`.
+  All these bitwise operators take operands of type i64 (`type_mismatch` otherwise) and evaluate them left to right.
 - `wrapping_add(a, b)`, `wrapping_mul(a, b)`: `(i64, i64) -> i64`, the low 64 bits of the exact sum / product as a
   two's-complement i64 (`wrapping_add(9223372036854775807, 1) == -9223372036854775808`). No overflow obligation on the
   result (ordinary `+ - *` inside the arguments keep theirs). Pure, allowed in code and contracts, names reserved. Known
@@ -175,7 +186,9 @@ it can never be silently dropped.
   [accept](tests/spec/r5_2_copy_within_accept.pruv), [reject end](tests/spec/r5_2_copy_within_src_end.pruv),
   [reject alias](tests/spec/r5_2_copy_within_idx_alias.pruv), `tests/runtime/l3_rt_copy_within*.pruv`.
 - Evaluation order: code evaluates left to right in source order, the same in every compile mode; call arguments left to right, and in `a[i] = v` the index is evaluated before the value.
-- Precedence (high to low): unary `- !`; `* / %`; `+ -`; comparisons (non-associative); `&&`; `||`; `==>`.
+- Precedence (high to low): unary `- ! ~`; `* / %`; `+ -`; `<< >>`; `&`; `^`; `|`; comparisons;
+  `&&`; `||`; `==>`. Binary operators group from the left. In expressions `>>` uses two adjacent `>`
+  tokens, so whitespace cannot separate them. Nested type arguments can still close with adjacent `>` tokens.
 
 ## 6. Contract-only expressions
 Allowed only in `requires`, `ensures`, `invariant`, `assert`:
@@ -1423,6 +1436,8 @@ timers. Declare `! async` for loop operations; `alloc` is also required. Socket 
 | `ev_add_timer(l, ms)` | Add a one-shot timer, 0..86400000 ms |
 | `ev_wait(l, timeout_ms)` | One event; -1 waits indefinitely, 0 polls, otherwise at most 86400000 ms |
 | `ev_read(l, slot, max)`, `ev_proc_read(l, slot, stream, max)` | Nonblocking read into the shared public buffer; stream is 1 (stdout) or 2 (stderr); max is 1..2^40 |
+| `ev_read_into(take l: Loop, slot: i64, inout dst: [u8], inout n: i64) -> Loop` | Nonblocking read from a socket slot into the caller's buffer |
+| `ev_proc_read_into(take l: Loop, slot: i64, stream: i64, inout dst: [u8], inout n: i64) -> Loop` | Nonblocking read from a process slot into the caller's buffer; stream is 1 (stdout) or 2 (stderr) |
 | `ev_write`, `ev_proc_write` | Write all bytes to a write-open slot; may block |
 | `ev_shutdown_write`, `ev_proc_close_stdin` | End writes while keeping reads available |
 | `ev_accept(l, slot)` | Nonblocking accept; `ev_last == -1` if nothing is pending |
@@ -1441,6 +1456,12 @@ Check the slot kind, range, capacity and write-open state before the relevant op
 even on failure. `Loop` cannot be copied, stored in a container or exposed in a host entry; every normal path must
 consume it with `ev_close` or transfer it to another owner. Observers read snapshots, never the OS. A byte copy survives
 later updates and close. Reads publish EOF only after queued bytes are drained; size zero alone means nothing yet.
+The `*_read_into` operations copy up to `len(dst)` queued bytes into `dst[0..n)`, leaving the rest of
+`dst`, its length, and the shared public buffer unchanged on a valid call. They set `n` to the number
+copied and guarantee `0 <= n <= len(dst)`. An empty queue, an empty destination, or a failed slot
+produces zero bytes. On a drained stream they publish EOF or a pending read error as the corresponding
+`ev_read` or `ev_proc_read` does. Check `ev_eof` for EOF, which for a process requires both streams
+to have been observed drained at end of stream. A return count of zero alone does not indicate EOF.
 Wait scans round-robin, reports one event, and frees fired timers. End and error events are reported once.
 
 Error codes: 1 internal (including invalid input), 2 setup (worker spawn, descriptor clone, timeout reset), 3 read, 4 write, 5 write timeout, 6 accept, 7 process I/O, 8 reap.
@@ -1531,6 +1552,11 @@ With `--no-verify`, a shift count outside `0..64` stops the program before shift
 `pruv: arithmetic error: shift count outside 0..64`); a run-time `requires` that passes such a count or an argument
 outside i64 to `wrapping_shl`/`ushr` panics with `pruv: requires undefined: shift count outside 0..64 in ushr`
 (`wrapping_shl` likewise).
+The operators `<<` and `>>` use the same safe-mode count check and runtime message. Safe-mode `<<` also
+checks overflow after shifting (`pruv: arithmetic error: overflow in <<`, exit 101). A runtime `requires` with
+bitwise operators reports `pruv: requires undefined: argument outside i64 in &` (using the actual operator),
+`pruv: requires undefined: shift count outside 0..64 in <<` (or `>>`), or
+`pruv: requires undefined: overflow in <<`, according to which domain check fails.
 
 `--no-verify` emits safe mode: no proof exists, so indexing and arithmetic are checked (panic on out-of-range index
 or i64 overflow), and `/` `%` use the verifier's domain (divisor > 0 and dividend >= 0, otherwise panic).

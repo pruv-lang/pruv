@@ -616,6 +616,7 @@ impl Ast {
     // Each expands through `bin_ast!`, whose unsafe block carries the SAFETY comment (S1 S2, same-context debug_assert).
     bin_ast!(bvshl, Z3_mk_bvshl);
     bin_ast!(bvlshr, Z3_mk_bvlshr);
+    bin_ast!(bvashr, Z3_mk_bvashr);
     // P2 batch 3: z3py `a + b` and `a * b` on bit-vectors (`BitVecRef.__add__` / `__mul__` → bvadd / bvmul).
     // Each expands through `bin_ast!`, whose unsafe block carries the SAFETY comment (S1 S2, same-context debug_assert).
     bin_ast!(bvadd, Z3_mk_bvadd);

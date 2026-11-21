@@ -51,22 +51,8 @@ impl Tok {
     }
 }
 
-const OPS2: &[&str] = &["==", "!=", "<=", ">=", "&&", "||", "->", "=>", "::", "..", "#["];
-const OPS1_LIST: &[&str] = &[".", "|", "-", "+", "*", "/", "%", "<", ">", "=", "!", "(", ")", "{", "}", "[", "]", ",", ":", ";"];
-
-/// STAGE1 A: `|` is a token only directly after a name that looks like a type in a type position
-/// (`x: i64 |`, `-> i64 |`, `[i64 |`, `Option<i64 |`). Anywhere else it is the old bad_char.
-fn bar_after_type(toks: &[Tok]) -> bool {
-    if toks.len() < 2 {
-        return false;
-    }
-    let (a, b) = (&toks[toks.len() - 1], &toks[toks.len() - 2]);
-    if a.kind != Kind::Id || b.kind != Kind::Op || !matches!(b.val.as_str(), ":" | "->" | "[" | "<") {
-        return false;
-    }
-    matches!(a.val.as_str(), "i64" | "u8" | "bool" | "Option" | "Result")
-        || a.val.chars().next().map_or(false, |c| c.is_ascii_uppercase())
-}
+const OPS2: &[&str] = &["==", "!=", "<=", ">=", "&&", "||", "<<", "->", "=>", "::", "..", "#["];
+const OPS1_LIST: &[&str] = &[".", "|", "&", "^", "~", "-", "+", "*", "/", "%", "<", ">", "=", "!", "(", ")", "{", "}", "[", "]", ",", ":", ";"];
 
 fn move_ahead_class(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '_' | '"' | '(' | '[')
@@ -338,10 +324,6 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
             let end = col + (pos - start) as i64;
             toks.push(Tok { kind: if is_kw { Kind::Kw } else { Kind::Id }, val: v, line, col, end });
         } else if let Some(op) = match_op(src, pos) {
-            if op == "|" && !bar_after_type(&toks) {
-                // A stray `|` outside a type position stays the lexical error it has always been
-                return Err(PruvError::new("parse", line, col, "bad_char", format!("unexpected character {}", repr_str("|")), "remove it"));
-            }
             if op == "#[" {
                 // An attribute must start a top-level item. Let the parser reject stacked attributes.
                 let ok = brace_depth == 0
@@ -401,9 +383,9 @@ mod tests {
     #[test]
     fn bad_things() {
         assert_eq!(lex(&chars("1_")).unwrap_err().code, "bad_int");
-        let e = lex(&chars("a &\n")).unwrap_err();
+        let e = lex(&chars("a @\n")).unwrap_err();
         assert_eq!((e.code.as_str(), e.line, e.col), ("bad_char", 1, 3));
-        assert_eq!(e.message, "unexpected character '&'");
+        assert_eq!(e.message, "unexpected character '@'");
         assert_eq!(lex(&chars("pruv_x")).unwrap_err().code, "reserved_name");
         assert_eq!(lex(&chars("a__b")).unwrap_err().code, "reserved_name");
         assert_eq!(lex(&chars("_")).unwrap_err().code, "reserved_name");

@@ -2522,7 +2522,7 @@ impl Checker {
         let mut effect_before = false;
         for (call, conditional) in calls {
             let f = self.funcs.get(&call.name);
-            if f.is_some() || matches!(call.name.as_str(), "map_remove" | "map_take" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice") {
+            if f.is_some() || matches!(call.name.as_str(), "map_remove" | "map_take" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice" | "ev_read_into" | "ev_proc_read_into") {
                 let marked: Vec<&crate::ast::InoutArg> = call
                     .args
                     .iter()
@@ -3680,6 +3680,9 @@ impl Checker {
                 if x.op == "-" {
                     self.expect(&mut x.operand, &i64t(), scope, c, Some("unary minus"))?;
                     Ok(i64t())
+                } else if x.op == "~" {
+                    self.expect(&mut x.operand, &i64t(), scope, c, None)?;
+                    Ok(i64t())
                 } else {
                     self.expect(&mut x.operand, &boolt(), scope, c, Some("a boolean operation"))?;
                     Ok(boolt())
@@ -3691,6 +3694,11 @@ impl Checker {
                     "+" | "-" | "*" | "/" | "%" => {
                         self.expect(&mut x.left, &i64t(), scope, c, Some("arithmetic"))?;
                         self.expect(&mut x.right, &i64t(), scope, c, Some("arithmetic"))?;
+                        Ok(i64t())
+                    }
+                    "&" | "|" | "^" | "<<" | ">>" => {
+                        self.expect(&mut x.left, &i64t(), scope, c, None)?;
+                        self.expect(&mut x.right, &i64t(), scope, c, None)?;
                         Ok(i64t())
                     }
                     "<" | "<=" | ">" | ">=" => {
@@ -5104,7 +5112,7 @@ impl Checker {
                 col: 0,
                 params: cf.params.iter().map(|p| p.ty.clone()).collect(),
                 pnames: cf.params.iter().map(|p| p.name.to_string()).collect(),
-                inout: (0..cf.params.len()).map(|i| i == 0 && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "map_take" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice")).collect(),
+                inout: cf.params.iter().enumerate().map(|(i, p)| p.inout || i == 0 && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "map_take" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice")).collect(),
                 ret: cf.ret.clone(),
                 effects: cf.effects.clone(),
                 tparams: cf.tparams.clone(),

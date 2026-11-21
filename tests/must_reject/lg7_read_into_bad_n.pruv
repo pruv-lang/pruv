@@ -1,0 +1,10 @@
+fn bad(take input: Loop) -> Loop ! async, net, alloc
+  requires ev_ok(input) && ev_cap(input) > 0 && ev_kind(input, 0) == 1
+{
+  let mut dst: [u8] = alloc(4, 0);
+  let mut n: i64 = 0;
+  let l: Loop = ev_read_into(move input, 0, inout dst, inout n);
+  assert len(dst) == 4 && 0 <= n && n <= len(dst);
+  let byte: i64 = dst[n];
+  return move l;
+}

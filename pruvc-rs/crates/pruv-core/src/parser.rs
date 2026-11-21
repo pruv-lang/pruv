@@ -1638,11 +1638,11 @@ impl Parser {
     }
 
     fn cmp(&mut self) -> R<Expr> {
-        let l = self.add()?;
+        let l = self.bitwise(0)?;
         for op in CMP_OPS.iter() {
             if self.at(op, 0) {
                 let t = self.next();
-                let r = self.add()?;
+                let r = self.bitwise(0)?;
                 for op2 in CMP_OPS.iter() {
                     if self.at(op2, 0) {
                         return Err(self.err("comparisons cannot be chained", "use `a < b && b < c`", None));
@@ -1652,6 +1652,32 @@ impl Parser {
             }
         }
         Ok(l)
+    }
+
+    fn bitwise(&mut self, level: usize) -> R<Expr> {
+        const OPS: [&str; 4] = ["|", "^", "&", "<<"];
+        let Some(&op) = OPS.get(level) else { return self.add(); };
+        let mut left = self.bitwise(level + 1)?;
+        let mut chain = 0;
+        let result = (|| {
+            loop {
+                let right_shift = op == "<<" && self.at(">", 0) && self.at(">", 1)
+                    && self.peek(0).line == self.peek(1).line && self.peek(0).end == self.peek(1).col;
+                if !self.at(op, 0) && !right_shift {
+                    return Ok(left);
+                }
+                let tok = self.next();
+                if right_shift {
+                    self.next();
+                }
+                chain += 1;
+                self.enter(1)?;
+                let right = self.bitwise(level + 1)?;
+                left = Self::bin(&tok, if right_shift { ">>" } else { op }, left, right);
+            }
+        })();
+        self.leave(chain);
+        result
     }
 
     fn add(&mut self) -> R<Expr> {
@@ -1701,7 +1727,7 @@ impl Parser {
     }
 
     fn unary(&mut self) -> R<Expr> {
-        if self.at("-", 0) || self.at("!", 0) || self.at("*", 0) {
+        if self.at("-", 0) || self.at("!", 0) || self.at("~", 0) || self.at("*", 0) {
             let t = self.next();
             self.enter(1)?;
             let o = self.unary();

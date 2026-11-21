@@ -26,6 +26,7 @@ pub struct CatParam {
     pub name: &'static str,
     pub ty: GType,
     pub take: bool,
+    pub inout: bool,
 }
 
 /// A catalog function: generic (explicit type arguments are required), effects as declared.
@@ -40,7 +41,7 @@ pub struct CatFn {
 }
 
 /// CATALOG_NAMES of foreign.py (insertion order).
-pub const CATALOG_NAMES: [&str; 104] = [
+pub const CATALOG_NAMES: [&str; 106] = [
     "vec_new",
     "vec_push",
     "vec_get",
@@ -98,10 +99,12 @@ pub const CATALOG_NAMES: [&str; 104] = [
     "ev_add_timer",
     "ev_wait",
     "ev_read",
+    "ev_read_into",
     "ev_write",
     "ev_shutdown_write",
     "ev_accept",
     "ev_proc_read",
+    "ev_proc_read_into",
     "ev_proc_write",
     "ev_proc_close_stdin",
     "ev_proc_wait",
@@ -185,7 +188,7 @@ pub const NET_OBSERVERS: [&str; 9] = [
 ];
 
 pub const ASYNC_OBSERVERS: [&str; 13] = ["ev_ok","ev_error","ev_cap","ev_count","ev_last","ev_kind","ev_eof","ev_write_open","ev_event_slot","ev_event_kind","ev_size","ev_byte","ev_exit"];
-pub const ASYNC_OPS: [&str; 32] = ["ev_new","ev_close","ev_add_socket","ev_add_listener","ev_add_process","ev_add_timer","ev_wait","ev_read","ev_write","ev_shutdown_write","ev_accept","ev_proc_read","ev_proc_write","ev_proc_close_stdin","ev_proc_wait","ev_proc_wait_for","ev_proc_write_for","ev_remove","ev_bytes","ev_ok","ev_error","ev_cap","ev_count","ev_last","ev_kind","ev_eof","ev_write_open","ev_event_slot","ev_event_kind","ev_size","ev_byte","ev_exit"];
+pub const ASYNC_OPS: [&str; 34] = ["ev_new","ev_close","ev_add_socket","ev_add_listener","ev_add_process","ev_add_timer","ev_wait","ev_read","ev_read_into","ev_write","ev_shutdown_write","ev_accept","ev_proc_read","ev_proc_read_into","ev_proc_write","ev_proc_close_stdin","ev_proc_wait","ev_proc_wait_for","ev_proc_write_for","ev_remove","ev_bytes","ev_ok","ev_error","ev_cap","ev_count","ev_last","ev_kind","ev_eof","ev_write_open","ev_event_slot","ev_event_kind","ev_size","ev_byte","ev_exit"];
 pub fn is_async_observer(name: &str) -> bool { ASYNC_OBSERVERS.contains(&name) }
 pub fn is_async_op(name: &str) -> bool { ASYNC_OPS.contains(&name) }
 
@@ -206,7 +209,11 @@ pub fn is_catalog_contract_only(name: &str) -> bool {
 }
 
 fn p(name: &'static str, ty: GType, take: bool) -> CatParam {
-    CatParam { name, ty, take }
+    CatParam { name, ty, take, inout: false }
+}
+
+fn inout(name: &'static str, ty: GType) -> CatParam {
+    CatParam { inout: true, ..p(name, ty, false) }
 }
 
 fn vec_of(t: GType) -> GType {
@@ -467,10 +474,12 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
         "ev_add_timer" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("ms", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "alloc".to_string()], tparams: vec![] },
         "ev_wait" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("timeout_ms", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "alloc".to_string()], tparams: vec![] },
         "ev_read" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false), p("max", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "net".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_read_into" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false), inout("dst", GType::new("array_u8", vec![])), inout("n", GType::i64())], ret: loop_t(), effects: vec!["async".to_string(), "net".to_string(), "alloc".to_string()], tparams: vec![] },
         "ev_write" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false), p("data", GType::new("array_u8", vec![]), false)], ret: loop_t(), effects: vec!["async".to_string(), "net".to_string(), "alloc".to_string()], tparams: vec![] },
         "ev_shutdown_write" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "net".to_string(), "alloc".to_string()], tparams: vec![] },
         "ev_accept" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "net".to_string(), "alloc".to_string()], tparams: vec![] },
         "ev_proc_read" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false), p("stream", GType::i64(), false), p("max", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "proc".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_proc_read_into" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false), p("stream", GType::i64(), false), inout("dst", GType::new("array_u8", vec![])), inout("n", GType::i64())], ret: loop_t(), effects: vec!["async".to_string(), "proc".to_string(), "alloc".to_string()], tparams: vec![] },
         "ev_proc_write" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false), p("data", GType::new("array_u8", vec![]), false)], ret: loop_t(), effects: vec!["async".to_string(), "proc".to_string(), "alloc".to_string()], tparams: vec![] },
         "ev_proc_close_stdin" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "proc".to_string(), "alloc".to_string()], tparams: vec![] },
         "ev_proc_wait" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "proc".to_string(), "alloc".to_string()], tparams: vec![] },
@@ -2099,7 +2108,7 @@ mod tests {
 
     #[test]
     fn catalog_shapes() {
-        assert_eq!(CATALOG_NAMES.len(), 104);
+        assert_eq!(CATALOG_NAMES.len(), 106);
         for n in CATALOG_NAMES.iter() {
             assert!(catalog_fn(n).is_some());
         }

@@ -230,6 +230,7 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6b_liar_len_all.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6b_r01_owned_results.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6b_r02_str_codes.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg7_rt_read_into.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--trust-callers", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_liar_requires.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r01_copy.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r02_nested.pruv"}
@@ -727,6 +728,9 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg5_rt_struct_len_frame.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg6_rt_field_inout.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg6_rt_view.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg7_rt_bitops.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg7_rt_field_gep.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg7_rt_read_into.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_rt_bits.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_rt_contract_guard.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_rt_kernels.pruv"}
@@ -1369,6 +1373,9 @@
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg5_rt_struct_len_frame.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg6_rt_field_inout.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg6_rt_view.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg7_rt_bitops.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg7_rt_field_gep.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg7_rt_read_into.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_rt_bits.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_rt_kernels.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_rt_shifts.pruv"}
@@ -1665,6 +1672,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6b_liar_len_all.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6b_r01_owned_results.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6b_r02_str_codes.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg7_rt_read_into.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--trust-callers", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_liar_requires.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r01_copy.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r02_nested.pruv"}
@@ -2165,6 +2173,9 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg5_rt_struct_len_frame.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg6_rt_field_inout.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg6_rt_view.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg7_rt_bitops.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg7_rt_field_gep.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg7_rt_read_into.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_rt_bits.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_rt_contract_guard.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_rt_kernels.pruv"}
@@ -2814,6 +2825,9 @@
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg5_rt_struct_len_frame.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg6_rt_field_inout.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg6_rt_view.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg7_rt_bitops.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg7_rt_field_gep.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg7_rt_read_into.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_rt_bits.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_rt_kernels.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_rt_shifts.pruv"}
@@ -4566,6 +4580,11 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg6_view_to_builtin.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg6_view_to_inout.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg6_view_write.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg7_bitop_bool.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg7_read_into_bad_n.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg7_shift_out_of_range.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg7_shl_overflow.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg7_shr_negative_count.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p2_bits_arity.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p2_bits_type.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p2_contract_shift.pruv"}
