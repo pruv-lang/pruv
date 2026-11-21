@@ -1,0 +1,22 @@
+// LG12 G-LG11-10: a cost function that calls another cost function with `move r` of a Result<_, String>
+fn unwrap_or(take r: Result<i64, String>, d: i64) -> i64 ! alloc
+  cost 0
+{
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return d; }
+  }
+}
+
+fn forward(take r: Result<i64, String>) -> i64 ! alloc
+  cost 1
+{
+  return unwrap_or(move r, -1);
+}
+
+fn run() -> () ! io, alloc {
+  let a: Result<i64, String> = Ok::<i64, String>(5);
+  print(forward(move a));
+  let b: Result<i64, String> = Err::<i64, String>(string_from("x"));
+  print(forward(move b));
+}

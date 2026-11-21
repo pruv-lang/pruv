@@ -829,6 +829,8 @@ def _g6_candidates(node, out):
         out.append((node.line, node.col, "move"))
     elif isinstance(node, Call) and node.ty is not None and (contains_collection(node.ty) or node.name == "string_eq"):
         out.append((node.line, node.col, "a collection value"))
+    elif isinstance(node, Ctor) and node.ty is not None and contains_collection(node.ty):
+        out.append((node.line, node.col, "a collection value"))     # LG12: Ok::<T, String>(..)
     for fname in node.__dataclass_fields__:
         _g6_candidates(getattr(node, fname), out)
 

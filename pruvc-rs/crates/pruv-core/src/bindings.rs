@@ -4,7 +4,7 @@
 use crate::ast::*;
 use crate::emit_common::{emit_public_types, emit_public_types_with, is_spec_fn, rty};
 use crate::gtype::GType;
-use crate::llvmgen::{g_arg, is_agg, is_gopt};
+use crate::llvmgen::{g_arg, g_error, is_agg, is_gopt};
 use crate::typeinfo::{is_array_name, is_user_type, uses_array_type, uses_str, TypeTable};
 
 pub const ALLOW: &str = "#[allow(dead_code, non_snake_case, unused)]";
@@ -129,19 +129,10 @@ fn rs_ser(tt: &TypeTable, ty: &str, expr: &str, arr: &str, off: i64, ctr: &mut i
                 expr, v, arr, off, inner, arr, off
             )]);
         }
+        let err = rs_ser(tt, g_error(ty), &v, arr, off + 1 + words(tt, x)?, ctr)?.join(" ");
         return Ok(vec![format!(
-            "match {} {{ Ok({}) => {{ {}[{}] = 1; {} }} Err({}) => {{ {}[{}] = 0; {}[{}] = {}; }} }}",
-            expr,
-            v,
-            arr,
-            off,
-            inner,
-            v,
-            arr,
-            off,
-            arr,
-            off + 1 + words(tt, x)?,
-            v
+            "match {} {{ Ok({}) => {{ {}[{}] = 1; {} }} Err({}) => {{ {}[{}] = 0; {} }} }}",
+            expr, v, arr, off, inner, v, arr, off, err
         )]);
     }
     match ty {
@@ -207,14 +198,8 @@ fn rs_de(tt: &TypeTable, ty: &str, arr: &str, off: i64) -> Result<String, String
         if ty.starts_with("option<") {
             return Ok(format!("(if {}[{}] != 0 {{ Some({}) }} else {{ None }})", arr, off, xe));
         }
-        return Ok(format!(
-            "(if {}[{}] != 0 {{ Ok({}) }} else {{ Err({}[{}]) }})",
-            arr,
-            off,
-            xe,
-            arr,
-            off + 1 + words(tt, x)?
-        ));
+        let err = rs_de(tt, g_error(ty), arr, off + 1 + words(tt, x)?)?;
+        return Ok(format!("(if {}[{}] != 0 {{ Ok({}) }} else {{ Err({}) }})", arr, off, xe, err));
     }
     match ty {
         "i64" => return Ok(format!("{}[{}]", arr, off)),
@@ -375,6 +360,11 @@ pub fn owned_collection_abi_error(
             }
             if f.params.iter().any(|p| p.take && p.ty == "string") {
                 return Some(err(f.line, f.col, format!("host entry {name} takes an owned String, which has no C ABI")));
+            }
+            if std::iter::once(&f.ret).chain(f.params.iter().map(|p| &p.ty))
+                .any(|ty| GType::from_key(ty).has_string_error())
+            {
+                return Some(err(f.line, f.col, format!("host entry {name} has a Result<_, String> in its signature, which has no C ABI")));
             }
             if crate::gtype::key_is_scalar_vec(&f.ret) {
                 return Some(err(f.line, f.col, format!("host entry {} returns a Vec, which has no C ABI", name)));

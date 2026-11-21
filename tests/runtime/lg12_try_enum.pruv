@@ -1,0 +1,42 @@
+// LG12: `?` through two levels with an enum error type, on both backends
+enum StepErr { Neg(at: i64), Big }
+
+fn step(x: i64) -> Result<i64, StepErr>
+  ensures is_ok(result) ==> ok_val(result) == x * 2
+  ensures is_ok(result) ==> 0 <= ok_val(result) && ok_val(result) <= 2000
+{
+  if x < 0 {
+    return Err::<i64, StepErr>(StepErr::Neg(x));
+  }
+  if x > 1000 {
+    return Err::<i64, StepErr>(StepErr::Big);
+  }
+  return Ok::<i64, StepErr>(x * 2);
+}
+
+fn twice(x: i64) -> Result<i64, StepErr>
+  ensures is_ok(result) ==> 0 <= ok_val(result) && ok_val(result) <= 2000
+{
+  let a: i64 = step(x)?;
+  let b: i64 = step(a)?;
+  return Ok::<i64, StepErr>(b);
+}
+
+fn chain(x: i64) -> Result<i64, StepErr> {
+  let mut t: i64 = twice(x)?;
+  t = twice(t)?;
+  return Ok::<i64, StepErr>(t + 1);
+}
+
+fn run(x: i64) -> i64 {
+  let r: Result<i64, StepErr> = chain(x);
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => {
+      match e {
+        StepErr::Neg(at) => { return at; }
+        StepErr::Big => { return -1000; }
+      }
+    }
+  }
+}

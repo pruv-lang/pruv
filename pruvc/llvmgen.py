@@ -49,7 +49,7 @@ from llvm_inline import llvm_inline
 from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str  # G2 B2: uses_str
 from typeinfo import field_place
 from check import array_resize_params, array_resize_args, same_place
-from typeinfo import is_collection, contains_collection, encode, is_scalar_vec, is_vec_slice_arg
+from typeinfo import is_collection, contains_collection, encode, is_scalar_vec, is_vec_slice_arg, is_owned_result
 from foreign import CATALOG, CATALOG_CONTRACT_ONLY, first_g6_use, _owned_result, NET_OBSERVERS, ASYNC_OBSERVERS  # G6 A3, G6b, G10 net A3
 import foreign_shim  # G6 A3
 import parallel_shim
@@ -561,11 +561,13 @@ def vkind(t):
 def st(t, c=False):
     """storage type of a value of type t inside an aggregate (c: contract/i128 form)"""
     n = t.name
+    if is_collection(t):    # LG12 E2: the error slot of Result<T, String> holds the String handle
+        return "ptr"
     if gopt(t):
         x = st(t.args[0], c)
         if n == "option":
             return "{ i1, %s }" % x
-        return "{ i1, %s, %s }" % (x, "i128" if c else "i64")
+        return "{ i1, %s, %s }" % (x, st(result_error(t), c))   # LG12: L(E) error slot (i64 for Result<X>)
     if n == "i64":
         return "i128" if c else "i64"
     if n == "bool":
@@ -605,7 +607,7 @@ def words(tt, ty):
     if n in ("i64", "bool"):
         r = 1
     elif gopt(ty):  # G3: 1 + W(X) (+ 1 for the Result error word)
-        r = 1 + words(tt, ty.args[0]) + (1 if n == "result" else 0)
+        r = 1 + words(tt, ty.args[0]) + (words(tt, result_error(ty)) if n == "result" else 0)
     elif n in ("option", "result"):
         r = 2
     else:
@@ -633,6 +635,10 @@ def new_tt(prog):
 
 def is_ext_t(tt, t):
     """t is an extended user type (G9): recursive, or holding a buffer or an extended type"""
+    if t is not None and is_owned_result(t):
+        # LG12 E2: Result<T, String> is an owned aggregate { i1, L(T), ptr }: it travels through output storage / ptr
+        # parameters like an extended value and has no host ABI wrapper; its String handle is null on the Ok side
+        return True
     return bool(tt.g9_ext) and t is not None and t.owner is None and not t.args and t.name in tt.g9_ext
 
 
@@ -1039,6 +1045,9 @@ class FnGen:
         return V("agg", s.op("load %s, ptr %s" % (lty(v.ty), dst)), None, v.ty, dst)
 
     def drop_agg(s, v):
+        if is_owned_result(v.ty):   # LG12 E2
+            s.drop_oresult(v.ty, s.spill(v))
+            return
         s.ins("call void @pruv_drop__%s(ptr %s)" % (v.ty.name, s.spill(v)))
 
     def view_ptr(s, e):
@@ -1132,10 +1141,95 @@ class FnGen:
                 s.drop_rest(sl, s.ret_moved[sl.a])
             elif sl.k == "coll":
                 s.drop_slot(sl)
+            elif sl.k == "agg" and is_owned_result(sl.ty):     # LG12 E2: an owned Result<T, String> local
+                s.drop_oresult(sl.ty, sl.a)
             elif sl.k == "agg":     # G9 A3: an owned extended local
                 s.ins("call void @pruv_drop__%s(ptr %s)" % (sl.ty.name, sl.a))
             else:
                 s.free_val(s.load(sl))
+
+    def drop_handle(s, h):
+        """drop the String handle h unless it is null (the Ok side, or a String that was moved out)"""
+        nn = s.op("icmp ne ptr %s, null" % h)
+        dl, el = s.label("gdrop"), s.label("gdone")
+        s.condbr(nn, dl, el)
+        s.place(dl)
+        s.g6_drop(V("coll", h, None, Type("string")))
+        s.br(el)
+        s.place(el)
+
+    def drop_oresult(s, ty, p):
+        """LG12 E2: release the owned value of type Result<T, String> stored at p: its String handle, when non-null"""
+        h = s.op("load ptr, ptr %s" % g9_gep(s, lty(ty), p, 2))
+        s.drop_handle(h)
+
+    def mk_octor(s, e):
+        """Ok / Err of Result<T, String>: Ok carries a scalar; Err MOVES its String in (a named String local becomes
+        null, a fresh String is taken as is: both are owned by the result afterwards)"""
+        ty = e.ty
+        T = st(ty)
+        if e.name == "Ok":
+            x = s.ev(e.arg)
+            acc = s.op("insertvalue %s zeroinitializer, i1 true, 0" % T)
+            return V("agg", s.put(acc, ty, 1, x, ty.args[0], False), None, ty)
+        a = e.arg
+        if isinstance(a, Var) and s.lookup(a.name)[0] != "slot":
+            raise PruvError("codegen", e.line, e.col, "unsupported_type",
+                            "Err of the borrowed String %s needs the Rust backend" % a.name, "use the Rust backend",
+                            file=getattr(e, "file", None))
+        x = s.ev(a, True)
+        if isinstance(a, Var):
+            s.ins("store ptr null, ptr %s" % s.lookup(a.name)[1].a)
+        return V("agg", s.op("insertvalue %s zeroinitializer, ptr %s, 2" % (T, x.a)), None, ty)
+
+    def owned_match(s, st):
+        """LG12 E2: `match r { Ok(v) => .., Err(e) => .. }` on a Result<T, String> CONSUMES r.  The tag, the payload and
+        the String handle are read first; a local scrutinee then has its handle slot nulled (so its scope drop frees
+        nothing), a temporary scrutinee (a call result, a constructor) is not dropped at all.  The Err binder becomes an
+        owned String local of the arm scope: dropped at arm end unless it is moved (string_to_str take, Err(e), a take
+        argument).  Other temporaries of the scrutinee are dropped right after it is evaluated."""
+        sc = st.scrutinee
+        ty = sc.ty
+        X = ty.args[0]
+        if isinstance(sc, Var) and s.lookup(sc.name)[0] != "slot":
+            raise PruvError("codegen", st.line, st.col, "unsupported_type",
+                            "a match on the borrowed Result<_, String> %s needs the Rust backend" % sc.name,
+                            "use the Rust backend", file=getattr(st, "file", None))
+        s.begin_temps()
+        sv = s.ev(sc)
+        for tv in reversed(s.temps.pop()):
+            if tv is not sv:
+                s.free_val(tv)
+        T = lty(ty)
+        tag = s.op("extractvalue %s %s, 0" % (T, sv.a))
+        okv = s.get(sv, ty, 1, X, False)
+        h = s.op("extractvalue %s %s, 2" % (T, sv.a))
+        if isinstance(sc, Var):
+            s.ins("store ptr null, ptr %s" % g9_gep(s, T, sv.p, 2))
+        pos = [a for a in st.arms if a.ctor == "Ok"][0]
+        neg = [a for a in st.arms if a.ctor == "Err"][0]
+        pl, nl_, end = s.label("armT"), s.label("armF"), s.label("endmatch")
+        s.condbr(tag, pl, nl_)
+        reach = False
+        for arm, lbl in ((pos, pl), (neg, nl_)):
+            s.place(lbl)
+            bind, own = None, None
+            if arm.ctor == "Ok":
+                if arm.binders:
+                    bind = {arm.binders[0]: ("ssa", okv)}
+            elif arm.binders:
+                sl = s.new_slot(arm.binders[0], Type("string"))
+                s.ins("store ptr %s, ptr %s" % (h, sl.a))
+                bind, own = {arm.binders[0]: ("slot", sl)}, [sl]
+            else:
+                s.drop_handle(h)
+            if s.run_block(arm.body, bind, own=own):
+                s.br(end)
+                reach = True
+        if reach:
+            s.place(end)
+        else:
+            s.dead = True
 
     def drop_rest(s, sl, moved):
         """P3: release an owned extended slot whose value (moved is None) or some unboxed payload fields of its
@@ -1516,8 +1610,7 @@ class FnGen:
             acc = s.op("insertvalue %s zeroinitializer, i1 true, 0" % st(ty, c))
             return V("agg", s.put(acc, ty, 1, x, ty.args[0], c), None, ty)
         # Err: tag false (zero), error payload in slot 2
-        return V("agg", s.op("insertvalue %s zeroinitializer, %s %s, 2" % (st(ty, c), "i128" if c else "i64", x.a)),
-                 None, ty)
+        return V("agg", s.put("zeroinitializer", ty, 2, x, result_error(ty), c), None, ty)
 
     def gmatch(s, st_, sv):
         """match on a new Option<X>/Result<X>: branch on the tag, bind the active payload only inside its arm"""
@@ -1536,7 +1629,7 @@ class FnGen:
                 if arm.ctor in ("Some", "Ok"):
                     bind = {arm.binders[0]: ("ssa", s.get(sv, ty, 1, X, False))}
                 else:
-                    bind = {arm.binders[0]: ("ssa", V("i64", s.op("extractvalue %s %s, 2" % (st(ty), sv.a))))}
+                    bind = {arm.binders[0]: ("ssa", s.get(sv, ty, 2, result_error(ty), False))}
             if s.run_block(arm.body, bind):
                 s.br(end)
                 reach = True
@@ -1570,9 +1663,8 @@ class FnGen:
             acc = s.op("insertvalue %s zeroinitializer, i1 %s, 0" % (st(ty, True), t))
             acc = s.put(acc, ty, 1, s.to_c(s.get(x, ty, 1, X, False), X), X, True)
             if n == "result":
-                er = s.op("extractvalue %s %s, 2" % (st(ty), x.a))
-                ec = s.op("sext i64 %s to i128" % er)
-                acc = s.op("insertvalue %s %s, i128 %s, 2" % (st(ty, True), acc, ec))
+                E = result_error(ty)
+                acc = s.put(acc, ty, 2, s.to_c(s.get(x, ty, 2, E, False), E), E, True)
             return V("agg", acc, None, ty)
         if n in ("option", "result"):
             return V("opt", x.a, s.op("sext i64 %s to i128" % x.b))
@@ -1623,9 +1715,8 @@ class FnGen:
             nt = s.op("xor i1 %s, true" % tl)
             if n == "option":
                 return s.op("and i1 %s, %s" % (te, s.op("or i1 %s, %s" % (nt, pe))))
-            el = s.op("extractvalue %s %s, 2" % (T, l.a))
-            er = s.op("extractvalue %s %s, 2" % (T, r.a))
-            ee = s.op("icmp eq i128 %s, %s" % (el, er))
+            E = result_error(ty)
+            ee = s.ceq(s.get(l, ty, 2, E, True), s.get(r, ty, 2, E, True), E)
             act = s.op("or i1 %s, %s" % (s.op("and i1 %s, %s" % (tl, pe)), s.op("and i1 %s, %s" % (nt, ee))))
             return s.op("and i1 %s, %s" % (te, act))
         if n in ("option", "result"):
@@ -1748,11 +1839,14 @@ class FnGen:
             s.term("ret %s %s" % (lty(rt), g))
 
     # ---------- statements ----------
-    def run_block(s, stmts, bind=None, loop=False):
-        """lower a block in its own scope; returns True if control can fall through"""
+    def run_block(s, stmts, bind=None, loop=False, own=None):
+        """lower a block in its own scope; returns True if control can fall through.  own: owner slots (LG12 E2: the
+        String binder of an Err arm) released when the scope ends"""
         s.push_scope()
         if bind:
             s.scopes[-1]["names"].update(bind)
+        if own:
+            s.scopes[-1]["arrays"].extend(own)
         later = [set() for _ in range(len(stmts) + 1)]
         for i in range(len(stmts) - 1, -1, -1):
             later[i] = set(later[i + 1])
@@ -1958,6 +2052,8 @@ class FnGen:
                 s.free_val(s.load(sl))
             elif sl.k == "coll":   # G6 A3: drop the old value (null when moved out) after the right side
                 s.drop_slot(sl)
+            elif sl.k == "agg" and is_owned_result(sl.ty):   # LG12 E2: the old Result releases its String
+                s.drop_oresult(sl.ty, sl.a)
             elif sl.k == "agg" and s.is_ext(sl.ty):   # G9 A3
                 s.ins("call void @pruv_drop__%s(ptr %s)" % (sl.ty.name, sl.a))
             s.store(sl, v)
@@ -2098,6 +2194,8 @@ class FnGen:
             s.end_temps()
         elif isinstance(st, Par):
             s.parallel(st)
+        elif isinstance(st, Match) and is_owned_result(st.scrutinee.ty):    # LG12 E2: consuming match
+            s.owned_match(st)
         elif isinstance(st, Match) and s.is_ext(st.scrutinee.ty):
             # G9 A3: the scrutinee is borrowed, never consumed; every temporary it created (a fresh scrutinee, a
             # fresh base of a field path, a fresh argument) is moved into owner slots of a scope that spans all
@@ -2418,6 +2516,16 @@ class FnGen:
                         prev = s.ret_moved.get(sl.a)
                         s.ret_moved[sl.a] = (vn, (prev[1] if prev else set()) | {k})
                     return v
+                if is_owned_result(v.ty):
+                    # LG12 E2: a Result<T, String> local in an owning position MOVES (as in the Rust output): the
+                    # slot becomes zero (Err, null handle), so its scope drop frees nothing
+                    if kind != "slot":
+                        raise PruvError("codegen", e.line, e.col, "unsupported_type",
+                                        "moving the borrowed Result<_, String> %s needs the Rust backend" % e.name,
+                                        "use the Rust backend", file=getattr(e, "file", None))
+                    s.ins("store %s zeroinitializer, ptr %s" % (lty(v.ty), x.a))
+                    v.p = None
+                    return v
                 return s.clone_val(v)
             return v
         if isinstance(e, Move) and e.fields:    # LG4: move an owned buffer field out; the field becomes (null, 0, 0)
@@ -2477,6 +2585,8 @@ class FnGen:
             p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 1, i64 1)" % (nm, ln))
             return s.temp_arr(V("arr", p, ln, STR), owned)
         if isinstance(e, Ctor):
+            if e.ty is not None and is_owned_result(e.ty):   # LG12 E2: fresh and owned; a temporary unless taken
+                return s.fresh(s.mk_octor(e), owned)
             if e.ty is not None and gopt(e.ty):  # G3
                 return s.mk_gctor(e, s.ev, False)
             if e.name == "None":
@@ -3202,8 +3312,8 @@ class FnGen:
                     x = s.g9_real(e.arg, px)
                     acc = s.op("insertvalue %s zeroinitializer, i1 true, 0" % st(t))
                     return V("agg", s.put(acc, t, 1, x, px, False), None, t)
-                x = s.g9_real(e.arg, I64)
-                return V("agg", s.op("insertvalue %s zeroinitializer, i64 %s, 2" % (st(t), x.a)), None, t)
+                x = s.g9_real(e.arg, result_error(t))
+                return V("agg", s.put("zeroinitializer", t, 2, x, result_error(t), False), None, t)
             if e.name == "None":
                 return V("opt", "false", "0")
             x = s.g9_real(e.arg, px if e.name != "Err" else I64)
@@ -3530,6 +3640,8 @@ class FnGen:
                     r = s.op("%s i64 %s, %s" % (BIT_LLVM[n], tx, ty))
                     return V("i128", s.op("sext i64 %s to i128" % r))
                 return V("i128", s.op("%s i128 %s, %s" % (BIT_LLVM[n], x.a, y.a)))
+            if n in ("is_some", "is_ok", "some_val", "ok_val", "err_val") and is_owned_result(a[0].ty):
+                raise s.g9_unsupported(e, "a Result<_, String> operand")      # LG12 E2: no i128 mirror of the String
             if n in ("is_some", "is_ok"):
                 o = s.cev(a[0])
                 if o.k == "agg":  # G3: tag of a new Option/Result
@@ -3542,7 +3654,7 @@ class FnGen:
                     tag = s.op("extractvalue %s %s, 0" % (T, o.a))
                     if n == "err_val":
                         s.guard(tag, und("err_val of Ok"), True)
-                        return V("i128", s.op("extractvalue %s %s, 2" % (T, o.a)))
+                        return s.get(o, o.ty, 2, result_error(o.ty), True)
                     s.guard(tag, und("some_val of None" if n == "some_val" else "ok_val of Err"), False)
                     return s.get(o, o.ty, 1, o.ty.args[0], True)
                 if n == "err_val":
@@ -4059,7 +4171,7 @@ def g9_node_texts(m, tt, d):
 def g9_walks(t):
     """size / equality walk into t: a nominal value, or Option / Result of one"""
     if gopt(t):
-        return g9_walks(t.args[0])
+        return g9_walks(t.args[0]) or (t.name == "result" and g9_walks(result_error(t)))
     return is_user_type(t)
 
 
@@ -4067,6 +4179,22 @@ def g9_weight(g, t, p, bud="%bud"):
     """i128 SSA value of weight(value stored at p) (G9_SPEC 3), or None when it is statically 0.  Some / Ok weigh their
     payload, None / Err 0; a nominal value weighs its size (one budget unit per node, inside pruv_csize).  bud is the
     budget pointer the size helper charges."""
+    if gopt(t) and t.name == "result" and g9_walks(result_error(t)):    # LG12: Ok weighs X, Err weighs E
+        X, E = t.args[0], result_error(t)
+        T = st(t)
+        tag = g.op("load i1, ptr %s" % g9_gep(g, T, p, 0))
+        lcur, yes, no, end = g.cur, g.label("gwy"), g.label("gwn"), g.label("gwe")
+        g.condbr(tag, yes, no)
+        g.place(yes)
+        w = g9_weight(g, X, g9_gep(g, T, p, 1), bud) or "0"
+        wcur = g.cur
+        g.br(end)
+        g.place(no)
+        we = g9_weight(g, E, g9_gep(g, T, p, 2), bud) or "0"
+        ecur = g.cur
+        g.br(end)
+        g.place(end)
+        return g.op("phi i128 [ %s, %%%s ], [ %s, %%%s ]" % (w, wcur, we, ecur))
     if gopt(t):
         X = t.args[0]
         if not g9_walks(X):
@@ -4145,9 +4273,12 @@ def g9_eq_val(g, t, pa, pb):
         l2cur = g.cur
         g.br(lend)
         g.place(l3)
-        ea = g.op("load i64, ptr %s" % g9_gep(g, T, pa, 2))
-        eb = g.op("load i64, ptr %s" % g9_gep(g, T, pb, 2))
-        e3 = g.op("icmp eq i64 %s, %s" % (ea, eb))
+        if result_error(t) == I64:
+            ea = g.op("load i64, ptr %s" % g9_gep(g, T, pa, 2))
+            eb = g.op("load i64, ptr %s" % g9_gep(g, T, pb, 2))
+            e3 = g.op("icmp eq i64 %s, %s" % (ea, eb))
+        else:   # LG12: the error payloads of type E
+            e3 = g9_eq_val(g, result_error(t), g9_gep(g, T, pa, 2), g9_gep(g, T, pb, 2))
         l3cur = g.cur
         g.br(lend)
         g.place(lend)
@@ -4266,7 +4397,7 @@ class Words:
         if r is None:
             if gopt(ty):
                 x = s.S(ty.args[0])
-                r = "{ i1, %s }" % x if ty.name == "option" else "{ i1, %s, i64 }" % x
+                r = "{ i1, %s }" % x if ty.name == "option" else "{ i1, %s, %s }" % (x, s.S(result_error(ty)))
             else:
                 r = st(ty)
             s.stm[ty] = r
@@ -4369,13 +4500,20 @@ class Words:
             x = s.de_new(X, ptr, off + 1, t)
             acc = s.op("insertvalue %s zeroinitializer, i1 %s, 0" % (T, t))
             acc = s.op("insertvalue %s %s, %s %s, 1" % (T, acc, s.S(X), x))
-            if n == "result":
+            if n == "result" and result_error(ty) == I64:
                 ew = s.rd(ptr, off + 1 + words(s.tt, X))
                 ea = s.op("xor i1 %s, true" % t)
                 if on:
                     ea = s.op("and i1 %s, %s" % (act, ea))
                 e = s.op("select i1 %s, i64 %s, i64 0" % (ea, ew))
                 acc = s.op("insertvalue %s %s, i64 %s, 2" % (T, acc, e))
+            elif n == "result":     # LG12: an error payload of type E, active when the tag is clear
+                E = result_error(ty)
+                ea = s.op("xor i1 %s, true" % t)
+                if on:
+                    ea = s.op("and i1 %s, %s" % (act, ea))
+                e = s.de_new(E, ptr, off + 1 + words(s.tt, X), ea)
+                acc = s.op("insertvalue %s %s, %s %s, 2" % (T, acc, s.S(E), e))
             return acc
         if n in ("option", "result"):       # legacy Option<i64>/Result<i64> nested in a G3 value
             t = s.op("icmp ne i64 %s, 0" % s.rd(ptr, off))
@@ -4438,13 +4576,12 @@ class Words:
                 t = s.op("and i1 %s, %s" % (act, t))
             s.wr(ptr, off, s.op("zext i1 %s to i64" % t))
             s.ser_new(X, s.op("extractvalue %s %s, 1" % (T, x)), ptr, off + 1, t)
-            if n == "result":
+            if n == "result":   # LG12: the error payload of type E (one i64 word for Result<X>)
                 e = s.op("extractvalue %s %s, 2" % (T, x))
                 ea = s.op("xor i1 %s, true" % t)
                 if on:
                     ea = s.op("and i1 %s, %s" % (act, ea))
-                e = s.op("select i1 %s, i64 %s, i64 0" % (ea, e))
-                s.wr(ptr, off + 1 + words(s.tt, X), e)
+                s.ser_new(result_error(ty), e, ptr, off + 1 + words(s.tt, X), ea)
         elif n in ("option", "result"):      # legacy Option<i64>/Result<i64> nested in a G3 value
             t = s.op("extractvalue %s %s, 0" % (OPT, x))
             p = s.op("extractvalue %s %s, 1" % (OPT, x))
@@ -4804,8 +4941,9 @@ def rs_ser(tt, ty, expr, arr, off, ctr):
         if n == "option":
             return ["match %s { Some(%s) => { %s[%d] = 1; %s } None => { %s[%d] = 0; } }"
                     % (expr, v, arr, off, inner, arr, off)]
-        return ["match %s { Ok(%s) => { %s[%d] = 1; %s } Err(%s) => { %s[%d] = 0; %s[%d] = %s; } }"
-                % (expr, v, arr, off, inner, v, arr, off, arr, off + 1 + words(tt, ty.args[0]), v)]
+        err = " ".join(rs_ser(tt, result_error(ty), v, arr, off + 1 + words(tt, ty.args[0]), ctr))  # LG12: E words
+        return ["match %s { Ok(%s) => { %s[%d] = 1; %s } Err(%s) => { %s[%d] = 0; %s } }"
+                % (expr, v, arr, off, inner, v, arr, off, err)]
     if n in ("option", "result"):
         ctr[0] += 1
         v = "pruv__b%d" % ctr[0]
@@ -4847,7 +4985,8 @@ def rs_de(tt, ty, arr, off):
         x = rs_de(tt, ty.args[0], arr, off + 1)
         if n == "option":
             return "(if %s[%d] != 0 { Some(%s) } else { None })" % (arr, off, x)
-        return "(if %s[%d] != 0 { Ok(%s) } else { Err(%s[%d]) })" % (arr, off, x, arr, off + 1 + words(tt, ty.args[0]))
+        e = rs_de(tt, result_error(ty), arr, off + 1 + words(tt, ty.args[0]))     # LG12: E words
+        return "(if %s[%d] != 0 { Ok(%s) } else { Err(%s) })" % (arr, off, x, e)
     if n == "option":
         return "(if %s[%d] != 0 { Some(%s[%d]) } else { None })" % (arr, off, arr, off + 1)
     if n == "result":
@@ -5576,6 +5715,8 @@ def _g6_type_ok(t):
     """a type that may occur in a G6 program on LLVM: no collection, or a supported one (never nested)"""
     if is_collection(t):
         return _g6_coll_ok(t)
+    if is_owned_result(t):     # LG12 E2: Result<T, String> with a scalar T (other shapes are rejected by _typed_result_in)
+        return _g6_scalar(t.args[0])
     return not contains_collection(t)
 
 
@@ -5647,23 +5788,31 @@ def _is_coll_fn(f):
     return any(is_collection(p.type) for p in f.params) or is_collection(f.ret)
 
 
-def _typed_result_in(node, specialized_args):
+def _typed_result_in(node, specialized_args, in_decl=False):
+    """the first type the llvm layer cannot lay out: an owned Result<T, String> (LG12 E2) is supported as a local,
+    parameter, result or temporary with T = i64 / bool; as a record / enum field or an argument of another type it
+    is not (it would need a drop path through that type)"""
     if isinstance(node, Type):
-        if node.owner is None and node.name == "result" and len(node.args) == 2:
+        if is_owned_result(node):
+            if in_decl or node.args[0] not in (I64, BOOL):
+                return node
+        elif any(is_owned_result(a) for a in node.args):
             return node
         # Lowered nominal applications keep their arguments in the specialization plan.
         children = node.args or specialized_args.get(node.name, ())
     elif isinstance(node, (list, tuple)):
         children = node
     elif dataclasses.is_dataclass(node):
-        children = [getattr(node, field.name) for field in dataclasses.fields(node)]
-        children.extend(getattr(node, attr, None) for attr in ("targs", "cost", "decreases"))
+        # an expression's own type, type arguments and specialization come before its operands (as in Rust)
+        children = [getattr(node, "ty", None), getattr(node, "targs", None)]
         if isinstance(node, Call):
             children.extend(specialized_args.get(node.name, ()))
+        children.extend(getattr(node, field.name) for field in dataclasses.fields(node) if field.name != "ty")
+        children.extend(getattr(node, attr, None) for attr in ("cost", "decreases"))
     else:
         return None
     for child in children:
-        hit = _typed_result_in(child, specialized_args)
+        hit = _typed_result_in(child, specialized_args, in_decl)
         if hit is not None:
             return hit
     return None
@@ -5710,6 +5859,10 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
             raise PruvError("codegen", f.line, f.col, "unsupported_type",
                             "host entry %s takes an owned String, which has no C ABI" % getattr(f, "disp", f.name),
                             "use the Rust backend", file=getattr(f, "file", None))
+        if f.host_entry and any(is_owned_result(t) for t in [f.ret] + [p.type for p in f.params]):
+            raise PruvError("codegen", f.line, f.col, "unsupported_type",     # LG12 E2
+                            "host entry %s has a Result<_, String> in its signature, which has no C ABI" % getattr(f, "disp", f.name),
+                            "use the Rust backend", file=getattr(f, "file", None))
         if f.host_entry and is_scalar_vec(f.ret):
             raise PruvError("codegen", f.line, f.col, "unsupported_type",
                             "host entry %s returns a Vec, which has no C ABI" % getattr(f, "disp", f.name),
@@ -5730,12 +5883,15 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     positions = {(item.file, item.line, item.col): i for i, item in enumerate(source.items or ())}
     items = sorted([*prog.types, *prog.functions],
                    key=lambda item: positions.get((item.file, item.line, item.col), len(positions)))
+    decl_ids = {id(d) for d in prog.types}
     for item in items:
-        hit = _typed_result_in(item, specialized_args)
+        hit = _typed_result_in(item, specialized_args, id(item) in decl_ids)
         if hit is not None:
             raise PruvError("codegen", item.line, item.col, "unsupported_type",
-                            "%s uses %s, a Result with a non-i64 error type, which the llvm codegen layer does not support yet"
-                            % (getattr(item, "disp", item.name), type_name(hit)),
+                            ("%s uses %s, an owned String error Result that the llvm codegen layer supports only with an "
+                             "i64 or bool Ok type, outside records and other generic types" if is_owned_result(hit) else
+                             "%s uses %s, a Result with a non-i64 error type, which the llvm codegen layer does not "
+                             "support yet") % (getattr(item, "disp", item.name), type_name(hit)),
                             "use the Rust backend", file=item.file)
     explicit = bool(getattr(prog, "explicit", False))
     g6err = g6_llvm_error(prog)

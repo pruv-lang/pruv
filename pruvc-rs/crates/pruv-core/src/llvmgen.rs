@@ -66,6 +66,16 @@ fn g9_diag_err(line: i64, col: i64, what: &str) -> String {
     format!("{}{}:{}:{}", G9_DIAG_TAG, line, col, what)
 }
 
+const E2_DIAG_TAG: &str = "\u{0}e2diag:";
+
+pub(crate) fn is_owned_result(t: &str) -> bool {
+    t.starts_with("result<") && g_error(t) == "string"
+}
+
+fn e2_diag(line: i64, col: i64, message: &str) -> String {
+    format!("{E2_DIAG_TAG}{line}:{col}:{message}")
+}
+
 /// An owned collection/File type key; never a bound parameter.
 pub fn is_collection(t: &str) -> bool {
     if t.starts_with('\u{1}') {
@@ -479,7 +489,27 @@ pub fn is_gopt(t: &str) -> bool {
 
 /// The argument key X of `option<X>` / `result<X>` (only for a key accepted by `is_gopt`).
 pub fn g_arg(t: &str) -> &str {
-    &t[7..t.len() - 1]
+    g_args(t).0
+}
+
+pub fn g_error(t: &str) -> &str {
+    g_args(t).1
+}
+
+fn g_args(t: &str) -> (&str, &str) {
+    let args = &t[7..t.len() - 1];
+    if t.starts_with("result<") {
+        let mut depth = 0;
+        for (i, byte) in args.bytes().enumerate() {
+            match byte {
+                b'<' => depth += 1,
+                b'>' => depth -= 1,
+                b',' if depth == 0 => return (&args[..i], &args[i + 1..]),
+                _ => {}
+            }
+        }
+    }
+    (args, "i64")
 }
 
 /// A user struct/enum (including generated generic instances) or a new Option/Result application.
@@ -621,12 +651,15 @@ pub fn vkind(t: &str) -> Kind {
 
 /// Storage type of a value inside an aggregate (c: contract/i128 form)
 pub fn st(t: &str, c: bool) -> String {
+    if is_collection(t) {
+        return "ptr".to_string();
+    }
     if is_gopt(t) {
         let x = st(g_arg(t), c);
         if t.starts_with("option<") {
             return format!("{{ i1, {} }}", x);
         }
-        return format!("{{ i1, {}, {} }}", x, if c { "i128" } else { "i64" });
+        return format!("{{ i1, {}, {} }}", x, st(g_error(t), c));
     }
     match t {
         "i64" => {
@@ -671,7 +704,7 @@ pub fn new_tt(prog: &Program) -> TypeTable {
 
 /// t is an extended user type (G9): recursive, or holding a buffer or an extended type
 pub fn is_ext_t(tt: &TypeTable, t: &str) -> bool {
-    !tt.g9_ext.is_empty() && tt.g9_ext.contains(t)
+    is_owned_result(t) || tt.g9_ext.contains(t)
 }
 
 /// G5 A3: some parameter has the inout mode (a mutable borrow of caller storage)
@@ -759,9 +792,9 @@ pub fn words(tt: &TypeTable, ty: &str) -> R<usize> {
         return Ok(n);
     }
     let r = if is_gopt(ty) {
-        // G3: 1 + W(X) (+ 1 for the Result error word)
+        // G3: 1 + W(X) (+ W(E) for Result)
         let x = words(tt, g_arg(ty))?;
-        1 + x + if ty.starts_with("result<") { 1 } else { 0 }
+        1 + x + if ty.starts_with("result<") { words(tt, g_error(ty))? } else { 0 }
     } else {
         match ty {
             "i64" | "bool" => 1,
@@ -1600,8 +1633,7 @@ impl<'a> FnGen<'a> {
                 self.drop_slot(sl)?;
             } else if sl.k == Kind::Agg {
                 // G9 A3: an owned extended local
-                let ty = need_ty(&sl.ty)?.to_string();
-                self.ins(format!("call void @pruv_drop__{}(ptr {})", ty, sl.a))?;
+                self.drop_agg_slot(need_ty(&sl.ty)?, &sl.a)?;
             } else {
                 let v = self.load(sl)?;
                 self.free_val(&v)?;
@@ -2036,7 +2068,115 @@ impl<'a> FnGen<'a> {
     fn drop_agg(&mut self, v: &V) -> R<()> {
         let ty = need_ty(&v.ty)?.to_string();
         let p = self.spill(v)?;
-        self.ins(format!("call void @pruv_drop__{}(ptr {})", ty, p))
+        self.drop_agg_slot(&ty, &p)
+    }
+
+    fn drop_agg_slot(&mut self, ty: &str, p: &str) -> R<()> {
+        if is_owned_result(ty) {
+            let slot = g9_gep(self, &lty(ty), p, 2)?;
+            let handle = self.op(format!("load ptr, ptr {slot}"))?;
+            return self.drop_handle(&handle);
+        }
+        self.ins(format!("call void @pruv_drop__{ty}(ptr {p})"))
+    }
+
+    fn drop_handle(&mut self, handle: &str) -> R<()> {
+        let nonnull = self.op(format!("icmp ne ptr {handle}, null"))?;
+        let drop = self.label("gdrop");
+        let done = self.label("gdone");
+        self.condbr(&nonnull, &drop, &done)?;
+        self.place(&drop);
+        let mut value = V::new(Kind::Coll, handle);
+        value.ty = Some("string".to_string());
+        self.g6_drop(&value)?;
+        self.br(&done)?;
+        self.place(&done);
+        Ok(())
+    }
+
+    fn mk_octor(&mut self, e: &Ctor) -> R<V> {
+        let ty = need_ty(&e.ty)?;
+        let layout = st(ty, false);
+        let arg = e.arg.as_deref().ok_or_else(|| IDX_ERR.to_string())?;
+        if e.name == "Ok" {
+            let value = self.ev(arg, false)?;
+            let tag = self.op(format!("insertvalue {layout} zeroinitializer, i1 true, 0"))?;
+            return Ok(V::agg(self.put(&tag, ty, 1, &value, g_arg(ty), false)?, ty));
+        }
+        let slot = if let Expr::Var(var) = arg {
+            match self.lookup(&var.name)? {
+                Bind::Slot(slot) => Some(slot),
+                Bind::Ssa(_) => return Err(e2_diag(e.line, e.col, &format!(
+                    "Err of the borrowed String {} needs the Rust backend", var.name))),
+            }
+        } else {
+            None
+        };
+        let value = self.ev(arg, true)?;
+        if let Some(slot) = slot {
+            self.ins(format!("store ptr null, ptr {}", slot.a))?;
+        }
+        Ok(V::agg(self.op(format!("insertvalue {layout} zeroinitializer, ptr {}, 2", value.a))?, ty))
+    }
+
+    fn owned_match(&mut self, m: &Match) -> R<()> {
+        let scrutinee = &m.scrutinee;
+        let ty = need_ty(expr_ty(scrutinee))?;
+        if let Expr::Var(var) = scrutinee {
+            if !matches!(self.lookup(&var.name)?, Bind::Slot(_)) {
+                return Err(e2_diag(m.line, m.col, &format!(
+                    "a match on the borrowed Result<_, String> {} needs the Rust backend", var.name)));
+            }
+        }
+        self.begin_temps();
+        let value = self.ev(scrutinee, false)?;
+        for temp in self.temps.pop().ok_or_else(|| IDX_ERR.to_string())?.iter().rev() {
+            if temp.k != value.k || temp.a != value.a {
+                self.free_val(temp)?;
+            }
+        }
+        let layout = lty(ty);
+        let tag = self.op(format!("extractvalue {layout} {}, 0", value.a))?;
+        let ok = self.get(&value, ty, 1, g_arg(ty), false)?;
+        let handle = self.op(format!("extractvalue {layout} {}, 2", value.a))?;
+        if matches!(scrutinee, Expr::Var(_)) {
+            let slot = g9_gep(self, &layout, value.p.as_deref().ok_or_else(|| IDX_ERR.to_string())?, 2)?;
+            self.ins(format!("store ptr null, ptr {slot}"))?;
+        }
+        let yes = self.label("armT");
+        let no = self.label("armF");
+        let end = self.label("endmatch");
+        self.condbr(&tag, &yes, &no)?;
+        let mut reach = false;
+        for (ctor, label) in [("Ok", yes), ("Err", no)] {
+            let arm = m.arms.iter().find(|arm| arm.ctor == ctor).ok_or_else(|| IDX_ERR.to_string())?;
+            self.place(&label);
+            let mut bind = Vec::new();
+            let mut own = None;
+            if let Some(name) = arm.binders.first() {
+                let binding = if ctor == "Ok" {
+                    Bind::Ssa(ok.clone())
+                } else {
+                    let slot = self.new_slot(name, "string")?;
+                    self.ins(format!("store ptr {handle}, ptr {}", slot.a))?;
+                    own = Some(slot.clone());
+                    Bind::Slot(slot)
+                };
+                bind.push((name.clone(), binding));
+            } else if ctor == "Err" {
+                self.drop_handle(&handle)?;
+            }
+            if self.run_block_with_owner(&arm.body, bind, false, own)? {
+                self.br(&end)?;
+                reach = true;
+            }
+        }
+        if reach {
+            self.place(&end);
+        } else {
+            self.dead = true;
+        }
+        Ok(())
     }
 
     /// Address of the storage of an extended expression in a READ position (argument): a local slot or a parameter is
@@ -2348,12 +2488,7 @@ impl<'a> FnGen<'a> {
             return Ok(V::agg(r, &ty));
         }
         // Err: tag false (zero), error payload in slot 2
-        let r = self.op(format!(
-            "insertvalue {} zeroinitializer, {} {}, 2",
-            st(&ty, c),
-            if c { "i128" } else { "i64" },
-            x.a
-        ))?;
+        let r = self.put("zeroinitializer", &ty, 2, &x, g_error(&ty), c)?;
         Ok(V::agg(r, &ty))
     }
 
@@ -2385,8 +2520,8 @@ impl<'a> FnGen<'a> {
                     let v = self.get(sv, &ty, 1, &x, false)?;
                     bind.push((b0.clone(), Bind::Ssa(v)));
                 } else {
-                    let r = self.op(format!("extractvalue {} {}, 2", st(&ty, false), sv.a))?;
-                    bind.push((b0.clone(), Bind::Ssa(V::new(Kind::I64, r))));
+                    let v = self.get(sv, &ty, 2, g_error(&ty), false)?;
+                    bind.push((b0.clone(), Bind::Ssa(v)));
                 }
             }
             if self.run_block(&arm.body, bind)? {
@@ -2443,9 +2578,10 @@ impl<'a> FnGen<'a> {
             let pc = self.to_c(&px, &xt)?;
             acc = self.put(&acc, ty, 1, &pc, &xt, true)?;
             if ty.starts_with("result<") {
-                let er = self.op(format!("extractvalue {} {}, 2", st(ty, false), x.a))?;
-                let ec = self.op(format!("sext i64 {} to i128", er))?;
-                acc = self.op(format!("insertvalue {} {}, i128 {}, 2", st(ty, true), acc, ec))?;
+                let et = g_error(ty);
+                let er = self.get(x, ty, 2, et, false)?;
+                let ec = self.to_c(&er, et)?;
+                acc = self.put(&acc, ty, 2, &ec, et, true)?;
             }
             return Ok(V::agg(acc, ty));
         }
@@ -2548,9 +2684,10 @@ impl<'a> FnGen<'a> {
                 let o = self.op(format!("or i1 {}, {}", nt, pe))?;
                 return self.op(format!("and i1 {}, {}", te, o));
             }
-            let el = self.op(format!("extractvalue {} {}, 2", tc, l.a))?;
-            let er = self.op(format!("extractvalue {} {}, 2", tc, r.a))?;
-            let ee = self.op(format!("icmp eq i128 {}, {}", el, er))?;
+            let et = g_error(ty);
+            let el = self.get(l, ty, 2, et, true)?;
+            let er = self.get(r, ty, 2, et, true)?;
+            let ee = self.ceq(&el, &er, et)?;
             let a1 = self.op(format!("and i1 {}, {}", tl, pe))?;
             let a2 = self.op(format!("and i1 {}, {}", nt, ee))?;
             let act = self.op(format!("or i1 {}, {}", a1, a2))?;
@@ -2720,13 +2857,18 @@ impl<'a> FnGen<'a> {
     }
 
     pub fn run_block_in(&mut self, stmts: &[Stmt], bind: Vec<(String, Bind)>, lp: bool) -> R<bool> {
+        self.run_block_with_owner(stmts, bind, lp, None)
+    }
+
+    fn run_block_with_owner(&mut self, stmts: &[Stmt], bind: Vec<(String, Bind)>, lp: bool, own: Option<Slot>) -> R<bool> {
         self.push_scope();
         let decls: HashSet<String> = bind.iter().map(|(k, _)| k.clone()).collect();
-        if !bind.is_empty() {
+        if !bind.is_empty() || own.is_some() {
             let sc = self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?;
             for (k, v) in bind {
                 sc.names.insert(k, v);
             }
+            sc.arrays.extend(own);
         }
         // later[i]: names any statement from i on names
         let mut later: Vec<HashSet<String>> = vec![HashSet::new(); stmts.len() + 1];
@@ -3052,8 +3194,7 @@ impl<'a> FnGen<'a> {
                     self.drop_slot(&sl)?;
                 } else if sl.k == Kind::Agg && self.is_ext_opt(&sl.ty) {
                     // G9 A3
-                    let ty = need_ty(&sl.ty)?.to_string();
-                    self.ins(format!("call void @pruv_drop__{}(ptr {})", ty, sl.a))?;
+                    self.drop_agg_slot(need_ty(&sl.ty)?, &sl.a)?;
                 }
                 self.store(&sl, &v)?;
                 self.end_temps()
@@ -3250,6 +3391,7 @@ impl<'a> FnGen<'a> {
                 self.ev(&x.expr, false)?;
                 self.end_temps()
             }
+            Stmt::Match(x) if expr_ty(&x.scrutinee).as_deref().is_some_and(is_owned_result) => self.owned_match(x),
             Stmt::Match(x) if self.is_ext_opt(expr_ty(&x.scrutinee)) => {
                 // G9 A3: the scrutinee is borrowed, never consumed; every temporary it created (a fresh scrutinee, a
                 // fresh base of a field path, a fresh argument) is moved into owner slots of a scope that spans all
@@ -3628,7 +3770,7 @@ impl<'a> FnGen<'a> {
             }
             Expr::Var(x) => {
                 let bd = self.lookup(&x.name)?;
-                let v = match &bd {
+                let mut v = match &bd {
                     Bind::Ssa(v) => v.clone(),
                     Bind::Slot(s) => self.load(s)?,
                 };
@@ -3650,6 +3792,16 @@ impl<'a> FnGen<'a> {
                                 self.ret_moved.insert(sl.a.clone(), Some((vn.clone(), set)));
                             }
                         }
+                        return Ok(v);
+                    }
+                    let ty = need_ty(&v.ty)?;
+                    if is_owned_result(ty) {
+                        let Bind::Slot(slot) = &bd else {
+                            return Err(e2_diag(x.line, x.col, &format!(
+                                "moving the borrowed Result<_, String> {} needs the Rust backend", x.name)));
+                        };
+                        self.ins(format!("store {} zeroinitializer, ptr {}", lty(ty), slot.a))?;
+                        v.p = None;
                         return Ok(v);
                     }
                     // G9 A3: a named extended value in an owning position
@@ -3739,6 +3891,10 @@ impl<'a> FnGen<'a> {
                 Ok(V::new(Kind::I64, r))
             }
             Expr::Ctor(x) => {
+                if x.ty.as_deref().is_some_and(is_owned_result) {
+                    let value = self.mk_octor(x)?;
+                    return self.fresh(value, owned);
+                }
                 if x.ty.as_deref().map_or(false, is_gopt) {
                     return self.mk_gctor(x, false); // G3
                 }
@@ -4859,8 +5015,9 @@ impl<'a> FnGen<'a> {
                     let r = self.put(&acc, gt, 1, &xv, &px, false)?;
                     return Ok(V::agg(r, gt));
                 }
-                let xv = self.g9_real(a, Some("i64"))?;
-                let r = self.op(format!("insertvalue {} zeroinitializer, i64 {}, 2", st(gt, false), xv.a))?;
+                let et = g_error(gt);
+                let xv = self.g9_real(a, Some(et))?;
+                let r = self.put("zeroinitializer", gt, 2, &xv, et, false)?;
                 return Ok(V::agg(r, gt));
             }
             if x.name == "None" {
@@ -5359,6 +5516,11 @@ impl<'a> FnGen<'a> {
                     let r = self.op(format!("{} i128 {}, {}", ins, x.a, y.a))?;
                     return Ok(V::new(Kind::I128, r));
                 }
+                if matches!(n, "is_some" | "is_ok" | "some_val" | "ok_val" | "err_val")
+                    && expr_ty(arg(a, 0)?).as_deref().is_some_and(is_owned_result)
+                {
+                    return Err(g9_diag_err(x.line, x.col, "a Result<_, String> operand"));
+                }
                 if n == "is_some" || n == "is_ok" {
                     let v = self.cev(arg(a, 0)?)?;
                     if v.k == Kind::Agg {
@@ -5378,8 +5540,7 @@ impl<'a> FnGen<'a> {
                         let tag = self.op(format!("extractvalue {} {}, 0", tc, o.a))?;
                         if n == "err_val" {
                             self.guard(&tag, und("err_val of Ok".to_string()), true)?;
-                            let r = self.op(format!("extractvalue {} {}, 2", tc, o.a))?;
-                            return Ok(V::new(Kind::I128, r));
+                            return self.get(&o, &oty, 2, g_error(&oty), true);
                         }
                         let msg = if n == "some_val" { "some_val of None" } else { "ok_val of Err" };
                         self.guard(&tag, und(msg.to_string()), false)?;
@@ -6164,7 +6325,7 @@ fn g9_node_texts(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<Vec<String>> {
 /// size / equality walk into t: a nominal value, or Option / Result of one
 fn g9_walks(t: &str) -> bool {
     if is_gopt(t) {
-        return g9_walks(g_arg(t));
+        return g9_walks(g_arg(t)) || (t.starts_with("result<") && g9_walks(g_error(t)));
     }
     crate::emit_common::is_user_key(t)
 }
@@ -6173,6 +6334,27 @@ fn g9_walks(t: &str) -> bool {
 /// payload, None / Err 0; a nominal value weighs its size (one budget unit per node, inside pruv_csize). bud is the
 /// budget pointer the size helper charges.
 fn g9_weight(g: &mut FnGen, t: &str, p: &str, bud: &str) -> R<Option<String>> {
+    if t.starts_with("result<") && g9_walks(g_error(t)) {
+        let tl = st(t, false);
+        let g0 = g9_gep(g, &tl, p, 0)?;
+        let tag = g.op(format!("load i1, ptr {}", g0))?;
+        let yes = g.label("gwy");
+        let no = g.label("gwn");
+        let end = g.label("gwe");
+        g.condbr(&tag, &yes, &no)?;
+        g.place(&yes);
+        let px = g9_gep(g, &tl, p, 1)?;
+        let w = g9_weight(g, g_arg(t), &px, bud)?.unwrap_or_else(|| "0".to_string());
+        let wcur = g.cur.clone();
+        g.br(&end)?;
+        g.place(&no);
+        let pe = g9_gep(g, &tl, p, 2)?;
+        let we = g9_weight(g, g_error(t), &pe, bud)?.unwrap_or_else(|| "0".to_string());
+        let ecur = g.cur.clone();
+        g.br(&end)?;
+        g.place(&end);
+        return g.op(format!("phi i128 [ {}, %{} ], [ {}, %{} ]", w, wcur, we, ecur)).map(Some);
+    }
     if is_gopt(t) {
         let x = g_arg(t);
         if !g9_walks(x) {
@@ -6289,10 +6471,16 @@ fn g9_eq_val(g: &mut FnGen, t: &str, pa: &str, pb: &str) -> R<String> {
         g.br(&lend)?;
         g.place(&l3);
         let ga2 = g9_gep(g, &tl, pa, 2)?;
-        let ea = g.op(format!("load i64, ptr {}", ga2))?;
-        let gb2 = g9_gep(g, &tl, pb, 2)?;
-        let eb = g.op(format!("load i64, ptr {}", gb2))?;
-        let e3 = g.op(format!("icmp eq i64 {}, {}", ea, eb))?;
+        let et = g_error(t);
+        let e3 = if et == "i64" {
+            let ea = g.op(format!("load i64, ptr {}", ga2))?;
+            let gb2 = g9_gep(g, &tl, pb, 2)?;
+            let eb = g.op(format!("load i64, ptr {}", gb2))?;
+            g.op(format!("icmp eq i64 {}, {}", ea, eb))?
+        } else {
+            let gb2 = g9_gep(g, &tl, pb, 2)?;
+            g9_eq_val(g, et, &ga2, &gb2)?
+        };
         let l3cur = g.cur.clone();
         g.br(&lend)?;
         g.place(&lend);
@@ -6394,7 +6582,15 @@ fn g9_eq_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
 /// payload type of Option / Result (arrays, str and scalars contribute nothing)
 fn g9_nominals_in(t: &str) -> Vec<String> {
     if is_gopt(t) {
-        return g9_nominals_in(g_arg(t));
+        let mut names = g9_nominals_in(g_arg(t));
+        if t.starts_with("result<") {
+            for name in g9_nominals_in(g_error(t)) {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        return names;
     }
     if crate::emit_common::is_user_key(t) {
         return vec![t.to_string()];
@@ -6531,6 +6727,9 @@ fn g6_coll_ok(t: &str) -> bool {
 fn g6_type_ok(t: &str) -> bool {
     if is_collection(t) {
         return g6_coll_ok(t);
+    }
+    if is_owned_result(t) {
+        return g6_scalar(g_arg(t));
     }
     !contains_collection(t)
 }
@@ -6767,7 +6966,7 @@ pub fn gen_llvm_any_ex_g4(
         if let Some(e) = crate::bindings::llvm_param_abi_error(prog, g4) {
             return Err(GenError::Diag(e));
         }
-        return gen_llvm_concrete_ex(&plan.program, verified, trust_callers, budget, target, foreign_checks);
+        return gen_llvm_with_specializations(&plan.program, verified, trust_callers, budget, target, foreign_checks, &plan.args);
     }
     gen_llvm_concrete_ex(prog, verified, trust_callers, budget, target, foreign_checks)
 }
@@ -6781,24 +6980,36 @@ pub fn gen_llvm_concrete(prog: &Program, verified: bool, trust_callers: bool, bu
     })
 }
 
-/// Find a non-i64 Result error before LLVM assumes i64 payloads.
-fn typed_result_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
+fn typed_result_llvm_error(prog: &Program, specialized: &HashMap<String, Vec<crate::gtype::GType>>) -> Option<crate::diagnostic::PruvError> {
     use crate::foreign_shim::{walk_stmts, Node};
     use crate::gtype::{format_type, is_g3_key, GType};
 
-    fn in_type(ty: &GType) -> Option<&GType> {
-        if ty.result_error().is_some() {
-            return Some(ty);
+    let in_type = |ty: &GType, in_decl| {
+        fn reject<'a>(ty: &'a GType, in_decl: bool, specialized: &'a HashMap<String, Vec<GType>>) -> Option<&'a GType> {
+            if ty.has_string_error() {
+                if in_decl || !matches!(ty.args[0].to_key().as_str(), "i64" | "bool") {
+                    return Some(ty);
+                }
+            } else if ty.args.iter().any(GType::has_string_error) {
+                return Some(ty);
+            }
+            let args = if ty.args.is_empty() {
+                specialized.get(&ty.name).map_or(&[][..], Vec::as_slice)
+            } else {
+                &ty.args
+            };
+            args.iter().find_map(|arg| reject(arg, in_decl, specialized))
         }
-        ty.args.iter().find_map(in_type)
-    }
-    fn in_key(key: &str) -> Option<String> {
-        if !is_g3_key(key) {
-            return None;
+        reject(ty, in_decl, specialized).map(|hit| (format_type(hit), hit.has_string_error()))
+    };
+    let in_key = |key: &str, in_decl| {
+        if is_g3_key(key) || specialized.contains_key(key) {
+            in_type(&GType::from_key(key), in_decl)
+        } else {
+            None
         }
-        in_type(&GType::from_key(key)).map(format_type)
-    }
-    fn in_expr(e: &Expr) -> Option<String> {
+    };
+    let in_expr = |e: &Expr| {
         let targs = match e {
             Expr::Ctor(x) => x.targs.as_ref(),
             Expr::Call(x) => x.targs.as_ref(),
@@ -6806,27 +7017,32 @@ fn typed_result_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvErro
             Expr::EnumCtor(x) => x.targs.as_ref(),
             _ => None,
         };
-        expr_ty(e).as_deref().and_then(in_key)
-            .or_else(|| targs?.iter().find_map(in_type).map(format_type))
-    }
-    fn in_clause(e: &Expr) -> Option<String> {
-        in_expr(e).or_else(|| crate::refine::kids(e).into_iter().find_map(in_clause))
+        expr_ty(e).as_deref().and_then(|key| in_key(key, false))
+            .or_else(|| targs?.iter().find_map(|ty| in_type(ty, false)))
+            .or_else(|| match e {
+                Expr::Call(x) => specialized.get(&x.name)?.iter().find_map(|ty| in_type(ty, false)),
+                _ => None,
+            })
+    };
+    fn in_clause(e: &Expr, check: &impl Fn(&Expr) -> Option<(String, bool)>) -> Option<(String, bool)> {
+        check(e).or_else(|| crate::refine::kids(e).into_iter().find_map(|child| in_clause(child, check)))
     }
 
     let decls = prog.types.iter().filter_map(|d| {
-        let ty = d.all_fields().into_iter().find_map(|f| in_key(&f.ty))?;
-        Some((d.line(), d.col(), d.name(), ty))
+        let ty = d.all_fields().into_iter().find_map(|f| in_key(&f.ty, true))?;
+        let name = prog.explicit.as_ref().and_then(|meta| meta.tdisp.get(d.name())).map_or(d.name(), String::as_str);
+        Some((d.line(), d.col(), name, ty))
     });
-    let functions = prog.functions.iter().filter_map(|f| {
-        let ty = f.params.iter().find_map(|p| in_key(&p.ty))
-            .or_else(|| in_key(&f.ret))
-            .or_else(|| f.requires.iter().chain(&f.ensures).chain(&f.decreases).chain(&f.cost).find_map(in_clause))
+    let functions = prog.functions.iter().enumerate().filter_map(|(i, f)| {
+        let ty = f.params.iter().find_map(|p| in_key(&p.ty, false))
+            .or_else(|| in_key(&f.ret, false))
+            .or_else(|| f.requires.iter().chain(&f.ensures).chain(&f.decreases).chain(&f.cost).find_map(|e| in_clause(e, &in_expr)))
             .or_else(|| {
                 let mut found = None;
                 walk_stmts(&f.body, &mut |node| {
                     if found.is_none() {
                         found = match node {
-                            Node::Let(l) => in_key(&l.ty),
+                            Node::Let(l) => in_key(&l.ty, false),
                             Node::Expr(e) => in_expr(e),
                             Node::ForMap(_) => None,
                         };
@@ -6834,12 +7050,18 @@ fn typed_result_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvErro
                 });
                 found
             })?;
-        Some((f.line, f.col, f.name.as_str(), ty))
+        let name = prog.explicit.as_ref().map_or(f.name.as_str(), |meta| meta.fns[i].disp.as_str());
+        Some((f.line, f.col, name, ty))
     });
-    let (line, col, name, ty) = decls.chain(functions).min_by_key(|(line, col, _, _)| (*line, *col))?;
+    let (line, col, name, (ty, owned)) = decls.chain(functions).min_by_key(|(line, col, _, _)| (*line, *col))?;
+    let detail = if owned {
+        "an owned String error Result that the llvm codegen layer supports only with an i64 or bool Ok type, outside records and other generic types"
+    } else {
+        "a Result with a non-i64 error type, which the llvm codegen layer does not support yet"
+    };
     Some(crate::diagnostic::PruvError::new(
         "codegen", line, col, "unsupported_type",
-        format!("{name} uses {ty}, a Result with a non-i64 error type, which the llvm codegen layer does not support yet"),
+        format!("{name} uses {ty}, {detail}"),
         "use the Rust backend",
     ))
 }
@@ -6853,10 +7075,19 @@ pub fn gen_llvm_concrete_ex(
     target: AbiTarget,
     foreign_checks: &str,
 ) -> Result<(String, String), crate::codegen::GenError> {
+    gen_llvm_with_specializations(prog, verified, trust_callers, budget, target, foreign_checks, &HashMap::new())
+}
+
+pub fn gen_llvm_with_specializations(
+    prog: &Program,
+    verified: bool,
+    trust_callers: bool,
+    budget: u64,
+    target: AbiTarget,
+    foreign_checks: &str,
+    specialized: &HashMap<String, Vec<crate::gtype::GType>>,
+) -> Result<(String, String), crate::codegen::GenError> {
     use crate::codegen::GenError;
-    if let Some(e) = typed_result_llvm_error(prog) {
-        return Err(GenError::Diag(e));
-    }
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
     }
@@ -6869,10 +7100,26 @@ pub fn gen_llvm_concrete_ex(
             "a borrowed vector slice argument needs the Rust backend", "use the Rust backend",
         )));
     }
+    if let Some(e) = typed_result_llvm_error(prog, specialized) {
+        return Err(GenError::Diag(e));
+    }
     if let Some(e) = g6_llvm_error(prog) {
         return Err(GenError::Diag(e));
     }
-    gen_llvm_body(prog, verified, trust_callers, budget, target, foreign_checks).map_err(|s| match s.strip_prefix(G6_DIAG_TAG) {
+    gen_llvm_body(prog, verified, trust_callers, budget, target, foreign_checks).map_err(decode_llvm_error)
+}
+
+fn decode_llvm_error(s: String) -> crate::codegen::GenError {
+    use crate::codegen::GenError;
+    if let Some(rest) = s.strip_prefix(E2_DIAG_TAG) {
+        let mut parts = rest.splitn(3, ':');
+        let line = parts.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+        let col = parts.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+        return GenError::Diag(crate::diagnostic::PruvError::new(
+            "codegen", line, col, "unsupported_type", parts.next().unwrap_or(""), "use the Rust backend",
+        ));
+    }
+    match s.strip_prefix(G6_DIAG_TAG) {
         Some(rest) => {
             let mut it = rest.split(':');
             let line: i64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
@@ -6937,7 +7184,7 @@ pub fn gen_llvm_concrete_ex(
                 },
             },
         },
-    })
+    }
 }
 
 fn gen_llvm_body(

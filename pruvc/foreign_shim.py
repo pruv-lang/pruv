@@ -20,7 +20,7 @@ pointer (File updates consume the old box and return a fresh box).  The helper-n
 `pruv_g6_v1_pruv_g6_vec_push__i`, `trusted rust fn min2` -> `pruv_g6_v1_min2`).
 """
 from vast import *
-from typeinfo import encode, is_collection, uses_array_type, uses_str
+from typeinfo import encode, is_collection, is_owned_result, uses_array_type, uses_str
 from codegen import (Gen, rty, CONTRACT_PRELUDE_G6, CONTRACT_PRELUDE_U8, CONTRACT_PRELUDE_BOOL,
                      CONTRACT_PRELUDE_STR, G6_PRELUDE, FILE_PRELUDE, proc_prelude, net_prelude, async_prelude, async_proc_prelude)
 from foreign import CATALOG, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS, ASYNC_OBSERVERS
@@ -102,6 +102,8 @@ def collect(prog):
     def add(t):
         if t is not None and is_collection(t):
             colls.setdefault(cname(t), t)
+        elif is_owned_result(t):    # LG12 E2: the String error handle is dropped through drop__string
+            colls.setdefault("string", Type("string"))
 
     def visit(n):
         if isinstance(n, Let):

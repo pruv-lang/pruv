@@ -2,7 +2,7 @@
 //! docs/M2_G1_SPEC.md §5 W(T).
 
 use crate::ast::*;
-use crate::llvmgen::{g_arg, is_agg, is_gopt, is_new_app, lty, mangle, st, words, Mod, R, OPT};
+use crate::llvmgen::{g_arg, g_error, is_agg, is_gopt, is_new_app, lty, mangle, st, words, Mod, R, OPT};
 use crate::typeinfo::{is_array_name, is_user_type, TypeTable};
 use std::collections::HashMap;
 
@@ -32,7 +32,7 @@ impl<'a> Words<'a> {
             if ty.starts_with("option<") {
                 format!("{{ i1, {} }}", x)
             } else {
-                format!("{{ i1, {}, i64 }}", x)
+                format!("{{ i1, {}, {} }}", x, self.s_of(g_error(ty)))
             }
         } else {
             st(ty, false)
@@ -212,7 +212,7 @@ impl<'a> Words<'a> {
             let mut acc = self.op(format!("insertvalue {} zeroinitializer, i1 {}, 0", tstr, t));
             let xs = self.s_of(&x);
             acc = self.op(format!("insertvalue {} {}, {} {}, 1", tstr, acc, xs, xv));
-            if ty.starts_with("result<") {
+            if ty.starts_with("result<") && g_error(ty) == "i64" {
                 let ew = self.rd(ptr, off + 1 + words(tt, &x)?);
                 let mut ea = self.op(format!("xor i1 {}, true", t));
                 if let Some(a) = act {
@@ -220,6 +220,15 @@ impl<'a> Words<'a> {
                 }
                 let e = self.op(format!("select i1 {}, i64 {}, i64 0", ea, ew));
                 acc = self.op(format!("insertvalue {} {}, i64 {}, 2", tstr, acc, e));
+            } else if ty.starts_with("result<") {
+                let et = g_error(ty);
+                let mut ea = self.op(format!("xor i1 {}, true", t));
+                if let Some(a) = act {
+                    ea = self.op(format!("and i1 {}, {}", a, ea));
+                }
+                let e = self.de_new(et, ptr, off + 1 + words(tt, &x)?, Some(&ea))?;
+                let es = self.s_of(et);
+                acc = self.op(format!("insertvalue {} {}, {} {}, 2", tstr, acc, es, e));
             }
             return Ok(acc);
         }
@@ -331,8 +340,7 @@ impl<'a> Words<'a> {
                 if let Some(a) = act {
                     ea = self.op(format!("and i1 {}, {}", a, ea));
                 }
-                let e2 = self.op(format!("select i1 {}, i64 {}, i64 0", ea, e));
-                self.wr(ptr, off + 1 + words(tt, &xt)?, &e2);
+                self.ser_new(g_error(ty), &e, ptr, off + 1 + words(tt, &xt)?, Some(&ea))?;
             }
             return Ok(());
         }

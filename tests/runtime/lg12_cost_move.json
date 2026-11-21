@@ -1,0 +1,1 @@
+{"flags_matrix": [["--no-verify"]], "exit": 0, "stdout_lines": ["5", "-1"], "g6_drop_balance": true, "gen_contains": ["unwrap_or__pruv_cost(&pruv_cost_arg_0, pruv_cost_arg_1)"]}

@@ -16,7 +16,7 @@ use crate::codegen::{
 use crate::emit_common::rty_g;
 use crate::foreign::{is_catalog, is_catalog_contract_only, FILE_OBSERVERS, NET_OBSERVERS, PROC_OBSERVERS, ASYNC_OBSERVERS};
 use crate::gtype::{encode, GType};
-use crate::llvmgen::{expr_ty, is_collection};
+use crate::llvmgen::{expr_ty, is_collection, is_owned_result};
 use crate::typeinfo::{uses_array_type, uses_str};
 use std::collections::{BTreeMap, HashMap};
 
@@ -223,6 +223,10 @@ type Colls = BTreeMap<String, GType>;
 
 fn add_coll(colls: &mut Colls, key: &str, err: &mut Option<String>) {
     if !is_collection(key) {
+        if is_owned_result(key) {
+            // LG12 E2: the String error handle is dropped through drop__string
+            add_coll(colls, "string", err);
+        }
         return;
     }
     match parse_key(key).and_then(|g| cname(&g).map(|c| (c, g))) {

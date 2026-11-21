@@ -70,6 +70,8 @@ pub struct SpecPlan {
     pub program: Program,
     pub fn_stems: Vec<String>,
     pub type_stems: Vec<String>,
+    /// Type arguments retained for LLVM layout diagnostics after nominal lowering.
+    pub args: HashMap<String, Vec<GType>>,
     /// non-generic function names in declaration order
     pub roots: Vec<String>,
 }
@@ -1064,7 +1066,10 @@ impl<'a> Mono<'a> {
             // P10H: program package name (prefix of every global C symbol)
             pkg_name: prog.pkg_name.clone(),
         };
-        Ok(SpecPlan { program, fn_stems, type_stems, roots: root_names })
+        let args = self.types.into_iter().map(|spec| (spec.stem, spec.args))
+            .chain(self.fns.into_iter().map(|spec| (spec.stem, spec.args)))
+            .collect();
+        Ok(SpecPlan { program, fn_stems, type_stems, roots: root_names, args })
     }
 }
 
