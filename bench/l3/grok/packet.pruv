@@ -391,8 +391,11 @@ fn rows10_ok(rows: [i64], count: i64, n: i64) -> bool
 // meta/rows/text agree: schema 2, enums, success scalars/refs, row width (0, 10 read, 12 list), row refs inside text
 fn result_ok(meta: [i64], rows: [i64], text: [u8]) -> bool
   requires len(meta) == 24 && len(rows) <= 100000000 && len(text) <= 100000000
+{ return result_ok_n(meta, rows, len(text)); }
+// result_ok on the text length only (the bytes are never read)
+fn result_ok_n(meta: [i64], rows: [i64], n: i64) -> bool
+  requires len(meta) == 24 && len(rows) <= 100000000 && 0 <= n && n <= 100000000
 {
-  let n: i64 = len(text);
   if meta[0] != 2 || meta[1] < 0 || meta[1] > 5 { return false; }
   if meta[2] < 0 || meta[2] > 1 || meta[11] < 0 || meta[11] > 1 || meta[12] < 0 || meta[12] > 1000000000 { return false; }
   if !ref_ok(meta[4], meta[5], n) || !ref_ok(meta[6], meta[7], n) || !ref_ok(meta[8], meta[9], n) { return false; }
@@ -424,6 +427,55 @@ pub fn result(meta: [i64], rows: [i64], text: [u8]) -> [i64] ! alloc
     return internal_packet(m);
   }
   return assemble(0, meta, rows, text);
+}
+// R06 C: success result whose text is a ++ b ++ c, written straight into the packet (one copy, no intermediate text buffer).
+// Same checks and same bytes as result(meta, rows, a ++ b ++ c).
+pub fn result3(meta: [i64], rows: [i64], a: [u8], b: str, c: str) -> [i64] ! alloc
+  requires len(meta) == 24 && len(rows) <= 100000000 && len(a) <= 30000000 && len(b) <= 30000000 && len(c) <= 30000000
+  ensures len(result) >= 28
+{
+  let na: i64 = len(a);
+  let nb: i64 = len(b);
+  let nc: i64 = len(c);
+  let nx: i64 = na + nb + nc;
+  if !result_ok_n(meta, rows, nx) {
+    let mut m: i64 = meta[1];
+    if m < 0 || m > 5 { m = 0; }
+    return internal_packet(m);
+  }
+  let nr: i64 = len(rows);
+  let mut p: [i64] = alloc(28 + nr + nx, 0);
+  p[0] = 0;
+  p[1] = 24;
+  p[2] = nr;
+  p[3] = nx;
+  let mut i: i64 = 0;
+  while i < 24
+    invariant 0 <= i && i <= 24 && len(meta) == 24 && len(p) == 28 + nr + nx && 0 <= nr && 0 <= nx
+    decreases 24 - i
+  { p[4 + i] = meta[i]; i = i + 1; }
+  let mut j: i64 = 0;
+  while j < nr
+    invariant 0 <= j && j <= nr && nr == len(rows) && len(p) == 28 + nr + nx && 0 <= nx
+    decreases nr - j
+  { p[28 + j] = rows[j]; j = j + 1; }
+  let base: i64 = 28 + nr;
+  let mut k: i64 = 0;
+  while k < na
+    invariant 0 <= k && k <= na && na == len(a) && len(p) == base + nx && nx == na + nb + nc && 0 <= nb && 0 <= nc && 0 <= base
+    decreases na - k
+  { p[base + k] = a[k]; k = k + 1; }
+  let mut u: i64 = 0;
+  while u < nb
+    invariant 0 <= u && u <= nb && nb == len(b) && len(p) == base + nx && nx == na + nb + nc && 0 <= na && 0 <= nc && 0 <= base
+    decreases nb - u
+  { let v: i64 = b[u]; p[base + na + u] = v; u = u + 1; }
+  let mut w: i64 = 0;
+  while w < nc
+    invariant 0 <= w && w <= nc && nc == len(c) && len(p) == base + nx && nx == na + nb + nc && 0 <= na && 0 <= nb && 0 <= base
+    decreases nc - w
+  { let v: i64 = c[w]; p[base + na + nb + w] = v; w = w + 1; }
+  return p;
 }
 // A result packet (status 0 or 1) is length-consistent: 28 + rowWords + textLen
 pub fn result_shape(res: [i64]) -> bool

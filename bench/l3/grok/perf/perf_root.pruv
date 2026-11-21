@@ -1,0 +1,26 @@
+// Grok history core perf root: one pub entry over read::window (bench/l3/grok/read.pruv). run_perf.py copies this file next to a
+// verbatim copy of the grok modules it reaches (util, packet, path, framing, entry, read) into perf/work/ and compiles it with
+// the manifest it writes (the deps are the packages grok/pruv.json lists, minus the ones read.pruv does not reach).
+// The module list below mirrors grok/root.pruv for those modules.
+mod json;
+mod parse;
+mod access;
+mod jstr;
+mod lines;
+mod bytes;
+mod text;
+mod time;
+mod names;
+mod turns;
+mod util;
+mod packet;
+mod path;
+mod framing;
+mod entry;
+mod read;
+
+pub fn grok_history_window(win: [u8], omitted: bool, title: str, model: str) -> [i64] ! alloc
+  ensures len(result) >= 28
+{
+  return crate::read::window(win, omitted, title, model);
+}
