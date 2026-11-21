@@ -6729,7 +6729,8 @@ fn g6_type_ok(t: &str) -> bool {
         return g6_coll_ok(t);
     }
     if is_owned_result(t) {
-        return g6_scalar(g_arg(t));
+        // The typed Result check already requires a value Ok payload.
+        return !contains_collection(g_arg(t));
     }
     !contains_collection(t)
 }
@@ -6982,12 +6983,18 @@ pub fn gen_llvm_concrete(prog: &Program, verified: bool, trust_callers: bool, bu
 
 fn typed_result_llvm_error(prog: &Program, specialized: &HashMap<String, Vec<crate::gtype::GType>>) -> Option<crate::diagnostic::PruvError> {
     use crate::foreign_shim::{walk_stmts, Node};
-    use crate::gtype::{format_type, is_g3_key, GType};
+    use crate::gtype::{format_type, is_g3_key, is_value, Decls, GType};
 
+    let decls = |name: &str| {
+        prog.types.iter().find(|d| d.name() == name).map(|d| (
+            d.tparams().len(),
+            d.all_fields().iter().map(|f| GType::from_key(&f.ty)).collect(),
+        ))
+    };
     let in_type = |ty: &GType, in_decl| {
-        fn reject<'a>(ty: &'a GType, in_decl: bool, specialized: &'a HashMap<String, Vec<GType>>) -> Option<&'a GType> {
+        fn reject<'a>(ty: &'a GType, in_decl: bool, specialized: &'a HashMap<String, Vec<GType>>, decls: Decls) -> Option<&'a GType> {
             if ty.has_string_error() {
-                if in_decl || !matches!(ty.args[0].to_key().as_str(), "i64" | "bool") {
+                if in_decl || !is_value(&ty.args[0], decls) {
                     return Some(ty);
                 }
             } else if ty.args.iter().any(GType::has_string_error) {
@@ -6998,9 +7005,9 @@ fn typed_result_llvm_error(prog: &Program, specialized: &HashMap<String, Vec<cra
             } else {
                 &ty.args
             };
-            args.iter().find_map(|arg| reject(arg, in_decl, specialized))
+            args.iter().find_map(|arg| reject(arg, in_decl, specialized, decls))
         }
-        reject(ty, in_decl, specialized).map(|hit| (format_type(hit), hit.has_string_error()))
+        reject(ty, in_decl, specialized, &decls).map(|hit| (format_type(hit), hit.has_string_error()))
     };
     let in_key = |key: &str, in_decl| {
         if is_g3_key(key) || specialized.contains_key(key) {
@@ -7055,7 +7062,7 @@ fn typed_result_llvm_error(prog: &Program, specialized: &HashMap<String, Vec<cra
     });
     let (line, col, name, (ty, owned)) = decls.chain(functions).min_by_key(|(line, col, _, _)| (*line, *col))?;
     let detail = if owned {
-        "an owned String error Result that the llvm codegen layer supports only with an i64 or bool Ok type, outside records and other generic types"
+        "an owned String error Result that the llvm codegen layer supports only with a value Ok type (i64, bool, a value struct or enum, or an Option of one), outside records and other generic types"
     } else {
         "a Result with a non-i64 error type, which the llvm codegen layer does not support yet"
     };

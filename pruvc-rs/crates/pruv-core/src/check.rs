@@ -430,6 +430,108 @@ fn ends_in_return(stmts: &[Stmt]) -> bool {
     }
 }
 
+/// LG13: the kid-index path (crate::refine::kids order) of the first `?` of e in evaluation order (operands left to
+/// right, then the node itself), or None when e has no `?` that can be lowered: a `?` inside the right operand of
+/// && / || / ==>, inside a quantifier, after a node evaluated before it that is not pure (a call, a constructor, a
+/// move, an index, arithmetic, a string literal), or whose operand passes `inout` while the statement reads a binding
+/// outside that operand stays for check_try_position. Python `find_try`.
+fn find_try(e: &Expr) -> Option<Vec<usize>> {
+    fn is_try(e: &Expr) -> bool {
+        matches!(e, Expr::Unary(u) if u.op == "?")
+    }
+    fn any(e: &Expr, f: &dyn Fn(&Expr) -> bool) -> bool {
+        f(e) || crate::refine::kids(e).into_iter().any(|k| any(k, f))
+    }
+    fn reads(e: &Expr) -> usize {
+        usize::from(matches!(e, Expr::Var(_) | Expr::Move(_))) + crate::refine::kids(e).into_iter().map(reads).sum::<usize>()
+    }
+    // A node that may run after a later `?` without changing what happens (Python `_try_pure`).
+    fn note(e: &Expr, seen: &mut bool) {
+        let pure = match e {
+            Expr::Var(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::FieldAccess(_) => true,
+            Expr::Unary(u) => u.op == "!",
+            Expr::Binary(b) => matches!(b.op.as_str(), "==" | "!=" | "<" | "<=" | ">" | ">=" | "&&" | "||" | "==>"),
+            _ => false,
+        };
+        if !pure {
+            *seen = true;
+        }
+    }
+    // Err(()) = no lowerable `?`; Ok(false) = none here, keep going; Ok(true) = found.
+    fn visit(e: &Expr, root: &Expr, seen: &mut bool, path: &mut Vec<usize>) -> Result<bool, ()> {
+        if let Expr::Quant(_) = e {
+            return if any(e, &is_try) { Err(()) } else { Ok(false) };
+        }
+        if let Expr::Binary(b) = e {
+            if matches!(b.op.as_str(), "&&" | "||" | "==>") {
+                path.push(0);
+                if visit(&b.left, root, seen, path)? {
+                    return Ok(true);
+                }
+                path.pop();
+                if any(&b.right, &is_try) {
+                    return Err(());
+                }
+                fn all(e: &Expr, seen: &mut bool) {
+                    note(e, seen);
+                    for k in crate::refine::kids(e) {
+                        all(k, seen);
+                    }
+                }
+                all(&b.right, seen);
+                note(e, seen);
+                return Ok(false);
+            }
+        }
+        if let Expr::Unary(u) = e {
+            if u.op == "?" {
+                let before = *seen;
+                path.push(0);
+                if visit(&u.operand, root, seen, path)? {
+                    return Ok(true);
+                }
+                path.pop();
+                if before || any(&u.operand, &|x| matches!(x, Expr::InoutArg(_))) && reads(root) > reads(&u.operand) {
+                    return Err(());
+                }
+                return Ok(true);
+            }
+        }
+        for (i, k) in crate::refine::kids(e).into_iter().enumerate() {
+            path.push(i);
+            if visit(k, root, seen, path)? {
+                return Ok(true);
+            }
+            path.pop();
+        }
+        note(e, seen);
+        Ok(false)
+    }
+    let mut path = Vec::new();
+    match visit(e, e, &mut false, &mut path) {
+        Ok(true) => Some(path),
+        _ => None,
+    }
+}
+
+/// LG13: kid i of e, in crate::refine::kids order (no quantifier: find_try never enters one).
+fn kid_mut(e: &mut Expr, i: usize) -> &mut Expr {
+    match e {
+        Expr::InoutArg(x) => &mut x.expr,
+        Expr::Unary(x) => &mut x.operand,
+        Expr::Binary(x) => if i == 0 { &mut x.left } else { &mut x.right },
+        Expr::Index(x) => if i == 0 { &mut x.array } else { &mut x.index },
+        Expr::Ctor(x) => x.arg.as_mut().unwrap(),
+        Expr::Call(x) => &mut x.args[i],
+        Expr::StructLit(x) => &mut x.fields[i].value,
+        Expr::EnumCtor(x) => &mut x.args[i],
+        Expr::FieldAccess(x) => &mut x.base,
+        Expr::IsVariant(x) => &mut x.value,
+        Expr::VariantField(x) => &mut x.value,
+        _ => unreachable!(),
+    }
+}
+
 fn set_ty(e: &mut Expr, t: &GType) {
     let v = Some(t.to_key());
     match e {
@@ -2494,17 +2596,19 @@ impl Checker {
     // ---- statements ----
     fn block(&mut self, stmts: &mut Vec<Stmt>, scope: &mut Scope) -> Res<()> {
         for i in 0..stmts.len() {
-            let rhs = match &stmts[i] {
+            let site = match &stmts[i] {
                 Stmt::Let(s) => Some(&s.value),
                 Stmt::Assign(s) if !s.deref && scope.get(&s.name).is_none_or(|entry| entry.kind == "local") =>
                     Some(&s.value),
                 Stmt::ExprStmt(s) => Some(&s.expr),
+                Stmt::Return(s) => s.value.as_ref(),
+                Stmt::If(s) => Some(&s.cond),
                 _ => None,
             };
-            if matches!(rhs, Some(Expr::Unary(u)) if u.op == "?") {
+            if let Some(path) = site.and_then(find_try) {
                 let rest = stmts.split_off(i + 1);
                 let stmt = stmts.pop().unwrap();
-                stmts.push(Stmt::Match(self.lower_try(stmt, rest, scope)?));
+                stmts.push(Stmt::Match(self.lower_try(stmt, rest, path, scope)?));
                 break;
             }
             let (prefix, tail) = stmts.split_at_mut(i + 1);
@@ -2516,7 +2620,9 @@ impl Checker {
     fn check_try_position(e: &Expr, line: i64, col: i64) -> Res<()> {
         if matches!(e, Expr::Unary(u) if u.op == "?") {
             return Err(terr(line, col, "try_position",
-                "`?` is only allowed as the whole right-hand side of a let, an assignment or an expression statement",
+                "`?` is only allowed in the value of a let, a local assignment or a return, an expression statement or an if \
+                 condition, and not in the right operand of && / ||, in a quantifier or after a call, constructor, move, index or \
+                 arithmetic evaluated before it",
                 "bind the value with `let x: T = e?;` first"));
         }
         for child in crate::refine::kids(e) {
@@ -2525,13 +2631,20 @@ impl Checker {
         Ok(())
     }
 
-    fn lower_try(&mut self, mut stmt: Stmt, mut rest: Vec<Stmt>, scope: &mut Scope) -> Res<Match> {
-        let (line, col, rhs) = match &mut stmt {
+    fn lower_try(&mut self, mut stmt: Stmt, mut rest: Vec<Stmt>, path: Vec<usize>, scope: &mut Scope)
+        -> Res<Match> {
+        let whole = path.is_empty();
+        let (line, col, mut rhs) = match &mut stmt {
             Stmt::Let(s) => (s.line, s.col, &mut s.value),
             Stmt::Assign(s) => (s.line, s.col, &mut s.value),
             Stmt::ExprStmt(s) => (s.line, s.col, &mut s.expr),
+            Stmt::Return(s) => (s.line, s.col, s.value.as_mut().unwrap()),
+            Stmt::If(s) => (s.line, s.col, &mut s.cond),
             _ => unreachable!(),
         };
+        for i in path {
+            rhs = kid_mut(rhs, i);
+        }
         let n = self.try_count;
         self.try_count += 1;
         let ok = format!("__pruv_try_v{n}");
@@ -2558,7 +2671,7 @@ impl Checker {
                 format!("`?` error type {} does not match the function error type {}", tn(&actual), tn(&expected)),
                 "use an explicit match and convert the error"));
         }
-        if !matches!(stmt, Stmt::ExprStmt(_)) {
+        if !(whole && matches!(stmt, Stmt::ExprStmt(_))) {
             rest.insert(0, stmt);
         }
         let mut targs = self.cur_ret.args.clone();

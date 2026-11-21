@@ -1,0 +1,17 @@
+// LG13: `?` in the value of a field assignment stays rejected
+struct P { a: i64 }
+
+fn half(x: i64) -> Result<i64>
+  requires 0 <= x && x <= 1000
+{
+  if x % 2 == 0 { return Ok(x / 2); }
+  return Err(x);
+}
+
+fn g(x: i64) -> Result<i64>
+  requires 0 <= x && x <= 1000
+{
+  let mut p: P = P { a: 0 };
+  p.a = half(x)?;
+  return Ok(p.a);
+}

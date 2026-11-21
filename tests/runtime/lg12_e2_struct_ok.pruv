@@ -1,4 +1,4 @@
-// LG12 E2: Result<T, String> with a struct Ok type runs on the Rust backend; LLVM still rejects it (llvm_pending)
+// LG12 E2: Result<T, String> with a struct Ok type (on LLVM since LG13, G-LG12-1)
 struct Pt { x: i64, y: i64 }
 
 fn mk(x: i64) -> Result<Pt, String> ! alloc

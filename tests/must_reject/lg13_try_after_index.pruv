@@ -1,0 +1,6 @@
+// LG13: an index evaluated before the `?` would only be checked on the Ok path once the `?` is lowered first; not lowered
+fn f(a: [i64]) -> Result<i64>
+  requires len(a) <= 100
+{
+  return Ok(a[0] + Err::<i64>(7)?);
+}

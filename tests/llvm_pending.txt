@@ -7,8 +7,3 @@
 tests/runtime/g6_a02_option_find.pruv
 tests/runtime/g6_a03_result_half.pruv
 tests/runtime/g6_v05_option_elems.pruv
-
-
-
-# LG12 E2: Result<T, String> with a T other than i64 / bool is not on LLVM yet (G-LG12-1)
-tests/runtime/lg12_e2_struct_ok.pruv
