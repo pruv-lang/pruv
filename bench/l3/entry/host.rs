@@ -508,17 +508,73 @@ impl Pool<'_> {
 fn decode_pool(sec: &[i64]) -> R<Pool<'_>> {
     let [nu, nb, words @ ..] = sec else { return ie("pool header is truncated"); };
     let cap = words.len() * 7;
-    if *nu < 0 || *nb < *nu || *nb as u64 > cap as u64 || *nb as u64 > (*nu as u64).saturating_mul(7) / 2 {
+    if *nu < 0 || *nu > MAX_WORDS as i64 || *nb < *nu || *nb as u64 > cap as u64 || *nb as u64 > (*nu as u64).saturating_mul(7) / 2 {
         return ie("pool counts are invalid");
     }
     let nb = *nb as usize;
     let used = (nb + 6) / 7;
+    // The pool length is exact: no trailing zero words (D-DB18-2).
+    if words.len() != used {
+        return ie("pool length is not 2 + ceil(nb/7)");
+    }
     let pool = Pool { words, nb };
-    if words[used..].iter().any(|&word| word != 0) ||
-        (nb..used * 7).any(|k| pool.byte(k) != Some(0)) {
+    if (nb..used * 7).any(|k| pool.byte(k) != Some(0)) {
         return ie("pool padding is not zero");
     }
+    // Boundary check of the whole byte stream, the same rule as the core pool_ok (D-DB18-6): WTF-8 forms, a 0xFF
+    // separator only between a lone high and a lone low surrogate, and nu equal to the unit count.
+    if pool_units(&pool) != Some(*nu as usize) {
+        return ie("pool bytes or unit count are invalid");
+    }
     Ok(pool)
+}
+
+fn pool_units(pool: &Pool) -> Option<usize> {
+    let nb = pool.nb;
+    if pool.words.iter().all(|&w| (0..(1i64 << 56)).contains(&w) && w & 0x0080_8080_8080_8080 == 0) {
+        return Some(nb);
+    }
+    let at = |k: usize| if k < nb { pool.byte(k) } else { None };
+    let cont = |k: usize| at(k).filter(|b| b & 0xc0 == 0x80);
+    let (mut k, mut u, mut hi) = (0usize, 0usize, false);
+    while k < nb {
+        let b0 = at(k)?;
+        match b0 {
+            0x00..=0x7f => { k += 1; u += 1; hi = false; }
+            0xff => {
+                if !hi || nb - k - 1 < 3 || at(k + 1) != Some(0xed) || !matches!(at(k + 2), Some(0xb0..=0xbf)) {
+                    return None;
+                }
+                k += 1;
+                hi = false;
+            }
+            0xc2..=0xdf => { cont(k + 1)?; k += 2; u += 1; hi = false; }
+            0xe0..=0xef => {
+                let (b1, b2) = (cont(k + 1)?, cont(k + 2)?);
+                if b0 == 0xe0 && b1 < 0xa0 {
+                    return None;
+                }
+                let v = ((b0 as u32 & 0x0f) << 12) | ((b1 as u32 & 0x3f) << 6) | (b2 as u32 & 0x3f);
+                if hi && (0xdc00..0xe000).contains(&v) {
+                    return None;
+                }
+                hi = (0xd800..0xdc00).contains(&v);
+                k += 3;
+                u += 1;
+            }
+            0xf0..=0xf4 => {
+                let (b1, _, _) = (cont(k + 1)?, cont(k + 2)?, cont(k + 3)?);
+                if (b0 == 0xf0 && b1 < 0x90) || (b0 == 0xf4 && b1 > 0x8f) {
+                    return None;
+                }
+                k += 4;
+                u += 2;
+                hi = false;
+            }
+            _ => return None,
+        }
+    }
+    Some(u)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1124,7 +1180,8 @@ fn parse_probe(v: Option<&Value>) -> R<Option<Probe>> {
         None => return ce("probe needs corrupt"),
     };
     match c.as_str() {
-        "version" | "length" | "tag" | "unit" | "op_id" | "seq" | "duplicate" | "reentry" | "oversize" | "exact_limit" => {}
+        "version" | "length" | "tag" | "unit" | "op_id" | "seq" | "duplicate" | "reentry"
+        | "extra_word" | "missing_word" | "oversize" | "exact_limit" | "oversize_phys" | "exact_limit_phys" => {}
         _ => return ce(format!("unknown probe corruption {}", c)),
     }
     Ok(Some(Probe { at, corrupt: c }))
@@ -2081,6 +2138,23 @@ fn corrupt(w: &mut Vec<i64>, how: &str) {
         }
         "op_id" => w[2] = if is_input { 0 } else { w[2] + 1 },
         "seq" => w[3] = if is_input { 7 } else { w[3] + 1 },
+        "extra_word" => {
+            w.insert(sec_start(w, 1), 0);
+            w[7] += 1;
+            w[4] += 1;
+        }
+        "missing_word" => {
+            if w[7] > 2 {
+                w.remove(sec_start(w, 1) - 1);
+                w[7] -= 1;
+                w[4] -= 1;
+            } else {
+                // An empty pool has no word to drop: claim one ASCII byte instead, so the pool is one word short.
+                let at = sec_start(w, 0);
+                w[at] += 1;
+                w[at + 1] += 1;
+            }
+        }
         _ => {}
     }
 }
@@ -2104,6 +2178,50 @@ fn pad_to(w: &mut Vec<i64>, total: usize) {
     w[4] = (w.len() - 5) as i64;
 }
 
+fn pad_phys(w: &mut Vec<i64>, oversize: bool) {
+    let start = sec_start(w, 0);
+    let end = sec_start(w, 1);
+    let fixed = w.len() - (end - start);
+    let nb = w[start + 1] as usize;
+    let nu = w[start] as usize;
+    let extra = if oversize {
+        if w.len() > MAX_WORDS {
+            return;
+        }
+        // Physical length M+1 with the densest content. This probe only grows the pool, and a grown pool adds more
+        // logical units than words, so the logical size is then over the limit too and the probe does not isolate
+        // the physical check. Physical M+1 with logical <= M needs at least M-1 words outside the pool and a pool of
+        // at most two units, which this probe does not build (G-DB20-1).
+        // Reach the first byte of the last packed word, rounding up to a whole U+0800.
+        let min_bytes = 7 * (MAX_WORDS + 1 - fixed - 3) + 1;
+        (min_bytes - nb).div_ceil(3)
+    } else {
+        if fixed + nu >= MAX_WORDS {
+            return;
+        }
+        MAX_WORDS - fixed - nu
+    };
+    let bytes = nb + extra * 3;
+    let words = 2 + bytes.div_ceil(7);
+    let tail = w.split_off(end);
+    w.resize(start + words, 0);
+    // U+0800 is one UTF-16 unit and three WTF-8 bytes. Keep all original slot offsets.
+    for (i, k) in (nb..bytes).enumerate() {
+        let byte = [0xE0i64, 0xA0, 0x80][i % 3];
+        w[start + 2 + k / 7] |= byte << (8 * (6 - k % 7));
+    }
+    w[start] = (nu + extra) as i64;
+    w[start + 1] = bytes as i64;
+    w.extend(tail);
+    w[7] = words as i64;
+    w[4] = (w.len() - 5) as i64;
+    if oversize {
+        assert_eq!(w.len(), MAX_WORDS + 1);
+    } else {
+        assert_eq!(w.len() - words + nu + extra, MAX_WORDS);
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // driver (DESIGN 5.2)
 
@@ -2124,6 +2242,8 @@ fn drive<S: Sol>(sol: &S, h: &mut Host, op: i64, op_id: i64, input: Vec<i64>, pr
             match p.corrupt.as_str() {
                 "oversize" => pad_to(&mut first, MAX_WORDS + 1),
                 "exact_limit" => pad_to(&mut first, MAX_WORDS),
+                "exact_limit_phys" => pad_phys(&mut first, false),
+                "oversize_phys" => pad_phys(&mut first, true),
                 "duplicate" | "reentry" => {}
                 c => corrupt(&mut first, c),
             }
@@ -2193,6 +2313,8 @@ fn drive<S: Sol>(sol: &S, h: &mut Host, op: i64, op_id: i64, input: Vec<i64>, pr
                         match pr.corrupt.as_str() {
                             "oversize" => pad_to(&mut comp, MAX_WORDS + 1),
                             "exact_limit" => pad_to(&mut comp, MAX_WORDS),
+                            "exact_limit_phys" => pad_phys(&mut comp, false),
+                            "oversize_phys" => pad_phys(&mut comp, true),
                             "duplicate" | "reentry" => {}
                             c => corrupt(&mut comp, c),
                         }
@@ -2623,5 +2745,38 @@ mod tests {
         assert_eq!(bad, "{\"id\":3,\"error\":\"case: unknown op nope\"}");
         let bad = run_one(&Mock, "{\"id\":4,\"op\":\"account_home\",\"args\":{\"id\":1.5}}");
         assert!(bad.starts_with("{\"id\":4,\"error\":\"case: "));
+    }
+
+    #[test]
+    fn decode_pool_rejects_malformed_sections() {
+        let one = 0x41000000000000;
+        let cases: [(&str, &[i64]); 8] = [
+            ("extra zero word", &[1, 1, one, 0]),
+            ("missing word", &[1, 1]),
+            ("one unit over", &[3, 3, 0xC3A94100000000]),
+            ("one unit under", &[1, 2, 0x41420000000000]),
+            ("separator after ASCII", &[2, 5, 0x41FFEDB0800000]),
+            ("separator at end", &[2, 5, 0x41EDA080FF0000]),
+            ("separator before ASCII", &[2, 5, 0xEDA080FF410000]),
+            ("nonzero padding", &[1, 1, one | 1]),
+        ];
+        for (name, section) in cases {
+            assert!(decode_pool(section).is_err(), "{name}");
+        }
+        // nu above 16,777,216 is refused like the core pool_ok, even when it equals the unit count.
+        let ascii = |n: usize| {
+            let mut p = vec![n as i64, n as i64];
+            p.resize(2 + n.div_ceil(7), 0x41414141414141);
+            let tail = 7 * (p.len() - 2) - n;
+            *p.last_mut().unwrap() &= !((1i64 << (8 * tail)) - 1);
+            p
+        };
+        assert!(decode_pool(&ascii(MAX_WORDS)).is_ok(), "nu at the limit");
+        assert!(decode_pool(&ascii(MAX_WORDS + 1)).is_err(), "nu over the limit");
+    }
+
+    #[test]
+    fn decode_pool_accepts_separated_lone_surrogates() {
+        assert!(decode_pool(&[2, 7, 0xEDA080FFEDB080]).is_ok());
     }
 }

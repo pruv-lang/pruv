@@ -1,4 +1,4 @@
-"""Mutant runner for the L3-8 entry: each mutant M01..M16 is a small edit (one or more sites) of the Pruv sources, built on rs/rust only.
+"""Mutant runner for the L3-8 entry: each mutant M01..M17 is a small edit (one or more sites) of the Pruv sources, built on rs/rust only.
 
   python3 q_mutants.py [--only M08,M09] [--jobs N]
 
@@ -68,6 +68,8 @@ MUTANTS = {
              "  return crate::ent_value::truthy(w, crate::ent_u16::clamp(p, 4294967296) + 3);")],
     'M16': [('ent_bound.pruv', "      // MUTANT M16: a later write overwrites the stored session (last write wins)\n",
              "      // MUTANT M16: a later write overwrites the stored session (last write wins)\n      crate::ent_u16::wr(inout val, hit, crate::ent_u16::rd(sp, f));\n")],
+    'M17': [('ent_wire.pruv', '  if l0 != 2 + (nb + 6) / 7 { return false; }',
+             '  if l0 < 2 + (nb + 6) / 7 { return false; }')],
 }
 
 

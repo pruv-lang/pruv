@@ -3,7 +3,7 @@
 For every fixture variant (I group excluded; integrate.py runs it) and each pair the runner (work/<pair>/harness, built from the
 verified root.pruv, harness.rs and the entry_host crate) is compared
   - with the fixture's `expect` (terminal, value, trace; driver when recorded),
-  - with the pinned-TypeScript oracle (not for probes except exact_limit),
+  - with the pinned-TypeScript oracle (including exact-limit probes),
   - across the pairs (all four identical).
 The comparison classes are those of common.compare. Exit code is nonzero on any unexplained difference.
 
@@ -125,11 +125,11 @@ def judge(case, actual, oracle):
     """-> (class, field) of the actual result against expect and the oracle (the worse class wins)."""
     exp = expect_line(case)
     probe = case.get('probe')
-    big = bool(probe) and probe['corrupt'] == 'oversize'
+    big = bool(probe) and probe['corrupt'] in ('oversize', 'oversize_phys')
     cls, field = compare(exp, actual, probe_too_large=big)
     if cls == 'exact' and exp.get('driver') is not None and actual.get('driver') != exp['driver']:
         cls, field = 'unexplained', 'driver'
-    if cls == 'exact' and oracle is not None and (not probe or probe['corrupt'] == 'exact_limit'):
+    if cls == 'exact' and oracle is not None and (not probe or probe['corrupt'] in ('exact_limit', 'exact_limit_phys')):
         cls, field = compare(oracle, actual)
     if cls == 'exact' and 'callerTitles' in case['expect'] and 'callerTitles' in actual and actual['callerTitles'] != case['expect']['callerTitles']:
         cls, field = 'unexplained', 'callerTitles'
@@ -193,7 +193,7 @@ def main(argv=None):
                 print(f'{key}: result id {actual.get("id")!r} for case {case["id"]}')
                 failed = True
                 continue
-            cls, field = judge(case, actual, None if case.get('probe') and case['probe']['corrupt'] != 'exact_limit' else oracle[case['id']])
+            cls, field = judge(case, actual, oracle[case['id']])
             row = table.setdefault((case['group'], key), {})
             row[cls] = row.get(cls, 0) + 1
             if cls == 'unexplained':

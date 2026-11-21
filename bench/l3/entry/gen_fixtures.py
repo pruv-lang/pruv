@@ -2,8 +2,8 @@
 
 Every non-probe expectation is derived by running the pinned-TypeScript oracle (oracle.py) over the case, then each case's
 check function asserts the observation the spec names (so a fixture really exercises that behavior, not just any result).
-Probe cases (P06-P10) record the expected boundary result of the new packet interface; they are not oracle-compared except
-exact_limit. The I group (integration) carries route/op and an assertion description for integrate.py.
+Probe cases (P06-P11) record the expected boundary result of the new packet interface. Exact-limit probes are also
+oracle-compared. The I group (integration) carries route/op and an assertion description for integrate.py.
 
   python3 gen_fixtures.py            # rewrite fixtures/*.json
   python3 gen_fixtures.py --check    # derive again and fail when a fixture's expect differs (no file written)
@@ -31,7 +31,7 @@ GROUPS = ['S', 'E', 'A', 'C', 'H', 'F', 'D', 'T', 'R', 'U', 'V', 'X', 'B', 'P', 
 MUTANT_KILLERS = {
     'E09': 'M01', 'S08': 'M02', 'E02': 'M03', 'A07': 'M04', 'A08': 'M05', 'C04': 'M06', 'H03': 'M07', 'F05': 'M08',
     'D06': 'M09', 'T07': 'M10', 'R04': 'M11', 'R09': 'M12', 'U09': 'M13', 'V03': 'M14', 'X06': 'M15',
-    'X01': 'M15', 'B03': 'M16',
+    'X01': 'M15', 'B03': 'M16', 'P11': 'M17',
 }
 
 ENTRIES = {g: [] for g in GROUPS}  # group -> list of fixture entries (without expect), with 'checks' kept aside
@@ -946,7 +946,11 @@ def probe_entries():
         'P08': [('duplicate-1', base, {'at': 1, 'corrupt': 'duplicate'}), ('duplicate-3', base, {'at': 3, 'corrupt': 'duplicate'})],
         'P09': [('reentry-threads', one, {'at': 0, 'corrupt': 'reentry'}), ('reentry-import', base, {'at': 0, 'corrupt': 'reentry'})],
         'P10': [('oversize-begin', one, {'at': 0, 'corrupt': 'oversize'}), ('oversize-step', base, {'at': 1, 'corrupt': 'oversize'}),
-                ('exact-limit-begin', one, {'at': 0, 'corrupt': 'exact_limit'}), ('exact-limit-step', base, {'at': 1, 'corrupt': 'exact_limit'})],
+                ('exact-limit-begin', one, {'at': 0, 'corrupt': 'exact_limit'}), ('exact-limit-step', base, {'at': 1, 'corrupt': 'exact_limit'}),
+                ('exact-limit-phys-begin', one, {'at': 0, 'corrupt': 'exact_limit_phys'}),
+                ('exact-limit-phys-step', base, {'at': 1, 'corrupt': 'exact_limit_phys'}),
+                ('oversize-phys-begin', one, {'at': 0, 'corrupt': 'oversize_phys'}),
+                ('oversize-phys-step', base, {'at': 1, 'corrupt': 'oversize_phys'})],
     }
 
 
@@ -961,6 +965,10 @@ for pid, items in probe_entries().items():
         subs.append((suffix, over, None))
         PROBES[f'{pid}/{suffix}'] = probe
     add(pid, PROBE_NAMES[pid], items[0][1]['op'], subs=subs)
+
+extra_word_case = thr(sess(externalThread={'engine': 'claude', 'thread': 't'}))
+PROBES['P11'] = {'at': 0, 'corrupt': 'extra_word'}
+add('P11', 'packet-extra-pool-word', extra_word_case['op'], args=extra_word_case['args'], probe=PROBES['P11'])
 
 
 # =========================================================================================================== I
@@ -1068,9 +1076,9 @@ def main(argv):
     if FAILS:
         print('\n'.join(FAILS))
         return 1
-    need(count == 155, f"{count} entries, expected 155")
+    need(count == 156, f"{count} entries, expected 156")
     names = [e['id'] for g in GROUPS for e in out[g]]
-    need(len(set(names)) == 155, 'ids unique')
+    need(len(set(names)) == 156, 'ids unique')
     status = 0
     for g in GROUPS:
         text = json.dumps(out[g], ensure_ascii=False, indent=1) + '\n'
