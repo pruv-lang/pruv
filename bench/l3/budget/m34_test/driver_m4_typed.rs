@@ -111,13 +111,16 @@ struct M4;
 
 impl TypedCore for M4 {
     type State = sol::St;
-    type Operation<'a> = &'a Op<'a>;
-    type Reply = sol::Reply;
+    type Operation<'a> = (&'a Op<'a>, &'a mut sol::Reply);
+    type Reply = Option<sol::Reply>;
 
-    fn apply(&self, st: &mut sol::St, op: &Op<'_>) -> sol::Reply {
-        match op {
+    fn apply(&self, st: &mut sol::St, (op, get_reply): Self::Operation<'_>) -> Self::Reply {
+        Some(match op {
             Op::SessionPut(key, blob) => sol::session_put_admitted(st, key, blob),
-            Op::SessionGet(key) => sol::session_get_admitted(st, key),
+            Op::SessionGet(key) => {
+                sol::session_get_admitted_into(get_reply, st, key);
+                return None;
+            }
             Op::SessionRemove(key) => sol::session_remove_admitted(st, key),
             Op::SessionList => sol::session_list(st),
             Op::ClockPut(key, owner) => sol::clock_put_admitted(st, key, owner),
@@ -134,25 +137,29 @@ impl TypedCore for M4 {
             Op::ActivityList(key) => sol::activity_list_admitted(st, key),
             Op::ToolList => sol::tool_list(st),
             Op::LiveCount => sol::live_count(st),
-        }
+        })
     }
 }
 
 type Resident = ResidentState<M4, sol::St>;
 
-fn adapter(st: &mut Resident, packet: &[i64]) -> Option<(&'static str, Vec<i64>)> {
-    let op = decode(packet)?;
-    encode(&op, st.step_typed(&op))
+fn apply_and_encode(st: &mut Resident, op: &Op<'_>, get_reply: &mut sol::Reply) -> Option<(&'static str, Vec<i64>)> {
+    let mut owned = st.step_typed((op, get_reply));
+    encode(op, owned.as_mut().unwrap_or(get_reply))
 }
 
-fn wire_step(lane: Lane, st: &mut Resident, packet: &[i64]) -> Option<(&'static str, Vec<i64>)> {
+fn adapter(st: &mut Resident, packet: &[i64], get_reply: &mut sol::Reply) -> Option<(&'static str, Vec<i64>)> {
+    let op = decode(packet)?;
+    apply_and_encode(st, &op, get_reply)
+}
+
+fn wire_step(lane: Lane, st: &mut Resident, packet: &[i64], get_reply: &mut sol::Reply) -> Option<(&'static str, Vec<i64>)> {
     match lane {
         Lane::Direct => {
             let op = decode(packet)?;
-            let reply = st.step_typed(&op);
-            encode(&op, reply)
+            apply_and_encode(st, &op, get_reply)
         }
-        Lane::Adapter => adapter(st, packet),
+        Lane::Adapter => adapter(st, packet, get_reply),
     }
 }
 
@@ -174,9 +181,9 @@ fn push_key(out: &mut Vec<i64>, key: &str) {
     out[count] = (out.len() - count - 1) as i64;
 }
 
-fn push_blob(out: &mut Vec<i64>, blob: Vec<i64>) {
+fn push_blob(out: &mut Vec<i64>, blob: &[i64]) {
     out.push(blob.len() as i64);
-    out.extend(blob);
+    out.extend_from_slice(blob);
 }
 
 fn push_clock(out: &mut Vec<i64>, clock: &sol::ClockView) {
@@ -194,7 +201,7 @@ fn push_runs(out: &mut Vec<i64>, mut runs: Vec<sol::RunView>) {
     }
 }
 
-fn encode(op: &Op<'_>, mut reply: sol::Reply) -> Option<(&'static str, Vec<i64>)> {
+fn encode(op: &Op<'_>, reply: &mut sol::Reply) -> Option<(&'static str, Vec<i64>)> {
     use sol::Outcome::*;
     let mut out = Vec::new();
     match reply.outcome {
@@ -206,7 +213,7 @@ fn encode(op: &Op<'_>, mut reply: sol::Reply) -> Option<(&'static str, Vec<i64>)
         Found => match op {
             Op::SessionGet(_) => {
                 out.push(1);
-                push_blob(&mut out, reply.blob);
+                push_blob(&mut out, &reply.blob);
             }
             Op::ClockGet(_) => {
                 let [clock] = reply.clocks.as_slice() else { panic!("expected one clock") };
@@ -216,12 +223,12 @@ fn encode(op: &Op<'_>, mut reply: sol::Reply) -> Option<(&'static str, Vec<i64>)
             }
             Op::RunList(_) => {
                 out.push(1);
-                push_runs(&mut out, reply.runs);
+                push_runs(&mut out, std::mem::take(&mut reply.runs));
             }
             Op::SessionList | Op::ClockList | Op::ToolList | Op::ActivityList(_) => {
                 reply.names.sort_unstable_by_key(|name| name.ordinal);
                 out.push(reply.names.len() as i64);
-                for name in reply.names {
+                for name in &reply.names {
                     push_key(&mut out, &name.key);
                 }
             }
@@ -251,7 +258,7 @@ fn observation(mut reply: sol::Reply) -> Vec<i64> {
     out.push(reply.sessions.len() as i64);
     for entry in reply.sessions {
         push_key(&mut out, &entry.key);
-        push_blob(&mut out, entry.blob);
+        push_blob(&mut out, &entry.blob);
     }
     out.push(reply.clocks.len() as i64);
     for entry in reply.clocks {
@@ -340,6 +347,7 @@ fn perf(lane: Lane, axis: &str, n: usize, reps: usize) {
     };
     let width = if axis == "tools" { 3 } else { 2 };
     let nops = (reps * width).max(1);
+    let mut get_reply = sol::session_get_reply();
 
     fn measure<T>(cycle: &[T], nops: usize, mut step: impl FnMut(&T) -> i64) -> u128 {
         let t0 = std::time::Instant::now();
@@ -358,13 +366,17 @@ fn perf(lane: Lane, axis: &str, n: usize, reps: usize) {
 
     let (label, total) = match lane {
         Lane::Direct => ("direct", measure(&cycle, nops, |op| {
-            let reply = match op {
-                Op::SessionGet(key) => sol::session_get(&state, key),
-                Op::SessionPut(key, data) => sol::session_put(&mut state, key, data),
-                Op::ToolNote(key, activity) => sol::tool_note(&mut state, key, activity),
-                Op::ToolRemove(key) => sol::tool_remove(&mut state, key),
+            let owned = match op {
+                Op::SessionGet(key) => {
+                    sol::session_get_into(&mut get_reply, &state, key);
+                    None
+                }
+                Op::SessionPut(key, data) => Some(sol::session_put(&mut state, key, data)),
+                Op::ToolNote(key, activity) => Some(sol::tool_note(&mut state, key, activity)),
+                Op::ToolRemove(key) => Some(sol::tool_remove(&mut state, key)),
                 _ => unreachable!(),
             };
+            let reply = owned.as_ref().unwrap_or(&get_reply);
             match reply.outcome {
                 sol::Outcome::Changed(value) => i64::from(value) + 1,
                 sol::Outcome::Found => reply.blob.len() as i64 + 3,
@@ -381,7 +393,7 @@ fn perf(lane: Lane, axis: &str, n: usize, reps: usize) {
                 _ => unreachable!(),
             }).collect();
             ("adapter", measure(&packets, nops, |packet| {
-                let (_, words) = adapter(&mut st, packet).expect("perf: op failed");
+                let (_, words) = adapter(&mut st, packet, &mut get_reply).expect("perf: op failed");
                 words.len() as i64 + words[0]
             }))
         }
@@ -419,6 +431,7 @@ fn churn(lane: Lane) {
                  st.tools.capacity());
     }
 
+    let mut get_reply = sol::session_get_reply();
     match lane {
         Lane::Direct => run(
             "direct",
@@ -430,7 +443,7 @@ fn churn(lane: Lane) {
             ],
             |st| st,
             |st, op, expected| {
-                assert!(matches!(M4.apply(st, op).outcome, sol::Outcome::Changed(value) if value == expected));
+                assert!(matches!(M4.apply(st, (op, &mut get_reply)).expect("churn: expected owned reply").outcome, sol::Outcome::Changed(value) if value == expected));
             },
         ),
         Lane::Adapter => run(
@@ -439,7 +452,7 @@ fn churn(lane: Lane) {
             [op_kk(13, "t0", "a0"), op_kk(13, "x", "y"), op_k(14, "x")],
             Resident::typed_state,
             |st, packet, expected| {
-                let (status, words) = adapter(st, packet).expect("churn: operation rejected");
+                let (status, words) = adapter(st, packet, &mut get_reply).expect("churn: operation rejected");
                 assert_eq!(status, "ok");
                 assert_eq!(words, [i64::from(expected)]);
             },
@@ -487,32 +500,33 @@ fn malformed(lane: Lane) {
     let mut st = empty_state();
     assert!(matches!(sol::session_put(&mut st, "😀", &[42]).outcome, Outcome::Changed(true)));
     let mut resident = Resident::from_typed(M4, st);
-    assert_eq!(wire_step(lane, &mut resident, &op_k(2, "😀")), Some(("ok", vec![1, 1, 42])));
-    assert_eq!(wire_step(lane, &mut resident, &op_session_put("😀", &[43])), Some(("ok", vec![0])));
+    let mut get_reply = sol::session_get_reply();
+    assert_eq!(wire_step(lane, &mut resident, &op_k(2, "😀"), &mut get_reply), Some(("ok", vec![1, 1, 42])));
+    assert_eq!(wire_step(lane, &mut resident, &op_session_put("😀", &[43]), &mut get_reply), Some(("ok", vec![0])));
     assert_eq!(sol::session_get(resident.typed_state(), "😀").blob, [43]);
 
     let surrogate_word = 0xd800_0000_0000_0000_u64 as i64;
-    assert_eq!(wire_step(lane, &mut resident, &[1, 1, surrogate_word, 1, 44]), Some(("ok", vec![1])));
-    assert_eq!(wire_step(lane, &mut resident, &[2, 1, surrogate_word]), Some(("ok", vec![1, 1, 44])));
-    assert_eq!(wire_step(lane, &mut resident, &op_session_put("\u{e000}\u{e100}", &[45])), Some(("ok", vec![1])));
+    assert_eq!(wire_step(lane, &mut resident, &[1, 1, surrogate_word, 1, 44], &mut get_reply), Some(("ok", vec![1])));
+    assert_eq!(wire_step(lane, &mut resident, &[2, 1, surrogate_word], &mut get_reply), Some(("ok", vec![1, 1, 44])));
+    assert_eq!(wire_step(lane, &mut resident, &op_session_put("\u{e000}\u{e100}", &[45]), &mut get_reply), Some(("ok", vec![1])));
     assert_eq!(sol::session_get(resident.typed_state(), "\u{e000}\u{e100}").blob, [45]);
-    assert_eq!(wire_step(lane, &mut resident, &[4]), Some(("ok", vec![3, 2, 0xd83d, 0xde00, 1, 0xd800, 2, 0xe000, 0xe100])));
+    assert_eq!(wire_step(lane, &mut resident, &[4], &mut get_reply), Some(("ok", vec![3, 2, 0xd83d, 0xde00, 1, 0xd800, 2, 0xe000, 0xe100])));
 
     let mut remove = op_k(3, "😀");
     remove.push(9);
-    assert_eq!(wire_step(lane, &mut resident, &remove), None);
+    assert_eq!(wire_step(lane, &mut resident, &remove, &mut get_reply), None);
     let mut note = op_kk(13, "tool", "activity");
     note.push(9);
-    assert_eq!(wire_step(lane, &mut resident, &note), None);
-    assert_eq!(wire_step(lane, &mut resident, &[4, 9]), None);
-    assert_eq!(wire_step(lane, &mut resident, &op_k(2, "😀")), Some(("ok", vec![1, 1, 43])));
-    assert_eq!(wire_step(lane, &mut resident, &op_k(15, "tool")), Some(("ok", vec![0])));
+    assert_eq!(wire_step(lane, &mut resident, &note, &mut get_reply), None);
+    assert_eq!(wire_step(lane, &mut resident, &[4, 9], &mut get_reply), None);
+    assert_eq!(wire_step(lane, &mut resident, &op_k(2, "😀"), &mut get_reply), Some(("ok", vec![1, 1, 43])));
+    assert_eq!(wire_step(lane, &mut resident, &op_k(15, "tool"), &mut get_reply), Some(("ok", vec![0])));
     let key_word = 0x0061_0000_0000_0000;
-    assert_eq!(wire_step(lane, &mut resident, &[1, 1, key_word]), None);
-    assert_eq!(wire_step(lane, &mut resident, &[1, 0]), None);
-    assert_eq!(wire_step(lane, &mut resident, &[1, 1, key_word, 2, 7]), None);
-    assert_eq!(wire_step(lane, &mut resident, &[1, 1, key_word, -1]), None);
-    assert_eq!(wire_step(lane, &mut resident, &[1, 1, key_word, 1, 7]), Some(("ok", vec![1])));
+    assert_eq!(wire_step(lane, &mut resident, &[1, 1, key_word], &mut get_reply), None);
+    assert_eq!(wire_step(lane, &mut resident, &[1, 0], &mut get_reply), None);
+    assert_eq!(wire_step(lane, &mut resident, &[1, 1, key_word, 2, 7], &mut get_reply), None);
+    assert_eq!(wire_step(lane, &mut resident, &[1, 1, key_word, -1], &mut get_reply), None);
+    assert_eq!(wire_step(lane, &mut resident, &[1, 1, key_word, 1, 7], &mut get_reply), Some(("ok", vec![1])));
     println!("m4typed: typed admission and stale/reused keys passed");
 }
 
@@ -535,6 +549,7 @@ fn main() -> io::Result<()> {
                "usage: driver_m4_typed q | churn | malformed | perf AXIS N REPS");
     let mut out = io::BufWriter::new(io::stdout().lock());
     let mut state = None;
+    let mut get_reply = sol::session_get_reply();
     for line in io::stdin().lock().lines() {
         let line = line?;
         let mut fields = line.split_whitespace();
@@ -547,7 +562,7 @@ fn main() -> io::Result<()> {
             Some("op") => {
                 let op: Vec<i64> = fields.map(|word| word.parse().expect("bad word")).collect();
                 let st = state.as_mut().expect("op before init");
-                let result = wire_step(lane, st, &op);
+                let result = wire_step(lane, st, &op, &mut get_reply);
                 match result {
                     Some((prefix, words)) => write_words(&mut out, prefix, &words)?,
                     _ => writeln!(out, "invalid")?,
