@@ -1,5 +1,5 @@
-// L3-9 request ABI v1 (ABI.md 3.1): 3-word value slots over [i64] rows and a UTF-16 pool.
-// tags: 0 undef, 1 null, 2/3 bool, 4 protocol int, 5 number, 6 string (pool offset, units), 7 array (section, count),
+// L3-9 request ABI v1 (ABI.md 3.1): 3-word value slots over [i64] rows and a packed WTF-8 pool.
+// tags: 0 undef, 1 null, 2/3 bool, 4 protocol int, 5 number, 6 string (byte offset, byte length), 7 array (section, count),
 // 8 object (section, count), 9 opaque ref, 10 absent, 11 inspected marker.
 
 pub fn tag_at(w: [i64], p: i64) -> i64 { return crate::ent_u16::rd(w, p); }
@@ -76,7 +76,7 @@ pub fn truthy(w: [i64], p: i64) -> bool
     if hi / 1048576 == 2047 && (hi % 1048576 != 0 || a != 0) { return false; }
     return true;
   }
-  if t == 6 { return crate::ent_value::pstr_len(w, p) > 0; }
+  if t == 6 { return crate::ent_value::slot_bytes(w, p) > 0; }
   if t == 7 || t == 8 || t == 9 || t == 11 { return true; }
   return false;
 }
@@ -96,13 +96,13 @@ pub fn slot_eq(pa: [i64], a: [i64], ia: i64, pb: [i64], b: [i64], ib: i64) -> bo
   return crate::ent_u16::rd(a, ia + 1) == crate::ent_u16::rd(b, ib + 1) && crate::ent_u16::rd(a, ia + 2) == crate::ent_u16::rd(b, ib + 2);
 }
 
-// a well-formed host value slot over a pool of plen units: the tags the host emits, with their words in range
+// a well-formed host value slot over a packed pool: the tags the host emits, with their words in range
 // (tag 10, absent, only where the field may be missing)
-pub fn slot_ok(plen: i64, w: [i64], p: i64, absent: bool) -> bool
+pub fn slot_ok(pool: [i64], w: [i64], p: i64, absent: bool) -> bool
   requires 0 <= p && p <= 1000000000
 {
   let t: i64 = crate::ent_u16::rd(w, p);
-  if t == 6 { return crate::ent_value::pslot_ok(plen, w, p); }
+  if t == 6 { return crate::ent_value::pslot_ok(pool, w, p); }
   if p + 3 > len(w) { return false; }
   let a: i64 = crate::ent_u16::rd(w, p + 1);
   let b: i64 = crate::ent_u16::rd(w, p + 2);
@@ -115,7 +115,7 @@ pub fn slot_ok(plen: i64, w: [i64], p: i64, absent: bool) -> bool
 }
 
 // count well-formed slots from word `from`
-pub fn slots_ok(plen: i64, w: [i64], from: i64, count: i64, absent: bool) -> bool
+pub fn slots_ok(pool: [i64], w: [i64], from: i64, count: i64, absent: bool) -> bool
   requires 0 <= from && from <= 1000000000 && 0 <= count && count <= 100000000
 {
   if from + 3 * count > len(w) || from + 3 * count > 1000000000 { return false; }
@@ -124,7 +124,7 @@ pub fn slots_ok(plen: i64, w: [i64], from: i64, count: i64, absent: bool) -> boo
     invariant 0 <= k && k <= count && count <= 100000000 && from + 3 * count <= 1000000000
     decreases count - k
   {
-    if !slot_ok(plen, w, from + 3 * k, absent) { return false; }
+    if !slot_ok(pool, w, from + 3 * k, absent) { return false; }
     k = k + 1;
   }
   return true;

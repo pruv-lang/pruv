@@ -13,22 +13,10 @@ fn add_pair(inout ep: [i64], inout el: [i64], inout tp: [i64], k: i64, fill: i64
   }
 }
 
-// length of the key's engine part: the units before the first ':' (a key without ':' gives the whole key)
+// The ASCII colon is itself a valid byte boundary for the sub-slot.
 fn colon_at(w: [i64], p: i64, pool: i64) -> i64
-  ensures 0 <= result && result <= 16777216
 {
-  let n: i64 = crate::ent_value::str_len(w, p);
-  let s: i64 = crate::ent_value::str_start_at(w, p, pool);
-  let mut i: i64 = 0;
-  // MUTANT M14: the prefix ends before the LAST colon (scan the whole key and keep the last match)
-  while i < n
-    invariant 0 <= i && i <= n && n <= 16777216 && 0 <= s && s <= 67108864
-    decreases n - i
-  {
-    if crate::ent_u16::rd(w, s + i) == 58 { return i; }
-    i = i + 1;
-  }
-  return n;
+  return crate::ent_value::pstr_find_byte(w, p, pool, 58);
 }
 
 // om = packet::new_meta(w): its offset table gives section starts in O(1) (sessions are many, sections are many).
@@ -193,11 +181,15 @@ pub fn excluded_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! allo
 
 // ---- op 9 ----
 // units of the engine part of the key
-fn eng_len(w: [i64], e: i64, l: i64) -> i64
+fn eng_len(w: [i64], pool: i64, e: i64, l: i64) -> i64
   ensures -1 <= result && result <= 16777216
 {
   if e < 0 { return 5; }
-  if l >= 0 { return crate::ent_u16::clamp(l, 16777216); }
+  if l >= 0 {
+    let p: i64 = crate::ent_u16::clamp(e, 4294967296);
+    let off: i64 = crate::ent_value::pstr_off(w, p);
+    return crate::ent_u16::clamp(crate::ent_value::span_units(w, pool, off, l), 16777216);
+  }
   return crate::ent_value::key_len(w, e);
 }
 
@@ -222,6 +214,7 @@ pub fn index_collect(w: [i64], base: i64, ns: i64, inout progress: [i64]) -> [i6
   ensures len(result) >= 0
 {
   // Collect predicate IDs in session order, then use only the populated prefix.
+  let delta: i64 = crate::ent_value::logical_pool_words(w) - crate::ent_packet::sec_len(w, 0);
   let mut ids: [i64] = alloc(3 * ns, 0);
   let mut nt: i64 = 0;
   let mut i: i64 = 0;
@@ -232,7 +225,7 @@ pub fn index_collect(w: [i64], base: i64, ns: i64, inout progress: [i64]) -> [i6
     let p: i64 = base + 30 * i;
     if !temp_true(w, p) {
       put_id(inout ids, 3 * nt, w, p);
-      progress[nt + 1] = p;
+      progress[nt + 1] = p + delta;
       nt = nt + 1;
     }
     i = i + 1;
@@ -245,10 +238,13 @@ pub fn index_progress_ok(w: [i64], head: i64, lb: i64, base: i64, progress: [i64
   requires 0 <= head && head <= 16777216 && 0 <= lb && lb <= 16777216 && 0 < nt && nt <= 559240
 {
   let nsec: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, head + 6), 1000000);
-  let pool: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, head + 7), 16777216);
-  let rec: i64 = 7 + nsec + pool;
+  let pool: i64 = 7 + nsec;
+  let words: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, head + 7), 16777216);
+  let units: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, head + pool), 16777216);
+  let delta: i64 = units - words;
+  let rec: i64 = pool + units;
   if rec + 3 > lb || base < rec + 3 || base > lb { return false; }
-  let ns: i64 = crate::ent_u16::rd(w, head + rec + 2);
+  let ns: i64 = crate::ent_u16::rd(w, head + pool + words + 2);
   if ns < nt || ns > (lb - base) / 30 { return false; }
   let end: i64 = base + 30 * ns;
   let mut last: i64 = base - 1;
@@ -259,7 +255,7 @@ pub fn index_progress_ok(w: [i64], head: i64, lb: i64, base: i64, progress: [i64
   {
     let p: i64 = crate::ent_u16::rd(progress, a + 1);
     if p <= last || p < base || p >= end || (p - base) % 30 != 0 { return false; }
-    if temp_true(w, head + p) { return false; }
+    if temp_true(w, head + p - delta) { return false; }
     last = p;
     a = a + 1;
   }
@@ -292,7 +288,9 @@ pub fn index_complete(w: [i64], head: i64, id: i64, seq: i64, answer: [i64], pro
   let ns: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, head + 6), 1000000);
   let om: [i64] = crate::ent_packet::new_meta_at(w, head);
   let ps: i64 = crate::ent_packet::meta_start(om, ns, 0);
-  let pl: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, head + 7), 16777216);
+  let pl: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, ps), 16777216);
+  let nb: i64 = crate::ent_value::pool_bytes(w, ps);
+  let delta: i64 = pl - crate::ent_u16::clamp(crate::ent_u16::rd(w, head + 7), 16777216);
   // pass 1: count the candidate pairs of the sessions that are not excluded
   let mut ep: [i64] = crate::ent_u16::empty();
   let mut el: [i64] = crate::ent_u16::empty();
@@ -304,7 +302,7 @@ pub fn index_complete(w: [i64], head: i64, id: i64, seq: i64, answer: [i64], pro
     decreases nt - a
   {
     if !crate::ent_value::truthy(answer, rbase + 3 * a) {
-      let p: i64 = head + crate::ent_u16::clamp(crate::ent_u16::rd(progress, a + 1), 16777216);
+      let p: i64 = head + crate::ent_u16::clamp(crate::ent_u16::rd(progress, a + 1), 16777216) - delta;
       total = ses_pairs(w, om, ns, p, inout ep, inout el, inout tp, total, 0);
       if total > 16777216 { return crate::ent_packet::boundary(9, id, 1); }
     }
@@ -323,7 +321,7 @@ pub fn index_complete(w: [i64], head: i64, id: i64, seq: i64, answer: [i64], pro
     decreases nt - b
   {
     if !crate::ent_value::truthy(answer, rbase + 3 * b) {
-      let p: i64 = head + crate::ent_u16::clamp(crate::ent_u16::rd(progress, b + 1), 16777216);
+      let p: i64 = head + crate::ent_u16::clamp(crate::ent_u16::rd(progress, b + 1), 16777216) - delta;
       let from: i64 = t2;
       t2 = ses_pairs(w, om, ns, p, inout ep2, inout el2, inout tp2, t2, 1);
       let mut q: i64 = crate::ent_u16::clamp(from, n);
@@ -346,7 +344,7 @@ pub fn index_complete(w: [i64], head: i64, id: i64, seq: i64, answer: [i64], pro
     invariant 0 <= c && c <= n && n <= 2796202 && 0 <= sum && sum <= 16000000 && len(ko) == n && len(kl) == n && len(ep2) == n && len(el2) == n && len(tp2) == n
     decreases n - c
   {
-    let a1: i64 = eng_len(w, crate::ent_u16::rd(ep2, c), crate::ent_u16::rd(el2, c));
+    let a1: i64 = eng_len(w, ps, crate::ent_u16::rd(ep2, c), crate::ent_u16::rd(el2, c));
     let a2: i64 = crate::ent_value::key_len(w, crate::ent_u16::rd(tp2, c));
     if a1 < 0 || a2 < 0 { return crate::ent_packet::boundary(9, id, 0); }
     let ln: i64 = a1 + 1 + a2;
@@ -421,66 +419,69 @@ pub fn index_complete(w: [i64], head: i64, id: i64, seq: i64, answer: [i64], pro
     }
     f = f + 1;
   }
-  // Write the done record, a fresh pool (only the value strings the table keeps, then the key suffix) and the pair table
-  // in their final packet. Copying the whole input pool would double the text held at the peak (DB4).
-  // The size limit is the one of the full-pool layout, so the accepted inputs do not change. When the kept value strings
-  // would take more room than the input pool (ids shared by many keys), the done keeps the full pool and the original offsets.
+  // Keep the old expanded-word limit and compact/full choice for the value pool.
   if 16 + pl + sum + 6 * m > 16777216 { return crate::ent_packet::boundary(9, id, 1); }
   let mut vsum: i64 = 0;
+  let mut bytes: i64 = 0;
   let mut full: bool = false;
   let mut h0: i64 = 0;
   while h0 < m && !full
-    invariant 0 <= h0 && h0 <= m && m <= n && n <= 2796202 && 0 <= vsum && vsum <= pl && len(val) == n && 0 <= pl && pl <= 16777216
+    invariant 0 <= h0 && h0 <= m && m <= n && n <= 2796202 && 0 <= vsum && vsum <= pl && len(val) == n && 0 <= pl && pl <= 16777216 && 0 <= bytes && bytes <= 4 * vsum
     decreases m - h0
   {
     let vp: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(val, h0), 4294967296);
     if crate::ent_u16::rd(w, vp) == 6 {
       let va: i64 = crate::ent_value::pstr_off(w, vp);
       let vb: i64 = crate::ent_value::pstr_raw_len(w, vp);
-      if va < 0 || vb < 0 || va > pl || vb > pl - va { return crate::ent_packet::boundary(9, id, 0); }
-      if vb > pl - vsum { full = true; } else { vsum = vsum + vb; }
+      if !crate::ent_value::span_ok(w, ps, va, vb) { return crate::ent_packet::boundary(9, id, 0); }
+      let vu: i64 = crate::ent_value::span_units(w, ps, va, vb);
+      if vu > pl - vsum { full = true; }
+      else {
+        bytes = bytes + 4 * vu;
+        vsum = vsum + vu;
+      }
     }
     h0 = h0 + 1;
   }
-  if full { vsum = pl; }
-  let lp: i64 = vsum + sum;
-  let tb: i64 = 16 + lp;
-  let size: i64 = tb + 6 * m;
-  if ps + pl > len(w) { return crate::ent_packet::boundary(9, id, 0); }
-  let mut out: [i64] = alloc(size, 0);
-  out[0] = 1;
-  out[1] = 3;
-  out[2] = id;
-  out[3] = seq;
-  out[4] = size - 5;
-  out[5] = 9;
-  out[6] = 5;
-  out[7] = lp;
-  out[8] = 4;
-  out[11] = 6 * m;
-  crate::ent_value::pool_copy_range(inout out, 12 + vsum, keys, 0, 0, sum);
-  if full { let z0: i64 = crate::ent_value::pool_copy_prefix(inout out, 12, w, ps, pl); }
-  crate::ent_packet::put_vs(inout out, 13 + lp, 7, 4, m);
-  let mut vc: i64 = 0;
+
+  let mut values: [i64] = crate::ent_u16::empty();
+  if full { values = crate::ent_value::pool_head(w, ps, nb, pl); }
+  else { values = alloc(crate::ent_value::pool_capacity(crate::ent_u16::clamp(bytes, 67108864)), 0); }
+  let mut key_pool: [i64] = alloc(crate::ent_value::pool_capacity(3 * sum + m), 0);
+  let mut tab: [i64] = alloc(6 * m, 0);
   let mut h: i64 = 0;
   while h < m
-    invariant 0 <= h && h <= m && m <= n && n <= 2796202 && len(out) == tb + 6 * m && 16 <= tb && tb <= 16777216 && len(keep) == n && len(val) == n && len(ko) == n && len(kl) == n && 0 <= pl && pl <= 16777216 && 0 <= vc && vc <= 16777216 && 0 <= vsum && vsum <= 16777216
+    invariant 0 <= h && h <= m && m <= n && n <= 2796202 && len(keep) == n && len(val) == n && len(ko) == n && len(kl) == n && len(tab) == 6 * m
     decreases m - h
   {
     let e3: i64 = crate::ent_u16::rd(keep, h);
-    let at: i64 = tb + 6 * h;
-    crate::ent_packet::put_vs(inout out, at, 6, vsum + crate::ent_u16::clamp(crate::ent_u16::rd(ko, e3), 16000000), crate::ent_u16::rd(kl, e3));
+    let start: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(ko, e3), 16000000);
+    let nk: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(kl, e3), 16000000);
+    if start + nk > len(keys) { return crate::ent_packet::boundary(9, id, 0); }
+    let key: [i64] = crate::ent_value::encode_pool(subview(keys, start, start + nk));
+    let at: i64 = crate::ent_value::append_span(inout key_pool, 0, key, 0, 0, crate::ent_value::pool_bytes(key, 0), nk);
+    crate::ent_packet::put_vs(inout tab, 6 * h, 6, at, crate::ent_value::pool_bytes(key, 0));
+
     let vp: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(val, h), 4294967296);
     if !full && crate::ent_u16::rd(w, vp) == 6 {
-      // the first pass checked the span; the copy stays total either way
-      let vb: i64 = crate::ent_value::str_len(w, vp);
-      let z: i64 = crate::ent_value::pool_copy_into(w, ps, vp, vb, inout out, 12 + vc);
-      crate::ent_packet::put_vs(inout out, at + 3, 6, vc, vb);
-      vc = crate::ent_u16::clamp(vc + vb, 16777216);
+      crate::ent_value::append_slot(inout values, 0, w, ps, w, vp, inout tab, 6 * h + 3);
     } else {
-      let z: i64 = crate::ent_u16::put_range(inout out, at + 3, w, vp, 3);
+      let z: i64 = crate::ent_u16::put_range(inout tab, 6 * h + 3, w, vp, 3);
     }
     h = h + 1;
   }
-  return out;
+  let base: i64 = crate::ent_value::pool_base(values, key_pool);
+  let mut j: i64 = 0;
+  while j < m
+    invariant 0 <= j && j <= m && m <= 2796202 && len(tab) == 6 * m && 0 <= base && base <= 1073741824
+    decreases m - j
+  {
+    let off: i64 = crate::ent_u16::clamp(crate::ent_value::pstr_off(tab, 6 * j), 1073741823);
+    crate::ent_value::pstr_set_off(inout tab, 6 * j, off + base);
+    j = j + 1;
+  }
+  let mut rec: [i64] = alloc(4, 0);
+  crate::ent_packet::put_vs(inout rec, 1, 7, 4, m);
+  let empty: [i64] = crate::ent_u16::empty();
+  return crate::ent_packet::mk_packet(3, id, seq, 9, crate::ent_value::pool_cat(values, key_pool), rec, empty, empty, tab, 1);
 }

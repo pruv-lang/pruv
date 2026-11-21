@@ -6,7 +6,7 @@
 //
 //   FORGE_DUMP    path   append one JSON line per begin/step call: {"n","kind","world","prev","comp","out"} (n = 0 for begin
 //                        calls, otherwise the 1-based step number). Used by forge_test.py to capture real await packets.
-//   FORGE_TAMPER  JSON   {"at":N,"world":[..]?,"prev":[..]?,"comp":[..]?}  replace the named arguments of the N-th step call
+//   FORGE_TAMPER  JSON   {"at":N,"world":[..]?,"prev":[..]?,"comp":[..]?,"comp5_fill":m?}  replace the named arguments of the N-th step call
 //                        (global, 1-based). The mutation itself is computed by forge_test.py from a dumped honest run.
 // The harness also prints, at exit of each step, nothing to stdout (stdout belongs to req_host::run).
 use std::cell::Cell;
@@ -17,6 +17,56 @@ struct G { n: Cell<usize>, tamper: Option<Value>, dump: Option<String> }
 
 fn words(v: &Value) -> Vec<i64> {
     v.as_array().unwrap().iter().map(|x| x.as_i64().unwrap()).collect()
+}
+
+const LIMIT: i64 = 16777216;
+
+// req packet: 32 header words, w[24] sections, their lengths from word 32, w[25] total. Section 0 is the pool [nu, nb, W..].
+fn req_secs(w: &[i64]) -> Vec<Vec<i64>> {
+    let ns = w[24] as usize;
+    let mut at = 32 + ns;
+    (0..ns).map(|i| { let l = w[32 + i] as usize; let s = w[at..at + l].to_vec(); at += l; s }).collect()
+}
+
+// entry packet: [1, kind, op_id, seq, len, op, nsec, lens.., sections]
+fn ent_secs(w: &[i64]) -> Vec<Vec<i64>> {
+    let ns = w[6] as usize;
+    let mut at = 7 + ns;
+    (0..ns).map(|i| { let l = w[7 + i] as usize; let s = w[at..at + l].to_vec(); at += l; s }).collect()
+}
+
+// Pad the pool of the child completion in section 5 with ASCII bytes, unreferenced by any slot. mode 0: the child's
+// logical size (len - l0 + nu) is exactly the limit, so the parent is over it. mode 1: the parent's logical size is
+// exactly the limit (C2 recheck: section 5 counts by the child's logical size, not its packed length).
+fn comp5_fill(c: &[i64], mode: i64) -> Vec<i64> {
+    let mut ps = req_secs(c);
+    let child = ps[5].clone();
+    let mut cs = ent_secs(&child);
+    let pool = &cs[0];
+    let (nu, nb) = (pool[0], pool[1] as usize);
+    let child_logical = child.len() as i64 - pool.len() as i64 + nu;
+    let parent_other = c.len() as i64 - child.len() as i64 - ps[0].len() as i64 + ps[0][0];
+    let want = if mode == 0 { LIMIT } else { LIMIT - parent_other };
+    let k = (want - child_logical) as usize;
+    let mut bytes: Vec<u8> = (0..nb).map(|j| ((pool[2 + j / 7] >> (8 * (6 - j % 7))) & 255) as u8).collect();
+    bytes.resize(nb + k, b'a');
+    let mut o = vec![nu + k as i64, bytes.len() as i64];
+    for chunk in bytes.chunks(7) {
+        let mut word = 0i64;
+        for (i, b) in chunk.iter().enumerate() { word |= (*b as i64) << (8 * (6 - i)); }
+        o.push(word);
+    }
+    cs[0] = o;
+    let mut nc: Vec<i64> = vec![child[0], child[1], child[2], child[3], 0, child[5], cs.len() as i64];
+    for s in &cs { nc.push(s.len() as i64); }
+    for s in &cs { nc.extend_from_slice(s); }
+    nc[4] = (nc.len() - 5) as i64;
+    ps[5] = nc;
+    let mut out: Vec<i64> = c[..32].to_vec();
+    for s in &ps { out.push(s.len() as i64); }
+    for s in &ps { out.extend_from_slice(s); }
+    out[25] = out.len() as i64;
+    out
 }
 
 impl G {
@@ -44,6 +94,7 @@ impl req_host::Req for G {
                 if let Some(v) = t.get("world") { w = words(v); }
                 if let Some(v) = t.get("prev") { p = words(v); }
                 if let Some(v) = t.get("comp") { c = words(v); }
+                if let Some(v) = t.get("comp5_fill") { c = comp5_fill(&c, v.as_i64().unwrap()); }
             }
         }
         let out = sol::req_step(&w, &p, &c);

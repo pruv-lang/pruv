@@ -86,6 +86,33 @@ def deep_stats(n, rel=False):
 
 def main():
     fails = 0
+    # The synthetic separator takes one byte but no logical UTF-16 unit.
+    for name, session, units in [
+        ('C3 separated surrogates', {'id': {'u16': [0xD800]}, 'temporary': {'u16': [0xDC00]}}, 2),
+        ('C3 literal NUL', {'id': {'u16': [0xD800, 0, 0xDC00]}}, 3),
+    ]:
+        case = {"op": "bound_session_index", "args": {"sessions": [session]}}
+        out, err = run(case, stats=True)
+        table = 10 + units + 3
+        want = f'index state {table} {units} {table + 30} progress {table}'
+        actual = next((line for line in err.splitlines() if line.startswith('index state ')), '')
+        ok = out.get('terminal') == 'ok' and actual == want
+        fails += not ok
+        print('%-4s %s -> %s' % ('ok' if ok else 'FAIL', name, actual))
+    # C3 recheck: a literal [D800, 0000, DC00] ID next to an unreferenced high-separator-low tail in the pool. The repack
+    # drops the tail and must keep the same unit count as the input without it; the separator byte is 0xFF (FORGE_SEP)
+    sep = int(os.environ.get('FORGE_SEP', '255'))
+    lit = {'u16': [0xD800, 0, 0xDC00]}
+    for name, session in [('ID only', {'id': lit}),
+                          ('ID with a thread', {'id': lit, 'temporary': False, 'externalThread': {'engine': 'claude', 'thread': 'a'}})]:
+        case = {"op": "bound_session_index", "args": {"sessions": [session]}}
+        base, berr = run(case, stats=True)
+        out, err = run(case, dict(T(999), index_tail=sep), stats=True)
+        # table and unit counts and progress; the third number is the raw input size, which the tail makes larger
+        line = lambda e: next((' '.join(l.split()[:4] + l.split()[5:]) for l in e.splitlines() if l.startswith('index state ')), '')
+        ok = out.get('terminal') == 'ok' and out.get('value') == base.get('value') and line(err) == line(berr) != ''
+        fails += not ok
+        print('%-4s C3 literal NUL %s, separated tail in the pool -> %s %s' % ('ok' if ok else 'FAIL', name, out.get('terminal'), line(err)))
     control, _ = run(C9)
     out, _ = run(C9, dict(T(1), index_swap=True))
     ok = (control.get('terminal'), control.get('value'), out.get('terminal'),

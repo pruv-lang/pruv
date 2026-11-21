@@ -49,19 +49,21 @@ MUTANTS = {
     'M07': [('ent_canon.pruv', "  if crate::ent_u16::eq(target, dot) { return flag(cx, 1); }\n", "")],
     'M08': [('ent_dispatch.pruv', "      if found < 0 { found = i; }", "      found = i;")],
     'M09': [('ent_dispatch.pruv', "  return 4;\n", "  return 1;\n")],
-    'M10': [('ent_dispatch.pruv', "  let cut: i64 = 200;\n", ""),
-            ('ent_dispatch.pruv', "      crate::ent_u16::wr(inout tab, tb, 1);\n",
-             "      crate::ent_u16::wr(inout tab, tb, 1);\n"
-             "      let u199: i64 = crate::ent_u16::rd(cx.ent, crate::ent_value::str_start(cx.ent, rb + 3) + 199);\n"
-             "      let mut cut: i64 = 200;\n"
-             "      if u199 >= 55296 && u199 <= 56319 { cut = 199; }\n")],
+    'M10': [('ent_dispatch.pruv',
+             '      crate::ent_value::put_title_prefix(inout pool, inout tab, tb + 4, cx.ent, rb + 3, clip, cut, reuse);',
+             '      let u199: i64 = crate::ent_u16::rd(crate::ent_value::str_units(cx.ent, rb + 3), 199);\n'
+             '      let mut limit: i64 = cut;\n'
+             '      if u199 >= 55296 && u199 <= 56319 { limit = 199; }\n'
+             '      let adjusted: i64 = crate::ent_value::title_cut(cx.ent, ps, rb + 3, limit);\n'
+             '      crate::ent_value::put_title_prefix(inout pool, inout tab, tb + 4, cx.ent, rb + 3, adjusted, limit, reuse);')],
     'M11': [('ent_dispatch.pruv', '"AbortError");\n  let e: [i64]', '"AbortError") && is_err;\n  let e: [i64]')],
     'M12': [('ent_dispatch.pruv', "  let has_detail: bool = is_err;", "  let has_detail: bool = true;")],
     'M13': [('ent_bound.pruv', "    if crate::ent_value::nullish(w, p + 6) {", "    if !crate::ent_value::truthy(w, p + 6) {")],
-    'M14': [('ent_bound.pruv', "  let mut i: i64 = 0;\n  // MUTANT M14", "  let mut i: i64 = 0;\n  let mut last: i64 = n;\n  // MUTANT M14"),
-            ('ent_bound.pruv', "    invariant 0 <= i && i <= n && n <= 16777216 && 0 <= s && s <= 67108864\n    decreases n - i\n  {\n    if crate::ent_u16::rd(w, s + i) == 58 { return i; }",
-             "    invariant 0 <= i && i <= n && n <= 16777216 && 0 <= s && s <= 67108864 && 0 <= last && last <= n\n    decreases n - i\n  {\n    if crate::ent_u16::rd(w, s + i) == 58 { last = i; }"),
-            ('ent_bound.pruv', "  return n;\n}\n\n// om = packet::new_meta(w)", "  return last;\n}\n\n// om = packet::new_meta(w)")],
+    'M14': [('ent_value.pruv', "  let mut i: i64 = 0;\n  // MUTANT M14",
+             "  let mut i: i64 = 0;\n  let mut last: i64 = n;\n  // MUTANT M14"),
+            ('ent_value.pruv', "    invariant 0 <= i && i <= n && n <= 1073741823 && 0 <= off && off <= 1073741823\n    decreases n - i\n  {\n    if pool_byte(w, pool, off + i) == byte { return i; }",
+             "    invariant 0 <= i && i <= n && n <= 1073741823 && 0 <= off && off <= 1073741823 && 0 <= last && last <= n\n    decreases n - i\n  {\n    if pool_byte(w, pool, off + i) == byte { last = i; }"),
+            ('ent_value.pruv', "  return n;\n}\n\npub fn pool_eq", "  return last;\n}\n\npub fn pool_eq")],
     'M15': [('ent_bound.pruv', "  return crate::ent_value::tag_at(w, crate::ent_u16::clamp(p, 4294967296) + 3) == 3;",
              "  return crate::ent_value::truthy(w, crate::ent_u16::clamp(p, 4294967296) + 3);")],
     'M16': [('ent_bound.pruv', "      // MUTANT M16: a later write overwrites the stored session (last write wins)\n",

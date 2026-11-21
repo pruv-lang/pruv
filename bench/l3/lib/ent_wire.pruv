@@ -1,40 +1,14 @@
-// L3 DB8: the entry string pool on the wire (docs/L3_DB8.md "Wire pool").
-// Inside Pruv a packet's section 0 is the UTF-16 unit pool (one word per unit, ent_u16). On the wire, section 0 is
-//   [nu, W_1 .. W_m]
-// nu = number of units; the units' WTF-8 bytes (a surrogate pair is one 4-byte form, a lone surrogate its 3-byte form)
-// are packed 7 per word, big-endian inside the word (byte 7i+j is digit 6-j of W_{i+1}), missing bytes 0,
-// m = ceil(bytes / 7). String slots keep unit offsets and lengths, so they do not change.
-// wire_in is the strict decoder of untrusted host bytes: overlong forms, values past U+10FFFF, truncation, stray
-// continuation bytes, a pair split into two 3-byte forms, a unit count that does not match, too few words and a nonzero
-// byte after the data are all rejected. Whole zero words after the data are allowed (the host pads section 0 with them
-// for its exact-limit probe, as it padded unreferenced units before DB8); wire_out never writes them. A rejected pool becomes the one-unit pool [-1], which the packet
-// checks (ent_packet::env_check) reject exactly like an out-of-range unit before DB8. A packet whose section table is
-// malformed is passed on unchanged, so the same checks reject it as before.
-
-// 256^d for d clamped into 0..6
-fn pw(d: i64) -> i64
-  ensures 1 <= result && result <= 281474976710656
-{
-  if d <= 0 { return 1; }
-  if d == 1 { return 256; }
-  if d == 2 { return 65536; }
-  if d == 3 { return 16777216; }
-  if d == 4 { return 4294967296; }
-  if d == 5 { return 1099511627776; }
-  return 281474976710656;
-}
-
-// byte k of the packed pool whose count word is at w[p]; -1 when k is past nb bytes or its word is outside 0..2^56-1
+// Section 0 is [nu, nb, W_1..W_m] on both sides of the entry boundary.
+// Validate WTF-8 in place, including zero byte padding and optional trailing zero words.
+// Return -1 past the stream or for a word outside the seven-byte range.
 fn byte_at(w: [i64], p: i64, k: i64, nb: i64) -> i64
   requires 0 <= p && p <= 33554432 && 0 <= k && k <= 4294967296
   ensures -1 <= result && result <= 255
 {
   if k >= nb { return -1; }
-  let x: i64 = crate::ent_u16::rd(w, p + 1 + k / 7);
+  let x: i64 = crate::ent_u16::rd(w, p + 2 + k / 7);
   if x < 0 || x > 72057594037927935 { return -1; }
-  let r: i64 = (x / pw(6 - k % 7)) % 256;
-  if r < 0 || r > 255 { return -1; }
-  return r;
+  return crate::ent_value::pool_byte(w, p, k);
 }
 
 fn cont(b: i64) -> bool
@@ -85,7 +59,7 @@ fn with_pool_len(w: [i64], l: i64) -> [i64] ! alloc
 }
 
 // the packet with the rejected pool [-1]
-fn poison(w: [i64]) -> [i64] ! alloc
+pub fn poison(w: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0
 {
   let mut o: [i64] = with_pool_len(w, 1);
@@ -95,156 +69,132 @@ fn poison(w: [i64]) -> [i64] ! alloc
   return o;
 }
 
-// wire packet -> packet with the unit pool (strict decoder, see the head comment)
-pub fn wire_in(w: [i64]) -> [i64] ! alloc
-  ensures len(result) >= 0
+// Malformed outer envelopes go to the packet layer for the existing error classification.
+pub fn wire_in(w: [i64]) -> bool
 {
-  if !shape_ok(w) { return copy(w); }
+  if !shape_ok(w) { return true; }
   let n: i64 = len(w);
-  if n < 8 || n > 16777216 { return copy(w); }
-  if w[4] != n - 5 { return copy(w); }
+  if n < 8 || n > 16777216 || w[4] != n - 5 { return true; }
   let ns: i64 = w[6];
-  if ns < 2 || ns > n - 7 { return copy(w); }
-  let p0: i64 = 7 + ns;
-  let l0: i64 = w[7];
-  if l0 < 0 || l0 > n - p0 { return copy(w); }
-  if l0 < 1 || l0 > 16777216 || p0 > 16777216 { return poison(w); }
+  if ns < 2 || ns > n - 7 { return true; }
+  return pool_ok(w, 7 + ns, w[7]);
+}
+
+pub fn pool_ok(w: [i64], p0: i64, l0: i64) -> bool
+{
+  if p0 < 0 || p0 > 33554432 || l0 < 2 || l0 > 16777216 || l0 > len(w) - p0 { return false; }
   let nu: i64 = crate::ent_u16::rd(w, p0);
-  if nu < 0 || nu > 16777216 { return poison(w); }
-  let nb: i64 = 7 * (l0 - 1);
-  if nu > nb { return poison(w); }   // every unit takes at least one byte
-  let mut o: [i64] = with_pool_len(w, nu);
+  let nb: i64 = crate::ent_u16::rd(w, p0 + 1);
+  let cap: i64 = 7 * (l0 - 2);
+  if nu < 0 || nu > 16777216 || nb < nu || nb > cap || nb > 3 * nu + nu / 2 { return false; }
+  // Equal counts imply an ASCII-only stream. Check all seven high bits in each word.
+  if nb == nu { return ascii_pool_ok(w, p0, l0, nb); }
   let mut u: i64 = 0;
   let mut k: i64 = 0;
   let mut hi3: bool = false;
-  while u < nu
-    invariant 0 <= u && u <= nu && nu <= 16777216 && 0 <= k && k <= 3 * u && 0 <= p0 && p0 <= 16777216
-    decreases nu - u
+  while k < nb
+    invariant 0 <= nb && nb <= 58720256 && 0 <= k && k <= nb + 3 && 0 <= u && u <= k && 0 <= p0 && p0 <= 33554432
+    decreases nb - k
   {
     let b0: i64 = byte_at(w, p0, k, nb);
-    if b0 < 0 { return poison(w); }
+    if b0 < 0 { return false; }
     if b0 < 128 {
-      crate::ent_u16::wr(inout o, p0 + u, b0);
       k = k + 1; u = u + 1; hi3 = false;
+    } else if b0 == 255 {
+      // The separator byte: only between a lone high and a lone low, and it counts no unit.
+      if !hi3 || !crate::ent_value::starts_low(w, p0, k + 1, nb - k - 1) { return false; }
+      k = k + 1; hi3 = false;
     } else if b0 < 194 {
-      return poison(w);
+      return false;
     } else if b0 < 224 {
       let b1: i64 = byte_at(w, p0, k + 1, nb);
-      if !cont(b1) { return poison(w); }
-      crate::ent_u16::wr(inout o, p0 + u, (b0 - 192) * 64 + (b1 - 128));
+      if !cont(b1) { return false; }
       k = k + 2; u = u + 1; hi3 = false;
     } else if b0 < 240 {
       let b1: i64 = byte_at(w, p0, k + 1, nb);
       let b2: i64 = byte_at(w, p0, k + 2, nb);
-      if !cont(b1) || !cont(b2) { return poison(w); }
-      if b0 == 224 && b1 < 160 { return poison(w); }
+      if !cont(b1) || !cont(b2) { return false; }
+      if b0 == 224 && b1 < 160 { return false; }
       let v: i64 = (b0 - 224) * 4096 + (b1 - 128) * 64 + (b2 - 128);
-      if hi3 && v >= 56320 && v <= 57343 { return poison(w); }
-      crate::ent_u16::wr(inout o, p0 + u, v);
+      if hi3 && v >= 56320 && v <= 57343 { return false; }
       hi3 = v >= 55296 && v <= 56319;
       k = k + 3; u = u + 1;
     } else if b0 < 245 {
-      if u + 2 > nu { return poison(w); }
       let b1: i64 = byte_at(w, p0, k + 1, nb);
       let b2: i64 = byte_at(w, p0, k + 2, nb);
       let b3: i64 = byte_at(w, p0, k + 3, nb);
-      if !cont(b1) || !cont(b2) || !cont(b3) { return poison(w); }
-      if b0 == 240 && b1 < 144 { return poison(w); }
-      if b0 == 244 && b1 > 143 { return poison(w); }
-      let s: i64 = (b0 - 240) * 262144 + (b1 - 128) * 4096 + (b2 - 128) * 64 + (b3 - 128) - 65536;
-      crate::ent_u16::wr(inout o, p0 + u, 55296 + s / 1024);
-      crate::ent_u16::wr(inout o, p0 + u + 1, 56320 + s % 1024);
+      if !cont(b1) || !cont(b2) || !cont(b3) { return false; }
+      if b0 == 240 && b1 < 144 { return false; }
+      if b0 == 244 && b1 > 143 { return false; }
       k = k + 4; u = u + 2; hi3 = false;
     } else {
-      return poison(w);
+      return false;
     }
   }
-  // every byte after the k data bytes is zero: the ceil(k / 7)-th word's tail and any whole zero words after it
-  // (the host's exact-limit probe pads section 0 with zero words, as it padded unreferenced units before)
-  if (k + 6) / 7 > l0 - 1 { return poison(w); }
-  let mut j: i64 = k;
-  while j < nb
-    invariant 0 <= j && j <= 4294967296 && nb <= 117440512 && 0 <= p0 && p0 <= 16777216
-    decreases nb - j
+  if k != nb || u != nu { return false; }
+  return padding_ok(w, p0, l0, nb);
+}
+
+fn ascii_pool_ok(w: [i64], p0: i64, l0: i64, nb: i64) -> bool
+  requires 0 <= p0 && p0 <= 33554432 && 0 <= nb && nb <= 58720256 && 2 <= l0 && l0 <= 16777216 && nb <= 7 * (l0 - 2)
+{
+  let used: i64 = (nb + 6) / 7;
+  let mut i: i64 = 0;
+  while i < used
+    invariant 0 <= i && i <= used && used <= 16777216 && 0 <= p0 && p0 <= 33554432
+    decreases used - i
   {
-    if byte_at(w, p0, j, nb) != 0 { return poison(w); }
+    let word: i64 = crate::ent_u16::rd(w, p0 + 2 + i);
+    // 0x80808080808080: the same high-bit mask in every packed byte.
+    if word < 0 || word > 72057594037927935 || (word & 36170086419038336) != 0 { return false; }
+    i = i + 1;
+  }
+  return padding_ok(w, p0, l0, nb);
+}
+
+fn padding_ok(w: [i64], p0: i64, l0: i64, nb: i64) -> bool
+  requires 0 <= p0 && p0 <= 33554432 && 0 <= nb && nb <= 58720256 && 2 <= l0 && l0 <= 16777216 && nb <= 7 * (l0 - 2)
+{
+  let used: i64 = (nb + 6) / 7;
+  let end: i64 = used * 7;
+  let mut k: i64 = nb;
+  while k < end
+    invariant 0 <= k && k <= end && end <= 58720262 && 0 <= p0 && p0 <= 33554432
+    decreases end - k
+  {
+    if byte_at(w, p0, k, end) != 0 { return false; }
+    k = k + 1;
+  }
+  let mut j: i64 = 2 + used;
+  while j < l0
+    invariant 2 <= j && j <= l0 && l0 <= 16777216 && 0 <= p0 && p0 <= 33554432
+    decreases l0 - j
+  {
+    if crate::ent_u16::rd(w, p0 + j) != 0 { return false; }
     j = j + 1;
   }
-  return o;
+  return true;
 }
 
-fn sur_hi(c: i64) -> bool { return c >= 55296 && c <= 56319; }
-fn sur_lo(c: i64) -> bool { return c >= 56320 && c <= 57343; }
-
-// add byte b of stream position k into the word at q0 + k / 7 (big-endian, digit 6 - k % 7); the word starts at 0
-fn emit(inout o: [i64], q0: i64, k: i64, b: i64) -> ()
-  requires 0 <= q0 && q0 <= 33554432 && 0 <= k && k <= 4294967296
+// Ignore the optional all-zero words accepted by wire_in when comparing awaits.
+pub fn same_packet(a: [i64], b: [i64]) -> bool
 {
-  let at: i64 = q0 + k / 7;
-  let x: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(o, at), 72057594037927935);
-  crate::ent_u16::wr(inout o, at, x + crate::ent_u16::clamp(b, 255) * pw(6 - k % 7));
-}
-
-// packet with the unit pool -> wire packet (the canonical encoding wire_in accepts). Pruv builds every pool from units
-// in 0..65535; a pool with another value, or a malformed section table, is passed on unchanged.
-pub fn wire_out(w: [i64]) -> [i64] ! alloc
-  ensures len(result) >= 0
-{
-  if !shape_ok(w) { return copy(w); }
-  let n: i64 = len(w);
-  if n < 8 || n > 16777216 { return copy(w); }
-  let ns: i64 = w[6];
-  if ns < 2 || ns > n - 7 { return copy(w); }
-  let p0: i64 = 7 + ns;
-  let l0: i64 = w[7];
-  if l0 < 0 || l0 > n - p0 { return copy(w); }
-  if l0 > 16777216 || p0 > 16777216 { return copy(w); }
-  let mut nb: i64 = 0;
-  let mut i: i64 = 0;
-  while i < l0
-    invariant 0 <= i && i <= l0 + 1 && l0 <= 16777216 && 0 <= nb && nb <= 3 * i && 0 <= p0 && p0 <= 16777216
-    decreases l0 - i
-  {
-    let c: i64 = crate::ent_u16::rd(w, p0 + i);
-    if c < 0 || c > 65535 { return copy(w); }
-    if c < 128 { nb = nb + 1; i = i + 1; }
-    else if c < 2048 { nb = nb + 2; i = i + 1; }
-    else if sur_hi(c) && i + 1 < l0 && sur_lo(crate::ent_u16::rd(w, p0 + i + 1)) { nb = nb + 4; i = i + 2; }
-    else { nb = nb + 3; i = i + 1; }
-  }
-  // pass 2 adds each byte straight into its word of the zeroed pool (no byte array)
-  let nw: i64 = (nb + 6) / 7;
-  let mut o: [i64] = with_pool_len(w, 1 + nw);
-  crate::ent_u16::wr(inout o, p0, l0);
-  let q0: i64 = p0 + 1;
-  let mut k: i64 = 0;
-  i = 0;
-  while i < l0
-    invariant 0 <= i && i <= l0 + 1 && l0 <= 16777216 && 0 <= k && k <= 3 * i && 0 <= p0 && p0 <= 16777216 && q0 == p0 + 1
-    decreases l0 - i
-  {
-    let c: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p0 + i), 65535);
-    if c < 128 {
-      emit(inout o, q0, k, c);
-      k = k + 1; i = i + 1;
-    } else if c < 2048 {
-      emit(inout o, q0, k, 192 + c / 64);
-      emit(inout o, q0, k + 1, 128 + c % 64);
-      k = k + 2; i = i + 1;
-    } else if sur_hi(c) && i + 1 < l0 && sur_lo(crate::ent_u16::rd(w, p0 + i + 1)) {
-      let d: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p0 + i + 1), 65535);
-      let s: i64 = 65536 + crate::ent_u16::clamp(c - 55296, 1023) * 1024 + crate::ent_u16::clamp(d - 56320, 1023);
-      emit(inout o, q0, k, 240 + s / 262144);
-      emit(inout o, q0, k + 1, 128 + (s / 4096) % 64);
-      emit(inout o, q0, k + 2, 128 + (s / 64) % 64);
-      emit(inout o, q0, k + 3, 128 + s % 64);
-      k = k + 4; i = i + 2;
-    } else {
-      emit(inout o, q0, k, 224 + c / 4096);
-      emit(inout o, q0, k + 1, 128 + (c / 64) % 64);
-      emit(inout o, q0, k + 2, 128 + c % 64);
-      k = k + 3; i = i + 1;
-    }
-  }
-  return o;
+  let na: i64 = len(a);
+  let nb: i64 = len(b);
+  if na == nb && eq_range(a, 0, b, 0, na) { return wire_in(b); }
+  if !shape_ok(a) || !shape_ok(b) { return false; }
+  if na < 9 || nb < 9 || a[4] != na - 5 || b[4] != nb - 5 { return false; }
+  let sa: i64 = a[6];
+  let sb: i64 = b[6];
+  if sa < 2 || sa > na - 7 || sb != sa || sb > nb - 7 { return false; }
+  let p: i64 = 7 + sa;
+  let la: i64 = a[7];
+  let lb: i64 = b[7];
+  if la < 2 || la > na - p || lb < 2 || lb > nb - p { return false; }
+  if na - la != nb - lb || !pool_ok(a, p, la) || !pool_ok(b, p, lb) { return false; }
+  if !eq_range(a, 0, b, 0, 4) || !eq_range(a, 5, b, 5, 2) || !eq_range(a, 8, b, 8, sa - 1) { return false; }
+  let bytes: i64 = crate::ent_value::pool_bytes(a, p);
+  let words: i64 = crate::ent_value::pool_capacity(bytes);
+  if words > la || words > lb || !eq_range(a, p, b, p, words) { return false; }
+  return eq_range(a, p + la, b, p + lb, na - p - la);
 }

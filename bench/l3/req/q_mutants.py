@@ -100,11 +100,10 @@ MUTANTS = {
              f'        crate::req_value::copy_slot(inout cr3, 1, w3, 21);\n'
              '        return open_done(world, h, false, seq, crate::ent_value::pool_cat(p, cpool), cr3, true);\n')],
     # a trailing high surrogate is dropped from the 80-unit title cut
-    'M15': [('req_fill.pruv',
-             '  let t: [i64] = crate::ent_u16::slice(crate::ent_u16::trim(collapse(raw)), 0, 80);\n',
-             '  let t0: [i64] = crate::ent_u16::slice(crate::ent_u16::trim(collapse(raw)), 0, 80);\n'
-             '  let mut t: [i64] = copy(t0);\n'
-             '  if len(t0) == 80 && crate::ent_u16::rd(t0, 79) >= 55296 && crate::ent_u16::rd(t0, 79) <= 56319 { t = crate::ent_u16::slice(t0, 0, 79); }\n')],
+    'M15': [('req_fill.pruv', '    let cut: i64 = 80;\n',
+             '    let mut cut: i64 = 80;\n'
+             '    let u79: i64 = crate::ent_u16::rd(t, 79);\n'
+             '    if u79 >= 55296 && u79 <= 56319 { cut = 79; }\n')],
     # the thread slot name ignores the account
     'M16': [('req_fill.pruv', '  if len(acc) > 0 { return crate::ent_u16::cat(', '  if false && len(acc) > 0 { return crate::ent_u16::cat(')],
 }
