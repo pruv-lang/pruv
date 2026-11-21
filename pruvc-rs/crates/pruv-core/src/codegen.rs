@@ -2983,6 +2983,7 @@ impl<'a> Gen<'a> {
                     hi: q0.hi.clone(),
                     body: Box::new(body),
                     ty: None,
+                    triggers: Vec::new(),
                 };
                 &owned
             }

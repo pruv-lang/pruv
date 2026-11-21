@@ -105,7 +105,15 @@ pub fn show(e: &Expr) -> Option<String> {
             Some(a) => Some(format!("{}({})", x.name, show(a)?)),
         },
         Expr::Quant(x) => {
-            let rng = format!("{} in {}..{}: {}", x.var, show(&x.lo)?, show(&x.hi)?, show(&x.body)?);
+            let mut trig = String::new();
+            if !x.triggers.is_empty() {
+                let mut parts: Vec<String> = Vec::new();
+                for t in &x.triggers {
+                    parts.push(show(t)?);
+                }
+                trig = format!(" trigger {}", parts.join(", "));
+            }
+            let rng = format!("{} in {}..{}{}: {}", x.var, show(&x.lo)?, show(&x.hi)?, trig, show(&x.body)?);
             if is_quantifier(e) {
                 Some(format!("{} {}", x.kind, rng))
             } else {
@@ -126,7 +134,11 @@ fn kids(e: &Expr) -> Vec<&Expr> {
         Expr::Binary(x) => vec![&*x.left, &*x.right],
         Expr::Index(x) => vec![&*x.array, &*x.index],
         Expr::Ctor(x) => x.arg.iter().map(|a| &**a).collect(),
-        Expr::Quant(x) => vec![&*x.lo, &*x.hi, &*x.body],
+        Expr::Quant(x) => {
+            let mut v = vec![&*x.lo, &*x.hi, &*x.body];
+            v.extend(x.triggers.iter());
+            v
+        }
         Expr::Call(x) => x.args.iter().collect(),
         Expr::StructLit(x) => x.fields.iter().map(|f| &f.value).collect(),
         Expr::EnumCtor(x) => x.args.iter().collect(),
@@ -263,6 +275,8 @@ fn shape_eq(a: &Expr, b: &Expr) -> bool {
                 && shape_eq(&x.lo, &y.lo)
                 && shape_eq(&x.hi, &y.hi)
                 && shape_eq(&x.body, &y.body)
+                && x.triggers.len() == y.triggers.len()
+                && x.triggers.iter().zip(&y.triggers).all(|(p, q)| shape_eq(p, q))
         }
         (Expr::StructLit(x), Expr::StructLit(y)) => {
             x.name == y.name
@@ -302,6 +316,9 @@ fn free(e: &Expr, bound: &mut Vec<String>, out: &mut HashSet<String>) {
             free(&q.hi, bound, out);
             bound.push(q.var.clone());
             free(&q.body, bound, out);
+            for t in &q.triggers {
+                free(t, bound, out);
+            }
             bound.pop();
         }
         _ => {
@@ -914,6 +931,7 @@ impl Bld {
             hi: Box::new(hi),
             body: Box::new(body),
             ty: None,
+            triggers: Vec::new(),
         })
     }
 
@@ -942,6 +960,7 @@ impl Bld {
                     hi: Box::new(self.clone_e(&x.hi, sub)),
                     body: Box::new(self.clone_e(&x.body, inner)),
                     ty: None,
+                    triggers: x.triggers.iter().map(|t| self.clone_e(t, inner)).collect(),
                 })
             }
             Expr::Spent(x) => Expr::Spent(ast::Spent { line, col, ty: x.ty.clone() }),

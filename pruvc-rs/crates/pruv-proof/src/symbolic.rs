@@ -2091,16 +2091,43 @@ impl<'a> FnVerifier<'a> {
                 env2.set(&x.var, Val::Int(k.clone()));
                 self.qstack.push(k.clone());
                 let body = self.ev_ast(&x.body, st, g, false, &env2);
+                // R-6-3: trigger terms, evaluated like the body (a term, no domain obligation)
+                let mut trig: Vec<Ast> = Vec::new();
+                let mut trig_err: Option<String> = None;
+                if body.is_ok() {
+                    for t in &x.triggers {
+                        match self.ev_ast(t, st, g, false, &env2) {
+                            Ok(a) => trig.push(a),
+                            Err(er) => {
+                                trig_err = Some(er);
+                                break;
+                            }
+                        }
+                    }
+                }
                 self.qstack.pop();
                 let body = body?;
+                if let Some(er) = trig_err {
+                    return Err(er);
+                }
                 if matches!(x.kind.as_str(), "sum" | "count" | "max" | "min") {
                     return Ok(Val::Int(self.aggregate(&x.kind, &k, &lo, &hi, &body)));
                 }
                 let rng = self.z.and(&[k.ge(&lo), k.lt(&hi)]);
                 if x.kind == "forall" {
-                    Ok(Val::Bool(self.z.forall(std::slice::from_ref(&k), &rng.implies(&body), &[])))
+                    let f = rng.implies(&body);
+                    if trig.is_empty() {
+                        Ok(Val::Bool(self.z.forall(std::slice::from_ref(&k), &f, &[])))
+                    } else {
+                        Ok(Val::Bool(self.z.forall_multi(std::slice::from_ref(&k), &f, &trig)))
+                    }
                 } else {
-                    Ok(Val::Bool(self.z.exists(std::slice::from_ref(&k), &self.z.and(&[rng, body]), &[])))
+                    let f = self.z.and(&[rng, body]);
+                    if trig.is_empty() {
+                        Ok(Val::Bool(self.z.exists(std::slice::from_ref(&k), &f, &[])))
+                    } else {
+                        Ok(Val::Bool(self.z.exists_multi(std::slice::from_ref(&k), &f, &trig)))
+                    }
                 }
             }
             Expr::Call(x) => self.call(e, x, st, g, code, env),

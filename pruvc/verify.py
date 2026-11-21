@@ -1038,9 +1038,19 @@ def _occurs(t, c):
             return True
         if z3.is_quantifier(n):
             todo.append(n.body())
+            todo.extend(_pattern_terms(n))    # R-6-3: a trigger may use an outer constant the body does not
         else:
             todo.extend(n.children())
     return False
+
+
+def _pattern_terms(q):
+    """every term of every pattern of quantifier q"""
+    out = []
+    for i in range(q.num_patterns()):
+        p = q.pattern(i)
+        out.extend(p.arg(j) for j in range(p.num_args()))
+    return out
 
 
 def in_range(x):
@@ -1647,14 +1657,17 @@ class FnVerifier:
             s.qstack.append(k)
             try:
                 body = s.ev(e.body, st, g, False, env2)
+                # R-6-3: trigger terms, evaluated like the body (a term, no domain obligation)
+                trig = [s.ev(t, st, g, False, env2) for t in e.triggers]
             finally:
                 s.qstack.pop()
             if e.kind in ("sum", "count", "max", "min"):
                 return s.aggregate(e.kind, k, lo, hi, body)
             rng = z3.And(k >= lo, k < hi)
+            pats = {"patterns": [z3.MultiPattern(*trig)]} if trig else {}
             if e.kind == "forall":
-                return z3.ForAll([k], z3.Implies(rng, body))
-            return z3.Exists([k], z3.And(rng, body))
+                return z3.ForAll([k], z3.Implies(rng, body), **pats)
+            return z3.Exists([k], z3.And(rng, body), **pats)
         if isinstance(e, Call):
             return s.call(e, st, g, code, env)
         if isinstance(e, StructLit):

@@ -393,6 +393,9 @@ fn g3_expr(e: &Expr, out: &mut G3Cands) {
             g3_expr(&x.lo, out);
             g3_expr(&x.hi, out);
             g3_expr(&x.body, out);
+            for t in &x.triggers {
+                g3_expr(t, out);
+            }
         }
         Expr::StructLit(x) => {
             app(out, x.line, x.col, &x.targs);

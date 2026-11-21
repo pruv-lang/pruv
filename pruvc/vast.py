@@ -130,6 +130,7 @@ class Quant(Expr):
     hi: Expr           # exclusive
     body: Expr
     ty: Optional[Type] = None
+    triggers: List[Expr] = field(default_factory=list)   # R-6-3: user-named trigger terms (one multi-pattern)
 
 @dataclass
 class Move(Expr):

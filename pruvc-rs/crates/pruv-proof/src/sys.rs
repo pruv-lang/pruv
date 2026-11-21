@@ -338,7 +338,23 @@ impl Z3 {
     pub fn exists(&self, bound: &[Ast], body: &Ast, patterns: &[Ast]) -> Ast {
         self.quantifier(false, bound, body, patterns)
     }
+    /// z3py `ForAll(vs, body, patterns=[MultiPattern(*terms)])`: ONE pattern made of all `terms` (R-6-3 user triggers).
+    pub fn forall_multi(&self, bound: &[Ast], body: &Ast, terms: &[Ast]) -> Ast {
+        let g: Vec<&Ast> = terms.iter().collect();
+        self.quantifier_groups(true, bound, body, &[g])
+    }
+    /// z3py `Exists(vs, body, patterns=[MultiPattern(*terms)])`.
+    pub fn exists_multi(&self, bound: &[Ast], body: &Ast, terms: &[Ast]) -> Ast {
+        let g: Vec<&Ast> = terms.iter().collect();
+        self.quantifier_groups(false, bound, body, &[g])
+    }
     fn quantifier(&self, is_forall: bool, bound: &[Ast], body: &Ast, patterns: &[Ast]) -> Ast {
+        // one single-term pattern per passed term (unchanged behavior)
+        let groups: Vec<Vec<&Ast>> = patterns.iter().map(|p| vec![p]).collect();
+        self.quantifier_groups(is_forall, bound, body, &groups)
+    }
+    /// each group of terms becomes one pattern (`Z3_mk_pattern(c, n, terms)`)
+    fn quantifier_groups(&self, is_forall: bool, bound: &[Ast], body: &Ast, groups: &[Vec<&Ast>]) -> Ast {
         if bound.is_empty() {
             return body.clone();
         }
@@ -346,11 +362,11 @@ impl Z3 {
         // SAFETY: S1 S2 S3 — variables are constant ASTs (`Z3_to_app` is an app view of the same pointer); patterns/arrays are borrowed only for the call.
         unsafe {
             let apps: Vec<RawApp> = bound.iter().map(|b| nn(z::Z3_to_app(c, b.raw))).collect();
-            let pats: Vec<RawPattern> = patterns
+            let pats: Vec<RawPattern> = groups
                 .iter()
-                .map(|p| {
-                    let term = [p.raw];
-                    nn(z::Z3_mk_pattern(c, 1, term.as_ptr()))
+                .map(|g| {
+                    let terms: Vec<RawAst> = g.iter().map(|p| p.raw).collect();
+                    nn(z::Z3_mk_pattern(c, terms.len() as c_uint, terms.as_ptr()))
                 })
                 .collect();
             // z3py: qid=skid="" → `Z3_mk_string_symbol("")` returns a null symbol, which is passed through as is.
@@ -769,6 +785,21 @@ impl Ast {
         // SAFETY: S1 S2 — kind()==QUANTIFIER.
         unsafe { self.z.wrap(nn(z::Z3_get_quantifier_body(self.z.raw(), self.raw))) }
     }
+    /// every term of every pattern of a quantifier (R-6-3 triggers)
+    fn pattern_terms(&self) -> Vec<Ast> {
+        let c = self.z.raw();
+        let mut out = Vec::new();
+        // SAFETY: S1 S2 — kind()==QUANTIFIER; i < num_patterns, j < num_terms.
+        unsafe {
+            for i in 0..z::Z3_get_quantifier_num_patterns(c, self.raw) {
+                let p = nn(z::Z3_get_quantifier_pattern_ast(c, self.raw, i));
+                for j in 0..z::Z3_get_pattern_num_terms(c, p) {
+                    out.push(self.z.wrap(nn(z::Z3_get_pattern(c, p, j))));
+                }
+            }
+        }
+        out
+    }
 
     /// z3py `z3.is_app`: kind APP or NUMERAL.
     pub fn is_app(&self) -> bool {
@@ -834,7 +865,10 @@ impl Ast {
                         todo.push(n.arg(i));
                     }
                 }
-                K_QUANTIFIER => todo.push(n.body()),
+                K_QUANTIFIER => {
+                    todo.push(n.body());
+                    todo.extend(n.pattern_terms()); // R-6-3: a trigger may use an outer constant the body does not
+                }
                 _ => {}
             }
         }

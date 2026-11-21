@@ -551,7 +551,7 @@ mod tests {
     fn forall(v: &str, lo: Expr, hi: Expr, body: Expr) -> Expr {
         Expr::Quant(Quant {
             line: 1, col: 1, kind: "forall".into(), var: v.into(),
-            lo: Box::new(lo), hi: Box::new(hi), body: Box::new(body), ty: None,
+            lo: Box::new(lo), hi: Box::new(hi), body: Box::new(body), ty: None, triggers: Vec::new(),
         })
     }
     fn sorted(inner_lo: Expr) -> Expr {

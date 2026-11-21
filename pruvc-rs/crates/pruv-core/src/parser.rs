@@ -1820,9 +1820,10 @@ impl Parser {
             let lo = self.add()?;
             self.expect("..")?;
             let hi = self.add()?;
+            let triggers = self.quant_triggers()?;
             self.expect(":")?;
             let body = self.expr()?;
-            return Ok(Self::quant(&t, v, lo, hi, body));
+            return Ok(Self::quant(&t, v, lo, hi, body, triggers));
         }
         if t.kind == Kind::Id
             && matches!(t.val.as_str(), "sum" | "count" | "max" | "min")
@@ -1837,10 +1838,11 @@ impl Parser {
             let lo = self.add()?;
             self.expect("..")?;
             let hi = self.add()?;
+            let triggers = self.quant_triggers()?;
             self.expect(":")?;
             let body = self.expr()?;
             self.expect(")")?;
-            return Ok(Self::quant(&t, v, lo, hi, body));
+            return Ok(Self::quant(&t, v, lo, hi, body, triggers));
         }
         if self.at("is_variant", 0) {
             self.bump();
@@ -1940,11 +1942,27 @@ impl Parser {
         Err(self.err(format!("expected an expression, found {}", t.repr()), "", None))
     }
 
-    fn quant(t: &Tok, var: String, lo: Expr, hi: Expr, body: Expr) -> Expr {
+    fn quant(t: &Tok, var: String, lo: Expr, hi: Expr, body: Expr, triggers: Vec<Expr>) -> Expr {
         Expr::Quant(Quant {
             line: t.line, col: t.col, kind: t.val.clone(), var,
-            lo: Box::new(lo), hi: Box::new(hi), body: Box::new(body), ty: None,
+            lo: Box::new(lo), hi: Box::new(hi), body: Box::new(body), ty: None, triggers,
         })
+    }
+
+    /// R-6-3: `trigger t1, t2` right after the hi bound; `trigger` is a contextual word (an ordinary identifier elsewhere).
+    fn quant_triggers(&mut self) -> R<Vec<Expr>> {
+        let mut out = Vec::new();
+        let t = self.peek(0);
+        if !(t.kind == Kind::Id && t.val == "trigger") {
+            return Ok(out);
+        }
+        self.bump();
+        out.push(self.add()?);
+        while self.at(",", 0) {
+            self.bump();
+            out.push(self.add()?);
+        }
+        Ok(out)
     }
 }
 

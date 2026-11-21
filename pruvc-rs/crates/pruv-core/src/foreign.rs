@@ -1611,6 +1611,9 @@ fn g6_expr(e: &Expr, out: &mut Cands) {
             g6_expr(&x.lo, out);
             g6_expr(&x.hi, out);
             g6_expr(&x.body, out);
+            for t in &x.triggers {
+                g6_expr(t, out);
+            }
         }
         Expr::StructLit(x) => {
             for f in &x.fields {
@@ -1782,6 +1785,9 @@ fn proc_expr(e: &Expr, out: &mut Cands) {
             proc_expr(&x.lo, out);
             proc_expr(&x.hi, out);
             proc_expr(&x.body, out);
+            for t in &x.triggers {
+                proc_expr(t, out);
+            }
         }
         Expr::StructLit(x) => {
             for f in &x.fields {
@@ -1917,6 +1923,9 @@ fn net_expr(e: &Expr, out: &mut Cands) {
             net_expr(&x.lo, out);
             net_expr(&x.hi, out);
             net_expr(&x.body, out);
+            for t in &x.triggers {
+                net_expr(t, out);
+            }
         }
         Expr::StructLit(x) => {
             for f in &x.fields {
@@ -2169,6 +2178,9 @@ fn async_expr(e: &Expr, out: &mut Cands, names: &HashSet<&str>) {
             async_expr(&x.lo, out, names);
             async_expr(&x.hi, out, names);
             async_expr(&x.body, out, names);
+            for t in &x.triggers {
+                async_expr(t, out, names);
+            }
         }
         Expr::StructLit(x) => {
             for f in &x.fields {

@@ -78,7 +78,8 @@ def show(e):
     if isinstance(e, Ctor):
         return e.name if e.arg is None else "%s(%s)" % (e.name, show(e.arg))
     if isinstance(e, Quant):
-        rng = "%s in %s..%s: %s" % (e.var, show(e.lo), show(e.hi), show(e.body))
+        trig = (" trigger " + ", ".join(show(t) for t in e.triggers)) if e.triggers else ""
+        rng = "%s in %s..%s%s: %s" % (e.var, show(e.lo), show(e.hi), trig, show(e.body))
         if _is_quantifier(e):
             return "%s %s" % (e.kind, rng)
         return "%s(%s)" % (e.kind, rng)
@@ -109,6 +110,8 @@ def _free(e, bound, out):
         _free(e.lo, bound, out)
         _free(e.hi, bound, out)
         _free(e.body, bound | {e.var}, out)
+        for t in e.triggers:
+            _free(t, bound | {e.var}, out)
     else:
         for c in _kids(e):
             _free(c, bound, out)
@@ -431,7 +434,7 @@ class _B:
         if isinstance(e, Quant):
             inner = None if (sub is not None and e.var == sub[0]) else sub
             return Quant(s.line, s.col, e.kind, e.var, s.clone(e.lo, sub), s.clone(e.hi, sub),
-                         s.clone(e.body, inner))
+                         s.clone(e.body, inner), None, [s.clone(t, inner) for t in e.triggers])
         kw = {}
         for f in dataclasses.fields(e):
             if f.name in ("line", "col"):

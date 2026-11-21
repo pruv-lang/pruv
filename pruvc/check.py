@@ -1892,6 +1892,22 @@ class Checker:
             if e.var in scope:
                 terr(e, "shadow", "%s is already defined" % e.var, "use a new name")
             sc = dict(scope); sc[e.var] = (I64, False, "bound")
+            for ti, tg in enumerate(e.triggers):    # R-6-3
+                why = None
+                if agg:
+                    why = "%s takes no trigger" % e.kind
+                elif not isinstance(tg, Index):
+                    why = "a trigger must be an array read a[e]"
+                elif not _mentions(tg, e.var):
+                    why = "a trigger must mention %s" % e.var
+                if why is not None:
+                    terr(e, "bad_trigger", "trigger %d of quantifier over %s: %s" % (ti + 1, e.var, why),
+                         "write trigger a[...] with an array read that uses %s" % e.var)
+                s.expr(tg, sc, c)
+                if not _mentions(tg, e.var):    # a contract call in the trigger is expanded in place
+                    terr(e, "bad_trigger", "trigger %d of quantifier over %s: after expanding calls it does not "
+                         "mention %s" % (ti + 1, e.var, e.var),
+                         "write trigger a[...] with an array read that uses %s" % e.var)
             s.expect(e.body, BOOL if e.kind in ("forall", "exists", "count") else I64, sc, c,
                      op="a quantifier body" if e.kind in ("forall", "exists", "count") else "an aggregate (%s)" % e.kind)
             return I64 if agg else BOOL
@@ -2655,7 +2671,7 @@ def x_scan_expr(e, funcs):
     if isinstance(e, FieldAccess):      # R03L: a field read of a struct parameter
         return x_scan_expr(e.base, funcs)
     if isinstance(e, Quant):     # R03L: a quantified fact or an aggregate (sum, count, max, min)
-        for k in (e.lo, e.hi, e.body):
+        for k in [e.lo, e.hi, e.body] + list(e.triggers):
             r = x_scan_expr(k, funcs)
             if r is not None:
                 return r
@@ -2683,7 +2699,7 @@ def x_size(e):
     if isinstance(e, FieldAccess):
         return 1 + x_size(e.base)
     if isinstance(e, Quant):
-        return 1 + x_size(e.lo) + x_size(e.hi) + x_size(e.body)
+        return 1 + x_size(e.lo) + x_size(e.hi) + x_size(e.body) + sum(x_size(t) for t in e.triggers)
     return 1
 
 
@@ -2716,6 +2732,7 @@ def x_map(e, leaf, bound=frozenset()):
     elif isinstance(e, Quant):
         n.lo, n.hi = x_map(e.lo, leaf, bound), x_map(e.hi, leaf, bound)
         n.body = x_map(e.body, leaf, bound | {e.var})
+        n.triggers = [x_map(t, leaf, bound | {e.var}) for t in e.triggers]
     return n
 
 
@@ -2769,6 +2786,7 @@ def x_instantiate(tpl, f, site):
                 terr(site, "call_in_contract", X_MSG % (f.name, "an argument uses the name %s that its body binds in "
                      "%s" % (e.var, e.kind)), "rename %s in the argument or in the body of %s" % (e.var, f.name))
             n.lo, n.hi, n.body = at(e.lo, bound), at(e.hi, bound), at(e.body, bound | {e.var})
+            n.triggers = [at(t, bound | {e.var}) for t in e.triggers]
         return n
     free = set()
     for a in site.args:

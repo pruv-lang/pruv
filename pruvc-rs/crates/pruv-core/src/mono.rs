@@ -623,6 +623,10 @@ impl<'a> Mono<'a> {
                 let lo = self.bx(&x.lo)?;
                 let hi = self.bx(&x.hi)?;
                 let body = self.bx(&x.body)?;
+                let mut triggers = Vec::with_capacity(x.triggers.len());
+                for t in &x.triggers {
+                    triggers.push(self.cp_e(t)?);
+                }
                 Expr::Quant(Quant {
                     line: x.line,
                     col: x.col,
@@ -632,6 +636,7 @@ impl<'a> Mono<'a> {
                     hi,
                     body,
                     ty: self.ty_opt(&x.ty)?,
+                    triggers,
                 })
             }
             Expr::StructLit(x) => {

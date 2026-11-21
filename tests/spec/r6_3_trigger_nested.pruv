@@ -1,0 +1,9 @@
+// spec: R-6-3 accept
+// an outer binder used only in an inner trigger still belongs to the aggregate term
+fn f(a: [i64]) -> i64
+  requires len(a) >= 2
+  requires forall k in 0..1: count(i in 0..len(a) - 1: forall j in 0..1 trigger a[i + j + k]: a[j] >= 0) >= 0
+  ensures result == 0
+{
+  return 0;
+}

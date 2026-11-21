@@ -140,7 +140,11 @@ pub(crate) fn kids(e: &Expr) -> Vec<&Expr> {
         Expr::Binary(x) => vec![x.left.as_ref(), x.right.as_ref()],
         Expr::Index(x) => vec![x.array.as_ref(), x.index.as_ref()],
         Expr::Ctor(x) => x.arg.iter().map(|a| &**a).collect(),
-        Expr::Quant(x) => vec![x.lo.as_ref(), x.hi.as_ref(), x.body.as_ref()],
+        Expr::Quant(x) => {
+            let mut v = vec![x.lo.as_ref(), x.hi.as_ref(), x.body.as_ref()];
+            v.extend(x.triggers.iter());
+            v
+        }
         Expr::Call(x) => x.args.iter().collect(),
         Expr::StructLit(x) => x.fields.iter().map(|f| &f.value).collect(),
         Expr::EnumCtor(x) => x.args.iter().collect(),
@@ -386,6 +390,7 @@ fn parts(r: &Refinement, name: &str, kname: &str) -> Vec<(&'static str, Expr)> {
                 hi: Box::new(at.length(name)),
                 body: Box::new(body),
                 ty: None,
+                triggers: Vec::new(),
             }),
         ));
     }

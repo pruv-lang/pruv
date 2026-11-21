@@ -73,6 +73,8 @@ pub struct Ctor {
 pub struct Quant {
     pub line: i64, pub col: i64, pub kind: String, pub var: String,
     pub lo: Box<Expr>, pub hi: Box<Expr>, pub body: Box<Expr>, pub ty: Ty,
+    /// R-6-3: user-named trigger terms (one multi-pattern); empty when absent.
+    pub triggers: Vec<Expr>,
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructLit {

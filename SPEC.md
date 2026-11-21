@@ -233,6 +233,18 @@ Allowed only in `requires`, `ensures`, `invariant`, `assert`:
     [effects and statements](tests/spec/r6_2_pred_effect.pruv),
     [effect call](tests/spec/r6_2_pred_effect_call.pruv), [nested binder](tests/spec/r6_2_pred_nested_binder.pruv),
     [pub pred](tests/spec/r6_2_pred_pub.pruv).
+  - R-6-3 **Quantifier triggers** (L3 R03D, G3): `forall i in lo..hi trigger t1, ..., tn: e` (and `exists`) names the
+    terms that let the verifier use the quantified fact: the verifier instantiates it only for an `i` where all of
+    `t1..tn` appear as terms (one multi-pattern). Each `t` is an array read `a[x]` that mentions `i`. Triggers never
+    change the meaning of the formula, only which instances the verifier tries, so they cannot make a false contract
+    true. A trigger is a term, not a value: it has no domain obligation. A trigger on `count`/`sum`/`max`/`min`, a
+    trigger that is not an array read, or one that does not mention `i` (also after calls in it are expanded) is
+    `type/bad_trigger`. Tests:
+    [accept](tests/spec/r6_3_trigger.pruv), [no binder](tests/spec/r6_3_trigger_no_binder.pruv),
+    [not an array read](tests/spec/r6_3_trigger_not_index.pruv), [on count](tests/spec/r6_3_trigger_count.pruv),
+    [false ensures still rejected](tests/spec/r6_3_trigger_still_checked.pruv),
+    [binder lost after expansion](tests/spec/r6_3_trigger_expanded.pruv),
+    [outer binder only in an inner trigger](tests/spec/r6_3_trigger_nested.pruv).
   - Anything else is `type` error `call_in_contract` "function F cannot be expanded in a contract: REASON". A call in
     a `cost` clause stays unsupported. A `pub` function's `requires`/`ensures`/`decreases` may expand only `pub`
     functions (`type/public_interface`, section 6f), because the body becomes part of the public contract.
@@ -1869,6 +1881,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/arity` | type | a call or constructor with the wrong number of arguments |
 | `type/array_alias` | type | a borrowed array or str is stored or returned without `copy` |
 | `type/async_unconsumed` | type | a temporary `Loop` is never consumed |
+| `type/bad_trigger` | type | a quantifier trigger on an aggregate, not an array read, or not mentioning the binder (R-6-3) |
 | `type/call_in_contract` | type | a contract calls a function that cannot be expanded there |
 | `type/contract_only` | type | a contract-only operation (`==>`, collection indexing, ...) used in code |
 | `type/cost_expr` | type | a `cost` expression uses `spent`, `result` or `old` |
