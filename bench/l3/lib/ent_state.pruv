@@ -190,9 +190,9 @@ pub fn ctx_new(op: i64, op_id: i64, blob: [i64], lg: [i64], ck: [i64]) -> Ctx ! 
   let mut k: [i64] = crate::ent_u16::zeros(8);
   let r: i64 = crate::ent_u16::put_range(inout k, 0, ck, 0, 8);
   return Ctx { op: op, op_id: op_id, pos: 0, stalled: 0, bad: 0, rcode: 0, raux: 0, rntab: 0, done: 0, ontab: 0,
-               blob: copy(blob), lg: copy(lg), rpool: copy(e1), rrec: copy(e2), rtab: copy(e3), ent: copy(e4), ck: copy(k),
-               opool: copy(e5), orec: copy(e6), otab: copy(e7),
-               ncan: 0, qon: 0, qexact: 0, qns: 0, qpool: copy(e8), qrec: copy(e9), qtab: copy(e10) };
+               blob: copy(blob), lg: copy(lg), rpool: move e1, rrec: move e2, rtab: move e3, ent: move e4, ck: move k,
+               opool: move e5, orec: move e6, otab: move e7,
+               ncan: 0, qon: 0, qexact: 0, qns: 0, qpool: move e8, qrec: move e9, qtab: move e10 };
 }
 
 // Observation: the next log entry if present (it must answer exactly this request), else stall with the request to emit.

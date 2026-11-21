@@ -25,9 +25,8 @@ fn adv(cx0: crate::ent_state::Ctx, ph: i64, idx: i64, cnt: i64) -> crate::ent_st
 fn skip(cx0: crate::ent_state::Ctx, ph: i64, idx: i64, cnt: i64) -> crate::ent_state::Ctx ! alloc
 {
   let mut cx: crate::ent_state::Ctx = cx0;
-  let e: [i64] = crate::ent_u16::empty();
-  cx.opool = copy(e);
-  cx.orec = copy(e);
+  cx.opool = crate::ent_u16::empty();
+  cx.orec = crate::ent_u16::empty();
   cx.done = 0;
   return adv(cx, ph, idx, cnt);
 }
@@ -80,8 +79,8 @@ fn emit_row(cx0: crate::ent_state::Ctx, src: [i64], eng: [i64], kind: [i64], has
     crate::ent_packet::put_vs(inout rec, 12, 10, 0, 0);
   }
   crate::ent_packet::put_vs(inout rec, 15, 6, o5, lh);
-  cx.opool = copy(pool);
-  cx.orec = copy(rec);
+  cx.opool = move pool;
+  cx.orec = move rec;
   return cx;
 }
 
@@ -89,7 +88,7 @@ fn emit_row(cx0: crate::ent_state::Ctx, src: [i64], eng: [i64], kind: [i64], has
 fn home_row(cx: crate::ent_state::Ctx, src: str, eng: str) -> crate::ent_state::Ctx ! alloc
 {
   let e: [i64] = crate::ent_u16::empty();
-  return emit_row(cx, crate::ent_u16::lit(src), crate::ent_u16::lit(eng), crate::ent_u16::lit("home"), false, e, 0, 0, 0, e, copy(cx.opool));
+  return emit_row(cx, crate::ent_u16::lit(src), crate::ent_u16::lit(eng), crate::ent_u16::lit("home"), false, e, 0, 0, 0, e, cx.opool);
 }
 
 // trimmed env slot, else join(homedir(), seg)
@@ -194,8 +193,8 @@ fn ph_qwen(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
   let rt: [i64] = env_trim(cx, 4);
   let qh: [i64] = env_trim(cx, 5);
   let mut h: [i64] = crate::ent_path::join2(cx.opool, crate::ent_u16::lit(".qwen"));
-  if len(qh) > 0 { h = copy(qh); }
-  if len(rt) > 0 { h = copy(rt); }
+  if len(qh) > 0 { h = move qh; }
+  if len(rt) > 0 { h = move rt; }
   return adv(home_row(crate::ent_canon::with_pool(cx, h), "qwen:home", "qwen"), 9, 0, 0);
 }
 
