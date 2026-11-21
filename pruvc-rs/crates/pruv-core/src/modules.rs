@@ -1421,6 +1421,9 @@ impl<'a> Rs<'a> {
                 self.rexpr(&mut x.lo)?;
                 self.rexpr(&mut x.hi)?;
                 self.rexpr(&mut x.body)?;
+                for t in x.triggers.iter_mut() {
+                    self.rexpr(t)?;
+                }
             }
             Expr::FieldAccess(x) => self.rexpr(&mut x.base)?,
             Expr::InoutArg(x) => self.rexpr(&mut x.expr)?, // G5 A0
@@ -1518,7 +1521,11 @@ fn kids(e: &Expr) -> Vec<&Expr> {
         Expr::Binary(x) => vec![&*x.left, &*x.right],
         Expr::Index(x) => vec![&*x.array, &*x.index],
         Expr::Ctor(x) => x.arg.iter().map(|a| &**a).collect(),
-        Expr::Quant(x) => vec![&*x.lo, &*x.hi, &*x.body],
+        Expr::Quant(x) => {
+            let mut v = vec![&*x.lo, &*x.hi, &*x.body];
+            v.extend(x.triggers.iter());
+            v
+        }
         Expr::Call(x) => x.args.iter().collect(),
         Expr::StructLit(x) => x.fields.iter().map(|f| &f.value).collect(),
         Expr::EnumCtor(x) => x.args.iter().collect(),

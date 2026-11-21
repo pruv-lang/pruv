@@ -198,6 +198,9 @@ fn walk_expr(e: &Expr, f: &mut dyn FnMut(Node<'_>)) {
             walk_expr(&x.lo, f);
             walk_expr(&x.hi, f);
             walk_expr(&x.body, f);
+            for t in &x.triggers {
+                walk_expr(t, f);
+            }
         }
         Expr::StructLit(x) => {
             for fi in &x.fields {

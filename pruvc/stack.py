@@ -165,6 +165,8 @@ class Uses:
             inner = dict(scope)
             inner[e.var] = None
             self.expr(e.body, inner, deny)
+            for t in e.triggers:
+                self.expr(t, inner, deny)
         elif isinstance(e, Call):
             self.call(e, scope, deny)
         else:

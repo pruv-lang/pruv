@@ -240,6 +240,18 @@ class Parser:
         s.i += 1
         return t
 
+    def quant_triggers(s):
+        # R-6-3: `trigger t1, t2` right after the hi bound; `trigger` is a contextual word (an ordinary identifier elsewhere)
+        t = s.peek()
+        if not (t.kind == "id" and t.val == "trigger"):
+            return []
+        s.next()
+        out = [s.add()]
+        while s.at(","):
+            s.next()
+            out.append(s.add())
+        return out
+
     def err(s, msg, fix="", tok=None):
         t = tok or s.peek()
         raise PruvError("parse", t.line, t.col, "syntax", msg, fix)
@@ -1273,18 +1285,22 @@ class Parser:
             s.next()
             v = s.ident().val
             s.expect("in")
-            lo = s.add(); s.expect(".."); hi = s.add(); s.expect(":")
+            lo = s.add(); s.expect(".."); hi = s.add()
+            trig = s.quant_triggers()
+            s.expect(":")
             body = s.expr()
-            return Quant(t.line, t.col, t.val, v, lo, hi, body)
+            return Quant(t.line, t.col, t.val, v, lo, hi, body, None, trig)
         if (t.kind == "id" and t.val in ("sum", "count", "max", "min")
                 and s.at("(", 1) and s.peek(2).kind == "id" and s.at("in", 3)):
             s.next(); s.next()
             v = s.ident().val
             s.expect("in")
-            lo = s.add(); s.expect(".."); hi = s.add(); s.expect(":")
+            lo = s.add(); s.expect(".."); hi = s.add()
+            trig = s.quant_triggers()
+            s.expect(":")
             body = s.expr()
             s.expect(")")
-            return Quant(t.line, t.col, t.val, v, lo, hi, body)
+            return Quant(t.line, t.col, t.val, v, lo, hi, body, None, trig)
         if s.at("is_variant"):
             s.next(); s.expect("(")
             v = s.expr(); s.expect(",")

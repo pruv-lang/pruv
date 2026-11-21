@@ -1,0 +1,3 @@
+// spec: R-6-3 reject
+// a trigger must mention the quantifier's binder: a[0] does not mention i
+fn f(a: [i64]) -> i64 requires forall i in 0..len(a) trigger a[0]: a[i] >= 0 { return 0; }

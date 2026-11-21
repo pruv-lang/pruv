@@ -172,6 +172,9 @@ impl<'a> Uses<'a> {
                 let mut inner = scope.clone();
                 inner.insert(x.var.clone(), None);
                 self.expr(&x.body, &inner, deny);
+                for t in &x.triggers {
+                    self.expr(t, &inner, deny);
+                }
             }
             Expr::Call(x) => self.call(x, scope, deny),
             _ => {

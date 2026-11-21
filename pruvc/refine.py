@@ -78,7 +78,7 @@ def _kids(e):
     if isinstance(e, Ctor):
         return [] if e.arg is None else [e.arg]
     if isinstance(e, Quant):
-        return [e.lo, e.hi, e.body]
+        return [e.lo, e.hi, e.body] + list(e.triggers)
     if isinstance(e, Call):
         return list(e.args)
     if isinstance(e, StructLit):

@@ -691,6 +691,7 @@ class _Resolver:
             e.lo = s.rexpr(e.lo)
             e.hi = s.rexpr(e.hi)
             e.body = s.rexpr(e.body)
+            e.triggers = [s.rexpr(t) for t in e.triggers]
         elif isinstance(e, FieldAccess):
             e.base = s.rexpr(e.base)
         elif isinstance(e, InoutArg):     # G5 A0

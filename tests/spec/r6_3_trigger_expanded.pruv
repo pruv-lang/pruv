@@ -1,0 +1,4 @@
+// spec: R-6-3 reject
+// a trigger must still mention its binder after calls are expanded: zero(i) becomes 0
+fn zero(x: i64) -> i64 ensures result == 0 { return 0; }
+fn f(a: [i64]) -> i64 requires forall i in 0..len(a) trigger a[zero(i)]: a[i] >= 0 { return 0; }

@@ -193,18 +193,21 @@ pub fn expr(e: &Expr) -> Json {
             targs_extra(&mut f, &x.targs, &x.inst);
             node("Ctor", Some((x.line, x.col)), f)
         }
-        Expr::Quant(x) => node(
-            "Quant",
-            Some((x.line, x.col)),
-            vec![
+        Expr::Quant(x) => {
+            let mut f: Fields = vec![
                 ("kind", js(&x.kind)),
                 ("var", js(&x.var)),
                 ("lo", bx(&x.lo)),
                 ("hi", bx(&x.hi)),
                 ("body", bx(&x.body)),
                 ("ty", ty(&x.ty)),
-            ],
-        ),
+            ];
+            if !x.triggers.is_empty() {
+                // R-6-3: written only when present, so a dump without triggers is unchanged
+                f.push(("triggers", list(&x.triggers, expr)));
+            }
+            node("Quant", Some((x.line, x.col)), f)
+        }
         Expr::StructLit(x) => {
             let mut f: Fields =
                 vec![("name", js(&x.name)), ("fields", list(&x.fields, field_init)), ("ty", ty(&x.ty))];

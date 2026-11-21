@@ -1070,6 +1070,9 @@ impl Checker {
                 self.norm_expr(&mut x.lo);
                 self.norm_expr(&mut x.hi);
                 self.norm_expr(&mut x.body);
+                for t in x.triggers.iter_mut() {
+                    self.norm_expr(t);
+                }
             }
             Expr::FieldAccess(x) => self.norm_expr(&mut x.base),
             Expr::IsVariant(x) => self.norm_expr(&mut x.value),
@@ -3645,6 +3648,39 @@ impl Checker {
                 let boolean_body = matches!(x.kind.as_str(), "forall" | "exists" | "count");
                 let body_ty = if boolean_body { boolt() } else { i64t() };
                 let what = if boolean_body { "a quantifier body".to_string() } else { format!("an aggregate ({})", x.kind) };
+                // R-6-3: trigger shape, then each trigger type checks like the body (binder in scope);
+                // triggers are checked before the body, as in pruvc/check.py
+                for (ti, tg) in x.triggers.iter_mut().enumerate() {
+                    let why = if agg {
+                        Some(format!("{} takes no trigger", x.kind))
+                    } else if !matches!(tg, Expr::Index(_)) {
+                        Some("a trigger must be an array read a[e]".to_string())
+                    } else if !mentions(tg, &x.var) {
+                        Some(format!("a trigger must mention {}", x.var))
+                    } else {
+                        None
+                    };
+                    if let Some(why) = why {
+                        return Err(terr(
+                            x.line,
+                            x.col,
+                            "bad_trigger",
+                            format!("trigger {} of quantifier over {}: {}", ti + 1, x.var, why),
+                            format!("write trigger a[...] with an array read that uses {}", x.var),
+                        ));
+                    }
+                    self.expr(tg, &sc, c)?;
+                    // a contract call inside the trigger is expanded in place; it must still use the binder
+                    if !mentions(tg, &x.var) {
+                        return Err(terr(
+                            x.line,
+                            x.col,
+                            "bad_trigger",
+                            format!("trigger {} of quantifier over {}: after expanding calls it does not mention {}", ti + 1, x.var, x.var),
+                            format!("write trigger a[...] with an array read that uses {}", x.var),
+                        ));
+                    }
+                }
                 self.expect(&mut x.body, &body_ty, &sc, c, Some(what.as_str()))?;
                 Ok(if agg { i64t() } else { boolt() })
             }
@@ -5170,7 +5206,7 @@ fn x_size(e: &Expr) -> usize {
         Expr::Index(x) => 1 + x_size(&x.array) + x_size(&x.index),
         Expr::Call(c) => 1 + c.args.iter().map(x_size).sum::<usize>(),
         Expr::FieldAccess(x) => 1 + x_size(&x.base),
-        Expr::Quant(x) => 1 + x_size(&x.lo) + x_size(&x.hi) + x_size(&x.body),
+        Expr::Quant(x) => 1 + x_size(&x.lo) + x_size(&x.hi) + x_size(&x.body) + x.triggers.iter().map(x_size).sum::<usize>(),
         _ => 1,
     }
 }
@@ -5211,7 +5247,18 @@ fn x_subst(e: &Expr, env: &HashMap<String, Expr>) -> Expr {
                 x_subst(&x.body, &inner)
             } else {
                 x_subst(&x.body, env)
-            }), ..x.clone()
+            }),
+            // R-6-3: the triggers are substituted like the body
+            triggers: x.triggers.iter().map(|t| {
+                if env.contains_key(&x.var) {
+                    let mut inner = env.clone();
+                    inner.remove(&x.var);
+                    x_subst(t, &inner)
+                } else {
+                    x_subst(t, env)
+                }
+            }).collect(),
+            ..x.clone()
         }),
         Expr::Call(c) => Expr::Call(Call {
             line: c.line, col: c.col, name: c.name.clone(), args: c.args.iter().map(|a| x_subst(a, env)).collect(),
@@ -5275,7 +5322,17 @@ fn x_instantiate(tpl: &Expr, pnames: &[String], args: &[Expr], line: i64, col: i
                 x_instantiate(&x.body, &inner, args, line, col)
             } else {
                 x_instantiate(&x.body, pnames, args, line, col)
-            }), ..x.clone()
+            }),
+            // R-6-3: the triggers are substituted like the body (the binder is never replaced)
+            triggers: x.triggers.iter().map(|t| {
+                if pnames.contains(&x.var) {
+                    let inner: Vec<String> = pnames.iter().map(|p| if *p == x.var { String::new() } else { p.clone() }).collect();
+                    x_instantiate(t, &inner, args, line, col)
+                } else {
+                    x_instantiate(t, pnames, args, line, col)
+                }
+            }).collect(),
+            ..x.clone()
         }),
         Expr::Call(c) => Expr::Call(Call {
             line, col, name: c.name.clone(), args: c.args.iter().map(|a| x_instantiate(a, pnames, args, line, col)).collect(),
@@ -5339,6 +5396,7 @@ pub fn opaque_inline(prog: &mut Program) {
                 ex(&mut x.lo, d);
                 ex(&mut x.hi, d);
                 ex(&mut x.body, d);
+                x.triggers.iter_mut().for_each(|t| ex(t, d));
             }
             Expr::StructLit(x) => x.fields.iter_mut().for_each(|f| ex(&mut f.value, d)),
             Expr::EnumCtor(x) => x.args.iter_mut().for_each(|a| ex(a, d)),
