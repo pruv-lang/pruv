@@ -15,7 +15,6 @@ fn run_item(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
   if cx.op == 4 { return crate::ent_dispatch::read_item(cx); }
   if cx.op == 7 { return crate::ent_bound::threads_item(cx); }
   if cx.op == 8 { return crate::ent_bound::excluded_item(cx); }
-  if cx.op == 9 { return crate::ent_bound::index_item(cx); }
   return crate::ent_state::fail(cx);
 }
 
@@ -26,6 +25,7 @@ pub fn entry_begin(input: [i64]) -> [i64] ! alloc
   let op: i64 = crate::ent_u16::rd(input, 5);
   let id: i64 = crate::ent_u16::rd(input, 2);
   if crate::ent_u16::rd(input, 1) != 0 || crate::ent_u16::rd(input, 3) != 0 { return bad_pkt(input, 1); }
+  if op == 9 { return bad_pkt(input, 1); }
   if op == 1 { return crate::ent_sources::import_begin(input); }
   if op == 5 { return crate::ent_accounts::account_home_begin(input); }
   if op == 6 { return crate::ent_canon::codex_folder_begin(input); }
@@ -51,7 +51,7 @@ pub fn entry_step(prev: [i64], completion: [i64]) -> [i64] ! alloc
   if seq >= 9007199254740992 { return bad_pkt(prev, 1); }
   if op == 1 { return crate::ent_sources::import_step(prev, completion); }
   if op == 6 { return crate::ent_canon::codex_folder_step(prev, completion); }
-  if op == 2 || op == 5 || op == 7 { return bad_pkt(prev, 1); }
+  if op == 2 || op == 5 || op == 7 || op == 9 { return bad_pkt(prev, 1); }
   let s2: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(prev, 2), 33554432);
   let st: [i64] = crate::ent_u16::slice(prev, s2, s2 + crate::ent_u16::clamp(crate::ent_packet::sec_len(prev, 2), 16777216));
   if !crate::ent_state::state_ok(st, op, id) { return bad_pkt(prev, 1); }
@@ -65,4 +65,110 @@ pub fn entry_step(prev: [i64], completion: [i64]) -> [i64] ! alloc
   let cx0: crate::ent_state::Ctx = crate::ent_state::with_prev(crate::ent_state::ctx_new(op, id, crate::ent_state::st_blob(st), lg, crate::ent_state::st_ck(st)), prev, true);
   let cx: crate::ent_state::Ctx = run_item(cx0);
   return crate::ent_state::finish(cx, seq + 1, seq);
+}
+
+// Op 9 issues at most one await. Its state section retains the v1 wire format.
+pub fn index_begin(inout progress: [i64], input: [i64]) -> [i64] ! alloc
+{
+  crate::ent_u16::wr(inout progress, 0, 0);
+  let ec: i64 = crate::ent_packet::env_check(input);
+  if ec != 0 { return bad_pkt(input, ec); }
+  if crate::ent_u16::rd(input, 1) != 0 || crate::ent_u16::rd(input, 3) != 0 || crate::ent_u16::rd(input, 5) != 9 {
+    return bad_pkt(input, 1);
+  }
+  let hi: i64 = crate::ent_packet::input_check(input);
+  if hi < 0 { return bad_pkt(input, 1); }
+  if hi != crate::ent_packet::sec_len(input, 0) {
+    let blob: [i64] = crate::ent_state::repack(input, hi);
+    return index_begin_checked(inout progress, blob);
+  }
+  return index_begin_checked(inout progress, input);
+}
+
+fn index_begin_checked(inout progress: [i64], blob: [i64]) -> [i64] ! alloc
+{
+  if len(progress) <= len(blob) / 30 { return bad_pkt(blob, 1); }
+  let rec: i64 = crate::ent_packet::sec_start(blob, 1);
+  let sec: i64 = crate::ent_u16::rd(blob, rec + 1);
+  let ns: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(blob, rec + 2), 559240);
+  let base: i64 = crate::ent_packet::sec_start(blob, sec);
+  let tab: [i64] = crate::ent_bound::index_collect(blob, base, ns, inout progress);
+  let nt: i64 = crate::ent_u16::rd(progress, 0);
+  let id: i64 = crate::ent_u16::rd(blob, 2);
+  if nt == 0 {
+    return crate::ent_bound::index_complete(blob, 0, id, 0, crate::ent_u16::empty(), progress);
+  }
+  // Write the final packet directly: request pool, record, state header, blob, table.
+  let lp: i64 = crate::ent_packet::sec_len(blob, 0);
+  let lb: i64 = len(blob);
+  let lt: i64 = len(tab);
+  if lb > 16777216 || lt > 16777216 { return bad_pkt(blob, 2); }
+  let total: i64 = 30 + lp + lb + lt;
+  if total > 16777216 { return bad_pkt(blob, 2); }
+  let mut out: [i64] = alloc(total, 0);
+  crate::ent_u16::wr(inout out, 0, 1);
+  crate::ent_u16::wr(inout out, 1, 1);
+  crate::ent_u16::wr(inout out, 2, id);
+  crate::ent_u16::wr(inout out, 3, 1);
+  crate::ent_u16::wr(inout out, 4, total - 5);
+  crate::ent_u16::wr(inout out, 5, 9);
+  crate::ent_u16::wr(inout out, 6, 5);
+  crate::ent_u16::wr(inout out, 7, lp);
+  crate::ent_u16::wr(inout out, 8, 4);
+  crate::ent_u16::wr(inout out, 9, 14 + lb);
+  crate::ent_u16::wr(inout out, 11, lt);
+  let r: i64 = 12 + lp;
+  let st: i64 = r + 4;
+  let pool: i64 = crate::ent_packet::sec_start(blob, 0);
+  if pool + lp > lb { return bad_pkt(blob, 1); }
+  copy_range(inout out, 12, blob, pool, lp);
+  let rq: [i64] = crate::ent_bound::index_request(nt);
+  let a: i64 = crate::ent_u16::put_all(inout out, r, rq);
+  crate::ent_u16::wr(inout out, st, crate::ent_state::magic());
+  crate::ent_u16::wr(inout out, st + 1, 9);
+  crate::ent_u16::wr(inout out, st + 2, 8);
+  crate::ent_u16::wr(inout out, st + 3, nt);
+  // Cache the checked session table offset so step only visits selected rows.
+  crate::ent_u16::wr(inout out, st + 4, base);
+  crate::ent_u16::wr(inout out, st + 12, lb);
+  copy_range(inout out, st + 14, blob, 0, lb);
+  copy_range(inout out, st + 14 + lb, tab, 0, lt);
+  return out;
+}
+
+// The adapter retains the actual emitted packet. Read the blob in place.
+// The caller supplies prev separately so even changes outside the state are rejected.
+pub fn index_step(inout progress: [i64], prev: [i64], emitted: [i64], completion: [i64]) -> [i64] ! alloc
+{
+  let nt: i64 = crate::ent_u16::rd(progress, 0);
+  let n: i64 = len(emitted);
+  if nt <= 0 || nt > 559240 || nt >= len(progress) ||
+     n != len(prev) || !eq_range(prev, 0, emitted, 0, n) { return bad_pkt(emitted, 1); }
+  if n < 30 || n > 16777216 || emitted[6] != 5 { return bad_pkt(emitted, 1); }
+  let st: i64 = crate::ent_packet::sec_start(emitted, 2);
+  let ls: i64 = crate::ent_packet::sec_len(emitted, 2);
+  if ls < 23 || st + ls > n { return bad_pkt(emitted, 1); }
+  let blob: i64 = st + 14;
+  let lb: i64 = emitted[st + 12];
+  if lb != ls - 14 || emitted[st + 13] != 0 { return bad_pkt(emitted, 1); }
+  if emitted[8] != 4 || crate::ent_u16::rd(emitted, st - 1) != nt || emitted[11] != 3 * nt {
+    return bad_pkt(emitted, 1);
+  }
+  let base: i64 = crate::ent_u16::rd(emitted, st + 4);
+  if !crate::ent_bound::index_progress_ok(emitted, blob, lb, base, progress, nt) {
+    return bad_pkt(emitted, 1);
+  }
+  let ec: i64 = crate::ent_packet::env_check(completion);
+  if ec != 0 { return bad_pkt(emitted, ec); }
+  let id: i64 = crate::ent_u16::rd(emitted, 2);
+  if crate::ent_u16::rd(completion, 1) != 2 || crate::ent_u16::rd(completion, 2) != id ||
+     crate::ent_u16::rd(completion, 3) != 1 || crate::ent_u16::rd(completion, 5) != 9 { return bad_pkt(emitted, 1); }
+  let hi0: i64 = crate::ent_packet::comp_check(completion, 8, nt);
+  if hi0 < 0 { return bad_pkt(emitted, 1); }
+  let hi: i64 = crate::ent_u16::clamp(hi0, 16777216);
+  let l: i64 = crate::ent_u16::clamp(len(completion), 16777216);
+  if l - crate::ent_packet::sec_len(completion, 0) + hi + 3 > 16777216 { return bad_pkt(emitted, 2); }
+  let done: [i64] = crate::ent_bound::index_complete(emitted, blob, id, 1, completion, progress);
+  crate::ent_u16::wr(inout progress, 0, 0);
+  return done;
 }

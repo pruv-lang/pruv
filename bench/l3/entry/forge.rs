@@ -1,5 +1,3 @@
-#![allow(dead_code, unused_imports, unused_variables)]
-#[path="@SOL@"] mod sol;
 // WA forge harness: the same driver as harness.rs, but entry_step receives a TAMPERED copy of the await packet it is
 // resumed from. The host (host.rs) never forges, so this wrapper is how the R1 replay validation is exercised.
 //
@@ -14,10 +12,11 @@
 //   {"drop":j} {"dup":j} {"swap":[i,j]} {"push":[j,seq]}          remove / duplicate / swap / append a copy of entry j with seq
 //   {"rec":[k,v]} {"pool":[k,v]} {"tab":[k,v]}                      words of section 1 / 0 / 4 of prev
 //   {"blob_pool":[k,v]}                                            word k of the pool of the repacked input in the state
+//   "index_swap": true (top level)                                use the op 9 await from swapped temporary slots
 use std::cell::Cell;
 use serde_json::Value;
 
-struct G { n: Cell<usize>, tamper: Option<Value>, stats: bool }
+pub struct Forge { n: Cell<usize>, tamper: Option<Value>, stats: bool }
 
 fn sec_bounds(w: &[i64]) -> Vec<(usize, usize)> {
     let ns = w[6] as usize;
@@ -95,28 +94,38 @@ fn tamper(prev: &[i64], t: &Value) -> Vec<i64> {
     rebuild(prev, &secs)
 }
 
-impl entry_host::Sol for G {
-    fn begin(&self, input: &[i64]) -> Vec<i64> {
-        sol::entry_begin(input)
+impl Forge {
+    pub fn from_env() -> Self {
+        let tamper = std::env::var("FORGE_TAMPER").ok().map(|s| serde_json::from_str::<Value>(&s).unwrap());
+        let stats = std::env::var("FORGE_STATS").is_ok();
+        Self { n: Cell::new(0), tamper, stats }
     }
-    fn step(&self, prev: &[i64], completion: &[i64]) -> Vec<i64> {
+
+    pub fn index_input(&self, input: &[i64]) -> Option<Vec<i64>> {
+        if self.tamper.as_ref()?.get("index_swap")?.as_bool() != Some(true) {
+            return None;
+        }
+        let bounds = sec_bounds(input);
+        let record = bounds[1].0;
+        let (base, end) = bounds[input[record + 1] as usize];
+        assert!(end - base >= 60);
+        let mut other = input.to_vec();
+        for word in 3..6 {
+            other.swap(base + word, base + 30 + word);
+        }
+        Some(other)
+    }
+
+    pub fn prev(&self, prev: &[i64]) -> Option<Vec<i64>> {
         let n = self.n.get() + 1;
         self.n.set(n);
-        let mut p: Vec<i64> = prev.to_vec();
-        if let Some(t) = &self.tamper {
-            if t["at"].as_u64().unwrap() as usize == n { p = tamper(prev, t); }
-        }
         if self.stats {
             let b = sec_bounds(prev);
             let st = &prev[b[2].0..b[2].1];
             let l = st[12] as usize;
             eprintln!("step {} prev_len {} state_len {} entries {}", n, prev.len(), st.len(), entries(&st[14 + l..]).len());
         }
-        sol::entry_step(&p, completion)
+        self.tamper.as_ref().filter(|t| t["at"].as_u64().unwrap() as usize == n)
+            .map(|t| tamper(prev, t))
     }
-}
-fn main() {
-    let tamper = std::env::var("FORGE_TAMPER").ok().map(|s| serde_json::from_str::<Value>(&s).unwrap());
-    let stats = std::env::var("FORGE_STATS").is_ok();
-    entry_host::run(&G { n: Cell::new(0), tamper, stats });
 }
