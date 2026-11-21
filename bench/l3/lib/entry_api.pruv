@@ -68,6 +68,7 @@ pub fn entry_step(prev: [i64], completion: [i64]) -> [i64] ! alloc
 }
 
 // Op 9 issues at most one await. Its state section retains the v1 wire format.
+// The adapter keeps input after the call and passes it to index_step (the await does not copy it).
 pub fn index_begin(inout progress: [i64], input: [i64]) -> [i64] ! alloc
 {
   crate::ent_u16::wr(inout progress, 0, 0);
@@ -80,12 +81,13 @@ pub fn index_begin(inout progress: [i64], input: [i64]) -> [i64] ! alloc
   if hi < 0 { return bad_pkt(input, 1); }
   if hi != crate::ent_packet::sec_len(input, 0) {
     let blob: [i64] = crate::ent_state::repack(input, hi);
-    return index_begin_checked(inout progress, blob);
+    return index_begin_checked(inout progress, blob, hi, len(input));
   }
-  return index_begin_checked(inout progress, input);
+  return index_begin_checked(inout progress, input, hi, len(input));
 }
 
-fn index_begin_checked(inout progress: [i64], blob: [i64]) -> [i64] ! alloc
+// hi and raw are the checked pool high water and the length of the input the adapter keeps; step repeats the repack from them.
+fn index_begin_checked(inout progress: [i64], blob: [i64], hi: i64, raw: i64) -> [i64] ! alloc
 {
   let rec: i64 = crate::ent_packet::sec_start(blob, 1);
   let sec: i64 = crate::ent_u16::rd(blob, rec + 1);
@@ -123,7 +125,9 @@ fn index_begin_checked(inout progress: [i64], blob: [i64]) -> [i64] ! alloc
   }
   let compact: bool = lp <= pl;
   if !compact { lp = pl; }
-  let total: i64 = 30 + lp + lb + lt;
+  // The await does not copy the input: the adapter keeps the input and passes it to step.
+  // State words 12 and 13 are the pool high water and the input length.
+  let total: i64 = 30 + lp + lt;
   if total > 16777216 { return bad_pkt(blob, 2); }
   let mut out: [i64] = alloc(total, 0);
   crate::ent_u16::wr(inout out, 0, 1);
@@ -135,7 +139,7 @@ fn index_begin_checked(inout progress: [i64], blob: [i64]) -> [i64] ! alloc
   crate::ent_u16::wr(inout out, 6, 5);
   crate::ent_u16::wr(inout out, 7, lp);
   crate::ent_u16::wr(inout out, 8, 4);
-  crate::ent_u16::wr(inout out, 9, 14 + lb);
+  crate::ent_u16::wr(inout out, 9, 14);
   crate::ent_u16::wr(inout out, 11, lt);
   let r: i64 = 12 + lp;
   let st: i64 = r + 4;
@@ -147,9 +151,9 @@ fn index_begin_checked(inout progress: [i64], blob: [i64]) -> [i64] ! alloc
   crate::ent_u16::wr(inout out, st + 3, nt);
   // Cache the checked session table offset so step only visits selected rows.
   crate::ent_u16::wr(inout out, st + 4, base);
-  crate::ent_u16::wr(inout out, st + 12, lb);
-  copy_range(inout out, st + 14, blob, 0, lb);
-  let t: i64 = st + 14 + lb;
+  crate::ent_u16::wr(inout out, st + 12, hi);
+  crate::ent_u16::wr(inout out, st + 13, raw);
+  let t: i64 = st + 14;
   copy_range(inout out, t, tab, 0, lt);
   if !compact { copy_range(inout out, 12, blob, pool, pl); }
   let mut at: i64 = 0;
@@ -171,9 +175,9 @@ fn index_begin_checked(inout progress: [i64], blob: [i64]) -> [i64] ! alloc
   return out;
 }
 
-// The adapter retains the actual emitted packet. Read the blob in place.
-// The caller supplies prev separately so even changes outside the state are rejected.
-pub fn index_step(inout progress: [i64], prev: [i64], emitted: [i64], completion: [i64]) -> [i64] ! alloc
+// The adapter retains the actual emitted packet and the input given to index_begin. Read the input in place,
+// or its repack when begin repacked it. The caller supplies prev separately so even changes outside the state are rejected.
+pub fn index_step(inout progress: [i64], input: [i64], prev: [i64], emitted: [i64], completion: [i64]) -> [i64] ! alloc
 {
   let nt: i64 = crate::ent_u16::rd(progress, 0);
   let n: i64 = len(emitted);
@@ -182,15 +186,26 @@ pub fn index_step(inout progress: [i64], prev: [i64], emitted: [i64], completion
   if n < 30 || n > 16777216 || emitted[6] != 5 { return bad_pkt(emitted, 1); }
   let st: i64 = crate::ent_packet::sec_start(emitted, 2);
   let ls: i64 = crate::ent_packet::sec_len(emitted, 2);
-  if ls < 23 || st + ls > n { return bad_pkt(emitted, 1); }
-  let blob: i64 = st + 14;
-  let lb: i64 = emitted[st + 12];
-  if lb != ls - 14 || emitted[st + 13] != 0 { return bad_pkt(emitted, 1); }
+  if ls != 14 || st + ls > n { return bad_pkt(emitted, 1); }
+  if len(input) > 16777216 || emitted[st + 13] != len(input) { return bad_pkt(emitted, 1); }
   if emitted[8] != 4 || crate::ent_u16::rd(emitted, st - 1) != nt || emitted[11] != 3 * nt {
     return bad_pkt(emitted, 1);
   }
+  let hi: i64 = emitted[st + 12];
+  if hi != crate::ent_packet::sec_len(input, 0) {
+    let blob: [i64] = crate::ent_state::repack(input, hi);
+    return index_step_on(inout progress, blob, emitted, st, nt, completion);
+  }
+  return index_step_on(inout progress, input, emitted, st, nt, completion);
+}
+
+fn index_step_on(inout progress: [i64], blob: [i64], emitted: [i64], st: i64, nt: i64, completion: [i64]) -> [i64] ! alloc
+  requires 0 < nt && nt <= 559240 && 0 <= st && st <= 16777216
+{
+  let lb: i64 = len(blob);
+  if lb > 16777216 { return bad_pkt(emitted, 1); }
   let base: i64 = crate::ent_u16::rd(emitted, st + 4);
-  if !crate::ent_bound::index_progress_ok(emitted, blob, lb, base, progress, nt) {
+  if !crate::ent_bound::index_progress_ok(blob, 0, lb, base, progress, nt) {
     return bad_pkt(emitted, 1);
   }
   let ec: i64 = crate::ent_packet::env_check(completion);
@@ -203,7 +218,7 @@ pub fn index_step(inout progress: [i64], prev: [i64], emitted: [i64], completion
   let hi: i64 = crate::ent_u16::clamp(hi0, 16777216);
   let l: i64 = crate::ent_u16::clamp(len(completion), 16777216);
   if l - crate::ent_packet::sec_len(completion, 0) + hi + 3 > 16777216 { return bad_pkt(emitted, 2); }
-  let done: [i64] = crate::ent_bound::index_complete(emitted, blob, id, 1, completion, progress);
+  let done: [i64] = crate::ent_bound::index_complete(blob, 0, id, 1, completion, progress);
   crate::ent_u16::wr(inout progress, 0, 0);
   return done;
 }

@@ -54,11 +54,25 @@ fn tamper(prev: &[i64], t: &Value) -> Vec<i64> {
     let b = sec_bounds(prev);
     let mut secs: Vec<Vec<i64>> = b.iter().map(|&(s, e)| prev[s..e].to_vec()).collect();
     let mut st = secs[2].clone();
+    let num = |v: &Value, i: usize| v.get(i).and_then(|x| x.as_i64()).unwrap();
+    // The op 9 state is 14 words with no blob or log (the adapter keeps the input): apply only the
+    // state-head, record, pool and table ops.
+    if st[1] == 9 {
+        for op in t["ops"].as_array().unwrap() {
+            if let Some(v) = op.get("ck") { st[4 + num(v, 0) as usize] = num(v, 1); }
+            if let Some(v) = op.get("code") { st[2] = v.as_i64().unwrap(); }
+            if let Some(v) = op.get("aux") { st[3] = v.as_i64().unwrap(); }
+            if let Some(v) = op.get("rec") { secs[1][num(v, 0) as usize] = num(v, 1); }
+            if let Some(v) = op.get("pool") { secs[0][num(v, 0) as usize] = num(v, 1); }
+            if let Some(v) = op.get("tab") { secs[4][num(v, 0) as usize] = num(v, 1); }
+        }
+        secs[2] = st;
+        return rebuild(prev, &secs);
+    }
     let l = st[12] as usize;
     let mut head: Vec<i64> = st[..12].to_vec();
     let mut blob: Vec<i64> = st[14..14 + l].to_vec();
     let mut ents = entries(&st[14 + l..]);
-    let num = |v: &Value, i: usize| v.get(i).and_then(|x| x.as_i64()).unwrap();
     for op in t["ops"].as_array().unwrap() {
         if let Some(v) = op.get("ck") { head[4 + num(v, 0) as usize] = num(v, 1); }
         if let Some(v) = op.get("code") { head[2] = v.as_i64().unwrap(); }
@@ -122,8 +136,8 @@ impl Forge {
         if self.stats {
             let b = sec_bounds(prev);
             let st = &prev[b[2].0..b[2].1];
-            let l = st[12] as usize;
-            eprintln!("step {} prev_len {} state_len {} entries {}", n, prev.len(), st.len(), entries(&st[14 + l..]).len());
+            let ne = if st[1] == 9 { 0 } else { entries(&st[14 + st[12] as usize..]).len() };
+            eprintln!("step {} prev_len {} state_len {} entries {}", n, prev.len(), st.len(), ne);
         }
         self.tamper.as_ref().filter(|t| t["at"].as_u64().unwrap() as usize == n)
             .map(|t| tamper(prev, t))

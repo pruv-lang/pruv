@@ -6,10 +6,11 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-// The await packet is immutable and shared with the driver. The progress array
-// stays in the adapter. Pruv locates the blob in the saved await.
+// The await packet is immutable and shared with the driver. The progress array and the
+// input given to index_begin stay in the adapter; the await does not copy the input.
 struct Index {
     progress: Vec<i64>,
+    input: Vec<i64>,
     emitted: Rc<Vec<i64>>,
 }
 
@@ -35,22 +36,29 @@ struct G {
 }
 
 impl entry_host::Sol for G {
-    fn begin(&self, input: &[i64]) -> Rc<Vec<i64>> {
+    fn begin(&self, input: Vec<i64>) -> Rc<Vec<i64>> {
         self.index.take();
         if input.get(5) != Some(&9) {
-            return Rc::new(sol::entry_begin(input));
+            return Rc::new(sol::entry_begin(&input));
         }
-        let mut progress = vec![0; index_progress_len(input)];
-        let emitted = Rc::new(sol::index_begin(&mut progress, input));
+        #[allow(unused_mut)]
+        let mut input = input;
+        let mut progress = vec![0; index_progress_len(&input)];
         #[cfg(entry_forge)]
-        let emitted = if let Some(other) = self.forge.index_input(input) {
+        let other = self.forge.index_input(&input);
+        let emitted = Rc::new(sol::index_begin(&mut progress, &input));
+        // Forge: keep progress from A with the await from B (and B's input, which the await came with).
+        #[cfg(entry_forge)]
+        let emitted = if let Some(other) = other {
             let mut other_progress = vec![0; index_progress_len(&other)];
-            Rc::new(sol::index_begin(&mut other_progress, &other))
+            let e = Rc::new(sol::index_begin(&mut other_progress, &other));
+            input = other;
+            e
         } else {
             emitted
         };
         if emitted[1] == 1 {
-            self.index.replace(Some(Index { progress, emitted: Rc::clone(&emitted) }));
+            self.index.replace(Some(Index { progress, input, emitted: Rc::clone(&emitted) }));
         }
         emitted
     }
@@ -64,8 +72,8 @@ impl entry_host::Sol for G {
         #[cfg(entry_forge)]
         let prev = tampered.as_deref().unwrap_or(prev);
 
-        if let Some(Index { mut progress, emitted }) = self.index.take() {
-            return sol::index_step(&mut progress, prev, &emitted, completion);
+        if let Some(Index { mut progress, input, emitted }) = self.index.take() {
+            return sol::index_step(&mut progress, &input, prev, &emitted, completion);
         }
         sol::entry_step(prev, completion)
     }
