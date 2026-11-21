@@ -13,6 +13,8 @@
 //   {"rec":[k,v]} {"pool":[k,v]} {"tab":[k,v]}                      words of section 1 / 0 / 4 of prev
 //   {"blob_pool":[k,v]}                                            word k of the pool of the repacked input in the state
 //   "index_swap": true (top level)                                use the op 9 await from swapped temporary slots
+//   "index_tail": b (top level)                                   append an unreferenced lone high, byte b, lone low
+//                                                                 to the op 9 input pool (b is the separator byte)
 use std::cell::Cell;
 use serde_json::Value;
 
@@ -128,6 +130,34 @@ impl Forge {
             other.swap(base + word, base + 30 + word);
         }
         Some(other)
+    }
+
+    pub fn index_tail(&self, input: Vec<i64>) -> Vec<i64> {
+        let Some(sep) = self.tamper.as_ref().and_then(|t| t.get("index_tail")).and_then(|v| v.as_i64()) else {
+            return input;
+        };
+        let bounds = sec_bounds(&input);
+        let mut secs: Vec<Vec<i64>> = bounds.iter().map(|&(a, b)| input[a..b].to_vec()).collect();
+        let pool = &secs[0];
+        let nb = pool[1] as usize;
+        let mut bytes: Vec<u8> = (0..nb).map(|k| ((pool[2 + k / 7] >> (8 * (6 - k % 7))) & 255) as u8).collect();
+        bytes.extend_from_slice(&[0xED, 0xA0, 0x80, sep as u8, 0xED, 0xB0, 0x80]);
+        let mut o = vec![pool[0] + 2, bytes.len() as i64];
+        for chunk in bytes.chunks(7) {
+            let mut word = 0i64;
+            for (i, b) in chunk.iter().enumerate() { word |= (*b as i64) << (8 * (6 - i)); }
+            o.push(word);
+        }
+        secs[0] = o;
+        rebuild(&input, &secs)
+    }
+
+    pub fn index_stats(&self, emitted: &[i64], progress: &[i64]) {
+        if self.stats {
+            let bounds = sec_bounds(emitted);
+            let state = &emitted[bounds[2].0..bounds[2].1];
+            eprintln!("index state {} {} {} progress {}", state[4], state[12], state[13], progress[1]);
+        }
     }
 
     pub fn prev(&self, prev: &[i64]) -> Option<Vec<i64>> {

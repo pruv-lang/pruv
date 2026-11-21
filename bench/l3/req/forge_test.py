@@ -149,6 +149,16 @@ def state_word(k, v):
     return m
 
 
+def comp_split_string(rec, pool=None):
+    def m(w, p, c, steps, n):
+        sections = secs(c)
+        # default U+00E9, followed by packed-word padding
+        sections[0] = list(pool) if pool is not None else [1, 2, 0xC3A90000000000]
+        sections[1] = rec
+        return w, p, build(c, sections)
+    return m
+
+
 def world_open(i, v):
     def m(w, p, c, steps, n):
         ni, na, no, np_ = w[5], w[6], w[7], w[8]
@@ -301,6 +311,25 @@ F = [
     ('F50', 'O01', 12, world_budget(10, 999999), 'world cleanup credits plus calls past the budget (resealed)'),
     ('F51', 'L02', 17, comp_set_rec([99]), 'session re-read (call 17) record changed, section 5 honest'),
     ('F52', 'L02', 9, comp_sec_set(0, []), 'folder success slot outside the empty completion pool'),
+    ('F53', 'L02', 9, comp_split_string([1] + [0] * 6 + [3] + [0] * 5 + [6, 1, 1] + [0] * 3),
+     'C4 folder error message starts inside a WTF-8 form'),
+    ('F54', 'O01', 15, comp_split_string([0, 6, 1, 1] + [0] * 7),
+     'C4 call 33 title starts inside a WTF-8 form'),
+    ('F55', 'O01', 15, comp_split_string([0] + [0] * 9 + [1] + [0] * 3 + [6, 1, 1] + [0] * 12),
+     'C4 call 33 turn.reply starts inside a WTF-8 form'),
+    ('F56', 'O01', 15, comp_split_string([0] + [0] * 6 + [6, 1, 1] + [0]),
+     'C4 call 33 lastPlan starts inside a WTF-8 form'),
+    ('F57', 'O01', 16, comp_split_string([0, 6, 1, 1]),
+     'C4 call 32 sessionId starts inside a WTF-8 form'),
+    ('F58', 'O01', 15, comp_split_string([0] + [0] * 6 + [8, 0, 0] + [0]),
+     'C4 call 33 lastPlan with a tag the host does not read'),
+    ('F59', 'O01', 16, comp_split_string([0, 8, 0, 0]),
+     'C4 call 32 sessionId with a tag the host does not read'),
+    # lone high, 0xFF separator, lone low: a valid pool, but a slot that covers the separator is refused (C3)
+    ('F60', 'O01', 15, comp_split_string([0] + [0] * 6 + [6, 0, 7] + [0], [2, 7, 0xEDA080FFEDB080]),
+     'C3 call 33 lastPlan covers the 0xFF separator'),
+    ('F61', 'O01', 16, comp_split_string([0, 6, 3, 1], [2, 7, 0xEDA080FFEDB080]),
+     'C3 call 32 sessionId is the 0xFF separator alone'),
 ]
 # the call budget (ABI.md 10): (id, case, step, world word 9 set to, effects the refused step must end with)
 BUDGET = [
@@ -344,6 +373,24 @@ def main():
         except Exception as e:
             got, ok = 'ERROR %s' % e, False
         rows.append((id, 'InputTooLarge+cleanup', got, ok, '%s step %d: calls used %d' % (cs, n, v)))
+    # C2 recheck: the child completion in section 5 padded with unreferenced pool bytes. P1: the child is exactly at the
+    # 16,777,216-word logical limit, so the parent is over it and must be refused (one request.reject, then the honest
+    # resubmission). P2: the parent is exactly at the limit and must be accepted with the honest result.
+    for id, mode in [('P1', 0), ('P2', 1)]:
+        if want and id not in want: continue
+        try:
+            base = capture('S01')[0]
+            obs = run(case('S01'), {'at': 3, 'comp5_fill': mode})
+            if mode == 0:
+                ok = without_rejects(obs) == base and n_rejects(obs) == 1
+                exp = 'InvalidPacket'
+            else:
+                ok = obs == base and n_rejects(obs) == 0
+                exp = 'identical'
+            got = exp if ok else 'rejects=%d same=%s' % (n_rejects(obs), without_rejects(obs) == base)
+        except Exception as e:
+            exp, got, ok = 'pass', 'ERROR %s' % e, False
+        rows.append((id, exp, got, ok, 'S01 step 3: child completion padded, %s at the logical limit' % ('child' if mode == 0 else 'parent')))
     for id, cs, name, n in CONTROLS:
         if want and id not in want: continue
         try:

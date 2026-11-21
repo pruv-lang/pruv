@@ -7,7 +7,7 @@
 fn has_acct(rows: [i64], p: i64) -> bool
   requires 0 <= p && p <= 999999991
 {
-  return crate::ent_u16::rd(rows, p + 9) == 6 && crate::ent_value::pstr_len(rows, p + 9) > 0;
+  return crate::ent_u16::rd(rows, p + 9) == 6 && crate::ent_value::slot_bytes(rows, p + 9) > 0;
 }
 
 fn nrows(rows: [i64]) -> i64

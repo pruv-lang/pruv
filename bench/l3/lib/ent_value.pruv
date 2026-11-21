@@ -52,87 +52,191 @@ pub fn truthy(w: [i64], p0: i64) -> bool
   return false;
 }
 
-// absolute start of the units of the string slot at p (tag 6) and its length; both clamped
-pub fn str_start(w: [i64], p0: i64) -> i64
-  ensures 0 <= result && result <= 67108864
+// A packed pool starts with its UTF-16 and byte counts.
+pub fn pool_bytes(w: [i64], pool0: i64) -> i64
+  ensures 0 <= result && result <= 1073741823
 {
-  return str_start_at(w, p0, crate::ent_packet::sec_start(w, 0));
+  let pool: i64 = crate::ent_u16::clamp(pool0, 2147483647);
+  return crate::ent_u16::clamp(crate::ent_u16::rd(w, pool + 1), 1073741823);
 }
 
-pub fn str_start_at(w: [i64], p0: i64, pool: i64) -> i64
-  ensures 0 <= result && result <= 67108864
+pub fn pool_byte(w: [i64], pool0: i64, k0: i64) -> i64
+  ensures 0 <= result && result <= 255
 {
-  let p: i64 = crate::ent_u16::clamp(p0, 4294967296);
-  return crate::ent_u16::clamp(pool, 33554432) + crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 1), 33554432);
+  let pool: i64 = crate::ent_u16::clamp(pool0, 2147483647);
+  let k: i64 = crate::ent_u16::clamp(k0, 2147483647);
+  return crate::ent_u16::clamp((crate::ent_u16::rd(w, pool + 2 + k / 7) >> (8 * (6 - k % 7))) & 255, 255);
 }
 
-pub fn str_len(w: [i64], p0: i64) -> i64
+fn cont(b: i64) -> bool { return b >= 128 && b < 192; }
+
+pub fn span_ok(w: [i64], pool: i64, off: i64, n: i64) -> bool
+{
+  let nb: i64 = pool_bytes(w, pool);
+  if off < 0 || n < 0 || off > nb || n > nb - off { return false; }
+  let end: i64 = off + n;
+  if !((off == nb || !cont(pool_byte(w, pool, off))) && (end == nb || !cont(pool_byte(w, pool, end)))) { return false; }
+  // the 0xFF separator is never part of a string: a span that covers it is refused
+  let mut k: i64 = off;
+  while k < end
+    invariant off <= k && k <= end
+    decreases end - k
+  {
+    if pool_byte(w, pool, k) == 255 { return false; }
+    k = k + 1;
+  }
+  return true;
+}
+
+fn form_width(b: i64) -> i64 ensures 1 <= result && result <= 4
+{
+  // 255 is the separator byte between a lone high and a lone low slot: one byte, no unit.
+  if b == 255 { return 1; }
+  if b < 192 { return 1; }
+  if b < 224 { return 2; }
+  if b < 240 { return 3; }
+  return 4;
+}
+
+fn form_code(w: [i64], pool: i64, k: i64, width: i64) -> i64
+  requires 0 <= k && k <= 2147483647
+  ensures 0 <= result && result <= 2097151
+{
+  let b: i64 = pool_byte(w, pool, k);
+  if width == 1 { return b; }
+  let b1: i64 = pool_byte(w, pool, k + 1) % 64;
+  if width == 2 { return b % 32 * 64 + b1; }
+  let b2: i64 = pool_byte(w, pool, k + 2) % 64;
+  if width == 3 { return b % 16 * 4096 + b1 * 64 + b2; }
+  return b % 8 * 262144 + b1 * 4096 + b2 * 64 + pool_byte(w, pool, k + 3) % 64;
+}
+
+pub fn span_units(w: [i64], pool: i64, off0: i64, n0: i64) -> i64
+  ensures 0 <= result && result <= 1073741823
+{
+  let off: i64 = crate::ent_u16::clamp(off0, 1073741823);
+  let n: i64 = crate::ent_u16::clamp(n0, crate::ent_u16::clamp(pool_bytes(w, pool) - off, 1073741823));
+  let mut k: i64 = 0;
+  let mut u: i64 = 0;
+  while k < n
+    invariant 0 <= k && k <= n + 3 && 0 <= u && u <= k && 0 <= off && off <= 1073741823 && n <= 1073741823
+    decreases n - k
+  {
+    let b: i64 = pool_byte(w, pool, off + k);
+    let width: i64 = form_width(b);
+    if width > n - k { return u; }
+    if width == 4 { u = u + 2; } else if b != 255 { u = u + 1; }
+    k = k + width;
+  }
+  return crate::ent_u16::clamp(u, 1073741823);
+}
+
+// Byte length of a complete prefix containing at most the requested number of units.
+pub fn prefix_bytes(w: [i64], pool: i64, off0: i64, n0: i64, limit0: i64) -> i64
+  ensures 0 <= result && result <= 1073741823
+{
+  let off: i64 = crate::ent_u16::clamp(off0, 1073741823);
+  let n: i64 = crate::ent_u16::clamp(n0, crate::ent_u16::clamp(pool_bytes(w, pool) - off, 1073741823));
+  let limit: i64 = crate::ent_u16::clamp(limit0, 1073741823);
+  let mut k: i64 = 0;
+  let mut u: i64 = 0;
+  while k < n && u < limit
+    invariant 0 <= k && k <= n && n <= 1073741823 && 0 <= u && u <= limit && limit <= 1073741823 && 0 <= off && off <= 1073741823
+    decreases n - k
+  {
+    let b: i64 = pool_byte(w, pool, off + k);
+    let width: i64 = form_width(b);
+    if width > n - k { return k; }
+    if width == 4 {
+      if u + 2 > limit { return k; }
+      u = u + 2;
+    } else if b != 255 { u = u + 1; }
+    k = k + width;
+  }
+  return k;
+}
+
+fn decode_into(w: [i64], pool: i64, off0: i64, n0: i64, inout o: [i64], at: i64) -> i64
+  requires 0 <= at && at <= 4294967296
+  ensures len(o) == len(old(o)) && at <= result && result <= at + 1073741824
+{
+  let off: i64 = crate::ent_u16::clamp(off0, 1073741823);
+  let n: i64 = crate::ent_u16::clamp(n0, crate::ent_u16::clamp(pool_bytes(w, pool) - off, 1073741823));
+  let mut k: i64 = 0;
+  let mut u: i64 = 0;
+  while k < n
+    invariant 0 <= k && k <= n && 0 <= u && u <= k && n <= 1073741823 && 0 <= off && off <= 1073741823 && 0 <= at && at <= 4294967296 && len(o) == len(old(o))
+    decreases n - k
+  {
+    let b: i64 = pool_byte(w, pool, off + k);
+    let width: i64 = form_width(b);
+    if width > n - k { return at + u; }
+    let cp: i64 = form_code(w, pool, off + k, width);
+    if b == 255 {
+    } else if width == 4 {
+      let scalar: i64 = crate::ent_u16::clamp(cp - 65536, 1048575);
+      crate::ent_u16::wr(inout o, at + u, 55296 + scalar / 1024);
+      crate::ent_u16::wr(inout o, at + u + 1, 56320 + scalar % 1024);
+      u = u + 2;
+    } else {
+      crate::ent_u16::wr(inout o, at + u, cp);
+      u = u + 1;
+    }
+    k = k + width;
+  }
+  return at + u;
+}
+
+fn decode_span(w: [i64], pool: i64, off: i64, n: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let mut o: [i64] = alloc(span_units(w, pool, off, n), 0);
+  let end: i64 = decode_into(w, pool, off, n, inout o, 0);
+  return o;
+}
+
+fn slot_off(w: [i64], p: i64) -> i64
+  ensures 0 <= result && result <= 1073741823
+{
+  return crate::ent_u16::clamp(pstr_off(w, crate::ent_u16::clamp(p, 4294967296)), 1073741823);
+}
+
+pub fn slot_bytes(w: [i64], p: i64) -> i64
+  ensures 0 <= result && result <= 1073741823
+{
+  return crate::ent_u16::clamp(pstr_raw_len(w, crate::ent_u16::clamp(p, 4294967296)), 1073741823);
+}
+
+pub fn str_len(w: [i64], p: i64) -> i64
   ensures 0 <= result && result <= 16777216
 {
-  let p: i64 = crate::ent_u16::clamp(p0, 4294967296);
-  return crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 2), 16777216);
+  return crate::ent_u16::clamp(pstr_len_at(w, crate::ent_packet::sec_start(w, 0), w, p), 16777216);
 }
 
-// the string slot at p as a unit array
 pub fn str_units(w: [i64], p: i64) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  let s: i64 = str_start(w, p);
-  return crate::ent_u16::slice(w, s, s + str_len(w, p));
+  return decode_span(w, crate::ent_packet::sec_start(w, 0), slot_off(w, p), slot_bytes(w, p));
 }
 
-// the string slot at p equals the unit array lit
-pub fn str_eq_arr(w: [i64], p: i64, lit: [i64]) -> bool
+pub fn str_eq_arr(w: [i64], p: i64, lit: [i64]) -> bool ! alloc
 {
-  if crate::ent_u16::rd(w, p) != 6 { return false; }
-  let n: i64 = str_len(w, p);
-  if n != len(lit) { return false; }
-  let s: i64 = str_start(w, p);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(lit) && 0 <= s && s <= 67108864
-    decreases n - i
-  {
-    if crate::ent_u16::rd(w, s + i) != crate::ent_u16::rd(lit, i) { return false; }
-    i = i + 1;
-  }
-  return true;
+  if tag_at(w, p) != 6 { return false; }
+  let expected: [i64] = encode_pool(lit);
+  let n: i64 = slot_bytes(w, p);
+  return n == pool_bytes(expected, 0) &&
+    span_eq(w, crate::ent_packet::sec_start(w, 0), slot_off(w, p), expected, 0, 0, n);
 }
 
-// the string slot at p equals an ASCII literal
 pub fn str_eq_lit(w: [i64], p: i64, s: str) -> bool
 {
-  if crate::ent_u16::rd(w, p) != 6 { return false; }
-  let n: i64 = len(s);
-  if n != str_len(w, p) { return false; }
-  let st: i64 = str_start(w, p);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(s) && 0 <= st && st <= 67108864
-    decreases n - i
-  {
-    if crate::ent_u16::rd(w, st + i) != s[i] { return false; }
-    i = i + 1;
-  }
-  return true;
+  return pstr_eq_lit_at(w, crate::ent_packet::sec_start(w, 0), w, p, s);
 }
 
-// units of two string slots (possibly in different packets) are equal
 pub fn str_eq(w1: [i64], p1: i64, w2: [i64], p2: i64) -> bool
 {
-  let n: i64 = str_len(w1, p1);
-  if n != str_len(w2, p2) { return false; }
-  let s1: i64 = str_start(w1, p1);
-  let s2: i64 = str_start(w2, p2);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && 0 <= s1 && s1 <= 67108864 && 0 <= s2 && s2 <= 67108864
-    decreases n - i
-  {
-    if crate::ent_u16::rd(w1, s1 + i) != crate::ent_u16::rd(w2, s2 + i) { return false; }
-    i = i + 1;
-  }
-  return true;
+  return pstr_eq_at(w1, crate::ent_packet::sec_start(w1, 0), w1, p1,
+                    w2, crate::ent_packet::sec_start(w2, 0), w2, p2);
 }
 
 // strict equality (===) of two slots. Tags 0 and 10 are equal; numbers: NaN is unequal, +0 equals -0; refs by id.
@@ -280,7 +384,7 @@ pub fn key_put_at(w: [i64], p0: i64, pool: i64, inout o: [i64], at0: i64) -> i64
     return r;
   }
   if t == 6 {
-    let r: i64 = crate::ent_u16::put_range(inout o, at, w, str_start_at(w, p, pool), str_len(w, p));
+    let r: i64 = decode_into(w, pool, slot_off(w, p), slot_bytes(w, p), inout o, at);
     return r;
   }
   if t == 5 {
@@ -340,30 +444,29 @@ pub fn pstr_put_prefix(inout o: [i64], at: i64, w: [i64], p: i64, n: i64) -> ()
   crate::ent_packet::put_vs(inout o, at, 6, pstr_off(w, p), n);
 }
 
-// Copy a slot prefix into a preallocated buffer using total reads and writes.
+// Copy the units of a byte prefix into a preallocated key buffer.
 pub fn pool_copy_into(w: [i64], pool: i64, p: i64, n: i64, inout o: [i64], at: i64) -> i64
   requires 0 <= at && at <= 4294967296
   ensures len(o) == len(old(o)) && at <= result && result <= at + 1073741824
 {
-  return crate::ent_u16::put_range(inout o, at, w, str_start_at(w, p, pool), n);
+  return decode_into(w, pool, slot_off(w, p), n, inout o, at);
 }
 
-// Copy a packet pool prefix with the same total range semantics as a slot copy.
-pub fn pool_copy_prefix(inout o: [i64], at: i64, w: [i64], pool: i64, n: i64) -> i64
-  requires 0 <= at && at <= 4294967296 && 0 <= pool && pool <= 4294967296
-  ensures len(o) == len(old(o)) && at <= result && result <= at + 1073741824
+pub fn pstr_find_byte(w: [i64], p: i64, pool: i64, byte: i64) -> i64
+  ensures 0 <= result && result <= 1073741823
 {
-  return crate::ent_u16::put_range(inout o, at, w, pool, n);
-}
-
-// Bulk copy a checked pool span into a preallocated buffer.
-pub fn pool_copy_range(inout o: [i64], at: i64, w: [i64], pool: i64, off: i64, n: i64) -> ()
-  requires 0 <= at && 0 <= pool && 0 <= off && 0 <= n
-  requires pool <= len(w) && off <= len(w) - pool && n <= len(w) - pool - off
-  requires at <= len(o) && n <= len(o) - at
-  ensures len(o) == len(old(o))
-{
-  copy_range(inout o, at, w, pool + off, n);
+  let off: i64 = slot_off(w, p);
+  let n: i64 = crate::ent_u16::clamp(slot_bytes(w, p), crate::ent_u16::clamp(pool_bytes(w, pool) - off, 1073741823));
+  let mut i: i64 = 0;
+  // MUTANT M14: keep the last match.
+  while i < n
+    invariant 0 <= i && i <= n && n <= 1073741823 && 0 <= off && off <= 1073741823
+    decreases n - i
+  {
+    if pool_byte(w, pool, off + i) == byte { return i; }
+    i = i + 1;
+  }
+  return n;
 }
 
 pub fn pool_eq(pool: [i64], a: i64, b: i64, n: i64) -> bool
@@ -400,186 +503,511 @@ pub fn pool_hash(keys: [i64], fo: i64, fl: i64) -> i64
   return hh;
 }
 
-pub fn packet_pool_ok(w: [i64]) -> bool
+// Append a slot to a zeroed pool builder; the source can be an embedded packet.
+pub fn append_slot(inout pool: [i64], start: i64, src: [i64], ps: i64, slots: [i64], p: i64, inout out: [i64], at: i64) -> ()
+  requires 0 <= start && start <= 2147483647
+  ensures len(pool) == len(old(pool)) && len(out) == len(old(out))
 {
-  let p0: i64 = crate::ent_packet::sec_start(w, 0);
-  let l0: i64 = crate::ent_packet::sec_len(w, 0);
-  let mut k: i64 = 0;
-  while k < l0
-    invariant 0 <= k && k <= l0 && 0 <= p0 && p0 <= 33554432 && l0 <= 16777216
-    decreases l0 - k
-  {
-    let u: i64 = crate::ent_u16::rd(w, p0 + k);
-    if u < 0 || u > 65535 { return false; }
-    k = k + 1;
-  }
-  return true;
+  let off: i64 = slot_off(slots, p);
+  let nb: i64 = crate::ent_u16::clamp(slot_bytes(slots, p), crate::ent_u16::clamp(pool_bytes(src, ps) - off, 1073741823));
+  let base: i64 = append_span(inout pool, start, src, ps, off, nb, span_units(src, ps, off, nb));
+  crate::ent_packet::put_vs(inout out, at, 6, base, nb);
 }
 
-// The logical size differs from the physical layout only in section 0.
+// A whole-form cut can reuse the source span when the source pool is retained.
+pub fn put_prefix(inout pool: [i64], inout tab: [i64], at: i64, w: [i64], ps: i64, off0: i64, n: i64, cut: i64, reuse: bool) -> ()
+  ensures len(pool) == len(old(pool)) && len(tab) == len(old(tab))
+{
+  let off: i64 = crate::ent_u16::clamp(off0, 1073741823);
+  let nb: i64 = prefix_bytes(w, ps, off, n, cut);
+  let nu: i64 = span_units(w, ps, off, nb);
+  let split: bool = nb < n && nu < cut && form_width(pool_byte(w, ps, off + nb)) == 4;
+  write_prefix(inout pool, inout tab, at, w, ps, off, nb, nu, split, reuse);
+}
+
+fn write_prefix(inout pool: [i64], inout tab: [i64], at: i64, w: [i64], ps: i64, off: i64, nb: i64, nu: i64, split: bool, reuse: bool) -> ()
+  requires 0 <= off && off <= 1073741823 && 0 <= nb && nb <= 1073741823
+  ensures len(pool) == len(old(pool)) && len(tab) == len(old(tab))
+{
+  if !split && reuse {
+    crate::ent_packet::put_vs(inout tab, at, 6, off, nb);
+    return;
+  }
+  let base: i64 = append_span(inout pool, 0, w, ps, off, nb, nu);
+  if split {
+    let cp: i64 = form_code(w, ps, off + nb, 4);
+    let hi: i64 = 55296 + crate::ent_u16::clamp(cp - 65536, 1048575) / 1024;
+    let end: i64 = pool_bytes(pool, 0);
+    emit(inout pool, 0, end, 237);
+    emit(inout pool, 0, end + 1, 128 + (hi / 64) % 64);
+    emit(inout pool, 0, end + 2, 128 + hi % 64);
+    let units: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(pool, 0), 1073741823);
+    crate::ent_u16::wr(inout pool, 0, units + 1);
+    crate::ent_u16::wr(inout pool, 1, end + 3);
+    crate::ent_packet::put_vs(inout tab, at, 6, base, nb + 3);
+  } else {
+    crate::ent_packet::put_vs(inout tab, at, 6, base, nb);
+  }
+}
+
+// 0 means the title fits. Otherwise the magnitude is one plus the retained byte count;
+// a negative result means the cut keeps only the high surrogate of the next form.
+pub fn title_cut(w: [i64], ps: i64, p: i64, cut: i64) -> i64
+{
+  let off: i64 = slot_off(w, p);
+  let n: i64 = crate::ent_u16::clamp(slot_bytes(w, p), crate::ent_u16::clamp(pool_bytes(w, ps) - off, 1073741823));
+  let limit: i64 = crate::ent_u16::clamp(cut, 200);
+  let mut k: i64 = 0;
+  let mut u: i64 = 0;
+  while k < n && u < limit
+    invariant 0 <= k && k <= n && n <= 1073741823 && 0 <= u && u <= limit && limit <= 200 && 0 <= off && off <= 1073741823
+    decreases n - k
+  {
+    let b: i64 = pool_byte(w, ps, off + k);
+    let width: i64 = form_width(b);
+    if width > n - k { return 0; }
+    if width == 4 {
+      if u + 2 > limit { return 0 - (k + 1); }
+      u = u + 2;
+    } else if b != 255 { u = u + 1; }
+    k = k + width;
+  }
+  if k == n { return 0; }
+  return k + 1;
+}
+
+pub fn put_title_prefix(inout pool: [i64], inout tab: [i64], at: i64, w: [i64], p: i64, clip0: i64, cut: i64, reuse: bool) -> ()
+  ensures len(pool) == len(old(pool)) && len(tab) == len(old(tab))
+{
+  let clip: i64 = clip0;
+  if clip < 0 - 601 || clip > 601 || clip == 0 { return; }
+  let mut nb: i64 = crate::ent_u16::clamp(clip - 1, 600);
+  let mut nu: i64 = cut;
+  let split: bool = clip < 0;
+  if split {
+    nb = 0 - clip - 1;
+    nu = crate::ent_u16::clamp(cut, 200) - 1;
+  }
+  write_prefix(inout pool, inout tab, at, w, crate::ent_packet::sec_start(w, 0), slot_off(w, p), nb, nu, split, reuse);
+}
+
+// Units of the first cut0 bytes. Separator bytes (255) count no unit.
+pub fn prefix_pool_units(w: [i64], pool: i64, cut0: i64) -> i64
+  ensures 0 <= result && result <= 1073741823
+{
+  let nb: i64 = pool_bytes(w, pool);
+  let cut: i64 = crate::ent_u16::clamp(cut0, nb);
+  if cut == nb { return crate::ent_u16::clamp(crate::ent_u16::rd(w, pool), nb); }
+  return span_units(w, pool, 0, cut);
+}
+
 pub fn logical_pool_words(w: [i64]) -> i64
   ensures 0 <= result && result <= 16777216
 {
-  return pkt_size(w) - len(w) + crate::ent_packet::sec_len(w, 0);
+  return crate::ent_u16::clamp(crate::ent_u16::rd(w, crate::ent_packet::sec_start(w, 0)), 16777216);
 }
 
-// Copy a title prefix into the preallocated pool without copying the whole pool.
-pub fn put_title_prefix(inout pool: [i64], off: i64, inout tab: [i64], at: i64, w: [i64], p: i64, cut: i64) -> ()
-  requires 0 <= off && off <= 4294967296
-  ensures len(pool) == len(old(pool)) && len(tab) == len(old(tab))
+pub fn pkt_size(w: [i64]) -> i64
+  ensures 0 <= result
 {
-  crate::ent_packet::put_vs(inout tab, at, 6, off, cut);
-  let end: i64 = pool_copy_into(w, crate::ent_packet::sec_start(w, 0), p, cut, inout pool, off);
+  let l0: i64 = crate::ent_packet::sec_len(w, 0);
+  if l0 < 2 || l0 > len(w) { return len(w); }
+  let rest: i64 = len(w) - l0;
+  if rest > 16777216 { return rest; }
+  return rest + logical_pool_words(w);
 }
 
-// ---- DB14: string pool coordinate helpers ----
-// Every writer and reader of string slots goes through these, so the slot coordinate (today UTF-16 units of a unit
-// pool, slot [6, unit_off, unit_len]) is decided here and in the packet checks only (D-DB13-1 stage 3 flips the bodies).
-// A "pool" below is a section-0 pool as an array; a "pslot" is a string slot whose pool is a separate array.
-
-// a fresh empty pool
 pub fn pool_new() -> [i64] ! alloc
-  ensures len(result) == 0
+  ensures len(result) == 2
 {
-  return crate::ent_u16::empty();
+  return alloc(2, 0);
 }
 
-// words the pool occupies as section 0 (section length; every limit on section sizes uses this)
 pub fn pool_words(pool: [i64]) -> i64
   ensures result == len(pool)
 {
   return len(pool);
 }
 
-// slot length of the unit string s once it is in a pool
-pub fn slot_len_of(s: [i64]) -> i64
-  ensures result == len(s)
+pub fn pool_capacity(nb: i64) -> i64
+  requires 0 <= nb && nb <= 2147483647
+  ensures result == 2 + (nb + 6) / 7
 {
-  return len(s);
+  return 2 + (nb + 6) / 7;
 }
 
-// append the unit string s to pool; returns the slot offset of s in the new pool
-pub fn pool_add(inout pool: [i64], s: [i64]) -> i64 ! alloc
-  ensures 0 <= result
+// A zeroed preallocated pool can take multiple appends before trimming its unused words.
+pub fn pool_finish(pool: [i64], start: i64) -> [i64] ! alloc
+  requires 0 <= start && start <= 2147483647
+  ensures len(result) >= 0
 {
-  let off: i64 = len(pool);
-  pool = crate::ent_u16::cat(pool, s);
+  return crate::ent_u16::slice(pool, start, start + pool_capacity(pool_bytes(pool, start)));
+}
+
+// Shorten a standalone pool at a complete form, keeping its packed prefix.
+pub fn pool_keep_prefix(inout pool: [i64], nb0: i64, nu0: i64) -> () ! alloc
+{
+  let nb: i64 = crate::ent_u16::clamp(nb0, pool_bytes(pool, 0));
+  let nu: i64 = crate::ent_u16::clamp(nu0, nb);
+  let words: i64 = pool_capacity(nb);
+  if nb % 7 != 0 {
+    let at: i64 = 2 + nb / 7;
+    let shift: i64 = 8 * (7 - nb % 7);
+    let word: i64 = crate::ent_u16::rd(pool, at);
+    crate::ent_u16::wr(inout pool, at, word & ~((1 << shift) - 1));
+  }
+  crate::ent_u16::wr(inout pool, 0, nu);
+  crate::ent_u16::wr(inout pool, 1, nb);
+  if words < len(pool) { pool = truncate(pool, words); }
+}
+
+fn emit(inout o: [i64], pool: i64, k: i64, byte: i64) -> ()
+  requires 0 <= pool && pool <= 2147483647 && 0 <= k && k <= 2147483647 && 0 <= byte && byte <= 255
+  ensures len(o) == len(old(o))
+{
+  let at: i64 = pool + 2 + k / 7;
+  let bits: i64 = byte << (8 * (6 - k % 7));
+  let word: i64 = crate::ent_u16::rd(o, at);
+  crate::ent_u16::wr(inout o, at, word | bits);
+}
+
+pub fn starts_low(w: [i64], pool: i64, off: i64, n: i64) -> bool
+  requires 0 <= off && off <= 1073741823
+{
+  if n < 3 || pool_byte(w, pool, off) != 237 { return false; }
+  let second: i64 = pool_byte(w, pool, off + 1);
+  return 176 <= second && second <= 191;
+}
+
+pub fn ends_high(w: [i64], pool: i64, end: i64) -> bool
+  requires 0 <= end && end <= 1073741823
+{
+  if end < 3 || pool_byte(w, pool, end - 3) != 237 { return false; }
+  let second: i64 = pool_byte(w, pool, end - 2);
+  return 160 <= second && second <= 175;
+}
+
+// Append a range of complete encoded forms, preserving string boundaries.
+pub fn append_span(inout o: [i64], dest: i64, w: [i64], src: i64, off0: i64, n0: i64, units0: i64) -> i64
+  requires 0 <= dest && dest <= 2147483647
+  ensures len(o) == len(old(o)) && 0 <= result && result <= 1073741824
+{
+  let nb: i64 = pool_bytes(o, dest);
+  let off: i64 = crate::ent_u16::clamp(off0, 1073741823);
+  let n: i64 = crate::ent_u16::clamp(n0, crate::ent_u16::clamp(pool_bytes(w, src) - off, 1073741823));
+  let mut base: i64 = nb;
+  if ends_high(o, dest, nb) && starts_low(w, src, off, n) { base = nb + 1; }
+  if n > 1073741823 - base { return nb; }
+  if base > nb { emit(inout o, dest, nb, 255); }
+  let mut k: i64 = 0;
+  while k < n
+    invariant 0 <= k && k <= n && 0 <= base && base + n <= 1073741823 && 0 <= off && off <= 1073741823 && 0 <= dest && dest <= 2147483647 && len(o) == len(old(o))
+    decreases n - k
+  {
+    emit(inout o, dest, base + k, pool_byte(w, src, off + k));
+    k = k + 1;
+  }
+  let nu: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(o, dest), 1073741823);
+  let units: i64 = crate::ent_u16::clamp(units0, n);
+  crate::ent_u16::wr(inout o, dest, nu + units);
+  crate::ent_u16::wr(inout o, dest + 1, base + n);
+  return base;
+}
+
+// Copy an aligned pool prefix and clear only the final partial word's unused bytes.
+pub fn copy_pool_prefix(inout o: [i64], dest0: i64, w: [i64], src0: i64, n0: i64, units: i64) -> ()
+  ensures len(o) == len(old(o))
+{
+  let dest: i64 = crate::ent_u16::clamp(dest0, 2147483647);
+  let src: i64 = crate::ent_u16::clamp(src0, 2147483647);
+  let n: i64 = crate::ent_u16::clamp(n0, pool_bytes(w, src));
+  let full: i64 = n / 7;
+  let rest: i64 = n % 7;
+  crate::ent_u16::wr(inout o, dest, units);
+  crate::ent_u16::wr(inout o, dest + 1, n);
+  let end: i64 = crate::ent_u16::put_range(inout o, dest + 2, w, src + 2, full);
+  if rest != 0 {
+    let word: i64 = crate::ent_u16::rd(w, src + 2 + full);
+    let shift: i64 = 8 * (7 - rest);
+    crate::ent_u16::wr(inout o, dest + 2 + full, word & ~((1 << shift) - 1));
+  }
+}
+
+pub fn pool_head(w: [i64], src: i64, n0: i64, units: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let n: i64 = crate::ent_u16::clamp(n0, pool_bytes(w, src));
+  let mut o: [i64] = alloc(pool_capacity(n), 0);
+  copy_pool_prefix(inout o, 0, w, src, n, units);
+  return o;
+}
+
+pub fn pool_starts_with(pool: [i64], prefix: [i64]) -> bool
+{
+  let n: i64 = pool_bytes(prefix, 0);
+  if n > pool_bytes(pool, 0) { return false; }
+  let full: i64 = n / 7;
+  if 2 + full > len(pool) || 2 + full > len(prefix) || !eq_range(pool, 2, prefix, 2, full) { return false; }
+  let rest: i64 = n % 7;
+  if rest == 0 { return true; }
+  let shift: i64 = 8 * (7 - rest);
+  return (crate::ent_u16::rd(pool, 2 + full) >> shift) == (crate::ent_u16::rd(prefix, 2 + full) >> shift);
+}
+
+fn high(c: i64) -> bool { return 55296 <= c && c <= 56319; }
+fn low(c: i64) -> bool { return 56320 <= c && c <= 57343; }
+
+fn unit_width(s: [i64], i: i64, n: i64) -> i64
+  requires 0 <= i && i <= 1073741823 && 0 <= n && n <= 1073741823
+  ensures 1 <= result && result <= 4
+{
+  let c: i64 = crate::ent_u16::rd(s, i);
+  if c < 128 { return 1; }
+  if c < 2048 { return 2; }
+  if high(c) && i + 1 < n && low(crate::ent_u16::rd(s, i + 1)) { return 4; }
+  return 3;
+}
+
+pub fn slot_len_of(s: [i64]) -> i64
+  ensures 0 <= result && result <= 1073741823
+{
+  let n: i64 = crate::ent_u16::clamp(len(s), 1073741823);
+  let mut nb: i64 = 0;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n + 1 && n <= 1073741823 && 0 <= nb && nb <= 3 * i
+    decreases n - i
+  {
+    let width: i64 = unit_width(s, i, n);
+    nb = nb + width;
+    if width == 4 { i = i + 2; } else { i = i + 1; }
+  }
+  return crate::ent_u16::clamp(nb, 1073741823);
+}
+
+pub fn encode_pool(s: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let n: i64 = crate::ent_u16::clamp(len(s), 357913941);
+  let nb: i64 = slot_len_of(s);
+  let mut o: [i64] = alloc(pool_capacity(nb), 0);
+  let mut i: i64 = 0;
+  let mut k: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n + 1 && n <= 357913941 && 0 <= k && k <= 3 * i
+    decreases n - i
+  {
+    let c: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(s, i), 65535);
+    let width: i64 = unit_width(s, i, n);
+    if width == 1 { emit(inout o, 0, k, crate::ent_u16::clamp(c, 127)); }
+    if width == 2 {
+      emit(inout o, 0, k, 192 + (c / 64) % 32);
+      emit(inout o, 0, k + 1, 128 + c % 64);
+    }
+    if width == 3 {
+      emit(inout o, 0, k, 224 + c / 4096);
+      emit(inout o, 0, k + 1, 128 + (c / 64) % 64);
+      emit(inout o, 0, k + 2, 128 + c % 64);
+    }
+    if width == 4 {
+      let d: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(s, i + 1), 65535);
+      let cp: i64 = 65536 + crate::ent_u16::clamp(c - 55296, 1023) * 1024 + crate::ent_u16::clamp(d - 56320, 1023);
+      emit(inout o, 0, k, 240 + cp / 262144);
+      emit(inout o, 0, k + 1, 128 + (cp / 4096) % 64);
+      emit(inout o, 0, k + 2, 128 + (cp / 64) % 64);
+      emit(inout o, 0, k + 3, 128 + cp % 64);
+      i = i + 1;
+    }
+    i = i + 1;
+    k = k + width;
+  }
+  crate::ent_u16::wr(inout o, 0, n);
+  crate::ent_u16::wr(inout o, 1, nb);
+  return o;
+}
+
+pub fn pool_base(a: [i64], b: [i64]) -> i64
+  ensures 0 <= result && result <= 1073741824
+{
+  let nb: i64 = pool_bytes(a, 0);
+  if ends_high(a, 0, nb) && starts_low(b, 0, 0, pool_bytes(b, 0)) { return nb + 1; }
+  return nb;
+}
+
+pub fn pool_cat(a: [i64], b: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let an: i64 = pool_bytes(a, 0);
+  let bn: i64 = pool_bytes(b, 0);
+  let base: i64 = pool_base(a, b);
+  if bn > 1073741823 - base { return pool_new(); }
+  let mut o: [i64] = alloc(pool_capacity(base + bn), 0);
+  // Copy aligned words from the prefix, then add just the suffix bytes.
+  let end: i64 = crate::ent_u16::put_range(inout o, 0, a, 0, pool_capacity(an));
+  let at: i64 = append_span(inout o, 0, b, 0, 0, bn, crate::ent_u16::rd(b, 0));
+  return o;
+}
+
+pub fn pool_add(inout pool: [i64], s: [i64]) -> i64 ! alloc
+  ensures 0 <= result && result <= 1073741824
+{
+  let suffix: [i64] = encode_pool(s);
+  let off: i64 = pool_base(pool, suffix);
+  pool = pool_cat(pool, suffix);
   return off;
 }
 
-// append the unit string s to pool and write its slot [6, off, len] at o[at]
 pub fn pool_put(inout pool: [i64], inout o: [i64], at: i64, s: [i64]) -> () ! alloc
   ensures len(o) == len(old(o))
 {
   let off: i64 = pool_add(inout pool, s);
-  crate::ent_packet::put_vs(inout o, at, 6, off, slot_len_of(s));
+  crate::ent_packet::put_vs(inout o, at, 6, off, pool_bytes(pool, 0) - off);
 }
 
-// pool_put of an ASCII literal
 pub fn pool_put_lit(inout pool: [i64], inout o: [i64], at: i64, s: str) -> () ! alloc
   ensures len(o) == len(old(o))
 {
   pool_put(inout pool, inout o, at, crate::ent_u16::lit(s));
 }
 
-// pool a followed by pool b; slots into b move up by pool_base(a, b)
-pub fn pool_cat(a: [i64], b: [i64]) -> [i64] ! alloc
-  ensures len(result) >= 0
-{
-  return crate::ent_u16::cat(a, b);
-}
-
-pub fn pool_base(a: [i64], b: [i64]) -> i64
-  ensures result == len(a)
-{
-  return len(a);
-}
-
-// logical size of a packet in the words the limits and the op 9 state numbers count (the expanded packet length)
-pub fn pkt_size(w: [i64]) -> i64
-  ensures result == len(w)
-{
-  return len(w);
-}
-
-// readers of a pslot (pool, w, p): units, length, literal and slot equality, and the UTF-16 order of two strings
-pub fn pstr_len(w: [i64], p: i64) -> i64
-  requires 0 <= p && p <= 1000000000
+fn pstr_len_at(pool: [i64], start: i64, w: [i64], p: i64) -> i64
   ensures 0 <= result && result <= 1073741823
 {
-  return crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 2), 1073741823);
+  return span_units(pool, start, slot_off(w, p), slot_bytes(w, p));
+}
+
+pub fn pstr_len(pool: [i64], w: [i64], p: i64) -> i64
+  ensures 0 <= result && result <= 1073741823
+{
+  return pstr_len_at(pool, 0, w, p);
 }
 
 pub fn pstr_units(pool: [i64], w: [i64], p: i64) -> [i64] ! alloc
-  requires 0 <= p && p <= 1000000000
   ensures len(result) >= 0
 {
-  if crate::ent_u16::rd(w, p) != 6 { return crate::ent_u16::empty(); }
-  let a: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 1), 1073741823);
-  return crate::ent_u16::slice(pool, a, a + pstr_len(w, p));
+  if tag_at(w, p) != 6 { return crate::ent_u16::empty(); }
+  return decode_span(pool, 0, slot_off(w, p), slot_bytes(w, p));
 }
 
-// pslot equals the ASCII literal s (false when not a string slot)
+fn pstr_eq_lit_at(pool: [i64], start: i64, w: [i64], p: i64, s: str) -> bool
+{
+  if tag_at(w, p) != 6 { return false; }
+  let n: i64 = slot_bytes(w, p);
+  if n != len(s) { return false; }
+  let off: i64 = slot_off(w, p);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(s) && n <= 1073741823 && 0 <= off && off <= 1073741823
+    decreases n - i
+  {
+    if pool_byte(pool, start, off + i) != s[i] { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
 pub fn pstr_eq_lit(pool: [i64], w: [i64], p: i64, s: str) -> bool
-  requires 0 <= p && p <= 1000000000
 {
-  if crate::ent_u16::rd(w, p) != 6 { return false; }
-  let n: i64 = len(s);
-  if n != pstr_len(w, p) { return false; }
-  let st: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 1), 1073741823);
+  return pstr_eq_lit_at(pool, 0, w, p, s);
+}
+
+fn span_eq(pa: [i64], sa: i64, oa: i64, pb: [i64], sb: i64, ob: i64, n: i64) -> bool
+  requires 0 <= n && n <= 1073741823 && 0 <= oa && oa <= 1073741823 && 0 <= ob && ob <= 1073741823
+{
   let mut i: i64 = 0;
   while i < n
-    invariant 0 <= i && i <= n && n == len(s) && 0 <= st && st <= 1073741823
+    invariant 0 <= i && i <= n && n <= 1073741823 && 0 <= oa && oa <= 1073741823 && 0 <= ob && ob <= 1073741823
     decreases n - i
   {
-    if crate::ent_u16::rd(pool, st + i) != s[i] { return false; }
+    if pool_byte(pa, sa, oa + i) != pool_byte(pb, sb, ob + i) { return false; }
     i = i + 1;
   }
   return true;
 }
 
-// two string pslots have equal units
+fn pstr_eq_at(pa: [i64], sa: i64, a: [i64], ia: i64, pb: [i64], sb: i64, b: [i64], ib: i64) -> bool
+{
+  let n: i64 = slot_bytes(a, ia);
+  return n == slot_bytes(b, ib) && span_eq(pa, sa, slot_off(a, ia), pb, sb, slot_off(b, ib), n);
+}
+
 pub fn pstr_eq(pa: [i64], a: [i64], ia: i64, pb: [i64], b: [i64], ib: i64) -> bool
-  requires 0 <= ia && ia <= 1000000000 && 0 <= ib && ib <= 1000000000
 {
-  let n: i64 = pstr_len(a, ia);
-  if n != pstr_len(b, ib) { return false; }
-  let s1: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(a, ia + 1), 1073741823);
-  let s2: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(b, ib + 1), 1073741823);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && 0 <= s1 && s1 <= 1073741823 && 0 <= s2 && s2 <= 1073741823
-    decreases n - i
-  {
-    if crate::ent_u16::rd(pa, s1 + i) != crate::ent_u16::rd(pb, s2 + i) { return false; }
-    i = i + 1;
-  }
-  return true;
+  return pstr_eq_at(pa, 0, a, ia, pb, 0, b, ib);
 }
 
-// UTF-16 code unit order of the string pslots p and q of w over one pool: -1, 0 or 1
-pub fn pstr_cmp(pool: [i64], w: [i64], p: i64, q: i64) -> i64
-  requires 0 <= p && p <= 1000000000 && 0 <= q && q <= 1000000000
+fn compare(a: i64, b: i64) -> i64 ensures -1 <= result && result <= 1
+{
+  if a < b { return -1; }
+  if a > b { return 1; }
+  return 0;
+}
+
+// Compare the UTF-16 units when a four-byte form meets a lone surrogate.
+fn pair_cmp(pool: [i64], pair: i64, lone: i64, left: i64) -> i64
+  requires 0 <= pair && pair <= 2147483647 && 0 <= lone && lone <= 2147483647
   ensures -1 <= result && result <= 1
 {
-  let nu: i64 = pstr_len(w, p);
-  let nv: i64 = pstr_len(w, q);
-  let su: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 1), 1073741823);
-  let sv: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, q + 1), 1073741823);
+  let scalar: i64 = crate::ent_u16::clamp(form_code(pool, 0, pair, 4) - 65536, 1048575);
+  let lead: i64 = 55296 + scalar / 1024;
+  let c: i64 = compare(lead, form_code(pool, 0, lone, 3));
+  if c != 0 { return c; }
+  if left <= 3 { return 1; }
+  let next: i64 = crate::ent_u16::clamp(lone + 3, 2147483647);
+  let width: i64 = form_width(pool_byte(pool, 0, next));
+  let cp: i64 = form_code(pool, 0, next, width);
+  let trail: i64 = 56320 + scalar % 1024;
+  if width == 4 { return 1; }
+  // The next complete form cannot be the same low surrogate: that would
+  // have formed a pair with the lone high surrogate in a canonical stream.
+  return compare(trail, cp);
+}
+
+// Compare bytes, except across the UTF-16 ordering boundary at surrogate forms.
+pub fn pstr_cmp(pool: [i64], w: [i64], p: i64, q: i64) -> i64
+  ensures -1 <= result && result <= 1
+{
+  let na: i64 = slot_bytes(w, p);
+  let nb: i64 = slot_bytes(w, q);
+  let oa: i64 = slot_off(w, p);
+  let ob: i64 = slot_off(w, q);
   let mut i: i64 = 0;
-  while i < nu && i < nv
-    invariant 0 <= i && i <= nu && 0 <= su && su <= 1073741823 && 0 <= sv && sv <= 1073741823
-    decreases nu - i
+  while i < na && i < nb
+    invariant 0 <= i && i <= na && i <= nb && na <= 1073741823 && nb <= 1073741823 && 0 <= oa && oa <= 1073741823 && 0 <= ob && ob <= 1073741823
+    decreases na - i
   {
-    let a: i64 = crate::ent_u16::rd(pool, su + i);
-    let b: i64 = crate::ent_u16::rd(pool, sv + i);
-    if a < b { return -1; }
-    if a > b { return 1; }
-    i = i + 1;
+    let a: i64 = pool_byte(pool, 0, oa + i);
+    let b: i64 = pool_byte(pool, 0, ob + i);
+    let wa: i64 = form_width(a);
+    let wb: i64 = form_width(b);
+    if wa != wb {
+      if wa == 4 && wb == 3 && b >= 237 {
+        if b >= 238 { return -1; }
+        if pool_byte(pool, 0, ob + i + 1) >= 160 {
+          return pair_cmp(pool, oa + i, ob + i, nb - i);
+        }
+      }
+      if wb == 4 && wa == 3 && a >= 237 {
+        if a >= 238 { return 1; }
+        if pool_byte(pool, 0, oa + i + 1) >= 160 {
+          return 0 - pair_cmp(pool, ob + i, oa + i, na - i);
+        }
+      }
+      return compare(a, b);
+    }
+    let mut j: i64 = 0;
+    while j < wa
+      invariant 0 <= j && j <= wa && wa <= 4 && 0 <= i && i <= 1073741823 && 0 <= oa && oa <= 1073741823 && 0 <= ob && ob <= 1073741823
+      decreases wa - j
+    {
+      let c: i64 = compare(pool_byte(pool, 0, oa + i + j), pool_byte(pool, 0, ob + i + j));
+      if c != 0 { return c; }
+      j = j + 1;
+    }
+    if wa > na - i || wa > nb - i { return compare(na, nb); }
+    i = i + wa;
   }
-  if nu < nv { return -1; }
-  if nu > nv { return 1; }
-  return 0;
+  return compare(na, nb);
 }
 
 // ---- DB17: req slot helpers ----
@@ -601,7 +1029,7 @@ pub fn pool_clamp_base(base: i64) -> i64
 pub fn pool_prefix(pool: [i64], base: i64) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  return crate::ent_u16::slice(pool, 0, pool_clamp_base(base));
+  return pool_head(pool, 0, base, prefix_pool_units(pool, 0, base));
 }
 
 // A stored pack places its pool word count immediately before the pool.
@@ -628,23 +1056,6 @@ pub fn packed_pool_read(w: [i64], size_at: i64) -> [i64] ! alloc
 {
   let start: i64 = size_at + 1;
   return crate::ent_u16::slice(w, start, start + packed_pool_words(w, size_at));
-}
-
-// Copy the packed pool into a preallocated destination using total reads.
-pub fn packed_pool_copy(inout o: [i64], at: i64, w: [i64], size_at: i64) -> i64
-  requires 0 <= at && at <= 4294967296 && 0 <= size_at && size_at <= 1000000000
-  ensures len(o) == len(old(o)) && at <= result && result <= at + 1073741824
-{
-  return crate::ent_u16::put_range(inout o, at, w, size_at + 1, packed_pool_words(w, size_at));
-}
-
-// Write a string and its slot into a preallocated pack. start is the pool's absolute start.
-pub fn packed_pool_put(inout o: [i64], start: i64, at: i64, slot: i64, units: [i64]) -> i64
-  requires 0 <= start && start <= 2147483647 && 0 <= at && at <= 2147483647
-  ensures len(o) == len(old(o))
-{
-  crate::ent_packet::put_vs(inout o, slot, 6, at - start, slot_len_of(units));
-  return crate::ent_u16::put_all(inout o, at, units);
 }
 
 pub fn pslot_empty(inout o: [i64], at: i64) -> ()
@@ -699,7 +1110,7 @@ pub fn pslot_copy_off_clamped(inout o: [i64], q: i64, w: [i64], p: i64, base: i6
   ensures len(o) == len(old(o))
 {
   let off: i64 = rebased_pool_off(crate::ent_u16::rd(w, p + 1), base);
-  crate::ent_packet::put_vs(inout o, q, 6, off, pstr_len(w, p));
+  crate::ent_packet::put_vs(inout o, q, 6, off, slot_bytes(w, p));
 }
 
 // Copy a slot array and rebase its string offsets in place.
@@ -726,15 +1137,15 @@ pub fn pslot_needs_clip(pool: [i64], w: [i64], p: i64) -> bool
   requires 0 <= p && p <= 1000000000
 {
   let off: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 1), 1073741823);
-  return off + pstr_len(w, p) > pool_words(pool);
+  return off + slot_bytes(w, p) > pool_bytes(pool, 0);
 }
 
 // A complete string slot whose raw span is within the pool.
-pub fn pslot_ok(plen: i64, w: [i64], p: i64) -> bool
+pub fn pslot_ok(pool: [i64], w: [i64], p: i64) -> bool
   requires 0 <= p && p <= 1000000000
 {
   if p + 3 > len(w) || tag_at(w, p) != 6 { return false; }
   let a: i64 = crate::ent_u16::rd(w, p + 1);
   let b: i64 = crate::ent_u16::rd(w, p + 2);
-  return 0 <= a && 0 <= b && a <= plen && b <= plen - a;
+  return span_ok(pool, 0, a, b);
 }

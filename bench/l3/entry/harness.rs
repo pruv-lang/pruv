@@ -43,6 +43,9 @@ impl entry_host::Sol for G {
         }
         #[allow(unused_mut)]
         let mut input = input;
+        #[cfg(entry_forge)]
+        #[allow(unused_mut)]
+        let mut input = self.forge.index_tail(input);
         let mut progress = vec![0; index_progress_len(&input)];
         #[cfg(entry_forge)]
         let other = self.forge.index_input(&input);
@@ -58,6 +61,8 @@ impl entry_host::Sol for G {
             emitted
         };
         if emitted[1] == 1 {
+            #[cfg(entry_forge)]
+            self.forge.index_stats(&emitted, &progress);
             self.index.replace(Some(Index { progress, input, emitted: Rc::clone(&emitted) }));
         }
         emitted

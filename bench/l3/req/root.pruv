@@ -18,6 +18,7 @@ mod req_wire;
 mod ent_u16;
 mod ent_packet;
 mod ent_value;
+mod ent_wire;
 mod ent_state;
 mod ent_dispatch;
 mod ent_bound;
@@ -210,6 +211,8 @@ fn emit_await(world: [i64], h: [i64], isnew: bool, owner: i64, seq: i64, pc: i64
   let hd: [i64] = mkh(h, 1, ns, crate::req_world::wgen(w2), ticket, pc, 1, 1, cc, cop, cs);
   let st: [i64] = crate::req_state::new_state(owner, pc, cc, cop, cs, 1);
   let pkt: [i64] = crate::req_packet::mk(hd, pool, rec, st, rows, wk, co, e, e);
+  // mk counts the child await by its logical size (C2): a parent over the limit ends InputTooLarge
+  if len(pkt) == 0 { return core_req(world, h, isnew, seq, 1); }
   return out(crate::req_world::act_set(w2, crate::ent_u16::rd(h, 5), 9, crate::req_world::dig(pkt, -1)), pkt);
 }
 
@@ -341,7 +344,7 @@ fn read_done(world: [i64], h: [i64], isnew: bool, owner: i64, seq: i64, p: [i64]
   let p2: [i64] = crate::ent_value::pool_cat(p, cp);
   let mut w2: [i64] = crate::req_list::w_items(wk, tab, cnt, crate::ent_value::pool_base(p, cp));
   // the base pool length (the pool without the child pool) waits in header slot 2 for pc 5
-  crate::req_list::hset(inout w2, 2, crate::ent_value::pool_words(p));
+  crate::req_list::hset(inout w2, 2, crate::ent_value::pool_bytes(p, 0));
   let mut call: [i64] = crate::ent_u16::zeros(2 + cnt);
   crate::ent_u16::wr(inout call, 0, 12);
   crate::ent_u16::wr(inout call, 1, cnt);
@@ -406,6 +409,8 @@ fn open_done(world: [i64], h: [i64], isnew: bool, seq: i64, cpool: [i64], crec: 
   ensures len(result) >= 0
 {
   if len(crec) != 4 || crate::ent_u16::rd(crec, 0) != 0 { return bad(world, h); }
+  // the copied sessionId string must be in range and on WTF-8 boundaries of its pool (C4)
+  if crate::ent_u16::rd(crec, 1) == 9 || !crate::req_value::slot_ok(cpool, crec, 1, false) { return bad(world, h); }
   let mut r: [i64] = crate::ent_u16::zeros(4);
   let mut count: i64 = 1;
   if existing { count = 2; }
@@ -525,14 +530,12 @@ fn open_recipe(world: [i64], h: [i64], owner: i64, seq: i64, p: [i64], rec: [i64
   ensures len(result) >= 0
 {
   let found: i64 = crate::ent_u16::clamp(crate::req_list::hget(wk, 4), 16777216);
-  if !crate::req_fill::view_ok(cr) || !crate::req_fill::title_ok(cr) { return bad(world, h); }
+  if !crate::req_fill::view_ok(cr) || !crate::req_fill::title_ok(cpool, cr) || !crate::req_fill::view_strs_ok(cpool, cr) { return bad(world, h); }
   let rows: [i64] = rows_acct(p, rec, rows0, found);
-  let title: [i64] = crate::req_fill::title_pick(cpool, cr, crate::req_value::units(p, wk, 15));
   let sn: [i64] = crate::req_fill::slot_name(p, rows, found);
   let view_pool: [i64] = crate::ent_value::pool_cat(p, cpool);
-  let mut suffix: [i64] = crate::ent_value::pool_new();
   let mut slots: [i64] = crate::ent_u16::zeros(6);
-  crate::ent_value::pool_put(inout suffix, inout slots, 0, title);
+  let mut suffix: [i64] = crate::req_fill::title_pool(cpool, cr, crate::req_value::units(p, wk, 15), inout slots);
   crate::ent_value::pool_put(inout suffix, inout slots, 3, sn);
   let pool2: [i64] = crate::ent_value::pool_cat(view_pool, suffix);
   let rcp: [i64] = crate::req_fill::recipe(p, rec, rows, wk, found, cr, slots, crate::ent_value::pool_base(view_pool, suffix), crate::ent_value::pool_base(p, cpool));
@@ -734,7 +737,8 @@ fn list_step(world: [i64], h: [i64], owner: i64, seq: i64, pc: i64, comp: [i64])
     return open_fail(world, h, false, owner, seq, p, rec, rows, wk, crec, 1, 1);
   }
   if pc == 3 {
-    if len(crec) != 7 || crate::ent_u16::rd(crec, 0) != 0 || crate::ent_u16::rd(crec, 1) != 9 || crate::ent_u16::rd(crec, 4) != 9 || !crate::req_value::slot_ok(0, crec, 1, false) || !crate::req_value::slot_ok(0, crec, 4, false) { return bad(world, h); }
+    let cpool: [i64] = crate::req_packet::sec(comp, 0);
+    if len(crec) != 7 || crate::ent_u16::rd(crec, 0) != 0 || crate::ent_u16::rd(crec, 1) != 9 || crate::ent_u16::rd(crec, 4) != 9 || !crate::req_value::slot_ok(cpool, crec, 1, false) || !crate::req_value::slot_ok(cpool, crec, 4, false) { return bad(world, h); }
     let mut r3: [i64] = crate::ent_u16::zeros(12);
     crate::req_value::copy_slot(inout r3, 0, rows, 18 * found + 3);
     crate::req_value::copy_slot(inout r3, 3, crec, 1);
@@ -754,7 +758,7 @@ fn list_step(world: [i64], h: [i64], owner: i64, seq: i64, pc: i64, comp: [i64])
     // the reply is one completion packet (ABI.md 10: at most 16,777,216 words)
     if n < 0 || n > 16777216 || 21 * m + 6 * n > 16777216 || crate::ent_u16::rd(crec, 0) != 0 || len(crec) != 2 + 21 * m + 6 * n { return bad(world, h); }
     let cp: [i64] = crate::req_packet::sec(comp, 0);
-    if !crate::req_value::slots_ok(crate::ent_value::pool_words(cp), crec, 2, 7 * m + 2 * n, true) { return bad(world, h); }
+    if !crate::req_value::slots_ok(cp, crec, 2, 7 * m + 2 * n, true) { return bad(world, h); }
     let base: i64 = crate::ent_value::pool_clamp_base(crate::req_list::hget(wk, 2));
     let p3: [i64] = crate::ent_value::pool_cat(p, cp);
     let mut w2: [i64] = crate::req_list::w_fill(wk, crec, m, n, crate::ent_value::pool_base(p, cp));
@@ -785,7 +789,7 @@ fn list_step(world: [i64], h: [i64], owner: i64, seq: i64, pc: i64, comp: [i64])
   }
   if pc == 8 {
     // host call 17 answers only in section 5: the record is [0] and the pool is empty (forge_test.py F51)
-    if len(crec) != 1 || crate::ent_u16::rd(crec, 0) != 0 || crate::req_packet::sec_len(comp, 0) != 0 { return bad(world, h); }
+    if len(crec) != 1 || crate::ent_u16::rd(crec, 0) != 0 || !crate::req_packet::empty_pool(comp) { return bad(world, h); }
     let co: [i64] = crate::entry_api::entry_begin(crate::req_packet::sec(comp, 5));
     if !crate::req_child::ok_any(co) || crate::req_child::kind(co) != 3 { return core_req(world, h, false, seq, 2); }
     if crate::req_child::done_tag(co) != 0 { return child_end(world, h, false, seq, co); }
@@ -800,9 +804,9 @@ fn list_step(world: [i64], h: [i64], owner: i64, seq: i64, pc: i64, comp: [i64])
   if pc == 9 {
     // the reply is [0, bound session id slot]; an open needs a string id
     let cpool: [i64] = crate::req_packet::sec(comp, 0);
-    if len(crec) != 4 || crate::ent_u16::rd(crec, 0) != 0 || !crate::req_value::slot_ok(crate::ent_value::pool_words(cpool), crec, 1, true) { return bad(world, h); }
+    if len(crec) != 4 || crate::ent_u16::rd(crec, 0) != 0 || !crate::req_value::slot_ok(cpool, crec, 1, true) { return bad(world, h); }
     if crate::ent_u16::rd(h, 3) == 3 && crate::ent_u16::rd(crec, 1) != 6 { return bad(world, h); }
-    if crate::ent_u16::rd(h, 3) == 3 && !(len(crec) == 4 && crate::ent_u16::rd(crec, 0) == 0 && crate::ent_u16::rd(crec, 1) == 6 && crate::ent_value::pstr_len(crec, 1) == 0) {
+    if crate::ent_u16::rd(h, 3) == 3 && !(len(crec) == 4 && crate::ent_u16::rd(crec, 0) == 0 && crate::ent_u16::rd(crec, 1) == 6 && crate::ent_value::slot_bytes(crec, 1) == 0) {
       if len(crec) == 4 && crate::ent_u16::rd(crec, 0) == 0 && crate::ent_u16::rd(crec, 1) == 6 && crate::req_list::hget(wk, 6) == 2 && crate::req_value::is_str_lit(p, rows, 18 * found + 3, "grok") {
         let mut w3: [i64] = copy(wk);
         crate::req_value::copy_slot_off(inout w3, 21, crec, 1, crate::ent_value::pool_base(p, cpool));
@@ -880,7 +884,7 @@ fn after_folder(world: [i64], h: [i64], isnew: bool, owner: i64, seq: i64, cpool
   let st: i64 = crate::ent_u16::rd(crec, 0);
   if st == 0 {
     // the folder is a string slot inside the completion pool (forge_test.py F52)
-    if (crate::ent_u16::rd(h, 3) != 2 && crate::ent_u16::rd(h, 3) != 3) || len(crec) != 4 || crate::ent_u16::rd(crec, 1) != 6 || !crate::req_value::slot_ok(crate::ent_value::pool_words(cpool), crec, 1, false) { return bad(world, h); }
+    if (crate::ent_u16::rd(h, 3) != 2 && crate::ent_u16::rd(h, 3) != 3) || len(crec) != 4 || crate::ent_u16::rd(crec, 1) != 6 || !crate::req_value::slot_ok(cpool, crec, 1, false) { return bad(world, h); }
     let np: [i64] = crate::req_packet::sec(h, 0);
     let p: [i64] = crate::ent_value::pool_cat(np, cpool);
     let rows: [i64] = crate::req_packet::sec(h, 3);
@@ -900,7 +904,7 @@ fn after_folder(world: [i64], h: [i64], isnew: bool, owner: i64, seq: i64, cpool
   crate::ent_value::pool_put(inout key, inout r, 1, folder_key);
   // MUTANT M02: always the folder fallback text instead of the Error message
   if crate::ent_u16::rd(crec, 7) == 3 {
-    if crate::ent_u16::rd(crec, 13) != 6 { return bad(world, h); }
+    if !crate::ent_value::pslot_ok(cpool, crec, 13) { return bad(world, h); }
     crate::ent_value::pslot_copy_off_clamped(inout r, 4, crec, 13, crate::ent_value::pool_base(key, cpool));
     return done_req(world, h, isnew, seq, crate::ent_value::pool_cat(key, cpool), r, crate::ent_u16::empty(), crate::ent_u16::empty());
   }
@@ -1041,7 +1045,7 @@ fn step_ok(world: [i64], prev: [i64], comp: [i64]) -> bool ! alloc
   if ck == 1 {
     if crate::req_packet::sec_len(comp, 1) != 1 { return false; }
     if crate::ent_u16::rd(crate::req_packet::sec(comp, 1), 0) != 0 { return false; }
-    if crate::req_packet::sec_len(comp, 0) != 0 { return false; }
+    if !crate::req_packet::empty_pool(comp) { return false; }
     if crate::req_packet::sec_len(comp, 5) == 0 { return false; }
     // the child completion answers the child await of prev: completion kind, same child call id and child seq
     let pa: [i64] = crate::req_packet::sec(prev, 5);
@@ -1051,8 +1055,8 @@ fn step_ok(world: [i64], prev: [i64], comp: [i64]) -> bool ! alloc
     return true;
   }
   if (ck == 2 || ck == 4) && crate::req_packet::sec_len(comp, 5) != 0 { return false; }
-  // a storage reply has no pool: the stored words carry their own units
-  if ck == 4 && crate::req_packet::sec_len(comp, 0) != 0 { return false; }
+  // A storage reply carries its packed strings inside the stored record.
+  if ck == 4 && !crate::req_packet::empty_pool(comp) { return false; }
   return true;
 }
 

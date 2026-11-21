@@ -69,11 +69,13 @@ fn build_rp(head: &[i64], secs: &[Vec<i64>]) -> Vec<i64> {
     w[0] = M_REQ;
     w[1] = 1;
     w[24] = secs.len() as i64;
-    for s in secs {
-        w.push(s.len() as i64);
+    for (i, s) in secs.iter().enumerate() {
+        let section = if i == 0 && s.is_empty() { &[0, 0][..] } else { s.as_slice() };
+        w.push(section.len() as i64);
     }
-    for s in secs {
-        w.extend_from_slice(s);
+    for (i, s) in secs.iter().enumerate() {
+        let section = if i == 0 && s.is_empty() { &[0, 0][..] } else { s.as_slice() };
+        w.extend_from_slice(section);
     }
     w[25] = w.len() as i64;
     w

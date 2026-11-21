@@ -241,18 +241,17 @@ impl Refs {
 // packet encoding
 
 struct Enc {
-    // The string pool as WTF-8 bytes (DB8 wire format) plus the unit count; slots stay in UTF-16 unit offsets.
+    // The string pool as WTF-8 bytes plus the unit count. Slots address byte ranges.
     bytes: Vec<u8>,
     nu: usize,
     rec: Vec<i64>,
     tables: Vec<Vec<i64>>,
 }
 
-// Pool mark for truncation: a later low surrogate may rewrite the last 3 bytes (join into a 4-byte form).
+// The pool is append-only between marks.
 struct PoolMark {
     len: usize,
     nu: usize,
-    tail: [u8; 3],
 }
 
 impl Enc {
@@ -260,23 +259,13 @@ impl Enc {
         Enc { bytes: Vec::new(), nu: 0, rec: Vec::new(), tables: Vec::new() }
     }
     fn pool_mark(&self) -> PoolMark {
-        let len = self.bytes.len();
-        let mut tail = [0u8; 3];
-        if len >= 3 {
-            tail.copy_from_slice(&self.bytes[len - 3..]);
-        }
-        PoolMark { len, nu: self.nu, tail }
+        PoolMark { len: self.bytes.len(), nu: self.nu }
     }
     fn pool_restore(&mut self, m: PoolMark) {
-        if m.len >= 3 {
-            self.bytes.truncate(m.len - 3);
-            self.bytes.extend_from_slice(&m.tail);
-        } else {
-            self.bytes.truncate(m.len);
-        }
+        self.bytes.truncate(m.len);
         self.nu = m.nu;
     }
-    // Appends UTF-16 units as WTF-8, joining a pair split across pushes into one 4-byte scalar.
+    // Append the canonical WTF-8 of a single string.
     fn push_units(&mut self, u: &[u16]) {
         self.bytes.reserve(u.len());
         let mut i = 0;
@@ -291,11 +280,6 @@ impl Enc {
                 let c = 0x10000 + ((x - 0xD800) << 10) + (u[i + 1] as u32 - 0xDC00);
                 self.push4(c);
                 i += 1;
-            } else if (0xDC00..0xE000).contains(&x) && self.ends_lone_high() {
-                let n = self.bytes.len();
-                let hi = 0xD000 | (((self.bytes[n - 2] & 0x3F) as u32) << 6) | (self.bytes[n - 1] & 0x3F) as u32;
-                self.bytes.truncate(n - 3);
-                self.push4(0x10000 + ((hi - 0xD800) << 10) + (x - 0xDC00));
             } else {
                 self.bytes.push(0xE0 | (x >> 12) as u8);
                 self.bytes.push(0x80 | ((x >> 6) & 0x3F) as u8);
@@ -315,20 +299,24 @@ impl Enc {
         let n = self.bytes.len();
         n >= 3 && self.bytes[n - 3] == 0xED && (0xA0..=0xAF).contains(&self.bytes[n - 2])
     }
-    // Old-format pool: one i64 per UTF-16 unit (REQ keeps this form).
-    fn units(&self) -> Vec<i64> {
-        wtf8_units(&self.bytes).expect("encoder produced invalid WTF-8").into_iter().map(i64::from).collect()
+    fn packed_pool(&self) -> Vec<i64> {
+        let mut pool = Vec::with_capacity(pool_words(&self.bytes));
+        push_pool_words(&mut pool, &self.bytes, self.nu);
+        pool
     }
     fn str_vs(&mut self, u: &[u16]) -> [i64; 3] {
-        let off = self.nu as i64;
+        if matches!(u.first(), Some(x) if (0xDC00..0xE000).contains(x)) && self.ends_lone_high() {
+            self.bytes.push(0xFF);
+        }
+        let off = self.bytes.len();
         self.push_units(u);
-        [6, off, u.len() as i64]
+        [6, off as i64, (self.bytes.len() - off) as i64]
     }
     fn text_vs(&mut self, s: &str) -> [i64; 3] {
-        let off = self.nu;
+        let off = self.bytes.len();
         self.bytes.extend_from_slice(s.as_bytes());
         self.nu += s.encode_utf16().count();
-        [6, off as i64, (self.nu - off) as i64]
+        [6, off as i64, s.len() as i64]
     }
     fn units_vs(&mut self, v: &Value) -> R<[i64; 3]> {
         let units = v.as_array().ok_or_else(|| HostErr::Case("u16 needs an array".into()))?;
@@ -386,13 +374,13 @@ fn put(out: &mut Vec<i64>, vs: [i64; 3]) {
     out.extend_from_slice(&vs);
 }
 
-// Section 0 on the wire: [nu, W_1..W_m], 7 bytes per word big-endian, zero padded.
-fn pool_words(bytes: &[u8], nu: usize) -> usize {
-    1 + (bytes.len() + 6) / 7
+// Section 0 on the wire: [nu, nb, W_1..W_m], 7 bytes per word big-endian, zero padded.
+fn pool_words(bytes: &[u8]) -> usize {
+    2 + (bytes.len() + 6) / 7
 }
 
 fn push_pool_words(w: &mut Vec<i64>, bytes: &[u8], nu: usize) {
-    w.push(nu as i64);
+    w.extend_from_slice(&[nu as i64, bytes.len() as i64]);
     for ch in bytes.chunks(7) {
         let mut x: u64 = 0;
         for j in 0..7 {
@@ -419,20 +407,8 @@ fn packet_header(kind: i64, op_id: i64, seq: i64, op: i64, lens0: usize, e_rec: 
 }
 
 fn mk_packet(kind: i64, op_id: i64, seq: i64, op: i64, e: &Enc) -> Vec<i64> {
-    let mut w = packet_header(kind, op_id, seq, op, pool_words(&e.bytes, e.nu), e.rec.len(), &e.tables);
+    let mut w = packet_header(kind, op_id, seq, op, pool_words(&e.bytes), e.rec.len(), &e.tables);
     push_pool_words(&mut w, &e.bytes, e.nu);
-    w.extend_from_slice(&e.rec);
-    for t in &e.tables {
-        w.extend_from_slice(t);
-    }
-    w
-}
-
-// Old-format packet (section 0 = one word per unit); REQ's entry packets keep this form.
-fn mk_packet_units(kind: i64, op_id: i64, seq: i64, op: i64, e: &Enc) -> Vec<i64> {
-    let pool = e.units();
-    let mut w = packet_header(kind, op_id, seq, op, pool.len(), e.rec.len(), &e.tables);
-    w.extend_from_slice(&pool);
     w.extend_from_slice(&e.rec);
     for t in &e.tables {
         w.extend_from_slice(t);
@@ -443,7 +419,7 @@ fn mk_packet_units(kind: i64, op_id: i64, seq: i64, op: i64, e: &Enc) -> Vec<i64
 // D-DB4-2: the byte pool is dropped as soon as it is packed, then rec and each table are dropped as they are copied.
 fn mk_packet_owned(kind: i64, op_id: i64, seq: i64, op: i64, enc: Enc) -> Vec<i64> {
     let Enc { bytes, nu, rec, tables } = enc;
-    let mut w = packet_header(kind, op_id, seq, op, pool_words(&bytes, nu), rec.len(), &tables);
+    let mut w = packet_header(kind, op_id, seq, op, pool_words(&bytes), rec.len(), &tables);
     push_pool_words(&mut w, &bytes, nu);
     drop(bytes);
     w.extend_from_slice(&rec);
@@ -455,23 +431,20 @@ fn mk_packet_owned(kind: i64, op_id: i64, seq: i64, op: i64, enc: Enc) -> Vec<i6
 }
 
 // Strict WTF-8 -> UTF-16 units. None on bad UTF-8, overlong forms, > U+10FFFF, or a split pair written as two 3-byte forms.
-fn wtf8_units(b: &[u8]) -> Option<Vec<u16>> {
-    let mut out: Vec<u16> = Vec::with_capacity(b.len());
-    let mut i = 0;
-    let cont = |k: usize| -> Option<u32> {
-        let c = *b.get(k)?;
+fn wtf8_units(mut bytes: impl Iterator<Item = Option<u8>>, capacity: usize) -> Option<Vec<u16>> {
+    let mut out: Vec<u16> = Vec::with_capacity(capacity);
+    let cont = |byte: Option<Option<u8>>| -> Option<u32> {
+        let c = byte.flatten()?;
         if c & 0xC0 == 0x80 { Some((c & 0x3F) as u32) } else { None }
     };
-    while i < b.len() {
-        let c = b[i] as u32;
+    while let Some(byte) = bytes.next() {
+        let c = byte? as u32;
         if c < 0x80 {
             out.push(c as u16);
-            i += 1;
         } else if (0xC2..0xE0).contains(&c) {
-            out.push((((c & 0x1F) << 6) | cont(i + 1)?) as u16);
-            i += 2;
+            out.push((((c & 0x1F) << 6) | cont(bytes.next())?) as u16);
         } else if (0xE0..0xF0).contains(&c) {
-            let x = ((c & 0x0F) << 12) | (cont(i + 1)? << 6) | cont(i + 2)?;
+            let x = ((c & 0x0F) << 12) | (cont(bytes.next())? << 6) | cont(bytes.next())?;
             if x < 0x800 {
                 return None;
             }
@@ -479,16 +452,14 @@ fn wtf8_units(b: &[u8]) -> Option<Vec<u16>> {
                 return None;
             }
             out.push(x as u16);
-            i += 3;
         } else if (0xF0..0xF5).contains(&c) {
-            let x = ((c & 0x07) << 18) | (cont(i + 1)? << 12) | (cont(i + 2)? << 6) | cont(i + 3)?;
+            let x = ((c & 0x07) << 18) | (cont(bytes.next())? << 12) | (cont(bytes.next())? << 6) | cont(bytes.next())?;
             if !(0x10000..=0x10FFFF).contains(&x) {
                 return None;
             }
             let y = x - 0x10000;
             out.push(0xD800 + (y >> 10) as u16);
             out.push(0xDC00 + (y & 0x3FF) as u16);
-            i += 4;
         } else {
             return None;
         }
@@ -496,60 +467,58 @@ fn wtf8_units(b: &[u8]) -> Option<Vec<u16>> {
     Some(out)
 }
 
-// Decodes wire section 0 back to units (words of Pruv output; any violation is an internal error).
-fn decode_pool(sec: &[i64]) -> R<Vec<u16>> {
-    if sec.is_empty() {
-        return ie("pool section is empty");
-    }
-    let nu = sec[0];
-    let words = &sec[1..];
-    if nu < 0 {
-        return ie("pool unit count is negative");
-    }
-    let mut bytes: Vec<u8> = Vec::with_capacity(words.len() * 7);
-    for &x in words {
-        if !(0..(1i64 << 56)).contains(&x) {
-            return ie("pool word out of range");
-        }
-        for j in 0..7 {
-            bytes.push(((x >> (8 * (6 - j))) & 0xff) as u8);
-        }
-    }
-    // padding: the true byte length is the one that decodes to nu units with only zero bytes after it
-    let units = match wtf8_prefix(&bytes, nu as usize) {
-        Some((u, used)) => {
-            if bytes[used..].iter().any(|&c| c != 0) || bytes.len() - used >= 7 {
-                return ie("pool padding is not zero or has the wrong word count");
-            }
-            u
-        }
-        None => return ie("pool is not valid WTF-8 of the stated unit count"),
-    };
-    Ok(units)
+// Borrow packed words. The strict slot decoder reads only the addressed bytes.
+struct Pool<'a> {
+    words: &'a [i64],
+    nb: usize,
 }
 
-// Decodes exactly nu units from the start of b; returns (units, bytes used).
-fn wtf8_prefix(b: &[u8], nu: usize) -> Option<(Vec<u16>, usize)> {
-    // find the end: scan scalars until nu units are produced
-    let mut units = 0usize;
-    let mut i = 0usize;
-    while units < nu {
-        let c = *b.get(i)?;
-        let (n, u) = if c < 0x80 { (1, 1) } else if c < 0xE0 { (2, 1) } else if c < 0xF0 { (3, 1) } else { (4, 2) };
-        i += n;
-        units += u;
-        if i > b.len() {
+impl Pool<'_> {
+    fn byte(&self, k: usize) -> Option<u8> {
+        let x = *self.words.get(k / 7)?;
+        if !(0..(1i64 << 56)).contains(&x) {
             return None;
         }
+        Some((x >> (8 * (6 - k % 7))) as u8)
     }
-    if units != nu {
-        return None;
+
+    fn string_units(&self, off: i64, len: i64) -> R<Vec<u16>> {
+        let end = match off.checked_add(len) {
+            Some(end) if off >= 0 && len >= 0 && end as u64 <= self.nb as u64 => end as usize,
+            _ => return ie("string slot outside the pool"),
+        };
+        let start = off as usize;
+        for at in [start, end] {
+            if at < self.nb && !matches!(self.byte(at), Some(b) if b & 0xc0 != 0x80) {
+                return ie("string slot cuts a WTF-8 form");
+            }
+        }
+        let words = &self.words[start / 7..(end + 6) / 7];
+        let bytes = words.iter().flat_map(|&word| {
+            let valid = (0..(1i64 << 56)).contains(&word);
+            (0..7).rev().map(move |i| valid.then_some((word >> (8 * i)) as u8))
+        });
+        match wtf8_units(bytes.skip(start % 7).take(end - start), end - start) {
+            Some(units) => Ok(units),
+            None => ie("string slot is not valid WTF-8"),
+        }
     }
-    let u = wtf8_units(&b[..i])?;
-    if u.len() != nu {
-        return None;
+}
+
+fn decode_pool(sec: &[i64]) -> R<Pool<'_>> {
+    let [nu, nb, words @ ..] = sec else { return ie("pool header is truncated"); };
+    let cap = words.len() * 7;
+    if *nu < 0 || *nb < *nu || *nb as u64 > cap as u64 || *nb as u64 > (*nu as u64).saturating_mul(7) / 2 {
+        return ie("pool counts are invalid");
     }
-    Some((u, i))
+    let nb = *nb as usize;
+    let used = (nb + 6) / 7;
+    let pool = Pool { words, nb };
+    if words[used..].iter().any(|&word| word != 0) ||
+        (nb..used * 7).any(|k| pool.byte(k) != Some(0)) {
+        return ie("pool padding is not zero");
+    }
+    Ok(pool)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -561,23 +530,10 @@ struct Pkt<'a> {
     seq: i64,
     op: i64,
     secs: Vec<&'a [i64]>,
-    // Section 0 as UTF-16 units: decoded from the wire bytes into u16, or borrowed words for old-format packets.
     pool: Pool<'a>,
 }
 
-enum Pool<'a> {
-    Words(&'a [i64]),
-    Units(Vec<u16>),
-}
-
 fn parse_pkt(w: &[i64]) -> R<Pkt<'_>> {
-    let mut p = parse_pkt_units(w)?;
-    p.pool = Pool::Units(decode_pool(p.secs[0])?);
-    Ok(p)
-}
-
-// Old format: section 0 is one word per unit (REQ entry packets).
-fn parse_pkt_units(w: &[i64]) -> R<Pkt<'_>> {
     if w.len() < 7 {
         return ie(format!("core packet too short ({} words)", w.len()));
     }
@@ -615,7 +571,7 @@ fn parse_pkt_units(w: &[i64]) -> R<Pkt<'_>> {
     if rest != 0 {
         return ie("core packet section lengths do not cover the payload");
     }
-    let pool = Pool::Words(secs[0]);
+    let pool = decode_pool(secs[0])?;
     Ok(Pkt { kind: w[1], op_id: w[2], seq: w[3], op: payload[0], secs, pool })
 }
 
@@ -656,14 +612,7 @@ impl Pkt<'_> {
                 }
                 Ok(V::Num(((b as u64) << 32) | a as u64))
             }
-            6 => {
-                let units = self.string_units(a, b)?;
-                let mut out = Vec::with_capacity(units.len());
-                for x in units.iter() {
-                    out.push(*x);
-                }
-                Ok(V::Str(out))
-            }
+            6 => self.string_units(a, b).map(V::Str),
             7 | 8 => {
                 if a < 2 || (a as usize) >= self.secs.len() || b < 0 {
                     return ie("table slot names an invalid section");
@@ -681,33 +630,13 @@ impl Pkt<'_> {
             _ => ie(format!("unknown value tag {}", tag)),
         }
     }
-    fn string_units(&self, start: i64, len: i64) -> R<std::borrow::Cow<'_, [u16]>> {
-        let n = match &self.pool {
-            Pool::Words(w) => w.len(),
-            Pool::Units(u) => u.len(),
-        };
-        if start < 0 || len < 0 || (start as u64) + (len as u64) > n as u64 {
-            return ie("string slot outside the pool");
-        }
-        let r = start as usize..(start + len) as usize;
-        match &self.pool {
-            Pool::Units(u) => Ok(std::borrow::Cow::Borrowed(&u[r])),
-            Pool::Words(w) => {
-                let mut out = Vec::with_capacity(r.len());
-                for x in &w[r] {
-                    if !(0..=65535).contains(x) {
-                        return ie("pool word is not a UTF-16 unit");
-                    }
-                    out.push(*x as u16);
-                }
-                Ok(std::borrow::Cow::Owned(out))
-            }
-        }
+    fn string_units(&self, start: i64, len: i64) -> R<Vec<u16>> {
+        self.pool.string_units(start, len)
     }
 
     fn render_at(&self, refs: &Refs, sec: usize, off: usize, out: &mut String) -> R<()> {
-        if self.word(sec, off)? == 6 {
-            let units = self.string_units(self.word(sec, off + 1)?, self.word(sec, off + 2)?)?;
+        let value = self.val(sec, off)?;
+        if let V::Str(units) = &value {
             if units.iter().all(|u| (32..=126).contains(u) && *u != 34 && *u != 92) {
                 out.reserve(units.len() + 2);
                 out.push('"');
@@ -716,7 +645,7 @@ impl Pkt<'_> {
                 return Ok(());
             }
         }
-        out.push_str(&render_v(refs, &self.val(sec, off)?)?);
+        out.push_str(&render_v(refs, &value)?);
         Ok(())
     }
     // Rows of a table slot: validates section length = count * width.
@@ -2157,16 +2086,22 @@ fn corrupt(w: &mut Vec<i64>, how: &str) {
 }
 
 fn pad_to(w: &mut Vec<i64>, total: usize) {
-    if w.len() >= total {
+    let start = sec_start(w, 0);
+    let end = sec_start(w, 1);
+    let logical = w.len() - (end - start) + w[start] as usize;
+    if logical >= total {
         return;
     }
-    let extra = total - w.len();
-    let at = sec_start(w, 1); // end of the pool
-    let tail: Vec<i64> = w.split_off(at);
-    w.resize(at + extra, 0);
+    // Append unreferenced ASCII NULs to reach the target expanded word count.
+    let extra = total - logical;
+    w[start] += extra as i64;
+    w[start + 1] += extra as i64;
+    let words = 2 + (w[start + 1] as usize + 6) / 7;
+    let tail = w.split_off(end);
+    w.resize(start + words, 0);
     w.extend(tail);
-    w[7] += extra as i64;
-    w[4] += extra as i64;
+    w[7] = words as i64;
+    w[4] = (w.len() - 5) as i64;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -2641,9 +2576,8 @@ mod tests {
         let base = mk_packet(0, 1, 0, 1, &enc);
         let mut w = base.clone();
         pad_to(&mut w, 5000);
-        assert_eq!(w.len(), 5000);
-        // the host output decoder is strict: padding is accepted only on the Pruv input path (wire_in)
-        assert!(parse_pkt(&w).is_err());
+        assert_eq!(w.len() - w[7] as usize + w[sec_start(&w, 0)] as usize, 5000);
+        assert_eq!(parse_pkt(&w).unwrap().val(1, 0).unwrap(), V::Str(u16s("/d")));
         let p = parse_pkt(&base).unwrap();
         assert_eq!(p.val(1, 0).unwrap(), V::Str(u16s("/d")));
         let mut w = base.clone();

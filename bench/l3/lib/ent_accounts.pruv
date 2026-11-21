@@ -62,7 +62,7 @@ pub fn io_check(w: [i64]) -> i64 ! alloc
     return -1;
   }
   if crate::ent_packet::is_bad(meta) || !crate::ent_packet::all_claimed(w, meta) { return -1; }
-  return crate::ent_u16::clamp(crate::ent_u16::rd(meta, 0), crate::ent_packet::sec_len(w, 0));
+  return crate::ent_packet::pool_high_water(w, meta);
 }
 
 // op 5: record dataDir {6}, engine {6}, id any. Done: [0, home] or the wire error invalidId [3, 0]. Never awaits.

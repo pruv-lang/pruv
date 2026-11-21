@@ -1,10 +1,14 @@
 // Thin library entry of the L3-9 request host (crate `req_host`): the leaf wrapper reuses the L3-8 entry host
-// (bench/l3/entry/host.rs, unchanged) inside module `eh`; the request driver lives in bench/l3/req/host.rs.
+// (bench/l3/entry/host.rs) and its packed pool decoder inside module `eh`; the request driver lives in bench/l3/req/host.rs.
 // Included files use only plain `//` comments (include! forbids inner doc comments and inner attributes).
 #[allow(dead_code)]
 mod eh {
     include!("../../../entry/host.rs");
     include!("../../leaf.rs");
+
+    fn units_at(pool: &[i64], off: i64, len: i64) -> Result<Vec<u16>, String> {
+        decode_pool(pool).and_then(|pool| pool.string_units(off, len)).map_err(he)
+    }
 
     pub(super) fn folder_units(pool: &[i64], rec: &[i64]) -> Result<Vec<u16>, String> {
         let units = match rec.get(27..30) {

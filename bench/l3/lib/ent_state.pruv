@@ -29,25 +29,25 @@
 
 pub fn magic() -> i64 ensures result == 1162761298 { return 1162761298; }
 
-// ---- repack: a copy of packet w whose pool is truncated to its first hi units ----
+// ---- repack: a copy of packet w whose pool is truncated to its first hi bytes ----
 pub fn repack(w: [i64], hi0: i64) -> [i64] ! alloc
   ensures len(result) >= 0
 {
   if crate::ent_value::pkt_size(w) > 16777216 { return crate::ent_u16::empty(); }
   // Physical packet words for allocation and copying.
   let n: i64 = len(w);
-  let pl: i64 = crate::ent_value::logical_pool_words(w);
-  let hi: i64 = crate::ent_u16::clamp(hi0, pl);
-  let drop: i64 = pl - hi;
-  let hdr: i64 = 7 + crate::ent_packet::nsec(w);
   let s0: i64 = crate::ent_packet::sec_start(w, 0);
   let s1: i64 = crate::ent_packet::sec_start(w, 1);
-  let mut o: [i64] = crate::ent_u16::zeros(n - drop);
-  let a: i64 = crate::ent_u16::put_range(inout o, 0, w, 0, hdr);
-  let b: i64 = crate::ent_value::pool_copy_prefix(inout o, crate::ent_u16::clamp(a, 4294967296), w, s0, hi);
-  let c: i64 = crate::ent_u16::put_range(inout o, crate::ent_u16::clamp(b, 4294967296), w, s1, n - s1);
-  crate::ent_u16::wr(inout o, 4, n - drop - 5);
-  crate::ent_u16::wr(inout o, 7, hi);
+  let cut: i64 = crate::ent_u16::clamp(hi0, crate::ent_value::pool_bytes(w, s0));
+  let nu: i64 = crate::ent_value::prefix_pool_units(w, s0, cut);
+  let l: i64 = crate::ent_value::pool_capacity(cut);
+  let m: i64 = n - crate::ent_packet::sec_len(w, 0) + l;
+  let mut o: [i64] = crate::ent_u16::zeros(m);
+  let a: i64 = crate::ent_u16::put_range(inout o, 0, w, 0, s0);
+  crate::ent_value::copy_pool_prefix(inout o, s0, w, s0, cut, nu);
+  let c: i64 = crate::ent_u16::put_range(inout o, crate::ent_u16::clamp(s0 + l, 4294967296), w, s1, n - s1);
+  crate::ent_u16::wr(inout o, 4, m - 5);
+  crate::ent_u16::wr(inout o, 7, l);
   return o;
 }
 
@@ -81,10 +81,36 @@ pub fn log_ok(lg: [i64], op_id: i64) -> bool ! alloc
     if crate::ent_packet::env_check(pk) != 0 { return false; }
     if crate::ent_u16::rd(pk, 1) != 2 || crate::ent_u16::rd(pk, 2) != op_id { return false; }
     let hi: i64 = crate::ent_packet::comp_check(pk, rc, ax);
-    if hi < 0 || hi != crate::ent_value::logical_pool_words(pk) { return false; }
+    if hi < 0 || hi != crate::ent_value::pool_bytes(pk, crate::ent_packet::sec_start(pk, 0)) { return false; }
     pos = pos + n;
   }
   return true;
+}
+
+// Each entry carries a physically packed completion, but the replay budget is in expanded words.
+pub fn log_words(lg: [i64]) -> i64
+  ensures 0 <= result
+{
+  let g: i64 = len(lg);
+  if g > 16777216 { return g; }
+  let mut pos: i64 = 0;
+  let mut words: i64 = 0;
+  while pos < g && words <= 16777216
+    invariant 0 <= pos && pos <= g && g <= 16777216 && 0 <= words
+    decreases g - pos
+  {
+    let n: i64 = crate::ent_u16::rd(lg, pos);
+    if n < 12 || n > g - pos { return 16777217; }
+    let pk: i64 = pos + 3;
+    let ns: i64 = crate::ent_u16::rd(lg, pk + 6);
+    if ns < 2 || ns > n - 10 { return 16777217; }
+    let lp: i64 = crate::ent_u16::rd(lg, pk + 7);
+    if lp < 2 || lp > n - 10 - ns { return 16777217; }
+    let nu: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(lg, pk + 7 + ns), 16777216);
+    words = words + n - lp + nu;
+    pos = pos + n;
+  }
+  return words;
 }
 
 // log + one entry for the completion packet comp (answer to request rc/ax); hi = its comp_check result
@@ -169,7 +195,7 @@ pub fn state_ok(st: [i64], op: i64, op_id: i64) -> bool ! alloc
   if crate::ent_u16::rd(blob, 1) != 0 || crate::ent_u16::rd(blob, 3) != 0 { return false; }
   if crate::ent_u16::rd(blob, 5) != op || crate::ent_u16::rd(blob, 2) != op_id { return false; }
   let hi: i64 = crate::ent_packet::input_check(blob);
-  if hi < 0 || hi != crate::ent_value::logical_pool_words(blob) { return false; }
+  if hi < 0 || hi != crate::ent_value::pool_bytes(blob, crate::ent_packet::sec_start(blob, 0)) { return false; }
   return log_ok(st_log(st), op_id);
 }
 
@@ -261,13 +287,10 @@ pub fn with_prev(cx0: Ctx, prev: [i64], exact: bool) -> Ctx ! alloc
 fn req_same(cx: Ctx, rpool: [i64], rrec: [i64], rtab: [i64], rntab: i64) -> bool ! alloc
 {
   if !crate::ent_u16::eq(cx.qrec, rrec) { return false; }
-  if cx.qexact != 0 {
-    if !crate::ent_u16::eq(cx.qpool, rpool) { return false; }
-  } else {
-    let lr: i64 = crate::ent_value::pool_words(rpool);
-    if crate::ent_value::pool_words(cx.qpool) < lr { return false; }
-    if !crate::ent_u16::eq(crate::ent_u16::slice(cx.qpool, 0, lr), rpool) { return false; }
-  }
+  let lr: i64 = crate::ent_value::pool_bytes(rpool, 0);
+  let lq: i64 = crate::ent_value::pool_bytes(cx.qpool, 0);
+  if lr > lq || (cx.qexact != 0 && lr != lq) { return false; }
+  if lr != 0 && !crate::ent_value::pool_starts_with(cx.qpool, rpool) { return false; }
   if rntab != 0 {
     if cx.qns != 5 { return false; }
     return crate::ent_u16::eq(cx.qtab, rtab);
@@ -439,13 +462,13 @@ fn ctx_path(cx: Ctx, code: i64, path: [i64]) -> Ctx ! alloc
   crate::ent_u16::wr(inout r, 0, code);
   crate::ent_packet::put_vs(inout r, 1, 6, 0, crate::ent_value::slot_len_of(path));
   let e: [i64] = crate::ent_u16::empty();
-  return obs(cx, code, 0, path, r, e, 0);
+  return obs(cx, code, 0, crate::ent_value::encode_pool(path), r, e, 0);
 }
 
 pub fn ctx_realpath(cx: Ctx, path: [i64]) -> Ctx ! alloc { return ctx_path(cx, 6, path); }
 pub fn ctx_stat(cx: Ctx, path: [i64]) -> Ctx ! alloc { return ctx_path(cx, 7, path); }
 
-// answer packet addressing: record word k, pool unit k, word k of section s
+// answer packet addressing: record word k, physical pool word k, word k of section s
 pub fn ent_r(cx: Ctx, k: i64) -> i64 { return crate::ent_u16::rd(cx.ent, crate::ent_packet::sec_start(cx.ent, 1) + crate::ent_u16::clamp(k, 4294967296)); }
 pub fn ent_p(cx: Ctx, k: i64) -> i64 { return crate::ent_u16::rd(cx.ent, crate::ent_packet::sec_start(cx.ent, 0) + crate::ent_u16::clamp(k, 4294967296)); }
 pub fn ent_s(cx: Ctx, s: i64, k: i64) -> i64 { return crate::ent_u16::rd(cx.ent, crate::ent_packet::sec_start(cx.ent, s) + crate::ent_u16::clamp(k, 4294967296)); }
@@ -486,6 +509,25 @@ pub fn fail(cx0: Ctx) -> Ctx ! alloc
   return cx;
 }
 
+// Count the embedded blob and log pools towards the same output limit as the request pool.
+pub fn replay_await(cx: Ctx, seq: i64, pool: [i64], rows: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let blob: i64 = crate::ent_value::pkt_size(cx.blob);
+  let log: i64 = log_words(cx.lg);
+  let nu: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(pool, 0), 16777216);
+  let rec: i64 = len(cx.rrec);
+  let nr: i64 = len(rows);
+  let mut tab: i64 = 0;
+  if cx.rntab != 0 { tab = 1 + len(cx.rtab); }
+  if blob > 16777216 || log > 16777216 || rec > 16777216 || nr > 16777216 || tab > 16777216 ||
+     25 + nu + rec + blob + log + nr + tab > 16777216 {
+    return crate::ent_packet::boundary(cx.op, cx.op_id, 1);
+  }
+  let st: [i64] = encode_state(cx.op, cx.rcode, cx.raux, cx.ck, cx.blob, cx.lg);
+  return crate::ent_packet::mk_packet(1, cx.op_id, seq, cx.op, pool, cx.rrec, st, rows, cx.rtab, cx.rntab);
+}
+
 // the packet to return to the host: await (aseq), done (dseq) or a boundary
 pub fn finish(cx: Ctx, aseq: i64, dseq: i64) -> [i64] ! alloc
   ensures len(result) >= 0
@@ -496,8 +538,7 @@ pub fn finish(cx: Ctx, aseq: i64, dseq: i64) -> [i64] ! alloc
   if crate::ent_u16::clamp(cx.pos, 4294967296) != len(cx.lg) { return crate::ent_packet::boundary(cx.op, cx.op_id, 0); }
   let e: [i64] = crate::ent_u16::empty();
   if cx.stalled != 0 {
-    let st: [i64] = encode_state(cx.op, cx.rcode, cx.raux, cx.ck, cx.blob, cx.lg);
-    return crate::ent_packet::mk_packet(1, cx.op_id, aseq, cx.op, cx.rpool, cx.rrec, st, e, cx.rtab, cx.rntab);
+    return replay_await(cx, aseq, cx.rpool, e);
   }
   if cx.done != 0 {
     return crate::ent_packet::mk_packet(3, cx.op_id, dseq, cx.op, cx.opool, cx.orec, e, e, cx.otab, cx.ontab);
