@@ -1,4 +1,4 @@
-// L3-8 entry root: thin forwarder. The verified code lives in bench/l3/lib (ent_* modules and entry_api); compile with --lib bench/l3/lib.
+// L3-8 entry root: thin forwarder. DB8: section 0 crosses the boundary as the packed WTF-8 pool (ent_wire). The verified code lives in bench/l3/lib (ent_* modules and entry_api); compile with --lib bench/l3/lib.
 mod ent_u16;
 mod ent_packet;
 mod ent_value;
@@ -10,23 +10,24 @@ mod ent_canon;
 mod ent_accounts;
 mod ent_path;
 mod entry_api;
+mod ent_wire;
 
 pub fn entry_begin(input: [i64]) -> [i64] ! alloc
 {
-  return crate::entry_api::entry_begin(input);
+  return crate::ent_wire::wire_out(crate::entry_api::entry_begin(crate::ent_wire::wire_in(input)));
 }
 
 pub fn entry_step(prev: [i64], completion: [i64]) -> [i64] ! alloc
 {
-  return crate::entry_api::entry_step(prev, completion);
+  return crate::ent_wire::wire_out(crate::entry_api::entry_step(crate::ent_wire::wire_in(prev), crate::ent_wire::wire_in(completion)));
 }
 
 pub fn index_begin(inout progress: [i64], input: [i64]) -> [i64] ! alloc
 {
-  return crate::entry_api::index_begin(inout progress, input);
+  return crate::ent_wire::wire_out(crate::entry_api::index_begin(inout progress, crate::ent_wire::wire_in(input)));
 }
 
 pub fn index_step(inout progress: [i64], input: [i64], prev: [i64], emitted: [i64], completion: [i64]) -> [i64] ! alloc
 {
-  return crate::entry_api::index_step(inout progress, input, prev, emitted, completion);
+  return crate::ent_wire::wire_out(crate::entry_api::index_step(inout progress, crate::ent_wire::wire_in(input), crate::ent_wire::wire_in(prev), crate::ent_wire::wire_in(emitted), crate::ent_wire::wire_in(completion)));
 }
