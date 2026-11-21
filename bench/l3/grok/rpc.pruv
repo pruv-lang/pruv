@@ -13,7 +13,7 @@
 //  5. `timeout_ms == 0` means the host default 20000 (IMPL_NOTES leaves the meaning of 0 to load_check). Capped at 86400000 like Codex.
 //  6. Drain: after the initialize reply settles, the remaining COMPLETE lines of the same chunk (st[2] < st[4]) are processed with an
 //     empty outstanding set (server requests get -32601, everything else is ignored) BEFORE request 2 is written (P6 chunk ordering).
-//     The drain calls transport::receive via `step`, which also polls once with wait 0 (a timeout could fire there; acceptable).
+//     The drain calls transport::receive_grow via `step`, which also polls once with wait 0 (a timeout could fire there; acceptable).
 //  7. proc_spawn_env(binary, args, cwd, names, values): the arguments are not `move`d, as in tests/runtime/g10p_r22_env.pruv.
 //  8. Result mapping (all mode 3, class 1 = EngineImportError, class 3 = RpcResponseError):
 //       spawn failure: stage 24 code 8 (engine-missing); loop capacity failure: stage 24 code 7;
@@ -245,8 +245,8 @@ pub fn error_detail(d: crate::json::JsonDocument, e: i64) -> [u8] ! alloc
 // the response to request `id` arrived (d is its document): an object error rejects (ctl[0] = 3, detail and raw code into aux);
 // otherwise the initialize response must carry an object agentCapabilities whose loadSession is exactly true (else ctl[0] = 4).
 fn on_reply(d: crate::json::JsonDocument, id: i64, inout ctl: [i64], inout aux: [u8]) -> () ! alloc
-  requires len(ctl) == 16 && len(aux) == 8389120 && 1 <= id && id <= 2
-  ensures len(ctl) == 16 && len(aux) == 8389120 && ctl[6] == old(ctl)[6]
+  requires len(ctl) == 16 && 512 <= len(aux) && len(aux) <= 8389120 && 1 <= id && id <= 2
+  ensures len(ctl) == 16 && 512 <= len(aux) && len(aux) <= 8389120 && ctl[6] == old(ctl)[6]
 {
   let error: i64 = field(d, 0, "error");
   if crate::access::kind(d, error) == 6 {
@@ -254,7 +254,7 @@ fn on_reply(d: crate::json::JsonDocument, id: i64, inout ctl: [i64], inout aux: 
     let m: [u8] = error_detail(d, error);
     let mut i: i64 = 0;
     while i < len(m)
-      invariant 0 <= i && i <= len(m) && len(m) <= 300 && len(aux) == 8389120 && len(ctl) == 16
+      invariant 0 <= i && i <= len(m) && len(m) <= 300 && 512 <= len(aux) && len(aux) <= 8389120 && len(ctl) == 16
       decreases len(m) - i
     { let c: i64 = m[i]; aux[i] = c; i = i + 1; }
     ctl[9] = len(m);
@@ -266,9 +266,14 @@ fn on_reply(d: crate::json::JsonDocument, id: i64, inout ctl: [i64], inout aux: 
       } else {
         let mut k: i64 = 0;
         while k < len(rj)
-          invariant 0 <= k && k <= len(rj) && len(rj) <= 8388608 && len(aux) == 8389120 && len(ctl) == 16
+          invariant 0 <= k && k <= len(rj) && len(rj) <= 8388608 && 512 + k <= len(aux) && len(aux) <= 8389120 && len(ctl) == 16
           decreases len(rj) - k
-        { let c2: i64 = rj[k]; aux[512 + k] = c2; k = k + 1; }
+        {
+          if 512 + k == len(aux) { aux = crate::transport::grow_line(aux, 8389120); }
+          let c2: i64 = rj[k];
+          aux[512 + k] = c2;
+          k = k + 1;
+        }
         ctl[8] = len(rj);
       }
     }
@@ -289,11 +294,11 @@ fn on_reply(d: crate::json::JsonDocument, id: i64, inout ctl: [i64], inout aux: 
 // and the reader keeps reading stdout (as TS does); the slot is not failed.
 
 fn pump(take l: Loop, slot: i64, overall: i64, id: i64, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64], inout aux: [u8]) -> Loop ! async, proc, alloc
-  requires len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && 1 <= id && id <= 2 && len(aux) == 8389120
+  requires len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && 1 <= id && id <= 2 && 512 <= len(aux) && len(aux) <= 8389120
   requires len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
   requires 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line)
   requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
-  ensures len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && len(aux) == 8389120
+  ensures len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && 512 <= len(aux) && len(aux) <= 8389120
   ensures len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
   ensures 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line)
   ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
@@ -302,7 +307,7 @@ fn pump(take l: Loop, slot: i64, overall: i64, id: i64, inout ctl: [i64], inout 
   let mut done: bool = false;
   let mut events: i64 = 0;
   while ctl[0] == 0 && !done && events < 1000000
-    invariant 0 <= events && events <= 1000000 && len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && len(aux) == 8389120
+    invariant 0 <= events && events <= 1000000 && len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && 512 <= len(aux) && len(aux) <= 8389120
     invariant len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
     invariant 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line) && 1 <= id && id <= 2
     invariant len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
@@ -370,7 +375,7 @@ fn drain(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64
 
 // the failure as a mode 3 result packet (see NOTE 8)
 fn failure(code: i64, stage: i64, aux: [u8], rl: i64, dl: i64) -> [i64] ! alloc
-  requires len(aux) == 8389120 && 0 <= rl && rl <= 8388608 && 0 <= dl && dl <= 300
+  requires 512 <= len(aux) && len(aux) <= 8389120 && 0 <= rl && rl <= len(aux) - 512 && 0 <= dl && dl <= 300
   ensures len(result) >= 28
 {
   let none: [u8] = alloc(0, 0);
@@ -378,13 +383,13 @@ fn failure(code: i64, stage: i64, aux: [u8], rl: i64, dl: i64) -> [i64] ! alloc
     let mut raw: [u8] = alloc(rl, 0);
     let mut i: i64 = 0;
     while i < rl
-      invariant 0 <= i && i <= rl && len(raw) == rl && rl <= 8388608 && len(aux) == 8389120
+      invariant 0 <= i && i <= rl && len(raw) == rl && rl <= len(aux) - 512
       decreases rl - i
     { let c: i64 = aux[512 + i]; raw[i] = c; i = i + 1; }
     let mut dt: [u8] = alloc(dl, 0);
     let mut j: i64 = 0;
     while j < dl
-      invariant 0 <= j && j <= dl && len(dt) == dl && dl <= 300 && len(aux) == 8389120
+      invariant 0 <= j && j <= dl && len(dt) == dl && dl <= 300 && 512 <= len(aux) && len(aux) <= 8389120
       decreases dl - j
     { let c2: i64 = aux[j]; dt[j] = c2; j = j + 1; }
     let detail: str = crate::jstr::adapter_probe(dt);
@@ -415,7 +420,7 @@ pub fn load_check(binary: str, home: str, folder: str, thread: str, timeout_ms: 
   let mut chunk: [u8] = alloc(65536, 0);
   let mut tb: [i64] = crate::tail::tail_buf(1024);
   let mut ts: [i64] = crate::tail::tail_state(1024);
-  let mut aux: [u8] = alloc(8389120, 0);
+  let mut aux: [u8] = alloc(512, 0);
   if ctl[0] == 0 {
     ctl[1] = 25;
     ctl[4] = 1;
@@ -451,7 +456,7 @@ pub fn load_check(binary: str, home: str, folder: str, thread: str, timeout_ms: 
   let stage: i64 = ctl[1];
   let mut rl: i64 = ctl[8];
   let mut dl: i64 = ctl[9];
-  if rl < 0 || rl > 8388608 { rl = 0; }
+  if rl < 0 || rl > len(aux) - 512 { rl = 0; }
   if dl < 0 || dl > 300 { dl = 0; }
   crate::transport::close(move l, slot);
   if code != 0 { return failure(code, stage, aux, rl, dl); }

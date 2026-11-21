@@ -297,5 +297,8 @@ pub fn string_text_scanned(doc: crate::json::JsonDocument, id: i64) -> crate::js
   if k != 4 { if k < 0 { return crate::jstr::Text::InternalInvariant(k); } return crate::jstr::Text::InternalInvariant(-2); }
   let s: Span = raw_span(doc, id);
   if s.status != 0 { return crate::jstr::Text::InternalInvariant(s.status); }
+  if doc.tape[6 * id + 5] == 1 {
+    return crate::jstr::string_text_plain(doc.source, s.start, s.end);
+  }
   return crate::jstr::string_text_scanned(doc.source, s.start, s.end);
 }
