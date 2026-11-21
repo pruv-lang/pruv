@@ -114,9 +114,16 @@ fn load(chain: &str) -> Vec<Page> {
     let mut pages = Vec::new();
     let mut p = start_packet();
     let (mut c, mut o) = (0i64, 0i64);
-    for f in chain.split(',') {
+    let files: Vec<&str> = chain.split(',').collect();
+    for (i, f) in files.iter().enumerate() {
         let bytes = std::fs::read(f).unwrap_or_else(|e| panic!("read {}: {}", f, e));
         let d = parse_doc(&bytes);
+        // The last page needs no hand pass: (count, objects) only feed the next page. Skipping it keeps a freed
+        // hand-sized packet out of every row's process, so peak RSS measures the row's own call (R00).
+        if i + 1 == files.len() {
+            pages.push(Page { d, c, o });
+            break;
+        }
         let (np, nc, no) = run_hand(&d, &p, c, o);
         pages.push(Page { d, c, o });
         p = np;
