@@ -1,0 +1,1 @@
+{"gen_regex":["#\\[inline\\]\\npub fn \\w*big_entry\\(","#\\[inline\\(always\\)\\]\\nfn \\w*big_entry__pruv_body\\(","#\\[inline\\(always\\)\\]\\npub fn \\w*tiny_entry\\("],"gen_regex_absent":["#\\[inline\\(always\\)\\]\\npub fn \\w*big_entry\\(","#\\[inline\\]\\npub fn \\w*tiny_entry\\("]}
