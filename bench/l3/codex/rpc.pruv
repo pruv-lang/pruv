@@ -10,13 +10,12 @@
 // first failure wins.
 
 // child arguments: app-server --stdio, then the host's extra arguments
-fn child_args(argv: str) -> ProcessArgs ! alloc
+fn child_args(argv: str, sp: [i64]) -> ProcessArgs ! alloc
+  requires len(sp) >= 2 && sp[0] == 0 && 0 <= sp[1] && sp[1] <= 1048576 && len(sp) == 2 + 2 * sp[1]
 {
-  let sp: [i64] = crate::args::arg_spans(argv);
   let mut a: ProcessArgs = proc_args_new();
   a = proc_args_push(move a, "app-server");
   a = proc_args_push(move a, "--stdio");
-  if sp[0] != 0 { return move a; }
   let cnt: i64 = sp[1];
   let mut k: i64 = 0;
   while k < cnt
@@ -42,7 +41,7 @@ pub fn start(binary: str, argv: str, cwd: str, timeout_ms: i64, inout ctl: [i64]
   ctl[0] = 0; ctl[1] = 0; ctl[2] = -1; ctl[3] = -1; ctl[4] = 0; ctl[6] = 0;
   let sp: [i64] = crate::args::arg_spans(argv);
   if sp[0] != 0 { ctl[0] = 2; let l0: Loop = ev_new(3); return move l0; }
-  let args: ProcessArgs = child_args(argv);
+  let args: ProcessArgs = child_args(argv, sp);
   ctl[1] = 1;
   let child: Process = proc_spawn(binary, args, cwd);
   if !proc_ok(child) {
