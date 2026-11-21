@@ -1,0 +1,7 @@
+// LG14 audit: a nested `?` does not let the outer inout `?` read another binding
+fn id(y: i64) -> i64 { return y; }
+fn wrap(v: i64, inout x: i64) -> Result<i64> { x = v; return Ok(v); }
+fn f(y: i64) -> Result<i64> {
+  let mut x: i64 = 0;
+  return Ok(id(y) + wrap(Ok(0)?, inout x)?);
+}

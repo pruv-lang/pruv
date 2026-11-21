@@ -56,13 +56,18 @@ def is_try(e):
 
 def check_try_position(e, at):
     if is_try(e):
-        terr(at, "try_position",
-             "`?` is only allowed in the value of a let, a local assignment or a return, an expression statement or an"
-             " if condition, and not in the right operand of && / ||, in a quantifier or after a call, constructor, move,"
-             " index or arithmetic evaluated before it",
-             "bind the value with `let x: T = e?;` first")
+        try_position_error(at)
     for child in expr_kids(e):
         check_try_position(child, at)
+
+
+def try_position_error(at):
+    terr(at, "try_position",
+         "`?` is only allowed in the value of a let, a local assignment or a return, an expression statement or an"
+         " if condition, and not in the right operand of && / || / ==>, in a quantifier or after an operand evaluated"
+         " before it that cannot be bound to a temporary (one with inout, a quantifier, a move of a name used again"
+         " or a type that is not a value)",
+         "bind the value with `let x: T = e?;` first")
 
 
 def _has_kind(e, kind):
@@ -78,21 +83,31 @@ def _try_pure(e):
     return isinstance(e, (Var, IntLit, BoolLit, FieldAccess)) or isinstance(e, (Unary, Binary)) and e.op in _TRY_PURE_OPS
 
 
+TRY_TEMP = "__pruv_try_t"
+
+
 def find_try(e):
-    """LG13: the first `?` of e in evaluation order (operands left to right, then the node itself), or None when e has
-    no `?` that can be lowered: a `?` inside the right operand of && / ||, inside a quantifier, after a node evaluated
-    before it that is not _try_pure (a call, a constructor, a move, an index, arithmetic, a string literal), or whose
-    operand passes `inout` while the statement reads a binding outside that operand stays for check_try_position."""
+    """LG13/LG14: (the first `?` of e in evaluation order (operands left to right, then the node itself), the operands
+    to bind to fresh temporaries first), or None when e has no `?` that can be lowered. An operand evaluated before the
+    `?` that is not _try_pure (a call, a constructor, a move, an index, arithmetic) is bound to a temporary when the
+    whole operand holds no `inout` argument and no quantifier and moves no binding mentioned elsewhere in e (LG14,
+    G-LG13-1); its type is checked by Checker.try_temps. A `?` inside the right operand of && / || / ==>, inside a
+    quantifier, after an operand that cannot be bound, or whose operand passes `inout` while the statement reads a
+    binding outside that operand stays for check_try_position."""
     root = e
     seen = {"impure": False}
+    path = []          # (node, index of the kid on the way to the current node)
 
     def visit(e):
         if isinstance(e, Quant):
             if any(is_try(x) for x in _walk(e)):
                 raise _NoTry
+            seen["impure"] = True      # G-LG13-7: a quantifier is not code that may move after a `?`
             return None
         if isinstance(e, Binary) and e.op in ("&&", "||", "==>"):
+            path.append((e, 0))
             found = visit(e.left)
+            path.pop()
             if found is not None:
                 return found
             if any(is_try(x) for x in _walk(e.right)):
@@ -102,22 +117,42 @@ def find_try(e):
             return None
         if is_try(e):
             before = seen["impure"]
+            path.append((e, 0))
             found = visit(e.operand)
+            path.pop()
             if found is not None:
                 return found
-            if before:
-                raise _NoTry
             if _has_kind(e.operand, InoutArg):
                 reads = lambda x: sum(isinstance(y, (Var, Move)) for y in _walk(x))
                 if reads(root) > reads(e.operand):
                     raise _NoTry
-            return e
-        for k in expr_kids(e):
+            return e, (temps() if before else [])
+        for i, k in enumerate(expr_kids(e)):
+            path.append((e, i))
             found = visit(k)
+            path.pop()
             if found is not None:
                 return found
         note_node(e)
         return None
+
+    def temps():
+        out = []
+        if _has_kind(root, InoutArg):  # an inout call would see the temporaries' reads before it, not after
+            raise _NoTry
+        for node, i in path:
+            for k in expr_kids(node)[:i]:
+                if all(_try_pure(x) for x in _walk(k)):
+                    continue
+                if any(isinstance(x, Quant) or isinstance(x, Call) and x.name == "subview" for x in _walk(k)):
+                    raise _NoTry
+                for m in _walk(k):
+                    if isinstance(m, Move) and _mentions_count(root, m.name) > _mentions_count(k, m.name):
+                        raise _NoTry
+                    if isinstance(m, (Var, Move)) and _moves_count(root, m.name) > _moves_count(k, m.name):
+                        raise _NoTry      # a borrow bound early would hide its conflict with the later move
+                out.append(k)
+        return out
 
     def note_node(e):
         if not _try_pure(e):
@@ -131,6 +166,14 @@ def find_try(e):
         return visit(e)
     except _NoTry:
         return None
+
+
+def _moves_count(e, name):
+    return sum(isinstance(x, Move) and x.name == name for x in _walk(e))
+
+
+def _mentions_count(e, name):
+    return sum(isinstance(x, (Var, Move)) and x.name == name for x in _walk(e))
 
 
 class _NoTry(Exception):
@@ -162,7 +205,7 @@ def replace_expr(holder, target, new):
 
 
 def try_site(st, scope):
-    """LG13: the `?` to lower first in statement st, or None. Lowered positions: the value of a let, of an assignment
+    """LG13/LG14: (the `?` to lower first in statement st, the operands to bind to temporaries first) or None. Lowered positions: the value of a let, of an assignment
     to a local variable and of a return, the expression of an expression statement and the condition of an if."""
     if isinstance(st, Assign):
         if st.deref or st.name in scope and scope[st.name][2] != "local":
@@ -1264,9 +1307,23 @@ class Checker:
 
     # ---- statements ----
     def block(s, stmts, scope):
-        for i, st in enumerate(stmts):
-            candidate = try_site(st, scope)
-            if candidate is not None:
+        i = 0
+        while i < len(stmts):
+            st = stmts[i]
+            if isinstance(st, Assign) and not st.deref and any(is_try(x) for x in _walk(st.value)):
+                # G-LG13-6: the target passed inout inside a statement with a `?`
+                for arg in _walk(st.value):
+                    root = field_place(arg.expr)[0] if isinstance(arg, InoutArg) else None
+                    if isinstance(root, Var) and root.name == st.name:
+                        terr(arg, "inout_context",
+                             "%s is passed inout and also mentioned elsewhere in this statement" % st.name,
+                             "use a separate statement for the inout call")
+            site = try_site(st, scope)
+            if site is not None:
+                candidate, temps = site
+                if temps:                       # LG14 (G-LG13-1): bind the earlier operands first
+                    stmts[i:i] = s.try_temps(st, temps, scope)
+                    continue
                 match = Match(st.line, st.col, candidate.operand, [])
                 if hasattr(st, "file"):
                     match.file = st.file
@@ -1274,6 +1331,27 @@ class Checker:
                 stmts[i:] = [match]
                 return
             s.stmt(st, scope, stmts[i + 1] if i + 1 < len(stmts) else None)
+            i += 1
+
+    def try_temps(s, st, temps, scope):
+        """LG14 (G-LG13-1): `let __pruv_try_tN: T = k;` for each operand k evaluated before the statement's first `?`,
+        in evaluation order, with k replaced by the fresh local in st; T must be a value type (a temporary of an owned
+        or borrowed value would change when it is dropped or what it borrows)"""
+        lets = []
+        for k in temps:
+            t = s.expr(copy.deepcopy(k), dict(scope))
+            if t == UNIT or not is_value(t, s.value_decls):
+                try_position_error(st)
+            name = "%s%d" % (TRY_TEMP, s.try_index)
+            s.try_index += 1
+            let = Let(st.line, st.col, name, False, t, k)
+            var = Var(st.line, st.col, name)
+            replace_expr(st, k, var)
+            for node in (let, var):
+                if hasattr(st, "file"):
+                    node.file = st.file
+            lets.append(let)
+        return lets
 
     def try_arms(s, st, rest, target, operand):
         if operand.owner is not None or operand.name != "result":
@@ -2769,6 +2847,10 @@ class Checker:
         for f in s.prog.functions:
             r = x_sig_reason(f, s.decls) or x_scan_block(f, f.body, 0, s.funcs)
             s.x_raw[f.name] = r if r is not None else copy.deepcopy(f.body)
+            if f.pred:                        # G-LG13-5: a `?` in a pred is try_position before pred_signature
+                for st in f.body:
+                    if isinstance(st, Return) and st.value is not None:
+                        check_try_position(st.value, st)
             if f.pred and r is not None:      # R03L (R-6-2): a pred always expands
                 terr(f, "pred_signature", "pred %s must expand in a contract: %s" % (f.name, r), X_FIX)
             if f.opaque and (r is not None or f.ret != BOOL):   # P13o: an opaque function is an expandable predicate

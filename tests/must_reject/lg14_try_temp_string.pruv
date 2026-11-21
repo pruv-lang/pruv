@@ -1,0 +1,18 @@
+// LG14: an operand before the `?` whose type is not a value (here a String) is not bound to a temporary, since the
+// temporary would change when it is dropped; rejected
+fn mk() -> String ! alloc {
+  return string_from("a");
+}
+
+fn need(x: i64) -> Result<i64, String> ! alloc {
+  if x > 0 { return Ok::<i64, String>(x); }
+  return Err::<i64, String>(string_from("no"));
+}
+
+fn cat2(a: String, b: i64) -> i64 {
+  return b;
+}
+
+fn g(x: i64) -> Result<i64, String> ! alloc {
+  return Ok::<i64, String>(cat2(mk(), need(x)?));
+}

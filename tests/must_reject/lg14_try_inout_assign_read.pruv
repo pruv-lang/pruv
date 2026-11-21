@@ -1,0 +1,7 @@
+// LG14 audit: x = set(inout x)? + y is inout_context even when the statement reads another local
+fn set(inout x: i64) -> Result<i64> { x = 1; return Ok(0); }
+fn f(y: i64) -> Result<i64> {
+  let mut x: i64 = 0;
+  x = set(inout x)? + y;
+  return Ok(x);
+}

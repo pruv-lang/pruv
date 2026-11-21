@@ -1,4 +1,5 @@
-// LG13: a call evaluated before the `?` would run after it once the `?` is lowered first; not lowered
+// LG13/LG14: an inout call evaluated before the `?` cannot be bound to a temporary (LG14 binds only operands without
+// inout or a quantifier); still rejected
 fn half(x: i64) -> Result<i64>
   requires 0 <= x && x <= 1000
 {
@@ -6,14 +7,16 @@ fn half(x: i64) -> Result<i64>
   return Err(x);
 }
 
-fn twice(x: i64) -> i64
-  requires 0 <= x && x <= 1000
+fn bump(inout y: i64) -> i64
+  requires y <= 100
 {
-  return x * 2;
+  y = y + 1;
+  return 0;
 }
 
 fn g(x: i64) -> Result<i64>
   requires 0 <= x && x <= 100
 {
-  return Ok(twice(x) + half(x)?);
+  let mut y: i64 = 0;
+  return Ok(bump(inout y) + half(x)?);
 }

@@ -1,0 +1,9 @@
+// LG14 (G-LG13-5): a `?` in a pred fn return is try_position in both compilers (checked before pred_signature)
+fn half(x: i64) -> Result<bool> {
+  if x % 2 == 0 { return Ok::<bool>(true); }
+  return Err::<bool>(x);
+}
+
+pred fn p(x: i64) -> bool {
+  return half(x)?;
+}

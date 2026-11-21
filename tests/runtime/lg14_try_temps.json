@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"], ["--trust-callers"]], "exit": 0, "stdout_lines": ["20", "10", "25", "15", "7", "24", "-6", "-6", "-6", "0", "-2", "21", "7", "-2"], "g6_drop_balance": true, "gen_contains": ["__pruv_try_t0", "__pruv_try_t2"]}

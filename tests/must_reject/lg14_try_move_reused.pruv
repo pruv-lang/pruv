@@ -1,0 +1,17 @@
+// LG14: an operand before the `?` that moves a name mentioned again in the statement is not bound to a temporary;
+// rejected
+fn eat(take s: String) -> i64 ! alloc
+  requires len(s) <= 100
+{
+  return len(s);
+}
+
+fn need(x: i64) -> Result<i64, String> ! alloc {
+  if x > 0 { return Ok::<i64, String>(x); }
+  return Err::<i64, String>(string_from("no"));
+}
+
+fn g(x: i64) -> Result<i64, String> ! alloc {
+  let s: String = string_from("abc");
+  return Ok::<i64, String>(eat(move s) + need(len(s))?);
+}

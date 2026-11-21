@@ -1,0 +1,5 @@
+// LG14 audit: a subview argument before a `?` cannot be bound to a temporary
+fn usev(a: [i64], n: i64) -> i64 { return n; }
+fn f(a: [i64]) -> Result<i64> {
+  return Ok(usev(subview(a, 0, 0), Ok(0)?));
+}

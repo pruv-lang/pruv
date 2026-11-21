@@ -426,11 +426,21 @@ let o: Option<bool> = Some::<bool>(true);   // also None::<bool>, Ok::<bool>(x),
   inside an expression statement or inside an `if` condition (LG13), for example `return Ok(f(x)? + 1);`,
   `g(f(x)?);`, `if f(x)? { .. }` or `let y: i64 = a + (f(x)? + f(y)?);`. It is `type/try_position` in any other
   statement (a `while` condition, a field or index assignment, an assignment through a reference, a contract), in the
-  right operand of `&&`, `||` or `==>`, inside a quantifier, when anything other than a local, a literal other than a
-  string, a field access, `!` or a comparison or logical operator is evaluated before it in the same statement (a
-  call, constructor, move, index, arithmetic, unary `-` or string literal; this also holds inside a short-circuit
-  operand that may be skipped, so `(false && b()) == x?` is rejected), and when its operand passes an `inout` argument
-  while the statement reads a local outside the operand. The operand must be
+  right operand of `&&`, `||` or `==>`, inside a quantifier, in a `return` of a `pred fn` (checked before
+  `type/pred_signature`, LG14), and when its operand passes an `inout` argument while the statement reads a local
+  outside the operand. When an assignment `x = ..` passes `x` itself `inout` in a statement that has a `?`, it is
+  `type/inout_context` (LG14). **Earlier operands (LG14).** When something other than a local, a literal other than a
+  string, a field access, `!` or a comparison or logical operator is evaluated before the `?` in the same statement (a
+  call, constructor, move, index, arithmetic, unary `-` or string literal), each such earlier operand on the way from
+  the statement to the `?` is first bound to a fresh immutable local, left to right: `return Ok(g(x) + f(x)?);` means
+  `let t: i64 = g(x); return Ok(t + f(x)?);`, so it still runs (and its preconditions and index bounds are still
+  checked) before the `?`. A short-circuit operand is bound whole, so `(false && b()) == x?` keeps its skipping. This
+  is `type/try_position` when a temporary would change the meaning: when the statement passes any `inout` argument
+  (the inout call and its alias and effect checks would no longer see the earlier operand), when the earlier operand
+  contains a quantifier or a `subview`, when it moves a name that the statement mentions again or mentions a name the
+  statement moves elsewhere (a borrow bound early would hide its conflict with the move), or when its type is
+  `()` or not a value type (a `String`, a collection, a reference or a type holding one, whose temporary would be
+  dropped or borrowed at a different point). The operand must be
   a `Result` (`type/try_operand`), the function must return a `Result<U, E'>` (`type/try_return`), and the errors
   must be the same type, `E == E'` (`type/try_error_type`; there is no error conversion). Operands are evaluated left
   to right and the `?` sites of a statement are taken in that order: the statement and the rest of its block mean
@@ -2160,7 +2170,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/refinement_bounds` | type | refinement bounds outside i64, or an empty range |
 | `type/reserved` | type | a function named like a builtin |
 | `type/result_error_type` | type | a `Result<T, E>` error type `E` that E1/E2 do not support (section 6c) |
-| `type/try_position` | type | a `?` outside the value of a let, a local assignment, a return, an expression statement or an if condition, in the right operand of `&&` / `\|\|` / `==>`, in a quantifier, after a call, constructor, move, index, arithmetic or string literal evaluated before it, or with an `inout` argument in its operand while the statement reads a local outside it (section 6c) |
+| `type/try_position` | type | a `?` outside the value of a let, a local assignment, a return, an expression statement or an if condition, in the right operand of `&&` / `\|\|` / `==>`, in a quantifier or a `pred fn` return, after an operand evaluated before it that cannot be bound to a temporary (in a statement that passes `inout`, or one that has a quantifier or `subview`, moves a name used again, mentions a name moved elsewhere in the statement or is not of a value type, LG14), or with an `inout` argument in its operand while the statement reads a local outside it (section 6c) |
 | `type/try_operand` | type | a `?` operand that is not a `Result` (section 6c) |
 | `type/try_return` | type | a `?` in a function that does not return a `Result` (section 6c) |
 | `type/try_error_type` | type | a `?` whose error type differs from the function's error type (section 6c) |
