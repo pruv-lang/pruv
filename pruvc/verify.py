@@ -1025,6 +1025,16 @@ def _opq_parts(args):
     return out
 
 
+def _arr_shape(t):
+    """LG4: the shape of an aggregate body with every array-sorted subterm replaced by `A` (frame lemma pairing).
+    A quantifier or other non-application keeps its full text, so it pairs only with an identical body."""
+    if z3.is_array(t):
+        return "A"
+    if z3.is_app(t) and t.num_args() > 0:
+        return "(" + t.decl().name() + " " + " ".join(_arr_shape(c) for c in t.children()) + ")"
+    return t.sexpr()
+
+
 def _occurs(t, c):
     """does z3 constant c appear in term t"""
     seen, todo = set(), [t]
@@ -1124,6 +1134,7 @@ class FnVerifier:
         s.qstack = []
         s.opq_fns = {}      # P13o: opaque function name -> its uninterpreted symbol opq!F
         s.aggs = {}
+        s.agg_shapes = []   # LG4: (kind, F, body, shape) for the aggregate frame lemma
         s.lemmas = []
         s.lemma_keys = set()
         s.theta = {}        # G3 A2: callee type-parameter substitution while a callee contract is re-interpreted
@@ -1855,6 +1866,27 @@ class FnVerifier:
                 key_extra=cand, cand=cand)
         return [d for d, _ in obs]
 
+    def agg_frame(s, kind, F, Tc, K0, Ps):
+        """LG4 G-R03D-1 aggregate frame lemma. Pairs a new aggregate with every earlier one of the same kind and
+        arity whose body differs only in array terms (same shape with every array-sorted subterm abstracted).
+        For such a pair, on a non-empty range either the two aggregates are equal or some slot in the range has
+        different bodies, named by a witness function W. This is true of any two aggregates over the same range."""
+        shape = _arr_shape(Tc)
+        for kind2, F2, Tc2, shape2 in s.agg_shapes:
+            if kind2 != kind or F2.arity() != F.arity() or shape2 != shape:
+                continue
+            x, y = z3.Ints("aggf!x aggf!y")
+            os_ = [z3.Int("aggf!o%d" % i) for i in range(len(Ps))]
+            W = z3.Function("aggf!w%d" % len(s.agg_shapes) + "_%s" % F2.name(), *([z3.IntSort()] * (2 + len(Ps))),
+                            z3.IntSort())
+            w = W(x, y, *os_)
+            b1 = z3.substitute(Tc2, (K0, w), *zip(Ps, os_))
+            b2 = z3.substitute(Tc, (K0, w), *zip(Ps, os_))
+            a1, a2 = F2(x, y, *os_), F(x, y, *os_)
+            s.lemmas.append(z3.ForAll([x, y] + os_, z3.Implies(
+                x < y, z3.Or(a1 == a2, z3.And(x <= w, w < y, b1 != b2))), patterns=[z3.MultiPattern(a1, a2)]))
+        s.agg_shapes.append((kind, F, Tc, shape))
+
     def aggregate(s, kind, k, lo, hi, T):
         """sum/count/max/min over lo<=k<hi as an uninterpreted F(lo, hi, *outer) plus unfolding lemmas."""
         outer = [c for c in s.qstack if _occurs(T, c)]
@@ -1866,6 +1898,7 @@ class FnVerifier:
             F = z3.Function("agg!%s%d" % (kind, len(s.aggs)), z3.IntSort(), z3.IntSort(),
                             *([z3.IntSort()] * len(outer)), z3.IntSort())
             s.aggs[key] = F
+            s.agg_frame(kind, F, Tc, K0, Ps)
         F = s.aggs[key]
 
         def body_at(x):

@@ -830,6 +830,8 @@ pub struct FnVerifier<'a> {
     pub(crate) opq_fns: HashMap<String, FuncDecl>,
     /// `s.aggs`: (kind, Tc.sexpr(), len(outer)) → F. Insertion order preserved (`len(aggs)` goes into the F name).
     pub(crate) aggs: Vec<((String, String, usize), FuncDecl)>,
+    /// LG4 `s.agg_shapes`: (kind, F, body, shape, arity) for the aggregate frame lemma.
+    pub(crate) agg_shapes: Vec<(String, FuncDecl, Ast, String, usize)>,
     pub lemmas: Vec<Ast>,
     /// The `(kind, F)` item of `lemma_keys`
     pub(crate) lemma_fn_keys: HashSet<(String, String)>,
@@ -950,6 +952,7 @@ impl<'a> FnVerifier<'a> {
             qstack: Vec::new(),
             opq_fns: HashMap::new(),
             aggs: Vec::new(),
+            agg_shapes: Vec::new(),
             lemmas: Vec::new(),
             lemma_fn_keys: HashSet::new(),
             lemma_text_keys: HashSet::new(),
@@ -1818,6 +1821,42 @@ impl<'a> FnVerifier<'a> {
     }
 
     // ---------- aggregates + lemmas (lines 545-602) ----------
+    /// LG4 G-R03D-1 aggregate frame lemma (verify.py `agg_frame`). For each earlier aggregate of the same kind, arity
+    /// and body shape: over the same range the two agree, or some index in the range has different bodies.
+    /// True of any two aggregates; the witness `W` names that index.
+    fn agg_frame(&mut self, kind: &str, f: &FuncDecl, tc: &Ast, k0: &Ast, ps: &[Ast]) {
+        let z = self.z.clone();
+        let shape = arr_shape(tc);
+        let arity = 2 + ps.len();
+        let mut new_lemmas = Vec::new();
+        for (kind2, f2, tc2, shape2, arity2) in self.agg_shapes.iter() {
+            if kind2 != kind || *arity2 != arity || *shape2 != shape {
+                continue;
+            }
+            let x = z.int_const("aggf!x");
+            let y = z.int_const("aggf!y");
+            let os: Vec<Ast> = (0..ps.len()).map(|i| z.int_const(&format!("aggf!o{}", i))).collect();
+            let int = z.int_sort();
+            let dom: Vec<Sort> = (0..arity).map(|_| int.clone()).collect();
+            let wf = FuncDecl::new(&z, &format!("aggf!w{}_{}", self.agg_shapes.len(), f2.name()), &dom, &int);
+            let mut args = vec![x.clone(), y.clone()];
+            args.extend(os.iter().cloned());
+            let w = wf.apply(&args);
+            let mut from = vec![k0.clone()];
+            let mut to = vec![w.clone()];
+            from.extend(ps.iter().cloned());
+            to.extend(os.iter().cloned());
+            let b1 = tc2.substitute(&from, &to);
+            let b2 = tc.substitute(&from, &to);
+            let a1 = f2.apply(&args);
+            let a2 = f.apply(&args);
+            let body = x.lt(&y).implies(&z.or(&[a1.eq(&a2), z.and(&[x.le(&w), w.lt(&y), b1.ne(&b2)])]));
+            new_lemmas.push(z.forall_multi(&args, &body, &[a1, a2]));
+        }
+        self.lemmas.extend(new_lemmas);
+        self.agg_shapes.push((kind.to_string(), f.clone(), tc.clone(), shape, arity));
+    }
+
     /// Translates sum/count/max/min over lo<=k<hi into an uninterpreted function `F(lo, hi, *outer)` and unrolling lemmas.
     /// At call time, this aggregate's own variable `k` must already be gone from `qstack` (after `quant_exit`).
     pub fn aggregate(&mut self, kind: &str, k: &Ast, lo: &Ast, hi: &Ast, t: &Ast) -> Ast {
@@ -1843,6 +1882,7 @@ impl<'a> FnVerifier<'a> {
                 let dom: Vec<Sort> = (0..2 + outer.len()).map(|_| int.clone()).collect();
                 let f = FuncDecl::new(&z, &format!("agg!{}{}", kind, self.aggs.len()), &dom, &int);
                 self.aggs.push((key.clone(), f.clone()));
+                self.agg_frame(kind, &f, &tc, &k0, &ps);
                 f
             }
         };
@@ -4830,4 +4870,18 @@ mod tests {
         assert_eq!(norm_int("-12"), "-12");
         assert_eq!(norm_int("9223372036854775808"), "9223372036854775808");
     }
+}
+
+/// LG4 (verify.py `_arr_shape`): an aggregate body with every array-sorted subterm replaced by `A`.
+/// A quantifier or other non-application keeps its full text, so it pairs only with an identical body.
+fn arr_shape(t: &Ast) -> String {
+    if t.sort().kind_id() == 5 {
+        return "A".to_string();
+    }
+    let ch = t.children();
+    if t.is_app() && !ch.is_empty() {
+        let parts: Vec<String> = ch.iter().map(arr_shape).collect();
+        return format!("({} {})", t.decl_name().unwrap_or_default(), parts.join(" "));
+    }
+    t.sexpr()
 }
