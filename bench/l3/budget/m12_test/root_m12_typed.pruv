@@ -952,6 +952,49 @@ fn replace_field(inout wire: Wire, parent: i64, slot: FieldLink, fresh: i64) -> 
   }
 }
 
+fn node_has_tag(wire: Wire, id: i64, tag: i64) -> bool
+{
+  match map_get::<i64, WireNode>(wire.nodes, id) {
+    Some(n) => { return n.tag == tag; }
+    None => {}
+  }
+  return false;
+}
+
+fn editable_number(wire: Wire, slot: FieldLink) -> bool
+{
+  return slot.hits <= 1 && (slot.id == 0 || node_has_tag(wire, slot.id, 5));
+}
+
+fn number_node(inout wire: Wire, key: str, value: i64) -> i64 ! alloc
+{
+  return append_node(inout wire, WireNode {
+    key: text(key), text: string_new(), tag: 5, scalar: value,
+    children: 0, count: 0, next: 0
+  });
+}
+
+fn set_wire_number(inout wire: Wire, parent: i64, slot: FieldLink, key: str, value: i64) -> () ! alloc
+{
+  if slot.id == 0 {
+    let fresh: i64 = number_node(inout wire, key, value);
+    let tail: FieldLink = find_field(wire, parent, key);
+    replace_field(inout wire, parent, tail, fresh);
+    return;
+  }
+  match map_get_mut::<i64, WireNode>(inout wire.nodes, slot.id) {
+    Some(n) => { n.scalar = value; }
+    None => {}
+  }
+}
+
+fn wire_room(wire: Wire, extra: i64) -> bool
+  requires 0 <= extra && extra <= 1099511627776
+{
+  return wire.next > 0 && wire.next <= 9223372036854775807 - extra &&
+         len(wire.nodes) <= 1099511627776 - extra;
+}
+
 fn delete_fields(inout wire: Wire, root: i64, key: str, first: FieldLink) -> () ! alloc
 {
   let mut slot: FieldLink = first;
@@ -1249,6 +1292,65 @@ fn charged(ok: bool, reason: i64) -> [i64] ! alloc
 
 struct AttachOutcome { status: i64 }
 
+fn object_node(inout wire: Wire, key: str, count: i64, first: i64) -> i64 ! alloc
+{
+  return append_node(inout wire, WireNode {
+    key: text(key), text: string_new(), tag: 9, scalar: 0,
+    children: first, count: count, next: 0
+  });
+}
+
+fn fresh_budget_wire(inout wire: Wire, old: i64, bid: [i64], stamp: [i64],
+                     arg: [i64], origin: i64, limits: [i64], unlimited: bool) -> i64 ! alloc
+  requires len(limits) == 5
+{
+  let empty: [u8] = alloc(0, 0);
+  let id: i64 = read_node(inout wire, bid, empty, false, 0, text("id"), 3);
+  let opened: i64 = read_node(inout wire, stamp, empty, false, 0, text("openedAt"), 3);
+  let source: i64 = read_node(inout wire, arg, empty, false, origin, text("origin"), 3);
+  let state: i64 = atom(inout wire, "state", 6, "open", 0);
+  link(inout wire, id, opened);
+  link(inout wire, opened, source);
+  link(inout wire, source, state);
+
+  let first_limit: i64 = number_node(inout wire, "timeMinutes", limits[0]);
+  let first_used: i64 = number_node(inout wire, "activeMs", 0);
+  let mut last_limit: i64 = first_limit;
+  let mut last_used: i64 = first_used;
+  let mut i: i64 = 1;
+  while i <= 4
+    invariant 1 <= i && i <= 5 && len(limits) == 5
+    decreases 5 - i
+  {
+    let key: str = named(i);
+    let limit: i64 = number_node(inout wire, key, limits[i]);
+    let used: i64 = number_node(inout wire, key, 0);
+    link(inout wire, last_limit, limit);
+    link(inout wire, last_used, used);
+    last_limit = limit;
+    last_used = used;
+    i = i + 1;
+  }
+  let tools: i64 = number_node(inout wire, "tools", 0);
+  let failures: i64 = number_node(inout wire, "failures", 0);
+  let retries: i64 = number_node(inout wire, "retries", 0);
+  link(inout wire, last_used, tools);
+  link(inout wire, tools, failures);
+  link(inout wire, failures, retries);
+  let limit_object: i64 = object_node(inout wire, "limits", 5, first_limit);
+  let used_object: i64 = object_node(inout wire, "used", 8, first_used);
+  link(inout wire, state, limit_object);
+  let mut fields: i64 = 6;
+  if unlimited {
+    let flag: i64 = atom(inout wire, "unlimited", 4, "", used_object);
+    link(inout wire, limit_object, flag);
+    fields = 7;
+  } else { link(inout wire, limit_object, used_object); }
+  let root: i64 = object_node(inout wire, "", fields, id);
+  let ignored: i64 = delete_node(inout wire, old, 64);
+  return root;
+}
+
 fn attach_fresh(inout st: St,
                 sid: [i64], sid_text: str, stale: [i64], arg: [i64], now: i64,
                 inout outcome: AttachOutcome, take incoming: Vec<i64>) -> Vec<i64> ! alloc, io
@@ -1269,7 +1371,8 @@ fn attach_fresh(inout st: St,
     }
   }
   let bid: [i64] = words_array(uuid(len(effects)));
-  effects = crate::bud_effect::value(move effects, 6, crate::bud_vwords::unpack(bid));
+  let bid_value: [i64] = crate::bud_vwords::unpack(bid);
+  effects = crate::bud_effect::value(move effects, 6, bid_value);
   effects = tick(move effects, now);
 
   let bid_text: String = decode_key(bid);
@@ -1289,11 +1392,10 @@ fn attach_fresh(inout st: St,
     outcome.status = 5;
     return crate::bud_effect::reply(5, false, crate::ent_u16::one(1), move effects);
   }
-  let mut limits: [i64] = numeric("timeMinutes", minutes);
-  let mut used: [i64] = numeric("activeMs", 0);
+  let mut values: [i64] = alloc(5, minutes);
   let mut i: i64 = 1;
   while i <= 4
-    invariant 1 <= i && i <= 5
+    invariant 1 <= i && i <= 5 && len(values) == 5
     decreases 5 - i
   {
     let k: str = named(i);
@@ -1302,25 +1404,9 @@ fn attach_fresh(inout st: St,
       outcome.status = 5;
       return crate::bud_effect::reply(5, false, crate::ent_u16::one(1), move effects);
     }
-    limits = cat(limits, numeric(k, limit));
-    used = cat(used, numeric(k, 0));
+    values[i] = limit;
     i = i + 1;
   }
-  used = cat(used, numeric("tools", 0));
-  used = cat(used, numeric("failures", 0));
-  used = cat(used, numeric("retries", 0));
-  let mut body: [i64] = crate::bud_vwords::field("id", crate::bud_vwords::unpack(bid));
-  body = cat(body, crate::bud_vwords::field("openedAt", crate::bud_vwords::iso(now)));
-  body = cat(body, crate::bud_vwords::field("origin", part(arg, get(arg, 0, "origin"))));
-  body = cat(body, crate::bud_vwords::field("state", crate::bud_vwords::text("open")));
-  body = cat(body, crate::bud_vwords::field("limits", crate::bud_vwords::object(5, limits)));
-  let mut fields: i64 = 6;
-  if unlimited {
-    body = cat(body, crate::bud_vwords::field("unlimited", crate::ent_u16::one(4)));
-    fields = 7;
-  }
-  body = cat(body, crate::bud_vwords::field("used", crate::bud_vwords::object(8, used)));
-  let blob: [i64] = crate::bud_vwords::object(fields, body);
 
   if len(st.sessions) >= 1099511627776 {
     outcome.status = 2;
@@ -1331,7 +1417,45 @@ fn attach_fresh(inout st: St,
     Some(b) => { old = b.metadata; }
     None => {}
   }
-  let root: i64 = replace_wire(inout st.wire, old, blob);
+  let origin: i64 = get(arg, 0, "origin");
+  let stamp: [i64] = crate::bud_vwords::iso(now);
+  let mut root: i64 = old;
+  // Scalar origins need one node and have the same depth as in replace_wire.
+  if origin >= 0 && origin <= 1099511627776 && rd(arg, origin) >= 1 && rd(arg, origin) <= 7 &&
+     crate::bud_card::v_end(arg, origin) > origin &&
+     len(stamp) > 0 && rd(bid_value, 0) == 6 && wire_room(st.wire, 21) {
+    root = fresh_budget_wire(inout st.wire, old, bid_value, stamp, arg, origin, values, unlimited);
+  } else {
+    let mut limits: [i64] = numeric("timeMinutes", minutes);
+    let mut used: [i64] = numeric("activeMs", 0);
+    i = 1;
+    while i <= 4
+      invariant 1 <= i && i <= 5 && len(values) == 5
+      decreases 5 - i
+    {
+      let k: str = named(i);
+      limits = cat(limits, numeric(k, values[i]));
+      used = cat(used, numeric(k, 0));
+      i = i + 1;
+    }
+    used = cat(used, numeric("tools", 0));
+    used = cat(used, numeric("failures", 0));
+    used = cat(used, numeric("retries", 0));
+    let mut body: [i64] = crate::bud_vwords::field("id", bid_value);
+    body = cat(body, crate::bud_vwords::field("openedAt", stamp));
+    body = cat(body, crate::bud_vwords::field("origin", part(arg, origin)));
+    body = cat(body, crate::bud_vwords::field("state", crate::bud_vwords::text("open")));
+    body = cat(body, crate::bud_vwords::field("limits", crate::bud_vwords::object(5, limits)));
+    let mut fields: i64 = 6;
+    if unlimited {
+      body = cat(body, crate::bud_vwords::field("unlimited", crate::ent_u16::one(4)));
+      fields = 7;
+    }
+    body = cat(body, crate::bud_vwords::field("used", crate::bud_vwords::object(8, used)));
+    let blob: [i64] = crate::bud_vwords::object(fields, body);
+
+    root = replace_wire(inout st.wire, old, blob);
+  }
   let replacement: crate::bud_tstate::Budget = make_budget(st.wire, root);
   st.sessions = map_insert::<String, crate::bud_tstate::Budget>(move st.sessions, text(sid_text), move replacement);
   effects = crate::bud_effect::mark(move effects, 4);
@@ -1376,10 +1500,10 @@ trusted rust fn encode_key(key: str) -> Vec<i64> ! alloc
 trusted rust fn running_wire(rf: [i64], offset: i64) -> Vec<i64> ! alloc, io
   ensures true = "::m12_facts::running_wire";
 
-fn drop_clock(inout st: St, key: str, take incoming: Vec<i64>) -> Vec<i64> ! alloc
+fn drop_clock(inout clocks: HashMap<String, crate::bud_tstate::Clock>, key: str, take incoming: Vec<i64>) -> Vec<i64> ! alloc
 {
   let mut effects: Vec<i64> = move incoming;
-  match map_take::<String, crate::bud_tstate::Clock>(inout st.clock_state.clocks, key) {
+  match map_take::<String, crate::bud_tstate::Clock>(inout clocks, key) {
     Some(c) => {
       if c.armed { effects = crate::bud_effect::value(move effects, 13, words_array(encode_key(key))); }
     }
@@ -1451,22 +1575,18 @@ fn cleanup(inout st: St, op: i64, sid: str) -> Vec<i64> ! alloc
 {
   let mut effects: Vec<i64> = vec_new::<i64>();
   if op == 1 {
-    let mut id: String = string_new();
-    let mut found: bool = false;
     match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid) {
       Some(b) => {
         if b.state >= 0 {
-          found = true;
-          id = text(string_to_str(b.id));
           let slot: FieldLink = find_field(st.wire, b.metadata, "activeSince");
           delete_fields(inout st.wire, b.metadata, "activeSince", slot);
           b.active_since = -1;
           b.since_kind = -1;
+          effects = drop_clock(inout st.clock_state.clocks, string_to_str(b.id), move effects);
         }
       }
       None => {}
     }
-    if found { effects = drop_clock(inout st, string_to_str(id), move effects); }
   } else {
     effects = cleanup_clocks(inout st.clock_state.clocks, inout st.clock_order, inout st.clock_ordinals, op, sid);
     if op == 3 {
@@ -1506,6 +1626,25 @@ fn charge_budget(inout wire: Wire, inout b: crate::bud_tstate::Budget, what: [i6
   let charged: i64 = crate::bud_tstate::charge(inout b, amounts);
   if charged < 0 { return 5; }
   if charged > 0 { return 32 + crate::bud_store::c32(charged); }
+
+  let parent: FieldLink = find_field(wire, b.metadata, "used");
+  if parent.hits == 1 && node_has_tag(wire, parent.id, 9) {
+    let delegations: FieldLink = find_field(wire, parent.id, "delegations");
+    let commands: FieldLink = find_field(wire, parent.id, "commands");
+    let reviews: FieldLink = find_field(wire, parent.id, "reviews");
+    let checks: FieldLink = find_field(wire, parent.id, "checks");
+    let retries: FieldLink = find_field(wire, parent.id, "retries");
+    if wire_room(wire, 5) && editable_number(wire, delegations) &&
+       editable_number(wire, commands) && editable_number(wire, reviews) &&
+       editable_number(wire, checks) && editable_number(wire, retries) {
+      set_wire_number(inout wire, parent.id, delegations, "delegations", b.delegations);
+      set_wire_number(inout wire, parent.id, commands, "commands", b.commands);
+      set_wire_number(inout wire, parent.id, reviews, "reviews", b.reviews);
+      set_wire_number(inout wire, parent.id, checks, "checks", b.checks);
+      set_wire_number(inout wire, parent.id, retries, "retries", b.retries);
+      return 0;
+    }
+  }
 
   let a: [i64] = budget_words(wire, b);
   let mut used: [i64] = part(a, get(a, 0, "used"));
@@ -1560,6 +1699,36 @@ fn run_view(st: St, bid: str, sid: str, run: str, op: i64, waiting: bool) -> Run
     None => {}
   }
   return v;
+}
+
+fn edit_clock_wire(inout wire: Wire, b: crate::bud_tstate::Budget, settled: bool, began: bool, now: i64) -> bool ! alloc
+{
+  if !node_has_tag(wire, b.metadata, 9) || !wire_room(wire, 2) { return false; }
+  let since: FieldLink = find_field(wire, b.metadata, "activeSince");
+  if since.hits > 1 { return false; }
+  let used: FieldLink = find_field(wire, b.metadata, "used");
+  let active: FieldLink = find_field(wire, used.id, "activeMs");
+  if settled && (used.hits != 1 || !node_has_tag(wire, used.id, 9) ||
+                 !editable_number(wire, active)) { return false; }
+  let mut iso: String = string_new();
+  if began {
+    let stamp: [i64] = crate::bud_vwords::iso(now);
+    if len(stamp) == 0 { return false; }
+    iso = v_units(stamp, 2, rd(stamp, 1));
+  }
+  if settled {
+    delete_fields(inout wire, b.metadata, "activeSince", since);
+    set_wire_number(inout wire, used.id, active, "activeMs", b.active_ms);
+  }
+  if began {
+    let slot: FieldLink = find_field(wire, b.metadata, "activeSince");
+    let fresh: i64 = append_node(inout wire, WireNode {
+      key: text("activeSince"), text: move iso, tag: 6, scalar: 0,
+      children: 0, count: 0, next: 0
+    });
+    replace_field(inout wire, b.metadata, slot, fresh);
+  }
+  return true;
 }
 
 fn after_clock(wire: Wire, b: crate::bud_tstate::Budget, settled: bool, began: bool, now: i64) -> [i64] ! alloc
@@ -1700,9 +1869,12 @@ fn life_settle(inout st: St, take effects: Vec<i64>, found: bool, since: bool, h
           sync_start = crate::bud_vwords::put(budget_words(st.wire, b), "activeSince", crate::bud_vwords::iso(now));
         }
         if settled || began || sync_fire {
-          let a: [i64] = after_clock(st.wire, b, settled || sync_fire, began, now);
-          let updated: i64 = replace_wire(inout st.wire, b.metadata, a);
-          b.metadata = updated;
+          let edited: bool = edit_clock_wire(inout st.wire, b, settled || sync_fire, began, now);
+          if !edited {
+            let a: [i64] = after_clock(st.wire, b, settled || sync_fire, began, now);
+            let updated: i64 = replace_wire(inout st.wire, b.metadata, a);
+            b.metadata = updated;
+          }
         }
       }
       None => {}
@@ -1763,9 +1935,8 @@ fn life_halted(inout st: St, take effects: Vec<i64>, explicit: bool, sid_text: s
 pub fn life(inout st: St, op: i64, rf: [i64], sid: [i64], sid_text: str, arg: [i64], now: i64,
             bid: [i64], bid_text: str, run: str, has_run: bool) -> [i64] ! alloc, io
 {
-  let undef: [i64] = crate::ent_u16::one(1);
   let mut effects: Vec<i64> = vec_new::<i64>();
-  if op < 1 || op > 10 { return words_array(crate::bud_effect::reply(2, false, undef, move effects)); }
+  if op < 1 || op > 10 { return words_array(crate::bud_effect::reply(2, false, crate::ent_u16::one(1), move effects)); }
   if op <= 3 { return words_array(cleanup(inout st, op, sid_text)); }
   if op == 8 {
     let packet: Vec<i64> = attach(inout st, sid, sid_text, arg, now);
@@ -1773,6 +1944,7 @@ pub fn life(inout st: St, op: i64, rf: [i64], sid: [i64], sid_text: str, arg: [i
     return words_array(packet);
   }
 
+  let undef: [i64] = crate::ent_u16::one(1);
   let waiting: bool = crate::bud_card::truthy(arg, get(arg, 0, "waiting"));
   let v: RunView = run_view(st, bid_text, sid_text, run, op, waiting);
   if !v.changed { return words_array(crate::bud_effect::reply(0, false, undef, move effects)); }

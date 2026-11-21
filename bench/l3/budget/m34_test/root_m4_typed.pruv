@@ -281,20 +281,51 @@ pub fn tool_note_admitted(inout st: St, key: str, activity: str) -> Reply ! allo
 
 
 pub fn session_get(st: St, key: str) -> Reply ! alloc {
-  if len(key) > 549755813888 { return reply(Outcome::Invalid); }
-  if !needs_escape(key) { return session_get_admitted(st, key); }
-  let key_key: String = native_key(key);
-  return session_get_admitted(st, string_to_str(key_key));
+  let mut out: Reply = session_get_reply();
+  session_get_into(inout out, st, key);
+  return out;
 }
 
 pub fn session_get_admitted(st: St, key: str) -> Reply ! alloc {
+  let mut out: Reply = session_get_reply();
+  session_get_admitted_into(inout out, st, key);
+  return out;
+}
+
+pub fn session_get_reply() -> Reply ! alloc {
+  return reply(Outcome::Missing);
+}
+
+pub fn session_get_into(inout out: Reply, st: St, key: str) -> () ! alloc {
+  if len(key) > 549755813888 {
+    vec_clear::<i64>(inout out.blob);
+    out.outcome = Outcome::Invalid;
+    return;
+  }
+  if !needs_escape(key) {
+    session_get_admitted_into(inout out, st, key);
+    return;
+  }
+  let key_key: String = native_key(key);
+  session_get_admitted_into(inout out, st, string_to_str(key_key));
+}
+
+// Use a dedicated reply from session_get_reply; only the outcome and blob change.
+pub fn session_get_admitted_into(inout out: Reply, st: St, key: str) -> () ! alloc {
+  vec_clear::<i64>(inout out.blob);
   match map_get::<String, Sess>(st.sessions, key) {
     Some(session) => {
-      let mut output: Reply = reply(Outcome::Found);
-      output.blob = blob_copy(session.blob);
-      return output;
+      out.outcome = Outcome::Found;
+      let mut i: i64 = 0;
+      while i < len(session.blob)
+        invariant 0 <= i && i <= len(session.blob) && len(out.blob) == i
+        decreases len(session.blob) - i
+      {
+        out.blob = vec_push::<i64>(move out.blob, vec_get::<i64>(session.blob, i));
+        i = i + 1;
+      }
     }
-    None => { return reply(Outcome::Missing); }
+    None => { out.outcome = Outcome::Missing; }
   }
 }
 

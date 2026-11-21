@@ -19,6 +19,10 @@ rejects trailing words. Native text and packed UTF-16 share a key representation
 that pairs supplementary characters and escapes lone surrogates.
 The direct perf cycle is prepared with typed arguments before the timed loop.
 
+Session gets on both lanes reuse a caller-held `Reply`. Per get, Pruv sets
+`outcome`, keeps the `blob` capacity with `vec_clear` and refills it with
+`vec_push`; Rust borrows that buffer when encoding.
+
 The churn check keeps one turn live across 200,000 create/delete cycles and
 checks bounded map capacity and monotonic ordinal assignment.
 
