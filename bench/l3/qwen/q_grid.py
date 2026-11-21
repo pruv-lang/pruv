@@ -69,9 +69,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {{
     let path = env::args_os().nth(1).ok_or("usage: qwen-pruv FILE")?;
     let (buffer, cut_before) = read_window(&path, 8388608)?;
     let start = Instant::now();
-    let packet = unwire(sol::{PRUV_ENTRY}(&buffer, i64::from(cut_before)));
+    // Time through the finished record JSON, the same end point as the hand runner.
+    let json = record(&unwire(sol::{PRUV_ENTRY}(&buffer, i64::from(cut_before))));
     let ms = start.elapsed().as_secs_f64() * 1000.0;
-    let json = record(&packet);
     println!("{{ms}} {{json}}");
     Ok(())
 }}
@@ -216,10 +216,11 @@ def check(pruv, hand):
             mismatches += not equal(pruv, hand, path)
 
     denominator = 1
+    collision_mismatches = 0
+    rows = SIZES_MIB["L"] * 1024 * 1024 // 200
     while True:
         # Probe L first so an expensive full collision does not delay all sizes.
         collision_grid = []
-        collision_mismatches = 0
         try:
             for size in reversed(SIZES_MIB):
                 path = grid_file("collide", size, denominator)
@@ -227,6 +228,8 @@ def check(pruv, hand):
                 collision_mismatches += not equal(pruv, hand, path, timeout=60)
         except subprocess.TimeoutExpired:
             denominator = 16 if denominator == 1 else denominator * 2
+            if denominator > rows:
+                raise RuntimeError(f"collide-{size} times out even at 1/{denominator}")
             print(f"collide-{size} Pruv 실행 60초 초과. 충돌 비율을 1/{denominator}로 낮춥니다.",
                   flush=True)
         else:
@@ -271,6 +274,9 @@ def main():
     parser.add_argument("--runs", type=int, default=7, help="fresh process runs per implementation")
     parser.add_argument("--sizes", default="M,L", help="sizes to time (S, M, L)")
     args = parser.parse_args()
+    sizes = args.sizes.split(",")
+    if not sizes or any(size not in SIZES_MIB for size in sizes):
+        parser.error("--sizes takes a comma list of S, M, L")
     if args.runs < 1:
         parser.error("--runs must be positive")
     pruv, hand = build()
@@ -278,7 +284,7 @@ def main():
     if mismatches:
         return 1
     if not args.check:
-        measure(pruv, hand, grid, args.runs, args.sizes.split(","))
+        measure(pruv, hand, grid, args.runs, sizes)
     return 0
 
 

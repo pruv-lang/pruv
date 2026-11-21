@@ -71,8 +71,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = env::args_os().nth(1).ok_or("usage: qwen-hand FILE")?;
     let (buffer, cut_before) = read_window(&path, qwen_hand::WINDOW_BYTES as u64)?;
     let start = Instant::now();
-    let window = qwen_hand::window_import(&buffer, cut_before)?;
+    // Time through the finished record JSON, the same end point as the Pruv runner.
+    let json = record(&qwen_hand::window_import(&buffer, cut_before)?);
     let ms = start.elapsed().as_secs_f64() * 1000.0;
-    println!("{ms} {}", record(&window));
+    println!("{ms} {json}");
     Ok(())
 }

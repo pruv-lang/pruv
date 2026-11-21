@@ -692,6 +692,24 @@ fn parse_line(line: &[u8], scratch: &mut Vec<u8>) -> Option<Object> {
         Some(&b'{') => {}
         _ => return None,
     }
+    // arbitrary_precision turns an object keyed by this literal into a number. Rename the key
+    // (same length) so it stays an object; no lookup reads that key. A \u-escaped key is not covered.
+    const NUMBER_KEY: &[u8] = b"\"$serde_json::private::Number\"";
+    let renamed;
+    let line = if line.windows(NUMBER_KEY.len()).any(|w| w == NUMBER_KEY) {
+        let mut copy = line.to_vec();
+        for i in 0..=copy.len() - NUMBER_KEY.len() {
+            let rest = &copy[i + NUMBER_KEY.len()..];
+            let key = rest.iter().find(|&&b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r')) == Some(&b':');
+            if key && copy[i..i + NUMBER_KEY.len()] == *NUMBER_KEY {
+                copy[i + 1] = b'_';
+            }
+        }
+        renamed = copy;
+        &renamed[..]
+    } else {
+        line
+    };
     let v = match serde_json::from_slice::<Value>(line) {
         Ok(v) => v,
         Err(e) => parse_slow(line, e, scratch)?,
