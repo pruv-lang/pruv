@@ -66,6 +66,8 @@ _add("map_take", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], mk_option
 CATALOG["map_take"].params[0].mode = "inout"
 _add("vec_clear", _T, lambda T: ([_p("v", _vec(T))], UNIT))
 CATALOG["vec_clear"].params[0].mode = "inout"
+_add("vec_reserve", _T, lambda T: ([_p("v", _vec(T)), _p("n", I64)], UNIT), ["alloc"])
+CATALOG["vec_reserve"].params[0].mode = "inout"
 _add("vec_extend_from_slice", _T, lambda T: ([_p("v", _vec(T)), _p("s", mk_array(T))], UNIT), ["alloc"])   # D95
 CATALOG["vec_extend_from_slice"].params[0].mode = "inout"
 _add("string_eq", [], lambda: ([_p("a", STR), _p("b", STR)], BOOL))

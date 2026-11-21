@@ -1,0 +1,5 @@
+// spec: R-6e-19 reject
+// The reserve size is not proved to be in 0..=2^40.
+fn f(inout v: Vec<i64>, n: i64) -> () ! alloc {
+  vec_reserve::<i64>(inout v, n);
+}

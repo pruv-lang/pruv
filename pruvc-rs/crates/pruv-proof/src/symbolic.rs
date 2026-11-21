@@ -2395,27 +2395,27 @@ impl<'a> FnVerifier<'a> {
                 self.assume(st, g, r_ast.eq(&fa));
                 return Ok(r);
             }
-            "copy_range" => {
-                // L-copy-range: five bounds obligations in order, then dst' := Lambda p. (i <= p < i+n ? src[j+p-i] : dst[p]);
-                // src is the value at the call (aliasing with dst is rejected by the checker)
+            "copy_range" | "copy_within" => {
                 let dv = arg(0)?.try_arr()?.clone();
                 let i = arg(1)?.try_ast()?.clone();
-                let sv = arg(2)?.try_arr()?.clone();
-                let j = arg(3)?.try_ast()?.clone();
-                let cnt = arg(4)?.try_ast()?.clone();
-                let obs: Vec<(Ast, String)> = vec![
-                    (i.ge_i(0), format!("copy_range start 0 <= i for {}", dv.name)),
-                    (j.ge_i(0), format!("copy_range start 0 <= j for {}", sv.name)),
-                    (cnt.ge_i(0), "copy_range length 0 <= n".to_string()),
-                    (i.add(&cnt).le(&dv.n), format!("copy_range i + n <= len({})", dv.name)),
-                    (j.add(&cnt).le(&sv.n), format!("copy_range j + n <= len({})", sv.name)),
+                let (sv, j, cnt, dst, src) = if n == "copy_within" {
+                    (dv.clone(), arg(2)?.try_ast()?.clone(), arg(3)?.try_ast()?.clone(), "dst", "src")
+                } else {
+                    (arg(2)?.try_arr()?.clone(), arg(3)?.try_ast()?.clone(), arg(4)?.try_ast()?.clone(), "i", "j")
+                };
+                let obs = [
+                    (i.ge_i(0), format!("{n} start 0 <= {dst} for {}", dv.name)),
+                    (j.ge_i(0), format!("{n} start 0 <= {src} for {}", sv.name)),
+                    (cnt.ge_i(0), format!("{n} length 0 <= n")),
+                    (i.add(&cnt).le(&dv.n), format!("{n} {dst} + n <= len({})", dv.name)),
+                    (j.add(&cnt).le(&sv.n), format!("{n} {src} + n <= len({})", sv.name)),
                 ];
                 for (ob, msg) in obs {
                     self.prove_core(&st, g, &ob, pos(e), "index_oob", &msg, None);
                 }
                 // a definitional (array-theory) update, no quantified assumption: the content fact, the frame fact and
                 // len(dst') == len(dst) hold by construction
-                let p = self.z.int_const("copy_range!p");
+                let p = self.z.int_const(&format!("{n}!p"));
                 let inr = self.z.and(&[i.le(&p), p.lt(&i.add(&cnt))]);
                 let body = self.z.ite(&inr, &sv.a.select(&j.add(&p).sub(&i)), &dv.a.select(&p));
                 let lam = self.z.lambda(&[p], &body);
@@ -3695,6 +3695,13 @@ impl<'a> FnVerifier<'a> {
                 self.store_collection_place(&place.expr, &mut st.env, Val::Arr(empty))?;
                 Ok(Val::Unit)
             }
+            "vec_reserve" => {
+                let cnt = argv(1)?.try_ast()?;
+                if code {
+                    self.prove_core(&st, g, &z.and(&[cnt.ge_i(0), cnt.le_i(MAX_LEN)]), pos(e), "call_requires", &what, None);
+                }
+                Ok(Val::Unit)
+            }
             "vec_extend_from_slice" => {
                 let v = argv(0)?.try_arr()?;
                 let src = argv(1)?.try_arr()?;
@@ -4498,7 +4505,7 @@ impl<'a> FnVerifier<'a> {
         // by inout calls keeps the loop-head length only if no whole assignment in the body can replace it.
         // Without inout, calls = {} and snap = {}: names/keep (and the SMT) are exactly the old ones.
         let mut calls: BTreeSet<String> = BTreeSet::new();
-        call_writes(body, &mut calls, &|_, _| true);
+        call_writes(body, &mut calls, &|call, _| call.name != "vec_reserve");
         let mut keep: BTreeSet<String> = BTreeSet::new();
         if !calls.is_empty() || !self.snap.0.is_empty() {
             let mut whole: BTreeSet<String> = BTreeSet::new();

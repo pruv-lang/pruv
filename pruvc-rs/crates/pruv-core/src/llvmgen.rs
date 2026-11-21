@@ -3920,19 +3920,21 @@ impl<'a> FnGen<'a> {
             let r = self.op(format!("{} i64 {}, {}", ins, x.a, y.a))?;
             return Ok(V::new(Kind::I64, r));
         }
-        if n == "copy_range" {
-            // L-copy-range: dst[i..i+n] := src[j..j+n]; source order dst, i, src, j, n; one memcpy
+        if matches!(n, "copy_range" | "copy_within") {
             let target = match arg(a, 0)? {
                 Expr::InoutArg(ia) => ia.expr.as_ref(),
                 other => other,
             };
             let dv = self.ev(target, false)?;
             let iv = self.ev(arg(a, 1)?, false)?;
-            let sv = self.ev(arg(a, 2)?, false)?;
-            let jv = self.ev(arg(a, 3)?, false)?;
-            let cnt = self.ev(arg(a, 4)?, false)?;
+            let within = n == "copy_within";
+            let (sv, jv, cnt) = if within {
+                (dv.clone(), self.ev(arg(a, 2)?, false)?, self.ev(arg(a, 3)?, false)?)
+            } else {
+                (self.ev(arg(a, 2)?, false)?, self.ev(arg(a, 3)?, false)?, self.ev(arg(a, 4)?, false)?)
+            };
             if dv.k != Kind::Arr || sv.k != Kind::Arr {
-                return Err(format!("{}{}:{}:operand", CPR_DIAG_TAG, e.line, e.col));
+                return Err(format!("{}{n}:{}:{}:operand", CPR_DIAG_TAG, e.line, e.col));
             }
             if !self.verified {
                 // P13i2a.audit-1: the destination check (i < 0 || n < 0 || i > len(dst) - n) reports (i, len(dst)),
@@ -3954,13 +3956,13 @@ impl<'a> FnGen<'a> {
             let tys = elem_ir(&sv);
             if !((is_bytes_ty(&dv.ty) && is_bytes_ty(&sv.ty)) || (tyd == "i64" && tys == "i64")) {
                 // the storage plan pins copy_range operands to i64 or bytes, as for eq_range; any other pair is not lowered
-                return Err(format!("{}{}:{}:array layout", CPR_DIAG_TAG, e.line, e.col));
+                return Err(format!("{}{n}:{}:{}:array layout", CPR_DIAG_TAG, e.line, e.col));
             }
             let pd = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", tyd, dv.a, iv.a))?;
             let ps = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", tys, sv.a, jv.a))?;
             let nb = if tyd == "i8" { cnt.a.clone() } else { self.op(format!("mul nuw nsw i64 {}, 8", cnt.a))? };
-            // dst and src are distinct arrays (the checker rejects the same array, inout_alias), so memcpy is exact
-            self.ins(format!("call void @llvm.memcpy.p0.p0.i64(ptr {}, ptr {}, i64 {}, i1 false)", pd, ps, nb))?;
+            let intrinsic = if within { "memmove" } else { "memcpy" };
+            self.ins(format!("call void @llvm.{intrinsic}.p0.p0.i64(ptr {}, ptr {}, i64 {}, i1 false)", pd, ps, nb))?;
             return Ok(V::unit());
         }
         if n == "eq_range" {
@@ -6264,6 +6266,7 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
                         "map_take" => rust_only.push((c.line, c.col, "map_take")),
                         "vec_at_mut" => rust_only.push((c.line, c.col, "vec_at_mut")),
                         "vec_clear" => rust_only.push((c.line, c.col, "vec_clear")),
+                        "vec_reserve" => rust_only.push((c.line, c.col, "vec_reserve")),
                         "vec_extend_from_slice" => rust_only.push((c.line, c.col, "vec_extend_from_slice")),
                         "string_eq" => rust_only.push((c.line, c.col, "string_eq")),
                         "map_get_mut" => bad.push((c.line, c.col)),
@@ -6504,7 +6507,8 @@ pub fn gen_llvm_concrete_ex(
                 }
                 None => match s.strip_prefix(CPR_DIAG_TAG) {
                     Some(rest) => {
-                        let mut it = rest.splitn(3, ':');
+                        let mut it = rest.splitn(4, ':');
+                        let builtin = it.next().unwrap_or("");
                         let line: i64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
                         let col: i64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
                         let what = it.next().unwrap_or("");
@@ -6513,7 +6517,7 @@ pub fn gen_llvm_concrete_ex(
                             line,
                             col,
                             "unsupported_type",
-                            &format!("copy_range is not supported by the llvm codegen layer for this {} yet", what),
+                            &format!("{builtin} is not supported by the llvm codegen layer for this {} yet", what),
                             "copy the elements in a loop, or use the Rust backend",
                         ))
                     }
@@ -6687,6 +6691,7 @@ fn gen_llvm_body(
             g6decls.push('\n');
         }
     }
+    let memmove = chunks.iter().any(|chunk| chunk.contains("call void @llvm.memmove.p0.p0.i64("));
     let mut ir = format!(
         "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
         if target == AbiTarget::WinX64 { WIN_X64_HEADER } else { "" },
@@ -6719,7 +6724,9 @@ fn gen_llvm_body(
         if m.resize_i64 { DECLS_RESIZE } else { "" },
         if m.resize_u8 { DECLS_RESIZE_U8 } else { "" },
         if m.resize_narrow { DECLS_RESIZE_NARROW } else { "" },
-        if m.memcmp { "declare i32 @memcmp(ptr nocapture, ptr nocapture, i64) nounwind readonly\n" } else { "" }, // P17a
+        format!("{}{}",
+            if memmove { "declare void @llvm.memmove.p0.p0.i64(ptr nocapture writeonly, ptr nocapture readonly, i64, i1 immarg)\n" } else { "" },
+            if m.memcmp { "declare i32 @memcmp(ptr nocapture, ptr nocapture, i64) nounwind readonly\n" } else { "" }), // P17a
         g6decls,
         chunks.join("\n")
     );
@@ -6755,7 +6762,7 @@ pub extern "C" fn pruv_panic_cost() -> ! {
         }
     }
     let bindings = crate::bindings::gen_bindings_with(prog, shim.as_deref(), verified)?;
-    Ok((ir, bindings))
+    Ok((crate::llvm_inline::llvm_inline(ir), bindings))
 }
 
 #[cfg(test)]

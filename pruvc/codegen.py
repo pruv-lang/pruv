@@ -3182,6 +3182,14 @@ class Gen:
             k = s.borrowed_map_key(key) if low[0].name == "string" else "&" + s.e(key)
             removed = "%s.remove(%s)" % (s.e(place.expr), k)
             return removed + ".is_some()" if e.name == "map_remove" else removed
+        if e.name == "vec_reserve":
+            s.fg.record_inline_catalog(e.name, src)
+            place, cnt = s.e(e.args[0].expr), s.e(e.args[1])
+            if s.unchecked_catalog():
+                return "%s.reserve((%s) as usize)" % (place, cnt)
+            return ('{ let pruv_n: i64 = %s; if pruv_n < 0 || pruv_n > (1i64 << 40) '
+                    '{ pruv_g6_req("vec_reserve", "0 <= n && n <= 2^40"); } %s.reserve((pruv_n) as usize) }'
+                    % (cnt, place))
         if e.name == "vec_clear":
             s.fg.record_inline_catalog(e.name, src)
             return "%s.clear()" % s.e(e.args[0].expr)
@@ -3413,6 +3421,17 @@ class Gen:
                 return ("%sif pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > (pruv_ea.len() as i64) - pruv_n "
                         "|| pruv_j > (pruv_eb.len() as i64) - pruv_n { pruv_oob(pruv_i, pruv_ea.len()) } "
                         "pruv_ea[%s] == pruv_eb[%s] }" % (head, ri, rj))
+            if n == "copy_within":
+                name = a[0].expr.name
+                head = ("{ let pruv_i: i64 = %s; let pruv_j: i64 = %s; let pruv_n: i64 = %s; "
+                        % (s.e(a[1]), s.e(a[2]), s.e(a[3])))
+                if s.verified:
+                    return ("%sunsafe { let pa = %s.as_mut_ptr(); ::core::ptr::copy(pa.add((pruv_j) as usize), "
+                            "pa.add((pruv_i) as usize), (pruv_n) as usize) }; }" % (head, name))
+                return ("%sif pruv_i < 0 || pruv_n < 0 || pruv_i > (%s.len() as i64) - pruv_n { pruv_oob(pruv_i, %s.len()) } "
+                        "if pruv_j < 0 || pruv_j > (%s.len() as i64) - pruv_n { pruv_oob(pruv_j, %s.len()) } "
+                        "%s.copy_within((pruv_j) as usize..((pruv_j) + (pruv_n)) as usize, (pruv_i) as usize); }"
+                        % (head, name, name, name, name, name))
             if n == "copy_range":  # L-copy-range: dst[i..i+n].copy_from_slice(&src[j..j+n]); i, src, j, n bound once in source order
                 name = a[0].expr.name
                 head = ("{ let pruv_i: i64 = %s; let pruv_cs = %s; let pruv_j: i64 = %s; let pruv_n: i64 = %s; "

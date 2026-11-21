@@ -44,6 +44,7 @@ import re
 from vast import *
 import codegen
 from codegen import show
+from llvm_inline import llvm_inline
 from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str  # G2 B2: uses_str
 from typeinfo import is_collection, contains_collection, encode, is_scalar_vec, is_vec_slice_arg
 from foreign import CATALOG, CATALOG_CONTRACT_ONLY, first_g6_use, _owned_result, NET_OBSERVERS, ASYNC_OBSERVERS  # G6 A3, G6b, G10 net A3
@@ -719,6 +720,7 @@ class Mod:
         s.stack = None          # P3-S1: StackPlan (set by gen_llvm)
         s.fill = False          # P3-S1: some stack array calls @pruv_fill_v2
         s.tail = set()          # P3: tail-filled alloc helpers used ("i64" -> pruv_alloc_tail, "u8" -> _u8)
+        s.memmove = False
         s.memcmp = False        # P17a: some eq_range lowers to a memcmp call (declare i32 @memcmp)
         s.resize = set()        # P05G: resize helpers used ("i64" -> pruv_resize, "u8" -> pruv_resize_u8, "narrow")
         s.range_nodes = {}      # P3 batch 2: `iW a, iW b` body -> !N number (first-use order)
@@ -2569,15 +2571,16 @@ class FnGen:
                 ok = s.op("icmp ult i64 %s, 64" % y.a)
                 s.guard(ok, s.panic1("pruv_panic_arith", "shift count outside 0..64"), False)
             return V("i64", s.op("%s i64 %s, %s" % (BIT_LLVM[n], x.a, y.a)))
-        if n == "copy_range":  # L-copy-range: dst[i..i+n] := src[j..j+n]; source order dst, i, src, j, n; one memcpy
+        if n in ("copy_range", "copy_within"):
+            within = n == "copy_within"
             dv = s.ev(a[0].expr)
             iv = s.ev(a[1])
-            sv = s.ev(a[2])
-            jv = s.ev(a[3])
-            cnt = s.ev(a[4])
+            sv = dv if within else s.ev(a[2])
+            jv = s.ev(a[2] if within else a[3])
+            cnt = s.ev(a[3] if within else a[4])
             if dv.k != "arr" or sv.k != "arr":
                 raise PruvError("codegen", e.line, e.col, "unsupported_type",
-                                "copy_range is not supported by the llvm codegen layer for this operand yet",
+                                "%s is not supported by the llvm codegen layer for this operand yet" % n,
                                 "copy the elements in a loop, or use the Rust backend")
             if not s.verified:
                 # P13i2a.audit-1: the destination check (i < 0 || n < 0 || i > len(dst) - n) reports (i, len(dst)),
@@ -2596,15 +2599,16 @@ class FnGen:
                 s.guard(o, lambda: s.ins("call void @pruv_panic_oob(i64 %s, i64 %s)" % (jv.a, sv.b)), True)
             tyd, tys = storage_ty(dv), storage_ty(sv)
             if not ((is_bytes(dv) and is_bytes(sv)) or (tyd == "i64" and tys == "i64")):
-                # the storage plan pins copy_range operands to i64 or bytes, as for eq_range; any other pair is not lowered
                 raise PruvError("codegen", e.line, e.col, "unsupported_type",
-                                "copy_range is not supported by the llvm codegen layer for this array layout yet",
+                                "%s is not supported by the llvm codegen layer for this array layout yet" % n,
                                 "copy the elements in a loop, or use the Rust backend")
             pd = s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (tyd, dv.a, iv.a))
             ps = s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (tys, sv.a, jv.a))
             nb = cnt.a if tyd == "i8" else s.op("mul nuw nsw i64 %s, 8" % cnt.a)
-            # dst and src are distinct arrays (the checker rejects the same array, inout_alias), so memcpy is exact
-            s.ins("call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)" % (pd, ps, nb))
+            if within:
+                s.m.memmove = True
+            s.ins("call void @llvm.%s.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)"
+                  % ("memmove" if within else "memcpy", pd, ps, nb))
             return V("unit")
         if n == "eq_range":  # P17a: a[i..i+n] == b[j..j+n]; source order a, i, b, j, n
             av = s.ev(a[0])
@@ -5425,7 +5429,7 @@ def g6_llvm_error(prog):
                     is_vec_slice_arg(a.ty, p.type) for a, p in zip(n.args, funcs[n.name].params)):
                 rust_only.append((n.line, n.col, "a borrowed vector slice argument"))
             if isinstance(n, Call) and n.name in CATALOG and n.name not in CATALOG_CONTRACT_ONLY:
-                if n.name in ("map_remove", "map_take", "vec_at_mut", "vec_clear", "vec_extend_from_slice", "string_eq"):
+                if n.name in ("map_remove", "map_take", "vec_at_mut", "vec_clear", "vec_reserve", "vec_extend_from_slice", "string_eq"):
                     rust_only.append((n.line, n.col, n.name))
                 if n.inst and not all(_g6_scalar(a) for a in n.inst["args"]):
                     bad.append((n.line, n.col))
@@ -5595,6 +5599,8 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         DECLS_RESIZE if "i64" in m.resize else "") + (
         DECLS_RESIZE_U8 if "u8" in m.resize else "") + (
         DECLS_RESIZE_NARROW if "narrow" in m.resize else "") + (
+        "declare void @llvm.memmove.p0.p0.i64(ptr nocapture writeonly, ptr nocapture readonly, i64, i1 immarg)\n"
+        if m.memmove else "") + (
         "declare i32 @memcmp(ptr nocapture, ptr nocapture, i64) nounwind readonly\n" if m.memcmp else "") + (
         g6decls + "\n" + "\n".join(chunks))  # G2 A5/B2, G3, G6 A3, G9 A3; P2 batch 4: llvm.bswap when used
     if m.par_trampolines:
@@ -5617,6 +5623,6 @@ pub extern "C" fn pruv_panic_cost() -> ! {
     ::std::process::exit(101);
 }
 """
-    if m.range_nodes:   # P3 batch 2: !range metadata nodes, in number order, last change to the IR text
+    if m.range_nodes:   # P3 batch 2: !range metadata nodes, in number order
         ir += "\n" + "".join("!%d = !{%s}\n" % (n, body) for body, n in sorted(m.range_nodes.items(), key=lambda kv: kv[1]))
-    return ir, gen_bindings(prog, shim, verified)
+    return llvm_inline(ir), gen_bindings(prog, shim, verified)

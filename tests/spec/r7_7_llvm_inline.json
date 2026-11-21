@@ -1,0 +1,1 @@
+{"backend": "llvm", "exit": 0, "gen_regex": ["define internal i64 @\\w*twice__pruv_body\\([^\\n]*\\) alwaysinline \\{"]}

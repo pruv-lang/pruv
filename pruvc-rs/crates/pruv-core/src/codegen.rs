@@ -4144,6 +4144,19 @@ impl<'a> Gen<'a> {
                 return Ok(format!("{}.clear()", self.e(&place.expr)?));
             }
         }
+        if x.name == "vec_reserve" {
+            self.fg_mut()?.record_inline_catalog(&x.name, &src);
+            if let Expr::InoutArg(place) = &x.args[0] {
+                let (p, count) = (self.e(&place.expr)?, self.e(&x.args[1])?);
+                if self.unchecked_collections() {
+                    return Ok(format!("{}.reserve(({}) as usize)", p, count));
+                }
+                return Ok(format!(
+                    "{{ let pruv_n: i64 = {}; if pruv_n < 0 || pruv_n > (1i64 << 40) {{ pruv_g6_req(\"vec_reserve\", \"0 <= n && n <= 2^40\"); }} {}.reserve((pruv_n) as usize) }}",
+                    count, p
+                ));
+            }
+        }
         if x.name == "vec_extend_from_slice" {
             self.fg_mut()?.record_inline_catalog(&x.name, &src);
             if let Expr::InoutArg(place) = &x.args[0] {
@@ -4625,7 +4638,7 @@ impl<'a> Gen<'a> {
                         head
                     ));
                 }
-                if n == "copy_range" {
+                if matches!(n, "copy_range" | "copy_within") {
                     // L-copy-range: dst[i..i+n].copy_from_slice(&src[j..j+n]); i, src, j, n bound once in source order
                     let name = match arg(a, 0)? {
                         Expr::InoutArg(ia) => match ia.expr.as_ref() {
@@ -4635,6 +4648,24 @@ impl<'a> Gen<'a> {
                         other => return Err(format!("codegen: inout operand is not a variable: {:?}", other)),
                     };
                     let i0 = self.e(arg(a, 1)?)?;
+                    if n == "copy_within" {
+                        let j0 = self.e(arg(a, 2)?)?;
+                        let n0 = self.e(arg(a, 3)?)?;
+                        let head = format!(
+                            "{{ let pruv_i: i64 = {}; let pruv_j: i64 = {}; let pruv_n: i64 = {}; ",
+                            i0, j0, n0
+                        );
+                        if self.verified {
+                            return Ok(format!(
+                                "{}unsafe {{ let pa = {}.as_mut_ptr(); ::core::ptr::copy(pa.add((pruv_j) as usize), pa.add((pruv_i) as usize), (pruv_n) as usize) }}; }}",
+                                head, name
+                            ));
+                        }
+                        return Ok(format!(
+                            "{}if pruv_i < 0 || pruv_n < 0 || pruv_i > ({}.len() as i64) - pruv_n {{ pruv_oob(pruv_i, {}.len()) }} if pruv_j < 0 || pruv_j > ({}.len() as i64) - pruv_n {{ pruv_oob(pruv_j, {}.len()) }} {}.copy_within((pruv_j) as usize..((pruv_j) + (pruv_n)) as usize, (pruv_i) as usize); }}",
+                            head, name, name, name, name, name
+                        ));
+                    }
                     let s0 = self.arr_ref(arg(a, 2)?)?;
                     let j0 = self.e(arg(a, 3)?)?;
                     let n0 = self.e(arg(a, 4)?)?;
@@ -5706,6 +5737,19 @@ mod tests {
             "{}",
             s
         );
+    }
+
+    #[test]
+    fn copy_within_emitted_rust() {
+        let mut p = crate::parse("fn put(inout a: [u8], dst: i64, src: i64, n: i64) -> () { copy_within(inout a, dst, src, n); }").unwrap();
+        crate::check::check(&mut p).unwrap();
+        let verified = gen_rust(&p, true, false, 1 << 30).unwrap();
+        assert!(verified.contains("unsafe { let pa = a.as_mut_ptr(); ::core::ptr::copy(pa.add((pruv_j) as usize), pa.add((pruv_i) as usize), (pruv_n) as usize) };"));
+        let checked = gen_rust(&p, false, false, 1 << 30).unwrap();
+        let dst = checked.find("pruv_oob(pruv_i, a.len())").unwrap();
+        let src = checked.find("pruv_oob(pruv_j, a.len())").unwrap();
+        let copy = checked.find("a.copy_within((pruv_j) as usize..((pruv_j) + (pruv_n)) as usize, (pruv_i) as usize);").unwrap();
+        assert!(dst < src && src < copy);
     }
 
     // L-copy-range

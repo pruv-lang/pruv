@@ -1,0 +1,12 @@
+// spec: R-6e-19 accept
+// Reserve capacity without filling, then push: length and contents are unchanged by the reserve.
+fn build(n: i64) -> Vec<i64> ! alloc
+  requires 0 <= n && n <= 1000
+{
+  let mut v: Vec<i64> = vec_new::<i64>();
+  v = vec_push::<i64>(move v, 7);
+  vec_reserve::<i64>(inout v, n);
+  assert len(v) == 1 && v[0] == 7;
+  v = vec_push::<i64>(move v, 8);
+  return move v;
+}

@@ -35,7 +35,7 @@ def x_has_bit(e):
 
 # P2 batch 4: byte-word access on [u8]: load_be(a, i, n) and the statement-only store_be(inout a, i, w, n)
 WORD_BUILTINS = ("load_be", "store_be")
-BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range", "resize", "copy_range") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range; L-copy-range
+BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range", "resize", "copy_range", "copy_within") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range; L-copy-range
 RESERVED_TYPE_NAMES = ("Option", "Result", "Some", "None", "Ok", "Err")
 TYPE_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9_]*\Z")
 FIELD_NAME_RE = re.compile(r"[a-z][A-Za-z0-9_]*\Z")
@@ -580,7 +580,7 @@ class Checker:
             terr(e, "type_arity", "%s expects %d type argument(s), got %d" % (what, len(tparams), len(targs)),
                  "give exactly one type argument per type parameter")
         catalog_collection = (isinstance(e, Call) and e.name not in s.funcs and (
-            e.name in ("vec_new", "vec_push", "vec_get", "vec_at_mut", "vec_clear", "vec_extend_from_slice",
+            e.name in ("vec_new", "vec_push", "vec_get", "vec_at_mut", "vec_clear", "vec_reserve", "vec_extend_from_slice",
                        "map_new", "map_get", "map_get_mut", "map_insert", "map_remove", "map_take")
             or e.name == "map_lookup" and targs[0] == STRING))
         if catalog_collection:
@@ -1066,7 +1066,7 @@ class Checker:
         for e, conditional in calls:
             f = s.funcs.get(e.name)
             marked = ([arg for arg in e.args if isinstance(arg, InoutArg)]
-                      if f is not None or e.name in ("map_remove", "map_take", "vec_clear", "vec_extend_from_slice") else [])
+                      if f is not None or e.name in ("map_remove", "map_take", "vec_clear", "vec_reserve", "vec_extend_from_slice") else [])
             if marked:
                 for arg in marked:
                     root, path = field_place(arg.expr)
@@ -2112,7 +2112,7 @@ class Checker:
                      "write `inout name` with a `let mut` local array or an inout parameter")
             op = arg.expr
             user_call = f is not CATALOG.get(n)
-            allow_path = user_call or n in MUTABLE_COLLECTION_MATCH + ("map_remove", "map_take", "vec_clear", "vec_extend_from_slice")
+            allow_path = user_call or n in MUTABLE_COLLECTION_MATCH + ("map_remove", "map_take", "vec_clear", "vec_reserve", "vec_extend_from_slice")
             place, path = field_place(op)
             if isinstance(place, Var):
                 s.check_iteration_borrow(arg, place.name, path)
@@ -2208,17 +2208,19 @@ class Checker:
         return UNIT if store else I64
 
     def copy_range_call(s, e, scope, c):
-        """L-copy-range: copy_range(inout dst, i, src, j, n) -> (), a whole expression statement. dst is a `let mut`
-        local array or an inout parameter of type [i64] or [u8]; src has the same type; i, j, n are i64. Same-array
-        aliasing (src mentions dst) is rejected with the existing inout_alias rule, as for store_be."""
+        """Check the shared destination-place and exclusivity rules for the range-copy builtins."""
         a = e.args
-        if c: terr(e, "effect_in_contract", "copy_range is not allowed in contracts")
-        if len(a) != 5:
-            terr(e, "arity", "copy_range takes 5 argument(s), got %d" % len(a))
+        n = e.name
+        within = n == "copy_within"
+        argc = 4 if within else 5
+        if c: terr(e, "effect_in_contract", "%s is not allowed in contracts" % n)
+        if len(a) != argc:
+            terr(e, "arity", "%s takes %d argument(s), got %d" % (n, argc, len(a)))
         arg = a[0]
         if not isinstance(arg, InoutArg):
-            terr(arg, "inout_argument", "the destination array of copy_range needs the `inout` marker",
-                 "write `copy_range(inout name, i, src, j, n)` with a `let mut` local array or an inout parameter")
+            terr(arg, "inout_argument", "the destination array of %s needs the `inout` marker" % n,
+                 "write `%s(inout name, %s)` with a `let mut` local array or an inout parameter" %
+                 (n, "dst, src, n" if within else "i, src, j, n"))
         op = arg.expr
         if not isinstance(op, Var):
             terr(arg, "inout_argument", "an inout argument must be the whole name of a local array or an inout "
@@ -2240,15 +2242,18 @@ class Checker:
         op.ty = v[0]
         arg.ty = v[0]
         s.expect(a[1], I64, scope, c)
-        s.expect(a[2], v[0], scope, c)
+        s.expect(a[2], I64 if within else v[0], scope, c)
         s.expect(a[3], I64, scope, c)
-        s.expect(a[4], I64, scope, c)
+        if not within:
+            s.expect(a[4], I64, scope, c)
         if any(_mentions(x, op.name) for x in a[1:]):
             terr(arg, "inout_alias", "%s is passed inout and also used elsewhere in the arguments of this call" % op.name,
+                 "compute the index arguments before the call" if within else
                  "copy the source first with `let mut t: [..] = copy(%s);` (needs alloc), then pass t" % op.name)
         if e is not s.boundary:
-            terr(e, "inout_context", "copy_range must be a whole expression statement",
-                 "write `copy_range(inout dst, i, src, j, n);` as a statement")
+            terr(e, "inout_context", "%s must be a whole expression statement" % n,
+                 "write `%s(%s);` as a statement" %
+                 (n, "inout a, dst, src, n" if within else "inout dst, i, src, j, n"))
         return UNIT
 
     def old_call(s, e, scope):
@@ -2403,7 +2408,7 @@ class Checker:
             return I64
         if n in WORD_BUILTINS:  # P2 batch 4
             return s.word_call(e, scope, c)
-        if n == "copy_range":   # L-copy-range: copy_range(inout dst, i, src, j, n); statement only, dst and src of one integer array type
+        if n in ("copy_range", "copy_within"):
             return s.copy_range_call(e, scope, c)
         if n == "eq_range":     # L3-10: eq_range(a, i, b, j, n) -> bool, code only, a and b of one integer array type
             if c: terr(e, "effect_in_contract", "eq_range is not allowed in contracts")
@@ -2451,7 +2456,7 @@ class Checker:
             return rt
         catalog = n in CATALOG and n not in s.funcs       # G6: fixed standard catalog (G6_SPEC 10.3)
         if catalog:
-            if n in ("vec_clear", "vec_extend_from_slice") and e is not s.statement_call and not c:
+            if n in ("vec_clear", "vec_reserve", "vec_extend_from_slice") and e is not s.statement_call and not c:
                 terr(e, "inout_context", "%s must be a whole expression statement" % n)
             if n in MUTABLE_COLLECTION_MATCH + ("map_take",) and e is not s.match_call:
                 terr(e, "foreign_contract", "%s is only allowed as a direct match scrutinee" % n)
