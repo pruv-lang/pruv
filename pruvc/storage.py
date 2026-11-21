@@ -174,7 +174,7 @@ def plan_storage(program_after_mono, verified=True):
                     v = expr(st.value, scope)
                     if v is not None: join(v, lookup.get(('result', f.name)))
                 elif isinstance(st, IndexAssign):
-                    out.objects[id(st)] = keys[scope[st.name]] if scope.get(st.name) is not None else None
+                    out.objects[id(st)] = keys[scope[st.name]] if scope.get(st.name) is not None and not st.fields else None
                     expr(st.index, scope); expr(st.value, scope)
                 elif isinstance(st, If):
                     expr(st.cond, scope); block(st.then, scope); block(st.els, scope)

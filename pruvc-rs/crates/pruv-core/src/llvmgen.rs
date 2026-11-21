@@ -2025,6 +2025,24 @@ impl<'a> FnGen<'a> {
         }
     }
 
+    /// LG4: (address of the field reached by `path` from the extended root slot `sl`, its declared type); a boxed
+    /// intermediate edge is loaded (as `inout_struct_ptr` does).
+    fn field_ptr_ty(&mut self, sl: &Slot, path: &[String]) -> R<(String, String)> {
+        let tt = self.tt;
+        let mut cur = sl.a.clone();
+        let mut cty = need_ty(&sl.ty)?.to_string();
+        for fname in path {
+            let i = t_field_index(tt, &cty, fname, None)?;
+            let g = g9_gep(self, &lty(&cty), &cur, i)?;
+            let boxed = self.fb(&cty, None, fname);
+            let fds = t_fields(tt, &cty, None)?;
+            let next = fds.get(i).ok_or_else(|| IDX_ERR.to_string())?.ty.clone();
+            cur = if boxed { self.op(format!("load ptr, ptr {}", g))? } else { g };
+            cty = next;
+        }
+        Ok((cur, cty))
+    }
+
     /// Field value of the aggregate `base` (type ty) at storage index idx; a boxed field is a VIEW of the child node
     /// (a shallow load, never dropped through this value).
     fn getf(&mut self, base: &V, ty: &str, idx: usize, fd: &FieldDecl, variant: Option<&str>, c: bool) -> R<V> {
@@ -3006,9 +3024,24 @@ impl<'a> FnGen<'a> {
                 let i = self.ev(&x.index, false)?; // index first, then the value (all modes)
                 let v = self.ev(&x.value, false)?;
                 // G5 A3: an inout parameter is a pointer view (ssa), stored through
-                let a = match bind {
-                    Bind::Ssa(sv) => sv,
-                    Bind::Slot(sl) => self.load(&sl)?,
+                let a = if !x.fields.is_empty() {
+                    // LG4: `p.a.b[i] = e`: address of the buffer field along the path from the root slot (a local slot or
+                    // the pointer of an inout struct parameter); the data pointer and length are read from it
+                    let Bind::Slot(sl) = bind else {
+                        return Err(format!("llvmgen: element store through non-local {}", x.name));
+                    };
+                    let (gp, fty) = self.field_ptr_ty(&sl, &x.fields)?;
+                    let dp = self.op(format!("load ptr, ptr {}", gp))?;
+                    let lp = self.op(format!("getelementptr inbounds {}, ptr {}, i32 0, i32 1", ARR, gp))?;
+                    let ln = self.op(format!("load i64, ptr {}", lp))?;
+                    let mut av = V::with_b(Kind::Arr, dp, ln);
+                    av.ty = elem_ty(&fty);
+                    av
+                } else {
+                    match bind {
+                        Bind::Ssa(sv) => sv,
+                        Bind::Slot(sl) => self.load(&sl)?,
+                    }
                 };
                 let g = self.index_ptr(&a, &i)?;
                 if a.layout != "i64" {
@@ -3542,6 +3575,14 @@ impl<'a> FnGen<'a> {
                     return self.clone_val(&v);
                 }
                 Ok(v)
+            }
+            Expr::Move(x) if !x.fields.is_empty() => {
+                // LG4: move an owned buffer field out of the extended struct slot; the field becomes (null, 0, 0)
+                let sl = self.lookup(&x.name)?.val().clone();
+                let (gp, fty) = self.field_ptr_ty(&sl, &x.fields)?;
+                let old = self.op(format!("load {}, ptr {}", ARR, gp))?;
+                self.ins(format!("store {} zeroinitializer, ptr {}", ARR, gp))?;
+                self.unpack(&old, &fty, false)
             }
             Expr::Move(x) => {
                 // G6 A3: load the owner slot, then null it

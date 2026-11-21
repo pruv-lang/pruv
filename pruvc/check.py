@@ -1049,7 +1049,7 @@ class Checker:
             return
         mentions = []
         if isinstance(st, (Assign, IndexAssign, FieldAssign)):
-            mentions.append((st.name, tuple(st.fields) if isinstance(st, FieldAssign) else ()))
+            mentions.append((st.name, tuple(st.fields) if isinstance(st, (FieldAssign, IndexAssign)) else ()))
         calls = []
 
         def visit(e, conditional):
@@ -1151,6 +1151,34 @@ class Checker:
             if is_array(v[0]) or v[0] == STR:
                 s.array_source(st, st.value, scope)
             s.own(st.value)
+        elif isinstance(st, IndexAssign) and st.fields:
+            # LG4: `p.a.b[i] = e` -- the place is the field path of a mutable local / inout parameter
+            fpath = tuple(st.fields)
+            v = s.lookup(st, st.name, scope, fpath)
+            s.check_borrow(st, st.name, fpath)
+            cur = v[0]
+            for fname in fpath:
+                if cur.owner is not None:
+                    terr(st, "generic_operation", "cannot assign field %s: %s is an abstract type parameter" % (
+                        fname, type_name(cur)), "a type parameter has no fields")
+                if not s.tt.is_struct(cur):
+                    terr(st, "not_struct", "cannot assign field %s: %s is not a struct" % (fname, type_name(cur)),
+                         "field assignment paths run through structs only; assign the whole enum value instead")
+                cur = s.field_type(st, cur, fname)
+            place = ".".join([st.name] + list(fpath))
+            if cur == STR:
+                terr(st, "immutable_string", "%s is a str; its bytes cannot be changed" % place,
+                     "build a new str with substr() or copy() instead")
+            if cur not in (ARRAY, ARRAY_U8, ARRAY_BOOL):
+                terr(st, "not_array", "%s is not an array" % place)
+            if not v[1] and v[2] not in ("inout", "map_mut"):
+                terr(st, "immutable", "%s is not mutable" % st.name,
+                     "declare it with `let mut`" if v[2] == "local" else "parameters are immutable; copy into a `let mut` local")
+            s.expect(st.index, I64, scope)
+            s.expect(st.value, s.elem_type(cur), scope)
+            if getattr(st.value, "map_iter_view", False):
+                s.own(st.value)
+            s.check_inout_context(st, st.index, st.value)
         elif isinstance(st, IndexAssign):
             s.check_iteration_borrow(st, st.name, ())
             v = s.lookup(st, st.name, scope)
@@ -1666,7 +1694,8 @@ class Checker:
             return None
         s.check_borrow(e, e.name, e.fields)
         _, mutable, kind = s.lookup(e, e.name, scope, e.fields)
-        if not (mutable or kind in ("inout", "map_mut")) or not (ty == STRING or is_scalar_vec(ty)):
+        if not (mutable or kind in ("inout", "map_mut")) or not (
+                ty == STRING or is_scalar_vec(ty) or ty in (ARRAY, ARRAY_U8, ARRAY_BOOL)):
             _field_move_error(e)
         if isinstance(st, FieldAssign) and (st.name != e.name or _paths_overlap(st.fields, e.fields)):
             _field_move_error(e)
@@ -1688,6 +1717,8 @@ class Checker:
             s.check_borrow(move, move.name, move.fields)
             s.lookup(move, move.name, scope, move.fields)
         e = moves[0]
+        if ty in (ARRAY, ARRAY_U8, ARRAY_BOOL):    # LG4: as check.rs, a nested array field move is array_alias
+            terr(e, "array_alias", "an array field cannot be moved", "use copy() to make an independent array")
         if (len(moves) != 1 or e.fields != tuple(st.fields) or e.name != st.name
                 or not (binding[1] or binding[2] in ("inout", "map_mut")) or not is_collection(ty) or not isinstance(st.value, Call)):
             _field_move_error(e)
@@ -1848,7 +1879,7 @@ class Checker:
                     if not s.tt.is_struct(ty):
                         _field_move_error(e)
                     ty = s.field_type(e, ty, field)
-                if is_array(ty):
+                if is_array(ty) and e is not s.field_move:
                     terr(e, "array_alias", "an array field cannot be moved", "use copy() to make an independent array")
                 if e is not s.field_move:
                     _field_move_error(e)

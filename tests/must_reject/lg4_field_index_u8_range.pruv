@@ -1,0 +1,7 @@
+struct S { n: i64, a: [u8] }
+
+fn put(inout s: S, i: i64, v: i64) -> ()
+  requires 0 <= i && i < len(s.a)
+{
+  s.a[i] = v;
+}

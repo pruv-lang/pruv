@@ -4320,6 +4320,54 @@ impl<'a> FnVerifier<'a> {
         match stmt {
             Stmt::Let(s) => self.exec_bind(&s.name, &s.value, st),
             Stmt::Assign(s) => self.exec_bind(&s.name, &s.value, st),
+            Stmt::IndexAssign(s) if !s.fields.is_empty() => {
+                // LG4: `p.a.b[i] = e`: the field array is read with the ordinary field read (an Arr from the Buf field);
+                // index, then value, in the state before the write; same obligations as `x[i] = v`
+                let mut st = st.fork(None);
+                let root = st.env.try_get(&s.name).ok_or_else(|| format!("'{}'", s.name))?.clone();
+                let Val::Dt(root_ast, root_ty) = root.clone() else {
+                    return Err(format!("element store through '{}' which is not a struct value", s.name));
+                };
+                let mut cur = root;
+                for field in &s.fields {
+                    let Val::Dt(va, sty) = cur else { return Err("element store through a non-struct value".to_string()) };
+                    let sf = model.struct_info(&sty)?;
+                    let idx = model.field_index_of(&sty, field, None)?;
+                    let fty = &model.fields_of(&sty, None)?[idx].1;
+                    self.observe(&mut st, &va, Some(&sty), false)?;
+                    cur = self.field_val(fty, sf.accs[idx].apply1(&va), field)?;
+                }
+                let arr = cur.try_arr()?.clone();
+                let place = format!("{}.{}", s.name, s.fields.join("."));
+                let i = self.ev0_ast(&s.index, &mut st, &[], true)?;
+                let v = self.ev0_ast(&s.value, &mut st, &[], true)?;
+                let ob = self.z.and(&[i.ge_i(0), i.lt(&arr.n)]);
+                self.prove_core(&st, &[], &ob, spos, "index_oob", &format!("index in bounds for {}[...] =", place), None);
+                if arr.elem == Elem::U8 {
+                    let ob = self.z.and(&[v.ge_i(0), v.le_i(255)]);
+                    self.prove_core(
+                        &st,
+                        &[],
+                        &ob,
+                        spos,
+                        "elem_range",
+                        &format!("u8 element range 0..=255 for {}[...] =", place),
+                        None,
+                    );
+                }
+                if let Some((lo, hi, what)) = &s.elem_refine {
+                    let lo: i64 = lo.parse().map_err(|_| format!("refinement bound '{}'", lo))?;
+                    let hi: i64 = hi.parse().map_err(|_| format!("refinement bound '{}'", hi))?;
+                    let ob = self.z.and(&[v.ge_i(lo), v.le_i(hi)]);
+                    self.prove_core(&st, &[], &ob, spos, "refinement_assign", what.as_str(), Some(what.as_str()));
+                }
+                let last = s.fields.last().map(|f| f.as_str()).unwrap_or("");
+                let new = Val::Arr(arr.like(arr.a.store(&i, &v), arr.n.clone(), last));
+                let path: Vec<&str> = s.fields.iter().map(|f| f.as_str()).collect();
+                let rebuilt = self.try_rebuild_v(&root_ty, &root_ast, &path, &new)?;
+                st.env.set(&s.name, Val::Dt(rebuilt, root_ty));
+                Ok(vec![st])
+            }
             Stmt::IndexAssign(s) => {
                 let mut st = st.fork(None);
                 let arr = st.env.try_get(&s.name).ok_or_else(|| format!("'{}'", s.name))?.try_arr()?.clone();

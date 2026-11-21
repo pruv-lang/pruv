@@ -1,0 +1,6 @@
+struct S { n: i64, a: [i64] }
+
+fn run() -> () ! alloc {
+  let s: S = S { n: 0, a: alloc(2, 0) };
+  s.a[0] = 1;
+}

@@ -1584,6 +1584,12 @@ class FnVerifier:
             s.observe(st, r, fty)
         return r
 
+    def field_chain_type(s, ty, path):
+        """declared type of the field reached by `path` from a struct of type ty"""
+        for fname in path:
+            ty = s.model.fields_of(ty)[s.model.tt.field_index(ty, fname)][1]
+        return ty
+
     def ev(s, e, st, g, code, env=None):
         """code=True: emit proof obligations and i64 semantics. env overrides st.env (contracts)."""
         env = st.env if env is None else env
@@ -3007,18 +3013,35 @@ class FnVerifier:
             return [st]
         if isinstance(stmt, IndexAssign):
             st = st.fork()
-            arr = st.env[stmt.name]
+            fpath = tuple(stmt.fields)
+            place = ".".join((stmt.name,) + fpath)
+            if fpath:
+                # LG4: `p.a.b[i] = e`: the field array is read with the ordinary field read (an Arr)
+                root = st.env[stmt.name]
+                cur = root
+                for fname in fpath:
+                    cur = s.read_field(st, cur, fname)
+                arr = cur
+                if not isinstance(arr, Arr):
+                    arr = s.model.field_get(s.field_chain_type(s.model.type_of(root), fpath), arr, fpath[-1])
+            else:
+                arr = st.env[stmt.name]
             i = s.ev(stmt.index, st, [], True)
             v = s.ev(stmt.value, st, [], True)
-            s.prove(st, [], z3.And(i >= 0, i < arr.n), stmt, "index_oob", "index in bounds for %s[...] =" % stmt.name)
+            s.prove(st, [], z3.And(i >= 0, i < arr.n), stmt, "index_oob", "index in bounds for %s[...] =" % place)
             if arr.elem == U8:
                 s.prove(st, [], z3.And(v >= 0, v <= 255), stmt, "elem_range",
-                        "u8 element range 0..=255 for %s[...] =" % stmt.name)
+                        "u8 element range 0..=255 for %s[...] =" % place)
             if stmt.elem_refine is not None:
                 # refine.py: the stored value (already evaluated) must lie in the element range. One query, no
                 # domain check, no re-evaluation, no forall; not assumed afterwards (it is implied by the path).
                 lo, hi, what = stmt.elem_refine
                 s.prove(st, [], z3.And(v >= lo, v <= hi), stmt, "refinement_assign", what, what)
+            if fpath:
+                new = mk_arr(z3.Store(arr.a, i, v), arr.n, arr.name, arr.elem)
+                root = st.env[stmt.name]
+                st.env[stmt.name] = s.rebuild(s.model.type_of(root), root, fpath, new)
+                return [st]
             st.env[stmt.name] = mk_arr(z3.Store(arr.a, i, v), arr.n, stmt.name, arr.elem)
             return [st]
         if isinstance(stmt, If):

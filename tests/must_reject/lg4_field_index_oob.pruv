@@ -1,0 +1,6 @@
+struct S { n: i64, a: [i64] }
+
+fn put(inout s: S, i: i64) -> ()
+{
+  s.a[i] = 1;
+}

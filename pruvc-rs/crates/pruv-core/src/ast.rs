@@ -234,6 +234,8 @@ pub struct Assign { pub line: i64, pub col: i64, pub name: String, pub value: Ex
 pub struct IndexAssign {
     pub line: i64, pub col: i64, pub name: String, pub index: Expr, pub value: Expr,
     pub elem_refine: Option<(String, String, String)>,
+    /// LG4: `s.a.b[i] = v` -> name = "s", fields = ["a", "b"]; empty for the plain `x[i] = v`.
+    pub fields: Vec<String>,
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct If { pub line: i64, pub col: i64, pub cond: Expr, pub then: Vec<Stmt>, pub els: Vec<Stmt> }

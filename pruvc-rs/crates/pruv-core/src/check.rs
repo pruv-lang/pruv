@@ -2321,7 +2321,8 @@ impl Checker {
         self.check_borrow(m.line, m.col, &m.name, &m.fields)?;
         let source = self.lookup(m.line, m.col, &m.name, scope, &m.fields)?;
         if !(source.mutable || matches!(source.kind, "inout" | "map_inout"))
-            || !matches!(ty.to_key().as_str(), "string" | "vec<i64>" | "vec<bool>")
+            || !(matches!(ty.to_key().as_str(), "string" | "vec<i64>" | "vec<bool>")
+                || (ty.args.is_empty() && matches!(ty.name.as_str(), "array" | "array_u8" | "array_bool")))
             || target.is_some_and(|(name, fields)| name != m.name || paths_overlap(fields, &m.fields))
         {
             return Err(field_move_error(m));
@@ -2525,6 +2526,56 @@ impl Checker {
                     self.array_source(s.line, s.col, &s.value, scope, false, &v.ty)?;
                 }
                 self.own(&s.value, scope)?;
+            }
+            Stmt::IndexAssign(s) if !s.fields.is_empty() => {
+                // LG4: `p.a.b[i] = e` -- the place is the field path of a mutable local / inout parameter
+                let v = self.lookup(s.line, s.col, &s.name, scope, &s.fields)?;
+                self.check_borrow(s.line, s.col, &s.name, &s.fields)?;
+                let mut cur = v.ty.clone();
+                for fname in &s.fields {
+                    if cur.owner.is_some() {
+                        return Err(terr(
+                            s.line,
+                            s.col,
+                            "generic_operation",
+                            format!("cannot assign field {}: {} is an abstract type parameter", fname, tn(&cur)),
+                            "a type parameter has no fields",
+                        ));
+                    }
+                    if !self.is_struct(&cur) {
+                        return Err(terr(
+                            s.line,
+                            s.col,
+                            "not_struct",
+                            format!("cannot assign field {}: {} is not a struct", fname, tn(&cur)),
+                            "field assignment paths run through structs only; assign the whole enum value instead",
+                        ));
+                    }
+                    cur = self.field_type(s.line, s.col, &cur, fname)?;
+                }
+                let place = format!("{}.{}", s.name, s.fields.join("."));
+                if cur == strt() {
+                    return Err(terr(
+                        s.line,
+                        s.col,
+                        "immutable_string",
+                        format!("{} is a str; its bytes cannot be changed", place),
+                        "build a new str with substr() or copy() instead",
+                    ));
+                }
+                if !(cur.args.is_empty() && matches!(cur.name.as_str(), "array" | "array_u8" | "array_bool")) {
+                    return Err(terr(s.line, s.col, "not_array", format!("{} is not an array", place), ""));
+                }
+                if !v.mutable && !matches!(v.kind, "inout" | "map_inout") {
+                    return Err(terr(s.line, s.col, "immutable", format!("{} is not mutable", s.name), Self::immutable_fix(v.kind)));
+                }
+                self.expect(&mut s.index, &i64t(), scope, false, None)?;
+                let want_val = elem_type(&cur);
+                self.expect(&mut s.value, &want_val, scope, false, None)?;
+                if Self::is_iteration_binder(&s.value, scope) {
+                    self.own(&s.value, scope)?;
+                }
+                self.check_inout_context(&[&s.index, &s.value], InoutContext::PlaceAssignment(&s.name, &s.fields))?;
             }
             Stmt::IndexAssign(s) => {
                 self.check_iteration_borrow(s.line, s.col, &s.name, &[])?;
@@ -3557,7 +3608,7 @@ impl Checker {
                         }
                         ty = self.field_type(x.line, x.col, &ty, field)?;
                     }
-                    if ty.is_array() {
+                    if ty.is_array() && self.field_move != Some((x.line, x.col)) {
                         return Err(terr(x.line, x.col, "array_alias", "an array field cannot be moved",
                             "use copy() to make an independent array"));
                     }

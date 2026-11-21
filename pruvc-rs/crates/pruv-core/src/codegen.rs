@@ -1539,6 +1539,20 @@ impl<'a> Gen<'a> {
     }
 
     /// the LAST field of the assignment path root.f1.f2... is a Box edge (follows the declared field types)
+    /// LG4: the declared type key of the field reached by `fields` from the struct local `root` (None if unknown).
+    fn field_path_ty(&self, root: &str, fields: &[String]) -> Option<String> {
+        let mut cur: Option<String> = self.vars.get(root).cloned();
+        for fname in fields {
+            let c = match &cur {
+                Some(c) if !is_g3_key(c) => c.clone(),
+                _ => return None,
+            };
+            let TypeDecl::Struct(sd) = self.table.decl(&c)? else { return None };
+            cur = sd.fields.iter().find(|fd| fd.name == *fname).map(|fd| fd.ty.clone());
+        }
+        cur
+    }
+
     fn path_boxed(&self, root: &str, fields: &[String]) -> bool {
         let mut cur: Option<String> = self.vars.get(root).cloned();
         let mut boxed = false;
@@ -3806,6 +3820,33 @@ impl<'a> Gen<'a> {
                 }
                 let v = self.own_e(&x.value)?;
                 self.emit(ind, &format!("{{ {}{}; {}.{} = {}; }}", decl, v, x.name, x.fields.join("."), stored));
+            }
+            Stmt::IndexAssign(x) if !x.fields.is_empty() => {
+                // LG4: `p.a.b[i] = e` on the place `p.a.b` (auto-deref through `&mut S` and Box edges)
+                let i = self.e(&x.index)?;
+                let v = self.e(&x.value)?;
+                let place = format!("{}.{}", x.name, x.fields.join("."));
+                let fty = self.field_path_ty(&x.name, &x.fields);
+                let is_u8 = fty.as_deref() == Some("array_u8");
+                let is_bool = fty.as_deref() == Some("array_bool");
+                let text = if is_bool {
+                    if self.verified {
+                        format!("{{ let pruv_i: i64 = {}; let pruv_x: bool = {}; unsafe {{ *{}.get_unchecked_mut(pruv_i as usize) = pruv_x; }} }}", i, v, place)
+                    } else {
+                        format!("{{ let pruv_i: i64 = {}; let pruv_x: bool = {}; pruv_set_bool(&mut {}, pruv_i, pruv_x); }}", i, v, place)
+                    }
+                } else if is_u8 {
+                    if self.verified {
+                        format!("{{ let pruv_i: i64 = {}; let pruv_x: i64 = {}; unsafe {{ *{}.get_unchecked_mut(pruv_i as usize) = pruv_x as u8; }} }}", i, v, place)
+                    } else {
+                        format!("{{ let pruv_i: i64 = {}; let pruv_x: i64 = {}; pruv_set_u8(&mut {}, pruv_i, pruv_x); }}", i, v, place)
+                    }
+                } else if self.verified {
+                    format!("{{ let pruv_i: i64 = {}; let pruv_x: i64 = {}; unsafe {{ *{}.get_unchecked_mut(pruv_i as usize) = pruv_x; }} }}", i, v, place)
+                } else {
+                    format!("{{ let pruv_i: i64 = {}; let pruv_x: i64 = {}; pruv_set(&mut {}, pruv_i, pruv_x); }}", i, v, place)
+                };
+                self.emit(ind, &text);
             }
             Stmt::IndexAssign(x) => {
                 let i = self.e(&x.index)?;

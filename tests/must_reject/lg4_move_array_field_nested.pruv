@@ -1,0 +1,6 @@
+struct P { a: [i64], n: i64 }
+fn run() -> () ! io, alloc {
+  let mut p: P = P { a: alloc(2, 0), n: 1 };
+  p.a = copy(move p.a);
+  print(p.n);
+}
