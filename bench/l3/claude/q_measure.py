@@ -1,26 +1,18 @@
 #!/usr/bin/env python3
-"""L3-1 Q measurement driver: warm latency, peak RSS and build time of the A4 pure API (a4_root.pruv).
+"""R08 Claude JSONL performance grid against equal-semantics hand Rust.
 
-Pairs: py/rust, py/llvm, rs/rust, rs/llvm (compiler/backend, as in test_a4.py, which is reused via importlib).
-Inputs (work/qmeasure/inputs/<name>.jsonl): small, window_8MiB, long_text, block_arrays, ring_wrap, depth_limit.
-Ops: window_packet (flag 0) on all six inputs; head_packet and tail_packet on small and window_8MiB
-(the 8 MiB input exceeds the 64 KiB edge limit, so head/tail time the size rejection, not a scan).
+Both runners own Vec<i64> packets and use the same rustc -O harness, including
+the same flag (0), one warm-up and five timed calls per process. File I/O,
+full packet comparisons and build time are outside the call timer. Fresh
+processes alternate order per round; report the median of seven process
+medians and peak RSS readings. --quick uses one rs/rust round.
 
-Latency: one Rust process per (pair, input, op); it reads the file, then calls sol::<op>_packet once as warm-up and five
-timed times with black_box (file IO and process start excluded); the driver reports median/min/max of the five.
-Peak RSS: the process runs under `/usr/bin/time -l` (macOS, 'maximum resident set size' in bytes); without it the
-driver uses os.wait4 rusage of exactly that child (ru_maxrss; bytes on macOS, KiB elsewhere). RSS covers the whole
-process (file read, six calls, output packets), not only the timed region.
-Build time: wall seconds of compile_pruv (compile + verify) and of rustc (+ LLVM object build), per pair.
-
-The TS baseline is not timed here: only work/qmeasure/fixtures.json is written (reference.mjs format) and the
-reference run is timed separately by hand.
-
-Usage: python3 q_measure.py [--only SUBSTRING_OF_INPUT] [--pairs py/rust,rs/llvm]
-Set PRUV_CLANG to a clang whose LLVM major is close to rustc's (rustc --version --verbose) so both backends get the
-same optimizer generation; measure.json records both versions.
+Usage: python3 bench/l3/claude/q_measure.py [--quick] [--only INPUT_SUBSTRING]
+       [--pairs py/rust,py/llvm,rs/rust,rs/llvm] [--out PERF_CELLS_JSON]
+Set PRUV_CLANG to the matching LLVM toolchain for the LLVM pairs.
 """
 import argparse
+from array import array
 import base64
 import importlib.util
 import json
@@ -33,45 +25,22 @@ import signal
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
-Q = HERE / 'work' / 'qmeasure'
-INPUTS = Q / 'inputs'
-RUNS = 5
+DEFAULT_OUT = HERE / 'work' / 'r08' / 'perf_cells.json'
+HAND_SRC = HERE / 'handrust' / 'src'
+OPS = ('window', 'head', 'tail')
+FLAG = 0
 
 _spec = importlib.util.spec_from_file_location('l3_test_a4', HERE / 'test_a4.py')
 t4 = importlib.util.module_from_spec(_spec)
 sys.modules['l3_test_a4'] = t4
 _spec.loader.exec_module(t4)
 oracle = t4.oracle
-EDGE, WINDOW, LINE, LIM = t4.EDGE, t4.WINDOW, t4.LINE, t4.LIM
-t4.WORK = Q  # configure() builds under work/qmeasure instead of work/a4
-
-HARNESS = r'''#![allow(dead_code, unused_imports)]
-#[path = "@SOL@"] mod sol;
-use std::{env,fs,hint::black_box,time::Instant};
-fn call(op: &str, data: &[u8]) -> Vec<i64> {
- match op {
-  "head" => sol::head_packet(black_box(data), 0),
-  "tail" => sol::tail_packet(black_box(data), 0),
-  "window" => sol::window_packet(black_box(data), 0),
-  _ => panic!("unknown op"),
- }
-}
-fn main() {
- let a: Vec<String> = env::args().collect();
- let data = fs::read(&a[1]).unwrap();
- let op = a[2].as_str();
- for i in 0..6 {
-  let start = Instant::now();
-  let out = black_box(call(op, &data));
-  let ms = start.elapsed().as_secs_f64()*1000.0;
-  println!("{} {} {} {}", if i == 0 { "warm" } else { "run" }, ms, out.len(), out[0]);
- }
-}
-'''
+EDGE, WINDOW, LINE = t4.EDGE, t4.WINDOW, t4.LINE
 
 
 # ---------------- inputs ----------------
@@ -122,240 +91,255 @@ def build_inputs():
 
     inputs = [('small', small), ('window_8MiB', win), ('long_text', long_text),
               ('block_arrays', block_arrays), ('ring_wrap', ring), ('depth_limit', depth)]
+    for n in (0, 1, 10, 16, 17, 200):
+        # turns16 ends with the assistant for user 16. The window collector
+        # checks the next slot before consuming this object, so it grows here.
+        data = L(*[row for i in range(n) for row in (
+            user(f'q{i}', timestamp=1700000000000 + 2000 * i),
+            asst(f'a{i}', model='claude-x', timestamp=1700000001000 + 2000 * i),
+        )]) if n else b''
+        assert len(data) <= EDGE
+        inputs.append((f'turns{n}', data))
     for name, data in inputs:
         assert len(data) <= WINDOW, (name, len(data))
     return inputs
 
 
-def plan(inputs):
-    """(input, op) measurement list: window on all; head and tail on small and window_8MiB."""
-    out = []
-    for name, _ in inputs:
-        out.append((name, 'window'))
-        if name in ('small', 'window_8MiB'):
-            out += [(name, 'head'), (name, 'tail')]
-    return out
+
+def size_class(name):
+    if name in ('small', 'turns0', 'turns1', 'turns10'):
+        return 'S'
+    if name in ('turns16', 'turns17'):
+        return 'M'
+    return 'L'
 
 
-def write_inputs_and_fixtures(inputs, ops):
-    INPUTS.mkdir(parents=True, exist_ok=True)
-    byname = dict(inputs)
-    for name, data in inputs:
-        (INPUTS / (name + '.jsonl')).write_bytes(data)
-    expected, fixtures = {}, []
-    for name, op in ops:
-        data = byname[name]
-        want = oracle.api(op, 0, data)
-        expected[(name, op)] = want
-        fixtures.append({'name': f'{op}0: q_{name}', 'op': op, 'flag': 0, 'data': base64.b64encode(data).decode(), 'expected': want})
-    (Q / 'fixtures.json').write_text(json.dumps(fixtures))
-    return expected
+def check_packet(exe, path, op, flag, want, data=None):
+    result = subprocess.run([exe, path, 'check', str(flag), op], input=data,
+                            capture_output=True, check=True, timeout=120)
+    got = array('q')
+    got.frombytes(result.stdout)
+    if sys.byteorder != 'little':
+        got.byteswap()
+    if got != want:
+        pos = next((i for i, (g, w) in enumerate(zip(got, want)) if g != w), min(len(got), len(want)))
+        raise RuntimeError(f'{exe}: {op}/{flag} word {pos}: '
+                           f'{list(got[pos:pos + 4])} != {list(want[pos:pos + 4])} (oracle)')
 
 
-# ---------------- process measurement ----------------
 RSS_RE = re.compile(r'(\d+)\s+maximum resident set size')
 
 
-def run_measured(cmd, timeout=600):
-    """Run one child; return (stdout, peak_rss_bytes, method). Only the child started here is ever killed."""
-    cmd = [str(c) for c in cmd]
-    use_time = sys.platform == 'darwin' and os.path.exists('/usr/bin/time')
-    full = ['/usr/bin/time', '-l'] + cmd if use_time else cmd
-    p = subprocess.Popen(full, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
-    deadline = time.monotonic() + timeout
+def mac_time_available():
+    if sys.platform != 'darwin' or not Path('/usr/bin/time').is_file():
+        return False
+    probe = subprocess.run(['/usr/bin/time', '-l', '/usr/bin/true'], capture_output=True, text=True)
+    return probe.returncode == 0 and RSS_RE.search(probe.stderr) is not None
+
+
+def run_measured(cmd, use_time, timeout=120):
     if use_time:
+        p = subprocess.Popen(['/usr/bin/time', '-l', *cmd], stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, start_new_session=True)
         try:
             out, err = p.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             os.killpg(p.pid, signal.SIGKILL)
             p.communicate()
-            raise RuntimeError(f'timeout: {cmd}')
+            raise
+        rss = RSS_RE.search(err)
+        if p.returncode or not rss:
+            raise RuntimeError(f'{cmd}: exit {p.returncode}, RSS missing or failed\n{err[-2000:]}')
+        return out, int(rss.group(1))
+
+    # wait4 returns this process's high-water mark. Separate files keep a
+    # failing child's stderr from filling a pipe while its parent waits.
+    with tempfile.TemporaryFile(mode='w+t') as stdout, tempfile.TemporaryFile(mode='w+t') as stderr:
+        p = subprocess.Popen(cmd, stdout=stdout, stderr=stderr)
+        deadline = time.monotonic() + timeout
+        while True:
+            pid, status, usage = os.wait4(p.pid, os.WNOHANG)
+            if pid:
+                p.returncode = os.waitstatus_to_exitcode(status)
+                break
+            if time.monotonic() >= deadline:
+                p.kill()
+                p.wait()
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            time.sleep(0.001)
+        stdout.seek(0)
+        stderr.seek(0)
         if p.returncode:
-            raise RuntimeError(f'{cmd}: exit {p.returncode}\n{out}\n{err[-2000:]}')
-        m = RSS_RE.search(err)
-        if not m:
-            raise RuntimeError('no maximum resident set size in /usr/bin/time output: ' + err[-500:])
-        return out, int(m.group(1)), '/usr/bin/time -l'
-    while True:
-        pid, status, ru = os.wait4(p.pid, os.WNOHANG)
-        if pid:
-            break
-        if time.monotonic() > deadline:
-            os.killpg(p.pid, signal.SIGKILL)
-            os.wait4(p.pid, 0)
-            raise RuntimeError(f'timeout: {cmd}')
-        time.sleep(0.01)
-    out, err = p.stdout.read(), p.stderr.read()
-    p.stdout.close()
-    p.stderr.close()
-    if status:
-        raise RuntimeError(f'{cmd}: status {status}\n{out}\n{err[-2000:]}')
-    rss = ru.ru_maxrss if sys.platform == 'darwin' else ru.ru_maxrss * 1024
-    return out, rss, 'wait4 ru_maxrss'
+            raise RuntimeError(f'{cmd}: exit {p.returncode}\n{stderr.read()[-2000:]}')
+        return stdout.read(), usage.ru_maxrss * (1 if sys.platform == 'darwin' else 1024)
 
 
-def measure_one(exe, name, op, want):
-    out, rss, method = run_measured([exe, INPUTS / (name + '.jsonl'), op])
-    rows = [l.split() for l in out.splitlines()]
-    if len(rows) != 6 or rows[0][0] != 'warm' or any(r[0] != 'run' for r in rows[1:]):
+def measure_one(exe, path, op, want, use_time):
+    out, rss = run_measured([exe, path, op, str(FLAG)], use_time)
+    rows = [line.split() for line in out.splitlines()]
+    if len(rows) != 6 or [r[0] for r in rows] != ['warm'] + ['run'] * 5:
         raise RuntimeError(f'unexpected harness output: {out!r}')
-    ms = [float(r[1]) for r in rows[1:]]
-    lens = {int(r[2]) for r in rows}
-    codes = {int(r[3]) for r in rows}
-    res = {'median_ms': statistics.median(ms), 'min_ms': min(ms), 'max_ms': max(ms), 'samples_ms': ms,
-           'warmup_ms': float(rows[0][1]), 'packet_len': rows[0][2] and int(rows[0][2]),
-           'peak_rss_bytes': rss, 'rss_method': method, 'code': int(rows[0][3]),
-           'input_bytes': (INPUTS / (name + '.jsonl')).stat().st_size}
-    if len(lens) != 1 or len(codes) != 1:
-        raise RuntimeError(f'packet differs between calls: {lens} {codes}')
-    res['expected_len'] = len(want)
-    res['matches_oracle_shape'] = (res['packet_len'] == len(want) and res['code'] == want[0])
-    return res
+    if any((int(r[2]), int(r[3])) != (len(want), want[0]) for r in rows):
+        raise RuntimeError(f'{exe}: timed packet shape differs from oracle: {out!r}')
+    warm, *ms = [float(r[1]) for r in rows]
+    return dict(median_ms=statistics.median(ms), warmup_ms=warm, samples_ms=ms, rss_bytes=rss)
 
 
-# ---------------- build ----------------
-def build_pair(g2, run, compiler, backend, flags, rustflags):
-    key = f'{compiler}/{backend}'
-    work = Q / f'{compiler}_{backend}'
+def build_runner(rustc, work, module, *flags):
     work.mkdir(parents=True, exist_ok=True)
-    t0 = time.monotonic()
-    compiled = g2.compile_pruv(compiler, str(HERE / 'a4_root.pruv'), str(work), backend, flags)
-    compile_s = time.monotonic() - t0
-    if compiled['rc'] != 0:
-        raise RuntimeError(f'{key}: compile/verify failed: ' + str(compiled['errors'] or compiled['stderr']))
     harness = work / 'main.rs'
-    harness.write_text(HARNESS.replace('@SOL@', compiled['rs']))
-    extra, llvm_s = [], 0.0
+    harness.write_text((HAND_SRC / 'main.rs').read_text().replace(
+        'use l3_claude_handrust as sol;', f'#[path = {json.dumps(str(module), ensure_ascii=False)}] mod sol;'))
+    exe = work / 'runner'
+    subprocess.run([rustc, '-O', '--edition', '2021', harness, '-o', exe, *flags], check=True, timeout=120)
+    return exe
+
+
+def build_pair(g2, pair, scratch, str_adapter):
+    compiler, backend = pair.split('/')
+    work = scratch / f'{compiler}_{backend}'
+    work.mkdir()
+    start = time.monotonic()
+    extern = f'pruv_str={str_adapter}'
+    compiled = g2.compile_pruv(compiler, str(HERE / 'a4_root.pruv'), str(work), backend,
+                               ['--rust-extern', extern, '--rust-search', str(str_adapter.parent)])
+    if compiled['rc'] != 0:
+        raise RuntimeError(f'{pair}: compile/verify failed: {compiled["errors"] or compiled["stderr"]}')
+    compile_s = time.monotonic() - start
+    objects = []
     if compiled['ll']:
-        t1 = time.monotonic()
-        extra, error = g2.build_llvm_objects(compiled['ll'], 'a4', str(work))
-        llvm_s = time.monotonic() - t1
+        objects, error = g2.build_llvm_objects(compiled['ll'], 'a4', str(work))
         if error:
             raise RuntimeError(error)
-    exe = work / 'runner'
-    t2 = time.monotonic()
-    run([g2.RUSTC, '-O', '--edition', '2021', harness, '-o', exe] + extra + rustflags)
-    rustc_s = time.monotonic() - t2
-    return exe, {'compile_verify_seconds': compile_s, 'llvm_objects_seconds': llvm_s, 'rustc_seconds': rustc_s,
-                 'build_seconds': compile_s + llvm_s + rustc_s}
+    exe = build_runner(g2.RUSTC, work, compiled['rs'], *objects, '--extern', extern)
+    return exe, {'compile_verify_seconds': compile_s, 'build_seconds': time.monotonic() - start}
 
 
-def tool_version(cmd):
-    try:
-        return subprocess.run([str(c) for c in cmd], capture_output=True, text=True, timeout=30).stdout.strip()
-    except Exception as exc:
-        return f'unavailable: {exc}'
+def compare(pair, name, op, path, want, pruv, hand, rounds, use_time):
+    # Each expected word (including all widened text bytes) is compared outside
+    # timing. Both comparisons to the same oracle packet imply pairwise equality.
+    check_packet(pruv, path, op, FLAG, want)
+    samples = {'pruv': [], 'hand': []}
+    for i in range(rounds):
+        lanes = [('pruv', pruv), ('hand', hand)]
+        for side, exe in (lanes if i % 2 == 0 else reversed(lanes)):
+            samples[side].append(measure_one(exe, path, op, want, use_time))
 
-
-def cpu_brand():
-    try:
-        p = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True, timeout=10)
-        return p.stdout.strip() if p.returncode == 0 and p.stdout.strip() else None
-    except Exception:
-        return None
-
-
-def save(report):
-    (Q / 'measure.json').write_text(json.dumps(report, indent=2) + '\n')
-
-
-def print_table(report):
-    print()
-    print(f'{"pair":9} {"input":13} {"op":7} {"median":>9} {"min":>9} {"max":>9} {"pkt len":>10} {"rss MiB":>8} {"in bytes":>10}  ok')
-    for pair, pr in report['pairs'].items():
-        for key, r in pr.get('results', {}).items():
-            name, op = key.split('/')
-            if 'error' in r:
-                print(f'{pair:9} {name:13} {op:7} ERROR {r["error"][:80]}')
-                continue
-            print(f'{pair:9} {name:13} {op:7} {r["median_ms"]:9.3f} {r["min_ms"]:9.3f} {r["max_ms"]:9.3f} {r["packet_len"]:10d} '
-                  f'{r["peak_rss_bytes"] / 1048576:8.1f} {r["input_bytes"]:10d}  {"y" if r["matches_oracle_shape"] else "N"}')
-    print()
-    for pair, pr in report['pairs'].items():
-        if 'build' in pr:
-            b = pr['build']
-            print(f'build {pair}: compile+verify {b["compile_verify_seconds"]:.1f}s, llvm objects {b["llvm_objects_seconds"]:.1f}s, '
-                  f'rustc {b["rustc_seconds"]:.1f}s, total {b["build_seconds"]:.1f}s')
-        if 'error' in pr:
-            print(f'{pair}: ERROR {pr["error"][:200]}')
+    size = size_class(name)
+    name_key = f'{name}/{op}/{pair}'
+    fixed = op != 'window' and path.stat().st_size > EDGE
+    tiny = all(statistics.median(s['warmup_ms'] + sum(s['samples_ms']) for s in lane) < 1
+               for lane in samples.values())
+    cells = []
+    for axis, metric, unit in [('time', 'median_ms', 'ms'), ('rss', 'rss_bytes', 'bytes')]:
+        p, h = [statistics.median(s[metric] for s in samples[side]) for side in ('pruv', 'hand')]
+        cells.append(dict(name=name_key, axis=axis, size='S' if axis == 'time' and tiny else size,
+                          kind='fixed' if axis == 'time' and fixed else 'proportional',
+                          pruv=p, hand=h, unit=unit, runs=rounds, ratio=p / h if h else None))
+    return cells, samples
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--only', default='', help='measure only inputs whose name contains this')
     ap.add_argument('--pairs', default='py/rust,py/llvm,rs/rust,rs/llvm')
+    ap.add_argument('--quick', action='store_true', help='one fresh-process round, rs/rust only')
+    ap.add_argument('--out', type=Path, default=DEFAULT_OUT, help='path for perf_cells.json')
     args = ap.parse_args()
-    start = time.monotonic()
-    Q.mkdir(parents=True, exist_ok=True)
+    inputs = [(name, data) for name, data in build_inputs() if args.only in name]
+    if not inputs:
+        ap.error('--only matched no inputs')
+    rounds = 1 if args.quick else 7
+    pairs = ['rs/rust'] if args.quick else args.pairs.split(',')
+    if not all(p in ('py/rust', 'py/llvm', 'rs/rust', 'rs/llvm') for p in pairs):
+        ap.error('unknown compiler/backend pair')
 
-    inputs = build_inputs()
-    ops = plan(inputs)
-    expected = write_inputs_and_fixtures(inputs, ops)
-    print(f'{len(inputs)} inputs written to {INPUTS}; fixtures.json written for reference.mjs (TS timing is done separately)', flush=True)
-    ops = [(n, o) for n, o in ops if args.only in n]
-
-    g2, run = t4.configure()
-    report = {
-        'method': ('Per (pair,input,op) one process: read file, 1 warm-up + 5 timed calls of sol::<op>_packet with black_box '
-                   '(Instant, ms); median/min/max of the 5. Peak RSS from /usr/bin/time -l (bytes) or wait4 ru_maxrss of that child; '
-                   'covers the whole process. Build seconds: compile_pruv wall time and rustc wall time, separately.'),
-        'machine': {'platform': platform.platform(), 'cpu': cpu_brand(), 'cpu_count': os.cpu_count()},
-        'versions': {'python': platform.python_version(), 'rustc': tool_version([g2.RUSTC, '--version', '--verbose']),
-                     'clang': tool_version([g2.CLANG, '--version'])},
-        'inputs': {n: {'bytes': len(d), 'file': f'inputs/{n}.jsonl'} for n, d in inputs},
-        'notes': [
-            'Fixed workspace: turns.new_buffer is 13,116,800 bytes (allocated per window collection regardless of input size).',
-            'The i64 packet widens every output byte to 8 bytes (packet words are i64), so a packet of N text bytes costs 8*N bytes.',
-            'Parsing vs collection cost: not separable without a new root (a4_root.pruv exposes only head/tail/window packets; no pub fn was added).',
-            'head/tail on window_8MiB exceed the 64 KiB edge limit: they time the size rejection ([1,0]), not a scan.',
-            'depth_limit uses 127 nested arrays inside an object line (total depth 128).',
-            'Native TS baseline not timed here: work/qmeasure/fixtures.json is in the reference.mjs fixtures format; time reference.mjs runs separately.',
-            'Cold first call is recorded as warmup_ms; median covers the five warm calls.',
-        ],
-        'pairs': {}, 'errors': [],
-    }
-
-    target = Q / 'str-adapter'
-    cargo = shutil.which('cargo') or str(Path.home() / '.cargo/bin/cargo')
-    run([cargo, 'build', '--release', '--offline', '--quiet', '--manifest-path', t4.JSON_DIR / 'str_adapter/Cargo.toml', '--target-dir', target])
-    rlib, deps = target / 'release/libpruv_str.rlib', target / 'release/deps'
-    flags = ['--rust-extern', f'pruv_str={rlib}', '--rust-search', str(deps)]
-    rustflags = ['--extern', f'pruv_str={rlib}', '-L', f'dependency={deps}']
-
-    failed = False
-    for pair in [p for p in args.pairs.split(',') if p]:
-        compiler, backend = pair.split('/')
-        entry = report['pairs'].setdefault(pair, {'results': {}})
+    use_time = mac_time_available()
+    rss_method = '/usr/bin/time -l' if use_time else 'wait4 ru_maxrss'
+    print(f'RSS: {rss_method}', flush=True)
+    report = dict(source='claude/r08', cells=[], builds={}, samples={}, errors=[], flag=FLAG,
+                  rss_method=rss_method, platform=platform.platform(), scratch_rust_flags='rustc -O',
+                  notes=[
+                      'Both lanes use rustc -O (opt-level 3); neither requests LTO or a codegen-units override.',
+                      'Each process reads input, warms once, times five calls and drops each owned packet outside the timer.',
+                      'RSS covers the whole process including input; oversized edge rejection time is fixed.',
+                      'The ring starts at 16 slots (1,049,344 bytes) and can grow to 200 (13,116,800 bytes).',
+                      'turns16 ends with the 16th user reply to exercise growth on that parsed object.',
+                      'S includes turns0/1/10; M includes turns16/17; turns200 and the heavy historical inputs are L.',
+                      'Time cells with median warm-up plus five calls under 1 ms on both lanes are S.',
+                  ])
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='claude-r08-') as temporary:
+        scratch = Path(temporary)
+        t4.WORK = scratch
+        os.environ['TMPDIR'] = str(scratch)
+        rustc = Path(os.environ.get('RUSTC', str(Path.home() / '.cargo/bin/rustc')))
+        # Use the same rustc entry point as the Pruv build when it is on PATH.
+        rustc = shutil.which('rustc') or rustc
+        hand = build_runner(rustc, scratch / 'hand', HAND_SRC / 'lib.rs')
+        pruv = {}
         try:
-            exe, build = build_pair(g2, run, compiler, backend, flags, rustflags)
-            entry['build'] = build
-            print(f'{pair}: built in {build["build_seconds"]:.1f}s', flush=True)
-        except Exception as exc:
-            failed = True
-            entry['error'] = str(exc)
-            report['errors'].append(f'{pair}: {exc}')
-            print(f'{pair}: ERROR {exc}', file=sys.stderr, flush=True)
-            save(report)
-            continue
-        for name, op in ops:
-            key = f'{name}/{op}'
-            try:
-                r = measure_one(exe, name, op, expected[(name, op)])
-                if not r['matches_oracle_shape']:
-                    report['errors'].append(f'{pair}/{key}: packet length/code differs from oracle ({r["packet_len"]} vs {r["expected_len"]})')
-                    failed = True
-                entry['results'][key] = r
-                print(f'{pair} {key}: median {r["median_ms"]:.3f} ms, rss {r["peak_rss_bytes"] / 1048576:.1f} MiB', flush=True)
-            except Exception as exc:
-                failed = True
-                entry['results'][key] = {'error': str(exc)}
-                report['errors'].append(f'{pair}/{key}: {exc}')
-                print(f'{pair} {key}: ERROR {exc}', file=sys.stderr, flush=True)
-            save(report)
-    report['elapsed_seconds'] = time.monotonic() - start
-    save(report)
-    print_table(report)
-    return int(failed)
+            g2, _ = t4.configure()
+            report['rustc'] = subprocess.check_output([g2.RUSTC, '--version', '--verbose'], text=True).strip()
+            report['clang'] = subprocess.run([g2.CLANG, '--version'], capture_output=True, text=True, timeout=30).stdout.strip()
+            adapter = scratch / 'libpruv_str.rlib'
+            subprocess.run([g2.RUSTC, '-O', '--edition', '2021', '--crate-name', 'pruv_str',
+                            '--crate-type', 'rlib', t4.JSON_DIR / 'str_adapter/src/lib.rs', '-o', adapter],
+                           check=True, timeout=120)
+            for pair in pairs:
+                try:
+                    print(f'{pair} 빌드 중', flush=True)
+                    pruv[pair], report['builds'][pair] = build_pair(g2, pair, scratch, adapter)
+                except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+                    report['errors'].append(str(exc))
+                    print(exc, file=sys.stderr, flush=True)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            report['errors'].append(str(exc))
+            print(exc, file=sys.stderr, flush=True)
+
+        print('| 입력 | 연산 | 페어 | Hand ms | Pruv ms | 시간 배율 | Hand MiB | Pruv MiB | RSS 배율 |', flush=True)
+        print('|---|---|---|---:|---:|---:|---:|---:|---:|', flush=True)
+        hand_checks = 0
+        pair_checks = 0
+        with (args.out.parent / 'fixtures.json').open('w') as fixtures:
+            fixtures.write('[\n')
+            for name, data in inputs:
+                path = scratch / f'{name}.jsonl'
+                path.write_bytes(data)
+                encoded = base64.b64encode(data).decode()
+                for op in OPS:
+                    expected = oracle.api(op, FLAG, data)
+                    if hand_checks:
+                        fixtures.write(',\n')
+                    json.dump(dict(name=f'{op}{FLAG}: q_{name}', op=op, flag=FLAG, data=encoded, expected=expected), fixtures)
+                    want = array('q', expected)
+                    check_packet(hand, path, op, FLAG, want)
+                    hand_checks += 1
+                    if not pruv:
+                        # A broken or concurrently edited Pruv root still leaves
+                        # usable hand smoke evidence and no invented ratios.
+                        sample = measure_one(hand, path, op, want, use_time)
+                        print(f'| {name} | {op} | hand | {sample["median_ms"]:.6f} | — | — | '
+                              f'{sample["rss_bytes"] / 1048576:.3f} | — | — |', flush=True)
+                    for pair, exe in pruv.items():
+                        try:
+                            cells, samples = compare(pair, name, op, path, want, exe, hand, rounds, use_time)
+                            pair_checks += 1
+                        except (RuntimeError, OSError, subprocess.SubprocessError, ValueError) as exc:
+                            report['errors'].append(f'{name}/{op}/{pair}: {exc}')
+                            print(report['errors'][-1], file=sys.stderr, flush=True)
+                            continue
+                        report['cells'].extend(cells)
+                        report['samples'][cells[0]['name']] = samples
+                        t, r = cells
+                        print(f'| {name} | {op} | {pair} | {t["hand"]:.6f} | {t["pruv"]:.6f} | {t["ratio"]:.3f} | '
+                              f'{r["hand"] / 1048576:.3f} | {r["pruv"] / 1048576:.3f} | {r["ratio"]:.3f} |', flush=True)
+            fixtures.write('\n]\n')
+        report['packet_checks'] = dict(hand_vs_oracle=hand_checks, pruv_vs_hand_vs_oracle=pair_checks)
+        args.out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
+        print(f'완전 일치: hand/oracle {hand_checks}개, Pruv/hand/oracle {pair_checks}개', flush=True)
+        print(f'{args.out} ({len(report["cells"])}개 셀)', flush=True)
+    return int(bool(report['errors']))
 
 
 if __name__ == '__main__':
