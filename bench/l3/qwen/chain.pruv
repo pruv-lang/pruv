@@ -1,23 +1,36 @@
-// Qwen currentChain. Byte-position marks avoid retaining parsed JSON documents.
+// Qwen currentChain. Entry-ordinal marks avoid retaining parsed JSON documents.
 // R05 B: one parse per line. scan decodes each uuid and parentUuid once into a byte arena; the chain walk compares
 // arena bytes and never re-parses a line. Newest-first hash buckets; exact UUID comparison resolves collisions.
-// Slot layout, 6 per uuid entry: line start, next slot (newest-first), uuid offset, uuid length,
+// Slot layout, 6 per uuid entry: Entry frame ordinal, next slot (newest-first), uuid offset, uuid length,
 // parent offset, parent length (-1 missing, -2 parentUuid defect: bad only when the entry matches a key).
-fn bucket(arena: [u8], off: i64, n: i64, size: i64) -> i64
-  requires 0 < size && size <= 16777219
+// DB6: a mixed 64-bit hash (8-byte words, splitmix64 finalizer) masked into a power-of-two table. The old
+// h * 257 % size hash let a crafted file put every uuid in 8 buckets (D-R05-1). The hash is fixed, not keyed (G-DB6-1).
+fn bucket(arena: [u8], off: i64, n: i64, mask: i64) -> i64
+  requires 0 <= mask
   requires 0 <= off && 0 <= n && off + n <= len(arena)
-  ensures 0 <= result && result < size
+  ensures 0 <= result && result <= mask
 {
-  let mut h: i64 = 0;
+  let mut h: i64 = bxor(-7046029254386353131, n);
   let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && off + n <= len(arena) && 0 <= off && 0 <= h && h < size
+  while i + 8 <= n
+    invariant 0 <= i && i <= n && off + n <= len(arena) && 0 <= off
     decreases n - i
   {
-    h = (h * 257 + arena[off + i]) % size;
+    h = wrapping_mul(bxor(h, load_le(arena, off + i, 8)), -4658895280553007687);
+    h = bxor(h, ushr(h, 31));
+    i = i + 8;
+  }
+  while i < n
+    invariant 0 <= i && i <= n && off + n <= len(arena) && 0 <= off
+    decreases n - i
+  {
+    h = wrapping_mul(bxor(h, arena[off + i]), -7046029254386353131);
     i = i + 1;
   }
-  return h;
+  h = wrapping_mul(bxor(h, ushr(h, 30)), -4658895280553007687);
+  h = wrapping_mul(bxor(h, ushr(h, 27)), -7723592293110705685);
+  h = bxor(h, ushr(h, 31));
+  return band(h, mask);
 }
 
 fn put(inout arena: [u8], at: i64, s: str) -> ()
@@ -56,7 +69,7 @@ fn same_span(arena: [u8], a: i64, an: i64, b: i64, bn: i64) -> bool
 pub struct Found { leaf: i64, found: bool, bad: bool }
 pub fn scan(data: [u8], cut: bool, inout arena: [u8], inout heads: [i64], inout slots: [i64]) -> Found ! alloc
   requires len(data) <= 8388608 && len(arena) == len(data)
-  requires 0 < len(heads) && len(heads) <= 16777219 && len(slots) <= 50331654
+  requires 0 < len(heads) && len(heads) <= 33554436 && len(slots) <= 50331654
   ensures len(arena) == len(old(arena))
   ensures len(heads) == len(old(heads)) && len(slots) == len(old(slots))
 {
@@ -65,12 +78,13 @@ pub fn scan(data: [u8], cut: bool, inout arena: [u8], inout heads: [i64], inout 
   let mut role_seen: bool = false;
   let mut used: i64 = 0;
   let mut aused: i64 = 0;
+  let mut ord: i64 = 0;
   let mut off: i64 = crate::framing::skip_first(data, cut);
   while off < len(data)
     invariant 0 <= off && off <= len(data) && len(data) <= 8388608 && len(arena) == len(data)
     invariant 0 <= used && used <= len(slots) && len(slots) <= 50331654
     invariant 0 <= aused && aused <= len(arena)
-    invariant 0 < len(heads) && len(heads) <= 16777219
+    invariant 0 < len(heads) && len(heads) <= 33554436 && 0 <= ord && ord <= off
     decreases len(data) - off
   {
     let step: crate::framing::Frame = crate::framing::window_next(data, off);
@@ -83,7 +97,9 @@ pub fn scan(data: [u8], cut: bool, inout arena: [u8], inout heads: [i64], inout 
             let f: crate::entry::Field = crate::entry::string_field(d, 0, "uuid");
             match f {
               crate::entry::Field::Value(u) => {
-                let role: bool = crate::entry::field_is(d, 0, "type", "user") == 1 || crate::entry::field_is(d, 0, "type", "assistant") == 1 || crate::entry::field_is(d, 0, "type", "tool_result") == 1;
+                // DB6: one "type" key lookup, then three literal compares on that value.
+                let ty: i64 = crate::entry::string_id(d, 0, "type");
+                let role: bool = ty >= 0 && (crate::access::string_is(d, ty, "user") == 1 || crate::access::string_is(d, ty, "assistant") == 1 || crate::access::string_is(d, ty, "tool_result") == 1);
                 if len(u) > 0 {
                   if used + 6 > len(slots) { return Found { leaf: -1, found: false, bad: true }; }
                   if len(u) > len(arena) - aused { return Found { leaf: -1, found: false, bad: true }; }
@@ -103,8 +119,8 @@ pub fn scan(data: [u8], cut: bool, inout arena: [u8], inout heads: [i64], inout 
                     crate::entry::Field::Missing => { pl = -1; }
                     crate::entry::Field::Defect(k) => { pl = -2; }
                   }
-                  let b: i64 = bucket(arena, uo, len(u), len(heads));
-                  slots[used] = s;
+                  let b: i64 = bucket(arena, uo, len(u), len(heads) - 1);
+                  slots[used] = ord;
                   slots[used + 1] = heads[b];
                   slots[used + 2] = uo;
                   slots[used + 3] = len(u);
@@ -128,6 +144,7 @@ pub fn scan(data: [u8], cut: bool, inout arena: [u8], inout heads: [i64], inout 
           crate::entry::Line::Skip => { found = found; }
           crate::entry::Line::Defect(k) => { return Found { leaf: -1, found: false, bad: true }; }
         }
+        ord = ord + 1;
         off = n;
       }
       crate::framing::Frame::Dropped(s, e, n) => { if n <= off || n > len(data) { return Found { leaf: -1, found: false, bad: true }; } off = n; }
@@ -142,10 +159,10 @@ pub fn scan(data: [u8], cut: bool, inout arena: [u8], inout heads: [i64], inout 
 pub struct Hit { poff: i64, plen: i64, found: bool, changed: bool, bad: bool }
 fn lookup(arena: [u8], koff: i64, klen: i64, heads: [i64], slots: [i64], inout marks: [u8]) -> Hit
   requires 0 <= koff && 0 <= klen && koff + klen <= len(arena)
-  requires 0 < len(heads) && len(heads) <= 16777219 && len(slots) <= 50331654
+  requires 0 < len(heads) && len(heads) <= 33554436 && len(slots) <= 50331654
   ensures len(marks) == len(old(marks))
 {
-  let mut at: i64 = heads[bucket(arena, koff, klen, len(heads))];
+  let mut at: i64 = heads[bucket(arena, koff, klen, len(heads) - 1)];
   let mut left: i64 = len(slots);
   let mut found: bool = false;
   let mut changed: bool = false;
@@ -177,24 +194,40 @@ fn lookup(arena: [u8], koff: i64, klen: i64, heads: [i64], slots: [i64], inout m
   return Hit { poff: poff, plen: plen, found: found, changed: changed, bad: false };
 }
 
-// marks is caller-owned (len(data), zero): no bitmap copy into or out of a result struct.
-pub struct Chain { active: bool, cut: bool, bad: bool }
-pub fn select(data: [u8], cut: bool, inout marks: [u8]) -> Chain ! alloc
-  requires len(data) <= 8388608 && len(marks) == len(data)
-  ensures len(marks) == len(old(marks))
+// One frame per newline, plus a possible unterminated final line: an upper bound on Entry frames.
+pub fn capacity(data: [u8]) -> i64
+  requires len(data) <= 8388608
+  ensures 1 <= result && result <= len(data) + 1
 {
-  // One frame per newline, plus a possible unterminated final line.
-  let mut capacity: i64 = 1;
+  let mut c: i64 = 1;
   let mut i: i64 = 0;
   while i < len(data)
     invariant 0 <= i && i <= len(data) && len(data) <= 8388608
-    invariant 1 <= capacity && capacity <= i + 1
+    invariant 1 <= c && c <= i + 1
     decreases len(data) - i
   {
-    if data[i] == 10 { capacity = capacity + 1; }
+    if data[i] == 10 { c = c + 1; }
     i = i + 1;
   }
-  let mut heads: [i64] = alloc(capacity * 2 + 1, -1);
+  return c;
+}
+
+// marks is caller-owned, zero, one byte per Entry frame ordinal (DB6: was one per input byte).
+pub struct Chain { active: bool, cut: bool, bad: bool }
+pub fn select(data: [u8], cut: bool, inout marks: [u8]) -> Chain ! alloc
+  requires len(data) <= 8388608 && 1 <= len(marks) && len(marks) <= len(data) + 1
+  ensures len(marks) == len(old(marks))
+{
+  let capacity: i64 = len(marks);
+  // Power-of-two heads, at least twice the entry count, so bucket chains stay short.
+  let mut size: i64 = 1;
+  while size < 2 * capacity
+    invariant 1 <= size && size <= 4 * capacity && capacity <= 8388609
+    decreases 4 * capacity - size
+  {
+    size = size * 2;
+  }
+  let mut heads: [i64] = alloc(size, -1);
   let mut slots: [i64] = alloc(capacity * 6, -1);
   let mut arena: [u8] = alloc(len(data), 0);
   let leaf: Found = scan(data, cut, inout arena, inout heads, inout slots);
@@ -214,8 +247,8 @@ pub fn select(data: [u8], cut: bool, inout marks: [u8]) -> Chain ! alloc
   let mut count: i64 = 0;
   let mut done: bool = !leaf.found;
   while !done && count < len(data)
-    invariant len(marks) == len(data) && len(data) <= 8388608 && 0 <= count && count <= len(data)
-    invariant 0 < len(heads) && len(heads) <= 16777219 && len(slots) <= 50331654
+    invariant len(marks) == len(old(marks)) && len(data) <= 8388608 && 0 <= count && count <= len(data)
+    invariant 0 < len(heads) && len(heads) <= 33554436 && len(slots) <= 50331654
     decreases len(data) - count
   {
     if koff < 0 || klen < 0 || klen > len(arena) - koff { return Chain { active: leaf.found, cut: lost, bad: true }; }

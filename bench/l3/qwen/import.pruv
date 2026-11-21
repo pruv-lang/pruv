@@ -438,10 +438,11 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
   if len(data) > crate::boundary::limit_window_bytes() {
     return crate::boundary::wire_fail(crate::boundary::code_input_too_large(), 0);
   }
-  let mut selected: [u8] = alloc(len(data), 0);
+  // DB6: one mark per Entry frame ordinal, not per input byte.
+  let mut selected: [u8] = alloc(crate::chain::capacity(data), 0);
   let chain: crate::chain::Chain = crate::chain::select(data, cut_before, inout selected);
   if chain.bad { return wfail_zero(); }
-  if len(selected) != len(data) { return wfail_zero(); }
+  let mut ordinal: i64 = 0;
   let mut started: bool = false;
   let mut pending: bool = false;
   let mut st: [i64] = crate::turns::new_state();
@@ -453,7 +454,7 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
   let mut idle: bool = false;
   let mut offset: i64 = crate::framing::skip_first(data, cut_before);
   while offset < len(data)
-    invariant len(selected) == len(data)
+    invariant 0 <= ordinal && ordinal <= offset
     invariant 0 <= offset && offset <= len(data) && len(data) <= 8388608
     invariant 0 <= best_rank && best_rank <= 3
     invariant len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf)) && 0 <= st[0] && st[0] <= offset && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
@@ -474,8 +475,8 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
               crate::entry::Title::NoTitle => { idle = true; }
               crate::entry::Title::Defect(e) => { return wfail_zero(); }
             }
-            if start >= len(selected) { return wfail_zero(); }
-            if !chain.active || selected[start] == 1 {
+            if ordinal >= len(selected) { return wfail_zero(); }
+            if !chain.active || selected[ordinal] == 1 {
               if !started && pending { crate::turns::skip_user(inout st); }
               started = true;
             if 65584 * (st[0] % 200) + 65584 > len(buf) { buf = crate::turns::grow(buf, st[0]); }
@@ -498,6 +499,7 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
           crate::entry::Line::Skip => { idle = true; }
           crate::entry::Line::Defect(p) => { return wfail_at(start, end, p); }
         }
+        ordinal = ordinal + 1;
         offset = next;
       }
       crate::framing::Frame::Dropped(s, e, n) => {
