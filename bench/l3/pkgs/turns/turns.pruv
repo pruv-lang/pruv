@@ -390,3 +390,311 @@ pub fn finish(st: [i64], sl: [i64], buf: [u8], base: i64) -> Collected ! alloc
   }
   return Collected { turns: copy(turns), text: copy(text), kept: kept, trimmed: tr, total: p[1] };
 }
+
+
+// ---- Content-sized store (DB11). Same st/sl state and slot rules as above; only the bytes move. ----
+// data  draft k's prompt then its reply, contiguous at off[k % 200]; the current draft is always the last record,
+//       so answer appends at end. Records are in ordinal order (newer at higher offsets).
+// off   [200] byte offset of each slot's record in data (-1 = no record)
+// stamp [9600] slot s: created stamp at 48*s, completed stamp at 48*s+24
+// end   bytes of data in use. Growth: when a write does not fit, reserve packs the records finish can still
+//       publish into the front, in place when that leaves half the buffer free, else into a new buffer of twice
+//       the bytes needed, so data stays within twice the live text and each byte is copied O(1) times on average.
+// Record offsets are not tied to sl by a proof; finish2 and answer2 check them at run time (D-DB11-1).
+pub struct Store { data: [u8], off: [i64], stamp: [u8], end: i64 }
+
+pub fn new_store() -> Store ! alloc
+  ensures len(result.off) == 200 && len(result.stamp) == 9600 && 0 <= result.end && result.end <= len(result.data)
+{
+  let d: [u8] = alloc(0, 0);
+  let o: [i64] = alloc(200, -1);
+  let s: [u8] = alloc(9600, 0);
+  return Store { data: move d, off: move o, stamp: move s, end: 0 };
+}
+
+// a[dst..dst+n) = old a[src..src+n) (overlap safe).
+fn move_bytes(inout a: [u8], dst: i64, src: i64, n: i64) -> ()
+  requires 0 <= dst && 0 <= src && 0 <= n && dst + n <= len(a) && src + n <= len(a)
+  ensures len(a) == len(old(a))
+{
+  copy_within(inout a, dst, src, n);
+}
+
+// Room for need more bytes at bk.end. The drafts kept are the newest ones from ordinal top-1 down, at most cnt,
+// stopping (as plan does) at the first that would push the running total, which starts at extra (the bytes of a
+// draft about to be added), past 2097152. Sizes only grow and newer drafts only get added, so finish can never
+// publish a draft past that point; those records are dropped (off = -1). Kept records are packed oldest first.
+fn reserve(inout bk: Store, sl: [i64], top: i64, cnt: i64, extra: i64, need: i64) -> () ! alloc
+  requires len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  requires len(sl) == 1600 && 0 <= cnt && cnt <= 200 && cnt <= top && top <= 1000000000000
+  requires 0 <= extra && extra <= 32768 && 0 <= need && need <= 32768
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= 32768)
+  ensures len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && need <= len(bk.data) - bk.end
+{
+  if need <= len(bk.data) - bk.end { return; }
+  let mut m: i64 = 0;
+  let mut live: i64 = 0;
+  let mut total: i64 = extra;
+  let mut lim: i64 = cnt;
+  while m < lim
+    invariant 0 <= m && m <= lim && lim <= cnt && cnt <= 200 && cnt <= top && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600
+    invariant 0 <= live && live <= total && total <= 2097152
+    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= 32768)
+    decreases lim - m
+  {
+    let w: i64 = (top - 1 - m) % 200;
+    let size: i64 = sl[8 * w] + sl[8 * w + 1];
+    let o: i64 = bk.off[w];
+    if total + size > 2097152 || o < 0 || o > bk.end - size {
+      lim = m;
+    } else {
+      total = total + size;
+      live = live + size;
+      m = m + 1;
+    }
+  }
+  let mut d: i64 = m;
+  while d < cnt
+    invariant m <= d && d <= cnt && cnt <= 200 && cnt <= top && len(bk.off) == 200 && len(bk.stamp) == 9600
+    decreases cnt - d
+  {
+    bk.off[(top - 1 - d) % 200] = -1;
+    d = d + 1;
+  }
+  let tgt: i64 = live + need;
+  let l: i64 = len(bk.data);
+  let mut pos: i64 = 0;
+  let mut i: i64 = m;
+  if tgt <= l - tgt {
+    while i > 0
+      invariant 0 <= i && i <= m && m <= cnt && cnt <= 200 && cnt <= top && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600
+      invariant len(bk.data) == l && 0 <= pos && pos <= live
+      invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= 32768)
+      decreases i
+    {
+      i = i - 1;
+      let w: i64 = (top - 1 - i) % 200;
+      let size: i64 = sl[8 * w] + sl[8 * w + 1];
+      let o: i64 = bk.off[w];
+      if o >= 0 && o <= l - size && pos <= live - size {
+        move_bytes(inout bk.data, pos, o, size);
+        bk.off[w] = pos;
+        pos = pos + size;
+      } else {
+        bk.off[w] = -1;
+      }
+    }
+    bk.end = pos;
+    return;
+  }
+  let mut cap: i64 = 2 * tgt;
+  if cap < 65536 { cap = 65536; }
+  let mut nb: [u8] = alloc(cap, 0);
+  while i > 0
+    invariant 0 <= i && i <= m && m <= cnt && cnt <= 200 && cnt <= top && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600
+    invariant len(bk.data) == l && len(nb) == cap && tgt <= cap && 0 <= pos && pos <= live
+    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= 32768)
+    decreases i
+  {
+    i = i - 1;
+    let w: i64 = (top - 1 - i) % 200;
+    let size: i64 = sl[8 * w] + sl[8 * w + 1];
+    let o: i64 = bk.off[w];
+    if o >= 0 && o <= l - size && pos <= live - size {
+      crate::bytes::copy_span(inout nb, pos, bk.data, o, o + size);
+      bk.off[w] = pos;
+      pos = pos + size;
+    } else {
+      bk.off[w] = -1;
+    }
+  }
+  bk.data = move nb;
+  bk.end = pos;
+}
+
+// begin on a Store: the same st/sl transition as begin; the clipped prompt is appended at bk.end.
+pub fn begin2(inout st: [i64], inout sl: [i64], inout bk: Store, prompt: str, created: str) -> () ! alloc
+  requires len(st) == 4 && len(sl) == 1600
+  requires len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  requires 0 <= st[0] && st[0] < 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  requires len(prompt) <= 100000000
+  requires len(created) == 0 || len(created) == 24
+  ensures len(st) == 4 && len(sl) == 1600
+  ensures len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  ensures st[0] == old(st)[0] + 1 && st[1] == 1 && st[2] == 0 && st[3] == old(st)[0] % 200
+  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+{
+  let k: i64 = st[0];
+  let w: i64 = k % 200;
+  let cp: str = crate::text::clip_bytes(prompt, 32768);
+  let n: i64 = len(cp);
+  let mut cnt: i64 = k;
+  if cnt > 199 { cnt = 199; }
+  reserve(inout bk, sl, k, cnt, n, n);
+  let at: i64 = bk.end;
+  put_str(inout bk.data, at, cp, n);
+  bk.off[w] = at;
+  bk.end = at + n;
+  let mut has: i64 = 0;
+  if len(created) == 24 {
+    put_str(inout bk.stamp, 48 * w, created, 24);
+    has = 1;
+  }
+  let mut cl: i64 = 0;
+  if len(prompt) > 32768 || st[2] == 1 { cl = 1; }
+  sl[8 * w] = n;
+  sl[8 * w + 1] = 0;
+  sl[8 * w + 2] = 0;
+  sl[8 * w + 3] = 0;
+  sl[8 * w + 4] = cl;
+  sl[8 * w + 5] = has;
+  sl[8 * w + 6] = 0;
+  sl[8 * w + 7] = k;
+  st[0] = k + 1;
+  st[1] = 1;
+  st[2] = 0;
+  st[3] = w;
+}
+
+// answer on a Store: the same rules as answer; the piece is appended at bk.end, which is the end of the current
+// draft's record (checked at run time; a mismatch leaves the draft unchanged, D-DB11-1).
+pub fn answer2(inout st: [i64], inout sl: [i64], inout bk: Store, text: str, at: str) -> () ! alloc
+  requires len(st) == 4 && len(sl) == 1600
+  requires len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  requires 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  requires len(text) <= 100000000
+  requires len(at) == 0 || len(at) == 24
+  ensures len(st) == 4 && len(sl) == 1600
+  ensures len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  ensures st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
+  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+{
+  if st[1] == 0 { return; }
+  let c: i64 = st[3];
+  if len(at) == 24 {
+    put_str(inout bk.stamp, 48 * c + 24, at, 24);
+    sl[8 * c + 6] = 1;
+  }
+  if len(text) == 0 { return; }
+  let used: i64 = sl[8 * c + 2];
+  if used >= 32768 { return; }
+  let rl: i64 = sl[8 * c + 1];
+  let room: i64 = 32768 - used;
+  let mut sep: i64 = 0;
+  if rl > 0 { sep = 2; }
+  let mut s2: i64 = sep;
+  let mut take: i64 = len(text);
+  let mut full: bool = true;
+  if sep + len(text) > room {
+    full = false;
+    if sep == 2 && room < 2 {
+      s2 = room;
+      take = 0;
+    } else {
+      let cp: str = crate::text::clip_bytes(text, room - sep);
+      take = len(cp);
+    }
+  }
+  let mut cnt: i64 = st[0];
+  if cnt > 200 { cnt = 200; }
+  if cnt < 1 { return; }
+  reserve(inout bk, sl, st[0], cnt, 0, s2 + take);
+  let o: i64 = bk.off[c];
+  let e: i64 = bk.end;
+  if o < 0 || o != e - sl[8 * c] - rl { return; }
+  write_piece(inout bk.data, e, s2, text, take);
+  bk.end = e + s2 + take;
+  sl[8 * c + 1] = rl + s2 + take;
+  if full {
+    sl[8 * c + 2] = used + s2 + take;
+  } else {
+    sl[8 * c + 2] = 32768;
+    sl[8 * c + 4] = 1;
+  }
+}
+
+// finish on a Store: the same selection, layout and result as finish.
+pub fn finish2(st: [i64], sl: [i64], inout bk: Store, base: i64) -> Collected ! alloc
+  requires len(st) == 4 && len(sl) == 1600
+  requires len(bk.off) == 200 && len(bk.stamp) == 9600
+  requires 0 <= st[0] && st[0] <= 1000000000000 && 0 <= base && base <= 3500000
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  ensures len(bk.off) == 200 && len(bk.stamp) == 9600
+  ensures 0 <= result.kept && result.kept <= 200 && result.kept <= st[0]
+  ensures len(result.turns) == 10 * result.kept
+  ensures 0 <= len(result.text) && len(result.text) <= 2106752
+  ensures (result.trimmed == 0 && result.kept == st[0]) || (result.trimmed == 1 && result.kept < st[0])
+  ensures 0 <= result.total && result.total <= 2097152
+  ensures result.total == sum(j in 0..result.kept: sl[8 * ((st[0] - 1 - j) % 200)] + sl[8 * ((st[0] - 1 - j) % 200) + 1])
+  ensures (result.kept < st[0] && result.kept < 200) ==> result.total + sl[8 * ((st[0] - 1 - result.kept) % 200)] + sl[8 * ((st[0] - 1 - result.kept) % 200) + 1] > 2097152
+{
+  let p: [i64] = plan(st, sl);
+  let kept: i64 = p[0];
+  let b: i64 = st[0];
+  let tl: i64 = p[2 + kept];
+  let mut turns: [i64] = alloc(10 * kept, 0);
+  let mut text: [u8] = alloc(tl, 0);
+  let mut tr: i64 = 0;
+  if kept < b { tr = 1; }
+  let dl: i64 = len(bk.data);
+  let mut j: i64 = 0;
+  while j < kept
+    invariant (tr == 0 && kept == b) || (tr == 1 && kept < b)
+    invariant 0 <= j && j <= kept && 0 <= kept && kept <= 200 && kept <= b && 0 <= b && b <= 1000000000000
+    invariant len(turns) == 10 * kept && len(text) == tl && len(p) == 203 && len(sl) == 1600
+    invariant len(bk.off) == 200 && len(bk.stamp) == 9600 && len(bk.data) == dl
+    invariant tl == p[2 + kept] && 0 <= tl && tl <= 2106752
+    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+    decreases kept - j
+  {
+    let w: i64 = (b - 1 - j) % 200;
+    let plen: i64 = sl[8 * w];
+    let rlen: i64 = sl[8 * w + 1];
+    let cp: i64 = sl[8 * w + 5];
+    let dp: i64 = sl[8 * w + 6];
+    let o: i64 = bk.off[w];
+    // plan lays draft j out at [tl - p[3+j], tl - p[2+j]); that and the record offset are checked here.
+    let e: i64 = p[3 + j];
+    if e < 0 || e > tl || plen + rlen + 24 * cp + 24 * dp > e || o < 0 || o > dl - plen - rlen {
+      return Collected { turns: copy(turns), text: copy(text), kept: kept, trimmed: tr, total: p[1] };
+    }
+    let lo: i64 = tl - e;
+    crate::bytes::copy_span(inout text, lo, bk.data, o, o + plen + rlen);
+    if cp == 1 {
+      crate::bytes::copy_span(inout text, lo + plen + rlen, bk.stamp, 48 * w, 48 * w + 24);
+    }
+    if dp == 1 {
+      crate::bytes::copy_span(inout text, lo + plen + rlen + 24 * cp, bk.stamp, 48 * w + 24, 48 * w + 48);
+    }
+    let t: i64 = kept - 1 - j;
+    turns[10 * t] = base + lo;
+    turns[10 * t + 1] = plen;
+    turns[10 * t + 2] = base + lo + plen;
+    turns[10 * t + 3] = rlen;
+    if cp == 1 {
+      turns[10 * t + 4] = base + lo + plen + rlen;
+      turns[10 * t + 5] = 24;
+    } else {
+      turns[10 * t + 4] = -1;
+      turns[10 * t + 5] = 0;
+    }
+    if dp == 1 {
+      turns[10 * t + 6] = base + lo + plen + rlen + 24 * cp;
+      turns[10 * t + 7] = 24;
+    } else {
+      turns[10 * t + 6] = -1;
+      turns[10 * t + 7] = 0;
+    }
+    turns[10 * t + 8] = sl[8 * w + 3];
+    turns[10 * t + 9] = sl[8 * w + 4];
+    j = j + 1;
+  }
+  return Collected { turns: copy(turns), text: copy(text), kept: kept, trimmed: tr, total: p[1] };
+}

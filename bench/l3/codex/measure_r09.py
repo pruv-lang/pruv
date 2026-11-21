@@ -211,7 +211,9 @@ def measure(name, size, pruv, hand, request, expected, rounds, timed):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--quick', action='store_true', help='run one round at size M')
-    quick = parser.parse_args().quick
+    parser.add_argument('--rounds', type=int, default=7, help='alternating rounds (default 7)')
+    args = parser.parse_args()
+    quick = args.quick
     WORK.mkdir(parents=True, exist_ok=True)
     runners = build_hand()
     hand = WORK / 'reader'
@@ -229,7 +231,7 @@ def main():
                 raise RuntimeError(f'{pair} {size}: Pruv and hand stdout differ before timing')
         checked[size] = request, expected
 
-    rounds = 1 if quick else 7
+    rounds = 1 if quick else args.rounds
     timed = rss_timer()
     print(f'{BATCH} reads per sample, {rounds} round(s), preflight stdout matched', flush=True)
     print(f'{"case":16} S {"axis":4} {"unit":5} {"Pruv":>15} {"hand":>15} {"Pruv/hand":>9}', flush=True)

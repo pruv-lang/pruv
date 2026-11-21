@@ -112,17 +112,17 @@ fn stamp_str(hb: [u8], o: i64) -> str ! alloc
 }
 
 // One held turn into the collector: begin, the folded reply when present, then its tool items.
-fn feed(inout st: [i64], inout sl: [i64], inout buf: [u8], prompt: str, created: str, ans: bool, text: str, completed: str, tools: i64) -> () ! alloc
-  requires len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf)) && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && 0 <= st[0] && st[0] < 200 && 65584 * (st[0] % 200) + 65584 <= len(buf)
+fn feed(inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store, prompt: str, created: str, ans: bool, text: str, completed: str, tools: i64) -> () ! alloc
+  requires len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && 0 <= st[0] && st[0] < 200
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
   requires len(prompt) <= 100000000 && (len(created) == 0 || len(created) == 24) && len(text) <= 100000000 && (len(completed) == 0 || len(completed) == 24) && 0 <= tools && tools <= 100000000
-  ensures len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf)) && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && st[0] == old(st)[0] + 1
+  ensures len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && st[0] == old(st)[0] + 1
   ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
 {
-  crate::turns::begin(inout st, inout sl, inout buf, prompt, created);
-  if ans { crate::turns::answer(inout st, inout sl, inout buf, text, completed); }
+  crate::turns::begin2(inout st, inout sl, inout bk, prompt, created);
+  if ans { crate::turns::answer2(inout st, inout sl, inout bk, text, completed); }
   add_tools(inout st, inout sl, tools);
 }
 
@@ -153,7 +153,7 @@ pub fn replay(ht: [i64], hb: [u8], count: i64, base: i64, inout bad: [i64]) -> c
 {
   let mut st: [i64] = crate::turns::new_state();
   let mut sl: [i64] = crate::turns::new_slots();
-  let mut buf: [u8] = crate::turns::new_buffer();
+  let mut bk: crate::turns::Store = crate::turns::new_store();
   let mut pad: [u8] = alloc(4, 0);
   pad[0] = 240;
   pad[1] = 144;
@@ -164,7 +164,7 @@ pub fn replay(ht: [i64], hb: [u8], count: i64, base: i64, inout bad: [i64]) -> c
   while j > 0
     invariant 0 <= j && j <= count && count <= 200 && len(ht) == 2000 && len(hb) <= 8700000 && len(bad) == 1 && len(pad) == 4
     invariant 0 <= fed && fed <= count && fed + j <= count
-    invariant len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf)) && st[0] == fed && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
+    invariant len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && st[0] == fed && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
     decreases j
@@ -201,13 +201,12 @@ pub fn replay(ht: [i64], hb: [u8], count: i64, base: i64, inout bad: [i64]) -> c
           let t: str = crate::jstr::adapter_probe(whole);
           if len(t) <= 100000000 { text = copy(t); ans = true; }
         }
-        if 65584 * (st[0] % 200) + 65584 > len(buf) { buf = crate::turns::grow(buf, st[0]); }
-        feed(inout st, inout sl, inout buf, prompt, created, ans, text, completed, tools);
+        feed(inout st, inout sl, inout bk, prompt, created, ans, text, completed, tools);
         fed = fed + 1;
       }
     }
   }
-  return crate::turns::finish(st, sl, buf, base);
+  return crate::turns::finish2(st, sl, inout bk, base);
 }
 
 fn put_str(inout dst: [u8], at: i64, s: str) -> ()
