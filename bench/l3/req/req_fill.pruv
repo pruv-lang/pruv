@@ -100,19 +100,65 @@ pub fn view_strs_ok(cpool: [i64], cr: [i64]) -> bool
   return true;
 }
 
+// DB22 (D-DB18-3 P5): trim(collapse(units(pool, w, p))) cut to its first 82 units, read in 128-unit parts so the
+// title does not decode the whole source. The first min(81, len) units equal those of the full form.
+fn title_head(pool: [i64], w: [i64], p: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let nb: i64 = crate::ent_value::pstr_part_bytes(w, p);
+  let mut o: [i64] = crate::ent_u16::zeros(82);
+  let mut k: i64 = 0;
+  // Start as if after whitespace, so leading whitespace is dropped (the trim of the collapsed text).
+  let mut inws: bool = true;
+  let mut pos: i64 = 0;
+  while pos < nb && k < 82
+    invariant 0 <= pos && pos <= nb && nb <= 1073741823 && 0 <= k && k <= 82
+    decreases nb - pos
+  {
+    let mut step: i64 = crate::ent_value::pstr_chunk_bytes(pool, w, p, pos, 128);
+    if step <= 0 || step > nb - pos { step = nb - pos; }
+    let part: [i64] = crate::ent_value::pstr_part(pool, w, p, pos, step);
+    let m: i64 = len(part);
+    let mut i: i64 = 0;
+    while i < m && k < 82
+      invariant 0 <= i && i <= m && m == len(part) && 0 <= k && k <= 82
+      decreases m - i
+    {
+      let u: i64 = part[i];
+      if crate::ent_u16::is_trim_unit(u) {
+        if !inws {
+          crate::ent_u16::wr(inout o, k, 32);
+          k = k + 1;
+          inws = true;
+        }
+      } else {
+        crate::ent_u16::wr(inout o, k, u);
+        k = k + 1;
+        inws = false;
+      }
+      i = i + 1;
+    }
+    pos = pos + step;
+  }
+  while k > 0 && crate::ent_u16::is_trim_unit(crate::ent_u16::rd(o, k - 1))
+    invariant 0 <= k && k <= 82
+    decreases k
+  { k = k - 1; }
+  return crate::ent_u16::slice(o, 0, k);
+}
+
 // (external.title || turns[0]?.prompt || '').replace(/\s+/g,' ').trim().slice(0,80) || basename(folder) || folder
 pub fn title_pool(cpool: [i64], cr: [i64], folder: [i64], inout slots: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0 && len(slots) == len(old(slots))
 {
-  let mut raw: [i64] = crate::ent_u16::empty();
+  let mut t: [i64] = crate::ent_u16::empty();
   if crate::req_value::truthy(cr, 1) {
-    raw = crate::req_value::units(cpool, cr, 1);
+    t = title_head(cpool, cr, 1);
   } else {
     if crate::ent_u16::rd(cr, 10) > 0 && crate::req_value::truthy(cr, 11) {
-      raw = crate::req_value::units(cpool, cr, 11);
+      t = title_head(cpool, cr, 11);
     }
   }
-  let t: [i64] = crate::ent_u16::trim(collapse(raw));
   if len(t) > 0 {
     // Include the unit after the cut so a pair that crosses it remains one form.
     let n: i64 = crate::ent_u16::clamp(81, len(t));

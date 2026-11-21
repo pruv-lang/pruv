@@ -135,7 +135,9 @@ fn list_recipe(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
   let cap: i64 = crate::ent_u16::clamp(nb + 601 * copies, 1073741823);
   let mut pool: [i64] = alloc(crate::ent_value::pool_capacity(cap), 0);
   if reuse {
-    let start: i64 = crate::ent_value::append_span(inout pool, 0, cx.ent, ps, 0, nb, nu);
+    // DB22 (D-DB18-3 P1): the retained source pool is copied by whole words, not byte by byte (same header and bytes
+    // as an append into the empty pool: nb bytes, clamp(nu, nb) units, cleared padding).
+    crate::ent_value::copy_pool_prefix(inout pool, 0, cx.ent, ps, nb, crate::ent_u16::clamp(nu, nb));
   }
   let mut j: i64 = 0;
   while j < cnt

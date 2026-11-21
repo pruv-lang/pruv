@@ -30,26 +30,36 @@ def case(id):
     raise KeyError(id)
 
 
-def run(c, tamper=None, dump=None):
+def run(c, tamper=None, dump=None, *, harness=BIN):
     env = dict(os.environ)
     env.pop('FORGE_TAMPER', None); env.pop('FORGE_DUMP', None)
     if tamper is not None: env['FORGE_TAMPER'] = json.dumps(tamper)
     if dump: env['FORGE_DUMP'] = dump
-    p = subprocess.run([BIN], input=json.dumps(c), capture_output=True, text=True, env=env)
+    p = subprocess.run([harness], input=json.dumps(c), capture_output=True, text=True, env=env)
     lines = p.stdout.strip().splitlines()
     return json.loads(lines[-1]) if lines else {'crash': p.stderr[-300:]}
 
 
-def capture(id):
-    if id not in _cache:
+def capture(id, *, harness=BIN):
+    key = (harness, id)
+    if key not in _cache:
         f = tempfile.mktemp(suffix='.jsonl')
-        obs = run(case(id), dump=f)
+        obs = run(case(id), dump=f, harness=harness)
         recs = [json.loads(l) for l in open(f)]
         os.remove(f)
         packets = {d['n']: d for d in recs if d['kind'] == 'step'}
         packets[0] = next(d for d in recs if d['kind'] == 'begin')
-        _cache[id] = (obs, packets)
-    return _cache[id]
+        _cache[key] = (obs, packets)
+    return _cache[key]
+
+
+def well_formed(pk):
+    """verdict mode: a core packet with a header, a non-zero kind, at least one section and a section table that fits."""
+    if len(pk) < HDR or pk[2] == 0: return False
+    n = pk[24]
+    if n < 1 or HDR + n > len(pk): return False
+    lens = pk[HDR:HDR + n]
+    return all(l >= 0 for l in lens) and HDR + n + sum(lens) <= len(pk)
 
 
 def secs(pk):
@@ -86,19 +96,24 @@ def comp_pool(fn):
     return m
 
 
-def begin_pool(id, fn):
-    _, packets = capture(id)
+def begin_pool(id, fn, *, harness=BIN, verdict=False):
+    """verdict: return 'refused', 'accepted' (a well-formed non-reject core packet) or 'other' instead of a bool."""
+    _, packets = capture(id, harness=harness)
     begin = packets[0]
     forged = sec_edit(begin['comp'], 0, fn)
     with tempfile.TemporaryDirectory() as tmp:
         dump = os.path.join(tmp, 'begin.jsonl')
-        obs = run(case(id), {'at': 0, 'input': forged}, dump=dump)
+        obs = run(case(id), {'at': 0, 'input': forged}, dump=dump, harness=harness)
         with open(dump) as f:
             out = json.loads(next(f))['out']
     if len(out) < 4 or out[0] != 1381057073:
-        return False
+        return 'other' if verdict else False
     world_end = 4 + out[2]
     pk = out[world_end:]
+    if verdict:
+        if not well_formed(pk): return 'other'
+        if pk[2] == 3 and secs(pk)[1] == [5, 0]: return 'refused'
+        return 'accepted'
     return (out[4:world_end] == begin['world'] and len(pk) >= HDR and pk[2] == 3
             and secs(pk)[1] == [5, 0] and rejected(obs) and n_rejects(obs) == 1)
 
@@ -132,18 +147,22 @@ def tamper_run(id, n, mut):
     return run(case(id), {'at': n, 'world': w, 'prev': p, 'comp': c})
 
 
-def core_refused(id, n, mut, strict=False):
+def core_refused(id, n, mut, strict=False, *, harness=BIN, verdict=False):
     """re-run the forgery with a dump and check what sol::req_step itself returned for the forged step n.
-    strict: only an explicit reject record (5, 0) counts, not a malformed core output."""
-    obs, steps = capture(id)
+    strict: only an explicit reject record (5, 0) counts, not a malformed core output.
+    verdict: return 'refused', 'accepted' (a well-formed non-reject core packet) or 'other' instead."""
+    obs, steps = capture(id, harness=harness)
     d = steps[n]
     w, p, c = mut(list(d['world']), list(d['prev']), list(d['comp']), steps, n)
     f = tempfile.mktemp(suffix='.jsonl')
-    run(case(id), {'at': n, 'world': w, 'prev': p, 'comp': c}, dump=f)
+    run(case(id), {'at': n, 'world': w, 'prev': p, 'comp': c}, dump=f, harness=harness)
     out = [json.loads(l) for l in open(f) if json.loads(l)['n'] == n and json.loads(l)['kind'] == 'step'][0]['out']
     os.remove(f)
-    if len(out) < 4 or out[0] != 1381057073: return False if strict else 'core'
+    if len(out) < 4 or out[0] != 1381057073: return 'other' if verdict else (False if strict else 'core')
     ww = out[2]; world, pk = out[4:4 + ww], out[4 + ww:]
+    if verdict:
+        if not well_formed(pk): return 'other'
+        return 'refused' if pk[2] == 3 and secs(pk)[1] == [5, 0] else 'accepted'
     if ww >= 3 and world[2] == w[2] + 1:
         # a complete, self-consistent old triple (world included) is fresh to the core; only the driver's freshness
         # rule (result generation must be its latest honest generation + 1) can refuse it
