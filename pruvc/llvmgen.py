@@ -565,7 +565,7 @@ def st(t, c=False):
         x = st(t.args[0], c)
         if n == "option":
             return "{ i1, %s }" % x
-        return "{ i1, %s, %s }" % (x, "i128" if c else "i64")
+        return "{ i1, %s, %s }" % (x, st(result_error(t), c))   # LG12: L(E) error slot (i64 for Result<X>)
     if n == "i64":
         return "i128" if c else "i64"
     if n == "bool":
@@ -605,7 +605,7 @@ def words(tt, ty):
     if n in ("i64", "bool"):
         r = 1
     elif gopt(ty):  # G3: 1 + W(X) (+ 1 for the Result error word)
-        r = 1 + words(tt, ty.args[0]) + (1 if n == "result" else 0)
+        r = 1 + words(tt, ty.args[0]) + (words(tt, result_error(ty)) if n == "result" else 0)
     elif n in ("option", "result"):
         r = 2
     else:
@@ -1516,8 +1516,7 @@ class FnGen:
             acc = s.op("insertvalue %s zeroinitializer, i1 true, 0" % st(ty, c))
             return V("agg", s.put(acc, ty, 1, x, ty.args[0], c), None, ty)
         # Err: tag false (zero), error payload in slot 2
-        return V("agg", s.op("insertvalue %s zeroinitializer, %s %s, 2" % (st(ty, c), "i128" if c else "i64", x.a)),
-                 None, ty)
+        return V("agg", s.put("zeroinitializer", ty, 2, x, result_error(ty), c), None, ty)
 
     def gmatch(s, st_, sv):
         """match on a new Option<X>/Result<X>: branch on the tag, bind the active payload only inside its arm"""
@@ -1536,7 +1535,7 @@ class FnGen:
                 if arm.ctor in ("Some", "Ok"):
                     bind = {arm.binders[0]: ("ssa", s.get(sv, ty, 1, X, False))}
                 else:
-                    bind = {arm.binders[0]: ("ssa", V("i64", s.op("extractvalue %s %s, 2" % (st(ty), sv.a))))}
+                    bind = {arm.binders[0]: ("ssa", s.get(sv, ty, 2, result_error(ty), False))}
             if s.run_block(arm.body, bind):
                 s.br(end)
                 reach = True
@@ -1570,9 +1569,8 @@ class FnGen:
             acc = s.op("insertvalue %s zeroinitializer, i1 %s, 0" % (st(ty, True), t))
             acc = s.put(acc, ty, 1, s.to_c(s.get(x, ty, 1, X, False), X), X, True)
             if n == "result":
-                er = s.op("extractvalue %s %s, 2" % (st(ty), x.a))
-                ec = s.op("sext i64 %s to i128" % er)
-                acc = s.op("insertvalue %s %s, i128 %s, 2" % (st(ty, True), acc, ec))
+                E = result_error(ty)
+                acc = s.put(acc, ty, 2, s.to_c(s.get(x, ty, 2, E, False), E), E, True)
             return V("agg", acc, None, ty)
         if n in ("option", "result"):
             return V("opt", x.a, s.op("sext i64 %s to i128" % x.b))
@@ -1623,9 +1621,8 @@ class FnGen:
             nt = s.op("xor i1 %s, true" % tl)
             if n == "option":
                 return s.op("and i1 %s, %s" % (te, s.op("or i1 %s, %s" % (nt, pe))))
-            el = s.op("extractvalue %s %s, 2" % (T, l.a))
-            er = s.op("extractvalue %s %s, 2" % (T, r.a))
-            ee = s.op("icmp eq i128 %s, %s" % (el, er))
+            E = result_error(ty)
+            ee = s.ceq(s.get(l, ty, 2, E, True), s.get(r, ty, 2, E, True), E)
             act = s.op("or i1 %s, %s" % (s.op("and i1 %s, %s" % (tl, pe)), s.op("and i1 %s, %s" % (nt, ee))))
             return s.op("and i1 %s, %s" % (te, act))
         if n in ("option", "result"):
@@ -3202,8 +3199,8 @@ class FnGen:
                     x = s.g9_real(e.arg, px)
                     acc = s.op("insertvalue %s zeroinitializer, i1 true, 0" % st(t))
                     return V("agg", s.put(acc, t, 1, x, px, False), None, t)
-                x = s.g9_real(e.arg, I64)
-                return V("agg", s.op("insertvalue %s zeroinitializer, i64 %s, 2" % (st(t), x.a)), None, t)
+                x = s.g9_real(e.arg, result_error(t))
+                return V("agg", s.put("zeroinitializer", t, 2, x, result_error(t), False), None, t)
             if e.name == "None":
                 return V("opt", "false", "0")
             x = s.g9_real(e.arg, px if e.name != "Err" else I64)
@@ -3542,7 +3539,7 @@ class FnGen:
                     tag = s.op("extractvalue %s %s, 0" % (T, o.a))
                     if n == "err_val":
                         s.guard(tag, und("err_val of Ok"), True)
-                        return V("i128", s.op("extractvalue %s %s, 2" % (T, o.a)))
+                        return s.get(o, o.ty, 2, result_error(o.ty), True)
                     s.guard(tag, und("some_val of None" if n == "some_val" else "ok_val of Err"), False)
                     return s.get(o, o.ty, 1, o.ty.args[0], True)
                 if n == "err_val":
@@ -4059,7 +4056,7 @@ def g9_node_texts(m, tt, d):
 def g9_walks(t):
     """size / equality walk into t: a nominal value, or Option / Result of one"""
     if gopt(t):
-        return g9_walks(t.args[0])
+        return g9_walks(t.args[0]) or (t.name == "result" and g9_walks(result_error(t)))
     return is_user_type(t)
 
 
@@ -4067,6 +4064,22 @@ def g9_weight(g, t, p, bud="%bud"):
     """i128 SSA value of weight(value stored at p) (G9_SPEC 3), or None when it is statically 0.  Some / Ok weigh their
     payload, None / Err 0; a nominal value weighs its size (one budget unit per node, inside pruv_csize).  bud is the
     budget pointer the size helper charges."""
+    if gopt(t) and t.name == "result" and g9_walks(result_error(t)):    # LG12: Ok weighs X, Err weighs E
+        X, E = t.args[0], result_error(t)
+        T = st(t)
+        tag = g.op("load i1, ptr %s" % g9_gep(g, T, p, 0))
+        lcur, yes, no, end = g.cur, g.label("gwy"), g.label("gwn"), g.label("gwe")
+        g.condbr(tag, yes, no)
+        g.place(yes)
+        w = g9_weight(g, X, g9_gep(g, T, p, 1), bud) or "0"
+        wcur = g.cur
+        g.br(end)
+        g.place(no)
+        we = g9_weight(g, E, g9_gep(g, T, p, 2), bud) or "0"
+        ecur = g.cur
+        g.br(end)
+        g.place(end)
+        return g.op("phi i128 [ %s, %%%s ], [ %s, %%%s ]" % (w, wcur, we, ecur))
     if gopt(t):
         X = t.args[0]
         if not g9_walks(X):
@@ -4145,9 +4158,12 @@ def g9_eq_val(g, t, pa, pb):
         l2cur = g.cur
         g.br(lend)
         g.place(l3)
-        ea = g.op("load i64, ptr %s" % g9_gep(g, T, pa, 2))
-        eb = g.op("load i64, ptr %s" % g9_gep(g, T, pb, 2))
-        e3 = g.op("icmp eq i64 %s, %s" % (ea, eb))
+        if result_error(t) == I64:
+            ea = g.op("load i64, ptr %s" % g9_gep(g, T, pa, 2))
+            eb = g.op("load i64, ptr %s" % g9_gep(g, T, pb, 2))
+            e3 = g.op("icmp eq i64 %s, %s" % (ea, eb))
+        else:   # LG12: the error payloads of type E
+            e3 = g9_eq_val(g, result_error(t), g9_gep(g, T, pa, 2), g9_gep(g, T, pb, 2))
         l3cur = g.cur
         g.br(lend)
         g.place(lend)
@@ -4266,7 +4282,7 @@ class Words:
         if r is None:
             if gopt(ty):
                 x = s.S(ty.args[0])
-                r = "{ i1, %s }" % x if ty.name == "option" else "{ i1, %s, i64 }" % x
+                r = "{ i1, %s }" % x if ty.name == "option" else "{ i1, %s, %s }" % (x, s.S(result_error(ty)))
             else:
                 r = st(ty)
             s.stm[ty] = r
@@ -4369,13 +4385,20 @@ class Words:
             x = s.de_new(X, ptr, off + 1, t)
             acc = s.op("insertvalue %s zeroinitializer, i1 %s, 0" % (T, t))
             acc = s.op("insertvalue %s %s, %s %s, 1" % (T, acc, s.S(X), x))
-            if n == "result":
+            if n == "result" and result_error(ty) == I64:
                 ew = s.rd(ptr, off + 1 + words(s.tt, X))
                 ea = s.op("xor i1 %s, true" % t)
                 if on:
                     ea = s.op("and i1 %s, %s" % (act, ea))
                 e = s.op("select i1 %s, i64 %s, i64 0" % (ea, ew))
                 acc = s.op("insertvalue %s %s, i64 %s, 2" % (T, acc, e))
+            elif n == "result":     # LG12: an error payload of type E, active when the tag is clear
+                E = result_error(ty)
+                ea = s.op("xor i1 %s, true" % t)
+                if on:
+                    ea = s.op("and i1 %s, %s" % (act, ea))
+                e = s.de_new(E, ptr, off + 1 + words(s.tt, X), ea)
+                acc = s.op("insertvalue %s %s, %s %s, 2" % (T, acc, s.S(E), e))
             return acc
         if n in ("option", "result"):       # legacy Option<i64>/Result<i64> nested in a G3 value
             t = s.op("icmp ne i64 %s, 0" % s.rd(ptr, off))
@@ -4438,13 +4461,12 @@ class Words:
                 t = s.op("and i1 %s, %s" % (act, t))
             s.wr(ptr, off, s.op("zext i1 %s to i64" % t))
             s.ser_new(X, s.op("extractvalue %s %s, 1" % (T, x)), ptr, off + 1, t)
-            if n == "result":
+            if n == "result":   # LG12: the error payload of type E (one i64 word for Result<X>)
                 e = s.op("extractvalue %s %s, 2" % (T, x))
                 ea = s.op("xor i1 %s, true" % t)
                 if on:
                     ea = s.op("and i1 %s, %s" % (act, ea))
-                e = s.op("select i1 %s, i64 %s, i64 0" % (ea, e))
-                s.wr(ptr, off + 1 + words(s.tt, X), e)
+                s.ser_new(result_error(ty), e, ptr, off + 1 + words(s.tt, X), ea)
         elif n in ("option", "result"):      # legacy Option<i64>/Result<i64> nested in a G3 value
             t = s.op("extractvalue %s %s, 0" % (OPT, x))
             p = s.op("extractvalue %s %s, 1" % (OPT, x))
@@ -4804,8 +4826,9 @@ def rs_ser(tt, ty, expr, arr, off, ctr):
         if n == "option":
             return ["match %s { Some(%s) => { %s[%d] = 1; %s } None => { %s[%d] = 0; } }"
                     % (expr, v, arr, off, inner, arr, off)]
-        return ["match %s { Ok(%s) => { %s[%d] = 1; %s } Err(%s) => { %s[%d] = 0; %s[%d] = %s; } }"
-                % (expr, v, arr, off, inner, v, arr, off, arr, off + 1 + words(tt, ty.args[0]), v)]
+        err = " ".join(rs_ser(tt, result_error(ty), v, arr, off + 1 + words(tt, ty.args[0]), ctr))  # LG12: E words
+        return ["match %s { Ok(%s) => { %s[%d] = 1; %s } Err(%s) => { %s[%d] = 0; %s } }"
+                % (expr, v, arr, off, inner, v, arr, off, err)]
     if n in ("option", "result"):
         ctr[0] += 1
         v = "pruv__b%d" % ctr[0]
@@ -4847,7 +4870,8 @@ def rs_de(tt, ty, arr, off):
         x = rs_de(tt, ty.args[0], arr, off + 1)
         if n == "option":
             return "(if %s[%d] != 0 { Some(%s) } else { None })" % (arr, off, x)
-        return "(if %s[%d] != 0 { Ok(%s) } else { Err(%s[%d]) })" % (arr, off, x, arr, off + 1 + words(tt, ty.args[0]))
+        e = rs_de(tt, result_error(ty), arr, off + 1 + words(tt, ty.args[0]))     # LG12: E words
+        return "(if %s[%d] != 0 { Ok(%s) } else { Err(%s) })" % (arr, off, x, e)
     if n == "option":
         return "(if %s[%d] != 0 { Some(%s[%d]) } else { None })" % (arr, off, arr, off + 1)
     if n == "result":
@@ -5649,8 +5673,8 @@ def _is_coll_fn(f):
 
 def _typed_result_in(node, specialized_args):
     if isinstance(node, Type):
-        if node.owner is None and node.name == "result" and len(node.args) == 2:
-            return node
+        if node.owner is None and node.name == "result" and len(node.args) == 2 and node.args[1] == Type("string"):
+            return node     # LG12: value error types are laid out; an owned String error is not yet (G-LG11-2)
         # Lowered nominal applications keep their arguments in the specialization plan.
         children = node.args or specialized_args.get(node.name, ())
     elif isinstance(node, (list, tuple)):
