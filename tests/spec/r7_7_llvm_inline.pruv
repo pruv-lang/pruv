@@ -1,0 +1,12 @@
+// spec: R-7-7 accept
+// A small body called twice gets alwaysinline in the LLVM IR.
+fn twice(x: i64) -> i64
+  requires 0 <= x && x <= 1000
+  ensures result == x + x
+{
+  return x + x;
+}
+
+fn main() -> () ! io {
+  print(twice(1) + twice(2));
+}

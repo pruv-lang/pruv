@@ -1,0 +1,10 @@
+// --no-verify: a source range past the end fails the source range check (after the destination check passes)
+fn mv(inout a: [i64], dst: i64, src: i64, n: i64) -> () {
+  copy_within(inout a, dst, src, n);
+}
+fn run() -> () ! io, alloc {
+  let mut a: [i64] = alloc(4, 1);
+  print(1);
+  mv(inout a, 0, 3, 2);
+  print(3);
+}

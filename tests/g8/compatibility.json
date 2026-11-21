@@ -17,14 +17,14 @@
     "exit": 0,
     "stdout": "{\"ok\": true}\n",
     "stderr": "",
-    "output": "be01c7bc6bd498fa14d23a1559ab36c9e6226d5e9976c54cb2fafd61f99a55c4",
+    "output": "32848b27592154dcabce4993479098353753b738beaf2490ac8c25c53dea19ae",
     "bindings": "d0eb5a031ea4321bd24638ba93ea259c63d57b284bfcdb8c626ae78ef094b1e1"
   },
   "legacy/llvm/safe": {
     "exit": 0,
     "stdout": "{\"ok\": true}\n",
     "stderr": "",
-    "output": "be01c7bc6bd498fa14d23a1559ab36c9e6226d5e9976c54cb2fafd61f99a55c4",
+    "output": "32848b27592154dcabce4993479098353753b738beaf2490ac8c25c53dea19ae",
     "bindings": "d0eb5a031ea4321bd24638ba93ea259c63d57b284bfcdb8c626ae78ef094b1e1"
   },
   "modules/rust/default": {
@@ -45,14 +45,14 @@
     "exit": 0,
     "stdout": "{\"ok\": true}\n",
     "stderr": "",
-    "output": "717d0a17a2400cbbb8032621daa8977c1a9221288204ca8c0c716751410e0c7c",
+    "output": "f309edae48a4f9e70ac274d53eecebaa3520dc8ff3acd04d25bbfc8fc6209fe0",
     "bindings": "d0eb5a031ea4321bd24638ba93ea259c63d57b284bfcdb8c626ae78ef094b1e1"
   },
   "modules/llvm/safe": {
     "exit": 0,
     "stdout": "{\"ok\": true}\n",
     "stderr": "",
-    "output": "717d0a17a2400cbbb8032621daa8977c1a9221288204ca8c0c716751410e0c7c",
+    "output": "f309edae48a4f9e70ac274d53eecebaa3520dc8ff3acd04d25bbfc8fc6209fe0",
     "bindings": "d0eb5a031ea4321bd24638ba93ea259c63d57b284bfcdb8c626ae78ef094b1e1"
   },
   "diagnostic/rust/default": {

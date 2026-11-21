@@ -1,0 +1,25 @@
+// copy_within(inout a, dst, src, n): overlap-safe move inside one array (memmove), [i64] and [u8].
+fn run() -> () ! io, alloc {
+  let mut a: [i64] = alloc(6, 0);
+  a[0] = 1; a[1] = 2; a[2] = 3; a[3] = 4; a[4] = 5; a[5] = 6;
+  copy_within(inout a, 1, 0, 4);
+  print(a[0]);
+  print(a[1]);
+  print(a[2]);
+  print(a[3]);
+  print(a[4]);
+  print(a[5]);
+  copy_within(inout a, 0, 2, 4);
+  print(a[0]);
+  print(a[1]);
+  print(a[2]);
+  print(a[3]);
+  copy_within(inout a, 6, 0, 0);
+  let mut s: [u8] = alloc(4, 0);
+  s[0] = 200; s[1] = 7; s[2] = 9; s[3] = 1;
+  copy_within(inout s, 0, 1, 3);
+  print(s[0]);
+  print(s[1]);
+  print(s[2]);
+  print(s[3]);
+}

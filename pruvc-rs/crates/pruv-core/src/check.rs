@@ -448,7 +448,7 @@ fn set_ty(e: &mut Expr, t: &GType) {
 /// G5: does the full syntax of e (every operand, reachable or not) mention the binding `name`?
 fn collection_catalog(name: &str) -> bool {
     matches!(name, "vec_new" | "vec_push" | "vec_get" | "map_new" | "map_insert"
-        | "map_get" | "map_get_mut" | "map_remove" | "map_take" | "vec_at_mut" | "vec_clear" | "vec_extend_from_slice")
+        | "map_get" | "map_get_mut" | "map_remove" | "map_take" | "vec_at_mut" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice")
 }
 
 pub(crate) fn place_root(e: &Expr) -> Option<&str> {
@@ -584,7 +584,7 @@ impl Checker {
             if funcs.contains_key(&name) {
                 return Err(terr(f.line, f.col, "dup_fn", format!("function {} defined twice", name), ""));
             }
-            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range" | "resize" | "copy_range")
+            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within")
                 || is_bit_builtin(&name)
                 || is_word_builtin(&name)
                 || contract_only(&name).is_some()
@@ -2385,7 +2385,7 @@ impl Checker {
         let mut effect_before = false;
         for (call, conditional) in calls {
             let f = self.funcs.get(&call.name);
-            if f.is_some() || matches!(call.name.as_str(), "map_remove" | "map_take" | "vec_clear" | "vec_extend_from_slice") {
+            if f.is_some() || matches!(call.name.as_str(), "map_remove" | "map_take" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice") {
                 let marked: Vec<&crate::ast::InoutArg> = call
                     .args
                     .iter()
@@ -2811,7 +2811,7 @@ impl Checker {
                     format!("{} returns {}: a par branch must return ()", n, tn(&f.ret)),
                     "call a unit Pruv helper and pass results back through whole inout arrays"));
             }
-        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range", "resize", "copy_range"].contains(&n.as_str())
+        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range", "resize", "copy_range", "copy_within"].contains(&n.as_str())
             || is_bit_builtin(n)
             || is_word_builtin(n)
             || contract_only(n).is_some() || is_catalog(n) || (n == "old" && self.uses_inout)
@@ -4006,7 +4006,7 @@ impl Checker {
     fn inout_args(&mut self, e: &mut Call, f: &FuncInfo, m: &Mapping, scope: &Scope, c: bool) -> Res<()> {
         let n = e.name.clone();
         let user_call = self.funcs.contains_key(&n);
-        let collection_place = !user_call && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "map_take" | "vec_clear" | "vec_extend_from_slice");
+        let collection_place = !user_call && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "map_take" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice");
         let mut marked = Vec::new();
         for i in 0..e.args.len().min(f.params.len()) {
             let want = substitute(&f.params[i], m);
@@ -4283,16 +4283,17 @@ impl Checker {
         Ok(if store { unitt() } else { i64t() })
     }
 
-    /// L-copy-range: copy_range(inout dst, i, src, j, n) -> (), a whole expression statement (check.py copy_range_call).
-    /// dst is a `let mut` local array or an inout parameter of type [i64] or [u8]; src has the same type; i, j, n are i64.
-    /// Same-array aliasing (src mentions dst) is rejected with the existing inout_alias rule, as for store_be.
+    /// R-5-1 and R-5-2: range copy statements with an inout integer array destination.
     fn copy_range_call(&mut self, e: &mut Call, scope: &Scope, c: bool) -> Res<GType> {
         let (line, col) = (e.line, e.col);
+        let within = e.name == "copy_within";
+        let builtin = e.name.as_str();
+        let arity = if within { 4 } else { 5 };
         if c {
-            return Err(terr(line, col, "effect_in_contract", "copy_range is not allowed in contracts", ""));
+            return Err(terr(line, col, "effect_in_contract", format!("{builtin} is not allowed in contracts"), ""));
         }
-        if e.args.len() != 5 {
-            return Err(terr(line, col, "arity", format!("copy_range takes 5 argument(s), got {}", e.args.len()), ""));
+        if e.args.len() != arity {
+            return Err(terr(line, col, "arity", format!("{builtin} takes {arity} argument(s), got {}", e.args.len()), ""));
         }
         let (aline, acol) = (e.args[0].line(), e.args[0].col());
         let name: String;
@@ -4305,8 +4306,9 @@ impl Checker {
                         aline,
                         acol,
                         "inout_argument",
-                        "the destination array of copy_range needs the `inout` marker",
-                        "write `copy_range(inout name, i, src, j, n)` with a `let mut` local array or an inout parameter",
+                        format!("the destination array of {builtin} needs the `inout` marker"),
+                        if within { "write `copy_within(inout name, dst, src, n)` with a `let mut` local array or an inout parameter" }
+                        else { "write `copy_range(inout name, i, src, j, n)` with a `let mut` local array or an inout parameter" },
                     ))
                 }
             };
@@ -4369,16 +4371,19 @@ impl Checker {
             dty = v.ty.clone();
         }
         self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
-        self.expect(&mut e.args[2], &dty, scope, c, None)?;
+        self.expect(&mut e.args[2], &if within { i64t() } else { dty }, scope, c, None)?;
         self.expect(&mut e.args[3], &i64t(), scope, c, None)?;
-        self.expect(&mut e.args[4], &i64t(), scope, c, None)?;
+        if !within {
+            self.expect(&mut e.args[4], &i64t(), scope, c, None)?;
+        }
         if e.args[1..].iter().any(|x| mentions(x, &name)) {
             return Err(terr(
                 aline,
                 acol,
                 "inout_alias",
                 format!("{} is passed inout and also used elsewhere in the arguments of this call", name),
-                format!("copy the source first with `let mut t: [..] = copy({});` (needs alloc), then pass t", name),
+                if within { "compute the index arguments before the call".to_string() }
+                else { format!("copy the source first with `let mut t: [..] = copy({});` (needs alloc), then pass t", name) },
             ));
         }
         if self.boundary != Some(&*e as *const Call as usize) {
@@ -4386,8 +4391,9 @@ impl Checker {
                 line,
                 col,
                 "inout_context",
-                "copy_range must be a whole expression statement",
-                "write `copy_range(inout dst, i, src, j, n);` as a statement",
+                format!("{builtin} must be a whole expression statement"),
+                if within { "write `copy_within(inout a, dst, src, n);` as a statement" }
+                else { "write `copy_range(inout dst, i, src, j, n);` as a statement" },
             ));
         }
         Ok(unitt())
@@ -4555,7 +4561,7 @@ impl Checker {
             }
             Ok(())
         };
-        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range" | "resize" | "copy_range")
+        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within")
             || is_bit_builtin(&n)
             || is_word_builtin(&n);
         let is_old = n == "old" && self.uses_inout && !self.funcs.contains_key(&n); // G5 A0: contextual builtin
@@ -4649,7 +4655,7 @@ impl Checker {
             // P2 batch 4: load_be / store_be
             _ if is_word_builtin(&n) => return self.word_call(e, scope, c),
             // L-copy-range: copy_range(inout dst: [T], i, src: [T], j, n), a statement, T an integer element type
-            "copy_range" => return self.copy_range_call(e, scope, c),
+            "copy_range" | "copy_within" => return self.copy_range_call(e, scope, c),
             // L3-10: eq_range(a: [T], i, b: [T], j, n) -> bool, code only, T an integer element type
             "eq_range" => {
                 if c {
@@ -4757,7 +4763,7 @@ impl Checker {
         if cat.is_some() && n == "map_take" && self.read_context != call_site {
             return Err(terr(line, col, "foreign_contract", "map_take is only allowed as a direct match scrutinee", ""));
         }
-        if cat.is_some() && matches!(n.as_str(), "vec_clear" | "vec_extend_from_slice") && !c && self.statement_call != call_site {
+        if cat.is_some() && matches!(n.as_str(), "vec_clear" | "vec_reserve" | "vec_extend_from_slice") && !c && self.statement_call != call_site {
             return Err(terr(line, col, "inout_context", format!("{n} must be a whole expression statement"), ""));
         }
         let f: Rc<FuncInfo> = if let Some(cf) = &cat {
@@ -4786,7 +4792,7 @@ impl Checker {
                 col: 0,
                 params: cf.params.iter().map(|p| p.ty.clone()).collect(),
                 pnames: cf.params.iter().map(|p| p.name.to_string()).collect(),
-                inout: (0..cf.params.len()).map(|i| i == 0 && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "map_take" | "vec_clear" | "vec_extend_from_slice")).collect(),
+                inout: (0..cf.params.len()).map(|i| i == 0 && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "map_take" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice")).collect(),
                 ret: cf.ret.clone(),
                 effects: cf.effects.clone(),
                 tparams: cf.tparams.clone(),
@@ -5451,6 +5457,23 @@ mod tests {
     }
 
     // L-copy-range: accepted forms
+    #[test]
+    fn copy_within_checks() {
+        assert!(run("fn f(inout a: [u8]) -> () { copy_within(inout a, 1, 0, 2); }").is_ok());
+        assert!(run("fn f(inout a: [i64]) -> () { copy_within(inout a, 1, 0, 2); }").is_ok());
+        let cases = [
+            ("fn f(inout a: [u8]) -> () { copy_within(inout a, 1, 0); }", "arity"),
+            ("fn f(a: [u8]) -> () { copy_within(a, 1, 0, 2); }", "inout_argument"),
+            ("fn f(inout a: [bool]) -> () { copy_within(inout a, 1, 0, 2); }", "type_mismatch"),
+            ("fn f(inout a: [u8]) -> () { copy_within(inout a, 1, len(a), 2); }", "inout_alias"),
+            ("fn f(inout a: [u8]) -> i64 { return 1 + copy_within(inout a, 1, 0, 2); }", "inout_context"),
+            ("fn f(inout a: [u8]) -> () requires copy_within(a, 1, 0, 2) == 0 { return; }", "effect_in_contract"),
+        ];
+        for (src, code) in cases {
+            assert_eq!(run(src).unwrap_err().code, code, "{src}");
+        }
+    }
+
     #[test]
     fn copy_range_checks_as_a_statement() {
         assert!(run("fn f(inout d: [u8], s: [u8]) -> () { copy_range(inout d, 0, s, 1, 2); }").is_ok());

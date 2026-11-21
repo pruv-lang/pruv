@@ -1,0 +1,7 @@
+// spec: R-5-2 reject
+// Only src + n <= len(a) is not proved.
+pub fn f(inout a: [i64], dst: i64, src: i64, n: i64) -> ()
+  requires 0 <= dst && 0 <= src && 0 <= n && dst + n <= len(a)
+{
+  copy_within(inout a, dst, src, n);
+}

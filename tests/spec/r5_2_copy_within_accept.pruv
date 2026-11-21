@@ -1,0 +1,18 @@
+// spec: R-5-2 accept
+// An overlapping move inside one array: the fact reads the old array, so the shifted values are known.
+pub fn shift_left(inout a: [i64], k: i64) -> ()
+  requires 0 <= k && k <= len(a)
+  ensures len(a) == len(old(a))
+  ensures forall p in 0..len(a) - k: a[p] == old(a)[p + k]
+{
+  let l: i64 = len(a);
+  copy_within(inout a, 0, k, l - k);
+}
+
+pub fn shift_right8(inout a: [u8]) -> ()
+  requires 2 <= len(a)
+  ensures a[1] == old(a)[0] && a[0] == old(a)[0]
+{
+  let l: i64 = len(a);
+  copy_within(inout a, 1, 0, l - 1);
+}

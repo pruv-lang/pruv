@@ -1,0 +1,7 @@
+// spec: R-5-2 reject
+// An index argument reads the moved array (len(a)): inout_alias; bind the length first.
+pub fn f(inout a: [i64]) -> ()
+  requires 2 <= len(a)
+{
+  copy_within(inout a, 0, 1, len(a) - 1);
+}

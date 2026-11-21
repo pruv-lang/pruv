@@ -154,6 +154,18 @@ it can never be silently dropped.
   (accept: `_u8`, `_i64`, `_zero`, `_eq`, `_caller`; reject: `_i`, `_j`, `_n`, `_dst_end`, `_src_end`, `_order`,
   `_type`, `_nonarray`, `_noinout`, `_contract`, `_expr`, `_alias`, `_idx_alias`, `_fact_outside`, `_fact_nocopy`),
   `tests/runtime/l3_rt_copy_range*.pruv`.
+- `copy_within(inout a, dst, src, n);` (R-5-2): an overlap-safe move inside one array (memmove). Same statement,
+  place, type, contract and name rules as `copy_range` (`a` is `[i64]` or `[u8]`, `dst, src, n: i64`). It sets
+  `a[dst..dst+n]` to the old `a[src..src+n]`, even when the two ranges overlap, and leaves every other element and
+  `len(a)` unchanged. The verifier must prove, in this order, `0 <= dst`, `0 <= src`, `0 <= n`, `dst + n <= len(a)`,
+  `src + n <= len(a)` (`verify` error `index_oob`, first failure only), and then knows the array-theory update
+  `a' = fun p. if dst <= p < dst + n then a[src + p - dst] else a[p]` over the array as it is at the call. An index
+  argument naming `a` (also `len(a)`) is `type/inout_alias`; bind `let l: i64 = len(a);` first. The Rust backend
+  emits one `::core::ptr::copy` on the array's pointer when verified and `slice::copy_within` after the
+  destination-then-source range checks (`pruv_oob`) with `--no-verify`; the LLVM backend emits one
+  `llvm.memmove` of `n` times the element size (other layouts `codegen/unsupported_type`). Tests:
+  [accept](tests/spec/r5_2_copy_within_accept.pruv), [reject end](tests/spec/r5_2_copy_within_src_end.pruv),
+  [reject alias](tests/spec/r5_2_copy_within_idx_alias.pruv), `tests/runtime/l3_rt_copy_within*.pruv`.
 - Evaluation order: code evaluates left to right in source order, the same in every compile mode; call arguments left to right, and in `a[i] = v` the index is evaluated before the value.
 - Precedence (high to low): unary `- !`; `* / %`; `+ -`; comparisons (non-associative); `&&`; `||`; `==>`.
 
@@ -750,6 +762,13 @@ fn tree_count(t: Tree) -> i64
   [accept](tests/spec/r6e_18_vec_extend.pruv), [reject element type](tests/spec/r6e_18_extend_string.pruv),
   [reject borrowed vector](tests/spec/r6e_18_extend_borrowed.pruv),
   [run-time length check](tests/spec/r6e_18_extend_guard.pruv).
+- R-6e-19 **Reserving vector capacity.** `vec_reserve::<T>(inout P, n) -> ()` is a whole statement that
+  needs `! alloc`; the place `P` and `T` follow R-6e-10. The verifier requires `0 <= n <= 2^40`
+  (`verify/call_requires`) and keeps `len(P)`, every element and sibling fields unchanged; capacity is not
+  modelled, so the proof knows only the length invariant. Rust emits `P.reserve((n) as usize);` (with the same
+  run-time `requires` check as R-6e-18 when the catalog runs checked), so a writer can then `vec_push` or
+  `vec_extend_from_slice` without filling the tail first. LLVM rejects it as `codegen/unsupported_type`. Tests:
+  [accept](tests/spec/r6e_19_vec_reserve.pruv), [reject](tests/spec/r6e_19_reserve_unbounded.pruv).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate. Putting an existing value into an owning place (`let`, assignment, constructor field,
@@ -1638,8 +1657,17 @@ the hint keep none. The Python and Rust compilers use the same pass, so their ou
 
 Measured on the request-budget milestones (`bench/l3/budget/M8_NOTES.md`, "Inline policy"). This policy kept the M8
 gains of `#[inline(always)]` on every fn and improved M7, M9, M4 and M11 too. Always-on-every-fn grew rustc time 3-4x
-and binaries by up to 38%. Size thresholds and single-call-site rules alone did not reach the M8 gains. The LLVM
-backend is unchanged.
+and binaries by up to 38%. Size thresholds and single-call-site rules alone did not reach the M8 gains.
+
+R-7-7 The LLVM backend applies the same rule to its finished IR text: every `define internal ... @F__pruv_body(...) {`
+header is a candidate, its size is its number of body lines up to the first line `}`, call sites are the textual
+`@F__pruv_body(` tokens outside its own header, and recursion, inclusive size and the `INLINE_SMALL` /
+`INLINE_BUDGET` thresholds are as in R-7-3. A promoted body gets `alwaysinline` before ` {`; the rest keep no
+attribute and clang's heuristics. Runtime helpers that already carry `alwaysinline` and ABI wrappers are not
+candidates; source attributes (section 6f) are not read. Why: clang -O2 kept calls to small Pruv bodies that the
+Rust backend's `#[inline(always)]` removes (D-R10-1). The rule does not promote `put_cp` of
+`bench/l3/supervisor/btail.pruv`: its inclusive size is 353 lines and it has 6 call sites, 353 * 5 = 1765 > 1500. Tests: [accept](tests/spec/r7_7_llvm_inline.pruv),
+[reject](tests/spec/r7_7_llvm_inline_recursive.pruv).
 
 Tests: [accept](tests/spec/r7_3_inline.pruv) (a small fn called once gets `#[inline(always)]`),
 [reject](tests/spec/r7_3_inline_recursive.pruv) (a recursive fn keeps `#[inline]`),

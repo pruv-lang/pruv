@@ -31,6 +31,7 @@ pub mod foreign_codegen;
 pub mod foreign_shim;
 pub mod gtype;
 pub mod inline_policy;
+mod llvm_inline;
 pub mod lexer;
 pub mod llvmgen;
 pub mod manifest;

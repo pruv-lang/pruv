@@ -1952,14 +1952,20 @@ class FnVerifier:
             s.assume(st, g, r == z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < cnt),
                                                          z3.Select(av.a, i + k) == z3.Select(bv.a, j + k))))
             return r
-        if n == "copy_range":   # L-copy-range: five bounds obligations in order, then dst' := Lambda p. (i <= p < i+n ? src[j+p-i] : dst[p])
-            dv, i, sv, j, cnt = args    # src is the value at the call (aliasing with dst is rejected by the checker)
-            s.prove(st, g, i >= 0, e, "index_oob", "copy_range start 0 <= i for %s" % dv.name)
-            s.prove(st, g, j >= 0, e, "index_oob", "copy_range start 0 <= j for %s" % sv.name)
-            s.prove(st, g, cnt >= 0, e, "index_oob", "copy_range length 0 <= n")
-            s.prove(st, g, i + cnt <= dv.n, e, "index_oob", "copy_range i + n <= len(%s)" % dv.name)
-            s.prove(st, g, j + cnt <= sv.n, e, "index_oob", "copy_range j + n <= len(%s)" % sv.name)
-            p = z3.Int("copy_range!p")
+        if n in ("copy_range", "copy_within"):
+            if n == "copy_within":
+                dv, i, j, cnt = args
+                sv = dv
+                dst, src = "dst", "src"
+            else:
+                dv, i, sv, j, cnt = args
+                dst, src = "i", "j"
+            s.prove(st, g, i >= 0, e, "index_oob", "%s start 0 <= %s for %s" % (n, dst, dv.name))
+            s.prove(st, g, j >= 0, e, "index_oob", "%s start 0 <= %s for %s" % (n, src, sv.name))
+            s.prove(st, g, cnt >= 0, e, "index_oob", "%s length 0 <= n" % n)
+            s.prove(st, g, i + cnt <= dv.n, e, "index_oob", "%s %s + n <= len(%s)" % (n, dst, dv.name))
+            s.prove(st, g, j + cnt <= sv.n, e, "index_oob", "%s %s + n <= len(%s)" % (n, src, sv.name))
+            p = z3.Int(n + "!p")
             # a definitional (array-theory) update, no quantified assumption: the content fact dst'[i+k] == src[j+k] for 0 <= k < n,
             # the frame fact dst'[p] == dst[p] outside [i, i+n), and len(dst') == len(dst) hold by construction
             arr = z3.Lambda([p], z3.If(z3.And(p >= i, p < i + cnt), z3.Select(sv.a, j + p - i), z3.Select(dv.a, p)))
@@ -2332,6 +2338,10 @@ class FnVerifier:
             v, x = args
             need(v.n < MAX_LEN)
             return mk_arr(z3.Store(v.a, v.n, s.model.field_put(v.elem, x)), v.n + 1, n, v.elem)
+        if n == "vec_reserve":
+            cnt = args[1]
+            need(z3.And(cnt >= 0, cnt <= MAX_LEN))
+            return None
         if n == "vec_clear":
             v = args[0]
             root, path = field_place(e.args[0].expr)
@@ -3067,7 +3077,7 @@ class FnVerifier:
             names.add("spent")
         # G5 A1 (5.3): writes through inout places also havoc their roots. Only
         # operands of resizing calls or whole assignments may lose their length.
-        calls = s.call_writes(w.body, set())
+        calls = s.call_writes(w.body, set(), select=lambda call, i: call.name != "vec_reserve")
         keep = frozenset()
         if calls or s.snap:
             whole = s.whole_assigned(w.body, set()) if calls else set()
