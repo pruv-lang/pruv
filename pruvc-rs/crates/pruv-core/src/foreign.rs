@@ -860,10 +860,7 @@ fn key_is_array(key: &str) -> bool {
 }
 
 fn is_coll(ty: &Option<String>) -> bool {
-    match ty {
-        Some(k) => key_is_collection(k),
-        None => false,
-    }
+    ty.as_deref().is_some_and(crate::gtype::key_is_collection_owner)
 }
 
 /// name -> `take` flags of the program's functions (what Python reads from `s.funcs[name].params[i].take`)
@@ -883,6 +880,7 @@ struct Ownership<'a> {
     bor: HashSet<String>,
     /// binders of the user-enum match arms being checked (payload views; only owned collection fields are collections)
     arm_bor: Vec<String>,
+    string_error_binders: HashSet<String>,
     /// name -> "move" | "borrow" of the outermost call being checked (shared by nested calls)
     track: Option<Track>,
     /// G10 A0: must-consume bindings, name -> "Process" | "Socket" | "Listener"; never File, String or ProcessArgs
@@ -918,7 +916,7 @@ fn handle_lost(kind: &str, line: i64, col: i64, msg: String) -> PruvError {
 
 impl<'a> Ownership<'a> {
     fn run(&mut self, f: &Function) -> Res<()> {
-        self.bor = f.params.iter().filter(|p| !p.take && (key_is_collection(&p.ty) || self.aggregates.contains(&p.ty)))
+        self.bor = f.params.iter().filter(|p| !p.take && (crate::gtype::key_is_collection_owner(&p.ty) || self.aggregates.contains(&p.ty)))
             .map(|p| p.name.clone()).collect();
         self.proc = f
             .params
@@ -1014,7 +1012,7 @@ impl<'a> Ownership<'a> {
             Stmt::Let(l) => {
                 self.consume(&l.value, &mut st, "let")?;
                 self.consumed_field = None;
-                if key_is_array(&l.ty) || key_is_collection(&l.ty) || self.aggregates.contains(&l.ty)
+                if key_is_array(&l.ty) || crate::gtype::key_is_collection_owner(&l.ty) || self.aggregates.contains(&l.ty)
                     || self.enums.contains(&l.ty)
                 {
                     st.set(&l.name, V::Live);
@@ -1095,7 +1093,13 @@ impl<'a> Ownership<'a> {
                 Ok(Some(st))
             }
             Stmt::Match(m) => {
-                self.expr(&m.scrutinee, &mut st)?;
+                let owned_result = crate::llvmgen::expr_ty(&m.scrutinee).as_deref()
+                    .is_some_and(|t| GType::from_key(t).has_string_error());
+                if owned_result {
+                    self.consume_payload(&m.scrutinee, &mut st)?;
+                } else {
+                    self.expr(&m.scrutinee, &mut st)?;
+                }
                 let mut out: Option<St> = None;
                 let mut first = true;
                 let mutable_map = matches!(&m.scrutinee, Expr::Call(c)
@@ -1133,11 +1137,22 @@ impl<'a> Ownership<'a> {
                             arm_state.set(b, V::Live);
                         }
                     }
+                    let string_error = (owned_result && a.ctor == "Err").then(|| &a.binders[0]);
+                    if let Some(binder) = string_error {
+                        arm_state.set(binder, V::Live);
+                        self.string_error_binders.insert(binder.clone());
+                    }
                     let r = self.block(&a.body, arm_state);
+                    if let Some(binder) = string_error {
+                        self.string_error_binders.remove(binder);
+                    }
                     self.map_binders.truncate(saved);
                     self.arm_bor.truncate(self.arm_bor.len() - n);
                     let mut r = r?;
                     if let Some(state) = r.as_mut() {
+                        if let Some(binder) = string_error {
+                            state.pop(binder);
+                        }
                         for b in &srcs {
                             state.pop(b);
                         }
@@ -1164,7 +1179,8 @@ impl<'a> Ownership<'a> {
         if let Expr::Var(v) = e {
             // LG8: a record or enum root consumed by a field or binder move is checked too
             if v.ty.as_deref().is_some_and(key_is_array)
-                || (st.contains(&v.name) && v.ty.as_ref().is_some_and(|t| self.enums.contains(t)))
+                || (st.contains(&v.name)
+                    && v.ty.as_ref().is_some_and(|t| self.enums.contains(t) || GType::from_key(t).has_string_error()))
             {
                 self.use_(&v.name, v.line, v.col, st)?;
             }
@@ -1215,7 +1231,9 @@ impl<'a> Ownership<'a> {
                 }
             }
             Stmt::Match(m) => {
-                self.dead_expr(&m.scrutinee, false)?;
+                let owned_result = crate::llvmgen::expr_ty(&m.scrutinee).as_deref()
+                    .is_some_and(|t| GType::from_key(t).has_string_error());
+                self.dead_expr(&m.scrutinee, owned_result)?;
                 for a in &m.arms {
                     let n = self.push_arm(a);
                     let r = a.body.iter().try_for_each(|stmt| self.dead_stmt(stmt));
@@ -1267,7 +1285,9 @@ impl<'a> Ownership<'a> {
                 self.dead_expr(arg, take)?;
             }
         } else {
-            let owns_fields = matches!(e, Expr::StructLit(_) | Expr::EnumCtor(_));
+            let owns_fields = matches!(e, Expr::StructLit(_) | Expr::EnumCtor(_))
+                || matches!(e, Expr::Ctor(x) if x.name == "Err" && x.ty.as_deref()
+                    .is_some_and(|t| GType::from_key(t).has_string_error()));
             for k in expr_kids(e) {
                 self.dead_expr(k, owns_fields)?;
             }
@@ -1437,6 +1457,16 @@ impl<'a> Ownership<'a> {
         }
     }
 
+    /// A match or String error constructor takes its payload's ownership.
+    fn consume_payload(&mut self, e: &Expr, st: &mut St) -> Res<()> {
+        match e {
+            Expr::Var(v) => self.mv(&Move {
+                line: v.line, col: v.col, name: v.name.clone(), fields: Vec::new(), ty: v.ty.clone(),
+            }, st, true, true),
+            _ => self.consume(e, st, "field"),
+        }
+    }
+
     // ---- expressions ----
     fn expr(&mut self, e: &Expr, st: &mut St) -> Res<()> {
         self.expr_o(e, st, false)
@@ -1483,6 +1513,11 @@ impl<'a> Ownership<'a> {
                     self.consume(arg, st, "field")?;
                 }
                 Ok(())
+            }
+            Expr::Ctor(x) if x.name == "Err" && x.ty.as_deref()
+                .is_some_and(|t| GType::from_key(t).has_string_error()) =>
+            {
+                self.consume_payload(x.arg.as_deref().unwrap(), st)
             }
             Expr::Binary(b) if b.op == "&&" || b.op == "||" => {
                 self.expr(&b.left, st)?;
@@ -1564,7 +1599,9 @@ impl<'a> Ownership<'a> {
     fn call_args(&mut self, e: &Call, st: &mut St, takes: &[bool]) -> Res<()> {
         Self::check_call_move_alias(e)?;
         for (arg, take) in e.args.iter().zip(takes.iter()) {
-            if *take {
+            if e.name == "string_to_str" && matches!(arg, Expr::Var(v) if self.string_error_binders.contains(&v.name)) {
+                self.consume_payload(arg, st)?;
+            } else if *take {
                 match arg {
                     Expr::Move(m) => self.mv(m, st, true, true)?,
                     Expr::Var(v) if is_coll(&v.ty) => {
@@ -1646,7 +1683,8 @@ fn ctor_moves<'e>(e: &'e Expr, out: &mut Vec<&'e Move>) {
 pub fn check_ownership(f: &Function, funcs: &Takes, aggregates: &HashSet<String>, enums: &HashSet<String>,
                        variants: &HashMap<(String, String), Vec<String>>) -> Res<()> {
     Ownership {
-        funcs, aggregates, enums, variants, map_binders: Vec::new(), bor: HashSet::new(), arm_bor: Vec::new(), track: None,
+        funcs, aggregates, enums, variants, map_binders: Vec::new(), bor: HashSet::new(), arm_bor: Vec::new(),
+        string_error_binders: HashSet::new(), track: None,
         proc: HashMap::new(), decl: HashMap::new(), consumed_field: None,
     }.run(f)
 }

@@ -13,7 +13,7 @@ use crate::foreign::{
 };
 use crate::gtype::{
     bind_args, check_arity, collection_arity, decl_owner, dependencies, fn_owner, format_type, is_element, is_value,
-    key_is_collection, key_is_vec_slice_arg, mk_array, mk_nominal, mk_option, mk_result_with_error, substitute, GType, Mapping, ParamId,
+    key_is_collection_owner, key_is_vec_slice_arg, mk_array, mk_nominal, mk_option, mk_result_with_error, substitute, GType, Mapping, ParamId,
 };
 use crate::typeinfo::{program_uses_inout, TypeTable, BUILTIN_TYPE_NAMES};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -306,6 +306,7 @@ struct Checker {
     tt: TypeTable,
     cur_name: String,
     cur_ret: GType,
+    try_count: usize,
     used_effects: BTreeSet<String>,
     /// Expected array type, turned on only when the right-hand expression of a let/reassignment/return is itself an alloc call (alloc takes it right away).
     alloc_want: Option<GType>,
@@ -735,6 +736,7 @@ impl Checker {
             tt: TypeTable::default(),
             cur_name: String::new(),
             cur_ret: unitt(),
+            try_count: 0,
             used_effects: BTreeSet::new(),
             alloc_want: None,
             ctx_names: HashSet::new(),
@@ -793,6 +795,11 @@ impl Checker {
     }
 
     fn run(&mut self, prog: &mut Program) -> Res<()> {
+        for f in &prog.functions {
+            for e in f.requires.iter().chain(&f.ensures).chain(&f.decreases).chain(&f.cost) {
+                Self::check_try_position(e, e.line(), e.col())?;
+            }
+        }
         crate::refine::expand(prog)?; // STAGE1 A: validate refinement annotations, then expand them into contracts/asserts
         self.declare_types(&prog.types)?;
         self.normalize_types(prog); // G6: Vec/HashMap/String become catalog types unless the program declares them
@@ -1487,6 +1494,9 @@ impl Checker {
     }
 
     fn check_result_error(&self, line: i64, col: i64, e: &GType) -> Res<()> {
+        if e.owner.is_none() && e.name == "string" {
+            return self.check_type(line, col, e);
+        }
         if e.owner.is_some()
             || matches!(e.name.as_str(), "option" | "result")
             || !is_value(e, &|n| self.value_decl(n))
@@ -1495,8 +1505,8 @@ impl Checker {
                 line,
                 col,
                 "result_error_type",
-                format!("{} is not supported as a Result error type yet: only i64, bool and value structs or enums are", tn(e)),
-                "owned String errors (E2) and error records with buffers (E3) are not supported yet",
+                format!("{} is not supported as a Result error type", tn(e)),
+                "use i64, bool, String or a value struct or enum",
             ));
         }
         self.check_type(line, col, e)
@@ -2310,6 +2320,7 @@ impl Checker {
         self.enter(&fn_owner(&fname), &f.tparams);
         self.cur_name = fname.clone();
         self.cur_ret = ret.clone();
+        self.try_count = 0;
         self.cur_cost = f.cost.is_some();
         self.cur_params = f.params.iter().map(|p| p.name.clone()).collect();
         if f.foreign.is_some() {
@@ -2324,7 +2335,7 @@ impl Checker {
                     "remove it; foreign termination is trusted",
                 ));
             }
-        } else if fname == "main" && (ret.is_collection() || f.params.iter().any(|p| key_is_collection(&p.ty))) {
+        } else if fname == "main" && (ret.is_collection_owner() || f.params.iter().any(|p| key_is_collection_owner(&p.ty))) {
             return Err(terr(
                 f.line,
                 f.col,
@@ -2342,7 +2353,7 @@ impl Checker {
             if pt == unitt() {
                 return Err(terr(f.line, f.col, "unit_param", format!("parameter {} cannot have type ()", p.name), ""));
             }
-            if p.take && !pt.is_array() && !pt.is_collection() && !self.owned_aggregate(&pt) {
+            if p.take && !pt.is_array() && !pt.is_collection_owner() && !self.owned_aggregate(&pt) {
                 return Err(terr(
                     f.line,
                     f.col,
@@ -2481,13 +2492,90 @@ impl Checker {
     }
 
     // ---- statements ----
-    fn block(&mut self, stmts: &mut [Stmt], scope: &mut Scope) -> Res<()> {
-        let mut rest = stmts;
-        while let Some((st, tail)) = rest.split_first_mut() {
-            self.stmt(st, scope, tail.first())?;
-            rest = tail;
+    fn block(&mut self, stmts: &mut Vec<Stmt>, scope: &mut Scope) -> Res<()> {
+        for i in 0..stmts.len() {
+            let rhs = match &stmts[i] {
+                Stmt::Let(s) => Some(&s.value),
+                Stmt::Assign(s) if !s.deref && scope.get(&s.name).is_none_or(|entry| entry.kind == "local") =>
+                    Some(&s.value),
+                Stmt::ExprStmt(s) => Some(&s.expr),
+                _ => None,
+            };
+            if matches!(rhs, Some(Expr::Unary(u)) if u.op == "?") {
+                let rest = stmts.split_off(i + 1);
+                let stmt = stmts.pop().unwrap();
+                stmts.push(Stmt::Match(self.lower_try(stmt, rest, scope)?));
+                break;
+            }
+            let (prefix, tail) = stmts.split_at_mut(i + 1);
+            self.stmt(&mut prefix[i], scope, tail.first())?;
         }
         Ok(())
+    }
+
+    fn check_try_position(e: &Expr, line: i64, col: i64) -> Res<()> {
+        if matches!(e, Expr::Unary(u) if u.op == "?") {
+            return Err(terr(line, col, "try_position",
+                "`?` is only allowed as the whole right-hand side of a let, an assignment or an expression statement",
+                "bind the value with `let x: T = e?;` first"));
+        }
+        for child in crate::refine::kids(e) {
+            Self::check_try_position(child, line, col)?;
+        }
+        Ok(())
+    }
+
+    fn lower_try(&mut self, mut stmt: Stmt, mut rest: Vec<Stmt>, scope: &mut Scope) -> Res<Match> {
+        let (line, col, rhs) = match &mut stmt {
+            Stmt::Let(s) => (s.line, s.col, &mut s.value),
+            Stmt::Assign(s) => (s.line, s.col, &mut s.value),
+            Stmt::ExprStmt(s) => (s.line, s.col, &mut s.expr),
+            _ => unreachable!(),
+        };
+        let n = self.try_count;
+        self.try_count += 1;
+        let ok = format!("__pruv_try_v{n}");
+        let err = format!("__pruv_try_e{n}");
+        let var = |name: &str| Expr::Var(Var { line, col, name: name.into(), ty: None });
+        let Expr::Unary(u) = std::mem::replace(rhs, var(&ok)) else { unreachable!() };
+        let mut scrutinee = *u.operand;
+        Self::check_try_position(&scrutinee, line, col)?;
+        self.ckind = "code";
+        self.boundary = None;
+        let ty = self.match_scrutinee(&mut scrutinee, scope)?;
+        if ty.owner.is_some() || ty.name != "result" {
+            return Err(terr(line, col, "try_operand", format!("`?` needs a Result operand, got {}", tn(&ty)),
+                "use `?` only on a Result value"));
+        }
+        if self.cur_ret.owner.is_some() || self.cur_ret.name != "result" {
+            return Err(terr(line, col, "try_return", "`?` needs the enclosing function to return a Result",
+                "return a Result or use an explicit match"));
+        }
+        if ty.result_error() != self.cur_ret.result_error() {
+            let actual = ty.result_error().cloned().unwrap_or_else(i64t);
+            let expected = self.cur_ret.result_error().cloned().unwrap_or_else(i64t);
+            return Err(terr(line, col, "try_error_type",
+                format!("`?` error type {} does not match the function error type {}", tn(&actual), tn(&expected)),
+                "use an explicit match and convert the error"));
+        }
+        if !matches!(stmt, Stmt::ExprStmt(_)) {
+            rest.insert(0, stmt);
+        }
+        let mut targs = self.cur_ret.args.clone();
+        if targs.is_empty() {
+            targs.push(i64t());
+        }
+        let ret = Expr::Ctor(Ctor {
+            line, col, name: "Err".into(), arg: Some(Box::new(var(&err))), ty: None, targs: Some(targs), inst: None,
+        });
+        let mut lowered = Match { line, col, scrutinee, arms: vec![
+            MatchArm { line, col, enum_name: None, ctor: "Ok".into(), binders: vec![ok], body: rest },
+            MatchArm { line, col, enum_name: None, ctor: "Err".into(), binders: vec![err],
+                body: vec![Stmt::Return(Return { line, col, value: Some(ret) })] },
+        ] };
+        // The operand was already checked in match context.
+        self.match_arms(&mut lowered, scope, ty)?;
+        Ok(lowered)
     }
 
     /// LG9 (G-LG8-1): `f(move d.a)` as a let initializer, call statement or return value, the field move a direct
@@ -2704,6 +2792,40 @@ impl Checker {
     fn stmt(&mut self, st: &mut Stmt, scope: &mut Scope, next: Option<&Stmt>) -> Res<()> {
         self.ckind = "code";
         self.boundary = None; // G5: only the statements below that allow a mutating call set it
+        let position = Self::check_try_position;
+        match &*st {
+            Stmt::Let(s) => position(&s.value, s.line, s.col)?,
+            Stmt::Assign(s) => position(&s.value, s.line, s.col)?,
+            Stmt::IndexAssign(s) => {
+                position(&s.index, s.line, s.col)?;
+                position(&s.value, s.line, s.col)?;
+            }
+            Stmt::FieldAssign(s) => position(&s.value, s.line, s.col)?,
+            Stmt::If(s) => position(&s.cond, s.line, s.col)?,
+            Stmt::While(s) => {
+                for e in std::iter::once(&s.cond).chain(&s.invariants).chain([&s.decreases]) {
+                    position(e, s.line, s.col)?;
+                }
+            }
+            Stmt::ForMap(s) => {
+                for e in std::iter::once(&s.place).chain(&s.invariants) {
+                    position(e, s.line, s.col)?;
+                }
+            }
+            Stmt::Return(s) => {
+                if let Some(v) = &s.value {
+                    position(v, s.line, s.col)?;
+                }
+            }
+            Stmt::Assert(s) => position(&s.cond, s.line, s.col)?,
+            Stmt::ExprStmt(s) => position(&s.expr, s.line, s.col)?,
+            Stmt::Par(s) => {
+                for call in &s.calls {
+                    position(call, call.line(), call.col())?;
+                }
+            }
+            Stmt::Match(s) => position(&s.scrutinee, s.line, s.col)?,
+        }
         match st {
             Stmt::Let(s) => {
                 if scope.contains_key(&s.name) {
@@ -3288,9 +3410,17 @@ impl Checker {
         Ok(())
     }
 
+    fn match_scrutinee(&mut self, e: &mut Expr, scope: &Scope) -> Res<GType> {
+        self.read_expr(e, scope, false, &["map_get", "map_get_mut", "map_take", "vec_at_mut"])
+    }
+
     fn match_stmt(&mut self, m: &mut Match, scope: &mut Scope) -> Res<()> {
+        let t = self.match_scrutinee(&mut m.scrutinee, scope)?;
+        self.match_arms(m, scope, t)
+    }
+
+    fn match_arms(&mut self, m: &mut Match, scope: &mut Scope, t: GType) -> Res<()> {
         let (line, col) = (m.line, m.col);
-        let t = self.read_expr(&mut m.scrutinee, scope, false, &["map_get", "map_get_mut", "map_take", "vec_at_mut"])?;
         let map_call = match &m.scrutinee {
             Expr::Call(call) if !self.funcs.contains_key(&call.name) => Some(call),
             _ => None,
@@ -3918,7 +4048,7 @@ impl Checker {
                     }
                     "==" | "!=" => {
                         let lt = self.expr(&mut x.left, scope, c)?;
-                        if lt.is_collection() {
+                        if lt.is_collection_owner() {
                             // G6
                             return Err(terr(
                                 x.line,
@@ -5706,7 +5836,7 @@ fn x_scan_block(f: &Function, stmts: &[Stmt], funcs: &HashMap<String, Rc<FuncInf
 fn x_scan_expr(e: &Expr, funcs: &HashMap<String, Rc<FuncInfo>>) -> Option<String> {
     match e {
         Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var(_) => None,
-        Expr::Unary(u) => x_scan_expr(&u.operand, funcs),
+        Expr::Unary(u) if u.op != "?" => x_scan_expr(&u.operand, funcs),
         Expr::Binary(b) => x_scan_expr(&b.left, funcs).or_else(|| x_scan_expr(&b.right, funcs)),
         Expr::Index(x) => x_scan_expr(&x.array, funcs).or_else(|| x_scan_expr(&x.index, funcs)),
         Expr::FieldAccess(_) | Expr::Quant(_) => {

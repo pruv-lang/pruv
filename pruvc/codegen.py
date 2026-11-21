@@ -86,7 +86,7 @@ from collections import namedtuple
 from vast import *
 from typeinfo import (TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection,
                       dependencies, is_owned_field_type, is_nested_collection_field, is_string_record_map,
-                      field_place, is_vec_slice_arg)
+                      field_place, is_vec_slice_arg, is_owned_result, is_owned_value)
 from foreign import CATALOG
 from inline_policy import PIN_INLINE, PIN_ALWAYS, inline_policy
 from check import BIT_BUILTINS, array_resize_params, array_resize_args, same_place
@@ -1116,7 +1116,9 @@ def rty(t, param=False):
         x = rty(t.args[0])
         if t.name == "option":
             return "::std::option::Option<%s>" % x
-        return "::std::result::Result<%s, %s>" % (x, rty(result_error(t)))
+        e = result_error(t)
+        result = "::std::result::Result<%s, %s>" % (x, rty(e))
+        return "&" + result if param and is_owned_result(t) else result
     if t.owner is None and t.name in ("vec", "hashmap", "string", "file", "process", "process_args", "socket", "listener", "loop"):   # G6: owned; a borrowed parameter is a reference
         if t.name == "vec":
             r = "::std::vec::Vec<%s>" % rty(t.args[0])
@@ -1166,6 +1168,8 @@ def cty(t):
         return "i128"
     if n == "bool":
         return "bool"
+    if n == "string":
+        return rty(t)
     if n == "option":
         return "::std::option::Option<i128>"
     if n == "result":
@@ -1189,7 +1193,7 @@ def conv(t, x):
     n = t.name
     if n == "i64":
         return "(%s as i128)" % x
-    if n == "bool":
+    if n in ("bool", "string"):
         return x
     if n == "option":
         return "%s.map(|v| v as i128)" % x
@@ -1841,7 +1845,7 @@ class Gen:
     def private(s, f):
         """G3 specializations, G6 collection-bearing functions and (G9) functions with an extended type in their
         signature are private Rust items (no raw ABI); this includes their checked entry wrappers"""
-        return (getattr(f, "private", False) or any(is_collection(p.type) for p in f.params) or is_collection(f.ret)
+        return (getattr(f, "private", False) or any(is_owned_value(p.type) for p in f.params) or is_owned_value(f.ret)
                 or any(s.is_ext(p.type) for p in f.params) or s.is_ext(f.ret)
                 or (s.g5 and any(p.mode == "inout" for p in f.params)))   # G5: no public API for a mutable borrow
 
@@ -1858,7 +1862,7 @@ class Gen:
         s.resizable = {p.name for i, p in enumerate(f.params) if (f.name, i) in s.array_resizes}
         s.resize_args = array_resize_args(f, s.array_resizes)
         s.vt = {p.name: p.type for p in f.params}
-        s.borrowed = {p.name for p in f.params if is_collection(p.type) and not p.take}
+        s.borrowed = {p.name for p in f.params if is_owned_value(p.type) and not p.take}
         s.refs = {p.name for p in f.params if s.is_ext(p.type) and not p.take}
         param_types = [
             "&mut " + (rty(p.type, True)[1:] if is_array(p.type) and p.name not in s.resizable else rty(p.type))
@@ -1895,7 +1899,8 @@ class Gen:
         s.emit(0, "%sfn %s(%s)%s {" % (vis, body_name, ps, ret))
         s.cost = not s.verified and f.cost is not None
         if s.cost:
-            args = ["&" + p.name if p.name in s.take_arrays or p.name in s.take_ext or p.take and p.type.name == "string"
+            args = ["&" + p.name if p.name in s.take_arrays or p.name in s.take_ext
+                    or p.take and (p.type.name == "string" or is_owned_result(p.type))
                     else p.name for p in f.params]
             s.emit(1, "let pruv_cost: i128 = %s__pruv_cost(%s);" % (f.name, ", ".join(args)))
             s.emit(1, "let mut pruv_spent: u128 = 0;")
@@ -1972,7 +1977,8 @@ class Gen:
 
     def cost_call(s, name, args):
         # A negative modular bound cannot be met by a nonnegative callee counter.
-        args = ["&" + arg if p.take and (is_array(p.type) or p.type.name == "string" or s.is_ext(p.type)) else arg
+        args = ["&" + arg if p.take and (is_array(p.type) or p.type.name == "string" or is_owned_result(p.type)
+                                       or s.is_ext(p.type)) else arg
                 for p, arg in zip(s.fmap[name].params, args)]
         return ('let pruv_units = %s__pruv_cost(%s); '
                 'if pruv_units < 0 { panic!("pruv: cost exceeded"); } %s' %
@@ -2111,6 +2117,8 @@ class Gen:
             return "(&%s)" % e.name if e.name in s.take_arrays else e.name
         if isinstance(e, StrLit):  # G2 B2: &'static str
             return str_lit(e.value)
+        if isinstance(e, Call) and e.name == "err_val" and e.ty == Type("string"):
+            return s.c(e)
         if s.g9 and isinstance(e, (FieldAccess, VariantField)):   # G9: a buffer field of a real (extended) value
             return s.cx(e)
         raise Exception("codegen: unsupported array expression in contract: %r" % e)
@@ -2305,6 +2313,8 @@ class Gen:
                 s.cp[e.name] = e.ty
                 return "pruv_cp_" + e.name
             name = "(*%s)" % e.name if e.name in s.inouts and t in ("i64", "bool") else e.name
+            if is_owned_result(e.ty):
+                return conv(e.ty, "%s.clone()" % name)
             if t in ("i64", "option", "result") or is_user_type(e.ty):
                 return conv(e.ty if e.ty is not None else I64, name)
             return name
@@ -2352,7 +2362,11 @@ class Gen:
                     return "None::<%s>" % cx
                 if e.name == "Some":
                     return "Some::<%s>(%s)" % (cx, s.c(e.arg))
-                return "%s::<%s, %s>(%s)" % (e.name, cx, cty(result_error(e.ty)), s.c(e.arg))
+                error = result_error(e.ty)
+                arg = s.c(e.arg)
+                if e.name == "Err" and is_owned_result(e.ty):
+                    arg = "%s.clone()" % arg
+                return "%s::<%s, %s>(%s)" % (e.name, cx, cty(error), arg)
             if e.name == "None":
                 return "None::<i128>"
             ctor = {"Some": "Some", "Ok": "Ok::<i128, i128>", "Err": "Err::<i128, i128>"}[e.name]
@@ -3363,7 +3377,8 @@ class Gen:
             return "::std::vec![%s]" % s.e(e.args[1])
         name = s.fg.catalog_helper(e.name, low, src)
         # string_to_str of an owned local that the enclosing return moves: the String itself is the copy.
-        if e.name == "string_to_str" and not s.cost and isinstance(e.args[0], Var) and e.args[0].name in s.moving:
+        if getattr(e, "take_result_error", False) or (
+                e.name == "string_to_str" and not s.cost and isinstance(e.args[0], Var) and e.args[0].name in s.moving):
             return s.e(e.args[0])
         args = []
         for i, (p, x) in enumerate(zip(cat.params, e.args)):
@@ -3437,7 +3452,8 @@ class Gen:
                     return "None::<%s>" % rx
                 if e.name == "Some":
                     return "Some::<%s>(%s)" % (rx, s.e(e.arg))
-                return "%s::<%s, %s>(%s)" % (e.name, rx, rty(result_error(e.ty)), s.e(e.arg))
+                error = rty(result_error(e.ty))
+                return "%s::<%s, %s>(%s)" % (e.name, rx, error, s.e(e.arg))
             return "None" if e.name == "None" else "%s(%s)" % (e.name, s.e(e.arg))
         if isinstance(e, StructLit):
             # declaration order = left-to-right evaluation; parenthesized so `if S { .. }.x` parses
@@ -3665,7 +3681,7 @@ class Gen:
                     args.append(s.borrowed_map_key(x))
                 elif callee is not None and is_vec_slice_arg(x.ty, callee.params[i].type):
                     args.append(s.e(x) + ".as_slice()")
-                elif s.g6 and (isinstance(x, Move) or (x.ty is not None and is_collection(x.ty))):
+                elif s.g6 and (isinstance(x, Move) or (x.ty is not None and is_owned_value(x.ty))):
                     take = isinstance(x, Move) or (callee is not None and callee.params[i].take)
                     args.append(s.e(x) if take else s.cref(x))
                 elif s.ext and s.is_ext(x.ty) and not (callee is not None and callee.params[i].take):

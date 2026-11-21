@@ -627,7 +627,7 @@ class Model:
         r = cache.get(ty)
         if r is not None:
             return r
-        if ty == I64 or ty == OPTION or ty == RESULT:
+        if ty == I64 or ty == OPTION or ty == RESULT or ty == _STRING:
             r = False
         elif ty.owner is not None:
             r = True
@@ -1066,7 +1066,8 @@ def _wf_of(m, ty, v):
         o = m.res(ty)
         w = _wf_of(m, ty.args[0], o.oval(v))
         parts = [] if w is None else [z3.Implies(o.is_ok(v), w)]
-        err = _wf_of(m, result_error(ty), o.eval(v))
+        error = result_error(ty)
+        err = _wf_of(m, error, m.field_get(error, o.eval(v)) if error == _STRING else o.eval(v))
         if err is not None:
             parts.append(z3.Implies(o.is_err(v), err))
         return _conj(parts)
@@ -1806,7 +1807,7 @@ class FnVerifier:
             if e.name == "Some":
                 return s.model.opt(cty).some(v)
             o = s.model.res(cty)
-            return o.ok(v) if e.name == "Ok" else o.err(v)
+            return o.ok(v) if e.name == "Ok" else o.err(s.model.field_put(result_error(cty), v))
         if isinstance(e, Quant):
             lo = s.ev(e.lo, st, g, False, env)
             hi = s.ev(e.hi, st, g, False, env)
@@ -2277,7 +2278,10 @@ class FnVerifier:
             o = s.model.opt(s.model.type_of(args[0]))     # G3: the datatype of the argument's own sort
             return o.is_some(args[0]) if n == "is_some" else o.sval(args[0])
         if n in ("is_ok", "ok_val", "err_val"):
-            o = s.model.res(s.model.type_of(args[0]))
+            ty = s.model.type_of(args[0])
+            o = s.model.res(ty)
+            if n == "err_val" and result_error(ty) == _STRING:
+                return s.model.field_get(_STRING, o.eval(args[0]), "err_val")
             return o.is_ok(args[0]) if n == "is_ok" else o.oval(args[0]) if n == "ok_val" else o.eval(args[0])
         f = s.funcs[n]
         if f.opaque and not code:   # P13o: a contract application of an opaque function is its symbol
@@ -3276,6 +3280,8 @@ class FnVerifier:
                     if s.model.g9:       # G9 A1: buffer payloads become Arr views; nominal payloads are observed
                         val = s.model.field_get(fty, val, name)
                         s.observe(b, val, fty)
+                    elif fty == _STRING and a.ctor == "Err":
+                        val = s.model.field_get(fty, val, name)
                     b.env[name] = val
                     w = s.wf(fty, val)
                     if w is not None:

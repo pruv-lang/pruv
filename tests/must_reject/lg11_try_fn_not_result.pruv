@@ -1,0 +1,9 @@
+fn half(x: i64) -> Result<i64> {
+  if x > 0 { return Ok(x); }
+  return Err(x);
+}
+
+fn g(x: i64) -> i64 {
+  let h: i64 = half(x)?;
+  return h;
+}

@@ -1,0 +1,15 @@
+fn f(x: i64) -> Result<i64, String> ! alloc {
+  if x > 0 { return Ok::<i64, String>(x); }
+  return Err::<i64, String>(string_from("bad"));
+}
+
+fn g(x: i64) -> i64 ! alloc {
+  let r: Result<i64, String> = f(x);
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => {
+      let s: str = string_to_str(e);
+      return len(e);
+    }
+  }
+}

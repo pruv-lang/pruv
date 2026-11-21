@@ -1,0 +1,29 @@
+// LG11: `?` on Result<i64, ParseErr> (E1 value-struct error) propagates the error unchanged
+struct ParseErr { pos: i64, code: i64 }
+
+fn digit(c: i64, pos: i64) -> Result<i64, ParseErr>
+  ensures is_ok(result) ==> 0 <= ok_val(result) && ok_val(result) <= 9
+  ensures !is_ok(result) ==> err_val(result).pos == pos
+{
+  if 48 <= c && c <= 57 {
+    return Ok::<i64, ParseErr>(c - 48);
+  }
+  return Err::<i64, ParseErr>(ParseErr { pos: pos, code: c });
+}
+
+fn two_digits(a: i64, b: i64) -> Result<i64, ParseErr>
+  ensures is_ok(result) ==> 0 <= ok_val(result) && ok_val(result) <= 99
+  ensures !is_ok(result) ==> (err_val(result).pos == 0 || err_val(result).pos == 1)
+{
+  let x: i64 = digit(a, 0)?;
+  let y: i64 = digit(b, 1)?;
+  return Ok::<i64, ParseErr>(x * 10 + y);
+}
+
+fn run(a: i64, b: i64) -> i64 {
+  let r: Result<i64, ParseErr> = two_digits(a, b);
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return 0 - 1 - e.pos; }
+  }
+}

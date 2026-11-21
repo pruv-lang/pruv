@@ -1,0 +1,60 @@
+// LG11: the `?` operator on Result<T> (E = i64) in let, assignment and expression-statement positions
+fn half(x: i64) -> Result<i64>
+  requires 0 <= x && x <= 1000000
+  ensures is_ok(result) ==> ok_val(result) * 2 == x
+  ensures !is_ok(result) ==> err_val(result) == x
+{
+  if x % 2 == 0 {
+    return Ok(x / 2);
+  }
+  return Err(x);
+}
+
+fn check_pos(x: i64) -> Result<bool>
+  requires 0 <= x && x <= 1000000
+  ensures !is_ok(result) ==> err_val(result) == 0
+{
+  if x > 0 {
+    return Ok::<bool>(true);
+  }
+  return Err::<bool>(0);
+}
+
+fn quarter(x: i64) -> Result<i64>
+  requires 0 <= x && x <= 1000000
+  ensures !is_ok(result) ==> 0 <= err_val(result) && err_val(result) <= x
+{
+  let h: i64 = half(x)?;
+  let q: i64 = half(h)?;
+  return Ok(q);
+}
+
+fn steps(x: i64) -> Result<i64>
+  requires 0 <= x && x <= 1000000
+  ensures is_ok(result) ==> ok_val(result) * 2 == x + 2
+{
+  check_pos(x)?;
+  let mut y: i64 = 0;
+  y = half(x)?;
+  return Ok(y + 1);
+}
+
+fn run_quarter(x: i64) -> i64
+  requires 0 <= x && x <= 1000000
+{
+  let r: Result<i64> = quarter(x);
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return 0 - 1 - e; }
+  }
+}
+
+fn run_steps(x: i64) -> i64
+  requires 0 <= x && x <= 1000000
+{
+  let r: Result<i64> = steps(x);
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return 0 - 1; }
+  }
+}

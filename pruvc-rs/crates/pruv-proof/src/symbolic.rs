@@ -1365,7 +1365,7 @@ impl<'a> FnVerifier<'a> {
                 if let Some(w) = w {
                     parts.push(Some(o.is_ok.apply1(v).implies(&w)));
                 }
-                if let Some(w) = self.try_wf(&payload_ty(Some(ty), true), &o.eval.apply1(v))? {
+                if let Some(w) = self.wf_field(&payload_ty(Some(ty), true), &o.eval.apply1(v))? {
                     parts.push(Some(o.is_err.apply1(v).implies(&w)));
                 }
                 conj(z, parts)
@@ -2245,7 +2245,8 @@ impl<'a> FnVerifier<'a> {
                     return Ok(Val::Dt(o.none.clone(), cty.unwrap_or(Ty::Opt)));
                 }
                 let arg = x.arg.as_ref().ok_or_else(|| "None".to_string())?;
-                let v = self.ev_ast(arg, st, g, code, env)?;
+                let v = self.ev(arg, st, g, code, env)?;
+                let v = self.field_put(&payload_ty(cty.as_ref(), x.name == "Err"), &v)?;
                 match x.name.as_str() {
                     "Some" => {
                         let o = model.opt(cty.as_ref())?;
@@ -2862,7 +2863,7 @@ impl<'a> FnVerifier<'a> {
                 return match n {
                     "is_ok" => Ok(Val::Bool(o.is_ok.apply1(a))),
                     "ok_val" => Val::from_field(&payload_ty(Some(ty), false), o.oval.apply1(a)),
-                    _ => Val::from_field(&payload_ty(Some(ty), true), o.eval.apply1(a)),
+                    _ => self.field_val(&payload_ty(Some(ty), true), o.eval.apply1(a), n),
                 };
             }
             _ => {}
@@ -4712,8 +4713,8 @@ impl<'a> FnVerifier<'a> {
                             }
                             continue;
                         }
-                        b.env.set(name, Val::from_field(fty, val.clone())?);
-                        if let Some(w) = self.try_wf(fty, val)? {
+                        b.env.set(name, self.field_val(fty, val.clone(), name)?);
+                        if let Some(w) = self.wf_field(fty, val)? {
                             b.pc.push(w);
                         }
                     }

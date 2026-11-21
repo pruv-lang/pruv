@@ -13,7 +13,7 @@ use crate::emit_common::{
 };
 use crate::foreign::{catalog_fn, is_catalog};
 use crate::foreign_codegen::ForeignGen;
-use crate::gtype::{is_g3_key, key_is_collection, key_is_vec_slice_arg, mk_option, GType};
+use crate::gtype::{is_g3_key, key_is_collection, key_is_collection_owner, key_is_vec_slice_arg, mk_option, GType};
 use crate::inline_policy::{inline_policy, PIN_ALWAYS, PIN_INLINE};
 use crate::pyrepr::repr_str;
 use crate::typeinfo::{array_elem_name, is_array_name, uses_array_type, uses_str, TypeTable};
@@ -1260,6 +1260,7 @@ struct Gen<'a> {
     /// G9 A2: names bound to a Rust reference (extended parameters, match payload views, buffer payload views)
     refs: HashSet<String>,
     map_views: HashSet<String>,
+    string_error_binders: HashSet<String>,
     /// owned extended locals the current return statement may move (return_movable)
     moving: HashSet<String>,
     /// names borrowed as the scrutinee of an enclosing match_ext arm
@@ -1422,6 +1423,7 @@ impl<'a> Gen<'a> {
             boxed: prog.g9.as_ref().map(|m| m.boxed.iter().cloned().collect()).unwrap_or_default(),
             refs: HashSet::new(),
             map_views: HashSet::new(),
+            string_error_binders: HashSet::new(),
             moving: HashSet::new(),
             pinned: HashSet::new(),
             frames: Vec::new(),
@@ -1654,8 +1656,8 @@ impl<'a> Gen<'a> {
     /// are private Rust items (this includes their checked entry wrappers)
     fn private(&self, f: &Function) -> bool {
         is_spec_fn(&f.name)
-            || f.params.iter().any(|p| key_is_collection(&p.ty))
-            || key_is_collection(&f.ret)
+            || f.params.iter().any(|p| key_is_collection_owner(&p.ty))
+            || key_is_collection_owner(&f.ret)
             || f.params.iter().any(|p| self.is_ext(Some(&p.ty)))
             || self.is_ext(Some(&f.ret))
             || (self.g5 && f.params.iter().any(|p| p.mode_pos.is_some())) // G5: no public API for a mutable borrow
@@ -1859,7 +1861,7 @@ impl<'a> Gen<'a> {
         }
         self.vars = f.params.iter().map(|p| (p.name.clone(), p.ty.clone())).collect();
         self.borrowed =
-            f.params.iter().filter(|p| key_is_collection(&p.ty) && !p.take).map(|p| p.name.clone()).collect();
+            f.params.iter().filter(|p| key_is_collection_owner(&p.ty) && !p.take).map(|p| p.name.clone()).collect();
         self.refs = f.params.iter().filter(|p| !p.take && self.is_ext(Some(&p.ty))).map(|p| p.name.clone()).collect();
         self.resizable_inouts = f.params.iter().enumerate()
             .filter(|(i, p)| is_array_name(&p.ty) && self.resize_params.contains(&(f.name.clone(), *i)))
@@ -1944,7 +1946,10 @@ impl<'a> Gen<'a> {
         self.cost = !self.verified && f.cost.is_some();
         if self.cost {
             let args = join_map(&f.params, ", ", |p| {
-                if self.take_arrays.contains(&p.name) || self.take_ext.contains(&p.name) || p.take && p.ty == "string" {
+                if self.take_arrays.contains(&p.name)
+                    || self.take_ext.contains(&p.name)
+                    || p.take && (p.ty == "string" || GType::from_key(&p.ty).has_string_error())
+                {
                     format!("&{}", p.name)
                 } else {
                     p.name.clone()
@@ -2340,6 +2345,7 @@ impl<'a> Gen<'a> {
             Expr::Var(x) if self.take_arrays.contains(&x.name) => Ok(format!("(&{})", x.name)),
             Expr::Var(x) => Ok(x.name.clone()),
             Expr::StrLit(x) => Ok(lit_str(&x.value)), // G2 B2
+            Expr::Call(x) if x.name == "err_val" && x.ty.as_deref() == Some("string") => self.c(e),
             // G9: a buffer field of a real (extended) value
             Expr::FieldAccess(_) | Expr::VariantField(_) if self.g9 => self.cx(e),
             other => Err(format!("codegen: unsupported array expression in contract: {:?}", other)),
@@ -2497,7 +2503,7 @@ impl<'a> Gen<'a> {
                 return Ok(format!("Some::<{}>({})", rx, self.g9_real(a, Some(&px))?));
             }
             let pe = g.as_ref().and_then(GType::result_error).map_or_else(|| "i64".to_string(), GType::to_key);
-            let re = rty(&pe, false);
+            let re = g.as_ref().map_or_else(|| "i64".to_string(), crate::emit_common::result_error_rty);
             let at = if x.name == "Ok" { &px } else { &pe };
             return Ok(format!("{}::<{}, {}>({})", x.name, rx, re, self.g9_real(a, Some(at))?));
         }
@@ -2509,7 +2515,7 @@ impl<'a> Gen<'a> {
             ));
         }
         let tk = tk.unwrap_or("i64");
-        if tk == "bool" {
+        if matches!(tk, "bool" | "string") {
             return self.c(e);
         }
         if matches!(e, Expr::Var(_) | Expr::FieldAccess(_) | Expr::VariantField(_))
@@ -2695,6 +2701,7 @@ impl<'a> Gen<'a> {
                         return Ok(format!("None::<{}>", cx));
                     }
                     let a = match &x.arg {
+                        Some(a) if x.name == "Err" && g.has_string_error() => format!("{}.clone()", self.c(a)?),
                         Some(a) => self.c(a)?,
                         None => return Err("codegen: unsupported expression in requires: None".to_string()),
                     };
@@ -4085,6 +4092,8 @@ impl<'a> Gen<'a> {
                 self.match_ext(x, ind)?;
             }
             Stmt::Match(x) => {
+                let owned_result = expr_ty(&x.scrutinee).as_deref()
+                    .is_some_and(|t| GType::from_key(t).has_string_error());
                 let s = self.e(&x.scrutinee)?;
                 self.emit(ind, &format!("match {} {{", s));
                 for a in &x.arms {
@@ -4094,7 +4103,14 @@ impl<'a> Gen<'a> {
                     };
                     let pat = if a.binders.is_empty() { name } else { format!("{}({})", name, a.binders.join(", ")) };
                     self.emit(ind + 1, &format!("{} => {{", pat));
+                    let string_error = (owned_result && a.ctor == "Err").then(|| &a.binders[0]);
+                    if let Some(binder) = string_error {
+                        self.string_error_binders.insert(binder.clone());
+                    }
                     self.block(&a.body, ind + 2)?;
+                    if let Some(binder) = string_error {
+                        self.string_error_binders.remove(binder);
+                    }
                     self.emit(ind + 1, "}");
                 }
                 self.emit(ind, "}");
@@ -4377,7 +4393,7 @@ impl<'a> Gen<'a> {
         // string_to_str of an owned local that the enclosing return moves: the String itself is the copy.
         if x.name == "string_to_str" && !self.cost {
             if let Some(a @ Expr::Var(v)) = x.args.first() {
-                if self.moving.contains(&v.name) {
+                if self.moving.contains(&v.name) || self.string_error_binders.contains(&v.name) {
                     return self.e(a);
                 }
             }
@@ -4602,7 +4618,7 @@ impl<'a> Gen<'a> {
                     if x.name == "Some" {
                         return Ok(format!("Some::<{}>({})", rx, a));
                     }
-                    let re = g.result_error().map_or_else(|| "i64".to_string(), |e| rty_g(e, false));
+                    let re = crate::emit_common::result_error_rty(&g);
                     return Ok(format!("{}::<{}, {}>({})", x.name, rx, re, a));
                 }
                 if x.name == "None" {
@@ -5030,7 +5046,7 @@ impl<'a> Gen<'a> {
                 let mut args: Vec<String> = Vec::new();
                 for (i, xa) in a.iter().enumerate() {
                     let is_move = matches!(xa, Expr::Move(_));
-                    let coll = expr_ty(xa).as_deref().map_or(false, key_is_collection);
+                    let coll = expr_ty(xa).as_deref().map_or(false, key_is_collection_owner);
                     if let Expr::InoutArg(ia) = xa {
                         // Mutable borrow / reborrow in source order.
                         let (root, path) = field_place(&ia.expr);

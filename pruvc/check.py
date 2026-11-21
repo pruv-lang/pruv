@@ -7,7 +7,7 @@ from typeinfo import (TypeTable, BUILTIN_TYPE_NAMES, type_name, is_user_type, is
                       dependencies, decl_owner, fn_owner,  # G3 A1
                       COLLECTION_ARITY, COLLECTION_SPELLING, is_collection, contains_collection,  # G6 A0
                       program_uses_inout, is_owned_field_type, is_scalar_vec, is_nongeneric_struct,
-                      field_place, is_nested_collection_field, is_string_record_map, is_vec_slice_arg)
+                      field_place, is_nested_collection_field, is_string_record_map, is_vec_slice_arg, is_owned_value)
 from refine import expand as refine_expand
 from refine import _kids as expr_kids, _stmt_names
 from foreign import (CATALOG, CATALOG_NAMES, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS, ASYNC_OBSERVERS, ASYNC_OPS,
@@ -48,6 +48,19 @@ def nested_child_type(s, ty):
 
 def terr(node, code, msg, fix="", stage="type"):
     raise PruvError(stage, node.line, node.col, code, msg, fix, file=getattr(node, "file", None))   # G4: file only in explicit mode
+
+
+def is_try(e):
+    return isinstance(e, Unary) and e.op == "?"
+
+
+def check_try_position(e, at):
+    if is_try(e):
+        terr(at, "try_position",
+             "`?` is only allowed as the whole right-hand side of a let, an assignment or an expression statement",
+             "bind the value with `let x: T = e?;` first")
+    for child in expr_kids(e):
+        check_try_position(child, at)
 
 
 class _At:
@@ -363,6 +376,7 @@ class Checker:
             s.ckind = "cost"
             scope = {p.name: (p.type, False, "inout" if p.mode else "param") for p in f.params}
             before = len(s.s5_errors)
+            check_try_position(f.cost, f.cost)
             ty = s.expr(f.cost, scope, True)
             if ty != I64 and len(s.s5_errors) == before:
                 s.s5_errors.append((f, f.cost, "cost_type", "cost expression must have type i64"))
@@ -629,12 +643,11 @@ class Checker:
 
     def check_result_error(s, node, error):
         # Checking all declared fields also excludes transitive buffers and owned collections.
-        if (error.owner is not None or error.name in ("option", "result")
-                or not is_value(error, s.value_decls)):
+        if error != STRING and (error.owner is not None or error.name in ("option", "result")
+                                or not is_value(error, s.value_decls)):
             terr(node, "result_error_type",
-                 "%s is not supported as a Result error type yet: only i64, bool and value structs or enums are"
-                 % type_name(error),
-                 "owned String errors (E2) and error records with buffers (E3) are not supported yet")
+                 "%s is not supported as a Result error type" % type_name(error),
+                 "use i64, bool, String or a value struct or enum")
         s.check_type_rec(node, error)
 
     def check_arg(s, node, a, tp):
@@ -1047,6 +1060,7 @@ class Checker:
     # ---- function ----
     def fn(s, f):
         s.f = f
+        s.try_index = 0
         s.enter(fn_owner(f.name), f.tparams)
         s.calls[f.name] = set()
         if f.foreign is not None:
@@ -1054,7 +1068,7 @@ class Checker:
             if f.decreases is not None:     # G9 A0: foreign termination is trusted
                 terr(f.decreases, "recursive_decreases", "a trusted rust fn cannot have a decreases clause",
                      "remove it; foreign termination is trusted")
-        elif f.name == "main" and (is_collection(f.ret) or any(is_collection(p.type) for p in f.params)):
+        elif f.name == "main" and (is_owned_value(f.ret) or any(is_owned_value(p.type) for p in f.params)):
             terr(f, "foreign_export", "main cannot have a collection parameter or result",
                  "give main plain value parameters and result; use collections inside it")
         scope = {}
@@ -1063,12 +1077,15 @@ class Checker:
                 terr(f, "dup_param", "duplicate parameter %s" % p.name)
             if p.type == UNIT:
                 terr(f, "unit_param", "parameter %s cannot have type ()" % p.name)
-            if p.take and not (is_array(p.type) or is_collection(p.type) or p.type.name in s.aggregates):
+            if p.take and not (is_array(p.type) or is_owned_value(p.type) or p.type.name in s.aggregates):
                 terr(f, "foreign_move", "take is only for array, collection or aggregate parameters",
                      "remove `take` from %s; scalars and str are passed by value or borrowed" % p.name)
             # Whole assignment to inout parameters is checked separately from local mutability.
             scope[p.name] = (p.type, False, "inout" if p.mode is not None else "take" if p.take else "param")
         if f.pred:      # R03L (R-6-2): a pred body is one bool contract expression, never code
+            for st in f.body:
+                if isinstance(st, Return):
+                    check_try_position(st.value, st)
             if (f.ret != BOOL or f.effects or f.requires or f.ensures or f.decreases is not None or f.tparams
                     or f.cost is not None or not (len(f.body) == 1 and isinstance(f.body[0], Return)
                                                   and f.body[0].value is not None)):
@@ -1083,15 +1100,18 @@ class Checker:
         s.field_move = None
         s.ckind = "requires"
         for r in f.requires:
+            check_try_position(r, r)
             s.expect(r, BOOL, scope, contract=True)
         escope = dict(scope)
         if f.ret != UNIT:
             escope["result"] = (f.ret, False, "result")
         s.ckind = "ensures"
         for e in f.ensures:
+            check_try_position(e, e)
             s.expect(e, BOOL, escope, contract=True)
         s.ckind = "decreases"
         if f.decreases is not None:      # G9 A0: scalar measure over the parameters only (no result)
+            check_try_position(f.decreases, f.decreases)
             s.expect(f.decreases, I64, scope, contract=True)
         s.ckind = "code"
         if f.foreign is not None:
@@ -1127,7 +1147,53 @@ class Checker:
     # ---- statements ----
     def block(s, stmts, scope):
         for i, st in enumerate(stmts):
+            candidate = st.expr if isinstance(st, ExprStmt) else st.value if isinstance(st, (Let, Assign)) else None
+            if is_try(candidate) and (not isinstance(st, Assign) or not st.deref and
+                                      (st.name not in scope or scope[st.name][2] == "local")):
+                match = Match(st.line, st.col, candidate.operand, [])
+                if hasattr(st, "file"):
+                    match.file = st.file
+                s.stmt(match, scope, None, try_tail=(st, stmts[i + 1:]))
+                stmts[i:] = [match]
+                return
             s.stmt(st, scope, stmts[i + 1] if i + 1 < len(stmts) else None)
+
+    def try_arms(s, st, rest, operand):
+        if operand.owner is not None or operand.name != "result":
+            terr(st, "try_operand", "`?` needs a Result operand, got %s" % type_name(operand),
+                 "use `?` only on a Result value")
+        ret = s.f.ret
+        if ret.owner is not None or ret.name != "result":
+            terr(st, "try_return", "`?` needs the enclosing function to return a Result",
+                 "return a Result or use an explicit match")
+        error = result_error(ret)
+        if result_error(operand) != error:
+            terr(st, "try_error_type", "`?` error type %s does not match the function error type %s"
+                 % (type_name(result_error(operand) or I64), type_name(error or I64)),
+                 "use an explicit match and convert the error")
+
+        pos = (st.line, st.col)
+        index = s.try_index
+        s.try_index += 1
+        ok_name = "__pruv_try_v%d" % index
+        err_name = "__pruv_try_e%d" % index
+        err_value = Var(*pos, err_name)
+        err = Ctor(*pos, "Err", err_value)
+        err.targs = [ret.args[0] if ret.args else I64]
+        if error != I64:
+            err.targs.append(error)
+        early = Return(*pos, err)
+        ok = MatchArm(*pos, None, "Ok", [ok_name], rest)
+        fail = MatchArm(*pos, None, "Err", [err_name], [early])
+        nodes = [ok, fail, early, err, err_value]
+        if isinstance(st, (Let, Assign)):
+            st.value = Var(*pos, ok_name)
+            ok.body.insert(0, st)
+            nodes.append(st.value)
+        if hasattr(st, "file"):
+            for node in nodes:
+                node.file = st.file
+        return [ok, fail]
 
     def check_inout_context(s, st, *exprs):
         """R-6g-1: check the typed expressions of one statement, without entering its blocks."""
@@ -1174,7 +1240,14 @@ class Checker:
             if e.name == "print" or (callee is not None and any(effect != "alloc" for effect in callee.effects)):
                 effect_before = True
 
-    def stmt(s, st, scope, next_stmt):
+    def stmt(s, st, scope, next_stmt, try_tail=None):
+        for value in vars(st).values():
+            if isinstance(value, Expr):
+                check_try_position(value, st)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, Expr):
+                        check_try_position(item, st)
         f = s.f
         s.ckind = "code"
         s.boundary = None
@@ -1390,6 +1463,8 @@ class Checker:
             s.match_call = st.scrutinee
             t = s.expr(st.scrutinee, scope)
             s.match_call = None
+            if try_tail is not None:
+                st.arms = s.try_arms(*try_tail, t)
             call = st.scrutinee
             catalog_match = isinstance(call, Call) and call.name not in s.funcs
             mutable_map = catalog_match and call.name in MUTABLE_COLLECTION_MATCH
@@ -1464,7 +1539,10 @@ class Checker:
                     if b in sc:
                         terr(node, "shadow", "%s is already defined" % b, "use a new name")
                     # G9 A0: a buffer payload is a read view (like a parameter): returning it needs copy()
-                    sc[b] = (bt, map_take and a.ctor == "Some", "param" if (is_array(bt) or bt == STR) else "local")
+                    kind = "param" if (is_array(bt) or bt == STR) else "local"
+                    if a.ctor == "Err" and not user and bt == STRING:
+                        kind = "result_error"
+                    sc[b] = (bt, map_take and a.ctor == "Some", kind)
                 if movable_scrut:
                     s.match_movable = saved_movable | {b for b, bt in zip(a.binders, ftypes) if is_array(bt)}
                     # LG9 (G-DB15-2): `return x` of a str binder of a consuming match moves it (see Return)
@@ -2006,7 +2084,7 @@ class Checker:
                 s.expect(e.right, I64, scope, c, op="ordering"); return BOOL
             if op in ("==", "!="):
                 lt = s.expr(e.left, scope, c)
-                if is_collection(lt):   # G6
+                if is_owned_value(lt):   # G6 / LG11 E2
                     terr(e, "eq_type", "collections cannot be compared with ==",
                          "compare lengths and elements: len(a) == len(b) && forall k in 0..len(a): a[k] == b[k]")
                 if is_array(lt):
@@ -2826,6 +2904,8 @@ class Checker:
                 if p.take and getattr(arg, "map_iter_view", False):
                     s.own(arg)
         if catalog:
+            if n == "string_to_str" and isinstance(a[0], Var) and scope[a[0].name][2] == "result_error":
+                e.take_result_error = True
             if n == "vec_get" and e.targs[0] == STRING:
                 if not borrow_element:
                     terr(e, "foreign_owned_type", "a Vec<String> element must be a direct borrowed text argument")

@@ -24,6 +24,14 @@ def is_collection(ty: Type) -> bool:
     return ty.owner is None and ty.name in COLLECTION_ARITY
 
 
+def is_owned_result(ty: Optional[Type]) -> bool:
+    return ty is not None and ty.owner is None and ty.name == "result" and result_error(ty) == Type("string")
+
+
+def is_owned_value(ty: Type) -> bool:
+    return is_collection(ty) or is_owned_result(ty)
+
+
 def is_scalar_vec(ty: Type) -> bool:
     return ty.owner is None and ty.name == "vec" and ty.args in ((I64,), (BOOL,))
 

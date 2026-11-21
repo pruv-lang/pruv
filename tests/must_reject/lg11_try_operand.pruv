@@ -1,0 +1,4 @@
+fn g(o: Option<i64>) -> Result<i64> {
+  let h: i64 = o?;
+  return Ok(h);
+}

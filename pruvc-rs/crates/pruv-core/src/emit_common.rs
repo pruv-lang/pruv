@@ -70,8 +70,9 @@ pub fn rty_g(g: &GType, param: bool) -> String {
         if g.name == "option" {
             return format!("::std::option::Option<{}>", x);
         }
-        let e = g.result_error().map_or_else(|| "i64".to_string(), |e| rty_g(e, false));
-        return format!("::std::result::Result<{}, {}>", x, e);
+        let e = result_error_rty(g);
+        let result = format!("::std::result::Result<{}, {}>", x, e);
+        return if param && g.has_string_error() { format!("&{}", result) } else { result };
     }
     // G6: owned collections; a borrowed parameter is a reference
     if g.owner.is_none() {
@@ -89,6 +90,14 @@ pub fn rty_g(g: &GType, param: bool) -> String {
         }
     }
     rty_name(&g.name, param)
+}
+
+pub(crate) fn result_error_rty(g: &GType) -> String {
+    if g.has_string_error() {
+        "::std::string::String".to_string()
+    } else {
+        g.result_error().map_or_else(|| "i64".to_string(), |e| rty_g(e, false))
+    }
 }
 
 /// Rust type spelling for execution. It covers all 6 built-ins and user types, so there is no failure path.
@@ -183,6 +192,7 @@ fn try_cty_name(t: &str) -> Result<String, String> {
         "bool" => Ok("bool".to_string()),
         "option" => Ok("::std::option::Option<i128>".to_string()),
         "result" => Ok("::std::result::Result<i128, i128>".to_string()),
+        "string" => Ok("::std::string::String".to_string()),
         _ if is_user_type(t) => Ok(format!("pruv_contract__{}", t)),
         _ => Err(format!("codegen: type {} has no contract representation", type_repr(t))),
     }
@@ -197,7 +207,8 @@ pub fn cty(t: &str) -> String {
 pub fn try_conv_g(g: &GType, x: &str) -> Result<String, String> {
     if structured_builtin(g) {
         let inner = try_conv_g(&g.args[0], "v")?;
-        let mapped = if inner == "v" { x.to_string() } else { format!("{}.map(|v| {})", x, inner) };
+        let value = if g.has_string_error() { format!("{}.clone()", x) } else { x.to_string() };
+        let mapped = if inner == "v" { value } else { format!("{}.map(|v| {})", value, inner) };
         if g.name == "option" {
             return Ok(mapped);
         }
@@ -205,6 +216,9 @@ pub fn try_conv_g(g: &GType, x: &str) -> Result<String, String> {
             Some(e) => try_conv_g(e, "v")?,
             None => "v as i128".to_string(),
         };
+        if err == "v" {
+            return Ok(mapped);
+        }
         return Ok(format!("{}.map_err(|v| {})", mapped, err));
     }
     try_conv_name(&g.name, x)
@@ -226,6 +240,7 @@ fn try_conv_name(t: &str, x: &str) -> Result<String, String> {
         "bool" => Ok(x.to_string()),
         "option" => Ok(format!("{}.map(|v| v as i128)", x)),
         "result" => Ok(format!("{}.map(|v| v as i128).map_err(|v| v as i128)", x)),
+        "string" => Ok(x.to_string()),
         _ if is_user_type(t) => Ok(format!("pruv_to_c__{}({})", t, x)),
         _ => Err(format!("codegen: type {} has no contract representation", type_repr(t))),
     }

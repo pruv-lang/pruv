@@ -1,1 +1,1 @@
-fn f(r: Result<i64, String>) -> i64 { return 0; }
+fn f(r: Result<i64, str>) -> i64 { return 0; }

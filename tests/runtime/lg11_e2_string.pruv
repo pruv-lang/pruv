@@ -1,0 +1,39 @@
+// LG11 E2: an owned String error; `?` moves the error out, a match arm moves it into string_to_str or reads its length
+fn need_pos(x: i64) -> Result<i64, String> ! alloc
+  ensures is_ok(result) ==> ok_val(result) == x && x > 0
+  ensures !is_ok(result) ==> len(err_val(result)) == 12
+{
+  if x > 0 {
+    return Ok::<i64, String>(x);
+  }
+  return Err::<i64, String>(string_from("not positive"));
+}
+
+fn sum2(a: i64, b: i64) -> Result<i64, String> ! alloc
+  requires a <= 1000 && b <= 1000
+  ensures is_ok(result) ==> ok_val(result) == a + b
+{
+  let x: i64 = need_pos(a)?;
+  let y: i64 = need_pos(b)?;
+  return Ok::<i64, String>(x + y);
+}
+
+fn describe(a: i64, b: i64) -> str ! alloc
+  requires a <= 1000 && b <= 1000
+{
+  let r: Result<i64, String> = sum2(a, b);
+  match r {
+    Ok(v) => { return "ok"; }
+    Err(e) => { return string_to_str(e); }
+  }
+}
+
+fn run_sum(a: i64, b: i64) -> i64 ! alloc
+  requires a <= 1000 && b <= 1000
+{
+  let r: Result<i64, String> = sum2(a, b);
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return 0 - len(e); }
+  }
+}
