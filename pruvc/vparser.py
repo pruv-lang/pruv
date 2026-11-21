@@ -15,7 +15,7 @@ TOKEN_RE = re.compile(r"""
  (?P<ws>[ \t\r]+) | (?P<nl>\n) | (?P<comment>//[^\n]*)
 |(?P<int>[0-9][0-9_]*)
 |(?P<id>[A-Za-z_][A-Za-z0-9_]*)
-|(?P<op>==>|==|!=|<=|>=|&&|\|\||->|=>|::|\.\.|\.|\||\#\[|[-+*/%<>=!(){}\[\],:;])
+|(?P<op>==>|==|!=|<=|>=|<<|&&|\|\||->|=>|::|\.\.|\.|\||\#\[|[-+*/%<>=!&^~(){}\[\],:;])
 """, re.X)
 
 
@@ -27,17 +27,6 @@ class Tok:
 
     def __repr__(s):
         return "%s(%r)" % (s.kind, s.val)
-
-
-def _bar_after_type(toks):
-    """STAGE1 A: `|` is a token only right after a type-looking name in a type position
-    (`x: i64 |`, `-> i64 |`, `[i64 |`, `Option<i64 |`); everywhere else it is the old bad_char."""
-    if len(toks) < 2:
-        return False
-    a, b = toks[-1], toks[-2]
-    if a.kind != "id" or b.kind != "op" or b.val not in (":", "->", "[", "<"):
-        return False
-    return a.val in ("i64", "bool", "u8", "Option", "Result") or a.val[:1].isupper()
 
 
 _MOD_NAME_RE = re.compile(r"[a-z][A-Za-z0-9_]*\Z")   # G4: module names
@@ -200,9 +189,6 @@ def lex(src, toks=None):
                                "rename it; names starting with pruv_, containing __, `_` and Rust keywords are reserved")
             toks.append(Tok("kw" if v in KEYWORDS else "id", v, line, col, col + len(v)))
         elif k == "op":
-            if v == "|" and not _bar_after_type(toks):
-                # a lone `|` outside a type position stays the lexical error it always was
-                raise PruvError("parse", line, col, "bad_char", "unexpected character %r" % v, "remove it")
             if v == "#[":
                 # An attribute must start a top-level item. Let the parser reject stacked attributes.
                 prev = toks[-1] if toks else None
@@ -1099,16 +1085,49 @@ class Parser:
         return l
 
     def cmp(s):
-        l = s.add()
+        l = s.bit_or()
         for op in ("==", "!=", "<=", ">=", "<", ">"):
             if s.at(op):
                 t = s.next()
-                r = s.add()
+                r = s.bit_or()
                 for op2 in ("==", "!=", "<=", ">=", "<", ">"):
                     if s.at(op2):
                         s.err("comparisons cannot be chained", "use `a < b && b < c`")
                 return Binary(t.line, t.col, op, l, r)
         return l
+
+    def bit_or(s):
+        l = s.bit_xor()
+        while s.at("|"):
+            t = s.next(); l = Binary(t.line, t.col, "|", l, s.bit_xor())
+        return l
+
+    def bit_xor(s):
+        l = s.bit_and()
+        while s.at("^"):
+            t = s.next(); l = Binary(t.line, t.col, "^", l, s.bit_and())
+        return l
+
+    def bit_and(s):
+        l = s.shift()
+        while s.at("&"):
+            t = s.next(); l = Binary(t.line, t.col, "&", l, s.shift())
+        return l
+
+    def shift(s):
+        l = s.add()
+        while True:
+            if s.at("<<"):
+                t = s.next()
+                op = "<<"
+            elif (s.at(">") and s.at(">", 1)
+                  and s.peek().line == s.peek(1).line and s.peek().end == s.peek(1).col):
+                t = s.next()
+                s.next()
+                op = ">>"
+            else:
+                return l
+            l = Binary(t.line, t.col, op, l, s.add())
 
     def add(s):
         l = s.mul()
@@ -1123,7 +1142,7 @@ class Parser:
         return l
 
     def unary(s):
-        if s.at("-") or s.at("!") or s.at("*"):
+        if s.at("-") or s.at("!") or s.at("~") or s.at("*"):
             t = s.next()
             o = s.unary()
             if t.val == "-" and isinstance(o, IntLit):

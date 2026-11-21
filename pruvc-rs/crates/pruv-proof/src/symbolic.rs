@@ -243,13 +243,29 @@ fn lit_width(e: &Expr) -> i64 {
     }
 }
 
+fn bit_operator(op: &str) -> bool {
+    matches!(op, "&" | "|" | "^" | "<<" | ">>")
+}
+
+fn shift_factor(e: &Expr) -> Option<i128> {
+    let Expr::IntLit(lit) = e else { return None; };
+    let k = lit.value.parse::<u32>().ok()?;
+    (k < 64).then(|| 1i128 << k)
+}
+
+fn low_mask_modulus(e: &Expr) -> Option<i64> {
+    let Expr::IntLit(lit) = e else { return None; };
+    let m = lit.value.parse::<i64>().ok()?.checked_add(1)?;
+    ((2..=1i64 << 62).contains(&m) && m & (m - 1) == 0).then_some(m)
+}
+
 fn partial_here(e: &Expr, kind: PKind) -> bool {
     match e {
         Expr::Spent(_) => false,
         Expr::VariantField(_) => kind != PKind::Other,
         _ if kind == PKind::Variant => false,
         Expr::Index(_) => true,
-        Expr::Binary(b) => b.op == "/" || b.op == "%",
+        Expr::Binary(b) => b.op == "/" || b.op == "%" || bit_operator(&b.op),
         Expr::Call(c) => {
             is_tag_fn(&c.name) || c.name == "file_byte" || is_bit_z3(&c.name) || matches!(c.name.as_str(), "load_be" | "load_le") || is_proc_dom(&c.name)
                 || is_net_dom(&c.name) || is_async_dom(&c.name)
@@ -2053,6 +2069,9 @@ impl<'a> FnVerifier<'a> {
                 if x.op == "!" {
                     return Ok(Val::Bool(v.not()));
                 }
+                if x.op == "~" {
+                    return Ok(Val::Int(v.neg().sub(&self.z.int(1))));
+                }
                 if code {
                     let ob = in_range(&self.z, &v.neg());
                     self.prove_core(&st, g, &ob, pos(e), "overflow", "no overflow in unary -", None);
@@ -2077,6 +2096,70 @@ impl<'a> FnVerifier<'a> {
                 }
                 let l = self.ev_ast(&x.left, st, g, code, env)?;
                 let r = self.ev_ast(&x.right, st, g, code, env)?;
+                if bit_operator(op) {
+                    let shift = matches!(op, "<<" | ">>");
+                    if code && shift {
+                        let ob = self.z.and(&[r.ge_i(0), r.lt_i(64)]);
+                        self.prove_core(st, g, &ob, pos(e), "shift_range",
+                            &format!("shift count in 0..64 in `{}`", op), None);
+                    }
+                    if let Some(factor) = shift_factor(&x.right).filter(|_| shift) {
+                        let factor = self.z.int_str(&factor.to_string());
+                        let value = if op == "<<" { l.mul(&factor) } else { l.div(&factor) };
+                        if code && op == "<<" {
+                            self.prove_core(st, g, &in_range(&self.z, &value), pos(e),
+                                "overflow", "no i64 overflow in `<<`", None);
+                        }
+                        return Ok(Val::Int(value));
+                    }
+                    let a = l.int2bv(64);
+                    let k = r.int2bv(64);
+                    let word = match op {
+                        "&" => a.bvand(&k),
+                        "|" => a.bvor(&k),
+                        "^" => a.bvxor(&k),
+                        "<<" => a.bvshl(&k),
+                        _ => a.bvashr(&k),
+                    };
+                    if code && op == "<<" {
+                        self.prove_core(st, g, &word.bvashr(&k).raw_eq(&a), pos(e),
+                            "overflow", "no i64 overflow in `<<`", None);
+                    }
+                    let u = word.bv2int(false);
+                    let value = self.z.ite(
+                        &u.raw_lt(&self.z.int_str("9223372036854775808")),
+                        &u, &u.sub(&self.z.int_str("18446744073709551616")),
+                    );
+                    if code {
+                        self.assume(st, g, in_range(&self.z, &value));
+                        let nonnegative = self.z.and(&[value.ge_i(0), value.le(&l)]);
+                        match op {
+                            "&" => {
+                                self.assume(st, g, r.ge_i(0).implies(&self.z.and(&[value.ge_i(0), value.le(&r)])));
+                                self.assume(st, g, l.ge_i(0).implies(&nonnegative));
+                                let mask = low_mask_modulus(&x.right).map(|m| (&l, m))
+                                    .or_else(|| low_mask_modulus(&x.left).map(|m| (&r, m)));
+                                if let Some((arg, m)) = mask {
+                                    self.assume(st, g, arg.ge_i(0).implies(&value.eq(&arg.modulo(&self.z.int(m)))));
+                                }
+                            }
+                            "|" | "^" => {
+                                let fact = self.z.and(&[l.ge_i(0), r.ge_i(0)])
+                                    .implies(&self.z.and(&[value.ge_i(0), value.le(&l.add(&r))]));
+                                self.assume(st, g, fact);
+                            }
+                            ">>" => {
+                                self.assume(st, g, l.ge_i(0).implies(&nonnegative));
+                                self.assume(st, g, l.lt_i(0).implies(&self.z.and(&[value.ge(&l), value.lt_i(0)])));
+                            }
+                            _ => {}
+                        }
+                        if shift {
+                            self.assume(st, g, r.raw_eq(&self.z.int(0)).implies(&value.eq(&l)));
+                        }
+                    }
+                    return Ok(Val::Int(value));
+                }
                 let res = match op {
                     "+" => l.add(&r),
                     "-" => l.sub(&r),
@@ -3419,6 +3502,7 @@ impl<'a> FnVerifier<'a> {
 
     fn async_call(&mut self, e: &Expr, n: &str, args: &[Val], st: &mut State, g: &[Ast], code: bool, rty: Option<Ty>) -> R<Val> {
         let z = self.z.clone();
+        let into = matches!(n, "ev_read_into" | "ev_proc_read_into");
         let what = format!("precondition of {} (catalog)", n);
         let p = if n != "ev_new" { Some(args[0].try_loop()?.clone()) } else { None };
         if matches!(n, "ev_ok") {
@@ -3508,7 +3592,7 @@ impl<'a> FnVerifier<'a> {
             let ms = args.last().unwrap().try_ast()?.clone();
             self.proc_need(st,g,e,code,&what,z.and(&[ms.ge_i(0),ms.le_i(86400000)]));
         }
-        if matches!(n, "ev_read" | "ev_write" | "ev_shutdown_write" | "ev_accept" | "ev_proc_read" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_wait" | "ev_remove" | "ev_proc_wait_for" | "ev_proc_write_for") {
+        if into || matches!(n, "ev_read" | "ev_write" | "ev_shutdown_write" | "ev_accept" | "ev_proc_read" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_wait" | "ev_remove" | "ev_proc_wait_for" | "ev_proc_write_for") {
             let i = args[1].try_ast()?.clone();
             self.proc_need(st, g, e, code, &what, z.and(&[(i.clone()).ge_i(0), (i.clone()).lt(&p.cap.clone())]));
             let k = p.kind.select(&i);
@@ -3523,10 +3607,31 @@ impl<'a> FnVerifier<'a> {
             let mx = args.last().unwrap().try_ast()?.clone();
             self.proc_need(st, g, e, code, &what, z.and(&[(mx.clone()).gt_i(0), (mx.clone()).le_i(MAX_LEN)]));
         }
-        if matches!(n, "ev_proc_read") {
+        if matches!(n, "ev_proc_read" | "ev_proc_read_into") {
             let stream = args[2].try_ast()?.clone();
             self.proc_need(st, g, e, code, &what, z.or(&[(stream.clone()).raw_eq(&z.int(1)), (stream.clone()).raw_eq(&z.int(2))]));
         }
+        let ios = [args.len().saturating_sub(2), args.len().saturating_sub(1)];
+        let read_count = if into {
+            let Expr::Call(call) = e else { return Err("read into: not a call".into()); };
+            let [Expr::InoutArg(dst), Expr::InoutArg(count)] = &call.args[ios[0]..] else {
+                return Err("read into: missing inout argument".into());
+            };
+            let pre = args[ios[0]].try_arr()?;
+            let Expr::Var(dst_var) = dst.expr.as_ref() else { return Err("read into: invalid destination".into()); };
+            let Expr::Var(count_var) = count.expr.as_ref() else { return Err("read into: invalid count".into()); };
+            let fresh = self.try_fresh(&dst_var.name, &pre.array_ty())?;
+            let after = pre.like(fresh.try_arr()?.a.clone(), pre.n.clone(), &dst_var.name);
+            self.assume(st, g, self.u8_dom(&after));
+            let count_val = self.try_fresh(&count_var.name, &Ty::I64)?;
+            let count_after = count_val.try_ast()?.clone();
+            self.assume(st, g, z.and(&[count_after.ge_i(0), count_after.le(&after.n)]));
+            st.env.set(&dst_var.name, Val::Arr(after));
+            st.env.set(&count_var.name, count_val);
+            Some(count_after)
+        } else {
+            None
+        };
         let res = self.try_fresh(n, &rty.unwrap())?; let r = res.try_loop()?.clone();
         self.assume(st, g, self.wf_loop(&r));
         self.assume(st, g, (r.cap.clone()).eq(&p.cap.clone()));
@@ -3559,7 +3664,7 @@ impl<'a> FnVerifier<'a> {
             self.assume(st, g, ((k.clone()).raw_eq(&z.int(5))).implies(&z.and(&[(r.eof.clone()).eq(&(p.eof.clone()).store(&i.clone(), &z.bool_val(false))), (r.write_open.clone()).eq(&(p.write_open.clone()).store(&i.clone(), &z.bool_val(false)))])));
             self.assume(st, g, (z.and(&[(k.clone()).ne_i(4), (k.clone()).ne_i(5)])).implies(&z.and(&[(r.eof.clone()).eq(&p.eof.clone()), (r.write_open.clone()).eq(&p.write_open.clone())])));
         }
-        if matches!(n, "ev_read" | "ev_write" | "ev_shutdown_write" | "ev_proc_read" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_wait" | "ev_remove" | "ev_proc_wait_for" | "ev_proc_write_for") {
+        if into || matches!(n, "ev_read" | "ev_write" | "ev_shutdown_write" | "ev_proc_read" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_wait" | "ev_remove" | "ev_proc_wait_for" | "ev_proc_write_for") {
             let i = args[1].try_ast()?.clone();
             let freed = matches!(n,"ev_remove" | "ev_proc_wait");
             let k = if freed { z.int(0) } else if n == "ev_proc_wait_for" { r.kind.select(&i) } else { p.kind.select(&i) };
@@ -3580,6 +3685,10 @@ impl<'a> FnVerifier<'a> {
             else if freed {
                 self.assume(st, g, ((r.eof.clone()).select(&i.clone())).not());
                 self.assume(st, g, ((r.write_open.clone()).select(&i.clone())).not());
+            }
+            else if let Some(count) = &read_count {
+                self.assume(st, g, p.eof.select(&i).implies(&r.eof.select(&i)));
+                self.assume(st, g, r.eof.select(&i).implies(&count.raw_eq(&z.int(0))));
             }
             else if matches!(n,"ev_read" | "ev_proc_read") {
                 let mx = args.last().unwrap().try_ast()?.clone();
@@ -3604,6 +3713,7 @@ impl<'a> FnVerifier<'a> {
             self.assume(st, g, r.error.raw_eq(&z.int(0)).implies(&(r.buf.n.clone()).eq(&p.buf.n.clone())));
             self.assume(st, g, r.error.raw_eq(&z.int(0)).implies(&(r.buf.a.clone()).eq(&p.buf.a.clone())));
         }
+        if into { self.post_refine(e, &ios, st, g)?; }
         Ok(res)
     }
 
@@ -4083,6 +4193,26 @@ impl<'a> FnVerifier<'a> {
                 if wo && (x.op == "/" || x.op == "%") {
                     let r = self.ev_ast(&x.right, st, g, false, env)?;
                     parts.push(Some(r.ne_i(0)));
+                }
+                if wo && bit_operator(&x.op) {
+                    let l = self.ev_ast(&x.left, st, g, false, env)?;
+                    let r = self.ev_ast(&x.right, st, g, false, env)?;
+                    parts.push(Some(in_range(&self.z, &l)));
+                    if matches!(x.op.as_str(), "<<" | ">>") {
+                        parts.push(Some(self.z.and(&[r.ge_i(0), r.lt_i(64)])));
+                        if x.op == "<<" {
+                            let fits = if let Some(factor) = shift_factor(&x.right) {
+                                in_range(&self.z, &l.mul(&self.z.int_str(&factor.to_string())))
+                            } else {
+                                let a = l.int2bv(64);
+                                let k = r.int2bv(64);
+                                a.bvshl(&k).bvashr(&k).raw_eq(&a)
+                            };
+                            parts.push(Some(fits));
+                        }
+                    } else {
+                        parts.push(Some(in_range(&self.z, &r)));
+                    }
                 }
                 Ok(conj(&self.z, parts))
             }

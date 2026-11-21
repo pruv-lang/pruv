@@ -1,0 +1,38 @@
+struct DigitTotal { n: i64, ok: bool }
+struct Counter { total: DigitTotal }
+struct Bytes { digits: [u8] }
+
+fn bump(inout n: i64) -> ()
+  requires 0 <= n && n <= 999
+  ensures 1 <= n && n <= 1000
+{
+  n = n + 1;
+}
+
+fn run() -> () ! io, alloc {
+  let digits: [u8] = alloc(3, 0);
+  let mut input: Bytes = Bytes { digits: move digits };
+  input.digits[0] = 1;
+  input.digits[1] = 2;
+  input.digits[2] = 3;
+  let mut s: Counter = Counter { total: DigitTotal { n: 0, ok: false } };
+  let mut i: i64 = 0;
+  while i < 3
+    invariant 0 <= i && i <= 3 && len(input.digits) == 3
+    invariant 0 <= s.total.n && s.total.n <= 999
+    invariant (i == 0 ==> s.total.n == 0) && (i == 1 ==> s.total.n <= 9) && (i == 2 ==> s.total.n <= 99)
+    decreases 3 - i
+  {
+    let d: i64 = input.digits[i];
+    if d <= 9 {
+      s.total.n = s.total.n * 10 + d;
+    }
+    i = i + 1;
+  }
+  s.total.ok = s.total.n == 123;
+  print(s.total.ok);
+  print(s.total.n);
+  bump(inout s.total.n);
+  print(s.total.n);
+  print(input.digits[2]);
+}

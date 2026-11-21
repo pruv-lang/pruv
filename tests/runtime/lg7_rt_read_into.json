@@ -1,0 +1,7 @@
+{
+  "backends": ["rust", "llvm"],
+  "flags_matrix": [[], ["--no-verify"], ["--no-verify", "--foreign-checks", "all"]],
+  "exit": 0,
+  "stdout_lines": ["65", "66", "67", "68", "69", "70", "65", "66", "67", "68", "69", "70", "async runtime ok"],
+  "g6_drop_balance": true
+}

@@ -745,6 +745,28 @@ _TAG_FNS = ("some_val", "ok_val", "err_val")
 BIT_Z3 = {"band": lambda a, b: a & b, "bor": lambda a, b: a | b, "bxor": lambda a, b: a ^ b,
           "wrapping_shl": lambda a, b: a << b, "ushr": z3.LShR,
           "wrapping_add": lambda a, b: a + b, "wrapping_mul": lambda a, b: a * b}
+BIT_OP = {"&": "band", "|": "bor", "^": "bxor"}
+
+
+def signed_bv(word):
+    u = z3.BV2Int(word)
+    return z3.If(u < 2 ** 63, u, u - 2 ** 64)
+
+
+def shift_value(e, a, k):
+    """The signed shift result and, for left shift, its exact overflow condition."""
+    left = e.op == "<<"
+    c = e.right.value if isinstance(e.right, IntLit) else None
+    if c is not None and 0 <= c < 64:
+        if not left:
+            return a / 2 ** c, None
+        r = a * 2 ** c
+        return r, in_range(r)
+    A, K = z3.Int2BV(a, 64), z3.Int2BV(k, 64)
+    if not left:
+        return signed_bv(A >> K), None
+    w = A << K
+    return signed_bv(w), (w >> K) == A
 
 
 def _partial_here(e, kind):
@@ -756,7 +778,7 @@ def _partial_here(e, kind):
     if isinstance(e, Index):
         return True
     if isinstance(e, Binary):
-        return e.op in ("/", "%")
+        return e.op in ("/", "%", "<<", ">>") or e.op in BIT_OP
     if isinstance(e, Call):
         return (e.name in _TAG_FNS or e.name == "file_byte" or e.name in BIT_Z3 or e.name in ("load_be", "load_le")
                 or e.name in _PROC_DOM    # G10 proc A1: the stream / index domains of the Process observers
@@ -1684,6 +1706,8 @@ class FnVerifier:
             v = s.ev(e.operand, st, g, code, env)
             if e.op == "!":
                 return z3.Not(v)
+            if e.op == "~":
+                return -v - 1
             if code:
                 s.prove(st, g, in_range(-v), e, "overflow", "no overflow in unary -")
             return -v
@@ -1696,6 +1720,34 @@ class FnVerifier:
                 return z3.And(l, r) if op == "&&" else z3.Or(l, r) if op == "||" else z3.Implies(l, r)
             l = s.ev(e.left, st, g, code, env)
             r = s.ev(e.right, st, g, code, env)
+            if op in BIT_OP:
+                res = signed_bv(BIT_Z3[BIT_OP[op]](z3.Int2BV(l, 64), z3.Int2BV(r, 64)))
+                if code:
+                    s.assume(st, g, in_range(res))
+                    if op == "&":
+                        s.assume(st, g, z3.Implies(r >= 0, z3.And(0 <= res, res <= r)))
+                        s.assume(st, g, z3.Implies(l >= 0, z3.And(0 <= res, res <= l)))
+                        for lit, other in ((e.left, r), (e.right, l)):
+                            if isinstance(lit, IntLit) and 0 < lit.value < 2 ** 62:
+                                modulus = lit.value + 1
+                                if modulus & (modulus - 1) == 0:
+                                    s.assume(st, g, z3.Implies(other >= 0, res == other % modulus))
+                    else:
+                        s.assume(st, g, z3.Implies(z3.And(l >= 0, r >= 0), z3.And(0 <= res, res <= l + r)))
+                return res
+            if op in ("<<", ">>"):
+                if code:
+                    s.prove(st, g, z3.And(r >= 0, r < 64), e, "shift_range", "shift count in 0..64 in `%s`" % op)
+                res, no_overflow = shift_value(e, l, r)
+                if code and no_overflow is not None:
+                    s.prove(st, g, no_overflow, e, "overflow", "no i64 overflow in `%s`" % op)
+                if code and not isinstance(e.right, IntLit):
+                    s.assume(st, g, in_range(res))
+                    if op == ">>":
+                        s.assume(st, g, z3.Implies(l >= 0, z3.And(0 <= res, res <= l)))
+                        s.assume(st, g, z3.Implies(l < 0, z3.And(l <= res, res < 0)))
+                    s.assume(st, g, z3.Implies(r == 0, res == l))
+                return res
             if op == "+": res = l + r
             elif op == "-": res = l - r
             elif op == "*": res = l * r
@@ -1820,6 +1872,16 @@ class FnVerifier:
             parts = [dl, s.dom(e.right, st, g, env, kind)]
             if wo and e.op in ("/", "%"):
                 parts.append(s.ev(e.right, st, g, False, env) != 0)
+            if wo and (e.op in BIT_OP or e.op in ("<<", ">>")):
+                l = s.ev(e.left, st, g, False, env)
+                r = s.ev(e.right, st, g, False, env)
+                parts.append(in_range(l))
+                if e.op in BIT_OP:
+                    parts.append(in_range(r))
+                else:
+                    parts.append(z3.And(r >= 0, r < 64))
+                    if e.op == "<<":
+                        parts.append(shift_value(e, l, r)[1])
             return _conj(parts)
         if isinstance(e, Index):
             parts = [s.dom(e.array, st, g, env, kind), s.dom(e.index, st, g, env, kind)]
@@ -2134,8 +2196,7 @@ class FnVerifier:
             return str_boundary(args[0], args[1])
         if n in BIT_Z3:     # P2: exact 64-bit two's-complement result as a signed Int
             x, y = args
-            u = z3.BV2Int(BIT_Z3[n](z3.Int2BV(x, 64), z3.Int2BV(y, 64)))
-            r = z3.If(u < 2 ** 63, u, u - 2 ** 64)
+            r = signed_bv(BIT_Z3[n](z3.Int2BV(x, 64), z3.Int2BV(y, 64)))
             if code and n in ("wrapping_shl", "ushr"):    # shift count must be in 0..64
                 s.prove(st, g, z3.And(y >= 0, y < 64), e, "shift_range", "shift count in 0..64")
             if code:
@@ -2689,6 +2750,7 @@ class FnVerifier:
     def async_call(s, n, e, args, st, g, code, rty):
         """G10 async section 4: requires, fresh snapshot, well-formedness, transitions."""
         need = s.catalog_need(st, g, e, code, n)
+        into = n in ("ev_read_into", "ev_proc_read_into")
         if n != "ev_new": p = args[0]
         if n in ('ev_ok',):
             return p.error == 0
@@ -2756,7 +2818,7 @@ class FnVerifier:
         if n in ('ev_proc_wait_for', 'ev_proc_write_for'):
             ms = args[-1]
             need(z3.And(ms >= 0, ms <= 86400000))
-        if n in ('ev_read', 'ev_write', 'ev_shutdown_write', 'ev_accept', 'ev_proc_read', 'ev_proc_write', 'ev_proc_close_stdin', 'ev_proc_wait', 'ev_remove', 'ev_proc_wait_for', 'ev_proc_write_for'):
+        if into or n in ('ev_read', 'ev_write', 'ev_shutdown_write', 'ev_accept', 'ev_proc_read', 'ev_proc_write', 'ev_proc_close_stdin', 'ev_proc_wait', 'ev_remove', 'ev_proc_wait_for', 'ev_proc_write_for'):
             i = args[1]
             need(z3.And(i >= 0, i < p.cap))
             k = z3.Select(p.kind, i)
@@ -2768,9 +2830,15 @@ class FnVerifier:
         if n in ('ev_read', 'ev_proc_read'):
             mx = args[-1]
             need(z3.And(mx > 0, mx <= MAX_LEN))
-        if n in ('ev_proc_read',):
+        if n in ('ev_proc_read', 'ev_proc_read_into'):
             stream = args[2]
             need(z3.Or(stream == 1, stream == 2))
+        if into:
+            ios = [len(args) - 2, len(args) - 1]
+            finals = {}
+            s.inout_finals(e, CATALOG[n], ios, args, finals, st, g)
+            count = finals["n"]
+            s.assume(st, g, z3.And(count >= 0, count <= finals["dst"].n))
         r = s.fresh(n, rty)
         s.assume(st, g, _wf_loop(r))
         s.assume(st, g, r.cap == p.cap)
@@ -2800,7 +2868,7 @@ class FnVerifier:
             s.assume(st, g, z3.Implies(k != 4, z3.And(r.kind == p.kind, r.count == p.count)))
             s.assume(st, g, z3.Implies(k == 5, z3.And(r.eof == z3.Store(p.eof, i, False), r.write_open == z3.Store(p.write_open, i, False))))
             s.assume(st, g, z3.Implies(z3.And(k != 4, k != 5), z3.And(r.eof == p.eof, r.write_open == p.write_open)))
-        if n in ('ev_read', 'ev_write', 'ev_shutdown_write', 'ev_proc_read', 'ev_proc_write', 'ev_proc_close_stdin', 'ev_proc_wait', 'ev_remove', 'ev_proc_wait_for', 'ev_proc_write_for'):
+        if into or n in ('ev_read', 'ev_write', 'ev_shutdown_write', 'ev_proc_read', 'ev_proc_write', 'ev_proc_close_stdin', 'ev_proc_wait', 'ev_remove', 'ev_proc_wait_for', 'ev_proc_write_for'):
             i = args[1]
             freed = n in ("ev_remove", "ev_proc_wait")
             k = z3.IntVal(0) if freed else z3.Select(r.kind, i) if n == "ev_proc_wait_for" else z3.Select(p.kind, i)
@@ -2819,6 +2887,9 @@ class FnVerifier:
             elif freed:
                 s.assume(st, g, z3.Not(z3.Select(r.eof, i)))
                 s.assume(st, g, z3.Not(z3.Select(r.write_open, i)))
+            elif into:
+                s.assume(st, g, z3.Implies(z3.Select(p.eof, i), z3.Select(r.eof, i)))
+                s.assume(st, g, z3.Implies(z3.Select(r.eof, i), count == 0))
             elif n in ("ev_read", "ev_proc_read"):
                 mx = args[-1]
                 s.assume(st, g, r.buf.n <= mx)
@@ -2836,6 +2907,8 @@ class FnVerifier:
         if n not in ("ev_read", "ev_proc_read"):
             s.assume(st, g, z3.Implies(r.error == 0, r.buf.n == p.buf.n))
             s.assume(st, g, z3.Implies(r.error == 0, r.buf.a == p.buf.a))
+        if into:
+            s.post_refine(e, ios, st, g)
         return r
 
     def net_call(s, n, e, args, st, g, code, rty):

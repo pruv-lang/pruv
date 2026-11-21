@@ -1,0 +1,34 @@
+fn mask(x: i64) -> i64
+  requires x >= 0
+  ensures result == x % 8
+{
+  return x & 7;
+}
+
+fn shifts(a: i64, k: i64) -> () ! io
+  requires -8 <= a && a <= 8 && 0 <= k && k <= 3
+  requires (a << k) >= -64 && (a >> k) <= 8 && (a | 0) == a && ~a == -a - 1
+{
+  print(a << k);
+  print(a >> k);
+}
+
+fn nested(x: Option<Option<i64>>) -> () {
+}
+
+fn run() -> () ! io {
+  print(-1 & 255);
+  print(-8 | 3);
+  print(-8 ^ 3);
+  print(~5);
+  print(~(-9223372036854775808));
+  print(-7 >> 1);
+  print(1 + 2 << 3);
+  print(32 >> 2 >> 1);
+  print(6 ^ 3 | 8);
+  let a: i64 = 13;
+  let b: i64 = 7;
+  print(a & b == 5);
+  print(mask(a));
+  shifts(-7, 2);
+}

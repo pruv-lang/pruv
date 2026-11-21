@@ -153,10 +153,16 @@ _add('ev_add_process', [], lambda: ([_p('l', LOOP, True), _p('p', PROCESS, True)
 _add('ev_add_timer', [], lambda: ([_p('l', LOOP, True), _p('ms', I64)], LOOP), ['async', 'alloc'])
 _add('ev_wait', [], lambda: ([_p('l', LOOP, True), _p('timeout_ms', I64)], LOOP), ['async', 'alloc'])
 _add('ev_read', [], lambda: ([_p('l', LOOP, True), _p('slot', I64), _p('max', I64)], LOOP), ['async', 'net', 'alloc'])
+_add('ev_read_into', [], lambda: ([_p('l', LOOP, True), _p('slot', I64), _p('dst', ARRAY_U8), _p('n', I64)], LOOP), ['async', 'net', 'alloc'])
+for _param in CATALOG['ev_read_into'].params[-2:]:
+    _param.mode = 'inout'
 _add('ev_write', [], lambda: ([_p('l', LOOP, True), _p('slot', I64), _p('data', ARRAY_U8)], LOOP), ['async', 'net', 'alloc'])
 _add('ev_shutdown_write', [], lambda: ([_p('l', LOOP, True), _p('slot', I64)], LOOP), ['async', 'net', 'alloc'])
 _add('ev_accept', [], lambda: ([_p('l', LOOP, True), _p('slot', I64)], LOOP), ['async', 'net', 'alloc'])
 _add('ev_proc_read', [], lambda: ([_p('l', LOOP, True), _p('slot', I64), _p('stream', I64), _p('max', I64)], LOOP), ['async', 'proc', 'alloc'])
+_add('ev_proc_read_into', [], lambda: ([_p('l', LOOP, True), _p('slot', I64), _p('stream', I64), _p('dst', ARRAY_U8), _p('n', I64)], LOOP), ['async', 'proc', 'alloc'])
+for _param in CATALOG['ev_proc_read_into'].params[-2:]:
+    _param.mode = 'inout'
 _add('ev_proc_write', [], lambda: ([_p('l', LOOP, True), _p('slot', I64), _p('data', ARRAY_U8)], LOOP), ['async', 'proc', 'alloc'])
 _add('ev_proc_close_stdin', [], lambda: ([_p('l', LOOP, True), _p('slot', I64)], LOOP), ['async', 'proc', 'alloc'])
 _add('ev_proc_wait', [], lambda: ([_p('l', LOOP, True), _p('slot', I64)], LOOP), ['async', 'proc', 'alloc'])

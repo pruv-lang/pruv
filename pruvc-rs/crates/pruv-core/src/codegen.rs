@@ -996,12 +996,50 @@ fn shift_safe(n: &str) -> Option<&'static str> {
     match n {
         "wrapping_shl" => Some("pruv_shl"),
         "ushr" => Some("pruv_ushr"),
+        "<<" => Some("pruv_shl_chk"),
+        ">>" => Some("pruv_shr_chk"),
         _ => None,
     }
 }
 
+/// LG7: Python CONTRACT_OPS (bit operator -> contract helper name part)
+fn contract_op_name(op: &str) -> Option<&'static str> {
+    match op {
+        "&" => Some("and"),
+        "|" => Some("or"),
+        "^" => Some("xor"),
+        "<<" => Some("shl"),
+        ">>" => Some("shr"),
+        _ => None,
+    }
+}
+
+/// LG7: Python contract_op_helper(op): i128 contract value of a bit operator, undefined outside i64
+fn contract_op_helper(op: &str) -> String {
+    let check = if op == "<<" || op == ">>" {
+        format!("if b < 0 || b >= 64 {{ pruv_ud(\"shift count outside 0..64 in {}\") }}", op)
+    } else {
+        format!("if b < (i64::MIN as i128) || b > (i64::MAX as i128) {{ pruv_ud(\"argument outside i64 in {}\") }}", op)
+    };
+    let result_check = if op == "<<" {
+        "if r < (i64::MIN as i128) || r > (i64::MAX as i128) { pruv_ud(\"overflow in <<\") }"
+    } else {
+        ""
+    };
+    format!("#[inline]\nfn pruv_c{}_op(a: i128, b: i128) -> i128 {{ if a < (i64::MIN as i128) || a > (i64::MAX as i128) {{ pruv_ud(\"argument outside i64 in {}\") }} {} let r = a {} b; {} r }}\n",
+        contract_op_name(op).unwrap(), op, check, op, result_check)
+}
+
 /// Python SAFE_SHIFT_HELPER % (helper, op)
 fn safe_shift_helper(helper: &str, op: &str) -> String {
+    if matches!(helper, "pruv_shl_chk" | "pruv_shr_chk") {
+        let body = if op == "<<" {
+            "let r = a.wrapping_shl(k as u32); if (r >> k) != a { pruv_ovf(\"overflow in <<\") } r"
+        } else {
+            "a >> k"
+        };
+        return format!("#[inline]\nfn {helper}(a: i64, k: i64) -> i64 {{ if k < 0 || k >= 64 {{ pruv_ovf(\"shift count outside 0..64\") }} {body} }}\n");
+    }
     format!(
         "#[allow(dead_code)]\n#[inline]\nfn {helper}(a: i64, k: i64) -> i64 {{ if k < 0 || k >= 64 {{ pruv_ovf(\"shift count outside 0..64\") }} (((a) as u64) {op} ((k) as u32)) as i64 }}\n",
         helper = helper,
@@ -2547,7 +2585,7 @@ impl<'a> Gen<'a> {
                 Ok(name)
             }
             Expr::Unary(x) => {
-                if x.op == "!" {
+                if matches!(x.op.as_str(), "!" | "~") {
                     Ok(format!("(!{})", self.c(&x.operand)?))
                 } else {
                     Ok(format!("pruv_cneg({})", self.c(&x.operand)?))
@@ -2572,6 +2610,10 @@ impl<'a> Gen<'a> {
                 }
                 let l = self.c(&x.left)?;
                 let r = self.c(&x.right)?;
+                if let Some(name) = contract_op_name(op) {
+                    self.need_bits.insert(op.to_string());
+                    return Ok(format!("pruv_c{}_op({}, {})", name, l, r));
+                }
                 if let Some(f) = contract_arith(op) {
                     return Ok(format!("{}({}, {})", f, l, r));
                 }
@@ -4302,6 +4344,17 @@ impl<'a> Gen<'a> {
         }
         let mut args: Vec<String> = Vec::new();
         for (p, xa) in cat.params.iter().zip(x.args.iter()) {
+            if let Expr::InoutArg(arg) = xa {
+                if let Expr::Var(v) = arg.expr.as_ref() {
+                    let borrow = if self.inouts.contains(&v.name) && p.ty == GType::i64() && !self.cost {
+                        v.name.clone()
+                    } else {
+                        self.array_mut_arg(&v.name, false)
+                    };
+                    args.push(borrow);
+                    continue;
+                }
+            }
             if x.name == "map_get" && p.name == "k" && low[0].to_key() == "string" {
                 args.push(self.borrowed_map_key(xa)?);
             } else if p.ty.is_collection() {
@@ -4443,10 +4496,16 @@ impl<'a> Gen<'a> {
                 if !self.verified && x.op == "-" {
                     return Ok(format!("pruv_neg({})", self.e(&x.operand)?));
                 }
-                Ok(format!("({}{})", x.op, self.e(&x.operand)?))
+                Ok(format!("({}{})", if x.op == "~" { "!" } else { &x.op }, self.e(&x.operand)?))
             }
             Expr::Binary(x) => {
                 if !self.verified {
+                    if let Some(f) = shift_safe(&x.op) {
+                        let l = self.e(&x.left)?;
+                        let r = self.e(&x.right)?;
+                        self.need_shift.insert(x.op.clone());
+                        return Ok(format!("{}({}, {})", f, l, r));
+                    }
                     if let Some(f) = safe_arith(&x.op) {
                         let l = self.e(&x.left)?;
                         let r = self.e(&x.right)?;
@@ -5277,6 +5336,20 @@ fn gen_rust_concrete_core(
         .filter_map(|(k, op)| shift_safe(k).map(|h| safe_shift_helper(h, op)))
         .collect();
     drop(g.out.splice(mark..mark, shift_texts));
+    // LG7: --no-verify helpers of the `<<` / `>>` operators (Python SHIFT_OP_HELPER), then the contract
+    // helpers of the bit operators (Python contract_op_helper), in table order
+    let op_shift_texts: Vec<String> = [("<<", "<<"), (">>", ">>")]
+        .iter()
+        .filter(|(k, _)| g.need_shift.contains(*k))
+        .filter_map(|(k, op)| shift_safe(k).map(|h| safe_shift_helper(h, op)))
+        .collect();
+    drop(g.out.splice(mark..mark, op_shift_texts));
+    let op_bit_texts: Vec<String> = ["&", "|", "^", "<<", ">>"]
+        .iter()
+        .filter(|k| g.need_bits.contains(**k))
+        .map(|k| contract_op_helper(k))
+        .collect();
+    drop(g.out.splice(mark..mark, op_bit_texts));
     // P2 batch 4: the load_be contract helper, when a runtime contract used it
     if g.need_load_le {
         let helper = CONTRACT_LOAD_HELPER.replace("pruv_cload_be", "pruv_cload_le")
@@ -6055,15 +6128,18 @@ fn pruv_ev_spawn<F: FnOnce()+Send+'static>(f: F) -> Option<::std::thread::JoinHa
     let guard=PruvEvThread::new();
     ::std::thread::Builder::new().spawn(move || { let _guard=guard; f(); }).ok()
 }
+const PRUV_EV_READ_CAP: usize = 1048576;
 fn pruv_ev_reader(mut s: ::std::net::TcpStream, sh: ::std::sync::Arc<PruvEvShared>, i: usize) {
     let result=::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
         //@hook read { let mut q=sh.state.lock().unwrap(); q[i].err=3; sh.cv.notify_all(); return; }
+        let mut b = vec![0u8; 65536];
         loop {
             let mut q=sh.state.lock().unwrap();
-            while q[i].bytes[0].len()>=1048576 && !q[i].closing { q=sh.cv.wait(q).unwrap(); }
+            while q[i].bytes[0].len()>=PRUV_EV_READ_CAP && !q[i].closing { q=sh.cv.wait(q).unwrap(); }
             if q[i].closing { return; }
-            let mut b=vec![0;65536.min(1048576-q[i].bytes[0].len())]; drop(q);
-            let r=::std::io::Read::read(&mut s,&mut b);
+            let limit = b.len().min(PRUV_EV_READ_CAP - q[i].bytes[0].len());
+            drop(q);
+            let r = ::std::io::Read::read(&mut s, &mut b[..limit]);
             let mut q=sh.state.lock().unwrap(); if q[i].closing { return; }
             match r { Ok(0)=>q[i].ended[0]=true, Ok(n)=>q[i].bytes[0].extend(&b[..n]), Err(e) if e.kind()==::std::io::ErrorKind::Interrupted=>continue, Err(_)=>q[i].err=3 }
             sh.cv.notify_all(); if q[i].ended[0] || q[i].err!=0 { return; }
@@ -6157,10 +6233,53 @@ fn pruv_ev_wait(mut l: pruv_Loop, ms: i64) -> pruv_Loop {
     }
 }
 fn pruv_ev_read(mut l: pruv_Loop, slot: i64, stream: i64, max: i64, proc: bool) -> pruv_Loop {
-    l.last=-1;l.buf.clear();if !pruv_ev_valid(&l,slot,if proc{3}else{1}) || !(1..=(1i64<<40)).contains(&max) || !(1..=2).contains(&stream){pruv_ev_fail(&mut l,1);return l;}let i=slot as usize;let k=(stream-1) as usize;if l.public[i].failed{return l;}
-    let sh=l.shared.clone();let mut q=sh.state.lock().unwrap();let n=(max as usize).min(1048576).min(q[i].bytes[k].len());
-    if n>0 {l.buf.extend(q[i].bytes[k].drain(..n));}else if q[i].err!=0 {let e=q[i].err;drop(q);pruv_ev_mark(&mut l,i,e);return l;}else if q[i].ended[k] {l.public[i].ends[k]=true;l.public[i].eof=l.public[i].ends[0] && (!proc || l.public[i].ends[1]);if l.public[i].eof{q[i].reported=true;}}
-    sh.cv.notify_all();drop(q);l
+    l.buf.clear();
+    if !(1..=(1i64<<40)).contains(&max) { pruv_ev_fail(&mut l, 1); return l; }
+    pruv_ev_read_queue(l, slot, stream, max.min(1048576) as usize, proc, None).0
+}
+fn pruv_ev_read_into(l: pruv_Loop, slot: i64, stream: i64, dst: &mut [u8], n: &mut i64, proc: bool) -> pruv_Loop {
+    let (l, count) = pruv_ev_read_queue(l, slot, stream, dst.len(), proc, Some(dst));
+    *n = count as i64;
+    l
+}
+fn pruv_ev_read_queue(mut l: pruv_Loop, slot: i64, stream: i64, max: usize, proc: bool, dst: Option<&mut [u8]>) -> (pruv_Loop, usize) {
+    l.last = -1;
+    if !pruv_ev_valid(&l, slot, if proc { 3 } else { 1 }) || !(1..=2).contains(&stream) {
+        pruv_ev_fail(&mut l, 1);
+        return (l, 0);
+    }
+    let i = slot as usize;
+    let k = (stream - 1) as usize;
+    if l.public[i].failed { return (l, 0); }
+    let sh = l.shared.clone();
+    let mut q = sh.state.lock().unwrap();
+    let bytes = &mut q[i].bytes[k];
+    let n = max.min(bytes.len());
+    if n > 0 {
+        if let Some(dst) = dst {
+            let (front, back) = bytes.as_slices();
+            let first = n.min(front.len());
+            dst[..first].copy_from_slice(&front[..first]);
+            dst[first..n].copy_from_slice(&back[..n - first]);
+            drop(bytes.drain(..n));
+        } else {
+            l.buf.extend(bytes.drain(..n));
+        }
+        sh.cv.notify_all();
+    } else if bytes.is_empty() {
+        if q[i].err != 0 {
+            let e = q[i].err;
+            drop(q);
+            pruv_ev_mark(&mut l, i, e);
+            return (l, 0);
+        }
+        if q[i].ended[k] {
+            l.public[i].ends[k] = true;
+            l.public[i].eof = l.public[i].ends[0] && (!proc || l.public[i].ends[1]);
+            if l.public[i].eof { q[i].reported = true; }
+        }
+    }
+    (l, n)
 }
 fn pruv_ev_write(mut l: pruv_Loop, slot: i64, data: &[u8], action: i64) -> pruv_Loop {
     l.last=-1;let proc=action>=2; if !pruv_ev_valid(&l,slot,if proc{3}else{1}) || !l.public[slot as usize].open {pruv_ev_fail(&mut l,1);return l;}let i=slot as usize;let mut code=0;
@@ -6237,19 +6356,42 @@ type PruvEvRoute = ::std::sync::Arc<::std::sync::Mutex<(::std::sync::Arc<PruvEvS
 struct PruvEvRx { route: PruvEvRoute }
 struct PruvEvTx { route: PruvEvRoute, discard: ::std::sync::Arc<::std::sync::atomic::AtomicBool> }
 impl PruvEvTx {
-    fn send(&self, msg: PruvProcMsg) -> Result<(),()> {
+    fn send(&self, msg: Result<Option<&[u8]>, ()>) {
         loop {
-            let route=self.route.lock().unwrap();let (shared,i,k,attached)=&*route;let sh=shared.clone();let mut q=sh.state.lock().unwrap();
-            if let PruvProcMsg::Chunk(ref b)=msg {
-                if self.discard.load(::std::sync::atomic::Ordering::SeqCst) || q[*i].closing{return Ok(());}
-                if *attached && q[*i].bytes[*k].len()+b.len()>1048576 {let sh=sh.clone();drop(route);q=sh.cv.wait_timeout(q,::std::time::Duration::from_millis(10)).unwrap().0;drop(q);continue;}
+            let route = self.route.lock().unwrap();
+            let (sh, i, k, attached) = &*route;
+            let sh = sh.clone();
+            let mut q = sh.state.lock().unwrap();
+            match msg {
+                Ok(Some(bytes)) => {
+                    if self.discard.load(::std::sync::atomic::Ordering::SeqCst) || q[*i].closing { return; }
+                    // Keep the in-flight batch in the reader buffer until there is room for it.
+                    if *attached && q[*i].bytes[*k].len() + bytes.len() > PRUV_EV_READ_CAP {
+                        drop(route);
+                        drop(sh.cv.wait_timeout(q, ::std::time::Duration::from_millis(10)).unwrap());
+                        continue;
+                    }
+                    q[*i].bytes[*k].extend(bytes);
+                }
+                Ok(None) => q[*i].ended[*k] = true,
+                Err(()) => q[*i].err = 7,
             }
-            match msg {PruvProcMsg::Chunk(b)=>q[*i].bytes[*k].extend(b),PruvProcMsg::Eof=>q[*i].ended[*k]=true,PruvProcMsg::Err=>q[*i].err=7}
-            sh.cv.notify_all();return Ok(());
+            sh.cv.notify_all();
+            return;
         }
     }
 }
-impl Drop for PruvEvTx {fn drop(&mut self){let r=self.route.lock().unwrap();let (sh,i,k,_)=&*r;let mut q=sh.state.lock().unwrap();if !q[*i].ended[*k] && q[*i].err==0{q[*i].err=7;}sh.cv.notify_all();}}
+impl Drop for PruvEvTx {
+    fn drop(&mut self) {
+        let route = self.route.lock().unwrap();
+        let (sh, i, k, _) = &*route;
+        let mut q = sh.state.lock().unwrap();
+        if !q[*i].ended[*k] && q[*i].err == 0 {
+            q[*i].err = 7;
+            sh.cv.notify_all();
+        }
+    }
+}
 impl PruvEvRx {
     fn attach(&mut self, target: ::std::sync::Arc<PruvEvShared>, slot: usize, stream: usize) {
         let mut route=self.route.lock().unwrap();let (sh,i,k,_)=&*route;let mut old=sh.state.lock().unwrap();let mut q=target.state.lock().unwrap();
@@ -6358,22 +6500,18 @@ fn pruv_proc_fail(p: &mut pruv_Process, code: i64) {
     p.stderr_eof = false;
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
-fn pruv_proc_reader<R: ::std::io::Read>(mut r: R, tx: PruvEvTx, stream: i64, discard: ::std::sync::Arc<::std::sync::atomic::AtomicBool>) {
+fn pruv_proc_reader<R: ::std::io::Read>(mut r: R, tx: PruvEvTx, stream: i64) {
     let mut buf: ::std::vec::Vec<u8> = vec![0u8; 8192];
-    //@hook read1 if stream == 1 { let _ = tx.send(PruvProcMsg::Err); while let Ok(n) = ::std::io::Read::read(&mut r, &mut buf) { if n == 0 { break; } } return; }
-    //@hook read2 if stream == 2 { let _ = tx.send(PruvProcMsg::Err); while let Ok(n) = ::std::io::Read::read(&mut r, &mut buf) { if n == 0 { break; } } return; }
-    //@async_hook proc_io { let _=tx.send(PruvProcMsg::Err); return; }
+    //@hook read1 if stream == 1 { tx.send(Err(())); while let Ok(n) = ::std::io::Read::read(&mut r, &mut buf) { if n == 0 { break; } } return; }
+    //@hook read2 if stream == 2 { tx.send(Err(())); while let Ok(n) = ::std::io::Read::read(&mut r, &mut buf) { if n == 0 { break; } } return; }
+    //@async_hook proc_io { tx.send(Err(())); return; }
     loop {
         match ::std::io::Read::read(&mut r, &mut buf) {
-            Ok(0) => { let _ = tx.send(PruvProcMsg::Eof); return; }
-            Ok(n) => {
-                // discard mode (wait / kill / setup failure): keep reading to EOF but queue nothing more
-                if discard.load(::std::sync::atomic::Ordering::SeqCst) { continue; }
-                if tx.send(PruvProcMsg::Chunk(buf[..n].to_vec())).is_err() { return; }
-            }
+            Ok(0) => { tx.send(Ok(None)); return; }
+            Ok(n) => tx.send(Ok(Some(&buf[..n]))),
             Err(e) => {
                 if e.kind() == ::std::io::ErrorKind::Interrupted { continue; }
-                let _ = tx.send(PruvProcMsg::Err);
+                tx.send(Err(()));
                 return;
             }
         }
@@ -6386,8 +6524,7 @@ fn pruv_proc_collector<R: ::std::io::Read + Send + 'static>(r: R, stream: i64) -
     let route=::std::sync::Arc::new(::std::sync::Mutex::new((shared,0,0,false)));
     let rx=PruvEvRx {route:route.clone()};
     let tx=PruvEvTx {route,discard:discard.clone()};
-    let flag = discard.clone();
-    let join = match ::std::thread::Builder::new().spawn(move || { let _guard=PruvEvThread::new(); pruv_proc_reader(r, tx, stream, flag) }) {
+    let join = match ::std::thread::Builder::new().spawn(move || { let _guard=PruvEvThread::new(); pruv_proc_reader(r, tx, stream) }) {
         Ok(h) => h,
         Err(_) => return None,
     };

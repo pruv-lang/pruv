@@ -94,6 +94,17 @@ const BIT_LLVM: [(&str, &str); 7] = [
     ("wrapping_mul", "mul"),
 ];
 
+fn bit_operator_llvm(op: &str) -> Option<&'static str> {
+    match op {
+        "&" => Some("and"),
+        "|" => Some("or"),
+        "^" => Some("xor"),
+        "<<" => Some("shl"),
+        ">>" => Some("ashr"),
+        _ => None,
+    }
+}
+
 fn bit_llvm(n: &str) -> Option<&'static str> {
     BIT_LLVM.iter().find(|(k, _)| *k == n).map(|(_, ins)| *ins)
 }
@@ -3053,9 +3064,15 @@ impl<'a> FnGen<'a> {
                     self.assign_path(&sl, &x.fields, &v)?;
                     return self.end_temps();
                 }
-                let v = self.ev(&x.value, false)?; // right side first, then root load -> insertvalue chain -> store
-                let root = self.load(&sl)?;
+                let v = self.ev(&x.value, false)?;
                 let ty = need_ty(&sl.ty)?.to_string();
+                if matches!(self.tt.decl(&ty), Some(TypeDecl::Struct(_))) {
+                    let (gp, fty) = self.field_ptr_ty(&sl, &x.fields)?;
+                    let value = self.pack(&v, &fty, false)?;
+                    self.ins(format!("store {} {}, ptr {}", self::st(&fty, false), value, gp))?;
+                    return self.end_temps();
+                }
+                let root = self.load(&sl)?;
                 let nv = self.set_path(&root, &ty, &x.fields, &v)?;
                 self.store(&sl, &nv)?;
                 self.end_temps()
@@ -3646,6 +3663,10 @@ impl<'a> FnGen<'a> {
                     let r = self.op(format!("xor i1 {}, true", v.a))?;
                     return Ok(V::new(Kind::I1, r));
                 }
+                if x.op == "~" {
+                    let r = self.op(format!("xor i64 {}, -1", v.a))?;
+                    return Ok(V::new(Kind::I64, r));
+                }
                 if self.verified {
                     let r = self.op(format!("sub nsw i64 0, {}", v.a))?;
                     return Ok(V::new(Kind::I64, r));
@@ -3704,6 +3725,26 @@ impl<'a> FnGen<'a> {
                 self.mk_enum(x, false, false)
             }
             Expr::FieldAccess(x) => {
+                if matches!(x.ty.as_deref(), Some("i64" | "bool" | "u8")) {
+                    let mut path = vec![x.field.clone()];
+                    let mut base = x.base.as_ref();
+                    while let Expr::FieldAccess(field) = base {
+                        path.push(field.field.clone());
+                        base = field.base.as_ref();
+                    }
+                    if let Expr::Var(var) = base {
+                        if let Ok(Bind::Slot(sl)) = self.lookup(&var.name) {
+                            if !self.is_ext_opt(&sl.ty)
+                                && matches!(sl.ty.as_deref().and_then(|ty| self.tt.decl(ty)), Some(TypeDecl::Struct(_)))
+                            {
+                                path.reverse();
+                                let (gp, fty) = self.field_ptr_ty(&sl, &path)?;
+                                let v = self.op(format!("load {}, ptr {}", st(&fty, false), gp))?;
+                                return self.unpack(&v, &fty, false);
+                            }
+                        }
+                    }
+                }
                 let tt = self.tt;
                 let b = self.ev(&x.base, false)?;
                 let ty = match &b.ty {
@@ -3724,6 +3765,11 @@ impl<'a> FnGen<'a> {
         }
     }
 
+    fn guard_shift_count(&mut self, count: &str) -> R<()> {
+        let ok = self.op(format!("icmp ult i64 {}, 64", count))?;
+        self.guard(&ok, Fail::Panic1("pruv_panic_arith", "shift count outside 0..64".to_string()), false)
+    }
+
     pub fn ev_binary(&mut self, e: &Binary) -> R<V> {
         let op = e.op.as_str();
         if op == "&&" || op == "||" {
@@ -3739,6 +3785,18 @@ impl<'a> FnGen<'a> {
         }
         let l = self.ev(&e.left, false)?;
         let r = self.ev(&e.right, false)?;
+        if let Some(ins) = bit_operator_llvm(op) {
+            if !self.verified && matches!(op, "<<" | ">>") {
+                self.guard_shift_count(&r.a)?;
+            }
+            let v = self.op(format!("{} i64 {}, {}", ins, l.a, r.a))?;
+            if !self.verified && op == "<<" {
+                let back = self.op(format!("ashr i64 {}, {}", v, r.a))?;
+                let overflow = self.op(format!("icmp ne i64 {}, {}", back, l.a))?;
+                self.guard(&overflow, Fail::Panic1("pruv_panic_arith", "overflow in <<".to_string()), true)?;
+            }
+            return Ok(V::new(Kind::I64, v));
+        }
         if op == "+" || op == "-" || op == "*" {
             let name = match op {
                 "+" => "add",
@@ -4033,12 +4091,7 @@ impl<'a> FnGen<'a> {
             let y = self.ev(arg(a, 1)?, false)?;
             if !self.verified && (n == "wrapping_shl" || n == "ushr") {
                 // P2 batch 2: check the count before shifting
-                let ok = self.op(format!("icmp ult i64 {}, 64", y.a))?;
-                self.guard(
-                    &ok,
-                    Fail::Panic1("pruv_panic_arith", "shift count outside 0..64".to_string()),
-                    false,
-                )?;
+                self.guard_shift_count(&y.a)?;
             }
             let r = self.op(format!("{} i64 {}, {}", ins, x.a, y.a))?;
             return Ok(V::new(Kind::I64, r));
@@ -4370,7 +4423,13 @@ impl<'a> FnGen<'a> {
         // arguments once, in source order; take arguments are owned values
         for (p, x) in cat.params.iter().zip(e.args.iter()) {
             let x = match x {
-                Expr::InoutArg(place) if n == "vec_reserve" => &*place.expr,
+                Expr::InoutArg(place) => {
+                    if p.inout && p.ty == crate::gtype::GType::i64() {
+                        args.push(("ptr".to_string(), self.inout_place_ptr(&place.expr)?));
+                        continue;
+                    }
+                    &*place.expr
+                }
                 _ => x,
             };
             let v = self.ev(x, p.take)?;
@@ -4387,7 +4446,7 @@ impl<'a> FnGen<'a> {
                 | "proc_args_new" | "proc_args_push" | "proc_spawn" | "proc_spawn_env" | "proc_write_str" | "proc_write_bytes"
                 | "proc_close_stdin" | "proc_read" | "proc_read_all"
                 | "net_connect" | "net_listen" | "net_accept" | "net_write_str" | "net_write_bytes"
-                | "net_shutdown_write" | "net_set_timeout" | "net_read" | "net_read_all" | "ev_new" | "ev_add_socket" | "ev_add_listener" | "ev_add_process" | "ev_add_timer" | "ev_wait" | "ev_read" | "ev_write" | "ev_shutdown_write" | "ev_accept" | "ev_proc_read" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_wait" | "ev_proc_wait_for" | "ev_proc_write_for" | "ev_remove"
+                | "net_shutdown_write" | "net_set_timeout" | "net_read" | "net_read_all" | "ev_new" | "ev_add_socket" | "ev_add_listener" | "ev_add_process" | "ev_add_timer" | "ev_wait" | "ev_read" | "ev_read_into" | "ev_proc_read_into" | "ev_write" | "ev_shutdown_write" | "ev_accept" | "ev_proc_read" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_wait" | "ev_proc_wait_for" | "ev_proc_write_for" | "ev_remove"
         ) {
             // a fresh box, or the very same box pointer of a consuming update
             let r = self.g6_call(&sym, "ptr", &args)?;
@@ -4868,6 +4927,10 @@ impl<'a> FnGen<'a> {
                     let r = self.op(format!("xor i1 {}, true", v.a))?;
                     return Ok(V::new(Kind::I1, r));
                 }
+                if x.op == "~" {
+                    let r = self.op(format!("xor i128 {}, -1", v.a))?;
+                    return Ok(V::new(Kind::I128, r));
+                }
                 let r = self.checked("i128", "ssub", "unary -", "0", &v.a)?;
                 Ok(V::new(Kind::I128, r))
             }
@@ -4902,6 +4965,26 @@ impl<'a> FnGen<'a> {
                 }
                 let l = self.cev(&x.left)?;
                 let r = self.cev(&x.right)?;
+                if let Some(ins) = bit_operator_llvm(op) {
+                    let shift = matches!(op, "<<" | ">>");
+                    let args = [&l, &r];
+                    for arg in &args[..if shift { 1 } else { 2 }] {
+                        let biased = self.op(format!("add i128 {}, 9223372036854775808", arg.a))?;
+                        let ok = self.op(format!("icmp ult i128 {}, 18446744073709551616", biased))?;
+                        self.guard(&ok, Fail::Panic1("pruv_panic_undefined", format!("argument outside i64 in {}", op)), false)?;
+                    }
+                    if shift {
+                        let ok = self.op(format!("icmp ult i128 {}, 64", r.a))?;
+                        self.guard(&ok, Fail::Panic1("pruv_panic_undefined", format!("shift count outside 0..64 in {}", op)), false)?;
+                    }
+                    let v = self.op(format!("{} i128 {}, {}", ins, l.a, r.a))?;
+                    if op == "<<" {
+                        let biased = self.op(format!("add i128 {}, 9223372036854775808", v))?;
+                        let ok = self.op(format!("icmp ult i128 {}, 18446744073709551616", biased))?;
+                        self.guard(&ok, Fail::Panic1("pruv_panic_undefined", "overflow in <<".to_string()), false)?;
+                    }
+                    return Ok(V::new(Kind::I128, v));
+                }
                 if op == "+" || op == "-" || op == "*" {
                     let name = match op {
                         "+" => "sadd",

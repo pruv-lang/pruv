@@ -1,0 +1,70 @@
+fn drain(take input: Loop, kind: i64) -> bool ! async, net, proc, alloc, io
+  requires ev_ok(input) && ev_cap(input) == 1
+  requires kind == 1 || kind == 3
+  requires ev_kind(input, 0) == kind
+{
+  let mut l: Loop = move input;
+  let mut dst: [u8] = alloc(4, 0);
+  let mut n: i64 = -1;
+  let mut done: bool = false;
+  let mut rounds: i64 = 100;
+  while !done && rounds > 0
+    invariant ev_ok(l) && ev_cap(l) == 1
+    invariant ev_kind(l, 0) == kind
+    decreases rounds
+  {
+    l = ev_wait(move l, 2000);
+    let event: i64 = ev_event_kind(l);
+    if event == 1 || event == 3 {
+      if kind == 3 {
+        l = ev_proc_read_into(move l, 0, 1, inout dst, inout n);
+      } else {
+        l = ev_read_into(move l, 0, inout dst, inout n);
+      }
+      assert len(dst) == 4;
+      assert 0 <= n && n <= len(dst);
+      if n > 0 { print(dst[0]); }
+      if n > 1 { print(dst[1]); }
+      if n > 2 { print(dst[2]); }
+      if n > 3 { print(dst[3]); }
+      if kind == 3 {
+        l = ev_proc_read_into(move l, 0, 2, inout dst, inout n);
+      }
+      done = ev_eof(l, 0);
+    }
+    rounds = rounds - 1;
+  }
+  if done && kind == 3 { l = ev_proc_wait(move l, 0); }
+  let r: Result<i64> = ev_close(move l);
+  match r { Ok(k) => { return done; } Err(e) => { return false; } }
+}
+fn socket(port: i64) -> bool ! async, net, proc, alloc, io
+  requires 1 <= port && port <= 65535
+{
+  let s: Socket = net_connect("127.0.0.1", port);
+  let mut l: Loop = ev_new(1);
+  if net_ok(s) {
+    l = ev_add_socket(move l, move s);
+    if ev_ok(l) { return drain(move l, 1); }
+  } else {
+    let r: Result<i64> = net_close(move s);
+  }
+  let r: Result<i64> = ev_close(move l);
+  return false;
+}
+fn process(program: str) -> bool ! async, net, proc, alloc, io
+  requires len(program) > 0
+{
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "read-into-child");
+  let p: Process = proc_spawn(program, args, "");
+  let mut l: Loop = ev_new(1);
+  if proc_ok(p) {
+    l = ev_add_process(move l, move p);
+    if ev_ok(l) { return drain(move l, 3); }
+  } else {
+    let r: Result<i64> = proc_kill(move p);
+  }
+  let r: Result<i64> = ev_close(move l);
+  return false;
+}
