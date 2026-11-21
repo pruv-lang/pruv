@@ -15,6 +15,13 @@ impl opencode_host::Sol for G {
             event, completion,
         )
     }
+    fn step_admitted(&self, cfg: &[i64], cfg_text: &[u8], ctl: &[i64], banks: &opencode_host::Banks, event: &[i64], completion: &[u8]) -> Vec<i64> {
+        sol::opencode_step_admitted(
+            cfg, cfg_text, ctl,
+            &banks.query_words, &banks.query_bytes, &banks.rows, &banks.text, &banks.document, &banks.saved,
+            event, completion,
+        )
+    }
 }
 fn main() {
     opencode_host::run(&G);

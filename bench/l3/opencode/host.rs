@@ -107,6 +107,10 @@ impl Banks {
 pub trait Sol {
     fn begin(&self, cfg: &[i64], cfg_text: &[u8]) -> Vec<i64>;
     fn step(&self, cfg: &[i64], cfg_text: &[u8], ctl: &[i64], banks: &Banks, event: &[i64], completion: &[u8]) -> Vec<i64>;
+    // R07 B: the same cfg that begin admitted (begin answered a step packet); no per-step environment walk
+    fn step_admitted(&self, cfg: &[i64], cfg_text: &[u8], ctl: &[i64], banks: &Banks, event: &[i64], completion: &[u8]) -> Vec<i64> {
+        self.step(cfg, cfg_text, ctl, banks, event, completion)
+    }
 }
 
 pub fn run<S: Sol>(sol: &S) {
@@ -919,6 +923,24 @@ fn apply_patches(b: &mut Banks, st: &Step, event: &[i64], comp: &[u8]) {
                 (false, Src::Bytes(s)) => b.bytes_mut(bank)[dst..dst + cnt].copy_from_slice(&s[soff..soff + cnt]),
             }
         }
+    }
+}
+
+// R07 C: the exact full-completion handoff `resize(b, n); copy(b, 0, n, completion, 0)` into a byte bank, with
+// n = len(completion), is the same as taking the completion buffer. The completion is dropped after this step, so
+// the host moves it into the bank instead of copying it (a whole read file or command output, once per handoff).
+fn completion_handoff(st: &Step, comp: &[u8]) -> Option<usize> {
+    if st.patches.len() != 2 {
+        return None;
+    }
+    let (r, c) = (&st.patches[0], &st.patches[1]);
+    let n = comp.len() as i64;
+    let bank = r[1];
+    let ok = r[..6] == [0, bank, 0, n, 0, 0] && c[..6] == [1, bank, 0, n, 2, 0] && r[6..] == [0, 0] && c[6..] == [0, 0];
+    if ok && !Banks::is_words(bank as usize) && n < MAX_BANK {
+        Some(bank as usize)
+    } else {
+        None
     }
 }
 
@@ -2101,6 +2123,9 @@ fn run_one<S: Sol>(sol: &S, v: &Value) -> String {
     let begin = sol.begin(&cfg.words, &cfg.text);
     let mut ctl: Vec<i64>;
     let mut first: Option<Vec<i64>> = None;
+    // begin admitted this cfg iff it answered a step packet (a refused cfg is a done packet: no step follows);
+    // `cfg` is owned here and never changes during the case
+    let admitted = begin.len() != CTL_WORDS;
     if begin.len() == CTL_WORDS {
         ctl = begin;
     } else if begin.len() >= HEADER && begin[0] == MAGIC_STEP {
@@ -2120,12 +2145,16 @@ fn run_one<S: Sol>(sol: &S, v: &Value) -> String {
         }
         let pkt = match first.take() {
             Some(p) => p,
+            None if admitted => sol.step_admitted(&cfg.words, &cfg.text, &ctl, &banks, &event, &comp),
             None => sol.step(&cfg.words, &cfg.text, &ctl, &banks, &event, &comp),
         };
         let st = parse_step(&pkt);
         ctl = st.ctl.clone();
         // patches first, in order, reading the event/completion this step was given
-        apply_patches(&mut banks, &st, &event, &comp);
+        match completion_handoff(&st, &comp) {
+            Some(bank) => *banks.bytes_mut(bank) = std::mem::take(&mut comp),
+            None => apply_patches(&mut banks, &st, &event, &comp),
+        }
         match st.action {
             1 => {
                 let out = render_result(&st.result);

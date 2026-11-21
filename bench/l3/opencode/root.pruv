@@ -346,6 +346,8 @@ pub fn opencode_begin(cfg: [i64], cfg_text: [u8]) -> [i64] ! alloc
   return crate::packet::step_packet(ctl, ep, ep, ep, eb, ep, 2);
 }
 
+// Checked step: re-checks the configuration geometry (O(E), no text scan) for a caller that did not keep the begin
+// admission. A host that owns the admitted configuration calls opencode_step_admitted instead.
 pub fn opencode_step(
   cfg: [i64], cfg_text: [u8], ctl: [i64],
   query_words: [i64], query_bytes: [u8], rows: [i64], text: [u8],
@@ -355,6 +357,34 @@ pub fn opencode_step(
   ensures len(result) >= 76
 {
   if !cfg_ok(cfg, cfg_text, false) { return crate::packet::done_internal(crate::packet::ctl_init(safe_mode(cfg), 999), 0); }
+  return step_body(cfg, cfg_text, ctl, query_words, query_bytes, rows, text, document, saved_result, event, completion);
+}
+
+// Admitted step (R07 B): the host passes the same immutable cfg/cfg_text that opencode_begin admitted (keys, values,
+// uniqueness, every ref) and that begin answered with a continue packet. Only the O(1) facts the phase modules need are
+// entry requires (checked at run time); the per-step O(E) environment walk is gone. Every bank, event, completion and
+// the ctl stay checked as before, and spawn_pool keeps its own ref guards.
+pub fn opencode_step_admitted(
+  cfg: [i64], cfg_text: [u8], ctl: [i64],
+  query_words: [i64], query_bytes: [u8], rows: [i64], text: [u8],
+  document: [u8], saved_result: [i64],
+  event: [i64], completion: [u8]
+) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && 0 <= cfg[1] && cfg[1] <= 5 && len(cfg_text) <= 2147483647
+  ensures len(result) >= 76
+{
+  return step_body(cfg, cfg_text, ctl, query_words, query_bytes, rows, text, document, saved_result, event, completion);
+}
+
+fn step_body(
+  cfg: [i64], cfg_text: [u8], ctl: [i64],
+  query_words: [i64], query_bytes: [u8], rows: [i64], text: [u8],
+  document: [u8], saved_result: [i64],
+  event: [i64], completion: [u8]
+) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && 0 <= cfg[1] && cfg[1] <= 5 && len(cfg_text) <= 2147483647
+  ensures len(result) >= 76
+{
   let blank: [i64] = crate::packet::ctl_init(cfg[1], 999);
   if len(ctl) != 64 { return crate::packet::done_internal(blank, 28); }
   if !banks_ok(query_words, query_bytes, rows, text, document, saved_result, completion) {
