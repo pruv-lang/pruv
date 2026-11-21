@@ -36,11 +36,25 @@ The reason is macOS malloc. Memory freed from the `serde_json::Value` tree (tiny
 - `ent_bound.pruv` `index_complete` (`ent_bound.pruv:292`) builds a fresh compact done pool.
   - A pre-pass sums the value string lengths (`vsum`, boundary error past 2^24).
   - The kept value strings are copied first, then the key texts, instead of copying the whole input pool.
+  - The size limit is the one of the old full-pool layout (`16 + pl + sum + 6m`), so the accepted inputs are the same as before.
+    When the kept value strings would take more than the input pool (one id shared by many keys), the done keeps the full input pool and the original value offsets, exactly as before.
 - `harness.rs` `Index` keeps `input` and passes it to step. `begin` takes the input by value (`Vec<i64>`).
 - `host.rs` `Sol::begin` takes `Vec<i64>`, and `drive` hands over `first` (`host.rs:1954`).
 - `root.pruv` forwards the new `index_step` signature. `forge.rs` tamper keeps the op 9 state unchanged (14 words).
 - A trial that reused the pool `Vec` in `mk_packet_owned` raised RSS and was reverted.
 - Step 1 (byte pool) did not land: D-DB4-1. The wire design is fixed and written down (below).
+
+## Audit
+
+One review (Codex gpt-6.2-astra ultra, delegation `7b4a6914`) found four must-fix items.
+- Fixed: a shared id could turn a valid input into `InputTooLarge`, and a large engine name could be newly accepted. The old size limit and a full-pool fallback were restored (above).
+- Fixed: `forge.rs` `tamper` returned prev unchanged for the op 9 state, so `rec`/`pool`/`tab`/state-head tampers were not applied.
+  It now applies them to the 14-word state and the other sections.
+  `FORGE_TAMPER={"at":1,"ops":[{"rec":[0,1]}]}` is now `InvalidPacket`.
+- Fixed: `FORGE_STATS=1` panicked on op 9 (it read `st[12]` as a blob length). It now reports 0 entries for the op 9 state.
+- Not changed: two sessions whose awaits are byte-identical can be swapped (A's kept input with B's await).
+  That await is then exactly A's own await, so the driver could have sent it anyway. The result is A's correct answer for the completion it gave.
+  The core's guarantee is relative to the adapter-kept input and prev. `index_swap` (where the driver swaps the input itself) is still rejected.
 
 ## Byte pool design (not implemented)
 
