@@ -1,0 +1,81 @@
+// LG13 (G-LG12-1): Result<T, String> with a value Ok type (struct, enum, Option) on both backends,
+// as local, parameter, result, match scrutinee and `?` operand
+struct Pt { x: i64, y: i64 }
+enum Shape { Dot, Box(w: i64) }
+
+fn mk_pt(x: i64) -> Result<Pt, String> ! alloc
+{
+  if x < 0 {
+    return Err::<Pt, String>(string_from("neg"));
+  }
+  return Ok::<Pt, String>(Pt { x: x, y: 1 });
+}
+
+fn mk_shape(x: i64) -> Result<Shape, String> ! alloc
+{
+  if x < 0 {
+    return Err::<Shape, String>(string_from("bad"));
+  }
+  if x == 0 {
+    return Ok::<Shape, String>(Shape::Dot);
+  }
+  return Ok::<Shape, String>(Shape::Box(x));
+}
+
+fn mk_opt(x: i64) -> Result<Option<i64>, String> ! alloc
+{
+  if x < 0 {
+    return Err::<Option<i64>, String>(string_from("nope"));
+  }
+  if x == 0 {
+    return Ok::<Option<i64>, String>(None);
+  }
+  return Ok::<Option<i64>, String>(Some(x));
+}
+
+fn shift(take r: Result<Pt, String>) -> Result<Pt, String> ! alloc
+{
+  let p: Pt = r?;
+  return Ok::<Pt, String>(Pt { x: p.y, y: p.x });
+}
+
+fn width(x: i64) -> Result<i64, String> ! alloc
+{
+  let s: Shape = mk_shape(x)?;
+  match s {
+    Shape::Dot => { return Ok::<i64, String>(0); }
+    Shape::Box(w) => { return Ok::<i64, String>(w); }
+  }
+}
+
+fn opt_or(x: i64) -> Result<i64, String> ! alloc
+{
+  let o: Option<i64> = mk_opt(x)?;
+  match o {
+    Some(v) => { return Ok::<i64, String>(v); }
+    None => { return Ok::<i64, String>(-1); }
+  }
+}
+
+fn show(take r: Result<i64, String>) -> i64
+{
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return 0 - 100 - len(e); }
+  }
+}
+
+fn run(k: i64, x: i64) -> i64 ! alloc
+{
+  if k == 0 {
+    let r: Result<Pt, String> = shift(mk_pt(x));
+    match r {
+      Ok(p) => { if p.x == 1 { return p.y; } return -50; }
+      Err(e) => { return 0 - len(e); }
+    }
+  }
+  if k == 1 {
+    return show(width(x));
+  }
+  return show(opt_or(x));
+}

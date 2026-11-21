@@ -57,10 +57,128 @@ def is_try(e):
 def check_try_position(e, at):
     if is_try(e):
         terr(at, "try_position",
-             "`?` is only allowed as the whole right-hand side of a let, an assignment or an expression statement",
+             "`?` is only allowed in the value of a let, a local assignment or a return, an expression statement or an"
+             " if condition, and not in the right operand of && / ||, in a quantifier or after a call, constructor, move,"
+             " index or arithmetic evaluated before it",
              "bind the value with `let x: T = e?;` first")
     for child in expr_kids(e):
         check_try_position(child, at)
+
+
+def _has_kind(e, kind):
+    return isinstance(e, kind) or any(_has_kind(k, kind) for k in expr_kids(e))
+
+
+_TRY_PURE_OPS = ("==", "!=", "<", "<=", ">", ">=", "&&", "||", "==>", "!")
+
+
+def _try_pure(e):
+    """LG13: a node that may run after a later `?` without changing what happens: a read of a binding, a literal
+    other than a string, a field read, `!` and a comparison or logic operator (none can fail, allocate or move)"""
+    return isinstance(e, (Var, IntLit, BoolLit, FieldAccess)) or isinstance(e, (Unary, Binary)) and e.op in _TRY_PURE_OPS
+
+
+def find_try(e):
+    """LG13: the first `?` of e in evaluation order (operands left to right, then the node itself), or None when e has
+    no `?` that can be lowered: a `?` inside the right operand of && / ||, inside a quantifier, after a node evaluated
+    before it that is not _try_pure (a call, a constructor, a move, an index, arithmetic, a string literal), or whose
+    operand passes `inout` while the statement reads a binding outside that operand stays for check_try_position."""
+    root = e
+    seen = {"impure": False}
+
+    def visit(e):
+        if isinstance(e, Quant):
+            if any(is_try(x) for x in _walk(e)):
+                raise _NoTry
+            return None
+        if isinstance(e, Binary) and e.op in ("&&", "||", "==>"):
+            found = visit(e.left)
+            if found is not None:
+                return found
+            if any(is_try(x) for x in _walk(e.right)):
+                raise _NoTry
+            note(e.right)
+            note_node(e)
+            return None
+        if is_try(e):
+            before = seen["impure"]
+            found = visit(e.operand)
+            if found is not None:
+                return found
+            if before:
+                raise _NoTry
+            if _has_kind(e.operand, InoutArg):
+                reads = lambda x: sum(isinstance(y, (Var, Move)) for y in _walk(x))
+                if reads(root) > reads(e.operand):
+                    raise _NoTry
+            return e
+        for k in expr_kids(e):
+            found = visit(k)
+            if found is not None:
+                return found
+        note_node(e)
+        return None
+
+    def note_node(e):
+        if not _try_pure(e):
+            seen["impure"] = True
+
+    def note(e):
+        for x in _walk(e):
+            note_node(x)
+
+    try:
+        return visit(e)
+    except _NoTry:
+        return None
+
+
+class _NoTry(Exception):
+    pass
+
+
+def _walk(e):
+    yield e
+    for k in expr_kids(e):
+        yield from _walk(k)
+
+
+def replace_expr(holder, target, new):
+    """LG13: replace the node `target` (by identity) inside the expression fields of `holder` with `new`"""
+    for key, value in vars(holder).items():
+        if value is target:
+            setattr(holder, key, new)
+            return True
+        if isinstance(value, list):
+            for i, item in enumerate(value):
+                if item is target:
+                    value[i] = new
+                    return True
+                if isinstance(item, (Expr, FieldInit)) and replace_expr(item, target, new):
+                    return True
+        elif isinstance(value, Expr) and replace_expr(value, target, new):
+            return True
+    return False
+
+
+def try_site(st, scope):
+    """LG13: the `?` to lower first in statement st, or None. Lowered positions: the value of a let, of an assignment
+    to a local variable and of a return, the expression of an expression statement and the condition of an if."""
+    if isinstance(st, Assign):
+        if st.deref or st.name in scope and scope[st.name][2] != "local":
+            return None
+        e = st.value
+    elif isinstance(st, Let):
+        e = st.value
+    elif isinstance(st, ExprStmt):
+        e = st.expr
+    elif isinstance(st, Return):
+        e = st.value
+    elif isinstance(st, If):
+        e = st.cond
+    else:
+        return None
+    return None if e is None else find_try(e)
 
 
 class _At:
@@ -1147,18 +1265,17 @@ class Checker:
     # ---- statements ----
     def block(s, stmts, scope):
         for i, st in enumerate(stmts):
-            candidate = st.expr if isinstance(st, ExprStmt) else st.value if isinstance(st, (Let, Assign)) else None
-            if is_try(candidate) and (not isinstance(st, Assign) or not st.deref and
-                                      (st.name not in scope or scope[st.name][2] == "local")):
+            candidate = try_site(st, scope)
+            if candidate is not None:
                 match = Match(st.line, st.col, candidate.operand, [])
                 if hasattr(st, "file"):
                     match.file = st.file
-                s.stmt(match, scope, None, try_tail=(st, stmts[i + 1:]))
+                s.stmt(match, scope, None, try_tail=(st, stmts[i + 1:], candidate))
                 stmts[i:] = [match]
                 return
             s.stmt(st, scope, stmts[i + 1] if i + 1 < len(stmts) else None)
 
-    def try_arms(s, st, rest, operand):
+    def try_arms(s, st, rest, target, operand):
         if operand.owner is not None or operand.name != "result":
             terr(st, "try_operand", "`?` needs a Result operand, got %s" % type_name(operand),
                  "use `?` only on a Result value")
@@ -1186,10 +1303,11 @@ class Checker:
         ok = MatchArm(*pos, None, "Ok", [ok_name], rest)
         fail = MatchArm(*pos, None, "Err", [err_name], [early])
         nodes = [ok, fail, early, err, err_value]
-        if isinstance(st, (Let, Assign)):
-            st.value = Var(*pos, ok_name)
+        if not (isinstance(st, ExprStmt) and st.expr is target):
+            value = Var(*pos, ok_name)
+            replace_expr(st, target, value)
             ok.body.insert(0, st)
-            nodes.append(st.value)
+            nodes.append(value)
         if hasattr(st, "file"):
             for node in nodes:
                 node.file = st.file

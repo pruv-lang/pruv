@@ -1164,7 +1164,7 @@ class FnGen:
         s.drop_handle(h)
 
     def mk_octor(s, e):
-        """Ok / Err of Result<T, String>: Ok carries a scalar; Err MOVES its String in (a named String local becomes
+        """Ok / Err of Result<T, String>: Ok carries a value; Err MOVES its String in (a named String local becomes
         null, a fresh String is taken as is: both are owned by the result afterwards)"""
         ty = e.ty
         T = st(ty)
@@ -5715,8 +5715,8 @@ def _g6_type_ok(t):
     """a type that may occur in a G6 program on LLVM: no collection, or a supported one (never nested)"""
     if is_collection(t):
         return _g6_coll_ok(t)
-    if is_owned_result(t):     # LG12 E2: Result<T, String> with a scalar T (other shapes are rejected by _typed_result_in)
-        return _g6_scalar(t.args[0])
+    if is_owned_result(t):     # LG12 E2: the String error is the only owned part
+        return not contains_collection(t.args[0])
     return not contains_collection(t)
 
 
@@ -5788,13 +5788,22 @@ def _is_coll_fn(f):
     return any(is_collection(p.type) for p in f.params) or is_collection(f.ret)
 
 
-def _typed_result_in(node, specialized_args, in_decl=False):
+def _result_ok_value(t, extended):
+    if t.owner is not None:
+        return False
+    if _g6_scalar(t) or t in (OPTION, RESULT):
+        return True
+    return (gopt(t) or (is_user_type(t) and t.name not in extended)) and all(
+        _result_ok_value(a, extended) for a in t.args)
+
+
+def _typed_result_in(node, specialized_args, extended, in_decl=False):
     """the first type the llvm layer cannot lay out: an owned Result<T, String> (LG12 E2) is supported as a local,
-    parameter, result or temporary with T = i64 / bool; as a record / enum field or an argument of another type it
+    parameter, result or temporary with a value T; as a record / enum field or an argument of another type it
     is not (it would need a drop path through that type)"""
     if isinstance(node, Type):
         if is_owned_result(node):
-            if in_decl or node.args[0] not in (I64, BOOL):
+            if in_decl or not _result_ok_value(node.args[0], extended):
                 return node
         elif any(is_owned_result(a) for a in node.args):
             return node
@@ -5812,7 +5821,7 @@ def _typed_result_in(node, specialized_args, in_decl=False):
     else:
         return None
     for child in children:
-        hit = _typed_result_in(child, specialized_args, in_decl)
+        hit = _typed_result_in(child, specialized_args, extended, in_decl)
         if hit is not None:
             return hit
     return None
@@ -5884,12 +5893,14 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     items = sorted([*prog.types, *prog.functions],
                    key=lambda item: positions.get((item.file, item.line, item.col), len(positions)))
     decl_ids = {id(d) for d in prog.types}
+    extended, _ = codegen.g9_sets(prog)
     for item in items:
-        hit = _typed_result_in(item, specialized_args, id(item) in decl_ids)
+        hit = _typed_result_in(item, specialized_args, extended, id(item) in decl_ids)
         if hit is not None:
             raise PruvError("codegen", item.line, item.col, "unsupported_type",
-                            ("%s uses %s, an owned String error Result that the llvm codegen layer supports only with an "
-                             "i64 or bool Ok type, outside records and other generic types" if is_owned_result(hit) else
+                            ("%s uses %s, an owned String error Result that the llvm codegen layer supports only with a "
+                             "value Ok type (i64, bool, a value struct or enum, or an Option of one), outside records "
+                             "and other generic types" if is_owned_result(hit) else
                              "%s uses %s, a Result with a non-i64 error type, which the llvm codegen layer does not "
                              "support yet") % (getattr(item, "disp", item.name), type_name(hit)),
                             "use the Rust backend", file=item.file)
