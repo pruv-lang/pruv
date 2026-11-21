@@ -3625,6 +3625,7 @@ impl<'a> FnVerifier<'a> {
             self.assume(st, g, self.u8_dom(&after));
             let count_val = self.try_fresh(&count_var.name, &Ty::I64)?;
             let count_after = count_val.try_ast()?.clone();
+            if let Some(w) = self.try_wf(&Ty::I64, &count_after)? { self.assume(st, g, w); }
             self.assume(st, g, z.and(&[count_after.ge_i(0), count_after.le(&after.n)]));
             st.env.set(&dst_var.name, Val::Arr(after));
             st.env.set(&count_var.name, count_val);
