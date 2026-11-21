@@ -421,43 +421,59 @@ fn event_step(win: [u8], kd: i64, lo: i64, hi: i64, inout st: [i64], inout sl: [
   return 0;
 }
 
-fn kd_at(ev: [i64], j: i64) -> i64
-  requires 0 <= j && 3 * j + 3 < len(ev)
-{
-  return ev[1 + 3 * j];
-}
-
 // The read packet (mode 1, row width 10) of a stored history window. omitted = the window does not start at the file start.
+// Framing (reference/tail.ts openLineWindow) walks the window once with a cursor; each event goes straight to the collector,
+// so no event array is built. Events in file order:
+//   kind 0: an LF-terminated line [lo,hi) of at most 1048576 bytes (CR stays in the span; empty lines produce no event)
+//   kind 1: a drop marker for a line over 1048576 bytes (LF-terminated, or the unterminated final fragment); [lo,hi) = its first 8192 bytes
+// omitted: everything up to and including the first LF is discarded (no LF: no event). An ordinary unterminated final fragment is ignored.
 pub fn window(win: [u8], omitted: bool, title: str, model: str) -> [i64] ! alloc
   ensures len(result) >= 28
 {
   if len(win) > 8388608 { return crate::packet::simple_error(1, 12, 6, 1); }
   if len(title) > 1000000 || len(model) > 20000000 { return crate::packet::simple_error(1, 12, 6, 2); }
-  let ev: [i64] = crate::framing::scan(win, omitted);
-  let count: i64 = ev[0];
-  if count < 0 || count > 8388608 || len(ev) != 1 + 3 * count { return crate::packet::simple_error(1, 12, 6, 2); }
+  let n: i64 = len(win);
   let mut st: [i64] = crate::turns::new_state();
   let mut sl: [i64] = crate::turns::new_slots();
   let mut buf: [u8] = crate::turns::new_buffer();
   let mut bad: i64 = 0;
   let mut j: i64 = 0;
-  while j < count && bad == 0
-    invariant 0 <= j && j <= count && count <= 8388608 && len(ev) == 1 + 3 * count && len(win) <= 8388608 && 0 <= bad && bad <= 1
+  let mut p: i64 = crate::framing::scan_start(win, omitted);
+  while p < n && bad == 0
+    invariant 0 <= p && p <= n && n == len(win) && n <= 8388608 && 0 <= j && j <= p && 0 <= bad && bad <= 1
     invariant len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= 2 * j && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-    decreases count - j
+    decreases n - p
   {
-    let kd: i64 = kd_at(ev, j);
-    let lo: i64 = ev[2 + 3 * j];
-    let hi: i64 = ev[3 + 3 * j];
-    let mut r: i64 = event_step(win, kd, lo, hi, inout st, inout sl, inout buf);
-    if r == 2 {
-      buf = crate::turns::grow(buf, st[0]);
+    let q: i64 = crate::framing::find_lf(win, p);
+    let mut kd: i64 = -1;
+    let lo: i64 = p;
+    let mut hi: i64 = p;
+    if q < 0 {
+      if n - p > 1048576 { kd = 1; hi = p + 8192; }
+      p = n;
+    } else {
+      let ln: i64 = q - p;
+      if ln > 1048576 {
+        kd = 1;
+        hi = p + 8192;
+      } else if ln > 0 {
+        kd = 0;
+        hi = q;
+      }
+      p = q + 1;
+    }
+    let mut r: i64 = 0;
+    if kd >= 0 {
       r = event_step(win, kd, lo, hi, inout st, inout sl, inout buf);
+      if r == 2 {
+        buf = crate::turns::grow(buf, st[0]);
+        r = event_step(win, kd, lo, hi, inout st, inout sl, inout buf);
+      }
+      j = j + 1;
     }
     if r != 0 { bad = 1; }
-    j = j + 1;
   }
   if bad != 0 { return crate::packet::simple_error(1, 12, 6, 2); }
   let col: crate::turns::Collected = crate::turns::finish(st, sl, buf, 0);
