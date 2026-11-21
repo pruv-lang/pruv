@@ -1,0 +1,4 @@
+fn grab(v: [i64]) -> () {
+  v[0] = 1;
+}
+fn f(b: [i64]) -> () { grab(subview(b, 0, 0)); }

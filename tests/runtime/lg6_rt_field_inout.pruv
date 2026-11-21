@@ -1,0 +1,42 @@
+struct C { n: i64, ok: bool }
+
+struct D { k: i64, a: [u8], c: C }
+
+fn bump(inout x: i64, d: i64) -> ()
+  requires 0 <= x && x <= 1000 && 0 <= d && d <= 1000
+  ensures x >= d
+{
+  x = x + d;
+}
+
+fn grow(inout a: [u8]) -> () ! alloc
+  requires len(a) <= 1000
+  ensures len(a) == len(old(a)) + 2
+{
+  a = alloc(len(a) + 2, 7);
+}
+
+fn grow_in(inout d: D) -> () ! alloc
+  requires len(d.a) == 5
+  ensures len(d.a) == 7
+{
+  grow(inout d.a);
+}
+
+fn run() -> () ! io, alloc {
+  let mut c: C = C { n: 10, ok: false };
+  bump(inout c.n, 32);
+  print(c.n);
+  let a0: [u8] = alloc(3, 1);
+  let mut d: D = D { k: 5, a: move a0, c: C { n: 1, ok: true } };
+  bump(inout d.k, 4);
+  bump(inout d.c.n, 6);
+  print(d.k);
+  print(d.c.n);
+  grow(inout d.a);
+  print(len(d.a));
+  print(d.a[4]);
+  grow_in(inout d);
+  print(len(d.a));
+  print(d.a[6]);
+}

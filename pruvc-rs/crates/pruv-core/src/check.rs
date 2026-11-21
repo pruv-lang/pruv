@@ -375,6 +375,8 @@ struct Checker {
     boundary: Option<usize>,
     /// G5 A0: parameter names of the function being checked
     cur_params: Vec<String>,
+    /// LG6: checking the operands of a subview(...) argument
+    in_view: bool,
 }
 
 /// G4 A0: `check_with_externs` for an explicit-mode program: resolves the names of the whole program to identities first
@@ -685,7 +687,7 @@ impl Checker {
             if funcs.contains_key(&name) {
                 return Err(terr(f.line, f.col, "dup_fn", format!("function {} defined twice", name), ""));
             }
-            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within")
+            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within" | "subview")
                 || is_bit_builtin(&name)
                 || is_word_builtin(&name)
                 || contract_only(&name).is_some()
@@ -759,6 +761,7 @@ impl Checker {
             cur_cost: false,
             s5_errors: Vec::new(),
             par_groups: Vec::new(),
+            in_view: false,
             explicit: false,
             host_entry: Vec::new(),
             uses_inout,
@@ -910,7 +913,7 @@ impl Checker {
         for d in types {
             let (name, line, col) = (d.name(), d.line(), d.col());
             // G4: explicit mode checked the names as written (modules::resolve); the identities are not type-name shaped
-            if !self.explicit && !type_name_ok(name) {
+            if !self.explicit && name != "subview" && !type_name_ok(name) {
                 return Err(terr(
                     line,
                     col,
@@ -919,7 +922,7 @@ impl Checker {
                     format!("rename it, e.g. {}", cap_first(name, true)),
                 ));
             }
-            if !self.explicit && RESERVED_TYPE_NAMES.contains(&name) {
+            if !self.explicit && (name == "subview" || RESERVED_TYPE_NAMES.contains(&name)) {
                 return Err(terr(line, col, "reserved", format!("{} is a builtin name", name), "rename the type"));
             }
             if self.decls.contains_key(name) {
@@ -3000,7 +3003,7 @@ impl Checker {
                     format!("{} returns {}: a par branch must return ()", n, tn(&f.ret)),
                     "call a unit Pruv helper and pass results back through whole inout arrays"));
             }
-        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within"].contains(&n.as_str())
+        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within", "subview"].contains(&n.as_str())
             || is_bit_builtin(n)
             || is_word_builtin(n)
             || contract_only(n).is_some() || is_catalog(n) || (n == "old" && self.uses_inout)
@@ -3416,7 +3419,43 @@ impl Checker {
         Ok(())
     }
 
+    fn view_context(e: &Call) -> PruvError {
+        terr(e.line, e.col, "view_context",
+            "subview(...) is only allowed as a direct argument to a non-inout array parameter of a function call",
+            "pass it straight to a function, or use copy_range to make an owned array")
+    }
+
     fn expect_user_arg(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, c: bool, borrow_vector: bool) -> Res<()> {
+        if let Expr::Call(x) = e {
+            if x.name == "subview" {
+                if c || !borrow_vector || !ty.is_array() || self.in_view {
+                    return Err(Self::view_context(x));
+                }
+                if x.targs.is_some() {
+                    return Err(terr(x.line, x.col, "type_arity", "builtin subview takes no type arguments", "remove the `::<...>`"));
+                }
+                if x.args.len() != 3 {
+                    return Err(terr(x.line, x.col, "arity", format!("subview takes 3 argument(s), got {}", x.args.len()), ""));
+                }
+                self.in_view = true;
+                if place_root(&x.args[0]).is_none() {
+                    // a view nested in the source is reported where it is
+                    let r = self.expect(&mut x.args[0], ty, scope, c, None);
+                    self.in_view = false;
+                    r?;
+                    return Err(Self::view_context(x));
+                }
+                let r = (|| -> Res<()> {
+                    self.expect(&mut x.args[0], ty, scope, c, None)?;
+                    self.expect(&mut x.args[1], &i64t(), scope, c, None)?;
+                    self.expect(&mut x.args[2], &i64t(), scope, c, None).map(|_| ())
+                })();
+                self.in_view = false;
+                r?;
+                x.ty = Some(ty.to_key());
+                return Ok(());
+            }
+        }
         if *ty == strt() {
             return self.expect_str_arg(e, scope, c);
         }
@@ -4254,6 +4293,11 @@ impl Checker {
                 }
                 continue;
             }
+            if let Expr::Call(x) = &e.args[i] {
+                if x.name == "subview" {
+                    return Err(Self::view_context(x));
+                }
+            }
             let (aline, acol) = (e.args[i].line(), e.args[i].col());
             let arg: &mut InoutArg = match &mut e.args[i] {
                 Expr::InoutArg(a) => a,
@@ -4802,7 +4846,22 @@ impl Checker {
             }
             Ok(())
         };
-        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within")
+        if n == "subview" {
+            return Err(Self::view_context(e));
+        }
+        for arg in &e.args {
+            let arg = match arg {
+                Expr::InoutArg(a) => a.expr.as_ref(),
+                _ if self.funcs.contains_key(&n) => continue,
+                _ => arg,
+            };
+            if let Expr::Call(x) = arg {
+                if x.name == "subview" {
+                    return Err(Self::view_context(x));
+                }
+            }
+        }
+        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within" | "subview")
             || is_bit_builtin(&n)
             || is_word_builtin(&n);
         let is_old = n == "old" && self.uses_inout && !self.funcs.contains_key(&n); // G5 A0: contextual builtin

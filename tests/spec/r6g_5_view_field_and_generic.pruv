@@ -1,0 +1,8 @@
+// spec: R-6g-5 accept
+struct D { a: [i64] }
+fn first<T: Element>(v: [T]) -> T
+  requires len(v) == 1
+{ return v[0]; }
+fn f(d: D) -> i64
+  requires len(d.a) >= 3
+{ return first::<i64>(subview(d.a, 2, 3)); }

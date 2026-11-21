@@ -3204,6 +3204,8 @@ class Gen:
             return "&" + e.name
         if isinstance(e, Var):
             return e.name
+        if isinstance(e, Call) and e.name == "subview":
+            return s.e(e)
         if isinstance(e, Call) and e.name == "vec_get" and e.name not in s.fmap and e.ty == STR:
             return s.e(e)
         return "&" + s.e(e)
@@ -3558,6 +3560,14 @@ class Gen:
                 return ('{ let pruv_b: &[u8] = %s; match ::core::str::from_utf8(pruv_b) { '
                         'Ok(pruv_s) => ::std::string::String::from(pruv_s), '
                         'Err(_) => panic!("pruv: invalid UTF-8 (len {})", pruv_b.len()), } }') % b
+            if n == "subview":
+                b, lo, hi = s.arr_ref(a[0]), s.e(a[1]), s.e(a[2])
+                if not s.verified:
+                    return ("match (%s, %s, %s) { (pruv_a, pruv_lo, pruv_hi) => { "
+                            "if !(pruv_lo >= 0 && pruv_lo <= pruv_hi && (pruv_hi as u64) <= (pruv_a.len() as u64)) "
+                            "{ pruv_oob(pruv_lo, pruv_a.len()) } "
+                            "&pruv_a[(pruv_lo as usize)..(pruv_hi as usize)] } }" % (b, lo, hi))
+                return "unsafe { (%s).get_unchecked(((%s) as usize)..((%s) as usize)) }" % (b, lo, hi)
             if n == "substr":  # G2 B2
                 if not s.verified:
                     return "pruv_substr(%s, %s, %s)" % (s.arr_ref(a[0]), s.e(a[1]), s.e(a[2]))

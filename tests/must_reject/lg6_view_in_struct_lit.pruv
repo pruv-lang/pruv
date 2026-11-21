@@ -1,0 +1,2 @@
+struct D { a: [i64] }
+fn f(b: [i64]) -> D { return D { a: subview(b, 0, 0) }; }

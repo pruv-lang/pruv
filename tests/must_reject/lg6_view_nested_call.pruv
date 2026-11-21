@@ -1,0 +1,6 @@
+fn width(v: [i64]) -> i64 { return len(v); }
+
+fn f(b: [i64]) -> i64 {
+    return width(subview(b,
+        width(subview(b, 0, 0)), 0));
+}

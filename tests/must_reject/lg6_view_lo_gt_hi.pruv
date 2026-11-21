@@ -1,0 +1,2 @@
+fn length(v: [i64]) -> i64 { return len(v); }
+fn f(b: [i64]) -> i64 { return length(subview(b, 1, 0)); }

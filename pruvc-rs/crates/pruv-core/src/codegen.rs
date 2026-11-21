@@ -4153,6 +4153,9 @@ impl<'a> Gen<'a> {
             }
             return Ok(x.name.clone());
         }
+        if matches!(e, Expr::Call(x) if x.name == "subview") {
+            return self.e(e);
+        }
         if matches!(e, Expr::Call(x) if x.name == "vec_get" && x.ty.as_deref() == Some("str") && !self.fmap.contains_key(&x.name)) {
             return self.e(e);
         }
@@ -4879,6 +4882,20 @@ impl<'a> Gen<'a> {
                         "Ok(pruv_s) => ::std::string::String::from(pruv_s), ",
                         "Err(_) => panic!(\"pruv: invalid UTF-8 (len {{}})\", pruv_b.len()), }} }}"
                     ), b));
+                }
+                if n == "subview" {
+                    let b = self.arr_ref(arg(a, 0)?)?;
+                    let lo = self.e(arg(a, 1)?)?;
+                    let hi = self.e(arg(a, 2)?)?;
+                    if !self.verified {
+                        return Ok(format!(concat!(
+                            "match ({}, {}, {}) {{ (pruv_a, pruv_lo, pruv_hi) => {{ ",
+                            "if !(pruv_lo >= 0 && pruv_lo <= pruv_hi && (pruv_hi as u64) <= (pruv_a.len() as u64)) ",
+                            "{{ pruv_oob(pruv_lo, pruv_a.len()) }} ",
+                            "&pruv_a[(pruv_lo as usize)..(pruv_hi as usize)] }} }}"
+                        ), b, lo, hi));
+                    }
+                    return Ok(format!("unsafe {{ ({}).get_unchecked((({}) as usize)..(({}) as usize)) }}", b, lo, hi));
                 }
                 if n == "substr" {
                     // G2 B2: argument evaluation order s -> lo -> hi

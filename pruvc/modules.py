@@ -387,10 +387,10 @@ class _Resolver:
                     _err(f, "reserved", "%s is a builtin name" % f.name, "rename the function")
                 m.funcs[f.name] = f
             for d in [i for i in m.items if isinstance(i, TypeDecl)]:
-                if not TYPE_NAME_RE.match(d.name):
+                if d.name != "subview" and not TYPE_NAME_RE.match(d.name):
                     _err(d, "type_name", "type name %s must start with an upper-case letter" % d.name,
                          "rename it, e.g. %s" % (d.name[:1].upper() + d.name[1:]))
-                if d.name in RESERVED_TYPE_NAMES:
+                if d.name == "subview" or d.name in RESERVED_TYPE_NAMES:
                     _err(d, "reserved", "%s is a builtin name" % d.name, "rename the type")
                 if d.name in m.types:
                     _err(d, "dup_type", "type %s defined twice" % s.ident(m.path, d.name, m.pkg))

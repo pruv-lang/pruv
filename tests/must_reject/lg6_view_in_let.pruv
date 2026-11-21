@@ -1,0 +1,4 @@
+fn f(b: [i64]) -> i64 {
+  let v: [i64] = subview(b, 0, 0);
+  return len(v);
+}
