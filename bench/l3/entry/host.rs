@@ -19,6 +19,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::rc::Rc;
 
 use serde_json::Value;
 
@@ -32,7 +33,7 @@ const KEY_HOST_EXEC: &str = "wireEngine.account.folder.codexHostExecution";
 
 // The generated module as seen by the host; harness.rs implements it with the `sol` functions.
 pub trait Sol {
-    fn begin(&self, input: &[i64]) -> Vec<i64>;
+    fn begin(&self, input: &[i64]) -> Rc<Vec<i64>>;
     fn step(&self, prev: &[i64], completion: &[i64]) -> Vec<i64>;
 }
 
@@ -253,6 +254,42 @@ impl Enc {
         self.pool.extend(u.iter().map(|&x| x as i64));
         [6, off, u.len() as i64]
     }
+    fn text_vs(&mut self, s: &str) -> [i64; 3] {
+        let off = self.pool.len();
+        self.pool.extend(s.encode_utf16().map(i64::from));
+        [6, off as i64, (self.pool.len() - off) as i64]
+    }
+    fn units_vs(&mut self, v: &Value) -> R<[i64; 3]> {
+        let units = v.as_array().ok_or_else(|| HostErr::Case("u16 needs an array".into()))?;
+        let off = self.pool.len();
+        self.pool.reserve(units.len());
+        for unit in units {
+            match unit.as_u64() {
+                Some(n) if n <= 65535 => self.pool.push(n as i64),
+                _ => return ce("u16 unit out of range"),
+            }
+        }
+        Ok([6, off as i64, units.len() as i64])
+    }
+    fn value_vs(&mut self, refs: &mut Refs, v: Option<&Value>) -> R<[i64; 3]> {
+        match v {
+            None => Ok([10, 0, 0]),
+            Some(Value::String(s)) => Ok(self.text_vs(s)),
+            Some(Value::Object(m)) if m.len() == 1 && m.contains_key("u16") => self.units_vs(&m["u16"]),
+            Some(Value::Object(m)) if m.len() == 1 && m.contains_key("ref") => {
+                let name = m["ref"].as_str().ok_or_else(|| HostErr::Case("ref needs a name".into()))?;
+                Ok([9, refs.id(name), 0])
+            }
+            Some(v) => Ok(self.jv_vs(refs, &parse_jv(v)?)),
+        }
+    }
+    fn key_vs(&mut self, v: &Value) -> R<[i64; 3]> {
+        match v {
+            Value::String(s) => Ok(self.text_vs(s)),
+            Value::Object(m) if m.len() == 1 && m.contains_key("u16") => self.units_vs(&m["u16"]),
+            _ => Ok(self.str_vs(&jv_str(v, "engineThreads key")?)),
+        }
+    }
     fn jv_vs(&mut self, refs: &mut Refs, j: &Jv) -> [i64; 3] {
         match j {
             Jv::Undef => [0, 0, 0],
@@ -303,15 +340,15 @@ fn mk_packet(kind: i64, op_id: i64, seq: i64, op: i64, e: &Enc) -> Vec<i64> {
 // ---------------------------------------------------------------------------------------------------------------
 // packet decoding
 
-struct Pkt {
+struct Pkt<'a> {
     kind: i64,
     op_id: i64,
     seq: i64,
     op: i64,
-    secs: Vec<Vec<i64>>,
+    secs: Vec<&'a [i64]>,
 }
 
-fn parse_pkt(w: &[i64]) -> R<Pkt> {
+fn parse_pkt(w: &[i64]) -> R<Pkt<'_>> {
     if w.len() < 7 {
         return ie(format!("core packet too short ({} words)", w.len()));
     }
@@ -334,23 +371,20 @@ fn parse_pkt(w: &[i64]) -> R<Pkt> {
         return ie("core packet header is truncated");
     }
     let mut rest = payload.len() - 2 - nsec;
-    let mut lens = Vec::new();
+    let mut secs = Vec::with_capacity(nsec);
+    let mut at = 2 + nsec;
     for i in 0..nsec {
         let l = payload[2 + i];
         if l < 0 || (l as u64) > rest as u64 {
             return ie("core packet section length is invalid");
         }
         rest -= l as usize;
-        lens.push(l as usize);
+        let end = at + l as usize;
+        secs.push(&payload[at..end]);
+        at = end;
     }
     if rest != 0 {
         return ie("core packet section lengths do not cover the payload");
-    }
-    let mut at = 2 + nsec;
-    let mut secs = Vec::new();
-    for l in lens {
-        secs.push(payload[at..at + l].to_vec());
-        at += l;
     }
     Ok(Pkt { kind: w[1], op_id: w[2], seq: w[3], op: payload[0], secs })
 }
@@ -369,7 +403,7 @@ enum V {
     Insp,
 }
 
-impl Pkt {
+impl Pkt<'_> {
     fn word(&self, sec: usize, off: usize) -> R<i64> {
         match self.secs.get(sec).and_then(|s| s.get(off)) {
             Some(x) => Ok(*x),
@@ -393,12 +427,9 @@ impl Pkt {
                 Ok(V::Num(((b as u64) << 32) | a as u64))
             }
             6 => {
-                let pool = &self.secs[0];
-                if a < 0 || b < 0 || (a as u64) + (b as u64) > pool.len() as u64 {
-                    return ie("string slot outside the pool");
-                }
-                let mut out = Vec::with_capacity(b as usize);
-                for x in &pool[a as usize..(a + b) as usize] {
+                let units = self.string_units(a, b)?;
+                let mut out = Vec::with_capacity(units.len());
+                for x in units {
                     if !(0..=65535).contains(x) {
                         return ie("pool word is not a UTF-16 unit");
                     }
@@ -422,6 +453,28 @@ impl Pkt {
             11 => Ok(V::Insp),
             _ => ie(format!("unknown value tag {}", tag)),
         }
+    }
+    fn string_units(&self, start: i64, len: i64) -> R<&[i64]> {
+        let pool = self.secs[0];
+        if start < 0 || len < 0 || (start as u64) + (len as u64) > pool.len() as u64 {
+            return ie("string slot outside the pool");
+        }
+        Ok(&pool[start as usize..(start + len) as usize])
+    }
+
+    fn render_at(&self, refs: &Refs, sec: usize, off: usize, out: &mut String) -> R<()> {
+        if self.word(sec, off)? == 6 {
+            let units = self.string_units(self.word(sec, off + 1)?, self.word(sec, off + 2)?)?;
+            if units.iter().all(|u| (32..=126).contains(u) && *u != 34 && *u != 92) {
+                out.reserve(units.len() + 2);
+                out.push('"');
+                out.extend(units.iter().map(|&u| char::from(u as u8)));
+                out.push('"');
+                return Ok(());
+            }
+        }
+        out.push_str(&render_v(refs, &self.val(sec, off)?)?);
+        Ok(())
     }
     // Rows of a table slot: validates section length = count * width.
     fn table(&self, v: &V, width: usize) -> R<(usize, usize)> {
@@ -908,37 +961,41 @@ fn parse_probe(v: Option<&Value>) -> R<Option<Probe>> {
 // ---------------------------------------------------------------------------------------------------------------
 // input encoding (DESIGN 3.1)
 
-fn parse_bound(v: &Value) -> R<(Jv, Option<Jv>)> {
-    // returns (bound-as-primitive, threadId) ; threadId Some => inspected object
-    match v {
-        Value::Object(m) => {
-            if is_jv_special(m) {
-                if let Some(Value::Array(a)) = m.get("obj") {
-                    let mut tid = Jv::Absent;
-                    for e in a {
-                        let pair = match e.as_array() {
-                            Some(p) if p.len() == 2 => p,
-                            _ => return ce("obj entry must be [key, value]"),
-                        };
-                        let k = jv_str(&pair[0], "obj key")?;
-                        let val = parse_jv(&pair[1])?;
-                        if k == u16s("threadId") && val != Jv::Absent {
-                            tid = val;
-                        }
-                    }
-                    return Ok((Jv::Absent, Some(tid)));
-                }
-                if m.contains_key("arr") {
-                    return Ok((Jv::Absent, Some(Jv::Absent)));
-                }
-                return Ok((parse_jv(v)?, None));
-            }
-            let tid = jv_opt(m.get("threadId"))?;
-            Ok((Jv::Absent, Some(tid)))
+fn bound_thread_id(entries: &[Value]) -> R<Jv> {
+    let mut tid = Jv::Absent;
+    for e in entries {
+        let pair = e.as_array().filter(|p| p.len() == 2)
+            .ok_or_else(|| HostErr::Case("obj entry must be [key, value]".into()))?;
+        let k = jv_str(&pair[0], "obj key")?;
+        let val = parse_jv(&pair[1])?;
+        if k.iter().copied().eq("threadId".encode_utf16()) && val != Jv::Absent {
+            tid = val;
         }
-        Value::Array(_) => Ok((Jv::Absent, Some(Jv::Absent))),
-        _ => Ok((parse_jv(v)?, None)),
     }
+    Ok(tid)
+}
+
+fn enc_bound(enc: &mut Enc, refs: &mut Refs, b: &Value, rows: &mut Vec<i64>) -> R<()> {
+    match b {
+        Value::Object(o) if !is_jv_special(o) => {
+            rows.extend_from_slice(&[11, 0, 0]);
+            put(rows, enc.value_vs(refs, o.get("threadId"))?);
+        }
+        Value::Array(_) => rows.extend_from_slice(&[11, 0, 0, 10, 0, 0]),
+        Value::Object(o) if o.len() == 1 && o.contains_key("arr") => {
+            rows.extend_from_slice(&[11, 0, 0, 10, 0, 0]);
+        }
+        Value::Object(o) if o.len() == 1 && o.get("obj").and_then(Value::as_array).is_some() => {
+            let tid = bound_thread_id(o["obj"].as_array().unwrap())?;
+            rows.extend_from_slice(&[11, 0, 0]);
+            put(rows, enc.jv_vs(refs, &tid));
+        }
+        _ => {
+            put(rows, enc.value_vs(refs, Some(b))?);
+            rows.extend_from_slice(&[0, 0, 0]);
+        }
+    }
+    Ok(())
 }
 
 enum TL<'a> {
@@ -988,11 +1045,9 @@ fn enc_forks(enc: &mut Enc, refs: &mut Refs, v: Option<&Value>) -> R<[i64; 3]> {
     };
     let a = list.unwrap();
     let sec = enc.reserve();
-    let mut rows = Vec::new();
+    let mut rows = Vec::with_capacity(3 * a.len());
     for e in a {
-        let j = jv_opt(Some(e))?;
-        let vs = enc.jv_vs(refs, &j);
-        put(&mut rows, vs);
+        put(&mut rows, enc.value_vs(refs, Some(e))?);
     }
     enc.fill(sec, rows);
     Ok([7, sec as i64, a.len() as i64])
@@ -1004,9 +1059,7 @@ fn enc_session(enc: &mut Enc, refs: &mut Refs, v: &Value, out: &mut Vec<i64>) ->
         None => return ce("session must be an object"),
     };
     for k in ["id", "temporary", "engine"] {
-        let j = jv_opt(m.get(k))?;
-        let vs = enc.jv_vs(refs, &j);
-        put(out, vs);
+        put(out, enc.value_vs(refs, m.get(k))?);
     }
     // externalThread: slots 3..6
     match thread_like(m.get("externalThread"))? {
@@ -1016,9 +1069,7 @@ fn enc_session(enc: &mut Enc, refs: &mut Refs, v: &Value, out: &mut Vec<i64>) ->
         TL::Obj(o) => {
             out.extend_from_slice(&[11, 0, 0]);
             for k in ["engine", "thread"] {
-                let j = jv_opt(o.get(k))?;
-                let vs = enc.jv_vs(refs, &j);
-                put(out, vs);
+                put(out, enc.value_vs(refs, o.get(k))?);
             }
             let f = enc_forks(enc, refs, o.get("forks"))?;
             put(out, f);
@@ -1031,9 +1082,7 @@ fn enc_session(enc: &mut Enc, refs: &mut Refs, v: &Value, out: &mut Vec<i64>) ->
         TL::Null => out.extend_from_slice(&[1, 0, 0, 0, 0, 0]),
         TL::Obj(o) => {
             out.extend_from_slice(&[11, 0, 0]);
-            let j = jv_opt(o.get("cliSession"))?;
-            let vs = enc.jv_vs(refs, &j);
-            put(out, vs);
+            put(out, enc.value_vs(refs, o.get("cliSession"))?);
         }
     }
     // engineThreads: slot 9
@@ -1048,42 +1097,38 @@ fn enc_session(enc: &mut Enc, refs: &mut Refs, v: &Value, out: &mut Vec<i64>) ->
                 Some(a) => a,
                 None => return ce("engineThreads obj needs an array"),
             };
-            let mut entries: Vec<(Vec<u16>, Value)> = Vec::new();
-            for e in a {
-                let pair = match e.as_array() {
-                    Some(p) if p.len() == 2 => p,
-                    _ => return ce("engineThreads entry must be [key, bound]"),
-                };
-                let k = jv_str(&pair[0], "engineThreads key")?;
-                if let Value::Object(b) = &pair[1] {
-                    if b.len() == 1 && b.contains_key("absent") {
+            let sec = enc.reserve();
+            let mut rows = Vec::with_capacity(9 * a.len());
+            if let [entry] = a.as_slice() {
+                let pair = entry.as_array().filter(|p| p.len() == 2)
+                    .ok_or_else(|| HostErr::Case("engineThreads entry must be [key, bound]".into()))?;
+                let pool_end = enc.pool.len();
+                let kv = enc.key_vs(&pair[0])?;
+                if matches!(&pair[1], Value::Object(b) if b.len() == 1 && b.contains_key("absent")) {
+                    enc.pool.truncate(pool_end);
+                } else {
+                    put(&mut rows, kv);
+                    enc_bound(enc, refs, &pair[1], &mut rows)?;
+                }
+            } else {
+                let mut entries = Vec::with_capacity(a.len());
+                for e in a {
+                    let pair = e.as_array().filter(|p| p.len() == 2)
+                        .ok_or_else(|| HostErr::Case("engineThreads entry must be [key, bound]".into()))?;
+                    let k = jv_str(&pair[0], "engineThreads key")?;
+                    if matches!(&pair[1], Value::Object(b) if b.len() == 1 && b.contains_key("absent")) {
                         continue;
                     }
+                    entries.push((k, &pair[1]));
                 }
-                entries.push((k, pair[1].clone()));
-            }
-            let ordered = order_entries(entries);
-            let sec = enc.reserve();
-            let mut rows = Vec::new();
-            for (k, b) in &ordered {
-                let kv = enc.str_vs(k);
-                put(&mut rows, kv);
-                let (prim, tid) = parse_bound(b)?;
-                match tid {
-                    Some(t) => {
-                        rows.extend_from_slice(&[11, 0, 0]);
-                        let vs = enc.jv_vs(refs, &t);
-                        put(&mut rows, vs);
-                    }
-                    None => {
-                        let vs = enc.jv_vs(refs, &prim);
-                        put(&mut rows, vs);
-                        rows.extend_from_slice(&[0, 0, 0]);
-                    }
+                for (k, b) in order_entries(entries) {
+                    put(&mut rows, enc.str_vs(&k));
+                    enc_bound(enc, refs, b, &mut rows)?;
                 }
             }
+            let count = rows.len() / 9;
             enc.fill(sec, rows);
-            out.extend_from_slice(&[8, sec as i64, ordered.len() as i64]);
+            out.extend_from_slice(&[8, sec as i64, count as i64]);
         }
         Some(_) => return ce("engineThreads must be {\"obj\":..}, null, undefined or absent"),
     }
@@ -1197,22 +1242,31 @@ fn encode_input(refs: &mut Refs, op: i64, args: &Value) -> R<Enc> {
             };
             enc_session(&mut enc, refs, s, &mut rec)?;
         }
-        9 => {
-            let list = match a.get("sessions") {
-                Some(Value::Array(l)) => l,
-                _ => return ce("sessions must be an array"),
-            };
-            let sec = enc.reserve();
-            let mut rows = Vec::new();
-            for s in list {
-                enc_session(&mut enc, refs, s, &mut rows)?;
-            }
-            enc.fill(sec, rows);
-            put(&mut rec, [7, sec as i64, list.len() as i64]);
-        }
         _ => return ce("unsupported op"),
     }
     enc.rec = rec;
+    Ok(enc)
+}
+
+fn encode_index(refs: &mut Refs, args: Value) -> R<Enc> {
+    let sessions = match args {
+        Value::Object(mut a) => match a.remove("sessions") {
+            Some(Value::Array(list)) => list,
+            _ => return ce("sessions must be an array"),
+        },
+        Value::Null => return ce("sessions must be an array"),
+        _ => return ce("args must be an object"),
+    };
+    let count = sessions.len();
+    let mut enc = Enc::new();
+    enc.pool.reserve(24 * count);
+    let sec = enc.reserve();
+    let mut rows = Vec::with_capacity(30 * count);
+    for session in sessions {
+        enc_session(&mut enc, refs, &session, &mut rows)?;
+    }
+    enc.fill(sec, rows);
+    put(&mut enc.rec, [7, sec as i64, count as i64]);
     Ok(enc)
 }
 
@@ -1473,16 +1527,14 @@ impl Host {
             8 => {
                 let v = p.val(1, 1)?;
                 let (sec, count) = p.table(&v, 3)?;
-                let mut results = Vec::new();
+                let mut results = Vec::with_capacity(3 * count);
                 let mut thrown: Option<ErrSpec> = None;
                 let mut n = 0usize;
                 for i in 0..count {
-                    let id = p.val(sec, i * 3)?;
-                    let idtxt = match &id {
-                        V::Absent => "{\"undef\":1}".to_string(),
-                        other => render_v(&self.refs, other)?,
-                    };
-                    self.trace.push(format!("[\"isTemporary\",{}]", idtxt));
+                    let mut trace = String::from("[\"isTemporary\",");
+                    p.render_at(&self.refs, sec, i * 3, &mut trace)?;
+                    trace.push(']');
+                    self.trace.push(trace);
                     let r = self.script.is_temp.next().unwrap_or(FsRes::Ok(Jv::Bool(false)));
                     match r {
                         FsRes::Ok(j) => {
@@ -1663,13 +1715,22 @@ fn render_sources(h: &Host) -> R<String> {
 
 fn pair_table(h: &Host, p: &Pkt, v: &V) -> R<String> {
     let (sec, n) = p.table(v, 6)?;
-    let mut out = Vec::new();
+    let mut out = String::with_capacity(16 * n + 2);
+    out.push('[');
     for i in 0..n {
         let a = p.val(sec, i * 6)?;
         let b = p.val(sec, i * 6 + 3)?;
-        out.push(format!("[{},{}]", render_v(&h.refs, &a)?, render_v(&h.refs, &b)?));
+        if i != 0 {
+            out.push(',');
+        }
+        out.push('[');
+        out.push_str(&render_v(&h.refs, &a)?);
+        out.push(',');
+        out.push_str(&render_v(&h.refs, &b)?);
+        out.push(']');
     }
-    Ok(format!("[{}]", out.join(",")))
+    out.push(']');
+    Ok(out)
 }
 
 fn decode_done(h: &mut Host, p: &Pkt, op: i64) -> R<Outcome> {
@@ -1858,7 +1919,9 @@ struct Run {
 fn drive<S: Sol>(sol: &S, h: &mut Host, op: i64, op_id: i64, input: Vec<i64>, probe: &Option<Probe>) -> R<Run> {
     let mut driver: Option<&'static str> = None;
     let mut note: Option<String> = None;
-    let mut first = input.clone();
+    let needs_input = matches!(probe, Some(p) if p.corrupt == "reentry");
+    let mut last_completion: Vec<i64> = if needs_input { input.clone() } else { Vec::new() };
+    let mut first = input;
     if let Some(p) = probe {
         if p.at == 0 {
             match p.corrupt.as_str() {
@@ -1870,11 +1933,9 @@ fn drive<S: Sol>(sol: &S, h: &mut Host, op: i64, op_id: i64, input: Vec<i64>, pr
         }
     }
     let mut out = sol.begin(&first);
+    drop(first);
     let mut calls = 0usize;
     let mut last_seq: i64 = 0;
-    let mut last_completion: Vec<i64> = input.clone();
-    #[allow(unused_assignments)]
-    let mut reentry_done = false;
     loop {
         let p = parse_pkt(&out)?;
         if p.op_id != op_id && p.kind != 3 {
@@ -1892,8 +1953,7 @@ fn drive<S: Sol>(sol: &S, h: &mut Host, op: i64, op_id: i64, input: Vec<i64>, pr
                     return ie("done packet seq is neither the last await seq nor 0");
                 }
                 if let Some(pr) = probe {
-                    if pr.corrupt == "reentry" && !reentry_done {
-                        reentry_done = true;
+                    if pr.corrupt == "reentry" {
                         let resp = sol.step(&out, &last_completion);
                         match parse_pkt(&resp) {
                             Ok(rp) if rp.kind == 3 && rp.secs.len() >= 2 && rp.word(1, 0).ok() == Some(5) => {
@@ -1931,18 +1991,18 @@ fn drive<S: Sol>(sol: &S, h: &mut Host, op: i64, op_id: i64, input: Vec<i64>, pr
                 };
                 let mut comp = mk_packet(2, p.op_id, p.seq, p.op, &enc);
                 calls += 1;
-                let mut sent = comp.clone();
+                drop(enc);
                 if let Some(pr) = probe {
                     if pr.at == calls {
                         match pr.corrupt.as_str() {
-                            "oversize" => pad_to(&mut sent, MAX_WORDS + 1),
-                            "exact_limit" => pad_to(&mut sent, MAX_WORDS),
+                            "oversize" => pad_to(&mut comp, MAX_WORDS + 1),
+                            "exact_limit" => pad_to(&mut comp, MAX_WORDS),
                             "duplicate" | "reentry" => {}
-                            c => corrupt(&mut sent, c),
+                            c => corrupt(&mut comp, c),
                         }
                     }
                 }
-                let next = sol.step(&out, &sent);
+                let next = sol.step(&out, &comp);
                 last_seq = p.seq;
                 let mut next = next;
                 if let Some(pr) = probe {
@@ -1960,16 +2020,18 @@ fn drive<S: Sol>(sol: &S, h: &mut Host, op: i64, op_id: i64, input: Vec<i64>, pr
                         }
                     }
                 }
-                last_completion = std::mem::take(&mut comp);
-                out = next;
+                if needs_input {
+                    last_completion = std::mem::take(&mut comp);
+                }
+                out = Rc::new(next);
             }
             _ => return ie("core returned a packet that is neither await nor done"),
         }
     }
 }
 
-fn run_case<S: Sol>(sol: &S, v: &Value) -> Result<String, String> {
-    let obj = match v.as_object() {
+fn run_case<S: Sol>(sol: &S, mut v: Value) -> Result<String, String> {
+    let obj = match v.as_object_mut() {
         Some(o) => o,
         None => return Err("case: line is not a JSON object".to_string()),
     };
@@ -1996,10 +2058,16 @@ fn run_case<S: Sol>(sol: &S, v: &Value) -> Result<String, String> {
     let script = parse_script(obj.get("script"), obj.get("forward")).map_err(mk)?;
     let probe = parse_probe(obj.get("probe")).map_err(mk)?;
     let mut refs = Refs::new();
-    let args = obj.get("args").cloned().unwrap_or(Value::Null);
-    let enc = encode_input(&mut refs, op, &args).map_err(mk)?;
+    let enc = if op == 9 {
+        let args = obj.remove("args").unwrap_or(Value::Null);
+        encode_index(&mut refs, args)
+    } else {
+        encode_input(&mut refs, op, obj.get("args").unwrap_or(&Value::Null))
+    }.map_err(mk)?;
+    drop(v);
     let op_id: i64 = 1;
     let input = mk_packet(0, op_id, 0, op, &enc);
+    drop(enc);
     let mut h = Host {
         refs,
         script,
@@ -2045,7 +2113,7 @@ fn run_one<S: Sol>(sol: &S, line: &str) -> String {
         Some(x) => serde_json::to_string(x).unwrap_or_else(|_| "null".to_string()),
         None => "null".to_string(),
     };
-    match catch_unwind(AssertUnwindSafe(|| run_case(sol, &v))) {
+    match catch_unwind(AssertUnwindSafe(|| run_case(sol, v))) {
         Ok(Ok(body)) => format!("{{\"id\":{},{}}}", id, body),
         Ok(Err(msg)) => format!("{{\"id\":{},\"error\":{}}}", id, jstr_s(&msg)),
         Err(_) => format!("{{\"id\":{},\"error\":\"case: host panic\"}}", id),
@@ -2173,7 +2241,7 @@ mod tests {
     // Mock core: op 5 answers immediately with a done/ok path "/x"; used to smoke the driver and JSON line.
     struct Mock;
     impl Sol for Mock {
-        fn begin(&self, input: &[i64]) -> Vec<i64> {
+        fn begin(&self, input: &[i64]) -> Rc<Vec<i64>> {
             let mut e = Enc::new();
             e.rec.push(0);
             let vs = e.str_vs(&u16s("/x"));
@@ -2182,7 +2250,7 @@ mod tests {
             e.tables.pop();
             let mut w = mk_done(&e, input[2], 5);
             w[1] = 3;
-            w
+            Rc::new(w)
         }
         fn step(&self, _p: &[i64], _c: &[i64]) -> Vec<i64> {
             vec![]

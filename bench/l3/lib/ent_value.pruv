@@ -56,8 +56,14 @@ pub fn truthy(w: [i64], p0: i64) -> bool
 pub fn str_start(w: [i64], p0: i64) -> i64
   ensures 0 <= result && result <= 67108864
 {
+  return str_start_at(w, p0, crate::ent_packet::sec_start(w, 0));
+}
+
+pub fn str_start_at(w: [i64], p0: i64, pool: i64) -> i64
+  ensures 0 <= result && result <= 67108864
+{
   let p: i64 = crate::ent_u16::clamp(p0, 4294967296);
-  return crate::ent_u16::clamp(crate::ent_packet::sec_start(w, 0) + crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 1), 33554432), 67108864);
+  return crate::ent_u16::clamp(pool, 33554432) + crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 1), 33554432);
 }
 
 pub fn str_len(w: [i64], p0: i64) -> i64
@@ -247,6 +253,13 @@ pub fn put_lit(inout o: [i64], at0: i64, s: str) -> i64 ! alloc
 pub fn key_put(w: [i64], p0: i64, inout o: [i64], at0: i64) -> i64 ! alloc
   ensures len(o) == len(old(o))
 {
+  let r: i64 = key_put_at(w, p0, crate::ent_packet::sec_start(w, 0), inout o, at0);
+  return r;
+}
+
+pub fn key_put_at(w: [i64], p0: i64, pool: i64, inout o: [i64], at0: i64) -> i64 ! alloc
+  ensures len(o) == len(old(o))
+{
   let p: i64 = crate::ent_u16::clamp(p0, 4294967296);
   let at: i64 = crate::ent_u16::clamp(at0, 4294967296);
   let t: i64 = ntag(w, p);
@@ -267,7 +280,7 @@ pub fn key_put(w: [i64], p0: i64, inout o: [i64], at0: i64) -> i64 ! alloc
     return r;
   }
   if t == 6 {
-    let r: i64 = crate::ent_u16::put_range(inout o, at, w, str_start(w, p), str_len(w, p));
+    let r: i64 = crate::ent_u16::put_range(inout o, at, w, str_start_at(w, p, pool), str_len(w, p));
     return r;
   }
   if t == 5 {

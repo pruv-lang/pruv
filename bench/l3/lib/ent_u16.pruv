@@ -49,11 +49,7 @@ pub fn slice(a: [i64], s: i64, e: i64) -> [i64] ! alloc
   if hi <= lo { return empty(); }
   let m: i64 = hi - lo;
   let mut o: [i64] = alloc(m, 0);
-  let mut i: i64 = 0;
-  while i < m
-    invariant 0 <= i && i <= m && len(o) == m && 0 <= lo && lo + m <= n && n == len(a)
-    decreases m - i
-  { o[i] = a[lo + i]; i = i + 1; }
+  copy_range(inout o, 0, a, lo, m);
   return o;
 }
 
@@ -64,16 +60,8 @@ pub fn cat(a: [i64], b: [i64]) -> [i64] ! alloc
   let nb: i64 = len(b);
   if na > 1073741823 || nb > 1073741823 { return empty(); }
   let mut o: [i64] = alloc(na + nb, 0);
-  let mut i: i64 = 0;
-  while i < na
-    invariant 0 <= i && i <= na && na == len(a) && nb == len(b) && len(o) == na + nb
-    decreases na - i
-  { o[i] = a[i]; i = i + 1; }
-  let mut j: i64 = 0;
-  while j < nb
-    invariant 0 <= j && j <= nb && na == len(a) && nb == len(b) && len(o) == na + nb
-    decreases nb - j
-  { o[na + j] = b[j]; j = j + 1; }
+  copy_range(inout o, 0, a, 0, na);
+  copy_range(inout o, na, b, 0, nb);
   return o;
 }
 
@@ -199,6 +187,10 @@ pub fn put_range(inout o: [i64], at: i64, src: [i64], s: i64, m: i64) -> i64
   let mut mm: i64 = m;
   if mm < 0 { mm = 0; }
   if mm > 1073741824 { mm = 1073741824; }
+  if mm >= 8 && at + mm <= len(o) && s + mm <= len(src) {
+    copy_range(inout o, at, src, s, mm);
+    return at + mm;
+  }
   let mut k: i64 = 0;
   while k < mm
     invariant 0 <= k && k <= mm && mm <= 1073741824 && 0 <= at && at <= 4294967296 && 0 <= s && s <= 4294967296 && len(o) == len(old(o))

@@ -1937,7 +1937,7 @@ impl Leaf {
 
     // Renders a done packet's record (section 1) into (terminal, value JSON). `secs` are the request-packet sections.
     pub fn render_done(&self, secs: Vec<Vec<i64>>) -> Result<(String, String), String> {
-        let p = Pkt { kind: 3, op_id: 0, seq: 0, op: 0, secs };
+        let p = Pkt { kind: 3, op_id: 0, seq: 0, op: 0, secs: secs.iter().map(Vec::as_slice).collect() };
         self.render_done_in(&p).map_err(he)
     }
 

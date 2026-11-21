@@ -20,6 +20,10 @@ C1 = {"op": "import_sources", "args": {"dataDir": "/data", "env": {}},
                  "accounts": {"claude": {"ok": []}, "codex": {"ok": []}}}}
 OK = ('ok', None)
 BAD = ('boundary_error', {"code": "InvalidPacket"})
+C9 = {"op": "bound_session_index", "args": {"sessions": [
+    {"id": "a", "temporary": False, "externalThread": {"engine": "claude", "thread": "a"}},
+    {"id": "b", "temporary": True, "externalThread": {"engine": "claude", "thread": "b"}},
+]}}
 
 def run(case, tamper=None, stats=False):
     env = dict(os.environ)
@@ -82,6 +86,12 @@ def deep_stats(n, rel=False):
 
 def main():
     fails = 0
+    control, _ = run(C9)
+    out, _ = run(C9, dict(T(1), index_swap=True))
+    ok = (control.get('terminal'), control.get('value'), out.get('terminal'),
+          out.get('value'), out.get('trace')) == ('ok', [['claude:a', 'a']], *BAD, [['isTemporary', 'b']])
+    fails += not ok
+    print('%-4s op 9 progress from A with the await from B -> %s' % ('ok' if ok else 'FAIL', out.get('terminal')))
     # R1 on op 1 (audit R1 forgery): the ambient answer (first request of its item, seq 3) is relabelled seq 1; the item start
     # seq kept in the state makes (start seq + dropped + kept log + current seq) inconsistent
     for name, tam, exp in [('control: op 1 untouched replay', None, OK),
