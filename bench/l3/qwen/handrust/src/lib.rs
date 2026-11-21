@@ -699,9 +699,12 @@ fn parse_line(line: &[u8], scratch: &mut Vec<u8>) -> Option<Object> {
     let line = if line.windows(NUMBER_KEY.len()).any(|w| w == NUMBER_KEY) {
         let mut copy = line.to_vec();
         for i in 0..=copy.len() - NUMBER_KEY.len() {
+            // Skip a match whose opening quote is escaped (inside another string).
+            if copy[i..i + NUMBER_KEY.len()] != *NUMBER_KEY || (i > 0 && copy[i - 1] == b'\\') {
+                continue;
+            }
             let rest = &copy[i + NUMBER_KEY.len()..];
-            let key = rest.iter().find(|&&b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r')) == Some(&b':');
-            if key && copy[i..i + NUMBER_KEY.len()] == *NUMBER_KEY {
+            if rest.iter().find(|&&b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r')) == Some(&b':') {
                 copy[i + 1] = b'_';
             }
         }

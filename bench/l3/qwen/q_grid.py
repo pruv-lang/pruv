@@ -216,20 +216,25 @@ def check(pruv, hand):
             mismatches += not equal(pruv, hand, path)
 
     denominator = 1
-    collision_mismatches = 0
     rows = SIZES_MIB["L"] * 1024 * 1024 // 200
     while True:
         # Probe L first so an expensive full collision does not delay all sizes.
         collision_grid = []
+        collision_mismatches = 0
         try:
             for size in reversed(SIZES_MIB):
                 path = grid_file("collide", size, denominator)
                 collision_grid.append(("collide", size, path))
                 collision_mismatches += not equal(pruv, hand, path, timeout=60)
         except subprocess.TimeoutExpired:
-            denominator = 16 if denominator == 1 else denominator * 2
-            if denominator > rows:
+            if collision_mismatches:
+                # Already failing: report the checked files instead of retrying.
+                grid.extend(reversed(collision_grid[:-1]))
+                mismatches += collision_mismatches
+                break
+            if 2 * denominator > rows:
                 raise RuntimeError(f"collide-{size} times out even at 1/{denominator}")
+            denominator = 16 if denominator == 1 else denominator * 2
             print(f"collide-{size} Pruv 실행 60초 초과. 충돌 비율을 1/{denominator}로 낮춥니다.",
                   flush=True)
         else:
