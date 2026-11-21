@@ -6781,6 +6781,69 @@ pub fn gen_llvm_concrete(prog: &Program, verified: bool, trust_callers: bool, bu
     })
 }
 
+/// Find a non-i64 Result error before LLVM assumes i64 payloads.
+fn typed_result_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
+    use crate::foreign_shim::{walk_stmts, Node};
+    use crate::gtype::{format_type, is_g3_key, GType};
+
+    fn in_type(ty: &GType) -> Option<&GType> {
+        if ty.result_error().is_some() {
+            return Some(ty);
+        }
+        ty.args.iter().find_map(in_type)
+    }
+    fn in_key(key: &str) -> Option<String> {
+        if !is_g3_key(key) {
+            return None;
+        }
+        in_type(&GType::from_key(key)).map(format_type)
+    }
+    fn in_expr(e: &Expr) -> Option<String> {
+        let targs = match e {
+            Expr::Ctor(x) => x.targs.as_ref(),
+            Expr::Call(x) => x.targs.as_ref(),
+            Expr::StructLit(x) => x.targs.as_ref(),
+            Expr::EnumCtor(x) => x.targs.as_ref(),
+            _ => None,
+        };
+        expr_ty(e).as_deref().and_then(in_key)
+            .or_else(|| targs?.iter().find_map(in_type).map(format_type))
+    }
+    fn in_clause(e: &Expr) -> Option<String> {
+        in_expr(e).or_else(|| crate::refine::kids(e).into_iter().find_map(in_clause))
+    }
+
+    let decls = prog.types.iter().filter_map(|d| {
+        let ty = d.all_fields().into_iter().find_map(|f| in_key(&f.ty))?;
+        Some((d.line(), d.col(), d.name(), ty))
+    });
+    let functions = prog.functions.iter().filter_map(|f| {
+        let ty = f.params.iter().find_map(|p| in_key(&p.ty))
+            .or_else(|| in_key(&f.ret))
+            .or_else(|| f.requires.iter().chain(&f.ensures).chain(&f.decreases).chain(&f.cost).find_map(in_clause))
+            .or_else(|| {
+                let mut found = None;
+                walk_stmts(&f.body, &mut |node| {
+                    if found.is_none() {
+                        found = match node {
+                            Node::Let(l) => in_key(&l.ty),
+                            Node::Expr(e) => in_expr(e),
+                            Node::ForMap(_) => None,
+                        };
+                    }
+                });
+                found
+            })?;
+        Some((f.line, f.col, f.name.as_str(), ty))
+    });
+    let (line, col, name, ty) = decls.chain(functions).min_by_key(|(line, col, _, _)| (*line, *col))?;
+    Some(crate::diagnostic::PruvError::new(
+        "codegen", line, col, "unsupported_type",
+        format!("{name} uses {ty}, a Result with a non-i64 error type, which the llvm codegen layer does not support yet"),
+        "use the Rust backend",
+    ))
+}
+
 /// `gen_llvm_concrete` with the G6 check mode; a diagnostic (G6 outside 13.1) is `GenError::Diag`.
 pub fn gen_llvm_concrete_ex(
     prog: &Program,
@@ -6791,6 +6854,9 @@ pub fn gen_llvm_concrete_ex(
     foreign_checks: &str,
 ) -> Result<(String, String), crate::codegen::GenError> {
     use crate::codegen::GenError;
+    if let Some(e) = typed_result_llvm_error(prog) {
+        return Err(GenError::Diag(e));
+    }
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
     }

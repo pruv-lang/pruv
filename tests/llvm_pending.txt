@@ -7,3 +7,8 @@
 tests/runtime/g6_a02_option_find.pruv
 tests/runtime/g6_a03_result_half.pruv
 tests/runtime/g6_v05_option_elems.pruv
+
+# LG10 E1: Result<T, E> with E != i64 is not on LLVM yet (G-LG10-2)
+tests/runtime/lg10_e1_struct_err.pruv
+tests/runtime/lg10_e1_enum_err.pruv
+tests/runtime/lg10_e1_bool_err.pruv

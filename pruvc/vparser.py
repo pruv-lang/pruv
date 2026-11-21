@@ -490,7 +490,7 @@ class Parser:
             s.scope.setdefault(tp.name, mk_param(owner, i, tp.name))
         return out
 
-    def type_arg_list(s, expr):
+    def type_arg_list(s, expr, result=False):
         """type arguments after an already consumed `<`, through the closing `>` -> [Type].
         expr: expression position, where a malformed list is a generic_syntax error."""
         out = []
@@ -498,7 +498,13 @@ class Parser:
             if s.at(">") or s.at(","):
                 s.generic_syntax(s.peek(), "missing type argument",
                                  "write a type between the angle brackets, e.g. Pair<i64, bool>")
-            out.append(s.type_r(False)[0])
+            a = s.peek()
+            if result and len(out) == 1 and a.kind == "id" and a.val in ("u8", "i32"):
+                # The checker reports unsupported Result error payloads.
+                s.next()
+                out.append(Type(a.val))
+            else:
+                out.append(s.type_r(False)[0])
             if not s.at(","):
                 break
             s.next()
@@ -510,11 +516,12 @@ class Parser:
         s.next()
         return out
 
-    def expr_targs(s):
+    def expr_targs(s, result=False):
         """at `::` `<` in an expression: consume `::<T, ...>` -> [Type]"""
         s.expect("::")
         s.expect("<")
-        return s.type_arg_list(True)
+        args = s.type_arg_list(True, result)
+        return args[:1] if result and len(args) == 2 and args[1] == I64 else args
 
     def named_type(s, n):
         """n: an already consumed identifier naming a type parameter, Option/Result or a user type
@@ -524,9 +531,11 @@ class Parser:
             a = s.peek()
             if a.kind == "id" and a.val in ("u8", "i32"):
                 s.unsupported("%s<%s>" % (n.val, a.val), a)
-            args = s.type_arg_list(False)
-            if len(args) == 1:
-                return mk_option(args[0]) if n.val == "Option" else mk_result(args[0])
+            args = s.type_arg_list(False, n.val == "Result")
+            if n.val == "Option" and len(args) == 1:
+                return mk_option(args[0])
+            if n.val == "Result" and len(args) in (1, 2):
+                return mk_result(*args)
             return Type("option" if n.val == "Option" else "result", tuple(args))   # wrong arity: the checker reports it
         if s.at("<"):
             s.next()
@@ -1299,7 +1308,7 @@ class Parser:
             return c
         if s.at("Some") or s.at("Ok") or s.at("Err"):
             s.next()
-            targs = s.expr_targs() if (s.at("::") and s.at("<", 1)) else None   # G3: Some::<T>(x)
+            targs = s.expr_targs(t.val in ("Ok", "Err")) if (s.at("::") and s.at("<", 1)) else None
             s.expect("("); a = s.expr(); s.expect(")")
             c = Ctor(t.line, t.col, t.val, a)
             c.targs = targs

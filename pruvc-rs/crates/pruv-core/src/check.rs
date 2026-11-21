@@ -13,7 +13,7 @@ use crate::foreign::{
 };
 use crate::gtype::{
     bind_args, check_arity, collection_arity, decl_owner, dependencies, fn_owner, format_type, is_element, is_value,
-    key_is_collection, key_is_vec_slice_arg, mk_array, mk_nominal, mk_option, mk_result, substitute, GType, Mapping, ParamId,
+    key_is_collection, key_is_vec_slice_arg, mk_array, mk_nominal, mk_option, mk_result_with_error, substitute, GType, Mapping, ParamId,
 };
 use crate::typeinfo::{program_uses_inout, TypeTable, BUILTIN_TYPE_NAMES};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -40,6 +40,7 @@ pub(crate) enum CRes {
     I64,
     /// The Option/Result payload type.
     Payload,
+    ErrorPayload,
 }
 
 /// P2: pure (i64, i64) -> i64 bit builtins (check.py BIT_BUILTINS); later batches add names here.
@@ -71,7 +72,7 @@ pub(crate) fn contract_only(n: &str) -> Option<(&'static str, CRes)> {
         "some_val" => Some(("option", CRes::Payload)),
         "is_ok" => Some(("result", CRes::Bool)),
         "ok_val" => Some(("result", CRes::Payload)),
-        "err_val" => Some(("result", CRes::I64)),
+        "err_val" => Some(("result", CRes::ErrorPayload)),
         "size" => Some(("size", CRes::I64)), // G9 A0: structural size of a non-generic nominal value
         _ => None,
     }
@@ -1008,6 +1009,13 @@ impl Checker {
                 self.collection_records.borrow_mut().insert(payload.name.clone());
             }
         }
+        if name == "result" {
+            match args.as_slice() {
+                [x] => return mk_result_with_error(x.clone(), i64t()),
+                [x, e] => return mk_result_with_error(x.clone(), e.clone()),
+                _ => {}
+            }
+        }
         if name == ty.name && args == ty.args {
             return ty.clone();
         }
@@ -1018,17 +1026,14 @@ impl Checker {
             if name == "option" {
                 return mk_option(args[0].clone());
             }
-            if name == "result" {
-                return mk_result(args[0].clone());
-            }
         }
         GType::new(&name, args)
     }
 
-    /// `norm_type` on an AST type key; a key without any of the three spellings is returned unchanged.
+    /// `norm_type` on an AST type key that may need normalization.
     fn norm_key(&self, key: &str) -> String {
         if !(key.contains("Vec") || key.contains("HashMap") || key.contains("String") || key.contains("File") || key.contains("Process")
-            || key.contains("Socket") || key.contains("Listener") || key.contains("Loop"))
+            || key.contains("Socket") || key.contains("Listener") || key.contains("Loop") || key.contains("result<"))
         {
             return key.to_string();
         }
@@ -1313,8 +1318,11 @@ impl Checker {
             return Ok(());
         }
         if ty.name == "option" || ty.name == "result" {
-            for a in &ty.args {
+            if let Some(a) = ty.args.first() {
                 self.check_arg(line, col, a, None)?;
+            }
+            if let Some(e) = ty.result_error() {
+                self.check_result_error(line, col, e)?;
             }
             return Ok(());
         }
@@ -1476,6 +1484,22 @@ impl Checker {
             ));
         }
         Ok(())
+    }
+
+    fn check_result_error(&self, line: i64, col: i64, e: &GType) -> Res<()> {
+        if e.owner.is_some()
+            || matches!(e.name.as_str(), "option" | "result")
+            || !is_value(e, &|n| self.value_decl(n))
+        {
+            return Err(terr(
+                line,
+                col,
+                "result_error_type",
+                format!("{} is not supported as a Result error type yet: only i64, bool and value structs or enums are", tn(e)),
+                "owned String errors (E2) and error records with buffers (E3) are not supported yet",
+            ));
+        }
+        self.check_type(line, col, e)
     }
 
     /// a: a type argument; tp: the TypeParam it instantiates (None for Option/Result).
@@ -3398,8 +3422,8 @@ impl Checker {
                 }
                 v
             } else {
-                // G3: the Some/Ok binder has the payload type of Option<X> / Result<X>; Err binds the i64 code
-                let payload = if !t.args.is_empty() && a.ctor != "Err" { t.args[0].clone() } else { i64t() };
+                let payload = if a.ctor == "Err" { t.result_error() } else { t.args.first() };
+                let payload = payload.cloned().unwrap_or_else(i64t);
                 vec![payload; a.binders.len()]
             };
             for (b, bt) in a.binders.iter().zip(ftypes.iter()) {
@@ -4356,7 +4380,7 @@ impl Checker {
     /// `Some::<X>(x)`, `None::<X>`, `Ok::<X>(x)`, `Err::<X>(code)` build Option<X> / Result<X> (3.5).
     fn ctor(&mut self, e: &mut Ctor, scope: &Scope, c: bool) -> Res<GType> {
         let name = e.name.clone();
-        let targs = match e.targs.clone() {
+        let mut targs = match e.targs.clone() {
             None => {
                 if name == "None" {
                     return Ok(GType::option());
@@ -4371,34 +4395,62 @@ impl Checker {
             }
             Some(t) => t,
         };
-        if targs.len() != 1 {
+        let result = matches!(name.as_str(), "Ok" | "Err");
+        if targs.len() != 1 && !(result && targs.len() == 2) {
+            let (arity, fix) = if result {
+                ("1 or 2 type arguments", format!("write {name}::<T> or {name}::<T, E>"))
+            } else {
+                ("exactly 1 type argument", format!("write {name}::<T>"))
+            };
             return Err(terr(
                 e.line,
                 e.col,
                 "type_arity",
-                format!("{}::<..> takes exactly 1 type argument, got {}", name, targs.len()),
-                format!("write {}::<T>", name),
+                format!("{name}::<..> takes {arity}, got {}", targs.len()),
+                fix,
             ));
         }
         let x = targs[0].clone();
         self.check_type(e.line, e.col, &x)?;
         self.check_arg(e.line, e.col, &x, None)?;
         self.ext_misuse(e.line, e.col, &x, Some("arg"))?; // G9 A0
+        let err = targs.get(1).cloned().unwrap_or_else(i64t);
+        if targs.len() == 2 {
+            let ad = &self.arg_decls;
+            let look = |n: &str| ad.get(n).map(|k| (*k, Vec::<GType>::new()));
+            if let Err(ex) = check_arity(&err, &look) {
+                return Err(terr(
+                    e.line,
+                    e.col,
+                    "type_arity",
+                    ex.to_string(),
+                    "give the exact number of type arguments, e.g. Option<i64>, Pair<i64, bool>",
+                ));
+            }
+            self.check_result_error(e.line, e.col, &err)?;
+            if err == i64t() {
+                targs.pop();
+                e.targs = Some(targs.clone());
+            }
+        }
         let owner = format!("builtin:{}", name);
         let mut m = Mapping::new();
         m.insert((owner.clone(), 0), x.clone());
+        if targs.len() == 2 {
+            m.insert((owner.clone(), 1), err.clone());
+        }
         e.inst = Some(inst_of(owner, &targs, &m));
         if name == "None" {
             return Ok(mk_option(x));
         }
-        let want = if name == "Err" { i64t() } else { x.clone() };
+        let want = if name == "Err" { err.clone() } else { x.clone() };
         if let Some(a) = e.arg.as_mut() {
             self.expect(a, &want, scope, c, None)?;
             if !c {
                 self.own(a, scope)?;
             }
         }
-        Ok(if name == "Some" { mk_option(x) } else { mk_result(x) })
+        Ok(if name == "Some" { mk_option(x) } else { mk_result_with_error(x, err) })
     }
 
     /// map_lookup / map_updated arguments: a key whose type differs from a map argument's key type is a
@@ -5266,6 +5318,7 @@ impl Checker {
             return Ok(match rt {
                 CRes::Bool => boolt(),
                 CRes::I64 => i64t(),
+                CRes::ErrorPayload => t.result_error().cloned().unwrap_or_else(i64t),
                 // G3: the payload type of Option<X> / Result<X>
                 CRes::Payload => {
                     if t.args.is_empty() {

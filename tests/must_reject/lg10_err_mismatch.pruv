@@ -1,0 +1,6 @@
+struct ParseErr { pos: i64, code: i64 }
+
+enum IoErr { Eof }
+
+fn read(r: Result<i64, IoErr>) -> i64 { return 0; }
+fn f(r: Result<i64, ParseErr>) -> i64 { return read(r); }

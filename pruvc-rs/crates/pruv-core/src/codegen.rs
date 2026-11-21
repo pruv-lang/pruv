@@ -908,7 +908,7 @@ const G9_HELPER_ALLOW: &str =
 /// names of the user types a field of type t can contribute to `size` / structural equality (Python `nominals_in`)
 fn nominals_in(t: &GType) -> Vec<String> {
     if t.owner.is_none() && !t.args.is_empty() && (t.name == "option" || t.name == "result") {
-        return nominals_in(&t.args[0]);
+        return t.args.iter().flat_map(nominals_in).collect();
     }
     if t.is_user_type() {
         return vec![t.name.clone()];
@@ -935,17 +935,14 @@ fn lit_str(bytes: &[u8]) -> String {
     s
 }
 
-/// G3: the payload type of a structured Option<X> / Result<X> node type (`e.ty.args[0]` in Python), else None.
-fn payload_type(ty: &Option<String>) -> Option<GType> {
+/// The payload types of a structured Option or Result constructor.
+fn ctor_type(ty: &Option<String>) -> Option<GType> {
     let t = ty.as_deref()?;
     if !is_g3_key(t) {
         return None;
     }
     let g = GType::try_from_key(t).ok()?;
-    if g.owner.is_none() && !g.args.is_empty() {
-        return Some(g.args[0].clone());
-    }
-    None
+    is_optres(&g).then_some(g)
 }
 
 /// The array element type name of the expression ("i64" if it is not an array).
@@ -2486,7 +2483,8 @@ impl<'a> Gen<'a> {
             None => expr_ty(e).clone(),
         };
         if let Expr::Ctor(x) = e {
-            let px: String = payload_type(&t).map(|g| g.to_key()).unwrap_or_else(|| "i64".to_string());
+            let g = ctor_type(&t);
+            let px = g.as_ref().map_or_else(|| "i64".to_string(), |g| g.args[0].to_key());
             let rx = rty(&px, false);
             if x.name == "None" {
                 return Ok(format!("None::<{}>", rx));
@@ -2498,8 +2496,10 @@ impl<'a> Gen<'a> {
             if x.name == "Some" {
                 return Ok(format!("Some::<{}>({})", rx, self.g9_real(a, Some(&px))?));
             }
-            let at = if x.name == "Ok" { px.clone() } else { "i64".to_string() };
-            return Ok(format!("{}::<{}, i64>({})", x.name, rx, self.g9_real(a, Some(&at))?));
+            let pe = g.as_ref().and_then(GType::result_error).map_or_else(|| "i64".to_string(), GType::to_key);
+            let re = rty(&pe, false);
+            let at = if x.name == "Ok" { &px } else { &pe };
+            return Ok(format!("{}::<{}, {}>({})", x.name, rx, re, self.g9_real(a, Some(at))?));
         }
         let tk: Option<&str> = t.as_deref();
         if tk.is_none() || tk == Some("i64") {
@@ -2689,9 +2689,8 @@ impl<'a> Gen<'a> {
                 Ok(format!("pruv_cidx({}, {})", a, i))
             }
             Expr::Ctor(x) => {
-                // G3: Option<X> / Result<X> with X != i64 carry an explicit payload type
-                if let Some(g) = payload_type(&x.ty) {
-                    let cx = try_cty_g(&g)?;
+                if let Some(g) = ctor_type(&x.ty) {
+                    let cx = try_cty_g(&g.args[0])?;
                     if x.name == "None" {
                         return Ok(format!("None::<{}>", cx));
                     }
@@ -2702,7 +2701,8 @@ impl<'a> Gen<'a> {
                     if x.name == "Some" {
                         return Ok(format!("Some::<{}>({})", cx, a));
                     }
-                    return Ok(format!("{}::<{}, i128>({})", x.name, cx, a));
+                    let ce = g.result_error().map(try_cty_g).transpose()?.unwrap_or_else(|| "i128".to_string());
+                    return Ok(format!("{}::<{}, {}>({})", x.name, cx, ce, a));
                 }
                 if x.name == "None" {
                     return Ok("None::<i128>".to_string());
@@ -3194,12 +3194,13 @@ impl<'a> Gen<'a> {
     // ---------- G9: generated contract helpers (size, structural equality) ----------
 
     /// Rust i128 expression for weight(value) (G9_SPEC 3); x names a variable of type `&R(t)`.
-    /// Scalars, arrays and str weigh 0; a nominal value weighs its size; Some / Ok weigh their payload; None / Err 0.
+    /// Scalars, arrays and str weigh 0; a nominal value weighs its size; constructors weigh their active payload.
     /// `bud` is the budget argument expression (`pruv_budget` inside a helper, where it is a `&mut i64`).
     fn g9_weight(&self, t: &GType, x: &str, bud: &str) -> String {
         if is_optres(t) {
             let inner = self.g9_weight(&t.args[0], "pruv_w", bud);
-            if inner == "0i128" {
+            let error = t.result_error().map_or_else(|| "0i128".to_string(), |e| self.g9_weight(e, "pruv_w", bud));
+            if inner == "0i128" && error == "0i128" {
                 return "0i128".to_string();
             }
             if t.name == "option" {
@@ -3208,9 +3209,10 @@ impl<'a> Gen<'a> {
                     x, inner
                 );
             }
+            let err_bind = if error == "0i128" { "_" } else { "pruv_w" };
             return format!(
-                "match {} {{ ::std::result::Result::Ok(pruv_w) => {}, ::std::result::Result::Err(_) => 0i128 }}",
-                x, inner
+                "match {} {{ ::std::result::Result::Ok(pruv_w) => {}, ::std::result::Result::Err({}) => {} }}",
+                x, inner, err_bind, error
             );
         }
         if t.is_user_type() {
@@ -3222,14 +3224,14 @@ impl<'a> Gen<'a> {
     /// equality has to walk into t (a nominal value, or Option / Result of one)
     fn g9_walks(&self, t: &GType) -> bool {
         if is_optres(t) {
-            return self.g9_walks(&t.args[0]);
+            return t.args.iter().any(|a| self.g9_walks(a));
         }
         t.is_user_type()
     }
 
     /// Rust bool expression: structural equality of the values behind the references x and y (type `&R(t)`)
     fn g9_eq(&self, t: &GType, x: &str, y: &str) -> String {
-        if is_optres(t) && self.g9_walks(&t.args[0]) {
+        if is_optres(t) && self.g9_walks(t) {
             let inner = self.g9_eq(&t.args[0], "pruv_p", "pruv_q");
             if t.name == "option" {
                 return format!(
@@ -3237,9 +3239,13 @@ impl<'a> Gen<'a> {
                     x, y, inner
                 );
             }
+            let error = t.result_error().map_or_else(
+                || "(*pruv_p == *pruv_q)".to_string(),
+                |e| self.g9_eq(e, "pruv_p", "pruv_q"),
+            );
             return format!(
-                "(match ({}, {}) {{ (::std::result::Result::Ok(pruv_p), ::std::result::Result::Ok(pruv_q)) => {}, (::std::result::Result::Err(pruv_p), ::std::result::Result::Err(pruv_q)) => (*pruv_p == *pruv_q), _ => false }})",
-                x, y, inner
+                "(match ({}, {}) {{ (::std::result::Result::Ok(pruv_p), ::std::result::Result::Ok(pruv_q)) => {}, (::std::result::Result::Err(pruv_p), ::std::result::Result::Err(pruv_q)) => {}, _ => false }})",
+                x, y, inner, error
             );
         }
         if t.is_user_type() {
@@ -4584,8 +4590,8 @@ impl<'a> Gen<'a> {
             }
             Expr::Ctor(x) => {
                 // G3: explicit payload type, never left to Rust inference
-                if let Some(g) = payload_type(&x.ty) {
-                    let rx = rty_g(&g, false);
+                if let Some(g) = ctor_type(&x.ty) {
+                    let rx = rty_g(&g.args[0], false);
                     if x.name == "None" {
                         return Ok(format!("None::<{}>", rx));
                     }
@@ -4596,7 +4602,8 @@ impl<'a> Gen<'a> {
                     if x.name == "Some" {
                         return Ok(format!("Some::<{}>({})", rx, a));
                     }
-                    return Ok(format!("{}::<{}, i64>({})", x.name, rx, a));
+                    let re = g.result_error().map_or_else(|| "i64".to_string(), |e| rty_g(e, false));
+                    return Ok(format!("{}::<{}, {}>({})", x.name, rx, re, a));
                 }
                 if x.name == "None" {
                     return Ok("None".to_string());

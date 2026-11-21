@@ -238,6 +238,7 @@ class _Mono:
         return new
 
     def _mark_type(self, new, d):
+        new.file = d.file
         if self.explicit:
             new.pub = d.pub
             new.src_name, new.mod_path = d.src_name, d.mod_path
@@ -299,7 +300,7 @@ class _Mono:
         if c.name == "option":
             return mk_option(self.lower(c.args[0]))
         if c.name == "result":
-            return mk_result(self.lower(c.args[0]))
+            return mk_result(*(self.lower(a) for a in c.args))
         if c.name in COLLECTION_ARITY:   # G6: Vec<T> / HashMap<K, V> keep their name, arguments are lowered
             return Type(c.name, tuple(self.lower(a) for a in c.args))
         return Type(self.request_type(c.name, c.args))

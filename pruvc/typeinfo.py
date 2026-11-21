@@ -176,7 +176,7 @@ def substitute(ty: Type, mapping: dict) -> Type:
     if ty.name == "option":
         return mk_option(args[0])
     if ty.name == "result":
-        return mk_result(args[0])
+        return mk_result(*args)
     return mk_nominal(ty.name, args)
 
 
@@ -184,8 +184,10 @@ def check_arity(ty: Type, decls) -> None:
     """TypeArityError if any Option/Result/array/nominal application inside ty has the wrong argument count.
     Nominal names unknown to decls are skipped (the checker reports them)."""
     if ty.owner is None and ty.args:
-        if ty.name in ("option", "result", "array") and len(ty.args) != 1:
-            raise TypeArityError("%s expects 1 type argument, got %d" % (ty.name, len(ty.args)))
+        arity = {"option": (1,), "array": (1,), "result": (1, 2)}.get(ty.name)
+        if arity is not None and len(ty.args) not in arity:
+            raise TypeArityError("%s expects %s, got %d" % (
+                ty.name, "1 or 2 type arguments" if ty.name == "result" else "1 type argument", len(ty.args)))
     if ty.owner is None and ty.name in COLLECTION_ARITY and len(ty.args) != COLLECTION_ARITY[ty.name]:
         raise TypeArityError("%s expects %d type argument(s), got %d" % (
             COLLECTION_SPELLING[ty.name], COLLECTION_ARITY[ty.name], len(ty.args)))
@@ -257,6 +259,8 @@ def encode(ty: Type) -> str:
     if ty == BOOL:
         return "b"
     if ty.owner is None and ty.name in ("option", "result"):
+        if ty.name == "result" and len(ty.args) == 2:
+            return "e" + encode(ty.args[0]) + encode(ty.args[1])
         return ("o" if ty.name == "option" else "r") + encode(ty.args[0] if ty.args else I64)
     if _is_nominal(ty):
         return "n%d_%s_%d" % (len(ty.name.encode("utf-8")), ty.name, len(ty.args)) + \

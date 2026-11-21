@@ -1,0 +1,3 @@
+struct ParseErr { pos: i64, code: i64 }
+
+fn f() -> Result<i64, ParseErr> { return Err::<i64, ParseErr>(5); }

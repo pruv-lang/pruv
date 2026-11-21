@@ -325,11 +325,12 @@ fn dt_arg(v: &Val) -> R<(&Ast, &Ty)> {
     }
 }
 
-/// The value read from the payload of an Option/Result of type `ty` (some_val / ok_val): `i64` for the legacy types.
-fn payload_val(ty: &Ty, a: Ast) -> R<Val> {
+/// The active constructor payload type, with an implicit i64 for legacy types.
+fn payload_ty(ty: Option<&Ty>, error: bool) -> Ty {
     match ty {
-        Ty::Inst(g) if !g.args.is_empty() => Val::from_field(&Ty::from_gtype(&g.args[0]), a),
-        _ => Ok(Val::Int(a)),
+        Some(Ty::Inst(g)) if error => g.result_error().map(Ty::from_gtype).unwrap_or(Ty::I64),
+        Some(Ty::Inst(g)) => g.args.first().map(Ty::from_gtype).unwrap_or(Ty::I64),
+        _ => Ty::I64,
     }
 }
 
@@ -1325,6 +1326,9 @@ impl<'a> FnVerifier<'a> {
                 Ty::Inst(g) if g.name == "option" => {
                     m.opt(Some(ty))?;
                 }
+                Ty::Inst(g) if g.name == "result" => {
+                    m.res(Some(ty))?;
+                }
                 _ => match m.nominal_kind(ty) {
                     Some(NomKind::Struct) => {
                         m.struct_info(ty)?;
@@ -1361,7 +1365,9 @@ impl<'a> FnVerifier<'a> {
                 if let Some(w) = w {
                     parts.push(Some(o.is_ok.apply1(v).implies(&w)));
                 }
-                parts.push(Some(o.is_err.apply1(v).implies(&in_range(z, &o.eval.apply1(v)))));
+                if let Some(w) = self.try_wf(&payload_ty(Some(ty), true), &o.eval.apply1(v))? {
+                    parts.push(Some(o.is_err.apply1(v).implies(&w)));
+                }
                 conj(z, parts)
             }
             // G9 A1: a recursive type is the application of its wf_D definition, never a Python expansion
@@ -1550,6 +1556,19 @@ impl<'a> FnVerifier<'a> {
                     out.push(m.size_fn(fty.name())?.apply1(&acc.apply1(t)).ge_i(1));
                 } else if matches!(fty, Ty::Inst(_)) && m.is_user(fty) && m.fixed_size(fty)?.is_none() {
                     out.push(m.size_inst(fty)?.apply1(&acc.apply1(t)).ge_i(1));
+                } else if let Ty::Inst(g) = fty {
+                    // E1: the Err payload of a Result<T, E> field counts in the weight, so its size is positive too
+                    if g.name == "result" {
+                        if let Some(e) = g.result_error() {
+                            let ety = Ty::from_gtype(e);
+                            let ev = m.res(Some(fty))?.eval.apply1(&acc.apply1(t));
+                            if m.rel_nominal(&ety) {
+                                out.push(m.size_fn(ety.name())?.apply1(&ev).ge_i(1));
+                            } else if matches!(ety, Ty::Inst(_)) && m.is_user(&ety) && m.fixed_size(&ety)?.is_none() {
+                                out.push(m.size_inst(&ety)?.apply1(&ev).ge_i(1));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2834,7 +2853,7 @@ impl<'a> FnVerifier<'a> {
                 return if n == "is_some" {
                     Ok(Val::Bool(o.is_some.apply1(a)))
                 } else {
-                    payload_val(ty, o.sval.apply1(a))
+                    Val::from_field(&payload_ty(Some(ty), false), o.sval.apply1(a))
                 };
             }
             "is_ok" | "ok_val" | "err_val" => {
@@ -2842,8 +2861,8 @@ impl<'a> FnVerifier<'a> {
                 let o = self.model.res(Some(ty))?;
                 return match n {
                     "is_ok" => Ok(Val::Bool(o.is_ok.apply1(a))),
-                    "ok_val" => payload_val(ty, o.oval.apply1(a)),
-                    _ => Ok(Val::Int(o.eval.apply1(a))),
+                    "ok_val" => Val::from_field(&payload_ty(Some(ty), false), o.oval.apply1(a)),
+                    _ => Val::from_field(&payload_ty(Some(ty), true), o.eval.apply1(a)),
                 };
             }
             _ => {}
@@ -4645,12 +4664,6 @@ impl<'a> FnVerifier<'a> {
                 if model.is_g9() {
                     self.observe(&mut st, &v, sty.as_ref(), false)?; // G9 A1: one-step facts of the matched value
                 }
-                let payload: Ty = match &sty {
-                    Some(Ty::Inst(g)) if !g.args.is_empty() && (g.name == "option" || g.name == "result") => {
-                        Ty::from_gtype(&g.args[0])
-                    }
-                    _ => Ty::I64,
-                };
                 for a in &s.arms {
                     let cond: Ast;
                     let vals: Vec<Ast>;
@@ -4682,7 +4695,7 @@ impl<'a> FnVerifier<'a> {
                         };
                         cond = c;
                         vals = val.into_iter().collect();
-                        let ft = if a.ctor == "Err" { Ty::I64 } else { payload.clone() };
+                        let ft = payload_ty(sty.as_ref(), a.ctor == "Err");
                         ftys = vals.iter().map(|_| ft.clone()).collect();
                     }
                     let mut b = st.fork(Some(cond));

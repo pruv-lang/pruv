@@ -1,0 +1,7 @@
+struct ParseErr { pos: i64, code: i64 }
+
+fn f() -> Result<i64, ParseErr>
+  ensures !is_ok(result) ==> err_val(result).code == 1
+{
+  return Err::<i64, ParseErr>(ParseErr { pos: 0, code: 2 });
+}

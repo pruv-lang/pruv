@@ -1,0 +1,38 @@
+struct ParseErr { pos: i64, code: i64 }
+
+fn parse_digit(c: i64) -> Result<i64, ParseErr>
+  ensures !is_ok(result) ==> err_val(result).code == c
+{
+  if 48 <= c && c <= 57 {
+    return Ok::<i64, ParseErr>(c - 48);
+  }
+  return Err::<i64, ParseErr>(ParseErr { pos: 0, code: c });
+}
+
+fn parse_or_code(c: i64) -> i64 {
+  let r: Result<i64, ParseErr> = parse_digit(c);
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return e.code; }
+  }
+}
+
+fn or_else<T>(r: Result<T, ParseErr>, d: T) -> T {
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return d; }
+  }
+}
+
+fn or_false(r: Result<bool, ParseErr>) -> bool {
+  return or_else::<bool>(r, false);
+}
+
+fn code(r: Result<i64, ParseErr>) -> i64
+  requires !is_ok(r) && err_val(r).pos == 0
+{
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return e.code; }
+  }
+}

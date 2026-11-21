@@ -638,6 +638,7 @@ fn file_contracts(name: &str) -> (Vec<Expr>, Vec<Expr>) {
 fn scalar_opt(t: &GType) -> bool {
     t.owner.is_none()
         && (t.name == "option" || t.name == "result")
+        && t.args.len() <= 1
         && (t.args.is_empty() || t.args[0] == GType::i64() || t.args[0] == GType::bool())
 }
 

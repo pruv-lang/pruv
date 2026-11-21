@@ -29,6 +29,7 @@ signature; no null, no exceptions, no implicit conversions, no globals, no overl
 | `str` | read-only UTF-8 text, indexed by byte (section 6b) | param: `&str`, local/return: `String` |
 | `Option<i64>` | `Some(v)` or `None` | `Option<i64>` |
 | `Result<i64>` | `Ok(v)` or `Err(code)`, code is i64 | `Result<i64, i64>` |
+| `Result<T, E>` | `Ok(v)` or `Err(e)`, e is an `E` (section 6c, LG10 E1) | `Result<T, E>` |
 | `Point`, `Event` | user struct / enum (section 6a) | `pub struct` / `pub enum` (Copy) |
 
 Parameters cannot be reassigned. Array parameters are read-only views, except an `inout` array parameter (section 6g),
@@ -398,6 +399,25 @@ let o: Option<bool> = Some::<bool>(true);   // also None::<bool>, Ok::<bool>(x),
   with `==`/`!=` **in contracts only**. You cannot do arithmetic, ordering, run-time equality, field access, `match` or `print`
   on a `T`. (`match` on an `Option<T>` or `Choice<A, B>` is fine; the payload variable is a `T`.)
 - `Result<T>` keeps an `i64` error code: `Err::<T>(code)`.
+- **Typed errors (LG10 E1).** `Result<T, E>` carries an error value of type `E`. `Result<T>` means exactly
+  `Result<T, i64>`: the two spellings are the same type with the same code, proof and ABI. In E1, `E` may be `i64`,
+  `bool`, or a value struct or enum (also a generic application that is a value). Any other `E` (`String`, `str`,
+  arrays, collections, a record holding a buffer, `Option`, `Result`, `u8`, `()`, a type parameter) is
+  `type/result_error_type`. Constructors name `E`: `Ok::<T, E>(v)`, `Err::<T, E>(e)` with `e: E`; `Ok::<T>`,
+  `Err::<T>` and unqualified `Ok`/`Err` keep `E = i64` (no inference of `E`). In `match`, `Err(e)` binds `e: E`, and
+  the contract selector `err_val(r)` has type `E`. `Result<T, A>` and `Result<T, B>` are different types
+  (`type/type_mismatch`). The proof models the error payload with its own sort and well-formedness, and the
+  recursive size counts it. There is no `?` operator. The LLVM backend does not support `E != i64` yet
+  (`codegen/unsupported_type`, use the Rust backend).
+  ```
+  struct ParseErr { pos: i64, code: i64 }
+  fn parse_digit(c: i64) -> Result<i64, ParseErr>
+    ensures !is_ok(result) ==> err_val(result).code == c
+  {
+    if c >= 48 && c <= 57 { return Ok::<i64, ParseErr>(c - 48); }
+    return Err::<i64, ParseErr>(ParseErr { pos: 0, code: c });
+  }
+  ```
 - `alloc`, `copy`, indexing and stores work on `[T]` (`T: Element`) as on `[i64]`; the verifier knows that
   `copy(a)` has `len(a)` elements equal to `a`'s. Explicitly typed constructors may appear anywhere an expression may
   (`o = Some::<T>(v);`).
@@ -2090,6 +2110,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/refinement_base` | type | a refinement on a type it cannot apply to |
 | `type/refinement_bounds` | type | refinement bounds outside i64, or an empty range |
 | `type/reserved` | type | a function named like a builtin |
+| `type/result_error_type` | type | a `Result<T, E>` error type `E` that E1 does not support (section 6c) |
 | `type/result_scope` | type | `result` used outside `ensures` where it is not a declared name (R-1-1) |
 | `type/return_type` | type | a `return` that does not match the result type |
 | `type/reveal_target` | type | `reveal` of something that is not an opaque function (R-6o-3) |
