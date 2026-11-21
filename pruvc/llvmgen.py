@@ -49,7 +49,7 @@ from llvm_inline import llvm_inline
 from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str  # G2 B2: uses_str
 from typeinfo import field_place
 from check import array_resize_params, array_resize_args, same_place
-from typeinfo import is_collection, contains_collection, encode, is_scalar_vec, is_vec_slice_arg
+from typeinfo import is_collection, contains_collection, encode, is_scalar_vec, is_vec_slice_arg, is_owned_result
 from foreign import CATALOG, CATALOG_CONTRACT_ONLY, first_g6_use, _owned_result, NET_OBSERVERS, ASYNC_OBSERVERS  # G6 A3, G6b, G10 net A3
 import foreign_shim  # G6 A3
 import parallel_shim
@@ -561,6 +561,8 @@ def vkind(t):
 def st(t, c=False):
     """storage type of a value of type t inside an aggregate (c: contract/i128 form)"""
     n = t.name
+    if is_collection(t):    # LG12 E2: the error slot of Result<T, String> holds the String handle
+        return "ptr"
     if gopt(t):
         x = st(t.args[0], c)
         if n == "option":
@@ -633,6 +635,10 @@ def new_tt(prog):
 
 def is_ext_t(tt, t):
     """t is an extended user type (G9): recursive, or holding a buffer or an extended type"""
+    if t is not None and is_owned_result(t):
+        # LG12 E2: Result<T, String> is an owned aggregate { i1, L(T), ptr }: it travels through output storage / ptr
+        # parameters like an extended value and has no host ABI wrapper; its String handle is null on the Ok side
+        return True
     return bool(tt.g9_ext) and t is not None and t.owner is None and not t.args and t.name in tt.g9_ext
 
 
@@ -1039,6 +1045,9 @@ class FnGen:
         return V("agg", s.op("load %s, ptr %s" % (lty(v.ty), dst)), None, v.ty, dst)
 
     def drop_agg(s, v):
+        if is_owned_result(v.ty):   # LG12 E2
+            s.drop_oresult(v.ty, s.spill(v))
+            return
         s.ins("call void @pruv_drop__%s(ptr %s)" % (v.ty.name, s.spill(v)))
 
     def view_ptr(s, e):
@@ -1132,10 +1141,95 @@ class FnGen:
                 s.drop_rest(sl, s.ret_moved[sl.a])
             elif sl.k == "coll":
                 s.drop_slot(sl)
+            elif sl.k == "agg" and is_owned_result(sl.ty):     # LG12 E2: an owned Result<T, String> local
+                s.drop_oresult(sl.ty, sl.a)
             elif sl.k == "agg":     # G9 A3: an owned extended local
                 s.ins("call void @pruv_drop__%s(ptr %s)" % (sl.ty.name, sl.a))
             else:
                 s.free_val(s.load(sl))
+
+    def drop_handle(s, h):
+        """drop the String handle h unless it is null (the Ok side, or a String that was moved out)"""
+        nn = s.op("icmp ne ptr %s, null" % h)
+        dl, el = s.label("gdrop"), s.label("gdone")
+        s.condbr(nn, dl, el)
+        s.place(dl)
+        s.g6_drop(V("coll", h, None, Type("string")))
+        s.br(el)
+        s.place(el)
+
+    def drop_oresult(s, ty, p):
+        """LG12 E2: release the owned value of type Result<T, String> stored at p: its String handle, when non-null"""
+        h = s.op("load ptr, ptr %s" % g9_gep(s, lty(ty), p, 2))
+        s.drop_handle(h)
+
+    def mk_octor(s, e):
+        """Ok / Err of Result<T, String>: Ok carries a scalar; Err MOVES its String in (a named String local becomes
+        null, a fresh String is taken as is: both are owned by the result afterwards)"""
+        ty = e.ty
+        T = st(ty)
+        if e.name == "Ok":
+            x = s.ev(e.arg)
+            acc = s.op("insertvalue %s zeroinitializer, i1 true, 0" % T)
+            return V("agg", s.put(acc, ty, 1, x, ty.args[0], False), None, ty)
+        a = e.arg
+        if isinstance(a, Var) and s.lookup(a.name)[0] != "slot":
+            raise PruvError("codegen", e.line, e.col, "unsupported_type",
+                            "Err of the borrowed String %s needs the Rust backend" % a.name, "use the Rust backend",
+                            file=getattr(e, "file", None))
+        x = s.ev(a, True)
+        if isinstance(a, Var):
+            s.ins("store ptr null, ptr %s" % s.lookup(a.name)[1].a)
+        return V("agg", s.op("insertvalue %s zeroinitializer, ptr %s, 2" % (T, x.a)), None, ty)
+
+    def owned_match(s, st):
+        """LG12 E2: `match r { Ok(v) => .., Err(e) => .. }` on a Result<T, String> CONSUMES r.  The tag, the payload and
+        the String handle are read first; a local scrutinee then has its handle slot nulled (so its scope drop frees
+        nothing), a temporary scrutinee (a call result, a constructor) is not dropped at all.  The Err binder becomes an
+        owned String local of the arm scope: dropped at arm end unless it is moved (string_to_str take, Err(e), a take
+        argument).  Other temporaries of the scrutinee are dropped right after it is evaluated."""
+        sc = st.scrutinee
+        ty = sc.ty
+        X = ty.args[0]
+        if isinstance(sc, Var) and s.lookup(sc.name)[0] != "slot":
+            raise PruvError("codegen", st.line, st.col, "unsupported_type",
+                            "a match on the borrowed Result<_, String> %s needs the Rust backend" % sc.name,
+                            "use the Rust backend", file=getattr(st, "file", None))
+        s.begin_temps()
+        sv = s.ev(sc)
+        for tv in reversed(s.temps.pop()):
+            if tv is not sv:
+                s.free_val(tv)
+        T = lty(ty)
+        tag = s.op("extractvalue %s %s, 0" % (T, sv.a))
+        okv = s.get(sv, ty, 1, X, False)
+        h = s.op("extractvalue %s %s, 2" % (T, sv.a))
+        if isinstance(sc, Var):
+            s.ins("store ptr null, ptr %s" % g9_gep(s, T, sv.p, 2))
+        pos = [a for a in st.arms if a.ctor == "Ok"][0]
+        neg = [a for a in st.arms if a.ctor == "Err"][0]
+        pl, nl_, end = s.label("armT"), s.label("armF"), s.label("endmatch")
+        s.condbr(tag, pl, nl_)
+        reach = False
+        for arm, lbl in ((pos, pl), (neg, nl_)):
+            s.place(lbl)
+            bind, own = None, None
+            if arm.ctor == "Ok":
+                if arm.binders:
+                    bind = {arm.binders[0]: ("ssa", okv)}
+            elif arm.binders:
+                sl = s.new_slot(arm.binders[0], Type("string"))
+                s.ins("store ptr %s, ptr %s" % (h, sl.a))
+                bind, own = {arm.binders[0]: ("slot", sl)}, [sl]
+            else:
+                s.drop_handle(h)
+            if s.run_block(arm.body, bind, own=own):
+                s.br(end)
+                reach = True
+        if reach:
+            s.place(end)
+        else:
+            s.dead = True
 
     def drop_rest(s, sl, moved):
         """P3: release an owned extended slot whose value (moved is None) or some unboxed payload fields of its
@@ -1745,11 +1839,14 @@ class FnGen:
             s.term("ret %s %s" % (lty(rt), g))
 
     # ---------- statements ----------
-    def run_block(s, stmts, bind=None, loop=False):
-        """lower a block in its own scope; returns True if control can fall through"""
+    def run_block(s, stmts, bind=None, loop=False, own=None):
+        """lower a block in its own scope; returns True if control can fall through.  own: owner slots (LG12 E2: the
+        String binder of an Err arm) released when the scope ends"""
         s.push_scope()
         if bind:
             s.scopes[-1]["names"].update(bind)
+        if own:
+            s.scopes[-1]["arrays"].extend(own)
         later = [set() for _ in range(len(stmts) + 1)]
         for i in range(len(stmts) - 1, -1, -1):
             later[i] = set(later[i + 1])
@@ -1955,6 +2052,8 @@ class FnGen:
                 s.free_val(s.load(sl))
             elif sl.k == "coll":   # G6 A3: drop the old value (null when moved out) after the right side
                 s.drop_slot(sl)
+            elif sl.k == "agg" and is_owned_result(sl.ty):   # LG12 E2: the old Result releases its String
+                s.drop_oresult(sl.ty, sl.a)
             elif sl.k == "agg" and s.is_ext(sl.ty):   # G9 A3
                 s.ins("call void @pruv_drop__%s(ptr %s)" % (sl.ty.name, sl.a))
             s.store(sl, v)
@@ -2095,6 +2194,8 @@ class FnGen:
             s.end_temps()
         elif isinstance(st, Par):
             s.parallel(st)
+        elif isinstance(st, Match) and is_owned_result(st.scrutinee.ty):    # LG12 E2: consuming match
+            s.owned_match(st)
         elif isinstance(st, Match) and s.is_ext(st.scrutinee.ty):
             # G9 A3: the scrutinee is borrowed, never consumed; every temporary it created (a fresh scrutinee, a
             # fresh base of a field path, a fresh argument) is moved into owner slots of a scope that spans all
@@ -2415,6 +2516,16 @@ class FnGen:
                         prev = s.ret_moved.get(sl.a)
                         s.ret_moved[sl.a] = (vn, (prev[1] if prev else set()) | {k})
                     return v
+                if is_owned_result(v.ty):
+                    # LG12 E2: a Result<T, String> local in an owning position MOVES (as in the Rust output): the
+                    # slot becomes zero (Err, null handle), so its scope drop frees nothing
+                    if kind != "slot":
+                        raise PruvError("codegen", e.line, e.col, "unsupported_type",
+                                        "moving the borrowed Result<_, String> %s needs the Rust backend" % e.name,
+                                        "use the Rust backend", file=getattr(e, "file", None))
+                    s.ins("store %s zeroinitializer, ptr %s" % (lty(v.ty), x.a))
+                    v.p = None
+                    return v
                 return s.clone_val(v)
             return v
         if isinstance(e, Move) and e.fields:    # LG4: move an owned buffer field out; the field becomes (null, 0, 0)
@@ -2474,6 +2585,8 @@ class FnGen:
             p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 1, i64 1)" % (nm, ln))
             return s.temp_arr(V("arr", p, ln, STR), owned)
         if isinstance(e, Ctor):
+            if e.ty is not None and is_owned_result(e.ty):   # LG12 E2: fresh and owned; a temporary unless taken
+                return s.fresh(s.mk_octor(e), owned)
             if e.ty is not None and gopt(e.ty):  # G3
                 return s.mk_gctor(e, s.ev, False)
             if e.name == "None":
@@ -3527,6 +3640,8 @@ class FnGen:
                     r = s.op("%s i64 %s, %s" % (BIT_LLVM[n], tx, ty))
                     return V("i128", s.op("sext i64 %s to i128" % r))
                 return V("i128", s.op("%s i128 %s, %s" % (BIT_LLVM[n], x.a, y.a)))
+            if n in ("is_some", "is_ok", "some_val", "ok_val", "err_val") and is_owned_result(a[0].ty):
+                raise s.g9_unsupported(e, "a Result<_, String> operand")      # LG12 E2: no i128 mirror of the String
             if n in ("is_some", "is_ok"):
                 o = s.cev(a[0])
                 if o.k == "agg":  # G3: tag of a new Option/Result
@@ -5600,6 +5715,8 @@ def _g6_type_ok(t):
     """a type that may occur in a G6 program on LLVM: no collection, or a supported one (never nested)"""
     if is_collection(t):
         return _g6_coll_ok(t)
+    if is_owned_result(t):     # LG12 E2: Result<T, String> with a scalar T (other shapes are rejected by _typed_result_in)
+        return _g6_scalar(t.args[0])
     return not contains_collection(t)
 
 
@@ -5671,10 +5788,16 @@ def _is_coll_fn(f):
     return any(is_collection(p.type) for p in f.params) or is_collection(f.ret)
 
 
-def _typed_result_in(node, specialized_args):
+def _typed_result_in(node, specialized_args, in_decl=False):
+    """the first type the llvm layer cannot lay out: an owned Result<T, String> (LG12 E2) is supported as a local,
+    parameter, result or temporary with T = i64 / bool; as a record / enum field or an argument of another type it
+    is not (it would need a drop path through that type)"""
     if isinstance(node, Type):
-        if node.owner is None and node.name == "result" and len(node.args) == 2 and node.args[1] == Type("string"):
-            return node     # LG12: value error types are laid out; an owned String error is not yet (G-LG11-2)
+        if is_owned_result(node):
+            if in_decl or node.args[0] not in (I64, BOOL):
+                return node
+        elif any(is_owned_result(a) for a in node.args):
+            return node
         # Lowered nominal applications keep their arguments in the specialization plan.
         children = node.args or specialized_args.get(node.name, ())
     elif isinstance(node, (list, tuple)):
@@ -5687,7 +5810,7 @@ def _typed_result_in(node, specialized_args):
     else:
         return None
     for child in children:
-        hit = _typed_result_in(child, specialized_args)
+        hit = _typed_result_in(child, specialized_args, in_decl)
         if hit is not None:
             return hit
     return None
@@ -5734,6 +5857,10 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
             raise PruvError("codegen", f.line, f.col, "unsupported_type",
                             "host entry %s takes an owned String, which has no C ABI" % getattr(f, "disp", f.name),
                             "use the Rust backend", file=getattr(f, "file", None))
+        if f.host_entry and any(is_owned_result(t) for t in [f.ret] + [p.type for p in f.params]):
+            raise PruvError("codegen", f.line, f.col, "unsupported_type",     # LG12 E2
+                            "host entry %s has a Result<_, String> in its signature, which has no C ABI" % getattr(f, "disp", f.name),
+                            "use the Rust backend", file=getattr(f, "file", None))
         if f.host_entry and is_scalar_vec(f.ret):
             raise PruvError("codegen", f.line, f.col, "unsupported_type",
                             "host entry %s returns a Vec, which has no C ABI" % getattr(f, "disp", f.name),
@@ -5755,11 +5882,13 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     items = sorted([*prog.types, *prog.functions],
                    key=lambda item: positions.get((item.file, item.line, item.col), len(positions)))
     for item in items:
-        hit = _typed_result_in(item, specialized_args)
+        hit = _typed_result_in(item, specialized_args, any(item is d for d in prog.types))
         if hit is not None:
             raise PruvError("codegen", item.line, item.col, "unsupported_type",
-                            "%s uses %s, a Result with a non-i64 error type, which the llvm codegen layer does not support yet"
-                            % (getattr(item, "disp", item.name), type_name(hit)),
+                            ("%s uses %s, an owned String error Result that the llvm codegen layer supports only with an "
+                             "i64 or bool Ok type, outside records and other generic types" if is_owned_result(hit) else
+                             "%s uses %s, a Result with a non-i64 error type, which the llvm codegen layer does not "
+                             "support yet") % (getattr(item, "disp", item.name), type_name(hit)),
                             "use the Rust backend", file=item.file)
     explicit = bool(getattr(prog, "explicit", False))
     g6err = g6_llvm_error(prog)

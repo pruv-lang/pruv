@@ -408,8 +408,9 @@ let o: Option<bool> = Some::<bool>(true);   // also None::<bool>, Ok::<bool>(x),
   `Err::<T>` and unqualified `Ok`/`Err` keep `E = i64` (no inference of `E`). In `match`, `Err(e)` binds `e: E`, and
   the contract selector `err_val(r)` has type `E`. `Result<T, A>` and `Result<T, B>` are different types
   (`type/type_mismatch`). The proof models the error payload with its own sort and well-formedness, and the
-  recursive size counts it. The LLVM backend does not support `E != i64` yet
-  (`codegen/unsupported_type`, use the Rust backend).
+  recursive size counts it. Both backends support every value `E` (LG12). In LLVM output a `Result<T, E>` is
+  `{ i1, T, E }` and its ABI words are the tag, the words of `T`, then the words of `E` (words of the inactive side
+  are 0); for `E = i64` this is the old `Result<T>` layout.
   ```
   struct ParseErr { pos: i64, code: i64 }
   fn parse_digit(c: i64) -> Result<i64, ParseErr>
@@ -427,7 +428,7 @@ let o: Option<bool> = Some::<bool>(true);   // also None::<bool>, Ok::<bool>(x),
   is no error conversion). The statement and the rest of its block mean exactly
   `match e { Ok(v) => { let x: T = v; <rest> } Err(err) => { return Err::<U, E>(err); } }` with fresh names, so the
   proof checks the postconditions on the early-return path as for the hand-written `match`, and both backends compile
-  the same `match`. The LLVM backend supports `?` for `E = i64`.
+  the same `match`. The LLVM backend supports `?` for every `E` it lays out (LG12).
   ```
   fn quarter(x: i64) -> Result<i64>
     requires x >= 0

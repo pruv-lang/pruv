@@ -2061,7 +2061,13 @@ impl<'a> Gen<'a> {
 
     fn cost_call(&self, name: &str, args: &[String]) -> String {
         let args: Vec<_> = self.fmap[name].params.iter().zip(args).map(|(p, arg)| {
-            if p.take && (is_array_name(&p.ty) || p.ty == "string" || self.is_ext(Some(&p.ty))) { format!("&{arg}") } else { arg.clone() }
+            if p.take && (is_array_name(&p.ty) || p.ty == "string"
+                || GType::from_key(&p.ty).has_string_error() || self.is_ext(Some(&p.ty)))
+            {
+                format!("&{arg}")
+            } else {
+                arg.clone()
+            }
         }).collect();
         format!("let pruv_units = {}__pruv_cost({}); if pruv_units < 0 {{ panic!(\"pruv: cost exceeded\"); }} {}",
             name, args.join(", "), Self::cost_add("(pruv_units as u128).checked_add(1).unwrap_or_else(|| panic!(\"pruv: cost exceeded\"))"))

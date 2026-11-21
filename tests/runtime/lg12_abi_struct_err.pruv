@@ -1,0 +1,25 @@
+// LG12: Result<T, ParseErr> crosses the host ABI in both directions on both backends
+struct ParseErr { pos: i64, code: i64 }
+
+fn parse(c: i64, pos: i64) -> Result<i64, ParseErr>
+  ensures !is_ok(result) ==> err_val(result).pos == pos
+{
+  if 48 <= c && c <= 57 {
+    return Ok::<i64, ParseErr>(c - 48);
+  }
+  return Err::<i64, ParseErr>(ParseErr { pos: pos, code: c });
+}
+
+fn code_of(r: Result<i64, ParseErr>) -> i64 {
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return e.code; }
+  }
+}
+
+fn flip(r: Result<bool, ParseErr>) -> Result<bool, ParseErr> {
+  match r {
+    Ok(b) => { return Ok::<bool, ParseErr>(!b); }
+    Err(e) => { return Err::<bool, ParseErr>(ParseErr { pos: e.code, code: e.pos }); }
+  }
+}

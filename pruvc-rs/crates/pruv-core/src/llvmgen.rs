@@ -479,7 +479,27 @@ pub fn is_gopt(t: &str) -> bool {
 
 /// The argument key X of `option<X>` / `result<X>` (only for a key accepted by `is_gopt`).
 pub fn g_arg(t: &str) -> &str {
-    &t[7..t.len() - 1]
+    g_args(t).0
+}
+
+pub fn g_error(t: &str) -> &str {
+    g_args(t).1
+}
+
+fn g_args(t: &str) -> (&str, &str) {
+    let args = &t[7..t.len() - 1];
+    if t.starts_with("result<") {
+        let mut depth = 0;
+        for (i, byte) in args.bytes().enumerate() {
+            match byte {
+                b'<' => depth += 1,
+                b'>' => depth -= 1,
+                b',' if depth == 0 => return (&args[..i], &args[i + 1..]),
+                _ => {}
+            }
+        }
+    }
+    (args, "i64")
 }
 
 /// A user struct/enum (including generated generic instances) or a new Option/Result application.
@@ -626,7 +646,7 @@ pub fn st(t: &str, c: bool) -> String {
         if t.starts_with("option<") {
             return format!("{{ i1, {} }}", x);
         }
-        return format!("{{ i1, {}, {} }}", x, if c { "i128" } else { "i64" });
+        return format!("{{ i1, {}, {} }}", x, st(g_error(t), c));
     }
     match t {
         "i64" => {
@@ -759,9 +779,9 @@ pub fn words(tt: &TypeTable, ty: &str) -> R<usize> {
         return Ok(n);
     }
     let r = if is_gopt(ty) {
-        // G3: 1 + W(X) (+ 1 for the Result error word)
+        // G3: 1 + W(X) (+ W(E) for Result)
         let x = words(tt, g_arg(ty))?;
-        1 + x + if ty.starts_with("result<") { 1 } else { 0 }
+        1 + x + if ty.starts_with("result<") { words(tt, g_error(ty))? } else { 0 }
     } else {
         match ty {
             "i64" | "bool" => 1,
@@ -2348,12 +2368,7 @@ impl<'a> FnGen<'a> {
             return Ok(V::agg(r, &ty));
         }
         // Err: tag false (zero), error payload in slot 2
-        let r = self.op(format!(
-            "insertvalue {} zeroinitializer, {} {}, 2",
-            st(&ty, c),
-            if c { "i128" } else { "i64" },
-            x.a
-        ))?;
+        let r = self.put("zeroinitializer", &ty, 2, &x, g_error(&ty), c)?;
         Ok(V::agg(r, &ty))
     }
 
@@ -2385,8 +2400,8 @@ impl<'a> FnGen<'a> {
                     let v = self.get(sv, &ty, 1, &x, false)?;
                     bind.push((b0.clone(), Bind::Ssa(v)));
                 } else {
-                    let r = self.op(format!("extractvalue {} {}, 2", st(&ty, false), sv.a))?;
-                    bind.push((b0.clone(), Bind::Ssa(V::new(Kind::I64, r))));
+                    let v = self.get(sv, &ty, 2, g_error(&ty), false)?;
+                    bind.push((b0.clone(), Bind::Ssa(v)));
                 }
             }
             if self.run_block(&arm.body, bind)? {
@@ -2443,9 +2458,10 @@ impl<'a> FnGen<'a> {
             let pc = self.to_c(&px, &xt)?;
             acc = self.put(&acc, ty, 1, &pc, &xt, true)?;
             if ty.starts_with("result<") {
-                let er = self.op(format!("extractvalue {} {}, 2", st(ty, false), x.a))?;
-                let ec = self.op(format!("sext i64 {} to i128", er))?;
-                acc = self.op(format!("insertvalue {} {}, i128 {}, 2", st(ty, true), acc, ec))?;
+                let et = g_error(ty);
+                let er = self.get(x, ty, 2, et, false)?;
+                let ec = self.to_c(&er, et)?;
+                acc = self.put(&acc, ty, 2, &ec, et, true)?;
             }
             return Ok(V::agg(acc, ty));
         }
@@ -2548,9 +2564,10 @@ impl<'a> FnGen<'a> {
                 let o = self.op(format!("or i1 {}, {}", nt, pe))?;
                 return self.op(format!("and i1 {}, {}", te, o));
             }
-            let el = self.op(format!("extractvalue {} {}, 2", tc, l.a))?;
-            let er = self.op(format!("extractvalue {} {}, 2", tc, r.a))?;
-            let ee = self.op(format!("icmp eq i128 {}, {}", el, er))?;
+            let et = g_error(ty);
+            let el = self.get(l, ty, 2, et, true)?;
+            let er = self.get(r, ty, 2, et, true)?;
+            let ee = self.ceq(&el, &er, et)?;
             let a1 = self.op(format!("and i1 {}, {}", tl, pe))?;
             let a2 = self.op(format!("and i1 {}, {}", nt, ee))?;
             let act = self.op(format!("or i1 {}, {}", a1, a2))?;
@@ -4859,8 +4876,9 @@ impl<'a> FnGen<'a> {
                     let r = self.put(&acc, gt, 1, &xv, &px, false)?;
                     return Ok(V::agg(r, gt));
                 }
-                let xv = self.g9_real(a, Some("i64"))?;
-                let r = self.op(format!("insertvalue {} zeroinitializer, i64 {}, 2", st(gt, false), xv.a))?;
+                let et = g_error(gt);
+                let xv = self.g9_real(a, Some(et))?;
+                let r = self.put("zeroinitializer", gt, 2, &xv, et, false)?;
                 return Ok(V::agg(r, gt));
             }
             if x.name == "None" {
@@ -5378,8 +5396,7 @@ impl<'a> FnGen<'a> {
                         let tag = self.op(format!("extractvalue {} {}, 0", tc, o.a))?;
                         if n == "err_val" {
                             self.guard(&tag, und("err_val of Ok".to_string()), true)?;
-                            let r = self.op(format!("extractvalue {} {}, 2", tc, o.a))?;
-                            return Ok(V::new(Kind::I128, r));
+                            return self.get(&o, &oty, 2, g_error(&oty), true);
                         }
                         let msg = if n == "some_val" { "some_val of None" } else { "ok_val of Err" };
                         self.guard(&tag, und(msg.to_string()), false)?;
@@ -6164,7 +6181,7 @@ fn g9_node_texts(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<Vec<String>> {
 /// size / equality walk into t: a nominal value, or Option / Result of one
 fn g9_walks(t: &str) -> bool {
     if is_gopt(t) {
-        return g9_walks(g_arg(t));
+        return g9_walks(g_arg(t)) || (t.starts_with("result<") && g9_walks(g_error(t)));
     }
     crate::emit_common::is_user_key(t)
 }
@@ -6173,6 +6190,27 @@ fn g9_walks(t: &str) -> bool {
 /// payload, None / Err 0; a nominal value weighs its size (one budget unit per node, inside pruv_csize). bud is the
 /// budget pointer the size helper charges.
 fn g9_weight(g: &mut FnGen, t: &str, p: &str, bud: &str) -> R<Option<String>> {
+    if t.starts_with("result<") && g9_walks(g_error(t)) {
+        let tl = st(t, false);
+        let g0 = g9_gep(g, &tl, p, 0)?;
+        let tag = g.op(format!("load i1, ptr {}", g0))?;
+        let yes = g.label("gwy");
+        let no = g.label("gwn");
+        let end = g.label("gwe");
+        g.condbr(&tag, &yes, &no)?;
+        g.place(&yes);
+        let px = g9_gep(g, &tl, p, 1)?;
+        let w = g9_weight(g, g_arg(t), &px, bud)?.unwrap_or_else(|| "0".to_string());
+        let wcur = g.cur.clone();
+        g.br(&end)?;
+        g.place(&no);
+        let pe = g9_gep(g, &tl, p, 2)?;
+        let we = g9_weight(g, g_error(t), &pe, bud)?.unwrap_or_else(|| "0".to_string());
+        let ecur = g.cur.clone();
+        g.br(&end)?;
+        g.place(&end);
+        return g.op(format!("phi i128 [ {}, %{} ], [ {}, %{} ]", w, wcur, we, ecur)).map(Some);
+    }
     if is_gopt(t) {
         let x = g_arg(t);
         if !g9_walks(x) {
@@ -6289,10 +6327,16 @@ fn g9_eq_val(g: &mut FnGen, t: &str, pa: &str, pb: &str) -> R<String> {
         g.br(&lend)?;
         g.place(&l3);
         let ga2 = g9_gep(g, &tl, pa, 2)?;
-        let ea = g.op(format!("load i64, ptr {}", ga2))?;
-        let gb2 = g9_gep(g, &tl, pb, 2)?;
-        let eb = g.op(format!("load i64, ptr {}", gb2))?;
-        let e3 = g.op(format!("icmp eq i64 {}, {}", ea, eb))?;
+        let et = g_error(t);
+        let e3 = if et == "i64" {
+            let ea = g.op(format!("load i64, ptr {}", ga2))?;
+            let gb2 = g9_gep(g, &tl, pb, 2)?;
+            let eb = g.op(format!("load i64, ptr {}", gb2))?;
+            g.op(format!("icmp eq i64 {}, {}", ea, eb))?
+        } else {
+            let gb2 = g9_gep(g, &tl, pb, 2)?;
+            g9_eq_val(g, et, &ga2, &gb2)?
+        };
         let l3cur = g.cur.clone();
         g.br(&lend)?;
         g.place(&lend);
@@ -6394,7 +6438,15 @@ fn g9_eq_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
 /// payload type of Option / Result (arrays, str and scalars contribute nothing)
 fn g9_nominals_in(t: &str) -> Vec<String> {
     if is_gopt(t) {
-        return g9_nominals_in(g_arg(t));
+        let mut names = g9_nominals_in(g_arg(t));
+        if t.starts_with("result<") {
+            for name in g9_nominals_in(g_error(t)) {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        return names;
     }
     if crate::emit_common::is_user_key(t) {
         return vec![t.to_string()];
@@ -6781,13 +6833,13 @@ pub fn gen_llvm_concrete(prog: &Program, verified: bool, trust_callers: bool, bu
     })
 }
 
-/// Find a non-i64 Result error before LLVM assumes i64 payloads.
+/// Find an owned String Result error, which has no LLVM layout.
 fn typed_result_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
     use crate::foreign_shim::{walk_stmts, Node};
     use crate::gtype::{format_type, is_g3_key, GType};
 
     fn in_type(ty: &GType) -> Option<&GType> {
-        if ty.result_error().is_some() {
+        if ty.has_string_error() {
             return Some(ty);
         }
         ty.args.iter().find_map(in_type)

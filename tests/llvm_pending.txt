@@ -9,5 +9,3 @@ tests/runtime/g6_a03_result_half.pruv
 tests/runtime/g6_v05_option_elems.pruv
 
 
-# LG11 E2: Result<T, String> is not on LLVM yet (G-LG11-2)
-tests/runtime/lg11_e2_string.pruv
