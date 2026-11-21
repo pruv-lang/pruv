@@ -4,18 +4,33 @@ Target: every listed cell at or below hand Rust 1.0x on time and RSS.
 
 ## Status
 
-- Status: DB5: D-R07-1 partial: the begin key pass is O(E) (`keys_unique`); the final ratio is in Measurement.
-- Status: DB5: D-R07-2 partial: the checked step still walks the E rows on both sides (D-DB5-1); no blank ctl per call.
-- Status: DB5: D-R07-3 partial: `step_body` no longer builds a blank ctl, and the hand lane does the same checks (rule 4).
-- Status: DB5: D-R07-4 partial: `done_simple` writes the reject packet with one alloc; the final ratio is in Measurement.
-- Status: DB5: D-R09-1 open: the line and arena grow from 4 KiB, but time is still above 1.0x (D-DB5-4).
-- Status: DB5: D-R09-2 partial: line and arena RSS are gone, but `pkgs/turns::grow` still costs 13 MB (D-DB5-3, G-DB5-3).
+- Status: DB5: D-R07-1 partial: begin time 0.31x/0.43x rs/rust, 0.40x rs/llvm M, 1.24x rs/llvm L (keys_unique O(E); D-DB5-2).
+- Status: DB5: D-R07-2 partial: step_checked 0.80x/0.92x rs/rust, 1.02x/1.07x rs/llvm (was 1316-1633x); O(E) rows on both sides (D-DB5-1).
+- Status: DB5: D-R07-3 partial: step_admitted 0.95x/0.95x rs/rust, 1.11x/1.07x rs/llvm (was 356-760x); hand lane now does the same checks.
+- Status: DB5: D-R07-4 closed: step RSS 0.991x rs/rust, 1.000x rs/llvm on every step cell (was 1.01-1.06x).
+- Status: DB5: D-R09-1 partial: time 1.23x/1.11x rs/rust, 1.28x M / 0.93x L rs/llvm (was 1.67-1.88x); D-DB5-4.
+- Status: DB5: D-R09-2 partial: RSS 7.0x-9.6x (was 10.9-12.9x); the rest is pkgs/turns::grow (D-DB5-3, G-DB5-3).
 
 ## Measurement
 
 Old values (L3_RESTRUCTURE_SPEC 7.5):
 - opencode: begin 25-218x, step_checked 1316-1633x, step_admitted 356-760x, step RSS 1.01-1.06x.
 - codex: time 1.67-1.88x, RSS 10.9-12.9x.
+
+Final run (one run, `measure_r07.py --rounds 15` then `measure_r09.py` at 7 rounds, Pruv/hand). Load averages: 127.36 before r07, 96.47 between, 84.63 after r09. Load stayed far above 16, so the cells near 1.0x on rs/llvm are within the noise of this host.
+
+| Cell | rs/rust M | rs/rust L | rs/llvm M | rs/llvm L |
+|---|---|---|---|---|
+| opencode begin time | 0.307x | 0.426x | 0.397x | 1.241x |
+| opencode begin RSS | 0.972x | 0.959x | 1.000x | 0.984x |
+| opencode step_checked time | 0.799x | 0.917x | 1.017x | 1.071x |
+| opencode step_checked RSS | 0.991x | 0.991x | 1.000x | 1.000x |
+| opencode step_admitted time | 0.949x | 0.951x | 1.105x | 1.065x |
+| opencode step_admitted RSS | 0.991x | 0.991x | 1.000x | 1.000x |
+| codex read time | 1.231x | 1.106x | 1.283x | 0.928x |
+| codex read RSS | 7.082x | 9.586x | 7.011x | 7.214x |
+
+The quick runs below are kept for reference.
 
 Quick runs during the work (one round each, load 40-150, not final):
 
@@ -27,7 +42,7 @@ Quick runs during the work (one round each, load 40-150, not final):
 | codex rs/rust M / L | 1.62x / 2.05x | 7.1x / 9.4x |
 | codex rs/llvm M / L | 2.33x / 1.87x | 7.0x / 8.3x |
 
-The final run (`measure_r07.py --rounds 15`, then `measure_r09.py`, with load before and after) is recorded below when it lands.
+
 
 ## What landed
 
@@ -66,4 +81,5 @@ The final run (`measure_r07.py --rounds 15`, then `measure_r09.py`, with load be
 - codex `test_impl.py`: 136/136 on py/rust, py/llvm, rs/rust and rs/llvm (rc 0). `q.py`: rc 0, 0 unexplained. `q_mutants.py`: every mutant listed so far was killed.
 - opencode `test_impl.py`: reference ts/expected 199/199. Each pair passes 194/199. The 5 failures are all F08 (hang, term-exit, kill-required, close-overrides-timeout, give-up-script). These are timing fixtures, and unchanged HEAD a3a4196 also fails them at this load (rs/rust F08 FAILED 4).
 - opencode `q.py`: 2199 cases, 16 unexplained = 4 cases (q01107, q01451, q01581, q01730, all `read`) x 4 pairs. In each, both the TS reference and the impl report "no exporter log exists". The reference side is missing too, so this is load and not this change.
-- opencode `q_mutants.py`: running at commit time. The mutants killed so far are listed in the log.
+- opencode `q_mutants.py`: every mutant listed so far (M01, M02, ...) was killed. The run was still going at commit time.
+- Audit: Codex gpt-6.2-astra ultra found 2 mandatory issues (the done_simple class/code pair, and the narrowed checked step). Both are fixed, and the re-check confirmed both fixed.
