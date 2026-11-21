@@ -64,9 +64,10 @@ def check_try_position(e, at):
 def try_position_error(at):
     terr(at, "try_position",
          "`?` is only allowed in the value of a let, a local assignment or a return, an expression statement or an"
-         " if condition, and not in the right operand of && / || / ==>, in a quantifier or after an operand evaluated"
-         " before it that cannot be bound to a temporary (one with inout, a quantifier, a move of a name used again"
-         " or a type that is not a value)",
+         " if condition, and not in a quantifier, in the right operand of ==>, in the right operand of && / || when"
+         " the statement passes inout or the operator holds a quantifier or a subview or moves a name used outside it"
+         " (or uses one moved outside it, or a binding of a type that is not a value used again), or after an operand evaluated before it that cannot be bound to a temporary (one with inout,"
+         " a quantifier, a move of a name used again or a type that is not a value)",
          "bind the value with `let x: T = e?;` first")
 
 
@@ -91,9 +92,11 @@ def find_try(e):
     to bind to fresh temporaries first), or None when e has no `?` that can be lowered. An operand evaluated before the
     `?` that is not _try_pure (a call, a constructor, a move, an index, arithmetic) is bound to a temporary when the
     whole operand holds no `inout` argument and no quantifier and moves no binding mentioned elsewhere in e (LG14,
-    G-LG13-1); its type is checked by Checker.try_temps. A `?` inside the right operand of && / || / ==>, inside a
-    quantifier, after an operand that cannot be bound, or whose operand passes `inout` while the statement reads a
-    binding outside that operand stays for check_try_position."""
+    G-LG13-1); its type is checked by Checker.try_temps. A `?` only in the right operand of && / || gives that
+    operator node instead (LG15, G-LG13-2; lowered by Checker.try_short) unless the statement passes `inout` or the
+    node holds a quantifier or a subview or moves a name mentioned outside it (or mentions one moved outside it). A
+    `?` inside a quantifier, after an operand that cannot be bound, or whose operand passes `inout` while the
+    statement reads a binding outside that operand stays for check_try_position."""
     root = e
     seen = {"impure": False}
     path = []          # (node, index of the kid on the way to the current node)
@@ -105,13 +108,16 @@ def find_try(e):
             seen["impure"] = True      # G-LG13-7: a quantifier is not code that may move after a `?`
             return None
         if isinstance(e, Binary) and e.op in ("&&", "||", "==>"):
+            before = seen["impure"]
             path.append((e, 0))
             found = visit(e.left)
             path.pop()
             if found is not None:
                 return found
             if any(is_try(x) for x in _walk(e.right)):
-                raise _NoTry
+                if e.op == "==>":       # ==> is contract-only; lowering it would hide type/contract_only
+                    raise _NoTry
+                return short(e, before)
             note(e.right)
             note_node(e)
             return None
@@ -153,6 +159,21 @@ def find_try(e):
                         raise _NoTry      # a borrow bound early would hide its conflict with the later move
                 out.append(k)
         return out
+
+    def short(e, before):
+        # LG15 (G-LG13-2): a `?` only in the right operand of && / ||: the whole operator is lowered to a nested
+        # if (Checker.try_short), so it runs before the rest of the statement; it must not pass inout, hold a
+        # quantifier or a subview, or move a name the rest of the statement mentions (or mention one it moves)
+        if _has_kind(root, InoutArg):
+            raise _NoTry
+        if any(isinstance(x, Quant) or isinstance(x, Call) and x.name == "subview" for x in _walk(e)):
+            raise _NoTry
+        for m in _walk(e):
+            if isinstance(m, Move) and _mentions_count(root, m.name) > _mentions_count(e, m.name):
+                raise _NoTry
+            if isinstance(m, (Var, Move)) and _moves_count(root, m.name) > _moves_count(e, m.name):
+                raise _NoTry
+        return e, (temps() if before else [])
 
     def note_node(e):
         if not _try_pure(e):
@@ -1321,8 +1342,13 @@ class Checker:
             site = try_site(st, scope)
             if site is not None:
                 candidate, temps = site
+                if isinstance(candidate, Binary):   # LG15: checked on the statement before its temporaries
+                    s.try_short_check(st, candidate, scope)
                 if temps:                       # LG14 (G-LG13-1): bind the earlier operands first
                     stmts[i:i] = s.try_temps(st, temps, scope)
+                    continue
+                if isinstance(candidate, Binary):   # LG15 (G-LG13-2): the operator becomes a nested if
+                    stmts[i:i] = s.try_short(st, candidate, scope)
                     continue
                 match = Match(st.line, st.col, candidate.operand, [])
                 if hasattr(st, "file"):
@@ -1352,6 +1378,38 @@ class Checker:
                     node.file = st.file
             lets.append(let)
         return lets
+
+    def try_short_check(s, st, node, scope):
+        """LG15: type/try_position when the operator node mentions a binding whose declared type is not a value type
+        and st mentions it again. Called on the statement before its LG14 temporaries are bound (a temporary would
+        hide a borrow in an earlier operand) and again before the lowering"""
+        root = st.cond if isinstance(st, If) else st.expr if isinstance(st, ExprStmt) else st.value
+        for m in _walk(node):
+            if isinstance(m, (Var, Move)) and m.name in scope and _mentions_count(root, m.name) > 1:
+                if not is_value(scope[m.name][0], s.value_decls):
+                    try_position_error(st)
+
+    def try_short(s, st, node, scope):
+        """LG15 (G-LG13-2): `let mut __pruv_try_tN: bool = D; if C { __pruv_try_tN = R; }` for the operator node
+        `L op R` whose right operand R holds the statement's first `?`, with node replaced by the fresh local in st:
+        D, C = false, L for &&; true, !L for ||. The assignment is a lowered position, so the `?` in R is lowered there
+        and runs only when R runs, as in the hand-written nested if. A binding of a type that is not a value type
+        mentioned in the operator and mentioned again in the statement is type/try_position: splitting the statement
+        would hide a borrow or an implicit move between the two mentions"""
+        s.try_short_check(st, node, scope)
+        pos = (st.line, st.col)
+        name = "%s%d" % (TRY_TEMP, s.try_index)
+        s.try_index += 1
+        let = Let(*pos, name, True, BOOL, BoolLit(*pos, node.op != "&&"))
+        cond = Unary(*pos, "!", node.left) if node.op == "||" else node.left
+        assign = Assign(*pos, name, node.right)
+        branch = If(*pos, cond, [assign], [])
+        var = Var(*pos, name)
+        replace_expr(st, node, var)
+        if hasattr(st, "file"):
+            for x in (let, let.value, cond, assign, branch, var):
+                x.file = st.file
+        return [let, branch]
 
     def try_arms(s, st, rest, target, operand):
         if operand.owner is not None or operand.name != "result":

@@ -1,0 +1,37 @@
+// LG15 G-LG12-4/5: is_ok / ok_val / err_val on a Result<_, String> parameter in a runtime-checked requires and in
+// a kept cost clause (--no-verify) on both backends
+fn ok_part(take r: Result<i64, String>) -> i64 ! alloc
+  requires is_ok(r) ==> ok_val(r) >= 0 && ok_val(r) <= 100
+  requires !is_ok(r) ==> len(err_val(r)) > 0 && len(err_val(r)) <= 100
+  ensures result >= -100 && result <= 100
+{
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return 0 - len(e); }
+  }
+}
+
+fn spend_ok(r: Result<i64, String>) -> i64 ! alloc
+  requires is_ok(r) && ok_val(r) >= 0
+  ensures result == 1
+  cost ok_val(r)
+{
+  return 1;
+}
+
+fn spend_err(r: Result<i64, String>) -> i64 ! alloc
+  requires !is_ok(r)
+  ensures result == 2
+  cost len(err_val(r))
+{
+  return 2;
+}
+
+fn run(k: i64) -> i64 ! alloc
+  requires k >= 0 && k <= 3
+{
+  let a: Result<i64, String> = Ok::<i64, String>(k + 4);
+  let b: Result<i64, String> = Err::<i64, String>(string_from("abc"));
+  let t: i64 = spend_ok(a) * 100 + spend_err(b) * 1000;
+  return t + ok_part(move a) + ok_part(move b) * 10;
+}

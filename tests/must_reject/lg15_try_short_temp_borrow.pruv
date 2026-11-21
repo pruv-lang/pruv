@@ -1,0 +1,5 @@
+fn pair(a: bool, b: bool) -> bool { return a == b; }
+fn get(take r: Result<bool, String>) -> bool { return true; }
+fn f(take s: String) -> Result<bool, String> {
+  return Ok::<bool, String>(pair(len(s) > 0, get(Err::<bool, String>(s)) && Ok::<bool, String>(true)?));
+}

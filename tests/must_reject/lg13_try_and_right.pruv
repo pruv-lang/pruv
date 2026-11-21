@@ -1,10 +1,13 @@
-// LG13: a `?` in the right operand of && would run only when the left operand is true; not lowered
-fn check_pos(x: i64) -> Result<bool> {
+// LG13: a `?` in the right operand of && would run only when the left operand is true. LG15 (G-LG13-2) lowers it to
+// a nested if, but not when the statement passes `inout`: try_position in both compilers
+fn check_pos(inout n: i64, x: i64) -> Result<bool> {
+  n = n + 1;
   if x > 0 { return Ok::<bool>(true); }
   return Err::<bool>(0);
 }
 
 fn g(x: i64) -> Result<i64> {
-  if x > 3 && check_pos(x)? { return Ok(1); }
+  let mut n: i64 = 0;
+  if x > 3 && check_pos(inout n, x)? { return Ok(1); }
   return Ok(0);
 }

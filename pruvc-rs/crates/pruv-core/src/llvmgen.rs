@@ -51,6 +51,7 @@ fn g6_diag_err(line: i64, col: i64) -> String {
 /// G9 A3: a PruvError (codegen/unsupported_type, Python `FnGen.g9_unsupported`) raised in the middle of a function body
 /// travels like the G6 one: this prefix, then `line:col:what`; `gen_llvm_concrete_ex` turns it back into the diagnostic.
 const G9_DIAG_TAG: &str = "\u{0}g9diag:";
+const G9_COST_DIAG_TAG: &str = "\u{0}g9cdiag:";
 
 /// P17a: an eq_range the LLVM backend does not lower (Python FnGen ev_call raises codegen/unsupported_type):
 /// this prefix, then `line:col:what` (the operand or layout that is not lowered).
@@ -5519,7 +5520,32 @@ impl<'a> FnGen<'a> {
                 if matches!(n, "is_some" | "is_ok" | "some_val" | "ok_val" | "err_val")
                     && expr_ty(arg(a, 0)?).as_deref().is_some_and(is_owned_result)
                 {
-                    return Err(g9_diag_err(x.line, x.col, "a Result<_, String> operand"));
+                    // LG15 (G-LG12-4/5): no i128 mirror of the String; the REAL storage { i1, L(T), ptr } is read
+                    // lazily through cx (a parameter or a field path), like the Rust backend reads its parameter
+                    let a0 = arg(a, 0)?;
+                    let oty = expr_ty(a0).clone().unwrap_or_default();
+                    let xt = g_arg(&oty).to_string();
+                    if !matches!(n, "is_ok" | "ok_val" | "err_val") || (n == "ok_val" && xt != "i64" && xt != "bool") {
+                        return Err(g9_diag_err(x.line, x.col, "a Result<_, String> operand"));
+                    }
+                    let p = self.cx(a0)?;
+                    let ot = lty(&oty);
+                    let tp = g9_gep(self, &ot, &p, 0)?;
+                    let tag = self.op(format!("load i1, ptr {}", tp))?;
+                    if n == "is_ok" {
+                        return Ok(V::new(Kind::I1, tag));
+                    }
+                    if n == "ok_val" {
+                        self.guard(&tag, und("ok_val of Err".to_string()), false)?;
+                        let vp = g9_gep(self, &ot, &p, 1)?;
+                        let v = self.op(format!("load {}, ptr {}", lty(&xt), vp))?;
+                        return self.to_c(&V::new(vkind(&xt), v), &xt);
+                    }
+                    self.guard(&tag, und("err_val of Ok".to_string()), true)?;
+                    let hp = g9_gep(self, &ot, &p, 2)?;
+                    let h = self.op(format!("load ptr, ptr {}", hp))?;
+                    let ety = g_error(&oty).to_string();
+                    return Ok(V { layout: "i64", rng: None, k: Kind::Coll, a: h, b: "None".to_string(), ty: Some(ety), p: None, mv: None, c: None });
                 }
                 if n == "is_some" || n == "is_ok" {
                     let v = self.cev(arg(a, 0)?)?;
@@ -6082,7 +6108,11 @@ pub fn entry_of(
     }
     if cost {
         let expr = f.cost.as_ref().ok_or_else(|| "missing cost bound".to_string())?;
-        let value = g.cregion(&|g2| g2.cev(expr))?;
+        // LG15 (G-LG12-5): a G9 diagnostic raised here names the cost clause
+        let value = g.cregion(&|g2| g2.cev(expr)).map_err(|e| match e.strip_prefix(G9_DIAG_TAG) {
+            Some(rest) => format!("{}{}", G9_COST_DIAG_TAG, rest),
+            None => e,
+        })?;
         g.term(format!("ret i128 {}", value.a))?;
         params.retain(|(_, n)| n != "%out");
         return Ok(g.render(&format!("define internal i128 @{}__pruv_cost({})", mangle(&f.name), sig_text(&params, Some(f)))));
@@ -7140,9 +7170,14 @@ fn decode_llvm_error(s: String) -> crate::codegen::GenError {
                 G6_UNSUPPORTED_FIX,
             ))
         }
-        None => match s.strip_prefix(G9_DIAG_TAG) {
-            // G9 A3: FnGen.g9_unsupported (a contract operand the LLVM backend cannot evaluate)
-            Some(rest) => {
+        None => match s
+            .strip_prefix(G9_DIAG_TAG)
+            .map(|r| (r, "runtime requires"))
+            .or_else(|| s.strip_prefix(G9_COST_DIAG_TAG).map(|r| (r, "kept cost clause")))
+        {
+            // G9 A3: FnGen.g9_unsupported (a contract operand the LLVM backend cannot evaluate); LG15 (G-LG12-5):
+            // the message names the clause being evaluated
+            Some((rest, clause)) => {
                 let mut it = rest.splitn(3, ':');
                 let line: i64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
                 let col: i64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
@@ -7152,7 +7187,7 @@ fn decode_llvm_error(s: String) -> crate::codegen::GenError {
                     line,
                     col,
                     "unsupported_type",
-                    &format!("{} is not supported in a runtime requires by the llvm codegen layer yet", what),
+                    &format!("{} is not supported in a {} by the llvm codegen layer yet", what, clause),
                     "compare tags with is_variant and fields with variant_field, or move the check into the body",
                 ))
             }

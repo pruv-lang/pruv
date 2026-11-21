@@ -1,0 +1,104 @@
+// LG15 (G-LG13-2): a `?` in the right operand of && / || runs only when that operand runs; the operator is
+// lowered to `let mut __pruv_try_tN: bool = D; if C { __pruv_try_tN = R; }` like the hand-written nested if
+fn check(x: i64) -> Result<bool>
+  requires -10 <= x && x <= 10
+  ensures is_ok(result) ==> x > 0
+  ensures x > 0 ==> is_ok(result)
+  ensures !is_ok(result) ==> err_val(result) == x
+{
+  if x > 5 { return Ok::<bool>(true); }
+  if x > 0 { return Ok::<bool>(false); }
+  return Err::<bool>(x);
+}
+
+fn twice(x: i64) -> i64
+  requires -10 <= x && x <= 10
+  ensures result == x * 2
+{
+  return x * 2;
+}
+
+fn pick(a: i64, b: bool) -> i64
+  requires -20 <= a && a <= 20
+  ensures result >= -20 && result <= 30
+{
+  if b { return a + 10; }
+  return a;
+}
+
+fn and_case(x: i64) -> Result<i64>
+  requires -10 <= x && x <= 10
+  ensures is_ok(result) ==> ok_val(result) >= 0 && ok_val(result) <= 1
+  ensures !is_ok(result) ==> err_val(result) >= -10 && err_val(result) <= 10
+{
+  if x != 1 && check(x)? { return Ok(1); }
+  return Ok(0);
+}
+
+fn or_case(x: i64) -> Result<i64>
+  requires -10 <= x && x <= 10
+  ensures is_ok(result) ==> ok_val(result) >= 0 && ok_val(result) <= 1
+  ensures !is_ok(result) ==> err_val(result) >= -10 && err_val(result) <= 10
+{
+  let b: bool = x == 1 || check(x)?;
+  if b { return Ok(1); }
+  return Ok(0);
+}
+
+fn imp_case(x: i64) -> Result<bool>
+  requires -10 <= x && x <= 10
+  ensures !is_ok(result) ==> err_val(result) >= -10 && err_val(result) <= 10
+{
+  return Ok::<bool>(x == 1 || check(x)?);
+}
+
+fn temp_case(x: i64) -> Result<i64>
+  requires -10 <= x && x <= 10
+  ensures is_ok(result) ==> ok_val(result) >= -20 && ok_val(result) <= 30
+  ensures !is_ok(result) ==> err_val(result) >= -10 && err_val(result) <= 10
+{
+  let mut r: i64 = 0;
+  r = pick(twice(x), x != 1 && check(x)?);
+  return Ok(r);
+}
+
+fn nested_case(x: i64) -> Result<i64>
+  requires -10 <= x && x <= 10
+  ensures is_ok(result) ==> ok_val(result) >= 0 && ok_val(result) <= 1
+  ensures !is_ok(result) ==> err_val(result) >= -10 && err_val(result) <= 10
+{
+  if x != 1 && (x == 3 || check(x)?) { return Ok(1); }
+  return Ok(0);
+}
+
+fn code(r: Result<i64>) -> i64
+  requires is_ok(r) ==> ok_val(r) >= -20 && ok_val(r) <= 30
+  requires !is_ok(r) ==> err_val(r) >= -10 && err_val(r) <= 10
+  ensures result >= -20 && result <= 110
+{
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return 100 + e; }
+  }
+}
+
+fn code_b(r: Result<bool>) -> i64
+  requires !is_ok(r) ==> err_val(r) >= -10 && err_val(r) <= 10
+  ensures result >= 0 && result <= 110
+{
+  match r {
+    Ok(v) => { if v { return 1; } return 0; }
+    Err(e) => { return 100 + e; }
+  }
+}
+
+fn run(x: i64) -> i64
+  requires -10 <= x && x <= 10
+{
+  let a: i64 = code(and_case(x));
+  let o: i64 = code(or_case(x));
+  let m: i64 = code_b(imp_case(x));
+  let t: i64 = code(temp_case(x));
+  let n: i64 = code(nested_case(x));
+  return a * 100000000 + o * 1000000 + m * 10000 + t * 100 + n;
+}

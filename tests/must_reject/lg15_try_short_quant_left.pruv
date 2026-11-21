@@ -1,0 +1,12 @@
+// LG15 (G-LG13-2): an operator whose left operand holds a quantifier is not lowered to a nested if; try_position in
+// both compilers
+fn half(x: i64) -> Result<i64> {
+  if x % 2 == 0 { return Ok(x / 2); }
+  return Err(x);
+}
+
+fn g(a: [i64]) -> Result<bool>
+  requires len(a) <= 10
+{
+  return Ok((forall i in 0..len(a): a[i] > 0) && half(2)? > 0);
+}
