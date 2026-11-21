@@ -67,6 +67,13 @@ pub fn entry_step(prev: [i64], completion: [i64]) -> [i64] ! alloc
   return crate::ent_state::finish(cx, seq + 1, seq);
 }
 
+// The logical size differs from the physical layout only in section 0.
+fn logical_pool_words(w: [i64]) -> i64
+  ensures 0 <= result && result <= 16777216
+{
+  return crate::ent_value::pkt_size(w) - len(w) + crate::ent_packet::sec_len(w, 0);
+}
+
 // Op 9 issues at most one await. Its state section retains the v1 wire format.
 // The adapter keeps input after the call and passes it to index_step (the await does not copy it).
 pub fn index_begin(inout progress: [i64], input: [i64]) -> [i64] ! alloc
@@ -81,12 +88,12 @@ pub fn index_begin(inout progress: [i64], input: [i64]) -> [i64] ! alloc
   if hi < 0 { return bad_pkt(input, 1); }
   if hi != crate::ent_packet::sec_len(input, 0) {
     let blob: [i64] = crate::ent_state::repack(input, hi);
-    return index_begin_checked(inout progress, blob, hi, len(input));
+    return index_begin_checked(inout progress, blob, hi, crate::ent_value::pkt_size(input));
   }
-  return index_begin_checked(inout progress, input, hi, len(input));
+  return index_begin_checked(inout progress, input, hi, crate::ent_value::pkt_size(input));
 }
 
-// hi and raw are the checked pool high water and the length of the input the adapter keeps; step repeats the repack from them.
+// hi and raw are the checked pool high water and the logical size of the input the adapter keeps; step repeats the repack from them.
 fn index_begin_checked(inout progress: [i64], blob: [i64], hi: i64, raw: i64) -> [i64] ! alloc
 {
   let rec: i64 = crate::ent_packet::sec_start(blob, 1);
@@ -102,12 +109,12 @@ fn index_begin_checked(inout progress: [i64], blob: [i64], hi: i64, raw: i64) ->
   }
   let pool: i64 = crate::ent_packet::sec_start(blob, 0);
   let pl: i64 = crate::ent_packet::sec_len(blob, 0);
-  let lb: i64 = len(blob);
+  let lb: i64 = crate::ent_value::pkt_size(blob);
   let lt: i64 = len(tab);
   if lb > 16777216 || lt > 16777216 { return bad_pkt(blob, 2); }
   // Keep the existing size limit based on the checked input pool.
-  if 30 + pl + lb + lt > 16777216 { return bad_pkt(blob, 2); }
-  if pool + pl > lb { return bad_pkt(blob, 1); }
+  if 30 + logical_pool_words(blob) + lb + lt > 16777216 { return bad_pkt(blob, 2); }
+  if pool + pl > len(blob) { return bad_pkt(blob, 1); }
   // Count the text units so the compact pool can be written into the await directly.
   // Ids may share one range; once the sum passes the input pool, copy that pool once instead.
   let mut lp: i64 = 0;
@@ -183,11 +190,12 @@ pub fn index_step(inout progress: [i64], input: [i64], prev: [i64], emitted: [i6
   let n: i64 = len(emitted);
   if nt <= 0 || nt > 559240 || nt >= len(progress) ||
      n != len(prev) || !eq_range(prev, 0, emitted, 0, n) { return bad_pkt(emitted, 1); }
-  if n < 30 || n > 16777216 || emitted[6] != 5 { return bad_pkt(emitted, 1); }
+  if n < 30 || crate::ent_value::pkt_size(emitted) > 16777216 || emitted[6] != 5 { return bad_pkt(emitted, 1); }
   let st: i64 = crate::ent_packet::sec_start(emitted, 2);
   let ls: i64 = crate::ent_packet::sec_len(emitted, 2);
   if ls != 14 || st + ls > n { return bad_pkt(emitted, 1); }
-  if len(input) > 16777216 || emitted[st + 13] != len(input) { return bad_pkt(emitted, 1); }
+  let raw: i64 = crate::ent_value::pkt_size(input);
+  if raw > 16777216 || emitted[st + 13] != raw { return bad_pkt(emitted, 1); }
   if emitted[8] != 4 || crate::ent_u16::rd(emitted, st - 1) != nt || emitted[11] != 3 * nt {
     return bad_pkt(emitted, 1);
   }
@@ -203,7 +211,7 @@ fn index_step_on(inout progress: [i64], blob: [i64], emitted: [i64], st: i64, nt
   requires 0 < nt && nt <= 559240 && 0 <= st && st <= 16777216
 {
   let lb: i64 = len(blob);
-  if lb > 16777216 { return bad_pkt(emitted, 1); }
+  if crate::ent_value::pkt_size(blob) > 16777216 || lb > 16777216 { return bad_pkt(emitted, 1); }
   let base: i64 = crate::ent_u16::rd(emitted, st + 4);
   if !crate::ent_bound::index_progress_ok(blob, 0, lb, base, progress, nt) {
     return bad_pkt(emitted, 1);
@@ -216,8 +224,8 @@ fn index_step_on(inout progress: [i64], blob: [i64], emitted: [i64], st: i64, nt
   let hi0: i64 = crate::ent_packet::comp_check(completion, 8, nt);
   if hi0 < 0 { return bad_pkt(emitted, 1); }
   let hi: i64 = crate::ent_u16::clamp(hi0, 16777216);
-  let l: i64 = crate::ent_u16::clamp(len(completion), 16777216);
-  if l - crate::ent_packet::sec_len(completion, 0) + hi + 3 > 16777216 { return bad_pkt(emitted, 2); }
+  let l: i64 = crate::ent_u16::clamp(crate::ent_value::pkt_size(completion), 16777216);
+  if l - logical_pool_words(completion) + hi + 3 > 16777216 { return bad_pkt(emitted, 2); }
   let done: [i64] = crate::ent_bound::index_complete(blob, 0, id, 1, completion, progress);
   crate::ent_u16::wr(inout progress, 0, 0);
   return done;

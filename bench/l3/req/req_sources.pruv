@@ -5,9 +5,9 @@
 // Key literals are appended to the done pool: sources 7, source 6, engine 6, account 7, label 5 (31 units).
 
 fn has_acct(rows: [i64], p: i64) -> bool
-  requires 0 <= p && p <= 1000000000
+  requires 0 <= p && p <= 999999991
 {
-  return crate::ent_u16::rd(rows, p + 9) == 6 && crate::ent_u16::rd(rows, p + 11) > 0;
+  return crate::ent_u16::rd(rows, p + 9) == 6 && crate::ent_value::pstr_len(rows, p + 9) > 0;
 }
 
 fn nrows(rows: [i64]) -> i64
@@ -20,7 +20,9 @@ fn nrows(rows: [i64]) -> i64
 pub fn dpool(pool: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  return crate::ent_u16::cat(pool, crate::ent_u16::lit("sourcesenginesourceaccountlabel"));
+  let mut slots: [i64] = crate::ent_u16::zeros(15);
+  let keys: [i64] = make_keys(inout slots);
+  return crate::ent_value::pool_cat(pool, keys);
 }
 
 // done record [0, V] with V = object slot over section 6
@@ -52,12 +54,17 @@ pub fn tlens(rows: [i64]) -> [i64] ! alloc
   return t;
 }
 
-// key slot at table position at: key literal (offset within the key block, units)
-fn key(inout o: [i64], at: i64, kb: i64, off: i64, n: i64) -> ()
-  requires 0 <= at && at <= 1000000000 && 0 <= kb && kb <= 1000000000 && 0 <= off && off <= 1000 && 0 <= n && n <= 1000
-  ensures len(o) == len(old(o))
+// Build the key pool and its slots before projecting the rows.
+fn make_keys(inout slots: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
 {
-  crate::req_value::put(inout o, at, 6, kb + off, n);
+  let mut keys: [i64] = crate::ent_value::pool_new();
+  crate::ent_value::pool_put_lit(inout keys, inout slots, 0, "sources");
+  crate::ent_value::pool_put_lit(inout keys, inout slots, 3, "engine");
+  crate::ent_value::pool_put_lit(inout keys, inout slots, 6, "source");
+  crate::ent_value::pool_put_lit(inout keys, inout slots, 9, "account");
+  crate::ent_value::pool_put_lit(inout keys, inout slots, 12, "label");
+  return keys;
 }
 
 pub fn tabs(pool: [i64], rows: [i64]) -> [i64] ! alloc
@@ -75,9 +82,11 @@ pub fn tabs(pool: [i64], rows: [i64]) -> [i64] ! alloc
     j = j + 1;
   }
   let mut o: [i64] = crate::ent_u16::zeros(total);
-  let kb: i64 = crate::ent_u16::clamp(len(pool), 1000000000);
+  let mut keys: [i64] = crate::ent_u16::zeros(15);
+  let kp: [i64] = make_keys(inout keys);
+  let kb: i64 = crate::ent_u16::clamp(crate::ent_value::pool_base(pool, kp), 1000000000);
   // table 6: key "sources" -> array over section 7
-  key(inout o, 0, kb, 0, 7);
+  crate::req_value::copy_slot_off(inout o, 0, keys, 0, kb);
   crate::req_value::put(inout o, 3, 7, 7, n);
   // table 7: one object slot per source
   let mut at: i64 = 6 + 3 * n;
@@ -91,18 +100,18 @@ pub fn tabs(pool: [i64], rows: [i64]) -> [i64] ! alloc
     if has_acct(rows, p) { k = 4; }
     crate::req_value::put(inout o, 6 + 3 * i, 8, 8 + i, k);
     let mut q: i64 = at;
-    key(inout o, q, kb, 13, 6);
+    crate::req_value::copy_slot_off(inout o, q, keys, 6, kb);
     crate::req_value::copy_slot(inout o, q + 3, rows, p);
     q = q + 6;
-    key(inout o, q, kb, 7, 6);
+    crate::req_value::copy_slot_off(inout o, q, keys, 3, kb);
     crate::req_value::copy_slot(inout o, q + 3, rows, p + 3);
     q = q + 6;
     if has_acct(rows, p) {
-      key(inout o, q, kb, 19, 7);
+      crate::req_value::copy_slot_off(inout o, q, keys, 9, kb);
       crate::req_value::copy_slot(inout o, q + 3, rows, p + 9);
       q = q + 6;
     }
-    key(inout o, q, kb, 26, 5);
+    crate::req_value::copy_slot_off(inout o, q, keys, 12, kb);
     if crate::req_value::is_str_lit(pool, rows, p + 6, "account") && !crate::req_value::nullish(rows, p + 12) {
       crate::req_value::copy_slot(inout o, q + 3, rows, p + 12);
     } else {

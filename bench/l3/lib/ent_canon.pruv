@@ -381,9 +381,10 @@ fn folder_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
   if cx.ontab == 1 { return wire_done(cx, 1); }
   let mut rec: [i64] = crate::ent_u16::zeros(4);
   crate::ent_u16::wr(inout rec, 0, 0);
-  crate::ent_packet::put_vs(inout rec, 1, 6, 0, len(expected));
+  let mut pool: [i64] = crate::ent_value::pool_new();
+  crate::ent_value::pool_put(inout pool, inout rec, 1, expected);
   let e: [i64] = crate::ent_u16::empty();
-  return crate::ent_state::set_done(cx, expected, rec, e, 0);
+  return crate::ent_state::set_done(cx, pool, rec, e, 0);
 }
 
 pub fn codex_folder_begin(input: [i64]) -> [i64] ! alloc

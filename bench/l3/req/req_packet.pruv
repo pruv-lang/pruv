@@ -49,7 +49,7 @@ pub fn sec(w: [i64], i: i64) -> [i64] ! alloc
 pub fn hdr_ok(w: [i64]) -> bool
 {
   let n: i64 = len(w);
-  if n > 16777216 || n < 38 { return false; }
+  if crate::ent_value::pkt_size(w) > 16777216 || n < 38 { return false; }
   if crate::ent_u16::rd(w, 0) != 1381057841 || crate::ent_u16::rd(w, 1) != 1 { return false; }
   if crate::ent_u16::rd(w, 25) != n { return false; }
   let ns: i64 = crate::ent_u16::rd(w, 24);
@@ -95,7 +95,7 @@ pub fn mk(h: [i64], s0: [i64], s1: [i64], s2: [i64], s3: [i64], s4: [i64], s5: [
 {
   let nt: i64 = crate::ent_u16::clamp(len(tlens), 1000000);
   let ns: i64 = 6 + nt;
-  let l0: i64 = len(s0);
+  let l0: i64 = crate::ent_value::pool_words(s0);
   let l1: i64 = len(s1);
   let l2: i64 = len(s2);
   let l3: i64 = len(s3);

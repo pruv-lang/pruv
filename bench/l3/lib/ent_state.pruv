@@ -33,7 +33,7 @@ pub fn magic() -> i64 ensures result == 1162761298 { return 1162761298; }
 pub fn repack(w: [i64], hi0: i64) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  let n: i64 = len(w);
+  let n: i64 = crate::ent_value::pkt_size(w);
   if n > 16777216 { return crate::ent_u16::empty(); }
   let hi: i64 = crate::ent_u16::clamp(hi0, crate::ent_packet::sec_len(w, 0));
   let drop: i64 = crate::ent_packet::sec_len(w, 0) - hi;
@@ -238,13 +238,12 @@ pub fn with_prev(cx0: Ctx, prev: [i64], exact: bool) -> Ctx ! alloc
 {
   let mut cx: Ctx = cx0;
   let ns: i64 = crate::ent_packet::nsec(prev);
-  let p0: i64 = crate::ent_packet::sec_start(prev, 0);
   let p1: i64 = crate::ent_packet::sec_start(prev, 1);
   cx.qon = 1;
   cx.qexact = 0;
   if exact { cx.qexact = 1; }
   cx.qns = ns;
-  cx.qpool = crate::ent_u16::slice(prev, p0, p0 + crate::ent_packet::sec_len(prev, 0));
+  cx.qpool = crate::ent_dispatch::blob_pool(prev);
   cx.qrec = crate::ent_u16::slice(prev, p1, p1 + crate::ent_packet::sec_len(prev, 1));
   cx.qtab = crate::ent_u16::empty();
   if ns >= 5 {
@@ -261,8 +260,8 @@ fn req_same(cx: Ctx, rpool: [i64], rrec: [i64], rtab: [i64], rntab: i64) -> bool
   if cx.qexact != 0 {
     if !crate::ent_u16::eq(cx.qpool, rpool) { return false; }
   } else {
-    let lr: i64 = len(rpool);
-    if len(cx.qpool) < lr { return false; }
+    let lr: i64 = crate::ent_value::pool_words(rpool);
+    if crate::ent_value::pool_words(cx.qpool) < lr { return false; }
     if !crate::ent_u16::eq(crate::ent_u16::slice(cx.qpool, 0, lr), rpool) { return false; }
   }
   if rntab != 0 {
@@ -434,9 +433,7 @@ fn ctx_path(cx: Ctx, code: i64, path: [i64]) -> Ctx ! alloc
 {
   let mut r: [i64] = crate::ent_u16::zeros(4);
   crate::ent_u16::wr(inout r, 0, code);
-  crate::ent_u16::wr(inout r, 1, 6);
-  crate::ent_u16::wr(inout r, 2, 0);
-  crate::ent_u16::wr(inout r, 3, len(path));
+  crate::ent_packet::put_vs(inout r, 1, 6, 0, crate::ent_value::slot_len_of(path));
   let e: [i64] = crate::ent_u16::empty();
   return obs(cx, code, 0, path, r, e, 0);
 }

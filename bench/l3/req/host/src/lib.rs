@@ -5,5 +5,13 @@
 mod eh {
     include!("../../../entry/host.rs");
     include!("../../leaf.rs");
+
+    pub(super) fn folder_units(pool: &[i64], rec: &[i64]) -> Result<Vec<u16>, String> {
+        let units = match rec.get(27..30) {
+            Some([6, off, len]) => units_at(pool, *off, *len).ok(),
+            _ => None,
+        };
+        units.ok_or_else(|| "internal: checkFolder await without a string folder slot".to_string())
+    }
 }
 include!("../../host.rs");
