@@ -939,6 +939,7 @@ pub struct Mod {
     pub explicit: bool,
     /// G4 A3: function name (stem) -> source-qualified identity (Python `f.disp`), explicit mode only
     pub fn_disp: HashMap<String, String>,
+    resize_params: HashSet<(String, usize)>,
 }
 
 impl Mod {
@@ -974,6 +975,7 @@ impl Mod {
             range_nodes: Vec::new(),
             explicit: false,
             fn_disp: HashMap::new(),
+            resize_params: HashSet::new(),
         }
     }
 
@@ -1015,16 +1017,22 @@ impl Default for Mod {
     }
 }
 
+/// These inout parameters borrow the mutable slot itself.
+fn inout_slot_param(param: &Param, resize: bool) -> bool {
+    param.mode_pos.is_some() && (matches!(param.ty.as_str(), "i64" | "bool")
+        || is_agg(&param.ty) || (is_array_name(&param.ty) && resize))
+}
+
 /// Internal parameter list [(type, name)]
 /// G9: an extended result is the leading `ptr %out` (output storage); an extended parameter is `ptr %p.NAME` to valid
 /// caller-owned storage (see sig_text for its attributes).
-pub fn ir_params(f: &Function, tt: &TypeTable) -> Vec<(String, String)> {
+pub fn ir_params(f: &Function, tt: &TypeTable, resizes: &HashSet<(String, usize)>) -> Vec<(String, String)> {
     let mut out = Vec::new();
     if is_ext_t(tt, &f.ret) {
         out.push(("ptr".to_string(), "%out".to_string()));
     }
-    for p in &f.params {
-        if is_ext_t(tt, &p.ty) || (p.mode_pos.is_some() && is_agg(&p.ty)) {
+    for (i, p) in f.params.iter().enumerate() {
+        if is_ext_t(tt, &p.ty) || inout_slot_param(p, resizes.contains(&(f.name.clone(), i))) {
             out.push(("ptr".to_string(), format!("%p.{}", mangle(&p.name))));
             continue;
         }
@@ -1056,7 +1064,10 @@ pub fn ir_params(f: &Function, tt: &TypeTable) -> Vec<(String, String)> {
 pub fn sig_text(params: &[(String, String)], f: Option<&Function>) -> String {
     let mut_names: Vec<_> = f.into_iter().flat_map(|f| &f.params)
         .filter(|p| p.mode_pos.is_some())
-        .map(|p| format!("%p.{}{}", mangle(&p.name), if is_arr_name(&p.ty) { ".a" } else { "" }))
+        .flat_map(|p| {
+            let base = format!("%p.{}", mangle(&p.name));
+            [format!("{base}.a"), base]
+        })
         .collect();
     let take_names: Vec<_> = f.into_iter().flat_map(|f| &f.params)
         .filter(|p| p.take && is_array_name(&p.ty))
@@ -1144,6 +1155,7 @@ pub struct FnGen<'a> {
     dead: bool,
     scopes: Vec<Scope>,
     // Bindings and cleanup lists clone slots; retain layout by unique slot address.
+    resize_slots: HashSet<String>,
     slot_layouts: HashMap<String, &'static str>,
     slot_rngs: HashMap<String, Option<(i128, i128)>>,
     temps: Vec<Vec<V>>,
@@ -1181,6 +1193,7 @@ impl<'a> FnGen<'a> {
         f: &'a Function,
         verified: bool,
     ) -> FnGen<'a> {
+        let resize_slots = crate::check::resize_slot_names(f, &m.resize_params);
         FnGen {
             m,
             tt,
@@ -1198,6 +1211,7 @@ impl<'a> FnGen<'a> {
             cur: "None".to_string(),
             dead: false,
             scopes: Vec::new(),
+            resize_slots,
             slot_layouts: HashMap::new(),
             slot_rngs: HashMap::new(),
             temps: Vec::new(),
@@ -1272,8 +1286,16 @@ impl<'a> FnGen<'a> {
             let f = self.funcs[&call.name];
             let mut fields = Vec::new();
             let mut cost_args = Vec::new();
-            for x in &call.args {
-                let x = if let Expr::InoutArg(x) = x { &*x.expr } else { x };
+            for (j, x) in call.args.iter().enumerate() {
+                let x = if let Expr::InoutArg(x) = x {
+                    if inout_slot_param(&f.params[j], self.m.resize_params.contains(&(f.name.clone(), j))) {
+                        let ptr = self.inout_place_ptr(&x.expr)?;
+                        if self.cost { cost_args.push(format!("ptr {ptr}")); }
+                        fields.push(("ptr", ptr));
+                        continue;
+                    }
+                    &*x.expr
+                } else { x };
                 let v = self.ev(x, false)?;
                 if self.cost {
                     if v.k == Kind::Arr {
@@ -1413,6 +1435,17 @@ impl<'a> FnGen<'a> {
     }
 
     // ---------- slots / scopes ----------
+    fn array_slot(&mut self, a: String, ty: &str) -> Slot {
+        let b = format!("{a}.len");
+        let c = format!("{a}.cap");
+        self.allocas.push(format!("{b} = getelementptr inbounds {ARR}, ptr {a}, i32 0, i32 1"));
+        self.allocas.push(format!("{c} = getelementptr inbounds {ARR}, ptr {a}, i32 0, i32 2"));
+        let mut slot = V::with_b(Kind::Arr, a, b);
+        slot.c = Some(c);
+        slot.ty = elem_ty(ty);
+        slot
+    }
+
     pub fn new_slot(&mut self, name: &str, ty: &str) -> Slot {
         let kind = vkind(ty);
         let base = format!("%l{}.{}", self.nslot, mangle(name));
@@ -1433,6 +1466,10 @@ impl<'a> FnGen<'a> {
                 self.allocas.push(format!("{} = alloca ptr", a));
                 self.allocas.push(format!("store ptr null, ptr {}", a));
                 V { layout: "i64", rng: None, k: Kind::Coll, a, b: "None".to_string(), ty: Some(ty.to_string()), p: None, mv: None, c: None }
+            }
+            Kind::Arr if self.resize_slots.contains(name) => {
+                self.allocas.push(format!("{a} = alloca {ARR}"));
+                self.array_slot(a, ty)
             }
             Kind::Arr => {
                 self.allocas.push(format!("{} = alloca ptr", a));
@@ -2004,8 +2041,8 @@ impl<'a> FnGen<'a> {
         self.spill(&v)
     }
 
-    /// Address of a mutable struct place in caller storage.
-    fn inout_struct_ptr(&mut self, e: &Expr) -> R<String> {
+    /// Address of a mutable place in caller storage.
+    fn inout_place_ptr(&mut self, e: &Expr) -> R<String> {
         match e {
             Expr::Var(x) => match self.lookup(&x.name)? {
                 Bind::Slot(s) => Ok(s.a),
@@ -2013,7 +2050,7 @@ impl<'a> FnGen<'a> {
             },
             Expr::FieldAccess(x) => {
                 let ty = need_ty(expr_ty(&x.base))?;
-                let p = self.inout_struct_ptr(&x.base)?;
+                let p = self.inout_place_ptr(&x.base)?;
                 let i = t_field_index(self.tt, ty, &x.field, None)?;
                 let g = g9_gep(self, &lty(ty), &p, i)?;
                 if self.fb(ty, None, &x.field) {
@@ -2021,12 +2058,12 @@ impl<'a> FnGen<'a> {
                 }
                 Ok(g)
             }
-            _ => Err("llvmgen: expected a mutable struct place".into()),
+            _ => Err("llvmgen: expected a mutable place".into()),
         }
     }
 
     /// LG4: (address of the field reached by `path` from the extended root slot `sl`, its declared type); a boxed
-    /// intermediate edge is loaded (as `inout_struct_ptr` does).
+    /// intermediate edge is loaded (as `inout_place_ptr` does).
     fn field_ptr_ty(&mut self, sl: &Slot, path: &[String]) -> R<(String, String)> {
         let tt = self.tt;
         let mut cur = sl.a.clone();
@@ -2570,9 +2607,15 @@ impl<'a> FnGen<'a> {
         let f = self.f;
         let mut names: HashMap<String, Bind> = HashMap::new();
         let mut owned: Vec<Slot> = Vec::new();
-        for p in &f.params {
+        for (i, p) in f.params.iter().enumerate() {
             let n = mangle(&p.name);
-            if is_arr_name(&p.ty) {
+            if p.mode_pos.is_some() && is_array_name(&p.ty) && self.m.resize_params.contains(&(f.name.clone(), i)) {
+                let slot = self.array_slot(format!("%p.{n}"), &p.ty);
+                names.insert(p.name.clone(), Bind::Slot(slot));
+            } else if p.mode_pos.is_some() && matches!(p.ty.as_str(), "bool" | "i64") {
+                let slot = V::new(vkind(&p.ty), format!("%p.{n}"));
+                names.insert(p.name.clone(), Bind::Slot(slot));
+            } else if is_arr_name(&p.ty) {
                 let mut av = V::with_b(Kind::Arr, format!("%p.{}.a", n), format!("%p.{}.n", n));
                 av.layout = self.m.storage.layout_of(p);
                 av.rng = self.m.storage.range_of(p);
@@ -2832,7 +2875,7 @@ impl<'a> FnGen<'a> {
         self.bind_params()?;
         let f = self.f;
         if self.cost {
-            let args = ir_params(f, self.tt).iter().filter(|(_, n)| n != "%out")
+            let args = ir_params(f, self.tt, &self.m.resize_params).iter().filter(|(_, n)| n != "%out")
                 .map(|(t, n)| format!("{} {}", t, n)).collect::<Vec<_>>().join(", ");
             self.cost_bound = self.op(format!("call i128 @{}__pruv_cost({})", mangle(&f.name), args))?;
             self.allocas.push("%cost.spent = alloca i128".into());
@@ -2916,7 +2959,7 @@ impl<'a> FnGen<'a> {
 
     pub fn stmt(&mut self, st: &Stmt) -> R<()> {
         match st {
-            Stmt::Let(x) if self.m.stack.contains(x) => self.stack_let(x),
+            Stmt::Let(x) if self.m.stack.contains(x) && !self.resize_slots.contains(&x.name) => self.stack_let(x),
             Stmt::Let(x) if self.m.stack.lit(x) && !self.cost => {
                 // P3: a borrowed literal local binds the read-only global directly: no copy, never freed
                 self.begin_temps();
@@ -3366,7 +3409,8 @@ impl<'a> FnGen<'a> {
             return Ok(None);
         }
         match self.lookup(&v.name)? {
-            Bind::Slot(sl) if sl.k == Kind::Arr => Ok(Some(sl)),
+            // LG5: a resizable inout parameter's slot is the caller's, so it is copied, not emptied
+            Bind::Slot(sl) if sl.k == Kind::Arr && self.owned_slot(&sl) => Ok(Some(sl)),
             _ => Ok(None),
         }
     }
@@ -4041,7 +4085,11 @@ impl<'a> FnGen<'a> {
             let pd = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", tyd, dv.a, iv.a))?;
             let ps = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", tys, sv.a, jv.a))?;
             let nb = if tyd == "i8" { cnt.a.clone() } else { self.op(format!("mul nuw nsw i64 {}, 8", cnt.a))? };
-            let intrinsic = if within { "memmove" } else { "memcpy" };
+            let intrinsic = if within || crate::check::same_place(target, arg(a, 2)?) {
+                "memmove"
+            } else {
+                "memcpy"
+            };
             self.ins(format!("call void @llvm.{intrinsic}.p0.p0.i64(ptr {}, ptr {}, i64 {}, i1 false)", pd, ps, nb))?;
             return Ok(V::unit());
         }
@@ -4182,8 +4230,8 @@ impl<'a> FnGen<'a> {
         for (i, x) in a.iter().enumerate() {
             let prm = f.params.get(i).ok_or_else(|| IDX_ERR.to_string())?;
             if let Expr::InoutArg(ix) = x {
-                if is_agg(&prm.ty) {
-                    let p = self.inout_struct_ptr(&ix.expr)?;
+                if inout_slot_param(prm, self.m.resize_params.contains(&(f.name.clone(), i))) {
+                    let p = self.inout_place_ptr(&ix.expr)?;
                     args.push(format!("ptr {}", p));
                 } else {
                     // The caller's array pointer and length stay borrowed.
@@ -4471,9 +4519,21 @@ impl<'a> FnGen<'a> {
         self.place("start");
         let f = self.f;
         self.cparams = f.params.iter().map(|p| p.name.clone()).collect();
-        for p in &f.params {
+        for (i, p) in f.params.iter().enumerate() {
             let n = mangle(&p.name);
-            if is_arr_name(&p.ty) {
+            if p.mode_pos.is_some() && is_array_name(&p.ty) && self.m.resize_params.contains(&(f.name.clone(), i)) {
+                let slot = self.array_slot(format!("%p.{n}"), &p.ty);
+                let v = self.load(&slot)?;
+                self.cenv.insert(p.name.clone(), v);
+            } else if p.mode_pos.is_some() && matches!(p.ty.as_str(), "bool" | "i64") {
+                let v = self.load(&V::new(vkind(&p.ty), format!("%p.{n}")))?;
+                let v = if v.k == Kind::I64 {
+                    V::new(Kind::I128, self.op(format!("sext i64 {} to i128", v.a))?)
+                } else {
+                    v
+                };
+                self.cenv.insert(p.name.clone(), v);
+            } else if is_arr_name(&p.ty) {
                 let mut av = V::with_b(Kind::Arr, format!("%p.{}.a", n), format!("%p.{}.n", n));
                 av.layout = self.m.storage.layout_of(p);
                 av.rng = self.m.storage.range_of(p);
@@ -5681,7 +5741,7 @@ pub fn entry_of(
     verified: bool,
 ) -> R<String> {
     let mut g = FnGen::new(m, tt, funcs, f, true);
-    let mut params = ir_params(f, tt);
+    let mut params = ir_params(f, tt, &g.m.resize_params);
     let rt = ir_ret(tt, f); // G9 A3: "void" for an extended result (output storage is the leading `ptr %out`)
     if trust && !cost {
         g.place("start");
@@ -6704,6 +6764,7 @@ fn gen_llvm_body(
     let tt = new_tt(prog);
     let mut m = Mod::new();
     m.sym_pre = sym_prefix(prog.pkg_name.as_deref());
+    m.resize_params = crate::check::resize_params(prog);
     m.storage = plan_storage(prog, verified);
     m.stack = crate::stack::plan_stack(prog, &m.storage, verified);
     let narrowed = m.storage.entries.iter().any(|(_, w)| *w != "i64");
@@ -6754,7 +6815,7 @@ fn gen_llvm_body(
         let coll = is_coll_fn(f) || is_internal_fn(f, &tt);
         let mut g = FnGen::new(&mut m, &tt, &funcs, f, verified);
         g.body()?;
-        let params = ir_params(f, &tt);
+        let params = ir_params(f, &tt, &g.m.resize_params);
         let cost = g.cost;
         let body = g.render(&format!(
             "define internal {} @{}__pruv_body({})",

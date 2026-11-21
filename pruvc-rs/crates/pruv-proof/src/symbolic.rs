@@ -428,25 +428,11 @@ fn call_writes(stmts: &[Stmt], out: &mut BTreeSet<String>, select: &impl Fn(&ast
 
 /// verify.py `whole_assigned` (G5 A1): names that a whole-variable assignment in stmts can replace (nested blocks included).
 fn whole_assigned(stmts: &[Stmt], out: &mut BTreeSet<String>) {
-    for st in stmts {
-        match st {
-            Stmt::Assign(a) => {
-                out.insert(a.name.clone());
-            }
-            Stmt::If(x) => {
-                whole_assigned(&x.then, out);
-                whole_assigned(&x.els, out);
-            }
-            Stmt::While(x) => whole_assigned(&x.body, out),
-            Stmt::ForMap(x) => whole_assigned(&x.body, out),
-            Stmt::Match(m) => {
-                for a in &m.arms {
-                    whole_assigned(&a.body, out);
-                }
-            }
-            _ => {}
+    pruv_core::check::walk_assignments(stmts, &mut |name, path| {
+        if path.is_empty() {
+            out.insert(name.to_string());
         }
-    }
+    });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -842,7 +828,8 @@ pub struct FnVerifier<'a> {
     /// `s.errors`(collected by verify_program in function order).
     pub errors: Vec<PruvError>,
     /// `s.funcs`: name → function (the later one if names repeat).
-    vec_resize_params: HashSet<(String, usize)>,
+    resize_params: HashSet<(String, usize)>,
+    struct_len_changes: LenChanges,
     pub(crate) funcs: HashMap<String, &'a ast::Function>,
     /// `s.f`: the function being proved (None on the prototype path).
     pub(crate) f: Option<&'a ast::Function>,
@@ -876,43 +863,89 @@ pub struct FnVerifier<'a> {
     pub(crate) kmemo: HashMap<u32, (String, Vec<String>)>,
 }
 
-/// G5 A1: the environment key of a frozen pre-call array (Python `("old", name)`); no identifier can contain the byte 1.
-fn vec_resize_params(prog: &ast::Program) -> HashSet<(String, usize)> {
+type LenChanges = HashMap<(String, usize), BTreeSet<Vec<String>>>;
+
+/// Each path marks all array fields below it. The empty path marks the entire argument.
+fn struct_len_changes(prog: &ast::Program, resizes: &HashSet<(String, usize)>) -> LenChanges {
     use pruv_core::foreign_shim::{walk_stmts, Node};
-    let mut resizes = HashSet::new();
-    let mut forwarded = HashMap::<_, Vec<_>>::new();
+    let structs: HashSet<_> = prog.types.iter().filter_map(|d| {
+        if let ast::TypeDecl::Struct(d) = d { Some(d.name.as_str()) } else { None }
+    }).collect();
+    let funcs: HashMap<_, _> = prog.functions.iter().map(|f| (f.name.as_str(), f)).collect();
+    let mut changes = LenChanges::new();
+    let mut forwarded = Vec::new();
     for f in &prog.functions {
         let params: HashMap<_, _> = f.params.iter().enumerate()
-            .filter(|(_, p)| p.mode_pos.is_some() && matches!(Ty::from_name(&p.ty).coll(), Some(Coll::Vec(_))))
-            .map(|(i, p)| (p.name.as_str(), i))
+            .filter(|(_, p)| p.mode_pos.is_some() && structs.contains(p.ty.as_str()))
+            .map(|(i, p)| (p.name.as_str(), (f.name.clone(), i)))
             .collect();
         if params.is_empty() { continue; }
+        if f.foreign.is_some() {
+            for key in params.values() {
+                changes.entry(key.clone()).or_default().insert(Vec::new());
+            }
+        }
+        pruv_core::check::walk_assignments(&f.body, &mut |name, path| {
+            if let Some(key) = params.get(name) {
+                changes.entry(key.clone()).or_default().insert(path.to_vec());
+            }
+        });
         walk_stmts(&f.body, &mut |node| {
-            let Node::Expr(Expr::Call(call)) = node else { return; };
-            for (i, arg) in call.args.iter().enumerate() {
-                let Expr::InoutArg(arg) = arg else { continue; };
-                let Expr::Var(var) = arg.expr.as_ref() else { continue; };
-                let Some(&index) = params.get(var.name.as_str()) else { continue; };
-                let source = (f.name.clone(), index);
-                if matches!(call.name.as_str(), "vec_clear" | "vec_extend_from_slice") {
-                    resizes.insert(source);
-                } else {
-                    forwarded.entry((call.name.clone(), i)).or_default().push(source);
+            let Node::Expr(expr) = node else { return };
+            match expr {
+                Expr::Move(m) => {
+                    if let Some(key) = params.get(m.name.as_str()) {
+                        changes.entry(key.clone()).or_default().insert(m.fields.clone());
+                    }
                 }
+                Expr::Call(call) => {
+                    for (i, arg) in call.args.iter().enumerate() {
+                        let Expr::InoutArg(arg) = arg else { continue };
+                        let mut root = arg.expr.as_ref();
+                        let mut path = Vec::new();
+                        while let Expr::FieldAccess(x) = root {
+                            path.push(x.field.clone());
+                            root = &x.base;
+                        }
+                        let Expr::Var(root) = root else { continue };
+                        let Some(key) = params.get(root.name.as_str()) else { continue };
+                        path.reverse();
+                        let target = (call.name.clone(), i);
+                        if let Some(callee) = funcs.get(call.name.as_str()).filter(|f| f.foreign.is_none()) {
+                            if callee.params.get(i).is_some_and(|p| structs.contains(p.ty.as_str())) {
+                                forwarded.push((key.clone(), path, target));
+                            } else if resizes.contains(&target) {
+                                changes.entry(key.clone()).or_default().insert(path);
+                            }
+                        } else if !matches!(call.name.as_str(),
+                            "copy_range" | "copy_within" | "store_be" | "store_le" | "vec_reserve")
+                        {
+                            changes.entry(key.clone()).or_default().insert(path);
+                        }
+                    }
+                }
+                _ => {}
             }
         });
     }
-    let mut pending: Vec<_> = resizes.iter().cloned().collect();
-    while let Some(target) = pending.pop() {
-        for source in forwarded.get(&target).into_iter().flatten() {
-            if resizes.insert(source.clone()) {
-                pending.push(source.clone());
+    loop {
+        let mut changed = false;
+        for (source, prefix, target) in &forwarded {
+            let paths: Vec<_> = changes.get(target).into_iter().flatten()
+                .map(|suffix| [prefix.as_slice(), suffix.as_slice()].concat()).collect();
+            let source = changes.entry(source.clone()).or_default();
+            for path in paths {
+                if !source.iter().any(|p| path.starts_with(p)) {
+                    source.insert(path);
+                    changed = true;
+                }
             }
         }
+        if !changed { return changes; }
     }
-    resizes
 }
 
+/// G5 A1: the environment key of a frozen pre-call array.
 fn old_key(name: &str) -> String {
     format!("\u{1}old:{}", name)
 }
@@ -959,7 +992,8 @@ impl<'a> FnVerifier<'a> {
             params: Env::default(),
             errors: Vec::new(),
             funcs: HashMap::new(),
-            vec_resize_params: HashSet::new(),
+            resize_params: HashSet::new(),
+            struct_len_changes: HashMap::new(),
             f: None,
             qcfg: QueryConfig::default(),
             extra: HashMap::new(),
@@ -1016,7 +1050,8 @@ impl<'a> FnVerifier<'a> {
         for g in &prog.functions {
             v.funcs.insert(g.name.clone(), g);
         }
-        v.vec_resize_params = vec_resize_params(prog);
+        v.resize_params = pruv_core::check::resize_params(prog);
+        v.struct_len_changes = struct_len_changes(prog, &v.resize_params);
         // G9 A1: function SCCs (Program.g9)
         if let Some(meta) = &prog.g9 {
             for (i, names) in meta.fn_sccs.iter().enumerate() {
@@ -2486,20 +2521,20 @@ impl<'a> FnVerifier<'a> {
                 let inr = self.z.and(&[i.le(&p), p.lt(&i.add(&cnt))]);
                 let body = self.z.ite(&inr, &sv.a.select(&j.add(&p).sub(&i)), &dv.a.select(&p));
                 let lam = self.z.lambda(&[p], &body);
-                let name = match &x.args[0] {
-                    Expr::InoutArg(ia) => match &*ia.expr {
-                        Expr::Var(v) => v.name.clone(),
-                        _ => return Err("'NoneType' object has no attribute 'name'".to_string()),
-                    },
-                    _ => return Err("'NoneType' object has no attribute 'expr'".to_string()),
+                let Expr::InoutArg(dst_place) = &x.args[0] else {
+                    return Err("copy destination is not an inout place".into());
                 };
-                let nv = dv.like(lam, dv.n.clone(), &name);
+                let name = match dst_place.expr.as_ref() {
+                    Expr::Var(v) => &v.name,
+                    _ => &dv.name,
+                };
+                let nv = dv.like(lam, dv.n.clone(), name);
                 if nv.elem == Elem::U8 {
                     // both operands are in the byte domain, so the result is too
                     let dom = self.u8_dom(&nv);
                     self.assume(st, g, dom);
                 }
-                st.env.set(&name, Val::Arr(nv));
+                self.store_collection_place(&dst_place.expr, &mut st.env, Val::Arr(nv))?;
                 self.post_refine(e, &[0], st, g)?;
                 return Ok(Val::Unit);
             }
@@ -2958,9 +2993,13 @@ impl<'a> FnVerifier<'a> {
             self.theta = saved;
             r?;
         }
-        for (e, f, cenv, ios, _) in &mut branches {
+        for (e, f, cenv, ios, theta) in &mut branches {
             if !ios.is_empty() {
-                self.inout_finals(e, f, ios, cenv, &mut st, &[])?;
+                // LG5: a generic resizable final takes the branch's element type
+                let saved = std::mem::replace(&mut self.theta, theta.clone());
+                let r = self.inout_finals(e, f, ios, cenv, &mut st, &[]);
+                self.theta = saved;
+                r?;
             }
         }
         let base = st.fork(None);
@@ -3036,8 +3075,8 @@ impl<'a> FnVerifier<'a> {
             let ty = Ty::from_name(&f.params[i].ty);
             let ty = Ty::from_gtype(&gtype::substitute(&ty.to_gtype(), &self.theta));
             let nv = match pre {
-                Val::Arr(pre) if !self.vec_resize_params.contains(&(f.name.clone(), i)) => {
-                    let fresh_ty = if matches!(ty.coll(), Some(Coll::Vec(_))) { ty } else { pre.array_ty() };
+                Val::Arr(pre) if !self.resize_params.contains(&(f.name.clone(), i)) => {
+                    let fresh_ty = if matches!(ty.coll(), Some(Coll::Vec(_))) { ty.clone() } else { pre.array_ty() };
                     let fv = self.try_fresh(name, &fresh_ty)?;
                     let fa = fv.try_arr()?;
                     let nv = pre.like(fa.a.clone(), pre.n.clone(), name);
@@ -3052,9 +3091,20 @@ impl<'a> FnVerifier<'a> {
                     if let Some(wf) = self.wf_of_val(&ty, &nv)? {
                         self.assume(st, g, wf);
                     }
+                    if let Val::Arr(a) = &nv {
+                        // LG5: a generic [T] has no wf, so its new length gets the entry bounds
+                        let b = self.z.and(&[a.n.ge_i(0), a.n.le_i(MAX_LEN)]);
+                        self.assume(st, g, b);
+                    }
                     nv
                 }
             };
+            if let (Val::Dt(before, _), Val::Dt(after, _)) = (pre, &nv) {
+                let changed = self.struct_len_changes.get(&(f.name.clone(), i));
+                for frame in self.model.array_field_len_frame(&ty, before, after, changed)? {
+                    self.assume(st, g, frame);
+                }
+            }
             cenv.set(pname, nv.clone());
             self.store_collection_place(place, &mut st.env, nv)?;
         }
@@ -4634,24 +4684,22 @@ impl<'a> FnVerifier<'a> {
         let mut names: BTreeSet<String> = BTreeSet::new();
         assigned(body, &mut names);
         if self.has_cost() { names.insert("spent".to_string()); }
-        // G5 A1 (5.3): inout call arguments are changed too. Inout parameters keep their entry length; a local changed
-        // by inout calls keeps the loop-head length only if no whole assignment in the body can replace it.
+        // G5 A1 (5.3): inout writes keep the loop-head length unless the
+        // body can replace the whole array or call a resizing helper.
         // Without inout, calls = {} and snap = {}: names/keep (and the SMT) are exactly the old ones.
         let mut calls: BTreeSet<String> = BTreeSet::new();
         call_writes(body, &mut calls, &|call, _| call.name != "vec_reserve");
         let mut keep: BTreeSet<String> = BTreeSet::new();
         if !calls.is_empty() || !self.snap.0.is_empty() {
             let mut whole: BTreeSet<String> = BTreeSet::new();
-            if !calls.is_empty() {
-                whole_assigned(body, &mut whole);
-            }
+            whole_assigned(body, &mut whole);
             names.extend(calls.iter().cloned());
             let mut resizes = BTreeSet::new();
             call_writes(body, &mut resizes, &|call, i| {
-                matches!(call.name.as_str(), "vec_clear" | "vec_extend_from_slice") || self.vec_resize_params.contains(&(call.name.clone(), i))
+                pruv_core::check::vec_resize_builtin(&call.name) || self.resize_params.contains(&(call.name.clone(), i))
             });
             for n in &names {
-                if self.snap.contains(n) || (calls.contains(n) && !whole.contains(n) && !resizes.contains(n)) {
+                if (self.snap.contains(n) || calls.contains(n)) && !whole.contains(n) && !resizes.contains(n) {
                     keep.insert(n.clone());
                 }
             }

@@ -7,6 +7,7 @@ from typeinfo import (TypeTable, is_array, array_elem, array_of, bind_args, subs
                       is_collection, field_place)
 from foreign import CATALOG, CATALOG_NAMES, FILE, FILE_OBSERVERS, PROCESS, PROCESS_ARGS, SOCKET, LISTENER, LOOP, MUTABLE_COLLECTION_MATCH
 from refine import _stmt_inout
+from check import array_resize_params
 
 I64_MIN, I64_MAX = -2 ** 63, 2 ** 63 - 1
 MAX_LEN = 2 ** 40
@@ -145,6 +146,9 @@ class TraceRecorder:
         s.obligations[idx]["attempts"].append(a)
 
 
+VEC_RESIZERS = ("vec_push", "vec_pop", "vec_clear", "vec_extend_from_slice")
+
+
 def _vec_resize_params(prog):
     """Inout vector parameters whose length can change through vec_clear or forwarding."""
     from foreign_shim import _walk
@@ -162,7 +166,7 @@ def _vec_resize_params(prog):
             for i, arg in enumerate(node.args):
                 if isinstance(arg, InoutArg) and isinstance(arg.expr, Var) and arg.expr.name in params:
                     source = (fn.name, params[arg.expr.name])
-                    if node.name in ("vec_clear", "vec_extend_from_slice"):
+                    if node.name in VEC_RESIZERS:
                         resizes.add(source)
                     else:
                         forwarded.setdefault((node.name, i), set()).add(source)
@@ -177,6 +181,68 @@ def _vec_resize_params(prog):
     return resizes
 
 
+def _struct_array_paths(tt, ty, path=()):
+    for fd in tt.fields(ty):
+        field = path + (fd.name,)
+        if is_array(fd.type):
+            yield field
+        elif tt.is_struct(fd.type):
+            yield from _struct_array_paths(tt, fd.type, field)
+
+
+def _struct_len_frames(prog, tt, resizes):
+    """Per inout struct parameter, find the array leaves whose lengths survive a call."""
+    from foreign_shim import _walk
+
+    paths = {(f.name, i): set(_struct_array_paths(tt, p.type))
+             for f in prog.functions for i, p in enumerate(f.params)
+             if p.mode == "inout" and tt.is_struct(p.type)}
+    funcs = {f.name: f for f in prog.functions}
+    changed = {key: set() for key in paths}
+    forwarded = []
+
+    def mark(key, prefix):
+        changed[key].update(path for path in paths[key] if path[:len(prefix)] == prefix)
+
+    for f in prog.functions:
+        params = {p.name: (f.name, i) for i, p in enumerate(f.params) if paths.get((f.name, i))}
+        if not params:
+            continue
+
+        def visit(node):
+            if isinstance(node, Assign) and node.name in params:
+                mark(params[node.name], ())
+            elif isinstance(node, (FieldAssign, Move)) and node.name in params:
+                mark(params[node.name], tuple(node.fields))
+            elif isinstance(node, Call):
+                callee = funcs.get(node.name)
+                for i, arg in enumerate(node.args):
+                    if not isinstance(arg, InoutArg):
+                        continue
+                    root, path = field_place(arg.expr)
+                    if not isinstance(root, Var) or root.name not in params:
+                        continue
+                    source, target = params[root.name], (node.name, i)
+                    if callee is not None and callee.foreign is None:
+                        if target in paths:
+                            forwarded.append((source, path, target))
+                        elif target in resizes:
+                            mark(source, path)
+                    elif node.name not in ("copy_range", "copy_within", "store_be", "store_le"):
+                        mark(source, path)
+
+        _walk(f.body, visit)
+    again = True
+    while again:
+        again = False
+        for source, prefix, target in forwarded:
+            additional = ({prefix + path for path in changed[target]} & paths[source]) - changed[source]
+            if additional:
+                changed[source].update(additional)
+                again = True
+    return {key: tuple(sorted(paths[key] - changes)) for key, changes in changed.items()}
+
+
 class Model:
     """Per-program z3 model of the user structs/enums (G1). Built once in verify_program.
     struct[name] = (constructor, [accessor per field])
@@ -185,7 +251,8 @@ class Model:
 
     def __init__(s, prog):
         s.tt = TypeTable(prog)
-        s.vec_resize_params = _vec_resize_params(prog)
+        s.vec_resize_params = _vec_resize_params(prog) | array_resize_params(prog)
+        s.struct_len_frames = _struct_len_frames(prog, s.tt, s.vec_resize_params)
         s.sorts = {}
         s.struct = {}
         s.enum = {}
@@ -2031,9 +2098,9 @@ class FnVerifier:
             # a definitional (array-theory) update, no quantified assumption: the content fact dst'[i+k] == src[j+k] for 0 <= k < n,
             # the frame fact dst'[p] == dst[p] outside [i, i+n), and len(dst') == len(dst) hold by construction
             arr = z3.Lambda([p], z3.If(z3.And(p >= i, p < i + cnt), z3.Select(sv.a, j + p - i), z3.Select(dv.a, p)))
-            name = e.args[0].expr.name
-            nv = mk_arr(arr, dv.n, name, dv.elem)
-            st.env[name] = nv
+            root, path = field_place(e.args[0].expr)
+            nv = mk_arr(arr, dv.n, ".".join((root.name,) + path), dv.elem)
+            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, nv) if path else nv
             if nv.elem == U8:       # both operands are in the byte domain, so the result is too
                 s.assume(st, g, u8_dom(nv))
             s.post_refine(e, [0], st, g)
@@ -2237,16 +2304,15 @@ class FnVerifier:
         return sorted({f.name for f, _, _ in st.apps if f.name not in st.rev})
 
     def inout_finals(s, e, f, ios, args, cenv, st, g):
-        """G5 A1 (G5_SPEC 5.2 step 5): for every inout argument in parameter order, fresh contents of exactly the
-        pre-call length (same length term, same element type, u8 domain for [u8]). The final array is what the
-        callee's ensures denote by the parameter name, and it rebinds the caller's marked place. All finals exist
+        """G5 A1 (G5_SPEC 5.2 step 5): fresh contents for every inout argument, retaining unchanged array
+        lengths. The final value rebinds the caller's marked place and the callee's parameter in ensures. All finals exist
         before any ensures clause is assumed, so relational ensures may connect several of them."""
         for i in ios:
             pre = args[i]
             root, path = field_place(e.args[i].expr)
             name = root.name
             ty = substitute(f.params[i].type, s.theta)
-            if isinstance(pre, Arr) and (is_array(ty) or (f.name, i) not in s.model.vec_resize_params):
+            if isinstance(pre, Arr) and (f.name, i) not in s.model.vec_resize_params:
                 fv = s.fresh(name, ty if ty.name == "vec" else arr_type(pre.elem))
                 nv = mk_arr(fv.a, pre.n, name, pre.elem)
                 if nv.elem == U8:
@@ -2256,6 +2322,14 @@ class FnVerifier:
                 wf = s.wf(ty, nv)
                 if wf is not None:
                     s.assume(st, g, wf)
+                if isinstance(nv, Arr):     # LG5: a generic [T] has no wf, so its new length gets the entry bounds
+                    s.assume(st, g, z3.And(nv.n >= 0, nv.n <= MAX_LEN))
+                for field_path in s.model.struct_len_frames.get((f.name, i), ()):
+                    before, after = pre, nv
+                    for field in field_path:
+                        before = s.read_field(st, before, field)
+                        after = s.read_field(st, after, field)
+                    s.assume(st, g, after.n == before.n)
             cenv[f.params[i].name] = nv
             st.env[name] = s.rebuild(root.ty, st.env[name], path, nv) if path else nv
 
@@ -2298,7 +2372,11 @@ class FnVerifier:
                 s.theta = saved
         for c, f, args, cenv, ios, theta in brs:
             if ios:
-                s.inout_finals(c, f, ios, args, cenv, st, [])
+                saved, s.theta = s.theta, theta     # LG5: a generic resizable final takes the branch's element type
+                try:
+                    s.inout_finals(c, f, ios, args, cenv, st, [])
+                finally:
+                    s.theta = saved
         base = st.fork()        # all finals exist, no ensures assumed yet
         for c, f, args, cenv, ios, theta in brs:
             saved, s.theta = s.theta, theta
@@ -3172,11 +3250,11 @@ class FnVerifier:
         calls = s.call_writes(w.body, set(), select=lambda call, i: call.name != "vec_reserve")
         keep = frozenset()
         if calls or s.snap:
-            whole = s.whole_assigned(w.body, set()) if calls else set()
+            whole = s.whole_assigned(w.body, set())
             resizes = s.call_writes(w.body, set(), select=lambda call, i:
-                                    call.name in ("vec_clear", "vec_extend_from_slice") or (call.name, i) in s.model.vec_resize_params)
+                                    call.name in VEC_RESIZERS or (call.name, i) in s.model.vec_resize_params)
             names |= calls
-            keep = frozenset(n for n in names if n in s.snap or n in calls - (whole | resizes))
+            keep = frozenset((names & s.snap.keys() | calls) - whole - resizes)
         # one arbitrary iteration; the invariants held (and were defined) at its start
         b = s.havoc(st, names, keep)
         for _cid, inv, _text in invs:

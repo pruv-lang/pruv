@@ -94,6 +94,63 @@ def _place_mentions(e):
         yield from _place_mentions(k)
 
 
+def same_place(a, b):
+    ar, ap = field_place(a)
+    br, bp = field_place(b)
+    return isinstance(ar, Var) and isinstance(br, Var) and ar.name == br.name and ap == bp
+
+
+def array_resize_params(prog):
+    """Find inout arrays replaced directly or forwarded to a parameter that can replace them."""
+    from foreign_shim import _walk
+
+    arrays = {(f.name, i) for f in prog.functions for i, p in enumerate(f.params)
+              if p.mode == "inout" and is_array(p.type)}
+    resizes = set()
+    forwarded = {}
+    for f in prog.functions:
+        params = {p.name: (f.name, i) for i, p in enumerate(f.params) if (f.name, i) in arrays}
+        if not params:
+            continue
+
+        def visit(node):
+            if isinstance(node, Assign) and node.name in params:
+                resizes.add(params[node.name])
+            elif isinstance(node, Call):
+                for i, arg in enumerate(node.args):
+                    target = (node.name, i)
+                    if (target in arrays and isinstance(arg, InoutArg) and isinstance(arg.expr, Var)
+                            and arg.expr.name in params):
+                        forwarded.setdefault(target, set()).add(params[arg.expr.name])
+
+        _walk(f.body, visit)
+    pending = list(resizes)
+    while pending:
+        for source in forwarded.get(pending.pop(), ()):
+            if source not in resizes:
+                resizes.add(source)
+                pending.append(source)
+    return resizes
+
+
+def array_resize_args(f, resizes):
+    """Bare bindings passed to resizable array parameters in f."""
+    from foreign_shim import _walk
+
+    names = set()
+
+    def visit(node):
+        if isinstance(node, Call):
+            for i, arg in enumerate(node.args):
+                if ((node.name, i) in resizes and isinstance(arg, InoutArg)
+                        and isinstance(arg.expr, Var)):
+                    names.add(arg.expr.name)
+
+    if resizes:
+        _walk(f.body, visit)
+    return names
+
+
 def _field_move_error(e):
     terr(e, "foreign_move", "a field moved out must be reassigned by the next statement",
          "restore the field immediately, or pass the move to a take call assigned back to the same field")
@@ -186,6 +243,7 @@ class Checker:
         s.ckind = "code"          # G5: kind of the expression being checked: requires/ensures/decreases/invariant/assert/code
         s.boundary = None         # statement boundary for the statement-only builtins
         s.statement_call = None
+        s.restore_array = None
         s.in_par = False
         s.funcs = {}
         for f in prog.functions:
@@ -273,6 +331,15 @@ class Checker:
         s.x_prepare()          # P06: which functions a contract may expand, and their raw bodies
         for f in s.prog.functions:
             s.fn(f)
+        if s.prog.explicit:
+            resizes = array_resize_params(s.prog)
+            for f in s.prog.functions:
+                if f.host_entry:
+                    for i, p in enumerate(f.params):
+                        if (f.name, i) in resizes:
+                            terr(_mode_at(f, p), "entry_signature",
+                                 "host entry %s cannot reassign inout array parameter %s" %
+                                 (getattr(f, "disp", f.name), p.name))
         s.check_fn_sccs()      # G9 A0: measures and stable type parameters of recursive call SCCs
         s.check_par_eligibility()   # G7 A0: transitive eligibility of every par branch (effects, foreign, nesting)
         s.check_costs()
@@ -980,7 +1047,7 @@ class Checker:
             if p.take and not (is_array(p.type) or is_collection(p.type) or p.type.name in s.aggregates):
                 terr(f, "foreign_move", "take is only for array, collection or aggregate parameters",
                      "remove `take` from %s; scalars and str are passed by value or borrowed" % p.name)
-            # G5 A0: an inout parameter allows element stores but, like every parameter, never whole reassignment
+            # Whole assignment to inout parameters is checked separately from local mutability.
             scope[p.name] = (p.type, False, "inout" if p.mode is not None else "take" if p.take else "param")
         if f.pred:      # R03L (R-6-2): a pred body is one bool contract expression, never code
             if (f.ret != BOOL or f.effects or f.requires or f.ensures or f.decreases is not None or f.tparams
@@ -1127,10 +1194,11 @@ class Checker:
             record_binder = (v[2] == "map_mut" and v[0].owner is None and not v[0].args
                              and v[0].name in s.aggregates)
             scalar_inout = v[2] == "inout" and v[0] in (I64, BOOL)
+            array_inout = v[2] == "inout" and is_array(v[0])
             if st.deref and not (scalar_binder or record_binder):
                 terr(st, "type_mismatch", "dereference requires a mutable scalar or record collection binder")
-            if not (v[1] or scalar_binder or record_binder or scalar_inout):
-                if v[2] == "inout":      # G5 A0: element stores are allowed, replacing the binding is not
+            if not (v[1] or scalar_binder or record_binder or scalar_inout or array_inout):
+                if v[2] == "inout":
                     terr(st, "immutable", "inout parameter %s cannot be reassigned as a whole" % st.name,
                          "store elements with %s[i] = v, or copy into a `let mut` local" % st.name)
                 terr(st, "immutable", "%s is not mutable" % st.name,
@@ -1141,7 +1209,9 @@ class Checker:
                 terr(st.value, "recursive_borrow", "a record replacement cannot mention its binder or a borrowed root")
             s.boundary = st.value
             s.alloc_hint_for(st.value, v[0])
+            s.restore_array = st.name if array_inout else None
             s.expect(st.value, v[0], scope)
+            s.restore_array = None
             if record_binder and not (
                     isinstance(st.value, (StructLit, Call))
                     or isinstance(st.value, Move) and not st.value.fields
@@ -1212,6 +1282,7 @@ class Checker:
             if not v[1] and v[2] not in ("inout", "map_mut"):
                 terr(st, "immutable", "%s is not mutable" % st.name,
                      "declare it with `let mut`" if v[2] == "local" else "parameters are immutable; copy into a `let mut` local")
+            s.alloc_hint_for(st.value, cur)
             s.expect(st.value, cur, scope)
             s.check_inout_context(st, st.value)
             if is_array(cur) or cur == STR:      # G9 A0: G2 explicit ownership for a buffer field
@@ -1888,7 +1959,8 @@ class Checker:
                 terr(e, "foreign_move", "move only where ownership is consumed",
                      "contracts read parameters and locals directly; remove `move`")
             ty, _, kind = s.lookup(e, e.name, scope)
-            if is_array(ty) and kind not in ("local", "take"):
+            if (is_array(ty) and kind not in ("local", "take")
+                    and not (kind == "inout" and e.name == s.restore_array)):
                 if kind in ("param", "inout"):
                     terr(e, "array_alias", "parameter %s is a borrowed array and cannot be moved" % e.name,
                          "declare `take %s: %s` or use copy(%s)" % (e.name, type_name(ty), e.name))
@@ -2270,34 +2342,41 @@ class Checker:
                  "write `%s(inout name, %s)` with a `let mut` local array or an inout parameter" %
                  (n, "dst, src, n" if within else "i, src, j, n"))
         op = arg.expr
-        if not isinstance(op, Var):
+        root, path = field_place(op)
+        if not isinstance(root, Var) or (within and path):
             terr(arg, "inout_argument", "an inout argument must be the whole name of a local array or an inout "
                  "parameter", "name a `let mut` local array or an inout parameter of this function")
-        v = s.lookup(op, op.name, scope)
+        v = s.lookup(root, root.name, scope, path)
         if v[2] == "local" and not v[1]:
-            terr(arg, "inout_argument", "%s is not mutable: it cannot be passed inout" % op.name,
+            terr(arg, "inout_argument", "%s is not mutable: it cannot be passed inout" % root.name,
                  "declare it with `let mut`")
-        if v[2] not in ("inout", "local"):
+        if v[2] not in ("inout", "local") and not (path and v[2] == "map_mut"):
             terr(arg, "inout_argument", "%s is a read-only %s: it cannot be passed inout" % (
-                op.name, "parameter" if v[2] == "param" else "binding"),
-                 "declare the parameter `inout %s: ...`, or copy into a `let mut` local" % op.name)
-        if v[0] not in (ARRAY, ARRAY_U8):
+                root.name, "parameter" if v[2] == "param" else "binding"),
+                 "declare the parameter `inout %s: ...`, or copy into a `let mut` local" % root.name)
+        ty = s.expr(op, scope, c) if path else v[0]
+        if ty not in (ARRAY, ARRAY_U8):
             terr(arg, "type_mismatch", "expected %s or %s, found %s" % (
-                type_name(ARRAY), type_name(ARRAY_U8), type_name(v[0])))
-        if op.name in s.active_roots or s.match_path_held(op.name, ()):
-            terr(arg, "recursive_borrow", "cannot pass %s inout while a match on it is active" % op.name,
+                type_name(ARRAY), type_name(ARRAY_U8), type_name(ty)))
+        if root.name in s.active_roots or s.match_path_held(root.name, path):
+            terr(arg, "recursive_borrow", "cannot pass %s inout while a match on it is active" % root.name,
                  "finish the match before the call")
-        op.ty = v[0]
-        arg.ty = v[0]
+        if path:
+            s.check_iteration_borrow(arg, root.name, path)
+        op.ty = ty
+        arg.ty = ty
         s.expect(a[1], I64, scope, c)
-        s.expect(a[2], I64 if within else v[0], scope, c)
+        s.expect(a[2], I64 if within else ty, scope, c)
         s.expect(a[3], I64, scope, c)
         if not within:
             s.expect(a[4], I64, scope, c)
-        if any(_mentions(x, op.name) for x in a[1:]):
-            terr(arg, "inout_alias", "%s is passed inout and also used elsewhere in the arguments of this call" % op.name,
+        others = a[1:2] + a[3:] if not within and same_place(op, a[2]) else a[1:]
+        if any(name == root.name and _paths_overlap(path, other)
+               for x in others for name, other in _place_mentions(x)):
+            terr(arg, "inout_alias", "%s is passed inout and also used elsewhere in the arguments of this call" % root.name,
                  "compute the index arguments before the call" if within else
-                 "copy the source first with `let mut t: [..] = copy(%s);` (needs alloc), then pass t" % op.name)
+                 "copy the source first with `let mut t: [..] = copy(%s);` (needs alloc), then pass t" %
+                 ".".join((root.name,) + path))
         if e is not s.boundary:
             terr(e, "inout_context", "%s must be a whole expression statement" % n,
                  "write `%s(%s);` as a statement" %

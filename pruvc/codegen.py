@@ -89,7 +89,7 @@ from typeinfo import (TypeTable, is_user_type, is_array, uses_array_type, uses_s
                       field_place, is_vec_slice_arg)
 from foreign import CATALOG
 from inline_policy import PIN_INLINE, PIN_ALWAYS, inline_policy
-from check import BIT_BUILTINS
+from check import BIT_BUILTINS, array_resize_params, array_resize_args, same_place
 from refine import _kids as expr_kids, _stmt_names, _expr_names
 
 ALLOW = ("#[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, "
@@ -1594,6 +1594,7 @@ class Gen:
         s.fmode = foreign_checks
         s.allow = ALLOW_G6 if s.g6 else ALLOW
         s.fmap = {}
+        s.array_resizes = array_resize_params(prog)
         for f in prog.functions:
             s.fmap.setdefault(f.name, f)
         s.fg = None
@@ -1609,6 +1610,10 @@ class Gen:
         if verified and not trust_callers and not s.cost_used:
             from small import plan_small
             s.small, s.small_sites = plan_small(prog, s.fmap, s.layout, s.stack)
+            if s.array_resizes:
+                s.small = {n: plan for n, plan in s.small.items()
+                           if plan[1] not in array_resize_args(s.fmap[n], s.array_resizes)}
+                s.small_sites = {site: plan for site, plan in s.small_sites.items() if plan[0] in s.small}
         s.fp = {}    # P18d: {function name: (K, o)} of the by-value fixed-prefix twins (--proven-entries, see plan_fp)
 
     def plan_fp(s):
@@ -1626,7 +1631,7 @@ class Gen:
                     or (not s.verified and f.cost is not None)):
                 continue
             p = f.params[-1]
-            if p.mode == "inout" and p.type == ARRAY and "&mut " + rty(p.type, True)[1:] == "&mut [i64]":
+            if p.mode == "inout" and p.type == ARRAY and (f.name, len(f.params) - 1) not in s.array_resizes:
                 cands.append(f)
         s.fp = plan_fp(cands, s.fmap, may_unwind(s.prog, s.fmap))
 
@@ -1801,11 +1806,13 @@ class Gen:
         s.take_ext = {p.name for p in f.params if p.take and s.is_ext(p.type)}
         if s.g5:
             s.inouts = {p.name for p in f.params if p.mode == "inout"}
+        s.resizable = {p.name for i, p in enumerate(f.params) if (f.name, i) in s.array_resizes}
+        s.resize_args = array_resize_args(f, s.array_resizes)
         s.vt = {p.name: p.type for p in f.params}
         s.borrowed = {p.name for p in f.params if is_collection(p.type) and not p.take}
         s.refs = {p.name for p in f.params if s.is_ext(p.type) and not p.take}
         param_types = [
-            "&mut " + (rty(p.type, True)[1:] if is_array(p.type) else rty(p.type))
+            "&mut " + (rty(p.type, True)[1:] if is_array(p.type) and p.name not in s.resizable else rty(p.type))
             if p.mode == "inout" else s.rt(p.type, not p.take, p) for p in f.params]
         ps = ", ".join("%s: %s" % (p.name, ty) for p, ty in zip(f.params, param_types))
         ret = "" if f.ret == UNIT else " -> " + s.rt(f.ret, site=f)
@@ -2820,7 +2827,7 @@ class Gen:
         return "{ let pruv_v: i64 = %s; %s[pruv_v%s; %d] }" % (s.e(v), chk, cast, n)
 
     def stmt(s, st, ind):
-        if isinstance(st, Let) and s.stack is not None and s.stack.contains(st):
+        if isinstance(st, Let) and s.stack is not None and s.stack.contains(st) and st.name not in s.resize_args:
             s.emit(ind, "let %s%s: %s = %s;" % ("mut " if st.mutable else "", st.name, s.stack_type(st), s.stack_init(st)))
             s.vt[st.name] = st.type
             s.refs.discard(st.name)
@@ -3116,8 +3123,10 @@ class Gen:
                 if isinstance(x, InoutArg):
                     name = x.expr.name
                     actual = s.vt[name]
-                    ty = "&mut " + (rty(actual, True)[1:] if is_array(actual) else rty(actual))
-                    val = "&mut *" + name if name in s.inouts else s.mut_ref(name)
+                    replaces = (call.name, j) in s.array_resizes
+                    ty = "&mut " + (rty(actual, True)[1:] if is_array(actual) and not replaces else rty(actual))
+                    val = (s.inout_ref(x.expr, call.name, j) if replaces or name in s.resizable else
+                           "&mut *" + name if name in s.inouts else s.mut_ref(name))
                 elif is_array(x.ty):
                     ty, val = s.rt(x.ty, True, x), s.arr_ref(x)
                 else:
@@ -3172,6 +3181,16 @@ class Gen:
         if name in s.inouts:
             return name if not s.cost and name in s.vt and not is_array(s.vt[name]) else "&mut *" + name
         return "&mut " + name
+
+    def inout_ref(s, e, callee, i):
+        root, path = field_place(e)
+        if path:
+            return "&mut " + ".".join((root.name,) + path)
+        if root.name in s.resizable:
+            if (callee, i) in s.array_resizes:
+                return "&mut *" + root.name if s.cost else root.name
+            return "&mut %s[..]" % root.name
+        return s.mut_ref(root.name)
 
     def arr_ref(s, e):
         """an array expression used as a borrowed slice; a string literal is borrowed as its `&'static str` (no alloc)"""
@@ -3307,6 +3326,8 @@ class Gen:
         if isinstance(e, Move):   # G6: Rust moves
             if e.fields:
                 return "::std::mem::take(&mut %s.%s)" % (e.name, ".".join(e.fields))
+            if e.name in s.resizable:
+                return "::std::mem::take(%s)" % e.name
             return e.name
         if isinstance(e, Unary):
             if not s.verified and e.op == "-":
@@ -3468,7 +3489,16 @@ class Gen:
                         "%s.copy_within((pruv_j) as usize..((pruv_j) + (pruv_n)) as usize, (pruv_i) as usize); }"
                         % (head, name, name, name, name, name))
             if n == "copy_range":  # L-copy-range: dst[i..i+n].copy_from_slice(&src[j..j+n]); i, src, j, n bound once in source order
-                name = a[0].expr.name
+                name = s.e(a[0].expr)
+                if same_place(a[0].expr, a[2]):
+                    head = ("{ let pruv_i: i64 = %s; let pruv_j: i64 = %s; let pruv_n: i64 = %s; "
+                            % (s.e(a[1]), s.e(a[3]), s.e(a[4])))
+                    if not s.verified:
+                        head += ("if pruv_i < 0 || pruv_n < 0 || pruv_i > (%s.len() as i64) - pruv_n { pruv_oob(pruv_i, %s.len()) } "
+                                 "if pruv_j < 0 || pruv_j > (%s.len() as i64) - pruv_n { pruv_oob(pruv_j, %s.len()) } "
+                                 % (name, name, name, name))
+                    return ("%s%s.copy_within((pruv_j as usize)..((pruv_j + pruv_n) as usize), pruv_i as usize); }"
+                            % (head, name))
                 head = ("{ let pruv_i: i64 = %s; let pruv_cs = %s; let pruv_j: i64 = %s; let pruv_n: i64 = %s; "
                         % (s.e(a[1]), s.arr_ref(a[2]), s.e(a[3]), s.e(a[4])))
                 ri = "(pruv_i as usize)..((pruv_i + pruv_n) as usize)"
@@ -3543,8 +3573,7 @@ class Gen:
             args = []
             for i, x in enumerate(a):
                 if isinstance(x, InoutArg):   # G5: mutable borrow / reborrow
-                    root, path = field_place(x.expr)
-                    args.append("&mut " + ".".join((root.name,) + path) if path else s.mut_ref(root.name))
+                    args.append(s.inout_ref(x.expr, n, i))
                 elif n in s.struct_inouts and isinstance(x, IntLit) and x.value >= 0:
                     args.append(str(x.value))
                 elif isinstance(x, Move) and is_array(x.ty):

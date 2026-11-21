@@ -1,1 +1,1 @@
-{"backend":"llvm","stage":"codegen","code":"unsupported_type","out_contains":["inout scalar parameter"]}
+{"backend": "llvm", "gen_regex": ["store i64 1, ptr %\\S+"]}

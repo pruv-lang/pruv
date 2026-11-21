@@ -1167,6 +1167,9 @@ struct Gen<'a> {
     params: HashSet<String>,
     /// G5 A2: inout parameters of the function being generated (`&mut [T]` bindings)
     inouts: HashSet<String>,
+    resize_params: HashSet<(String, usize)>,
+    resizable_inouts: HashSet<String>,
+    resize_slots: HashSet<String>,
     /// G5 A2: the inout code paths only run for a program that uses inout (unchecked program: assume it may)
     g5: bool,
     /// G5 A2 (legacy mode): a function with an inout parameter has an always-checked private wrapper, also under
@@ -1339,6 +1342,9 @@ impl<'a> Gen<'a> {
             table: make_type_table(prog),
             params: HashSet::new(),
             inouts: HashSet::new(),
+            resize_params: crate::check::resize_params(prog),
+            resizable_inouts: HashSet::new(),
+            resize_slots: HashSet::new(),
             g5: prog.uses_inout != Some(false),
             inout_req: prog.uses_inout != Some(false)
                 && !explicit
@@ -1802,10 +1808,16 @@ impl<'a> Gen<'a> {
         self.borrowed =
             f.params.iter().filter(|p| key_is_collection(&p.ty) && !p.take).map(|p| p.name.clone()).collect();
         self.refs = f.params.iter().filter(|p| !p.take && self.is_ext(Some(&p.ty))).map(|p| p.name.clone()).collect();
+        self.resizable_inouts = f.params.iter().enumerate()
+            .filter(|(i, p)| is_array_name(&p.ty) && self.resize_params.contains(&(f.name.clone(), *i)))
+            .map(|(_, p)| p.name.clone()).collect();
+        self.resize_slots = crate::check::resize_slot_names(f, &self.resize_params);
         let param_types: Vec<String> = f.params.iter().map(|p| {
             if p.mode_pos.is_some() {
-                // G5 A2: an inout parameter is a mutable slice borrow (`&mut [T]`)
-                if GType::from_key(&p.ty).is_array() {
+                // G5 A2: resizable arrays borrow the Vec; other arrays borrow its slice
+                if self.resizable_inouts.contains(&p.name) {
+                    format!("&mut {}", rty(&p.ty, false))
+                } else if GType::from_key(&p.ty).is_array() {
                     format!("&mut {}", &rty(&p.ty, true)[1..])
                 } else {
                     format!("&mut {}", rty(&p.ty, false))
@@ -3714,7 +3726,7 @@ impl<'a> Gen<'a> {
 
     fn stmt(&mut self, st: &Stmt, ind: usize) -> R<()> {
         match st {
-            Stmt::Let(x) if self.stack.contains(x) => {
+            Stmt::Let(x) if self.stack.contains(x) && !self.resize_slots.contains(&x.name) => {
                 let init = self.stack_init(x)?;
                 let line = format!("let {}{}: {} = {};", if x.mutable { "mut " } else { "" }, x.name, self.stack_type(x), init);
                 self.emit(ind, &line);
@@ -4034,9 +4046,12 @@ impl<'a> Gen<'a> {
                         _ => return Err("codegen: inout operand is not a variable".into()),
                     };
                     let actual = &self.vars[name];
-                    let rust_ty = rty(actual, is_array_name(actual));
-                    let pointee = if is_array_name(actual) { &rust_ty[1..] } else { &rust_ty };
-                    (format!("&mut {}", pointee), self.mut_ref(name))
+                    let array = is_array_name(actual);
+                    let resize = array && self.resize_params.contains(&(call.name.clone(), j));
+                    let rust_ty = rty(actual, array && !resize);
+                    let pointee = if array && !resize { &rust_ty[1..] } else { &rust_ty };
+                    let value = if array { self.array_mut_arg(name, resize) } else { self.mut_ref(name) };
+                    (format!("&mut {}", pointee), value)
                 } else {
                     let ty = expr_ty(x).as_deref().ok_or("codegen: par argument has no type")?;
                     if is_array_name(&ty) {
@@ -4103,6 +4118,20 @@ impl<'a> Gen<'a> {
 
     fn mut_ref(&self, name: &str) -> String {
         if self.inouts.contains(name) { format!("&mut *{}", name) } else { format!("&mut {}", name) }
+    }
+
+    fn array_mut_arg(&self, name: &str, resize: bool) -> String {
+        if self.resizable_inouts.contains(name) {
+            if !resize {
+                format!("&mut {name}[..]")
+            } else if self.cost {
+                self.mut_ref(name) // the cost wrapper binds the argument before calling
+            } else {
+                name.to_string()
+            }
+        } else {
+            self.mut_ref(name)
+        }
     }
 
     /// An array expression used as a borrowed slice
@@ -4386,6 +4415,8 @@ impl<'a> Gen<'a> {
     fn e(&mut self, e: &Expr) -> R<String> {
         match e {
             Expr::Spent(_) => Err("cost_unavailable: Stage 5 cost verification is not implemented yet".into()),
+            Expr::Move(x) if x.fields.is_empty() && self.resizable_inouts.contains(&x.name) =>
+                Ok(format!("::std::mem::take({})", x.name)),
             Expr::Move(x) if x.fields.is_empty() => Ok(x.name.clone()),
             Expr::Move(x) => Ok(format!("::std::mem::take(&mut {}.{})", x.name, x.fields.join("."))),
             // G5 A0: never reaches the generator (the driver's A0 guard stops the program earlier)
@@ -4690,14 +4721,23 @@ impl<'a> Gen<'a> {
                 }
                 if matches!(n, "copy_range" | "copy_within") {
                     // L-copy-range: dst[i..i+n].copy_from_slice(&src[j..j+n]); i, src, j, n bound once in source order
-                    let name = match arg(a, 0)? {
-                        Expr::InoutArg(ia) => match ia.expr.as_ref() {
-                            Expr::Var(v) => v.name.clone(),
-                            other => return Err(format!("codegen: inout operand is not a variable: {:?}", other)),
-                        },
-                        other => return Err(format!("codegen: inout operand is not a variable: {:?}", other)),
+                    let Expr::InoutArg(dst) = arg(a, 0)? else {
+                        return Err("codegen: expected an inout copy destination".into());
                     };
+                    let name = self.e(&dst.expr)?;
                     let i0 = self.e(arg(a, 1)?)?;
+                    if n == "copy_range" && crate::check::same_place(&dst.expr, arg(a, 2)?) {
+                        let j0 = self.e(arg(a, 3)?)?;
+                        let n0 = self.e(arg(a, 4)?)?;
+                        let checks = if self.verified {
+                            String::new()
+                        } else {
+                            format!("if pruv_i < 0 || pruv_n < 0 || pruv_i > ({name}.len() as i64) - pruv_n {{ pruv_oob(pruv_i, {name}.len()) }} if pruv_j < 0 || pruv_j > ({name}.len() as i64) - pruv_n {{ pruv_oob(pruv_j, {name}.len()) }} ")
+                        };
+                        return Ok(format!(
+                            "{{ let pruv_i: i64 = {i0}; let pruv_j: i64 = {j0}; let pruv_n: i64 = {n0}; {checks}{name}.copy_within((pruv_j as usize)..((pruv_j + pruv_n) as usize), pruv_i as usize); }}"
+                        ));
+                    }
                     if n == "copy_within" {
                         let j0 = self.e(arg(a, 2)?)?;
                         let n0 = self.e(arg(a, 3)?)?;
@@ -4878,7 +4918,9 @@ impl<'a> Gen<'a> {
                         let ty = v.ty.as_deref().unwrap_or("");
                         args.push(if !path.is_empty() {
                             format!("&mut {}.{}", v.name, path.join("."))
-                        } else if !self.cost && !GType::from_key(ty).is_array() && self.inouts.contains(&v.name) {
+                        } else if is_array_name(ty) {
+                            self.array_mut_arg(&v.name, self.resize_params.contains(&(n.to_string(), i)))
+                        } else if !self.cost && self.inouts.contains(&v.name) {
                             v.name.clone()
                         } else {
                             self.mut_ref(&v.name)

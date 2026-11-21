@@ -146,16 +146,22 @@ it can never be silently dropped.
   `forall p: (p < i || p >= i + n) ==> dst'[p] == dst[p]`. These facts are one array-theory update of `dst`
   (`dst' = fun p. if i <= p < i + n then src[j + p - i] else dst[p]`), not a quantified assumption, so they are exact
   (no vacuous or missing fact) and cost the callers no quantifier instantiation; a `[u8]` result stays in `0..=255`.
-  Aliasing: pruv arrays have value semantics and the call is an `inout` call, so the existing `inout_alias` rule
-  applies: `src`, `i`, `j` or `n` naming `dst` (`copy_range(inout a, 0, a, 4, 2)`) is `type/inout_alias`; copy the
-  source first (`copy(a)`). So no overlapping (memmove) case exists. Both backends evaluate the arguments once each,
-  in source order dst, i, src, j, n. The Rust backend emits one `copy_from_slice` of the two slices (unchecked
-  slices when verified, a checked failure `pruv_oob` with `--no-verify`); the LLVM backend emits one
-  `llvm.memcpy` of `n` times the element size, and an operand layout other than `[u8]` bytes or 64-bit elements is
-  `codegen` error `unsupported_type`, as for `eq_range`. Tests: `tests/spec/r5_1_copy_range_*.pruv`
+  Aliasing (LG5): `src` may be exactly `dst`, the same variable or an identical field path
+  (`copy_range(inout a, 2, a, 0, 4)`). The copy then has memmove semantics: the source range is read before the
+  destination range is written, so overlapping ranges copy the old contents (the Rust backend emits `copy_within`,
+  the LLVM backend `llvm.memmove`). The five bounds obligations are unchanged, and `src` is still the array as it is
+  at the call. The index arguments `i`, `j` and `n` naming `dst` (including `len(dst)`), and any other `src`
+  expression mentioning `dst`, stay `type/inout_alias` (`copy_range(inout a, 0, a, len(a) - 2, 2)`); bind
+  `let l: i64 = len(a);` first. Both backends evaluate the arguments once each,
+  in source order dst, i, src, j, n. For a `src` that is not `dst`, the Rust backend emits one `copy_from_slice` of
+  the two slices (unchecked slices when verified, a checked failure `pruv_oob` with `--no-verify`); the LLVM backend
+  emits one `llvm.memcpy` of `n` times the element size (`llvm.memmove` when `src` is `dst`), and an operand layout
+  other than `[u8]` bytes or 64-bit elements is `codegen` error `unsupported_type`, as for `eq_range`. Tests:
+  `tests/spec/r5_1_copy_range_*.pruv`
   (accept: `_u8`, `_i64`, `_zero`, `_eq`, `_caller`; reject: `_i`, `_j`, `_n`, `_dst_end`, `_src_end`, `_order`,
   `_type`, `_nonarray`, `_noinout`, `_contract`, `_expr`, `_alias`, `_idx_alias`, `_fact_outside`, `_fact_nocopy`),
-  `tests/runtime/l3_rt_copy_range*.pruv`.
+  `tests/runtime/l3_rt_copy_range*.pruv`, `tests/runtime/lg5_rt_copy_range_overlap.pruv`,
+  `tests/must_reject/lg5_copy_range_overlap_oob.pruv`, `tests/must_reject/lg5_copy_range_self_idx_alias.pruv`.
 - `copy_within(inout a, dst, src, n);` (R-5-2): an overlap-safe move inside one array (memmove). Same statement,
   place, type, contract and name rules as `copy_range` (`a` is `[i64]` or `[u8]`, `dst, src, n: i64`). It sets
   `a[dst..dst+n]` to the old `a[src..src+n]`, even when the two ranges overlap, and leaves every other element and
@@ -913,6 +919,8 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
 ## 6g. In-place array parameters: `inout` (G5)
 Full contract: `docs/G5_SPEC.md` (§2–§8 and §15 for deferred limits). R-6g-1 below replaces its §2.1
 statement-boundary rule for calls; the rest of that contract still applies. Examples: `examples/g5_*.pruv`, `tests/runtime/g5_r*`.
+LG5 tests: `tests/runtime/lg5_rt_inout_reassign.pruv`, `tests/must_reject/lg5_inout_reassign_len.pruv`,
+`tests/must_reject/lg5_inout_reassign_entry/` (and the tests named in R-6g-2 and R-6g-4).
 ```
 fn set_at(inout a: [i64], i: i64, v: i64) -> ()
   requires 0 <= i && i < len(a)
@@ -931,8 +939,17 @@ set_at(inout w, 0, 7);
   malformed or combined modes (e.g. with `take`) are `parse/inout_syntax`.
 - **What the callee may do.** Read, index, `len`, `copy`, and assign elements (`a[i] = e`, with the usual bounds,
   `u8` range and refinement proofs). Never `a = ...` (`type/immutable`), resize, move, store or return the view
-  itself (`type/array_alias`; return `copy(a)` instead). It may pass `a` unmarked to a read-only parameter or
-  forward it as `inout a`. No `alloc` effect is needed for mutation.
+  itself (`type/array_alias`; return `copy(a)` instead). (LG5) It may reassign an `inout` array parameter as a
+  whole (`input = repack(input, hi)`, `a = alloc(len(old(a)) + 2, 7)`), the right side obeying the usual rules for
+  assignment to a typed array (section 6c, including the narrow element type of `alloc`). Such a parameter is
+  resizable: the caller learns its new length only from `ensures` (`len(a) == ...`, `len(old(a))`); without a length
+  clause the length is unknown after the call. A host entry (R-6f, explicit mode) with such a parameter is
+  `type/entry_signature` ("host entry F cannot reassign inout array parameter A"), because the host owns the buffer
+  and its length. The Rust backend keeps `&mut Vec<T>` for such a parameter; the LLVM backend passes a pointer to the
+  caller's `{ptr, len, cap}` slot and frees the old buffer on reassignment. A callee that never reassigns the whole
+  parameter is unchanged (`&mut [T]`, pointer and length). Reassigning needs the `alloc` effect when the right side
+  allocates; element assignment still needs none. It may pass `a` unmarked to a read-only parameter or
+  forward it as `inout a`.
 - **Exclusivity.** A whole marked binding may occur nowhere else in the same call's arguments, including inside nested calls
   or `len(a)`: `f(inout a, a)`, `f(inout a, len(a))` and `f(inout a, inout a)` are `type/inout_alias`. Compute
   `let n: i64 = len(a);` first. Read-only arguments may alias each other. Holds in every mode, also under
@@ -969,7 +986,15 @@ set_at(inout w, 0, 7);
   `map_get_mut` and forward `inout x`. Whole reassignment `x = e` is `type/immutable`. A generic struct is
   `type/inout_type`. The caller passes `inout y` for a `let mut` local or `inout` parameter `y`, with the alias
   rules for arrays. `old(x)` is not supported for structs (`type/old_argument`). After the call the caller
-  knows only the callee's `ensures` about `y`.
+  knows only the callee's `ensures` about `y`, with one frame rule (LG5): the caller keeps `len` of every array
+  field of `y` (through nested struct fields) that `f` cannot change, that is, `f` contains no field assignment,
+  move, or resizing `inout` pass of that field or of an enclosing field (transitively through the functions `f`
+  calls). All other contents of `y` come only from `ensures`. A callee that does change the field leaves its
+  length unknown (`index_oob` at a later index relying on the old length). A field assignment `p.f = alloc(n, v)`
+  takes its element type from the field type, as a typed `let` does (`p.a = alloc(4, 200)` for a `[u8]` field,
+  `p.b = alloc(2, true)` for a `[bool]` field; `alloc(3, 300)` for a `[u8]` field is `verify/elem_range`).
+  Tests: `tests/runtime/lg5_rt_struct_len_frame.pruv`, `tests/runtime/lg5_rt_field_alloc_hint.pruv`,
+  `tests/must_reject/lg5_struct_len_changed.pruv`, `tests/must_reject/lg5_field_alloc_u8_range.pruv`.
 - R-6g-3 **Inout field paths.** A user call may pass `inout x.f1...fn` with at least one field.
   The root must be a `let mut` local, an `inout` parameter, or the mutable binder of a
   `map_get_mut` or `vec_at_mut` `Some` arm. The field type must exactly match the parameter type.
@@ -990,7 +1015,9 @@ set_at(inout w, 0, 7);
   denotes the final value. The caller learns only what those clauses guarantee about it.
   `old(n)` is `type/old_argument` and a scalar inout root entry is `type/entry_signature`.
   Rust uses `n: &mut T`, reads `(*n)`, writes `*n = e;` and passes a mutable borrow.
-  Scalar inout requires the Rust backend (`codegen/unsupported_type`).
+  The LLVM backend passes a pointer to the scalar (a load on read, a store on write), so both backends support
+  scalar `inout`. A scalar `u8` does not exist. Tests: `tests/runtime/lg5_rt_scalar_inout.pruv`,
+  `tests/must_reject/lg5_scalar_inout_ensures.pruv`.
 - **Generics.** `fn swap<T: Element>(inout a: [T], ...)` works like any G3 function; `swap::<i64>(inout w, i, j)`
   (`examples/g5_generic_swap.pruv`). It is specialized per element type, also across modules.
 - **Loops.** A loop that passes an array as `inout` treats it as changed: an `inout` parameter keeps its length, a

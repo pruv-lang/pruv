@@ -1,0 +1,4 @@
+// companion module of lg5_inout_reassign_entry (not a standalone test root)
+pub fn one() -> i64 {
+  return 1;
+}

@@ -1,0 +1,60 @@
+fn repack(a: [u8], hi: i64) -> [u8] ! alloc
+  requires 0 <= hi && hi <= len(a) && hi <= 1048576
+  ensures len(result) == hi
+{
+  let mut out: [u8] = alloc(hi, 0);
+  copy_range(inout out, 0, a, 0, hi);
+  return out;
+}
+
+fn shrink(inout input: [u8], hi: i64) -> () ! alloc
+  requires 0 <= hi && hi <= len(input) && hi <= 1048576
+  ensures len(input) == hi
+{
+  input = repack(input, hi);
+}
+
+fn grow(inout a: [u8]) -> () ! alloc
+  requires len(a) <= 1000
+  ensures len(a) == len(old(a)) + 2
+{
+  a = alloc(len(a) + 2, 7);
+}
+
+fn fwd(inout a: [u8]) -> () ! alloc
+  requires len(a) <= 1000
+  ensures len(a) == len(old(a)) + 2
+{
+  grow(inout a);
+}
+
+fn grow_head(inout a: [u8]) -> [u8] ! alloc
+  requires 2 <= len(a) && len(a) <= 1000
+  ensures len(a) == len(old(a)) + 2 && len(result) == 2
+{
+  grow(inout a);
+  return truncate(a, 2);
+}
+
+fn run() -> () ! io, alloc {
+  let mut buf: [u8] = alloc(6, 0);
+  buf[0] = 10;
+  buf[1] = 20;
+  buf[2] = 30;
+  buf[3] = 40;
+  buf[4] = 50;
+  buf[5] = 60;
+  shrink(inout buf, 3);
+  print(len(buf));
+  print(buf[0]);
+  print(buf[1]);
+  print(buf[2]);
+  fwd(inout buf);
+  print(len(buf));
+  print(buf[0]);
+  print(buf[4]);
+  let h: [u8] = grow_head(inout buf);
+  print(len(buf));
+  print(len(h));
+  print(h[1]);
+}
