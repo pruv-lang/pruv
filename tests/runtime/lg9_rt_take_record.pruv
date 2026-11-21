@@ -1,0 +1,19 @@
+// G-LG8-5: a take record parameter with buffer fields on LLVM; the callee owns and drops the record exactly once
+struct Packet { bytes: [u8], n: i64, more: [u8] }
+fn eat(take p: Packet) -> i64 ! io {
+  let a: i64 = len(p.bytes);
+  let b: i64 = len(p.more);
+  print(a);
+  print(b);
+  return p.n;
+}
+fn run() -> () ! io, alloc {
+  let b1: [u8] = alloc(7, 0);
+  let m1: [u8] = alloc(3, 9);
+  let mut pk: Packet = Packet { bytes: move b1, n: 4, more: move m1 };
+  print(eat(move pk));
+  let b2: [u8] = alloc(2, 0);
+  let m2: [u8] = alloc(5, 9);
+  let q: Packet = Packet { bytes: move b2, n: 1, more: move m2 };
+  print(eat(move q));
+}

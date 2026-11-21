@@ -1882,7 +1882,22 @@ impl<'a> Gen<'a> {
                 self.rt_width(&p.ty, !p.take, self.storage.layout_of(p))
             }
         }).collect();
-        let ps = f.params.iter().zip(&param_types).map(|(p, ty)| format!("{}: {ty}", p.name))
+        // LG9 (G-LG8-3): a take record parameter a consuming field move empties is a `mut` binding
+        let mut moved: HashSet<String> = HashSet::new();
+        if f.params.iter().any(|p| p.take && crate::typeinfo::is_user_type(&p.ty)) {
+            crate::foreign_shim::walk_stmts(&f.body, &mut |node| {
+                if let crate::foreign_shim::Node::Expr(Expr::Move(m)) = node {
+                    if !m.fields.is_empty() {
+                        moved.insert(m.name.clone());
+                    }
+                }
+            });
+        }
+        let ps = f.params.iter().zip(&param_types)
+            .map(|(p, ty)| {
+                let m = if p.take && crate::typeinfo::is_user_type(&p.ty) && moved.contains(&p.name) { "mut " } else { "" };
+                format!("{m}{}: {ty}", p.name)
+            })
             .collect::<Vec<_>>().join(", ");
         let ret = if f.ret == "unit" { String::new() } else { format!(" -> {}", self.rt_width(&f.ret, false, self.storage.layout_of(f))) };
         let has = !f.requires.is_empty();

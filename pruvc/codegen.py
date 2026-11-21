@@ -1860,7 +1860,16 @@ class Gen:
         param_types = [
             "&mut " + (rty(p.type, True)[1:] if is_array(p.type) and p.name not in s.resizable else rty(p.type))
             if p.mode == "inout" else s.rt(p.type, not p.take, p) for p in f.params]
-        ps = ", ".join("%s: %s" % (p.name, ty) for p, ty in zip(f.params, param_types))
+        from foreign_shim import _walk
+        moved = set()   # LG9 (G-LG8-3): a take record parameter a consuming field move empties is a `mut` binding
+
+        def field_move(node):
+            if isinstance(node, Move) and node.fields:
+                moved.add(node.name)
+        if any(p.take and is_user_type(p.type) for p in f.params):
+            _walk(f.body, field_move)
+        ps = ", ".join("%s%s: %s" % ("mut " if p.take and is_user_type(p.type) and p.name in moved else "", p.name, ty)
+                       for p, ty in zip(f.params, param_types))
         ret = "" if f.ret == UNIT else " -> " + s.rt(f.ret, site=f)
         body_name = f.name + "__pruv_body" if f.name in s.body_named else f.name
         if s.explicit:

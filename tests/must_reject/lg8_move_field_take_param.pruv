@@ -1,7 +1,6 @@
-// G-R09-4: the consuming field move is only for a `let mut` local record; a take record parameter keeps the restore rule
-struct Packet { bytes: [u8] }
-
+struct Packet { bytes: [u8], more: [u8] }
 fn unpack(take p: Packet) -> [u8] {
   let b: [u8] = move p.bytes;
+  let k: i64 = len(p.more);
   return move b;
 }

@@ -1165,7 +1165,11 @@ class Checker:
         s.statement_call = st.expr if isinstance(st, ExprStmt) else None
         s.field_move = None
         if isinstance(st, Return) and st.value is not None:
+            if isinstance(st.value, Call):     # LG9 (G-LG8-1): `return f(move d.a);` with a take parameter
+                s.field_move = s.field_move_arg(st.value, scope, None)
             for e in _field_moves(st.value):
+                if e is s.field_move:
+                    continue
                 s.check_borrow(e, e.name, e.fields)
                 s.lookup(e, e.name, scope, e.fields)
                 _field_move_error(e)
@@ -1319,9 +1323,17 @@ class Checker:
                 s.alloc_hint_for(st.value, f.ret)
                 s.expect(st.value, f.ret, scope)
                 s.check_inout_context(st, st.value)
-                if is_array(f.ret) or f.ret == STR:
+                # LG9 (G-DB15-2): a str binder of a consuming match is returned like an owned local
+                binder_ret = (f.ret == STR and isinstance(st.value, Var) and st.value.name in s.match_movable
+                              and st.value.ty == STR)
+                if (is_array(f.ret) or f.ret == STR) and not binder_ret:
                     s.array_source(st, st.value, scope, allow_local_var=True)
+                if binder_ret:
+                    s.used_effects.add("alloc")
                 s.own(st.value)
+                if binder_ret:
+                    # it means `return copy(x)`: rewrite it so both backends and the cost proof see the copy
+                    st.value = Call(st.value.line, st.value.col, "copy", [st.value], STR)
         elif isinstance(st, Assert) and st.reveal is not None:     # P13o: `reveal F;` names an opaque function
             rf = s.funcs.get(st.reveal.name)
             if rf is None or not rf.opaque:
@@ -1338,6 +1350,7 @@ class Checker:
                     _field_move_error(e)
                 terr(st, "useless_expr", "expression statement must be a call", "bind it with let or remove it")
             s.boundary = st.expr
+            s.field_move = s.field_move_out(st, None, scope, next_stmt)   # LG9 (G-LG8-1): `f(move d.a);`
             t = s.expr(st.expr, scope)
             s.check_inout_context(st, st.expr)
             if t.owner is None and t.name == "process":   # G10 proc: a discarded Process result keeps its duty
@@ -1439,6 +1452,8 @@ class Checker:
                     sc[b] = (bt, map_take and a.ctor == "Some", "param" if (is_array(bt) or bt == STR) else "local")
                 if movable_scrut:
                     s.match_movable = saved_movable | {b for b, bt in zip(a.binders, ftypes) if is_array(bt)}
+                    # LG9 (G-DB15-2): `return x` of a str binder of a consuming match moves it (see Return)
+                    s.match_movable = s.match_movable | {b for b, bt in zip(a.binders, ftypes) if bt == STR}
                 if root is not None:
                     s.active_roots.append(root)
                 if mpath is not None:
@@ -1778,7 +1793,9 @@ class Checker:
                  "copy the needed payload into a local, finish the match, then assign")
 
     def field_move_out(s, st, ty, scope, next_stmt):
-        e = st.value
+        e = st.expr if isinstance(st, ExprStmt) else st.value
+        if isinstance(st, (Let, ExprStmt)) and isinstance(e, Call):
+            return s.field_move_arg(e, scope, next_stmt)
         if not isinstance(e, Move) or not e.fields:
             return None
         s.check_borrow(e, e.name, e.fields)
@@ -1786,9 +1803,12 @@ class Checker:
         typed = ty == STRING or is_scalar_vec(ty) or ty in (ARRAY, ARRAY_U8, ARRAY_BOOL)
         restored = (isinstance(next_stmt, FieldAssign) and next_stmt.name == e.name
                     and tuple(next_stmt.fields) == tuple(e.fields))
-        if (ty in (ARRAY, ARRAY_U8, ARRAY_BOOL) and not restored and isinstance(st, Let) and len(e.fields) == 1
-                and kind == "local" and mutable and e.name not in s.arm_binders):
-            return e     # G-R09-4: `let t = move d.a;` of a `let mut` local record consumes d; foreign.py marks d moved
+        if (typed and not restored and isinstance(st, Let)
+                and ((kind == "local" and mutable) or kind == "take") and e.name not in s.arm_binders):
+            # G-R09-4: `let t = move d.a;` of a `let mut` local record (LG9: or a take record parameter, which the
+            # callee owns; LG9 G-LG8-1: any owned buffer field type, any field path) consumes d; foreign.py marks d
+            # moved
+            return e
         if not (mutable or kind in ("inout", "map_mut")) or not typed:
             _field_move_error(e)
         if isinstance(st, FieldAssign) and (st.name != e.name or _paths_overlap(st.fields, e.fields)):
@@ -1800,6 +1820,36 @@ class Checker:
         chained = isinstance(restore, Move) and restore.name == e.name and restore.fields
         if not isinstance(restore, (Call, Move)) or (not chained and _mentions(restore, e.name)):
             _field_move_error(e)
+        return e
+
+    def field_move_arg(s, call, scope, next_stmt):
+        """LG9 (G-LG8-1): `f(move d.a)` as a let initializer or call statement, the field move a direct argument of a
+        take parameter, consumes d like `let t = move d.a;` (no restore follows; no other argument mentions d)"""
+        if not any(isinstance(arg, Move) and arg.fields for arg in call.args):
+            return None
+        moves = list(_field_moves(call))
+        if len(moves) != 1:
+            return None
+        e = moves[0]
+        callee = s.funcs.get(call.name) or CATALOG.get(call.name)
+        if callee is None or not any(arg is e and p.take for arg, p in zip(call.args, callee.params)):
+            return None
+        if any(_mentions(arg, e.name) for arg in call.args if arg is not e):
+            return None
+        if (isinstance(next_stmt, FieldAssign) and next_stmt.name == e.name
+                and tuple(next_stmt.fields) == tuple(e.fields)):
+            return None
+        s.check_borrow(e, e.name, e.fields)
+        _, mutable, kind = s.lookup(e, e.name, scope, e.fields)
+        if not ((kind == "local" and mutable) or kind == "take") or e.name in s.arm_binders:
+            return None
+        ty = s.lookup(e, e.name, scope, e.fields)[0]
+        for field in e.fields:
+            if not s.tt.is_struct(ty):
+                return None
+            ty = s.field_type(e, ty, field)
+        if not (ty == STRING or is_scalar_vec(ty) or ty in (ARRAY, ARRAY_U8, ARRAY_BOOL)):
+            return None
         return e
 
     def field_update_move(s, st, ty, binding, scope):

@@ -407,7 +407,12 @@ class Model:
         # Array tails outside the logical length are unobservable.
         k = z3.Int("utf8!k")
         contents = z3.Lambda([k], z3.If(z3.And(k >= 0, k < b.n), z3.Select(b.a, k), 0))
-        return s.utf8_valid_decl(b.n, contents)
+        # LG9 (G-DB15-1): bytes that are all below 128 are valid UTF-8 (ASCII), so a byte-level proof establishes
+        # the predicate. Sound: `utf8_valid(b) == ascii(b) || utf8_valid!(b)` holds with utf8_valid! read as the
+        # real check, because ascii(b) implies it.
+        a = z3.Int("utf8!a")
+        ascii = z3.ForAll([a], z3.Implies(z3.And(a >= 0, a < b.n), z3.Select(b.a, a) < 128))
+        return z3.Or(ascii, s.utf8_valid_decl(b.n, contents))
 
     def map_fields(s, ty):
         if ty not in s.maps:

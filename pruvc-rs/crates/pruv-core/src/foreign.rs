@@ -948,14 +948,31 @@ impl<'a> Ownership<'a> {
         let mut cur: Option<St> = Some(st);
         for (i, x) in stmts.iter().enumerate() {
             if let Some(s) = cur.take() {
+                // G-R09-4 / LG9 (G-LG8-1): the `move d.a` that consumes d: the let initializer itself, or the one
+                // field move passed directly as a call argument of a let initializer or call statement (the type
+                // checker admits it only for a take parameter), with no restore of that field by the next statement
                 self.consumed_field = None;
-                if let Stmt::Let(l) = x {
-                    if let Expr::Move(m) = &l.value {
-                        let restored = matches!(stmts.get(i + 1), Some(Stmt::FieldAssign(r))
-                            if r.name == m.name && r.fields == m.fields);
-                        if !m.fields.is_empty() && !restored {
-                            self.consumed_field = Some((m.line, m.col)); // G-R09-4
-                        }
+                let value = match x {
+                    Stmt::Let(l) => Some(&l.value),
+                    Stmt::ExprStmt(e) => Some(&e.expr),
+                    _ => None,
+                };
+                let moved = match value {
+                    Some(Expr::Move(m)) if matches!(x, Stmt::Let(_)) => Some(m),
+                    Some(Expr::Call(c)) => {
+                        let ms: Vec<&Move> = c.args.iter().filter_map(|a| match a {
+                            Expr::Move(m) if !m.fields.is_empty() => Some(m),
+                            _ => None,
+                        }).collect();
+                        if ms.len() == 1 { Some(ms[0]) } else { None }
+                    }
+                    _ => None,
+                };
+                if let Some(m) = moved {
+                    let restored = matches!(stmts.get(i + 1), Some(Stmt::FieldAssign(r))
+                        if r.name == m.name && r.fields == m.fields);
+                    if !m.fields.is_empty() && !restored {
+                        self.consumed_field = Some((m.line, m.col));
                     }
                 }
                 cur = self.stmt(x, s, &mut declared)?;

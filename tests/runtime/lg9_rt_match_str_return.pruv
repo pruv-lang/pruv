@@ -1,0 +1,58 @@
+// LG9 (G-DB15-2): `return x` of a str binder of a match on an owned local enum moves the payload out (no copy(x));
+// the other arm's binder is dropped with the scrutinee
+enum T { A(s: str), B(n: i64), C(t: str, m: i64) }
+
+fn mk(k: i64) -> T ! alloc {
+  if k > 1 { return T::C(copy("four"), k); }
+  if k > 0 { return T::A(copy("hey")); }
+  return T::B(k);
+}
+
+fn get(k: i64) -> str ! alloc {
+  let t: T = mk(k);
+  match t {
+    T::A(x) => { return x; }
+    T::B(n) => { return copy("no"); }
+    T::C(y, m) => {
+      if m > 5 { return copy("big"); }
+      return y;
+    }
+  }
+}
+
+enum E { A(s: str) }
+
+// cost metering borrows the scrutinee; `return x` is `return copy(x)` and is charged like it
+fn getc() -> str ! alloc cost 6 {
+  let e: E = E::A(copy("hi"));
+  match e { E::A(x) => { return x; } }
+}
+
+// an arm that falls through and a later match on t: the first match borrows t
+fn get2(k: i64) -> str ! alloc {
+  let t: T = mk(k);
+  match t {
+    T::A(x) => { return x; }
+    T::B(n) => { }
+    T::C(y, m) => { }
+  }
+  match t {
+    T::A(x) => { return copy("a"); }
+    T::B(n) => { return copy("bb"); }
+    T::C(y, m) => { return copy("ccc"); }
+  }
+}
+
+fn run() -> () ! io, alloc {
+  let a: str = get(1);
+  print(len(a));
+  let b: str = get(0);
+  print(len(b));
+  let c: str = get(2);
+  print(len(c));
+  let d: str = get(9);
+  print(len(d));
+  print(len(getc()));
+  print(len(get2(1)));
+  print(len(get2(0)));
+}

@@ -1081,8 +1081,9 @@ pub fn sig_text(params: &[(String, String)], f: Option<&Function>) -> String {
         })
         .collect();
     let take_names: Vec<_> = f.into_iter().flat_map(|f| &f.params)
-        .filter(|p| p.take && is_array_name(&p.ty))
-        .map(|p| format!("%p.{}.a", mangle(&p.name)))
+        .filter(|p| p.take && (is_array_name(&p.ty) || is_agg(&p.ty)))
+        // LG9: a take record parameter is owned record storage
+        .map(|p| if is_array_name(&p.ty) { format!("%p.{}.a", mangle(&p.name)) } else { format!("%p.{}", mangle(&p.name)) })
         .collect();
     params
         .iter()
@@ -2673,6 +2674,11 @@ impl<'a> FnGen<'a> {
                 }
             } else if p.mode_pos.is_some() && is_agg(&p.ty) {
                 names.insert(p.name.clone(), Bind::Slot(V::agg(format!("%p.{}", n), &p.ty)));
+            } else if self.is_ext(&p.ty) && p.take {
+                // LG9: the callee owns the storage; dropped at exit unless moved out
+                let sl = V::agg(format!("%p.{}", n), &p.ty);
+                names.insert(p.name.clone(), Bind::Slot(sl.clone()));
+                owned.push(sl);
             } else if self.is_ext(&p.ty) {
                 // G9 A3: a read view of caller-owned storage; never dropped here
                 let pv = self.op(format!("load {}, ptr %p.{}", lty(&p.ty), n))?;
@@ -3199,7 +3205,21 @@ impl<'a> FnGen<'a> {
                     self.ins(format!("store ptr null, ptr {}", sl.a))?;
                     self.ins(format!("store i64 0, ptr {}", sl.b))?;
                     self.ins(format!("store i64 0, ptr {}", need_c(&sl.c)?))?;
-                } else if let Some(val) = &x.value {
+                } else if let Some(val0) = &x.value {
+                    // LG9 (G-DB15-2): `return x` of a str match binder (the checker admits it only for a consuming
+                    // match) is `return copy(x)`, which moves the payload out of the owned scrutinee (ret_movable)
+                    let copied;
+                    let val = match val0 {
+                        Expr::Var(var) if var.ty.as_deref() == Some(STR)
+                            && matches!(self.lookup(&var.name), Ok(Bind::Ssa(_))) => {
+                            copied = Expr::Call(Call {
+                                line: var.line, col: var.col, name: "copy".to_string(), args: vec![val0.clone()],
+                                ty: Some(STR.to_string()), targs: None, inst: None, old: None, opaque_c: false,
+                            });
+                            &copied
+                        }
+                        _ => val0,
+                    };
                     self.ret_cand = self.ret_movable(val);
                     self.ret_take = self.ret_takable(val);
                     v = self.ev(val, true)?;
@@ -3662,9 +3682,15 @@ impl<'a> FnGen<'a> {
                     }
                 }
                 let sl = bound.val().clone();
-                let v = self.load(&sl)?;
+                let mut v = self.load(&sl)?;
                 if x.ty.as_deref().is_some_and(is_array_name) {
                     self.empty_array_slot(&sl)?;
+                } else if sl.k == Kind::Agg && self.is_ext_opt(&sl.ty) {
+                    // LG9 (G-LG8-5): an extended record owns every buffer field; the whole slot becomes zero (its drop
+                    // then frees nothing) and the moved value is no longer backed by the emptied slot
+                    let lt = lty(need_ty(&sl.ty)?);
+                    self.ins(format!("store {} zeroinitializer, ptr {}", lt, sl.a))?;
+                    v.p = None;
                 } else {
                     self.ins(format!("store ptr null, ptr {}", sl.a))?;
                 }
@@ -4328,6 +4354,13 @@ impl<'a> FnGen<'a> {
                         args.push(format!("i64 {}", v.b));
                     }
                 }
+                continue;
+            }
+            if self.is_ext(&prm.ty) && prm.take {
+                // LG9: the callee owns (and drops) fresh storage holding an owned value
+                let v = self.ev(x, true)?;
+                let sp = self.spill(&v)?;
+                args.push(format!("ptr {}", sp));
                 continue;
             }
             if self.is_ext(&prm.ty) {

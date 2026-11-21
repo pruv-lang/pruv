@@ -1,0 +1,12 @@
+// LG9 (G-DB15-2): an arm names the scrutinee again, so the match does not consume it and `return x` needs copy(x)
+enum T { A(s: str), B(n: i64) }
+
+fn mk() -> T ! alloc { return T::A(copy("hey")); }
+
+fn get() -> str ! alloc {
+  let t: T = mk();
+  match t {
+    T::A(x) => { return x; }
+    T::B(n) => { let u: T = copy(t); return copy("no"); }
+  }
+}

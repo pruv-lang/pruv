@@ -2466,6 +2466,63 @@ impl Checker {
         Ok(())
     }
 
+    /// LG9 (G-LG8-1): `f(move d.a)` as a let initializer, call statement or return value, the field move a direct
+    /// argument of a take parameter, consumes d like `let t = move d.a;` (no restore follows; no other argument
+    /// mentions d). Python `field_move_arg`.
+    fn field_move_arg(&self, call: &Call, scope: &Scope, next: Option<&Stmt>) -> Res<Option<(i64, i64)>> {
+        fn count(e: &Expr, n: &mut usize) {
+            if let Expr::Move(m) = e {
+                if !m.fields.is_empty() {
+                    *n += 1;
+                }
+            }
+            for k in crate::refine::kids(e) {
+                count(k, n);
+            }
+        }
+        if !call.args.iter().any(|arg| matches!(arg, Expr::Move(m) if !m.fields.is_empty())) {
+            return Ok(None);
+        }
+        let mut n = 0;
+        for arg in &call.args {
+            count(arg, &mut n);
+        }
+        if n != 1 {
+            return Ok(None);
+        }
+        let found = call.args.iter().enumerate().find_map(|(i, arg)| match arg {
+            Expr::Move(m) if !m.fields.is_empty() => Some((i, m)),
+            _ => None,
+        });
+        let Some((i, m)) = found else { return Ok(None) };
+        let take = if let Some(takes) = self.takes.get(&call.name) {
+            takes.get(i).copied().unwrap_or(false)
+        } else {
+            catalog_fn(&call.name).and_then(|f| f.params.get(i).map(|p| p.take)).unwrap_or(false)
+        };
+        if !take || call.args.iter().enumerate().any(|(j, arg)| j != i && mentions(arg, &m.name)) {
+            return Ok(None);
+        }
+        if matches!(next, Some(Stmt::FieldAssign(r)) if r.name == m.name && r.fields == m.fields) {
+            return Ok(None);
+        }
+        self.check_borrow(m.line, m.col, &m.name, &m.fields)?;
+        let source = self.lookup(m.line, m.col, &m.name, scope, &m.fields)?;
+        if !((source.kind == "local" && source.mutable) || source.kind == "take") || self.arm_binders.contains(&m.name) {
+            return Ok(None);
+        }
+        let mut ty = source.ty.clone();
+        for field in &m.fields {
+            if !self.is_struct(&ty) {
+                return Ok(None);
+            }
+            ty = self.field_type(m.line, m.col, &ty, field)?;
+        }
+        let typed = matches!(ty.to_key().as_str(), "string" | "vec<i64>" | "vec<bool>")
+            || (ty.args.is_empty() && matches!(ty.name.as_str(), "array" | "array_u8" | "array_bool"));
+        Ok(typed.then_some((m.line, m.col)))
+    }
+
     fn field_move_out(
         &self,
         value: &Expr,
@@ -2483,15 +2540,15 @@ impl Checker {
         let typed = matches!(ty.to_key().as_str(), "string" | "vec<i64>" | "vec<bool>")
             || (ty.args.is_empty() && matches!(ty.name.as_str(), "array" | "array_u8" | "array_bool"));
         let restored = matches!(next, Some(Stmt::FieldAssign(r)) if r.name == m.name && r.fields == m.fields);
-        if ty.args.is_empty()
-            && matches!(ty.name.as_str(), "array" | "array_u8" | "array_bool")
+        if typed
             && !restored
             && target.is_none()
-            && m.fields.len() == 1
-            && source.kind == "local" && source.mutable
+            && ((source.kind == "local" && source.mutable) || source.kind == "take")
             && !self.arm_binders.contains(&m.name)
         {
-            // G-R09-4: `let t = move d.a;` of a `let mut` local record consumes d; foreign.rs marks d moved
+            // G-R09-4: `let t = move d.a;` of a `let mut` local record (LG9: or a take record parameter, which the
+            // callee owns; LG9 G-LG8-1: any owned buffer field type, any field path) consumes d; foreign.rs marks d
+            // moved
             return Ok(Some((m.line, m.col)));
         }
         if !(source.mutable || matches!(source.kind, "inout" | "map_inout"))
@@ -2642,7 +2699,10 @@ impl Checker {
                 self.ext_misuse(s.line, s.col, &sty, None)?; // G9 A0
                 self.boundary = boundary_of(&s.value);
                 self.want_alloc(&s.value, &sty);
-                self.field_move = self.field_move_out(&s.value, &sty, None, scope, next)?;
+                self.field_move = match &s.value {
+                    Expr::Call(call) => self.field_move_arg(call, scope, next)?, // LG9 (G-LG8-1)
+                    v => self.field_move_out(v, &sty, None, scope, next)?,
+                };
                 let checked = self.expect(&mut s.value, &sty, scope, false, None);
                 self.field_move = None;
                 checked?;
@@ -2876,7 +2936,12 @@ impl Checker {
             }
             Stmt::ForMap(s) => self.for_map(s, scope)?,
             Stmt::Return(s) => {
-                if let Some(m) = s.value.as_ref().and_then(first_field_move) {
+                // LG9 (G-LG8-1): `return f(move d.a);` with a take parameter
+                self.field_move = match &s.value {
+                    Some(Expr::Call(call)) => self.field_move_arg(call, scope, None)?,
+                    _ => None,
+                };
+                if let Some(m) = s.value.as_ref().and_then(first_field_move).filter(|_| self.field_move.is_none()) {
                     self.check_borrow(m.line, m.col, &m.name, &m.fields)?;
                     self.lookup(m.line, m.col, &m.name, scope, &m.fields)?;
                     return Err(field_move_error(m));
@@ -2906,12 +2971,29 @@ impl Checker {
                         }
                         self.boundary = boundary_of(v);
                         self.want_alloc(v, &ret);
-                        self.expect(v, &ret, scope, false, None)?;
+                        let checked = self.expect(v, &ret, scope, false, None);
+                        self.field_move = None;
+                        checked?;
                         self.check_inout_context(&[&*v], InoutContext::Value)?;
-                        if ret.is_array() || ret == strt() {
+                        // LG9 (G-DB15-2): a str binder of a consuming match is returned like an owned local
+                        let binder_ret = ret == strt() && matches!(&*v, Expr::Var(x)
+                            if self.match_movable.contains(&x.name)
+                                && scope.get(&x.name).is_some_and(|entry| entry.ty == strt()));
+                        if (ret.is_array() || ret == strt()) && !binder_ret {
                             self.array_source(s.line, s.col, v, scope, true, &ret)?;
                         }
+                        if binder_ret {
+                            self.used_effects.insert("alloc".to_string());
+                        }
                         self.own(v, scope)?;
+                        if binder_ret {
+                            // it means `return copy(x)`: rewrite it so both backends and the cost proof see the copy
+                            let (line, col) = match &*v { Expr::Var(x) => (x.line, x.col), _ => unreachable!() };
+                            *v = Expr::Call(Call {
+                                line, col, name: "copy".to_string(), args: vec![v.clone()],
+                                ty: Some("str".to_string()), targs: None, inst: None, old: None, opaque_c: false,
+                            });
+                        }
                     }
                 }
             }
@@ -2955,7 +3037,12 @@ impl Checker {
                 if let Expr::Call(call) = &s.expr {
                     self.statement_call = Some(call as *const Call as usize);
                 }
+                self.field_move = match &s.expr {
+                    Expr::Call(call) => self.field_move_arg(call, scope, next)?, // LG9 (G-LG8-1): `f(move d.a);`
+                    _ => None,
+                };
                 let result = self.expr(&mut s.expr, scope, false);
+                self.field_move = None;
                 self.statement_call = None;
                 let t = result?;
                 self.check_inout_context(&[&s.expr], InoutContext::Value)?;
@@ -3326,7 +3413,8 @@ impl Checker {
             }
             if movable_scrut {
                 for (b, bt) in a.binders.iter().zip(ftypes.iter()) {
-                    if bt.is_array() {
+                    // LG9 (G-DB15-2): a str binder too, for `return x` (see Return)
+                    if bt.is_array() || *bt == strt() {
                         self.match_movable.insert(b.clone());
                     }
                 }
