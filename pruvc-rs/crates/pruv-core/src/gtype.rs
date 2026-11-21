@@ -91,6 +91,14 @@ impl GType {
     pub fn result() -> GType {
         GType::new("result", Vec::new())
     }
+
+    /// The error payload when it differs from the implicit i64.
+    pub fn result_error(&self) -> Option<&GType> {
+        match (self.owner.as_ref(), self.name.as_str(), self.args.as_slice()) {
+            (None, "result", [_, e]) if *e != GType::i64() => Some(e),
+            _ => None,
+        }
+    }
     pub fn array_u8() -> GType {
         GType::new("array_u8", Vec::new())
     }
@@ -326,6 +334,14 @@ pub fn mk_result(x: GType) -> GType {
     }
 }
 
+pub fn mk_result_with_error(x: GType, e: GType) -> GType {
+    if e == GType::i64() {
+        mk_result(x)
+    } else {
+        GType::new("result", vec![x, e])
+    }
+}
+
 pub fn mk_array(x: GType) -> GType {
     if x == GType::i64() {
         GType::array()
@@ -443,7 +459,11 @@ pub fn substitute(ty: &GType, mapping: &Mapping) -> GType {
     match ty.name.as_str() {
         "array" => mk_array(args.swap_remove(0)),
         "option" => mk_option(args.swap_remove(0)),
-        "result" => mk_result(args.swap_remove(0)),
+        "result" if args.len() == 2 => {
+            let e = args.pop().unwrap();
+            mk_result_with_error(args.pop().unwrap(), e)
+        }
+        "result" if args.len() == 1 => mk_result(args.swap_remove(0)),
         other => mk_nominal(other, args),
     }
 }
@@ -453,10 +473,13 @@ pub fn substitute(ty: &GType, mapping: &Mapping) -> GType {
 pub fn check_arity(ty: &GType, decls: Decls) -> Result<(), TypeArityError> {
     if ty.owner.is_none()
         && !ty.args.is_empty()
-        && matches!(ty.name.as_str(), "option" | "result" | "array")
+        && matches!(ty.name.as_str(), "option" | "array")
         && ty.args.len() != 1
     {
         return Err(TypeArityError(format!("{} expects 1 type argument, got {}", ty.name, ty.args.len())));
+    }
+    if ty.owner.is_none() && ty.name == "result" && ty.args.len() > 2 {
+        return Err(TypeArityError(format!("result expects 1 or 2 type arguments, got {}", ty.args.len())));
     }
     // G6 A0: Vec<T>, HashMap<K, V>, String
     if ty.owner.is_none() {
@@ -580,6 +603,9 @@ pub fn encode(ty: &GType) -> Result<String, String> {
             Some(a) => encode(a)?,
             None => "i".to_string(),
         };
+        if let Some(e) = ty.result_error() {
+            return Ok(format!("e{}{}", inner, encode(e)?));
+        }
         return Ok(format!("{}{}", prefix, inner));
     }
     if is_nominal(ty) {

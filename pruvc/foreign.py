@@ -258,7 +258,7 @@ _PATH_RE = re.compile(r"::[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*")
 
 def _scalar_opt(t):
     """Option<i64|bool> / Result<i64|bool>"""
-    return t.owner is None and t.name in ("option", "result") and (not t.args or t.args[0] in (I64, BOOL))
+    return t.owner is None and t.name in ("option", "result") and t.args in ((), (I64,), (BOOL,))
 
 
 def _owned_result(t):

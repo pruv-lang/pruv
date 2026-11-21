@@ -63,14 +63,15 @@ fn structured_builtin(g: &GType) -> bool {
     g.owner.is_none() && !g.args.is_empty() && (g.name == "option" || g.name == "result")
 }
 
-/// Rust type spelling of a structured type (G3): Option<X> / Result<X> with X != i64.
+/// Rust type spelling of a structured Option or Result.
 pub fn rty_g(g: &GType, param: bool) -> String {
     if structured_builtin(g) {
         let x = rty_g(&g.args[0], false);
         if g.name == "option" {
             return format!("::std::option::Option<{}>", x);
         }
-        return format!("::std::result::Result<{}, i64>", x);
+        let e = g.result_error().map_or_else(|| "i64".to_string(), |e| rty_g(e, false));
+        return format!("::std::result::Result<{}, {}>", x, e);
     }
     // G6: owned collections; a borrowed parameter is a reference
     if g.owner.is_none() {
@@ -153,14 +154,15 @@ fn type_repr(t: &str) -> String {
     format!("Type(name='{}')", t)
 }
 
-/// Contract (i128) mirror of a structured type (G3): C(Option<X>) = Option<C(X)>, C(Result<X>) = Result<C(X), i128>.
+/// Contract mirror of a structured Option or Result.
 pub fn try_cty_g(g: &GType) -> Result<String, String> {
     if structured_builtin(g) {
         let x = try_cty_g(&g.args[0])?;
         if g.name == "option" {
             return Ok(format!("::std::option::Option<{}>", x));
         }
-        return Ok(format!("::std::result::Result<{}, i128>", x));
+        let e = g.result_error().map(try_cty_g).transpose()?.unwrap_or_else(|| "i128".to_string());
+        return Ok(format!("::std::result::Result<{}, {}>", x, e));
     }
     try_cty_name(&g.name)
 }
@@ -199,7 +201,11 @@ pub fn try_conv_g(g: &GType, x: &str) -> Result<String, String> {
         if g.name == "option" {
             return Ok(mapped);
         }
-        return Ok(format!("{}.map_err(|v| v as i128)", mapped));
+        let err = match g.result_error() {
+            Some(e) => try_conv_g(e, "v")?,
+            None => "v as i128".to_string(),
+        };
+        return Ok(format!("{}.map_err(|v| {})", mapped, err));
     }
     try_conv_name(&g.name, x)
 }

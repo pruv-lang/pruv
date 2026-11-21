@@ -5647,12 +5647,34 @@ def _is_coll_fn(f):
     return any(is_collection(p.type) for p in f.params) or is_collection(f.ret)
 
 
+def _typed_result_in(node, specialized_args):
+    if isinstance(node, Type):
+        if node.owner is None and node.name == "result" and len(node.args) == 2:
+            return node
+        # Lowered nominal applications keep their arguments in the specialization plan.
+        children = node.args or specialized_args.get(node.name, ())
+    elif isinstance(node, (list, tuple)):
+        children = node
+    elif dataclasses.is_dataclass(node):
+        children = [getattr(node, field.name) for field in dataclasses.fields(node)]
+        children.extend(getattr(node, attr, None) for attr in ("targs", "cost", "decreases"))
+        if isinstance(node, Call):
+            children.extend(specialized_args.get(node.name, ()))
+    else:
+        return None
+    for child in children:
+        hit = _typed_result_in(child, specialized_args)
+        if hit is not None:
+            return hit
+    return None
+
+
 def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None, foreign_checks="requires"):
     """plan: a mono.SpecPlan for a generic program (computed here when omitted; PruvError specialization_limit
     propagates).  The generator works on the concrete plan.program only: no type parameter reaches LLVM.
     foreign_checks: G6 boundary check mode of the shim helpers (requires|all|off, docs/G6_SPEC.md 12.3).
     A G6 program outside the supported subset (G6_SPEC 13.1) raises PruvError codegen/unsupported_type."""
-    from typeinfo import g2_unimplemented_error, first_g3_use
+    from typeinfo import g2_unimplemented_error, first_g3_use, type_name
     if foreign_checks not in ("requires", "all", "off"):
         raise ValueError("foreign_checks must be requires, all or off")
     from check import opaque_inline
@@ -5700,8 +5722,21 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     if plan is None and (first_g3_use(prog) is not None or prog.explicit):   # G4 A3: explicit mode names via mono
         from mono import specialize
         plan = specialize(prog)
+    source = prog if plan is None else plan.source
+    specialized_args = {}
     if plan is not None:
         prog = plan.program
+        specialized_args = {spec.stem: spec.args for spec in (*plan.type_specs, *plan.fn_specs)}
+    positions = {(item.file, item.line, item.col): i for i, item in enumerate(source.items or ())}
+    items = sorted([*prog.types, *prog.functions],
+                   key=lambda item: positions.get((item.file, item.line, item.col), len(positions)))
+    for item in items:
+        hit = _typed_result_in(item, specialized_args)
+        if hit is not None:
+            raise PruvError("codegen", item.line, item.col, "unsupported_type",
+                            "%s uses %s, a Result with a non-i64 error type, which the llvm codegen layer does not support yet"
+                            % (getattr(item, "disp", item.name), type_name(hit)),
+                            "use the Rust backend", file=item.file)
     explicit = bool(getattr(prog, "explicit", False))
     g6err = g6_llvm_error(prog)
     if g6err is not None:

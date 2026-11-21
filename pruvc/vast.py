@@ -10,7 +10,8 @@ from typing import List, Optional
 class Type:
     """name: "i64" | "bool" | "unit" | "array" | "option" | "result" | ... | a user nominal name | a parameter name.
     G3 A0 optional fields (all defaults leave every legacy type unchanged, so legacy equality/hash/print are as before):
-      args:  type arguments of a structured type: Option<X> / Result<X> -> (X,); [X] -> (X,); D<X0,..> -> (X0,..).
+      args:  type arguments of a structured type: Option<X> / Result<X> -> (X,); Result<X, E> -> (X, E)
+             when E is not i64; [X] -> (X,); D<X0,..> -> (X0,..).
       owner/index: set only on a bound type parameter: owner is the declaration identity ("fn:<name>" or
              "type:<name>", see typeinfo.fn_owner/decl_owner) and index its position in that declaration's list.
     Build structured types with the mk_* constructors: they normalize to the legacy constants
@@ -46,8 +47,13 @@ def mk_param(owner: str, index: int, name: str) -> Type:
 def mk_option(x: Type) -> Type:
     return OPTION if x == I64 else Type("option", (x,))
 
-def mk_result(x: Type) -> Type:
+def mk_result(x: Type, error: Type = I64) -> Type:
+    if error != I64:
+        return Type("result", (x, error))
     return RESULT if x == I64 else Type("result", (x,))
+
+def result_error(ty: Type) -> Type:
+    return ty.args[1] if len(ty.args) == 2 else I64
 
 def mk_array(x: Type) -> Type:
     if x == I64: return ARRAY

@@ -1,0 +1,24 @@
+enum IoErr { Eof, Bad(at: i64) }
+
+fn read(mode: i64) -> Result<bool, IoErr> {
+  if mode == 0 {
+    return Ok::<bool, IoErr>(true);
+  }
+  if mode == 1 {
+    return Err::<bool, IoErr>(IoErr::Eof);
+  }
+  return Err::<bool, IoErr>(IoErr::Bad(mode));
+}
+
+fn status(mode: i64) -> i64 {
+  let r: Result<bool, IoErr> = read(mode);
+  match r {
+    Ok(v) => { if v { return 1; } return 0; }
+    Err(e) => {
+      match e {
+        IoErr::Eof => { return -1; }
+        IoErr::Bad(at) => { return at; }
+      }
+    }
+  }
+}

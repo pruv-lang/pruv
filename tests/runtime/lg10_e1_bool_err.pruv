@@ -1,0 +1,15 @@
+fn choose(ok: bool) -> Result<i64, bool>
+  ensures !is_ok(result) ==> err_val(result)
+{
+  if ok {
+    return Ok::<i64, bool>(42);
+  }
+  return Err::<i64, bool>(true);
+}
+
+fn status(r: Result<i64, bool>) -> i64 {
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { if e { return 1; } return 0; }
+  }
+}

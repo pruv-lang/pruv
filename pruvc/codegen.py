@@ -1103,9 +1103,9 @@ G9_HELPER_ALLOW = "#[allow(dead_code, non_camel_case_types, non_snake_case, unus
 
 def nominals_in(t):
     """names of the user types a field of type t can contribute to `size` / structural equality: the type itself, or
-    the payload type of Option / Result (arrays, str and scalars contribute nothing), in first-occurrence order"""
+    the payload types of Option / Result (arrays, str and scalars contribute nothing), in first-occurrence order"""
     if t.owner is None and t.args and t.name in ("option", "result"):
-        return nominals_in(t.args[0])
+        return list(dict.fromkeys(n for a in t.args for n in nominals_in(a)))
     if is_user_type(t):
         return [t.name]
     return []
@@ -1116,7 +1116,7 @@ def rty(t, param=False):
         x = rty(t.args[0])
         if t.name == "option":
             return "::std::option::Option<%s>" % x
-        return "::std::result::Result<%s, i64>" % x
+        return "::std::result::Result<%s, %s>" % (x, rty(result_error(t)))
     if t.owner is None and t.name in ("vec", "hashmap", "string", "file", "process", "process_args", "socket", "listener", "loop"):   # G6: owned; a borrowed parameter is a reference
         if t.name == "vec":
             r = "::std::vec::Vec<%s>" % rty(t.args[0])
@@ -1160,7 +1160,7 @@ def cty(t):
         x = cty(t.args[0])
         if t.name == "option":
             return "::std::option::Option<%s>" % x
-        return "::std::result::Result<%s, i128>" % x
+        return "::std::result::Result<%s, %s>" % (x, cty(result_error(t)))
     n = t.name
     if n == "i64":
         return "i128"
@@ -1182,7 +1182,10 @@ def conv(t, x):
         if t.name == "option":
             return x if inner == "v" else "%s.map(|v| %s)" % (x, inner)
         ok = x if inner == "v" else "%s.map(|v| %s)" % (x, inner)
-        return "%s.map_err(|v| v as i128)" % ok
+        if len(t.args) == 1:
+            return "%s.map_err(|v| v as i128)" % ok
+        err = conv(result_error(t), "v")
+        return ok if err == "v" else "%s.map_err(|v| %s)" % (ok, err)
     n = t.name
     if n == "i64":
         return "(%s as i128)" % x
@@ -2221,7 +2224,8 @@ class Gen:
                 return "None::<%s>" % rx
             if e.name == "Some":
                 return "Some::<%s>(%s)" % (rx, s.g9_real(e.arg, px))
-            return "%s::<%s, i64>(%s)" % (e.name, rx, s.g9_real(e.arg, px if e.name == "Ok" else I64))
+            err = result_error(t) if t is not None else I64
+            return "%s::<%s, %s>(%s)" % (e.name, rx, rty(err), s.g9_real(e.arg, px if e.name == "Ok" else err))
         if t is None or (t.owner is None and t.name == "i64"):
             return "i64::try_from(%s).unwrap_or_else(|_| pruv_ud(\"constructor field out of i64 range\"))" % s.c(e)
         if t.owner is None and t.name == "bool":
@@ -2348,7 +2352,7 @@ class Gen:
                     return "None::<%s>" % cx
                 if e.name == "Some":
                     return "Some::<%s>(%s)" % (cx, s.c(e.arg))
-                return "%s::<%s, i128>(%s)" % (e.name, cx, s.c(e.arg))
+                return "%s::<%s, %s>(%s)" % (e.name, cx, cty(result_error(e.ty)), s.c(e.arg))
             if e.name == "None":
                 return "None::<i128>"
             ctor = {"Some": "Some", "Ok": "Ok::<i128, i128>", "Err": "Err::<i128, i128>"}[e.name]
@@ -2607,16 +2611,18 @@ class Gen:
     def g9_weight(s, t, x, bud="pruv_budget"):
         """Rust i128 expression for weight(value) (G9_SPEC 3); x names a variable of type `&R(t)`; bud is the budget
         argument expression (`pruv_budget` inside a helper, where it is a `&mut i64`).
-        Scalars, arrays and str weigh 0; a nominal value weighs its size; Some / Ok weigh their payload; None / Err 0."""
+        Scalars, arrays, str and None weigh 0; a nominal value weighs its size; Some / Ok / Err weigh their payload."""
         if t.owner is None and t.args and t.name in ("option", "result"):
             inner = s.g9_weight(t.args[0], "pruv_w", bud)
-            if inner == "0i128":
+            err = s.g9_weight(t.args[1], "pruv_w", bud) if len(t.args) == 2 else "0i128"
+            if inner == err == "0i128":
                 return "0i128"
             if t.name == "option":
                 return ("match %s { ::std::option::Option::Some(pruv_w) => %s, ::std::option::Option::None => 0i128 }"
                         % (x, inner))
-            return ("match %s { ::std::result::Result::Ok(pruv_w) => %s, ::std::result::Result::Err(_) => 0i128 }"
-                    % (x, inner))
+            binder = "_" if err == "0i128" else "pruv_w"
+            return ("match %s { ::std::result::Result::Ok(pruv_w) => %s, ::std::result::Result::Err(%s) => %s }"
+                    % (x, inner, binder, err))
         if is_user_type(t):
             return "pruv_csize__%s(%s, %s)" % (t.name, x, bud)
         return "0i128"
@@ -2624,19 +2630,20 @@ class Gen:
     def g9_walks(s, t):
         """equality has to walk into t (a nominal value, or Option / Result of one)"""
         if t.owner is None and t.args and t.name in ("option", "result"):
-            return s.g9_walks(t.args[0])
+            return any(s.g9_walks(a) for a in t.args)
         return is_user_type(t)
 
     def g9_eq(s, t, x, y):
         """Rust bool expression: structural equality of the values behind the references x and y (type `&R(t)`)"""
-        if t.owner is None and t.args and t.name in ("option", "result") and s.g9_walks(t.args[0]):
+        if t.owner is None and t.args and t.name in ("option", "result") and s.g9_walks(t):
             inner = s.g9_eq(t.args[0], "pruv_p", "pruv_q")
             if t.name == "option":
                 return ("(match (%s, %s) { (::std::option::Option::Some(pruv_p), ::std::option::Option::Some(pruv_q)) => %s, "
                         "(::std::option::Option::None, ::std::option::Option::None) => true, _ => false })" % (x, y, inner))
+            err = s.g9_eq(result_error(t), "pruv_p", "pruv_q")
             return ("(match (%s, %s) { (::std::result::Result::Ok(pruv_p), ::std::result::Result::Ok(pruv_q)) => %s, "
-                    "(::std::result::Result::Err(pruv_p), ::std::result::Result::Err(pruv_q)) => (*pruv_p == *pruv_q), "
-                    "_ => false })" % (x, y, inner))
+                    "(::std::result::Result::Err(pruv_p), ::std::result::Result::Err(pruv_q)) => %s, "
+                    "_ => false })" % (x, y, inner, err))
         if is_user_type(t):
             return "pruv_ceq__%s(%s, %s, pruv_budget)" % (t.name, x, y)
         return "(*%s == *%s)" % (x, y)
@@ -3430,7 +3437,7 @@ class Gen:
                     return "None::<%s>" % rx
                 if e.name == "Some":
                     return "Some::<%s>(%s)" % (rx, s.e(e.arg))
-                return "%s::<%s, i64>(%s)" % (e.name, rx, s.e(e.arg))
+                return "%s::<%s, %s>(%s)" % (e.name, rx, rty(result_error(e.ty)), s.e(e.arg))
             return "None" if e.name == "None" else "%s(%s)" % (e.name, s.e(e.arg))
         if isinstance(e, StructLit):
             # declaration order = left-to-right evaluation; parenthesized so `if S { .. }.x` parses

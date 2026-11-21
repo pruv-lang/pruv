@@ -461,7 +461,7 @@ class Model:
 
     def weight(s, fty, t):
         """size weight of a field value t of type fty (None = always 0): nominal values count their own size,
-        Some/Ok payloads count their payload, everything else is 0"""
+        Some/Ok/Err count their payload, everything else is 0"""
         if fty.owner is not None or fty in (I64, BOOL, OPTION, RESULT) or s.is_buf(fty) or is_collection(fty):
             return None
         if fty.name == "option":
@@ -471,6 +471,10 @@ class Model:
         if fty.name == "result":
             o = s.res(fty)
             w = s.weight(fty.args[0], o.oval(t))
+            if len(fty.args) == 2:
+                err = s.weight(result_error(fty), o.eval(t))
+                if err is not None:
+                    return z3.If(o.is_ok(t), 0 if w is None else w, err)
             return None if w is None else z3.If(o.is_ok(t), w, 0)
         if s.tt.is_struct(fty) or s.tt.is_enum(fty):
             if not fty.args:
@@ -567,6 +571,14 @@ class Model:
                     out.append(s.size_fn(fty.name)(acc(t)) >= 1)
                 elif fty.owner is None and fty.args and s.is_user(fty) and s.fixed_size(fty) is None:
                     out.append(s.size_inst(fty)(acc(t)) >= 1)
+                elif fty.owner is None and fty.name == "result" and len(fty.args) == 2:
+                    # E1: the Err payload of a Result<T, E> field counts in the weight, so its size is positive too
+                    ety = result_error(fty)
+                    ev = s.res(fty).eval(acc(t))
+                    if s.rel_nominal(ety):
+                        out.append(s.size_fn(ety.name)(ev) >= 1)
+                    elif ety.owner is None and ety.args and s.is_user(ety) and s.fixed_size(ety) is None:
+                        out.append(s.size_inst(ety)(ev) >= 1)
         return out
 
     def rel_nominal(s, ty):
@@ -615,12 +627,14 @@ class Model:
         r = cache.get(ty)
         if r is not None:
             return r
-        if ty == I64 or ty == OPTION or ty == RESULT or ty.name == "result":
+        if ty == I64 or ty == OPTION or ty == RESULT:
             r = False
         elif ty.owner is not None:
             r = True
         elif ty.name == "option":
             r = s.wf_trivial(ty.args[0])
+        elif ty.name == "result":
+            r = len(ty.args) == 2 and all(s.wf_trivial(a) for a in ty.args)
         elif ty.owner is None and not ty.args and ty.name in s.scc_of:
             r = False       # G9 A1: a recursive type has the wf_D definition (never trivially true here)
         elif s.tt.is_struct(ty):
@@ -660,7 +674,7 @@ class Model:
         elif ty.name == "result":
             ps = s.sort_of(ty.args[0])
             dt.declare(tag + "Ok", (tag + "Ok.val", ps))
-            dt.declare(tag + "Err", (tag + "Err.val", z3.IntSort()))
+            dt.declare(tag + "Err", (tag + "Err.val", s.sort_of(result_error(ty))))
             srt = dt.create()
             s.gres[ty] = _ResOps(srt.constructor(0), srt.constructor(1), srt.recognizer(0), srt.recognizer(1),
                                  srt.accessor(0, 0), srt.accessor(1, 0))
@@ -1036,6 +1050,8 @@ def _wf_of(m, ty, v):
         # but skip the field recursion, which is exponential in the nesting depth
         if ty.name == "option":
             m.opt(ty)
+        elif ty.name == "result":
+            m.res(ty)
         elif m.tt.is_struct(ty):
             m.struct_info(ty)
         elif m.tt.is_enum(ty):
@@ -1050,7 +1066,9 @@ def _wf_of(m, ty, v):
         o = m.res(ty)
         w = _wf_of(m, ty.args[0], o.oval(v))
         parts = [] if w is None else [z3.Implies(o.is_ok(v), w)]
-        parts.append(z3.Implies(o.is_err(v), in_range(o.eval(v))))
+        err = _wf_of(m, result_error(ty), o.eval(v))
+        if err is not None:
+            parts.append(z3.Implies(o.is_err(v), err))
         return _conj(parts)
     if not ty.args and ty.name in m.scc_of:     # G9 A1: recursive type: the definition, never a Python expansion
         return m.wf_fn(ty.name)(v)
@@ -3252,7 +3270,7 @@ class FnVerifier:
                         if a.ctor == "Ok": cond, val = o.is_ok(v), o.oval(v)
                         else: cond, val = o.is_err(v), o.eval(v)
                     vals = [] if val is None else [val]
-                    ftys = [I64 if a.ctor == "Err" else payload] * len(vals)
+                    ftys = [result_error(sty) if a.ctor == "Err" else payload] * len(vals)
                 b = st.fork(cond)
                 for name, val, fty in zip(a.binders, vals, ftys):
                     if s.model.g9:       # G9 A1: buffer payloads become Arr views; nominal payloads are observed

@@ -1,0 +1,3 @@
+struct Buffered { data: [i64] }
+
+fn f(r: Result<i64, Buffered>) -> i64 { return 0; }

@@ -2,7 +2,7 @@
 
 use crate::ast::*;
 use crate::diagnostic::PruvError;
-use crate::gtype::{fn_owner, decl_owner, mk_array, mk_option, mk_param, mk_result, GType};
+use crate::gtype::{fn_owner, decl_owner, mk_array, mk_option, mk_param, mk_result, mk_result_with_error, GType};
 use crate::lexer::{lex_tagged, Kind, Tok};
 use crate::pyrepr::repr_str;
 use std::collections::HashMap;
@@ -665,7 +665,7 @@ impl Parser {
 
     /// Type arguments after an already consumed `<`, through the closing `>`. expr: expression position,
     /// where a malformed list is a generic_syntax error.
-    fn type_arg_list(&mut self, expr: bool) -> R<Vec<GType>> {
+    fn type_arg_list(&mut self, expr: bool, result: bool) -> R<Vec<GType>> {
         let mut out: Vec<GType> = Vec::new();
         loop {
             if self.at(">", 0) || self.at(",", 0) {
@@ -676,7 +676,14 @@ impl Parser {
                     "write a type between the angle brackets, e.g. Pair<i64, bool>",
                 ));
             }
-            out.push(self.type_g(false)?.0);
+            if result && out.len() == 1 && (self.peek(0).val == "u8" || self.peek(0).val == "i32") {
+                // The checker reports unsupported Result error payloads.
+                let v = self.peek(0).val.clone();
+                self.bump();
+                out.push(GType::new(&v, Vec::new()));
+            } else {
+                out.push(self.type_g(false)?.0);
+            }
             if !self.at(",", 0) {
                 break;
             }
@@ -699,9 +706,18 @@ impl Parser {
 
     /// At `::` `<` in an expression: consumes `::<T, ...>`.
     fn expr_targs(&mut self) -> R<Vec<GType>> {
+        self.expr_targs_for_result(false)
+    }
+
+    fn expr_targs_for_result(&mut self, result: bool) -> R<Vec<GType>> {
         self.expect("::")?;
         self.expect("<")?;
-        self.type_arg_list(true)
+        let mut args = self.type_arg_list(true, result)?;
+        // `Ok::<T, i64>` / `Err::<T, i64>` is the one-argument form (canonical Result<T>).
+        if result && args.len() == 2 && args[1] == GType::new("i64", Vec::new()) {
+            args.pop();
+        }
+        Ok(args)
     }
 
     /// n: an already consumed identifier naming a type parameter, Option/Result or a user type (no refinement;
@@ -713,7 +729,12 @@ impl Parser {
             if a.kind == Kind::Id && (a.val == "u8" || a.val == "i32") {
                 return Err(self.unsupported(&format!("{}<{}>", n.val, a.val), &a));
             }
-            let mut args = self.type_arg_list(false)?;
+            let result = n.val == "Result";
+            let mut args = self.type_arg_list(false, result)?;
+            if result && args.len() == 2 {
+                let e = args.pop().unwrap();
+                return Ok(mk_result_with_error(args.pop().unwrap(), e));
+            }
             if args.len() == 1 {
                 let x = args.swap_remove(0);
                 return Ok(if n.val == "Option" { mk_option(x) } else { mk_result(x) });
@@ -724,7 +745,7 @@ impl Parser {
         if self.at("<", 0) {
             self.bump();
             // also a parameter applied to arguments (`T<X>`): kept unresolved, the checker reports it
-            let args = self.type_arg_list(false)?;
+            let args = self.type_arg_list(false, false)?;
             return Ok(GType::new(&n.val, args));
         }
         if let Some(t) = self.scope.get(&n.val) {
@@ -1837,7 +1858,11 @@ impl Parser {
         }
         if self.at("Some", 0) || self.at("Ok", 0) || self.at("Err", 0) {
             self.bump();
-            let targs = if self.at("::", 0) && self.at("<", 1) { Some(self.expr_targs()?) } else { None }; // G3: Some::<T>(x)
+            let targs = if self.at("::", 0) && self.at("<", 1) {
+                Some(self.expr_targs_for_result(t.val != "Some")?)
+            } else {
+                None
+            };
             self.expect("(")?;
             let a = self.expr()?;
             self.expect(")")?;

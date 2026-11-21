@@ -13,9 +13,9 @@ from refine import _kids as expr_kids, _stmt_names
 from foreign import (CATALOG, CATALOG_NAMES, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS, ASYNC_OBSERVERS, ASYNC_OPS,
                      check_foreign_decl, check_ownership, STRING, MUTABLE_COLLECTION_MATCH, BORROWED_MAP_KEY)  # G6 A0 / G10 A0
 
-# name -> (argument kind, result: BOOL | I64 | "payload" = the Option/Result payload type)
+# name -> (argument kind, result: concrete type or the selected payload type)
 CONTRACT_ONLY = {"is_some": ("option", BOOL), "some_val": ("option", "payload"), "is_ok": ("result", BOOL),
-                 "ok_val": ("result", "payload"), "err_val": ("result", I64),
+                 "ok_val": ("result", "payload"), "err_val": ("result", "error"),
                  "size": ("size", I64)}   # G9 A0: structural size of a non-generic nominal value
 # P2: pure (i64, i64) -> i64 bit builtins: name -> (Rust operator, LLVM instruction); later batches add entries here
 BIT_BUILTINS = {"band": ("&", "and"), "bor": ("|", "or"), "bxor": ("^", "xor"),
@@ -298,6 +298,7 @@ class Checker:
         s.check_tparams()      # G3: type-parameter lists (type_parameter, generic_bound, generic_main)
         value_decls = {n: (len(d.tparams), [fd.type for _, fd in s.decl_fields(d)])
                        for n, d in s.decls.items()}
+        s.value_decls = value_decls
         record_map_values = {n for n, d in s.decls.items() if is_nongeneric_struct(Type(n), s.decls)
                              and all(f.type == STRING or is_value(f.type, value_decls, (n,))
                                      for f in d.fields)}
@@ -428,14 +429,14 @@ class Checker:
                     "Listener": "listener", "Loop": "loop"}[name]
         if name in ("vec", "hashmap") and args and args[-1].owner is None and not args[-1].args:
             s.collection_records.add(args[-1].name)
+        if name == "result" and len(args) in (1, 2):
+            return mk_result(*args)
         if name == ty.name and args == ty.args:
             return ty
         if name == "array" and len(args) == 1:
             return mk_array(args[0])
         if name == "option" and len(args) == 1:
             return mk_option(args[0])
-        if name == "result" and len(args) == 1:
-            return mk_result(args[0])
         return Type(name, args)
 
     def normalize_types(s):
@@ -548,18 +549,23 @@ class Checker:
 
     def check_type(s, node, ty):
         """every type reference: arity, known names, type-argument and bound rules (G3_SPEC 3.1, 3.2, 3.4)"""
+        s.check_type_arity(node, ty)
+        s.check_type_rec(node, ty)
+
+    def check_type_arity(s, node, ty):
         try:
             check_arity(ty, s.arg_decls)
         except TypeArityError as ex:
             terr(node, "type_arity", str(ex), "give the exact number of type arguments, e.g. Option<i64>, Pair<i64, bool>")
-        s.check_type_rec(node, ty)
 
     def check_type_rec(s, node, ty):
         if ty.owner is not None:
             return
         if ty.name in ("option", "result"):
-            for a in ty.args:
-                s.check_arg(node, a, None)
+            if ty.args:
+                s.check_arg(node, ty.args[0], None)
+            if ty.name == "result" and len(ty.args) == 2:
+                s.check_result_error(node, result_error(ty))
             return
         if ty.name in COLLECTION_ARITY:      # G6: Vec<T>, HashMap<K, V>, String
             for a in ty.args:
@@ -620,6 +626,16 @@ class Checker:
             terr(node, "foreign_owned_type", "%s cannot have type %s: only i64, bool, Option, Result, structs, "
                  "enums and type parameters can" % (what, type_name(a)),
                  "arrays, str and () cannot be collection payloads")
+
+    def check_result_error(s, node, error):
+        # Checking all declared fields also excludes transitive buffers and owned collections.
+        if (error.owner is not None or error.name in ("option", "result")
+                or not is_value(error, s.value_decls)):
+            terr(node, "result_error_type",
+                 "%s is not supported as a Result error type yet: only i64, bool and value structs or enums are"
+                 % type_name(error),
+                 "owned String errors (E2) and error records with buffers (E3) are not supported yet")
+        s.check_type_rec(node, error)
 
     def check_arg(s, node, a, tp):
         """a: a type argument; tp: the TypeParam it instantiates (None for Option/Result)"""
@@ -1442,8 +1458,7 @@ class Checker:
                             t.name, a.ctor, len(ftypes), len(a.binders)),
                              "bind every field, in declaration order")
                 else:
-                    # G3: the Some/Ok binder has the payload type of Option<X> / Result<X>; Err binds the i64 code
-                    payload = t.args[0] if t.args and a.ctor != "Err" else I64
+                    payload = result_error(t) if a.ctor == "Err" else t.args[0] if t.args else I64
                     ftypes = [payload] * len(a.binders)
                 for b, bt in zip(a.binders, ftypes):
                     if b in sc:
@@ -2240,20 +2255,30 @@ class Checker:
             if not c:
                 s.own(e.arg)
             return OPTION if e.name == "Some" else RESULT
-        if len(e.targs) != 1:
+        is_result = e.name in ("Ok", "Err")
+        if len(e.targs) != 1 and not (is_result and len(e.targs) == 2):
+            if is_result:
+                terr(e, "type_arity", "%s::<..> takes 1 or 2 type arguments, got %d" % (e.name, len(e.targs)),
+                     "write %s::<T> or %s::<T, E>" % (e.name, e.name))
             terr(e, "type_arity", "%s::<..> takes exactly 1 type argument, got %d" % (e.name, len(e.targs)),
                  "write %s::<T>" % e.name)
         x = e.targs[0]
         s.check_type(e, x)
         s.check_arg(e, x, None)
         s.ext_misuse(e, x, "arg")      # G9 A0
-        e.inst = {"decl": "builtin:" + e.name, "args": (x,), "subst": {("builtin:" + e.name, 0): x}}
+        error = e.targs[1] if len(e.targs) == 2 else I64
+        if error != I64:
+            s.check_type_arity(e, error)
+            s.check_result_error(e, error)
+        args = (x,) if error == I64 else (x, error)
+        owner = "builtin:" + e.name
+        e.inst = {"decl": owner, "args": args, "subst": bind_args(owner, len(args), args)}
         if e.name == "None":
             return mk_option(x)
-        s.expect(e.arg, I64 if e.name == "Err" else x, scope, c)
+        s.expect(e.arg, error if e.name == "Err" else x, scope, c)
         if not c:
             s.own(e.arg)
-        return mk_option(x) if e.name == "Some" else mk_result(x)
+        return mk_option(x) if e.name == "Some" else mk_result(x, error)
 
     def observer_args(s, e, f, m, scope, c):
         """map_lookup / map_updated arguments: a key whose type differs from a map argument's key type is a
@@ -2742,6 +2767,8 @@ class Checker:
                                                                          type_name(t)))
             if rt == "payload":     # G3: the payload type of Option<X> / Result<X>
                 return t.args[0] if t.args else I64
+            if rt == "error":
+                return result_error(t)
             return rt
         catalog = n in CATALOG and n not in s.funcs       # G6: fixed standard catalog (G6_SPEC 10.3)
         if catalog:

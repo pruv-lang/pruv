@@ -1,0 +1,14 @@
+fn fail(code: i64) -> Result<bool, i64> {
+  return Err::<bool, i64>(code);
+}
+
+fn succeed() -> Result<bool, i64> {
+  return Ok::<bool, i64>(true);
+}
+
+fn status(r: Result<bool, i64>) -> i64 {
+  match r {
+    Ok(v) => { if v { return 1; } return 0; }
+    Err(e) => { return e; }
+  }
+}

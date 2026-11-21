@@ -27,7 +27,7 @@ use crate::ast::*;
 use crate::diagnostic::{plain_line, PruvError};
 use crate::foreign::is_catalog;
 use crate::gtype::{
-    bind_args, decl_owner, encode, fn_owner, format_type, is_g3_key, mk_array, mk_option, mk_result, spec_fn_stem,
+    bind_args, decl_owner, encode, fn_owner, format_type, is_g3_key, mk_array, mk_option, mk_result_with_error, spec_fn_stem,
     spec_type_stem, substitute, GType, Mapping, ParamId,
 };
 use crate::modules::{encode_name, encode_stem, ident_key, safe_type, G4};
@@ -108,7 +108,10 @@ fn meas_with(t: &GType, pm: &HashMap<ParamId, Meas>) -> Meas {
         }
         return Meas { depth: 1, nodes: 1, kind, args: false };
     }
-    let ms: Vec<Meas> = t.args.iter().map(|a| meas_with(a, pm)).collect();
+    let mut ms: Vec<Meas> = t.args.iter().map(|a| meas_with(a, pm)).collect();
+    if t.name == "result" && ms.len() == 2 && ms[1].kind == 1 {
+        ms.pop();
+    }
     let depth = 1 + ms.iter().map(|m| m.depth).max().unwrap_or(0);
     let nodes = ms.iter().fold(1u64, |s, m| s.saturating_add(m.nodes));
     if ms.len() == 1 {
@@ -338,7 +341,12 @@ impl<'a> Mono<'a> {
         if x.args.is_empty() {
             return put(parts, size, limit, &format_type(x));
         }
-        if x.args.len() == 1 {
+        let args = if x.name == "result" && x.args.len() == 2 && self.meas(&x.args[1]).kind == 1 {
+            &x.args[..1]
+        } else {
+            &x.args
+        };
+        if args.len() == 1 {
             let k = self.meas(&x.args[0]).kind;
             let leaf = match (x.name.as_str(), k) {
                 ("option", 1) => Some("Option<i64>"),
@@ -363,7 +371,7 @@ impl<'a> Mono<'a> {
             other => other,
         };
         put(parts, size, limit, &format!("{}<", shown))?;
-        for (i, a) in x.args.iter().enumerate() {
+        for (i, a) in args.iter().enumerate() {
             if i > 0 {
                 put(parts, size, limit, ", ")?;
             }
@@ -443,7 +451,14 @@ impl<'a> Mono<'a> {
         match c.name.as_str() {
             "array" => Ok(mk_array(self.lower(&c.args[0])?)),
             "option" => Ok(mk_option(self.lower(&c.args[0])?)),
-            "result" => Ok(mk_result(self.lower(&c.args[0])?)),
+            "result" => {
+                let x = self.lower(&c.args[0])?;
+                let e = match c.result_error() {
+                    Some(e) => self.lower(e)?,
+                    None => GType::i64(),
+                };
+                Ok(mk_result_with_error(x, e))
+            }
             // G6: Vec<T> / HashMap<K, V> keep their name, the arguments are lowered
             "vec" | "hashmap" => {
                 let mut args = Vec::with_capacity(c.args.len());

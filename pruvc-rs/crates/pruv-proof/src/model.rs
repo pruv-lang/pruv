@@ -10,7 +10,7 @@
 //! - G3 A2 instances (Option<X>, Result<X>, D<..>) are built lazily, one datatype per complete structural type, named
 //!   `m{SEQ}g{N}!` + format_type(ty); N counts the instances of the whole program in order of first construction (Python keeps one
 //!   Model for all functions, so the number is kept in a per-SEQ registry that outlives the per-function Rust `Model`).
-//!   Option<X>: `tag+Some(tag+Some.val)`, `tag+None`; Result<X>: `tag+Ok(tag+Ok.val)`, `tag+Err(tag+Err.val: Int)`;
+//!   Option<X>: `tag+Some(tag+Some.val)`, `tag+None`; Result<X, E>: `tag+Ok(tag+Ok.val)`, `tag+Err(tag+Err.val)`;
 //!   struct/enum as for non-generic ones, with the tag above.
 //! - A type parameter of a function is the uninterpreted sort `g3!<function declaration index>!T<i>`.
 //! - SEQ (`_MODEL_SEQ`) increases by 1 each time a `Model` is created in the process (here, the thread). Python creates
@@ -958,7 +958,7 @@ impl Model {
     }
 
     /// verify.py `Model.weight`: size weight of a field value `t` of type `fty` (None = always 0): nominal values count their
-    /// own size, Some/Ok payloads count their payload, everything else is 0.
+    /// own size, constructors count their active payload, everything else is 0.
     pub fn weight(&self, fty: &Ty, t: &Ast) -> Result<Option<Ast>, String> {
         let early = matches!(fty, Ty::Param(_) | Ty::I64 | Ty::Bool | Ty::Opt | Ty::Res);
         if early || Model::is_buf(fty) || fty.coll().is_some() {
@@ -973,7 +973,18 @@ impl Model {
             if g.name == "result" {
                 let o = self.res(Some(fty))?;
                 let w = self.weight(&Ty::from_gtype(&g.args[0]), &o.oval.apply1(t))?;
-                return Ok(w.map(|w| self.z.ite(&o.is_ok.apply1(t), &w, &self.z.int(0))));
+                let err_weight = match g.result_error() {
+                    Some(e) => self.weight(&Ty::from_gtype(e), &o.eval.apply1(t))?,
+                    None => None,
+                };
+                return Ok(match (w, err_weight) {
+                    (None, None) => None,
+                    (w, e) => Some(self.z.ite(
+                        &o.is_ok.apply1(t),
+                        &w.unwrap_or_else(|| self.z.int(0)),
+                        &e.unwrap_or_else(|| self.z.int(0)),
+                    )),
+                });
             }
         }
         if self.nominal_kind(fty).is_some() {
@@ -1178,13 +1189,17 @@ impl Model {
             st.short.insert(format!("{}None", tag), "None");
         } else if g.name == "result" {
             let ps = self.try_sort_of(&Ty::from_gtype(&g.args[0]))?;
+            let es = match g.result_error() {
+                Some(e) => self.try_sort_of(&Ty::from_gtype(e))?,
+                None => self.int_sort.clone(),
+            };
             let spec = DtSpec {
                 name: dtname,
                 ctors: vec![
                     DtCtorSpec { name: format!("{}Ok", tag), fields: vec![(format!("{}Ok.val", tag), ps)] },
                     DtCtorSpec {
                         name: format!("{}Err", tag),
-                        fields: vec![(format!("{}Err.val", tag), self.int_sort.clone())],
+                        fields: vec![(format!("{}Err.val", tag), es)],
                     },
                 ],
             };
@@ -1321,8 +1336,7 @@ impl Model {
         }
     }
 
-    /// G3 (verify.py `Model.wf_trivial`): true when `wf(ty, v)` is None for every v (no i64 leaf and no Result
-    /// error code inside). Cached per instance type, so the check is linear in the size of the type.
+    /// True when `wf(ty, v)` is None for every v. Cached per instance type.
     pub fn wf_trivial(&self, ty: &Ty) -> Result<bool, String> {
         let key = match ty {
             Ty::Inst(g) => Some(g.clone()),
@@ -1336,7 +1350,10 @@ impl Model {
         let r = match ty {
             Ty::I64 | Ty::Opt | Ty::Res => false,
             Ty::Param(_) => true,
-            Ty::Inst(g) if g.name == "result" => false,
+            Ty::Inst(g) if g.name == "result" => match g.result_error() {
+                Some(e) => self.wf_trivial(&Ty::from_gtype(&g.args[0]))? && self.wf_trivial(&Ty::from_gtype(e))?,
+                None => false,
+            },
             Ty::Inst(g) if g.name == "option" => self.wf_trivial(&Ty::from_gtype(&g.args[0]))?,
             // G9 A1: a recursive type has the wf_D definition (never trivially true here)
             Ty::User(n) if self.scc_of.contains_key(n) => false,
