@@ -26,7 +26,7 @@ pub fn index_begin(inout progress: [i64], input: [i64]) -> [i64] ! alloc
   return crate::entry_api::index_begin(inout progress, input);
 }
 
-pub fn index_step(inout progress: [i64], prev: [i64], emitted: [i64], completion: [i64]) -> [i64] ! alloc
+pub fn index_step(inout progress: [i64], input: [i64], prev: [i64], emitted: [i64], completion: [i64]) -> [i64] ! alloc
 {
-  return crate::entry_api::index_step(inout progress, prev, emitted, completion);
+  return crate::entry_api::index_step(inout progress, input, prev, emitted, completion);
 }

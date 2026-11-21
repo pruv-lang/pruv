@@ -54,6 +54,8 @@ fn tamper(prev: &[i64], t: &Value) -> Vec<i64> {
     let b = sec_bounds(prev);
     let mut secs: Vec<Vec<i64>> = b.iter().map(|&(s, e)| prev[s..e].to_vec()).collect();
     let mut st = secs[2].clone();
+    // The op 9 state holds no blob or log (the adapter keeps the input); its ops do not apply.
+    if st[1] == 9 { return prev.to_vec(); }
     let l = st[12] as usize;
     let mut head: Vec<i64> = st[..12].to_vec();
     let mut blob: Vec<i64> = st[14..14 + l].to_vec();

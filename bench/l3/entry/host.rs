@@ -33,7 +33,8 @@ const KEY_HOST_EXEC: &str = "wireEngine.account.folder.codexHostExecution";
 
 // The generated module as seen by the host; harness.rs implements it with the `sol` functions.
 pub trait Sol {
-    fn begin(&self, input: &[i64]) -> Rc<Vec<i64>>;
+    // The core may keep the input (op 9 keeps it for the step instead of copying it into the await).
+    fn begin(&self, input: Vec<i64>) -> Rc<Vec<i64>>;
     fn step(&self, prev: &[i64], completion: &[i64]) -> Vec<i64>;
 }
 
@@ -1950,8 +1951,7 @@ fn drive<S: Sol>(sol: &S, h: &mut Host, op: i64, op_id: i64, input: Vec<i64>, pr
             }
         }
     }
-    let mut out = sol.begin(&first);
-    drop(first);
+    let mut out = sol.begin(first);
     let mut calls = 0usize;
     let mut last_seq: i64 = 0;
     loop {
@@ -2258,7 +2258,7 @@ mod tests {
     // Mock core: op 5 answers immediately with a done/ok path "/x"; used to smoke the driver and JSON line.
     struct Mock;
     impl Sol for Mock {
-        fn begin(&self, input: &[i64]) -> Rc<Vec<i64>> {
+        fn begin(&self, input: Vec<i64>) -> Rc<Vec<i64>> {
             let mut e = Enc::new();
             e.rec.push(0);
             let vs = e.str_vs(&u16s("/x"));
