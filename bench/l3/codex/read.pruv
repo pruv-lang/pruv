@@ -153,7 +153,28 @@ pub fn replay(ht: [i64], hb: [u8], count: i64, base: i64, inout bad: [i64]) -> c
 {
   let mut st: [i64] = crate::turns::new_state();
   let mut sl: [i64] = crate::turns::new_slots();
-  let mut bk: crate::turns::Store = crate::turns::new_store();
+  // Size the store once from the held turns: each turn appends at most its clipped prompt and its clipped reply
+  // (reply plus the 4-byte pad), so reserve never has to grow or repack it (DB26, D-R09-1).
+  let mut need: i64 = 0;
+  let mut h: i64 = 0;
+  while h < count
+    invariant 0 <= h && h <= count && count <= 200 && len(ht) == 2000 && 0 <= need && need <= 65536 * h
+    decreases count - h
+  {
+    let mut a: i64 = ht[10 * h + 1];
+    let mut r: i64 = ht[10 * h + 3];
+    if a < 0 { a = 0; }
+    if a > 32768 { a = 32768; }
+    if r < 0 { r = 0; }
+    if r > 32764 { r = 32764; }
+    r = r + 4;
+    need = need + a + r;
+    h = h + 1;
+  }
+  let d0: [u8] = alloc(need, 0);
+  let o0: [i64] = alloc(200, -1);
+  let s0: [u8] = alloc(9600, 0);
+  let mut bk: crate::turns::Store = crate::turns::Store { data: move d0, off: move o0, stamp: move s0, end: 0 };
   let mut pad: [u8] = alloc(4, 0);
   pad[0] = 240;
   pad[1] = 144;

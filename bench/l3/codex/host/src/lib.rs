@@ -110,26 +110,36 @@ fn render_read(meta: &[i64], rows: &[i64], text: &[u8]) -> String {
     let kept = meta[3] as usize;
     let plan_items = if meta[11] < 0 { 0 } else { meta[11] as usize };
     assert!(meta[10] == 10 && rows.len() == 10 * kept + 2 * plan_items);
-    let mut turns = Vec::new();
+    // One output buffer sized from the text (escapes add a little), written in place: no per-turn strings, join or
+    // doubling copies, so the rendered result is held once (DB26).
+    let mut out = String::with_capacity(text.len() + text.len() / 16 + 160 * kept + 1024);
+    out.push_str("{\"turns\":[");
     for j in 0..kept {
         let b = 10 * j;
-        let mut s = String::from("{");
-        s.push_str(&format!("\"prompt\":{}", q(text_ref(rows, text, b).expect("prompt"))));
-        s.push_str(&format!(",\"reply\":{}", q(text_ref(rows, text, b + 2).expect("reply"))));
-        s.push_str(&format!(",\"tools\":{}", rows[b + 8]));
+        if j != 0 {
+            out.push(',');
+        }
+        out.push_str("{\"prompt\":");
+        out.push_str(&q(text_ref(rows, text, b).expect("prompt")));
+        out.push_str(",\"reply\":");
+        out.push_str(&q(text_ref(rows, text, b + 2).expect("reply")));
+        out.push_str(",\"tools\":");
+        out.push_str(&rows[b + 8].to_string());
         if let Some(c) = text_ref(rows, text, b + 4) {
-            s.push_str(&format!(",\"createdAt\":{}", q(c)));
+            out.push_str(",\"createdAt\":");
+            out.push_str(&q(c));
         }
         if let Some(c) = text_ref(rows, text, b + 6) {
-            s.push_str(&format!(",\"completedAt\":{}", q(c)));
+            out.push_str(",\"completedAt\":");
+            out.push_str(&q(c));
         }
         if rows[b + 9] == 1 {
-            s.push_str(",\"clipped\":true");
+            out.push_str(",\"clipped\":true");
         }
-        s.push('}');
-        turns.push(s);
+        out.push('}');
     }
-    let mut out = format!("{{\"turns\":[{}],\"omittedBefore\":{}", turns.join(","), if meta[2] == 1 { "true" } else { "false" });
+    out.push_str("],\"omittedBefore\":");
+    out.push_str(if meta[2] == 1 { "true" } else { "false" });
     if let Some(m) = text_ref(meta, text, 6) {
         out.push_str(&format!(",\"model\":{}", q(m)));
     }
