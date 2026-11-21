@@ -320,6 +320,7 @@ struct Checker {
     takes: Takes,
     /// Location of the field move allowed in the current field assignment.
     field_move: Option<(i64, i64)>,
+    array_replace: Option<String>,
     collection_records: std::cell::RefCell<HashSet<String>>,
     nested_records: HashSet<String>,
     holder_records: HashSet<String>,
@@ -467,6 +468,106 @@ pub(crate) fn field_place(mut e: &Expr) -> (&Expr, Vec<String>) {
     }
     path.reverse();
     (e, path)
+}
+
+/// Exact place identity, independent of source positions and type annotations.
+pub(crate) fn same_place(a: &Expr, b: &Expr) -> bool {
+    let (ar, ap) = field_place(a);
+    let (br, bp) = field_place(b);
+    matches!((ar, br), (Expr::Var(a), Expr::Var(b)) if a.name == b.name) && ap == bp
+}
+
+pub fn walk_assignments(stmts: &[Stmt], visit: &mut impl FnMut(&str, &[String])) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Assign(a) => visit(&a.name, &[]),
+            Stmt::FieldAssign(a) => visit(&a.name, &a.fields),
+            Stmt::If(s) => {
+                walk_assignments(&s.then, visit);
+                walk_assignments(&s.els, visit);
+            }
+            Stmt::While(s) => walk_assignments(&s.body, visit),
+            Stmt::ForMap(s) => walk_assignments(&s.body, visit),
+            Stmt::Match(s) => {
+                for arm in &s.arms {
+                    walk_assignments(&arm.body, visit);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+pub fn vec_resize_builtin(name: &str) -> bool {
+    matches!(name, "vec_push" | "vec_pop" | "vec_clear" | "vec_extend_from_slice")
+}
+
+/// Array and vector inout parameters whose lengths may change, including through forwarding.
+pub fn resize_params(prog: &Program) -> HashSet<(String, usize)> {
+    use crate::foreign_shim::{walk_stmts, Node};
+    let mut resizes = HashSet::new();
+    let mut forwarded = HashMap::<_, Vec<_>>::new();
+    for f in &prog.functions {
+        let params: HashMap<_, _> = f.params.iter().enumerate()
+            .filter(|(_, p)| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || GType::from_key(&p.ty).name == "vec"))
+            .map(|(i, p)| (p.name.as_str(), i))
+            .collect();
+        if params.is_empty() { continue; }
+        walk_assignments(&f.body, &mut |name, path| {
+            if path.is_empty() {
+                if let Some(&i) = params.get(name) {
+                    resizes.insert((f.name.clone(), i));
+                }
+            }
+        });
+        walk_stmts(&f.body, &mut |node| {
+            let Node::Expr(Expr::Call(call)) = node else { return; };
+            for (i, arg) in call.args.iter().enumerate() {
+                let Expr::InoutArg(arg) = arg else { continue; };
+                let Expr::Var(var) = arg.expr.as_ref() else { continue; };
+                let Some(&index) = params.get(var.name.as_str()) else { continue; };
+                let source = (f.name.clone(), index);
+                if vec_resize_builtin(&call.name) {
+                    resizes.insert(source);
+                } else {
+                    forwarded.entry((call.name.clone(), i)).or_default().push(source);
+                }
+            }
+        });
+    }
+    let mut pending: Vec<_> = resizes.iter().cloned().collect();
+    while let Some(target) = pending.pop() {
+        for source in forwarded.get(&target).into_iter().flatten() {
+            if resizes.insert(source.clone()) {
+                pending.push(source.clone());
+            }
+        }
+    }
+    resizes
+}
+
+/// Bare array arguments to resizing functions need owned, addressable storage.
+pub(crate) fn resize_slot_names(f: &Function, resizes: &HashSet<(String, usize)>) -> HashSet<String> {
+    use crate::foreign_shim::{walk_stmts, Node};
+    let mut resize_slots = HashSet::new();
+    if !resizes.is_empty() {
+        walk_stmts(&f.body, &mut |node| {
+            let Node::Expr(Expr::Call(call)) = node else { return; };
+            for (i, arg) in call.args.iter().enumerate() {
+                if let Expr::InoutArg(arg) = arg {
+                    if !arg.ty.as_deref().is_some_and(crate::typeinfo::is_array_name)
+                        || !resizes.contains(&(call.name.clone(), i))
+                    {
+                        continue;
+                    }
+                    if let Expr::Var(v) = &*arg.expr {
+                        resize_slots.insert(v.name.clone());
+                    }
+                }
+            }
+        });
+    }
+    resize_slots
 }
 
 pub(crate) fn mentions(e: &Expr, name: &str) -> bool {
@@ -636,6 +737,7 @@ impl Checker {
             externs: externs.to_vec(),
             takes,
             field_move: None,
+            array_replace: None,
             collection_records: Default::default(),
             nested_records: HashSet::new(),
             holder_records: HashSet::new(),
@@ -2012,6 +2114,7 @@ impl Checker {
             }
             if !changed { break; }
         }
+        let resizes = resize_params(prog);
         for (i, f) in prog.functions.iter().enumerate() {
             if !self.host_entry.get(i).copied().unwrap_or(false) {
                 continue;
@@ -2019,6 +2122,13 @@ impl Checker {
             if let Some(p) = f.params.iter().find(|p| p.mode_pos.is_some() && matches!(p.ty.as_str(), "i64" | "bool")) {
                 return Err(terr(f.line, f.col, "entry_signature",
                     format!("host entry {} cannot take scalar inout parameter {}", f.name, p.name), ""));
+            }
+            for (j, p) in f.params.iter().enumerate() {
+                if GType::from_key(&p.ty).is_array() && resizes.contains(&(f.name.clone(), j)) {
+                    let (line, col) = p.mode_pos.unwrap_or((f.line, f.col));
+                    return Err(terr(line, col, "entry_signature",
+                        format!("host entry {} cannot reassign inout array parameter {}", f.name, p.name), ""));
+                }
             }
             let rust_state = f.params.first().is_some_and(|p| p.mode_pos.is_some() && rust_records.contains(&p.ty));
             let mut sig: Vec<(String, &str)> = f.params.iter().enumerate().filter(|(i, p)| {
@@ -2292,7 +2402,27 @@ impl Checker {
             }
         }
         let aggregates = self.decls.keys().filter(|n| self.owned_aggregate(&GType::from_key(n))).cloned().collect();
-        check_ownership(f, &self.takes, &aggregates)?; // Check ownership and liveness after typing.
+        // For ownership analysis a replaced array starts live, like a take
+        // parameter. Only the RHS that restores it may consume it.
+        let mut moved = HashSet::new();
+        if f.params.iter().any(|p| p.mode_pos.is_some() && GType::from_key(&p.ty).is_array()) {
+            crate::foreign_shim::walk_stmts(&f.body, &mut |node| {
+                if let crate::foreign_shim::Node::Expr(Expr::Move(m)) = node {
+                    if m.fields.is_empty() {
+                        moved.insert(m.name.clone());
+                    }
+                }
+            });
+        }
+        if f.params.iter().any(|p| p.mode_pos.is_some() && GType::from_key(&p.ty).is_array() && moved.contains(&p.name)) {
+            let mut owned = f.clone();
+            for p in &mut owned.params {
+                p.take |= p.mode_pos.is_some() && GType::from_key(&p.ty).is_array() && moved.contains(&p.name);
+            }
+            check_ownership(&owned, &self.takes, &aggregates)?;
+        } else {
+            check_ownership(f, &self.takes, &aggregates)?;
+        }
         Ok(())
     }
 
@@ -2490,7 +2620,8 @@ impl Checker {
                     return Err(terr(s.line, s.col, "type_mismatch",
                         "dereference requires a mutable scalar or record collection binder", ""));
                 }
-                if !(v.mutable || scalar_binder || record_binder || scalar_inout) {
+                let array_inout = v.kind == "inout" && v.ty.is_array();
+                if !(v.mutable || scalar_binder || record_binder || scalar_inout || array_inout) {
                     if matches!(v.kind, "inout" | "map_inout") {
                         // G5 A0: element stores are allowed, replacing the binding is not
                         return Err(terr(
@@ -2513,7 +2644,10 @@ impl Checker {
                 }
                 self.boundary = boundary_of(&s.value);
                 self.want_alloc(&s.value, &v.ty);
-                self.expect(&mut s.value, &v.ty, scope, false, None)?;
+                self.array_replace = array_inout.then(|| s.name.clone());
+                let checked = self.expect(&mut s.value, &v.ty, scope, false, None);
+                self.array_replace = None;
+                checked?;
                 if record_binder && !matches!(&s.value, Expr::StructLit(_) | Expr::Call(_))
                     && !matches!(&s.value, Expr::Move(m) if m.fields.is_empty()
                         && scope.get(&m.name).is_some_and(|entry| matches!(entry.kind, "local" | "take")))
@@ -2665,6 +2799,7 @@ impl Checker {
                         });
                     }
                 }
+                self.want_alloc(&s.value, &cur);
                 let checked = self.expect(&mut s.value, &cur, scope, false, None);
                 self.field_move = saved;
                 checked?;
@@ -3628,7 +3763,9 @@ impl Checker {
                     ));
                 }
                 let entry = self.lookup(x.line, x.col, &x.name, scope, &[])?;
-                if entry.ty.is_array() && !matches!(entry.kind, "local" | "take") {
+                if entry.ty.is_array() && !matches!(entry.kind, "local" | "take")
+                    && self.array_replace.as_deref() != Some(x.name.as_str())
+                {
                     if matches!(entry.kind, "param" | "inout") {
                         return Err(terr(x.line, x.col, "array_alias",
                             format!("parameter {} is a borrowed array and cannot be moved", x.name),
@@ -4384,6 +4521,7 @@ impl Checker {
         }
         let (aline, acol) = (e.args[0].line(), e.args[0].col());
         let name: String;
+        let path: Vec<String>;
         let dty: GType;
         {
             let arg: &mut InoutArg = match &mut e.args[0] {
@@ -4399,8 +4537,9 @@ impl Checker {
                     ))
                 }
             };
-            let op: &mut Var = match &mut *arg.expr {
-                Expr::Var(v) => v,
+            let (root, fields) = field_place(&arg.expr);
+            let op = match root {
+                Expr::Var(v) if !within || fields.is_empty() => v,
                 _ => {
                     return Err(terr(
                         aline,
@@ -4411,7 +4550,12 @@ impl Checker {
                     ))
                 }
             };
-            let v = self.lookup(op.line, op.col, &op.name, scope, &[])?;
+            name = op.name.clone();
+            path = fields;
+            if !path.is_empty() {
+                self.check_iteration_borrow(aline, acol, &name, &path)?;
+            }
+            let v = self.lookup(op.line, op.col, &name, scope, &path)?;
             if v.kind == "local" && !v.mutable {
                 return Err(terr(
                     aline,
@@ -4421,7 +4565,7 @@ impl Checker {
                     "declare it with `let mut`",
                 ));
             }
-            if v.kind != "inout" && v.kind != "local" {
+            if !(matches!(v.kind, "inout" | "local") || v.kind == "map_inout" && !path.is_empty()) {
                 return Err(terr(
                     aline,
                     acol,
@@ -4434,28 +4578,27 @@ impl Checker {
                     format!("declare the parameter `inout {}: ...`, or copy into a `let mut` local", op.name),
                 ));
             }
-            if v.ty != GType::array() && v.ty != GType::array_u8() {
+            dty = if path.is_empty() { v.ty } else { self.expr(&mut arg.expr, scope, c)? };
+            if dty != GType::array() && dty != GType::array_u8() {
                 return Err(terr(
                     aline,
                     acol,
                     "type_mismatch",
-                    format!("expected {} or {}, found {}", tn(&GType::array()), tn(&GType::array_u8()), tn(&v.ty)),
+                    format!("expected {} or {}, found {}", tn(&GType::array()), tn(&GType::array_u8()), tn(&dty)),
                     "",
                 ));
             }
-            if self.active_roots.iter().any(|(root, _)| *root == op.name) || self.match_path_held(&op.name, &[]) {
+            if self.active_roots.iter().any(|(root, _)| *root == name) || self.match_path_held(&name, &path) {
                 return Err(terr(
                     aline,
                     acol,
                     "recursive_borrow",
-                    format!("cannot pass {} inout while a match on it is active", op.name),
+                    format!("cannot pass {} inout while a match on it is active", name),
                     "finish the match before the call",
                 ));
             }
-            op.ty = Some(v.ty.to_key());
-            arg.ty = Some(v.ty.to_key());
-            name = op.name.clone();
-            dty = v.ty.clone();
+            set_ty(&mut arg.expr, &dty);
+            arg.ty = Some(dty.to_key());
         }
         self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
         self.expect(&mut e.args[2], &if within { i64t() } else { dty }, scope, c, None)?;
@@ -4463,7 +4606,18 @@ impl Checker {
         if !within {
             self.expect(&mut e.args[4], &i64t(), scope, c, None)?;
         }
-        if e.args[1..].iter().any(|x| mentions(x, &name)) {
+        let Expr::InoutArg(dst) = &e.args[0] else { unreachable!() };
+        if e.args.iter().enumerate().skip(1).any(|(i, arg)| {
+            if !within && i == 2 && same_place(&dst.expr, arg) {
+                return false;
+            }
+            if path.is_empty() {
+                return mentions(arg, &name);
+            }
+            let mut places = Vec::new();
+            place_mentions(arg, &mut places);
+            places.iter().any(|(root, other)| *root == name && paths_overlap(&path, other))
+        }) {
             return Err(terr(
                 aline,
                 acol,
@@ -5612,7 +5766,8 @@ mod tests {
         assert_eq!(e.code, "arity");
         let e = run("fn f(d: [u8], s: [u8]) -> () { copy_range(d, 0, s, 0, 1); }").unwrap_err();
         assert_eq!(e.code, "inout_argument");
-        let e = run("fn f(inout a: [u8]) -> () { copy_range(inout a, 0, a, 4, 2); }").unwrap_err();
+        assert!(run("fn f(inout a: [u8]) -> () { copy_range(inout a, 0, a, 4, 2); }").is_ok());
+        let e = run("fn f(inout a: [u8]) -> () ! alloc { copy_range(inout a, 0, copy(a), 4, 2); }").unwrap_err();
         assert_eq!(e.code, "inout_alias");
         let e = run("fn f(inout a: [i64], s: [i64]) -> () { copy_range(inout a, len(a) - 2, s, 0, 2); }").unwrap_err();
         assert_eq!(e.code, "inout_alias");

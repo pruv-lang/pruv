@@ -1,0 +1,12 @@
+struct S { n: i64, a: [i64] }
+
+fn grow(inout s: S) -> () ! alloc
+{
+  s.a = alloc(5, 0);
+}
+
+fn run() -> () ! io, alloc {
+  let mut s: S = S { n: 0, a: alloc(3, 0) };
+  grow(inout s);
+  print(s.a[2]);
+}

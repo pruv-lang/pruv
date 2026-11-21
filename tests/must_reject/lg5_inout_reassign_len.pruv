@@ -1,0 +1,10 @@
+fn reset(inout a: [u8]) -> () ! alloc
+{
+  a = alloc(2, 0);
+}
+
+fn run() -> () ! io, alloc {
+  let mut buf: [u8] = alloc(6, 0);
+  reset(inout buf);
+  print(buf[4]);
+}

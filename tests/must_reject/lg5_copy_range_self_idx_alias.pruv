@@ -1,0 +1,4 @@
+fn run() -> () ! alloc {
+  let mut a: [i64] = alloc(8, 0);
+  copy_range(inout a, 0, a, len(a) - 2, 2);
+}

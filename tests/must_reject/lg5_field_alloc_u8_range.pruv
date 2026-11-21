@@ -1,0 +1,7 @@
+struct B { n: i64, a: [u8] }
+
+fn run() -> () ! alloc {
+  let b: [u8] = alloc(1, 0);
+  let mut d: B = B { n: 0, a: move b };
+  d.a = alloc(3, 300);
+}

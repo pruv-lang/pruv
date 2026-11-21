@@ -1,0 +1,7 @@
+// LG5: a host entry (explicit mode) cannot reassign an inout array parameter as a whole
+mod util;
+
+pub fn reset(inout a: [u8]) -> () ! alloc
+{
+  a = alloc(2, 0);
+}

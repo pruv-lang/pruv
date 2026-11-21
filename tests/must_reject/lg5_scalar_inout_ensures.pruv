@@ -1,0 +1,13 @@
+fn bump(inout x: i64) -> ()
+  requires 0 <= x && x <= 100
+  ensures x >= 0
+{
+  x = x + 1;
+}
+
+fn run() -> () ! io, alloc {
+  let a: [i64] = alloc(4, 0);
+  let mut x: i64 = 1;
+  bump(inout x);
+  print(a[x]);
+}

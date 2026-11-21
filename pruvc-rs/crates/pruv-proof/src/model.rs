@@ -1381,6 +1381,40 @@ impl Model {
         }
     }
 
+    /// Frame only lengths of array fields reached through struct fields.
+    pub fn array_field_len_frame(
+        &self, ty: &Ty, before: &Ast, after: &Ast,
+        changed: Option<&std::collections::BTreeSet<Vec<String>>>,
+    ) -> Result<Vec<Ast>, String> {
+        fn visit(
+            m: &Model, ty: &Ty, before: &Ast, after: &Ast, path: &mut Vec<String>,
+            changed: Option<&std::collections::BTreeSet<Vec<String>>>, out: &mut Vec<Ast>,
+        ) -> Result<(), String> {
+            if changed.is_some_and(|paths| paths.contains(path)) {
+                return Ok(());
+            }
+            if ty.is_array() {
+                let len = m.buf_entry(ty)?.len;
+                out.push(len.apply1(after).eq(&len.apply1(before)));
+            } else if matches!(m.nominal_kind(ty), Some(NomKind::Struct)) {
+                let access = m.struct_info(ty)?.accs;
+                for ((field, ft), acc) in m.fields_of(ty, None)?.into_iter().zip(access) {
+                    if !ft.is_array() && !matches!(m.nominal_kind(&ft), Some(NomKind::Struct)) {
+                        continue;
+                    }
+                    path.push(field.name);
+                    visit(m, &ft, &acc.apply1(before), &acc.apply1(after), path, changed, out)?;
+                    path.pop();
+                }
+            }
+            Ok(())
+        }
+
+        let mut frame = Vec::new();
+        visit(self, ty, before, after, &mut Vec::new(), changed, &mut frame)?;
+        Ok(frame)
+    }
+
     /// `TypeTable.field_index(ty, name, variant)`.
     pub fn field_index_of(&self, ty: &Ty, field: &str, variant: Option<&str>) -> Result<usize, String> {
         let fs = self.fields_of(ty, variant)?;

@@ -1,0 +1,24 @@
+struct B { n: i64, a: [u8], b: [bool] }
+
+fn bit(x: bool) -> i64 {
+  if x { return 1; }
+  return 0;
+}
+
+fn run() -> () ! io, alloc {
+  let a0: [u8] = alloc(1, 0);
+  let b0: [bool] = alloc(1, false);
+  let mut d: B = B { n: 1, a: move a0, b: move b0 };
+  d.a = alloc(4, 200);
+  d.b = alloc(2, true);
+  d.a[1] = 7;
+  d.b[0] = false;
+  print(len(d.a));
+  print(d.a[0]);
+  print(d.a[1]);
+  print(d.a[3]);
+  print(len(d.b));
+  print(bit(d.b[0]));
+  print(bit(d.b[1]));
+  print(d.n);
+}

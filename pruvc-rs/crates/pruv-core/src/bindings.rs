@@ -282,8 +282,6 @@ fn struct_inout_abi_error_at(
             } else {
                 let kind = if f.params.iter().any(|p| p.mode_pos.is_some() && crate::gtype::key_is_collection(&p.ty)) {
                     "collection"
-                } else if f.params.iter().any(|p| p.mode_pos.is_some() && matches!(p.ty.as_str(), "i64" | "bool")) {
-                    "scalar"
                 } else if host {
                     "struct"
                 } else {

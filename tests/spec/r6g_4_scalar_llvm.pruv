@@ -1,2 +1,2 @@
-// spec: R-6g-4 reject
+// spec: R-6g-4 accept
 fn bump(inout n: i64) -> () { n = 1; }

@@ -48,6 +48,7 @@ from codegen import show
 from llvm_inline import llvm_inline
 from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str  # G2 B2: uses_str
 from typeinfo import field_place
+from check import array_resize_params, array_resize_args, same_place
 from typeinfo import is_collection, contains_collection, encode, is_scalar_vec, is_vec_slice_arg
 from foreign import CATALOG, CATALOG_CONTRACT_ONLY, first_g6_use, _owned_result, NET_OBSERVERS, ASYNC_OBSERVERS  # G6 A3, G6b, G10 net A3
 import foreign_shim  # G6 A3
@@ -703,6 +704,7 @@ class Slot:
 class Mod:
     def __init__(s, tt=None):
         s.tt = tt
+        s.array_resizes = set()
         s.strs = {}
         s.order = []
         s.uses_repr = False     # G3: the wrappers reject an invalid enum ordinal through pruv_panic_repr
@@ -784,6 +786,10 @@ def exports_abi(f, tt, explicit):
     return True
 
 
+def inout_slot_param(p):
+    return p.mode == "inout" and (is_agg(p.type) or p.type in (I64, BOOL) or getattr(p, "resizable", False))
+
+
 def ir_params(f, tt=None):
     """internal parameter list [(type, name)].  G9: an extended result is the leading `ptr %out` (output storage);
     an extended parameter is `ptr %p.NAME` to valid caller-owned storage (see sig_text for its attributes)."""
@@ -791,7 +797,7 @@ def ir_params(f, tt=None):
     if tt is not None and is_ext_t(tt, f.ret):
         out.append(("ptr", "%out"))
     for p in f.params:
-        if (tt is not None and is_ext_t(tt, p.type)) or (p.mode == "inout" and is_agg(p.type)):
+        if (tt is not None and is_ext_t(tt, p.type)) or inout_slot_param(p):
             out.append(("ptr", "%%p.%s" % mangle(p.name)))
             continue
         n = mangle(p.name)
@@ -814,7 +820,7 @@ def ir_params(f, tt=None):
 
 def sig_text(params, f):
     """Borrowed arrays and aggregates are readonly unless inout. Take arrays transfer the data pointer."""
-    mut = {"%%p.%s%s" % (mangle(p.name), ".a" if is_arr(p.type) else "")
+    mut = {"%%p.%s%s" % (mangle(p.name), ".a" if is_arr(p.type) and not inout_slot_param(p) else "")
            for p in f.params if p.mode == "inout"}
     take = {"%%p.%s.a" % mangle(p.name) for p in f.params if p.take and is_array(p.type)}
     return ", ".join("%s %s" % (("ptr noalias nocapture" if n in mut else "ptr noalias nocapture readonly")
@@ -846,6 +852,7 @@ class FnGen:
         s.cregions = []     # G9: constructor temporaries of the contract expression being evaluated, per region
         s.tt = m.tt
         s.bridge = False    # G6 A3: this function references @pruv_g6_bridge_v1
+        s.resize_args = array_resize_args(f, m.array_resizes) if f is not None and m.array_resizes else set()
 
     # ---------- emission ----------
     def ins(s, text):
@@ -912,7 +919,7 @@ class FnGen:
         return "\n".join(out) + "\n"
 
     # ---------- slots / scopes ----------
-    def new_slot(s, name, ty, prefix="l"):
+    def new_slot(s, name, ty, prefix="l", packed=False):
         kind = vkind(ty)
         base = "%%%s%d.%s" % (prefix, s.nslot, mangle(name))
         s.nslot += 1
@@ -928,6 +935,9 @@ class FnGen:
             s.allocas.append("store ptr null, ptr %s" % a)
             return Slot("coll", a, None, ty)
         if kind == "arr":
+            if packed:
+                s.allocas.append("%s = alloca %s" % (a, ARR))
+                return s.array_slot(a, ty)
             s.allocas.append("%s = alloca ptr" % a)
             s.allocas.append("%s = alloca i64" % b)
             sl = Slot("arr", a, b, elem_ty(ty))
@@ -940,6 +950,11 @@ class FnGen:
         s.allocas.append("%s = alloca i1" % a)
         s.allocas.append("%s = alloca i64" % b)
         return Slot("opt", a, b)
+
+    def array_slot(s, ptr, ty):
+        sl = Slot("arr", ptr, g9_gep(s, ARR, ptr, 1), elem_ty(ty))
+        sl.c = g9_gep(s, ARR, ptr, 2)
+        return sl
 
     def load(s, sl):
         if sl.k in ("i64", "i1"):
@@ -1034,21 +1049,14 @@ class FnGen:
             return s.spill(x)
         return s.spill(s.ev(e))
 
-    def inout_struct_ptr(s, e):
+    def inout_place_ptr(s, e):
         root, path = field_place(e)
         _, sl = s.lookup(root.name)
-        ptr, ty = sl.a, sl.ty
-        for field in path:
-            i = s.tt.field_index(ty, field)
-            ptr = g9_gep(s, lty(ty), ptr, i)
-            if s.fb(ty, None, field):
-                ptr = s.op("load ptr, ptr %s" % ptr)
-            ty = s.tt.fields(ty)[i].type
-        return ptr
+        return s.field_ptr_ty(sl, path)[0]
 
     def field_ptr_ty(s, sl, path):
         """LG4: (address of the field reached by `path` from the extended root slot sl, its declared type); a boxed
-        intermediate edge is loaded (as inout_struct_ptr does)"""
+        intermediate edge is loaded"""
         ptr, ty = sl.a, sl.ty
         for field in path:
             i = s.tt.field_index(ty, field)
@@ -1674,12 +1682,16 @@ class FnGen:
         owned = []
         for p in s.f.params:
             n = mangle(p.name)
-            if is_arr(p.type):
+            if getattr(p, "resizable", False):
+                names[p.name] = ("slot", s.array_slot("%%p.%s" % n, p.type))
+            elif p.mode == "inout" and p.type in (I64, BOOL):
+                names[p.name] = ("slot", Slot(vkind(p.type), "%%p.%s" % n))
+            elif is_arr(p.type):
                 v = V("arr", "%%p.%s.a" % n, "%%p.%s.n" % n, elem_ty(p.type),
                       layout=s.m.storage.layout_of(p), rng=s.m.storage.range_of(p),
                       c="%%p.%s.c" % n if p.take else None)
                 if p.take:
-                    sl = s.new_slot(p.name, p.type)
+                    sl = s.new_slot(p.name, p.type, packed=p.name in s.resize_args)
                     s.store(sl, v)
                     names[p.name] = ("slot", sl)
                     owned.append(sl)
@@ -1882,7 +1894,7 @@ class FnGen:
         s.end_temps()
 
     def stmt(s, st):
-        if isinstance(st, Let) and s.m.stack is not None and s.m.stack.contains(st):
+        if isinstance(st, Let) and s.m.stack is not None and s.m.stack.contains(st) and st.name not in s.resize_args:
             s.stack_let(st)
         elif isinstance(st, Let) and s.m.stack is not None and s.m.stack.lit(st) and not s.cost:
             # P3: a borrowed literal local binds the read-only global directly: no copy, never freed
@@ -1918,7 +1930,7 @@ class FnGen:
             v = s.ev(st.value, True)
             s.moving = set()
             s.take_let = set()
-            sl = s.new_slot(st.name, st.type)
+            sl = s.new_slot(st.name, st.type, packed=st.name in s.resize_args)
             s.store(sl, v)
             sc = s.scopes[-1]
             sc["names"][st.name] = ("slot", sl)
@@ -2145,7 +2157,13 @@ class FnGen:
             f = s.funcs[call.name]
             fields = []
             cost_args = []
-            for x in call.args:
+            for p, x in zip(f.params, call.args):
+                if isinstance(x, InoutArg) and inout_slot_param(p):
+                    ptr = s.inout_place_ptr(x.expr)
+                    fields.append(("ptr", ptr))
+                    if s.cost:
+                        cost_args.append("ptr %s" % ptr)
+                    continue
                 v = s.ev(x.expr if isinstance(x, InoutArg) else x)
                 if s.cost:
                     cost_args.extend(["ptr %s" % v.a, "i64 %s" % v.b] if v.k == "arr" else
@@ -2272,8 +2290,8 @@ class FnGen:
         if e.args[0].name in names:
             return None
         kind, sl = s.lookup(e.args[0].name)
-        if kind != "slot" or sl.k != "arr":
-            return None
+        if kind != "slot" or sl.k != "arr" or not s.owned_slot(sl):
+            return None  # LG5: a resizable inout parameter's slot is the caller's, so it is copied, not emptied
         return sl
 
     def word_ptr(s, a, i, nb):
@@ -2637,9 +2655,10 @@ class FnGen:
             return V("i64", s.op("%s i64 %s, %s" % (BIT_LLVM[n], x.a, y.a)))
         if n in ("copy_range", "copy_within"):
             within = n == "copy_within"
+            overlap = within or same_place(a[0].expr, a[2])
             dv = s.ev(a[0].expr)
             iv = s.ev(a[1])
-            sv = dv if within else s.ev(a[2])
+            sv = dv if overlap else s.ev(a[2])
             jv = s.ev(a[2] if within else a[3])
             cnt = s.ev(a[3] if within else a[4])
             if dv.k != "arr" or sv.k != "arr":
@@ -2669,10 +2688,10 @@ class FnGen:
             pd = s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (tyd, dv.a, iv.a))
             ps = s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (tys, sv.a, jv.a))
             nb = cnt.a if tyd == "i8" else s.op("mul nuw nsw i64 %s, 8" % cnt.a)
-            if within:
+            if overlap:
                 s.m.memmove = True
             s.ins("call void @llvm.%s.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)"
-                  % ("memmove" if within else "memcpy", pd, ps, nb))
+                  % ("memmove" if overlap else "memcpy", pd, ps, nb))
             return V("unit")
         if n == "eq_range":  # P17a: a[i..i+n] == b[j..j+n]; source order a, i, b, j, n
             av = s.ev(a[0])
@@ -2811,8 +2830,8 @@ class FnGen:
             return s.trusted_call(f, e, owned)
         args = []
         for p, x in zip(f.params, a):
-            if isinstance(x, InoutArg) and is_agg(p.type):
-                args.append("ptr %s" % s.inout_struct_ptr(x.expr))
+            if isinstance(x, InoutArg) and inout_slot_param(p):
+                args.append("ptr %s" % s.inout_place_ptr(x.expr))
                 continue
             if s.is_ext(p.type):   # G9 A3: a read argument is a pointer to valid caller-owned storage
                 args.append("ptr %s" % s.view_ptr(x))
@@ -2985,7 +3004,12 @@ class FnGen:
         s.cparams = set(p.name for p in s.f.params)
         for p in s.f.params:
             n = mangle(p.name)
-            if is_arr(p.type):
+            if getattr(p, "resizable", False):
+                s.cenv[p.name] = s.load(s.array_slot("%%p.%s" % n, p.type))
+            elif p.mode == "inout" and p.type in (I64, BOOL):
+                v = s.load(Slot(vkind(p.type), "%%p.%s" % n))
+                s.cenv[p.name] = s.to_c(v, p.type)
+            elif is_arr(p.type):
                 s.cenv[p.name] = V("arr", "%%p.%s.a" % n, "%%p.%s.n" % n, elem_ty(p.type), layout=s.m.storage.layout_of(p), rng=s.m.storage.range_of(p))
             elif p.type == BOOL:
                 s.cenv[p.name] = V("i1", "%%p.%s" % n)
@@ -5550,13 +5574,12 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
             raise PruvError("codegen", f.line, f.col, "unsupported_type",
                             "%s has a take array parameter, which needs the Rust backend" % getattr(f, "disp", f.name),
                             "use the Rust backend", file=getattr(f, "file", None))
-        if any(p.mode == "inout" and not is_array(p.type) and (f.host_entry or not is_agg(p.type))
+        if any(p.mode == "inout" and not is_array(p.type) and p.type not in (I64, BOOL)
+               and (f.host_entry or not is_agg(p.type))
                for p in f.params):
             kind = "struct"
             if any(p.mode == "inout" and is_collection(p.type) for p in f.params):
                 kind = "collection"
-            elif any(p.mode == "inout" and p.type in (I64, BOOL) for p in f.params):
-                kind = "scalar"
             raise PruvError("codegen", f.line, f.col, "unsupported_type",
                             "%s has an inout %s parameter, which needs the Rust backend" %
                             (getattr(f, "disp", f.name), kind),
@@ -5607,6 +5630,11 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         raise RuntimeError("unsupported_type: %s" % g2err.message)
     tt = new_tt(prog)   # G9: SCC-condensed order and the extended / boxed metadata (identical to TypeTable otherwise)
     m = Mod(tt)
+    m.array_resizes = array_resize_params(prog)
+    for f in prog.functions:
+        for i, p in enumerate(f.params):
+            if (f.name, i) in m.array_resizes:
+                p.resizable = True
     m.sym_pre = sym_prefix(getattr(prog, "pkg_name", None))
     m.storage = plan_storage(prog, verified)
     from stack import plan_stack

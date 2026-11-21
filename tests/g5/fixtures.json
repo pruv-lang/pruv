@@ -34,7 +34,6 @@
     {"name": "g5_call_place", "root": "tests/must_reject/g5_call_place.pruv", "stage": "type", "code": "inout_argument", "mode": "static"},
     {"name": "g5_element_type_mismatch", "root": "tests/must_reject/g5_element_type_mismatch.pruv", "stage": "type", "code": "inout_argument", "mode": "static"},
     {"name": "g5_read_param_place", "root": "tests/must_reject/g5_read_param_place.pruv", "stage": "type", "code": "inout_argument", "mode": "static"},
-    {"name": "g5_whole_param_assign", "root": "tests/must_reject/g5_whole_param_assign.pruv", "stage": "type", "code": "immutable", "mode": "static"},
     {"name": "g5_escape_return", "root": "tests/must_reject/g5_escape_return.pruv", "stage": "type", "code": "array_alias", "mode": "static"},
     {"name": "g5_escape_store", "root": "tests/must_reject/g5_escape_store.pruv", "stage": "type", "code": "array_alias", "mode": "static"},
     {"name": "g5_alias_two_marked", "root": "tests/must_reject/g5_alias_two_marked.pruv", "stage": "type", "code": "inout_alias", "mode": "static"},

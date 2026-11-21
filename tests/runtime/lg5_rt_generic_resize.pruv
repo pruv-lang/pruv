@@ -1,0 +1,19 @@
+// LG5: generic resizable inout arrays in a par group take each branch's element type and keep the length bounds
+fn regrow<T: Element>(inout a: [T], v: T) -> () ! alloc
+  requires len(a) <= 1000
+  ensures len(a) == len(old(a)) + 1
+{
+  a = alloc(len(a) + 1, v);
+}
+
+fn run() -> () ! io, alloc {
+  let mut b: [bool] = alloc(2, false);
+  let mut c: [i64] = alloc(2, 0);
+  par {
+    regrow::<bool>(inout b, true);
+    regrow::<i64>(inout c, 5);
+  }
+  print(len(b));
+  print(c[2]);
+  print(len(c) + 1);
+}

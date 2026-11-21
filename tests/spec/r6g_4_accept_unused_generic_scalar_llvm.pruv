@@ -1,2 +1,2 @@
-// spec: R-6g-4 reject
+// spec: R-6g-4 accept
 fn unused<T>(inout n: i64, x: T) -> () { n = 1; }

@@ -425,10 +425,10 @@ def g4_reject_jobs():
     expected stage/code come from the project's root.json."""
     jobs = []
     P = _g4()
-    # G5/G8, L3 visibility and LG3 LLVM ABI rejections follow the same convention.
+    # G5/G8, L3 visibility, LG3 LLVM ABI and LG5 entry rejections follow the same convention.
     for f in sorted(glob.glob(os.path.join(ROOT, "tests/must_reject/g[458]_*/root.pruv")) +
                     glob.glob(os.path.join(ROOT, "tests/must_reject/l3_*/root.pruv")) +
-                    glob.glob(os.path.join(ROOT, "tests/must_reject/lg3_*/root.pruv"))):
+                    glob.glob(os.path.join(ROOT, "tests/must_reject/lg[35]_*/root.pruv"))):
         rel = rel_sample(f)
         name = "must_reject/" + rel[len("tests/must_reject/"):]
         proj = os.path.basename(os.path.dirname(f))
