@@ -107,20 +107,22 @@ fn index_begin_checked(inout progress: [i64], blob: [i64]) -> [i64] ! alloc
   if 30 + pl + lb + lt > 16777216 { return bad_pkt(blob, 2); }
   if pool + pl > lb { return bad_pkt(blob, 1); }
   // Count the text units so the compact pool can be written into the await directly.
+  // Ids may share one range; once the sum passes the input pool, copy that pool once instead.
   let mut lp: i64 = 0;
   let mut i: i64 = 0;
-  while i + 2 < lt
-    invariant 0 <= i && i <= lt && lt == len(tab) && lt <= 16777216 && 0 <= lp && lp <= 16777216
+  while pl > 0 && lp <= pl && i + 2 < lt
+    invariant 0 <= i && i <= lt && lt == len(tab) && lt <= 16777216 && 0 <= pl && pl <= 16777216 && 0 <= lp && lp <= pl + pl
     decreases lt - i
   {
     if tab[i] == 6 {
       let n: i64 = tab[i + 2];
       if n < 0 || n > pl { return bad_pkt(blob, 1); }
       lp = lp + n;
-      if lp > 16777216 { return bad_pkt(blob, 2); }
     }
     i = i + 3;
   }
+  let compact: bool = lp <= pl;
+  if !compact { lp = pl; }
   let total: i64 = 30 + lp + lb + lt;
   if total > 16777216 { return bad_pkt(blob, 2); }
   let mut out: [i64] = alloc(total, 0);
@@ -149,9 +151,10 @@ fn index_begin_checked(inout progress: [i64], blob: [i64]) -> [i64] ! alloc
   copy_range(inout out, st + 14, blob, 0, lb);
   let t: i64 = st + 14 + lb;
   copy_range(inout out, t, tab, 0, lt);
+  if !compact { copy_range(inout out, 12, blob, pool, pl); }
   let mut at: i64 = 0;
   let mut j: i64 = 0;
-  while j + 2 < lt
+  while compact && pl > 0 && j + 2 < lt
     invariant 0 <= j && j <= lt && lt == len(tab) && 0 <= at && at <= lp && len(out) == t + lt
     decreases lt - j
   {

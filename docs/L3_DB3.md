@@ -23,6 +23,7 @@ So the "`prev` read back from the driver" share named in D-DB2-1 does not exist.
 - `entry_api.pruv` `index_begin_checked`: the await request pool (section 0) now holds only the id texts referenced by the table.
   Each `[6, start, len]` slot is rewritten to the compact offset. The full blob still sits in the state section, and `index_complete` reads it there.
   L await: 438,723 → 332,273 words (−106,450 words, −0.85 MB).
+  Ids may share one text range. If the summed lengths pass the input pool length, the await copies the input pool once and keeps the original offsets (audit fix: such a packet was wrongly rejected as too large). With an empty pool both loops are skipped.
 - `index_begin_checked` rejects `len(progress) <= ns` (session count) instead of `len(progress) <= len(blob) / 30`.
   `ent_bound.pruv` `index_collect` takes `ns < len(progress)` as a precondition.
 - `harness.rs` `index_progress_len` sizes `progress` from the record's session count, clamped to 559,240 and to `input.len() / 30`, plus 1.
