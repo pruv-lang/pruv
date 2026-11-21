@@ -668,10 +668,13 @@ pub fn has_inout(f: &Function) -> bool {
     f.params.iter().any(|p| p.mode_pos.is_some())
 }
 
-/// G9: a function with an extended type in its signature has no raw ABI wrapper and no binding;
-/// G5 A3: neither has a function with an inout parameter (one host-eligibility rule)
+pub fn has_take_array(f: &Function) -> bool {
+    f.params.iter().any(|p| p.take && is_array_name(&p.ty))
+}
+
+/// Legacy functions with extended, inout, or take-array parameters use only internal entry points.
 pub fn is_internal_fn(f: &Function, tt: &TypeTable) -> bool {
-    has_ext_sig(f, tt) || has_inout(f)
+    has_ext_sig(f, tt) || has_inout(f) || has_take_array(f)
 }
 
 /// An extended (G9) type in the signature (separate from the inout rule: an explicit host entry may have inout params)
@@ -1021,7 +1024,7 @@ pub fn ir_params(f: &Function, tt: &TypeTable) -> Vec<(String, String)> {
         out.push(("ptr".to_string(), "%out".to_string()));
     }
     for p in &f.params {
-        if is_ext_t(tt, &p.ty) {
+        if is_ext_t(tt, &p.ty) || (p.mode_pos.is_some() && is_agg(&p.ty)) {
             out.push(("ptr".to_string(), format!("%p.{}", mangle(&p.name))));
             continue;
         }
@@ -1029,6 +1032,9 @@ pub fn ir_params(f: &Function, tt: &TypeTable) -> Vec<(String, String)> {
         if is_arr_name(&p.ty) {
             out.push(("ptr".to_string(), format!("%p.{}.a", n)));
             out.push(("i64".to_string(), format!("%p.{}.n", n)));
+            if p.take && is_array_name(&p.ty) {
+                out.push(("i64".to_string(), format!("%p.{}.c", n)));
+            }
         } else if p.ty == "bool" {
             out.push(("i1".to_string(), format!("%p.{}", n)));
         } else if p.ty == "i64" {
@@ -1045,27 +1051,23 @@ pub fn ir_params(f: &Function, tt: &TypeTable) -> Vec<(String, String)> {
     out
 }
 
-/// Parameter list of an internal function definition: array pointers (names ending in `.a`) are read-only borrows;
-/// a G6 collection handle `%p.NAME.h` is a plain ptr. G5 A3: with the function `f`, the pointer of an inout parameter
-/// is a mutable borrow: `ptr noalias nocapture` (no readonly). G9: an extended parameter `%p.NAME` is a read-only view:
-/// `ptr noalias nocapture readonly` (the same subtree may be passed twice, which noalias allows because nothing writes
-/// it; output storage `%out` is always a fresh alloca of the caller)
+/// Array and extended aggregate borrows are readonly unless marked inout.
+/// Owned array pointers and collection handles can escape through the function result.
 pub fn sig_text(params: &[(String, String)], f: Option<&Function>) -> String {
-    let mut_names: Vec<String> = match f {
-        Some(f) => f
-            .params
-            .iter()
-            .filter(|p| p.mode_pos.is_some())
-            .map(|p| format!("%p.{}.a", mangle(&p.name)))
-            .collect(),
-        None => Vec::new(),
-    };
+    let mut_names: Vec<_> = f.into_iter().flat_map(|f| &f.params)
+        .filter(|p| p.mode_pos.is_some())
+        .map(|p| format!("%p.{}{}", mangle(&p.name), if is_arr_name(&p.ty) { ".a" } else { "" }))
+        .collect();
+    let take_names: Vec<_> = f.into_iter().flat_map(|f| &f.params)
+        .filter(|p| p.take && is_array_name(&p.ty))
+        .map(|p| format!("%p.{}.a", mangle(&p.name)))
+        .collect();
     params
         .iter()
         .map(|(t, n)| {
             format!(
                 "{} {}",
-                if t == "ptr" && n != "%out" && !n.ends_with(".h") {
+                if t == "ptr" && n != "%out" && !n.ends_with(".h") && !take_names.contains(n) {
                     if mut_names.contains(n) { "ptr noalias nocapture" } else { "ptr noalias nocapture readonly" }
                 } else {
                     t.as_str()
@@ -2002,6 +2004,27 @@ impl<'a> FnGen<'a> {
         self.spill(&v)
     }
 
+    /// Address of a mutable struct place in caller storage.
+    fn inout_struct_ptr(&mut self, e: &Expr) -> R<String> {
+        match e {
+            Expr::Var(x) => match self.lookup(&x.name)? {
+                Bind::Slot(s) => Ok(s.a),
+                Bind::Ssa(_) => Err(format!("llvmgen: no mutable storage for {}", x.name)),
+            },
+            Expr::FieldAccess(x) => {
+                let ty = need_ty(expr_ty(&x.base))?;
+                let p = self.inout_struct_ptr(&x.base)?;
+                let i = t_field_index(self.tt, ty, &x.field, None)?;
+                let g = g9_gep(self, &lty(ty), &p, i)?;
+                if self.fb(ty, None, &x.field) {
+                    return self.op(format!("load ptr, ptr {}", g));
+                }
+                Ok(g)
+            }
+            _ => Err("llvmgen: expected a mutable struct place".into()),
+        }
+    }
+
     /// Field value of the aggregate `base` (type ty) at storage index idx; a boxed field is a VIEW of the child node
     /// (a shallow load, never dropped through this value).
     fn getf(&mut self, base: &V, ty: &str, idx: usize, fd: &FieldDecl, variant: Option<&str>, c: bool) -> R<V> {
@@ -2538,7 +2561,15 @@ impl<'a> FnGen<'a> {
                 if let Some(t) = elem_ty(&p.ty) {
                     av.ty = Some(t); // G2 A5
                 }
-                names.insert(p.name.clone(), Bind::Ssa(av));
+                if p.take && is_array_name(&p.ty) {
+                    av.c = Some(format!("%p.{}.c", n));
+                    let sl = self.new_slot(&p.name, &p.ty);
+                    self.store(&sl, &av)?;
+                    names.insert(p.name.clone(), Bind::Slot(sl.clone()));
+                    owned.push(sl);
+                } else {
+                    names.insert(p.name.clone(), Bind::Ssa(av));
+                }
             } else if p.ty == "bool" {
                 names.insert(p.name.clone(), Bind::Ssa(V::new(Kind::I1, format!("%p.{}", n))));
             } else if p.ty == "i64" {
@@ -2569,6 +2600,8 @@ impl<'a> FnGen<'a> {
                         }),
                     );
                 }
+            } else if p.mode_pos.is_some() && is_agg(&p.ty) {
+                names.insert(p.name.clone(), Bind::Slot(V::agg(format!("%p.{}", n), &p.ty)));
             } else if self.is_ext(&p.ty) {
                 // G9 A3: a read view of caller-owned storage; never dropped here
                 let pv = self.op(format!("load {}, ptr %p.{}", lty(&p.ty), n))?;
@@ -4107,17 +4140,22 @@ impl<'a> FnGen<'a> {
         let mut args: Vec<String> = Vec::new();
         for (i, x) in a.iter().enumerate() {
             let prm = f.params.get(i).ok_or_else(|| IDX_ERR.to_string())?;
+            if let Expr::InoutArg(ix) = x {
+                if is_agg(&prm.ty) {
+                    let p = self.inout_struct_ptr(&ix.expr)?;
+                    args.push(format!("ptr {}", p));
+                } else {
+                    // The caller's array pointer and length stay borrowed.
+                    let v = self.ev(&ix.expr, false)?;
+                    args.push(format!("ptr {}", v.a));
+                    args.push(format!("i64 {}", v.b));
+                }
+                continue;
+            }
             if self.is_ext(&prm.ty) {
                 // G9 A3: a read argument is a pointer to valid caller-owned storage
                 let vp = self.view_ptr(x)?;
                 args.push(format!("ptr {}", vp));
-                continue;
-            }
-            if let Expr::InoutArg(ix) = x {
-                // G5 A3: the caller's own pointer and length; no copy, ownership stays put
-                let v = self.ev(&ix.expr, false)?;
-                args.push(format!("ptr {}", v.a));
-                args.push(format!("i64 {}", v.b));
                 continue;
             }
             let take = prm.take;
@@ -4127,6 +4165,9 @@ impl<'a> FnGen<'a> {
                 Kind::Arr => {
                     args.push(format!("ptr {}", v.a));
                     args.push(format!("i64 {}", v.b));
+                    if take && is_array_name(&prm.ty) {
+                        args.push(format!("i64 {}", capof(&v)));
+                    }
                 }
                 Kind::Opt => {
                     let g = self.agg(&v)?;
@@ -4221,8 +4262,16 @@ impl<'a> FnGen<'a> {
         let mut args: Vec<(String, String)> = Vec::new();
         // arguments once, in source order; take arguments are owned values
         for (p, x) in cat.params.iter().zip(e.args.iter()) {
+            let x = match x {
+                Expr::InoutArg(place) if n == "vec_reserve" => &*place.expr,
+                _ => x,
+            };
             let v = self.ev(x, p.take)?;
             args.extend(self.g6_arg(&v)?);
+        }
+        if n == "vec_reserve" {
+            self.g6_call(&sym, "void", &args)?;
+            return Ok(V::unit());
         }
         if matches!(
             n,
@@ -4409,7 +4458,13 @@ impl<'a> FnGen<'a> {
                     V { layout: "i64", rng: None, k: Kind::Ref, a: format!("%p.{}", n), b: "None".to_string(), ty: Some(p.ty.clone()), p: None, mv: None, c: None },
                 );
             } else if is_agg(&p.ty) {
-                let c = self.to_c(&V::agg(format!("%p.{}", n), &p.ty), &p.ty)?;
+                let param = format!("%p.{}", n);
+                let v = if p.mode_pos.is_some() {
+                    self.load(&V::agg(param, &p.ty))?
+                } else {
+                    V::agg(param, &p.ty)
+                };
+                let c = self.to_c(&v, &p.ty)?;
                 self.cenv.insert(p.name.clone(), c);
             } else {
                 let t = self.op(format!("extractvalue {} %p.{}, 0", OPT, n))?;
@@ -4438,7 +4493,7 @@ impl<'a> FnGen<'a> {
                     return Err(g9_diag_err(x.line, x.col, &format!("the variable {} as an aggregate operand", x.name)));
                 }
                 let n = mangle(&x.name);
-                if self.is_ext_opt(&x.ty) {
+                if self.is_ext_opt(&x.ty) || self.f.params.iter().any(|p| p.name == x.name && p.mode_pos.is_some() && is_agg(&p.ty)) {
                     return Ok(format!("%p.{}", n));
                 }
                 // a non-extended parameter is an SSA value
@@ -5616,7 +5671,7 @@ pub fn entry_of(
         let value = g.cregion(&|g2| g2.cev(expr))?;
         g.term(format!("ret i128 {}", value.a))?;
         params.retain(|(_, n)| n != "%out");
-        return Ok(g.render(&format!("define internal i128 @{}__pruv_cost({})", mangle(&f.name), sig_text(&params, None))));
+        return Ok(g.render(&format!("define internal i128 @{}__pruv_cost({})", mangle(&f.name), sig_text(&params, Some(f)))));
     }
     let args = params.iter().map(|(t, n)| format!("{} {}", t, n)).collect::<Vec<_>>().join(", ");
     let callee = format!("@{}__pruv_body", mangle(&f.name));
@@ -6297,10 +6352,17 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
                         "map_take" => rust_only.push((c.line, c.col, "map_take")),
                         "vec_at_mut" => rust_only.push((c.line, c.col, "vec_at_mut")),
                         "vec_clear" => rust_only.push((c.line, c.col, "vec_clear")),
-                        "vec_reserve" => rust_only.push((c.line, c.col, "vec_reserve")),
                         "vec_extend_from_slice" => rust_only.push((c.line, c.col, "vec_extend_from_slice")),
                         "string_eq" => rust_only.push((c.line, c.col, "string_eq")),
                         "map_get_mut" => bad.push((c.line, c.col)),
+                        "vec_reserve"
+                            if !c.inst.as_ref().and_then(|i| i.args.first()).is_some_and(|a| {
+                                let k = a.to_key();
+                                k == "i64" || k == "bool"
+                            }) =>
+                        {
+                            rust_only.push((c.line, c.col, "vec_reserve"))
+                        }
                         _ => {}
                     }
                     if crate::foreign::is_catalog(&c.name) && !crate::foreign::is_catalog_contract_only(&c.name) {
@@ -6335,6 +6397,7 @@ pub fn is_host_abi_fn(f: &Function, tt: &TypeTable, explicit: bool, host: bool) 
         && !crate::emit_common::is_spec_fn(&f.name)
         && !is_coll_fn(f)
         && !has_ext_sig(f, tt)
+        && !has_take_array(f)
         && (host || !explicit)
         // an inout entry is exported only as an explicit-mode host entry (legacy inout fns stay internal)
         && (!has_inout(f) || (explicit && host))
@@ -6448,8 +6511,7 @@ pub fn gen_llvm_any_ex_g4(
             crate::mono::MonoError::Limit(p) => GenError::Diag(p),
             crate::mono::MonoError::Internal(m) => GenError::Msg(m),
         })?;
-        if let Some(e) = crate::bindings::take_array_abi_error(prog, g4)
-            .or_else(|| crate::bindings::struct_inout_abi_error(prog, false, g4)) {
+        if let Some(e) = crate::bindings::llvm_param_abi_error(prog, g4) {
             return Err(GenError::Diag(e));
         }
         return gen_llvm_concrete_ex(&plan.program, verified, trust_callers, budget, target, foreign_checks);

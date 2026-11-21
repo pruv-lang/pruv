@@ -1,0 +1,1 @@
+{"stage": "codegen", "code": "unsupported_type", "file": "root.pruv", "message": "crate::bump has an inout struct parameter, which needs the Rust backend"}

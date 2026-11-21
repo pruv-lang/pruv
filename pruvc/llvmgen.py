@@ -47,6 +47,7 @@ import codegen
 from codegen import show
 from llvm_inline import llvm_inline
 from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str  # G2 B2: uses_str
+from typeinfo import field_place
 from typeinfo import is_collection, contains_collection, encode, is_scalar_vec, is_vec_slice_arg
 from foreign import CATALOG, CATALOG_CONTRACT_ONLY, first_g6_use, _owned_result, NET_OBSERVERS, ASYNC_OBSERVERS  # G6 A3, G6b, G10 net A3
 import foreign_shim  # G6 A3
@@ -754,10 +755,14 @@ def has_inout(f):
     return any(p.mode == "inout" for p in f.params)
 
 
+def has_take_array(f):
+    return any(p.take and is_array(p.type) for p in f.params)
+
+
 def is_internal_fn(f, tt):
     """G9: a function with an extended type in its signature has no raw ABI wrapper and no binding;
     G5 A3: neither has a function with an inout parameter (one host-eligibility rule)"""
-    return has_ext_sig(f, tt) or has_inout(f)
+    return has_ext_sig(f, tt) or has_inout(f) or has_take_array(f)
 
 
 def has_ext_sig(f, tt):
@@ -769,7 +774,8 @@ def exports_abi(f, tt, explicit):
     """the common export rule of the raw wrapper, the typed variant, the Rust binding and the public host wrapper:
     not foreign / specialization / collection-bearing / extended, explicit mode => host entry, and an inout parameter
     is exported only from an explicit-mode host entry (mutable host entries; legacy inout fns stay internal)"""
-    if (f.foreign is not None or getattr(f, "private", False) or _is_coll_fn(f) or has_ext_sig(f, tt)):
+    if (f.foreign is not None or getattr(f, "private", False) or _is_coll_fn(f) or has_ext_sig(f, tt)
+            or has_take_array(f)):
         return False
     if explicit and not f.host_entry:
         return False
@@ -785,12 +791,14 @@ def ir_params(f, tt=None):
     if tt is not None and is_ext_t(tt, f.ret):
         out.append(("ptr", "%out"))
     for p in f.params:
-        if tt is not None and is_ext_t(tt, p.type):
+        if (tt is not None and is_ext_t(tt, p.type)) or (p.mode == "inout" and is_agg(p.type)):
             out.append(("ptr", "%%p.%s" % mangle(p.name)))
             continue
         n = mangle(p.name)
         if is_arr(p.type):
             out += [("ptr", "%%p.%s.a" % n), ("i64", "%%p.%s.n" % n)]
+            if p.take:
+                out.append(("i64", "%%p.%s.c" % n))
         elif p.type == BOOL:
             out.append(("i1", "%%p.%s" % n))
         elif p.type == I64:
@@ -804,15 +812,13 @@ def ir_params(f, tt=None):
     return out
 
 
-def sig_text(params, f=None):
-    """definition parameter list of an internal function: array pointers are read-only borrows (their IR names
-    end in .a; a G6 collection handle %p.NAME.h is a plain ptr).  G5 A3: with the function `f`, the pointer of an
-    inout parameter is a mutable borrow: `ptr noalias nocapture` (no readonly).  G9: an extended parameter %p.NAME is
-    a read-only view: `ptr noalias nocapture readonly` (the same subtree may be passed twice, which noalias allows
-    because nothing writes it; output storage %out is always a fresh alloca of the caller)"""
-    mut = set("%%p.%s.a" % mangle(p.name) for p in f.params if p.mode == "inout") if f is not None else ()
+def sig_text(params, f):
+    """Borrowed arrays and aggregates are readonly unless inout. Take arrays transfer the data pointer."""
+    mut = {"%%p.%s%s" % (mangle(p.name), ".a" if is_arr(p.type) else "")
+           for p in f.params if p.mode == "inout"}
+    take = {"%%p.%s.a" % mangle(p.name) for p in f.params if p.take and is_array(p.type)}
     return ", ".join("%s %s" % (("ptr noalias nocapture" if n in mut else "ptr noalias nocapture readonly")
-                                if t == "ptr" and n != "%out" and not n.endswith(".h") else t, n)
+                                if t == "ptr" and n != "%out" and not n.endswith(".h") and n not in take else t, n)
                      for t, n in params)
 
 
@@ -1027,6 +1033,18 @@ class FnGen:
                 return x.a
             return s.spill(x)
         return s.spill(s.ev(e))
+
+    def inout_struct_ptr(s, e):
+        root, path = field_place(e)
+        _, sl = s.lookup(root.name)
+        ptr, ty = sl.a, sl.ty
+        for field in path:
+            i = s.tt.field_index(ty, field)
+            ptr = g9_gep(s, lty(ty), ptr, i)
+            if s.fb(ty, None, field):
+                ptr = s.op("load ptr, ptr %s" % ptr)
+            ty = s.tt.fields(ty)[i].type
+        return ptr
 
     def getf(s, base, ty, idx, fd, variant, c=False):
         """field value of the aggregate `base` (type ty) at storage index idx; a boxed field is a VIEW of the child
@@ -1645,7 +1663,16 @@ class FnGen:
         for p in s.f.params:
             n = mangle(p.name)
             if is_arr(p.type):
-                names[p.name] = ("ssa", V("arr", "%%p.%s.a" % n, "%%p.%s.n" % n, elem_ty(p.type), layout=s.m.storage.layout_of(p), rng=s.m.storage.range_of(p)))
+                v = V("arr", "%%p.%s.a" % n, "%%p.%s.n" % n, elem_ty(p.type),
+                      layout=s.m.storage.layout_of(p), rng=s.m.storage.range_of(p),
+                      c="%%p.%s.c" % n if p.take else None)
+                if p.take:
+                    sl = s.new_slot(p.name, p.type)
+                    s.store(sl, v)
+                    names[p.name] = ("slot", sl)
+                    owned.append(sl)
+                else:
+                    names[p.name] = ("ssa", v)
             elif p.type == BOOL:
                 names[p.name] = ("ssa", V("i1", "%%p.%s" % n))
             elif p.type == I64:
@@ -1659,6 +1686,8 @@ class FnGen:
                     owned.append(sl)
                 else:        # borrowed: never dropped here
                     names[p.name] = ("ssa", V("coll", "%%p.%s.h" % n, None, p.type))
+            elif p.mode == "inout" and is_agg(p.type):
+                names[p.name] = ("slot", Slot("agg", "%%p.%s" % n, None, p.type))
             elif s.is_ext(p.type):   # G9 A3: a read view of caller-owned storage; never dropped here
                 pv = s.op("load %s, ptr %%p.%s" % (lty(p.type), n))
                 names[p.name] = ("ssa", V("agg", pv, None, p.type, "%%p.%s" % n))
@@ -2752,19 +2781,20 @@ class FnGen:
         if f.foreign is not None:   # G6 A3: trusted rust fn through its bridge adapter
             return s.trusted_call(f, e, owned)
         args = []
-        for i, x in enumerate(a):
-            if s.is_ext(f.params[i].type):   # G9 A3: a read argument is a pointer to valid caller-owned storage
+        for p, x in zip(f.params, a):
+            if isinstance(x, InoutArg) and is_agg(p.type):
+                args.append("ptr %s" % s.inout_struct_ptr(x.expr))
+                continue
+            if s.is_ext(p.type):   # G9 A3: a read argument is a pointer to valid caller-owned storage
                 args.append("ptr %s" % s.view_ptr(x))
                 continue
-            if isinstance(x, InoutArg):   # G5 A3: the caller's own pointer and length; no copy, ownership stays put
-                v = s.ev(x.expr)
-                args += ["ptr %s" % v.a, "i64 %s" % v.b]
-                continue
-            v = s.ev(x, f.params[i].take)
+            v = s.ev(x.expr if isinstance(x, InoutArg) else x, p.take)
             if v.k == "coll":   # G6 A3: opaque handle
                 args.append("ptr %s" % v.a)
             elif v.k == "arr":
                 args += ["ptr %s" % v.a, "i64 %s" % v.b]
+                if p.take:
+                    args.append("i64 %s" % capof(v))
             elif v.k == "opt":
                 args.append("%s %s" % (OPT, s.agg(v)))
             elif v.k == "agg":
@@ -2830,7 +2860,10 @@ class FnGen:
         sym = foreign_shim.adapter_sym(foreign_shim.helper_name(n, src))
         args = []
         for p, x in zip(cat.params, e.args):   # arguments once, in source order; take arguments are owned values
-            args += s.g6_arg(s.ev(x, bool(p.take)))
+            args += s.g6_arg(s.ev(x.expr if n == "vec_reserve" and isinstance(x, InoutArg) else x, bool(p.take)))
+        if n == "vec_reserve":
+            s.g6_call(sym, "void", args)
+            return V("unit")
         if n in ("vec_new", "map_new", "string_from", "string_new", "vec_push", "map_insert", "string_push_str",
                  "file_open_read", "file_create", "file_read_all", "file_write_str", "file_write_bytes",
                  "proc_args_new", "proc_args_push", "proc_spawn", "proc_spawn_env", "proc_write_str", "proc_write_bytes",
@@ -2934,7 +2967,10 @@ class FnGen:
             elif s.is_ext(p.type):   # G9 A3: no i128 mirror; contracts read the REAL storage lazily (see cx)
                 s.cenv[p.name] = V("ref", "%%p.%s" % n, None, p.type)
             elif is_agg(p.type):
-                s.cenv[p.name] = s.to_c(V("agg", "%%p.%s" % n, None, p.type), p.type)
+                a = "%%p.%s" % n
+                if p.mode == "inout":
+                    a = s.op("load %s, ptr %s" % (lty(p.type), a))
+                s.cenv[p.name] = s.to_c(V("agg", a, None, p.type), p.type)
             else:
                 t = s.op("extractvalue %s %%p.%s, 0" % (OPT, n))
                 v = s.op("extractvalue %s %%p.%s, 1" % (OPT, n))
@@ -2959,7 +2995,7 @@ class FnGen:
             if e.name not in s.cparams:
                 raise s.g9_unsupported(e, "the variable %s as an aggregate operand" % e.name)
             n = mangle(e.name)
-            if s.is_ext(e.ty):
+            if s.is_ext(e.ty) or any(p.name == e.name and p.mode == "inout" and is_agg(p.type) for p in s.f.params):
                 return "%%p.%s" % n
             return s.spill(V("agg", "%%p.%s" % n, None, e.ty))     # a non-extended parameter is an SSA value
         if isinstance(e, FieldAccess):
@@ -3700,7 +3736,7 @@ def entry_of(m, funcs, f, trust, budget=1 << 30, cost=False, verified=False):
         value = g.cregion(lambda: g.cev(f.cost))
         g.term("ret i128 %s" % value.a)
         params = [(t, n) for t, n in params if n != "%out"]
-        return g.render("define internal i128 @%s__pruv_cost(%s)" % (mangle(f.name), sig_text(params)))
+        return g.render("define internal i128 @%s__pruv_cost(%s)" % (mangle(f.name), sig_text(params, f)))
     args = ", ".join("%s %s" % (t, n) for t, n in params)
     callee = "@%s__pruv_body" % mangle(f.name)
     if f.ret == UNIT or rt == "void":
@@ -5451,7 +5487,8 @@ def g6_llvm_error(prog):
                     is_vec_slice_arg(a.ty, p.type) for a, p in zip(n.args, funcs[n.name].params)):
                 rust_only.append((n.line, n.col, "a borrowed vector slice argument"))
             if isinstance(n, Call) and n.name in CATALOG and n.name not in CATALOG_CONTRACT_ONLY:
-                if n.name in ("map_remove", "map_take", "vec_at_mut", "vec_clear", "vec_reserve", "vec_extend_from_slice", "string_eq"):
+                if (n.name in ("map_remove", "map_take", "vec_at_mut", "vec_clear", "vec_extend_from_slice", "string_eq")
+                        or (n.name == "vec_reserve" and n.inst["args"][0] not in (I64, BOOL))):
                     rust_only.append((n.line, n.col, n.name))
                 if n.inst and not all(_g6_scalar(a) for a in n.inst["args"]):
                     bad.append((n.line, n.col))
@@ -5480,11 +5517,12 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     from check import opaque_inline
     opaque_inline(prog)     # P13o: contract applications of opaque functions become their bodies
     for f in prog.functions:
-        if any(p.take and is_array(p.type) for p in f.params):
+        if f.host_entry and has_take_array(f):
             raise PruvError("codegen", f.line, f.col, "unsupported_type",
                             "%s has a take array parameter, which needs the Rust backend" % getattr(f, "disp", f.name),
                             "use the Rust backend", file=getattr(f, "file", None))
-        if any(p.mode == "inout" and not is_array(p.type) for p in f.params):
+        if any(p.mode == "inout" and not is_array(p.type) and (f.host_entry or not is_agg(p.type))
+               for p in f.params):
             kind = "struct"
             if any(p.mode == "inout" and is_collection(p.type) for p in f.params):
                 kind = "collection"

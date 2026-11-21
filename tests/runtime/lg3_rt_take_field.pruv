@@ -1,0 +1,51 @@
+struct D { a: [i64] }
+struct B { b: [u8] }
+
+fn wrap(take a: [i64]) -> D
+  requires len(a) >= 1
+  ensures len(result.a) == len(a) && result.a[0] == a[0]
+  cost 0
+{
+  return D { a: move a };
+}
+
+fn forward(take a: [i64]) -> D
+  requires len(a) >= 1
+  ensures len(result.a) == len(a) && result.a[0] == a[0]
+  cost 1
+{
+  return wrap(move a);
+}
+
+fn wrap_bytes(take b: [u8]) -> B
+  requires len(b) >= 1
+  ensures len(result.b) == len(b) && result.b[0] == b[0]
+{
+  return B { b: move b };
+}
+
+fn consume(take a: [bool]) -> bool
+  requires len(a) == 1
+{
+  return a[0];
+}
+
+fn make_prefix() -> [i64] ! alloc
+  ensures len(result) == 3 && result[0] == 42
+{
+  let a: [i64] = alloc(8, 42);
+  return truncate(a, 3);
+}
+
+fn run() -> () ! io, alloc {
+  let a: [i64] = make_prefix();
+  let d: D = forward(move a);
+  let b: [u8] = alloc(2, 255);
+  let bytes: B = wrap_bytes(move b);
+  let flags: [bool] = alloc(1, true);
+  print(len(d.a));
+  print(d.a[0]);
+  print(len(bytes.b));
+  print(bytes.b[0]);
+  print(consume(move flags));
+}

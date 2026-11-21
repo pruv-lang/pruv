@@ -248,6 +248,15 @@ def _fn(sym, params, ret, body):
         sym, params, "" if ret is None else " -> " + ret, body)
 
 
+def _vec_reserve_adapter(helper, elem, checked):
+    vec = rty(Type("vec", (elem,)))
+    guard = ('if n < 0 || n > (1i64 << 40) { pruv_g6_req("vec_reserve", "0 <= n && n <= 2^40"); } '
+             if checked else "")
+    return _fn(adapter_sym(helper), "v: PruvH, n: i64", None,
+               'pruv_g6_guard(|| { %sif v.is_null() { pruv_g6_repr("null handle") } '
+               'unsafe { (&mut *(v as *mut %s)).reserve(n as usize) } })' % (guard, vec))
+
+
 def _cat_adapter(helper, op, low):
     S = adapter_sym(helper)
     if op.startswith("file_"):
@@ -592,12 +601,12 @@ def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign
             adapters.append(_cat_adapter(name, cats[name][0], cats[name][1]))
         else:
             adapters.append(_trusted_adapter(trusted[name]))
-    for helper in cats:
-        if cats[helper][0] == "string_to_str":
-            adapters.append(_string_bytes_adapter())
-            if take:
-                adapters.append(_string_take_adapter())
-            break
+    for helper in sorted(h for h, (op, _) in cats.items() if op == "vec_reserve"):     # name order, as the Rust port
+        adapters.append(_vec_reserve_adapter(helper, cats[helper][1][0], not g.unchecked_catalog()))
+    if any(op == "string_to_str" for op, _ in cats.values()):
+        adapters.append(_string_bytes_adapter())
+        if take:
+            adapters.append(_string_take_adapter())
     for name in unbox:
         if name in trusted:
             adapters.append(_unbox_adapter(trusted[name]))

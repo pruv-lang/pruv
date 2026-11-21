@@ -1,0 +1,20 @@
+fn run(n: i64) -> () ! io, alloc
+  requires 0 <= n && n <= 1000
+{
+  let mut v: Vec<i64> = vec_new::<i64>();
+  v = vec_push::<i64>(move v, 7);
+  vec_reserve::<i64>(inout v, n);
+  assert len(v) == 1 && v[0] == 7;
+  v = vec_push::<i64>(move v, 8);
+  print(len(v));
+  print(vec_get::<i64>(v, 0));
+  print(vec_get::<i64>(v, 1));
+
+  let mut bits: Vec<bool> = vec_new::<bool>();
+  bits = vec_push::<bool>(move bits, true);
+  vec_reserve::<bool>(inout bits, n);
+  bits = vec_push::<bool>(move bits, false);
+  print(len(bits));
+  print(vec_get::<bool>(bits, 0));
+  print(vec_get::<bool>(bits, 1));
+}

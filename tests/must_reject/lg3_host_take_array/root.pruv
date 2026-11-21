@@ -1,0 +1,3 @@
+pub fn consume(take a: [i64]) -> i64 {
+  return len(a);
+}

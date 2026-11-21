@@ -408,8 +408,7 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
         }
     }
     if plan_prog.is_some() && (!matches!(a.kind, Kind::Rs) || a.also_llvm.is_some()) {
-        if let Some(e) = pruv_core::bindings::take_array_abi_error(&prog, g4.as_ref())
-            .or_else(|| pruv_core::bindings::struct_inout_abi_error(&prog, false, g4.as_ref())) {
+        if let Some(e) = pruv_core::bindings::llvm_param_abi_error(&prog, g4.as_ref()) {
             return Err(Fail::Lang(vec![e]));
         }
     }

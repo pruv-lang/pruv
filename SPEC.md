@@ -681,7 +681,8 @@ fn tree_count(t: Tree) -> i64
   (`type/foreign_loop_move`). Returning an owned local array as `return x` remains legal.
   Rust uses `Vec<T>` for a `take` array parameter and emits the moved value directly without copying.
   The verifier charges zero units for the move itself. LLVM moves local arrays by emptying
-  the source slot and rejects `take` array parameters with `codegen/unsupported_type`.
+  the source slot. Both backends support internal `take` array parameters. LLVM rejects them on host
+  entries with `codegen/unsupported_type`.
   Tests: [field and payload](tests/spec/r6e_12_field_move.pruv),
   [take parameter](tests/spec/r6e_12_take_param.pruv), [LLVM](tests/spec/r6e_12_llvm_move.pruv),
   [use after move](tests/spec/r6e_12_use_after_move.pruv), [borrowed parameter](tests/spec/r6e_12_borrowed_param.pruv),
@@ -788,7 +789,8 @@ fn tree_count(t: Tree) -> i64
   (`verify/call_requires`) and keeps `len(P)`, every element and sibling fields unchanged; capacity is not
   modelled, so the proof knows only the length invariant. Rust emits `P.reserve((n) as usize);` (with the same
   run-time `requires` check as R-6e-18 when the catalog runs checked), so a writer can then `vec_push` or
-  `vec_extend_from_slice` without filling the tail first. LLVM rejects it as `codegen/unsupported_type`. Tests:
+  `vec_extend_from_slice` without filling the tail first. Both backends support reserving a local
+  `Vec<i64>` or `Vec<bool>`. Tests:
   [accept](tests/spec/r6e_19_vec_reserve.pruv), [reject](tests/spec/r6e_19_reserve_unbounded.pruv).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
