@@ -625,6 +625,20 @@ fixed in one package before R12.
 | D113 | Debt (P33, R-7-3 zero-site rule, re-applied under the rule 3 exception), M11 time vs base: interleaved pairs (15 rounds, `work/p33/m11ab.json`) were slower with the rule in R/100 15/15 (275.8 -> 288.9 ns/op, +4.7%), R/1000 14/15 (+5.8%), B/100 14/15 (+3.3%), B/1000 14/15 (+3.8%); H/100, H/1000, I/1000 +3.7-4.3% median. This gives back time already won (rule 3; `__text` -15.8% and rustc CPU -30% are not gate axes), so the rule was reverted | Same cause as D110: the M11 entries lose `#[inline(always)]` and are no longer copied into the harness closures. Next means: per-entry inline decision from host call-site information (P26c), measured against base on M10 and M11 time and H RSS. Closed (rejected); H code pages stay in P26c |
 | D114 | Gate RSS debt cells at d7c2240: M11 A/1000 (+16 KiB vs hand), H/1000 (+32 KiB, P26b.4), C/100 (run spread); M10 perf D10 / D50 / D100 fixed share above hand | M11 C/100 moves -32 / -32 KiB vs hand over base1 / base2 and spreads by up to three pages between runs. M10 fixed-share RSS is the open P13 debt. Next: P26c (M11) and the M10 fixed-share work. Open |
 | D115 | P32P perf (M12 typed direct, `work/p32p/m12_perf.txt`, 3 rounds, load average 8-10): T M 3.06x / L 4.05x (allocs 1.008 vs 0), S M 2.91x / L 4.98x (allocs 2.008 vs 1); D68b had marked these fixed on allocs | Not touched in P32P (fast mode, no further fix). Re-measure at lower load before R12; then line-by-line cause. Open |
+| D-R00-1 | RSS 50, 100, 250, 500 tools (1.004-1.017x, 16-48 KiB = 1-3 pages); S RSS 0, 1, 10 tools (one 16 KiB page, 0 tools has no plan so it is not the call) | `bench/l3/mcp/packet.pruv:331` `resize(p,want,0)` (gen.rs `with_capacity(want)` + `extend_from_slice` + `resize`) zero-fills the whole tail `want - len(p)`, so every page up to `want` is touched. Hand (`hand_packet.rs:198`) only reserves, and touches just the words it writes. The over-reserve `want - out_words` is 1500 words at 250 tools and 3000 at 500 (the zero-fill column minus the written payload), the same order as the RSS gap | G-R00-1 (an uninitialized reserve with a length invariant), or a tighter `plan[1]` |
+| D-R00-2 | RSS 5x100 chain (1.138x, +1.8 MB) | Inferred, not isolated: on pages 2-5, `packet.pruv:331` copies the whole previous packet into a fresh `want`-sized vec and zero-fills it, while the previous packet stays live in `call()`. Hand also copies `p0` (`hand_packet.rs:199`), but it reserves without touching. The chain cells still run the hand pre-pass in `load()` for pages 1-4 in both rows' processes, so part of the gap may be the harness | Isolate with one RSS probe per page; G-R00-2 |
+
+
+#### 7.5.1 Language gap list (fast mode, 2026-11-21)
+
+Gaps found in R bundles, worked around and batched into one language bundle when five or six pile up (AGENTS.md concept 5). Detail in the bundle doc (docs/L3_Rxx.md).
+
+| Gap | What is missing | Workaround / note |
+|---|---|---|
+| G-R00-1 | No way to grow an owned array with an uninitialized (reserve-only) tail under a length invariant: `resize` must give every slot a value, so pre-sized output pays a zero-fill of the reserve (≈ written payload, see the zero-fill column) | Kept `resize(p,want,0)`; cost measured as D-R00-1 |
+| G-R00-2 | No in-place growth of a caller's packet: `write` takes `p: [i64]` by value-copy and builds a new array, so the prefix (5010 words, the whole previous packet on a chain) is copied every page | Kept the copy; constant 5010 words per single page in the counters |
+| G-R00-3 | The plan's descriptor buffer cannot move into the result record without a copy (R-6e-12 array move/take params may now allow it; not checked in this bundle) | Descriptors stay a separate live array during `write` |
+| G-R00-4 | Packet text is UTF-16 units stored as `i64` (8 bytes per unit) | Deferred to R04 or later; not changed |
 
 Queued with the debt list (not product perf):
 
