@@ -1,0 +1,11 @@
+// LG12: a Result<_, String> that only appears as a constructor; the bindings must define the bridge and drop__string
+fn pick(x: i64) -> i64 {
+  match Ok::<i64, String>(x) {
+    Ok(v) => { return v; }
+    Err(e) => { return 0; }
+  }
+}
+
+fn run() -> () ! io {
+  print(pick(7));
+}

@@ -5803,10 +5803,12 @@ def _typed_result_in(node, specialized_args, in_decl=False):
     elif isinstance(node, (list, tuple)):
         children = node
     elif dataclasses.is_dataclass(node):
-        children = [getattr(node, field.name) for field in dataclasses.fields(node)]
-        children.extend(getattr(node, attr, None) for attr in ("targs", "cost", "decreases"))
+        # an expression's own type, type arguments and specialization come before its operands (as in Rust)
+        children = [getattr(node, "ty", None), getattr(node, "targs", None)]
         if isinstance(node, Call):
             children.extend(specialized_args.get(node.name, ()))
+        children.extend(getattr(node, field.name) for field in dataclasses.fields(node) if field.name != "ty")
+        children.extend(getattr(node, attr, None) for attr in ("cost", "decreases"))
     else:
         return None
     for child in children:
@@ -5881,8 +5883,9 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     positions = {(item.file, item.line, item.col): i for i, item in enumerate(source.items or ())}
     items = sorted([*prog.types, *prog.functions],
                    key=lambda item: positions.get((item.file, item.line, item.col), len(positions)))
+    decl_ids = {id(d) for d in prog.types}
     for item in items:
-        hit = _typed_result_in(item, specialized_args, any(item is d for d in prog.types))
+        hit = _typed_result_in(item, specialized_args, id(item) in decl_ids)
         if hit is not None:
             raise PruvError("codegen", item.line, item.col, "unsupported_type",
                             ("%s uses %s, an owned String error Result that the llvm codegen layer supports only with an "

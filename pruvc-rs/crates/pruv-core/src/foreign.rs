@@ -1701,6 +1701,17 @@ fn key_contains_collection(key: &str) -> bool {
     }
 }
 
+fn cost_ctors(e: &Expr, out: &mut Cands) {
+    if let Expr::Ctor(x) = e {
+        if x.ty.as_deref().is_some_and(key_contains_collection) {
+            out.push((x.line, x.col));
+        }
+    }
+    for k in crate::refine::kids(e) {
+        cost_ctors(k, out);
+    }
+}
+
 fn g6_expr(e: &Expr, out: &mut Cands) {
     match e {
         Expr::Move(m) if !m.ty.as_deref().is_some_and(key_is_array) => out.push((m.line, m.col)),
@@ -1725,6 +1736,10 @@ fn g6_expr(e: &Expr, out: &mut Cands) {
             g6_expr(&x.index, out);
         }
         Expr::Ctor(x) => {
+            // LG12: Ok::<T, String>(..)
+            if x.ty.as_deref().is_some_and(key_contains_collection) {
+                out.push((x.line, x.col));
+            }
             if let Some(a) = &x.arg {
                 g6_expr(a, out);
             }
@@ -1836,7 +1851,14 @@ pub fn first_g6_use(prog: &Program) -> Option<(i64, i64, String)> {
             return Some((f.line, f.col, format!("result type of {}", f.name)));
         }
         let mut cands: Cands = Vec::new();
-        if let Some(cost) = &f.cost { g6_expr(cost, &mut cands); }
+        if let Some(cost) = &f.cost {
+            g6_expr(cost, &mut cands);
+            // LG12: a constructor that only appears in the cost clause is not a G6 use (the clause is erased
+            // after verification and evaluated as a contract otherwise), as in Python
+            let mut ctors: Cands = Vec::new();
+            cost_ctors(cost, &mut ctors);
+            cands.retain(|c| !ctors.contains(c));
+        }
         g6_stmts(&f.body, &mut cands);
         // min by (line, col); the first one wins on a tie, like Python's min(key=..)
         let mut best: Option<(i64, i64)> = None;

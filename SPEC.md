@@ -410,7 +410,8 @@ let o: Option<bool> = Some::<bool>(true);   // also None::<bool>, Ok::<bool>(x),
   (`type/type_mismatch`). The proof models the error payload with its own sort and well-formedness, and the
   recursive size counts it. Both backends support every value `E` (LG12). In LLVM output a `Result<T, E>` is
   `{ i1, T, E }` and its ABI words are the tag, the words of `T`, then the words of `E` (words of the inactive side
-  are 0); for `E = i64` this is the old `Result<T>` layout.
+  are 0); for `E = i64` this is the old `Result<T>` layout, and `Result<i64, i64>` keeps its old two ABI words (the
+  tag and the active payload).
   ```
   struct ParseErr { pos: i64, code: i64 }
   fn parse_digit(c: i64) -> Result<i64, ParseErr>
@@ -441,7 +442,13 @@ let o: Option<bool> = Some::<bool>(true);   // also None::<bool>, Ok::<bool>(x),
 - **Owned `String` errors (LG11 E2).** `E` may be an owned `String`. A `Result<T, String>` is owned like a `String`:
   `Err::<T, String>(s)` moves `s`, the `Err(e)` arm of a `match` moves the error into `e` (the matched local is used
   up), `?` moves it into the early return, and use after a move is `type/foreign_move`. In contracts `err_val(r)` is a
-  `String` (`len(err_val(result))`). The LLVM backend rejects `E = String` (`codegen/unsupported_type`). Records that
+  `String` (`len(err_val(result))`). The LLVM backend (LG12) lays out `Result<T, String>` as `{ i1, T, ptr }` with
+  the String handle null on Ok and after a move, and drops a live handle on every path; it supports `T = i64` or
+  `bool` for a local, parameter, result or temporary. It rejects other `T` (`codegen/unsupported_type`) and
+  `is_ok` / `ok_val` / `err_val` on it in a runtime-checked `requires` or in a `cost` clause that is
+  kept (`--no-verify`) (`codegen/unsupported_type`). On both backends a `Result<T, String>` inside a record, enum or
+  another generic type is `type/foreign_owned_type` (as the error type of another `Result` it is
+  `type/result_error_type`), and one in a host entry signature (no C ABI) is `type/entry_signature`. Records that
   hold a buffer (E3) and `T = String` on the Ok side stay rejected.
   ```
   fn need_pos(x: i64) -> Result<i64, String> ! alloc

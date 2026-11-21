@@ -361,6 +361,11 @@ pub fn owned_collection_abi_error(
             if f.params.iter().any(|p| p.take && p.ty == "string") {
                 return Some(err(f.line, f.col, format!("host entry {name} takes an owned String, which has no C ABI")));
             }
+            if std::iter::once(&f.ret).chain(f.params.iter().map(|p| &p.ty))
+                .any(|ty| GType::from_key(ty).has_string_error())
+            {
+                return Some(err(f.line, f.col, format!("host entry {name} has a Result<_, String> in its signature, which has no C ABI")));
+            }
             if crate::gtype::key_is_scalar_vec(&f.ret) {
                 return Some(err(f.line, f.col, format!("host entry {} returns a Vec, which has no C ABI", name)));
             }

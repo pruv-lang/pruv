@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"], ["--trust-callers"]], "exit": 0, "stdout_lines": ["11", "-8", "-7", "-1", "9", "7", "7", "0", "8", "0", "1", "0", "-3"], "g6_drop_balance": true, "gen_contains": ["Err::<i64, ::std::string::String>(", "Ok::<bool, ::std::string::String>("]}

@@ -1,0 +1,19 @@
+// LG12 E2: Result<T, String> with a struct Ok type runs on the Rust backend; LLVM still rejects it (llvm_pending)
+struct Pt { x: i64, y: i64 }
+
+fn mk(x: i64) -> Result<Pt, String> ! alloc
+{
+  if x < 0 {
+    return Err::<Pt, String>(string_from("neg"));
+  }
+  return Ok::<Pt, String>(Pt { x: x, y: 1 });
+}
+
+fn get(x: i64) -> i64 ! alloc
+{
+  let r: Result<Pt, String> = mk(x);
+  match r {
+    Ok(p) => { return p.x; }
+    Err(e) => { return 0 - len(e); }
+  }
+}

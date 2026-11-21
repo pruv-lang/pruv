@@ -137,7 +137,7 @@ fn write_text(path: &str, text: &str) -> Result<(), Fail> {
     std::fs::write(path, text).map_err(|e| Fail::Internal(pruv_core::pyio::io_error_message(Path::new(path), &e)))
 }
 
-fn generate(a: &Args, prog: &Program) -> Result<(String, String), Fail> {
+fn generate(a: &Args, prog: &Program, plan: Option<&pruv_core::mono::SpecPlan>) -> Result<(String, String), Fail> {
     // Stage 6: for a Windows x64 target the external wrapper uses the target ABI (sret) from the start; otherwise the existing output (byte-identical to Python).
     // Without --target the host target is used (design §3 "default host"). The ll of a Windows host must also be in sret form (stage 6 audit must-fix).
     let host = pruvc::target::Target::host().ok();
@@ -150,7 +150,12 @@ fn generate(a: &Args, prog: &Program) -> Result<(String, String), Fail> {
     // `prog` is the CONCRETE program (the specialization plan of a generic program, see `compile`).
     // G6 A3: foreign_checks reaches the shim helpers; a G6 construct outside G6_SPEC 13.1 is a codegen/unsupported_type
     // diagnostic (nothing is written), like Python's PruvError from gen_llvm.
-    pruv_core::llvmgen::gen_llvm_concrete_ex(prog, a.verify, a.trust_callers, a.budget, abi, &a.foreign_checks).map_err(|e| match e {
+    let result = if let Some(plan) = plan {
+        pruv_core::llvmgen::gen_llvm_with_specializations(prog, a.verify, a.trust_callers, a.budget, abi, &a.foreign_checks, &plan.args)
+    } else {
+        pruv_core::llvmgen::gen_llvm_concrete_ex(prog, a.verify, a.trust_callers, a.budget, abi, &a.foreign_checks)
+    };
+    result.map_err(|e| match e {
         pruv_core::codegen::GenError::Diag(p) => Fail::Lang(vec![p]),
         pruv_core::codegen::GenError::Msg(m) => Fail::Internal(m),
     })
@@ -399,20 +404,20 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
     // programs through the shared plan (mono.rs) and generates from the concrete program. G4 A2: explicit mode always goes
     // through the plan (it names every function and type by its Rust stem). G4 A3: the LLVM backend generates explicit
     // programs too (no staging guard); the executable shim of `--emit exe` targets only the root `main`.
-    let mut plan_prog: Option<Program> = None;
+    let mut plan = None;
     if pruv_core::typeinfo::first_g3_use(&prog).is_some() || g4.is_some() {
         match pruv_core::mono::specialize_g4(&prog, g4.as_ref()) {
-            Ok(plan) => plan_prog = Some(plan.program),
+            Ok(result) => plan = Some(result),
             Err(pruv_core::mono::MonoError::Limit(e)) => return Err(Fail::Lang(vec![e])), // no output at all
             Err(pruv_core::mono::MonoError::Internal(m)) => return Err(Fail::Internal(m)),
         }
     }
-    if plan_prog.is_some() && (!matches!(a.kind, Kind::Rs) || a.also_llvm.is_some()) {
+    if plan.is_some() && (!matches!(a.kind, Kind::Rs) || a.also_llvm.is_some()) {
         if let Some(e) = pruv_core::bindings::llvm_param_abi_error(&prog, g4.as_ref()) {
             return Err(Fail::Lang(vec![e]));
         }
     }
-    let gprog: &Program = plan_prog.as_ref().unwrap_or(&prog);
+    let gprog: &Program = plan.as_ref().map_or(&prog, |plan| &plan.program);
     // G2: even after verify, reject array types that do not yet have a code-generation layer.
     // A4, A5: [u8] and [bool] are allowed on every path (rust, llvm, ll, obj, exe, also_llvm).
     let g2_err = pruv_core::typeinfo::g2_unimplemented_error(gprog, "codegen", None, &["array_u8", "array_bool", "str"], None); // G2 B2
@@ -438,7 +443,7 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
                 pruv_core::codegen::GenError::Msg(m) => Fail::Internal(m),
             })?;
             let llvm_texts = match &a.also_llvm {
-                Some(_) => Some(generate(a, gprog)?),
+                Some(_) => Some(generate(a, gprog, plan.as_ref())?),
                 None => None,
             };
             write_text(&a.out, &rs_text)?;
@@ -453,7 +458,7 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
             Ok(())
         }
         Kind::Ll => {
-            let (ir, bindings) = generate(a, gprog)?;
+            let (ir, bindings) = generate(a, gprog, plan.as_ref())?;
             // Same order as Python: IR first, then the bindings
             write_text(&a.out, &ir)?;
             match &a.bindings {
@@ -463,7 +468,7 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
         }
         Kind::Obj => {
             let target = need_target(a)?;
-            let (ir, bindings) = generate(a, gprog)?;
+            let (ir, bindings) = generate(a, gprog, plan.as_ref())?;
             // The object is built in a temporary folder and moved to -o only on success (an existing file is not touched on failure)
             let tmp = tempfile::tempdir().map_err(|e| Fail::Internal(format!("tempdir: {e}")))?;
             let obj = tmp.path().join("out.o");
@@ -484,7 +489,7 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
             };
             check_entry(&prog, entry_name)?;
             check_runtime(target)?;
-            let (mut ir, _) = generate(a, gprog)?;
+            let (mut ir, _) = generate(a, gprog, plan.as_ref())?;
             if !ir.ends_with('\n') {
                 ir.push('\n');
             }

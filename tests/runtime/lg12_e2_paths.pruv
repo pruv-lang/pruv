@@ -1,0 +1,80 @@
+// LG12 E2 on both backends: an unused Err binder, `?` through two levels, an Ok local dropped at scope end,
+// an Err local dropped by an early return before its match, and a bool Ok type
+fn check(x: i64) -> Result<i64, String> ! alloc
+  ensures is_ok(result) ==> ok_val(result) == x && x >= 0 && x <= 100
+{
+  if x < 0 {
+    return Err::<i64, String>(string_from("negative"));
+  }
+  if x > 100 {
+    return Err::<i64, String>(string_from("too big"));
+  }
+  return Ok::<i64, String>(x);
+}
+
+fn level1(x: i64) -> Result<i64, String> ! alloc
+  ensures is_ok(result) ==> ok_val(result) >= 0 && ok_val(result) <= 200
+{
+  let v: i64 = check(x)?;
+  return Ok::<i64, String>(v + v);
+}
+
+fn level2(x: i64) -> Result<i64, String> ! alloc
+  ensures is_ok(result) ==> ok_val(result) >= 1 && ok_val(result) <= 201
+{
+  let v: i64 = level1(x)?;
+  return Ok::<i64, String>(v + 1);
+}
+
+fn is_even(x: i64) -> Result<bool, String> ! alloc
+{
+  if x < 0 {
+    return Err::<bool, String>(string_from("neg"));
+  }
+  return Ok::<bool, String>(x % 2 == 0);
+}
+
+fn code(x: i64) -> i64 ! alloc
+{
+  let r: Result<i64, String> = level2(x);
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return 0 - len(e); }
+  }
+}
+
+fn ignore_err(x: i64) -> i64 ! alloc
+{
+  let r: Result<i64, String> = check(x);
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return -1; }
+  }
+}
+
+fn unused(x: i64) -> i64 ! alloc
+{
+  let r: Result<i64, String> = check(x);
+  return 7;
+}
+
+fn early(x: i64, stop: bool) -> i64 ! alloc
+{
+  let r: Result<i64, String> = check(x);
+  if stop {
+    return 0;
+  }
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return len(e); }
+  }
+}
+
+fn parity(x: i64) -> i64 ! alloc
+{
+  let r: Result<bool, String> = is_even(x);
+  match r {
+    Ok(b) => { if b { return 1; } return 0; }
+    Err(e) => { return 0 - len(e); }
+  }
+}
