@@ -25,11 +25,12 @@ use std::path::{Path, PathBuf};
 type Res<T> = Result<T, PruvError>;
 
 /// vparser / check names that a function may not carry (check.py BUILTIN_FNS).
-const BUILTIN_FNS: [&str; 24] = [
+const BUILTIN_FNS: [&str; 25] = [
     "len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "band", "bor", "bxor", "wrapping_shl",
     "ushr", "wrapping_add", "wrapping_mul", "load_be", "store_be", "load_le", "store_le", "utf8_valid", "str_from_utf8",
     "eq_range", // L3-10: eq_range
     "resize",   // P05G
+    "subview",
     "copy_range", // L-copy-range
     "copy_within",
 ];
@@ -788,7 +789,7 @@ fn run(prog: &mut Program, g4: &mut G4) -> Res<()> {
             if let Item::Ty(ti) = *it {
                 let d = &prog.types[ti];
                 let (name, line, col) = (d.name().to_string(), d.line(), d.col());
-                if !crate::check::type_name_ok(&name) {
+                if name != "subview" && !crate::check::type_name_ok(&name) {
                     return Err(err(
                         line,
                         col,
@@ -797,7 +798,7 @@ fn run(prog: &mut Program, g4: &mut G4) -> Res<()> {
                         format!("rename it, e.g. {}", crate::check::cap_first(&name, true)),
                     ));
                 }
-                if crate::check::RESERVED_TYPE_NAMES.contains(&name.as_str()) {
+                if name == "subview" || crate::check::RESERVED_TYPE_NAMES.contains(&name.as_str()) {
                     return Err(err(line, col, "reserved", format!("{} is a builtin name", name), "rename the type"));
                 }
                 if g4.modules[mi].types.contains_key(&name) {

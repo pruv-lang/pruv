@@ -1,0 +1,5 @@
+// spec: R-6g-6 accept
+fn length(v: [i64]) -> i64 { return len(v); }
+fn f(b: [i64]) -> i64
+  requires len(b) >= 2
+{ return length(subview(b, 0, 2)); }

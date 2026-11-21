@@ -1,0 +1,3 @@
+struct D { a: [i64] }
+fn grab(v: [i64]) -> D { return D { a: v }; }
+fn f(b: [i64]) -> D { return grab(subview(b, 0, 0)); }

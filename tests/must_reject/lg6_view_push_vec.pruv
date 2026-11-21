@@ -1,0 +1,5 @@
+fn grab(v: [i64]) -> () ! alloc {
+  let a: Vec<i64> = vec_new::<i64>();
+  vec_push::<[i64]>(move a, v);
+}
+fn f(b: [i64]) -> () ! alloc { grab(subview(b, 0, 0)); }

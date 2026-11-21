@@ -1,0 +1,9 @@
+// spec: R-6g-7 accept
+fn head2(v: [i64]) -> i64
+  requires len(v) == 2
+  ensures result == v[0]
+{ return v[0]; }
+fn f(b: [i64]) -> i64
+  requires len(b) == 5
+  ensures result == b[1]
+{ return head2(subview(b, 1, 3)); }

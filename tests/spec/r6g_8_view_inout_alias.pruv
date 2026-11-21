@@ -1,0 +1,3 @@
+// spec: R-6g-8 reject
+fn both(v: [i64], inout b: [i64]) -> () { return; }
+fn f(inout b: [i64]) -> () { both(subview(b, 0, 0), inout b); }

@@ -1,0 +1,4 @@
+fn length(v: [i64]) -> i64 { return len(v); }
+fn f(b: [i64]) -> i64
+  requires length(subview(b, 0, 0)) == 0
+{ return 0; }

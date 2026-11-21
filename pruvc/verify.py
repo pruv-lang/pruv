@@ -2167,6 +2167,12 @@ class FnVerifier:
             s.assume(st, g, z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < res.n),
                                                        z3.Select(res.a, k) == z3.Select(b.a, k))))
             return res
+        if n == "subview":
+            base, lo, hi = args
+            s.prove(st, g, z3.And(lo >= 0, lo <= hi, hi <= base.n), e, "index_oob",
+                    "subview range 0 <= lo <= hi <= len(%s)" % base.name)
+            p = z3.Int("subview!p")
+            return mk_arr(z3.Lambda([p], z3.Select(base.a, lo + p)), hi - lo, "subview", base.elem)
         if n == "substr":   # G2 B1 (G2_SPEC 4.4): range -> boundary -> fresh result
             sv, lo, hi = args
             s.prove(st, g, z3.And(lo >= 0, lo <= hi, hi <= sv.n), e, "string_slice_range",

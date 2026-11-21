@@ -1,0 +1,14 @@
+struct D { k: i64, a: [u8] }
+
+fn regrow(inout a: [u8]) -> () ! alloc
+  requires len(a) <= 1000
+{
+  a = alloc(1, 7);
+}
+
+fn run() -> () ! io, alloc {
+  let a0: [u8] = alloc(6, 1);
+  let mut d: D = D { k: 5, a: move a0 };
+  regrow(inout d.a);
+  print(d.a[3]);
+}

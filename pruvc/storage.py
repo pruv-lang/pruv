@@ -132,7 +132,7 @@ def plan_storage(program_after_mono, verified=True):
                 if children: pin(children[0])
                 if n is not None: join(n, children[0])
             elif isinstance(e, Call):
-                if e.name in ('copy', 'truncate', 'old', 'resize'):
+                if e.name in ('copy', 'truncate', 'old', 'resize', 'subview'):
                     if n is not None: join(n, children[0])
                 elif e.name == 'alloc': pass
                 elif e.name in fmap:

@@ -4198,6 +4198,25 @@ impl<'a> FnGen<'a> {
             rv.ty = Some(STR.to_string());
             return self.temp_arr(rv, owned);
         }
+        if n == "subview" {
+            let mut base = self.ev(arg(a, 0)?, false)?;
+            let lo = self.ev(arg(a, 1)?, false)?;
+            let hi = self.ev(arg(a, 2)?, false)?;
+            if !self.verified {
+                let nonneg = self.op(format!("icmp sge i64 {}, 0", lo.a))?;
+                let ordered = self.op(format!("icmp sle i64 {}, {}", lo.a, hi.a))?;
+                let upper = self.op(format!("icmp sle i64 {}, {}", hi.a, base.b))?;
+                let ok = self.op(format!("and i1 {}, {}", nonneg, ordered))?;
+                let ok = self.op(format!("and i1 {}, {}", ok, upper))?;
+                self.guard(&ok, Fail::Oob(lo.a.clone(), base.b.clone()), false)?;
+            }
+            let length = self.op(format!("sub i64 {}, {}", hi.a, lo.a))?;
+            base.a = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", elem_ir(&base), base.a, lo.a))?;
+            base.b = length;
+            base.p = None;
+            base.c = None;
+            return Ok(base);
+        }
         if n == "substr" {
             // G2 B2: argument order s -> lo -> hi
             let s = self.ev(arg(a, 0)?, false)?;

@@ -1,0 +1,2 @@
+fn mutate(inout v: [i64]) -> () { return; }
+fn f(inout b: [i64]) -> () { mutate(subview(b, 0, 0)); }

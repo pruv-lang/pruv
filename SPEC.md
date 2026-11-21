@@ -1044,6 +1044,36 @@ set_at(inout w, 0, 7);
 - **New error codes:** `inout_syntax`, `inout_type`, `inout_argument`, `inout_alias`, `inout_context`, `old_context`,
   `old_argument`; reused: `immutable`, `array_alias`, `recursive_borrow`, `entry_signature`, `foreign_signature`,
   `reserved`, `refinement_assign`.
+- **Field places (LG6).** A scalar field path (`f(inout c.n)`, `f(inout d.c.n)`) and a resizable array field
+  (`f(inout d.a)` where `f` reassigns `a`) work on both back ends. After the call the caller knows the field's
+  length only from the callee's `ensures`. Tests: `tests/runtime/lg6_rt_field_inout.pruv`,
+  `tests/must_reject/lg6_field_inout_reassign_len.pruv`.
+
+## 6g2. Borrowed slice arguments: `subview` (LG6)
+
+- R-6g-5 **Form.** `subview(b, lo, hi)` passes the elements `b[lo]` to `b[hi - 1]` to a function without a copy.
+  `b` is an array (`[i64]`, `[u8]`, `[bool]` or a generic `[T]`): a local, a parameter or a field path rooted at
+  one. Any other source (a call result such as `copy(b)`, an index) is `type/view_context`.
+  `lo` and `hi` are `i64`. There is no lifetime syntax and no slice type. The callee declares an ordinary
+  non-`inout` array parameter and cannot tell whether it got a whole array or a view.
+- R-6g-6 **Where it may appear.** Only as a direct argument of a call to a Pruv function, in a non-`inout`
+  parameter whose array type matches `b`. Anywhere else is `type/view_context`: a `let` or assignment, a `return`,
+  a struct literal, a contract, an argument of a builtin or foreign function, an `inout` position, or anywhere
+  inside the three operands of another `subview` (also through a nested call); the error is at the inner `subview`. `subview` is a builtin name (`type/reserved`); the shorter `view` was not taken because existing programs define functions named `view`.
+- R-6g-7 **Proof.** At the call the verifier proves `0 <= lo`, `lo <= hi` and `hi <= len(b)`
+  (`verify/index_oob`). The callee's parameter `v` then has exactly `len(v) == hi - lo` and
+  `v[i] == b[lo + i]` for every `i` in range, so the callee's `requires` are proved from `b`.
+- R-6g-8 **No escape, no write.** The rules for array parameters already keep a view inside the call. The callee
+  cannot write it (`type/immutable`), return it or store it in a field (`type/array_alias`), or push it into
+  a `Vec` (`type/foreign_owned_type`) without `copy`. The view exists only during the call.
+  `subview(b, ...)` counts as a use of `b` for `type/inout_alias`, so neither `b` nor a struct holding it
+  can be passed `inout` in the same call. A `par` branch argument cannot be a view
+  (`type/parallel_argument`). Nothing can write `b` while the view lives.
+- R-6g-9 **Code.** Rust passes `&b[lo..hi]` (unchecked when verified). LLVM passes the array pointer advanced by
+  `lo` elements and the length `hi - lo`. Neither copies or allocates. The callee is compiled as before, so
+  index checks it proved stay removed. In safe mode (`--no-verify`) the caller checks the range at run time
+  and panics with the array range error.
+- Tests: `tests/runtime/lg6_rt_view*.pruv`, `tests/must_reject/lg6_view_*.pruv`. New error code: `view_context`.
 
 ## 6h. Files (G10)
 
@@ -2009,6 +2039,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/unused_value` | type | a non-unit value is dropped |
 | `type/useless_expr` | type | an expression statement that is not a call |
 | `type/variant_name` | type | a variant name does not start with an upper-case letter |
+| `type/view_context` | type | `subview(...)` anywhere but a direct non-`inout` array argument of a Pruv call (R-6g-6) |
 | `effect/cost_callee` | effect | a cost function calls a function without `cost` |
 | `effect/cost_unsupported` | effect | a cost function calls a foreign, catalog or file operation |
 | `effect/missing_effect` | effect | a function uses an effect it does not declare |

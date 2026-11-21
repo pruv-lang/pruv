@@ -2803,6 +2803,18 @@ class FnGen:
                 s.guard(ok, lambda: s.ins("call void @pruv_panic_utf8(i64 %s)" % b.b), False)
             p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 1, i64 1)" % (b.a, b.b))
             return s.temp_arr(V("arr", p, b.b, STR), owned)
+        if n == "subview":
+            base, lo, hi = (s.ev(x) for x in a)
+            if not s.verified:
+                nonneg = s.op("icmp sge i64 %s, 0" % lo.a)
+                ordered = s.op("icmp sle i64 %s, %s" % (lo.a, hi.a))
+                upper = s.op("icmp sle i64 %s, %s" % (hi.a, base.b))
+                ok = s.op("and i1 %s, %s" % (nonneg, ordered))
+                ok = s.op("and i1 %s, %s" % (ok, upper))
+                s.guard(ok, lambda: s.ins("call void @pruv_panic_oob(i64 %s, i64 %s)" % (lo.a, base.b)), False)
+            length = s.op("sub i64 %s, %s" % (hi.a, lo.a))
+            ptr = s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (storage_ty(base), base.a, lo.a))
+            return V("arr", ptr, length, base.ty, layout=base.layout, rng=base.rng)
         if n == "substr":  # G2 B2: s, lo, hi in order
             sv = s.ev(a[0])
             lo = s.ev(a[1])

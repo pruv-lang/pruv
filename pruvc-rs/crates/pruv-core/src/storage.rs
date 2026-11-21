@@ -83,7 +83,7 @@ impl Analysis {
             Expr::Move(x) => { if n.is_some() { self.join(n, scope.get(&x.name).copied().flatten()); } }
             Expr::InoutArg(_) => { self.pin(children[0]); if n.is_some() { self.join(n, children[0]); } }
             Expr::Call(x) => match x.name.as_str() {
-                "copy" | "truncate" | "old" | "resize" => { if n.is_some() { self.join(n, children[0]); } }
+                "copy" | "truncate" | "old" | "resize" | "subview" => { if n.is_some() { self.join(n, children[0]); } }
                 "alloc" => {},
                 name if self.functions.contains(name) => {
                     for (j, c) in children.iter().enumerate() {

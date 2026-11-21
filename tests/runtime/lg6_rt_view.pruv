@@ -1,0 +1,52 @@
+struct D { a: [u8] }
+
+fn sum_view(v: [i64]) -> i64 {
+  let mut total: i64 = 0;
+  let mut i: i64 = 0;
+  while i < len(v)
+    invariant 0 <= i && i <= len(v)
+    decreases len(v) - i
+  {
+    total = wrapping_add(total, v[i]);
+    i = i + 1;
+  }
+  return total;
+}
+
+fn first<T: Element>(v: [T]) -> T
+  requires len(v) == 1
+  ensures result == v[0]
+{
+  return v[0];
+}
+
+fn pick<T: Element>(b: [T], lo: i64) -> T
+  requires 0 <= lo && lo < len(b)
+  ensures result == b[lo]
+{
+  return first::<T>(subview(b, lo, lo + 1));
+}
+
+fn first_byte(v: [u8]) -> i64
+  requires len(v) == 1
+  ensures result == v[0]
+{
+  return v[0];
+}
+
+fn both(a: [i64], b: [i64], c: [i64]) -> i64 {
+  return len(a) + len(b) + len(c);
+}
+
+fn run() -> () ! io, alloc {
+  let b: [i64] = alloc(5, 3);
+  print(sum_view(subview(b, 1, 4)));
+  print(sum_view(subview(b, 5, 5)));
+  print(both(subview(b, 0, 2), subview(b, 2, 5), b));
+  let a: [u8] = alloc(4, 7);
+  let d: D = D { a: move a };
+  print(first_byte(subview(d.a, 2, 3)));
+  let flags: [bool] = alloc(3, true);
+  print(pick::<bool>(flags, 1));
+  print(pick::<i64>(b, 2));
+}

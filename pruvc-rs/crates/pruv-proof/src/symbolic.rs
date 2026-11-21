@@ -2691,6 +2691,18 @@ impl<'a> FnVerifier<'a> {
                 self.assume(st, g, fa);
                 return Ok(res_v);
             }
+            "subview" => {
+                let base = arg(0)?.try_arr()?;
+                let lo = arg(1)?.try_ast()?;
+                let hi = arg(2)?.try_ast()?;
+                let ob = self.z.and(&[lo.ge_i(0), lo.le(hi), hi.le(&base.n)]);
+                self.prove_core(st, g, &ob, pos(e), "index_oob",
+                    &format!("subview range 0 <= lo <= hi <= len({})", base.name), None);
+                let p = self.z.int_const("subview!p");
+                let body = base.a.select(&lo.add(&p));
+                let slice = self.z.lambda(&[p], &body);
+                return Ok(Val::Arr(base.like(slice, hi.sub(lo), "subview")));
+            }
             "substr" => {
                 // G2 B1: range → bounds → new result → length assumption → byte-relation assumption.
                 let sv = arg(0)?.try_arr()?.clone();

@@ -35,7 +35,7 @@ def x_has_bit(e):
 
 # P2 batch 4: byte-word access on [u8]: load_be(a, i, n) and the statement-only store_be(inout a, i, w, n)
 WORD_BUILTINS = ("load_be", "store_be", "load_le", "store_le")
-BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range; L-copy-range
+BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within", "subview") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range; L-copy-range
 RESERVED_TYPE_NAMES = ("Option", "Result", "Some", "None", "Ok", "Err")
 TYPE_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9_]*\Z")
 FIELD_NAME_RE = re.compile(r"[a-z][A-Za-z0-9_]*\Z")
@@ -245,6 +245,7 @@ class Checker:
         s.statement_call = None
         s.restore_array = None
         s.in_par = False
+        s.in_view = False         # LG6: checking the operands of a subview(...) argument
         s.funcs = {}
         for f in prog.functions:
             if f.name in s.funcs:
@@ -384,10 +385,10 @@ class Checker:
     # ---- user type declarations ----
     def declare_types(s):
         for d in s.prog.types:
-            if d.src_name is None and not TYPE_NAME_RE.match(d.name):   # G4: explicit mode checked the written names
+            if d.src_name is None and d.name != "subview" and not TYPE_NAME_RE.match(d.name):   # G4: explicit mode checked the written names
                 terr(d, "type_name", "type name %s must start with an upper-case letter" % d.name,
                      "rename it, e.g. %s" % (d.name[:1].upper() + d.name[1:]))
-            if d.src_name is None and d.name in RESERVED_TYPE_NAMES:
+            if d.src_name is None and (d.name == "subview" or d.name in RESERVED_TYPE_NAMES):
                 terr(d, "reserved", "%s is a builtin name" % d.name, "rename the type")
             if d.name in s.decls:
                 terr(d, "dup_type", "type %s defined twice" % d.name)
@@ -2205,6 +2206,39 @@ class Checker:
         terr(arg, "type_mismatch", "expected str or a borrowed String read, found %s" % type_name(actual))
 
     # ---- G5 A0: inout call arguments and old(..) ----
+    @staticmethod
+    def view_context(e):
+        terr(e, "view_context", "subview(...) is only allowed as a direct argument to a non-inout array parameter of a function call",
+             "pass it straight to a function, or use copy_range to make an owned array")
+
+    def user_arg(s, e, want, scope, c, borrow):
+        if isinstance(e, Call) and e.name == "subview":
+            if c or not borrow or not is_array(want) or s.in_view:
+                s.view_context(e)
+            if e.targs is not None:
+                terr(e, "type_arity", "builtin subview takes no type arguments", "remove the `::<...>`")
+            if len(e.args) != 3:
+                terr(e, "arity", "subview takes 3 argument(s), got %d" % len(e.args))
+            root = e.args[0]
+            while isinstance(root, FieldAccess):
+                root = root.base
+            s.in_view = True
+            if not isinstance(root, Var):
+                try:
+                    s.expect(e.args[0], want, scope, c)   # a view nested in the source is reported where it is
+                finally:
+                    s.in_view = False
+                s.view_context(e)
+            try:
+                s.expect(e.args[0], want, scope, c)
+                s.expect(e.args[1], I64, scope, c)
+                s.expect(e.args[2], I64, scope, c)
+            finally:
+                s.in_view = False
+            e.ty = want
+        else:
+            s.expect(e, want, scope, c, borrow_element=want == STR, borrow_vector=borrow)
+
     def inout_args(s, e, f, m, scope, c):
         """arguments of a resolved call to a user function whose signature has an inout parameter (or that carries a
         marker): per argument marker/place validity and the instantiated type, then exclusive use of every marked
@@ -2221,11 +2255,15 @@ class Checker:
                     s.check_text_key(arg, scope, c)
                 else:
                     user_call = f is not CATALOG.get(n)
-                    s.expect(arg, want, scope, c, borrow_element=user_call and want == STR,
-                             borrow_vector=user_call and f.foreign is None and not p.take)
+                    if user_call:
+                        s.user_arg(arg, want, scope, c, f.foreign is None and not p.take)
+                    else:
+                        s.expect(arg, want, scope, c)
                 if p.take and getattr(arg, "map_iter_view", False):
                     s.own(arg)
                 continue
+            if isinstance(arg, Call) and arg.name == "subview":
+                s.view_context(arg)
             if not isinstance(arg, InoutArg):
                 terr(arg, "inout_argument", "parameter %s of %s is inout: the argument needs the `inout` marker" % (p.name, n),
                      "write `inout name` with a `let mut` local array or an inout parameter")
@@ -2491,6 +2529,15 @@ class Checker:
         def arity(k):
             if len(a) != k:
                 terr(e, "arity", "%s takes %d argument(s), got %d" % (n, k, len(a)))
+        if n == "subview":
+            s.view_context(e)
+        for arg in a:
+            if isinstance(arg, InoutArg):
+                arg = arg.expr
+            elif n in s.funcs:
+                continue
+            if isinstance(arg, Call) and arg.name == "subview":
+                s.view_context(arg)
         is_old = n == "old" and s.uses_inout and n not in s.funcs   # G5 A0: contextual builtin
         if e.targs is not None and n not in s.funcs and (n in BUILTIN_FNS or n in CONTRACT_ONLY or is_old):
             terr(e, "type_arity", "builtin %s takes no type arguments" % n, "remove the `::<...>`")
@@ -2637,8 +2684,10 @@ class Checker:
                 if catalog and n in BORROWED_MAP_KEY and want == STRING:
                     s.check_text_key(arg, scope, c)
                 else:
-                    s.expect(arg, want, scope, c, borrow_element=not catalog and want == STR,
-                             borrow_vector=not catalog and f.foreign is None and not p.take)
+                    if catalog:
+                        s.expect(arg, want, scope, c)
+                    else:
+                        s.user_arg(arg, want, scope, c, f.foreign is None and not p.take)
                 if p.take and getattr(arg, "map_iter_view", False):
                     s.own(arg)
         if catalog:
