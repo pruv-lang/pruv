@@ -372,31 +372,159 @@ fn line_step(win: [u8], lo: i64, hi: i64, inout tape: [i64], inout stack: [i64],
   }
 }
 
-// The packet of a finished collector, written in one copy by packet::result3 (R06 C). Turn text first (base 0, so turns::finish' base bound always holds), then the title, then the model.
-fn assemble(col: crate::turns::Collected, title: str, model: str, omitted: bool) -> [i64] ! alloc
+// p[at..at+n) = src[lo..lo+n), each byte widened to a word.
+fn widen(inout p: [i64], at: i64, src: [u8], lo: i64, n: i64) -> ()
+  requires 0 <= at && 0 <= n && n <= len(p) - at && 0 <= lo && n <= len(src) - lo
+  ensures len(p) == len(old(p))
+{
+  let mut k: i64 = 0;
+  while k < n
+    invariant 0 <= k && k <= n && n <= len(p) - at && 0 <= at && 0 <= lo && n <= len(src) - lo && len(p) == len(old(p))
+    decreases n - k
+  { p[at + k] = src[lo + k]; k = k + 1; }
+}
+
+// p[at..at+len(s)) = the bytes of s, each widened to a word.
+fn widen_str(inout p: [i64], at: i64, s: str) -> ()
+  requires 0 <= at && len(s) <= len(p) - at
+  ensures len(p) == len(old(p))
+{
+  let n: i64 = len(s);
+  let mut k: i64 = 0;
+  while k < n
+    invariant 0 <= k && k <= n && n == len(s) && n <= len(p) - at && 0 <= at && len(p) == len(old(p))
+    decreases n - k
+  { let v: i64 = s[k]; p[at + k] = v; k = k + 1; }
+}
+
+// The packet of the finished Store (DB51, G-DB48-1 / G-DB48-3). Same selection, layout, run-time checks and words as
+// turns::finish2(st, sl, bk, 0) followed by packet::result3(meta, turns, text, title, model): turn text first (base 0),
+// then the title, then the model. The turn text is widened from bk.data and bk.stamp straight into the packet, so the
+// separate text buffer of finish2 (up to 2106752 bytes, zero-filled, then copied once more) is never built.
+// Draft j (j = 0 the newest) takes [tl - e, tl - acc) with acc the bytes of the j newer drafts and e = acc + its own
+// bytes, as turns::plan lays it out; text_layout gives kept and tl. A failed span or record-offset check stops the
+// walk at that draft and leaves its row and every older one (and their text) zero, as finish2 does.
+fn assemble_store(st: [i64], sl: [i64], bk: crate::turns::Store, title: str, model: str, omitted: bool) -> [i64] ! alloc
+  requires len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600
+  requires 0 <= st[0] && st[0] <= 1000000000000
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires len(title) <= 1000000 && len(model) <= 20000000
   ensures len(result) >= 28
 {
-  let nt: i64 = len(col.turns);
-  let nx: i64 = len(col.text);
-  if col.kept < 0 || col.kept > 200 || nt != 10 * col.kept || nx < 0 || nx > 2106752 {
-    return crate::packet::simple_error(1, 12, 6, 2);
+  let lay: crate::turns::Layout = crate::turns::text_layout(st, sl);
+  let kept: i64 = lay.kept;
+  let tl: i64 = lay.text_len;
+  let b: i64 = st[0];
+  let dl: i64 = len(bk.data);
+  let mut rows: [i64] = alloc(10 * kept, 0);
+  let mut stop: i64 = kept;
+  let mut acc: i64 = 0;
+  let mut j: i64 = 0;
+  while j < stop
+    invariant 0 <= j && j <= stop && stop <= kept && 0 <= kept && kept <= 200 && kept <= b && b <= 1000000000000
+    invariant 0 <= acc && acc <= tl && tl <= 2106752 && len(rows) == 10 * kept && len(sl) == 1600 && len(bk.off) == 200
+    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+    decreases stop - j
+  {
+    let w: i64 = (b - 1 - j) % 200;
+    let plen: i64 = sl[8 * w];
+    let rlen: i64 = sl[8 * w + 1];
+    let cp: i64 = sl[8 * w + 5];
+    let dp: i64 = sl[8 * w + 6];
+    let o: i64 = bk.off[w];
+    let e: i64 = acc + plen + rlen + 24 * cp + 24 * dp;
+    if e > tl || o < 0 || o > dl - plen - rlen {
+      stop = j;
+    } else {
+      let lo: i64 = tl - e;
+      let t: i64 = kept - 1 - j;
+      rows[10 * t] = lo;
+      rows[10 * t + 1] = plen;
+      rows[10 * t + 2] = lo + plen;
+      rows[10 * t + 3] = rlen;
+      if cp == 1 {
+        rows[10 * t + 4] = lo + plen + rlen;
+        rows[10 * t + 5] = 24;
+      } else {
+        rows[10 * t + 4] = -1;
+        rows[10 * t + 5] = 0;
+      }
+      if dp == 1 {
+        rows[10 * t + 6] = lo + plen + rlen + 24 * cp;
+        rows[10 * t + 7] = 24;
+      } else {
+        rows[10 * t + 6] = -1;
+        rows[10 * t + 7] = 0;
+      }
+      rows[10 * t + 8] = sl[8 * w + 3];
+      rows[10 * t + 9] = sl[8 * w + 4];
+      acc = e;
+      j = j + 1;
+    }
   }
-  let tl: i64 = len(title);
-  let ml: i64 = len(model);
+  let tn: i64 = len(title);
+  let mn: i64 = len(model);
+  let nx: i64 = tl + tn + mn;
+  let nr: i64 = 10 * kept;
   let mut m: [i64] = crate::packet::meta_new(1);
-  if omitted || col.trimmed == 1 { m[2] = 1; }  // MUT:M12 => if omitted { m[2] = 1; }
-  m[3] = col.kept;
+  if omitted || kept < b { m[2] = 1; }  // MUT:M12 => if omitted { m[2] = 1; }
+  m[3] = kept;
   m[10] = 10;
-  if tl > 0 {
-    m[4] = nx;
-    m[5] = tl;
+  if tn > 0 {
+    m[4] = tl;
+    m[5] = tn;
   }
-  if ml > 0 {
-    m[6] = nx + tl;
-    m[7] = ml;
+  if mn > 0 {
+    m[6] = tl + tn;
+    m[7] = mn;
   }
-  return crate::packet::result3(m, col.turns, col.text, title, model);
+  if !crate::packet::rows_ok(m, rows, nx) { return crate::packet::internal_packet(1); }
+  let base: i64 = 28 + nr;
+  let mut p: [i64] = alloc(base + nx, 0);
+  p[0] = 0;
+  p[1] = 24;
+  p[2] = nr;
+  p[3] = nx;
+  let mut i: i64 = 0;
+  while i < 24
+    invariant 0 <= i && i <= 24 && len(m) == 24 && len(p) == base + nx && base == 28 + nr && 0 <= nr && 0 <= nx
+    decreases 24 - i
+  { p[4 + i] = m[i]; i = i + 1; }
+  let mut r: i64 = 0;
+  while r < nr
+    invariant 0 <= r && r <= nr && nr == len(rows) && len(p) == base + nx && base == 28 + nr && 0 <= nx
+    decreases nr - r
+  { p[28 + r] = rows[r]; r = r + 1; }
+  let mut acc2: i64 = 0;
+  let mut q: i64 = 0;
+  while q < stop
+    invariant 0 <= q && q <= stop && stop <= kept && 0 <= kept && kept <= 200 && kept <= b && b <= 1000000000000
+    invariant 0 <= acc2 && acc2 <= tl && 0 <= tn && 0 <= mn && nx == tl + tn + mn && len(p) == base + nx && 0 <= base
+    invariant len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && len(bk.data) == dl
+    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+    decreases stop - q
+  {
+    let w: i64 = (b - 1 - q) % 200;
+    let plen: i64 = sl[8 * w];
+    let rlen: i64 = sl[8 * w + 1];
+    let cp: i64 = sl[8 * w + 5];
+    let dp: i64 = sl[8 * w + 6];
+    let o: i64 = bk.off[w];
+    let e: i64 = acc2 + plen + rlen + 24 * cp + 24 * dp;
+    if e > tl || o < 0 || o > dl - plen - rlen {
+      q = stop;
+    } else {
+      let at: i64 = base + tl - e;
+      widen(inout p, at, bk.data, o, plen + rlen);
+      if cp == 1 { widen(inout p, at + plen + rlen, bk.stamp, 48 * w, 24); }
+      if dp == 1 { widen(inout p, at + plen + rlen + 24 * cp, bk.stamp, 48 * w + 24, 24); }
+      acc2 = e;
+      q = q + 1;
+    }
+  }
+  widen_str(inout p, base + tl, title);
+  widen_str(inout p, base + tl + tn, model);
+  return p;
 }
 
 // One framing event: 0 = consumed, 2 = grow the buffer and call again (state unchanged), 1 = corrupt event or a failed
@@ -480,6 +608,5 @@ pub fn window(win: [u8], omitted: bool, title: str, model: str) -> [i64] ! alloc
     if r != 0 { bad = 1; }
   }
   if bad != 0 { return crate::packet::simple_error(1, 12, 6, 2); }
-  let col: crate::turns::Collected = crate::turns::finish2(st, sl, inout bk, 0);
-  return assemble(col, title, model, omitted);
+  return assemble_store(st, sl, bk, title, model, omitted);
 }
