@@ -52,7 +52,8 @@ M5_NEW = '''let mut keep: bool = true;
 
 MUTANTS = [
  (1, 'entry.pruv', 'invert the exact-true isMeta filter in human_text',
-  'if meta == 1 { return Field::Missing; }', 'if meta == 0 { return Field::Missing; }'),
+  'let meta: i64 = is_true(doc, root, "isMeta");\n  if meta < 0 { return Field::Defect(meta); }\n  if meta == 1 { return Field::Missing; }',
+  'let meta: i64 = is_true(doc, root, "isMeta");\n  if meta < 0 { return Field::Defect(meta); }\n  if meta == 0 { return Field::Missing; }'),
  (2, 'entry.pruv', 'remove the any-position tool_result veto (a tool_result block is just ignored)',
   'Block::Veto => { return Field::Missing; }', 'Block::Veto => { seen = seen + 1; }'),
  (3, 'import.pruv', 'allow synthetic non-error replies (drop the isApiErrorMessage requirement)',

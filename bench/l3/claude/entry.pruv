@@ -29,7 +29,7 @@ pub fn parse_line(data: [u8], start: i64, end: i64) -> Line ! alloc
       if len(tape) < 6 || tape[0] != 6 { return Line::Skip; }
       let mut owned: [u8] = alloc(n, 0);
       copy_range(inout owned, 0, data, start, n);
-      return Line::Object(crate::json::JsonDocument { source: move owned, tape: copy(tape) });
+      return Line::Object(crate::json::JsonDocument { source: move owned, tape: move tape });
     }
   }
 }
@@ -98,7 +98,7 @@ fn scan_shortened(data: [u8], start: i64, end: i64) -> Line ! alloc
       if tape[last] != 5 || tape[last + 1] != n - 3 || tape[last + 4] != 0 {
         return Line::Skip;
       }
-      return Line::Object(crate::json::JsonDocument { source: move owned, tape: copy(tape) });
+      return Line::Object(crate::json::JsonDocument { source: move owned, tape: move tape });
     }
   }
 }
