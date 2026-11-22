@@ -319,6 +319,24 @@ fn from_string(v: str) -> Iso ! alloc
   return absent();
 }
 
+// DB39: the 24 canonical bytes at p, copied. Kept out of iso_of so its proof does not carry the JsonDocument invariant.
+fn canonical_copy(b: [u8], p: i64) -> Iso ! alloc
+  requires 0 <= p && p + 24 <= len(b)
+  requires b[p + 4] == 45 && b[p + 7] == 45 && b[p + 10] == 84 && b[p + 13] == 58 && b[p + 16] == 58 && b[p + 19] == 46 && b[p + 23] == 90
+  requires forall i in 0..24: (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19 || i == 23 || (48 <= b[p + i] && b[p + i] <= 57))
+  ensures result.status == 0 && len(result.text) == 24 && result.text[4] == 45 && result.text[7] == 45 && result.text[10] == 84 && result.text[13] == 58 && result.text[16] == 58 && result.text[19] == 46 && result.text[23] == 90
+  ensures forall i in 0..24: (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19 || i == 23 || (48 <= result.text[i] && result.text[i] <= 57))
+{
+  let mut out: [u8] = alloc(24, 0);
+  let mut j: i64 = 0;
+  while j < 24
+    invariant 0 <= j && j <= 24 && len(out) == 24
+    invariant forall q in 0..j: out[q] == b[p + q]
+    decreases 24 - j
+  { out[j] = b[p + j]; j = j + 1; }
+  return Iso { status: 0, text: copy(out) };
+}
+
 // tail.ts isoOf for the value with tape id `id` of doc.
 pub fn iso_of(doc: crate::json::JsonDocument, id: i64) -> Iso ! alloc
   ensures result.status == 0 ==> (len(result.text) == 24 && result.text[4] == 45 && result.text[7] == 45 && result.text[10] == 84 && result.text[13] == 58 && result.text[16] == 58 && result.text[19] == 46 && result.text[23] == 90)
@@ -338,14 +356,7 @@ pub fn iso_of(doc: crate::json::JsonDocument, id: i64) -> Iso ! alloc
     // A quoted canonical timestamp has no escapes, so its value is the 24 raw bytes: no decoding needed.
     let sp: crate::access::Span = crate::access::raw_span(doc, id);
     if sp.status == 0 && sp.end - sp.start == 26 && canonical_at(doc.source, sp.start + 1) {
-      let mut out: [u8] = alloc(24, 0);
-      let mut j: i64 = 0;
-      while j < 24
-        invariant 0 <= j && j <= 24 && len(out) == 24 && 0 <= sp.start && sp.start + 26 <= len(doc.source)
-        invariant forall q in 0..j: out[q] == doc.source[sp.start + 1 + q]
-        decreases 24 - j
-      { out[j] = doc.source[sp.start + 1 + j]; j = j + 1; }
-      return Iso { status: 0, text: copy(out) };
+      return canonical_copy(doc.source, sp.start + 1);
     }
     let t: crate::jstr::Text = crate::access::string_text(doc, id);
     match t {

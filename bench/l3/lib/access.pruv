@@ -5,8 +5,9 @@ fn valid(doc: crate::json::JsonDocument, id: i64) -> bool
   ensures result ==> (0 <= id && id < len(doc.tape) / 6 && len(doc.tape) <= 6291456)
   ensures result ==> (0 <= doc.tape[6 * id] && doc.tape[6 * id] <= 6)
 {
-  if len(doc.tape) > 6291456 || id < 0 || id >= len(doc.tape) / 6 { return false; }
-  return 0 <= doc.tape[6 * id] && doc.tape[6 * id] <= 6;
+  // DB39 (as DB34 pkgs/access): the JsonDocument invariant gives the tape bound and kinds 0..7.
+  if id < 0 || id >= len(doc.tape) / 6 { return false; }
+  return doc.tape[6 * id] <= 6;
 }
 pub fn kind(doc: crate::json::JsonDocument, id: i64) -> i64
   ensures result == -3 || (0 <= result && result <= 6)
@@ -19,7 +20,6 @@ pub fn raw_span(doc: crate::json::JsonDocument, id: i64) -> Span
 {
   if !valid(doc, id) { return Span { status: -3, start: 0, end: 0 }; }
   let s: i64 = doc.tape[6 * id + 1]; let e: i64 = doc.tape[6 * id + 2];
-  if s < 0 || e < s || e > len(doc.source) || e > 16777216 { return Span { status: -4, start: 0, end: 0 }; }
   return Span { status: 0, start: s, end: e };
 }
 pub fn array_length(doc: crate::json::JsonDocument, id: i64) -> i64
@@ -33,7 +33,6 @@ pub fn array_at(doc: crate::json::JsonDocument, id: i64, index: i64) -> i64
   if !valid(doc, id) { return -3; } if doc.tape[6 * id] != 5 { return -2; }
   if index < 0 { return -1; }
   let stop: i64 = doc.tape[6 * id + 3];
-  if stop <= id || stop > len(doc.tape) / 6 { return -4; }
   let mut j: i64 = id + 1; let mut n: i64 = 0;
   while j < stop
     invariant 0 <= id && id < j && j <= stop && stop <= len(doc.tape) / 6 && len(doc.tape) <= 6291456
@@ -41,7 +40,7 @@ pub fn array_at(doc: crate::json::JsonDocument, id: i64, index: i64) -> i64
     decreases stop - j
   {
     let next: i64 = doc.tape[6 * j + 3];
-    if next <= j || next > stop || doc.tape[6 * j + 4] != id || !valid(doc, j) { return -4; }
+    if next > stop || doc.tape[6 * j + 4] != id || !valid(doc, j) { return -4; }
     if n == index { return j; } n = n + 1; j = next;
   }
   return -1;
@@ -53,19 +52,17 @@ fn find(doc: crate::json::JsonDocument, id: i64, key: [i64], klen: i64) -> i64
 {
   if !valid(doc, id) { return -3; } if doc.tape[6 * id] != 6 { return -2; }
   let stop: i64 = doc.tape[6 * id + 3];
-  if stop <= id || stop > len(doc.tape) / 6 { return -4; }
   let mut j: i64 = id + 1; let mut found: i64 = -1;
   while j < stop
     invariant 0 <= id && id < j && j <= stop && stop <= len(doc.tape) / 6 && len(doc.tape) <= 6291456
     invariant found == -1 || (0 <= found && found < len(doc.tape) / 6 && doc.tape[6 * found + 4] == id)
     decreases stop - j
   {
-    if doc.tape[6 * j] != 7 || doc.tape[6 * j + 4] != id || doc.tape[6 * j + 3] != j + 1 { return -4; }
+    if doc.tape[6 * j] != 7 || doc.tape[6 * j + 4] != id { return -4; }
     let v: i64 = j + 1; if v >= stop || !valid(doc, v) { return -4; }
     let next: i64 = doc.tape[6 * v + 3];
-    if next <= v || next > stop || doc.tape[6 * v + 4] != id { return -4; }
+    if next > stop || doc.tape[6 * v + 4] != id { return -4; }
     let s: i64 = doc.tape[6 * j + 1]; let e: i64 = doc.tape[6 * j + 2];
-    if s < 0 || e < s || e > len(doc.source) || e > 16777216 { return -4; }
     if crate::jstr::units_equal(doc.source, s, e, key, klen) { found = v; } j = next;
   }
   return found;
@@ -80,19 +77,17 @@ fn find_ascii(doc: crate::json::JsonDocument, id: i64, key: str) -> i64
 {
   if !valid(doc, id) { return -3; } if doc.tape[6 * id] != 6 { return -2; }
   let stop: i64 = doc.tape[6 * id + 3];
-  if stop <= id || stop > len(doc.tape) / 6 { return -4; }
   let mut j: i64 = id + 1; let mut found: i64 = -1;
   while j < stop
     invariant 0 <= id && id < j && j <= stop && stop <= len(doc.tape) / 6 && len(doc.tape) <= 6291456
     invariant found == -1 || (0 <= found && found < len(doc.tape) / 6 && doc.tape[6 * found + 4] == id)
     decreases stop - j
   {
-    if doc.tape[6 * j] != 7 || doc.tape[6 * j + 4] != id || doc.tape[6 * j + 3] != j + 1 { return -4; }
+    if doc.tape[6 * j] != 7 || doc.tape[6 * j + 4] != id { return -4; }
     let v: i64 = j + 1; if v >= stop || !valid(doc, v) { return -4; }
     let next: i64 = doc.tape[6 * v + 3];
-    if next <= v || next > stop || doc.tape[6 * v + 4] != id { return -4; }
+    if next > stop || doc.tape[6 * v + 4] != id { return -4; }
     let s: i64 = doc.tape[6 * j + 1]; let e: i64 = doc.tape[6 * j + 2];
-    if s < 0 || e < s || e > len(doc.source) || e > 16777216 { return -4; }
     // O(1) misses with ascii_equal's result: each decoded unit takes at least one byte, and an
     // ASCII byte other than a backslash decodes to itself.
     let mut miss: bool = false;
@@ -229,7 +224,6 @@ pub fn fields_into(doc: crate::json::JsonDocument, id: i64, n: i64, k0: str, k1:
   if !valid(doc, id) { fill_error(n, -3, inout out); return; }
   if doc.tape[6 * id] != 6 { fill_error(n, -2, inout out); return; }
   let stop: i64 = doc.tape[6 * id + 3];
-  if stop <= id || stop > len(doc.tape) / 6 { fill_error(n, -4, inout out); return; }
   let mut j: i64 = id + 1;
   let mut f0: i64 = -1;
   let mut f1: i64 = -1;
@@ -251,12 +245,11 @@ pub fn fields_into(doc: crate::json::JsonDocument, id: i64, n: i64, k0: str, k1:
     invariant f7 == -1 || (0 <= f7 && f7 < len(doc.tape) / 6 && doc.tape[6 * f7 + 4] == id)
     decreases stop - j
   {
-    if doc.tape[6 * j] != 7 || doc.tape[6 * j + 4] != id || doc.tape[6 * j + 3] != j + 1 { fill_error(n, -4, inout out); return; }
+    if doc.tape[6 * j] != 7 || doc.tape[6 * j + 4] != id { fill_error(n, -4, inout out); return; }
     let v: i64 = j + 1; if v >= stop || !valid(doc, v) { fill_error(n, -4, inout out); return; }
     let next: i64 = doc.tape[6 * v + 3];
     if next <= v || next > stop || doc.tape[6 * v + 4] != id { fill_error(n, -4, inout out); return; }
     let s: i64 = doc.tape[6 * j + 1]; let e: i64 = doc.tape[6 * j + 2];
-    if s < 0 || e < s || e > len(doc.source) || e > 16777216 { fill_error(n, -4, inout out); return; }
     f0 = last_match(f0, v, n > 0 && hit(doc, s, e, k0));
     f1 = last_match(f1, v, n > 1 && hit(doc, s, e, k1));
     f2 = last_match(f2, v, n > 2 && hit(doc, s, e, k2));
