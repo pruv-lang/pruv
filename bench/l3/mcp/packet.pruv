@@ -328,20 +328,24 @@ fn put_field(src: [u8], s: i64, e: i64, cap: i64, nonempty: bool, inout q: [i64]
   }
   return cursor;
 }
-pub fn write(p: [i64], d: crate::json::JsonDocument, plan: [i64]) -> [i64] ! alloc
+// The caller's packet is taken (R-6e-12), so it grows in place: on the Rust backend `q = resize(q,want,0)` on the
+// owned local is Vec::resize (no prefix copy, the old packet is not live next to the new one; DB49, G-R00-2) and
+// the final truncate shortens it in place. LLVM still copies on resize (G-LG16-1).
+pub fn write(take p: [i64], d: crate::json::JsonDocument, plan: [i64]) -> [i64] ! alloc
   requires 5010 <= len(p) && len(p) <= 100000000
   requires len(plan) >= 4 && 0 <= plan[0] && plan[0] <= plan[2] && plan[2] <= 500 && len(plan) >= 4+10*plan[0]
   ensures 5010 <= len(result) && len(result) <= 100000000 && len(result) >= len(p)
 {
-  let adm: i64 = plan[0]; let c0: i64 = plan[2]-adm;
+  let adm: i64 = plan[0]; let c0: i64 = plan[2]-adm; let lp: i64 = len(p);
   let mut room: i64 = plan[1]; if room < 0 { room=0; } if room > 100000000 { room=100000000; }
-  let mut want: i64 = len(p)+room; if want > 100000000 { want=100000000; }
-  // One allocation of want words: the prefix is copied once and only the tail is zero-filled (P05G).
-  let mut q: [i64] = resize(p,want,0);
-  let mut cursor: i64 = len(p); let mut k: i64 = 0;
+  let mut want: i64 = lp+room; if want > 100000000 { want=100000000; }
+  // Only the tail is zero-filled; the prefix values are kept (Vec::resize may still move them when it reallocates).
+  let mut q: [i64] = move p;
+  q = resize(q,want,0);
+  let mut cursor: i64 = lp; let mut k: i64 = 0;
   while k < adm
-    invariant 0 <= k && k <= adm && len(q) == want && len(p) <= cursor && cursor <= want && want <= 100000000
-    invariant 5010 <= len(p) && len(p) <= want && adm <= plan[2] && c0 == plan[2]-adm && len(plan) >= 4+10*adm
+    invariant 0 <= k && k <= adm && len(q) == want && lp <= cursor && cursor <= want && want <= 100000000
+    invariant 5010 <= lp && lp <= want && adm <= plan[2] && c0 == plan[2]-adm && len(plan) >= 4+10*adm
     decreases adm-k
   {
     let o: i64 = 4+10*k; let base: i64 = 10+10*(c0+k);

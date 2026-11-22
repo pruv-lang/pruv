@@ -132,7 +132,7 @@ pub fn mcp_check(command: str, argv: str, cwd: str, timeout_ms: i64) -> [i64] ! 
                   if crate::packet::has_work(d,tools,objects) {
                     let pl: [i64] = crate::packet::plan(p,d,tools,count,objects);
                     let admitted: i64 = pl[0]; count=pl[2]; objects=pl[3];
-                    if admitted > 0 { p=crate::packet::write(p,d,pl); }
+                    if admitted > 0 { p=crate::packet::write(move p,d,pl); }
                   }
                   if page < 5 { page=page+1; }
                   let cur: i64 = crate::util::field(d,result_id,"nextCursor"); let cu: crate::access::Units = crate::access::string_units(d,cur);
