@@ -811,11 +811,16 @@ pub fn finish_into(st: [i64], sl: [i64], bk: Store, base: i64, inout wire: [u8],
 fn clip_span(src: [u8], lo: i64, n: i64, max: i64) -> i64
   requires 0 <= lo && 0 <= n && n <= len(src) - lo && 0 <= max
   ensures 0 <= result && result <= n && result <= max
+  ensures n <= max ==> result == n
+  ensures result == 0 || result == n || src[lo + result] < 128 || src[lo + result] > 191
+  ensures result == n || (forall t in result + 1..max + 1: t < n && src[lo + t] >= 128 && src[lo + t] <= 191)
 {
   let mut i: i64 = max;
   if i > n { i = n; }
   while i > 0 && i < n && src[lo + i] >= 128 && src[lo + i] <= 191
     invariant 0 <= i && i <= n && i <= max && n <= len(src) - lo && 0 <= lo
+    invariant n <= max ==> i == n
+    invariant i == n || (forall t in i + 1..max + 1: t < n && src[lo + t] >= 128 && src[lo + t] <= 191)
     decreases i
   {
     i = i - 1;
@@ -828,6 +833,10 @@ fn write_span(inout dst: [u8], at: i64, sep: i64, src: [u8], lo: i64, n: i64, pa
   requires 0 <= sep && sep <= 2 && 0 <= lo && 0 <= n && n <= len(src) - lo && (pad == 0 || pad == 4)
   requires 0 <= at && at <= len(dst) && sep + n + pad <= len(dst) - at
   ensures len(dst) == len(old(dst))
+  ensures forall k in 0..sep: dst[at + k] == 10
+  ensures forall k in 0..n: dst[at + sep + k] == src[lo + k]
+  ensures pad == 4 ==> (dst[at + sep + n] == 240 && dst[at + sep + n + 1] == 144 && dst[at + sep + n + 2] == 128 && dst[at + sep + n + 3] == 128)
+  ensures forall k in 0..len(dst): (k < at || k >= at + sep + n + pad) ==> dst[k] == old(dst)[k]
 {
   put_nl(inout dst, at, sep);
   crate::bytes::copy_span(inout dst, at + sep, src, lo, lo + n);
@@ -933,7 +942,6 @@ pub fn answer3(inout st: [i64], inout sl: [i64], inout bk: Store, src: [u8], lo:
   if cnt > 200 { cnt = 200; }
   if cnt < 1 { return; }
   let piece: i64 = s2 + take + tp;
-  if piece > 32768 { return; }
   reserve(inout bk, sl, st[0], cnt, 0, piece);
   let o: i64 = bk.off[c];
   let e: i64 = bk.end;
