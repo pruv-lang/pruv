@@ -337,8 +337,17 @@ match e {                                  // statement; every variant exactly o
   other than `i64` (`Result<T, i64>` is normalized to the legacy `Result<T>` and is not walked) (under
   `is_ok`, value `ok_val`, label `r.ok`) and the fields of a variant of a non-generic enum (under `is_variant`, value
   `variant_field`, label `s.V.f`); a clause under guards g1..gn is `!g1 || ... || !gn || C`. A type already on the
-  path is skipped. Values in array or `Vec` elements, an `Err` payload and the variants of a generic enum are not
-  assumed to satisfy it (G-LG23).
+  path is skipped. LG24 adds the Err payload of the same `Result<T, E>` (under `!is_ok`, value `err_val`, label
+  `r.err`) and the fields of a variant of a generic enum instance (type arguments substituted, label `w.V.f`). At a
+  call of a generic user function the rules apply to the instantiated signature: an argument whose instantiated
+  parameter type has an effective invariant is checked ("... for parameter x of F", also through payloads such as
+  `x.some`, partial operations of the clause proved first); a parameter named `result` adds no clause there. A
+  result whose instantiated type has one is assumed after the call only when each type parameter of the callee
+  occurs in its parameter types only directly, under `Option` or under a two-argument `Result<T, E>` (E not `i64`),
+  none of those parameters is named `result`, and each type parameter of the result type occurs in a parameter;
+  otherwise the uninstantiated result is assumed (G-LG24-2). The assumption rests on a generic body making a `T`
+  value only from its checked `T` arguments; the body itself sees an abstract `T` and assumes nothing about it.
+  Values in array or `Vec` elements are not assumed to satisfy it (G-LG24-1).
   A failure is `verify/struct_invariant` ("invariant of S (line L) for parameter P of F", "... for result",
   "... for inout P at exit"); a partial operation in a clause proved at a handoff (index, `/`, `some_val`, ...) is
   checked under the same code and message. A host entry may not take a parameter of such a struct

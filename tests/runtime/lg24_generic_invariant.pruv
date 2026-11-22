@@ -1,0 +1,68 @@
+// LG24 (G-LG23-4, G-LG23-3): a valid R passes a generic call and the instantiated result carries its invariant;
+// the invariant of R inside an Err payload and inside a generic enum variant field is assumed for a parameter
+struct R {
+  lo: i64, hi: i64,
+  invariant 0 <= lo && lo <= hi && hi <= 1000
+}
+
+enum Wrap<T> { Nothing, One(v: T) }
+
+fn id<T>(x: T) -> T {
+  return x;
+}
+
+fn ignore<T>(x: T) -> i64
+  ensures result == 1
+{
+  return 1;
+}
+
+fn named<T>(result: T) -> i64 {
+  return 0;
+}
+
+fn via_id(r: R) -> i64
+  ensures 0 <= result && result <= 1000
+{
+  let s: R = id::<R>(r);
+  return s.hi - s.lo;
+}
+
+fn err_width(x: Result<i64, R>) -> i64
+  ensures 0 <= result && result <= 1000
+{
+  match x {
+    Ok(v) => { return 0; }
+    Err(r) => { return r.hi - r.lo; }
+  }
+}
+
+fn wrap_width(w: Wrap<R>) -> i64
+  ensures 0 <= result && result <= 1000
+{
+  match w {
+    Wrap::Nothing => { return 0; }
+    Wrap::One(r) => { return r.hi - r.lo; }
+  }
+}
+
+pub fn run(k: i64) -> i64
+  requires 0 <= k && k <= 3
+{
+  let r: R = R { lo: k, hi: k * 10 };
+  let a: i64 = via_id(r);
+  let b: i64 = ignore::<R>(R { lo: 1, hi: 2 });
+  let c: i64 = ignore::<Option<R>>(Some::<R>(R { lo: 0, hi: k }));
+  let d: i64 = err_width(Err::<i64, R>(R { lo: 2, hi: 5 + k }));
+  let e: i64 = wrap_width(Wrap::<R>::One(R { lo: 0, hi: k }));
+  let f: i64 = err_width(Ok::<i64, R>(k)) + wrap_width(Wrap::<R>::Nothing);
+  let g: i64 = named::<R>(R { lo: 0, hi: 0 });
+  let h: R = later::<R>(Ok::<R>(R { lo: 0, hi: 0 }), R { lo: 1, hi: 1 });
+  assert h.lo <= h.hi;
+  return a * 10000 + b * 1000 + c * 100 + d * 10 + e + f + g * 0 + (h.hi - h.lo) * 0;
+}
+
+// declared after its caller: the uninstantiated result invariant of R is still assumed there
+fn later<T>(r: Result<T>, x: T) -> R {
+  return R { lo: 3, hi: 4 };
+}

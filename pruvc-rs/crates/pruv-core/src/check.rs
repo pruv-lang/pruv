@@ -6567,13 +6567,15 @@ pub enum InvariantStep {
     Field(String, GType),
     Some(GType),
     Ok(GType),
-    VariantField(String, String, String, GType),
+    Err(GType),
+    VariantField(GType, String, String, GType),
 }
 
 impl InvariantStep {
     fn ty(&self) -> &GType {
         match self {
-            Self::Field(_, ty) | Self::Some(ty) | Self::Ok(ty) | Self::VariantField(_, _, _, ty) => ty,
+            Self::Field(_, ty) | Self::Some(ty) | Self::Ok(ty) | Self::Err(ty)
+            | Self::VariantField(_, _, _, ty) => ty,
         }
     }
 }
@@ -6587,7 +6589,7 @@ fn invariant_positions<'a>(
     }
     match (ty.name.as_str(), ty.args.as_slice()) {
         ("option", [payload]) => return (None, vec![InvariantStep::Some(payload.clone())]),
-        ("result", [payload, _]) => return (None, vec![InvariantStep::Ok(payload.clone())]),
+        ("result", [ok, err]) => return (None, vec![InvariantStep::Ok(ok.clone()), InvariantStep::Err(err.clone())]),
         _ => {}
     }
     match lookup(&ty.name) {
@@ -6600,9 +6602,15 @@ fn invariant_positions<'a>(
             }).collect();
             (Some(s).filter(|s| !s.invariants.is_empty() && s.tparams.is_empty()), fields)
         }
-        Some(TypeDecl::Enum(e)) if e.tparams.is_empty() => {
+        Some(TypeDecl::Enum(e)) => {
+            let Ok(mapping) = bind_args(&decl_owner(&e.name), e.tparams.len(), &ty.args) else {
+                return (None, Vec::new());
+            };
+            let mapping = &mapping;
             let fields = e.variants.iter().flat_map(|v| v.fields.iter().map(|f| {
-                InvariantStep::VariantField(e.name.clone(), v.name.clone(), f.name.clone(), GType::from_key(&f.ty))
+                InvariantStep::VariantField(
+                    ty.clone(), v.name.clone(), f.name.clone(), substitute(&GType::from_key(&f.ty), mapping),
+                )
             })).collect();
             (None, fields)
         }
