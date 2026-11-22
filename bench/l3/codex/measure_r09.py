@@ -15,7 +15,7 @@ from time import perf_counter_ns
 
 HERE = Path(__file__).resolve().parent
 WORK = HERE / 'work' / 'r09'
-PAIRS = ('rs_rust', 'rs_llvm')
+PAIRS = ('py_rust', 'py_llvm', 'rs_rust', 'rs_llvm')
 BATCH = 20
 THREAD = 'r09-thread'
 FOLDER = '/work/r09'
@@ -185,38 +185,52 @@ def time_wait4(runner, payload):
         return ns, usage.ru_maxrss, stdout.read()
 
 
-def measure(name, size, pruv, hand, request, expected, rounds, timed):
-    samples = {'pruv': [], 'hand': []}
+def measure(name, size, pruv, hand, request, expected, rounds, timed, base=None):
+    samples = {'pruv': [], 'hand': [], 'base': []}
     payload = request * BATCH
     expected_batch = expected * BATCH
+    sides = [('pruv', pruv), ('hand', hand)] + ([('base', base)] if base else [])
     for index in range(rounds):
-        order = [('pruv', pruv), ('hand', hand)]
-        if index % 2:
-            order.reverse()
+        order = sides[index % len(sides):] + sides[:index % len(sides)]
         for side, runner in order:
             ns, rss, stdout = timed(runner, payload)
             if stdout != expected_batch:
                 raise RuntimeError(f'{name} {size} round {index + 1}: {side} batch differs from preflight')
             samples[side].append((ns, rss))
 
-    cells = []
+    cells, base_cells = [], []
     for index, (axis, unit) in enumerate((('time', 'ns'), ('rss', 'bytes'))):
         p, h = (median(sample[index] for sample in samples[side]) for side in ('pruv', 'hand'))
         cells.append(dict(name=name, axis=axis, size=size, kind='proportional',
                           pruv=p, hand=h, ratio=p / h, unit=unit, runs=rounds))
-        print(f'{name:16} {size} {axis:4} {unit:5} {p:15,d} {h:15,d} {p / h:8.3f}x', flush=True)
-    return cells
+        line = f'{name:16} {size} {axis:4} {unit:5} {p:15,d} {h:15,d} {p / h:8.3f}x'
+        if base:
+            b = median(sample[index] for sample in samples['base'])
+            base_cells.append(dict(name=name, axis=axis, size=size, kind='proportional',
+                                   pruv=b, hand=h, ratio=b / h, unit=unit, runs=rounds))
+            line += f'   base {b:15,d} {b / h:8.3f}x'
+        print(line, flush=True)
+    return cells, base_cells
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--quick', action='store_true', help='run one round at size M')
     parser.add_argument('--rounds', type=int, default=7, help='alternating rounds (default 7)')
+    parser.add_argument('--save', help='copy the Pruv runners into this directory (a base for --base)')
+    parser.add_argument('--base', help='also time the runners saved in this directory by --save')
     args = parser.parse_args()
     quick = args.quick
     WORK.mkdir(parents=True, exist_ok=True)
     runners = build_hand()
     hand = WORK / 'reader'
+    if args.save:
+        Path(args.save).mkdir(parents=True, exist_ok=True)
+        for pair, runner in runners.items():
+            shutil.copy2(runner, Path(args.save) / runner.name)
+        print(f'saved runners to {args.save}', flush=True)
+        return
+    bases = {pair: Path(args.base) / runner.name for pair, runner in runners.items()} if args.base else {}
     sizes = [('M', 5, 10)] if quick else [('M', 5, 10), ('L', 40, 5)]
     checked = {}
     for size, pages, per_page in sizes:
@@ -229,21 +243,27 @@ def main():
             actual, _ = invoke([runner], request)
             if actual != expected:
                 raise RuntimeError(f'{pair} {size}: Pruv and hand stdout differ before timing')
+            if pair in bases and invoke([bases[pair]], request)[0] != expected:
+                raise RuntimeError(f'{pair} {size}: base and hand stdout differ before timing')
         checked[size] = request, expected
 
     rounds = 1 if quick else args.rounds
     timed = rss_timer()
     print(f'{BATCH} reads per sample, {rounds} round(s), preflight stdout matched', flush=True)
     print(f'{"case":16} S {"axis":4} {"unit":5} {"Pruv":>15} {"hand":>15} {"Pruv/hand":>9}', flush=True)
-    cells = []
+    cells, base_cells = [], []
     for pair, runner in runners.items():
         for size, (request, expected) in checked.items():
             name = f'read/{pair.replace("_", "/")}'
-            cells.extend(measure(name, size, runner, hand, request, expected, rounds, timed))
+            got, got_base = measure(name, size, runner, hand, request, expected, rounds, timed, bases.get(pair))
+            cells.extend(got)
+            base_cells.extend(got_base)
     method = 'wait4' if timed is time_wait4 else 'time -l'
-    out = WORK / ('perf_cells_quick.json' if quick else 'perf_cells.json')
-    out.write_text(json.dumps({'source': 'codex/r09', 'timing': f'wall perf_counter_ns, peak RSS via {method}',
-                               'rounds': rounds, 'cells': cells}, indent=2) + '\n')
+    for cell_list, stem in ((cells, 'perf_cells'), (base_cells, 'perf_cells_base')):
+        if cell_list:
+            out = WORK / (stem + ('_quick.json' if quick else '.json'))
+            out.write_text(json.dumps({'source': 'codex/r09', 'timing': f'wall perf_counter_ns, peak RSS via {method}',
+                                       'rounds': rounds, 'cells': cell_list}, indent=2) + '\n')
 
 
 if __name__ == '__main__':

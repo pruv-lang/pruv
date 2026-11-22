@@ -288,7 +288,7 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
   let code: i64 = ctl[0];
   let stage: i64 = ctl[1];
   if code == 0 {
-    let wire: [u8] = crate::read::finish(hs, ht, hb.data, pl, pb, title, model, more);
+    let wire: [u8] = crate::read::finish(hs, ht, move hb.data, pl, pb, title, model, more);
     crate::transport::close(move l, slot);
     return wire;
   }

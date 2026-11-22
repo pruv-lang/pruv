@@ -802,3 +802,149 @@ pub fn finish_into(st: [i64], sl: [i64], bk: Store, base: i64, inout wire: [u8],
   }
   return Placed { turns: move turns, kept: kept, trimmed: tr, total: p[1], text_len: tl, ok: true };
 }
+
+// Span forms (DB32): begin2 / answer2 over a byte span src[lo..lo+n) instead of a str, so a caller that holds the
+// text in a byte arena does not copy it out first. The span must be valid UTF-8 (the caller checks); then clipping
+// at the last byte that is not a continuation byte (128..191) is the clip_bytes cut.
+
+// Longest prefix length of src[lo..lo+n) that is at most max and ends before a non-continuation byte or at n.
+fn clip_span(src: [u8], lo: i64, n: i64, max: i64) -> i64
+  requires 0 <= lo && 0 <= n && n <= len(src) - lo && 0 <= max
+  ensures 0 <= result && result <= n && result <= max
+{
+  let mut i: i64 = max;
+  if i > n { i = n; }
+  while i > 0 && i < n && src[lo + i] >= 128 && src[lo + i] <= 191
+    invariant 0 <= i && i <= n && i <= max && n <= len(src) - lo && 0 <= lo
+    decreases i
+  {
+    i = i - 1;
+  }
+  return i;
+}
+
+// sep LF bytes, src[lo..lo+n), then pad bytes of U+10000 (pad 0 or 4) at dst[at..].
+fn write_span(inout dst: [u8], at: i64, sep: i64, src: [u8], lo: i64, n: i64, pad: i64) -> ()
+  requires 0 <= sep && sep <= 2 && 0 <= lo && 0 <= n && n <= len(src) - lo && (pad == 0 || pad == 4)
+  requires 0 <= at && at <= len(dst) && sep + n + pad <= len(dst) - at
+  ensures len(dst) == len(old(dst))
+{
+  put_nl(inout dst, at, sep);
+  crate::bytes::copy_span(inout dst, at + sep, src, lo, lo + n);
+  if pad == 4 {
+    let p: i64 = at + sep + n;
+    dst[p] = 240;
+    dst[p + 1] = 144;
+    dst[p + 2] = 128;
+    dst[p + 3] = 128;
+  }
+}
+
+// begin2 with the prompt src[lo..lo+n) (valid UTF-8).
+pub fn begin3(inout st: [i64], inout sl: [i64], inout bk: Store, src: [u8], lo: i64, n: i64, created: str) -> () ! alloc
+  requires len(st) == 4 && len(sl) == 1600
+  requires len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  requires 0 <= st[0] && st[0] < 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  requires 0 <= lo && 0 <= n && n <= len(src) - lo && n <= 100000000
+  requires len(created) == 0 || len(created) == 24
+  ensures len(st) == 4 && len(sl) == 1600
+  ensures len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  ensures st[0] == old(st)[0] + 1 && st[1] == 1 && st[2] == 0 && st[3] == old(st)[0] % 200
+  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+{
+  let k: i64 = st[0];
+  let w: i64 = k % 200;
+  let cn: i64 = clip_span(src, lo, n, 32768);
+  let mut cnt: i64 = k;
+  if cnt > 199 { cnt = 199; }
+  reserve(inout bk, sl, k, cnt, cn, cn);
+  let at: i64 = bk.end;
+  crate::bytes::copy_span(inout bk.data, at, src, lo, lo + cn);
+  bk.off[w] = at;
+  bk.end = at + cn;
+  let mut has: i64 = 0;
+  if len(created) == 24 {
+    put_str(inout bk.stamp, 48 * w, created, 24);
+    has = 1;
+  }
+  let mut cl: i64 = 0;
+  if n > 32768 || st[2] == 1 { cl = 1; }
+  sl[8 * w] = cn;
+  sl[8 * w + 1] = 0;
+  sl[8 * w + 2] = 0;
+  sl[8 * w + 3] = 0;
+  sl[8 * w + 4] = cl;
+  sl[8 * w + 5] = has;
+  sl[8 * w + 6] = 0;
+  sl[8 * w + 7] = k;
+  st[0] = k + 1;
+  st[1] = 1;
+  st[2] = 0;
+  st[3] = w;
+}
+
+// answer2 with the text src[lo..lo+n) (valid UTF-8) followed, when pad is 4, by the one scalar U+10000.
+pub fn answer3(inout st: [i64], inout sl: [i64], inout bk: Store, src: [u8], lo: i64, n: i64, pad: i64, at: str) -> () ! alloc
+  requires len(st) == 4 && len(sl) == 1600
+  requires len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  requires 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  requires 0 <= lo && 0 <= n && n <= len(src) - lo && n + pad <= 100000000 && (pad == 0 || pad == 4)
+  requires len(at) == 0 || len(at) == 24
+  ensures len(st) == 4 && len(sl) == 1600
+  ensures len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  ensures st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
+  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+{
+  if st[1] == 0 { return; }
+  let c: i64 = st[3];
+  if len(at) == 24 {
+    put_str(inout bk.stamp, 48 * c + 24, at, 24);
+    sl[8 * c + 6] = 1;
+  }
+  let tl: i64 = n + pad;
+  if tl == 0 { return; }
+  let used: i64 = sl[8 * c + 2];
+  if used >= 32768 { return; }
+  let rl: i64 = sl[8 * c + 1];
+  let room: i64 = 32768 - used;
+  let mut sep: i64 = 0;
+  if rl > 0 { sep = 2; }
+  let mut s2: i64 = sep;
+  let mut take: i64 = n;
+  let mut tp: i64 = pad;
+  let mut full: bool = true;
+  if sep + tl > room {
+    full = false;
+    tp = 0;
+    if sep == 2 && room < 2 {
+      s2 = room;
+      take = 0;
+    } else if room - sep < n {
+      take = clip_span(src, lo, n, room - sep);
+    }
+  }
+  let mut cnt: i64 = st[0];
+  if cnt > 200 { cnt = 200; }
+  if cnt < 1 { return; }
+  let piece: i64 = s2 + take + tp;
+  if piece > 32768 { return; }
+  reserve(inout bk, sl, st[0], cnt, 0, piece);
+  let o: i64 = bk.off[c];
+  let e: i64 = bk.end;
+  if o < 0 || o != e - sl[8 * c] - rl { return; }
+  write_span(inout bk.data, e, s2, src, lo, take, tp);
+  bk.end = e + piece;
+  sl[8 * c + 1] = rl + piece;
+  if full {
+    sl[8 * c + 2] = used + piece;
+  } else {
+    sl[8 * c + 2] = 32768;
+    sl[8 * c + 4] = 1;
+  }
+}

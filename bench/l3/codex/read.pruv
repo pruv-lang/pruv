@@ -112,18 +112,25 @@ fn stamp_str(hb: [u8], o: i64) -> str ! alloc
 }
 
 // One held turn into the collector: begin, the folded reply when present, then its tool items.
-fn feed(inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store, prompt: str, created: str, ans: bool, text: str, completed: str, tools: i64) -> () ! alloc
+fn feed(inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store, hb: [u8], po: i64, pn: i64, created: str, ans: bool, ro: i64, rn: i64, pad: i64, completed: str, tools: i64) -> () ! alloc
   requires len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && 0 <= st[0] && st[0] < 200
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-  requires len(prompt) <= 100000000 && (len(created) == 0 || len(created) == 24) && len(text) <= 100000000 && (len(completed) == 0 || len(completed) == 24) && 0 <= tools && tools <= 100000000
+  requires 0 <= po && 0 <= pn && pn <= len(hb) - po && pn <= 100000000 && 0 <= ro && 0 <= rn && rn <= len(hb) - ro && rn <= 99999996 && (pad == 0 || pad == 4)
+  requires (len(created) == 0 || len(created) == 24) && (len(completed) == 0 || len(completed) == 24) && 0 <= tools && tools <= 100000000
   ensures len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && st[0] == old(st)[0] + 1
   ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
 {
-  crate::turns::begin2(inout st, inout sl, inout bk, prompt, created);
-  if ans { crate::turns::answer2(inout st, inout sl, inout bk, text, completed); }
+  crate::turns::begin3(inout st, inout sl, inout bk, hb, po, pn, created);
+  if ans { crate::turns::answer3(inout st, inout sl, inout bk, hb, ro, rn, pad, completed); }
   add_tools(inout st, inout sl, tools);
+}
+
+// The bytes are valid UTF-8 (the check decoding did).
+fn span_ok(b: [u8]) -> bool
+{
+  return utf8_valid(b);
 }
 
 fn add_tools(inout st: [i64], inout sl: [i64], n: i64) -> ()
@@ -147,10 +154,17 @@ fn add_tools(inout st: [i64], inout sl: [i64], n: i64) -> ()
   }
 }
 
-// Feed the held turns oldest first into a fresh collector and finish it. bad[0] is set when a held record is malformed.
-pub fn replay(ht: [i64], hb: [u8], count: i64, base: i64, inout bad: [i64]) -> crate::turns::Collected ! alloc
-  requires len(ht) == 2000 && len(hb) <= 8700000 && 0 <= count && count <= 200 && 0 <= base && base <= 3500000 && len(bad) == 1
+// Feed the held turns oldest first into a fresh collector, size the wire from the text layout (header of
+// 20 + 10 * kept + 2 * items words, then base bytes, then the turn texts) and write the selected texts straight
+// into it (turns::finish_into, D-DB28-1). bad[0] is set when a held record is malformed or the layout disagrees.
+pub fn replay(ht: [i64], take held: [u8], count: i64, base: i64, items: i64, inout wire: [u8], inout bad: [i64]) -> crate::turns::Placed ! alloc
+  requires len(ht) == 2000 && len(held) <= 8700000 && 0 <= count && count <= 200 && 0 <= base && base <= 3500000 && len(bad) == 1
+  requires 0 <= items && items <= 30
+  ensures len(bad) == 1
 {
+  // hb is owned here and released before the wire is allocated, so the held text, the store and the wire are never
+  // live together (DB32 step 3).
+  let mut hb: [u8] = move held;
   let mut st: [i64] = crate::turns::new_state();
   let mut sl: [i64] = crate::turns::new_slots();
   // Size the store once from the held turns: each turn appends at most its clipped prompt and its clipped reply
@@ -175,15 +189,10 @@ pub fn replay(ht: [i64], hb: [u8], count: i64, base: i64, inout bad: [i64]) -> c
   let o0: [i64] = alloc(200, -1);
   let s0: [u8] = alloc(9600, 0);
   let mut bk: crate::turns::Store = crate::turns::Store { data: move d0, off: move o0, stamp: move s0, end: 0 };
-  let mut pad: [u8] = alloc(4, 0);
-  pad[0] = 240;
-  pad[1] = 144;
-  pad[2] = 128;
-  pad[3] = 128;
   let mut fed: i64 = 0;
   let mut j: i64 = count;
   while j > 0
-    invariant 0 <= j && j <= count && count <= 200 && len(ht) == 2000 && len(hb) <= 8700000 && len(bad) == 1 && len(pad) == 4
+    invariant 0 <= j && j <= count && count <= 200 && len(ht) == 2000 && len(hb) <= 8700000 && len(bad) == 1
     invariant 0 <= fed && fed <= count && fed + j <= count
     invariant len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && st[0] == fed && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
@@ -204,31 +213,31 @@ pub fn replay(ht: [i64], hb: [u8], count: i64, base: i64, inout bad: [i64]) -> c
     if po < 0 || pn < 0 || pn > 2097152 || po > len(hb) - pn || ro < 0 || rn < 0 || rn > 32768 || ro > len(hb) - rn || nrep < 0 || tools < 0 || tools > 100000000 || (rcl != 0 && rcl != 1) || co < -1 || (co >= 0 && co > len(hb) - 24) || dof < -1 || (dof >= 0 && dof > len(hb) - 24) {
       bad[0] = 1;
     } else {
-      let mut pbytes: [u8] = alloc(pn, 0);
-      crate::bytes::copy_span(inout pbytes, 0, hb, po, po + pn);
-      let prompt: str = crate::jstr::adapter_probe(pbytes);
+      // the spans of hb are passed as they are (no copy, D-DB28-1); a span that is not valid UTF-8 counts as empty,
+      // as decoding it did before
+      let mut pl: i64 = 0;
+      if span_ok(subview(hb, po, po + pn)) { pl = pn; }
+      let mut rl: i64 = 0;
+      let mut pd: i64 = 0;
+      if nrep > 0 {
+        if span_ok(subview(hb, ro, ro + rn)) {
+          rl = rn;
+          if rcl == 1 { pd = 4; }
+        }
+      }
       let created: str = stamp_str(hb, co);
       let completed: str = stamp_str(hb, dof);
-      if len(prompt) > 100000000 {
-        bad[0] = 1;
-      } else {
-        let none: str = "";
-        if nrep > 0 {
-          let mut fbuf: [u8] = alloc(rn, 0);
-          crate::bytes::copy_span(inout fbuf, 0, hb, ro, ro + rn);
-          if rcl == 1 { fbuf = crate::util::join(fbuf, pad); }
-          let t: str = crate::jstr::adapter_probe(fbuf);
-          // t is fed in place (no copy into a second text)
-          if len(t) <= 100000000 { feed(inout st, inout sl, inout bk, prompt, created, true, t, completed, tools); }
-          else { feed(inout st, inout sl, inout bk, prompt, created, false, none, completed, tools); }
-        } else {
-          feed(inout st, inout sl, inout bk, prompt, created, false, none, completed, tools);
-        }
-        fed = fed + 1;
-      }
+      feed(inout st, inout sl, inout bk, hb, po, pl, created, nrep > 0, ro, rl, pd, completed, tools);
+      fed = fed + 1;
     }
   }
-  return crate::turns::finish2(st, sl, inout bk, base);
+  hb = alloc(0, 0);
+  let layout: crate::turns::Layout = crate::turns::text_layout(st, sl);
+  let at: i64 = 8 * (20 + 10 * layout.kept + 2 * items) + base;
+  wire = alloc(at + layout.text_len, 0);
+  let col: crate::turns::Placed = crate::turns::finish_into(st, sl, bk, base, inout wire, at);
+  if !col.ok || col.kept != layout.kept || col.text_len != layout.text_len { bad[0] = 1; }
+  return col;
 }
 
 fn put_str(inout dst: [u8], at: i64, s: str) -> ()
@@ -248,7 +257,7 @@ fn put_str(inout dst: [u8], at: i64, s: str) -> ()
 }
 
 // The result packet of a finished read. Text layout: title, model, lastPlan at (24), plan item blob, then the turn texts.
-pub fn finish(hs: [i64], ht: [i64], hb: [u8], pl: [i64], pb: [u8], title: str, model: str, more: bool) -> [u8] ! alloc
+pub fn finish(hs: [i64], ht: [i64], take hb: [u8], pl: [i64], pb: [u8], title: str, model: str, more: bool) -> [u8] ! alloc
   requires len(hs) == 8 && len(ht) == 2000 && len(hb) <= 8700000 && len(pl) == 64 && len(pb) == 18024
   requires 0 <= hs[0] && hs[0] <= 200
   requires -1 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000 && (pl[63] == 0 || pl[63] == 1)
@@ -271,9 +280,10 @@ pub fn finish(hs: [i64], ht: [i64], hb: [u8], pl: [i64], pb: [u8], title: str, m
   }
   let base: i64 = tl + ml + alen + blob;
   let mut bad: [i64] = alloc(1, 0);
-  let col: crate::turns::Collected = replay(ht, hb, hs[0], base, inout bad);
+  let mut wire: [u8] = alloc(0, 0);
+  let col: crate::turns::Placed = replay(ht, move hb, hs[0], base, pitems, inout wire, inout bad);
   let nt: i64 = len(col.turns);
-  let nx: i64 = len(col.text);
+  let nx: i64 = col.text_len;
   if bad[0] != 0 || nt < 0 || nt > 2000 || nx < 0 || nx > 2106752 || col.kept < 0 || col.kept > 200 || nt != 10 * col.kept {
     return crate::packet::wire_fail(2, 6, empty);
   }
@@ -306,13 +316,12 @@ pub fn finish(hs: [i64], ht: [i64], hb: [u8], pl: [i64], pb: [u8], title: str, m
     rows[nt + 2 * q + 1] = pl[3 + 2 * q];
     q = q + 1;
   }
-  let mut wire: [u8] = crate::packet::wire_read(m, rows, total);
-  if len(wire) == 24 { return wire; }
   let header: i64 = 8 * (20 + rl);
+  if len(wire) != header + total { return crate::packet::wire_fail(2, 6, empty); }
+  if !crate::packet::read_header(m, rows, total, inout wire) { return crate::packet::wire_fail(2, 6, empty); }
   put_str(inout wire, header, title);
   put_str(inout wire, header + tl, model);
   if alen == 24 { crate::bytes::copy_span(inout wire, header + tl + ml, pb, 18000, 18024); }
   if blob > 0 { crate::bytes::copy_span(inout wire, header + tl + ml + alen, pb, 0, blob); }
-  crate::bytes::copy_span(inout wire, header + base, col.text, 0, nx);
   return wire;
 }
