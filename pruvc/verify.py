@@ -2335,7 +2335,7 @@ class FnVerifier:
                 # the same requires/termination obligations; legacy programs keep their exact old behavior and SMT.
                 # G5 A1: every inout call applies its ensures, in legacy single-file mode too
                 if ios or f.foreign is not None or n in s.scc_id or s.explicit:
-                    for en in f.inv_ensures + f.ensures:
+                    for en in s.inv_of(e, f)[1] + f.ensures:
                         s.assume(st, g, s.ev(en, st, g, False, cenv))
                 if ios:
                     s.post_refine(e, ios, st, g)
@@ -2363,7 +2363,7 @@ class FnVerifier:
             else:
                 xv = s.ev(xa, st, g, False, cenv) if code and xa is not None else None
             cenv["result"] = res
-            for en in f.inv_ensures + f.ensures:
+            for en in s.inv_of(e, f)[1] + f.ensures:
                 s.assume(st, g, s.ev(en, st, g, False, cenv))
             if xv is not None:
                 s.assume(st, g, res == xv)
@@ -2373,12 +2373,21 @@ class FnVerifier:
         finally:
             s.theta = saved
 
+    def inv_of(s, node, f):
+        """LG24: the struct invariant (requires, ensures) at a call: the instantiated ones of a generic call, else f's"""
+        return getattr(node, "inv_inst", None) or (f.inv_requires, f.inv_ensures)
+
     def prove_call_requires(s, node, f, st, g, env):
-        for i, r in enumerate(f.inv_requires):
+        prev = []   # earlier invariant clauses (domain + value) proven above may justify later lookups
+        for i, r in enumerate(s.inv_of(node, f)[0]):
             name, line, param = r.struct_invariant
-            s.prove(st, g, s.ev(r, st, g, False, env), node, "struct_invariant",
-                    "invariant of %s (line %d) for parameter %s of %s" % (name, line, param, node.name),
-                    key_extra=i)
+            what = "invariant of %s (line %d) for parameter %s of %s" % (name, line, param, node.name)
+            for dom, code in s.dom_obligations(r, st, g + prev, env):
+                s.prove(st, g + prev, dom, node, "struct_invariant", what, key_extra=(i, code))
+                prev.append(dom)
+            ob = s.ev(r, st, g, False, env)
+            s.prove(st, g, ob, node, "struct_invariant", what, key_extra=i)
+            prev.append(ob)
         for r in f.requires:
             ob = s.ev(r, st, g, False, env)
             s.prove(st, g, ob, node, "call_requires", "precondition of %s (line %d)" % (node.name, r.line))
@@ -2503,7 +2512,7 @@ class FnVerifier:
         for c, f, args, cenv, ios, theta in brs:
             saved, s.theta = s.theta, theta
             try:
-                for en in f.inv_ensures + f.ensures:
+                for en in s.inv_of(c, f)[1] + f.ensures:
                     s.assume(st, [], s.ev(en, st, [], False, cenv))
             finally:
                 s.theta = saved
@@ -2513,7 +2522,7 @@ class FnVerifier:
             b = base.fork()
             saved, s.theta = s.theta, theta
             try:
-                for en in f.inv_ensures + f.ensures:
+                for en in s.inv_of(c, f)[1] + f.ensures:
                     s.assume(b, [], s.ev(en, b, [], False, cenv))
             finally:
                 s.theta = saved

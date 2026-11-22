@@ -1,0 +1,23 @@
+// LG24 (G-LG23-3): a Result whose Err payload breaks the struct invariant is rejected at the return
+struct R {
+  lo: i64, hi: i64,
+  invariant 0 <= lo && lo <= hi
+}
+
+fn mk(k: i64) -> Result<i64, R>
+  requires 0 <= k && k <= 10
+{
+  let mut r: R = R { lo: 0, hi: k };
+  r.lo = k + 1;
+  return Err::<i64, R>(r);
+}
+
+pub fn run(k: i64) -> i64
+  requires 0 <= k && k <= 10
+{
+  let x: Result<i64, R> = mk(k);
+  match x {
+    Ok(v) => { return v; }
+    Err(r) => { return r.hi; }
+  }
+}

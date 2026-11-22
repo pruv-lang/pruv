@@ -265,6 +265,10 @@ def invariant_base(name, ty, path, line, col, file, guards=None):
             if guards is not None:
                 guards.append(mk(Call(line, col, "is_" + kind, [base], BOOL)))
             nxt = Call(line, col, kind + "_val", [base], sty)
+        elif kind == "err":
+            if guards is not None:
+                guards.append(mk(Unary(line, col, "!", mk(Call(line, col, "is_ok", [base], BOOL)), BOOL)))
+            nxt = Call(line, col, "err_val", [base], sty)
         else:
             if guards is not None:
                 g = IsVariant(line, col, base, extra[0], extra[1], BOOL)
@@ -1287,14 +1291,15 @@ class Checker:
             m = bind_args(decl_owner(ty.name), len(d.tparams), ty.args)
             return [(fd.name, substitute(fd.type, m), "field", fd.name) for fd in d.fields]
         if isinstance(d, EnumDecl):
-            if ty.args or d.tparams:
+            if len(ty.args) != len(d.tparams):
                 return []
-            return [("%s.%s" % (v.name, fd.name), fd.type, "variant", (ty.name, v.name, fd.name))
+            m = bind_args(decl_owner(ty.name), len(d.tparams), ty.args)
+            return [("%s.%s" % (v.name, fd.name), substitute(fd.type, m), "variant", (ty.name, v.name, fd.name))
                     for v in d.variants for fd in v.fields]
         if ty.name == "option" and len(ty.args) == 1:
             return [("some", ty.args[0], "some", None)]
         if ty.name == "result" and len(ty.args) == 2:
-            return [("ok", ty.args[0], "ok", None)]
+            return [("ok", ty.args[0], "ok", None), ("err", ty.args[1], "err", None)]
         return []
 
     def reaches_invariant(s, ty):
@@ -1392,26 +1397,71 @@ class Checker:
                              "host entry %s cannot take parameter %s of struct %s with an invariant" %
                              (getattr(f, "disp", f.name), p.name, d.name))
 
-    def add_struct_contracts(s, f):
+    def struct_contracts(s, f, m=None, node=None):
+        """(requires, ensures) synthesized from the struct invariants of f's parameter and result types, with the
+        type parameters substituted by m (LG24: instantiated generic call sites)"""
         requires, ensures = [], []
         for p in f.params:
-            d = s.invariant_struct(p.type)
+            pty = substitute(p.type, m) if m else p.type
+            d = s.invariant_struct(pty)
             if d is None:
                 continue
             if p.name == "result":
-                terr(f, "invariant_decl", "parameter result of type %s cannot be used: %s has an invariant" %
+                if m or node is not None:
+                    continue        # LG24: instantiated call site; the callee is then not parametric-safe
+                terr(node or f, "invariant_decl", "parameter result of type %s cannot be used: %s has an invariant" %
                      (d.name, d.name))
-            for owner, clause, path in s.effective_invariants(p.type):
+            for owner, clause, path in s.effective_invariants(pty):
                 tag = (owner.name, clause.invariant_line, ".".join([p.name] + [x[0] for x in path]))
-                r = invariant_clause(clause, p.type, p.name, tag, path)
+                r = invariant_clause(clause, pty, p.name, tag, path)
                 requires.append(r)
                 if p.mode == "inout":
                     ensures.append(copy.deepcopy(r))
-        d = s.invariant_struct(f.ret)
+        rty = substitute(f.ret, m) if m else f.ret
+        d = s.invariant_struct(rty)
         if d is not None:
-            for owner, clause, path in s.effective_invariants(f.ret):
+            for owner, clause, path in s.effective_invariants(rty):
                 tag = (owner.name, clause.invariant_line, ".".join(["result"] + [x[0] for x in path]))
-                ensures.append(invariant_clause(clause, f.ret, "result", tag, path))
+                ensures.append(invariant_clause(clause, rty, "result", tag, path))
+        return requires, ensures
+
+    @staticmethod
+    def parametric_safe(f, m):
+        """LG24: result-invariant ensures may be instantiated only if every type parameter of f in its parameter
+        types sits in a walked position (option / two-argument result), no such parameter is named result,
+        and every type parameter of the result type occurs in some parameter type"""
+        def has_tp(ty):
+            return ty.owner is not None and (ty.owner, ty.index) in m or any(has_tp(a) for a in ty.args)
+
+        def tps(ty, out):
+            if ty.owner is not None:
+                if (ty.owner, ty.index) in m:
+                    out.add((ty.owner, ty.index))
+                return out
+            for a in ty.args:
+                tps(a, out)
+            return out
+
+        def walked(ty):
+            if not has_tp(ty) or ty.owner is not None:
+                return True
+            if ty.name == "option" and len(ty.args) == 1:
+                return walked(ty.args[0])
+            if ty.name == "result" and len(ty.args) == 2:
+                return walked(ty.args[0]) and walked(ty.args[1])
+            return False
+
+        in_params = set()
+        for p in f.params:
+            if not has_tp(p.type):
+                continue
+            if p.name == "result" or not walked(p.type):
+                return False
+            tps(p.type, in_params)
+        return tps(f.ret, set()) <= in_params
+
+    def add_struct_contracts(s, f):
+        requires, ensures = s.struct_contracts(f)
         if requires:
             f.inv_requires = requires
         if ensures:
@@ -3573,6 +3623,14 @@ class Checker:
         m = s.instantiate(e, "function %s" % n, fn_owner(n), f.tparams, e.targs)
         if m is not None:
             e.inst = {"decl": fn_owner(n), "args": tuple(e.targs), "subst": m}
+            if f is s.funcs.get(n) and f.tparams and m:
+                req, ens = s.struct_contracts(f, m, e)      # LG24: invariants of the instantiated type arguments
+                if not s.parametric_safe(f, m):
+                    # LG24: unwalked payloads; keep the uninstantiated ensures (built here: a callee declared
+                    # later has no inv_ensures yet)
+                    ens = s.struct_contracts(f, None, e)[1]
+                if req or ens:
+                    e.inv_inst = (req, ens)
         else:
             m = {}
         arity(len(f.params))

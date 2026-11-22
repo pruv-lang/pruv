@@ -1,0 +1,19 @@
+// LG24 (G-LG23-4): the instantiated result invariant is not assumed when a type parameter of the callee sits in a
+// position the invariant walk does not check (here the Ok payload of the legacy Result<T>)
+struct R {
+  n: i64,
+  invariant n >= 0
+}
+
+fn unwrap_or<T>(r: Result<T>, fallback: T) -> T {
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return fallback; }
+  }
+}
+
+pub fn run(k: i64) -> i64 {
+  let x: R = unwrap_or::<R>(Ok::<R>(R { n: k }), R { n: 0 });
+  assert x.n >= 0;
+  return x.n;
+}
