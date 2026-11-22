@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Grok history core perf harness: the generated Pruv read::window (pruv) against hand-written safe Rust (hand).
 
-  python3 bench/l3/grok/perf/run_perf.py [check|all] [--rounds 5] [--time-ms 400] [--rows hist-ord-64k,...] [--pruvc PATH]
+  python3 bench/l3/grok/perf/run_perf.py [check|all] [--rounds 5] [--time-ms 400] [--rows hist-ord-64k,...] [--pruvc PATH] [--pair PAIR]
 
 Build (everything under perf/work/, scratch, never committed): the grok modules read.pruv reaches (util, packet, path, framing,
 entry, read) are copied verbatim next to perf_root.pruv together with a manifest, pruvc compiles it (verified mode, str adapter
@@ -14,9 +14,9 @@ check: the driver runs both rows on every row (omitted=false and true) and compa
 perf: a fresh process per (row, cell, round), implementation order rotated every round, warm-up call, per process median of the
 timed calls; the cell value is the median of the round medians. RSS: /usr/bin/time -l whole-process peak (median of 3) of one call
 with the window read first (so RSS includes the input window bytes for both sides).
-Writes work/perf_result.json and work/perf_cells.json (schema of tools/perf_gate.py).
+Writes perf_result.json and perf_cells.json (schema of tools/perf_gate.py) in the pair's build directory.
 """
-import argparse, json, os, random, shutil, statistics, subprocess, sys
+import argparse, importlib.util, json, os, random, shutil, statistics, subprocess, sys
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -24,6 +24,8 @@ GROK = os.path.dirname(HERE)
 L3 = os.path.dirname(GROK)
 ROOT = os.path.abspath(os.path.join(L3, "..", ".."))
 WORK = os.path.join(HERE, "work")
+PAIRS = ("py/rust", "py/llvm", "rs/rust", "rs/llvm")
+DEFAULT_PAIR = "rs/rust"
 ROWS_DIR = os.path.join(WORK, "rows")
 CARGO_BIN = os.path.expanduser("~/.cargo/bin")
 ENV = dict(os.environ, PATH=CARGO_BIN + os.pathsep + os.environ.get("PATH", ""))
@@ -58,31 +60,63 @@ def find_pruvc(arg):
 
 
 # ---------------------------------------------------------------- build
-def build(pruvc):
-    os.makedirs(WORK, exist_ok=True)
-    shutil.copy(os.path.join(HERE, "perf_root.pruv"), os.path.join(WORK, "perf_root.pruv"))
+def pair_work(pair):
+    return WORK if pair == DEFAULT_PAIR else os.path.join(WORK, pair.replace("/", "-"))
+
+
+def compiler_cmd(pair, arg):
+    if pair.startswith("rs/"):
+        return [find_pruvc(arg)]
+    candidates = [os.path.join(ROOT, ".venv", "bin", "python"),
+                  os.path.expanduser("~/Projects/pruv/.venv/bin/python")]
+    py = os.environ.get("PRUV_PYTHON") or next((p for p in candidates if os.path.isfile(p)), sys.executable)
+    return [py, os.path.join(ROOT, "pruvc", "pruvc.py")]
+
+
+def build(pair, pruvc_arg):
+    compiler = compiler_cmd(pair, pruvc_arg)
+    work = pair_work(pair)
+    llvm = pair.endswith("/llvm")
+    os.makedirs(work, exist_ok=True)
+    shutil.copy(os.path.join(HERE, "perf_root.pruv"), os.path.join(work, "perf_root.pruv"))
     for m in GROK_MODULES:
-        shutil.copy(os.path.join(GROK, m + ".pruv"), os.path.join(WORK, m + ".pruv"))  # copies, the originals stay untouched
+        shutil.copy(os.path.join(GROK, m + ".pruv"), os.path.join(work, m + ".pruv"))
+    pkgs = os.path.relpath(os.path.join(L3, "pkgs"), work)
     man = {"name": "l3_grok_perf", "version": "0.1.0", "root": "perf_root.pruv",
-           "dependencies": {k: {"path": "../../../pkgs/" + k, "version": "0.1"} for k in DEPS}}
-    json.dump(man, open(os.path.join(WORK, "perf_root.pruv.json"), "w"))
-    rlib = os.path.join(WORK, "libpruv_str.rlib")
+           "dependencies": {k: {"path": pkgs + "/" + k, "version": "0.1"} for k in DEPS}}
+    json.dump(man, open(os.path.join(work, "perf_root.pruv.json"), "w"))
+    rlib = os.path.join(work, "libpruv_str.rlib")
     sh([rustc()] + RUSTC_FLAGS + ["--crate-name", "pruv_str", "--crate-type", "rlib", os.path.join(GROK, "str_adapter.rs"), "-o", rlib],
        what="rustc str_adapter")
-    gen = os.path.join(WORK, "gen.rs")
-    if os.path.exists(gen):
-        os.remove(gen)  # a stale gen.rs must never pass for a fresh compile
-    r = subprocess.run([pruvc, "perf_root.pruv", "-o", "gen.rs", "--manifest", "perf_root.pruv.json",
-                        "--rust-extern", "pruv_str=libpruv_str.rlib"], cwd=WORK, capture_output=True, text=True, env=ENV)
-    if r.returncode != 0 or not os.path.exists(gen):
+    outputs = ["gen.rs", "gen.ll"] if llvm else ["gen.rs"]
+    for name in outputs:
+        path = os.path.join(work, name)
+        if os.path.exists(path):
+            os.remove(path)  # stale output must never pass for a fresh compile
+    emit = ["-o", "gen.ll", "--backend", "llvm", "--rust-bindings", "gen.rs"] if llvm else ["-o", "gen.rs"]
+    env = dict(ENV, PYTHONDONTWRITEBYTECODE="1") if pair.startswith("py/") else ENV
+    r = subprocess.run(compiler + ["perf_root.pruv"] + emit +
+                       ["--manifest", "perf_root.pruv.json", "--rust-extern", "pruv_str=libpruv_str.rlib"],
+                       cwd=work, capture_output=True, text=True, env=env)
+    if r.returncode != 0 or not all(os.path.exists(os.path.join(work, name)) for name in outputs):
         sys.exit("pruvc failed:\n" + r.stdout[-4000:] + r.stderr[-4000:])
-    shutil.copy(os.path.join(HERE, "hand_history.rs"), os.path.join(WORK, "hand_history.rs"))
+    extra = []
+    generated = 'include!("gen.rs");\n'
+    if llvm:
+        spec = importlib.util.spec_from_file_location("g2_run", os.path.join(ROOT, "bench", "g2", "run.py"))
+        g = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(g)
+        extra, error = g.build_llvm_objects(os.path.join(work, "gen.ll"), "grok_perf", work)
+        if error:
+            sys.exit(pair + ": " + error)
+        generated = '#[path = "gen.rs"] mod sol;\nuse sol::grok_history_window;\n'
+    shutil.copy(os.path.join(HERE, "hand_history.rs"), os.path.join(work, "hand_history.rs"))
     drv = open(os.path.join(HERE, "perf_driver.rs"), encoding="utf-8").read()
-    main = os.path.join(WORK, "main.rs")
+    main = os.path.join(work, "main.rs")
     with open(main, "w", encoding="utf-8") as f:
-        f.write(HEADER + 'include!("gen.rs");\nmod hand { include!("hand_history.rs"); }\n' + drv)
-    exe = os.path.join(WORK, "perf_driver")
-    sh([rustc()] + RUSTC_FLAGS + ["-o", exe, main, "--extern", "pruv_str=" + rlib], what="rustc driver")
+        f.write(HEADER + generated + 'mod hand { include!("hand_history.rs"); }\n' + drv)
+    exe = os.path.join(work, "perf_driver")
+    sh([rustc()] + RUSTC_FLAGS + ["-o", exe, main, "--extern", "pruv_str=" + rlib] + extra, what="rustc driver")
     return exe
 
 
@@ -264,10 +298,11 @@ def report(out, rows, args):
                       "pruv": p["median_ns"], "hand": h["median_ns"], "unit": "ns", "runs": args.rounds})
         cells.append({"name": "grok history %s rss" % name, "axis": "rss", "size": size_class, "kind": "proportional",
                       "pruv": p["max_rss_bytes"], "hand": h["max_rss_bytes"], "unit": "bytes", "runs": 3})
-    json.dump({"rounds": args.rounds, "time_ms": args.time_ms, "results": out}, open(os.path.join(WORK, "perf_result.json"), "w"), indent=1)
-    json.dump({"source": "bench/l3/grok/perf/run_perf.py", "cells": cells}, open(os.path.join(WORK, "perf_cells.json"), "w"), indent=1)
-    print("\nJSON: " + os.path.join(WORK, "perf_result.json"))
-    print("perf_cells: " + os.path.join(WORK, "perf_cells.json"))
+    work = pair_work(args.pair)
+    json.dump({"rounds": args.rounds, "time_ms": args.time_ms, "results": out}, open(os.path.join(work, "perf_result.json"), "w"), indent=1)
+    json.dump({"source": "bench/l3/grok/perf/run_perf.py", "cells": cells}, open(os.path.join(work, "perf_cells.json"), "w"), indent=1)
+    print("\nJSON: " + os.path.join(work, "perf_result.json"))
+    print("perf_cells: " + os.path.join(work, "perf_cells.json"))
     for c in cells:
         print("%-36s %-4s %-4s pruv %14.0f hand %14.0f %-5s %.3fx" % (
             c["name"], c["axis"], c["size"], c["pruv"], c["hand"], c["unit"], c["pruv"] / max(c["hand"], 1)))
@@ -280,10 +315,11 @@ def main():
     ap.add_argument("--time-ms", type=int, default=400)
     ap.add_argument("--rows", default="", help="comma separated row names (default: all)")
     ap.add_argument("--pruvc", default=None)
+    ap.add_argument("--pair", choices=PAIRS, default=DEFAULT_PAIR)
     args = ap.parse_args()
     only = [r for r in args.rows.split(",") if r]
     rows = make_rows(only)
-    exe = build(find_pruvc(args.pruvc))
+    exe = build(args.pair, args.pruvc)
     bad = run_check(exe, rows)
     if args.mode == "all" and bad == 0:
         out, b = run_perf(exe, rows, args)

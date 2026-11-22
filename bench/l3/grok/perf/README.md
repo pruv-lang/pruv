@@ -10,11 +10,21 @@ packet (`[status, 24, nrows, ntext, meta x24, rows, text bytes widened to i64]`)
 ```
 python3 bench/l3/grok/perf/run_perf.py --rounds 5            # check + perf, writes perf/work/perf_cells.json
 python3 bench/l3/grok/perf/run_perf.py check                 # build + word-for-word check only
+python3 bench/l3/grok/perf/run_perf.py check --pair py/rust --rows hist-ord-64k
 python3 bench/l3/grok/perf/run_perf.py --rounds 1 --time-ms 50 --rows hist-ord-64k,hist-ord-2m   # smoke
 python3 tools/perf_gate.py bench/l3/grok/perf/work/perf_cells.json
 ```
 
-`--pruvc PATH` (or `$PRUVC`) selects the compiler; default `pruvc-rs/target/release/pruvc`. `~/.cargo/bin` is put on PATH for rustc.
+`--pair` selects `py/rust`, `py/llvm`, `rs/rust` (default), or `rs/llvm`.
+For `rs/*`, `--pruvc PATH` (or `$PRUVC`) selects the compiler, which defaults to `pruvc-rs/target/release/pruvc`.
+For `py/*`, the script runs the checkout's `pruvc/pruvc.py` with `$PRUV_PYTHON` if set, then tries the checkout's
+`.venv/bin/python`, `~/Projects/pruv/.venv/bin/python`, and the current interpreter in that order.
+`~/.cargo/bin` is put on PATH for rustc. LLVM pairs link the generated Rust bindings, LLVM object, and Pruv runtime
+through the shared benchmark helper. Set `PRUV_CLANG` to select clang.
+
+The default build and reports are in `work/`. Other pairs put their driver and reports in
+`work/py-rust/`, `work/py-llvm/`, or `work/rs-llvm/`. All pairs use the same deterministic rows in `work/rows/`.
+The Python CLI exposes `check` and `all`. The built `perf_driver` also accepts `time` and `rss` directly.
 
 ## Files
 
