@@ -246,3 +246,55 @@ pub fn feed(d: crate::json::JsonDocument, inout st: [i64], inout sl: [i64], inou
   }
   return 0;
 }
+
+// ---- DB45: the same decisions on values read by line::step (borrowed strs, no tape) ----
+// prompt is contentText(content) and at is isoOf(timestamp ?? created_at) ("" or 24 bytes); skip = synthetic_reason neither
+// missing nor null; nopi = prompt_index missing or null. Same order of decisions as feed_user (at never has a defect here:
+// line::step sends every line whose timestamp could be a defect to the tape path).
+pub fn user_view(prompt: str, at: str, skip: bool, nopi: bool, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
+  requires len(at) == 0 || len(at) == 24
+  requires len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  ensures result == 0 || result == -1
+  ensures len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  ensures st[0] == old(st)[0] || st[0] == old(st)[0] + 1
+  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+{
+  if skip { return 0; }
+  if len(prompt) > 100000000 { return -1; }
+  let tr: crate::text::Span = crate::text::trim_span(prompt);
+  let q: [i64] = query_range(prompt, tr.lo, tr.hi);
+  if q[0] >= 0 {
+    // user_query wins over everything: only the inner text, borrowed (the tags are ASCII, so the cut points are boundaries)
+    let a: i64 = q[0];
+    let b: i64 = q[1];
+    if !is_char_boundary(prompt, a) || !is_char_boundary(prompt, b) { return -1; }
+    if crate::text::is_blank(subview(prompt, a, b)) { return 0; }
+    crate::turns::begin2(inout st, inout sl, inout bk, subview(prompt, a, b), at);
+    return 0;
+  }
+  if nopi && has_at(prompt, tr.lo, "<user_info>") { return 0; }
+  if crate::text::is_blank(prompt) { return 0; }
+  crate::turns::begin2(inout st, inout sl, inout bk, prompt, at);
+  return 0;
+}
+
+// type == "assistant": answer(contentText, at) even for empty text, then tools tool calls (tools < 0: tool_calls is not an array).
+pub fn assistant_view(text: str, at: str, tools: i64, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
+  requires len(at) == 0 || len(at) == 24
+  requires len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  ensures result == 0 || result == -1
+  ensures len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  ensures st[0] == old(st)[0] || st[0] == old(st)[0] + 1
+  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+{
+  if len(text) > 100000000 { return -1; }
+  crate::turns::answer2(inout st, inout sl, inout bk, text, at);
+  if tools > 0 { add_tools(tools, inout st, inout sl); }
+  return 0;
+}

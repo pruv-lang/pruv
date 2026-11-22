@@ -32,7 +32,7 @@ ENV = dict(os.environ, PATH=CARGO_BIN + os.pathsep + os.environ.get("PATH", ""))
 HEADER = ('#![allow(dead_code, unused_imports, unused_variables, unused_mut, non_snake_case, unused_parens, '
           'unused_assignments, non_camel_case_types, private_interfaces)]\n')
 RUSTC_FLAGS = ["-C", "opt-level=3", "--edition", "2021"]
-GROK_MODULES = ["util", "packet", "path", "framing", "entry", "read"]
+GROK_MODULES = ["util", "packet", "path", "framing", "entry", "line", "read"]
 DEPS = ["json", "parse", "access", "jstr", "lines", "bytes", "text", "time", "names", "turns"]
 IMPLS = ["pruv", "hand"]
 # (name, size class, window bytes, shape)

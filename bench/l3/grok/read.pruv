@@ -340,6 +340,11 @@ fn line_step(win: [u8], lo: i64, hi: i64, inout tape: [i64], inout stack: [i64],
 {
   // Scan the span in place into the caller's scratch; only a user/assistant object line gets an owned document.
   if hi - lo > 16777216 { return 0; }
+  // DB45 one-pass reader on the borrowed line; 3 = out of its scope, the tape path below decides (docs/L3_DB45.md).
+  if len(tape) >= 256 {
+    let r: i64 = crate::line::step(subview(win, lo, hi), inout tape, inout st, inout sl, inout bk);
+    if r != 3 { return r; }
+  }
   // string_token validates UTF-8 inside strings, and token_at_span rejects non-ASCII outside strings.
   // Positive errors other than 18 all skip the line; scratch exhaustion falls back to UTF-8-validating parse_range.
   let sp: crate::parse::Pass = crate::parse::scan_into(win, lo, hi, inout tape, inout stack);
