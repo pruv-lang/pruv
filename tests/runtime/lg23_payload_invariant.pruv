@@ -1,0 +1,66 @@
+// LG23 (G-LG22-1): the invariant of a struct inside an Option payload, a Result Ok payload, a user enum variant field
+// and a field of a generic struct instance is assumed for a parameter (and checked at the call), with no restated
+// contract
+struct R {
+  lo: i64, hi: i64,
+  invariant 0 <= lo && lo <= hi && hi <= 1000
+}
+
+enum Shape { Empty, Span(r: R, w: i64) }
+
+struct Box<T> { v: T, n: i64 }
+
+fn width(o: Option<R>) -> i64
+  ensures 0 <= result && result <= 1000
+{
+  match o {
+    Some(r) => { return r.hi - r.lo; }
+    None => { return 0; }
+  }
+}
+
+fn span(s: Shape) -> i64
+  ensures 0 <= result && result <= 1000
+{
+  match s {
+    Shape::Empty => { return 0; }
+    Shape::Span(r, w) => { return r.hi - r.lo; }
+  }
+}
+
+fn boxed(b: Box<R>) -> i64
+  ensures 0 <= result && result <= 1000
+{
+  return b.v.hi - b.v.lo;
+}
+
+fn ok_width(take x: Result<R, String>) -> i64 ! alloc
+  ensures 0 <= result && result <= 1000
+{
+  match x {
+    Ok(r) => { return r.hi - r.lo; }
+    Err(e) => { return 0; }
+  }
+}
+
+fn opt_box(o: Option<Box<R>>) -> i64
+  ensures 0 <= result && result <= 1000
+{
+  match o {
+    Some(b) => { return b.v.hi; }
+    None => { return 0; }
+  }
+}
+
+pub fn run(k: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 3
+{
+  let r: R = R { lo: k, hi: k * 10 };
+  let a: i64 = width(Some::<R>(r));
+  let b: i64 = span(Shape::Span(R { lo: 1, hi: 2 + k }, 7));
+  let c: i64 = boxed(Box::<R> { v: R { lo: 0, hi: k }, n: 3 });
+  let x: Result<R, String> = Ok::<R, String>(R { lo: 2, hi: 5 });
+  let d: i64 = ok_width(move x);
+  let e: i64 = opt_box(Some::<Box<R>>(Box::<R> { v: R { lo: 0, hi: 4 }, n: 0 }));
+  return a * 10000 + b * 1000 + c * 100 + d * 10 + e;
+}

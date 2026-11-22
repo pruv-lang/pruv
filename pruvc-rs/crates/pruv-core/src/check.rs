@@ -1208,22 +1208,22 @@ impl Checker {
                 }
             }
         }
-        let inv_structs = self.invariant_structs();
-        if !inv_structs.is_empty() {
-            for f in &prog.functions {
-                if let Some(p) = f.params.iter().find(|p| p.name == "result" && inv_structs.contains(&p.ty)) {
-                    return Err(terr(f.line, f.col, "invariant_decl",
-                        format!("parameter result of type {} cannot be used: {} has an invariant", p.ty, p.ty), ""));
-                }
+        for f in &prog.functions {
+            if let Some(owner) = f.params.iter().filter(|p| p.name == "result")
+                .find_map(|p| self.invariant_owner(&p.ty))
+            {
+                return Err(terr(f.line, f.col, "invariant_decl",
+                    format!("parameter result of type {} cannot be used: {} has an invariant", owner.name, owner.name), ""));
             }
-            // LG17 (G-LG16-2): legacy mode has no host-entry check and every ordinary function is callable
-            // from the host, so none may take a struct with an invariant (its callers are not proved).
-            if !self.explicit {
-                for f in prog.functions.iter().filter(|f| !f.pred && f.foreign.is_none()) {
-                    if let Some(p) = f.params.iter().find(|p| inv_structs.contains(&p.ty)) {
-                        return Err(terr(f.line, f.col, "entry_signature",
-                            format!("host entry {} cannot take parameter {} of struct {} with an invariant", f.name, p.name, p.ty), ""));
-                    }
+        }
+        // Legacy mode exposes all ordinary functions to host callers.
+        if !self.explicit {
+            for f in prog.functions.iter().filter(|f| !f.pred && f.foreign.is_none()) {
+                if let Some((p, owner)) = f.params.iter()
+                    .find_map(|p| self.invariant_owner(&p.ty).map(|owner| (p, owner)))
+                {
+                    return Err(terr(f.line, f.col, "entry_signature",
+                        format!("host entry {} cannot take parameter {} of struct {} with an invariant", f.name, p.name, owner.name), ""));
                 }
             }
         }
@@ -1241,12 +1241,8 @@ impl Checker {
         }
     }
 
-    fn invariant_structs(&self) -> HashSet<String> {
-        self.decls.keys().filter(|name| {
-            let lookup = |n: &str| self.struct_decl(n);
-            plain_struct(&GType::from_key(name), &lookup)
-                .is_some_and(|s| reaches(s, &lookup, &mut HashMap::new()))
-        }).cloned().collect()
+    fn invariant_owner(&self, ty: &str) -> Option<&StructDecl> {
+        reaches(&GType::from_key(ty), &|name| self.decls.get(name), &mut HashMap::new())
     }
 
     fn check_costs(&mut self, prog: &mut Program) -> Res<()> {
@@ -2531,15 +2527,16 @@ impl Checker {
             if !changed { break; }
         }
         let resizes = resize_params(prog);
-        let inv_structs = self.invariant_structs();
         for (i, f) in prog.functions.iter().enumerate() {
             if !self.host_entry.get(i).copied().unwrap_or(false) {
                 continue;
             }
             // LG16: a host entry cannot take a struct with an invariant (its callers are not proved)
-            if let Some(p) = f.params.iter().find(|p| inv_structs.contains(&p.ty)) {
+            if let Some((p, owner)) = f.params.iter()
+                .find_map(|p| self.invariant_owner(&p.ty).map(|owner| (p, owner)))
+            {
                 return Err(terr(f.line, f.col, "entry_signature",
-                    format!("host entry {} cannot take parameter {} of struct {} with an invariant", f.name, p.name, p.ty), ""));
+                    format!("host entry {} cannot take parameter {} of struct {} with an invariant", f.name, p.name, owner.name), ""));
             }
             if let Some(p) = f.params.iter().find(|p| p.mode_pos.is_some() && matches!(p.ty.as_str(), "i64" | "bool")) {
                 return Err(terr(f.line, f.col, "entry_signature",
@@ -5821,41 +5818,73 @@ impl Checker {
                 "write old(a) with the name of an inout parameter of this function",
             ));
         }
-        let (root, path) = field_place(&e.args[0]);
-        let entry = match root {
-            Expr::Var(v) => scope.get(&v.name).filter(|x| {
-                x.kind == "inout" && (path.is_empty() && x.ty.is_array() || self.plain_struct(&x.ty).is_some())
-            }),
-            _ => None,
+        fn reads_inout_or_old(e: &Expr, scope: &Scope) -> bool {
+            match e {
+                Expr::Var(v) if scope.get(&v.name).is_some_and(|p| p.kind == "inout") => true,
+                Expr::Move(m) if scope.get(&m.name).is_some_and(|p| p.kind == "inout") => true,
+                Expr::Call(c) if c.name == "old" => true,
+                _ => crate::refine::kids(e).into_iter().any(|child| reads_inout_or_old(child, scope)),
+            }
+        }
+        let bad_operand = || terr(
+            line,
+            col,
+            "old_argument",
+            "the operand of old must be the name of an inout parameter of this function",
+            "write old(a) where `inout a: [..]` is a parameter of the enclosing function",
+        );
+        let mut lowered = e.args[0].clone();
+        let len = matches!(&lowered, Expr::Call(c) if c.name == "len" && c.args.len() == 1 && c.targs.is_none());
+        let mut base = match &mut lowered {
+            Expr::Call(c) if len => &mut c.args[0],
+            _ => &mut lowered,
         };
-        let (Expr::Var(root), Some(entry)) = (root, entry) else {
-            return Err(terr(
-                line,
-                col,
-                "old_argument",
-                "the operand of old must be the name of an inout parameter of this function",
-                "write old(a) where `inout a: [..]` is a parameter of the enclosing function",
-            ));
-        };
+        let mut whole = !len;
+        let mut bad_index = false;
+        let mut root_field = false;
+        loop {
+            match base {
+                Expr::FieldAccess(field) => {
+                    root_field = true;
+                    base = &mut field.base;
+                }
+                Expr::Index(index) => {
+                    root_field = false;
+                    bad_index |= reads_inout_or_old(&index.index, scope);
+                    base = &mut index.array;
+                }
+                _ => break,
+            }
+            whole = false;
+        }
+        let Expr::Var(root) = base else { return Err(bad_operand()) };
+        let entry = scope.get(&root.name).filter(|x| {
+            x.kind == "inout" && (!root_field && x.ty.is_array() || self.plain_struct(&x.ty).is_some())
+        }).ok_or_else(bad_operand)?;
+        if bad_index {
+            return Err(terr(line, col, "old_argument",
+                "the index of an old operand cannot read an inout parameter; write old(a)[old(b)[0]] explicitly", ""));
+        }
         let ty = entry.ty.clone();
-        let mut root = root.clone();
         root.ty = Some(ty.to_key());
         let index = self.cur_params.iter().position(|p| *p == root.name).unwrap_or(0);
         e.old = Some((root.name.clone(), index));
-        if path.is_empty() {
-            e.args[0] = Expr::Var(root);
+        if whole {
+            e.args[0] = Expr::Var(root.clone());
             return Ok(ty);
         }
         let mut call = e.clone();
-        call.args[0] = Expr::Var(root);
+        call.args[0] = Expr::Var(root.clone());
         call.ty = Some(ty.to_key());
-        let mut lowered = e.args[0].clone();
-        let mut base = &mut lowered;
-        while let Expr::FieldAccess(field) = base {
-            base = &mut field.base;
-        }
         *base = Expr::Call(call);
-        let ty = self.expr(&mut lowered, scope, true)?;
+        let checked = self.expr(&mut lowered, scope, true);
+        // Ordinary len also accepts strings and collections, which are excluded here.
+        if let Expr::Call(c) = &lowered {
+            if len && expr_ty(&c.args[0]).as_deref().is_some_and(|ty| !GType::from_key(ty).is_array()) {
+                return Err(bad_operand());
+            }
+        }
+        let ty = checked?;
         self.x_pending = Some(lowered);
         Ok(ty)
     }
@@ -6533,62 +6562,115 @@ fn plain_struct<'a>(ty: &GType, lookup: &impl Fn(&str) -> Option<&'a StructDecl>
     lookup(&ty.name).filter(|s| s.tparams.is_empty())
 }
 
-/// Whether a plain struct with an invariant is reachable from `s` through plain struct fields (memoized per
-/// struct, so a field type with nothing below it is not walked once per path).
-fn reaches<'a>(
-    s: &'a StructDecl,
-    lookup: &impl Fn(&str) -> Option<&'a StructDecl>,
-    memo: &mut HashMap<&'a str, bool>,
-) -> bool {
-    if let Some(&r) = memo.get(s.name.as_str()) {
-        return r;
+#[derive(Clone)]
+pub enum InvariantStep {
+    Field(String, GType),
+    Some(GType),
+    Ok(GType),
+    VariantField(String, String, String, GType),
+}
+
+impl InvariantStep {
+    fn ty(&self) -> &GType {
+        match self {
+            Self::Field(_, ty) | Self::Some(ty) | Self::Ok(ty) | Self::VariantField(_, _, _, ty) => ty,
+        }
     }
-    let mut seen: HashSet<&'a str> = HashSet::from([s.name.as_str()]);
-    let mut todo = vec![s];
-    let mut found = false;
+}
+
+fn invariant_positions<'a>(
+    ty: &GType,
+    lookup: &impl Fn(&str) -> Option<&'a TypeDecl>,
+) -> (Option<&'a StructDecl>, Vec<InvariantStep>) {
+    if ty.owner.is_some() {
+        return (None, Vec::new());
+    }
+    match (ty.name.as_str(), ty.args.as_slice()) {
+        ("option", [payload]) => return (None, vec![InvariantStep::Some(payload.clone())]),
+        ("result", [payload, _]) => return (None, vec![InvariantStep::Ok(payload.clone())]),
+        _ => {}
+    }
+    match lookup(&ty.name) {
+        Some(TypeDecl::Struct(s)) => {
+            let Ok(mapping) = bind_args(&decl_owner(&s.name), s.tparams.len(), &ty.args) else {
+                return (None, Vec::new());
+            };
+            let fields = s.fields.iter().map(|f| {
+                InvariantStep::Field(f.name.clone(), substitute(&GType::from_key(&f.ty), &mapping))
+            }).collect();
+            (Some(s).filter(|s| !s.invariants.is_empty() && s.tparams.is_empty()), fields)
+        }
+        Some(TypeDecl::Enum(e)) if e.tparams.is_empty() => {
+            let fields = e.variants.iter().flat_map(|v| v.fields.iter().map(|f| {
+                InvariantStep::VariantField(e.name.clone(), v.name.clone(), f.name.clone(), GType::from_key(&f.ty))
+            })).collect();
+            (None, fields)
+        }
+        _ => (None, Vec::new()),
+    }
+}
+
+fn reaches<'a>(
+    ty: &GType,
+    lookup: &impl Fn(&str) -> Option<&'a TypeDecl>,
+    memo: &mut HashMap<GType, Option<&'a StructDecl>>,
+) -> Option<&'a StructDecl> {
+    if let Some(&found) = memo.get(ty) {
+        return found;
+    }
+    let mut seen = HashSet::new();
+    let mut todo = vec![ty.clone()];
+    let mut found = None;
     while let Some(cur) = todo.pop() {
-        if !cur.invariants.is_empty() {
-            found = true;
+        if !seen.insert(cur.clone()) {
+            continue;
+        }
+        if let Some(&cached) = memo.get(&cur) {
+            if cached.is_some() {
+                found = cached;
+                break;
+            }
+            continue;
+        }
+        let (owner, steps) = invariant_positions(&cur, lookup);
+        if owner.is_some() {
+            found = owner;
             break;
         }
-        for field in &cur.fields {
-            if let Some(next) = plain_struct(&GType::from_key(&field.ty), lookup) {
-                if seen.insert(next.name.as_str()) {
-                    todo.push(next);
-                }
-            }
-        }
+        todo.extend(steps.iter().rev().map(|step| step.ty().clone()));
     }
-    memo.insert(s.name.as_str(), found);
+    memo.insert(ty.clone(), found);
     found
 }
 
-/// Structs owning effective clauses, in preorder, with their field paths from the root.
+/// Structs owning effective clauses, in preorder, with their paths from the root.
 pub fn effective_invariant_structs<'a>(
     ty: &GType,
-    lookup: &impl Fn(&str) -> Option<&'a StructDecl>,
-) -> Vec<(&'a StructDecl, Vec<&'a FieldDecl>)> {
+    lookup: &impl Fn(&str) -> Option<&'a TypeDecl>,
+) -> Vec<(&'a StructDecl, Vec<InvariantStep>)> {
     fn visit<'a>(
         ty: &GType,
-        lookup: &impl Fn(&str) -> Option<&'a StructDecl>,
-        seen: &mut HashSet<&'a str>,
-        memo: &mut HashMap<&'a str, bool>,
-        path: &mut Vec<&'a FieldDecl>,
-        out: &mut Vec<(&'a StructDecl, Vec<&'a FieldDecl>)>,
+        lookup: &impl Fn(&str) -> Option<&'a TypeDecl>,
+        seen: &mut HashSet<GType>,
+        memo: &mut HashMap<GType, Option<&'a StructDecl>>,
+        path: &mut Vec<InvariantStep>,
+        out: &mut Vec<(&'a StructDecl, Vec<InvariantStep>)>,
     ) {
-        let Some(s) = plain_struct(ty, lookup) else { return };
-        if !reaches(s, lookup, memo) || !seen.insert(&s.name) {
+        if seen.contains(ty) || reaches(ty, lookup, memo).is_none() {
             return;
         }
-        if !s.invariants.is_empty() {
+        seen.insert(ty.clone());
+        let (owner, steps) = invariant_positions(ty, lookup);
+        if let Some(s) = owner {
             out.push((s, path.clone()));
         }
-        for field in &s.fields {
-            path.push(field);
-            visit(&GType::from_key(&field.ty), lookup, seen, memo, path, out);
+        for step in steps {
+            let next = step.ty().clone();
+            path.push(step);
+            visit(&next, lookup, seen, memo, path, out);
             path.pop();
         }
-        seen.remove(s.name.as_str());
+        seen.remove(ty);
     }
     let mut out = Vec::new();
     visit(ty, lookup, &mut HashSet::new(), &mut HashMap::new(), &mut Vec::new(), &mut out);

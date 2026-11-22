@@ -1,0 +1,8 @@
+// LG23 (G-LG22-2): the index of an old operand is read in the current state, so it cannot read an inout parameter
+fn f(inout a: [i64], inout b: [i64]) -> ()
+  requires len(a) == 4 && len(b) == 1 && 0 <= b[0] && b[0] < 4
+  ensures len(a) == old(len(a))
+  ensures a[0] == old(a[b[0]])
+{
+  b[0] = 0;
+}
