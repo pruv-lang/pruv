@@ -1,0 +1,13 @@
+// LG19 (G-LG18-4): a call inside the lifted call's arguments (here a borrow of a vector element) is not plain; the
+// statement is type/try_position, not a diagnostic of the argument checked outside its parameter's borrow context
+fn mk(s: str) -> String ! alloc { return string_from("ab"); }
+fn noisy() -> Result<i64, String> ! alloc, io {
+  print(1);
+  return Ok::<i64, String>(1);
+}
+fn eat(take a: String, b: i64) -> i64 ! alloc { return b; }
+fn f(v: Vec<String>) -> Result<i64, String> ! alloc, io
+  requires len(v) > 0
+{
+  return Ok::<i64, String>(eat(mk(vec_get::<String>(v, 0)), noisy()?));
+}

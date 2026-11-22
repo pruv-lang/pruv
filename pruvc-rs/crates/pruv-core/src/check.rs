@@ -3076,7 +3076,15 @@ impl Checker {
                     }
                     _ => false,
                 };
-                if !ok {
+                // LG19 (G-LG18-4): a lifted call result is bound only when its own arguments create no owned
+                // temporary: the `let` would drop a value the call borrowed at its end, before the `?` operand runs,
+                // instead of at the end of the statement. Python `try_owned_temp`.
+                let plain = !ok
+                    || match &*rhs {
+                        Expr::Call(c) => c.args.iter().all(Self::try_plain_arg),
+                        _ => true,
+                    };
+                if !ok || !plain {
                     return Err(Self::try_position_error(line, col));
                 }
             }
@@ -3091,6 +3099,21 @@ impl Checker {
             lets.push(Stmt::Let(Let { line, col, name, mutable: false, ty: t.to_key(), value: k, refine: None }));
         }
         Ok(lets)
+    }
+
+    /// LG19 (G-LG18-4): a is a move, an int / bool literal, a place (a binding or a field of one), or an operator or
+    /// index whose operands are all plain in this sense, so evaluating it creates no temporary that needs a drop.
+    /// Syntactic, without a standalone type check (an argument may need its parameter's borrow context); a string
+    /// literal is not plain (the generated code may build a String from it). Python `try_plain_arg`.
+    fn try_plain_arg(a: &Expr) -> bool {
+        if matches!(a, Expr::Move(_) | Expr::IntLit(_) | Expr::BoolLit(_)) || matches!(field_place(a).0, Expr::Var(_)) {
+            return true;
+        }
+        match a {
+            Expr::Unary(u) if u.op != "?" => Self::try_plain_arg(&u.operand),
+            Expr::Binary(_) | Expr::Index(_) => crate::refine::kids(a).into_iter().all(Self::try_plain_arg),
+            _ => false,
+        }
     }
 
     /// LG15 (G-LG13-2): `let mut __pruv_try_tN: bool = D; if C { __pruv_try_tN = R; }` for the operator node `L op R`

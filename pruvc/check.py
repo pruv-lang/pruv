@@ -1607,9 +1607,23 @@ class Checker:
         ok = (f is not None and f.foreign is None and j is not None and j < len(f.params) and f.params[j].take
               and f.params[j].type == t and t.owner is None and t.name in ("vec", "hashmap", "string")
               and (isinstance(k, Call) and k.name != "subview" or isinstance(k, Move) and not k.fields))
-        if not ok:
+        # LG19 (G-LG18-4): a lifted call result is bound only when its own arguments create no owned temporary: the
+        # `let` would drop a value the call borrowed at its end, before the `?` operand runs, instead of at the end of
+        # the statement
+        if not ok or isinstance(k, Call) and not all(s.try_plain_arg(a) for a in k.args):
             try_position_error(st)
         return True
+
+    def try_plain_arg(s, a):
+        """LG19 (G-LG18-4): a is a move, an int / bool literal, a place (a binding or a field of one), or an operator
+        or index whose operands are all plain in this sense, so evaluating it creates no temporary that needs a drop.
+        Syntactic, without a standalone type check (an argument may need its parameter's borrow context); a string
+        literal is not plain (the generated code may build a String from it)"""
+        if isinstance(a, (Move, IntLit, BoolLit)) or isinstance(field_place(a)[0], Var):
+            return True
+        if isinstance(a, (Unary, Binary, Index)) and getattr(a, "op", "") != "?":
+            return all(s.try_plain_arg(c) for c in expr_kids(a) if isinstance(c, Expr))
+        return False
 
     def try_short_check(s, st, node, scope):
         """LG15: type/try_position when the operator node mentions a binding whose declared type is not a value type

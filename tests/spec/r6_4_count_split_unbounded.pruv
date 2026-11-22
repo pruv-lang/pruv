@@ -1,0 +1,10 @@
+// spec: R-6-4 reject
+// m may lie past n, so the counts need not add up
+fn join(n: i64, m: i64, l: i64, r: i64) -> i64
+  requires 0 <= m && m <= 2097152 && 0 <= n && n <= 1048576
+  requires l == count(k in 0..m: k % 3 == 0)
+  requires r == count(k in m..n: k % 3 == 0)
+  ensures result == count(k in 0..n: k % 3 == 0)
+{
+  return l + r;
+}

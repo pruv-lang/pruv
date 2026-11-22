@@ -1249,6 +1249,7 @@ class FnVerifier:
         s.aggs = {}
         s.agg_shapes = []   # LG4: (kind, F, body, shape) for the aggregate frame lemma
         s.lemmas = []
+        s.split_lemmas = []  # LG19: count range split, a third stage only (it slows unrelated proofs)
         s.lemma_keys = set()
         s.theta = {}        # G3 A2: callee type-parameter substitution while a callee contract is re-interpreted
         s._opq = {}
@@ -1399,9 +1400,9 @@ class FnVerifier:
                 sol.add(p)
             for p in g:
                 sol.add(p)
-            if with_lemmas:
-                for p in s.lemmas:
-                    sol.add(p)
+            lemmas = (s.lemmas + (s.split_lemmas if with_lemmas == 2 else [])) if with_lemmas else []
+            for p in lemmas:
+                sol.add(p)
             neg = z3.Not(ob)
             sol.add(neg)
             text = key_text = None
@@ -1416,12 +1417,12 @@ class FnVerifier:
                 if s.rec is not None:
                     text = head + sol.sexpr()
                 if cache is not None:
-                    parts = list(st.pc) + list(g) + (list(s.lemmas) if with_lemmas else []) + [neg]
+                    parts = list(st.pc) + list(g) + list(lemmas) + [neg]
                     key_text = proof_cache.key_text(head, parts, s._kmemo)
             if cache is not None and cache.lookup(key_text):
                 cache.hits += 1
                 if s.rec is not None:
-                    s.rec.attempt(idx, with_lemmas, text, "unsat", "proved", cfg.timeout_ms, cfg.rlimit,
+                    s.rec.attempt(idx, bool(with_lemmas), text, "unsat", "proved", cfg.timeout_ms, cfg.rlimit,
                                   cfg.seed, None, cached=True)
                 return sol, z3.unsat
             if cache is not None:
@@ -1430,12 +1431,12 @@ class FnVerifier:
                 r = sol.check()
             except z3.Z3Exception as e:
                 if s.rec is not None:
-                    s.rec.attempt(idx, with_lemmas, text, "error", "error", cfg.timeout_ms, cfg.rlimit,
+                    s.rec.attempt(idx, bool(with_lemmas), text, "error", "error", cfg.timeout_ms, cfg.rlimit,
                                   cfg.seed, str(e))
                 raise
             if s.rec is not None:
                 reason = sol.reason_unknown() if r == z3.unknown else None
-                s.rec.attempt(idx, with_lemmas, text, str(r), query_status(r, reason), cfg.timeout_ms,
+                s.rec.attempt(idx, bool(with_lemmas), text, str(r), query_status(r, reason), cfg.timeout_ms,
                               cfg.rlimit, cfg.seed, reason)
             if cache is not None and r == z3.unsat:
                 cache.store(key_text)
@@ -1456,6 +1457,11 @@ class FnVerifier:
             sol, r = run(True)
             if r == z3.unsat:
                 return
+            if s.split_lemmas:
+                # LG19: the count range split only when the other lemmas are not enough
+                sol, r = run(2)
+                if r == z3.unsat:
+                    return
         s.seen.add(key)
         cex = None
         if r == z3.sat or relaxed is not None:
@@ -1490,8 +1496,8 @@ class FnVerifier:
         as query_status gives it."""
         pr = s.probe
         status = None
-        for with_lemmas in (False, True):
-            if with_lemmas and not s.lemmas:
+        for with_lemmas in (False, True, 2):
+            if with_lemmas and not s.lemmas or with_lemmas == 2 and not s.split_lemmas:
                 break
             pr.tick()
             try:
@@ -2085,6 +2091,16 @@ class FnVerifier:
                 os_ = list(z3.Ints(" ".join("agg!o%d" % i for i in range(len(outer))))) if outer else []
                 fa = F(x, y, *os_)
                 s.lemmas.append(z3.ForAll([x, y] + os_, z3.Implies(y <= x, fa == 0), patterns=[fa]))
+            if kind == "count":
+                # LG19 (R03L-G2): range split, count(lo, hi) == count(lo, m) + count(m, hi) for lo <= m <= hi. Every
+                # trigger pairs two existing terms, and the instance only adds a term over their endpoints, so the
+                # endpoint set never grows and there is no matching loop.
+                x, m, y = z3.Ints("agg!x agg!m agg!y")
+                os_ = list(z3.Ints(" ".join("agg!o%d" % i for i in range(len(outer))))) if outer else []
+                fxy, fxm, fmy = F(x, y, *os_), F(x, m, *os_), F(m, y, *os_)
+                s.split_lemmas.append(z3.ForAll([x, m, y] + os_, z3.Implies(z3.And(x <= m, m <= y), fxy == fxm + fmy),
+                                          patterns=[z3.MultiPattern(fxm, fmy), z3.MultiPattern(fxy, fxm),
+                                                    z3.MultiPattern(fxy, fmy)]))
 
         app = F(lo, hi, *outer)
         facts = []

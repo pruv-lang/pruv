@@ -2118,6 +2118,25 @@ impl<'a> FnVerifier<'a> {
                 let body = y.le(&x).implies(&fapp.raw_eq(&z.int(0)));
                 self.lemmas.push(z.forall(&bound, &body, &[fapp.clone()]));
             }
+            if kind == "count" {
+                // LG19 (R03L-G2): range split, count(lo, hi) == count(lo, m) + count(m, hi) for lo <= m <= hi. Every
+                // trigger pairs two existing terms, and the instance only adds a term over their endpoints, so the
+                // endpoint set never grows and there is no matching loop.
+                let x = z.int_const("agg!x");
+                let m = z.int_const("agg!m");
+                let y = z.int_const("agg!y");
+                let os: Vec<Ast> = (0..outer.len()).map(|i| z.int_const(&format!("agg!o{}", i))).collect();
+                let ap = |a: &Ast, b: &Ast| -> Ast {
+                    let mut args = vec![a.clone(), b.clone()];
+                    args.extend(os.iter().cloned());
+                    f.apply(&args)
+                };
+                let (fxy, fxm, fmy) = (ap(&x, &y), ap(&x, &m), ap(&m, &y));
+                let mut bound = vec![x.clone(), m.clone(), y.clone()];
+                bound.extend(os.iter().cloned());
+                let body = z.and(&[x.le(&m), m.le(&y)]).implies(&fxy.eq(&fxm.add(&fmy)));
+                self.lemmas.push(z.forall_groups(&bound, &body, &[vec![&fxm, &fmy], vec![&fxy, &fxm], vec![&fxy, &fmy]]));
+            }
         }
 
         let app = fa(lo, hi);
