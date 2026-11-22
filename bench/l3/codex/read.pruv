@@ -112,19 +112,22 @@ fn stamp_str(hb: [u8], o: i64) -> str ! alloc
 }
 
 // One held turn into the collector: begin, the folded reply when present, then its tool items.
-fn feed(inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store, hb: [u8], po: i64, pn: i64, created: str, ans: bool, ro: i64, rn: i64, pad: i64, completed: str, tools: i64) -> () ! alloc
-  requires len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && 0 <= st[0] && st[0] < 200
+fn feed(inout st: [i64], inout sl: [i64], inout rf: [i64], hb: [u8], po: i64, pn: i64, co: i64, ans: bool, ro: i64, rn: i64, pad: i64, dc: i64, tools: i64) -> bool
+  requires len(st) == 4 && len(sl) == 1600 && len(rf) == 800 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && 0 <= st[0] && st[0] < 200
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
   requires 0 <= po && 0 <= pn && pn <= len(hb) - po && pn <= 100000000 && 0 <= ro && 0 <= rn && rn <= len(hb) - ro && rn <= 99999996 && (pad == 0 || pad == 4)
-  requires (len(created) == 0 || len(created) == 24) && (len(completed) == 0 || len(completed) == 24) && 0 <= tools && tools <= 100000000
-  ensures len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && st[0] == old(st)[0] + 1
+  requires (co == -1 || (0 <= co && co <= len(hb) - 24)) && (dc == -1 || (0 <= dc && dc <= len(hb) - 24)) && 0 <= tools && tools <= 100000000
+  ensures len(st) == 4 && len(sl) == 1600 && len(rf) == 800 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && st[0] == old(st)[0] + 1
   ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
 {
-  crate::turns::begin3(inout st, inout sl, inout bk, hb, po, pn, created);
-  if ans { crate::turns::answer3(inout st, inout sl, inout bk, hb, ro, rn, pad, completed); }
+  crate::turns::begin_ref(inout st, inout sl, inout rf, hb, po, pn, co);
+  if ans {
+    if !crate::turns::answer_ref(inout st, inout sl, inout rf, hb, ro, rn, pad, dc) { return false; }
+  }
   add_tools(inout st, inout sl, tools);
+  return true;
 }
 
 // The bytes are valid UTF-8 (the check decoding did).
@@ -154,47 +157,24 @@ fn add_tools(inout st: [i64], inout sl: [i64], n: i64) -> ()
   }
 }
 
-// Feed the held turns oldest first into a fresh collector, size the wire from the text layout (header of
-// 20 + 10 * kept + 2 * items words, then base bytes, then the turn texts) and write the selected texts straight
-// into it (turns::finish_into, D-DB28-1). bad[0] is set when a held record is malformed or the layout disagrees.
+// Collect held turns oldest first as offsets into hb. Size the wire from the layout (header of
+// 20 + 10 * kept + 2 * items words, then base bytes, then turn texts). Keep hb and wire live together
+// so finish_ref can copy directly from the arena. Set bad[0] for a malformed record or layout mismatch.
 pub fn replay(ht: [i64], take held: [u8], count: i64, base: i64, items: i64, inout wire: [u8], inout bad: [i64]) -> crate::turns::Placed ! alloc
   requires len(ht) == 2000 && len(held) <= 8700000 && 0 <= count && count <= 200 && 0 <= base && base <= 3500000 && len(bad) == 1
   requires 0 <= items && items <= 30
   ensures len(bad) == 1
 {
-  // hb is owned here and released before the wire is allocated, so the held text, the store and the wire are never
-  // live together (DB32 step 3).
-  let mut hb: [u8] = move held;
+  let hb: [u8] = move held;
   let mut st: [i64] = crate::turns::new_state();
   let mut sl: [i64] = crate::turns::new_slots();
-  // Size the store once from the held turns: each turn appends at most its clipped prompt and its clipped reply
-  // (reply plus the 4-byte pad), so reserve never has to grow or repack it (DB26, D-R09-1).
-  let mut need: i64 = 0;
-  let mut h: i64 = 0;
-  while h < count
-    invariant 0 <= h && h <= count && count <= 200 && len(ht) == 2000 && 0 <= need && need <= 65536 * h
-    decreases count - h
-  {
-    let mut a: i64 = ht[10 * h + 1];
-    let mut r: i64 = ht[10 * h + 3];
-    if a < 0 { a = 0; }
-    if a > 32768 { a = 32768; }
-    if r < 0 { r = 0; }
-    if r > 32764 { r = 32764; }
-    r = r + 4;
-    need = need + a + r;
-    h = h + 1;
-  }
-  let d0: [u8] = alloc(need, 0);
-  let o0: [i64] = alloc(200, -1);
-  let s0: [u8] = alloc(9600, 0);
-  let mut bk: crate::turns::Store = crate::turns::Store { data: move d0, off: move o0, stamp: move s0, end: 0 };
+  let mut rf: [i64] = crate::turns::new_refs();
   let mut fed: i64 = 0;
   let mut j: i64 = count;
   while j > 0
     invariant 0 <= j && j <= count && count <= 200 && len(ht) == 2000 && len(hb) <= 8700000 && len(bad) == 1
     invariant 0 <= fed && fed <= count && fed + j <= count
-    invariant len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && st[0] == fed && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
+    invariant len(st) == 4 && len(sl) == 1600 && len(rf) == 800 && st[0] == fed && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
     decreases j
@@ -225,17 +205,20 @@ pub fn replay(ht: [i64], take held: [u8], count: i64, base: i64, items: i64, ino
           if rcl == 1 { pd = 4; }
         }
       }
-      let created: str = stamp_str(hb, co);
-      let completed: str = stamp_str(hb, dof);
-      feed(inout st, inout sl, inout bk, hb, po, pl, created, nrep > 0, ro, rl, pd, completed, tools);
+      let mut created: i64 = -1;
+      if len(stamp_str(hb, co)) == 24 { created = co; }
+      let mut completed: i64 = -1;
+      if len(stamp_str(hb, dof)) == 24 { completed = dof; }
+      if !feed(inout st, inout sl, inout rf, hb, po, pl, created, nrep > 0, ro, rl, pd, completed, tools) {
+        bad[0] = 1;
+      }
       fed = fed + 1;
     }
   }
-  hb = alloc(0, 0);
   let layout: crate::turns::Layout = crate::turns::text_layout(st, sl);
   let at: i64 = 8 * (20 + 10 * layout.kept + 2 * items) + base;
   wire = alloc(at + layout.text_len, 0);
-  let col: crate::turns::Placed = crate::turns::finish_into(st, sl, bk, base, inout wire, at);
+  let col: crate::turns::Placed = crate::turns::finish_ref(st, sl, rf, hb, base, inout wire, at);
   if !col.ok || col.kept != layout.kept || col.text_len != layout.text_len { bad[0] = 1; }
   return col;
 }

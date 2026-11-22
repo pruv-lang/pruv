@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
-from statistics import median
+from statistics import median_low as median
 import subprocess
 import tempfile
 from time import perf_counter_ns
