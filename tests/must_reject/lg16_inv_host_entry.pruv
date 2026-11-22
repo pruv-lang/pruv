@@ -1,0 +1,13 @@
+// LG16: a host entry cannot take a struct with an invariant (its callers are not proved)
+pub struct R {
+  lo: i64, hi: i64,
+  invariant 0 <= lo && lo <= hi
+}
+
+pub fn main() -> () {
+  return;
+}
+
+pub fn get(r: R) -> i64 {
+  return r.hi - r.lo;
+}

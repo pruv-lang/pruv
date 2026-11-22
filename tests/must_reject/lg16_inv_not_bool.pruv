@@ -1,0 +1,5 @@
+// LG16: an invariant must be bool
+struct R {
+  lo: i64, hi: i64,
+  invariant lo + hi
+}

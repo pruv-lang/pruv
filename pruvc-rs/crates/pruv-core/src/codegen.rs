@@ -3880,6 +3880,25 @@ impl<'a> Gen<'a> {
             }
             Stmt::Assign(x) => {
                 self.moving = self.last_copy(&x.name, &x.value);
+                if let Expr::Call(call) = &x.value {
+                    if !self.cost && self.moving.is_empty() && call.name == "resize"
+                        && !self.fmap.contains_key(&call.name) && !self.refs.contains(&x.name)
+                        && (!self.params.contains(&x.name) || self.take_arrays.contains(&x.name)
+                            || self.resizable_inouts.contains(&x.name))
+                    {
+                        let source = arg(&call.args, 0)?;
+                        let same_place = match source {
+                            Expr::Var(v) => v.name == x.name,
+                            Expr::Move(m) => m.name == x.name && m.fields.is_empty(),
+                            _ => false,
+                        };
+                        if same_place && expr_ty(source).as_deref().is_some_and(is_array_name) {
+                            let v = self.resize_expr(&x.value, &call.args, Some(&x.name))?;
+                            self.emit(ind, &v);
+                            return Ok(());
+                        }
+                    }
+                }
                 let v = self.own_e(&x.value);
                 self.moving.clear();
                 let v = v?;
@@ -4530,6 +4549,43 @@ impl<'a> Gen<'a> {
         Ok(self.fg_mut()?.fn_trusted(name, &ps, ret, &body, &disp, checks > 0))
     }
 
+    fn resize_expr(&mut self, e: &Expr, args: &[Expr], place: Option<&str>) -> R<String> {
+        let aty = expr_ty(arg(args, 0)?).as_deref();
+        let (u8a, boola) = (aty == Some("array_u8"), aty == Some("array_bool"));
+        let vty = if boola { "bool" } else { "i64" };
+        let fill = if u8a {
+            "pruv_v as u8".to_string()
+        } else if boola || !self.verified || self.layout(e) == "i64" {
+            "pruv_v".to_string()
+        } else {
+            format!("pruv_v as {}", self.layout(e))
+        };
+        let mut chk = String::new();
+        if !self.verified {
+            chk.push_str("if pruv_n < (pruv_a.len() as i64) || pruv_n > (1i64 << 40) { pruv_ovf(\"resize length outside len..2^40\") } ");
+            if u8a {
+                chk.push_str("if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } ");
+            }
+        }
+        if let Some(place) = place {
+            let n = self.e(arg(args, 1)?)?;
+            let v = self.e(arg(args, 2)?)?;
+            let chk = chk.replace("pruv_a.len()", &format!("{place}.len()"));
+            return Ok(format!(
+                "{{ let pruv_n: i64 = {n}; let pruv_v: {vty} = {v}; {chk}{place}.resize(pruv_n as usize, {fill}); }}"
+            ));
+        }
+        // source order: a, n, v
+        let a0 = self.arr_ref(arg(args, 0)?)?;
+        let n0 = self.e(arg(args, 1)?)?;
+        let v0 = self.e(arg(args, 2)?)?;
+        let result = format!(
+            "{{ let pruv_a = {}; let pruv_n: i64 = {}; let pruv_v: {} = {}; {}let mut pruv_t = ::std::vec::Vec::with_capacity(pruv_n as usize); pruv_t.extend_from_slice(pruv_a); pruv_t.resize(pruv_n as usize, {}); pruv_t }}",
+            a0, n0, vty, v0, chk, fill
+        );
+        Ok(result)
+    }
+
     fn e(&mut self, e: &Expr) -> R<String> {
         match e {
             Expr::Spent(_) => Err("cost_unavailable: Stage 5 cost verification is not implemented yet".into()),
@@ -4798,32 +4854,7 @@ impl<'a> Gen<'a> {
                     return Ok(self.cost_buffer(result));
                 }
                 if n == "resize" {
-                    // P05G: one allocation of n, one memcpy of the prefix, one fill of the tail
-                    let aty = expr_ty(arg(a, 0)?).as_deref();
-                    let (u8a, boola) = (aty == Some("array_u8"), aty == Some("array_bool"));
-                    let vty = if boola { "bool" } else { "i64" };
-                    let fill = if u8a {
-                        "pruv_v as u8".to_string()
-                    } else if boola || !self.verified || self.layout(e) == "i64" {
-                        "pruv_v".to_string()
-                    } else {
-                        format!("pruv_v as {}", self.layout(e))
-                    };
-                    let mut chk = String::new();
-                    if !self.verified {
-                        chk.push_str("if pruv_n < (pruv_a.len() as i64) || pruv_n > (1i64 << 40) { pruv_ovf(\"resize length outside len..2^40\") } ");
-                        if u8a {
-                            chk.push_str("if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } ");
-                        }
-                    }
-                    // source order: a, n, v
-                    let a0 = self.arr_ref(arg(a, 0)?)?;
-                    let n0 = self.e(arg(a, 1)?)?;
-                    let v0 = self.e(arg(a, 2)?)?;
-                    let result = format!(
-                        "{{ let pruv_a = {}; let pruv_n: i64 = {}; let pruv_v: {} = {}; {}let mut pruv_t = ::std::vec::Vec::with_capacity(pruv_n as usize); pruv_t.extend_from_slice(pruv_a); pruv_t.resize(pruv_n as usize, {}); pruv_t }}",
-                        a0, n0, vty, v0, chk, fill
-                    );
+                    let result = self.resize_expr(e, a, None)?;
                     return Ok(self.cost_buffer(result));
                 }
                 if n == "eq_range" {

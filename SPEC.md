@@ -100,7 +100,9 @@ it can never be silently dropped.
   `result[k] == a[k]` for `k < len(a)` and `result[k] == v` for `len(a) <= k < n`. Needs `alloc`, code only
   (`effect_in_contract` in a contract). `a` is `[i64]`, `[u8]` or `[bool]` and the result has the type of `a`; v has
   its element type. Generic `[T]` and `str` are type errors. Arguments are evaluated a, n, v. The generated code makes
-  one allocation of n, copies the prefix once and fills only the tail, so every element is written once. An element read
+  one allocation of n, copies the prefix once and fills only the tail, so every element is written once. In the Rust
+  backend the statement `x = resize(x, n, v)` on a `let mut` local or a resizable `inout` array grows `x` in place
+  (`Vec::resize`, no prefix copy) unless cost accounting is on; LLVM still copies (G-LG16-1). An element read
   directly off the call (`resize(a, n, v)[k]`, also through `copy`/`truncate`) keeps the array's storage at i64.
 - `band(a, b)`, `bor(a, b)`, `bxor(a, b)`: `(i64, i64) -> i64`, bitwise and/or/xor on the 64-bit two's-complement
   representation. Negative operands are allowed (`band(-1, 255) == 255`); the complement of `x` is `bxor(x, -1)`
@@ -308,6 +310,19 @@ match e {                                  // statement; every variant exactly o
   `requires !is_variant(e, Event::Hit) || variant_field(e, Event::Hit, point).x > 0`.
 - A loop that assigns any field of `p` forgets all of `p`; keep the other fields with invariants (`invariant p.y == 7`).
 - Contract arithmetic inside struct literals is mathematical, like all contract arithmetic.
+- Struct invariants (LG16): `struct S { a: i64, b: i64, invariant <bool expr>, invariant <bool expr> }`. The clauses come after the
+  fields, name fields bare, may call contract-callable user functions, and may not use `old()` or `result`
+  (`type/invariant_decl`; also for a non-bool clause, a generic struct with an invariant, and a parameter named `result`
+  of type `S`). They are proof-only: generated code is unchanged and safe mode does not check them. In every function
+  the verifier assumes the invariant for each parameter of type exactly `S` at entry and proves it at each handoff:
+  every call argument of type `S` (callee precondition), every returned `S` and every `inout` `S` parameter at exit.
+  After a call the caller assumes it for the result and for `inout` arguments. Between field writes the value may
+  break it. Values in nested positions (struct fields, array elements, `Option` payloads) are not assumed to satisfy it.
+  A failure is `verify/struct_invariant` ("invariant of S (line L) for parameter P of F", "... for result",
+  "... for inout P at exit"); a partial operation in a clause proved at a handoff (index, `/`, `some_val`, ...) is
+  checked under the same code and message. A host entry may not take a parameter of such a struct
+  (`type/entry_signature`). In legacy single-file mode every function is public and has no host-entry check, so a
+  host Rust caller can pass an `S` that breaks the invariant (G-LG16-2).
 
 ## 6b. Byte arrays, bool arrays and strings (G2)
 Full contract: `docs/G2_SPEC.md`. There are no scalar `u8` types, no casts and no narrow arithmetic: reading `[u8]` or
@@ -2152,6 +2167,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/inout_type` | type | an `inout` parameter of a type that cannot be `inout` |
 | `type/int_range` | type | an integer literal outside the i64 range |
 | `type/internal` | type | an unknown statement or expression reached the checker |
+| `type/invariant_decl` | type | a struct invariant clause that is not bool, uses `old()` or `result`, sits on a generic struct, or a parameter `result` of that struct type |
 | `type/match_arity` | type | a match arm binds the wrong number of fields |
 | `type/match_arms` | type | match arms that are missing or repeated |
 | `type/match_type` | type | a match on a value that is not Option, Result or an enum |
@@ -2239,6 +2255,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `verify/refinement_init` | verify | a refined local's initial value not proved in its range |
 | `verify/shift_range` | verify | a shift count not proved in `0..64` |
 | `verify/string_slice_range` | verify | `substr` bounds not proved in `0 <= lo <= hi <= len(s)` |
+| `verify/struct_invariant` | verify | a struct invariant not proved for a call argument, a result or an `inout` value at exit |
 | `verify/utf8_boundary` | verify | a `substr` cut not proved at a character boundary |
 | `verify/utf8_invalid` | verify | bytes passed to `str_from_utf8` not proved valid UTF-8 |
 | `verify/variant_domain` | verify | a `variant_field` lookup not guarded by its variant |

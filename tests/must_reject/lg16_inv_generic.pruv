@@ -1,0 +1,5 @@
+// LG16: a generic struct cannot have an invariant
+struct G<T> {
+  x: T, n: i64,
+  invariant n >= 0
+}

@@ -759,10 +759,25 @@ impl Parser {
         let n = self.ident()?;
         let tparams = if self.at("<", 0) { self.type_params(&decl_owner(&n.val))? } else { Vec::new() };
         self.expect("{")?;
-        let fields = self.field_list("}")?;
+        // LG16: fields, then zero or more `invariant <expr>` clauses, each optionally followed by `,`
+        let mut fields = Vec::new();
+        while !self.at("}", 0) && !self.at("invariant", 0) {
+            fields.push(self.field_decl()?);
+            if !self.at("}", 0) && !self.at("invariant", 0) {
+                self.expect(",")?;
+            }
+        }
+        let mut invariants = Vec::new();
+        while self.at("invariant", 0) {
+            self.bump();
+            invariants.push(self.expr()?);
+            if self.at(",", 0) {
+                self.bump();
+            }
+        }
         self.expect("}")?;
         self.scope = HashMap::new();
-        Ok(StructDecl { line: kw.line, col: kw.col, name: n.val, fields, tparams })
+        Ok(StructDecl { line: kw.line, col: kw.col, name: n.val, fields, tparams, invariants })
     }
 
     fn enum_decl(&mut self) -> R<EnumDecl> {

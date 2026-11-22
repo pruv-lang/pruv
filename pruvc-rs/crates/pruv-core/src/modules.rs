@@ -1196,6 +1196,10 @@ impl<'a> Rs<'a> {
                 for fd in s.fields.iter_mut() {
                     fd.ty = self.rtype_key(&fd.ty, fd.line, fd.col)?;
                 }
+                // LG16: the invariant clauses resolve like a requires (calls to functions of the module)
+                for e in s.invariants.iter_mut() {
+                    self.rexpr(e)?;
+                }
                 s.name = new_name;
             }
             TypeDecl::Enum(e) => {

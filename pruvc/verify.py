@@ -1468,6 +1468,10 @@ class FnVerifier:
                 cex = dict(cex or {}, _opaque=hid)
         else:
             code2, msg = "verify_unknown", "solver gave up proving %s in %s (%s)" % (what, s.f.name, sol.reason_unknown())
+        if code == "struct_invariant":
+            if code2 == "verify_unknown":
+                cex = {"_note": sol.reason_unknown()}
+            code2, msg = code, what
         s.errors.append(PruvError("verify", node.line, node.col, code2, msg, FIX.get(code, ""), cex,
                                   file=s.file_of(node)))
 
@@ -2300,9 +2304,7 @@ class FnVerifier:
                 # No domain proof of callee requires here: the callee's own run() already proved
                 # D(r) under "param wf + earlier requires (values and variant domains)"; the call site
                 # proves each earlier requires value and the args satisfy wf, so it would be redundant.
-                for r in f.requires:
-                    ob = s.ev(r, st, g, False, cenv)
-                    s.prove(st, g, ob, e, "call_requires", "precondition of %s (line %d)" % (n, r.line))
+                s.prove_call_requires(e, f, st, g, cenv)
                 s.termination(e, f, st, g, cenv)    # G9 A1: only a call inside the caller's own recursive SCC
                 s.call_cost(e, f, st, g, cenv)
             if ios:
@@ -2315,7 +2317,7 @@ class FnVerifier:
                 # the same requires/termination obligations; legacy programs keep their exact old behavior and SMT.
                 # G5 A1: every inout call applies its ensures, in legacy single-file mode too
                 if ios or f.foreign is not None or n in s.scc_id or s.explicit:
-                    for en in f.ensures:
+                    for en in f.inv_ensures + f.ensures:
                         s.assume(st, g, s.ev(en, st, g, False, cenv))
                 if ios:
                     s.post_refine(e, ios, st, g)
@@ -2343,7 +2345,7 @@ class FnVerifier:
             else:
                 xv = s.ev(xa, st, g, False, cenv) if code and xa is not None else None
             cenv["result"] = res
-            for en in f.ensures:
+            for en in f.inv_ensures + f.ensures:
                 s.assume(st, g, s.ev(en, st, g, False, cenv))
             if xv is not None:
                 s.assume(st, g, res == xv)
@@ -2352,6 +2354,16 @@ class FnVerifier:
             return res
         finally:
             s.theta = saved
+
+    def prove_call_requires(s, node, f, st, g, env):
+        for i, r in enumerate(f.inv_requires):
+            name, line, param = r.struct_invariant
+            s.prove(st, g, s.ev(r, st, g, False, env), node, "struct_invariant",
+                    "invariant of %s (line %d) for parameter %s of %s" % (name, line, param, node.name),
+                    key_extra=i)
+        for r in f.requires:
+            ob = s.ev(r, st, g, False, env)
+            s.prove(st, g, ob, node, "call_requires", "precondition of %s (line %d)" % (node.name, r.line))
 
     def opq(s, f, args, st):
         """P13o (appendix P13o.1): the application of the opaque function f to the argument values: the
@@ -2457,9 +2469,7 @@ class FnVerifier:
         for c, f, args, cenv, ios, theta in brs:
             saved, s.theta = s.theta, theta
             try:
-                for r in f.requires:
-                    ob = s.ev(r, st, [], False, cenv)
-                    s.prove(st, [], ob, c, "call_requires", "precondition of %s (line %d)" % (c.name, r.line))
+                s.prove_call_requires(c, f, st, [], cenv)
                 s.termination(c, f, st, [], cenv)
                 s.call_cost(c, f, st, [], cenv)
             finally:
@@ -2475,7 +2485,7 @@ class FnVerifier:
         for c, f, args, cenv, ios, theta in brs:
             saved, s.theta = s.theta, theta
             try:
-                for en in f.ensures:
+                for en in f.inv_ensures + f.ensures:
                     s.assume(st, [], s.ev(en, st, [], False, cenv))
             finally:
                 s.theta = saved
@@ -2485,7 +2495,7 @@ class FnVerifier:
             b = base.fork()
             saved, s.theta = s.theta, theta
             try:
-                for en in f.ensures:
+                for en in f.inv_ensures + f.ensures:
                     s.assume(b, [], s.ev(en, b, [], False, cenv))
             finally:
                 s.theta = saved
@@ -3052,6 +3062,16 @@ class FnVerifier:
         if val is not None:
             env["result"] = val
         prev = []   # earlier clauses (domain + value) were proven above and may justify later lookups
+        for i, en in enumerate(s.f.inv_ensures):
+            name, line, param = en.struct_invariant
+            target = "result" if param == "result" else "inout %s at exit" % param
+            what = "invariant of %s (line %d) for %s" % (name, line, target)
+            for dom, code in s.dom_obligations(en, st, prev, env):
+                s.prove(st, prev, dom, node, "struct_invariant", what, key_extra=(i, code))
+                prev.append(dom)
+            ob = s.ev(en, st, [], False, env)
+            s.prove(st, [], ob, node, "struct_invariant", what, key_extra=i)
+            prev.append(ob)
         for en in s.f.ensures:
             prev.extend(s.check_dom(st, prev, en, node, "variant_field lookups in postcondition (line %d) are defined" % en.line, env))
             ob = s.ev(en, st, [], False, env)
@@ -3448,7 +3468,7 @@ class FnVerifier:
                     st.pc.append(w)
             env["result"] = res
         prev = []
-        for en in f.ensures:
+        for en in f.inv_ensures + f.ensures:
             prev.extend(s.check_dom(st, prev, en, en, "variant_field lookups in postcondition (line %d) are defined"
                                     % en.line, env))
             prev.append(s.ev(en, st, [], False, env))
@@ -3485,7 +3505,7 @@ class FnVerifier:
             st0 = State(dict(env), list(shape))
             for d, _ in s.dom_obligations(f.x_auto, st0, [], st0.env):
                 s.prove(st0, [], d, f, "opaque_total", "the body of opaque %s is defined for every argument" % f.name)
-        for r in f.requires:
+        for r in f.inv_requires + f.requires:
             # D(r) is proven from the earlier requires only, then D(r) && r is assumed, in declaration order
             s.check_dom(st, [], r, r, "variant_field lookups in requires (line %d) are defined" % r.line)
             # assume only the variant_field part of D(r) (as before): the other domains are proven above but not

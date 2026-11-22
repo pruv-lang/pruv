@@ -1,0 +1,42 @@
+// LG16 G-DB26-1: invariants assumed at entry (by value and inout), proved at return, at inout exit and for call
+// arguments after local field writes; between field writes the value may break the invariant
+fn le(a: i64, b: i64) -> bool {
+  return a <= b;
+}
+
+struct Range {
+  lo: i64, hi: i64,
+  invariant le(lo, hi) && lo >= 0,
+  invariant hi <= 1000
+}
+
+fn width(r: Range) -> i64
+  ensures result >= 0 && result <= 1000
+{
+  return r.hi - r.lo;
+}
+
+fn mk(a: i64) -> Range
+  requires 0 <= a && a <= 500
+{
+  return Range { lo: a, hi: a + a };
+}
+
+fn shift(inout r: Range, d: i64) -> ()
+  requires 0 <= d && d <= 10
+{
+  if r.hi + d > 1000 { return; }
+  r.lo = r.lo + d;      // lo may pass hi here; the next write restores the invariant before the exit
+  r.hi = r.hi + d;
+}
+
+fn run(k: i64) -> i64
+  requires 0 <= k && k <= 3
+{
+  let mut r: Range = mk(k * 100);
+  shift(inout r, k);
+  let mut q: Range = mk(1);
+  q.hi = 900;
+  q.lo = 5;
+  return width(r) * 1000 + width(q) + r.lo;
+}

@@ -356,6 +356,19 @@ impl<'a> FnVerifier<'a> {
                 None,
             )
         };
+        // LG16: a broken struct invariant reports its own text (verify.py prove)
+        let (code2, msg, cex) = if code == "struct_invariant" {
+            let cex = if code2 == "verify_unknown" {
+                let mut m = Vec::new();
+                set_key(&mut m, "_note", Json::Str(sol.reason_unknown()));
+                Some(Json::Obj(m))
+            } else {
+                cex
+            };
+            (code.to_string(), what.to_string(), cex)
+        } else {
+            (code2, msg, cex)
+        };
         self.errors.push(PruvError {
             stage: "verify".to_string(),
             line: self.err_line(node), // G4 A1: carries the file tag; the JSON prints it untagged with `file`

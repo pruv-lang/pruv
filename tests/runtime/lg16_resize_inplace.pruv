@@ -1,0 +1,28 @@
+fn grow(inout buf: [i64]) -> () ! alloc
+  requires len(buf) == 2
+  ensures len(buf) == 4
+{
+  buf = resize(buf, len(buf) * 2, buf[0]);
+}
+
+fn run() -> () ! io, alloc {
+  let mut local: [i64] = alloc(1, 7);
+  local = resize(local, 2, 9);
+  print(local[0]); print(local[1]);
+
+  grow(inout local);
+  print(len(local)); print(local[1]); print(local[3]);
+
+  let mut bytes: [u8] = alloc(1, 3);
+  bytes = resize(bytes, 2, 200);
+  print(bytes[0]); print(bytes[1]);
+
+  let mut flags: [bool] = alloc(1, false);
+  flags = resize(flags, 2, true);
+  print(flags[0]); print(flags[1]);
+
+  let mut other: [i64] = alloc(1, 0);
+  print(other[0]);
+  other = resize(local, 5, 11);
+  print(len(local)); print(other[0]); print(other[4]);
+}

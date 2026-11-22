@@ -1,0 +1,5 @@
+// LG16: an invariant cannot use old() or result
+struct R {
+  lo: i64, hi: i64,
+  invariant lo <= result
+}

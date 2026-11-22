@@ -1,0 +1,4 @@
+struct S { x: Option<i64>, invariant some_val(x) == some_val(x) }
+fn make() -> S {
+  return S { x: None };
+}

@@ -1,0 +1,13 @@
+{
+  "flags_matrix": [[], ["--no-verify"]],
+  "exit": 0,
+  "stdout_lines": ["7", "9", "4", "9", "7", "3", "200", "false", "true", "0", "4", "7", "11"],
+  "gen_contains": [
+    "local.resize(pruv_n as usize,",
+    "buf.resize(pruv_n as usize, pruv_v)",
+    "bytes.resize(pruv_n as usize, pruv_v as u8)",
+    "flags.resize(pruv_n as usize, pruv_v)",
+    "other = { let pruv_a = &local;",
+    "pruv_t.extend_from_slice(pruv_a); pruv_t.resize("
+  ]
+}

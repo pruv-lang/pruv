@@ -1,0 +1,10 @@
+// LG16: an invariant struct parameter cannot be named result (the synthesized ensures would mean the return value)
+struct R {
+  lo: i64, hi: i64,
+  invariant 0 <= lo && lo <= hi
+}
+
+fn bad(inout result: R) -> R {
+  result.lo = 9;
+  return R { lo: 0, hi: 1 };
+}

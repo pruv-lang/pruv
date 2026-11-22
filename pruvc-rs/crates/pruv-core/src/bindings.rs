@@ -1542,6 +1542,7 @@ mod tests {
                 FieldDecl { line: 1, col: 1, name: "b".into(), ty: "bool".into() },
             ],
             tparams: vec![],
+            invariants: vec![],
         });
         let tt = TypeTable::new(&[st]);
         let mut c = 0;

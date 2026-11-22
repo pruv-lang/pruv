@@ -445,12 +445,12 @@ class Parser:
         s.expect(":")
         return FieldDecl(n.line, n.col, n.val, s.type_())
 
-    def field_list(s, close):
+    def field_list(s, close, after_fields=None):
         """`name: Type, ...` up to (not including) `close`; trailing comma allowed"""
         out = []
-        while not s.at(close):
+        while not s.at(close) and (after_fields is None or not s.at(after_fields)):
             out.append(s.field_decl())
-            if not s.at(close):
+            if not s.at(close) and (after_fields is None or not s.at(after_fields)):
                 s.expect(",")
         return out
 
@@ -551,11 +551,22 @@ class Parser:
         n = s.ident()
         tparams = s.type_params(decl_owner(n.val)) if s.at("<") else ()
         s.expect("{")
-        fields = s.field_list("}")
+        fields = s.field_list("}", "invariant")
+        invariants = []
+        while s.at("invariant"):
+            clause = s.next()
+            expr = s.expr()
+            expr.invariant_line = clause.line
+            expr.invariant_col = clause.col
+            invariants.append(expr)
+            if s.at(","):
+                s.next()
         s.expect("}")
         s.scope = {}
         d = StructDecl(kw.line, kw.col, n.val, fields)
         d.tparams = tparams
+        if invariants:
+            d.invariants = invariants
         return d
 
     def enum_decl(s):
