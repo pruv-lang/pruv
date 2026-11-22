@@ -354,6 +354,16 @@ match e {                                  // statement; every variant exactly o
   `Vec` the body changes (`vec_at_mut`, `vec_clear`, ...) is proved at exit, and a loop that changes it, like a local
   `Vec` built in a loop, needs a user loop invariant stating the element clause (G-LG27-1). Elements of arrays (which cannot hold
   structs), of `Vec` values inside fields or payloads, and `HashMap` values are not assumed (G-LG27-2).
+  Host callers never pass or receive such a `Vec` (LG28, G-LG27-6), so the entry fact rests on proved Pruv callers.
+  In explicit mode a host entry (root `pub` non-generic function, section 6f) with a `Vec<S>` parameter
+  (read-only, `inout` or `take`) or result is `type/entry_signature` ("host entry F cannot have the type Vec<S> in
+  parameter P" / "in the result") by the collection rule; only `Vec<i64>` and `Vec<bool>` results are allowed
+  (R-6f-1). Child `pub` and private functions may take or return it. In legacy single-file mode there is no
+  host-entry signature check and the invariant-parameter rule below does not look inside `Vec`, so any function
+  except `main` may take or return it; the Rust backend emits every such function as a private item (no host
+  caller), and the LLVM backend rejects a `Vec` of a struct (`codegen/unsupported_type`; it has only `Vec<i64>`
+  and `Vec<bool>`). `main` with a collection parameter or result is `type/entry_main` in explicit mode and
+  `type/foreign_export` in legacy mode.
   A failure is `verify/struct_invariant` ("invariant of S (line L) for parameter P of F", "... for result",
   "... for inout P at exit"); a partial operation in a clause proved at a handoff (index, `/`, `some_val`, ...) is
   checked under the same code and message. A host entry may not take a parameter of such a struct
