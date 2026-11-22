@@ -1,0 +1,9 @@
+// LG22 (G-DB31-2): old() of a struct parameter that is not inout is still rejected (old(a) of the array is fine)
+struct C { n: i64, m: i64 }
+
+fn f(c: C, inout a: [i64]) -> i64
+  ensures len(a) == len(old(a))
+  ensures result == old(c).n
+{
+  return c.n;
+}

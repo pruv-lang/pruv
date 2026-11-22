@@ -3635,7 +3635,8 @@ class Gen:
                 return "{ let pruv_a: &[u8] = %s; let pruv_i: i64 = %s; %s%s }" % (s.arr_ref(a[0]), s.e(a[1]), chk, tail)
             if n in ("store_be", "store_le"):
                 order = n[-2:]
-                nb, name = a[3].value, a[0].expr.name
+                nb = a[3].value
+                name = a[0].expr.name if isinstance(a[0].expr, Var) else s.e(a[0].expr)   # G-DB31-1: a field place
                 chk = "" if s.verified else ("if pruv_i < 0 || (pruv_i as u64) + %d > (%s.len() as u64) "
                                              "{ pruv_oob(pruv_i, %s.len()) } " % (nb, name, name))
                 rng = "(pruv_i as usize)..((pruv_i as usize) + %d)" % nb

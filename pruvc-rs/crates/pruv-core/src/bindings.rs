@@ -1543,6 +1543,7 @@ mod tests {
             ],
             tparams: vec![],
             invariants: vec![],
+            invariant_lines: vec![],
         });
         let tt = TypeTable::new(&[st]);
         let mut c = 0;

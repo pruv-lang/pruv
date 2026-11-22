@@ -1,0 +1,8 @@
+// LG22 (G-DB31-1): the inout field of store_le may not be read by another argument
+struct P { a: [u8], n: i64 }
+
+fn f(inout p: P) -> ()
+  requires len(p.a) == 4
+{
+  store_le(inout p.a, 0, p.a[1], 1);
+}

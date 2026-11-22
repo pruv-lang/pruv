@@ -1,13 +1,14 @@
-// LG16: a struct read from another struct's field is not assumed to satisfy its invariant
+// LG16: a struct read from an Option payload is not assumed to satisfy its invariant (LG22: struct fields now are)
 struct R {
   lo: i64, hi: i64,
   invariant 0 <= lo && lo <= hi
 }
 
-struct W { r: R }
-
-fn bad(w: W) -> i64
+fn bad(o: Option<R>) -> i64
   ensures result >= 0
 {
-  return w.r.hi - w.r.lo;
+  match o {
+    Some(r) => { return r.hi - r.lo; }
+    None => { return 0; }
+  }
 }

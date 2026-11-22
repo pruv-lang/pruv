@@ -1,0 +1,35 @@
+// LG22 (G-DB31-1): store_le and store_be write straight into an array field of an inout or local struct; the other
+// fields keep their values and the struct invariant is proved at the handoff (here the inout exit)
+struct Events {
+  records: [u8], used: i64,
+  invariant 0 <= used && used <= len(records)
+}
+
+fn put(inout log: Events, pos: i64, a: i64, b: i64) -> ()
+  requires 0 <= pos && pos + 6 <= len(log.records)
+  ensures log.used == pos + 6 && len(log.records) >= pos + 6
+{
+  let u: i64 = log.used;
+  store_le(inout log.records, pos, a, 2);
+  assert log.used == u;
+  store_be(inout log.records, pos + 2, b, 4);
+  log.used = pos + 6;
+}
+
+fn get(log: Events, pos: i64) -> i64
+  requires 0 <= pos && pos + 6 <= len(log.records)
+  ensures 0 <= result && result <= 70000000000
+{
+  return load_le(log.records, pos, 2) * 1000 + load_be(log.records, pos + 2, 4);
+}
+
+pub fn run(k: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 3
+{
+  let r: [u8] = alloc(12, 0);
+  let mut e: Events = Events { records: move r, used: 0 };
+  store_le(inout e.records, 6, 258 + k, 2);
+  assert e.used == 0;
+  put(inout e, 0, 513, 70000 + k);
+  return get(e, 0) * 1000 + load_le(e.records, 6, 2);
+}

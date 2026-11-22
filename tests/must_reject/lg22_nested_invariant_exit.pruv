@@ -1,0 +1,18 @@
+// LG22 (G-DB31-3): the invariant of a struct field is proved for an inout parameter at exit
+struct R {
+  lo: i64, hi: i64,
+  invariant 0 <= lo && lo <= hi
+}
+
+struct W { r: R, n: i64 }
+
+fn bad(inout w: W) -> ()
+{
+  w.r.lo = w.r.hi;
+  w.r.hi = 0 - 1;
+}
+
+pub fn run(k: i64) -> i64
+{
+  return k;
+}

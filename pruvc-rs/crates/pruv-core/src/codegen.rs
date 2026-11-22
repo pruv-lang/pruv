@@ -4969,7 +4969,7 @@ impl<'a> Gen<'a> {
                     let name = match arg(a, 0)? {
                         Expr::InoutArg(ia) => match ia.expr.as_ref() {
                             Expr::Var(v) => v.name.clone(),
-                            other => return Err(format!("codegen: inout operand is not a variable: {:?}", other)),
+                            place => self.e(place)?,
                         },
                         other => return Err(format!("codegen: inout operand is not a variable: {:?}", other)),
                     };

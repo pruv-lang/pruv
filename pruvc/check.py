@@ -251,8 +251,9 @@ def _walk(e):
         yield from _walk(k)
 
 
-def invariant_clause(expr, ty, name, metadata):
-    """Bind free field names in a copy of an already typed struct clause."""
+def invariant_clause(expr, ty, name, metadata, path=()):
+    """Bind free field names in a copy of an already typed struct clause. path = ((field, field type), ...) is the
+    chain of struct fields from the named value to the struct that owns the clause (G-DB31-3)."""
     expr = copy.deepcopy(expr)
 
     def bind(e, bound):
@@ -262,6 +263,9 @@ def invariant_clause(expr, ty, name, metadata):
             else:
                 base = Var(e.line, e.col, name, ty)
                 base.file = e.file
+                for fname, fty in path:
+                    base = FieldAccess(e.line, e.col, base, fname, fty)
+                    base.file = e.file
                 e.__class__ = FieldAccess
                 e.base, e.field = base, e.name
                 del e.name
@@ -1223,9 +1227,43 @@ class Checker:
                                               and not any(n in s.extended for n in dependencies(ft)))
         return any(owned(ft) for ft in fields) and all(ok(ft) for ft in fields)
 
+    def effective_invariants(s, ty, stack=()):
+        """G-DB31-3: [(owner decl, clause, ((field, field type), ...))] of the struct type ty: its own clauses in
+        declaration order, then those of each struct-typed field in declaration order (pre-order, no cycles)"""
+        d = s.decls.get(ty.name)
+        if ty.owner is not None or ty.args or not isinstance(d, StructDecl) or ty.name in stack:
+            return []
+        out = [(d, clause, ()) for clause in d.invariants]
+        for fd in d.fields:
+            if not s.reaches_invariant(fd.type):
+                continue    # a field with no invariant below it is not walked (no path-wise revisit)
+            for owner, clause, path in s.effective_invariants(fd.type, stack + (ty.name,)):
+                out.append((owner, clause, ((fd.name, fd.type),) + path))
+        return out
+
+    def reaches_invariant(s, ty):
+        """whether a plain struct with an invariant is reachable from ty through plain struct fields (memoized)"""
+        d = s.decls.get(ty.name)
+        if ty.owner is not None or ty.args or not isinstance(d, StructDecl):
+            return False
+        memo = s.__dict__.setdefault("_reach_inv", {})
+        if ty.name not in memo:
+            seen, todo, found = {ty.name}, [d], False
+            while todo and not found:
+                cur = todo.pop()
+                found = bool(cur.invariants)
+                for fd in cur.fields:
+                    fdd = s.decls.get(fd.type.name)
+                    if (fd.type.owner is None and not fd.type.args and isinstance(fdd, StructDecl)
+                            and fd.type.name not in seen):
+                        seen.add(fd.type.name)
+                        todo.append(fdd)
+            memo[ty.name] = found
+        return memo[ty.name]
+
     def invariant_struct(s, ty):
         d = s.decls.get(ty.name)
-        if ty.owner is None and not ty.args and isinstance(d, StructDecl) and d.invariants:
+        if ty.owner is None and not ty.args and isinstance(d, StructDecl) and s.reaches_invariant(ty):
             return d
         return None
 
@@ -1309,17 +1347,17 @@ class Checker:
             if p.name == "result":
                 terr(f, "invariant_decl", "parameter result of type %s cannot be used: %s has an invariant" %
                      (d.name, d.name))
-            for clause in d.invariants:
-                tag = (d.name, clause.invariant_line, p.name)
-                r = invariant_clause(clause, p.type, p.name, tag)
+            for owner, clause, path in s.effective_invariants(p.type):
+                tag = (owner.name, clause.invariant_line, ".".join([p.name] + [x for x, _ in path]))
+                r = invariant_clause(clause, p.type, p.name, tag, path)
                 requires.append(r)
                 if p.mode == "inout":
                     ensures.append(copy.deepcopy(r))
         d = s.invariant_struct(f.ret)
         if d is not None:
-            for clause in d.invariants:
-                tag = (d.name, clause.invariant_line, "result")
-                ensures.append(invariant_clause(clause, f.ret, "result", tag))
+            for owner, clause, path in s.effective_invariants(f.ret):
+                tag = (owner.name, clause.invariant_line, ".".join(["result"] + [x for x, _ in path]))
+                ensures.append(invariant_clause(clause, f.ret, "result", tag, path))
         if requires:
             f.inv_requires = requires
         if ensures:
@@ -3078,29 +3116,35 @@ class Checker:
                 terr(arg, "inout_argument", "the array of %s needs the `inout` marker" % n,
                      "write `%s(inout name, i, w, n)` with a `let mut` local array or an inout parameter" % n)
             op = arg.expr
-            if not isinstance(op, Var):
+            root, path = field_place(op)
+            if not isinstance(root, Var):
                 terr(arg, "inout_argument", "an inout argument must be the whole name of a local array or an inout "
                      "parameter", "name a `let mut` local array or an inout parameter of this function")
-            v = s.lookup(op, op.name, scope)
+            if path:
+                s.check_iteration_borrow(arg, root.name, path)
+            v = s.lookup(root, root.name, scope, path) if path else s.lookup(op, op.name, scope)
             if v[2] == "local" and not v[1]:
-                terr(arg, "inout_argument", "%s is not mutable: it cannot be passed inout" % op.name,
+                terr(arg, "inout_argument", "%s is not mutable: it cannot be passed inout" % root.name,
                      "declare it with `let mut`")
-            if v[2] not in ("inout", "local"):
+            if v[2] not in ("inout", "local") and not (path and v[2] == "map_mut"):
                 terr(arg, "inout_argument", "%s is a read-only %s: it cannot be passed inout" % (
-                    op.name, "parameter" if v[2] == "param" else "binding"),
-                     "declare the parameter `inout %s: ...`, or copy into a `let mut` local" % op.name)
-            if v[0] != ARRAY_U8:
-                terr(arg, "type_mismatch", "expected %s, found %s" % (type_name(ARRAY_U8), type_name(v[0])))
-            if op.name in s.active_roots or s.match_path_held(op.name, ()):
-                terr(arg, "recursive_borrow", "cannot pass %s inout while a match on it is active" % op.name,
+                    root.name, "parameter" if v[2] == "param" else "binding"),
+                     "declare the parameter `inout %s: ...`, or copy into a `let mut` local" % root.name)
+            ty = s.expr(op, scope, c) if path else v[0]
+            if ty != ARRAY_U8:
+                terr(arg, "type_mismatch", "expected %s, found %s" % (type_name(ARRAY_U8), type_name(ty)))
+            if root.name in s.active_roots or s.match_path_held(root.name, path):
+                terr(arg, "recursive_borrow", "cannot pass %s inout while a match on it is active" % root.name,
                      "finish the match before the call")
-            op.ty = v[0]
-            arg.ty = v[0]
+            op.ty = ty
+            arg.ty = ty
             s.expect(a[1], I64, scope, c)
             s.expect(a[2], I64, scope, c)
-            if any(_mentions(x, op.name) for x in a[1:]):
-                terr(arg, "inout_alias", "%s is passed inout and also used elsewhere in the arguments of this call" % op.name,
-                     "compute the other value first, e.g. `let n: i64 = len(%s);`, then pass n" % op.name)
+            if any(name == root.name and _paths_overlap(path, other)
+                   for x in a[1:3] for name, other in _place_mentions(x)) if path else \
+                    any(_mentions(x, op.name) for x in a[1:]):
+                terr(arg, "inout_alias", "%s is passed inout and also used elsewhere in the arguments of this call" % root.name,
+                     "compute the other value first, e.g. `let n: i64 = len(%s);`, then pass n" % root.name)
             if e is not s.boundary:
                 terr(e, "inout_context", "%s must be a whole expression statement" % n,
                      "write `%s(inout a, i, w, n);` as a statement" % n)
@@ -3180,13 +3224,33 @@ class Checker:
             terr(e, "old_argument", "old takes exactly 1 argument, got %d" % len(a),
                  "write old(a) with the name of an inout parameter of this function")
         arg = a[0]
-        if not (isinstance(arg, Var) and arg.name in scope and scope[arg.name][2] == "inout"
-                and is_array(scope[arg.name][0])):
+        root, path = field_place(arg)
+        ok = isinstance(root, Var) and root.name in scope and scope[root.name][2] == "inout"
+        if ok:
+            rty = scope[root.name][0]
+            ok = is_nongeneric_struct(rty, s.decls) or (is_array(rty) and not path)
+        if not ok:
             terr(e, "old_argument", "the operand of old must be the name of an inout parameter of this function",
                  "write old(a) where `inout a: [..]` is a parameter of the enclosing function")
-        arg.ty = scope[arg.name][0]
-        e.old = {"param": arg.name, "index": [p.name for p in s.f.params].index(arg.name)}
-        return arg.ty
+        root.ty = rty
+        old = {"param": root.name, "index": [p.name for p in s.f.params].index(root.name)}
+        if not path:
+            e.old = old
+            return rty
+        # G-DB31-2: old(x.f1...fn) is lowered to the field chain old(x).f1...fn
+        # the field nodes keep their source positions; the innermost base becomes old(x) at the position of old,
+        # and the chain is typed as an ordinary field read (as pruvc-rs does)
+        inner = Call(e.line, e.col, "old", [root], rty)
+        inner.file = e.file
+        node = arg
+        while isinstance(node.base, FieldAccess):
+            node = node.base
+        node.base = inner
+        cur = s.expr(arg, scope, True)
+        # the outermost node replaces this Call in place (the caller stores the type on it)
+        e.__class__ = FieldAccess
+        e.__dict__ = vars(arg).copy()
+        return cur
 
     # ---- P06: expanding user functions in contracts (docs/L3_RESTRUCTURE_SPEC.md appendix P06) ----
     def x_prepare(s):

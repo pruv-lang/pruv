@@ -1176,7 +1176,6 @@ impl Checker {
                 _ => crate::refine::kids(e).into_iter().any(uses_old_or_result),
             }
         }
-        let mut inv_structs: HashSet<String> = HashSet::new();
         for d in prog.types.iter_mut() {
             let TypeDecl::Struct(s) = d else { continue };
             if s.invariants.is_empty() {
@@ -1187,7 +1186,6 @@ impl Checker {
                 return Err(terr(s.line, s.col, "invariant_decl",
                     format!("struct {} with type parameters cannot have an invariant", sname), ""));
             }
-            inv_structs.insert(sname.clone());
             let scope: Scope = s.fields.iter().map(|fd| (fd.name.clone(), Entry {
                 ty: GType::from_key(&fd.ty), mutable: false, kind: "param",
             })).collect();
@@ -1210,6 +1208,7 @@ impl Checker {
                 }
             }
         }
+        let inv_structs = self.invariant_structs();
         if !inv_structs.is_empty() {
             for f in &prog.functions {
                 if let Some(p) = f.params.iter().find(|p| p.name == "result" && inv_structs.contains(&p.ty)) {
@@ -1229,6 +1228,25 @@ impl Checker {
             }
         }
         Ok(())
+    }
+
+    fn plain_struct(&self, ty: &GType) -> Option<&StructDecl> {
+        plain_struct(ty, &|name| self.struct_decl(name))
+    }
+
+    fn struct_decl(&self, name: &str) -> Option<&StructDecl> {
+        match self.decls.get(name) {
+            Some(TypeDecl::Struct(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    fn invariant_structs(&self) -> HashSet<String> {
+        self.decls.keys().filter(|name| {
+            let lookup = |n: &str| self.struct_decl(n);
+            plain_struct(&GType::from_key(name), &lookup)
+                .is_some_and(|s| reaches(s, &lookup, &mut HashMap::new()))
+        }).cloned().collect()
     }
 
     fn check_costs(&mut self, prog: &mut Program) -> Res<()> {
@@ -2513,19 +2531,15 @@ impl Checker {
             if !changed { break; }
         }
         let resizes = resize_params(prog);
+        let inv_structs = self.invariant_structs();
         for (i, f) in prog.functions.iter().enumerate() {
             if !self.host_entry.get(i).copied().unwrap_or(false) {
                 continue;
             }
             // LG16: a host entry cannot take a struct with an invariant (its callers are not proved)
-            if let Some((p, sname)) = f.params.iter().find_map(|p| {
-                prog.types.iter().find_map(|d| match d {
-                    TypeDecl::Struct(s) if s.name == p.ty && !s.invariants.is_empty() => Some((p, s.name.as_str())),
-                    _ => None,
-                })
-            }) {
+            if let Some(p) = f.params.iter().find(|p| inv_structs.contains(&p.ty)) {
                 return Err(terr(f.line, f.col, "entry_signature",
-                    format!("host entry {} cannot take parameter {} of struct {} with an invariant", f.name, p.name, sname), ""));
+                    format!("host entry {} cannot take parameter {} of struct {} with an invariant", f.name, p.name, p.ty), ""));
             }
             if let Some(p) = f.params.iter().find(|p| p.mode_pos.is_some() && matches!(p.ty.as_str(), "i64" | "bool")) {
                 return Err(terr(f.line, f.col, "entry_signature",
@@ -5527,6 +5541,7 @@ impl Checker {
             }
             let (aline, acol) = (e.args[0].line(), e.args[0].col());
             let name: String;
+            let path: Vec<String>;
             {
                 let arg: &mut InoutArg = match &mut e.args[0] {
                     Expr::InoutArg(a) => a,
@@ -5540,7 +5555,8 @@ impl Checker {
                         ))
                     }
                 };
-                let op: &mut Var = match &mut *arg.expr {
+                let (root, fields) = field_place(&arg.expr);
+                let op = match root {
                     Expr::Var(v) => v,
                     _ => {
                         return Err(terr(
@@ -5552,7 +5568,12 @@ impl Checker {
                         ))
                     }
                 };
-                let v = self.lookup(op.line, op.col, &op.name, scope, &[])?;
+                name = op.name.clone();
+                path = fields;
+                if !path.is_empty() {
+                    self.check_iteration_borrow(aline, acol, &name, &path)?;
+                }
+                let v = self.lookup(op.line, op.col, &name, scope, &path)?;
                 if v.kind == "local" && !v.mutable {
                     return Err(terr(
                         aline,
@@ -5562,7 +5583,7 @@ impl Checker {
                         "declare it with `let mut`",
                     ));
                 }
-                if v.kind != "inout" && v.kind != "local" {
+                if !(matches!(v.kind, "inout" | "local") || v.kind == "map_inout" && !path.is_empty()) {
                     return Err(terr(
                         aline,
                         acol,
@@ -5575,31 +5596,39 @@ impl Checker {
                         format!("declare the parameter `inout {}: ...`, or copy into a `let mut` local", op.name),
                     ));
                 }
-                if v.ty != GType::array_u8() {
+                let ty = if path.is_empty() { v.ty } else { self.expr(&mut arg.expr, scope, c)? };
+                if ty != GType::array_u8() {
                     return Err(terr(
                         aline,
                         acol,
                         "type_mismatch",
-                        format!("expected {}, found {}", tn(&GType::array_u8()), tn(&v.ty)),
+                        format!("expected {}, found {}", tn(&GType::array_u8()), tn(&ty)),
                         "",
                     ));
                 }
-                if self.active_roots.iter().any(|(root, _)| *root == op.name) || self.match_path_held(&op.name, &[]) {
+                if self.active_roots.iter().any(|(root, _)| *root == name) || self.match_path_held(&name, &path) {
                     return Err(terr(
                         aline,
                         acol,
                         "recursive_borrow",
-                        format!("cannot pass {} inout while a match on it is active", op.name),
+                        format!("cannot pass {} inout while a match on it is active", name),
                         "finish the match before the call",
                     ));
                 }
-                op.ty = Some(v.ty.to_key());
-                arg.ty = Some(v.ty.to_key());
-                name = op.name.clone();
+                set_ty(&mut arg.expr, &ty);
+                arg.ty = Some(ty.to_key());
             }
             self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
             self.expect(&mut e.args[2], &i64t(), scope, c, None)?;
-            if e.args[1..].iter().any(|x| mentions(x, &name)) {
+            let alias_args = if path.is_empty() { &e.args[1..] } else { &e.args[1..3] };
+            if alias_args.iter().any(|x| {
+                if path.is_empty() {
+                    return mentions(x, &name);
+                }
+                let mut places = Vec::new();
+                place_mentions(x, &mut places);
+                places.iter().any(|(root, other)| *root == name && paths_overlap(&path, other))
+            }) {
                 return Err(terr(
                     aline,
                     acol,
@@ -5792,30 +5821,43 @@ impl Checker {
                 "write old(a) with the name of an inout parameter of this function",
             ));
         }
-        let entry: Option<Entry> = match &e.args[0] {
-            Expr::Var(v) => scope.get(&v.name).filter(|x| x.kind == "inout" && x.ty.is_array()).cloned(),
+        let (root, path) = field_place(&e.args[0]);
+        let entry = match root {
+            Expr::Var(v) => scope.get(&v.name).filter(|x| {
+                x.kind == "inout" && (path.is_empty() && x.ty.is_array() || self.plain_struct(&x.ty).is_some())
+            }),
             _ => None,
         };
-        let entry = match entry {
-            Some(x) => x,
-            None => {
-                return Err(terr(
-                    line,
-                    col,
-                    "old_argument",
-                    "the operand of old must be the name of an inout parameter of this function",
-                    "write old(a) where `inout a: [..]` is a parameter of the enclosing function",
-                ))
-            }
+        let (Expr::Var(root), Some(entry)) = (root, entry) else {
+            return Err(terr(
+                line,
+                col,
+                "old_argument",
+                "the operand of old must be the name of an inout parameter of this function",
+                "write old(a) where `inout a: [..]` is a parameter of the enclosing function",
+            ));
         };
-        let mut name = String::new();
-        if let Expr::Var(v) = &mut e.args[0] {
-            v.ty = Some(entry.ty.to_key());
-            name = v.name.clone();
+        let ty = entry.ty.clone();
+        let mut root = root.clone();
+        root.ty = Some(ty.to_key());
+        let index = self.cur_params.iter().position(|p| *p == root.name).unwrap_or(0);
+        e.old = Some((root.name.clone(), index));
+        if path.is_empty() {
+            e.args[0] = Expr::Var(root);
+            return Ok(ty);
         }
-        let index = self.cur_params.iter().position(|p| *p == name).unwrap_or(0);
-        e.old = Some((name, index));
-        Ok(entry.ty)
+        let mut call = e.clone();
+        call.args[0] = Expr::Var(root);
+        call.ty = Some(ty.to_key());
+        let mut lowered = e.args[0].clone();
+        let mut base = &mut lowered;
+        while let Expr::FieldAccess(field) = base {
+            base = &mut field.base;
+        }
+        *base = Expr::Call(call);
+        let ty = self.expr(&mut lowered, scope, true)?;
+        self.x_pending = Some(lowered);
+        Ok(ty)
     }
 
     // ---- P06: expanding user functions in contracts (docs/L3_RESTRUCTURE_SPEC.md appendix P06) ----
@@ -6482,6 +6524,75 @@ fn x_captured_quant<'a>(e: &'a Expr, names: &HashSet<String>) -> Option<&'a Quan
         }
     }
     crate::refine::kids(e).into_iter().find_map(|child| x_captured_quant(child, names))
+}
+
+fn plain_struct<'a>(ty: &GType, lookup: &impl Fn(&str) -> Option<&'a StructDecl>) -> Option<&'a StructDecl> {
+    if ty.owner.is_some() || !ty.args.is_empty() {
+        return None;
+    }
+    lookup(&ty.name).filter(|s| s.tparams.is_empty())
+}
+
+/// Whether a plain struct with an invariant is reachable from `s` through plain struct fields (memoized per
+/// struct, so a field type with nothing below it is not walked once per path).
+fn reaches<'a>(
+    s: &'a StructDecl,
+    lookup: &impl Fn(&str) -> Option<&'a StructDecl>,
+    memo: &mut HashMap<&'a str, bool>,
+) -> bool {
+    if let Some(&r) = memo.get(s.name.as_str()) {
+        return r;
+    }
+    let mut seen: HashSet<&'a str> = HashSet::from([s.name.as_str()]);
+    let mut todo = vec![s];
+    let mut found = false;
+    while let Some(cur) = todo.pop() {
+        if !cur.invariants.is_empty() {
+            found = true;
+            break;
+        }
+        for field in &cur.fields {
+            if let Some(next) = plain_struct(&GType::from_key(&field.ty), lookup) {
+                if seen.insert(next.name.as_str()) {
+                    todo.push(next);
+                }
+            }
+        }
+    }
+    memo.insert(s.name.as_str(), found);
+    found
+}
+
+/// Structs owning effective clauses, in preorder, with their field paths from the root.
+pub fn effective_invariant_structs<'a>(
+    ty: &GType,
+    lookup: &impl Fn(&str) -> Option<&'a StructDecl>,
+) -> Vec<(&'a StructDecl, Vec<&'a FieldDecl>)> {
+    fn visit<'a>(
+        ty: &GType,
+        lookup: &impl Fn(&str) -> Option<&'a StructDecl>,
+        seen: &mut HashSet<&'a str>,
+        memo: &mut HashMap<&'a str, bool>,
+        path: &mut Vec<&'a FieldDecl>,
+        out: &mut Vec<(&'a StructDecl, Vec<&'a FieldDecl>)>,
+    ) {
+        let Some(s) = plain_struct(ty, lookup) else { return };
+        if !reaches(s, lookup, memo) || !seen.insert(&s.name) {
+            return;
+        }
+        if !s.invariants.is_empty() {
+            out.push((s, path.clone()));
+        }
+        for field in &s.fields {
+            path.push(field);
+            visit(&GType::from_key(&field.ty), lookup, seen, memo, path, out);
+            path.pop();
+        }
+        seen.remove(s.name.as_str());
+    }
+    let mut out = Vec::new();
+    visit(ty, lookup, &mut HashSet::new(), &mut HashMap::new(), &mut Vec::new(), &mut out);
+    out
 }
 
 fn x_record(ty: &GType, decls: &HashMap<String, TypeDecl>) -> bool {

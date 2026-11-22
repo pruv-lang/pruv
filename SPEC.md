@@ -136,7 +136,10 @@ it can never be silently dropped.
   `0 <= i && i + n <= len(a)` (`verify` error `index_oob`).
 - `store_be(inout a, i, w, n);`: a whole expression statement (`a` a mutable `[u8]`). It
   writes the low `8n` bits of `w: i64` big-endian into `a[i..i+n]` and leaves the other elements unchanged. `n` and the
-  obligation are as for `load_be`. Not allowed in contracts.
+  obligation are as for `load_be`. Not allowed in contracts. `a` may also be a `[u8]` field path `inout x.f` (`x.f.g`)
+  of a mutable local or `inout` struct parameter, with the destination rules of `copy_range` (LG22): only that field
+  changes, the other fields of `x` keep their values, and `i` or `w` mentioning an overlapping path of `x` is
+  `type/inout_alias`. No struct invariant is checked at the store (invariants are checked at handoffs).
 - `load_le(a, i, n)` and `store_le(inout a, i, w, n);` follow the same rules as `load_be` and `store_be`,
   respectively, using little-endian byte order (byte `a[i+k]` has weight `256^k`). Both names are reserved.
 - `eq_range(a, i, b, j, n)`: `a` and `b` of one type, `[i64]` or `[u8]` (else `type_mismatch`); `i, j, n: i64`; a
@@ -196,7 +199,7 @@ it can never be silently dropped.
 ## 6. Contract-only expressions
 Allowed only in `requires`, `ensures`, `invariant`, `assert`:
 - `result` (in ensures): the return value.
-- `old(a)` (in ensures, invariant, assert): the entry contents of an `inout` parameter `a` of the enclosing function (section 6g).
+- `old(a)` (in ensures, invariant, assert): the entry contents of an `inout` parameter `a` (array or struct, also `old(x.f)`) of the enclosing function (section 6g).
 - `forall i in lo..hi: e` / `exists i in lo..hi: e` (i ranges over lo <= i < hi).
 - `a ==> b` (implication).
 - `is_some(o)`, `some_val(o)`, `is_ok(r)`, `ok_val(r)`, `err_val(r)`.
@@ -325,7 +328,11 @@ match e {                                  // statement; every variant exactly o
   the verifier assumes the invariant for each parameter of type exactly `S` at entry and proves it at each handoff:
   every call argument of type `S` (callee precondition), every returned `S` and every `inout` `S` parameter at exit.
   After a call the caller assumes it for the result and for `inout` arguments. Between field writes the value may
-  break it. Values in nested positions (struct fields, array elements, `Option` payloads) are not assumed to satisfy it.
+  break it. A struct-typed field of `S` carries its own invariant (LG22): the effective invariant of `S` is its own
+  clauses, then the effective invariants of its fields of a plain non-generic struct type at `p.f`, in field order
+  (a struct already on the path is skipped), and a struct whose effective invariant is non-empty counts as having an
+  invariant for every rule here. Nested clauses report the dotted path ("... for parameter p.log of F"). Values in
+  other nested positions (array elements, `Option` payloads, generic structs) are not assumed to satisfy it.
   A failure is `verify/struct_invariant` ("invariant of S (line L) for parameter P of F", "... for result",
   "... for inout P at exit"); a partial operation in a clause proved at a handoff (index, `/`, `some_val`, ...) is
   checked under the same code and message. A host entry may not take a parameter of such a struct
@@ -1160,9 +1167,10 @@ set_at(inout w, 0, 7);
   or `len(a)`: `f(inout a, a)`, `f(inout a, len(a))` and `f(inout a, inout a)` are `type/inout_alias`. Compute
   `let n: i64 = len(a);` first. Read-only arguments may alias each other. Holds in every mode, also under
   `--no-verify` and `--trust-callers`. Mutable access while a `match` arm views the same root is `type/recursive_borrow`.
-- **`old`.** `old(a)` names the entry contents of an `inout` parameter `a` of the enclosing function; legal only in
+- **`old`.** `old(a)` names the entry contents of an `inout` array parameter `a` of the enclosing function; legal only in
   that function's `ensures`, `invariant` and `assert` (`type/old_context`, `type/old_argument` otherwise: locals,
-  ordinary parameters, fields, elements and nested `old` are rejected). It always means function entry. In `requires`
+  ordinary parameters, elements and nested `old` are rejected). For an `inout` parameter `x` of a non-generic struct
+  (LG22) `old(x)` is its entry value and `old(x.f.g)` means `old(x).f.g`. It always means function entry. In `requires`
   a parameter is its entry value; in `ensures` an `inout` parameter is its final value. `len(a) == len(old(a))` is
   always known for a fixed-length `inout` parameter (one the callee never reassigns as a whole); for a resizable one
   (LG5) only `ensures` relate `len(a)` and `len(old(a))`. `old` is a proof object: no copy, no run-time check. Arrays still cannot be compared with `==`.
@@ -1192,7 +1200,7 @@ set_at(inout w, 0, 7);
   `x: &mut S`. The callee may assign fields of `x` (also nested), use R-6e-2 on `x.f`, pass `x.f` to
   `map_get_mut` and forward `inout x`. Whole reassignment `x = e` is `type/immutable`. A generic struct is
   `type/inout_type`. The caller passes `inout y` for a `let mut` local or `inout` parameter `y`, with the alias
-  rules for arrays. `old(x)` is not supported for structs (`type/old_argument`). After the call the caller
+  rules for arrays. `old(x)` and `old(x.f)` give the entry value (LG22). After the call the caller
   knows only the callee's `ensures` about `y`, with one frame rule (LG5): the caller keeps `len` of every array
   field of `y` (through nested struct fields) that `f` cannot change, that is, `f` contains no field assignment,
   move, or resizing `inout` pass of that field or of an enclosing field (transitively through the functions `f`
