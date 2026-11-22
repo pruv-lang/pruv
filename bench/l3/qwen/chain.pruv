@@ -1,5 +1,5 @@
 // Qwen currentChain. Entry-ordinal marks avoid retaining parsed JSON documents.
-// R05 B: one parse per line. scan decodes each uuid and parentUuid once into a byte arena; the chain walk compares
+// The index decodes each uuid and parentUuid once into a byte arena; the chain walk compares
 // arena bytes and never re-parses a line. Newest-first hash buckets; exact UUID comparison resolves collisions.
 // Slot layout, 6 per uuid entry: Entry frame ordinal, next slot (newest-first), uuid offset, uuid length,
 // parent offset, parent length (-1 missing, -2 parentUuid defect: bad only when the entry matches a key).
@@ -90,81 +90,74 @@ fn same_span(arena: [u8], a: i64, an: i64, b: i64, bn: i64) -> bool
   return true;
 }
 
-// leaf: slot of the leaf entry, or -1.
-pub struct Found { leaf: i64, found: bool, bad: bool }
-pub fn scan(data: [u8], cut: bool, inout arena: [u8], inout heads: [i64], inout slots: [i64]) -> Found ! alloc
-  requires len(data) <= 8388608 && len(arena) == len(data)
-  requires 0 < len(heads) && len(heads) <= 33554436 && len(slots) <= 50331654
-  ensures len(arena) == len(old(arena))
-  ensures len(heads) == len(old(heads)) && len(slots) == len(old(slots))
+// The caller frames and parses each line and feeds Object frames into this index.
+pub struct Index {
+  arena: [u8], heads: [i64], slots: [i64],
+  bytes_used: i64, slots_used: i64, leaf: i64, role_seen: bool
+}
+
+pub fn new_index(bytes: i64, capacity: i64) -> Index ! alloc
+  requires 0 <= bytes && bytes <= 8388608 && 1 <= capacity && capacity <= bytes + 1
+  ensures len(result.arena) == bytes && result.bytes_used == 0
+  ensures 0 < len(result.heads) && len(result.heads) <= 33554436
+  ensures len(result.slots) == 6 * capacity && result.slots_used == 0
 {
-  let mut leaf: i64 = -1;
-  let mut found: bool = false;
-  let mut role_seen: bool = false;
-  let mut used: i64 = 0;
-  let mut aused: i64 = 0;
-  let mut ord: i64 = 0;
-  // DB23: one parse scratch for the whole scan (tape 4096 records, stack 516).
-  let mut tape: [i64] = alloc(24576, 0);
-  let mut stack: [i64] = alloc(516, 0);
-  let mut off: i64 = crate::framing::skip_first(data, cut);
-  while off < len(data)
-    invariant 0 <= off && off <= len(data) && len(data) <= 8388608 && len(arena) == len(data)
-    invariant 0 <= used && used <= len(slots) && len(slots) <= 50331654
-    invariant 0 <= aused && aused <= len(arena)
-    invariant 0 < len(heads) && len(heads) <= 33554436 && 0 <= ord && ord <= off
-    decreases len(data) - off
+  // Power-of-two heads, at least twice the entry count, so bucket chains stay short.
+  let mut size: i64 = 1;
+  while size < 2 * capacity
+    invariant 1 <= size && size <= 4 * capacity && capacity <= 8388609
+    decreases 4 * capacity - size
   {
-    let step: crate::framing::Frame = crate::framing::window_next(data, off);
-    match step {
-      crate::framing::Frame::Entry(s, e, n) => {
-        if s < 0 || s >= len(data) || e < s || e > len(data) || n <= off || n > len(data) { return Found { leaf: -1, found: false, bad: true }; }
-        let line: crate::entry::Line = crate::entry::parse_line_span(data, s, e, inout tape, inout stack);
-        match line {
-          crate::entry::Line::Object(d) => {
-            // DB23: uuid decoded straight into the arena (no string_field copy); a zero-length uuid adds no slot.
-            let ul: i64 = put_field(d, 0, "uuid", inout arena, aused);
-            if ul == -2 || ul == -3 { return Found { leaf: -1, found: false, bad: true }; }
-            if ul > 0 {
-              // DB6: one "type" key lookup, then three literal compares on that value.
-              let ty: i64 = crate::entry::string_id(d, 0, "type");
-              let role: bool = ty >= 0 && (crate::access::string_is(d, ty, "user") == 1 || crate::access::string_is(d, ty, "assistant") == 1 || crate::access::string_is(d, ty, "tool_result") == 1);
-              if used + 6 > len(slots) { return Found { leaf: -1, found: false, bad: true }; }
-              let uo: i64 = aused;
-              aused = aused + ul;
-              let po: i64 = aused;
-              let pl: i64 = put_field(d, 0, "parentUuid", inout arena, aused);
-              if pl == -3 { return Found { leaf: -1, found: false, bad: true }; }
-              if pl >= 0 { aused = aused + pl; }
-              let b: i64 = bucket(arena, uo, ul, len(heads) - 1);
-              slots[used] = ord;
-              slots[used + 1] = heads[b];
-              slots[used + 2] = uo;
-              slots[used + 3] = ul;
-              slots[used + 4] = po;
-              slots[used + 5] = pl;
-              heads[b] = used;
-              if role || !role_seen {
-                // A leaf candidate reads its parent strictly.
-                if pl == -2 { return Found { leaf: -1, found: false, bad: true }; }
-                found = true;
-                leaf = used;
-              }
-              used = used + 6;
-              if role { role_seen = true; }
-            }
-          }
-          crate::entry::Line::Skip => { found = found; }
-          crate::entry::Line::Defect(k) => { return Found { leaf: -1, found: false, bad: true }; }
-        }
-        ord = ord + 1;
-        off = n;
-      }
-      crate::framing::Frame::Dropped(s, e, n) => { if n <= off || n > len(data) { return Found { leaf: -1, found: false, bad: true }; } off = n; }
-      crate::framing::Frame::Done => { off = len(data); }
-    }
+    size = size * 2;
   }
-  return Found { leaf: leaf, found: found, bad: false };
+  let heads: [i64] = alloc(size, -1);
+  let slots: [i64] = alloc(capacity * 6, -1);
+  let arena: [u8] = alloc(bytes, 0);
+  return Index {
+    arena: move arena, heads: move heads, slots: move slots,
+    bytes_used: 0, slots_used: 0, leaf: -1, role_seen: false
+  };
+}
+
+pub fn note(inout index: Index, doc: crate::json::JsonDocument, ordinal: i64) -> bool ! alloc
+  requires len(index.arena) <= 8388608 && 0 < len(index.heads) && len(index.heads) <= 33554436
+  requires 0 <= index.slots_used && index.slots_used <= len(index.slots) && len(index.slots) <= 50331654
+  requires 0 <= index.bytes_used && index.bytes_used <= len(index.arena)
+  ensures len(index.arena) <= 8388608 && 0 < len(index.heads) && len(index.heads) <= 33554436 && len(index.slots) <= 50331654
+  ensures 0 <= index.slots_used && index.slots_used <= len(index.slots)
+  ensures 0 <= index.bytes_used && index.bytes_used <= len(index.arena)
+{
+  // DB23: uuid decoded straight into the arena (no string_field copy); a zero-length uuid adds no slot.
+  let ul: i64 = put_field(doc, 0, "uuid", inout index.arena, index.bytes_used);
+  if ul == -2 || ul == -3 { return false; }
+  if ul > 0 {
+    // DB6: one "type" key lookup, then three literal compares on that value.
+    let ty: i64 = crate::entry::string_id(doc, 0, "type");
+    let role: bool = ty >= 0 && (crate::access::string_is(doc, ty, "user") == 1 || crate::access::string_is(doc, ty, "assistant") == 1 || crate::access::string_is(doc, ty, "tool_result") == 1);
+    if index.slots_used + 6 > len(index.slots) { return false; }
+    let uo: i64 = index.bytes_used;
+    index.bytes_used = index.bytes_used + ul;
+    let po: i64 = index.bytes_used;
+    let pl: i64 = put_field(doc, 0, "parentUuid", inout index.arena, index.bytes_used);
+    if pl == -3 { return false; }
+    if pl >= 0 { index.bytes_used = index.bytes_used + pl; }
+    let b: i64 = bucket(index.arena, uo, ul, len(index.heads) - 1);
+    index.slots[index.slots_used] = ordinal;
+    index.slots[index.slots_used + 1] = index.heads[b];
+    index.slots[index.slots_used + 2] = uo;
+    index.slots[index.slots_used + 3] = ul;
+    index.slots[index.slots_used + 4] = po;
+    index.slots[index.slots_used + 5] = pl;
+    index.heads[b] = index.slots_used;
+    if role || !index.role_seen {
+      // A leaf candidate reads its parent strictly.
+      if pl == -2 { return false; }
+      index.leaf = index.slots_used;
+    }
+    index.slots_used = index.slots_used + 6;
+    if role { index.role_seen = true; }
+  }
+  return true;
 }
 
 // First match supplies the last-write parent; mark all duplicates.
@@ -227,45 +220,33 @@ pub fn capacity(data: [u8]) -> i64
 
 // marks is caller-owned, zero, one byte per Entry frame ordinal (DB6: was one per input byte).
 pub struct Chain { active: bool, cut: bool, bad: bool }
-pub fn select(data: [u8], cut: bool, inout marks: [u8]) -> Chain ! alloc
-  requires len(data) <= 8388608 && 1 <= len(marks) && len(marks) <= len(data) + 1
+struct Leaf { slot: i64, found: bool, bad: bool }
+pub fn resolve(index: Index, inout marks: [u8]) -> Chain
+  requires len(index.arena) <= 8388608 && 0 < len(index.heads) && len(index.heads) <= 33554436 && len(index.slots) <= 50331654
   ensures len(marks) == len(old(marks))
 {
-  let capacity: i64 = len(marks);
-  // Power-of-two heads, at least twice the entry count, so bucket chains stay short.
-  let mut size: i64 = 1;
-  while size < 2 * capacity
-    invariant 1 <= size && size <= 4 * capacity && capacity <= 8388609
-    decreases 4 * capacity - size
-  {
-    size = size * 2;
-  }
-  let mut heads: [i64] = alloc(size, -1);
-  let mut slots: [i64] = alloc(capacity * 6, -1);
-  let mut arena: [u8] = alloc(len(data), 0);
-  let leaf: Found = scan(data, cut, inout arena, inout heads, inout slots);
-  if leaf.bad { return Chain { active: leaf.found, cut: false, bad: true }; }
+  let leaf: Leaf = Leaf { slot: index.leaf, found: index.leaf >= 0, bad: false };
   let mut koff: i64 = 0;
   let mut klen: i64 = 0;
   let mut poff: i64 = 0;
   let mut plen: i64 = 0;
   if leaf.found {
-    let at: i64 = leaf.leaf;
-    if at < 0 || at > len(slots) - 6 { return Chain { active: leaf.found, cut: false, bad: true }; }
-    koff = slots[at + 2];
-    klen = slots[at + 3];
-    if slots[at + 5] >= 0 { poff = slots[at + 4]; plen = slots[at + 5]; }
+    let at: i64 = leaf.slot;
+    if at < 0 || at > len(index.slots) - 6 { return Chain { active: leaf.found, cut: false, bad: true }; }
+    koff = index.slots[at + 2];
+    klen = index.slots[at + 3];
+    if index.slots[at + 5] >= 0 { poff = index.slots[at + 4]; plen = index.slots[at + 5]; }
   }
   let mut lost: bool = false;
   let mut count: i64 = 0;
   let mut done: bool = !leaf.found;
-  while !done && count < len(data)
-    invariant len(marks) == len(old(marks)) && len(data) <= 8388608 && 0 <= count && count <= len(data)
-    invariant 0 < len(heads) && len(heads) <= 33554436 && len(slots) <= 50331654
-    decreases len(data) - count
+  while !done && count < len(index.arena)
+    invariant len(marks) == len(old(marks)) && len(index.arena) <= 8388608 && 0 <= count && count <= len(index.arena)
+    invariant 0 < len(index.heads) && len(index.heads) <= 33554436 && len(index.slots) <= 50331654
+    decreases len(index.arena) - count
   {
-    if koff < 0 || klen < 0 || klen > len(arena) - koff { return Chain { active: leaf.found, cut: lost, bad: true }; }
-    let f: Hit = lookup(arena, koff, klen, heads, slots, inout marks);
+    if koff < 0 || klen < 0 || klen > len(index.arena) - koff { return Chain { active: leaf.found, cut: lost, bad: true }; }
+    let f: Hit = lookup(index.arena, koff, klen, index.heads, index.slots, inout marks);
     if f.bad { return Chain { active: leaf.found, cut: lost, bad: true }; }
     // The initial parent belongs to the leaf entry itself, not the last duplicate UUID.
     if count > 0 { poff = f.poff; plen = f.plen; }
