@@ -52,8 +52,9 @@ pub fn render(p: &[i64]) -> String {
     }
 }
 
-/// Render the read wire. Decode only its words and borrow the raw UTF-8 payload.
-pub fn render_wire(wire: &[u8]) -> String {
+/// Render the read wire straight into `out` (DB44): the same bytes as `render_wire`, without holding the rendered
+/// result. The turn texts are escaped by serde_json directly into the writer.
+pub fn render_wire_to<W: std::io::Write>(wire: &[u8], out: &mut W) -> std::io::Result<()> {
     fn word(bytes: &[u8]) -> i64 {
         let encoded = i64::from_le_bytes(bytes.try_into().unwrap());
         assert!((0..(1_i64 << 56)).contains(&encoded));
@@ -65,7 +66,7 @@ pub fn render_wire(wire: &[u8]) -> String {
     if code != 0 {
         let detail_len = usize::try_from(word(&wire[16..24])).unwrap();
         assert_eq!(wire.len() - 24, detail_len);
-        return format!("{{\"error\":{}}}", q(error_name(code)));
+        return write!(out, "{{\"error\":{}}}", q(error_name(code)));
     }
     assert!(wire.len() >= 160 && word(&wire[8..16]) == 16, "bad read header");
     let rw = usize::try_from(word(&wire[16..24])).unwrap();
@@ -76,7 +77,81 @@ pub fn render_wire(wire: &[u8]) -> String {
     let words: Vec<i64> = wire[32..header].chunks_exact(8).map(word).collect();
     let (meta, rows) = words.split_at(16);
     assert!(meta[0] == 1 && meta[1] == 1, "bad read metadata");
-    render_read(meta, rows, &wire[header..])
+    render_read_to(meta, rows, &wire[header..], out)
+}
+
+/// Render the read wire. Decode only its words and borrow the raw UTF-8 payload.
+pub fn render_wire(wire: &[u8]) -> String {
+    let mut out = Vec::new();
+    render_wire_to(wire, &mut out).unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+fn render_read_to<W: std::io::Write>(meta: &[i64], rows: &[i64], text: &[u8], out: &mut W) -> std::io::Result<()> {
+    fn qw<W: std::io::Write>(out: &mut W, s: &str) -> std::io::Result<()> {
+        serde_json::to_writer(&mut *out, s).map_err(std::io::Error::from)
+    }
+    let kept = meta[3] as usize;
+    let plan_items = if meta[11] < 0 { 0 } else { meta[11] as usize };
+    assert!(meta[10] == 10 && rows.len() == 10 * kept + 2 * plan_items);
+    out.write_all(b"{\"turns\":[")?;
+    for j in 0..kept {
+        let b = 10 * j;
+        if j != 0 {
+            out.write_all(b",")?;
+        }
+        out.write_all(b"{\"prompt\":")?;
+        qw(out, text_ref(rows, text, b).expect("prompt"))?;
+        out.write_all(b",\"reply\":")?;
+        qw(out, text_ref(rows, text, b + 2).expect("reply"))?;
+        write!(out, ",\"tools\":{}", rows[b + 8])?;
+        if let Some(c) = text_ref(rows, text, b + 4) {
+            out.write_all(b",\"createdAt\":")?;
+            qw(out, c)?;
+        }
+        if let Some(c) = text_ref(rows, text, b + 6) {
+            out.write_all(b",\"completedAt\":")?;
+            qw(out, c)?;
+        }
+        if rows[b + 9] == 1 {
+            out.write_all(b",\"clipped\":true")?;
+        }
+        out.write_all(b"}")?;
+    }
+    out.write_all(b"],\"omittedBefore\":")?;
+    out.write_all(if meta[2] == 1 { b"true" } else { b"false" })?;
+    if let Some(m) = text_ref(meta, text, 6) {
+        out.write_all(b",\"model\":")?;
+        qw(out, m)?;
+    }
+    if let Some(t) = text_ref(meta, text, 4) {
+        out.write_all(b",\"title\":")?;
+        qw(out, t)?;
+    }
+    if meta[11] >= 0 {
+        out.write_all(b",\"lastPlan\":{")?;
+        if let Some(at) = text_ref(meta, text, 8) {
+            out.write_all(b"\"at\":")?;
+            qw(out, at)?;
+            out.write_all(b",")?;
+        }
+        out.write_all(b"\"items\":[")?;
+        let base = 10 * kept;
+        for i in 0..plan_items {
+            if i != 0 {
+                out.write_all(b",")?;
+            }
+            out.write_all(b"{\"text\":")?;
+            qw(out, text_ref(rows, text, base + 2 * i).expect("plan item"))?;
+            out.write_all(b"}")?;
+        }
+        out.write_all(b"]")?;
+        if meta[12] > 0 {
+            write!(out, ",\"more\":{}", meta[12])?;
+        }
+        out.write_all(b"}")?;
+    }
+    out.write_all(b"}")
 }
 
 fn render_list(meta: &[i64], rows: &[i64], text: &[u8]) -> String {
@@ -107,68 +182,7 @@ fn render_list(meta: &[i64], rows: &[i64], text: &[u8]) -> String {
 }
 
 fn render_read(meta: &[i64], rows: &[i64], text: &[u8]) -> String {
-    let kept = meta[3] as usize;
-    let plan_items = if meta[11] < 0 { 0 } else { meta[11] as usize };
-    assert!(meta[10] == 10 && rows.len() == 10 * kept + 2 * plan_items);
-    // One output buffer sized from the text (escapes add a little), written in place: no per-turn strings, join or
-    // doubling copies, so the rendered result is held once (DB26).
-    let mut out = String::with_capacity(text.len() + text.len() / 16 + 160 * kept + 1024);
-    out.push_str("{\"turns\":[");
-    for j in 0..kept {
-        let b = 10 * j;
-        if j != 0 {
-            out.push(',');
-        }
-        out.push_str("{\"prompt\":");
-        out.push_str(&q(text_ref(rows, text, b).expect("prompt")));
-        out.push_str(",\"reply\":");
-        out.push_str(&q(text_ref(rows, text, b + 2).expect("reply")));
-        out.push_str(",\"tools\":");
-        out.push_str(&rows[b + 8].to_string());
-        if let Some(c) = text_ref(rows, text, b + 4) {
-            out.push_str(",\"createdAt\":");
-            out.push_str(&q(c));
-        }
-        if let Some(c) = text_ref(rows, text, b + 6) {
-            out.push_str(",\"completedAt\":");
-            out.push_str(&q(c));
-        }
-        if rows[b + 9] == 1 {
-            out.push_str(",\"clipped\":true");
-        }
-        out.push('}');
-    }
-    out.push_str("],\"omittedBefore\":");
-    out.push_str(if meta[2] == 1 { "true" } else { "false" });
-    if let Some(m) = text_ref(meta, text, 6) {
-        out.push_str(&format!(",\"model\":{}", q(m)));
-    }
-    if let Some(t) = text_ref(meta, text, 4) {
-        out.push_str(&format!(",\"title\":{}", q(t)));
-    }
-    if meta[11] >= 0 {
-        let mut plan = String::from("{");
-        let mut first = true;
-        if let Some(at) = text_ref(meta, text, 8) {
-            plan.push_str(&format!("\"at\":{}", q(at)));
-            first = false;
-        }
-        if !first {
-            plan.push(',');
-        }
-        let base = 10 * kept;
-        let mut items = Vec::new();
-        for i in 0..plan_items {
-            let t = text_ref(rows, text, base + 2 * i).expect("plan item");
-            items.push(format!("{{\"text\":{}}}", q(t)));
-        }
-        plan.push_str(&format!("\"items\":[{}]", items.join(",")));
-        if meta[12] > 0 {
-            plan.push_str(&format!(",\"more\":{}", meta[12]));
-        }
-        plan.push('}');
-        out.push_str(&format!(",\"lastPlan\":{}", plan));
-    }
-    out.push('}');
-    out
+    let mut out = Vec::with_capacity(text.len() + text.len() / 16 + 160 * meta[3] as usize + 1024);
+    render_read_to(meta, rows, text, &mut out).unwrap();
+    String::from_utf8(out).unwrap()
 }
