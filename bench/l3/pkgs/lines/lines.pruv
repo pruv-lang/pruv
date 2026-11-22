@@ -31,6 +31,7 @@ pub fn parse_range(data: [u8], lo: i64, hi: i64) -> crate::json::JsonParse ! all
   ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= hi - lo)
   ensures hi - lo > 16777216 ==> is_variant(result, crate::json::JsonParse::Failed)
   ensures hi - lo > 16777216 ==> (variant_field(result, crate::json::JsonParse::Failed, error).position == 0 && variant_field(result, crate::json::JsonParse::Failed, error).kind == 1)
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
 {
   let n: i64 = hi - lo;
   if n > crate::json::limit_input_bytes() {
@@ -89,6 +90,7 @@ pub fn build_span(data: [u8], lo: i64, hi: i64, tape: [i64], records: i64) -> cr
   requires 0 <= lo && lo <= hi && hi <= len(data) && hi - lo <= 16777216
   requires 0 <= records && records <= 1048576 && 6 * records <= len(tape)
   ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= hi - lo)
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
 {
   // DB21 (D-DB15-3): the span bytes come from copy(subview(...)) (one allocate-and-fill, no zeroed buffer and byte loop).
   // The tape prefix keeps its loop: copy(subview(tape, 0, m)) here hits "z3 error 6: invalid pattern" (G-DB21-1).
@@ -111,6 +113,7 @@ pub fn parse_span(data: [u8], lo: i64, hi: i64, inout tape: [i64], inout stack: 
   ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= hi - lo)
   ensures hi - lo > 16777216 ==> is_variant(result, crate::json::JsonParse::Failed)
   ensures hi - lo > 16777216 ==> (variant_field(result, crate::json::JsonParse::Failed, error).position == 0 && variant_field(result, crate::json::JsonParse::Failed, error).kind == 1)
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
 {
   let sp: crate::parse::Pass = scan_span(data, lo, hi, inout tape, inout stack);
   if sp.kind < 0 { return parse_range(data, lo, hi); }

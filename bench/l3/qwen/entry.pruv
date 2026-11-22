@@ -7,6 +7,7 @@ enum Block { Piece(text: str), Ignore, Veto, Broken(kind: i64) }
 
 pub fn parse_line(data: [u8], start: i64, end: i64) -> Line ! alloc
   requires 0 <= start && start <= end && end <= len(data)
+  ensures is_variant(result, Line::Object) ==> crate::json::doc_local(variant_field(result, Line::Object, doc))
 {
   let parsed: crate::json::JsonParse = crate::lines::parse_range(data, start, end);
   match parsed {
@@ -26,6 +27,7 @@ pub fn parse_line(data: [u8], start: i64, end: i64) -> Line ! alloc
 pub fn parse_line_span(data: [u8], start: i64, end: i64, inout tape: [i64], inout stack: [i64]) -> Line ! alloc
   requires 0 <= start && start <= end && end <= len(data)
   ensures len(tape) == len(old(tape)) && len(stack) == len(old(stack))
+  ensures is_variant(result, Line::Object) ==> crate::json::doc_local(variant_field(result, Line::Object, doc))
 {
   let parsed: crate::json::JsonParse = crate::lines::parse_span(data, start, end, inout tape, inout stack);
   match parsed {
