@@ -1,0 +1,8 @@
+// LG26 (R-6b-3): a valid prefix 0..k cut at m < k is a str only when m is a char boundary
+fn width(t: str) -> i64 { return len(t); }
+
+pub fn run(buf: [u8], k: i64, m: i64) -> i64
+  requires utf8_valid_span(buf, 0, k) && 0 <= m && m <= k
+{
+  return width(subview(buf, 0, m));
+}

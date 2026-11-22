@@ -1,0 +1,6 @@
+// LG26 (R-6b-3): utf8_valid_span takes a [u8], not a str
+pub fn run(s: str) -> i64
+  requires utf8_valid_span(s, 0, len(s))
+{
+  return len(s);
+}

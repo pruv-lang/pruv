@@ -2521,6 +2521,11 @@ class Gen:
                 return "pruv_c%s(%s, %s, %d)" % (n, s.carr(a[0]), s.c(a[1]), a[2].value)
             if n == "utf8_valid":
                 return "::core::str::from_utf8(%s).is_ok()" % s.carr(a[0])
+            if n == "utf8_valid_span":   # LG26 (R-6b-3): the --no-verify requires check; false outside the range
+                return ("match (&%s, %s, %s) { (pruv_b, pruv_lo, pruv_hi) => pruv_lo >= 0 && pruv_lo <= pruv_hi && "
+                        "pruv_hi <= (pruv_b.len() as i128) && "
+                        "::core::str::from_utf8(&pruv_b[(pruv_lo as usize)..(pruv_hi as usize)]).is_ok() }"
+                        % (s.carr(a[0]), s.c(a[1]), s.c(a[2])))
             if n in BIT_RUST:   # P2: i128 arguments checked inside i64 by the helper
                 s.need_bits.add(n)
                 return "pruv_c%s(%s, %s)" % (n, s.c(a[0]), s.c(a[1]))

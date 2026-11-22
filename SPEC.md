@@ -390,22 +390,46 @@ return a parameter with `copy`). Refinements: `[u8 | L..=U; <=N]` with `0 <= L <
   (`string_slice_range`) and then `is_char_boundary(s, lo) && is_char_boundary(s, hi)` (`utf8_boundary`; also when
   `lo == hi`). It knows `len(result) == hi - lo` and `result[k] == s[lo + k]`.
 - `utf8_valid(b: [u8]) -> bool` (code and contracts) is true iff the bytes in `b[0..len(b)]` are valid UTF-8.
-  The verifier treats it as an uninterpreted predicate of the array value, with one byte-level fact (LG9,
-  G-DB15-1): `(forall k in 0..len(b): b[k] < 128)` implies `utf8_valid(b)` (ASCII bytes are valid UTF-8; the model
-  is `ascii(b) || utf8_valid!(b)`, sound because ascii implies the real check). So a scanner that proves every
-  byte of a span is below 128 can pass it to `str_from_utf8` without a runtime check. Multi-byte sequences are not
-  modelled: a span with bytes `>= 128` still needs a `utf8_valid` guard. Other argument types give
-  `type_mismatch`. Tests: [ASCII proof](tests/runtime/lg9_rt_utf8_ascii.pruv),
+  The verifier encodes it exactly (R-6b-3, LG26; before LG26 it was an uninterpreted predicate with only the LG9 ASCII
+  fact): `utf8_valid(b)` is `W(b, 0, len(b))`, where `W(b, lo, n)` says that every byte `c = b[lo + i]`, `0 <= i < n`,
+  is ASCII (`c < 128`), or a lead byte whose continuation bytes follow inside the window (`194..=223` + 1;
+  `224` + `160..=191` + 1; `225..=236`, `238`, `239` + 2; `237` + `128..=159` + 1; `240` + `144..=191` + 2;
+  `241..=243` + 3; `244` + `128..=143` + 2; a continuation byte is `128..=191`), or a continuation byte (`128..=191`)
+  that completes a lead byte one, two or three bytes before it inside the window. This is Rust `str::from_utf8`
+  validity (no overlong forms, no surrogates, nothing above U+10FFFF). ASCII bytes are valid, so a scanner that proves
+  every byte of a span is below 128 can still pass it to `str_from_utf8` without a runtime check. Other argument types
+  give `type_mismatch`. Tests: [ASCII proof](tests/runtime/lg9_rt_utf8_ascii.pruv),
   [bound 129](tests/must_reject/lg9_utf8_ascii_partial.pruv).
+- `utf8_valid_span(b: [u8], lo: i64, hi: i64) -> bool` (R-6b-3, contracts only; in code or a `cost` clause `type/contract_only`) is
+  `0 <= lo && lo <= hi && hi <= len(b) && W(b, lo, hi - lo)`: the bytes `b[lo..hi]` are valid UTF-8 (false outside
+  the range, no domain proof). It is the loop invariant and contract form for a `[u8]` buffer filled by copying the
+  bytes of `str` values: appending all bytes of a `str` to a valid prefix `0..k` gives a valid prefix `0..k + len(s)`,
+  and a valid span ends at a char boundary, so `subview(buf, lo, hi)` of a proven span (or of a valid prefix cut at
+  char boundaries) is passed to a `str` parameter (R-6g-10) with no run-time check. A `str` or other array argument is
+  `type_mismatch`. Write the copy invariant over buffer indices, `forall t in k..k + j: buf[t] == s[t - k]`, so the
+  solver can match each buffer byte of the goal to a byte of `s`. A `requires` checked at run time (such as under
+  `--no-verify`) evaluates it with `str::from_utf8` on `b[lo..hi]` after the range test.
+  Tests: [copy loop](tests/runtime/lg26_utf8_span.pruv),
+  [partial character](tests/must_reject/lg26_partial_char_copy.pruv),
+  [cut inside a character](tests/must_reject/lg26_prefix_boundary.pruv).
+- Valid `str` values (R-6b-3). A `str` is valid UTF-8 at run time, and in a function that uses UTF-8 facts the verifier
+  assumes `W(s, 0, len(s))` for its `str` values: `str` parameters at entry, reads of `str` variables, `str` results
+  of user calls, `str` field reads (under the path condition, and for an enum variant field only when that variant is
+  active; inside a quantifier, for all its indices), `str` views passed to `str` parameters, and the results of
+  `substr`, `copy`, `str_from_utf8` and string literals. A function uses UTF-8 facts when its body or its own
+  contracts (`requires`, `ensures`, header `decreases` and `cost`, quantifier triggers included; not the contracts
+  synthesized from struct invariants) call `utf8_valid`, `utf8_valid_span` or `str_from_utf8`, pass a `subview` of a
+  `[u8]` to a `str` parameter, or call a user function whose `requires` or `ensures` mention `utf8_valid` or `utf8_valid_span`. Other
+  functions get no such assumption, so their proofs are unchanged.
 - `str_from_utf8(b: [u8]) -> str` (R-6b-1, needs `alloc`, code only) copies the bytes into a fresh string. The verifier
   proves `utf8_valid(b)` (`utf8_invalid`), then knows `len(result) == len(b)` and `result[k] == b[k]` for
-  `0 <= k < len(b)`. Both names are reserved.
+  `0 <= k < len(b)`. `utf8_valid`, `utf8_valid_span` and `str_from_utf8` are reserved.
 - Not available: `==`/`!=` on whole strings (compare `len` and bytes with `forall`), `print` of a string, `str` in
   `Option`/`Result`/struct fields, char/code-point indexing. Character counts are written with boundaries, e.g.
   `count(t in 0..len(s): is_char_boundary(s, t))` counts the characters of `s`.
-- The verifier models a `str` as bytes `0..=255`; apart from the ASCII fact of `utf8_valid` it does **not** know
-  UTF-8 rules (e.g. that byte 0 is not a continuation byte unless you check it), and a counterexample string may be
-  invalid UTF-8.
+- The verifier models a `str` as bytes `0..=255`. Outside functions that use UTF-8 facts (above) it does **not**
+  assume a `str` is valid UTF-8 (e.g. that byte 0 is not a continuation byte unless you check it), and a
+  counterexample string may be invalid UTF-8.
 
 **Run time.** Proof mode removes the element-range, substring and UTF-8 conversion checks. `--no-verify` (safe mode) checks them and panics with exit 101:
 `pruv: element out of range: v (u8 0..=255)`, `pruv: string slice out of bounds: lo..hi (len n)`,

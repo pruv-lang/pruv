@@ -1,0 +1,7 @@
+// spec: R-6b-3 reject
+fn copy_head(inout buf: [u8], s: str) -> ()
+  requires len(s) >= 2 && len(buf) >= 1 && s[0] == 195
+  ensures utf8_valid_span(buf, 0, 1)
+{
+  buf[0] = s[0];
+}

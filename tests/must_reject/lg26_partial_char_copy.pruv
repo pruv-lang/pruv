@@ -1,0 +1,18 @@
+// LG26 (R-6b-3): copying bytes 0..j of a str where j is not proven a char boundary gives no valid span
+fn width(t: str) -> i64 { return len(t); }
+
+pub fn run(s: str, j: i64) -> i64 ! alloc
+  requires 0 <= j && j <= len(s)
+{
+  let mut buf: [u8] = alloc(len(s), 0);
+  let mut i: i64 = 0;
+  while i < j
+    invariant 0 <= i && i <= j && len(buf) == len(s)
+    invariant forall t in 0..i: buf[t] == s[t]
+    decreases j - i
+  {
+    buf[i] = s[i];
+    i = i + 1;
+  }
+  return width(subview(buf, 0, j));
+}

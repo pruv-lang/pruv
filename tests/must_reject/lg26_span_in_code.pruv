@@ -1,0 +1,5 @@
+// LG26 (R-6b-3): utf8_valid_span is contract only
+pub fn run(buf: [u8]) -> i64 {
+  if utf8_valid_span(buf, 0, len(buf)) { return 1; }
+  return 0;
+}

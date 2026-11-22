@@ -1,0 +1,23 @@
+// spec: R-6b-3 accept
+fn width(t: str) -> i64 { return len(t); }
+fn fill(inout buf: [u8], s: str) -> i64
+  requires len(s) <= len(buf)
+  ensures utf8_valid_span(buf, 0, len(s)) && result == len(s) && len(buf) == old(len(buf))
+{
+  let mut j: i64 = 0;
+  while j < len(s)
+    invariant 0 <= j && j <= len(s) && len(buf) == old(len(buf))
+    invariant forall t in 0..j: buf[t] == s[t]
+    decreases len(s) - j
+  {
+    buf[j] = s[j];
+    j = j + 1;
+  }
+  return len(s);
+}
+pub fn f() -> i64 ! alloc
+{
+  let mut buf: [u8] = alloc(8, 0);
+  let k: i64 = fill(inout buf, "é€");
+  return width(subview(buf, 0, k));
+}

@@ -501,7 +501,6 @@ pub struct Model {
     bufs: RefCell<HashMap<String, BufFns>>,
     maps: RefCell<HashMap<String, (Sort, StructFns)>>,
     strkey: RefCell<Option<FuncDecl>>,
-    utf8_valid_decl: RefCell<Option<FuncDecl>>,
     buf_names: RefCell<HashSet<String>>,
     /// lazily declared uninterpreted `size!<Name>` / `wf!<Name>` functions
     size_f: RefCell<HashMap<String, FuncDecl>>,
@@ -664,7 +663,6 @@ impl Model {
             bufs: RefCell::new(HashMap::new()),
             maps: RefCell::new(HashMap::new()),
             strkey: RefCell::new(None),
-            utf8_valid_decl: RefCell::new(None),
             buf_names: RefCell::new(HashSet::new()),
             size_f: RefCell::new(HashMap::new()),
             wf_f: RefCell::new(HashMap::new()),
@@ -1446,23 +1444,50 @@ impl Model {
     }
 
     pub fn utf8_valid(&self, len: &Ast, bytes: &Ast) -> Ast {
-        let mut decl = self.utf8_valid_decl.borrow_mut();
-        let pred = decl.get_or_insert_with(|| {
-            self.z.func_decl("utf8_valid!", &[self.int_sort.clone(), bytes.sort()], &self.bool_sort)
-        });
-        // Array tails outside the logical length are unobservable.
-        let k = self.z.int_const("utf8!k");
-        let in_range = self.z.and(&[k.ge_i(0), k.lt(len)]);
-        let byte = self.z.ite(&in_range, &bytes.select(&k), &self.z.int(0));
-        let contents = self.z.lambda(std::slice::from_ref(&k), &byte);
-        let opaque = pred.apply(&[len.clone(), contents]);
-        // LG9 (G-DB15-1): bytes that are all below 128 are valid UTF-8 (ASCII), so a byte-level proof establishes
-        // the predicate. Sound: `utf8_valid(b) == ascii(b) || utf8_valid!(b)` holds with utf8_valid! read as the
-        // real check, because ascii(b) implies it.
-        let a = self.z.int_const("utf8!a");
-        let a_range = self.z.and(&[a.ge_i(0), a.lt(len)]);
-        let ascii = self.z.forall(std::slice::from_ref(&a), &a_range.implies(&bytes.select(&a).lt_i(128)), &[]);
-        self.z.or(&[ascii, opaque])
+        self.utf8_window(len, |i| bytes.select(i))
+    }
+
+    // LG26 (R-6b-3, G-LG25-1): each byte must start a complete UTF-8 sequence
+    // or be a continuation at the proper distance from its leading byte.
+    pub(crate) fn utf8_window(&self, len: &Ast, byte: impl Fn(&Ast) -> Ast) -> Ast {
+        let z = &self.z;
+        let i = z.int_const("utf8!i");
+        let c = byte(&i);
+        let i1 = i.add_i(1);
+        let i2 = i.add_i(2);
+        let i3 = i.add_i(3);
+        let b1 = byte(&i1);
+        let b2 = byte(&i2);
+        let b3 = byte(&i3);
+        let prev1 = byte(&i.sub_i(1));
+        let prev2 = byte(&i.sub_i(2));
+        let prev3 = byte(&i.sub_i(3));
+        let between = |x: &Ast, lo, hi| z.and(&[x.ge_i(lo), x.le_i(hi)]);
+        let cont = |x: &Ast| between(x, 128, 191);
+        let is = |value| c.eq(&z.int(value));
+        let p = z.or(&[
+            c.lt_i(128),
+            z.and(&[between(&c, 194, 223), i1.lt(len), cont(&b1)]),
+            z.and(&[is(224), i2.lt(len), between(&b1, 160, 191), cont(&b2)]),
+            z.and(&[
+                z.or(&[between(&c, 225, 236), is(238), is(239)]),
+                i2.lt(len), cont(&b1), cont(&b2),
+            ]),
+            z.and(&[is(237), i2.lt(len), between(&b1, 128, 159), cont(&b2)]),
+            z.and(&[is(240), i3.lt(len), between(&b1, 144, 191), cont(&b2), cont(&b3)]),
+            z.and(&[between(&c, 241, 243), i3.lt(len), cont(&b1), cont(&b2), cont(&b3)]),
+            z.and(&[is(244), i3.lt(len), between(&b1, 128, 143), cont(&b2), cont(&b3)]),
+            z.and(&[
+                cont(&c),
+                z.or(&[
+                    z.and(&[i.ge_i(1), between(&prev1, 194, 244)]),
+                    z.and(&[i.ge_i(2), between(&prev2, 224, 244), cont(&prev1)]),
+                    z.and(&[i.ge_i(3), between(&prev3, 240, 244), cont(&prev2), cont(&prev1)]),
+                ]),
+            ]),
+        ]);
+        let in_range = z.and(&[i.ge_i(0), i.lt(len)]);
+        z.forall(std::slice::from_ref(&i), &in_range.implies(&p), &[])
     }
 
     pub fn text_map_key(&self, len: &Ast, bytes: &Ast) -> Ast {

@@ -1,0 +1,58 @@
+// LG26 (R-6b-3, G-LG25-1): a [u8] buffer filled by copying whole str values carries utf8_valid_span(buf, 0, k) as a
+// loop invariant; a later subview of the proven prefix is passed as a str with no run-time UTF-8 check.
+fn width(t: str) -> i64
+  ensures result == len(t)
+{
+  return len(t);
+}
+
+fn head(t: str) -> i64
+  requires len(t) >= 1
+  ensures result == t[0]
+{
+  return t[0];
+}
+
+fn append(inout buf: [u8], k: i64, s: str) -> i64
+  requires 0 <= k && k + len(s) <= len(buf) && utf8_valid_span(buf, 0, k)
+  ensures len(buf) == old(len(buf)) && result == k + len(s)
+  ensures utf8_valid_span(buf, 0, k + len(s))
+{
+  let mut j: i64 = 0;
+  while j < len(s)
+    invariant 0 <= j && j <= len(s) && len(buf) == old(len(buf))
+    invariant utf8_valid_span(buf, 0, k)
+    invariant forall t in k..k + j: buf[t] == s[t - k]
+    decreases len(s) - j
+  {
+    buf[k + j] = s[j];
+    j = j + 1;
+  }
+  return k + len(s);
+}
+
+pub fn run(n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 3
+{
+  let mut buf: [u8] = alloc(40, 0);
+  let a: str = "aé";
+  let b: str = "€😀";
+  let mut k: i64 = 0;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && k == 10 * i && len(buf) == 40
+    invariant utf8_valid_span(buf, 0, k)
+    decreases n - i
+  {
+    k = append(inout buf, k, a);
+    k = append(inout buf, k, b);
+    i = i + 1;
+  }
+  let mut w: i64 = 0;
+  let mut h: i64 = 0;
+  if k > 0 {
+    w = width(subview(buf, 0, k));
+    h = head(subview(buf, 0, k));
+  }
+  return w * 1000 + h;
+}
