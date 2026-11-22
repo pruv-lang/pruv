@@ -1,0 +1,12 @@
+// LG27 (G-LG26-1): a parameter named result cannot have a Vec type whose element has an invariant
+struct P {
+  x: i64,
+  invariant x > 0
+}
+
+fn consume<T>(result: Vec<P>, tag: T) -> i64 {
+  return len(result);
+}
+pub fn lg27_entry() -> () {
+  return;
+}

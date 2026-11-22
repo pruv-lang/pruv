@@ -1,0 +1,19 @@
+// LG27 (G-LG26-1): a Vec<S> call argument must hold S's invariant for every element
+struct R {
+  lo: i64, hi: i64,
+  invariant 0 <= lo && lo <= hi
+}
+
+fn first(v: Vec<R>) -> i64
+  requires len(v) == 1
+{
+  return vec_get::<R>(v, 0).hi - vec_get::<R>(v, 0).lo;
+}
+
+fn bad(k: i64) -> i64 ! alloc {
+  let v: Vec<R> = vec_push::<R>(vec_new::<R>(), R { lo: k, hi: 5 });
+  return first(v);
+}
+pub fn lg27_entry() -> () {
+  return;
+}

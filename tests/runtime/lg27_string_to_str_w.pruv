@@ -1,0 +1,61 @@
+// LG27 (R-6b-3, G-LG26-2): the str made by string_to_str is valid UTF-8. A buffer filled from it carries
+// utf8_valid_span, its view is passed as a str with no run-time check, and the caller knows the lead byte of the
+// converted String is below 0xF8 (no byte of valid UTF-8 is 0xF8..0xFF) without a check.
+fn width(t: str) -> i64
+  ensures result == len(t)
+{
+  return len(t);
+}
+
+fn below_f8(x: i64) -> i64
+  requires x < 248
+  ensures result == x
+{
+  return x;
+}
+
+fn append(inout buf: [u8], k: i64, s: str) -> i64
+  requires 0 <= k && k + len(s) <= len(buf) && utf8_valid_span(buf, 0, k)
+  ensures len(buf) == old(len(buf)) && result == k + len(s)
+  ensures utf8_valid_span(buf, 0, k + len(s))
+{
+  let mut j: i64 = 0;
+  while j < len(s)
+    invariant 0 <= j && j <= len(s) && len(buf) == old(len(buf))
+    invariant utf8_valid_span(buf, 0, k)
+    invariant forall t in k..k + j: buf[t] == s[t - k]
+    decreases len(s) - j
+  {
+    buf[k + j] = s[j];
+    j = j + 1;
+  }
+  return k + len(s);
+}
+
+fn probe(s: String) -> i64 ! alloc
+  requires 1 <= len(s) && len(s) <= 40
+{
+  let h: i64 = below_f8(string_to_str(s)[0]);
+  let mut buf: [u8] = alloc(40, 0);
+  let k: i64 = append(inout buf, 0, string_to_str(s));
+  let w: i64 = width(subview(buf, 0, k));
+  return w * 1000 + h;
+}
+
+pub fn run(n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 3
+{
+  let mut s: String = string_new();
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && len(s) == 5 * i
+    decreases n - i
+  {
+    s = string_push_str(move s, "é€");
+    i = i + 1;
+  }
+  if len(s) >= 1 {
+    return probe(s);
+  }
+  return 0;
+}

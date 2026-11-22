@@ -25,7 +25,16 @@ fn socket(port: i64, mode: i64, payload: [u8]) -> i64 ! async, net, proc, alloc 
  assert ready;
  }
  if mode == 1 {l = ev_remove(move l, 0);} else {
- if mode == 2 {l = ev_write(move l, 0, payload);} else {
+ if mode == 2 {l = ev_write(move l, 0, payload);} else { return echo(move l); }
+ }
+ let r: Result<i64> = ev_close(move l);
+ match r {Ok(n)=>{return n;} Err(e)=>{return -e;}}
+}
+// The echo loop and its closing checks are separate functions so the (unprovable, --no-verify) runtime asserts after
+// the loop are not decided under the byte quantifiers of socket's payload and of the loop's reads: there z3 5.3.3
+// answered sat, unknown (incomplete quantifiers) or timeout depending on term order and load (diff_trace flaky_unknown).
+fn echo(take input: Loop) -> i64 ! async, net, proc, alloc {
+ let mut l: Loop = move input;
  let mut total: i64 = 0;
  let mut done: bool = false;
  let mut rounds: i64 = 10000;
@@ -40,6 +49,10 @@ fn socket(port: i64, mode: i64, payload: [u8]) -> i64 ! async, net, proc, alloc 
   } else { done = true; }
   rounds = rounds - 1;
  }
+ return finish(move l);
+}
+fn finish(take input: Loop) -> i64 ! async, net, proc, alloc {
+ let mut l: Loop = move input;
  if ev_event_kind(l) == 3 {
   l = ev_read(move l, 0, 1); assert ev_eof(l, 0);
   l = ev_wait(move l, 0); assert ev_event_kind(l) == 0;
@@ -47,8 +60,6 @@ fn socket(port: i64, mode: i64, payload: [u8]) -> i64 ! async, net, proc, alloc 
  if ev_event_kind(l) == 5 {
   assert ev_ok(l); l = ev_read(move l, 0, 1); assert ev_size(l) == 0;
   l = ev_wait(move l, 0); assert ev_event_kind(l) == 0;
- }
- }
  }
  let r: Result<i64> = ev_close(move l);
  match r {Ok(n)=>{return n;} Err(e)=>{return -e;}}

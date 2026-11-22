@@ -1210,7 +1210,14 @@ impl Checker {
         }
         for f in &prog.functions {
             if let Some(owner) = f.params.iter().filter(|p| p.name == "result")
-                .find_map(|p| self.invariant_owner(&p.ty))
+                .find_map(|p| self.invariant_owner(&p.ty).or_else(|| {
+                    // LG27: a top-level Vec element reaching an invariant struct counts too (check.py vec_elem)
+                    let g = GType::from_key(&p.ty);
+                    match (g.owner.is_none(), g.name.as_str(), g.args.as_slice()) {
+                        (true, "vec", [e]) => self.invariant_owner(&e.to_key()),
+                        _ => None,
+                    }
+                }))
             {
                 return Err(terr(f.line, f.col, "invariant_decl",
                     format!("parameter result of type {} cannot be used: {} has an invariant", owner.name, owner.name), ""));

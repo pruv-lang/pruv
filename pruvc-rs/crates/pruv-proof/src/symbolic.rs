@@ -950,12 +950,24 @@ pub(crate) struct InvClause {
     pub inout: bool,
 }
 
-fn inv_place(base: &str, base_ty: &str, path: &[InvariantStep], line: i64, col: i64,
+// LG27: The outer quantifier binds the index used by each element place.
+const INV_ELEM: &str = "$inv_e";
+
+fn inv_place(base: &str, base_ty: &str, elem_ty: Option<&str>, path: &[InvariantStep], line: i64, col: i64,
     mut guards: Option<&mut Vec<Expr>>,
 ) -> Expr {
     let mut place = Expr::Var(ast::Var {
         line, col, name: base.to_string(), ty: Some(base_ty.to_string()),
     });
+    if let Some(elem_ty) = elem_ty {
+        place = Expr::Index(ast::Index {
+            line, col, array: Box::new(place),
+            index: Box::new(Expr::Var(ast::Var {
+                line, col, name: INV_ELEM.into(), ty: Some("i64".into()),
+            })),
+            ty: Some(elem_ty.into()),
+        });
+    }
     let call = |name: &str, value, ty: String| Expr::Call(ast::Call {
         line, col, name: name.to_string(), args: vec![value], ty: Some(ty),
         targs: None, inst: None, old: None, opaque_c: false,
@@ -1005,14 +1017,14 @@ fn inv_place(base: &str, base_ty: &str, path: &[InvariantStep], line: i64, col: 
 
 /// LG16: rewrite the bare field names of a struct invariant clause to `base.field` (a quantifier variable of the same
 /// name shadows the field inside its body and triggers).
-fn inv_rewrite(e: &mut Expr, fields: &[String], base: &str, base_ty: &str, path: &[InvariantStep], bound: &mut Vec<(String, String)>) {
+fn inv_rewrite(e: &mut Expr, fields: &[String], base: &str, base_ty: &str, elem_ty: Option<&str>, path: &[InvariantStep], bound: &mut Vec<(String, String)>) {
     if let Expr::Var(v) = &mut *e {
         if let Some((_, to)) = bound.iter().rev().find(|(b, _)| *b == v.name) {
             v.name = to.clone();
             return;
         }
         if fields.iter().any(|f| *f == v.name) {
-            let place = inv_place(base, base_ty, path, v.line, v.col, None);
+            let place = inv_place(base, base_ty, elem_ty, path, v.line, v.col, None);
             let fa = Expr::FieldAccess(ast::FieldAccess {
                 line: v.line,
                 col: v.col,
@@ -1025,40 +1037,44 @@ fn inv_rewrite(e: &mut Expr, fields: &[String], base: &str, base_ty: &str, path:
         return;
     }
     match e {
-        Expr::InoutArg(x) => inv_rewrite(&mut x.expr, fields, base, base_ty, path, bound),
-        Expr::Unary(x) => inv_rewrite(&mut x.operand, fields, base, base_ty, path, bound),
+        Expr::InoutArg(x) => inv_rewrite(&mut x.expr, fields, base, base_ty, elem_ty, path, bound),
+        Expr::Unary(x) => inv_rewrite(&mut x.operand, fields, base, base_ty, elem_ty, path, bound),
         Expr::Binary(x) => {
-            inv_rewrite(&mut x.left, fields, base, base_ty, path, bound);
-            inv_rewrite(&mut x.right, fields, base, base_ty, path, bound);
+            inv_rewrite(&mut x.left, fields, base, base_ty, elem_ty, path, bound);
+            inv_rewrite(&mut x.right, fields, base, base_ty, elem_ty, path, bound);
         }
-        Expr::Call(x) => x.args.iter_mut().for_each(|a| inv_rewrite(a, fields, base, base_ty, path, bound)),
+        Expr::Call(x) => x.args.iter_mut().for_each(|a| inv_rewrite(a, fields, base, base_ty, elem_ty, path, bound)),
         Expr::Index(x) => {
-            inv_rewrite(&mut x.array, fields, base, base_ty, path, bound);
-            inv_rewrite(&mut x.index, fields, base, base_ty, path, bound);
+            inv_rewrite(&mut x.array, fields, base, base_ty, elem_ty, path, bound);
+            inv_rewrite(&mut x.index, fields, base, base_ty, elem_ty, path, bound);
         }
         Expr::Ctor(x) => {
             if let Some(a) = x.arg.as_mut() {
-                inv_rewrite(a, fields, base, base_ty, path, bound);
+                inv_rewrite(a, fields, base, base_ty, elem_ty, path, bound);
             }
         }
         Expr::Quant(x) => {
-            inv_rewrite(&mut x.lo, fields, base, base_ty, path, bound);
-            inv_rewrite(&mut x.hi, fields, base, base_ty, path, bound);
+            inv_rewrite(&mut x.lo, fields, base, base_ty, elem_ty, path, bound);
+            inv_rewrite(&mut x.hi, fields, base, base_ty, elem_ty, path, bound);
             // a quantifier variable named like the parameter would capture `base.f`: rename it (check.py invariant_clause)
             let orig = x.var.clone();
             if x.var == base {
                 x.var = format!("$inv_{}", x.var);
+                // LG27: Keep the renamed binder distinct from the element index.
+                if elem_ty.is_some() && x.var == INV_ELEM {
+                    x.var.push_str("_bound");
+                }
             }
             bound.push((orig, x.var.clone()));
-            inv_rewrite(&mut x.body, fields, base, base_ty, path, bound);
-            x.triggers.iter_mut().for_each(|t| inv_rewrite(t, fields, base, base_ty, path, bound));
+            inv_rewrite(&mut x.body, fields, base, base_ty, elem_ty, path, bound);
+            x.triggers.iter_mut().for_each(|t| inv_rewrite(t, fields, base, base_ty, elem_ty, path, bound));
             bound.pop();
         }
-        Expr::StructLit(x) => x.fields.iter_mut().for_each(|fi| inv_rewrite(&mut fi.value, fields, base, base_ty, path, bound)),
-        Expr::EnumCtor(x) => x.args.iter_mut().for_each(|a| inv_rewrite(a, fields, base, base_ty, path, bound)),
-        Expr::FieldAccess(x) => inv_rewrite(&mut x.base, fields, base, base_ty, path, bound),
-        Expr::IsVariant(x) => inv_rewrite(&mut x.value, fields, base, base_ty, path, bound),
-        Expr::VariantField(x) => inv_rewrite(&mut x.value, fields, base, base_ty, path, bound),
+        Expr::StructLit(x) => x.fields.iter_mut().for_each(|fi| inv_rewrite(&mut fi.value, fields, base, base_ty, elem_ty, path, bound)),
+        Expr::EnumCtor(x) => x.args.iter_mut().for_each(|a| inv_rewrite(a, fields, base, base_ty, elem_ty, path, bound)),
+        Expr::FieldAccess(x) => inv_rewrite(&mut x.base, fields, base, base_ty, elem_ty, path, bound),
+        Expr::IsVariant(x) => inv_rewrite(&mut x.value, fields, base, base_ty, elem_ty, path, bound),
+        Expr::VariantField(x) => inv_rewrite(&mut x.value, fields, base, base_ty, elem_ty, path, bound),
         _ => {}
     }
 }
@@ -1269,9 +1285,18 @@ impl<'a> FnVerifier<'a> {
                 gtype::substitute(&GType::from_key(ty), theta)
             };
             let base_ty = ty_g.to_key();
-            for (s, path) in pruv_core::check::effective_invariant_structs(&ty_g, &lookup) {
+            // LG27: Unwrap a Vec only at the contract root.
+            let elem = match (ty_g.owner.is_none(), ty_g.name.as_str(), ty_g.args.as_slice()) {
+                (true, "vec", [elem]) => Some(elem),
+                _ => None,
+            };
+            let elem_ty = elem.map(GType::to_key);
+            for (s, path) in pruv_core::check::effective_invariant_structs(elem.unwrap_or(&ty_g), &lookup) {
                 let fields: Vec<_> = s.fields.iter().map(|fd| fd.name.clone()).collect();
                 let mut label = who.to_string();
+                if elem.is_some() {
+                    label.push_str("[]");
+                }
                 for step in &path {
                     label.push('.');
                     match step {
@@ -1288,11 +1313,11 @@ impl<'a> FnVerifier<'a> {
                 };
                 for (c, &line) in s.invariants.iter().zip(&s.invariant_lines) {
                     let mut expr = c.clone();
-                    inv_rewrite(&mut expr, &fields, who, &base_ty, &path, &mut Vec::new());
+                    inv_rewrite(&mut expr, &fields, who, &base_ty, elem_ty.as_deref(), &path, &mut Vec::new());
                     if path.iter().any(|step| !matches!(step, InvariantStep::Field(..))) {
                         let (line, col) = (c.line(), c.col());
                         let mut guards = Vec::new();
-                        inv_place(who, &base_ty, &path, line, col, Some(&mut guards));
+                        inv_place(who, &base_ty, elem_ty.as_deref(), &path, line, col, Some(&mut guards));
                         for guard in guards.into_iter().rev() {
                             let negated = Expr::Unary(ast::Unary {
                                 line, col, op: "!".into(), operand: Box::new(guard), ty: Some("bool".into()),
@@ -1302,6 +1327,23 @@ impl<'a> FnVerifier<'a> {
                                 ty: Some("bool".into()),
                             });
                         }
+                    }
+                    if elem.is_some() {
+                        let (line, col) = (c.line(), c.col());
+                        let arg = Expr::Var(ast::Var {
+                            line, col, name: who.into(), ty: Some(base_ty.clone()),
+                        });
+                        expr = Expr::Quant(ast::Quant {
+                            line, col, kind: "forall".into(), var: INV_ELEM.into(),
+                            lo: Box::new(Expr::IntLit(ast::IntLit {
+                                line, col, value: "0".into(), ty: Some("i64".into()),
+                            })),
+                            hi: Box::new(Expr::Call(ast::Call {
+                                line, col, name: "len".into(), args: vec![arg], ty: Some("i64".into()),
+                                targs: None, inst: None, old: None, opaque_c: false,
+                            })),
+                            body: Box::new(expr), ty: Some("bool".into()), triggers: Vec::new(),
+                        });
                     }
                     out.push(InvClause { expr, sname: s.name.clone(), line, who: label.clone(), inout });
                 }
@@ -1961,12 +2003,20 @@ impl<'a> FnVerifier<'a> {
 
     fn assume_str_utf8(&self, st: &mut State, g: &[Ast], ty: &Ty, value: &Val) {
         if let Some(valid) = self.str_utf8(ty, value) {
-            if self.qstack.is_empty() {
-                self.assume(st, g, valid);
-            } else {
+            // LG27: Keep the guard: a str read under a short-circuit guard is only valid on that path.
+            let fact = if !self.qstack.is_empty() {
                 // A field or call result can depend on an enclosing quantifier's indices.
                 let guarded = self.z.and(g).implies(&valid);
-                st.pc.push(self.z.forall(&self.qstack, &guarded, &[]));
+                self.z.forall(&self.qstack, &guarded, &[])
+            } else if g.is_empty() {
+                valid
+            } else {
+                self.z.and(g).implies(&valid)
+            };
+            let i = fact.id();
+            if !st.obs.contains(&i) {
+                st.pc.push(fact);
+                std::rc::Rc::make_mut(&mut st.obs).insert(i);
             }
         }
     }
@@ -4578,7 +4628,10 @@ impl<'a> FnVerifier<'a> {
             }
             "string_to_str" => {
                 let a = argv(0)?.try_arr()?;
-                Ok(Val::Arr(Arr::new(a.a.clone(), a.n.clone(), n.to_string(), Elem::U8)))
+                let value = Val::Arr(Arr::new(a.a.clone(), a.n.clone(), n.to_string(), Elem::U8));
+                // LG27: Record UTF-8 validity for the converted str.
+                self.assume_str_utf8(st, g, &Ty::Str, &value);
+                Ok(value)
             }
             other => Err(format!("catalog: {}", other)),
         }

@@ -347,7 +347,13 @@ match e {                                  // statement; every variant exactly o
   none of those parameters is named `result`, and each type parameter of the result type occurs in a parameter;
   otherwise the uninstantiated result is assumed (G-LG24-2). The assumption rests on a generic body making a `T`
   value only from its checked `T` arguments; the body itself sees an abstract `T` and assumes nothing about it.
-  Values in array or `Vec` elements are not assumed to satisfy it (G-LG24-1).
+  LG27: a parameter or result of type exactly `Vec<T>` (top level, not nested in a field, payload or `HashMap`),
+  where `T` has an effective invariant, gets each clause of `T` as `forall $inv_e in 0..len(p): C[p[$inv_e]]`
+  (label `p[]`, `p[].f`): assumed at entry, proved at call arguments, for the result and for an inout `Vec` at exit,
+  assumed after the call. A read-only `Vec` parameter cannot be written, so a loop keeps the entry fact; an inout
+  `Vec` the body changes (`vec_at_mut`, `vec_clear`, ...) is proved at exit, and a loop that changes it, like a local
+  `Vec` built in a loop, needs a user loop invariant stating the element clause (G-LG27-1). Elements of arrays (which cannot hold
+  structs), of `Vec` values inside fields or payloads, and `HashMap` values are not assumed (G-LG27-2).
   A failure is `verify/struct_invariant` ("invariant of S (line L) for parameter P of F", "... for result",
   "... for inout P at exit"); a partial operation in a clause proved at a handoff (index, `/`, `some_val`, ...) is
   checked under the same code and message. A host entry may not take a parameter of such a struct
@@ -416,7 +422,8 @@ return a parameter with `copy`). Refinements: `[u8 | L..=U; <=N]` with `0 <= L <
   assumes `W(s, 0, len(s))` for its `str` values: `str` parameters at entry, reads of `str` variables, `str` results
   of user calls, `str` field reads (under the path condition, and for an enum variant field only when that variant is
   active; inside a quantifier, for all its indices), `str` views passed to `str` parameters, and the results of
-  `substr`, `copy`, `str_from_utf8` and string literals. A function uses UTF-8 facts when its body or its own
+  `substr`, `copy`, `str_from_utf8`, `string_to_str` (LG27) and string literals. Each value is assumed once (LG27): a
+  later read of the same `str` value adds no new clause; after a loop havoc the new value is assumed again. A function uses UTF-8 facts when its body or its own
   contracts (`requires`, `ensures`, header `decreases` and `cost`, quantifier triggers included; not the contracts
   synthesized from struct invariants) call `utf8_valid`, `utf8_valid_span` or `str_from_utf8`, pass a `subview` of a
   `[u8]` to a `str` parameter, or call a user function whose `requires` or `ensures` mention `utf8_valid` or `utf8_valid_span`. Other

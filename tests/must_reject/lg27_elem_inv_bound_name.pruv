@@ -1,0 +1,17 @@
+// LG27 (G-LG26-1): a clause quantifier named like the parameter must not capture the element index
+struct P {
+  x: i64,
+  invariant forall e in 0..1: x > 0
+}
+
+fn take(e: Vec<P>) -> i64 {
+  return len(e);
+}
+
+fn bad() -> i64 ! alloc {
+  let v: Vec<P> = vec_push::<P>(vec_push::<P>(vec_new::<P>(), P { x: 1 }), P { x: 0 });
+  return take(v);
+}
+pub fn lg27_entry() -> () {
+  return;
+}
