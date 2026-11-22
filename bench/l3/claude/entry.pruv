@@ -125,7 +125,12 @@ pub fn window_line(data: [u8], start: i64, end: i64) -> Line ! alloc
 pub fn string_field(doc: crate::json::JsonDocument, id: i64, key: str) -> Field ! alloc
   ensures is_variant(result, Field::Value) ==> len(variant_field(result, Field::Value, text)) <= 50331648
 {
-  let f: i64 = crate::access::field(doc, id, key);
+  return string_field_of(doc, crate::access::field(doc, id, key));
+}
+
+pub fn string_field_of(doc: crate::json::JsonDocument, f: i64) -> Field ! alloc
+  ensures is_variant(result, Field::Value) ==> len(variant_field(result, Field::Value, text)) <= 50331648
+{
   if f == -1 || f == -2 { return Field::Missing; }
   if f < 0 { return Field::Defect(f); }
   let k: i64 = crate::access::kind(doc, f);
@@ -156,11 +161,16 @@ pub fn field_is(doc: crate::json::JsonDocument, id: i64, key: str, lit: str) -> 
 pub fn string_id(doc: crate::json::JsonDocument, id: i64, key: str) -> i64 ! alloc
   ensures result == -1 || result == -3 || result == -4 || (result >= 0 && result < len(doc.tape) / 6)
 {
-  let f: i64 = crate::access::field(doc, id, key);
+  return string_of(doc, crate::access::field(doc, id, key));
+}
+
+pub fn string_of(doc: crate::json::JsonDocument, f: i64) -> i64
+  ensures result == -1 || result == -3 || result == -4 || (result >= 0 && result < len(doc.tape) / 6)
+{
   if f == -1 || f == -2 { return -1; }
   if f < 0 { if f == -3 { return -3; } return -4; }
   let k: i64 = crate::access::kind(doc, f);
-  if k < 0 { return -3; }
+  if k < 0 || f >= len(doc.tape) / 6 { return -3; }
   if k != 4 { return -1; }
   return f;
 }
@@ -169,11 +179,16 @@ pub fn string_id(doc: crate::json::JsonDocument, id: i64, key: str) -> i64 ! all
 pub fn object_field(doc: crate::json::JsonDocument, id: i64, key: str) -> i64 ! alloc
   ensures result == -1 || result == -2 || (result >= 0 && result < len(doc.tape) / 6)
 {
-  let f: i64 = crate::access::field(doc, id, key);
+  return object_of(doc, crate::access::field(doc, id, key));
+}
+
+pub fn object_of(doc: crate::json::JsonDocument, f: i64) -> i64
+  ensures result == -1 || result == -2 || (result >= 0 && result < len(doc.tape) / 6)
+{
   if f == -1 || f == -2 { return -1; }
   if f < 0 { return -2; }
   let k: i64 = crate::access::kind(doc, f);
-  if k < 0 { return -2; }
+  if k < 0 || f >= len(doc.tape) / 6 { return -2; }
   if k == 6 { return f; }
   return -1;
 }
@@ -182,7 +197,12 @@ pub fn object_field(doc: crate::json::JsonDocument, id: i64, key: str) -> i64 ! 
 pub fn is_true(doc: crate::json::JsonDocument, id: i64, key: str) -> i64 ! alloc
   ensures result <= 1
 {
-  let f: i64 = crate::access::field(doc, id, key);
+  return true_of(doc, crate::access::field(doc, id, key));
+}
+
+pub fn true_of(doc: crate::json::JsonDocument, f: i64) -> i64
+  ensures result <= 1
+{
   if f == -1 || f == -2 { return 0; }
   if f < 0 { return f; }
   let k: i64 = crate::access::kind(doc, f);
@@ -191,12 +211,28 @@ pub fn is_true(doc: crate::json::JsonDocument, id: i64, key: str) -> i64 ! alloc
   return 0;
 }
 
+// Raw lookup results of the root members, including missing fields and tape errors, in one pass:
+// [0] type, [1] timestamp, [2] isMeta, [3] isSidechain, [4] message, [5] isApiErrorMessage, [6] origin.
+pub fn root_of(doc: crate::json::JsonDocument) -> [i64] ! alloc
+  ensures len(result) == 8
+{
+  let mut r: [i64] = alloc(8, 0);
+  crate::access::fields_into(doc, 0, 7, "type", "timestamp", "isMeta", "isSidechain", "message", "isApiErrorMessage", "origin", "", inout r);
+  return r;
+}
+
 // 1 when origin is an object whose kind is the string "task-notification", 0 otherwise, negative on a
 // corrupt tape.
 pub fn task_origin(doc: crate::json::JsonDocument, id: i64) -> i64 ! alloc
   ensures result <= 1
 {
-  let o: i64 = object_field(doc, id, "origin");
+  return task_origin_of(doc, crate::access::field(doc, id, "origin"));
+}
+
+pub fn task_origin_of(doc: crate::json::JsonDocument, origin_raw: i64) -> i64 ! alloc
+  ensures result <= 1
+{
+  let o: i64 = object_of(doc, origin_raw);
   if o == -1 { return 0; }
   if o < 0 { return -4; }
   return field_is(doc, o, "kind", "task-notification");
@@ -208,7 +244,9 @@ fn block_of(doc: crate::json::JsonDocument, j: i64) -> Block ! alloc
   let k: i64 = crate::access::kind(doc, j);
   if k < 0 { return Block::Broken(k); }
   if k != 6 { return Block::Ignore; }
-  let ty: i64 = string_id(doc, j, "type");
+  let mut b: [i64] = alloc(8, 0);
+  crate::access::fields_into(doc, j, 2, "type", "text", "", "", "", "", "", "", inout b);
+  let ty: i64 = string_of(doc, b[0]);
   if ty == -1 { return Block::Ignore; }
   if ty < 0 { return Block::Broken(ty); }
   let veto: i64 = crate::access::string_is(doc, ty, "tool_result");
@@ -217,7 +255,7 @@ fn block_of(doc: crate::json::JsonDocument, j: i64) -> Block ! alloc
   let txt: i64 = crate::access::string_is(doc, ty, "text");
   if txt < 0 { return Block::Broken(txt); }
   if txt == 0 { return Block::Ignore; }
-  let tx: Field = string_field(doc, j, "text");
+  let tx: Field = string_field_of(doc, b[1]);
   match tx {
     Field::Value(x) => { return Block::Piece(copy(x)); }
     Field::Missing => { return Block::Ignore; }
@@ -225,15 +263,23 @@ fn block_of(doc: crate::json::JsonDocument, j: i64) -> Block ! alloc
   }
 }
 
+// origin_raw is a raw root "origin" lookup, or -9 (never a field result) to look it up only when needed.
+fn origin_flag(doc: crate::json::JsonDocument, origin_raw: i64) -> i64 ! alloc
+  ensures result <= 1
+{
+  if origin_raw == -9 { return task_origin(doc, 0); }
+  return task_origin_of(doc, origin_raw);
+}
+
 // String content: untrimmed text unless blank or an engine line.
-fn string_content(doc: crate::json::JsonDocument, c: i64) -> Field ! alloc
+fn string_content(doc: crate::json::JsonDocument, c: i64, origin_raw: i64) -> Field ! alloc
 {
   let t: crate::jstr::Text = crate::access::string_text(doc, c);
   match t {
     crate::jstr::Text::InternalInvariant(e) => { return Field::Defect(e); }
     crate::jstr::Text::Decoded(v) => {
       if crate::text::is_blank(v) { return Field::Missing; }
-      let o: i64 = task_origin(doc, 0);
+      let o: i64 = origin_flag(doc, origin_raw);
       if o < 0 { return Field::Defect(o); }
       let engine: bool = crate::text::engine_line(v, o == 1);
       if engine { return Field::Missing; }
@@ -244,7 +290,7 @@ fn string_content(doc: crate::json::JsonDocument, c: i64) -> Field ! alloc
 
 // Array content: walk the children by their skip links; a tool_result object anywhere vetoes; text pieces
 // are joined with "\n\n"; the joined text is then tested for blankness and engine lines.
-fn array_content(doc: crate::json::JsonDocument, c: i64) -> Field ! alloc
+fn array_content(doc: crate::json::JsonDocument, c: i64, origin_raw: i64) -> Field ! alloc
   requires 0 <= c && c < len(doc.tape) / 6
 {
   if len(doc.tape) > 6291456 { return Field::Defect(-4); }
@@ -279,7 +325,7 @@ fn array_content(doc: crate::json::JsonDocument, c: i64) -> Field ! alloc
   }
   let whole: str = string_to_str(joined);
   if crate::text::is_blank(whole) { return Field::Missing; }
-  let o: i64 = task_origin(doc, 0);
+  let o: i64 = origin_flag(doc, origin_raw);
   if o < 0 { return Field::Defect(o); }
   let engine: bool = crate::text::engine_line(whole, o == 1);
   if engine { return Field::Missing; }
@@ -314,8 +360,32 @@ pub fn user_text(doc: crate::json::JsonDocument) -> Field ! alloc
   if c < 0 { return Field::Defect(c); }
   let k: i64 = crate::access::kind(doc, c);
   if k < 0 { return Field::Defect(k); }
-  if k == 4 { return string_content(doc, c); }
-  if k == 5 { return array_content(doc, c); }
+  if k == 4 { return string_content(doc, c, -9); }
+  if k == 5 { return array_content(doc, c, -9); }
+  return Field::Missing;
+}
+
+// user_text with the root lookups already done by root_of(doc) on the same doc.
+
+pub fn user_text_of(doc: crate::json::JsonDocument, r: [i64]) -> Field ! alloc
+  requires len(r) == 8
+{
+  let meta: i64 = true_of(doc, r[2]);
+  if meta < 0 { return Field::Defect(meta); }
+  if meta == 1 { return Field::Missing; }
+  let side: i64 = true_of(doc, r[3]);
+  if side < 0 { return Field::Defect(side); }
+  if side == 1 { return Field::Missing; }
+  let msg: i64 = object_of(doc, r[4]);
+  if msg == -1 { return Field::Missing; }
+  if msg < 0 { return Field::Defect(msg); }
+  let c: i64 = crate::access::field(doc, msg, "content");
+  if c == -1 || c == -2 { return Field::Missing; }
+  if c < 0 { return Field::Defect(c); }
+  let k: i64 = crate::access::kind(doc, c);
+  if k < 0 { return Field::Defect(k); }
+  if k == 4 { return string_content(doc, c, r[6]); }
+  if k == 5 { return array_content(doc, c, r[6]); }
   return Field::Missing;
 }
 

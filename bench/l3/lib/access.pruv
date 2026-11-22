@@ -148,6 +148,135 @@ pub fn field(doc: crate::json::JsonDocument, id: i64, key: str) -> i64 ! alloc
   }
   return find(doc, id, units, used);
 }
+
+fn hit(doc: crate::json::JsonDocument, s: i64, e: i64, key: str) -> bool
+  requires 0 <= s && s <= e && e <= len(doc.source) && e <= 16777216
+{
+  // The same length and first-byte prefilter as find_ascii.
+  if e - s >= 2 {
+    if e - s - 2 < len(key) { return false; }
+    if len(key) > 0 {
+      let c: i64 = doc.source[s + 1];
+      if c < 128 && c != 92 && c != key[0] { return false; }
+    }
+  }
+  return crate::jstr::ascii_equal(doc.source, s, e, key);
+}
+
+fn slot_error(n: i64, slot: i64, code: i64) -> i64
+  requires code < 0
+  ensures result < 0
+{
+  if slot >= n { return -1; }
+  return code;
+}
+
+fn fill_error(n: i64, code: i64, inout out: [i64]) -> ()
+  requires code < 0 && len(out) == 8
+  ensures len(out) == 8
+{
+  out[0] = slot_error(n, 0, code);
+  out[1] = slot_error(n, 1, code);
+  out[2] = slot_error(n, 2, code);
+  out[3] = slot_error(n, 3, code);
+  out[4] = slot_error(n, 4, code);
+  out[5] = slot_error(n, 5, code);
+  out[6] = slot_error(n, 6, code);
+  out[7] = slot_error(n, 7, code);
+}
+
+fn field_if_used(doc: crate::json::JsonDocument, id: i64, used: bool, key: str) -> i64 ! alloc
+  ensures result >= 0 ==> (result < len(doc.tape) / 6 && doc.tape[6 * result + 4] == id)
+{
+  if !used { return -1; }
+  return field(doc, id, key);
+}
+
+// Keep the slot updates independent in the loop proof.
+fn last_match(found: i64, v: i64, matched: bool) -> i64
+  ensures result == found || result == v
+{
+  if matched { return v; }
+  return found;
+}
+
+// Last-wins lookup of the first n keys of object id into out[0..8), each slot equal to field(doc, id, key);
+// slots at or past n get -1. Results go to an inout array, not a struct: one more struct in the crate pushed
+// an unrelated rs proof query (turns::plan_end) past its time limit (G-DB29-1).
+pub fn fields_into(doc: crate::json::JsonDocument, id: i64, n: i64, k0: str, k1: str, k2: str, k3: str, k4: str, k5: str, k6: str, k7: str, inout out: [i64]) -> () ! alloc
+  requires len(out) == 8
+  ensures len(out) == 8
+{
+  if (n > 0 && (len(k0) > 16777216 || !is_ascii(k0))) ||
+     (n > 1 && (len(k1) > 16777216 || !is_ascii(k1))) ||
+     (n > 2 && (len(k2) > 16777216 || !is_ascii(k2))) ||
+     (n > 3 && (len(k3) > 16777216 || !is_ascii(k3))) ||
+     (n > 4 && (len(k4) > 16777216 || !is_ascii(k4))) ||
+     (n > 5 && (len(k5) > 16777216 || !is_ascii(k5))) ||
+     (n > 6 && (len(k6) > 16777216 || !is_ascii(k6))) ||
+     (n > 7 && (len(k7) > 16777216 || !is_ascii(k7)))
+  {
+    out[0] = field_if_used(doc, id, n > 0, k0);
+    out[1] = field_if_used(doc, id, n > 1, k1);
+    out[2] = field_if_used(doc, id, n > 2, k2);
+    out[3] = field_if_used(doc, id, n > 3, k3);
+    out[4] = field_if_used(doc, id, n > 4, k4);
+    out[5] = field_if_used(doc, id, n > 5, k5);
+    out[6] = field_if_used(doc, id, n > 6, k6);
+    out[7] = field_if_used(doc, id, n > 7, k7);
+    return;
+  }
+  if !valid(doc, id) { fill_error(n, -3, inout out); return; }
+  if doc.tape[6 * id] != 6 { fill_error(n, -2, inout out); return; }
+  let stop: i64 = doc.tape[6 * id + 3];
+  if stop <= id || stop > len(doc.tape) / 6 { fill_error(n, -4, inout out); return; }
+  let mut j: i64 = id + 1;
+  let mut f0: i64 = -1;
+  let mut f1: i64 = -1;
+  let mut f2: i64 = -1;
+  let mut f3: i64 = -1;
+  let mut f4: i64 = -1;
+  let mut f5: i64 = -1;
+  let mut f6: i64 = -1;
+  let mut f7: i64 = -1;
+  while j < stop
+    invariant 0 <= id && id < j && j <= stop && stop <= len(doc.tape) / 6 && len(doc.tape) <= 6291456
+    invariant f0 == -1 || (0 <= f0 && f0 < len(doc.tape) / 6 && doc.tape[6 * f0 + 4] == id)
+    invariant f1 == -1 || (0 <= f1 && f1 < len(doc.tape) / 6 && doc.tape[6 * f1 + 4] == id)
+    invariant f2 == -1 || (0 <= f2 && f2 < len(doc.tape) / 6 && doc.tape[6 * f2 + 4] == id)
+    invariant f3 == -1 || (0 <= f3 && f3 < len(doc.tape) / 6 && doc.tape[6 * f3 + 4] == id)
+    invariant f4 == -1 || (0 <= f4 && f4 < len(doc.tape) / 6 && doc.tape[6 * f4 + 4] == id)
+    invariant f5 == -1 || (0 <= f5 && f5 < len(doc.tape) / 6 && doc.tape[6 * f5 + 4] == id)
+    invariant f6 == -1 || (0 <= f6 && f6 < len(doc.tape) / 6 && doc.tape[6 * f6 + 4] == id)
+    invariant f7 == -1 || (0 <= f7 && f7 < len(doc.tape) / 6 && doc.tape[6 * f7 + 4] == id)
+    decreases stop - j
+  {
+    if doc.tape[6 * j] != 7 || doc.tape[6 * j + 4] != id || doc.tape[6 * j + 3] != j + 1 { fill_error(n, -4, inout out); return; }
+    let v: i64 = j + 1; if v >= stop || !valid(doc, v) { fill_error(n, -4, inout out); return; }
+    let next: i64 = doc.tape[6 * v + 3];
+    if next <= v || next > stop || doc.tape[6 * v + 4] != id { fill_error(n, -4, inout out); return; }
+    let s: i64 = doc.tape[6 * j + 1]; let e: i64 = doc.tape[6 * j + 2];
+    if s < 0 || e < s || e > len(doc.source) || e > 16777216 { fill_error(n, -4, inout out); return; }
+    f0 = last_match(f0, v, n > 0 && hit(doc, s, e, k0));
+    f1 = last_match(f1, v, n > 1 && hit(doc, s, e, k1));
+    f2 = last_match(f2, v, n > 2 && hit(doc, s, e, k2));
+    f3 = last_match(f3, v, n > 3 && hit(doc, s, e, k3));
+    f4 = last_match(f4, v, n > 4 && hit(doc, s, e, k4));
+    f5 = last_match(f5, v, n > 5 && hit(doc, s, e, k5));
+    f6 = last_match(f6, v, n > 6 && hit(doc, s, e, k6));
+    f7 = last_match(f7, v, n > 7 && hit(doc, s, e, k7));
+    j = next;
+  }
+  out[0] = f0;
+  out[1] = f1;
+  out[2] = f2;
+  out[3] = f3;
+  out[4] = f4;
+  out[5] = f5;
+  out[6] = f6;
+  out[7] = f7;
+}
+
 pub struct Units { status: i64, units: [i64] }
 pub fn string_units(doc: crate::json::JsonDocument, id: i64) -> Units ! alloc
   ensures len(result.units) <= len(doc.source)
