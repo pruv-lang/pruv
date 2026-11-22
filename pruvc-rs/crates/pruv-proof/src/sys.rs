@@ -913,9 +913,9 @@ pub struct Solver {
     raw: RawSolver,
     /// (timeout, rlimit, seed) as set on `raw`, for the query copy made by `check`
     opts: (u32, Option<u32>, Option<u32>),
-    /// LG19 (G-DB29-1): the context and solver of the last `check`. The query is copied into a fresh context that holds
-    /// only the sorts and declarations its terms reach, so the datatypes, terms and ids built for the rest of the crate
-    /// do not change how the solver searches.
+    /// LG19 (G-DB29-1): the context and solver of the last `check` when the shared check was unknown (LG20). The query
+    /// is copied into a fresh context that holds only the sorts and declarations its terms reach, so the datatypes,
+    /// terms and ids built for the rest of the crate do not change how the solver searches.
     iso: Option<(Z3, RawSolver)>,
 }
 
@@ -1013,6 +1013,15 @@ impl Solver {
     pub fn check(&mut self) -> Sat {
         // SAFETY: S1 — reads the lbool via `as i32` (works for both enum and integer alias).
         self.drop_iso();
+        // LG20 (G-LG19-2): check in the shared context first and copy the query into a fresh one only when that check
+        // is not decided. A sat or unsat answer does not depend on the context, so only an unknown one can be the
+        // perturbation of G-DB29-1; the decided queries (almost all) no longer pay the copy.
+        let r = unsafe { z::Z3_solver_check(self.z.raw(), self.raw) } as i32;
+        match r {
+            LBOOL_TRUE => return Sat::Sat,
+            LBOOL_FALSE => return Sat::Unsat,
+            _ => {}
+        }
         let iz = Z3::new();
         let (t, r, sd) = self.opts;
         let is = mk_solver_raw(&iz, t, r, sd);

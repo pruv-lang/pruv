@@ -1,0 +1,12 @@
+// LG20 (G-LG19-1): a value temporary lifted before a `?` follows the plain-argument rule too: `mk(2)` builds a
+// String that `lend` borrows, and the temporary's `let` would drop it before `need(x)` runs, so the statement stays
+// try_position
+fn mk(n: i64) -> String ! alloc { return string_from("ab"); }
+fn lend(s: String, i: i64) -> i64 { return i; }
+fn need(x: i64) -> Result<i64, String> ! alloc {
+  if x > 0 { return Ok::<i64, String>(x); }
+  return Err::<i64, String>(string_from("neg"));
+}
+fn f(x: i64) -> Result<i64, String> ! alloc {
+  return Ok::<i64, String>(lend(mk(2), 0) + need(x)?);
+}

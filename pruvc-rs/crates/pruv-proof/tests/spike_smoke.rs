@@ -17,12 +17,13 @@ fn every_sample_has_well_formed_trace() {
             assert!(o["line"].as_u64().is_some() && o["col"].as_u64().is_some());
             assert!(o["code"].as_str().is_some());
             let attempts = o["attempts"].as_array().expect("attempts");
-            assert!(matches!(attempts.len(), 1 | 2), "{name}: attempts {}", attempts.len());
-            // the first attempt is lemmas=false; a second one, if present, is lemmas=true
+            assert!(matches!(attempts.len(), 1..=3), "{name}: attempts {}", attempts.len());
+            // the first attempt is lemmas=false; later ones (aggregate lemmas, then also the count split, LG20) are
+            // lemmas=true, and no attempt follows an unsat one
             assert_eq!(attempts[0]["lemmas"], Value::Bool(false));
-            if attempts.len() == 2 {
-                assert_eq!(attempts[1]["lemmas"], Value::Bool(true));
-                assert_ne!(attempts[0]["result"], "unsat", "no retry after unsat");
+            for (j, a) in attempts.iter().enumerate().skip(1) {
+                assert_eq!(a["lemmas"], Value::Bool(true));
+                assert_ne!(attempts[j - 1]["result"], "unsat", "no retry after unsat");
             }
             for a in attempts {
                 assert!(a["smt2"].as_str().unwrap().starts_with("(set-option :timeout 8000)\n"));

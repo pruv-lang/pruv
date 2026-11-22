@@ -286,7 +286,8 @@ Allowed only in `requires`, `ensures`, `invariant`, `assert`:
     count(k in m..hi: c)` whenever `lo <= m <= hi`, for counts with the same body `c`. It uses the fact for two
     counts that share an end point (`lo..m` and `m..hi`, or `lo..hi` and one of its parts), so a sum of two
     adjacent counts and the remainder of a count after its prefix both verify; it never invents a split point.
-    Without `lo <= m <= hi` the fact is not used. Tests: [split](tests/spec/r6_4_count_split.pruv),
+    Without `lo <= m <= hi` the fact is not used. Both verifiers try a query first without aggregate lemmas, then
+    with them, and add the split only in a third attempt (LG20). Tests: [split](tests/spec/r6_4_count_split.pruv),
     [split point not in the range](tests/spec/r6_4_count_split_unbounded.pruv).
   - Example: `ensures result == count(k in 0..len(a): a[k] < x)` with
     `invariant c == count(k in 0..i: a[k] < x)`.
@@ -489,9 +490,14 @@ let o: Option<bool> = Some::<bool>(true);   // also None::<bool>, Ok::<bool>(x),
   inout roots and have no effect is bound as usual); or when its type is not a value type, except (LG18) a `Vec`,
   `HashMap` or `String` that is a call result (not `subview`) or a plain `move x`, passed directly as an argument of a
   user (non-foreign) function to a `take` parameter of exactly that type: the call then gets `move t`, so the
-  temporary owns exactly the value the argument held and is consumed by the same call (a value the call itself
-  borrows while it runs, such as `mk(string_from("a"))`'s argument, is then dropped before the `?` operand runs
-  instead of at the end of the statement, G-LG18-4). Any other operand of a
+  temporary owns exactly the value the argument held and is consumed by the same call. A temporary, of a value type
+  or such an owned call result, is bound only when every argument of its call (for a non-call operand, every direct
+  sub-expression) is plain: a `move`, an integer or bool literal, a place rooted at a local (`x`, `x.f`, `x[i]`), a
+  unary, binary or index operator over plain operands, or (LG20) any other expression of a value type whose own
+  sub-expressions are plain, such as `len(s)` or `twice(len(s))`; otherwise it is `type/try_position`. A
+  non-plain argument, such as `mk(2)` in `lend(mk(2), 0) + need(x)?` or the string literal in `mk(len("a"))`, would
+  be built inside the temporary's `let` and dropped there, before the `?` operand runs instead of at the end of the
+  statement (LG19, LG20). Any other operand of a
   non-value type (a borrow of a live local, a field, an index, a reference, a type holding one, an owned value passed
   to a borrowed parameter, whose temporary would be dropped at the end of the block instead of the statement, one
   passed to a parameter of another type such as `Vec<T>` to `[T]`, an argument of a builtin or a constructor) stays
@@ -2231,7 +2237,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/refinement_bounds` | type | refinement bounds outside i64, or an empty range |
 | `type/reserved` | type | a function named like a builtin |
 | `type/result_error_type` | type | a `Result<T, E>` error type `E` that E1/E2 do not support (section 6c) |
-| `type/try_position` | type | a `?` outside the value of a let, a local assignment, a return, an expression statement or an if condition, in a quantifier, in the right operand of `==>`, in the right operand of `&&` / `\|\|` when the statement passes `inout` or the operator has a quantifier or `subview`, moves a name used outside it, mentions one moved outside it or mentions a non-value binding used again (LG15) or a `pred fn` return, after an operand evaluated before it that cannot be bound to a temporary (it has a quantifier or `subview`, moves a name used again, mentions a non-value binding that the same call mentions again other than as a borrowed user-function argument, or is not of a value type other than an owned call result or `move` passed directly to a user function's `take` parameter of the same type, LG14/LG18; in a statement that passes `inout`, also when it or any `?` operand mentions an inout root or has an effect call, or it passes `inout`, LG18), or with an `inout` argument in its operand while the statement reads a local outside it (section 6c) |
+| `type/try_position` | type | a `?` outside the value of a let, a local assignment, a return, an expression statement or an if condition, in a quantifier, in the right operand of `==>`, in the right operand of `&&` / `\|\|` when the statement passes `inout` or the operator has a quantifier or `subview`, moves a name used outside it, mentions one moved outside it or mentions a non-value binding used again (LG15) or a `pred fn` return, after an operand evaluated before it that cannot be bound to a temporary (it has a quantifier or `subview`, moves a name used again, mentions a non-value binding that the same call mentions again other than as a borrowed user-function argument, or is not of a value type other than an owned call result or `move` passed directly to a user function's `take` parameter of the same type, LG14/LG18, or whose arguments are not plain, LG19/LG20; in a statement that passes `inout`, also when it or any `?` operand mentions an inout root or has an effect call, or it passes `inout`, LG18), or with an `inout` argument in its operand while the statement reads a local outside it (section 6c) |
 | `type/try_operand` | type | a `?` operand that is not a `Result` (section 6c) |
 | `type/try_return` | type | a `?` in a function that does not return a `Result` (section 6c) |
 | `type/try_error_type` | type | a `?` whose error type differs from the function's error type (section 6c) |
