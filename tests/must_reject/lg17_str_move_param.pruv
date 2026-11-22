@@ -1,0 +1,7 @@
+// LG17 (G-DB28-2): a str parameter is borrowed and cannot be moved
+fn run(t: str) -> i64 ! alloc
+{
+  let mut text: str = "none";
+  text = move t;
+  return len(text);
+}

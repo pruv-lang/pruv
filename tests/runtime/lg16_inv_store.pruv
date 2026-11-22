@@ -55,7 +55,7 @@ fn slot_sum(b: Buf, top: i64, m: i64) -> i64
   return s;
 }
 
-fn run(k: i64) -> i64 ! alloc
+pub fn run(k: i64) -> i64 ! alloc
   requires 0 <= k && k <= 3
 {
   let mut b: Buf = new_buf();

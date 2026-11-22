@@ -13,3 +13,6 @@ fn bad() -> i64 {
   r.lo = 9;
   return use_r(r);
 }
+pub fn lg17_entry() -> () {
+  return;
+}

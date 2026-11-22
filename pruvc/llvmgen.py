@@ -2543,7 +2543,7 @@ class FnGen:
                 s.ins("store %s zeroinitializer, ptr %s" % (ARR, g9_gep(s, lty(sl.ty), sl.a, k)))
                 return x
             v = s.load(x)
-            if is_array(e.ty):
+            if is_array(e.ty) or e.ty == STR:
                 s.empty_array_slot(x)
             elif x.k == "agg" and s.is_ext(x.ty):
                 # LG9 (G-LG8-5): an extended record owns every buffer field; the whole slot becomes zero (its drop

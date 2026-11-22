@@ -1,0 +1,10 @@
+// LG17 (G-LG16-2): in legacy single-file mode every function is a host entry, so it cannot take a struct with an
+// invariant (the host caller is not proved)
+struct R {
+  lo: i64, hi: i64,
+  invariant 0 <= lo && lo <= hi
+}
+
+fn width(r: R) -> i64 {
+  return r.hi - r.lo;
+}

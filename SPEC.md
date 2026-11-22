@@ -321,8 +321,10 @@ match e {                                  // statement; every variant exactly o
   A failure is `verify/struct_invariant` ("invariant of S (line L) for parameter P of F", "... for result",
   "... for inout P at exit"); a partial operation in a clause proved at a handoff (index, `/`, `some_val`, ...) is
   checked under the same code and message. A host entry may not take a parameter of such a struct
-  (`type/entry_signature`). In legacy single-file mode every function is public and has no host-entry check, so a
-  host Rust caller can pass an `S` that breaks the invariant (G-LG16-2).
+  (`type/entry_signature`). In legacy single-file mode every function is public, so every ordinary function (not a
+  `pred`, not a foreign declaration) counts as a host entry for this rule: one with a parameter of such a struct (by
+  value, `inout` or `take`) is `type/entry_signature` with the same message (LG17); returning it stays allowed. To
+  keep such functions, write the program in explicit mode, where unmarked functions are private.
 
 ## 6b. Byte arrays, bool arrays and strings (G2)
 Full contract: `docs/G2_SPEC.md`. There are no scalar `u8` types, no casts and no narrow arithmetic: reading `[u8]` or
@@ -347,7 +349,11 @@ return a parameter with `copy`). Refinements: `[u8 | L..=U; <=N]` with `0 <= L <
   character inside is an error). In code a literal creates a new string and needs `alloc`; in contracts it is free.
 - `len(s)` is the number of **bytes**; `s[i]` is byte `i` as an i64 in `0..=255` (index must be proven in range).
 - `copy(s)` (needs `alloc`) returns an independent copy. A `str` follows the array ownership rules: a `let` or
-  assignment from another `str` variable, and returning a parameter, need `copy(s)`.
+  assignment from another `str` variable, and returning a parameter, need `copy(s)`. Like an owned array, an owned
+  `str` local can be handed over with `move t` (`text = move t`, `let x = move t`, `return move t`, a struct field
+  `S { f: move t }`); `t` is dead after the move (a later use, also in an `assert` or loop clause, is
+  `type/foreign_move`; a move in a loop body that does not restore `t` is `type/foreign_loop_move`), and moving a
+  borrowed `str` parameter is `type/array_alias` (LG17). A `take` parameter of type `str` is not allowed.
 - `is_char_boundary(s, i)` (code and contracts) is exactly: `i == 0 || i == len(s) || (0 < i && i < len(s) && (s[i] < 128
   || s[i] >= 192))`; it is false outside `0..=len(s)` and never needs a domain proof for `i`.
 - `substr(s, lo, hi)` (needs `alloc`, code only) copies bytes `lo..hi`. The verifier proves `0 <= lo <= hi <= len(s)`

@@ -1137,6 +1137,16 @@ impl Checker {
                         format!("parameter result of type {} cannot be used: {} has an invariant", p.ty, p.ty), ""));
                 }
             }
+            // LG17 (G-LG16-2): legacy mode has no host-entry check and every ordinary function is callable
+            // from the host, so none may take a struct with an invariant (its callers are not proved).
+            if !self.explicit {
+                for f in prog.functions.iter().filter(|f| !f.pred && f.foreign.is_none()) {
+                    if let Some(p) = f.params.iter().find(|p| inv_structs.contains(&p.ty)) {
+                        return Err(terr(f.line, f.col, "entry_signature",
+                            format!("host entry {} cannot take parameter {} of struct {} with an invariant", f.name, p.name, p.ty), ""));
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -4273,8 +4283,8 @@ impl Checker {
 
     /// Arrays are moved or borrowed explicitly: a new array comes only from alloc/copy/a call.
     fn array_source(&self, line: i64, col: i64, value: &Expr, scope: &Scope, allow_local_var: bool, ty: &GType) -> Res<()> {
-        if matches!(value, Expr::Call(_) | Expr::StrLit(_)) || matches!(value, Expr::Move(_)) && ty.is_array() {
-            return Ok(());
+        if matches!(value, Expr::Call(_) | Expr::StrLit(_)) || matches!(value, Expr::Move(_)) && (ty.is_array() || *ty == strt()) {
+            return Ok(()); // LG17 (G-DB28-2): `move t` of an owned str binding also hands over its bytes
         }
         if let Expr::Var(v) = value {
             if scope.get(&v.name).map(|x| x.kind == "inout").unwrap_or(false) {
@@ -4584,7 +4594,7 @@ impl Checker {
                     ));
                 }
                 let entry = self.lookup(x.line, x.col, &x.name, scope, &[])?;
-                if entry.ty.is_array() && !matches!(entry.kind, "local" | "take")
+                if (entry.ty.is_array() || entry.ty == strt()) && !matches!(entry.kind, "local" | "take")
                     && self.array_replace.as_deref() != Some(x.name.as_str())
                     && !self.match_movable.contains(&x.name) // G-DB16-1: array binder of a consuming match
                 {

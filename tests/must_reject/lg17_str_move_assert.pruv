@@ -1,0 +1,8 @@
+// LG17: a str local moved away cannot be read in an assert (proof clauses read it too)
+fn f() -> i64 ! alloc {
+  let t: str = copy("x");
+  let mut text: str = "";
+  text = move t;
+  assert len(t) >= 0;
+  return len(text);
+}

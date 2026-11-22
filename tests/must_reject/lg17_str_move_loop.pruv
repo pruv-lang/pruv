@@ -1,0 +1,12 @@
+// LG17 (G-DB28-2): a str local declared outside a loop cannot be moved in every iteration
+fn run() -> i64 ! alloc
+{
+  let mut text: str = "none";
+  let t: str = copy("one");
+  let mut i: i64 = 0;
+  while i < 2 invariant 0 <= i && i <= 2 decreases 2 - i {
+    text = move t;
+    i = i + 1;
+  }
+  return len(text);
+}
