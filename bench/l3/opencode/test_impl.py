@@ -10,8 +10,8 @@ the fixture. Only this piece is built; no repository-wide suites.
 
   --verify-only    true verification, no host linking, no execution: root.pruv and everything it reaches (its manifest packages and
                    local modules) through each selected compiler (the same py/rs command lines the builds use); the command lines
-                   and outputs are logged to work/logs/verify_*.log. `--verify-only` is passed to the compiler when it accepts it;
-                   otherwise the verified compile is emitted into a throwaway work/verify directory (never `--no-verify`).
+                   and outputs are logged to work/logs/verify_*.log. Neither compiler has a verify-only flag, so the verified
+                   compile is emitted into a throwaway work/verify directory (never `--no-verify`).
   --scope A|B|C|D  verify only that package's modules through a temporary entry/manifest in work/scope_<X>
                    (A util packet; B + path admit sql rows list; C + export; D + entry convert plan).
   --unit host      host unit tests: SQLite typed round trip, wx/stdout fd + spawn/observe, delta patches, result rendering, protocol
@@ -363,47 +363,37 @@ def scope_entry(scope):
     deps = man.get('dependencies', {})
     for dep in deps.values():
         dep['path'] = os.path.relpath((HERE / dep['path']).resolve(), d.resolve())
-    man = dict(man, name=man.get('name', 'l3_opencode') + '_scope_' + scope, root='scope.pruv')
+    man = dict(man, name=man.get('name', 'l3_opencode') + '_scope_' + scope.lower(), root='scope.pruv')
     (d / 'scope.json').write_text(json.dumps(man, indent=1) + '\n', encoding='utf-8')
     missing = [m for m in SCOPES[scope] if not (HERE / f'{m}.pruv').exists()]
     if missing:
         raise RuntimeError('scope %s: missing module file(s) %s (not delivered yet)' % (scope, ', '.join(m + '.pruv' for m in missing)))
+    for m in SCOPES[scope]:                  # local modules sit next to the entry: --manifest and --lib cannot be combined
+        shutil.copyfile(HERE / f'{m}.pruv', d / f'{m}.pruv')
     lines = ['mod %s;' % n for n in deps] + ['mod %s;' % m for m in SCOPES[scope]]
     (d / 'scope.pruv').write_text('\n'.join(lines) + '\n', encoding='utf-8')
     return d
 
 
-_VERIFY_FLAG = {}
-
-
 def verify_one(g, compiler, backend, root_file, manifest, libdir, log):
-    """One true verification of root_file with one compiler. Returns (ok, line, output tail)."""
+    """One true verification of root_file with one compiler: a verified compile into work/verify. Returns (ok, line, output tail)."""
     base = list(g.COMPILERS[compiler])
     flags = compile_flags(WORK / 'libpruv_str.rlib', manifest)
     if libdir:
         flags += ['--lib', str(libdir)]
     out = WORK / 'verify' / f'{compiler}_{backend}'
     out.mkdir(parents=True, exist_ok=True)
-    attempts = []
-    if _VERIFY_FLAG.get(compiler, True):
-        attempts.append(('--verify-only', base + [str(root_file), '--verify-only'] + flags))
     stem = Path(root_file).stem
     emit = out / (stem + '_gen.rs')
     if backend == 'llvm':
-        fallback = base + [str(root_file), '-o', str(out / (stem + '_gen.ll')), '--backend', 'llvm', '--rust-bindings', str(emit)] + flags
+        cmd = base + [str(root_file), '-o', str(out / (stem + '_gen.ll')), '--backend', 'llvm', '--rust-bindings', str(emit)] + flags
     else:
-        fallback = base + [str(root_file), '-o', str(emit)] + flags
-    attempts.append(('verified compile to a throwaway directory', fallback))
-    for label, cmd in attempts:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-        Path(log).parent.mkdir(parents=True, exist_ok=True)
-        with open(log, 'a', encoding='utf-8') as f:
-            f.write('$ %s   # %s\n[exit %d]\n%s%s\n' % (' '.join(cmd), label, p.returncode, p.stdout, p.stderr))
-        if label == '--verify-only' and p.returncode == 2 and 'verify-only' in (p.stdout + p.stderr):
-            _VERIFY_FLAG[compiler] = False                  # this compiler has no such flag: fall through to the verified compile
-            continue
-        return p.returncode == 0, '%s [%s] exit %d' % (' '.join(cmd[-6:]), label, p.returncode), (p.stdout + p.stderr)[-600:]
-    return False, 'no attempt ran', ''
+        cmd = base + [str(root_file), '-o', str(emit)] + flags
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    Path(log).parent.mkdir(parents=True, exist_ok=True)
+    with open(log, 'a', encoding='utf-8') as f:
+        f.write('$ %s\n[exit %d]\n%s%s\n' % (' '.join(cmd), p.returncode, p.stdout, p.stderr))
+    return p.returncode == 0, '%s exit %d' % (' '.join(cmd[-6:]), p.returncode), (p.stdout + p.stderr)[-600:]
 
 
 def verify_only(pairs, scope=None):
@@ -412,7 +402,7 @@ def verify_only(pairs, scope=None):
     rc = 0
     if scope:
         d = scope_entry(scope)
-        root_file, manifest, libdir, tag = d / 'scope.pruv', d / 'scope.json', HERE, f'scope{scope}'
+        root_file, manifest, libdir, tag = d / 'scope.pruv', d / 'scope.json', None, f'scope{scope}'
     else:
         root_file, manifest, libdir, tag = HERE / 'root.pruv', HERE / 'pruv.json', None, 'root'
         print('verifying root and what it reaches: ' + '; '.join(reachable()), flush=True)
