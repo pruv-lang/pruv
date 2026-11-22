@@ -1,0 +1,9 @@
+// LG16: a returned struct must satisfy its invariant
+struct R {
+  lo: i64, hi: i64,
+  invariant 0 <= lo && lo <= hi
+}
+
+fn bad() -> R {
+  return R { lo: 2, hi: 1 };
+}

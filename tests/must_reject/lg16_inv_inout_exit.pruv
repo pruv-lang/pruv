@@ -1,0 +1,9 @@
+// LG16: an inout struct must satisfy its invariant at the exit
+struct R {
+  lo: i64, hi: i64,
+  invariant 0 <= lo && lo <= hi
+}
+
+fn bad(inout r: R) -> () {
+  r.lo = r.hi + 1;
+}

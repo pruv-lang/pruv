@@ -369,6 +369,9 @@ class TypeParam:
 
 Function.tparams = ()      # tuple/list of TypeParam; empty = not generic
 TypeDecl.tparams = ()      # inherited by StructDecl / EnumDecl
+StructDecl.invariants = [] # proof-only clauses, absent from dataclass dumps
+Function.inv_requires = []
+Function.inv_ensures = []
 # explicit type arguments as written (list of Type) on `f::<..>(..)`, `S::<..> {..}`, `E::<..>::V(..)`,
 # `Some::<T>(x)` / `None::<T>` / `Ok::<T>(x)` / `Err::<T>(c)`; None = no type application written
 Call.targs = None

@@ -1035,6 +1035,7 @@ impl Checker {
         }
         self.tt = TypeTable::new(&prog.types);
         self.x_prepare(prog)?; // P06: which functions a contract may expand, and their raw bodies
+        self.check_invariants(prog)?; // LG16: struct invariant declarations
         for f in prog.functions.iter_mut() {
             self.fn_(f)?;
         }
@@ -1080,6 +1081,62 @@ impl Checker {
                 }
             }
             self.ckind = "code";
+        }
+        Ok(())
+    }
+
+    /// LG16 (G-DB26-1): declaration checks of struct invariants. Each clause is checked once, in the environment of the
+    /// struct's fields, as a contract expression (like a `requires`); the annotated clause stays on the declaration, and
+    /// the verifier rewrites it per parameter (pruv-proof `inv_clauses`). Nothing else sees the clauses.
+    fn check_invariants(&mut self, prog: &mut Program) -> Res<()> {
+        fn uses_old_or_result(e: &Expr) -> bool {
+            match e {
+                Expr::Var(v) if v.name == "result" => true,
+                Expr::Call(c) if c.name == "old" => true,
+                _ => crate::refine::kids(e).into_iter().any(uses_old_or_result),
+            }
+        }
+        let mut inv_structs: HashSet<String> = HashSet::new();
+        for d in prog.types.iter_mut() {
+            let TypeDecl::Struct(s) = d else { continue };
+            if s.invariants.is_empty() {
+                continue;
+            }
+            let sname = s.name.clone();
+            if !s.tparams.is_empty() {
+                return Err(terr(s.line, s.col, "invariant_decl",
+                    format!("struct {} with type parameters cannot have an invariant", sname), ""));
+            }
+            inv_structs.insert(sname.clone());
+            let scope: Scope = s.fields.iter().map(|fd| (fd.name.clone(), Entry {
+                ty: GType::from_key(&fd.ty), mutable: false, kind: "param",
+            })).collect();
+            self.cur_name = format!("\u{1}invariant:{}", sname);
+            self.cur_ret = unitt();
+            self.cur_cost = false;
+            self.cur_params = s.fields.iter().map(|fd| fd.name.clone()).collect();
+            self.enter(&decl_owner(&sname), &[]);
+            for e in s.invariants.iter_mut() {
+                if uses_old_or_result(e) {
+                    return Err(terr(e.line(), e.col(), "invariant_decl",
+                        format!("invariant of struct {} cannot use old() or result", sname), ""));
+                }
+                self.ckind = "requires";
+                let ty = self.expr(e, &scope, true)?;
+                self.ckind = "code";
+                if ty != boolt() {
+                    return Err(terr(e.line(), e.col(), "invariant_decl",
+                        format!("invariant of struct {} must be bool", sname), ""));
+                }
+            }
+        }
+        if !inv_structs.is_empty() {
+            for f in &prog.functions {
+                if let Some(p) = f.params.iter().find(|p| p.name == "result" && inv_structs.contains(&p.ty)) {
+                    return Err(terr(f.line, f.col, "invariant_decl",
+                        format!("parameter result of type {} cannot be used: {} has an invariant", p.ty, p.ty), ""));
+                }
+            }
         }
         Ok(())
     }
@@ -1258,6 +1315,9 @@ impl Checker {
                 TypeDecl::Struct(s) => {
                     for fd in s.fields.iter_mut() {
                         fd.ty = self.norm_key(&fd.ty);
+                    }
+                    for e in s.invariants.iter_mut() {
+                        self.norm_expr(e); // LG16
                     }
                 }
                 TypeDecl::Enum(e) => {
@@ -2366,6 +2426,16 @@ impl Checker {
         for (i, f) in prog.functions.iter().enumerate() {
             if !self.host_entry.get(i).copied().unwrap_or(false) {
                 continue;
+            }
+            // LG16: a host entry cannot take a struct with an invariant (its callers are not proved)
+            if let Some((p, sname)) = f.params.iter().find_map(|p| {
+                prog.types.iter().find_map(|d| match d {
+                    TypeDecl::Struct(s) if s.name == p.ty && !s.invariants.is_empty() => Some((p, s.name.as_str())),
+                    _ => None,
+                })
+            }) {
+                return Err(terr(f.line, f.col, "entry_signature",
+                    format!("host entry {} cannot take parameter {} of struct {} with an invariant", f.name, p.name, sname), ""));
             }
             if let Some(p) = f.params.iter().find(|p| p.mode_pos.is_some() && matches!(p.ty.as_str(), "i64" | "bool")) {
                 return Err(terr(f.line, f.col, "entry_signature",

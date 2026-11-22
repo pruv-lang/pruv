@@ -1,0 +1,7 @@
+struct S { n: i64, invariant forall p in 0..1: n >= p }
+fn use_s(p: S) -> i64 {
+  return p.n;
+}
+fn bad() -> i64 {
+  return use_s(S { n: -1 });
+}

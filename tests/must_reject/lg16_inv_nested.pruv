@@ -1,0 +1,13 @@
+// LG16: a struct read from another struct's field is not assumed to satisfy its invariant
+struct R {
+  lo: i64, hi: i64,
+  invariant 0 <= lo && lo <= hi
+}
+
+struct W { r: R }
+
+fn bad(w: W) -> i64
+  ensures result >= 0
+{
+  return w.r.hi - w.r.lo;
+}

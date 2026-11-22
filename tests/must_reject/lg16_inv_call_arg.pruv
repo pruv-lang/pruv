@@ -1,0 +1,15 @@
+// LG16: a local struct passed after field writes must satisfy the invariant at the call
+struct R {
+  lo: i64, hi: i64,
+  invariant 0 <= lo && lo <= hi
+}
+
+fn use_r(r: R) -> i64 {
+  return r.hi - r.lo;
+}
+
+fn bad() -> i64 {
+  let mut r: R = R { lo: 0, hi: 5 };
+  r.lo = 9;
+  return use_r(r);
+}

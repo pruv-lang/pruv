@@ -185,7 +185,9 @@ pub struct FieldDecl { pub line: i64, pub col: i64, pub name: String, pub ty: Ty
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantDecl { pub line: i64, pub col: i64, pub name: String, pub fields: Vec<FieldDecl> }
 #[derive(Debug, Clone, PartialEq)]
-pub struct StructDecl { pub line: i64, pub col: i64, pub name: String, pub fields: Vec<FieldDecl>, pub tparams: Vec<TParam> }
+pub struct StructDecl { pub line: i64, pub col: i64, pub name: String, pub fields: Vec<FieldDecl>, pub tparams: Vec<TParam>,
+    /// LG16: `invariant <expr>` clauses (field names bare). Not emitted in the dump.
+    pub invariants: Vec<Expr> }
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumDecl { pub line: i64, pub col: i64, pub name: String, pub variants: Vec<VariantDecl>, pub tparams: Vec<TParam> }
 #[derive(Debug, Clone, PartialEq)]

@@ -2939,6 +2939,15 @@ class Gen:
             s.refs.discard(st.name)    # G9: a local is an owned value, never a reference
         elif isinstance(st, Assign):
             s.moving = s.last_copy(st)
+            call = st.value
+            if (not s.cost and not s.moving and isinstance(call, Call) and call.name == "resize"
+                    and call.name not in s.fmap and st.name not in s.refs
+                    and (st.name not in s.params or st.name in s.take_arrays or st.name in s.resizable)):
+                source = call.args[0]
+                if (isinstance(source, (Var, Move)) and source.name == st.name
+                        and not getattr(source, "fields", ()) and is_array(source.ty)):
+                    s.emit(ind, s.resize_expr(call, st.name))
+                    return
             target = "*" + st.name if st.name in s.inouts else st.name
             s.emit(ind, "%s = %s;" % (target, s.own_e(st.value)))
             s.moving = set()
@@ -3394,6 +3403,32 @@ class Gen:
                 args.append(s.e(x))
         return "%s(%s)" % (name, ", ".join(args))
 
+    def resize_expr(s, e, place=None):
+        a = e.args
+        bool_arr = is_bool_array(a[0].ty)
+        vty = "bool" if bool_arr else "i64"
+        if is_u8_array(a[0].ty):
+            fill = "pruv_v as u8"
+        elif bool_arr or not s.verified or s.layout(e) == "i64":
+            fill = "pruv_v"
+        else:
+            fill = "pruv_v as %s" % s.layout(e)
+        chk = ""
+        if not s.verified:
+            chk = ('if pruv_n < (pruv_a.len() as i64) || pruv_n > (1i64 << 40) '
+                   '{ pruv_ovf("resize length outside len..2^40") } ')
+            if is_u8_array(a[0].ty):
+                chk += "if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } "
+        if place is not None:
+            return ("{ let pruv_n: i64 = %s; let pruv_v: %s = %s; %s%s.resize(pruv_n as usize, %s); }"
+                    % (s.e(a[1]), vty, s.e(a[2]), chk.replace("pruv_a.len()", place + ".len()"),
+                       place, fill))
+        # source order: a, n, v
+        return ("{ let pruv_a = %s; let pruv_n: i64 = %s; let pruv_v: %s = %s; %s"
+                "let mut pruv_t = ::std::vec::Vec::with_capacity(pruv_n as usize); pruv_t.extend_from_slice(pruv_a); "
+                "pruv_t.resize(pruv_n as usize, %s); pruv_t }"
+                % (s.arr_ref(a[0]), s.e(a[1]), vty, s.e(a[2]), chk, fill))
+
     def e(s, e):
         if isinstance(e, IntLit):
             if e.value == -2 ** 63:
@@ -3535,26 +3570,8 @@ class Gen:
                             "{ pruv_oob(pruv_m, pruv_a.len()) } pruv_a[..(pruv_m as usize)].to_vec() }" % (s.arr_ref(a[0]), s.e(a[1])))
                 return ("{ let pruv_a = %s; let pruv_m: i64 = %s; unsafe { pruv_a.get_unchecked(..(pruv_m as usize)) }.to_vec() }"
                         % (s.arr_ref(a[0]), s.e(a[1])))
-            if n == "resize":  # P05G: one allocation of n, one memcpy of the prefix, one fill of the tail
-                bool_arr = is_bool_array(a[0].ty)
-                vty = "bool" if bool_arr else "i64"
-                if is_u8_array(a[0].ty):
-                    fill = "pruv_v as u8"
-                elif bool_arr or not s.verified or s.layout(e) == "i64":
-                    fill = "pruv_v"
-                else:
-                    fill = "pruv_v as %s" % s.layout(e)
-                chk = ""
-                if not s.verified:
-                    chk = ('if pruv_n < (pruv_a.len() as i64) || pruv_n > (1i64 << 40) '
-                           '{ pruv_ovf("resize length outside len..2^40") } ')
-                    if is_u8_array(a[0].ty):
-                        chk += "if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } "
-                # source order: a, n, v
-                return ("{ let pruv_a = %s; let pruv_n: i64 = %s; let pruv_v: %s = %s; %s"
-                        "let mut pruv_t = ::std::vec::Vec::with_capacity(pruv_n as usize); pruv_t.extend_from_slice(pruv_a); "
-                        "pruv_t.resize(pruv_n as usize, %s); pruv_t }"
-                        % (s.arr_ref(a[0]), s.e(a[1]), vty, s.e(a[2]), chk, fill))
+            if n == "resize":
+                return s.resize_expr(e)
             if n == "eq_range":  # L3-10: eq_range: slice equality of a[i..i+n] and b[j..j+n]
                 # the five arguments are bound once each, in source order a, i, b, j, n (SPEC.md eq_range)
                 head = ("{ let pruv_ea = %s; let pruv_i: i64 = %s; let pruv_eb = %s; let pruv_j: i64 = %s; "

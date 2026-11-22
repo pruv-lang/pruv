@@ -878,6 +878,81 @@ pub struct FnVerifier<'a> {
     /// G4b-3 (verify.py `s._kmemo`): AST id -> key piece of that assertion (digest, fresh names; obligation.rs
     /// `key_text`).
     pub(crate) kmemo: HashMap<u32, (String, Vec<String>)>,
+    /// LG16 (G-DB26-1): struct name -> (field names, annotated invariant clauses) of every struct with an invariant.
+    /// Empty for a program without invariants (nothing below changes then).
+    invs: HashMap<String, (Vec<String>, Vec<&'a Expr>)>,
+}
+
+/// LG16: one synthesized struct-invariant clause of a function contract (verifier only).
+pub(crate) struct InvClause {
+    /// the clause with every bare field `f` rewritten to `p.f` (source positions of the clause kept)
+    pub expr: Expr,
+    pub sname: String,
+    /// the clause line (as in `postcondition (line N)`)
+    pub line: i64,
+    /// the parameter name, or "result"
+    pub who: String,
+    /// an inout parameter (the clause is an exit obligation on its final value)
+    pub inout: bool,
+}
+
+/// LG16: rewrite the bare field names of a struct invariant clause to `base.field` (a quantifier variable of the same
+/// name shadows the field inside its body and triggers).
+fn inv_rewrite(e: &mut Expr, fields: &[String], base: &str, base_ty: &str, bound: &mut Vec<(String, String)>) {
+    if let Expr::Var(v) = &mut *e {
+        if let Some((_, to)) = bound.iter().rev().find(|(b, _)| *b == v.name) {
+            v.name = to.clone();
+            return;
+        }
+        if fields.iter().any(|f| *f == v.name) {
+            let fa = Expr::FieldAccess(ast::FieldAccess {
+                line: v.line,
+                col: v.col,
+                base: Box::new(Expr::Var(ast::Var { line: v.line, col: v.col, name: base.to_string(), ty: Some(base_ty.to_string()) })),
+                field: v.name.clone(),
+                ty: v.ty.clone(),
+            });
+            *e = fa;
+        }
+        return;
+    }
+    match e {
+        Expr::InoutArg(x) => inv_rewrite(&mut x.expr, fields, base, base_ty, bound),
+        Expr::Unary(x) => inv_rewrite(&mut x.operand, fields, base, base_ty, bound),
+        Expr::Binary(x) => {
+            inv_rewrite(&mut x.left, fields, base, base_ty, bound);
+            inv_rewrite(&mut x.right, fields, base, base_ty, bound);
+        }
+        Expr::Call(x) => x.args.iter_mut().for_each(|a| inv_rewrite(a, fields, base, base_ty, bound)),
+        Expr::Index(x) => {
+            inv_rewrite(&mut x.array, fields, base, base_ty, bound);
+            inv_rewrite(&mut x.index, fields, base, base_ty, bound);
+        }
+        Expr::Ctor(x) => {
+            if let Some(a) = x.arg.as_mut() {
+                inv_rewrite(a, fields, base, base_ty, bound);
+            }
+        }
+        Expr::Quant(x) => {
+            inv_rewrite(&mut x.lo, fields, base, base_ty, bound);
+            inv_rewrite(&mut x.hi, fields, base, base_ty, bound);
+            // a quantifier variable named like the parameter would capture `base.f`: rename it (check.py invariant_clause)
+            let orig = x.var.clone();
+            if x.var == base {
+                x.var = format!("$inv_{}", x.var);
+            }
+            bound.push((orig, x.var.clone()));
+            inv_rewrite(&mut x.body, fields, base, base_ty, bound);
+            x.triggers.iter_mut().for_each(|t| inv_rewrite(t, fields, base, base_ty, bound));
+            bound.pop();
+        }
+        Expr::StructLit(x) => x.fields.iter_mut().for_each(|fi| inv_rewrite(&mut fi.value, fields, base, base_ty, bound)),
+        Expr::EnumCtor(x) => x.args.iter_mut().for_each(|a| inv_rewrite(a, fields, base, base_ty, bound)),
+        Expr::FieldAccess(x) => inv_rewrite(&mut x.base, fields, base, base_ty, bound),
+        Expr::IsVariant(x) => inv_rewrite(&mut x.value, fields, base, base_ty, bound),
+        Expr::VariantField(x) => inv_rewrite(&mut x.value, fields, base, base_ty, bound),
+        _ => {}
+    }
 }
 
 type LenChanges = HashMap<(String, usize), BTreeSet<Vec<String>>>;
@@ -1025,7 +1100,37 @@ impl<'a> FnVerifier<'a> {
             snap: Env::default(),
             iter_places: Vec::new(),
             kmemo: HashMap::new(),
+            invs: HashMap::new(),
         }
+    }
+
+    /// LG16: the synthesized invariant clauses of `f`: `ensures == false` the requires (every parameter of type exactly S,
+    /// by value, take or inout), `ensures == true` the ensures (every inout parameter of type S on its final value, then the
+    /// result when the return type is exactly S). Parameters in order. Empty when no struct has an invariant.
+    pub(crate) fn inv_clauses(&self, f: &ast::Function, ensures: bool) -> Vec<InvClause> {
+        let mut out = Vec::new();
+        if self.invs.is_empty() {
+            return out;
+        }
+        let add = |ty: &str, who: &str, inout: bool, out: &mut Vec<InvClause>| {
+            if let Some((fields, clauses)) = self.invs.get(ty) {
+                for c in clauses {
+                    let mut expr = (**c).clone();
+                    inv_rewrite(&mut expr, fields, who, ty, &mut Vec::new());
+                    out.push(InvClause { expr, sname: ty.to_string(), line: c.line(), who: who.to_string(), inout });
+                }
+            }
+        };
+        for p in &f.params {
+            if ensures && p.mode_pos.is_none() {
+                continue;
+            }
+            add(p.ty.as_str(), p.name.as_str(), p.mode_pos.is_some(), &mut out);
+        }
+        if ensures {
+            add(f.ret.as_str(), "result", false, &mut out);
+        }
+        out
     }
 
     /// verify.py `T(ty)`: a checked node type (a type key) under the current contract-instantiation substitution.
@@ -1069,6 +1174,14 @@ impl<'a> FnVerifier<'a> {
         }
         v.resize_params = pruv_core::check::resize_params(prog);
         v.struct_len_changes = struct_len_changes(prog, &v.resize_params);
+        // LG16: struct invariants (proof-only)
+        for d in &prog.types {
+            if let ast::TypeDecl::Struct(s) = d {
+                if !s.invariants.is_empty() && s.tparams.is_empty() {
+                    v.invs.insert(s.name.clone(), (s.fields.iter().map(|fd| fd.name.clone()).collect(), s.invariants.iter().collect()));
+                }
+            }
+        }
         // G9 A1: function SCCs (Program.g9)
         if let Some(meta) = &prog.g9 {
             for (i, names) in meta.fn_sccs.iter().enumerate() {
@@ -2966,6 +3079,19 @@ impl<'a> FnVerifier<'a> {
     fn call_contract(&mut self, e: &Expr, f: &'a ast::Function, st: &mut State, g: &[Ast], code: bool, mut cenv: Env) -> R<Val> {
         let n = f.name.as_str();
         if code {
+            // LG16: the synthesized struct-invariant requires come before the user's
+            for (i, ic) in self.inv_clauses(f, false).into_iter().enumerate() {
+                let ob = self.ev_ast(&ic.expr, st, g, false, &cenv)?;
+                self.prove_core(
+                    &st,
+                    g,
+                    &ob,
+                    pos(e),
+                    "struct_invariant",
+                    &format!("invariant of {} (line {}) for parameter {} of {}", ic.sname, pruv_core::diagnostic::plain_line(ic.line), ic.who, n),
+                    Some(&i.to_string()),
+                );
+            }
             // The call site does not prove the callee's requires domain (the callee's own run() already proves it).
             for r in &f.requires {
                 let ob = self.ev_ast(r, st, g, false, &cenv)?;
@@ -2995,6 +3121,10 @@ impl<'a> FnVerifier<'a> {
             // G5 A1: every inout call applies its ensures, in legacy single-file mode too
             if !ios.is_empty() || f.foreign.is_some() || self.scc_id.contains_key(n) || self.explicit() {
                 // (legacy ordinary unit functions keep the legacy behaviour)
+                for ic in self.inv_clauses(f, true) {
+                    let v = self.ev_ast(&ic.expr, st, g, false, &cenv)?; // LG16
+                    self.assume(st, g, v);
+                }
                 for en in &f.ensures {
                     let v = self.ev_ast(en, st, g, false, &cenv)?;
                     self.assume(st, g, v);
@@ -3051,6 +3181,10 @@ impl<'a> FnVerifier<'a> {
             _ => None,
         };
         cenv.set("result", res.clone());
+        for ic in self.inv_clauses(f, true) {
+            let v = self.ev_ast(&ic.expr, st, g, false, &cenv)?; // LG16
+            self.assume(st, g, v);
+        }
         for en in &f.ensures {
             let v = self.ev_ast(en, st, g, false, &cenv)?;
             self.assume(st, g, v);
@@ -3097,6 +3231,11 @@ impl<'a> FnVerifier<'a> {
         for (e, f, cenv, _, theta) in &branches {
             let saved = std::mem::replace(&mut self.theta, theta.clone());
             let r = (|| -> R<()> {
+                for (i, ic) in self.inv_clauses(f, false).into_iter().enumerate() {
+                    let ob = self.ev_ast(&ic.expr, &mut st, &[], false, cenv)?; // LG16
+                    self.prove_core(&st, &[], &ob, pos(e), "struct_invariant",
+                        &format!("invariant of {} (line {}) for parameter {} of {}", ic.sname, pruv_core::diagnostic::plain_line(ic.line), ic.who, f.name), Some(&i.to_string()));
+                }
                 for req in &f.requires {
                     let ob = self.ev_ast(req, &mut st, &[], false, cenv)?;
                     self.prove_core(&st, &[], &ob, pos(e), "call_requires",
@@ -3121,6 +3260,10 @@ impl<'a> FnVerifier<'a> {
         for (_, f, cenv, _, theta) in &branches {
             let saved = std::mem::replace(&mut self.theta, theta.clone());
             let r = (|| -> R<()> {
+                for ic in self.inv_clauses(f, true) {
+                    let ob = self.ev_ast(&ic.expr, &mut st, &[], false, cenv)?; // LG16
+                    self.assume(&mut st, &[], ob);
+                }
                 for en in &f.ensures {
                     let ob = self.ev_ast(en, &mut st, &[], false, cenv)?;
                     self.assume(&mut st, &[], ob);
@@ -3138,6 +3281,10 @@ impl<'a> FnVerifier<'a> {
             let mut b = base.fork(None);
             let saved = std::mem::replace(&mut self.theta, theta.clone());
             let r = (|| -> R<()> {
+                for ic in self.inv_clauses(f, true) {
+                    let ob = self.ev_ast(&ic.expr, &mut b, &[], false, cenv)?; // LG16
+                    self.assume(&mut b, &[], ob);
+                }
                 for en in &f.ensures {
                     let ob = self.ev_ast(en, &mut b, &[], false, cenv)?;
                     self.assume(&mut b, &[], ob);
@@ -4477,6 +4624,21 @@ impl<'a> FnVerifier<'a> {
             }
         }
         let mut prev: Vec<Ast> = Vec::new(); // earlier clauses (domain + value) were proved above and can justify lookups in later clauses
+        // LG16: the synthesized struct-invariant ensures come before the user's (inout parameters on their final values)
+        for (i, ic) in self.inv_clauses(f, true).into_iter().enumerate() {
+            let what = if ic.inout {
+                format!("invariant of {} (line {}) for inout {} at exit", ic.sname, pruv_core::diagnostic::plain_line(ic.line), ic.who)
+            } else {
+                format!("invariant of {} (line {}) for result", ic.sname, pruv_core::diagnostic::plain_line(ic.line))
+            };
+            for (d, code) in self.dom_obligations(&ic.expr, st, &prev, &env)? {
+                self.prove_core(&st, &prev, &d, node, "struct_invariant", &what, Some(&format!("({}, '{}')", i, code)));
+                prev.push(d);
+            }
+            let ob = self.ev_ast(&ic.expr, st, &[], false, &env)?;
+            self.prove_core(&st, &[], &ob, node, "struct_invariant", &what, Some(&i.to_string()));
+            prev.push(ob);
+        }
         for en in &f.ensures {
             let what = format!(
                 "variant_field lookups in postcondition (line {}) are defined",
@@ -5057,7 +5219,9 @@ impl<'a> FnVerifier<'a> {
                 self.prove_core(&st0, &[], &d, mk_pos(f.line, f.col), "opaque_total", &what, None);
             }
         }
-        for r in &f.requires {
+        // LG16: the synthesized struct-invariant requires come first and are handled like the user's
+        let invs: Vec<Expr> = self.inv_clauses(f, false).into_iter().map(|ic| ic.expr).collect();
+        for r in invs.iter().chain(f.requires.iter()) {
             // D(r) is proved from the preceding requires only, then D(r) && r is assumed in declaration order
             let what = format!(
                 "variant_field lookups in requires (line {}) are defined",

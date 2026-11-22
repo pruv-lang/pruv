@@ -207,6 +207,39 @@ def _walk(e):
         yield from _walk(k)
 
 
+def invariant_clause(expr, ty, name, metadata):
+    """Bind free field names in a copy of an already typed struct clause."""
+    expr = copy.deepcopy(expr)
+
+    def bind(e, bound):
+        if isinstance(e, Var):
+            if e.name in bound:
+                e.name = bound[e.name]
+            else:
+                base = Var(e.line, e.col, name, ty)
+                base.file = e.file
+                e.__class__ = FieldAccess
+                e.base, e.field = base, e.name
+                del e.name
+        elif isinstance(e, Quant):
+            bind(e.lo, bound)
+            bind(e.hi, bound)
+            original = e.var
+            if e.var == name:
+                e.var = "$inv_" + e.var
+            inner = {**bound, original: e.var}
+            bind(e.body, inner)
+            for trigger in e.triggers:
+                bind(trigger, inner)
+        else:
+            for child in expr_kids(e):
+                bind(child, bound)
+
+    bind(expr, {})
+    expr.struct_invariant = metadata
+    return expr
+
+
 def replace_expr(holder, target, new):
     """LG13: replace the node `target` (by identity) inside the expression fields of `holder` with `new`"""
     for key, value in vars(holder).items():
@@ -528,6 +561,7 @@ class Checker:
             s.check_entries()      # G4 A0: host-entry signatures
         s.tt = TypeTable(s.prog)
         s.x_prepare()          # P06: which functions a contract may expand, and their raw bodies
+        s.check_struct_invariants()
         for f in s.prog.functions:
             s.fn(f)
         if s.prog.explicit:
@@ -1145,6 +1179,90 @@ class Checker:
                                               and not any(n in s.extended for n in dependencies(ft)))
         return any(owned(ft) for ft in fields) and all(ok(ft) for ft in fields)
 
+    def invariant_struct(s, ty):
+        d = s.decls.get(ty.name)
+        if ty.owner is None and not ty.args and isinstance(d, StructDecl) and d.invariants:
+            return d
+        return None
+
+    def check_struct_invariants(s):
+        decls = [d for d in s.prog.types if isinstance(d, StructDecl) and d.invariants]
+        if not decls:
+            return
+        resolver = None
+        if s.prog.explicit:
+            from modules import _Resolver
+            resolver = _Resolver(s.prog)
+        for d in decls:
+            if d.tparams:
+                terr(d, "invariant_decl", "struct %s with type parameters cannot have an invariant" % d.name)
+            for clause in d.invariants:
+                at = _At(clause.invariant_line, clause.invariant_col, clause.file)
+                if any(isinstance(e, (Var, Move)) and e.name == "result"
+                       or isinstance(e, Call) and e.name == "old" for e in _walk(clause)):
+                    terr(_At(clause.line, clause.col, clause.file), "invariant_decl",
+                         "invariant of struct %s cannot use old() or result" % d.name)
+            if resolver is not None:
+                resolver.m = resolver.by_path[(d.pkg, d.mod_path)]
+                resolver.own(d, decl_owner)
+                resolved = []
+                for clause in d.invariants:
+                    expr = resolver.rexpr(clause)
+                    expr.invariant_line = clause.invariant_line
+                    expr.invariant_col = clause.invariant_col
+                    resolved.append(expr)
+                d.invariants = resolved
+        if resolver is not None:
+            # The digest walk includes instance attributes and records resolved cross-module references.
+            resolver.module_edges()
+        s.ckind = "requires"
+        s.field_move = None
+        for d in decls:
+            s.f = d
+            s.enter(decl_owner(d.name), d.tparams)
+            scope = {fd.name: (fd.type, False, "param") for fd in d.fields}
+            for clause in d.invariants:
+                at = _At(clause.invariant_line, clause.invariant_col, clause.file)
+                saved, s.collection_records = s.collection_records, set()
+                try:
+                    s.norm_expr(clause)
+                finally:
+                    s.collection_records = saved
+                check_try_position(clause, clause)
+                if s.expr(clause, scope, contract=True) != BOOL:
+                    terr(_At(clause.line, clause.col, clause.file), "invariant_decl",
+                         "invariant of struct %s must be bool" % d.name)
+                clause.invariant_line, clause.invariant_col = at.line, at.col
+        # Written contracts must build their own templates and record backend requirements.
+        s.x_memo.clear()
+        s.field_paths.clear()
+        s.ckind = "code"
+
+    def add_struct_contracts(s, f):
+        requires, ensures = [], []
+        for p in f.params:
+            d = s.invariant_struct(p.type)
+            if d is None:
+                continue
+            if p.name == "result":
+                terr(f, "invariant_decl", "parameter result of type %s cannot be used: %s has an invariant" %
+                     (d.name, d.name))
+            for clause in d.invariants:
+                tag = (d.name, clause.invariant_line, p.name)
+                r = invariant_clause(clause, p.type, p.name, tag)
+                requires.append(r)
+                if p.mode == "inout":
+                    ensures.append(copy.deepcopy(r))
+        d = s.invariant_struct(f.ret)
+        if d is not None:
+            for clause in d.invariants:
+                tag = (d.name, clause.invariant_line, "result")
+                ensures.append(invariant_clause(clause, f.ret, "result", tag))
+        if requires:
+            f.inv_requires = requires
+        if ensures:
+            f.inv_ensures = ensures
+
     def check_entries(s):
         """Host entry signatures admit plain values, array/str parameters and scalar Vec results."""
         def new_collection(ty):
@@ -1168,6 +1286,11 @@ class Checker:
             rust_state = bool(f.params and f.params[0].mode == "inout" and f.params[0].type.name in rust_records)
             positions = []
             for i, p in enumerate(f.params):
+                d = s.invariant_struct(p.type)
+                if d is not None:
+                    terr(f, "entry_signature",
+                         "host entry %s cannot take parameter %s of struct %s with an invariant" %
+                         (getattr(f, "disp", f.name), p.name, d.name))
                 if p.mode == "inout" and p.type in (I64, BOOL):
                     terr(f, "entry_signature", "host entry %s cannot take scalar inout parameter %s" % (f.name, p.name))
                 if p.mode == "inout" and is_nongeneric_struct(p.type, s.decls):
@@ -1245,6 +1368,7 @@ class Checker:
         s.try_index = 0
         s.enter(fn_owner(f.name), f.tparams)
         s.calls[f.name] = set()
+        s.add_struct_contracts(f)
         if f.foreign is not None:
             check_foreign_decl(f, s.externs)
             if f.decreases is not None:     # G9 A0: foreign termination is trusted
@@ -2286,6 +2410,8 @@ class Checker:
                 return types[0] if types else I64
             return s.f.ret if isinstance(e, Var) and s.f.ret != UNIT else I64
         if isinstance(e, Spent):
+            if isinstance(s.f, StructDecl):
+                terr(e, "spent_context", "spent is only allowed in invariant/assert of a cost function")
             if s.f.cost is None or s.ckind not in ("invariant", "assert"):
                 s.s5_errors.append((s.f, e, "spent_context", "spent is only allowed in invariant/assert of a cost function"))
             return I64
@@ -2957,6 +3083,8 @@ class Checker:
             terr(e, "call_in_contract", X_MSG % (n, "it is recursive"), X_FIX)
         s.x_busy.add(n)
         scope = {p.name: (p.type, False, "param") for p in f.params}
+        if isinstance(s.f, StructDecl):
+            raw = copy.deepcopy(raw)
         t = s.x_walk(e, f, raw, 0, scope, {})
         s.x_busy.discard(n)
         s.x_memo[n] = t
@@ -3209,7 +3337,7 @@ class Checker:
             terr(e, "effect_in_contract", "function %s has effects; not allowed in contracts" % n)
         if c:
             # Contract expansion can erase the call before backend validation.
-            if getattr(s.prog, "contract_vec_slice", None) is None and any(
+            if isinstance(s.f, Function) and getattr(s.prog, "contract_vec_slice", None) is None and any(
                     is_vec_slice_arg(arg.ty, substitute(p.type, m)) for arg, p in zip(a, f.params)):
                 s.prog.contract_vec_slice = (e.line, e.col, getattr(s.f, "file", None))
             if s.ckind == "cost":
@@ -3475,7 +3603,7 @@ def opaque_inline(prog):
     for f in prog.functions:
         seen.add(id(f))
         for k, v in list(vars(f).items()):
-            if k in ("x_auto", "x_raw"):
+            if k in ("x_auto", "x_raw", "inv_requires", "inv_ensures"):
                 continue
             if isinstance(v, Expr):
                 setattr(f, k, walk_e(v))
