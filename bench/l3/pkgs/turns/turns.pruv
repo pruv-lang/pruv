@@ -399,7 +399,8 @@ pub fn finish(st: [i64], sl: [i64], buf: [u8], base: i64) -> Collected ! alloc
 // stamp [9600] slot s: created stamp at 48*s, completed stamp at 48*s+24
 // end   bytes of data in use. Growth: when a write does not fit, reserve packs the records finish can still
 //       publish into the front, in place when that leaves half the buffer free, else into a new buffer of twice
-//       the bytes needed, so data stays within twice the live text and each byte is copied O(1) times on average.
+//       the bytes needed; past 1 MiB the new buffer is 4259840 bytes (twice the largest live text plus need), after
+//       which every grow is in place (DB48). Each byte is copied O(1) times on average.
 // Record offsets are not tied to sl by a proof; finish2 and answer2 check them at run time (D-DB11-1).
 pub struct Store { data: [u8], off: [i64], stamp: [u8], end: i64 }
 
@@ -487,8 +488,14 @@ fn reserve(inout bk: Store, sl: [i64], top: i64, cnt: i64, extra: i64, need: i64
     bk.end = pos;
     return;
   }
+  // DB48 (G-DB45-2): past 1 MiB, jump to the bound. live <= 2097152 and need <= 32768, so tgt <= 2129920 and a
+  // buffer of 2 * 2129920 bytes always takes the in-place path above from then on. Plain doubling went on through
+  // 1.1, 2.2 and 4.2 MB and, once live sat near 2 MiB, made a fresh 4.2 MB buffer on most grows; every freed block
+  // stayed resident (about 1.1 B of RSS per input byte on the grok ord rows). Small windows keep doubling, so they
+  // never map the large buffer.
   let mut cap: i64 = 2 * tgt;
   if cap < 65536 { cap = 65536; }
+  if cap > 1048576 { cap = 4259840; }
   let mut nb: [u8] = alloc(cap, 0);
   while i > 0
     invariant 0 <= i && i <= m && m <= cnt && cnt <= 200 && cnt <= top && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600
