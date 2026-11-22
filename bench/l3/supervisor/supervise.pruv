@@ -190,6 +190,10 @@ pub fn supervise(shell: str, argv: str, cwd: str, out: str, file_limit: i64, tai
 
   // tag: 0 running, 1 exited, 2 stop, 3 disconnect. After the shell's end event, pump without waiting until
   // both streams have published EOF.
+  // One reused buffer per stream (DB41): reads copy straight into them, and `take` gets a view of the bytes read.
+  let mut b1: [u8] = alloc(65536, 0);
+  let mut b2: [u8] = alloc(65536, 0);
+  let mut bs: [u8] = alloc(4096, 0);
   let mut tag: i64 = 0;
   let mut broken: bool = false;
   let mut draining: bool = false;
@@ -221,9 +225,10 @@ pub fn supervise(shell: str, argv: str, cwd: str, out: str, file_limit: i64, tai
           } else if sock_state(l, sslot) != 1 {
             tag = 3;
           } else {
-            l = ev_read(move l, sslot, 4096);
+            let mut ns: i64 = 0;
+            l = ev_read_into(move l, sslot, inout bs, inout ns);
             if ev_ok(l) {
-              if ev_size(l) > 0 {
+              if ns > 0 {
                 tag = 2;
               } else if sock_state(l, sslot) != 1 || ek == 3 {
                 tag = 3;
@@ -240,17 +245,17 @@ pub fn supervise(shell: str, argv: str, cwd: str, out: str, file_limit: i64, tai
     }
     if pump && !broken && tag == 0 && ev_ok(l) {
       if proc_state(l, pslot) == 1 {
-        l = ev_proc_read(move l, pslot, 1, 65536);
+        let mut n1: i64 = 0;
+        l = ev_proc_read_into(move l, pslot, 1, inout b1, inout n1);
         if ev_ok(l) {
-          let d1: [u8] = ev_bytes(l);
-          f = take(move f, inout cw, inout buf, inout ts, 1, d1);
+          f = take(move f, inout cw, inout buf, inout ts, 1, subview(b1, 0, n1));
         }
       }
       if ev_ok(l) && proc_state(l, pslot) == 1 {
-        l = ev_proc_read(move l, pslot, 2, 65536);
+        let mut n2: i64 = 0;
+        l = ev_proc_read_into(move l, pslot, 2, inout b2, inout n2);
         if ev_ok(l) {
-          let d2: [u8] = ev_bytes(l);
-          f = take(move f, inout cw, inout buf, inout ts, 2, d2);
+          f = take(move f, inout cw, inout buf, inout ts, 2, subview(b2, 0, n2));
         }
       }
       if ev_ok(l) {
@@ -308,18 +313,18 @@ pub fn supervise(shell: str, argv: str, cwd: str, out: str, file_limit: i64, tai
     {
       n = n + 1;
       let mut got: i64 = 0;
-      l = ev_proc_read(move l, pslot, 1, 65536);
+      let mut m1: i64 = 0;
+      l = ev_proc_read_into(move l, pslot, 1, inout b1, inout m1);
       if ev_ok(l) {
-        got = ev_size(l);
-        let e1: [u8] = ev_bytes(l);
-        f = take(move f, inout cw, inout buf, inout ts, 1, e1);
+        got = m1;
+        f = take(move f, inout cw, inout buf, inout ts, 1, subview(b1, 0, m1));
       }
       if ev_ok(l) && proc_state(l, pslot) == 1 {
-        l = ev_proc_read(move l, pslot, 2, 65536);
+        let mut m2: i64 = 0;
+        l = ev_proc_read_into(move l, pslot, 2, inout b2, inout m2);
         if ev_ok(l) {
-          got = got + ev_size(l);
-          let e2: [u8] = ev_bytes(l);
-          f = take(move f, inout cw, inout buf, inout ts, 2, e2);
+          got = got + m2;
+          f = take(move f, inout cw, inout buf, inout ts, 2, subview(b2, 0, m2));
         }
       }
       if got == 0 { more = false; }
