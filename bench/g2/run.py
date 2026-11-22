@@ -139,10 +139,11 @@ def build_llvm_objects(llvm_path, stem, workdir):
     return ["-C", "link-arg=" + gen_o, "-C", "link-arg=" + rt_o], None
 
 
-def compile_pruv(compiler, src, workdir, backend="rust", flags=()):
+def compile_pruv(compiler, src, workdir, backend="rust", flags=(), wall=600):
     """Compile only. compiler: "py" | "rs". Returns
     {"rc", "errors" (JSON error dicts), "rs" (path), "ll" (path or None), "stderr" (last 500 chars)}.
-    rc == -1 on timeout (600 s); rc == -2 if the compiler could not be started."""
+    rc == -1 on timeout (wall seconds, 600 by default; a caller with a large verified program may raise it);
+    rc == -2 if the compiler could not be started."""
     stem = os.path.splitext(os.path.basename(src))[0]
     rs = os.path.join(workdir, stem + "_gen.rs")
     ll = None
@@ -153,7 +154,7 @@ def compile_pruv(compiler, src, workdir, backend="rust", flags=()):
     else:
         cmd = base + [src, "-o", rs] + list(flags)
     try:
-        c = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace", timeout=600)
+        c = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace", timeout=wall)
     except subprocess.TimeoutExpired:
         return {"rc": -1, "errors": [], "rs": rs, "ll": ll, "stderr": "timeout"}
     except OSError as e:

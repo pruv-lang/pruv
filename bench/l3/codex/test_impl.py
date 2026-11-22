@@ -4,6 +4,7 @@ against the scripted fake app-server, comparing each pair with the checked-in ex
 
     PATH="$HOME/.cargo/bin:$PATH" python3 bench/l3/codex/test_impl.py [--verify-only] [--reuse-verified] [--only SUBSTRING]
 """
+import os
 import sys
 sys.dont_write_bytecode = True
 import importlib.util
@@ -36,7 +37,10 @@ def build_pair(g, run, compiler, backend, flags, host, reuse=False):
         built = {'rc': 0, 'rs': str(out / 'root_gen.rs'), 'll': str(out / 'root_gen.ll') if backend == 'llvm' else None}
         assert Path(built['rs']).is_file(), 'Run once without --reuse-verified first'
     else:
-        built = g.compile_pruv(compiler, str(HERE / 'root.pruv'), str(out), backend, flags)
+        # the codex py verify is load-bound (526-800 s at load 12-110, G-DB37-1); the proof is unchanged, only the wall
+        # limit is raised (CODEX_COMPILE_WALL seconds, default 3600)
+        built = g.compile_pruv(compiler, str(HERE / 'root.pruv'), str(out), backend, flags,
+                               wall=int(os.environ.get('CODEX_COMPILE_WALL', '3600')))
     if built['rc']:
         raise RuntimeError(str(built))
     print(f'{compiler}/{backend}: ' + ('reusing verified Pruv emission' if reuse else 'verified'), flush=True)
