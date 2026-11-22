@@ -6,7 +6,10 @@ struct B { a: A, invariant q(a) >= 0 }
 fn make() -> B {
   return B { a: A { n: 0 } };
 }
-fn main() -> i64 {
+fn run() -> i64 {
   let b: B = make();
   return 0;
+}
+pub fn lg17_entry() -> () {
+  return;
 }

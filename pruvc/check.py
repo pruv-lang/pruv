@@ -1237,6 +1237,24 @@ class Checker:
         s.x_memo.clear()
         s.field_paths.clear()
         s.ckind = "code"
+        for f in s.prog.functions:
+            for p in f.params:
+                d = s.invariant_struct(p.type)
+                if d is not None and p.name == "result":
+                    terr(f, "invariant_decl", "parameter result of type %s cannot be used: %s has an invariant" %
+                         (d.name, d.name))
+        if not s.prog.explicit:
+            # LG17 (G-LG16-2): legacy mode has no host-entry check and every ordinary function is callable
+            # from the host, so none may take a struct with an invariant (its callers are not proved).
+            for f in s.prog.functions:
+                if f.pred or f.foreign is not None:
+                    continue
+                for p in f.params:
+                    d = s.invariant_struct(p.type)
+                    if d is not None:
+                        terr(f, "entry_signature",
+                             "host entry %s cannot take parameter %s of struct %s with an invariant" %
+                             (getattr(f, "disp", f.name), p.name, d.name))
 
     def add_struct_contracts(s, f):
         requires, ensures = [], []
@@ -2187,8 +2205,8 @@ class Checker:
 
     def array_source(s, st, value, scope, allow_local_var=False):
         """Arrays in owning positions need a fresh result or an explicit move."""
-        if isinstance(value, (Call, StrLit)) or (isinstance(value, Move) and is_array(value.ty)):
-            return
+        if isinstance(value, (Call, StrLit)) or (isinstance(value, Move) and (is_array(value.ty) or value.ty == STR)):
+            return   # LG17 (G-DB28-2): `move t` of an owned str binding also hands over its bytes
         if isinstance(value, Var) and scope.get(value.name, (None, None, ""))[2] == "inout":   # G5 A0
             terr(st, "array_alias", "inout parameter %s is a borrowed array: it cannot be stored or returned" % value.name,
                  "write copy(%s) to make an independent array (needs `! alloc`)" % value.name)
@@ -2510,7 +2528,7 @@ class Checker:
                 terr(e, "foreign_move", "move only where ownership is consumed",
                      "contracts read parameters and locals directly; remove `move`")
             ty, _, kind = s.lookup(e, e.name, scope)
-            if (is_array(ty) and kind not in ("local", "take")
+            if ((is_array(ty) or ty == STR) and kind not in ("local", "take")
                     and not (kind == "inout" and e.name == s.restore_array)
                     and e.name not in s.match_movable):    # G-DB16-1: array binder of a consuming match
                 if kind in ("param", "inout"):

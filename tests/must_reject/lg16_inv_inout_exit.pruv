@@ -7,3 +7,6 @@ struct R {
 fn bad(inout r: R) -> () {
   r.lo = r.hi + 1;
 }
+pub fn lg17_entry() -> () {
+  return;
+}

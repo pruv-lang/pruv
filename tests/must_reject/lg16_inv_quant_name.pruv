@@ -5,3 +5,6 @@ fn use_s(p: S) -> i64 {
 fn bad() -> i64 {
   return use_s(S { n: -1 });
 }
+pub fn lg17_entry() -> () {
+  return;
+}

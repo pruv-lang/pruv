@@ -1012,7 +1012,7 @@ impl<'a> Ownership<'a> {
             Stmt::Let(l) => {
                 self.consume(&l.value, &mut st, "let")?;
                 self.consumed_field = None;
-                if key_is_array(&l.ty) || crate::gtype::key_is_collection_owner(&l.ty) || self.aggregates.contains(&l.ty)
+                if key_is_array(&l.ty) || l.ty == "str" || crate::gtype::key_is_collection_owner(&l.ty) || self.aggregates.contains(&l.ty)
                     || self.enums.contains(&l.ty)
                 {
                     st.set(&l.name, V::Live);
@@ -1178,7 +1178,7 @@ impl<'a> Ownership<'a> {
     fn array_reads(&self, e: &Expr, st: &St) -> Res<()> {
         if let Expr::Var(v) = e {
             // LG8: a record or enum root consumed by a field or binder move is checked too
-            if v.ty.as_deref().is_some_and(key_is_array)
+            if v.ty.as_deref().is_some_and(|t| key_is_array(t) || t == "str")
                 || (st.contains(&v.name)
                     && v.ty.as_ref().is_some_and(|t| self.enums.contains(t) || GType::from_key(t).has_string_error()))
             {
@@ -1348,7 +1348,7 @@ impl<'a> Ownership<'a> {
             return Ok(());
         }
         let (line, col) = (e.line, e.col);
-        if !is_coll(&e.ty) && !e.ty.as_deref().is_some_and(key_is_array)
+        if !is_coll(&e.ty) && !e.ty.as_deref().is_some_and(key_is_array) && e.ty.as_deref() != Some("str")
             && !(e.ty.as_ref().is_some_and(|t| self.aggregates.contains(t)) && st.contains(&e.name)) {
             return Err(err(
                 line,

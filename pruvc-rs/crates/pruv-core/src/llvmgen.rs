@@ -3836,7 +3836,7 @@ impl<'a> FnGen<'a> {
                 }
                 let sl = bound.val().clone();
                 let mut v = self.load(&sl)?;
-                if x.ty.as_deref().is_some_and(is_array_name) {
+                if x.ty.as_deref().is_some_and(|t| is_array_name(t) || t == "str") {
                     self.empty_array_slot(&sl)?;
                 } else if sl.k == Kind::Agg && self.is_ext_opt(&sl.ty) {
                     // LG9 (G-LG8-5): an extended record owns every buffer field; the whole slot becomes zero (its drop

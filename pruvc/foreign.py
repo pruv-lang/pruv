@@ -429,7 +429,7 @@ class _Ownership:
             s.consumed_field = _consumed_field(v, nxt)
             s.consume(x.value, st, "let")
             s.consumed_field = None
-            if (is_array(x.type) or is_owned_value(x.type) or is_nongeneric_struct(x.type, s.types)
+            if (is_array(x.type) or x.type == STR or is_owned_value(x.type) or is_nongeneric_struct(x.type, s.types)
                     or s.enum_value(x.type)):     # G-DB16-1: an enum local is tracked so a binder move can consume it
                 st[x.name] = "live"
                 declared.append(x.name)
@@ -551,7 +551,7 @@ class _Ownership:
         """Check array reads in proof clauses without applying executable call rules."""
         if e is None:
             return
-        if isinstance(e, Var) and (is_array(e.ty) or (e.name in st and e.ty is not None and (
+        if isinstance(e, Var) and (is_array(e.ty) or e.ty == STR or (e.name in st and e.ty is not None and (
                 is_owned_result(e.ty) or is_nongeneric_struct(e.ty, s.types) or s.enum_value(e.ty)))):
             s.use(e, st)     # LG8: a record or enum root consumed by a field or binder move
         for k in expr_kids(e):
@@ -658,7 +658,7 @@ class _Ownership:
             if e is s.consumed_field:    # G-R09-4: no restore follows, so the record is wholly moved
                 st[e.name] = "dead"
             return       # Otherwise the type checker enforces restoration. The root stays live.
-        if not (is_array(e.ty) or is_owned_value(e.ty) or (s.aggregate(e.ty) and e.name in st)):
+        if not (is_array(e.ty) or e.ty == STR or is_owned_value(e.ty) or (s.aggregate(e.ty) and e.name in st)):
             _err(e, "foreign_move", "move of a non-collection value",
                  "move applies to Vec, HashMap and String bindings only; use the value directly")
         n = e.name
@@ -729,7 +729,7 @@ class _Ownership:
             for k in expr_kids(e):
                 if isinstance(e, (StructLit, EnumCtor)) and (
                         is_collection(k.ty) or isinstance(k, Move) and (
-                            is_array(k.ty) or is_nongeneric_struct(k.ty, s.types))):   # D85: owned aggregate field init
+                            is_array(k.ty) or k.ty == STR or is_nongeneric_struct(k.ty, s.types))):   # D85: owned aggregate field init
                     s.consume(k, st, "let")
                 else:
                     s.expr(k, st)

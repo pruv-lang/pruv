@@ -1,0 +1,46 @@
+// LG17 (G-DB28-2): `text = move t` hands the bytes of a str local to an outer `let mut` str, in branches and in a
+// loop body (a fresh t each iteration), and into a struct field, with no copy
+struct Boxed { text: str }
+
+fn pick(k: i64) -> str ! alloc
+  requires 0 <= k && k <= 3
+{
+  let mut text: str = "none";
+  if k == 1 {
+    let t: str = copy("one");
+    text = move t;
+  } else if k == 2 {
+    let t: str = copy("second");
+    text = move t;
+  } else if k == 3 {
+    let t: str = copy("box");
+    let bx: Boxed = Boxed { text: move t };
+    text = copy(bx.text);
+  }
+  return move text;
+}
+
+fn last(k: i64) -> str ! alloc
+  requires 0 <= k && k <= 3
+{
+  let mut text: str = "";
+  let mut i: i64 = 0;
+  while i < k
+    invariant 0 <= i && i <= k
+    decreases k - i
+  {
+    let t: str = pick(i);
+    text = move t;
+    i = i + 1;
+  }
+  let u: str = move text;
+  return move u;
+}
+
+fn run(k: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 3
+{
+  let a: str = pick(k);
+  let b: str = last(k);
+  return len(a) * 100 + len(b);
+}

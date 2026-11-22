@@ -30,7 +30,7 @@ fn shift(inout r: Range, d: i64) -> ()
   r.hi = r.hi + d;
 }
 
-fn run(k: i64) -> i64
+pub fn run(k: i64) -> i64
   requires 0 <= k && k <= 3
 {
   let mut r: Range = mk(k * 100);

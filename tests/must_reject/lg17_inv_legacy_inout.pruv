@@ -1,0 +1,13 @@
+// LG17 (G-LG16-2): a legacy-mode function cannot take an invariant struct as inout either
+struct R {
+  lo: i64, hi: i64,
+  invariant 0 <= lo && lo <= hi
+}
+
+fn mk() -> R {
+  return R { lo: 0, hi: 1 };
+}
+
+fn widen(inout r: R) -> () {
+  if r.hi < 1000 { r.hi = r.hi + 1; }
+}

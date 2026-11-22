@@ -4226,7 +4226,11 @@ fn pruv_ev_read_queue(mut l: pruv_Loop, slot: i64, stream: i64, max: usize, proc
             dst[first..n].copy_from_slice(&back[..n - first]);
             drop(bytes.drain(..n));
         } else {
-            l.buf.extend(bytes.drain(..n));
+            let (front, back) = bytes.as_slices();
+            let first = n.min(front.len());
+            l.buf.extend_from_slice(&front[..first]);
+            l.buf.extend_from_slice(&back[..n - first]);
+            drop(bytes.drain(..n));
         }
         sh.cv.notify_all();
     } else if bytes.is_empty() {
