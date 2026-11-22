@@ -351,8 +351,15 @@ match e {                                  // statement; every variant exactly o
   where `T` has an effective invariant, gets each clause of `T` as `forall $inv_e in 0..len(p): C[p[$inv_e]]`
   (label `p[]`, `p[].f`): assumed at entry, proved at call arguments, for the result and for an inout `Vec` at exit,
   assumed after the call. A read-only `Vec` parameter cannot be written, so a loop keeps the entry fact; an inout
-  `Vec` the body changes (`vec_at_mut`, `vec_clear`, ...) is proved at exit, and a loop that changes it, like a local
-  `Vec` built in a loop, needs a user loop invariant stating the element clause (G-LG27-1). Elements of arrays (which cannot hold
+  `Vec` the body changes (`vec_at_mut`, `vec_clear`, ...) is proved at exit, and a loop that changes it needs a user
+  loop invariant stating the element clause (G-LG27-1). LG31: a `while` loop whose body only pushes onto an in-scope
+  `Vec<T>` `w` (some statement `w = vec_push::<T>(move w, x)` with `x` not mentioning `w`, and every other occurrence
+  of `w` a plain read: not an assignment root, `move` operand, `inout` argument, `vec_pop` argument or rebinding)
+  gets each element clause of `w` as a loop frame clause, an extra loop invariant proved at entry and preservation and
+  assumed after havoc. A frame clause whose obligation fails is dropped without an error and the function is
+  verified again without it; a run with frame clauses is kept only if every clause is proved and nothing is
+  reported, else its trace is rewound and the function is judged by the old path without frames, so a frame
+  never turns an accepted program into a rejected one and a rejected function reports the old errors. Elements of arrays (which cannot hold
   structs), of `Vec` values inside fields or payloads, and `HashMap` values are not assumed (G-LG27-2).
   Host callers never pass or receive such a `Vec` (LG28, G-LG27-6), so the entry fact rests on proved Pruv callers.
   In explicit mode a host entry (root `pub` non-generic function, section 6f) with a `Vec<S>` parameter

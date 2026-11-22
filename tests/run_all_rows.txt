@@ -1712,6 +1712,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--infer"], "group": "runtime", "mode": null, "sample": "tests/runtime/g2a_rt_bool_infer_sibling.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--infer"], "group": "runtime", "mode": null, "sample": "tests/runtime/g2a_rt_infer_havoc.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--infer"], "group": "runtime", "mode": null, "sample": "tests/runtime/g2b_rt_infer.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--infer"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg31_push_frame.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--contract-budget", "100"], "group": "runtime", "mode": null, "sample": "tests/runtime/g9_r27_ctor_copy_budget.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--contract-budget", "1000"], "group": "runtime", "mode": null, "sample": "tests/runtime/g3_r22_contract_budget.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--contract-budget", "1000"], "group": "runtime", "mode": null, "sample": "tests/runtime/g9_r21_contract_size_pass.pruv"}
@@ -2347,6 +2348,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg2_rt_words_le.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg30_opq_guard.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg30_utf8_after_ascii.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg31_push_frame.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg3_rt_inout_struct.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg3_rt_take_field.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg3_rt_vec_reserve.pruv"}
@@ -2699,6 +2701,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg27_string_to_str_w.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg30_opq_guard.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg30_utf8_after_ascii.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/lg31_push_frame.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/r04.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/refine_array_edges.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/refine_edges.pruv"}
@@ -3086,6 +3089,7 @@
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg2_rt_words_le.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg30_opq_guard.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg30_utf8_after_ascii.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg31_push_frame.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg3_rt_inout_struct.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg3_rt_take_field.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lg3_rt_vec_reserve.pruv"}
@@ -4935,6 +4939,7 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg2_utf8_unguarded.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg30_after_lead.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg30_outside_span.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg31_frame_clear.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg3_host_inout_struct/root.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg3_host_take_array/root.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lg4_agg_frame_changed.pruv"}

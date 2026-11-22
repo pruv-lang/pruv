@@ -283,6 +283,10 @@ impl<'a> FnVerifier<'a> {
             if p.abort.is_some() || cand.is_none() || cand.map_or(false, |c| p.failed.contains_key(c)) {
                 return;
             }
+            // LG31: a loop frame clause is never searched (no trace entry, no query); it is only assumed
+            if cand.map_or(false, |c| c.starts_with('F')) {
+                return;
+            }
         }
         // The key uses the plain per-file line (Python's key has no file).
         let key = (crate::symbolic::pos_line(node), node.1, code.to_string(), key_extra.map(|s| s.to_string()));
@@ -330,6 +334,16 @@ impl<'a> FnVerifier<'a> {
                     return;
                 }
             }
+        }
+        // LG31: a failing loop frame clause obligation reports no error: remember the candidate (first failure wins; the
+        // status is that of the last attempt, as the trace records it), and leave `seen` untouched.
+        if let Some(c) = cand.filter(|c| c.starts_with('F')) {
+            if !self.frame_failed.iter().any(|(id, _)| id == c) {
+                let reason = if r == Sat::Unknown { Some(sol.reason_unknown()) } else { None };
+                let status = query_status(r, reason.as_deref()).to_string();
+                self.frame_failed.push((c.to_string(), (code.to_string(), status)));
+            }
+            return;
         }
         self.seen.insert(key);
         let fix = fix_for(code).to_string();

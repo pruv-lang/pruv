@@ -1330,7 +1330,7 @@ FIX = {
 
 
 class FnVerifier:
-    def __init__(s, prog, f, errors, model=None, rec=None, qcfg=None, extra=None, probe=None, cache=None):
+    def __init__(s, prog, f, errors, model=None, rec=None, qcfg=None, extra=None, probe=None, cache=None, frame=None):
         s.rec = rec
         s.cache = cache     # G4b-3: ProofCache or None
         s._kmemo = {}       # G4b-3: id(assertion object) -> (object, key text piece), proof_cache.key_text
@@ -1338,8 +1338,10 @@ class FnVerifier:
         # STAGE1 B2: extra = {loop number: [(cand id, expr, text)]} (inferred invariants); probe = exploration
         # state (only candidate obligations are queried, nothing is reported). Both empty = the old path.
         s.extra = extra or {}
+        s.frame = frame or {}
+        s.frame_failed = {}
         s.probe = probe
-        s.loop_no = {id(w): n for n, (w, _, _) in enumerate(walk_loops(f.body))} if s.extra else {}
+        s.loop_no = {id(w): n for n, (w, _, _) in enumerate(walk_loops(f.body))} if s.extra or s.frame else {}
         s.funcs = {g.name: g for g in prog.functions}
         s.explicit = bool(prog.explicit)    # G4 A1
         s.model = model if model is not None else Model(prog)
@@ -1481,7 +1483,8 @@ class FnVerifier:
     # ---------- obligations ----------
     def prove(s, st, g, ob, node, code, what, key_extra=None, cand=None):
         probing = s.probe is not None
-        if probing and (cand is None or cand in s.probe.failed):
+        frame_clause = cand is not None and cand.startswith("F")
+        if probing and (cand is None or frame_clause or cand in s.probe.failed):
             return      # exploration looks only at candidate obligations that have not failed this round
         key = (node.line, node.col, code) if key_extra is None else (node.line, node.col, code, key_extra)
         skipped = False if probing else key in s.seen
@@ -1566,6 +1569,10 @@ class FnVerifier:
                 sol, r = run(2)
                 if r == z3.unsat:
                     return
+        if frame_clause:
+            reason = sol.reason_unknown() if r == z3.unknown else None
+            s.frame_failed.setdefault(cand, (code, query_status(r, reason) or "error"))
+            return
         s.seen.add(key)
         cex = None
         if r == z3.sat or relaxed is not None:
@@ -3552,15 +3559,19 @@ class FnVerifier:
         raise Exception("exec: %r" % stmt)
 
     def loop(s, w, st):
-        # (cand id | None, expr, text): the written invariants (required refinement first, then user), then the
-        # STAGE1 B2 inferred candidates of this loop in their sorted order
+        # (cand id | None, expr, text): written invariants, then frame clauses, then inferred candidates.
         invs = [(None, inv, None) for inv in w.invariants]
-        if s.extra and isinstance(w, While):
-            invs = invs + list(s.extra.get(s.loop_no[id(w)], []))
+        if s.loop_no and isinstance(w, While):
+            n = s.loop_no[id(w)]
+            invs.extend(s.frame.get(n, ()))
+            invs.extend(s.extra.get(n, ()))
         prev = []   # invariants run in order: an earlier one (proven here) may justify a later one's lookups
         for cid, inv, text in invs:
             if cid is None:
                 w_dom, w_ob = "variant_field lookups in loop invariant (entry) are defined", "loop invariant on entry"
+            elif cid.startswith("F"):
+                w_dom = "partial operations in loop frame clause `%s` (entry) are defined" % text
+                w_ob = "loop frame clause `%s` on entry" % text
             else:
                 w_dom = "partial operations in inferred loop invariant `%s` (entry) are defined" % text
                 w_ob = "inferred loop invariant `%s` on entry" % text
@@ -3613,6 +3624,9 @@ class FnVerifier:
                 if cid is None:
                     w_dom, w_ob = ("variant_field lookups in loop invariant (preserved) are defined",
                                    "loop invariant preserved")
+                elif cid.startswith("F"):
+                    w_dom = "partial operations in loop frame clause `%s` (preserved) are defined" % text
+                    w_ob = "loop frame clause `%s` preserved" % text
                 else:
                     w_dom = "partial operations in inferred loop invariant `%s` (preserved) are defined" % text
                     w_ob = "inferred loop invariant `%s` preserved" % text
@@ -3739,7 +3753,7 @@ class FnVerifier:
 def verify_program(prog, rec=None, infer=False, report=None, cache=None, modrec=None):
     """infer=True (STAGE1 B2, --infer): per function, explore template invariant candidates (infer.py), then
     verify the whole function with the survivors as extra loop invariants. report (a list) receives one record
-    per loop (docs/STAGE1_B_INFER.md section 5). infer=False: exactly the old path.
+    per loop (docs/STAGE1_B_INFER.md section 5).
     modrec: PR1 proof_cache.ModuleRecords or None. With it (explicit-module programs only, no trace, no
     inference report) a module whose record exists is not verified again, and a module whose functions all verify
     with no error gets a record (docs/G4B_SPEC.md 7.8)."""
@@ -3752,22 +3766,47 @@ def verify_program(prog, rec=None, infer=False, report=None, cache=None, modrec=
     errors = []
     model = Model(prog)
 
-    def one(f):
+    def verify_once(f, errs, records, frame=None):
         if not infer:
-            FnVerifier(prog, f, errors, model, rec=rec, cache=cache).run()
-            return
+            v = FnVerifier(prog, f, errs, model, rec=rec, cache=cache, frame=frame)
+            v.run()
+            return v.frame_failed
         import infer as infer_mod      # lazy: infer.py imports this module
-        res = infer_mod.infer_function(prog, f, model, rec, cache)
-        before = len(errors)
+        res = infer_mod.infer_function(prog, f, model, rec, cache, frame=frame)
+        before = len(errs)
+        failed = {}
         if res.status == "timeout":
-            errors.append(PruvError(
+            errs.append(PruvError(
                 "verify", f.line, f.col, "inference_timeout",
                 "invariant inference for %s hit the time safety limit (5 s per function, 500 ms per query)" % f.name,
                 "write the loop invariants explicitly, or compile without --infer", file=f.file))
         else:
-            FnVerifier(prog, f, errors, model, rec=rec, extra=res.extra(), cache=cache).run()
-        if report is not None:
-            report.extend(res.records(len(errors) - before))
+            v = FnVerifier(prog, f, errs, model, rec=rec, extra=res.extra(), cache=cache, frame=frame)
+            v.run()
+            failed = v.frame_failed
+        if records is not None:
+            records.extend(res.records(len(errs) - before))
+        return failed
+
+    def one(f):
+        # A round with frame clauses is kept only if it proves every clause and reports no error; otherwise its trace
+        # entries are rewound, and with no failed clause (another error, an inference timeout) the old path decides.
+        frame = getattr(f, "frame_cands", None)
+        while frame:
+            mark = len(rec.obligations) if rec is not None else 0
+            errs, records = [], [] if report is not None else None
+            failed = verify_once(f, errs, records, frame)
+            if not failed and not errs:
+                if report is not None:
+                    report.extend(records)
+                return
+            if rec is not None:
+                del rec.obligations[mark:]
+            if not failed:
+                break
+            frame = {n: [c for c in cands if c[0] not in failed] for n, cands in frame.items()}
+            frame = {n: cands for n, cands in frame.items() if cands}
+        verify_once(f, errors, report)
 
     groups = _module_groups(prog) if modrec is not None and rec is None and report is None else None
     if groups is None:

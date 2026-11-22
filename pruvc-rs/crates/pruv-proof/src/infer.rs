@@ -663,6 +663,204 @@ fn scope_types(f: &ast::Function, w: &ast::While) -> TyEnv {
     }
 }
 
+// ---------------------------------------------------------------------------
+// LG31: automatic loop frame clause for a push-only local Vec
+// ---------------------------------------------------------------------------
+
+/// Every direct sub-expression of `e` (unlike `kids`: also an inout operand, a quantifier's triggers, a constructor argument).
+fn lg31_kids(e: &Expr) -> Vec<&Expr> {
+    match e {
+        Expr::Spent(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StrLit(_) | Expr::Var(_) | Expr::Move(_) => Vec::new(),
+        Expr::InoutArg(x) => vec![&*x.expr],
+        Expr::Unary(x) => vec![&*x.operand],
+        Expr::Binary(x) => vec![&*x.left, &*x.right],
+        Expr::Call(x) => x.args.iter().collect(),
+        Expr::Index(x) => vec![&*x.array, &*x.index],
+        Expr::Ctor(x) => x.arg.iter().map(|a| &**a).collect(),
+        Expr::Quant(x) => {
+            let mut v: Vec<&Expr> = vec![&*x.lo, &*x.hi, &*x.body];
+            v.extend(x.triggers.iter());
+            v
+        }
+        Expr::StructLit(x) => x.fields.iter().map(|f| &f.value).collect(),
+        Expr::EnumCtor(x) => x.args.iter().collect(),
+        Expr::FieldAccess(x) => vec![&*x.base],
+        Expr::IsVariant(x) => vec![&*x.value],
+        Expr::VariantField(x) => vec![&*x.value],
+    }
+}
+
+/// Does `e` mention the name `w` at all (a variable or a `move`)?
+fn lg31_mentions(e: &Expr, w: &str) -> bool {
+    match e {
+        Expr::Var(v) => v.name == w,
+        Expr::Move(m) => m.name == w,
+        _ => lg31_kids(e).into_iter().any(|c| lg31_mentions(c, w)),
+    }
+}
+
+/// The variable a place / operand is rooted at (through `inout`, field access, indexing and variant fields), if any.
+fn lg31_root(e: &Expr) -> Option<&str> {
+    match e {
+        Expr::Var(v) => Some(v.name.as_str()),
+        Expr::Move(m) => Some(m.name.as_str()),
+        Expr::InoutArg(x) => lg31_root(&x.expr),
+        Expr::FieldAccess(x) => lg31_root(&x.base),
+        Expr::Index(x) => lg31_root(&x.array),
+        Expr::VariantField(x) => lg31_root(&x.value),
+        _ => None,
+    }
+}
+
+/// Every occurrence of `w` in `e` is a pure read (no move, no inout operand, no `vec_pop` argument rooted at `w`).
+fn lg31_expr_ok(e: &Expr, w: &str) -> bool {
+    match e {
+        Expr::Move(m) => m.name != w,
+        Expr::InoutArg(x) => lg31_root(&x.expr) != Some(w) && lg31_expr_ok(&x.expr, w),
+        Expr::Call(c) => {
+            if c.name == "vec_pop" && c.args.iter().any(|a| lg31_root(a) == Some(w)) {
+                return false;
+            }
+            c.args.iter().all(|a| lg31_expr_ok(a, w))
+        }
+        _ => lg31_kids(e).into_iter().all(|c| lg31_expr_ok(c, w)),
+    }
+}
+
+/// `w = vec_push::<T>(move w, x)` with `x` not mentioning `w`.
+fn lg31_is_push(a: &ast::Assign, w: &str) -> bool {
+    if a.name != w || a.deref {
+        return false;
+    }
+    let Expr::Call(c) = &a.value else { return false };
+    if c.name != "vec_push" || c.args.len() != 2 {
+        return false;
+    }
+    matches!(&c.args[0], Expr::Move(m) if m.name == w && m.fields.is_empty()) && !lg31_mentions(&c.args[1], w)
+}
+
+fn lg31_stmts_ok(stmts: &[Stmt], w: &str, pushes: &mut usize) -> bool {
+    stmts.iter().all(|st| match st {
+        Stmt::Let(x) => x.name != w && lg31_expr_ok(&x.value, w),
+        Stmt::Assign(a) => {
+            if a.name == w {
+                if lg31_is_push(a, w) {
+                    *pushes += 1;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                lg31_expr_ok(&a.value, w)
+            }
+        }
+        Stmt::IndexAssign(a) => a.name != w && lg31_expr_ok(&a.index, w) && lg31_expr_ok(&a.value, w),
+        Stmt::FieldAssign(a) => a.name != w && lg31_expr_ok(&a.value, w),
+        Stmt::If(x) => {
+            lg31_expr_ok(&x.cond, w) && lg31_stmts_ok(&x.then, w, pushes) && lg31_stmts_ok(&x.els, w, pushes)
+        }
+        Stmt::While(x) => {
+            lg31_expr_ok(&x.cond, w)
+                && x.invariants.iter().all(|i| lg31_expr_ok(i, w))
+                && lg31_expr_ok(&x.decreases, w)
+                && lg31_stmts_ok(&x.body, w, pushes)
+        }
+        Stmt::ForMap(x) => {
+            x.key != w
+                && x.val != w
+                && lg31_expr_ok(&x.place, w)
+                && x.invariants.iter().all(|i| lg31_expr_ok(i, w))
+                && lg31_stmts_ok(&x.body, w, pushes)
+        }
+        Stmt::Return(x) => x.value.as_ref().map_or(true, |v| lg31_expr_ok(v, w)),
+        Stmt::Assert(x) => lg31_expr_ok(&x.cond, w),
+        Stmt::ExprStmt(x) => lg31_expr_ok(&x.expr, w),
+        Stmt::Match(m) => {
+            lg31_expr_ok(&m.scrutinee, w)
+                && m.arms.iter().all(|a| a.binders.iter().all(|b| b != w) && lg31_stmts_ok(&a.body, w, pushes))
+        }
+        Stmt::Par(p) => p.calls.iter().all(|c| lg31_expr_ok(c, w)),
+    })
+}
+
+/// LG31: names `w` with a statement `w = vec_push(..)` anywhere in `stmts` (a cheap filter before the scope walk).
+fn lg31_pushed(stmts: &[Stmt], out: &mut Vec<String>) {
+    for st in stmts {
+        match st {
+            Stmt::Assign(a) => {
+                if matches!(&a.value, Expr::Call(c) if c.name == "vec_push") && !out.contains(&a.name) {
+                    out.push(a.name.clone());
+                }
+            }
+            Stmt::If(x) => {
+                lg31_pushed(&x.then, out);
+                lg31_pushed(&x.els, out);
+            }
+            Stmt::While(x) => lg31_pushed(&x.body, out),
+            Stmt::ForMap(x) => lg31_pushed(&x.body, out),
+            Stmt::Match(m) => {
+                for a in &m.arms {
+                    lg31_pushed(&a.body, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// LG31 push-only walk: the loop body only appends to `w` (`w = vec_push::<T>(move w, x)`, at least once) and reads it otherwise.
+pub fn push_only(body: &[Stmt], w: &str) -> bool {
+    let mut pushes = 0usize;
+    lg31_stmts_ok(body, w, &mut pushes) && pushes > 0
+}
+
+/// LG31: per While loop (numbered by `walk_loops`), the automatic frame clause candidates (id `F{n}#{k}`, clause, text) of the
+/// in-scope top-level `Vec<T>` names (sorted) that reach an invariant struct and that the loop body only pushes onto. Loops
+/// without a candidate are absent (an empty table = the old path).
+pub fn frame_candidates(prog: &ast::Program, f: &ast::Function) -> Extra {
+    let mut out: Extra = HashMap::new();
+    if f.foreign.is_some() {
+        return out;
+    }
+    let decls = crate::symbolic::inv_decl_table(prog);
+    let theta = pruv_core::gtype::Mapping::new();
+    for (n, (w, _, _)) in walk_loops(&f.body).into_iter().enumerate() {
+        let mut pushed = Vec::new();
+        lg31_pushed(&w.body, &mut pushed);
+        if pushed.is_empty() {
+            continue;
+        }
+        let mut names: Vec<(String, String)> =
+            scope_types(f, w).into_iter().filter(|(nm, _)| pushed.contains(nm)).collect();
+        names.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut cands: Vec<ExtraInv> = Vec::new();
+        for (name, ty) in &names {
+            let Ok(g) = GType::try_from_key(ty) else { continue };
+            if !(g.owner.is_none() && g.name == "vec" && g.args.len() == 1) {
+                continue;
+            }
+            if !push_only(&w.body, name) {
+                continue;
+            }
+            let mut clauses = Vec::new();
+            crate::symbolic::inv_type_clauses(&decls, &theta, ty, name, false, &mut clauses);
+            for ic in clauses {
+                let text = format!(
+                    "invariant of {} (line {}) for {}",
+                    ic.sname,
+                    pruv_core::diagnostic::plain_line(ic.line),
+                    ic.who
+                );
+                cands.push((format!("F{}#{}", n, cands.len()), ic.expr, text));
+            }
+        }
+        if !cands.is_empty() {
+            out.insert(n, std::rc::Rc::new(cands));
+        }
+    }
+    out
+}
+
 /// Table of array name → element kind visible at the head of loop `w` (starting from the parameters).
 fn elem_types(f: &ast::Function, w: &ast::While) -> Vec<(String, &'static str)> {
     let mut out: Vec<(String, &'static str)> = Vec::new();
@@ -1884,6 +2082,7 @@ fn houdini_rounds(
     res: &mut InferResult,
     probe: &mut Probe,
     r: &mut u32,
+    frame: &Extra,
 ) -> R<()> {
     loop {
         let extra = res.extra();
@@ -1905,6 +2104,7 @@ fn houdini_rounds(
                 seed: Some(SEED),
             };
             fv.set_extra(extra);
+            fv.set_frame(frame.clone());
             fv.probe = Some(&mut *probe);
             let out = fv.run();
             drop(fv);
@@ -1954,6 +2154,7 @@ pub fn infer_function(
     decls: &[TypeDecl],
     seq: u32,
     rec: &mut Trace,
+    frame: &Extra,
 ) -> R<InferResult> {
     let kname = pick_bound_name(&fn_names(f));
     let ranges = elem_ranges(f);
@@ -1980,7 +2181,7 @@ pub fn infer_function(
     let deadline = Instant::now() + Duration::from_secs(MAX_SECONDS);
     let mut probe = Probe::new(MAX_QUERIES, deadline);
     let mut r: u32 = 0;
-    houdini_rounds(prog, f, decls, seq, rec, &mut res, &mut probe, &mut r)?;
+    houdini_rounds(prog, f, decls, seq, rec, &mut res, &mut probe, &mut r, frame)?;
     let mut queries = probe.queries;
 
     // 4.1 version 1 fallback: if the budget was exhausted and the initial candidates included kind 12 or above, retry with kinds 1-11 only.
@@ -1993,7 +2194,7 @@ pub fn infer_function(
             l.dropped.clear();
         }
         let mut probe2 = Probe::new(MAX_QUERIES, deadline);
-        houdini_rounds(prog, f, decls, seq, rec, &mut res, &mut probe2, &mut r)?;
+        houdini_rounds(prog, f, decls, seq, rec, &mut res, &mut probe2, &mut r, frame)?;
         queries += probe2.queries;
     }
     res.rounds = r;

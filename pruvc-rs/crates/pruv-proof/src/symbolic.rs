@@ -146,6 +146,18 @@ fn inv_what(cid: Option<&str>, text: Option<&str>, phase: &str) -> (String, Stri
             format!("variant_field lookups in loop invariant ({}) are defined", phase),
             if phase == "entry" { "loop invariant on entry".to_string() } else { "loop invariant preserved".to_string() },
         ),
+        // LG31: a loop frame clause candidate (id `F{n}#{k}`)
+        Some(c) if c.starts_with('F') => {
+            let t = text.unwrap_or("");
+            (
+                format!("partial operations in loop frame clause `{}` ({}) are defined", t, phase),
+                if phase == "entry" {
+                    format!("loop frame clause `{}` on entry", t)
+                } else {
+                    format!("loop frame clause `{}` preserved", t)
+                },
+            )
+        }
         Some(_) => {
             let t = text.unwrap_or("");
             (
@@ -912,6 +924,11 @@ pub struct FnVerifier<'a> {
     pub extra: Extra,
     /// Loop (While node address) → loop number. Filled only when `extra` is non-empty (`set_extra`).
     pub(crate) loop_no: HashMap<usize, usize>,
+    /// LG31: loop number -> automatic frame clause candidates (ids `F{n}#{k}`); separate from `extra`. Empty = the old path.
+    pub frame: Extra,
+    /// LG31: frame candidates whose obligation failed in this run, in first-failure order: (id, (code, status)).
+    /// A failing frame obligation reports no error (see `prove_core_cand`).
+    pub frame_failed: Vec<(String, (String, String))>,
     /// STAGE1 B2 search state. If Some, only candidate obligations are queried and no errors are produced.
     pub probe: Option<&'a mut Probe>,
     /// G3 A2: callee type-parameter substitution while a callee contract is re-interpreted (verify.py `theta`).
@@ -1081,6 +1098,93 @@ fn inv_rewrite(e: &mut Expr, fields: &[String], base: &str, base_ty: &str, elem_
     }
 }
 
+/// LG16/LG27: the synthesized invariant clauses of one value `who` of type key `ty` (appended to `out`). Factored out of
+/// `inv_clauses_with` (its `add`) so the LG31 loop frame clauses are built by the same code.
+pub(crate) fn inv_type_clauses(
+    inv_decls: &HashMap<String, &ast::TypeDecl>,
+    theta: &Mapping,
+    ty: &str,
+    who: &str,
+    inout: bool,
+    out: &mut Vec<InvClause>,
+) {
+    let lookup = |name: &str| inv_decls.get(name).copied();
+    let ty_g = if theta.is_empty() {
+        GType::from_key(ty)
+    } else {
+        gtype::substitute(&GType::from_key(ty), theta)
+    };
+    let base_ty = ty_g.to_key();
+    // LG27: Unwrap a Vec only at the contract root.
+    let elem = match (ty_g.owner.is_none(), ty_g.name.as_str(), ty_g.args.as_slice()) {
+        (true, "vec", [elem]) => Some(elem),
+        _ => None,
+    };
+    let elem_ty = elem.map(GType::to_key);
+    for (s, path) in pruv_core::check::effective_invariant_structs(elem.unwrap_or(&ty_g), &lookup) {
+        let fields: Vec<_> = s.fields.iter().map(|fd| fd.name.clone()).collect();
+        let mut label = who.to_string();
+        if elem.is_some() {
+            label.push_str("[]");
+        }
+        for step in &path {
+            label.push('.');
+            match step {
+                InvariantStep::Field(field, _) => label.push_str(field),
+                InvariantStep::Some(_) => label.push_str("some"),
+                InvariantStep::Ok(_) => label.push_str("ok"),
+                InvariantStep::Err(_) => label.push_str("err"),
+                InvariantStep::VariantField(_, variant, field, _) => {
+                    label.push_str(variant);
+                    label.push('.');
+                    label.push_str(field);
+                }
+            }
+        };
+        for (c, &line) in s.invariants.iter().zip(&s.invariant_lines) {
+            let mut expr = c.clone();
+            inv_rewrite(&mut expr, &fields, who, &base_ty, elem_ty.as_deref(), &path, &mut Vec::new());
+            if path.iter().any(|step| !matches!(step, InvariantStep::Field(..))) {
+                let (line, col) = (c.line(), c.col());
+                let mut guards = Vec::new();
+                inv_place(who, &base_ty, elem_ty.as_deref(), &path, line, col, Some(&mut guards));
+                for guard in guards.into_iter().rev() {
+                    let negated = Expr::Unary(ast::Unary {
+                        line, col, op: "!".into(), operand: Box::new(guard), ty: Some("bool".into()),
+                    });
+                    expr = Expr::Binary(ast::Binary {
+                        line, col, op: "||".into(), left: Box::new(negated), right: Box::new(expr),
+                        ty: Some("bool".into()),
+                    });
+                }
+            }
+            if elem.is_some() {
+                let (line, col) = (c.line(), c.col());
+                let arg = Expr::Var(ast::Var {
+                    line, col, name: who.into(), ty: Some(base_ty.clone()),
+                });
+                expr = Expr::Quant(ast::Quant {
+                    line, col, kind: "forall".into(), var: INV_ELEM.into(),
+                    lo: Box::new(Expr::IntLit(ast::IntLit {
+                        line, col, value: "0".into(), ty: Some("i64".into()),
+                    })),
+                    hi: Box::new(Expr::Call(ast::Call {
+                        line, col, name: "len".into(), args: vec![arg], ty: Some("i64".into()),
+                        targs: None, inst: None, old: None, opaque_c: false,
+                    })),
+                    body: Box::new(expr), ty: Some("bool".into()), triggers: Vec::new(),
+                });
+            }
+            out.push(InvClause { expr, sname: s.name.clone(), line, who: label.clone(), inout });
+        }
+    }
+}
+
+/// LG31: the plain declaration table of a program (struct/enum name -> declaration), as `for_function` fills `inv_decls`.
+pub(crate) fn inv_decl_table(prog: &ast::Program) -> HashMap<String, &ast::TypeDecl> {
+    prog.types.iter().map(|d| (d.name().to_string(), d)).collect()
+}
+
 type LenChanges = HashMap<(String, usize), BTreeSet<Vec<String>>>;
 
 /// Each path marks all array fields below it. The empty path marks the entire argument.
@@ -1248,6 +1352,8 @@ impl<'a> FnVerifier<'a> {
             qcfg: QueryConfig::default(),
             extra: HashMap::new(),
             loop_no: HashMap::new(),
+            frame: HashMap::new(),
+            frame_failed: Vec::new(),
             probe: None,
             theta: Mapping::new(),
             opq: RefCell::new(HashMap::new()),
@@ -1280,76 +1386,7 @@ impl<'a> FnVerifier<'a> {
     fn inv_clauses_with(&self, f: &ast::Function, ensures: bool, theta: &Mapping) -> Vec<InvClause> {
         let mut out = Vec::new();
         let add = |ty: &str, who: &str, inout: bool, out: &mut Vec<InvClause>| {
-            let lookup = |name: &str| self.inv_decls.get(name).copied();
-            let ty_g = if theta.is_empty() {
-                GType::from_key(ty)
-            } else {
-                gtype::substitute(&GType::from_key(ty), theta)
-            };
-            let base_ty = ty_g.to_key();
-            // LG27: Unwrap a Vec only at the contract root.
-            let elem = match (ty_g.owner.is_none(), ty_g.name.as_str(), ty_g.args.as_slice()) {
-                (true, "vec", [elem]) => Some(elem),
-                _ => None,
-            };
-            let elem_ty = elem.map(GType::to_key);
-            for (s, path) in pruv_core::check::effective_invariant_structs(elem.unwrap_or(&ty_g), &lookup) {
-                let fields: Vec<_> = s.fields.iter().map(|fd| fd.name.clone()).collect();
-                let mut label = who.to_string();
-                if elem.is_some() {
-                    label.push_str("[]");
-                }
-                for step in &path {
-                    label.push('.');
-                    match step {
-                        InvariantStep::Field(field, _) => label.push_str(field),
-                        InvariantStep::Some(_) => label.push_str("some"),
-                        InvariantStep::Ok(_) => label.push_str("ok"),
-                        InvariantStep::Err(_) => label.push_str("err"),
-                        InvariantStep::VariantField(_, variant, field, _) => {
-                            label.push_str(variant);
-                            label.push('.');
-                            label.push_str(field);
-                        }
-                    }
-                };
-                for (c, &line) in s.invariants.iter().zip(&s.invariant_lines) {
-                    let mut expr = c.clone();
-                    inv_rewrite(&mut expr, &fields, who, &base_ty, elem_ty.as_deref(), &path, &mut Vec::new());
-                    if path.iter().any(|step| !matches!(step, InvariantStep::Field(..))) {
-                        let (line, col) = (c.line(), c.col());
-                        let mut guards = Vec::new();
-                        inv_place(who, &base_ty, elem_ty.as_deref(), &path, line, col, Some(&mut guards));
-                        for guard in guards.into_iter().rev() {
-                            let negated = Expr::Unary(ast::Unary {
-                                line, col, op: "!".into(), operand: Box::new(guard), ty: Some("bool".into()),
-                            });
-                            expr = Expr::Binary(ast::Binary {
-                                line, col, op: "||".into(), left: Box::new(negated), right: Box::new(expr),
-                                ty: Some("bool".into()),
-                            });
-                        }
-                    }
-                    if elem.is_some() {
-                        let (line, col) = (c.line(), c.col());
-                        let arg = Expr::Var(ast::Var {
-                            line, col, name: who.into(), ty: Some(base_ty.clone()),
-                        });
-                        expr = Expr::Quant(ast::Quant {
-                            line, col, kind: "forall".into(), var: INV_ELEM.into(),
-                            lo: Box::new(Expr::IntLit(ast::IntLit {
-                                line, col, value: "0".into(), ty: Some("i64".into()),
-                            })),
-                            hi: Box::new(Expr::Call(ast::Call {
-                                line, col, name: "len".into(), args: vec![arg], ty: Some("i64".into()),
-                                targs: None, inst: None, old: None, opaque_c: false,
-                            })),
-                            body: Box::new(expr), ty: Some("bool".into()), triggers: Vec::new(),
-                        });
-                    }
-                    out.push(InvClause { expr, sname: s.name.clone(), line, who: label.clone(), inout });
-                }
-            }
+            inv_type_clauses(&self.inv_decls, theta, ty, who, inout, out);
         };
         for p in &f.params {
             if (ensures && p.mode_pos.is_none()) || (!theta.is_empty() && p.name == "result") {
@@ -1374,15 +1411,26 @@ impl<'a> FnVerifier<'a> {
 
     /// verify.py `FnVerifier(.., extra=..)`: fixes the candidates and, if non-empty, builds the loop number table.
     pub fn set_extra(&mut self, extra: Extra) {
+        self.extra = extra;
+        self.rebuild_loop_no();
+    }
+
+    /// LG31: fixes the loop frame clause candidates (loop number -> candidates; empty = none).
+    pub fn set_frame(&mut self, frame: Extra) {
+        self.frame = frame;
+        self.rebuild_loop_no();
+    }
+
+    /// The loop number table is built when `extra` or `frame` is non-empty.
+    fn rebuild_loop_no(&mut self) {
         self.loop_no.clear();
-        if !extra.is_empty() {
+        if !self.extra.is_empty() || !self.frame.is_empty() {
             if let Some(f) = self.f {
                 for (n, (w, _, _)) in walk_loops(&f.body).into_iter().enumerate() {
                     self.loop_no.insert(w as *const ast::While as usize, n);
                 }
             }
         }
-        self.extra = extra;
     }
 
     pub(crate) fn probe_aborted(&self) -> bool {
@@ -5348,15 +5396,21 @@ impl<'a> FnVerifier<'a> {
             Loop::Map(w) => (&w.invariants, &w.body),
         };
         // Append inferred candidates after the written invariants of a while loop.
-        let extra_here = match head {
-            Loop::While(w) if !self.extra.is_empty() => {
+        let (frame_here, extra_here) = match head {
+            Loop::While(w) if !self.extra.is_empty() || !self.frame.is_empty() => {
                 let n = self.loop_no.get(&(w as *const ast::While as usize))
                     .ok_or_else(|| "loop number not found".to_string())?;
-                self.extra.get(n).cloned()
+                (self.frame.get(n).cloned(), self.extra.get(n).cloned())
             }
-            _ => None,
-        }.unwrap_or_default();
+            _ => (None, None),
+        };
+        let frame_here = frame_here.unwrap_or_default();
+        let extra_here = extra_here.unwrap_or_default();
         let mut invs: Vec<InvRef<'_>> = invariants.iter().map(|i| (None, i, None)).collect();
+        // LG31: the automatic frame clauses come after the written invariants and before the inferred candidates
+        for (id, e, t) in frame_here.iter() {
+            invs.push((Some(id.as_str()), e, Some(t.as_str())));
+        }
         for (id, e, t) in extra_here.iter() {
             invs.push((Some(id.as_str()), e, Some(t.as_str())));
         }

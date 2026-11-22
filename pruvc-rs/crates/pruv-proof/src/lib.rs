@@ -105,16 +105,21 @@ pub fn verify_program_opts(
         Model::for_program(&z, &pre, &decls, prog, seq)?;
     }
     let mut errors: Vec<PruvError> = Vec::new();
-    let one = |f: &pruv_core::ast::Function,
-                   errors: &mut Vec<PruvError>,
+    // One verification of a function (plain, or inference + final verification) with the given LG31 loop frame clause
+    // candidates. Returns (errors, inference report records, failed frame candidates (id, (code, status))); nothing is
+    // appended to the caller's lists. An empty `frame` is exactly the old code.
+    let attempt = |f: &pruv_core::ast::Function,
+                   frame: &symbolic::Extra,
                    trace: &mut Trace,
-                   report: &mut Option<&mut Vec<pruv_core::pyjson::Json>>|
-     -> Result<(), String> {
+                   want_recs: bool|
+     -> Result<(Vec<PruvError>, Vec<pruv_core::pyjson::Json>, Vec<(String, (String, String))>), String> {
+        let mut errs: Vec<PruvError> = Vec::new();
+        let mut recs: Vec<pruv_core::pyjson::Json> = Vec::new();
+        let mut failed: Vec<(String, (String, String))> = Vec::new();
         if opts.infer {
-            let res = infer::infer_function(prog, f, &decls, seq, &mut *trace)?;
-            let before = errors.len();
+            let res = infer::infer_function(prog, f, &decls, seq, &mut *trace, frame)?;
             if res.status == infer::InferStatus::Timeout {
-                errors.push(PruvError {
+                errs.push(PruvError {
                     stage: "verify".to_string(),
                     line: f.line,
                     col: f.col,
@@ -132,13 +137,17 @@ pub fn verify_program_opts(
                 let model = Model::for_program(&z, &pre, &decls, prog, seq)?;
                 let mut fv = FnVerifier::for_function(&z, &pre, &model, &mut *trace, prog, f);
                 fv.set_extra(res.extra());
+                if !frame.is_empty() {
+                    fv.set_frame(frame.clone());
+                }
                 fv.run()?;
-                errors.append(&mut fv.errors);
+                errs.append(&mut fv.errors);
+                failed = std::mem::take(&mut fv.frame_failed);
             }
-            if let Some(rep) = report.as_mut() {
-                rep.extend(res.records(errors.len() - before));
+            if want_recs {
+                recs = res.records(errs.len());
             }
-            return Ok(());
+            return Ok((errs, recs, failed));
         }
         // A fresh context per function (a non-rc context never frees ASTs, so it is dropped wholesale when the function ends).
         // Counterexample model values may differ from Python (the SMT text and verdicts are the same). Suspected cause: z3py uses an rc context, so AST ids are reused
@@ -147,9 +156,58 @@ pub fn verify_program_opts(
         let pre = Prelude::new(&z);
         let model = Model::for_program(&z, &pre, &decls, prog, seq)?;
         let mut fv = FnVerifier::for_function(&z, &pre, &model, &mut *trace, prog, f);
+        if !frame.is_empty() {
+            fv.set_frame(frame.clone());
+        }
         fv.run()?;
-        errors.append(&mut fv.errors);
-        Ok(())
+        errs.append(&mut fv.errors);
+        failed = std::mem::take(&mut fv.frame_failed);
+        Ok((errs, recs, failed))
+    };
+    // LG31: the function is verified with its automatic loop frame clauses; a frame candidate whose entry/preservation
+    // obligation fails reports nothing, is removed (the others keep their ids) and the function is verified again, until
+    // no frame candidate fails. With no (more) candidates this is exactly the old path.
+    let one = |f: &pruv_core::ast::Function,
+                   errors: &mut Vec<PruvError>,
+                   trace: &mut Trace,
+                   report: &mut Option<&mut Vec<pruv_core::pyjson::Json>>|
+     -> Result<(), String> {
+        // A round with frame clauses is kept only if it proves every clause and reports no error; otherwise its trace
+        // entries are rewound, and with no failed clause (another error, an inference timeout) the old path decides.
+        let mut frame = infer::frame_candidates(prog, f);
+        loop {
+            if frame.is_empty() {
+                let (mut errs, recs, _) = attempt(f, &frame, &mut *trace, report.is_some())?;
+                errors.append(&mut errs);
+                if let Some(rep) = report.as_mut() {
+                    rep.extend(recs);
+                }
+                return Ok(());
+            }
+            let mark = trace.obligations.len();
+            let (errs, recs, failed) = attempt(f, &frame, &mut *trace, report.is_some())?;
+            if failed.is_empty() && errs.is_empty() {
+                if let Some(rep) = report.as_mut() {
+                    rep.extend(recs);
+                }
+                return Ok(());
+            }
+            trace.obligations.truncate(mark);
+            if failed.is_empty() {
+                frame = std::collections::HashMap::new();
+                continue;
+            }
+            let dead: std::collections::HashSet<&str> = failed.iter().map(|(id, _)| id.as_str()).collect();
+            let mut next: symbolic::Extra = std::collections::HashMap::new();
+            for (n, cands) in &frame {
+                let kept: Vec<symbolic::ExtraInv> =
+                    cands.iter().filter(|c| !dead.contains(c.0.as_str())).cloned().collect();
+                if !kept.is_empty() {
+                    next.insert(*n, std::rc::Rc::new(kept));
+                }
+            }
+            frame = next;
+        }
     };
     // a plan is used once (`ModulePlan.spent`, consumed above): it was built for one program
     let Some(plan) = plan.filter(|p| p.fn_module.len() == prog.functions.len()) else {

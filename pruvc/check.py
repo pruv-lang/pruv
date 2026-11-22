@@ -384,6 +384,81 @@ def _mentions(e, name):
     return any(_mentions(k, name) for k in expr_kids(e))
 
 
+def push_only(body, name):
+    """Whether the loop body writes this binding only by pushing independent elements."""
+    pushed = False
+
+    def is_root(e):
+        while isinstance(e, (FieldAccess, Index, InoutArg, VariantField)):
+            if isinstance(e, FieldAccess):
+                e = e.base
+            elif isinstance(e, Index):
+                e = e.array
+            elif isinstance(e, VariantField):
+                e = e.value
+            else:
+                e = e.expr
+        return isinstance(e, (Var, Move)) and e.name == name
+
+    def reads_only(e):
+        for part in _walk(e):
+            if isinstance(part, Move) and part.name == name:
+                return False
+            if isinstance(part, InoutArg) and is_root(part.expr):
+                return False
+            if isinstance(part, Call) and part.name == "vec_pop" and any(is_root(a) for a in part.args):
+                return False
+        return True
+
+    def walk(stmts):
+        nonlocal pushed
+        for st in stmts:
+            if isinstance(st, (Let, Assign, FieldAssign, IndexAssign)) and st.name == name:
+                call = st.value
+                if (not isinstance(st, Assign) or st.deref or not isinstance(call, Call)
+                        or call.name != "vec_push" or len(call.args) != 2):
+                    return False
+                moved, item = call.args
+                if (not isinstance(moved, Move) or moved.name != name or moved.fields
+                        or _mentions(item, name)):
+                    return False
+                pushed = True
+                continue
+            if isinstance(st, (Let, Assign, FieldAssign, Return)):
+                exprs = (st.value,)
+            elif isinstance(st, IndexAssign):
+                exprs = (st.index, st.value)
+            elif isinstance(st, Assert):
+                exprs = (st.cond,)
+            elif isinstance(st, ExprStmt):
+                exprs = (st.expr,)
+            elif isinstance(st, Par):
+                exprs = st.calls
+            elif isinstance(st, If):
+                exprs = (st.cond,)
+                if not walk(st.then) or not walk(st.els):
+                    return False
+            elif isinstance(st, While):
+                exprs = (st.cond, *st.invariants, st.decreases)
+                if not walk(st.body):
+                    return False
+            elif isinstance(st, ForMap):
+                exprs = (st.place, *st.invariants)
+                if name in (st.key, st.val) or not walk(st.body):
+                    return False
+            elif isinstance(st, Match):
+                exprs = (st.scrutinee,)
+                if any(name in a.binders or not walk(a.body) for a in st.arms):
+                    return False
+            else:
+                return False
+            if any(e is not None and not reads_only(e) for e in exprs):
+                return False
+        return True
+
+    return walk(body) and pushed
+
+
 def _field_moves(e):
     if isinstance(e, Move) and e.fields:
         yield e
@@ -1403,46 +1478,46 @@ class Checker:
                              "host entry %s cannot take parameter %s of struct %s with an invariant" %
                              (getattr(f, "disp", f.name), p.name, d.name))
 
+    def invariant_vec_elem(s, ty):
+        # LG27: element type of a top-level Vec<T> whose T reaches an invariant struct, else None
+        if ty.owner is None and ty.name == "vec" and len(ty.args) == 1 and s.reaches_invariant(ty.args[0]):
+            return ty.args[0]
+        return None
+
+    def invariant_clauses(s, ty, name):
+        """the synthesized clauses of the value `name` of type ty (LG27: Vec<T> gets one forall per T clause)"""
+        elem = s.invariant_vec_elem(ty)
+        if elem is None:
+            out = []
+            for owner, clause, path in s.effective_invariants(ty):
+                tag = (owner.name, clause.invariant_line, ".".join([name] + [x[0] for x in path]))
+                out.append(invariant_clause(clause, ty, name, tag, path))
+            return out
+        out = []
+        for owner, clause, path in s.effective_invariants(elem):
+            tag = (owner.name, clause.invariant_line, name + "[]" + "".join("." + x[0] for x in path))
+            body = invariant_clause(clause, ty, name, tag, (("[]", elem, "elem", None),) + tuple(path))
+            ln, col, file = clause.line, clause.col, getattr(clause, "file", None)
+            vec = Var(ln, col, name, ty)
+            vec.file = file
+            lo = IntLit(ln, col, 0, I64)
+            lo.file = file
+            hi = Call(ln, col, "len", [vec], I64)
+            hi.file = file
+            q = Quant(ln, col, "forall", "$inv_e", lo, hi, body, BOOL)
+            q.file = file
+            q.struct_invariant = tag
+            out.append(q)
+        return out
+
     def struct_contracts(s, f, m=None, node=None):
         """(requires, ensures) synthesized from the struct invariants of f's parameter and result types, with the
         type parameters substituted by m (LG24: instantiated generic call sites)"""
         requires, ensures = [], []
 
-        def vec_elem(ty):
-            # LG27: element type of a top-level Vec<T> whose T reaches an invariant struct, else None
-            if ty.owner is None and ty.name == "vec" and len(ty.args) == 1 and s.reaches_invariant(ty.args[0]):
-                return ty.args[0]
-            return None
-
-        def clauses(ty, name):
-            """the synthesized clauses of the value `name` of type ty (LG27: Vec<T> gets one forall per T clause)"""
-            elem = vec_elem(ty)
-            if elem is None:
-                out = []
-                for owner, clause, path in s.effective_invariants(ty):
-                    tag = (owner.name, clause.invariant_line, ".".join([name] + [x[0] for x in path]))
-                    out.append(invariant_clause(clause, ty, name, tag, path))
-                return out
-            out = []
-            for owner, clause, path in s.effective_invariants(elem):
-                tag = (owner.name, clause.invariant_line, name + "[]" + "".join("." + x[0] for x in path))
-                body = invariant_clause(clause, ty, name, tag, (("[]", elem, "elem", None),) + tuple(path))
-                ln, col, file = clause.line, clause.col, getattr(clause, "file", None)
-                vec = Var(ln, col, name, ty)
-                vec.file = file
-                lo = IntLit(ln, col, 0, I64)
-                lo.file = file
-                hi = Call(ln, col, "len", [vec], I64)
-                hi.file = file
-                q = Quant(ln, col, "forall", "$inv_e", lo, hi, body, BOOL)
-                q.file = file
-                q.struct_invariant = tag
-                out.append(q)
-            return out
-
         for p in f.params:
             pty = substitute(p.type, m) if m else p.type
-            d = s.invariant_struct(vec_elem(pty) or pty)
+            d = s.invariant_struct(s.invariant_vec_elem(pty) or pty)
             if d is None:
                 continue
             if p.name == "result":
@@ -1450,13 +1525,13 @@ class Checker:
                     continue        # LG24: instantiated call site; the callee is then not parametric-safe
                 terr(node or f, "invariant_decl", "parameter result of type %s cannot be used: %s has an invariant" %
                      (d.name, d.name))
-            for r in clauses(pty, p.name):
+            for r in s.invariant_clauses(pty, p.name):
                 requires.append(r)
                 if p.mode == "inout":
                     ensures.append(copy.deepcopy(r))
         rty = substitute(f.ret, m) if m else f.ret
-        if s.invariant_struct(vec_elem(rty) or rty) is not None:
-            ensures.extend(clauses(rty, "result"))
+        if s.invariant_struct(s.invariant_vec_elem(rty) or rty) is not None:
+            ensures.extend(s.invariant_clauses(rty, "result"))
         return requires, ensures
 
     @staticmethod
@@ -1500,6 +1575,42 @@ class Checker:
             f.inv_requires = requires
         if ensures:
             f.inv_ensures = ensures
+
+    def loop_frame_candidates(s, f):
+        frame = {}
+        n = 0
+
+        def walk(stmts, env):
+            # Match verify.walk_loops preorder and infer._scope_types visibility.
+            nonlocal n
+            for st in stmts:
+                if isinstance(st, Let):
+                    env[st.name] = st.type
+                elif isinstance(st, While):
+                    loop_no = n
+                    n += 1
+                    cands = []
+                    for name in sorted(env):
+                        ty = env[name]
+                        if s.invariant_vec_elem(ty) is not None and push_only(st.body, name):
+                            for clause in s.invariant_clauses(ty, name):
+                                cid = "F%d#%d" % (loop_no, len(cands))
+                                text = "invariant of %s (line %d) for %s" % clause.struct_invariant
+                                cands.append((cid, clause, text))
+                    if cands:
+                        frame[loop_no] = cands
+                    walk(st.body, dict(env))
+                elif isinstance(st, ForMap):
+                    walk(st.body, dict(env))
+                elif isinstance(st, If):
+                    walk(st.then, dict(env))
+                    walk(st.els, dict(env))
+                elif isinstance(st, Match):
+                    for arm in st.arms:
+                        walk(arm.body, {name: ty for name, ty in env.items() if name not in arm.binders})
+
+        walk(f.body, {p.name: p.type for p in f.params})
+        return frame
 
     def check_entries(s):
         """Host entry signatures admit plain values, array/str parameters and scalar Vec results."""
@@ -1675,6 +1786,7 @@ class Checker:
                      "add `! %s` after the return type" % ", ".join(sorted(set(f.effects) | s.used_effects)),
                      stage="effect")
         check_ownership(f, s.funcs, s.decls, s.aggregates)      # Check ownership and liveness after typing.
+        f.frame_cands = s.loop_frame_candidates(f)
 
     def ends_in_return(s, stmts):
         if not stmts:
