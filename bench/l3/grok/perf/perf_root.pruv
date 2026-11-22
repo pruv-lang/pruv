@@ -17,6 +17,7 @@ mod packet;
 mod path;
 mod framing;
 mod entry;
+mod line;
 mod read;
 
 pub fn grok_history_window(win: [u8], omitted: bool, title: str, model: str) -> [i64] ! alloc
