@@ -8,7 +8,8 @@
 // Tape record r occupies slots 6*r .. 6*r+6:
 //   0 kind   1 source start (inclusive)   2 source end (exclusive)
 //   3 skip (record after the subtree)     4 parent record (-1 for the root)
-//   5 child count (array elements / object members, 0 otherwise)
+//   5 child count (array elements / object members); on a string or key, 1 when scan_into saw no backslash
+//     (a run-time mark trusted by access::string_text_scanned, not checked against source, G-DB21-2), else 0
 // Kinds: 0 null, 1 false, 2 true, 3 number, 4 string, 5 array, 6 object, 7 key.
 
 // ---- kinds ----
@@ -48,9 +49,44 @@ pub fn limit_depth() -> i64 ensures result == 128 { return 128; }
 
 // ---- types ----
 pub struct JsonError { position: i64, kind: i64 }
-pub struct JsonDocument { source: [u8], tape: [i64] }
+// DB34 (G-DB33-3): the record-local tape facts that access::find / find_ascii / raw_span rely on are a type invariant
+// (SPEC "Struct invariants (LG16)"): proof-only, proved where a document is handed over (parse::parse and the
+// pkgs/lines builders ensure them on the Parsed payload), assumed for every JsonDocument parameter.
+pub struct JsonDocument {
+  source: [u8], tape: [i64],
+  invariant len(tape) % 6 == 0 && len(tape) >= 6 && len(tape) <= 6291456 && len(source) <= 16777216,
+  invariant forall t in 0..len(tape) / 6: (0 <= tape[6 * t] && tape[6 * t] <= 7),
+  invariant forall t in 0..len(tape) / 6: (0 <= tape[6 * t + 1] && tape[6 * t + 1] < tape[6 * t + 2] && tape[6 * t + 2] <= len(source)),
+  invariant forall t in 0..len(tape) / 6: (t < tape[6 * t + 3] && tape[6 * t + 3] <= len(tape) / 6),
+  invariant forall t in 0..len(tape) / 6: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> tape[6 * t + 3] == t + 1)
+}
 // Dedicated non-generic result: a buffer-bearing type cannot be a Result<T> payload.
 pub enum JsonParse { Parsed(document: JsonDocument), Failed(error: JsonError) }
+
+// ---- tape facts (R03L, rule R-6-2): named contract predicates, expanded where used and proved by `parse` ----
+pub pred fn doc_shape(d: JsonDocument) -> bool {
+  return len(d.tape) % 6 == 0 && len(d.tape) >= 6 && len(d.tape) <= 6291456 && len(d.source) <= 16777216;
+}
+pub pred fn doc_kinds(d: JsonDocument) -> bool {
+  return forall t in 0..len(d.tape) / 6: (0 <= d.tape[6 * t] && d.tape[6 * t] <= 7);
+}
+pub pred fn doc_spans(d: JsonDocument) -> bool {
+  return forall t in 0..len(d.tape) / 6: (0 <= d.tape[6 * t + 1] && d.tape[6 * t + 1] < d.tape[6 * t + 2] && d.tape[6 * t + 2] <= len(d.source));
+}
+pub pred fn doc_skips(d: JsonDocument) -> bool {
+  return forall t in 0..len(d.tape) / 6: (t < d.tape[6 * t + 3] && d.tape[6 * t + 3] <= len(d.tape) / 6);
+}
+pub pred fn doc_parents(d: JsonDocument) -> bool {
+  return forall t in 0..len(d.tape) / 6: (t > 0 ==> (0 <= d.tape[6 * t + 4] && d.tape[6 * t + 4] < t && (d.tape[6 * d.tape[6 * t + 4]] == 5 || d.tape[6 * d.tape[6 * t + 4]] == 6) && t < d.tape[6 * d.tape[6 * t + 4] + 3] && d.tape[6 * t + 3] <= d.tape[6 * d.tape[6 * t + 4] + 3] && d.tape[6 * d.tape[6 * t + 4] + 1] <= d.tape[6 * t + 1] && d.tape[6 * t + 2] <= d.tape[6 * d.tape[6 * t + 4] + 2]));
+}
+// The JsonDocument invariant as a predicate, for builders that hand a document over inside a JsonParse payload
+// (a payload is a nested position: the invariant is neither assumed nor proved there, so the builder ensures this).
+pub pred fn doc_local(d: JsonDocument) -> bool {
+  return doc_shape(d) && doc_kinds(d) && doc_spans(d) && doc_skips(d) && (forall t in 0..len(d.tape) / 6: ((d.tape[6 * t] <= 4 || d.tape[6 * t] == 7) ==> d.tape[6 * t + 3] == t + 1));
+}
+pub pred fn doc_array_counts(d: JsonDocument) -> bool {
+  return forall t in 0..len(d.tape) / 6: (d.tape[6 * t] == 5 ==> d.tape[6 * t + 5] == count(k in t + 1..d.tape[6 * t + 3]: d.tape[6 * k + 4] == t));
+}
 
 pub fn make_error(position: i64, kind: i64) -> JsonError
   ensures result.position == position && result.kind == kind
@@ -64,17 +100,9 @@ pub fn parse_failed(position: i64, kind: i64) -> JsonParse
   return JsonParse::Failed(JsonError { position: position, kind: kind });
 }
 
-// Ownership boundary: wraps (copies of) completed buffers. The caller must have run check_tape.
-pub fn wrap_document(source: [u8], tape: [i64]) -> JsonParse ! alloc
-  ensures is_variant(result, JsonParse::Parsed)
-  ensures len(variant_field(result, JsonParse::Parsed, document).source) == len(source)
-  ensures forall i in 0..len(source): variant_field(result, JsonParse::Parsed, document).source[i] == source[i]
-  ensures len(variant_field(result, JsonParse::Parsed, document).tape) == len(tape)
-  ensures forall i in 0..len(tape): variant_field(result, JsonParse::Parsed, document).tape[i] == tape[i]
-{
-  let d: JsonDocument = JsonDocument { source: copy(source), tape: copy(tape) };
-  return JsonParse::Parsed(d);
-}
+// Ownership boundary (R03L, R-6e-12): parse::scan_document builds the JsonDocument itself. The finished tape local
+// moves into the field (no copy); the source is borrowed by parse, so it is copied once (handing it over is R03 C).
+// The old wrap_document copied both buffers and is gone.
 
 // ---- structural publication check ----
 
@@ -85,7 +113,7 @@ fn rec_ok(tape: [i64], input_length: i64, r: i64) -> bool
   ensures result ==> (0 <= tape[6 * r] && tape[6 * r] <= 7)
   ensures result ==> (0 <= tape[6 * r + 1] && tape[6 * r + 1] < tape[6 * r + 2] && tape[6 * r + 2] <= input_length)
   ensures result ==> (r < tape[6 * r + 3] && tape[6 * r + 3] <= len(tape) / 6)
-  ensures result ==> ((tape[6 * r] <= 4 || tape[6 * r] == 7) ==> (tape[6 * r + 3] == r + 1 && tape[6 * r + 5] == 0))
+  ensures result ==> ((tape[6 * r] <= 4 || tape[6 * r] == 7) ==> (tape[6 * r + 3] == r + 1 && (tape[6 * r + 5] == 0 || (tape[6 * r + 5] == 1 && (tape[6 * r] == 4 || tape[6 * r] == 7)))))
   ensures result ==> (r == 0 ==> (tape[6 * r + 4] == -1 && tape[6 * r + 3] == len(tape) / 6 && tape[6 * r] != 7))
   ensures result ==> (r > 0 ==> (0 <= tape[6 * r + 4] && tape[6 * r + 4] < r && (tape[6 * tape[6 * r + 4]] == 5 || tape[6 * tape[6 * r + 4]] == 6) && r < tape[6 * tape[6 * r + 4] + 3] && tape[6 * r + 3] <= tape[6 * tape[6 * r + 4] + 3] && tape[6 * tape[6 * r + 4] + 1] <= tape[6 * r + 1] && tape[6 * r + 2] <= tape[6 * tape[6 * r + 4] + 2]))
 {
@@ -100,7 +128,7 @@ fn rec_ok(tape: [i64], input_length: i64, r: i64) -> bool
   if kind < 0 || kind > 7 { return false; }
   if s < 0 || s >= e || e > input_length { return false; }
   if sk <= r || sk > m { return false; }
-  if (kind <= 4 || kind == 7) && (sk != r + 1 || cnt != 0) { return false; }
+  if (kind <= 4 || kind == 7) && (sk != r + 1 || (cnt != 0 && (cnt != 1 || kind < 4))) { return false; }
   if r == 0 {
     if par != -1 || sk != m || kind == 7 { return false; }
     return true;
@@ -171,7 +199,7 @@ pub fn check_tape(tape: [i64], input_length: i64) -> bool
   ensures result ==> (forall t in 0..len(tape) / 6: (0 <= tape[6 * t] && tape[6 * t] <= 7))
   ensures result ==> (forall t in 0..len(tape) / 6: (0 <= tape[6 * t + 1] && tape[6 * t + 1] < tape[6 * t + 2] && tape[6 * t + 2] <= input_length))
   ensures result ==> (forall t in 0..len(tape) / 6: (t < tape[6 * t + 3] && tape[6 * t + 3] <= len(tape) / 6))
-  ensures result ==> (forall t in 0..len(tape) / 6: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && tape[6 * t + 5] == 0)))
+  ensures result ==> (forall t in 0..len(tape) / 6: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && (tape[6 * t + 5] == 0 || (tape[6 * t + 5] == 1 && (tape[6 * t] == 4 || tape[6 * t] == 7))))))
   ensures result ==> (forall t in 0..len(tape) / 6: (t == 0 ==> (tape[6 * t + 4] == -1 && tape[6 * t + 3] == len(tape) / 6 && tape[6 * t] != 7)))
   ensures result ==> (forall t in 0..len(tape) / 6: (t > 0 ==> (0 <= tape[6 * t + 4] && tape[6 * t + 4] < t && (tape[6 * tape[6 * t + 4]] == 5 || tape[6 * tape[6 * t + 4]] == 6) && t < tape[6 * tape[6 * t + 4] + 3] && tape[6 * t + 3] <= tape[6 * tape[6 * t + 4] + 3] && tape[6 * tape[6 * t + 4] + 1] <= tape[6 * t + 1] && tape[6 * t + 2] <= tape[6 * tape[6 * t + 4] + 2])))
   ensures result ==> (forall t in 0..len(tape) / 6: (forall j in t + 1..tape[6 * t + 3]: (j < len(tape) / 6 && tape[6 * j + 1] >= tape[6 * t + 1] && tape[6 * j + 2] <= tape[6 * t + 2] && tape[6 * j + 3] <= tape[6 * t + 3] && tape[6 * j + 4] >= t)))
@@ -191,7 +219,7 @@ pub fn check_tape(tape: [i64], input_length: i64) -> bool
     invariant forall t in 0..i: (0 <= tape[6 * t] && tape[6 * t] <= 7)
     invariant forall t in 0..i: (0 <= tape[6 * t + 1] && tape[6 * t + 1] < tape[6 * t + 2] && tape[6 * t + 2] <= input_length)
     invariant forall t in 0..i: (t < tape[6 * t + 3] && tape[6 * t + 3] <= len(tape) / 6)
-    invariant forall t in 0..i: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && tape[6 * t + 5] == 0))
+    invariant forall t in 0..i: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && (tape[6 * t + 5] == 0 || (tape[6 * t + 5] == 1 && (tape[6 * t] == 4 || tape[6 * t] == 7)))))
     invariant forall t in 0..i: (t == 0 ==> (tape[6 * t + 4] == -1 && tape[6 * t + 3] == len(tape) / 6 && tape[6 * t] != 7))
     invariant forall t in 0..i: (t > 0 ==> (0 <= tape[6 * t + 4] && tape[6 * t + 4] < t && (tape[6 * tape[6 * t + 4]] == 5 || tape[6 * tape[6 * t + 4]] == 6) && t < tape[6 * tape[6 * t + 4] + 3] && tape[6 * t + 3] <= tape[6 * tape[6 * t + 4] + 3] && tape[6 * tape[6 * t + 4] + 1] <= tape[6 * t + 1] && tape[6 * t + 2] <= tape[6 * tape[6 * t + 4] + 2]))
     decreases m - i
@@ -206,7 +234,68 @@ pub fn check_tape(tape: [i64], input_length: i64) -> bool
     invariant forall t in 0..m: (0 <= tape[6 * t] && tape[6 * t] <= 7)
     invariant forall t in 0..m: (0 <= tape[6 * t + 1] && tape[6 * t + 1] < tape[6 * t + 2] && tape[6 * t + 2] <= input_length)
     invariant forall t in 0..m: (t < tape[6 * t + 3] && tape[6 * t + 3] <= len(tape) / 6)
-    invariant forall t in 0..m: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && tape[6 * t + 5] == 0))
+    invariant forall t in 0..m: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && (tape[6 * t + 5] == 0 || (tape[6 * t + 5] == 1 && (tape[6 * t] == 4 || tape[6 * t] == 7)))))
+    invariant forall t in 0..m: (t == 0 ==> (tape[6 * t + 4] == -1 && tape[6 * t + 3] == len(tape) / 6 && tape[6 * t] != 7))
+    invariant forall t in 0..m: (t > 0 ==> (0 <= tape[6 * t + 4] && tape[6 * t + 4] < t && (tape[6 * tape[6 * t + 4]] == 5 || tape[6 * tape[6 * t + 4]] == 6) && t < tape[6 * tape[6 * t + 4] + 3] && tape[6 * t + 3] <= tape[6 * tape[6 * t + 4] + 3] && tape[6 * tape[6 * t + 4] + 1] <= tape[6 * t + 1] && tape[6 * t + 2] <= tape[6 * tape[6 * t + 4] + 2]))
+    invariant forall t in 0..r: (forall j in t + 1..tape[6 * t + 3]: (j < len(tape) / 6 && tape[6 * j + 1] >= tape[6 * t + 1] && tape[6 * j + 2] <= tape[6 * t + 2] && tape[6 * j + 3] <= tape[6 * t + 3] && tape[6 * j + 4] >= t))
+    invariant forall t in 0..r: (tape[6 * t] == 5 ==> (forall j in t + 1..tape[6 * t + 3]: (j < len(tape) / 6 && (tape[6 * j + 4] == t ==> tape[6 * j] != 7))))
+    invariant forall t in 0..r: (tape[6 * t] == 6 ==> (forall j in t + 1..tape[6 * t + 3]: (j < len(tape) / 6 && (tape[6 * j + 4] == t ==> ((tape[6 * j] == 7) == (count(k in t + 1..j: tape[6 * k + 4] == t) % 2 == 0))))))
+    invariant forall t in 0..r: (tape[6 * t] == 5 ==> (tape[6 * t + 3] <= len(tape) / 6 && tape[6 * t + 5] == count(k in t + 1..tape[6 * t + 3]: tape[6 * k + 4] == t)))
+    invariant forall t in 0..r: (tape[6 * t] == 6 ==> (tape[6 * t + 3] <= len(tape) / 6 && 2 * tape[6 * t + 5] == count(k in t + 1..tape[6 * t + 3]: tape[6 * k + 4] == t)))
+    decreases m - r
+  {
+    if !scan_ok(tape, r) { return false; }
+    r = r + 1;
+  }
+  return true;
+}
+
+// D-DB33-2: check_tape without pass 1. The scanner proves the record-local facts,
+// so only the subtree, key-parity and count facts stay runtime checks (G-DB33-1).
+pub fn check_subtrees(tape: [i64], input_length: i64) -> bool
+  requires (len(tape) % 6 == 0 && len(tape) >= 6 && len(tape) <= 6291456)
+  requires (input_length >= 1 && input_length <= 16777216)
+  requires (forall t in 0..len(tape) / 6: (0 <= tape[6 * t] && tape[6 * t] <= 7))
+  requires (forall t in 0..len(tape) / 6: (0 <= tape[6 * t + 1] && tape[6 * t + 1] < tape[6 * t + 2] && tape[6 * t + 2] <= input_length))
+  requires (forall t in 0..len(tape) / 6: (t < tape[6 * t + 3] && tape[6 * t + 3] <= len(tape) / 6))
+  requires (forall t in 0..len(tape) / 6: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && (tape[6 * t + 5] == 0 || (tape[6 * t + 5] == 1 && (tape[6 * t] == 4 || tape[6 * t] == 7))))))
+  requires (forall t in 0..len(tape) / 6: (t == 0 ==> (tape[6 * t + 4] == -1 && tape[6 * t + 3] == len(tape) / 6 && tape[6 * t] != 7)))
+  requires (forall t in 0..len(tape) / 6: (t > 0 ==> (0 <= tape[6 * t + 4] && tape[6 * t + 4] < t && (tape[6 * tape[6 * t + 4]] == 5 || tape[6 * tape[6 * t + 4]] == 6) && tape[6 * tape[6 * t + 4] + 1] < tape[6 * t + 1])))
+  ensures result ==> (len(tape) % 6 == 0 && len(tape) >= 6 && len(tape) <= 6291456)
+  ensures result ==> (input_length >= 1 && input_length <= 16777216)
+  ensures result ==> (forall t in 0..len(tape) / 6: (0 <= tape[6 * t] && tape[6 * t] <= 7))
+  ensures result ==> (forall t in 0..len(tape) / 6: (0 <= tape[6 * t + 1] && tape[6 * t + 1] < tape[6 * t + 2] && tape[6 * t + 2] <= input_length))
+  ensures result ==> (forall t in 0..len(tape) / 6: (t < tape[6 * t + 3] && tape[6 * t + 3] <= len(tape) / 6))
+  ensures result ==> (forall t in 0..len(tape) / 6: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && (tape[6 * t + 5] == 0 || (tape[6 * t + 5] == 1 && (tape[6 * t] == 4 || tape[6 * t] == 7))))))
+  ensures result ==> (forall t in 0..len(tape) / 6: (t == 0 ==> (tape[6 * t + 4] == -1 && tape[6 * t + 3] == len(tape) / 6 && tape[6 * t] != 7)))
+  ensures result ==> (forall t in 0..len(tape) / 6: (t > 0 ==> (0 <= tape[6 * t + 4] && tape[6 * t + 4] < t && (tape[6 * tape[6 * t + 4]] == 5 || tape[6 * tape[6 * t + 4]] == 6) && t < tape[6 * tape[6 * t + 4] + 3] && tape[6 * t + 3] <= tape[6 * tape[6 * t + 4] + 3] && tape[6 * tape[6 * t + 4] + 1] <= tape[6 * t + 1] && tape[6 * t + 2] <= tape[6 * tape[6 * t + 4] + 2])))
+  ensures result ==> (forall t in 0..len(tape) / 6: (forall j in t + 1..tape[6 * t + 3]: (j < len(tape) / 6 && tape[6 * j + 1] >= tape[6 * t + 1] && tape[6 * j + 2] <= tape[6 * t + 2] && tape[6 * j + 3] <= tape[6 * t + 3] && tape[6 * j + 4] >= t)))
+  ensures result ==> (forall t in 0..len(tape) / 6: (tape[6 * t] == 5 ==> (forall j in t + 1..tape[6 * t + 3]: (j < len(tape) / 6 && (tape[6 * j + 4] == t ==> tape[6 * j] != 7)))))
+  ensures result ==> (forall t in 0..len(tape) / 6: (tape[6 * t] == 6 ==> (forall j in t + 1..tape[6 * t + 3]: (j < len(tape) / 6 && (tape[6 * j + 4] == t ==> ((tape[6 * j] == 7) == (count(k in t + 1..j: tape[6 * k + 4] == t) % 2 == 0)))))))
+  ensures result ==> (forall t in 0..len(tape) / 6: (tape[6 * t] == 5 ==> (tape[6 * t + 3] <= len(tape) / 6 && tape[6 * t + 5] == count(k in t + 1..tape[6 * t + 3]: tape[6 * k + 4] == t))))
+  ensures result ==> (forall t in 0..len(tape) / 6: (tape[6 * t] == 6 ==> (tape[6 * t + 3] <= len(tape) / 6 && 2 * tape[6 * t + 5] == count(k in t + 1..tape[6 * t + 3]: tape[6 * k + 4] == t))))
+{
+  let m: i64 = len(tape) / 6;
+  // G-DB33-2: the scanner proves each parent is an earlier container that starts first; the rest of
+  // the parent fact (the child lies inside the parent's skip and end) stays a runtime check.
+  let mut q: i64 = 1;
+  while q < m
+    invariant 1 <= q && q <= m && m == len(tape) / 6
+    invariant forall t in 0..q: (t > 0 ==> (0 <= tape[6 * t + 4] && tape[6 * t + 4] < t && (tape[6 * tape[6 * t + 4]] == 5 || tape[6 * tape[6 * t + 4]] == 6) && t < tape[6 * tape[6 * t + 4] + 3] && tape[6 * t + 3] <= tape[6 * tape[6 * t + 4] + 3] && tape[6 * tape[6 * t + 4] + 1] <= tape[6 * t + 1] && tape[6 * t + 2] <= tape[6 * tape[6 * t + 4] + 2]))
+    decreases m - q
+  {
+    let up: i64 = tape[6 * q + 4];
+    if !(q < tape[6 * up + 3] && tape[6 * q + 3] <= tape[6 * up + 3] && tape[6 * q + 2] <= tape[6 * up + 2]) { return false; }
+    q = q + 1;
+  }
+  // Pass 2: subtree facts of every record (pass 1 facts are restated: loops keep only invariants).
+  let mut r: i64 = 0;
+  while r < m
+    invariant 0 <= r && r <= m && m == len(tape) / 6
+    invariant forall t in 0..m: (0 <= tape[6 * t] && tape[6 * t] <= 7)
+    invariant forall t in 0..m: (0 <= tape[6 * t + 1] && tape[6 * t + 1] < tape[6 * t + 2] && tape[6 * t + 2] <= input_length)
+    invariant forall t in 0..m: (t < tape[6 * t + 3] && tape[6 * t + 3] <= len(tape) / 6)
+    invariant forall t in 0..m: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && (tape[6 * t + 5] == 0 || (tape[6 * t + 5] == 1 && (tape[6 * t] == 4 || tape[6 * t] == 7)))))
     invariant forall t in 0..m: (t == 0 ==> (tape[6 * t + 4] == -1 && tape[6 * t + 3] == len(tape) / 6 && tape[6 * t] != 7))
     invariant forall t in 0..m: (t > 0 ==> (0 <= tape[6 * t + 4] && tape[6 * t + 4] < t && (tape[6 * tape[6 * t + 4]] == 5 || tape[6 * tape[6 * t + 4]] == 6) && t < tape[6 * tape[6 * t + 4] + 3] && tape[6 * t + 3] <= tape[6 * tape[6 * t + 4] + 3] && tape[6 * tape[6 * t + 4] + 1] <= tape[6 * t + 1] && tape[6 * t + 2] <= tape[6 * tape[6 * t + 4] + 2]))
     invariant forall t in 0..r: (forall j in t + 1..tape[6 * t + 3]: (j < len(tape) / 6 && tape[6 * j + 1] >= tape[6 * t + 1] && tape[6 * j + 2] <= tape[6 * t + 2] && tape[6 * j + 3] <= tape[6 * t + 3] && tape[6 * j + 4] >= t))
