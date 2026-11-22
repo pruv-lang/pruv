@@ -150,10 +150,51 @@ defined external symbols of the .ll), "bindings_contains" / "bindings_absent" [s
 {fields} (overrides top-level fields of the llvm rows), and an optional main_llvm.rs next to main.rs (the llvm host driver; flat samples: T_llvm.rs next to T.rs).
 tests/llvm_pending.txt (one repo-relative sample path per line, # comments): the llvm rows of the listed examples and
 runtime samples expect pruvc exit 1 with a codegen/unsupported_type diagnostic (nothing is linked or run)."""
-import concurrent.futures, glob, json, os, platform, re, shutil, subprocess, sys, tempfile, threading
+import concurrent.futures, glob, json, os, platform, re, shutil, signal, subprocess, sys, tempfile, threading, time
 
 CPU_FLAG = "-mcpu=native" if platform.machine().lower() in ("arm64", "aarch64") else "-march=native"
 BODY_DEF = re.compile(r"^define internal [^\n]*@([A-Za-z0-9_.$]+?)__pruv_body\(", re.M)
+
+
+WORK_PREFIX = "pruvtests_"
+STALE_NO_OWNER_SEC = 12 * 3600
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def sweep_stale_work():
+    """Remove pruvtests_* work dirs left by runs that were killed before their finally ran (SIGKILL, timeouts).
+    A dir is removed only when its .owner pid is gone; a dir without .owner (older runs) only when nothing at its
+    top level changed for 12 hours. A reused pid keeps the dir (safe side)."""
+    for d in glob.glob(os.path.join(tempfile.gettempdir(), WORK_PREFIX + "*")):
+        if not os.path.isdir(d) or os.path.islink(d):
+            continue
+        try:
+            with open(os.path.join(d, ".owner")) as f:
+                pid = int(f.read().split()[0])
+        except (OSError, ValueError, IndexError):
+            try:
+                newest = max([os.path.getmtime(d)] + [os.path.getmtime(os.path.join(d, e)) for e in os.listdir(d)])
+            except OSError:
+                continue
+            if time.time() - newest >= STALE_NO_OWNER_SEC:
+                shutil.rmtree(d, ignore_errors=True)
+            continue
+        if pid != os.getpid() and not _pid_alive(pid):
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def _terminate(signum, frame):
+    # turn SIGTERM/SIGHUP into the Ctrl+C path so the finally below removes WORK
+    raise KeyboardInterrupt
 
 
 def body_functions(text):
@@ -1716,7 +1757,12 @@ def main():
             print(USAGE)
             return 2
     backends = ["rust", "llvm"] if backend == "both" else [backend]
-    WORK = tempfile.mkdtemp(prefix="pruvtests_")
+    sweep_stale_work()
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _terminate)
+    WORK = tempfile.mkdtemp(prefix=WORK_PREFIX)
+    with open(os.path.join(WORK, ".owner"), "w") as f:
+        f.write("%d\n" % os.getpid())
     passed = total = 0
     try:
         jobs = []

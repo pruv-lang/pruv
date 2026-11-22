@@ -1687,6 +1687,7 @@ mod lib_tests {
         let e = files_of(load_program(&d.join("app/main.pruv"))).unwrap_err();
         assert_eq!(e.code, "module_file");
         assert_eq!(e.fix, "create json.pruv next to the root file, pass --lib DIR, or remove `mod json;`");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -1699,6 +1700,7 @@ mod lib_tests {
         assert_eq!(e.code, "lib_module_conflict");
         assert_eq!(e.message, "module json is found in more than one place: json.pruv, @lib/json.pruv, @lib/json.pruv");
         assert_eq!(e.fix, "remove the duplicate file or drop one --lib");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -1709,5 +1711,6 @@ mod lib_tests {
         );
         let r = load_program_with_libs(&d.join("app/main.pruv"), &[d.join("lib")]);
         assert_eq!(files_of(r).unwrap(), vec!["main.pruv", "@lib/json.pruv", "@lib/json/x.pruv"]);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
