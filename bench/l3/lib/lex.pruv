@@ -98,19 +98,20 @@ pub fn scan_literal(input: [u8], pos: i64, end: i64) -> Scan
     decreases n - k
   {
     if i == end { return outcome(end, 5); }
+    // The literal tests form one else-if chain (c is 116, 102 or 110 here), so the verifier no longer walks the
+    // product of all three literals' k tests. The k tests stay independent ifs: a k else-if chain verified
+    // cheaper but its generated Rust measured about 15% slower on a periodic input (DB36).
     let mut want: i64 = c;
     if c == 116 {
       if k == 1 { want = 114; }
       if k == 2 { want = 117; }
       if k == 3 { want = 101; }
-    }
-    if c == 102 {
+    } else if c == 102 {
       if k == 1 { want = 97; }
       if k == 2 { want = 108; }
       if k == 3 { want = 115; }
       if k == 4 { want = 101; }
-    }
-    if c == 110 {
+    } else {
       if k == 1 { want = 117; }
       if k >= 2 { want = 108; }
     }
