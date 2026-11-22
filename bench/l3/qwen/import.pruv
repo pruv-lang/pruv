@@ -280,7 +280,6 @@ pub fn tail_info(data: [u8], cut_before: bool) -> crate::boundary::ImportResult 
 }
 
 
-pub enum Effect { Done(rank: i64, title: str, model: str), Defect(kind: i64) }
 enum Stamp { At(text: str), Bad(kind: i64) }
 
 fn stamp_of(doc: crate::json::JsonDocument) -> Stamp ! alloc
@@ -299,133 +298,249 @@ fn stamp_of(doc: crate::json::JsonDocument) -> Stamp ! alloc
   return Stamp::At(copy(s));
 }
 
-fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: str, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
-  requires 0 <= c && c < len(doc.tape) / 6
-  requires len(at) == 0 || len(at) == 24
-  requires len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
-  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-  ensures len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
-  ensures st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
-  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+// One record per Object boundary or replay operation. Skip frames and non-user drops are no-ops.
+struct Event { kind: i64, a: i64, b: i64 }
+struct Events {
+  records: [u8], used: i64, text: [u8], end: i64,
+  invariant 0 <= used && used <= len(records) && used <= 4294967295,
+  invariant 0 <= end && end <= len(text) && end <= 4294967295
+}
+
+// Fixed-width records: tag and two unsigned 32-bit fields. For Object they hold ordinal/start.
+// Text operations refer to spans in a separate UTF-8 buffer. Grow both buffers geometrically.
+fn reserve_bytes(inout bytes: [u8], need: i64) -> () ! alloc
+  requires 0 <= need && need <= 4294967295
+  ensures need <= len(bytes)
 {
-  if len(doc.tape) > 6291456 { return -4; }
+  if need > len(bytes) { bytes = resize(bytes, need + need / 4 + 65536, 0); }
+}
+
+fn put_event(inout records: [u8], pos: i64, event: Event) -> ()
+  requires 0 <= pos && pos + 9 <= len(records)
+{
+  store_le(inout records, pos, event.kind, 1);
+  store_le(inout records, pos + 1, event.a, 4);
+  store_le(inout records, pos + 5, event.b, 4);
+}
+
+fn write_event(inout log: Events, event: Event) -> bool ! alloc
+{
+  let pos: i64 = log.used;
+  if pos > 4294967295 - 9 { return false; }
+  reserve_bytes(inout log.records, pos + 9);
+  put_event(inout log.records, pos, event);
+  log.used = pos + 9;
+  return true;
+}
+
+fn write_text(inout log: Events, kind: i64, text: str) -> bool ! alloc
+{
+  let start: i64 = log.end;
+  let n: i64 = len(text);
+  if n > 4294967295 - start { return false; }
+  reserve_bytes(inout log.text, start + n);
+  put_str(inout log.text, start, text);
+  log.end = start + n;
+  return write_event(inout log, Event { kind: kind, a: start, b: n });
+}
+
+fn read_event(records: [u8], pos: i64) -> Event
+  requires 0 <= pos && pos + 9 <= len(records)
+  ensures 0 <= result.a && result.a <= 4294967295 && 0 <= result.b && result.b <= 4294967295
+{
+  return Event { kind: records[pos], a: load_le(records, pos + 1, 4), b: load_le(records, pos + 5, 4) };
+}
+
+fn read_text(text: [u8], start: i64, n: i64) -> str ! alloc
+  requires 0 <= start && start <= len(text) && 0 <= n && n <= len(text) - start
+{
+  return crate::jstr::adapter_probe(subview(text, start, start + n));
+}
+
+// Replay tags: 0 Object, 1 dropped real user, 2 Ranked title, 3 title defect,
+// 4 stamp, 5 prompt, 6 model, 7 answer, 8 tool, 9 selected-entry defect.
+fn record_answers(doc: crate::json::JsonDocument, c: i64, inout log: Events) -> bool ! alloc
+  requires 0 <= c && c < len(doc.tape) / 6
+{
+  if len(doc.tape) > 6291456 { return false; }
   let stop: i64 = doc.tape[6 * c + 3];
-  if stop <= c || stop > len(doc.tape) / 6 { return -4; }
-  let mut idle: bool = false;
+  if stop <= c || stop > len(doc.tape) / 6 { return false; }
   let mut j: i64 = c + 1;
   while j < stop
     invariant 0 <= c && c < j && j <= stop && stop <= len(doc.tape) / 6 && len(doc.tape) <= 6291456
-    invariant len(at) == 0 || len(at) == 24
-    invariant len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
-    invariant st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
-    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-    invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+    invariant 0 <= log.used && log.used <= len(log.records) && log.used <= 4294967295
+    invariant 0 <= log.end && log.end <= len(log.text) && log.end <= 4294967295
     decreases stop - j
   {
     let next: i64 = doc.tape[6 * j + 3];
-    if next <= j || next > stop || doc.tape[6 * j + 4] != c { return -4; }
+    if next <= j || next > stop || doc.tape[6 * j + 4] != c { return false; }
     let bkind: i64 = crate::access::kind(doc, j);
-    if bkind < 0 { return -4; }
+    if bkind < 0 { return false; }
     if bkind == 6 {
       let thought: i64 = crate::entry::is_true(doc, j, "thought");
-      if thought < 0 { return -4; }
+      if thought < 0 { return false; }
       if thought != 1 {
         let tx: crate::entry::Field = crate::entry::string_field(doc, j, "text");
         match tx {
           crate::entry::Field::Value(x) => {
-            if len(x) > 50331648 { return -4; }
-            crate::turns::answer2(inout st, inout sl, inout bk, x, at);
+            if len(x) > 50331648 { return false; }
+            if !write_text(inout log, 7, x) { return false; }
           }
           crate::entry::Field::Missing => {
             let call: i64 = crate::entry::object_field(doc, j, "functionCall");
-            if call < -1 { return -4; }
-            if call >= 0 { crate::turns::tool(inout st, inout sl); }
+            if call < -1 { return false; }
+            if call >= 0 {
+              if !write_event(inout log, Event { kind: 8, a: 0, b: 0 }) { return false; }
+            }
           }
-          crate::entry::Field::Defect(e) => { return -4; }
+          crate::entry::Field::Defect(e) => { return false; }
         }
       }
     }
     j = next;
   }
-  return 0;
+  return true;
 }
 
-pub fn consume_entry(doc: crate::json::JsonDocument, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> Effect ! alloc
-  requires len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[0] && st[0] < 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
-  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-  ensures len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
-  ensures old(st)[0] <= st[0] && st[0] <= old(st)[0] + 1 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
-  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+fn record_entry(doc: crate::json::JsonDocument, inout log: Events) -> bool ! alloc
 {
   let root: i64 = crate::access::root(doc);
-  let nothing: str = "";
-  let mut idle: bool = false;
-  let mut rank: i64 = 0;
-  let mut title: str = "";
-  let t: crate::entry::Title = crate::entry::title_of(doc);
-  match t {
-    crate::entry::Title::Ranked(r, x) => {
-      if r < 1 || r > 3 { return Effect::Defect(-4); }
-      if len(x) > 50331648 { return Effect::Defect(-4); }
-      rank = r;
-      title = copy(x);
-    }
-    crate::entry::Title::NoTitle => { idle = true; }
-    crate::entry::Title::Defect(e) => { return Effect::Defect(e); }
-  }
-  let mut at: str = "";
   let sv: Stamp = stamp_of(doc);
   match sv {
-    Stamp::At(x) => { at = copy(x); }
-    Stamp::Bad(e) => { return Effect::Defect(e); }
+    Stamp::At(x) => {
+      if len(x) > 0 {
+        if !write_text(inout log, 4, x) { return false; }
+      }
+    }
+    Stamp::Bad(e) => { return false; }
   }
-  if len(at) != 0 && len(at) != 24 { return Effect::Defect(-4); }
   let h: crate::entry::Field = crate::entry::human_text(doc);
   match h {
     crate::entry::Field::Value(p) => {
-      if len(p) > 50331648 { return Effect::Defect(-4); }
-      crate::turns::begin2(inout st, inout sl, inout bk, p, at);
-      return Effect::Done(rank, copy(title), copy(nothing));
+      if len(p) > 50331648 { return false; }
+      return write_text(inout log, 5, p);
     }
-    crate::entry::Field::Missing => { idle = true; }
-    crate::entry::Field::Defect(e) => { return Effect::Defect(e); }
+    crate::entry::Field::Missing => {}
+    crate::entry::Field::Defect(e) => { return false; }
   }
   let asst: i64 = crate::entry::field_is(doc, root, "type", "assistant");
-  if asst < 0 { return Effect::Defect(asst); }
-  if asst == 0 { return Effect::Done(rank, copy(title), copy(nothing)); }
-  let mut model: str = "";
+  if asst < 0 { return false; }
+  if asst == 0 { return true; }
   let mf: crate::entry::Field = crate::entry::string_field(doc, root, "model");
   match mf {
     crate::entry::Field::Value(m) => {
-      if len(m) > 50331648 { return Effect::Defect(-4); }
-      model = copy(m);
+      if len(m) > 50331648 { return false; }
+      if len(m) > 0 {
+        if !write_text(inout log, 6, m) { return false; }
+      }
     }
-    crate::entry::Field::Missing => { idle = true; }
-    crate::entry::Field::Defect(e) => { return Effect::Defect(e); }
+    crate::entry::Field::Missing => {}
+    crate::entry::Field::Defect(e) => { return false; }
   }
   let msg: i64 = crate::entry::object_field(doc, root, "message");
-  if msg == -1 { return Effect::Done(rank, copy(title), copy(model)); }
-  if msg < 0 { return Effect::Defect(msg); }
+  if msg == -1 { return true; }
+  if msg < 0 { return false; }
   let c: i64 = crate::access::field(doc, msg, "parts");
-  if c == -1 || c == -2 { return Effect::Done(rank, copy(title), copy(model)); }
-  if c < 0 { return Effect::Defect(c); }
+  if c == -1 || c == -2 { return true; }
+  if c < 0 { return false; }
   let k: i64 = crate::access::kind(doc, c);
-  if k < 0 { return Effect::Defect(k); }
-  if k != 5 { return Effect::Done(rank, copy(title), copy(model)); }
-  let r: i64 = answer_blocks(doc, c, at, inout st, inout sl, inout bk);
-  if r < 0 { return Effect::Defect(r); }
-  return Effect::Done(rank, copy(title), copy(model));
+  if k < 0 { return false; }
+  if k != 5 { return true; }
+  return record_answers(doc, c, inout log);
 }
 
-fn wfail_at(start: i64, end: i64, p: i64) -> [u8] ! alloc
-  requires 0 <= start && start <= end
+fn record_object(doc: crate::json::JsonDocument, ordinal: i64, start: i64, inout log: Events) -> bool ! alloc
 {
-  if p >= 0 && p <= end - start { return crate::boundary::wire_fail(crate::boundary::code_internal_invariant(), start + p); }
-  return crate::boundary::wire_fail(crate::boundary::code_internal_invariant(), start);
+  if !write_event(inout log, Event { kind: 0, a: ordinal, b: start }) { return false; }
+  let t: crate::entry::Title = crate::entry::title_of(doc);
+  match t {
+    crate::entry::Title::Ranked(rank, title) => {
+      if !write_text(inout log, 2, title) { return false; }
+      if len(title) > 50331648 {
+        return write_event(inout log, Event { kind: 9, a: 0, b: 0 });
+      }
+    }
+    crate::entry::Title::NoTitle => {}
+    crate::entry::Title::Defect(e) => {
+      return write_event(inout log, Event { kind: 3, a: 0, b: 0 });
+    }
+  }
+  if record_entry(doc, inout log) { return true; }
+  return write_event(inout log, Event { kind: 9, a: 0, b: 0 });
+}
+
+struct Replay { title: str, model: str, defect: i64 }
+
+fn replay(log: Events, chain: crate::chain::Chain, selected: [u8], inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> Replay ! alloc
+  requires len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && st[0] == 0 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  ensures len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600
+  ensures 0 <= st[0] && st[0] <= 4294967295
+  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+{
+  let mut pos: i64 = 0;
+  let mut start: i64 = 0;
+  let mut chosen: bool = false;
+  let mut started: bool = false;
+  let mut pending: bool = false;
+  let mut best: str = "";
+  let mut model: str = "";
+  let mut at: str = "";
+  while pos + 9 <= log.used
+    invariant 0 <= pos && pos <= log.used && log.used <= len(log.records) && log.used <= 4294967295
+    invariant 0 <= log.end && log.end <= len(log.text) && 0 <= start
+    invariant len(at) == 0 || len(at) == 24
+    invariant len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[0] && st[0] <= pos && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
+    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+    invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+    decreases log.used - pos
+  {
+    let event: Event = read_event(log.records, pos);
+    if event.kind == 0 {
+      if event.a >= len(selected) { return Replay { title: move best, model: move model, defect: 0 }; }
+      chosen = !chain.active || selected[event.a] == 1;
+      start = event.b;
+      at = "";
+      if chosen {
+        if !started && pending { crate::turns::skip_user(inout st); }
+        started = true;
+      }
+      pending = false;
+    } else if event.kind == 1 {
+      pending = true;
+      if started { crate::turns::skip_user(inout st); }
+    } else if event.kind == 3 {
+      return Replay { title: move best, model: move model, defect: 0 };
+    } else if event.kind == 9 {
+      if chosen { return Replay { title: move best, model: move model, defect: start }; }
+    } else if event.kind == 8 {
+      if chosen { crate::turns::tool(inout st, inout sl); }
+    } else if event.kind == 2 || chosen {
+      if event.a > log.end || event.b > log.end - event.a {
+        return Replay { title: move best, model: move model, defect: 0 };
+      }
+      let text: str = read_text(log.text, event.a, event.b);
+      if event.kind == 2 {
+        best = move text;
+      } else if event.kind == 4 {
+        if len(text) != 24 { return Replay { title: move best, model: move model, defect: start }; }
+        at = move text;
+      } else if event.kind == 6 {
+        model = move text;
+      } else {
+        if len(text) > 50331648 { return Replay { title: move best, model: move model, defect: start }; }
+        if event.kind == 5 {
+          crate::turns::begin2(inout st, inout sl, inout bk, text, at);
+        } else {
+          crate::turns::answer2(inout st, inout sl, inout bk, text, at);
+        }
+      }
+    }
+    pos = pos + 9;
+  }
+  return Replay { title: move best, model: move model, defect: -1 };
 }
 
 fn wfail_zero() -> [u8] ! alloc
@@ -438,104 +553,80 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
   if len(data) > crate::boundary::limit_window_bytes() {
     return crate::boundary::wire_fail(crate::boundary::code_input_too_large(), 0);
   }
-  // DB6: one mark per Entry frame ordinal, not per input byte.
-  let mut selected: [u8] = alloc(crate::chain::capacity(data), 0);
-  let chain: crate::chain::Chain = crate::chain::select(data, cut_before, inout selected);
-  if chain.bad { return wfail_zero(); }
-  let mut ordinal: i64 = 0;
-  let mut started: bool = false;
-  let mut pending: bool = false;
-  let mut st: [i64] = crate::turns::new_state();
-  let mut sl: [i64] = crate::turns::new_slots();
-  // DB23: content-sized turn store instead of the 13 MB fixed-stride buffer.
-  let mut bk: crate::turns::Store = crate::turns::new_store();
-  let mut best: str = "";
-  let mut best_rank: i64 = 0;
-  let mut model: str = "";
-  let mut idle: bool = false;
-  // DB23: one parse scratch for the whole window (tape 4096 records, stack 516).
+  let capacity: i64 = crate::chain::capacity(data);
+  let mut selected: [u8] = alloc(capacity, 0);
+  let mut index: crate::chain::Index = crate::chain::new_index(len(data), capacity);
+  let records: [u8] = alloc(len(data) / 4, 0);
+  let text: [u8] = alloc(len(data) / 4, 0);
+  let mut log: Events = Events { records: move records, used: 0, text: move text, end: 0 };
   let mut tape: [i64] = alloc(24576, 0);
   let mut stack: [i64] = alloc(516, 0);
+  let mut ordinal: i64 = 0;
   let mut offset: i64 = crate::framing::skip_first(data, cut_before);
   while offset < len(data)
     invariant 0 <= ordinal && ordinal <= offset
     invariant 0 <= offset && offset <= len(data) && len(data) <= 8388608
-    invariant 0 <= best_rank && best_rank <= 3
-    invariant len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[0] && st[0] <= offset && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
-    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-    invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+    invariant len(index.arena) <= 8388608 && 0 <= index.bytes_used && index.bytes_used <= len(index.arena)
+    invariant 0 < len(index.heads) && len(index.heads) <= 33554436
+    invariant 0 <= index.slots_used && index.slots_used <= len(index.slots) && len(index.slots) <= 50331654
+    invariant 0 <= log.used && log.used <= len(log.records) && log.used <= 4294967295
+    invariant 0 <= log.end && log.end <= len(log.text) && log.end <= 4294967295
     decreases len(data) - offset
   {
     let step: crate::framing::Frame = crate::framing::window_next(data, offset);
     match step {
       crate::framing::Frame::Entry(start, end, next) => {
-        if start < 0 || start > end || end > len(data) || next <= offset || next > len(data) { return wfail_zero(); }
         let line: crate::entry::Line = crate::entry::parse_line_span(data, start, end, inout tape, inout stack);
         match line {
           crate::entry::Line::Object(d) => {
-            let t: crate::entry::Title = crate::entry::title_of(d);
-            match t {
-              crate::entry::Title::Ranked(r, v) => { best = copy(v); best_rank = 1; }
-              crate::entry::Title::NoTitle => { idle = true; }
-              crate::entry::Title::Defect(e) => { return wfail_zero(); }
-            }
-            if ordinal >= len(selected) { return wfail_zero(); }
-            if !chain.active || selected[ordinal] == 1 {
-              if !started && pending { crate::turns::skip_user(inout st); }
-              started = true;
-            let eff: Effect = consume_entry(d, inout st, inout sl, inout bk);
-            match eff {
-              Effect::Done(rank, cand, mid) => {
-                if rank >= 1 && rank <= 3 {
-                  if replaces(best_rank, rank) {
-                    best_rank = rank;
-                    best = copy(cand);
-                  }
-                }
-                if len(mid) > 0 { model = copy(mid); }
-              }
-              Effect::Defect(kind) => { return wfail_at(start, end, 0); }
-            }
-            }
-            pending = false;
+            if !crate::chain::note(inout index, d, ordinal) { return wfail_zero(); }
+            if !record_object(d, ordinal, start, inout log) { return wfail_zero(); }
           }
-          crate::entry::Line::Skip => { idle = true; }
-          crate::entry::Line::Defect(p) => { return wfail_at(start, end, p); }
+          crate::entry::Line::Skip => {}
+          // The old chain scan saw a parser defect before importer replay could report its position.
+          crate::entry::Line::Defect(p) => { return wfail_zero(); }
         }
         ordinal = ordinal + 1;
         offset = next;
       }
       crate::framing::Frame::Dropped(s, e, n) => {
-        if s < 0 || s > e || e > len(data) || e - s > 8192 || n <= offset || n > len(data) { return wfail_zero(); }
-        let mut head: [u8] = alloc(e - s, 0);
-        crate::bytes::copy_span(inout head, 0, data, s, e);
-        if crate::text::dropped_user(head) { pending = true; if started { crate::turns::skip_user(inout st); } }
+        if crate::text::dropped_user(subview(data, s, e)) {
+          if !write_event(inout log, Event { kind: 1, a: 0, b: 0 }) { return wfail_zero(); }
+        }
         offset = n;
       }
       crate::framing::Frame::Done => { offset = len(data); }
     }
   }
-  if len(best) > 100000000000 { return wfail_zero(); }
-  let title: str = crate::text::one_line(best, 120);
+  let chain: crate::chain::Chain = crate::chain::resolve(index, inout selected);
+  if chain.bad { return wfail_zero(); }
+  let mut st: [i64] = crate::turns::new_state();
+  let mut sl: [i64] = crate::turns::new_slots();
+  let mut bk: crate::turns::Store = crate::turns::new_store();
+  let result: Replay = replay(log, chain, selected, inout st, inout sl, inout bk);
+  if result.defect >= 0 {
+    return crate::boundary::wire_fail(crate::boundary::code_internal_invariant(), result.defect);
+  }
+  if len(result.title) > 100000000000 { return wfail_zero(); }
+  let title: str = crate::text::one_line(result.title, 120);
   let tl: i64 = len(title);
-  let ml: i64 = len(model);
+  let ml: i64 = len(result.model);
   if tl > 4096 || ml > 3145728 { return wfail_zero(); }
   let base: i64 = tl + ml;
-  let col: crate::turns::Collected = crate::turns::finish2(st, sl, inout bk, base);
-  let nt: i64 = len(col.turns);
-  let nx: i64 = len(col.text);
-  if nt < 0 || nt > 2000 || nx < 0 || nx > 2106752 { return wfail_zero(); }
-  if col.kept < 0 || col.kept > 200 || nt != 10 * col.kept { return wfail_zero(); }
-  let total: i64 = base + nx;
+  let layout: crate::turns::Layout = crate::turns::text_layout(st, sl);
+  let nt: i64 = 10 * layout.kept;
+  let total: i64 = base + layout.text_len;
+  let hl: i64 = 8 * (18 + nt);
+  let mut w: [u8] = alloc(hl + total, 0);
+  let col: crate::turns::Placed = crate::turns::finish_into(st, sl, bk, base, inout w, hl + base);
+  if !col.ok || col.kept != layout.kept || col.text_len != layout.text_len { return wfail_zero(); }
   let mut m: [i64] = meta_new(2);
   if cut_before || col.trimmed == 1 || chain.cut { m[2] = 1; }
   m[3] = col.kept;
   if tl > 0 { m[4] = 0; m[5] = tl; }
   if ml > 0 { m[12] = tl; m[13] = ml; }
-  // R05 C: one check, then the selected turn spans and text go straight into the output wire.
+  // Check metadata and turn spans against the final text length before writing the header.
   if !crate::boundary::check_shape(m, col.turns, total) { return wfail_zero(); }
-  let hl: i64 = 8 * (18 + nt);
-  let mut w: [u8] = alloc(hl + total, 0);
   let mut ok: bool = true;
   if !crate::boundary::put_word(inout w, 0, 0) { ok = false; }
   if !crate::boundary::put_word(inout w, 8, 14) { ok = false; }
@@ -559,7 +650,6 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
   }
   if !ok { return wfail_zero(); }
   put_str(inout w, hl, title);
-  put_str(inout w, hl + tl, model);
-  crate::bytes::copy_span(inout w, hl + base, col.text, 0, nx);
+  put_str(inout w, hl + tl, result.model);
   return w;
 }
