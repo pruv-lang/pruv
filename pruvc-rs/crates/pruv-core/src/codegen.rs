@@ -5042,9 +5042,38 @@ impl<'a> Gen<'a> {
                     ), b));
                 }
                 if n == "subview" {
-                    let b = self.arr_ref(arg(a, 0)?)?;
+                    let source = arg(a, 0)?;
+                    let b = self.arr_ref(source)?;
                     let lo = self.e(arg(a, 1)?)?;
                     let hi = self.e(arg(a, 2)?)?;
+                    if x.ty.as_deref() == Some("str") {
+                        let string_source = expr_ty(source).as_deref() == Some("str");
+                        if self.verified && !string_source {
+                            return Ok(format!("unsafe {{ ::core::str::from_utf8_unchecked(({}).get_unchecked((({}) as usize)..(({}) as usize))) }}", b, lo, hi));
+                        }
+                        if !self.verified {
+                            let checks = if string_source {
+                                concat!(
+                                    "pruv_slice_oob(pruv_lo, pruv_hi, pruv_a.len()) } ",
+                                    "if !(pruv_a.is_char_boundary(pruv_lo as usize) && pruv_a.is_char_boundary(pruv_hi as usize)) ",
+                                    "{ pruv_slice_cut(pruv_lo, pruv_hi, pruv_a.len()) } ",
+                                    "&pruv_a[(pruv_lo as usize)..(pruv_hi as usize)]"
+                                )
+                            } else {
+                                concat!(
+                                    "pruv_oob(pruv_lo, pruv_a.len()) } ",
+                                    "let pruv_span: &[u8] = &pruv_a[(pruv_lo as usize)..(pruv_hi as usize)]; ",
+                                    "match ::core::str::from_utf8(pruv_span) { Ok(pruv_t) => pruv_t, ",
+                                    "Err(_) => panic!(\"pruv: invalid UTF-8 (len {})\", pruv_span.len()), }"
+                                )
+                            };
+                            return Ok(format!(concat!(
+                                "match ({}, {}, {}) {{ (pruv_a, pruv_lo, pruv_hi) => {{ ",
+                                "if !(pruv_lo >= 0 && pruv_lo <= pruv_hi && (pruv_hi as u64) <= (pruv_a.len() as u64)) ",
+                                "{{ {} }} }}"
+                            ), b, lo, hi, checks));
+                        }
+                    }
                     if !self.verified {
                         return Ok(format!(concat!(
                             "match ({}, {}, {}) {{ (pruv_a, pruv_lo, pruv_hi) => {{ ",

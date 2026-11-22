@@ -2276,10 +2276,23 @@ class FnVerifier:
             return res
         if n == "subview":
             base, lo, hi = args
-            s.prove(st, g, z3.And(lo >= 0, lo <= hi, hi <= base.n), e, "index_oob",
-                    "subview range 0 <= lo <= hi <= len(%s)" % base.name)
+            to_str = getattr(e, "ty", None) == STR   # LG25 (R-6g-10): a view passed to a str parameter
+            from_str = to_str and getattr(e.args[0], "ty", None) == STR
+            if from_str:
+                s.prove(st, g, z3.And(lo >= 0, lo <= hi, hi <= base.n), e, "string_slice_range",
+                        "subview range 0 <= lo <= hi <= len(%s)" % base.name)
+                s.prove(st, g, z3.And(str_boundary(base, lo), str_boundary(base, hi)), e, "utf8_boundary",
+                        "subview cuts of %s at UTF-8 character boundaries" % base.name)
+            else:
+                s.prove(st, g, z3.And(lo >= 0, lo <= hi, hi <= base.n), e, "index_oob",
+                        "subview range 0 <= lo <= hi <= len(%s)" % base.name)
             p = z3.Int("subview!p")
-            return mk_arr(z3.Lambda([p], z3.Select(base.a, lo + p)), hi - lo, "subview", base.elem)
+            span = mk_arr(z3.Lambda([p], z3.Select(base.a, lo + p)), hi - lo, "subview", base.elem)
+            if to_str and not from_str:
+                cb = z3.And(str_boundary(base, lo), str_boundary(base, hi))
+                s.prove(st, g, z3.Or(s.model.utf8_valid(span), z3.And(s.model.utf8_valid(base), cb)), e,
+                        "utf8_invalid", "valid UTF-8 bytes in subview of %s" % base.name)
+            return span
         if n == "substr":   # G2 B1 (G2_SPEC 4.4): range -> boundary -> fresh result
             sv, lo, hi = args
             s.prove(st, g, z3.And(lo >= 0, lo <= hi, hi <= sv.n), e, "string_slice_range",

@@ -1,0 +1,9 @@
+// LG25 (G-DB32-1): the source of a str view is a place; a non-place source is type/view_context in both compilers
+// (audit case: Rust compared the source type first and reported type_mismatch at the literal)
+fn width(t: str) -> i64 {
+  return len(t);
+}
+
+pub fn run() -> i64 {
+  return width(subview(7, 0, 0));
+}

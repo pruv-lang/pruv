@@ -1,0 +1,10 @@
+// LG25 (G-DB32-1): a valid [u8] buffer gives valid spans only at char boundaries; lo is not proven to be one
+fn width(t: str) -> i64 {
+  return len(t);
+}
+
+pub fn run(b: [u8], lo: i64) -> i64
+  requires utf8_valid(b) && 0 <= lo && lo <= len(b)
+{
+  return width(subview(b, lo, len(b)));
+}

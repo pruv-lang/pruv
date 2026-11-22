@@ -3065,11 +3065,31 @@ impl<'a> FnVerifier<'a> {
                 let lo = arg(1)?.try_ast()?;
                 let hi = arg(2)?.try_ast()?;
                 let ob = self.z.and(&[lo.ge_i(0), lo.le(hi), hi.le(&base.n)]);
-                self.prove_core(st, g, &ob, pos(e), "index_oob",
+                let string_view = x.ty.as_deref() == Some("str");
+                let string_source = string_view && match &x.args[0] {
+                    Expr::Var(v) => v.ty.as_deref() == Some("str"),
+                    Expr::FieldAccess(f) => f.ty.as_deref() == Some("str"),
+                    _ => false,
+                };
+                let range_code = if string_source { "string_slice_range" } else { "index_oob" };
+                self.prove_core(st, g, &ob, pos(e), range_code,
                     &format!("subview range 0 <= lo <= hi <= len({})", base.name), None);
                 let p = self.z.int_const("subview!p");
                 let body = base.a.select(&lo.add(&p));
                 let slice = self.z.lambda(&[p], &body);
+                if string_view {
+                    let boundaries = self.z.and(&[self.str_boundary(base, lo), self.str_boundary(base, hi)]);
+                    if string_source {
+                        self.prove_core(st, g, &boundaries, pos(e), "utf8_boundary",
+                            &format!("subview cuts of {} at UTF-8 character boundaries", base.name), None);
+                    } else {
+                        let valid_span = self.model.utf8_valid(&hi.sub(lo), &slice);
+                        let valid_base = self.model.utf8_valid(&base.n, &base.a);
+                        let valid = self.z.or(&[valid_span, self.z.and(&[valid_base, boundaries])]);
+                        self.prove_core(st, g, &valid, pos(e), "utf8_invalid",
+                            &format!("valid UTF-8 bytes in subview of {}", base.name), None);
+                    }
+                }
                 return Ok(Val::Arr(base.like(slice, hi.sub(lo), "subview")));
             }
             "substr" => {

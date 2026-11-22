@@ -3080,7 +3080,7 @@ class Checker:
 
     def user_arg(s, e, want, scope, c, borrow):
         if isinstance(e, Call) and e.name == "subview":
-            if c or not borrow or not is_array(want) or s.in_view:
+            if c or not borrow or not (is_array(want) or want == STR) or s.in_view:
                 s.view_context(e)
             if e.targs is not None:
                 terr(e, "type_arity", "builtin subview takes no type arguments", "remove the `::<...>`")
@@ -3092,12 +3092,20 @@ class Checker:
             s.in_view = True
             if not isinstance(root, Var):
                 try:
-                    s.expect(e.args[0], want, scope, c)   # a view nested in the source is reported where it is
+                    if want == STR:
+                        s.expr(e.args[0], scope, c)
+                    else:
+                        s.expect(e.args[0], want, scope, c)   # a view nested in the source is reported where it is
                 finally:
                     s.in_view = False
                 s.view_context(e)
             try:
-                s.expect(e.args[0], want, scope, c)
+                if want == STR:   # LG25 (R-6g-10): a str or [u8] source viewed as str
+                    st = s.expr(e.args[0], scope, c)
+                    if st != STR and st != ARRAY_U8:
+                        terr(e.args[0], "type_mismatch", "expected %s, found %s" % (type_name(STR), type_name(st)))
+                else:
+                    s.expect(e.args[0], want, scope, c)
                 s.expect(e.args[1], I64, scope, c)
                 s.expect(e.args[2], I64, scope, c)
             finally:

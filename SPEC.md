@@ -1309,6 +1309,24 @@ set_at(inout w, 0, 7);
   index checks it proved stay removed. In safe mode (`--no-verify`) the caller checks the range at run time
   and panics with the array range error.
 - Tests: `tests/runtime/lg6_rt_view*.pruv`, `tests/must_reject/lg6_view_*.pruv`. New error code: `view_context`.
+- R-6g-10 **String views (LG25).** `subview(x, lo, hi)` may also be the direct argument of a non-`inout` `str`
+  parameter. Then `x` is a `str` or a `[u8]` (a local, a parameter or a field path rooted at one), and the callee
+  gets a borrowed `str` of the bytes `x[lo..hi]`: no copy, no allocation, no `! alloc`. R-6g-6 and R-6g-8 apply
+  unchanged; a `str` source for an array parameter stays `type/type_mismatch` (section 6b: the only `[u8]` to `str`
+  conversion that makes a value is `str_from_utf8`).
+  - `str` source: the verifier proves `0 <= lo <= hi <= len(x)` (`string_slice_range`), then
+    `is_char_boundary(x, lo) && is_char_boundary(x, hi)` (`utf8_boundary`), as for `substr`.
+  - `[u8]` source: the verifier proves `0 <= lo <= hi <= len(x)` (`index_oob`), then that the span is valid UTF-8
+    (`utf8_invalid`): `utf8_valid` of the span (its ASCII fact), or `utf8_valid(x)` with both `lo` and `hi`
+    char boundaries of `x` (the byte formula of `is_char_boundary`: the end points, or a byte `< 128` or `>= 192`).
+    A valid UTF-8 buffer cut where no continuation byte starts gives valid pieces, so this is sound.
+  - The callee's parameter `t` has `len(t) == hi - lo` and `t[k] == x[lo + k]`.
+  - Code: Rust passes `x.get_unchecked(lo..hi)` for a `str` source and `str::from_utf8_unchecked` of the byte
+    span for a `[u8]` source when verified, so the proven path has no run-time UTF-8 or boundary check. LLVM passes
+    the pointer advanced by `lo` and the length `hi - lo`. In safe mode (`--no-verify`) the caller checks the range,
+    then the boundaries (`str` source, the `substr` messages) or the bytes (`[u8]` source, `pruv: invalid UTF-8
+    (len n)` with `n = hi - lo`), and panics.
+  - Tests: [views](tests/runtime/lg25_str_view.pruv), `tests/must_reject/lg25_*_view_*.pruv`.
 
 ## 6h. Files (G10)
 

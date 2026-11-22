@@ -1,0 +1,11 @@
+// LG25 (G-DB32-1): a str view goes only to a str parameter; a [u8] parameter does not take a str source
+fn width(t: [u8]) -> i64 {
+  return len(t);
+}
+
+pub fn run(k: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 3
+{
+  let s: str = "abc";
+  return width(subview(s, 0, 3));
+}
