@@ -753,9 +753,11 @@ pub struct State {
     pub obs: std::rc::Rc<HashSet<u32>>,
     /// P13o (verify.py `State.rev`): names of the opaque functions revealed on this path.
     pub rev: std::rc::Rc<BTreeSet<String>>,
-    /// P13o (verify.py `State.apps`): (function, application term, argument values) met on this path, in order.
-    pub apps: std::rc::Rc<Vec<(String, Ast, Vec<Val>)>>,
-    pub app_ids: std::rc::Rc<HashSet<u32>>,
+    /// P13o (verify.py `State.apps`): (function, application term, argument values, guard, enclosing quantifier
+    /// constants) met on this path, in order.
+    pub apps: std::rc::Rc<Vec<(String, Ast, Vec<Val>, Vec<Ast>, Vec<Ast>)>>,
+    /// LG30 (G-LG29-1): (application id, guard ids) of every occurrence in `apps`.
+    pub app_ids: std::rc::Rc<HashSet<(u32, Vec<u32>)>>,
 }
 
 impl State {
@@ -3322,7 +3324,7 @@ impl<'a> FnVerifier<'a> {
         };
         if f.opaque && !code {
             // P13o: a contract application of an opaque function is its symbol
-            return Ok(Val::Bool(self.opq(f, &args, st)?));
+            return Ok(Val::Bool(self.opq(f, &args, st, g)?));
         }
         let mut cenv = Env::default();
         for (p, a) in f.params.iter().zip(args.iter()) {
@@ -3351,10 +3353,13 @@ impl<'a> FnVerifier<'a> {
     /// whose bound variable reaches an argument the application is expanded in place instead (a reveal equation cannot
     /// mention a bound variable). A new application is recorded on the path; if F is revealed on the path its equation
     /// is appended to pc at once.
-    fn opq(&mut self, f: &'a ast::Function, args: &[Val], st: &mut State) -> R<Ast> {
+    /// LG30 (G-LG29-1): every occurrence is recorded with its path guard g (one entry per application and guard);
+    /// the body is evaluated under that guard, so the facts it pushes (W of a str read) hold only where the call is
+    /// reached, while the definition equation app == body is pushed once per application, unguarded.
+    fn opq(&mut self, f: &'a ast::Function, args: &[Val], st: &mut State, g: &[Ast]) -> R<Ast> {
         let parts = opq_parts(args)?;
         if !self.qstack.is_empty() && parts.iter().any(|t| self.qstack.iter().any(|c| t.occurs(c))) {
-            return self.opq_body(f, args, st);
+            return self.opq_body(f, args, st, g);
         }
         if !self.opq_fns.contains_key(&f.name) {
             let dom: Vec<Sort> = parts.iter().map(|t| t.sort()).collect();
@@ -3363,26 +3368,45 @@ impl<'a> FnVerifier<'a> {
         }
         let app = self.opq_fns[&f.name].apply(&parts);
         let i = app.id();
-        if !st.app_ids.contains(&i) {
-            std::rc::Rc::make_mut(&mut st.apps).push((f.name.clone(), app.clone(), args.to_vec()));
-            std::rc::Rc::make_mut(&mut st.app_ids).insert(i);
+        let key = (i, g.iter().map(|c| c.id()).collect::<Vec<u32>>());
+        if !st.app_ids.contains(&key) {
+            let first = !st.apps.iter().any(|(_, a, _, _, _)| a.id() == i);
+            let qs = self.qstack.clone();
+            std::rc::Rc::make_mut(&mut st.apps).push((f.name.clone(), app.clone(), args.to_vec(), g.to_vec(), qs));
+            std::rc::Rc::make_mut(&mut st.app_ids).insert(key);
             if st.rev.contains(&f.name) {
-                let b = self.opq_body(f, args, st)?;
-                st.pc.push(app.eq(&b));
+                let qs = self.qstack.clone();
+                self.opq_occ(f, &app, args, st, g, &qs, first)?;
             }
         }
         Ok(app)
     }
 
+    /// LG30 (G-LG29-1, verify.py `opq_occ`): the body of one recorded occurrence, evaluated under its guard g (its
+    /// facts go to pc under g); the first occurrence of an application also pushes the unguarded equation app == body.
+    /// The quantifier constants qs enclosing the occurrence are bound again while the body is evaluated, so a guard
+    /// over a bound variable stays quantified on a later `reveal` (the arguments never mention them).
+    #[allow(clippy::too_many_arguments)]
+    fn opq_occ(&mut self, f: &'a ast::Function, app: &Ast, args: &[Val], st: &mut State, g: &[Ast], qs: &[Ast], first: bool) -> R<()> {
+        let outer = std::mem::replace(&mut self.qstack, qs.to_vec());
+        let b = self.opq_body(f, args, st, g);
+        self.qstack = outer;
+        let b = b?;
+        if first {
+            st.pc.push(app.eq(&b));
+        }
+        Ok(())
+    }
+
     /// P13o: the body of the opaque f over the argument values (its contract template; opaque calls in it stay
-    /// symbols, so a reveal does not cascade).
-    fn opq_body(&mut self, f: &'a ast::Function, args: &[Val], st: &mut State) -> R<Ast> {
+    /// symbols, so a reveal does not cascade). LG30 (G-LG29-1): evaluated under the guard g of the occurrence.
+    fn opq_body(&mut self, f: &'a ast::Function, args: &[Val], st: &mut State, g: &[Ast]) -> R<Ast> {
         let xa = f.x_auto.as_ref().ok_or_else(|| format!("opaque {} has no contract expansion", f.name))?;
         let mut cenv = Env::default();
         for (p, a) in f.params.iter().zip(args.iter()) {
             cenv.set(&p.name, a.clone());
         }
-        self.ev_ast(xa, st, &[], false, &cenv)
+        self.ev_ast(xa, st, g, false, &cenv)
     }
 
     /// P13o: `reveal F;` makes F transparent on the rest of this path: the equation of every application already
@@ -3394,11 +3418,13 @@ impl<'a> FnVerifier<'a> {
         }
         std::rc::Rc::make_mut(&mut st.rev).insert(name.to_string());
         let apps = std::rc::Rc::clone(&st.apps);
-        for (fname, app, args) in apps.iter() {
+        let mut seen: HashSet<u32> = HashSet::new();
+        for (fname, app, args, g, qs) in apps.iter() {
             if fname == name {
                 let f: &'a ast::Function = self.funcs[fname.as_str()];
-                let b = self.opq_body(f, args, &mut st)?;
-                st.pc.push(app.eq(&b));
+                let first = !seen.contains(&app.id());
+                self.opq_occ(f, app, args, &mut st, g, qs, first)?;
+                seen.insert(app.id());
             }
         }
         Ok(st)
@@ -3406,7 +3432,7 @@ impl<'a> FnVerifier<'a> {
 
     /// P13o: the opaque functions applied on this path and not revealed, sorted.
     pub(crate) fn hidden(&self, st: &State) -> Vec<String> {
-        let s: BTreeSet<&String> = st.apps.iter().map(|(n, _, _)| n).filter(|n| !st.rev.contains(*n)).collect();
+        let s: BTreeSet<&String> = st.apps.iter().map(|(n, _, _, _, _)| n).filter(|n| !st.rev.contains(*n)).collect();
         s.into_iter().cloned().collect()
     }
 
@@ -3517,7 +3543,7 @@ impl<'a> FnVerifier<'a> {
         // named result keeps its argument value.
         let xv = match (code, &f.x_auto) {
             // P13o: the result is the symbol; its body is known only where F is revealed
-            (true, _) if f.opaque => Some(self.opq(f, &args_of(&cenv, f), st)?),
+            (true, _) if f.opaque => Some(self.opq(f, &args_of(&cenv, f), st, g)?),
             (true, Some(xa)) => Some(self.ev_ast(xa, st, g, false, &cenv)?),
             _ => None,
         };

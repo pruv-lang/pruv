@@ -1,0 +1,14 @@
+// LG30 (R-6b-3): the byte after a lead byte is not a char boundary, so a run starting there is not a valid span
+fn cp(b: [u8], m: i64, q: i64, e: i64, inout d: [u8]) -> i64
+  requires 0 <= m && m <= len(b) && utf8_valid_span(b, 0, m)
+  requires 1 <= q && q <= e && e < m && b[q - 1] >= 192 && b[e] < 128 && e - q <= len(d)
+  ensures len(d) == len(old(d)) && result == e - q && utf8_valid_span(d, 0, result)
+{
+  copy_range(inout d, 0, b, q, e - q);
+  return e - q;
+}
+
+pub fn run(n: i64) -> i64
+{
+  return n;
+}
