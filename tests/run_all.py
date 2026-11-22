@@ -1758,8 +1758,10 @@ def main():
             return 2
     backends = ["rust", "llvm"] if backend == "both" else [backend]
     sweep_stale_work()
-    for sig in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(sig, _terminate)
+    # SIGHUP does not exist on Windows
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), _terminate)
     WORK = tempfile.mkdtemp(prefix=WORK_PREFIX)
     with open(os.path.join(WORK, ".owner"), "w") as f:
         f.write("%d\n" % os.getpid())
