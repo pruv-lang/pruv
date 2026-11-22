@@ -3632,6 +3632,21 @@ class FnGen:
                 b = s.cev(a[0])
                 s.m.uses_utf8_valid = True
                 return V("i1", s.op("call i1 @pruv_utf8_valid(ptr %s, i64 %s)" % (b.a, b.b)))
+            if n == "utf8_valid_span":   # LG26 (R-6b-3): the --no-verify requires check; false outside the range
+                b = s.cev(a[0])
+                lo = s.cev(a[1])
+                hi = s.cev(a[2])
+                s.m.uses_utf8_valid = True
+                ln = s.op("zext i64 %s to i128" % b.b)
+                c1 = s.op("icmp sge i128 %s, 0" % lo.a)
+                c2 = s.op("icmp sle i128 %s, %s" % (lo.a, hi.a))
+                c3 = s.op("icmp sle i128 %s, %s" % (hi.a, ln))
+                ok = s.op("and i1 %s, %s" % (s.op("and i1 %s, %s" % (c1, c2)), c3))
+                lo64 = s.op("select i1 %s, i64 %s, i64 0" % (ok, s.op("trunc i128 %s to i64" % lo.a)))
+                n64 = s.op("select i1 %s, i64 %s, i64 0" % (ok, s.op("trunc i128 %s to i64" % s.op("sub i128 %s, %s" % (hi.a, lo.a)))))
+                p = s.op("getelementptr i8, ptr %s, i64 %s" % (b.a, lo64))
+                v = s.op("call i1 @pruv_utf8_valid(ptr %s, i64 %s)" % (p, n64))
+                return V("i1", s.op("and i1 %s, %s" % (ok, v)))
             if n == "is_char_boundary":  # G2 B2
                 sv = s.cev(a[0])
                 iv = s.cev(a[1])

@@ -278,12 +278,6 @@ class Model:
         s.bufs = {}         # "int" | "bool" -> (sort, constructor, length accessor, array accessor)
         s.buf_names = set()
         s.maps = {}
-        # Every concrete execution is one interpretation of this function: map each
-        # (length, byte array) to an ID for its prefix of that length. Congruence
-        # covers equal terms; different terms may have equal or distinct IDs.
-        # No injectivity or byte-content axioms are assumed. When the same bytes
-        # are built differently the resulting loss is in proof completeness.
-        s.utf8_valid_decl = None
         s.strkey = None     # declared on first String-key use so other programs keep their solver input
         s.size_f, s.wf_f, s.fixed_memo = {}, {}, {}
         if meta is not None:
@@ -402,17 +396,8 @@ class Model:
         return s.strkey(key.n, key.a)
 
     def utf8_valid(s, b):
-        if s.utf8_valid_decl is None:
-            s.utf8_valid_decl = z3.Function("utf8_valid!", z3.IntSort(), b.a.sort(), z3.BoolSort())
-        # Array tails outside the logical length are unobservable.
-        k = z3.Int("utf8!k")
-        contents = z3.Lambda([k], z3.If(z3.And(k >= 0, k < b.n), z3.Select(b.a, k), 0))
-        # LG9 (G-DB15-1): bytes that are all below 128 are valid UTF-8 (ASCII), so a byte-level proof establishes
-        # the predicate. Sound: `utf8_valid(b) == ascii(b) || utf8_valid!(b)` holds with utf8_valid! read as the
-        # real check, because ascii(b) implies it.
-        a = z3.Int("utf8!a")
-        ascii = z3.ForAll([a], z3.Implies(z3.And(a >= 0, a < b.n), z3.Select(b.a, a) < 128))
-        return z3.Or(ascii, s.utf8_valid_decl(b.n, contents))
+        # LG26 (R-6b-3, G-LG25-1): the exact Rust `str::from_utf8` validity of the first b.n bytes of b
+        return utf8_window(lambda t: z3.Select(b.a, t), b.n)
 
     def map_fields(s, ty):
         if ty not in s.maps:
@@ -839,6 +824,123 @@ def _has_vf(e, kind=None):
     return any(_has_vf(c, kind) for c in _kids(e))
 
 
+def utf8_window(B, n):
+    """LG26 (R-6b-3, G-LG25-1): W(B, n), the exact UTF-8 validity (Rust str::from_utf8) of a window of n bytes, B(i)
+    being the Int term of byte i. One ForAll over the bound Int utf8!i; the disjunct order is shared with the Rust
+    compiler. ASCII is implied by the first disjunct."""
+    i = z3.Int("utf8!i")
+    c = B(i)
+
+    def cont(x):
+        return z3.And(128 <= x, x <= 191)
+    p = z3.Or(
+        c < 128,
+        z3.And(194 <= c, c <= 223, i + 1 < n, cont(B(i + 1))),
+        z3.And(c == z3.IntVal(224), i + 2 < n, 160 <= B(i + 1), B(i + 1) <= 191, cont(B(i + 2))),
+        z3.And(z3.Or(z3.And(225 <= c, c <= 236), c == z3.IntVal(238), c == z3.IntVal(239)), i + 2 < n, cont(B(i + 1)), cont(B(i + 2))),
+        z3.And(c == z3.IntVal(237), i + 2 < n, 128 <= B(i + 1), B(i + 1) <= 159, cont(B(i + 2))),
+        z3.And(c == z3.IntVal(240), i + 3 < n, 144 <= B(i + 1), B(i + 1) <= 191, cont(B(i + 2)), cont(B(i + 3))),
+        z3.And(241 <= c, c <= 243, i + 3 < n, cont(B(i + 1)), cont(B(i + 2)), cont(B(i + 3))),
+        z3.And(c == z3.IntVal(244), i + 3 < n, 128 <= B(i + 1), B(i + 1) <= 143, cont(B(i + 2)), cont(B(i + 3))),
+        z3.And(cont(c), z3.Or(
+            z3.And(i >= 1, 194 <= B(i - 1), B(i - 1) <= 244),
+            z3.And(i >= 2, 224 <= B(i - 2), B(i - 2) <= 244, cont(B(i - 1))),
+            z3.And(i >= 3, 240 <= B(i - 3), B(i - 3) <= 244, cont(B(i - 2)), cont(B(i - 1))))))
+    return z3.ForAll([i], z3.Implies(z3.And(0 <= i, i < n), p))
+
+
+def _kids_all(e):
+    """LG26: the sub-expressions of e, like _kids but also through an inout argument marker"""
+    if isinstance(e, InoutArg):
+        return [e.expr]
+    if isinstance(e, Quant):
+        return [e.lo, e.hi, e.body] + list(e.triggers or [])
+    return _kids(e)
+
+
+def _stmt_exprs(st):
+    """LG26: the expressions directly held by statement st (conditions, values, invariants, asserts)"""
+    if isinstance(st, Let):
+        return [st.value]
+    if isinstance(st, Assign):
+        return [st.value]
+    if isinstance(st, IndexAssign):
+        return [st.index, st.value]
+    if isinstance(st, If):
+        return [st.cond]
+    if isinstance(st, While):
+        return [st.cond] + list(st.invariants) + ([st.decreases] if st.decreases is not None else [])
+    if isinstance(st, ForMap):
+        return [st.place] + list(st.invariants)
+    if isinstance(st, Return):
+        return [] if st.value is None else [st.value]
+    if isinstance(st, Assert):
+        return [st.cond]
+    if isinstance(st, ExprStmt):
+        return [st.expr]
+    if isinstance(st, Par):
+        return list(st.calls)
+    if isinstance(st, FieldAssign):
+        return [st.value]
+    if isinstance(st, Match):
+        return [st.scrutinee]
+    return []
+
+
+def _stmt_blocks(st):
+    if isinstance(st, (While, ForMap)):
+        return [st.body]
+    if isinstance(st, If):
+        return [st.then, st.els]
+    if isinstance(st, Match):
+        return [a.body for a in st.arms]
+    return []
+
+
+def _expr_has(e, pred):
+    return pred(e) or any(_expr_has(k, pred) for k in _kids_all(e))
+
+
+def _block_has(stmts, pred):
+    for st in stmts:
+        if any(_expr_has(e, pred) for e in _stmt_exprs(st)):
+            return True
+        if any(_block_has(b, pred) for b in _stmt_blocks(st)):
+            return True
+    return False
+
+
+def _utf8_call(e):
+    """LG26 (R-6b-3, G-LG25-1): a call that mentions UTF-8 validity, or a [u8] subview passed to a str parameter"""
+    if not isinstance(e, Call):
+        return False
+    if e.name in ("utf8_valid", "utf8_valid_span", "str_from_utf8"):
+        return True
+    return (e.name == "subview" and getattr(e, "ty", None) == STR and bool(e.args)
+            and getattr(e.args[0], "ty", None) != STR)
+
+
+def _utf8_pred_call(e):
+    return isinstance(e, Call) and e.name in ("utf8_valid", "utf8_valid_span")
+
+
+def utf8_aware(f, funcs):
+    """LG26 (R-6b-3, G-LG25-1): is f a function whose str values may be assumed valid UTF-8? True when its own
+    requires/ensures/body mention UTF-8 validity (see _utf8_call), or when it calls a user function whose requires or
+    ensures contain utf8_valid / utf8_valid_span. Header decreases and cost count as own contracts; synthesized struct
+    invariant contracts do not (the Rust compiler builds them at verification time). A purely syntactic walk; other functions get no new assumption."""
+    own = list(f.requires) + list(f.ensures) + [e for e in (f.decreases, f.cost) if e is not None]
+    if any(_expr_has(e, _utf8_call) for e in own) or _block_has(f.body, _utf8_call):
+        return True
+
+    def calls_aware(e):
+        if not isinstance(e, Call) or e.name not in funcs:
+            return False
+        g = funcs[e.name]
+        return any(_expr_has(r, _utf8_pred_call) for r in list(g.requires) + list(g.ensures))
+    return any(_expr_has(e, calls_aware) for e in own) or _block_has(f.body, calls_aware)
+
+
 class Arr:
     __slots__ = ("a", "n", "name", "elem")
 
@@ -1242,6 +1344,8 @@ class FnVerifier:
         s.explicit = bool(prog.explicit)    # G4 A1
         s.model = model if model is not None else Model(prog)
         s.f, s.errors = f, errors
+        # LG26 (R-6b-3, G-LG25-1): computed once per function; only a UTF-8 aware function assumes its str values valid
+        s.utf8_aware = utf8_aware(f, s.funcs)
         s.k = 0
         s.seen = set()
         s.qstack = []
@@ -1694,8 +1798,18 @@ class FnVerifier:
         """add a fact that only holds on the short-circuit path g"""
         st.pc.append(z3.Implies(z3.And(*g), fact) if g else fact)
 
+    def assume_str(s, st, g, v):
+        """LG26 (R-6b-3, G-LG25-1): a str value is valid UTF-8 at run time; assumed only in a UTF-8 aware function"""
+        if s.utf8_aware and isinstance(v, Arr):
+            valid = s.model.utf8_valid(v)
+            if s.qstack:    # a field or call result can depend on an enclosing quantifier's indices
+                st.pc.append(z3.ForAll(list(s.qstack), z3.Implies(z3.And(list(g)), valid)))
+            else:
+                s.assume(st, g, valid)
+        return v
+
     # ---------- expressions ----------
-    def read_field(s, st, v, field):
+    def read_field(s, st, v, field, g=()):
         model = s.model
         ty = model.type_of(v)
         i = model.tt.field_index(ty, field)
@@ -1705,6 +1819,8 @@ class FnVerifier:
             fty = model.fields_of(ty)[i][1]
             r = model.field_get(fty, r, field)
             s.observe(st, r, fty)
+            if fty == STR:      # LG26 (R-6b-3, G-LG25-1)
+                s.assume_str(st, list(g), r)
         return r
 
     def field_chain_type(s, ty, path):
@@ -1726,8 +1842,10 @@ class FnVerifier:
             a = z3.K(z3.IntSort(), z3.IntVal(0))
             for i, b in enumerate(e.value):
                 a = z3.Store(a, z3.IntVal(i), z3.IntVal(b))
-            return mk_arr(a, z3.IntVal(len(e.value)), "literal", U8)
+            return s.assume_str(st, g, mk_arr(a, z3.IntVal(len(e.value)), "literal", U8))   # LG26
         if isinstance(e, Var):
+            if s.utf8_aware and getattr(e, "ty", None) == STR:   # LG26: loop havoc makes a mutable str a fresh array
+                return s.assume_str(st, g, env[e.name])
             return env[e.name]
         if isinstance(e, Move):
             v = env[e.name]
@@ -1859,7 +1977,7 @@ class FnVerifier:
                 return res
             return s.model.enum_info(ety)[e.variant][0](*vals)
         if isinstance(e, FieldAccess):
-            return s.read_field(st, s.ev(e.base, st, g, code, env), e.field)
+            return s.read_field(st, s.ev(e.base, st, g, code, env), e.field, g)
         if isinstance(e, IsVariant):
             v = s.ev(e.value, st, g, code, env)
             return s.model.enum_info(s._enum_ty(e, v))[e.variant][1](v)
@@ -1873,6 +1991,8 @@ class FnVerifier:
                 fty = s.model.fields_of(ety, e.variant)[i][1]
                 r = s.model.field_get(fty, r, e.field)
                 s.observe(st, r, fty)
+                if fty == STR:      # LG26 (R-6b-3, G-LG25-1): only where the variant is the active one
+                    s.assume_str(st, list(g) + [s.model.enum_info(ety)[e.variant][1](v)], r)
             return r
         raise Exception("ev: %r" % e)
 
@@ -2157,7 +2277,10 @@ class FnVerifier:
             return mk_arr(z3.K(z3.IntSort(), args[1]), args[0], "alloc", aelem)
         if n == "copy":
             s.spend(st, g, 1 + args[0].n)
-            return mk_arr(args[0].a, args[0].n, "copy", args[0].elem)
+            res = mk_arr(args[0].a, args[0].n, "copy", args[0].elem)
+            if getattr(e.args[0], "ty", None) == STR:     # LG26 (R-6b-3, G-LG25-1)
+                s.assume_str(st, g, res)
+            return res
         if n == "truncate":     # the first m elements of a, as a fresh array of length m
             av, m = args
             s.prove(st, g, z3.And(m >= 0, m <= av.n), e, "index_oob",
@@ -2265,6 +2388,9 @@ class FnVerifier:
             return r
         if n == "utf8_valid":
             return s.model.utf8_valid(args[0])
+        if n == "utf8_valid_span":      # LG26 (R-6b-3, G-LG25-1): contract only, no domain obligation
+            b, lo, hi = args
+            return z3.And(lo >= 0, lo <= hi, hi <= b.n, utf8_window(lambda t: z3.Select(b.a, lo + t), hi - lo))
         if n == "str_from_utf8":
             b = args[0]
             s.prove(st, g, s.model.utf8_valid(b), e, "utf8_invalid", "valid UTF-8 bytes in %s" % b.name)
@@ -2273,7 +2399,7 @@ class FnVerifier:
             k = z3.Int("str!k")
             s.assume(st, g, z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < res.n),
                                                        z3.Select(res.a, k) == z3.Select(b.a, k))))
-            return res
+            return s.assume_str(st, g, res)     # LG26 (R-6b-3, G-LG25-1)
         if n == "subview":
             base, lo, hi = args
             to_str = getattr(e, "ty", None) == STR   # LG25 (R-6g-10): a view passed to a str parameter
@@ -2292,6 +2418,8 @@ class FnVerifier:
                 cb = z3.And(str_boundary(base, lo), str_boundary(base, hi))
                 s.prove(st, g, z3.Or(s.model.utf8_valid(span), z3.And(s.model.utf8_valid(base), cb)), e,
                         "utf8_invalid", "valid UTF-8 bytes in subview of %s" % base.name)
+            if to_str:
+                return s.assume_str(st, g, span)   # LG26: a str view is a valid str (as Rust)
             return span
         if n == "substr":   # G2 B1 (G2_SPEC 4.4): range -> boundary -> fresh result
             sv, lo, hi = args
@@ -2304,7 +2432,7 @@ class FnVerifier:
             k = z3.Int("str!k")
             s.assume(st, g, z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < res.n),
                                                        z3.Select(res.a, k) == z3.Select(sv.a, lo + k))))
-            return res
+            return s.assume_str(st, g, res)     # LG26 (R-6b-3, G-LG25-1)
         if n in CATALOG_NAMES and n not in s.funcs:
             return s.catalog_call(e, args, st, g, code)
         if n == "print":
@@ -2355,6 +2483,8 @@ class FnVerifier:
                 return None
             rty = substitute(f.ret, theta) if theta else f.ret
             res = s.fresh("ret_" + n, rty)
+            if rty == STR:      # LG26 (R-6b-3, G-LG25-1)
+                s.assume_str(st, g, res)
             if isinstance(res, Arr):
                 s.assume(st, g, z3.And(res.n >= 0, res.n <= MAX_LEN))
                 if res.elem == U8:
@@ -3524,6 +3654,8 @@ class FnVerifier:
                 if v.elem == U8:
                     pc.append(u8_dom(v))
                 shape.extend(pc[-2:] if v.elem == U8 else pc[-1:])
+                if p.type == STR and s.utf8_aware:      # LG26 (R-6b-3, G-LG25-1)
+                    pc.append(s.model.utf8_valid(v))
             elif isinstance(v, Map):    # G6 A1
                 pc.append(z3.And(v.n >= 0, v.n <= MAX_LEN))
                 shape.append(pc[-1])

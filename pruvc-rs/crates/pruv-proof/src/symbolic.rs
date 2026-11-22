@@ -295,6 +295,56 @@ fn kids(e: &Expr) -> Vec<&Expr> {
     }
 }
 
+// LG26 (R-6b-3, G-LG25-1): keep UTF-8 quantified facts local to functions that use them.
+fn uses_utf8(f: &ast::Function, funcs: &HashMap<String, &ast::Function>) -> bool {
+    fn contains(e: &Expr, matches: &impl Fn(&ast::Call) -> bool) -> bool {
+        if let Expr::Call(c) = e {
+            if matches(c) {
+                return true;
+            }
+        }
+        match e {
+            Expr::Quant(q) if q.triggers.iter().any(|t| contains(t, matches)) => true,
+            Expr::InoutArg(a) => contains(&a.expr, matches),
+            _ => kids(e).into_iter().any(|child| contains(child, matches)),
+        }
+    }
+
+    fn block(stmts: &[Stmt], uses: &impl Fn(&Expr) -> bool) -> bool {
+        stmts.iter().any(|stmt| match stmt {
+            Stmt::Let(s) => uses(&s.value),
+            Stmt::Assign(s) => uses(&s.value),
+            Stmt::IndexAssign(s) => uses(&s.index) || uses(&s.value),
+            Stmt::FieldAssign(s) => uses(&s.value),
+            Stmt::If(s) => uses(&s.cond) || block(&s.then, uses) || block(&s.els, uses),
+            Stmt::While(s) => uses(&s.cond) || s.invariants.iter().any(uses)
+                || uses(&s.decreases) || block(&s.body, uses),
+            Stmt::ForMap(s) => uses(&s.place) || s.invariants.iter().any(uses) || block(&s.body, uses),
+            Stmt::Return(s) => s.value.as_ref().is_some_and(uses),
+            Stmt::Assert(s) => uses(&s.cond),
+            Stmt::ExprStmt(s) => uses(&s.expr),
+            Stmt::Match(s) => uses(&s.scrutinee) || s.arms.iter().any(|a| block(&a.body, uses)),
+            Stmt::Par(s) => s.calls.iter().any(uses),
+        })
+    }
+
+    let predicate = |c: &ast::Call| matches!(c.name.as_str(), "utf8_valid" | "utf8_valid_span");
+    let uses = |e: &Expr| contains(e, &|c| {
+        predicate(c) || c.name == "str_from_utf8"
+            || (c.name == "subview" && c.ty.as_deref() == Some("str")
+                && match c.args.first() {
+                    Some(Expr::Var(v)) => v.ty.as_deref() == Some("array_u8"),
+                    Some(Expr::FieldAccess(v)) => v.ty.as_deref() == Some("array_u8"),
+                    _ => false,
+                })
+            || funcs.get(&c.name).is_some_and(|callee| {
+                callee.requires.iter().chain(&callee.ensures).any(|e| contains(e, &predicate))
+            })
+    });
+    f.requires.iter().chain(&f.ensures).chain(&f.decreases).chain(&f.cost).any(&uses)
+        || block(&f.body, &uses)
+}
+
 /// verify.py `_has_vf` (line 127).
 pub fn has_vf(e: &Expr, kind: PKind) -> bool {
     if partial_here(e, kind) {
@@ -821,6 +871,7 @@ pub enum Arith {
 
 /// verify.py `FnVerifier` (line 189). One per function; `k`/`seen`/`aggs`/`lemmas` are per function.
 pub struct FnVerifier<'a> {
+    utf8_aware: bool,
     pub z: Z3,
     pub prelude: &'a Prelude,
     pub model: &'a Model,
@@ -1154,6 +1205,7 @@ impl<'a> FnVerifier<'a> {
     /// Prototype (hand-builder) path: uses only the pieces, without a program or function.
     pub fn new(z: &Z3, prelude: &'a Prelude, model: &'a Model, trace: &'a mut Trace, fname: &str) -> Self {
         FnVerifier {
+            utf8_aware: false,
             z: z.clone(),
             prelude,
             model,
@@ -1319,6 +1371,7 @@ impl<'a> FnVerifier<'a> {
                 }
             }
         }
+        v.utf8_aware = uses_utf8(f, &v.funcs);
         v.f = Some(f);
         v.fn_tag = pruv_core::diagnostic::line_tag(f.line) as u32;
         v
@@ -1866,6 +1919,9 @@ impl<'a> FnVerifier<'a> {
                     }
                 }
             }
+            if let Some(valid) = self.str_utf8(ty, &v) {
+                pc.push(valid);
+            }
             env.set(name, v);
         }
         self.params = env.clone();
@@ -1891,6 +1947,27 @@ impl<'a> FnVerifier<'a> {
             st.pc.push(fact);
         } else {
             st.pc.push(self.z.and(g).implies(&fact));
+        }
+    }
+
+    fn str_utf8(&self, ty: &Ty, value: &Val) -> Option<Ast> {
+        if self.utf8_aware && *ty == Ty::Str {
+            if let Val::Arr(a) = value {
+                return Some(self.model.utf8_valid(&a.n, &a.a));
+            }
+        }
+        None
+    }
+
+    fn assume_str_utf8(&self, st: &mut State, g: &[Ast], ty: &Ty, value: &Val) {
+        if let Some(valid) = self.str_utf8(ty, value) {
+            if self.qstack.is_empty() {
+                self.assume(st, g, valid);
+            } else {
+                // A field or call result can depend on an enclosing quantifier's indices.
+                let guarded = self.z.and(g).implies(&valid);
+                st.pc.push(self.z.forall(&self.qstack, &guarded, &[]));
+            }
         }
     }
 
@@ -2340,14 +2417,23 @@ impl<'a> FnVerifier<'a> {
             Expr::IntLit(x) => Ok(Val::Int(self.z.int_str(&norm_int(&x.value)))),
             Expr::BoolLit(x) => Ok(Val::Bool(self.z.bool_val(x.value))),
             Expr::StrLit(x) => {
-                // G2 B1: constant byte array. No counters, obligations or assumptions.
+                // G2 B1: constant byte array.
                 let mut a = self.z.const_array(&self.z.int_sort(), &self.z.int(0));
                 for (i, b) in x.value.iter().enumerate() {
                     a = a.store(&self.z.int(i as i64), &self.z.int(*b as i64));
                 }
-                Ok(Val::Arr(Arr::new(a, self.z.int(x.value.len() as i64), "literal".to_string(), Elem::U8)))
+                let value = Val::Arr(Arr::new(a, self.z.int(x.value.len() as i64), "literal".to_string(), Elem::U8));
+                self.assume_str_utf8(st, g, &Ty::Str, &value);
+                Ok(value)
             }
-            Expr::Var(x) => env.try_get(&x.name).cloned().ok_or_else(|| format!("'{}'", x.name)),
+            Expr::Var(x) => {
+                let value = env.try_get(&x.name).cloned().ok_or_else(|| format!("'{}'", x.name))?;
+                // Loop havoc represents a mutable str as a fresh byte array.
+                if self.utf8_aware && self.t(x.ty.as_deref()) == Some(Ty::Str) {
+                    self.assume_str_utf8(st, g, &Ty::Str, &value);
+                }
+                Ok(value)
+            }
             Expr::Unary(x) => {
                 let v = self.ev_ast(&x.operand, st, g, code, env)?;
                 if x.op == "!" {
@@ -2644,6 +2730,7 @@ impl<'a> FnVerifier<'a> {
                     let r = sf.accs[idx].apply1(va);
                     self.observe(st, va, Some(sty), false)?; // the parent's one-step wf/size equations give the field's own facts
                     let rv = self.field_val(&fty, r, &x.field)?;
+                    self.assume_str_utf8(st, g, &fty, &rv);
                     if let Val::Dt(a, t) = &rv {
                         self.observe(st, a, Some(t), false)?;
                     }
@@ -2682,6 +2769,11 @@ impl<'a> FnVerifier<'a> {
                     let r = vf.accs[idx].apply1(v.try_ast()?);
                     self.observe(st, v.try_ast()?, Some(&ety), false)?;
                     let rv = self.field_val(&fty, r, &x.field)?;
+                    if self.utf8_aware && fty == Ty::Str {
+                        let mut guards = g.to_vec();
+                        guards.push(vf.rec.apply1(v.try_ast()?));
+                        self.assume_str_utf8(st, &guards, &fty, &rv);
+                    }
                     if let Val::Dt(a, t) = &rv {
                         self.observe(st, a, Some(t), false)?;
                     }
@@ -2778,7 +2870,11 @@ impl<'a> FnVerifier<'a> {
             "copy" => {
                 let a = arg(0)?.try_arr()?;
                 self.spend(st, g, self.z.int(1).add(&a.n));
-                return Ok(Val::Arr(a.like(a.a.clone(), a.n.clone(), "copy")));
+                let value = Val::Arr(a.like(a.a.clone(), a.n.clone(), "copy"));
+                if self.utf8_aware && self.t(x.ty.as_deref()) == Some(Ty::Str) {
+                    self.assume_str_utf8(st, g, &Ty::Str, &value);
+                }
+                return Ok(value);
             }
             "truncate" => {
                 // the first m elements of a, as a fresh array of length m
@@ -3045,6 +3141,13 @@ impl<'a> FnVerifier<'a> {
                 let b = arg(0)?.try_arr()?;
                 return Ok(Val::Bool(self.model.utf8_valid(&b.n, &b.a)));
             }
+            "utf8_valid_span" => {
+                let b = arg(0)?.try_arr()?;
+                let lo = arg(1)?.try_ast()?;
+                let hi = arg(2)?.try_ast()?;
+                let valid = self.model.utf8_window(&hi.sub(lo), |i| b.a.select(&lo.add(i)));
+                return Ok(Val::Bool(self.z.and(&[lo.ge_i(0), lo.le(hi), hi.le(&b.n), valid])));
+            }
             "str_from_utf8" => {
                 let b = arg(0)?.try_arr()?;
                 let ob = self.model.utf8_valid(&b.n, &b.a);
@@ -3058,6 +3161,7 @@ impl<'a> FnVerifier<'a> {
                 let body = res.a.select(&k).eq(&b.a.select(&k));
                 let fa = self.z.forall(std::slice::from_ref(&k), &rng.implies(&body), &[]);
                 self.assume(st, g, fa);
+                self.assume_str_utf8(st, g, &Ty::Str, &res_v);
                 return Ok(res_v);
             }
             "subview" => {
@@ -3090,7 +3194,11 @@ impl<'a> FnVerifier<'a> {
                             &format!("valid UTF-8 bytes in subview of {}", base.name), None);
                     }
                 }
-                return Ok(Val::Arr(base.like(slice, hi.sub(lo), "subview")));
+                let value = Val::Arr(base.like(slice, hi.sub(lo), "subview"));
+                if string_view {
+                    self.assume_str_utf8(st, g, &Ty::Str, &value);
+                }
+                return Ok(value);
             }
             "substr" => {
                 // G2 B1: range → bounds → new result → length assumption → byte-relation assumption.
@@ -3126,7 +3234,8 @@ impl<'a> FnVerifier<'a> {
                 let body = res.a.select(&k).eq(&sv.a.select(&lo.add(&k)));
                 let fa = self.z.forall(std::slice::from_ref(&k), &rng.implies(&body), &[]);
                 self.assume(st, g, fa);
-                return Ok(Val::Arr(res));
+                self.assume_str_utf8(st, g, &Ty::Str, &res_v);
+                return Ok(res_v);
             }
             // G6 A1 (G6_SPEC 11.3): the standard catalog (unless the program declares a function of that name)
             _ if pruv_core::foreign::is_catalog(n) && !self.funcs.contains_key(n) => {
@@ -3319,6 +3428,7 @@ impl<'a> FnVerifier<'a> {
             Ty::from_gtype(&gtype::substitute(&ret.to_gtype(), &self.theta))
         };
         let res = self.try_fresh(&format!("ret_{}", n), &rty)?;
+        self.assume_str_utf8(st, g, &rty, &res);
         if let Val::Arr(ra) = &res {
             let w = self.z.and(&[ra.n.ge_i(0), ra.n.le_i(MAX_LEN)]);
             self.assume(st, g, w);
@@ -5292,6 +5402,7 @@ impl<'a> FnVerifier<'a> {
         let rty = Ty::from_name(&f.ret);
         if rty != Ty::Unit {
             let res = self.try_fresh("result", &rty)?;
+            self.assume_str_utf8(st, &[], &rty, &res);
             match &res {
                 Val::Arr(a) => {
                     st.pc.push(self.z.and(&[a.n.ge_i(0), a.n.le_i(MAX_LEN)]));
@@ -5368,6 +5479,10 @@ impl<'a> FnVerifier<'a> {
                         pc.push(w);
                     }
                 }
+            }
+            if let Some(valid) = self.str_utf8(&pty, &v) {
+                shape.push(valid.clone());
+                pc.push(valid);
             }
             env.set(&p.name, v);
         }

@@ -2978,6 +2978,18 @@ impl<'a> Gen<'a> {
                 if n == "utf8_valid" {
                     return Ok(format!("::core::str::from_utf8({}).is_ok()", self.carr(arg(a, 0)?)?));
                 }
+                if n == "utf8_valid_span" {
+                    // LG26 (R-6b-3): the --no-verify requires check; false outside the range
+                    let b = self.carr(arg(a, 0)?)?;
+                    let lo = self.c(arg(a, 1)?)?;
+                    let hi = self.c(arg(a, 2)?)?;
+                    return Ok(format!(
+                        "match (&{}, {}, {}) {{ (pruv_b, pruv_lo, pruv_hi) => pruv_lo >= 0 && pruv_lo <= pruv_hi && \
+pruv_hi <= (pruv_b.len() as i128) && \
+::core::str::from_utf8(&pruv_b[(pruv_lo as usize)..(pruv_hi as usize)]).is_ok() }}",
+                        b, lo, hi
+                    ));
+                }
                 if bit_rust(n).is_some() {
                     // P2: i128 arguments checked inside i64 by the helper
                     self.need_bits.insert(n.to_string());

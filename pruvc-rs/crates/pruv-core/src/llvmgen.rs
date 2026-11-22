@@ -5493,6 +5493,28 @@ impl<'a> FnGen<'a> {
                     let ok = self.op(format!("call i1 @pruv_utf8_valid(ptr {}, i64 {})", b.a, b.b))?;
                     return Ok(V::new(Kind::I1, ok));
                 }
+                if n == "utf8_valid_span" {
+                    // LG26 (R-6b-3): the --no-verify requires check; false outside the range
+                    let b = self.cev(arg(a, 0)?)?;
+                    let lo = self.cev(arg(a, 1)?)?;
+                    let hi = self.cev(arg(a, 2)?)?;
+                    self.m.uses_utf8_valid = true;
+                    let ln = self.op(format!("zext i64 {} to i128", b.b))?;
+                    let c1 = self.op(format!("icmp sge i128 {}, 0", lo.a))?;
+                    let c2 = self.op(format!("icmp sle i128 {}, {}", lo.a, hi.a))?;
+                    let c3 = self.op(format!("icmp sle i128 {}, {}", hi.a, ln))?;
+                    let c12 = self.op(format!("and i1 {}, {}", c1, c2))?;
+                    let ok = self.op(format!("and i1 {}, {}", c12, c3))?;
+                    let lt = self.op(format!("trunc i128 {} to i64", lo.a))?;
+                    let lo64 = self.op(format!("select i1 {}, i64 {}, i64 0", ok, lt))?;
+                    let d = self.op(format!("sub i128 {}, {}", hi.a, lo.a))?;
+                    let dt = self.op(format!("trunc i128 {} to i64", d))?;
+                    let n64 = self.op(format!("select i1 {}, i64 {}, i64 0", ok, dt))?;
+                    let p = self.op(format!("getelementptr i8, ptr {}, i64 {}", b.a, lo64))?;
+                    let v = self.op(format!("call i1 @pruv_utf8_valid(ptr {}, i64 {})", p, n64))?;
+                    let r = self.op(format!("and i1 {}, {}", ok, v))?;
+                    return Ok(V::new(Kind::I1, r));
+                }
                 if n == "is_char_boundary" {
                     // G2 B2
                     let s = self.cev(arg(a, 0)?)?;

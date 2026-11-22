@@ -35,7 +35,7 @@ def x_has_bit(e):
 
 # P2 batch 4: byte-word access on [u8]: load_be(a, i, n) and the statement-only store_be(inout a, i, w, n)
 WORD_BUILTINS = ("load_be", "store_be", "load_le", "store_le")
-BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within", "subview") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range; L-copy-range
+BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "utf8_valid_span", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within", "subview") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range; L-copy-range
 RESERVED_TYPE_NAMES = ("Option", "Result", "Some", "None", "Ok", "Err")
 TYPE_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9_]*\Z")
 FIELD_NAME_RE = re.compile(r"[a-z][A-Za-z0-9_]*\Z")
@@ -3569,6 +3569,11 @@ class Checker:
             if n == "utf8_valid":
                 return BOOL
             s.used_effects.add("alloc"); return STR
+        if n == "utf8_valid_span":      # LG26 (R-6b-3, G-LG25-1): contract only, b[lo..hi] is valid UTF-8
+            if not c or s.ckind == "cost":
+                terr(e, "contract_only", "utf8_valid_span is only allowed in contracts")
+            arity(3); s.expect(a[0], ARRAY_U8, scope, c); s.expect(a[1], I64, scope, c); s.expect(a[2], I64, scope, c)
+            return BOOL
         if n == "substr":   # G2 B0
             if c: terr(e, "effect_in_contract", "substr not allowed in contracts")
             arity(3); s.expect(a[0], STR, scope, c); s.expect(a[1], I64, scope, c); s.expect(a[2], I64, scope, c)
@@ -3814,7 +3819,7 @@ def x_scan_expr(e, funcs):
                 return r
         return None
     if isinstance(e, Call):
-        if e.name in funcs or e.name == "len" or e.name in BIT_BUILTINS or e.name in ("load_be", "load_le", "utf8_valid"):
+        if e.name in funcs or e.name == "len" or e.name in BIT_BUILTINS or e.name in ("load_be", "load_le", "utf8_valid", "utf8_valid_span"):
             for a in e.args:
                 r = x_scan_expr(a, funcs)
                 if r is not None:

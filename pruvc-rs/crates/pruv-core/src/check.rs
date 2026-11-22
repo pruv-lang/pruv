@@ -978,7 +978,7 @@ impl Checker {
             if funcs.contains_key(&name) {
                 return Err(terr(f.line, f.col, "dup_fn", format!("function {} defined twice", name), ""));
             }
-            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within" | "subview")
+            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "utf8_valid_span" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within" | "subview")
                 || is_bit_builtin(&name)
                 || is_word_builtin(&name)
                 || contract_only(&name).is_some()
@@ -3997,7 +3997,7 @@ impl Checker {
                     format!("{} returns {}: a par branch must return ()", n, tn(&f.ret)),
                     "call a unit Pruv helper and pass results back through whole inout arrays"));
             }
-        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within", "subview"].contains(&n.as_str())
+        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "utf8_valid_span", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within", "subview"].contains(&n.as_str())
             || is_bit_builtin(n)
             || is_word_builtin(n)
             || contract_only(n).is_some() || is_catalog(n) || (n == "old" && self.uses_inout)
@@ -6040,7 +6040,7 @@ impl Checker {
                 }
             }
         }
-        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within" | "subview")
+        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "utf8_valid_span" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within" | "subview")
             || is_bit_builtin(&n)
             || is_word_builtin(&n);
         let is_old = n == "old" && self.uses_inout && !self.funcs.contains_key(&n); // G5 A0: contextual builtin
@@ -6159,6 +6159,17 @@ impl Checker {
                 self.expect(&mut e.args[2], &at, scope, c, None)?;
                 self.expect(&mut e.args[3], &i64t(), scope, c, None)?;
                 self.expect(&mut e.args[4], &i64t(), scope, c, None)?;
+                return Ok(boolt());
+            }
+            // LG26 (R-6b-3, G-LG25-1): this predicate is evaluated only by the verifier.
+            "utf8_valid_span" => {
+                if !c || self.ckind == "cost" {
+                    return Err(terr(line, col, "contract_only", "utf8_valid_span is only allowed in contracts", ""));
+                }
+                arity(3)?;
+                self.expect(&mut e.args[0], &GType::array_u8(), scope, c, None)?;
+                self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
+                self.expect(&mut e.args[2], &i64t(), scope, c, None)?;
                 return Ok(boolt());
             }
             "utf8_valid" | "str_from_utf8" => {
@@ -6771,7 +6782,7 @@ fn x_scan_expr(e: &Expr, funcs: &HashMap<String, Rc<FuncInfo>>) -> Option<String
             crate::refine::kids(e).into_iter().find_map(|child| x_scan_expr(child, funcs))
         }
         Expr::Call(c) => {
-            if funcs.contains_key(&c.name) || c.name == "len" || is_bit_builtin(&c.name) || matches!(c.name.as_str(), "load_be" | "load_le" | "utf8_valid") {
+            if funcs.contains_key(&c.name) || c.name == "len" || is_bit_builtin(&c.name) || matches!(c.name.as_str(), "load_be" | "load_le" | "utf8_valid" | "utf8_valid_span") {
                 c.args.iter().find_map(|a| x_scan_expr(a, funcs))
             } else {
                 Some(format!("it calls {}", c.name))
