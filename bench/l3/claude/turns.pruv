@@ -373,9 +373,21 @@ pub pred fn planned_spans(sl: [i64], b: i64, kept: i64, bytes: i64) -> bool {
         24 * sl[8 * ((b - 1 - j) % 200) + 5] + 24 * sl[8 * ((b - 1 - j) % 200) + 6] <= sl[1600 + j]));
 }
 
+// planned_spans with the end slot as trigger, for plan_end's requires only (G-LG29). Without a
+// trigger z3 picks the row reads as patterns and the ensures proof turns into a long integer
+// search. A trigger only matters where the pred is assumed, so plan_end's ensures and the loops
+// in plan and write_turns keep the untriggered planned_spans.
+pred fn planned_spans_slot(sl: [i64], b: i64, kept: i64, bytes: i64) -> bool {
+  return len(sl) == 1800 && 0 <= kept && kept <= 200 && kept <= b &&
+    (forall j in 0..kept trigger sl[1600 + j]: 0 <= sl[1600 + j] && sl[1600 + j] <= bytes) &&
+    (forall j in 0..kept trigger sl[1600 + j]: (
+      sl[8 * ((b - 1 - j) % 200)] + sl[8 * ((b - 1 - j) % 200) + 1] +
+        24 * sl[8 * ((b - 1 - j) % 200) + 5] + 24 * sl[8 * ((b - 1 - j) % 200) + 6] <= sl[1600 + j]));
+}
+
 fn plan_end(inout sl: [i64], b: i64, i: i64, prior: i64, end: i64) -> ()
   requires 0 <= i && i < 200 && i < b && b <= 1000000000000 && 0 <= prior && prior <= end
-  requires planned_spans(sl, b, i, prior)
+  requires planned_spans_slot(sl, b, i, prior)
   requires sl[8 * ((b - 1 - i) % 200)] + sl[8 * ((b - 1 - i) % 200) + 1] +
     24 * sl[8 * ((b - 1 - i) % 200) + 5] + 24 * sl[8 * ((b - 1 - i) % 200) + 6] <= end
   ensures planned_spans(sl, b, i + 1, end)
