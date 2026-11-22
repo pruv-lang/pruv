@@ -4489,7 +4489,8 @@ impl Checker {
     fn expect_user_arg(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, c: bool, borrow_vector: bool) -> Res<()> {
         if let Expr::Call(x) = e {
             if x.name == "subview" {
-                if c || !borrow_vector || !ty.is_array() || self.in_view {
+                let string_view = *ty == strt();
+                if c || !borrow_vector || !(ty.is_array() || string_view) || self.in_view {
                     return Err(Self::view_context(x));
                 }
                 if x.targs.is_some() {
@@ -4498,16 +4499,24 @@ impl Checker {
                 if x.args.len() != 3 {
                     return Err(terr(x.line, x.col, "arity", format!("subview takes 3 argument(s), got {}", x.args.len()), ""));
                 }
+                let source_is_place = place_root(&x.args[0]).is_some();
                 self.in_view = true;
-                if place_root(&x.args[0]).is_none() {
-                    // a view nested in the source is reported where it is
-                    let r = self.expect(&mut x.args[0], ty, scope, c, None);
-                    self.in_view = false;
-                    r?;
-                    return Err(Self::view_context(x));
-                }
                 let r = (|| -> Res<()> {
-                    self.expect(&mut x.args[0], ty, scope, c, None)?;
+                    // Check the source first so a nested view is reported where it is.
+                    if string_view {
+                        let got = self.expr(&mut x.args[0], scope, c)?;
+                        if !source_is_place {
+                            return Err(Self::view_context(x));
+                        }
+                        if got != GType::array_u8() {
+                            self.check_expected_type(&x.args[0], ty, None, got)?;
+                        }
+                    } else {
+                        self.expect(&mut x.args[0], ty, scope, c, None)?;
+                    }
+                    if !source_is_place {
+                        return Err(Self::view_context(x));
+                    }
                     self.expect(&mut x.args[1], &i64t(), scope, c, None)?;
                     self.expect(&mut x.args[2], &i64t(), scope, c, None).map(|_| ())
                 })();

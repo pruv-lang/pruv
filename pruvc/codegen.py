@@ -3669,6 +3669,26 @@ class Gen:
                         'Err(_) => panic!("pruv: invalid UTF-8 (len {})", pruv_b.len()), } }') % b
             if n == "subview":
                 b, lo, hi = s.arr_ref(a[0]), s.e(a[1]), s.e(a[2])
+                if e.ty == STR:   # LG25 (R-6g-10): a borrowed str view for a str parameter
+                    from_str = a[0].ty == STR
+                    if from_str and s.verified:
+                        return "unsafe { (%s).get_unchecked(((%s) as usize)..((%s) as usize)) }" % (b, lo, hi)
+                    if from_str:
+                        return ("match (%s, %s, %s) { (pruv_a, pruv_lo, pruv_hi) => { "
+                                "if !(pruv_lo >= 0 && pruv_lo <= pruv_hi && (pruv_hi as u64) <= (pruv_a.len() as u64)) "
+                                "{ pruv_slice_oob(pruv_lo, pruv_hi, pruv_a.len()) } "
+                                "if !(pruv_a.is_char_boundary(pruv_lo as usize) && pruv_a.is_char_boundary(pruv_hi as usize)) "
+                                "{ pruv_slice_cut(pruv_lo, pruv_hi, pruv_a.len()) } "
+                                "&pruv_a[(pruv_lo as usize)..(pruv_hi as usize)] } }" % (b, lo, hi))
+                    if s.verified:
+                        return ("unsafe { ::core::str::from_utf8_unchecked((%s).get_unchecked(((%s) as usize)..((%s) as usize))) }"
+                                % (b, lo, hi))
+                    return ("match (%s, %s, %s) { (pruv_a, pruv_lo, pruv_hi) => { "
+                            "if !(pruv_lo >= 0 && pruv_lo <= pruv_hi && (pruv_hi as u64) <= (pruv_a.len() as u64)) "
+                            "{ pruv_oob(pruv_lo, pruv_a.len()) } "
+                            "let pruv_span: &[u8] = &pruv_a[(pruv_lo as usize)..(pruv_hi as usize)]; "
+                            "match ::core::str::from_utf8(pruv_span) { Ok(pruv_t) => pruv_t, "
+                            "Err(_) => panic!(\"pruv: invalid UTF-8 (len {})\", pruv_span.len()), } } }" % (b, lo, hi))
                 if not s.verified:
                     return ("match (%s, %s, %s) { (pruv_a, pruv_lo, pruv_hi) => { "
                             "if !(pruv_lo >= 0 && pruv_lo <= pruv_hi && (pruv_hi as u64) <= (pruv_a.len() as u64)) "

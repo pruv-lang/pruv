@@ -1,0 +1,7 @@
+// spec: R-6g-10 reject
+fn width(t: str) -> i64 { return len(t); }
+pub fn f() -> i64 ! alloc
+{
+  let s: str = "aé€";
+  return width(subview(s, 2, len(s)));
+}

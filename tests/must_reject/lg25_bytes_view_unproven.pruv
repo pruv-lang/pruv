@@ -1,0 +1,10 @@
+// LG25 (G-DB32-1): a [u8] span carries no UTF-8 fact of its own; passing it as a str needs a proof (utf8_invalid)
+fn width(t: str) -> i64 {
+  return len(t);
+}
+
+pub fn run(b: [u8], lo: i64, hi: i64) -> i64
+  requires 0 <= lo && lo <= hi && hi <= len(b)
+{
+  return width(subview(b, lo, hi));
+}

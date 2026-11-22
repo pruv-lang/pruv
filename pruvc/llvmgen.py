@@ -2966,6 +2966,35 @@ class FnGen:
             return s.temp_arr(V("arr", p, b.b, STR), owned)
         if n == "subview":
             base, lo, hi = (s.ev(x) for x in a)
+            if e.ty == STR:   # LG25 (R-6g-10): a borrowed str view for a str parameter (ptr advanced by lo)
+                if not s.verified:
+                    nonneg = s.op("icmp sge i64 %s, 0" % lo.a)
+                    ordered = s.op("icmp sle i64 %s, %s" % (lo.a, hi.a))
+                    upper = s.op("icmp sle i64 %s, %s" % (hi.a, base.b))
+                if not s.verified and a[0].ty == STR:
+                    # same range then boundary checks and panics as substr; the failing path re-enters pruv_substr,
+                    # which panics with the matching message (it never returns there)
+                    ok = s.op("and i1 %s, %s" % (nonneg, ordered))
+                    ok = s.op("and i1 %s, %s" % (ok, upper))
+                    s.guard(ok, lambda: s.ins("call ptr @pruv_substr(ptr %s, i64 %s, i64 %s, i64 %s)" % (base.a, base.b, lo.a, hi.a)), False)
+                    b1 = s.op("call i32 @pruv_str_boundary(ptr %s, i64 %s, i64 %s)" % (base.a, base.b, lo.a))
+                    b2 = s.op("call i32 @pruv_str_boundary(ptr %s, i64 %s, i64 %s)" % (base.a, base.b, hi.a))
+                    c1 = s.op("icmp ne i32 %s, 0" % b1)
+                    c2 = s.op("icmp ne i32 %s, 0" % b2)
+                    ok2 = s.op("and i1 %s, %s" % (c1, c2))
+                    s.guard(ok2, lambda: s.ins("call ptr @pruv_substr(ptr %s, i64 %s, i64 %s, i64 %s)" % (base.a, base.b, lo.a, hi.a)), False)
+                elif not s.verified:
+                    ok = s.op("and i1 %s, %s" % (nonneg, ordered))
+                    ok = s.op("and i1 %s, %s" % (ok, upper))
+                    s.guard(ok, lambda: s.ins("call void @pruv_panic_oob(i64 %s, i64 %s)" % (lo.a, base.b)), False)
+                    s.m.uses_utf8_valid = s.m.uses_utf8_panic = True
+                    length = s.op("sub i64 %s, %s" % (hi.a, lo.a))
+                    g = s.op("getelementptr inbounds i8, ptr %s, i64 %s" % (base.a, lo.a))
+                    okv = s.op("call i1 @pruv_utf8_valid(ptr %s, i64 %s)" % (g, length))
+                    s.guard(okv, lambda: s.ins("call void @pruv_panic_utf8(i64 %s)" % length), False)
+                length = s.op("sub i64 %s, %s" % (hi.a, lo.a))
+                ptr = s.op("getelementptr inbounds i8, ptr %s, i64 %s" % (base.a, lo.a))
+                return V("arr", ptr, length, STR)
             if not s.verified:
                 nonneg = s.op("icmp sge i64 %s, 0" % lo.a)
                 ordered = s.op("icmp sle i64 %s, %s" % (lo.a, hi.a))

@@ -1,0 +1,44 @@
+// LG25 (G-DB32-1): a subview passed to a str parameter is a borrowed str view. A str source proves its cut points
+// are char boundaries; a [u8] source proves its span valid UTF-8 (ASCII bytes, or a valid buffer cut at char
+// boundaries). Verified code has no copy and no run-time UTF-8 check on these paths.
+fn width(t: str) -> i64
+  ensures result == len(t)
+{
+  return len(t);
+}
+
+fn head(t: str) -> i64
+  requires len(t) >= 1
+  ensures result == t[0]
+{
+  return t[0];
+}
+
+fn piece(b: [u8], lo: i64, hi: i64) -> i64
+  requires utf8_valid(b) && 0 <= lo && lo <= hi && hi <= len(b)
+  requires lo == 0 || lo == len(b) || b[lo] < 128 || b[lo] >= 192
+  requires hi == 0 || hi == len(b) || b[hi] < 128 || b[hi] >= 192
+  ensures result == hi - lo
+{
+  return width(subview(b, lo, hi));
+}
+
+pub fn run(k: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 3
+{
+  let s: str = "aé€😀";
+  let mut lo: i64 = 0;
+  if k == 1 { lo = 1; }
+  if k == 2 { lo = 3; }
+  if k == 3 { lo = 6; }
+  let w: i64 = width(subview(s, lo, 10));
+  let h: i64 = head(subview(s, lo, len(s)));
+  let mut b: [u8] = alloc(5, 65);
+  b[1] = 195;
+  b[2] = 169;
+  let mut p: i64 = -1;
+  if utf8_valid(b) { p = piece(b, 1, 3 + k % 2); }
+  let a: [u8] = alloc(4, 66);
+  let q: i64 = width(subview(a, 1, 4));
+  return w * 1000000 + h * 1000 + p * 10 + q;
+}
