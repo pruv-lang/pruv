@@ -69,14 +69,16 @@ pub fn escaped(s: str) -> [u8] ! alloc
   return r;
 }
 // ECMAScript trim whitespace, encoded as UTF-8 (mcp util).
-fn space(b: [u8], i: i64) -> i64
- requires 0 <= i && i < len(b)
- ensures 0 <= result && result <= 3 && result <= len(b)-i
+// ECMAScript whitespace at b[i..n) as a UTF-8 sequence: its length (1..3), else 0. Bounded by n, not len(b),
+// so a prefix of a longer buffer is read without copying it out.
+fn space_in(b: [u8], i: i64, n: i64) -> i64
+ requires 0 <= i && i < n && n <= len(b)
+ ensures 0 <= result && result <= 3 && result <= n-i
 {
  let c: i64 = b[i];
  if c == 32 || (9 <= c && c <= 13) { return 1; }
- if i+1 < len(b) && c == 194 && b[i+1] == 160 { return 2; }
- if i+2 < len(b) {
+ if i+1 < n && c == 194 && b[i+1] == 160 { return 2; }
+ if i+2 < n {
  if c == 225 && b[i+1] == 154 && b[i+2] == 128 { return 3; }
  if c == 226 && b[i+1] == 128 && ((128 <= b[i+2] && b[i+2] <= 138) || b[i+2] == 168 || b[i+2] == 169 || b[i+2] == 175) { return 3; }
  if c == 226 && b[i+1] == 129 && b[i+2] == 159 { return 3; }
@@ -85,25 +87,22 @@ fn space(b: [u8], i: i64) -> i64
  }
  return 0;
 }
-pub fn trim(b: [u8]) -> [u8] ! alloc
- ensures len(result) <= len(b)
+// String.prototype.trim of b[0..n) as a span: r[0] start, r[1] end (no copy).
+pub fn trim_span(b: [u8], n: i64, inout r: [i64]) -> ()
+ requires 0 <= n && n <= len(b) && len(r) == 2
+ ensures len(r) == 2 && 0 <= r[0] && r[0] <= r[1] && r[1] <= n
 {
  let mut lo: i64 = 0; let mut hi: i64 = 0; let mut i: i64 = 0;
- while i < len(b)
- invariant 0 <= lo && lo <= i && 0 <= hi && hi <= i && i <= len(b)
- decreases len(b)-i
+ while i < n
+ invariant 0 <= lo && lo <= i && 0 <= hi && hi <= i && i <= n && n <= len(b) && len(r) == 2
+ decreases n-i
  {
- let n: i64 = space(b,i);
- if n > 0 { if lo == i { lo=lo+n; } i=i+n; }
+ let k: i64 = space_in(b,i,n);
+ if k > 0 { if lo == i { lo=lo+k; } i=i+k; }
  else { i=i+1; hi=i; }
  }
  if hi < lo { hi=lo; }
- let mut out: [u8] = alloc(hi-lo,0); let mut j: i64 = 0;
- while j < len(out)
- invariant 0 <= j && j <= len(out) && len(out) == hi-lo
- decreases len(out)-j
- { out[j]=b[lo+j]; j=j+1; }
- return out;
+ r[0] = lo; r[1] = hi;
 }
 // The decoded text of string value id (lone surrogates became U+FFFD in the decoder, policy P2); "" for anything else.
 pub fn str_at(d: crate::json::JsonDocument, id: i64) -> str ! alloc

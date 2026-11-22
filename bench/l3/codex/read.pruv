@@ -212,17 +212,18 @@ pub fn replay(ht: [i64], hb: [u8], count: i64, base: i64, inout bad: [i64]) -> c
       if len(prompt) > 100000000 {
         bad[0] = 1;
       } else {
-        let mut text: str = "";
-        let mut ans: bool = false;
+        let none: str = "";
         if nrep > 0 {
           let mut fbuf: [u8] = alloc(rn, 0);
           crate::bytes::copy_span(inout fbuf, 0, hb, ro, ro + rn);
-          let mut whole: [u8] = copy(fbuf);
-          if rcl == 1 { whole = crate::util::join(fbuf, pad); }
-          let t: str = crate::jstr::adapter_probe(whole);
-          if len(t) <= 100000000 { text = copy(t); ans = true; }
+          if rcl == 1 { fbuf = crate::util::join(fbuf, pad); }
+          let t: str = crate::jstr::adapter_probe(fbuf);
+          // t is fed in place (no copy into a second text)
+          if len(t) <= 100000000 { feed(inout st, inout sl, inout bk, prompt, created, true, t, completed, tools); }
+          else { feed(inout st, inout sl, inout bk, prompt, created, false, none, completed, tools); }
+        } else {
+          feed(inout st, inout sl, inout bk, prompt, created, false, none, completed, tools);
         }
-        feed(inout st, inout sl, inout bk, prompt, created, ans, text, completed, tools);
         fed = fed + 1;
       }
     }
