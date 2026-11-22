@@ -428,6 +428,17 @@ return a parameter with `copy`). Refinements: `[u8 | L..=U; <=N]` with `0 <= L <
   Tests: [copy loop](tests/runtime/lg26_utf8_span.pruv),
   [partial character](tests/must_reject/lg26_partial_char_copy.pruv),
   [cut inside a character](tests/must_reject/lg26_prefix_boundary.pruv).
+  A byte after an ASCII byte inside a valid window is a char boundary (LG30, G-DB47-2): if `W(b, lo, n)`,
+  `0 <= i` and `i + 1 < n` and `b[lo + i] < 128`, then `b[lo + i + 1]` is not a continuation byte (`128..=191`). This is
+  derived, not assumed: instantiate `W` at `i + 1`; its last disjunct (a continuation byte) needs `b[lo + i]` to be a
+  lead byte or a continuation byte, both `>= 128`, so `b[lo + i + 1]` is ASCII or a lead byte. Both compilers state
+  nothing new (no axiom, no trusted-base change); the solver finds it from the exact `W` when the program states that
+  the previous byte is ASCII. So a run `b[q..e)` inside a valid span (or `utf8_valid(b)`) with `b[q - 1] < 128` and
+  `b[e] < 128` (or `e` the end of the window) is itself a valid span and can be copied with `copy_range` without a
+  run-time test of its first byte. After a lead byte, or with the ASCII byte outside the valid window, the fact does
+  not hold. Tests: [after an ASCII byte](tests/runtime/lg30_utf8_after_ascii.pruv),
+  [after a lead byte](tests/must_reject/lg30_after_lead.pruv),
+  [outside the span](tests/must_reject/lg30_outside_span.pruv).
 - Valid `str` values (R-6b-3). A `str` is valid UTF-8 at run time, and in a function that uses UTF-8 facts the verifier
   assumes `W(s, 0, len(s))` for its `str` values: `str` parameters at entry, reads of `str` variables, `str` results
   of user calls, `str` field reads (under the path condition, and for an enum variant field only when that variant is
@@ -1784,6 +1795,13 @@ pub fn read(a: [i64], i: i64) -> i64
 - R-6o-3 **`reveal F;`** is a statement in a function body; `F` is resolved like a call path. From that point on the
   current proof path, applications of `F` equal its body. It does not reveal opaque functions that `F` calls. A
   target that is not an opaque function is `type/reveal_target`.
+  The equation `F(args) == body` holds everywhere (both are total, R-6o-4), so it is assumed unguarded. Facts the
+  body's evaluation adds about its values (such as the UTF-8 facts of the `str` values it reads, R-6b-3) hold only
+  where the application is evaluated: the verifier keeps the path guard of every occurrence of an application and
+  assumes those facts under that guard, both at once and when a later `reveal` adds the equation (LG30, G-LG29-1;
+  [test](tests/runtime/lg30_opq_guard.pruv)). An occurrence inside a quantifier keeps the enclosing bound variables
+  with its guard, so a later `reveal` assumes the facts for every value of them under the guard. The range of an
+  enclosing quantifier is not part of the guard (G-LG30-3).
 - R-6o-4 **`opaque_total`.** Each opaque body is proved defined (no out-of-range index, overflow or division fault)
   for every argument, with no `requires` and no range assumption on its parameters, so a symbol never stands for an
   undefined value. A body that is not total is `verify/opaque_total`; guard reads with `&&` as above.

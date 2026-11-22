@@ -1106,8 +1106,8 @@ class State:
         s.env, s.pc = env, pc
         s.obs = frozenset()     # G9 A1: ids of the recursive-value facts already in pc (immutable, shared by forks)
         s.rev = frozenset()     # P13o: names of the opaque functions revealed on this path
-        s.apps = ()             # P13o: (function, application term, argument values) met on this path, in order
-        s.app_ids = frozenset()
+        s.apps = ()             # P13o: (function, application term, argument values, guard, enclosing quantifier constants) met on this path, in order
+        s.app_ids = frozenset()     # LG30 (G-LG29-1): (application id, guard ids) of every occurrence in apps
 
     def fork(s, extra=None):
         n = State(dict(s.env), s.pc + ([extra] if extra is not None else []))
@@ -2455,7 +2455,7 @@ class FnVerifier:
             return o.is_ok(args[0]) if n == "is_ok" else o.oval(args[0]) if n == "ok_val" else o.eval(args[0])
         f = s.funcs[n]
         if f.opaque and not code:   # P13o: a contract application of an opaque function is its symbol
-            return s.opq(f, args, st)
+            return s.opq(f, args, st, g)
         cenv = {p.name: a for p, a in zip(f.params, args)}
         # G5 A1 (5.2 step 2): the pre-call arrays freeze as the callee's old bindings (scoped to this contract
         # evaluation: the caller's own snapshot map is never touched)
@@ -2509,7 +2509,7 @@ class FnVerifier:
             # argument): the result equals the template over the arguments. Evaluated before "result" is bound,
             # so a parameter named result keeps its argument value.
             if code and f.opaque:   # P13o: the result is the symbol; its body is known only where F is revealed
-                xv = s.opq(f, args, st)
+                xv = s.opq(f, args, st, g)
             else:
                 xv = s.ev(xa, st, g, False, cenv) if code and xa is not None else None
             cenv["result"] = res
@@ -2542,14 +2542,17 @@ class FnVerifier:
             ob = s.ev(r, st, g, False, env)
             s.prove(st, g, ob, node, "call_requires", "precondition of %s (line %d)" % (node.name, r.line))
 
-    def opq(s, f, args, st):
+    def opq(s, f, args, st, g):
         """P13o (appendix P13o.1): the application of the opaque function f to the argument values: the
         uninterpreted opq!F over the argument encodings (an array is its contents and its length). Under a quantifier
         whose bound variable reaches an argument the application is expanded in place instead (a reveal equation
         cannot mention a bound variable). A new application is recorded on the path; if F is revealed on the path
-        its equation is appended to pc at once."""
+        its equation is appended to pc at once.
+        LG30 (G-LG29-1): every occurrence is recorded with its path guard g (one entry per application and guard);
+        the body is evaluated under that guard, so the facts it pushes (W of a str read) hold only where the call
+        is reached, while the definition equation app == body is pushed once per application, unguarded."""
         if s.qstack and any(_occurs(t, c) for t in _opq_parts(args) for c in s.qstack):
-            return s.opq_body(f, args, st)
+            return s.opq_body(f, args, st, g)
         parts = _opq_parts(args)
         fn = s.opq_fns.get(f.name)
         if fn is None:
@@ -2557,17 +2560,33 @@ class FnVerifier:
             s.opq_fns[f.name] = fn
         app = fn(*parts)
         i = app.get_id()
-        if i not in st.app_ids:
-            st.apps = st.apps + ((f, app, tuple(args)),)
-            st.app_ids = st.app_ids | {i}
+        key = (i, tuple(c.get_id() for c in g))
+        if key not in st.app_ids:
+            first = not any(a.get_id() == i for _, a, _, _, _ in st.apps)
+            st.apps = st.apps + ((f, app, tuple(args), tuple(g), tuple(s.qstack)),)
+            st.app_ids = st.app_ids | {key}
             if f.name in st.rev:
-                st.pc.append(app == s.opq_body(f, args, st))
+                s.opq_occ(f, app, args, st, g, tuple(s.qstack), first)
         return app
 
-    def opq_body(s, f, args, st):
+    def opq_occ(s, f, app, args, st, g, qs, first):
+        """LG30 (G-LG29-1): the body of one recorded occurrence, evaluated under its guard g (its facts go to pc
+        under g); the first occurrence of an application also pushes the unguarded equation app == body. The
+        quantifier constants qs enclosing the occurrence are bound again while the body is evaluated, so a guard over
+        a bound variable stays quantified on a later reveal (the arguments never mention them)."""
+        outer = s.qstack
+        s.qstack = list(qs)
+        try:
+            b = s.opq_body(f, args, st, g)
+        finally:
+            s.qstack = outer
+        if first:
+            st.pc.append(app == b)
+
+    def opq_body(s, f, args, st, g):
         """P13o: the body of the opaque f over the argument values (its contract template; opaque calls in it stay
-        symbols, so a reveal does not cascade)"""
-        return s.ev(f.x_auto, st, [], False, {p.name: a for p, a in zip(f.params, args)})
+        symbols, so a reveal does not cascade). LG30 (G-LG29-1): evaluated under the guard g of the occurrence."""
+        return s.ev(f.x_auto, st, list(g), False, {p.name: a for p, a in zip(f.params, args)})
 
     def reveal(s, stmt, st):
         """P13o: `reveal F;` makes F transparent on the rest of this path: the equation of every application already
@@ -2577,14 +2596,16 @@ class FnVerifier:
         if name in st.rev:
             return [st]
         st.rev = st.rev | {name}
-        for f, app, args in st.apps:
+        seen = set()
+        for f, app, args, g, qs in st.apps:
             if f.name == name:
-                st.pc.append(app == s.opq_body(f, list(args), st))
+                s.opq_occ(f, app, list(args), st, g, qs, app.get_id() not in seen)
+                seen.add(app.get_id())
         return [st]
 
     def hidden(s, st):
         """P13o: the opaque functions applied on this path and not revealed, sorted"""
-        return sorted({f.name for f, _, _ in st.apps if f.name not in st.rev})
+        return sorted({f.name for f, _, _, _, _ in st.apps if f.name not in st.rev})
 
     def inout_finals(s, e, f, ios, args, cenv, st, g):
         """G5 A1 (G5_SPEC 5.2 step 5): fresh contents for every inout argument, retaining unchanged array

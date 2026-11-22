@@ -1,0 +1,78 @@
+// LG30 (R-6b-3, G-DB47-2): inside a valid span the byte after an ASCII byte is a char boundary, so a run b[q..e)
+// with b[q - 1] and b[e] ASCII is copied as a valid span with no run-time check of its first byte.
+fn width(t: str) -> i64
+  ensures result == len(t)
+{
+  return len(t);
+}
+
+fn put(inout d: [u8], k: i64, s: str) -> i64
+  requires 0 <= k && k + len(s) <= len(d) && utf8_valid_span(d, 0, k)
+  ensures len(d) == len(old(d)) && result == k + len(s)
+  ensures utf8_valid_span(d, 0, k + len(s))
+{
+  let mut j: i64 = 0;
+  while j < len(s)
+    invariant 0 <= j && j <= len(s) && len(d) == len(old(d))
+    invariant utf8_valid_span(d, 0, k)
+    invariant forall t in k..k + j: d[t] == s[t - k]
+    decreases len(s) - j
+  {
+    d[k + j] = s[j];
+    j = j + 1;
+  }
+  return k + len(s);
+}
+
+// span form: b[0..m) is valid, q - 1 and e are ASCII positions inside it
+fn cp(b: [u8], m: i64, q: i64, e: i64, inout d: [u8]) -> i64
+  requires 0 <= m && m <= len(b) && utf8_valid_span(b, 0, m)
+  requires 1 <= q && q <= e && e < m && b[q - 1] < 128 && b[e] < 128 && e - q <= len(d)
+  ensures len(d) == len(old(d)) && result == e - q && utf8_valid_span(d, 0, result)
+{
+  copy_range(inout d, 0, b, q, e - q);
+  return e - q;
+}
+
+// whole-buffer form: utf8_valid(b), the run ends at the end of b
+fn cpw(b: [u8], q: i64, inout d: [u8]) -> i64
+  requires utf8_valid(b) && 1 <= q && q <= len(b) && b[q - 1] < 128 && len(b) - q <= len(d)
+  ensures len(d) == len(old(d)) && result == len(b) - q && utf8_valid_span(d, 0, result)
+{
+  copy_range(inout d, 0, b, q, len(b) - q);
+  return len(b) - q;
+}
+
+pub fn run(n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 3
+{
+  let mut b: [u8] = alloc(8, 0);
+  let mut k: i64 = put(inout b, 0, "a");
+  k = put(inout b, k, "é");
+  k = put(inout b, k, "\"");
+  k = put(inout b, k, "€");
+  k = put(inout b, k, "x");
+  let mut d: [u8] = alloc(8, 0);
+  let mut q: i64 = 1;
+  let mut e: i64 = 3;
+  if n == 1 { q = 4; e = 7; }
+  let mut w: i64 = 0;
+  if n == 2 {
+    if b[7] < 128 {
+      w = cpw(b, 8, inout d);   // an empty run after the last ASCII byte
+    }
+    return w;
+  }
+  if n == 3 {
+    if b[3] < 128 {
+      let r: i64 = cpw(b, 4, inout d);
+      w = width(subview(d, 0, r));
+    }
+    return w;
+  }
+  if b[q - 1] < 128 && b[e] < 128 {
+    let r: i64 = cp(b, k, q, e, inout d);
+    w = width(subview(d, 0, r));
+  }
+  return w;
+}

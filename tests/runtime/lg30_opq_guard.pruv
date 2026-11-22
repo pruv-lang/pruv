@@ -1,0 +1,64 @@
+// LG30 (G-LG29-1, P13o): every occurrence of an opaque application keeps its path guard. The body of `hit` reads
+// the str field p.label; the facts that read pushes are added under the guard of the occurrence (in-place unfold
+// under a quantifier, the reveal of an occurrence met earlier, and one met after the reveal), while the definition
+// equation stays unguarded, so the proofs below still go through. The utf8_valid_span(z, 0, 0) requires only
+// turns the str W facts on (SPEC R-6b-3: a function that names UTF-8 validity).
+struct P { label: str, n: i64 }
+
+opaque fn hit(p: P, i: i64) -> bool
+{ return 0 <= i && i < len(p.label) && p.label[i] == 97; }
+
+// in-place unfold under a quantifier, behind a short-circuit guard
+fn any_hit(p: P, z: [u8]) -> i64
+  requires utf8_valid_span(z, 0, 0)
+  requires forall i in 0..1: p.n > 0 ==> (hit(p, i) ==> p.n > 0)
+  ensures result == p.n
+{ return p.n; }
+
+// an occurrence met under a branch guard, revealed later on the same path
+fn first(p: P, z: [u8]) -> i64
+  requires utf8_valid_span(z, 0, 0)
+  ensures result == 0 || result == 97
+{
+  let mut r: i64 = 0;
+  if p.n > 0 && hit(p, 0) {
+    reveal hit;
+    r = p.label[0];
+  }
+  return r;
+}
+
+// the same application under two guards; the second is met after the reveal
+fn twice(p: P, z: [u8]) -> i64
+  requires utf8_valid_span(z, 0, 0)
+  ensures 0 <= result && result <= 256
+{
+  let mut r: i64 = 0;
+  if p.n > 0 && hit(p, 0) { r = 1; }
+  reveal hit;
+  if p.n < 0 && hit(p, 0) { r = r + p.label[0]; }
+  return r;
+}
+
+opaque fn edge(p: P) -> bool
+{ return len(p.label) <= 0 || p.label[0] < 128 || p.label[0] >= 192; }
+
+// an occurrence under a guard over a bound variable, revealed after the quantifier: the W of p.label is assumed
+// under that guard with the variable bound again (forall i: i == 0 ==> W), so edge(p) and then flag follow
+fn late(p: P, z: [u8], flag: bool) -> bool
+  requires utf8_valid_span(z, 0, 0)
+  requires forall i in 0..1: i == 0 ==> (edge(p) ==> flag)
+  ensures result
+{
+  reveal edge;
+  return flag;
+}
+
+pub fn run(n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 3
+{
+  let p: P = P { label: "abc", n: n };
+  let z: [u8] = alloc(1, 0);
+  if !late(p, z, true) { return 0 - 1; }
+  return any_hit(p, z) + first(p, z) + twice(p, z);
+}

@@ -156,6 +156,7 @@ fn lit_end(b: [u8], p: i64, lit: str) -> i64
 
 // Kind of the value starting with byte c (access kinds): 0 null, 1 bool, 3 number, 4 string, 5 array, 6 object.
 fn kind_of(c: i64) -> i64
+  ensures result == 4 ==> c == 34
 {
   if c == 110 { return 0; }
   if c == 116 || c == 102 { return 1; }
@@ -473,10 +474,10 @@ fn stop(b: [u8], q: i64) -> i64
 
 // p is just after the opening quote of a content text string. Its body is decoded (simple escapes) in the same pass that
 // finds its end and appended to the valid prefix d[0..k). end: the closing quote, or -1 (control byte, `\u`, `\b`, `\f` or
-// unknown escape, unterminated, a run not starting at a char boundary, or no room in d: the caller falls back).
+// unknown escape, unterminated, or no room in d: the caller falls back). p - 1 is an ASCII byte (the opening quote).
 // out: the new valid prefix length.
 fn dstr(b: [u8], p: i64, inout d: [u8], k: i64) -> Dec ! alloc
-  requires utf8_valid(b) && 0 <= p && p <= len(b)
+  requires utf8_valid(b) && 1 <= p && p <= len(b) && b[p - 1] < 128
   requires 0 <= k && k <= len(d) && utf8_valid_span(d, 0, k)
   ensures len(d) == len(old(d))
   ensures result.end == -1 || (p <= result.end && result.end < len(b))
@@ -485,7 +486,7 @@ fn dstr(b: [u8], p: i64, inout d: [u8], k: i64) -> Dec ! alloc
   let mut o: i64 = k;
   let mut q: i64 = p;
   while q < len(b)
-    invariant p <= q && q <= len(b) && len(d) == len(old(d))
+    invariant p <= q && q <= len(b) && len(d) == len(old(d)) && b[q - 1] < 128
     invariant 0 <= o && o <= len(d) && utf8_valid_span(d, 0, o)
     decreases len(b) - q
   {
@@ -494,9 +495,7 @@ fn dstr(b: [u8], p: i64, inout d: [u8], k: i64) -> Dec ! alloc
     let c: i64 = b[e];
     if c != 34 && c != 92 { return Dec { end: -1, out: o }; }
     if e > q {
-      // b[e] is ASCII; the run start follows a quote or an escape letter (checked once per run)
-      let a: i64 = b[q];
-      if a >= 128 && a < 192 { return Dec { end: -1, out: o }; }
+      // b[e] is ASCII and b[q - 1] is ASCII (a quote or an escape letter), so b[q..e) is a valid span (SPEC R-6b-3)
       if e - q > len(d) - o { return Dec { end: -1, out: o }; }
       copy_range(inout d, o, b, q, e - q);
       o = o + (e - q);
