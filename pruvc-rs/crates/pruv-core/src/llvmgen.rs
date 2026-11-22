@@ -961,7 +961,6 @@ pub struct Mod {
     pub bswap: BTreeSet<u32>,
     pub uses_utf8_valid: bool,
     pub uses_utf8_panic: bool,
-    uses_slice_panic: bool,
     /// P3: some external array-return wrapper normalizes cap to len with @pruv_shrink_v2
     pub shrink: bool,
     /// some host wrapper of an inout entry calls @pruv_overlap (module gets DECLS_OVERLAP)
@@ -1008,7 +1007,6 @@ impl Mod {
             bswap: BTreeSet::new(),
             uses_utf8_valid: false,
             uses_utf8_panic: false,
-            uses_slice_panic: false,
             shrink: false,
             overlap: false,
             stack: crate::stack::StackPlan::default(),
@@ -1144,7 +1142,8 @@ pub enum Fail {
     Panic1(&'static str, String),
     Oob(String, String),
     Utf8(String),
-    StringSlice(&'static str, String, String, String),
+    // LG25: re-enter pruv_substr (ptr, len, lo, hi), which panics with the matching message
+    Substr(String, String, String, String),
     Requires(String, String),
     /// u8 element range violation: (value SSA, range text). The string is registered when the fail block is emitted.
     Elem(String, &'static str),
@@ -1434,11 +1433,7 @@ impl<'a> FnGen<'a> {
                 self.ins(format!("call void @{}(ptr {})", func, s))
             }
             Fail::Utf8(n) => self.ins(format!("call void @pruv_panic_utf8(i64 {})", n)),
-            Fail::StringSlice(what, lo, hi, len) => {
-                self.m.uses_slice_panic = true;
-                let msg = self.m.string(what);
-                self.ins(format!("call void @pruv_panic_slice(ptr {}, i64 {}, i64 {}, i64 {})", msg, lo, hi, len))
-            }
+            Fail::Substr(p, n, lo, hi) => self.ins(format!("call ptr @pruv_substr(ptr {}, i64 {}, i64 {}, i64 {})", p, n, lo, hi)),
             Fail::Oob(i, n) => self.ins(format!("call void @pruv_panic_oob(i64 {}, i64 {})", i, n)),
             Fail::Requires(a, b) => self.ins(format!("call void @pruv_panic_requires(ptr {}, ptr {})", a, b)),
             Fail::Elem(v, range) => {
@@ -4471,15 +4466,25 @@ impl<'a> FnGen<'a> {
                 let ok = self.op(format!("and i1 {}, {}", nonneg, ordered))?;
                 let ok = self.op(format!("and i1 {}, {}", ok, upper))?;
                 if string_source {
-                    let fail = |what| Fail::StringSlice(what, lo.a.clone(), hi.a.clone(), base.b.clone());
-                    self.guard(&ok, fail("string slice out of bounds"), false)?;
-                    let lo_ok = self.op(format!("call i32 @pruv_str_boundary(ptr {}, i64 {}, i64 {})", base.a, base.b, lo.a))?;
-                    let hi_ok = self.op(format!("call i32 @pruv_str_boundary(ptr {}, i64 {}, i64 {})", base.a, base.b, hi.a))?;
-                    let both = self.op(format!("and i32 {}, {}", lo_ok, hi_ok))?;
-                    let ok = self.op(format!("icmp ne i32 {}, 0", both))?;
-                    self.guard(&ok, fail("UTF-8 boundary error"), false)?;
+                    let fail = || Fail::Substr(base.a.clone(), base.b.clone(), lo.a.clone(), hi.a.clone());
+                    self.guard(&ok, fail(), false)?;
+                    let b1 = self.op(format!("call i32 @pruv_str_boundary(ptr {}, i64 {}, i64 {})", base.a, base.b, lo.a))?;
+                    let b2 = self.op(format!("call i32 @pruv_str_boundary(ptr {}, i64 {}, i64 {})", base.a, base.b, hi.a))?;
+                    let c1 = self.op(format!("icmp ne i32 {}, 0", b1))?;
+                    let c2 = self.op(format!("icmp ne i32 {}, 0", b2))?;
+                    let ok = self.op(format!("and i1 {}, {}", c1, c2))?;
+                    self.guard(&ok, fail(), false)?;
                 } else {
                     self.guard(&ok, Fail::Oob(lo.a.clone(), base.b.clone()), false)?;
+                    if string_view {
+                        // same order as the py compiler: the UTF-8 check on the span, then the view itself
+                        self.m.uses_utf8_valid = true;
+                        self.m.uses_utf8_panic = true;
+                        let length = self.op(format!("sub i64 {}, {}", hi.a, lo.a))?;
+                        let g = self.op(format!("getelementptr inbounds i8, ptr {}, i64 {}", base.a, lo.a))?;
+                        let okv = self.op(format!("call i1 @pruv_utf8_valid(ptr {}, i64 {})", g, length))?;
+                        self.guard(&okv, Fail::Utf8(length), false)?;
+                    }
                 }
             }
             let length = self.op(format!("sub i64 {}, {}", hi.a, lo.a))?;
@@ -4488,12 +4493,6 @@ impl<'a> FnGen<'a> {
             base.p = None;
             base.c = None;
             if string_view {
-                if !self.verified && !string_source {
-                    self.m.uses_utf8_valid = true;
-                    self.m.uses_utf8_panic = true;
-                    let ok = self.op(format!("call i1 @pruv_utf8_valid(ptr {}, i64 {})", base.a, base.b))?;
-                    self.guard(&ok, Fail::Utf8(base.b.clone()), false)?;
-                }
                 base.ty = Some(STR.to_string());
             }
             return Ok(base);
@@ -7498,9 +7497,6 @@ fn gen_llvm_body(
     }
     if m.uses_utf8_panic {
         ir.push_str("declare void @pruv_panic_utf8(i64) noreturn cold nounwind\n");
-    }
-    if m.uses_slice_panic {
-        ir.push_str("declare void @pruv_panic_slice(ptr, i64, i64, i64) noreturn cold nounwind\n");
     }
     if !m.par_trampolines.is_empty() {
         ir = format!("%pruv_g7_job = type {{ ptr, ptr }}\n{}\n{}", m.par_types.join("\n"), ir);
