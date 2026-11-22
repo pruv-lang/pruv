@@ -14,10 +14,13 @@
 //   f[id] kind of wanted top-level key id (1 type, 2 synthetic_reason, 3 prompt_index, 4 content, 5 timestamp, 6 created_at,
 //         7 tool_calls): -1 absent, 0 null, 1 bool, 3 number, 4 string, 5 array, 6 object
 //   f[8 + id] value start (strings: after the opening quote), f[16 + id] value end (strings: the closing quote), f[24 + id] escapes
-//   f[32] content parts recorded, f[33] tool_calls elements, f[0] decode failure flag
+//   f[32] content parts recorded, f[33] tool_calls elements, f[0] unused
+//   f[34] decoded content length: the content string is decoded into d[0 .. f[34]) during the scan (DB47)
+//   f[35] 1 = the scan already checked utf8_valid(b) (it checks lazily, only before decoding content), else 0
 //   f[40 + 3k], f[41 + 3k], f[42 + 3k]: span and escape flag of the "text" string of content part k (k < 64)
 
 pub struct Str { end: i64, esc: i64 }
+pub struct Dec { end: i64, out: i64 }
 
 // JSON whitespace run from p.
 fn ws(b: [u8], p: i64) -> i64
@@ -45,22 +48,21 @@ fn str_end(b: [u8], p: i64) -> Str
 {
   let mut q: i64 = p;
   let mut esc: i64 = 0;
+  // run loop: one combined test per plain byte (stop), the escape and error cases off the hot loop
   while q < len(b)
     invariant p <= q && q <= len(b) && (esc == 0 || esc == 1)
     decreases len(b) - q
   {
-    let c: i64 = b[q];
-    if c == 34 { return Str { end: q, esc: esc }; }
-    if c == 92 {
-      if q + 1 >= len(b) { return Str { end: -1, esc: esc }; }
-      let e: i64 = b[q + 1];
-      if e != 34 && e != 92 && e != 47 && e != 98 && e != 102 && e != 110 && e != 114 && e != 116 { return Str { end: -1, esc: esc }; }
-      esc = 1;
-      q = q + 2;
-    } else {
-      if c < 32 { return Str { end: -1, esc: esc }; }
-      q = q + 1;
-    }
+    let e: i64 = stop(b, q);
+    if e >= len(b) { return Str { end: -1, esc: esc }; }
+    let c: i64 = b[e];
+    if c == 34 { return Str { end: e, esc: esc }; }
+    if c != 92 { return Str { end: -1, esc: esc }; }
+    if e + 1 >= len(b) { return Str { end: -1, esc: esc }; }
+    let x: i64 = b[e + 1];
+    if x != 34 && x != 92 && x != 47 && x != 98 && x != 102 && x != 110 && x != 114 && x != 116 { return Str { end: -1, esc: esc }; }
+    esc = 1;
+    q = e + 2;
   }
   return Str { end: -1, esc: esc };
 }
@@ -230,9 +232,9 @@ fn key_id(b: [u8], lo: i64, hi: i64) -> i64 ! alloc
 }
 
 // One content part object at p (b[p] == `{`): records the span of its "text" string as part f[32]. End or -1.
-fn part(b: [u8], p: i64, inout f: [i64]) -> i64 ! alloc
-  requires 0 <= p && p < len(b) && len(f) >= 256
-  ensures len(f) == len(old(f))
+fn part(b: [u8], p: i64, inout f: [i64], inout d: [u8]) -> i64 ! alloc
+  requires utf8_valid(b) && 0 <= p && p < len(b) && len(f) >= 256 && 0 <= f[34] && f[34] <= len(d) && utf8_valid_span(d, 0, f[34])
+  ensures len(f) == len(old(f)) && len(d) == len(old(d)) && 0 <= f[34] && f[34] <= len(d) && utf8_valid_span(d, 0, f[34])
   ensures result == -1 || (p < result && result <= len(b))
 {
   let mut q: i64 = ws(b, p + 1);
@@ -241,7 +243,7 @@ fn part(b: [u8], p: i64, inout f: [i64]) -> i64 ! alloc
   }
   let mut seen: bool = false;
   while q < len(b)
-    invariant p < q && q <= len(b) && len(f) == len(old(f))
+    invariant p < q && q <= len(b) && len(f) == len(old(f)) && len(d) == len(old(d)) && 0 <= f[34] && f[34] <= len(d) && utf8_valid_span(d, 0, f[34])
     decreases len(b) - q
   {
     if b[q] != 34 { return -1; }
@@ -258,13 +260,22 @@ fn part(b: [u8], p: i64, inout f: [i64]) -> i64 ! alloc
       if seen { return -1; }
       seen = true;
       if b[q] == 34 {
-        let s: Str = str_end(b, q + 1);
-        if s.end < 0 { return -1; }
         let n: i64 = f[32];
         if n < 0 || n >= 64 { return -1; }
+        // "\n\n" before a non-empty text when some text precedes it (a non-empty body decodes to a non-empty text)
+        let mut o: i64 = f[34];
+        if q + 1 < len(b) && o > 0 {
+          if b[q + 1] != 34 {
+            if len(d) - o < 2 { return -1; }
+            o = put(inout d, o, "\n\n");
+          }
+        }
+        let s: Dec = dstr(b, q + 1, inout d, o);
+        f[34] = s.out;
+        if s.end < 0 { return -1; }
         f[40 + 3 * n] = q + 1;
         f[41 + 3 * n] = s.end;
-        f[42 + 3 * n] = s.esc;
+        f[42 + 3 * n] = 0;
         f[32] = n + 1;
         v = s.end + 1;
       } else {
@@ -285,9 +296,9 @@ fn part(b: [u8], p: i64, inout f: [i64]) -> i64 ! alloc
 }
 
 // Array at p (b[p] == `[`): element count in f[33]; content = true records the part objects. End or -1.
-fn array(b: [u8], p: i64, content: bool, inout f: [i64]) -> i64 ! alloc
-  requires 0 <= p && p < len(b) && len(f) >= 256
-  ensures len(f) == len(old(f))
+fn array(b: [u8], p: i64, content: bool, inout f: [i64], inout d: [u8]) -> i64 ! alloc
+  requires utf8_valid(b) && 0 <= p && p < len(b) && len(f) >= 256 && 0 <= f[34] && f[34] <= len(d) && utf8_valid_span(d, 0, f[34])
+  ensures len(f) == len(old(f)) && len(d) == len(old(d)) && 0 <= f[34] && f[34] <= len(d) && utf8_valid_span(d, 0, f[34])
   ensures result == -1 || (p < result && result <= len(b))
 {
   let mut q: i64 = ws(b, p + 1);
@@ -297,11 +308,11 @@ fn array(b: [u8], p: i64, content: bool, inout f: [i64]) -> i64 ! alloc
     if b[q] == 93 { return q + 1; }
   }
   while q < len(b)
-    invariant p < q && q <= len(b) && len(f) == len(old(f)) && 0 <= n && n <= q
+    invariant p < q && q <= len(b) && len(f) == len(old(f)) && 0 <= n && n <= q && len(d) == len(old(d)) && 0 <= f[34] && f[34] <= len(d) && utf8_valid_span(d, 0, f[34])
     decreases len(b) - q
   {
     let mut v: i64 = -1;
-    if content && b[q] == 123 { v = part(b, q, inout f); } else { v = skip_value(b, q, 119); }
+    if content && b[q] == 123 { v = part(b, q, inout f, inout d); } else { v = skip_value(b, q, 119); }
     if v < 0 { return -1; }
     n = n + 1;
     f[33] = n;
@@ -316,9 +327,10 @@ fn array(b: [u8], p: i64, content: bool, inout f: [i64]) -> i64 ! alloc
 }
 
 // The top-level scan: 0 object read into f, 1 fall back to the tape path, 2 skip (not an object line).
-pub fn scan(b: [u8], inout f: [i64]) -> i64 ! alloc
+pub fn scan(b: [u8], inout f: [i64], inout d: [u8]) -> i64 ! alloc
   requires len(f) >= 256
-  ensures len(f) == len(old(f))
+  ensures len(f) == len(old(f)) && len(d) == len(old(d)) && 0 <= f[34] && f[34] <= len(d) && utf8_valid_span(d, 0, f[34])
+  ensures result == 0 ==> (f[35] == 1 ==> utf8_valid(b))
   ensures 0 <= result && result <= 2
 {
   let mut i: i64 = 0;
@@ -332,6 +344,8 @@ pub fn scan(b: [u8], inout f: [i64]) -> i64 ! alloc
   f[0] = 0;
   f[32] = 0;
   f[33] = 0;
+  f[34] = 0;
+  f[35] = 0;
   let p: i64 = ws(b, 0);
   if p >= len(b) { return 2; }
   let c0: i64 = b[p];
@@ -347,8 +361,10 @@ pub fn scan(b: [u8], inout f: [i64]) -> i64 ! alloc
     }
   }
   let mut tools: i64 = 0;
+  // the UTF-8 check of the line runs once, before the first decode (lines with no content text are checked by step if kept)
+  let mut u: bool = false;
   while q < len(b)
-    invariant p < q && q <= len(b) && len(f) == len(old(f))
+    invariant p < q && q <= len(b) && len(f) == len(old(f)) && len(d) == len(old(d)) && 0 <= f[34] && f[34] <= len(d) && utf8_valid_span(d, 0, f[34]) && (u ==> utf8_valid(b))
     decreases len(b) - q
   {
     if b[q] != 34 { return 1; }
@@ -369,7 +385,20 @@ pub fn scan(b: [u8], inout f: [i64]) -> i64 ! alloc
       let kd: i64 = kind_of(c);
       f[id] = kd;
       f[8 + id] = q;
-      if kd == 4 {
+      if kd == 4 && id == 4 {
+        // content string: decoded into d in the same pass
+        if !u {
+          if !utf8_valid(b) { return 1; }
+          u = true;
+        }
+        let s: Dec = dstr(b, q + 1, inout d, f[34]);
+        f[34] = s.out;
+        if s.end < 0 { return 1; }
+        f[8 + id] = q + 1;
+        f[16 + id] = s.end;
+        f[24 + id] = 0;
+        v = s.end + 1;
+      } else if kd == 4 {
         let s: Str = str_end(b, q + 1);
         if s.end < 0 { return 1; }
         f[8 + id] = q + 1;
@@ -377,7 +406,11 @@ pub fn scan(b: [u8], inout f: [i64]) -> i64 ! alloc
         f[24 + id] = s.esc;
         v = s.end + 1;
       } else if kd == 5 && (id == 4 || id == 7) {
-        v = array(b, q, id == 4, inout f);
+        if !u {
+          if !utf8_valid(b) { return 1; }
+          u = true;
+        }
+        v = array(b, q, id == 4, inout f, inout d);
         if id == 7 { tools = f[33]; }
         f[16 + id] = v;
       } else {
@@ -391,6 +424,8 @@ pub fn scan(b: [u8], inout f: [i64]) -> i64 ! alloc
     let t: i64 = b[q];
     if t == 125 {
       f[33] = tools;
+      f[35] = 0;
+      if u { f[35] = 1; }
       if ws(b, q + 1) == len(b) { return 0; }
       return 1;
     }
@@ -400,101 +435,85 @@ pub fn scan(b: [u8], inout f: [i64]) -> i64 ! alloc
   return 1;
 }
 
-// out + t (t is a borrowed view).
-fn push(take out: String, t: str) -> String ! alloc
+// d[k .. k + len(s)) = s: an append to the valid prefix d[0..k) (copy invariant as in tests/runtime/lg26_utf8_span.pruv).
+fn put(inout d: [u8], k: i64, s: str) -> i64
+  requires 0 <= k && k + len(s) <= len(d) && utf8_valid_span(d, 0, k)
+  ensures len(d) == len(old(d)) && result == k + len(s)
+  ensures utf8_valid_span(d, 0, k + len(s))
 {
-  // a line is at most 16 MiB (read::line_step), so the joined text never comes near the catalog bound 2^40
-  if len(out) > 1099511627776 - len(t) { return move out; }
-  return string_push_str(move out, t);
+  let mut j: i64 = 0;
+  while j < len(s)
+    invariant 0 <= j && j <= len(s) && len(d) == len(old(d))
+    invariant utf8_valid_span(d, 0, k)
+    invariant forall t in k..k + j: d[t] == s[t - k]
+    decreases len(s) - j
+  {
+    d[k + j] = s[j];
+    j = j + 1;
+  }
+  return k + len(s);
 }
 
-// First backslash in b[q..hi), or hi.
-fn run_end(b: [u8], q: i64, hi: i64) -> i64
-  requires 0 <= q && q <= hi && hi <= len(b)
-  ensures q <= result && result <= hi
+// First `"`, `\` or control byte at or after q, or len(b).
+fn stop(b: [u8], q: i64) -> i64
+  requires 0 <= q && q <= len(b)
+  ensures q <= result && result <= len(b)
 {
   let mut e: i64 = q;
-  while e < hi
-    invariant q <= e && e <= hi
-    decreases hi - e
+  while e < len(b)
+    invariant q <= e && e <= len(b)
+    decreases len(b) - e
   {
     let c: i64 = b[e];
-    if c == 92 { return e; }
+    if c == 34 || c == 92 || c < 32 { return e; }
     e = e + 1;
   }
   return e;
 }
 
-// out + the decoded JSON string body b[lo..hi) (simple escapes only; scan already rejected `\u`). A cut that is not a char
-// boundary (impossible after the scan) sets f[0] = 1.
-fn decode(take out: String, b: [u8], lo: i64, hi: i64, inout f: [i64]) -> String ! alloc
-  requires utf8_valid(b) && 0 <= lo && lo <= hi && hi <= len(b) && len(f) >= 256
-  ensures len(f) == len(old(f))
+// p is just after the opening quote of a content text string. Its body is decoded (simple escapes) in the same pass that
+// finds its end and appended to the valid prefix d[0..k). end: the closing quote, or -1 (control byte, `\u`, `\b`, `\f` or
+// unknown escape, unterminated, a run not starting at a char boundary, or no room in d: the caller falls back).
+// out: the new valid prefix length.
+fn dstr(b: [u8], p: i64, inout d: [u8], k: i64) -> Dec ! alloc
+  requires utf8_valid(b) && 0 <= p && p <= len(b)
+  requires 0 <= k && k <= len(d) && utf8_valid_span(d, 0, k)
+  ensures len(d) == len(old(d))
+  ensures result.end == -1 || (p <= result.end && result.end < len(b))
+  ensures 0 <= result.out && result.out <= len(d) && utf8_valid_span(d, 0, result.out)
 {
-  let mut s: String = move out;
-  let mut q: i64 = lo;
-  while q < hi
-    invariant lo <= q && q <= hi && hi <= len(b) && len(f) == len(old(f))
-    decreases hi - q
+  let mut o: i64 = k;
+  let mut q: i64 = p;
+  while q < len(b)
+    invariant p <= q && q <= len(b) && len(d) == len(old(d))
+    invariant 0 <= o && o <= len(d) && utf8_valid_span(d, 0, o)
+    decreases len(b) - q
   {
-    let e: i64 = run_end(b, q, hi);
+    let e: i64 = stop(b, q);
+    if e >= len(b) { return Dec { end: -1, out: o }; }
+    let c: i64 = b[e];
+    if c != 34 && c != 92 { return Dec { end: -1, out: o }; }
     if e > q {
+      // b[e] is ASCII; the run start follows a quote or an escape letter (checked once per run)
       let a: i64 = b[q];
-      let mut z: i64 = 0;
-      if e < len(b) { z = b[e]; }
-      if (a >= 128 && a < 192) || (e < len(b) && z >= 128 && z < 192) { f[0] = 1; return move s; }
-      s = push(move s, subview(b, q, e));
+      if a >= 128 && a < 192 { return Dec { end: -1, out: o }; }
+      if e - q > len(d) - o { return Dec { end: -1, out: o }; }
+      copy_range(inout d, o, b, q, e - q);
+      o = o + (e - q);
     }
-    if e + 1 >= hi {
-      if e < hi { f[0] = 1; }
-      return move s;
-    }
+    if c == 34 { return Dec { end: e, out: o }; }
+    if e + 1 >= len(b) || o >= len(d) { return Dec { end: -1, out: o }; }
     let x: i64 = b[e + 1];
-    if x == 110 { s = push(move s, "\n"); }
-    else if x == 116 { s = push(move s, "\t"); }
-    else if x == 114 { s = push(move s, "\r"); }
-    else if x == 34 { s = push(move s, "\""); }
-    else if x == 92 { s = push(move s, "\\"); }
-    else if x == 47 { s = push(move s, "/"); }
-    else { f[0] = 1; return move s; }
+    if x == 110 { o = put(inout d, o, "\n"); }
+    else if x == 116 { o = put(inout d, o, "\t"); }
+    else if x == 114 { o = put(inout d, o, "\r"); }
+    else if x == 34 { o = put(inout d, o, "\""); }
+    else if x == 92 { o = put(inout d, o, "\\"); }
+    else if x == 47 { o = put(inout d, o, "/"); }
+    else { return Dec { end: -1, out: o }; }
     q = e + 2;
   }
-  return move s;
-}
-
-// The joined content text when it is not a single borrowed span (f[0] = 1 on a defect).
-fn content_text(b: [u8], inout f: [i64]) -> String ! alloc
-  requires utf8_valid(b) && len(f) >= 256
-  ensures len(f) == len(old(f))
-{
-  let mut out: String = string_new();
-  if f[4] == 4 {
-    let lo: i64 = f[12];
-    let hi: i64 = f[20];
-    if lo < 0 || lo > hi || hi > len(b) { f[0] = 1; return move out; }
-    out = decode(move out, b, lo, hi, inout f);
-    return move out;
-  }
-  if f[4] != 5 { return move out; }
-  let n: i64 = f[32];
-  if n < 0 || n > 64 { f[0] = 1; return move out; }
-  let mut first: bool = true;
-  let mut k: i64 = 0;
-  while k < n
-    invariant 0 <= k && k <= n && n <= 64 && len(f) == len(old(f)) && len(f) >= 256
-    decreases n - k
-  {
-    let lo: i64 = f[40 + 3 * k];
-    let hi: i64 = f[41 + 3 * k];
-    if lo < 0 || lo > hi || hi > len(b) { f[0] = 1; return move out; }
-    if hi > lo {
-      if !first { out = push(move out, "\n\n"); }
-      out = decode(move out, b, lo, hi, inout f);
-      first = false;
-    }
-    k = k + 1;
-  }
-  return move out;
+  return Dec { end: -1, out: o };
 }
 
 // Hand the entry to entry::user_view / assistant_view with at = b[at .. at + 24) (at >= 0) or "".
@@ -519,7 +538,7 @@ fn go(b: [u8], at: i64, text: str, user: bool, skip: bool, nopi: bool, tools: i6
 }
 
 // One history line (see the header). 0 handled, -1 internal failure, 3 = run the tape path on this line.
-pub fn step(b: [u8], inout f: [i64], inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
+pub fn step(b: [u8], inout f: [i64], inout d: [u8], inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
   requires len(f) >= 256
   requires len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
@@ -533,7 +552,17 @@ pub fn step(b: [u8], inout f: [i64], inout st: [i64], inout sl: [i64], inout bk:
 {
   // above 1 MiB the tape record limit of the old parser could reject a line this scan accepts
   if len(b) > 1048576 { return 3; }
-  let r: i64 = scan(b, inout f);
+  // a line whose first non-whitespace byte is ASCII and not `{` is a skip whatever follows
+  let p0: i64 = ws(b, 0);
+  if p0 >= len(b) { return 0; }
+  let c0: i64 = b[p0];
+  if c0 != 123 {
+    if c0 < 128 { return 0; }
+    return 3;
+  }
+  // d is reused across lines and grown in place to the longest object line + 256 (texts plus at most 63 joiners)
+  if len(d) < len(b) + 256 { d = resize(d, len(b) + 256, 0); }
+  let r: i64 = scan(b, inout f, inout d);
   if r == 2 { return 0; }
   if r != 0 { return 3; }
   if f[1] != 4 { return 0; }
@@ -546,7 +575,10 @@ pub fn step(b: [u8], inout f: [i64], inout st: [i64], inout sl: [i64], inout bk:
   // synthetic_reason neither missing nor null: the user entry is skipped before anything else is looked at
   let skip: bool = f[2] != -1 && f[2] != 0;
   if user && skip { return 0; }
-  if !utf8_valid(b) { return 3; }
+  // one UTF-8 check per kept line (as hand): done by the scan before its first decode, else here
+  if f[35] != 1 {
+    if !utf8_valid(b) { return 3; }
+  }
   // isoOf(timestamp ?? created_at)
   let mut tid: i64 = 5;
   if f[5] == -1 || f[5] == 0 { tid = 6; }
@@ -568,42 +600,8 @@ pub fn step(b: [u8], inout f: [i64], inout st: [i64], inout sl: [i64], inout bk:
   let mut tools: i64 = -1;
   if f[7] == 5 { tools = f[33]; }
   if tools > 100000000 { return 3; }
-  // a single escape-free span is passed borrowed; anything else is joined into one String
-  let mut vlo: i64 = -1;
-  let mut vhi: i64 = -1;
-  let mut empty: bool = false;
-  if f[4] == 4 {
-    if f[28] == 0 { vlo = f[12]; vhi = f[20]; }
-  } else if f[4] == 5 {
-    let n: i64 = f[32];
-    if n < 0 || n > 64 { return 3; }
-    let mut live: i64 = 0;
-    let mut k: i64 = 0;
-    while k < n
-      invariant 0 <= k && k <= n && n <= 64 && 0 <= live && live <= k && len(f) >= 256 && len(f) == len(old(f))
-      decreases n - k
-    {
-      if f[41 + 3 * k] > f[40 + 3 * k] {
-        live = live + 1;
-        if f[42 + 3 * k] == 0 { vlo = f[40 + 3 * k]; vhi = f[41 + 3 * k]; } else { vlo = -2; }
-      }
-      k = k + 1;
-    }
-    if live == 0 { empty = true; }
-    if live != 1 { vlo = -1; }
-  } else {
-    empty = true;
-  }
-  if empty { return go(b, at, "", user, skip, nopi, tools, inout st, inout sl, inout bk); }
-  if vlo >= 0 {
-    if vlo > vhi || vhi >= len(b) { return 3; }
-    let a: i64 = b[vlo];
-    let z: i64 = b[vhi];
-    if (a >= 128 && a < 192) || z >= 128 { return 3; }
-    return go(b, at, subview(b, vlo, vhi), user, skip, nopi, tools, inout st, inout sl, inout bk);
-  }
-  let s: String = content_text(b, inout f);
-  if f[0] != 0 { return 3; }
-  let t: str = string_to_str(s);
-  return go(b, at, t, user, skip, nopi, tools, inout st, inout sl, inout bk);
+  // the joined content text is d[0..f[34]) (decoded by the scan; empty when content is not a string or array)
+  let o: i64 = f[34];
+  if o <= 0 { return go(b, at, "", user, skip, nopi, tools, inout st, inout sl, inout bk); }
+  return go(b, at, subview(d, 0, o), user, skip, nopi, tools, inout st, inout sl, inout bk);
 }
