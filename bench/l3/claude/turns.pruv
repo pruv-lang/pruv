@@ -360,6 +360,7 @@ fn move_stamp(inout data: [u8], from: i64, to: i64) -> ()
     decreases j
   {
     j = j - 1;
+    assert data[from + j] == old(data)[from + j];
     data[to + j] = data[from + j];
   }
 }
