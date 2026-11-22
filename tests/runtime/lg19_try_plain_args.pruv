@@ -1,0 +1,81 @@
+// LG19 (G-LG18-4): an owned call result lifted before a `?` for a take parameter when every argument of that call
+// is a value expression, a place or a move (no temporary of the lifted call is dropped early)
+fn mk(n: i64) -> String ! alloc
+  requires 0 <= n && n <= 10
+  ensures len(result) == n
+{
+  let mut s: String = string_from("");
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && len(s) == i
+    decreases n - i
+  {
+    s = string_push_str(move s, "x");
+    i = i + 1;
+  }
+  return move s;
+}
+
+fn copy_of(a: String) -> String ! alloc
+  requires len(a) <= 10
+  ensures len(result) == len(a)
+{
+  return mk(len(a));
+}
+
+fn grow(take a: String) -> String ! alloc
+  requires len(a) <= 9
+  ensures len(result) == len(a) + 1
+{
+  return string_push_str(move a, "y");
+}
+
+fn need(x: i64) -> Result<i64, String> ! alloc
+  requires 0 <= x && x <= 100
+  ensures is_ok(result) ==> ok_val(result) == x
+{
+  if x > 0 { return Ok::<i64, String>(x); }
+  return Err::<i64, String>(string_from("neg"));
+}
+
+fn eat(take a: String, b: i64) -> i64 ! alloc
+  requires len(a) <= 10 && 0 <= b && b <= 100
+  ensures 0 <= result && result <= 1100
+{
+  return len(a) * 100 + b;
+}
+
+fn value_arg(n: i64, x: i64) -> Result<i64, String> ! alloc
+  requires 0 <= n && n <= 5 && 0 <= x && x <= 100
+{
+  return Ok::<i64, String>(eat(mk(n * 2 - n + 1), need(x)?));
+}
+
+fn place_arg(x: i64) -> Result<i64, String> ! alloc
+  requires 0 <= x && x <= 100
+{
+  let s: String = mk(6);
+  return Ok::<i64, String>(eat(copy_of(s), need(x)?));
+}
+
+fn move_arg(x: i64) -> Result<i64, String> ! alloc
+  requires 0 <= x && x <= 100
+{
+  let s: String = mk(7);
+  return Ok::<i64, String>(eat(grow(move s), need(x)?));
+}
+
+fn show(take r: Result<i64, String>) -> i64 ! alloc {
+  match move r {
+    Ok(v) => { return v; }
+    Err(e) => { return 0 - len(e); }
+  }
+}
+
+fn run(k: i64, x: i64) -> i64 ! alloc
+  requires 0 <= x && x <= 100
+{
+  if k == 0 { return show(value_arg(3, x)); }
+  if k == 1 { return show(place_arg(x)); }
+  return show(move_arg(x));
+}

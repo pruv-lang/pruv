@@ -1,0 +1,11 @@
+// LG19 (G-LG18-4): a string literal inside the lifted call's arguments is not plain (the generated code builds a
+// String from it, which the `let` would drop before the `?` operand runs), so the call stays try_position
+fn mk(n: i64) -> String ! alloc { return string_from("ab"); }
+fn noisy() -> Result<i64, String> ! alloc, io {
+  print(1);
+  return Ok::<i64, String>(1);
+}
+fn eat(take a: String, b: i64) -> i64 ! alloc { return b; }
+fn f() -> Result<i64, String> ! alloc, io {
+  return Ok::<i64, String>(eat(mk(len("a")), noisy()?));
+}

@@ -280,7 +280,14 @@ Allowed only in `requires`, `ensures`, `invariant`, `assert`:
   - The verifier knows one step of each aggregate (e.g. `sum(lo..hi) == sum(lo..hi-1) + e[hi-1]`, and from the
     front `sum(lo..hi) == e[lo] + sum(lo+1..hi)`) at every place the aggregate appears. Loops that grow `i` by one
     and keep `acc == agg(k in 0..i: ...)` therefore verify without extra lemmas. Facts that need induction
-    (e.g. `sum` splitting at an arbitrary point, `max` of `e + c`) are not known automatically.
+    (e.g. `sum` splitting at an arbitrary point, `max` of `e + c`) are not known automatically, except the `count`
+    split below.
+  - R-6-4 **Count range split** (L3 LG19): the verifier knows `count(k in lo..hi: c) == count(k in lo..m: c) +
+    count(k in m..hi: c)` whenever `lo <= m <= hi`, for counts with the same body `c`. It uses the fact for two
+    counts that share an end point (`lo..m` and `m..hi`, or `lo..hi` and one of its parts), so a sum of two
+    adjacent counts and the remainder of a count after its prefix both verify; it never invents a split point.
+    Without `lo <= m <= hi` the fact is not used. Tests: [split](tests/spec/r6_4_count_split.pruv),
+    [split point not in the range](tests/spec/r6_4_count_split_unbounded.pruv).
   - Example: `ensures result == count(k in 0..len(a): a[k] < x)` with
     `invariant c == count(k in 0..i: a[k] < x)`.
 

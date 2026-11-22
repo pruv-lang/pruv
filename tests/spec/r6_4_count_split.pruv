@@ -1,0 +1,18 @@
+// spec: R-6-4 accept
+// two adjacent counts add up to the whole range; the suffix is the whole minus the prefix
+fn join(a: [i64], m: i64, l: i64, r: i64) -> i64
+  requires 0 <= m && m <= len(a) && len(a) <= 1048576
+  requires l == count(k in 0..m: a[k] > 0)
+  requires r == count(k in m..len(a): a[k] > 0)
+  ensures result == count(k in 0..len(a): a[k] > 0)
+{
+  return l + r;
+}
+fn rest(a: [i64], m: i64, all: i64, l: i64) -> i64
+  requires 0 <= m && m <= len(a) && len(a) <= 1048576
+  requires all == count(k in 0..len(a): a[k] > 0)
+  requires l == count(k in 0..m: a[k] > 0)
+  ensures result == count(k in m..len(a): a[k] > 0)
+{
+  return all - l;
+}

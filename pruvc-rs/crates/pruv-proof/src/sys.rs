@@ -343,6 +343,10 @@ impl Z3 {
         let g: Vec<&Ast> = terms.iter().collect();
         self.quantifier_groups(true, bound, body, &[g])
     }
+    /// z3py `ForAll(vs, body, patterns=[MultiPattern(*g) for g in groups])`: one pattern per group.
+    pub fn forall_groups(&self, bound: &[Ast], body: &Ast, groups: &[Vec<&Ast>]) -> Ast {
+        self.quantifier_groups(true, bound, body, groups)
+    }
     /// z3py `Exists(vs, body, patterns=[MultiPattern(*terms)])`.
     pub fn exists_multi(&self, bound: &[Ast], body: &Ast, terms: &[Ast]) -> Ast {
         let g: Vec<&Ast> = terms.iter().collect();
@@ -907,6 +911,38 @@ pub struct DtSort {
 pub struct Solver {
     z: Z3,
     raw: RawSolver,
+    /// (timeout, rlimit, seed) as set on `raw`, for the query copy made by `check`
+    opts: (u32, Option<u32>, Option<u32>),
+    /// LG19 (G-DB29-1): the context and solver of the last `check`. The query is copied into a fresh context that holds
+    /// only the sorts and declarations its terms reach, so the datatypes, terms and ids built for the rest of the crate
+    /// do not change how the solver searches.
+    iso: Option<(Z3, RawSolver)>,
+}
+
+/// A solver of `z` with these options (inc_ref'd; the caller dec_refs it).
+fn mk_solver_raw(z: &Z3, timeout_ms: u32, rlimit: Option<u32>, seed: Option<u32>) -> RawSolver {
+    let key = z.sym("timeout");
+    let rkey = rlimit.map(|_| z.sym("rlimit"));
+    let skey = seed.map(|_| z.sym("random_seed"));
+    let c = z.raw();
+    // SAFETY: S1 S5 — the solver gets inc_ref right after creation (its owner dec_refs it), params get dec_ref right after set.
+    // The symbols (key/rkey/skey) were made in the same context (S1).
+    unsafe {
+        let s = nn(z::Z3_mk_solver(c));
+        z::Z3_solver_inc_ref(c, s);
+        let p = nn(z::Z3_mk_params(c));
+        z::Z3_params_inc_ref(c, p);
+        z::Z3_params_set_uint(c, p, key, timeout_ms as c_uint);
+        if let (Some(k), Some(r)) = (rkey, rlimit) {
+            z::Z3_params_set_uint(c, p, k, r as c_uint);
+        }
+        if let (Some(k), Some(sd)) = (skey, seed) {
+            z::Z3_params_set_uint(c, p, k, sd as c_uint);
+        }
+        z::Z3_solver_set_params(c, s, p);
+        z::Z3_params_dec_ref(c, p);
+        s
+    }
 }
 
 impl Solver {
@@ -917,28 +953,8 @@ impl Solver {
 
     /// z3py `s.set("timeout", t)`, (if present) `s.set("rlimit", r)`, (if present) `s.set("random_seed", s)`, in this order.
     pub fn with_options(z: &Z3, timeout_ms: u32, rlimit: Option<u32>, seed: Option<u32>) -> Solver {
-        let key = z.sym("timeout");
-        let rkey = rlimit.map(|_| z.sym("rlimit"));
-        let skey = seed.map(|_| z.sym("random_seed"));
-        let c = z.raw();
-        // SAFETY: S1 S5 — solver/params get inc_ref right after creation, params get dec_ref right after set, and the solver gets dec_ref in Drop.
-        // The symbols (key/rkey/skey) were made in the same context (S1).
-        unsafe {
-            let s = nn(z::Z3_mk_solver(c));
-            z::Z3_solver_inc_ref(c, s);
-            let p = nn(z::Z3_mk_params(c));
-            z::Z3_params_inc_ref(c, p);
-            z::Z3_params_set_uint(c, p, key, timeout_ms as c_uint);
-            if let (Some(k), Some(r)) = (rkey, rlimit) {
-                z::Z3_params_set_uint(c, p, k, r as c_uint);
-            }
-            if let (Some(k), Some(sd)) = (skey, seed) {
-                z::Z3_params_set_uint(c, p, k, sd as c_uint);
-            }
-            z::Z3_solver_set_params(c, s, p);
-            z::Z3_params_dec_ref(c, p);
-            Solver { z: z.clone(), raw: s }
-        }
+        let raw = mk_solver_raw(z, timeout_ms, rlimit, seed);
+        Solver { z: z.clone(), raw, opts: (timeout_ms, rlimit, seed), iso: None }
     }
     pub fn add(&mut self, a: &Ast) {
         // SAFETY: S1 S2 — a is a Bool expression of the same context.
@@ -968,7 +984,18 @@ impl Solver {
         let c = self.z.raw();
         // SAFETY: S1 S5 — the model gets inc_ref right after creation and dec_ref in `ZModel`'s Drop.
         unsafe {
-            let m = nn(z::Z3_solver_get_model(c, self.raw));
+            let m = match &self.iso {
+                Some((iz, is)) => {
+                    // the model of the copy, translated back so it evaluates terms of this context
+                    let ic = iz.raw();
+                    let im = nn(z::Z3_solver_get_model(ic, *is));
+                    z::Z3_model_inc_ref(ic, im);
+                    let m = nn(z::Z3_model_translate(ic, im, c));
+                    z::Z3_model_dec_ref(ic, im);
+                    m
+                }
+                None => nn(z::Z3_solver_get_model(c, self.raw)),
+            };
             z::Z3_model_inc_ref(c, m);
             ZModel { z: self.z.clone(), raw: m }
         }
@@ -976,11 +1003,26 @@ impl Solver {
     /// z3py `Solver.reason_unknown()`.
     pub fn reason_unknown(&self) -> String {
         // SAFETY: S1 S4.
-        unsafe { take_string(z::Z3_solver_get_reason_unknown(self.z.raw(), self.raw)) }
+        unsafe {
+            match &self.iso {
+                Some((iz, is)) => take_string(z::Z3_solver_get_reason_unknown(iz.raw(), *is)),
+                None => take_string(z::Z3_solver_get_reason_unknown(self.z.raw(), self.raw)),
+            }
+        }
     }
     pub fn check(&mut self) -> Sat {
         // SAFETY: S1 — reads the lbool via `as i32` (works for both enum and integer alias).
-        let r = unsafe { z::Z3_solver_check(self.z.raw(), self.raw) } as i32;
+        self.drop_iso();
+        let iz = Z3::new();
+        let (t, r, sd) = self.opts;
+        let is = mk_solver_raw(&iz, t, r, sd);
+        let ic = iz.raw();
+        for a in self.assertions() {
+            // SAFETY: S1 S2 — a is an expression of this context; the copy belongs to `iz`, which outlives `is`.
+            unsafe { z::Z3_solver_assert(ic, is, nn(z::Z3_translate(self.z.raw(), a.raw, ic))) }
+        }
+        self.iso = Some((iz, is));
+        let r = unsafe { z::Z3_solver_check(ic, is) } as i32;
         match r {
             LBOOL_TRUE => Sat::Sat,
             LBOOL_FALSE => Sat::Unsat,
@@ -988,8 +1030,17 @@ impl Solver {
         }
     }
 }
+impl Solver {
+    fn drop_iso(&mut self) {
+        if let Some((iz, is)) = self.iso.take() {
+            // SAFETY: S1 S5 — pairs with the inc_ref in `mk_solver_raw`; `iz` is dropped (and its context deleted) after this.
+            unsafe { z::Z3_solver_dec_ref(iz.raw(), is) }
+        }
+    }
+}
 impl Drop for Solver {
     fn drop(&mut self) {
+        self.drop_iso();
         // SAFETY: S1 S5 — pairs with the inc_ref in new().
         unsafe { z::Z3_solver_dec_ref(self.z.raw(), self.raw) }
     }
