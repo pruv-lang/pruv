@@ -828,7 +828,35 @@ fn clip_span(src: [u8], lo: i64, n: i64, max: i64) -> i64
   return i;
 }
 
+// sep LF bytes followed by src[lo..lo+n) at dst[at..] (write_piece over a byte span).
+fn put_nl_span(inout dst: [u8], at: i64, sep: i64, src: [u8], lo: i64, n: i64) -> ()
+  requires 0 <= sep && sep <= 2 && 0 <= lo && 0 <= n && n <= len(src) - lo
+  requires 0 <= at && at <= len(dst) && sep + n <= len(dst) - at
+  ensures len(dst) == len(old(dst))
+  ensures forall k in 0..sep: dst[at + k] == 10
+  ensures forall k in 0..n: dst[at + sep + k] == src[lo + k]
+  ensures forall k in 0..len(dst): (k < at || k >= at + sep + n) ==> dst[k] == old(dst)[k]
+{
+  put_nl(inout dst, at, sep);
+  crate::bytes::copy_span(inout dst, at + sep, src, lo, lo + n);
+}
+
+// The 4 UTF-8 bytes of U+10000 at dst[p..p+4); everything else unchanged.
+fn put_pad(inout dst: [u8], p: i64) -> ()
+  requires 0 <= p && 4 <= len(dst) - p
+  ensures len(dst) == len(old(dst))
+  ensures dst[p] == 240 && dst[p + 1] == 144 && dst[p + 2] == 128 && dst[p + 3] == 128
+  ensures forall k in 0..len(dst): (k < p || k >= p + 4) ==> dst[k] == old(dst)[k]
+{
+  dst[p] = 240;
+  dst[p + 1] = 144;
+  dst[p + 2] = 128;
+  dst[p + 3] = 128;
+}
+
 // sep LF bytes, src[lo..lo+n), then pad bytes of U+10000 (pad 0 or 4) at dst[at..].
+// DB37: split into put_nl_span and put_pad so each postcondition here follows from one helper's content or frame
+// clause (the inline form timed out on the line-837 clause in full codex runs under load, G-DB36-2).
 fn write_span(inout dst: [u8], at: i64, sep: i64, src: [u8], lo: i64, n: i64, pad: i64) -> ()
   requires 0 <= sep && sep <= 2 && 0 <= lo && 0 <= n && n <= len(src) - lo && (pad == 0 || pad == 4)
   requires 0 <= at && at <= len(dst) && sep + n + pad <= len(dst) - at
@@ -838,14 +866,9 @@ fn write_span(inout dst: [u8], at: i64, sep: i64, src: [u8], lo: i64, n: i64, pa
   ensures pad == 4 ==> (dst[at + sep + n] == 240 && dst[at + sep + n + 1] == 144 && dst[at + sep + n + 2] == 128 && dst[at + sep + n + 3] == 128)
   ensures forall k in 0..len(dst): (k < at || k >= at + sep + n + pad) ==> dst[k] == old(dst)[k]
 {
-  put_nl(inout dst, at, sep);
-  crate::bytes::copy_span(inout dst, at + sep, src, lo, lo + n);
+  put_nl_span(inout dst, at, sep, src, lo, n);
   if pad == 4 {
-    let p: i64 = at + sep + n;
-    dst[p] = 240;
-    dst[p + 1] = 144;
-    dst[p + 2] = 128;
-    dst[p + 3] = 128;
+    put_pad(inout dst, at + sep + n);
   }
 }
 

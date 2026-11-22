@@ -26,6 +26,8 @@ import stat
 import struct
 import subprocess
 import tempfile
+import threading
+import atexit
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -359,14 +361,41 @@ def place_db(db, tokens):
 
 
 # ---- fake exporter -------------------------------------------------------------------------------------------------
+# DB37 (G-DB36-1): macOS checks a newly written executable on its first exec (about 200 ms on a quiet host, seconds
+# under load), which ate the 1000 ms rpcMs of the F08 hang cases before the fake's first statement. Every case's
+# exporter is therefore a hard link to one copy per runner process that has been executed once; a hard link is the same
+# regular file (same bytes, mode 0755), so the importer under test sees no difference.
+_WARM = {'path': None}
+_WARM_LOCK = threading.Lock()
+
+
+def warm_exporter():
+    with _WARM_LOCK:
+        if _WARM['path'] is None:
+            WORK.mkdir(parents=True, exist_ok=True)
+            p = WORK / ('.fake-exporter-%d' % os.getpid())
+            src = FAKE_EXPORTER.read_text(encoding='utf-8').split('\n', 1)
+            p.write_text('#!%s\n%s' % (sys.executable, src[1]), encoding='utf-8')
+            p.chmod(0o755)
+            subprocess.run([str(p)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for side in ('.log', '.out', '.stamp'):
+                Path(str(p) + side).unlink(missing_ok=True)
+            atexit.register(lambda: p.unlink(missing_ok=True))
+            _WARM['path'] = p
+        return _WARM['path']
+
 def place_exporter(case, tokens, binary):
     """Executable `binary` (a copy of fake_exporter.py with an absolute python shebang), its sibling scenario and output bytes.
     Returns the log path. The scenario is case['export'] minus `bytes`/`expect`, plus expect{thread, cwd, env, detached}."""
     exe = Path(binary)
     exe.parent.mkdir(parents=True, exist_ok=True)
-    src = FAKE_EXPORTER.read_text(encoding='utf-8').split('\n', 1)
-    exe.write_text('#!%s\n%s' % (sys.executable, src[1]), encoding='utf-8')
-    exe.chmod(0o755)
+    exe.unlink(missing_ok=True)
+    try:
+        os.link(warm_exporter(), exe)
+    except OSError:
+        src = FAKE_EXPORTER.read_text(encoding='utf-8').split('\n', 1)
+        exe.write_text('#!%s\n%s' % (sys.executable, src[1]), encoding='utf-8')
+        exe.chmod(0o755)
     exp = case['export']
     scenario = {k: v for k, v in exp.items() if k not in ('bytes', 'expect', 'env')}
     expect = {'thread': expand_tokens(case.get('thread', ''), tokens), 'cwd': expand_tokens(case.get('folder', ''), tokens)}
