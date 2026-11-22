@@ -1,0 +1,22 @@
+// LG22 (G-DB31-2): old(c) and old(c.f) of an inout struct parameter in ensures, one ensures per field
+struct C { n: i64, m: i64, a: [i64] }
+
+fn bump(inout c: C, k: i64) -> ()
+  requires 0 <= c.n && c.n <= 1000 && 0 <= k && k <= 10 && len(c.a) == 4 && 0 <= c.a[1] && c.a[1] <= 100
+  ensures c.n == old(c.n) + k
+  ensures c.m == old(c).m
+  ensures len(c.a) == 4 && c.a[1] == old(c.a)[1] + 1
+{
+  c.n = c.n + k;
+  c.a[1] = c.a[1] + 1;
+}
+
+pub fn run(k: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 3
+{
+  let arr: [i64] = alloc(4, 0);
+  let mut c: C = C { n: 5, m: 7, a: move arr };
+  bump(inout c, k);
+  bump(inout c, 1);
+  return c.n * 1000 + c.m * 10 + c.a[1];
+}

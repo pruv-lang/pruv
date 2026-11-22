@@ -2232,8 +2232,10 @@ class FnVerifier:
             for k in range(nb):
                 sh = 8 * (k if n == "store_le" else nb - 1 - k)
                 arr = z3.Store(arr, i + k, z3.BV2Int(z3.Extract(sh + 7, sh, wb)))
-            name = e.args[0].expr.name
-            st.env[name] = mk_arr(arr, av.n, name, av.elem)
+            root, path = field_place(e.args[0].expr)
+            name = root.name
+            nv = mk_arr(arr, av.n, ".".join((name,) + path), av.elem)
+            st.env[name] = s.rebuild(root.ty, st.env[name], path, nv) if path else nv
             s.post_refine(e, [0], st, g)
             return None
         if n == "is_char_boundary":
@@ -3080,7 +3082,7 @@ class FnVerifier:
         prev = []   # earlier clauses (domain + value) were proven above and may justify later lookups
         for i, en in enumerate(s.f.inv_ensures):
             name, line, param = en.struct_invariant
-            target = "result" if param == "result" else "inout %s at exit" % param
+            target = param if param == "result" or param.startswith("result.") else "inout %s at exit" % param
             what = "invariant of %s (line %d) for %s" % (name, line, target)
             for dom, code in s.dom_obligations(en, st, prev, env):
                 s.prove(st, prev, dom, node, "struct_invariant", what, key_extra=(i, code))
@@ -3511,7 +3513,8 @@ class FnVerifier:
         s.params = dict(env)
         # G5 A1 (5.1): the immutable entry snapshots of the inout parameters; the executable name starts as the same
         # array and is rebound by element stores, calls and loop havoc, never the snapshot
-        s.snap = {p.name: env[p.name] for p in f.params if p.mode is not None and is_array(p.type)}
+        s.snap = {p.name: env[p.name] for p in f.params if p.mode is not None and (
+            is_array(p.type) or p.type.owner is None and not p.type.args and p.type.name in s.model.struct)}
         st = State(env, pc)
         if f.opaque and f.x_auto is not None:
             # P13o (P13o.1 totality): the body is defined for every argument, proven once here, so a reveal equation

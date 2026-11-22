@@ -873,7 +873,7 @@ pub struct FnVerifier<'a> {
     /// G4 A1: the file tag of the function being proved (0 in legacy mode). A function of an explicit-mode program has a
     /// nonzero tag, so `fn_tag != 0` is the explicit visibility mode (Python `s.explicit`); legacy programs keep tag 0.
     pub(crate) fn_tag: u32,
-    /// G5 A1 (`s.snap`): immutable entry snapshots {inout parameter name: entry array}; separate from the current
+    /// G5 A1 (`s.snap`): immutable entry snapshots of inout array and struct parameters; separate from the current
     /// environment. Empty for a function without inout parameters.
     pub(crate) snap: Env,
     iter_places: Vec<Expr>,
@@ -881,8 +881,8 @@ pub struct FnVerifier<'a> {
     /// `key_text`).
     pub(crate) kmemo: HashMap<u32, (String, Vec<String>)>,
     /// LG16 (G-DB26-1): struct name -> (field names, annotated invariant clauses) of every struct with an invariant.
-    /// Empty for a program without invariants (nothing below changes then).
-    invs: HashMap<String, (Vec<String>, Vec<&'a Expr>)>,
+    /// Plain struct declarations for effective invariant clauses and entry snapshots.
+    invs: HashMap<String, &'a ast::StructDecl>,
 }
 
 /// LG16: one synthesized struct-invariant clause of a function contract (verifier only).
@@ -900,17 +900,25 @@ pub(crate) struct InvClause {
 
 /// LG16: rewrite the bare field names of a struct invariant clause to `base.field` (a quantifier variable of the same
 /// name shadows the field inside its body and triggers).
-fn inv_rewrite(e: &mut Expr, fields: &[String], base: &str, base_ty: &str, bound: &mut Vec<(String, String)>) {
+fn inv_rewrite(e: &mut Expr, fields: &[String], base: &str, base_ty: &str, path: &[&ast::FieldDecl], bound: &mut Vec<(String, String)>) {
     if let Expr::Var(v) = &mut *e {
         if let Some((_, to)) = bound.iter().rev().find(|(b, _)| *b == v.name) {
             v.name = to.clone();
             return;
         }
         if fields.iter().any(|f| *f == v.name) {
+            let mut place = Expr::Var(ast::Var {
+                line: v.line, col: v.col, name: base.to_string(), ty: Some(base_ty.to_string()),
+            });
+            for fd in path {
+                place = Expr::FieldAccess(ast::FieldAccess {
+                    line: v.line, col: v.col, base: Box::new(place), field: fd.name.clone(), ty: Some(fd.ty.clone()),
+                });
+            }
             let fa = Expr::FieldAccess(ast::FieldAccess {
                 line: v.line,
                 col: v.col,
-                base: Box::new(Expr::Var(ast::Var { line: v.line, col: v.col, name: base.to_string(), ty: Some(base_ty.to_string()) })),
+                base: Box::new(place),
                 field: v.name.clone(),
                 ty: v.ty.clone(),
             });
@@ -919,40 +927,40 @@ fn inv_rewrite(e: &mut Expr, fields: &[String], base: &str, base_ty: &str, bound
         return;
     }
     match e {
-        Expr::InoutArg(x) => inv_rewrite(&mut x.expr, fields, base, base_ty, bound),
-        Expr::Unary(x) => inv_rewrite(&mut x.operand, fields, base, base_ty, bound),
+        Expr::InoutArg(x) => inv_rewrite(&mut x.expr, fields, base, base_ty, path, bound),
+        Expr::Unary(x) => inv_rewrite(&mut x.operand, fields, base, base_ty, path, bound),
         Expr::Binary(x) => {
-            inv_rewrite(&mut x.left, fields, base, base_ty, bound);
-            inv_rewrite(&mut x.right, fields, base, base_ty, bound);
+            inv_rewrite(&mut x.left, fields, base, base_ty, path, bound);
+            inv_rewrite(&mut x.right, fields, base, base_ty, path, bound);
         }
-        Expr::Call(x) => x.args.iter_mut().for_each(|a| inv_rewrite(a, fields, base, base_ty, bound)),
+        Expr::Call(x) => x.args.iter_mut().for_each(|a| inv_rewrite(a, fields, base, base_ty, path, bound)),
         Expr::Index(x) => {
-            inv_rewrite(&mut x.array, fields, base, base_ty, bound);
-            inv_rewrite(&mut x.index, fields, base, base_ty, bound);
+            inv_rewrite(&mut x.array, fields, base, base_ty, path, bound);
+            inv_rewrite(&mut x.index, fields, base, base_ty, path, bound);
         }
         Expr::Ctor(x) => {
             if let Some(a) = x.arg.as_mut() {
-                inv_rewrite(a, fields, base, base_ty, bound);
+                inv_rewrite(a, fields, base, base_ty, path, bound);
             }
         }
         Expr::Quant(x) => {
-            inv_rewrite(&mut x.lo, fields, base, base_ty, bound);
-            inv_rewrite(&mut x.hi, fields, base, base_ty, bound);
+            inv_rewrite(&mut x.lo, fields, base, base_ty, path, bound);
+            inv_rewrite(&mut x.hi, fields, base, base_ty, path, bound);
             // a quantifier variable named like the parameter would capture `base.f`: rename it (check.py invariant_clause)
             let orig = x.var.clone();
             if x.var == base {
                 x.var = format!("$inv_{}", x.var);
             }
             bound.push((orig, x.var.clone()));
-            inv_rewrite(&mut x.body, fields, base, base_ty, bound);
-            x.triggers.iter_mut().for_each(|t| inv_rewrite(t, fields, base, base_ty, bound));
+            inv_rewrite(&mut x.body, fields, base, base_ty, path, bound);
+            x.triggers.iter_mut().for_each(|t| inv_rewrite(t, fields, base, base_ty, path, bound));
             bound.pop();
         }
-        Expr::StructLit(x) => x.fields.iter_mut().for_each(|fi| inv_rewrite(&mut fi.value, fields, base, base_ty, bound)),
-        Expr::EnumCtor(x) => x.args.iter_mut().for_each(|a| inv_rewrite(a, fields, base, base_ty, bound)),
-        Expr::FieldAccess(x) => inv_rewrite(&mut x.base, fields, base, base_ty, bound),
-        Expr::IsVariant(x) => inv_rewrite(&mut x.value, fields, base, base_ty, bound),
-        Expr::VariantField(x) => inv_rewrite(&mut x.value, fields, base, base_ty, bound),
+        Expr::StructLit(x) => x.fields.iter_mut().for_each(|fi| inv_rewrite(&mut fi.value, fields, base, base_ty, path, bound)),
+        Expr::EnumCtor(x) => x.args.iter_mut().for_each(|a| inv_rewrite(a, fields, base, base_ty, path, bound)),
+        Expr::FieldAccess(x) => inv_rewrite(&mut x.base, fields, base, base_ty, path, bound),
+        Expr::IsVariant(x) => inv_rewrite(&mut x.value, fields, base, base_ty, path, bound),
+        Expr::VariantField(x) => inv_rewrite(&mut x.value, fields, base, base_ty, path, bound),
         _ => {}
     }
 }
@@ -1039,7 +1047,7 @@ fn struct_len_changes(prog: &ast::Program, resizes: &HashSet<(String, usize)>) -
     }
 }
 
-/// G5 A1: the environment key of a frozen pre-call array.
+/// G5 A1: the environment key of a frozen pre-call value.
 fn old_key(name: &str) -> String {
     format!("\u{1}old:{}", name)
 }
@@ -1116,11 +1124,15 @@ impl<'a> FnVerifier<'a> {
             return out;
         }
         let add = |ty: &str, who: &str, inout: bool, out: &mut Vec<InvClause>| {
-            if let Some((fields, clauses)) = self.invs.get(ty) {
-                for c in clauses {
-                    let mut expr = (**c).clone();
-                    inv_rewrite(&mut expr, fields, who, ty, &mut Vec::new());
-                    out.push(InvClause { expr, sname: ty.to_string(), line: c.line(), who: who.to_string(), inout });
+            let lookup = |name: &str| self.invs.get(name).copied();
+            for (s, path) in pruv_core::check::effective_invariant_structs(&GType::from_key(ty), &lookup) {
+                let fields: Vec<_> = s.fields.iter().map(|fd| fd.name.clone()).collect();
+                let label = std::iter::once(who).chain(path.iter().map(|fd| fd.name.as_str()))
+                    .collect::<Vec<_>>().join(".");
+                for (c, &line) in s.invariants.iter().zip(&s.invariant_lines) {
+                    let mut expr = c.clone();
+                    inv_rewrite(&mut expr, &fields, who, ty, &path, &mut Vec::new());
+                    out.push(InvClause { expr, sname: s.name.clone(), line, who: label.clone(), inout });
                 }
             }
         };
@@ -1180,8 +1192,8 @@ impl<'a> FnVerifier<'a> {
         // LG16: struct invariants (proof-only)
         for d in &prog.types {
             if let ast::TypeDecl::Struct(s) = d {
-                if !s.invariants.is_empty() && s.tparams.is_empty() {
-                    v.invs.insert(s.name.clone(), (s.fields.iter().map(|fd| fd.name.clone()).collect(), s.invariants.iter().collect()));
+                if s.tparams.is_empty() {
+                    v.invs.insert(s.name.clone(), s);
                 }
             }
         }
@@ -2571,7 +2583,7 @@ impl<'a> FnVerifier<'a> {
         let n = x.name.as_str();
         if let Some((param, _)) = &x.old {
             // G5 A1: old(a) is the frozen entry array. A callee contract being instantiated at a call site supplies its
-            // own pre-call arrays under ("old", name) in its environment; otherwise it is this function's snapshot.
+            // own pre-call values under ("old", name) in its environment; otherwise it is this function's snapshot.
             let key = old_key(param);
             return match env.try_get(&key) {
                 Some(v) => Ok(v.clone()),
@@ -2836,14 +2848,15 @@ impl<'a> FnVerifier<'a> {
                     let byte = wb.extract(sh + 7, sh).bv2int(false);
                     arr = arr.store(&i.add_i(k), &byte);
                 }
-                let name = match &x.args[0] {
-                    Expr::InoutArg(ia) => match &*ia.expr {
-                        Expr::Var(v) => v.name.clone(),
-                        _ => return Err("'NoneType' object has no attribute 'name'".to_string()),
-                    },
-                    _ => return Err("'NoneType' object has no attribute 'expr'".to_string()),
+                let Expr::InoutArg(dst) = &x.args[0] else {
+                    return Err("store destination is not an inout place".into());
                 };
-                st.env.set(&name, Val::Arr(av.like(arr, av.n.clone(), &name)));
+                let name = match dst.expr.as_ref() {
+                    Expr::Var(v) => &v.name,
+                    _ => &av.name,
+                };
+                let value = Val::Arr(av.like(arr, av.n.clone(), name));
+                self.store_collection_place(&dst.expr, &mut st.env, value)?;
                 self.post_refine(e, &[0], st, g)?;
                 return Ok(Val::Unit);
             }
@@ -3019,7 +3032,7 @@ impl<'a> FnVerifier<'a> {
         for (p, a) in f.params.iter().zip(args.iter()) {
             cenv.set(&p.name, a.clone());
         }
-        // G5 A1 (5.2 step 2): the pre-call arrays freeze as the callee's old bindings (scoped to this contract evaluation:
+        // G5 A1 (5.2 step 2): the pre-call values freeze as the callee's old bindings (scoped to this contract evaluation:
         // the caller's own snapshot map is never touched)
         for (p, a) in f.params.iter().zip(args.iter()) {
             if p.mode_pos.is_some() {
@@ -4655,7 +4668,7 @@ impl<'a> FnVerifier<'a> {
             let what = if ic.inout {
                 format!("invariant of {} (line {}) for inout {} at exit", ic.sname, pruv_core::diagnostic::plain_line(ic.line), ic.who)
             } else {
-                format!("invariant of {} (line {}) for result", ic.sname, pruv_core::diagnostic::plain_line(ic.line))
+                format!("invariant of {} (line {}) for {}", ic.sname, pruv_core::diagnostic::plain_line(ic.line), ic.who)
             };
             for (d, code) in self.dom_obligations(&ic.expr, st, &prev, &env)? {
                 self.prove_core(&st, &prev, &d, node, "struct_invariant", &what, Some(&format!("({}, '{}')", i, code)));
@@ -5224,12 +5237,12 @@ impl<'a> FnVerifier<'a> {
             env.set(&p.name, v);
         }
         self.params = env.clone();
-        // G5 A1 (5.1): the immutable entry snapshots of the inout parameters; the executable name starts as the same array
+        // G5 A1 (5.1): the immutable entry snapshots of the inout parameters; the executable name starts as the same value
         // and is rebound by element stores, calls and loop havoc, never the snapshot
         self.snap = Env(f
             .params
             .iter()
-            .filter(|p| p.mode_pos.is_some() && GType::from_key(&p.ty).is_array())
+            .filter(|p| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || self.invs.contains_key(&p.ty)))
             .map(|p| (p.name.clone(), env.get(&p.name).clone()))
             .collect());
         let mut st = State::new(env.clone(), pc);

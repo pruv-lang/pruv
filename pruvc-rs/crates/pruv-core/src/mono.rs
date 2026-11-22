@@ -916,6 +916,7 @@ impl<'a> Mono<'a> {
                 fields: self.fields(&s.fields)?,
                 tparams: Vec::new(),
                 invariants: Vec::new(), // LG16: proof-only; the verifier runs on the checked program, not the concrete one
+                invariant_lines: Vec::new(),
             }),
             TypeDecl::Enum(e) => {
                 let mut variants = Vec::with_capacity(e.variants.len());

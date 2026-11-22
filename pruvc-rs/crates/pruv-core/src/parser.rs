@@ -768,8 +768,9 @@ impl Parser {
             }
         }
         let mut invariants = Vec::new();
+        let mut invariant_lines = Vec::new();
         while self.at("invariant", 0) {
-            self.bump();
+            invariant_lines.push(self.next().line);
             invariants.push(self.expr()?);
             if self.at(",", 0) {
                 self.bump();
@@ -777,7 +778,7 @@ impl Parser {
         }
         self.expect("}")?;
         self.scope = HashMap::new();
-        Ok(StructDecl { line: kw.line, col: kw.col, name: n.val, fields, tparams, invariants })
+        Ok(StructDecl { line: kw.line, col: kw.col, name: n.val, fields, tparams, invariants, invariant_lines })
     }
 
     fn enum_decl(&mut self) -> R<EnumDecl> {
