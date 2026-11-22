@@ -71,6 +71,7 @@ pub fn start(binary: str, argv: str, cwd: str, timeout_ms: i64, inout ctl: [i64]
 // trim the line, parse it as JSON (P1: invalid UTF-8 is a parse failure and the line is skipped)
 pub fn parse_line(line: [u8], n: i64) -> crate::json::JsonParse ! alloc
   requires 0 <= n && n <= len(line)
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
 {
   let mut r: [i64] = alloc(2, 0);
   crate::util::trim_span(line, n, inout r);
