@@ -1,0 +1,31 @@
+// LG23 (G-LG22-2): old(a[i]), old(len(a)) of an inout array and old(c.a[i]), old(len(c.a)) of an inout struct
+// parameter in ensures; the index is read in the current state (a non-inout parameter)
+struct C { n: i64, a: [i64] }
+
+fn inc(inout a: [i64], i: i64) -> ()
+  requires 0 <= i && i < len(a) && 0 <= a[i] && a[i] <= 1000
+  ensures len(a) == old(len(a))
+  ensures a[i] == old(a[i]) + 1
+{
+  a[i] = a[i] + 1;
+}
+
+fn bump(inout c: C, i: i64) -> ()
+  requires 0 <= i && i < len(c.a) && 0 <= c.a[i] && c.a[i] <= 1000
+  ensures len(c.a) == old(len(c.a))
+  ensures c.a[i] == old(c.a[i]) + 2
+  ensures c.n == old(c.n)
+{
+  c.a[i] = c.a[i] + 2;
+}
+
+pub fn run(k: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 3
+{
+  let mut arr: [i64] = alloc(4, 0);
+  inc(inout arr, k);
+  inc(inout arr, k);
+  let mut c: C = C { n: 5, a: move arr };
+  bump(inout c, k);
+  return c.n * 1000 + c.a[k] * 10 + len(c.a);
+}

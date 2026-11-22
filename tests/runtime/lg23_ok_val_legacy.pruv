@@ -1,0 +1,41 @@
+// LG23 (G-LG18-2): ok_val of a Result<Option<i64>, String> and a Result<Result<i64>, String> parameter in a
+// runtime-checked requires and a kept cost clause (--no-verify) on both backends
+fn opt_val(take r: Result<Option<i64>, String>) -> i64 ! alloc
+  requires is_ok(r) && is_some(ok_val(r)) && some_val(ok_val(r)) >= 0 && some_val(ok_val(r)) <= 100
+  ensures result >= 0 && result <= 100
+  cost some_val(ok_val(r))
+{
+  match r {
+    Ok(o) => {
+      match o {
+        Some(v) => { return v; }
+        None => { return 0; }
+      }
+    }
+    Err(e) => { return 0; }
+  }
+}
+
+fn res_val(take r: Result<Result<i64>, String>) -> i64 ! alloc
+  requires is_ok(r) && is_ok(ok_val(r)) && ok_val(ok_val(r)) >= 0 && ok_val(ok_val(r)) <= 100
+  ensures result >= 0 && result <= 100
+  cost ok_val(ok_val(r))
+{
+  match r {
+    Ok(q) => {
+      match q {
+        Ok(v) => { return v; }
+        Err(e) => { return 0; }
+      }
+    }
+    Err(e) => { return 0; }
+  }
+}
+
+fn run(k: i64) -> i64 ! alloc
+  requires k >= 0 && k <= 3
+{
+  let a: Result<Option<i64>, String> = Ok::<Option<i64>, String>(Some(k * 10));
+  let b: Result<Result<i64>, String> = Ok::<Result<i64>, String>(Ok(k + 5));
+  return opt_val(move a) * 100 + res_val(move b);
+}

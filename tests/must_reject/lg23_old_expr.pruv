@@ -1,0 +1,8 @@
+// LG23 (G-LG22-2): old of an expression that is not a place (or len of a place) of an inout parameter stays rejected
+fn f(inout a: [i64]) -> ()
+  requires len(a) == 4
+  ensures len(a) == old(len(a))
+  ensures a[0] == old(a[0] + 1)
+{
+  a[0] = a[0];
+}

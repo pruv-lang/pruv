@@ -1,0 +1,24 @@
+// LG23 (G-LG22-1): a call that passes an enum value whose variant field breaks the struct invariant is rejected at the call
+struct R {
+  lo: i64, hi: i64,
+  invariant 0 <= lo && lo <= hi
+}
+
+enum Shape { Empty, Span(r: R, w: i64) }
+
+fn span(s: Shape) -> i64
+  ensures result >= 0
+{
+  match s {
+    Shape::Empty => { return 0; }
+    Shape::Span(r, w) => { return r.hi - r.lo; }
+  }
+}
+
+pub fn run(k: i64) -> i64
+  requires 0 <= k && k <= 10
+{
+  let mut r: R = R { lo: 0, hi: k };
+  r.lo = k + 1;
+  return span(Shape::Span(r, 0));
+}
