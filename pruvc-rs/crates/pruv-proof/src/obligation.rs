@@ -306,7 +306,7 @@ impl<'a> FnVerifier<'a> {
         }
         // First without the aggregate lemmas: assumptions are few, so unsat here is a sound proof,
         // and it drops the quantified lemmas for the many obligations that do not need them
-        let (mut sol, mut r) = self.run_attempt(&st.pc, g, ob, false, idx);
+        let (mut sol, mut r) = self.run_attempt(&st.pc, g, ob, 0, idx);
         if r == Sat::Unsat {
             return;
         }
@@ -315,11 +315,20 @@ impl<'a> FnVerifier<'a> {
             if r == Sat::Sat {
                 relaxed = Some(self.cex(&sol.model(), &st.env));
             }
-            let (s2, r2) = self.run_attempt(&st.pc, g, ob, true, idx);
+            let (s2, r2) = self.run_attempt(&st.pc, g, ob, 1, idx);
             sol = s2;
             r = r2;
             if r == Sat::Unsat {
                 return;
+            }
+            if !self.split_lemmas.is_empty() {
+                // LG20 (G-LG19-4): the count range split only when the other lemmas are not enough (verify.py)
+                let (s3, r3) = self.run_attempt(&st.pc, g, ob, 2, idx);
+                sol = s3;
+                r = r3;
+                if r == Sat::Unsat {
+                    return;
+                }
             }
         }
         self.seen.insert(key);
@@ -380,7 +389,7 @@ impl<'a> FnVerifier<'a> {
         });
     }
 
-    /// verify.py `_probe_attempts`: search of a single candidate obligation. Same two stages as `prove` (without lemmas → if the first attempt is not unsat
+    /// verify.py `_probe_attempts`: search of a single candidate obligation. Same stages as `prove` (without lemmas → if the first attempt is not unsat
     /// and lemmas exist, with them too). Before each attempt, the budget and wall clock are checked first (`Probe::tick`; if exceeded, mark abort and finish).
     /// If an attempt's result is unknown and the z3 reason is exactly "timeout" (the 500ms per-query wall-clock deadline), the whole function ends with a timeout (abort Timeout).
     /// Otherwise, if the last attempt is not proved (including other unknown wordings such as rlimit-exhausted canceled), only that candidate is left failed for this round (status as in query_status).
@@ -388,8 +397,8 @@ impl<'a> FnVerifier<'a> {
     /// Python's z3.Z3Exception → status "error" branch is not ported: Rust's `Solver::check` does not throw exceptions.
     fn probe_attempts(&mut self, pc: &[Ast], g: &[Ast], ob: &Ast, code: &str, cand: &str, idx: Option<usize>) {
         let mut status = String::new();
-        for with_lemmas in [false, true] {
-            if with_lemmas && self.lemmas.is_empty() {
+        for stage in [0u8, 1, 2] {
+            if (stage >= 1 && self.lemmas.is_empty()) || (stage == 2 && self.split_lemmas.is_empty()) {
                 break;
             }
             let ok = match self.probe.as_mut() {
@@ -399,7 +408,7 @@ impl<'a> FnVerifier<'a> {
             if !ok {
                 return;
             }
-            let (sol, r) = self.run_attempt(pc, g, ob, with_lemmas, idx);
+            let (sol, r) = self.run_attempt(pc, g, ob, stage, idx);
             let reason = if r == Sat::Unknown { Some(sol.reason_unknown()) } else { None };
             status = query_status(r, reason.as_deref()).to_string();
             if reason.as_deref() == Some("timeout") {
@@ -439,7 +448,10 @@ impl<'a> FnVerifier<'a> {
         out
     }
 
-    fn run_attempt(&mut self, pc: &[Ast], g: &[Ast], ob: &Ast, with_lemmas: bool, idx: Option<usize>) -> (Solver, Sat) {
+    /// `stage`: 0 without lemmas, 1 with the aggregate lemmas, 2 with those and the count range split (verify.py
+    /// `run(2)`); the trace records `lemmas` as `stage > 0`, as verify.py `bool(with_lemmas)`.
+    fn run_attempt(&mut self, pc: &[Ast], g: &[Ast], ob: &Ast, stage: u8, idx: Option<usize>) -> (Solver, Sat) {
+        let with_lemmas = stage > 0;
         let q = &self.qcfg;
         let mut sol = Solver::with_options(&self.z, q.timeout_ms, q.rlimit, q.seed);
         for p in pc {
@@ -450,6 +462,11 @@ impl<'a> FnVerifier<'a> {
         }
         if with_lemmas {
             for p in &self.lemmas {
+                sol.add(p);
+            }
+        }
+        if stage == 2 {
+            for p in &self.split_lemmas {
                 sol.add(p);
             }
         }

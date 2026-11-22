@@ -836,6 +836,8 @@ pub struct FnVerifier<'a> {
     /// LG4 `s.agg_shapes`: (kind, F, body, shape, arity) for the aggregate frame lemma.
     pub(crate) agg_shapes: Vec<(String, FuncDecl, Ast, String, usize)>,
     pub lemmas: Vec<Ast>,
+    /// LG20 (G-LG19-4): the count range split lemmas, asserted only in a third attempt (verify.py `split_lemmas`)
+    pub split_lemmas: Vec<Ast>,
     /// The `(kind, F)` item of `lemma_keys`
     pub(crate) lemma_fn_keys: HashSet<(String, String)>,
     /// The `L.sexpr()` item of `lemma_keys`
@@ -1079,6 +1081,7 @@ impl<'a> FnVerifier<'a> {
             aggs: Vec::new(),
             agg_shapes: Vec::new(),
             lemmas: Vec::new(),
+            split_lemmas: Vec::new(),
             lemma_fn_keys: HashSet::new(),
             lemma_text_keys: HashSet::new(),
             params: Env::default(),
@@ -2135,7 +2138,11 @@ impl<'a> FnVerifier<'a> {
                 let mut bound = vec![x.clone(), m.clone(), y.clone()];
                 bound.extend(os.iter().cloned());
                 let body = z.and(&[x.le(&m), m.le(&y)]).implies(&fxy.eq(&fxm.add(&fmy)));
-                self.lemmas.push(z.forall_groups(&bound, &body, &[vec![&fxm, &fmy], vec![&fxy, &fxm], vec![&fxy, &fmy]]));
+                self.split_lemmas.push(z.forall_groups(
+                    &bound,
+                    &body,
+                    &[vec![&fxm, &fmy], vec![&fxy, &fxm], vec![&fxy, &fmy]],
+                ));
             }
         }
 

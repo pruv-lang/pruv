@@ -3080,13 +3080,18 @@ impl Checker {
                 // temporary: the `let` would drop a value the call borrowed at its end, before the `?` operand runs,
                 // instead of at the end of the statement. Python `try_owned_temp`.
                 let plain = !ok
-                    || match &*rhs {
-                        Expr::Call(c) => c.args.iter().all(Self::try_plain_arg),
+                    || match &probe {
+                        Expr::Call(c) => c.args.iter().all(|a| self.try_plain_arg(a)),
                         _ => true,
                     };
                 if !ok || !plain {
                     return Err(Self::try_position_error(line, col));
                 }
+            } else if !crate::refine::kids(&probe).into_iter().all(|a| self.try_plain_arg(a)) {
+                // LG20 (G-LG19-1): a value temporary follows the same rule: `lend(mk(2), 0)` is an i64, but the
+                // String `mk(2)` that `lend` borrows would be dropped at the end of the temporary's `let`, before
+                // the `?` operand runs. Python `try_temps`.
+                return Err(Self::try_position_error(line, col));
             }
             let name = format!("{TRY_TEMP}{}", self.try_count);
             self.try_count += 1;
@@ -3104,15 +3109,23 @@ impl Checker {
     /// LG19 (G-LG18-4): a is a move, an int / bool literal, a place (a binding or a field of one), or an operator or
     /// index whose operands are all plain in this sense, so evaluating it creates no temporary that needs a drop.
     /// Syntactic, without a standalone type check (an argument may need its parameter's borrow context); a string
-    /// literal is not plain (the generated code may build a String from it). Python `try_plain_arg`.
-    fn try_plain_arg(a: &Expr) -> bool {
+    /// literal is not plain (the generated code may build a String from it). LG20 (G-LG19-3): any other node (a call)
+    /// whose type, as the typed copy of the temporary already recorded it, is a value type and whose operands are all
+    /// plain is plain too: its result needs no drop and it creates no other value. Python `try_plain_arg`.
+    fn try_plain_arg(&self, a: &Expr) -> bool {
         if matches!(a, Expr::Move(_) | Expr::IntLit(_) | Expr::BoolLit(_)) || matches!(field_place(a).0, Expr::Var(_)) {
             return true;
         }
+        let kids_plain = || crate::refine::kids(a).into_iter().all(|k| self.try_plain_arg(k));
         match a {
-            Expr::Unary(u) if u.op != "?" => Self::try_plain_arg(&u.operand),
-            Expr::Binary(_) | Expr::Index(_) => crate::refine::kids(a).into_iter().all(Self::try_plain_arg),
-            _ => false,
+            Expr::Unary(u) if u.op == "?" => false,
+            Expr::Unary(_) | Expr::Binary(_) | Expr::Index(_) => kids_plain(),
+            _ => match expr_ty(a) {
+                Some(k) => {
+                    GType::try_from_key(k).is_ok_and(|t| is_value(&t, &|d| self.value_decl(d))) && kids_plain()
+                }
+                None => false,
+            },
         }
     }
 

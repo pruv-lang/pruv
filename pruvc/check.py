@@ -1540,14 +1540,19 @@ class Checker:
         for q in tries if inout else []:
             s.try_effect_check(st, q)
         for parent, k in temps:
-            t = s.expr(copy.deepcopy(k), dict(scope))
+            typed = copy.deepcopy(k)
+            t = s.expr(typed, dict(scope))
             if t == UNIT:
                 try_position_error(st)
             if inout:
                 s.try_effect_check(st, k)
             take = False
             if not is_value(t, s.value_decls):
-                take = s.try_owned_temp(st, parent, k, t)
+                take = s.try_owned_temp(st, parent, k, t, typed)
+            elif not all(s.try_plain_arg(c) for c in expr_kids(typed) if isinstance(c, Expr)):
+                # LG20 (G-LG19-1): a value temporary's own operands follow the same rule, or the `let` would drop
+                # an owned value built inside it (`lend(mk(2), 0)`) before the `?` operand runs
+                try_position_error(st)
             name = "%s%d" % (TRY_TEMP, s.try_index)
             s.try_index += 1
             let = Let(st.line, st.col, name, False, t, k)
@@ -1595,7 +1600,7 @@ class Checker:
                         if not (f is not None and f.foreign is None and i < len(f.params) and not f.params[i].take):
                             try_position_error(st)
 
-    def try_owned_temp(s, st, parent, k, t):
+    def try_owned_temp(s, st, parent, k, t, typed):
         """LG18 (G-LG14-1): an operand of an owned type (Vec, HashMap, String) evaluated before a `?` may be bound to
         a temporary only when it is a call result (not subview) or a plain move passed directly as an argument of a
         non-foreign user function to a take parameter of exactly its type: the temporary is then moved into the same
@@ -1610,18 +1615,22 @@ class Checker:
         # LG19 (G-LG18-4): a lifted call result is bound only when its own arguments create no owned temporary: the
         # `let` would drop a value the call borrowed at its end, before the `?` operand runs, instead of at the end of
         # the statement
-        if not ok or isinstance(k, Call) and not all(s.try_plain_arg(a) for a in k.args):
+        if not ok or isinstance(k, Call) and not all(s.try_plain_arg(a) for a in typed.args):
             try_position_error(st)
         return True
 
     def try_plain_arg(s, a):
         """LG19 (G-LG18-4): a is a move, an int / bool literal, a place (a binding or a field of one), or an operator
         or index whose operands are all plain in this sense, so evaluating it creates no temporary that needs a drop.
-        Syntactic, without a standalone type check (an argument may need its parameter's borrow context); a string
-        literal is not plain (the generated code may build a String from it)"""
+        LG20 (G-LG19-3): or any other node whose type is a value type (a call such as `len(s)`) with plain operands.
+        a is a node of the temporary's typed copy, so its type is the one the temporary's own check gave (no second
+        type check); a string literal is not plain (str is not a value type; the generated code may build a String)"""
         if isinstance(a, (Move, IntLit, BoolLit)) or isinstance(field_place(a)[0], Var):
             return True
-        if isinstance(a, (Unary, Binary, Index)) and getattr(a, "op", "") != "?":
+        if getattr(a, "op", "") == "?":
+            return False
+        if isinstance(a, (Unary, Binary, Index)) or (getattr(a, "ty", None) is not None
+                                                     and is_value(a.ty, s.value_decls)):
             return all(s.try_plain_arg(c) for c in expr_kids(a) if isinstance(c, Expr))
         return False
 

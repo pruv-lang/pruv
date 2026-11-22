@@ -1,0 +1,68 @@
+// LG20 (G-LG19-3): a call whose result is a value type and whose own arguments are plain is a plain argument of a
+// lifted call (`mk(len(s))`), and a value temporary whose operands are such calls is lifted as before
+// (`twice(len(s)) + need(x)?`); neither creates a value that the temporary's `let` drops
+fn mk(n: i64) -> String ! alloc
+  requires 0 <= n && n <= 10
+  ensures len(result) == n
+{
+  let mut s: String = string_from("");
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && len(s) == i
+    decreases n - i
+  {
+    s = string_push_str(move s, "x");
+    i = i + 1;
+  }
+  return move s;
+}
+
+fn twice(n: i64) -> i64
+  requires 0 <= n && n <= 100
+  ensures result == n * 2
+{
+  return n * 2;
+}
+
+fn need(x: i64) -> Result<i64, String> ! alloc
+  requires 0 <= x && x <= 100
+  ensures is_ok(result) ==> ok_val(result) == x
+{
+  if x > 0 { return Ok::<i64, String>(x); }
+  return Err::<i64, String>(string_from("neg"));
+}
+
+fn eat(take a: String, b: i64) -> i64 ! alloc
+  requires len(a) <= 10 && 0 <= b && b <= 100
+  ensures 0 <= result && result <= 1100
+{
+  return len(a) * 100 + b;
+}
+
+fn call_arg(x: i64) -> Result<i64, String> ! alloc
+  requires 0 <= x && x <= 100
+{
+  let s: String = mk(4);
+  return Ok::<i64, String>(eat(mk(len(s)), need(x)?));
+}
+
+fn value_temp(x: i64) -> Result<i64, String> ! alloc
+  requires 0 <= x && x <= 100
+{
+  let s: String = mk(3);
+  return Ok::<i64, String>(twice(len(s)) + need(x)?);
+}
+
+fn show(take r: Result<i64, String>) -> i64 ! alloc {
+  match move r {
+    Ok(v) => { return v; }
+    Err(e) => { return 0 - len(e); }
+  }
+}
+
+fn run(k: i64, x: i64) -> i64 ! alloc
+  requires 0 <= x && x <= 100
+{
+  if k == 0 { return show(call_arg(x)); }
+  return show(value_temp(x));
+}

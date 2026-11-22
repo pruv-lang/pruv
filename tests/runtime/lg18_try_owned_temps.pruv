@@ -50,7 +50,10 @@ fn use3(n: i64, k: i64, inout y: i64) -> i64
 fn borrowed(x: i64) -> Result<i64, String> ! alloc
   requires 0 <= x && x <= 100
 {
-  return Ok::<i64, String>(lend(mk(2), 0) + need(x)?);
+  // LG20 (G-LG19-1): `lend(mk(2), 0) + need(x)?` is type/try_position (the String `mk(2)` would be dropped before
+  // `need(x)` runs); the borrowed call is bound first
+  let l: i64 = lend(mk(2), 0);
+  return Ok::<i64, String>(l + need(x)?);
 }
 
 fn taken(x: i64) -> Result<i64, String> ! alloc
@@ -77,7 +80,8 @@ fn with_inout(x: i64) -> Result<i64, String> ! alloc
   requires 0 <= x && x <= 100
 {
   let mut y: i64 = 7;
-  let r: i64 = use3(lend(mk(1), 0), need(x)?, inout y);
+  let l: i64 = lend(mk(1), 0);
+  let r: i64 = use3(l, need(x)?, inout y);
   return Ok::<i64, String>(r + y);
 }
 
