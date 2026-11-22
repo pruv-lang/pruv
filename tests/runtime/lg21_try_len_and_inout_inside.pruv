@@ -1,0 +1,55 @@
+// LG21 (G-LG20-3, G-LG18-1): with no operand to bind before the `?`, a builtin reading the binding the `?` operand
+// borrows, and an inout argument inside the `?` operand itself, still lower
+fn read(s: String) -> Result<i64, String> ! alloc
+  requires len(s) <= 10
+  ensures is_ok(result) ==> ok_val(result) == len(s)
+{
+  if len(s) > 0 { return Ok::<i64, String>(len(s)); }
+  return Err::<i64, String>(string_from("empty"));
+}
+
+fn eat(n: i64, m: i64) -> i64
+  requires 0 <= n && n <= 10 && 0 <= m && m <= 10
+  ensures 0 <= result && result <= 1010
+{
+  return n * 100 + m;
+}
+
+fn set(inout x: i64, v: i64) -> Result<i64, String> ! alloc
+  requires 0 <= v && v <= 10
+  ensures is_ok(result) ==> ok_val(result) == v
+{
+  if v > 0 { x = v; return Ok::<i64, String>(v); }
+  return Err::<i64, String>(string_from("zero"));
+}
+
+fn f(k: i64) -> Result<i64, String> ! alloc
+  requires 0 <= k && k <= 1
+  ensures is_ok(result) ==> 0 <= ok_val(result) && ok_val(result) <= 1010
+{
+  let mut s: String = string_from("");
+  if k == 0 { s = string_from("abc"); }
+  return Ok::<i64, String>(eat(read(s)?, len(s)));
+}
+
+fn g(k: i64) -> Result<i64, String> ! alloc
+  requires 0 <= k && k <= 1
+  ensures is_ok(result) ==> 0 <= ok_val(result) && ok_val(result) <= 10
+{
+  let mut x: i64 = 0;
+  return Ok::<i64, String>(set(inout x, 7 - 7 * k)?);
+}
+
+fn run(k: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 1
+{
+  let mut a: i64 = 0;
+  match f(k) {
+    Ok(v) => { a = v; }
+    Err(e) => { if len(e) > 10 { return 0; } a = 0 - len(e); }
+  }
+  match g(k) {
+    Ok(v) => { return a * 10 + v; }
+    Err(e) => { if len(e) > 10 { return 0; } return a * 10 - len(e); }
+  }
+}

@@ -1016,11 +1016,34 @@ impl Solver {
         // LG20 (G-LG19-2): check in the shared context first and copy the query into a fresh one only when that check
         // is not decided. A sat or unsat answer does not depend on the context, so only an unknown one can be the
         // perturbation of G-DB29-1; the decided queries (almost all) no longer pay the copy.
+        // LG21 (G-LG20-1): the shared check gets at most SHARED_FIRST_MS. A query it cannot decide in that time is
+        // one the isolated check (full timeout) decides as well as the shared one would; giving the shared check the
+        // full timeout doubled the cost of every query that ends unknown (8 s + 8 s per stage-0 timeout in a3).
+        let full = self.opts.0;
+        let first = full.min(SHARED_FIRST_MS);
+        if first < full {
+            set_timeout(&self.z, self.raw, first);
+        }
         let r = unsafe { z::Z3_solver_check(self.z.raw(), self.raw) } as i32;
+        if first < full {
+            set_timeout(&self.z, self.raw, full);
+        }
         match r {
             LBOOL_TRUE => return Sat::Sat,
             LBOOL_FALSE => return Sat::Unsat,
             _ => {}
+        }
+        // LG21: an attempt reports one result, as verify.py's single check does. Only a timeout or a cancel (rlimit)
+        // in the shared context can be the perturbation, so only those are retried; an unknown the shared check
+        // gives with another reason (incomplete quantifiers) is the attempt's result, with that reason; the copy
+        // would answer differently from verify.py, which checks once (CI trace_infer, g10a_v_havoc_eof). A retried
+        // query reports the copy's result and reason. The reason text of an unknown can still differ from verify.py
+        // (its context has another history: inf_budget reads `canceled` there and `max. resource limit exceeded`
+        // here); tests/diff_trace.py treats that as same_unknown when the query text is identical (G-LG21-3).
+        // SAFETY: S1 S4.
+        let why = unsafe { take_string(z::Z3_solver_get_reason_unknown(self.z.raw(), self.raw)) };
+        if !(why.contains("timeout") || why.contains("canceled")) {
+            return Sat::Unknown;
         }
         let iz = Z3::new();
         let (t, r, sd) = self.opts;
@@ -1037,6 +1060,21 @@ impl Solver {
             LBOOL_FALSE => Sat::Unsat,
             _ => Sat::Unknown,
         }
+    }
+}
+/// LG21 (G-LG20-1): the timeout of the first check in the shared context (see `Solver::check`).
+const SHARED_FIRST_MS: u32 = 2000;
+/// z3py `s.set("timeout", ms)` on an existing solver.
+fn set_timeout(z: &Z3, s: RawSolver, ms: u32) {
+    let key = z.sym("timeout");
+    let c = z.raw();
+    // SAFETY: S1 — `s` is a live solver of `z`; the params object is inc_ref'd for its use here and dec_ref'd after.
+    unsafe {
+        let p = nn(z::Z3_mk_params(c));
+        z::Z3_params_inc_ref(c, p);
+        z::Z3_params_set_uint(c, p, key, ms as c_uint);
+        z::Z3_solver_set_params(c, s, p);
+        z::Z3_params_dec_ref(c, p);
     }
 }
 impl Solver {

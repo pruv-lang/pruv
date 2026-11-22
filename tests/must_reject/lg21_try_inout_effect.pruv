@@ -1,0 +1,11 @@
+// LG21 (G-LG18-1): with no operand to bind before the `?`, an effect call inside a `?` operand of an inout statement
+// stays try_position (the inout effect-before rule)
+fn noisy() -> Result<i64> ! io {
+  print(1);
+  return Ok(1);
+}
+fn set(k: i64, inout y: i64) -> i64 { y = k; return k; }
+fn f() -> Result<i64> ! io {
+  let mut y: i64 = 1;
+  return Ok(set(noisy()?, inout y));
+}

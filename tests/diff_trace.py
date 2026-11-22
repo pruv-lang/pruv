@@ -19,7 +19,8 @@ Classification (exactly one per input):
                   Checked before any other classification.
   same          the one stdout line of each is byte-identical, no attempt result is unknown/error, and errors has no
                 verify_unknown or inference_timeout
-  same_unknown  byte-identical (or differing only in counterexample values or in the reason_unknown text of a resource_unknown attempt), but the
+  same_unknown  byte-identical (or differing only in counterexample values or in the reason_unknown text of a resource_unknown attempt, or in the reason text and status of
+                inference attempts that both answered unknown to the same query), but the
                 unknown/error/verify_unknown/inference_timeout above is present. Not counted as success. If the py or rs errors contain inference_timeout it is a fail;
                 otherwise it is not treated as a fail but is reported separately
   cex_only      only the counterexample values in errors differ and everything else is identical, provided neither side has unknown/error/verify_unknown/
@@ -297,6 +298,35 @@ def same_query_dropped(py, rs):
     return canon(strip_cex(py2)) == canon(strip_cex(rs2))
 
 
+def same_query_unknown(py, rs):
+    """Do the two sides differ only in the reason_unknown text and status of inference attempts that both answered
+    unknown to a byte-identical query? Under an rlimit, z3 words the stop by where it ran out, and that depends on the
+    context's history: verify.py's global context gives "incomplete quantifiers" or "canceled" (status timeout) where
+    the Rust verifier, which checks in its own shared context and retries in a fresh one, gives "push canceled" or
+    "max. resource limit exceeded" (LG21, CI run of 6d767fae: g10a_v_havoc_eof, inf_budget). Everything else, the
+    inference result and the errors included, must be identical."""
+    po, ro = py.get("obligations", []), rs.get("obligations", [])
+    if len(po) != len(ro):
+        return False
+    obs_r, seen = [], False
+    for a, b in zip(po, ro):
+        aa, ba = a.get("attempts", []), b.get("attempts", [])
+        if len(aa) != len(ba):
+            return False
+        na = []
+        for x, y in zip(aa, ba):
+            if x != y and x.get("result") == y.get("result") == "unknown" and a.get("phase") == "inference" \
+                    and x.get("smt2") == y.get("smt2"):
+                seen = True
+                na.append(x)
+            else:
+                na.append(y)
+        obs_r.append(dict(b, attempts=na))
+    if not seen:
+        return False
+    return canon(strip_cex(py)) == canon(strip_cex(dict(rs, obligations=obs_r)))
+
+
 def py_recursion(obj):
     """Did Python emit internal_error because of the recursion limit (RecursionError)? (nothing to compare; same category as in diff_parse)"""
     return any(isinstance(e, dict) and e.get("code") == "internal_error"
@@ -329,7 +359,7 @@ def classify(case, expected):
         return "cex_only"
     if canon(strip_reason(strip_cex(case.py_obj))) == canon(strip_reason(strip_cex(case.rs_obj))):
         return "same_unknown"   # only the z3 text of resource_unknown differs (that attempt is unknown, so it is not counted as success)
-    if same_query_dropped(case.py_obj, case.rs_obj):
+    if same_query_dropped(case.py_obj, case.rs_obj) or same_query_unknown(case.py_obj, case.rs_obj):
         return "same_unknown"
     if unknown_involved(case.py_obj, case.rs_obj):
         return "flaky_unknown"

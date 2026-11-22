@@ -1,0 +1,11 @@
+// LG21 (G-LG18-1): with no operand to bind before the `?`, a `?` operand reading the root of an inout argument of the
+// same statement stays try_position (inout_context unlowered)
+fn get(y: i64) -> Result<i64> {
+  if y > 0 { return Ok(y); }
+  return Err(0);
+}
+fn use3(n: i64, inout y: i64) -> i64 { y = n; return n; }
+fn f() -> Result<i64> {
+  let mut y: i64 = 1;
+  return Ok(use3(get(y)?, inout y));
+}
