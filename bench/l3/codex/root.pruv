@@ -120,9 +120,8 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
   let mut ts: [i64] = crate::tail::tail_state(1024);
   let mut hs: [i64] = alloc(8, 0);
   let mut ht: [i64] = alloc(2000, 0);
-  // held turns start at 36864, past the largest wire header + base, so read::replay can move them left in place
+  // held turns start at 0; read::replay shifts them right once past the wire header + base, then moves them left in place
   let mut hb: crate::util::ByteBuffer = crate::util::byte_buffer(65536);
-  hs[1] = 36864;
   let mut pl: [i64] = alloc(64, 0);
   pl[0] = -1;
   let mut pb: [u8] = alloc(18024, 0);
