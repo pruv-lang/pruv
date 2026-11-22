@@ -1162,3 +1162,103 @@ pub fn finish_ref(st: [i64], sl: [i64], rf: [i64], src: [u8], base: i64, inout w
   }
   return Placed { turns: move turns, kept: kept, trimmed: tr, total: p[1], text_len: tl, ok: true };
 }
+
+
+// In-place form (DB44): the turn texts already sit in buf, the caller's byte arena, at the rf offsets. finish_inplace
+// moves the selected drafts left to buf[at..at+text_len), newest first, so the arena becomes the wire and no second
+// buffer is allocated. Each move is overlap safe (copy_within), so the proof is bounds only, as for finish_ref.
+// Output correctness needs one caller fact that is not proved here: every source span lies at or after `at`, and
+// the held turns sit newest first at increasing offsets, each as prompt, reply, created stamp, completed stamp. The
+// bytes a draft takes in the wire are at most its source bytes (clipping only shortens), so by induction each
+// draft's destination starts at or before its source and ends at or before the next older draft's source: no move
+// overwrites a byte that is still to be read. Turn offsets are relative to base as in finish_ref; the rows stay
+// oldest first while the texts are newest first, which a reader that follows the rows does not see.
+pub fn finish_inplace(st: [i64], sl: [i64], rf: [i64], inout buf: [u8], base: i64, at: i64) -> Placed ! alloc
+  requires len(st) == 4 && len(sl) == 1600
+  requires len(rf) == 800
+  requires 0 <= st[0] && st[0] <= 1000000000000 && 0 <= base && base <= 3500000
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  ensures len(buf) == len(old(buf))
+  ensures 0 <= result.kept && result.kept <= 200 && result.kept <= st[0]
+  ensures len(result.turns) == 10 * result.kept
+  ensures 0 <= result.text_len && result.text_len <= result.total + 48 * result.kept && result.text_len <= 2106752
+  ensures result.ok ==> (0 <= at && at <= len(buf) && result.text_len <= len(buf) - at)
+  ensures (result.trimmed == 0 && result.kept == st[0]) || (result.trimmed == 1 && result.kept < st[0])
+  ensures 0 <= result.total && result.total <= 2097152
+  ensures result.total == sum(j in 0..result.kept: sl[8 * ((st[0] - 1 - j) % 200)] + sl[8 * ((st[0] - 1 - j) % 200) + 1])
+  ensures (result.kept < st[0] && result.kept < 200) ==> result.total + sl[8 * ((st[0] - 1 - result.kept) % 200)] + sl[8 * ((st[0] - 1 - result.kept) % 200) + 1] > 2097152
+{
+  let p: [i64] = plan(st, sl);
+  let kept: i64 = p[0];
+  let b: i64 = st[0];
+  let tl: i64 = p[2 + kept];
+  let mut turns: [i64] = alloc(10 * kept, 0);
+  let mut tr: i64 = 0;
+  if kept < b { tr = 1; }
+  if at < 0 || at > len(buf) || tl > len(buf) - at {
+    return Placed { turns: move turns, kept: kept, trimmed: tr, total: p[1], text_len: tl, ok: false };
+  }
+  let dl: i64 = len(buf);
+  let mut j: i64 = 0;
+  while j < kept
+    invariant (tr == 0 && kept == b) || (tr == 1 && kept < b)
+    invariant 0 <= j && j <= kept && 0 <= kept && kept <= 200 && kept <= b && 0 <= b && b <= 1000000000000
+    invariant len(turns) == 10 * kept && 0 <= at && at <= dl && tl <= dl - at && len(buf) == dl && dl == len(old(buf)) && len(p) == 203 && len(sl) == 1600
+    invariant len(rf) == 800
+    invariant tl == p[2 + kept] && 0 <= tl && tl <= 2106752
+    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+    decreases kept - j
+  {
+    let w: i64 = (b - 1 - j) % 200;
+    let plen: i64 = sl[8 * w];
+    let rlen: i64 = sl[8 * w + 1];
+    let cp: i64 = sl[8 * w + 5];
+    let dp: i64 = sl[8 * w + 6];
+    let po: i64 = rf[4 * w];
+    let ro: i64 = rf[4 * w + 1];
+    let co: i64 = rf[4 * w + 2];
+    let dc: i64 = rf[4 * w + 3];
+    let lo: i64 = p[2 + j];
+    let e: i64 = p[3 + j];
+    if lo < 0 || lo > tl || e < lo || e > tl || lo + plen + rlen + 24 * cp + 24 * dp > e || po < 0 || po > dl - plen
+      || ((rlen != 0 || ro != -1) && (ro < 0 || ro > dl - rlen))
+      || (cp == 1 && (co < 0 || co > dl - 24))
+      || (dp == 1 && (dc < 0 || dc > dl - 24)) {
+      return Placed { turns: move turns, kept: kept, trimmed: tr, total: p[1], text_len: tl, ok: false };
+    }
+    copy_within(inout buf, at + lo, po, plen);
+    if rlen > 0 {
+      copy_within(inout buf, at + lo + plen, ro, rlen);
+    }
+    if cp == 1 {
+      copy_within(inout buf, at + lo + plen + rlen, co, 24);
+    }
+    if dp == 1 {
+      copy_within(inout buf, at + lo + plen + rlen + 24 * cp, dc, 24);
+    }
+    let t: i64 = kept - 1 - j;
+    turns[10 * t] = base + lo;
+    turns[10 * t + 1] = plen;
+    turns[10 * t + 2] = base + lo + plen;
+    turns[10 * t + 3] = rlen;
+    if cp == 1 {
+      turns[10 * t + 4] = base + lo + plen + rlen;
+      turns[10 * t + 5] = 24;
+    } else {
+      turns[10 * t + 4] = -1;
+      turns[10 * t + 5] = 0;
+    }
+    if dp == 1 {
+      turns[10 * t + 6] = base + lo + plen + rlen + 24 * cp;
+      turns[10 * t + 7] = 24;
+    } else {
+      turns[10 * t + 6] = -1;
+      turns[10 * t + 7] = 0;
+    }
+    turns[10 * t + 8] = sl[8 * w + 3];
+    turns[10 * t + 9] = sl[8 * w + 4];
+    j = j + 1;
+  }
+  return Placed { turns: move turns, kept: kept, trimmed: tr, total: p[1], text_len: tl, ok: true };
+}

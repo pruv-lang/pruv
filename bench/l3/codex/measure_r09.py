@@ -48,7 +48,7 @@ def build_hand():
         # The emission (and LLVM objects) must be newer than every Pruv source of this fragment and its packages.
         built = [main_rs, src / 'root_gen.rs']
         objs = [src / 'codex_gen.o', src / 'codex_rt.o'] if pair.endswith('llvm') else []
-        sources = list(HERE.glob('*.pruv')) + list((HERE.parent / 'pkgs').rglob('*.pruv'))
+        sources = list(HERE.glob('*.pruv')) + list((HERE.parent / 'pkgs').rglob('*.pruv')) + [HERE / 'harness.rs']
         newest = max(p.stat().st_mtime for p in sources)
         if any(not p.is_file() or p.stat().st_mtime < newest for p in built + objs) \
                 or 'sol::codex_read_wire(' not in main_rs.read_text():
@@ -213,13 +213,51 @@ def measure(name, size, pruv, hand, request, expected, rounds, timed, base=None)
     return cells, base_cells
 
 
+
+
+def probe(runners, hand, rounds, timed, bases=None):
+    """G-DB38-3: one-process fixed-share probe. E0 = empty stdin (no request: runtime, code pages, startup),
+    E1 = one read of a thread with no turns (adds the per-read scratch), M1 = one read of the M thread."""
+    empty, _ = scenario('E', 1, 0)
+    medium, medium_count = scenario('M', 5, 10)
+    cases = [('E0', b''), ('E1', empty), ('M1', medium)]
+    sides = [('hand', hand)] + [(pair, runner) for pair, runner in runners.items()]
+    sides += [(f'old/{pair}', runner) for pair, runner in (bases or {}).items()]
+    expected = {}
+    for case, payload in cases:
+        expected[case] = invoke([hand], payload)[0] if payload else b''
+        if case == 'M1' and len(json.loads(expected[case]).get('turns', [])) != medium_count:
+            raise RuntimeError(f'M1: hand reader did not keep all {medium_count} turns')
+        for side, runner in sides:
+            if invoke([runner], payload)[0] != expected[case]:
+                raise RuntimeError(f'{side} {case}: stdout differs from hand')
+    print(f'probe: {rounds} round(s), one process per sample, median_low peak RSS (bytes)', flush=True)
+    print(f'{"side":12} {"size":>9} ' + ' '.join(f'{case:>11}' for case, _ in cases), flush=True)
+    rss = {side: {case: [] for case, _ in cases} for side, _ in sides}
+    for index in range(rounds):
+        order = sides[index % len(sides):] + sides[:index % len(sides)]
+        for case, payload in cases:
+            for side, runner in order:
+                _, peak, out = timed(runner, payload)
+                if out != expected[case]:
+                    raise RuntimeError(f'{side} {case} round {index + 1}: stdout differs from hand')
+                rss[side][case].append(peak)
+    for side, runner in sides:
+        print(f'{side:12} {Path(runner).stat().st_size:9,d} '
+              + ' '.join(f'{median(rss[side][case]):11,d}' for case, _ in cases), flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--quick', action='store_true', help='run one round at size M')
     parser.add_argument('--rounds', type=int, default=7, help='alternating rounds (default 7)')
     parser.add_argument('--save', help='copy the Pruv runners into this directory (a base for --base)')
     parser.add_argument('--base', help='also time the runners saved in this directory by --save')
+    parser.add_argument('--probe', type=int, metavar='ROUNDS',
+                        help='only run the one-read fixed-share probe (G-DB38-3) for this many rounds')
     args = parser.parse_args()
+    if args.probe is not None and args.probe < 1:
+        parser.error('--probe needs at least one round')
     quick = args.quick
     WORK.mkdir(parents=True, exist_ok=True)
     runners = build_hand()
@@ -231,6 +269,9 @@ def main():
         print(f'saved runners to {args.save}', flush=True)
         return
     bases = {pair: Path(args.base) / runner.name for pair, runner in runners.items()} if args.base else {}
+    if args.probe:
+        probe(runners, hand, args.probe, rss_timer(), bases)
+        return
     sizes = [('M', 5, 10)] if quick else [('M', 5, 10), ('L', 40, 5)]
     checked = {}
     for size, pages, per_page in sizes:

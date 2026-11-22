@@ -157,15 +157,15 @@ fn add_tools(inout st: [i64], inout sl: [i64], n: i64) -> ()
   }
 }
 
-// Collect held turns oldest first as offsets into hb. Size the wire from the layout (header of
-// 20 + 10 * kept + 2 * items words, then base bytes, then turn texts). Keep hb and wire live together
-// so finish_ref can copy directly from the arena. Set bad[0] for a malformed record or layout mismatch.
+// Collect held turns oldest first as offsets into hb, then turn hb itself into the wire (header of
+// 20 + 10 * kept + 2 * items words, then base bytes, then turn texts, newest first) by moving the kept
+// drafts left in place. Set bad[0] for a malformed record or layout mismatch.
 pub fn replay(ht: [i64], take held: [u8], count: i64, base: i64, items: i64, inout wire: [u8], inout bad: [i64]) -> crate::turns::Placed ! alloc
   requires len(ht) == 2000 && len(held) <= 8700000 && 0 <= count && count <= 200 && 0 <= base && base <= 3500000 && len(bad) == 1
   requires 0 <= items && items <= 30
   ensures len(bad) == 1
 {
-  let hb: [u8] = move held;
+  let mut hb: [u8] = move held;
   let mut st: [i64] = crate::turns::new_state();
   let mut sl: [i64] = crate::turns::new_slots();
   let mut rf: [i64] = crate::turns::new_refs();
@@ -217,9 +217,19 @@ pub fn replay(ht: [i64], take held: [u8], count: i64, base: i64, items: i64, ino
   }
   let layout: crate::turns::Layout = crate::turns::text_layout(st, sl);
   let at: i64 = 8 * (20 + 10 * layout.kept + 2 * items) + base;
-  wire = alloc(at + layout.text_len, 0);
-  let col: crate::turns::Placed = crate::turns::finish_ref(st, sl, rf, hb, base, inout wire, at);
-  if !col.ok || col.kept != layout.kept || col.text_len != layout.text_len { bad[0] = 1; }
+  // In place (DB44, G-DB40-2): root starts the held turns at FRONT (36864) of hb, past the largest header + base
+  // (8 * (20 + 2000 + 60) + 20024 = 36664), and absorb packs them newest first, each as prompt, reply, created,
+  // completed. finish_inplace moves the kept drafts left to at, so hb becomes the wire and no second buffer is
+  // allocated. The move needs the newest held turn to start at or after at; if it does not, mv = -1 makes
+  // finish_inplace fail without moving.
+  let mut mv: i64 = at;
+  if count > 0 && ht[0] < at { mv = -1; }
+  let col: crate::turns::Placed = crate::turns::finish_inplace(st, sl, rf, inout hb, base, mv);
+  if !col.ok || col.kept != layout.kept || col.text_len != layout.text_len {
+    bad[0] = 1;
+    return col;
+  }
+  wire = truncate(hb, mv + col.text_len);
   return col;
 }
 
