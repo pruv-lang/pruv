@@ -1,0 +1,10 @@
+// LG21 (G-LG20-3): string_to_str consumes a String error binder, so it is not a read of the name after the `?`;
+// the `?` operand borrowing the same binder stays try_position
+fn read(s: String) -> Result<i64> { return Ok(len(s)); }
+fn both(n: i64, text: str) -> i64 { return n; }
+fn f() -> Result<i64> ! alloc {
+  match Err::<i64,String>(string_from("e")) {
+    Ok(n) => { return Ok(n); }
+    Err(e) => { return Ok(both(read(e)?, string_to_str(e))); }
+  }
+}

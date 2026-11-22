@@ -497,7 +497,9 @@ let o: Option<bool> = Some::<bool>(true);   // also None::<bool>, Ok::<bool>(x),
   sub-expressions are plain, such as `len(s)` or `twice(len(s))`; otherwise it is `type/try_position`. A
   non-plain argument, such as `mk(2)` in `lend(mk(2), 0) + need(x)?` or the string literal in `mk(len("a"))`, would
   be built inside the temporary's `let` and dropped there, before the `?` operand runs instead of at the end of the
-  statement (LG19, LG20). Any other operand of a
+  statement (LG19, LG20). The rules on a `?` operand (the borrow split, the inout root and the effect rule) hold
+  also when nothing is evaluated before the `?`, so `eat(read(s)?, move s)` and `Ok(use3(get(y)?, inout y))` are
+  `type/try_position` (LG21). Any other operand of a
   non-value type (a borrow of a live local, a field, an index, a reference, a type holding one, an owned value passed
   to a borrowed parameter, whose temporary would be dropped at the end of the block instead of the statement, one
   passed to a parameter of another type such as `Vec<T>` to `[T]`, an argument of a builtin or a constructor) stays

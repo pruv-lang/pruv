@@ -648,8 +648,44 @@ fn find_try(e: &Expr) -> Option<(Vec<usize>, Vec<Vec<usize>>)> {
     match visit(e, e, &mut seen, &mut path) {
         Ok(true) => {
             // seen now holds whether a node evaluated before the `?` is not pure (restored in the `?` branch)
-            let t = if seen { temps(e, &path).ok()? } else { Vec::new() };
-            Some((path, t))
+            if seen {
+                return Some((path.clone(), temps(e, &path).ok()?));
+            }
+            // LG21 (G-LG18-1): with nothing evaluated before the `?` nothing is bound, but a `?` operand still may not
+            // mention the root of an inout argument outside it (inout_context unlowered); an inout argument inside the
+            // operand itself (`set(inout x)?`) stays as before. Python `find_try`.
+            fn walk<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+                out.push(e);
+                for k in crate::refine::kids(e) {
+                    walk(k, out);
+                }
+            }
+            let mut all = Vec::new();
+            walk(e, &mut all);
+            for t in &all {
+                let Expr::Unary(u) = t else { continue };
+                if u.op != "?" {
+                    continue;
+                }
+                let mut inner = Vec::new();
+                walk(&u.operand, &mut inner);
+                let mut outs: Vec<&str> = Vec::new();
+                for x in &all {
+                    if let Expr::InoutArg(a) = x {
+                        if inner.iter().any(|y| std::ptr::eq(*y, *x)) {
+                            continue;
+                        }
+                        match field_place(&a.expr).0 {
+                            Expr::Var(v) => outs.push(v.name.as_str()),
+                            _ => return None,
+                        }
+                    }
+                }
+                if outs.iter().any(|n| mentions(&u.operand, n) > 0) {
+                    return None;
+                }
+            }
+            Some((path, Vec::new()))
         }
         _ => None,
     }
@@ -2870,9 +2906,10 @@ impl Checker {
                     // LG15: checked on the statement before its temporaries
                     self.try_short_check(&mut stmts[i], &path, scope)?;
                 }
-                if !temps.is_empty() {
-                    // LG14 (G-LG13-1): bind the earlier operands first
-                    let lets = self.try_temps(&mut stmts[i], temps, scope)?;
+                // LG14 (G-LG13-1): bind the earlier operands first; LG21 (G-LG20-3): try_temps also runs its split
+                // and effect checks on a statement with nothing to bind
+                let lets = self.try_temps(&mut stmts[i], temps, scope)?;
+                if !lets.is_empty() {
                     stmts.splice(i..i, lets);
                     continue;
                 }
@@ -3017,6 +3054,13 @@ impl Checker {
                         let ok = match (x, parent) {
                             (Expr::Var(_), Some((Expr::Call(p), i))) => match (self.funcs.get(&p.name), self.takes.get(&p.name)) {
                                 (Some(f), Some(takes)) => !f.foreign && i < f.params.len() && i < takes.len() && !takes[i],
+                                // LG21 (G-LG20-3): with nothing bound, a builtin's borrowed argument (`len(s)`) also
+                                // only reads the name after the `?` operand ran; string_to_str consumes a String
+                                // error binder and is not a read
+                                (None, _) if temps.is_empty() => {
+                                    p.name != "string_to_str"
+                                        && catalog_fn(&p.name).is_none_or(|f| i < f.params.len() && !f.params[i].take)
+                                }
                                 _ => false,
                             },
                             _ => false,

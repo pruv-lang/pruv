@@ -1,0 +1,34 @@
+// LG21 (G-LG20-3): with no operand to bind before the `?`, a `?` operand borrowing one binding and a move of another
+// binding in the same call still lower
+fn read(s: String) -> Result<i64, String> ! alloc
+  requires len(s) <= 10
+  ensures is_ok(result) ==> ok_val(result) == len(s)
+{
+  if len(s) > 0 { return Ok::<i64, String>(len(s)); }
+  return Err::<i64, String>(string_from("empty"));
+}
+
+fn eat(n: i64, take a: String) -> i64 ! alloc
+  requires 0 <= n && n <= 10 && len(a) <= 10
+  ensures 0 <= result && result <= 1010
+{
+  return n * 100 + len(a);
+}
+
+fn f(k: i64) -> Result<i64, String> ! alloc
+  requires 0 <= k && k <= 1
+{
+  let mut s: String = string_from("");
+  if k == 0 { s = string_from("abc"); }
+  let t: String = string_from("xy");
+  return Ok::<i64, String>(eat(read(s)?, move t));
+}
+
+fn run(k: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 1
+{
+  match f(k) {
+    Ok(v) => { return v; }
+    Err(e) => { return 0 - len(e); }
+  }
+}

@@ -1,0 +1,11 @@
+// LG21 (G-LG20-3): with no operand to bind before the `?`, a `?` operand borrowing a binding that the same call
+// moves stays try_position (lowering would move the borrow out of the call, foreign_borrow unlowered)
+fn read(s: String) -> Result<i64, String> ! alloc {
+  if len(s) > 0 { return Ok::<i64, String>(len(s)); }
+  return Err::<i64, String>(string_from("empty"));
+}
+fn eat(n: i64, take a: String) -> i64 { return n; }
+fn f() -> Result<i64, String> ! alloc {
+  let s: String = string_from("ab");
+  return Ok::<i64, String>(eat(read(s)?, move s));
+}

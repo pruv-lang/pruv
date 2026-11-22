@@ -132,7 +132,24 @@ def find_try(e):
                 reads = lambda x: sum(isinstance(y, (Var, Move)) for y in _walk(x))
                 if reads(root) > reads(e.operand):
                     raise _NoTry
-            return e, (temps(e.operand) if before else [])
+            if before:
+                return e, temps(e.operand)
+            # LG21 (G-LG18-1): with nothing evaluated before the `?` nothing is bound, but a `?` operand still may not
+            # mention the root of an inout argument outside it (inout_context unlowered); an inout argument inside
+            # the operand itself (`set(inout x)?`) stays as before
+            for t in _walk(root):
+                if is_try(t):
+                    inner = {id(x) for x in _walk(t.operand)}
+                    outs = set()
+                    for a in _walk(root):
+                        if isinstance(a, InoutArg) and id(a) not in inner:
+                            place = field_place(a.expr)[0]
+                            if not isinstance(place, Var):
+                                raise _NoTry
+                            outs.add(place.name)
+                    if any(isinstance(x, (Var, Move)) and x.name in outs for x in _walk(t.operand)):
+                        raise _NoTry
+            return e, []
         for i, k in enumerate(expr_kids(e)):
             path.append((e, i))
             found = visit(k)
@@ -1513,6 +1530,9 @@ class Checker:
                 candidate, temps = site
                 if isinstance(candidate, Binary):   # LG15: checked on the statement before its temporaries
                     s.try_short_check(st, candidate, scope)
+                # LG21 (G-LG20-3): the split and effect checks run on every lowered statement, not only on one
+                # with earlier operands to bind
+                s.try_checks(st, temps, scope)
                 if temps:                       # LG14 (G-LG13-1): bind the earlier operands first
                     stmts[i:i] = s.try_temps(st, temps, scope)
                     continue
@@ -1533,12 +1553,7 @@ class Checker:
         in evaluation order, with k replaced by the fresh local in st; T is a value type or, per LG18 (G-LG14-1), an owned call
         result or move that find_try admitted as a direct user-call argument"""
         lets = []
-        roots = [v for v in vars(st).values() if isinstance(v, Expr)]
-        inout = any(isinstance(x, InoutArg) for v in roots for x in _walk(v))
-        tries = [x.operand for v in roots for x in _walk(v) if is_try(x)]
-        s.try_split_check(st, roots, [k for _, k in temps] + tries, scope)
-        for q in tries if inout else []:
-            s.try_effect_check(st, q)
+        inout = any(isinstance(x, InoutArg) for v in vars(st).values() if isinstance(v, Expr) for x in _walk(v))
         for parent, k in temps:
             typed = copy.deepcopy(k)
             t = s.expr(typed, dict(scope))
@@ -1564,6 +1579,16 @@ class Checker:
             lets.append(let)
         return lets
 
+    def try_checks(s, st, temps, scope):
+        """LG18 (G-LG14-2) checks of a statement find_try lowers, with or without temporaries (LG21, G-LG20-3): the
+        split check over the temporaries and every `?` operand, and with inout the effect check over every `?` operand"""
+        roots = [v for v in vars(st).values() if isinstance(v, Expr)]
+        inout = any(isinstance(x, InoutArg) for v in roots for x in _walk(v))
+        tries = [x.operand for v in roots for x in _walk(v) if is_try(x)]
+        s.try_split_check(st, roots, [k for _, k in temps] + tries, scope, bool(temps))
+        for q in tries if inout else []:
+            s.try_effect_check(st, q)
+
     def try_effect_check(s, st, k):
         """LG18 (G-LG14-2 a): in a statement with inout, a temporary or `?` operand calling print or a function with
         an effect other than alloc is type/try_position (unlowered, inout_context's effect-before rule rejects it)"""
@@ -1573,7 +1598,7 @@ class Checker:
                 if x.name == "print" or (callee is not None and any(fx != "alloc" for fx in callee.effects)):
                     try_position_error(st)
 
-    def try_split_check(s, st, roots, parts, scope):
+    def try_split_check(s, st, roots, parts, scope, temps=True):
         """LG18 (G-LG14-2 b): type/try_position when a part (a temporary or a `?` operand) mentions a binding whose
         type is not a value type and a call holding the part also mentions it outside the part, except as a direct
         argument of a borrowed parameter of a user function. Nested calls share the outermost call's borrow track and
@@ -1597,6 +1622,14 @@ class Checker:
                             continue
                         p, i = parent.get(id(x), (None, None))
                         f = s.funcs.get(p.name) if isinstance(x, Var) and isinstance(p, Call) else None
+                        if f is None and isinstance(x, Var) and isinstance(p, Call) and not temps:
+                            # LG21 (G-LG20-3): with nothing bound, a builtin's borrowed argument (`len(s)`) also
+                            # only reads the name after the `?` operand ran; string_to_str consumes a String error
+                            # binder and is not a read
+                            cf = CATALOG.get(p.name)
+                            if p.name != "string_to_str" and (cf is None or i < len(cf.params)
+                                                              and not cf.params[i].take):
+                                continue
                         if not (f is not None and f.foreign is None and i < len(f.params) and not f.params[i].take):
                             try_position_error(st)
 
