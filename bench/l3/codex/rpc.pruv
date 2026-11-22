@@ -72,12 +72,9 @@ pub fn start(binary: str, argv: str, cwd: str, timeout_ms: i64, inout ctl: [i64]
 pub fn parse_line(line: [u8], n: i64) -> crate::json::JsonParse ! alloc
   requires 0 <= n && n <= len(line)
 {
-  let mut b: [u8] = alloc(n, 0);
-  let mut i: i64 = 0;
-  while i < n invariant 0 <= i && i <= n && len(b) == n && n <= len(line) decreases n - i
-  { let c: i64 = line[i]; b[i] = c; i = i + 1; }
-  let trimmed: [u8] = crate::util::trim(b);
-  return crate::lines::parse_range(trimmed, 0, len(trimmed));
+  let mut r: [i64] = alloc(2, 0);
+  crate::util::trim_span(line, n, inout r);
+  return crate::lines::parse_range(line, r[0], r[1]);
 }
 
 // The shared transport requires a full-sized line buffer. Keep its polling and event order

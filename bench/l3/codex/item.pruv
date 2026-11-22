@@ -102,6 +102,16 @@ fn stamp(d: crate::json::JsonDocument, t: i64, key: str) -> [u8] ! alloc
   return empty;
 }
 
+// fb[0..n) as a new buffer.
+fn head(fb: [u8], n: i64) -> [u8] ! alloc
+  requires 0 <= n && n <= len(fb)
+  ensures len(result) == n
+{
+  let mut rb: [u8] = alloc(n, 0);
+  crate::bytes::copy_span(inout rb, 0, fb, 0, n);
+  return rb;
+}
+
 pub fn read_turn(d: crate::json::JsonDocument, t: i64, inout fs: [i64], inout fb: [u8]) -> RawTurn ! alloc
   requires len(fs) == 3 && len(fb) == 32768
   ensures len(fs) == 3 && len(fb) == 32768 && 0 <= fs[0] && fs[0] <= fs[1] && fs[1] <= 32768 && (fs[2] == 0 || fs[2] == 1)
@@ -158,13 +168,7 @@ pub fn read_turn(d: crate::json::JsonDocument, t: i64, inout fs: [i64], inout fb
       }
     }
   }
-  let created: [u8] = stamp(d, t, "startedAt");
-  let completed: [u8] = stamp(d, t, "completedAt");
+  // fields built by calls, so no second copy of each buffer into the record
   let ps: str = string_to_str(prompt);
-  let pbytes: [u8] = crate::util::to_bytes(ps);
-  let plbytes: [u8] = crate::util::to_bytes(plan);
-  let rn: i64 = fs[0];
-  let mut rb: [u8] = alloc(rn, 0);
-  crate::bytes::copy_span(inout rb, 0, fb, 0, rn);
-  return RawTurn { prompt: copy(pbytes), reply: copy(rb), nreply: nreply, rbytes: rbytes, rclipped: fs[2], tools: tools, has_plan: has_plan, plan: copy(plbytes), created: copy(created), completed: copy(completed) };
+  return RawTurn { prompt: crate::util::to_bytes(ps), reply: head(fb, fs[0]), nreply: nreply, rbytes: rbytes, rclipped: fs[2], tools: tools, has_plan: has_plan, plan: crate::util::to_bytes(plan), created: stamp(d, t, "startedAt"), completed: stamp(d, t, "completedAt") };
 }
