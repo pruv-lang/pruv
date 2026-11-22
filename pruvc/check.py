@@ -261,6 +261,9 @@ def invariant_base(name, ty, path, line, col, file, guards=None):
     for label, sty, kind, extra in path:
         if kind == "field":
             nxt = FieldAccess(line, col, base, extra, sty)
+        elif kind == "elem":
+            # LG27: the element of a top-level Vec, read at the quantified index $inv_e
+            nxt = Index(line, col, base, mk(Var(line, col, "$inv_e", I64)), sty)
         elif kind in ("some", "ok"):
             if guards is not None:
                 guards.append(mk(Call(line, col, "is_" + kind, [base], BOOL)))
@@ -301,6 +304,9 @@ def invariant_clause(expr, ty, name, metadata, path=()):
             original = e.var
             if e.var == name:
                 e.var = "$inv_" + e.var
+                # LG27: keep the renamed binder distinct from the element index (symbolic.rs inv_rewrite)
+                if path and path[0][0] == "[]" and e.var == "$inv_e":
+                    e.var += "_bound"
             inner = {**bound, original: e.var}
             bind(e.body, inner)
             for trigger in e.triggers:
@@ -1401,9 +1407,42 @@ class Checker:
         """(requires, ensures) synthesized from the struct invariants of f's parameter and result types, with the
         type parameters substituted by m (LG24: instantiated generic call sites)"""
         requires, ensures = [], []
+
+        def vec_elem(ty):
+            # LG27: element type of a top-level Vec<T> whose T reaches an invariant struct, else None
+            if ty.owner is None and ty.name == "vec" and len(ty.args) == 1 and s.reaches_invariant(ty.args[0]):
+                return ty.args[0]
+            return None
+
+        def clauses(ty, name):
+            """the synthesized clauses of the value `name` of type ty (LG27: Vec<T> gets one forall per T clause)"""
+            elem = vec_elem(ty)
+            if elem is None:
+                out = []
+                for owner, clause, path in s.effective_invariants(ty):
+                    tag = (owner.name, clause.invariant_line, ".".join([name] + [x[0] for x in path]))
+                    out.append(invariant_clause(clause, ty, name, tag, path))
+                return out
+            out = []
+            for owner, clause, path in s.effective_invariants(elem):
+                tag = (owner.name, clause.invariant_line, name + "[]" + "".join("." + x[0] for x in path))
+                body = invariant_clause(clause, ty, name, tag, (("[]", elem, "elem", None),) + tuple(path))
+                ln, col, file = clause.line, clause.col, getattr(clause, "file", None)
+                vec = Var(ln, col, name, ty)
+                vec.file = file
+                lo = IntLit(ln, col, 0, I64)
+                lo.file = file
+                hi = Call(ln, col, "len", [vec], I64)
+                hi.file = file
+                q = Quant(ln, col, "forall", "$inv_e", lo, hi, body, BOOL)
+                q.file = file
+                q.struct_invariant = tag
+                out.append(q)
+            return out
+
         for p in f.params:
             pty = substitute(p.type, m) if m else p.type
-            d = s.invariant_struct(pty)
+            d = s.invariant_struct(vec_elem(pty) or pty)
             if d is None:
                 continue
             if p.name == "result":
@@ -1411,18 +1450,13 @@ class Checker:
                     continue        # LG24: instantiated call site; the callee is then not parametric-safe
                 terr(node or f, "invariant_decl", "parameter result of type %s cannot be used: %s has an invariant" %
                      (d.name, d.name))
-            for owner, clause, path in s.effective_invariants(pty):
-                tag = (owner.name, clause.invariant_line, ".".join([p.name] + [x[0] for x in path]))
-                r = invariant_clause(clause, pty, p.name, tag, path)
+            for r in clauses(pty, p.name):
                 requires.append(r)
                 if p.mode == "inout":
                     ensures.append(copy.deepcopy(r))
         rty = substitute(f.ret, m) if m else f.ret
-        d = s.invariant_struct(rty)
-        if d is not None:
-            for owner, clause, path in s.effective_invariants(rty):
-                tag = (owner.name, clause.invariant_line, ".".join(["result"] + [x[0] for x in path]))
-                ensures.append(invariant_clause(clause, rty, "result", tag, path))
+        if s.invariant_struct(vec_elem(rty) or rty) is not None:
+            ensures.extend(clauses(rty, "result"))
         return requires, ensures
 
     @staticmethod

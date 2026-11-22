@@ -1,0 +1,69 @@
+// LG27 (G-LG26-1): invariants of struct Vec elements. A Vec<S> parameter or result, S with an invariant, carries
+// `forall i in 0..len(v): C[v[i]]`: assumed at entry (so a read element can divide by its field and be passed as the
+// struct), proved for Vec call arguments, returned Vecs and inout Vecs at exit. A Vec parameter cannot be written
+// (no inout reassignment, no element store), so a loop keeps its entry fact; a local Vec built by pushes in a loop
+// re-proves the clause where it is returned, from the loop invariant the program states.
+struct P {
+  x: i64,
+  invariant x > 0 && x <= 1000
+}
+
+fn inv(p: P) -> i64
+  ensures 1 <= result && result <= 1000
+{
+  return 1000 / p.x;
+}
+
+fn get(v: Vec<P>, i: i64) -> i64
+  requires 0 <= i && i < len(v)
+  ensures 0 <= result && result <= 2000
+{
+  return 1000 / vec_get::<P>(v, i).x + inv(vec_get::<P>(v, i));
+}
+
+fn sum(v: Vec<P>) -> i64
+  requires len(v) <= 10
+  ensures 0 <= result && result <= 10000
+{
+  let mut s: i64 = 0;
+  let mut i: i64 = 0;
+  while i < len(v)
+    invariant 0 <= i && i <= len(v) && 0 <= s && s <= 1000 * i
+    decreases len(v) - i
+  {
+    s = s + 1000 / vec_get::<P>(v, i).x;
+    i = i + 1;
+  }
+  return s;
+}
+
+fn fill(v: Vec<P>, n: i64, x: i64) -> Vec<P> ! alloc
+  requires len(v) == 1 && 0 <= n && n <= 10 && 1 <= x && x <= 10
+  ensures len(result) == 1 + n
+{
+  let mut w: Vec<P> = vec_push::<P>(vec_new::<P>(), vec_get::<P>(v, 0));
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && len(w) == 1 + i
+    invariant forall j in 0..len(w): w[j].x > 0 && w[j].x <= 1000
+    decreases n - i
+  {
+    w = vec_push::<P>(move w, P { x: x + i });
+    i = i + 1;
+  }
+  return move w;
+}
+
+fn start(x: i64) -> Vec<P> ! alloc
+  requires 1 <= x && x <= 1000
+  ensures len(result) == 1
+{
+  return vec_push::<P>(vec_new::<P>(), P { x: x });
+}
+
+pub fn run(k: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 3
+{
+  let v: Vec<P> = fill(start(500), 2, k + 1);
+  return get(v, 0) * 100000 + get(v, 1) * 100 + get(v, 2) + sum(v) * 10000000;
+}

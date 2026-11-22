@@ -1799,13 +1799,18 @@ class FnVerifier:
         st.pc.append(z3.Implies(z3.And(*g), fact) if g else fact)
 
     def assume_str(s, st, g, v):
-        """LG26 (R-6b-3, G-LG25-1): a str value is valid UTF-8 at run time; assumed only in a UTF-8 aware function"""
+        """LG26 (R-6b-3, G-LG25-1): a str value is valid UTF-8 at run time; assumed only in a UTF-8 aware function
+        LG27 (G-LG26-3): each fact is pushed once per path (deduped by z3 id in st.obs); the guard is kept"""
         if s.utf8_aware and isinstance(v, Arr):
             valid = s.model.utf8_valid(v)
             if s.qstack:    # a field or call result can depend on an enclosing quantifier's indices
-                st.pc.append(z3.ForAll(list(s.qstack), z3.Implies(z3.And(list(g)), valid)))
+                fact = z3.ForAll(list(s.qstack), z3.Implies(z3.And(list(g)), valid))
             else:
-                s.assume(st, g, valid)
+                fact = z3.Implies(z3.And(*g), valid) if g else valid
+            i = fact.get_id()
+            if i not in st.obs:     # LG27: obs only holds ids of facts already in pc
+                st.pc.append(fact)
+                st.obs = st.obs | {i}
         return v
 
     # ---------- expressions ----------
@@ -2864,7 +2869,7 @@ class FnVerifier:
                                                        z3.Select(res.a, sv.n + k) == z3.Select(t.a, k))))
             return res
         if n == "string_to_str":
-            return mk_arr(args[0].a, args[0].n, n, U8)
+            return s.assume_str(st, g, mk_arr(args[0].a, args[0].n, n, U8))   # LG27 (G-LG26-2)
         raise Exception("catalog: " + n)
 
     def proc_call(s, n, e, args, st, g, code, rty):
@@ -3234,7 +3239,7 @@ class FnVerifier:
         prev = []   # earlier clauses (domain + value) were proven above and may justify later lookups
         for i, en in enumerate(s.f.inv_ensures):
             name, line, param = en.struct_invariant
-            target = param if param == "result" or param.startswith("result.") else "inout %s at exit" % param
+            target = param if param == "result" or param.startswith(("result.", "result[")) else "inout %s at exit" % param
             what = "invariant of %s (line %d) for %s" % (name, line, target)
             for dom, code in s.dom_obligations(en, st, prev, env):
                 s.prove(st, prev, dom, node, "struct_invariant", what, key_extra=(i, code))

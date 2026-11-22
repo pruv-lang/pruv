@@ -1,0 +1,15 @@
+// LG27 (G-LG26-1): an inout Vec<S> must hold S's invariant for every element at exit
+struct R {
+  lo: i64, hi: i64,
+  invariant 0 <= lo && lo <= hi
+}
+
+fn widen(inout v: Vec<R>) -> () {
+  match vec_at_mut::<R>(inout v, 0) {
+    Some(r) => { r.lo = 9; }
+    None => {}
+  }
+}
+pub fn lg27_entry() -> () {
+  return;
+}
