@@ -46,16 +46,17 @@ fn core_old(p0: [i64], d: crate::json::JsonDocument, count0: i64, objects0: i64)
 // NEW-BEGIN
 // Thin wrapper over the planned path; the only part to adjust if the plan header layout changes.
 // Expected header: plan[0] admitted, plan[1] reservation, plan[2] new count, plan[3] new objects.
-fn core_new(p0: [i64], d: crate::json::JsonDocument, count0: i64, objects0: i64) -> [i64] ! alloc
+// The packet is taken and grown in place, as root.pruv does with its `p` (DB49); the driver hands over its packet.
+fn core_new(take p0: [i64], d: crate::json::JsonDocument, count0: i64, objects0: i64) -> [i64] ! alloc
   requires 5010 <= len(p0) && len(p0) <= 100000000 && 0 <= count0 && count0 <= 500 && 0 <= objects0 && objects0 <= 500
   ensures 5010 <= len(result) && len(result) <= 100000000
 {
   let result_id: i64 = crate::util::field(d,0,"result"); let tools: i64 = crate::util::field(d,result_id,"tools");
   if crate::packet::has_work(d,tools,objects0) {
     let plan: [i64] = crate::packet::plan(p0,d,tools,count0,objects0);
-    if plan[0] > 0 { return crate::packet::write(p0,d,plan); }
+    if plan[0] > 0 { return crate::packet::write(move p0,d,plan); }
   }
-  return copy(p0);
+  return move p0;
 }
 // NEW-END
 pub fn keep_old(b: [u8], p: [i64]) -> i64 ! alloc
@@ -69,6 +70,6 @@ pub fn keep_new(b: [u8], p: [i64]) -> i64 ! alloc
   requires 5010 <= len(p) && len(p) <= 100000000
 {
   match parse(b) { crate::json::JsonParse::Failed(e) => { return -1; }
-    crate::json::JsonParse::Parsed(d) => { let q: [i64] = core_new(p,d,0,0); return len(q); } }
+    crate::json::JsonParse::Parsed(d) => { let p1: [i64] = copy(p); let q: [i64] = core_new(move p1,d,0,0); return len(q); } }
 }
 // NEW-END

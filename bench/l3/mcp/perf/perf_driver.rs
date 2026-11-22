@@ -11,6 +11,8 @@
 //   perf_driver time <row> <chain> <ms> per-call ns (median/min/max over calls for ~<ms> ms) + checksum of the output
 //   perf_driver instr <row> <chain> <reps>   reps bare calls (nothing else timed or folded): for /usr/bin/time -l
 //   perf_driver counters <row> <chain>  allocation calls / bytes of one call (counting global allocator) + output size
+//   perf_driver probe <row> <chain>     one call; after the harness load() and after each page prints
+//                                       `step resident_bytes max_rss_bytes` (DB49 per-page RSS probe)
 // rows: old new hand. Output checksum = fold s = s*31 + w (wrapping, i64) over every word.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
@@ -95,7 +97,7 @@ fn run_old(p: &[i64], d: &Doc, c: i64, o: i64) -> Vec<i64> {
     @CORE_OLD@(p, d, c, o)
 }
 #[inline(never)]
-fn run_new(p: &[i64], d: &Doc, c: i64, o: i64) -> Vec<i64> {
+fn run_new(p: Vec<i64>, d: &Doc, c: i64, o: i64) -> Vec<i64> {
     @CORE_NEW@
 }
 #[inline(never)]
@@ -133,18 +135,31 @@ fn load(chain: &str) -> Vec<Page> {
     pages
 }
 
+// The new row takes its packet (core_new grows it in place, as root.pruv does with its `p`; DB49), so its first page
+// needs an owned copy of `start`; own() makes it outside the timed call, as the borrowed rows get `start` for free.
+fn own(row: Row, start: &[i64]) -> Vec<i64> {
+    if row == Row::New {
+        start.to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
+// One page of a row: the new row takes `cur` (on page 0 the copy from own()), old and hand borrow it (`start` on page 0).
+fn step(row: Row, i: usize, pg: &Page, start: &[i64], cur: &mut Vec<i64>) {
+    let next = match row {
+        Row::Old => run_old(if i == 0 { start } else { cur }, &pg.d, pg.c, pg.o),
+        Row::New => run_new(std::mem::take(cur), &pg.d, pg.c, pg.o),
+        Row::Hand => run_hand(&pg.d, if i == 0 { start } else { cur }, pg.c, pg.o).0,
+    };
+    *cur = next;
+}
+
 // One call of a row: the whole chain; returns the final packet.
 #[inline(never)]
-fn call(row: Row, pages: &[Page], start: &[i64]) -> Vec<i64> {
-    let mut cur: Vec<i64> = Vec::new();
+fn call(row: Row, pages: &[Page], start: &[i64], mut cur: Vec<i64>) -> Vec<i64> {
     for (i, pg) in pages.iter().enumerate() {
-        let inp: &[i64] = if i == 0 { start } else { &cur };
-        let next = match row {
-            Row::Old => run_old(inp, &pg.d, pg.c, pg.o),
-            Row::New => run_new(inp, &pg.d, pg.c, pg.o),
-            Row::Hand => run_hand(&pg.d, inp, pg.c, pg.o).0,
-        };
-        cur = next;
+        step(row, i, pg, start, &mut cur);
     }
     cur
 }
@@ -161,7 +176,7 @@ fn check(chains: &[String]) -> i32 {
             let d = parse_doc(&bytes);
             let (hp, nc, no) = run_hand(&d, &packets[2], c, o);
             let op = run_old(&packets[0], &d, c, o);
-            let np = if HAS_NEW { run_new(&packets[1], &d, c, o) } else { hp.clone() };
+            let np = if HAS_NEW { run_new(packets[1].clone(), &d, c, o) } else { hp.clone() };
             for (name, got) in [("old", &op), ("new", &np)] {
                 if name == "new" && !HAS_NEW {
                     continue;
@@ -190,6 +205,42 @@ fn check(chains: &[String]) -> i32 {
     }
 }
 
+// Current resident size (proc_pid_rusage RUSAGE_INFO_V2: uuid, then u64 user, system, pkg_idle, interrupt, pageins,
+// wired, resident, ...) and the high-water mark (getrusage ru_maxrss, bytes on macOS).
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn proc_pid_rusage(pid: i32, flavor: i32, buf: *mut u64) -> i32;
+    fn getpid() -> i32;
+    fn getrusage(who: i32, r: *mut i64) -> i32;
+}
+// A failed call prints -1 rather than a zero that reads like a measurement.
+#[cfg(target_os = "macos")]
+fn rss_now() -> (i64, i64) {
+    let mut b = [0u64; 64];
+    let mut r = [0i64; 18];
+    let (e1, e2) = unsafe { (proc_pid_rusage(getpid(), 2, b.as_mut_ptr()), getrusage(0, r.as_mut_ptr())) };
+    (if e1 == 0 { b[8] as i64 } else { -1 }, if e2 == 0 { r[4] } else { -1 })
+}
+#[cfg(not(target_os = "macos"))]
+fn rss_now() -> (i64, i64) {
+    (-1, -1)
+}
+fn probe(row: Row, chain: &str) {
+    let (a, m) = rss_now();
+    println!("start {} {}", a, m);
+    let pages = load(chain);
+    let (a, m) = rss_now();
+    println!("load {} {}", a, m);
+    let start = start_packet();
+    let mut cur = own(row, &start);
+    for (i, pg) in pages.iter().enumerate() {
+        step(row, i, pg, &start, &mut cur);
+        let (a, m) = rss_now();
+        println!("page{} {} {} {}", i + 1, a, m, cur.len());
+    }
+    black_box(fold(&cur));
+}
+
 fn pct(v: &[u64], q: usize) -> u64 {
     v[(v.len() - 1) * q / 100]
 }
@@ -204,17 +255,18 @@ fn main() {
             let pages = load(&a[3]);
             let budget_ns: u128 = a[4].parse::<u128>().unwrap() * 1_000_000;
             let start = start_packet();
-            black_box(call(row, &pages, black_box(&start)));
+            black_box(call(row, &pages, black_box(&start), own(row, &start)));
             let mut t: Vec<u64> = Vec::new();
             let all = Instant::now();
             while t.len() < 3 || (all.elapsed().as_nanos() < budget_ns && t.len() < 2_000_000) {
+                let c0 = own(row, &start);
                 let t0 = Instant::now();
-                let r = call(row, &pages, black_box(&start));
+                let r = call(row, &pages, black_box(&start), c0);
                 black_box(&r);
                 drop(r);
                 t.push(t0.elapsed().as_nanos() as u64);
             }
-            let sum = fold(&call(row, &pages, &start));
+            let sum = fold(&call(row, &pages, &start, own(row, &start)));
             t.sort_unstable();
             // Trimmed mean (slowest 5% dropped): sub-tick resolution for small cells, where the per-call median is
             // quantized to the 41.67 ns timer tick (P05N).
@@ -228,7 +280,7 @@ fn main() {
             let reps: usize = a[4].parse().unwrap();
             let start = start_packet();
             for _ in 0..reps {
-                let r = call(row, &pages, black_box(&start));
+                let r = call(row, &pages, black_box(&start), own(row, &start));
                 black_box(r.len());
             }
         }
@@ -236,14 +288,16 @@ fn main() {
             let row = row_of(&a[2]);
             let pages = load(&a[3]);
             let start = start_packet();
-            drop(call(row, &pages, &start)); // warm-up
+            drop(call(row, &pages, &start, own(row, &start))); // warm-up
+            let c0 = own(row, &start);
             let (a0, r0, b0) = (ALLOCS.load(Relaxed), REALLOCS.load(Relaxed), BYTES.load(Relaxed));
-            let r = call(row, &pages, black_box(&start));
+            let r = call(row, &pages, black_box(&start), c0);
             let (a1, r1, b1) = (ALLOCS.load(Relaxed), REALLOCS.load(Relaxed), BYTES.load(Relaxed));
             println!("{} {} {} {} {}", a1 - a0, b1 - b0, r1 - r0, r.len(), fold(&r));
         }
+        "probe" => probe(row_of(&a[2]), &a[3]),
         _ => {
-            eprintln!("usage: perf_driver check|time|instr|counters ...");
+            eprintln!("usage: perf_driver check|time|instr|counters|probe ...");
             std::process::exit(2);
         }
     }
