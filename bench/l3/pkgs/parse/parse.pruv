@@ -47,6 +47,7 @@ fn utf8_width(input: [u8], i: i64, end: i64) -> i64
 fn string_token(input: [u8], pos: i64, end: i64, kind: i64) -> Token
   requires 0 <= pos && pos < end && end <= len(input)
   ensures pos <= result.end && result.end <= end
+  ensures result.kind == kind
   ensures result.error == 0 ==> pos < result.end
 {
   let mut i: i64 = pos + 1;
@@ -147,6 +148,7 @@ fn token_at(input: [u8], p: i64, key: bool) -> Token
   requires 0 <= p && p < len(input)
   ensures p <= result.end && result.end <= len(input)
   ensures result.error == 0 ==> p < result.end
+  ensures (result.error == 0 && result.kind >= 0) ==> (((key && input[p] == 34) ==> result.kind == 7) && (!key ==> result.kind <= 6))
 {
   let c: i64 = input[p];
   if c == 91 { return token_result(p + 1, 5, 0); }
@@ -174,7 +176,7 @@ fn done(p: i64, k: i64, records: i64) -> Pass
 
 fn write_record(inout tape: [i64], r: i64, k: i64, s: i64, e: i64, parent: i64, plain_flag: i64) -> bool
   requires 0 <= r && r < 1048576
-  requires plain_flag == 0 || (plain_flag == 1 && (k == 4 || k == 7))
+  requires plain_flag == 0 || (plain_flag == 1 && (k == 4 || k == 7)) || (plain_flag < 0 && (k == 5 || k == 6))
   ensures len(tape) == len(old(tape))
   ensures forall i in 0..len(tape): ((i < 6 * r || i >= 6 * r + 6) ==> tape[i] == old(tape)[i])
   ensures !result ==> (forall i in 0..len(tape): tape[i] == old(tape)[i])
@@ -201,13 +203,17 @@ fn close_record(inout tape: [i64], r: i64, e: i64, skip: i64, count: i64) -> boo
 }
 
 fn comma_state(kind: i64) -> i64
+  ensures (kind == 6 ==> result == 4) && (kind != 6 ==> result == 1)
 { if kind == 6 { return 4; } return 1; }
 fn initial_state(kind: i64) -> i64
+  ensures (kind == 6 ==> result == 3) && (kind != 6 ==> result == 0)
 { if kind == 6 { return 3; } return 0; }
 fn value_state(key: bool) -> i64
+  ensures (key ==> result == 5) && (!key ==> result == 2)
 { if key { return 5; } return 2; }
 fn value_increment(key: bool) -> i64
   ensures 0 <= result && result <= 1
+  ensures (key ==> result == 0) && (!key ==> result == 1)
 { if key { return 0; } return 1; }
 // Stack slots: kind, grammar state, record ID, direct value/member count.
 // Frame zero is the synthetic document frame; frames 1..128 are containers.
@@ -358,6 +364,14 @@ fn scan_document(input: [u8]) -> crate::json::JsonParse ! alloc
   requires len(input) <= 16777216
   ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= len(input))
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> len(variant_field(result, crate::json::JsonParse::Parsed, document).source) == len(input)
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) % 6 == 0 && len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) >= 6 && len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) <= 6291456)
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (len(input) >= 1 && len(input) <= 16777216)
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6: (0 <= variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] && variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] <= 7))
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6: (0 <= variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 1] && variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 1] < variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 2] && variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 2] <= len(input)))
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6: (t < variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 3] && variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 3] <= len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6))
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6: ((variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] <= 4 || variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] == 7) ==> (variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 3] == t + 1 && (variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 5] == 0 || (variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 5] == 1 && (variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] == 4 || variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] == 7))))))
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6: (t == 0 ==> (variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 4] == -1 && variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 3] == len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6 && variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] != 7)))
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6: (t > 0 ==> (0 <= variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 4] && variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 4] < t && (variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 4]] == 5 || variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 4]] == 6) && variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 4] + 1] < variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 1])))
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6: ((variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] <= 4 || variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] == 7) ==> variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 5] == 0))
 {
   let mut tape: [i64] = alloc(192, 0);
@@ -376,8 +390,14 @@ fn scan_document(input: [u8]) -> crate::json::JsonParse ! alloc
     invariant 0 <= depth && depth <= p && depth <= cap && 0 <= cap && cap <= 128 && len(stack) == 4 * cap + 4 && (1 <= cap || n == 0)
     invariant 0 <= records && records <= 1048576
     invariant 6 * records <= len(tape) && len(tape) <= 6291456
-    invariant forall t in 0..records: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> tape[6 * t + 5] == 0)
-    invariant forall d in 1..depth + 1: (0 <= stack[4 * d + 2] && stack[4 * d + 2] < records && (tape[6 * stack[4 * d + 2]] == 5 || tape[6 * stack[4 * d + 2]] == 6))
+    invariant forall t in 0..records: (0 <= tape[6 * t] && tape[6 * t] <= 7 && 0 <= tape[6 * t + 1] && tape[6 * t + 1] < tape[6 * t + 2] && tape[6 * t + 2] <= p && t < tape[6 * t + 3] && tape[6 * t + 3] <= records)
+    invariant forall t in 0..records: ((tape[6 * t] <= 4 || tape[6 * t] == 7) ==> (tape[6 * t + 3] == t + 1 && tape[6 * t + 5] == 0))
+    invariant forall t in 0..records: (tape[6 * t + 5] < 0 ==> ((tape[6 * t] == 5 || tape[6 * t] == 6) && 1 <= 0 - tape[6 * t + 5] && 0 - tape[6 * t + 5] <= depth && stack[4 * (0 - tape[6 * t + 5]) + 2] == t && tape[6 * t + 3] == t + 1))
+    invariant forall t in 0..records: (t > 0 ==> (0 <= tape[6 * t + 4] && tape[6 * t + 4] < t && (tape[6 * tape[6 * t + 4]] == 5 || tape[6 * tape[6 * t + 4]] == 6) && tape[6 * tape[6 * t + 4] + 1] < tape[6 * t + 1]))
+    invariant records >= 1 ==> (tape[4] == -1 && tape[0] != 7)
+    invariant forall d in 1..depth + 1: (0 <= stack[4 * d + 2] && stack[4 * d + 2] < records && stack[4 * d] == tape[6 * stack[4 * d + 2]] && (stack[4 * d] == 5 || stack[4 * d] == 6) && tape[6 * stack[4 * d + 2] + 5] == 0 - d && tape[6 * stack[4 * d + 2] + 4] == stack[4 * (d - 1) + 2] && stack[4 * (d - 1) + 2] < stack[4 * d + 2] && 0 <= stack[4 * d + 3])
+    invariant stack[0] == 0 && stack[2] == -1 && ((stack[1] == 6 && records == 0 && depth == 0) || (stack[1] == 2 && records >= 1))
+    invariant (depth == 0 && records >= 1) ==> tape[3] == records
     decreases n - p + 1
   {
     p = crate::lex::skip_whitespace(input, p, n);
@@ -428,7 +448,10 @@ fn scan_document(input: [u8]) -> crate::json::JsonParse ! alloc
           if records == 1048576 { return failure(p, 2); }
           if (kind == 5 || kind == 6) && depth == 128 { return failure(p, 3); }
           if len(tape) - 6 * records < 6 { tape = widened(tape, 6 * records); }
-          let written: bool = write_record(inout tape, records, kind, start, end, parent, 0);
+          // D-DB33-1: an open container carries -(its frame) in the count slot until close_record stores the count.
+          let mut mark: i64 = 0;
+          if kind == 5 || kind == 6 { mark = 0 - (depth + 1); }
+          let written: bool = write_record(inout tape, records, kind, start, end, parent, mark);
           if !written { return failure(p, 18); }
           stack[4 * depth + 1] = value_state(key);
           let count: i64 = stack[4 * depth + 3];
@@ -460,7 +483,15 @@ fn scan_document(input: [u8]) -> crate::json::JsonParse ! alloc
 }
 
 fn publication_ok(parsed: crate::json::JsonParse, n: i64) -> bool
+  requires is_variant(parsed, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) / 6: (t > 0 ==> (0 <= variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 4] && variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 4] < t && (variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 4]] == 5 || variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 4]] == 6) && variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 4] + 1] < variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 1])))
   requires is_variant(parsed, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) / 6: ((variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t] <= 4 || variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t] == 7) ==> variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 5] == 0))
+  requires is_variant(parsed, crate::json::JsonParse::Parsed) ==> (len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) % 6 == 0 && len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) >= 6 && len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) <= 6291456)
+  requires is_variant(parsed, crate::json::JsonParse::Parsed) ==> (n >= 1 && n <= 16777216)
+  requires is_variant(parsed, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) / 6: (0 <= variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t] && variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t] <= 7))
+  requires is_variant(parsed, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) / 6: (0 <= variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 1] && variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 1] < variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 2] && variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 2] <= n))
+  requires is_variant(parsed, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) / 6: (t < variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 3] && variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 3] <= len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) / 6))
+  requires is_variant(parsed, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) / 6: ((variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t] <= 4 || variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t] == 7) ==> (variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 3] == t + 1 && (variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 5] == 0 || (variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 5] == 1 && (variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t] == 4 || variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t] == 7))))))
+  requires is_variant(parsed, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) / 6: (t == 0 ==> (variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 4] == -1 && variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 3] == len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) / 6 && variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t] != 7)))
   ensures result ==> is_variant(parsed, crate::json::JsonParse::Parsed)
   ensures result ==> is_variant(parsed, crate::json::JsonParse::Parsed) ==> (len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) % 6 == 0 && len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) >= 6 && len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) <= 6291456)
   ensures result ==> is_variant(parsed, crate::json::JsonParse::Parsed) ==> (n >= 1 && n <= 16777216)
@@ -477,7 +508,7 @@ fn publication_ok(parsed: crate::json::JsonParse, n: i64) -> bool
   ensures result ==> is_variant(parsed, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) / 6: (variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t] == 6 ==> (variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 3] <= len(variant_field(parsed, crate::json::JsonParse::Parsed, document).tape) / 6 && 2 * variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 5] == count(k in t + 1..variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * t + 3]: variant_field(parsed, crate::json::JsonParse::Parsed, document).tape[6 * k + 4] == t))))
 {
   match parsed {
-    crate::json::JsonParse::Parsed(document) => { return crate::json::check_tape(document.tape, n); }
+    crate::json::JsonParse::Parsed(document) => { return crate::json::check_subtrees(document.tape, n); }
     crate::json::JsonParse::Failed(error) => { return false; }
   }
 }
