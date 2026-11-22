@@ -558,9 +558,43 @@ fn find_try(e: &Expr) -> Option<(Vec<usize>, Vec<Vec<usize>>)> {
     }
     // The operands evaluated before the `?` at path that are not wholly pure, in evaluation order.
     fn temps(root: &Expr, path: &[usize]) -> Result<Vec<Vec<usize>>, ()> {
+        fn walk<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+            out.push(e);
+            for k in crate::refine::kids(e) {
+                walk(k, out);
+            }
+        }
+        // LG18: some call of root holds both nodes a and b (by identity): their arguments share one borrow track
+        fn shared_call(root: &Expr, a: &Expr, b: &Expr) -> bool {
+            let mut all = Vec::new();
+            walk(root, &mut all);
+            all.into_iter().any(|x| {
+                if !matches!(x, Expr::Call(_)) {
+                    return false;
+                }
+                let mut inner = Vec::new();
+                walk(x, &mut inner);
+                inner.iter().any(|y| std::ptr::eq(*y, a)) && inner.iter().any(|y| std::ptr::eq(*y, b))
+            })
+        }
         let mut out = Vec::new();
-        if any(root, &|x| matches!(x, Expr::InoutArg(_))) {
-            return Err(()); // an inout call would see the temporaries' reads before it, not after
+        let mut all = Vec::new();
+        walk(root, &mut all);
+        let mut inout: Vec<String> = Vec::new();
+        for x in &all {
+            if let Expr::InoutArg(a) = x {
+                match field_place(&a.expr).0 {
+                    Expr::Var(v) => inout.push(v.name.clone()),
+                    _ => return Err(()),
+                }
+            }
+        }
+        let touches = |e: &Expr| inout.iter().any(|n| mentions(e, n) > 0);
+        // LG18 (G-LG14-2 a): with inout in the statement, neither the temporaries nor any `?` operand may hold an
+        // inout argument or mention an inout root (that would be inout_context unlowered); Checker::try_temps rejects
+        // a temporary or `?` operand with an effect call (effect_before)
+        if !inout.is_empty() && all.iter().any(|x| matches!(x, Expr::Unary(u) if u.op == "?" && touches(&u.operand))) {
+            return Err(());
         }
         let mut node = root;
         for (depth, &i) in path.iter().enumerate() {
@@ -569,10 +603,13 @@ fn find_try(e: &Expr) -> Option<(Vec<usize>, Vec<Vec<usize>>)> {
                 fn all_pure(e: &Expr) -> bool {
                     pure(e) && crate::refine::kids(e).into_iter().all(all_pure)
                 }
-                if all_pure(k) {
-                    continue;
+                if all_pure(k) || matches!(k, Expr::Move(m) if m.name.starts_with(TRY_TEMP)) {
+                    continue; // LG18: `move __pruv_try_tN` is an already bound temporary passed to take
                 }
                 if any(k, &|x| matches!(x, Expr::Quant(_)) || matches!(x, Expr::Call(c) if c.name == "subview")) {
+                    return Err(());
+                }
+                if !inout.is_empty() && (any(k, &|x| matches!(x, Expr::InoutArg(_))) || touches(k)) {
                     return Err(());
                 }
                 fn names<'a>(e: &'a Expr, out: &mut Vec<(&'a str, bool)>) {
@@ -587,9 +624,16 @@ fn find_try(e: &Expr) -> Option<(Vec<usize>, Vec<Vec<usize>>)> {
                 }
                 let mut named = Vec::new();
                 names(k, &mut named);
-                if named.iter().any(|&(m, moved)| moved && mentions(root, m) > mentions(k, m)
-                    || moves_of(root, m) > moves_of(k, m)) {
-                    return Err(()); // a moved name used again, or a borrow bound early hiding a later move
+                for &(m, moved) in &named {
+                    if moved && (mentions(root, m) > mentions(k, m) || moves_of(root, m) > moves_of(k, m)) {
+                        return Err(()); // a moved name used again
+                    }
+                    // LG18 (G-LG14-2 b): a borrow bound early keeps its order before the later move; only a move in
+                    // the same call (one borrow track, foreign_borrow unlowered) must stay rejected
+                    if !moved && moves_of(root, m) > moves_of(k, m)
+                        && all.iter().any(|x| matches!(x, Expr::Move(y) if y.name == m) && shared_call(root, k, x)) {
+                        return Err(());
+                    }
                 }
                 let mut p = path[..depth].to_vec();
                 p.push(j);
@@ -2883,11 +2927,120 @@ impl Checker {
     }
 
     /// LG14 (G-LG13-1): `let __pruv_try_tN: T = k;` for each operand k evaluated before the statement's first `?`, in
-    /// evaluation order, with k replaced by the fresh local in stmt; T must be a value type (a temporary of an owned or
-    /// borrowed value would change when it is dropped or what it borrows). Python `try_temps`.
+    /// evaluation order, with k replaced by the fresh local in stmt; T is a value type or, per LG18 (G-LG14-1), an owned call result or move
+    /// that find_try admitted as a direct user-call argument. Python `try_temps`.
     fn try_temps(&mut self, stmt: &mut Stmt, temps: Vec<Vec<usize>>, scope: &Scope) -> Res<Vec<Stmt>> {
+        fn has_inout(e: &Expr) -> bool {
+            matches!(e, Expr::InoutArg(_)) || crate::refine::kids(e).into_iter().any(has_inout)
+        }
+        fn calls<'a>(e: &'a Expr, out: &mut Vec<&'a Call>) {
+            if let Expr::Call(c) = e {
+                out.push(c);
+            }
+            for k in crate::refine::kids(e) {
+                calls(k, out);
+            }
+        }
+        let inout = has_inout(Self::try_site_mut(stmt).2);
+        let (line0, col0, _) = Self::try_site_mut(stmt);
+        let effect = |me: &Self, e: &Expr| -> bool {
+            let mut cs = Vec::new();
+            calls(e, &mut cs);
+            cs.into_iter().any(|c| {
+                c.name == "print"
+                    || match me.funcs.get(&c.name) {
+                        Some(f) => f.effects.iter().any(|x| x != "alloc"),
+                        None => catalog_fn(&c.name).is_some_and(|f| f.effects.iter().any(|x| x != "alloc")),
+                    }
+            })
+        };
+        {
+            let root: &Expr = Self::try_site_mut(stmt).2;
+            fn walk<'a>(e: &'a Expr, parent: Option<(&'a Expr, usize)>, out: &mut Vec<(&'a Expr, Option<(&'a Expr, usize)>)>) {
+                out.push((e, parent));
+                for (i, k) in crate::refine::kids(e).into_iter().enumerate() {
+                    walk(k, Some((e, i)), out);
+                }
+            }
+            let mut all = Vec::new();
+            walk(root, None, &mut all);
+            let mut parts: Vec<&Expr> = temps
+                .iter()
+                .map(|path| path.iter().fold(root, |n, &i| crate::refine::kids(n)[i]))
+                .collect();
+            let tries: Vec<&Expr> = all
+                .iter()
+                .filter_map(|(x, _)| match x {
+                    Expr::Unary(u) if u.op == "?" => Some(&*u.operand),
+                    _ => None,
+                })
+                .collect();
+            if inout && tries.iter().any(|q| effect(self, q)) {
+                return Err(Self::try_position_error(line0, col0));
+            }
+            parts.extend(tries);
+            // LG18 (G-LG14-2 b): a part (temporary or `?` operand) mentioning a binding of a type that is not a value
+            // type, mentioned again outside the part in a call holding the part, is type/try_position unless that
+            // mention is a direct argument of a borrowed parameter of a user function: nested calls share the
+            // outermost call's borrow track and lowering moves the part out of it. Python `try_split_check`.
+            for part in parts {
+                let mut inside = Vec::new();
+                walk(part, None, &mut inside);
+                let has = |x: &Expr| inside.iter().any(|(y, _)| std::ptr::eq(*y, x));
+                fn named(x: &Expr) -> Option<&str> {
+                    match x {
+                        Expr::Var(v) => Some(v.name.as_str()),
+                        Expr::Move(m) => Some(m.name.as_str()),
+                        _ => None,
+                    }
+                }
+                let names: Vec<&str> = inside
+                    .iter()
+                    .filter_map(|(x, _)| named(x))
+                    .filter(|n| scope.get(*n).is_some_and(|e| !is_value(&e.ty, &|d| self.value_decl(d))))
+                    .collect();
+                for (c, _) in &all {
+                    if !matches!(c, Expr::Call(_)) {
+                        continue;
+                    }
+                    let mut sub = Vec::new();
+                    walk(c, None, &mut sub);
+                    if !sub.iter().any(|(y, _)| std::ptr::eq(*y, part)) {
+                        continue;
+                    }
+                    for (x, _) in &sub {
+                        let Some(n) = named(x) else { continue };
+                        if has(x) || !names.contains(&n) {
+                            continue;
+                        }
+                        let parent = all.iter().find(|(y, _)| std::ptr::eq(*y, *x)).and_then(|(_, p)| *p);
+                        let ok = match (x, parent) {
+                            (Expr::Var(_), Some((Expr::Call(p), i))) => match (self.funcs.get(&p.name), self.takes.get(&p.name)) {
+                                (Some(f), Some(takes)) => !f.foreign && i < f.params.len() && i < takes.len() && !takes[i],
+                                _ => false,
+                            },
+                            _ => false,
+                        };
+                        if !ok {
+                            return Err(Self::try_position_error(line0, col0));
+                        }
+                    }
+                }
+            }
+        }
         let mut lets = Vec::new();
         for path in temps {
+            let parent_name = {
+                let (_, _, mut p) = Self::try_site_mut(stmt);
+                for &i in &path[..path.len() - 1] {
+                    p = kid_mut(p, i);
+                }
+                match p {
+                    Expr::Call(c) => Some(c.name.clone()),
+                    _ => None,
+                }
+            };
+            let j = *path.last().unwrap();
             let (line, col, mut rhs) = Self::try_site_mut(stmt);
             for i in path {
                 rhs = kid_mut(rhs, i);
@@ -2896,12 +3049,45 @@ impl Checker {
             self.ckind = "code";
             self.boundary = None;
             let t = self.expr(&mut probe, scope, false)?;
-            if t == unitt() || !is_value(&t, &|n| self.value_decl(n)) {
+            if t == unitt() {
                 return Err(Self::try_position_error(line, col));
+            }
+            // LG18 (G-LG14-2 a): a call with effects before the inout call is inout_context unlowered
+            if inout && effect(self, rhs) {
+                return Err(Self::try_position_error(line, col));
+            }
+            let mut take = false;
+            if !is_value(&t, &|n| self.value_decl(n)) {
+                // LG18 (G-LG14-1): an operand of an owned type (Vec, HashMap, String) may be bound only when it is a
+                // call result (not subview) or a plain move passed directly as an argument of a non-foreign user
+                // function to a take parameter of exactly its type: the temporary is moved into the same call, so it
+                // is consumed where the value was (a borrowed parameter would drop it at the end of the block, and a
+                // coercion such as Vec to [T] applies to places only). Python `try_owned_temp`.
+                let f = parent_name.as_ref().and_then(|n| self.funcs.get(n).map(|f| (f.clone(), self.takes.get(n).cloned())));
+                let ok = match &f {
+                    Some((f, Some(takes))) if !f.foreign && j < f.params.len() && j < takes.len() && takes[j]
+                        && f.params[j] == t && t.owner.is_none() && matches!(t.name.as_str(), "vec" | "hashmap" | "string") => {
+                        take = true;
+                        match &*rhs {
+                            Expr::Call(c) => c.name != "subview",
+                            Expr::Move(m) => m.fields.is_empty(),
+                            _ => false,
+                        }
+                    }
+                    _ => false,
+                };
+                if !ok {
+                    return Err(Self::try_position_error(line, col));
+                }
             }
             let name = format!("{TRY_TEMP}{}", self.try_count);
             self.try_count += 1;
-            let k = std::mem::replace(rhs, Expr::Var(Var { line, col, name: name.clone(), ty: None }));
+            let new = if take {
+                Expr::Move(Move { line, col, name: name.clone(), fields: Vec::new(), ty: None })
+            } else {
+                Expr::Var(Var { line, col, name: name.clone(), ty: None })
+            };
+            let k = std::mem::replace(rhs, new);
             lets.push(Stmt::Let(Let { line, col, name, mutable: false, ty: t.to_key(), value: k, refine: None }));
         }
         Ok(lets)

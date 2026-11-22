@@ -1,0 +1,17 @@
+// LG18 (G-LG14-2 b): a temporary that borrows a name the same call moves through Err(...) stays try_position
+// (unlowered the borrow and the implicit move share one borrow track: foreign_borrow)
+fn need(x: i64) -> Result<i64, String> ! alloc {
+  if x > 0 { return Ok::<i64, String>(x); }
+  return Err::<i64, String>(string_from("neg"));
+}
+fn lend(a: String, b: i64) -> i64 { return b; }
+fn two(a: i64, b: i64, take r: Result<i64, String>) -> i64 ! alloc {
+  match move r {
+    Ok(v) => { return v; }
+    Err(e) => { return a; }
+  }
+}
+fn f(x: i64) -> Result<i64, String> ! alloc {
+  let s: String = string_from("ab");
+  return Ok::<i64, String>(two(lend(s, 0), need(x)?, Err::<i64, String>(s)));
+}

@@ -1,0 +1,12 @@
+// LG18 (G-LG14-2 a): with a temporary before the `?`, a `?` operand that reads the name the statement passes inout
+// stays try_position (unlowered it would be inout_context)
+fn get(a: i64) -> Result<i64> {
+  if a > 0 { return Ok(a); }
+  return Err(a);
+}
+fn twice(a: i64) -> i64 { return a * 2; }
+fn use3(n: i64, k: i64, inout y: i64) -> i64 { y = y + k; return n; }
+fn f() -> Result<i64> {
+  let mut y: i64 = 1;
+  return Ok(use3(twice(3), get(y)?, inout y));
+}
