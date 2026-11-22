@@ -1,0 +1,12 @@
+// LG18 (G-LG14-2 a): with a temporary before the `?` of an inout statement, an effect call inside a `?` operand
+// stays try_position (the inout effect-before rule reads every `?` operand too)
+fn noisy() -> Result<i64> ! io {
+  print(1);
+  return Ok(1);
+}
+fn before() -> i64 { return 3; }
+fn set(n: i64, k: i64, inout y: i64) -> i64 { y = k; return n; }
+fn f() -> Result<i64> ! io {
+  let mut y: i64 = 1;
+  return Ok(set(before(), noisy()?, inout y));
+}

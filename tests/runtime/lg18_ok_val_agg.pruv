@@ -1,0 +1,51 @@
+// LG18 G-LG15-2: ok_val of a Result<T, String> parameter with a user struct / enum T in a runtime-checked requires
+// and in a kept cost clause (--no-verify) on both backends
+struct Pt { x: i64, y: i64 }
+enum Col { Red, Blue(v: i64) }
+
+fn pt_sum(take r: Result<Pt, String>) -> i64 ! alloc
+  requires is_ok(r) && ok_val(r).x >= 0 && ok_val(r).x <= 10 && ok_val(r).y >= 0 && ok_val(r).y <= 10
+  ensures result >= 0 && result <= 20
+  cost ok_val(r).x
+{
+  match r {
+    Ok(p) => { return p.x + p.y; }
+    Err(e) => { return 0; }
+  }
+}
+
+fn pt_or(take r: Result<Pt, String>) -> i64 ! alloc
+  requires is_ok(r) ==> ok_val(r).x >= 0 && ok_val(r).x <= 10
+  ensures result >= 0 && result <= 10
+{
+  match r {
+    Ok(p) => { return p.x; }
+    Err(e) => { return 7; }
+  }
+}
+
+fn col_val(take r: Result<Col, String>) -> i64 ! alloc
+  requires is_ok(r) && is_variant(ok_val(r), Col::Blue) && variant_field(ok_val(r), Col::Blue, v) >= 0
+  requires variant_field(ok_val(r), Col::Blue, v) <= 100
+  ensures result >= 0 && result <= 100
+{
+  match r {
+    Ok(c) => {
+      match c {
+        Col::Red => { return 0; }
+        Col::Blue(v) => { return v; }
+      }
+    }
+    Err(e) => { return 0; }
+  }
+}
+
+fn run(k: i64) -> i64 ! alloc
+  requires k >= 0 && k <= 3
+{
+  let a: Result<Pt, String> = Ok::<Pt, String>(Pt { x: k, y: k + 2 });
+  let b: Result<Pt, String> = Ok::<Pt, String>(Pt { x: 1, y: 0 });
+  let d: Result<Pt, String> = Err::<Pt, String>(string_from("no"));
+  let c: Result<Col, String> = Ok::<Col, String>(Col::Blue(k * 10));
+  return pt_sum(move a) * 1000 + pt_sum(move b) * 100 + col_val(move c) + pt_or(move d) * 10000;
+}

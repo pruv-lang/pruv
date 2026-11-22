@@ -468,12 +468,27 @@ let o: Option<bool> = Some::<bool>(true);   // also None::<bool>, Ok::<bool>(x),
   the statement to the `?` is first bound to a fresh immutable local, left to right: `return Ok(g(x) + f(x)?);` means
   `let t: i64 = g(x); return Ok(t + f(x)?);`, so it still runs (and its preconditions and index bounds are still
   checked) before the `?`. A short-circuit operand is bound whole, so `(false && b()) == x?` keeps its skipping. This
-  is `type/try_position` when a temporary would change the meaning: when the statement passes any `inout` argument
-  (the inout call and its alias and effect checks would no longer see the earlier operand), when the earlier operand
-  contains a quantifier or a `subview`, when it moves a name that the statement mentions again or mentions a name the
-  statement moves elsewhere (a borrow bound early would hide its conflict with the move), or when its type is
-  `()` or not a value type (a `String`, a collection, a reference or a type holding one, whose temporary would be
-  dropped or borrowed at a different point). The operand must be
+  is `type/try_position` when a temporary would change the meaning: when the earlier operand contains a quantifier or
+  a `subview`; when it moves a name that the statement mentions again (also kept unlowered, as that is a use after
+  move); when it or a `?` operand mentions a binding of a type that is not a value type which a call holding it
+  mentions again outside it, other than as a direct argument of a borrowed parameter of a user function (nested
+  calls share one borrow track, so a borrow taken out of the call would hide its `type/foreign_borrow` with a move,
+  explicit or implicit through `Err(x)` or a constructor argument; a borrow in an earlier operand of a different call
+  keeps its order before the later move and is bound, LG18); when its type is `()`; when the statement passes an
+  `inout` argument and the earlier operand or any `?` operand of the statement mentions that argument's root local
+  (or an inout argument is not a local or a field of one), the earlier operand passes `inout` itself, or it or any `?`
+  operand calls `print` or a function with an effect other than `alloc` (the inout call's alias and effect checks
+  would no longer see it, LG18; a statement with `inout` whose earlier operands and `?` operands do not touch the
+  inout roots and have no effect is bound as usual); or when its type is not a value type, except (LG18) a `Vec`,
+  `HashMap` or `String` that is a call result (not `subview`) or a plain `move x`, passed directly as an argument of a
+  user (non-foreign) function to a `take` parameter of exactly that type: the call then gets `move t`, so the
+  temporary owns exactly the value the argument held and is consumed by the same call (a value the call itself
+  borrows while it runs, such as `mk(string_from("a"))`'s argument, is then dropped before the `?` operand runs
+  instead of at the end of the statement, G-LG18-4). Any other operand of a
+  non-value type (a borrow of a live local, a field, an index, a reference, a type holding one, an owned value passed
+  to a borrowed parameter, whose temporary would be dropped at the end of the block instead of the statement, one
+  passed to a parameter of another type such as `Vec<T>` to `[T]`, an argument of a builtin or a constructor) stays
+  `type/try_position`. The operand must be
   a `Result` (`type/try_operand`), the function must return a `Result<U, E'>` (`type/try_return`), and the errors
   must be the same type, `E == E'` (`type/try_error_type`; there is no error conversion). Operands are evaluated left
   to right and the `?` sites of a statement are taken in that order: the statement and the rest of its block mean
@@ -497,9 +512,11 @@ let o: Option<bool> = Some::<bool>(true);   // also None::<bool>, Ok::<bool>(x),
   the String handle null on Ok and after a move, and drops a live handle on every path; it supports every value
   `T` (`i64`, `bool`, a value struct or enum, an `Option` of a value; LG13) for a local, parameter, result or
   temporary. In a runtime-checked `requires` and in a `cost` clause that is kept (`--no-verify`) it reads `is_ok`,
-  `ok_val` (for `T` = `i64` or `bool`) and `err_val` (a `String`, for example `len(err_val(r))`) of a parameter from the
-  real storage, with the same result as the Rust backend (LG15); `ok_val` of another `T` or an operand that is not a
-  parameter is `codegen/unsupported_type`, whose message names the clause
+  `ok_val` (for `T` = `i64`, `bool`, LG15, or a struct, enum, `Option` or `Result` whose layout is not extended, read
+  into its contract form, LG18) and `err_val` (a `String`, for example `len(err_val(r))`) of a parameter from the
+  real storage, with the same result as the Rust backend (LG15; a recursive `T` or one holding an array cannot be a
+  `Result` payload, `type/type_argument`); `ok_val` of a legacy-normalized payload (`Option<i64>`, `Result<i64>`) and
+  an operand that is not a parameter are `codegen/unsupported_type` (G-LG18-2), whose message names the clause
   (`runtime requires` or `kept cost clause`). On both backends a `Result<T, String>` inside a record, enum or
   another generic type is `type/foreign_owned_type` (as the error type of another `Result` it is
   `type/result_error_type`), and one in a host entry signature (no C ABI) is `type/entry_signature`. Records that
@@ -2207,7 +2224,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/refinement_bounds` | type | refinement bounds outside i64, or an empty range |
 | `type/reserved` | type | a function named like a builtin |
 | `type/result_error_type` | type | a `Result<T, E>` error type `E` that E1/E2 do not support (section 6c) |
-| `type/try_position` | type | a `?` outside the value of a let, a local assignment, a return, an expression statement or an if condition, in a quantifier, in the right operand of `==>`, in the right operand of `&&` / `\|\|` when the statement passes `inout` or the operator has a quantifier or `subview`, moves a name used outside it, mentions one moved outside it or mentions a non-value binding used again (LG15) or a `pred fn` return, after an operand evaluated before it that cannot be bound to a temporary (in a statement that passes `inout`, or one that has a quantifier or `subview`, moves a name used again, mentions a name moved elsewhere in the statement or is not of a value type, LG14), or with an `inout` argument in its operand while the statement reads a local outside it (section 6c) |
+| `type/try_position` | type | a `?` outside the value of a let, a local assignment, a return, an expression statement or an if condition, in a quantifier, in the right operand of `==>`, in the right operand of `&&` / `\|\|` when the statement passes `inout` or the operator has a quantifier or `subview`, moves a name used outside it, mentions one moved outside it or mentions a non-value binding used again (LG15) or a `pred fn` return, after an operand evaluated before it that cannot be bound to a temporary (it has a quantifier or `subview`, moves a name used again, mentions a non-value binding that the same call mentions again other than as a borrowed user-function argument, or is not of a value type other than an owned call result or `move` passed directly to a user function's `take` parameter of the same type, LG14/LG18; in a statement that passes `inout`, also when it or any `?` operand mentions an inout root or has an effect call, or it passes `inout`, LG18), or with an `inout` argument in its operand while the statement reads a local outside it (section 6c) |
 | `type/try_operand` | type | a `?` operand that is not a `Result` (section 6c) |
 | `type/try_return` | type | a `?` in a function that does not return a `Result` (section 6c) |
 | `type/try_error_type` | type | a `?` whose error type differs from the function's error type (section 6c) |

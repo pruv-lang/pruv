@@ -1,5 +1,6 @@
-// LG14: an operand before the `?` whose type is not a value (here a String) is not bound to a temporary, since the
-// temporary would change when it is dropped; rejected
+// LG14: an operand before the `?` whose type is not a value (here a String) is bound to a temporary only when it is
+// a call result, or a plain move passed to a take parameter (LG18, G-LG14-1); a move passed to a borrowed parameter
+// is not, since the temporary would turn the invalid move into a valid borrow; rejected
 fn mk() -> String ! alloc {
   return string_from("a");
 }
@@ -14,5 +15,6 @@ fn cat2(a: String, b: i64) -> i64 {
 }
 
 fn g(x: i64) -> Result<i64, String> ! alloc {
-  return Ok::<i64, String>(cat2(mk(), need(x)?));
+  let s: String = mk();
+  return Ok::<i64, String>(cat2(move s, need(x)?));
 }

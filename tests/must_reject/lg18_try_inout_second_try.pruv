@@ -1,0 +1,11 @@
+// LG18 (G-LG14-2 a): a second `?` operand that reads the inout root stays try_position even when the first does not
+fn get(a: i64) -> Result<i64> {
+  if a > 0 { return Ok(a); }
+  return Err(a);
+}
+fn before() -> i64 { return 3; }
+fn set4(n: i64, k: i64, j: i64, inout y: i64) -> i64 { y = k + j; return n; }
+fn f() -> Result<i64> {
+  let mut y: i64 = 1;
+  return Ok(set4(before(), get(2)?, get(y)?, inout y));
+}

@@ -132,7 +132,7 @@ def find_try(e):
                 reads = lambda x: sum(isinstance(y, (Var, Move)) for y in _walk(x))
                 if reads(root) > reads(e.operand):
                     raise _NoTry
-            return e, (temps() if before else [])
+            return e, (temps(e.operand) if before else [])
         for i, k in enumerate(expr_kids(e)):
             path.append((e, i))
             found = visit(k)
@@ -142,22 +142,43 @@ def find_try(e):
         note_node(e)
         return None
 
-    def temps():
+    def temps(operand=None):
         out = []
-        if _has_kind(root, InoutArg):  # an inout call would see the temporaries' reads before it, not after
+        inout = set()
+        for a in _walk(root):
+            if isinstance(a, InoutArg):
+                place = field_place(a.expr)[0]
+                if not isinstance(place, Var):
+                    raise _NoTry
+                inout.add(place.name)
+        # LG18 (G-LG14-2 a): with inout in the statement, neither the temporaries nor the `?` operand may hold an
+        # inout argument or mention an inout root (that would be inout_context unlowered); Checker.try_temps rejects
+        # a temporary with an effect call (effect_before)
+        # (every `?` of the statement: a later `?` finds its earlier operands already bound and would skip this)
+        if inout and any(is_try(t) and any(isinstance(x, (Var, Move)) and x.name in inout for x in _walk(t.operand))
+                         for t in _walk(root)):
             raise _NoTry
         for node, i in path:
             for k in expr_kids(node)[:i]:
-                if all(_try_pure(x) for x in _walk(k)):
-                    continue
+                if all(_try_pure(x) for x in _walk(k)) or isinstance(k, Move) and k.name.startswith(TRY_TEMP):
+                    continue        # LG18: `move __pruv_try_tN` is an already bound temporary passed to take
                 if any(isinstance(x, Quant) or isinstance(x, Call) and x.name == "subview" for x in _walk(k)):
+                    raise _NoTry
+                if inout and (_has_kind(k, InoutArg)
+                              or any(isinstance(x, (Var, Move)) and x.name in inout for x in _walk(k))):
                     raise _NoTry
                 for m in _walk(k):
                     if isinstance(m, Move) and _mentions_count(root, m.name) > _mentions_count(k, m.name):
                         raise _NoTry
-                    if isinstance(m, (Var, Move)) and _moves_count(root, m.name) > _moves_count(k, m.name):
-                        raise _NoTry      # a borrow bound early would hide its conflict with the later move
-                out.append(k)
+                    if isinstance(m, Move) and _moves_count(root, m.name) > _moves_count(k, m.name):
+                        raise _NoTry
+                    if isinstance(m, Var) and _moves_count(root, m.name) > _moves_count(k, m.name):
+                        # LG18 (G-LG14-2 b): a borrow bound early keeps its order before the later move; only a
+                        # move in the same call (one borrow track, foreign_borrow unlowered) must stay rejected
+                        for x in _walk(root):
+                            if isinstance(x, Move) and x.name == m.name and _shared_call(root, k, x):
+                                raise _NoTry
+                out.append((node, k))
         return out
 
     def short(e, before):
@@ -187,6 +208,12 @@ def find_try(e):
         return visit(e)
     except _NoTry:
         return None
+
+
+def _shared_call(root, a, b):
+    """LG18: some call of root holds both nodes a and b (by identity): their arguments share one borrow track"""
+    return any(isinstance(x, Call) and any(y is a for y in _walk(x)) and any(y is b for y in _walk(x))
+               for x in _walk(root))
 
 
 def _moves_count(e, name):
@@ -1503,23 +1530,86 @@ class Checker:
 
     def try_temps(s, st, temps, scope):
         """LG14 (G-LG13-1): `let __pruv_try_tN: T = k;` for each operand k evaluated before the statement's first `?`,
-        in evaluation order, with k replaced by the fresh local in st; T must be a value type (a temporary of an owned
-        or borrowed value would change when it is dropped or what it borrows)"""
+        in evaluation order, with k replaced by the fresh local in st; T is a value type or, per LG18 (G-LG14-1), an owned call
+        result or move that find_try admitted as a direct user-call argument"""
         lets = []
-        for k in temps:
+        roots = [v for v in vars(st).values() if isinstance(v, Expr)]
+        inout = any(isinstance(x, InoutArg) for v in roots for x in _walk(v))
+        tries = [x.operand for v in roots for x in _walk(v) if is_try(x)]
+        s.try_split_check(st, roots, [k for _, k in temps] + tries, scope)
+        for q in tries if inout else []:
+            s.try_effect_check(st, q)
+        for parent, k in temps:
             t = s.expr(copy.deepcopy(k), dict(scope))
-            if t == UNIT or not is_value(t, s.value_decls):
+            if t == UNIT:
                 try_position_error(st)
+            if inout:
+                s.try_effect_check(st, k)
+            take = False
+            if not is_value(t, s.value_decls):
+                take = s.try_owned_temp(st, parent, k, t)
             name = "%s%d" % (TRY_TEMP, s.try_index)
             s.try_index += 1
             let = Let(st.line, st.col, name, False, t, k)
-            var = Var(st.line, st.col, name)
+            var = Move(st.line, st.col, name) if take else Var(st.line, st.col, name)
             replace_expr(st, k, var)
             for node in (let, var):
                 if hasattr(st, "file"):
                     node.file = st.file
             lets.append(let)
         return lets
+
+    def try_effect_check(s, st, k):
+        """LG18 (G-LG14-2 a): in a statement with inout, a temporary or `?` operand calling print or a function with
+        an effect other than alloc is type/try_position (unlowered, inout_context's effect-before rule rejects it)"""
+        for x in _walk(k):
+            if isinstance(x, Call):
+                callee = s.funcs.get(x.name) or CATALOG.get(x.name)
+                if x.name == "print" or (callee is not None and any(fx != "alloc" for fx in callee.effects)):
+                    try_position_error(st)
+
+    def try_split_check(s, st, roots, parts, scope):
+        """LG18 (G-LG14-2 b): type/try_position when a part (a temporary or a `?` operand) mentions a binding whose
+        type is not a value type and a call holding the part also mentions it outside the part, except as a direct
+        argument of a borrowed parameter of a user function. Nested calls share the outermost call's borrow track and
+        lowering moves the part out of that call, so a borrow in it and a move (explicit, or implicit through Err or a
+        constructor argument) of the same name in the call would no longer meet (foreign_borrow unlowered)"""
+        parent = {}
+        for r in roots:
+            for x in _walk(r):
+                for i, c in enumerate(expr_kids(x)):
+                    parent[id(c)] = (x, i)
+        for part in parts:
+            inside = {id(x) for x in _walk(part)}
+            names = {x.name for x in _walk(part) if isinstance(x, (Var, Move)) and x.name in scope
+                     and not is_value(scope[x.name][0], s.value_decls)}
+            for r in roots:
+                for c in _walk(r):
+                    if not isinstance(c, Call) or id(part) not in {id(y) for y in _walk(c)}:
+                        continue
+                    for x in _walk(c):
+                        if id(x) in inside or not isinstance(x, (Var, Move)) or x.name not in names:
+                            continue
+                        p, i = parent.get(id(x), (None, None))
+                        f = s.funcs.get(p.name) if isinstance(x, Var) and isinstance(p, Call) else None
+                        if not (f is not None and f.foreign is None and i < len(f.params) and not f.params[i].take):
+                            try_position_error(st)
+
+    def try_owned_temp(s, st, parent, k, t):
+        """LG18 (G-LG14-1): an operand of an owned type (Vec, HashMap, String) evaluated before a `?` may be bound to
+        a temporary only when it is a call result (not subview) or a plain move passed directly as an argument of a
+        non-foreign user function to a take parameter of exactly its type: the temporary is then moved into the same
+        call, so it is consumed where the value was (a borrowed parameter would drop it at the end of the block, not
+        the statement, and a coercion such as Vec to [T] applies to places only). Returns True; any other operand of a
+        type that is not a value is type/try_position"""
+        f = s.funcs.get(parent.name) if isinstance(parent, Call) else None
+        j = next((i for i, a in enumerate(parent.args) if a is k), None) if f is not None else None
+        ok = (f is not None and f.foreign is None and j is not None and j < len(f.params) and f.params[j].take
+              and f.params[j].type == t and t.owner is None and t.name in ("vec", "hashmap", "string")
+              and (isinstance(k, Call) and k.name != "subview" or isinstance(k, Move) and not k.fields))
+        if not ok:
+            try_position_error(st)
+        return True
 
     def try_short_check(s, st, node, scope):
         """LG15: type/try_position when the operator node mentions a binding whose declared type is not a value type

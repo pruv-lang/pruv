@@ -1,0 +1,11 @@
+// LG18 (G-LG14-1): an owned call result passed to a borrowed parameter before a `?` stays try_position (a temporary
+// would be dropped at the end of the block, not the statement)
+fn mk() -> String ! alloc { return string_from("ab"); }
+fn need(x: i64) -> Result<i64, String> ! alloc {
+  if x > 0 { return Ok::<i64, String>(x); }
+  return Err::<i64, String>(string_from("neg"));
+}
+fn lend(a: String, b: i64) -> i64 { return b; }
+fn f(x: i64) -> Result<i64, String> ! alloc {
+  return Ok::<i64, String>(lend(mk(), need(x)?));
+}

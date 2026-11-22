@@ -1,0 +1,99 @@
+// LG18: operands before a `?` that are bound to temporaries although they are owned (G-LG14-1: a String call result
+// or a move passed to a take parameter of the same type), in a statement that passes inout (G-LG14-2 a) and that
+// borrow a name moved later in another call (G-LG14-2 b)
+fn mk(n: i64) -> String ! alloc
+  requires 0 <= n && n <= 10
+  ensures len(result) == n
+{
+  let mut s: String = string_from("");
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && len(s) == i
+    decreases n - i
+  {
+    s = string_push_str(move s, "x");
+    i = i + 1;
+  }
+  return move s;
+}
+
+fn need(x: i64) -> Result<i64, String> ! alloc
+  requires 0 <= x && x <= 100
+  ensures is_ok(result) ==> ok_val(result) == x
+{
+  if x > 0 { return Ok::<i64, String>(x); }
+  return Err::<i64, String>(string_from("neg"));
+}
+
+fn lend(a: String, b: i64) -> i64
+  requires len(a) <= 10 && 0 <= b && b <= 100
+  ensures 0 <= result && result <= 1100
+{
+  return len(a) * 100 + b;
+}
+
+fn eat(take a: String, b: i64) -> i64 ! alloc
+  requires len(a) <= 10 && 0 <= b && b <= 100
+  ensures 0 <= result && result <= 1100
+{
+  return len(a) * 100 + b;
+}
+
+fn use3(n: i64, k: i64, inout y: i64) -> i64
+  requires 0 <= n && n <= 10000 && 0 <= k && k <= 100
+  ensures result == n * 1000 + k && y == k
+{
+  y = k;
+  return n * 1000 + k;
+}
+
+fn borrowed(x: i64) -> Result<i64, String> ! alloc
+  requires 0 <= x && x <= 100
+{
+  return Ok::<i64, String>(lend(mk(2), 0) + need(x)?);
+}
+
+fn taken(x: i64) -> Result<i64, String> ! alloc
+  requires 0 <= x && x <= 100
+{
+  return Ok::<i64, String>(eat(mk(3), need(x)?));
+}
+
+fn moved(x: i64) -> Result<i64, String> ! alloc
+  requires 0 <= x && x <= 100
+{
+  let s: String = mk(4);
+  return Ok::<i64, String>(eat(move s, need(x)?));
+}
+
+fn borrow_then_move(x: i64) -> Result<i64, String> ! alloc
+  requires 0 <= x && x <= 100
+{
+  let s: String = mk(5);
+  return Ok::<i64, String>(lend(s, 1) + need(x)? + eat(move s, 2));
+}
+
+fn with_inout(x: i64) -> Result<i64, String> ! alloc
+  requires 0 <= x && x <= 100
+{
+  let mut y: i64 = 7;
+  let r: i64 = use3(lend(mk(1), 0), need(x)?, inout y);
+  return Ok::<i64, String>(r + y);
+}
+
+fn show(take r: Result<i64, String>) -> i64 ! alloc {
+  match move r {
+    Ok(v) => { return v; }
+    Err(e) => { return 0 - len(e); }
+  }
+}
+
+fn run(k: i64, x: i64) -> i64 ! alloc
+  requires 0 <= x && x <= 100
+{
+  if k == 0 { return show(borrowed(x)); }
+  if k == 1 { return show(taken(x)); }
+  if k == 2 { return show(moved(x)); }
+  if k == 3 { return show(borrow_then_move(x)); }
+  return show(with_inout(x));
+}
