@@ -3649,7 +3649,8 @@ class FnGen:
                 X = oty.args[0]
                 # LG18 (G-LG15-2): ok_val also of a user struct / enum or a new Option / Result T that is not
                 # extended (its contract mirror comes from to_c); an extended T cannot be a Result payload (type_argument)
-                okt = X in (I64, BOOL) or is_agg(X) and not s.is_ext(X)
+                # LG23 (G-LG18-2): also a legacy Option<..> / one-argument Result<..> (OPT struct at payload index 1)
+                okt = X in (I64, BOOL) or is_agg(X) and not s.is_ext(X) or vkind(X) == "opt"
                 if n not in ("is_ok", "ok_val", "err_val") or (n == "ok_val" and not okt):
                     raise s.g9_unsupported(e, "a Result<_, String> operand")
                 p = s.cx(a[0])
@@ -3659,6 +3660,10 @@ class FnGen:
                 if n == "ok_val":
                     s.guard(tag, und("ok_val of Err"), False)
                     x = s.op("load %s, ptr %s" % (lty(X), g9_gep(s, lty(oty), p, 1)))
+                    if vkind(X) == "opt":
+                        ot = s.op("extractvalue %s %s, 0" % (OPT, x))
+                        ov = s.op("extractvalue %s %s, 1" % (OPT, x))
+                        return s.to_c(V("opt", ot, ov), X)
                     return s.to_c(V(vkind(X), x, None, X), X)
                 s.guard(tag, und("err_val of Ok"), True)
                 return V("coll", s.op("load ptr, ptr %s" % g9_gep(s, lty(oty), p, 2)), None, result_error(oty))

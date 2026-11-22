@@ -199,7 +199,7 @@ it can never be silently dropped.
 ## 6. Contract-only expressions
 Allowed only in `requires`, `ensures`, `invariant`, `assert`:
 - `result` (in ensures): the return value.
-- `old(a)` (in ensures, invariant, assert): the entry contents of an `inout` parameter `a` (array or struct, also `old(x.f)`) of the enclosing function (section 6g).
+- `old(a)` (in ensures, invariant, assert): the entry contents of an `inout` parameter `a` (array or struct, also `old(x.f)`, `old(a[i])`, `old(len(a))`) of the enclosing function (section 6g).
 - `forall i in lo..hi: e` / `exists i in lo..hi: e` (i ranges over lo <= i < hi).
 - `a ==> b` (implication).
 - `is_some(o)`, `some_val(o)`, `is_ok(r)`, `ok_val(r)`, `err_val(r)`.
@@ -331,8 +331,14 @@ match e {                                  // statement; every variant exactly o
   break it. A struct-typed field of `S` carries its own invariant (LG22): the effective invariant of `S` is its own
   clauses, then the effective invariants of its fields of a plain non-generic struct type at `p.f`, in field order
   (a struct already on the path is skipped), and a struct whose effective invariant is non-empty counts as having an
-  invariant for every rule here. Nested clauses report the dotted path ("... for parameter p.log of F"). Values in
-  other nested positions (array elements, `Option` payloads, generic structs) are not assumed to satisfy it.
+  invariant for every rule here. Nested clauses report the dotted path ("... for parameter p.log of F"). LG23 adds
+  guarded positions: the fields of a generic struct instance (type arguments substituted, label `b.v`), the payload
+  of an `Option` (under `is_some`, value `some_val`, label `o.some`), the Ok payload of a `Result<T, E>` with `E`
+  other than `i64` (`Result<T, i64>` is normalized to the legacy `Result<T>` and is not walked) (under
+  `is_ok`, value `ok_val`, label `r.ok`) and the fields of a variant of a non-generic enum (under `is_variant`, value
+  `variant_field`, label `s.V.f`); a clause under guards g1..gn is `!g1 || ... || !gn || C`. A type already on the
+  path is skipped. Values in array or `Vec` elements, an `Err` payload and the variants of a generic enum are not
+  assumed to satisfy it (G-LG23).
   A failure is `verify/struct_invariant` ("invariant of S (line L) for parameter P of F", "... for result",
   "... for inout P at exit"); a partial operation in a clause proved at a handoff (index, `/`, `some_val`, ...) is
   checked under the same code and message. A host entry may not take a parameter of such a struct
@@ -537,8 +543,8 @@ let o: Option<bool> = Some::<bool>(true);   // also None::<bool>, Ok::<bool>(x),
   `ok_val` (for `T` = `i64`, `bool`, LG15, or a struct, enum, `Option` or `Result` whose layout is not extended, read
   into its contract form, LG18) and `err_val` (a `String`, for example `len(err_val(r))`) of a parameter from the
   real storage, with the same result as the Rust backend (LG15; a recursive `T` or one holding an array cannot be a
-  `Result` payload, `type/type_argument`); `ok_val` of a legacy-normalized payload (`Option<i64>`, `Result<i64>`) and
-  an operand that is not a parameter are `codegen/unsupported_type` (G-LG18-2), whose message names the clause
+  `Result` payload, `type/type_argument`); `ok_val` of a legacy-normalized payload (`Option<i64>`, `Result<i64>`) is
+  read too (LG23); an operand that is not a parameter is `codegen/unsupported_type`, whose message names the clause
   (`runtime requires` or `kept cost clause`). On both backends a `Result<T, String>` inside a record, enum or
   another generic type is `type/foreign_owned_type` (as the error type of another `Result` it is
   `type/result_error_type`), and one in a host entry signature (no C ABI) is `type/entry_signature`. Records that
@@ -1169,8 +1175,12 @@ set_at(inout w, 0, 7);
   `--no-verify` and `--trust-callers`. Mutable access while a `match` arm views the same root is `type/recursive_borrow`.
 - **`old`.** `old(a)` names the entry contents of an `inout` array parameter `a` of the enclosing function; legal only in
   that function's `ensures`, `invariant` and `assert` (`type/old_context`, `type/old_argument` otherwise: locals,
-  ordinary parameters, elements and nested `old` are rejected). For an `inout` parameter `x` of a non-generic struct
-  (LG22) `old(x)` is its entry value and `old(x.f.g)` means `old(x).f.g`. It always means function entry. In `requires`
+  ordinary parameters and nested `old` are rejected). For an `inout` parameter `x` of a non-generic struct
+  (LG22) `old(x)` is its entry value and `old(x.f.g)` means `old(x).f.g`. The operand may also be a place chain of
+  `.field` and `[index]` steps from such a parameter, or `len` of one that is an array (LG23): `old(a[i])` means
+  `old(a)[i]`, `old(len(c.a))` means `len(old(c).a)`. An index inside the operand is read at the current point, so it
+  may not mention an `inout` parameter or `old` (`type/old_argument`; write `old(a)[old(b)[0]]` explicitly). Other
+  operands (`old(a[0] + 1)`, a generic struct parameter, which cannot be `inout`) stay `type/old_argument`. It always means function entry. In `requires`
   a parameter is its entry value; in `ensures` an `inout` parameter is its final value. `len(a) == len(old(a))` is
   always known for a fixed-length `inout` parameter (one the callee never reassigns as a whole); for a resizable one
   (LG5) only `ensures` relate `len(a)` and `len(old(a))`. `old` is a proof object: no copy, no run-time check. Arrays still cannot be compared with `==`.
@@ -1255,7 +1265,7 @@ set_at(inout w, 0, 7);
   `trusted rust fn` with `inout` is `type/foreign_signature`. Give the host an ordinary function that owns a
   `copy` of its input, calls the `inout` helpers on it and returns it.
 - **Not supported.** Elements as `inout` places,
-  `str`, collection types outside R-6e-7, or generic struct `inout` parameters (non-generic structs are R-6g-2), `old` of anything but an array `inout` parameter, mutable host entries other than `inout` arrays and R-6f-2.
+  `str`, collection types outside R-6e-7, or generic struct `inout` parameters (non-generic structs are R-6g-2), `old` of anything but a place chain (or its `len`) from an array or struct `inout` parameter, mutable host entries other than `inout` arrays and R-6f-2.
 - **New error codes:** `inout_syntax`, `inout_type`, `inout_argument`, `inout_alias`, `inout_context`, `old_context`,
   `old_argument`; reused: `immutable`, `array_alias`, `recursive_borrow`, `entry_signature`, `foreign_signature`,
   `reserved`, `refinement_assign`.

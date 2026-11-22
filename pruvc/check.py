@@ -251,9 +251,35 @@ def _walk(e):
         yield from _walk(k)
 
 
+def invariant_base(name, ty, path, line, col, file, guards=None):
+    """LG23: the value reached from the variable `name` of type ty through path = ((label, type, kind, extra), ...);
+    the guard of each Option / Result / enum step (is_some, is_ok, is_variant) is appended to guards"""
+    def mk(n):
+        n.file = file
+        return n
+    base, cur = mk(Var(line, col, name, ty)), ty
+    for label, sty, kind, extra in path:
+        if kind == "field":
+            nxt = FieldAccess(line, col, base, extra, sty)
+        elif kind in ("some", "ok"):
+            if guards is not None:
+                guards.append(mk(Call(line, col, "is_" + kind, [base], BOOL)))
+            nxt = Call(line, col, kind + "_val", [base], sty)
+        else:
+            if guards is not None:
+                g = IsVariant(line, col, base, extra[0], extra[1], BOOL)
+                g.enum_ty = cur
+                guards.append(mk(g))
+            nxt = VariantField(line, col, base, extra[0], extra[1], extra[2], sty)
+            nxt.enum_ty = cur
+        base, cur = mk(nxt), sty
+    return base
+
+
 def invariant_clause(expr, ty, name, metadata, path=()):
-    """Bind free field names in a copy of an already typed struct clause. path = ((field, field type), ...) is the
-    chain of struct fields from the named value to the struct that owns the clause (G-DB31-3)."""
+    """Bind free field names in a copy of an already typed struct clause. path = ((label, type, kind, extra), ...) is
+    the chain of steps (struct fields, Option / Result payloads, enum variant fields) from the named value to the
+    struct that owns the clause (G-DB31-3, LG23); a guarded step wraps the clause in `!guard || ...`."""
     expr = copy.deepcopy(expr)
 
     def bind(e, bound):
@@ -261,11 +287,7 @@ def invariant_clause(expr, ty, name, metadata, path=()):
             if e.name in bound:
                 e.name = bound[e.name]
             else:
-                base = Var(e.line, e.col, name, ty)
-                base.file = e.file
-                for fname, fty in path:
-                    base = FieldAccess(e.line, e.col, base, fname, fty)
-                    base.file = e.file
+                base = invariant_base(name, ty, path, e.line, e.col, e.file)
                 e.__class__ = FieldAccess
                 e.base, e.field = base, e.name
                 del e.name
@@ -284,6 +306,14 @@ def invariant_clause(expr, ty, name, metadata, path=()):
                 bind(child, bound)
 
     bind(expr, {})
+    guards = []
+    invariant_base(name, ty, path, expr.line, expr.col, getattr(expr, "file", None), guards)
+    for g in reversed(guards):
+        neg = Unary(expr.line, expr.col, "!", g, BOOL)
+        neg.file = g.file
+        wrapped = Binary(expr.line, expr.col, "||", neg, expr, BOOL)
+        wrapped.file = g.file
+        expr = wrapped
     expr.struct_invariant = metadata
     return expr
 
@@ -1230,42 +1260,66 @@ class Checker:
     def effective_invariants(s, ty, stack=()):
         """G-DB31-3: [(owner decl, clause, ((field, field type), ...))] of the struct type ty: its own clauses in
         declaration order, then those of each struct-typed field in declaration order (pre-order, no cycles)"""
-        d = s.decls.get(ty.name)
-        if ty.owner is not None or ty.args or not isinstance(d, StructDecl) or ty.name in stack:
+        if ty in stack:
             return []
-        out = [(d, clause, ()) for clause in d.invariants]
-        for fd in d.fields:
-            if not s.reaches_invariant(fd.type):
-                continue    # a field with no invariant below it is not walked (no path-wise revisit)
-            for owner, clause, path in s.effective_invariants(fd.type, stack + (ty.name,)):
-                out.append((owner, clause, ((fd.name, fd.type),) + path))
+        d = s.decls.get(ty.name)
+        out = []
+        if ty.owner is None and not ty.args and isinstance(d, StructDecl):
+            out = [(d, clause, ()) for clause in d.invariants]
+        for step in s.invariant_steps(ty):
+            if not s.reaches_invariant(step[1]):
+                continue    # a position with no invariant below it is not walked (no path-wise revisit)
+            for owner, clause, path in s.effective_invariants(step[1], stack + (ty,)):
+                out.append((owner, clause, (step,) + path))
         return out
 
-    def reaches_invariant(s, ty):
-        """whether a plain struct with an invariant is reachable from ty through plain struct fields (memoized)"""
+    def invariant_steps(s, ty):
+        """LG23: the positions below ty that can hold an invariant struct, in order: (label, type, kind, extra) with
+        kind field (struct or generic struct instance field), some (Option payload), ok (Result<U, E> Ok payload) or
+        variant (field of a non-generic enum variant)"""
+        if ty.owner is not None:
+            return []
         d = s.decls.get(ty.name)
-        if ty.owner is not None or ty.args or not isinstance(d, StructDecl):
-            return False
+        if isinstance(d, StructDecl):
+            if len(ty.args) != len(d.tparams):
+                return []
+            # d.fields, not fields_of: check_entries runs before the type table exists
+            m = bind_args(decl_owner(ty.name), len(d.tparams), ty.args)
+            return [(fd.name, substitute(fd.type, m), "field", fd.name) for fd in d.fields]
+        if isinstance(d, EnumDecl):
+            if ty.args or d.tparams:
+                return []
+            return [("%s.%s" % (v.name, fd.name), fd.type, "variant", (ty.name, v.name, fd.name))
+                    for v in d.variants for fd in v.fields]
+        if ty.name == "option" and len(ty.args) == 1:
+            return [("some", ty.args[0], "some", None)]
+        if ty.name == "result" and len(ty.args) == 2:
+            return [("ok", ty.args[0], "ok", None)]
+        return []
+
+    def reaches_invariant(s, ty):
+        """whether a plain struct with an invariant is reachable from ty through the invariant_steps (memoized)"""
         memo = s.__dict__.setdefault("_reach_inv", {})
-        if ty.name not in memo:
-            seen, todo, found = {ty.name}, [d], False
+        if ty not in memo:
+            seen, todo, found = {ty}, [ty], False
             while todo and not found:
                 cur = todo.pop()
-                found = bool(cur.invariants)
-                for fd in cur.fields:
-                    fdd = s.decls.get(fd.type.name)
-                    if (fd.type.owner is None and not fd.type.args and isinstance(fdd, StructDecl)
-                            and fd.type.name not in seen):
-                        seen.add(fd.type.name)
-                        todo.append(fdd)
-            memo[ty.name] = found
-        return memo[ty.name]
+                d = s.decls.get(cur.name)
+                found = cur.owner is None and not cur.args and isinstance(d, StructDecl) and bool(d.invariants)
+                for step in s.invariant_steps(cur):
+                    if step[1] not in seen:
+                        seen.add(step[1])
+                        todo.append(step[1])
+            memo[ty] = found
+        return memo[ty]
 
     def invariant_struct(s, ty):
+        if not s.reaches_invariant(ty):
+            return None
         d = s.decls.get(ty.name)
-        if ty.owner is None and not ty.args and isinstance(d, StructDecl) and s.reaches_invariant(ty):
+        if ty.owner is None and not ty.args and isinstance(d, StructDecl) and d.invariants:
             return d
-        return None
+        return s.effective_invariants(ty)[0][0]
 
     def check_struct_invariants(s):
         decls = [d for d in s.prog.types if isinstance(d, StructDecl) and d.invariants]
@@ -1348,7 +1402,7 @@ class Checker:
                 terr(f, "invariant_decl", "parameter result of type %s cannot be used: %s has an invariant" %
                      (d.name, d.name))
             for owner, clause, path in s.effective_invariants(p.type):
-                tag = (owner.name, clause.invariant_line, ".".join([p.name] + [x for x, _ in path]))
+                tag = (owner.name, clause.invariant_line, ".".join([p.name] + [x[0] for x in path]))
                 r = invariant_clause(clause, p.type, p.name, tag, path)
                 requires.append(r)
                 if p.mode == "inout":
@@ -1356,7 +1410,7 @@ class Checker:
         d = s.invariant_struct(f.ret)
         if d is not None:
             for owner, clause, path in s.effective_invariants(f.ret):
-                tag = (owner.name, clause.invariant_line, ".".join(["result"] + [x for x, _ in path]))
+                tag = (owner.name, clause.invariant_line, ".".join(["result"] + [x[0] for x in path]))
                 ensures.append(invariant_clause(clause, f.ret, "result", tag, path))
         if requires:
             f.inv_requires = requires
@@ -3224,32 +3278,61 @@ class Checker:
             terr(e, "old_argument", "old takes exactly 1 argument, got %d" % len(a),
                  "write old(a) with the name of an inout parameter of this function")
         arg = a[0]
-        root, path = field_place(arg)
+        # LG23 (G-LG22-2): old(len(P)) for a place chain P is lowered to len(old(root)...)
+        len_op = (isinstance(arg, Call) and arg.name == "len" and len(arg.args) == 1
+                  and getattr(arg, "targs", None) is None)
+        place = arg.args[0] if len_op else arg
+        steps, root = [], place
+        while isinstance(root, (FieldAccess, Index)):
+            steps.append(root)
+            root = root.base if isinstance(root, FieldAccess) else root.array
         ok = isinstance(root, Var) and root.name in scope and scope[root.name][2] == "inout"
         if ok:
             rty = scope[root.name][0]
-            ok = is_nongeneric_struct(rty, s.decls) or (is_array(rty) and not path)
+            # a field step right on an array root is not a place (as pruvc-rs)
+            ok = is_nongeneric_struct(rty, s.decls) or (
+                is_array(rty) and not (steps and isinstance(steps[-1], FieldAccess)))
         if not ok:
             terr(e, "old_argument", "the operand of old must be the name of an inout parameter of this function",
                  "write old(a) where `inout a: [..]` is a parameter of the enclosing function")
+        inouts = {p.name for p in s.f.params if p.mode == "inout"}
+        for st in steps:
+            if isinstance(st, Index) and any(
+                    isinstance(x, (Var, Move)) and x.name in inouts or isinstance(x, Call) and x.name == "old"
+                    for x in _walk(st.index)):
+                terr(e, "old_argument", "the index of an old operand cannot read an inout parameter; "
+                     "write old(a)[old(b)[0]] explicitly")
         root.ty = rty
         old = {"param": root.name, "index": [p.name for p in s.f.params].index(root.name)}
-        if not path:
+        if not steps and not len_op:
             e.old = old
             return rty
         # G-DB31-2: old(x.f1...fn) is lowered to the field chain old(x).f1...fn
         # the field nodes keep their source positions; the innermost base becomes old(x) at the position of old,
-        # and the chain is typed as an ordinary field read (as pruvc-rs does)
+        # and the chain is typed as an ordinary read (as pruvc-rs does)
         inner = Call(e.line, e.col, "old", [root], rty)
         inner.file = e.file
-        node = arg
-        while isinstance(node.base, FieldAccess):
-            node = node.base
-        node.base = inner
-        cur = s.expr(arg, scope, True)
+        if steps:
+            if isinstance(steps[-1], FieldAccess):
+                steps[-1].base = inner
+            else:
+                steps[-1].array = inner
+        else:
+            place = inner
+            if len_op:
+                arg.args[0] = inner
+        cur = s.expr(place, scope, True)
+        if len_op:
+            if not is_array(cur):
+                terr(e, "old_argument", "the operand of old must be the name of an inout parameter of this function",
+                     "write old(a) where `inout a: [..]` is a parameter of the enclosing function")
+            cur = s.expr(arg, scope, True)
+            node = arg
+        else:
+            node = place
         # the outermost node replaces this Call in place (the caller stores the type on it)
-        e.__class__ = FieldAccess
-        e.__dict__ = vars(arg).copy()
+        e.__class__ = node.__class__
+        e.__dict__ = vars(node).copy()
         return cur
 
     # ---- P06: expanding user functions in contracts (docs/L3_RESTRUCTURE_SPEC.md appendix P06) ----

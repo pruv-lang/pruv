@@ -5527,7 +5527,7 @@ impl<'a> FnGen<'a> {
                     let xt = g_arg(&oty).to_string();
                     // LG18 (G-LG15-2): ok_val also of a user struct / enum or a new Option / Result T that is not
                     // extended (its contract mirror comes from to_c); an extended T cannot be a Result payload (type_argument)
-                    let okt = xt == "i64" || xt == "bool" || is_agg(&xt) && !self.is_ext(&xt);
+                    let okt = matches!(xt.as_str(), "i64" | "bool" | "option" | "result") || is_agg(&xt) && !self.is_ext(&xt);
                     if !matches!(n, "is_ok" | "ok_val" | "err_val") || (n == "ok_val" && !okt) {
                         return Err(g9_diag_err(x.line, x.col, "a Result<_, String> operand"));
                     }
@@ -5542,6 +5542,10 @@ impl<'a> FnGen<'a> {
                         self.guard(&tag, und("ok_val of Err".to_string()), false)?;
                         let vp = g9_gep(self, &ot, &p, 1)?;
                         let v = self.op(format!("load {}, ptr {}", lty(&xt), vp))?;
+                        if vkind(&xt) == Kind::Opt {
+                            let xv = self.unpack(&v, &xt, false)?;
+                            return self.to_c(&xv, &xt);
+                        }
                         let mut xv = V::new(vkind(&xt), v);
                         xv.ty = Some(xt.clone());
                         return self.to_c(&xv, &xt);

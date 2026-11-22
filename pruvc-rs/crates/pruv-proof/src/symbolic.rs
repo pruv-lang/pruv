@@ -12,6 +12,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Instant;
 
+use pruv_core::check::InvariantStep;
 use pruv_core::ast::{self as ast, Expr, Stmt};
 use pruv_core::diagnostic::PruvError;
 use pruv_core::gtype::{self, GType, Mapping};
@@ -882,7 +883,7 @@ pub struct FnVerifier<'a> {
     pub(crate) kmemo: HashMap<u32, (String, Vec<String>)>,
     /// LG16 (G-DB26-1): struct name -> (field names, annotated invariant clauses) of every struct with an invariant.
     /// Plain struct declarations for effective invariant clauses and entry snapshots.
-    invs: HashMap<String, &'a ast::StructDecl>,
+    inv_decls: HashMap<String, &'a ast::TypeDecl>,
 }
 
 /// LG16: one synthesized struct-invariant clause of a function contract (verifier only).
@@ -898,23 +899,60 @@ pub(crate) struct InvClause {
     pub inout: bool,
 }
 
+fn inv_place(base: &str, base_ty: &str, path: &[InvariantStep], line: i64, col: i64,
+    mut guards: Option<&mut Vec<Expr>>,
+) -> Expr {
+    let mut place = Expr::Var(ast::Var {
+        line, col, name: base.to_string(), ty: Some(base_ty.to_string()),
+    });
+    let call = |name: &str, value, ty: String| Expr::Call(ast::Call {
+        line, col, name: name.to_string(), args: vec![value], ty: Some(ty),
+        targs: None, inst: None, old: None, opaque_c: false,
+    });
+    for step in path {
+        place = match step {
+            InvariantStep::Field(field, ty) => Expr::FieldAccess(ast::FieldAccess {
+                line, col, base: Box::new(place), field: field.clone(), ty: Some(ty.to_key()),
+            }),
+            InvariantStep::Some(ty) | InvariantStep::Ok(ty) => {
+                let (test, get) = if matches!(step, InvariantStep::Some(_)) {
+                    ("is_some", "some_val")
+                } else {
+                    ("is_ok", "ok_val")
+                };
+                if let Some(guards) = &mut guards {
+                    guards.push(call(test, place.clone(), "bool".into()));
+                }
+                call(get, place, ty.to_key())
+            }
+            InvariantStep::VariantField(enum_name, variant, field, ty) => {
+                let enum_ty = Some(GType::from_key(enum_name));
+                if let Some(guards) = &mut guards {
+                    guards.push(Expr::IsVariant(ast::IsVariant {
+                        line, col, value: Box::new(place.clone()), enum_name: enum_name.clone(),
+                        variant: variant.clone(), ty: Some("bool".into()), enum_ty: enum_ty.clone(),
+                    }));
+                }
+                Expr::VariantField(ast::VariantField {
+                    line, col, value: Box::new(place), enum_name: enum_name.clone(),
+                    variant: variant.clone(), field: field.clone(), ty: Some(ty.to_key()), enum_ty,
+                })
+            }
+        };
+    }
+    place
+}
+
 /// LG16: rewrite the bare field names of a struct invariant clause to `base.field` (a quantifier variable of the same
 /// name shadows the field inside its body and triggers).
-fn inv_rewrite(e: &mut Expr, fields: &[String], base: &str, base_ty: &str, path: &[&ast::FieldDecl], bound: &mut Vec<(String, String)>) {
+fn inv_rewrite(e: &mut Expr, fields: &[String], base: &str, base_ty: &str, path: &[InvariantStep], bound: &mut Vec<(String, String)>) {
     if let Expr::Var(v) = &mut *e {
         if let Some((_, to)) = bound.iter().rev().find(|(b, _)| *b == v.name) {
             v.name = to.clone();
             return;
         }
         if fields.iter().any(|f| *f == v.name) {
-            let mut place = Expr::Var(ast::Var {
-                line: v.line, col: v.col, name: base.to_string(), ty: Some(base_ty.to_string()),
-            });
-            for fd in path {
-                place = Expr::FieldAccess(ast::FieldAccess {
-                    line: v.line, col: v.col, base: Box::new(place), field: fd.name.clone(), ty: Some(fd.ty.clone()),
-                });
-            }
+            let place = inv_place(base, base_ty, path, v.line, v.col, None);
             let fa = Expr::FieldAccess(ast::FieldAccess {
                 line: v.line,
                 col: v.col,
@@ -1111,7 +1149,7 @@ impl<'a> FnVerifier<'a> {
             snap: Env::default(),
             iter_places: Vec::new(),
             kmemo: HashMap::new(),
-            invs: HashMap::new(),
+            inv_decls: HashMap::new(),
         }
     }
 
@@ -1120,18 +1158,41 @@ impl<'a> FnVerifier<'a> {
     /// result when the return type is exactly S). Parameters in order. Empty when no struct has an invariant.
     pub(crate) fn inv_clauses(&self, f: &ast::Function, ensures: bool) -> Vec<InvClause> {
         let mut out = Vec::new();
-        if self.invs.is_empty() {
-            return out;
-        }
         let add = |ty: &str, who: &str, inout: bool, out: &mut Vec<InvClause>| {
-            let lookup = |name: &str| self.invs.get(name).copied();
+            let lookup = |name: &str| self.inv_decls.get(name).copied();
             for (s, path) in pruv_core::check::effective_invariant_structs(&GType::from_key(ty), &lookup) {
                 let fields: Vec<_> = s.fields.iter().map(|fd| fd.name.clone()).collect();
-                let label = std::iter::once(who).chain(path.iter().map(|fd| fd.name.as_str()))
-                    .collect::<Vec<_>>().join(".");
+                let mut label = who.to_string();
+                for step in &path {
+                    label.push('.');
+                    match step {
+                        InvariantStep::Field(field, _) => label.push_str(field),
+                        InvariantStep::Some(_) => label.push_str("some"),
+                        InvariantStep::Ok(_) => label.push_str("ok"),
+                        InvariantStep::VariantField(_, variant, field, _) => {
+                            label.push_str(variant);
+                            label.push('.');
+                            label.push_str(field);
+                        }
+                    }
+                };
                 for (c, &line) in s.invariants.iter().zip(&s.invariant_lines) {
                     let mut expr = c.clone();
                     inv_rewrite(&mut expr, &fields, who, ty, &path, &mut Vec::new());
+                    if path.iter().any(|step| !matches!(step, InvariantStep::Field(..))) {
+                        let (line, col) = (c.line(), c.col());
+                        let mut guards = Vec::new();
+                        inv_place(who, ty, &path, line, col, Some(&mut guards));
+                        for guard in guards.into_iter().rev() {
+                            let negated = Expr::Unary(ast::Unary {
+                                line, col, op: "!".into(), operand: Box::new(guard), ty: Some("bool".into()),
+                            });
+                            expr = Expr::Binary(ast::Binary {
+                                line, col, op: "||".into(), left: Box::new(negated), right: Box::new(expr),
+                                ty: Some("bool".into()),
+                            });
+                        }
+                    }
                     out.push(InvClause { expr, sname: s.name.clone(), line, who: label.clone(), inout });
                 }
             }
@@ -1189,13 +1250,8 @@ impl<'a> FnVerifier<'a> {
         }
         v.resize_params = pruv_core::check::resize_params(prog);
         v.struct_len_changes = struct_len_changes(prog, &v.resize_params);
-        // LG16: struct invariants (proof-only)
         for d in &prog.types {
-            if let ast::TypeDecl::Struct(s) = d {
-                if s.tparams.is_empty() {
-                    v.invs.insert(s.name.clone(), s);
-                }
-            }
+            v.inv_decls.insert(d.name().to_string(), d);
         }
         // G9 A1: function SCCs (Program.g9)
         if let Some(meta) = &prog.g9 {
@@ -5242,7 +5298,7 @@ impl<'a> FnVerifier<'a> {
         self.snap = Env(f
             .params
             .iter()
-            .filter(|p| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || self.invs.contains_key(&p.ty)))
+            .filter(|p| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || matches!(self.inv_decls.get(&p.ty), Some(ast::TypeDecl::Struct(s)) if s.tparams.is_empty())))
             .map(|p| (p.name.clone(), env.get(&p.name).clone()))
             .collect());
         let mut st = State::new(env.clone(), pc);
