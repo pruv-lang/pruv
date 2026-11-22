@@ -2003,9 +2003,6 @@ impl<'a> FnVerifier<'a> {
 
     fn assume_str_utf8(&self, st: &mut State, g: &[Ast], ty: &Ty, value: &Val) {
         if let Some(valid) = self.str_utf8(ty, value) {
-            if st.obs.contains(&valid.id()) {
-                return; // LG28 (G-LG27-5): the unguarded W is already on this path
-            }
             // LG27: Keep the guard: a str read under a short-circuit guard is only valid on that path.
             let fact = if !self.qstack.is_empty() {
                 // A field or call result can depend on an enclosing quantifier's indices.
@@ -4692,11 +4689,8 @@ impl<'a> FnVerifier<'a> {
                 let dl = self.dom(&x.left, st, g, env, kind)?;
                 if matches!(x.op.as_str(), "&&" | "||" | "==>") {
                     let l = self.ev_ast(&x.left, st, g, false, env)?;
+                    let dr = self.dom(&x.right, st, g, env, kind)?;
                     let guard = if x.op == "||" { l.not() } else { l };
-                    // G-LG27-7: the right side is read under the short-circuit guard
-                    let mut gr = g.to_vec();
-                    gr.push(guard.clone());
-                    let dr = self.dom(&x.right, st, &gr, env, kind)?;
                     return Ok(conj(&self.z, vec![dl, imp(&guard, dr)]));
                 }
                 let dr = self.dom(&x.right, st, g, env, kind)?;
@@ -5510,7 +5504,6 @@ impl<'a> FnVerifier<'a> {
         let mut pc: Vec<Ast> = Vec::new();
         // P13o: the facts every value of the parameter types meets in a contract too
         let mut shape: Vec<Ast> = Vec::new();
-        let mut w_ids: Vec<u32> = Vec::new();
         for p in &f.params {
             let pty = Ty::from_name(&p.ty);
             let v = self.try_fresh(&p.name, &pty)?;
@@ -5541,8 +5534,6 @@ impl<'a> FnVerifier<'a> {
                 }
             }
             if let Some(valid) = self.str_utf8(&pty, &v) {
-                // LG28 (G-LG27-5): the entry W is in obs, so no read adds it again
-                w_ids.push(valid.id());
                 shape.push(valid.clone());
                 pc.push(valid);
             }
@@ -5558,7 +5549,6 @@ impl<'a> FnVerifier<'a> {
             .map(|p| (p.name.clone(), env.get(&p.name).clone()))
             .collect());
         let mut st = State::new(env.clone(), pc);
-        std::rc::Rc::make_mut(&mut st.obs).extend(w_ids);
         if let (true, Some(xa)) = (f.opaque, &f.x_auto) {
             // P13o (P13o.1 totality): the body is defined for every argument, proven once here, so a reveal equation
             // never stands on an undefined body. Contract arithmetic is unbounded, so a contract may apply F to a

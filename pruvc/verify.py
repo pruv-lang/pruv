@@ -1803,8 +1803,6 @@ class FnVerifier:
         LG27 (G-LG26-3): each fact is pushed once per path (deduped by z3 id in st.obs); the guard is kept"""
         if s.utf8_aware and isinstance(v, Arr):
             valid = s.model.utf8_valid(v)
-            if valid.get_id() in st.obs:    # LG28 (G-LG27-5): the unguarded W is already on this path
-                return v
             if s.qstack:    # a field or call result can depend on an enclosing quantifier's indices
                 fact = z3.ForAll(list(s.qstack), z3.Implies(z3.And(list(g)), valid))
             else:
@@ -2027,8 +2025,8 @@ class FnVerifier:
             dl = s.dom(e.left, st, g, env, kind)
             if e.op in ("&&", "||", "==>"):
                 l = s.ev(e.left, st, g, False, env)
+                dr = s.dom(e.right, st, g, env, kind)
                 guard = z3.Not(l) if e.op == "||" else l
-                dr = s.dom(e.right, st, list(g) + [guard], env, kind)    # G-LG27-7: the short-circuit guard
                 return _conj([dl, _imp(guard, dr)])
             parts = [dl, s.dom(e.right, st, g, env, kind)]
             if wo and e.op in ("/", "%"):
@@ -3653,7 +3651,6 @@ class FnVerifier:
     def run(s):
         f = s.f
         env, pc = {}, []
-        w_ids = set()
         shape = []      # P13o: the facts every value of the parameter types meets in a contract too
         for p in f.params:
             v = s.fresh(p.name, p.type)
@@ -3664,7 +3661,6 @@ class FnVerifier:
                 shape.extend(pc[-2:] if v.elem == U8 else pc[-1:])
                 if p.type == STR and s.utf8_aware:      # LG26 (R-6b-3, G-LG25-1)
                     pc.append(s.model.utf8_valid(v))
-                    w_ids.add(pc[-1].get_id())     # LG28 (G-LG27-5): the entry W is in obs, so no read adds it again
             elif isinstance(v, Map):    # G6 A1
                 pc.append(z3.And(v.n >= 0, v.n <= MAX_LEN))
                 shape.append(pc[-1])
@@ -3679,7 +3675,6 @@ class FnVerifier:
         s.snap = {p.name: env[p.name] for p in f.params if p.mode is not None and (
             is_array(p.type) or p.type.owner is None and not p.type.args and p.type.name in s.model.struct)}
         st = State(env, pc)
-        st.obs = frozenset(w_ids)
         if f.opaque and f.x_auto is not None:
             # P13o (P13o.1 totality): the body is defined for every argument, proven once here, so a reveal equation
             # never stands on an undefined body. Contract arithmetic is unbounded, so a contract may apply F to a
