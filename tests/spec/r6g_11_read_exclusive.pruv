@@ -1,0 +1,15 @@
+// spec: R-6g-11 reject
+// A buffer lent as `inout` to a borrowed result cannot even be read while the result is used.
+fn text_of(src: [u8], inout buf: [u8]) -> ref [u8] from(src, buf)
+  requires len(src) >= 1
+{
+  if src[0] == 0 { return subview(src, 0, 1); }
+  return subview(buf, 0, 0);
+}
+pub fn f(x: [u8]) -> i64 ! alloc requires len(x) >= 1 && len(x) <= 1000
+{
+  let mut buf: [u8] = alloc(0, 0);
+  let m: ref [u8] = text_of(x, inout buf);
+  let k: i64 = len(buf);
+  return len(m) + k;
+}

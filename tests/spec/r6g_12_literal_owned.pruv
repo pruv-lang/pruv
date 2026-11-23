@@ -1,0 +1,7 @@
+// spec: R-6g-12 reject
+// A string literal bound to an owned `str` local still allocates.
+pub fn f() -> i64
+{
+  let s: str = "abc";
+  return len(s);
+}

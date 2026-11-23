@@ -2356,8 +2356,10 @@ class FnVerifier:
             return mk_arr(av.a, m, "truncate", av.elem)
         if n == "resize":       # P05G: a grown to length m; k < len(a) keeps a[k], len(a) <= k < m is v
             av, m, v = args
-            s.prove(st, g, z3.And(av.n <= m, m <= MAX_LEN), e, "index_oob",
-                    "resize length len(%s) <= n <= 2^40" % av.name)
+            minimum = 0 if getattr(e, "resize_scratch", False) else av.n
+            bound = "0" if getattr(e, "resize_scratch", False) else "len(%s)" % av.name
+            s.prove(st, g, z3.And(minimum <= m, m <= MAX_LEN), e, "index_oob",
+                    "resize length %s <= n <= 2^40" % bound)
             if av.elem == U8:
                 s.prove(st, g, z3.And(v >= 0, v <= 255), e, "elem_range",
                         "u8 element range 0..=255 for the resize fill value")
@@ -2565,8 +2567,8 @@ class FnVerifier:
                 if w is not None:
                     s.assume(st, g, w)
             xa = getattr(f, "x_auto", None)
-            # P07: the callee's body is its contract expansion (no requires, so its code proof covers every
-            # argument): the result equals the template over the arguments. Evaluated before "result" is bound,
+            # P07: the result equals the template over the arguments. For read helpers of borrowing
+            # structs, the call's proved requires cover the template's domain. Evaluate before "result" is bound,
             # so a parameter named result keeps its argument value.
             if code and f.opaque:   # P13o: the result is the symbol; its body is known only where F is revealed
                 xv = s.opq(f, args, st, g)
@@ -2679,7 +2681,9 @@ class FnVerifier:
             if isinstance(pre, Arr) and (f.name, i) not in s.model.vec_resize_params:
                 fv = s.fresh(name, ty if ty.name == "vec" else arr_type(pre.elem))
                 nv = mk_arr(fv.a, pre.n, name, pre.elem)
-                if nv.elem == U8:
+                if ty == STR:
+                    s.assume_str(st, g, nv)
+                elif nv.elem == U8:
                     s.assume(st, g, u8_dom(nv))
             else:
                 nv = s.fresh(name, ty)

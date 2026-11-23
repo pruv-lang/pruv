@@ -403,6 +403,15 @@ Program.g9 = None          # checker metadata dict (see check.Checker.g9_meta), 
 
 # ---------- G5 A0: inout parameters ----------
 # Same convention: plain class attributes (absent by default), so every dump of a G5-free program is unchanged.
+Function.borrow_from = None  # contextual from clause, including an explicitly empty list
+Function.ref_result = False
+FieldDecl.ref = False
+StructDecl.borrowing = False
+Let.ref = False
+Program.borrow_site = None
+Expr.borrowed_view = False
+Expr.static_str = False
+
 Param.mode = None          # "inout" for `inout name: [..]` (None = ordinary read parameter)
 Param.mode_pos = None      # (line, col) of the `inout` token of the parameter
 Call.old = None            # set by the checker on a resolved builtin `old(a)`: {"param": name, "index": position}

@@ -170,7 +170,7 @@ fn walk_stmt(s: &Stmt, f: &mut dyn FnMut(Node<'_>)) {
     }
 }
 
-fn walk_expr(e: &Expr, f: &mut dyn FnMut(Node<'_>)) {
+pub(crate) fn walk_expr(e: &Expr, f: &mut dyn FnMut(Node<'_>)) {
     f(Node::Expr(e));
     match e {
         Expr::Move(_) | Expr::Spent(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StrLit(_) | Expr::Var(_) => {}

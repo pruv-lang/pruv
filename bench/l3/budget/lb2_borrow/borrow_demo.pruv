@@ -1,0 +1,93 @@
+// LB2 demo: a request line parsed into a struct that borrows its input, and a text reader whose result borrows
+// either the input (no escape) or a reused scratch buffer (escape removed), like hand_rpc.rs `text_of`.
+// borrow_hand.rs is the hand Rust twin; both print the same lines.
+
+struct Req { method: ref [u8], path: ref [u8], n: i64 }
+
+fn find(src: [u8], start: i64, end: i64, c: i64) -> i64
+  requires 0 <= start && start <= end && end <= len(src)
+  ensures start <= result && result <= end
+{
+  let mut i: i64 = start;
+  while i < end
+    invariant start <= i && i <= end
+    decreases end - i
+  {
+    if src[i] == c {
+      return i;
+    }
+    i = i + 1;
+  }
+  return i;
+}
+
+fn parse_req(src: [u8]) -> Req from(src)
+  ensures len(result.method) <= len(src) && len(result.path) <= len(src) && result.n == len(src)
+{
+  let a: i64 = find(src, 0, len(src), 32);
+  let mut s: i64 = a;
+  if a < len(src) {
+    s = a + 1;
+  }
+  let b: i64 = find(src, s, len(src), 32);
+  return Req { method: subview(src, 0, a), path: subview(src, s, b), n: len(src) };
+}
+
+fn text_of(src: [u8], lo: i64, hi: i64, inout buf: [u8]) -> ref [u8] from(src, buf) ! alloc
+  requires 0 <= lo && lo <= hi && hi <= len(src)
+  ensures len(result) <= hi - lo
+{
+  let k: i64 = find(src, lo, hi, 92);
+  if k == hi {
+    return subview(src, lo, hi);
+  }
+  let n: i64 = hi - lo;
+  buf = resize(buf, n, 0);
+  let mut i: i64 = lo;
+  let mut j: i64 = 0;
+  while i < hi
+    invariant lo <= i && i <= hi && 0 <= j && j <= i - lo && len(buf) == n
+    decreases hi - i
+  {
+    if src[i] != 92 {
+      buf[j] = src[i];
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  return subview(buf, 0, j);
+}
+
+fn sum(x: [u8]) -> i64 requires len(x) <= 1000000
+{
+  let mut t: i64 = 0;
+  let mut i: i64 = 0;
+  while i < len(x)
+    invariant 0 <= i && i <= len(x) && 0 <= t && t <= 255 * i
+    decreases len(x) - i
+  {
+    t = t + x[i];
+    i = i + 1;
+  }
+  return t;
+}
+
+fn main() -> () ! alloc, io {
+  // "GET /p\q/r 1"
+  let mut r: [u8] = alloc(12, 0);
+  r[0] = 71; r[1] = 69; r[2] = 84; r[3] = 32; r[4] = 47; r[5] = 112;
+  r[6] = 92; r[7] = 113; r[8] = 47; r[9] = 114; r[10] = 32; r[11] = 49;
+  let mut buf: [u8] = alloc(0, 0);
+  let q: Req = parse_req(r);
+  print(len(q.method));
+  print(len(q.path));
+  print(sum(q.method));
+  print(sum(q.path));
+  print(q.n);
+  let t1: ref [u8] = text_of(r, 4, 10, inout buf);
+  print(len(t1));
+  print(sum(t1));
+  let t2: ref [u8] = text_of(r, 0, 3, inout buf);
+  print(len(t2));
+  print(sum(t2));
+}

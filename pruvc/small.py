@@ -22,7 +22,7 @@ def _conjuncts(e):
 def declared_bound(f):
     """K of a top-level `len(result) <= K` conjunct (literal, 1..=64) of a non-generic, non-foreign `[i64]` or `[u8]`
     function"""
-    if f.tparams or f.foreign is not None or f.ret not in ELEM:
+    if f.tparams or f.foreign is not None or f.ref_result or f.ret not in ELEM:
         return None
     best = None
     for e in f.ensures:

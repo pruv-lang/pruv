@@ -380,9 +380,19 @@ pub fn emit_public_types_with(prog: &Program, tt: &TypeTable) -> String {
                     let body: Vec<String> = s
                         .fields
                         .iter()
-                        .map(|f| format!("{}{}: {}", pv, f.name, fty(&f.ty, &format!("{}.{}", s.name, f.name))))
+                        .map(|f| {
+                            let ty = if f.borrowed {
+                                format!("&'a {}", &rty(&f.ty, true)[1..])
+                            } else if tt.decl(&f.ty).is_some_and(crate::borrowed::borrowing_struct) {
+                                format!("{}<'a>", f.ty)
+                            } else {
+                                fty(&f.ty, &format!("{}.{}", s.name, f.name))
+                            };
+                            format!("{}{}: {}", pv, f.name, ty)
+                        })
                         .collect();
-                    out.push(format!("{}struct {} {{ {} }}", pv, s.name, body.join(", ")));
+                    let lifetime = if crate::borrowed::borrowing_struct(d) { "<'a>" } else { "" };
+                    out.push(format!("{}struct {}{} {{ {} }}", pv, s.name, lifetime, body.join(", ")));
                 } else {
                     out.push(format!("{}struct {} {{}}", pv, s.name));
                 }

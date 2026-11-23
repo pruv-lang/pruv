@@ -1,0 +1,1 @@
+{"gen_contains": ["fn body_of<'a>(d: &Doc<'a>) -> &'a [u8]", "fn g<'a>(src: &'a [u8]) -> &'a [u8]"], "gen_absent": ["to_vec()", ".clone()", "__pruv_lend"]}

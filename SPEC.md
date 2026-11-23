@@ -1435,6 +1435,76 @@ set_at(inout w, 0, 7);
     (len n)` with `n = hi - lo`), and panics.
   - Tests: [views](tests/runtime/lg25_str_view.pruv), `tests/must_reject/lg25_*_view_*.pruv`.
 
+## 6g3. Borrowed views and borrowing structs: `ref` (LB2)
+
+A borrowed view is a read-only `&[u8]` / `&str` that lives in a local, a function result or a struct field, as in
+hand Rust `struct Req<'a> { method: &'a [u8], .. }` or `fn text_of<'a>(src: &'a [u8], .., buf: &'a mut Vec<u8>)
+-> &'a [u8]`. Pruv does not write lifetimes. It tracks, for every borrowed value, the set of variables it may borrow
+(its provenance) and whether each is borrowed shared or exclusive, and checks the uses of those variables while the
+borrowed value is live.
+
+- R-6g-11 **Borrowed views.**
+  - *Types.* `ref [u8]` and `ref str` (`ref` is contextual, only in type position) are borrowed views. A
+    non-generic struct may have `ref` fields; it is then a borrowing struct (Rust `struct Doc<'a>`). A `ref` type or
+    a borrowing struct is allowed only as the type of an immutable `let`, a function result, a field of a borrowing
+    struct, and (borrowing struct only) a read parameter. Anywhere else (`let mut`, a parameter declared `ref`,
+    `inout`, `take`, `Vec`/`Option`/map/enum payload/generic argument, a generic function, a host entry or `par`
+    argument) is `type/borrow_signature`.
+  - *Results.* A function whose result is `ref T` or a borrowing struct writes `-> T from(p1, .., pn)` (`from` is
+    contextual), naming at least one parameter, each at most once; each `pi` is a `[u8]` / `str` parameter (read or `inout`) or a
+    borrowing-struct read parameter. A missing or bad `from` list is `type/borrow_signature`, and so is an `ensures`
+    that names an `inout` parameter of the `from` list (Rust cannot read the buffer after lending it to the result).
+  - *Making a borrow.* `subview(x, lo, hi)` bound to a `ref` local (G-DB63-1), returned from a `ref` function or
+    stored in a `ref` field; a call of a `ref` function; a field read of a borrowing struct; a struct literal with
+    `ref` fields; a `ref` local; a string literal for `ref str` (static, no provenance). A `[u8]` / `str` variable
+    in a `ref` position (field of a literal, `return` of a `ref` function) borrows it whole.
+  - *Provenance.* The provenance of a borrow is a set of root variables, each *shared* or *exclusive*. `subview` of
+    / whole borrow of `x`: `x`, shared (an `inout` parameter of the current function counts as a variable). A call:
+    for each argument at a `from` position, the provenance of that argument (a `ref` / borrowing local) or its root
+    variable, shared for a read argument and exclusive for an `inout` argument. A field read of a borrowing struct,
+    a copy of a `ref` local, a borrowing-struct field of a record (`d.child`): the provenance of the source. A view
+    of an owned `[u8]` / `str` field of a local record (`subview(d.scratch, ..)`): the record variable `d` only.
+    A struct literal: the union over its `ref` fields. The
+    argument at a `from` position must be a variable, field path, `subview` or `ref` value.
+  - *Live range.* A `ref` / borrowing local is live from the statement after its `let` through the last statement
+    of the same block that mentions it (a loop or `if` that mentions it anywhere counts whole).
+  - *Exclusivity.* In the live range of a borrow, a shared root may be read but not assigned, stored into (element
+    or field), passed `inout`, moved, or given to `resize`/`truncate`-assign, `vec_push` or `vec_clear`; an exclusive
+    root may not be used at all. A violation is `type/borrow_conflict`. This is the Rust rule (`&` / `&mut`), so
+    the generated Rust borrow-checks.
+  - *Escape.* The provenance of a returned borrow must be a subset of the `from` parameters; a local root is
+    `type/borrow_escape`. A borrowing-struct `from` parameter lends only what the struct borrows (Rust `&Doc<'a>`):
+    passing a borrowing local at that position gives the local's provenance, and a returned view of an owned field
+    of the parameter (`subview(d.scratch, ..)`) is `type/borrow_escape`. A `ref` value in an owned position (`let o: [u8] = m`, an owned field, an owned return) is
+    `type/array_alias`; `copy(m)` makes an owned array (and needs `alloc`). A store into a view is `type/immutable`.
+  - *Proof.* A view bound from `subview(x, lo, hi)` is proved and modelled as `copy(subview(x, lo, hi))` (R-6g-7,
+    R-6g-10: `len == hi - lo`, element `k` is `x[lo + k]`, the str boundary / UTF-8 obligations), with no copy at
+    run time. A call result is a fresh value constrained by the callee's `ensures`, and a field read is the field.
+    Exclusivity freezes every root while a borrow is live, so these facts stay true.
+  - *Code.* Rust only. A borrowing struct is `struct Doc<'a>` with `&'a [u8]` / `&'a str` fields; a `ref` function
+    is `fn f<'a>(..)` (body and wrapper) whose `from` parameters are `&'a [u8]`, `&'a str`, `&'a mut
+    ::std::vec::Vec<u8>` (resizable `inout`), `&'a mut [u8]` (fixed `inout`) or `&Doc<'a>`, and whose result is
+    `&'a [u8]`, `&'a str` or `Doc<'a>`. A `ref` local is `&[u8]` / `&str`; a view is the same unchecked (verified) or
+    checked (`--no-verify`) slice expression as a `subview` argument. No `to_vec` or `clone`. The LLVM backend rejects
+    a program with a `ref` type or a borrowing struct with `codegen/unsupported_type` (LB3).
+  - Tests: [document borrowing its input](tests/spec/r6g_11_doc_input.pruv),
+    [result from either of two sources](tests/spec/r6g_11_two_sources.pruv),
+    [subview bound to a local](tests/spec/r6g_11_local_view.pruv), [copy then reuse](tests/spec/r6g_11_copy_owned.pruv),
+    [struct forwarded](tests/spec/r6g_11_struct_forward.pruv),
+    [owned field of a local record](tests/spec/r6g_11_owned_field_local.pruv);
+    rejects [local escape](tests/spec/r6g_11_escape_local.pruv), [struct escape](tests/spec/r6g_11_escape_struct.pruv),
+    [owned field escape](tests/spec/r6g_11_escape_owned_field.pruv),
+    [buffer reuse](tests/spec/r6g_11_reuse_buf.pruv), [exclusive read](tests/spec/r6g_11_read_exclusive.pruv),
+    [owner grows](tests/spec/r6g_11_realloc_owner.pruv), [owner store](tests/spec/r6g_11_store_owner.pruv),
+    [owner moved](tests/spec/r6g_11_move_owner.pruv), [loop](tests/spec/r6g_11_loop_conflict.pruv),
+    [no from](tests/spec/r6g_11_no_from.pruv), [duplicate from](tests/spec/r6g_11_from_duplicate.pruv), [ref parameter](tests/spec/r6g_11_ref_param.pruv),
+    [let mut](tests/spec/r6g_11_mut_ref.pruv), [store into a view](tests/spec/r6g_11_store_view.pruv),
+    [owned alias](tests/spec/r6g_11_own_alias.pruv), [LLVM](tests/spec/r6g_11_llvm.pruv).
+- R-6g-12 **String literal arguments (G-DB63-2).** A string literal that is the direct argument of a non-`inout`,
+  non-`take` `str` parameter of a Pruv function is a borrowed static string: it needs no `! alloc` (Rust passes
+  `"abc"`, LLVM the read-only global). A literal in an owned position still allocates.
+  Tests: [literal argument](tests/spec/r6g_12_literal_arg.pruv), [owned literal](tests/spec/r6g_12_literal_owned.pruv).
+
 ## 6h. Files (G10)
 
 `fs` is the file-system effect, independent of `io` (stdout) and `alloc`. Direct and transitive calls
@@ -2326,6 +2396,9 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `pkg/version_unsatisfied` | pkg | a package version does not satisfy a requirement |
 | `type/arity` | type | a call or constructor with the wrong number of arguments |
 | `type/array_alias` | type | a borrowed array or str is stored or returned without `copy` |
+| `type/borrow_conflict` | type | a root of a live borrow is written, moved or lent `inout` (exclusive root: used) (R-6g-11) |
+| `type/borrow_escape` | type | a returned borrow may borrow a local, not only its `from` parameters (R-6g-11) |
+| `type/borrow_signature` | type | a `ref` type or borrowing struct outside its allowed positions, or a bad `from` list (R-6g-11) |
 | `type/async_unconsumed` | type | a temporary `Loop` is never consumed |
 | `type/bad_trigger` | type | a quantifier trigger on an aggregate, not an array read, or not mentioning the binder (R-6-3) |
 | `type/call_in_contract` | type | a contract calls a function that cannot be expanded there |

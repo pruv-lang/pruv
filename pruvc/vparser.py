@@ -8,7 +8,7 @@ KEYWORDS = {"fn", "let", "mut", "if", "else", "while", "return", "match", "true"
             "in", "Some", "None", "Ok", "Err", "struct", "enum", "is_variant", "variant_field", "async"}
 # Rust keywords that are not Pruv keywords: user names go into the generated Rust unchanged.
 RUST_KEYWORDS = {"as", "async", "await", "break", "const", "continue", "crate", "dyn", "enum", "extern", "for",
-                 "impl", "loop", "mod", "move", "pub", "ref", "self", "Self", "static", "struct", "super",
+                 "impl", "loop", "mod", "move", "pub", "self", "Self", "static", "struct", "super",
                  "trait", "type", "unsafe", "use", "where", "abstract", "become", "box", "do", "final", "gen",
                  "macro", "override", "priv", "try", "typeof", "unsized", "virtual", "yield", "union", "_"}
 TOKEN_RE = re.compile(r"""
@@ -224,6 +224,10 @@ class Parser:
     def next(s):
         t = s.t[s.i]
         s.i += 1
+        if t.kind == "id" and t.val == "ref":
+            # Rust reserves this spelling. The type parser recognizes the
+            # contextual marker before consuming it.
+            t.val = "pruv_ref"
         return t
 
     def quant_triggers(s):
@@ -658,10 +662,18 @@ class Parser:
     def type_r(s, allow):
         """-> (Type, Refinement or None). `allow`: refinement annotations are legal here."""
         t = s.peek()
+        if s.peek().val == "ref" and (s.at("[", 1) or s.peek(1).val == "str"):
+            s.next()
+            base, refinement = s.type_r(allow)
+            return Type("ref", (base,)), refinement
         if s.at("("):
             s.next(); s.expect(")"); return UNIT, None
         if s.at("["):
             s.next()
+            if s.peek().val == "ref" and (s.at("[", 1) or s.peek(1).val == "str"):
+                elem = s.type_()
+                s.expect("]")
+                return mk_array(elem), None
             e = s.type_path() if s.at("crate") else s.ident()   # G4: a qualified element type
             if e.val in ("i64", "u8", "bool"):
                 elem = {"i64": I64, "u8": U8, "bool": BOOL}[e.val]
@@ -761,6 +773,16 @@ class Parser:
             s.cost_syntax(s.peek())
         s.expect("->")
         ret, ret_refine = s.type_r(True)
+        borrow_from = None
+        if s.peek().val == "from":
+            s.next()
+            s.expect("(")
+            borrow_from = []
+            while not s.at(")"):
+                borrow_from.append(s.ident().val)
+                if not s.at(")"):
+                    s.expect(",")
+            s.expect(")")
         effects = []
         if s.at("!"):
             s.next()
@@ -803,6 +825,8 @@ class Parser:
         s.scope = {}
         f = Function(kw.line, kw.col, name, params, ret, effects, req, ens, body, ret_refine)
         f.tparams = tparams
+        if borrow_from is not None:
+            f.borrow_from = borrow_from
         if info is not None:
             f.foreign = info
         if cost is not None:

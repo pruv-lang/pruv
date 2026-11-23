@@ -1,0 +1,7 @@
+// spec: R-6g-11 reject
+// A borrowed local is immutable: no `let mut`.
+pub fn f(x: [u8]) -> i64 requires len(x) >= 2
+{
+  let mut m: ref [u8] = subview(x, 0, 1);
+  return len(m);
+}

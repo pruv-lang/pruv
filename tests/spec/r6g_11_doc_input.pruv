@@ -1,0 +1,17 @@
+// spec: R-6g-11 accept
+// A document that borrows its input: `struct Doc<'a> { src: &'a [u8], .. }`, built without a copy.
+struct Doc { src: ref [u8], n: i64 }
+fn parse(src: [u8]) -> Doc from(src)
+  ensures len(result.src) == len(src) && result.n == len(src)
+{
+  return Doc { src: src, n: len(src) };
+}
+fn first(d: Doc) -> i64 requires len(d.src) >= 1 { return d.src[0]; }
+fn body_of(d: Doc) -> ref [u8] from(d) ensures len(result) == len(d.src) { return d.src; }
+pub fn f(x: [u8]) -> i64 requires len(x) >= 1 && len(x) <= 1000
+{
+  let d: Doc = parse(x);
+  let s: ref [u8] = body_of(d);
+  let k: i64 = x[0];
+  return first(d) + len(s) + k + d.n;
+}

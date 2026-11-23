@@ -86,7 +86,7 @@ from collections import namedtuple
 from vast import *
 from typeinfo import (TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection,
                       dependencies, is_owned_field_type, is_nested_collection_field, is_string_record_map,
-                      field_place, is_vec_slice_arg, is_owned_result, is_owned_value)
+                      field_place, is_vec_slice_arg, is_owned_result, is_owned_value, borrowing_struct, borrowing_copy)
 from foreign import CATALOG
 from inline_policy import PIN_INLINE, PIN_ALWAYS, inline_policy
 from check import BIT_BUILTINS, array_resize_params, array_resize_args, same_place
@@ -1306,6 +1306,7 @@ def emit_public_types(prog, order=None):
     ext, boxed = g9_sets(prog)
     explicit = bool(getattr(prog, "explicit", False))   # G4 A2: only a source-`pub` type is a `pub` Rust item
     out = []
+    types = {d.name: d for d in prog.types}
     for d in (order if order is not None else make_type_table(prog).order):
         pv = "pub " if (not explicit or d.pub) else ""
         out.append("#[allow(dead_code, non_camel_case_types, non_snake_case%s)]" % (", private_interfaces" if explicit else ""))
@@ -1315,12 +1316,16 @@ def emit_public_types(prog, order=None):
             out.append("#[derive(Clone, Copy, Debug, PartialEq, Eq)]")
 
         def fty(f, label):
-            r = rty(f.type)
+            if f.ref:
+                return "&'a " + rty(f.type, True)[1:]
+            decl = types.get(f.type.name)
+            r = rty(f.type) + ("<'a>" if borrowing_struct(decl) else "")
             return "::std::boxed::Box<%s>" % r if label in boxed else r
         if isinstance(d, StructDecl):
+            name = d.name + ("<'a>" if d.borrowing else "")
             if d.fields:
                 body = ", ".join("%s%s: %s" % (pv, f.name, fty(f, "%s.%s" % (d.name, f.name))) for f in d.fields)
-                out.append("%sstruct %s { %s }" % (pv, d.name, body))
+                out.append("%sstruct %s { %s }" % (pv, name, body))
             else:
                 out.append("%sstruct %s {}" % (pv, d.name))
         else:
@@ -1592,6 +1597,7 @@ class Gen:
         s.trust = trust_callers
         s.out = []
         s.cost = False
+        s.borrow_from = None
         s.cost_used = not verified and any(f.cost is not None for f in prog.functions)
         s.has_req = {f.name for f in prog.functions if f.requires and f.foreign is None}
         from foreign import _par_nodes
@@ -1629,7 +1635,7 @@ class Gen:
         s.proven_items = []
         s.raw_items = []    # (name, params text, return text, parameter names) of each host entry's public item, in emission order
         s.checks_needed = s.explicit and any(
-            f.requires and f.foreign is None and (not verified or (f.host_entry and not trust_callers))
+            f.requires and f.foreign is None and (not verified or (f.host_entry or f.borrow_from) and not trust_callers)
             for f in prog.functions)
         s.cp = None    # set during requires entry checks: user-type params already converted
         s.bound = []   # quantifier variables in scope (contract evaluation)
@@ -1895,6 +1901,8 @@ class Gen:
 
     def fn(s, f):
         s.function_name = f.name
+        s.borrow_from = f.borrow_from
+        name = f.name
         s.function_pkg = getattr(f, "pkg", None)   # G4b-2: package of the function being emitted (trust report)
         if f.foreign is not None:
             return   # G6: a trusted rust fn has no body; its boundary helper is emitted on first use
@@ -1909,8 +1917,18 @@ class Gen:
         s.borrowed = {p.name for p in f.params if is_owned_value(p.type) and not p.take}
         s.refs = {p.name for p in f.params if s.is_ext(p.type) and not p.take}
         param_types = [
-            "&mut " + (rty(p.type, True)[1:] if is_array(p.type) and p.name not in s.resizable else rty(p.type))
+            ("&mut str" if p.type == STR else
+             "&mut " + (rty(p.type, True)[1:] if is_array(p.type) and p.name not in s.resizable else rty(p.type)))
             if p.mode == "inout" else s.rt(p.type, not p.take, p) for p in f.params]
+        lifetime = "<'a>" if f.borrow_from else ""
+        if f.borrow_from:
+            param_types = [
+                ("&" if borrowing_struct(s.table.decls.get(p.type.name)) else "&'a ") + ty[1:]
+                + ("<'a>" if borrowing_struct(s.table.decls.get(p.type.name)) else "")
+                if p.name in f.borrow_from else ty
+                for p, ty in zip(f.params, param_types)]
+        s.ref_result = f.ref_result
+        s.borrowed_roots = getattr(f, "borrowed_roots", ())
         from foreign_shim import _walk
         moved = set()   # LG9 (G-LG8-3): a take record parameter a consuming field move empties is a `mut` binding
 
@@ -1922,7 +1940,11 @@ class Gen:
         ps = ", ".join("%s%s: %s" % ("mut " if p.take and is_user_type(p.type) and p.name in moved else "", p.name, ty)
                        for p, ty in zip(f.params, param_types))
         ret = "" if f.ret == UNIT else " -> " + s.rt(f.ret, site=f)
-        body_name = f.name + "__pruv_body" if f.name in s.body_named else f.name
+        if f.ref_result:
+            ret = " -> &'a " + rty(f.ret, True)[1:]
+        elif f.borrow_from:
+            ret += lifetime
+        body_name = name + "__pruv_body" if f.name in s.body_named else name
         if s.explicit:
             vis = s.pub_vis() if (f.host_entry and f.name not in s.body_named) else ""
             if vis and s.raw:
@@ -1940,7 +1962,7 @@ class Gen:
             s.emit(0, PIN_ALWAYS)
         else:
             s.emit_inline(f)
-        s.emit(0, "%sfn %s(%s)%s {" % (vis, body_name, ps, ret))
+        s.emit(0, "%sfn %s%s(%s)%s {" % (vis, body_name, lifetime, ps, ret))
         s.cost = not s.verified and f.cost is not None
         if s.cost:
             args = ["&" + p.name if p.name in s.take_arrays or p.name in s.take_ext
@@ -1981,8 +2003,8 @@ class Gen:
                 if not s.verified and s.trust and not s.inouts and f.name in s.par_callees:
                     s.entry(f, ps, param_types, ret, body_name, f.name + "__pruv_par_chk", False, True)
             elif s.verified:
-                if f.host_entry:     # the checked host wrapper; no other function has a wrapper in verified mode
-                    s.entry(f, ps, param_types, ret, body_name, f.name, True, not s.trust)
+                if f.host_entry or f.borrow_from:
+                    s.entry(f, ps, param_types, ret, body_name, f.name, f.host_entry, not s.trust)
             elif f.host_entry:
                 s.entry(f, ps, param_types, ret, body_name, f.name, True, not s.trust)
                 if s.trust:          # Pruv callers of the entry keep the safe-mode check
@@ -2059,7 +2081,7 @@ class Gen:
         pub = (not s.private(f)) if pub is None else pub
         checked = (not s.trust) if checked is None else checked
         vis = s.pub_vis() if pub else ""
-        header = "%sfn %s(%s)%s {" % (vis, name, ps, ret)
+        header = "%sfn %s%s(%s)%s {" % (vis, name, "<'a>" if f.borrow_from else "", ps, ret)
         s.emit(0, s.allow)
         s.emit_inline(f)
         s.emit(0, header)
@@ -2861,7 +2883,8 @@ class Gen:
             # P2 batch 4: `return truncate(x, m)` of an owned local array shortens x in place in every program
             if (not s.cost and isinstance(e, Call) and e.name == "truncate" and len(e.args) == 2
                     and isinstance(e.args[0], Var) and e.args[0].name in s.vt and e.args[0].name not in s.params
-                    and e.args[0].name not in s.refs and e.args[0].name not in s.pinned):
+                    and e.args[0].name not in s.refs and e.args[0].name not in s.pinned
+                    and e.args[0].name not in s.borrowed_roots):
                 m_names = set()
                 _expr_names(e.args[1], m_names)
                 if e.args[0].name not in m_names:
@@ -2874,7 +2897,8 @@ class Gen:
             for k in expr_kids(x):
                 walk(k)
         walk(e)
-        return {n for n, c in counts.items() if c == 1 and n not in s.refs and n not in s.params and n not in s.pinned}
+        return {n for n, c in counts.items() if c == 1 and n not in s.refs and n not in s.params
+                and n not in s.pinned and n not in s.borrowed_roots}
 
     def own_e(s, e):
         """an expression in an OWNING position (let, assignment, constructor field, return). A named value or a field
@@ -2914,7 +2938,7 @@ class Gen:
     def dead_after(s, name):
         """the statement being emitted is the last use of local `name`: no later statement of any enclosing block up to
         the one declaring it names it, and no loop body lies between (a parameter or binder view is never dead here)."""
-        if name in s.refs or name in s.params or name in s.pinned:
+        if name in s.refs or name in s.params or name in s.pinned or name in s.borrowed_roots:
             return False
         for decls, later, loop, _ in reversed(s.frames):
             if name in later:
@@ -2928,7 +2952,7 @@ class Gen:
     def return_next(s, name):
         """R03L: the statement after the one being emitted is a return of the same block that does not name local
         `name`, so `name` is dead even inside a loop body (control leaves the function before any later iteration)."""
-        if name in s.refs or name in s.params or name in s.pinned or not s.frames:
+        if name in s.refs or name in s.params or name in s.pinned or name in s.borrowed_roots or not s.frames:
             return False
         return s.frames[-1][3] and name not in s.frames[-1][1]
 
@@ -2951,6 +2975,8 @@ class Gen:
         if not (s.ext and not s.cost and isinstance(e, Call) and e.name == "copy" and len(e.args) == 1):
             return set()
         x = e.args[0]
+        if x.borrowed_view:
+            return set()
         if isinstance(x, Var) and x.name != st.name and s.dead_after(x.name):
             return {x.name}
         # copy(v.f) of an unboxed field of an owned local v at its last use moves the field out of v
@@ -3010,14 +3036,24 @@ class Gen:
             s.moving = s.last_copy(st)
             binding = ("mut " if st.mutable else "") + st.name
             if not (isinstance(st.value, Move) and st.value.fields):
-                binding += ": " + s.rt(st.type, site=st)
-            s.emit(ind, "let %s = %s;" % (binding, s.own_e(st.value)))
+                binding += ": " + (rty(st.type, True) if st.ref else s.rt(st.type, site=st))
+            value = s.arr_ref(st.value) if st.ref else s.own_e(st.value)
+            s.emit(ind, "let %s = %s;" % (binding, value))
             s.moving = set()
             s.vt[st.name] = st.type
-            s.refs.discard(st.name)    # G9: a local is an owned value, never a reference
+            if st.ref:
+                s.refs.add(st.name)
+            else:
+                s.refs.discard(st.name)
         elif isinstance(st, Assign):
             s.moving = s.last_copy(st)
             call = st.value
+            if getattr(call, "resize_scratch", False):
+                resize = s.resize_expr(call, st.name)
+                if s.cost:
+                    resize = "{ %s %s }" % (resize, s.cost_add("1u128 + %s.len() as u128" % st.name))
+                s.emit(ind, resize)
+                return
             if (not s.cost and not s.moving and isinstance(call, Call) and call.name == "resize"
                     and call.name not in s.fmap and st.name not in s.refs
                     and (st.name not in s.params or st.name in s.take_arrays or st.name in s.resizable)):
@@ -3144,14 +3180,15 @@ class Gen:
             s.emit(ind, "return %s.len();" % s.small_o)
         elif isinstance(st, Return):
             s.moving = s.return_movable(st.value)
+            value = None if st.value is None else (s.arr_ref(st.value) if s.ref_result else s.own_e(st.value))
             if s.cost:
-                if st.value is not None:
-                    s.emit(ind, "let pruv_return = %s;" % s.own_e(st.value))
+                if value is not None:
+                    s.emit(ind, "let pruv_return = %s;" % value)
                 s.moving = set()
                 s.emit(ind, s.cost_check())
                 s.emit(ind, "return;" if st.value is None else "return pruv_return;")
                 return
-            s.emit(ind, "return;" if st.value is None else "return %s;" % s.own_e(st.value))
+            s.emit(ind, "return;" if value is None else "return %s;" % value)
             s.moving = set()
         elif isinstance(st, Assert):
             pass
@@ -3369,8 +3406,10 @@ class Gen:
 
     def arr_ref(s, e):
         """an array expression used as a borrowed slice; a string literal is borrowed as its `&'static str` (no alloc)"""
-        if isinstance(e, StrLit) and not s.cost:
+        if isinstance(e, StrLit) and (e.static_str or not s.cost):
             return str_lit(e.value)
+        if e.borrowed_view:
+            return s.e(e)
         if isinstance(e, Var) and e.name in s.refs:
             return e.name          # G9: a buffer payload view is already a reference
         if isinstance(e, Var) and e.name in s.inouts:
@@ -3503,8 +3542,11 @@ class Gen:
             fill = "pruv_v as %s" % s.layout(e)
         chk = ""
         if not s.verified:
-            chk = ('if pruv_n < (pruv_a.len() as i64) || pruv_n > (1i64 << 40) '
-                   '{ pruv_ovf("resize length outside len..2^40") } ')
+            scratch = getattr(e, "resize_scratch", False)
+            lower = "0" if scratch else "(pruv_a.len() as i64)"
+            limit = "0" if scratch else "len"
+            chk = ('if pruv_n < %s || pruv_n > (1i64 << 40) '
+                   '{ pruv_ovf("resize length outside %s..2^40") } ' % (lower, limit))
             if is_u8_array(a[0].ty):
                 chk += "if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } "
         if place is not None:
@@ -3528,7 +3570,7 @@ class Gen:
             if (e.name in s.refs and e.name not in s.inouts and e.ty is not None and is_user_type(e.ty)
                     and not s.is_ext(e.ty)):
                 return "(*%s)" % e.name
-            if e.name in s.inouts and not (is_array(e.ty) or is_collection(e.ty) or s.is_ext(e.ty)):
+            if e.name in s.inouts and not (is_array(e.ty) or e.ty == STR or is_collection(e.ty) or s.is_ext(e.ty)):
                 return "(*%s)" % e.name
             return e.name
         if isinstance(e, Move):   # G6: Rust moves
@@ -3586,7 +3628,8 @@ class Gen:
                 return "(%s {})" % e.name
             if s.ext:   # G9: constructor fields are owning positions; a recursive edge is boxed
                 return "(%s { %s })" % (e.name, ", ".join(
-                    "%s: %s" % (f.name, s.field_value(inits[f.name], "%s.%s" % (e.name, f.name))) for f in fs))
+                    "%s: %s" % (f.name, s.arr_ref(inits[f.name]) if f.ref else
+                                s.field_value(inits[f.name], "%s.%s" % (e.name, f.name))) for f in fs))
             return "(%s { %s })" % (e.name, ", ".join("%s: %s" % (f.name, s.e(inits[f.name])) for f in fs))
         if isinstance(e, EnumCtor):
             ctor = "%s::%s" % (e.enum_name, e.variant)
@@ -3638,7 +3681,8 @@ class Gen:
                 # copy of an owned local that the enclosing return moves: the local itself is the copy.
                 if not s.cost and isinstance(a[0], Var) and a[0].name in s.moving:
                     return s.e(a[0])
-                if (not s.cost and isinstance(a[0], FieldAccess) and isinstance(a[0].base, Var)
+                if (not s.cost and not a[0].borrowed_view
+                        and isinstance(a[0], FieldAccess) and isinstance(a[0].base, Var)
                         and a[0].base.name in s.moving and not s.field_boxed(a[0].base.ty, a[0].field)):
                     return s.e(a[0])
                 if is_str(a[0].ty):  # G2 B2

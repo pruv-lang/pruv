@@ -1,0 +1,4 @@
+// spec: R-6g-12 accept
+// G-DB63-2: a string literal passed straight to a read `str` parameter is a borrowed static string: no `alloc`.
+fn width(t: str) -> i64 { return len(t); }
+pub fn f() -> i64 { return width("abc"); }

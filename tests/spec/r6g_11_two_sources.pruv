@@ -1,0 +1,30 @@
+// spec: R-6g-11 accept
+// A result that borrows either the input or a reused scratch buffer (hand_rpc.rs `text_of`):
+// `fn text_of<'a>(src: &'a [u8], .., buf: &'a mut Vec<u8>) -> &'a [u8]`.
+fn text_of(src: [u8], lo: i64, hi: i64, inout buf: [u8]) -> ref [u8] from(src, buf) ! alloc
+  requires 0 <= lo && lo <= hi && hi <= len(src)
+  ensures len(result) <= hi - lo
+{
+  if hi - lo < 2 {
+    return subview(src, lo, hi);
+  }
+  let n: i64 = hi - lo - 1;
+  buf = resize(buf, n, 0);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && len(buf) == n
+    decreases n - i
+  {
+    buf[i] = src[lo + 1 + i];
+    i = i + 1;
+  }
+  return subview(buf, 0, n);
+}
+pub fn f(x: [u8]) -> i64 ! alloc requires len(x) >= 6 && len(x) <= 1000
+{
+  let mut buf: [u8] = alloc(0, 0);
+  let m: ref [u8] = text_of(x, 0, 1, inout buf);
+  let a: i64 = len(m) + len(x);
+  let t: ref [u8] = text_of(x, 1, 6, inout buf);
+  return a + len(t);
+}

@@ -1350,7 +1350,8 @@ impl<'a> Gen<'a> {
         let entries: HashSet<String> = prog.functions.iter().filter(|f| is_host(*f)).map(|f| f.name.clone()).collect();
         let checks_needed = explicit
             && prog.functions.iter().any(|f| {
-                !f.requires.is_empty() && f.foreign.is_none() && (!verified || (is_host(f) && !trust_callers))
+                !f.requires.is_empty() && f.foreign.is_none()
+                    && (!verified || f.borrow_from.is_some() || (is_host(f) && !trust_callers))
             });
         let storage = crate::storage::plan_storage(prog, verified);
         let stack = crate::stack::plan_stack(prog, &storage, verified);
@@ -1876,8 +1877,17 @@ impl<'a> Gen<'a> {
             .filter(|(i, p)| is_array_name(&p.ty) && self.resize_params.contains(&(f.name.clone(), *i)))
             .map(|(_, p)| p.name.clone()).collect();
         self.resize_slots = crate::check::resize_slot_names(f, &self.resize_params);
+        self.pinned.clear();
+        crate::foreign_shim::walk_stmts(&f.body, &mut |node| {
+            if let crate::foreign_shim::Node::Let(s) = node {
+                if s.borrowed || self.table.decl(&s.ty).is_some_and(crate::borrowed::borrowing_struct) {
+                    // A later use of the view keeps its source alive even if the owner is not named again.
+                    crate::refine::expr_names(&s.value, &mut self.pinned);
+                }
+            }
+        });
         let param_types: Vec<String> = f.params.iter().map(|p| {
-            if p.mode_pos.is_some() {
+            let ty = if p.mode_pos.is_some() {
                 // G5 A2: resizable arrays borrow the Vec; other arrays borrow its slice
                 if self.resizable_inouts.contains(&p.name) {
                     format!("&mut {}", rty(&p.ty, false))
@@ -1888,6 +1898,15 @@ impl<'a> Gen<'a> {
                 }
             } else {
                 self.rt_width(&p.ty, !p.take, self.storage.layout_of(p))
+            };
+            if f.borrow_from.as_ref().is_some_and(|from| from.contains(&p.name)) {
+                if self.table.decl(&p.ty).is_some_and(crate::borrowed::borrowing_struct) {
+                    format!("&{}<'a>", p.ty)
+                } else {
+                    format!("&'a {}", &ty[1..])
+                }
+            } else {
+                ty
             }
         }).collect();
         // LG9 (G-LG8-3): a take record parameter a consuming field move empties is a `mut` binding
@@ -1907,7 +1926,16 @@ impl<'a> Gen<'a> {
                 format!("{m}{}: {ty}", p.name)
             })
             .collect::<Vec<_>>().join(", ");
-        let ret = if f.ret == "unit" { String::new() } else { format!(" -> {}", self.rt_width(&f.ret, false, self.storage.layout_of(f))) };
+        let lifetime = if f.borrow_from.is_some() { "<'a>" } else { "" };
+        let ret = if f.borrowed_result {
+            format!(" -> &'a {}", &rty(&f.ret, true)[1..])
+        } else if f.borrow_from.is_some() {
+            format!(" -> {}<'a>", f.ret)
+        } else if f.ret == "unit" {
+            String::new()
+        } else {
+            format!(" -> {}", self.rt_width(&f.ret, false, self.storage.layout_of(f)))
+        };
         let has = !f.requires.is_empty();
         let named = self.body_named.contains(&f.name);
         let body_name = if named { format!("{}__pruv_body", f.name) } else { f.name.clone() };
@@ -1951,7 +1979,7 @@ impl<'a> Gen<'a> {
         } else {
             self.emit_inline(f);
         }
-        self.emit(0, &format!("{}fn {}({}){} {{", vis, body_name, ps, ret));
+        self.emit(0, &format!("{vis}fn {body_name}{lifetime}({ps}){ret} {{"));
         self.cost = !self.verified && f.cost.is_some();
         if self.cost {
             let args = join_map(&f.params, ", ", |p| {
@@ -2013,10 +2041,9 @@ impl<'a> Gen<'a> {
                     self.entry(f, &ps, &param_types, &ret, &body_name, Some(&name), Some(false), Some(true))?;
                 }
             } else if self.verified {
-                if host {
-                    // the checked host wrapper; no other function has a wrapper in verified mode
-                    let checked = !self.trust;
-                    self.entry(f, &ps, &param_types, &ret, &body_name, Some(f.name.as_str()), Some(true), Some(checked))?;
+                if host || f.borrow_from.is_some() {
+                    let checked = !host || !self.trust;
+                    self.entry(f, &ps, &param_types, &ret, &body_name, Some(f.name.as_str()), Some(host), Some(checked))?;
                 }
             } else if host {
                 let checked = !self.trust;
@@ -2103,7 +2130,7 @@ impl<'a> Gen<'a> {
     fn callee(&self, n: &str) -> String {
         if !self.has_req.contains(n) {
             // T0: past the entry's length guard
-            return if self.verified && self.lg.contains(n) { format!("{}__pruv_body", n) } else { n.to_string() };
+            return if self.verified && self.body_named.contains(n) { format!("{}__pruv_body", n) } else { n.to_string() };
         }
         if self.verified {
             return format!("{}__pruv_body", n); // the caller proved requires
@@ -2168,7 +2195,8 @@ impl<'a> Gen<'a> {
         self.emit(0, allow);
         self.emit_inline(f);
         let vis = if is_pub { self.pub_vis() } else { "" };
-        let header = format!("{vis}fn {name}({ps}){ret} {{");
+        let lifetime = if f.borrow_from.is_some() { "<'a>" } else { "" };
+        let header = format!("{vis}fn {name}{lifetime}({ps}){ret} {{");
         self.emit(0, &header);
         if is_pub && self.explicit && self.raw.is_some() {
             self.raw_items.push((
@@ -3928,17 +3956,21 @@ pruv_hi <= (pruv_b.len() as i128) && \
             }
             Stmt::Let(x) => {
                 self.moving = self.last_copy(&x.name, &x.value);
-                let v = self.own_e(&x.value);
+                let v = if x.borrowed { self.borrowed_value(&x.value) } else { self.own_e(&x.value) };
                 self.moving.clear();
                 let v = v?;
                 let mut binding = format!("{}{}", if x.mutable { "mut " } else { "" }, x.name);
                 if !matches!(&x.value, Expr::Move(m) if !m.fields.is_empty()) {
                     binding.push_str(": ");
-                    binding.push_str(&self.rt_width(&x.ty, false, self.storage.layout_of(x)));
+                    binding.push_str(&self.rt_width(&x.ty, x.borrowed, self.storage.layout_of(x)));
                 }
                 self.emit(ind, &format!("let {binding} = {v};"));
                 self.vars.insert(x.name.clone(), x.ty.clone());
-                self.refs.remove(&x.name); // G9: a local is an owned value, never a reference
+                if x.borrowed {
+                    self.refs.insert(x.name.clone());
+                } else {
+                    self.refs.remove(&x.name);
+                }
             }
             Stmt::Assign(x) => {
                 self.moving = self.last_copy(&x.name, &x.value);
@@ -4163,7 +4195,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
             Stmt::Return(x) if self.cost => {
                 self.moving = self.return_movable(x.value.as_ref());
                 if let Some(v) = &x.value {
-                    let t = self.own_e(v)?;
+                    let t = if self.returns_view() { self.borrowed_value(v)? } else { self.own_e(v)? };
                     self.emit(ind, &format!("let pruv_return = {};", t));
                 }
                 self.moving.clear();
@@ -4174,7 +4206,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 None => self.emit(ind, "return;"),
                 Some(v) => {
                     self.moving = self.return_movable(Some(v));
-                    let t = self.own_e(v)?;
+                    let t = if self.returns_view() { self.borrowed_value(v)? } else { self.own_e(v)? };
                     self.moving.clear();
                     self.emit(ind, &format!("return {};", t));
                 }
@@ -4332,6 +4364,27 @@ pruv_hi <= (pruv_b.len() as i128) && \
         }
     }
 
+    fn borrowed_value(&mut self, e: &Expr) -> R<String> {
+        if let Expr::StrLit(x) = e {
+            return Ok(lit_str(&x.value));
+        }
+        self.arr_ref(e)
+    }
+
+    fn returns_view(&self) -> bool {
+        self.fmap.get(&self.function_name).is_some_and(|f| f.borrowed_result)
+    }
+
+    fn is_ref_value(&self, e: &Expr) -> bool {
+        match e {
+            Expr::Call(x) => self.fmap.get(&x.name).is_some_and(|f| f.borrowed_result),
+            Expr::FieldAccess(x) => expr_ty(&x.base).as_deref()
+                .and_then(|name| self.table.fields(name, None))
+                .is_some_and(|fields| fields.iter().any(|f| f.name == x.field && f.borrowed)),
+            _ => false,
+        }
+    }
+
     /// An array expression used as a borrowed slice
     fn arr_ref(&mut self, e: &Expr) -> R<String> {
         if let Expr::StrLit(x) = e {
@@ -4351,7 +4404,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
             }
             return Ok(x.name.clone());
         }
-        if matches!(e, Expr::Call(x) if x.name == "subview") {
+        if self.is_ref_value(e) || matches!(e, Expr::Call(x) if x.name == "subview") {
             return self.e(e);
         }
         if matches!(e, Expr::Call(x) if x.name == "vec_get" && x.ty.as_deref() == Some("str") && !self.fmap.contains_key(&x.name)) {
@@ -4652,7 +4705,11 @@ pruv_hi <= (pruv_b.len() as i128) && \
         };
         let mut chk = String::new();
         if !self.verified {
-            chk.push_str("if pruv_n < (pruv_a.len() as i64) || pruv_n > (1i64 << 40) { pruv_ovf(\"resize length outside len..2^40\") } ");
+            if self.fmap.get(&self.function_name).is_some_and(|f| f.borrows_inout_buffer(&args[0])) {
+                chk.push_str("if pruv_n < 0 || pruv_n > (1i64 << 40) { pruv_ovf(\"resize length outside 0..2^40\") } ");
+            } else {
+                chk.push_str("if pruv_n < (pruv_a.len() as i64) || pruv_n > (1i64 << 40) { pruv_ovf(\"resize length outside len..2^40\") } ");
+            }
             if u8a {
                 chk.push_str("if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } ");
             }
@@ -4791,7 +4848,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 let mut parts: Vec<String> = Vec::new();
                 for f in &fs {
                     let v = init_value(&vals, &f.name)?;
-                    if !self.ext.is_empty() {
+                    if f.borrowed {
+                        parts.push(format!("{}: {}", f.name, self.borrowed_value(v)?));
+                    } else if !self.ext.is_empty() {
                         // G9: constructor fields are owning positions; a recursive edge is boxed
                         let fv = self.field_value(v, &format!("{}.{}", x.name, f.name))?;
                         parts.push(format!("{}: {}", f.name, fv));
@@ -4896,7 +4955,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         }
                         if let a0 @ Expr::FieldAccess(x) = arg(a, 0)? {
                             if let Expr::Var(v) = &*x.base {
-                                if self.moving.contains(&v.name) && !self.field_boxed(&v.ty, &x.field) {
+                                if self.moving.contains(&v.name) && !self.field_boxed(&v.ty, &x.field) && !self.is_ref_value(a0) {
                                     return self.e(a0);
                                 }
                             }
@@ -5237,6 +5296,10 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         } else {
                             self.mut_ref(&v.name)
                         });
+                    } else if self.fmap.get(n).is_some_and(|f| f.foreign.is_none()
+                        && f.params.get(i).is_some_and(|p| crate::borrowed::static_str_argument(xa, p))) {
+                        let Expr::StrLit(lit) = xa else { unreachable!() };
+                        args.push(lit_str(&lit.value));
                     } else if is_move && expr_ty(xa).as_deref().is_some_and(is_array_name) {
                         args.push(self.e(xa)?);
                     } else if callee.is_some_and(|c| c.params.get(i).is_some_and(|p| p.ty == "str"))
@@ -6145,7 +6208,7 @@ mod tests {
         Expr::Binary(Binary { line: 1, col: 1, op: op.into(), left: Box::new(l), right: Box::new(r), ty: Some("i64".into()) })
     }
     fn prog(requires: Vec<Expr>) -> Program {
-        let f = Function {
+        let f = Function { borrow_from: None, borrowed_result: false,
             line: 1,
             col: 1,
             name: "f".into(),
@@ -6196,7 +6259,7 @@ mod tests {
             index: Box::new(int("0")),
             ty: Some("i64".into()),
         });
-        let f = Function {
+        let f = Function { borrow_from: None, borrowed_result: false,
             line: 1,
             col: 1,
             name: "g".into(),
@@ -6287,7 +6350,7 @@ mod tests {
     }
 
     fn small_func(name: &str, ret: &str, ensures: Vec<Expr>, body: Vec<Stmt>) -> Function {
-        Function {
+        Function { borrow_from: None, borrowed_result: false,
             line: 1,
             col: 1,
             name: name.into(),
@@ -6314,7 +6377,7 @@ mod tests {
             "array",
             vec![bound],
             vec![
-                Stmt::Let(Let {
+                Stmt::Let(Let { borrowed: false,
                     line: 1,
                     col: 1,
                     name: "o".into(),
@@ -6331,7 +6394,7 @@ mod tests {
             "i64",
             vec![],
             vec![
-                Stmt::Let(Let {
+                Stmt::Let(Let { borrowed: false,
                     line: 1,
                     col: 1,
                     name: "r".into(),

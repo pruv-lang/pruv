@@ -1,0 +1,1 @@
+{"gen_contains": ["struct Doc<'a>", "src: &'a [u8]", "fn parse<'a>(src: &'a [u8]) -> Doc<'a>", "fn body_of<'a>(d: &Doc<'a>) -> &'a [u8]"], "gen_absent": ["to_vec()", ".clone()"]}

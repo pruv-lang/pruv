@@ -1,0 +1,1 @@
+{"gen_regex": ["^\\s+return \\w+\\(\"abc\"\\);$"], "gen_absent": ["String::from(\"abc\")", "\"abc\".to_string()"]}

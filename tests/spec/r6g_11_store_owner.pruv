@@ -1,0 +1,9 @@
+// spec: R-6g-11 reject
+// The owner is written while a view of it is live.
+pub fn f() -> i64 ! alloc
+{
+  let mut b: [u8] = alloc(4, 7);
+  let m: ref [u8] = subview(b, 0, 2);
+  b[0] = 1;
+  return m[0];
+}

@@ -1143,7 +1143,7 @@ impl<'a> Rs<'a> {
         for a in &ty.args {
             args.push(self.rtype(a, line, col)?);
         }
-        let name = if BUILTIN_TYPE_NAMES.contains(&ty.name.as_str()) {
+        let name = if ty.name == "@ref" || BUILTIN_TYPE_NAMES.contains(&ty.name.as_str()) {
             ty.name.clone()
         } else {
             self.local_or_path_type(&ty.name, line, col)?

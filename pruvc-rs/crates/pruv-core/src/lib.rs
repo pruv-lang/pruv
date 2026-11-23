@@ -19,6 +19,7 @@ pub const SCHEMA_AST: &str = "pruv-ast-v1";
 
 pub mod abi;
 pub mod ast;
+mod borrowed;
 pub mod bindings;
 pub mod check;
 pub mod codegen;
