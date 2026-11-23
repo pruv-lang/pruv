@@ -5,6 +5,8 @@ mod json;
 mod access;
 mod jstr;
 mod lines;
+mod lex;
+mod parse;
 mod tail;
 mod bytes;
 mod text;
@@ -62,7 +64,8 @@ pub fn codex_list(binary: str, argv: str, cwd: str, folder: str, timeout_ms: i64
       events = events + 1;
       l = crate::rpc::step(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
       if ctl[0] == 0 && ctl[5] == 1 {
-        let parsed: crate::json::JsonParse = crate::rpc::parse_line(line.data, ctl[6]);
+        let parsed: crate::json::JsonParse = crate::rpc::parse_line(inout line, ctl[6], st);
+        ctl[6] = 0;
         match parsed {
           crate::json::JsonParse::Failed(e) => { }
           crate::json::JsonParse::Parsed(d) => {
@@ -156,7 +159,8 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
       events = events + 1;
       l = crate::rpc::step(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
       if ctl[0] == 0 && ctl[5] == 1 {
-        let parsed: crate::json::JsonParse = crate::rpc::parse_line(line.data, ctl[6]);
+        let parsed: crate::json::JsonParse = crate::rpc::parse_line(inout line, ctl[6], st);
+        ctl[6] = 0;
         match parsed {
           crate::json::JsonParse::Failed(e) => { }
           crate::json::JsonParse::Parsed(d) => {
@@ -247,7 +251,8 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
       events = events + 1;
       l = crate::rpc::step(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
       if ctl[0] == 0 && ctl[5] == 1 {
-        let parsed: crate::json::JsonParse = crate::rpc::parse_line(line.data, ctl[6]);
+        let parsed: crate::json::JsonParse = crate::rpc::parse_line(inout line, ctl[6], st);
+        ctl[6] = 0;
         match parsed {
           crate::json::JsonParse::Failed(e) => { }
           crate::json::JsonParse::Parsed(d) => {
