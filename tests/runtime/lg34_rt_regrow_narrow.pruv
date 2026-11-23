@@ -1,0 +1,54 @@
+// LG34 (G-LG33-4): `x = resize(x, n, v)` on a narrow-stored [i64 | lo..=hi] local (u8 / u16 / u32 storage) grows the
+// block in place (`@pruv_regrow_narrow`) on LLVM. Each function first grows past the cap (realloc), then truncates by
+// one and grows back to the cap (fill inside the old block, no realloc), then grows past the cap again; g32 also
+// regrows to the same length with a nonzero fill (nothing is written). Every filled element is printed.
+fn g8(n: i64) -> () ! io, alloc
+  requires 2 <= n && n <= 50
+{
+  let mut a: [i64 | 0..=200] = alloc(2, 180);
+  a = resize(a, n, 150);
+  a = truncate(a, n - 1);
+  a = resize(a, n, 120);
+  a = resize(a, n + 3, 0);
+  print(len(a));
+  print(a[1]);
+  print(a[n - 2]);
+  print(a[n - 1]);
+  print(a[n + 2]);
+}
+fn g16(n: i64, v: i64) -> () ! io, alloc
+  requires 3 <= n && n <= 50 && 0 <= v && v <= 1000
+{
+  let mut a: [i64 | 0..=1000] = alloc(3, 999);
+  a = resize(a, n, v);
+  a = truncate(a, n - 1);
+  a = resize(a, n, 7);
+  a = resize(a, n + 1, 500);
+  print(len(a));
+  print(a[2]);
+  print(a[n - 2]);
+  print(a[n - 1]);
+  print(a[n]);
+}
+fn g32(n: i64) -> () ! io, alloc
+  requires 2 <= n && n <= 50
+{
+  let mut a: [i64 | 0..=100000] = alloc(1, 70000);
+  a = resize(a, n, 99999);
+  a = truncate(a, n - 1);
+  a = resize(a, n, 12345);
+  a = resize(a, n + 2, 100000);
+  a = resize(a, n + 2, 3);
+  print(len(a));
+  print(a[0]);
+  print(a[n - 2]);
+  print(a[n - 1]);
+  print(a[n + 1]);
+}
+fn run() -> () ! io, alloc {
+  g8(4);
+  g16(5, 700);
+  g16(5, 0);
+  g32(6);
+  g32(2);
+}

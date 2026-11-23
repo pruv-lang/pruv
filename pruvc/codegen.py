@@ -230,6 +230,18 @@ fn pruv_cidx_bool(a: &[bool], i: i128) -> bool { if i >= 0 && i < (a.len() as i1
 """
 
 
+def same_field_path(x, name, fields):
+    """LG34 (G-LG32-3): the expression x reads exactly the field path `name.fields` (a FieldAccess chain on the
+    local `name`, or `move name.fields`)"""
+    if isinstance(x, Move):
+        return x.name == name and tuple(x.fields) == tuple(fields)
+    path = []
+    while isinstance(x, FieldAccess):
+        path.append(x.field)
+        x = x.base
+    return isinstance(x, Var) and x.name == name and tuple(path[::-1]) == tuple(fields)
+
+
 def is_bool_array(t):
     return t is not None and t.name == "array_bool"
 
@@ -2976,6 +2988,12 @@ class Gen:
                 s.fg.record_inline_catalog(call.name, args)
                 s.emit(ind, "%s.%s.insert(%s, %s);" %
                        (st.name, ".".join(st.fields), s.e(call.args[1]), s.e(call.args[2])))
+                return
+            if (not s.cost and isinstance(call, Call) and call.name == "resize" and call.name not in s.fmap
+                    and is_array(vty) and same_field_path(call.args[0], st.name, st.fields)
+                    and not (s.boxed and s.path_boxed(st.name, st.fields))):
+                # LG34 (G-LG32-3): `x.f = resize(x.f, n, v)` grows the field in place, like the plain-name assign
+                s.emit(ind, s.resize_expr(call, "%s.%s" % (st.name, ".".join(st.fields))))
                 return
             if (vty is not None and is_collection(vty)) or (st.name in s.inouts and not (s.boxed and s.path_boxed(st.name, st.fields))):
                 s.emit(ind, "%s.%s = %s;" % (st.name, ".".join(st.fields), s.own_e(st.value) if vty is None or not is_collection(vty) else s.e(st.value)))
