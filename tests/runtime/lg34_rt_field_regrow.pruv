@@ -1,0 +1,55 @@
+// LG34 (G-LG32-3): `x.f = resize(x.f, n, v)` on a struct local and on an `inout` struct parameter grows the field in
+// place (Rust: Vec::resize on the field, LLVM: the regrow helpers); a copy taken before, another field and a
+// different source keep their own blocks.
+struct S { n: i64, w: [i64], b: [u8], f: [bool] }
+struct D { sub: S, tag: i64 }
+fn grow(inout s: S, k: i64) -> () ! alloc
+  requires len(s.w) == 5 && 0 <= k && k <= 10 && len(s.b) == 2 && len(s.f) == 1
+  ensures len(s.w) == 5 + k && len(s.b) == 6 && len(s.f) == 3
+{
+  s.w = resize(s.w, len(s.w) + k, 9);
+  s.b = resize(s.b, 6, 0);
+  s.f = resize(s.f, 3, true);
+}
+fn other(inout s: S) -> () ! alloc
+  requires len(s.w) == 2 && len(s.b) == 6
+  ensures len(s.w) == 7
+{
+  s.w = resize(s.w, len(s.b) + 1, 1);
+}
+fn local(k: i64) -> i64 ! alloc
+  requires 1 <= k && k <= 10
+{
+  let b0: [u8] = alloc(1, 7);
+  let f0: [bool] = alloc(1, false);
+  let mut d: D = D { sub: S { n: 1, w: alloc(2, 3), b: move b0, f: move f0 }, tag: 42 };
+  let before: [i64] = copy(d.sub.w);
+  d.sub.w = resize(d.sub.w, 2 + k, 4);
+  d.sub.w[0] = 8;
+  d.sub.w = resize(d.sub.w, 3 + k, 6);
+  d.sub.b = resize(d.sub.b, 3, 200);
+  d.sub.f = resize(d.sub.f, 2, true);
+  let b1: [u8] = alloc(0, 0);
+  let f1: [bool] = alloc(0, false);
+  let mut e: S = S { n: 0, w: alloc(1, 2), b: move b1, f: move f1 };
+  e.w = resize(d.sub.w, 4 + k, 5);
+  let mut r: i64 = len(e.w) * 1000000 + before[0] * 100000 + len(d.sub.w) * 10000 + d.sub.w[0] * 1000
+    + d.sub.w[2 + k] * 100 + d.sub.b[2] + d.tag * 0;
+  if d.sub.f[1] { r = r + 1; }
+  return r;
+}
+fn run() -> () ! io, alloc {
+  let b0: [u8] = alloc(2, 7);
+  let f0: [bool] = alloc(1, false);
+  let mut d: D = D { sub: S { n: 1, w: alloc(5, 3), b: move b0, f: move f0 }, tag: 42 };
+  grow(inout d.sub, 4);
+  print(len(d.sub.w)); print(d.sub.w[0]); print(d.sub.w[8]);
+  print(len(d.sub.b)); print(d.sub.b[1]); print(d.sub.b[5]);
+  print(len(d.sub.f)); print(d.sub.f[0]); print(d.sub.f[2]);
+  let b1: [u8] = alloc(6, 0);
+  let f1: [bool] = alloc(0, false);
+  let mut s: S = S { n: 0, w: alloc(2, 1), b: move b1, f: move f1 };
+  other(inout s);
+  print(len(s.w)); print(s.w[6]);
+  print(local(3));
+}

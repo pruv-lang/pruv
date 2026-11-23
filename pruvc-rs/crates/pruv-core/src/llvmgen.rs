@@ -472,6 +472,68 @@ pub const DECLS_REGROW_U8: &str = concat!(
     "  ret ptr %q\n",
     "}\n",
 );
+// LG34 (G-LG32-3): the regrow of a narrow (u8/i8/u16/i16/u32/i32) storage layout; size/align are the element's
+// constant byte width (1, 2 or 4) so the branches fold after inlining.  Same growth as pruv_regrow, same tail fill as
+// pruv_resize_narrow (a memset for 0 or byte elements, else one store loop).
+pub const DECLS_REGROW_NARROW: &str = concat!(
+    "define internal ptr @pruv_regrow_narrow(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v, i64 %size, i64 %align) alwaysinline nounwind {\n",
+    "entry:\n",
+    "  %e = icmp sle i64 %n, 0\n",
+    "  br i1 %e, label %none, label %chk\n",
+    "none:\n",
+    "  ret ptr %s\n",
+    "chk:\n",
+    "  %big = icmp ugt i64 %n, 1099511627776\n",
+    "  br i1 %big, label %fail, label %ok\n",
+    "fail:\n",
+    "  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)\n",
+    "  unreachable\n",
+    "ok:\n",
+    "  %gr = icmp sgt i64 %n, %c\n",
+    "  br i1 %gr, label %grow, label %have\n",
+    "grow:\n",
+    "  %p = call ptr @pruv_regrow_v2(ptr %s, i64 %c, i64 %n, i64 %size, i64 %align)\n",
+    "  br label %have\n",
+    "have:\n",
+    "  %q = phi ptr [ %s, %ok ], [ %p, %grow ]\n",
+    "  %b = mul nuw nsw i64 %m, %size\n",
+    "  %t = getelementptr inbounds i8, ptr %q, i64 %b\n",
+    "  %r = sub nuw nsw i64 %n, %m\n",
+    "  %z = icmp eq i64 %v, 0\n",
+    "  %one = icmp eq i64 %size, 1\n",
+    "  %set = or i1 %z, %one\n",
+    "  br i1 %set, label %bytes, label %wide\n",
+    "bytes:\n",
+    "  %rb = mul nuw nsw i64 %r, %size\n",
+    "  %vb = trunc i64 %v to i8\n",
+    "  call void @llvm.memset.p0.i64(ptr %t, i8 %vb, i64 %rb, i1 false)\n",
+    "  ret ptr %q\n",
+    "wide:\n",
+    "  %w = icmp eq i64 %r, 0\n",
+    "  br i1 %w, label %done, label %pick\n",
+    "pick:\n",
+    "  %two = icmp eq i64 %size, 2\n",
+    "  %v16 = trunc i64 %v to i16\n",
+    "  %v32 = trunc i64 %v to i32\n",
+    "  br i1 %two, label %loop16, label %loop32\n",
+    "loop16:\n",
+    "  %i = phi i64 [ 0, %pick ], [ %i1, %loop16 ]\n",
+    "  %g = getelementptr inbounds i16, ptr %t, i64 %i\n",
+    "  store i16 %v16, ptr %g\n",
+    "  %i1 = add nuw nsw i64 %i, 1\n",
+    "  %d = icmp eq i64 %i1, %r\n",
+    "  br i1 %d, label %done, label %loop16\n",
+    "loop32:\n",
+    "  %j = phi i64 [ 0, %pick ], [ %j1, %loop32 ]\n",
+    "  %h = getelementptr inbounds i32, ptr %t, i64 %j\n",
+    "  store i32 %v32, ptr %h\n",
+    "  %j1 = add nuw nsw i64 %j, 1\n",
+    "  %k = icmp eq i64 %j1, %r\n",
+    "  br i1 %k, label %done, label %loop32\n",
+    "done:\n",
+    "  ret ptr %q\n",
+    "}\n",
+);
 pub const DECL_REGROW_V2: &str = "declare ptr @pruv_regrow_v2(ptr, i64, i64, i64, i64) nounwind\n";
 /// P05G: resize of a narrow (u8/i8/u16/i16/u32/i32) storage layout, size/align are the element's constant byte width
 /// (1, 2 or 4) so the branches fold after inlining.  Same shape as pruv_resize: one uninitialized block, one memcpy
@@ -1055,6 +1117,8 @@ pub struct Mod {
     /// LG32 (G-DB52-4): in-place resize helpers used (pruv_regrow, pruv_regrow_u8)
     pub regrow_i64: bool,
     pub regrow_u8: bool,
+    /// LG34 (G-LG32-3): the narrow-layout regrow helper (pruv_regrow_narrow)
+    pub regrow_narrow: bool,
     /// P17a: some eq_range lowers to a memcmp call (declare i32 @memcmp)
     pub memcmp: bool,
     /// P3 batch 2: `!range` node bodies in first-use order (index = metadata number)
@@ -1097,6 +1161,7 @@ impl Mod {
             resize_narrow: false,
             regrow_i64: false,
             regrow_u8: false,
+            regrow_narrow: false,
             memcmp: false,
             range_nodes: Vec::new(),
             explicit: false,
@@ -1301,7 +1366,7 @@ pub struct FnGen<'a> {
     /// P3: owner slot address -> None (whole value moved) or (variant, {storage index of a moved field})
     ret_moved: HashMap<String, Option<(String, HashSet<usize>)>>,
     /// P3: enclosing blocks being lowered: (names declared so far, names named later, loop body)
-    frames: Vec<(HashSet<String>, HashSet<String>, bool)>,
+    frames: Vec<(HashSet<String>, HashSet<String>, bool, bool)>,
     /// P3: names the copy of the let / assignment being lowered moves (move_src)
     moving: HashSet<String>,
     /// P3 M3: String locals whose string_to_str in the return result position takes the buffer (ret_takable)
@@ -2962,10 +3027,12 @@ impl<'a> FnGen<'a> {
             crate::refine::stmt_names(std::slice::from_ref(&stmts[i]), &mut n);
             later[i] = n;
         }
-        self.frames.push((decls, HashSet::new(), lp));
+        self.frames.push((decls, HashSet::new(), lp, false));
         for (i, s) in stmts.iter().enumerate() {
             if let Some(fr) = self.frames.last_mut() {
                 fr.1 = std::mem::take(&mut later[i + 1]);
+                // LG34: the next statement is a return
+                fr.3 = i + 1 < stmts.len() && matches!(stmts[i + 1], Stmt::Return(_));
             }
             self.unbox_next = matches!(s, Stmt::Let(l) if self.unbox_let(l, &stmts[i + 1..]));
             self.tail = match s {
@@ -2991,7 +3058,7 @@ impl<'a> FnGen<'a> {
     /// statement of any enclosing block up to the one declaring it (or binding it, for a match arm) names it, and no
     /// loop body lies between; a parameter is never dead here
     pub fn dead_after(&self, name: &str) -> bool {
-        for (decls, later, lp) in self.frames.iter().rev() {
+        for (decls, later, lp, _) in self.frames.iter().rev() {
             if later.contains(name) {
                 return false;
             }
@@ -3003,6 +3070,18 @@ impl<'a> FnGen<'a> {
             }
         }
         false
+    }
+
+    /// LG34 (G-LG33-2, the Rust backend's return_next): the statement after the one being lowered is a return of the
+    /// same block that does not name local `name`, so `name` is dead even inside a loop body (control leaves the
+    /// function before any later iteration); an owned (take) parameter in scope 0 is never dead here
+    pub fn return_next(&self, name: &str) -> bool {
+        let Some(fr) = self.frames.last() else { return false };
+        if !fr.3 || fr.1.contains(name) {
+            return false;
+        }
+        let Ok(Bind::Slot(v)) = self.lookup(name) else { return false };
+        !self.scopes.first().is_some_and(|sc| sc.arrays.iter().any(|y| y.a == v.a))
     }
 
     /// --no-verify guards of resize(src, cnt, v): len(src) <= cnt <= 2^40, and v <= 255 for [u8]
@@ -3022,7 +3101,8 @@ impl<'a> FnGen<'a> {
 
     /// LG32 (G-DB52-4): `x = resize(x, n, v)` on an owned local / inout array slot grows the slot's block in place
     /// (realloc), so the old and new blocks are never live together.  Returns false when the statement does not have
-    /// that shape (the caller then uses the generic path).
+    /// that shape (the caller then uses the generic path).  LG34 (G-LG32-3): every scalar element kind (u8, bool, i64
+    /// and the narrow layouts).
     fn regrow_assign(&mut self, name: &str, value: &Expr, sl: &Slot) -> R<bool> {
         let Expr::Call(c) = value else { return Ok(false) };
         if self.cost || sl.k != Kind::Arr || c.name != "resize" || c.args.len() != 3 {
@@ -3032,29 +3112,9 @@ impl<'a> FnGen<'a> {
         if x.name != name {
             return Ok(false);
         }
-        let bytes = matches!(sl.ty.as_deref(), Some(ARRAY_U8) | Some(ARRAY_BOOL));
         let layout = self.slot_layouts.get(&sl.a).copied().unwrap_or(sl.layout);
-        if !bytes && layout != "i64" {
-            return Ok(false);
-        }
         let src = self.load(sl)?; // a = ptr, b = len, c = cap
-        let cnt = self.ev(&c.args[1], false)?;
-        let v = self.ev(&c.args[2], false)?;
-        self.resize_guards(&src, &cnt, &v)?;
-        let cap = capof(&src);
-        let q = if src.ty.as_deref() == Some(ARRAY_BOOL) {
-            let z = self.op(format!("zext i1 {} to i64", v.a))?;
-            self.m.regrow_u8 = true;
-            self.op(format!("call ptr @pruv_regrow_u8(ptr {}, i64 {}, i64 {}, i64 {}, i64 {})", src.a, cap, src.b, cnt.a, z))?
-        } else if src.ty.as_deref() == Some(ARRAY_U8) {
-            self.m.regrow_u8 = true;
-            self.op(format!("call ptr @pruv_regrow_u8(ptr {}, i64 {}, i64 {}, i64 {}, i64 {})", src.a, cap, src.b, cnt.a, v.a))?
-        } else {
-            self.m.regrow_i64 = true;
-            self.op(format!("call ptr @pruv_regrow(ptr {}, i64 {}, i64 {}, i64 {}, i64 {})", src.a, cap, src.b, cnt.a, v.a))?
-        };
-        let gt = self.op(format!("icmp sgt i64 {}, {}", cnt.a, cap))?;
-        let nc = self.op(format!("select i1 {}, i64 {}, i64 {}", gt, cnt.a, cap))?;
+        let (q, cnt, nc) = self.regrow_val(&src, c)?;
         let mut nv = V::with_b(Kind::Arr, q, cnt.a.clone());
         nv.ty = sl.ty.clone();
         nv.layout = layout;
@@ -3062,6 +3122,78 @@ impl<'a> FnGen<'a> {
         nv.c = Some(nc);
         self.store(sl, &nv)?;
         Ok(true)
+    }
+
+    /// LG34 (G-LG32-3): `x.f = resize(x.f, n, v)` (the same field path on both sides, a buffer field of an extended
+    /// struct local or `inout` struct parameter) grows the field's block in place like regrow_assign; the field keeps
+    /// the block with cap max(n, cap).  Returns false when the statement does not have that shape.
+    fn regrow_field(&mut self, st: &FieldAssign, sl: &Slot) -> R<bool> {
+        let Expr::Call(c) = &st.value else { return Ok(false) };
+        if self.cost || c.name != "resize" || c.args.len() != 3 {
+            return Ok(false);
+        }
+        let Some(sty) = sl.ty.clone() else { return Ok(false) };
+        if !self.is_ext(&sty) || !matches!(self.tt.decl(&sty), Some(TypeDecl::Struct(_))) {
+            return Ok(false);
+        }
+        if !crate::codegen::same_field_path(&c.args[0], &st.name, &st.fields) {
+            return Ok(false);
+        }
+        let mut cty = sty;
+        for fname in &st.fields[..st.fields.len() - 1] {
+            if !matches!(self.tt.decl(&cty), Some(TypeDecl::Struct(_))) {
+                return Ok(false);
+            }
+            let i = t_field_index(self.tt, &cty, fname, None)?;
+            let fds = t_fields(self.tt, &cty, None)?;
+            cty = fds.get(i).ok_or_else(|| IDX_ERR.to_string())?.ty.clone();
+        }
+        let last = st.fields.last().ok_or_else(|| IDX_ERR.to_string())?;
+        if !matches!(self.tt.decl(&cty), Some(TypeDecl::Struct(_))) || self.fb(&cty, None, last) {
+            return Ok(false);
+        }
+        let (gp, fty) = self.field_ptr_ty(sl, &st.fields)?;
+        if !is_arr_name(&fty) {
+            return Ok(false);
+        }
+        let ld = self.op(format!("load {}, ptr {}", ARR, gp))?;
+        let src = self.unpack(&ld, &fty, false)?;
+        let (q, cnt, nc) = self.regrow_val(&src, c)?;
+        let mut nv = V::with_b(Kind::Arr, q, cnt.a.clone());
+        nv.ty = src.ty.clone();
+        nv.c = Some(nc);
+        let g = self.agg(&nv)?;
+        self.ins(format!("store {} {}, ptr {}", ARR, g, gp))?;
+        Ok(true)
+    }
+
+    /// the in-place regrow of the owned array value src (its block, len and cap) by resize(_, n, v): the guards of
+    /// resize, then the helper of src's element kind; returns (new block, n, new cap)
+    fn regrow_val(&mut self, src: &V, c: &Call) -> R<(String, V, String)> {
+        let cnt = self.ev(&c.args[1], false)?;
+        let v = self.ev(&c.args[2], false)?;
+        self.resize_guards(src, &cnt, &v)?;
+        let cap = capof(src);
+        let q = if src.ty.as_deref() == Some(ARRAY_BOOL) {
+            let z = self.op(format!("zext i1 {} to i64", v.a))?;
+            self.m.regrow_u8 = true;
+            self.op(format!("call ptr @pruv_regrow_u8(ptr {}, i64 {}, i64 {}, i64 {}, i64 {})", src.a, cap, src.b, cnt.a, z))?
+        } else if src.ty.as_deref() == Some(ARRAY_U8) {
+            self.m.regrow_u8 = true;
+            self.op(format!("call ptr @pruv_regrow_u8(ptr {}, i64 {}, i64 {}, i64 {}, i64 {})", src.a, cap, src.b, cnt.a, v.a))?
+        } else if src.layout != "i64" {
+            self.m.regrow_narrow = true;
+            self.op(format!(
+                "call ptr @pruv_regrow_narrow(ptr {}, i64 {}, i64 {}, i64 {}, i64 {}, i64 {}, i64 {})",
+                src.a, cap, src.b, cnt.a, v.a, elem_size(src.layout), alignment(src.layout)
+            ))?
+        } else {
+            self.m.regrow_i64 = true;
+            self.op(format!("call ptr @pruv_regrow(ptr {}, i64 {}, i64 {}, i64 {}, i64 {})", src.a, cap, src.b, cnt.a, v.a))?
+        };
+        let gt = self.op(format!("icmp sgt i64 {}, {}", cnt.a, cap))?;
+        let nc = self.op(format!("select i1 {}, i64 {}, i64 {}", gt, cnt.a, cap))?;
+        Ok((q, cnt, nc))
     }
 
     /// P3 (the Rust backend's last_copy): a let / assignment `y = copy(x)` at the last use of x moves x when x is an
@@ -3080,7 +3212,7 @@ impl<'a> FnGen<'a> {
             if c.name == "truncate" {
                 crate::refine::expr_names(&c.args[1], &mut m_names);
             }
-            if x.name == name || m_names.contains(&x.name) || !self.dead_after(&x.name) {
+            if x.name == name || m_names.contains(&x.name) || !(self.dead_after(&x.name) || self.return_next(&x.name)) {
                 return out;
             }
             if let Ok(Bind::Slot(v)) = self.lookup(&x.name) {
@@ -3370,6 +3502,10 @@ impl<'a> FnGen<'a> {
                     Bind::Slot(s) => s,
                     Bind::Ssa(_) => return Err(format!("llvmgen: field assignment to non-local {}", x.name)),
                 };
+                if self.regrow_field(x, &sl)? {
+                    // LG34 (G-LG32-3): x.f = resize(x.f, n, v) grows the field in place
+                    return self.end_temps();
+                }
                 if self.is_ext_opt(&sl.ty) {
                     // G9 A3: owned right side first, then an in-place store along the path
                     let v = self.ev(&x.value, true)?;
@@ -7641,7 +7777,7 @@ fn gen_llvm_body(
     }
     let memmove = chunks.iter().any(|chunk| chunk.contains("call void @llvm.memmove.p0.p0.i64("));
     let mut ir = format!(
-        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
+        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
         if target == AbiTarget::WinX64 { WIN_X64_HEADER } else { "" },
         m.render_strings(),
         type_defs(&tt),
@@ -7672,9 +7808,10 @@ fn gen_llvm_body(
         if m.resize_i64 { DECLS_RESIZE } else { "" },
         if m.resize_u8 { DECLS_RESIZE_U8 } else { "" },
         if m.resize_narrow { DECLS_RESIZE_NARROW } else { "" },
-        if m.regrow_i64 || m.regrow_u8 { DECL_REGROW_V2 } else { "" },
+        if m.regrow_i64 || m.regrow_u8 || m.regrow_narrow { DECL_REGROW_V2 } else { "" },
         if m.regrow_i64 { DECLS_REGROW } else { "" },
         if m.regrow_u8 { DECLS_REGROW_U8 } else { "" },
+        if m.regrow_narrow { DECLS_REGROW_NARROW } else { "" },
         format!("{}{}",
             if memmove { "declare void @llvm.memmove.p0.p0.i64(ptr nocapture writeonly, ptr nocapture readonly, i64, i1 immarg)\n" } else { "" },
             if m.memcmp { "declare i32 @memcmp(ptr nocapture, ptr nocapture, i64) nounwind readonly\n" } else { "" }), // P17a

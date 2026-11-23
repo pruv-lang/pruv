@@ -1,0 +1,53 @@
+// LG34 (G-LG33-2): truncate / str_from_utf8 of an owned local whose next statement is a `return` not naming it hand
+// the block over on both backends, even when the local is read again on another path (later in the loop or after it).
+fn cut(n: i64, k: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50 && 0 <= k && k <= 5
+{
+  let mut t: [i64] = alloc(n, 5);
+  t[0] = 4;
+  let mut i: i64 = 0;
+  while i < 5
+    invariant 0 <= i && i <= 5 && len(t) == n
+    decreases 5 - i
+  {
+    if i == k {
+      let u: [i64] = truncate(t, 1);
+      return len(u) * 100 + u[0];
+    }
+    i = i + 1;
+  }
+  return len(t);
+}
+fn word(n: i64, k: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50 && 0 <= k && k <= 5
+{
+  let mut b: [u8] = alloc(n, 65);
+  b[0] = 104;
+  let mut i: i64 = 0;
+  while i < 5
+    invariant 0 <= i && i <= 5 && len(b) == n
+    decreases 5 - i
+  {
+    if i == k && utf8_valid(b) {
+      let s: str = str_from_utf8(b);
+      return len(s) * 1000 + s[0];
+    }
+    i = i + 1;
+  }
+  return len(b);
+}
+// the next statement returns t itself: no move into u (t is still read by the return)
+fn keep(n: i64) -> i64 ! alloc
+  requires 2 <= n && n <= 50
+{
+  let t: [i64] = alloc(n, 3);
+  let u: [i64] = truncate(t, 1);
+  return len(t) * 10 + len(u);
+}
+fn run() -> () ! io, alloc {
+  print(cut(7, 2));
+  print(cut(7, 9 - 4));
+  print(word(6, 0));
+  print(word(6, 5));
+  print(keep(4));
+}

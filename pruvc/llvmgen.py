@@ -492,6 +492,68 @@ have:
   ret ptr %q
 }
 """
+# LG34 (G-LG32-3): the regrow of a narrow (u8/i8/u16/i16/u32/i32) storage layout; size/align are the element's
+# constant byte width (1, 2 or 4) so the branches fold after inlining.  Same growth as pruv_regrow, same tail fill as
+# pruv_resize_narrow (a memset for 0 or byte elements, else one store loop).
+DECLS_REGROW_NARROW = """\
+define internal ptr @pruv_regrow_narrow(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v, i64 %size, i64 %align) alwaysinline nounwind {
+entry:
+  %e = icmp sle i64 %n, 0
+  br i1 %e, label %none, label %chk
+none:
+  ret ptr %s
+chk:
+  %big = icmp ugt i64 %n, 1099511627776
+  br i1 %big, label %fail, label %ok
+fail:
+  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)
+  unreachable
+ok:
+  %gr = icmp sgt i64 %n, %c
+  br i1 %gr, label %grow, label %have
+grow:
+  %p = call ptr @pruv_regrow_v2(ptr %s, i64 %c, i64 %n, i64 %size, i64 %align)
+  br label %have
+have:
+  %q = phi ptr [ %s, %ok ], [ %p, %grow ]
+  %b = mul nuw nsw i64 %m, %size
+  %t = getelementptr inbounds i8, ptr %q, i64 %b
+  %r = sub nuw nsw i64 %n, %m
+  %z = icmp eq i64 %v, 0
+  %one = icmp eq i64 %size, 1
+  %set = or i1 %z, %one
+  br i1 %set, label %bytes, label %wide
+bytes:
+  %rb = mul nuw nsw i64 %r, %size
+  %vb = trunc i64 %v to i8
+  call void @llvm.memset.p0.i64(ptr %t, i8 %vb, i64 %rb, i1 false)
+  ret ptr %q
+wide:
+  %w = icmp eq i64 %r, 0
+  br i1 %w, label %done, label %pick
+pick:
+  %two = icmp eq i64 %size, 2
+  %v16 = trunc i64 %v to i16
+  %v32 = trunc i64 %v to i32
+  br i1 %two, label %loop16, label %loop32
+loop16:
+  %i = phi i64 [ 0, %pick ], [ %i1, %loop16 ]
+  %g = getelementptr inbounds i16, ptr %t, i64 %i
+  store i16 %v16, ptr %g
+  %i1 = add nuw nsw i64 %i, 1
+  %d = icmp eq i64 %i1, %r
+  br i1 %d, label %done, label %loop16
+loop32:
+  %j = phi i64 [ 0, %pick ], [ %j1, %loop32 ]
+  %h = getelementptr inbounds i32, ptr %t, i64 %j
+  store i32 %v32, ptr %h
+  %j1 = add nuw nsw i64 %j, 1
+  %k = icmp eq i64 %j1, %r
+  br i1 %k, label %done, label %loop32
+done:
+  ret ptr %q
+}
+"""
 DECL_REGROW_V2 = "declare ptr @pruv_regrow_v2(ptr, i64, i64, i64, i64) nounwind\n"
 
 # G9 A3: only emitted when the program has a recursive (boxed) edge.  The marker global is kept alive through
@@ -925,7 +987,8 @@ class FnGen:
         s.temps = []
         s.ret_cand = {}     # P3: return-movable names -> owner slot (see ret_movable)
         s.ret_moved = {}    # P3: owner slot address -> None (whole value moved) or {storage index of a moved field}
-        s.frames = []       # P3: enclosing blocks being lowered: [names declared so far, names named later, loop body]
+        s.frames = []       # P3: enclosing blocks being lowered: [names declared so far, names named later, loop body,
+                            # LG34: the next statement is a return]
         s.moving = set()    # P3: names the copy of the let / assignment being lowered moves (move_src)
         s.ret_take = set()  # P3 M3: String locals whose string_to_str in the return result position takes the buffer
         s.take_let = set()  # P3 M3: String local the let / assignment being lowered takes (take_src)
@@ -1927,10 +1990,11 @@ class FnGen:
         for i in range(len(stmts) - 1, -1, -1):
             later[i] = set(later[i + 1])
             codegen._stmt_names([stmts[i]], later[i])
-        frame = [set(bind or ()), set(), loop]
+        frame = [set(bind or ()), set(), loop, False]
         s.frames.append(frame)
         for i, st in enumerate(stmts):
             frame[1] = later[i + 1]
+            frame[3] = i + 1 < len(stmts) and isinstance(stmts[i + 1], Return)
             s.unbox_st = st if isinstance(st, Let) and s.unbox_let(st, stmts[i + 1:]) else None
             s.tail_k = s.tail_fill(st, stmts[i + 1:]) if isinstance(st, Let) else None
             s.tail_st = st if s.tail_k is not None else None
@@ -1947,7 +2011,7 @@ class FnGen:
         """P3 (the Rust backend's dead_after): the statement being lowered is the last use of local `name`: no later
         statement of any enclosing block up to the one declaring it (or binding it, for a match arm) names it, and no
         loop body lies between; a parameter is never dead here"""
-        for decls, later, loop in reversed(s.frames):
+        for decls, later, loop, _ in reversed(s.frames):
             if name in later:
                 return False
             if name in decls:
@@ -1955,6 +2019,15 @@ class FnGen:
             if loop:
                 return False
         return False
+
+    def return_next(s, name):
+        """LG34 (G-LG33-2, the Rust backend's return_next): the statement after the one being lowered is a return of the
+        same block that does not name local `name`, so `name` is dead even inside a loop body (control leaves the
+        function before any later iteration); an owned (take) parameter in scope 0 is never dead here"""
+        if not s.frames or not s.frames[-1][3] or name in s.frames[-1][1]:
+            return False
+        kind, v = s.lookup(name)
+        return kind == "slot" and not any(v is y for y in s.scopes[0]["arrays"])
 
     def move_src(s, st):
         """P3 (the Rust backend's last_copy): a let / assignment `y = copy(x)` at the last use of x moves x when x is an
@@ -1969,7 +2042,7 @@ class FnGen:
             names = set()
             if e.name == "truncate":
                 codegen._expr_names(e.args[1], names)
-            if x.name == st.name or x.name in names or not s.dead_after(x.name):
+            if x.name == st.name or x.name in names or not (s.dead_after(x.name) or s.return_next(x.name)):
                 return set()
             kind, v = s.lookup(x.name)
             return {x.name} if kind == "slot" and v.k == "arr" and s.owned_slot(v) else set()
@@ -2155,6 +2228,9 @@ class FnGen:
             kind, sl = s.lookup(st.name)
             if kind != "slot":
                 raise Exception("llvmgen: field assignment to non-local %s" % st.name)
+            if s.regrow_field(st, sl):         # LG34 (G-LG32-3): x.f = resize(x.f, n, v) grows the field in place
+                s.end_temps()
+                return
             if s.is_ext(sl.ty):             # G9 A3: owned right side first, then an in-place store along the path
                 v = s.ev(st.value, True)
                 s.assign_path(sl, st.fields, v)
@@ -2500,15 +2576,46 @@ class FnGen:
 
     def regrow_assign(s, st, sl):
         """LG32 (G-DB52-4): `x = resize(x, n, v)` on an owned local / inout array slot grows the slot's block in place
-        (realloc), so the old and new blocks are never live together.  Returns False when the statement does not have
-        that shape (the caller then uses the generic path)."""
+        (realloc), so the old and new blocks are never live together.  LG34 (G-LG32-3): every scalar element kind
+        (u8, bool, i64 and the narrow layouts).  Returns False when the statement does not have that shape (the caller
+        then uses the generic path)."""
         e = st.value
         if (s.cost or sl.k != "arr" or not isinstance(e, Call) or e.name != "resize" or len(e.args) != 3
                 or not isinstance(e.args[0], Var) or e.args[0].name != st.name):
             return False
-        if not (sl.ty is not None and sl.ty.name in ("array_u8", "array_bool")) and sl.layout != "i64":
-            return False
         src = s.load(sl)                    # a = ptr, b = len, c = cap
+        q, cnt, nc = s.regrow_val(src, e)
+        s.store(sl, V("arr", q, cnt.a, sl.ty, layout=sl.layout, rng=sl.rng, c=nc))
+        return True
+
+    def regrow_field(s, st, sl):
+        """LG34 (G-LG32-3): `x.f = resize(x.f, n, v)` (the same field path on both sides, a buffer field of an extended
+        struct local or `inout` struct parameter) grows the field's block in place like regrow_assign; the field keeps
+        the block with cap max(n, cap).  Returns False when the statement does not have that shape."""
+        e = st.value
+        if (s.cost or not isinstance(e, Call) or e.name != "resize" or len(e.args) != 3
+                or not s.is_ext(sl.ty) or not s.tt.is_struct(sl.ty)):
+            return False
+        if not codegen.same_field_path(e.args[0], st.name, st.fields):
+            return False
+        cty = sl.ty
+        for fname in st.fields[:-1]:
+            if not s.tt.is_struct(cty):
+                return False
+            cty = s.tt.fields(cty)[s.tt.field_index(cty, fname)].type
+        if not s.tt.is_struct(cty) or s.fb(cty, None, st.fields[-1]):
+            return False
+        gp, fty = s.field_ptr_ty(sl, st.fields)
+        if not is_arr(fty):
+            return False
+        src = s.unpack(s.op("load %s, ptr %s" % (ARR, gp)), fty, False)
+        q, cnt, nc = s.regrow_val(src, e)
+        s.ins("store %s %s, ptr %s" % (ARR, s.agg(V("arr", q, cnt.a, src.ty, c=nc)), gp))
+        return True
+
+    def regrow_val(s, src, e):
+        """the in-place regrow of the owned array value src (its block, len and cap) by resize(_, n, v): the guards of
+        resize, then the helper of src's element kind; returns (new block, n, new cap)"""
         cnt = s.ev(e.args[1])
         v = s.ev(e.args[2])
         s.resize_guards(src, cnt, v)
@@ -2520,13 +2627,16 @@ class FnGen:
         elif src.ty is not None and src.ty.name == "array_u8":
             s.m.resize.add("regrow_u8")
             q = s.op("call ptr @pruv_regrow_u8(ptr %s, i64 %s, i64 %s, i64 %s, i64 %s)" % (src.a, cap, src.b, cnt.a, v.a))
+        elif src.layout != "i64":
+            s.m.resize.add("regrow_narrow")
+            q = s.op("call ptr @pruv_regrow_narrow(ptr %s, i64 %s, i64 %s, i64 %s, i64 %s, i64 %d, i64 %d)"
+                     % (src.a, cap, src.b, cnt.a, v.a, elem_size(src.layout), alignment(src.layout)))
         else:
             s.m.resize.add("regrow_i64")
             q = s.op("call ptr @pruv_regrow(ptr %s, i64 %s, i64 %s, i64 %s, i64 %s)" % (src.a, cap, src.b, cnt.a, v.a))
         gt = s.op("icmp sgt i64 %s, %s" % (cnt.a, cap))
         nc = s.op("select i1 %s, i64 %s, i64 %s" % (gt, cnt.a, cap))
-        s.store(sl, V("arr", q, cnt.a, sl.ty, layout=sl.layout, rng=sl.rng, c=nc))
-        return True
+        return q, cnt, nc
 
     def truncate_move(s, e):
         """P2 batch 4: the slot of x when e is `truncate(x, m)` with x an owned local array (not a parameter or binder)
@@ -6221,9 +6331,11 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         DECLS_RESIZE if "i64" in m.resize else "") + (
         DECLS_RESIZE_U8 if "u8" in m.resize else "") + (
         DECLS_RESIZE_NARROW if "narrow" in m.resize else "") + (
-        DECL_REGROW_V2 if ("regrow_i64" in m.resize or "regrow_u8" in m.resize) else "") + (
+        DECL_REGROW_V2 if ("regrow_i64" in m.resize or "regrow_u8" in m.resize or "regrow_narrow" in m.resize)
+        else "") + (
         DECLS_REGROW if "regrow_i64" in m.resize else "") + (
         DECLS_REGROW_U8 if "regrow_u8" in m.resize else "") + (
+        DECLS_REGROW_NARROW if "regrow_narrow" in m.resize else "") + (
         "declare void @llvm.memmove.p0.p0.i64(ptr nocapture writeonly, ptr nocapture readonly, i64, i1 immarg)\n"
         if m.memmove else "") + (
         "declare i32 @memcmp(ptr nocapture, ptr nocapture, i64) nounwind readonly\n" if m.memcmp else "") + (

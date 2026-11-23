@@ -3948,6 +3948,17 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         }
                         return Ok(());
                     }
+                    if !self.cost && call.name == "resize" && !self.fmap.contains_key(&call.name)
+                        && expr_ty(&x.value).as_deref().is_some_and(is_array_name)
+                        && same_field_path(arg(&call.args, 0)?, &x.name, &x.fields)
+                        && !(!self.boxed.is_empty() && self.path_boxed(&x.name, &x.fields))
+                    {
+                        // LG34 (G-LG32-3): `x.f = resize(x.f, n, v)` grows the field in place, like the plain-name assign
+                        let place = format!("{}.{}", x.name, x.fields.join("."));
+                        let v = self.resize_expr(&x.value, &call.args, Some(&place))?;
+                        self.emit(ind, &v);
+                        return Ok(());
+                    }
                 }
                 if expr_ty(&x.value).as_deref().is_some_and(key_is_collection)
                     || (self.inouts.contains(&x.name) && !self.path_boxed(&x.name, &x.fields))
@@ -5246,6 +5257,28 @@ pub fn shim_helpers(
     match g.fg.as_ref() {
         Some(fg) => Ok(fg.items().to_vec()),
         None => Ok(Vec::new()),
+    }
+}
+
+/// LG34 (G-LG32-3): the expression x reads exactly the field path `name.fields` (a FieldAccess chain on the local
+/// `name`, or `move name.fields`); shared with the LLVM backend
+pub fn same_field_path(x: &Expr, name: &str, fields: &[String]) -> bool {
+    if let Expr::Move(m) = x {
+        return m.name == name && m.fields == fields;
+    }
+    let mut path: Vec<&str> = Vec::new();
+    let mut cur = x;
+    while let Expr::FieldAccess(fa) = cur {
+        path.push(fa.field.as_str());
+        cur = &*fa.base;
+    }
+    match cur {
+        Expr::Var(v) => {
+            v.name == name
+                && path.len() == fields.len()
+                && path.iter().rev().zip(fields.iter()).all(|(a, b)| *a == b.as_str())
+        }
+        _ => false,
     }
 }
 

@@ -383,9 +383,11 @@ void pruv_free_v2(void *data, int64_t len, int64_t size, int64_t align) {
 }
 
 /* P2 batch 4 / P3: normalizes a block to m elements. In the LLVM backend the module keeps the allocated
- * element count (cap) next to the len, so a moved `truncate` no longer calls this; the external ABI
- * wrappers call it as pruv_shrink_v2(data, cap, len, size, align) before handing the buffer to the host,
- * which frees with the exact length. Here `len` is the allocated element count (cap). Returns a block of
+ * element count (cap) next to the len. Callers: a moved `truncate(x, m)` (LG33, D-LG33-1) calls
+ * pruv_shrink_v2(data, cap, nc, size, align) with nc = m when more than half of the cap is unused and nc = cap
+ * otherwise (kept as is); the external ABI wrappers call it as pruv_shrink_v2(data, cap, len, size, align)
+ * before handing the buffer to the host, which frees with the exact length. Here `len` is the allocated
+ * element count (cap). Returns a block of
  * m elements holding the first m elements of data (layout size/align), so the later pruv_free_v2 /
  * pruv_free with length m uses the block's real layout. m == len keeps data; m == 0 frees it and returns NULL.
  * Default mode: realloc; a failed shrinking realloc is pruv_panic_arith("allocation failed") (LG33: the LLVM

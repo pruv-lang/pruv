@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["104", "7", "6104", "6", "41"], "alloc_balance": true, "llvm_fn_absent": {"cut": ["@pruv_copy_v2(", "@pruv_copy("], "word": ["@pruv_copy_v2(", "@pruv_copy("]}, "llvm_fn_contains": {"keep": ["@pruv_copy("]}, "gen_contains": ["{ let pruv_m: i64 = 1i64; let mut pruv_t = t;", "let pruv_v: ::std::vec::Vec<u8> = b;"]}
