@@ -1147,12 +1147,14 @@ impl Checker {
     /// function whose template cannot be built gets None (never an error); so does an i64 function whose template uses a
     /// bit builtin (its value would put a bit-vector term into every later query of the caller).
     fn x_auto(&mut self, prog: &mut Program) -> Res<()> {
+        // check.py `allow_str`: read observers get a template only when the program uses borrow syntax
+        let borrows = crate::borrowed::first_borrow(prog).is_some();
         for f in prog.functions.iter_mut() {
             f.x_auto = None;
             if !matches!(self.x_raw.get(&f.name), Some(Ok(_))) {
                 // A read observer of a slice can supply its exact scalar result after the caller
                 // has proved its requires. This template is for the verifier only.
-                if f.ret == "i64" && f.tparams.is_empty() && f.effects.is_empty()
+                if borrows && f.ret == "i64" && f.tparams.is_empty() && f.effects.is_empty()
                     && f.decreases.is_none() && f.params.iter().all(|p| p.mode_pos.is_none() && !p.take)
                     && f.params.iter().any(|p| p.ty == "str"
                         || self.decls.get(&p.ty).is_some_and(crate::borrowed::borrowing_struct))
