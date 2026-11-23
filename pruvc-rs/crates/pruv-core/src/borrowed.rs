@@ -99,7 +99,10 @@ pub(crate) fn prepare(prog: &mut Program, hosts: &[bool]) -> Res<()> {
         let borrowed_result = f.borrowed_result || structs.contains(&f.ret);
         match &f.borrow_from {
             Some(names) if borrowed_result && !names.is_empty() => {
-                for name in names {
+                for (i, name) in names.iter().enumerate() {
+                    if names[..i].contains(name) {
+                        return Err(signature(f.line, f.col));
+                    }
                     let Some(p) = f.params.iter().find(|p| p.name == *name) else {
                         return Err(signature(f.line, f.col));
                     };
@@ -245,10 +248,16 @@ impl Analysis<'_> {
         let mut roots = Roots::new();
         if let Some(root) = place_root(e) {
             if let Some(origin) = locals.get(root) {
-                roots = origin.clone();
-                // An owned field still depends on the storage of its record.
-                if matches!(e, Expr::FieldAccess(x) if !self.ref_field(&x.base, &x.field)) {
-                    merge(&mut roots, root, Access::Read);
+                // An owned field depends on the storage of its record; it also carries what the record
+                // borrows only when the field is itself a borrowing record (an owned `[u8]` does not).
+                match e {
+                    Expr::FieldAccess(x) if !self.ref_field(&x.base, &x.field) => {
+                        if expr_ty(e).as_deref().is_some_and(|ty| self.records.contains_key(ty)) {
+                            roots = origin.clone();
+                        }
+                        merge(&mut roots, root, Access::Read);
+                    }
+                    _ => roots = origin.clone(),
                 }
             } else {
                 merge(&mut roots, root, Access::Read);

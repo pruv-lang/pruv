@@ -1,0 +1,12 @@
+// spec: R-6g-11 accept
+// A view of an owned field of a local borrowing struct holds only the record's storage, not what the
+// record borrows, so the borrowed owner may be written while the view is live (Rust accepts the same).
+struct Doc { src: ref [u8], scratch: [u8] }
+pub fn f() -> i64 ! alloc {
+  let mut x: [u8] = alloc(1, 0);
+  let s: [u8] = alloc(1, 0);
+  let d: Doc = Doc { src: x, scratch: move s };
+  let m: ref [u8] = subview(d.scratch, 0, 1);
+  x[0] = 1;
+  return len(m);
+}

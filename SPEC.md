@@ -1451,7 +1451,7 @@ borrowed value is live.
     `inout`, `take`, `Vec`/`Option`/map/enum payload/generic argument, a generic function, a host entry or `par`
     argument) is `type/borrow_signature`.
   - *Results.* A function whose result is `ref T` or a borrowing struct writes `-> T from(p1, .., pn)` (`from` is
-    contextual), naming at least one parameter; each `pi` is a `[u8]` / `str` parameter (read or `inout`) or a
+    contextual), naming at least one parameter, each at most once; each `pi` is a `[u8]` / `str` parameter (read or `inout`) or a
     borrowing-struct read parameter. A missing or bad `from` list is `type/borrow_signature`, and so is an `ensures`
     that names an `inout` parameter of the `from` list (Rust cannot read the buffer after lending it to the result).
   - *Making a borrow.* `subview(x, lo, hi)` bound to a `ref` local (G-DB63-1), returned from a `ref` function or
@@ -1462,7 +1462,9 @@ borrowed value is live.
     / whole borrow of `x`: `x`, shared (an `inout` parameter of the current function counts as a variable). A call:
     for each argument at a `from` position, the provenance of that argument (a `ref` / borrowing local) or its root
     variable, shared for a read argument and exclusive for an `inout` argument. A field read of a borrowing struct,
-    a copy of a `ref` local: the provenance of the source. A struct literal: the union over its `ref` fields. The
+    a copy of a `ref` local: the provenance of the source. A view of an owned field of a local record (`subview(d.scratch,
+    ..)`): the record variable `d` only (plus the record's provenance when the field is itself a borrowing struct).
+    A struct literal: the union over its `ref` fields. The
     argument at a `from` position must be a variable, field path, `subview` or `ref` value.
   - *Live range.* A `ref` / borrowing local is live from the statement after its `let` through the last statement
     of the same block that mentions it (a loop or `if` that mentions it anywhere counts whole).
@@ -1488,13 +1490,14 @@ borrowed value is live.
   - Tests: [document borrowing its input](tests/spec/r6g_11_doc_input.pruv),
     [result from either of two sources](tests/spec/r6g_11_two_sources.pruv),
     [subview bound to a local](tests/spec/r6g_11_local_view.pruv), [copy then reuse](tests/spec/r6g_11_copy_owned.pruv),
-    [struct forwarded](tests/spec/r6g_11_struct_forward.pruv);
+    [struct forwarded](tests/spec/r6g_11_struct_forward.pruv),
+    [owned field of a local record](tests/spec/r6g_11_owned_field_local.pruv);
     rejects [local escape](tests/spec/r6g_11_escape_local.pruv), [struct escape](tests/spec/r6g_11_escape_struct.pruv),
     [owned field escape](tests/spec/r6g_11_escape_owned_field.pruv),
     [buffer reuse](tests/spec/r6g_11_reuse_buf.pruv), [exclusive read](tests/spec/r6g_11_read_exclusive.pruv),
     [owner grows](tests/spec/r6g_11_realloc_owner.pruv), [owner store](tests/spec/r6g_11_store_owner.pruv),
     [owner moved](tests/spec/r6g_11_move_owner.pruv), [loop](tests/spec/r6g_11_loop_conflict.pruv),
-    [no from](tests/spec/r6g_11_no_from.pruv), [ref parameter](tests/spec/r6g_11_ref_param.pruv),
+    [no from](tests/spec/r6g_11_no_from.pruv), [duplicate from](tests/spec/r6g_11_from_duplicate.pruv), [ref parameter](tests/spec/r6g_11_ref_param.pruv),
     [let mut](tests/spec/r6g_11_mut_ref.pruv), [store into a view](tests/spec/r6g_11_store_view.pruv),
     [owned alias](tests/spec/r6g_11_own_alias.pruv), [LLVM](tests/spec/r6g_11_llvm.pruv).
 - R-6g-12 **String literal arguments (G-DB63-2).** A string literal that is the direct argument of a non-`inout`,

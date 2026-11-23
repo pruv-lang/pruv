@@ -1,0 +1,4 @@
+// spec: R-6g-11 reject
+// The names in a from list are distinct parameters.
+fn f(x: [u8]) -> ref [u8] from(x, x) { return x; }
+pub fn g(x: [u8]) -> i64 { return len(f(x)); }
