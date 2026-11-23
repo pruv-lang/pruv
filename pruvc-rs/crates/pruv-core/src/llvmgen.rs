@@ -397,6 +397,82 @@ pub const DECLS_RESIZE_U8: &str = concat!(
     "  ret ptr %q\n",
     "}\n",
 );
+/// LG32 (G-DB52-4): only emitted when `x = resize(x, n, v)` is lowered in place.  The block s (allocated count c, live
+/// count m <= n) grows through pruv_regrow_v2 (realloc, so the old block is never live next to the new one) when n > c,
+/// else it is kept; then the tail [m, n) is set to v exactly like pruv_resize / pruv_resize_u8.  n <= 0 (so the array is
+/// empty) returns s unchanged.
+pub const DECLS_REGROW: &str = concat!(
+    "define internal ptr @pruv_regrow(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {\n",
+    "entry:\n",
+    "  %e = icmp sle i64 %n, 0\n",
+    "  br i1 %e, label %none, label %chk\n",
+    "none:\n",
+    "  ret ptr %s\n",
+    "chk:\n",
+    "  %big = icmp ugt i64 %n, 1152921504606846975\n",
+    "  br i1 %big, label %fail, label %ok\n",
+    "fail:\n",
+    "  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)\n",
+    "  unreachable\n",
+    "ok:\n",
+    "  %gr = icmp sgt i64 %n, %c\n",
+    "  br i1 %gr, label %grow, label %have\n",
+    "grow:\n",
+    "  %p = call ptr @pruv_regrow_v2(ptr %s, i64 %c, i64 %n, i64 8, i64 8)\n",
+    "  br label %have\n",
+    "have:\n",
+    "  %q = phi ptr [ %s, %ok ], [ %p, %grow ]\n",
+    "  %t = getelementptr inbounds i64, ptr %q, i64 %m\n",
+    "  %r = sub nuw nsw i64 %n, %m\n",
+    "  %z = icmp eq i64 %v, 0\n",
+    "  br i1 %z, label %zero, label %fill\n",
+    "zero:\n",
+    "  %rb = shl nuw nsw i64 %r, 3\n",
+    "  call void @llvm.memset.p0.i64(ptr %t, i8 0, i64 %rb, i1 false)\n",
+    "  ret ptr %q\n",
+    "fill:\n",
+    "  %w = icmp eq i64 %r, 0\n",
+    "  br i1 %w, label %done, label %loop\n",
+    "loop:\n",
+    "  %i = phi i64 [ 0, %fill ], [ %i1, %loop ]\n",
+    "  %g = getelementptr inbounds i64, ptr %t, i64 %i\n",
+    "  store i64 %v, ptr %g\n",
+    "  %i1 = add nuw nsw i64 %i, 1\n",
+    "  %d = icmp eq i64 %i1, %r\n",
+    "  br i1 %d, label %done, label %loop\n",
+    "done:\n",
+    "  ret ptr %q\n",
+    "}\n",
+);
+pub const DECLS_REGROW_U8: &str = concat!(
+    "define internal ptr @pruv_regrow_u8(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {\n",
+    "entry:\n",
+    "  %e = icmp sle i64 %n, 0\n",
+    "  br i1 %e, label %none, label %chk\n",
+    "none:\n",
+    "  ret ptr %s\n",
+    "chk:\n",
+    "  %big = icmp ugt i64 %n, 1099511627776\n",
+    "  br i1 %big, label %fail, label %ok\n",
+    "fail:\n",
+    "  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)\n",
+    "  unreachable\n",
+    "ok:\n",
+    "  %gr = icmp sgt i64 %n, %c\n",
+    "  br i1 %gr, label %grow, label %have\n",
+    "grow:\n",
+    "  %p = call ptr @pruv_regrow_v2(ptr %s, i64 %c, i64 %n, i64 1, i64 1)\n",
+    "  br label %have\n",
+    "have:\n",
+    "  %q = phi ptr [ %s, %ok ], [ %p, %grow ]\n",
+    "  %t = getelementptr inbounds i8, ptr %q, i64 %m\n",
+    "  %r = sub nuw nsw i64 %n, %m\n",
+    "  %b = trunc i64 %v to i8\n",
+    "  call void @llvm.memset.p0.i64(ptr %t, i8 %b, i64 %r, i1 false)\n",
+    "  ret ptr %q\n",
+    "}\n",
+);
+pub const DECL_REGROW_V2: &str = "declare ptr @pruv_regrow_v2(ptr, i64, i64, i64, i64) nounwind\n";
 /// P05G: resize of a narrow (u8/i8/u16/i16/u32/i32) storage layout, size/align are the element's constant byte width
 /// (1, 2 or 4) so the branches fold after inlining.  Same shape as pruv_resize: one uninitialized block, one memcpy
 /// of the prefix, the tail set once (a memset for 0 or byte elements, else one store loop).  n <= 2^40 is proved
@@ -976,6 +1052,9 @@ pub struct Mod {
     pub resize_i64: bool,
     pub resize_u8: bool,
     pub resize_narrow: bool,
+    /// LG32 (G-DB52-4): in-place resize helpers used (pruv_regrow, pruv_regrow_u8)
+    pub regrow_i64: bool,
+    pub regrow_u8: bool,
     /// P17a: some eq_range lowers to a memcmp call (declare i32 @memcmp)
     pub memcmp: bool,
     /// P3 batch 2: `!range` node bodies in first-use order (index = metadata number)
@@ -1016,6 +1095,8 @@ impl Mod {
             resize_i64: false,
             resize_u8: false,
             resize_narrow: false,
+            regrow_i64: false,
+            regrow_u8: false,
             memcmp: false,
             range_nodes: Vec::new(),
             explicit: false,
@@ -2924,6 +3005,65 @@ impl<'a> FnGen<'a> {
         false
     }
 
+    /// --no-verify guards of resize(src, cnt, v): len(src) <= cnt <= 2^40, and v <= 255 for [u8]
+    fn resize_guards(&mut self, src: &V, cnt: &V, v: &V) -> R<()> {
+        if !self.verified {
+            let lo = self.op(format!("icmp sle i64 {}, {}", src.b, cnt.a))?;
+            let hi = self.op(format!("icmp ule i64 {}, 1099511627776", cnt.a))?;
+            let ok = self.op(format!("and i1 {}, {}", lo, hi))?;
+            self.guard(&ok, Fail::Panic1("pruv_panic_arith", "resize length outside len..2^40".to_string()), false)?;
+            if src.ty.as_deref() == Some(ARRAY_U8) {
+                let ok2 = self.op(format!("icmp ule i64 {}, 255", v.a))?;
+                self.guard(&ok2, Fail::Elem(v.a.clone(), "u8 0..=255"), false)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// LG32 (G-DB52-4): `x = resize(x, n, v)` on an owned local / inout array slot grows the slot's block in place
+    /// (realloc), so the old and new blocks are never live together.  Returns false when the statement does not have
+    /// that shape (the caller then uses the generic path).
+    fn regrow_assign(&mut self, name: &str, value: &Expr, sl: &Slot) -> R<bool> {
+        let Expr::Call(c) = value else { return Ok(false) };
+        if self.cost || sl.k != Kind::Arr || c.name != "resize" || c.args.len() != 3 {
+            return Ok(false);
+        }
+        let Expr::Var(x) = &c.args[0] else { return Ok(false) };
+        if x.name != name {
+            return Ok(false);
+        }
+        let bytes = matches!(sl.ty.as_deref(), Some(ARRAY_U8) | Some(ARRAY_BOOL));
+        let layout = self.slot_layouts.get(&sl.a).copied().unwrap_or(sl.layout);
+        if !bytes && layout != "i64" {
+            return Ok(false);
+        }
+        let src = self.load(sl)?; // a = ptr, b = len, c = cap
+        let cnt = self.ev(&c.args[1], false)?;
+        let v = self.ev(&c.args[2], false)?;
+        self.resize_guards(&src, &cnt, &v)?;
+        let cap = capof(&src);
+        let q = if src.ty.as_deref() == Some(ARRAY_BOOL) {
+            let z = self.op(format!("zext i1 {} to i64", v.a))?;
+            self.m.regrow_u8 = true;
+            self.op(format!("call ptr @pruv_regrow_u8(ptr {}, i64 {}, i64 {}, i64 {}, i64 {})", src.a, cap, src.b, cnt.a, z))?
+        } else if src.ty.as_deref() == Some(ARRAY_U8) {
+            self.m.regrow_u8 = true;
+            self.op(format!("call ptr @pruv_regrow_u8(ptr {}, i64 {}, i64 {}, i64 {}, i64 {})", src.a, cap, src.b, cnt.a, v.a))?
+        } else {
+            self.m.regrow_i64 = true;
+            self.op(format!("call ptr @pruv_regrow(ptr {}, i64 {}, i64 {}, i64 {}, i64 {})", src.a, cap, src.b, cnt.a, v.a))?
+        };
+        let gt = self.op(format!("icmp sgt i64 {}, {}", cnt.a, cap))?;
+        let nc = self.op(format!("select i1 {}, i64 {}, i64 {}", gt, cnt.a, cap))?;
+        let mut nv = V::with_b(Kind::Arr, q, cnt.a.clone());
+        nv.ty = sl.ty.clone();
+        nv.layout = layout;
+        nv.rng = self.slot_rngs.get(&sl.a).copied().unwrap_or(sl.rng);
+        nv.c = Some(nc);
+        self.store(sl, &nv)?;
+        Ok(true)
+    }
+
     /// P3 (the Rust backend's last_copy): a let / assignment `y = copy(x)` at the last use of x moves x when x is an
     /// owned local array, or an array payload binder of a match on an owned extended local that is dead after the
     /// match; returns {x} (the copy lowering then takes the value and empties its owner), else an empty set
@@ -3183,6 +3323,10 @@ impl<'a> FnGen<'a> {
             Stmt::Assign(x) => {
                 self.begin_temps();
                 let sl = self.lookup(&x.name)?.val().clone();
+                // LG32 (G-DB52-4): x = resize(x, n, v) grows the slot's block in place (realloc), so the old and new blocks are never live together
+                if self.regrow_assign(&x.name, &x.value, &sl)? {
+                    return self.end_temps();
+                }
                 // the right side is complete and owned before the old value is destroyed
                 self.moving = self.move_src(&x.name, &x.value);
                 self.take_let = self.take_src(&x.name, &x.value);
@@ -4224,16 +4368,7 @@ impl<'a> FnGen<'a> {
             let cnt = self.ev(arg(a, 1)?, false)?;
             let v = self.ev(arg(a, 2)?, false)?;
             let u8a = src.ty.as_deref() == Some(ARRAY_U8);
-            if !self.verified {
-                let lo = self.op(format!("icmp sle i64 {}, {}", src.b, cnt.a))?;
-                let hi = self.op(format!("icmp ule i64 {}, 1099511627776", cnt.a))?;
-                let ok = self.op(format!("and i1 {}, {}", lo, hi))?;
-                self.guard(&ok, Fail::Panic1("pruv_panic_arith", "resize length outside len..2^40".to_string()), false)?;
-                if u8a {
-                    let ok2 = self.op(format!("icmp ule i64 {}, 255", v.a))?;
-                    self.guard(&ok2, Fail::Elem(v.a.clone(), "u8 0..=255"), false)?;
-                }
-            }
+            self.resize_guards(&src, &cnt, &v)?;
             if src.ty.as_deref() == Some(ARRAY_BOOL) {
                 let z = self.op(format!("zext i1 {} to i64", v.a))?;
                 self.m.resize_u8 = true;
@@ -7455,7 +7590,7 @@ fn gen_llvm_body(
     }
     let memmove = chunks.iter().any(|chunk| chunk.contains("call void @llvm.memmove.p0.p0.i64("));
     let mut ir = format!(
-        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
+        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
         if target == AbiTarget::WinX64 { WIN_X64_HEADER } else { "" },
         m.render_strings(),
         type_defs(&tt),
@@ -7486,6 +7621,9 @@ fn gen_llvm_body(
         if m.resize_i64 { DECLS_RESIZE } else { "" },
         if m.resize_u8 { DECLS_RESIZE_U8 } else { "" },
         if m.resize_narrow { DECLS_RESIZE_NARROW } else { "" },
+        if m.regrow_i64 || m.regrow_u8 { DECL_REGROW_V2 } else { "" },
+        if m.regrow_i64 { DECLS_REGROW } else { "" },
+        if m.regrow_u8 { DECLS_REGROW_U8 } else { "" },
         format!("{}{}",
             if memmove { "declare void @llvm.memmove.p0.p0.i64(ptr nocapture writeonly, ptr nocapture readonly, i64, i1 immarg)\n" } else { "" },
             if m.memcmp { "declare i32 @memcmp(ptr nocapture, ptr nocapture, i64) nounwind readonly\n" } else { "" }), // P17a

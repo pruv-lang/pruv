@@ -102,7 +102,8 @@ it can never be silently dropped.
   its element type. Generic `[T]` and `str` are type errors. Arguments are evaluated a, n, v. The generated code makes
   one allocation of n, copies the prefix once and fills only the tail, so every element is written once. In the Rust
   backend the statement `x = resize(x, n, v)` on a `let mut` local or a resizable `inout` array grows `x` in place
-  (`Vec::resize`, no prefix copy) unless cost accounting is on; LLVM still copies (G-LG16-1). An element read
+  (`Vec::resize`, no prefix copy) unless cost accounting is on; the LLVM backend grows the block with one realloc
+  (`pruv_regrow_v2`) and fills only the tail (D-LG32-2). An element read
   directly off the call (`resize(a, n, v)[k]`, also through `copy`/`truncate`) keeps the array's storage at i64.
 - `band(a, b)`, `bor(a, b)`, `bxor(a, b)`: `(i64, i64) -> i64`, bitwise and/or/xor on the 64-bit two's-complement
   representation. Negative operands are allowed (`band(-1, 255) == 255`); the complement of `x` is `bxor(x, -1)`
