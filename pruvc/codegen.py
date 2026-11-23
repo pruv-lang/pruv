@@ -2875,6 +2875,11 @@ class Gen:
             m_names = set()
             _expr_names(e.args[1], m_names)
             return set() if e.args[0].name in m_names else {e.args[0].name}
+        # LG33 (G-DB54-2): str_from_utf8 of a dead owned local [u8] moves the vector into the String (no second copy)
+        if (not s.cost and isinstance(e, Call) and e.name == "str_from_utf8" and len(e.args) == 1
+                and isinstance(e.args[0], Var) and e.args[0].name in s.vt and e.args[0].name != st.name
+                and (s.dead_after(e.args[0].name) or s.return_next(e.args[0].name))):
+            return {e.args[0].name}
         if not (s.ext and not s.cost and isinstance(e, Call) and e.name == "copy" and len(e.args) == 1):
             return set()
         x = e.args[0]
@@ -3666,6 +3671,13 @@ class Gen:
             if n == "utf8_valid":
                 return "::core::str::from_utf8(%s).is_ok()" % s.arr_ref(a[0])
             if n == "str_from_utf8":
+                if not s.cost and isinstance(a[0], Var) and a[0].name in s.moving:
+                    # LG33 (G-DB54-2): the owned local at its last use (last_copy) becomes the String's buffer
+                    if s.verified:
+                        return "{ let pruv_v: ::std::vec::Vec<u8> = %s; unsafe { ::std::string::String::from_utf8_unchecked(pruv_v) } }" % s.e(a[0])
+                    return ('{ let pruv_v: ::std::vec::Vec<u8> = %s; match ::std::string::String::from_utf8(pruv_v) { '
+                            'Ok(pruv_s) => pruv_s, '
+                            'Err(pruv_e) => panic!("pruv: invalid UTF-8 (len {})", pruv_e.as_bytes().len()), } }') % s.e(a[0])
                 b = s.arr_ref(a[0])
                 if s.verified:
                     return "{ let pruv_b: &[u8] = %s; unsafe { ::std::string::String::from_utf8_unchecked(pruv_b.to_vec()) } }" % b

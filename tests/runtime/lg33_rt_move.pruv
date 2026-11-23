@@ -1,0 +1,73 @@
+// LG33: truncate(x, m) / str_from_utf8(x) of an owned local array at its last use hand x's block over instead of
+// copying it (G-LG32-5, G-DB54-2); a later read of x keeps the copy.
+fn put(inout w: [u8], n: i64) -> () ! alloc
+  requires 1 <= n && n <= 50
+  ensures len(w) == n - 1
+{
+  let mut t: [u8] = alloc(n, 7);
+  t[0] = 3;
+  w = truncate(t, n - 1);
+}
+fn small(n: i64) -> [i64] ! alloc
+  requires 2 <= n && n <= 50
+  ensures len(result) == 1
+{
+  let mut t: [i64] = alloc(n, 5);
+  t[0] = 4;
+  let u: [i64] = truncate(t, 1);
+  return u;
+}
+fn none(n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 50
+{
+  let t: [i64] = alloc(n, 5);
+  let u: [i64] = truncate(t, 0);
+  return len(u);
+}
+fn text(n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 50
+{
+  let mut b: [u8] = alloc(n + 2, 65);
+  b[0] = 104;
+  let mut r: i64 = -1;
+  if utf8_valid(b) {
+    let s: str = str_from_utf8(b);
+    r = len(s) * 1000 + s[0];
+  }
+  return r;
+}
+fn keepstr(n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 50
+{
+  let b: [u8] = alloc(n + 1, 66);
+  let mut r: i64 = -1;
+  if utf8_valid(b) {
+    let s: str = str_from_utf8(b);
+    r = len(s) + len(b);
+  }
+  return r;
+}
+fn capstr(n: i64) -> i64 ! alloc
+  requires 6 <= n && n <= 10
+{
+  let mut t: [u8] = alloc(n, 97);
+  t[1] = 98;
+  let u: [u8] = truncate(t, 6);
+  let mut r: i64 = -1;
+  if utf8_valid(u) {
+    let s: str = str_from_utf8(u);
+    r = len(s) * 1000 + s[1];
+  }
+  return r;
+}
+fn run() -> () ! io, alloc {
+  let mut w: [u8] = alloc(3, 1);
+  put(inout w, 9);
+  print(len(w)); print(w[0]); print(w[7]);
+  let s: [i64] = small(40);
+  print(len(s)); print(s[0]);
+  print(none(6));
+  print(text(5));
+  print(keepstr(4));
+  print(capstr(10));
+}

@@ -1961,6 +1961,18 @@ class FnGen:
         owned local array, or an array payload binder of a match on an owned extended local that is dead after the
         match; returns {x} (the copy lowering then takes the value and empties its owner), else an empty set"""
         e = st.value
+        if (not s.cost and isinstance(e, Call) and len(e.args) == (2 if e.name == "truncate" else 1)
+                and e.name in ("truncate", "str_from_utf8") and isinstance(e.args[0], Var)):
+            # LG33 (G-LG32-5, G-DB54-2): truncate(x, m) / str_from_utf8(x) of an owned local array at its last use
+            # hands x's block over (the Rust backend's last_copy); a length argument naming x keeps it borrowed
+            x = e.args[0]
+            names = set()
+            if e.name == "truncate":
+                codegen._expr_names(e.args[1], names)
+            if x.name == st.name or x.name in names or not s.dead_after(x.name):
+                return set()
+            kind, v = s.lookup(x.name)
+            return {x.name} if kind == "slot" and v.k == "arr" and s.owned_slot(v) else set()
         if s.cost or not (isinstance(e, Call) and e.name == "copy" and len(e.args) == 1):
             return set()
         x = e.args[0]
@@ -2885,6 +2897,21 @@ class FnGen:
                 # cap moves out (no runtime call), as `return truncate(x, m)` does; the return's cleanup skips the slot
                 s.ret_moved[s.lookup(a[0].name)[1].a] = None
                 return s.temp_arr(V("arr", src.a, m.a, src.ty, layout=src.layout, rng=src.rng, c=capof(src)), owned)
+            if isinstance(a[0], Var) and a[0].name in s.moving:
+                # LG33 (G-LG32-5): an owned local array at its last use (move_src) keeps its block with length m; as the
+                # Rust backend's truncate move, a block left more than half unused is shrunk to m (pruv_shrink_v2
+                # returns the block unchanged when the target is the cap, frees it and returns NULL only when the
+                # target is 0, and panics if a shrinking realloc fails, so the recorded cap is always the block's real cap)
+                s.empty_array_slot(s.lookup(a[0].name)[1])
+                cap = capof(src)
+                half = s.op("lshr i64 %s, 1" % cap)
+                cut = s.op("icmp ugt i64 %s, %s" % (half, m.a))
+                nc = s.op("select i1 %s, i64 %s, i64 %s" % (cut, m.a, cap))
+                s.m.shrink = True
+                sz = 1 if is_bytes(src) else elem_size(src.layout)
+                al = 1 if is_bytes(src) else alignment(src.layout)
+                p = s.op("call ptr @pruv_shrink_v2(ptr %s, i64 %s, i64 %s, i64 %d, i64 %d)" % (src.a, cap, nc, sz, al))
+                return s.temp_arr(V("arr", p, m.a, src.ty, layout=src.layout, rng=src.rng, c=nc), owned)
             if src.layout != "i64":
                 p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 %d, i64 %d)" %
                          (src.a, m.a, elem_size(src.layout), alignment(src.layout)))
@@ -3076,6 +3103,10 @@ class FnGen:
                 s.m.uses_utf8_valid = s.m.uses_utf8_panic = True
                 ok = s.op("call i1 @pruv_utf8_valid(ptr %s, i64 %s)" % (b.a, b.b))
                 s.guard(ok, lambda: s.ins("call void @pruv_panic_utf8(i64 %s)" % b.b), False)
+            if isinstance(a[0], Var) and a[0].name in s.moving:
+                # LG33 (G-DB54-2): an owned local [u8] at its last use (move_src): the str takes its block and cap
+                s.empty_array_slot(s.lookup(a[0].name)[1])
+                return s.temp_arr(V("arr", b.a, b.b, STR, c=capof(b)), owned)
             p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 1, i64 1)" % (b.a, b.b))
             return s.temp_arr(V("arr", p, b.b, STR), owned)
         if n == "subview":
