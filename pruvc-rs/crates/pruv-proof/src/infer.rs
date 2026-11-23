@@ -663,6 +663,46 @@ fn scope_types(f: &ast::Function, w: &ast::While) -> TyEnv {
     }
 }
 
+/// LG37 (G-LG31-6): the head scope of every `while` loop of `f` (keyed by node address), built in one walk with the
+/// same rules as `find_loop_env` (a `let` sets its name; `if` / `while` / map `for` bodies and match arms, with their
+/// binders unknown, are entered with a copied environment), so `loop_envs(f)[w] == scope_types(f, w)` for each loop.
+fn loop_envs(f: &ast::Function) -> HashMap<*const ast::While, TyEnv> {
+    fn walk(stmts: &[Stmt], env: &mut TyEnv, out: &mut HashMap<*const ast::While, TyEnv>) {
+        for st in stmts {
+            match st {
+                Stmt::Let(x) => tyenv_set(env, &x.name, Some(&x.ty)),
+                Stmt::If(x) => {
+                    for blk in [&x.then, &x.els] {
+                        walk(blk, &mut env.clone(), out);
+                    }
+                }
+                Stmt::While(x) => {
+                    out.insert(x as *const ast::While, env.clone());
+                    walk(&x.body, &mut env.clone(), out);
+                }
+                Stmt::ForMap(x) => walk(&x.body, &mut env.clone(), out),
+                Stmt::Match(m) => {
+                    for a in &m.arms {
+                        let mut e2 = env.clone();
+                        for bn in &a.binders {
+                            tyenv_set(&mut e2, bn, None);
+                        }
+                        walk(&a.body, &mut e2, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut env: TyEnv = Vec::new();
+    for p in &f.params {
+        tyenv_set(&mut env, &p.name, Some(&p.ty));
+    }
+    let mut out = HashMap::new();
+    walk(&f.body, &mut env, &mut out);
+    out
+}
+
 // ---------------------------------------------------------------------------
 // LG31: automatic loop frame clause for a push-only local Vec
 // ---------------------------------------------------------------------------
@@ -824,14 +864,17 @@ pub fn frame_candidates(prog: &ast::Program, f: &ast::Function) -> Extra {
     }
     let decls = crate::symbolic::inv_decl_table(prog);
     let theta = pruv_core::gtype::Mapping::new();
+    // LG37 (G-LG31-6): every loop head scope from one walk, built on the first pushing loop
+    let mut envs: Option<HashMap<*const ast::While, TyEnv>> = None;
     for (n, (w, _, _)) in walk_loops(&f.body).into_iter().enumerate() {
         let mut pushed = Vec::new();
         lg31_pushed(&w.body, &mut pushed);
         if pushed.is_empty() {
             continue;
         }
-        let mut names: Vec<(String, String)> =
-            scope_types(f, w).into_iter().filter(|(nm, _)| pushed.contains(nm)).collect();
+        let env = envs.get_or_insert_with(|| loop_envs(f)).get(&(w as *const ast::While)).cloned();
+        let env = env.unwrap_or_else(|| scope_types(f, w));
+        let mut names: Vec<(String, String)> = env.into_iter().filter(|(nm, _)| pushed.contains(nm)).collect();
         names.sort_by(|a, b| a.0.cmp(&b.0));
         let mut cands: Vec<ExtraInv> = Vec::new();
         for (name, ty) in &names {

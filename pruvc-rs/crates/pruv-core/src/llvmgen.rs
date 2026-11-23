@@ -3179,6 +3179,13 @@ impl<'a> FnGen<'a> {
         let cnt = self.ev(&c.args[1], false)?;
         let v = self.ev(&c.args[2], false)?;
         self.resize_guards(src, &cnt, &v)?;
+        let (q, nc) = self.regrow_block(src, &cnt, &v)?;
+        Ok((q, cnt, nc))
+    }
+
+    /// the regrow helper call of src's element kind for the evaluated, guarded resize(src, cnt, v); returns (new
+    /// block, new cap max(cnt, cap))
+    fn regrow_block(&mut self, src: &V, cnt: &V, v: &V) -> R<(String, String)> {
         let cap = capof(src);
         let q = if src.ty.as_deref() == Some(ARRAY_BOOL) {
             let z = self.op(format!("zext i1 {} to i64", v.a))?;
@@ -3199,7 +3206,70 @@ impl<'a> FnGen<'a> {
         };
         let gt = self.op(format!("icmp sgt i64 {}, {}", cnt.a, cap))?;
         let nc = self.op(format!("select i1 {}, i64 {}, i64 {}", gt, cnt.a, cap))?;
-        Ok((q, cnt, nc))
+        Ok((q, nc))
+    }
+
+    /// LG37 (G-DB56-4, G-DB49-2): the owned local arrays a `str_from_utf8(x)` or `resize(x, n, v)` anywhere in the
+    /// expression e of a let / assignment / expression statement / return takes at their last use: x is named once
+    /// in the statement (so nothing reads it after the take), is not the assigned target, and is dead after the
+    /// statement (dead_after, return_next, or the statement is a return).  x is an owned array slot (a local, or a take
+    /// parameter the function owns at a return; not a borrowed or inout parameter, reference, pinned or stack local); for str_from_utf8 also an array payload binder of a consuming match (as
+    /// move_src).  The str_from_utf8 lowering then hands x's block and cap to the str, the resize lowering grows x's
+    /// block in place (realloc) instead of a fresh block plus a prefix copy.
+    fn nested_moves(&self, e: &Expr, target: Option<&str>, ret: bool) -> HashSet<String> {
+        self.nested_moves_all(&[e], target, ret)
+    }
+
+    /// LG37: nested_moves over several operands of one statement (an element store's index and value), the names
+    /// counted across all of them
+    fn nested_moves_all(&self, es: &[&Expr], target: Option<&str>, ret: bool) -> HashSet<String> {
+        let mut out = HashSet::new();
+        if self.cost {
+            return out;
+        }
+        fn walk<'a>(x: &'a Expr, counts: &mut HashMap<String, usize>, calls: &mut Vec<&'a Call>) {
+            match x {
+                Expr::Var(v) => *counts.entry(v.name.clone()).or_insert(0) += 1,
+                Expr::Move(v) => *counts.entry(v.name.clone()).or_insert(0) += 1,
+                Expr::Call(c) if matches!(c.args.first(), Some(Expr::Var(_)))
+                    && ((c.name == "str_from_utf8" && c.args.len() == 1) || (c.name == "resize" && c.args.len() == 3)) => {
+                    calls.push(c)
+                }
+                _ => {}
+            }
+            for k in crate::refine::kids(x) {
+                walk(k, counts, calls);
+            }
+        }
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        let mut calls: Vec<&Call> = Vec::new();
+        for e in es {
+            walk(e, &mut counts, &mut calls);
+        }
+        for c in calls {
+            let Some(Expr::Var(x)) = c.args.first() else { continue };
+            let n = &x.name;
+            if Some(n.as_str()) == target || counts.get(n) != Some(&1) {
+                continue;
+            }
+            match self.lookup(n) {
+                Ok(Bind::Ssa(v)) => {
+                    if c.name == "str_from_utf8" && v.k == Kind::Arr && v.mv.as_ref().is_some_and(|m| m.3) {
+                        let nxt = self.frames.last().is_some_and(|fr| fr.3 && !fr.1.contains(n));
+                        if ret || nxt || self.dead_after(n) {
+                            out.insert(n.clone());
+                        }
+                    }
+                }
+                Ok(Bind::Slot(v)) => {
+                    if (ret || self.dead_after(n) || self.return_next(n)) && v.k == Kind::Arr && self.owned_slot(&v) {
+                        out.insert(n.clone());
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+        out
     }
 
     /// P3 (the Rust backend's last_copy): a let / assignment `y = copy(x)` at the last use of x moves x when x is an
@@ -3394,7 +3464,10 @@ impl<'a> FnGen<'a> {
             Expr::Call(c) => &c.args[1],
             _ => return Err("llvmgen: stack array without alloc".to_string()),
         };
-        let v = self.ev(fill, false)?;
+        self.moving = self.nested_moves(&x.value, Some(&x.name), false); // LG37: a last-use take inside the fill value
+        let v = self.ev(fill, false);
+        self.moving.clear();
+        let v = v?;
         let val: String;
         let layout: &'static str;
         let mut rng: Option<(i128, i128)> = None;
@@ -3490,6 +3563,7 @@ impl<'a> FnGen<'a> {
             Stmt::Let(x) => {
                 self.begin_temps();
                 self.moving = self.move_src(&x.name, &x.value);
+                self.moving.extend(self.nested_moves(&x.value, Some(&x.name), false));
                 self.take_let = self.take_src(&x.name, &x.value);
                 let v = self.ev(&x.value, true);
                 self.moving.clear();
@@ -3510,11 +3584,17 @@ impl<'a> FnGen<'a> {
                 self.begin_temps();
                 let sl = self.lookup(&x.name)?.val().clone();
                 // LG32 (G-DB52-4): x = resize(x, n, v) grows the slot's block in place (realloc), so the old and new blocks are never live together
-                if self.regrow_assign(&x.name, &x.value, &sl)? {
+                // LG37: a last-use take also inside the in-place regrow's operands
+                self.moving = self.nested_moves(&x.value, Some(&x.name), false);
+                let rg = self.regrow_assign(&x.name, &x.value, &sl);
+                if rg.is_err() || rg == Ok(true) {
+                    self.moving.clear();
+                    rg?;
                     return self.end_temps();
                 }
                 // the right side is complete and owned before the old value is destroyed
-                self.moving = self.move_src(&x.name, &x.value);
+                let ms = self.move_src(&x.name, &x.value);
+                self.moving.extend(ms);
                 self.take_let = self.take_src(&x.name, &x.value);
                 let v = self.ev(&x.value, true);
                 self.moving.clear();
@@ -3539,17 +3619,26 @@ impl<'a> FnGen<'a> {
                     Bind::Slot(s) => s,
                     Bind::Ssa(_) => return Err(format!("llvmgen: field assignment to non-local {}", x.name)),
                 };
-                if self.regrow_field(x, &sl)? {
+                // LG37: a last-use take anywhere in the right side
+                self.moving = self.nested_moves(&x.value, Some(&x.name), false);
+                let rg = self.regrow_field(x, &sl);
+                if rg.is_err() || rg == Ok(true) {
                     // LG34 (G-LG32-3): x.f = resize(x.f, n, v) grows the field in place
+                    self.moving.clear();
+                    rg?;
                     return self.end_temps();
                 }
                 if self.is_ext_opt(&sl.ty) {
                     // G9 A3: owned right side first, then an in-place store along the path
-                    let v = self.ev(&x.value, true)?;
+                    let v = self.ev(&x.value, true);
+                    self.moving.clear();
+                    let v = v?;
                     self.assign_path(&sl, &x.fields, &v)?;
                     return self.end_temps();
                 }
-                let v = self.ev(&x.value, false)?;
+                let v = self.ev(&x.value, false);
+                self.moving.clear();
+                let v = v?;
                 let ty = need_ty(&sl.ty)?.to_string();
                 if matches!(self.tt.decl(&ty), Some(TypeDecl::Struct(_))) {
                     let (gp, fty) = self.field_ptr_ty(&sl, &x.fields)?;
@@ -3565,8 +3654,15 @@ impl<'a> FnGen<'a> {
             Stmt::IndexAssign(x) => {
                 self.begin_temps();
                 let bind = self.lookup(&x.name)?;
-                let i = self.ev(&x.index, false)?; // index first, then the value (all modes)
-                let v = self.ev(&x.value, false)?;
+                // LG37: a last-use take in either operand, the names counted across both
+                self.moving = self.nested_moves_all(&[&x.index, &x.value], Some(&x.name), false);
+                let i = self.ev(&x.index, false); // index first, then the value (all modes)
+                let v = match &i {
+                    Ok(_) => self.ev(&x.value, false),
+                    Err(e) => Err(e.clone()),
+                };
+                self.moving.clear();
+                let (i, v) = (i?, v?);
                 // G5 A3: an inout parameter is a pointer view (ssa), stored through
                 let a = if !x.fields.is_empty() {
                     // LG4: `p.a.b[i] = e`: address of the buffer field along the path from the root slot (a local slot or
@@ -3670,7 +3766,11 @@ impl<'a> FnGen<'a> {
                 if let (Some(sl), Some(Expr::Call(c))) = (tm, x.value.as_ref()) {
                     // P2 batch 4: `return truncate(x, m)` of an owned local array: the same pointer with length m moves out
                     let src = self.load(&sl)?;
-                    let m = self.ev(arg(&c.args, 1)?, false)?;
+                    // LG37: a last-use take inside the length
+                    self.moving = self.nested_moves(arg(&c.args, 1)?, None, true);
+                    let m = self.ev(arg(&c.args, 1)?, false);
+                    self.moving.clear();
+                    let m = m?;
                     if !self.verified {
                         let ok = self.op(format!("icmp ule i64 {}, {}", m.a, src.b))?;
                         self.guard(&ok, Fail::Panic1("pruv_panic_arith", "truncate length outside 0..len".to_string()), false)?;
@@ -3703,7 +3803,11 @@ impl<'a> FnGen<'a> {
                     };
                     self.ret_cand = self.ret_movable(val);
                     self.ret_take = self.ret_takable(val);
-                    v = self.ev(val, true)?;
+                    let nm = self.nested_moves(val, None, true);
+                    self.moving = nm.difference(&self.ret_cand).cloned().collect();
+                    let r = self.ev(val, true);
+                    self.moving.clear();
+                    v = r?;
                     self.ret_cand.clear();
                     self.ret_take.clear();
                     if v.k == Kind::Arr {
@@ -3728,7 +3832,10 @@ impl<'a> FnGen<'a> {
             Stmt::Par(p) => self.parallel(p),
             Stmt::ExprStmt(x) => {
                 self.begin_temps();
-                self.ev(&x.expr, false)?;
+                self.moving = self.nested_moves(&x.expr, None, false);
+                let r = self.ev(&x.expr, false);
+                self.moving.clear();
+                r?;
                 self.end_temps()
             }
             Stmt::Match(x) if expr_ty(&x.scrutinee).as_deref().is_some_and(is_owned_result) => self.owned_match(x),
@@ -4594,6 +4701,20 @@ impl<'a> FnGen<'a> {
             let v = self.ev(arg(a, 2)?, false)?;
             let u8a = src.ty.as_deref() == Some(ARRAY_U8);
             self.resize_guards(&src, &cnt, &v)?;
+            if let Expr::Var(x) = arg(a, 0)? {
+                if self.moving.contains(&x.name) {
+                    // LG37 (G-DB49-2): an owned local array at its last use (nested_moves): its block grows in place
+                    // (realloc when n > cap, the tail filled with v) and moves into the result, as `x = resize(x, n, v)`
+                    self.take_array(&x.name)?;
+                    let (q, nc) = self.regrow_block(&src, &cnt, &v)?;
+                    let mut rv = V::with_b(Kind::Arr, q, cnt.a.clone());
+                    rv.ty = src.ty.clone();
+                    rv.layout = src.layout;
+                    rv.rng = src.rng;
+                    rv.c = Some(nc);
+                    return self.temp_arr(rv, owned);
+                }
+            }
             if src.ty.as_deref() == Some(ARRAY_BOOL) {
                 let z = self.op(format!("zext i1 {} to i64", v.a))?;
                 self.m.resize_u8 = true;
