@@ -600,8 +600,14 @@ fn line(raw: &[u8], acc: &mut [u64; 15], buf: &mut Vec<u8>) {
     if kind == 1 {
         let idr = &t[cap.id.s..cap.id.e];
         acc[3] = bump(acc[3], 1);
-        acc[7] = bump(acc[7], NH_HEAD.len() + idr.len() + NH_TAIL.len());
-        acc[8] = fold(fold(fold(acc[8], NH_HEAD), idr), NH_TAIL);
+        // DB65 (RUST_SHAPE_RESET §7: the hand computes the full result): the reply the pump sends is built, one exact Vec
+        let mut nh = Vec::with_capacity(NH_HEAD.len() + idr.len() + NH_TAIL.len());
+        nh.extend_from_slice(NH_HEAD);
+        nh.extend_from_slice(idr);
+        nh.extend_from_slice(NH_TAIL);
+        let nh = std::hint::black_box(nh);
+        acc[7] = bump(acc[7], nh.len());
+        acc[8] = fold(acc[8], &nh);
     } else if kind == 2 {
         acc[4] = bump(acc[4], 1);
         if cap.err_obj {
