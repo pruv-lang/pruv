@@ -148,7 +148,8 @@ pub fn parse_line(line: [u8], n: i64) -> crate::json::JsonParse ! alloc
   while i < n invariant 0 <= i && i <= n && len(b) == n && n <= len(line) decreases n - i
   { let c: i64 = line[i]; b[i] = c; i = i + 1; }
   let trimmed: [u8] = trim_bytes(b);
-  return crate::lines::parse_range(trimmed, 0, len(trimmed));
+  let tn: i64 = len(trimmed);
+  return crate::lines::parse_owned(move trimmed, tn);
 }
 
 // One receive step of the pump (same contract as the Codex rpc::step with a 16-word ctl). ctl[5] = 1 when a line of ctl[6] bytes is

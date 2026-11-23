@@ -219,6 +219,19 @@ fn value_increment(key: bool) -> i64
 // Frame zero is the synthetic document frame; frames 1..128 are containers.
 // States: 0 array initial, 1 array after comma, 2 comma/end,
 // 3 object initial key, 4 object after comma key, 5 colon, 6 value.
+// DB55 (G-DB54-3): the first tape size from the input length (one slot per 16 input bytes, at least 192 and at most
+// 4096), so a line up to 64 KiB starts near its final size instead of doubling up from 192 slots; widened still grows
+// it on denser or longer input. The 4096 cap bounds the unused first tape of a sparse line (one long string) to 32 KiB.
+fn first_slots(n: i64) -> i64
+  requires 0 <= n && n <= 16777216
+  ensures 192 <= result && result <= 4096
+{
+  let m: i64 = n / 16;
+  if m < 192 { return 192; }
+  if m > 4096 { return 4096; }
+  return m;
+}
+
 // a with its first used slots kept and twice the room (capped at the record limit).
 fn widened(a: [i64], used: i64) -> [i64] ! alloc
   requires 0 <= used && used <= len(a) && used + 6 <= 6291456
@@ -260,8 +273,8 @@ pub fn scan(input: [u8]) -> Checked ! alloc
   requires len(input) <= 16777216
   ensures is_variant(result, Checked::Rejected) ==> (0 <= variant_field(result, Checked::Rejected, position) && variant_field(result, Checked::Rejected, position) <= len(input))
 {
-  let mut tape: [i64] = alloc(192, 0);
   let n: i64 = len(input);
+  let mut tape: [i64] = alloc(first_slots(n), 0);
   // Depth never exceeds the bytes read, so the stack needs at most min(128, n) frames.
   // It starts at 8 frames and grows on demand toward that bound.
   let mut cap: i64 = 8;
@@ -374,8 +387,8 @@ fn scan_document(input: [u8]) -> crate::json::JsonParse ! alloc
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6: (t > 0 ==> (0 <= variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 4] && variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 4] < t && (variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 4]] == 5 || variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 4]] == 6) && variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 4] + 1] < variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 1])))
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6: ((variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] <= 4 || variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] == 7) ==> variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 5] == 0))
 {
-  let mut tape: [i64] = alloc(192, 0);
   let n: i64 = len(input);
+  let mut tape: [i64] = alloc(first_slots(n), 0);
   // Depth never exceeds the bytes read, so the stack needs at most min(128, n) frames.
   // It starts at 8 frames and grows on demand toward that bound.
   let mut cap: i64 = 8;

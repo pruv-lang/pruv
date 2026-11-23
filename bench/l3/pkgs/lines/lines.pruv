@@ -54,7 +54,36 @@ pub fn parse_range(data: [u8], lo: i64, hi: i64) -> crate::json::JsonParse ! all
     }
     crate::parse::Checked::Tape(tape) => {
       if !crate::json::check_tape(tape, n) { return crate::json::JsonParse::Failed(crate::json::make_error(0, 18)); }
-      return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: copy(owned), tape: copy(tape) });
+      return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: copy(owned), tape: move tape });
+    }
+  }
+}
+
+// DB55 (G-DB54-1): parse_range(data, 0, hi) for a caller that gives up its buffer: no copy of the bytes; the document's
+// source is data shortened to hi (in place on both backends) and the scanned tape is moved in.
+pub fn parse_owned(take data: [u8], hi: i64) -> crate::json::JsonParse ! alloc
+  requires 0 <= hi && hi <= len(data)
+  ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= hi)
+  ensures hi > 16777216 ==> is_variant(result, crate::json::JsonParse::Failed)
+  ensures hi > 16777216 ==> (variant_field(result, crate::json::JsonParse::Failed, error).position == 0 && variant_field(result, crate::json::JsonParse::Failed, error).kind == 1)
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
+{
+  let n: i64 = hi;
+  if n > crate::json::limit_input_bytes() {
+    return crate::json::JsonParse::Failed(crate::json::make_error(0, crate::json::err_input_too_large()));
+  }
+  // an owned local, so the truncate in the returned document shortens it in place (Rust and LLVM)
+  let owned: [u8] = move data;
+  let invalid: i64 = crate::lex::validate_utf8(owned, 0, n);
+  if invalid >= 0 { return crate::json::JsonParse::Failed(crate::json::make_error(invalid, 4)); }
+  let checked: crate::parse::Checked = crate::parse::scan(subview(owned, 0, n));
+  match checked {
+    crate::parse::Checked::Rejected(position, kind) => {
+      return crate::json::JsonParse::Failed(crate::json::make_error(position, kind));
+    }
+    crate::parse::Checked::Tape(tape) => {
+      if !crate::json::check_tape(tape, n) { return crate::json::JsonParse::Failed(crate::json::make_error(0, 18)); }
+      return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: truncate(owned, n), tape: move tape });
     }
   }
 }
