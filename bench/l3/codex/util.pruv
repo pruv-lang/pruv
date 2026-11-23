@@ -171,14 +171,14 @@ pub fn byte_buffer(n: i64) -> ByteBuffer ! alloc
   return ByteBuffer { data: move data };
 }
 
-// Grow a byte buffer to fit a pending write without exceeding its caller's limit.
-pub fn grow_bytes(buf: [u8], needed: i64, cap: i64) -> [u8] ! alloc
+// Grow a byte buffer to fit a pending write without exceeding its caller's limit. Grows in place (one realloc on both backends).
+pub fn grow_bytes(inout buf: [u8], needed: i64, cap: i64) -> () ! alloc
   requires len(buf) < needed && needed <= cap && cap <= 8700000
-  ensures needed <= len(result) && len(result) <= cap
-  ensures forall k in 0..len(buf): result[k] == buf[k]
+  ensures needed <= len(buf) && len(buf) <= cap
+  ensures forall k in 0..len(old(buf)): buf[k] == old(buf)[k]
 {
   let mut next: i64 = 2 * len(buf);
   if next < needed { next = needed; }
   if next > cap { next = cap; }
-  return resize(buf, next, 0);
+  buf = resize(buf, next, 0);
 }
