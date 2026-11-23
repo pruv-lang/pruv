@@ -66,7 +66,7 @@ pub fn clean_title(kind: i64, a: i64, b: i64, qb: [u8]) -> [u8] ! alloc
   if has_prefix(qb, a, b, "New session - ") { return empty; }
   if has_prefix(qb, a, b, "Child session - ") { return empty; }
   let raw: [u8] = crate::util::span_bytes(qb, a, b);
-  let s: str = crate::jstr::adapter_probe(raw);
+  let s: str = crate::jstr::owned_text(move raw);
   if len(s) > 100000000000 { return empty; }
   let t: str = crate::text::one_line(s, 120);
   let out: [u8] = crate::util::to_bytes(t);
@@ -124,7 +124,7 @@ pub fn updated_number(kind: i64, a: i64, b: i64, qb: [u8]) -> i64 ! alloc
   if kind == 3 {
     if !crate::packet::ref_ok(a, b, len(qb)) || a < 0 { return 0; }
     let raw: [u8] = crate::util::span_bytes(qb, a, b);
-    let s: str = crate::jstr::adapter_probe(raw);
+    let s: str = crate::jstr::owned_text(move raw);
     return text_number(s);
   }
   return 0;

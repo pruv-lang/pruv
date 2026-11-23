@@ -3,7 +3,7 @@
 //
 // NOTES / THINGS I WAS UNSURE ABOUT  (spec P11 is resolved: a failed stdin write half-closes stdin and stdout is still read, as TS does)
 //  1. Local helpers: grok util.pruv has no `field`, `join`, `id_is`, `int_bytes`, `trim` (the Codex util has them), so this file has
-//     private copies (`field`, `id_is`, `trim_bytes`); joins use packet::cat_bytes.
+//     private copies (`field`, `id_is`, `trim_bounds`); joins use packet::cat_bytes.
 //  2. `inout` arrays are only written element by element (never replaced): the RpcResponseError detail text and raw `error.code` JSON
 //     travel in the caller-owned buffer `aux` (detail at 0..300, raw code from 512, at most 8388608 bytes; longer => internal invariant).
 //  3. kind 0 null/1 false/2 true/3 number/4 string/5 array/6 object are taken from access::kind (as the Codex rpc does).
@@ -64,8 +64,11 @@ fn space(b: [u8], i: i64) -> i64
   return 0;
 }
 
-fn trim_bytes(b: [u8]) -> [u8] ! alloc
-  ensures len(result) <= len(b)
+// DB56 (G-DB55-5): the bounds the old trim_bytes copied out, without the copy: b[lo..hi) is b without leading and trailing
+// whitespace (the same `space` steps), lo == hi when b is all whitespace.
+struct Bounds { lo: i64, hi: i64 }
+fn trim_bounds(b: [u8]) -> Bounds
+  ensures 0 <= result.lo && result.lo <= result.hi && result.hi <= len(b)
 {
   let mut lo: i64 = 0;
   let mut hi: i64 = 0;
@@ -79,13 +82,7 @@ fn trim_bytes(b: [u8]) -> [u8] ! alloc
     else { i = i + 1; hi = i; }
   }
   if hi < lo { hi = lo; }
-  let mut out: [u8] = alloc(hi - lo, 0);
-  let mut j: i64 = 0;
-  while j < len(out)
-    invariant 0 <= j && j <= len(out) && len(out) == hi - lo && 0 <= lo && hi <= len(b)
-    decreases len(out) - j
-  { out[j] = b[lo + j]; j = j + 1; }
-  return out;
+  return Bounds { lo: lo, hi: hi };
 }
 
 // ---- process start ----
@@ -143,13 +140,12 @@ pub fn parse_line(line: [u8], n: i64) -> crate::json::JsonParse ! alloc
   requires 0 <= n && n <= len(line)
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
 {
-  let mut b: [u8] = alloc(n, 0);
-  let mut i: i64 = 0;
-  while i < n invariant 0 <= i && i <= n && len(b) == n && n <= len(line) decreases n - i
-  { let c: i64 = line[i]; b[i] = c; i = i + 1; }
-  let trimmed: [u8] = trim_bytes(b);
-  let tn: i64 = len(trimmed);
-  return crate::lines::parse_owned(move trimmed, tn);
+  // DB56 (G-DB55-5): trim to bounds on the line itself, then copy only the trimmed bytes once and give them up.
+  let tb: Bounds = trim_bounds(subview(line, 0, n));
+  let tn: i64 = tb.hi - tb.lo;
+  let mut b: [u8] = alloc(tn, 0);
+  copy_range(inout b, 0, line, tb.lo, tn);
+  return crate::lines::parse_owned(move b, tn);
 }
 
 // One receive step of the pump (same contract as the Codex rpc::step with a 16-word ctl). ctl[5] = 1 when a line of ctl[6] bytes is
@@ -394,7 +390,7 @@ fn failure(code: i64, stage: i64, aux: [u8], rl: i64, dl: i64) -> [i64] ! alloc
       invariant 0 <= j && j <= dl && len(dt) == dl && dl <= 300 && 512 <= len(aux) && len(aux) <= 8389120
       decreases dl - j
     { let c2: i64 = aux[j]; dt[j] = c2; j = j + 1; }
-    let detail: str = crate::jstr::adapter_probe(dt);
+    let detail: str = crate::jstr::owned_text(move dt);
     return crate::packet::error_mode(3, stage, 3, 0, 0, 0, raw, "RpcResponseError", detail);
   }
   if code == 7 { return crate::packet::error_mode(3, 24, 1, 8, 0, 0, none, "EngineImportError", ""); }

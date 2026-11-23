@@ -186,7 +186,7 @@ fn feed_user(d: crate::json::JsonDocument, inout st: [i64], inout sl: [i64], ino
     if n < 0 || n > len(prompt) { return -1; }
     let mut bb: [u8] = alloc(n, 0);
     copy_text_range(inout bb, prompt, q[0], n);
-    let inner: str = crate::jstr::adapter_probe(bb);
+    let inner: str = crate::jstr::owned_text(move bb);
     if len(inner) != n { return -1; }
     prompt = copy(inner);  // MUT:M08 => prompt = crate::text::trim(inner);
   } else {

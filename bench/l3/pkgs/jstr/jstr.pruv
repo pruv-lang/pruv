@@ -415,3 +415,49 @@ pub fn string_text_plain(source: [u8], start: i64, end: i64) -> Text ! alloc
   if len(owned) != len(bytes) { return Text::InternalInvariant(crate::json::err_internal_invariant()); }
   return Text::Decoded(string_to_str(owned));
 }
+
+// DB56 (G-LG33-1): owned decodes. Each builds its decode buffer as a fresh local, tests it with utf8_valid at run
+// time (the test utf8_to_string made) and hands it to str_from_utf8 at its last use, which moves the block into
+// the str (D-LG33-2) instead of copying it. Same results as the borrowed versions above: invalid UTF-8 gives
+// InternalInvariant (Text) or "" (owned_text), and the empty buffer is valid.
+pub fn string_text_owned(source: [u8], start: i64, end: i64) -> Text ! alloc
+  requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
+  ensures is_variant(result, Text::Decoded) ==> len(variant_field(result, Text::Decoded, text)) <= 3 * (end - start)
+{
+  let bytes: [u8] = string_utf8(source, start, end);
+  if !utf8_valid(bytes) { return Text::InternalInvariant(crate::json::err_internal_invariant()); }
+  let text: str = str_from_utf8(bytes);
+  return Text::Decoded(move text);
+}
+
+pub fn string_text_scanned_owned(source: [u8], start: i64, end: i64) -> Text ! alloc
+  requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
+  ensures is_variant(result, Text::Decoded) ==> len(variant_field(result, Text::Decoded, text)) <= 3 * (end - start)
+{
+  let bytes: [u8] = string_utf8_scanned(source, start, end);
+  if !utf8_valid(bytes) { return Text::InternalInvariant(crate::json::err_internal_invariant()); }
+  let text: str = str_from_utf8(bytes);
+  return Text::Decoded(move text);
+}
+
+pub fn string_text_plain_owned(source: [u8], start: i64, end: i64) -> Text ! alloc
+  requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
+  ensures is_variant(result, Text::Decoded) ==> len(variant_field(result, Text::Decoded, text)) <= 3 * (end - start)
+{
+  let bytes: [u8] = string_utf8_plain(source, start, end);
+  if !utf8_valid(bytes) { return Text::InternalInvariant(crate::json::err_internal_invariant()); }
+  let text: str = str_from_utf8(bytes);
+  return Text::Decoded(move text);
+}
+
+// adapter_probe for a buffer the caller gives up: the bytes as text with no copy, "" when they are not valid UTF-8.
+pub fn owned_text(take data: [u8]) -> str ! alloc
+{
+  let b: [u8] = move data;
+  if utf8_valid(b) {
+    let text: str = str_from_utf8(b);
+    return move text;
+  }
+  let none: str = "";
+  return copy(none);
+}
