@@ -131,7 +131,7 @@ fn receive(take l: Loop, slot: i64, overall: i64,
     i = i + 1;
   }
   let needed: i64 = filled + (i - begin);
-  if needed > len(line.data) { line.data = crate::util::grow_bytes(line.data, needed, 8388608); }
+  if needed > len(line.data) { crate::util::grow_bytes(inout line.data, needed, 8388608); }
   crate::bytes::copy_span(inout line.data, filled, chunk, begin, i);
   st[1] = needed;
   if i < st[4] {

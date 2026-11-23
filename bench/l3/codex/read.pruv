@@ -60,7 +60,7 @@ pub fn absorb(d: crate::json::JsonDocument, rid: i64, inout hs: [i64], inout ht:
           let needed: i64 = hs[1] + plen + rlen + 48;
           if needed > 8700000 { return -4; }
           if rlen > 32768 || raw.tools < 0 || raw.nreply < 0 || raw.rclipped < 0 || raw.rclipped > 1 { return -4; }
-          if needed > len(hb.data) { hb.data = crate::util::grow_bytes(hb.data, needed, 8700000); }
+          if needed > len(hb.data) { crate::util::grow_bytes(inout hb.data, needed, 8700000); }
           let h: i64 = hs[0];
           let b: i64 = 10 * h;
           let mut u: i64 = hs[1];
