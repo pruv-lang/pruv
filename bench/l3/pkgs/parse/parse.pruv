@@ -219,14 +219,16 @@ fn value_increment(key: bool) -> i64
 // Frame zero is the synthetic document frame; frames 1..128 are containers.
 // States: 0 array initial, 1 array after comma, 2 comma/end,
 // 3 object initial key, 4 object after comma key, 5 colon, 6 value.
-// DB55 (G-DB54-3): the first tape size from the input length (one slot per 16 input bytes, at least 192), so a long
-// line starts near its final size instead of doubling up from 192 slots; widened still grows it on denser input.
+// DB55 (G-DB54-3): the first tape size from the input length (one slot per 16 input bytes, at least 192 and at most
+// 4096), so a line up to 64 KiB starts near its final size instead of doubling up from 192 slots; widened still grows
+// it on denser or longer input. The 4096 cap bounds the unused first tape of a sparse line (one long string) to 32 KiB.
 fn first_slots(n: i64) -> i64
   requires 0 <= n && n <= 16777216
-  ensures 192 <= result && result <= 6291456
+  ensures 192 <= result && result <= 4096
 {
   let m: i64 = n / 16;
   if m < 192 { return 192; }
+  if m > 4096 { return 4096; }
   return m;
 }
 
