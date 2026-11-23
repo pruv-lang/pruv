@@ -98,6 +98,12 @@ provider's content filter) found three required items:
   once. This is new checking of new syntax only: a program with no `ref` type or borrowing struct skips it (both
   checkers test that first), so no existing program compiles slower. Not changed; listed under Open items.
 
+The confirm audit (same reviewer) found both fixes correct and the checkers in agreement on nested owned and
+borrowing-struct fields of locals and parameters. Its one required item was SPEC wording: the new sentence gave a
+borrowing-struct field of a local record (`src(d.child)`) the record variable `d` as well, while both checkers (and
+rustc, since `&Inner<'a>` lends only `'a`) take only what the record borrows. SPEC now says so, and the unreachable
+branch in `borrowed.rs` that tried to add it was removed.
+
 ## Demo
 
 `bench/l3/budget/lb2_borrow/borrow_demo.pruv` has `struct Req { method: ref [u8], path: ref [u8], n: i64 }`, a
