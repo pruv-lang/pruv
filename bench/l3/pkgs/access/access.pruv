@@ -75,6 +75,17 @@ pub fn field_units(doc: crate::json::JsonDocument, id: i64, key: [i64]) -> i64 !
 { return find(doc, id, key, len(key)); }
 // str indexing exposes UTF-8 bytes. Decode scalars without interpreting escapes.
 // Member lookup for an ASCII key given as str bytes; no allocation.
+// O(1) misses with ascii_equal's result: each decoded unit takes at least one byte, and an
+// ASCII byte other than a backslash decodes to itself. A function of its own so find_ascii's
+// loop invariant check does not carry these branches (G-DB61-2: solver timeout at low load).
+fn may_match(source: [u8], s: i64, e: i64, key: str) -> bool
+  requires 0 <= s && s <= e && e <= len(source)
+{
+  if e - s < 2 { return true; }
+  if e - s - 2 < len(key) { return false; }
+  if len(key) > 0 { let c: i64 = source[s + 1]; if c < 128 && c != 92 && c != key[0] { return false; } }
+  return true;
+}
 fn find_ascii(doc: crate::json::JsonDocument, id: i64, key: str) -> i64
   ensures result >= 0 ==> (result < len(doc.tape) / 6 && doc.tape[6 * result + 4] == id)
 {
@@ -91,14 +102,7 @@ fn find_ascii(doc: crate::json::JsonDocument, id: i64, key: str) -> i64
     let next: i64 = doc.tape[6 * v + 3];
     if next > stop || doc.tape[6 * v + 4] != id { return -4; }
     let s: i64 = doc.tape[6 * j + 1]; let e: i64 = doc.tape[6 * j + 2];
-    // O(1) misses with ascii_equal's result: each decoded unit takes at least one byte, and an
-    // ASCII byte other than a backslash decodes to itself.
-    let mut miss: bool = false;
-    if e - s >= 2 {
-      if e - s - 2 < len(key) { miss = true; }
-      else { if len(key) > 0 { let c: i64 = doc.source[s + 1]; if c < 128 && c != 92 && c != key[0] { miss = true; } } }
-    }
-    if !miss && crate::jstr::ascii_equal(doc.source, s, e, key) { found = v; } j = next;
+    if may_match(doc.source, s, e, key) && crate::jstr::ascii_equal(doc.source, s, e, key) { found = v; } j = next;
   }
   return found;
 }
