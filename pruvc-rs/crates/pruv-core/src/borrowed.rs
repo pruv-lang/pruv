@@ -248,16 +248,12 @@ impl Analysis<'_> {
         let mut roots = Roots::new();
         if let Some(root) = place_root(e) {
             if let Some(origin) = locals.get(root) {
-                // An owned field depends on the storage of its record; it also carries what the record
-                // borrows only when the field is itself a borrowing record (an owned `[u8]` does not).
-                match e {
-                    Expr::FieldAccess(x) if !self.ref_field(&x.base, &x.field) => {
-                        if expr_ty(e).as_deref().is_some_and(|ty| self.records.contains_key(ty)) {
-                            roots = origin.clone();
-                        }
-                        merge(&mut roots, root, Access::Read);
-                    }
-                    _ => roots = origin.clone(),
+                // An owned field (not `ref`, not a borrowing struct: `ref_field` covers those) lives in the
+                // record's storage and carries nothing the record borrows.
+                if matches!(e, Expr::FieldAccess(x) if !self.ref_field(&x.base, &x.field)) {
+                    merge(&mut roots, root, Access::Read);
+                } else {
+                    roots = origin.clone();
                 }
             } else {
                 merge(&mut roots, root, Access::Read);

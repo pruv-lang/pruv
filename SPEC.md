@@ -1462,8 +1462,8 @@ borrowed value is live.
     / whole borrow of `x`: `x`, shared (an `inout` parameter of the current function counts as a variable). A call:
     for each argument at a `from` position, the provenance of that argument (a `ref` / borrowing local) or its root
     variable, shared for a read argument and exclusive for an `inout` argument. A field read of a borrowing struct,
-    a copy of a `ref` local: the provenance of the source. A view of an owned field of a local record (`subview(d.scratch,
-    ..)`): the record variable `d` only (plus the record's provenance when the field is itself a borrowing struct).
+    a copy of a `ref` local, a borrowing-struct field of a record (`d.child`): the provenance of the source. A view
+    of an owned `[u8]` / `str` field of a local record (`subview(d.scratch, ..)`): the record variable `d` only.
     A struct literal: the union over its `ref` fields. The
     argument at a `from` position must be a variable, field path, `subview` or `ref` value.
   - *Live range.* A `ref` / borrowing local is live from the statement after its `let` through the last statement
