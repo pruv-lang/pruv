@@ -747,7 +747,7 @@ mod tests {
     #[test]
     fn abi_i64_bool() {
         let tt = TypeTable::new(&[]);
-        let f = Function {
+        let f = Function { borrow_from: None, borrowed_result: false,
             line: 1,
             col: 1,
             name: "f".into(),
@@ -777,7 +777,7 @@ mod tests {
     }
 
     fn opt_fn() -> Function {
-        Function {
+        Function { borrow_from: None, borrowed_result: false,
             line: 1,
             col: 1,
             name: "f".into(),

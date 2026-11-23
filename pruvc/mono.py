@@ -200,13 +200,15 @@ class _Mono:
                     if getattr(f, "pkg", None) is not None:   # G4b-1: dependency item, stem from the package name
                         self.rfns[f.name] = "pruv_p_f_" + encode_name((f.pkg,) + f.mod_path + (f.src_name,))
                     else:
-                        self.rfns[f.name] = f.src_name if f.host_entry else encode_stem("f", f.mod_path + (f.src_name,))
+                        plain = f.host_entry or f.mod_path == () and f.borrow_from
+                        self.rfns[f.name] = f.src_name if plain else encode_stem("f", f.mod_path + (f.src_name,))
             for d in prog.types:
                 if not d.tparams and self.tdecls[d.name] is d:
                     if getattr(d, "pkg", None) is not None:
                         self.rtypes[d.name] = "pruv_p_t_" + encode_name((d.pkg,) + d.mod_path + (d.src_name,))
                     else:
-                        self.rtypes[d.name] = d.src_name if (d.pub and d.mod_path == ()) else \
+                        self.rtypes[d.name] = d.src_name if (d.mod_path == () and (d.pub or
+                                                                               isinstance(d, StructDecl) and d.borrowing)) else \
                             encode_stem("t", d.mod_path + (d.src_name,))
         self.fns = {}            # stem -> FnSpec
         self.types = {}          # stem -> TypeSpec
@@ -352,7 +354,16 @@ class _Mono:
         if fields is None:
             return node
         new = type(node)(**dict((n, self.cp(getattr(node, n))) for n in fields))
+        if isinstance(node, Expr):
+            if node.borrowed_view:
+                new.borrowed_view = True
+            if node.static_str:
+                new.static_str = True
+        if isinstance(node, Let) and node.ref:
+            new.ref = True
         if isinstance(node, Call):
+            if getattr(node, "resize_scratch", False):
+                new.resize_scratch = True
             if getattr(node, "take_result_error", False):
                 new.take_result_error = True
             if node.old is not None:
@@ -427,6 +438,9 @@ class _Mono:
                        body=self.cp(f.body), ret_refine=self.cp(f.ret_refine))
         if f.cost is not None:
             new.cost = self.cp(f.cost)
+        new.borrow_from = f.borrow_from
+        new.ref_result = f.ref_result
+        new.borrowed_roots = getattr(f, "borrowed_roots", ())
         new.small_bound = declared_bound(f)
         new.private = private
         new.attribute = f.attribute
@@ -440,9 +454,14 @@ class _Mono:
         self.pos = (d.line, d.col)
 
         def fields(fs):
-            return [FieldDecl(fd.line, fd.col, fd.name, self.ty(fd.type)) for fd in fs]
+            result = [FieldDecl(fd.line, fd.col, fd.name, self.ty(fd.type)) for fd in fs]
+            for old, new in zip(fs, result):
+                new.ref = old.ref
+            return result
         if isinstance(d, StructDecl):
-            return self._mark_type(StructDecl(line=d.line, col=d.col, name=stem, fields=fields(d.fields)), d)
+            new = StructDecl(line=d.line, col=d.col, name=stem, fields=fields(d.fields))
+            new.borrowing = d.borrowing
+            return self._mark_type(new, d)
         return self._mark_type(EnumDecl(line=d.line, col=d.col, name=stem,
                                         variants=[VariantDecl(v.line, v.col, v.name, fields(v.fields))
                                                   for v in d.variants]), d)

@@ -1395,7 +1395,7 @@ mod tests {
     use super::*;
 
     fn func(name: &str, params: Vec<(&str, &str)>, ret: &str) -> Function {
-        Function {
+        Function { borrow_from: None, borrowed_result: false,
             line: 1, col: 1, name: name.into(),
             params: params.into_iter().map(|(n, t)| Param { name: n.into(), ty: t.into(), refine: None, take: false, mode_pos: None }).collect(),
             ret: ret.into(), effects: vec![], requires: vec![], ensures: vec![], body: vec![], ret_refine: None, tparams: vec![],
@@ -1538,8 +1538,8 @@ mod tests {
         let st = TypeDecl::Struct(StructDecl {
             line: 1, col: 1, name: "P".into(),
             fields: vec![
-                FieldDecl { line: 1, col: 1, name: "x".into(), ty: "i64".into() },
-                FieldDecl { line: 1, col: 1, name: "b".into(), ty: "bool".into() },
+                FieldDecl { borrowed: false, line: 1, col: 1, name: "x".into(), ty: "i64".into() },
+                FieldDecl { borrowed: false, line: 1, col: 1, name: "b".into(), ty: "bool".into() },
             ],
             tparams: vec![],
             invariants: vec![],

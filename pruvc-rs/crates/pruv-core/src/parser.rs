@@ -168,6 +168,11 @@ impl Parser {
         (t.kind == Kind::Op || t.kind == Kind::Kw) && t.val == val
     }
 
+    fn at_ident(&self, val: &str, k: usize) -> bool {
+        let t = self.peek(k);
+        t.kind == Kind::Id && t.val == val
+    }
+
     fn next(&mut self) -> Tok {
         let t = self.t[self.idx(0)].clone();
         self.i += 1;
@@ -592,7 +597,7 @@ impl Parser {
         let n = self.ident()?;
         self.expect(":")?;
         let ty = self.type_()?;
-        Ok(FieldDecl { line: n.line, col: n.col, name: n.val, ty })
+        Ok(FieldDecl { borrowed: false, line: n.line, col: n.col, name: n.val, ty })
     }
 
     /// `name: Type, ...` up to close (close is not consumed); a trailing comma is allowed
@@ -920,6 +925,11 @@ impl Parser {
 
     /// The structured form of `type_r`.
     fn type_g(&mut self, allow: bool) -> R<(GType, Option<Refinement>)> {
+        if self.at_ident(crate::lexer::REF_IDENT, 0) && (self.at("[", 1) || self.at_ident("str", 1)) {
+            self.bump();
+            let (base, refinement) = self.type_g(allow)?;
+            return Ok((GType::new("@ref", vec![base]), refinement));
+        }
         let t = self.peek(0).clone();
         if self.at("(", 0) {
             self.bump();
@@ -1081,6 +1091,21 @@ impl Parser {
         }
         self.expect("->")?;
         let (ret, ret_refine) = self.type_r(true)?;
+        let borrow_from = if self.at_ident("from", 0) && self.at("(", 1) {
+            self.bump();
+            self.expect("(")?;
+            let mut names = Vec::new();
+            while !self.at(")", 0) {
+                names.push(self.ident()?.val);
+                if !self.at(")", 0) {
+                    self.expect(",")?;
+                }
+            }
+            self.expect(")")?;
+            Some(names)
+        } else {
+            None
+        };
         let mut effects = Vec::new();
         if self.at("!", 0) {
             self.bump();
@@ -1145,7 +1170,7 @@ impl Parser {
             body = self.block()?;
         }
         self.scope = HashMap::new();
-        Ok(Function {
+        Ok(Function { borrow_from, borrowed_result: false,
             line: kw.line, col: kw.col, name, params, ret, effects, requires: req, ensures: ens, body, ret_refine, tparams,
             foreign: info,
             decreases,
@@ -1322,7 +1347,7 @@ impl Parser {
             self.expect("=")?;
             let value = self.expr()?;
             self.expect(";")?;
-            return Ok(Stmt::Let(Let { line: l, col: c, name: n, mutable, ty, value, refine }));
+            return Ok(Stmt::Let(Let { borrowed: false, line: l, col: c, name: n, mutable, ty, value, refine }));
         }
         if self.at("if", 0) {
             return Ok(Stmt::If(self.if_()?));

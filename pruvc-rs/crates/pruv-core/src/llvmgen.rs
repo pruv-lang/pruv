@@ -6690,7 +6690,7 @@ type Var9<'t> = (Option<&'t str>, Option<usize>, &'t [FieldDecl]);
 
 /// A function that stands in for `None` (the helper generators have no function): never read by the helper code.
 fn dummy_fn() -> Function {
-    Function {
+    Function { borrow_from: None, borrowed_result: false,
         line: 0,
         col: 0,
         name: String::new(),
@@ -7540,6 +7540,12 @@ pub fn gen_llvm_any_ex_g4(
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
     }
+    if let Some((line, col)) = crate::borrowed::first_borrow(prog) {
+        return Err(GenError::Diag(crate::diagnostic::PruvError::new(
+            "codegen", line, col, "unsupported_type",
+            "borrowed views and borrowing structs need the Rust backend", "use the Rust backend",
+        )));
+    }
     if crate::typeinfo::first_g3_use(prog).is_some() || g4.is_some() {
         let plan = crate::mono::specialize_g4(prog, g4).map_err(|e| match e {
             crate::mono::MonoError::Limit(p) => GenError::Diag(p),
@@ -7678,6 +7684,12 @@ pub fn gen_llvm_with_specializations(
     use crate::codegen::GenError;
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
+    }
+    if let Some((line, col)) = crate::borrowed::first_borrow(prog) {
+        return Err(GenError::Diag(crate::diagnostic::PruvError::new(
+            "codegen", line, col, "unsupported_type",
+            "borrowed views and borrowing structs need the Rust backend", "use the Rust backend",
+        )));
     }
     if let Some(e) = crate::bindings::owned_collection_abi_error(prog, None) {
         return Err(GenError::Diag(e));
@@ -8058,7 +8070,7 @@ mod tests {
     fn fn_gen_labels_and_guard() {
         let tt = TypeTable::new(&[]);
         let funcs: HashMap<String, &Function> = HashMap::new();
-        let f = Function {
+        let f = Function { borrow_from: None, borrowed_result: false,
             line: 1,
             col: 1,
             name: "f".into(),
@@ -8085,7 +8097,7 @@ mod tests {
     fn opt_prog() -> Program {
         Program {
             types: vec![],
-            functions: vec![Function {
+            functions: vec![Function { borrow_from: None, borrowed_result: false,
                 line: 1,
                 col: 1,
                 name: "f".into(),

@@ -3,6 +3,9 @@
 use crate::diagnostic::PruvError;
 use crate::pyrepr::repr_str;
 
+// `ref` is a Pruv identifier outside type position and a Rust keyword.
+pub(crate) const REF_IDENT: &str = "pruv_ident_ref";
+
 pub const KEYWORDS: &[&str] = &[
     "fn", "let", "mut", "if", "else", "while", "return", "match", "true", "false", "invariant",
     "cost", "spent", "decreases", "requires", "ensures", "assert", "forall", "exists", "in", "Some", "None", "Ok",
@@ -12,7 +15,7 @@ pub const KEYWORDS: &[&str] = &[
 /// Rust keywords that are not Pruv keywords: user names go into the generated Rust as they are.
 pub const RUST_KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "enum", "extern", "for",
-    "impl", "loop", "mod", "move", "pub", "ref", "self", "Self", "static", "struct", "super",
+    "impl", "loop", "mod", "move", "pub", "self", "Self", "static", "struct", "super",
     "trait", "type", "unsafe", "use", "where", "abstract", "become", "box", "do", "final", "gen",
     "macro", "override", "priv", "try", "typeof", "unsized", "virtual", "yield", "union", "_",
 ];
@@ -322,7 +325,8 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
                 ));
             }
             let end = col + (pos - start) as i64;
-            toks.push(Tok { kind: if is_kw { Kind::Kw } else { Kind::Id }, val: v, line, col, end });
+            let val = if v == "ref" { REF_IDENT.to_string() } else { v };
+            toks.push(Tok { kind: if is_kw { Kind::Kw } else { Kind::Id }, val, line, col, end });
         } else if let Some(op) = match_op(src, pos) {
             if op == "#[" {
                 // An attribute must start a top-level item. Let the parser reject stacked attributes.

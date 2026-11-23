@@ -3020,14 +3020,17 @@ impl<'a> FnVerifier<'a> {
                 let av = arg(0)?.try_arr()?.clone();
                 let m = arg(1)?.try_ast()?.clone();
                 let v = arg(2)?.try_ast()?.clone();
-                let ob = self.z.and(&[av.n.le(&m), m.le_i(MAX_LEN)]);
+                let scratch = self.funcs.get(self.fname.as_str()).is_some_and(|f| f.borrows_inout_buffer(&x.args[0]));
+                let lower = if scratch { m.ge_i(0) } else { av.n.le(&m) };
+                let ob = self.z.and(&[lower, m.le_i(MAX_LEN)]);
+                let bound = if scratch { "0".to_string() } else { format!("len({})", av.name) };
                 self.prove_core(
                     &st,
                     g,
                     &ob,
                     pos(e),
                     "index_oob",
-                    &format!("resize length len({}) <= n <= 2^40", av.name),
+                    &format!("resize length {} <= n <= 2^40", bound),
                     None,
                 );
                 if av.elem == Elem::U8 {

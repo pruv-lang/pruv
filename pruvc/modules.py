@@ -754,6 +754,16 @@ class _Resolver:
     def interface(s, it):
         seen = s.iface_seen
         if isinstance(it, Function):
+            if (it.mod_path == () and it.pkg is None and not it.tparams
+                    and it.foreign is None and not it.pred):
+                def has_borrow(ty):
+                    decl = s.type_by_id.get(ty.name)
+                    return (ty.name == "ref" or isinstance(decl, StructDecl)
+                            and any(fd.type.name == "ref" for fd in decl.fields)
+                            or any(has_borrow(arg) for arg in ty.args))
+
+                if has_borrow(it.ret) or any(has_borrow(p.type) for p in it.params):
+                    _err(it, "borrow_signature", "a host entry cannot accept or return a borrowed type")
             for p in it.params:
                 s.iface_type(p.type, it, it, "signature", seen)
             s.iface_type(it.ret, it, it, "signature", seen)

@@ -171,6 +171,8 @@ impl<'a> Mono<'a> {
         let mut rfns: HashMap<String, String> = HashMap::new();
         let mut rtypes: HashMap<String, String> = HashMap::new();
         if let Some(g) = g4 {
+            // A standalone source has no module namespace to encode for these Rust items.
+            let standalone = g.modules.len() == 1;
             for (i, f) in prog.functions.iter().enumerate() {
                 if f.tparams.is_empty() && findex.get(&f.name) == Some(&i) {
                     let m = &g.fn_meta[i];
@@ -180,7 +182,7 @@ impl<'a> Mono<'a> {
                         comps.extend(g.modules[m.module].path.iter().cloned());
                         comps.push(m.src_name.clone());
                         format!("pruv_p_f_{}", encode_name(&comps))
-                    } else if m.host_entry {
+                    } else if m.host_entry || standalone && f.borrow_from.is_some() {
                         m.src_name.clone()
                     } else {
                         let mut comps = g.modules[m.module].path.clone();
@@ -199,7 +201,7 @@ impl<'a> Mono<'a> {
                         comps.extend(path.iter().cloned());
                         comps.push(m.src_name.clone());
                         format!("pruv_p_t_{}", encode_name(&comps))
-                    } else if m.is_pub && path.is_empty() {
+                    } else if path.is_empty() && (m.is_pub || standalone && crate::borrowed::borrowing_struct(d)) {
                         m.src_name.clone()
                     } else {
                         let mut comps = path.clone();
@@ -757,7 +759,7 @@ impl<'a> Mono<'a> {
             Stmt::Let(x) => {
                 let ty = self.ty_key(&x.ty)?;
                 let value = self.cp_e(&x.value)?;
-                Stmt::Let(Let {
+                Stmt::Let(Let { borrowed: x.borrowed,
                     line: x.line,
                     col: x.col,
                     name: x.name.clone(),
@@ -878,7 +880,7 @@ impl<'a> Mono<'a> {
         let ensures = if f.foreign.is_some() { self.cp_es(&f.ensures)? } else { Vec::new() };
         let body = self.cp_stmts(&f.body)?;
         let small_bound = crate::small::declared_bound(f);
-        Ok(Function {
+        Ok(Function { borrow_from: f.borrow_from.clone(), borrowed_result: f.borrowed_result,
             line: f.line,
             col: f.col,
             name: name.to_string(),
@@ -900,7 +902,7 @@ impl<'a> Mono<'a> {
     fn fields(&mut self, fs: &[FieldDecl]) -> MR<Vec<FieldDecl>> {
         let mut out = Vec::with_capacity(fs.len());
         for fd in fs {
-            out.push(FieldDecl { line: fd.line, col: fd.col, name: fd.name.clone(), ty: self.ty_key(&fd.ty)? });
+            out.push(FieldDecl { borrowed: fd.borrowed, line: fd.line, col: fd.col, name: fd.name.clone(), ty: self.ty_key(&fd.ty)? });
         }
         Ok(out)
     }

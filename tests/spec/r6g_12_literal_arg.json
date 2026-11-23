@@ -1,1 +1,1 @@
-{"gen_contains": ["width__pruv_body(\"abc\")"]}
+{"gen_regex": ["^\\s+return \\w+\\(\"abc\"\\);$"], "gen_absent": ["String::from(\"abc\")", "\"abc\".to_string()"]}

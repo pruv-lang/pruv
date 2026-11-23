@@ -1471,7 +1471,9 @@ borrowed value is live.
     root may not be used at all. A violation is `type/borrow_conflict`. This is the Rust rule (`&` / `&mut`), so
     the generated Rust borrow-checks.
   - *Escape.* The provenance of a returned borrow must be a subset of the `from` parameters; a local root is
-    `type/borrow_escape`. A `ref` value in an owned position (`let o: [u8] = m`, an owned field, an owned return) is
+    `type/borrow_escape`. A borrowing-struct `from` parameter lends only what the struct borrows (Rust `&Doc<'a>`):
+    passing a borrowing local at that position gives the local's provenance, and a returned view of an owned field
+    of the parameter (`subview(d.scratch, ..)`) is `type/borrow_escape`. A `ref` value in an owned position (`let o: [u8] = m`, an owned field, an owned return) is
     `type/array_alias`; `copy(m)` makes an owned array (and needs `alloc`). A store into a view is `type/immutable`.
   - *Proof.* A view bound from `subview(x, lo, hi)` is proved and modelled as `copy(subview(x, lo, hi))` (R-6g-7,
     R-6g-10: `len == hi - lo`, element `k` is `x[lo + k]`, the str boundary / UTF-8 obligations), with no copy at
@@ -1479,14 +1481,16 @@ borrowed value is live.
     Exclusivity freezes every root while a borrow is live, so these facts stay true.
   - *Code.* Rust only. A borrowing struct is `struct Doc<'a>` with `&'a [u8]` / `&'a str` fields; a `ref` function
     is `fn f<'a>(..)` (body and wrapper) whose `from` parameters are `&'a [u8]`, `&'a str`, `&'a mut
-    ::std::vec::Vec<u8>` (resizable `inout`), `&'a mut [u8]` (fixed `inout`) or `&'a Doc<'a>`, and whose result is
+    ::std::vec::Vec<u8>` (resizable `inout`), `&'a mut [u8]` (fixed `inout`) or `&Doc<'a>`, and whose result is
     `&'a [u8]`, `&'a str` or `Doc<'a>`. A `ref` local is `&[u8]` / `&str`; a view is the same unchecked (verified) or
     checked (`--no-verify`) slice expression as a `subview` argument. No `to_vec` or `clone`. The LLVM backend rejects
     a program with a `ref` type or a borrowing struct with `codegen/unsupported_type` (LB3).
   - Tests: [document borrowing its input](tests/spec/r6g_11_doc_input.pruv),
     [result from either of two sources](tests/spec/r6g_11_two_sources.pruv),
-    [subview bound to a local](tests/spec/r6g_11_local_view.pruv), [copy then reuse](tests/spec/r6g_11_copy_owned.pruv);
+    [subview bound to a local](tests/spec/r6g_11_local_view.pruv), [copy then reuse](tests/spec/r6g_11_copy_owned.pruv),
+    [struct forwarded](tests/spec/r6g_11_struct_forward.pruv);
     rejects [local escape](tests/spec/r6g_11_escape_local.pruv), [struct escape](tests/spec/r6g_11_escape_struct.pruv),
+    [owned field escape](tests/spec/r6g_11_escape_owned_field.pruv),
     [buffer reuse](tests/spec/r6g_11_reuse_buf.pruv), [exclusive read](tests/spec/r6g_11_read_exclusive.pruv),
     [owner grows](tests/spec/r6g_11_realloc_owner.pruv), [owner store](tests/spec/r6g_11_store_owner.pruv),
     [owner moved](tests/spec/r6g_11_move_owner.pruv), [loop](tests/spec/r6g_11_loop_conflict.pruv),

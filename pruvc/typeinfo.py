@@ -8,7 +8,7 @@ from vast import *
 
 # Shared with pruvc-rs (pruvc/data/builtin_types.json, tools/gen_shared.py).
 _TYPES = load("builtin_types")
-BUILTIN_TYPE_NAMES = frozenset(_TYPES["BUILTIN_TYPE_NAMES"])
+BUILTIN_TYPE_NAMES = frozenset(_TYPES["BUILTIN_TYPE_NAMES"]) | {"ref"}
 _BUILTIN_PRINT = {k: v for k, v in _TYPES["BUILTIN_PRINT"]}
 
 # G6 A0: the fixed owned collection types (G6_SPEC 10.1): internal name -> number of type arguments / source spelling.
@@ -30,6 +30,17 @@ def is_owned_result(ty: Optional[Type]) -> bool:
 
 def is_owned_value(ty: Type) -> bool:
     return is_collection(ty) or is_owned_result(ty)
+
+
+def borrowing_struct(decl):
+    return isinstance(decl, StructDecl) and decl.borrowing
+
+
+def borrowing_copy(decl, extended, types):
+    return borrowing_struct(decl) and all(
+        f.ref or (not (is_array(f.type) or f.type == STR or is_owned_value(f.type))
+                  and (f.type.name not in extended or borrowing_copy(types.get(f.type.name), extended, types)))
+        for f in decl.fields)
 
 
 def is_scalar_vec(ty: Type) -> bool:

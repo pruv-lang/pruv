@@ -181,7 +181,7 @@ impl Expr {
 
 // ---------- declarations/helpers ----------
 #[derive(Debug, Clone, PartialEq)]
-pub struct FieldDecl { pub line: i64, pub col: i64, pub name: String, pub ty: Type }
+pub struct FieldDecl { pub borrowed: bool, pub line: i64, pub col: i64, pub name: String, pub ty: Type }
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantDecl { pub line: i64, pub col: i64, pub name: String, pub fields: Vec<FieldDecl> }
 #[derive(Debug, Clone, PartialEq)]
@@ -227,6 +227,7 @@ pub enum TypeDecl {
 // ---------- statements ----------
 #[derive(Debug, Clone, PartialEq)]
 pub struct Let {
+    pub borrowed: bool,
     pub line: i64, pub col: i64, pub name: String, pub mutable: bool, pub ty: Type, pub value: Expr,
     pub refine: Option<Refinement>,
 }
@@ -295,6 +296,8 @@ pub enum FnAttribute {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
+    pub borrow_from: Option<Vec<String>>,
+    pub borrowed_result: bool,
     pub line: i64, pub col: i64, pub name: String, pub params: Vec<Param>, pub ret: Type,
     pub effects: Vec<String>, pub requires: Vec<Expr>, pub ensures: Vec<Expr>, pub body: Vec<Stmt>,
     pub ret_refine: Option<Refinement>, pub tparams: Vec<TParam>,
@@ -315,6 +318,19 @@ pub struct Function {
     pub pred: bool,
     /// Source attribute, kept by specialization and omitted from the AST dump.
     pub attribute: Option<FnAttribute>,
+}
+
+impl Function {
+    /// An inout buffer lent by a borrowed result serves as resizable scratch storage.
+    pub fn borrows_inout_buffer(&self, source: &Expr) -> bool {
+        let name = match source {
+            Expr::Var(v) => &v.name,
+            Expr::Move(m) if m.fields.is_empty() => &m.name,
+            _ => return false,
+        };
+        self.borrow_from.as_ref().is_some_and(|from| from.contains(name))
+            && self.params.iter().any(|p| p.name == *name && p.mode_pos.is_some() && p.ty == "array_u8")
+    }
 }
 
 /// G9 A0: checker metadata recorded on the program and the type table, only when a G9 feature is present

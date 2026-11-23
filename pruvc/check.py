@@ -7,7 +7,8 @@ from typeinfo import (TypeTable, BUILTIN_TYPE_NAMES, type_name, is_user_type, is
                       dependencies, decl_owner, fn_owner,  # G3 A1
                       COLLECTION_ARITY, COLLECTION_SPELLING, is_collection, contains_collection,  # G6 A0
                       program_uses_inout, is_owned_field_type, is_scalar_vec, is_nongeneric_struct,
-                      field_place, is_nested_collection_field, is_string_record_map, is_vec_slice_arg, is_owned_value)
+                      field_place, is_nested_collection_field, is_string_record_map, is_vec_slice_arg, is_owned_value,
+                      borrowing_copy)
 from refine import expand as refine_expand
 from refine import _kids as expr_kids, _stmt_names
 from foreign import (CATALOG, CATALOG_NAMES, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS, ASYNC_OBSERVERS, ASYNC_OPS,
@@ -686,6 +687,8 @@ class Checker:
         refine_expand(s.prog)  # STAGE1 A: validate refinement annotations, desugar them into contracts/asserts
         s.declare_types()      # names, duplicates
         s.collection_records = set()
+        s.borrowing_structs = {d.name for d in s.prog.types if isinstance(d, StructDecl)
+                               and any(fd.type.name == "ref" for fd in d.fields)}
         s.normalize_types()    # G6: Vec/HashMap/String become catalog types unless the program declares them
         s.arg_decls = {n: (len(d.tparams), []) for n, d in s.decls.items()}
         s.check_tparams()      # G3: type-parameter lists (type_parameter, generic_bound, generic_main)
@@ -833,26 +836,67 @@ class Checker:
             return mk_option(args[0])
         return Type(name, args)
 
+    def borrowed_type(s, ty):
+        return ty.owner is None and (ty.name == "ref" or ty.name in s.borrowing_structs)
+
+    def contains_borrow(s, ty):
+        return s.borrowed_type(ty) or any(s.contains_borrow(t) for t in ty.args)
+
+    def borrow_signature(s, node, message):
+        terr(node, "borrow_signature", message)
+
+    def borrow_type_position(s, node, ty, allowed):
+        if not s.contains_borrow(ty):
+            return ty
+        if (not allowed or not s.borrowed_type(ty) or
+                (ty.name == "ref" and ty.args not in ((ARRAY_U8,), (STR,)))):
+            s.borrow_signature(node, "borrowed type is not allowed in this position")
+        if s.prog.borrow_site is None:
+            s.prog.borrow_site = node
+        # The verifier uses the ordinary value type. Checking and lowering retain
+        # borrow information on the declaring node and on borrowed expressions.
+        return ty.args[0] if ty.name == "ref" else ty
+
     def normalize_types(s):
         for d in s.prog.types:
+            if d.name in s.borrowing_structs:
+                d.borrowing = True
             for fd in (d.fields if isinstance(d, StructDecl) else [x for v in d.variants for x in v.fields]):
-                fd.type = s.norm_type(fd.type)
+                fd.ref = fd.type.name == "ref"
+                fd.type = s.norm_type(s.borrow_type_position(
+                    fd, fd.type, d.name in s.borrowing_structs and not d.tparams))
         for f in s.prog.functions:
+            boundary = f.host_entry or f.foreign is not None or bool(f.tparams)
             for p in f.params:
-                p.type = s.norm_type(p.type)
-            f.ret = s.norm_type(f.ret)
+                p.type = s.norm_type(s.borrow_type_position(
+                    f, p.type, not (boundary or p.mode or p.take or p.type.name == "ref")))
+            borrowed_result = s.borrowed_type(f.ret)
+            f.ref_result = f.ret.name == "ref"
+            f.ret = s.norm_type(s.borrow_type_position(f, f.ret, not boundary))
+            if borrowed_result or f.borrow_from is not None:
+                params = {p.name: p for p in f.params}
+                if (not borrowed_result or not f.borrow_from or len(set(f.borrow_from)) != len(f.borrow_from)
+                        or any(n not in params or params[n].take
+                               or not (params[n].type in (ARRAY_U8, STR)
+                                       or not params[n].mode and s.borrowed_type(params[n].type))
+                               for n in f.borrow_from)):
+                    s.borrow_signature(f, "a borrowed result needs a from list naming its source parameters")
+                for ens in f.ensures:
+                    if any(params[n].mode and _mentions(ens, n) for n in f.borrow_from):
+                        s.borrow_signature(ens, "ensures cannot read an inout source of a borrowed result")
             for e in f.requires + f.ensures:
                 s.norm_expr(e)
             if f.decreases is not None:
                 s.norm_expr(f.decreases)
             if f.cost is not None:
                 s.norm_expr(f.cost)
-            s.norm_stmts(f.body)
+            s.norm_stmts(f.body, bool(f.tparams))
 
-    def norm_stmts(s, stmts):
+    def norm_stmts(s, stmts, generic=False):
         for st in stmts:
             if isinstance(st, Let):
-                st.type = s.norm_type(st.type)
+                st.ref = st.type.name == "ref"
+                st.type = s.norm_type(s.borrow_type_position(st, st.type, not (st.mutable or generic)))
                 s.norm_expr(st.value)
             elif isinstance(st, (Assign, FieldAssign, Return)):
                 if st.value is not None:
@@ -862,19 +906,19 @@ class Checker:
                 s.norm_expr(st.value)
             elif isinstance(st, If):
                 s.norm_expr(st.cond)
-                s.norm_stmts(st.then)
-                s.norm_stmts(st.els)
+                s.norm_stmts(st.then, generic)
+                s.norm_stmts(st.els, generic)
             elif isinstance(st, While):
                 s.norm_expr(st.cond)
                 for i in st.invariants:
                     s.norm_expr(i)
                 s.norm_expr(st.decreases)
-                s.norm_stmts(st.body)
+                s.norm_stmts(st.body, generic)
             elif isinstance(st, ForMap):
                 s.norm_expr(st.place)
                 for i in st.invariants:
                     s.norm_expr(i)
-                s.norm_stmts(st.body)
+                s.norm_stmts(st.body, generic)
             elif isinstance(st, Assert):
                 s.norm_expr(st.cond)
             elif isinstance(st, ExprStmt):
@@ -885,12 +929,12 @@ class Checker:
             elif isinstance(st, Match):
                 s.norm_expr(st.scrutinee)
                 for a in st.arms:
-                    s.norm_stmts(a.body)
+                    s.norm_stmts(a.body, generic)
 
     def norm_expr(s, e):
         targs = getattr(e, "targs", None)
         if targs is not None:
-            e.targs = [s.norm_type(t) for t in targs]
+            e.targs = [s.norm_type(s.borrow_type_position(e, t, False)) for t in targs]
             if (isinstance(e, Call) and e.name in CATALOG and e.name not in s.funcs
                     and e.name.startswith(("vec_", "map_")) and e.targs
                     and e.targs[-1].owner is None and not e.targs[-1].args):
@@ -1335,6 +1379,7 @@ class Checker:
         for f in s.prog.functions:
             for p in f.params:
                 if p.mode is not None and not (p.type in (I64, BOOL) or is_array(p.type)
+                                               or p.type == STR and p.name in (f.borrow_from or ())
                                                or is_nongeneric_struct(p.type, s.decls)
                                                or p.type.name == "vec" and p.type.owner is None
                                                or p.type.name == "hashmap" and p.type.owner is None
@@ -1812,6 +1857,9 @@ class Checker:
                      stage="effect")
             return                       # a trusted rust fn has no body to check
         s.block(f.body, dict(scope))
+        if s.prog.borrow_site is not None:
+            f.borrowed_roots = set()
+            s.check_view_block(f.body, {p.name: {p.name: False} for p in f.params if s.borrowed_type(p.type)})
         if f.ret != UNIT and not s.ends_in_return(f.body):
             terr(f, "missing_return", "function %s may reach its end without returning" % f.name,
                  "end every path with `return ...;`")
@@ -2142,12 +2190,16 @@ class Checker:
             s.boundary = st.value
             s.alloc_hint_for(st.value, st.type)
             s.field_move = s.field_move_out(st, st.type, scope, next_stmt)
-            s.expect(st.value, st.type, scope)
+            if st.ref:
+                s.view_value(st.value, st.type, scope)
+            else:
+                s.expect(st.value, st.type, scope)
             s.check_inout_context(st, st.value)
-            s.own(st.value)
-            if is_array(st.type) or st.type == STR:
-                s.array_source(st, st.value, scope)
-            scope[st.name] = (st.type, st.mutable, "local")
+            if not st.ref:
+                s.own(st.value)
+                if is_array(st.type) or st.type == STR:
+                    s.array_source(st, st.value, scope)
+            scope[st.name] = (st.type, st.mutable, "ref" if st.ref else "local")
         elif isinstance(st, Assign):
             v = s.lookup(st, st.name, scope)
             s.check_borrow(st, st.name, [])
@@ -2172,6 +2224,10 @@ class Checker:
             s.alloc_hint_for(st.value, v[0])
             s.restore_array = st.name if array_inout else None
             s.expect(st.value, v[0], scope)
+            if (array_inout and st.name in (f.borrow_from or ()) and isinstance(st.value, Call)
+                    and st.value.name == "resize" and isinstance(st.value.args[0], (Var, Move))
+                    and st.value.args[0].name == st.name and not getattr(st.value.args[0], "fields", ())):
+                st.value.resize_scratch = True
             s.restore_array = None
             s.own(st.value)
             if record_binder and not (
@@ -2195,6 +2251,8 @@ class Checker:
                 if not s.tt.is_struct(cur):
                     terr(st, "not_struct", "cannot assign field %s: %s is not a struct" % (fname, type_name(cur)),
                          "field assignment paths run through structs only; assign the whole enum value instead")
+                if s.ref_field(cur, fname):
+                    terr(st, "immutable", "a borrowed view is read-only")
                 cur = s.field_type(st, cur, fname)
             place = ".".join([st.name] + list(fpath))
             if cur == STR:
@@ -2213,6 +2271,8 @@ class Checker:
         elif isinstance(st, IndexAssign):
             s.check_iteration_borrow(st, st.name, ())
             v = s.lookup(st, st.name, scope)
+            if v[2] == "ref":
+                terr(st, "immutable", "a borrowed view is read-only")
             if v[0] == STR:
                 terr(st, "immutable_string", "%s is a str; its bytes cannot be changed" % st.name,
                      "build a new str with substr() or copy() instead")
@@ -2275,14 +2335,18 @@ class Checker:
                     terr(st, "return_type", "function returns (); use `return;`")
                 s.boundary = st.value
                 s.alloc_hint_for(st.value, f.ret)
-                s.expect(st.value, f.ret, scope)
+                if f.ref_result:
+                    s.view_value(st.value, f.ret, scope)
+                else:
+                    s.expect(st.value, f.ret, scope)
                 s.check_inout_context(st, st.value)
                 # LG9 (G-DB15-2): a str binder of a consuming match is returned like an owned local
                 binder_ret = (f.ret == STR and isinstance(st.value, Var) and st.value.name in s.match_movable
                               and st.value.ty == STR)
-                s.own(st.value)
-                if (is_array(f.ret) or f.ret == STR) and not binder_ret:
-                    s.array_source(st, st.value, scope, allow_local_var=True)
+                if not f.ref_result:
+                    s.own(st.value)
+                    if (is_array(f.ret) or f.ret == STR) and not binder_ret:
+                        s.array_source(st, st.value, scope, allow_local_var=True)
                 if binder_ret:
                     s.used_effects.add("alloc")
                 if binder_ret:
@@ -2520,6 +2584,8 @@ class Checker:
             if f.foreign is not None:
                 terr(c, "parallel_call", "%s is a trusted rust fn: it cannot be a par branch" % n,
                      "call a unit Pruv helper, and keep trusted rust fns outside the par group")
+            if f.borrow_from or any(s.borrowed_type(p.type) for p in f.params):
+                s.borrow_signature(c, "borrowed values cannot cross a par branch boundary")
             if f.ret != UNIT:
                 terr(c, "parallel_call", "%s returns %s: a par branch must return ()" % (n, type_name(f.ret)),
                      "call a unit Pruv helper and pass results back through whole inout arrays")
@@ -2540,6 +2606,8 @@ class Checker:
 
     def par_args(s, c):
         for arg in c.args:
+            if arg.borrowed_view or arg.ty is not None and s.borrowed_type(arg.ty):
+                s.borrow_signature(arg, "borrowed values cannot cross a par branch boundary")
             if (not isinstance(arg, (InoutArg, Var, IntLit, BoolLit))
                     or isinstance(arg, InoutArg) and not isinstance(arg.expr, Var)):
                 terr(arg, "parallel_argument", "a par branch argument must be a binding name, an integer or bool "
@@ -2684,6 +2752,9 @@ class Checker:
 
     def array_source(s, st, value, scope, allow_local_var=False):
         """Arrays in owning positions need a fresh result or an explicit move."""
+        if value.borrowed_view:
+            terr(st, "array_alias", "a borrowed view cannot be stored or returned as an owned value",
+                 "use copy() to make an independent value")
         if isinstance(value, (Call, StrLit)) or (isinstance(value, Move) and (is_array(value.ty) or value.ty == STR)):
             return   # LG17 (G-DB28-2): `move t` of an owned str binding also hands over its bytes
         if isinstance(value, Var) and scope.get(value.name, (None, None, ""))[2] == "inout":   # G5 A0
@@ -2711,6 +2782,8 @@ class Checker:
         if getattr(value, "map_mut_view", False):
             terr(value, "foreign_move", "a mutable collection binder cannot be used as an owned value")
         if t is not None:
+            if borrowing_copy(s.decls.get(t.name), s.extended, s.decls):
+                return
             if ((s.is_extended(t) or is_owned_value(t) or is_array(t) or t == STR)
                     and s.rec_vec_get(field_place(value)[0])):
                 terr(value, "foreign_owned_type", "vec_get cannot copy %s" % type_name(t))
@@ -2927,13 +3000,14 @@ class Checker:
         if isinstance(e, BoolLit):
             return BOOL
         if isinstance(e, StrLit):   # G2 B0
-            if not c:
+            if not c and not e.static_str:
                 s.used_effects.add("alloc")
             return STR
         if isinstance(e, Var):
             if e.name == "result" and "result" not in scope:
                 terr(e, "result_scope", "`result` is only allowed in ensures")
             binding = s.lookup(e, e.name, scope)
+            e.borrowed_view = binding[2] == "ref"
             if binding[2] == "map_mut" and binding[0] not in (I64, BOOL):
                 e.map_mut_view = True
             if binding[2] == "map_iter":
@@ -3005,6 +3079,8 @@ class Checker:
                 for field in e.fields:
                     if not s.tt.is_struct(ty):
                         _field_move_error(e)
+                    if s.ref_field(ty, field):
+                        terr(e, "array_alias", "a borrowed view cannot be moved")
                     ty = s.field_type(e, ty, field)
                 if is_array(ty) and e is not s.field_move:
                     terr(e, "array_alias", "an array field cannot be moved", "use copy() to make an independent array")
@@ -3015,6 +3091,8 @@ class Checker:
                 terr(e, "foreign_move", "move only where ownership is consumed",
                      "contracts read parameters and locals directly; remove `move`")
             ty, _, kind = s.lookup(e, e.name, scope)
+            if kind == "ref" or s.borrowed_type(ty):
+                terr(e, "array_alias", "a borrowed value cannot be moved")
             if e.name in s.arm_binders and s.rec_vec(ty):
                 terr(e, "foreign_move", "a borrowed vector payload cannot be moved")
             if ((is_array(ty) or ty == STR) and kind not in ("local", "take")
@@ -3105,6 +3183,7 @@ class Checker:
             if not s.tt.is_struct(bt):
                 terr(e, "not_struct", "cannot read field %s: %s is not a struct" % (e.field, type_name(bt)),
                      "enum payloads are read with match" if s.tt.is_enum(bt) else "")
+            e.borrowed_view = s.ref_field(bt, e.field)
             return s.field_type(e, bt, e.field)
         if isinstance(e, IsVariant):
             if not c:
@@ -3124,7 +3203,9 @@ class Checker:
             terr(e, "inout_argument", "the `inout` marker is only valid on an argument of a function whose parameter is inout",
                  "remove `inout`")
         if isinstance(e, Call):
+            callee = s.funcs.get(e.name)   # s.call can rewrite e in place (old(c).f becomes a field read)
             t = s.call(e, scope, c, borrow_element)
+            e.borrowed_view = callee is not None and callee.ref_result
             x = s.x_pending
             if x is not None:     # P06: a contract call to a user function becomes its expansion, in place
                 s.x_pending = None
@@ -3204,9 +3285,12 @@ class Checker:
                 why = "fields must be written in declaration order: %s" % ", ".join(declared)
             terr(e, "struct_fields", "%s literal: %s" % (e.name, why),
                  "write every field exactly once, in declaration order")
-        for fi, ft in zip(e.fields, ftypes):
-            s.expect(fi.value, ft, scope, c)
-            s.own_field(fi.value, ft, scope, c)
+        for fi, ft, fd in zip(e.fields, ftypes, fields):
+            if fd.ref:
+                s.view_value(fi.value, ft, scope, c)
+            else:
+                s.expect(fi.value, ft, scope, c)
+                s.own_field(fi.value, ft, scope, c)
         s.ctor_allocs(e.name, None, c)
         return sty
 
@@ -3274,12 +3358,124 @@ class Checker:
         terr(arg, "type_mismatch", "expected str or a borrowed String read, found %s" % type_name(actual))
 
     # ---- G5 A0: inout call arguments and old(..) ----
+    def ref_field(s, ty, name):
+        decl = s.decls.get(ty.name)
+        return isinstance(decl, StructDecl) and any(fd.name == name and fd.ref for fd in decl.fields)
+
+    def view_value(s, e, want, scope, contract=False):
+        s.user_arg(e, want, scope, contract, True)
+        if e.ty != want or not (e.borrowed_view or isinstance(e, StrLit) or isinstance(field_place(e)[0], Var)
+                or isinstance(e, Call) and e.name == "subview"):
+            s.borrow_signature(e, "a borrowed view needs a place, subview, borrowed result or string literal")
+
+    def view_provenance(s, e, loans, exclusive=False):
+        if isinstance(e, StrLit):
+            return {}
+        if isinstance(e, InoutArg):
+            return s.view_provenance(e.expr, loans, True)
+        if isinstance(e, Call):
+            if e.name == "subview":
+                return s.view_provenance(e.args[0], loans, exclusive)
+            f = s.funcs.get(e.name)
+            if f is None or not f.borrow_from:
+                s.borrow_signature(e, "a borrowed result source must be a place or a borrowed value")
+            sources = [s.view_provenance(arg, loans, exclusive or bool(p.mode))
+                       for p, arg in zip(f.params, e.args) if p.name in f.borrow_from]
+        elif isinstance(e, FieldAccess) and (e.borrowed_view or s.borrowed_type(e.ty)):
+            return s.view_provenance(e.base, loans, exclusive)
+        elif isinstance(e, StructLit) and s.borrowed_type(e.ty):
+            sources = [s.view_provenance(fi.value, loans, exclusive)
+                       for fi, fd in zip(e.fields, s.decls[e.name].fields)
+                       if fd.ref or s.borrowed_type(fd.type)]
+        else:
+            root, path = field_place(e)
+            if not isinstance(root, Var):
+                s.borrow_signature(e, "a borrowed result source must be a place or a borrowed value")
+            if not path and root.name in loans:
+                return {name: held or exclusive for name, held in loans[root.name].items()}
+            if path and any(
+                    p.name == root.name and s.borrowed_type(p.type) for p in s.f.params):
+                # An owned field of a borrowing-struct parameter lives in the caller's record, which the
+                # Rust signature `&Doc<'a>` does not lend to the result.
+                return {root.name: exclusive, root.name + ".storage": exclusive}
+            return {root.name: exclusive}
+        merged = {}
+        for source in sources:
+            for name, held in source.items():
+                merged[name] = merged.get(name, False) or held
+        return merged
+
+    @staticmethod
+    def view_stmt_items(st):
+        for value in vars(st).values():
+            yield from value if isinstance(value, list) else (value,)
+
+    def view_uses(s, st, nested=False):
+        """Yield (root, write) for the syntax of this statement."""
+        if isinstance(st, (Assign, FieldAssign, IndexAssign)):
+            yield st.name, True
+        for item in s.view_stmt_items(st):
+            if isinstance(item, Expr):
+                for e in _walk(item):
+                    if isinstance(e, (Var, Move)):
+                        yield e.name, isinstance(e, Move)
+                    elif isinstance(e, InoutArg):
+                        root, _ = field_place(e.expr)
+                        if isinstance(root, Var):
+                            yield root.name, True
+            elif nested and isinstance(item, Stmt):
+                yield from s.view_uses(item, True)
+            elif nested and isinstance(item, MatchArm):
+                for child in item.body:
+                    yield from s.view_uses(child, True)
+
+    def check_view_block(s, stmts, loans, active=None):
+        loans = dict(loans)
+        inherited = {} if active is None else active
+        live = []
+        last = {name: i for i, st in enumerate(stmts) for name, _ in s.view_uses(st, True)}
+        for i, st in enumerate(stmts):
+            live = [(end, provenance) for end, provenance in live if i <= end]
+            held = dict(inherited)
+            for _, provenance in live:
+                for name, exclusive in provenance.items():
+                    held[name] = held.get(name, False) or exclusive
+            for name, write in s.view_uses(st):
+                if name in held and (write or held[name]):
+                    terr(st, "borrow_conflict", "%s is still borrowed by a live view" % name)
+            # Validate borrowed calls even when their results are used only inside the statement.
+            for item in s.view_stmt_items(st):
+                if isinstance(item, Expr):
+                    for e in _walk(item):
+                        if isinstance(e, Call) and e.name in s.funcs and s.funcs[e.name].borrow_from:
+                            s.view_provenance(e, loans)
+            if isinstance(st, Let) and (st.ref or s.borrowed_type(st.type)):
+                provenance = s.view_provenance(st.value, loans)
+                loans[st.name] = provenance
+                s.f.borrowed_roots.update(provenance)
+                if last.get(st.name, i) > i:
+                    live.append((last[st.name], provenance))
+            elif isinstance(st, Return) and s.f.borrow_from and st.value is not None:
+                provenance = s.view_provenance(st.value, loans)
+                if set(provenance) - set(s.f.borrow_from):
+                    terr(st, "borrow_escape", "the result borrows a value outside the from parameters")
+            if isinstance(st, If):
+                s.check_view_block(st.then, loans, held)
+                s.check_view_block(st.els, loans, held)
+            elif isinstance(st, (While, ForMap)):
+                s.check_view_block(st.body, loans, held)
+            elif isinstance(st, Match):
+                for arm in st.arms:
+                    s.check_view_block(arm.body, loans, held)
+
     @staticmethod
     def view_context(e):
         terr(e, "view_context", "subview(...) is only allowed as a direct argument to a non-inout array parameter of a function call",
              "pass it straight to a function, or use copy_range to make an owned array")
 
     def user_arg(s, e, want, scope, c, borrow):
+        if borrow and want == STR and isinstance(e, StrLit):
+            e.static_str = True
         if isinstance(e, Call) and e.name == "subview":
             if c or not borrow or not (is_array(want) or want == STR) or s.in_view:
                 s.view_context(e)
@@ -3605,7 +3801,11 @@ class Checker:
         """the reason each function cannot be expanded in a contract, or a raw copy of its body when its signature
         and statements allow it (checked before any body is typed, so every template starts from source)"""
         for f in s.prog.functions:
-            r = x_sig_reason(f, s.decls) or x_scan_block(f, f.body, 0, s.funcs)
+            read_borrowing = not f.opaque and any(s.borrowed_type(p.type) for p in f.params)
+            r = ("has a borrowed result" if f.borrow_from else
+                 x_sig_reason(f, s.decls, allow_requires=read_borrowing,
+                              allow_str=s.prog.borrow_site is not None and not f.opaque)
+                 or x_scan_block(f, f.body, 0, s.funcs))
             s.x_raw[f.name] = r if r is not None else copy.deepcopy(f.body)
             if f.pred:                        # G-LG13-5: a `?` in a pred is try_position before pred_signature
                 for st in f.body:
@@ -3635,7 +3835,8 @@ class Checker:
             try:
                 xa = s.x_template(f, f)
                 f.x_auto = xa if f.ret == BOOL or not x_has_bit(xa) else None
-                if f.pred or not f.opaque and (x_has_quant(xa) or any(x_record(p.type, s.decls) for p in f.params)):
+                if f.pred or not f.opaque and (x_has_quant(xa) or any(
+                        x_record(p.type, s.decls) and not s.borrowed_type(p.type) for p in f.params)):
                     f.x_auto = None     # R03L: a record or quantified predicate gives contracts only, no code fact
             except PruvError:
                 s.x_busy = set()
@@ -3645,6 +3846,10 @@ class Checker:
 
     def x_expand(s, e, f):
         """the expansion of the checked contract call e of the user function f"""
+        if not isinstance(s.x_raw[f.name], str):
+            reason = x_sig_reason(f, s.decls)
+            if reason is not None:
+                terr(e, "call_in_contract", X_MSG % (f.name, reason), X_FIX)
         return x_instantiate(s.x_template(e, f), f, e)
 
     def x_template(s, e, f):
@@ -3919,6 +4124,8 @@ class Checker:
             s.used_effects.update(f.effects)
             return substitute(f.ret, m)
         for arg, p in zip(a, f.params):
+            if p.take and arg.borrowed_view:
+                terr(arg, "array_alias", "a borrowed view cannot be passed to a consuming parameter")
             if p.take and is_array(substitute(p.type, m)) and not isinstance(arg, Move):
                 terr(arg, "foreign_move", "missing move in a consuming argument",
                      "write move %s" % arg.name if isinstance(arg, Var) else "bind the array to a local, then move it")
@@ -3967,16 +4174,17 @@ def x_record(t, decls):
     return is_user_type(t) and not t.args and isinstance(decls.get(t.name), StructDecl)
 
 
-def x_sig_reason(f, decls):
+def x_sig_reason(f, decls, allow_requires=False, allow_str=False):
     if f.tparams:
         return "it is generic"
     if any(p.mode is not None or p.take for p in f.params):
         return "it has an inout or take parameter"
-    if any(p.type not in X_PARAM_TYPES and not x_record(p.type, decls) for p in f.params):
+    if any(p.type not in X_PARAM_TYPES and not (allow_str and p.type == STR)
+           and not x_record(p.type, decls) for p in f.params):
         return "its parameters are not all i64, bool, arrays of i64, u8 or bool, or structs"
     if f.ret not in (I64, BOOL):
         return "it does not return bool or i64"
-    if f.requires:
+    if f.requires and not allow_requires:
         return "it has requires"
     if f.decreases is not None:
         return "it has decreases"

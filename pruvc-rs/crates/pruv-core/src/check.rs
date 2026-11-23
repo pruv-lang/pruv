@@ -192,7 +192,7 @@ fn field_label(d: &str, vname: Option<&str>, field: &str) -> String {
 }
 
 /// The checked type key of an expression (None before the checker has seen it).
-fn expr_ty(e: &Expr) -> &Ty {
+pub(crate) fn expr_ty(e: &Expr) -> &Ty {
     match e {
         Expr::InoutArg(x) => &x.ty,
         Expr::Move(x) => &x.ty,
@@ -306,6 +306,7 @@ struct Checker {
     tt: TypeTable,
     cur_name: String,
     cur_ret: GType,
+    borrowed_result: bool,
     try_count: usize,
     used_effects: BTreeSet<String>,
     /// Expected array type, turned on only when the right-hand expression of a let/reassignment/return is itself an alloc call (alloc takes it right away).
@@ -395,11 +396,14 @@ pub fn check_explicit(
 ) -> Result<TypeTable, PruvError> {
     crate::modules::resolve(prog, g4)?;
     let src_names: Vec<String> = g4.fn_meta.iter().map(|m| m.src_name.clone()).collect();
+    let hosts: Vec<bool> = g4.fn_meta.iter().map(|m| m.host_entry).collect();
+    crate::borrowed::prepare(prog, &hosts)?;
     let mut c = Checker::new(prog, externs, &src_names)?;
     prog.uses_inout = Some(c.uses_inout); // G5 A0: lets the staging guard skip its walk for inout-free programs
     c.explicit = true;
     c.host_entry = g4.fn_meta.iter().map(|m| m.host_entry).collect();
     c.run(prog)?;
+    crate::borrowed::check(prog)?;
     prog.contract_vec_slice = c.contract_vec_slice;
     g4.remove_preds(&prog.functions);
     prog.functions.retain(|f| !f.pred);
@@ -413,9 +417,11 @@ pub fn check(prog: &mut Program) -> Result<TypeTable, PruvError> {
 
 /// `check` with the crate names given with --rust-extern (G6: crates a trusted rust fn path may start with besides std).
 pub fn check_with_externs(prog: &mut Program, externs: &[String]) -> Result<TypeTable, PruvError> {
+    crate::borrowed::prepare(prog, &[])?;
     let mut c = Checker::new(prog, externs, &[])?;
     prog.uses_inout = Some(c.uses_inout); // G5 A0: lets the staging guard skip its walk for inout-free programs
     c.run(prog)?;
+    crate::borrowed::check(prog)?;
     prog.contract_vec_slice = c.contract_vec_slice;
     prog.functions.retain(|f| !f.pred);
     Ok(c.tt)
@@ -1022,6 +1028,7 @@ impl Checker {
             tt: TypeTable::default(),
             cur_name: String::new(),
             cur_ret: unitt(),
+            borrowed_result: false,
             try_count: 0,
             used_effects: BTreeSet::new(),
             alloc_want: None,
@@ -1143,6 +1150,24 @@ impl Checker {
         for f in prog.functions.iter_mut() {
             f.x_auto = None;
             if !matches!(self.x_raw.get(&f.name), Some(Ok(_))) {
+                // A read observer of a slice can supply its exact scalar result after the caller
+                // has proved its requires. This template is for the verifier only.
+                if f.ret == "i64" && f.tparams.is_empty() && f.effects.is_empty()
+                    && f.decreases.is_none() && f.params.iter().all(|p| p.mode_pos.is_none() && !p.take)
+                    && f.params.iter().any(|p| p.ty == "str"
+                        || self.decls.get(&p.ty).is_some_and(crate::borrowed::borrowing_struct))
+                {
+                    if let [Stmt::Return(Return { value: Some(value), .. })] = f.body.as_slice() {
+                        let observed = match value {
+                            Expr::Call(c) if c.name == "len" => c.args.first(),
+                            Expr::Index(x) if matches!(&*x.index, Expr::IntLit(_) | Expr::Var(_)) => Some(&*x.array),
+                            _ => None,
+                        };
+                        if observed.and_then(place_root).is_some_and(|name| f.params.iter().any(|p| p.name == name)) {
+                            f.x_auto = Some(value.clone());
+                        }
+                    }
+                }
                 continue;
             }
             let fi = match self.funcs.get(&f.name) {
@@ -1690,6 +1715,9 @@ impl Checker {
 
     /// Every type reference: arity, known names, type-argument and bound rules (G3_SPEC 3.1, 3.2, 3.4).
     fn check_type(&self, line: i64, col: i64, ty: &GType) -> Res<()> {
+        if ty.name == "@ref" || ty.args.iter().any(|t| self.borrowed_type_argument(t)) {
+            return Err(terr(line, col, "borrow_signature", "borrowed types cannot be generic arguments", ""));
+        }
         let ad = &self.arg_decls;
         let look = |n: &str| ad.get(n).map(|k| (*k, Vec::<GType>::new()));
         if let Err(ex) = check_arity(ty, &look) {
@@ -1896,8 +1924,16 @@ impl Checker {
         self.check_type(line, col, e)
     }
 
+    fn borrowed_type_argument(&self, ty: &GType) -> bool {
+        ty.name == "@ref" || self.decls.get(&ty.name).is_some_and(crate::borrowed::borrowing_struct)
+            || ty.args.iter().any(|t| self.borrowed_type_argument(t))
+    }
+
     /// a: a type argument; tp: the TypeParam it instantiates (None for Option/Result).
     fn check_arg(&self, line: i64, col: i64, a: &GType, tp: Option<&TParam>) -> Res<()> {
+        if self.borrowed_type_argument(a) {
+            return Err(terr(line, col, "borrow_signature", "borrowed types cannot be generic arguments", ""));
+        }
         self.check_type_rec(line, col, a)?;
         if a.contains_collection() || self.depends_on_nested_record(a) {
             // G6: collections are never type arguments of Option/Result/user declarations
@@ -2740,6 +2776,7 @@ impl Checker {
         self.enter(&fn_owner(&fname), &f.tparams);
         self.cur_name = fname.clone();
         self.cur_ret = ret.clone();
+        self.borrowed_result = f.borrowed_result;
         self.try_count = 0;
         self.cur_cost = f.cost.is_some();
         self.cur_params = f.params.iter().map(|p| p.name.clone()).collect();
@@ -3203,7 +3240,7 @@ impl Checker {
                 Expr::Var(Var { line, col, name: name.clone(), ty: None })
             };
             let k = std::mem::replace(rhs, new);
-            lets.push(Stmt::Let(Let { line, col, name, mutable: false, ty: t.to_key(), value: k, refine: None }));
+            lets.push(Stmt::Let(Let { borrowed: false, line, col, name, mutable: false, ty: t.to_key(), value: k, refine: None }));
         }
         Ok(lets)
     }
@@ -3287,7 +3324,7 @@ impl Checker {
         };
         let init = Expr::BoolLit(BoolLit { line, col, value: b.op != "&&", ty: None });
         Ok(vec![
-            Stmt::Let(Let { line, col, name: name.clone(), mutable: true, ty: boolt().to_key(), value: init, refine: None }),
+            Stmt::Let(Let { borrowed: false, line, col, name: name.clone(), mutable: true, ty: boolt().to_key(), value: init, refine: None }),
             Stmt::If(If { line, col, cond, then: vec![Stmt::Assign(Assign { line, col, name, value: *b.right, deref: false })],
                 els: Vec::new() }),
         ])
@@ -3612,20 +3649,24 @@ impl Checker {
                 self.check_type(s.line, s.col, &sty)?;
                 self.ext_misuse(s.line, s.col, &sty, None)?; // G9 A0
                 self.boundary = boundary_of(&s.value);
-                self.want_alloc(&s.value, &sty);
+                if !s.borrowed { self.want_alloc(&s.value, &sty); }
                 self.field_move = match &s.value {
                     Expr::Call(call) => self.field_move_arg(call, scope, next)?, // LG9 (G-LG8-1)
                     v => self.field_move_out(v, &sty, None, scope, next)?,
                 };
-                let checked = self.expect(&mut s.value, &sty, scope, false, None);
+                let checked = if s.borrowed {
+                    self.expect_user_arg(&mut s.value, &sty, scope, false, true)
+                } else {
+                    self.expect(&mut s.value, &sty, scope, false, None).map(|_| ())
+                };
                 self.field_move = None;
                 checked?;
                 self.check_inout_context(&[&s.value], InoutContext::Value)?;
-                if sty.is_array() || sty == strt() {
+                if !s.borrowed && (sty.is_array() || sty == strt()) {
                     self.array_source(s.line, s.col, &s.value, scope, false, &sty)?;
                 }
                 self.own(&s.value, scope)?;
-                scope.insert(s.name.clone(), Entry { ty: sty, mutable: s.mutable, kind: "local" });
+                scope.insert(s.name.clone(), Entry { ty: sty, mutable: s.mutable, kind: if s.borrowed { "ref_local" } else { "local" } });
             }
             Stmt::Assign(s) => {
                 let v = self.lookup(s.line, s.col, &s.name, scope, &[])?;
@@ -3885,8 +3926,12 @@ impl Checker {
                             return Err(terr(s.line, s.col, "return_type", "function returns (); use `return;`", ""));
                         }
                         self.boundary = boundary_of(v);
-                        self.want_alloc(v, &ret);
-                        let checked = self.expect(v, &ret, scope, false, None);
+                        let checked = if self.borrowed_result {
+                            self.expect_user_arg(v, &ret, scope, false, true)
+                        } else {
+                            self.want_alloc(v, &ret);
+                            self.expect(v, &ret, scope, false, None).map(|_| ())
+                        };
                         self.field_move = None;
                         checked?;
                         self.check_inout_context(&[&*v], InoutContext::Value)?;
@@ -3894,7 +3939,7 @@ impl Checker {
                         let binder_ret = ret == strt() && matches!(&*v, Expr::Var(x)
                             if self.match_movable.contains(&x.name)
                                 && scope.get(&x.name).is_some_and(|entry| entry.ty == strt()));
-                        if (ret.is_array() || ret == strt()) && !binder_ret {
+                        if !self.borrowed_result && (ret.is_array() || ret == strt()) && !binder_ret {
                             self.array_source(s.line, s.col, v, scope, true, &ret)?;
                         }
                         if binder_ret {
@@ -4019,6 +4064,15 @@ impl Checker {
         self.ckind = "code";
         self.boundary = None;
         for e in &p.calls {
+            if let Expr::Call(c) = e {
+                for a in &c.args {
+                    if matches!(a, Expr::Var(x) if scope.get(&x.name).is_some_and(|e| e.kind == "ref_local"))
+                        || matches!(a, Expr::FieldAccess(x) if self.is_borrowed_field(&x.base, &x.field))
+                    {
+                        return Err(terr(a.line(), a.col(), "borrow_signature", "borrowed values cannot cross a par branch boundary", ""));
+                    }
+                }
+            }
             self.par_args(e)?;
         }
         Self::par_overlap(&p.calls)?;
@@ -4064,6 +4118,11 @@ impl Checker {
                 && t.args[0].owner.is_some() && is_element(&t.args[0], &self.elem_params))
     }
 
+    fn is_borrowed_field(&self, base: &Expr, field: &str) -> bool {
+        matches!(expr_ty(base).as_ref().and_then(|ty| self.decls.get(ty)),
+            Some(TypeDecl::Struct(s)) if s.fields.iter().any(|f| f.name == field && f.borrowed))
+    }
+
     fn par_args(&self, e: &Expr) -> Res<()> {
         if let Expr::Call(c) = e {
             for arg in &c.args {
@@ -4075,6 +4134,9 @@ impl Checker {
                         "bind the value before the group, e.g. `let n: i64 = len(a);`, and pass n"));
                 }
                 let t = expr_ty(arg).as_ref().map(|k| GType::from_key(k));
+                if t.as_ref().and_then(|t| self.decls.get(&t.name)).is_some_and(crate::borrowed::borrowing_struct) {
+                    return Err(terr(arg.line(), arg.col(), "borrow_signature", "borrowed values cannot cross a par branch boundary", ""));
+                }
                 if !t.as_ref().map_or(false, |t| self.par_type_ok(t)) {
                     return Err(terr(arg.line(), arg.col(), "parallel_argument",
                         format!("an argument of type {} cannot cross a par branch boundary",
@@ -4407,7 +4469,16 @@ impl Checker {
                 return Err(terr(value.line(), value.col(), "foreign_owned_type", format!("vec_get cannot copy {}", tn(&t)), ""));
             }
             if self.is_extended(&t) && !matches!(value, Expr::EnumCtor(_) | Expr::StructLit(_) | Expr::Call(_) | Expr::Move(_)) {
-                self.used_effects.insert("alloc".to_string());
+                let copies_only_refs = self.decls.get(&t.name).is_some_and(|decl| {
+                    crate::borrowed::borrowing_struct(decl) && decl.all_fields().iter().all(|field| {
+                        let ty = GType::from_key(&field.ty);
+                        field.borrowed || !(ty.is_array() || ty == strt() || ty.is_collection()
+                            || ty.has_string_error() || self.is_extended(&ty))
+                    })
+                });
+                if !copies_only_refs {
+                    self.used_effects.insert("alloc".to_string());
+                }
             }
         }
         Ok(())
@@ -4590,6 +4661,12 @@ impl Checker {
             }
         }
         if *ty == strt() {
+            if borrow_vector {
+                if let Expr::StrLit(lit) = e {
+                    lit.ty = Some(ty.to_key());
+                    return Ok(());
+                }
+            }
             return self.expect_str_arg(e, scope, c);
         }
         let got = if borrow_vector && self.recursive_vec_element(ty) {
@@ -5295,9 +5372,17 @@ impl Checker {
                 "write every field exactly once, in declaration order",
             ));
         }
-        for (fi, fd) in e.fields.iter_mut().zip(fields.iter()) {
-            self.expect(&mut fi.value, &fd.1, scope, c, None)?;
-            self.own_field(&fi.value, &fd.1, scope, c)?; // G9 A0
+        let borrowed_fields = match self.decls.get(&name) {
+            Some(TypeDecl::Struct(s)) => s.fields.iter().map(|f| f.borrowed).collect::<Vec<_>>(),
+            _ => unreachable!(),
+        };
+        for ((fi, fd), borrowed) in e.fields.iter_mut().zip(&fields).zip(borrowed_fields) {
+            if borrowed {
+                self.expect_user_arg(&mut fi.value, &fd.1, scope, c, true)?;
+            } else {
+                self.expect(&mut fi.value, &fd.1, scope, c, None)?;
+                self.own_field(&fi.value, &fd.1, scope, c)?;
+            }
         }
         self.ctor_allocs(&name, None, c); // G9 A0
         Ok(sty)
