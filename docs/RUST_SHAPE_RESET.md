@@ -101,6 +101,9 @@ Each claimed win must show an assembly or instruction diff naming the check that
    - **LB1 (V1, V2):** the recursive owned value: a monomorphic declaration, a size measure, last-match lookup and in-place child replace, owned UTF-16 keys, on the Rust backend. This comes first because budget M12 and `ent_value` depend on it, and DB64 showed it is the main cause there.
    - **LB2 (B, G-DB63-2):** borrowed doc and text fields with provenance and exclusivity, starting from the test cases in §4.
    - **LB3 (V3, V4, ABI):** the LLVM layout of recursive and owned collections, then owned collections across the host boundary.
+   - **LB3b (layout follow-up):** overlapped enum payloads, `realloc` growth, native scalar `Vec` fields, the
+     checked-mode length bound and budget charge in native push, and borrowed views on LLVM (debt rows D-LB3-1..3,
+     docs/L3_LB3.md Open items).
    - **LB4 (U):** borrowed UTF-16 views, if still needed after LB1.
 
    Each bundle adds tests in `tests/` and updates `SPEC.md`.
