@@ -1,0 +1,1 @@
+{"backends": ["rust"], "flags_matrix": [[], ["--no-verify"], ["--trust-callers"], ["--infer"]], "exit": 0, "stdout_lines": ["100000030005000213", "8300025003330213", "4300023332500313", "2900022502000313"]}

@@ -1,0 +1,27 @@
+// LG31 (G-LG28-2): a loop that also clears the Vec (an inout write) does not make it push-only, so no frame
+// clause is assumed and the returned Vec<S> cannot be shown to hold S's invariant per element
+struct P {
+  x: i64,
+  invariant x > 0 && x <= 1000
+}
+
+fn fill(n: i64) -> Vec<P> ! alloc
+  requires 0 <= n && n <= 10
+{
+  let mut w: Vec<P> = vec_new::<P>();
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && len(w) <= i
+    decreases n - i
+  {
+    w = vec_push::<P>(move w, P { x: 1 + i });
+    if i == 5 {
+      vec_clear::<P>(inout w);
+    }
+    i = i + 1;
+  }
+  return move w;
+}
+pub fn lg31_entry() -> () {
+  return;
+}
