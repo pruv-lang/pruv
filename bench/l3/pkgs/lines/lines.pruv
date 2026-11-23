@@ -88,6 +88,24 @@ pub fn parse_owned(take data: [u8], hi: i64) -> crate::json::JsonParse ! alloc
   }
 }
 
+// DB59 (G-DB58-1): parse_range for a caller that keeps and reuses its buffer (a line buffer): data[lo..hi) is copied
+// once into an exact-size block (one allocate-and-fill, no zeroed buffer and byte loop) that parse_owned moves into
+// the document. Same results as parse_range.
+pub fn parse_copy(data: [u8], lo: i64, hi: i64) -> crate::json::JsonParse ! alloc
+  requires 0 <= lo && lo <= hi && hi <= len(data)
+  ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= hi - lo)
+  ensures hi - lo > 16777216 ==> is_variant(result, crate::json::JsonParse::Failed)
+  ensures hi - lo > 16777216 ==> (variant_field(result, crate::json::JsonParse::Failed, error).position == 0 && variant_field(result, crate::json::JsonParse::Failed, error).kind == 1)
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
+{
+  let n: i64 = hi - lo;
+  if n > crate::json::limit_input_bytes() {
+    return crate::json::JsonParse::Failed(crate::json::make_error(0, crate::json::err_input_too_large()));
+  }
+  let owned: [u8] = copy(subview(data, lo, hi));
+  return parse_owned(move owned, n);
+}
+
 // ---- borrowed-span parsing: scan into caller scratch, then (optionally) build an exact-size owned document ----
 
 // Validate and scan data[lo..hi) in place, with no allocation. Same outcome as parse_range except that the document is not built:

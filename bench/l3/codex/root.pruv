@@ -191,7 +191,7 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
                     let ms: str = crate::util::str_at(d, mid);
                     if crate::util::units16(ms) <= 200 {
                       let mt: str = crate::text::trim(ms);
-                      if len(mt) > 0 { model = copy(mt); }
+                      if len(mt) > 0 { model = move mt; }
                     }
                   }
                 } else {
