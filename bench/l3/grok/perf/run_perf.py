@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""Grok history core perf harness: the generated Pruv read::window (pruv) against hand-written safe Rust (hand).
+"""Grok perf harness: the generated Pruv read::window and rpc line path (pruv) against hand-written safe Rust (hand).
 
   python3 bench/l3/grok/perf/run_perf.py [check|all] [--rounds 5] [--time-ms 400] [--rows hist-ord-64k,...] [--pruvc PATH] [--pair PAIR]
 
-Build (everything under perf/work/, scratch, never committed): the grok modules read.pruv reaches (util, packet, path, framing,
-entry, read) are copied verbatim next to perf_root.pruv together with a manifest, pruvc compiles it (verified mode, str adapter
-rlib), and gen.rs + hand_history.rs + perf_driver.rs become one main.rs built with rustc -C opt-level=3 --edition 2021.
+Build (everything under perf/work/, scratch, never committed): the grok modules perf_root.pruv reaches (util, packet, path, framing,
+entry, line, read, rpc) are copied verbatim next to perf_root.pruv together with a manifest (packages json parse access jstr lines
+tail bytes text time names turns transport), pruvc compiles it (verified mode, str adapter rlib), and gen.rs + hand_history.rs +
+hand_rpc.rs + perf_driver.rs become one main.rs built with rustc -C opt-level=3 --edition 2021.
 
 Rows (generated deterministically here, written to work/rows/*.bin only so the driver can read them; nothing is committed):
   hist-ord-64k (S sanity), hist-ord-2m (M), hist-ord-8m (L)   ordinary grok session lines, LF-terminated
   hist-dense-2m (M), hist-dense-8m (L)                         dense tiny lines ("0", "{}", a few small user/assistant objects)
-check: the driver runs both rows on every row (omitted=false and true) and compares the packets word for word; a mismatch exits 1.
+  rpc-lines-64k (S), rpc-lines-2m (M), rpc-lines-8m (L)        ACP stdout lines (session/update notifications, requests, responses,
+                                                               errors, escapes, blanks, a few malformed); grok_rpc_lines vs hand_rpc
+check: the driver runs both rows on every row (omitted=false and true for history rows, once for rpc rows) and compares the
+packets word for word; a mismatch exits 1.
 perf: a fresh process per (row, cell, round), implementation order rotated every round, warm-up call, per process median of the
 timed calls; the cell value is the median of the round medians. RSS: /usr/bin/time -l whole-process peak (median of 3) of one call
 with the window read first (so RSS includes the input window bytes for both sides).
@@ -32,12 +36,13 @@ ENV = dict(os.environ, PATH=CARGO_BIN + os.pathsep + os.environ.get("PATH", ""))
 HEADER = ('#![allow(dead_code, unused_imports, unused_variables, unused_mut, non_snake_case, unused_parens, '
           'unused_assignments, non_camel_case_types, private_interfaces)]\n')
 RUSTC_FLAGS = ["-C", "opt-level=3", "--edition", "2021"]
-GROK_MODULES = ["util", "packet", "path", "framing", "entry", "line", "read"]
-DEPS = ["json", "parse", "access", "jstr", "lines", "bytes", "text", "time", "names", "turns"]
+GROK_MODULES = ["util", "packet", "path", "framing", "entry", "line", "read", "rpc"]
+DEPS = ["json", "parse", "access", "jstr", "lines", "tail", "bytes", "text", "time", "names", "turns", "transport"]
 IMPLS = ["pruv", "hand"]
 # (name, size class, window bytes, shape)
 ROWS = [("hist-ord-64k", "S", 64 * 1024, "ord"), ("hist-ord-2m", "M", 2 << 20, "ord"), ("hist-ord-8m", "L", 8 << 20, "ord"),
-        ("hist-dense-2m", "M", 2 << 20, "dense"), ("hist-dense-8m", "L", 8 << 20, "dense")]
+        ("hist-dense-2m", "M", 2 << 20, "dense"), ("hist-dense-8m", "L", 8 << 20, "dense"),
+        ("rpc-lines-64k", "S", 64 * 1024, "rpc"), ("rpc-lines-2m", "M", 2 << 20, "rpc"), ("rpc-lines-8m", "L", 8 << 20, "rpc")]
 
 
 def rustc():
@@ -109,12 +114,13 @@ def build(pair, pruvc_arg):
         extra, error = g.build_llvm_objects(os.path.join(work, "gen.ll"), "grok_perf", work)
         if error:
             sys.exit(pair + ": " + error)
-        generated = '#[path = "gen.rs"] mod sol;\nuse sol::grok_history_window;\n'
+        generated = '#[path = "gen.rs"] mod sol;\nuse sol::{grok_history_window, grok_rpc_lines};\n'
     shutil.copy(os.path.join(HERE, "hand_history.rs"), os.path.join(work, "hand_history.rs"))
+    shutil.copy(os.path.join(HERE, "hand_rpc.rs"), os.path.join(work, "hand_rpc.rs"))
     drv = open(os.path.join(HERE, "perf_driver.rs"), encoding="utf-8").read()
     main = os.path.join(work, "main.rs")
     with open(main, "w", encoding="utf-8") as f:
-        f.write(HEADER + generated + 'mod hand { include!("hand_history.rs"); }\n' + drv)
+        f.write(HEADER + generated + 'mod hand { include!("hand_history.rs"); }\nmod hand_rpc { include!("hand_rpc.rs"); }\n' + drv)
     exe = os.path.join(work, "perf_driver")
     sh([rustc()] + RUSTC_FLAGS + ["-o", exe, main, "--extern", "pruv_str=" + rlib] + extra, what="rustc driver")
     return exe
@@ -209,13 +215,92 @@ def gen_dense(size, seed):
         i += 1
 
 
+def uuid_like(rng):
+    return "%08x-%04x-%04x-%04x-%012x" % (rng.getrandbits(32), rng.getrandbits(16), rng.getrandbits(16), rng.getrandbits(16),
+                                          rng.getrandbits(48))
+
+
+def body(s):
+    """JSON string body (no quotes) of s, non-ASCII kept raw."""
+    return json.dumps(s, ensure_ascii=False)[1:-1]
+
+
+def notification(rng, session, update):
+    return dump({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session, "update": update}})
+
+
+def escaped_notification(rng, session):
+    """session/update whose text carries raw \\u escapes (accented char, surrogate pair, occasionally a lone surrogate)."""
+    t = text(rng, rng.randint(40, 600))
+    cut = rng.randint(0, len(t))
+    mid = "\\u00e9" + body(rng.choice(["", " ", "ab"])) + "\\ud83d\\ude42"
+    if rng.random() < 0.3:
+        mid += "\\ud800"
+    if rng.random() < 0.2:
+        mid += "\\u0041\\u00df\\u2028"
+    txt = body(t[:cut]) + mid + body(t[cut:])
+    return (('{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":{"sessionUpdate":"agent_message_chunk",'
+             '"content":{"type":"text","text":"%s"}}}}\n') % (session, txt)).encode("utf-8")
+
+
+def gen_rpc(size, seed):
+    """ACP stdout lines, LF-terminated. Stays inside the hand scope: plain ASCII keys, integer error codes."""
+    rng = random.Random(seed)
+    session = uuid_like(rng)
+    out, total, i = [], 0, 0
+    while True:
+        i += 1
+        if i % 500 == 0:
+            session = uuid_like(rng)
+        v = rng.random()
+        if v < 0.85:
+            w = rng.random()
+            if w < 0.90:
+                u = {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text(rng, rng.randint(20, 2000))}}
+            elif w < 0.97:
+                u = {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": text(rng, rng.randint(20, 600))}}
+            else:
+                u = {"sessionUpdate": "tool_call", "toolCallId": "call_%d" % i, "title": "Read file", "kind": "read",
+                     "status": "pending"}
+            b = notification(rng, session, u)
+        elif v < 0.88:
+            rid = rng.randint(3, 99999) if rng.random() < 0.7 else "req-%d" % rng.randint(3, 99999)
+            b = dump({"jsonrpc": "2.0", "id": rid, "method": "session/request_permission",
+                      "params": {"sessionId": session, "toolCall": {"toolCallId": "call_%d" % i, "title": "Edit src/a.rs"},
+                                 "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                                             {"optionId": "reject", "name": "Reject", "kind": "reject_once"}]}})
+        elif v < 0.90:
+            b = dump({"jsonrpc": "2.0", "id": 2, "result": {"sessionId": session, "modes": {"currentModeId": "default"}}})
+        elif v < 0.92:
+            b = dump({"jsonrpc": "2.0", "id": rng.choice([1, 3, 4, 17]), "result": {"stopReason": "end_turn"}})
+        elif v < 0.94:
+            b = dump({"jsonrpc": "2.0", "id": 2, "error": {"code": -32603, "message": text(rng, rng.randint(10, 450))}})
+        elif v < 0.95:
+            b = dump({"jsonrpc": "2.0", "id": 2, "error": {"code": -32603, "message": 5}})
+        elif v < 0.98:
+            b = escaped_notification(rng, session)
+        elif v < 0.985:
+            b = b"\n"
+        elif v < 0.99:
+            b = b"  \t" + dump({"jsonrpc": "2.0", "id": 9, "result": None})[:-1] + b"  \r\n"
+        else:
+            raw = dump({"jsonrpc": "2.0", "method": "session/update",
+                        "params": {"sessionId": session, "update": {"sessionUpdate": "agent_message_chunk",
+                                                                    "content": {"type": "text", "text": text(rng, 120)}}}})[:-1]
+            b = raw[:rng.randint(5, len(raw) - 1)] + b"\n"
+        if total + len(b) > size:
+            return b"".join(out)
+        out.append(b)
+        total += len(b)
+
+
 def make_rows(only):
     os.makedirs(ROWS_DIR, exist_ok=True)
     rows = []
     for name, size_class, size, shape in ROWS:
         if only and name not in only:
             continue
-        data = (gen_ord if shape == "ord" else gen_dense)(size, 20240601 + len(name) + size)
+        data = {"ord": gen_ord, "dense": gen_dense, "rpc": gen_rpc}[shape](size, 20240601 + len(name) + size)
         assert len(data) <= size and data.endswith(b"\n")
         path = os.path.join(ROWS_DIR, name + ".bin")
         with open(path, "wb") as f:
@@ -228,13 +313,13 @@ def make_rows(only):
 
 # ---------------------------------------------------------------- run
 def max_rss(cmd):
-    """Peak resident set size in bytes of one process (/usr/bin/time -l, macOS)."""
+    """(peak resident set size in bytes, printed fold) of one process (/usr/bin/time -l, macOS)."""
     r = subprocess.run(["/usr/bin/time", "-l"] + cmd, capture_output=True, text=True, env=ENV)
     if r.returncode != 0:
         sys.exit("%s failed:\n%s" % (cmd[0], r.stderr[-2000:]))
     for l in r.stderr.splitlines():
         if "maximum resident set size" in l:
-            return int(l.split()[0])
+            return int(l.split()[0]), int(r.stdout.split()[-1])
     sys.exit("no 'maximum resident set size' in /usr/bin/time -l output")
 
 
@@ -269,12 +354,14 @@ def run_perf(exe, rows, args):
     bad = 0
     for name, size_class, path, nbytes in rows:
         cks = res[(name, "pruv")]["ck"] | res[(name, "hand")]["ck"]
+        samples = {impl: [max_rss([exe, "rss", impl, path]) for _ in range(3)] for impl in IMPLS}
+        cks |= {ck for impl in IMPLS for _, ck in samples[impl]}  # every rss sample's fold is compared too
         if len(cks) != 1:
             print("ERROR: checksums disagree on %s: %s" % (name, sorted(cks)), file=sys.stderr)
             bad += 1
         for impl in IMPLS:
             e = res[(name, impl)]
-            rss = statistics.median([max_rss([exe, "rss", impl, path]) for _ in range(3)])
+            rss = statistics.median([m for m, _ in samples[impl]])
             out.append({"row": name, "size": size_class, "impl": impl, "window_bytes": nbytes, "median_ns": statistics.median(e["med"]),
                         "min_ns": min(e["min"]), "max_ns": max(e["max"]), "rounds_median_ns": e["med"], "calls": e["calls"],
                         "max_rss_bytes": rss})
@@ -294,9 +381,10 @@ def report(out, rows, args):
                 name, size_class, impl, o["median_ns"], o["min_ns"], o["max_ns"], o["max_rss_bytes"],
                 o["median_ns"] / max(h["median_ns"], 1), o["max_rss_bytes"] / max(h["max_rss_bytes"], 1)))
         p = by[(name, "pruv")]
-        cells.append({"name": "grok history %s time" % name, "axis": "time", "size": size_class, "kind": "proportional",
+        prefix = "grok rpc" if name.startswith("rpc-") else "grok history"  # the call is chosen by the row name prefix
+        cells.append({"name": "%s %s time" % (prefix, name), "axis": "time", "size": size_class, "kind": "proportional",
                       "pruv": p["median_ns"], "hand": h["median_ns"], "unit": "ns", "runs": args.rounds})
-        cells.append({"name": "grok history %s rss" % name, "axis": "rss", "size": size_class, "kind": "proportional",
+        cells.append({"name": "%s %s rss" % (prefix, name), "axis": "rss", "size": size_class, "kind": "proportional",
                       "pruv": p["max_rss_bytes"], "hand": h["max_rss_bytes"], "unit": "bytes", "runs": 3})
     work = pair_work(args.pair)
     json.dump({"rounds": args.rounds, "time_ms": args.time_ms, "results": out}, open(os.path.join(work, "perf_result.json"), "w"), indent=1)
