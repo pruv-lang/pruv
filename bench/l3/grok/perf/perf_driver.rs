@@ -1,6 +1,9 @@
 // Grok history core driver (run_perf.py writes work/main.rs = header + include!("gen.rs") + `mod hand { include!("hand_history.rs"); }`
-// + this file). One call = one window() over a window file, omitted=false, short ASCII title/model; the returned Vec<i64> is the
-// read result packet. Rows: pruv (grok_history_window from the generated code), hand (hand::history_window).
+// + `mod hand_rpc { include!("hand_rpc.rs"); }` + this file). One call = one window() over a window file, omitted=false, short
+// ASCII title/model; the returned Vec<i64> is the read result packet. Rows: pruv (grok_history_window from the generated code),
+// hand (hand::history_window).
+// Files whose basename starts with "rpc-" are rpc-lines windows instead: pruv = grok_rpc_lines(win), hand = hand_rpc::rpc_lines(win)
+// (15 words; no omitted flag, so check runs them once). Same modes and output formats.
 //
 //   perf_driver check <file>...        both rows on every file, omitted=false and omitted=true, packets compared word for word;
 //                                      prints `file len fold` (the hand packet); exit 1 on any mismatch
@@ -23,10 +26,18 @@ fn fold(p: &[i64]) -> i64 {
     s
 }
 
-fn run(row: &str, win: &[u8], omitted: bool) -> Vec<i64> {
-    match row {
-        "pruv" => grok_history_window(win, omitted, TITLE, MODEL),
-        "hand" => hand::history_window(win, omitted, TITLE, MODEL),
+// rpc rows are the files whose basename starts with "rpc-" (the rpc-lines rows): grok_rpc_lines against hand_rpc::rpc_lines;
+// `omitted` has no meaning there. Every other file is a history window.
+fn is_rpc(path: &str) -> bool {
+    std::path::Path::new(path).file_name().and_then(|n| n.to_str()).map_or(false, |n| n.starts_with("rpc-"))
+}
+
+fn run(row: &str, win: &[u8], omitted: bool, rpc: bool) -> Vec<i64> {
+    match (row, rpc) {
+        ("pruv", false) => grok_history_window(win, omitted, TITLE, MODEL),
+        ("hand", false) => hand::history_window(win, omitted, TITLE, MODEL),
+        ("pruv", true) => grok_rpc_lines(win),
+        ("hand", true) => hand_rpc::rpc_lines(win),
         _ => panic!("row must be pruv|hand"),
     }
 }
@@ -35,9 +46,13 @@ fn check(files: &[String]) -> i32 {
     let mut bad = 0;
     for f in files {
         let win = std::fs::read(f).unwrap_or_else(|e| panic!("read {}: {}", f, e));
+        let rpc = is_rpc(f);
         for omitted in [false, true] {
-            let a = run("pruv", &win, omitted);
-            let b = run("hand", &win, omitted);
+            if rpc && omitted {
+                continue; // one run per rpc file
+            }
+            let a = run("pruv", &win, omitted, rpc);
+            let b = run("hand", &win, omitted, rpc);
             if a.len() != b.len() {
                 eprintln!("MISMATCH {} omitted={}: pruv len {} vs hand len {}", f, omitted, a.len(), b.len());
                 bad += 1;
@@ -64,18 +79,19 @@ fn main() {
         "time" => {
             let row = a[2].as_str();
             let win = std::fs::read(&a[3]).unwrap();
+            let rpc = is_rpc(&a[3]);
             let budget_ns: u128 = a[4].parse::<u128>().unwrap() * 1_000_000;
-            black_box(run(row, black_box(&win), false)); // warm-up
+            black_box(run(row, black_box(&win), false, rpc)); // warm-up
             let mut t: Vec<u64> = Vec::new();
             let all = Instant::now();
             while t.len() < 3 || (all.elapsed().as_nanos() < budget_ns && t.len() < 1_000_000) {
                 let t0 = Instant::now();
-                let r = run(row, black_box(&win), false);
+                let r = run(row, black_box(&win), false, rpc);
                 black_box(&r);
                 drop(r);
                 t.push(t0.elapsed().as_nanos() as u64);
             }
-            let sum = fold(&run(row, &win, false));
+            let sum = fold(&run(row, &win, false, rpc));
             t.sort_unstable();
             let n = t.len();
             let med = if n % 2 == 0 { (t[n / 2 - 1] + t[n / 2]) / 2 } else { t[n / 2] };
@@ -84,7 +100,7 @@ fn main() {
         "rss" => {
             let row = a[2].as_str();
             let win = std::fs::read(&a[3]).unwrap();
-            let r = run(row, black_box(&win), false);
+            let r = run(row, black_box(&win), false, is_rpc(&a[3]));
             black_box(&r);
             println!("{}", fold(&r)); // after the peak: lets a caller compare every RSS sample with hand
         }

@@ -14,7 +14,7 @@
    "gen": [{"session": {"thread": "A", "readdir": true, "files": {"usage.json": "{}"}}}],
    "acp": {"initialize": {"result": {"agentCapabilities": {"loadSession": false}}}},
    "expected": {"status": "error", "class": "EngineImportError", "code": "grok-load-failed"}},
-  {"name": "verify-timeout-removes-target", "mode": "copy", "kills": ["M15"], "rpcMs": 3000,
+  {"name": "verify-timeout-removes-target", "mode": "copy", "kills": ["M15"], "rpcMs": 15000,
    "gen": [{"session": {"thread": "A", "readdir": true, "files": {"usage.json": "{}"}}}],
    "acp": {"session/load": {"stall": true}},
    "expected": {"status": "error", "class": "EngineImportError", "code": "grok-load-failed"}},

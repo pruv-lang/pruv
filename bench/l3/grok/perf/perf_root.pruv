@@ -1,17 +1,20 @@
-// Grok history core perf root: one pub entry over read::window (bench/l3/grok/read.pruv). run_perf.py copies this file next to a
-// verbatim copy of the grok modules it reaches (util, packet, path, framing, entry, read) into perf/work/ and compiles it with
-// the manifest it writes (the deps are the packages grok/pruv.json lists, minus the ones read.pruv does not reach).
+// Grok perf root: two pub entries, grok_history_window over read::window (bench/l3/grok/read.pruv) and grok_rpc_lines over the
+// ACP line path of rpc.pruv (parse_line, kind_of, not_handled, error_detail, the jstr decodes). run_perf.py copies this file next
+// to a verbatim copy of the grok modules they reach (util, packet, path, framing, entry, line, read, rpc) into perf/work/ and
+// compiles it with the manifest it writes (the deps are the packages grok/pruv.json lists, minus `args`, which nothing here reaches).
 // The module list below mirrors grok/root.pruv for those modules.
 mod json;
 mod parse;
 mod access;
 mod jstr;
 mod lines;
+mod tail;
 mod bytes;
 mod text;
 mod time;
 mod names;
 mod turns;
+mod transport;
 mod util;
 mod packet;
 mod path;
@@ -19,9 +22,128 @@ mod framing;
 mod entry;
 mod line;
 mod read;
+mod rpc;
 
 pub fn grok_history_window(win: [u8], omitted: bool, title: str, model: str) -> [i64] ! alloc
   ensures len(result) >= 28
 {
   return crate::read::window(win, omitted, title, model);
+}
+
+// ---- rpc-lines (DB62, G-DB56-7) ----
+// One call = every LF-terminated line of the window (a trailing unterminated line too) through the per-line work of the rpc pump
+// (rpc.pruv pump/drain): parse_line, then kind_of(d, 2) and, by kind, what the loop does with the line (kind 1: build the
+// not_handled reply; kind 2 with an object error: error_detail, the owned_text of the detail (as `failure` does) and the raw
+// `error.code` JSON (util::json_value); kind 0, the session/update notifications a reader would show: the jstr decodes
+// (util::str_at) of `method` and of params.update.content.text). No process, no event loop.
+// Result (15 words, each kept in [0, 1000000007)): 0 lines, 1 failed parses, 2 kind 0, 3 kind 1, 4 kind 2,
+// 5/6 text bytes/fold, 7/8 not_handled bytes/fold, 9/10 detail bytes/fold, 11/12 code bytes/fold, 13/14 method bytes/fold.
+// fold: s = (s * 31 + byte) % 1000000007; counters add modulo 1000000007 as well (they never reach it on an 8 MiB window).
+
+fn bump(a: i64, n: i64) -> i64
+  requires 0 <= a && a < 1000000007 && 0 <= n
+  ensures 0 <= result && result < 1000000007
+{
+  return (a + n % 1000000007) % 1000000007;
+}
+
+fn fold_bytes(s0: i64, b: [u8]) -> i64
+  requires 0 <= s0 && s0 < 1000000007
+  ensures 0 <= result && result < 1000000007
+{
+  let mut s: i64 = s0;
+  let mut i: i64 = 0;
+  while i < len(b)
+    invariant 0 <= i && i <= len(b) && 0 <= s && s < 1000000007
+    decreases len(b) - i
+  {
+    let c: i64 = b[i];
+    s = (s * 31 + c) % 1000000007;
+    i = i + 1;
+  }
+  return s;
+}
+
+fn fold_str(s0: i64, t: str) -> i64
+  requires 0 <= s0 && s0 < 1000000007
+  ensures 0 <= result && result < 1000000007
+{
+  let mut s: i64 = s0;
+  let mut i: i64 = 0;
+  while i < len(t)
+    invariant 0 <= i && i <= len(t) && 0 <= s && s < 1000000007
+    decreases len(t) - i
+  {
+    let c: i64 = t[i];
+    s = (s * 31 + c) % 1000000007;
+    i = i + 1;
+  }
+  return s;
+}
+
+fn rpc_line(line: [u8], inout acc: [i64]) -> () ! alloc
+  requires len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
+  ensures len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
+{
+  acc[0] = bump(acc[0], 1);
+  let parsed: crate::json::JsonParse = crate::rpc::parse_line(line, len(line));
+  match parsed {
+    crate::json::JsonParse::Failed(e) => { acc[1] = bump(acc[1], 1); }
+    crate::json::JsonParse::Parsed(d) => {
+      let k: i64 = crate::rpc::kind_of(d, 2);
+      if k == 1 {
+        acc[3] = bump(acc[3], 1);
+        let nh: [u8] = crate::rpc::not_handled(d);
+        acc[7] = bump(acc[7], len(nh));
+        acc[8] = fold_bytes(acc[8], nh);
+      } else if k == 2 {
+        acc[4] = bump(acc[4], 1);
+        let e: i64 = crate::access::field(d, 0, "error");
+        if crate::access::kind(d, e) == 6 {
+          let dt: [u8] = crate::rpc::error_detail(d, e);
+          let detail: str = crate::jstr::owned_text(move dt);
+          acc[9] = bump(acc[9], len(detail));
+          acc[10] = fold_str(acc[10], detail);
+          let c: i64 = crate::access::field(d, e, "code");
+          if c >= 0 {
+            let raw: [u8] = crate::util::json_value(d, c);
+            acc[11] = bump(acc[11], len(raw));
+            acc[12] = fold_bytes(acc[12], raw);
+          }
+        }
+      } else {
+        acc[2] = bump(acc[2], 1);
+        let m: str = crate::util::str_at(d, crate::access::field(d, 0, "method"));
+        acc[13] = bump(acc[13], len(m));
+        acc[14] = fold_str(acc[14], m);
+        let p: i64 = crate::access::field(d, 0, "params");
+        let u: i64 = crate::access::field(d, p, "update");
+        let c2: i64 = crate::access::field(d, u, "content");
+        let t: str = crate::util::str_at(d, crate::access::field(d, c2, "text"));
+        acc[5] = bump(acc[5], len(t));
+        acc[6] = fold_str(acc[6], t);
+      }
+    }
+  }
+}
+
+pub fn grok_rpc_lines(win: [u8]) -> [i64] ! alloc
+  ensures len(result) == 15
+{
+  let mut acc: [i64] = alloc(15, 0);
+  let mut start: i64 = 0;
+  let mut i: i64 = 0;
+  while i < len(win)
+    invariant 0 <= start && start <= i && i <= len(win) && len(acc) == 15
+    invariant forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
+    decreases len(win) - i
+  {
+    if win[i] == 10 {
+      rpc_line(subview(win, start, i), inout acc);
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  if start < len(win) { rpc_line(subview(win, start, len(win)), inout acc); }
+  return acc;
 }
