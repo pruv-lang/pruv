@@ -358,7 +358,7 @@ pub fn iso_of(doc: crate::json::JsonDocument, id: i64) -> Iso ! alloc
     if sp.status == 0 && sp.end - sp.start == 26 && canonical_at(doc.source, sp.start + 1) {
       return canonical_copy(doc.source, sp.start + 1);
     }
-    let t: crate::jstr::Text = crate::access::string_text(doc, id);
+    let t: crate::jstr::Text = crate::access::string_text_owned(doc, id);
     match t {
       crate::jstr::Text::InternalInvariant(e) => { return defect(); }
       crate::jstr::Text::Decoded(v) => { return from_string(v); }

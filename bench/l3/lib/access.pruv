@@ -291,6 +291,18 @@ pub fn string_text(doc: crate::json::JsonDocument, id: i64) -> crate::jstr::Text
   if s.status != 0 { return crate::jstr::Text::InternalInvariant(s.status); }
   return crate::jstr::string_text(doc.source, s.start, s.end);
 }
+
+// DB60 (G-DB56-2, as DB56 pkgs/access): string_text through jstr::string_text_owned (the decode buffer is moved
+// into the str, not copied). Same contract and results.
+pub fn string_text_owned(doc: crate::json::JsonDocument, id: i64) -> crate::jstr::Text ! alloc
+  ensures is_variant(result, crate::jstr::Text::Decoded) ==> (0 <= id && id < len(doc.tape) / 6 && len(variant_field(result, crate::jstr::Text::Decoded, text)) <= 3 * (doc.tape[6 * id + 2] - doc.tape[6 * id + 1]))
+{
+  let k: i64 = kind(doc, id);
+  if k != 4 { if k < 0 { return crate::jstr::Text::InternalInvariant(k); } return crate::jstr::Text::InternalInvariant(-2); }
+  let s: Span = raw_span(doc, id);
+  if s.status != 0 { return crate::jstr::Text::InternalInvariant(s.status); }
+  return crate::jstr::string_text_owned(doc.source, s.start, s.end);
+}
 // 1 when id is a string whose value equals lit, 0 when it is another string or another kind, negative on a
 // bad ID or corrupt tape. ASCII literals are compared without decoding.
 pub fn string_is(doc: crate::json::JsonDocument, id: i64, lit: str) -> i64 ! alloc
