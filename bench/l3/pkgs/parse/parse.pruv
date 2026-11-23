@@ -235,7 +235,8 @@ fn first_slots(n: i64, lo: i64) -> i64
 }
 
 // a with its first used slots kept and twice the room plus one record (capped at the record limit).
-// DB39/DB61: 2*len+6 (not +192) keeps a grown tape at least half full, so the final truncate never shrinks it.
+// DB39/DB61: 2*len+6 (not +192) keeps a grown tape about half full, so the final truncate rarely shrinks it
+// (it can when a first tape not a multiple of 6 slots grows just before the last record).
 fn widened(a: [i64], used: i64) -> [i64] ! alloc
   requires 0 <= used && used <= len(a) && used + 6 <= 6291456
   ensures used + 6 <= len(result) && len(result) <= 6291456

@@ -130,6 +130,11 @@ def copy_sources(work):
     for p in HERE.glob('*.pruv'):
         shutil.copyfile(p, work / p.name)
     # json, lex, parse, lines, jstr and access come from bench/l3/pkgs through the manifest (write_manifest).
+    # A work dir reused from a run before DB61 still holds local copies of them; a local file next to the package
+    # of the same name is a pkg/mount_conflict, so drop those copies.
+    man = json.loads((HERE / 'a4_root.pruv.json').read_text(encoding='utf-8'))
+    for name in man.get('dependencies', {}):
+        (work / f'{name}.pruv').unlink(missing_ok=True)
 
 
 def write_manifest(work):
