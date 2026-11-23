@@ -1,0 +1,43 @@
+// spec: R-6e-21 accept
+// A recursive value with a vector of itself and a scalar-vector field, built, edited in place and dropped on LLVM.
+struct Field { key: Vec<i64>, value: Tree }
+enum Tree { Leaf(n: i64), Branch(children: Vec<Tree>), Obj(fields: Vec<Field>) }
+
+fn total(t: Tree) -> i64
+  requires size(t) <= 1000
+  decreases size(t)
+{
+  match t {
+    Tree::Leaf(n) => { return 1; }
+    Tree::Branch(children) => {
+      let mut i: i64 = 0;
+      let mut s: i64 = 1;
+      while i < len(children)
+        invariant 0 <= i && i <= len(children)
+        invariant 1 <= s && s < 2000
+        decreases len(children) - i
+      {
+        let d: i64 = total(vec_get::<Tree>(children, i));
+        if d >= 0 && d < 1000 && s < 1000 { s = s + d; }
+        i = i + 1;
+      }
+      return s;
+    }
+    Tree::Obj(fields) => { return 1 + len(fields); }
+  }
+}
+
+fn main() -> () ! alloc, io {
+  let mut kids: Vec<Tree> = vec_new::<Tree>();
+  kids = vec_push::<Tree>(move kids, Tree::Leaf(1));
+  kids = vec_push::<Tree>(move kids, Tree::Leaf(2));
+  let fields: Vec<Field> = vec_push::<Field>(vec_new::<Field>(),
+    Field { key: vec_push::<i64>(vec_new::<i64>(), 7), value: Tree::Leaf(3) });
+  kids = vec_push::<Tree>(move kids, Tree::Obj(move fields));
+  match vec_at_mut::<Tree>(inout kids, 0) {
+    Some(b) => { *b = Tree::Branch(vec_push::<Tree>(vec_new::<Tree>(), Tree::Leaf(4))); }
+    None => { }
+  }
+  let t: Tree = Tree::Branch(move kids);
+  print(total(t));
+}

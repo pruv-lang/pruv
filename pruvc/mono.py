@@ -261,7 +261,11 @@ class _Mono:
             else:
                 tn, _, v = head.rpartition("::")
                 boxed.append("%s::%s.%s" % (ren(tn), v, field))
-        return dict(meta, boxed=boxed, extended=[ren(n) for n in meta["extended"]])
+        out = dict(meta, boxed=boxed, extended=[ren(n) for n in meta["extended"]],
+                   type_sccs=[[ren(n) for n in g] for g in meta["type_sccs"]])
+        if "rec_vec_elems" in meta:
+            out["rec_vec_elems"] = sorted(ren(n) for n in meta["rec_vec_elems"])
+        return out
 
     # ---------- errors ----------
     def limit(self, msg):

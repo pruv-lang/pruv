@@ -77,9 +77,33 @@ fn e2_diag(line: i64, col: i64, message: &str) -> String {
     format!("{E2_DIAG_TAG}{line}:{col}:{message}")
 }
 
-/// An owned collection/File type key; never a bound parameter.
+/// Pruv's checked recursive vectors use an inline LLVM vector header.
+pub(crate) fn native_vec_elem(t: &str) -> Option<&str> {
+    let elem = t.strip_prefix("vec<")?.strip_suffix('>')?;
+    (crate::emit_common::is_user_key(elem) && !elem.contains('<')).then_some(elem)
+}
+
+pub(crate) fn recursive_vec_elements(prog: &Program) -> BTreeSet<String> {
+    let mut elems = BTreeSet::new();
+    if let Some(meta) = &prog.g9 {
+        for group in &meta.type_sccs {
+            for decl in prog.types.iter().filter(|d| group.iter().any(|n| n == d.name())) {
+                for field in decl.all_fields() {
+                    if let Some(elem) = native_vec_elem(&field.ty) {
+                        if group.iter().any(|n| n == elem) {
+                            elems.insert(elem.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    elems
+}
+
+/// An opaque collection/File handle type key; never a bound parameter.
 pub fn is_collection(t: &str) -> bool {
-    if t.starts_with('\u{1}') {
+    if t.starts_with('\u{1}') || native_vec_elem(t).is_some() {
         return false;
     }
     matches!(crate::emit_common::key_name(t), "vec" | "hashmap" | "string" | "file" | "process" | "process_args" | "socket" | "listener" | "loop")
@@ -653,7 +677,7 @@ fn g_args(t: &str) -> (&str, &str) {
 
 /// A user struct/enum (including generated generic instances) or a new Option/Result application.
 pub fn is_agg(t: &str) -> bool {
-    is_gopt(t) || (is_user_type(t) && !crate::gtype::is_g3_key(t))
+    native_vec_elem(t).is_some() || is_gopt(t) || (is_user_type(t) && !crate::gtype::is_g3_key(t))
 }
 
 /// Types whose external word form follows the G3 rules (tag normalization, inactive words zero, enum check).
@@ -722,6 +746,9 @@ pub fn mangle(n: &str) -> String {
 
 /// The internal SSA type of a Pruv type
 pub fn lty(t: &str) -> String {
+    if native_vec_elem(t).is_some() {
+        return ARR.to_string();
+    }
     if is_collection(t) {
         // G6 A3: opaque handle
         return "ptr".to_string();
@@ -790,6 +817,9 @@ pub fn vkind(t: &str) -> Kind {
 
 /// Storage type of a value inside an aggregate (c: contract/i128 form)
 pub fn st(t: &str, c: bool) -> String {
+    if native_vec_elem(t).is_some() {
+        return ARR.to_string();
+    }
     if is_collection(t) {
         return "ptr".to_string();
     }
@@ -843,7 +873,7 @@ pub fn new_tt(prog: &Program) -> TypeTable {
 
 /// t is an extended user type (G9): recursive, or holding a buffer or an extended type
 pub fn is_ext_t(tt: &TypeTable, t: &str) -> bool {
-    is_owned_result(t) || tt.g9_ext.contains(t)
+    native_vec_elem(t).is_some() || is_owned_result(t) || tt.g9_ext.contains(t)
 }
 
 /// G5 A3: some parameter has the inout mode (a mutable borrow of caller storage)
@@ -1073,6 +1103,11 @@ struct Scope {
 }
 
 pub struct Mod {
+    owned_collection_fields: bool,
+    vec_elems: BTreeSet<String>,
+    vec_get_requires: bool,
+    vec_get_checked: bool,
+    vec_get_used: bool,
     pub(crate) storage: StoragePlan, // pub(crate): abi.rs reads the return layout for the shrink size
     strs: HashMap<String, String>,
     order: Vec<String>,
@@ -1133,6 +1168,11 @@ pub struct Mod {
 impl Mod {
     pub fn new() -> Mod {
         Mod {
+            owned_collection_fields: false,
+            vec_elems: BTreeSet::new(),
+            vec_get_requires: false,
+            vec_get_checked: false,
+            vec_get_used: false,
             storage: StoragePlan::default(),
             strs: HashMap::new(),
             order: Vec::new(),
@@ -1261,9 +1301,13 @@ pub fn sig_text(params: &[(String, String)], f: Option<&Function>) -> String {
         })
         .collect();
     let take_names: Vec<_> = f.into_iter().flat_map(|f| &f.params)
-        .filter(|p| p.take && (is_array_name(&p.ty) || is_agg(&p.ty)))
+        .filter(|p| p.take && (is_array_name(&p.ty) || is_agg(&p.ty) || native_vec_elem(&p.ty).is_some()))
         // LG9: a take record parameter is owned record storage
         .map(|p| if is_array_name(&p.ty) { format!("%p.{}.a", mangle(&p.name)) } else { format!("%p.{}", mangle(&p.name)) })
+        .collect();
+    let read_vec_names: Vec<_> = f.into_iter().flat_map(|f| &f.params)
+        .filter(|p| native_vec_elem(&p.ty).is_some())
+        .map(|p| format!("%p.{}", mangle(&p.name)))
         .collect();
     params
         .iter()
@@ -1271,7 +1315,13 @@ pub fn sig_text(params: &[(String, String)], f: Option<&Function>) -> String {
             format!(
                 "{} {}",
                 if t == "ptr" && n != "%out" && !n.ends_with(".h") && !take_names.contains(n) {
-                    if mut_names.contains(n) { "ptr noalias nocapture" } else { "ptr noalias nocapture readonly" }
+                    if mut_names.contains(n) {
+                        "ptr noalias nocapture"
+                    } else if read_vec_names.contains(n) {
+                        "ptr nocapture readonly"
+                    } else {
+                        "ptr noalias nocapture readonly"
+                    }
                 } else {
                     t.as_str()
                 },
@@ -1293,6 +1343,8 @@ pub enum Fail {
     Requires(String, String),
     /// u8 element range violation: (value SSA, range text). The string is registered when the fail block is emitted.
     Elem(String, &'static str),
+    VecGet,
+    VecGrowth { elem: String, extended: bool },
 }
 
 pub(crate) fn expr_ty(e: &Expr) -> &Option<String> {
@@ -1580,6 +1632,27 @@ impl<'a> FnGen<'a> {
     fn run_fail(&mut self, f: &Fail) -> R<()> {
         match f {
             Fail::Cost => self.cost_fail(),
+            Fail::VecGrowth { elem, extended } => {
+                self.ins(format!("call void @pruv_vdrop__{elem}(ptr %v)"))?;
+                if *extended {
+                    self.ins(format!("call void @pruv_drop__{elem}(ptr %x)"))?;
+                }
+                self.ins("call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)".to_string())
+            }
+            Fail::VecGet => {
+                for region in self.temps.clone().iter().rev() {
+                    for value in region.iter().rev() {
+                        self.free_val(value)?;
+                    }
+                }
+                for i in (0..self.scopes.len()).rev() {
+                    let owners = self.scopes[i].arrays.clone();
+                    self.free_scope(&owners)?;
+                }
+                let requires = if self.m.vec_get_requires { "1" } else { "0" };
+                self.m.vec_get_used = true;
+                self.ins(format!("call void @pruv_panic_vec_get_v1(i64 {requires})"))
+            }
             Fail::Panic1(func, msg) => {
                 let s = self.m.string(msg);
                 self.ins(format!("call void @{}(ptr {})", func, s))
@@ -1811,7 +1884,7 @@ impl<'a> FnGen<'a> {
         for (i, fd) in fds.iter().enumerate() {
             let ft = fd.ty.as_str();
             let k = payload_index(tt, &ty, vn, i)?;
-            if idxs.contains(&k) || !(is_arr_name(ft) || self.is_ext(ft)) {
+            if idxs.contains(&k) || !(is_arr_name(ft) || is_collection(ft) || self.is_ext(ft)) {
                 continue;
             }
             let lt = lty(&ty);
@@ -1823,8 +1896,10 @@ impl<'a> FnGen<'a> {
                 let x = self.op(format!("load {}, ptr {}", ARR, gp))?;
                 let v = self.unpack(&x, ft, false)?;
                 self.free_val(&v)?;
+            } else if is_collection(ft) {
+                self.drop_slot(&V { ty: Some(ft.to_string()), ..V::new(Kind::Coll, gp) })?;
             } else {
-                self.ins(format!("call void @pruv_drop__{}(ptr {})", ft, gp))?;
+                self.drop_agg_slot(ft, &gp)?;
             }
         }
         Ok(())
@@ -2216,7 +2291,13 @@ impl<'a> FnGen<'a> {
         let src = self.spill(v)?;
         let ty = need_ty(&v.ty)?.to_string();
         let dst = self.new_out(&ty);
-        self.ins(format!("call void @pruv_clone__{}(ptr {}, ptr {})", ty, src, dst))?;
+        let sym = if let Some(elem) = native_vec_elem(&ty) {
+            self.m.vec_elems.insert(elem.to_string());
+            format!("pruv_vclone__{elem}")
+        } else {
+            format!("pruv_clone__{ty}")
+        };
+        self.ins(format!("call void @{sym}(ptr {src}, ptr {dst})"))?;
         let r = self.op(format!("load {}, ptr {}", lty(&ty), dst))?;
         Ok(V::agg_p(r, &ty, dst))
     }
@@ -2232,6 +2313,10 @@ impl<'a> FnGen<'a> {
             let slot = g9_gep(self, &lty(ty), p, 2)?;
             let handle = self.op(format!("load ptr, ptr {slot}"))?;
             return self.drop_handle(&handle);
+        }
+        if let Some(elem) = native_vec_elem(ty) {
+            self.m.vec_elems.insert(elem.to_string());
+            return self.ins(format!("call void @pruv_vdrop__{elem}(ptr {p})"));
         }
         self.ins(format!("call void @pruv_drop__{ty}(ptr {p})"))
     }
@@ -2395,6 +2480,12 @@ impl<'a> FnGen<'a> {
             let r = self.op(format!("load {}, ptr {}", lty(&fd.ty), x))?;
             return Ok(V::agg_p(r, &fd.ty, x));
         }
+        if !c && native_vec_elem(&fd.ty).is_some() {
+            if let Some(p) = &base.p {
+                let field = g9_gep(self, &lty(ty), p, idx)?;
+                return self.load(&V::agg(field, &fd.ty));
+            }
+        }
         self.get(base, ty, idx, &fd.ty, c)
     }
 
@@ -2436,8 +2527,11 @@ impl<'a> FnGen<'a> {
                 self.free_val(&old)?;
                 let a = self.agg(v)?;
                 self.ins(format!("store {} {}, ptr {}", ARR, a, g))?;
+            } else if is_collection(ft) {
+                self.drop_slot(&V { ty: Some(ft.to_string()), ..V::new(Kind::Coll, g.clone()) })?;
+                self.ins(format!("store ptr {}, ptr {}", v.a, g))?;
             } else if self.is_ext(ft) {
-                self.ins(format!("call void @pruv_drop__{}(ptr {})", ft, g))?;
+                self.drop_agg_slot(ft, &g)?;
                 self.ins(format!("store {} {}, ptr {}", lty(ft), v.a, g))?;
             } else {
                 let x = self.pack(v, ft, false)?;
@@ -2543,6 +2637,9 @@ impl<'a> FnGen<'a> {
     }
 
     pub fn unpack(&mut self, x: &str, ty: &str, c: bool) -> R<V> {
+        if is_collection(ty) {
+            return Ok(V { ty: Some(ty.to_string()), ..V::new(Kind::Coll, x) });
+        }
         if is_arr_name(ty) {
             // G9 A3
             let p0 = self.op(format!("extractvalue {} {}, 0", ARR, x))?;
@@ -3838,6 +3935,9 @@ impl<'a> FnGen<'a> {
                 r?;
                 self.end_temps()
             }
+            Stmt::Match(x) if matches!(&x.scrutinee, Expr::Call(c) if c.name == "vec_at_mut" && native_vec_call_elem(c).is_some()) => {
+                self.native_vec_match(x)
+            }
             Stmt::Match(x) if expr_ty(&x.scrutinee).as_deref().is_some_and(is_owned_result) => self.owned_match(x),
             Stmt::Match(x) if self.is_ext_opt(expr_ty(&x.scrutinee)) => {
                 // G9 A3: the scrutinee is borrowed, never consumed; every temporary it created (a fresh scrutinee, a
@@ -3962,7 +4062,7 @@ impl<'a> FnGen<'a> {
                 let pi = payload_index(tt, &ty, &a.ctor, i)?;
                 let mut v = self.getf(sv, &ty, pi, fd, Some(&a.ctor), false)?;
                 if let Some(o) = &own {
-                    if (self.is_ext(&fd.ty) || is_arr_name(&fd.ty)) && !self.fb(&ty, Some(&a.ctor), &fd.name) {
+                    if (self.is_ext(&fd.ty) || is_arr_name(&fd.ty) || is_collection(&fd.ty)) && !self.fb(&ty, Some(&a.ctor), &fd.name) {
                         v.mv = Some(Box::new((o.clone(), a.ctor.clone(), pi, own_dead)));
                     }
                 }
@@ -4271,14 +4371,25 @@ impl<'a> FnGen<'a> {
                 // LG4: move an owned buffer field out of the extended struct slot; the field becomes (null, 0, 0)
                 let sl = self.lookup(&x.name)?.val().clone();
                 let (gp, fty) = self.field_ptr_ty(&sl, &x.fields)?;
-                let old = self.op(format!("load {}, ptr {}", ARR, gp))?;
-                self.ins(format!("store {} zeroinitializer, ptr {}", ARR, gp))?;
+                let lt = lty(&fty);
+                let old = self.op(format!("load {lt}, ptr {gp}"))?;
+                let empty = if is_collection(&fty) { "null" } else { "zeroinitializer" };
+                self.ins(format!("store {lt} {empty}, ptr {gp}"))?;
                 self.unpack(&old, &fty, false)
             }
             Expr::Move(x) => {
                 // G6 A3: load the owner slot, then null it
                 let bound = self.lookup(&x.name)?;
                 if let Bind::Ssa(v) = &bound {
+                    if let Some(mv) = &v.mv {
+                        if v.ty.as_deref().is_some_and(|t| native_vec_elem(t).is_some() || is_collection(t)) {
+                            let g = g9_gep(self, &lty(need_ty(&mv.0.ty)?), &mv.0.a, mv.2)?;
+                            let ty = need_ty(&v.ty)?;
+                            let empty = if is_collection(ty) { "null" } else { "zeroinitializer" };
+                            self.ins(format!("store {} {empty}, ptr {g}", lty(ty)))?;
+                            return Ok(V { p: None, ..v.clone() });
+                        }
+                    }
                     if v.k == Kind::Arr {
                         if let Some(mv) = &v.mv {
                             // G-DB16-1: moving an array binder of a match on an owned local takes the descriptor and
@@ -4500,6 +4611,10 @@ impl<'a> FnGen<'a> {
         let a = &e.args;
         if n == "len" {
             let x = self.ev(arg(a, 0)?, false)?;
+            if x.ty.as_deref().and_then(native_vec_elem).is_some() {
+                let len = self.op(format!("extractvalue {ARR} {}, 1", x.a))?;
+                return Ok(V::new(Kind::I64, len));
+            }
             if x.k == Kind::Coll {
                 // G6 A3
                 let ty = need_ty(&x.ty)?.to_string();
@@ -5019,7 +5134,7 @@ impl<'a> FnGen<'a> {
         for (i, x) in a.iter().enumerate() {
             let prm = f.params.get(i).ok_or_else(|| IDX_ERR.to_string())?;
             if let Expr::InoutArg(ix) = x {
-                if inout_slot_param(prm, self.m.resize_params.contains(&(f.name.clone(), i))) {
+                if self.is_ext(&prm.ty) || inout_slot_param(prm, self.m.resize_params.contains(&(f.name.clone(), i))) {
                     let p = self.inout_place_ptr(&ix.expr)?;
                     args.push(format!("ptr {}", p));
                 } else {
@@ -5142,9 +5257,87 @@ impl<'a> FnGen<'a> {
         base
     }
 
+    fn native_vec_call(&mut self, e: &Call, elem: &str, owned: bool) -> R<V> {
+        match e.name.as_str() {
+            "vec_new" => Ok(V::agg("zeroinitializer", need_ty(&e.ty)?)),
+            "vec_push" => {
+                let v = self.ev(arg(&e.args, 0)?, true)?;
+                // The moved vector is owned while the element is evaluated, so a failure there drops it.
+                let pending = self.temps.last().map_or(0, |t| t.len());
+                self.temps.last_mut().ok_or_else(|| IDX_ERR.to_string())?.push(v.clone());
+                let x = self.ev(arg(&e.args, 1)?, true)?;
+                self.temps.last_mut().ok_or_else(|| IDX_ERR.to_string())?.remove(pending);
+                let xp = self.spill(&x)?;
+                let vp = self.spill(&v)?;
+                let ty = need_ty(&e.ty)?;
+                self.m.vec_elems.insert(elem.to_string());
+                self.ins(format!("call void @pruv_vpush__{elem}(ptr {vp}, ptr {xp})"))?;
+                let value = self.op(format!("load {ARR}, ptr {vp}"))?;
+                self.fresh(V::agg_p(value, ty, vp), owned)
+            }
+            "vec_get" => {
+                let v = self.ev(arg(&e.args, 0)?, false)?;
+                let i = self.ev(arg(&e.args, 1)?, false)?;
+                if self.m.vec_get_checked {
+                    let len = self.op(format!("extractvalue {ARR} {}, 1", v.a))?;
+                    let ok = self.op(format!("icmp ult i64 {}, {len}", i.a))?;
+                    self.guard(&ok, Fail::VecGet, false)?;
+                }
+                let data = self.op(format!("extractvalue {ARR} {}, 0", v.a))?;
+                let lt = lty(elem);
+                let p = self.op(format!("getelementptr inbounds {lt}, ptr {data}, i64 {}", i.a))?;
+                let value = self.op(format!("load {lt}, ptr {p}"))?;
+                Ok(V::agg_p(value, elem, p))
+            }
+            _ => Err(IDX_ERR.to_string()),
+        }
+    }
+
+    fn native_vec_match(&mut self, m: &Match) -> R<()> {
+        let Expr::Call(call) = &m.scrutinee else { return Err(IDX_ERR.to_string()) };
+        let elem = native_vec_call_elem(call).ok_or_else(|| IDX_ERR.to_string())?;
+        let Expr::InoutArg(place) = arg(&call.args, 0)? else { return Err(IDX_ERR.to_string()) };
+        self.begin_temps();
+        let vec = self.ev(&place.expr, false)?;
+        let index = self.ev(arg(&call.args, 1)?, false)?;
+        self.end_temps()?;
+        let len = self.op(format!("extractvalue {ARR} {}, 1", vec.a))?;
+        let ok = self.op(format!("icmp ult i64 {}, {len}", index.a))?;
+        let some = self.label("armT");
+        let none = self.label("armF");
+        let end = self.label("endmatch");
+        self.condbr(&ok, &some, &none)?;
+        let mut reach = false;
+        for arm in &m.arms {
+            let ctor = arm.ctor.as_str();
+            self.place(if ctor == "Some" { &some } else { &none });
+            let mut bindings = Vec::new();
+            if ctor == "Some" {
+                if let Some(name) = arm.binders.first() {
+                    let data = self.op(format!("extractvalue {ARR} {}, 0", vec.a))?;
+                    let p = self.op(format!("getelementptr inbounds {}, ptr {data}, i64 {}", lty(elem), index.a))?;
+                    bindings.push((name.clone(), Bind::Slot(V::agg(p, elem))));
+                }
+            }
+            if self.run_block(&arm.body, bindings)? {
+                self.br(&end)?;
+                reach = true;
+            }
+        }
+        if reach {
+            self.place(&end);
+        } else {
+            self.dead = true;
+        }
+        Ok(())
+    }
+
     fn catalog_call(&mut self, e: &Call, owned: bool) -> R<V> {
         let n = e.name.as_str();
         let cat = crate::foreign::catalog_fn(n).ok_or_else(|| format!("'{}'", n))?;
+        if let Some(elem) = native_vec_call_elem(e) {
+            return self.native_vec_call(e, elem, owned);
+        }
         let (_low, src) = crate::foreign_shim::inst_types(e);
         let sym = crate::foreign_shim::adapter_sym(&crate::foreign_shim::helper_name(n, &src)?);
         let mut args: Vec<(String, String)> = Vec::new();
@@ -5624,6 +5817,10 @@ impl<'a> FnGen<'a> {
             v.ty = elem_ty(&t);
             return Ok(v);
         }
+        if is_collection(&t) {
+            let handle = self.op(format!("load ptr, ptr {p}"))?;
+            return self.unpack(&handle, &t, false);
+        }
         if self.is_ext(&t) {
             return Ok(V { layout: "i64", rng: None, k: Kind::Ref, a: p, b: "None".to_string(), ty: Some(t), p: None, mv: None, c: None });
         }
@@ -5754,6 +5951,7 @@ impl<'a> FnGen<'a> {
                 let v = self.op(format!("icmp {} {} {}, {}", cmp, ty, l.a, r.a))?;
                 Ok(V::new(Kind::I1, v))
             }
+            Expr::Index(x) if expr_ty(&x.array).as_deref().and_then(native_vec_elem).is_some() => self.cload(e),
             Expr::Index(x) => {
                 if expr_ty(&x.array).as_deref().map_or(false, is_collection) {
                     // G6 A3: not evaluable on LLVM yet
@@ -5961,7 +6159,14 @@ impl<'a> FnGen<'a> {
                     return Ok(V::new(Kind::I128, r));
                 }
                 if n == "len" {
-                    let v = self.cev(arg(a, 0)?)?;
+                    let operand = arg(a, 0)?;
+                    if expr_ty(operand).as_deref().and_then(native_vec_elem).is_some() {
+                        let ptr = self.cx(operand)?;
+                        let lp = g9_gep(self, ARR, &ptr, 1)?;
+                        let len = self.op(format!("load i64, ptr {lp}"))?;
+                        return Ok(V::new(Kind::I128, self.op(format!("zext i64 {len} to i128"))?));
+                    }
+                    let v = self.cev(operand)?;
                     if v.k == Kind::Coll {
                         // G6 A3
                         let vty = need_ty(&v.ty)?.to_string();
@@ -6789,12 +6994,12 @@ fn g9_drop_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
     g.place("start");
     let vs: Vec<Var9<'_>> = g9_variants(d)
         .into_iter()
-        .filter(|(_, _, fs)| fs.iter().any(|f| is_arr_name(&f.ty) || g.is_ext(&f.ty)))
+        .filter(|(_, _, fs)| fs.iter().any(|f| is_arr_name(&f.ty) || is_collection(&f.ty) || g.is_ext(&f.ty)))
         .collect();
     g9_each_variant(&mut g, &ty, d, "%v", &vs, &mut |g, vn, fs| {
         for (i, f) in fs.iter().enumerate() {
             let ft = f.ty.as_str();
-            if !(is_arr_name(ft) || g.is_ext(ft)) {
+            if !(is_arr_name(ft) || is_collection(ft) || g.is_ext(ft)) {
                 continue;
             }
             let gp = g9_gep(g, &tl, "%v", g9_sidx(tt, &ty, vn, i)?)?;
@@ -6806,9 +7011,10 @@ fn g9_drop_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
                 let x = g.op(format!("load {}, ptr {}", ARR, gp))?;
                 let av = g.unpack(&x, ft, false)?; // P3: freed with its cap
                 g.free_val(&av)?;
+            } else if is_collection(ft) {
+                g.drop_slot(&V { ty: Some(ft.to_string()), ..V::new(Kind::Coll, gp) })?;
             } else {
-                // an inline extended child (not a node)
-                g.ins(format!("call void @pruv_drop__{}(ptr {})", ft, gp))?;
+                g.drop_agg_slot(ft, &gp)?;
             }
         }
         Ok(())
@@ -6829,12 +7035,12 @@ fn g9_clone_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
     g.ins(format!("store {} {}, ptr %dst", tl, v0))?;
     let vs: Vec<Var9<'_>> = g9_variants(d)
         .into_iter()
-        .filter(|(_, _, fs)| fs.iter().any(|f| is_arr_name(&f.ty) || g.is_ext(&f.ty)))
+        .filter(|(_, _, fs)| fs.iter().any(|f| is_arr_name(&f.ty) || is_collection(&f.ty) || g.is_ext(&f.ty)))
         .collect();
     g9_each_variant(&mut g, &ty, d, "%src", &vs, &mut |g, vn, fs| {
         for (i, f) in fs.iter().enumerate() {
             let ft = f.ty.as_str();
-            if !(is_arr_name(ft) || g.is_ext(ft)) {
+            if !(is_arr_name(ft) || is_collection(ft) || g.is_ext(ft)) {
                 continue;
             }
             let idx = g9_sidx(tt, &ty, vn, i)?;
@@ -6856,6 +7062,21 @@ fn g9_clone_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
                 let a1 = g.op(format!("insertvalue {} {}, ptr {}, 0", ARR, x, np))?;
                 let a2 = g.op(format!("insertvalue {} {}, i64 {}, 2", ARR, a1, n))?; // P3: the new block holds exactly len elements
                 g.ins(format!("store {} {}, ptr {}", ARR, a2, gd))?;
+            } else if let Some(elem) = native_vec_elem(ft) {
+                g.m.vec_elems.insert(elem.to_string());
+                g.ins(format!("call void @pruv_vclone__{elem}(ptr {gs}, ptr {gd})"))?;
+            } else if is_collection(ft) {
+                let handle = g.op(format!("load ptr, ptr {gs}"))?;
+                let nn = g.op(format!("icmp ne ptr {handle}, null"))?;
+                let clone = g.label("gclone");
+                let done = g.label("gdone");
+                g.condbr(&nn, &clone, &done)?;
+                g.place(&clone);
+                let sym = crate::foreign_shim::clone_sym(ft)?;
+                let value = g.g6_call(&sym, "ptr", &[("ptr".to_string(), handle)])?;
+                g.ins(format!("store ptr {value}, ptr {gd}"))?;
+                g.br(&done)?;
+                g.place(&done);
             } else {
                 g.ins(format!("call void @pruv_clone__{}(ptr {}, ptr {})", ft, gs, gd))?;
             }
@@ -6885,9 +7106,23 @@ fn g9_node_texts(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<Vec<String>> {
     {
         let mut g = FnGen::new(&mut *m, tt, &funcs, &df, true);
         g.place("start");
+        let end = if g.m.owned_collection_fields {
+            let live = g.op("icmp ne ptr %n, null".to_string())?;
+            let drop = g.label("ndrop");
+            let end = g.label("ndone");
+            g.condbr(&live, &drop, &end)?;
+            g.place(&drop);
+            Some(end)
+        } else {
+            None
+        };
         g.ins(format!("call void @pruv_drop__{}(ptr %n)", n))?;
         let (size, align) = g9_node_layout(&mut g, &tl)?;
         g.ins(format!("call void @pruv_node_free_v1(ptr %n, i64 {}, i64 {})", size, align))?;
+        if let Some(end) = end {
+            g.br(&end)?;
+            g.place(&end);
+        }
         g.term("ret void".to_string())?;
         out.push(g.render(&format!("define internal void @pruv_dropnode__{}(ptr %n)", n)));
     }
@@ -6904,7 +7139,150 @@ fn g9_node_texts(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<Vec<String>> {
 }
 
 /// size / equality walk into t: a nominal value, or Option / Result of one
+/// Visit the initialized elements in index order. The callback may emit its own blocks.
+fn g9_vec_each(
+    g: &mut FnGen,
+    len: &str,
+    visit: &mut impl FnMut(&mut FnGen, &str) -> R<()>,
+) -> R<()> {
+    let start = g.cur.clone();
+    let head = g.label("vloop");
+    let body = g.label("vbody");
+    let latch = g.label("vnext");
+    let done = g.label("vend");
+    g.br(&head)?;
+    g.place(&head);
+    let next = g.tmp();
+    let i = g.op(format!("phi i64 [ 0, %{start} ], [ {next}, %{latch} ]"))?;
+    let more = g.op(format!("icmp ult i64 {i}, {len}"))?;
+    g.condbr(&more, &body, &done)?;
+    g.place(&body);
+    visit(g, &i)?;
+    g.br(&latch)?;
+    g.place(&latch);
+    g.ins(format!("{next} = add i64 {i}, 1"))?;
+    g.br(&head)?;
+    g.place(&done);
+    Ok(())
+}
+
+fn g9_vec_parts(g: &mut FnGen, p: &str) -> R<(String, String, String)> {
+    let v = g.op(format!("load {ARR}, ptr {p}"))?;
+    let data = g.op(format!("extractvalue {ARR} {v}, 0"))?;
+    let len = g.op(format!("extractvalue {ARR} {v}, 1"))?;
+    let cap = g.op(format!("extractvalue {ARR} {v}, 2"))?;
+    Ok((data, len, cap))
+}
+
+fn g9_vec_texts(m: &mut Mod, tt: &TypeTable, elem: &str) -> R<Vec<String>> {
+    let tl = lty(elem);
+    let extended = is_ext_t(tt, elem);
+    let df = dummy_fn();
+    let funcs = HashMap::new();
+    let mut out = Vec::new();
+    {
+        let mut g = FnGen::new(m, tt, &funcs, &df, true);
+        g.place("start");
+        let (data, len, cap) = g9_vec_parts(&mut g, "%v")?;
+        if extended {
+            g9_vec_each(&mut g, &len, &mut |g, i| {
+                let p = g.op(format!("getelementptr inbounds {tl}, ptr {data}, i64 {i}"))?;
+                g.ins(format!("call void @pruv_drop__{elem}(ptr {p})"))
+            })?;
+        }
+        let free = g.label("vfree");
+        let done = g.label("vdone");
+        let nonempty = g.op(format!("icmp ne i64 {cap}, 0"))?;
+        g.condbr(&nonempty, &free, &done)?;
+        g.place(&free);
+        let (size, align) = g9_node_layout(&mut g, &tl)?;
+        let bytes = g.op(format!("mul i64 {cap}, {size}"))?;
+        g.ins(format!("call void @pruv_node_free_v1(ptr {data}, i64 {bytes}, i64 {align})"))?;
+        g.br(&done)?;
+        g.place(&done);
+        g.term("ret void".to_string())?;
+        out.push(g.render(&format!("define internal void @pruv_vdrop__{elem}(ptr %v)")));
+    }
+    {
+        let mut g = FnGen::new(m, tt, &funcs, &df, true);
+        g.place("start");
+        let (src, len, _) = g9_vec_parts(&mut g, "%src")?;
+        let empty = g.label("vempty");
+        let copy = g.label("vcopy");
+        let zero = g.op(format!("icmp eq i64 {len}, 0"))?;
+        g.condbr(&zero, &empty, &copy)?;
+        g.place(&empty);
+        g.ins(format!("store {ARR} zeroinitializer, ptr %dst"))?;
+        g.term("ret void".to_string())?;
+        g.place(&copy);
+        let (size, align) = g9_node_layout(&mut g, &tl)?;
+        let bytes = g.op(format!("mul i64 {len}, {size}"))?;
+        let dst = g.op(format!("call ptr @pruv_node_alloc_v1(i64 {bytes}, i64 {align})"))?;
+        if extended {
+            g9_vec_each(&mut g, &len, &mut |g, i| {
+                let sp = g.op(format!("getelementptr inbounds {tl}, ptr {src}, i64 {i}"))?;
+                let dp = g.op(format!("getelementptr inbounds {tl}, ptr {dst}, i64 {i}"))?;
+                g.ins(format!("call void @pruv_clone__{elem}(ptr {sp}, ptr {dp})"))
+            })?;
+        } else {
+            g.ins(format!("call void @llvm.memcpy.p0.p0.i64(ptr {dst}, ptr {src}, i64 {bytes}, i1 false)"))?;
+        }
+        let a = g.op(format!("insertvalue {ARR} zeroinitializer, ptr {dst}, 0"))?;
+        let b = g.op(format!("insertvalue {ARR} {a}, i64 {len}, 1"))?;
+        let c = g.op(format!("insertvalue {ARR} {b}, i64 {len}, 2"))?;
+        g.ins(format!("store {ARR} {c}, ptr %dst"))?;
+        g.term("ret void".to_string())?;
+        out.push(g.render(&format!("define internal void @pruv_vclone__{elem}(ptr %src, ptr %dst)")));
+    }
+    {
+        let mut g = FnGen::new(m, tt, &funcs, &df, true);
+        g.place("start");
+        let (data, len, cap) = g9_vec_parts(&mut g, "%v")?;
+        let grow = g.label("vgrow");
+        let copy = g.label("vcopy");
+        let grown = g.label("vgrown");
+        let push = g.label("vpush");
+        let full = g.op(format!("icmp eq i64 {len}, {cap}"))?;
+        g.condbr(&full, &grow, &push)?;
+        g.place(&grow);
+        let empty = g.op(format!("icmp eq i64 {cap}, 0"))?;
+        let double = g.op(format!("mul i64 {cap}, 2"))?;
+        let ncap = g.op(format!("select i1 {empty}, i64 4, i64 {double}"))?;
+        let (size, align) = g9_node_layout(&mut g, &tl)?;
+        let prod = g.op(format!("call {{ i64, i1 }} @llvm.umul.with.overflow.i64(i64 {ncap}, i64 {size})"))?;
+        let bytes = g.op(format!("extractvalue {{ i64, i1 }} {prod}, 0"))?;
+        let overflow = g.op(format!("extractvalue {{ i64, i1 }} {prod}, 1"))?;
+        g.guard(&overflow, Fail::VecGrowth { elem: elem.to_string(), extended }, true)?;
+        let dst = g.op(format!("call ptr @pruv_node_alloc_v1(i64 {bytes}, i64 {align})"))?;
+        g.condbr(&empty, &grown, &copy)?;
+        g.place(&copy);
+        let used = g.op(format!("mul i64 {len}, {size}"))?;
+        g.ins(format!("call void @llvm.memcpy.p0.p0.i64(ptr {dst}, ptr {data}, i64 {used}, i1 false)"))?;
+        g.ins(format!("call void @pruv_node_free_v1(ptr {data}, i64 {used}, i64 {align})"))?;
+        g.br(&grown)?;
+        g.place(&grown);
+        g.ins(format!("store ptr {dst}, ptr %v"))?;
+        let cp = g9_gep(&mut g, ARR, "%v", 2)?;
+        g.ins(format!("store i64 {ncap}, ptr {cp}"))?;
+        g.br(&push)?;
+        g.place(&push);
+        let dp = g.op(format!("phi ptr [ {data}, %start ], [ {dst}, %{grown} ]"))?;
+        let slot = g.op(format!("getelementptr inbounds {tl}, ptr {dp}, i64 {len}"))?;
+        let value = g.op(format!("load {tl}, ptr %x"))?;
+        g.ins(format!("store {tl} {value}, ptr {slot}"))?;
+        let next = g.op(format!("add i64 {len}, 1"))?;
+        let lp = g9_gep(&mut g, ARR, "%v", 1)?;
+        g.ins(format!("store i64 {next}, ptr {lp}"))?;
+        g.term("ret void".to_string())?;
+        out.push(g.render(&format!("define internal void @pruv_vpush__{elem}(ptr %v, ptr %x)")));
+    }
+    Ok(out)
+}
+
 fn g9_walks(t: &str) -> bool {
+    if native_vec_elem(t).is_some() {
+        return true;
+    }
     if is_gopt(t) {
         return g9_walks(g_arg(t)) || (t.starts_with("result<") && g9_walks(g_error(t)));
     }
@@ -6915,6 +7293,21 @@ fn g9_walks(t: &str) -> bool {
 /// payload, None / Err 0; a nominal value weighs its size (one budget unit per node, inside pruv_csize). bud is the
 /// budget pointer the size helper charges.
 fn g9_weight(g: &mut FnGen, t: &str, p: &str, bud: &str) -> R<Option<String>> {
+    if let Some(elem) = native_vec_elem(t) {
+        g.m.need_size.insert(elem.to_string());
+        let (data, len, _) = g9_vec_parts(g, p)?;
+        let acc = g.g6_out("i128");
+        g.ins(format!("store i128 0, ptr {acc}"))?;
+        let tl = lty(elem);
+        g9_vec_each(g, &len, &mut |g, i| {
+            let p = g.op(format!("getelementptr inbounds {tl}, ptr {data}, i64 {i}"))?;
+            let w = g.op(format!("call i128 @pruv_csize__{elem}(ptr {p}, ptr {bud})"))?;
+            let prev = g.op(format!("load i128, ptr {acc}"))?;
+            let next = g.checked("i128", "sadd", "+", &prev, &w)?;
+            g.ins(format!("store i128 {next}, ptr {acc}"))
+        })?;
+        return Ok(Some(g.op(format!("load i128, ptr {acc}"))?));
+    }
     if t.starts_with("result<") && g9_walks(g_error(t)) {
         let tl = st(t, false);
         let g0 = g9_gep(g, &tl, p, 0)?;
@@ -7162,6 +7555,9 @@ fn g9_eq_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
 /// names of the user types a field of type t can contribute to `size` / structural equality: the type itself, or the
 /// payload type of Option / Result (arrays, str and scalars contribute nothing)
 fn g9_nominals_in(t: &str) -> Vec<String> {
+    if let Some(elem) = native_vec_elem(t) {
+        return vec![elem.to_string()];
+    }
     if is_gopt(t) {
         let mut names = g9_nominals_in(g_arg(t));
         if t.starts_with("result<") {
@@ -7203,6 +7599,9 @@ fn g9_helper_chunks(m: &mut Mod, tt: &TypeTable) -> R<Vec<String>> {
             chunks.extend(g9_node_texts(m, tt, d)?);
         }
     }
+    for elem in m.vec_elems.clone() {
+        chunks.extend(g9_vec_texts(m, tt, &elem)?);
+    }
     let close = |seed: &BTreeSet<String>| -> BTreeSet<String> {
         let mut out: BTreeSet<String> = BTreeSet::new();
         let mut work: Vec<String> = seed.iter().cloned().collect();
@@ -7217,7 +7616,7 @@ fn g9_helper_chunks(m: &mut Mod, tt: &TypeTable) -> R<Vec<String>> {
             out.insert(n);
             for (_vn, _t, fs) in g9_variants(d) {
                 for f in fs {
-                    work.extend(g9_nominals_in(&f.ty));
+                    work.extend(g9_nominals_in(native_vec_elem(&f.ty).unwrap_or(&f.ty)));
                 }
             }
         }
@@ -7287,6 +7686,20 @@ pub fn gen_llvm(prog: &Program, verified: bool, trust_callers: bool, budget: u64
 
 const WIN_X64_HEADER: &str = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\ntarget triple = \"x86_64-pc-windows-msvc\"\n\n";
 
+pub(crate) fn native_vec_call_elem(c: &Call) -> Option<&str> {
+    if !matches!(c.name.as_str(), "vec_new" | "vec_push" | "vec_get" | "vec_at_mut") {
+        return None;
+    }
+    let ty = if c.name == "vec_new" {
+        c.ty.as_deref()?
+    } else {
+        let first = c.args.first()?;
+        let place = if let Expr::InoutArg(arg) = first { &arg.expr } else { first };
+        expr_ty(place).as_deref()?
+    };
+    native_vec_elem(ty)
+}
+
 fn g6_scalar(t: &str) -> bool {
     t == "i64" || t == "bool"
 }
@@ -7305,7 +7718,10 @@ fn g6_coll_ok(t: &str) -> bool {
 }
 
 /// a type that may occur in a G6 program on LLVM: no collection, or a supported one (never nested)
-fn g6_type_ok(t: &str) -> bool {
+fn g6_type_ok(t: &str, vec_elems: &BTreeSet<String>) -> bool {
+    if let Some(elem) = native_vec_elem(t) {
+        return vec_elems.contains(elem);
+    }
     if is_collection(t) {
         return g6_coll_ok(t);
     }
@@ -7321,6 +7737,7 @@ fn g6_type_ok(t: &str) -> bool {
 pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
     use crate::foreign_shim::{walk_stmts, Node};
     crate::foreign::first_g6_use(prog)?;
+    let vec_elems = recursive_vec_elements(prog);
     let err = |line: i64, col: i64| {
         crate::diagnostic::PruvError::new("codegen", line, col, "unsupported_type", G6_UNSUPPORTED_MSG, G6_UNSUPPORTED_FIX)
     };
@@ -7354,7 +7771,7 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
         if f.params.iter().any(|p| rust_type(&p.ty)) || rust_type(&f.ret) {
             return Some(rust_error(f.line, f.col, "this collection type"));
         }
-        if f.params.iter().any(|p| !g6_type_ok(&p.ty)) || !g6_type_ok(&f.ret) {
+        if f.params.iter().any(|p| !g6_type_ok(&p.ty, &vec_elems)) || !g6_type_ok(&f.ret, &vec_elems) {
             return Some(err(f.line, f.col));
         }
         let mut bad: Vec<(i64, i64)> = Vec::new();
@@ -7362,14 +7779,18 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
         walk_stmts(&f.body, &mut |n: Node<'_>| match n {
             Node::ForMap(w) => rust_only.push((w.line, w.col, "map iteration")),
             Node::Let(l) => {
-                if !g6_type_ok(&l.ty) {
+                if !g6_type_ok(&l.ty, &vec_elems) {
                     bad.push((l.line, l.col));
                 }
             }
             Node::Expr(e) => {
+                if matches!(e, Expr::Call(c) if native_vec_call_elem(c).is_some_and(|elem| vec_elems.contains(elem))
+                    && !funcs.contains_key(c.name.as_str())) {
+                    return;
+                }
                 if let Some(t) = expr_ty(e) {
                     if rust_type(t) { rust_only.push((e.line(), e.col(), "this collection type")); }
-                    if !g6_type_ok(t) {
+                    if !g6_type_ok(t, &vec_elems) {
                         bad.push((e.line(), e.col()));
                     }
                 }
@@ -7833,6 +8254,12 @@ fn gen_llvm_body(
     // G9: SCC-condensed order and the extended / boxed metadata (identical to TypeTable::new otherwise)
     let tt = new_tt(prog);
     let mut m = Mod::new();
+    let vec_elems = recursive_vec_elements(prog);
+    m.owned_collection_fields = prog.types.iter().any(|d| {
+        d.all_fields().iter().any(|field| crate::gtype::key_is_collection(&field.ty))
+    });
+    m.vec_get_requires = foreign_checks != "off";
+    m.vec_get_checked = !verified || foreign_checks == "all" || prog.functions.iter().any(|f| f.foreign.is_some());
     m.sym_pre = sym_prefix(prog.pkg_name.as_deref());
     m.resize_params = crate::check::resize_params(prog);
     m.storage = plan_storage(prog, verified);
@@ -7940,7 +8367,7 @@ fn gen_llvm_body(
             chunks.push(prefix_abi_defs(&abi, &m.sym_pre));
         }
     }
-    if !tt.g9_ext.is_empty() || !m.need_size.is_empty() || !m.need_eq.is_empty() {
+    if !tt.g9_ext.is_empty() || !m.vec_elems.is_empty() || !m.need_size.is_empty() || !m.need_eq.is_empty() {
         // G9 A3: clone / drop / node helpers, then the contract helpers above
         chunks.extend(g9_helper_chunks(&mut m, &tt)?);
     }
@@ -7977,7 +8404,9 @@ fn gen_llvm_body(
         if uses_array_type(prog, "array_bool") { DECLS_BOOL } else { "" },
         if has_str { DECLS_STR } else { "" },
         if m.uses_repr { DECLS_REPR } else { "" }, // G3
-        if !tt.g9_boxed.is_empty() { DECLS_NODE } else { "" }, // G9 A3
+        format!("{}{}",
+            if !tt.g9_boxed.is_empty() || !m.vec_elems.is_empty() { DECLS_NODE } else { "" },
+            if !m.vec_elems.is_empty() && !m.overlap { "declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64)\n" } else { "" }),
         // P2 batch 4: llvm.bswap declarations of the widths used, ascending
         m.bswap.iter().map(|w| format!("declare i{w} @llvm.bswap.i{w}(i{w})\n", w = w)).collect::<String>(),
         if m.shrink { "declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind\n" } else { "" },
@@ -7999,6 +8428,9 @@ fn gen_llvm_body(
         g6decls,
         chunks.join("\n")
     );
+    if m.vec_get_used {
+        ir.push_str("declare void @pruv_panic_vec_get_v1(i64) noreturn cold nounwind\n");
+    }
     if m.uses_utf8_valid {
         ir.push_str(include_str!("../../../../pruvc/utf8_valid.ll"));
     }
@@ -8010,7 +8442,7 @@ fn gen_llvm_body(
         ir.push_str("declare void @pruv_g7_v1_run(ptr, i64) nounwind\n");
         ir.push_str(&m.par_trampolines.join("\n"));
     }
-    let mut shim = if is_g6 {
+    let mut shim = if is_g6 && (!m.g6_decls.is_empty() || m.g6_bridge || vec_elems.is_empty()) {
         Some(crate::foreign_shim::build_shim(prog, verified, trust_callers, budget, foreign_checks, m.g6_take, &m.g6_unbox.iter().cloned().collect::<Vec<String>>(), &m.sym_pre)?)
     } else {
         None

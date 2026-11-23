@@ -772,8 +772,9 @@ fn tree_count(t: Tree) -> i64
   Rust uses `::std::vec::Vec<i64>`, `::std::vec::Vec<bool>` and `::std::string::String` for these fields.
   The aggregate derives `Clone` without `Copy`, and struct parameters remain borrowed (`&Rec` for `Rec`).
   Initializers that move a binding or use a call result store it directly without cloning.
-  LLVM rejects a struct or enum with such a field as `codegen/unsupported_type`. The diagnostic names the
-  aggregate and says owned collection fields need the Rust backend.
+  LLVM keeps a `Vec<i64>` or `Vec<bool>` field as a shim handle (R-6e-21). LLVM rejects a struct or enum
+  with a `String` field as `codegen/unsupported_type`. The diagnostic names the aggregate and says owned
+  collection fields need the Rust backend.
 - R-6e-2 **Moving a field into its replacement.** This rule permits `move p.f` as a direct `take` argument
   of a call whose result is assigned back to the same field, as in
   `p.f = vec_push::<i64>(move p.f, 5);`. The receiver `p` must be a `let mut` local, a struct `inout` parameter (R-6g-2) or
@@ -1121,13 +1122,13 @@ fn tree_count(t: Tree) -> i64
   a write through `vec_at_mut` replaces the old element size by the new one, and an element read at a proved index
   `0 <= i < len` (in code or in a contract, `size(v[i])`, also under a quantifier) has size at most the sum. The run-time check of a `requires` that indexes an element in `size` is not generated (`codegen/unsupported_type` with `--no-verify`). There is no axiom that a child is always smaller, so recursion on an
   element read from the parameter proves `decreases size(v)`, while recursion on the same value is
-  `verify/recursive_decrease`. The run-time `size` contract sums the element sizes in the same way. LLVM rejects
-  these types as `codegen/unsupported_type` ("has owned collection fields, which need the Rust backend").
+  `verify/recursive_decrease`. The run-time `size` contract sums the element sizes in the same way. LLVM lowers
+  these types by R-6e-21.
   Tests: [accept value tree](tests/spec/r6e_20_value_tree.pruv),
   [accept last-key lookup and in-place replace](tests/spec/r6e_20_lookup_last.pruv),
   [reject same-value recursion](tests/spec/r6e_20_same_value.pruv),
   [reject generic](tests/spec/r6e_20_generic.pruv), [reject HashMap](tests/spec/r6e_20_hashmap.pruv),
-  [reject LLVM](tests/spec/r6e_20_llvm.pruv),
+  [accept LLVM tree](tests/spec/r6e_21_llvm_tree.pruv),
   [accept observed empty vector and child](tests/spec/r6e_20_observed.pruv),
   [accept moved local payload](tests/spec/r6e_20_push_moved.pruv),
   [reject element of another vector](tests/spec/r6e_20_other_vec.pruv),
@@ -1140,6 +1141,24 @@ fn tree_count(t: Tree) -> i64
   [reject replace during a nested element match](tests/spec/r6e_20_nested_borrow.pruv),
   [reject owned field of a borrowed element](tests/spec/r6e_20_field_owned.pruv),
   [accept quantified child size](tests/spec/r6e_20_forall_child.pruv).
+- R-6e-21 **Owned collections in values on LLVM, and across the host boundary (LB3).** On the LLVM backend a
+  `Vec<S>` of R-6e-20 is a `{ ptr, i64, i64 }` (data, length, capacity) with the `S` values stored inline, and a
+  `Vec<i64>` / `Vec<bool>` field of a struct or enum payload is the §6d handle; the operations of R-6e-20 print the
+  same output as the Rust backend. Each owned value is created, overwritten, moved and dropped exactly once: an
+  assignment builds the new value before it drops the old one, `move` leaves an empty place that drops to nothing,
+  and growing a vector moves its elements without a copy. **Host ABI (V4).** On the Rust backend such values cross
+  a call by Rust ownership (passed by value, the receiver owns and drops them; read parameters are borrows). On the
+  LLVM backend a native vector or a §6d handle never crosses the C ABI: a host entry whose signature has one is
+  rejected as under the Limits below (`type/entry_signature`, or `codegen/unsupported_type` at the LLVM layer). The
+  allocator that made a block frees it: native vector buffers use the runtime node allocator
+  (`pruv_node_alloc_v1` / `pruv_node_free_v1`), §6d handles the shim's Rust allocator, and the two are never mixed.
+  On failure (a resource failure or a failed run-time check) the program stops; values owned by the failing call
+  are not handed back, and the moved arguments of a call belong to the callee from the call on. A future C ABI for
+  owned collections must name the allocator in the symbol version (as `_v1` does) and give the free function with
+  the value. Borrowed views and borrowing structs (R-6g-11) stay `codegen/unsupported_type` on LLVM.
+  Tests: [accept LLVM tree](tests/spec/r6e_21_llvm_tree.pruv),
+  [reject host entry](tests/spec/r6e_21_host_entry.pruv); measurements and the test table in
+  [L3_LB3](docs/L3_LB3.md).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate (the one exception: R-6e-12a moves an array binder out of a consumed scrutinee). Putting an existing value into an owning place (`let`, assignment, constructor field,

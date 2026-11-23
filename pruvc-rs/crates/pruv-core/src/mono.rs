@@ -305,7 +305,7 @@ impl<'a> Mono<'a> {
             }
         }
         G9Meta {
-            type_sccs: m.type_sccs.clone(),
+            type_sccs: m.type_sccs.iter().map(|g| g.iter().map(|n| ren(n.as_str())).collect()).collect(),
             boxed,
             extended: m.extended.iter().map(|n| ren(n.as_str())).collect(),
             fn_sccs: m.fn_sccs.clone(),

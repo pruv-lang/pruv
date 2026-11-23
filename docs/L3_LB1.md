@@ -38,7 +38,7 @@ Files: `pruvc/check.py`, `pruvc/codegen.py`, `pruvc/verify.py`, `pruvc-rs/crates
 | `tests/spec/r6e_20_same_value.pruv` | reject `verify/recursive_decrease` |
 | `tests/spec/r6e_20_generic.pruv` | reject `type/recursive_generic_type` |
 | `tests/spec/r6e_20_hashmap.pruv` | reject `type/foreign_owned_type` |
-| `tests/spec/r6e_20_llvm.pruv` | reject `codegen/unsupported_type` on the LLVM backend |
+| `tests/spec/r6e_20_llvm.pruv` | reject `codegen/unsupported_type` on the LLVM backend (LB3 replaced it with the accept test `tests/spec/r6e_21_llvm_tree.pruv`) |
 | `tests/spec/r6e_20_observed.pruv` | accept; an input with `len == 0` has size 1, `size(t.kids[0]) < size(t)` in a contract |
 | `tests/spec/r6e_20_push_moved.pruv` | accept; a local moved into `vec_push` |
 | `tests/spec/r6e_20_other_vec.pruv` | reject `verify/recursive_decrease`; recursion on an element of a vector built locally |
