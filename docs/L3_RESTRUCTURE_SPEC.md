@@ -1,5 +1,7 @@
 # L3-wide restructure framework: correcting every piece
 
+> **2026-11-24: superseded in order by the Rust-shape reset (`docs/RUST_SHAPE_RESET.md`).** Product code is now shaped like hand Rust; Node/TS is the output oracle only. The reset runs first (language bundle B/V, shared pkgs, entry/req, fragments, bulk remeasure). Per-row §7.5 perf-debt fixing is frozen until then. The R-queue below still lists what each piece must keep passing.
+
 Design only; inspected 2026-11-18. No implementation, builds or new benchmark results. Citation prefixes: `B/` = `bench/l3/budget/`, `RC/` = `pruvc-rs/crates/pruv-core/src/`, `RP/` = `pruvc-rs/crates/pruv-proof/src/`. Proposed types/signatures are design notation, not necessarily accepted syntax.
 
 This framework governs ALL earlier L3 pieces and L3-10 budget: req, budget, entry/shared ent libraries, json/shared packages, mcp, qwen, grok, opencode, claude, codex and supervisor. Budget is the detailed worked example, not the scope boundary. Preserve the AGENTS rule supplied in this task: rework **L3-1..L3-9 as one restructure batch before plugging them into real Lair**. Intermediate proof/test slices are not separate product integrations.
@@ -502,6 +504,8 @@ Each row must satisfy §7.1 on its entire listed grid; S/M cells are early feedb
 
 ### 7.4 Execution packages and gates
 
+**Queue head (2026-11-24): RS0 Rust-shape reset (`docs/RUST_SHAPE_RESET.md` §6) runs before every R package below.**
+
 Follow §6.1's distinct compiler (C) and product (P) gates. Each earlier-piece package has **A baseline/counters**, **B one state/local-invariant root**, **C one ownership/source-byte handoff**, and **D narrow composition+S/M closure**. A is apparatus work; B/C are split per named root/handoff and use touched Q families/fixed negatives, not full-suite Q on every edit. Compiler extensions get their own frontend/proof/ABI manifests before product adoption. D does not defer the earlier substeps' relevant checks. Full Q and complete grids run at whole-batch closure.
 
 Plan at least **3–5 substeps for each B or C package**, plus A and D: **8–12 substeps per non-budget piece**, or **80–120 across the ten earlier-piece groups below**, before extra roots, baseline authoring and whole-batch integration. This is a preliminary lower planning envelope, not a one-hour promise. Budget uses §6's 114–190 estimate without duplicate counting. These ranges are not additive: P05M is the early part of MCP's C work and P10H overlaps req host apparatus; shared substeps must be counted once in the implementation manifest, not as extra savings or second implementations. Extend estimates for additional opcodes/host signatures; half-day/day work units plus proof/build time replace the old 45–55 minute feature caps. Long campaigns retain artifacts and use <=60-minute monitoring sessions.
@@ -526,6 +530,8 @@ Queue order is explicit; R IDs identify packages and need not sort numerically. 
 | R12 whole batch | Audit dependency/intent ledger; close missing hand lanes and unresolved causes with new packages, never waivers; schedule P36 | Full four-pair Q ×2000 where generated, existing fixture suites and all §7.3 grids/selected §4 goals. No real-Lair hookup while any baseline/backend/cause or req gate is incomplete. |
 
 ### 7.5 Perf debt (gate scope, 2026-11-19)
+
+**Frozen 2026-11-24.** Rows are not fixed one by one. After the Rust-shape reset they are remeasured and closed in bulk; remaining cells are grouped by cause and fixed once in shared code.
 
 The target stays at or below 1.0x hand for both time and memory. Only cells that measure cost proportional to data
 size (time, peak RSS growth) at the representative sizes M and L block the next package. A cell above 1.0x that is
