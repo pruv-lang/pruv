@@ -106,9 +106,9 @@ fn stamp_str(hb: [u8], o: i64) -> str ! alloc
   if o < 0 || o > len(hb) - 24 { return copy(none); }
   let mut cb: [u8] = alloc(24, 0);
   crate::bytes::copy_span(inout cb, 0, hb, o, o + 24);
-  let s: str = crate::jstr::adapter_probe(cb);
+  let s: str = crate::jstr::owned_text(move cb);
   if len(s) != 24 { return copy(none); }
-  return copy(s);
+  return move s;
 }
 
 // One held turn into the collector: begin, the folded reply when present, then its tool items.

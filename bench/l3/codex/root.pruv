@@ -32,7 +32,7 @@ pub fn codex_list(binary: str, argv: str, cwd: str, folder: str, timeout_ms: i64
   let slot: i64 = ctl[2];
   let overall: i64 = ctl[3];
   let mut st: [i64] = alloc(5, 0);
-  let mut line: crate::util::ByteBuffer = crate::util::byte_buffer(8388608);
+  let mut line: crate::util::ByteBuffer = crate::util::byte_buffer(4096);
   let mut chunk: [u8] = alloc(65536, 0);
   let mut tb: [i64] = crate::tail::tail_buf(1024);
   let mut ts: [i64] = crate::tail::tail_state(1024);
@@ -191,7 +191,7 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
                     let ms: str = crate::util::str_at(d, mid);
                     if crate::util::units16(ms) <= 200 {
                       let mt: str = crate::text::trim(ms);
-                      if len(mt) > 0 { model = copy(mt); }
+                      if len(mt) > 0 { model = move mt; }
                     }
                   }
                 } else {

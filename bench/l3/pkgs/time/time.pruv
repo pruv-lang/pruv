@@ -232,14 +232,14 @@ fn absent() -> Iso ! alloc
   ensures result.status == 1 && len(result.text) == 0
 {
   let e: [u8] = alloc(0, 0);
-  return Iso { status: 1, text: copy(e) };
+  return Iso { status: 1, text: move e };
 }
 
 fn defect() -> Iso ! alloc
   ensures result.status == -4 && len(result.text) == 0
 {
   let e: [u8] = alloc(0, 0);
-  return Iso { status: -4, text: copy(e) };
+  return Iso { status: -4, text: move e };
 }
 
 fn present(t: [u8]) -> Iso ! alloc
@@ -280,7 +280,7 @@ fn from_integer(v: i64) -> Iso ! alloc
   if ms == 9223372036854775807 { return absent(); }
   let f: [u8] = format_iso(ms);
   if len(f) != 24 { return defect(); }
-  return Iso { status: 0, text: copy(f) };
+  return Iso { status: 0, text: move f };
 }
 
 // All of t is ASCII digits (and t is nonempty): the value; -1 otherwise; -2 when digit-only but above 2^53-1.
@@ -318,7 +318,7 @@ fn from_string(v: str) -> Iso ! alloc
   if n == -2 { return absent(); }
   if canonical_iso(v) {
     let b: [u8] = bytes24(v);
-    return Iso { status: 0, text: copy(b) };
+    return Iso { status: 0, text: move b };
   }
   return absent();
 }
@@ -339,7 +339,7 @@ fn copy_canonical(b: [u8], p: i64) -> [u8] ! alloc
     invariant forall q in 0..j: out[q] == b[p + q]
     decreases 24 - j
   { out[j] = b[p + j]; j = j + 1; }
-  return copy(out);
+  return out;
 }
 
 // tail.ts isoOf for the value with tape id `id` of doc.
@@ -362,9 +362,9 @@ pub fn iso_of(doc: crate::json::JsonDocument, id: i64) -> Iso ! alloc
     let sp: crate::access::Span = crate::access::raw_span(doc, id);
     if sp.status == 0 && sp.end - sp.start == 26 && 0 <= sp.start && sp.start + 26 <= len(doc.source) {
       let c: [u8] = copy_canonical(doc.source, sp.start + 1);
-      if len(c) == 24 { return Iso { status: 0, text: copy(c) }; }
+      if len(c) == 24 { return Iso { status: 0, text: move c }; }
     }
-    let t: crate::jstr::Text = crate::access::string_text(doc, id);
+    let t: crate::jstr::Text = crate::access::string_text_owned(doc, id);
     match t {
       crate::jstr::Text::InternalInvariant(e) => { return defect(); }
       crate::jstr::Text::Decoded(v) => { return from_string(v); }

@@ -161,7 +161,7 @@ pub fn read_turn(d: crate::json::JsonDocument, t: i64, inout fs: [i64], inout fb
         let tf: i64 = crate::util::field(d, it, "text");
         if crate::access::kind(d, tf) == 4 {
           let x: str = crate::util::str_at(d, tf);
-          if !crate::text::is_blank(x) { has_plan = true; plan = copy(x); }
+          if !crate::text::is_blank(x) { has_plan = true; plan = move x; }
         }
       } else if crate::access::string_is(d, ty, "reasoning") != 1 {
         tools = tools + 1;

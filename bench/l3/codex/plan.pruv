@@ -78,7 +78,7 @@ fn take_segment(b: [u8], lo: i64, hi: i64, inout pl: [i64], inout pb: [u8]) -> (
 {
   let mut seg: [u8] = alloc(hi - lo, 0);
   crate::bytes::copy_span(inout seg, 0, b, lo, hi);
-  let s: str = crate::jstr::adapter_probe(seg);
+  let s: str = crate::jstr::owned_text(move seg);
   if len(s) != hi - lo { return; }
   let t: str = crate::text::trim(s);
   let m: i64 = marker_end(t);
