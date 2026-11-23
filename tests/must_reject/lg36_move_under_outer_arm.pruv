@@ -1,0 +1,22 @@
+// LG36 (G-LG35-1): an enclosing match arm on the same owner p is still open, so its binder outer views the payload;
+// moving the inner binder would hand that payload over (LLVM empties the field, Rust would move out of &p)
+enum Pk { Nums(v: [i64]), Nil }
+
+fn run(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50
+{
+  let a: [i64] = alloc(n, 5);
+  let p: Pk = Pk::Nums(move a);
+  match p {
+    Pk::Nums(outer) => {
+      match p {
+        Pk::Nums(inner) => {
+          let u: [i64] = move inner;
+          return len(u) + len(outer);
+        }
+        Pk::Nil => { return 0; }
+      }
+    }
+    Pk::Nil => { return 1; }
+  }
+}

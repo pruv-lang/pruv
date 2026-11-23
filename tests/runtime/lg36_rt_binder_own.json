@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["4", "104", "0", "403", "505", "403"], "alloc_balance": true, "llvm_fn_absent": {"other_owner": ["@pruv_copy("], "after_close": ["@pruv_copy("], "reuse_name": ["@pruv_copy("]}, "gen_absent": [".clone()"], "gen_contains": ["let x: ::std::string::String = x;"]}

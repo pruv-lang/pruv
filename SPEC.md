@@ -953,16 +953,23 @@ fn tree_count(t: Tree) -> i64
   [move in a loop condition](tests/spec/r6e_12_loop_cond_move.pruv).
 - R-6e-12a **Moving an array out of a match binder (G-DB16-1).** `move b` of an array-typed binder `b` of a
   user-enum arm is allowed when the scrutinee is a plain name (not a field path or call) of a non-generic enum
-  that is an owned local (not a `take`, plain or `inout` parameter, and not another arm's binder), and no arm of that
-  `match` names the scrutinee. A `match` where some arm moves a binder consumes its scrutinee on entry to every arm:
-  the scrutinee is moved inside each arm and after the `match`, and inside an arm its array binders are owned
+  that is an owned local (not a `take`, plain or `inout` parameter, and not another arm's binder), no arm of that
+  `match` names the scrutinee, and no enclosing `match` arm on the same local is still open (LG36, G-LG35-1: the
+  outer arm's binders view the payload the move would hand over). The same rule admits `move x` of a `str` binder
+  `x` (LG36, G-DB59-1: both compilers), which hands the payload over without a copy. A `match` where some arm moves a binder consumes its scrutinee on entry to every arm:
+  the scrutinee is moved inside each arm and after the `match`, and inside an arm its array and `str` binders are owned
   bindings (a use after their own move is `type/foreign_move`). A later read of the scrutinee is `type/foreign_move` ("use after move" / "binding may have been moved"), and in a loop the scrutinee must be
   live again (`type/foreign_loop_move`). Every other `move` of a binder stays `type/array_alias`. Rust matches the
   scrutinee by value, also under cost metering, so `b` is an owned `Vec<T>` moved as is. LLVM takes the binder's
   `{ptr, len, cap}` and stores the empty array into that field of the scrutinee's slot, so its drop frees nothing twice.
   Tests: [runtime](tests/runtime/lg8_rt_match_move.pruv),
   [use after](tests/must_reject/lg8_match_move_use_after.pruv),
-  [borrowed scrutinee](tests/must_reject/lg8_match_move_borrowed.pruv).
+  [borrowed scrutinee](tests/must_reject/lg8_match_move_borrowed.pruv),
+  [str binder and other owner](tests/runtime/lg36_rt_binder_own.pruv),
+  [enclosing arm on the same owner](tests/must_reject/lg36_move_under_outer_arm.pruv),
+  [str binder under an enclosing arm](tests/must_reject/lg36_str_move_under_outer_arm.pruv),
+  [str binder moved on one branch](tests/must_reject/lg36_str_move_branch_read.pruv),
+  [str binder moved in a loop](tests/must_reject/lg36_str_move_in_loop.pruv).
   LG9 (G-DB15-2): under the same conditions, `return x` of a `str` binder `x` of that arm is allowed without
   `copy(x)` and means exactly `return copy(x)`: it needs `alloc`, and the verifier and both backends treat it as that
   copy (the checker rewrites the value into the `copy(x)` call, so both backends and the cost bound count the

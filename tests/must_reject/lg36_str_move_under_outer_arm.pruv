@@ -1,0 +1,18 @@
+// LG36 (G-LG35-1, G-DB59-1): the str binder move follows the same rule: not while an enclosing arm on the same owner
+// still views the payload
+enum T { Dec(x: str), Bad(e: i64) }
+
+fn get(n: i64) -> str ! alloc {
+  let none: str = "";
+  let s: str = "abc";
+  let t: T = T::Dec(copy(s));
+  match t {
+    T::Dec(outer) => {
+      match t {
+        T::Dec(x) => { return move x; }
+        T::Bad(e) => { return copy(none); }
+      }
+    }
+    T::Bad(e) => { return copy(none); }
+  }
+}
