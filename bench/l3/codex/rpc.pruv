@@ -68,14 +68,49 @@ pub fn start(binary: str, argv: str, cwd: str, timeout_ms: i64, inout ctl: [i64]
   return move l;
 }
 
-// trim the line, parse it as JSON (P1: invalid UTF-8 is a parse failure and the line is skipped)
-pub fn parse_line(line: [u8], n: i64) -> crate::json::JsonParse ! alloc
-  requires 0 <= n && n <= len(line)
+// trim the line, parse it as JSON (P1: invalid UTF-8 is a parse failure and the line is skipped).
+// DB54: a line that starts at 0 while no partial line is pending (st[1] == 0) hands the line storage to the document
+// (no copy); line.data is then empty and receive grows it again for the next line.
+pub fn parse_line(inout line: crate::util::ByteBuffer, n: i64, st: [i64]) -> crate::json::JsonParse ! alloc
+  requires 0 <= n && n <= len(line.data) && len(line.data) <= 8388608
+  requires len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data)
+  ensures len(line.data) <= 8388608 && st[1] <= len(line.data)
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
 {
   let mut r: [i64] = alloc(2, 0);
-  crate::util::trim_span(line, n, inout r);
-  return crate::lines::parse_range(line, r[0], r[1]);
+  crate::util::trim_span(line.data, n, inout r);
+  if r[0] == 0 && st[1] == 0 {
+    let t: [u8] = move line.data;
+    line.data = alloc(0, 0);
+    return parse_owned(move t, r[1]);
+  }
+  return crate::lines::parse_range(line.data, r[0], r[1]);
+}
+
+// DB54: pkgs/lines parse_range(data, 0, hi) without its copy: the document keeps data (shortened to hi) as its source.
+// The body is parse_range's after the copy loop (G-DB54-1: belongs in pkgs/lines once that package may change).
+fn parse_owned(take data: [u8], hi: i64) -> crate::json::JsonParse ! alloc
+  requires 0 <= hi && hi <= len(data)
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
+{
+  let n: i64 = hi;
+  if n > crate::json::limit_input_bytes() {
+    return crate::json::JsonParse::Failed(crate::json::make_error(0, crate::json::err_input_too_large()));
+  }
+  // an owned local, so the truncate in the returned document shortens it in place (Rust and LLVM)
+  let owned: [u8] = move data;
+  let invalid: i64 = crate::lex::validate_utf8(owned, 0, n);
+  if invalid >= 0 { return crate::json::JsonParse::Failed(crate::json::make_error(invalid, 4)); }
+  let checked: crate::parse::Checked = crate::parse::scan(subview(owned, 0, n));
+  match checked {
+    crate::parse::Checked::Rejected(position, kind) => {
+      return crate::json::JsonParse::Failed(crate::json::make_error(position, kind));
+    }
+    crate::parse::Checked::Tape(tape) => {
+      if !crate::json::check_tape(tape, n) { return crate::json::JsonParse::Failed(crate::json::make_error(0, 18)); }
+      return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: truncate(owned, n), tape: copy(tape) });
+    }
+  }
 }
 
 // The shared transport requires a full-sized line buffer. Keep its polling and event order
@@ -238,7 +273,8 @@ pub fn open(take l: Loop, inout ctl: [i64], inout st: [i64], inout line: crate::
     events = events + 1;
     q = step(move q, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
     if ctl[0] == 0 && ctl[5] == 1 {
-      let parsed: crate::json::JsonParse = parse_line(line.data, ctl[6]);
+      let parsed: crate::json::JsonParse = parse_line(inout line, ctl[6], st);
+      ctl[6] = 0;
       match parsed {
         crate::json::JsonParse::Failed(e) => { }
         crate::json::JsonParse::Parsed(d) => {
