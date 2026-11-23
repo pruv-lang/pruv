@@ -1131,7 +1131,8 @@ impl<'a> Ownership<'a> {
                     if let (Some(sc), Some(en)) = (&consuming, &a.enum_name) {
                         arm_state.set(sc, V::Dead);
                         let fields = self.variants.get(&(en.clone(), a.ctor.clone())).cloned().unwrap_or_default();
-                        srcs = a.binders.iter().zip(&fields).filter(|(_, t)| key_is_array(t))
+                        // LG36 (G-DB59-1): str binders too, so a branch, loop or closed arm sees their moves
+                        srcs = a.binders.iter().zip(&fields).filter(|(_, t)| key_is_array(t) || t.as_str() == "str")
                             .map(|(b, _)| b.clone()).collect();
                         for b in &srcs {
                             arm_state.set(b, V::Live);

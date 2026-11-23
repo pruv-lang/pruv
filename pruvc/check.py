@@ -2343,8 +2343,11 @@ class Checker:
                         "%s::%s" % (t.name, n) for n in missing))
             # G-DB16-1: an array binder may be moved when the scrutinee is a plain owned local enum value that
             # no arm names again; the move then consumes the scrutinee (foreign.py marks it moved)
+            # LG36 (G-LG35-1): not while an enclosing match arm still views the same owner (active_roots): the
+            # outer binder reads the payload the move would hand over
             movable_scrut = False
-            if user and not t.args and isinstance(st.scrutinee, Var) and st.scrutinee.name not in s.arm_binders:
+            if (user and not t.args and isinstance(st.scrutinee, Var) and st.scrutinee.name not in s.arm_binders
+                    and st.scrutinee.name not in s.active_roots):
                 skind = scope.get(st.scrutinee.name, (None, None, None))[2]
                 if skind == "local":
                     named = set()

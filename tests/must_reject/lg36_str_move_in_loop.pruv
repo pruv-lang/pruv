@@ -1,0 +1,20 @@
+// LG36 (G-DB59-1, review): a str binder moved in a loop body is not live again on the next iteration
+enum T { Dec(x: str), Bad(e: i64) }
+
+fn get(n: i64) -> i64 ! alloc {
+  let s: str = "abc";
+  let t: T = T::Dec(copy(s));
+  let mut k: i64 = 0;
+  match t {
+    T::Dec(x) => {
+      let mut i: i64 = 0;
+      while i < n decreases n - i {
+        let y: str = move x;
+        k = k + len(y);
+        i = i + 1;
+      }
+      return k;
+    }
+    T::Bad(e) => { return 0; }
+  }
+}

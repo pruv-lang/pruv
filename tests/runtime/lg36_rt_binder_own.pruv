@@ -1,0 +1,111 @@
+// LG36 (G-DB59-1, G-LG35-1): `move x` of a str binder of a consuming match on an owned local hands the payload over
+// on both backends (no copy); a move under an enclosing arm on a different owner, or after an earlier match on the
+// same owner has closed, stays legal.
+enum T { Dec(x: str), Bad(e: i64) }
+enum Pk { Nums(v: [i64]), Nil }
+
+fn mk_t(n: i64) -> T ! alloc
+  requires 0 <= n && n <= 50
+{
+  let mut a: [u8] = alloc(n, 97);
+  if n == 0 { return T::Bad(7); }
+  a[0] = 104;
+  if !utf8_valid(a) { return T::Bad(8); }
+  let s: str = str_from_utf8(a);
+  return T::Dec(copy(s));
+}
+
+fn mk_pk(n: i64) -> Pk ! alloc
+  requires 1 <= n && n <= 50
+{
+  let a: [i64] = alloc(n, 5);
+  return Pk::Nums(move a);
+}
+
+// the str binder moves out of the consumed scrutinee
+fn str_take(n: i64) -> str ! alloc
+  requires 0 <= n && n <= 50
+{
+  let none: str = "";
+  let t: T = mk_t(n);
+  match t {
+    T::Dec(x) => {
+      if len(x) > 100 { return copy(none); }
+      return move x;
+    }
+    T::Bad(e) => { return copy(none); }
+  }
+}
+
+// the enclosing arm borrows p, the inner match consumes a different owner q: the move is legal
+fn other_owner(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 40
+{
+  let p: Pk = mk_pk(n);
+  match p {
+    Pk::Nums(outer) => {
+      let q: Pk = mk_pk(n + 1);
+      match q {
+        Pk::Nums(inner) => {
+          let u: [i64] = move inner;
+          if len(u) > 1000 || len(outer) > 1000 { return 0 - 1; }
+          return len(u) * 100 + len(outer);
+        }
+        Pk::Nil => { return 0; }
+      }
+    }
+    Pk::Nil => { return 1; }
+  }
+}
+
+// an earlier match on p has closed before the consuming one: the move is legal
+fn after_close(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50
+{
+  let p: Pk = mk_pk(n);
+  let mut k: i64 = 0;
+  match p {
+    Pk::Nums(v) => { k = len(v); }
+    Pk::Nil => { k = 0; }
+  }
+  match p {
+    Pk::Nums(w) => {
+      let u: [i64] = move w;
+      if len(u) > 1000 || k < 0 || k > 1000 { return 0 - 1; }
+      return len(u) * 100 + k;
+    }
+    Pk::Nil => { return 0; }
+  }
+}
+
+// review: a moved str binder of a closed arm does not leak its moved state into a later arm binder of the same name
+fn reuse_name(n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 40
+{
+  let a: T = mk_t(n);
+  let mut k: i64 = 0;
+  match a {
+    T::Dec(x) => { let saved: str = move x; k = len(saved); }
+    T::Bad(e) => { k = 0; }
+  }
+  let b: T = mk_t(n + 1);
+  match b {
+    T::Dec(x) => {
+      if len(x) > 1000 || k < 0 || k > 1000 { return 0 - 1; }
+      let y: str = move x;
+      return len(y) * 100 + k;
+    }
+    T::Bad(e) => { return 0; }
+  }
+}
+
+fn run() -> () ! io, alloc {
+  let s: str = str_take(4);
+  print(len(s));
+  if len(s) > 0 { print(s[0]); }
+  let e: str = str_take(0);
+  print(len(e));
+  print(other_owner(3));
+  print(after_close(5));
+  print(reuse_name(3));
+}

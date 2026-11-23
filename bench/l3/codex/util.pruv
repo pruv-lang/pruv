@@ -113,7 +113,7 @@ pub fn str_at(d: crate::json::JsonDocument, id: i64) -> str ! alloc
   match t {
     crate::jstr::Text::Decoded(x) => {
       if len(x) > 50331648 { return copy(none); }
-      return copy(x);
+      return move x;
     }
     crate::jstr::Text::InternalInvariant(e) => { return copy(none); }
   }
