@@ -112,7 +112,9 @@ Each bundle keeps to AGENTS.md: at most 2 subs at a time, 2 hours per bundle, di
 
 ## 8. Existing work
 
-- DB63 (grok RPC, branch in worktree `pruv-57782787`) and DB64 (budget M12 slab, branch `lair/db64-brief-budget-m12-typed-fcff`) were stopped unmerged. They are kept as reference for the grok and budget ports.
+- DB63 (grok RPC) and DB64 (budget M12 slab) were stopped unmerged. Their worktrees are removed and the branches kept as reference for the grok and budget ports:
+  - `lair/db63-brief-grok-rpc-lines-5778` has no commits of its own. Its uncommitted diff (grok `rpc.pruv`, `perf/hand_rpc.rs`, `perf/perf_root.pruv`, `perf/run_perf.py`) and notes are kept in the local work records, not in git.
+  - `lair/db64-brief-budget-m12-typed-fcff` ends at `998a5f60`. Its perf gate failed on 18 of 74 cells (RSS 1.38x at M, 1.56x at L). The causes support this plan: a 96-byte `WireNode` because there is no value enum (G-DB64-3, gap V), `encode_key`/`words_array` allocations (G-DB64-7), `bud_vwords` needing an `inout` Vec API (G-DB64-8), and a node built per field in the R cell (G-DB64-9).
 - L3-1..L3-10 test suites, fixtures and hand Rust lanes stay. They are the oracle and baseline harness for the reset.
 
 ## 9. Toward replacing Lair
