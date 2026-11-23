@@ -15,8 +15,8 @@ MUTANTS=[
  ('missing-command','root.pruv','if error == 2 && command_missing','if error == 3 && command_missing'),
  ('drop-title','packet.pruv','"title"','"absentTitle"'),
  ('description-cap','packet.pruv','{ return 65536; }','{ return 10; }'),
- ('readonly','packet.pruv','q[base+6]=1;','q[base+6]=0;'),
- ('destructive','packet.pruv','q[base+7]=dv;','q[base+7]=-1;'),
+ ('readonly','packet.pruv','p[base+6]=1;','p[base+6]=0;'),
+ ('destructive','packet.pruv','p[base+7]=dv;','p[base+7]=-1;'),
 ]
 def main():
  spec=importlib.util.spec_from_file_location('common',HERE.parent/'supervisor/common.py')

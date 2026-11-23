@@ -53,7 +53,7 @@ pub fn tool(input: [i64], d: crate::json::JsonDocument, tool: i64, count: i64) -
   if crate::access::boolean(d,crate::util::field(d,a,"readOnlyHint")) == 1 { p[base+6]=1; }
   p[base+7]=-1; let destructive: i64 = crate::access::boolean(d,crate::util::field(d,a,"destructiveHint"));
   if destructive == 0 || destructive == 1 { p[base+7]=destructive; }
-  let r: [u8] = crate::util::raw(d,tool);
+  let r: [u8] = raw(d,tool);
   if len(r) <= 16000000 && len(p) <= 100000000-len(r) {
     let mut w: [i64] = alloc(len(r),0); let mut i: i64 = 0;
     while i < len(r) invariant 0 <= i && i <= len(r) && len(w) == len(r) decreases len(r)-i
@@ -61,4 +61,12 @@ pub fn tool(input: [i64], d: crate::json::JsonDocument, tool: i64, count: i64) -
     p[base+8]=len(p); p[base+9]=len(w); p=append(p,w);
   }
   return p;
+}
+// Snapshot of the removed util::raw (owned copy of a token's raw bytes), kept here for the OLD perf row only.
+fn raw(d: crate::json::JsonDocument, id: i64) -> [u8] ! alloc {
+  let s: crate::access::Span = crate::access::raw_span(d,id);
+  if s.status != 0 { let e: [u8] = alloc(0,0); return e; }
+  let mut b: [u8] = alloc(s.end-s.start,0); let mut i: i64 = 0;
+  while i < len(b) invariant 0 <= i && i <= len(b) && len(b) == s.end-s.start decreases len(b)-i
+  { b[i]=d.source[s.start+i]; i=i+1; } return b;
 }

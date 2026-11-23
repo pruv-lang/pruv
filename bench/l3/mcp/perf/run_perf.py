@@ -5,8 +5,8 @@
                                         [--no-new] [--cells 0,1,10,50,100,250,500] [--pruvc PATH]
 
 Measured work: one parsed tools/list page (JsonDocument = {source, tape}) plus the current packet (>= 5010 words) in, the
-new packet out. Rows: old (old_packet.pruv + the root loop with array_at), new (packet.pruv plan + write, wrapper
-core_new in perf_root.pruv, wired only when packet.pruv defines `plan`), hand (hand_packet.rs, safe Rust over the same
+new packet out. Rows: old (old_packet.pruv + the root loop with array_at), new (packet.pruv page, inout, wrapper
+core_new in perf_root.pruv, wired only when packet.pruv defines `page`), hand (hand_packet.rs, safe Rust over the same
 source + tape boundary). Parsing is outside every timed region.
 
 check: generated edge-case pages (and chains of pages) go through driver `check`, which compares OLD, NEW and HAND word
@@ -63,7 +63,7 @@ def sh(cmd, cwd=None, what=None):
 
 def has_plan():
     txt = open(os.path.join(MCP, "packet.pruv"), encoding="utf-8").read()
-    return bool(re.search(r"^\s*(pub\s+)?fn\s+plan\b", txt, re.M)) and bool(re.search(r"^\s*(pub\s+)?fn\s+write\b", txt, re.M))
+    return bool(re.search(r"^\s*(pub\s+)?fn\s+page\b", txt, re.M))
 
 
 def strip_new(src):
@@ -432,7 +432,7 @@ def run_check(exe, chains):
 # (packet.pruv: fn names with `_packet_`, not `old_packet`). The source files are not touched; the counted build's
 # output checksum must equal the plain build's.
 CNT_KINDS = ["visits", "stores", "prefix", "zero_fill"]
-DESC_FNS = ("plan", "put_span")  # their stores fill the plan descriptor, not the output packet
+DESC_FNS = ()  # the single-pass page writes no descriptor buffer (the old plan/put_span did)
 
 
 def short_fn(name):
@@ -471,7 +471,7 @@ VISITS_MODE = r"""        "visits" => {
             for c in PRUV_CNT.iter() {
                 c.store(0, Relaxed);
             }
-            let r = call(row, &pages, black_box(&start));
+            let r = call(row, &pages, black_box(&start), own(row, &start));
             for (i, f) in PRUV_FNS.iter().enumerate() {
                 let v: Vec<u64> = (0..4).map(|k| PRUV_CNT[i * 4 + k].load(Relaxed)).collect();
                 println!("FN {} {} {} {} {}", f, v[0], v[1], v[2], v[3]);
@@ -572,6 +572,10 @@ def run_counters(exe, args, tol=0.02):
     gates = {}
     for k in ("visits", "desc_stores", "out_stores", "new_alloc_bytes"):
         ys = [t[k] for t in live]
+        if not any(ys):  # e.g. desc_stores: no descriptor buffer any more
+            gates[k] = {"coef": None, "max_rel_resid": 0.0, "per_tool_step": 0.0, "ok": True}
+            print("linear %-16s all zero  ok" % k)
+            continue
         c, res = lsq_resid(xs, ys)
         ok = len(live) >= 4 and res <= tol
         step = (ys[-1] - ys[0]) / max(live[-1]["tools"] - live[0]["tools"], 1)
@@ -580,8 +584,12 @@ def run_counters(exe, args, tol=0.02):
         bad += 0 if ok else 1
     # Gate 2: one copy. Written words (prefix + output stores) minus out words are the per-record header slot
     # stores into the copied prefix (10 slots, some written twice); never a per-payload or per-packet term.
+    # When the packet grows in place (no prefix copy, page takes p inout), the start packet is never rewritten, so
+    # only the grown words count: written - (out words - start words).
+    start_words = min(t["out_words"] for t in table)
     for t in table:
-        extra = t["prefix_words"] + t["out_stores"] - t["out_words"]
+        grown = t["out_words"] - (start_words if t["prefix_words"] == 0 else 0)
+        extra = t["prefix_words"] + t["out_stores"] - grown
         ok = t["tools"] == 0 or 0 <= extra <= 20 * t["tools"]
         t["rewrites"] = extra
         if not ok:
@@ -708,6 +716,10 @@ def report(cells, rows, out, args, new, pruvc):
                 pc.append({"name": "mcp packet %s tools rss" % cell, "axis": "rss", "size": size(cell),
                            "kind": "proportional", "pruv": n["max_rss_bytes"], "hand": h["max_rss_bytes"],
                            "unit": "bytes", "runs": 3})
+            if n.get("alloc_count") is not None and h.get("alloc_count") is not None:
+                pc.append({"name": "mcp packet %s tools allocs" % cell, "axis": "allocs", "size": size(cell),
+                           "kind": "proportional", "pruv": n["alloc_count"], "hand": h["alloc_count"],
+                           "unit": "count", "runs": 1})
         json.dump({"source": "bench/l3/mcp/perf/run_perf.py perf", "cells": pc},
                   open(os.path.join(WORK, "perf_cells.json"), "w"), indent=1)
         print("perf_cells: " + os.path.join(WORK, "perf_cells.json"))
@@ -727,7 +739,7 @@ def main():
     args = ap.parse_args()
     chains = gen_cases()
     exe, new = build(args.pruvc, not args.no_new)
-    print("NEW row wired: %s" % ("yes" if new else "no (packet.pruv has no plan/write, or --no-new)"))
+    print("NEW row wired: %s" % ("yes" if new else "no (packet.pruv has no page, or --no-new)"))
     bad = 0
     if args.mode in ("check", "all"):
         bad += run_check(exe, chains)

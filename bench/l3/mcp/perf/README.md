@@ -1,5 +1,10 @@
 # P05M: MCP packet core, linear rewrite
 
+> **Superseded (RUST_SHAPE_RESET §6 step 4.1).** `plan`/`write` are gone. The product path is now one pass,
+> `packet::page(inout p, ..)`, in the shape of `hand_packet.rs` `core_hand`; `core_new` in `perf_root.pruv` wraps it.
+> See `bench/l3/mcp/RESHAPE.md` for the structure table, the results and the language gaps. The text below describes
+> the P05M design and is kept as history; the tool (`run_perf.py check|counters|perf|all`) is unchanged in use.
+
 Package P05M of docs/L3_RESTRUCTURE_SPEC.md §6.2. The tools/list page loop of `bench/l3/mcp` no longer copies the
 whole packet once per tool and once per appended field. It computes the accepted descriptors and an output size
 first, allocates once, and writes each accepted tool once via `inout`.
