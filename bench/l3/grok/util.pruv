@@ -31,7 +31,7 @@ pub fn cfg_str(t: [u8], s: i64, l: i64) -> str ! alloc
   let none: str = "";
   if !crate::packet::ref_ok(s, l, len(t)) || s < 0 || l > 1000000 { return copy(none); }
   let b: [u8] = span_bytes(t, s, l);
-  let x: str = crate::jstr::adapter_probe(b);
+  let x: str = crate::jstr::owned_text(move b);
   if len(x) > 1000000 { return copy(none); }
   return copy(x);
 }
@@ -44,7 +44,7 @@ pub fn long_str(t: [u8], s: i64, l: i64) -> str ! alloc
   let none: str = "";
   if !crate::packet::ref_ok(s, l, len(t)) || s < 0 || l > 20000000 { return copy(none); }
   let b: [u8] = span_bytes(t, s, l);
-  let x: str = crate::jstr::adapter_probe(b);
+  let x: str = crate::jstr::owned_text(move b);
   if len(x) > 20000000 { return copy(none); }
   return copy(x);
 }
@@ -103,7 +103,7 @@ pub fn str_at(d: crate::json::JsonDocument, id: i64) -> str ! alloc
   ensures len(result) <= 50331648
 {
   let none: str = "";
-  let t: crate::jstr::Text = crate::access::string_text_scanned(d, id);
+  let t: crate::jstr::Text = crate::access::string_text_scanned_owned(d, id);
   match t {
     crate::jstr::Text::Decoded(x) => {
       if len(x) > 50331648 { return copy(none); }

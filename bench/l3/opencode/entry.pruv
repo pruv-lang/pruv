@@ -129,7 +129,7 @@ fn iso_str(d: crate::json::JsonDocument, id: i64) -> str ! alloc
   let b: [u8] = iso_bytes(d, id);
   if len(b) == 0 { return copy(none); }
   if len(b) != 24 { return copy(flag); }
-  let s: str = crate::jstr::adapter_probe(b);
+  let s: str = crate::jstr::owned_text(move b);
   if len(s) != 24 { return copy(flag); }
   return copy(s);
 }
