@@ -845,6 +845,8 @@ pub struct TypeTable {
     pub g9_ext: HashSet<String>,
     /// G9 A3 (Python `tt.g9_boxed`): labels of the boxed fields; set by `llvmgen::new_tt`, empty otherwise.
     pub g9_boxed: HashSet<String>,
+    /// LLVM code-form enums with overlapping payloads, keyed by name with the payload word bound.
+    pub union_words: HashMap<String, usize>,
 }
 
 impl TypeTable {

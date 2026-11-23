@@ -90,6 +90,7 @@ void *pruv_substr(const uint8_t *data, int64_t len, int64_t lo, int64_t hi);
 void pruv_check_utf8(const uint8_t *data, int64_t len);
 void pruv_runtime_nodes_v1(void);
 void *pruv_node_alloc_v1(int64_t size, int64_t align);
+void *pruv_node_realloc_v1(void *ptr, int64_t old_size, int64_t new_size, int64_t align);
 void pruv_node_free_v1(void *ptr, int64_t size, int64_t align);
 
 #ifdef PRUV_RUST_ALLOCATOR
@@ -135,6 +136,14 @@ _Noreturn void pruv_panic_vec_get_v1(int64_t checked) {
     fflush(stdout);
     fputs(checked ? "pruv: foreign requires violated: vec_get: 0 <= i && i < len(v)\n"
                   : "pruv: invalid representation: index\n", stderr);
+    exit(101);
+}
+
+_Noreturn void pruv_panic_vec_push_v1(int64_t budget_exceeded) {
+    PRUV_HOST_FLUSH();
+    fflush(stdout);
+    fputs(budget_exceeded ? "pruv: foreign contract undefined: vec_push: budget\n"
+                         : "pruv: foreign requires violated: vec_push: len(v) < 2^40\n", stderr);
     exit(101);
 }
 
@@ -461,6 +470,24 @@ void *pruv_node_alloc_v1(int64_t size, int64_t align) {
 #ifdef PRUV_COUNT_ALLOCS
     pruv_n_allocs++;
 #endif
+    return p;
+}
+
+void *pruv_node_realloc_v1(void *ptr, int64_t old_size, int64_t new_size, int64_t align) {
+    if (!pruv_node_layout_ok(new_size, align)) pruv_panic_arith("allocation failed");
+    int64_t bytes = new_size > 0 ? new_size : 1;
+    if (!ptr) return pruv_sys_alloc_v2(1, bytes, align, 0);
+    if (!pruv_node_layout_ok(old_size, align)) pruv_panic_arith("allocation failed");
+    /* a zero-sized block still holds one byte (pruv_node_alloc_v1), so it is resized, not replaced */
+    int64_t old_bytes = old_size > 0 ? old_size : 1;
+#ifdef PRUV_RUST_ALLOCATOR
+    /* The host API multiplies each count by a common size. Count bytes so both
+     * layouts match node alloc/free even when the new size is not a multiple. */
+    void *p = pruv_host_realloc_v2(ptr, old_bytes, bytes, 1, align);
+#else
+    void *p = realloc(ptr, (size_t)bytes);
+#endif
+    if (!p) pruv_panic_arith("allocation failed");
     return p;
 }
 

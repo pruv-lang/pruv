@@ -1,0 +1,10 @@
+// spec: R-6e-21 accept
+enum Tree { Leaf(n: i64), Branch(children: Vec<Tree>) }
+
+fn main() -> () ! alloc, io {
+  let kids: Vec<Tree> = vec_push::<Tree>(vec_new::<Tree>(), Tree::Leaf(1));
+  let leaf: Tree = Tree::Branch(vec_push::<Tree>(vec_new::<Tree>(), Tree::Leaf(2)));
+  // The snapshot costs one unit. The prefix visit needs a second unit.
+  let grown: Vec<Tree> = vec_push::<Tree>(move kids, move leaf);
+  print(len(grown));
+}

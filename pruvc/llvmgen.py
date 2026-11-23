@@ -77,9 +77,9 @@ COPT = "{ i1, i128 }"       # Option/Result stored inside a contract aggregate (
 ARR = "{ ptr, i64, i64 }"   # P3: owned buffer inside the module: { data, len, cap }; cap = allocated element count
 
 # G1 (docs/M2_G1_SPEC.md section 5): user struct/enum layout
-#   %pruv_t_Name  struct: its fields in order ({} if none); enum: { i64 tag, every variant's payload fields in
-#                variant order then field order }.  Inactive payload is always zeroinitializer-derived.
-#   %pruv_c_Name  same shape for requires evaluation: integer leaves are i128, Option/Result are { i1, i128 }.
+#   %pruv_t_Name  struct: its fields in order; enum: i64 tag followed by flattened or overlapping payloads.
+#   %pruv_v_Name__Variant  tag and fields of a payload variant of an overlapping enum.
+#   %pruv_c_Name  flattened form for requires evaluation: integer leaves are i128.
 
 # P3: pruv_alloc / pruv_copy (and pruv_alloc_u8 / pruv_copy_v2 in DECLS_U8) are inline module copies of the
 # runtime functions of the same name: len <= 0 gives NULL, a len above the runtime's bound panics with the same
@@ -559,6 +559,7 @@ DECL_REGROW_V2 = "declare ptr @pruv_regrow_v2(ptr, i64, i64, i64, i64) nounwind\
 # G9 A3: only emitted when the program has a recursive (boxed) edge.  The marker global is kept alive through
 # @llvm.used, so linking a runtime without pruv_runtime_nodes_v1 fails even when no node helper survives inlining.
 DECLS_NODE = ("declare noalias ptr @pruv_node_alloc_v1(i64, i64) nounwind\n"
+              "declare noalias ptr @pruv_node_realloc_v1(ptr, i64, i64, i64) nounwind\n"
               "declare void @pruv_node_free_v1(ptr nocapture, i64, i64) nounwind\n"
               "declare void @pruv_runtime_nodes_v1() nounwind\n"
               "@pruv_nodes_marker = internal global ptr @pruv_runtime_nodes_v1\n"
@@ -728,8 +729,8 @@ def st(t, c=False):
     return "%%pruv_%s_%s" % ("c" if c else "t", n)
 
 
-def payload_index(tt, ty, variant, i):
-    """storage index of field i of `variant` inside the flattened enum %pruv_t_/%pruv_c_ type"""
+def flattened_payload_index(tt, ty, variant, i):
+    """storage index of field i of `variant` in a flattened code or contract enum"""
     # the variant -> base offset map is computed once per (type table, type name): rescanning the variants on every
     # call made helper generation quadratic in the number of variants
     memo = tt.__dict__.setdefault("_payload_memo", {})
@@ -743,6 +744,20 @@ def payload_index(tt, ty, variant, i):
     if variant not in offs:
         raise KeyError(variant)
     return offs[variant] + i
+
+
+def variant_type(tt, ty, variant, c):
+    if not c and variant is not None and ty.name in tt.union_words:
+        return "%%pruv_v_%s__%s" % (ty.name, variant)
+    return st(ty, c)
+
+
+def field_index(tt, ty, variant, i, c=False):
+    if variant is None:
+        return i
+    if not c and ty.name in tt.union_words:
+        return 1 + i
+    return flattened_payload_index(tt, ty, variant, i)
 
 
 def words(tt, ty):
@@ -774,12 +789,85 @@ def fld_label(d, vname, fname):
     return "%s.%s" % (d.name, fname) if vname is None else "%s::%s.%s" % (d.name, vname, fname)
 
 
+UNION_LIMIT = 1 << 40   # word and byte bounds above this rule out overlap (same limit in pruvc-rs)
+
+
+def enum_union_words(tt, abi_types):
+    """Word bounds of code-form enum payloads. Unknown or wider leaves rule out overlap.
+    Each bound is (words, low): words bounds the overlapped size in 8-byte words, low is a lower bound of the
+    flattened size in bytes. An enum overlaps only when 8 * (1 + W) is at most low rounded up to 8, so the union
+    form is never larger than the flattened one on 64-bit targets. Bounds above UNION_LIMIT rule out overlap, so both
+    compilers decide with exact arithmetic."""
+    bounds, unions = {}, {}
+
+    def leaf(words, low):
+        return (words, low)
+
+    def total(parts):
+        return None if None in parts else limited((sum(p[0] for p in parts), sum(p[1] for p in parts)))
+
+    def limited(r):
+        return None if r is None or r[0] > UNION_LIMIT or r[1] > UNION_LIMIT else r
+
+    def bound(ty):
+        if is_native_vec(ty):
+            return leaf(3, 24)
+        if is_collection(ty):
+            return leaf(1, 8)
+        if gopt(ty):
+            parts = [bound(ty.args[0])]
+            if ty.name == "result":
+                parts.append(bound(result_error(ty)))
+            t = total(parts)
+            return None if t is None else limited((1 + t[0], 1 + t[1]))
+        if ty.name == "i64":
+            return leaf(1, 8)
+        if ty.name == "bool":
+            return leaf(1, 1)
+        if ty.name in ("option", "result"):
+            return leaf(2, 2)
+        if ty.name in ("array", "array_u8", "array_bool", "str"):
+            return leaf(3, 24)
+        name = ty.name
+        if name in bounds or name not in tt.decls:
+            return bounds.get(name)
+        # Recursive references in the emitted types go through boxes or vector descriptors.
+        bounds[name] = None
+        d = tt.decls[name]
+
+        def fields_bound(fields, variant):
+            return total([leaf(1, 8) if fld_label(d, variant, f.name) in tt.g9_boxed else bound(f.type)
+                          for f in fields])
+
+        if isinstance(d, StructDecl):
+            r = fields_bound(d.fields, None)
+        else:
+            parts = [fields_bound(v.fields, v.name) for v in d.variants if v.fields]
+            r = None
+            if None not in parts:
+                w = max([1] + [p[0] for p in parts])
+                flat_low = (8 + sum(p[1] for p in parts) + 7) // 8 * 8
+                if len(parts) >= 2 and name not in abi_types and 8 * (1 + w) <= flat_low:
+                    unions[name] = w
+                    r = (1 + w, 8 * (1 + w))
+                else:
+                    r = (1 + sum(p[0] for p in parts), 8 + sum(p[1] for p in parts))
+        r = limited(r)
+        bounds[name] = r
+        return r
+
+    for d in tt.order:
+        bound(Type(d.name))
+    return unions
+
+
 def new_tt(prog):
     """type table of a program: SCC-condensed declaration order for G9 programs (identical to TypeTable otherwise),
     plus the G9 metadata sets tt.g9_ext (extended declaration names) and tt.g9_boxed (boxed field labels)"""
     tt = codegen.make_type_table(prog)
     tt.g9_ext, tt.g9_boxed = codegen.g9_sets(prog)
     tt.rec_vec_elems = set((prog.g9 or {}).get("rec_vec_elems", ()))
+    tt.union_words = enum_union_words(tt, entry_type_closure(prog, tt, llvm_layout=True))
     return tt
 
 
@@ -807,6 +895,12 @@ def type_defs(tt):
                 return ["ptr" if fld_label(d, vname, f.name) in boxed else st(f.type, c) for f in fields]
             if isinstance(d, StructDecl):
                 fs = fs_of(d.fields, None)
+            elif not c and d.name in tt.union_words:
+                fs = ["i64", "[%d x i64]" % tt.union_words[d.name]]
+                for v in d.variants:
+                    if v.fields:
+                        out.append("%s = type { %s }" % (variant_type(tt, Type(d.name), v.name, False),
+                                                         ", ".join(["i64"] + fs_of(v.fields, v.name))))
             else:
                 fs = ["i64"]
                 for v in d.variants:
@@ -841,7 +935,7 @@ class V:
         s.k, s.a, s.b, s.ty, s.p = k, a, b, ty, p
         s.layout = layout
         s.rng = rng
-        s.mv = None     # P3: (owner slot, variant, storage index) of a payload binder of a match on an owned local
+        s.mv = None     # P3: (owner slot, variant, field index, owner dead) for a match payload binder
         s.c = c         # P3 (arr only): allocated element count (cap) SSA; None means cap == len (b)
 
 
@@ -1007,7 +1101,7 @@ class FnGen:
         s.scopes = []
         s.temps = []
         s.ret_cand = {}     # P3: return-movable names -> owner slot (see ret_movable)
-        s.ret_moved = {}    # P3: owner slot address -> None (whole value moved) or {storage index of a moved field}
+        s.ret_moved = {}    # P3: owner slot address -> None (whole value moved) or (variant, {indices of moved fields})
         s.frames = []       # P3: enclosing blocks being lowered: [names declared so far, names named later, loop body,
                             # LG34: the next statement is a return]
         s.moving = set()    # P3: names the copy of the let / assignment being lowered moves (move_src)
@@ -1250,10 +1344,20 @@ class FnGen:
             ty = s.tt.fields(ty)[i].type
         return ptr, ty
 
-    def getf(s, base, ty, idx, fd, variant, c=False):
-        """field value of the aggregate `base` (type ty) at storage index idx; a boxed field is a VIEW of the child
+    def getf(s, base, ty, i, fd, variant, c=False):
+        """field value of the aggregate `base` (type ty); a boxed field is a VIEW of the child
         node (a shallow load, never dropped through this value)"""
-        if not c and s.fb(ty, variant, fd.name):
+        boxed = not c and s.fb(ty, variant, fd.name)
+        if not c and variant is not None and ty.name in s.tt.union_words:
+            p = g9_field_gep(s, ty, s.spill(base), variant, i)
+            if is_native_vec(fd.type):
+                return s.load(Slot("agg", p, None, fd.type))
+            x = s.op("load %s, ptr %s" % ("ptr" if boxed else st(fd.type), p))
+            if boxed:
+                return V("agg", s.op("load %s, ptr %s" % (lty(fd.type), x)), None, fd.type, x)
+            return s.unpack(x, fd.type, False)
+        idx = field_index(s.tt, ty, variant, i, c)
+        if boxed:
             x = s.op("extractvalue %s %s, %d" % (st(ty, c), base.a, idx))
             return V("agg", s.op("load %s, ptr %s" % (lty(fd.type), x)), None, fd.type, x)
         if not c and base.p is not None and is_native_vec(fd.type):
@@ -1261,12 +1365,26 @@ class FnGen:
             return s.load(Slot("agg", p, None, fd.type))
         return s.get(base, ty, idx, fd.type, c)
 
-    def putf(s, acc, ty, idx, v, fd, variant, c=False):
+    def putf(s, acc, ty, i, v, fd, variant, c=False):
         """insertvalue of the owned field value v; a boxed field first moves into a new node"""
+        T = variant_type(s.tt, ty, variant, c)
+        idx = field_index(s.tt, ty, variant, i, c)
         if not c and s.fb(ty, variant, fd.name):
             nd = s.op("call ptr @pruv_box__%s(%s %s)" % (fd.type.name, lty(fd.type), v.a))
-            return s.op("insertvalue %s %s, ptr %s, %d" % (st(ty, c), acc, nd, idx))
-        return s.put(acc, ty, idx, v, fd.type, c)
+            return s.op("insertvalue %s %s, ptr %s, %d" % (T, acc, nd, idx))
+        x = s.pack(v, fd.type, c)
+        return s.op("insertvalue %s %s, %s %s, %d" % (T, acc, st(fd.type, c), x, idx))
+
+    def finish_enum(s, acc, ty, variant, c):
+        T = st(ty, c)
+        Vty = variant_type(s.tt, ty, variant, c)
+        if Vty != T:
+            p = s.new_out(ty)
+            # A shorter variant leaves some of the union's storage untouched.
+            s.ins("store %s zeroinitializer, ptr %s" % (T, p))
+            s.ins("store %s %s, ptr %s" % (Vty, acc, p))
+            acc = s.op("load %s, ptr %s" % (T, p))
+        return V("agg", acc, None, ty)
 
     def assign_path(s, sl, path, v):
         """store the owned value v into the field path of the extended local slot sl (in place).  The old value of
@@ -1409,16 +1527,15 @@ class FnGen:
 
     def drop_rest(s, sl, moved):
         """P3: release an owned extended slot whose value (moved is None) or some unboxed payload fields of its
-        current variant (moved = {storage index}) a return moved out: only the parts that were not moved"""
+        current variant (moved = {field index}) a return moved out: only the parts that were not moved"""
         if moved is None:
             return
         vn, idxs = moved
         for i, fd in enumerate(s.tt.fields(sl.ty, vn)):
             ft = fd.type
-            k = payload_index(s.tt, sl.ty, vn, i)
-            if k in idxs or not (is_arr(ft) or s.is_ext(ft) or is_scalar_vec(ft)):
+            if i in idxs or not (is_arr(ft) or s.is_ext(ft) or is_scalar_vec(ft)):
                 continue
-            gp = g9_gep(s, lty(sl.ty), sl.a, k)
+            gp = g9_field_gep(s, sl.ty, sl.a, vn, i)
             if s.fb(sl.ty, vn, fd.name):
                 s.ins("call void @pruv_dropnode__%s(ptr %s)" % (ft.name, s.op("load ptr, ptr %s" % gp)))
             elif is_arr(ft):
@@ -1772,10 +1889,11 @@ class FnGen:
         ty = Type(e.enum_name)
         vals = [evf(x) for x in e.args]     # left to right
         tag = s.tt.variant_index(ty, e.variant)
-        acc = s.op("insertvalue %s zeroinitializer, i64 %d, 0" % (st(ty, c), tag))
+        variant = e.variant if e.args else None
+        acc = s.op("insertvalue %s zeroinitializer, i64 %d, 0" % (variant_type(s.tt, ty, variant, c), tag))
         for i, fd in enumerate(s.tt.fields(ty, e.variant)):
-            acc = s.putf(acc, ty, payload_index(s.tt, ty, e.variant, i), vals[i], fd, e.variant, c)
-        return V("agg", acc, None, ty)
+            acc = s.putf(acc, ty, i, vals[i], fd, e.variant, c)
+        return s.finish_enum(acc, ty, variant, c)
 
     def mk_gctor(s, e, evf, c):
         """Some/None/Ok/Err of a new Option<X>/Result<X> application (e.ty): zeroinitializer-based, so the unused
@@ -1867,8 +1985,8 @@ class FnGen:
             s.place(l)
             acc = base
             for i, f in enumerate(v.fields):
-                pi = payload_index(s.tt, ty, v.name, i)
-                fx = s.get(x, ty, pi, f.type, False)
+                pi = flattened_payload_index(s.tt, ty, v.name, i)
+                fx = s.getf(x, ty, i, f, v.name) if ty.name in s.tt.union_words else s.get(x, ty, pi, f.type, False)
                 acc = s.put(acc, ty, pi, s.to_c(fx, f.type), f.type, True)
             entries.append((acc, s.cur))
             s.br(join)
@@ -1933,7 +2051,7 @@ class FnGen:
         s.br(end)
         for v, lb in zip(vs, lbls):
             s.place(lb)
-            e = fields_eq(v.fields, lambda i, v=v: payload_index(s.tt, ty, v.name, i))
+            e = fields_eq(v.fields, lambda i, v=v: flattened_payload_index(s.tt, ty, v.name, i))
             entries.append((e, s.cur))
             s.br(end)
         s.place(end)
@@ -2184,7 +2302,7 @@ class FnGen:
             prev = s.ret_moved.get(sl.a)
             s.ret_moved[sl.a] = (vn, (prev[1] if prev else set()) | {k})
         else:
-            s.ins("store %s zeroinitializer, ptr %s" % (ARR, g9_gep(s, lty(sl.ty), sl.a, k)))
+            s.ins("store %s zeroinitializer, ptr %s" % (ARR, g9_field_gep(s, sl.ty, sl.a, vn, k)))
         return x
 
     def take_array(s, name):
@@ -2194,8 +2312,8 @@ class FnGen:
         if kind == "slot":
             s.empty_array_slot(x)
         else:
-            sl, _vn, k, _dead = x.mv
-            s.ins("store %s zeroinitializer, ptr %s" % (ARR, g9_gep(s, lty(sl.ty), sl.a, k)))
+            sl, vn, k, _dead = x.mv
+            s.ins("store %s zeroinitializer, ptr %s" % (ARR, g9_field_gep(s, sl.ty, sl.a, vn, k)))
 
     def empty_array_slot(s, x):
         s.ins("store ptr null, ptr %s" % x.a)
@@ -2644,10 +2762,9 @@ class FnGen:
             s.place(l)
             bind = {}
             for i, (name, fd) in enumerate(zip(a.binders, s.tt.fields(ty, a.ctor))):
-                k = payload_index(s.tt, ty, a.ctor, i)
-                bv = s.getf(sv, ty, k, fd, a.ctor, False)
+                bv = s.getf(sv, ty, i, fd, a.ctor, False)
                 if own is not None and (s.is_ext(fd.type) or is_arr(fd.type) or is_scalar_vec(fd.type)) and not s.fb(ty, a.ctor, fd.name):
-                    bv.mv = (own, a.ctor, k, own_dead)
+                    bv.mv = (own, a.ctor, i, own_dead)
                 bind[name] = ("ssa", bv)
             if s.run_block(a.body, bind):
                 s.br(end)
@@ -2924,15 +3041,15 @@ class FnGen:
         if isinstance(e, Move):   # G6 A3: load the owner slot, then null it
             kind, x = s.lookup(e.name)
             if kind == "ssa" and (is_native_vec(x.ty) or x.k == "coll") and x.mv is not None:
-                sl, _vn, k, _dead = x.mv
+                sl, vn, k, _dead = x.mv
                 zero = "zeroinitializer" if is_native_vec(x.ty) else "null"
-                s.ins("store %s %s, ptr %s" % (lty(x.ty), zero, g9_gep(s, lty(sl.ty), sl.a, k)))
+                s.ins("store %s %s, ptr %s" % (lty(x.ty), zero, g9_field_gep(s, sl.ty, sl.a, vn, k)))
                 return V(x.k, x.a, None, x.ty)
             if kind == "ssa" and x.k == "arr" and x.mv is not None:
                 # G-DB16-1: moving an array binder of a match on an owned local takes the descriptor and empties the
                 # field of the scrutinee (null, 0, 0), so the scrutinee's drop frees nothing twice
-                sl, _vn, k, _dead = x.mv
-                s.ins("store %s zeroinitializer, ptr %s" % (ARR, g9_gep(s, lty(sl.ty), sl.a, k)))
+                sl, vn, k, _dead = x.mv
+                s.ins("store %s zeroinitializer, ptr %s" % (ARR, g9_field_gep(s, sl.ty, sl.a, vn, k)))
                 return x
             v = s.load(x)
             if is_array(e.ty) or e.ty == STR:
@@ -3761,8 +3878,7 @@ class FnGen:
             s.guard(ok, und("variant_field expected %s::%s.%s" % (getattr(e, "src_name", e.enum_name), e.variant, e.field)),
                     False)
             i = s.tt.field_index(ety, e.field, e.variant)
-            g = s.op("getelementptr inbounds %s, ptr %s, i32 0, i32 %d" % (
-                lty(ety), bp, payload_index(s.tt, ety, e.variant, i)))
+            g = g9_field_gep(s, ety, bp, e.variant, i)
             if s.fb(ety, e.variant, e.field):
                 g = s.op("load ptr, ptr %s" % g)
             return g
@@ -3809,11 +3925,12 @@ class FnGen:
             return V("agg", acc, None, sty)
         if isinstance(e, EnumCtor):
             ety = Type(e.enum_name)
-            acc = s.op("insertvalue %s zeroinitializer, i64 %d, 0" % (st(ety), s.tt.variant_index(ety, e.variant)))
+            variant = e.variant if e.args else None
+            acc = s.op("insertvalue %s zeroinitializer, i64 %d, 0" % (
+                variant_type(s.tt, ety, variant, False), s.tt.variant_index(ety, e.variant)))
             for i, (a, fd) in enumerate(zip(e.args, s.tt.fields(ety, e.variant))):
-                acc = s.putf(acc, ety, payload_index(s.tt, ety, e.variant, i), s.g9_real(a, fd.type), fd, e.variant,
-                             False)
-            return V("agg", acc, None, ety)
+                acc = s.putf(acc, ety, i, s.g9_real(a, fd.type), fd, e.variant, False)
+            return s.finish_enum(acc, ety, variant, False)
         t = ty if ty is not None else e.ty
         if isinstance(e, Ctor):
             px = t.args[0] if t is not None and t.args else I64
@@ -4027,7 +4144,7 @@ class FnGen:
             s.guard(ok, und("variant_field expected %s::%s.%s" % (e.enum_name, e.variant, e.field)), False)
             i = s.tt.field_index(b.ty, e.field, e.variant)
             fd = s.tt.fields(b.ty, e.variant)[i]
-            return s.get(b, b.ty, payload_index(s.tt, b.ty, e.variant, i), fd.type, True)
+            return s.get(b, b.ty, flattened_payload_index(s.tt, b.ty, e.variant, i), fd.type, True)
         if isinstance(e, Call):
             n, a = e.name, e.args
             if n in ("file_ok", "file_readable", "file_writable", "file_size", "file_byte"):
@@ -4564,9 +4681,8 @@ def entry_of(m, funcs, f, trust, budget=1 << 30, cost=False, verified=False):
 # Design note.
 #  Layout.  An ordinary acyclic aggregate stays inline (%pruv_t_Name, declaration order).  A field whose type is in the
 #    same recursive type SCC as its container (prog.g9["boxed"]) is an opaque `ptr` to an independently allocated node
-#    holding one %pruv_t_Child; buffers ([i64], [u8], [bool], str) are { ptr, i64 }.  An enum is { i64 tag, every
-#    variant's payload slots }: inactive pointers are null, inactive scalar storage is zero, and only the ACTIVE payload
-#    is ever loaded, cloned, compared, sized or dropped.  Node size and alignment come from the target's own layout
+#    holding one %pruv_t_Child; buffers ([i64], [u8], [bool], str) are { ptr, i64, i64 }. Enum helpers load, clone,
+#    compare, size and drop only the active payload. Node size and alignment come from the target's own layout
 #    (getelementptr-from-null, evaluated by the backend), never from Python host sizes.
 #  Values.  Code evaluates an extended aggregate as an SSA value that is a shallow copy of its storage.  Whether a value
 #    OWNS its resources is decided syntactically, as in the Rust backend: a constructor or a call result is fresh; a
@@ -4597,9 +4713,8 @@ def g9_variants(d):
     return [(v.name, i, v.fields) for i, v in enumerate(d.variants)]
 
 
-def g9_sidx(tt, ty, vn, i):
-    """storage index of field i of variant vn (a struct: vn is None) inside the aggregate"""
-    return i if vn is None else payload_index(tt, ty, vn, i)
+def g9_field_gep(g, ty, p, vn, i):
+    return g9_gep(g, variant_type(g.tt, ty, vn, False), p, field_index(g.tt, ty, vn, i))
 
 
 def g9_each_variant(g, ty, d, base, vs, emit):
@@ -4634,7 +4749,6 @@ def g9_node_layout(g, T):
 
 def g9_drop_text(m, tt, d):
     ty = Type(d.name)
-    T = lty(ty)
     g = FnGen(m, {}, None, True)
     g.place("start")
 
@@ -4643,7 +4757,7 @@ def g9_drop_text(m, tt, d):
             ft = f.type
             if not (is_arr(ft) or g.is_ext(ft) or is_scalar_vec(ft)):
                 continue
-            gp = g9_gep(g, T, "%v", g9_sidx(tt, ty, vn, i))
+            gp = g9_field_gep(g, ty, "%v", vn, i)
             if g.fb(ty, vn, f.name):       # a boxed child: its contents first, then its node
                 c = g.op("load ptr, ptr %s" % gp)
                 g.ins("call void @pruv_dropnode__%s(ptr %s)" % (ft.name, c))
@@ -4671,9 +4785,8 @@ def g9_clone_text(m, tt, d):
             ft = f.type
             if not (is_arr(ft) or g.is_ext(ft) or is_scalar_vec(ft)):
                 continue
-            idx = g9_sidx(tt, ty, vn, i)
-            gs = g9_gep(g, T, "%src", idx)
-            gd = g9_gep(g, T, "%dst", idx)
+            gs = g9_field_gep(g, ty, "%src", vn, i)
+            gd = g9_field_gep(g, ty, "%dst", vn, i)
             if g.fb(ty, vn, f.name):
                 c = g.op("load ptr, ptr %s" % gs)
                 nb = g.op("call ptr @pruv_clonenode__%s(ptr %s)" % (ft.name, c))
@@ -4770,7 +4883,7 @@ def g9_vec_loop(g, length, emit):
     g.place(end)
 
 
-def g9_vec_texts(m, elem):
+def g9_vec_texts(m, elem, budget):
     name, T = elem.name, lty(elem)
     g = FnGen(m, {}, None, True)
     g.place("start")
@@ -4804,7 +4917,7 @@ def g9_vec_texts(m, elem):
     g.place(copy)
     size, align = g9_node_layout(g, T)
     bytes_ = g.op("mul i64 %s, %s" % (length, size))
-    dst = g.op("call ptr @pruv_node_alloc_v1(i64 %s, i64 %s)" % (bytes_, align))
+    dst = g.op("call ptr @pruv_node_realloc_v1(ptr null, i64 0, i64 %s, i64 %s)" % (bytes_, align))
     if g.is_ext(elem):
         def clone(i):
             a = g.vec_element_ptr(elem, data, i)
@@ -4823,7 +4936,22 @@ def g9_vec_texts(m, elem):
     g = FnGen(m, {}, None, True)
     g.place("start")
     data, length, cap = g9_vec_parts(g, "%v")
-    grow, copy, grown, push = (g.label(h) for h in ("vgrow", "vcopy", "vgrown", "vpush"))
+    def fail(panic, drop_element=True):
+        g.ins("call void @pruv_vdrop__%s(ptr %%v)" % name)
+        if drop_element and g.is_ext(elem):
+            g.ins("call void @pruv_drop__%s(ptr %%x)" % name)
+        g.ins(panic)
+
+    if m.foreign_checks != "off":
+        bounded = g.op("icmp ult i64 %s, %d" % (length, 1 << 40))
+        g.guard(bounded, lambda: fail("call void @pruv_panic_vec_push_v1(i64 0)"), False)
+    if m.foreign_checks == "all":
+        # Charge the snapshot before push, like the G6 shim.
+        enough = g.op("icmp uge i64 %d, %s" % (budget, length))
+        g.guard(enough, lambda: fail("call void @pruv_panic_vec_push_v1(i64 1)"), False)
+        remaining = g.op("sub i64 %d, %s" % (budget, length))
+    ready = g.cur
+    grow, push = g.label("vgrow"), g.label("vpush")
     full = g.op("icmp eq i64 %s, %s" % (length, cap))
     g.condbr(full, grow, push)
     g.place(grow)
@@ -4835,30 +4963,30 @@ def g9_vec_texts(m, elem):
     bytes_ = g.op("extractvalue { i64, i1 } %s, 0" % mul)
     overflow = g.op("extractvalue { i64, i1 } %s, 1" % mul)
 
-    def fail():
-        g.ins("call void @pruv_vdrop__%s(ptr %%v)" % name)
-        if g.is_ext(elem):
-            g.ins("call void @pruv_drop__%s(ptr %%x)" % name)
-        g.ins("call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)")
-    g.guard(overflow, fail, True)
-    new = g.op("call ptr @pruv_node_alloc_v1(i64 %s, i64 %s)" % (bytes_, align))
-    g.condbr(empty, grown, copy)
-    g.place(copy)
-    old = g.op("mul i64 %s, %s" % (length, size))
-    g.ins("call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)" % (new, data, old))
-    g.ins("call void @pruv_node_free_v1(ptr %s, i64 %s, i64 %s)" % (data, old, align))
-    g.br(grown)
-    g.place(grown)
+    g.guard(overflow, lambda: fail("call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)"), True)
+    grown = g.cur
+    old = g.op("mul i64 %s, %s" % (cap, size))
+    new = g.op("call ptr @pruv_node_realloc_v1(ptr %s, i64 %s, i64 %s, i64 %s)" % (data, old, bytes_, align))
     g.ins("store ptr %s, ptr %%v" % new)
     g.ins("store i64 %s, ptr %s" % (ncap, g9_gep(g, ARR, "%v", 2)))
     g.br(push)
     g.place(push)
-    buf = g.op("phi ptr [ %s, %%start ], [ %s, %%%s ]" % (data, new, grown))
+    buf = g.op("phi ptr [ %s, %%%s ], [ %s, %%%s ]" % (data, ready, new, grown))
     slot = g.vec_element_ptr(elem, buf, length)
     value = g.op("load %s, ptr %%x" % T)
     g.ins("store %s %s, ptr %s" % (T, value, slot))
     ln = g.op("add i64 %s, 1" % length)
     g.ins("store i64 %s, ptr %s" % (ln, g9_gep(g, ARR, "%v", 1)))
+    if m.foreign_checks == "all":
+        # The shim charges the prefix even when S is extended, then charges the new element.
+        # The vector now owns the inserted element, so its drop handles both arguments.
+        def budget_fail():
+            fail("call void @pruv_panic_vec_push_v1(i64 1)", drop_element=False)
+        enough = g.op("icmp uge i64 %s, %s" % (remaining, length))
+        g.guard(enough, budget_fail, False)
+        remaining = g.op("sub i64 %s, %s" % (remaining, length))
+        enough = g.op("icmp uge i64 %s, 1" % remaining)
+        g.guard(enough, budget_fail, False)
     g.term("ret void")
     return [drop_text, clone_text, g.render("define internal void @pruv_vpush__%s(ptr %%v, ptr %%x)" % name)]
 
@@ -4928,7 +5056,6 @@ def g9_weight(g, t, p, bud="%bud"):
 def g9_size_text(m, tt, d):
     """pruv_csize__T: 1 + the weights of the ACTIVE fields, checked i128 additions in field order, one budget unit"""
     ty = Type(d.name)
-    T = lty(ty)
     g = FnGen(m, {}, None, True)
     g.place("start")
     g.budget = "%bud"
@@ -4939,7 +5066,7 @@ def g9_size_text(m, tt, d):
         for i, f in enumerate(fs):
             if not g9_walks(f.type):
                 continue
-            gp = g9_gep(g, T, "%v", g9_sidx(tt, ty, vn, i))
+            gp = g9_field_gep(g, ty, "%v", vn, i)
             if g.fb(ty, vn, f.name):
                 gp = g.op("load ptr, ptr %s" % gp)
             acc = g.checked("i128", "sadd", "+", acc, g9_weight(g, f.type, gp))
@@ -5014,7 +5141,6 @@ def g9_eq_val(g, t, pa, pb):
 def g9_eq_text(m, tt, d):
     """pruv_ceq__T: one budget unit, then equal tags and the fields of the active variant, left to right"""
     ty = Type(d.name)
-    T = lty(ty)
     g = FnGen(m, {}, None, True)
     g.place("start")
     g.budget = "%bud"
@@ -5023,8 +5149,7 @@ def g9_eq_text(m, tt, d):
 
     def conj(vn, fs):
         for i, f in enumerate(fs):
-            idx = g9_sidx(tt, ty, vn, i)
-            pa, pb = g9_gep(g, T, "%a", idx), g9_gep(g, T, "%b", idx)
+            pa, pb = g9_field_gep(g, ty, "%a", vn, i), g9_field_gep(g, ty, "%b", vn, i)
             if g.fb(ty, vn, f.name):
                 pa, pb = g.op("load ptr, ptr %s" % pa), g.op("load ptr, ptr %s" % pb)
             e = g9_eq_val(g, f.type, pa, pb)
@@ -5054,7 +5179,7 @@ def g9_eq_text(m, tt, d):
     return g.render("define internal i1 @pruv_ceq__%s(ptr %%a, ptr %%b, ptr %%bud)" % d.name)
 
 
-def g9_helper_chunks(m, tt):
+def g9_helper_chunks(m, tt, budget):
     """clone / drop / node helpers of every extended type (SCC-condensed order), then the contract size / equality
     helpers the requires checks needed (closed over the nominal field types, declaration order)"""
     boxed = tt.g9_boxed
@@ -5074,7 +5199,7 @@ def g9_helper_chunks(m, tt):
             chunks.extend(g9_node_texts(m, tt, d))
 
     for name in sorted(m.vec_elems):
-        chunks.extend(g9_vec_texts(m, Type(name)))
+        chunks.extend(g9_vec_texts(m, Type(name), budget))
 
     def close(seed):
         out, work = set(), sorted(seed)
@@ -5728,13 +5853,14 @@ def is_host_abi_fn(f, tt, explicit):
     return exports_abi(f, tt, explicit)
 
 
-def entry_type_closure(prog, tt):
-    """G4 A3: names of the nominal types reachable from the host entry signatures (parameters and results), following
-    Option/Result arguments and struct fields / enum payloads, with a visited set (cycles)"""
+def entry_type_closure(prog, tt, llvm_layout=False):
+    """G4 A3: nominal types reachable from explicit host entries. For LLVM layout, include legacy exports and foreign
+    signatures as well. Follow type arguments, struct fields and enum payloads."""
     seen = set()
     work = []
+    explicit = bool(prog.explicit) if llvm_layout else True
     for f in prog.functions:
-        if is_host_abi_fn(f, tt, True):
+        if is_host_abi_fn(f, tt, explicit) or (llvm_layout and f.foreign is not None):
             work += [p.type for p in f.params] + [f.ret]
     while work:
         t = work.pop()
@@ -6727,7 +6853,7 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         if not getattr(f, "private", False) and not coll:  # G3: a generic specialization has no ABI symbol
             chunks.append(abi_of(f, tt, m))
     if tt.g9_ext or m.vec_elems or m.need_size or m.need_eq:   # G9 A3: clone / drop / node helpers, then the contract helpers above
-        chunks.extend(g9_helper_chunks(m, tt))
+        chunks.extend(g9_helper_chunks(m, tt, budget))
     # G9 A3: buffer fields count as uses of the buffer runtime declarations
     has_str = uses_str(prog, cost=not verified) or type_has_field(prog, "str")  # G2 B2: walk the AST once
     g6decls = ""
@@ -6766,6 +6892,8 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         g6decls + "\n" + "\n".join(chunks))  # G2 A5/B2, G3, G6 A3, G9 A3; P2 batch 4: llvm.bswap when used
     if m.vec_get_check:
         ir += "declare void @pruv_panic_vec_get_v1(i64) noreturn cold nounwind\n"
+    if m.vec_elems and foreign_checks != "off":
+        ir += "declare void @pruv_panic_vec_push_v1(i64) noreturn cold nounwind\n"
     if m.uses_utf8_valid:
         ir += Path(__file__).with_name("utf8_valid.ll").read_text()
     if m.uses_utf8_panic:

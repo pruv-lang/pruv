@@ -1,0 +1,56 @@
+// spec: R-6e-21 accept
+enum Tree { Leaf(n: i64), Branch(children: Vec<Tree>) }
+enum Shape { A(x: i64), B(p: i64, q: bool), C(v: Vec<i64>) }
+enum Single { Empty, Value(n: i64) }
+enum Plain { Small(b: bool), Pair(n: i64, b: bool), Empty }
+enum Nested { Value(p: Plain), Other(n: i64) }
+enum HostValue { Number(n: i64), Flag(b: bool) }
+struct HostRecord { value: HostValue }
+enum Chain { End(xs: [i64]), Next(t: Chain) }
+enum Flags { Many(a: bool, b: bool, c: bool, d: bool, e: bool, f: bool, g: bool, h: bool), One(z: bool) }
+
+fn host_identity(x: HostRecord) -> HostRecord { return x; }
+
+fn check_clone(t: Tree, c: Tree, p: Nested) -> i64
+  requires size(c) <= 10
+  requires is_variant(t, Tree::Branch) && is_variant(c, Tree::Branch)
+  requires len(variant_field(t, Tree::Branch, children)) == len(variant_field(c, Tree::Branch, children))
+  requires p == Nested::Value(Plain::Pair(9, true))
+{
+  match c {
+    Tree::Leaf(n) => { return n; }
+    Tree::Branch(children) => { return len(children); }
+  }
+}
+
+fn shape_value(s: Shape) -> i64 {
+  match s {
+    Shape::A(x) => { return x; }
+    Shape::B(p, q) => {
+      if q { return p; }
+      return 0;
+    }
+    Shape::C(v) => { return len(v); }
+  }
+}
+
+fn main() -> () ! alloc, io {
+  let t: Tree = Tree::Branch(vec_push::<Tree>(vec_new::<Tree>(), Tree::Leaf(7)));
+  let c: Tree = t;
+  print(check_clone(t, c, Nested::Value(Plain::Pair(9, true))));
+  print(shape_value(Shape::A(4)));
+  print(shape_value(Shape::B(5, true)));
+  let s: Shape = Shape::C(vec_push::<i64>(vec_new::<i64>(), 6));
+  let copy: Shape = s;
+  print(shape_value(copy));
+  let fl: Flags = Flags::One(true);
+  match fl {
+    Flags::Many(f1, f2, f3, f4, f5, f6, f7, f8) => { print(0); }
+    Flags::One(z) => { if z { print(1); } }
+  }
+  let ch: Chain = Chain::Next(Chain::End(alloc(2, 1)));
+  match ch {
+    Chain::End(xs) => { print(0); }
+    Chain::Next(nx) => { print(2); }
+  }
+}

@@ -706,7 +706,9 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   iteration. Collections are freed automatically. `ensures` may mention a consumed parameter: it means the value at entry.
 - **Run-time boundary checks** (`--foreign-checks`): `requires` (default) checks foreign and catalog preconditions at
   run time, subject to R-6d-2; `all` also checks their postconditions (snapshots; slower, repeated appends become quadratic; on the LLVM backend
-  the bytes copied by `string_to_str` are not re-compared); `off` skips
+  the bytes copied by `string_to_str` are not re-compared; a native `Vec<S>` push of the LLVM backend checks the
+  `len(v) < 2^40` precondition and charges the contract budget as the shim does, but does not re-check the shim's
+  postconditions, because the push is compiled code and not a foreign implementation); `off` skips
   both (only with verification). Failures exit 101 with `pruv: foreign requires violated:`, `pruv: foreign ensures
   violated:`, `pruv: foreign contract undefined:` or `pruv: foreign panic:`.
 - **Build.** The Rust backend supports all of the above. The LLVM backend supports collections of `i64`/`bool` and trusted
@@ -1151,7 +1153,7 @@ fn tree_count(t: Tree) -> i64
   LLVM backend a native vector or a §6d handle never crosses the C ABI: a host entry whose signature has one is
   rejected as under the Limits below (`type/entry_signature`, or `codegen/unsupported_type` at the LLVM layer). The
   allocator that made a block frees it: native vector buffers use the runtime node allocator
-  (`pruv_node_alloc_v1` / `pruv_node_free_v1`), §6d handles the shim's Rust allocator, and the two are never mixed.
+  (`pruv_node_alloc_v1` / `pruv_node_realloc_v1` / `pruv_node_free_v1`), §6d handles the shim's Rust allocator, and the two are never mixed.
   On failure (a resource failure or a failed run-time check) the program stops; values owned by the failing call
   are not handed back, and the moved arguments of a call belong to the callee from the call on. A future C ABI for
   owned collections must name the allocator in the symbol version (as `_v1` does) and give the free function with

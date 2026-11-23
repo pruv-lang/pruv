@@ -1,0 +1,5 @@
+{
+  "backend": "llvm",
+  "gen_regex": ["(?s)^define internal void @pruv_vpush__Tree\\([^\\n]*\\) \\{(?:(?!^\\}).)*call ptr @pruv_node_realloc_v1"],
+  "gen_regex_absent": ["(?s)^define internal void @pruv_vpush__Tree\\([^\\n]*\\) \\{(?:(?!^\\}).)*@(?:llvm\\.memcpy|pruv_node_free_v1)"]
+}

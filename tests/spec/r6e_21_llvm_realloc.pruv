@@ -1,0 +1,32 @@
+// spec: R-6e-21 accept
+enum Tree { Leaf(n: i64), Branch(children: Vec<Tree>) }
+
+fn main() -> () ! alloc, io {
+  let mut kids: Vec<Tree> = vec_new::<Tree>();
+  let mut i: i64 = 0;
+  while i < 20
+    invariant 0 <= i && i <= 20
+    invariant len(kids) == i
+    decreases 20 - i
+  {
+    kids = vec_push::<Tree>(move kids, Tree::Leaf(i));
+    i = i + 1;
+  }
+
+  let mut j: i64 = 0;
+  let mut total: i64 = 0;
+  while j < len(kids)
+    invariant 0 <= j && j <= len(kids)
+    invariant 0 <= total && total <= 400
+    decreases len(kids) - j
+  {
+    match vec_get::<Tree>(kids, j) {
+      Tree::Leaf(n) => {
+        if 0 <= n && n < 20 && total <= 380 { total = total + n; }
+      }
+      Tree::Branch(children) => { }
+    }
+    j = j + 1;
+  }
+  print(total);
+}
