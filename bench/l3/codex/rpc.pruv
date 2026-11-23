@@ -110,14 +110,12 @@ fn receive(take l: Loop, slot: i64, overall: i64,
     }
   }
   if st[2] == st[4] && ev_ok(q) && crate::transport::live(q, slot) && !ev_eof(q, slot) {
-    q = ev_proc_read(move q, slot, 1, 65536);
+    // DB58: read straight into `chunk` (no `ev_bytes` copy of the loop buffer per read)
+    let mut got: i64 = 0;
+    q = ev_proc_read_into(move q, slot, 1, inout chunk, inout got);
     if ev_ok(q) {
-      let data: [u8] = ev_bytes(q);
-      if len(data) <= 65536 {
-        copy_range(inout chunk, 0, data, 0, len(data));
-        st[4] = len(data);
-        st[2] = 0;
-      }
+      st[4] = got;
+      st[2] = 0;
     }
   }
   let begin: i64 = st[2];
