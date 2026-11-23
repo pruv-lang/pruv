@@ -1,0 +1,9 @@
+// spec: R-6e-21 reject
+// An owned recursive vector value never crosses the C ABI: a host entry with one is rejected.
+pub enum Tree { Leaf, Branch(xs: Vec<Tree>) }
+pub fn count(t: Tree) -> i64 {
+  match t {
+    Tree::Leaf => { return 0; }
+    Tree::Branch(xs) => { return len(xs); }
+  }
+}

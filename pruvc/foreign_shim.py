@@ -20,7 +20,7 @@ pointer (File updates consume the old box and return a fresh box).  The helper-n
 `pruv_g6_v1_pruv_g6_vec_push__i`, `trusted rust fn min2` -> `pruv_g6_v1_min2`).
 """
 from vast import *
-from typeinfo import encode, is_collection, is_owned_result, uses_array_type, uses_str
+from typeinfo import TypeTable, encode, is_collection, is_owned_result, is_scalar_vec, uses_array_type, uses_str
 from codegen import (Gen, rty, CONTRACT_PRELUDE_G6, CONTRACT_PRELUDE_U8, CONTRACT_PRELUDE_BOOL,
                      CONTRACT_PRELUDE_STR, G6_PRELUDE, FILE_PRELUDE, proc_prelude, net_prelude, async_prelude, async_proc_prelude)
 from foreign import CATALOG, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS, ASYNC_OBSERVERS
@@ -63,6 +63,10 @@ def drop_sym(t):
     return "%sdrop__%s" % (PREFIX, cname(t))
 
 
+def clone_sym(t):
+    return "%s%s_clone" % (PREFIX, cname(t))
+
+
 def len_sym(t):
     return "%slen__%s" % (PREFIX, cname(t))
 
@@ -92,15 +96,20 @@ def _walk(node, fn):
 
 
 def collect(prog):
-    """(cats, colls, trusted): cats: helper name -> (op, low types); colls: <C> -> collection Type (sorted by the
-    caller); trusted: name -> Function of the trusted declarations called from a body"""
+    """(cats, colls, trusted, field_vecs): cats: helper name -> (op, low types); colls: <C> -> collection Type (sorted by the
+    caller); trusted: name -> called trusted declaration; field_vecs: scalar Vec types used as owned fields"""
     cats, colls, trusted = {}, {}, {}
+    field_vecs = {fd.type for d in prog.types for fd in TypeTable._all_fields(d) if is_scalar_vec(fd.type)}
+    rec_elems = set((prog.g9 or {}).get("rec_vec_elems", ()))
+
+    def native(t):
+        return t is not None and t.name == "vec" and t.args[0].name in rec_elems
     fmap = {}
     for f in prog.functions:
         fmap.setdefault(f.name, f)
 
     def add(t):
-        if t is not None and is_collection(t):
+        if t is not None and is_collection(t) and not native(t):
             colls.setdefault(cname(t), t)
         elif is_owned_result(t):    # LG12 E2: the String error handle is dropped through drop__string
             colls.setdefault("string", Type("string"))
@@ -114,6 +123,8 @@ def collect(prog):
         if isinstance(n, Call):
             if n.name in CATALOG and n.name not in CATALOG_CONTRACT_ONLY:
                 low, src = inst_types(n)
+                if n.name in ("vec_new", "vec_push", "vec_get", "vec_at_mut") and low[0].name in rec_elems:
+                    return
                 cats.setdefault(helper_name(n.name, src), (n.name, low))
                 # helper edges (incl. G10 proc/net A3 bounds guards) live in pruvc/data/shim_edges.json
                 for caller, bound in SHIM_EDGES:
@@ -124,6 +135,8 @@ def collect(prog):
                 if f is not None and f.foreign is not None:
                     trusted.setdefault(n.name, f)
 
+    for ty in field_vecs:
+        add(ty)
     for f in prog.functions:
         if f.foreign is not None:
             continue
@@ -137,7 +150,7 @@ def collect(prog):
         _walk(f.requires, contract_visit)
         _walk(f.ensures, contract_visit)
         _walk(getattr(f, "cost", None), contract_visit)
-    return cats, colls, trusted
+    return cats, colls, trusted, field_vecs
 
 
 # ---------------------------------------------------------------------------
@@ -558,7 +571,7 @@ def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign
     unbox: sorted names of the trusted String functions lowered unboxed (P3 M5), one `<f>__str` adapter each;
     pre: P10H symbol prefix (`<pkg>__`, or "" for a program without a package name) of every `pruv_g6_v1_*` adapter
     and of the `pruv_g6_bridge_v1` marker, as the .ll side references them"""
-    cats, colls, trusted = collect(prog)
+    cats, colls, trusted, field_vecs = collect(prog)
     # helper discovery: exactly the A2 helpers (same texts, same mode and budget).  The entry checks of the Rust
     # source backend are not emitted here (trust=True): the LLVM entries evaluate requires themselves.
     g = Gen(prog, verified, True, budget, foreign_checks)
@@ -614,6 +627,9 @@ def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign
             adapters.append(_unbox_adapter(trusted[name]))
     for key in sorted(colls):
         adapters.append(_coll_adapters(colls[key]))
+    for t in sorted(field_vecs, key=cname):
+        adapters.append(_fn(clone_sym(t), "h: PruvH", "PruvH",
+                            "pruv_g6_guard(|| pruv_g6_new(pruv_g6_ref::<%s>(h).clone()))" % rty(t)))
     out.extend(prefix_adapter(a, pre) for a in adapters)
     out.append("}")
     if g.ev:

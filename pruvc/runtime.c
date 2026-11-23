@@ -129,6 +129,15 @@ _Noreturn void pruv_panic_requires(const char *fn, const char *expr) {
     exit(101);
 }
 
+/* LB3 native vectors use the same bounds failure messages as G6 vec_get. */
+_Noreturn void pruv_panic_vec_get_v1(int64_t checked) {
+    PRUV_HOST_FLUSH();
+    fflush(stdout);
+    fputs(checked ? "pruv: foreign requires violated: vec_get: 0 <= i && i < len(v)\n"
+                  : "pruv: invalid representation: index\n", stderr);
+    exit(101);
+}
+
 _Noreturn void pruv_panic_undefined(const char *detail) {
     PRUV_HOST_FLUSH();
     fflush(stdout);

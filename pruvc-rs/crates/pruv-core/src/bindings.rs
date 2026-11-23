@@ -265,9 +265,10 @@ fn struct_inout_abi_error_at(
             let (message, fix) = if entries_only {
                 (format!("host entry {name} takes an inout struct, which has no C ABI"), "use Rust raw_entries crate or unsafe")
             } else {
-                // G-LG7-1: an internal inout Vec<i64> / Vec<bool> passes its handle; a host entry keeps rejecting
+                // The LLVM collection check validates nominal vector elements after the ABI check.
                 let kind = if f.params.iter().any(|p| p.mode_pos.is_some() && crate::gtype::key_is_collection(&p.ty)
-                    && (host || !crate::gtype::key_is_scalar_vec(&p.ty)))
+                    && (host || !(crate::gtype::key_is_scalar_vec(&p.ty)
+                        || crate::llvmgen::native_vec_elem(&p.ty).is_some())))
                 {
                     "collection"
                 } else if host {
@@ -336,8 +337,13 @@ pub fn owned_collection_abi_error(
     if let Some(e) = llvm_param_abi_error(prog, g4) {
         return Some(e);
     }
+    let vec_elems = crate::llvmgen::recursive_vec_elements(prog);
     for d in &prog.types {
-        if d.all_fields().iter().any(|f| crate::gtype::key_is_collection(&f.ty)) {
+        if d.all_fields().iter().any(|f| {
+            crate::gtype::key_is_collection(&f.ty)
+                && !crate::gtype::key_is_scalar_vec(&f.ty)
+                && !crate::llvmgen::native_vec_elem(&f.ty).is_some_and(|elem| vec_elems.contains(elem))
+        }) {
             let name = prog.explicit.as_ref().and_then(|e| e.tdisp.get(d.name())).map_or(d.name(), String::as_str);
             return Some(err(d.line(), d.col(), format!("{} has owned collection fields, which need the Rust backend", name)));
         }
@@ -368,6 +374,20 @@ pub fn owned_collection_abi_error(
             }
             if crate::gtype::key_is_scalar_vec(&f.ret) {
                 return Some(err(f.line, f.col, format!("host entry {} returns a Vec, which has no C ABI", name)));
+            }
+            let mut work: Vec<_> = std::iter::once(&f.ret).chain(f.params.iter().map(|p| &p.ty))
+                .map(|ty| GType::from_key(ty)).collect();
+            let mut seen = std::collections::HashSet::new();
+            while let Some(ty) = work.pop() {
+                if ty.is_collection() {
+                    return Some(err(f.line, f.col, format!("host entry {name} has owned collections in its signature, which have no C ABI")));
+                }
+                work.extend(ty.args.iter().cloned());
+                if ty.is_user_type() && seen.insert(ty.name.clone()) {
+                    if let Some(d) = prog.types.iter().find(|d| d.name() == ty.name) {
+                        work.extend(d.all_fields().iter().map(|field| GType::from_key(&field.ty)));
+                    }
+                }
             }
         }
     }

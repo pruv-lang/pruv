@@ -16,7 +16,7 @@ use crate::codegen::{
 use crate::emit_common::rty_g;
 use crate::foreign::{is_catalog, is_catalog_contract_only, FILE_OBSERVERS, NET_OBSERVERS, PROC_OBSERVERS, ASYNC_OBSERVERS};
 use crate::gtype::{encode, GType};
-use crate::llvmgen::{expr_ty, is_collection, is_owned_result};
+use crate::llvmgen::{expr_ty, is_collection, is_owned_result, native_vec_call_elem};
 use crate::typeinfo::{uses_array_type, uses_str};
 use std::collections::{BTreeMap, HashMap};
 
@@ -72,6 +72,10 @@ pub fn cname(t: &GType) -> R<String> {
 
 fn parse_key(key: &str) -> R<GType> {
     GType::try_from_key(key)
+}
+
+pub fn clone_sym(key: &str) -> R<String> {
+    Ok(format!("{}{}_clone", PREFIX, cname(&parse_key(key)?)?))
 }
 
 /// `pruv_g6_v1_drop__<C>` of the collection type key `key`
@@ -254,6 +258,13 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
         fmap.entry(f.name.as_str()).or_insert(f);
     }
     let mut err: Option<String> = None;
+    for d in &prog.types {
+        for field in d.all_fields() {
+            if crate::gtype::key_is_scalar_vec(&field.ty) {
+                add_coll(&mut colls, &field.ty, &mut err);
+            }
+        }
+    }
     for f in &prog.functions {
         if f.foreign.is_some() {
             continue;
@@ -271,6 +282,9 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
                 }
                 if let Expr::Call(c) = e {
                     if is_catalog(&c.name) && !is_catalog_contract_only(&c.name) {
+                        if native_vec_call_elem(c).is_some() && !fmap.contains_key(c.name.as_str()) {
+                            return;
+                        }
                         let (low, src) = inst_types(c);
                         match helper_name(&c.name, &src) {
                             Ok(h) => {
@@ -1029,6 +1043,20 @@ pub fn build_shim(
     }
     for t in colls.values() {
         adapters.push(coll_adapters(t)?);
+    }
+    // Clone adapters follow all collection adapters, ordered by their symbol suffix.
+    for t in colls.values() {
+        let key = t.to_key();
+        if crate::gtype::key_is_scalar_vec(&key)
+            && prog.types.iter().any(|d| d.all_fields().iter().any(|field| field.ty == key))
+        {
+            adapters.push(fn_text(
+                &clone_sym(&key)?,
+                "h: PruvH",
+                Some("PruvH"),
+                &format!("pruv_g6_guard(|| pruv_g6_new(pruv_g6_ref::<{}>(h).clone()))", rty_t(t)),
+            ));
+        }
     }
     out.extend(adapters.iter().map(|a| prefix_adapter(a, pre)));
     out.push("}".to_string());

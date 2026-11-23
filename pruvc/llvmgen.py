@@ -676,8 +676,15 @@ def is_new_app(t):
     return gopt(t) or (is_user_type(t) and t.name.startswith(G3_TYPE_PREFIX))
 
 
+def is_native_vec(t):
+    return (t is not None and t.owner is None and t.name == "vec" and len(t.args) == 1
+            and is_user_type(t.args[0]))
+
+
 def lty(t):
     """internal SSA type of a Pruv type"""
+    if is_native_vec(t):
+        return ARR
     if is_collection(t):  # G6 A3: opaque handle
         return "ptr"
     if gopt(t):
@@ -688,6 +695,8 @@ def lty(t):
 
 
 def vkind(t):
+    if is_native_vec(t):
+        return "agg"
     if is_collection(t):  # G6 A3
         return "coll"
     if gopt(t):
@@ -699,6 +708,8 @@ def vkind(t):
 def st(t, c=False):
     """storage type of a value of type t inside an aggregate (c: contract/i128 form)"""
     n = t.name
+    if is_native_vec(t):
+        return ARR
     if is_collection(t):    # LG12 E2: the error slot of Result<T, String> holds the String handle
         return "ptr"
     if gopt(t):
@@ -768,11 +779,14 @@ def new_tt(prog):
     plus the G9 metadata sets tt.g9_ext (extended declaration names) and tt.g9_boxed (boxed field labels)"""
     tt = codegen.make_type_table(prog)
     tt.g9_ext, tt.g9_boxed = codegen.g9_sets(prog)
+    tt.rec_vec_elems = set((prog.g9 or {}).get("rec_vec_elems", ()))
     return tt
 
 
 def is_ext_t(tt, t):
     """t is an extended user type (G9): recursive, or holding a buffer or an extended type"""
+    if is_native_vec(t):
+        return True
     if t is not None and is_owned_result(t):
         # LG12 E2: Result<T, String> is an owned aggregate { i1, L(T), ptr }: it travels through output storage / ptr
         # parameters like an extended value and has no host ABI wrapper; its String handle is null on the Ok side
@@ -868,6 +882,10 @@ class Mod:
         s.overlap = False       # mutable host entries: some wrapper calls @pruv_overlap (DECLS_OVERLAP is emitted)
         s.need_size = set()     # G9 A3: types whose runtime-contract size / equality helpers are needed
         s.need_eq = set()
+        s.owned_collection_fields = False
+        s.vec_elems = set()
+        s.vec_get_check = False
+        s.foreign_checks = "requires"
         s.stack = None          # P3-S1: StackPlan (set by gen_llvm)
         s.fill = False          # P3-S1: some stack array calls @pruv_fill_v2
         s.tail = set()          # P3: tail-filled alloc helpers used ("i64" -> pruv_alloc_tail, "u8" -> _u8)
@@ -932,7 +950,7 @@ def exports_abi(f, tt, explicit):
 
 
 def inout_slot_param(p):
-    return p.mode == "inout" and (is_agg(p.type) or p.type in (I64, BOOL) or getattr(p, "resizable", False))
+    return p.mode == "inout" and (is_agg(p.type) or is_native_vec(p.type) or p.type in (I64, BOOL) or getattr(p, "resizable", False))
 
 
 def ir_params(f, tt=None):
@@ -968,8 +986,9 @@ def sig_text(params, f):
     mut = {"%%p.%s%s" % (mangle(p.name), ".a" if is_arr(p.type) and not inout_slot_param(p) else "")
            for p in f.params if p.mode == "inout"}
     take = {"%%p.%s.a" % mangle(p.name) for p in f.params if p.take and is_array(p.type)}
-    take |= {"%%p.%s" % mangle(p.name) for p in f.params if p.take and is_agg(p.type)}   # LG9: owned record storage
-    return ", ".join("%s %s" % (("ptr noalias nocapture" if n in mut else "ptr noalias nocapture readonly")
+    take |= {"%%p.%s" % mangle(p.name) for p in f.params if p.take and (is_agg(p.type) or is_native_vec(p.type))}   # LG9: owned record storage
+    reads = {"%%p.%s" % mangle(p.name) for p in f.params if is_native_vec(p.type)}
+    return ", ".join("%s %s" % (("ptr noalias nocapture" if n in mut else ("ptr nocapture readonly" if n in reads else "ptr noalias nocapture readonly"))
                                 if t == "ptr" and n != "%out" and not n.endswith(".h") and n not in take else t, n)
                      for t, n in params)
 
@@ -1182,14 +1201,27 @@ class FnGen:
         """deep copy of the extended value v (a view) into new owned storage"""
         src = s.spill(v)
         dst = s.new_out(v.ty)
-        s.ins("call void @pruv_clone__%s(ptr %s, ptr %s)" % (v.ty.name, src, dst))
+        if is_native_vec(v.ty):
+            s.m.vec_elems.add(v.ty.args[0].name)
+            s.ins("call void @pruv_vclone__%s(ptr %s, ptr %s)" % (v.ty.args[0].name, src, dst))
+        else:
+            s.ins("call void @pruv_clone__%s(ptr %s, ptr %s)" % (v.ty.name, src, dst))
         return V("agg", s.op("load %s, ptr %s" % (lty(v.ty), dst)), None, v.ty, dst)
 
     def drop_agg(s, v):
         if is_owned_result(v.ty):   # LG12 E2
             s.drop_oresult(v.ty, s.spill(v))
             return
-        s.ins("call void @pruv_drop__%s(ptr %s)" % (v.ty.name, s.spill(v)))
+        s.drop_owned_field(v.ty, s.spill(v))
+
+    def drop_owned_field(s, ty, ptr):
+        if is_native_vec(ty):
+            s.m.vec_elems.add(ty.args[0].name)
+            s.ins("call void @pruv_vdrop__%s(ptr %s)" % (ty.args[0].name, ptr))
+        elif is_scalar_vec(ty):
+            s.drop_slot(Slot("coll", ptr, None, ty))
+        else:
+            s.ins("call void @pruv_drop__%s(ptr %s)" % (ty.name, ptr))
 
     def view_ptr(s, e):
         """address of the storage of an extended expression in a READ position (argument): a local slot or a
@@ -1224,6 +1256,9 @@ class FnGen:
         if not c and s.fb(ty, variant, fd.name):
             x = s.op("extractvalue %s %s, %d" % (st(ty, c), base.a, idx))
             return V("agg", s.op("load %s, ptr %s" % (lty(fd.type), x)), None, fd.type, x)
+        if not c and base.p is not None and is_native_vec(fd.type):
+            p = g9_gep(s, lty(ty), base.p, idx)
+            return s.load(Slot("agg", p, None, fd.type))
         return s.get(base, ty, idx, fd.type, c)
 
     def putf(s, acc, ty, idx, v, fd, variant, c=False):
@@ -1256,8 +1291,8 @@ class FnGen:
                 x = s.op("load %s, ptr %s" % (ARR, g))
                 s.free_val(s.unpack(x, ft, False))      # the old buffer is freed with its cap
                 s.ins("store %s %s, ptr %s" % (ARR, s.agg(v), g))
-            elif s.is_ext(ft):
-                s.ins("call void @pruv_drop__%s(ptr %s)" % (ft.name, g))
+            elif s.is_ext(ft) or is_scalar_vec(ft):
+                s.drop_owned_field(ft, g)
                 s.ins("store %s %s, ptr %s" % (lty(ft), v.a, g))
             else:
                 s.store_field(g, ft, v)
@@ -1285,7 +1320,7 @@ class FnGen:
             elif sl.k == "agg" and is_owned_result(sl.ty):     # LG12 E2: an owned Result<T, String> local
                 s.drop_oresult(sl.ty, sl.a)
             elif sl.k == "agg":     # G9 A3: an owned extended local
-                s.ins("call void @pruv_drop__%s(ptr %s)" % (sl.ty.name, sl.a))
+                s.drop_owned_field(sl.ty, sl.a)
             else:
                 s.free_val(s.load(sl))
 
@@ -1381,7 +1416,7 @@ class FnGen:
         for i, fd in enumerate(s.tt.fields(sl.ty, vn)):
             ft = fd.type
             k = payload_index(s.tt, sl.ty, vn, i)
-            if k in idxs or not (is_arr(ft) or s.is_ext(ft)):
+            if k in idxs or not (is_arr(ft) or s.is_ext(ft) or is_scalar_vec(ft)):
                 continue
             gp = g9_gep(s, lty(sl.ty), sl.a, k)
             if s.fb(sl.ty, vn, fd.name):
@@ -1390,7 +1425,7 @@ class FnGen:
                 x = s.op("load %s, ptr %s" % (ARR, gp))
                 s.free_val(s.unpack(x, ft, False))
             else:
-                s.ins("call void @pruv_drop__%s(ptr %s)" % (ft.name, gp))
+                s.drop_owned_field(ft, gp)
 
     def owned_slot(s, sl):
         return any(sl is x for sc in s.scopes for x in sc["arrays"])
@@ -1698,6 +1733,8 @@ class FnGen:
         if is_arr(ty):  # G9 A3
             return V("arr", s.op("extractvalue %s %s, 0" % (ARR, x)), s.op("extractvalue %s %s, 1" % (ARR, x)),
                      elem_ty(ty), c=s.op("extractvalue %s %s, 2" % (ARR, x)))
+        if is_collection(ty) and not is_native_vec(ty):
+            return V("coll", x, None, ty)
         if n == "i64":
             return V("i128" if c else "i64", x)
         if n == "bool":
@@ -1938,7 +1975,7 @@ class FnGen:
                 names[p.name] = ("ssa", V("i1", "%%p.%s" % n))
             elif p.type == I64:
                 names[p.name] = ("ssa", V("i64", "%%p.%s" % n))
-            elif is_collection(p.type):  # G6 A3
+            elif is_collection(p.type) and not is_native_vec(p.type):  # G6 A3
                 s.bridge = True
                 if p.take:   # consuming parameter: an owner slot (the callee drops it unless it is moved out)
                     sl = s.new_slot(p.name, p.type)
@@ -1947,7 +1984,7 @@ class FnGen:
                     owned.append(sl)
                 else:        # borrowed: never dropped here
                     names[p.name] = ("ssa", V("coll", "%%p.%s.h" % n, None, p.type))
-            elif p.mode == "inout" and is_agg(p.type):
+            elif p.mode == "inout" and (is_agg(p.type) or is_native_vec(p.type)):
                 names[p.name] = ("slot", Slot("agg", "%%p.%s" % n, None, p.type))
             elif s.is_ext(p.type) and p.take:   # LG9: the callee owns the storage; dropped at exit unless moved out
                 sl = Slot("agg", "%%p.%s" % n, None, p.type)
@@ -2288,7 +2325,7 @@ class FnGen:
             elif sl.k == "agg" and is_owned_result(sl.ty):   # LG12 E2: the old Result releases its String
                 s.drop_oresult(sl.ty, sl.a)
             elif sl.k == "agg" and s.is_ext(sl.ty):   # G9 A3
-                s.ins("call void @pruv_drop__%s(ptr %s)" % (sl.ty.name, sl.a))
+                s.drop_owned_field(sl.ty, sl.a)
             s.store(sl, v)
             s.end_temps()
         elif isinstance(st, FieldAssign):
@@ -2444,6 +2481,9 @@ class FnGen:
             s.end_temps()
         elif isinstance(st, Par):
             s.parallel(st)
+        elif (isinstance(st, Match) and isinstance(st.scrutinee, Call)
+              and st.scrutinee.name == "vec_at_mut" and is_native_vec(st.scrutinee.args[0].ty)):
+            s.vec_mut_match(st)
         elif isinstance(st, Match) and is_owned_result(st.scrutinee.ty):    # LG12 E2: consuming match
             s.owned_match(st)
         elif isinstance(st, Match) and s.is_ext(st.scrutinee.ty):
@@ -2606,7 +2646,7 @@ class FnGen:
             for i, (name, fd) in enumerate(zip(a.binders, s.tt.fields(ty, a.ctor))):
                 k = payload_index(s.tt, ty, a.ctor, i)
                 bv = s.getf(sv, ty, k, fd, a.ctor, False)
-                if own is not None and (s.is_ext(fd.type) or is_arr(fd.type)) and not s.fb(ty, a.ctor, fd.name):
+                if own is not None and (s.is_ext(fd.type) or is_arr(fd.type) or is_scalar_vec(fd.type)) and not s.fb(ty, a.ctor, fd.name):
                     bv.mv = (own, a.ctor, k, own_dead)
                 bind[name] = ("ssa", bv)
             if s.run_block(a.body, bind):
@@ -2867,6 +2907,14 @@ class FnGen:
                     return v
                 return s.clone_val(v)
             return v
+        if isinstance(e, Move) and e.fields and (is_native_vec(e.ty) or is_scalar_vec(e.ty)):
+            _, sl = s.lookup(e.name)
+            gp, ty = s.field_ptr_ty(sl, e.fields)
+            T = lty(ty)
+            old = s.op("load %s, ptr %s" % (T, gp))
+            zero = "zeroinitializer" if is_native_vec(ty) else "null"
+            s.ins("store %s %s, ptr %s" % (T, zero, gp))
+            return s.unpack(old, ty, False)
         if isinstance(e, Move) and e.fields:    # LG4: move an owned buffer field out; the field becomes (null, 0, 0)
             _, x = s.lookup(e.name)
             gp, fty = s.field_ptr_ty(x, e.fields)
@@ -2875,6 +2923,11 @@ class FnGen:
             return s.unpack(old, fty, False)
         if isinstance(e, Move):   # G6 A3: load the owner slot, then null it
             kind, x = s.lookup(e.name)
+            if kind == "ssa" and (is_native_vec(x.ty) or x.k == "coll") and x.mv is not None:
+                sl, _vn, k, _dead = x.mv
+                zero = "zeroinitializer" if is_native_vec(x.ty) else "null"
+                s.ins("store %s %s, ptr %s" % (lty(x.ty), zero, g9_gep(s, lty(sl.ty), sl.a, k)))
+                return V(x.k, x.a, None, x.ty)
             if kind == "ssa" and x.k == "arr" and x.mv is not None:
                 # G-DB16-1: moving an array binder of a match on an owned local takes the descriptor and empties the
                 # field of the scrutinee (null, 0, 0), so the scrutinee's drop frees nothing twice
@@ -3019,6 +3072,8 @@ class FnGen:
             return result
         if n == "len":
             x = s.ev(a[0])
+            if is_native_vec(x.ty):
+                return V("i64", s.op("extractvalue %s %s, 1" % (ARR, x.a)))
             if x.k == "coll":   # G6 A3
                 return V("i64", s.g6_call(foreign_shim.len_sym(x.ty), "i64", [("ptr", x.a)]))
             return V("i64", x.b)
@@ -3459,8 +3514,77 @@ class FnGen:
         s.allocas.append("%s = alloca %s" % (base, kind))
         return base
 
+    def vec_element_ptr(s, elem, data, index):
+        return s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (lty(elem), data, index))
+
+    def native_vec_call(s, e, owned):
+        n = e.name
+        if n == "vec_new":
+            return V("agg", "zeroinitializer", None, e.ty)
+        v = s.ev(e.args[0], n == "vec_push")
+        elem = v.ty.args[0]
+        if n == "vec_push":
+            # The moved vector is owned while the element is evaluated, so a failure there drops it.
+            pending = len(s.temps[-1])
+            s.temps[-1].append(v)
+            xv = s.ev(e.args[1], True)
+            del s.temps[-1][pending]
+            x = s.spill(xv)
+            p = s.spill(v)
+            s.m.vec_elems.add(elem.name)
+            s.ins("call void @pruv_vpush__%s(ptr %s, ptr %s)" % (elem.name, p, x))
+            return s.fresh(s.load(Slot("agg", p, None, v.ty)), owned)
+        i = s.ev(e.args[1]).a
+        if not s.verified or s.m.foreign_checks == "all" or any(f.foreign is not None for f in s.funcs.values()):
+            length = s.op("extractvalue %s %s, 1" % (ARR, v.a))
+            ok = s.op("icmp ult i64 %s, %s" % (i, length))
+            s.m.vec_get_check = True
+            checked = 0 if s.m.foreign_checks == "off" else 1
+            def fail():
+                for temps in reversed(s.temps):
+                    for temporary in reversed(temps):
+                        s.free_val(temporary)
+                for scope in reversed(s.scopes):
+                    s.free_scope(scope)
+                s.ins("call void @pruv_panic_vec_get_v1(i64 %d)" % checked)
+            s.guard(ok, fail, False)
+        data = s.op("extractvalue %s %s, 0" % (ARR, v.a))
+        p = s.vec_element_ptr(elem, data, i)
+        return s.load(Slot("agg", p, None, elem))
+
+    def vec_mut_match(s, st):
+        v, index = st.scrutinee.args
+        s.begin_temps()
+        vec = s.ev(v.expr)
+        i = s.ev(index).a
+        s.end_temps()
+        length = s.op("extractvalue %s %s, 1" % (ARR, vec.a))
+        ok = s.op("icmp ult i64 %s, %s" % (i, length))
+        yes, no, end = s.label("armT"), s.label("armF"), s.label("endmatch")
+        s.condbr(ok, yes, no)
+        reach = False
+        for arm in st.arms:
+            some = arm.ctor == "Some"
+            s.place(yes if some else no)
+            bind = None
+            if some and arm.binders:
+                data = s.op("extractvalue %s %s, 0" % (ARR, vec.a))
+                elem = vec.ty.args[0]
+                p = s.vec_element_ptr(elem, data, i)
+                bind = {arm.binders[0]: ("slot", Slot("agg", p, None, elem))}
+            if s.run_block(arm.body, bind):
+                s.br(end)
+                reach = True
+        if reach:
+            s.place(end)
+        else:
+            s.dead = True
+
     def catalog_call(s, e, owned):
         n = e.name
+        if (n == "vec_new" and is_native_vec(e.ty)
+                or n in ("vec_push", "vec_get") and is_native_vec(e.args[0].ty)):
+            return s.native_vec_call(e, owned)
         if n in ("map_get_mut", "map_remove", "map_take", "vec_at_mut"):
             raise PruvError("codegen", e.line, e.col, "unsupported_type",
                             "%s in %s needs the Rust backend" % (n, getattr(s.f, "disp", s.f.name)),
@@ -3582,7 +3706,7 @@ class FnGen:
                 s.cenv[p.name] = V("i1", "%%p.%s" % n)
             elif p.type == I64:
                 s.cenv[p.name] = V("i128", s.op("sext i64 %%p.%s to i128" % n))
-            elif is_collection(p.type):   # G6 A3: only len(c) is evaluable in a requires on LLVM
+            elif is_collection(p.type) and not is_native_vec(p.type):   # G6 A3: only len(c) is evaluable in a requires on LLVM
                 s.cenv[p.name] = V("coll", "%%p.%s.h" % n, None, p.type)
             elif s.is_ext(p.type):   # G9 A3: no i128 mirror; contracts read the REAL storage lazily (see cx)
                 s.cenv[p.name] = V("ref", "%%p.%s" % n, None, p.type)
@@ -3761,6 +3885,8 @@ class FnGen:
                      elem_ty(t))
         if s.is_ext(t):
             return V("ref", p, None, t)
+        if is_scalar_vec(t):
+            return V("coll", s.op("load ptr, ptr %s" % p), None, t)
         s.g9_charge_weight(t, p)
         x = s.op("load %s, ptr %s" % (st(t), p))
         return s.to_c(s.unpack(x, t, False), t)
@@ -3978,6 +4104,10 @@ class FnGen:
                 s.m.need_size.add(a[0].ty.name)
                 return V("i128", s.op("call i128 @pruv_csize__%s(ptr %s, ptr %s)" % (a[0].ty.name, p, s.budget)))
             if n == "len":
+                if is_native_vec(a[0].ty):
+                    p = s.cx(a[0])
+                    ln = s.op("load i64, ptr %s" % g9_gep(s, ARR, p, 1))
+                    return V("i128", s.op("zext i64 %s to i128" % ln))
                 x = s.cev(a[0])
                 if x.k == "coll":   # G6 A3
                     ln = s.g6_call(foreign_shim.len_sym(x.ty), "i64", [("ptr", x.a)])
@@ -4511,7 +4641,7 @@ def g9_drop_text(m, tt, d):
     def emit(vn, fs):
         for i, f in enumerate(fs):
             ft = f.type
-            if not (is_arr(ft) or g.is_ext(ft)):
+            if not (is_arr(ft) or g.is_ext(ft) or is_scalar_vec(ft)):
                 continue
             gp = g9_gep(g, T, "%v", g9_sidx(tt, ty, vn, i))
             if g.fb(ty, vn, f.name):       # a boxed child: its contents first, then its node
@@ -4521,8 +4651,8 @@ def g9_drop_text(m, tt, d):
                 x = g.op("load %s, ptr %s" % (ARR, gp))
                 g.free_val(g.unpack(x, ft, False))      # P3: freed with its cap
             else:                          # an inline extended child (not a node)
-                g.ins("call void @pruv_drop__%s(ptr %s)" % (ft.name, gp))
-    vs = [(vn, t, fs) for vn, t, fs in g9_variants(d) if any(is_arr(f.type) or g.is_ext(f.type) for f in fs)]
+                g.drop_owned_field(ft, gp)
+    vs = [(vn, t, fs) for vn, t, fs in g9_variants(d) if any(is_arr(f.type) or g.is_ext(f.type) or is_scalar_vec(f.type) for f in fs)]
     g9_each_variant(g, ty, d, "%v", vs, emit)
     g.term("ret void")
     return g.render("define internal void @pruv_drop__%s(ptr %%v)" % d.name)
@@ -4539,7 +4669,7 @@ def g9_clone_text(m, tt, d):
     def emit(vn, fs):
         for i, f in enumerate(fs):
             ft = f.type
-            if not (is_arr(ft) or g.is_ext(ft)):
+            if not (is_arr(ft) or g.is_ext(ft) or is_scalar_vec(ft)):
                 continue
             idx = g9_sidx(tt, ty, vn, i)
             gs = g9_gep(g, T, "%src", idx)
@@ -4559,9 +4689,22 @@ def g9_clone_text(m, tt, d):
                 a1 = g.op("insertvalue %s %s, ptr %s, 0" % (ARR, x, np_))
                 a2 = g.op("insertvalue %s %s, i64 %s, 2" % (ARR, a1, n))    # P3: the new block holds exactly len elements
                 g.ins("store %s %s, ptr %s" % (ARR, a2, gd))
+            elif is_native_vec(ft):
+                m.vec_elems.add(ft.args[0].name)
+                g.ins("call void @pruv_vclone__%s(ptr %s, ptr %s)" % (ft.args[0].name, gs, gd))
+            elif is_scalar_vec(ft):
+                h = g.op("load ptr, ptr %s" % gs)
+                nn = g.op("icmp ne ptr %s, null" % h)
+                copy, end = g.label("gclone"), g.label("gdone")
+                g.condbr(nn, copy, end)
+                g.place(copy)
+                ch = g.g6_call(foreign_shim.clone_sym(ft), "ptr", [("ptr", h)])
+                g.ins("store ptr %s, ptr %s" % (ch, gd))
+                g.br(end)
+                g.place(end)
             else:
                 g.ins("call void @pruv_clone__%s(ptr %s, ptr %s)" % (ft.name, gs, gd))
-    vs = [(vn, t, fs) for vn, t, fs in g9_variants(d) if any(is_arr(f.type) or g.is_ext(f.type) for f in fs)]
+    vs = [(vn, t, fs) for vn, t, fs in g9_variants(d) if any(is_arr(f.type) or g.is_ext(f.type) or is_scalar_vec(f.type) for f in fs)]
     g9_each_variant(g, ty, d, "%src", vs, emit)
     g.term("ret void")
     return g.render("define internal void @pruv_clone__%s(ptr %%src, ptr %%dst)" % d.name)
@@ -4580,9 +4723,18 @@ def g9_node_texts(m, tt, d):
     out.append(g.render("define internal ptr @pruv_box__%s(%s %%v)" % (n, T)))
     g = FnGen(m, {}, None, True)
     g.place("start")
+    if m.owned_collection_fields:
+        # A moved aggregate is zeroed, including any boxed fields.
+        live = g.op("icmp ne ptr %n, null")
+        drop, end = g.label("ndrop"), g.label("ndone")
+        g.condbr(live, drop, end)
+        g.place(drop)
     g.ins("call void @pruv_drop__%s(ptr %%n)" % n)
     size, align = g9_node_layout(g, T)
     g.ins("call void @pruv_node_free_v1(ptr %%n, i64 %s, i64 %s)" % (size, align))
+    if m.owned_collection_fields:
+        g.br(end)
+        g.place(end)
     g.term("ret void")
     out.append(g.render("define internal void @pruv_dropnode__%s(ptr %%n)" % n))
     g = FnGen(m, {}, None, True)
@@ -4595,11 +4747,127 @@ def g9_node_texts(m, tt, d):
     return out
 
 
+def g9_vec_parts(g, ptr):
+    v = g.op("load %s, ptr %s" % (ARR, ptr))
+    return [g.op("extractvalue %s %s, %d" % (ARR, v, i)) for i in range(3)]
+
+
+def g9_vec_loop(g, length, emit):
+    start = g.cur
+    loop, body, latch, end = (g.label(h) for h in ("vloop", "vbody", "vnext", "vend"))
+    g.br(loop)
+    g.place(loop)
+    nxt = g.tmp()
+    i = g.op("phi i64 [ 0, %%%s ], [ %s, %%%s ]" % (start, nxt, latch))
+    ok = g.op("icmp ult i64 %s, %s" % (i, length))
+    g.condbr(ok, body, end)
+    g.place(body)
+    emit(i)
+    g.br(latch)
+    g.place(latch)
+    g.ins("%s = add i64 %s, 1" % (nxt, i))
+    g.br(loop)
+    g.place(end)
+
+
+def g9_vec_texts(m, elem):
+    name, T = elem.name, lty(elem)
+    g = FnGen(m, {}, None, True)
+    g.place("start")
+    data, length, cap = g9_vec_parts(g, "%v")
+    if g.is_ext(elem):
+        def drop(i):
+            p = g.vec_element_ptr(elem, data, i)
+            g.ins("call void @pruv_drop__%s(ptr %s)" % (name, p))
+        g9_vec_loop(g, length, drop)
+    free, end = g.label("vfree"), g.label("vdone")
+    live = g.op("icmp ne i64 %s, 0" % cap)
+    g.condbr(live, free, end)
+    g.place(free)
+    size, align = g9_node_layout(g, T)
+    size = g.op("mul i64 %s, %s" % (cap, size))
+    g.ins("call void @pruv_node_free_v1(ptr %s, i64 %s, i64 %s)" % (data, size, align))
+    g.br(end)
+    g.place(end)
+    g.term("ret void")
+    drop_text = g.render("define internal void @pruv_vdrop__%s(ptr %%v)" % name)
+
+    g = FnGen(m, {}, None, True)
+    g.place("start")
+    data, length, _ = g9_vec_parts(g, "%src")
+    empty, copy = g.label("vempty"), g.label("vcopy")
+    zero = g.op("icmp eq i64 %s, 0" % length)
+    g.condbr(zero, empty, copy)
+    g.place(empty)
+    g.ins("store %s zeroinitializer, ptr %%dst" % ARR)
+    g.term("ret void")
+    g.place(copy)
+    size, align = g9_node_layout(g, T)
+    bytes_ = g.op("mul i64 %s, %s" % (length, size))
+    dst = g.op("call ptr @pruv_node_alloc_v1(i64 %s, i64 %s)" % (bytes_, align))
+    if g.is_ext(elem):
+        def clone(i):
+            a = g.vec_element_ptr(elem, data, i)
+            b = g.vec_element_ptr(elem, dst, i)
+            g.ins("call void @pruv_clone__%s(ptr %s, ptr %s)" % (name, a, b))
+        g9_vec_loop(g, length, clone)
+    else:
+        g.ins("call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)" % (dst, data, bytes_))
+    v = g.op("insertvalue %s zeroinitializer, ptr %s, 0" % (ARR, dst))
+    v = g.op("insertvalue %s %s, i64 %s, 1" % (ARR, v, length))
+    v = g.op("insertvalue %s %s, i64 %s, 2" % (ARR, v, length))
+    g.ins("store %s %s, ptr %%dst" % (ARR, v))
+    g.term("ret void")
+    clone_text = g.render("define internal void @pruv_vclone__%s(ptr %%src, ptr %%dst)" % name)
+
+    g = FnGen(m, {}, None, True)
+    g.place("start")
+    data, length, cap = g9_vec_parts(g, "%v")
+    grow, copy, grown, push = (g.label(h) for h in ("vgrow", "vcopy", "vgrown", "vpush"))
+    full = g.op("icmp eq i64 %s, %s" % (length, cap))
+    g.condbr(full, grow, push)
+    g.place(grow)
+    empty = g.op("icmp eq i64 %s, 0" % cap)
+    twice = g.op("mul i64 %s, 2" % cap)
+    ncap = g.op("select i1 %s, i64 4, i64 %s" % (empty, twice))
+    size, align = g9_node_layout(g, T)
+    mul = g.op("call { i64, i1 } @llvm.umul.with.overflow.i64(i64 %s, i64 %s)" % (ncap, size))
+    bytes_ = g.op("extractvalue { i64, i1 } %s, 0" % mul)
+    overflow = g.op("extractvalue { i64, i1 } %s, 1" % mul)
+
+    def fail():
+        g.ins("call void @pruv_vdrop__%s(ptr %%v)" % name)
+        if g.is_ext(elem):
+            g.ins("call void @pruv_drop__%s(ptr %%x)" % name)
+        g.ins("call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)")
+    g.guard(overflow, fail, True)
+    new = g.op("call ptr @pruv_node_alloc_v1(i64 %s, i64 %s)" % (bytes_, align))
+    g.condbr(empty, grown, copy)
+    g.place(copy)
+    old = g.op("mul i64 %s, %s" % (length, size))
+    g.ins("call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)" % (new, data, old))
+    g.ins("call void @pruv_node_free_v1(ptr %s, i64 %s, i64 %s)" % (data, old, align))
+    g.br(grown)
+    g.place(grown)
+    g.ins("store ptr %s, ptr %%v" % new)
+    g.ins("store i64 %s, ptr %s" % (ncap, g9_gep(g, ARR, "%v", 2)))
+    g.br(push)
+    g.place(push)
+    buf = g.op("phi ptr [ %s, %%start ], [ %s, %%%s ]" % (data, new, grown))
+    slot = g.vec_element_ptr(elem, buf, length)
+    value = g.op("load %s, ptr %%x" % T)
+    g.ins("store %s %s, ptr %s" % (T, value, slot))
+    ln = g.op("add i64 %s, 1" % length)
+    g.ins("store i64 %s, ptr %s" % (ln, g9_gep(g, ARR, "%v", 1)))
+    g.term("ret void")
+    return [drop_text, clone_text, g.render("define internal void @pruv_vpush__%s(ptr %%v, ptr %%x)" % name)]
+
+
 def g9_walks(t):
     """size / equality walk into t: a nominal value, or Option / Result of one"""
     if gopt(t):
         return g9_walks(t.args[0]) or (t.name == "result" and g9_walks(result_error(t)))
-    return is_user_type(t)
+    return is_user_type(t) or is_native_vec(t)
 
 
 def g9_weight(g, t, p, bud="%bud"):
@@ -4637,6 +4905,21 @@ def g9_weight(g, t, p, bud="%bud"):
         g.br(end)
         g.place(end)
         return g.op("phi i128 [ 0, %%%s ], [ %s, %%%s ]" % (lcur, w, wcur))
+    if is_native_vec(t):
+        elem = t.args[0]
+        g.m.need_size.add(elem.name)
+        data, length, _ = g9_vec_parts(g, p)
+        acc = g.g6_out("i128")
+        g.ins("store i128 0, ptr %s" % acc)
+
+        def fold(i):
+            child = g.vec_element_ptr(elem, data, i)
+            weight = g9_weight(g, elem, child, bud)
+            total = g.op("load i128, ptr %s" % acc)
+            total = g.checked("i128", "sadd", "+", total, weight)
+            g.ins("store i128 %s, ptr %s" % (total, acc))
+        g9_vec_loop(g, length, fold)
+        return g.op("load i128, ptr %s" % acc)
     if is_user_type(t):
         return g.op("call i128 @pruv_csize__%s(ptr %s, ptr %s)" % (t.name, p, bud))
     return None
@@ -4790,6 +5073,9 @@ def g9_helper_chunks(m, tt):
         if d.name in targets:
             chunks.extend(g9_node_texts(m, tt, d))
 
+    for name in sorted(m.vec_elems):
+        chunks.extend(g9_vec_texts(m, Type(name)))
+
     def close(seed):
         out, work = set(), sorted(seed)
         while work:
@@ -4799,7 +5085,7 @@ def g9_helper_chunks(m, tt):
             out.add(n)
             for _vn, _t, fs in g9_variants(tt.decls[n]):
                 for f in fs:
-                    work.extend(codegen.nominals_in(f.type))
+                    work.extend(codegen.nominals_in(f.type.args[0] if is_native_vec(f.type) else f.type))
         return out
     sizes, eqs = close(m.need_size), close(m.need_eq)
     for d in tt.decls.values():
@@ -6153,6 +6439,13 @@ def g6_llvm_error(prog):
     if first_g6_use(prog) is None:
         return None
 
+    rec_elems = set((prog.g9 or {}).get("rec_vec_elems", ()))
+
+    def type_ok(t):
+        if is_native_vec(t):
+            return t.args[0].name in rec_elems
+        return _g6_type_ok(t)
+
     def needs_rust(t):
         return (t.name == "hashmap" and t.args[0].name == "string"
                 or t.name == "vec" and t.args[0].name == "string"
@@ -6177,7 +6470,7 @@ def g6_llvm_error(prog):
             continue
         if any(needs_rust(t) for t in [f.ret] + [p.type for p in f.params]):
             return err(f.line, f.col, "this collection type")
-        if any(not _g6_type_ok(p.type) for p in f.params) or not _g6_type_ok(f.ret):
+        if any(not type_ok(p.type) for p in f.params) or not type_ok(f.ret):
             return err(f.line, f.col)
         bad = []
         rust_only = []
@@ -6185,17 +6478,20 @@ def g6_llvm_error(prog):
         def visit(n):
             if isinstance(n, ForMap):
                 rust_only.append((n.line, n.col, "map iteration"))
-            if isinstance(n, Let) and not _g6_type_ok(n.type):
+            if isinstance(n, Let) and not type_ok(n.type):
                 bad.append((n.line, n.col))
             ty = getattr(n, "ty", None)
             if ty is not None and needs_rust(ty):
                 rust_only.append((n.line, n.col, "this collection type"))
-            if ty is not None and not _g6_type_ok(ty):
+            if (ty is not None and not type_ok(ty)
+                    and not (isinstance(n, Call) and n.name == "vec_at_mut" and is_native_vec(n.args[0].ty))):
                 bad.append((n.line, n.col))
             if isinstance(n, Call) and n.name in funcs and any(
                     is_vec_slice_arg(a.ty, p.type) for a, p in zip(n.args, funcs[n.name].params)):
                 rust_only.append((n.line, n.col, "a borrowed vector slice argument"))
             if isinstance(n, Call) and n.name in CATALOG and n.name not in CATALOG_CONTRACT_ONLY:
+                if n.name in ("vec_new", "vec_push", "vec_get", "vec_at_mut") and n.inst["args"][0].name in rec_elems:
+                    return
                 if (n.name in ("map_remove", "map_take", "vec_at_mut", "vec_clear", "vec_extend_from_slice", "string_eq")
                         or (n.name == "vec_reserve" and n.inst["args"][0] not in (I64, BOOL))):
                     rust_only.append((n.line, n.col, n.name))
@@ -6259,7 +6555,7 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     propagates).  The generator works on the concrete plan.program only: no type parameter reaches LLVM.
     foreign_checks: G6 boundary check mode of the shim helpers (requires|all|off, docs/G6_SPEC.md 12.3).
     A G6 program outside the supported subset (G6_SPEC 13.1) raises PruvError codegen/unsupported_type."""
-    from typeinfo import g2_unimplemented_error, first_g3_use, type_name
+    from typeinfo import dependencies, g2_unimplemented_error, first_g3_use, type_name
     if foreign_checks not in ("requires", "all", "off"):
         raise ValueError("foreign_checks must be requires, all or off")
     if prog.borrow_site is not None:
@@ -6275,7 +6571,7 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
                             "%s has a take array parameter, which needs the Rust backend" % getattr(f, "disp", f.name),
                             "use the Rust backend", file=getattr(f, "file", None))
         if any(p.mode == "inout" and not is_array(p.type) and p.type not in (I64, BOOL)
-               and (f.host_entry or not (is_agg(p.type) or is_scalar_vec(p.type)))     # G-LG7-1: internal inout Vec<i64>/Vec<bool> passes its handle
+               and (f.host_entry or not (is_agg(p.type) or is_scalar_vec(p.type) or is_native_vec(p.type)))     # G-LG7-1: internal inout Vec<i64>/Vec<bool> passes its handle
                for p in f.params):
             kind = "struct"
             if any(p.mode == "inout" and is_collection(p.type) for p in f.params):
@@ -6284,12 +6580,24 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
                             "%s has an inout %s parameter, which needs the Rust backend" %
                             (getattr(f, "disp", f.name), kind),
                             "use the Rust backend", file=getattr(f, "file", None))
+    rec_elems = set((prog.g9 or {}).get("rec_vec_elems", ()))
+    owned_decls = set()
     for d in prog.types:
-        if any(is_collection(fd.type) for fd in TypeTable._all_fields(d)):
+        fields = [fd.type for fd in TypeTable._all_fields(d)]
+        if any(is_collection(t) and not (is_scalar_vec(t) or is_native_vec(t) and t.args[0].name in rec_elems)
+               for t in fields):
             raise PruvError("codegen", d.line, d.col, "unsupported_type",
                             "%s has owned collection fields, which need the Rust backend" % getattr(d, "disp", d.name),
                             "use the Rust backend",
                             file=getattr(d, "file", None))
+        if any(is_collection(t) for t in fields):
+            owned_decls.add(d.name)
+    pending = bool(owned_decls)
+    while pending:
+        enclosing = {d.name for d in prog.types for fd in TypeTable._all_fields(d)
+                     if any(n in owned_decls for n in dependencies(fd.type))}
+        pending = not enclosing <= owned_decls
+        owned_decls.update(enclosing)
     u8_structs = {d.name for d in prog.types if isinstance(d, StructDecl) and any(fd.type == ARRAY_U8 for fd in d.fields)}
     for f in prog.functions:
         if f.host_entry and any(p.type.owner is None and p.type.name in u8_structs for p in f.params):
@@ -6304,6 +6612,11 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
             raise PruvError("codegen", f.line, f.col, "unsupported_type",     # LG12 E2
                             "host entry %s has a Result<_, String> in its signature, which has no C ABI" % getattr(f, "disp", f.name),
                             "use the Rust backend", file=getattr(f, "file", None))
+        if f.host_entry and any(is_native_vec(t) or any(n in owned_decls for n in dependencies(t))
+                                for t in [f.ret] + [p.type for p in f.params]):
+            raise PruvError("codegen", f.line, f.col, "unsupported_type",
+                            "host entry %s has owned collections in its signature, which have no C ABI" %
+                            getattr(f, "disp", f.name), "use the Rust backend", file=getattr(f, "file", None))
         if f.host_entry and is_scalar_vec(f.ret):
             raise PruvError("codegen", f.line, f.col, "unsupported_type",
                             "host entry %s returns a Vec, which has no C ABI" % getattr(f, "disp", f.name),
@@ -6352,6 +6665,8 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         raise RuntimeError("unsupported_type: %s" % g2err.message)
     tt = new_tt(prog)   # G9: SCC-condensed order and the extended / boxed metadata (identical to TypeTable otherwise)
     m = Mod(tt)
+    m.foreign_checks = foreign_checks
+    m.owned_collection_fields = bool(owned_decls)
     m.array_resizes = array_resize_params(prog)
     for f in prog.functions:
         for i, p in enumerate(f.params):
@@ -6411,7 +6726,7 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
                                    verified=verified))
         if not getattr(f, "private", False) and not coll:  # G3: a generic specialization has no ABI symbol
             chunks.append(abi_of(f, tt, m))
-    if tt.g9_ext or m.need_size or m.need_eq:   # G9 A3: clone / drop / node helpers, then the contract helpers above
+    if tt.g9_ext or m.vec_elems or m.need_size or m.need_eq:   # G9 A3: clone / drop / node helpers, then the contract helpers above
         chunks.extend(g9_helper_chunks(m, tt))
     # G9 A3: buffer fields count as uses of the buffer runtime declarations
     has_str = uses_str(prog, cost=not verified) or type_has_field(prog, "str")  # G2 B2: walk the AST once
@@ -6427,7 +6742,9 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         DECLS_BOOL if uses_array_type(prog, "array_bool") else "") + (
         DECLS_STR if has_str else "") + (
         DECLS_REPR if m.uses_repr else "") + (
-        DECLS_NODE if tt.g9_boxed else "") + "".join(
+        DECLS_NODE if tt.g9_boxed or m.vec_elems else "") + (
+        "declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64)\n"
+        if m.vec_elems and not m.overlap else "") + "".join(
         "declare i%d @llvm.bswap.i%d(i%d)\n" % (w, w, w) for w in (16, 32, 64) if w in m.bswap) + (
         "declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind\n" if m.shrink else "") + (
         DECLS_OVERLAP if m.overlap else "") + (
@@ -6447,6 +6764,8 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         if m.memmove else "") + (
         "declare i32 @memcmp(ptr nocapture, ptr nocapture, i64) nounwind readonly\n" if m.memcmp else "") + (
         g6decls + "\n" + "\n".join(chunks))  # G2 A5/B2, G3, G6 A3, G9 A3; P2 batch 4: llvm.bswap when used
+    if m.vec_get_check:
+        ir += "declare void @pruv_panic_vec_get_v1(i64) noreturn cold nounwind\n"
     if m.uses_utf8_valid:
         ir += Path(__file__).with_name("utf8_valid.ll").read_text()
     if m.uses_utf8_panic:
@@ -6456,7 +6775,7 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         ir += "declare void @pruv_g7_v1_run(ptr, i64) nounwind\n"
         ir += "\n".join(m.par_trampolines)
     shim = None
-    if is_g6:
+    if is_g6 and (m.g6_decls or m.g6_bridge or not tt.rec_vec_elems):
         shim = foreign_shim.build_shim(prog, verified, trust_callers, budget, foreign_checks, m.g6_take,
                                        sorted(m.g6_unbox), m.sym_pre)
     if first_par(prog) is not None:
