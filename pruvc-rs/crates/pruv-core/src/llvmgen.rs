@@ -1337,6 +1337,10 @@ pub struct FnGen<'a> {
     funcs: &'a HashMap<String, &'a Function>,
     f: &'a Function,
     verified: bool,
+    /// LG35: the str_from_utf8 call whose bytes the enclosing `if` checked (codegen::utf8_checked)
+    utf8_ok: usize,
+    /// LG35: locals borrowed as the scrutinee of an enclosing match arm (codegen's pinned)
+    pinned: HashSet<String>,
     cost: bool,
     cost_bound: String,
     lines: Vec<String>,
@@ -1394,6 +1398,8 @@ impl<'a> FnGen<'a> {
             funcs,
             f,
             verified,
+            utf8_ok: 0,
+            pinned: HashSet::new(),
             cost: !verified && f.cost.is_some(),
             cost_bound: String::new(),
             lines: Vec::new(),
@@ -3212,7 +3218,24 @@ impl<'a> FnGen<'a> {
             if c.name == "truncate" {
                 crate::refine::expr_names(&c.args[1], &mut m_names);
             }
-            if x.name == name || m_names.contains(&x.name) || !(self.dead_after(&x.name) || self.return_next(&x.name)) {
+            if x.name == name || m_names.contains(&x.name) {
+                return out;
+            }
+            if let Ok(Bind::Ssa(v)) = self.lookup(&x.name) {
+                // LG35 (G-LG34-1): the array payload binder of a match arm on an owned extended local (the Rust
+                // backend's consuming match binds the payload Vec by value): at its last use the binder takes the
+                // payload block and the owner's field is emptied, so the enum cleanup frees null. The owner must be
+                // dead after the match (own_dead: the Rust backend then matches by value, `match p`), and the binder
+                // dead after the statement or the next statement a return that does not name it (its last_copy)
+                if v.k == Kind::Arr && v.mv.as_ref().is_some_and(|m| m.3) {
+                    let nxt = self.frames.last().is_some_and(|fr| fr.3 && !fr.1.contains(&x.name));
+                    if nxt || self.dead_after(&x.name) {
+                        out.insert(x.name.clone());
+                    }
+                }
+                return out;
+            }
+            if !(self.dead_after(&x.name) || self.return_next(&x.name)) {
                 return out;
             }
             if let Ok(Bind::Slot(v)) = self.lookup(&x.name) {
@@ -3262,6 +3285,20 @@ impl<'a> FnGen<'a> {
             _ => {}
         }
         out
+    }
+
+    /// P3: empty the owner of array local `name` that a move_src lowering takes: its slot, or for a match payload
+    /// binder (V.mv) the owner enum's payload field, so the owner's cleanup frees null
+    fn take_array(&mut self, name: &str) -> R<()> {
+        match self.lookup(name)? {
+            Bind::Slot(x) => self.empty_array_slot(&x),
+            Bind::Ssa(x) => {
+                let (sl, _vn, k, _) = (*x.mv.clone().ok_or_else(|| IDX_ERR.to_string())?).clone();
+                let lt = lty(need_ty(&sl.ty)?);
+                let g = g9_gep(self, &lt, &sl.a, k)?;
+                self.ins(format!("store {} zeroinitializer, ptr {}", ARR, g))
+            }
+        }
     }
 
     fn empty_array_slot(&mut self, x: &V) -> R<()> {
@@ -3582,10 +3619,12 @@ impl<'a> FnGen<'a> {
                 self.condbr(&c.a, &thn, &els)?;
                 self.place(&thn);
                 let mut reach = false;
+                let prev = std::mem::replace(&mut self.utf8_ok, crate::codegen::utf8_checked(x));
                 if self.run_block(&x.then, Vec::new())? {
                     self.br(&end)?;
                     reach = true;
                 }
+                self.utf8_ok = prev;
                 if has_else {
                     self.place(&els);
                     if self.run_block(&x.els, Vec::new())? {
@@ -3786,10 +3825,20 @@ impl<'a> FnGen<'a> {
             }
         }
         // an array binder moved by a let / assignment empties its field of the owner, so the owner must be dead too
+        // LG35: an enclosing arm's binders still view the payload of a pinned owner, so its fields are never emptied
         let own_dead = match (&own, &st.scrutinee) {
-            (Some(_), Expr::Var(scv)) => self.dead_after(&scv.name),
+            (Some(_), Expr::Var(scv)) => !self.pinned.contains(&scv.name) && self.dead_after(&scv.name),
             _ => false,
         };
+        let saved_pinned = self.pinned.clone();
+        // the local a field-path scrutinee (h.e) borrows from is pinned too
+        let mut root = &st.scrutinee;
+        while let Expr::FieldAccess(fa) = root {
+            root = &fa.base;
+        }
+        if let Expr::Var(v) = root {
+            self.pinned.insert(v.name.clone());
+        }
         let mut cases: Vec<String> = Vec::new();
         for (a, l) in &arms {
             cases.push(format!("i64 {}, label %{}", t_variant_index(tt, &ty, &a.ctor)?, l));
@@ -3817,6 +3866,7 @@ impl<'a> FnGen<'a> {
                 reach = true;
             }
         }
+        self.pinned = saved_pinned;
         if reach {
             self.place(&end);
         } else {
@@ -4500,8 +4550,7 @@ impl<'a> FnGen<'a> {
             // panics if a shrinking realloc fails, so the recorded cap is always the block's real cap)
             if let Expr::Var(xv) = arg(a, 0)? {
                 if self.moving.contains(&xv.name) {
-                    let Bind::Slot(sl) = self.lookup(&xv.name)? else { return Err(IDX_ERR.to_string()) };
-                    self.empty_array_slot(&sl)?;
+                    self.take_array(&xv.name)?;
                     let cap = capof(&src);
                     let half = self.op(format!("lshr i64 {}, 1", cap))?;
                     let cut = self.op(format!("icmp ugt i64 {}, {}", half, m.a))?;
@@ -4752,7 +4801,7 @@ impl<'a> FnGen<'a> {
         }
         if n == "str_from_utf8" {
             let b = self.ev(arg(a, 0)?, false)?;
-            if !self.verified {
+            if !self.verified && e as *const Call as usize != self.utf8_ok {
                 self.m.uses_utf8_valid = true;
                 self.m.uses_utf8_panic = true;
                 let ok = self.op(format!("call i1 @pruv_utf8_valid(ptr {}, i64 {})", b.a, b.b))?;
@@ -4761,8 +4810,7 @@ impl<'a> FnGen<'a> {
             // LG33 (G-DB54-2): an owned local [u8] at its last use (move_src): the str takes its block and cap
             if let Expr::Var(xv) = arg(a, 0)? {
                 if self.moving.contains(&xv.name) {
-                    let Bind::Slot(sl) = self.lookup(&xv.name)? else { return Err(IDX_ERR.to_string()) };
-                    self.empty_array_slot(&sl)?;
+                    self.take_array(&xv.name)?;
                     let mut rv = V::with_b(Kind::Arr, b.a.clone(), b.b.clone());
                     rv.ty = Some(STR.to_string());
                     rv.c = Some(capof(&b));

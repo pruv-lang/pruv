@@ -1,0 +1,136 @@
+// LG35 (G-LG34-1): truncate / str_from_utf8 of the array payload binder of a match on an owned enum local hand the
+// payload block over on both backends at the binder's last use (the owner is dead after the match, or the next
+// statement returns); the owner's payload field is emptied so its cleanup frees null. When the binder or the owner
+// is read later the call copies.
+enum Pk { Nums(v: [i64]), Raw(b: [u8]), Nil }
+
+fn mk_nums(n: i64) -> Pk ! alloc
+  requires 1 <= n && n <= 50
+{
+  let a: [i64] = alloc(n, 5);
+  return Pk::Nums(copy(a));
+}
+
+fn mk_raw(n: i64) -> Pk ! alloc
+  requires 1 <= n && n <= 50
+{
+  let mut a: [u8] = alloc(n, 65);
+  a[0] = 104;
+  return Pk::Raw(copy(a));
+}
+
+fn plen(p: Pk) -> i64 {
+  match p {
+    Pk::Nums(v) => { return len(v); }
+    Pk::Raw(b) => { return len(b); }
+    Pk::Nil => { return 0; }
+  }
+}
+
+// the owner p is dead after the match: the binder moves (no return next to the truncate)
+fn cut(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50
+{
+  let p: Pk = mk_nums(n);
+  let mut r: i64 = 0;
+  match p {
+    Pk::Nums(t) => {
+      if len(t) >= 1 {
+        let u: [i64] = truncate(t, 1);
+        if 0 <= u[0] && u[0] < 100 { r = len(u) * 100 + u[0]; }
+      }
+    }
+    Pk::Raw(b) => { r = len(b); }
+    Pk::Nil => { r = 0 - 1; }
+  }
+  return r;
+}
+
+// p is dead after the match and the next statement returns: the binder moves
+fn word(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50
+{
+  let p: Pk = mk_raw(n);
+  match p {
+    Pk::Raw(b) => {
+      if len(b) >= 1 && len(b) < 1000 && utf8_valid(b) {
+        let s: str = str_from_utf8(b);
+        return len(s) * 1000 + s[0];
+      }
+    }
+    Pk::Nums(t) => { return 0 - 2; }
+    Pk::Nil => { return 0 - 3; }
+  }
+  return 0 - 1;
+}
+
+// the binder is read by the return: copy
+fn keep_binder(n: i64) -> i64 ! alloc
+  requires 2 <= n && n <= 50
+{
+  let p: Pk = mk_nums(n);
+  match p {
+    Pk::Nums(t) => {
+      if len(t) < 1 || len(t) > 1000 { return 0 - 1; }
+      let u: [i64] = truncate(t, 1);
+      return len(t) * 10 + len(u);
+    }
+    Pk::Raw(b) => { return 0; }
+    Pk::Nil => { return 0; }
+  }
+}
+
+// the owner is read after the match: copy on both backends (the Rust backend matches on &p), and the owner keeps its
+// full payload
+fn keep_owner(n: i64) -> i64 ! alloc
+  requires 2 <= n && n <= 50
+{
+  let p: Pk = mk_nums(n);
+  let mut r: i64 = 0;
+  match p {
+    Pk::Nums(t) => {
+      if len(t) >= 1 {
+        let u: [i64] = truncate(t, 1);
+        r = len(u);
+      }
+    }
+    Pk::Raw(b) => { r = 0; }
+    Pk::Nil => { r = 0; }
+  }
+  let q: i64 = plen(p);
+  if 0 <= r && r <= 1 && 0 <= q && q < 1000 { return r * 100 + q; }
+  return 0 - 1;
+}
+
+// an enclosing match arm on the same owner still views the payload through its binder: the inner binder copies
+// (the Rust backend pins p and matches on &p), so the write to u is not seen through outer
+fn nested(n: i64) -> i64 ! alloc
+  requires 2 <= n && n <= 50
+{
+  let p: Pk = mk_nums(n);
+  match p {
+    Pk::Nums(outer) => {
+      match p {
+        Pk::Nums(inner) => {
+          if len(inner) < 2 || len(outer) < 1 { return 0 - 1; }
+          let mut u: [i64] = truncate(inner, 2);
+          u[0] = 9;
+          if 0 <= outer[0] && outer[0] < 100 && 0 <= u[0] && u[0] < 10 { return outer[0] * 10 + u[0]; }
+          return 0 - 1;
+        }
+        Pk::Raw(b) => { return 0; }
+        Pk::Nil => { return 0; }
+      }
+    }
+    Pk::Raw(b) => { return 0; }
+    Pk::Nil => { return 0; }
+  }
+}
+
+fn run() -> () ! io, alloc {
+  print(cut(7));
+  print(word(6));
+  print(keep_binder(4));
+  print(keep_owner(6));
+  print(nested(2));
+}
