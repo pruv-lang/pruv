@@ -499,6 +499,8 @@ pub struct Model {
     recrel: HashSet<String>,
     /// `false` = "int" (i64/u8/str elements), `true` = "bool": buffer datatypes built lazily
     bufs: RefCell<HashMap<String, BufFns>>,
+    vec_handles: HashMap<String, Sort>,
+    vec_sums: HashMap<String, FuncDecl>,
     maps: RefCell<HashMap<String, (Sort, StructFns)>>,
     strkey: RefCell<Option<FuncDecl>>,
     buf_names: RefCell<HashSet<String>>,
@@ -661,6 +663,8 @@ impl Model {
             scc_of: HashMap::new(),
             recrel: HashSet::new(),
             bufs: RefCell::new(HashMap::new()),
+            vec_handles: HashMap::new(),
+            vec_sums: HashMap::new(),
             maps: RefCell::new(HashMap::new()),
             strkey: RefCell::new(None),
             buf_names: RefCell::new(HashSet::new()),
@@ -738,10 +742,21 @@ impl Model {
 
     /// The sort of a field type while the datatypes of `gnames` are under construction: a member type is a datatype
     /// reference (`Some(index in the group)`; the returned sort is then an ignored placeholder), anything else its sort.
-    fn group_field_sort(&self, ft: &Ty, gnames: &[String]) -> Result<(Sort, Option<usize>), String> {
+    fn group_field_sort(&mut self, ft: &Ty, gnames: &[String]) -> Result<(Sort, Option<usize>), String> {
         if let Ty::User(n) = ft {
             if let Some(i) = gnames.iter().position(|g| g == n) {
                 return Ok((self.int_sort.clone(), Some(i)));
+            }
+        }
+        if let Some(elem) = Self::vec_element(ft) {
+            if let Some(sort) = self.vec_handles.get(elem) {
+                return Ok((sort.clone(), None));
+            }
+            if gnames.iter().any(|name| name == elem) {
+                // Z3 can resolve a direct reference to a group member, but not Array(Int, member).
+                let sort = self.z.declare_sort(&format!("{}VecH_{}", self.pre_tag, elem));
+                self.vec_handles.insert(elem.to_string(), sort.clone());
+                return Ok((sort, None));
             }
         }
         if Self::is_buf(ft) {
@@ -757,6 +772,7 @@ impl Model {
     /// ordinary type: the same call as the old per-type construction).
     fn make_group(&mut self, members: &[TypeDecl], idx_of: &HashMap<String, usize>) -> Result<(), String> {
         let gnames: Vec<String> = members.iter().map(|d| d.name.clone()).collect();
+        let handle_count = self.vec_handles.len();
         let mut specs: Vec<DtSpec> = Vec::new();
         let mut refs: Vec<Vec<Vec<Option<usize>>>> = Vec::new();
         for d in members {
@@ -821,6 +837,22 @@ impl Model {
             self.by_sort.borrow_mut().insert(sort.name(), Ty::User(d.name.clone()));
             self.sorts.insert(d.name.clone(), sort);
         }
+        if self.vec_handles.len() == handle_count {
+            return Ok(());
+        }
+        for name in &gnames {
+            if self.vec_handles.contains_key(name) {
+                let ty = Ty::from_gtype(&GType::new("vec", vec![GType::new(name, vec![])]));
+                self.buf_entry(&ty)?;
+                let arr = self.z.array_sort(&self.int_sort, &self.sorts[name]);
+                let sum = self.z.func_decl(
+                    &format!("{}vsum_{}", self.pre_tag, name),
+                    &[arr, self.int_sort.clone()],
+                    &self.int_sort,
+                );
+                self.vec_sums.insert(name.clone(), sum);
+            }
+        }
         Ok(())
     }
 
@@ -869,6 +901,17 @@ impl Model {
         }
         let tag = format!("{}buf!{}", self.pre_tag, key);
         let arr_sort = self.z.array_sort(&self.int_sort, &esort);
+        if let Some(sort) = Self::vec_element(ty).and_then(|elem| self.vec_handles.get(elem)) {
+            let ent = BufFns {
+                sort: sort.clone(),
+                ctor: self.z.func_decl(&format!("{}.mk", tag), &[self.int_sort.clone(), arr_sort.clone()], sort),
+                len: self.z.func_decl(&format!("{}.len", tag), &[sort.clone()], &self.int_sort),
+                arr: self.z.func_decl(&format!("{}.arr", tag), &[sort.clone()], &arr_sort),
+            };
+            self.bufs.borrow_mut().insert(key, ent.clone());
+            self.buf_names.borrow_mut().insert(sort.name());
+            return Ok(ent);
+        }
         let spec = DtSpec {
             name: tag.clone(),
             ctors: vec![DtCtorSpec {
@@ -911,9 +954,35 @@ impl Model {
     }
 
     /// verify.py `Model.field_put` for an array value `(a, n)` stored into a buffer field of type `fty`: `Buf(n, a)`.
-    pub fn buf_put(&self, fty: &Ty, n: &Ast, a: &Ast) -> Result<Ast, String> {
+    pub fn buf_put(&self, fty: &Ty, n: &Ast, a: &Ast, facts: &mut Vec<Ast>) -> Result<Ast, String> {
         let ent = self.buf_entry(fty)?;
-        Ok(ent.ctor.apply(&[n.clone(), a.clone()]))
+        let term = ent.ctor.apply(&[n.clone(), a.clone()]);
+        if Self::vec_element(fty).is_some_and(|elem| self.vec_handles.contains_key(elem)) {
+            facts.push(ent.len.apply1(&term).eq(n));
+            facts.push(ent.arr.apply1(&term).eq(a));
+        }
+        Ok(term)
+    }
+
+    fn vec_element(ty: &Ty) -> Option<&str> {
+        let Ty::Inst(g) = ty else { return None };
+        let ("vec", [elem]) = (g.name.as_str(), g.args.as_slice()) else { return None };
+        (g.owner.is_none() && elem.owner.is_none() && elem.args.is_empty()).then_some(elem.name.as_str())
+    }
+
+    pub fn vec_sum(&self, elem: &Ty, a: &Ast, n: &Ast) -> Option<Ast> {
+        let Ty::User(name) = elem else { return None };
+        self.vec_sums.get(name).map(|sum| sum.apply(&[a.clone(), n.clone()]))
+    }
+
+    pub fn has_vec_sums(&self) -> bool {
+        !self.vec_sums.is_empty()
+    }
+
+    pub fn vec_field_sum(&self, fty: &Ty, acc: &FuncDecl, t: &Ast) -> Result<Option<(Ast, Ast)>, String> {
+        let Some(sum) = Self::vec_element(fty).and_then(|elem| self.vec_sums.get(elem)) else { return Ok(None) };
+        let (a, n) = self.buf_parts(fty, &acc.apply1(t))?;
+        Ok(Some((sum.apply(&[a, n.clone()]), n)))
     }
 
     // ---------- G9 A1: structural size and well-formedness of recursive values ----------
@@ -1011,6 +1080,10 @@ impl Model {
         if self.nominal_kind(ty) == Some(NomKind::Struct) {
             k = Some("1".to_string());
             for (_fd, fty) in self.fields_of(ty, None)? {
+                if Self::vec_element(&fty).is_some_and(|elem| self.vec_sums.contains_key(elem)) {
+                    k = None;
+                    break;
+                }
                 if matches!(fty, Ty::Param(_) | Ty::I64 | Ty::Bool) || Model::is_buf(&fty) || fty.coll().is_some() {
                     continue;
                 }
@@ -1051,13 +1124,12 @@ impl Model {
     pub fn size_sum(&self, ty: &Ty, variant: Option<&str>, accs: &[FuncDecl], t: &Ast) -> Result<Ast, String> {
         let mut total = self.z.int(1);
         for ((_fd, fty), acc) in self.fields_of(ty, variant)?.iter().zip(accs.iter()) {
-            let term = acc.apply1(t);
-            if Model::is_buf(fty) {
-                // field_get makes an Arr view (weight None): only the buffer sort is (idempotently) ensured
-                self.buf_entry(fty)?;
-                continue;
-            }
-            if let Some(w) = self.weight(fty, &term)? {
+            let weight = if Model::is_buf(fty) {
+                self.vec_field_sum(fty, acc, t)?.map(|(sum, _)| sum)
+            } else {
+                self.weight(fty, &acc.apply1(t))?
+            };
+            if let Some(w) = weight {
                 total = total.add(&w);
             }
         }

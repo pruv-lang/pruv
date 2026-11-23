@@ -277,6 +277,8 @@ class Model:
         s.recrel = set()    # names of non-generic types that are recursive or (transitively) contain a recursive type
         s.bufs = {}         # "int" | "bool" -> (sort, constructor, length accessor, array accessor)
         s.buf_names = set()
+        s.vec_handles = {}
+        s.vec_sums = {}
         s.maps = {}
         s.strkey = None     # declared on first String-key use so other programs keep their solver input
         s.size_f, s.wf_f, s.fixed_memo = {}, {}, {}
@@ -332,6 +334,11 @@ class Model:
             # a field of a member type refers to the datatype under construction (z3 simultaneous declaration)
             if ft.owner is None and not ft.args and ft.name in gdt:
                 return gdt[ft.name]
+            if ft.owner is None and ft.name == "vec" and ft.args[0].name in gdt:
+                elem = ft.args[0]
+                if elem not in s.vec_handles:
+                    s.vec_handles[elem] = z3.DeclareSort("%sVecH_%s" % (s.pre, elem.name))
+                return s.vec_handles[elem]
             return s.sort_of(ft)
         for d, tag, dt in dts:
             if isinstance(d, StructDecl):
@@ -351,6 +358,18 @@ class Model:
                                               [srt.accessor(i, j) for j in range(len(v.fields))])
             s.sorts[d.name] = srt
             s.by_sort[srt.name()] = Type(d.name)
+        for d, tag, _ in dts:
+            elem = Type(d.name)
+            if elem not in s.vec_handles:
+                continue
+            handle = s.vec_handles[elem]
+            integer = z3.IntSort()
+            array = z3.ArraySort(integer, s.sort_of(elem))
+            s.bufs[elem] = (handle, z3.Function(tag + "mk_vec", integer, array, handle),
+                            z3.Function(tag + "len_vec", handle, integer),
+                            z3.Function(tag + "arr_vec", handle, array))
+            s.buf_names.add(handle.name())
+            s.vec_sums[elem] = z3.Function(tag + "vsum", array, integer, integer)
 
     # ---------- G9 A1: buffer fields ----------
     @staticmethod
@@ -446,7 +465,9 @@ class Model:
 
     def weight(s, fty, t):
         """size weight of a field value t of type fty (None = always 0): nominal values count their own size,
-        Some/Ok/Err count their payload, everything else is 0"""
+        Some/Ok/Err count their payload, and a recursive Vec element type determines the sum regardless of the owner."""
+        if isinstance(t, Arr) and t.elem in s.vec_sums:
+            return s.vec_sums[t.elem](t.a, t.n)
         if fty.owner is not None or fty in (I64, BOOL, OPTION, RESULT) or s.is_buf(fty) or is_collection(fty):
             return None
         if fty.name == "option":
@@ -552,7 +573,9 @@ class Model:
             groups = [(v.name, s.enum_info(ty)[v.name][2]) for v in d.variants]
         for vname, accs in groups:
             for (fd, fty), acc in zip(s.fields_of(ty, vname), accs):
-                if s.rel_nominal(fty):
+                if fty.owner is None and fty.name == "vec" and fty.args[0] in s.vec_sums:
+                    out.append(s.weight(fty, s.field_get(fty, acc(t), fd.name)) >= 0)
+                elif s.rel_nominal(fty):
                     out.append(s.size_fn(fty.name)(acc(t)) >= 1)
                 elif fty.owner is None and fty.args and s.is_user(fty) and s.fixed_size(fty) is None:
                     out.append(s.size_inst(fty)(acc(t)) >= 1)
@@ -1445,11 +1468,13 @@ class FnVerifier:
         """well_formed(ty, v): every active leaf is an i64. None when trivially true (module-level _wf_of)."""
         return _wf_of(s.model, ty, v)
 
-    def observe(s, st, t, ty, force=False):
+    def observe(s, st, t, ty, force=False, *, g=()):
         """G9 A1: add the valid one-step size/wf facts of the observed nominal term t (Model.facts) to the path
         condition of st, once per fact. Only for recursive-related types, or any non-generic nominal when forced
         (an explicit `size` call). A no-op for programs without recursive types."""
         m = s.model
+        if isinstance(t, Arr) and t.elem in m.vec_sums:
+            s.vec_sum(st, g, t)
         if ty is None or isinstance(t, (Arr, Map, File)):
             return
         if not (m.rel(ty) or (force and m.rel_nominal(ty))):
@@ -1465,7 +1490,29 @@ class FnVerifier:
                 st.pc.append(fct)
         st.obs = st.obs | set(new)
 
-    def rebuild(s, ty, cur, path, new):
+    def vec_sum(s, st, g, v):
+        total = s.model.vec_sums[v.elem](v.a, v.n)
+        s.assume(st, g, z3.And(total >= 0, z3.Implies(v.n == 0, total == 0)), bound=s.qstack)
+        return total
+
+    def observe_vec_element(s, st, g, v, i, element):
+        guard = [*g, i >= 0, i < v.n]
+        size = s.model.size_fn(v.elem.name)(element)
+        s.assume(st, guard, z3.And(size >= 1, size <= s.vec_sum(st, g, v)), bound=s.qstack)
+        wf = s.wf(v.elem, element)
+        if wf is not None:
+            s.assume(st, guard, wf, bound=s.qstack)
+
+    def field_put(s, st, g, ty, val):
+        term = s.model.field_put(ty, val)
+        if isinstance(val, Arr) and val.elem in s.model.vec_sums:
+            # The handle projections recover the vector at each observed construction.
+            vec = s.model.field_get(ty, term)
+            s.assume(st, g, z3.And(vec.n == val.n, vec.a == val.a))
+            s.vec_sum(st, g, val)
+        return term
+
+    def rebuild(s, ty, cur, path, new, st, g=()):
         """struct value `cur` of type ty with the field path replaced by `new`"""
         if not path:
             return new
@@ -1475,9 +1522,9 @@ class FnVerifier:
         vals = [acc(cur) for acc in accs]
         fty = m.fields_of(ty)[i][1]
         if len(path) == 1:
-            vals[i] = m.field_put(fty, new)       # G9 A1: a buffer field stores a Buf datatype value
+            vals[i] = s.field_put(st, g, fty, new)
         else:
-            vals[i] = s.rebuild(fty, vals[i], path[1:], new)
+            vals[i] = s.rebuild(fty, vals[i], path[1:], new, st, g)
         return ctor(*vals)
 
     # ---------- obligations ----------
@@ -1801,9 +1848,10 @@ class FnVerifier:
         except Exception:
             return str(v)
 
-    def assume(s, st, g, fact):
+    def assume(s, st, g, fact, *, bound=()):
         """add a fact that only holds on the short-circuit path g"""
-        st.pc.append(z3.Implies(z3.And(*g), fact) if g else fact)
+        fact = z3.Implies(z3.And(*g), fact) if g else fact
+        st.pc.append(z3.ForAll(list(bound), fact) if bound else fact)
 
     def assume_str(s, st, g, v):
         """LG26 (R-6b-3, G-LG25-1): a str value is valid UTF-8 at run time; assumed only in a UTF-8 aware function
@@ -1832,7 +1880,7 @@ class FnVerifier:
             s.observe(st, v, ty)
             fty = model.fields_of(ty)[i][1]
             r = model.field_get(fty, r, field)
-            s.observe(st, r, fty)
+            s.observe(st, r, fty, g=g)
             if fty == STR:      # LG26 (R-6b-3, G-LG25-1)
                 s.assume_str(st, list(g), r)
         return r
@@ -1858,9 +1906,12 @@ class FnVerifier:
                 a = z3.Store(a, z3.IntVal(i), z3.IntVal(b))
             return s.assume_str(st, g, mk_arr(a, z3.IntVal(len(e.value)), "literal", U8))   # LG26
         if isinstance(e, Var):
+            v = env[e.name]
             if s.utf8_aware and getattr(e, "ty", None) == STR:   # LG26: loop havoc makes a mutable str a fresh array
-                return s.assume_str(st, g, env[e.name])
-            return env[e.name]
+                return s.assume_str(st, g, v)
+            if isinstance(v, Arr) and v.elem in s.model.vec_sums:
+                s.vec_sum(st, g, v)
+            return v
         if isinstance(e, Move):
             v = env[e.name]
             for field in e.fields:
@@ -1937,8 +1988,10 @@ class FnVerifier:
                 s.prove(st, g, z3.And(i >= 0, i < arr.n), e, "index_oob",
                         "index in bounds for %s[...]" % arr.name)
             v = z3.Select(arr.a, i)
+            if arr.elem in s.model.vec_sums:
+                s.observe_vec_element(st, g, arr, i, v)
             # G2 A5: a bool element is a Bool; G3: an abstract element has no numeric domain: no in_range assumption
-            if code and arr.elem != BOOL and arr.elem.owner is None:
+            elif code and arr.elem != BOOL and arr.elem.owner is None:
                 s.assume(st, g, in_range(v))
             return v
         if isinstance(e, Ctor):
@@ -1976,7 +2029,7 @@ class FnVerifier:
             vals = [s.ev(fi.value, st, g, code, env) for fi in e.fields]
             sty = s.T(e.ty) if e.ty is not None else Type(e.name)
             if s.model.g9:      # G9 A1: buffer fields store Buf values; recursive results expose their facts
-                vals = [s.model.field_put(ft, x) for (fd, ft), x in zip(s.model.fields_of(sty), vals)]
+                vals = [s.field_put(st, g, ft, x) for (fd, ft), x in zip(s.model.fields_of(sty), vals)]
                 res = s.model.struct_info(sty)[0](*vals)
                 s.observe(st, res, sty)
                 return res
@@ -1985,7 +2038,7 @@ class FnVerifier:
             vals = [s.ev(a, st, g, code, env) for a in e.args]
             ety = s.T(e.ty) if e.ty is not None else Type(e.enum_name)
             if s.model.g9:
-                vals = [s.model.field_put(ft, x) for (fd, ft), x in zip(s.model.fields_of(ety, e.variant), vals)]
+                vals = [s.field_put(st, g, ft, x) for (fd, ft), x in zip(s.model.fields_of(ety, e.variant), vals)]
                 res = s.model.enum_info(ety)[e.variant][0](*vals)
                 s.observe(st, res, ety)
                 return res
@@ -2004,7 +2057,7 @@ class FnVerifier:
                 s.observe(st, v, ety)
                 fty = s.model.fields_of(ety, e.variant)[i][1]
                 r = s.model.field_get(fty, r, e.field)
-                s.observe(st, r, fty)
+                s.observe(st, r, fty, g=g)
                 if fty == STR:      # LG26 (R-6b-3, G-LG25-1): only where the variant is the active one
                     s.assume_str(st, list(g) + [s.model.enum_info(ety)[e.variant][1](v)], r)
             return r
@@ -2343,7 +2396,7 @@ class FnVerifier:
             arr = z3.Lambda([p], z3.If(z3.And(p >= i, p < i + cnt), z3.Select(sv.a, j + p - i), z3.Select(dv.a, p)))
             root, path = field_place(e.args[0].expr)
             nv = mk_arr(arr, dv.n, ".".join((root.name,) + path), dv.elem)
-            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, nv) if path else nv
+            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, nv, st, g) if path else nv
             if nv.elem == U8:       # both operands are in the byte domain, so the result is too
                 s.assume(st, g, u8_dom(nv))
             s.post_refine(e, [0], st, g)
@@ -2372,7 +2425,7 @@ class FnVerifier:
             root, path = field_place(e.args[0].expr)
             name = root.name
             nv = mk_arr(arr, av.n, ".".join((name,) + path), av.elem)
-            st.env[name] = s.rebuild(root.ty, st.env[name], path, nv) if path else nv
+            st.env[name] = s.rebuild(root.ty, st.env[name], path, nv, st, g) if path else nv
             s.post_refine(e, [0], st, g)
             return None
         if n == "is_char_boundary":
@@ -2642,7 +2695,7 @@ class FnVerifier:
                         after = s.read_field(st, after, field)
                     s.assume(st, g, after.n == before.n)
             cenv[f.params[i].name] = nv
-            st.env[name] = s.rebuild(root.ty, st.env[name], path, nv) if path else nv
+            st.env[name] = s.rebuild(root.ty, st.env[name], path, nv, st, g) if path else nv
 
     def post_refine(s, e, ios, st, g):
         """G5 A1 (G5_SPEC 5.2 step 8): the refinement of every marked refined local must hold right after the call
@@ -2795,11 +2848,19 @@ class FnVerifier:
             if n == "map_new":
                 kt = z3.K(s.model.map_key_sort(r.kty), z3.BoolVal(False))
                 return Map(kt, r.a, z3.IntVal(0), n, r.kty, r.vty)
-            return mk_arr(r.a, z3.IntVal(0), n, r.elem)
+            empty = mk_arr(r.a, z3.IntVal(0), n, r.elem)
+            if r.elem in s.model.vec_sums:
+                s.vec_sum(st, g, empty)
+            return empty
         if n == "vec_push":
             v, x = args
             need(v.n < MAX_LEN)
-            return mk_arr(z3.Store(v.a, v.n, s.model.field_put(v.elem, x)), v.n + 1, n, v.elem)
+            r = mk_arr(z3.Store(v.a, v.n, s.model.field_put(v.elem, x)), v.n + 1, n, v.elem)
+            if v.elem in s.model.vec_sums:
+                s.observe(st, x, v.elem)
+                s.assume(st, g, z3.Implies(z3.And(v.n >= 0, v.n < MAX_LEN),
+                    s.vec_sum(st, g, r) == s.vec_sum(st, g, v) + s.model.size_fn(v.elem.name)(x)))
+            return r
         if n == "vec_reserve":
             cnt = args[1]
             need(z3.And(cnt >= 0, cnt <= MAX_LEN))
@@ -2808,7 +2869,9 @@ class FnVerifier:
             v = args[0]
             root, path = field_place(e.args[0].expr)
             empty = mk_arr(v.a, z3.IntVal(0), v.name, v.elem)
-            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, empty)
+            if v.elem in s.model.vec_sums:
+                s.vec_sum(st, g, empty)
+            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, empty, st, g)
             return None
         if n == "vec_extend_from_slice":   # D95: old prefix kept, suffix equals the slice
             v, src = args
@@ -2822,7 +2885,7 @@ class FnVerifier:
             s.assume(st, g, z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < src.n),
                                                       z3.Select(r.a, v.n + k) == z3.Select(src.a, k))))
             out = mk_arr(r.a, v.n + src.n, v.name, v.elem)
-            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, out)
+            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, out, st, g)
             return None
         if n == "string_eq":
             a, b = args
@@ -2835,7 +2898,8 @@ class FnVerifier:
             return r
         if n in ("vec_get", "string_byte"):
             v, i = args
-            need(z3.And(i >= 0, i < v.n))
+            bounds = z3.And(i >= 0, i < v.n)
+            need(bounds)
             r = z3.Select(v.a, i)
             if v.elem == _STRING:
                 text = s.model.field_get(_STRING, r, n)
@@ -2844,7 +2908,10 @@ class FnVerifier:
                 return text
             if code and v.elem in (I64, U8):   # as an array read: an i64/u8 element is a machine integer
                 s.assume(st, g, in_range(r))
-            if code and s.model.tt.is_struct(v.elem):
+            if v.elem in s.model.vec_sums:
+                s.observe(st, r, v.elem)
+                s.observe_vec_element(st, g, v, i, r)
+            elif code and s.model.tt.is_struct(v.elem):
                 wf = s.wf(v.elem, r)
                 if wf is not None:
                     s.assume(st, g, wf)
@@ -2862,7 +2929,7 @@ class FnVerifier:
             new = Map(z3.Store(m.d, k, z3.BoolVal(False)), m.a, m.n - z3.If(has, 1, 0),
                       m.name, m.kty, m.vty)
             root, path = field_place(e.args[0].expr)
-            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, new)
+            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, new, st, g)
             return s.map_lookup(m, k, rty) if n == "map_take" else has
         if n == "map_insert":
             m, k, x = args
@@ -3397,7 +3464,7 @@ class FnVerifier:
             root, path = field_place(place)
             if root.name in names:
                 saved = s.ev(place, st.fork(), [], False)
-                h.env[root.name] = s.rebuild(root.ty, h.env[root.name], path, saved)
+                h.env[root.name] = s.rebuild(root.ty, h.env[root.name], path, saved, h)
         return h
 
     def check_assert(s, stmt, st):
@@ -3449,7 +3516,7 @@ class FnVerifier:
             if fpath:
                 new = mk_arr(z3.Store(arr.a, i, v), arr.n, arr.name, arr.elem)
                 root = st.env[stmt.name]
-                st.env[stmt.name] = s.rebuild(s.model.type_of(root), root, fpath, new)
+                st.env[stmt.name] = s.rebuild(s.model.type_of(root), root, fpath, new, st)
                 return [st]
             st.env[stmt.name] = mk_arr(z3.Store(arr.a, i, v), arr.n, stmt.name, arr.elem)
             return [st]
@@ -3472,10 +3539,12 @@ class FnVerifier:
                     v = s.map_lookup(collection, key, scrutinee.ty)
                 else:
                     o = s.model.opt(scrutinee.ty)
-                    v = z3.If(z3.And(key >= 0, key < collection.n),
-                              o.some(z3.Select(collection.a, key)), o.none)
+                    bounds = z3.And(key >= 0, key < collection.n)
+                    element = z3.Select(collection.a, key)
+                    v = z3.If(bounds, o.some(element), o.none)
             else:
                 v = s.ev(scrutinee, st, [], True)
+            recursive_vec = update and isinstance(collection, Arr) and collection.elem in s.model.vec_sums
             outer = set(st.env)
             out = []
             sty = s.model.type_of(v)     # G3: the scrutinee's complete (possibly generic) type
@@ -3511,8 +3580,12 @@ class FnVerifier:
                     w = s.wf(fty, val)
                     if w is not None:
                         b.pc.append(w)
+                writes_back = update and a.ctor == "Some"
+                if writes_back and recursive_vec:
+                    size = s.model.size_fn(collection.elem.name)
+                    b.pc.append(size(element) <= s.vec_sum(b, [], collection))
                 for end in s.exec_block(a.body, b):
-                    if update and a.ctor == "Some":
+                    if writes_back:
                         final = end.env[a.binders[0]]
                         array = z3.Store(collection.a, key, final)
                         if isinstance(collection, Map):
@@ -3520,7 +3593,13 @@ class FnVerifier:
                                       collection.kty, collection.vty)
                         else:
                             new = mk_arr(array, collection.n, collection.name, collection.elem)
-                        end.env[root.name] = s.rebuild(root.ty, end.env[root.name], path, new)
+                            if recursive_vec:
+                                s.observe(end, final, collection.elem)
+                                old_sum = s.vec_sum(end, [], collection)
+                                new_sum = s.vec_sum(end, [], new)
+                                end.pc.append(new_sum == old_sum - size(element) + size(final))
+                        end.env[root.name] = s.rebuild(root.ty, end.env[root.name], path, new, end)
+
                     # binders and arm locals end with the arm; only updates to outer variables remain
                     for k in [k for k in end.env if k not in outer]:
                         del end.env[k]
@@ -3530,7 +3609,7 @@ class FnVerifier:
             st = st.fork()
             v = s.ev(stmt.value, st, [], True)          # rhs first, on the state before the store
             root = st.env[stmt.name]
-            st.env[stmt.name] = s.rebuild(s.model.type_of(root), root, stmt.fields, v)
+            st.env[stmt.name] = s.rebuild(s.model.type_of(root), root, stmt.fields, v, st)
             return [st]
         if isinstance(stmt, Return):
             st = st.fork()

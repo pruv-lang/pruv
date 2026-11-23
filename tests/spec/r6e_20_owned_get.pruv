@@ -1,0 +1,9 @@
+// spec: R-6e-20 reject
+// vec_get of a recursive element is a borrowed read; it cannot be returned as an owned value.
+enum Tree { Leaf, Branch(xs: Vec<Tree>) }
+
+fn first(xs: Vec<Tree>) -> Tree ! alloc
+  requires len(xs) > 0
+{
+  return vec_get::<Tree>(xs, 0);
+}

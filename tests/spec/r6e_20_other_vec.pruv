@@ -1,0 +1,10 @@
+// spec: R-6e-20 reject
+// The element comes from a vector built here, not from the parameter, so it is not smaller than t.
+enum Tree { Leaf, Branch(children: Vec<Tree>) }
+
+fn walk(t: Tree) -> i64 ! alloc
+  decreases size(t)
+{
+  let big: Vec<Tree> = vec_push::<Tree>(vec_new::<Tree>(), Tree::Branch(vec_new::<Tree>()));
+  return walk(vec_get::<Tree>(big, 0));
+}

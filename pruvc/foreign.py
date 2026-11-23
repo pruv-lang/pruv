@@ -383,7 +383,7 @@ class _Ownership:
     def __init__(s, funcs, types, aggregates):
         s.funcs = funcs
         s.types = types
-        s.aggregates = aggregates   # owned aggregate struct names (the checker's s.aggregates; Rust port aggregates)
+        s.aggregates = aggregates   # owned aggregates and recursive vector element types
         s.bor = set()
         s.arm_bor = []   # binders of the enclosing user-enum arms (Rust port arm_bor)
         s.track = None   # name -> "move" | "borrow" of the outermost call being checked (shared by nested calls)
@@ -742,7 +742,8 @@ class _Ownership:
             if is_nongeneric_struct(e.args[-1].ty, s.types):
                 takes[-1] = True
             if e.name not in s.funcs:
-                takes[-1] |= e.args[-1].ty == STRING
+                payload = e.args[-1].ty
+                takes[-1] |= payload == STRING or (e.name == "vec_push" and s.aggregate(payload))
                 if e.name == "map_insert":
                     takes[1] = e.args[1].ty == STRING
         return takes

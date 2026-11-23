@@ -1,0 +1,22 @@
+// spec: R-6e-20 accept
+// Facts on vectors the function only observes: an empty input weighs 0, an in-bounds child is smaller.
+struct Tree { kids: Vec<Tree> }
+
+fn leaf(t: Tree) -> i64
+  requires len(t.kids) == 0
+  ensures size(t) == 1
+{
+  return 0;
+}
+
+fn child(t: Tree) -> i64
+  requires len(t.kids) > 0
+  ensures size(t.kids[0]) < size(t)
+{
+  return 0;
+}
+
+fn main() -> () ! alloc, io {
+  let t: Tree = Tree { kids: vec_new::<Tree>() };
+  print(leaf(t));
+}

@@ -1653,6 +1653,7 @@ class Gen:
         # requires checks are generated, closed over field types by g9_helper_texts). All empty for a non-G9 program.
         s.g9 = getattr(prog, "g9", None) is not None
         s.ext, s.boxed = g9_sets(prog)
+        s.rec_vec_elems = set((getattr(prog, "g9", None) or {}).get("rec_vec_elems", ()))
         s.refs = set()
         s.moving = set()     # owned extended locals a return statement may move (see return_movable)
         s.pinned = set()     # names borrowed as the scrutinee of an enclosing match_ext arm
@@ -2674,6 +2675,9 @@ class Gen:
         """Rust i128 expression for weight(value) (G9_SPEC 3); x names a variable of type `&R(t)`; bud is the budget
         argument expression (`pruv_budget` inside a helper, where it is a `&mut i64`).
         Scalars, arrays, str and None weigh 0; a nominal value weighs its size; Some / Ok / Err weigh their payload."""
+        if s.rec_vec(t):
+            return ("(%s).iter().fold(0i128, |pruv_sum, pruv_w| "
+                    "pruv_cadd(pruv_sum, pruv_csize__%s(pruv_w, %s)))" % (x, t.args[0].name, bud))
         if t.owner is None and t.args and t.name in ("option", "result"):
             inner = s.g9_weight(t.args[0], "pruv_w", bud)
             err = s.g9_weight(t.args[1], "pruv_w", bud) if len(t.args) == 2 else "0i128"
@@ -2804,7 +2808,10 @@ class Gen:
                     continue
                 out.add(n)
                 for f in s.decl_fields(decls[n]):
-                    work.extend(nominals_in(f.type))
+                    if s.rec_vec(f.type):
+                        work.append(f.type.args[0].name)
+                    else:
+                        work.extend(nominals_in(f.type))
             return out
         sizes, eqs = close(s.need_size), close(s.need_eq)
         texts = [G9_TICK]
@@ -2816,6 +2823,24 @@ class Gen:
         return texts
 
     # ---------- G9: owning and viewing extended values (executable code) ----------
+    def rec_vec(s, t):
+        return (t.owner is None and t.name == "vec" and t.args[0].owner is None
+                and not t.args[0].args and t.args[0].name in s.rec_vec_elems)
+
+    def rec_vec_get(s, e):
+        return (isinstance(e, Call) and e.name == "vec_get" and e.name not in s.fmap
+                and s.rec_vec(e.args[0].ty))
+
+    def rec_vec_view(s, e):
+        s.fg.record_inline_catalog(e.name, tuple(e.inst.get("src_args", e.inst["args"])))
+        v, i = map(s.e, e.args)
+        if s.unchecked_catalog():
+            return "(*unsafe { (%s).get_unchecked((%s) as usize) })" % (v, i)
+        fail = ('pruv_g6_req("vec_get", "0 <= i && i < len(v)")' if s.fg is not None and s.fg.req
+                else 'pruv_g6_repr("index")')
+        index = "<usize as ::std::convert::TryFrom<i64>>::try_from(%s).unwrap_or(usize::MAX)" % i
+        return "(*(%s).get(%s).unwrap_or_else(|| %s))" % (v, index, fail)
+
     def view(s, e):
         """Rust `&T` for an extended expression in a READ position (argument, match scrutinee): no clone, no alloc.
         A parameter / payload view is already a reference; an owned local or a field path is borrowed; a fresh temporary
@@ -3219,9 +3244,9 @@ class Gen:
             pat = name if not a.binders else "%s(%s)" % (name, ", ".join(a.binders))
             s.emit(ind + 1, "%s => {" % pat)
             saved_vt, saved_refs, saved_pinned = dict(s.vt), set(s.refs), set(s.pinned)
-            root = st.scrutinee    # the local a field-path scrutinee (h.e) borrows from is pinned too
-            while isinstance(root, FieldAccess):
-                root = root.base
+            root = field_place(sc)[0]
+            if s.rec_vec_get(root):
+                root = field_place(root.args[0])[0]
             if isinstance(root, Var):
                 s.pinned.add(root.name)
             fields = s.table.variant(sty, a.ctor).fields
@@ -3234,7 +3259,7 @@ class Gen:
                 elif s.is_ext(ft):
                     s.emit(ind + 2, "let %s: &%s = %s;" % (b, ft.name, b))
                     s.refs.add(b)
-                elif is_owned_field_type(ft):
+                elif is_owned_field_type(ft) or s.rec_vec(ft):
                     s.emit(ind + 2, "let %s: %s = %s%s;" % (b, rty(ft, True), "&" if consume else "", b))
                     s.refs.add(b)
                 elif (is_array(ft) or ft == STR) and consume:
@@ -3429,6 +3454,8 @@ class Gen:
                 return "((%s)[%s].as_str())" % (v, index)
             return ('((%s).get(%s).unwrap_or_else(|| pruv_g6_req("vec_get", "0 <= i && i < len(v)")).as_str())'
                     % (v, index))
+        if s.rec_vec_get(e):
+            return s.rec_vec_view(e)
         if e.name == "vec_get" and s.is_ext(low[-1]):
             s.fg.record_inline_catalog(e.name, src)
             v, i = map(s.e, e.args)
@@ -3573,6 +3600,8 @@ class Gen:
             while isinstance(b, FieldAccess):   # D90: a nested field path stays one place inside the block
                 path.insert(0, b.field)
                 b = b.base
+            if s.rec_vec_get(b):
+                return "%s.%s" % (s.rec_vec_view(b), ".".join(path))
             if (isinstance(b, Call) and b.name == "vec_get" and b.name not in s.fmap and s.is_ext(b.ty)
                     and s.unchecked_catalog()):
                 s.fg.record_inline_catalog(b.name, tuple(b.inst.get("src_args", b.inst["args"])))

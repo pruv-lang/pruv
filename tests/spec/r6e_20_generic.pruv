@@ -1,0 +1,2 @@
+// spec: R-6e-20 reject
+enum Tree<T> { Leaf(value: T), Branch(children: Vec<Tree<T>>) }

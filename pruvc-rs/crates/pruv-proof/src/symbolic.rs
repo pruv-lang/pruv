@@ -1863,10 +1863,10 @@ impl<'a> FnVerifier<'a> {
     }
 
     /// verify.py `Model.field_put`: an Arr stored into a buffer field becomes a Buf value, any other value is stored as is.
-    fn field_put(&self, fty: &Ty, v: &Val) -> R<Ast> {
+    fn field_put(&self, fty: &Ty, v: &Val, facts: &mut Vec<Ast>) -> R<Ast> {
         if let Val::Arr(a) = v {
             if Model::is_buf(fty) {
-                return Ok(self.model.buf_put(fty, &a.n, &a.a)?);
+                return Ok(self.model.buf_put(fty, &a.n, &a.a, facts)?);
             }
         }
         if let Val::Map(m) = v {
@@ -1939,7 +1939,11 @@ impl<'a> FnVerifier<'a> {
         };
         for (vname, accs) in &groups {
             for ((_fd, fty), acc) in m.fields_of(ty, vname.as_deref())?.iter().zip(accs.iter()) {
-                if m.rel_nominal(fty) {
+                if let Some((sum, len)) = m.vec_field_sum(fty, acc, t)? {
+                    out.push(sum.ge_i(0));
+                    let zero = self.z.int(0);
+                    out.push(len.eq(&zero).implies(&sum.eq(&zero)));
+                } else if m.rel_nominal(fty) {
                     out.push(m.size_fn(fty.name())?.apply1(&acc.apply1(t)).ge_i(1));
                 } else if matches!(fty, Ty::Inst(_)) && m.is_user(fty) && m.fixed_size(fty)?.is_none() {
                     out.push(m.size_inst(fty)?.apply1(&acc.apply1(t)).ge_i(1));
@@ -1964,12 +1968,12 @@ impl<'a> FnVerifier<'a> {
 
     /// `rebuild(ty, cur, path, new)` (line 242): the struct value `cur` with the field path replaced by `new`.
     pub fn try_rebuild(&self, ty: &Ty, cur: &Ast, path: &[&str], new: &Ast) -> R<Ast> {
-        self.try_rebuild_v(ty, cur, path, &Val::Int(new.clone()))
+        self.try_rebuild_v(ty, cur, path, &Val::Int(new.clone()), &mut Vec::new())
     }
 
     /// `rebuild` with an environment value as the new field value (G9 A1: a buffer field stores a Buf datatype value built from
     /// an Arr, `Model.field_put`).
-    pub fn try_rebuild_v(&self, ty: &Ty, cur: &Ast, path: &[&str], new: &Val) -> R<Ast> {
+    fn try_rebuild_v(&self, ty: &Ty, cur: &Ast, path: &[&str], new: &Val, facts: &mut Vec<Ast>) -> R<Ast> {
         if path.is_empty() {
             return Ok(new.try_ast()?.clone());
         }
@@ -1980,9 +1984,9 @@ impl<'a> FnVerifier<'a> {
         let fty = m.fields_of(ty, None)?[i].1.clone();
         if path.len() == 1 {
             // G9 A1: a buffer field stores a Buf datatype value
-            vals[i] = self.field_put(&fty, new)?;
+            vals[i] = self.field_put(&fty, new, facts)?;
         } else {
-            let sub = self.try_rebuild_v(&fty, &vals[i], &path[1..], new)?;
+            let sub = self.try_rebuild_v(&fty, &vals[i], &path[1..], new, facts)?;
             vals[i] = sub;
         }
         Ok(sf.ctor.apply(&vals))
@@ -2247,7 +2251,7 @@ impl<'a> FnVerifier<'a> {
             }
             if matches!(root, Expr::Var(v) if names.contains(&v.name)) {
                 let saved = self.ev0(&place, &mut st.fork(None), &[], false)?;
-                self.store_collection_place(&place, &mut h.env, saved)?;
+                self.store_collection_place(&place, &mut h, saved)?;
             }
         }
         Ok(h)
@@ -2515,7 +2519,7 @@ impl<'a> FnVerifier<'a> {
     /// verify.py `ev(e, st, g, code, env)`. code=True: generates proof obligations and i64 semantics.
     pub(crate) fn ev(&mut self, e: &Expr, st: &mut State, g: &[Ast], code: bool, env: &Env) -> R<Val> {
         let model: &'a Model = self.model;
-        match e {
+        let value: R<Val> = match e {
             Expr::Spent(_) => Ok(st.env.get("spent").clone()),
             Expr::IntLit(x) => Ok(Val::Int(self.z.int_str(&norm_int(&x.value)))),
             Expr::BoolLit(x) => Ok(Val::Bool(self.z.bool_val(x.value))),
@@ -2683,6 +2687,9 @@ impl<'a> FnVerifier<'a> {
                 }
                 // G3: an abstract element has no numeric domain: no in_range assumption
                 if arr.elem == Elem::Abs {
+                    if !code && model.has_vec_sums() {
+                        self.observe_vec_element(st, g, &arr, &i)?;
+                    }
                     return Ok(Val::Dt(v, arr.elem_ty()));
                 }
                 if code {
@@ -2700,7 +2707,7 @@ impl<'a> FnVerifier<'a> {
                 }
                 let arg = x.arg.as_ref().ok_or_else(|| "None".to_string())?;
                 let v = self.ev(arg, st, g, code, env)?;
-                let v = self.field_put(&payload_ty(cty.as_ref(), x.name == "Err"), &v)?;
+                let v = self.field_put(&payload_ty(cty.as_ref(), x.name == "Err"), &v, &mut st.pc)?;
                 match x.name.as_str() {
                     "Some" => {
                         let o = model.opt(cty.as_ref())?;
@@ -2776,7 +2783,7 @@ impl<'a> FnVerifier<'a> {
                     };
                     let mut asts: Vec<Ast> = Vec::new();
                     for ((_, ft), xv) in model.fields_of(&sty, None)?.iter().zip(vals.iter()) {
-                        asts.push(self.field_put(ft, xv)?);
+                        asts.push(self.field_put(ft, xv, &mut st.pc)?);
                     }
                     let res = model.struct_info(&sty)?.ctor.apply(&asts);
                     self.observe(st, &res, Some(&sty), false)?;
@@ -2805,7 +2812,7 @@ impl<'a> FnVerifier<'a> {
                     };
                     let mut asts: Vec<Ast> = Vec::new();
                     for ((_, ft), xv) in model.fields_of(&ety, Some(&x.variant))?.iter().zip(vals.iter()) {
-                        asts.push(self.field_put(ft, xv)?);
+                        asts.push(self.field_put(ft, xv, &mut st.pc)?);
                     }
                     let res = model.variant_fns(&ety, &x.variant)?.ctor.apply(&asts);
                     self.observe(st, &res, Some(&ety), false)?;
@@ -2837,9 +2844,10 @@ impl<'a> FnVerifier<'a> {
                     if let Val::Dt(a, t) = &rv {
                         self.observe(st, a, Some(t), false)?;
                     }
-                    return Ok(rv);
+                    Ok(rv)
+                } else {
+                    Val::from_field(&fty, sf.accs[idx].apply1(va))
                 }
-                Val::from_field(&fty, sf.accs[idx].apply1(va))
             }
             Expr::IsVariant(x) => {
                 let v = self.ev(&x.value, st, g, code, env)?;
@@ -2880,11 +2888,22 @@ impl<'a> FnVerifier<'a> {
                     if let Val::Dt(a, t) = &rv {
                         self.observe(st, a, Some(t), false)?;
                     }
-                    return Ok(rv);
+                    Ok(rv)
+                } else {
+                    Val::from_field(&fty, vf.accs[idx].apply1(v.try_ast()?))
                 }
-                Val::from_field(&fty, vf.accs[idx].apply1(v.try_ast()?))
+            }
+        };
+        let value = value?;
+        if model.has_vec_sums() {
+            if let Val::Arr(v) = &value {
+                if let Some(sum) = model.vec_sum(&v.elem_ty(), &v.a, &v.n) {
+                    let zero = self.z.int(0);
+                    self.assume(st, g, v.n.eq(&zero).implies(&sum.eq(&zero)));
+                }
             }
         }
+        Ok(value)
     }
 
     /// verify.py `call` (line 604).
@@ -3101,7 +3120,7 @@ impl<'a> FnVerifier<'a> {
                     let dom = self.u8_dom(&nv);
                     self.assume(st, g, dom);
                 }
-                self.store_collection_place(&dst_place.expr, &mut st.env, Val::Arr(nv))?;
+                self.store_collection_place(&dst_place.expr, st, Val::Arr(nv))?;
                 self.post_refine(e, &[0], st, g)?;
                 return Ok(Val::Unit);
             }
@@ -3169,7 +3188,7 @@ impl<'a> FnVerifier<'a> {
                     _ => &av.name,
                 };
                 let value = Val::Arr(av.like(arr, av.n.clone(), name));
-                self.store_collection_place(&dst.expr, &mut st.env, value)?;
+                self.store_collection_place(&dst.expr, st, value)?;
                 self.post_refine(e, &[0], st, g)?;
                 return Ok(Val::Unit);
             }
@@ -3779,7 +3798,7 @@ impl<'a> FnVerifier<'a> {
                 }
             }
             cenv.set(pname, nv.clone());
-            self.store_collection_place(place, &mut st.env, nv)?;
+            self.store_collection_place(place, st, nv)?;
         }
         Ok(())
     }
@@ -4513,22 +4532,47 @@ impl<'a> FnVerifier<'a> {
                     return Ok(Val::Map(MapV { d: kt, a: r.a.clone(), n: z.int(0), name: n.to_string(), kty: r.kty.clone(), vty: r.vty.clone() }));
                 }
                 let r = r.try_arr()?;
-                Ok(Val::Arr(r.like(r.a.clone(), z.int(0), n)))
+                let empty = r.like(r.a.clone(), z.int(0), n);
+                if !self.model.has_vec_sums() {
+                    return Ok(Val::Arr(empty));
+                }
+                if let Some(sum) = self.model.vec_sum(&empty.elem_ty(), &empty.a, &empty.n) {
+                    self.assume(st, g, sum.eq(&z.int(0)));
+                }
+                Ok(Val::Arr(empty))
             }
             "vec_push" => {
                 let v = argv(0)?.try_arr()?.clone();
-                let xv = self.field_put(&v.elem_ty(), argv(1)?)?;
+                let xv = self.field_put(&v.elem_ty(), argv(1)?, &mut st.pc)?;
                 if code {
                     let ob = v.n.lt_i(MAX_LEN);
                     self.prove_core(&st, g, &ob, pos(e), "call_requires", &what, None);
                 }
-                Ok(Val::Arr(v.like(v.a.store(&v.n, &xv), v.n.add_i(1), n)))
+                let pushed = v.like(v.a.store(&v.n, &xv), v.n.add_i(1), n);
+                if !self.model.has_vec_sums() {
+                    return Ok(Val::Arr(pushed));
+                }
+                let elem = v.elem_ty();
+                if let (Some(old_sum), Some(sum)) = (
+                    self.model.vec_sum(&elem, &v.a, &v.n),
+                    self.model.vec_sum(&elem, &pushed.a, &pushed.n),
+                ) {
+                    self.observe(st, &xv, Some(&elem), false)?;
+                    let size = self.model.size_fn(elem.name())?.apply1(&xv);
+                    self.assume(st, g, old_sum.ge_i(0));
+                    self.assume(st, g, sum.ge_i(0));
+                    self.assume(st, g, sum.eq(&old_sum.add(&size)));
+                }
+                Ok(Val::Arr(pushed))
             }
             "vec_clear" => {
                 let v = argv(0)?.try_arr()?;
                 let Expr::InoutArg(place) = &x.args[0] else { return Err("missing inout place".into()); };
                 let empty = v.like(v.a.clone(), z.int(0), &v.name);
-                self.store_collection_place(&place.expr, &mut st.env, Val::Arr(empty))?;
+                if let Some(sum) = self.model.vec_sum(&empty.elem_ty(), &empty.a, &empty.n) {
+                    self.assume(st, g, sum.eq(&z.int(0)));
+                }
+                self.store_collection_place(&place.expr, st, Val::Arr(empty))?;
                 Ok(Val::Unit)
             }
             "vec_reserve" => {
@@ -4558,7 +4602,7 @@ impl<'a> FnVerifier<'a> {
                 self.assume(st, g, z.forall(&[k.clone()], &prefix, &[]));
                 self.assume(st, g, z.forall(&[k], &suffix, &[]));
                 let out = v.like(a.clone(), len, &v.name);
-                self.store_collection_place(&place.expr, &mut st.env, Val::Arr(out))?;
+                self.store_collection_place(&place.expr, st, Val::Arr(out))?;
                 Ok(Val::Unit)
             }
             "string_eq" => {
@@ -4595,8 +4639,9 @@ impl<'a> FnVerifier<'a> {
                     Elem::Bool => Ok(Val::Bool(r)),
                     Elem::Abs => {
                         let ty = v.elem_ty();
-                        // verify.py: only a struct element read in code assumes its well-formedness
-                        if code && self.model.nominal_kind(&ty) == Some(NomKind::Struct) {
+                        if !self.observe_vec_element(st, g, &v, &i)?
+                            && code && self.model.nominal_kind(&ty) == Some(NomKind::Struct)
+                        {
                             if let Some(wf) = self.try_wf(&ty, &r)? {
                                 self.assume(st, g, wf);
                             }
@@ -4621,7 +4666,7 @@ impl<'a> FnVerifier<'a> {
             "map_insert" => {
                 let m = argv(0)?.try_map()?.clone();
                 let k = self.map_key(&m.kty, argv(1)?)?;
-                let xv = self.field_put(&Ty::from_gtype(&m.vty), argv(2)?)?;
+                let xv = self.field_put(&Ty::from_gtype(&m.vty), argv(2)?, &mut st.pc)?;
                 let has = m.d.select(&k);
                 if code {
                     let ob = z.or(&[has.clone(), m.n.lt_i(MAX_LEN)]);
@@ -4650,14 +4695,14 @@ impl<'a> FnVerifier<'a> {
                 m.d = m.d.store(&k, &z.bool_val(false));
                 m.n = m.n.sub(&z.ite(&has, &z.int(1), &z.int(0)));
                 let Expr::InoutArg(place) = &x.args[0] else { return Err("missing inout place".into()) };
-                self.store_collection_place(&place.expr, &mut st.env, Val::Map(m))?;
+                self.store_collection_place(&place.expr, st, Val::Map(m))?;
                 Ok(result)
             }
             "map_updated" => {
                 let aft = argv(0)?.try_map()?.clone();
                 let bef = argv(1)?.try_map()?.clone();
                 let k = self.map_key(&aft.kty, argv(2)?)?;
-                let xv = self.field_put(&Ty::from_gtype(&aft.vty), argv(3)?)?;
+                let xv = self.field_put(&Ty::from_gtype(&aft.vty), argv(3)?, &mut st.pc)?;
                 let jsort = self.model.map_key_sort(&aft.kty)?;
                 let j = z.constant("map!j", &jsort);
                 let c1 = aft.d.eq(&bef.d.store(&k, &z.bool_val(true)));
@@ -4714,7 +4759,29 @@ impl<'a> FnVerifier<'a> {
         }
     }
 
-    fn store_collection_place(&self, mut place: &Expr, env: &mut Env, value: Val) -> R<()> {
+    fn observe_vec_element(&self, st: &mut State, g: &[Ast], v: &Arr, i: &Ast) -> R<bool> {
+        let elem = v.elem_ty();
+        let Some(sum) = self.model.vec_sum(&elem, &v.a, &v.n) else { return Ok(false) };
+        let element = v.a.select(i);
+        let size = self.model.size_fn(elem.name())?.apply1(&element);
+        let in_bounds = self.z.and(&[i.ge_i(0), i.lt(&v.n)]);
+        let mut facts = vec![sum.ge_i(0), in_bounds.implies(&self.z.and(&[size.ge_i(1), size.le(&sum)]))];
+        if let Some(wf) = self.try_wf(&elem, &element)? {
+            facts.push(in_bounds.implies(&wf));
+        }
+        for fact in facts {
+            if self.qstack.is_empty() {
+                self.assume(st, g, fact);
+            } else {
+                // inside a quantified contract the index can be a bound variable: the fact holds for every index
+                let guarded = self.z.and(g).implies(&fact);
+                st.pc.push(self.z.forall(&self.qstack, &guarded, &[]));
+            }
+        }
+        Ok(true)
+    }
+
+    fn store_collection_place(&self, mut place: &Expr, st: &mut State, value: Val) -> R<()> {
         let mut path = Vec::new();
         while let Expr::FieldAccess(f) = place {
             path.push(f.field.as_str());
@@ -4722,12 +4789,12 @@ impl<'a> FnVerifier<'a> {
         }
         let Expr::Var(root) = place else { return Err("invalid collection place".into()) };
         if path.is_empty() {
-            env.set(&root.name, value);
+            st.env.set(&root.name, value);
         } else {
             path.reverse();
-            let Val::Dt(term, ty) = env.get(&root.name) else { return Err("invalid collection root".into()) };
-            let rebuilt = self.try_rebuild_v(ty, term, &path, &value)?;
-            env.set(&root.name, Val::Dt(rebuilt, ty.clone()));
+            let Val::Dt(term, ty) = st.env.get(&root.name) else { return Err("invalid collection root".into()) };
+            let rebuilt = self.try_rebuild_v(ty, term, &path, &value, &mut st.pc)?;
+            st.env.set(&root.name, Val::Dt(rebuilt, ty.clone()));
         }
         Ok(())
     }
@@ -5156,7 +5223,7 @@ impl<'a> FnVerifier<'a> {
                 let last = s.fields.last().map(|f| f.as_str()).unwrap_or("");
                 let new = Val::Arr(arr.like(arr.a.store(&i, &v), arr.n.clone(), last));
                 let path: Vec<&str> = s.fields.iter().map(|f| f.as_str()).collect();
-                let rebuilt = self.try_rebuild_v(&root_ty, &root_ast, &path, &new)?;
+                let rebuilt = self.try_rebuild_v(&root_ty, &root_ast, &path, &new, &mut st.pc)?;
                 st.env.set(&s.name, Val::Dt(rebuilt, root_ty));
                 Ok(vec![st])
             }
@@ -5216,6 +5283,7 @@ impl<'a> FnVerifier<'a> {
                         let (key, value) = if call.name == "vec_at_mut" {
                             let v = collection.try_arr()?;
                             let i = index.try_ast()?;
+                            self.observe_vec_element(&mut st, &[], v, i)?;
                             let opt = self.model.opt(Some(&ty))?;
                             let has = self.z.and(&[i.ge_i(0), i.lt(&v.n)]);
                             (i.clone(), Val::Dt(self.z.ite(&has, &opt.some.apply1(&v.a.select(i)), &opt.none), ty))
@@ -5299,17 +5367,32 @@ impl<'a> FnVerifier<'a> {
                     }
                     for mut end in self.exec_block(&a.body, b)? {
                         if let (Some((place, before, key)), Some(name)) = (&collection_update, a.binders.first()) {
-                            let value = end.env.get(name).try_ast()?;
+                            let value = end.env.get(name).try_ast()?.clone();
                             let after = match before {
                                 Val::Map(m) => {
                                     let mut m = m.clone();
-                                    m.a = m.a.store(key, value);
+                                    m.a = m.a.store(key, &value);
                                     Val::Map(m)
                                 }
-                                Val::Arr(v) => Val::Arr(v.like(v.a.store(key, value), v.n.clone(), &v.name)),
+                                Val::Arr(v) => {
+                                    let updated = v.like(v.a.store(key, &value), v.n.clone(), &v.name);
+                                    let elem = v.elem_ty();
+                                    if let (Some(old_sum), Some(sum)) = (
+                                        model.vec_sum(&elem, &v.a, &v.n),
+                                        model.vec_sum(&elem, &updated.a, &updated.n),
+                                    ) {
+                                        self.observe(&mut end, &value, Some(&elem), false)?;
+                                        let size = model.size_fn(elem.name())?;
+                                        let old_size = size.apply1(&v.a.select(key));
+                                        let new_size = size.apply1(&value);
+                                        end.pc.push(sum.ge_i(0));
+                                        end.pc.push(sum.eq(&old_sum.sub(&old_size).add(&new_size)));
+                                    }
+                                    Val::Arr(updated)
+                                }
                                 _ => return Err("invalid mutable collection".into()),
                             };
-                            self.store_collection_place(place, &mut end.env, after)?;
+                            self.store_collection_place(place, &mut end, after)?;
                         }
                         // The binder and the arm's local variables end with the arm; only updates to outer variables remain
                         let drop_keys: Vec<String> =
@@ -5331,7 +5414,7 @@ impl<'a> FnVerifier<'a> {
                     _ => return Err(format!("field assignment on '{}' which is not a struct value", s.name)),
                 };
                 let path: Vec<&str> = s.fields.iter().map(|f| f.as_str()).collect();
-                let new = self.try_rebuild_v(&ty, &root, &path, &v)?;
+                let new = self.try_rebuild_v(&ty, &root, &path, &v, &mut st.pc)?;
                 st.env.set(&s.name, Val::Dt(new, ty));
                 Ok(vec![st])
             }

@@ -1,0 +1,56 @@
+// spec: R-6e-20 accept
+struct Field { key: Vec<i64>, value: Value }
+enum Value { Null, Num(n: i64), Arr(children: Vec<Value>), Obj(fields: Vec<Field>) }
+
+fn depth(v: Value) -> i64
+  requires size(v) <= 1000
+  ensures 1 <= result && result <= size(v)
+  decreases size(v)
+{
+  match v {
+    Value::Null => { return 1; }
+    Value::Num(n) => { return 1; }
+    Value::Arr(children) => {
+      let mut i: i64 = 0;
+      let mut best: i64 = 1;
+      while i < len(children)
+        invariant 0 <= i && i <= len(children)
+        invariant 1 <= best && best <= size(v)
+        decreases len(children) - i
+      {
+        let d: i64 = 1 + depth(vec_get::<Value>(children, i));
+        if d > best { best = d; }
+        i = i + 1;
+      }
+      return best;
+    }
+    Value::Obj(fields) => {
+      let mut i: i64 = 0;
+      let mut best: i64 = 1;
+      while i < len(fields)
+        invariant 0 <= i && i <= len(fields)
+        invariant 1 <= best && best <= size(v)
+        decreases len(fields) - i
+      {
+        let d: i64 = 1 + depth(vec_get::<Field>(fields, i).value);
+        if d > best { best = d; }
+        i = i + 1;
+      }
+      return best;
+    }
+  }
+}
+
+fn boundary_depth(v: Value) -> i64
+  requires size(v) == 4
+{
+  return depth(v);
+}
+
+fn main() -> () ! alloc, io {
+  let children: Vec<Value> = vec_push::<Value>(vec_new::<Value>(), Value::Num(42));
+  let fields: Vec<Field> = vec_push::<Field>(vec_new::<Field>(),
+    Field { key: vec_new::<i64>(), value: Value::Arr(move children) });
+  let v: Value = Value::Obj(move fields);
+  print(boundary_depth(v));
+}

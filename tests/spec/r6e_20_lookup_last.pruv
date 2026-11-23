@@ -1,0 +1,94 @@
+// spec: R-6e-20 accept
+struct Field { key: Vec<i64>, value: Value }
+enum Value { Null, Num(n: i64), Arr(children: Vec<Value>), Obj(fields: Vec<Field>) }
+
+fn key_eq(a: Vec<i64>, b: Vec<i64>) -> bool {
+  if len(a) != len(b) { return false; }
+  let mut i: i64 = 0;
+  while i < len(a)
+    invariant 0 <= i && i <= len(a)
+    decreases len(a) - i
+  {
+    if vec_get::<i64>(a, i) != vec_get::<i64>(b, i) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn find_last(fields: Vec<Field>, key: Vec<i64>) -> i64
+  ensures -1 <= result && result < len(fields)
+{
+  let mut i: i64 = len(fields);
+  while i > 0
+    invariant 0 <= i && i <= len(fields)
+    decreases i
+  {
+    i = i - 1;
+    if key_eq(vec_get::<Field>(fields, i).key, key) { return i; }
+  }
+  return -1;
+}
+
+fn number(v: Value) -> i64 {
+  match v {
+    Value::Null => { return 0; }
+    Value::Num(n) => { return n; }
+    Value::Arr(xs) => { return 0; }
+    Value::Obj(fs) => { return 0; }
+  }
+}
+
+fn lookup(v: Value, key: Vec<i64>) -> i64 {
+  match v {
+    Value::Null => { return 0; }
+    Value::Num(n) => { return n; }
+    Value::Arr(xs) => { return 0; }
+    Value::Obj(fs) => {
+      let i: i64 = find_last(fs, key);
+      if i < 0 { return 0; }
+      return number(vec_get::<Field>(fs, i).value);
+    }
+  }
+}
+
+fn replace_last(inout fields: Vec<Field>, key: Vec<i64>, replacement: i64) -> () ! alloc {
+  let i: i64 = find_last(fields, key);
+  match vec_at_mut::<Field>(inout fields, i) {
+    Some(f) => { f.value = Value::Num(replacement); }
+    None => { }
+  }
+}
+
+fn first_number(children: Vec<Value>) -> i64
+  requires len(children) > 0
+{
+  match vec_get::<Value>(children, 0) {
+    Value::Null => { return 0; }
+    Value::Num(n) => { return n; }
+    Value::Arr(xs) => { return 0; }
+    Value::Obj(fs) => { return 0; }
+  }
+}
+
+fn main() -> () ! alloc, io {
+  let key: Vec<i64> = vec_push::<i64>(vec_new::<i64>(), 7);
+  let first: Vec<Field> = vec_push::<Field>(vec_new::<Field>(),
+    Field { key: vec_push::<i64>(vec_new::<i64>(), 7), value: Value::Num(10) });
+  let mut fields: Vec<Field> = vec_push::<Field>(move first,
+    Field { key: vec_push::<i64>(vec_new::<i64>(), 7), value: Value::Num(20) });
+  replace_last(inout fields, key, 30);
+  print(len(fields));
+  print(number(vec_get::<Field>(fields, 0).value));
+  print(number(vec_get::<Field>(fields, 1).value));
+  print(lookup(Value::Obj(move fields), key));
+
+  let inner: Vec<Value> = vec_push::<Value>(vec_new::<Value>(), Value::Null);
+  let mut children: Vec<Value> = vec_push::<Value>(vec_new::<Value>(), Value::Arr(move inner));
+  match vec_at_mut::<Value>(inout children, 0) {
+    Some(v) => { *v = Value::Num(9); }
+    None => { }
+  }
+  print(first_number(children));
+  let updated: Value = Value::Arr(move children);
+  assert size(updated) == 2;
+}

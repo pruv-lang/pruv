@@ -1100,6 +1100,46 @@ fn tree_count(t: Tree) -> i64
   `vec_extend_from_slice` without filling the tail first. Both backends support reserving a local
   `Vec<i64>` or `Vec<bool>`. Tests:
   [accept](tests/spec/r6e_19_vec_reserve.pruv), [reject](tests/spec/r6e_19_reserve_unbounded.pruv).
+- R-6e-20 **Recursion through a vector (LB1).** A field of a non-generic struct, or a payload field of a
+  non-generic enum variant, may have type `Vec<S>` where `S` is a non-generic struct or enum in the same recursive
+  group, e.g. `enum Value { Null, Num(n: i64), Arr(items: Vec<Value>), Obj(fields: Vec<Field>) }` with
+  `struct Field { key: Vec<i64>, value: Value }`. Such a field is a plain `Vec<S>` in Rust (no `Box`) and does not
+  count when checking that the type has a finite value (an empty vector ends the recursion). Generic recursion
+  through a vector stays `type/recursive_generic_type`; recursion through a `HashMap` value or any other wrapper
+  stays rejected (`type/foreign_owned_type` or `type/recursive_type`); HashMap payload recursion is later work.
+  On `Vec<S>` the operations `vec_new`, `vec_push` (whose payload is a constructor, call result or `move`),
+  `len`, `vec_get` (a borrowed read: a `match` scrutinee, a read-only argument or a field read) and
+  `vec_at_mut` (in-place replacement of an element or of one of its fields, keeping order and duplicates) are
+  allowed. **Size measure:** `size(x)` of such a value is 1 plus the weights of its fields, and a `Vec<S>` field
+  weighs the sum of the sizes of its actual elements, whatever the owner (also a struct outside the recursive
+  group that holds a `Vec<S>`). A `vec_get` element is never an owned value: returning it, binding it with `let`,
+  or using it as a constructor field or `vec_push` payload is `type/foreign_owned_type`, and a `match` on it (also
+  through a field, `match vec_get::<N>(ns, i).v`, also through a nested element read) borrows the outermost `ns` for the arm (`type/recursive_borrow`); a field of a borrowed element is not owned either (`type/foreign_owned_type`). A read
+  parameter is not a `vec_push` payload (`type/foreign_move`; there is no implicit clone). When a generic type is
+  also recursive through a `HashMap`, `type/recursive_generic_type` is reported. The verifier models that sum per element type with facts
+  that hold for every real value only: an empty vector sums to 0 (also an input vector observed with `len == 0`), `vec_push` adds the size of the pushed element,
+  a write through `vec_at_mut` replaces the old element size by the new one, and an element read at a proved index
+  `0 <= i < len` (in code or in a contract, `size(v[i])`, also under a quantifier) has size at most the sum. The run-time check of a `requires` that indexes an element in `size` is not generated (`codegen/unsupported_type` with `--no-verify`). There is no axiom that a child is always smaller, so recursion on an
+  element read from the parameter proves `decreases size(v)`, while recursion on the same value is
+  `verify/recursive_decrease`. The run-time `size` contract sums the element sizes in the same way. LLVM rejects
+  these types as `codegen/unsupported_type` ("has owned collection fields, which need the Rust backend").
+  Tests: [accept value tree](tests/spec/r6e_20_value_tree.pruv),
+  [accept last-key lookup and in-place replace](tests/spec/r6e_20_lookup_last.pruv),
+  [reject same-value recursion](tests/spec/r6e_20_same_value.pruv),
+  [reject generic](tests/spec/r6e_20_generic.pruv), [reject HashMap](tests/spec/r6e_20_hashmap.pruv),
+  [reject LLVM](tests/spec/r6e_20_llvm.pruv),
+  [accept observed empty vector and child](tests/spec/r6e_20_observed.pruv),
+  [accept moved local payload](tests/spec/r6e_20_push_moved.pruv),
+  [reject element of another vector](tests/spec/r6e_20_other_vec.pruv),
+  [reject old size after child replace](tests/spec/r6e_20_grow_child.pruv),
+  [reject outer owner size](tests/spec/r6e_20_outer_owner.pruv),
+  [reject owned element read](tests/spec/r6e_20_owned_get.pruv),
+  [reject replace during a field match](tests/spec/r6e_20_field_borrow.pruv),
+  [reject borrowed payload](tests/spec/r6e_20_push_borrowed.pruv),
+  [reject generic HashMap](tests/spec/r6e_20_generic_hashmap.pruv),
+  [reject replace during a nested element match](tests/spec/r6e_20_nested_borrow.pruv),
+  [reject owned field of a borrowed element](tests/spec/r6e_20_field_owned.pruv),
+  [accept quantified child size](tests/spec/r6e_20_forall_child.pruv).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate (the one exception: R-6e-12a moves an array binder out of a consumed scrutinee). Putting an existing value into an owning place (`let`, assignment, constructor field,
@@ -1108,7 +1148,7 @@ fn tree_count(t: Tree) -> i64
   changed (`type/recursive_borrow`). Whole-value `==`/`!=` on values that contain arrays, strings or owned collections is rejected
   (`type/eq_type`); compare tags, lengths and elements instead.
 - **Limits.** Recursive and buffer-field types cannot be generic arguments, `Option`/`Result` payloads or G6
-  collection elements, except the owned aggregates of R-6e-3. Functions whose signatures use these types are internal, except
+  collection elements, except the owned aggregates of R-6e-3 and the vector edges of R-6e-20. Functions whose signatures use these types are internal, except
   the Rust entries in R-6e-5, R-6e-6 and R-6f-2. In explicit mode other host entry signatures
   with such types are `type/entry_signature`. A property such as "x is somewhere in the tree"
   must be stated with the existing contract operations, and not every recursive property is
