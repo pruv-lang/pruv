@@ -60,6 +60,22 @@ Inventory delegation `64c782e8` (2026-11-24, readable with `history.read-delegat
 
 SPEC.md §6e currently restricts recursive types (`SPEC.md:744`). V lifts that restriction for `Vec` and `HashMap` payloads.
 
+Refinements from the debate on this plan (delegation `0d3535db`, 2026-11-24):
+
+- **B needs provenance and exclusivity, not one lifetime.** Grok `text_of` (`hand_rpc.rs:500`) returns a borrow of either the input or a reused scratch buffer. Today a `subview` lives only for one call (`SPEC.md` R-6g-6, R-6g-8), and it cannot be bound to a local (G-DB63-1). Before B is designed, fix these cases as tests:
+  - a JSON doc borrowing one input
+  - a Grok result that may borrow either of two sources
+  - rejection, in both compilers, of: a local escaping, reusing or reallocating the buffer while a result borrows it, and moving or freeing the owner
+- **V needs a real size measure.** Both verifiers give collection fields a size weight of 0 (`pruvc/verify.py` `weight`, `pruv-proof/src/model.rs:958`), so `Array([Null])` and `Null` have the same size. Adding "a child is smaller" as an axiom would contradict that. V defines a measure over finite owned trees that counts the actual Vec elements and present map values, and proves a strict decrease for the chosen child after construction, replacement and move. A decoder may use the remaining input length instead. A call on the same value is rejected in both compilers.
+- **V is four blockers, each with its own deliverable:**
+  1. the recursive type declaration, starting monomorphic (`Value`, `Field`), with generics opened only where needed
+  2. mutation: last-match lookup and in-place child replace, keeping order and duplicates (`hand_life.rs:113`); a `HashMap` replacement would change behaviour
+  3. LLVM internal layout: create, overwrite, move and free exactly once
+  4. host ABI: allocator, which side frees, ownership on failure
+- **V checks deep and wide values.** Traversal, mutation and drop are measured on deep and narrow values and on wide values, for both run-time stack use and proof time. The plan then sets an input depth policy (`SPEC.md:1113`).
+- **U is split.** Owned UTF-16 storage (`Vec<u16>` keys owned by M12 objects, `hand_life.rs:6`) is part of V. Borrowed `&[u16]` lookup views remain U.
+- **G-DB63-2.** A string literal passed as a `str` argument makes the effect checker infer `alloc`, although generated Rust passes `&'static str`. This goes in the B bundle.
+
 ## 5. Beyond hand Rust: where Pruv can win
 
 Matching hand Rust gives parity. Going below 1.0x needs something that safe hand Rust cannot do. These are the sources, in expected order of payoff:
@@ -70,11 +86,24 @@ Matching hand Rust gives parity. Going below 1.0x needs something that safe hand
 4. **No panic and unwind paths.** Code without reachable panics is smaller and inlines better.
 5. **Effects in signatures.** A pure function is known pure, so calls can be hoisted, merged or memoised without alias analysis.
 
+Expected payoff after the debate (`0d3535db`):
+
+- Item 1 is the most promising, mainly in data-dependent tape indexing (`hand_json.rs:280` `record()`). Plain sequential loops may have no bounds branch left after LLVM.
+- Items 2 and 3 are likely parity restores. Hand Rust already returns the tape directly and precomputes key sizes. `ensures` does not emit `reserve` today, and the proof model does not track capacity. Count only the scans and reallocations left after safe Rust uses the same reservation strategy.
+- Items 4 and 5 are left out of performance budgets until measured. An earlier guard-versus-direct-call test differed by under 0.1 ns.
+  - Calls without `!` can still write `inout` arguments. Moving or merging them needs read/write and alias evidence, not purity alone.
+
 Each claimed win must show an assembly or instruction diff naming the check that survives in hand Rust and is gone in Pruv (`docs/L3_RESTRUCTURE_SPEC.md` §4.2). A hand Rust author can write the same `unsafe` code; the Pruv claim is that it is proven safe, so the comparison stays against safe hand Rust plus a labelled unsafe variant.
 
 ## 6. Order
 
-1. **Language bundle (B, V), both compilers.** Borrowed doc and text fields, recursive owned value with order, duplicates and UTF-16 preserved. Rust-backend boundary first, then LLVM. Tests in `tests/` plus `SPEC.md`. U and ABI follow in the same bundle if small, else a second language bundle.
+1. **Language bundles, both compilers, one at a time.** They all touch the type checker and verifiers, so they do not run in parallel with each other. Fragment work that does not touch the compilers may run beside them.
+   - **LB1 (V1, V2):** the recursive owned value: a monomorphic declaration, a size measure, last-match lookup and in-place child replace, owned UTF-16 keys, on the Rust backend. This comes first because budget M12 and `ent_value` depend on it, and DB64 showed it is the main cause there.
+   - **LB2 (B, G-DB63-2):** borrowed doc and text fields with provenance and exclusivity, starting from the test cases in §4.
+   - **LB3 (V3, V4, ABI):** the LLVM layout of recursive and owned collections, then owned collections across the host boundary.
+   - **LB4 (U):** borrowed UTF-16 views, if still needed after LB1.
+
+   Each bundle adds tests in `tests/` and updates `SPEC.md`.
 2. **Shared packages, in dependency order:**
    1. `json`, `lex`, `bytes`, `text`, `names`, `args`, `tail`
    2. `jstr`, `parse`, `turns`, `transport`
@@ -98,9 +127,19 @@ Each claimed win must show an assembly or instruction diff naming the check that
    4. Qwen, Codex, OpenCode.
    5. Entry/req.
    6. Budget, starting from the M12 value model once V lands.
+Order changes from the debate (`0d3535db`):
+
+- **Independent paths start without waiting for all of B and V.** These are `lex` and `bytes`, the MCP output path (existing `inout`) and the Grok RPC line path.
+- **Entry modules that call each other move together, one call path at a time.** `ent_packet` ↔ `ent_value` and `ent_state` ↔ `ent_dispatch` call each other. `ent_wire` (called by `ent_packet`) joins step 3.2. Before that, the plan fixes the boundary between types and external input validation.
+- **The P10H experiment runs early.** It covers the cost of about 420k host calls and reading the latest value at lookup time. Porting `req` waits for its result.
+- **Claude R08 is part of step 4.** It sits with Qwen/Codex/OpenCode, and the `lib/` consumers' move to `pkgs/` is listed in each bundle.
+- **Measuring starts with the first product path.** When a shared ownership boundary changes, one representative consumer is measured at M/L right away. Step 5 below then closes the full table.
+
 5. **Bulk remeasure.** All pieces, all M/L cells, time, RSS and allocation count against hand Rust. §7.5 rows are closed in bulk. Cells still over 1.0x are grouped by cause (shape, language gap, codegen) and fixed once in shared code.
 
 Each bundle keeps to AGENTS.md: at most 2 subs at a time, 2 hours per bundle, disjoint files.
+
+**Scheduling.** The 51 `?` modules make module counts a poor estimate; the older estimate was 80–120 sub-steps for the non-budget fragments (`docs/L3_RESTRUCTURE_SPEC.md:511`). Instead, each product operation gets an agreed hand Rust baseline with the same meaning first. The schedule is estimated from those operations.
 
 ## 7. Done criteria per piece
 
@@ -109,6 +148,21 @@ Each bundle keeps to AGENTS.md: at most 2 subs at a time, 2 hours per bundle, di
 - Time, peak RSS and allocation count ≤1.0x hand Rust at M and L, measured with interleaved runs on the same machine.
 - No word packets or step wire in product modules; harness-only adapters are named `*_test` or live under `perf/`.
 - Both compilers, both backends where the piece already ran on both.
+
+Tightened after the debate (`0d3535db`):
+
+- **What the structure table covers.** It follows the real call path from the product entry point to the owner of the result. It lists field accesses, bytes copied and allocation sites, not type names.
+  - A named struct that still wraps word arrays fails, for example `pkgs/turns` `Collected` with its 200×8 slots.
+  - The allowed JSON tape and MCP packet state their use and their boundary.
+  - An open gap row is not a pass.
+- **Measure the complete operation.** The hand lane must build the same result. A checksum-only hand lane like `hand_rpc.rs:600` does not count. Cost moved outside the adapter must still show up.
+- **Oracle semantics.** Where a hand lane is known to diverge (for example escaped object keys, or the `error.code` scope in `hand_rpc.rs:4`), compare the output bytes and errors of TS, hand Rust and Pruv on that counterexample. Each intended TS fix cites the spec for its expected value. The R12 four compiler/backend pairs, existing fixtures, rejection of bad external input and effect order are linked from the done table.
+- **Measurement protocol.**
+  - Fixed per piece: M/L inputs, build flags, the measured span and the repeat count.
+  - Peak RSS is taken from a fresh process. Language-level allocation requests are reported separately from system `malloc` calls, since the LLVM cache makes them differ.
+  - Where hand Rust allocates 0 times, the comparison uses absolute counts.
+  - A paired result whose uncertainty crosses 1.0 is "undecided", not pass.
+  - Fixed RSS cost is reported separately from the proportional part, as in AGENTS.md perf rule 3.
 
 ## 8. Existing work
 
