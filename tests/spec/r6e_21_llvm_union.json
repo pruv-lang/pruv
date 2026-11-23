@@ -1,0 +1,18 @@
+{
+  "backend": "llvm",
+  "flags": ["--no-verify"],
+  "gen_contains": [
+    "%pruv_t_Tree = type { i64, [3 x i64] }",
+    "%pruv_v_Tree__Branch = type { i64, { ptr, i64, i64 } }",
+    "%pruv_t_Shape = type { i64, [2 x i64] }",
+    "%pruv_t_Single = type { i64, i64 }",
+    "%pruv_t_HostValue = type { i64, i64, i1 }",
+    "%pruv_t_Nested = type { i64, [3 x i64] }",
+    "%pruv_c_Plain = type { i64, i1, i128, i1 }",
+    "%pruv_c_Nested = type { i64, %pruv_c_Plain, i128 }",
+    "getelementptr inbounds %pruv_v_Nested__Value, ptr",
+    "getelementptr inbounds %pruv_v_Tree__Branch, ptr",
+    "call void @pruv_clone__Tree",
+    "call i128 @pruv_csize__Tree"
+  ]
+}

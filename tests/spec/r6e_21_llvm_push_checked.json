@@ -1,0 +1,7 @@
+{
+  "backend": "llvm",
+  "flags": ["--foreign-checks", "all", "--contract-budget", "1"],
+  "gen_contains": ["call void @pruv_panic_vec_push_v1(i64 0)", "call void @pruv_panic_vec_push_v1(i64 1)"],
+  "gen_regex": ["icmp ult i64 %[^,]+, 1099511627776", "icmp uge i64 1, %[^\\n]+", "icmp uge i64 %[^,]+, 1$",
+    "(?s)^define internal void @pruv_vpush__Tree\\([^\\n]*\\) \\{(?:(?!^\\}).)*sub i64 1, (%\\w+)(?:(?!^\\}).)*sub i64 %\\w+, \\1"]
+}

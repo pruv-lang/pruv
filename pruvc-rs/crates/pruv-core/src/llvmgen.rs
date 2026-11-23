@@ -635,6 +635,7 @@ pub const DECLS_REPR: &str = "declare void @pruv_panic_repr(i64, ptr) noreturn c
 /// @llvm.used, so linking a runtime without pruv_runtime_nodes_v1 fails even when no node helper survives inlining.
 pub const DECLS_NODE: &str = concat!(
     "declare noalias ptr @pruv_node_alloc_v1(i64, i64) nounwind\n",
+    "declare noalias ptr @pruv_node_realloc_v1(ptr, i64, i64, i64) nounwind\n",
     "declare void @pruv_node_free_v1(ptr nocapture, i64, i64) nounwind\n",
     "declare void @pruv_runtime_nodes_v1() nounwind\n",
     "@pruv_nodes_marker = internal global ptr @pruv_runtime_nodes_v1\n",
@@ -868,7 +869,109 @@ pub fn new_tt(prog: &Program) -> TypeTable {
         tt.g9_ext = meta.extended.iter().cloned().collect();
         tt.g9_boxed = meta.boxed.iter().cloned().collect();
     }
+    tt.union_words = enum_union_words(&tt, &abi_layout_types(prog, &tt));
     tt
+}
+
+/// Nominal types reachable from a foreign signature or a host ABI entry.
+fn abi_layout_types(prog: &Program, tt: &TypeTable) -> HashSet<String> {
+    use crate::gtype::{dependencies, GType};
+    let explicit = prog.explicit.as_ref();
+    let mut work = Vec::new();
+    for (i, f) in prog.functions.iter().enumerate() {
+        let host = explicit.and_then(|x| x.fns.get(i)).is_some_and(|mk| mk.host_entry);
+        if f.foreign.is_some() || is_host_abi_fn(f, tt, explicit.is_some(), host) {
+            for ty in f.params.iter().map(|p| &p.ty).chain(std::iter::once(&f.ret)) {
+                work.extend(dependencies(&GType::from_key(ty)));
+            }
+        }
+    }
+    let mut seen = HashSet::new();
+    while let Some(name) = work.pop() {
+        if let Some(decl) = tt.decl(&name) {
+            if seen.insert(name) {
+                work.extend(tt.deps(decl));
+            }
+        }
+    }
+    seen
+}
+
+/// Word bounds of code-form enum payloads. Unknown or wider leaves rule out overlap.
+fn enum_union_words(tt: &TypeTable, abi_types: &HashSet<String>) -> HashMap<String, usize> {
+    fn bound(
+        tt: &TypeTable,
+        abi_types: &HashSet<String>,
+        bounds: &mut HashMap<String, Option<usize>>,
+        unions: &mut HashMap<String, usize>,
+        ty: &str,
+    ) -> Option<usize> {
+        if native_vec_elem(ty).is_some() {
+            return Some(3);
+        }
+        if is_collection(ty) {
+            return Some(1);
+        }
+        if is_gopt(ty) {
+            let ok = bound(tt, abi_types, bounds, unions, g_arg(ty))?;
+            let err = if ty.starts_with("result<") {
+                bound(tt, abi_types, bounds, unions, g_error(ty))?
+            } else {
+                0
+            };
+            return Some(1 + ok + err);
+        }
+        match ty {
+            "i64" | "bool" => return Some(1),
+            "option" | "result" => return Some(2),
+            "array" | "array_u8" | "array_bool" | "str" => return Some(3),
+            _ => {}
+        }
+        if let Some(&words) = bounds.get(ty) {
+            return words;
+        }
+        let d = tt.decl(ty)?;
+        // Recursive references in the emitted types go through boxes or vector descriptors.
+        bounds.insert(ty.to_string(), None);
+        let mut fields_bound = |fields: &[FieldDecl], variant| {
+            fields.iter().map(|f| {
+                if tt.g9_boxed.contains(&fld_label(d.name(), variant, &f.name)) {
+                    Some(1)
+                } else {
+                    bound(tt, abi_types, bounds, unions, &f.ty)
+                }
+            }).sum::<Option<usize>>()
+        };
+        let total = match d {
+            TypeDecl::Struct(s) => fields_bound(&s.fields, None),
+            TypeDecl::Enum(e) => {
+                let mut count = 0;
+                let mut sum = 0;
+                let mut max = 1;
+                for v in e.variants.iter().filter(|v| !v.fields.is_empty()) {
+                    let words = fields_bound(&v.fields, Some(&v.name))?;
+                    count += 1;
+                    sum += words;
+                    max = max.max(words);
+                }
+                if count >= 2 && !abi_types.contains(ty) {
+                    unions.insert(ty.to_string(), max);
+                    Some(1 + max)
+                } else {
+                    Some(1 + sum)
+                }
+            }
+        };
+        bounds.insert(ty.to_string(), total);
+        total
+    }
+
+    let mut bounds = HashMap::new();
+    let mut unions = HashMap::new();
+    for d in tt.ordered() {
+        bound(tt, abi_types, &mut bounds, &mut unions, d.name());
+    }
+    unions
 }
 
 /// t is an extended user type (G9): recursive, or holding a buffer or an extended type
@@ -925,8 +1028,8 @@ fn t_variant_index(tt: &TypeTable, ty: &str, variant: &str) -> R<usize> {
     tt.variant_index(ty, variant).ok_or_else(|| format!("'{}' is not in list", variant))
 }
 
-/// Storage index of the i-th field of `variant` inside the flattened enum type
-pub fn payload_index(tt: &TypeTable, ty: &str, variant: &str, i: usize) -> R<usize> {
+/// Storage index of the i-th field of `variant` in a flattened code or contract enum.
+fn flattened_payload_index(tt: &TypeTable, ty: &str, variant: &str, i: usize) -> R<usize> {
     // The variant -> base offset map is computed once per (type table, type) and memoized: rescanning the variants on
     // every call made helper generation quadratic in the number of variants. The cache lives in `words_memo` (the
     // type table's existing per-type memo) under keys that cannot collide with a type key (they start with NUL).
@@ -952,6 +1055,21 @@ pub fn payload_index(tt: &TypeTable, ty: &str, variant: &str, i: usize) -> R<usi
         return Err("'StructDecl' object has no attribute 'variants'".to_string());
     }
     Err(format!("'{}'", variant))
+}
+
+fn variant_type(tt: &TypeTable, ty: &str, variant: Option<&str>, c: bool) -> String {
+    if let Some(v) = variant.filter(|_| !c && tt.union_words.contains_key(ty)) {
+        return format!("%pruv_v_{}__{}", ty, v);
+    }
+    st(ty, c)
+}
+
+fn field_index(tt: &TypeTable, ty: &str, variant: Option<&str>, i: usize, c: bool) -> R<usize> {
+    match variant {
+        None => Ok(i),
+        Some(_) if !c && tt.union_words.contains_key(ty) => Ok(1 + i),
+        Some(v) => flattened_payload_index(tt, ty, v, i),
+    }
 }
 
 /// W(T): number of i64 words in the external (pruv_abi_*) form.  Memoized per type table (a nested generic value
@@ -1016,8 +1134,18 @@ pub fn type_defs(tt: &TypeTable) -> String {
                 TypeDecl::Struct(s) => fs_of(&s.fields, None),
                 TypeDecl::Enum(e) => {
                     let mut v = vec!["i64".to_string()];
-                    for var in &e.variants {
-                        v.extend(fs_of(&var.fields, Some(var.name.as_str())));
+                    if let Some(w) = tt.union_words.get(d.name()).filter(|_| !c) {
+                        v.push(format!("[{} x i64]", w));
+                        for var in e.variants.iter().filter(|var| !var.fields.is_empty()) {
+                            let variant = Some(var.name.as_str());
+                            let vt = variant_type(tt, d.name(), variant, c);
+                            let fields = fs_of(&var.fields, variant);
+                            out.push(format!("{} = type {{ i64, {} }}", vt, fields.join(", ")));
+                        }
+                    } else {
+                        for var in &e.variants {
+                            v.extend(fs_of(&var.fields, Some(var.name.as_str())));
+                        }
                     }
                     v
                 }
@@ -1049,7 +1177,7 @@ pub struct V {
     /// G9 (agg only): address of storage that holds this value when known (a parameter, a local slot, a boxed node,
     /// a call-result slot); lets a read argument pass the pointer instead of spilling a copy.
     pub p: Option<String>,
-    /// P3: (owner slot, variant, storage index) of a payload binder of a match on an owned local
+    /// P3: (owner slot, variant, field index, owner dead) for a match payload binder
     pub mv: Option<Box<(Slot, String, usize, bool)>>,
     /// P3 (arr only): allocated element count (cap) SSA for a value, cap storage for a Slot; None means cap == len (b)
     pub c: Option<String>,
@@ -1105,7 +1233,7 @@ struct Scope {
 pub struct Mod {
     owned_collection_fields: bool,
     vec_elems: BTreeSet<String>,
-    vec_get_requires: bool,
+    foreign_requires: bool,
     vec_get_checked: bool,
     vec_get_used: bool,
     pub(crate) storage: StoragePlan, // pub(crate): abi.rs reads the return layout for the shrink size
@@ -1170,7 +1298,7 @@ impl Mod {
         Mod {
             owned_collection_fields: false,
             vec_elems: BTreeSet::new(),
-            vec_get_requires: false,
+            foreign_requires: false,
             vec_get_checked: false,
             vec_get_used: false,
             storage: StoragePlan::default(),
@@ -1344,7 +1472,7 @@ pub enum Fail {
     /// u8 element range violation: (value SSA, range text). The string is registered when the fail block is emitted.
     Elem(String, &'static str),
     VecGet,
-    VecGrowth { elem: String, extended: bool },
+    VecPush { elem: String, drop_element: bool, panic: &'static str },
 }
 
 pub(crate) fn expr_ty(e: &Expr) -> &Option<String> {
@@ -1419,7 +1547,7 @@ pub struct FnGen<'a> {
     cregions: Vec<Vec<(String, String)>>,
     /// P3: return-movable names (see ret_movable)
     ret_cand: HashSet<String>,
-    /// P3: owner slot address -> None (whole value moved) or (variant, {storage index of a moved field})
+    /// P3: owner slot address -> None (whole value moved) or (variant, {indices of moved fields})
     ret_moved: HashMap<String, Option<(String, HashSet<usize>)>>,
     /// P3: enclosing blocks being lowered: (names declared so far, names named later, loop body)
     frames: Vec<(HashSet<String>, HashSet<String>, bool, bool)>,
@@ -1632,12 +1760,12 @@ impl<'a> FnGen<'a> {
     fn run_fail(&mut self, f: &Fail) -> R<()> {
         match f {
             Fail::Cost => self.cost_fail(),
-            Fail::VecGrowth { elem, extended } => {
+            Fail::VecPush { elem, drop_element, panic } => {
                 self.ins(format!("call void @pruv_vdrop__{elem}(ptr %v)"))?;
-                if *extended {
+                if *drop_element {
                     self.ins(format!("call void @pruv_drop__{elem}(ptr %x)"))?;
                 }
-                self.ins("call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)".to_string())
+                self.ins((*panic).to_string())
             }
             Fail::VecGet => {
                 for region in self.temps.clone().iter().rev() {
@@ -1649,7 +1777,7 @@ impl<'a> FnGen<'a> {
                     let owners = self.scopes[i].arrays.clone();
                     self.free_scope(&owners)?;
                 }
-                let requires = if self.m.vec_get_requires { "1" } else { "0" };
+                let requires = if self.m.foreign_requires { "1" } else { "0" };
                 self.m.vec_get_used = true;
                 self.ins(format!("call void @pruv_panic_vec_get_v1(i64 {requires})"))
             }
@@ -1872,7 +2000,7 @@ impl<'a> FnGen<'a> {
     }
 
     /// P3: release an owned extended slot whose value (moved is None) or some unboxed payload fields of its
-    /// current variant (moved = {storage index}) a return moved out: only the parts that were not moved
+    /// current variant (moved = {field index}) a return moved out: only the parts that were not moved
     fn drop_rest(&mut self, sl: &Slot, moved: &Option<(String, HashSet<usize>)>) -> R<()> {
         let (vn, idxs) = match moved {
             None => return Ok(()),
@@ -1883,12 +2011,10 @@ impl<'a> FnGen<'a> {
         let fds = t_fields(tt, &ty, Some(vn))?;
         for (i, fd) in fds.iter().enumerate() {
             let ft = fd.ty.as_str();
-            let k = payload_index(tt, &ty, vn, i)?;
-            if idxs.contains(&k) || !(is_arr_name(ft) || is_collection(ft) || self.is_ext(ft)) {
+            if idxs.contains(&i) || !(is_arr_name(ft) || is_collection(ft) || self.is_ext(ft)) {
                 continue;
             }
-            let lt = lty(&ty);
-            let gp = g9_gep(self, &lt, &sl.a, k)?;
+            let gp = g9_field_gep(self, &ty, &sl.a, Some(vn), i)?;
             if self.fb(&ty, Some(vn), &fd.name) {
                 let p = self.op(format!("load ptr, ptr {}", gp))?;
                 self.ins(format!("call void @pruv_dropnode__{}(ptr {})", ft, p))?;
@@ -2472,10 +2598,26 @@ impl<'a> FnGen<'a> {
         Ok((cur, cty))
     }
 
-    /// Field value of the aggregate `base` (type ty) at storage index idx; a boxed field is a VIEW of the child node
+    /// Field value of the aggregate `base` (type ty); a boxed field is a VIEW of the child node
     /// (a shallow load, never dropped through this value).
-    fn getf(&mut self, base: &V, ty: &str, idx: usize, fd: &FieldDecl, variant: Option<&str>, c: bool) -> R<V> {
-        if !c && self.fb(ty, variant, &fd.name) {
+    fn getf(&mut self, base: &V, ty: &str, i: usize, fd: &FieldDecl, variant: Option<&str>, c: bool) -> R<V> {
+        let boxed = !c && self.fb(ty, variant, &fd.name);
+        if !c && variant.is_some() && self.tt.union_words.contains_key(ty) {
+            let p = self.spill(base)?;
+            let field = g9_field_gep(self, ty, &p, variant, i)?;
+            if native_vec_elem(&fd.ty).is_some() {
+                return self.load(&V::agg(field, &fd.ty));
+            }
+            let ft = if boxed { "ptr".to_string() } else { st(&fd.ty, false) };
+            let x = self.op(format!("load {}, ptr {}", ft, field))?;
+            if boxed {
+                let r = self.op(format!("load {}, ptr {}", lty(&fd.ty), x))?;
+                return Ok(V::agg_p(r, &fd.ty, x));
+            }
+            return self.unpack(&x, &fd.ty, false);
+        }
+        let idx = field_index(self.tt, ty, variant, i, c)?;
+        if boxed {
             let x = self.op(format!("extractvalue {} {}, {}", st(ty, c), base.a, idx))?;
             let r = self.op(format!("load {}, ptr {}", lty(&fd.ty), x))?;
             return Ok(V::agg_p(r, &fd.ty, x));
@@ -2490,12 +2632,28 @@ impl<'a> FnGen<'a> {
     }
 
     /// insertvalue of the owned field value v; a boxed field first moves into a new node.
-    fn putf(&mut self, acc: &str, ty: &str, idx: usize, v: &V, fd: &FieldDecl, variant: Option<&str>, c: bool) -> R<String> {
+    fn putf(&mut self, acc: &str, ty: &str, i: usize, v: &V, fd: &FieldDecl, variant: Option<&str>, c: bool) -> R<String> {
+        let t = variant_type(self.tt, ty, variant, c);
+        let idx = field_index(self.tt, ty, variant, i, c)?;
         if !c && self.fb(ty, variant, &fd.name) {
             let nd = self.op(format!("call ptr @pruv_box__{}({} {})", fd.ty, lty(&fd.ty), v.a))?;
-            return self.op(format!("insertvalue {} {}, ptr {}, {}", st(ty, c), acc, nd, idx));
+            return self.op(format!("insertvalue {} {}, ptr {}, {}", t, acc, nd, idx));
         }
-        self.put(acc, ty, idx, v, &fd.ty, c)
+        let x = self.pack(v, &fd.ty, c)?;
+        self.op(format!("insertvalue {} {}, {} {}, {}", t, acc, st(&fd.ty, c), x, idx))
+    }
+
+    fn finish_enum(&mut self, mut acc: String, ty: &str, variant: Option<&str>, c: bool) -> R<V> {
+        let t = st(ty, c);
+        let vt = variant_type(self.tt, ty, variant, c);
+        if vt != t {
+            let p = self.new_out(ty);
+            // A shorter variant leaves some of the union's storage untouched.
+            self.ins(format!("store {} zeroinitializer, ptr {}", t, p))?;
+            self.ins(format!("store {} {}, ptr {}", vt, acc, p))?;
+            acc = self.op(format!("load {}, ptr {}", t, p))?;
+        }
+        Ok(V::agg(acc, ty))
     }
 
     /// Store the owned value v into the field path of the extended local slot sl (in place). The old value of the last
@@ -2717,13 +2875,14 @@ impl<'a> FnGen<'a> {
             vals.push(self.evf(x, c, own)?);
         }
         let tag = t_variant_index(tt, ty, &e.variant)?;
-        let mut acc = self.op(format!("insertvalue {} zeroinitializer, i64 {}, 0", st(ty, c), tag))?;
+        let variant = (!e.args.is_empty()).then_some(e.variant.as_str());
+        let t = variant_type(tt, ty, variant, c);
+        let mut acc = self.op(format!("insertvalue {} zeroinitializer, i64 {}, 0", t, tag))?;
         for (i, fd) in t_fields(tt, ty, Some(&e.variant))?.iter().enumerate() {
             let v = vals.get(i).ok_or_else(|| IDX_ERR.to_string())?;
-            let pi = payload_index(tt, ty, &e.variant, i)?;
-            acc = self.putf(&acc, ty, pi, v, fd, Some(&e.variant), c)?;
+            acc = self.putf(&acc, ty, i, v, fd, Some(&e.variant), c)?;
         }
-        Ok(V::agg(acc, ty))
+        self.finish_enum(acc, ty, variant, c)
     }
 
     /// Some/None/Ok/Err of a new Option<X>/Result<X> application (e.ty): zeroinitializer-based, so the unused
@@ -2872,8 +3031,12 @@ impl<'a> FnGen<'a> {
                     self.place(l);
                     let mut acc = base.clone();
                     for (i, f) in v.fields.iter().enumerate() {
-                        let pi = payload_index(tt, ty, &v.name, i)?;
-                        let fx = self.get(x, ty, pi, &f.ty, false)?;
+                        let pi = flattened_payload_index(tt, ty, &v.name, i)?;
+                        let fx = if tt.union_words.contains_key(ty) {
+                            self.getf(x, ty, i, f, Some(&v.name), false)?
+                        } else {
+                            self.get(x, ty, pi, &f.ty, false)?
+                        };
                         let cx = self.to_c(&fx, &f.ty)?;
                         acc = self.put(&acc, ty, pi, &cx, &f.ty, true)?;
                     }
@@ -2894,7 +3057,7 @@ impl<'a> FnGen<'a> {
         for (i, f) in fds.iter().enumerate() {
             let j = match variant {
                 None => i,
-                Some(v) => payload_index(tt, ty, v, i)?,
+                Some(v) => flattened_payload_index(tt, ty, v, i)?,
             };
             let lx = self.get(l, ty, j, &f.ty, true)?;
             let rx = self.get(r, ty, j, &f.ty, true)?;
@@ -3460,9 +3623,8 @@ impl<'a> FnGen<'a> {
         match self.lookup(name)? {
             Bind::Slot(x) => self.empty_array_slot(&x),
             Bind::Ssa(x) => {
-                let (sl, _vn, k, _) = (*x.mv.clone().ok_or_else(|| IDX_ERR.to_string())?).clone();
-                let lt = lty(need_ty(&sl.ty)?);
-                let g = g9_gep(self, &lt, &sl.a, k)?;
+                let (sl, vn, k, _) = (*x.mv.clone().ok_or_else(|| IDX_ERR.to_string())?).clone();
+                let g = g9_field_gep(self, need_ty(&sl.ty)?, &sl.a, Some(&vn), k)?;
                 self.ins(format!("store {} zeroinitializer, ptr {}", ARR, g))
             }
         }
@@ -3517,8 +3679,7 @@ impl<'a> FnGen<'a> {
                     ks.insert(k);
                     self.ret_moved.insert(sl.a.clone(), Some((vn, ks)));
                 } else {
-                    let lt = lty(need_ty(&sl.ty)?);
-                    let g = g9_gep(self, &lt, &sl.a, k)?;
+                    let g = g9_field_gep(self, need_ty(&sl.ty)?, &sl.a, Some(&vn), k)?;
                     self.ins(format!("store {} zeroinitializer, ptr {}", ARR, g))?;
                 }
                 Ok(Some(x))
@@ -4059,11 +4220,10 @@ impl<'a> FnGen<'a> {
             let mut bind: Vec<(String, Bind)> = Vec::new();
             let fds = t_fields(tt, &ty, Some(&a.ctor))?;
             for (i, (name, fd)) in a.binders.iter().zip(fds.iter()).enumerate() {
-                let pi = payload_index(tt, &ty, &a.ctor, i)?;
-                let mut v = self.getf(sv, &ty, pi, fd, Some(&a.ctor), false)?;
+                let mut v = self.getf(sv, &ty, i, fd, Some(&a.ctor), false)?;
                 if let Some(o) = &own {
                     if (self.is_ext(&fd.ty) || is_arr_name(&fd.ty) || is_collection(&fd.ty)) && !self.fb(&ty, Some(&a.ctor), &fd.name) {
-                        v.mv = Some(Box::new((o.clone(), a.ctor.clone(), pi, own_dead)));
+                        v.mv = Some(Box::new((o.clone(), a.ctor.clone(), i, own_dead)));
                     }
                 }
                 bind.push((name.clone(), Bind::Ssa(v)));
@@ -4383,7 +4543,7 @@ impl<'a> FnGen<'a> {
                 if let Bind::Ssa(v) = &bound {
                     if let Some(mv) = &v.mv {
                         if v.ty.as_deref().is_some_and(|t| native_vec_elem(t).is_some() || is_collection(t)) {
-                            let g = g9_gep(self, &lty(need_ty(&mv.0.ty)?), &mv.0.a, mv.2)?;
+                            let g = g9_field_gep(self, need_ty(&mv.0.ty)?, &mv.0.a, Some(&mv.1), mv.2)?;
                             let ty = need_ty(&v.ty)?;
                             let empty = if is_collection(ty) { "null" } else { "zeroinitializer" };
                             self.ins(format!("store {} {empty}, ptr {g}", lty(ty)))?;
@@ -4394,9 +4554,8 @@ impl<'a> FnGen<'a> {
                         if let Some(mv) = &v.mv {
                             // G-DB16-1: moving an array binder of a match on an owned local takes the descriptor and
                             // empties the field of the scrutinee (null, 0, 0), so the scrutinee's drop frees nothing twice
-                            let (sl, _vn, k, _dead) = (**mv).clone();
-                            let lt = lty(need_ty(&sl.ty)?);
-                            let g = g9_gep(self, &lt, &sl.a, k)?;
+                            let (sl, vn, k, _dead) = (**mv).clone();
+                            let g = g9_field_gep(self, need_ty(&sl.ty)?, &sl.a, Some(&vn), k)?;
                             self.ins(format!("store {} zeroinitializer, ptr {}", ARR, g))?;
                             return Ok(v.clone());
                         }
@@ -5630,8 +5789,7 @@ impl<'a> FnGen<'a> {
                     false,
                 )?;
                 let i = t_field_index(tt, &ety, &x.field, Some(&x.variant))?;
-                let pi = payload_index(tt, &ety, &x.variant, i)?;
-                let g = self.op(format!("getelementptr inbounds {}, ptr {}, i32 0, i32 {}", lty(&ety), bp, pi))?;
+                let g = g9_field_gep(self, &ety, &bp, Some(&x.variant), i)?;
                 if self.fb(&ety, Some(&x.variant), &x.field) {
                     return self.op(format!("load ptr, ptr {}", g));
                 }
@@ -5699,13 +5857,14 @@ impl<'a> FnGen<'a> {
             Expr::EnumCtor(x) => {
                 let ety = x.enum_name.as_str();
                 let tag = t_variant_index(tt, ety, &x.variant)?;
-                let mut acc = self.op(format!("insertvalue {} zeroinitializer, i64 {}, 0", st(ety, false), tag))?;
+                let variant = (!x.args.is_empty()).then_some(x.variant.as_str());
+                let t = variant_type(tt, ety, variant, false);
+                let mut acc = self.op(format!("insertvalue {} zeroinitializer, i64 {}, 0", t, tag))?;
                 for (i, (a, fd)) in x.args.iter().zip(t_fields(tt, ety, Some(&x.variant))?.iter()).enumerate() {
                     let v = self.g9_real(a, Some(&fd.ty))?;
-                    let pi = payload_index(tt, ety, &x.variant, i)?;
-                    acc = self.putf(&acc, ety, pi, &v, fd, Some(&x.variant), false)?;
+                    acc = self.putf(&acc, ety, i, &v, fd, Some(&x.variant), false)?;
                 }
-                return Ok(V::agg(acc, ety));
+                return self.finish_enum(acc, ety, variant, false);
             }
             _ => {}
         }
@@ -6050,7 +6209,7 @@ impl<'a> FnGen<'a> {
                 let i = t_field_index(tt, &bty, &x.field, Some(&x.variant))?;
                 let fds = t_fields(tt, &bty, Some(&x.variant))?;
                 let fd = fds.get(i).ok_or_else(|| IDX_ERR.to_string())?;
-                let pi = payload_index(tt, &bty, &x.variant, i)?;
+                let pi = flattened_payload_index(tt, &bty, &x.variant, i)?;
                 self.get(&b, &bty, pi, &fd.ty, true)
             }
             Expr::Call(x) => {
@@ -6928,12 +7087,10 @@ fn g9_variants(d: &TypeDecl) -> Vec<Var9<'_>> {
     }
 }
 
-/// storage index of field i of variant vn (a struct: vn is None) inside the aggregate
-fn g9_sidx(tt: &TypeTable, ty: &str, vn: Option<&str>, i: usize) -> R<usize> {
-    match vn {
-        None => Ok(i),
-        Some(v) => payload_index(tt, ty, v, i),
-    }
+fn g9_field_gep(g: &mut FnGen, ty: &str, p: &str, vn: Option<&str>, i: usize) -> R<String> {
+    let t = variant_type(g.tt, ty, vn, false);
+    let idx = field_index(g.tt, ty, vn, i, false)?;
+    g9_gep(g, &t, p, idx)
 }
 
 /// emit(variant name, fields) for the variants in vs. A struct runs it inline. An enum switches on the tag of the value
@@ -6987,7 +7144,6 @@ fn g9_node_layout(g: &mut FnGen, t: &str) -> R<(String, String)> {
 
 fn g9_drop_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
     let ty = d.name().to_string();
-    let tl = lty(&ty);
     let df = dummy_fn();
     let funcs: HashMap<String, &Function> = HashMap::new();
     let mut g = FnGen::new(&mut *m, tt, &funcs, &df, true);
@@ -7002,7 +7158,7 @@ fn g9_drop_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
             if !(is_arr_name(ft) || is_collection(ft) || g.is_ext(ft)) {
                 continue;
             }
-            let gp = g9_gep(g, &tl, "%v", g9_sidx(tt, &ty, vn, i)?)?;
+            let gp = g9_field_gep(g, &ty, "%v", vn, i)?;
             if g.fb(&ty, vn, &f.name) {
                 // a boxed child: its contents first, then its node
                 let c = g.op(format!("load ptr, ptr {}", gp))?;
@@ -7043,9 +7199,8 @@ fn g9_clone_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
             if !(is_arr_name(ft) || is_collection(ft) || g.is_ext(ft)) {
                 continue;
             }
-            let idx = g9_sidx(tt, &ty, vn, i)?;
-            let gs = g9_gep(g, &tl, "%src", idx)?;
-            let gd = g9_gep(g, &tl, "%dst", idx)?;
+            let gs = g9_field_gep(g, &ty, "%src", vn, i)?;
+            let gd = g9_field_gep(g, &ty, "%dst", vn, i)?;
             if g.fb(&ty, vn, &f.name) {
                 let c = g.op(format!("load ptr, ptr {}", gs))?;
                 let nb = g.op(format!("call ptr @pruv_clonenode__{}(ptr {})", ft, c))?;
@@ -7174,7 +7329,7 @@ fn g9_vec_parts(g: &mut FnGen, p: &str) -> R<(String, String, String)> {
     Ok((data, len, cap))
 }
 
-fn g9_vec_texts(m: &mut Mod, tt: &TypeTable, elem: &str) -> R<Vec<String>> {
+fn g9_vec_texts(m: &mut Mod, tt: &TypeTable, elem: &str, budget: Option<u64>) -> R<Vec<String>> {
     let tl = lty(elem);
     let extended = is_ext_t(tt, elem);
     let df = dummy_fn();
@@ -7217,7 +7372,7 @@ fn g9_vec_texts(m: &mut Mod, tt: &TypeTable, elem: &str) -> R<Vec<String>> {
         g.place(&copy);
         let (size, align) = g9_node_layout(&mut g, &tl)?;
         let bytes = g.op(format!("mul i64 {len}, {size}"))?;
-        let dst = g.op(format!("call ptr @pruv_node_alloc_v1(i64 {bytes}, i64 {align})"))?;
+        let dst = g.op(format!("call ptr @pruv_node_realloc_v1(ptr null, i64 0, i64 {bytes}, i64 {align})"))?;
         if extended {
             g9_vec_each(&mut g, &len, &mut |g, i| {
                 let sp = g.op(format!("getelementptr inbounds {tl}, ptr {src}, i64 {i}"))?;
@@ -7238,9 +7393,22 @@ fn g9_vec_texts(m: &mut Mod, tt: &TypeTable, elem: &str) -> R<Vec<String>> {
         let mut g = FnGen::new(m, tt, &funcs, &df, true);
         g.place("start");
         let (data, len, cap) = g9_vec_parts(&mut g, "%v")?;
+        let fail = |panic, drop_element| Fail::VecPush { elem: elem.to_string(), drop_element, panic };
+        const BUDGET_PANIC: &str = "call void @pruv_panic_vec_push_v1(i64 1)";
+        if g.m.foreign_requires {
+            let bounded = g.op(format!("icmp ult i64 {len}, {}", 1u64 << 40))?;
+            g.guard(&bounded, fail("call void @pruv_panic_vec_push_v1(i64 0)", extended), false)?;
+        }
+        let remaining = if let Some(budget) = budget {
+            // Charge the snapshot before push, like the G6 shim.
+            let enough = g.op(format!("icmp uge i64 {budget}, {len}"))?;
+            g.guard(&enough, fail(BUDGET_PANIC, extended), false)?;
+            Some(g.op(format!("sub i64 {budget}, {len}"))?)
+        } else {
+            None
+        };
+        let ready = g.cur.clone();
         let grow = g.label("vgrow");
-        let copy = g.label("vcopy");
-        let grown = g.label("vgrown");
         let push = g.label("vpush");
         let full = g.op(format!("icmp eq i64 {len}, {cap}"))?;
         g.condbr(&full, &grow, &push)?;
@@ -7252,27 +7420,31 @@ fn g9_vec_texts(m: &mut Mod, tt: &TypeTable, elem: &str) -> R<Vec<String>> {
         let prod = g.op(format!("call {{ i64, i1 }} @llvm.umul.with.overflow.i64(i64 {ncap}, i64 {size})"))?;
         let bytes = g.op(format!("extractvalue {{ i64, i1 }} {prod}, 0"))?;
         let overflow = g.op(format!("extractvalue {{ i64, i1 }} {prod}, 1"))?;
-        g.guard(&overflow, Fail::VecGrowth { elem: elem.to_string(), extended }, true)?;
-        let dst = g.op(format!("call ptr @pruv_node_alloc_v1(i64 {bytes}, i64 {align})"))?;
-        g.condbr(&empty, &grown, &copy)?;
-        g.place(&copy);
-        let used = g.op(format!("mul i64 {len}, {size}"))?;
-        g.ins(format!("call void @llvm.memcpy.p0.p0.i64(ptr {dst}, ptr {data}, i64 {used}, i1 false)"))?;
-        g.ins(format!("call void @pruv_node_free_v1(ptr {data}, i64 {used}, i64 {align})"))?;
-        g.br(&grown)?;
-        g.place(&grown);
+        g.guard(&overflow, fail("call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)", extended), true)?;
+        let grown = g.cur.clone();
+        let old = g.op(format!("mul i64 {cap}, {size}"))?;
+        let dst = g.op(format!("call ptr @pruv_node_realloc_v1(ptr {data}, i64 {old}, i64 {bytes}, i64 {align})"))?;
         g.ins(format!("store ptr {dst}, ptr %v"))?;
         let cp = g9_gep(&mut g, ARR, "%v", 2)?;
         g.ins(format!("store i64 {ncap}, ptr {cp}"))?;
         g.br(&push)?;
         g.place(&push);
-        let dp = g.op(format!("phi ptr [ {data}, %start ], [ {dst}, %{grown} ]"))?;
+        let dp = g.op(format!("phi ptr [ {data}, %{ready} ], [ {dst}, %{grown} ]"))?;
         let slot = g.op(format!("getelementptr inbounds {tl}, ptr {dp}, i64 {len}"))?;
         let value = g.op(format!("load {tl}, ptr %x"))?;
         g.ins(format!("store {tl} {value}, ptr {slot}"))?;
         let next = g.op(format!("add i64 {len}, 1"))?;
         let lp = g9_gep(&mut g, ARR, "%v", 1)?;
         g.ins(format!("store i64 {next}, ptr {lp}"))?;
+        if let Some(remaining) = remaining {
+            // The shim charges the prefix even for extended elements, then charges the new element.
+            // The vector now owns the inserted element, so its drop handles both arguments.
+            let enough = g.op(format!("icmp uge i64 {remaining}, {len}"))?;
+            g.guard(&enough, fail(BUDGET_PANIC, false), false)?;
+            let remaining = g.op(format!("sub i64 {remaining}, {len}"))?;
+            let enough = g.op(format!("icmp uge i64 {remaining}, 1"))?;
+            g.guard(&enough, fail(BUDGET_PANIC, false), false)?;
+        }
         g.term("ret void".to_string())?;
         out.push(g.render(&format!("define internal void @pruv_vpush__{elem}(ptr %v, ptr %x)")));
     }
@@ -7358,13 +7530,13 @@ fn g9_weight(g: &mut FnGen, t: &str, p: &str, bud: &str) -> R<Option<String>> {
 }
 
 /// 1 + the weights of the ACTIVE fields of one variant, checked i128 additions in field order
-fn g9_size_fold(g: &mut FnGen, tt: &TypeTable, ty: &str, tl: &str, vn: Option<&str>, fs: &[FieldDecl]) -> R<String> {
+fn g9_size_fold(g: &mut FnGen, ty: &str, vn: Option<&str>, fs: &[FieldDecl]) -> R<String> {
     let mut acc = "1".to_string();
     for (i, f) in fs.iter().enumerate() {
         if !g9_walks(&f.ty) {
             continue;
         }
-        let mut gp = g9_gep(g, tl, "%v", g9_sidx(tt, ty, vn, i)?)?;
+        let mut gp = g9_field_gep(g, ty, "%v", vn, i)?;
         if g.fb(ty, vn, &f.name) {
             gp = g.op(format!("load ptr, ptr {}", gp))?;
         }
@@ -7377,7 +7549,6 @@ fn g9_size_fold(g: &mut FnGen, tt: &TypeTable, ty: &str, tl: &str, vn: Option<&s
 /// pruv_csize__T: 1 + the weights of the ACTIVE fields, checked i128 additions in field order, one budget unit
 fn g9_size_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
     let ty = d.name().to_string();
-    let tl = lty(&ty);
     let df = dummy_fn();
     let funcs: HashMap<String, &Function> = HashMap::new();
     let mut g = FnGen::new(&mut *m, tt, &funcs, &df, true);
@@ -7386,7 +7557,7 @@ fn g9_size_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
     g.spend()?;
     match d {
         TypeDecl::Struct(s) => {
-            let acc = g9_size_fold(&mut g, tt, &ty, &tl, None, &s.fields)?;
+            let acc = g9_size_fold(&mut g, &ty, None, &s.fields)?;
             g.term(format!("ret i128 {}", acc))?;
         }
         TypeDecl::Enum(_) => {
@@ -7397,7 +7568,7 @@ fn g9_size_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
                 .filter(|(_, _, fs)| fs.iter().any(|f| g9_walks(&f.ty)))
                 .collect();
             g9_each_variant(&mut g, &ty, d, "%v", &vs, &mut |g, vn, fs| {
-                let acc = g9_size_fold(g, tt, &ty, &tl, vn, fs)?;
+                let acc = g9_size_fold(g, &ty, vn, fs)?;
                 g.ins(format!("store i128 {}, ptr %res", acc))
             })?;
             let r = g.op("load i128, ptr %res".to_string())?;
@@ -7489,11 +7660,10 @@ fn g9_eq_val(g: &mut FnGen, t: &str, pa: &str, pb: &str) -> R<String> {
 }
 
 /// the equal-fields chain of one variant: every field of fs must be equal, else jump to `fail`; ends with `ret i1 true`
-fn g9_eq_conj(g: &mut FnGen, tt: &TypeTable, ty: &str, tl: &str, fail: &str, vn: Option<&str>, fs: &[FieldDecl]) -> R<()> {
+fn g9_eq_conj(g: &mut FnGen, ty: &str, fail: &str, vn: Option<&str>, fs: &[FieldDecl]) -> R<()> {
     for (i, f) in fs.iter().enumerate() {
-        let idx = g9_sidx(tt, ty, vn, i)?;
-        let mut pa = g9_gep(g, tl, "%a", idx)?;
-        let mut pb = g9_gep(g, tl, "%b", idx)?;
+        let mut pa = g9_field_gep(g, ty, "%a", vn, i)?;
+        let mut pb = g9_field_gep(g, ty, "%b", vn, i)?;
         if g.fb(ty, vn, &f.name) {
             pa = g.op(format!("load ptr, ptr {}", pa))?;
             pb = g.op(format!("load ptr, ptr {}", pb))?;
@@ -7509,7 +7679,6 @@ fn g9_eq_conj(g: &mut FnGen, tt: &TypeTable, ty: &str, tl: &str, fail: &str, vn:
 /// pruv_ceq__T: one budget unit, then equal tags and the fields of the active variant, left to right
 fn g9_eq_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
     let ty = d.name().to_string();
-    let tl = lty(&ty);
     let df = dummy_fn();
     let funcs: HashMap<String, &Function> = HashMap::new();
     let mut g = FnGen::new(&mut *m, tt, &funcs, &df, true);
@@ -7518,7 +7687,7 @@ fn g9_eq_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
     g.spend()?;
     let fail = g.label("ceqf");
     match d {
-        TypeDecl::Struct(s) => g9_eq_conj(&mut g, tt, &ty, &tl, &fail, None, &s.fields)?,
+        TypeDecl::Struct(s) => g9_eq_conj(&mut g, &ty, &fail, None, &s.fields)?,
         TypeDecl::Enum(_) => {
             let pa = g.tag_ptr(&ty, "%a")?;
             let tl_ = g.op(format!("load i64, ptr {}", pa))?;
@@ -7543,7 +7712,7 @@ fn g9_eq_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
             g.term("ret i1 true".to_string())?;
             for ((vn, _t, fs), l) in vs.iter().zip(&lbls) {
                 g.place(l);
-                g9_eq_conj(&mut g, tt, &ty, &tl, &fail, *vn, fs)?;
+                g9_eq_conj(&mut g, &ty, &fail, *vn, fs)?;
             }
         }
     }
@@ -7577,7 +7746,7 @@ fn g9_nominals_in(t: &str) -> Vec<String> {
 
 /// clone / drop / node helpers of every extended type (SCC-condensed order), then the contract size / equality helpers
 /// the requires checks needed (closed over the nominal field types, declaration order)
-fn g9_helper_chunks(m: &mut Mod, tt: &TypeTable) -> R<Vec<String>> {
+fn g9_helper_chunks(m: &mut Mod, tt: &TypeTable, vec_budget: Option<u64>) -> R<Vec<String>> {
     let mut targets: HashSet<String> = HashSet::new();
     for d in tt.ordered() {
         for (vn, _t, fs) in g9_variants(d) {
@@ -7600,7 +7769,7 @@ fn g9_helper_chunks(m: &mut Mod, tt: &TypeTable) -> R<Vec<String>> {
         }
     }
     for elem in m.vec_elems.clone() {
-        chunks.extend(g9_vec_texts(m, tt, &elem)?);
+        chunks.extend(g9_vec_texts(m, tt, &elem, vec_budget)?);
     }
     let close = |seed: &BTreeSet<String>| -> BTreeSet<String> {
         let mut out: BTreeSet<String> = BTreeSet::new();
@@ -8258,7 +8427,7 @@ fn gen_llvm_body(
     m.owned_collection_fields = prog.types.iter().any(|d| {
         d.all_fields().iter().any(|field| crate::gtype::key_is_collection(&field.ty))
     });
-    m.vec_get_requires = foreign_checks != "off";
+    m.foreign_requires = foreign_checks != "off";
     m.vec_get_checked = !verified || foreign_checks == "all" || prog.functions.iter().any(|f| f.foreign.is_some());
     m.sym_pre = sym_prefix(prog.pkg_name.as_deref());
     m.resize_params = crate::check::resize_params(prog);
@@ -8369,7 +8538,7 @@ fn gen_llvm_body(
     }
     if !tt.g9_ext.is_empty() || !m.vec_elems.is_empty() || !m.need_size.is_empty() || !m.need_eq.is_empty() {
         // G9 A3: clone / drop / node helpers, then the contract helpers above
-        chunks.extend(g9_helper_chunks(&mut m, &tt)?);
+        chunks.extend(g9_helper_chunks(&mut m, &tt, (foreign_checks == "all").then_some(budget))?);
     }
     // G9 A3: buffer fields count as uses of the buffer runtime declarations
     let has_str = crate::typeinfo::uses_str(prog, !verified) || type_has_field(prog, "str"); // G2 B2
@@ -8430,6 +8599,9 @@ fn gen_llvm_body(
     );
     if m.vec_get_used {
         ir.push_str("declare void @pruv_panic_vec_get_v1(i64) noreturn cold nounwind\n");
+    }
+    if !m.vec_elems.is_empty() && m.foreign_requires {
+        ir.push_str("declare void @pruv_panic_vec_push_v1(i64) noreturn cold nounwind\n");
     }
     if m.uses_utf8_valid {
         ir.push_str(include_str!("../../../../pruvc/utf8_valid.ll"));
