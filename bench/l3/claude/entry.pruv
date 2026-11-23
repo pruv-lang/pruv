@@ -136,7 +136,7 @@ pub fn string_field_of(doc: crate::json::JsonDocument, f: i64) -> Field ! alloc
   let k: i64 = crate::access::kind(doc, f);
   if k < 0 { return Field::Defect(k); }
   if k != 4 { return Field::Missing; }
-  let t: crate::jstr::Text = crate::access::string_text(doc, f);
+  let t: crate::jstr::Text = crate::access::string_text_owned(doc, f);
   match t {
     crate::jstr::Text::InternalInvariant(e) => { return Field::Defect(e); }
     crate::jstr::Text::Decoded(v) => {
@@ -274,7 +274,7 @@ fn origin_flag(doc: crate::json::JsonDocument, origin_raw: i64) -> i64 ! alloc
 // String content: untrimmed text unless blank or an engine line.
 fn string_content(doc: crate::json::JsonDocument, c: i64, origin_raw: i64) -> Field ! alloc
 {
-  let t: crate::jstr::Text = crate::access::string_text(doc, c);
+  let t: crate::jstr::Text = crate::access::string_text_owned(doc, c);
   match t {
     crate::jstr::Text::InternalInvariant(e) => { return Field::Defect(e); }
     crate::jstr::Text::Decoded(v) => {
