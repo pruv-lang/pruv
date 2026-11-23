@@ -401,16 +401,27 @@ pub fn finish(st: [i64], sl: [i64], buf: [u8], base: i64) -> Collected ! alloc
 //       publish into the front, in place when that leaves half the buffer free, else into a new buffer of twice
 //       the bytes needed; past 1 MiB the new buffer is 4259840 bytes (twice the largest live text plus need), after
 //       which every grow is in place (DB48). Each byte is copied O(1) times on average.
+// hint  the owner's input size (0 = unknown, the sizes above). With a hint the first buffer is 16384 bytes instead of
+//       65536 (a dense window keeps a few KiB of text; DB53, G-DB51-4), and when the hint is over 1 MiB the first grow
+//       past it goes straight to 4259840 bytes instead of 32 K ... 561 K first (DB53, G-DB51-2). Windows whose text stays
+//       in the first buffer never take that grow, so they never map the large buffer.
 // Record offsets are not tied to sl by a proof; finish2 and answer2 check them at run time (D-DB11-1).
-pub struct Store { data: [u8], off: [i64], stamp: [u8], end: i64 }
+pub struct Store { data: [u8], off: [i64], stamp: [u8], end: i64, hint: i64 }
 
 pub fn new_store() -> Store ! alloc
+  ensures len(result.off) == 200 && len(result.stamp) == 9600 && 0 <= result.end && result.end <= len(result.data)
+{
+  return new_store_hint(0);
+}
+
+// A Store whose owner knows its input size (see hint above). Only the growth sizes depend on it, never the contents.
+pub fn new_store_hint(hint: i64) -> Store ! alloc
   ensures len(result.off) == 200 && len(result.stamp) == 9600 && 0 <= result.end && result.end <= len(result.data)
 {
   let d: [u8] = alloc(0, 0);
   let o: [i64] = alloc(200, -1);
   let s: [u8] = alloc(9600, 0);
-  return Store { data: move d, off: move o, stamp: move s, end: 0 };
+  return Store { data: move d, off: move o, stamp: move s, end: 0, hint: hint };
 }
 
 // a[dst..dst+n) = old a[src..src+n) (overlap safe).
@@ -494,8 +505,10 @@ fn reserve(inout bk: Store, sl: [i64], top: i64, cnt: i64, extra: i64, need: i64
   // stayed resident (about 1.1 B of RSS per input byte on the grok ord rows). Small windows keep doubling, so they
   // never map the large buffer.
   let mut cap: i64 = 2 * tgt;
-  if cap < 65536 { cap = 65536; }
-  if cap > 1048576 { cap = 4259840; }
+  let mut low: i64 = 65536;
+  if bk.hint > 0 { low = 16384; }
+  if cap < low { cap = low; }
+  if cap > 1048576 || (cap > low && bk.hint > 1048576) { cap = 4259840; }
   let mut nb: [u8] = alloc(cap, 0);
   while i > 0
     invariant 0 <= i && i <= m && m <= cnt && cnt <= 200 && cnt <= top && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600
