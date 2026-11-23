@@ -1199,6 +1199,8 @@ struct Gen<'a> {
     function_name: String,
     budget: u64,
     verified: bool,
+    /// LG35: the str_from_utf8 call whose bytes the enclosing `if` checked (utf8_checked)
+    utf8_ok: usize,
     trust: bool,
     out: Vec<String>,
     cost: bool,
@@ -1378,6 +1380,7 @@ impl<'a> Gen<'a> {
             fmarks,
             budget,
             verified,
+            utf8_ok: 0,
             trust: trust_callers,
             out: Vec::new(),
             cost: false,
@@ -4069,7 +4072,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
             Stmt::If(x) => {
                 let c = self.e(&x.cond)?;
                 self.emit(ind, &format!("if {} {{", c));
+                let prev = std::mem::replace(&mut self.utf8_ok, utf8_checked(x));
                 self.block(&x.then, ind + 1)?;
+                self.utf8_ok = prev;
                 if !x.els.is_empty() {
                     self.emit(ind, "} else {");
                     self.block(&x.els, ind + 1)?;
@@ -5063,12 +5068,13 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     return Ok(format!("::core::str::from_utf8({}).is_ok()", self.arr_ref(arg(a, 0)?)?));
                 }
                 if n == "str_from_utf8" {
+                    let checked = self.verified || matches!(e, Expr::Call(c) if c as *const Call as usize == self.utf8_ok);
                     // LG33 (G-DB54-2): the owned local at its last use (last_copy) becomes the String's buffer
                     if !self.cost {
                         if let a0 @ Expr::Var(v) = arg(a, 0)? {
                             if self.moving.contains(&v.name) {
                                 let t0 = self.e(a0)?;
-                                if self.verified {
+                                if checked {
                                     return Ok(format!("{{ let pruv_v: ::std::vec::Vec<u8> = {}; unsafe {{ ::std::string::String::from_utf8_unchecked(pruv_v) }} }}", t0));
                                 }
                                 return Ok(format!(concat!(
@@ -5080,7 +5086,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         }
                     }
                     let b = self.arr_ref(arg(a, 0)?)?;
-                    if self.verified {
+                    if checked {
                         return Ok(format!("{{ let pruv_b: &[u8] = {}; unsafe {{ ::std::string::String::from_utf8_unchecked(pruv_b.to_vec()) }} }}", b));
                     }
                     return Ok(format!(concat!(
@@ -5291,6 +5297,45 @@ pub enum GenError {
 
 /// Pruv -> Rust source for any checked program (Python `gen_rust`): a program that uses generics is specialized first
 /// (shared plan, mono.rs) and generated from the concrete program; any other program is generated directly.
+/// LG35 (G-DB56-3): the `str_from_utf8(x)` call that is the whole value of the first statement of the `if` st when st's
+/// condition is an `&&` chain with a conjunct `utf8_valid(x)` and no `inout` argument. The condition has just checked
+/// those same bytes and nothing ran in between that could change x, so a --no-verify build does not check them a second
+/// time (as an address, 0 = none; Python `codegen.utf8_checked`).
+pub(crate) fn utf8_checked(st: &If) -> usize {
+    let v = match st.then.first() {
+        Some(Stmt::Let(f)) => Some(&f.value),
+        Some(Stmt::Assign(f)) if !f.deref => Some(&f.value),
+        Some(Stmt::Return(f)) => f.value.as_ref(),
+        _ => None,
+    };
+    let (c, x) = match v {
+        Some(Expr::Call(c)) if c.name == "str_from_utf8" && c.args.len() == 1 => match &c.args[0] {
+            Expr::Var(x) => (c, &x.name),
+            _ => return 0,
+        },
+        _ => return 0,
+    };
+    fn inout(e: &Expr) -> bool {
+        matches!(e, Expr::InoutArg(_)) || crate::refine::kids(e).into_iter().any(inout)
+    }
+    if inout(&st.cond) {
+        return 0;
+    }
+    let mut todo = vec![&st.cond];
+    while let Some(e) = todo.pop() {
+        match e {
+            Expr::Binary(b) if b.op == "&&" => {
+                todo.push(&b.left);
+                todo.push(&b.right);
+            }
+            Expr::Call(u) if u.name == "utf8_valid" && u.args.len() == 1
+                && matches!(&u.args[0], Expr::Var(y) if &y.name == x) => return c as *const Call as usize,
+            _ => {}
+        }
+    }
+    0
+}
+
 pub fn gen_rust_any(prog: &Program, verified: bool, trust_callers: bool, budget: u64) -> Result<String, GenError> {
     gen_rust_ex(prog, verified, trust_callers, budget, "requires", &[]).map(|(text, _)| text)
 }

@@ -1336,6 +1336,36 @@ def emit_public_types(prog, order=None):
     return "\n".join(out) + ("\n" if out else "")
 
 
+def utf8_checked(st):
+    """LG35 (G-DB56-3): the `str_from_utf8(x)` call that is the whole value of the first statement of the `if` st when
+    st's condition is an `&&` chain with a conjunct `utf8_valid(x)` and no `inout` argument. The condition has just
+    checked those same bytes and nothing ran in between that could change x, so a --no-verify build does not check
+    them a second time. None otherwise."""
+    if not st.then:
+        return None
+    f = st.then[0]
+    v = f.value if isinstance(f, (Let, Assign, Return)) and not (isinstance(f, Assign) and f.deref) else None
+    if not (isinstance(v, Call) and v.name == "str_from_utf8" and len(v.args) == 1 and isinstance(v.args[0], Var)):
+        return None
+    conj, todo = [], [st.cond]
+    while todo:
+        c = todo.pop()
+        if isinstance(c, Binary) and c.op == "&&":
+            todo += [c.left, c.right]
+        else:
+            conj.append(c)
+
+    def inout(e):
+        return isinstance(e, InoutArg) or any(inout(k) for k in expr_kids(e))
+    if inout(st.cond):
+        return None
+    x = v.args[0].name
+    if any(isinstance(c, Call) and c.name == "utf8_valid" and len(c.args) == 1 and isinstance(c.args[0], Var)
+           and c.args[0].name == x for c in conj):
+        return v
+    return None
+
+
 def show(e):
     """readable source-like text of a contract expression (for panic messages)"""
     if isinstance(e, (IntLit, BoolLit)):
@@ -1558,6 +1588,7 @@ class Gen:
         s.budget = budget
         s.prog = prog
         s.verified = verified
+        s.utf8_ok = None   # LG35: the str_from_utf8 call whose bytes the enclosing `if` checked (utf8_checked)
         s.trust = trust_callers
         s.out = []
         s.cost = False
@@ -3058,7 +3089,9 @@ class Gen:
                        (s.e(st.index), s.e(st.value), s.mut_ref(st.name)))
         elif isinstance(st, If):
             s.emit(ind, "if %s {" % s.e(st.cond))
+            prev, s.utf8_ok = s.utf8_ok, utf8_checked(st)
             s.block(st.then, ind + 1)
+            s.utf8_ok = prev
             if st.els:
                 s.emit(ind, "} else {")
                 s.block(st.els, ind + 1)
@@ -3691,13 +3724,13 @@ class Gen:
             if n == "str_from_utf8":
                 if not s.cost and isinstance(a[0], Var) and a[0].name in s.moving:
                     # LG33 (G-DB54-2): the owned local at its last use (last_copy) becomes the String's buffer
-                    if s.verified:
+                    if s.verified or e is s.utf8_ok:
                         return "{ let pruv_v: ::std::vec::Vec<u8> = %s; unsafe { ::std::string::String::from_utf8_unchecked(pruv_v) } }" % s.e(a[0])
                     return ('{ let pruv_v: ::std::vec::Vec<u8> = %s; match ::std::string::String::from_utf8(pruv_v) { '
                             'Ok(pruv_s) => pruv_s, '
                             'Err(pruv_e) => panic!("pruv: invalid UTF-8 (len {})", pruv_e.as_bytes().len()), } }') % s.e(a[0])
                 b = s.arr_ref(a[0])
-                if s.verified:
+                if s.verified or e is s.utf8_ok:
                     return "{ let pruv_b: &[u8] = %s; unsafe { ::std::string::String::from_utf8_unchecked(pruv_b.to_vec()) } }" % b
                 return ('{ let pruv_b: &[u8] = %s; match ::core::str::from_utf8(pruv_b) { '
                         'Ok(pruv_s) => ::std::string::String::from(pruv_s), '

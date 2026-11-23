@@ -977,6 +977,8 @@ def sig_text(params, f):
 class FnGen:
     def __init__(s, m, funcs, f, verified):
         s.m, s.funcs, s.f, s.verified = m, funcs, f, verified
+        s.utf8_ok = None   # LG35: the str_from_utf8 call whose bytes the enclosing `if` checked (codegen.utf8_checked)
+        s.pinned = set()   # LG35: locals borrowed as the scrutinee of an enclosing match arm (codegen's pinned)
         s.cost = not verified and f.cost is not None
         s.lines = []
         s.allocas = []
@@ -2042,9 +2044,19 @@ class FnGen:
             names = set()
             if e.name == "truncate":
                 codegen._expr_names(e.args[1], names)
-            if x.name == st.name or x.name in names or not (s.dead_after(x.name) or s.return_next(x.name)):
+            if x.name == st.name or x.name in names:
                 return set()
             kind, v = s.lookup(x.name)
+            if kind == "ssa" and v.k == "arr" and v.mv is not None:
+                # LG35 (G-LG34-1): the array payload binder of a match arm on an owned extended local (the Rust
+                # backend's consuming match binds the payload Vec by value): at its last use the binder takes the
+                # payload block and the owner's field is emptied, so the enum cleanup frees null. The owner must be
+                # dead after the match (own_dead: the Rust backend then matches by value, `match p`), and the binder
+                # dead after the statement or the next statement a return that does not name it (its last_copy)
+                nxt = bool(s.frames) and s.frames[-1][3] and x.name not in s.frames[-1][1]
+                return {x.name} if v.mv[3] and (nxt or s.dead_after(x.name)) else set()
+            if not (s.dead_after(x.name) or s.return_next(x.name)):
+                return set()
             return {x.name} if kind == "slot" and v.k == "arr" and s.owned_slot(v) else set()
         if s.cost or not (isinstance(e, Call) and e.name == "copy" and len(e.args) == 1):
             return set()
@@ -2095,6 +2107,16 @@ class FnGen:
         else:
             s.ins("store %s zeroinitializer, ptr %s" % (ARR, g9_gep(s, lty(sl.ty), sl.a, k)))
         return x
+
+    def take_array(s, name):
+        """P3: empty the owner of array local `name` that a move_src lowering takes: its slot, or for a match payload
+        binder (V.mv) the owner enum's payload field, so the owner's cleanup frees null"""
+        kind, x = s.lookup(name)
+        if kind == "slot":
+            s.empty_array_slot(x)
+        else:
+            sl, _vn, k, _dead = x.mv
+            s.ins("store %s zeroinitializer, ptr %s" % (ARR, g9_gep(s, lty(sl.ty), sl.a, k)))
 
     def empty_array_slot(s, x):
         s.ins("store ptr null, ptr %s" % x.a)
@@ -2287,9 +2309,11 @@ class FnGen:
             s.condbr(c.a, thn, els)
             s.place(thn)
             reach = False
+            prev, s.utf8_ok = s.utf8_ok, codegen.utf8_checked(st)
             if s.run_block(st.then):
                 s.br(end)
                 reach = True
+            s.utf8_ok = prev
             if st.els:
                 s.place(els)
                 if s.run_block(st.els):
@@ -2505,7 +2529,14 @@ class FnGen:
             if kind == "slot" and x.k == "agg" and s.owned_slot(x) and sc.name not in named:
                 own = x
         # an array binder moved by a let / assignment empties its field of the owner, so the owner must be dead too
-        own_dead = own is not None and s.dead_after(sc.name)
+        # LG35: an enclosing arm's binders still view the payload of a pinned owner, so its fields are never emptied
+        own_dead = own is not None and sc.name not in s.pinned and s.dead_after(sc.name)
+        root = sc    # the local a field-path scrutinee (h.e) borrows from is pinned too
+        while isinstance(root, FieldAccess):
+            root = root.base
+        saved_pinned = set(s.pinned)
+        if isinstance(root, Var):
+            s.pinned.add(root.name)
         s.term("switch i64 %s, label %%%s [ %s ]" % (tag, dflt, " ".join(
             "i64 %d, label %%%s" % (s.tt.variant_index(ty, a.ctor), l) for a, l in arms)))
         s.place(dflt)
@@ -2523,6 +2554,7 @@ class FnGen:
             if s.run_block(a.body, bind):
                 s.br(end)
                 reach = True
+        s.pinned = saved_pinned
         if reach:
             s.place(end)
         else:
@@ -3012,7 +3044,7 @@ class FnGen:
                 # Rust backend's truncate move, a block left more than half unused is shrunk to m (pruv_shrink_v2
                 # returns the block unchanged when the target is the cap, frees it and returns NULL only when the
                 # target is 0, and panics if a shrinking realloc fails, so the recorded cap is always the block's real cap)
-                s.empty_array_slot(s.lookup(a[0].name)[1])
+                s.take_array(a[0].name)
                 cap = capof(src)
                 half = s.op("lshr i64 %s, 1" % cap)
                 cut = s.op("icmp ugt i64 %s, %s" % (half, m.a))
@@ -3209,13 +3241,13 @@ class FnGen:
             return V("i1", s.op("call i1 @pruv_utf8_valid(ptr %s, i64 %s)" % (b.a, b.b)))
         if n == "str_from_utf8":
             b = s.ev(a[0])
-            if not s.verified:
+            if not s.verified and e is not s.utf8_ok:
                 s.m.uses_utf8_valid = s.m.uses_utf8_panic = True
                 ok = s.op("call i1 @pruv_utf8_valid(ptr %s, i64 %s)" % (b.a, b.b))
                 s.guard(ok, lambda: s.ins("call void @pruv_panic_utf8(i64 %s)" % b.b), False)
             if isinstance(a[0], Var) and a[0].name in s.moving:
                 # LG33 (G-DB54-2): an owned local [u8] at its last use (move_src): the str takes its block and cap
-                s.empty_array_slot(s.lookup(a[0].name)[1])
+                s.take_array(a[0].name)
                 return s.temp_arr(V("arr", b.a, b.b, STR, c=capof(b)), owned)
             p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 1, i64 1)" % (b.a, b.b))
             return s.temp_arr(V("arr", p, b.b, STR), owned)

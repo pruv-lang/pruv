@@ -1,0 +1,69 @@
+// LG35 (G-DB56-3): under --no-verify, str_from_utf8(x) as the whole value of the first statement of an `if` whose
+// `&&` condition has the conjunct utf8_valid(x) does not check the bytes a second time (owned move and borrowed copy).
+// A guard under `||`, or a statement between the test and the decode, keeps the check.
+
+fn mk(n: i64) -> [u8] ! alloc
+  requires 1 <= n && n <= 50
+{
+  let mut a: [u8] = alloc(n, 65);
+  a[0] = 104;
+  return a;
+}
+
+// a is dead after the decode: the str takes its block, no second check
+fn once(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50
+{
+  let a: [u8] = mk(n);
+  if len(a) < 1000 && utf8_valid(a) {
+    let s: str = str_from_utf8(a);
+    return len(s);
+  }
+  return 0 - 1;
+}
+
+// a is read after the decode: copy, no second check
+fn keep(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50
+{
+  let a: [u8] = mk(n);
+  let mut r: i64 = 0;
+  if utf8_valid(a) && len(a) < 1000 {
+    let s: str = str_from_utf8(a);
+    r = len(s);
+  }
+  if 0 <= r && r < 1000 && len(a) < 1000 { return r * 10 + len(a); }
+  return 0 - 1;
+}
+
+// utf8_valid under ||: the decode checks
+fn either(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50
+{
+  let a: [u8] = mk(n);
+  if utf8_valid(a) || n > 100 {
+    let s: str = str_from_utf8(a);
+    return len(s);
+  }
+  return 0 - 1;
+}
+
+// a statement between the test and the decode: the decode checks
+fn later(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50
+{
+  let a: [u8] = mk(n);
+  if utf8_valid(a) {
+    let k: i64 = len(a);
+    let s: str = str_from_utf8(a);
+    if k < 1000 { return len(s) + k; }
+  }
+  return 0 - 1;
+}
+
+fn run() -> () ! io, alloc {
+  print(once(5));
+  print(keep(3));
+  print(either(4));
+  print(later(2));
+}
