@@ -104,6 +104,9 @@ Each claimed win must show an assembly or instruction diff naming the check that
    - **LB3b (layout follow-up):** overlapped enum payloads, `realloc` growth, native scalar `Vec` fields, the
      checked-mode length bound and budget charge in native push, and borrowed views on LLVM (debt rows D-LB3-1..3,
      docs/L3_LB3.md Open items).
+   - **LB5 (buffer growth gaps from MCP):** non-filling growth (`reserve`/append, or `resize` without fill when the
+     tail is proved written before read), in-place `x = truncate(x, m)`, `reserve_exact` before `resize`, and `str`
+     lent as read-only `[u8]` (debt rows D-MCP-1..2, bench/l3/mcp/RESHAPE.md).
    - **LB4 (U):** borrowed UTF-16 views, if still needed after LB1.
 
    Each bundle adds tests in `tests/` and updates `SPEC.md`.
