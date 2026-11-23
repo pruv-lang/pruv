@@ -1,0 +1,2 @@
+// spec: R-6e-20 reject
+enum Tree { Leaf, Branch(children: HashMap<i64, Tree>) }

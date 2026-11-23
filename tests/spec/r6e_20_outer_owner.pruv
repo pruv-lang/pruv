@@ -1,0 +1,15 @@
+// spec: R-6e-20 reject
+// A vector field weighs its elements in any owner, also a struct outside the recursive group: size(o) == 2.
+enum V { Nil, A(xs: Vec<V>) }
+struct O { xs: Vec<V> }
+
+fn one(o: O) -> i64
+  requires size(o) == 1
+{
+  return 1;
+}
+
+fn main() -> () ! alloc, io {
+  let o: O = O { xs: vec_push::<V>(vec_new::<V>(), V::Nil) };
+  print(one(o));
+}

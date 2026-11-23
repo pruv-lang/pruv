@@ -1,0 +1,13 @@
+// spec: R-6e-20 reject
+// Replacing a child through vec_at_mut changes the owner's size; the old size is not kept.
+struct Tree { kids: Vec<Tree> }
+
+fn grow(inout t: Tree) -> () ! alloc
+  requires len(t.kids) > 0
+  ensures size(t) == size(old(t))
+{
+  match vec_at_mut::<Tree>(inout t.kids, 0) {
+    Some(c) => { *c = Tree { kids: vec_push::<Tree>(vec_new::<Tree>(), Tree { kids: vec_new::<Tree>() }) }; }
+    None => { }
+  }
+}

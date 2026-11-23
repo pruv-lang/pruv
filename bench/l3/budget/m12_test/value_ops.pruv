@@ -1,0 +1,233 @@
+// LB1 demo: the hand_life.rs value shape and its object operations in Pruv (R-6e-20).
+// Text is UTF-16 code units held in Vec<i64> (no u16 element type yet, see docs/L3_LB1.md).
+// value_ops_hand.rs is the hand Rust twin; both print the same lines.
+struct Field { key: Vec<i64>, value: Value }
+struct Obj { fields: Vec<Field> }
+enum Value {
+  Undefined,
+  Null,
+  Bool(b: bool),
+  Integer(n: i64),
+  Str(units: Vec<i64>),
+  Array(items: Vec<Value>),
+  Object(fields: Vec<Field>),
+}
+
+fn text_eq(a: Vec<i64>, b: Vec<i64>) -> bool {
+  if len(a) != len(b) { return false; }
+  let mut i: i64 = 0;
+  while i < len(a)
+    invariant 0 <= i && i <= len(a)
+    decreases len(a) - i
+  {
+    if vec_get::<i64>(a, i) != vec_get::<i64>(b, i) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// hand_life.rs get/put: the last field with a matching key wins (rfind).
+fn find_last(fields: Vec<Field>, key: Vec<i64>) -> i64
+  ensures -1 <= result && result < len(fields)
+{
+  let mut i: i64 = len(fields);
+  while i > 0
+    invariant 0 <= i && i <= len(fields)
+    decreases i
+  {
+    i = i - 1;
+    if text_eq(vec_get::<Field>(fields, i).key, key) { return i; }
+  }
+  return -1;
+}
+
+// Value::put on an Object: replace the last match in place, else append. Order and duplicates are kept.
+fn put(inout o: Obj, a: i64, b: i64, value: i64) -> () ! alloc
+  requires len(o.fields) < 1000
+  ensures 1 <= len(o.fields) && len(o.fields) <= len(old(o).fields) + 1
+{
+  let key: Vec<i64> = word(a, b);
+  let i: i64 = find_last(o.fields, key);
+  if i >= 0 {
+    match vec_at_mut::<Field>(inout o.fields, i) {
+      Some(f) => { f.value = Value::Integer(value); }
+      None => { }
+    }
+  } else {
+    o.fields = vec_push::<Field>(move o.fields, Field { key: move key, value: Value::Integer(value) });
+  }
+}
+
+// Node count (mod 10^6): every node counts once, a vector field counts its elements.
+fn nodes(v: Value) -> i64
+  ensures 0 <= result && result < 1000000
+  decreases size(v)
+{
+  match v {
+    Value::Undefined => { return 1; }
+    Value::Null => { return 1; }
+    Value::Bool(b) => { return 1; }
+    Value::Integer(n) => { return 1; }
+    Value::Str(u) => { return 1; }
+    Value::Array(items) => {
+      let mut i: i64 = 0;
+      let mut total: i64 = 1;
+      while i < len(items)
+        invariant 0 <= i && i <= len(items)
+        invariant 0 <= total && total < 1000000
+        decreases len(items) - i
+      {
+        let c: i64 = nodes(vec_get::<Value>(items, i));
+        total = (total + c) % 1000000;
+        i = i + 1;
+      }
+      return total;
+    }
+    Value::Object(fields) => {
+      let mut i: i64 = 0;
+      let mut total: i64 = 1;
+      while i < len(fields)
+        invariant 0 <= i && i <= len(fields)
+        invariant 0 <= total && total < 1000000
+        decreases len(fields) - i
+      {
+        let c: i64 = nodes(vec_get::<Field>(fields, i).value);
+        total = (total + c) % 1000000;
+        i = i + 1;
+      }
+      return total;
+    }
+  }
+}
+
+// Sum of the integers in a value, the last duplicate key included like any other field.
+fn sum(v: Value) -> i64
+  ensures 0 <= result && result < 1000000
+  decreases size(v)
+{
+  match v {
+    Value::Undefined => { return 0; }
+    Value::Null => { return 0; }
+    Value::Bool(b) => { if b { return 1; } return 0; }
+    Value::Integer(n) => { if n < 0 { return 0; } return n % 1000000; }
+    Value::Str(u) => { return len(u) % 1000000; }
+    Value::Array(items) => {
+      let mut i: i64 = 0;
+      let mut total: i64 = 0;
+      while i < len(items)
+        invariant 0 <= i && i <= len(items)
+        invariant 0 <= total && total < 1000000
+        decreases len(items) - i
+      {
+        total = (total + sum(vec_get::<Value>(items, i))) % 1000000;
+        i = i + 1;
+      }
+      return total;
+    }
+    Value::Object(fields) => {
+      let mut i: i64 = 0;
+      let mut total: i64 = 0;
+      while i < len(fields)
+        invariant 0 <= i && i <= len(fields)
+        invariant 0 <= total && total < 1000000
+        decreases len(fields) - i
+      {
+        total = (total + sum(vec_get::<Field>(fields, i).value)) % 1000000;
+        i = i + 1;
+      }
+      return total;
+    }
+  }
+}
+
+// Value::get on an Object, read as an integer (Undefined and non-integers read 0, missing reads -1).
+fn get_int(fields: Vec<Field>, key: Vec<i64>) -> i64 {
+  let i: i64 = find_last(fields, key);
+  if i < 0 { return -1; }
+  match vec_get::<Field>(fields, i).value {
+    Value::Integer(n) => { return n; }
+    Value::Undefined => { return 0; }
+    Value::Null => { return 0; }
+    Value::Bool(b) => { return 0; }
+    Value::Str(u) => { return 0; }
+    Value::Array(xs) => { return 0; }
+    Value::Object(fs) => { return 0; }
+  }
+}
+
+// The root object held in a struct field: count and sum it through its field list.
+fn object_nodes(fields: Vec<Field>) -> i64 {
+  let mut i: i64 = 0;
+  let mut total: i64 = 1;
+  while i < len(fields)
+    invariant 0 <= i && i <= len(fields)
+    invariant 0 <= total && total < 1000000
+    decreases len(fields) - i
+  {
+    total = (total + nodes(vec_get::<Field>(fields, i).value)) % 1000000;
+    i = i + 1;
+  }
+  return total;
+}
+
+fn object_sum(fields: Vec<Field>) -> i64 {
+  let mut i: i64 = 0;
+  let mut total: i64 = 0;
+  while i < len(fields)
+    invariant 0 <= i && i <= len(fields)
+    invariant 0 <= total && total < 1000000
+    decreases len(fields) - i
+  {
+    total = (total + sum(vec_get::<Field>(fields, i).value)) % 1000000;
+    i = i + 1;
+  }
+  return total;
+}
+
+fn word(a: i64, b: i64) -> Vec<i64> ! alloc {
+  return vec_push::<i64>(vec_push::<i64>(vec_new::<i64>(), a), b);
+}
+
+fn main() -> () ! alloc, io {
+  // put takes a two-unit key; keys "ti" (time), "de" (delegations), "ch" (checks) as UTF-16 units
+  let ti: Vec<i64> = word(116, 105);
+  let de: Vec<i64> = word(100, 101);
+  let ch: Vec<i64> = word(99, 104);
+  let mut o: Obj = Obj { fields: vec_new::<Field>() };
+  put(inout o, 116, 105, 5);
+  put(inout o, 100, 101, 2);
+  // a duplicate key the way hand_life keeps it: append directly, then put edits the last one
+  o.fields = vec_push::<Field>(move o.fields, Field { key: word(116, 105), value: Value::Integer(7) });
+  print(len(o.fields));
+  print(get_int(o.fields, ti));
+  put(inout o, 116, 105, 9);
+  print(get_int(o.fields, ti));
+  print(get_int(o.fields, de));
+  print(get_int(o.fields, ch));
+  print(len(o.fields));
+  match vec_get::<Field>(o.fields, 0).value {
+    Value::Integer(n) => { print(n); }
+    Value::Undefined => { print(-2); }
+    Value::Null => { print(-2); }
+    Value::Bool(b) => { print(-2); }
+    Value::Str(u) => { print(-2); }
+    Value::Array(xs) => { print(-2); }
+    Value::Object(fs) => { print(-2); }
+  }
+
+  // an array child replaced in place through vec_at_mut
+  let mut items: Vec<Value> = vec_new::<Value>();
+  let i0: Vec<Value> = move items;
+  items = vec_push::<Value>(move i0, Value::Null);
+  let i1: Vec<Value> = move items;
+  items = vec_push::<Value>(move i1, Value::Str(word(104, 105)));
+  let i2: Vec<Value> = move items;
+  items = vec_push::<Value>(move i2, Value::Bool(true));
+  match vec_at_mut::<Value>(inout items, 0) {
+    Some(slot) => { *slot = Value::Integer(40); }
+    None => { }
+  }
+  o.fields = vec_push::<Field>(move o.fields, Field { key: move ch, value: Value::Array(move items) });
+  print(object_nodes(o.fields));
+  print(object_sum(o.fields));
+}

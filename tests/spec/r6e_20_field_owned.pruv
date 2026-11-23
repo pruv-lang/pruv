@@ -1,0 +1,10 @@
+// spec: R-6e-20 reject
+// A recursive field read through a borrowed element cannot be returned as an owned value.
+enum Tree { Leaf, Branch(cs: Vec<Node>) }
+struct Node { v: Tree }
+
+fn first(ns: Vec<Node>) -> Tree ! alloc
+  requires len(ns) > 0
+{
+  return vec_get::<Node>(ns, 0).v;
+}

@@ -659,13 +659,15 @@ class Checker:
         s.arg_decls = {}          # type name -> (number of type parameters, []) for typeinfo.check_arity/is_value
         # G9 A0 metadata
         s.type_sccs = []          # recursive type SCCs (lists of names in declaration order), SCC-number order
+        s.rec_vec_edges = set()   # (declaration, element) for intra-SCC Vec fields
+        s.rec_vec_elems = set()
         s.boxed = []              # "Decl.field" / "Enum::Variant.field" of every intra-SCC (boxed) field
         s.boxed_decls = set()     # (declaration name, variant name or None) holding at least one boxed field
         s.extended = set()        # names of extended declarations
         s.buffered = set()        # declarations transitively containing a buffer (array/str) field
         s.fn_sccs = []            # recursive function SCCs (lists of names in function order)
         s.call_log = []           # (caller Function, Call node, callee Function) of every checked user call
-        s.match_call = s.field_receiver = None
+        s.match_call = s.field_receiver = s.read_arg = None
         s.map_iterations = []     # read-only (root, field path) of enclosing map loops
         s.map_borrows = []        # (root, field path, binders) of the enclosing mutable collection Some arms
         s.field_paths = {}        # id(root Var) -> field path of the outermost field read over it
@@ -714,8 +716,7 @@ class Checker:
                                     or is_value(f.type, value_decls, (n,)) for f in d.fields)}
         s.aggregates |= s.holder_records
         s.nested_records |= s.holder_records
-        s.resolve_types()      # every type reference
-        s.type_graph()         # G9 A0: type SCCs, generic/recursive field rules
+        s.resolve_types()      # every type reference and the recursive type SCCs
         s.inhabitance()        # G9 A0: every declaration needs a finite value
         s.compute_extended()
         s.check_extended_uses()
@@ -1073,6 +1074,8 @@ class Checker:
             s.check_type(e, Type("vec" if e.name.startswith("vec_") else "hashmap", tuple(targs)))
         for a, tp in zip(targs, tparams):
             s.check_type(e, a)
+            if catalog_collection and e.name.startswith("vec_") and s.rec_vec_elem(a):
+                continue
             if catalog_collection:
                 s.ext_misuse(e, a, "coll")
             else:
@@ -1081,6 +1084,13 @@ class Checker:
         return bind_args(owner, len(tparams), targs)
 
     def resolve_types(s):
+        graph_error = None
+        try:
+            s.type_graph()
+        except PruvError as ex:
+            if ex.code == "recursive_generic_type":
+                raise
+            graph_error = ex
         for d in s.prog.types:
             s.enter(decl_owner(d.name), d.tparams)
             groups = [d.fields] if isinstance(d, StructDecl) else [v.fields for v in d.variants]
@@ -1093,26 +1103,34 @@ class Checker:
                         terr(f, "field_type", "field %s cannot have type %s" % (f.name, type_name(f.type)),
                              "fields are i64, bool, Option<i64>, Result<i64> or a user struct/enum")
                     s.check_type(f, f.type)
-                    state_field = isinstance(d, StructDecl) and (
-                        f.type.name == "vec" or f.type.name == "hashmap" and f.type.args[0] in (I64, STRING)
-                    ) and not f.type.args[-1].args and f.type.args[-1].name in s.aggregates
-                    nested_field = isinstance(d, StructDecl) and is_nested_collection_field(f.type)
-                    if nested_field and f.type.name == "hashmap" and f.type.args[-1] == I64:
-                        nested_field = d.name in s.collection_records
-                    holder_field = (d.name in s.holder_records and f.type.name not in s.holder_records
-                                    and nested_child_type(s, f.type))
-                    if not state_field and not holder_field and any(n in s.nested_records for n in dependencies(f.type)):
-                        terr(f, "foreign_owned_type", "a record with nested collection fields cannot be a direct field")
-                    if contains_collection(f.type) and (
-                            d.tparams or not (is_owned_field_type(f.type) or state_field or nested_field)):
-                        terr(f, "foreign_owned_type", "field %s cannot have the collection type %s" % (
-                            f.name, type_name(f.type)),
-                             "only non-generic declarations may have Vec<i64>, Vec<bool> or String fields")
+                    s.check_collection_field(d, f)
         for f in s.prog.functions:
             s.enter(fn_owner(f.name), f.tparams)
             for p in f.params:
                 s.check_type(f, p.type)
             s.check_type(f, f.ret)
+        if graph_error is not None:
+            raise graph_error
+
+    def check_collection_field(s, d, f):
+        if s.rec_vec(f.type) and (isinstance(d, StructDecl) or (d.name, f.type.args[0].name) in s.rec_vec_edges):
+            if not d.tparams:
+                return
+        state_field = isinstance(d, StructDecl) and (
+            f.type.name == "vec" or f.type.name == "hashmap" and f.type.args[0] in (I64, STRING)
+        ) and not f.type.args[-1].args and f.type.args[-1].name in s.aggregates
+        nested_field = isinstance(d, StructDecl) and is_nested_collection_field(f.type)
+        if nested_field and f.type.name == "hashmap" and f.type.args[-1] == I64:
+            nested_field = d.name in s.collection_records
+        holder_field = (d.name in s.holder_records and f.type.name not in s.holder_records
+                        and nested_child_type(s, f.type))
+        if not state_field and not holder_field and any(n in s.nested_records for n in dependencies(f.type)):
+            terr(f, "foreign_owned_type", "a record with nested collection fields cannot be a direct field")
+        if contains_collection(f.type) and (
+                d.tparams or not (is_owned_field_type(f.type) or state_field or nested_field)):
+            terr(f, "foreign_owned_type", "field %s cannot have the collection type %s" % (
+                f.name, type_name(f.type)),
+                 "only non-generic declarations may have Vec<i64>, Vec<bool> or String fields")
 
     # ---- G9 A0: type graph, inhabitance, extended types ----
     @staticmethod
@@ -1129,6 +1147,12 @@ class Checker:
     def is_plain_nominal(s, ty):
         """a declared user type written without type arguments"""
         return ty.owner is None and not ty.args and ty.name in s.decls and ty.name not in BUILTIN_TYPE_NAMES
+
+    def rec_vec_elem(s, ty):
+        return ty.owner is None and not ty.args and ty.name in s.rec_vec_elems
+
+    def rec_vec(s, ty):
+        return ty.owner is None and ty.name == "vec" and s.rec_vec_elem(ty.args[0])
 
     def type_graph(s):
         types = s.prog.types
@@ -1156,11 +1180,18 @@ class Checker:
                     terr(d, "recursive_generic_type", "generic type %s cannot be recursive (cycle: %s)" % (
                         d.name, " -> ".join(cyc)),
                          "recursive types must be non-generic; write a dedicated enum for the element type")
-            # (b) intra-SCC fields must be direct nominal fields (these are the boxed edges)
+            # (b) a Vec supplies its own indirection; direct nominal edges need a Box
             for i in comp:
                 d = types[i]
                 for vname, fd in s.decl_fields(d):
                     if not any(n in members for n in dependencies(fd.type)):
+                        continue
+                    if (fd.type.owner is None and fd.type.name == "vec" and len(fd.type.args) == 1
+                            and s.is_plain_nominal(fd.type.args[0])
+                            and fd.type.args[0].name in members):
+                        elem = fd.type.args[0].name
+                        s.rec_vec_edges.add((d.name, elem))
+                        s.rec_vec_elems.add(elem)
                         continue
                     if not (s.is_plain_nominal(fd.type) and fd.type.name in members):
                         terr(fd, "recursive_type", "recursive field %s must have the type itself, not hide it inside %s" % (
@@ -1262,6 +1293,8 @@ class Checker:
         if ty.owner is not None:
             return
         if is_collection(ty):
+            if s.rec_vec(ty):
+                return
             for a in ty.args:
                 s.ext_misuse(node, a, "coll")
             return
@@ -1269,7 +1302,7 @@ class Checker:
             name = type_name(ty)
             terr(node, "foreign_owned_type", "%s has no data and cannot be a Vec or HashMap element" % name,
                  "give %s a field" % name)
-        if inside == "coll" and not ty.args and ty.name in s.aggregates:
+        if inside == "coll" and not ty.args and ty.name in s.aggregates and not s.rec_vec_elem(ty):
             return
         if ty.name in s.extended and not ty.args and ty.name in s.decls:
             if inside in ("coll", "coll_nested"):
@@ -1708,6 +1741,8 @@ class Checker:
         meta = {"type_sccs": [list(x) for x in s.type_sccs], "boxed": list(s.boxed),
                 "extended": [d.name for d in s.prog.types if d.name in s.extended],
                 "fn_sccs": [list(x) for x in s.fn_sccs]}
+        if s.rec_vec_elems:
+            meta["rec_vec_elems"] = sorted(s.rec_vec_elems)
         s.prog.g9 = meta
         s.tt.g9 = meta
 
@@ -1785,7 +1820,7 @@ class Checker:
                 terr(f, "missing_effect", "function %s uses effect `%s` but does not declare it" % (f.name, e),
                      "add `! %s` after the return type" % ", ".join(sorted(set(f.effects) | s.used_effects)),
                      stage="effect")
-        check_ownership(f, s.funcs, s.decls, s.aggregates)      # Check ownership and liveness after typing.
+        check_ownership(f, s.funcs, s.decls, s.aggregates | s.rec_vec_elems)
         f.frame_cands = s.loop_frame_candidates(f)
 
     def ends_in_return(s, stmts):
@@ -2109,16 +2144,16 @@ class Checker:
             s.field_move = s.field_move_out(st, st.type, scope, next_stmt)
             s.expect(st.value, st.type, scope)
             s.check_inout_context(st, st.value)
+            s.own(st.value)
             if is_array(st.type) or st.type == STR:
                 s.array_source(st, st.value, scope)
-            s.own(st.value)
             scope[st.name] = (st.type, st.mutable, "local")
         elif isinstance(st, Assign):
             v = s.lookup(st, st.name, scope)
             s.check_borrow(st, st.name, [])
             scalar_binder = v[2] == "map_mut" and v[0] in (I64, BOOL)
             record_binder = (v[2] == "map_mut" and v[0].owner is None and not v[0].args
-                             and v[0].name in s.aggregates)
+                             and (v[0].name in s.aggregates or s.rec_vec_elem(v[0])))
             scalar_inout = v[2] == "inout" and v[0] in (I64, BOOL)
             array_inout = v[2] == "inout" and is_array(v[0])
             if st.deref and not (scalar_binder or record_binder):
@@ -2138,15 +2173,15 @@ class Checker:
             s.restore_array = st.name if array_inout else None
             s.expect(st.value, v[0], scope)
             s.restore_array = None
+            s.own(st.value)
             if record_binder and not (
-                    isinstance(st.value, (StructLit, Call))
+                    isinstance(st.value, (StructLit, EnumCtor, Call))
                     or isinstance(st.value, Move) and not st.value.fields
                     and scope[st.value.name][2] in ("local", "take")):
                 terr(st.value, "foreign_move", "a record replacement needs a constructor, call result or move")
             s.check_inout_context(st, st.value)
             if is_array(v[0]) or v[0] == STR:
                 s.array_source(st, st.value, scope)
-            s.own(st.value)
         elif isinstance(st, IndexAssign) and st.fields:
             # LG4: `p.a.b[i] = e` -- the place is the field path of a mutable local / inout parameter
             fpath = tuple(st.fields)
@@ -2211,9 +2246,9 @@ class Checker:
             s.alloc_hint_for(st.value, cur)
             s.expect(st.value, cur, scope)
             s.check_inout_context(st, st.value)
+            s.own(st.value)
             if is_array(cur) or cur == STR:      # G9 A0: G2 explicit ownership for a buffer field
                 s.array_source(st, st.value, scope)
-            s.own(st.value)
         elif isinstance(st, If):
             s.expect(st.cond, BOOL, scope, op="a condition")
             s.check_inout_context(st, st.cond)
@@ -2245,11 +2280,11 @@ class Checker:
                 # LG9 (G-DB15-2): a str binder of a consuming match is returned like an owned local
                 binder_ret = (f.ret == STR and isinstance(st.value, Var) and st.value.name in s.match_movable
                               and st.value.ty == STR)
+                s.own(st.value)
                 if (is_array(f.ret) or f.ret == STR) and not binder_ret:
                     s.array_source(st, st.value, scope, allow_local_var=True)
                 if binder_ret:
                     s.used_effects.add("alloc")
-                s.own(st.value)
                 if binder_ret:
                     # it means `return copy(x)`: rewrite it so both backends and the cost proof see the copy
                     st.value = Call(st.value.line, st.value.col, "copy", [st.value], STR)
@@ -2308,8 +2343,15 @@ class Checker:
             map_view = map_read and (s.is_extended(call.targs[-1]) or nested_map_path is not None)
             s.check_inout_context(st, st.scrutinee)
             user = s.tt.is_enum(t)
-            mpath = s.match_inout_path(st.scrutinee, t, scope)
-            root = None if mpath is not None else s.match_root(st.scrutinee, t, scope)
+            mpath = s.match_inout_path(call, t, scope)
+            vec_read = field_place(call)[0]
+            if s.rec_vec_get(vec_read):
+                base = field_place(vec_read.args[0])[0]
+                while s.rec_vec_get(base):  # a nested borrowed element read borrows the outermost vector
+                    base = field_place(base.args[0])[0]
+                root = base.name if isinstance(base, Var) else None
+            else:
+                root = None if mpath is not None else s.match_root(call, t, scope)
             if t.owner is not None:
                 terr(st, "generic_operation", "cannot match a value of the abstract type %s" % t.name,
                      "a type parameter has no variants; match on an Option, Result or enum that contains it")
@@ -2372,7 +2414,7 @@ class Checker:
                     if b in sc:
                         terr(node, "shadow", "%s is already defined" % b, "use a new name")
                     # G9 A0: a buffer payload is a read view (like a parameter): returning it needs copy()
-                    kind = "param" if (is_array(bt) or bt == STR) else "local"
+                    kind = "param" if (is_array(bt) or bt == STR or s.rec_vec(bt)) else "local"
                     if a.ctor == "Err" and not user and bt == STRING:
                         kind = "result_error"
                     sc[b] = (bt, map_take and a.ctor == "Some", kind)
@@ -2656,6 +2698,10 @@ class Checker:
              "write copy(x) to make an explicit copy (needs `! alloc`)")
 
     # ---- G9 A0: ownership of extended values, active-match borrows ----
+    def rec_vec_get(s, e):
+        return (isinstance(e, Call) and e.name == "vec_get" and e.name not in s.funcs
+                and e.ty is not None and s.rec_vec_elem(e.ty))
+
     def own(s, value):
         """`value` (already typed) is moved into an owning position (let, assignment, constructor field, return):
         a non-fresh extended value is cloned, which needs `alloc`; constructors, literals and calls are fresh"""
@@ -2664,16 +2710,20 @@ class Checker:
             terr(value, "foreign_move", "a map iteration binder cannot be used as an owned value")
         if getattr(value, "map_mut_view", False):
             terr(value, "foreign_move", "a mutable collection binder cannot be used as an owned value")
-        if t is not None and s.is_extended(t) and not isinstance(value, (EnumCtor, StructLit, Call, Move)):
-            s.used_effects.add("alloc")
+        if t is not None:
+            if ((s.is_extended(t) or is_owned_value(t) or is_array(t) or t == STR)
+                    and s.rec_vec_get(field_place(value)[0])):
+                terr(value, "foreign_owned_type", "vec_get cannot copy %s" % type_name(t))
+            if s.is_extended(t) and not isinstance(value, (EnumCtor, StructLit, Call, Move)):
+                s.used_effects.add("alloc")
 
     def own_field(s, value, ftype, scope, c):
         """a constructor / struct-literal field argument: owning position, G2 explicit ownership for buffers"""
         if c:
             return
+        s.own(value)
         if is_array(ftype) or ftype == STR:
             s.array_source(value, value, scope)
-        s.own(value)
 
     def ctor_allocs(s, decl_name, variant, c):
         """a constructor that initializes a boxed field allocates"""
@@ -2965,6 +3015,8 @@ class Checker:
                 terr(e, "foreign_move", "move only where ownership is consumed",
                      "contracts read parameters and locals directly; remove `move`")
             ty, _, kind = s.lookup(e, e.name, scope)
+            if e.name in s.arm_binders and s.rec_vec(ty):
+                terr(e, "foreign_move", "a borrowed vector payload cannot be moved")
             if ((is_array(ty) or ty == STR) and kind not in ("local", "take")
                     and not (kind == "inout" and e.name == s.restore_array)
                     and e.name not in s.match_movable):    # G-DB16-1: array binder of a consuming match
@@ -3261,7 +3313,13 @@ class Checker:
                 s.in_view = False
             e.ty = want
         else:
-            s.expect(e, want, scope, c, borrow_element=want == STR, borrow_vector=borrow)
+            saved, s.read_arg = s.read_arg, e if borrow and s.rec_vec_elem(want) else None
+            try:
+                s.expect(e, want, scope, c, borrow_element=want == STR, borrow_vector=borrow)
+            finally:
+                s.read_arg = saved
+            if not borrow and s.rec_vec_get(field_place(e)[0]):
+                s.own(e)
 
     def copy_subview_arg(s, e, scope, c):
         """LG8: subview(a, lo, hi) as the only direct argument of the builtin copy; the array type is the source's"""
@@ -3796,6 +3854,9 @@ class Checker:
         else:
             m = {}
         arity(len(f.params))
+        if (catalog and n == "vec_get" and s.rec_vec_elem(e.targs[0])
+                and all(e is not read for read in (s.field_receiver, s.match_call, s.read_arg))):
+            terr(e, "foreign_owned_type", "vec_get cannot copy %s" % type_name(e.targs[0]))
         if catalog and n == "string_eq":
             for arg in a:
                 if isinstance(arg, StrLit):
@@ -3829,7 +3890,7 @@ class Checker:
                 if not isinstance(field_place(a[0])[0], Var):
                     terr(a[0], "foreign_borrow", "a borrowed Vec<String> element needs a vector place")
                 return STR
-            if n == "vec_at_mut" and e.targs[0].name not in s.aggregates:
+            if n == "vec_at_mut" and e.targs[0].name not in s.aggregates and not s.rec_vec_elem(e.targs[0]):
                 terr(e, "foreign_owned_type", "vec_at_mut requires an owned aggregate element")
             if n == "map_remove" and e.targs[0] not in (I64, STRING):
                 terr(e, "foreign_owned_type", "map_remove requires i64 or String keys")
@@ -3837,7 +3898,8 @@ class Checker:
                 arg = a[1]
                 if not (isinstance(arg, Call) or isinstance(arg, Move) and not arg.fields):
                     terr(arg, "foreign_move", "an owned String argument needs a call result or move")
-            if n in ("vec_get", "map_get") and s.is_extended(e.targs[-1]):
+            if (n in ("vec_get", "map_get") and s.is_extended(e.targs[-1])
+                    and not (n == "vec_get" and s.rec_vec_elem(e.targs[-1]))):
                 if e is not (s.field_receiver if n == "vec_get" else s.match_call):
                     terr(e, "foreign_owned_type", "%s cannot copy %s" % (n, type_name(e.targs[-1])))
             if n in ("vec_push", "map_insert"):
@@ -3845,9 +3907,12 @@ class Checker:
                 if getattr(x, "map_iter_view", False):
                     s.own(x)
                 payload = e.targs[-1]
+                rec_push = n == "vec_push" and s.rec_vec_elem(payload)
+                if rec_push:
+                    s.own(x)
                 if getattr(x, "map_mut_view", False) or (
-                        payload.owner is None and payload.name in s.aggregates
-                        and not (isinstance(x, (StructLit, Call)) or isinstance(x, Move) and not x.fields
+                        (rec_push or payload.owner is None and payload.name in s.aggregates)
+                        and not (isinstance(x, (StructLit, EnumCtor, Call)) or isinstance(x, Move) and not x.fields
                                  and scope[x.name][2] in ("local", "take"))):
                     terr(x, "foreign_move", "an aggregate collection payload needs a constructor, call result or move")
             # Includes fs for G10 operations, through the same path as alloc.

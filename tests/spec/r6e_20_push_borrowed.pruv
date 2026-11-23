@@ -1,0 +1,7 @@
+// spec: R-6e-20 reject
+// A read parameter is borrowed; pushing it needs a move, and there is no implicit clone.
+enum Tree { Leaf, Branch(xs: Vec<Tree>) }
+
+fn wrap(x: Tree) -> Tree ! alloc {
+  return Tree::Branch(vec_push::<Tree>(vec_new::<Tree>(), x));
+}

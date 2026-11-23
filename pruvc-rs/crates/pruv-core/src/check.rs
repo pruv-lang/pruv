@@ -338,6 +338,7 @@ struct Checker {
     // ---- G9 A0 metadata ----
     /// recursive type SCCs (names in declaration order), SCC-number order
     type_sccs: Vec<Vec<String>>,
+    recursive_vec_elements: HashSet<String>,
     /// "Decl.field" / "Enum::Variant.field" of every intra-SCC (boxed) field
     boxed: Vec<String>,
     /// (declaration name, variant name or None) holding at least one boxed field
@@ -1043,6 +1044,7 @@ impl Checker {
             map_roots: Vec::new(),
             map_iterations: Vec::new(),
             type_sccs: Vec::new(),
+            recursive_vec_elements: HashSet::new(),
             boxed: Vec::new(),
             boxed_decls: HashSet::new(),
             extended: HashSet::new(),
@@ -1104,8 +1106,14 @@ impl Checker {
         self.arg_decls = self.decls.iter().map(|(n, d)| (n.clone(), d.tparams().len())).collect();
         self.check_tparams(prog)?; // G3: type-parameter lists (type_parameter, generic_bound, generic_main)
         self.compute_holder_records();
+        let graph = self.type_graph(&prog.types); // also identifies Vec edges for field validation
+        if let Err(e) = &graph {
+            if e.code == "recursive_generic_type" {
+                return graph;
+            }
+        }
         self.resolve_types(prog)?;
-        self.type_graph(&prog.types)?; // G9 A0: type SCCs, generic/recursive field rules
+        graph?;
         self.inhabitance(&prog.types)?; // G9 A0: every declaration needs a finite value
         self.compute_extended(&prog.types);
         self.check_extended_uses(prog)?;
@@ -1984,8 +1992,10 @@ impl Checker {
             if catalog_collection.is_none() {
                 self.check_arg(line, col, a, Some(tp))?;
             }
-            let catalog_collection = catalog_collection.is_some();
-            self.ext_misuse(line, col, a, Some(if catalog_collection { "coll" } else { "arg" }))?;
+            if !catalog_collection.is_some_and(|n| n.starts_with("vec_")) || !self.recursive_vec_element(a) {
+                let inside = if catalog_collection.is_some() { "coll" } else { "arg" };
+                self.ext_misuse(line, col, a, Some(inside))?;
+            }
         }
         match bind_args(owner, tparams.len(), targs) {
             Ok(m) => Ok(Some(m)),
@@ -2037,11 +2047,11 @@ impl Checker {
                     if ft.contains_collection()
                         && !(d.tparams().is_empty() && ((crate::gtype::key_is_owned_field(&f.ty)
                             && !crate::gtype::key_is_nested_collection_field(&f.ty) || nested_field)
-                            || matches!(d, TypeDecl::Struct(_)) && self.state_collection(&ft)))
+                            || matches!(d, TypeDecl::Struct(_)) && self.state_collection(&ft)
+                            || self.vec_scc_edge(d.name(), &ft)))
                     {
                         if matches!(ft.name.as_str(), "vec" | "hashmap") {
                             if let Some(payload) = ft.args.last().filter(|ty| is_value(ty, &|n| self.value_decl(n))) {
-                                // The type graph has not run yet; is_value rules out recursive payloads.
                                 self.ext_misuse(f.line, f.col, payload, Some("coll"))?;
                             }
                         }
@@ -2073,6 +2083,27 @@ impl Checker {
             && ty.args.is_empty()
             && self.decls.contains_key(&ty.name)
             && !BUILTIN_TYPE_NAMES.contains(&ty.name.as_str())
+    }
+
+    /// R-6e-20: `e` is a catalog `vec_get` of a recursive vector element (a borrowed read).
+    fn rec_vec_get<'e>(&self, e: &'e Expr) -> Option<&'e Call> {
+        match e {
+            Expr::Call(call) if call.name == "vec_get" && !self.funcs.contains_key(&call.name)
+                && call.ty.as_deref().is_some_and(|ty| self.recursive_vec_element(&GType::from_key(ty))) => Some(call),
+            _ => None,
+        }
+    }
+
+    fn recursive_vec_element(&self, ty: &GType) -> bool {
+        self.is_plain_nominal(ty) && self.recursive_vec_elements.contains(&ty.name)
+    }
+
+    fn vec_scc_edge(&self, owner: &str, ty: &GType) -> bool {
+        ty.name == "vec" && ty.args.first().is_some_and(|elem| {
+            self.is_plain_nominal(elem) && self.type_sccs.iter().any(|scc| {
+                scc.iter().any(|n| n == owner) && scc.contains(&elem.name)
+            })
+        })
     }
 
     fn type_graph(&mut self, types: &[TypeDecl]) -> Res<()> {
@@ -2114,12 +2145,16 @@ impl Checker {
                     ));
                 }
             }
-            // (b) intra-SCC fields must be direct nominal fields (these are the boxed edges)
+            // (b) intra-SCC fields are direct boxed fields or unboxed Vec edges
             for &i in &comp {
                 let d = &types[i];
                 for (vname, fd) in decl_fields(d) {
                     let ft = GType::from_key(&fd.ty);
                     if !dependencies(&ft).iter().any(|n| members.contains(n.as_str())) {
+                        continue;
+                    }
+                    if self.vec_scc_edge(d.name(), &ft) {
+                        self.recursive_vec_elements.insert(ft.args[0].name.clone());
                         continue;
                     }
                     if !(self.is_plain_nominal(&ft) && members.contains(ft.name.as_str())) {
@@ -2332,7 +2367,7 @@ impl Checker {
 
     fn state_collection(&self, ty: &GType) -> bool {
         match (ty.name.as_str(), ty.args.as_slice()) {
-            ("vec", [v]) => self.owned_aggregate(v),
+            ("vec", [v]) => self.owned_aggregate(v) || self.recursive_vec_element(v),
             ("hashmap", [k, v]) => (*k == i64t() || k.to_key() == "string") && self.owned_aggregate(v),
             _ => false,
         }
@@ -2353,7 +2388,9 @@ impl Checker {
         }
         if ty.is_collection() {
             for a in &ty.args {
-                self.ext_misuse(line, col, a, Some("coll"))?;
+                if ty.name != "vec" || !self.recursive_vec_element(a) {
+                    self.ext_misuse(line, col, a, Some("coll"))?;
+                }
             }
             return Ok(());
         }
@@ -2835,7 +2872,10 @@ impl Checker {
                 ));
             }
         }
-        let aggregates = self.decls.keys().filter(|n| self.owned_aggregate(&GType::from_key(n))).cloned().collect();
+        let aggregates = self.decls.keys().filter(|n| {
+            let ty = GType::from_key(n);
+            self.owned_aggregate(&ty) || self.recursive_vec_element(&ty)
+        }).cloned().collect();
         // G-DB16-1 / G-R09-4: non-generic user enums and structs, tracked as owned locals so a binder move or a
         // consuming field move can consume them
         let enums: HashSet<String> = self
@@ -3591,7 +3631,8 @@ impl Checker {
                 let v = self.lookup(s.line, s.col, &s.name, scope, &[])?;
                 self.check_borrow(s.line, s.col, &s.name, &[])?; // G9 A0
                 let scalar_binder = v.kind == "map_inout" && (v.ty == i64t() || v.ty == boolt());
-                let record_binder = v.kind == "map_inout" && self.owned_aggregate(&v.ty);
+                let record_binder = v.kind == "map_inout"
+                    && (self.owned_aggregate(&v.ty) || self.recursive_vec_element(&v.ty));
                 let scalar_inout = v.kind == "inout" && (v.ty == i64t() || v.ty == boolt());
                 if s.deref && !(scalar_binder || record_binder) {
                     return Err(terr(s.line, s.col, "type_mismatch",
@@ -3625,7 +3666,7 @@ impl Checker {
                 let checked = self.expect(&mut s.value, &v.ty, scope, false, None);
                 self.array_replace = None;
                 checked?;
-                if record_binder && !matches!(&s.value, Expr::StructLit(_) | Expr::Call(_))
+                if record_binder && !matches!(&s.value, Expr::StructLit(_) | Expr::EnumCtor(_) | Expr::Call(_))
                     && !matches!(&s.value, Expr::Move(m) if m.fields.is_empty()
                         && scope.get(&m.name).is_some_and(|entry| matches!(entry.kind, "local" | "take")))
                 {
@@ -4139,7 +4180,7 @@ impl Checker {
     }
 
     fn match_scrutinee(&mut self, e: &mut Expr, scope: &Scope) -> Res<GType> {
-        self.read_expr(e, scope, false, &["map_get", "map_get_mut", "map_take", "vec_at_mut"])
+        self.read_expr(e, scope, false, &["map_get", "map_get_mut", "map_take", "vec_at_mut", "vec_get"])
     }
 
     fn match_stmt(&mut self, m: &mut Match, scope: &mut Scope) -> Res<()> {
@@ -4179,7 +4220,14 @@ impl Checker {
             Some((v.name.clone(), path))
         });
         let mpath = self.match_inout_path(&m.scrutinee, &t, scope);
-        let root = if let Some(call) = map_call.filter(|_| map_borrow && nested_map_path.is_none()) {
+        let vec_read = self.rec_vec_get(field_place(&m.scrutinee).0);
+        let root = if let Some(mut call) = vec_read {
+            // a nested borrowed element read borrows the outermost vector
+            while let Some(inner) = self.rec_vec_get(field_place(&call.args[0]).0) {
+                call = inner;
+            }
+            place_root(&call.args[0]).map(str::to_string)
+        } else if let Some(call) = map_call.filter(|_| map_borrow && nested_map_path.is_none()) {
             place_root(&call.args[0]).map(str::to_string)
         } else if mpath.is_none() {
             self.match_root(&m.scrutinee, &t, scope)
@@ -4353,6 +4401,11 @@ impl Checker {
         }
         if let Some(k) = expr_ty(value) {
             let t = GType::from_key(k);
+            // R-6e-20: a field read through a borrowed vector element is never owned
+            if matches!(value, Expr::FieldAccess(_)) && self.rec_vec_get(field_place(value).0).is_some()
+                && (self.is_extended(&t) || t.is_collection() || crate::llvmgen::is_owned_result(k) || t.is_array() || t == strt()) {
+                return Err(terr(value.line(), value.col(), "foreign_owned_type", format!("vec_get cannot copy {}", tn(&t)), ""));
+            }
             if self.is_extended(&t) && !matches!(value, Expr::EnumCtor(_) | Expr::StructLit(_) | Expr::Call(_) | Expr::Move(_)) {
                 self.used_effects.insert("alloc".to_string());
             }
@@ -4539,7 +4592,11 @@ impl Checker {
         if *ty == strt() {
             return self.expect_str_arg(e, scope, c);
         }
-        let got = self.expr(e, scope, c)?;
+        let got = if borrow_vector && self.recursive_vec_element(ty) {
+            self.read_expr(e, scope, c, &["vec_get"])?
+        } else {
+            self.expr(e, scope, c)?
+        };
         if borrow_vector && place_root(e).is_some() && key_is_vec_slice_arg(&got.to_key(), &ty.to_key()) {
             return Ok(());
         }
@@ -6407,8 +6464,11 @@ impl Checker {
                 }
             }
         }
-        if cat.is_some() && n == "vec_at_mut" && !self.owned_aggregate(&targs.as_ref().unwrap()[0]) {
-            return Err(terr(line, col, "foreign_owned_type", "vec_at_mut requires an owned aggregate element", ""));
+        if cat.is_some() && n == "vec_at_mut" {
+            let elem = &targs.as_ref().unwrap()[0];
+            if !self.owned_aggregate(elem) && !self.recursive_vec_element(elem) {
+                return Err(terr(line, col, "foreign_owned_type", "vec_at_mut requires an owned aggregate element", ""));
+            }
         }
         if cat.is_some() && n == "map_remove" {
             let key = &targs.as_ref().unwrap()[0];
@@ -6444,7 +6504,9 @@ impl Checker {
                     "an aggregate collection payload needs a constructor, call result or move", ""));
             }
             let payload = targs.as_ref().and_then(|a| a.last()).unwrap();
-            if self.owned_aggregate(payload) && !matches!(arg, Expr::StructLit(_) | Expr::Call(_) | Expr::Move(_)) {
+            if (self.owned_aggregate(payload) || n == "vec_push" && self.recursive_vec_element(payload))
+                && !matches!(arg, Expr::StructLit(_) | Expr::EnumCtor(_) | Expr::Call(_) | Expr::Move(_))
+            {
                 return Err(terr(arg.line(), arg.col(), "foreign_move", "an aggregate collection payload needs a constructor, call result or move", ""));
             }
         }

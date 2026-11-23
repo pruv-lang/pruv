@@ -1563,6 +1563,12 @@ impl<'a> Gen<'a> {
     }
 
     /// t is an extended user type (G9): recursive, or holding a buffer or an extended type
+    fn is_recursive(&self, ty: &str) -> bool {
+        self.prog.g9.as_ref().is_some_and(|g9| {
+            g9.type_sccs.iter().any(|scc| scc.iter().any(|name| name == ty))
+        })
+    }
+
     fn is_ext(&self, t: Option<&str>) -> bool {
         !self.ext.is_empty() && t.map_or(false, |t| !is_g3_key(t) && self.ext.contains(t))
     }
@@ -3225,6 +3231,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
     /// Scalars, arrays and str weigh 0; a nominal value weighs its size; constructors weigh their active payload.
     /// `bud` is the budget argument expression (`pruv_budget` inside a helper, where it is a `&mut i64`).
     fn g9_weight(&self, t: &GType, x: &str, bud: &str) -> String {
+        if let Some(elem) = self.vec_size_element(t) {
+            return format!(
+                "({x}).iter().fold(0i128, |pruv_sum, pruv_w| pruv_cadd(pruv_sum, pruv_csize__{}(pruv_w, {bud})))",
+                elem.name,
+            );
+        }
         if is_optres(t) {
             let inner = self.g9_weight(&t.args[0], "pruv_w", bud);
             let error = t.result_error().map_or_else(|| "0i128".to_string(), |e| self.g9_weight(e, "pruv_w", bud));
@@ -3280,6 +3292,19 @@ pruv_hi <= (pruv_b.len() as i128) && \
             return format!("pruv_ceq__{}({}, {}, pruv_budget)", t.name, x, y);
         }
         format!("(*{} == *{})", x, y)
+    }
+
+    fn vec_size_element<'t>(&self, ty: &'t GType) -> Option<&'t GType> {
+        let ("vec", [elem]) = (ty.name.as_str(), ty.args.as_slice()) else { return None };
+        if ty.owner.is_some() || elem.owner.is_some() || !elem.args.is_empty() {
+            return None;
+        }
+        // An element qualifies if a vector field inside its SCC refers to it.
+        let group = self.prog.g9.as_ref()?.type_sccs.iter().find(|scc| scc.contains(&elem.name))?;
+        let key = ty.to_key();
+        group.iter().filter_map(|name| self.table.decl(name)).any(|d| {
+            d.all_fields().iter().any(|f| f.ty == key)
+        }).then_some(elem)
     }
 
     /// pruv_csize__Name: 1 + sum of the weights of the ACTIVE fields, one budget unit per call (= per node)
@@ -3431,7 +3456,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 };
                 out.insert(n);
                 for f in d.all_fields() {
-                    work.extend(nominals_in(&GType::from_key(&f.ty)));
+                    let ft = GType::from_key(&f.ty);
+                    if let Some(elem) = self.vec_size_element(&ft) {
+                        work.push(elem.name.clone());
+                    } else {
+                        work.extend(nominals_in(&ft));
+                    }
                 }
             }
             out
@@ -3773,8 +3803,16 @@ pruv_hi <= (pruv_b.len() as i128) && \
             while let Expr::FieldAccess(f) = root {
                 root = &*f.base;
             }
-            if let Expr::Var(v) = root {
-                self.pinned.insert(v.name.clone());
+            let root = match root {
+                Expr::Var(v) => Some(v.name.as_str()),
+                Expr::Call(call) if call.name == "vec_get" && !self.fmap.contains_key(&call.name)
+                    && call.ty.as_deref().is_some_and(|ty| self.is_recursive(ty)) => {
+                    crate::check::place_root(&call.args[0])
+                }
+                _ => None,
+            };
+            if let Some(root) = root {
+                self.pinned.insert(root.to_string());
             }
             let fields: Vec<FieldDecl> = k_variant(&self.table, &sty, &a.ctor)?.fields.clone();
             for (b, fd) in a.binders.iter().zip(fields.iter()) {
@@ -4429,6 +4467,21 @@ pruv_hi <= (pruv_b.len() as i128) && \
             }
             return Ok(format!(r#"(({v}).get({index}).unwrap_or_else(|| pruv_g6_req("vec_get", "0 <= i && i < len(v)")).as_str())"#));
         }
+        if x.name == "vec_get" && low.first().is_some_and(|elem| self.is_recursive(&elem.to_key())) {
+            self.fg_mut()?.record_inline_catalog(&x.name, &src);
+            let v = self.e(arg(&x.args, 0)?)?;
+            let i = self.e(arg(&x.args, 1)?)?;
+            if self.unchecked_collections() {
+                return Ok(format!("(*unsafe {{ ({v}).get_unchecked(({i}) as usize) }})"));
+            }
+            let fail = if self.fg.as_ref().is_some_and(|fg| fg.req) {
+                r#"pruv_g6_req("vec_get", "0 <= i && i < len(v)")"#
+            } else {
+                r#"pruv_g6_repr("index")"#
+            };
+            let index = format!("<usize as ::std::convert::TryFrom<i64>>::try_from({i}).unwrap_or(usize::MAX)");
+            return Ok(format!("(*({v}).get({index}).unwrap_or_else(|| {fail}))"));
+        }
         // A bound proof can depend on an unchecked user foreign postcondition.
         if x.name == "vec_get" && self.unchecked_collections() {
             self.fg_mut()?.record_inline_catalog(&x.name, &src);
@@ -4778,6 +4831,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 if let Expr::Call(call) = base {
                     if call.name == "vec_get" && !self.fmap.contains_key(&call.name)
                         && self.is_ext(expr_ty(base).as_deref()) && self.unchecked_collections()
+                        && !expr_ty(base).as_deref().is_some_and(|ty| self.is_recursive(ty))
                     {
                         let (_, types) = crate::foreign_shim::inst_types(call);
                         self.fg_mut()?.record_inline_catalog(&call.name, &types);

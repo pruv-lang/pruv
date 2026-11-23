@@ -1,0 +1,19 @@
+// spec: R-6e-20 reject
+// A match on an element of an element borrows the outermost vector; vec_at_mut on it is rejected.
+enum Tree { Leaf, Branch(cs: Vec<Node>) }
+struct Node { v: Tree, kids: Vec<Node> }
+
+fn edit(inout ns: Vec<Node>) -> i64
+  requires len(ns) > 0 && len(ns[0].kids) > 0
+{
+  match vec_get::<Node>(vec_get::<Node>(ns, 0).kids, 0).v {
+    Tree::Leaf => { return 0; }
+    Tree::Branch(cs) => {
+      match vec_at_mut::<Node>(inout ns, 0) {
+        Some(n) => { n.v = Tree::Leaf; }
+        None => { }
+      }
+      return len(cs);
+    }
+  }
+}
