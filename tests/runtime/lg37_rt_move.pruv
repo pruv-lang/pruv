@@ -1,0 +1,150 @@
+// LG37: str_from_utf8(x) in return or argument position (G-DB56-4) and resize(x, n, v) (G-DB49-2) of an owned local
+// array at its last use take x's block (resize grows it in place) instead of copying it; a later read of x keeps the copy.
+fn width(s: str) -> i64
+  requires 1 <= len(s) && len(s) <= 100
+  ensures 0 <= result && result <= 200000
+{
+  return len(s) * 1000 + s[0];
+}
+fn retstr(n: i64) -> str ! alloc
+  requires 1 <= n && n <= 50
+  ensures len(result) <= n
+{
+  let mut b: [u8] = alloc(n, 97);
+  b[0] = 104;
+  if utf8_valid(b) {
+    return str_from_utf8(b);
+  }
+  return "";
+}
+fn argstr(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50
+{
+  let mut b: [u8] = alloc(n, 98);
+  b[0] = 105;
+  let mut r: i64 = -1;
+  if utf8_valid(b) {
+    r = width(str_from_utf8(b));
+  }
+  return r;
+}
+fn keeparg(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50
+{
+  let b: [u8] = alloc(n, 99);
+  let mut r: i64 = -1;
+  if utf8_valid(b) {
+    r = width(str_from_utf8(b));
+    r = r + len(b);
+  }
+  return r;
+}
+fn grow(n: i64) -> [i64] ! alloc
+  requires 3 <= n && n <= 50
+  ensures len(result) == n
+{
+  let mut t: [i64] = alloc(3, 5);
+  t[0] = 1;
+  let u: [i64] = resize(t, n, 9);
+  return u;
+}
+fn zbytes(n: i64) -> [u8] ! alloc
+  requires 2 <= n && n <= 50
+  ensures len(result) == n
+{
+  let b: [u8] = alloc(2, 7);
+  return resize(b, n, 0);
+}
+fn cut() -> [i64] ! alloc
+  ensures len(result) == 6
+{
+  let t: [i64] = alloc(10, 3);
+  return truncate(t, 6);
+}
+fn within(k: i64) -> [i64] ! alloc
+  requires 6 <= k && k <= 10
+  ensures len(result) == k
+{
+  let u: [i64] = cut();
+  let w: [i64] = resize(u, k, 4);
+  return w;
+}
+fn flags(n: i64) -> i64 ! alloc
+  requires 2 <= n && n <= 50
+{
+  let b: [bool] = alloc(2, true);
+  let c: [bool] = resize(b, n, false);
+  let mut r: i64 = len(c) * 10;
+  if c[1] { r = r + 1; }
+  if c[n - 1] { r = r + 5; }
+  return r;
+}
+fn keepsrc(n: i64) -> i64 ! alloc
+  requires 3 <= n && n <= 50
+{
+  let mut t: [i64] = alloc(3, 6);
+  t[0] = 2;
+  let u: [i64] = resize(t, n, 8);
+  return len(u) * 100 + u[n - 1] * 10 + t[0] + len(t);
+}
+fn asg(n: i64) -> i64 ! alloc
+  requires 2 <= n && n <= 100
+{
+  let mut a: [i64] = alloc(2, 1);
+  let b: [i64] = alloc(1, 2);
+  a = resize(a, len(resize(b, n, 3)), 7);
+  return len(a);
+}
+fn rtr(n: i64) -> [i64] ! alloc
+  requires 2 <= n && n <= 100
+{
+  let a: [i64] = alloc(200, 1);
+  let b: [i64] = alloc(1, 2);
+  return truncate(a, len(resize(b, n, 3)));
+}
+fn stk(n: i64) -> i64 ! alloc
+  requires 2 <= n && n <= 100
+{
+  let b: [i64] = alloc(1, 2);
+  let t: [i64] = alloc(1, len(resize(b, n, 3)));
+  return t[0];
+}
+fn idx(n: i64) -> i64 ! alloc
+  requires 2 <= n && n <= 100
+{
+  let mut a: [i64] = alloc(2, 1);
+  let b: [i64] = alloc(1, 2);
+  a[0] = len(resize(b, n, 3));
+  return a[0] + a[1];
+}
+fn su8(n: i64) -> i64 ! alloc
+  requires 2 <= n && n <= 100
+{
+  let mut a: [u8] = alloc(2, 97);
+  let b: [u8] = alloc(n, 98);
+  let mut r: i64 = 0;
+  if utf8_valid(b) {
+    a = resize(a, len(str_from_utf8(b)), 0);
+    r = len(a);
+  }
+  return r;
+}
+fn run() -> () ! io, alloc {
+  let s: str = retstr(4);
+  if len(s) >= 1 { print(width(s)); }
+  print(argstr(3));
+  print(keeparg(5));
+  let g: [i64] = grow(7);
+  print(len(g)); print(g[0]); print(g[2]); print(g[3]); print(g[6]);
+  let z: [u8] = zbytes(40);
+  print(len(z)); print(z[1]); print(z[2]); print(z[39]);
+  let w: [i64] = within(9);
+  print(len(w)); print(w[5]); print(w[6]); print(w[8]);
+  print(flags(6));
+  print(keepsrc(5));
+  print(asg(5));
+  print(len(rtr(6)));
+  print(stk(7));
+  print(idx(8));
+  print(su8(9));
+}

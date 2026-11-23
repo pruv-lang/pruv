@@ -2081,6 +2081,48 @@ class FnGen:
             return {x.name}
         return set()
 
+    def nested_moves(s, e, target=None, ret=False):
+        """LG37 (G-DB56-4, G-DB49-2): the owned local arrays a `str_from_utf8(x)` or `resize(x, n, v)` anywhere in the
+        expression e of a let / assignment / expression statement / return takes at their last use: x is named once
+        in the statement (so nothing reads it after the take), is not the assigned target, and is dead after the
+        statement (dead_after, return_next, or the statement is a return).  x is an owned array slot (a local, or a
+        take parameter the function owns at a return; not a borrowed or inout parameter, reference, pinned or stack
+        local); for str_from_utf8 also an array payload binder of a consuming match (as
+        move_src).  The str_from_utf8 lowering then hands x's block and cap to the str, the resize lowering grows x's
+        block in place (realloc) instead of a fresh block plus a prefix copy."""
+        if s.cost or e is None:
+            return set()
+        counts = {}
+        calls = []
+
+        def walk(x):
+            if isinstance(x, (Var, Move)):
+                counts[x.name] = counts.get(x.name, 0) + 1
+            if (isinstance(x, Call) and isinstance(x.args[0] if x.args else None, Var)
+                    and ((x.name == "str_from_utf8" and len(x.args) == 1) or (x.name == "resize" and len(x.args) == 3))):
+                calls.append(x)
+            for k in codegen.expr_kids(x):
+                walk(k)
+        for x in (e if isinstance(e, list) else [e]):
+            walk(x)
+        out = set()
+        for c in calls:
+            n = c.args[0].name
+            if n == target or counts.get(n) != 1:
+                continue
+            kind, v = s.lookup(n)
+            if kind == "ssa":
+                if c.name == "str_from_utf8" and v.k == "arr" and v.mv is not None and v.mv[3]:
+                    nxt = bool(s.frames) and s.frames[-1][3] and n not in s.frames[-1][1]
+                    if ret or nxt or s.dead_after(n):
+                        out.add(n)
+                continue
+            if not (ret or s.dead_after(n) or s.return_next(n)):
+                continue
+            if kind == "slot" and v.k == "arr" and s.owned_slot(v):
+                out.add(n)
+        return out
+
     def copy_move(s, e):
         """P3: the value of copy(x) when x moves instead (a return candidate or a move_src name), else None"""
         if isinstance(e, FieldAccess) and isinstance(e.base, Var) and e.base.name in s.moving:
@@ -2144,7 +2186,9 @@ class FnGen:
         pruv_fill_v2 otherwise, and nothing for length 0; the slot is not owned, so nothing is ever freed."""
         n = s.m.stack.length(st)
         s.begin_temps()
+        s.moving = s.nested_moves(st.value, st.name)     # LG37: a last-use take inside the fill value
         v = s.ev(st.value.args[1])      # n is a literal (no code); the fill value is evaluated here, once
+        s.moving = set()
         if st.type.name == "array_bool":
             val = v.a                   # i1; widened to the fill byte below (no code at all when n == 0)
             layout, size, ety, rng = "i64", 1, "i8", None
@@ -2211,7 +2255,7 @@ class FnGen:
             s.end_temps()
         elif isinstance(st, Let):
             s.begin_temps()
-            s.moving = s.move_src(st)
+            s.moving = s.move_src(st) | s.nested_moves(st.value, st.name)
             s.take_let = s.take_src(st)
             v = s.ev(st.value, True)
             s.moving = set()
@@ -2227,10 +2271,12 @@ class FnGen:
             s.begin_temps()
             sl = s.lookup(st.name)[1]
             # LG32 (G-DB52-4): x = resize(x, n, v) grows the slot's block in place (realloc), so the old and new blocks are never live together
+            s.moving = s.nested_moves(st.value, st.name)     # LG37: also inside the in-place regrow's operands
             if s.regrow_assign(st, sl):
+                s.moving = set()
                 s.end_temps()
                 return
-            s.moving = s.move_src(st)
+            s.moving = s.move_src(st) | s.moving
             s.take_let = s.take_src(st)
             v = s.ev(st.value, True)        # the right side is complete and owned before the old value is destroyed
             s.moving = set()
@@ -2250,15 +2296,19 @@ class FnGen:
             kind, sl = s.lookup(st.name)
             if kind != "slot":
                 raise Exception("llvmgen: field assignment to non-local %s" % st.name)
+            s.moving = s.nested_moves(st.value, st.name)     # LG37: a last-use take anywhere in the right side
             if s.regrow_field(st, sl):         # LG34 (G-LG32-3): x.f = resize(x.f, n, v) grows the field in place
+                s.moving = set()
                 s.end_temps()
                 return
             if s.is_ext(sl.ty):             # G9 A3: owned right side first, then an in-place store along the path
                 v = s.ev(st.value, True)
+                s.moving = set()
                 s.assign_path(sl, st.fields, v)
                 s.end_temps()
                 return
             v = s.ev(st.value)
+            s.moving = set()
             if s.tt.is_struct(sl.ty):
                 gp, fty = s.field_ptr_ty(sl, st.fields)
                 s.store_field(gp, fty, v)
@@ -2269,8 +2319,10 @@ class FnGen:
         elif isinstance(st, IndexAssign):
             s.begin_temps()
             kind, sl = s.lookup(st.name)
+            s.moving = s.nested_moves([st.index, st.value], st.name)    # LG37: both operands, counted together
             i = s.ev(st.index)      # index first, then value, in every mode
             v = s.ev(st.value)
+            s.moving = set()
             if st.fields:
                 # LG4: `p.a.b[i] = e`: address of the buffer field along the path from the root slot (a local slot or
                 # the pointer of an inout struct parameter), then the data pointer and length are read from it
@@ -2346,7 +2398,9 @@ class FnGen:
                 # P2 batch 4: `return truncate(x, m)` of an owned local array: the same pointer with length m moves out
                 sl = s.truncate_move(st.value)
                 src = s.load(sl)
+                s.moving = s.nested_moves(st.value.args[1], ret=True)   # LG37: a last-use take inside the length
                 m = s.ev(st.value.args[1])
+                s.moving = set()
                 if not s.verified:
                     ok = s.op("icmp ule i64 %s, %s" % (m.a, src.b))
                     s.guard(ok, s.panic1("pruv_panic_arith", "truncate length outside 0..len"), False)
@@ -2364,7 +2418,9 @@ class FnGen:
                     val = Call(val.line, val.col, "copy", [val], STR)
                 s.ret_cand = s.ret_movable(val)
                 s.ret_take = s.ret_takable(val)
+                s.moving = s.nested_moves(val, ret=True) - set(s.ret_cand)
                 v = s.ev(val, True)
+                s.moving = set()
                 s.ret_cand = {}
                 s.ret_take = set()
                 if v.k == "arr" and isinstance(val, Var):
@@ -2382,7 +2438,9 @@ class FnGen:
             pass
         elif isinstance(st, ExprStmt):
             s.begin_temps()
+            s.moving = s.nested_moves(st.expr)
             s.ev(st.expr)
+            s.moving = set()
             s.end_temps()
         elif isinstance(st, Par):
             s.parallel(st)
@@ -2651,6 +2709,12 @@ class FnGen:
         cnt = s.ev(e.args[1])
         v = s.ev(e.args[2])
         s.resize_guards(src, cnt, v)
+        q, nc = s.regrow_block(src, cnt, v)
+        return q, cnt, nc
+
+    def regrow_block(s, src, cnt, v):
+        """the regrow helper call of src's element kind for the evaluated, guarded resize(src, cnt, v); returns (new
+        block, new cap max(cnt, cap))"""
         cap = capof(src)
         if src.ty is not None and src.ty.name == "array_bool":
             z = s.op("zext i1 %s to i64" % v.a)
@@ -2668,7 +2732,7 @@ class FnGen:
             q = s.op("call ptr @pruv_regrow(ptr %s, i64 %s, i64 %s, i64 %s, i64 %s)" % (src.a, cap, src.b, cnt.a, v.a))
         gt = s.op("icmp sgt i64 %s, %s" % (cnt.a, cap))
         nc = s.op("select i1 %s, i64 %s, i64 %s" % (gt, cnt.a, cap))
-        return q, cnt, nc
+        return q, nc
 
     def truncate_move(s, e):
         """P2 batch 4: the slot of x when e is `truncate(x, m)` with x an owned local array (not a parameter or binder)
@@ -3068,6 +3132,12 @@ class FnGen:
             cnt = s.ev(a[1])
             v = s.ev(a[2])
             s.resize_guards(src, cnt, v)
+            if isinstance(a[0], Var) and a[0].name in s.moving:
+                # LG37 (G-DB49-2): an owned local array at its last use (nested_moves): its block grows in place
+                # (realloc when n > cap, the tail filled with v) and moves into the result, as `x = resize(x, n, v)`
+                s.take_array(a[0].name)
+                q, nc = s.regrow_block(src, cnt, v)
+                return s.temp_arr(V("arr", q, cnt.a, src.ty, layout=src.layout, rng=src.rng, c=nc), owned)
             if src.ty is not None and src.ty.name == "array_bool":
                 z = s.op("zext i1 %s to i64" % v.a)
                 s.m.resize.add("u8")
