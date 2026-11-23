@@ -857,7 +857,8 @@ def main():
             try:
                 work = WORK / f'{compiler}_{backend}'
                 work.mkdir(exist_ok=True)
-                compiled = g2.compile_pruv(compiler, str(HERE / 'a1_root.pruv'), str(work), backend, flags)
+                compiled = g2.compile_pruv(compiler, str(HERE / 'a1_root.pruv'), str(work), backend,
+                                            flags + ['--manifest', str(HERE / 'a1_root.pruv.json')])
                 if compiled['rc'] != 0:
                     raise RuntimeError('compile/verify failed: ' + str(compiled['errors'] or compiled['stderr']))
                 print(f'{key}: verified and compiled', flush=True)

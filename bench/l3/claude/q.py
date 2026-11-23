@@ -863,7 +863,8 @@ def run_pair(g2, run, key, entries, flags, rustflags, chunk=2000, timeout=3600):
     try:
         work = WORK / f'{compiler}_{backend}'
         work.mkdir(parents=True, exist_ok=True)
-        compiled = g2.compile_pruv(compiler, str(HERE / 'q_root.pruv'), str(work), backend, flags)
+        compiled = g2.compile_pruv(compiler, str(HERE / 'q_root.pruv'), str(work), backend,
+                                    flags + ['--manifest', str(HERE / 'q_root.pruv.json')])
         if compiled['rc'] != 0:
             raise RuntimeError('compile/verify failed: ' + str(compiled['errors'] or compiled['stderr']))
         harness = work / 'main.rs'
