@@ -18,9 +18,9 @@ created, overwritten, moved and dropped exactly once; and SPEC states the host A
   `pruv_node_free_v1(data, cap * size, align)` (runtime.c, marker `pruv_runtime_nodes_v1`), where `size`/`align` are
   the `g9_node_layout` values of `%pruv_t_S`. A vector with cap 0 owns nothing and is never freed.
 - **Growth.** On push with `len == cap`: `ncap = cap == 0 ? 4 : cap * 2`; `ncap * size` is computed with
-  `llvm.umul.with.overflow.i64` and an overflow takes the existing allocation-failure path; the new block is
-  allocated, `len * size` bytes are copied with `llvm.memcpy`, and the old block (if cap != 0) is freed. The element
-  bits are moved, not cloned, so nothing is dropped or cloned on growth.
+  `llvm.umul.with.overflow.i64` and an overflow takes the existing allocation-failure path; the block is resized
+  with `pruv_node_realloc_v1` (LB3b; LB3 allocated a new block, copied with `llvm.memcpy` and freed the old one).
+  The element bits are moved, not cloned, so nothing is dropped or cloned on growth.
 - **Helpers** (emitted once per element type that is used, internal, fixed names so both compilers emit the same
   text):
   - `define internal void @pruv_vdrop__S(ptr %v)`: when `S` is extended, call `@pruv_drop__S` on each element
@@ -134,7 +134,7 @@ threads (about 16000 levels at 120 B). Deeper inputs need an explicit stack size
   element types.
 - **Deep values beyond the stack.** Drop and clone are recursive, as in Rust. An iterative drop (Rust's `Drop`
   workaround for linked lists) would remove the depth limit of drop, but not of user recursion.
-- **Native push skips two checked-mode guards.** The G6 shim push checks the catalog length bound (`len < 2^40`) and
+- **Native push skips two checked-mode guards (resolved in LB3b, see L3_LB3B.md).** The G6 shim push checks the catalog length bound (`len < 2^40`) and
   charges the contract budget; `@pruv_vpush__S` does neither (found by the audit). The length is still bounded by
   memory (the `cap * size` overflow check), but the checked-mode guards of the shim and the native path differ.
   Fix: emit the same bound and budget charge in the native push in both compilers.

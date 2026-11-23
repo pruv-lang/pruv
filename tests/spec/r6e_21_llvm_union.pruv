@@ -6,6 +6,7 @@ enum Plain { Small(b: bool), Pair(n: i64, b: bool), Empty }
 enum Nested { Value(p: Plain), Other(n: i64) }
 enum HostValue { Number(n: i64), Flag(b: bool) }
 struct HostRecord { value: HostValue }
+enum Flags { Many(a: bool, b: bool, c: bool, d: bool, e: bool, f: bool, g: bool, h: bool), One(z: bool) }
 
 fn host_identity(x: HostRecord) -> HostRecord { return x; }
 
@@ -32,6 +33,13 @@ fn shape_value(s: Shape) -> i64 {
   }
 }
 
+fn flag_value(x: Flags) -> i64 {
+  match x {
+    Flags::Many(a, b, c, d, e, f, g, h) => { if h { return 1; } return 0; }
+    Flags::One(z) => { if z { return 1; } return 0; }
+  }
+}
+
 fn main() -> () ! alloc, io {
   let t: Tree = Tree::Branch(vec_push::<Tree>(vec_new::<Tree>(), Tree::Leaf(7)));
   let c: Tree = t;
@@ -41,4 +49,5 @@ fn main() -> () ! alloc, io {
   let s: Shape = Shape::C(vec_push::<i64>(vec_new::<i64>(), 6));
   let copy: Shape = s;
   print(shape_value(copy));
+  print(flag_value(Flags::One(true)));
 }

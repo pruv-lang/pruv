@@ -7,6 +7,7 @@
     "%pruv_t_Shape = type { i64, [2 x i64] }",
     "%pruv_t_Single = type { i64, i64 }",
     "%pruv_t_HostValue = type { i64, i64, i1 }",
+    "%pruv_t_Flags = type { i64, i1, i1, i1, i1, i1, i1, i1, i1, i1 }",
     "%pruv_t_Nested = type { i64, [3 x i64] }",
     "%pruv_c_Plain = type { i64, i1, i128, i1 }",
     "%pruv_c_Nested = type { i64, %pruv_c_Plain, i128 }",

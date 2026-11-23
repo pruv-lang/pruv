@@ -790,25 +790,37 @@ def fld_label(d, vname, fname):
 
 
 def enum_union_words(tt, abi_types):
-    """Word bounds of code-form enum payloads. Unknown or wider leaves rule out overlap."""
+    """Word bounds of code-form enum payloads. Unknown or wider leaves rule out overlap.
+    Each bound is (words, low): words bounds the overlapped size in 8-byte words, low is a lower bound of the
+    flattened size in bytes. An enum overlaps only when 8 * (1 + W) is at most low rounded up to 8, so the union
+    form is never larger than the flattened one on 64-bit targets."""
     bounds, unions = {}, {}
+
+    def leaf(words, low):
+        return (words, low)
+
+    def total(parts):
+        return None if None in parts else (sum(p[0] for p in parts), sum(p[1] for p in parts))
 
     def bound(ty):
         if is_native_vec(ty):
-            return 3
+            return leaf(3, 20)
         if is_collection(ty):
-            return 1
+            return leaf(1, 4)
         if gopt(ty):
             parts = [bound(ty.args[0])]
             if ty.name == "result":
                 parts.append(bound(result_error(ty)))
-            return None if None in parts else 1 + sum(parts)
-        if ty.name in ("i64", "bool"):
-            return 1
+            t = total(parts)
+            return None if t is None else (1 + t[0], 1 + t[1])
+        if ty.name == "i64":
+            return leaf(1, 8)
+        if ty.name == "bool":
+            return leaf(1, 1)
         if ty.name in ("option", "result"):
-            return 2
+            return leaf(2, 2)
         if ty.name in ("array", "array_u8", "array_bool", "str"):
-            return 3
+            return leaf(3, 12)
         name = ty.name
         if name in bounds or name not in tt.decls:
             return bounds.get(name)
@@ -817,22 +829,24 @@ def enum_union_words(tt, abi_types):
         d = tt.decls[name]
 
         def fields_bound(fields, variant):
-            parts = [1 if fld_label(d, variant, f.name) in tt.g9_boxed else bound(f.type) for f in fields]
-            return None if None in parts else sum(parts)
+            return total([leaf(1, 4) if fld_label(d, variant, f.name) in tt.g9_boxed else bound(f.type)
+                          for f in fields])
 
         if isinstance(d, StructDecl):
-            total = fields_bound(d.fields, None)
+            r = fields_bound(d.fields, None)
         else:
             parts = [fields_bound(v.fields, v.name) for v in d.variants if v.fields]
-            total = None
+            r = None
             if None not in parts:
-                if len(parts) >= 2 and name not in abi_types:
-                    unions[name] = max(1, max(parts))
-                    total = 1 + unions[name]
+                w = max([1] + [p[0] for p in parts])
+                flat_low = (8 + sum(p[1] for p in parts) + 7) // 8 * 8
+                if len(parts) >= 2 and name not in abi_types and 8 * (1 + w) <= flat_low:
+                    unions[name] = w
+                    r = (1 + w, 8 * (1 + w))
                 else:
-                    total = 1 + sum(parts)
-        bounds[name] = total
-        return total
+                    r = (1 + sum(p[0] for p in parts), 8 + sum(p[1] for p in parts))
+        bounds[name] = r
+        return r
 
     for d in tt.order:
         bound(Type(d.name))

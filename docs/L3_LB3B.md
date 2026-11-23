@@ -27,6 +27,9 @@ alignment of at most 8:
   functions.
 - Enums with at most one payload variant, enums with a wider leaf, and enums reachable from a host or foreign ABI
   signature keep the flattened layout. Their IR is unchanged.
+- The union form is used only when it is not larger than the flattened form: `8 * (1 + W)` must be at most a lower
+  bound of the flattened size (leaf byte lower bounds summed with the tag, rounded up to 8). An enum with eight
+  `bool` fields in one variant and one in another stays flattened (16 B instead of 72 B). Found by the audit.
 - `Tree` nodes shrink from 40 B to 32 B. Rust's `Tree` is 24 B because it stores the tag in the `Vec` capacity niche.
   No niche is used here (open item D-LB3-1).
 
@@ -47,6 +50,9 @@ counts under `PRUV_RUST_ALLOCATOR`. A zero-sized old block holds one byte, so it
   then the prefix length, then 1. An exhausted budget calls `pruv_panic_vec_push_v1(1)`.
 - With `off`, no check is emitted.
 - On failure the vector is dropped. The moved element is dropped too while the vector does not yet own it.
+- With `all`, the shim also re-checks its postconditions (new length, unchanged prefix, pushed element). The native
+  push does not: it is compiled code, not a foreign implementation, and the re-check would cost O(len) per push.
+  It still charges the same budget, so budget exhaustion is the same on both paths. SPEC.md records this exception.
 
 ## Tests
 
@@ -88,11 +94,18 @@ L3_RESTRUCTURE_SPEC.md §7.5.
 - **D-LB3-3 (scalar `Vec` fields inside aggregates).** Not done in this bundle. `Vec<i64>` and `Vec<bool>` fields
   still use G6 handles.
 - **Borrowed views on LLVM (R-6g-11/12).** Not done in this bundle.
-- **Audit.** Delegated after the commit. Required findings will be fixed in a follow-up commit.
+- **Union spill per binder (audit).** A `match` on an enum value without an address stores the whole value once per
+  bound field. With word-sized leaves SROA removes the slots in the measured benches (pruv IR is unchanged after
+  the audit fix and the cells hold); with `bool` leaves a byte store can stay in a loop. Fix: spill once per match
+  and reuse the slot, or pass constructor fields straight to the arm.
+- **Runtime checks of the new tests.** The new spec tests check IR text. Running the programs (outputs, exit 101 and
+  allocation balance of the budget failure) is still to add. Rust's `W` sum is unchecked `usize` (Python is
+  unbounded); a shared size limit with a diagnostic would remove the theoretical difference.
 
 ## Delegations
 
 - Items D-LB3-2 and push guards (both compilers, runtime, tests): Codex gpt-6.2-sol (write delegation).
 - Item D-LB3-1 union layout (both compilers, test): Codex gpt-6.2-sol (write delegation).
 - Encoding decisions, the zero-size realloc fix, measurements and this note: Claude Opus 5.5.
-- Audit: Codex gpt-6.2-astra (ultra).
+- Audit: Codex gpt-6.2-astra (ultra). Required findings fixed in a follow-up commit: union size bound, the `all`
+  postcondition exception (documented), stale design text. The spill per binder is kept open (see above).
