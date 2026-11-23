@@ -12,6 +12,7 @@ sys.dont_write_bytecode = True
 import collections
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -19,7 +20,6 @@ import time
 
 HERE = Path(__file__).resolve().parent
 QM = HERE / 'work' / 'qm'
-JSON_MODULES = ('json', 'lex', 'parse', 'lines', 'jstr', 'access')
 PROOF_WORDS = ('verif', 'postcondition', 'precondition', 'invariant', 'proof', 'assertion', 'decreases',
                'ensures', 'requires', 'bounds', 'index', 'overflow', 'cannot prove', 'unproved')
 
@@ -129,9 +129,16 @@ def copy_sources(work):
     work.mkdir(parents=True, exist_ok=True)
     for p in HERE.glob('*.pruv'):
         shutil.copyfile(p, work / p.name)
-    for m in JSON_MODULES:  # json modules are copied from the json batch when this folder lacks them
-        if not (work / f'{m}.pruv').exists() and (HERE.parent / 'json' / f'{m}.pruv').exists():
-            shutil.copyfile(HERE.parent / 'json' / f'{m}.pruv', work / f'{m}.pruv')
+    # json, lex, parse, lines, jstr and access come from bench/l3/pkgs through the manifest (write_manifest).
+
+
+def write_manifest(work):
+    """Write a4_root.pruv.json into work with the package paths made relative to work; return the --manifest flags."""
+    man = json.loads((HERE / 'a4_root.pruv.json').read_text(encoding='utf-8'))
+    for dep in man.get('dependencies', {}).values():
+        dep['path'] = os.path.relpath((HERE / dep['path']).resolve(), work.resolve())
+    (work / 'a4_root.pruv.json').write_text(json.dumps(man, indent=1) + '\n', encoding='utf-8')
+    return ['--manifest', str(work / 'a4_root.pruv.json')]
 
 
 def build_runner(g2, run, ta, compiled, work, rustflags):
@@ -184,7 +191,7 @@ def main():
     copy_sources(work)
     out = work / 'out'
     out.mkdir(exist_ok=True)
-    c = g2.compile_pruv('rs', str(work / 'a4_root.pruv'), str(out), 'rust', flags)
+    c = g2.compile_pruv('rs', str(work / 'a4_root.pruv'), str(out), 'rust', flags + write_manifest(work))
     if c['rc'] != 0:
         print('baseline does not verify: ' + first_line(diagnostic(c)), file=sys.stderr)
         return 2
@@ -216,7 +223,7 @@ def main():
             out = work / 'out'
             out.mkdir(exist_ok=True)
             try:
-                c = g2.compile_pruv('rs', str(work / 'a4_root.pruv'), str(out), 'rust', flags)
+                c = g2.compile_pruv('rs', str(work / 'a4_root.pruv'), str(out), 'rust', flags + write_manifest(work))
                 if c['rc'] != 0:
                     diag = diagnostic(c)
                     note = '' if any(w in diag.lower() for w in PROOF_WORDS) else '[no proof keyword; check it is not a syntax error] '

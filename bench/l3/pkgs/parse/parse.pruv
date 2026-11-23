@@ -219,26 +219,29 @@ fn value_increment(key: bool) -> i64
 // Frame zero is the synthetic document frame; frames 1..128 are containers.
 // States: 0 array initial, 1 array after comma, 2 comma/end,
 // 3 object initial key, 4 object after comma key, 5 colon, 6 value.
-// DB55 (G-DB54-3): the first tape size from the input length (one slot per 16 input bytes, at least 192 and at most
-// 4096), so a line up to 64 KiB starts near its final size instead of doubling up from 192 slots; widened still grows
-// it on denser or longer input. The 4096 cap bounds the unused first tape of a sparse line (one long string) to 32 KiB.
-fn first_slots(n: i64) -> i64
-  requires 0 <= n && n <= 16777216
-  ensures 192 <= result && result <= 4096
+// DB55 (G-DB54-3): the first tape size from the input length (one slot per 16 input bytes, at most 4096), so a line up
+// to 64 KiB starts near its final size instead of doubling up; widened still grows it on denser or longer input. The 4096
+// cap bounds the unused first tape of a sparse line (one long string) to 32 KiB.
+// DB61: the floor is the caller's (192 for scan, 96 for scan_document as in lib DB39), so a short line keeps the small
+// first tape that the llvm runtime's free-block cache (blocks up to 1 KiB) reuses without malloc.
+fn first_slots(n: i64, lo: i64) -> i64
+  requires 0 <= n && n <= 16777216 && 96 <= lo && lo <= 4096
+  ensures lo <= result && result <= 4096
 {
   let m: i64 = n / 16;
-  if m < 192 { return 192; }
+  if m < lo { return lo; }
   if m > 4096 { return 4096; }
   return m;
 }
 
-// a with its first used slots kept and twice the room (capped at the record limit).
+// a with its first used slots kept and twice the room plus one record (capped at the record limit).
+// DB39/DB61: 2*len+6 (not +192) keeps a grown tape at least half full, so the final truncate never shrinks it.
 fn widened(a: [i64], used: i64) -> [i64] ! alloc
   requires 0 <= used && used <= len(a) && used + 6 <= 6291456
   ensures used + 6 <= len(result) && len(result) <= 6291456
   ensures forall j in 0..used: result[j] == a[j]
 {
-  let mut m: i64 = 2 * len(a) + 192;
+  let mut m: i64 = 2 * len(a) + 6;
   if m > 6291456 { m = 6291456; }
   let mut out: [i64] = alloc(m, 0);
   let mut i: i64 = 0;
@@ -274,7 +277,7 @@ pub fn scan(input: [u8]) -> Checked ! alloc
   ensures is_variant(result, Checked::Rejected) ==> (0 <= variant_field(result, Checked::Rejected, position) && variant_field(result, Checked::Rejected, position) <= len(input))
 {
   let n: i64 = len(input);
-  let mut tape: [i64] = alloc(first_slots(n), 0);
+  let mut tape: [i64] = alloc(first_slots(n, 192), 0);
   // Depth never exceeds the bytes read, so the stack needs at most min(128, n) frames.
   // It starts at 8 frames and grows on demand toward that bound.
   let mut cap: i64 = 8;
@@ -388,7 +391,7 @@ fn scan_document(input: [u8]) -> crate::json::JsonParse ! alloc
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6: ((variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] <= 4 || variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] == 7) ==> variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 5] == 0))
 {
   let n: i64 = len(input);
-  let mut tape: [i64] = alloc(first_slots(n), 0);
+  let mut tape: [i64] = alloc(first_slots(n, 96), 0);
   // Depth never exceeds the bytes read, so the stack needs at most min(128, n) frames.
   // It starts at 8 frames and grows on demand toward that bound.
   let mut cap: i64 = 8;

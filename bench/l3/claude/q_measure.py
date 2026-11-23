@@ -202,7 +202,8 @@ def build_pair(g2, pair, scratch, str_adapter):
     start = time.monotonic()
     extern = f'pruv_str={str_adapter}'
     compiled = g2.compile_pruv(compiler, str(HERE / 'a4_root.pruv'), str(work), backend,
-                               ['--rust-extern', extern, '--rust-search', str(str_adapter.parent)])
+                               ['--rust-extern', extern, '--rust-search', str(str_adapter.parent),
+                                '--manifest', str(HERE / 'a4_root.pruv.json')])
     if compiled['rc'] != 0:
         raise RuntimeError(f'{pair}: compile/verify failed: {compiled["errors"] or compiled["stderr"]}')
     compile_s = time.monotonic() - start
