@@ -4247,10 +4247,13 @@ impl Checker {
         }
         // G-DB16-1: an array binder may be moved when the scrutinee is a plain owned local enum value that
         // no arm names again; the move then consumes the scrutinee (foreign.rs marks it moved)
+        // LG36 (G-LG35-1): not while an enclosing match arm still views the same owner (active_roots): the outer
+        // binder reads the payload the move would hand over
         let mut movable_scrut = false;
         if user && t.args.is_empty() {
             if let Expr::Var(v) = &m.scrutinee {
                 if !self.arm_binders.contains(&v.name)
+                    && !self.active_roots.iter().any(|(r, _)| *r == v.name)
                     && scope.get(&v.name).is_some_and(|e| e.kind == "local")
                 {
                     let mut named: HashSet<String> = HashSet::new();

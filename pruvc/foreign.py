@@ -528,7 +528,8 @@ class _Ownership:
                     inner[sc.name] = "dead"
                     decl = s.types.get(a.enum_name)
                     variant = next(v for v in decl.variants if v.name == a.ctor)
-                    srcs = [b for b, fd in zip(a.binders, variant.fields) if is_array(fd.type)]
+                    # LG36 (G-DB59-1): str binders too, so a branch, loop or closed arm sees their moves
+                    srcs = [b for b, fd in zip(a.binders, variant.fields) if is_array(fd.type) or fd.type == STR]
                     for b in srcs:
                         inner[b] = "live"
                 r = s.block(a.body, inner)

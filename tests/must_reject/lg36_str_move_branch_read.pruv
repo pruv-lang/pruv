@@ -1,0 +1,14 @@
+// LG36 (G-DB59-1, review): a str binder moved on one branch only may have been moved, so a later read is rejected
+enum T { Dec(x: str), Bad(e: i64) }
+
+fn get(c: bool) -> i64 ! alloc {
+  let s: str = "abc";
+  let t: T = T::Dec(copy(s));
+  match t {
+    T::Dec(x) => {
+      if c { let y: str = move x; }
+      return len(x);
+    }
+    T::Bad(e) => { return 0; }
+  }
+}
