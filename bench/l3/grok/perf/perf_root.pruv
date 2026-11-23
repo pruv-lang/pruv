@@ -81,11 +81,11 @@ fn fold_str(s0: i64, t: str) -> i64
   return s;
 }
 
-fn rpc_line(line: [u8], inout acc: [i64]) -> () ! alloc
+// the old tape path for one line (DB65: only the lines rpc::scan hands back, see bench/l3/grok/RESHAPE_LINE.md)
+fn rpc_line_tape(line: [u8], inout acc: [i64]) -> () ! alloc
   requires len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
   ensures len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
 {
-  acc[0] = bump(acc[0], 1);
   let parsed: crate::json::JsonParse = crate::rpc::parse_line(line, len(line));
   match parsed {
     crate::json::JsonParse::Failed(e) => { acc[1] = bump(acc[1], 1); }
@@ -127,10 +127,52 @@ fn rpc_line(line: [u8], inout acc: [i64]) -> () ! alloc
   }
 }
 
+// hand text_of(): fold a member borrowed from the line, or decoded into the reused scratch buf
+fn fold_text(line: [u8], c: crate::rpc::Cap, which: i64, inout buf: [u8], inout acc: [i64], ln: i64, fo: i64) -> () ! alloc
+  requires len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007) && 0 <= ln && ln < 15 && 0 <= fo && fo < 15
+  ensures len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
+{
+  let sp: crate::rpc::Span = crate::rpc::text_span(line, c, which, inout buf);
+  if sp.inbuf == 1 {
+    acc[ln] = bump(acc[ln], sp.e);
+    acc[fo] = fold_bytes(acc[fo], subview(buf, 0, sp.e));
+  } else if sp.inbuf == 0 {
+    acc[ln] = bump(acc[ln], sp.e - sp.s);
+    acc[fo] = fold_bytes(acc[fo], subview(line, sp.s, sp.e));
+  }
+}
+
+// DB65: the hand_rpc.rs line() shape. One span scan of the trimmed line (no copy, no tape); c and buf are reused across lines.
+fn rpc_line(line: [u8], inout acc: [i64], inout c: crate::rpc::Cap, inout buf: [u8]) -> () ! alloc
+  requires len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
+  ensures len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
+{
+  acc[0] = bump(acc[0], 1);
+  let r: i64 = crate::rpc::scan(line, len(line), inout c);
+  if r == 0 { acc[1] = bump(acc[1], 1); return; }
+  if r == 2 { rpc_line_tape(line, inout acc); return; }
+  let k: i64 = crate::rpc::line_kind(line, c, 2);
+  if k == 1 {
+    acc[3] = bump(acc[3], 1);
+    let nh: [u8] = crate::rpc::not_handled_line(line, c);
+    acc[7] = bump(acc[7], len(nh));
+    acc[8] = fold_bytes(acc[8], nh);
+  } else if k == 2 {
+    if c.err == 6 { rpc_line_tape(line, inout acc); return; }
+    acc[4] = bump(acc[4], 1);
+  } else {
+    acc[2] = bump(acc[2], 1);
+    fold_text(line, c, 0, inout buf, inout acc, 13, 14);
+    fold_text(line, c, 1, inout buf, inout acc, 5, 6);
+  }
+}
+
 pub fn grok_rpc_lines(win: [u8]) -> [i64] ! alloc
   ensures len(result) == 15
 {
   let mut acc: [i64] = alloc(15, 0);
+  let mut c: crate::rpc::Cap = crate::rpc::cap_new();
+  let mut buf: [u8] = alloc(0, 0);
   let mut start: i64 = 0;
   let mut i: i64 = 0;
   while i < len(win)
@@ -139,11 +181,11 @@ pub fn grok_rpc_lines(win: [u8]) -> [i64] ! alloc
     decreases len(win) - i
   {
     if win[i] == 10 {
-      rpc_line(subview(win, start, i), inout acc);
+      rpc_line(subview(win, start, i), inout acc, inout c, inout buf);
       start = i + 1;
     }
     i = i + 1;
   }
-  if start < len(win) { rpc_line(subview(win, start, len(win)), inout acc); }
+  if start < len(win) { rpc_line(subview(win, start, len(win)), inout acc, inout c, inout buf); }
   return acc;
 }
