@@ -6,7 +6,7 @@
 //                                      prints `file len fold` (the hand packet); exit 1 on any mismatch
 //   perf_driver time <row> <file> <ms> per-call ns (median/min/max over calls for ~<ms> ms, at least 3) + checksum. A timed call
 //                                      is window() including the drop of the returned Vec; the window is read before timing
-//   perf_driver rss <row> <file>       read the window, one call, exit (run under /usr/bin/time -l: whole-process peak RSS,
+//   perf_driver rss <row> <file>       read the window, one call, print the checksum, exit (run under /usr/bin/time -l: peak RSS,
 //                                      which includes the input window bytes for both rows)
 // Checksum = fold s = s*31 + w (wrapping, i64) over every packet word.
 use std::hint::black_box;
@@ -86,6 +86,7 @@ fn main() {
             let win = std::fs::read(&a[3]).unwrap();
             let r = run(row, black_box(&win), false);
             black_box(&r);
+            println!("{}", fold(&r)); // after the peak: lets a caller compare every RSS sample with hand
         }
         _ => {
             eprintln!("usage: perf_driver check|time|rss ...");
