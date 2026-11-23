@@ -897,10 +897,17 @@ fn abi_layout_types(prog: &Program, tt: &TypeTable) -> HashSet<String> {
     seen
 }
 
+const UNION_LIMIT: usize = 1 << 40; // same limit as pruvc/llvmgen.py
+
+fn limited(r: (usize, usize)) -> Option<(usize, usize)> {
+    (r.0 <= UNION_LIMIT && r.1 <= UNION_LIMIT).then_some(r)
+}
+
 /// Word bounds of code-form enum payloads. Unknown or wider leaves rule out overlap.
 /// Each bound is (words, low): words bounds the overlapped size in 8-byte words, low is a lower bound of the
 /// flattened size in bytes. An enum overlaps only when 8 * (1 + W) is at most low rounded up to 8, so the union
-/// form is never larger than the flattened one on 64-bit targets.
+/// form is never larger than the flattened one on 64-bit targets. Bounds above UNION_LIMIT rule out overlap; sums
+/// saturate, so both compilers decide as with exact arithmetic.
 fn enum_union_words(tt: &TypeTable, abi_types: &HashSet<String>) -> HashMap<String, usize> {
     fn bound(
         tt: &TypeTable,
@@ -910,10 +917,10 @@ fn enum_union_words(tt: &TypeTable, abi_types: &HashSet<String>) -> HashMap<Stri
         ty: &str,
     ) -> Option<(usize, usize)> {
         if native_vec_elem(ty).is_some() {
-            return Some((3, 20));
+            return Some((3, 24));
         }
         if is_collection(ty) {
-            return Some((1, 4));
+            return Some((1, 8));
         }
         if is_gopt(ty) {
             let ok = bound(tt, abi_types, bounds, unions, g_arg(ty))?;
@@ -922,13 +929,13 @@ fn enum_union_words(tt: &TypeTable, abi_types: &HashSet<String>) -> HashMap<Stri
             } else {
                 (0, 0)
             };
-            return Some((1 + ok.0 + err.0, 1 + ok.1 + err.1));
+            return limited((1 + ok.0 + err.0, 1 + ok.1 + err.1));
         }
         match ty {
             "i64" => return Some((1, 8)),
             "bool" => return Some((1, 1)),
             "option" | "result" => return Some((2, 2)),
-            "array" | "array_u8" | "array_bool" | "str" => return Some((3, 12)),
+            "array" | "array_u8" | "array_bool" | "str" => return Some((3, 24)),
             _ => {}
         }
         if let Some(&words) = bounds.get(ty) {
@@ -938,35 +945,35 @@ fn enum_union_words(tt: &TypeTable, abi_types: &HashSet<String>) -> HashMap<Stri
         // Recursive references in the emitted types go through boxes or vector descriptors.
         bounds.insert(ty.to_string(), None);
         let mut fields_bound = |fields: &[FieldDecl], variant| {
-            let mut sum = (0, 0);
+            let mut sum: (usize, usize) = (0, 0);
             for f in fields {
                 let b = if tt.g9_boxed.contains(&fld_label(d.name(), variant, &f.name)) {
-                    (1, 4)
+                    (1, 8)
                 } else {
                     bound(tt, abi_types, bounds, unions, &f.ty)?
                 };
-                sum = (sum.0 + b.0, sum.1 + b.1);
+                sum = (sum.0.saturating_add(b.0), sum.1.saturating_add(b.1));
             }
-            Some(sum)
+            limited(sum)
         };
         let total = match d {
             TypeDecl::Struct(s) => fields_bound(&s.fields, None),
             TypeDecl::Enum(e) => {
                 let mut count = 0;
-                let mut sum = (0, 0);
+                let mut sum: (usize, usize) = (0, 0);
                 let mut max = 1;
                 for v in e.variants.iter().filter(|v| !v.fields.is_empty()) {
                     let b = fields_bound(&v.fields, Some(&v.name))?;
                     count += 1;
-                    sum = (sum.0 + b.0, sum.1 + b.1);
+                    sum = (sum.0.saturating_add(b.0), sum.1.saturating_add(b.1));
                     max = max.max(b.0);
                 }
-                let flat_low = (8 + sum.1 + 7) / 8 * 8;
+                let flat_low = sum.1.saturating_add(15) / 8 * 8;
                 if count >= 2 && !abi_types.contains(ty) && 8 * (1 + max) <= flat_low {
                     unions.insert(ty.to_string(), max);
-                    Some((1 + max, 8 * (1 + max)))
+                    limited((1 + max, 8 * (1 + max)))
                 } else {
-                    Some((1 + sum.0, 8 + sum.1))
+                    limited((sum.0.saturating_add(1), sum.1.saturating_add(8)))
                 }
             }
         };

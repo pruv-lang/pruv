@@ -28,8 +28,11 @@ alignment of at most 8:
 - Enums with at most one payload variant, enums with a wider leaf, and enums reachable from a host or foreign ABI
   signature keep the flattened layout. Their IR is unchanged.
 - The union form is used only when it is not larger than the flattened form: `8 * (1 + W)` must be at most a lower
-  bound of the flattened size (leaf byte lower bounds summed with the tag, rounded up to 8). An enum with eight
-  `bool` fields in one variant and one in another stays flattened (16 B instead of 72 B). Found by the audit.
+  bound of the flattened size on 64-bit targets (leaf byte lower bounds summed with the tag, rounded up to 8;
+  `bool` 1, `i64`, boxes and handles 8, arrays and native vectors 24). An enum with eight `bool` fields in one
+  variant and one in another stays flattened (24 B instead of 72 B); `Chain { End([i64]), Next(Chain) }` overlaps
+  (32 B instead of 40 B). Bounds above 2^40 rule out overlap in both compilers, so they decide alike. Found by the
+  audit and its confirm review. On 32-bit targets (not a public target) the union form can be larger.
 - `Tree` nodes shrink from 40 B to 32 B. Rust's `Tree` is 24 B because it stores the tag in the `Vec` capacity niche.
   No niche is used here (open item D-LB3-1).
 
@@ -42,7 +45,7 @@ counts under `PRUV_RUST_ALLOCATOR`. A zero-sized old block holds one byte, so it
 
 ### Native push guards
 
-`@pruv_vpush__S` emits the same checks as the G6 shim `vec_push`:
+`@pruv_vpush__S` emits the same length bound and budget charges as the G6 shim `vec_push`:
 
 - With `--foreign-checks requires` or `all`, it checks `len < 2^40`. A failure calls
   `pruv_panic_vec_push_v1(0)`.
@@ -99,8 +102,7 @@ L3_RESTRUCTURE_SPEC.md §7.5.
   the audit fix and the cells hold); with `bool` leaves a byte store can stay in a loop. Fix: spill once per match
   and reuse the slot, or pass constructor fields straight to the arm.
 - **Runtime checks of the new tests.** The new spec tests check IR text. Running the programs (outputs, exit 101 and
-  allocation balance of the budget failure) is still to add. Rust's `W` sum is unchecked `usize` (Python is
-  unbounded); a shared size limit with a diagnostic would remove the theoretical difference.
+  allocation balance of the budget failure) is still to add.
 
 ## Delegations
 

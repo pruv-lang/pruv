@@ -120,7 +120,8 @@ threads (about 16000 levels at 120 B). Deeper inputs need an explicit stack size
 
 ## Open items
 
-- **Speed below hand Rust (perf gate fails).** Root cause, measured: building and dropping cost the same (1.01x), but
+- **Speed below hand Rust (perf gate fails).** State at LB3; LB3b overlaps payloads and grows through realloc
+  (see L3_LB3B.md). Root cause, measured: building and dropping cost the same (1.01x), but
   clone and wide values do not. 1) `%pruv_t_Tree = { i64, i64, { ptr, i64, i64 } }` is 40 bytes, while Rust's enum
   overlaps variant payloads and stores the tag in the Vec niche (24 bytes). Every element and copy is about 1.7x larger
   (RSS of wide_100000 1.85x). 2) Growth allocates a new block, copies and frees the old one. Rust uses `realloc`,

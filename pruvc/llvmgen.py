@@ -789,30 +789,37 @@ def fld_label(d, vname, fname):
     return "%s.%s" % (d.name, fname) if vname is None else "%s::%s.%s" % (d.name, vname, fname)
 
 
+UNION_LIMIT = 1 << 40   # word and byte bounds above this rule out overlap (same limit in pruvc-rs)
+
+
 def enum_union_words(tt, abi_types):
     """Word bounds of code-form enum payloads. Unknown or wider leaves rule out overlap.
     Each bound is (words, low): words bounds the overlapped size in 8-byte words, low is a lower bound of the
     flattened size in bytes. An enum overlaps only when 8 * (1 + W) is at most low rounded up to 8, so the union
-    form is never larger than the flattened one on 64-bit targets."""
+    form is never larger than the flattened one on 64-bit targets. Bounds above UNION_LIMIT rule out overlap, so both
+    compilers decide with exact arithmetic."""
     bounds, unions = {}, {}
 
     def leaf(words, low):
         return (words, low)
 
     def total(parts):
-        return None if None in parts else (sum(p[0] for p in parts), sum(p[1] for p in parts))
+        return None if None in parts else limited((sum(p[0] for p in parts), sum(p[1] for p in parts)))
+
+    def limited(r):
+        return None if r is None or r[0] > UNION_LIMIT or r[1] > UNION_LIMIT else r
 
     def bound(ty):
         if is_native_vec(ty):
-            return leaf(3, 20)
+            return leaf(3, 24)
         if is_collection(ty):
-            return leaf(1, 4)
+            return leaf(1, 8)
         if gopt(ty):
             parts = [bound(ty.args[0])]
             if ty.name == "result":
                 parts.append(bound(result_error(ty)))
             t = total(parts)
-            return None if t is None else (1 + t[0], 1 + t[1])
+            return None if t is None else limited((1 + t[0], 1 + t[1]))
         if ty.name == "i64":
             return leaf(1, 8)
         if ty.name == "bool":
@@ -820,7 +827,7 @@ def enum_union_words(tt, abi_types):
         if ty.name in ("option", "result"):
             return leaf(2, 2)
         if ty.name in ("array", "array_u8", "array_bool", "str"):
-            return leaf(3, 12)
+            return leaf(3, 24)
         name = ty.name
         if name in bounds or name not in tt.decls:
             return bounds.get(name)
@@ -829,7 +836,7 @@ def enum_union_words(tt, abi_types):
         d = tt.decls[name]
 
         def fields_bound(fields, variant):
-            return total([leaf(1, 4) if fld_label(d, variant, f.name) in tt.g9_boxed else bound(f.type)
+            return total([leaf(1, 8) if fld_label(d, variant, f.name) in tt.g9_boxed else bound(f.type)
                           for f in fields])
 
         if isinstance(d, StructDecl):
@@ -845,6 +852,7 @@ def enum_union_words(tt, abi_types):
                     r = (1 + w, 8 * (1 + w))
                 else:
                     r = (1 + sum(p[0] for p in parts), 8 + sum(p[1] for p in parts))
+        r = limited(r)
         bounds[name] = r
         return r
 
