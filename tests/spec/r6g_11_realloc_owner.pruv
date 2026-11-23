@@ -1,0 +1,9 @@
+// spec: R-6g-11 reject
+// The owner grows (reallocates) while a view of it is live.
+pub fn f() -> i64 ! alloc
+{
+  let mut b: [u8] = alloc(4, 7);
+  let m: ref [u8] = subview(b, 0, 2);
+  b = resize(b, 8, 0);
+  return m[0];
+}

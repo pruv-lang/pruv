@@ -1,0 +1,8 @@
+// spec: R-6g-11 reject
+// A borrowed view is not an owned array; `copy` makes one.
+pub fn f(x: [u8]) -> i64 ! alloc requires len(x) >= 2
+{
+  let m: ref [u8] = subview(x, 0, 1);
+  let o: [u8] = m;
+  return len(o);
+}

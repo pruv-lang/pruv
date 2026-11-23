@@ -1,0 +1,7 @@
+// spec: R-6g-11 reject
+// A result that borrows a local of the function.
+fn bad(src: [u8]) -> ref [u8] from(src) ! alloc
+{
+  let t: [u8] = alloc(3, 0);
+  return subview(t, 0, 1);
+}

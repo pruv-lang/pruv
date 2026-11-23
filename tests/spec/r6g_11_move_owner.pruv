@@ -1,0 +1,10 @@
+// spec: R-6g-11 reject
+// The owner is moved away (its storage is given up) while a view of it is live.
+fn sink(take a: [u8]) -> i64 { return len(a); }
+pub fn f() -> i64 ! alloc
+{
+  let b: [u8] = alloc(4, 7);
+  let m: ref [u8] = subview(b, 0, 2);
+  let k: i64 = sink(move b);
+  return m[0] + k;
+}

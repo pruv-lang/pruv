@@ -1,0 +1,18 @@
+// spec: R-6g-11 reject
+// A view used inside a loop is live for the whole loop, so a store later in the body conflicts.
+pub fn f() -> i64 ! alloc
+{
+  let mut b: [u8] = alloc(4, 7);
+  let m: ref [u8] = subview(b, 0, 2);
+  let mut s: i64 = 0;
+  let mut i: i64 = 0;
+  while i < 3
+    invariant 0 <= i && i <= 3 && len(b) == 4 && s <= 255 * i
+    decreases 3 - i
+  {
+    s = s + m[0];
+    b[i] = 1;
+    i = i + 1;
+  }
+  return s;
+}
