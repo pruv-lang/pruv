@@ -417,6 +417,82 @@ done:
   ret ptr %q
 }
 """
+# LG32 (G-DB52-4): only emitted when `x = resize(x, n, v)` is lowered in place.  The block s (allocated count c, live
+# count m <= n) grows through pruv_regrow_v2 (realloc, so the old block is never live next to the new one) when n > c,
+# else it is kept; then the tail [m, n) is set to v exactly like pruv_resize / pruv_resize_u8.  n <= 0 (so the array is
+# empty) returns s unchanged.
+DECLS_REGROW = """\
+define internal ptr @pruv_regrow(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {
+entry:
+  %e = icmp sle i64 %n, 0
+  br i1 %e, label %none, label %chk
+none:
+  ret ptr %s
+chk:
+  %big = icmp ugt i64 %n, 1152921504606846975
+  br i1 %big, label %fail, label %ok
+fail:
+  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)
+  unreachable
+ok:
+  %gr = icmp sgt i64 %n, %c
+  br i1 %gr, label %grow, label %have
+grow:
+  %p = call ptr @pruv_regrow_v2(ptr %s, i64 %c, i64 %n, i64 8, i64 8)
+  br label %have
+have:
+  %q = phi ptr [ %s, %ok ], [ %p, %grow ]
+  %t = getelementptr inbounds i64, ptr %q, i64 %m
+  %r = sub nuw nsw i64 %n, %m
+  %z = icmp eq i64 %v, 0
+  br i1 %z, label %zero, label %fill
+zero:
+  %rb = shl nuw nsw i64 %r, 3
+  call void @llvm.memset.p0.i64(ptr %t, i8 0, i64 %rb, i1 false)
+  ret ptr %q
+fill:
+  %w = icmp eq i64 %r, 0
+  br i1 %w, label %done, label %loop
+loop:
+  %i = phi i64 [ 0, %fill ], [ %i1, %loop ]
+  %g = getelementptr inbounds i64, ptr %t, i64 %i
+  store i64 %v, ptr %g
+  %i1 = add nuw nsw i64 %i, 1
+  %d = icmp eq i64 %i1, %r
+  br i1 %d, label %done, label %loop
+done:
+  ret ptr %q
+}
+"""
+DECLS_REGROW_U8 = """\
+define internal ptr @pruv_regrow_u8(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {
+entry:
+  %e = icmp sle i64 %n, 0
+  br i1 %e, label %none, label %chk
+none:
+  ret ptr %s
+chk:
+  %big = icmp ugt i64 %n, 1099511627776
+  br i1 %big, label %fail, label %ok
+fail:
+  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)
+  unreachable
+ok:
+  %gr = icmp sgt i64 %n, %c
+  br i1 %gr, label %grow, label %have
+grow:
+  %p = call ptr @pruv_regrow_v2(ptr %s, i64 %c, i64 %n, i64 1, i64 1)
+  br label %have
+have:
+  %q = phi ptr [ %s, %ok ], [ %p, %grow ]
+  %t = getelementptr inbounds i8, ptr %q, i64 %m
+  %r = sub nuw nsw i64 %n, %m
+  %b = trunc i64 %v to i8
+  call void @llvm.memset.p0.i64(ptr %t, i8 %b, i64 %r, i1 false)
+  ret ptr %q
+}
+"""
+DECL_REGROW_V2 = "declare ptr @pruv_regrow_v2(ptr, i64, i64, i64, i64) nounwind\n"
 
 # G9 A3: only emitted when the program has a recursive (boxed) edge.  The marker global is kept alive through
 # @llvm.used, so linking a runtime without pruv_runtime_nodes_v1 fails even when no node helper survives inlining.
@@ -2043,6 +2119,10 @@ class FnGen:
         elif isinstance(st, Assign):
             s.begin_temps()
             sl = s.lookup(st.name)[1]
+            # LG32 (G-DB52-4): x = resize(x, n, v) grows the slot's block in place (realloc), so the old and new blocks are never live together
+            if s.regrow_assign(st, sl):
+                s.end_temps()
+                return
             s.moving = s.move_src(st)
             s.take_let = s.take_src(st)
             v = s.ev(st.value, True)        # the right side is complete and owned before the old value is destroyed
@@ -2394,6 +2474,47 @@ class FnGen:
             ok = s.op("icmp ult i64 %s, %s" % (i.a, a.b))
             s.guard(ok, lambda: s.ins("call void @pruv_panic_oob(i64 %s, i64 %s)" % (i.a, a.b)), False)
         return s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (storage_ty(a), a.a, i.a))  # G2 A5: bytes = u8|bool
+
+    def resize_guards(s, src, cnt, v):
+        """--no-verify guards of resize(src, cnt, v): len(src) <= cnt <= 2^40, and v <= 255 for [u8]"""
+        if not s.verified:
+            lo = s.op("icmp sle i64 %s, %s" % (src.b, cnt.a))
+            hi = s.op("icmp ule i64 %s, 1099511627776" % cnt.a)
+            ok = s.op("and i1 %s, %s" % (lo, hi))
+            s.guard(ok, s.panic1("pruv_panic_arith", "resize length outside len..2^40"), False)
+            if src.ty is not None and src.ty.name == "array_u8":
+                ok = s.op("icmp ule i64 %s, 255" % v.a)
+                s.guard(ok, s.panic_elem(v.a), False)
+
+    def regrow_assign(s, st, sl):
+        """LG32 (G-DB52-4): `x = resize(x, n, v)` on an owned local / inout array slot grows the slot's block in place
+        (realloc), so the old and new blocks are never live together.  Returns False when the statement does not have
+        that shape (the caller then uses the generic path)."""
+        e = st.value
+        if (s.cost or sl.k != "arr" or not isinstance(e, Call) or e.name != "resize" or len(e.args) != 3
+                or not isinstance(e.args[0], Var) or e.args[0].name != st.name):
+            return False
+        if not (sl.ty is not None and sl.ty.name in ("array_u8", "array_bool")) and sl.layout != "i64":
+            return False
+        src = s.load(sl)                    # a = ptr, b = len, c = cap
+        cnt = s.ev(e.args[1])
+        v = s.ev(e.args[2])
+        s.resize_guards(src, cnt, v)
+        cap = capof(src)
+        if src.ty is not None and src.ty.name == "array_bool":
+            z = s.op("zext i1 %s to i64" % v.a)
+            s.m.resize.add("regrow_u8")
+            q = s.op("call ptr @pruv_regrow_u8(ptr %s, i64 %s, i64 %s, i64 %s, i64 %s)" % (src.a, cap, src.b, cnt.a, z))
+        elif src.ty is not None and src.ty.name == "array_u8":
+            s.m.resize.add("regrow_u8")
+            q = s.op("call ptr @pruv_regrow_u8(ptr %s, i64 %s, i64 %s, i64 %s, i64 %s)" % (src.a, cap, src.b, cnt.a, v.a))
+        else:
+            s.m.resize.add("regrow_i64")
+            q = s.op("call ptr @pruv_regrow(ptr %s, i64 %s, i64 %s, i64 %s, i64 %s)" % (src.a, cap, src.b, cnt.a, v.a))
+        gt = s.op("icmp sgt i64 %s, %s" % (cnt.a, cap))
+        nc = s.op("select i1 %s, i64 %s, i64 %s" % (gt, cnt.a, cap))
+        s.store(sl, V("arr", q, cnt.a, sl.ty, layout=sl.layout, rng=sl.rng, c=nc))
+        return True
 
     def truncate_move(s, e):
         """P2 batch 4: the slot of x when e is `truncate(x, m)` with x an owned local array (not a parameter or binder)
@@ -2777,14 +2898,7 @@ class FnGen:
             src = s.ev(a[0])
             cnt = s.ev(a[1])
             v = s.ev(a[2])
-            if not s.verified:
-                lo = s.op("icmp sle i64 %s, %s" % (src.b, cnt.a))
-                hi = s.op("icmp ule i64 %s, 1099511627776" % cnt.a)
-                ok = s.op("and i1 %s, %s" % (lo, hi))
-                s.guard(ok, s.panic1("pruv_panic_arith", "resize length outside len..2^40"), False)
-                if src.ty is not None and src.ty.name == "array_u8":
-                    ok = s.op("icmp ule i64 %s, 255" % v.a)
-                    s.guard(ok, s.panic_elem(v.a), False)
+            s.resize_guards(src, cnt, v)
             if src.ty is not None and src.ty.name == "array_bool":
                 z = s.op("zext i1 %s to i64" % v.a)
                 s.m.resize.add("u8")
@@ -6076,6 +6190,9 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         DECLS_RESIZE if "i64" in m.resize else "") + (
         DECLS_RESIZE_U8 if "u8" in m.resize else "") + (
         DECLS_RESIZE_NARROW if "narrow" in m.resize else "") + (
+        DECL_REGROW_V2 if ("regrow_i64" in m.resize or "regrow_u8" in m.resize) else "") + (
+        DECLS_REGROW if "regrow_i64" in m.resize else "") + (
+        DECLS_REGROW_U8 if "regrow_u8" in m.resize else "") + (
         "declare void @llvm.memmove.p0.p0.i64(ptr nocapture writeonly, ptr nocapture readonly, i64, i1 immarg)\n"
         if m.memmove else "") + (
         "declare i32 @memcmp(ptr nocapture, ptr nocapture, i64) nounwind readonly\n" if m.memcmp else "") + (

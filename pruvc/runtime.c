@@ -405,6 +405,27 @@ void *pruv_shrink_v2(void *data, int64_t len, int64_t m, int64_t size, int64_t a
 #endif
 }
 
+/* LG32 (G-DB52-4): grows a block in place for `x = resize(x, n, v)`. The module passes the block (data), its
+ * allocated element count (cap), the new element count n and the element layout (size, align). Precondition (checked
+ * by the inline @pruv_regrow helpers): n > cap, n >= 1, n <= PRUV_MAX_LEN, valid layout. A NULL block or cap <= 0
+ * (an empty array) is a plain pruv_raw_alloc_v3. Otherwise the block is realloc'ed and the old block is gone, so the
+ * old and new blocks are never live together. A block that came from the per-thread free cache keeps its exact
+ * byte layout (cap * size bytes, align), so realloc with cap is correct for it too. Under -DPRUV_COUNT_ALLOCS a
+ * realloc of a non-NULL block is neither an allocation nor a free, so the balance line is unchanged.
+ * Default mode: realloc (NULL is an allocation failure). -DPRUV_RUST_ALLOCATOR: the host helper
+ * pruv_host_realloc_v2 (std::alloc::realloc with the block's own layout cap * size / align). */
+void *pruv_regrow_v2(void *data, int64_t cap, int64_t n, int64_t size, int64_t align) {
+    if (!data || cap <= 0) return pruv_raw_alloc_v3(n, size, align);
+#ifdef PRUV_RUST_ALLOCATOR
+    return pruv_host_realloc_v2(data, cap, n, size, align);
+#else
+    (void)align;
+    void *p = realloc(data, (size_t)n * (size_t)size);
+    if (!p) pruv_panic_arith("allocation failed");
+    return p;
+#endif
+}
+
 /* G9 A3: node allocator (recursive-type nodes), see the header comment */
 void pruv_runtime_nodes_v1(void) {}
 

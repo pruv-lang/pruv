@@ -4,7 +4,7 @@ entry:
   br label %head
 
 head:
-  %i = phi i64 [ 0, %entry ], [ %next, %ascii ], [ %end, %continuation ]
+  %i = phi i64 [ 0, %entry ], [ %next, %ascii ], [ %end, %continuation ], [ %resume, %block_exit ]
   %done = icmp eq i64 %i, %len
   br i1 %done, label %valid, label %lead
 
@@ -16,6 +16,34 @@ lead:
   br i1 %is_ascii, label %ascii, label %sequence
 
 ascii:
+  ; At a 16-byte aligned ASCII byte, skip whole 16-byte ASCII blocks (two aligned words with no high bit).
+  %addr = ptrtoint ptr %p to i64
+  %misaligned = and i64 %addr, 15
+  %aligned = icmp eq i64 %misaligned, 0
+  br i1 %aligned, label %block_head, label %head
+
+block_head:
+  %k = phi i64 [ %i, %ascii ], [ %k16, %block ]
+  %left = sub i64 %len, %k
+  %room = icmp uge i64 %left, 16
+  br i1 %room, label %block, label %block_exit
+
+block:
+  %bp = getelementptr inbounds i8, ptr %data, i64 %k
+  %w0 = load i64, ptr %bp, align 8
+  %bp8 = getelementptr inbounds i8, ptr %bp, i64 8
+  %w1 = load i64, ptr %bp8, align 8
+  %w = or i64 %w0, %w1
+  %high_bits = and i64 %w, -9187201950435737472
+  %all_ascii = icmp eq i64 %high_bits, 0
+  %k16 = add i64 %k, 16
+  br i1 %all_ascii, label %block_head, label %block_exit
+
+block_exit:
+  ; %k is the first block not known to be ASCII; data[%i] is ASCII, so never resume before %next.
+  %stop = phi i64 [ %k, %block_head ], [ %k, %block ]
+  %same = icmp eq i64 %stop, %i
+  %resume = select i1 %same, i64 %next, i64 %stop
   br label %head
 
 sequence:
