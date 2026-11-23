@@ -3073,6 +3073,23 @@ impl<'a> FnGen<'a> {
             return out;
         }
         let Expr::Call(c) = e else { return out };
+        if (c.name == "truncate" && c.args.len() == 2) || (c.name == "str_from_utf8" && c.args.len() == 1) {
+            // LG33: truncate(x, m) / str_from_utf8(x) of an owned local array at its last use moves x
+            let Expr::Var(x) = &c.args[0] else { return out };
+            let mut m_names: HashSet<String> = HashSet::new();
+            if c.name == "truncate" {
+                crate::refine::expr_names(&c.args[1], &mut m_names);
+            }
+            if x.name == name || m_names.contains(&x.name) || !self.dead_after(&x.name) {
+                return out;
+            }
+            if let Ok(Bind::Slot(v)) = self.lookup(&x.name) {
+                if v.k == Kind::Arr && self.owned_slot(&v) {
+                    out.insert(x.name.clone());
+                }
+            }
+            return out;
+        }
         if c.name != "copy" || c.args.len() != 1 {
             return out;
         }
@@ -4341,6 +4358,29 @@ impl<'a> FnGen<'a> {
                     }
                 }
             }
+            // LG33 (G-LG32-5): an owned local array at its last use (move_src) keeps its block with length m; as the Rust
+            // backend's truncate move, a block left more than half unused is shrunk to m (pruv_shrink_v2 returns the
+            // block unchanged when the target is the cap, frees it and returns NULL only when the target is 0, and
+            // panics if a shrinking realloc fails, so the recorded cap is always the block's real cap)
+            if let Expr::Var(xv) = arg(a, 0)? {
+                if self.moving.contains(&xv.name) {
+                    let Bind::Slot(sl) = self.lookup(&xv.name)? else { return Err(IDX_ERR.to_string()) };
+                    self.empty_array_slot(&sl)?;
+                    let cap = capof(&src);
+                    let half = self.op(format!("lshr i64 {}, 1", cap))?;
+                    let cut = self.op(format!("icmp ugt i64 {}, {}", half, m.a))?;
+                    let nc = self.op(format!("select i1 {}, i64 {}, i64 {}", cut, m.a, cap))?;
+                    self.m.shrink = true;
+                    let (sz, al) = if is_bytes_ty(&src.ty) { (1, 1) } else { (elem_size(src.layout), alignment(src.layout)) };
+                    let p = self.op(format!("call ptr @pruv_shrink_v2(ptr {}, i64 {}, i64 {}, i64 {}, i64 {})", src.a, cap, nc, sz, al))?;
+                    let mut rv = V::with_b(Kind::Arr, p, m.a.clone());
+                    rv.ty = src.ty.clone();
+                    rv.layout = src.layout;
+                    rv.rng = src.rng;
+                    rv.c = Some(nc);
+                    return self.temp_arr(rv, owned);
+                }
+            }
             if src.layout != "i64" {
                 let p = self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 {}, i64 {})", src.a, m.a, elem_size(src.layout), alignment(src.layout)))?;
                 let mut rv = V::with_b(Kind::Arr, p, m.a.clone());
@@ -4581,6 +4621,17 @@ impl<'a> FnGen<'a> {
                 self.m.uses_utf8_panic = true;
                 let ok = self.op(format!("call i1 @pruv_utf8_valid(ptr {}, i64 {})", b.a, b.b))?;
                 self.guard(&ok, Fail::Utf8(b.b.clone()), false)?;
+            }
+            // LG33 (G-DB54-2): an owned local [u8] at its last use (move_src): the str takes its block and cap
+            if let Expr::Var(xv) = arg(a, 0)? {
+                if self.moving.contains(&xv.name) {
+                    let Bind::Slot(sl) = self.lookup(&xv.name)? else { return Err(IDX_ERR.to_string()) };
+                    self.empty_array_slot(&sl)?;
+                    let mut rv = V::with_b(Kind::Arr, b.a.clone(), b.b.clone());
+                    rv.ty = Some(STR.to_string());
+                    rv.c = Some(capof(&b));
+                    return self.temp_arr(rv, owned);
+                }
             }
             let p = self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 1, i64 1)", b.a, b.b))?;
             let mut rv = V::with_b(Kind::Arr, p, b.b);

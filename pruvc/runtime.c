@@ -388,7 +388,8 @@ void pruv_free_v2(void *data, int64_t len, int64_t size, int64_t align) {
  * which frees with the exact length. Here `len` is the allocated element count (cap). Returns a block of
  * m elements holding the first m elements of data (layout size/align), so the later pruv_free_v2 /
  * pruv_free with length m uses the block's real layout. m == len keeps data; m == 0 frees it and returns NULL.
- * Default mode: realloc (keeps data if the shrinking realloc fails). -DPRUV_RUST_ALLOCATOR: the host
+ * Default mode: realloc; a failed shrinking realloc is pruv_panic_arith("allocation failed") (LG33: the LLVM
+ * truncate move records m as the new cap, so the block must really have m elements). -DPRUV_RUST_ALLOCATOR: the host
  * helper pruv_host_realloc_v2 (std::alloc::realloc with the block's own layout). */
 void *pruv_shrink_v2(void *data, int64_t len, int64_t m, int64_t size, int64_t align) {
     if (!data || m >= len) return data;
@@ -401,7 +402,8 @@ void *pruv_shrink_v2(void *data, int64_t len, int64_t m, int64_t size, int64_t a
 #else
     (void)align;
     void *p = realloc(data, (size_t)m * (size_t)size);
-    return p ? p : data;
+    if (!p) pruv_panic_arith("allocation failed");
+    return p;
 #endif
 }
 

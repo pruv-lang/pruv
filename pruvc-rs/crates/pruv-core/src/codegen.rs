@@ -3614,6 +3614,15 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         }
                     }
                 }
+                // LG33 (G-DB54-2): str_from_utf8 of a dead owned local [u8] moves the vector into the String (no second copy)
+                if c.name == "str_from_utf8" && c.args.len() == 1 {
+                    if let Expr::Var(v) = &c.args[0] {
+                        if self.vars.contains_key(&v.name) && v.name != target
+                            && (self.dead_after(&v.name) || self.return_next(&v.name)) {
+                            out.insert(v.name.clone());
+                        }
+                    }
+                }
                 if !self.ext.is_empty() && c.name == "copy" && c.args.len() == 1 {
                     if let Expr::Var(v) = &c.args[0] {
                         if v.name != target && self.dead_after(&v.name) {
@@ -5043,6 +5052,22 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     return Ok(format!("::core::str::from_utf8({}).is_ok()", self.arr_ref(arg(a, 0)?)?));
                 }
                 if n == "str_from_utf8" {
+                    // LG33 (G-DB54-2): the owned local at its last use (last_copy) becomes the String's buffer
+                    if !self.cost {
+                        if let a0 @ Expr::Var(v) = arg(a, 0)? {
+                            if self.moving.contains(&v.name) {
+                                let t0 = self.e(a0)?;
+                                if self.verified {
+                                    return Ok(format!("{{ let pruv_v: ::std::vec::Vec<u8> = {}; unsafe {{ ::std::string::String::from_utf8_unchecked(pruv_v) }} }}", t0));
+                                }
+                                return Ok(format!(concat!(
+                                    "{{ let pruv_v: ::std::vec::Vec<u8> = {}; match ::std::string::String::from_utf8(pruv_v) {{ ",
+                                    "Ok(pruv_s) => pruv_s, ",
+                                    "Err(pruv_e) => panic!(\"pruv: invalid UTF-8 (len {{}})\", pruv_e.as_bytes().len()), }} }}"
+                                ), t0));
+                            }
+                        }
+                    }
                     let b = self.arr_ref(arg(a, 0)?)?;
                     if self.verified {
                         return Ok(format!("{{ let pruv_b: &[u8] = {}; unsafe {{ ::std::string::String::from_utf8_unchecked(pruv_b.to_vec()) }} }}", b));
