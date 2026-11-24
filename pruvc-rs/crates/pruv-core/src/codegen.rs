@@ -3810,6 +3810,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
     fn block_in(&mut self, stmts: &[Stmt], ind: usize, decls: &[String], lp: bool) -> R<()> {
         let saved = self.vars.clone();
         let saved_refs = self.refs.clone();
+        let saved_inouts = self.inouts.clone();
         let mut later: Vec<HashSet<String>> = vec![HashSet::new(); stmts.len() + 1];
         for i in (0..stmts.len()).rev() {
             let mut n = later[i + 1].clone();
@@ -3837,6 +3838,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
         self.frames.pop();
         self.vars = saved;
         self.refs = saved_refs;
+        self.inouts = saved_inouts;
         Ok(())
     }
 
@@ -4163,8 +4165,44 @@ pruv_hi <= (pruv_b.len() as i128) && \
         Ok(format!("{{ let pruv_v: i64 = {}; {}[pruv_v{}; {}] }}", v, chk, cast, n))
     }
 
+    fn place_path(&self, place: &Expr) -> R<String> {
+        let (root, path) = crate::check::field_place(place);
+        let Expr::Var(root) = root else { return Err("invalid place root".into()) };
+        if path.is_empty() && self.inouts.contains(&root.name) {
+            return Ok(format!("(*{})", root.name));
+        }
+        Ok(std::iter::once(root.name.as_str()).chain(path.iter().map(String::as_str)).collect::<Vec<_>>().join("."))
+    }
+
+    fn place_ref(&mut self, place: &Expr) -> R<String> {
+        match place {
+            Expr::Call(c) if crate::ast::PlaceIf::matches(c) => Ok(format!("if {} {{ {} }} else {{ {} }}",
+                self.e(&c.args[0])?, self.place_ref(&c.args[1])?, self.place_ref(&c.args[2])?)),
+            Expr::Index(i) => {
+                let arr = self.place_path(&i.array)?;
+                let idx = self.e(&i.index)?;
+                if self.verified {
+                    Ok(format!("{{ let pruv_pi = ({idx}) as usize; unsafe {{ {arr}.get_unchecked_mut(pruv_pi) }} }}"))
+                } else {
+                    Ok(format!("{{ let pruv_pi = pruv_idx({idx}, {arr}.len()); &mut {arr}[pruv_pi] }}"))
+                }
+            }
+            Expr::Var(v) if self.inouts.contains(&v.name) => Ok(format!("&mut *{}", v.name)),
+            _ => Ok(format!("&mut {}", self.place_path(place)?)),
+        }
+    }
+
     fn stmt(&mut self, st: &Stmt, ind: usize) -> R<()> {
         match st {
+            Stmt::Let(x) if x.is_place() => {
+                let Expr::InoutArg(arg) = &x.value else { unreachable!() };
+                let place = self.place_ref(&arg.expr)?;
+                let mutable = if x.mutable { "mut " } else { "" };
+                self.emit(ind, &format!("let {mutable}{} = {place};", x.name));
+                self.vars.insert(x.name.clone(), x.ty.clone());
+                self.refs.remove(&x.name);
+                self.inouts.insert(x.name.clone());
+            }
             Stmt::Let(x) if self.stack.contains(x) && !self.resize_slots.contains(&x.name) => {
                 let init = self.stack_init(x)?;
                 let line = format!("let {}{}: {} = {};", if x.mutable { "mut " } else { "" }, x.name, self.stack_type(x), init);

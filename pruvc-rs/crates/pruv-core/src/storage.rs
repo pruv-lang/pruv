@@ -81,7 +81,24 @@ impl Analysis {
         match e {
             Expr::Var(x) => { if n.is_some() { self.join(n, scope.get(&x.name).copied().flatten()); } }
             Expr::Move(x) => { if n.is_some() { self.join(n, scope.get(&x.name).copied().flatten()); } }
-            Expr::InoutArg(_) => { self.pin(children[0]); if n.is_some() { self.join(n, children[0]); } }
+            Expr::InoutArg(arg) => {
+                self.pin(children[0]);
+                // Element place bindings write through an i64 pointer.
+                let mut places = vec![arg.expr.as_ref()];
+                while let Some(place) = places.pop() {
+                    match place {
+                        Expr::Index(i) => {
+                            if let Expr::Var(v) = i.array.as_ref() {
+                                self.pin(scope.get(&v.name).copied().flatten());
+                            }
+                            places.push(&i.array);
+                        }
+                        Expr::Call(c) if crate::ast::PlaceIf::matches(c) => places.extend(&c.args[1..]),
+                        _ => {}
+                    }
+                }
+                if n.is_some() { self.join(n, children[0]); }
+            }
             Expr::Call(x) => match x.name.as_str() {
                 "copy" | "truncate" | "old" | "resize" | "subview" => { if n.is_some() { self.join(n, children[0]); } }
                 "alloc" => {},

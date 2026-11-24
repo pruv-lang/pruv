@@ -4615,9 +4615,27 @@ impl Checker {
     }
 
     // ---- G9 A0: ownership of extended values, active-match borrows ----
+    fn place_escape(&self, name: &str, line: i64, col: i64, scope: &Scope) -> Res<()> {
+        // Place bindings are mutable inout entries; inout parameters are not rebindable.
+        if let Some(entry) = scope.get(name).filter(|e| e.kind == "inout" && e.mutable) {
+            let ty = &entry.ty;
+            if self.is_extended(ty) || ty.is_collection() || ty.is_array() || *ty == strt()
+                || crate::llvmgen::is_owned_result(&ty.to_key())
+            {
+                return Err(terr(line, col, "borrow_escape",
+                    format!("place binding {name} cannot be returned, stored or moved"),
+                    "copy(...) the value, or return / store it from the place's root after the binding's last use"));
+            }
+        }
+        Ok(())
+    }
+
     /// `value` (already typed) is moved into an owning position (let, assignment, constructor field, return):
     /// a non-fresh extended value is cloned, which needs `alloc`; constructors, literals and calls are fresh.
     fn own(&mut self, value: &Expr, scope: &Scope) -> Res<()> {
+        if let Expr::Var(v) = value {
+            self.place_escape(&v.name, v.line, v.col, scope)?;
+        }
         if Self::is_iteration_binder(value, scope) {
             return Err(terr(value.line(), value.col(), "foreign_move",
                 "a map iteration binder cannot be used as an owned value", ""));
@@ -4888,6 +4906,9 @@ impl Checker {
 
     /// Arrays are moved or borrowed explicitly: a new array comes only from alloc/copy/a call.
     fn array_source(&self, line: i64, col: i64, value: &Expr, scope: &Scope, allow_local_var: bool, ty: &GType) -> Res<()> {
+        if let Expr::Var(v) = value {
+            self.place_escape(&v.name, v.line, v.col, scope)?;
+        }
         if matches!(value, Expr::Call(_) | Expr::StrLit(_)) || matches!(value, Expr::Move(_)) && (ty.is_array() || *ty == strt()) {
             return Ok(()); // LG17 (G-DB28-2): `move t` of an owned str binding also hands over its bytes
         }
@@ -5167,6 +5188,7 @@ impl Checker {
                 }
             }
             Expr::Move(x) => {
+                self.place_escape(&x.name, x.line, x.col, scope)?;
                 self.check_borrow(x.line, x.col, &x.name, &x.fields)?;
                 if scope.get(&x.name).is_some_and(|entry| entry.kind == "map_iter") {
                     return Err(terr(x.line, x.col, "foreign_move", "a map iteration binder cannot be moved", ""));

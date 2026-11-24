@@ -113,7 +113,7 @@ pub struct InoutArg { pub line: i64, pub col: i64, pub expr: Box<Expr>, pub ty: 
 /// Conditional place syntax, encoded in the expression enum's call payload.
 /// The reserved name cannot be written in source, and the front end handles this
 /// payload as a place node without resolving it as a call.
-pub(crate) struct PlaceIf {
+pub struct PlaceIf {
     pub line: i64,
     pub col: i64,
     pub cond: Expr,
@@ -263,7 +263,7 @@ pub struct Let {
     pub refine: Option<Refinement>,
 }
 impl Let {
-    pub(crate) fn is_place(&self) -> bool {
+    pub fn is_place(&self) -> bool {
         matches!(&self.value, Expr::InoutArg(_))
     }
 }

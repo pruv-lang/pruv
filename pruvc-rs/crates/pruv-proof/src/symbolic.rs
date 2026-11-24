@@ -471,6 +471,83 @@ fn inout_ops(e: &Expr, out: &mut BTreeSet<String>, select: &impl Fn(&ast::Call, 
     }
 }
 
+fn place_expr_root(place: &Expr) -> Option<&str> {
+    match place {
+        Expr::Var(v) => Some(&v.name),
+        Expr::FieldAccess(f) => place_expr_root(&f.base),
+        Expr::Index(i) => place_expr_root(&i.array),
+        Expr::Call(c) if ast::PlaceIf::matches(c) => place_expr_root(&c.args[1]),
+        _ => None,
+    }
+}
+
+fn stmt_blocks(stmt: &Stmt) -> Vec<&[Stmt]> {
+    match stmt {
+        Stmt::If(s) => vec![&s.then, &s.els],
+        Stmt::While(s) => vec![&s.body],
+        Stmt::ForMap(s) => vec![&s.body],
+        Stmt::Match(s) => s.arms.iter().map(|arm| arm.body.as_slice()).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn place_roots(stmts: &[Stmt], out: &mut BTreeSet<String>) {
+    for stmt in stmts {
+        if let Stmt::Let(l) = stmt {
+            if let Expr::InoutArg(arg) = &l.value {
+                if let Some(root) = place_expr_root(&arg.expr) {
+                    out.insert(root.to_string());
+                }
+            }
+        }
+        for block in stmt_blocks(stmt) {
+            place_roots(block, out);
+        }
+    }
+}
+
+fn place_mentions(stmt: &Stmt, names: &mut HashSet<String>) {
+    fn expr_names(expr: &Expr, names: &mut HashSet<String>) {
+        match expr {
+            Expr::Var(v) => { names.insert(v.name.clone()); }
+            Expr::Move(v) => { names.insert(v.name.clone()); }
+            Expr::InoutArg(v) => expr_names(&v.expr, names),
+            Expr::Quant(q) => {
+                for trigger in &q.triggers {
+                    expr_names(trigger, names);
+                }
+            }
+            _ => {}
+        }
+        for child in kids(expr) {
+            expr_names(child, names);
+        }
+    }
+
+    let exprs: Vec<&Expr> = match stmt {
+        Stmt::Let(s) => vec![&s.value],
+        Stmt::Assign(s) => { names.insert(s.name.clone()); vec![&s.value] }
+        Stmt::IndexAssign(s) => { names.insert(s.name.clone()); vec![&s.index, &s.value] }
+        Stmt::FieldAssign(s) => { names.insert(s.name.clone()); vec![&s.value] }
+        Stmt::If(s) => vec![&s.cond],
+        Stmt::While(s) => [&s.cond, &s.decreases].into_iter().chain(&s.invariants).collect(),
+        Stmt::ForMap(s) => std::iter::once(&s.place).chain(&s.invariants).collect(),
+        Stmt::Return(s) => s.value.iter().collect(),
+        Stmt::Assert(s) => vec![&s.cond],
+        Stmt::ExprStmt(s) => vec![&s.expr],
+        Stmt::Match(s) => vec![&s.scrutinee],
+        Stmt::Par(s) => s.calls.iter().collect(),
+    };
+    for expr in exprs {
+        expr_names(expr, names);
+    }
+    for block in stmt_blocks(stmt) {
+        for stmt in block {
+            place_mentions(stmt, names);
+        }
+    }
+}
+
 /// verify.py `call_writes`: names passed inout in executable expressions, recursively through statement blocks.
 fn call_writes(stmts: &[Stmt], out: &mut BTreeSet<String>, select: &impl Fn(&ast::Call, usize) -> bool) {
     for st in stmts {
@@ -757,10 +834,33 @@ impl Env {
     }
 }
 
+// A place with its index and condition operands frozen at binding time.
+enum Place {
+    Root(String),
+    Field(Box<Place>, String),
+    Index(Box<Place>, Ast),
+    If(Ast, Box<Place>, Box<Place>),
+}
+
+impl Place {
+    fn root(&self) -> &str {
+        match self {
+            Self::Root(name) => name,
+            Self::Field(base, _) | Self::Index(base, _) | Self::If(_, base, _) => base.root(),
+        }
+    }
+}
+
+struct LivePlace {
+    name: String,
+    place: Place,
+}
+
 #[derive(Clone)]
 pub struct State {
     pub env: Env,
     pub pc: Vec<Ast>,
+    places: Vec<std::rc::Rc<LivePlace>>,
     /// G9 A1 (verify.py `State.obs`): ids of the recursive-value facts already in `pc` (immutable, shared by forks).
     pub obs: std::rc::Rc<HashSet<u32>>,
     /// P13o (verify.py `State.rev`): names of the opaque functions revealed on this path.
@@ -778,6 +878,7 @@ impl State {
         State {
             env,
             pc,
+            places: Vec::new(),
             obs: std::rc::Rc::new(HashSet::new()),
             rev: std::rc::Rc::new(BTreeSet::new()),
             apps: std::rc::Rc::new(Vec::new()),
@@ -794,6 +895,7 @@ impl State {
         State {
             env: self.env.clone(),
             pc,
+            places: self.places.clone(),
             obs: std::rc::Rc::clone(&self.obs),
             rev: std::rc::Rc::clone(&self.rev),
             apps: std::rc::Rc::clone(&self.apps),
@@ -5339,10 +5441,134 @@ impl<'a> FnVerifier<'a> {
         Ok(())
     }
 
+    fn place_ite(&self, cond: &Ast, a: &Val, b: &Val) -> R<Val> {
+        let ite = |a, b| self.z.ite(cond, a, b);
+        Ok(match (a, b) {
+            (Val::Arr(a), Val::Arr(b)) => Val::Arr(a.like(ite(&a.a, &b.a), ite(&a.n, &b.n), &a.name)),
+            (Val::Int(a), Val::Int(b)) => Val::Int(ite(a, b)),
+            (Val::Bool(a), Val::Bool(b)) => Val::Bool(ite(a, b)),
+            (Val::Dt(a, ty), Val::Dt(b, _)) => Val::Dt(ite(a, b), ty.clone()),
+            _ => return Err("invalid conditional place value".into()),
+        })
+    }
+
+    fn place_read(&mut self, place: &Place, st: &mut State) -> R<Val> {
+        match place {
+            Place::Root(name) => st.env.try_get(name).cloned().ok_or_else(|| format!("'{name}'")),
+            Place::Field(base, field) => {
+                let Val::Dt(value, ty) = self.place_read(base, st)? else {
+                    return Err("field access on a non-struct place".into());
+                };
+                let idx = self.model.field_index_of(&ty, field, None)?;
+                let accessor = &self.model.struct_info(&ty)?.accs[idx];
+                let fty = &self.model.fields_of(&ty, None)?[idx].1;
+                self.observe(st, &value, Some(&ty), false)?;
+                let result = self.field_val(fty, accessor.apply1(&value), field)?;
+                self.assume_str_utf8(st, &[], fty, &result);
+                if let Val::Dt(value, ty) = &result {
+                    self.observe(st, value, Some(ty), false)?;
+                }
+                Ok(result)
+            }
+            Place::Index(base, index) => {
+                let base = self.place_read(base, st)?;
+                let arr = base.try_arr()?;
+                let ty = if arr.elem == Elem::Bool { Ty::Bool } else { arr.elem_ty() };
+                Val::from_field(&ty, arr.a.select(index))
+            }
+            Place::If(cond, then, els) => {
+                let a = self.place_read(then, st)?;
+                let b = self.place_read(els, st)?;
+                self.place_ite(cond, &a, &b)
+            }
+        }
+    }
+
+    fn place_write(&mut self, place: &Place, st: &mut State, value: Val) -> R<()> {
+        match place {
+            Place::Root(name) => st.env.set(name, match value {
+                Val::Arr(arr) => Val::Arr(arr.like(arr.a.clone(), arr.n.clone(), name)),
+                value => value,
+            }),
+            Place::Field(base, field) => {
+                let Val::Dt(current, ty) = self.place_read(base, st)? else {
+                    return Err("field store on a non-struct place".into());
+                };
+                let rebuilt = self.try_rebuild_v(&ty, &current, &[field], &value, &mut st.pc)?;
+                self.place_write(base, st, Val::Dt(rebuilt, ty))?;
+            }
+            Place::Index(base, index) => {
+                let current = self.place_read(base, st)?;
+                let arr = current.try_arr()?;
+                let updated = arr.like(arr.a.store(index, value.try_ast()?), arr.n.clone(), &arr.name);
+                self.place_write(base, st, Val::Arr(updated))?;
+            }
+            Place::If(cond, then, els) => {
+                let root = then.root();
+                let mut a = st.fork(None);
+                let mut b = st.fork(None);
+                self.place_write(then, &mut a, value.clone())?;
+                self.place_write(els, &mut b, value)?;
+                st.env.set(root, self.place_ite(cond, a.env.get(root), b.env.get(root))?);
+            }
+        }
+        Ok(())
+    }
+
+    fn place_bind(&mut self, expr: &Expr, st: &mut State, guard: &Ast, binding: &ast::Let) -> R<Place> {
+        Ok(match expr {
+            Expr::Var(v) => Place::Root(v.name.clone()),
+            Expr::FieldAccess(f) => Place::Field(Box::new(self.place_bind(&f.base, st, guard, binding)?), f.field.clone()),
+            Expr::Index(i) => {
+                let base = self.place_bind(&i.array, st, guard, binding)?;
+                let index = self.ev0_ast(&i.index, st, &[], true)?;
+                let array = self.place_read(&base, st)?;
+                let bounds = self.z.and(&[index.ge_i(0), index.lt(&array.try_arr()?.n)]);
+                self.prove_core(st, &[], &guard.implies(&bounds), mk_pos(binding.line, binding.col), "index_oob",
+                    &format!("index in bounds for place binding {}", binding.name), None);
+                Place::Index(Box::new(base), index)
+            }
+            Expr::Call(c) if ast::PlaceIf::matches(c) => {
+                let cond = self.ev0_ast(&c.args[0], st, &[], true)?;
+                let then_guard = self.z.and(&[guard.clone(), cond.clone()]);
+                let else_guard = self.z.and(&[guard.clone(), cond.not()]);
+                let then = self.place_bind(&c.args[1], st, &then_guard, binding)?;
+                let els = self.place_bind(&c.args[2], st, &else_guard, binding)?;
+                Place::If(cond, Box::new(then), Box::new(els))
+            }
+            _ => return Err("invalid place binding".into()),
+        })
+    }
+
+    fn place_writeback(&mut self, st: &mut State, name: &str) -> R<()> {
+        if let Some(index) = st.places.iter().position(|binding| binding.name == name) {
+            let binding = st.places.remove(index);
+            self.place_write(&binding.place, st, st.env.get(name).clone())?;
+        }
+        Ok(())
+    }
+
     /// verify.py `exec_block` (line 660).
     pub(crate) fn exec_block(&mut self, stmts: &[Stmt], st: State) -> R<Vec<State>> {
+        let mut dead = HashMap::<usize, Vec<&str>>::new();
+        if stmts.iter().any(|stmt| matches!(stmt, Stmt::Let(l) if l.is_place())) {
+            let mut last = HashMap::new();
+            for (index, stmt) in stmts.iter().enumerate() {
+                let mut names = HashSet::new();
+                place_mentions(stmt, &mut names);
+                last.extend(names.into_iter().map(|name| (name, index)));
+            }
+            for (index, stmt) in stmts.iter().enumerate() {
+                if let Stmt::Let(binding) = stmt {
+                    if binding.is_place() {
+                        let end = last.get(&binding.name).copied().unwrap_or(index).max(index);
+                        dead.entry(end).or_default().push(&binding.name);
+                    }
+                }
+            }
+        }
         let mut states = vec![st];
-        for stmt in stmts {
+        for (index, stmt) in stmts.iter().enumerate() {
             // STAGE1 B2: on budget exhaustion or timeout, Python escapes from here via an exception.
             if self.probe_aborted() {
                 return Ok(Vec::new());
@@ -5354,6 +5580,13 @@ impl<'a> FnVerifier<'a> {
             states = nxt;
             if states.is_empty() {
                 break;
+            }
+            if let Some(names) = dead.get(&index) {
+                for name in names {
+                    for state in &mut states {
+                        self.place_writeback(state, name)?;
+                    }
+                }
             }
         }
         Ok(states)
@@ -5379,6 +5612,21 @@ impl<'a> FnVerifier<'a> {
         let model: &'a Model = self.model;
         let spos = stmt_pos(stmt);
         match stmt {
+            Stmt::Let(s) if s.is_place() => {
+                let Expr::InoutArg(arg) = &s.value else { unreachable!() };
+                let mut st = st.fork(None);
+                let place = self.place_bind(&arg.expr, &mut st, &self.z.bool_val(true), s)?;
+                let value = match self.place_read(&place, &mut st)? {
+                    Val::Arr(arr) => Val::Arr(arr.like(arr.a.clone(), arr.n.clone(), &s.name)),
+                    value => value,
+                };
+                if s.ty == "i64" {
+                    st.pc.push(in_range(&self.z, value.try_ast()?));
+                }
+                st.env.set(&s.name, value);
+                st.places.push(std::rc::Rc::new(LivePlace { name: s.name.clone(), place }));
+                Ok(vec![st])
+            }
             Stmt::Let(s) => self.exec_bind(&s.name, &s.value, st),
             Stmt::Assign(s) => self.exec_bind(&s.name, &s.value, st),
             Stmt::IndexAssign(s) if !s.fields.is_empty() => {
@@ -5626,6 +5874,10 @@ impl<'a> FnVerifier<'a> {
                     Some(e) => Some(self.ev0(e, &mut st, &[], true)?),
                     None => None,
                 };
+                while let Some(binding) = st.places.pop() {
+                    let value = st.env.get(&binding.name).clone();
+                    self.place_write(&binding.place, &mut st, value)?;
+                }
                 self.ensures_ok(&mut st, v, spos)?;
                 Ok(Vec::new())
             }
@@ -5716,6 +5968,7 @@ impl<'a> FnVerifier<'a> {
         // Without inout, calls = {} and snap = {}: names/keep (and the SMT) are exactly the old ones.
         let mut calls: BTreeSet<String> = BTreeSet::new();
         call_writes(body, &mut calls, &|call, _| !matches!(call.name.as_str(), "vec_reserve" | "arr_reserve"));
+        place_roots(body, &mut calls);
         let mut keep: BTreeSet<String> = BTreeSet::new();
         if !calls.is_empty() || !self.snap.0.is_empty() {
             let mut whole: BTreeSet<String> = BTreeSet::new();
