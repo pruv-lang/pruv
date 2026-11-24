@@ -5,12 +5,14 @@ from shared_data import load
 # compilers decide the same way by construction. A non-recursive `#[inline]` fn (one that cannot reach itself through
 # calls) gets `#[inline(always)]` when its inclusive size (own body lines plus, once per call, the inclusive size of
 # each callee that gets always) is at most INLINE_SMALL, when it has exactly one call site, or when it has two or more and
-# the copies it adds beyond one, incl * (call sites - 1), fit INLINE_BUDGET. A fn with zero call sites (a host entry
+# the copies it adds beyond one, incl * (call sites - 1), fit INLINE_BUDGET and, if its own body has a loop (a line
+# starting with `while `, `for ` or `loop {`), incl is at most INLINE_LOOP. A fn with zero call sites (a host entry
 # called only from the harness closures) is not promoted by the call-site rules, so it gets always only at
 # incl <= INLINE_SMALL. The rest keep `#[inline]` and rustc's own heuristics.
 _INLINE = load("inline_policy")   # shared with pruvc-rs (pruvc/data/inline_policy.json, tools/gen_shared.py)
 INLINE_SMALL = _INLINE["INLINE_SMALL"]
 INLINE_BUDGET = _INLINE["INLINE_BUDGET"]
+INLINE_LOOP = _INLINE["INLINE_LOOP"]
 
 
 # Private codegen markers consumed before the Rust text is returned.
@@ -40,6 +42,11 @@ def _calls(text, names):
                 got[w] = got.get(w, 0) + 1
         i = e
     return got
+
+
+def _has_loop(body):
+    """True when a body line starts (after spaces) with `while `, `for ` or `loop {`: the loops codegen emits."""
+    return any(ln.lstrip(" ").startswith(("while ", "for ", "loop {")) for ln in body.split("\n"))
 
 
 def inline_policy(text):
@@ -132,7 +139,10 @@ def inline_policy(text):
                 if nm.endswith("__pruv_fp") and nm[:-len("__pruv_fp")] in index and nm + "b" in index:
                     nm = nm[:-len("__pruv_fp")]
                 calls = sites.get(nm, 0)
-                always[v] = tot <= INLINE_SMALL or calls == 1 or (calls >= 2 and tot * (calls - 1) <= INLINE_BUDGET)
+                # LI1: a loop amortizes the call, so copying a larger loop body to several sites only adds code
+                # pages (bench/INLINE_POLICY_LI1.md); rustc keeps such fns out of line in the hand Rust as well.
+                always[v] = tot <= INLINE_SMALL or calls == 1 or (
+                    calls >= 2 and tot * (calls - 1) <= INLINE_BUDGET and (tot <= INLINE_LOOP or not _has_loop(fns[v][3])))
     for v, f in enumerate(fns):
         if always[v]:
             lines[f[0]] = "#[inline(always)]"

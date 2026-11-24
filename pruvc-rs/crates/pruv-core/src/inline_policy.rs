@@ -2,10 +2,11 @@
 // compilers decide the same way by construction. A non-recursive `#[inline]` fn (one that cannot reach itself through
 // calls) gets `#[inline(always)]` when its inclusive size (own body lines plus, once per call, the inclusive size of
 // each callee that gets always) is at most INLINE_SMALL, when it has exactly one call site, or when it has two or more and
-// the copies it adds beyond one, incl * (call sites - 1), fit INLINE_BUDGET. A fn with zero call sites (a host entry
+// the copies it adds beyond one, incl * (call sites - 1), fit INLINE_BUDGET and, if its own body has a loop (a line
+// starting with `while `, `for ` or `loop {`), incl is at most INLINE_LOOP. A fn with zero call sites (a host entry
 // called only from the harness closures) is not promoted by the call-site rules, so it gets always only at
 // incl <= INLINE_SMALL. The rest keep `#[inline]` and rustc's own heuristics.
-use crate::shared_tables::inline_policy::{INLINE_BUDGET, INLINE_SMALL}; // shared with pruvc (pruvc/data/inline_policy.json, tools/gen_shared.py)
+use crate::shared_tables::inline_policy::{INLINE_BUDGET, INLINE_LOOP, INLINE_SMALL}; // shared with pruvc (pruvc/data/inline_policy.json, tools/gen_shared.py)
 use std::collections::{BTreeMap, HashMap};
 
 // Private codegen markers consumed before the Rust text is returned.
@@ -38,6 +39,14 @@ fn inline_calls(text: &str, index: &HashMap<&str, usize>) -> BTreeMap<usize, u64
         i = e;
     }
     got
+}
+
+/// True when a body line starts (after spaces) with `while `, `for ` or `loop {`: the loops codegen emits.
+fn has_loop(body: &str) -> bool {
+    body.split('\n').any(|ln| {
+        let t = ln.trim_start_matches(' ');
+        t.starts_with("while ") || t.starts_with("for ") || t.starts_with("loop {")
+    })
 }
 
 pub(crate) fn inline_policy(text: String) -> String {
@@ -158,7 +167,11 @@ pub(crate) fn inline_policy(text: String) -> String {
                     _ => nm,
                 };
                 let calls = index.get(nm).and_then(|k| sites.get(k)).copied().unwrap_or(0);
-                always[v] = tot <= INLINE_SMALL || calls == 1 || (calls >= 2 && tot.saturating_mul(calls - 1) <= INLINE_BUDGET);
+                // LI1: a loop amortizes the call, so copying a larger loop body to several sites only adds code
+                // pages (bench/INLINE_POLICY_LI1.md); rustc keeps such fns out of line in the hand Rust as well.
+                always[v] = tot <= INLINE_SMALL
+                    || calls == 1
+                    || (calls >= 2 && tot.saturating_mul(calls - 1) <= INLINE_BUDGET && (tot <= INLINE_LOOP || !has_loop(&fns[v].3)));
             }
         }
     }
@@ -194,6 +207,32 @@ mod tests {
         }
         t.push_str("}\n");
         inline_policy(t).starts_with("#[inline(always)]\n")
+    }
+
+    /// Like `inline_case`, but `lines` body lines include one `while` line when `looped`.
+    fn inline_loop_case(lines: usize, sites: usize, looped: bool) -> bool {
+        let mut t = String::from("#[inline]\nfn f(x: i64) -> i64 {\n");
+        for i in 0..lines - if looped { 2 } else { 1 } {
+            t.push_str(&format!("    let _ = x + {};\n", i));
+        }
+        if looped {
+            t.push_str("    while x < 0 { }\n");
+        }
+        t.push_str("    x\n}\nfn main() {\n");
+        for _ in 0..sites {
+            t.push_str("    f(0);\n");
+        }
+        t.push_str("}\n");
+        inline_policy(t).starts_with("#[inline(always)]\n")
+    }
+
+    /// LI1 loop condition, spec values (tests/check_generated.py has the same cases for the Python compiler).
+    #[test]
+    fn inline_policy_loop_condition() {
+        assert!(!inline_loop_case(65, 3, true), "loop fn, 3 sites, incl 65 keeps #[inline]");
+        assert!(inline_loop_case(64, 3, true), "loop fn, 3 sites, incl 64 gets always");
+        assert!(inline_loop_case(65, 3, false), "loop-free fn, 3 sites, incl 65 still gets always");
+        assert!(inline_loop_case(200, 1, true), "loop fn, 1 site, incl 200 still gets always");
     }
 
     /// P18d: a `__pruv_fp` twin is counted by the call sites of its base name, not by its single adapter call.

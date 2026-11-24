@@ -262,6 +262,10 @@ perf_cells: `bench/l3/mcp/perf/work/perf_cells.json` (not committed). check 18 c
    (`/tmp/lb5rss/v2`): RSS equal to hand at 0, 1, 50, 100, 250 tools and 16 KB under at 500; time 0.92x at 100 tools.
    The fix is a global policy change (budget in code bytes rather than lines, or no promotion of a fn with a loop
    and more than one site) that needs a re-measure of every bench; it did not fit the time box.
+   LI1 (2026-11-24) tried the second form (`incl <= 64` or no loop, for budget promotion): RSS reaches hand at every
+   cell, but instructions grow 10-12% and time goes 0.91x -> 1.03x at 500 tools, because demoting `field`/`fields4`
+   changes rustc's inlining of `step` in the `page` loop. Still open; numbers and variants in
+   `bench/INLINE_POLICY_LI1.md`.
 5. **Open: 1-tool time 1.19x** with 0.96x instructions (1000 vs 834-875 ns, 3 timer ticks); not located.
 
 ### LB5 measurement (superseded: taken on the LB5 shape, before LB5b; kept for the record)

@@ -2279,7 +2279,9 @@ the hint keep none. The Python and Rust compilers use the same pass, so their ou
 - Call sites are counted textually over the whole output: a fn name followed by `(`, not after `.` and not in its own
   `fn name(` header.
 - A non-recursive fn gets `#[inline(always)]` when `incl <= 8`, when it has exactly one call site, or when it has at
-  least two call sites and `incl * (call sites - 1) <= 1500` (the extra copies inlining adds). A fn with zero call
+  least two call sites and `incl * (call sites - 1) <= 1500` (the extra copies inlining adds) and, when its own body contains a loop (a body line
+  that, after leading spaces, starts with `while `, `for ` or `loop {`; a loop later in a line, such as a one-line
+  contract block `{ let ...; while ... }`, is not counted), `incl <= 64`. A fn with zero call
   sites in the output (any visibility; in practice a host entry such as `pub fn m11_load`, called only from the
   harness, whose calls the pass does not see) is therefore promoted only by `incl <= 8`. Every other fn keeps `#[inline]` and is left to rustc's heuristics. Why: host entries called from
   harness closures would otherwise be copied into every closure; measured on M11 in `docs/L3_RESTRUCTURE_SPEC.md`
@@ -2289,10 +2291,12 @@ Measured on the request-budget milestones (`bench/l3/budget/M8_NOTES.md`, "Inlin
 gains of `#[inline(always)]` on every fn and improved M7, M9, M4 and M11 too. Always-on-every-fn grew rustc time 3-4x
 and binaries by up to 38%. Size thresholds and single-call-site rules alone did not reach the M8 gains.
 
+LI1 (2026-11-24): the loop condition excludes larger loop routines with several call sites from forced `#[inline(always)]` promotion; they keep `#[inline]` and rustc decides, as it does for the same hand Rust. In the MCP packet bench the old rule copied `field`, `fields4` and `step` into every caller (`run_new` 18,104 bytes of text against about 5,500 for hand) and cost one extra 16 KB resident code page. Status: removes the MCP code page but regresses MCP instructions 10-12% at M/L sizes, so not merged as is. Measurements and the per-bench attribute changes: `bench/INLINE_POLICY_LI1.md`.
+
 R-7-7 The LLVM backend applies the same rule to its finished IR text: every `define internal ... @F__pruv_body(...) {`
 header is a candidate, its size is its number of body lines up to the first line `}`, call sites are the textual
 `@F__pruv_body(` tokens outside its own header, and recursion, inclusive size and the `INLINE_SMALL` /
-`INLINE_BUDGET` thresholds are as in R-7-3. A promoted body gets `alwaysinline` before ` {`; the rest keep no
+`INLINE_BUDGET` thresholds are as in R-7-3 (the R-7-3 loop condition is not applied to LLVM IR; clang keeps its own loop heuristics). A promoted body gets `alwaysinline` before ` {`; the rest keep no
 attribute and clang's heuristics. Runtime helpers that already carry `alwaysinline` and ABI wrappers are not
 candidates; source attributes (section 6f) are not read. Why: clang -O2 kept calls to small Pruv bodies that the
 Rust backend's `#[inline(always)]` removes (D-R10-1). The rule does not promote `put_cp` of

@@ -17,9 +17,10 @@ import gen_shared  # noqa: E402
 from inline_policy import inline_policy  # noqa: E402
 
 
-def inline_case(lines, sites):
-    """one #[inline] fn of `lines` body lines, called `sites` times from a plain fn; True when it gets always"""
-    body = "".join("    let _ = x + %d;\n" % i for i in range(lines - 1)) + "    x\n"
+def inline_case(lines, sites, loop=False):
+    """one #[inline] fn of `lines` body lines, called `sites` times from a plain fn; True when it gets always.
+    loop=True makes one of the lines a `while` line (the fn then has a loop of its own)"""
+    body = "".join("    let _ = x + %d;\n" % i for i in range(lines - (2 if loop else 1))) + ("    while x < 0 { }\n" if loop else "") + "    x\n"
     text = "#[inline]\nfn f(x: i64) -> i64 {\n" + body + "}\nfn main() {\n" + "    f(0);\n" * sites + "}\n"
     return inline_policy(text).startswith("#[inline(always)]\n")
 
@@ -28,6 +29,10 @@ def inline_case(lines, sites):
 # budget 1500 accepts, 1501 rejects (two sites, so the added copies equal the body size)
 # zero call sites (a host entry called only from the harness): 8 lines accepts by INLINE_SMALL, 9 keeps #[inline]
 INLINE_PAIRS = [(8, 300, True), (9, 300, False), (1500, 2, True), (1501, 2, False), (8, 0, True), (9, 0, False), (9, 1, True)]
+# LI1 loop condition (INLINE_LOOP 64): (body lines, call sites, has a while line, expected always)
+# a loop fn with 3 sites: 65 lines keeps #[inline], 64 gets always; a loop-free fn at 65 (budget 65 * 2 <= 1500) and a
+# loop fn with one call site at 200 lines still get always
+INLINE_LOOP_PAIRS = [(65, 3, True, False), (64, 3, True, True), (65, 3, False, True), (200, 1, True, True)]
 
 
 def inline_fp_case(sites, triple=True):
@@ -60,6 +65,10 @@ def main():
     for lines, sites, want in INLINE_PAIRS:
         if inline_case(lines, sites) != want:
             print("inline policy: %d lines, %d sites: want %s" % (lines, sites, "always" if want else "inline"))
+            bad = True
+    for lines, sites, loop, want in INLINE_LOOP_PAIRS:
+        if inline_case(lines, sites, loop) != want:
+            print("inline policy: %d lines, %d sites, loop %s: want %s" % (lines, sites, loop, "always" if want else "inline"))
             bad = True
     for sites, triple, want in ((300, True, False), (1, True, True), (300, False, True)):
         if inline_fp_case(sites, triple) != want:

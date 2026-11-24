@@ -20,8 +20,9 @@ pub mod shim_edges {
     pub const SHIM_EDGES: &[(&str, &str)] = &[("file_byte", "file_size"), ("proc_byte", "proc_size"), ("ev_kind", "ev_cap"), ("ev_eof", "ev_cap"), ("ev_write_open", "ev_cap"), ("ev_byte", "ev_size"), ("net_byte", "net_size")];
 }
 
-/// Inline policy thresholds (#[inline(always)] for small callees or copies within the budget).
+/// Inline policy thresholds (#[inline(always)] for small callees, single sites, or copies within the budget; a multi-site fn with a loop also needs incl <= INLINE_LOOP).
 pub mod inline_policy {
     pub const INLINE_SMALL: u64 = 8;
     pub const INLINE_BUDGET: u64 = 1500;
+    pub const INLINE_LOOP: u64 = 64;
 }
