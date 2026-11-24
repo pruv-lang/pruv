@@ -24,7 +24,7 @@ measured only for a package whose table shows zero differences.
 | names | 0 (`project_name` reshaped in step 2.2b) | no |
 | args | 1 (`arg_spans`: span packet kept for codex `child_args` and the U8 check; `build_args` reshaped in step 2.8) | no |
 | tail | whole package (hand is UTF-8 `Vec<u8>`; decoder pick: FM) | no |
-| lex | 0 (cursor and return form done in step 2.7; `e?;` codegen row, not a source difference) | yes, `scan_string` M and L (step 2.7) |
+| lex | 0 (cursor and return form done in step 2.7; `e?;` emits the hand `f(..)?;` since LB-Q) | yes, `scan_string` M and L (step 2.7) |
 | bytes | 0 | no (not run in this step) |
 
 ## json (`json/json.pruv`, hand `json/hand/hand_json.rs`)
@@ -425,7 +425,7 @@ Emitted Rust (qwen `rs_rust`, both compilers alike): `build_span` is `data[lo..h
 
 Not counted, as in every `=` row of this file: `i64` for `u8`/`usize` (SPEC §6b), `(input, lo, hi)` for a sub-slice, `if` chains and `while` for `match` and `for`. The lex structure difference is 0.
 
-**Codegen difference (not a source difference).** A `f(..)?;` statement on `Result<(), E>` emits `match f(..) { Ok(()) => {} Err(__pruv_try_eN) => { return Err::<(), E>(__pruv_try_eN); } }`, where the hand `?` goes through `Try` and `From` (identity here). Both lower to the same branch on the discriminant. This is recorded, not worked around. No new gap row.
+**Codegen difference: closed.** A `f(..)?;` statement on `Result<(), E>` once emitted `match f(..) { Ok(()) => {} Err(__pruv_try_eN) => { return Err::<(), E>(__pruv_try_eN); } }`. Both Rust backends now emit the hand `f(..)?;` (and `let x: T = f(..)?;` for a value), so `parse::record` and `parse::container` read like the hand parser. No gap row.
 
 **Mutants.** The lex/parse strings in `json/run_q_mutants.py` follow the new text (`Err::<(), Fault>(..)`, `digits(input, inout pos, end)?;`, `literal[k]`, `crate::lex::Fault`). Each appears exactly once. Run result (`json/mutants.json`): 11 proof-rejected, 14 behavior-detected, no errors (was 10 / 15). The one change is `wrong_literal_position` (`position: pos - k`): it is now rejected by the proof, because every scanner's `ensures` states that an error's position is the cursor.
 

@@ -1441,6 +1441,8 @@ struct Gen<'a> {
     owned_binders: HashSet<String>,
     map_views: HashSet<String>,
     string_error_binders: HashSet<String>,
+    /// `e?` Ok binder -> `e?` text, for the statement that takes the value (try_match)
+    try_values: HashMap<String, String>,
     /// owned extended locals the current return statement may move (return_movable)
     moving: HashSet<String>,
     /// names borrowed as the scrutinee of an enclosing match_ext arm
@@ -1612,6 +1614,7 @@ impl<'a> Gen<'a> {
             owned_binders: HashSet::new(),
             map_views: HashSet::new(),
             string_error_binders: HashSet::new(),
+            try_values: HashMap::new(),
             moving: HashSet::new(),
             pinned: HashSet::new(),
             frames: Vec::new(),
@@ -3999,6 +4002,50 @@ pruv_hi <= (pruv_b.len() as i128) && \
         Ok(())
     }
 
+    /// the checker's lowering of `e?` (check::try_arms): `match e { Ok(v) => { rest } Err(__pruv_try_eN) =>
+    /// { return Err(__pruv_try_eN); } }` with the same error type, where the value is unit or the first statement
+    /// of rest takes v whole (`let x: T = v;` / `x = v;`). Not under cost metering (its return adds a check).
+    fn try_match(&self, x: &Match) -> bool {
+        if self.cost || x.arms.len() != 2 {
+            return false;
+        }
+        let (ok, fail) = (&x.arms[0], &x.arms[1]);
+        if ok.enum_name.is_some() || fail.enum_name.is_some() || ok.ctor != "Ok" || fail.ctor != "Err" {
+            return false;
+        }
+        if fail.binders.len() != 1 || !fail.binders[0].starts_with("__pruv_try_e") || fail.body.len() != 1 {
+            return false;
+        }
+        let returns_err = matches!(&fail.body[0], Stmt::Return(Return { value: Some(Expr::Ctor(c)), .. })
+            if c.name == "Err" && matches!(c.arg.as_deref(), Some(Expr::Var(v)) if v.name == fail.binders[0]));
+        if !returns_err {
+            return false;
+        }
+        let Some(binder) = ok.binders.first() else { return true };
+        let value = match ok.body.first() {
+            Some(Stmt::Let(l)) if l.borrowed || self.stack.contains(l) => return false,
+            Some(Stmt::Let(l)) => &l.value,
+            Some(Stmt::Assign(a)) => &a.value,
+            _ => return false,
+        };
+        matches!(value, Expr::Var(v) if &v.name == binder) && !self.is_ext(expr_ty(value).as_deref())
+    }
+
+    /// `e?` as the hand-written Rust `?` (`From` is the identity: try_arms requires the same error type). The Ok
+    /// arm holds the rest of the block, so it follows at the same level: `f(..)?;` for a unit Ok, else the first
+    /// statement of the rest takes `f(..)?` in place of the binder (`let x: T = f(..)?;` / `x = f(..)?;`).
+    fn try_stmt(&mut self, x: &Match, ind: usize) -> R<()> {
+        let ok = &x.arms[0];
+        let value = format!("{}?", self.e(&x.scrutinee)?);
+        match ok.binders.first() {
+            Some(binder) => {
+                self.try_values.insert(binder.clone(), value);
+            }
+            None => self.emit(ind, &format!("{value};")),
+        }
+        self.block(&ok.body, ind)
+    }
+
     fn match_ext(&mut self, x: &Match, ind: usize) -> R<()> {
         let sty = key_name(expr_ty(&x.scrutinee).as_deref().unwrap_or("")).to_string();
         // Consuming match: a match on an owned local that no arm and no later statement names again (dead_after) is
@@ -4444,6 +4491,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
             }
             Stmt::Match(x) if self.is_ext(expr_ty(&x.scrutinee).as_deref()) => {
                 self.match_ext(x, ind)?;
+            }
+            Stmt::Match(x) if self.try_match(x) => {
+                self.try_stmt(x, ind)?;
             }
             Stmt::Match(x) => {
                 let owned_result = expr_ty(&x.scrutinee).as_deref()
@@ -4982,6 +5032,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
     fn e(&mut self, e: &Expr) -> R<String> {
         match e {
             Expr::Spent(_) => Err("cost_unavailable: Stage 5 cost verification is not implemented yet".into()),
+            Expr::Var(x) if self.try_values.contains_key(&x.name) => Ok(self.try_values.remove(&x.name).unwrap_or_default()),
             Expr::Move(x) if x.fields.is_empty() && self.resizable_inouts.contains(&x.name) =>
                 Ok(format!("::std::mem::take({})", x.name)),
             Expr::Move(x) if x.fields.is_empty() => Ok(x.name.clone()),
