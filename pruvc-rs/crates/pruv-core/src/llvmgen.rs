@@ -823,6 +823,21 @@ pub fn vkind(t: &str) -> Kind {
     }
 }
 
+/// R-6g9-2: storage type of the field declaration f: a `ref` buffer field is the VIEW pair { ptr, i64 } inline
+/// (Rust `&'a [u8]`), every other field is st(f.ty)
+pub fn fst(f: &FieldDecl, c: bool) -> String {
+    if f.borrowed { VIEW.to_string() } else { st(&f.ty, c) }
+}
+
+/// R-6g9-2: the { data, len } pair of the buffer field at gp. A `ref` field is the pair itself and an owned field
+/// starts with it ({ data, len, cap }), so every reader that needs only data and len goes through here
+fn g9_pair(g: &mut FnGen, gp: &str) -> R<(String, String)> {
+    let d = g.op(format!("load ptr, ptr {gp}"))?;
+    let lp = g.op(format!("getelementptr inbounds {VIEW}, ptr {gp}, i32 0, i32 1"))?;
+    let n = g.op(format!("load i64, ptr {lp}"))?;
+    Ok((d, n))
+}
+
 /// Storage type of a value inside an aggregate (c: contract/i128 form)
 pub fn st(t: &str, c: bool) -> String {
     if native_vec_elem(t).is_some() {
@@ -1154,7 +1169,7 @@ pub fn type_defs(tt: &TypeTable) -> String {
                         if !tt.g9_boxed.is_empty() && tt.g9_boxed.contains(&fld_label(d.name(), vname, &f.name)) {
                             "ptr".to_string()
                         } else {
-                            st(&f.ty, c)
+                            fst(f, c)
                         }
                     })
                     .collect()
@@ -1471,8 +1486,9 @@ pub fn sig_text(params: &[(String, String)], f: Option<&Function>) -> String {
         .filter(|p| native_vec_elem(&p.ty).is_some())
         .map(|p| format!("%p.{}", mangle(&p.name)))
         .collect();
-    // R-6g9-1: the data pointer of a `from` source escapes through a view result
-    let escapes: Vec<_> = f.into_iter().filter(|f| view_ret(f))
+    // R-6g9-1/R-6g9-2: the data pointer of a read `from` source escapes through the borrowed result (a view, or a
+    // borrowing struct's `ref` field written through %out), so it is not nocapture
+    let escapes: Vec<_> = f.into_iter()
         .flat_map(|f| f.borrow_from.iter().flatten())
         .map(|n| format!("%p.{}.a", mangle(n)))
         .collect();
@@ -1911,6 +1927,9 @@ impl<'a> FnGen<'a> {
 
     pub fn new_slot(&mut self, name: &str, ty: &str) -> R<Slot> {
         let kind = vkind(ty);
+        if self.tt.decl(ty).is_some_and(crate::borrowed::borrowing_struct) {
+            self.views = true; // R-6g9-2: a borrowing struct local reads its source array like a `ref` local
+        }
         let base = format!("%l{}.{}", self.nslot, mangle(name));
         self.nslot += 1;
         let a = format!("{}.a", base);
@@ -2079,8 +2098,8 @@ impl<'a> FnGen<'a> {
         let fds = t_fields(tt, &ty, Some(vn))?;
         for (i, fd) in fds.iter().enumerate() {
             let ft = fd.ty.as_str();
-            if idxs.contains(&i) || !(is_arr_name(ft) || is_collection(ft) || self.is_ext(ft)) {
-                continue;
+            if idxs.contains(&i) || fd.borrowed || !(is_arr_name(ft) || is_collection(ft) || self.is_ext(ft)) {
+                continue; // R-6g9-2: a `ref` field owns nothing
             }
             let gp = g9_field_gep(self, &ty, &sl.a, Some(vn), i)?;
             if self.fb(&ty, Some(vn), &fd.name) {
@@ -2704,11 +2723,14 @@ impl<'a> FnGen<'a> {
             if native_vec_elem(&fd.ty).is_some() {
                 return self.load(&V::agg(field, &fd.ty));
             }
-            let ft = if boxed { "ptr".to_string() } else { st(&fd.ty, false) };
+            let ft = if boxed { "ptr".to_string() } else { fst(fd, false) };
             let x = self.op(format!("load {}, ptr {}", ft, field))?;
             if boxed {
                 let r = self.op(format!("load {}, ptr {}", lty(&fd.ty), x))?;
                 return Ok(V::agg_p(r, &fd.ty, x));
+            }
+            if fd.borrowed {
+                return self.unpack_view(&x, &fd.ty);
             }
             return self.unpack(&x, &fd.ty, false);
         }
@@ -2724,6 +2746,10 @@ impl<'a> FnGen<'a> {
                 return self.load(&V::agg(field, &fd.ty));
             }
         }
+        if fd.borrowed {
+            let x = self.op(format!("extractvalue {} {}, {}", st(ty, c), base.a, idx))?;
+            return self.unpack_view(&x, &fd.ty);
+        }
         self.get(base, ty, idx, &fd.ty, c)
     }
 
@@ -2735,8 +2761,8 @@ impl<'a> FnGen<'a> {
             let nd = self.op(format!("call ptr @pruv_box__{}({} {})", fd.ty, lty(&fd.ty), v.a))?;
             return self.op(format!("insertvalue {} {}, ptr {}, {}", t, acc, nd, idx));
         }
-        let x = self.pack(v, &fd.ty, c)?;
-        self.op(format!("insertvalue {} {}, {} {}, {}", t, acc, st(&fd.ty, c), x, idx))
+        let x = if fd.borrowed { self.pack_view(v)? } else { self.pack(v, &fd.ty, c)? };
+        self.op(format!("insertvalue {} {}, {} {}, {}", t, acc, fst(fd, c), x, idx))
     }
 
     fn finish_enum(&mut self, mut acc: String, ty: &str, variant: Option<&str>, c: bool) -> R<V> {
@@ -2890,6 +2916,21 @@ impl<'a> FnGen<'a> {
         Ok(v.a.clone())
     }
 
+    /// R-6g9-2: a `ref` field stores only the borrowed { data, len } pair
+    fn pack_view(&mut self, v: &V) -> R<String> {
+        let a = self.op(format!("insertvalue {VIEW} undef, ptr {}, 0", v.a))?;
+        self.op(format!("insertvalue {VIEW} {a}, i64 {}, 1", v.b))
+    }
+
+    /// R-6g9-2: a `ref` field is a view: no cap, never freed through this value
+    fn unpack_view(&mut self, x: &str, ty: &str) -> R<V> {
+        let p0 = self.op(format!("extractvalue {VIEW} {x}, 0"))?;
+        let p1 = self.op(format!("extractvalue {VIEW} {x}, 1"))?;
+        let mut v = V::with_b(Kind::Arr, p0, p1);
+        v.ty = elem_ty(ty);
+        Ok(v)
+    }
+
     pub fn unpack(&mut self, x: &str, ty: &str, c: bool) -> R<V> {
         if is_collection(ty) {
             return Ok(V { ty: Some(ty.to_string()), ..V::new(Kind::Coll, x) });
@@ -2946,13 +2987,17 @@ impl<'a> FnGen<'a> {
         let ty = e.name.as_str();
         // Look up by name like a Python dict (audit: a linear Vec search is quadratic in the field count). For the same name, the later value wins.
         let mut vals: std::collections::HashMap<&str, V> = std::collections::HashMap::new();
+        let fds = t_fields(tt, ty, None)?;
+        let refs: HashSet<&str> = fds.iter().filter(|fd| fd.borrowed).map(|fd| fd.name.as_str()).collect();
         for fi in &e.fields {
-            // Evaluate in source order
-            let v = self.evf(&fi.value, c, own)?;
+            // Evaluate in source order. R-6g9-2: ownership by type: a `ref` field borrows its value (a place, subview
+            // or `from` result), never owns or copies it
+            let by_ref = !c && refs.contains(fi.name.as_str());
+            let v = self.evf(&fi.value, c, own && !by_ref)?;
             vals.insert(fi.name.as_str(), v);
         }
         let mut acc = "zeroinitializer".to_string();
-        for (i, fd) in t_fields(tt, ty, None)?.iter().enumerate() {
+        for (i, fd) in fds.iter().enumerate() {
             let v = vals
                 .get(fd.name.as_str())
                 .cloned()
@@ -3796,7 +3841,7 @@ impl<'a> FnGen<'a> {
     }
 
     /// Every last-use take (move_src, take_src, nested_moves, ret_takable) is on: not a cost build, and R-6g9-1 no
-    /// `ref` local in the function, since a live view may read the array (local or field) a take would move, shrink,
+    /// `ref` local (nor R-6g9-2 borrowing struct local) in the function, since a live view may read the array (local or field) a take would move, shrink,
     /// regrow or free
     fn may_take(&self) -> bool {
         !self.cost && !self.views
@@ -3863,7 +3908,7 @@ impl<'a> FnGen<'a> {
                     let fd = t_field_index(self.tt, ty, &fa.field, None)
                         .and_then(|i| t_fields(self.tt, ty, None).map(|fs| fs.get(i).cloned()));
                     if let Ok(Some(fd)) = fd {
-                        if is_arr_name(&fd.ty) && !self.fb(ty, None, &fd.name) {
+                        if is_arr_name(&fd.ty) && !fd.borrowed && !self.fb(ty, None, &fd.name) {
                             out.insert(b.name.clone());
                         }
                     }
@@ -4080,9 +4125,7 @@ impl<'a> FnGen<'a> {
                 Bind::Slot(slot) if path.is_empty() => self.load(&slot)?,
                 Bind::Slot(slot) => {
                     let (ptr, ty) = self.field_ptr_ty(&slot, &path)?;
-                    let data = self.op(format!("load ptr, ptr {ptr}"))?;
-                    let len_ptr = self.op(format!("getelementptr inbounds {ARR}, ptr {ptr}, i32 0, i32 1"))?;
-                    let len = self.op(format!("load i64, ptr {len_ptr}"))?;
+                    let (data, len) = g9_pair(self, &ptr)?;
                     let mut arr = V::with_b(Kind::Arr, data, len);
                     arr.ty = elem_ty(&ty);
                     arr
@@ -6282,7 +6325,8 @@ impl<'a> FnGen<'a> {
                 let mut acc = "zeroinitializer".to_string();
                 for (i, fd) in t_fields(tt, sty, None)?.iter().enumerate() {
                     let init = inits.get(fd.name.as_str()).copied().ok_or_else(|| format!("'{}'", fd.name))?;
-                    let v = self.g9_real(init, Some(&fd.ty))?;
+                    // R-6g9-2: a `ref` field borrows the contract buffer (Rust `&x`): no charge, no copy, nothing to free
+                    let v = if fd.borrowed { self.cev(init)? } else { self.g9_real(init, Some(&fd.ty))? };
                     acc = self.putf(&acc, sty, i, &v, fd, None, false)?;
                 }
                 return Ok(V::agg(acc, sty));
@@ -6407,9 +6451,7 @@ impl<'a> FnGen<'a> {
         let p = self.cx(e)?;
         let t = need_ty(expr_ty(e))?.to_string();
         if is_arr_name(&t) {
-            let x = self.op(format!("load {}, ptr {}", ARR, p))?;
-            let p0 = self.op(format!("extractvalue {} {}, 0", ARR, x))?;
-            let p1 = self.op(format!("extractvalue {} {}, 1", ARR, x))?;
+            let (p0, p1) = g9_pair(self, &p)?;
             let mut v = V::with_b(Kind::Arr, p0, p1);
             v.ty = elem_ty(&t);
             return Ok(v);
@@ -7588,13 +7630,13 @@ fn g9_drop_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
     g.place("start");
     let vs: Vec<Var9<'_>> = g9_variants(d)
         .into_iter()
-        .filter(|(_, _, fs)| fs.iter().any(|f| is_arr_name(&f.ty) || is_collection(&f.ty) || g.is_ext(&f.ty)))
+        .filter(|(_, _, fs)| fs.iter().any(|f| !f.borrowed && (is_arr_name(&f.ty) || is_collection(&f.ty) || g.is_ext(&f.ty))))
         .collect();
     g9_each_variant(&mut g, &ty, d, "%v", &vs, &mut |g, vn, fs| {
         for (i, f) in fs.iter().enumerate() {
             let ft = f.ty.as_str();
-            if !(is_arr_name(ft) || is_collection(ft) || g.is_ext(ft)) {
-                continue;
+            if f.borrowed || !(is_arr_name(ft) || is_collection(ft) || g.is_ext(ft)) {
+                continue; // R-6g9-2: a `ref` field owns nothing
             }
             let gp = g9_field_gep(g, &ty, "%v", vn, i)?;
             if g.fb(&ty, vn, &f.name) {
@@ -7629,13 +7671,13 @@ fn g9_clone_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
     g.ins(format!("store {} {}, ptr %dst", tl, v0))?;
     let vs: Vec<Var9<'_>> = g9_variants(d)
         .into_iter()
-        .filter(|(_, _, fs)| fs.iter().any(|f| is_arr_name(&f.ty) || is_collection(&f.ty) || g.is_ext(&f.ty)))
+        .filter(|(_, _, fs)| fs.iter().any(|f| !f.borrowed && (is_arr_name(&f.ty) || is_collection(&f.ty) || g.is_ext(&f.ty))))
         .collect();
     g9_each_variant(&mut g, &ty, d, "%src", &vs, &mut |g, vn, fs| {
         for (i, f) in fs.iter().enumerate() {
             let ft = f.ty.as_str();
-            if !(is_arr_name(ft) || is_collection(ft) || g.is_ext(ft)) {
-                continue;
+            if f.borrowed || !(is_arr_name(ft) || is_collection(ft) || g.is_ext(ft)) {
+                continue; // R-6g9-2: a `ref` field is the pair, copied by the shallow copy above
             }
             let gs = g9_field_gep(g, &ty, "%src", vn, i)?;
             let gd = g9_field_gep(g, &ty, "%dst", vn, i)?;
@@ -8569,13 +8611,6 @@ pub fn gen_llvm_any_ex_g4(
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
     }
-    // R-6g9-1: views lower to { ptr, i64 }; borrowing structs wait for R-6g9-2 (B2)
-    if let Some(TypeDecl::Struct(d)) = prog.types.iter().find(|d| crate::borrowed::borrowing_struct(d)) {
-        return Err(GenError::Diag(crate::diagnostic::PruvError::new(
-            "codegen", d.line, d.col, "unsupported_type",
-            "borrowing structs need the Rust backend", "use the Rust backend",
-        )));
-    }
     if crate::typeinfo::first_g3_use(prog).is_some() || g4.is_some() {
         let plan = crate::mono::specialize_g4(prog, g4).map_err(|e| match e {
             crate::mono::MonoError::Limit(p) => GenError::Diag(p),
@@ -8715,13 +8750,6 @@ pub fn gen_llvm_with_specializations(
     use crate::codegen::GenError;
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
-    }
-    // R-6g9-1: views lower to { ptr, i64 }; borrowing structs wait for R-6g9-2 (B2)
-    if let Some(TypeDecl::Struct(d)) = prog.types.iter().find(|d| crate::borrowed::borrowing_struct(d)) {
-        return Err(GenError::Diag(crate::diagnostic::PruvError::new(
-            "codegen", d.line, d.col, "unsupported_type",
-            "borrowing structs need the Rust backend", "use the Rust backend",
-        )));
     }
     if let Some(e) = crate::bindings::owned_collection_abi_error(prog, None) {
         return Err(GenError::Diag(e));

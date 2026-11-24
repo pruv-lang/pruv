@@ -1,0 +1,20 @@
+{
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ],
+      [
+        "--no-verify",
+        "--contract-budget",
+        "1"
+      ]
+    ],
+    "stdout_lines": [
+      "3"
+    ],
+    "alloc_balance": true
+  }
+}

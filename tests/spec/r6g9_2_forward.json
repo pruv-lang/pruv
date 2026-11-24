@@ -1,0 +1,3 @@
+{"gen_contains": ["fn wrap<'a>(src: &'a [u8]) -> Doc<'a>", "fn rebase<'a>(d: &Doc<'a>, lo: i64) -> Doc<'a>"],
+ "gen_absent": ["to_vec()", ".clone()"],
+ "run": {"exit": 0, "flags_matrix": [[], ["--no-verify"]], "stdout_lines": ["652464"], "alloc_balance": true}}

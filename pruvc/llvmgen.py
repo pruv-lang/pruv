@@ -737,6 +737,20 @@ def st(t, c=False):
     return "%%pruv_%s_%s" % ("c" if c else "t", n)
 
 
+def fst(f, c=False):
+    """R-6g9-2: storage type of the field declaration f: a `ref` buffer field is the VIEW pair { ptr, i64 } inline
+    (Rust `&'a [u8]`), every other field is st(f.type)"""
+    return VIEW if f.ref else st(f.type, c)
+
+
+def g9_pair(g, gp):
+    """R-6g9-2: the { data, len } pair of the buffer field at gp.  A `ref` field is the pair itself and an owned field
+    starts with it ({ data, len, cap }), so every reader that needs only data and len goes through here"""
+    d = g.op("load ptr, ptr %s" % gp)
+    n = g.op("load i64, ptr %s" % g.op("getelementptr inbounds %s, ptr %s, i32 0, i32 1" % (VIEW, gp)))
+    return d, n
+
+
 def flattened_payload_index(tt, ty, variant, i):
     """storage index of field i of `variant` in a flattened code or contract enum"""
     # the variant -> base offset map is computed once per (type table, type name): rescanning the variants on every
@@ -902,7 +916,7 @@ def type_defs(tt):
 
             def fs_of(fields, vname):
                 # a boxed (recursive SCC) field is an opaque ptr to an independently allocated node
-                return ["ptr" if fld_label(d, vname, f.name) in boxed else st(f.type, c) for f in fields]
+                return ["ptr" if fld_label(d, vname, f.name) in boxed else fst(f, c) for f in fields]
             if isinstance(d, StructDecl):
                 fs = fs_of(d.fields, None)
             elif not c and d.name in tt.union_words:
@@ -1096,8 +1110,9 @@ def sig_text(params, f):
     take = {"%%p.%s.a" % mangle(p.name) for p in f.params if p.take and is_array(p.type)}
     take |= {"%%p.%s" % mangle(p.name) for p in f.params if p.take and (is_agg(p.type) or is_native_vec(p.type))}   # LG9: owned record storage
     reads = {"%%p.%s" % mangle(p.name) for p in f.params if is_native_vec(p.type)}
-    # R-6g9-1: the data pointer of a read from source escapes through the view result, so it is not nocapture
-    escapes = {"%%p.%s.a" % mangle(n) for n in (f.borrow_from or ())} if view_ret(f) else set()
+    # R-6g9-1/R-6g9-2: the data pointer of a read from source escapes through the borrowed result (a view, or a
+    # borrowing struct's `ref` field written through %out), so it is not nocapture
+    escapes = {"%%p.%s.a" % mangle(n) for n in (f.borrow_from or ())}
     def attrs(n):
         a = "ptr noalias nocapture" if n in mut else ("ptr nocapture readonly" if n in reads else "ptr noalias nocapture readonly")
         return a.replace(" nocapture", "") if n in escapes else a
@@ -1212,6 +1227,8 @@ class FnGen:
             s.allocas.append("%s = alloca ptr" % a)
             s.allocas.append("%s = alloca i64" % b)
             return Slot("arr", a, b, elem_ty(ty))
+        if getattr(s.tt.decls.get(ty.name), "borrowing", False):
+            s.views = True  # R-6g9-2: a borrowing struct local reads its source array like a `ref` local
         if kind == "i64":
             s.allocas.append("%s = alloca i64" % a)
             return Slot("i64", a)
@@ -1389,8 +1406,7 @@ class FnGen:
             kind, sl = s.lookup(root.name)
             if path:
                 gp, fty = s.field_ptr_ty(sl, path)
-                dp = s.op("load ptr, ptr %s" % gp)
-                ln = s.op("load i64, ptr %s" % s.op("getelementptr inbounds %s, ptr %s, i32 0, i32 1" % (ARR, gp)))
+                dp, ln = g9_pair(s, gp)
                 a = V("arr", dp, ln, elem_ty(fty))
             else:
                 a = sl if kind == "ssa" else s.load(sl)
@@ -1438,10 +1454,10 @@ class FnGen:
             p = g9_field_gep(s, ty, s.spill(base), variant, i)
             if is_native_vec(fd.type):
                 return s.load(Slot("agg", p, None, fd.type))
-            x = s.op("load %s, ptr %s" % ("ptr" if boxed else st(fd.type), p))
+            x = s.op("load %s, ptr %s" % ("ptr" if boxed else fst(fd), p))
             if boxed:
                 return V("agg", s.op("load %s, ptr %s" % (lty(fd.type), x)), None, fd.type, x)
-            return s.unpack(x, fd.type, False)
+            return s.unpack(x, fd.type, False, fd.ref)
         idx = field_index(s.tt, ty, variant, i, c)
         if boxed:
             x = s.op("extractvalue %s %s, %d" % (st(ty, c), base.a, idx))
@@ -1449,7 +1465,7 @@ class FnGen:
         if not c and base.p is not None and is_native_vec(fd.type):
             p = g9_gep(s, lty(ty), base.p, idx)
             return s.load(Slot("agg", p, None, fd.type))
-        return s.get(base, ty, idx, fd.type, c)
+        return s.get(base, ty, idx, fd.type, c, fd.ref)
 
     def putf(s, acc, ty, i, v, fd, variant, c=False):
         """insertvalue of the owned field value v; a boxed field first moves into a new node"""
@@ -1458,8 +1474,8 @@ class FnGen:
         if not c and s.fb(ty, variant, fd.name):
             nd = s.op("call ptr @pruv_box__%s(%s %s)" % (fd.type.name, lty(fd.type), v.a))
             return s.op("insertvalue %s %s, ptr %s, %d" % (T, acc, nd, idx))
-        x = s.pack(v, fd.type, c)
-        return s.op("insertvalue %s %s, %s %s, %d" % (T, acc, st(fd.type, c), x, idx))
+        x = s.pack(v, fd.type, c, fd.ref)
+        return s.op("insertvalue %s %s, %s %s, %d" % (T, acc, fst(fd, c), x, idx))
 
     def finish_enum(s, acc, ty, variant, c):
         T = st(ty, c)
@@ -1621,8 +1637,8 @@ class FnGen:
         vn, idxs = moved
         for i, fd in enumerate(s.tt.fields(sl.ty, vn)):
             ft = fd.type
-            if i in idxs or not (is_arr(ft) or s.is_ext(ft) or is_scalar_vec(ft)):
-                continue
+            if i in idxs or fd.ref or not (is_arr(ft) or s.is_ext(ft) or is_scalar_vec(ft)):
+                continue    # R-6g9-2: a `ref` field owns nothing
             gp = g9_field_gep(s, sl.ty, sl.a, vn, i)
             if s.fb(sl.ty, vn, fd.name):
                 s.ins("call void @pruv_dropnode__%s(ptr %s)" % (ft.name, s.op("load ptr, ptr %s" % gp)))
@@ -1637,7 +1653,7 @@ class FnGen:
 
     def may_take(s):
         """Every last-use take (move_src, take_src, nested_moves, ret_takable) is on: not a cost build, and R-6g9-1 no
-        `ref` local in the function, since a live view may read the array (local or field) a take would move, shrink,
+        `ref` local (nor R-6g9-2 borrowing struct local) in the function, since a live view may read the array (local or field) a take would move, shrink,
         regrow or free"""
         return not s.cost and not s.views
 
@@ -1926,8 +1942,11 @@ class FnGen:
                 s.free_val(v)
 
     # ---------- user aggregates (G1) ----------
-    def pack(s, v, ty, c):
-        """SSA value of storage type st(ty, c) for the value v"""
+    def pack(s, v, ty, c, ref=False):
+        """SSA value of storage type st(ty, c) (VIEW for a `ref` field) for the value v"""
+        if ref:     # R-6g9-2: a `ref` field stores only the borrowed pair
+            a = s.op("insertvalue %s undef, ptr %s, 0" % (VIEW, v.a))
+            return s.op("insertvalue %s %s, i64 %s, 1" % (VIEW, a, v.b))
         if ty.name in ("option", "result") and not gopt(ty):
             ot, pt = (COPT, "i128") if c else (OPT, "i64")
             a = s.op("insertvalue %s undef, i1 %s, 0" % (ot, v.a))
@@ -1939,8 +1958,11 @@ class FnGen:
     def store_field(s, ptr, ty, v):
         s.ins("store %s %s, ptr %s" % (st(ty), s.pack(v, ty, False), ptr))
 
-    def unpack(s, x, ty, c):
+    def unpack(s, x, ty, c, ref=False):
         n = ty.name
+        if ref:     # R-6g9-2: a `ref` field is a view: no cap, never freed through this value
+            return V("arr", s.op("extractvalue %s %s, 0" % (VIEW, x)), s.op("extractvalue %s %s, 1" % (VIEW, x)),
+                     elem_ty(ty))
         if is_arr(ty):  # G9 A3
             return V("arr", s.op("extractvalue %s %s, 0" % (ARR, x)), s.op("extractvalue %s %s, 1" % (ARR, x)),
                      elem_ty(ty), c=s.op("extractvalue %s %s, 2" % (ARR, x)))
@@ -1962,18 +1984,21 @@ class FnGen:
         x = s.pack(v, fty, c)
         return s.op("insertvalue %s %s, %s %s, %d" % (st(ty, c), base, st(fty, c), x, idx))
 
-    def get(s, base, ty, idx, fty, c):
+    def get(s, base, ty, idx, fty, c, ref=False):
         x = s.op("extractvalue %s %s, %d" % (st(ty, c), base.a, idx))
-        return s.unpack(x, fty, c)
+        return s.unpack(x, fty, c, ref)
 
     def tag_of(s, v, c):
         return s.op("extractvalue %s %s, 0" % (st(v.ty, c), v.a))
 
     def mk_struct(s, e, evf, c):
         ty = Type(e.name)
+        refs = {fd.name for fd in s.tt.fields(ty) if fd.ref}
         vals = {}
         for fi in e.fields:                 # source order evaluation
-            vals[fi.name] = evf(fi.value)
+            # R-6g9-2: ownership by type: a `ref` field borrows its value (a place, subview or `from` result), never
+            # owns or copies it
+            vals[fi.name] = s.ev(fi.value, False) if fi.name in refs and not c else evf(fi.value)
         acc = "zeroinitializer"
         for i, fd in enumerate(s.tt.fields(ty)):
             acc = s.putf(acc, ty, i, vals[fd.name], fd, None, c)    # G9: a boxed field moves into a new node
@@ -2327,7 +2352,7 @@ class FnGen:
             if (kind == "slot" and v.k == "agg" and s.is_ext(v.ty) and s.owned_slot(v)
                     and isinstance(s.tt.decl(v.ty), StructDecl)):
                 fd = s.tt.fields(v.ty)[s.tt.field_index(v.ty, x.field)]
-                if is_arr(fd.type) and not s.fb(v.ty, None, fd.name):
+                if is_arr(fd.type) and not fd.ref and not s.fb(v.ty, None, fd.name):
                     return {x.base.name}
             return set()
         if not isinstance(x, Var) or x.name == st.name or not s.dead_after(x.name):
@@ -4220,7 +4245,9 @@ class FnGen:
             inits = {f.name: f.value for f in e.fields}
             acc = "zeroinitializer"
             for i, fd in enumerate(s.tt.fields(sty)):
-                acc = s.putf(acc, sty, i, s.g9_real(inits[fd.name], fd.type), fd, None, False)
+                # R-6g9-2: a `ref` field borrows the contract buffer (Rust `&x`): no charge, no copy, nothing to free
+                v = s.cev(inits[fd.name]) if fd.ref else s.g9_real(inits[fd.name], fd.type)
+                acc = s.putf(acc, sty, i, v, fd, None, False)
             return V("agg", acc, None, sty)
         if isinstance(e, EnumCtor):
             ety = Type(e.enum_name)
@@ -4298,9 +4325,8 @@ class FnGen:
         p = s.cx(e)
         t = e.ty
         if is_arr(t):
-            x = s.op("load %s, ptr %s" % (ARR, p))
-            return V("arr", s.op("extractvalue %s %s, 0" % (ARR, x)), s.op("extractvalue %s %s, 1" % (ARR, x)),
-                     elem_ty(t))
+            d, n = g9_pair(s, p)
+            return V("arr", d, n, elem_ty(t))
         if s.is_ext(t):
             return V("ref", p, None, t)
         if is_scalar_vec(t):
@@ -5056,8 +5082,8 @@ def g9_drop_text(m, tt, d):
     def emit(vn, fs):
         for i, f in enumerate(fs):
             ft = f.type
-            if not (is_arr(ft) or g.is_ext(ft) or is_scalar_vec(ft)):
-                continue
+            if f.ref or not (is_arr(ft) or g.is_ext(ft) or is_scalar_vec(ft)):
+                continue    # R-6g9-2: a `ref` field owns nothing
             gp = g9_field_gep(g, ty, "%v", vn, i)
             if g.fb(ty, vn, f.name):       # a boxed child: its contents first, then its node
                 c = g.op("load ptr, ptr %s" % gp)
@@ -5067,7 +5093,8 @@ def g9_drop_text(m, tt, d):
                 g.free_val(g.unpack(x, ft, False))      # P3: freed with its cap
             else:                          # an inline extended child (not a node)
                 g.drop_owned_field(ft, gp)
-    vs = [(vn, t, fs) for vn, t, fs in g9_variants(d) if any(is_arr(f.type) or g.is_ext(f.type) or is_scalar_vec(f.type) for f in fs)]
+    vs = [(vn, t, fs) for vn, t, fs in g9_variants(d)
+          if any(not f.ref and (is_arr(f.type) or g.is_ext(f.type) or is_scalar_vec(f.type)) for f in fs)]
     g9_each_variant(g, ty, d, "%v", vs, emit)
     g.term("ret void")
     return g.render("define internal void @pruv_drop__%s(ptr %%v)" % d.name)
@@ -5084,8 +5111,8 @@ def g9_clone_text(m, tt, d):
     def emit(vn, fs):
         for i, f in enumerate(fs):
             ft = f.type
-            if not (is_arr(ft) or g.is_ext(ft) or is_scalar_vec(ft)):
-                continue
+            if f.ref or not (is_arr(ft) or g.is_ext(ft) or is_scalar_vec(ft)):
+                continue    # R-6g9-2: a `ref` field is the pair, copied by the shallow copy above
             gs = g9_field_gep(g, ty, "%src", vn, i)
             gd = g9_field_gep(g, ty, "%dst", vn, i)
             if g.fb(ty, vn, f.name):
@@ -5118,7 +5145,8 @@ def g9_clone_text(m, tt, d):
                 g.place(end)
             else:
                 g.ins("call void @pruv_clone__%s(ptr %s, ptr %s)" % (ft.name, gs, gd))
-    vs = [(vn, t, fs) for vn, t, fs in g9_variants(d) if any(is_arr(f.type) or g.is_ext(f.type) or is_scalar_vec(f.type) for f in fs)]
+    vs = [(vn, t, fs) for vn, t, fs in g9_variants(d)
+          if any(not f.ref and (is_arr(f.type) or g.is_ext(f.type) or is_scalar_vec(f.type)) for f in fs)]
     g9_each_variant(g, ty, d, "%src", vs, emit)
     g.term("ret void")
     return g.render("define internal void @pruv_clone__%s(ptr %%src, ptr %%dst)" % d.name)
@@ -6994,11 +7022,6 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     from typeinfo import dependencies, g2_unimplemented_error, first_g3_use, type_name
     if foreign_checks not in ("requires", "all", "off"):
         raise ValueError("foreign_checks must be requires, all or off")
-    for site in prog.types:       # R-6g9-1: views lower to { ptr, i64 }; borrowing structs wait for R-6g9-2 (B2)
-        if getattr(site, "borrowing", False):
-            raise PruvError("codegen", site.line, site.col, "unsupported_type",
-                            "borrowing structs need the Rust backend",
-                            file=getattr(site, "file", None))
     from check import opaque_inline
     opaque_inline(prog)     # P13o: contract applications of opaque functions become their bodies
     for f in prog.functions:

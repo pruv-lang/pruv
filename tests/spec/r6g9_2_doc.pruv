@@ -1,0 +1,25 @@
+// spec: R-6g9-2 accept
+// On LLVM a borrowing struct is `{ { ptr, i64 }, { ptr, i64, i64 }, i64 }`: the `ref` field is the view pair,
+// the owned tape is a buffer, and only the tape is freed (Rust `Doc<'a> { src: &'a [u8], tape: Vec<i64>, .. }`).
+// It is built by a `from` call through `%out`, read through a pointer parameter, and lends its view.
+struct Doc { src: ref [u8], tape: [i64], n: i64 }
+fn parse(src: [u8]) -> Doc from(src) ! alloc
+  requires len(src) <= 1000
+  ensures len(result.src) == len(src) && result.n == len(src) && len(result.tape) == len(src)
+{
+  let t: [i64] = alloc(len(src), 2);
+  return Doc { src: src, tape: move t, n: len(src) };
+}
+fn first(d: Doc) -> i64 requires len(d.src) >= 1 { return d.src[0]; }
+fn span(d: Doc, lo: i64, hi: i64) -> ref [u8] from(d)
+  requires 0 <= lo && lo <= hi && hi <= len(d.src)
+  ensures len(result) == hi - lo
+{
+  return subview(d.src, lo, hi);
+}
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(5, 7);
+  let d: Doc = parse(x);
+  let s: ref [u8] = span(d, 1, 4);
+  return first(d) * 1000 + len(s) * 100 + s[0] * 10 + d.n + len(d.tape) + len(d.src);
+}

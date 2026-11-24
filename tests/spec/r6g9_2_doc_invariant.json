@@ -1,0 +1,2 @@
+{"gen_contains": ["struct Doc<'a>"],
+ "run": {"exit": 0, "flags_matrix": [[], ["--no-verify"]], "stdout_lines": ["225"], "alloc_balance": true}}

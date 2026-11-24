@@ -2717,7 +2717,8 @@ impl<'a> Gen<'a> {
                 let mut parts: Vec<String> = Vec::new();
                 for f in &fs {
                     let v = init_value(&vals, &f.name)?;
-                    let fv = self.g9_field_real(v, &f.ty, &format!("{}.{}", x.name, f.name))?;
+                    // R-6g9-2: a `ref` field borrows the contract buffer (Rust `&x`): no charge, no copy
+                    let fv = if f.borrowed { self.carr(v)? } else { self.g9_field_real(v, &f.ty, &format!("{}.{}", x.name, f.name))? };
                     parts.push(format!("{}: {}", f.name, fv));
                 }
                 return Ok(format!("{} {{ {} }}", x.name, parts.join(", ")));
