@@ -222,18 +222,11 @@ pub fn engine_line(text: str, task_origin: bool) -> bool ! alloc
 {
   let b: Span = trim_span(text);
   let m: i64 = b.hi - b.lo;
-  let a: str = "[Request interrupted by user]";
-  if m == len(a) && eq_at(text, b.lo, a) { return true; }
-  let u: str = "[Request interrupted by user for tool use]";
-  if m == len(u) && eq_at(text, b.lo, u) { return true; }
-  if task_origin {
-    let open: str = "<task-notification>";
-    let close: str = "</task-notification>";
-    if m >= len(open) + len(close) {
-      if eq_at(text, b.lo, open) {
-        if eq_at(text, b.hi - len(close), close) { return true; }
-      }
-    }
+  // Literals go straight to eq_at as &'static str (a `let x: str = "..."` local would build a String).
+  if m == 29 && eq_at(text, b.lo, "[Request interrupted by user]") { return true; }
+  if m == 42 && eq_at(text, b.lo, "[Request interrupted by user for tool use]") { return true; }
+  if task_origin && m >= 39 {
+    if eq_at(text, b.lo, "<task-notification>") && eq_at(text, b.hi - 20, "</task-notification>") { return true; }
   }
   return false;
 }

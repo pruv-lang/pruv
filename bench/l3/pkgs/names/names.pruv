@@ -41,6 +41,7 @@ pub fn project_name(data: [u8]) -> [u8] ! alloc
   return result_bytes;
 }
 
+// Rust shape: s.bytes().skip(1).all(|x| alnum(x) || x == b'_' || x == b'-') after the length and first-byte checks.
 pub fn valid_thread(s: str) -> bool
   requires len(s) <= 100000000000
 {
@@ -48,14 +49,13 @@ pub fn valid_thread(s: str) -> bool
   if n < 1 || n > 128 { return false; }
   if !alnum(s[0]) { return false; }
   let mut i: i64 = 1;
-  let mut ok: bool = true;
   while i < n
     invariant 1 <= i && i <= n
     decreases n - i
   {
     let x: i64 = s[i];
-    if !(alnum(x) || x == 95 || x == 45) { ok = false; }
+    if !(alnum(x) || x == 95 || x == 45) { return false; }
     i = i + 1;
   }
-  return ok;
+  return true;
 }
