@@ -1179,6 +1179,7 @@ Gaps found in R bundles, worked around and batched into one language bundle when
 | G-DB47-3 | Item 2 of the brief (G-DB45-3: ord/dense time on py/rust, py/llvm, rs/llvm) was not done for time; only `pruv == hand` is checked there. | open DB51: open (not started; G-DB51-3) |
 | G-B4-Q1 | `b[0] = m[0]` where this is `m`'s last use is rejected with borrow_conflict, but codegen reads `m[0]` into a temp first (`pruvc/codegen.py` ~3257), so NLL would accept it. Found in the B4 review. | Write the read into a local first. Open. |
 | G-B4-Q2 | borrow_conflict column differs: Python reports the statement column, Rust the access-expression column (`r6g_11_read_exclusive.pruv:13` col 3 vs 20; `r6g9_4_move_in_own_init` col 5 vs 41). Tests compare lines only. | Pick one column rule and align both compilers. Open. |
+| G-B5-R10 | LLVM place bindings over a whole array place work only for an `inout` array parameter; other whole-array places (locals, fields) still report "needs the Rust backend" (B5 review R10, partly fixed). | Lower whole-array place bindings on LLVM like the `inout` parameter path. Open. |
 
 Queued with the debt list (not product perf):
 
