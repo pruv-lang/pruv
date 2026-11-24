@@ -99,7 +99,8 @@ for data, want in [(b'01', error(13, 1)), (b'-01', error(13, 2)),
 
 for data in [b'""', b'"A"', b'"\\uD800"', b'"\\uDC00"', b'"\\uD800\\uDC00"',
              b'"\\u0000"', b'"\\uabcd"', b'"\x7f"', '"\u2028"'.encode(),
-             '"\u2029"'.encode(), '"😀"'.encode(), b'"\\u12345"']:
+             '"\u2029"'.encode(), '"😀"'.encode(), b'"\\u12345"',
+             '"A\u00a2\u20ac😀Z"'.encode(), '"\ud7ff\ue000\U0010ffff"'.encode()]:
     case('string valid ' + str(data), 4, data, len(data))
 for escape in [b'\\"', b'\\\\', b'\\/', b'\\b', b'\\f', b'\\n', b'\\r', b'\\t']:
     data = b'"' + escape + b'"'
@@ -110,8 +111,17 @@ for data, want in [(b'"\\x"', error(14, 2)), (b'"\\u12', error(5, 5)),
                    (b'"\x00"', error(16, 1)), (b'"A', error(17, 2)),
                    (b'"', error(17, 1)), (b'"\\', error(5, 2)),
                    (b'"\\u', error(5, 3)), (b'"\\u1', error(5, 4)),
-                   (b'"\\u123', error(5, 6)), (b'"A"tail', 3)]:
+                   (b'"\\u123', error(5, 6)), (b'"A"tail', 3),
+                   # Non-ASCII bytes are checked one scalar at a time (error 4 at its first byte).
+                   (b'"\xff"', error(4, 1)), (b'"\x80"', error(4, 1)),
+                   (b'"\xc0\x80"', error(4, 1)), (b'"A\xed\xa0\x80"', error(4, 2)),
+                   (b'"\xc2', error(4, 1)), (b'"\xe2\x82', error(4, 1)),
+                   (b'"\xc2"', error(4, 1)), (b'"\xe2\x82"', error(4, 1)),
+                   (b'"\xc2\xa2\xff"', error(4, 3)), (b'"\xf0\x9f\x98\x80', error(17, 5)),
+                   (b'"\\\xff"', error(14, 2))]:
     case('string edge ' + str(data), 4, data, want)
+# `end` inside a scalar whose bytes go on in the buffer: the check stops at `end`.
+FIXTURES.append(('string scalar cut by end', 4, b'"\xc2\xa2"', 0, 2, error(4, 1)))
 
 
 

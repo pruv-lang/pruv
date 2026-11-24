@@ -24,7 +24,7 @@ measured only for a package whose table shows zero differences.
 | names | 0 (`project_name` reshaped in step 2.2b) | no |
 | args | 1 (`build_args`: SR) | no |
 | tail | whole package (hand is UTF-8 `Vec<u8>`; decoder pick: FM) | no |
-| lex | 1 (`scan_string` block skip, kept by brief) | no |
+| lex | 1 (cursor and return form of the `scan_*` API: RU, plus a package API change; loop of `scan_string` = since step 2.6) | loop only (step 2.6), not the gate measurement |
 | bytes | 0 | no (not run in this step) |
 
 ## json (`json/json.pruv`, hand `json/hand/hand_json.rs`)
@@ -84,18 +84,19 @@ rewrite to the hand shape is open; its decoder pick needs `let d = if s == 1 { &
 which Pruv cannot express (gap **FM**). A first attempt that grouped the state into `Tail` / `Decoder` structs but kept
 UTF-16 units and copied the chosen decoder in and out was withdrawn as a non-hand shape.
 
-## lex (`lex/lex.pruv`, hand: `json/hand/hand_json.rs` scanner) — keep
+## lex (`lex/lex.pruv`, hand: `json/hand/hand_json.rs` scanner) — `scan_string` loop reshaped in step 2.6
 
 | Pruv | Hand Rust | Types | Ownership | Loops | Allocations | Difference and reason |
 |---|---|---|---|---|---|---|
-| `struct Scan { position, kind }` | `Result<usize, (usize,i64)>` | `i64` pair | = | — | none | Named struct; same layout. |
+| `struct Scan { position, kind }` | `ParseResult<()>` = `Result<(), (usize, i64)>`, cursor in `self.pos` | `i64` pair | = | — | none | **Differs**: hand moves `&mut self.pos` and returns `Result<(), E>`; Pruv takes the cursor by value and returns the new position in `Scan`. `Result<(), E>` is **RU**; an `inout pos` cursor (OS closed) changes the API of every `scan_*` and their callers (`parse`, `claude/entry`, `json/a1_root`), not done in step 2.6. |
 | `validate_utf8(input, start, end) -> i64` | `std::str::from_utf8(&input[a..b])` | `[u8]` | borrow | 16-byte ASCII blocks, then per char | none | Same algorithm as std (ASCII fast path, then sequence check); returns the error offset like `valid_up_to`. = |
 | `skip_whitespace` | `while matches!(b, b' '\|b'\t'\|b'\n'\|b'\r')` | `[u8]` | borrow | one pass | none | = |
-| `scan_literal` | `input[p..].starts_with(b"true")` etc. | `[u8]` | borrow | ≤5 steps | none | Blames the first mismatching byte (A0 error rule), = otherwise. |
-| `digits`, `scan_number` | hand number scanner | `[u8]` | borrow | one pass | none | = |
-| `scan_string` | `hand_json.rs:113` `string()`: `while let Some(byte) = self.peek()` per byte | `[u8]` | borrow | Pruv: 16-byte plain-byte blocks, then per byte; hand: per byte | none | **Differs** (loop shape, not a gap): Pruv has an extra block skip. Kept because lex is a keep package in this step; not a proof-only difference. |
+| `scan_literal` | `hand_json.rs:66` `literal()`: `required()` per byte, error 12 at the first mismatch | `[u8]` | borrow | ≤5 steps | none | = loop; cursor and return form as `Scan`. |
+| `digits`, `scan_number` | `hand_json.rs:75` `digits()`, `:85` `number()` | `[u8]` | borrow | one pass | none | Hand `digits` requires its first digit itself; Pruv `digits` scans the rest after the caller checked the first one. Cursor and return form as `Scan`. |
+| `scalar_width(byte)` | `hand_json.rs:235` `utf8_width(byte: u8) -> usize` | `i64` → `i64` (SPEC §6b: no scalar `u8`/`usize`) | — | — | none | Same table (194-223/224-239/240-244/else 1). Named apart from `parse::utf8_width` only to keep the Python verifier stable (step 2.6). |
+| `scan_string` | `hand_json.rs:113` `string()`: `while let Some(byte) = self.peek()` per byte | `[u8]` | borrow | per byte; a byte ≥ 128 checks one scalar `[i, i + width)` with `from_utf8` and jumps over it | none | Loop = since step 2.6 (the 16-byte block skip is gone). The scalar check passes `(input, i, i + width)` where hand passes `&input[i..i + width]`. Cursor and return form as `Scan`. |
 
-No source change (keep package). One loop difference left (`scan_string`).
+Step 2.6 rewrote the `scan_string` loop to the hand shape. The cursor and return form (`Scan` row) is left for the whole package.
 
 ## bytes (`bytes/bytes.pruv`) — keep, one fix
 
@@ -315,3 +316,37 @@ LB6 (SPEC R-6g5-1..5) closed SB, IF, MC, OS and SX. This step rewrites the rows 
 `bench/l3/lib/access.pruv` was removed in this step. Every root that has `mod access;` (claude, codex, qwen, mcp, grok, opencode, json, `pkgs/time`) takes it from `pkgs/access` through its `pruv.json` dependency, and no `--lib bench/l3/lib` user (budget, req, entry) refers to `crate::access`. The mutant text in `json/run_q_mutants.py` for P3 moved to the one-`arr_push` form.
 
 With P3 and P6 together (either one alone was fine), the Python verifier timed out on `claude/time.pruv` `canonical_copy` for the claude a2 and a4 roots. That function does not use `parse`, so the cause is solver instability from the changed declarations, not the new code. The Rust compiler proved it unchanged. The fix adds one loop invariant to `canonical_copy` that states the digit property for `out[0..j]` directly. Its contracts are unchanged.
+
+## Step 2.6: lex string scanner in the hand shape
+
+**Split.** `lex::scan_string` is the hand `Parser::string` (`json/hand/hand_json.rs:113-153`). It is one per-byte loop. `"` ends the string. A byte below 32 is error 16. A byte of 128 or more checks one scalar: `scalar_width` (hand `utf8_width`, `:235`) gives the width, and `validate_utf8` (std `from_utf8`) checks `[i, i + width)`. A short or bad scalar is error 4 at its first byte. `\` reads one escape (`\u` with four hex digits). `validate_utf8` stays as the separate std `from_utf8` counterpart. The hand never validates the whole input first, so there is no proof to take the 16-byte plain-byte skip away. The skip was an extra loop, so it was removed. The hand baseline is unchanged because it already had this shape. `parse::string_token` has the same shape, so lex and parse now scan strings the same way.
+
+| Pruv | Hand Rust | Types | Ownership | Loops | Allocations | Difference |
+|---|---|---|---|---|---|---|
+| `scan_string` | `Parser::string` | `[u8]`, `i64` positions / `&[u8]`, `usize` | borrow | one per-byte loop; scalar jump on ≥ 128 | none | Loop, branch order, error kinds and positions =. Cursor by value and `Scan` return vs `&mut self.pos` and `Result<(), E>` (RU). Scalar check gets `(input, i, e)`, hand a sub-slice `&input[i..e]` |
+| `scalar_width` | `utf8_width` | `i64` / `u8 → usize` | — | — | none | Same table; `i64` for `u8`/`usize` (SPEC §6b); name differs |
+| `validate_utf8` | `std::str::from_utf8` | `[u8]` | borrow | ASCII blocks, then per sequence | none | = (unchanged) |
+
+The loop difference is gone. The structure difference is not zero: the cursor and return form stays. The `Result<(), E>` half is the open gap **RU** (RUST_SHAPE_RESET §4). The `inout pos` half is expressible since OS closed. It is a change to the `scan_*` API as a whole and to callers outside this step's files (`parse`, `claude/entry`), so it is listed here, not worked around. Integer types (`i64` for `u8`/`usize`, SPEC §6b) and `(array, lo, hi)` arguments for a sub-slice are the convention of every `=` row in this file and are not counted. No new gap row. The helper is named `scalar_width`, not `utf8_width`, for one reason. With a second `utf8_width` (next to `parse`'s private one, same body), the Python verifier timed out on `claude/time.pruv` `iso_of` → `canonical_copy` in the claude a2/a4 roots, every time, with either visibility. This is the solver instability noted in step 2.4. The two other names tried (`lex_width_probe`, `scalar_width`) pass.
+
+**Fixtures.** A1 has 13 new cases (26 fixtures with their offset-range copies) plus one fixed-range fixture, 351 in all: valid strings with 2-, 3- and 4-byte scalars, and error-4 positions for a lone continuation byte, `\xff`, an overlong lead, a surrogate encoding, scalars cut by the end or by `"`, a bad byte after a good scalar, a string that ends after a full 4-byte scalar (error 17), and `\\` followed by `\xff` (error 14 at the `ff`: the escape rule comes first). One more fixture puts `end` inside a scalar whose bytes go on in the buffer (`22 c2 a2 22`, `end` 2: error 4 at 1), so a check that read past `end` would fail it.
+
+**Consumers** (all four compiler/backend pairs, rc 0):
+
+| Runner | Fixtures per pair |
+|---|---|
+| json A0 / A1 / A2 / A3 / A4 / A5 | 37 / 351 / 114 / 454 / 6344 / 83 |
+| claude A0 / A1 / A2 / A3 / A4 | 272 / 2884 / 2443 / 134 / 270 |
+
+`bench/l3/lib/lex.pruv` is untouched, so its `--lib` users were not run. The lex mutant strings in `json/run_q_mutants.py` still appear exactly once each.
+
+**Measurement (loop only).** The structure difference is not zero, so this is not the gate measurement of RUST_SHAPE_RESET; it compares the reshaped loop and is to be repeated when the cursor form is done. The harness lives outside the repo. It runs hand `Parser::string`, copied verbatim, against Pruv `string` (a1 root, i.e. `lex::scan_string` behind its `requires` checks) over every string in the buffer. Runs alternate hand / Pruv-rust / Pruv-LLVM, 5 rounds each. Results are ns per byte, median and range:
+
+| Size | Profile | Hand | Pruv (rust) | Pruv (LLVM) | Max RSS |
+|---|---|---|---|---|---|
+| M 1 MiB | mixed (escapes, Latin-1, Hangul, emoji, CJK) | 0.974 (0.77-1.59) | 0.790 (0.73-0.93) | 0.859 (0.80-1.75) | 2.5 MiB all three |
+| M 1 MiB | long ASCII | 0.690 (0.69-0.85) | 0.666 (0.65-0.77) | 0.660 (0.66-0.77) | 2.5 MiB all three |
+| L 15 MiB | mixed | 0.850 (0.74-0.90) | 0.762 (0.73-0.85) | 0.828 (0.81-0.94) | 16.5 MiB all three |
+| L 15 MiB | long ASCII | 0.837 (0.73-0.85) | 0.727 (0.71-0.74) | 0.747 (0.66-0.90) | 16.5 MiB all three |
+
+L is 15 MiB because the A1 root requires `end <= 16777216`, and the buffer runs slightly past its target size. The Pruv median is at or under the hand median in every cell, and the ranges overlap. Five runs do not show a difference either way. Max RSS is the same for all three, and neither scanner allocates. A first 1 MiB ASCII smoke run read 2.65 vs 0.78 ns/byte. It did not repeat in three back-to-back pairs (0.87/0.95, 1.12/1.04, 0.80/0.91) or in the alternated runs above. Its cause is not known.
