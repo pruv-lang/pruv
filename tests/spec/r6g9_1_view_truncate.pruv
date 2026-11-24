@@ -1,0 +1,21 @@
+// spec: R-6g9-1 accept
+fn head(s: [u8]) -> ref [u8] from(s)
+  requires len(s) >= 2
+  ensures len(result) == 1
+{
+  return subview(s, 0, 1);
+}
+// truncate of an array a live view reads, at the array's last use, stays a copy: no in-place shrink frees the
+// block under the view (a same-size heap alloc after it would reuse a freed block and overwrite what the view reads).
+fn nines() -> [u8] ! alloc
+  ensures len(result) == 2
+{
+  return alloc(2, 9);
+}
+pub fn checksum() -> i64 ! alloc {
+  let s: [u8] = alloc(2, 7);
+  let v: ref [u8] = head(s);
+  let c: [u8] = truncate(s, 0);
+  let w: [u8] = nines();
+  return v[0] + len(c) + w[1] - 9;
+}

@@ -1,0 +1,17 @@
+// spec: R-6g9-1 accept
+fn head(s: [u8]) -> ref [u8] from(s)
+  requires len(s) >= 2
+  ensures len(result) == 1
+{
+  return subview(s, 0, 1);
+}
+// A resize nested in a call argument does not regrow an array a live view reads in place.
+fn count(s: [u8]) -> i64 {
+  return len(s);
+}
+pub fn checksum() -> i64 ! alloc {
+  let s: [u8] = alloc(2, 7);
+  let v: ref [u8] = head(s);
+  let n: i64 = count(resize(s, 3, 0));
+  return v[0] + n;
+}

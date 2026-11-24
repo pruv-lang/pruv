@@ -1,0 +1,22 @@
+// spec: R-6g9-1 accept
+fn head(s: [u8]) -> ref [u8] from(s)
+  requires len(s) >= 2
+  ensures len(result) == 1
+{
+  return subview(s, 0, 1);
+}
+// truncate to 0 then resize back up of an array a live view reads: both stay copies, the view keeps reading the
+// original block.
+fn nines() -> [u8] ! alloc
+  ensures len(result) == 2
+{
+  return alloc(2, 9);
+}
+pub fn checksum() -> i64 ! alloc {
+  let s: [u8] = alloc(2, 7);
+  let v: ref [u8] = head(s);
+  let e: [u8] = truncate(s, 0);
+  let g: [u8] = resize(e, 3, 1);
+  let w: [u8] = nines();
+  return v[0] * 100 + len(g) + w[1] - 9;
+}

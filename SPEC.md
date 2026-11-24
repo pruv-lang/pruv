@@ -1743,11 +1743,15 @@ borrowed value is live.
   resizable `inout` buffer (one a `from` result borrows) is the slot's data and length read after the callee's last
   write; that buffer is scratch storage, so `buf = resize(buf, n, v)` may also shrink it (`0 <= n`). A
   fixed-length `inout` array is viewed through its data pointer and length directly. An enum payload owns its
-  value, so a view there is `type/array_alias`. A copy of an array a live view reads
-  stays a copy, and no view is passed to the host ABI. A string literal in a view position is the read-only
+  value, so a view there is `type/array_alias`. In a function with a `ref` local no builtin or nested call takes
+  an array (local or struct field) at its last use: `copy`, `truncate`, `str_from_utf8` and `resize` of an array a
+  live view reads stay copies, and no view is passed to the host ABI. A string literal in a view position is the read-only
   global. A borrowing struct is still `codegen/unsupported_type` on LLVM until bundle B2.
   Tests: [view result](tests/spec/r6g9_1_view_result.pruv), [inout source](tests/spec/r6g9_1_inout_source.pruv),
-  [copy beside a view](tests/spec/r6g9_1_view_copy.pruv),
+  [copy beside a view](tests/spec/r6g9_1_view_copy.pruv), [truncate](tests/spec/r6g9_1_view_truncate.pruv),
+  [str_from_utf8 in a branch](tests/spec/r6g9_1_view_utf8_branch.pruv),
+  [nested resize](tests/spec/r6g9_1_view_nested_resize.pruv), [field copy](tests/spec/r6g9_1_view_field_copy.pruv),
+  [shrink then regrow](tests/spec/r6g9_1_view_shrink_regrow.pruv),
   [literal](tests/spec/r6g9_1_literal.pruv), [subview local](tests/spec/r6g_11_local_view.pruv),
   [two sources](tests/spec/r6g_11_two_sources.pruv), [copy then reuse](tests/spec/r6g_11_copy_owned.pruv);
   rejects [borrowing struct](tests/spec/r6g9_1_struct_llvm.pruv), [enum payload](tests/spec/r6g9_1_enum_payload.pruv).

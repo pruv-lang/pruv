@@ -2121,7 +2121,7 @@ impl<'a> FnGen<'a> {
     /// buffer and the return's cleanup skips the slot
     fn ret_takable(&self, e: &Expr) -> HashSet<String> {
         let mut out = HashSet::new();
-        if self.cost {
+        if !self.may_take() {
             return out;
         }
         fn walk(x: &Expr, counts: &mut Vec<(String, usize)>) {
@@ -2171,7 +2171,7 @@ impl<'a> FnGen<'a> {
     /// owned local String x (dead_after), takes x's buffer; returns {x}, else an empty set
     fn take_src(&self, name: &str, e: &Expr) -> HashSet<String> {
         let mut out = HashSet::new();
-        if self.cost {
+        if !self.may_take() {
             return out;
         }
         let Expr::Call(c) = e else { return out };
@@ -3741,7 +3741,7 @@ impl<'a> FnGen<'a> {
     /// counted across all of them
     fn nested_moves_all(&self, es: &[&Expr], target: Option<&str>, ret: bool) -> HashSet<String> {
         let mut out = HashSet::new();
-        if self.cost || self.views {   // R-6g9-1: a live `ref` local may view the taken array
+        if !self.may_take() {
             return out;
         }
         fn walk<'a>(x: &'a Expr, counts: &mut HashMap<String, usize>, calls: &mut Vec<&'a Call>) {
@@ -3789,12 +3789,19 @@ impl<'a> FnGen<'a> {
         out
     }
 
+    /// Every last-use take (move_src, take_src, nested_moves, ret_takable) is on: not a cost build, and R-6g9-1 no
+    /// `ref` local in the function, since a live view may read the array (local or field) a take would move, shrink,
+    /// regrow or free
+    fn may_take(&self) -> bool {
+        !self.cost && !self.views
+    }
+
     /// P3 (the Rust backend's last_copy): a let / assignment `y = copy(x)` at the last use of x moves x when x is an
     /// owned local array, or an array payload binder of a match on an owned extended local that is dead after the
     /// match; returns {x} (the copy lowering then takes the value and empties its owner), else an empty set
     pub fn move_src(&self, name: &str, e: &Expr) -> HashSet<String> {
         let mut out = HashSet::new();
-        if self.cost {
+        if !self.may_take() {
             return out;
         }
         let Expr::Call(c) = e else { return out };
@@ -3859,8 +3866,7 @@ impl<'a> FnGen<'a> {
             return out;
         }
         let Expr::Var(x) = &c.args[0] else { return out };
-        // R-6g9-1: a live `ref` local may view x, so the copy stays a copy
-        if x.name == name || !self.dead_after(&x.name) || self.views {
+        if x.name == name || !self.dead_after(&x.name) {
             return out;
         }
         match self.lookup(&x.name) {
