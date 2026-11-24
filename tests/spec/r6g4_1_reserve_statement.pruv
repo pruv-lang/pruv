@@ -1,0 +1,2 @@
+// spec: R-6g4-1 reject
+fn f(inout a: [i64]) -> i64 ! alloc { return arr_reserve(inout a, 1); }

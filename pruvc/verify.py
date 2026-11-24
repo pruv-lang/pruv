@@ -228,7 +228,7 @@ def _struct_len_frames(prog, tt, resizes):
                             forwarded.append((source, path, target))
                         elif target in resizes:
                             mark(source, path)
-                    elif node.name not in ("copy_range", "copy_within", "store_be", "store_le"):
+                    elif node.name not in ("copy_range", "copy_within", "store_be", "store_le", "arr_reserve"):
                         mark(source, path)
 
         _walk(f.body, visit)
@@ -251,7 +251,7 @@ class Model:
 
     def __init__(s, prog):
         s.tt = TypeTable(prog)
-        s.vec_resize_params = _vec_resize_params(prog) | array_resize_params(prog)
+        s.vec_resize_params = _vec_resize_params(prog) | array_resize_params(prog, length_only=True)
         s.struct_len_frames = _struct_len_frames(prog, s.tt, s.vec_resize_params)
         s.sorts = {}
         s.struct = {}
@@ -2379,6 +2379,36 @@ class FnVerifier:
             s.assume(st, g, r == z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < cnt),
                                                          z3.Select(av.a, i + k) == z3.Select(bv.a, j + k))))
             return r
+        if n == "arr_reserve":
+            cnt = args[1]
+            s.prove(st, g, z3.And(cnt >= 0, cnt <= MAX_LEN), e, "call_requires", "precondition of arr_reserve")
+            return None
+        if n == "arr_push":
+            av, v = args
+            s.prove(st, g, av.n < MAX_LEN, e, "call_requires", "precondition of arr_push")
+            if av.elem == U8:
+                s.prove(st, g, z3.And(v >= 0, v <= 255), e, "elem_range", "u8 element range 0..=255 for the pushed value")
+            name = e.args[0].expr.name
+            st.env[name] = mk_arr(z3.Store(av.a, av.n, v), av.n + 1, name, av.elem)
+            if av.elem == U8:
+                s.assume(st, g, u8_dom(st.env[name]))
+            s.post_refine(e, [0], st, g)
+            return None
+        if n == "arr_append":
+            dv, sv, start, cnt = args
+            need = dv.n + cnt
+            s.prove(st, g, z3.And(start >= 0, cnt >= 0, start + cnt <= sv.n, need <= MAX_LEN),
+                    e, "call_requires", "precondition of arr_append")
+            p = z3.Int("arr_append!p")
+            arr = z3.Lambda([p], z3.If(z3.And(p >= dv.n, p < need),
+                                       z3.Select(sv.a, start + p - dv.n), z3.Select(dv.a, p)))
+            root, path = field_place(e.args[0].expr)
+            nv = mk_arr(arr, need, ".".join((root.name,) + path), dv.elem)
+            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, nv, st, g) if path else nv
+            if nv.elem == U8:
+                s.assume(st, g, u8_dom(nv))
+            s.post_refine(e, [0], st, g)
+            return None
         if n in ("copy_range", "copy_within"):
             if n == "copy_within":
                 dv, i, j, cnt = args
@@ -3667,12 +3697,12 @@ class FnVerifier:
             names.add("spent")
         # G5 A1 (5.3): writes through inout places also havoc their roots. Only
         # operands of resizing calls or whole assignments may lose their length.
-        calls = s.call_writes(w.body, set(), select=lambda call, i: call.name != "vec_reserve")
+        calls = s.call_writes(w.body, set(), select=lambda call, i: call.name not in ("vec_reserve", "arr_reserve"))
         keep = frozenset()
         if calls or s.snap:
             whole = s.whole_assigned(w.body, set())
             resizes = s.call_writes(w.body, set(), select=lambda call, i:
-                                    call.name in VEC_RESIZERS or (call.name, i) in s.model.vec_resize_params)
+                                    call.name in VEC_RESIZERS + ("arr_push", "arr_append") or (call.name, i) in s.model.vec_resize_params)
             names |= calls
             keep = frozenset((names & s.snap.keys() | calls) - whole - resizes)
         # one arbitrary iteration; the invariants held (and were defined) at its start

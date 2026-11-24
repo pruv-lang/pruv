@@ -1,0 +1,6 @@
+// spec: R-6g4-4 accept
+pub fn checksum() -> i64 ! alloc {
+  let mut a: [i64] = alloc(8, 21);
+  a = resize(a, 10, 5);
+  return len(a) + a[7] + a[9];
+}

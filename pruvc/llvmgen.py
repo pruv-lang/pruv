@@ -48,7 +48,7 @@ from codegen import show
 from llvm_inline import llvm_inline
 from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str  # G2 B2: uses_str
 from typeinfo import field_place
-from check import array_resize_params, array_resize_args, same_place
+from check import ARRAY_GROW_BUILTINS, array_resize_params, array_resize_args, same_place
 from typeinfo import is_collection, contains_collection, encode, is_scalar_vec, is_vec_slice_arg, is_owned_result
 from foreign import CATALOG, CATALOG_CONTRACT_ONLY, first_g6_use, _owned_result, NET_OBSERVERS, ASYNC_OBSERVERS  # G6 A3, G6b, G10 net A3
 import foreign_shim  # G6 A3
@@ -1114,7 +1114,7 @@ class FnGen:
         s.cregions = []     # G9: constructor temporaries of the contract expression being evaluated, per region
         s.tt = m.tt
         s.bridge = False    # G6 A3: this function references @pruv_g6_bridge_v1
-        s.resize_args = array_resize_args(f, m.array_resizes) if f is not None and m.array_resizes else set()
+        s.resize_args = array_resize_args(f, m.array_resizes) if f is not None else set()
 
     # ---------- emission ----------
     def ins(s, text):
@@ -2557,8 +2557,7 @@ class FnGen:
                 m = s.ev(st.value.args[1])
                 s.moving = set()
                 if not s.verified:
-                    ok = s.op("icmp ule i64 %s, %s" % (m.a, src.b))
-                    s.guard(ok, s.panic1("pruv_panic_arith", "truncate length outside 0..len"), False)
+                    s.truncate_guard(src.b, m.a)
                 # P3: no runtime call: the same pointer with length m moves out and keeps the source cap, so the
                 # eventual free still gets the real allocation size
                 v = V("arr", src.a, m.a, src.ty, layout=src.layout, rng=src.rng, c=capof(src))
@@ -2822,25 +2821,23 @@ class FnGen:
                 s.guard(ok, s.panic_elem(v.a), False)
 
     def regrow_assign(s, st, sl):
-        """LG32 (G-DB52-4): `x = resize(x, n, v)` on an owned local / inout array slot grows the slot's block in place
-        (realloc), so the old and new blocks are never live together.  LG34 (G-LG32-3): every scalar element kind
-        (u8, bool, i64 and the narrow layouts).  Returns False when the statement does not have that shape (the caller
-        then uses the generic path)."""
+        """Apply a self-assigned resize or truncate to an owned local or inout array slot."""
         e = st.value
-        if (s.cost or sl.k != "arr" or not isinstance(e, Call) or e.name != "resize" or len(e.args) != 3
+        if (s.cost or sl.k != "arr" or not isinstance(e, Call) or e.name not in ("resize", "truncate") or e.name in s.funcs
                 or not isinstance(e.args[0], Var) or e.args[0].name != st.name):
             return False
+        if e.name == "truncate":
+            s.truncate_len(e, sl.b)
+            return True
         src = s.load(sl)                    # a = ptr, b = len, c = cap
         q, cnt, nc = s.regrow_val(src, e)
         s.store(sl, V("arr", q, cnt.a, sl.ty, layout=sl.layout, rng=sl.rng, c=nc))
         return True
 
     def regrow_field(s, st, sl):
-        """LG34 (G-LG32-3): `x.f = resize(x.f, n, v)` (the same field path on both sides, a buffer field of an extended
-        struct local or `inout` struct parameter) grows the field's block in place like regrow_assign; the field keeps
-        the block with cap max(n, cap).  Returns False when the statement does not have that shape."""
+        """Apply a self-assigned resize or truncate to an owned buffer field."""
         e = st.value
-        if (s.cost or not isinstance(e, Call) or e.name != "resize" or len(e.args) != 3
+        if (s.cost or not isinstance(e, Call) or e.name not in ("resize", "truncate") or e.name in s.funcs
                 or not s.is_ext(sl.ty) or not s.tt.is_struct(sl.ty)):
             return False
         if not codegen.same_field_path(e.args[0], st.name, st.fields):
@@ -2855,14 +2852,17 @@ class FnGen:
         gp, fty = s.field_ptr_ty(sl, st.fields)
         if not is_arr(fty):
             return False
+        if e.name == "truncate":
+            length = s.op("getelementptr inbounds %s, ptr %s, i32 0, i32 1" % (ARR, gp))
+            s.truncate_len(e, length)
+            return True
         src = s.unpack(s.op("load %s, ptr %s" % (ARR, gp)), fty, False)
         q, cnt, nc = s.regrow_val(src, e)
         s.ins("store %s %s, ptr %s" % (ARR, s.agg(V("arr", q, cnt.a, src.ty, c=nc)), gp))
         return True
 
     def regrow_val(s, src, e):
-        """the in-place regrow of the owned array value src (its block, len and cap) by resize(_, n, v): the guards of
-        resize, then the helper of src's element kind; returns (new block, n, new cap)"""
+        """Return the block, length and capacity after an in-place resize."""
         cnt = s.ev(e.args[1])
         v = s.ev(e.args[2])
         s.resize_guards(src, cnt, v)
@@ -2890,6 +2890,113 @@ class FnGen:
         gt = s.op("icmp sgt i64 %s, %s" % (cnt.a, cap))
         nc = s.op("select i1 %s, i64 %s, i64 %s" % (gt, cnt.a, cap))
         return q, nc
+
+    def truncate_guard(s, old_len, new_len):
+        ok = s.op("icmp ule i64 %s, %s" % (new_len, old_len))
+        s.guard(ok, s.panic1("pruv_panic_arith", "truncate length outside 0..len"), False)
+
+    def truncate_len(s, e, length):
+        cnt = s.ev(e.args[1])
+        if not s.verified:
+            s.truncate_guard(s.op("load i64, ptr %s" % length), cnt.a)
+        s.ins("store i64 %s, ptr %s" % (cnt.a, length))
+
+    def array_grow_stmt(s, e):
+        dest = e.args[0].expr
+        if isinstance(dest, Var):
+            _, slot = s.lookup(dest.name)
+        else:
+            slot = s.array_slot(s.inout_place_ptr(dest), dest.ty)
+        src = s.load(slot)
+        value = s.ev(e.args[1])
+        push = e.name == "arr_push"
+        append = e.name == "arr_append"
+        if append:
+            start = s.ev(e.args[2])
+            count = s.ev(e.args[3])
+        if not s.verified:
+            if append:
+                remaining = s.op("sub i64 %s, %s" % (value.b, count.a))
+                start_ok = s.op("icmp sge i64 %s, 0" % start.a)
+                count_ok = s.op("icmp sge i64 %s, 0" % count.a)
+                end_ok = s.op("icmp sle i64 %s, %s" % (start.a, remaining))
+                ok = s.op("and i1 %s, %s" % (start_ok, count_ok))
+                ok = s.op("and i1 %s, %s" % (ok, end_ok))
+                s.guard(ok, lambda: s.ins("call void @pruv_panic_oob(i64 %s, i64 %s)" % (start.a, value.b)), False)
+                remaining = s.op("sub i64 1099511627776, %s" % src.b)
+                ok = s.op("icmp sle i64 %s, %s" % (count.a, remaining))
+                s.guard(ok, s.panic1("pruv_panic_arith", "arr_append length exceeds 2^40"), False)
+            elif push:
+                ok = s.op("icmp ult i64 %s, 1099511627776" % src.b)
+                s.guard(ok, s.panic1("pruv_panic_arith", "arr_push length exceeds 2^40"), False)
+                if is_u8(src):
+                    ok = s.op("icmp ule i64 %s, 255" % value.a)
+                    s.guard(ok, s.panic_elem(value.a), False)
+            else:
+                ok = s.op("icmp ule i64 %s, 1099511627776" % value.a)
+                s.guard(ok, s.panic1("pruv_panic_arith", "arr_reserve length outside 0..2^40"), False)
+        need = s.op("add i64 %s, %s" % (src.b, "1" if push else count.a if append else value.a))
+        cap = capof(src)
+        grow = s.op("icmp ult i64 %s, %s" % (cap, need))
+        before = s.cur
+        regrow, done = s.label("regrow"), s.label("grown")
+        s.condbr(grow, regrow, done)
+        s.place(regrow)
+        newcap = need
+        if push or append:
+            double = s.op("mul i64 %s, 2" % cap)
+            enough = s.op("icmp uge i64 %s, %s" % (double, need))
+            target = s.op("select i1 %s, i64 %s, i64 %s" % (enough, double, need))
+            enough = s.op("icmp uge i64 %s, 4" % target)
+            newcap = s.op("select i1 %s, i64 %s, i64 4" % (enough, target))
+        ty = storage_ty(src)
+        size = 1 if is_bytes(src) else elem_size(src.layout)
+        s.m.resize.add("raw_regrow")
+        newptr = s.op("call ptr @pruv_regrow_v2(ptr %s, i64 %s, i64 %s, i64 %d, i64 %d)"
+                      % (src.a, cap, newcap, size, size))
+        s.ins("store ptr %s, ptr %s" % (newptr, slot.a))
+        s.ins("store i64 %s, ptr %s" % (newcap, slot.c))
+        s.br(done)
+        s.place(done)
+        if push or append:
+            ptr = s.op("phi ptr [ %s, %%%s ], [ %s, %%%s ]" % (src.a, before, newptr, regrow))
+            dst = s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (ty, ptr, src.b))
+        if push:
+            elem = value.a
+            if is_boolarr(src):
+                elem = s.op("zext i1 %s to i8" % elem)
+            elif ty != "i64":
+                elem = s.op("trunc i64 %s to %s" % (elem, ty))
+            s.ins("store %s %s, ptr %s" % (ty, elem, dst))
+        if append:
+            src_ty = storage_ty(value)
+            inp = s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (src_ty, value.a, start.a))
+            if ty == src_ty:
+                size_bytes = count.a if size == 1 else s.op("mul nuw nsw i64 %s, %d" % (count.a, size))
+                s.ins("call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)" % (dst, inp, size_bytes))
+            else:
+                s.append_widen(dst, inp, count.a)
+        if push or append:
+            s.ins("store i64 %s, ptr %s" % (need, slot.b))
+        return V("unit")
+
+    def append_widen(s, dst, src, count):
+        pre = s.cur
+        loop, done = s.label("append.loop"), s.label("append.end")
+        empty = s.op("icmp eq i64 %s, 0" % count)
+        s.condbr(empty, done, loop)
+        s.place(loop)
+        i, nxt = s.tmp(), s.tmp()
+        s.ins("%s = phi i64 [ 0, %%%s ], [ %s, %%%s ]" % (i, pre, nxt, loop))
+        inp = s.op("getelementptr inbounds i8, ptr %s, i64 %s" % (src, i))
+        out = s.op("getelementptr inbounds i64, ptr %s, i64 %s" % (dst, i))
+        byte = s.op("load i8, ptr %s" % inp)
+        value = s.op("zext i8 %s to i64" % byte)
+        s.ins("store i64 %s, ptr %s" % (value, out))
+        s.ins("%s = add nuw nsw i64 %s, 1" % (nxt, i))
+        end = s.op("icmp eq i64 %s, %s" % (nxt, count))
+        s.condbr(end, done, loop)
+        s.place(done)
 
     def truncate_move(s, e):
         """P2 batch 4: the slot of x when e is `truncate(x, m)` with x an owned local array (not a parameter or binder)
@@ -3090,7 +3197,7 @@ class FnGen:
             nm = s.m.string(e.value.decode("utf-8"))
             ln = str(len(e.value))
             if not owned:   # P3: a borrowed literal reads the read-only global directly (nothing to free)
-                return V("arr", nm, ln, STR)
+                return V("arr", nm, ln, e.ty)
             p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 1, i64 1)" % (nm, ln))
             return s.temp_arr(V("arr", p, ln, STR), owned)
         if isinstance(e, Ctor):
@@ -3267,8 +3374,7 @@ class FnGen:
             src = s.ev(a[0])
             m = s.ev(a[1])
             if not s.verified:
-                ok = s.op("icmp ule i64 %s, %s" % (m.a, src.b))
-                s.guard(ok, s.panic1("pruv_panic_arith", "truncate length outside 0..len"), False)
+                s.truncate_guard(src.b, m.a)
             if (isinstance(a[0], Var) and a[0].name in s.ret_cand and s.lookup(a[0].name)[0] == "slot"
                     and s.lookup(a[0].name)[1].k == "arr"):
                 # P3: an owned local array the return moves (ret_movable): the same block with length m and the source
@@ -3379,6 +3485,8 @@ class FnGen:
             s.ins("call void @llvm.%s.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)"
                   % ("memmove" if overlap else "memcpy", pd, ps, nb))
             return V("unit")
+        if n in ARRAY_GROW_BUILTINS:
+            return s.array_grow_stmt(e)
         if n == "eq_range":  # P17a: a[i..i+n] == b[j..j+n]; source order a, i, b, j, n
             av = s.ev(a[0])
             iv = s.ev(a[1])
@@ -4106,7 +4214,7 @@ class FnGen:
             x = s.op("load i64, ptr %s" % g)
             return V("i128", s.op("sext i64 %s to i128" % x))
         if isinstance(e, StrLit):  # G2 B2: no copy
-            return V("arr", s.m.string(e.value.decode("utf-8")), str(len(e.value)), STR)
+            return V("arr", s.m.string(e.value.decode("utf-8")), str(len(e.value)), e.ty)
         if isinstance(e, Ctor):
             if e.ty is not None and gopt(e.ty):  # G3
                 return s.mk_gctor(e, s.cev, True)
@@ -6881,7 +6989,8 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         DECLS_RESIZE if "i64" in m.resize else "") + (
         DECLS_RESIZE_U8 if "u8" in m.resize else "") + (
         DECLS_RESIZE_NARROW if "narrow" in m.resize else "") + (
-        DECL_REGROW_V2 if ("regrow_i64" in m.resize or "regrow_u8" in m.resize or "regrow_narrow" in m.resize)
+        DECL_REGROW_V2 if ("regrow_i64" in m.resize or "regrow_u8" in m.resize or "regrow_narrow" in m.resize
+                             or "raw_regrow" in m.resize)
         else "") + (
         DECLS_REGROW if "regrow_i64" in m.resize else "") + (
         DECLS_REGROW_U8 if "regrow_u8" in m.resize else "") + (

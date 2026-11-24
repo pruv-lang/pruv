@@ -89,7 +89,7 @@ from typeinfo import (TypeTable, is_user_type, is_array, uses_array_type, uses_s
                       field_place, is_vec_slice_arg, is_owned_result, is_owned_value, borrowing_struct, borrowing_copy)
 from foreign import CATALOG
 from inline_policy import PIN_INLINE, PIN_ALWAYS, inline_policy
-from check import BIT_BUILTINS, array_resize_params, array_resize_args, same_place
+from check import ARRAY_GROW_BUILTINS, BIT_BUILTINS, array_resize_params, array_resize_args, same_place
 from refine import _kids as expr_kids, _stmt_names, _expr_names
 
 
@@ -1341,6 +1341,49 @@ def emit_public_types(prog, order=None):
     return "\n".join(out) + ("\n" if out else "")
 
 
+def _exit_bound(cond):
+    """the leftmost conjunct of a `while` condition when it reads `i < X` (X a literal or another local): (i, X)"""
+    c = cond
+    while isinstance(c, Binary) and c.op == "&&":
+        c = c.left
+    if not (isinstance(c, Binary) and c.op == "<" and isinstance(c.left, Var)):
+        return None
+    x = c.right
+    if isinstance(x, IntLit) or (isinstance(x, Var) and x.name != c.left.name):
+        return c.left.name, x
+    return None
+
+
+def _same_bound(a, b):
+    if isinstance(a, IntLit) and isinstance(b, IntLit):
+        return a.value == b.value
+    return isinstance(a, Var) and isinstance(b, Var) and a.name == b.name
+
+
+def loop_exits(w):
+    """Assignments `i = X` in tail position of a `while i < X && ...` body: nothing runs between them and the next
+    condition test, whose leftmost conjunct is then false, so the emitted Rust leaves the loop with `break;` right
+    away. Hand Rust writes this early exit as `break` (or `iter().all`); the dead re-test kept LLVM from treating the
+    branch as a loop exit (LB5b: the key_eq plain scan ran 1.5x slower than the hand's)."""
+    out = set()
+    b = _exit_bound(w.cond)
+    if b is None:
+        return out
+    i, bound = b
+
+    def tail(stmts):
+        if not stmts:
+            return
+        st = stmts[-1]
+        if isinstance(st, Assign) and st.name == i and not st.deref and _same_bound(st.value, bound):
+            out.add(id(st))
+        elif isinstance(st, If):
+            tail(st.then)
+            tail(st.els)
+    tail(w.body)
+    return out
+
+
 def utf8_checked(st):
     """LG35 (G-DB56-3): the `str_from_utf8(x)` call that is the whole value of the first statement of the `if` st when
     st's condition is an `&&` chain with a conjunct `utf8_valid(x)` and no `inout` argument. The condition has just
@@ -1593,6 +1636,7 @@ class Gen:
         s.budget = budget
         s.prog = prog
         s.verified = verified
+        s.exits = set()    # loop_exits: ids of tail `i = X` assignments followed by `break;`
         s.utf8_ok = None   # LG35: the str_from_utf8 call whose bytes the enclosing `if` checked (utf8_checked)
         s.trust = trust_callers
         s.out = []
@@ -1670,6 +1714,8 @@ class Gen:
         s.need_shift = set()  # P2 batch 2: shifts used in code under --no-verify (pruv_shl / pruv_ushr helpers)
         s.printed = False  # P13a.10: print lowers to println!, which panics when stdout fails (raw_unwind_free)
         s.need_load_le = False
+        s.need_cidx_u8 = False
+        s.has_cidx_u8 = False
         s.need_load_be = False  # P2 batch 4: load_be used in a runtime contract (pruv_cload_be helper)
         # T0 (TIDY_SPEC 4.8 item 4): `lg` = functions without a requires whose public Rust item takes an array or str
         # (legacy: every non-private function; explicit mode: host entries). Like a function with a requires, such a
@@ -1712,11 +1758,7 @@ class Gen:
         s.small_elem = "i64"   # buffer element of the __pruv_small variant being emitted
         if verified and not trust_callers and not s.cost_used:
             from small import plan_small
-            s.small, s.small_sites = plan_small(prog, s.fmap, s.layout, s.stack)
-            if s.array_resizes:
-                s.small = {n: plan for n, plan in s.small.items()
-                           if plan[1] not in array_resize_args(s.fmap[n], s.array_resizes)}
-                s.small_sites = {site: plan for site, plan in s.small_sites.items() if plan[0] in s.small}
+            s.small, s.small_sites = plan_small(prog, s.fmap, s.layout, s.stack, s.array_resizes)
         s.fp = {}    # P18d: {function name: (K, o)} of the by-value fixed-prefix twins (--proven-entries, see plan_fp)
 
     def plan_fp(s):
@@ -1830,6 +1872,7 @@ class Gen:
             s.out.append(CONTRACT_PRELUDE_G6 if s.g6 else CONTRACT_PRELUDE)
             if u8_used:
                 s.out.append(CONTRACT_PRELUDE_U8)
+                s.has_cidx_u8 = True
             if bool_used:
                 s.out.append(CONTRACT_PRELUDE_BOOL)
             if str_used:
@@ -2181,8 +2224,8 @@ class Gen:
     def carr(s, e):
         if isinstance(e, Var):   # R03L: an owned take array is read through a borrow
             return "(&%s)" % e.name if e.name in s.take_arrays else e.name
-        if isinstance(e, StrLit):  # G2 B2: &'static str
-            return str_lit(e.value)
+        if isinstance(e, StrLit):  # G2 B2
+            return s.c(e)
         if isinstance(e, Call) and e.name == "err_val" and e.ty == Type("string"):
             return s.c(e)
         if s.g9 and isinstance(e, (FieldAccess, VariantField)):   # G9: a buffer field of a real (extended) value
@@ -2364,7 +2407,8 @@ class Gen:
 
     def c(s, e):
         if isinstance(e, StrLit):  # G2 B2
-            return str_lit(e.value)
+            literal = str_lit(e.value)
+            return "(%s).as_bytes()" % literal if e.ty == ARRAY_U8 else literal
         if isinstance(e, IntLit):
             return "(%di128)" % e.value if e.value < 0 else "%di128" % e.value
         if isinstance(e, BoolLit):
@@ -2417,6 +2461,7 @@ class Gen:
             if is_bool_array(e.array.ty):  # G2 A5
                 return "pruv_cidx_bool(%s, %s)" % (s.carr(e.array), s.c(e.index))
             if is_u8_array(e.array.ty):
+                s.need_cidx_u8 = True
                 return "pruv_cidx_u8(%s, %s)" % (s.carr(e.array), s.c(e.index))
             if s.layout(e.array) != "i64":
                 return ('{ let pruv_a = %s; let pruv_i: i128 = %s; if pruv_i >= 0 && pruv_i < pruv_a.len() as i128 { pruv_a[pruv_i as usize] as i128 } else { pruv_ud("array index out of range") } }' % (s.carr(e.array), s.c(e.index)))
@@ -2929,6 +2974,8 @@ class Gen:
             frame[1] = later[i + 1]
             frame[3] = i + 1 < len(stmts) and isinstance(stmts[i + 1], Return)
             s.stmt(st, ind)
+            if id(st) in s.exits:
+                s.emit(ind, "break;")
             if isinstance(st, Let):
                 frame[0].add(st.name)
         s.frames.pop()
@@ -3054,13 +3101,13 @@ class Gen:
                     resize = "{ %s %s }" % (resize, s.cost_add("1u128 + %s.len() as u128" % st.name))
                 s.emit(ind, resize)
                 return
-            if (not s.cost and not s.moving and isinstance(call, Call) and call.name == "resize"
+            if (not s.cost and not s.moving and isinstance(call, Call) and call.name in ("resize", "truncate")
                     and call.name not in s.fmap and st.name not in s.refs
                     and (st.name not in s.params or st.name in s.take_arrays or st.name in s.resizable)):
                 source = call.args[0]
                 if (isinstance(source, (Var, Move)) and source.name == st.name
                         and not getattr(source, "fields", ()) and is_array(source.ty)):
-                    s.emit(ind, s.resize_expr(call, st.name))
+                    s.emit(ind, s.array_resize_expr(call, st.name))
                     return
             target = "*" + st.name if st.name in s.inouts else st.name
             s.emit(ind, "%s = %s;" % (target, s.own_e(st.value)))
@@ -3081,11 +3128,11 @@ class Gen:
                 s.emit(ind, "%s.%s.insert(%s, %s);" %
                        (st.name, ".".join(st.fields), s.e(call.args[1]), s.e(call.args[2])))
                 return
-            if (not s.cost and isinstance(call, Call) and call.name == "resize" and call.name not in s.fmap
+            if (not s.cost and isinstance(call, Call) and call.name in ("resize", "truncate") and call.name not in s.fmap
                     and is_array(vty) and same_field_path(call.args[0], st.name, st.fields)
                     and not (s.boxed and s.path_boxed(st.name, st.fields))):
                 # LG34 (G-LG32-3): `x.f = resize(x.f, n, v)` grows the field in place, like the plain-name assign
-                s.emit(ind, s.resize_expr(call, "%s.%s" % (st.name, ".".join(st.fields))))
+                s.emit(ind, s.array_resize_expr(call, "%s.%s" % (st.name, ".".join(st.fields))))
                 return
             if (vty is not None and is_collection(vty)) or (st.name in s.inouts and not (s.boxed and s.path_boxed(st.name, st.fields))):
                 s.emit(ind, "%s.%s = %s;" % (st.name, ".".join(st.fields), s.own_e(st.value) if vty is None or not is_collection(vty) else s.e(st.value)))
@@ -3161,7 +3208,12 @@ class Gen:
             s.emit(ind, "while %s {" % s.e(st.cond))
             if s.cost:
                 s.emit(ind + 1, s.cost_add("1"))
-            s.block(st.body, ind + 1, loop=True)
+            exits = set() if s.cost else loop_exits(st)
+            s.exits |= exits
+            try:
+                s.block(st.body, ind + 1, loop=True)
+            finally:
+                s.exits -= exits
             s.emit(ind, "}")
         elif isinstance(st, ForMap):
             key_ty, val_ty = st.place.ty.args
@@ -3406,8 +3458,11 @@ class Gen:
 
     def arr_ref(s, e):
         """an array expression used as a borrowed slice; a string literal is borrowed as its `&'static str` (no alloc)"""
-        if isinstance(e, StrLit) and (e.static_str or not s.cost):
-            return str_lit(e.value)
+        if isinstance(e, StrLit):
+            if e.ty == ARRAY_U8:
+                return "(%s).as_bytes()" % str_lit(e.value)
+            if e.static_str or not s.cost:
+                return str_lit(e.value)
         if e.borrowed_view:
             return s.e(e)
         if isinstance(e, Var) and e.name in s.refs:
@@ -3530,6 +3585,14 @@ class Gen:
                 args.append(s.e(x))
         return "%s(%s)" % (name, ", ".join(args))
 
+    def array_resize_expr(s, e, place):
+        if e.name == "resize":
+            return s.resize_expr(e, place)
+        check = ("" if s.verified else
+                 "if pruv_m < 0 || (pruv_m as u64) > (%s.len() as u64) { pruv_oob(pruv_m, %s.len()) } "
+                 % (place, place))
+        return "{ let pruv_m: i64 = %s; %s%s.truncate(pruv_m as usize); }" % (s.e(e.args[1]), check, place)
+
     def resize_expr(s, e, place=None):
         a = e.args
         bool_arr = is_bool_array(a[0].ty)
@@ -3550,9 +3613,9 @@ class Gen:
             if is_u8_array(a[0].ty):
                 chk += "if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } "
         if place is not None:
-            return ("{ let pruv_n: i64 = %s; let pruv_v: %s = %s; %s%s.resize(pruv_n as usize, %s); }"
+            return ("{ let pruv_n: i64 = %s; let pruv_v: %s = %s; %s%s.reserve_exact((pruv_n as usize).saturating_sub(%s.len())); %s.resize(pruv_n as usize, %s); }"
                     % (s.e(a[1]), vty, s.e(a[2]), chk.replace("pruv_a.len()", place + ".len()"),
-                       place, fill))
+                       place, place, place, fill))
         # source order: a, n, v
         return ("{ let pruv_a = %s; let pruv_n: i64 = %s; let pruv_v: %s = %s; %s"
                 "let mut pruv_t = ::std::vec::Vec::with_capacity(pruv_n as usize); pruv_t.extend_from_slice(pruv_a); "
@@ -3706,6 +3769,37 @@ class Gen:
                         % (s.arr_ref(a[0]), s.e(a[1])))
             if n == "resize":
                 return s.resize_expr(e)
+            if n in ARRAY_GROW_BUILTINS:
+                dest = a[0].expr
+                if n == "arr_append":
+                    place = s.e(dest)
+                    src, start, cnt = s.arr_ref(a[1]), s.e(a[2]), s.e(a[3])
+                    head = ("{ let pruv_src = %s; let pruv_s: i64 = %s; let pruv_n: i64 = %s; " % (src, start, cnt))
+                    if not s.verified:
+                        head += ("if pruv_s < 0 || pruv_n < 0 || pruv_s > (pruv_src.len() as i64) - pruv_n "
+                                 "{ pruv_oob(pruv_s, pruv_src.len()) } "
+                                 'if pruv_n > (1i64 << 40) - (%s.len() as i64) { pruv_ovf("arr_append length exceeds 2^40") } ' % place)
+                    span = "(pruv_s as usize)..((pruv_s + pruv_n) as usize)"
+                    tail = ("unsafe { pruv_src.get_unchecked(%s) }" if s.verified else "&pruv_src[%s]") % span
+                    if dest.ty == a[1].ty:
+                        return "%s%s.extend_from_slice(%s) }" % (head, place, tail)
+                    return "%s%s.extend((%s).iter().map(|&x| x as i64)) }" % (head, place, tail)
+                place = dest.name
+                value = s.e(a[1])
+                if n == "arr_reserve":
+                    check = ("" if s.verified else
+                             'if pruv_n < 0 || pruv_n > (1i64 << 40) { pruv_ovf("arr_reserve length outside 0..2^40") } ')
+                    return "{ let pruv_n: i64 = %s; %s%s.reserve_exact((pruv_n) as usize) }" % (value, check, place)
+                u8 = is_u8_array(dest.ty)
+                vty = "bool" if is_bool_array(dest.ty) else "i64"
+                layout = "u8" if u8 else s.layout(dest)
+                elem = "pruv_v" if layout == "i64" or vty == "bool" else "pruv_v as " + layout
+                check = ""
+                if not s.verified:
+                    check = 'if %s.len() >= (1usize << 40) { pruv_ovf("arr_push length exceeds 2^40") } ' % place
+                    if u8:
+                        check += "if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } "
+                return "{ let pruv_v: %s = %s; %s%s.push(%s) }" % (vty, value, check, place, elem)
             if n == "eq_range":  # L3-10: eq_range: slice equality of a[i..i+n] and b[j..j+n]
                 # the five arguments are bound once each, in source order a, i, b, j, n (SPEC.md eq_range)
                 head = ("{ let pruv_ea = %s; let pruv_i: i64 = %s; let pruv_eb = %s; let pruv_j: i64 = %s; "
@@ -4169,6 +4263,9 @@ def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=N
     mark = len(g.out)
     for f in prog.functions:
         g.fn(f)
+    # LB5: inserted first so every helper below goes in front of it (same order as pruv-core codegen.rs)
+    if g.need_cidx_u8 and not g.has_cidx_u8:
+        g.out.insert(mark, CONTRACT_PRELUDE_U8)
     # G9: size / equality helpers discovered while the requires checks were generated go in front of the functions
     # (declaration order, no addresses or hashes); nothing at all is added when no runtime requires needs them
     g.out[mark:mark] = g.g9_helper_texts()

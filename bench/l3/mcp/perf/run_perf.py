@@ -453,6 +453,10 @@ def instrument(g):
             if re.match(r"\s*while \(.*\{\s*$", ln):
                 ln += " pruv_cnt(0, %d, 1);" % fid
             ln = re.sub(r"unsafe \{ \*(\w+)\.get_unchecked_mut\(", r"pruv_cnt(1, %d, 1); unsafe { *\1.get_unchecked_mut(" % fid, ln)
+            # LB5: arr_push stores one word, arr_append stores pruv_n words (output stores, like indexed writes)
+            ln = re.sub(r"(\w+)\.push\(pruv_v\b", r"pruv_cnt(1, %d, 1); \1.push(pruv_v" % fid, ln)
+            ln = re.sub(r"(\w+)\.extend(_from_slice)?\((?=.*pruv_src)",
+                        r"pruv_cnt(1, %d, pruv_n as u64); \1.extend\2(" % fid, ln)
             ln = ln.replace("pruv_t.extend_from_slice(pruv_a);",
                             "pruv_cnt(2, %d, pruv_a.len() as u64); pruv_t.extend_from_slice(pruv_a);" % fid)
             ln = ln.replace("pruv_t.resize(pruv_n as usize, pruv_v);",

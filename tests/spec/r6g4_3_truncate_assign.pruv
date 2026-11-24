@@ -1,0 +1,23 @@
+// spec: R-6g4-3 accept
+struct Buf { data: [u8] }
+fn shorten(inout a: [i64]) -> () ! alloc
+  requires len(a) >= 2
+  ensures len(a) == 2 && a[1] == old(a)[1]
+{
+  a = truncate(a, 2);
+}
+fn shorten_field(inout b: Buf) -> () ! alloc
+  requires len(b.data) == 8
+  ensures len(b.data) == 3 && b.data[2] == old(b.data)[2]
+{
+  b.data = truncate(b.data, 3);
+}
+pub fn checksum() -> i64 ! alloc {
+  let mut a: [i64] = alloc(6, 19);
+  shorten(inout a);
+  a = truncate(a, 1);
+  let data: [u8] = alloc(8, 30);
+  let mut b: Buf = Buf { data: move data };
+  shorten_field(inout b);
+  return len(a) + len(b.data) + b.data[2];
+}

@@ -1,0 +1,6 @@
+// spec: R-6g4-1 reject
+fn f() -> i64 ! alloc {
+  let mut a: [i64] = alloc(2, 1);
+  arr_reserve(inout a, 4);
+  return a[len(a)];
+}

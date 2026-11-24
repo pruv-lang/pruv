@@ -199,7 +199,7 @@ static int64_t *pruv_raw_alloc(int64_t len, int zeroed) {
 #endif
     if (!p) pruv_panic_arith("allocation failed");
 #ifdef PRUV_COUNT_ALLOCS
-    pruv_n_allocs++;
+    __atomic_fetch_add(&pruv_n_allocs, 1, __ATOMIC_RELAXED);
 #endif
     return p;
 }
@@ -235,7 +235,7 @@ static inline void *pruv_fc_take(uint64_t bytes, int64_t align) {
             c->align[i] = c->align[c->n];
             pruv_fc_parked -= bytes;
 #ifdef PRUV_COUNT_ALLOCS
-            pruv_n_allocs++;
+            __atomic_fetch_add(&pruv_n_allocs, 1, __ATOMIC_RELAXED);
 #endif
             return p;
         }
@@ -273,7 +273,7 @@ int64_t *pruv_copy(const int64_t *src, int64_t len) {
 
 void pruv_free(int64_t *data, int64_t len) {
 #ifdef PRUV_COUNT_ALLOCS
-    if (data) pruv_n_frees++;
+    if (data) __atomic_fetch_add(&pruv_n_frees, 1, __ATOMIC_RELAXED);
 #endif
     if (!data || len <= 0) return;
     if ((uint64_t)len <= PRUV_FC_MAX_BYTES && pruv_fc_park(data, (uint64_t)len * 8u, 8)) return;
@@ -307,7 +307,7 @@ static inline void *pruv_sys_alloc_v2(int64_t len, int64_t size, int64_t align, 
     if (!p) pruv_panic_arith("allocation failed");
 #endif
 #ifdef PRUV_COUNT_ALLOCS
-    pruv_n_allocs++;
+    __atomic_fetch_add(&pruv_n_allocs, 1, __ATOMIC_RELAXED);
 #endif
     return p;
 }
@@ -386,7 +386,7 @@ void *pruv_copy_v2(const void *src, int64_t len, int64_t size, int64_t align) {
 
 void pruv_free_v2(void *data, int64_t len, int64_t size, int64_t align) {
 #ifdef PRUV_COUNT_ALLOCS
-    if (data) pruv_n_frees++;
+    if (data) __atomic_fetch_add(&pruv_n_frees, 1, __ATOMIC_RELAXED);
 #endif
     if (!data || len <= 0) return;
     if ((uint64_t)len <= PRUV_FC_MAX_BYTES && (uint64_t)size <= 8 && pruv_fc_park(data, (uint64_t)len * (uint64_t)size, align)) return;
@@ -427,9 +427,10 @@ void *pruv_shrink_v2(void *data, int64_t len, int64_t m, int64_t size, int64_t a
 #endif
 }
 
-/* LG32 (G-DB52-4): grows a block in place for `x = resize(x, n, v)`. The module passes the block (data), its
- * allocated element count (cap), the new element count n and the element layout (size, align). Precondition (checked
- * by the inline @pruv_regrow helpers): n > cap, n >= 1, n <= PRUV_MAX_LEN, valid layout. A NULL block or cap <= 0
+/* Grows an array block in place without initializing the new capacity. The module passes the block (data), its
+ * allocated element count (cap), the new capacity n and the element layout (size, align). Callers ensure
+ * n > cap, n >= 1 and a valid layout. Resize uses n <= PRUV_MAX_LEN. Reserve and push use capacities of up to
+ * 2 * PRUV_MAX_LEN without increasing the logical length past PRUV_MAX_LEN. A NULL block or cap <= 0
  * (an empty array) is a plain pruv_raw_alloc_v3. Otherwise the block is realloc'ed and the old block is gone, so the
  * old and new blocks are never live together. A block that came from the per-thread free cache keeps its exact
  * byte layout (cap * size bytes, align), so realloc with cap is correct for it too. Under -DPRUV_COUNT_ALLOCS a
@@ -468,7 +469,7 @@ void *pruv_node_alloc_v1(int64_t size, int64_t align) {
 #endif
     if (!p) pruv_panic_arith("allocation failed");
 #ifdef PRUV_COUNT_ALLOCS
-    pruv_n_allocs++;
+    __atomic_fetch_add(&pruv_n_allocs, 1, __ATOMIC_RELAXED);
 #endif
     return p;
 }
@@ -493,7 +494,7 @@ void *pruv_node_realloc_v1(void *ptr, int64_t old_size, int64_t new_size, int64_
 
 void pruv_node_free_v1(void *ptr, int64_t size, int64_t align) {
 #ifdef PRUV_COUNT_ALLOCS
-    if (ptr) pruv_n_frees++;
+    if (ptr) __atomic_fetch_add(&pruv_n_frees, 1, __ATOMIC_RELAXED);
 #endif
     if (!ptr) return;
 #ifdef PRUV_RUST_ALLOCATOR

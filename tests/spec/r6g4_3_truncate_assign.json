@@ -1,0 +1,33 @@
+{
+  "gen_contains": [
+    "a.truncate(pruv_m as usize);",
+    "b.data.truncate(pruv_m as usize);"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "34"
+    ],
+    "alloc_balance": true,
+    "llvm_fn_absent": {
+      "pruv_m_f_1_7_shorten": [
+        "call ptr @pruv_copy(",
+        "call ptr @pruv_copy_v2"
+      ],
+      "pruv_m_f_1_13_shorten_field": [
+        "call ptr @pruv_copy(",
+        "call ptr @pruv_copy_v2"
+      ],
+      "checksum": [
+        "call ptr @pruv_copy(",
+        "call ptr @pruv_copy_v2"
+      ]
+    }
+  }
+}

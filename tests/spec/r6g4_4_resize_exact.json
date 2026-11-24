@@ -1,0 +1,21 @@
+{
+  "gen_contains": [
+    "a.reserve_exact((pruv_n as usize).saturating_sub(a.len())); a.resize"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "36"
+    ],
+    "alloc_balance": true,
+    "ll_contains": [
+      "call ptr @pruv_regrow("
+    ]
+  }
+}

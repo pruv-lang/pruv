@@ -29,6 +29,11 @@ An optional `NAME.json` (`NAME/root.json`) next to the source sets the expectati
 | `cache` | `{"prime": "OTHER.pruv", "hits": "positive"\|"zero"}`: compile `prime` (default the test itself) into a fresh `--proof-cache`, then compile the test with that cache and `--trust-report`; `proof_cache.hits` must be > 0 or == 0 |
 | `py`, `rs` | objects merged over the keys above for that compiler only; a `null` value drops the key (for a driver-only rule) |
 
+A flat test can also include a `run` object with a runtime expectation (see `tests/run_all.py`) and a
+`NAME.rs` driver that calls the generated module as `sol`. The runtime harness runs it on both backends by
+default. Use `--only runtime --sample-prefix tests/spec/` to select these rows, or
+`--only runtime --sample-prefix tests/spec/r6g4_ --backend both` for the buffer growth fixtures.
+
 An accept test of a code-generation policy (stack arrays, small result buffers, inlining) checks the generated code;
 its reject test is a program just outside the policy, whose generated code must lack the optimized form. The policy
 is not a diagnostic: such a reject test exits 0.

@@ -23,11 +23,6 @@ fn put(inout b: [u8], at: i64, s: str) -> i64
   { b[at+i]=s[i]; i=i+1; }
   return at+n;
 }
-// A literal line as the [u8] that send takes: one exact-size buffer (G: no borrowed [u8] view of a str literal).
-fn lit(s: str) -> [u8] ! alloc
-{
-  let mut b: [u8] = alloc(len(s),0); let at: i64 = put(inout b,0,s); return b;
-}
 // One request line written into one buffer; the cursor is the raw token src[cs..ce) of the last page (no copy).
 fn request(take l: Loop, slot: i64, id: i64, init: bool, old: bool, src: [u8], cs: i64, ce: i64, ms: i64) -> Loop ! async, alloc, proc
   requires 1 <= id && id <= 7 && 0 <= cs && cs <= ce && ce <= len(src) && ce - cs <= 16777216
@@ -105,7 +100,7 @@ pub fn mcp_check(command: str, argv: str, cwd: str, timeout_ms: i64) -> [i64] ! 
     invariant 0 <= events && events <= 1000000
     invariant 1 <= id && id <= 7 && 0 <= page && page <= 5
     invariant 0 <= objects && objects <= 500 && 0 <= count && count <= 500
-    invariant 5010 <= len(p) && len(p) <= 100000000
+    invariant 5010 <= len(p) && len(p) <= 100000000 + 200*count
     invariant len(st) == 5 && 0 <= st[1] && st[1] <= len(line) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
     invariant 1 <= len(line) && len(line) <= 4194304
     invariant len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
@@ -144,12 +139,13 @@ pub fn mcp_check(command: str, argv: str, cwd: str, timeout_ms: i64) -> [i64] ! 
                     done=true;
                   }
                 } else if !ready {
-                  ready=true; p[1]=2; l=crate::transport::send(move l,slot,lit("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"),ms);
+                  // The literal is lent to send as read-only bytes (R-6g4-5): no allocation.
+                  ready=true; p[1]=2; l=crate::transport::send(move l,slot,"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",ms);
                   if id < 7 { id=id+1; l=request(move l,slot,id,false,false,empty,0,0,ms); }
                 } else {
-                  let result_id: i64 = crate::util::field(d,0,"result"); let tools: i64 = crate::util::field(d,result_id,"tools");
+                  let result_id: i64 = crate::packet::field(d,0,"result"); let tools: i64 = crate::packet::field(d,result_id,"tools");
                   let c: crate::packet::Counts = crate::packet::page(inout p,d,tools,count,objects);
-                  p = crate::packet::shorten(move p,c.end); count=c.count; objects=c.objects;
+                  count=c.count; objects=c.objects;
                   if page < 5 { page=page+1; }
                   // A string token decodes to no units exactly when it has nothing between its quotes.
                   let cur: i64 = crate::util::field(d,result_id,"nextCursor"); let cu: crate::access::Span = crate::packet::str_span(d,cur);

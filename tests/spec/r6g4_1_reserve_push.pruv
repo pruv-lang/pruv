@@ -1,0 +1,45 @@
+// spec: R-6g4-1 R-6g4-2 accept
+fn reserve(inout a: [i64]) -> () ! alloc {
+  arr_reserve(inout a, 3);
+}
+fn fill(inout a: [i64]) -> () ! alloc
+  requires len(a) == 1 && a[0] == 7
+  ensures len(a) == 7 && a[0] == 7
+  ensures forall k in 1..7: a[k] == k
+{
+  reserve(inout a);
+  assert len(a) == 1;
+  // The call preserves length. Its inout contract must state any content we rely on.
+  a[0] = 7;
+  let mut i: i64 = 1;
+  while i < 7
+    invariant 1 <= i && i <= 7
+    invariant len(a) == i && a[0] == 7
+    invariant forall k in 1..i: a[k] == k
+    decreases 7 - i
+  {
+    arr_push(inout a, i);
+    i = i + 1;
+  }
+}
+fn push_byte(inout a: [u8], v: i64) -> () ! alloc
+  requires len(a) < 8 && 0 <= v && v <= 255
+  ensures len(a) == len(old(a)) + 1 && a[len(old(a))] == v
+{
+  arr_push(inout a, v);
+}
+pub fn checksum() -> i64 ! alloc {
+  let mut a: [i64] = alloc(1, 7);
+  fill(inout a);
+  let mut b: [u8] = alloc(0, 0);
+  push_byte(inout b, 200);
+  arr_reserve(inout b, 3);
+  assert len(b) == 1 && b[0] == 200;
+  let mut flags: [bool] = alloc(0, false);
+  arr_push(inout flags, true);
+  arr_push(inout flags, false);
+  if flags[0] && !flags[1] {
+    return a[0] + a[1] + a[2] + a[3] + a[4] + a[5] + a[6] + b[0];
+  }
+  return 0;
+}

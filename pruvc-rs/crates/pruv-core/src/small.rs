@@ -334,7 +334,9 @@ pub(crate) fn cyclic(calls: &HashMap<String, HashSet<String>>) -> HashSet<String
     out
 }
 
-pub fn plan_small(prog: &Program, fmap: &Fmap, storage: &StoragePlan, stack: &StackPlan) -> SmallPlan {
+pub fn plan_small(
+    prog: &Program, fmap: &Fmap, storage: &StoragePlan, stack: &StackPlan, resizes: &HashSet<(String, usize)>,
+) -> SmallPlan {
     let mut calls: HashMap<String, HashSet<String>> = HashMap::new();
     for f in fmap.values() {
         let mut out = HashSet::new();
@@ -410,6 +412,11 @@ pub fn plan_small(prog: &Program, fmap: &Fmap, storage: &StoragePlan, stack: &St
         plan.fns.insert(f.name.clone(), (k, o, elem));
     }
 
+    // The resizable-slot filter runs before the site walk so ineligible candidates take no budget.
+    // The slice-backed result cannot be passed to a helper that needs a Vec slot.
+    plan.fns.retain(|name, (_, buffer, _)| {
+        !crate::check::resize_slot_names(fmap[name], resizes).contains(buffer)
+    });
     if plan.fns.is_empty() {
         return plan;
     }

@@ -135,22 +135,23 @@ fn load(chain: &str) -> Vec<Page> {
     pages
 }
 
-// The new row takes its packet (core_new grows it in place, as root.pruv does with its `p`; DB49), so its first page
-// needs an owned copy of `start`; own() makes it outside the timed call, as the borrowed rows get `start` for free.
+// The new and hand rows replace the packet: they start from an owned copy of `start` made by own() outside the timed
+// call, and the old packet is freed inside it on every page (new: `p = move out` in packet::page; hand: `*cur = next`).
+// LB5b: before, hand borrowed `start` on page 0 and never freed its input there, while new freed it.
 fn own(row: Row, start: &[i64]) -> Vec<i64> {
-    if row == Row::New {
-        start.to_vec()
-    } else {
+    if row == Row::Old {
         Vec::new()
+    } else {
+        start.to_vec()
     }
 }
 
-// One page of a row: the new row takes `cur` (on page 0 the copy from own()), old and hand borrow it (`start` on page 0).
+// One page of a row: the new row takes `cur`, hand borrows `cur` (both start from own()), old borrows `start` on page 0.
 fn step(row: Row, i: usize, pg: &Page, start: &[i64], cur: &mut Vec<i64>) {
     let next = match row {
         Row::Old => run_old(if i == 0 { start } else { cur }, &pg.d, pg.c, pg.o),
         Row::New => run_new(std::mem::take(cur), &pg.d, pg.c, pg.o),
-        Row::Hand => run_hand(&pg.d, if i == 0 { start } else { cur }, pg.c, pg.o).0,
+        Row::Hand => run_hand(&pg.d, cur, pg.c, pg.o).0,
     };
     *cur = next;
 }
@@ -278,6 +279,13 @@ fn main() {
             let row = row_of(&a[2]);
             let pages = load(&a[3]);
             let reps: usize = a[4].parse().unwrap();
+            // One call (the peak RSS probe): new and hand own their only input packet. Copying it from a borrowed
+            // `start` that stays alive would add one dead 5010-word packet (40080 bytes) to the peak.
+            if reps == 1 && row != Row::Old {
+                let r = call(row, &pages, black_box(&[]), start_packet());
+                black_box(r.len());
+                return;
+            }
             let start = start_packet();
             for _ in 0..reps {
                 let r = call(row, &pages, black_box(&start), own(row, &start));
