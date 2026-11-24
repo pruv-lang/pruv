@@ -3009,7 +3009,8 @@ class Gen:
             # P2 batch 4: `return truncate(x, m)` of an owned local array shortens x in place in every program
             if (not s.cost and isinstance(e, Call) and e.name == "truncate" and len(e.args) == 2
                     and isinstance(e.args[0], Var) and e.args[0].name in s.vt and e.args[0].name not in s.params
-                    and e.args[0].name not in s.refs and e.args[0].name not in s.pinned
+                    and e.args[0].name not in s.refs and e.args[0].name not in s.inouts
+                    and e.args[0].name not in s.pinned
                     and e.args[0].name not in s.borrowed_roots):
                 m_names = set()
                 _expr_names(e.args[1], m_names)
@@ -3024,7 +3025,7 @@ class Gen:
                 walk(k)
         walk(e)
         return {n for n, c in counts.items() if c == 1 and n not in s.refs and n not in s.params
-                and n not in s.pinned and n not in s.borrowed_roots}
+                and n not in s.inouts and n not in s.pinned and n not in s.borrowed_roots}
 
     def own_e(s, e):
         """an expression in an OWNING position (let, assignment, constructor field, return). A named value or a field
@@ -3045,6 +3046,7 @@ class Gen:
     def block(s, stmts, ind, decls=(), loop=False):
         saved = dict(s.vt)
         saved_refs = set(s.refs)
+        saved_inouts = set(s.inouts)
         later = [set() for _ in range(len(stmts) + 1)]
         for i in range(len(stmts) - 1, -1, -1):
             later[i] = set(later[i + 1])
@@ -3062,11 +3064,12 @@ class Gen:
         s.frames.pop()
         s.vt = saved
         s.refs = saved_refs
+        s.inouts = saved_inouts
 
     def dead_after(s, name):
         """the statement being emitted is the last use of local `name`: no later statement of any enclosing block up to
         the one declaring it names it, and no loop body lies between (a parameter or binder view is never dead here)."""
-        if name in s.refs or name in s.params or name in s.pinned or name in s.borrowed_roots:
+        if name in s.refs or name in s.inouts or name in s.params or name in s.pinned or name in s.borrowed_roots:
             return False
         for decls, later, loop, _ in reversed(s.frames):
             if name in later:
@@ -3080,7 +3083,7 @@ class Gen:
     def return_next(s, name):
         """R03L: the statement after the one being emitted is a return of the same block that does not name local
         `name`, so `name` is dead even inside a loop body (control leaves the function before any later iteration)."""
-        if name in s.refs or name in s.params or name in s.pinned or name in s.borrowed_roots or not s.frames:
+        if name in s.refs or name in s.inouts or name in s.params or name in s.pinned or name in s.borrowed_roots or not s.frames:
             return False
         return s.frames[-1][3] and name not in s.frames[-1][1]
 
@@ -3164,6 +3167,11 @@ class Gen:
             s.emit(ind, "let %s: &'static str = %s;" % (st.name, str_lit(st.value.value)))
             s.vt[st.name] = st.type
             s.refs.add(st.name)
+        elif isinstance(st, Let) and isinstance(st.value, InoutArg):   # R-6g9-5: `let d = inout P;` is `&mut P`
+            s.emit(ind, "let %s%s = %s;" % ("mut " if st.mutable else "", st.name, s.place_ref(st.value.expr)))
+            s.vt[st.name] = st.type
+            s.refs.discard(st.name)
+            s.inouts.add(st.name)
         elif isinstance(st, Let):
             s.moving = s.last_copy(st)
             binding = ("mut " if st.mutable else "") + st.name
@@ -3572,6 +3580,25 @@ class Gen:
         if name in s.inouts:
             return name if not s.cost and name in s.vt and not is_array(s.vt[name]) else "&mut *" + name
         return "&mut " + name
+
+    def place_ref(s, p):
+        """R-6g9-5: the `&mut` borrow of a place P ::= x | P.f | P[i] | if c {P} else {P}; an index is evaluated
+        once before the borrow; a verified element is in bounds (index_oob proven at the binding)"""
+        if isinstance(p, PlaceIf):
+            return "if %s { %s } else { %s }" % (s.e(p.cond), s.place_ref(p.then), s.place_ref(p.els))
+        if isinstance(p, Index):
+            arr = s.place_path(p.array)
+            if s.verified:
+                return "{ let pruv_pi = (%s) as usize; unsafe { %s.get_unchecked_mut(pruv_pi) } }" % (s.e(p.index), arr)
+            return "{ let pruv_pi = pruv_idx(%s, %s.len()); &mut %s[pruv_pi] }" % (s.e(p.index), arr, arr)
+        return "&mut " + s.place_path(p) if not (isinstance(p, Var) and p.name in s.inouts) else "&mut *" + p.name
+
+    def place_path(s, p):
+        """the Rust lvalue of a field place rooted at a local or an inout parameter (auto-deref through `&mut`)"""
+        root, path = field_place(p)
+        if not path and root.name in s.inouts:
+            return "(*%s)" % root.name
+        return ".".join((root.name,) + path)
 
     def inout_ref(s, e, callee, i):
         root, path = field_place(e)

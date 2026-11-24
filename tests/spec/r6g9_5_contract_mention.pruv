@@ -1,0 +1,18 @@
+// spec: R-6g9-5 reject
+// A loop invariant is a mention: naming x.total while d (bound to it) is live across the loop is a conflict.
+struct Q { total: i64, n: i64 }
+
+fn count(inout x: Q, n: i64) -> ()
+  requires 0 <= n && n < 1000 && 0 <= x.total && x.total < 1000
+{
+  let d = inout x.total;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n
+    invariant x.total < 2000
+    decreases n - i
+  {
+    d = d + 1;
+    i = i + 1;
+  }
+}

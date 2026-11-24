@@ -1,0 +1,16 @@
+// spec: R-6g9-5 accept
+pub fn guarded(inout a: [i64], n: i64) -> i64
+  requires len(a) >= 2
+{
+  let d = inout if n != 1 { a[0] } else { a[1 / n] };
+  return d;
+}
+
+fn nested(inout a: [i64], n: i64) -> i64
+  requires len(a) >= 2
+{
+  let d = inout if n != 1 { a[0] } else {
+    if 1 / n == 1 { a[1] } else { a[0] }
+  };
+  return d;
+}

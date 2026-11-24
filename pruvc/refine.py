@@ -91,6 +91,8 @@ def _kids(e):
         return [e.value]
     if isinstance(e, InoutArg):     # G5 A0
         return [e.expr]
+    if isinstance(e, PlaceIf):      # R-6g9-5
+        return [e.cond, e.then, e.els]
     return []
 
 
@@ -194,18 +196,28 @@ def _stmt_inout(st, out, *, select=None):
     return out
 
 
-def _assigned(stmts, out):
+def _assigned(stmts, out, aliases=None):
+    aliases = {} if aliases is None else dict(aliases)
     for st in stmts:
-        _stmt_inout(st, out)    # G5 A1: an inout argument of a call is a changed variable (no-op without inout)
+        writes = _stmt_inout(st, set())
         if isinstance(st, (Assign, IndexAssign)):
-            out.add(st.name)
+            writes.add(st.name)
+        out.update(aliases.get(name, name) for name in writes)
+        if isinstance(st, Let) and st.place:
+            place = st.value.expr
+            while isinstance(place, (PlaceIf, FieldAccess, Index)):
+                place = place.then if isinstance(place, PlaceIf) else (
+                    place.base if isinstance(place, FieldAccess) else place.array)
+            if isinstance(place, Var):
+                aliases[st.name] = place.name
         elif isinstance(st, If):
-            _assigned(st.then, out); _assigned(st.els, out)
+            _assigned(st.then, out, aliases)
+            _assigned(st.els, out, aliases)
         elif isinstance(st, (While, ForMap)):
-            _assigned(st.body, out)
+            _assigned(st.body, out, aliases)
         elif isinstance(st, Match):
             for a in st.arms:
-                _assigned(a.body, out)
+                _assigned(a.body, out, aliases)
     return out
 
 
@@ -252,6 +264,31 @@ def _synth_assert(r, label, expr, code, what):
     return _at_file(Assert(r.line, r.col, expr, code, what), r)
 
 
+def _place_refinement(place, scope):
+    if isinstance(place, Var):
+        return scope.get(place.name)
+    if isinstance(place, PlaceIf):
+        # Both arms have the same root and type.
+        return _place_refinement(place.then, scope)
+    if isinstance(place, Index):
+        r = _place_refinement(place.array, scope)
+        if r is not None and r.shape == "array" and r.base == "i64" and r.lo is not None:
+            element = copy.copy(r)
+            element.shape, element.maxlen = "scalar", None
+            return element
+    return None
+
+
+def _intersect_refinements(r, inherited):
+    if inherited is None or (r.shape, r.base) != (inherited.shape, inherited.base):
+        return r
+    both = copy.copy(r)
+    both.lo = max((x for x in (r.lo, inherited.lo) if x is not None), default=None)
+    both.hi = min((x for x in (r.hi, inherited.hi) if x is not None), default=None)
+    both.maxlen = min((x for x in (r.maxlen, inherited.maxlen) if x is not None), default=None)
+    return both
+
+
 class _Expander:
     def __init__(s, f):
         s.f = f
@@ -281,8 +318,12 @@ class _Expander:
                 for e in _stmt_call_exprs(st):
                     s.annotate(e, scope)
             if isinstance(st, Let):
+                if st.place:
+                    r = _place_refinement(st.value.expr, scope)
+                    if r is not None:
+                        scope[st.name] = r
                 if st.refine is not None:
-                    scope[st.name] = st.refine
+                    scope[st.name] = _intersect_refinements(st.refine, scope.get(st.name))
                     for label, e in parts(st.refine, st.name, s.k):
                         out.append(_synth_assert(st.refine, label, e, "refinement_init",
                                                  "the %s of local %s at its declaration (line %d)" % (

@@ -1,0 +1,30 @@
+// spec: R-6g9-5 reject
+fn grow() -> () ! alloc {
+  let mut a: [i64] = alloc(0, 0);
+  let mut i: i64 = 0;
+  while i < 1
+    invariant 0 <= i && i <= 1
+    invariant len(a) <= i
+    decreases 1 - i
+  {
+    let d = inout a;
+    arr_push(inout d, 1);
+    i = i + 1;
+  }
+  assert len(a) == 0;
+}
+
+fn grow_existing_alias() -> () ! alloc {
+  let mut a: [i64] = alloc(0, 0);
+  let d = inout a;
+  let mut i: i64 = 0;
+  while i < 1
+    invariant 0 <= i && i <= 1
+    invariant len(d) <= i
+    decreases 1 - i
+  {
+    arr_push(inout d, 1);
+    i = i + 1;
+  }
+  assert len(a) == 0;
+}

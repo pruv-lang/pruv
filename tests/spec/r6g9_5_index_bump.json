@@ -1,0 +1,10 @@
+{
+  "gen_absent": ["to_vec()", ".clone()"],
+  "gen_contains": ["(*v).get_unchecked_mut(pruv_pi)"],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["52"],
+    "alloc_balance": true
+  }
+}

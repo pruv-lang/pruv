@@ -1,0 +1,60 @@
+// spec: R-6g9-5 accept
+fn write_one(inout x: i64) -> () ensures x == 1 {
+  x = 1;
+}
+
+fn branch(inout x: i64, c: bool) -> i64 ensures result == 1 {
+  let d = inout x;
+  if c { d = 1; return x; } else { write_one(inout d); return x; }
+}
+
+enum Choice { A, B }
+
+fn arms(inout x: i64, c: Choice) -> i64 ensures result == 1 {
+  let d = inout x;
+  match c {
+    Choice::A => { d = 1; return x; }
+    Choice::B => { d = 1; return x; }
+  }
+}
+
+fn loop_exit(inout x: i64, c: bool) -> i64 ensures result == 1 {
+  let mut i: i64 = 1;
+  while i > 0 invariant 0 <= i && i <= 1 decreases i {
+    let d = inout x;
+    if c { d = 1; return x; }
+    i = 0;
+  }
+  return 1;
+}
+
+struct Pair { value: i64, other: i64 }
+
+fn disjoint_loop(inout x: Pair, limit: i64) -> i64
+  requires 0 <= limit && limit <= 1
+  ensures result == old(x.value)
+  ensures x.value == old(x.value)
+{
+  let d = inout x.value;
+  let mut i: i64 = 0;
+  while i < limit invariant 0 <= i && i <= limit decreases limit - i {
+    x.other = 1;
+    i = i + 1;
+  }
+  return d;
+}
+
+fn root_write_before_loop(inout x: Pair, limit: i64) -> i64
+  requires 0 <= limit && limit <= 1
+  ensures result == 2
+{
+  let d = inout x.value;
+  d = 1;
+  x.value = 2;
+  let mut i: i64 = 0;
+  while i < limit invariant 0 <= i && i <= limit decreases limit - i {
+    x.other = 1;
+    i = i + 1;
+  }
+  return x.value;
+}

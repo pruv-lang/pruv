@@ -1,0 +1,1 @@
+{"stage":"verify","code":"assert","line":12,"out_contains":["cannot prove assertion in wrong_left","cannot prove assertion in wrong_right"]}

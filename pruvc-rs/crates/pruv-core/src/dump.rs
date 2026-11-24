@@ -160,6 +160,12 @@ pub fn expr(e: &Expr) -> Json {
             Some((x.line, x.col)),
             vec![("op", js(&x.op)), ("left", bx(&x.left)), ("right", bx(&x.right)), ("ty", ty(&x.ty))],
         ),
+        Expr::Call(x) if PlaceIf::matches(x) => {
+            let [cond, then, els] = x.args.as_slice() else { unreachable!() };
+            node("PlaceIf", Some((x.line, x.col)), vec![
+                ("cond", bx(cond)), ("then", bx(then)), ("els", bx(els)), ("ty", ty(&x.ty)),
+            ])
+        }
         Expr::Call(x) => {
             let mut f: Fields = vec![("name", js(&x.name)), ("args", list(&x.args, expr)), ("ty", ty(&x.ty))];
             targs_extra(&mut f, &x.targs, &x.inst);
@@ -299,7 +305,7 @@ fn match_arm(a: &MatchArm) -> Json {
 pub fn stmt(s: &Stmt) -> Json {
     match s {
         Stmt::Let(x) => {
-            let mut f = vec![("name", js(&x.name)), ("mutable", Json::Bool(x.mutable)), ("type", tys(&x.ty)), ("value", expr(&x.value))];
+            let mut f = vec![("name", js(&x.name)), ("mutable", Json::Bool(x.mutable)), ("type", if x.ty.is_empty() { Json::Null } else { tys(&x.ty) }), ("value", expr(&x.value))];
             if let Some(r) = &x.refine {
                 f.push(("refine", refinement(r)));
             }

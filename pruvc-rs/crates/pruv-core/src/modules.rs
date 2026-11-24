@@ -1249,7 +1249,7 @@ impl<'a> Rs<'a> {
         for st in stmts.iter_mut() {
             match st {
                 Stmt::Let(l) => {
-                    l.ty = self.rtype_key(&l.ty, l.line, l.col)?;
+                    if !l.ty.is_empty() { l.ty = self.rtype_key(&l.ty, l.line, l.col)?; }
                     self.rrefine(&mut l.refine)?;
                     self.rexpr(&mut l.value)?;
                 }
@@ -1320,6 +1320,11 @@ impl<'a> Rs<'a> {
 
     // ---- expressions ----
     fn rexpr(&self, e: &mut Expr) -> Res<()> {
+        if let Expr::Call(call) = e {
+            if PlaceIf::matches(call) {
+                return call.args.iter_mut().try_for_each(|arg| self.rexpr(arg));
+            }
+        }
         // `crate::m::Enum::Variant(args)` parses as a Call: a variant constructor replaces the node
         let mut replace: Option<Expr> = None;
         if let Expr::Call(c) = &mut *e {

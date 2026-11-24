@@ -1,0 +1,9 @@
+// spec: R-6g9-5 accept
+struct Boxed<T> { val: T }
+
+fn f() -> i64 {
+  let mut q: Boxed<i64> = Boxed::<i64> { val: 0 };
+  let d = inout q.val;
+  d = 1;
+  return q.val;
+}

@@ -1,0 +1,11 @@
+// spec: R-6g9-5 reject
+fn see(x: i64) -> () {}
+fn nothing() -> () {}
+
+fn f(inout x: i64) -> () {
+  let d = inout x;
+  par {
+    see(d);
+    nothing();
+  }
+}

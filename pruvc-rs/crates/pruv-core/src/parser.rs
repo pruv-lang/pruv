@@ -1339,13 +1339,24 @@ impl Parser {
                 mutable = true;
             }
             let n = self.ident()?.val;
-            if !self.at(":", 0) {
+            let (ty, refine) = if self.at(":", 0) {
+                self.bump();
+                self.type_r(true)?
+            } else if self.at("=", 0) && self.at_ident("inout", 1) {
+                (String::new(), None)
+            } else {
                 return Err(self.err("let needs a type annotation", format!("write `let {}: i64 = ...;`", n), None));
-            }
-            self.bump();
-            let (ty, refine) = self.type_r(true)?;
+            };
             self.expect("=")?;
-            let value = self.expr()?;
+            let value = if self.at_ident("inout", 0) {
+                let t = self.next();
+                Expr::InoutArg(InoutArg {
+                    line: t.line, col: t.col, expr: Box::new(self.place_operand()?),
+                    ty: None, post_refine: Vec::new(),
+                })
+            } else {
+                self.expr()?
+            };
             self.expect(";")?;
             return Ok(Stmt::Let(Let { borrowed: false, line: l, col: c, name: n, mutable, ty, value, refine }));
         }
@@ -1809,6 +1820,24 @@ impl Parser {
             return Ok(Expr::Unary(Unary { line: t.line, col: t.col, op: t.val, operand: Box::new(o), ty: None }));
         }
         self.postfix()
+    }
+
+    fn place_operand(&mut self) -> R<Expr> {
+        if !self.at("if", 0) {
+            return self.postfix();
+        }
+        self.enter(1)?;
+        let t = self.next();
+        let cond = self.expr()?;
+        self.expect("{")?;
+        let then = self.place_operand()?;
+        self.expect("}")?;
+        self.expect("else")?;
+        self.expect("{")?;
+        let els = self.place_operand()?;
+        self.expect("}")?;
+        self.leave(1);
+        Ok(PlaceIf { line: t.line, col: t.col, cond, then, els, ty: None }.into_expr())
     }
 
     fn postfix(&mut self) -> R<Expr> {

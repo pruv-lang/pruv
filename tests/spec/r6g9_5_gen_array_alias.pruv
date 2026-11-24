@@ -1,0 +1,25 @@
+// spec: R-6g9-5 accept
+// Length and element operations use the caller's array through the alias.
+fn update(inout a: [i64]) -> bool
+  requires len(a) > 0
+{
+  let d = inout a;
+  d[0] = 7;
+  return len(d) == 2 && d[0] == 7;
+}
+
+fn replace(inout a: [i64]) -> bool ! alloc {
+  // A direct replacement already gives the parameter a resizable slot.
+  a = alloc(1, 0);
+  let d = inout a;
+  d = alloc(3, 5);
+  return len(d) == 3;
+}
+
+pub fn checksum() -> bool ! alloc {
+  let mut a: [i64] = alloc(2, 4);
+  let value: bool = update(inout a);
+  let updated: bool = value && a[0] == 7;
+  let replaced: bool = replace(inout a);
+  return updated && replaced && len(a) == 3;
+}

@@ -1,0 +1,21 @@
+// spec: R-6g9-5 reject
+fn refined() -> i64 {
+  let mut x: i64 | 0..=10 = 0;
+  let d = inout x;
+  d = 11;
+  return x;
+}
+
+fn refined_element() -> i64 ! alloc {
+  let mut a: [i64 | 0..=10] = alloc(1, 0);
+  let d = inout a[0];
+  d = 11;
+  return a[0];
+}
+
+fn refined_explicit_alias() -> i64 {
+  let mut x: i64 | 0..=10 = 0;
+  let d: i64 | 0..=20 = inout x;
+  d = 11;
+  return x;
+}

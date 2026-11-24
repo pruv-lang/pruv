@@ -1,0 +1,1 @@
+{"stage":"verify","code":"refinement_assign","line":3,"out_contains":["on line 12 in refined_element","on line 19 in refined_explicit_alias"]}

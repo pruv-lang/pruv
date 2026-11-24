@@ -894,6 +894,8 @@ struct Ownership<'a> {
     track: Option<Track>,
     /// G10 A0: must-consume bindings, name -> "Process" | "Socket" | "Listener"; never File, String or ProcessArgs
     proc: HashMap<String, &'static str>,
+    /// Place bindings that refer to a must-consume handle.
+    borrowed_handles: HashMap<String, &'static str>,
     /// name -> (line, col) of the Let that declared it (location of a scope-end proc_unconsumed / net_unconsumed)
     decl: HashMap<String, (i64, i64)>,
 }
@@ -988,8 +990,9 @@ impl<'a> Ownership<'a> {
                 self.dead_stmt(x)?;
             }
         }
-        if let Some(s) = cur.as_mut() {
-            for n in &declared {
+        for n in &declared {
+            self.borrowed_handles.remove(n);
+            if let Some(s) = cur.as_mut() {
                 if let Some(kind) = self.proc.get(n) {
                     if matches!(s.get(n), Some(V::Live) | Some(V::Maybe)) {
                         let (l, c) = self.decl.get(n).copied().unwrap_or((0, 0));
@@ -1018,6 +1021,15 @@ impl<'a> Ownership<'a> {
 
     fn stmt(&mut self, x: &Stmt, mut st: St, declared: &mut Vec<String>) -> Res<Option<St>> {
         match x {
+            Stmt::Let(l) if l.is_place() => {
+                // Evaluate the borrow while keeping the resource duty on its owner.
+                self.expr(&l.value, &mut st)?;
+                if let Some(kind) = must_kind(&l.ty) {
+                    self.borrowed_handles.insert(l.name.clone(), kind);
+                    declared.push(l.name.clone());
+                }
+                Ok(Some(st))
+            }
             Stmt::Let(l) => {
                 self.consume(&l.value, &mut st, "let")?;
                 self.consumed_field = None;
@@ -1037,10 +1049,12 @@ impl<'a> Ownership<'a> {
             }
             Stmt::Assign(a) => {
                 self.consume(&a.value, &mut st, "assign")?; // the right-hand side is consumed first
-                if let Some(kind) = self.proc.get(&a.name) {
-                    if matches!(st.get(&a.name), Some(V::Live) | Some(V::Maybe)) {
-                        return Err(handle_lost(kind, a.line, a.col, format!("{} {} is overwritten while it is not consumed", kind, a.name)));
-                    }
+                let mut kind = self.borrowed_handles.get(&a.name);
+                if kind.is_none() && matches!(st.get(&a.name), Some(V::Live) | Some(V::Maybe)) {
+                    kind = self.proc.get(&a.name);
+                }
+                if let Some(kind) = kind {
+                    return Err(handle_lost(kind, a.line, a.col, format!("{} {} is overwritten while it is not consumed", kind, a.name)));
                 }
                 if st.contains(&a.name) {
                     st.set(&a.name, V::Live);
@@ -1513,6 +1527,15 @@ impl<'a> Ownership<'a> {
                 self.expr(&x.index, st)?;
                 self.expr(&x.array, st)
             }
+            Expr::Call(c) if PlaceIf::matches(c) => {
+                let [cond, then, els] = c.args.as_slice() else { unreachable!() };
+                self.expr(cond, st)?;
+                let mut other = st.clone();
+                self.expr(then, st)?;
+                self.expr(els, &mut other)?;
+                *st = join(Some(std::mem::take(st)), Some(other)).unwrap();
+                Ok(())
+            }
             Expr::Call(c) => {
                 self.call(c, st)?;
                 if !owned {
@@ -1706,7 +1729,7 @@ pub fn check_ownership(f: &Function, funcs: &Takes, aggregates: &HashSet<String>
     Ownership {
         funcs, aggregates, enums, variants, map_binders: Vec::new(), bor: HashSet::new(), arm_bor: Vec::new(),
         string_error_binders: HashSet::new(), field_only: HashSet::new(), track: None,
-        proc: HashMap::new(), decl: HashMap::new(), consumed_field: None,
+        proc: HashMap::new(), borrowed_handles: HashMap::new(), decl: HashMap::new(), consumed_field: None,
     }.run(f)
 }
 

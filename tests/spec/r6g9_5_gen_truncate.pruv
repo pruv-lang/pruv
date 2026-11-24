@@ -1,0 +1,12 @@
+// spec: R-6g9-5 accept
+// Taking a prefix creates an owned array while the caller keeps its array.
+fn prefix(inout a: [i64]) -> [i64] ! alloc {
+  let d = inout a;
+  return truncate(d, 0);
+}
+
+pub fn checksum() -> bool ! alloc {
+  let mut a: [i64] = alloc(2, 4);
+  let p: [i64] = prefix(inout a);
+  return len(p) == 0 && len(a) == 2;
+}

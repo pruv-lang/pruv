@@ -1,0 +1,8 @@
+// spec: R-6g9-5 reject
+fn index(inout a: [u8]) -> i64 ensures result == 0 { return 0; }
+
+fn f(inout a: [u8], inout x: [i64]) -> i64 requires len(x) > 0 {
+  let v: ref [u8] = a;
+  let d = inout x[index(inout a)];
+  return len(v);
+}

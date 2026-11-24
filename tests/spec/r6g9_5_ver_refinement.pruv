@@ -1,0 +1,23 @@
+// spec: R-6g9-5 accept
+fn write_two(inout x: i64) -> () ensures x == 2 {
+  x = 2;
+}
+
+pub fn refined() -> i64 ensures result == 2 {
+  let mut x: i64 | 0..=10 = 0;
+  let d = inout x;
+  d = 1;
+  write_two(inout d);
+  return x;
+}
+
+fn refined_loop() -> i64 {
+  let mut x: i64 | 0..=10 = 0;
+  let mut i: i64 = 0;
+  while i < 1 invariant 0 <= i && i <= 1 decreases 1 - i {
+    let d = inout x;
+    d = 10 - d;
+    i = i + 1;
+  }
+  return x;
+}

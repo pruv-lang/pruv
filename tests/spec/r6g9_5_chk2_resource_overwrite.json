@@ -1,0 +1,6 @@
+{
+  "stage": "type",
+  "code": "proc_unconsumed",
+  "line": 5,
+  "out_contains": ["Process d is overwritten while it is not consumed"]
+}

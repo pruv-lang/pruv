@@ -1,0 +1,21 @@
+{
+  "gen_contains": [
+    ".to_vec()"
+  ],
+  "gen_absent": [
+    ".shrink_to_fit()"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "true"
+    ],
+    "alloc_balance": true
+  }
+}

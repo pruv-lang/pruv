@@ -1,0 +1,17 @@
+// spec: R-6g9-5 reject
+// The root's struct invariant relates x.a to x.b; a write through d breaks it and is reported where the root's invariant is checked (inout x at exit).
+struct P { a: i64, b: i64, invariant a <= b }
+
+fn f(inout x: P) -> ()
+  requires x.b < 1000
+{
+  let d = inout x.a;
+  d = x.b + 1;
+}
+
+pub fn g() -> i64
+{
+  let mut x: P = P { a: 1, b: 2 };
+  f(inout x);
+  return x.a;
+}

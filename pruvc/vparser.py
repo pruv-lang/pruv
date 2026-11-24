@@ -918,10 +918,14 @@ class Parser:
             if s.at("mut"):
                 s.next(); mut = True
             n = s.ident().val
+            if s.at("=") and s.peek(1).kind == "id" and s.peek(1).val == "inout":
+                return s.place_let(L, C, n, mut, None, None)
             if not s.at(":"):
                 s.err("let needs a type annotation", "write `let %s: i64 = ...;`" % n)
             s.next()
             ty, rf = s.type_r(True)
+            if s.at("=") and s.peek(1).kind == "id" and s.peek(1).val == "inout":
+                return s.place_let(L, C, n, mut, ty, rf)
             s.expect("=")
             v = s.expr()
             s.expect(";")
@@ -1097,6 +1101,31 @@ class Parser:
                 s.next()
                 return Var(name.line, name.col, name.val)
         return s.expr()
+
+    def place_let(s, L, C, n, mut, ty, rf):
+        """R-6g9-5: `let d [: T] = inout P;` with P ::= x | P.f | P[i] | if c { P } else { P }. The place is kept as
+        written inside an InoutArg; the checker validates its shape and fills the binding type."""
+        s.expect("=")
+        t = s.next()
+        place = s.place_operand()
+        s.expect(";")
+        st = Let(L, C, n, mut, ty, InoutArg(t.line, t.col, place), rf)
+        st.place = True
+        return st
+
+    def place_operand(s):
+        if s.at("if"):
+            t = s.next()
+            cond = s.expr()
+            s.expect("{")
+            then = s.place_operand()
+            s.expect("}")
+            s.expect("else")
+            s.expect("{")
+            els = s.place_operand()
+            s.expect("}")
+            return PlaceIf(t.line, t.col, cond, then, els)
+        return s.postfix()
 
     def if_(s):
         t = s.expect("if")

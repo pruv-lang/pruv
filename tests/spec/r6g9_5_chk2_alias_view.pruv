@@ -1,0 +1,7 @@
+// spec: R-6g9-5 reject
+fn f(inout a: [u8]) -> i64 {
+  let d = inout a;
+  let v: ref [u8] = d;
+  d[0] = 1;
+  return len(v);
+}

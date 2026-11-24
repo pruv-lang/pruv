@@ -593,7 +593,8 @@ class _Resolver:
     def rstmts(s, stmts):
         for st in stmts:
             if isinstance(st, Let):
-                st.type = s.rtype(st.type, st)
+                if st.type is not None:   # R-6g9-5: a place binding without a type gets it from the checker
+                    st.type = s.rtype(st.type, st)
                 s.rrefine(st.refine)
                 st.value = s.rexpr(st.value)
             elif isinstance(st, (Assign, FieldAssign)):
@@ -696,6 +697,8 @@ class _Resolver:
             e.base = s.rexpr(e.base)
         elif isinstance(e, InoutArg):     # G5 A0
             e.expr = s.rexpr(e.expr)
+        elif isinstance(e, PlaceIf):      # R-6g9-5
+            e.cond, e.then, e.els = s.rexpr(e.cond), s.rexpr(e.then), s.rexpr(e.els)
         return e
 
     # ---- public interfaces ----

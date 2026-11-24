@@ -2637,6 +2637,8 @@ impl<'a> FnGen<'a> {
         match e {
             Expr::Var(x) => match self.lookup(&x.name)? {
                 Bind::Slot(s) => Ok(s.a),
+                Bind::Ssa(v) if v.k == Kind::Arr => Err(e2_diag(x.line, x.col,
+                    "forwarding a fixed-length array place to a resizable inout parameter needs the Rust backend")),
                 Bind::Ssa(_) => Err(format!("llvmgen: no mutable storage for {}", x.name)),
             },
             Expr::FieldAccess(x) => {
@@ -4044,6 +4046,61 @@ impl<'a> FnGen<'a> {
         self.end_temps()
     }
 
+    fn place_ptr(&mut self, place: &Expr) -> R<String> {
+        if let Expr::Call(c) = place {
+            if crate::ast::PlaceIf::matches(c) {
+                let cond = self.ev(&c.args[0], false)?;
+                let then = self.label("pthen");
+                let els = self.label("pelse");
+                let end = self.label("pend");
+                self.condbr(&cond.a, &then, &els)?;
+                self.place(&then);
+                self.begin_temps();
+                let a = self.place_ptr(&c.args[1])?;
+                self.end_temps()?;
+                let pa = self.cur.clone();
+                self.br(&end)?;
+                self.place(&els);
+                self.begin_temps();
+                let b = self.place_ptr(&c.args[2])?;
+                self.end_temps()?;
+                let pb = self.cur.clone();
+                self.br(&end)?;
+                self.place(&end);
+                return self.op(format!("phi ptr [ {a}, %{pa} ], [ {b}, %{pb} ]"));
+            }
+        }
+        let base = if let Expr::Index(i) = place { i.array.as_ref() } else { place };
+        let (root, path) = crate::check::field_place(base);
+        let Expr::Var(root) = root else { return Err("invalid place root".into()) };
+        let binding = self.lookup(&root.name)?;
+        if let Expr::Index(i) = place {
+            let arr = match binding {
+                Bind::Ssa(v) if path.is_empty() => v,
+                Bind::Slot(slot) if path.is_empty() => self.load(&slot)?,
+                Bind::Slot(slot) => {
+                    let (ptr, ty) = self.field_ptr_ty(&slot, &path)?;
+                    let data = self.op(format!("load ptr, ptr {ptr}"))?;
+                    let len_ptr = self.op(format!("getelementptr inbounds {ARR}, ptr {ptr}, i32 0, i32 1"))?;
+                    let len = self.op(format!("load i64, ptr {len_ptr}"))?;
+                    let mut arr = V::with_b(Kind::Arr, data, len);
+                    arr.ty = elem_ty(&ty);
+                    arr
+                }
+                _ => return Err(format!("llvmgen: place binding of non-slot {}", root.name)),
+            };
+            if arr.layout != "i64" {
+                return Err(format!("llvmgen: place binding into a narrowed array {}", root.name));
+            }
+            let index = self.ev(&i.index, false)?;
+            return self.index_ptr(&arr, &index);
+        }
+        let Bind::Slot(slot) = binding else {
+            return Err(format!("llvmgen: place binding of non-slot {}", root.name));
+        };
+        if path.is_empty() { Ok(slot.a) } else { Ok(self.field_ptr_ty(&slot, &path)?.0) }
+    }
+
     pub fn stmt(&mut self, st: &Stmt) -> R<()> {
         match st {
             Stmt::Let(x) if x.borrowed && is_arr_name(&x.ty) => {
@@ -4055,6 +4112,34 @@ impl<'a> FnGen<'a> {
                 let sc = self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?;
                 sc.names.insert(x.name.clone(), Bind::Slot(sl));
                 self.end_temps()
+            }
+            Stmt::Let(x) if x.is_place() => {
+                let Expr::InoutArg(arg) = &x.value else { unreachable!() };
+                let kind = vkind(&x.ty);
+                if kind == Kind::Arr {
+                    if let Expr::Var(place) = &*arg.expr {
+                        if self.f.params.iter().any(|p| p.name == place.name && p.mode_pos.is_some()) {
+                            // Reuse the data/length pair or the caller-owned resizable slot.
+                            let binding = self.lookup(&place.name)?;
+                            self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?
+                                .names.insert(x.name.clone(), binding);
+                            return Ok(());
+                        }
+                    }
+                }
+                if !matches!(kind, Kind::I64 | Kind::I1 | Kind::Agg) || self.is_ext(&x.ty) {
+                    let ty = crate::gtype::GType::from_key(&x.ty);
+                    return Err(e2_diag(x.line, x.col,
+                        &format!("a place binding of type {} needs the Rust backend", ty.name)));
+                }
+                self.begin_temps();
+                let ptr = self.place_ptr(&arg.expr)?;
+                self.end_temps()?;
+                let mut slot = Slot::new(kind, ptr);
+                slot.ty = Some(x.ty.clone());
+                self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?
+                    .names.insert(x.name.clone(), Bind::Slot(slot));
+                Ok(())
             }
             Stmt::Let(x) if self.m.stack.contains(x) && !self.resize_slots.contains(&x.name) => self.stack_let(x),
             Stmt::Let(x) if self.m.stack.lit(x) && !self.cost
@@ -4120,7 +4205,12 @@ impl<'a> FnGen<'a> {
             }
             Stmt::Assign(x) => {
                 self.begin_temps();
-                let sl = self.lookup(&x.name)?.val().clone();
+                let binding = self.lookup(&x.name)?;
+                if matches!(&binding, Bind::Ssa(v) if v.k == Kind::Arr) {
+                    return Err(e2_diag(x.line, x.col,
+                        "replacing a fixed-length array place needs a resizable inout parameter"));
+                }
+                let sl = binding.val().clone();
                 if sl.k == Kind::Arr && sl.c.is_none() {
                     // R-6g9-1: rebinding a view slot: nothing to free
                     let v = self.ev(&x.value, false)?;

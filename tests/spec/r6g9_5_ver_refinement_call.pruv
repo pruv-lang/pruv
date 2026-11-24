@@ -1,0 +1,11 @@
+// spec: R-6g9-5 reject
+fn write_eleven(inout x: i64) -> i64 ensures x == 11 {
+  x = 11;
+  return 0;
+}
+
+fn refined() -> i64 {
+  let mut x: i64 | 0..=10 = 0;
+  let d = inout x;
+  return write_eleven(inout d);
+}

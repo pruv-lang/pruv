@@ -1,0 +1,49 @@
+// spec: R-6g9-5 accept
+// core_hand shape: the element picked by index stays bound while the disjoint field t.bytes grows; the hand's
+// `continue` is the arm of the inner if that ends the iteration without touching d.
+struct Tail { st: [i64], bytes: [u8], units: i64 }
+
+fn push(inout t: Tail, s: i64, data: [u8]) -> () ! alloc
+  requires 0 <= s && s < len(t.st)
+  requires 0 <= t.units && t.units < 1000000
+  requires len(data) < 1000
+  requires len(t.bytes) == 0
+  requires 0 <= t.st[s] && t.st[s] <= 2
+  ensures 0 <= t.st[s] && t.st[s] <= 2
+  ensures len(t.bytes) <= len(data)
+  ensures t.units == old(t.units) + len(data)
+{
+  let mut i: i64 = 0;
+  while i < len(data)
+    invariant 0 <= i && i <= len(data)
+    invariant s < len(t.st)
+    invariant t.units == old(t.units) + i
+    invariant len(t.bytes) <= i
+    invariant 0 <= t.st[s] && t.st[s] <= 2
+    decreases len(data) - i
+  {
+    let d = inout t.st[s];
+    if d > 0 {
+      arr_push(inout t.bytes, data[i]);
+      d = d - 1;
+    } else {
+      if data[i] < 128 {
+        arr_push(inout t.bytes, data[i]);
+      } else {
+        d = 2;
+      }
+    }
+    t.units = t.units + 1;
+    i = i + 1;
+  }
+}
+
+pub fn checksum() -> i64 ! alloc
+{
+  let st0: [i64] = alloc(2, 0);
+  let b0: [u8] = alloc(0, 0);
+  let mut t: Tail = Tail { st: move st0, bytes: move b0, units: 0 };
+  let data: [u8] = alloc(5, 200);
+  push(inout t, 1, data);
+  return t.st[1] * 100 + len(t.bytes) * 10 + t.units;
+}

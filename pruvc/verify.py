@@ -149,10 +149,34 @@ class TraceRecorder:
 VEC_RESIZERS = ("vec_push", "vec_pop", "vec_clear", "vec_extend_from_slice")
 
 
-def _vec_resize_params(prog):
-    """Inout vector parameters whose length can change through vec_clear or forwarding."""
+def _parameter_place_paths(place, aliases):
+    """Resolve possible roots and field paths, excluding element places."""
+    if isinstance(place, Var):
+        return aliases.get(place.name, ((place.name, ()),))
+    if isinstance(place, FieldAccess):
+        return tuple((name, path + (place.field,)) for name, path in _parameter_place_paths(place.base, aliases))
+    if isinstance(place, PlaceIf):
+        return tuple(dict.fromkeys(_parameter_place_paths(place.then, aliases)
+                                   + _parameter_place_paths(place.els, aliases)))
+    return ()
+
+
+def _walk_place_uses(body, visit, aliases=None):
     from foreign_shim import _walk
 
+    aliases = {} if aliases is None else aliases.copy()
+    for stmt in body:
+        visit(stmt, aliases)
+        for expr in _stmt_exprs(stmt):
+            _walk(expr, lambda node: visit(node, aliases))
+        for block in _stmt_blocks(stmt):
+            _walk_place_uses(block, visit, aliases)
+        if isinstance(stmt, Let) and stmt.place:
+            aliases[stmt.name] = _parameter_place_paths(stmt.value.expr, aliases)
+
+
+def _vec_resize_params(prog):
+    """Inout vector parameters whose length can change through a resizer or forwarding."""
     resizes = set()
     forwarded = {}
     for fn in prog.functions:
@@ -160,18 +184,26 @@ def _vec_resize_params(prog):
         if not params:
             continue
 
-        def visit(node):
+        def visit(node, aliases):
+            if isinstance(node, Assign):
+                for name, path in aliases.get(node.name, ((node.name, ()),)):
+                    if not path and name in params:
+                        resizes.add((fn.name, params[name]))
             if not isinstance(node, Call):
                 return
             for i, arg in enumerate(node.args):
-                if isinstance(arg, InoutArg) and isinstance(arg.expr, Var) and arg.expr.name in params:
-                    source = (fn.name, params[arg.expr.name])
+                if not isinstance(arg, InoutArg):
+                    continue
+                for name, path in _parameter_place_paths(arg.expr, aliases):
+                    if path or name not in params:
+                        continue
+                    source = (fn.name, params[name])
                     if node.name in VEC_RESIZERS:
                         resizes.add(source)
                     else:
                         forwarded.setdefault((node.name, i), set()).add(source)
 
-        _walk(fn.body, visit)
+        _walk_place_uses(fn.body, visit)
     pending = list(resizes)
     while pending:
         for source in forwarded.get(pending.pop(), ()):
@@ -192,8 +224,6 @@ def _struct_array_paths(tt, ty, path=()):
 
 def _struct_len_frames(prog, tt, resizes):
     """Per inout struct parameter, find the array leaves whose lengths survive a call."""
-    from foreign_shim import _walk
-
     paths = {(f.name, i): set(_struct_array_paths(tt, p.type))
              for f in prog.functions for i, p in enumerate(f.params)
              if p.mode == "inout" and tt.is_struct(p.type)}
@@ -209,29 +239,30 @@ def _struct_len_frames(prog, tt, resizes):
         if not params:
             continue
 
-        def visit(node):
-            if isinstance(node, Assign) and node.name in params:
-                mark(params[node.name], ())
-            elif isinstance(node, (FieldAssign, Move)) and node.name in params:
-                mark(params[node.name], tuple(node.fields))
+        def visit(node, aliases):
+            if isinstance(node, (Assign, FieldAssign, Move)):
+                fields = () if isinstance(node, Assign) else tuple(node.fields)
+                for name, path in aliases.get(node.name, ((node.name, ()),)):
+                    if name in params:
+                        mark(params[name], path + fields)
             elif isinstance(node, Call):
                 callee = funcs.get(node.name)
                 for i, arg in enumerate(node.args):
                     if not isinstance(arg, InoutArg):
                         continue
-                    root, path = field_place(arg.expr)
-                    if not isinstance(root, Var) or root.name not in params:
-                        continue
-                    source, target = params[root.name], (node.name, i)
-                    if callee is not None and callee.foreign is None:
-                        if target in paths:
-                            forwarded.append((source, path, target))
-                        elif target in resizes:
+                    for name, path in _parameter_place_paths(arg.expr, aliases):
+                        if name not in params:
+                            continue
+                        source, target = params[name], (node.name, i)
+                        if callee is not None and callee.foreign is None:
+                            if target in paths:
+                                forwarded.append((source, path, target))
+                            elif target in resizes:
+                                mark(source, path)
+                        elif node.name not in ("copy_range", "copy_within", "store_be", "store_le", "vec_reserve", "arr_reserve"):
                             mark(source, path)
-                    elif node.name not in ("copy_range", "copy_within", "store_be", "store_le", "arr_reserve"):
-                        mark(source, path)
 
-        _walk(f.body, visit)
+        _walk_place_uses(f.body, visit)
     again = True
     while again:
         again = False
@@ -839,6 +870,8 @@ def _kids(e):
         return [e.base]
     if isinstance(e, (IsVariant, VariantField)):
         return [e.value]
+    if isinstance(e, PlaceIf):
+        return [e.cond, e.then, e.els]
     return []
 
 
@@ -921,6 +954,40 @@ def _stmt_blocks(st):
     if isinstance(st, Match):
         return [a.body for a in st.arms]
     return []
+
+
+def _place_lets(stmts, out):
+    """R-6g9-5: the place bindings of stmts, nested blocks included"""
+    for st in stmts:
+        if isinstance(st, Let) and getattr(st, "place", False):
+            out.append(st)
+        for b in _stmt_blocks(st):
+            _place_lets(b, out)
+    return out
+
+
+def field_place_root(p):
+    """R-6g9-5: the root variable name of a place"""
+    while not isinstance(p, Var):
+        p = p.base if isinstance(p, FieldAccess) else p.array if isinstance(p, Index) else p.then
+    return p.name
+
+
+def _whole_place(p):
+    if isinstance(p, PlaceIf):
+        return _whole_place(p.then) and _whole_place(p.els)
+    return isinstance(p, Var)
+
+
+def _store_paths(stmts, out):
+    for stmt in stmts:
+        if isinstance(stmt, Assign):
+            out.setdefault(stmt.name, []).append(())
+        elif isinstance(stmt, (FieldAssign, IndexAssign)):
+            out.setdefault(stmt.name, []).append(tuple(stmt.fields))
+        for block in _stmt_blocks(stmt):
+            _store_paths(block, out)
+    return out
 
 
 def _expr_has(e, pred):
@@ -1134,11 +1201,13 @@ class State:
         s.rev = frozenset()     # P13o: names of the opaque functions revealed on this path
         s.apps = ()             # P13o: (function, application term, argument values, guard, enclosing quantifier constants) met on this path, in order
         s.app_ids = frozenset()     # LG30 (G-LG29-1): (application id, guard ids) of every occurrence in apps
+        s.places = {}           # R-6g9-5: copy on binding, shared by forks and restored on block exit
 
     def fork(s, extra=None):
         n = State(dict(s.env), s.pc + ([extra] if extra is not None else []))
         n.obs = s.obs
         n.rev, n.apps, n.app_ids = s.rev, s.apps, s.app_ids
+        n.places = s.places
         return n
 
 
@@ -2450,7 +2519,7 @@ class FnVerifier:
             for i, v in enumerate(vs):
                 arr = z3.Store(arr, av.n + i, v)
             nv = mk_arr(arr, av.n + len(vs), ".".join((root.name,) + path), av.elem)
-            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, nv, st, g) if path else nv
+            s.store(st, root.name, s.rebuild(root.ty, st.env[root.name], path, nv, st, g) if path else nv, g)
             if av.elem == U8:
                 s.assume(st, g, u8_dom(nv))
             s.post_refine(e, [0], st, g)
@@ -2465,7 +2534,7 @@ class FnVerifier:
                                        z3.Select(sv.a, start + p - dv.n), z3.Select(dv.a, p)))
             root, path = field_place(e.args[0].expr)
             nv = mk_arr(arr, need, ".".join((root.name,) + path), dv.elem)
-            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, nv, st, g) if path else nv
+            s.store(st, root.name, s.rebuild(root.ty, st.env[root.name], path, nv, st, g) if path else nv, g)
             if nv.elem == U8:
                 s.assume(st, g, u8_dom(nv))
             s.post_refine(e, [0], st, g)
@@ -2489,7 +2558,7 @@ class FnVerifier:
             arr = z3.Lambda([p], z3.If(z3.And(p >= i, p < i + cnt), z3.Select(sv.a, j + p - i), z3.Select(dv.a, p)))
             root, path = field_place(e.args[0].expr)
             nv = mk_arr(arr, dv.n, ".".join((root.name,) + path), dv.elem)
-            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, nv, st, g) if path else nv
+            s.store(st, root.name, s.rebuild(root.ty, st.env[root.name], path, nv, st, g) if path else nv, g)
             if nv.elem == U8:       # both operands are in the byte domain, so the result is too
                 s.assume(st, g, u8_dom(nv))
             s.post_refine(e, [0], st, g)
@@ -2518,7 +2587,7 @@ class FnVerifier:
             root, path = field_place(e.args[0].expr)
             name = root.name
             nv = mk_arr(arr, av.n, ".".join((name,) + path), av.elem)
-            st.env[name] = s.rebuild(root.ty, st.env[name], path, nv, st, g) if path else nv
+            s.store(st, name, s.rebuild(root.ty, st.env[name], path, nv, st, g) if path else nv, g)
             s.post_refine(e, [0], st, g)
             return None
         if n == "is_char_boundary":
@@ -2790,7 +2859,7 @@ class FnVerifier:
                         after = s.read_field(st, after, field)
                     s.assume(st, g, after.n == before.n)
             cenv[f.params[i].name] = nv
-            st.env[name] = s.rebuild(root.ty, st.env[name], path, nv, st, g) if path else nv
+            s.store(st, name, s.rebuild(root.ty, st.env[name], path, nv, st, g) if path else nv, g)
 
     def post_refine(s, e, ios, st, g):
         """G5 A1 (G5_SPEC 5.2 step 8): the refinement of every marked refined local must hold right after the call
@@ -2798,7 +2867,7 @@ class FnVerifier:
         assertions were attached to the inout argument by refine.py."""
         for i in ios:
             for a in getattr(e.args[i], "post_refine", None) or ():
-                st.pc.append(s.check_assert(a, st))
+                s.assume(st, g, s.check_assert(a, st, g))
 
     def par(s, p, st):
         """G7 A1 (G7_SPEC 5): one par group. (1) every branch's actuals are evaluated against the group-entry state and
@@ -2966,7 +3035,7 @@ class FnVerifier:
             empty = mk_arr(v.a, z3.IntVal(0), v.name, v.elem)
             if v.elem in s.model.vec_sums:
                 s.vec_sum(st, g, empty)
-            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, empty, st, g)
+            s.store(st, root.name, s.rebuild(root.ty, st.env[root.name], path, empty, st, g), g)
             return None
         if n == "vec_extend_from_slice":   # D95: old prefix kept, suffix equals the slice
             v, src = args
@@ -2980,7 +3049,7 @@ class FnVerifier:
             s.assume(st, g, z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < src.n),
                                                       z3.Select(r.a, v.n + k) == z3.Select(src.a, k))))
             out = mk_arr(r.a, v.n + src.n, v.name, v.elem)
-            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, out, st, g)
+            s.store(st, root.name, s.rebuild(root.ty, st.env[root.name], path, out, st, g), g)
             return None
         if n == "string_eq":
             a, b = args
@@ -3024,7 +3093,7 @@ class FnVerifier:
             new = Map(z3.Store(m.d, k, z3.BoolVal(False)), m.a, m.n - z3.If(has, 1, 0),
                       m.name, m.kty, m.vty)
             root, path = field_place(e.args[0].expr)
-            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, new, st, g)
+            s.store(st, root.name, s.rebuild(root.ty, st.env[root.name], path, new, st, g), g)
             return s.map_lookup(m, k, rty) if n == "map_take" else has
         if n == "map_insert":
             m, k, x = args
@@ -3464,6 +3533,7 @@ class FnVerifier:
             prev.append(ob)
 
     def exec_block(s, stmts, st):
+        outer_places = st.places
         states = [st]
         for stmt in stmts:
             nxt = []
@@ -3472,7 +3542,110 @@ class FnVerifier:
             states = nxt
             if not states:
                 break
+        for cur in states:
+            cur.places = outer_places
         return states
+
+    # ---------- R-6g9-5: place bindings ----------
+
+    def place_ite(s, c, a, b):
+        if isinstance(a, Arr):
+            return mk_arr(z3.If(c, a.a, b.a), z3.If(c, a.n, b.n), a.name, a.elem)
+        if isinstance(a, Map):
+            return Map(z3.If(c, a.d, b.d), z3.If(c, a.a, b.a), z3.If(c, a.n, b.n),
+                       a.name, a.kty, a.vty)
+        if isinstance(a, (File, Process, Socket, Listener, PArgs)):
+            return type(a)(*(s.place_ite(c, getattr(a, field), getattr(b, field)) for field in a.__slots__))
+        if isinstance(a, Loop):
+            return Loop(**{field: s.place_ite(c, value, getattr(b, field)) for field, value in vars(a).items()})
+        if a is None:
+            return None
+        return z3.If(c, a, b)
+
+    def place_read(s, p, st, snaps):
+        """the current value of place p, with its index and condition operands at their binding values"""
+        if isinstance(p, Var):
+            return st.env[p.name]
+        if isinstance(p, FieldAccess):
+            return s.read_field(st, s.place_read(p.base, st, snaps), p.field)
+        if isinstance(p, Index):
+            return z3.Select(s.place_read(p.array, st, snaps).a, snaps[id(p)])
+        return s.place_ite(snaps[id(p)], s.place_read(p.then, st, snaps), s.place_read(p.els, st, snaps))
+
+    def place_write(s, p, st, snaps, v):
+        """store v into place p (the location captured at binding)"""
+        if isinstance(p, Var):
+            st.env[p.name] = mk_arr(v.a, v.n, p.name, v.elem) if isinstance(v, Arr) else v
+        elif isinstance(p, FieldAccess):
+            cur = s.place_read(p.base, st, snaps)
+            s.place_write(p.base, st, snaps, s.rebuild(s.model.type_of(cur), cur, (p.field,), v, st))
+        elif isinstance(p, Index):
+            arr = s.place_read(p.array, st, snaps)
+            s.place_write(p.array, st, snaps, mk_arr(z3.Store(arr.a, snaps[id(p)], v), arr.n, arr.name, arr.elem))
+        else:
+            root = field_place_root(p)
+            a, b = st.fork(), st.fork()
+            s.place_write(p.then, a, snaps, v)
+            s.place_write(p.els, b, snaps, v)
+            c = snaps[id(p)]
+            base = len(st.pc)
+            for branch, guard in ((a, c), (b, z3.Not(c))):
+                for fact in branch.pc[base:]:
+                    s.assume(st, [guard], fact)
+            st.env[root] = s.place_ite(c, a.env[root], b.env[root])
+
+    def place_bind(s, p, st, snaps, guard, let):
+        """evaluate the operands of place p once, in source order, and prove every index in bounds"""
+        if isinstance(p, FieldAccess):
+            s.place_bind(p.base, st, snaps, guard, let)
+        elif isinstance(p, Index):
+            s.place_bind(p.array, st, snaps, guard, let)
+            i = s.ev(p.index, st, guard, True)
+            snaps[id(p)] = i
+            arr = s.place_read(p.array, st, snaps)
+            s.prove(st, guard, z3.And(i >= 0, i < arr.n), let, "index_oob",
+                    "index in bounds for place binding %s" % let.name)
+        elif isinstance(p, PlaceIf):
+            c = s.ev(p.cond, st, guard, True)
+            snaps[id(p)] = c
+            s.place_bind(p.then, st, snaps, guard + [c], let)
+            s.place_bind(p.els, st, snaps, guard + [z3.Not(c)], let)
+
+    def place_let(s, let, st):
+        st = st.fork()
+        snaps = {}
+        p = let.value.expr
+        s.place_bind(p, st, snaps, [], let)
+        v = s.place_read(p, st, snaps)
+        if let.type == I64:
+            st.pc.append(in_range(v))       # an element read: the value lies in the i64 range, as with x[i]
+        st.env[let.name] = mk_arr(v.a, v.n, let.name, v.elem) if isinstance(v, Arr) else v
+        st.places = st.places.copy()
+        st.places[let.name] = (let, snaps)
+        return [st]
+
+    def store(s, st, name, value, guard=()):
+        """Update the alias's local view and its captured location in the same transition.
+
+        The checker excludes overlapping stores while this view can still be read.
+        """
+        cond = z3.And(*guard) if guard else None
+        binding = st.places.get(name)
+        if binding is not None:
+            let, snaps = binding
+            place = let.value.expr
+            if cond is not None:
+                branch = st.fork()
+                s.place_write(place, branch, snaps, value)
+                root = field_place_root(place)
+                for fact in branch.pc[len(st.pc):]:
+                    s.assume(st, guard, fact)
+                st.env[root] = s.place_ite(cond, branch.env[root], st.env[root])
+            else:
+                s.place_write(place, st, snaps, value)
+        if cond is not None:
+            value = s.place_ite(cond, value, st.env[name])
+        st.env[name] = value
 
     def assigned(s, stmts, out):
         for st in stmts:
@@ -3520,12 +3693,13 @@ class FnVerifier:
                     s.whole_assigned(a.body, out)
         return out
 
-    def havoc(s, st, names, keep=frozenset()):
+    def havoc(s, st, names, keep=frozenset(), place_frames=()):
         """keep: array names whose havoc retains the length term (G5 A1: inout parameters, and locals changed only by
         inout calls); every other array gets an arbitrary well-formed length exactly as before"""
         h = st.fork()
+        aliases = st.places
         for n in sorted(names):
-            if n not in h.env:
+            if n in aliases or n not in h.env:
                 continue
             old = h.env[n]
             if isinstance(old, File):
@@ -3578,27 +3752,42 @@ class FnVerifier:
             if root.name in names:
                 saved = s.ev(place, st.fork(), [], False)
                 h.env[root.name] = s.rebuild(root.ty, h.env[root.name], path, saved, h)
+        for let, snaps in place_frames:
+            place = let.value.expr
+            saved = s.place_read(place, st.fork(), snaps)
+            s.place_write(place, h, snaps, saved)
+        # A live alias that the loop never writes can still be read after a sibling field changes.
+        for let, snaps in h.places.values():
+            p = let.value.expr
+            if let.name in names:
+                v = s.place_read(p, h, snaps)
+                if let.type == I64 and not _whole_place(p):
+                    h.pc.append(in_range(v))
+                h.env[let.name] = mk_arr(v.a, v.n, let.name, v.elem) if isinstance(v, Arr) else v
         return h
 
-    def check_assert(s, stmt, st):
+    def check_assert(s, stmt, st, guard=None):
         """prove one assertion (user or synthesized by refine.py) on st; returns its value term"""
-        s.check_dom(st, [], stmt.cond, stmt, "variant_field lookups in assertion are defined")
-        ob = s.ev(stmt.cond, st, [], False)
+        guard = [] if guard is None else guard
+        s.check_dom(st, guard, stmt.cond, stmt, "variant_field lookups in assertion are defined")
+        ob = s.ev(stmt.cond, st, guard, False)
         if stmt.origin_code is None:
-            s.prove(st, [], ob, stmt, "assert", "assertion")
+            s.prove(st, guard, ob, stmt, "assert", "assertion")
         else:
             # synthesized by refine.py: own code and a source description; the description also keys
             # the duplicate suppression, so different sites of one annotation are all reported
-            s.prove(st, [], ob, stmt, stmt.origin_code, stmt.origin_what, stmt.origin_what)
+            s.prove(st, guard, ob, stmt, stmt.origin_code, stmt.origin_what, stmt.origin_what)
         return ob
 
     def exec(s, stmt, st):
+        if isinstance(stmt, Let) and getattr(stmt, "place", False):
+            return s.place_let(stmt, st)
         if isinstance(stmt, Let) or isinstance(stmt, Assign):
             st = st.fork()
             v = s.ev(stmt.value, st, [], True)
             if isinstance(v, Arr):
                 v = mk_arr(v.a, v.n, stmt.name, v.elem)
-            st.env[stmt.name] = v
+            s.store(st, stmt.name, v)
             return [st]
         if isinstance(stmt, IndexAssign):
             st = st.fork()
@@ -3629,9 +3818,9 @@ class FnVerifier:
             if fpath:
                 new = mk_arr(z3.Store(arr.a, i, v), arr.n, arr.name, arr.elem)
                 root = st.env[stmt.name]
-                st.env[stmt.name] = s.rebuild(s.model.type_of(root), root, fpath, new, st)
+                s.store(st, stmt.name, s.rebuild(s.model.type_of(root), root, fpath, new, st))
                 return [st]
-            st.env[stmt.name] = mk_arr(z3.Store(arr.a, i, v), arr.n, stmt.name, arr.elem)
+            s.store(st, stmt.name, mk_arr(z3.Store(arr.a, i, v), arr.n, stmt.name, arr.elem))
             return [st]
         if isinstance(stmt, If):
             st = st.fork()
@@ -3711,7 +3900,7 @@ class FnVerifier:
                                 old_sum = s.vec_sum(end, [], collection)
                                 new_sum = s.vec_sum(end, [], new)
                                 end.pc.append(new_sum == old_sum - size(element) + size(final))
-                        end.env[root.name] = s.rebuild(root.ty, end.env[root.name], path, new, end)
+                        s.store(end, root.name, s.rebuild(root.ty, end.env[root.name], path, new, end))
 
                     # binders and arm locals end with the arm; only updates to outer variables remain
                     for k in [k for k in end.env if k not in outer]:
@@ -3722,7 +3911,7 @@ class FnVerifier:
             st = st.fork()
             v = s.ev(stmt.value, st, [], True)          # rhs first, on the state before the store
             root = st.env[stmt.name]
-            st.env[stmt.name] = s.rebuild(s.model.type_of(root), root, stmt.fields, v, st)
+            s.store(st, stmt.name, s.rebuild(s.model.type_of(root), root, stmt.fields, v, st))
             return [st]
         if isinstance(stmt, Return):
             st = st.fork()
@@ -3778,14 +3967,33 @@ class FnVerifier:
         # operands of resizing calls or whole assignments may lose their length.
         calls = s.call_writes(w.body, set(), select=lambda call, i: call.name not in ("vec_reserve", "arr_reserve"))
         keep = frozenset()
+        # Translate writes through aliases, including bindings declared during the loop.
+        bindings = [let for let, _ in st.places.values()] + _place_lets(w.body, [])
+        aliases = {}
+        for let in bindings:
+            place = let.value.expr
+            aliases.setdefault(let.name, set()).add((field_place_root(place), _whole_place(place)))
+        alias_writes = {root for name in names | calls for root, _ in aliases.get(name, ())}
+        calls |= alias_writes
+        names |= calls
         if calls or s.snap:
             whole = s.whole_assigned(w.body, set())
             resizes = s.call_writes(w.body, set(), select=lambda call, i:
                                     call.name in VEC_RESIZERS + ("arr_push", "arr_append") or (call.name, i) in s.model.vec_resize_params)
-            names |= calls
-            keep = frozenset((names & s.snap.keys() | calls) - whole - resizes)
+            loses_length = {root for name in whole | resizes
+                            for root, is_whole in aliases.get(name, ((name, True),)) if is_whole}
+            keep = frozenset((names & s.snap.keys() | calls) - loses_length)
+        # Preserve captured places when the root is modified only by disjoint field stores.
+        place_frames = []
+        if st.places:
+            stores = _store_paths(w.body, {})
+            for let, snaps in st.places.values():
+                root, path = let.place_root
+                if root in stores and root not in calls and all(
+                        any(a != b for a, b in zip(path, written)) for written in stores[root]):
+                    place_frames.append((let, snaps))
         # one arbitrary iteration; the invariants held (and were defined) at its start
-        b = s.havoc(st, names, keep)
+        b = s.havoc(st, names, keep, place_frames)
         for _cid, inv, _text in invs:
             d = s.dom(inv, b, [], b.env, "variant")
             if d is not None:
@@ -3840,7 +4048,7 @@ class FnVerifier:
             s.prove(end, [], s.ev(w.decreases, end, [], False) < d0, w.decreases, "decreases_decrease",
                     "decreases strictly decreases")
         # after the loop
-        a = s.havoc(st, names, keep)
+        a = s.havoc(st, names, keep, place_frames)
         for _cid, inv, _text in invs:
             d = s.dom(inv, a, [], a.env, "variant")
             if d is not None:

@@ -130,6 +130,14 @@ def plan_storage(program_after_mono, verified=True):
                 if n is not None: join(n, scope.get(e.name))
             elif isinstance(e, InoutArg):
                 if children: pin(children[0])
+                # R-6g9-5: a place binding `let d = inout a[i]` writes an element through d: the array keeps i64
+                stack = [e.expr]
+                while stack:
+                    p = stack.pop()
+                    if isinstance(p, Index):
+                        if isinstance(p.array, Var): pin(scope.get(p.array.name))
+                        stack.append(p.array)
+                    elif isinstance(p, PlaceIf): stack += [p.then, p.els]
                 if n is not None: join(n, children[0])
             elif isinstance(e, Call):
                 if e.name in ('copy', 'truncate', 'old', 'resize', 'subview'):

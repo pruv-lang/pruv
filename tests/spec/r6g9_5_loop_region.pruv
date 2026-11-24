@@ -1,0 +1,31 @@
+// spec: R-6g9-5 accept
+// d is bound before the loop and used inside it: the whole loop is its live region and the only write-back is the
+// loop exit (no write-back on the back edge); a disjoint field is written inside the loop.
+struct Q { total: i64, n: i64 }
+
+fn count(inout x: Q, n: i64) -> ()
+  requires 0 <= n && n < 1000 && 0 <= x.total && x.total < 1000
+  ensures x.total == old(x.total) + n
+  ensures x.n == n
+{
+  let t0: i64 = x.total;
+  let d = inout x.total;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n
+    invariant d == t0 + i
+    decreases n - i
+  {
+    d = d + 1;
+    x.n = i + 1;
+    i = i + 1;
+  }
+  x.n = n;
+}
+
+pub fn checksum() -> i64
+{
+  let mut x: Q = Q { total: 5, n: 0 };
+  count(inout x, 7);
+  return x.total * 100 + x.n;
+}

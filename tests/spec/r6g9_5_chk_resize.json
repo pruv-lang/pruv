@@ -1,0 +1,6 @@
+{
+  "gen_contains": [
+    "a: &mut ::std::vec::Vec<i64>",
+    "b: &mut ::std::vec::Vec<i64>"
+  ]
+}

@@ -1,0 +1,16 @@
+// spec: R-6g9-5 accept
+// Only the selected arm evaluates its index and releases its temporary.
+fn select(inout a: [i64], b: bool) -> i64 ! alloc
+  requires len(a) > 1
+{
+  let d = inout if b { a[len(alloc(1, 0))] } else { a[0] };
+  return d;
+}
+
+pub fn checksum() -> bool ! alloc {
+  let mut a: [i64] = alloc(2, 3);
+  a[1] = 7;
+  let left: i64 = select(inout a, true);
+  let right: i64 = select(inout a, false);
+  return left == 7 && right == 3;
+}

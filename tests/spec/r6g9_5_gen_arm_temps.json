@@ -1,0 +1,19 @@
+{
+  "backend": "llvm",
+  "gen_regex": [
+    "pthen\\.\\d+:[\\s\\S]*?call void @pruv_free_nn\\([^\\n]*\\)\\n  br label %pend\\.\\d+\\npelse\\."
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "true"
+    ],
+    "alloc_balance": true
+  }
+}

@@ -1,0 +1,8 @@
+// spec: R-6g9-5 accept
+fn f(take input: File, c: bool) -> File {
+  let mut x: File = move input;
+  let d = inout if c { x } else { x };
+  return move x;
+}
+
+pub fn main_value() -> i64 { return 0; }

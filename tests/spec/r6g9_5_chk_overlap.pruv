@@ -1,0 +1,7 @@
+// spec: R-6g9-5 reject
+fn f(inout x: i64) -> () {
+  let d = inout x;
+  let e = inout x;
+  d = 1;
+  e = 2;
+}

@@ -3777,6 +3777,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                             if self.vars.contains_key(&v.name)
                                 && !self.params.contains(&v.name)
                                 && !self.refs.contains(&v.name)
+                                && !self.inouts.contains(&v.name)
                                 && !self.pinned.contains(&v.name)
                             {
                                 let mut m_names = HashSet::new();
@@ -3804,7 +3805,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
         let mut counts = HashMap::new();
         walk(e, &mut counts);
         for (n, c) in counts {
-            if c == 1 && !self.refs.contains(&n) && !self.params.contains(&n) && !self.pinned.contains(&n) {
+            if c == 1 && !self.inouts.contains(&n) && !self.refs.contains(&n) && !self.params.contains(&n) && !self.pinned.contains(&n) {
                 out.insert(n);
             }
         }
@@ -3826,6 +3827,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
     fn block_in(&mut self, stmts: &[Stmt], ind: usize, decls: &[String], lp: bool) -> R<()> {
         let saved = self.vars.clone();
         let saved_refs = self.refs.clone();
+        let saved_inouts = self.inouts.clone();
         let mut later: Vec<HashSet<String>> = vec![HashSet::new(); stmts.len() + 1];
         for i in (0..stmts.len()).rev() {
             let mut n = later[i + 1].clone();
@@ -3853,13 +3855,14 @@ pruv_hi <= (pruv_b.len() as i128) && \
         self.frames.pop();
         self.vars = saved;
         self.refs = saved_refs;
+        self.inouts = saved_inouts;
         Ok(())
     }
 
     /// the statement being emitted is the last use of local `name`: no later statement of any enclosing block up to
     /// the one declaring it names it, and no loop body lies between (a parameter or binder view is never dead here).
     fn dead_after(&self, name: &str) -> bool {
-        if self.refs.contains(name) || self.params.contains(name) || self.pinned.contains(name) {
+        if self.refs.contains(name) || self.inouts.contains(name) || self.params.contains(name) || self.pinned.contains(name) {
             return false;
         }
         for (decls, later, lp, _) in self.frames.iter().rev() {
@@ -3878,7 +3881,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
 
     // A following return can end the lifetime even inside a loop body.
     fn return_next(&self, name: &str) -> bool {
-        !self.refs.contains(name) && !self.params.contains(name) && !self.pinned.contains(name)
+        !self.refs.contains(name) && !self.inouts.contains(name) && !self.params.contains(name) && !self.pinned.contains(name)
             && self.frames.last().is_some_and(|(_, later, _, returns)| *returns && !later.contains(name))
     }
 
@@ -4179,8 +4182,44 @@ pruv_hi <= (pruv_b.len() as i128) && \
         Ok(format!("{{ let pruv_v: i64 = {}; {}[pruv_v{}; {}] }}", v, chk, cast, n))
     }
 
+    fn place_path(&self, place: &Expr) -> R<String> {
+        let (root, path) = crate::check::field_place(place);
+        let Expr::Var(root) = root else { return Err("invalid place root".into()) };
+        if path.is_empty() && self.inouts.contains(&root.name) {
+            return Ok(format!("(*{})", root.name));
+        }
+        Ok(std::iter::once(root.name.as_str()).chain(path.iter().map(String::as_str)).collect::<Vec<_>>().join("."))
+    }
+
+    fn place_ref(&mut self, place: &Expr) -> R<String> {
+        match place {
+            Expr::Call(c) if crate::ast::PlaceIf::matches(c) => Ok(format!("if {} {{ {} }} else {{ {} }}",
+                self.e(&c.args[0])?, self.place_ref(&c.args[1])?, self.place_ref(&c.args[2])?)),
+            Expr::Index(i) => {
+                let arr = self.place_path(&i.array)?;
+                let idx = self.e(&i.index)?;
+                if self.verified {
+                    Ok(format!("{{ let pruv_pi = ({idx}) as usize; unsafe {{ {arr}.get_unchecked_mut(pruv_pi) }} }}"))
+                } else {
+                    Ok(format!("{{ let pruv_pi = pruv_idx({idx}, {arr}.len()); &mut {arr}[pruv_pi] }}"))
+                }
+            }
+            Expr::Var(v) if self.inouts.contains(&v.name) => Ok(format!("&mut *{}", v.name)),
+            _ => Ok(format!("&mut {}", self.place_path(place)?)),
+        }
+    }
+
     fn stmt(&mut self, st: &Stmt, ind: usize) -> R<()> {
         match st {
+            Stmt::Let(x) if x.is_place() => {
+                let Expr::InoutArg(arg) = &x.value else { unreachable!() };
+                let place = self.place_ref(&arg.expr)?;
+                let mutable = if x.mutable { "mut " } else { "" };
+                self.emit(ind, &format!("let {mutable}{} = {place};", x.name));
+                self.vars.insert(x.name.clone(), x.ty.clone());
+                self.refs.remove(&x.name);
+                self.inouts.insert(x.name.clone());
+            }
             Stmt::Let(x) if self.stack.contains(x) && !self.resize_slots.contains(&x.name) => {
                 let init = self.stack_init(x)?;
                 let line = format!("let {}{}: {} = {};", if x.mutable { "mut " } else { "" }, x.name, self.stack_type(x), init);
