@@ -2603,6 +2603,10 @@ impl<'a> Gen<'a> {
             }
             let a = match &x.arg {
                 Some(a) => a,
+                None if x.name == "Ok" => {
+                    let re = g.as_ref().map_or_else(|| "i64".to_string(), crate::emit_common::result_error_rty);
+                    return Ok(format!("Ok::<(), {}>(())", re));
+                }
                 None => return Err("codegen: unsupported expression in requires: None".to_string()),
             };
             if x.name == "Some" {
@@ -2806,13 +2810,15 @@ impl<'a> Gen<'a> {
             }
             Expr::Ctor(x) => {
                 if let Some(g) = ctor_type(&x.ty) {
-                    let cx = try_cty_g(&g.args[0])?;
+                    // LB8: the Ok payload of Result<(), E> mirrors to ()
+                    let cx = if g.args[0].name == "unit" && g.args[0].owner.is_none() { "()".to_string() } else { try_cty_g(&g.args[0])? };
                     if x.name == "None" {
                         return Ok(format!("None::<{}>", cx));
                     }
                     let a = match &x.arg {
                         Some(a) if x.name == "Err" && g.has_string_error() => format!("{}.clone()", self.c(a)?),
                         Some(a) => self.c(a)?,
+                        None if x.name == "Ok" => "()".to_string(),
                         None => return Err("codegen: unsupported expression in requires: None".to_string()),
                     };
                     if x.name == "Some" {
@@ -3891,7 +3897,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 None => a.ctor.clone(),
                 Some(en) => format!("{}::{}", en, a.ctor),
             };
-            let pat = if a.binders.is_empty() { name } else { format!("{}({})", name, a.binders.join(", ")) };
+            let pat = if a.binders.is_empty() && a.enum_name.is_none() && a.ctor == "Ok" { "Ok(())".to_string() } else if a.binders.is_empty() { name } else { format!("{}({})", name, a.binders.join(", ")) };
             self.emit(ind + 1, &format!("{} => {{", pat));
             let saved_vars = self.vars.clone();
             let saved_refs = self.refs.clone();
@@ -4310,7 +4316,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         None => a.ctor.clone(),
                         Some(en) => format!("{}::{}", en, a.ctor),
                     };
-                    let pat = if a.binders.is_empty() { name } else { format!("{}({})", name, a.binders.join(", ")) };
+                    let pat = if a.binders.is_empty() && a.enum_name.is_none() && a.ctor == "Ok" { "Ok(())".to_string() } else if a.binders.is_empty() { name } else { format!("{}({})", name, a.binders.join(", ")) };
                     self.emit(ind + 1, &format!("{} => {{", pat));
                     let string_error = (owned_result && a.ctor == "Err").then(|| &a.binders[0]);
                     if let Some(binder) = string_error {
@@ -4923,6 +4929,8 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     }
                     let a = match &x.arg {
                         Some(a) => self.e(a)?,
+                        // R-6g7-1: Ok(()) of a Result<(), E>
+                        None if x.name == "Ok" => "()".to_string(),
                         None => return Err("codegen: contract-only expression in code: None".to_string()),
                     };
                     if x.name == "Some" {

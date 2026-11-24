@@ -1,0 +1,4 @@
+// spec: R-6g7-1 reject
+fn f() -> Option<Result<(), i64>> {
+  return None::<Result<(), i64>>;
+}

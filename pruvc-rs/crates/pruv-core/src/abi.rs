@@ -185,6 +185,10 @@ impl<'a> Words<'a> {
     pub fn de_new(&mut self, ty: &str, ptr: &str, off: usize, act: Option<&str>) -> R<String> {
         let tt = self.tt;
         let on = act.is_some();
+        if ty == "unit" {
+            // LB8: the zero-word Ok payload of Result<(), E>
+            return Ok("zeroinitializer".to_string());
+        }
         if ty == "i64" {
             let w = self.rd(ptr, off);
             return Ok(match act {
@@ -305,6 +309,10 @@ impl<'a> Words<'a> {
     /// the tag is set, a Result error word when it is not, an enum payload when the tag selects its variant.
     pub fn ser_new(&mut self, ty: &str, x: &str, ptr: &str, off: usize, act: Option<&str>) -> R<()> {
         let tt = self.tt;
+        if ty == "unit" {
+            // LB8: the zero-word Ok payload of Result<(), E>
+            return Ok(());
+        }
         if ty == "i64" {
             let v = match act {
                 Some(a) => self.op(format!("select i1 {}, i64 {}, i64 0", a, x)),

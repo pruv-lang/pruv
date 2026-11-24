@@ -476,7 +476,7 @@ class Model:
             return None if w is None else z3.If(o.is_some(t), w, 0)
         if fty.name == "result":
             o = s.res(fty)
-            w = s.weight(fty.args[0], o.oval(t))
+            w = None if o.oval is None else s.weight(fty.args[0], o.oval(t))
             if len(fty.args) == 2:
                 err = s.weight(result_error(fty), o.eval(t))
                 if err is not None:
@@ -680,12 +680,15 @@ class Model:
                                  srt.accessor(0, 0))
             s.short[tag + "Some"], s.short[tag + "None"] = "Some", "None"
         elif ty.name == "result":
-            ps = s.sort_of(ty.args[0])
-            dt.declare(tag + "Ok", (tag + "Ok.val", ps))
+            unit = ty.args[0] == UNIT     # LB8 R-6g7-1: Result<(), E> has a field-less Ok
+            if unit:
+                dt.declare(tag + "Ok")
+            else:
+                dt.declare(tag + "Ok", (tag + "Ok.val", s.sort_of(ty.args[0])))
             dt.declare(tag + "Err", (tag + "Err.val", s.sort_of(result_error(ty))))
             srt = dt.create()
             s.gres[ty] = _ResOps(srt.constructor(0), srt.constructor(1), srt.recognizer(0), srt.recognizer(1),
-                                 srt.accessor(0, 0), srt.accessor(1, 0))
+                                 None if unit else srt.accessor(0, 0), srt.accessor(1, 0))
             s.short[tag + "Ok"], s.short[tag + "Err"] = "Ok", "Err"
         else:
             d = s.tt.decls[ty.name]
@@ -1189,7 +1192,7 @@ def _wf_of(m, ty, v):
         return None if w is None else z3.Implies(o.is_some(v), w)
     if ty.name == "result":
         o = m.res(ty)
-        w = _wf_of(m, ty.args[0], o.oval(v))
+        w = None if o.oval is None else _wf_of(m, ty.args[0], o.oval(v))     # LB8: no Ok payload in Result<(), E>
         parts = [] if w is None else [z3.Implies(o.is_ok(v), w)]
         error = result_error(ty)
         err = _wf_of(m, error, m.field_get(error, o.eval(v)) if error == _STRING else o.eval(v))
@@ -1999,6 +2002,8 @@ class FnVerifier:
             cty = s.T(e.ty)
             if e.name == "None":
                 return s.model.opt(cty).none
+            if e.arg is None:       # LB8 R-6g7-1: Ok::<(), E>(())
+                return s.model.res(cty).ok()
             v = s.ev(e.arg, st, g, code, env)
             if e.name == "Some":
                 return s.model.opt(cty).some(v)
@@ -3655,7 +3660,7 @@ class FnVerifier:
                         else: cond, val = o.is_none(v), None
                     else:
                         o = s.model.res(sty)
-                        if a.ctor == "Ok": cond, val = o.is_ok(v), o.oval(v)
+                        if a.ctor == "Ok": cond, val = o.is_ok(v), (o.oval(v) if o.oval is not None else None)
                         else: cond, val = o.is_err(v), o.eval(v)
                     vals = [] if val is None else [val]
                     ftys = [result_error(sty) if a.ctor == "Err" else payload] * len(vals)

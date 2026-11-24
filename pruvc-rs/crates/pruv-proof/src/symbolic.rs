@@ -1750,7 +1750,10 @@ impl<'a> FnVerifier<'a> {
             }
             Ty::Inst(g) if g.name == "result" => {
                 let o = m.res(Some(ty))?;
-                let w = self.try_wf(&Ty::from_gtype(&g.args[0]), &o.oval.apply1(v))?;
+                let w = match &o.oval {
+                    Some(ov) => self.try_wf(&Ty::from_gtype(&g.args[0]), &ov.apply1(v))?,
+                    None => None,
+                };
                 let mut parts: Vec<Option<Ast>> = Vec::new();
                 if let Some(w) = w {
                     parts.push(Some(o.is_ok.apply1(v).implies(&w)));
@@ -2756,6 +2759,11 @@ impl<'a> FnVerifier<'a> {
                     let o = model.opt(cty.as_ref())?;
                     return Ok(Val::Dt(o.none.clone(), cty.unwrap_or(Ty::Opt)));
                 }
+                if x.arg.is_none() && x.name == "Ok" {
+                    // LB8 R-6g7-1: Ok::<(), E>(())
+                    let o = model.res(cty.as_ref())?;
+                    return Ok(Val::Dt(o.ok.apply(&[]), cty.unwrap_or(Ty::Res)));
+                }
                 let arg = x.arg.as_ref().ok_or_else(|| "None".to_string())?;
                 let v = self.ev(arg, st, g, code, env)?;
                 let v = self.field_put(&payload_ty(cty.as_ref(), x.name == "Err"), &v, &mut st.pc)?;
@@ -3524,7 +3532,10 @@ impl<'a> FnVerifier<'a> {
                 let o = self.model.res(Some(ty))?;
                 return match n {
                     "is_ok" => Ok(Val::Bool(o.is_ok.apply1(a))),
-                    "ok_val" => Val::from_field(&payload_ty(Some(ty), false), o.oval.apply1(a)),
+                    "ok_val" => Val::from_field(
+                        &payload_ty(Some(ty), false),
+                        o.oval.as_ref().ok_or("ok_val of Result<(), E>")?.apply1(a),
+                    ),
                     _ => self.field_val(&payload_ty(Some(ty), true), o.eval.apply1(a), n),
                 };
             }
@@ -5481,7 +5492,7 @@ impl<'a> FnVerifier<'a> {
                         } else {
                             let o = model.res(sty.as_ref())?;
                             if a.ctor == "Ok" {
-                                (o.is_ok.apply1(&v), Some(o.oval.apply1(&v)))
+                                (o.is_ok.apply1(&v), o.oval.as_ref().map(|ov| ov.apply1(&v)))
                             } else {
                                 (o.is_err.apply1(&v), Some(o.eval.apply1(&v)))
                             }

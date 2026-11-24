@@ -1,0 +1,7 @@
+// spec: R-6g7-1 reject
+fn f(r: Result<(), i64>) -> i64 {
+  match r {
+    Ok(v) => { return 1; }
+    Err(e) => { return e; }
+  }
+}

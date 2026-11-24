@@ -1,0 +1,20 @@
+{
+  "gen_contains": [
+    "Result<(), ",
+    "Ok::<(), pruv_m_t_",
+    "Ok(()) =>"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "101019"
+    ],
+    "alloc_balance": true
+  }
+}

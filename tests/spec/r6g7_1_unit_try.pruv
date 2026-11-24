@@ -1,0 +1,70 @@
+// spec: R-6g7-1 accept
+struct Fault { code: i64 }
+
+fn check(x: i64) -> Result<(), Fault>
+  ensures is_ok(result) == (x >= 0)
+{
+  if x < 0 { return Err::<(), Fault>(Fault { code: x }); }
+  return Ok::<(), Fault>(());
+}
+
+fn both(a: i64, b: i64) -> Result<i64, Fault>
+  requires a < 1000 && b < 1000
+  ensures is_ok(result) == (a >= 0 && b >= 0)
+  ensures is_ok(result) ==> ok_val(result) == a + b
+{
+  check(a)?;
+  check(b)?;
+  return Ok::<i64, Fault>(a + b);
+}
+
+fn steps(n: i64) -> Result<(), i64>
+  requires n >= 0 && n < 100
+  ensures is_ok(result) == (n < 50)
+{
+  if n >= 50 { return Err::<(), i64>(n); }
+  return Ok::<(), i64>(());
+}
+
+fn chain(n: i64) -> Result<(), i64>
+  requires n >= 0 && n < 100
+  ensures is_ok(result) == (n < 50)
+{
+  steps(n)?;
+  return Ok::<(), i64>(());
+}
+
+fn code(r: Result<(), Fault>) -> i64
+  ensures result >= 0 && result <= 1
+{
+  match r {
+    Ok(()) => { return 0; }
+    Err(f) => { return 1; }
+  }
+}
+
+pub fn checksum() -> i64 {
+  let mut total: i64 = 0;
+  let r: Result<i64, Fault> = both(3, 4);
+  match r {
+    Ok(v) => { total = total + v; }
+    Err(f) => { total = total + 3; }
+  }
+  let q: Result<i64, Fault> = both(5, -9);
+  match q {
+    Ok(v) => { total = total + v * 100; }
+    Err(f) => { total = total + 1000; }
+  }
+  total = total + code(check(-2)) * 10 + code(check(8));
+  let c: Result<(), i64> = chain(70);
+  match c {
+    Ok(()) => { total = total + 1; }
+    Err(e) => { total = total + 100000; }
+  }
+  let d: Result<(), i64> = chain(7);
+  match d {
+    Ok(()) => { total = total + 2; }
+    Err(e) => { total = total + 5; }
+  }
+  return total;
+}

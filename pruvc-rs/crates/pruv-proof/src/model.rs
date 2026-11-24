@@ -391,7 +391,8 @@ pub struct ResOps {
     pub err: FuncDecl,
     pub is_ok: FuncDecl,
     pub is_err: FuncDecl,
-    pub oval: FuncDecl,
+    /// None for Result<(), E> (LB8 R-6g7-1: field-less Ok)
+    pub oval: Option<FuncDecl>,
     pub eval: FuncDecl,
 }
 
@@ -414,7 +415,7 @@ impl ResOps {
             err: p.res.ctors[1].ctor.clone(),
             is_ok: p.res.ctors[0].rec.clone(),
             is_err: p.res.ctors[1].rec.clone(),
-            oval: p.res.ctors[0].accs[0].clone(),
+            oval: Some(p.res.ctors[0].accs[0].clone()),
             eval: p.res.ctors[1].accs[0].clone(),
         }
     }
@@ -1039,7 +1040,10 @@ impl Model {
             }
             if g.name == "result" {
                 let o = self.res(Some(fty))?;
-                let w = self.weight(&Ty::from_gtype(&g.args[0]), &o.oval.apply1(t))?;
+                let w = match &o.oval {
+                    Some(ov) => self.weight(&Ty::from_gtype(&g.args[0]), &ov.apply1(t))?,
+                    None => None,
+                };
                 let err_weight = match g.result_error() {
                     Some(e) => self.weight(&Ty::from_gtype(e), &o.eval.apply1(t))?,
                     None => None,
@@ -1258,7 +1262,13 @@ impl Model {
             st.short.insert(format!("{}Some", tag), "Some");
             st.short.insert(format!("{}None", tag), "None");
         } else if g.name == "result" {
-            let ps = self.try_sort_of(&Ty::from_gtype(&g.args[0]))?;
+            // LB8 R-6g7-1: Result<(), E> has a field-less Ok
+            let unit = g.args[0].name == "unit";
+            let ok_fields = if unit {
+                Vec::new()
+            } else {
+                vec![(format!("{}Ok.val", tag), self.try_sort_of(&Ty::from_gtype(&g.args[0]))?)]
+            };
             let es = match g.result_error() {
                 Some(e) => self.try_sort_of(&Ty::from_gtype(e))?,
                 None => self.int_sort.clone(),
@@ -1266,7 +1276,7 @@ impl Model {
             let spec = DtSpec {
                 name: dtname,
                 ctors: vec![
-                    DtCtorSpec { name: format!("{}Ok", tag), fields: vec![(format!("{}Ok.val", tag), ps)] },
+                    DtCtorSpec { name: format!("{}Ok", tag), fields: ok_fields },
                     DtCtorSpec {
                         name: format!("{}Err", tag),
                         fields: vec![(format!("{}Err.val", tag), es)],
@@ -1283,7 +1293,7 @@ impl Model {
                     err: ctors[1].ctor.clone(),
                     is_ok: ctors[0].rec.clone(),
                     is_err: ctors[1].rec.clone(),
-                    oval: ctors[0].accs[0].clone(),
+                    oval: ctors[0].accs.first().cloned(),
                     eval: ctors[1].accs[0].clone(),
                 },
             );

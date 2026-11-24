@@ -1,0 +1,38 @@
+// spec: R-6g7-1 accept (String error, pass-through, Ok(()) in a let)
+fn need(x: i64) -> Result<(), String> ! alloc
+  ensures is_ok(result) == (x > 0)
+{
+  if x > 0 { return Ok::<(), String>(()); }
+  return Err::<(), String>(string_from("no"));
+}
+
+fn twice(x: i64) -> Result<(), String> ! alloc
+  ensures is_ok(result) == (x > 0)
+{
+  need(x)?;
+  need(x)?;
+  return Ok::<(), String>(());
+}
+
+fn pass(r: Result<(), i64>) -> Result<(), i64> {
+  return r;
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let mut t: i64 = 0;
+  match twice(3) {
+    Ok(()) => { t = t + 1; }
+    Err(s) => { t = t + 10 + len(s); }
+  }
+  match twice(-1) {
+    Ok(()) => { t = t + 100; }
+    Err(s) => { t = t + 1000 * len(s); }
+  }
+  let a: Result<(), i64> = Ok::<(), i64>(());
+  let b: Result<(), i64> = pass(a);
+  match b {
+    Ok(()) => { t = t + 7; }
+    Err(e) => { t = t + 5; }
+  }
+  return t;
+}

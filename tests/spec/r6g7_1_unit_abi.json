@@ -1,0 +1,20 @@
+{
+  "gen_contains": [
+    "Result<(), i64>",
+    "Ok::<(), i64>(())"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "107",
+      "0 42 Ok(()) Err(9) 1"
+    ],
+    "alloc_balance": true
+  }
+}

@@ -117,6 +117,10 @@ fn rust_ty(t: &str, param: bool) -> String {
 
 /// Rust statements that write the value `expr` (Copy) into the word array `arr` at `off`.
 fn rs_ser(tt: &TypeTable, ty: &str, expr: &str, arr: &str, off: i64, ctr: &mut i64) -> Result<Vec<String>, String> {
+    if ty == "unit" {
+        // LB8: zero words
+        return Ok(Vec::new());
+    }
     if is_gopt(ty) {
         // G3: the word array starts zeroed, so only the active words are written
         *ctr += 1;
@@ -191,6 +195,10 @@ fn rs_ser(tt: &TypeTable, ty: &str, expr: &str, arr: &str, off: i64, ctr: &mut i
 
 /// Rust expression that rebuilds a ty value from the word array `arr` at `off` (safe constructors only).
 fn rs_de(tt: &TypeTable, ty: &str, arr: &str, off: i64) -> Result<String, String> {
+    if ty == "unit" {
+        // LB8: zero words
+        return Ok("()".to_string());
+    }
     if is_gopt(ty) {
         // G3
         let x = g_arg(ty);

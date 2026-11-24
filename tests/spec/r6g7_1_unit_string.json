@@ -1,0 +1,20 @@
+{
+  "gen_contains": [
+    "Result<(), ::std::string::String>",
+    "Ok::<(), i64>(())",
+    "Ok(()) =>"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "2008"
+    ],
+    "alloc_balance": true
+  }
+}
