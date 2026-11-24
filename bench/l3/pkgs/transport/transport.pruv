@@ -98,14 +98,10 @@ pub fn receive_grow(take l: Loop, slot: i64, overall: i64, init: i64, ready: boo
  }
  let begin: i64 = st[2];
  let filled: i64 = st[1];
- let mut i: i64 = begin;
- while i < st[4] && i - begin < cap - filled && chunk[i] != 10
-  invariant 0 <= begin && begin <= i && i <= st[4] && st[4] <= 65536 && len(chunk) == 65536
-  invariant i - begin <= cap - filled
-  decreases st[4] - i
- {
-  i = i + 1;
- }
+ // Hand read_line: memchr for the newline in the buffered bytes, bounded by the room left under cap.
+ let mut stop: i64 = st[4];
+ if cap - filled < stop - begin { stop = begin + (cap - filled); }
+ let mut i: i64 = find_byte(chunk, 10, begin, stop);
  let needed: i64 = filled + (i - begin);
  // Hand read_line: drop the bytes past the filled prefix, then extend_from_slice (Vec growth, no zero fill).
  if i > begin {

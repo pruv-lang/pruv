@@ -78,16 +78,7 @@ fn put_str(inout dst: [u8], at: i64, src: str, n: i64) -> ()
   ensures forall k in 0..n: dst[at + k] == src[k]
   ensures forall k in 0..len(dst): (k < at || k >= at + n) ==> dst[k] == old(dst)[k]
 {
-  let mut j: i64 = 0;
-  while j < n
-    invariant 0 <= j && j <= n && n <= len(src) && 0 <= at && at <= len(dst) && n <= len(dst) - at && len(dst) == len(old(dst))
-    invariant forall k in 0..j: dst[at + k] == src[k]
-    invariant forall k in 0..len(dst): (k < at || k >= at + j) ==> dst[k] == old(dst)[k]
-    decreases n - j
-  {
-    dst[at + j] = src[j];
-    j = j + 1;
-  }
+  copy_range(inout dst, at, src, 0, n);
 }
 
 // n (0..2) LF bytes at dst[at..].

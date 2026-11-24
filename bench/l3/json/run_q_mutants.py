@@ -89,7 +89,7 @@ MUTANTS = [
  ('parse','trailing_comma',2,'Accept trailing commas','if pos < end && input[pos] == close { return Err::<i64, Fault>(Fault { position: pos, kind: 10 }); }','if pos < end && input[pos] == close { pos = pos + 1; return Ok::<i64, Fault>(children); }'),
  ('parse','record_bound',2,'Reject one record too early','if id == 1048576 { return Err::<i64, Fault>(Fault { position: start, kind: 2 }); }','if id == 1048575 { return Err::<i64, Fault>(Fault { position: start, kind: 2 }); }'),
  ('parse','depth_bound',2,'Move primary depth guard to 129','&& depth == 128 { return Err::<i64, Fault>(Fault { position: start, kind: 3 }); }','&& depth == 129 { return Err::<i64, Fault>(Fault { position: start, kind: 3 }); }'),
- ('parse','skip_not_advanced',2,'Do not advance scalar skip','arr_push(inout tape, r + 1);','arr_push(inout tape, r);'),
+ ('parse','skip_not_advanced',2,'Do not advance scalar skip','arr_push(inout tape, k, s, e, r + 1, parent, count);','arr_push(inout tape, k, s, e, r, parent, count);'),
  ('parse','wrong_colon_kind',2,'Wrong missing-colon error','if input[pos] != 58 { return Err::<i64, Fault>(Fault { position: pos, kind: 8 }); }','if input[pos] != 58 { return Err::<i64, Fault>(Fault { position: pos, kind: 9 }); }'),
  ('jstr','surrogate_combine',3,'Drop surrogate-pair combine','v = 65536 + (v - 55296) * 1024 + s2.value - 56320; np = s2.next;','v = 65533; np = s2.next;'),
  ('jstr','replacement_bytes',3,'Wrong replacement scalar / UTF-8 bytes','if 55296 <= v && v <= 57343 { v = 65533; }','if 55296 <= v && v <= 57343 { v = 65532; }'),
