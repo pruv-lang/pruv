@@ -2401,8 +2401,10 @@ class Gen:
             fs = s.table.fields(Type(e.name))
             if not fs:
                 return "%s {}" % e.name
+            # R-6g9-2: a `ref` field borrows the contract buffer (Rust `&x`): no charge, no copy
             return "%s { %s }" % (e.name, ", ".join(
-                "%s: %s" % (f.name, s.g9_field_real(inits[f.name], f.type, "%s.%s" % (e.name, f.name))) for f in fs))
+                "%s: %s" % (f.name, s.carr(inits[f.name]) if f.ref
+                            else s.g9_field_real(inits[f.name], f.type, "%s.%s" % (e.name, f.name))) for f in fs))
         if isinstance(e, EnumCtor):
             ctor = "%s::%s" % (e.enum_name, e.variant)
             if not e.args:

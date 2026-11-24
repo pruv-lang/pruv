@@ -1,0 +1,5 @@
+// spec: R-6g9-2 reject
+// A borrowing struct is not an enum payload, so moving its owned field out through a match has no source form yet.
+struct Doc { src: ref [u8], tape: [i64] }
+enum E { A(d: Doc), B }
+pub fn f() -> i64 { return 0; }

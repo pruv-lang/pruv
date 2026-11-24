@@ -1227,6 +1227,8 @@ class FnGen:
             s.allocas.append("%s = alloca ptr" % a)
             s.allocas.append("%s = alloca i64" % b)
             return Slot("arr", a, b, elem_ty(ty))
+        if getattr(s.tt.decls.get(ty.name), "borrowing", False):
+            s.views = True  # R-6g9-2: a borrowing struct local reads its source array like a `ref` local
         if kind == "i64":
             s.allocas.append("%s = alloca i64" % a)
             return Slot("i64", a)
@@ -1651,7 +1653,7 @@ class FnGen:
 
     def may_take(s):
         """Every last-use take (move_src, take_src, nested_moves, ret_takable) is on: not a cost build, and R-6g9-1 no
-        `ref` local in the function, since a live view may read the array (local or field) a take would move, shrink,
+        `ref` local (nor R-6g9-2 borrowing struct local) in the function, since a live view may read the array (local or field) a take would move, shrink,
         regrow or free"""
         return not s.cost and not s.views
 
@@ -4243,7 +4245,9 @@ class FnGen:
             inits = {f.name: f.value for f in e.fields}
             acc = "zeroinitializer"
             for i, fd in enumerate(s.tt.fields(sty)):
-                acc = s.putf(acc, sty, i, s.g9_real(inits[fd.name], fd.type), fd, None, False)
+                # R-6g9-2: a `ref` field borrows the contract buffer (Rust `&x`): no charge, no copy, nothing to free
+                v = s.cev(inits[fd.name]) if fd.ref else s.g9_real(inits[fd.name], fd.type)
+                acc = s.putf(acc, sty, i, v, fd, None, False)
             return V("agg", acc, None, sty)
         if isinstance(e, EnumCtor):
             ety = Type(e.enum_name)

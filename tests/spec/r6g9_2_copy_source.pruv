@@ -1,0 +1,11 @@
+// spec: R-6g9-2 accept
+// `copy(x)` while a borrowing struct local reads `x` must copy, not take `x`.
+struct Doc { src: ref [u8] }
+
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(2, 7);
+  let d: Doc = Doc { src: x };
+  let mut y: [u8] = copy(x);
+  y[0] = 9;
+  return d.src[0] * 10 + y[0];
+}

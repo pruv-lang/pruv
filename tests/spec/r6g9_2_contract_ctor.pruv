@@ -1,0 +1,12 @@
+// spec: R-6g9-2 accept
+// a borrowing struct built in a contract borrows the buffer; nothing is copied or freed.
+pub struct Doc { src: ref [u8] }
+
+pub fn n(x: [u8]) -> i64
+  requires len(Doc { src: x }.src) == len(x)
+{ return len(x); }
+
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(3, 1);
+  return n(x);
+}

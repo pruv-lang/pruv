@@ -1927,6 +1927,9 @@ impl<'a> FnGen<'a> {
 
     pub fn new_slot(&mut self, name: &str, ty: &str) -> R<Slot> {
         let kind = vkind(ty);
+        if self.tt.decl(ty).is_some_and(crate::borrowed::borrowing_struct) {
+            self.views = true; // R-6g9-2: a borrowing struct local reads its source array like a `ref` local
+        }
         let base = format!("%l{}.{}", self.nslot, mangle(name));
         self.nslot += 1;
         let a = format!("{}.a", base);
@@ -2985,10 +2988,11 @@ impl<'a> FnGen<'a> {
         // Look up by name like a Python dict (audit: a linear Vec search is quadratic in the field count). For the same name, the later value wins.
         let mut vals: std::collections::HashMap<&str, V> = std::collections::HashMap::new();
         let fds = t_fields(tt, ty, None)?;
+        let refs: HashSet<&str> = fds.iter().filter(|fd| fd.borrowed).map(|fd| fd.name.as_str()).collect();
         for fi in &e.fields {
             // Evaluate in source order. R-6g9-2: ownership by type: a `ref` field borrows its value (a place, subview
             // or `from` result), never owns or copies it
-            let by_ref = !c && fds.iter().any(|fd| fd.borrowed && fd.name == fi.name);
+            let by_ref = !c && refs.contains(fi.name.as_str());
             let v = self.evf(&fi.value, c, own && !by_ref)?;
             vals.insert(fi.name.as_str(), v);
         }
@@ -3837,7 +3841,7 @@ impl<'a> FnGen<'a> {
     }
 
     /// Every last-use take (move_src, take_src, nested_moves, ret_takable) is on: not a cost build, and R-6g9-1 no
-    /// `ref` local in the function, since a live view may read the array (local or field) a take would move, shrink,
+    /// `ref` local (nor R-6g9-2 borrowing struct local) in the function, since a live view may read the array (local or field) a take would move, shrink,
     /// regrow or free
     fn may_take(&self) -> bool {
         !self.cost && !self.views
@@ -6321,7 +6325,8 @@ impl<'a> FnGen<'a> {
                 let mut acc = "zeroinitializer".to_string();
                 for (i, fd) in t_fields(tt, sty, None)?.iter().enumerate() {
                     let init = inits.get(fd.name.as_str()).copied().ok_or_else(|| format!("'{}'", fd.name))?;
-                    let v = self.g9_real(init, Some(&fd.ty))?;
+                    // R-6g9-2: a `ref` field borrows the contract buffer (Rust `&x`): no charge, no copy, nothing to free
+                    let v = if fd.borrowed { self.cev(init)? } else { self.g9_real(init, Some(&fd.ty))? };
                     acc = self.putf(&acc, sty, i, &v, fd, None, false)?;
                 }
                 return Ok(V::agg(acc, sty));

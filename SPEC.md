@@ -1768,7 +1768,9 @@ borrowed value is live.
   source form yet (a borrowing struct is not an enum payload, not `let mut`, and a field move of a local must be
   restored), so the remainder drop that would follow it is only the skip of `ref` fields above.
   Tests: [document](tests/spec/r6g9_2_doc.pruv), [invariant](tests/spec/r6g9_2_doc_invariant.pruv),
-  [forwarded](tests/spec/r6g9_2_forward.pruv), [empty `ref` field](tests/spec/r6g9_3_empty_field.pruv).
+  [forwarded](tests/spec/r6g9_2_forward.pruv), [empty `ref` field](tests/spec/r6g9_3_empty_field.pruv),
+  [copy of a borrowed source](tests/spec/r6g9_2_copy_source.pruv), [contract constructor](tests/spec/r6g9_2_contract_ctor.pruv),
+  [reject enum payload](tests/spec/r6g9_2_enum_payload.pruv).
 - R-6g9-3 **Static views need no `alloc`.** An R-6g8-3 static text local is the literal's read-only global (Rust
   `let x: &'static str = "lit";`, LLVM the global with no copy, also in a recursive or metered function), so it
   needs no `alloc` effect: `effect/missing_effect` no longer fires for it. A literal in any owned position still
