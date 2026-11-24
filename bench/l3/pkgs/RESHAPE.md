@@ -467,8 +467,8 @@ No performance was measured: `args` keeps the `arg_spans` row (U8, codex spans) 
 | --- | --- |
 | json `run_a0` .. `run_a5` | pass (6/6 on py/rust, py/llvm, rs/rust, rs/llvm) |
 | mcp `test_impl` | pass (22/22 per pair) |
-| codex `test_impl` | @CODEX@ |
-| grok `test_impl` (`GROK_COMPILE_WALL=3600`) | @GROK@ |
+| codex `test_impl` | pass (136/136 on 4 pairs; TypeScript oracle 136/136) |
+| grok `test_impl` (`GROK_COMPILE_WALL=3600`) | pass (254/254 on 4 pairs; `GROK_TS_TRANSPILER` set for the reference) |
 
 Grok declares `mod args;` but calls nothing from it; it still compiles the package. Supervisor, claude and qwen do not
 use `pkgs/args` or `json/a2_root.pruv` and were not run.
