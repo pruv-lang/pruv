@@ -332,6 +332,7 @@ fn canonical_copy(b: [u8], p: i64) -> Iso ! alloc
   while j < 24
     invariant 0 <= j && j <= 24 && len(out) == 24
     invariant forall q in 0..j: out[q] == b[p + q]
+    invariant forall q in 0..j: (q == 4 || q == 7 || q == 10 || q == 13 || q == 16 || q == 19 || q == 23 || (48 <= out[q] && out[q] <= 57))
     decreases 24 - j
   { out[j] = b[p + j]; j = j + 1; }
   return Iso { status: 0, text: copy(out) };

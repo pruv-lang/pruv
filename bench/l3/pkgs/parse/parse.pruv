@@ -176,12 +176,7 @@ fn append_record(inout tape: [i64], r: i64, k: i64, s: i64, e: i64, parent: i64,
   ensures forall i in 0..len(old(tape)): tape[i] == old(tape)[i]
   ensures tape[6 * r] == k && tape[6 * r + 1] == s && tape[6 * r + 2] == e && tape[6 * r + 3] == r + 1 && tape[6 * r + 4] == parent && tape[6 * r + 5] == count
 {
-  arr_push(inout tape, k);
-  arr_push(inout tape, s);
-  arr_push(inout tape, e);
-  arr_push(inout tape, r + 1);
-  arr_push(inout tape, parent);
-  arr_push(inout tape, count);
+  arr_push(inout tape, k, s, e, r + 1, parent, count);
 }
 
 pred fn local_records(tape: [i64], lo: i64, hi: i64, end: i64) -> bool {
@@ -202,14 +197,13 @@ pred fn parents_ok(tape: [i64], lo: i64, hi: i64) -> bool {
 
 // Hand `Parser::record` / `Parser::container`: one recursion, errors passed up with `?`.
 // `record` returns `Ok(0)`: the hand returns `ParseResult<()>`, and `Result<(), Fault>` is not a type (gap RU).
-// `initial` is the entry cursor the contracts need (gap OS: no `old(pos)` for a scalar `inout`).
-fn record(input: [u8], initial: i64, inout pos: i64, inout tape: [i64], parent: i64, depth: i64, key: bool) -> Result<i64, Fault> ! alloc
-  requires pos == initial && 0 <= pos && pos <= len(input) && len(input) <= 16777216
+fn record(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, depth: i64, key: bool) -> Result<i64, Fault> ! alloc
+  requires 0 <= pos && pos <= len(input) && len(input) <= 16777216
   requires 0 <= depth && depth <= 128 && len(tape) % 6 == 0 && len(tape) <= 6291456
-  requires len(tape) > 0 ==> (0 <= parent && 6 * parent < len(tape) && (tape[6 * parent] == 5 || tape[6 * parent] == 6) && tape[6 * parent + 1] < initial)
-  ensures initial <= pos && pos <= len(input)
+  requires len(tape) > 0 ==> (0 <= parent && 6 * parent < len(tape) && (tape[6 * parent] == 5 || tape[6 * parent] == 6) && tape[6 * parent + 1] < pos)
+  ensures old(pos) <= pos && pos <= len(input)
   ensures len(tape) >= len(old(tape)) && len(tape) % 6 == 0 && len(tape) <= 6291456
-  ensures is_ok(result) ==> (pos > initial && len(tape) > len(old(tape)))
+  ensures is_ok(result) ==> (pos > old(pos) && len(tape) > len(old(tape)))
   ensures forall i in 0..len(old(tape)): tape[i] == old(tape)[i]
   ensures is_ok(result) ==> local_records(tape, len(old(tape)) / 6, len(tape) / 6, pos)
   ensures is_ok(result) ==> parents_ok(tape, len(old(tape)) / 6, len(tape) / 6)
@@ -253,8 +247,7 @@ fn record(input: [u8], initial: i64, inout pos: i64, inout tape: [i64], parent: 
   if (kind == 5 || kind == 6) && depth == 128 { return Err::<i64, Fault>(Fault { position: start, kind: 3 }); }
   append_record(inout tape, id, kind, start, pos, parent, 0);
   if kind == 5 || kind == 6 {
-    let opened: i64 = pos;
-    let children: i64 = container(input, opened, inout pos, inout tape, id, depth + 1, kind == 6)?;
+    let children: i64 = container(input, inout pos, inout tape, id, depth + 1, kind == 6)?;
     tape[base + 2] = pos;
     tape[base + 3] = len(tape) / 6;
     tape[base + 5] = children;
@@ -262,11 +255,11 @@ fn record(input: [u8], initial: i64, inout pos: i64, inout tape: [i64], parent: 
   return Ok::<i64, Fault>(0);
 }
 
-fn container(input: [u8], initial: i64, inout pos: i64, inout tape: [i64], id: i64, depth: i64, object: bool) -> Result<i64, Fault> ! alloc
-  requires pos == initial && 0 <= pos && pos <= len(input) && len(input) <= 16777216
+fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64, object: bool) -> Result<i64, Fault> ! alloc
+  requires 0 <= pos && pos <= len(input) && len(input) <= 16777216
   requires 1 <= depth && depth <= 128 && len(tape) % 6 == 0 && len(tape) <= 6291456
-  requires 0 <= id && 6 * id < len(tape) && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < initial
-  ensures initial <= pos && pos <= len(input)
+  requires 0 <= id && 6 * id < len(tape) && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < pos
+  ensures old(pos) <= pos && pos <= len(input)
   ensures len(tape) >= len(old(tape)) && len(tape) % 6 == 0 && len(tape) <= 6291456
   ensures forall i in 0..len(old(tape)): tape[i] == old(tape)[i]
   ensures is_ok(result) ==> local_records(tape, len(old(tape)) / 6, len(tape) / 6, pos)
@@ -284,25 +277,23 @@ fn container(input: [u8], initial: i64, inout pos: i64, inout tape: [i64], id: i
   }
   let mut children: i64 = 0;
   while pos <= end
-    invariant initial <= pos && pos <= end && end == len(input) && end <= 16777216
+    invariant old(pos) <= pos && pos <= end && end == len(input) && end <= 16777216
     invariant len(tape) >= len(old(tape)) && len(tape) % 6 == 0 && len(tape) <= 6291456
     invariant forall i in 0..len(old(tape)): tape[i] == old(tape)[i]
     invariant local_records(tape, len(old(tape)) / 6, len(tape) / 6, pos)
     invariant parents_ok(tape, len(old(tape)) / 6, len(tape) / 6)
-    invariant 0 <= id && 6 * id < len(old(tape)) && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < initial
+    invariant 0 <= id && 6 * id < len(old(tape)) && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < old(pos)
     invariant 0 <= children && children <= pos
     decreases end - pos + 1
   {
     if object {
-      let key_start: i64 = pos;
-      record(input, key_start, inout pos, inout tape, id, depth, true)?;
+      record(input, inout pos, inout tape, id, depth, true)?;
       pos = crate::lex::skip_whitespace(input, pos, end);
       if pos == end { return Err::<i64, Fault>(Fault { position: pos, kind: 5 }); }
       if input[pos] != 58 { return Err::<i64, Fault>(Fault { position: pos, kind: 8 }); }
       pos = pos + 1;
     }
-    let value_start: i64 = pos;
-    record(input, value_start, inout pos, inout tape, id, depth, false)?;
+    record(input, inout pos, inout tape, id, depth, false)?;
     children = children + 1;
     pos = crate::lex::skip_whitespace(input, pos, end);
     if pos == end { return Err::<i64, Fault>(Fault { position: pos, kind: 5 }); }
@@ -330,7 +321,7 @@ fn scan_records(input: [u8], inout tape: [i64]) -> Result<i64, Fault> ! alloc
   let n: i64 = len(input);
   arr_reserve(inout tape, 32 * 6);
   let mut pos: i64 = 0;
-  record(input, 0, inout pos, inout tape, -1, 0, false)?;
+  record(input, inout pos, inout tape, -1, 0, false)?;
   pos = crate::lex::skip_whitespace(input, pos, n);
   if pos != n { return Err::<i64, Fault>(Fault { position: pos, kind: 11 }); }
   return Ok::<i64, Fault>(0);
