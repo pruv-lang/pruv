@@ -471,6 +471,9 @@ impl Analysis<'_> {
                         if self.ref_field(e, &field.name) { self.provenance(&field.value, locals).map(|_| ()) }
                         else { self.owned(&field.value, locals) }
                     }),
+                    // R-6g9-1: an enum (or Option / Result) payload owns its value, so it cannot hold a view
+                    Expr::EnumCtor(x) => x.args.iter().try_for_each(|a| self.owned(a, locals)),
+                    Expr::Ctor(x) => x.arg.iter().try_for_each(|a| self.owned(a, locals)),
                     _ => Ok(()),
                 };
                 failure = result.err();

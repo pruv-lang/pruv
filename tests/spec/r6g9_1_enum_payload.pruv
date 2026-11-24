@@ -1,0 +1,9 @@
+// spec: R-6g9-1 reject
+// An enum payload owns its value, so a borrowed result cannot fill it; `copy` makes an owned one.
+enum E { A(x: [u8]), B }
+fn head(s: [u8]) -> ref [u8] from(s) requires len(s) >= 2 { return subview(s, 0, 1); }
+pub fn f() -> i64 ! alloc {
+  let s: [u8] = alloc(2, 7);
+  let e: E = E::A(head(s));
+  match e { E::A(x) => { return len(x); } E::B => { return 0; } }
+}

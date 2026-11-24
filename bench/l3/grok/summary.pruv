@@ -135,7 +135,8 @@ fn trimmed_string(d: crate::json::JsonDocument, id: i64) -> str ! alloc
 {
   let none: str = "";
   if crate::access::kind(d, id) != 4 { return copy(none); }
-  return crate::text::trim(crate::util::str_at(d, id));
+  let s: str = crate::util::str_at(d, id);
+  return copy(crate::text::trim(s));
 }
 
 // trim(generated_title) || trim(session_summary) || ''

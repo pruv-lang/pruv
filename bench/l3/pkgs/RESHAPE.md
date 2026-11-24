@@ -5,8 +5,8 @@ same job. Order of work: json, text, names, args, tail, then the lex and bytes c
 "keep" (structure check only). Gap ids refer to `docs/RUST_SHAPE_RESET.md` §4.
 
 Both backends are a hard constraint: every consumer piece (mcp, qwen, codex, grok, opencode) also builds on LLVM,
-where borrowed views and borrowing structs are `codegen/unsupported_type` (gap **B-LLVM**, debt D-LB3). So no package
-here returns `ref str` / `ref [u8]` or stores one in a struct yet.
+where borrowing structs are `codegen/unsupported_type` (gap **B-LLVM**, debt D-LB3). Borrowed views reach LLVM in
+bundle B1 (R-6g9-1), so `text` returns `ref str`; no package stores a view in a struct yet.
 
 Columns: Pruv function, hand Rust function, types, ownership, loops, allocation sites. "=" means same as hand.
 
@@ -20,7 +20,7 @@ measured only for a package whose table shows zero differences.
 | Package | Differences left | Measured |
 |---|---|---|
 | json | 2 (B-LLVM source copy, D32 publication checks; root tape move reshaped in step 2.8) | no |
-| text | 2 (`trim`, `clip_bytes`: B-LLVM; `one_line` reshaped in step 2.5) | no |
+| text | 0 (`trim`, `clip_bytes` reshaped in B1; `one_line` reshaped in step 2.5) | no |
 | names | 0 (`project_name` reshaped in step 2.2b) | no |
 | args | 1 (`arg_spans`: span packet kept for codex `child_args` and the U8 check; `build_args` reshaped in step 2.8) | no |
 | tail | whole package (hand is UTF-8 `Vec<u8>`; decoder pick: FM) | no |
@@ -51,10 +51,10 @@ before this rule and is withdrawn, along with its debt rows).
 | `next`, `prev` (private) | `s[i..].chars().next().len_utf8()` | `str` | borrow | ≤4 steps | none | = |
 | `is_blank(s)` | `s.trim().is_empty()` | `str -> bool` | borrow | one pass | none | = |
 | `trim_span(s) -> Span` | `s.trim()` bounds | `str -> {lo,hi}` | borrow | two passes | none | = (span form of trim) |
-| `trim(s) -> str` | `s.trim() -> &str` | `str -> str` | Pruv returns an owned copy | — | Pruv: 1 (`substr`) | **B-LLVM** (borrowed result). Callers that only need bounds use `trim_span`. |
+| `trim(s) -> ref str from(s)` | `s.trim() -> &str` | `&str -> &str` | borrow (=) | two passes (=) | none (=) | = since B1 (R-6g9-1: the view lowers to `{ ptr, i64 }` on LLVM). Was an owned `substr` copy. Callers that only need bounds use `trim_span`. |
 | `same(a, b)` | `a == b` | `str` | borrow | one pass | none | = |
 | `one_line(s, max) -> str` | `qwen/handrust/src/lib.rs:325`: `for c in s.trim_matches(is_es_ws).chars()`, `out.push(c)` per scalar, `push(' ')` per whitespace run | `str -> String` | owned result (=) | one pass (=) | `out` growth only (=) | **changed in 2.5** (LB7, R-6g6-3): the scalar is pushed as `string_push_str(move out, subview(s, i, j))`, Rust `out.push_str(&s[i..j])`, with no temporary (was one `substr` per scalar). = See step 2.5 for the line-by-line comparison. |
-| `clip_bytes(s, max) -> str` | `&s[..floor_char_boundary(max)]` | `str -> str` | Pruv returns an owned copy | ≤3 steps back | Pruv: 1 (`substr`) | **B-LLVM** (borrowed result). |
+| `clip_bytes(s, max) -> ref str from(s)` | `&s[..floor_char_boundary(max)]` | `&str -> &str` | borrow (=) | ≤3 steps back (=) | none (=) | = since B1 (R-6g9-1). Was an owned `substr` copy. |
 | `engine_line(text, task_origin)` | `let t = text.trim(); t == "[Request…]" \|\| …` | `str -> bool` | borrow | `eq_at` per literal | **changed**: the literals are written inline at each comparison like hand (`t == "…"`), so no `let a: str = "…"` local (which emits `String::from`, gap SL) | = now. `! alloc` kept on the signature for caller stability. |
 | `dropped_user` and helpers (`ws_at`, `skip_ws`, `lit_end`, `quoted_end`, `colon_value`, `kv`, `tool_result_after`, `content_hit`, `eq_at`) | byte scans over `as_bytes()` | `[u8]`/`str` | borrow | one pass | none (literal arguments are `&'static str`) | = . The `! alloc` marks are stale but kept for caller stability. |
 
@@ -111,7 +111,7 @@ Added to `docs/RUST_SHAPE_RESET.md` §4. Each function hit by a gap is left unch
 
 | Id | Hand Rust form | What Pruv cannot express | Functions left unchanged |
 |---|---|---|---|
-| B-LLVM | `Document<'a> { source: &'a [u8] }`, `fn trim(&str) -> &str` | Borrowed fields and borrowed results are Rust-backend only (`codegen/unsupported_type` on LLVM, debt D-LB3); every consumer also builds on LLVM. | `json` source copy, `text::trim`, `text::clip_bytes` |
+| B-LLVM | `Document<'a> { source: &'a [u8] }` | Borrowed results and locals reach LLVM in bundle B1 (R-6g9-1); borrowing structs stay Rust-backend only (`codegen/unsupported_type` on LLVM) until bundle B2. | `json` source copy (`text::trim`, `text::clip_bytes` closed in B1) |
 | SR | `out.push(c)`, `out.push_str(&s[i..j])`, `cmd.arg(&s[i..j])` | No scalar push; `subview(s,lo,hi)` cannot be the direct argument of `string_push_str` / `proc_args_push` (only of a plain `str` parameter of a Pruv fn, R-6g-10). | `text::one_line`, `args::build_args` (+ `arg_spans`) |
 | VC | `Vec::with_capacity(n)` then `push` | No reserve-without-fill `[u8]`; `alloc` fills and `truncate` may shrink-realloc (LB5 non-filling growth). | `names::project_name` |
 | FM | `let d = if c { &mut x.a } else { &mut x.b };` | No `inout` binding to one of two fields chosen at run time. | `tail` rewrite (blocked part: decoder pick) |
@@ -517,3 +517,30 @@ No performance was measured: `args` keeps the `arg_spans` row (U8, codex spans) 
 
 Grok declares `mod args;` but calls nothing from it; it still compiles the package. Supervisor, claude and qwen do not
 use `pkgs/args` or `json/a2_root.pruv` and were not run.
+
+## Bundle B1: borrowed views on LLVM (`text::trim`, `text::clip_bytes`)
+
+SPEC R-6g9-1 lowers `ref str` / `ref [u8]` locals, arguments and `from` results to `{ ptr, i64 }` on LLVM, never
+freed. The two `text` rows held only by B-LLVM are rewritten in the hand shape: `trim(s: str) -> ref str from(s)` and
+`clip_bytes(s: str, max: i64) -> ref str from(s)` return `subview(s, ..)` (hand `&s[..]`), with no `substr` copy and no
+`! alloc`. Contracts are unchanged.
+
+Callers bind the result to a `ref str` local, the hand `let t = s.trim();`. Where the argument was a temporary
+(`trim(str_at(..))`), it is bound to a local first, as the hand borrow needs a named owner. Where the hand keeps an
+owned string (`.to_string()`), the caller writes `copy(..)`. Callers: `pkgs/time/time.pruv`, `codex/item.pruv`, `codex/list.pruv`, `codex/plan.pruv`,
+`codex/root.pruv`, `grok/summary.pruv`, `opencode/path.pruv`, `opencode/plan.pruv`. Each removes one allocation per
+call. (claude keeps its own `claude/text.pruv` copy and is not a consumer of `pkgs/text`.) Still open: the `json` source copy (borrowing struct, bundle B2).
+
+
+The codex list title is a helper `title(d, t)` that returns early, so the name path builds one `one_line` string like the
+hand. The grok mutant M08 (`grok/entry.pruv`) now reads `copy(crate::text::trim(inner))`, because `trim` returns a view.
+
+**Consumers** (all four compiler/backend pairs, rc 0):
+
+| Runner | Fixtures per pair |
+|---|---|
+| codex | 136 |
+| grok (`--no-ts`) | 254 |
+| opencode | 199 |
+| qwen | 26 |
+| claude A0 / A1 / A2 / A3 / A4 (own `claude/text.pruv`, unchanged) | 272 / 2884 / 2443 / 134 / 270 |

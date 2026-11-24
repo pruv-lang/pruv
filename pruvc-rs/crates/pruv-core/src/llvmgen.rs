@@ -147,6 +147,13 @@ pub const OPT: &str = "{ i1, i64 }";
 /// Option/Result stored inside a contract aggregate
 pub const COPT: &str = "{ i1, i128 }";
 pub const ARR: &str = "{ ptr, i64, i64 }"; // P3: owned buffer inside the module: { data, len, cap }; cap = allocated element count
+/// R-6g9-1: a borrowed view result `{ data, len }`; it owns nothing and is never freed
+pub const VIEW: &str = "{ ptr, i64 }";
+
+/// R-6g9-1: the function returns a `ref [u8]` / `ref str` view of its `from` sources
+pub fn view_ret(f: &Function) -> bool {
+    f.borrowed_result && is_arr_name(&f.ret)
+}
 
 // P3: pruv_alloc / pruv_copy (and pruv_alloc_u8 / pruv_copy_v2 in DECLS_U8) are inline module copies of the
 // runtime functions of the same name: len <= 0 gives NULL, a len above the runtime's bound panics with the same
@@ -423,12 +430,12 @@ pub const DECLS_RESIZE_U8: &str = concat!(
 );
 /// LG32 (G-DB52-4): only emitted when `x = resize(x, n, v)` is lowered in place.  The block s (allocated count c, live
 /// count m <= n) grows through pruv_regrow_v2 (realloc, so the old block is never live next to the new one) when n > c,
-/// else it is kept; then the tail [m, n) is set to v exactly like pruv_resize / pruv_resize_u8.  n <= 0 (so the array is
-/// empty) returns s unchanged.
+/// else it is kept; then the tail [m, n) is set to v exactly like pruv_resize / pruv_resize_u8.  n <= m (a shrink, which
+/// R-6g9-1's scratch resize of an inout view source allows, or an empty array) returns s unchanged.
 pub const DECLS_REGROW: &str = concat!(
     "define internal ptr @pruv_regrow(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {\n",
     "entry:\n",
-    "  %e = icmp sle i64 %n, 0\n",
+    "  %e = icmp sle i64 %n, %m\n",
     "  br i1 %e, label %none, label %chk\n",
     "none:\n",
     "  ret ptr %s\n",
@@ -471,7 +478,7 @@ pub const DECLS_REGROW: &str = concat!(
 pub const DECLS_REGROW_U8: &str = concat!(
     "define internal ptr @pruv_regrow_u8(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {\n",
     "entry:\n",
-    "  %e = icmp sle i64 %n, 0\n",
+    "  %e = icmp sle i64 %n, %m\n",
     "  br i1 %e, label %none, label %chk\n",
     "none:\n",
     "  ret ptr %s\n",
@@ -502,7 +509,7 @@ pub const DECLS_REGROW_U8: &str = concat!(
 pub const DECLS_REGROW_NARROW: &str = concat!(
     "define internal ptr @pruv_regrow_narrow(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v, i64 %size, i64 %align) alwaysinline nounwind {\n",
     "entry:\n",
-    "  %e = icmp sle i64 %n, 0\n",
+    "  %e = icmp sle i64 %n, %m\n",
     "  br i1 %e, label %none, label %chk\n",
     "none:\n",
     "  ret ptr %s\n",
@@ -1006,8 +1013,9 @@ pub fn has_take_array(f: &Function) -> bool {
 }
 
 /// Legacy functions with extended, inout, or take-array parameters use only internal entry points.
+/// R-6g9-1: a borrowed result (a { ptr, i64 } view the host would read as an owned array) is internal too
 pub fn is_internal_fn(f: &Function, tt: &TypeTable) -> bool {
-    has_ext_sig(f, tt) || has_inout(f) || has_take_array(f)
+    has_ext_sig(f, tt) || has_inout(f) || has_take_array(f) || view_ret(f)
 }
 
 /// An extended (G9) type in the signature (separate from the inout rule: an explicit host entry may have inout params)
@@ -1019,6 +1027,8 @@ pub fn has_ext_sig(f: &Function, tt: &TypeTable) -> bool {
 pub fn ir_ret(tt: &TypeTable, f: &Function) -> String {
     if is_ext_t(tt, &f.ret) {
         "void".to_string()
+    } else if view_ret(f) {
+        VIEW.to_string()
     } else {
         lty(&f.ret)
     }
@@ -1461,16 +1471,24 @@ pub fn sig_text(params: &[(String, String)], f: Option<&Function>) -> String {
         .filter(|p| native_vec_elem(&p.ty).is_some())
         .map(|p| format!("%p.{}", mangle(&p.name)))
         .collect();
+    // R-6g9-1: the data pointer of a `from` source escapes through a view result
+    let escapes: Vec<_> = f.into_iter().filter(|f| view_ret(f))
+        .flat_map(|f| f.borrow_from.iter().flatten())
+        .map(|n| format!("%p.{}.a", mangle(n)))
+        .collect();
     params
         .iter()
         .map(|(t, n)| {
             format!(
                 "{} {}",
                 if t == "ptr" && n != "%out" && !n.ends_with(".h") && !take_names.contains(n) {
+                    let esc = escapes.contains(n);
                     if mut_names.contains(n) {
-                        "ptr noalias nocapture"
+                        if esc { "ptr noalias" } else { "ptr noalias nocapture" }
                     } else if read_vec_names.contains(n) {
                         "ptr nocapture readonly"
+                    } else if esc {
+                        "ptr noalias readonly"
                     } else {
                         "ptr noalias nocapture readonly"
                     }
@@ -1552,6 +1570,8 @@ pub struct FnGen<'a> {
     nt: usize,
     nl: usize,
     nslot: usize,
+    /// R-6g9-1: a `ref` local exists, so no last-use copy or resize takes its source
+    views: bool,
     nq: usize,
     cur: String,
     dead: bool,
@@ -1611,6 +1631,7 @@ impl<'a> FnGen<'a> {
             nt: 0,
             nl: 0,
             nslot: 0,
+            views: false,
             nq: 0,
             cur: "None".to_string(),
             dead: false,
@@ -1870,6 +1891,20 @@ impl<'a> FnGen<'a> {
         Ok(slot)
     }
 
+    /// R-6g9-1: a `ref [u8]` / `ref str` local: data and length only (no cap), never in a scope's owner list
+    fn view_slot(&mut self, name: &str, ty: &str) -> Slot {
+        let base = format!("%l{}.{}", self.nslot, mangle(name));
+        self.nslot += 1;
+        self.views = true;
+        let a = format!("{}.a", base);
+        let b = format!("{}.b", base);
+        self.allocas.push(format!("{} = alloca ptr", a));
+        self.allocas.push(format!("{} = alloca i64", b));
+        let mut sl = V::with_b(Kind::Arr, a, b);
+        sl.ty = elem_ty(ty);
+        sl
+    }
+
     pub fn new_slot(&mut self, name: &str, ty: &str) -> R<Slot> {
         let kind = vkind(ty);
         let base = format!("%l{}.{}", self.nslot, mangle(name));
@@ -1936,9 +1971,11 @@ impl<'a> FnGen<'a> {
             Kind::Arr => {
                 let p = self.op(format!("load ptr, ptr {}", sl.a))?;
                 let n = self.op(format!("load i64, ptr {}", sl.b))?;
-                let c = self.op(format!("load i64, ptr {}", need_c(&sl.c)?))?;
                 let mut v = V::with_b(Kind::Arr, p, n);
-                v.c = Some(c);
+                if let Some(cp) = &sl.c {
+                    // a view slot (R-6g9-1) has no cap
+                    v.c = Some(self.op(format!("load i64, ptr {}", cp))?);
+                }
                 v.ty = sl.ty.clone();
                 v.layout = self.slot_layouts.get(&sl.a).copied().unwrap_or(sl.layout);
                 v.rng = self.slot_rngs.get(&sl.a).copied().unwrap_or(sl.rng);
@@ -1965,7 +2002,10 @@ impl<'a> FnGen<'a> {
                 self.slot_rngs.insert(sl.a.clone(), v.rng);
                 self.ins(format!("store ptr {}, ptr {}", v.a, sl.a))?;
                 self.ins(format!("store i64 {}, ptr {}", v.b, sl.b))?;
-                self.ins(format!("store i64 {}, ptr {}", capof(v), need_c(&sl.c)?))
+                match &sl.c {
+                    Some(cp) => self.ins(format!("store i64 {}, ptr {}", capof(v), cp)),
+                    None => Ok(()), // R-6g9-1: a view slot has no cap
+                }
             }
             _ => {
                 self.ins(format!("store i1 {}, ptr {}", v.a, sl.a))?;
@@ -3314,7 +3354,12 @@ impl<'a> FnGen<'a> {
         if self.cost { self.cost_check()?; }
         let f = self.f;
         let rt = f.ret.as_str();
-        if self.is_ext(rt) {
+        if view_ret(f) {
+            // R-6g9-1: a borrowed view { data, len }
+            let g0 = self.op(format!("insertvalue {VIEW} undef, ptr {}, 0", v.a))?;
+            let g1 = self.op(format!("insertvalue {VIEW} {g0}, i64 {}, 1", v.b))?;
+            self.term(format!("ret {VIEW} {g1}"))
+        } else if self.is_ext(rt) {
             // G9 A3: explicit output storage; v is an owned value
             self.ins(format!("store {} {}, ptr %out", lty(rt), v.a))?;
             self.term("ret void".to_string())
@@ -3413,9 +3458,11 @@ impl<'a> FnGen<'a> {
     }
 
     /// --no-verify guards of resize(src, cnt, v): len(src) <= cnt <= 2^40, and v <= 255 for [u8]
-    fn resize_guards(&mut self, src: &V, cnt: &V, v: &V) -> R<()> {
+    /// --no-verify guards of resize(src, cnt, v): len(src) <= cnt <= 2^40 (0 <= cnt for R-6g9-1's scratch resize of
+    /// an inout view source, which may shrink), and v <= 255 for [u8]
+    fn resize_guards(&mut self, src: &V, cnt: &V, v: &V, scratch: bool) -> R<()> {
         if !self.verified {
-            let lo = self.op(format!("icmp sle i64 {}, {}", src.b, cnt.a))?;
+            let lo = self.op(format!("icmp sle i64 {}, {}", if scratch { "0" } else { src.b.as_str() }, cnt.a))?;
             let hi = self.op(format!("icmp ule i64 {}, 1099511627776", cnt.a))?;
             let ok = self.op(format!("and i1 {}, {}", lo, hi))?;
             self.guard(&ok, Fail::Panic1("pruv_panic_arith", "resize length outside len..2^40".to_string()), false)?;
@@ -3503,7 +3550,8 @@ impl<'a> FnGen<'a> {
     fn regrow_val(&mut self, src: &V, c: &Call) -> R<(String, V, String)> {
         let cnt = self.ev(&c.args[1], false)?;
         let v = self.ev(&c.args[2], false)?;
-        self.resize_guards(src, &cnt, &v)?;
+        let scratch = self.f.borrows_inout_buffer(&c.args[0]);
+        self.resize_guards(src, &cnt, &v, scratch)?;
         let (q, nc) = self.regrow_block(src, &cnt, &v)?;
         Ok((q, cnt, nc))
     }
@@ -3693,7 +3741,7 @@ impl<'a> FnGen<'a> {
     /// counted across all of them
     fn nested_moves_all(&self, es: &[&Expr], target: Option<&str>, ret: bool) -> HashSet<String> {
         let mut out = HashSet::new();
-        if self.cost {
+        if self.cost || self.views {   // R-6g9-1: a live `ref` local may view the taken array
             return out;
         }
         fn walk<'a>(x: &'a Expr, counts: &mut HashMap<String, usize>, calls: &mut Vec<&'a Call>) {
@@ -3811,7 +3859,8 @@ impl<'a> FnGen<'a> {
             return out;
         }
         let Expr::Var(x) = &c.args[0] else { return out };
-        if x.name == name || !self.dead_after(&x.name) {
+        // R-6g9-1: a live `ref` local may view x, so the copy stays a copy
+        if x.name == name || !self.dead_after(&x.name) || self.views {
             return out;
         }
         match self.lookup(&x.name) {
@@ -3987,6 +4036,16 @@ impl<'a> FnGen<'a> {
 
     pub fn stmt(&mut self, st: &Stmt) -> R<()> {
         match st {
+            Stmt::Let(x) if x.borrowed && is_arr_name(&x.ty) => {
+                // R-6g9-1: a `ref [u8]` / `ref str` local is a view: no copy, never freed
+                self.begin_temps();
+                let v = self.ev(&x.value, false)?;
+                let sl = self.view_slot(&x.name, &x.ty);
+                self.store(&sl, &v)?;
+                let sc = self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?;
+                sc.names.insert(x.name.clone(), Bind::Slot(sl));
+                self.end_temps()
+            }
             Stmt::Let(x) if self.m.stack.contains(x) && !self.resize_slots.contains(&x.name) => self.stack_let(x),
             Stmt::Let(x) if self.m.stack.lit(x) && !self.cost => {
                 // P3: a borrowed literal local binds the read-only global directly: no copy, never freed
@@ -4050,6 +4109,12 @@ impl<'a> FnGen<'a> {
             Stmt::Assign(x) => {
                 self.begin_temps();
                 let sl = self.lookup(&x.name)?.val().clone();
+                if sl.k == Kind::Arr && sl.c.is_none() {
+                    // R-6g9-1: rebinding a view slot: nothing to free
+                    let v = self.ev(&x.value, false)?;
+                    self.store(&sl, &v)?;
+                    return self.end_temps();
+                }
                 // LG32 (G-DB52-4): x = resize(x, n, v) grows the slot's block in place (realloc), so the old and new blocks are never live together
                 // LG37: a last-use take also inside the in-place regrow's operands
                 self.moving = self.nested_moves(&x.value, Some(&x.name), false);
@@ -4230,7 +4295,10 @@ impl<'a> FnGen<'a> {
                     Some(val) => self.truncate_move(val)?,
                     None => None,
                 };
-                if let (Some(sl), Some(Expr::Call(c))) = (tm, x.value.as_ref()) {
+                if let (true, Some(val)) = (view_ret(self.f), x.value.as_ref()) {
+                    // R-6g9-1: a view result borrows its `from` sources; nothing moves out
+                    v = self.ev(val, false)?;
+                } else if let (Some(sl), Some(Expr::Call(c))) = (tm, x.value.as_ref()) {
                     // P2 batch 4: `return truncate(x, m)` of an owned local array: the same pointer with length m moves out
                     let src = self.load(&sl)?;
                     // LG37: a last-use take inside the length
@@ -5181,7 +5249,7 @@ impl<'a> FnGen<'a> {
             let cnt = self.ev(arg(a, 1)?, false)?;
             let v = self.ev(arg(a, 2)?, false)?;
             let u8a = src.ty.as_deref() == Some(ARRAY_U8);
-            self.resize_guards(&src, &cnt, &v)?;
+            self.resize_guards(&src, &cnt, &v, false)?;
             if let Expr::Var(x) = arg(a, 0)? {
                 if self.moving.contains(&x.name) {
                     // LG37 (G-DB49-2): an owned local array at its last use (nested_moves): its block grows in place
@@ -5615,6 +5683,17 @@ impl<'a> FnGen<'a> {
         if f.ret == "unit" {
             self.ins(format!("call void {}({})", callee, argl))?;
             return Ok(V::unit());
+        }
+        if view_ret(f) {
+            // R-6g9-1: a borrowed view of the caller's sources: not a temporary, never freed
+            let r = self.op(format!("call {VIEW} {}({})", callee, argl))?;
+            let x0 = self.op(format!("extractvalue {VIEW} {}, 0", r))?;
+            let x1 = self.op(format!("extractvalue {VIEW} {}, 1", r))?;
+            let mut rv = V::with_b(Kind::Arr, x0, x1);
+            rv.ty = elem_ty(&f.ret);
+            rv.layout = self.m.storage.layout_of(f);
+            rv.rng = self.m.storage.range_of(f);
+            return Ok(rv);
         }
         let r = self.op(format!("call {} {}({})", lty(&f.ret), callee, argl))?;
         if f.ret == "i64" || f.ret == "bool" {
@@ -8279,6 +8358,7 @@ pub fn is_host_abi_fn(f: &Function, tt: &TypeTable, explicit: bool, host: bool) 
         && !is_coll_fn(f)
         && !has_ext_sig(f, tt)
         && !has_take_array(f)
+        && !view_ret(f) // R-6g9-1: a borrowed result never crosses the host boundary
         && (host || !explicit)
         // an inout entry is exported only as an explicit-mode host entry (legacy inout fns stay internal)
         && (!has_inout(f) || (explicit && host))
@@ -8387,10 +8467,11 @@ pub fn gen_llvm_any_ex_g4(
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
     }
-    if let Some((line, col)) = crate::borrowed::first_borrow(prog) {
+    // R-6g9-1: views lower to { ptr, i64 }; borrowing structs wait for R-6g9-2 (B2)
+    if let Some(TypeDecl::Struct(d)) = prog.types.iter().find(|d| crate::borrowed::borrowing_struct(d)) {
         return Err(GenError::Diag(crate::diagnostic::PruvError::new(
-            "codegen", line, col, "unsupported_type",
-            "borrowed views and borrowing structs need the Rust backend", "use the Rust backend",
+            "codegen", d.line, d.col, "unsupported_type",
+            "borrowing structs need the Rust backend", "use the Rust backend",
         )));
     }
     if crate::typeinfo::first_g3_use(prog).is_some() || g4.is_some() {
@@ -8533,10 +8614,11 @@ pub fn gen_llvm_with_specializations(
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
     }
-    if let Some((line, col)) = crate::borrowed::first_borrow(prog) {
+    // R-6g9-1: views lower to { ptr, i64 }; borrowing structs wait for R-6g9-2 (B2)
+    if let Some(TypeDecl::Struct(d)) = prog.types.iter().find(|d| crate::borrowed::borrowing_struct(d)) {
         return Err(GenError::Diag(crate::diagnostic::PruvError::new(
-            "codegen", line, col, "unsupported_type",
-            "borrowed views and borrowing structs need the Rust backend", "use the Rust backend",
+            "codegen", d.line, d.col, "unsupported_type",
+            "borrowing structs need the Rust backend", "use the Rust backend",
         )));
     }
     if let Some(e) = crate::bindings::owned_collection_abi_error(prog, None) {

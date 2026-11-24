@@ -80,14 +80,15 @@ fn take_segment(b: [u8], lo: i64, hi: i64, inout pl: [i64], inout pb: [u8]) -> (
   crate::bytes::copy_span(inout seg, 0, b, lo, hi);
   let s: str = crate::jstr::owned_text(move seg);
   if len(s) != hi - lo { return; }
-  let t: str = crate::text::trim(s);
+  let t: ref str = crate::text::trim(s);
   let m: i64 = marker_end(t);
-  let mut u: str = copy(t);
+  let mut start: i64 = 0;
   if m >= 0 {
     if is_char_boundary(t, m) && is_char_boundary(t, len(t)) {
-      u = crate::text::trim(substr(t, m, len(t)));
+      start = m;
     }
   }
+  let u: ref str = crate::text::trim(subview(t, start, len(t)));
   if len(u) == 0 { return; }
   let k: i64 = clip_units(u, 200);
   if pl[0] < 30 {

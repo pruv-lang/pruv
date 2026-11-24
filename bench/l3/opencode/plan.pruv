@@ -97,7 +97,7 @@ pub fn fit(doc: crate::json::JsonDocument, todos: i64, at: [u8]) -> PlanValue ! 
       let c: i64 = crate::access::field(doc, todo, "content");
       if crate::access::kind(doc, c) == 4 {
         let x: str = crate::util::str_at(doc, c);
-        let t: str = crate::text::trim(x);
+        let t: ref str = crate::text::trim(x);
         if len(t) > 0 {
           cnt = cnt + 1;
           if stored < 30 {

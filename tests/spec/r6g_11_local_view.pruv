@@ -9,3 +9,7 @@ pub fn f(x: [u8], s: str) -> i64
   let k: i64 = x[0];
   return m[0] + m[1] + k + width(w) + len(w);
 }
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(4, 2);
+  return f(x, "hi");
+}

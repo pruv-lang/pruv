@@ -75,6 +75,12 @@ EQR_LOOP_MAX = 4   # P17a: a dynamic-length eq_range below this many elements us
 OPT = "{ i1, i64 }"
 COPT = "{ i1, i128 }"       # Option/Result stored inside a contract aggregate (%pruv_c_*)
 ARR = "{ ptr, i64, i64 }"   # P3: owned buffer inside the module: { data, len, cap }; cap = allocated element count
+VIEW = "{ ptr, i64 }"       # R-6g9-1: a `ref [u8]` / `ref str` result: { data, len }, never owned
+
+
+def view_ret(f):
+    """R-6g9-1: the function returns a borrowed view (`-> ref [T] from(..)`), lowered as VIEW"""
+    return getattr(f, "ref_result", False) and is_arr(f.ret)
 
 # G1 (docs/M2_G1_SPEC.md section 5): user struct/enum layout
 #   %pruv_t_Name  struct: its fields in order; enum: i64 tag followed by flattened or overlapping payloads.
@@ -419,12 +425,12 @@ done:
 """
 # LG32 (G-DB52-4): only emitted when `x = resize(x, n, v)` is lowered in place.  The block s (allocated count c, live
 # count m <= n) grows through pruv_regrow_v2 (realloc, so the old block is never live next to the new one) when n > c,
-# else it is kept; then the tail [m, n) is set to v exactly like pruv_resize / pruv_resize_u8.  n <= 0 (so the array is
-# empty) returns s unchanged.
+# else it is kept; then the tail [m, n) is set to v exactly like pruv_resize / pruv_resize_u8.  n <= m (a shrink, which
+# R-6g9-1's scratch resize of an inout view source allows, or an empty array) returns s unchanged.
 DECLS_REGROW = """\
 define internal ptr @pruv_regrow(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {
 entry:
-  %e = icmp sle i64 %n, 0
+  %e = icmp sle i64 %n, %m
   br i1 %e, label %none, label %chk
 none:
   ret ptr %s
@@ -467,7 +473,7 @@ done:
 DECLS_REGROW_U8 = """\
 define internal ptr @pruv_regrow_u8(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {
 entry:
-  %e = icmp sle i64 %n, 0
+  %e = icmp sle i64 %n, %m
   br i1 %e, label %none, label %chk
 none:
   ret ptr %s
@@ -498,7 +504,7 @@ have:
 DECLS_REGROW_NARROW = """\
 define internal ptr @pruv_regrow_narrow(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v, i64 %size, i64 %align) alwaysinline nounwind {
 entry:
-  %e = icmp sle i64 %n, 0
+  %e = icmp sle i64 %n, %m
   br i1 %e, label %none, label %chk
 none:
   ret ptr %s
@@ -1011,6 +1017,8 @@ class Mod:
 
 def ir_ret(tt, f):
     """internal LLVM result type: an extended (G9) aggregate result goes through explicit output storage"""
+    if view_ret(f):     # R-6g9-1
+        return VIEW
     return "void" if is_ext_t(tt, f.ret) else lty(f.ret)
 
 
@@ -1025,8 +1033,9 @@ def has_take_array(f):
 
 def is_internal_fn(f, tt):
     """G9: a function with an extended type in its signature has no raw ABI wrapper and no binding;
-    G5 A3: neither has a function with an inout parameter (one host-eligibility rule)"""
-    return has_ext_sig(f, tt) or has_inout(f) or has_take_array(f)
+    G5 A3: neither has a function with an inout parameter (one host-eligibility rule); R-6g9-1: nor a borrowed result
+    (a { ptr, i64 } view the host would read as an owned array)"""
+    return has_ext_sig(f, tt) or has_inout(f) or has_take_array(f) or view_ret(f)
 
 
 def has_ext_sig(f, tt):
@@ -1039,7 +1048,7 @@ def exports_abi(f, tt, explicit):
     not foreign / specialization / collection-bearing / extended, explicit mode => host entry, and an inout parameter
     is exported only from an explicit-mode host entry (mutable host entries; legacy inout fns stay internal)"""
     if (f.foreign is not None or getattr(f, "private", False) or _is_coll_fn(f) or has_ext_sig(f, tt)
-            or has_take_array(f)):
+            or has_take_array(f) or view_ret(f)):   # R-6g9-1: a borrowed result never crosses the host boundary
         return False
     if explicit and not f.host_entry:
         return False
@@ -1087,8 +1096,12 @@ def sig_text(params, f):
     take = {"%%p.%s.a" % mangle(p.name) for p in f.params if p.take and is_array(p.type)}
     take |= {"%%p.%s" % mangle(p.name) for p in f.params if p.take and (is_agg(p.type) or is_native_vec(p.type))}   # LG9: owned record storage
     reads = {"%%p.%s" % mangle(p.name) for p in f.params if is_native_vec(p.type)}
-    return ", ".join("%s %s" % (("ptr noalias nocapture" if n in mut else ("ptr nocapture readonly" if n in reads else "ptr noalias nocapture readonly"))
-                                if t == "ptr" and n != "%out" and not n.endswith(".h") and n not in take else t, n)
+    # R-6g9-1: the data pointer of a read from source escapes through the view result, so it is not nocapture
+    escapes = {"%%p.%s.a" % mangle(n) for n in (f.borrow_from or ())} if view_ret(f) else set()
+    def attrs(n):
+        a = "ptr noalias nocapture" if n in mut else ("ptr nocapture readonly" if n in reads else "ptr noalias nocapture readonly")
+        return a.replace(" nocapture", "") if n in escapes else a
+    return ", ".join("%s %s" % (attrs(n) if t == "ptr" and n != "%out" and not n.endswith(".h") and n not in take else t, n)
                      for t, n in params)
 
 
@@ -1101,6 +1114,7 @@ class FnGen:
         s.lines = []
         s.allocas = []
         s.nt = s.nl = s.nslot = s.nq = 0
+        s.views = False    # R-6g9-1: a `ref` local exists, so no last-use copy or resize takes its source
         s.cur = None
         s.dead = False
         s.scopes = []
@@ -1186,11 +1200,16 @@ class FnGen:
         return "\n".join(out) + "\n"
 
     # ---------- slots / scopes ----------
-    def new_slot(s, name, ty, prefix="l", packed=False):
+    def new_slot(s, name, ty, prefix="l", packed=False, view=False):
         kind = vkind(ty)
         base = "%%%s%d.%s" % (prefix, s.nslot, mangle(name))
         s.nslot += 1
         a, b = base + ".a", base + ".b"
+        if view:    # R-6g9-1: a `ref` local is a { ptr, i64 } pair: no cap, never an owner
+            s.views = True
+            s.allocas.append("%s = alloca ptr" % a)
+            s.allocas.append("%s = alloca i64" % b)
+            return Slot("arr", a, b, elem_ty(ty))
         if kind == "i64":
             s.allocas.append("%s = alloca i64" % a)
             return Slot("i64", a)
@@ -1233,7 +1252,7 @@ class FnGen:
         if sl.k == "arr":
             p = s.op("load ptr, ptr %s" % sl.a)
             n = s.op("load i64, ptr %s" % sl.b)
-            c = s.op("load i64, ptr %s" % sl.c)
+            c = s.op("load i64, ptr %s" % sl.c) if sl.c is not None else None   # R-6g9-1: a view slot has no cap
             return V("arr", p, n, sl.ty, layout=sl.layout, rng=sl.rng, c=c)
         t = s.op("load i1, ptr %s" % sl.a)
         v = s.op("load i64, ptr %s" % sl.b)
@@ -1251,7 +1270,8 @@ class FnGen:
             sl.rng = v.rng
             s.ins("store ptr %s, ptr %s" % (v.a, sl.a))
             s.ins("store i64 %s, ptr %s" % (v.b, sl.b))
-            s.ins("store i64 %s, ptr %s" % (capof(v), sl.c))
+            if sl.c is not None:
+                s.ins("store i64 %s, ptr %s" % (capof(v), sl.c))
         else:
             s.ins("store i1 %s, ptr %s" % (v.a, sl.a))
             s.ins("store i64 %s, ptr %s" % (v.b, sl.b))
@@ -1640,7 +1660,7 @@ class FnGen:
         expression itself, or a field of a constructor / struct literal / enum constructor in it, the same place walk
         as ret_movable) and that the expression names exactly once; the return is their last use, so the call takes the
         buffer and the return's cleanup skips the slot"""
-        if s.cost or e is None:
+        if s.cost or e is None or s.views:     # R-6g9-1: a live `ref` local may view the taken array
             return set()
         counts = {}
 
@@ -2148,7 +2168,11 @@ class FnGen:
         if s.cost:
             s.cost_check()
         rt = s.f.ret
-        if s.is_ext(rt):    # G9 A3: explicit output storage; v is an owned value
+        if view_ret(s.f):  # R-6g9-1: a view result goes back by value as { ptr, i64 }
+            a = s.op("insertvalue %s undef, ptr %s, 0" % (VIEW, v.a))
+            a = s.op("insertvalue %s %s, i64 %s, 1" % (VIEW, a, v.b))
+            s.term("ret %s %s" % (VIEW, a))
+        elif s.is_ext(rt):    # G9 A3: explicit output storage; v is an owned value
             s.ins("store %s %s, ptr %%out" % (lty(rt), v.a))
             s.term("ret void")
         elif rt == UNIT:
@@ -2252,7 +2276,8 @@ class FnGen:
                 if is_arr(fd.type) and not s.fb(v.ty, None, fd.name):
                     return {x.base.name}
             return set()
-        if not isinstance(x, Var) or x.name == st.name or not s.dead_after(x.name):
+        if not isinstance(x, Var) or x.name == st.name or not s.dead_after(x.name) or s.views:
+            # R-6g9-1: a live `ref` local may view x, so the copy stays a copy
             return set()
         kind, v = s.lookup(x.name)
         if kind == "slot" and v.k == "arr" and s.owned_slot(v):
@@ -2404,7 +2429,16 @@ class FnGen:
         s.end_temps()
 
     def stmt(s, st):
-        if isinstance(st, Let) and s.m.stack is not None and s.m.stack.contains(st) and st.name not in s.resize_args:
+        if isinstance(st, Let) and getattr(st, "ref", False) and is_arr(st.type):
+            # R-6g9-1: ownership by type first: a `ref` local reads its source (a place, a subview, a borrowed
+            # result or a literal's read-only global) as a { ptr, i64 } view and is never dropped
+            s.begin_temps()
+            v = s.ev(st.value, False)
+            sl = s.new_slot(st.name, st.type, view=True)
+            s.store(sl, v)
+            s.scopes[-1]["names"][st.name] = ("slot", sl)
+            s.end_temps()
+        elif isinstance(st, Let) and s.m.stack is not None and s.m.stack.contains(st) and st.name not in s.resize_args:
             s.stack_let(st)
         elif isinstance(st, Let) and s.m.stack is not None and s.m.stack.lit(st) and not s.cost:
             # P3: a borrowed literal local binds the read-only global directly: no copy, never freed
@@ -2450,6 +2484,10 @@ class FnGen:
         elif isinstance(st, Assign):
             s.begin_temps()
             sl = s.lookup(st.name)[1]
+            if sl.k == "arr" and sl.c is None:     # R-6g9-1: a `ref` local takes another view; nothing to drop
+                s.store(sl, s.ev(st.value, False))
+                s.end_temps()
+                return
             # LG32 (G-DB52-4): x = resize(x, n, v) grows the slot's block in place (realloc), so the old and new blocks are never live together
             s.moving = s.nested_moves(st.value, st.name)     # LG37: also inside the in-place regrow's operands
             if s.regrow_assign(st, sl):
@@ -2574,7 +2612,10 @@ class FnGen:
         elif isinstance(st, Return):
             s.begin_temps()
             v = V("unit")
-            if st.value is not None and s.truncate_move(st.value) is not None:
+            if st.value is not None and view_ret(s.f):
+                # R-6g9-1: a borrowed result is the { ptr, i64 } of a from source; nothing moves, nothing is copied
+                v = s.ev(st.value, False)
+            elif st.value is not None and s.truncate_move(st.value) is not None:
                 # P2 batch 4: `return truncate(x, m)` of an owned local array: the same pointer with length m moves out
                 sl = s.truncate_move(st.value)
                 src = s.load(sl)
@@ -2834,10 +2875,11 @@ class FnGen:
             s.guard(ok, lambda: s.ins("call void @pruv_panic_oob(i64 %s, i64 %s)" % (i.a, a.b)), False)
         return s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (storage_ty(a), a.a, i.a))  # G2 A5: bytes = u8|bool
 
-    def resize_guards(s, src, cnt, v):
-        """--no-verify guards of resize(src, cnt, v): len(src) <= cnt <= 2^40, and v <= 255 for [u8]"""
+    def resize_guards(s, src, cnt, v, scratch=False):
+        """--no-verify guards of resize(src, cnt, v): len(src) <= cnt <= 2^40 (0 <= cnt for R-6g9-1's scratch resize of
+        an inout view source, which may shrink), and v <= 255 for [u8]"""
         if not s.verified:
-            lo = s.op("icmp sle i64 %s, %s" % (src.b, cnt.a))
+            lo = s.op("icmp sle i64 %s, %s" % ("0" if scratch else src.b, cnt.a))
             hi = s.op("icmp ule i64 %s, 1099511627776" % cnt.a)
             ok = s.op("and i1 %s, %s" % (lo, hi))
             s.guard(ok, s.panic1("pruv_panic_arith", "resize length outside len..2^40"), False)
@@ -2890,7 +2932,7 @@ class FnGen:
         """Return the block, length and capacity after an in-place resize."""
         cnt = s.ev(e.args[1])
         v = s.ev(e.args[2])
-        s.resize_guards(src, cnt, v)
+        s.resize_guards(src, cnt, v, getattr(e, "resize_scratch", False))
         q, nc = s.regrow_block(src, cnt, v)
         return q, cnt, nc
 
@@ -3774,6 +3816,11 @@ class FnGen:
         if f.ret == UNIT:
             s.ins("call void %s(%s)" % (callee, ", ".join(args)))
             return V("unit")
+        if view_ret(f):     # R-6g9-1: ownership by type: a borrowed result is a view, never a temporary
+            r = s.op("call %s %s(%s)" % (VIEW, callee, ", ".join(args)))
+            x0 = s.op("extractvalue %s %s, 0" % (VIEW, r))
+            x1 = s.op("extractvalue %s %s, 1" % (VIEW, r))
+            return V("arr", x0, x1, elem_ty(f.ret), layout=s.m.storage.layout_of(f), rng=s.m.storage.range_of(f))
         r = s.op("call %s %s(%s)" % (lty(f.ret), callee, ", ".join(args)))
         if f.ret in (I64, BOOL):
             return V(vkind(f.ret), r)
@@ -6870,11 +6917,11 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     from typeinfo import dependencies, g2_unimplemented_error, first_g3_use, type_name
     if foreign_checks not in ("requires", "all", "off"):
         raise ValueError("foreign_checks must be requires, all or off")
-    if prog.borrow_site is not None:
-        site = prog.borrow_site
-        raise PruvError("codegen", site.line, site.col, "unsupported_type",
-                        "borrowed views and borrowing structs need the Rust backend",
-                        file=getattr(site, "file", None))
+    for site in prog.types:       # R-6g9-1: views lower to { ptr, i64 }; borrowing structs wait for R-6g9-2 (B2)
+        if getattr(site, "borrowing", False):
+            raise PruvError("codegen", site.line, site.col, "unsupported_type",
+                            "borrowing structs need the Rust backend",
+                            file=getattr(site, "file", None))
     from check import opaque_inline
     opaque_inline(prog)     # P13o: contract applications of opaque functions become their bodies
     for f in prog.functions:

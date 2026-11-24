@@ -327,7 +327,8 @@ pub fn data_dir(cfg: [i64], cfg_text: [u8]) -> str ! alloc
   requires len(cfg) >= 32 && len(cfg) <= 2147483647
   ensures len(result) <= 1000000100
 {
-  let xdg: str = crate::text::trim(env_value(cfg, cfg_text, "XDG_DATA_HOME"));
+  let xv: str = env_value(cfg, cfg_text, "XDG_DATA_HOME");
+  let xdg: ref str = crate::text::trim(xv);
   if len(xdg) > 0 && xdg[0] == 47 { return join(xdg, "opencode"); }
   let home: str = crate::util::cfg_str(cfg_text, cfg[16], cfg[17]);
   return join(home, ".local/share/opencode");
@@ -337,7 +338,8 @@ pub fn data_dir(cfg: [i64], cfg_text: [u8]) -> str ! alloc
 pub fn db_none(cfg: [i64], cfg_text: [u8]) -> bool ! alloc
   requires len(cfg) >= 32 && len(cfg) <= 2147483647
 {
-  let given: str = crate::text::trim(env_value(cfg, cfg_text, "OPENCODE_DB"));
+  let gv: str = env_value(cfg, cfg_text, "OPENCODE_DB");
+  let given: ref str = crate::text::trim(gv);
   return crate::text::same(given, ":memory:");  // MUT:M01 => return false;
 }
 
@@ -346,7 +348,8 @@ pub fn db_path(cfg: [i64], cfg_text: [u8]) -> str ! alloc
   requires len(cfg) >= 32 && len(cfg) <= 2147483647
   ensures len(result) <= 2000000100
 {
-  let given: str = crate::text::trim(env_value(cfg, cfg_text, "OPENCODE_DB"));
+  let gv: str = env_value(cfg, cfg_text, "OPENCODE_DB");
+  let given: ref str = crate::text::trim(gv);
   let home: str = crate::util::cfg_str(cfg_text, cfg[6], cfg[7]);
   if len(given) == 0 { return join(home, "opencode.db"); }
   if given[0] == 47 { return copy(given); }
