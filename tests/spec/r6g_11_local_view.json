@@ -1,1 +1,5 @@
-{"gen_contains": ["get_unchecked("], "gen_absent": ["to_vec()", ".clone()"]}
+{
+  "gen_contains": ["get_unchecked("],
+  "gen_absent": ["to_vec()", ".clone()"],
+  "run": {"exit": 0, "flags_matrix": [[], ["--no-verify"]], "stdout_lines": ["8"], "alloc_balance": true}
+}

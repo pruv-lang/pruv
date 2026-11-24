@@ -1,0 +1,24 @@
+// spec: R-6g9-1 accept
+// A borrowed result goes back by value as { ptr, i64 }: no copy, no ownership transfer, and the caller never
+// frees it; a `ref` local holds the same pair and chains into another borrowed call.
+fn head(x: [u8], n: i64) -> ref [u8] from(x)
+  requires 0 <= n && n <= len(x)
+  ensures len(result) == n
+{
+  return subview(x, 0, n);
+}
+fn tail2(x: [u8]) -> ref [u8] from(x)
+  requires len(x) >= 2
+  ensures len(result) == len(x) - 2
+{
+  let h: ref [u8] = subview(x, 2, len(x));
+  return h;
+}
+fn word(s: str) -> ref str from(s) { return s; }
+pub fn checksum() -> i64 ! alloc {
+  let b: [u8] = alloc(6, 3);
+  let m: ref [u8] = head(b, 4);
+  let t: ref [u8] = tail2(m);
+  let w: ref str = word("pruv");
+  return len(m) + m[0] + len(t) + len(head(b, 2)) + len(w);
+}

@@ -2,6 +2,18 @@
 // List row (9 words): thread ref, title ref, updatedAt ref, path ref, origin (-1 absent, 0 other, 1 lair).
 // Text order per row: thread, title, updatedAt, path (the refs tile the text).
 
+// Title: name, else preview (each trimmed), one line, 120 units.
+fn title(d: crate::json::JsonDocument, t: i64) -> str ! alloc
+  ensures len(result) <= 50331648
+{
+  let name: str = crate::util::str_at(d, crate::util::field(d, t, "name"));
+  let tn: ref str = crate::text::trim(name);
+  if len(tn) > 0 { return crate::text::one_line(tn, 120); }
+  let preview: str = crate::util::str_at(d, crate::util::field(d, t, "preview"));
+  let tp: ref str = crate::text::trim(preview);
+  return crate::text::one_line(tp, 120);
+}
+
 pub fn build(d: crate::json::JsonDocument, rid: i64) -> [i64] ! alloc
   ensures len(result) >= 3
 {
@@ -32,10 +44,7 @@ pub fn build(d: crate::json::JsonDocument, rid: i64) -> [i64] ! alloc
         if len(idv) > 100000000 - off { return crate::packet::fail(2, 6, empty); }
         tx = string_push_str(move tx, idv);
         off = off + len(idv);
-        // title: name, else preview (each trimmed), one line, 120 units
-        let mut title: str = crate::text::trim(crate::util::str_at(d, crate::util::field(d, t, "name")));
-        if len(title) == 0 { title = crate::text::trim(crate::util::str_at(d, crate::util::field(d, t, "preview"))); }
-        let one: str = crate::text::one_line(title, 120);
+        let one: str = title(d, t);
         rows[b + 2] = off;
         rows[b + 3] = len(one);
         if len(one) > 100000000 - off { return crate::packet::fail(2, 6, empty); }

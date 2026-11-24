@@ -70,7 +70,7 @@ Files: `pruvc/check.py`, `pruvc/codegen.py`, `pruvc/llvmgen.py`, `pruvc/modules.
 | `tests/spec/r6g_11_mut_ref.pruv` | reject `type/borrow_signature`; `let mut` view |
 | `tests/spec/r6g_11_store_view.pruv` | reject `type/immutable`; store into a view |
 | `tests/spec/r6g_11_own_alias.pruv` | reject `type/array_alias`; view in an owned position |
-| `tests/spec/r6g_11_llvm.pruv` | reject `codegen/unsupported_type` on the LLVM backend |
+| `tests/spec/r6g9_1_struct_llvm.pruv` (was `r6g_11_llvm`) | reject `codegen/unsupported_type` for a borrowing struct on the LLVM backend (views lower under R-6g9-1) |
 | `tests/spec/r6g_12_literal_arg.pruv` | accept; `f("abc")` with no allocation and no `alloc` |
 | `tests/spec/r6g_12_literal_owned.pruv` | reject `effect/missing_effect`; a literal bound to an owned `str` still allocates |
 

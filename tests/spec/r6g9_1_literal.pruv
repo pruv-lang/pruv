@@ -1,0 +1,23 @@
+// spec: R-6g9-1 accept
+// A string literal in a borrowed position is a static view: the read-only global and its length, never copied
+// and never freed, also when it flows through a borrowed result.
+fn pick(a: str, b: str, first: bool) -> ref str from(a, b) {
+  if first {
+    return a;
+  }
+  return b;
+}
+fn label(s: str, k: i64) -> ref str from(s) {
+  if k == 0 {
+    return "none";
+  }
+  return s;
+}
+pub fn checksum() -> i64 {
+  let w: ref str = "pruv";
+  let e: ref str = "";
+  let p: ref str = pick("ab", "cde", false);
+  let l: ref str = label(w, 0);
+  let q: ref str = label(p, 1);
+  return len(w) + len(e) + len(p) + len(l) + len(q) + w[0];
+}

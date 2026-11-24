@@ -1,1 +1,5 @@
-{"gen_contains": ["fn text_of<'a>(src: &'a [u8], lo: i64, hi: i64, buf: &'a mut ::std::vec::Vec<u8>) -> &'a [u8]"], "gen_absent": ["to_vec()", ".clone()"]}
+{
+  "gen_contains": ["fn text_of<'a>(src: &'a [u8], lo: i64, hi: i64, buf: &'a mut ::std::vec::Vec<u8>) -> &'a [u8]"],
+  "gen_absent": ["to_vec()", ".clone()"],
+  "run": {"exit": 0, "flags_matrix": [[], ["--no-verify"]], "stdout_lines": ["13"], "alloc_balance": true}
+}

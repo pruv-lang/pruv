@@ -1158,7 +1158,8 @@ fn tree_count(t: Tree) -> i64
   On failure (a resource failure or a failed run-time check) the program stops; values owned by the failing call
   are not handed back, and the moved arguments of a call belong to the callee from the call on. A future C ABI for
   owned collections must name the allocator in the symbol version (as `_v1` does) and give the free function with
-  the value. Borrowed views and borrowing structs (R-6g-11) stay `codegen/unsupported_type` on LLVM.
+  the value. Borrowed views lower to `{ ptr, i64 }` on LLVM (R-6g9-1); borrowing structs (R-6g-11) stay
+  `codegen/unsupported_type` on LLVM.
   Tests: [accept LLVM tree](tests/spec/r6e_21_llvm_tree.pruv),
   [reject host entry](tests/spec/r6e_21_host_entry.pruv); measurements and the test table in
   [L3_LB3](docs/L3_LB3.md).
@@ -1506,8 +1507,8 @@ borrowed value is live.
     is `fn f<'a>(..)` (body and wrapper) whose `from` parameters are `&'a [u8]`, `&'a str`, `&'a mut
     ::std::vec::Vec<u8>` (resizable `inout`), `&'a mut [u8]` (fixed `inout`) or `&Doc<'a>`, and whose result is
     `&'a [u8]`, `&'a str` or `Doc<'a>`. A `ref` local is `&[u8]` / `&str`; a view is the same unchecked (verified) or
-    checked (`--no-verify`) slice expression as a `subview` argument. No `to_vec` or `clone`. The LLVM backend rejects
-    a program with a `ref` type or a borrowing struct with `codegen/unsupported_type` (LB3).
+    checked (`--no-verify`) slice expression as a `subview` argument. No `to_vec` or `clone`. LLVM lowers views
+    under R-6g9-1 and rejects a program with a borrowing struct with `codegen/unsupported_type`.
   - Tests: [document borrowing its input](tests/spec/r6g_11_doc_input.pruv),
     [result from either of two sources](tests/spec/r6g_11_two_sources.pruv),
     [subview bound to a local](tests/spec/r6g_11_local_view.pruv), [copy then reuse](tests/spec/r6g_11_copy_owned.pruv),
@@ -1520,7 +1521,7 @@ borrowed value is live.
     [owner moved](tests/spec/r6g_11_move_owner.pruv), [loop](tests/spec/r6g_11_loop_conflict.pruv),
     [no from](tests/spec/r6g_11_no_from.pruv), [duplicate from](tests/spec/r6g_11_from_duplicate.pruv), [ref parameter](tests/spec/r6g_11_ref_param.pruv),
     [let mut](tests/spec/r6g_11_mut_ref.pruv), [store into a view](tests/spec/r6g_11_store_view.pruv),
-    [owned alias](tests/spec/r6g_11_own_alias.pruv), [LLVM](tests/spec/r6g_11_llvm.pruv).
+    [owned alias](tests/spec/r6g_11_own_alias.pruv).
 - R-6g-12 **String literal arguments (G-DB63-2).** A string literal that is the direct argument of a non-`inout`,
   non-`take` `str` parameter of a Pruv function is a borrowed static string: it needs no `! alloc` (Rust passes
   `"abc"`, LLVM the read-only global). A literal in an owned position still allocates. R-6g4-5 extends
@@ -1730,6 +1731,21 @@ borrowed value is live.
   Tests: [field](tests/spec/r6g8_4_binder_field.pruv), [use after](tests/spec/r6g8_4_binder_after.pruv),
   [return](tests/spec/r6g8_4_binder_return.pruv), [named scrutinee](tests/spec/r6g8_4_binder_named.pruv),
   [branch](tests/spec/r6g8_4_binder_branch.pruv), [whole move](tests/spec/r6g8_4_binder_whole.pruv).
+
+## 6g9. Borrows past one call (B bundle)
+
+- R-6g9-1 **LLVM views.** On the LLVM backend a value of type `ref [u8]` or `ref str` is a `{ ptr, i64 }` view
+  (data, length). Ownership is decided by type before expression shape: a view is never owned, whatever produced
+  it (a place, `subview`, a call of a `from` function, a string literal), so it is never freed and never copied.
+  A `ref` local is a stack slot holding the pair (no capacity word); a read `[u8]` / `str` argument is passed as
+  today (`ptr` + length); a `-> ref [u8] from(..)` / `-> ref str from(..)` result is returned by value as
+  `{ ptr, i64 }` (no `%out`), and the data pointer of a read `from` parameter is not `nocapture`. A view of an
+  `inout` buffer is the slot's data and length read after the callee's last write. A string literal in a view
+  position is the read-only global. A borrowing struct is still `codegen/unsupported_type` on LLVM until bundle B2.
+  Tests: [view result](tests/spec/r6g9_1_view_result.pruv), [inout source](tests/spec/r6g9_1_inout_source.pruv),
+  [literal](tests/spec/r6g9_1_literal.pruv), [subview local](tests/spec/r6g_11_local_view.pruv),
+  [two sources](tests/spec/r6g_11_two_sources.pruv), [copy then reuse](tests/spec/r6g_11_copy_owned.pruv);
+  rejects [borrowing struct](tests/spec/r6g9_1_struct_llvm.pruv).
 
 ## 6h. Files (G10)
 

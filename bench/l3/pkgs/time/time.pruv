@@ -312,7 +312,7 @@ fn from_string(v: str) -> Iso ! alloc
   ensures result.status == 0 ==> (forall i in 0..24: (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19 || i == 23 || (48 <= result.text[i] && result.text[i] <= 57)))
   ensures result.status != 0 ==> len(result.text) == 0
 {
-  let t: str = crate::text::trim(v);
+  let t: ref str = crate::text::trim(v);
   let n: i64 = digit_value(t);
   if n >= 0 { return from_integer(n); }
   if n == -2 { return absent(); }

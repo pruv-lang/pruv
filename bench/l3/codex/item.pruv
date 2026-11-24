@@ -45,7 +45,7 @@ fn fold_reply(inout fs: [i64], inout fb: [u8], text: str) -> () ! alloc
   if sep == 2 && room < 2 {
     s2 = room;
   } else {
-    let cp: str = crate::text::clip_bytes(text, room - sep);
+    let cp: ref str = crate::text::clip_bytes(text, room - sep);
     take = len(cp);
   }
   put_piece(inout fb, rl, s2, text, take);

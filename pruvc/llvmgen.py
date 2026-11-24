@@ -75,6 +75,12 @@ EQR_LOOP_MAX = 4   # P17a: a dynamic-length eq_range below this many elements us
 OPT = "{ i1, i64 }"
 COPT = "{ i1, i128 }"       # Option/Result stored inside a contract aggregate (%pruv_c_*)
 ARR = "{ ptr, i64, i64 }"   # P3: owned buffer inside the module: { data, len, cap }; cap = allocated element count
+VIEW = "{ ptr, i64 }"       # R-6g9-1: a `ref [u8]` / `ref str` result: { data, len }, never owned
+
+
+def view_ret(f):
+    """R-6g9-1: the function returns a borrowed view (`-> ref [T] from(..)`), lowered as VIEW"""
+    return getattr(f, "ref_result", False) and is_arr(f.ret)
 
 # G1 (docs/M2_G1_SPEC.md section 5): user struct/enum layout
 #   %pruv_t_Name  struct: its fields in order; enum: i64 tag followed by flattened or overlapping payloads.
@@ -1011,6 +1017,8 @@ class Mod:
 
 def ir_ret(tt, f):
     """internal LLVM result type: an extended (G9) aggregate result goes through explicit output storage"""
+    if view_ret(f):     # R-6g9-1
+        return VIEW
     return "void" if is_ext_t(tt, f.ret) else lty(f.ret)
 
 
@@ -1087,8 +1095,12 @@ def sig_text(params, f):
     take = {"%%p.%s.a" % mangle(p.name) for p in f.params if p.take and is_array(p.type)}
     take |= {"%%p.%s" % mangle(p.name) for p in f.params if p.take and (is_agg(p.type) or is_native_vec(p.type))}   # LG9: owned record storage
     reads = {"%%p.%s" % mangle(p.name) for p in f.params if is_native_vec(p.type)}
-    return ", ".join("%s %s" % (("ptr noalias nocapture" if n in mut else ("ptr nocapture readonly" if n in reads else "ptr noalias nocapture readonly"))
-                                if t == "ptr" and n != "%out" and not n.endswith(".h") and n not in take else t, n)
+    # R-6g9-1: the data pointer of a read from source escapes through the view result, so it is not nocapture
+    escapes = {"%%p.%s.a" % mangle(n) for n in (f.borrow_from or ())} if view_ret(f) else set()
+    def attrs(n):
+        a = "ptr noalias nocapture" if n in mut else ("ptr nocapture readonly" if n in reads else "ptr noalias nocapture readonly")
+        return a.replace(" nocapture", "") if n in escapes else a
+    return ", ".join("%s %s" % (attrs(n) if t == "ptr" and n != "%out" and not n.endswith(".h") and n not in take else t, n)
                      for t, n in params)
 
 
@@ -1186,11 +1198,15 @@ class FnGen:
         return "\n".join(out) + "\n"
 
     # ---------- slots / scopes ----------
-    def new_slot(s, name, ty, prefix="l", packed=False):
+    def new_slot(s, name, ty, prefix="l", packed=False, view=False):
         kind = vkind(ty)
         base = "%%%s%d.%s" % (prefix, s.nslot, mangle(name))
         s.nslot += 1
         a, b = base + ".a", base + ".b"
+        if view:    # R-6g9-1: a `ref` local is a { ptr, i64 } pair: no cap, never an owner
+            s.allocas.append("%s = alloca ptr" % a)
+            s.allocas.append("%s = alloca i64" % b)
+            return Slot("arr", a, b, elem_ty(ty))
         if kind == "i64":
             s.allocas.append("%s = alloca i64" % a)
             return Slot("i64", a)
@@ -1233,7 +1249,7 @@ class FnGen:
         if sl.k == "arr":
             p = s.op("load ptr, ptr %s" % sl.a)
             n = s.op("load i64, ptr %s" % sl.b)
-            c = s.op("load i64, ptr %s" % sl.c)
+            c = s.op("load i64, ptr %s" % sl.c) if sl.c is not None else None   # R-6g9-1: a view slot has no cap
             return V("arr", p, n, sl.ty, layout=sl.layout, rng=sl.rng, c=c)
         t = s.op("load i1, ptr %s" % sl.a)
         v = s.op("load i64, ptr %s" % sl.b)
@@ -1251,7 +1267,8 @@ class FnGen:
             sl.rng = v.rng
             s.ins("store ptr %s, ptr %s" % (v.a, sl.a))
             s.ins("store i64 %s, ptr %s" % (v.b, sl.b))
-            s.ins("store i64 %s, ptr %s" % (capof(v), sl.c))
+            if sl.c is not None:
+                s.ins("store i64 %s, ptr %s" % (capof(v), sl.c))
         else:
             s.ins("store i1 %s, ptr %s" % (v.a, sl.a))
             s.ins("store i64 %s, ptr %s" % (v.b, sl.b))
@@ -2148,7 +2165,11 @@ class FnGen:
         if s.cost:
             s.cost_check()
         rt = s.f.ret
-        if s.is_ext(rt):    # G9 A3: explicit output storage; v is an owned value
+        if view_ret(s.f):  # R-6g9-1: a view result goes back by value as { ptr, i64 }
+            a = s.op("insertvalue %s undef, ptr %s, 0" % (VIEW, v.a))
+            a = s.op("insertvalue %s %s, i64 %s, 1" % (VIEW, a, v.b))
+            s.term("ret %s %s" % (VIEW, a))
+        elif s.is_ext(rt):    # G9 A3: explicit output storage; v is an owned value
             s.ins("store %s %s, ptr %%out" % (lty(rt), v.a))
             s.term("ret void")
         elif rt == UNIT:
@@ -2404,7 +2425,16 @@ class FnGen:
         s.end_temps()
 
     def stmt(s, st):
-        if isinstance(st, Let) and s.m.stack is not None and s.m.stack.contains(st) and st.name not in s.resize_args:
+        if isinstance(st, Let) and getattr(st, "ref", False) and is_arr(st.type):
+            # R-6g9-1: ownership by type first: a `ref` local reads its source (a place, a subview, a borrowed
+            # result or a literal's read-only global) as a { ptr, i64 } view and is never dropped
+            s.begin_temps()
+            v = s.ev(st.value, False)
+            sl = s.new_slot(st.name, st.type, view=True)
+            s.store(sl, v)
+            s.scopes[-1]["names"][st.name] = ("slot", sl)
+            s.end_temps()
+        elif isinstance(st, Let) and s.m.stack is not None and s.m.stack.contains(st) and st.name not in s.resize_args:
             s.stack_let(st)
         elif isinstance(st, Let) and s.m.stack is not None and s.m.stack.lit(st) and not s.cost:
             # P3: a borrowed literal local binds the read-only global directly: no copy, never freed
@@ -2450,6 +2480,10 @@ class FnGen:
         elif isinstance(st, Assign):
             s.begin_temps()
             sl = s.lookup(st.name)[1]
+            if sl.k == "arr" and sl.c is None:     # R-6g9-1: a `ref` local takes another view; nothing to drop
+                s.store(sl, s.ev(st.value, False))
+                s.end_temps()
+                return
             # LG32 (G-DB52-4): x = resize(x, n, v) grows the slot's block in place (realloc), so the old and new blocks are never live together
             s.moving = s.nested_moves(st.value, st.name)     # LG37: also inside the in-place regrow's operands
             if s.regrow_assign(st, sl):
@@ -2574,7 +2608,10 @@ class FnGen:
         elif isinstance(st, Return):
             s.begin_temps()
             v = V("unit")
-            if st.value is not None and s.truncate_move(st.value) is not None:
+            if st.value is not None and view_ret(s.f):
+                # R-6g9-1: a borrowed result is the { ptr, i64 } of a from source; nothing moves, nothing is copied
+                v = s.ev(st.value, False)
+            elif st.value is not None and s.truncate_move(st.value) is not None:
                 # P2 batch 4: `return truncate(x, m)` of an owned local array: the same pointer with length m moves out
                 sl = s.truncate_move(st.value)
                 src = s.load(sl)
@@ -3774,6 +3811,11 @@ class FnGen:
         if f.ret == UNIT:
             s.ins("call void %s(%s)" % (callee, ", ".join(args)))
             return V("unit")
+        if view_ret(f):     # R-6g9-1: ownership by type: a borrowed result is a view, never a temporary
+            r = s.op("call %s %s(%s)" % (VIEW, callee, ", ".join(args)))
+            x0 = s.op("extractvalue %s %s, 0" % (VIEW, r))
+            x1 = s.op("extractvalue %s %s, 1" % (VIEW, r))
+            return V("arr", x0, x1, elem_ty(f.ret), layout=s.m.storage.layout_of(f), rng=s.m.storage.range_of(f))
         r = s.op("call %s %s(%s)" % (lty(f.ret), callee, ", ".join(args)))
         if f.ret in (I64, BOOL):
             return V(vkind(f.ret), r)
@@ -6870,11 +6912,11 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     from typeinfo import dependencies, g2_unimplemented_error, first_g3_use, type_name
     if foreign_checks not in ("requires", "all", "off"):
         raise ValueError("foreign_checks must be requires, all or off")
-    if prog.borrow_site is not None:
-        site = prog.borrow_site
-        raise PruvError("codegen", site.line, site.col, "unsupported_type",
-                        "borrowed views and borrowing structs need the Rust backend",
-                        file=getattr(site, "file", None))
+    for site in prog.types:       # R-6g9-1: views lower to { ptr, i64 }; borrowing structs wait for R-6g9-2 (B2)
+        if getattr(site, "borrowing", False):
+            raise PruvError("codegen", site.line, site.col, "unsupported_type",
+                            "borrowing structs need the Rust backend",
+                            file=getattr(site, "file", None))
     from check import opaque_inline
     opaque_inline(prog)     # P13o: contract applications of opaque functions become their bodies
     for f in prog.functions:
