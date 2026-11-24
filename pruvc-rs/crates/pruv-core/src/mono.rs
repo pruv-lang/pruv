@@ -572,7 +572,7 @@ impl<'a> Mono<'a> {
             }
             Expr::BoolLit(x) => Expr::BoolLit(BoolLit { line: x.line, col: x.col, value: x.value, ty: self.ty_opt(&x.ty)? }),
             Expr::StrLit(x) => {
-                Expr::StrLit(StrLit { line: x.line, col: x.col, value: x.value.clone(), ty: self.ty_opt(&x.ty)? })
+                Expr::StrLit(StrLit { line: x.line, col: x.col, value: x.value.clone(), ty: self.ty_opt(&x.ty)?, empty: x.empty })
             }
             Expr::Var(x) => Expr::Var(Var { line: x.line, col: x.col, name: x.name.clone(), ty: self.ty_opt(&x.ty)? }),
             Expr::Move(x) => Expr::Move(Move { line: x.line, col: x.col, name: x.name.clone(), fields: x.fields.clone(), ty: self.ty_opt(&x.ty)? }),

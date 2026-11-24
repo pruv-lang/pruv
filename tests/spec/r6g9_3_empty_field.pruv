@@ -1,0 +1,12 @@
+// spec: R-6g9-3 accept
+// `[]` as a `ref [u8]` struct field value is the static empty view (hand `Window { bytes: &[] }`; borrowing
+// structs are Rust-backend only).
+struct Window {
+  bytes: ref [u8],
+  at: i64,
+}
+
+pub fn checksum() -> i64 {
+  let w: Window = Window { bytes: [], at: 4 };
+  return len(w.bytes) * 10 + w.at;
+}

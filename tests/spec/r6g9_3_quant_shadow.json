@@ -1,0 +1,34 @@
+{
+  "gen_contains": [
+    "let tag: &'static str = \"lit\";",
+    "let tag: &'static str = \"abc\";"
+  ],
+  "gen_absent": [
+    "String::from"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "33"
+    ],
+    "alloc_balance": true,
+    "llvm_fn_absent": {
+      "pruv_m_f_1_6_tagged": [
+        "call ptr @pruv_copy(",
+        "call ptr @pruv_copy_v2",
+        "call ptr @malloc"
+      ],
+      "checksum": [
+        "call ptr @pruv_copy(",
+        "call ptr @pruv_copy_v2",
+        "call ptr @malloc"
+      ]
+    }
+  }
+}

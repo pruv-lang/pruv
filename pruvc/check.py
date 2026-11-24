@@ -1,5 +1,6 @@
 """Pruv type / effect / structure checker. Fills Expr.ty."""
 import copy
+import dataclasses
 import re
 from vast import *
 from typeinfo import (TypeTable, BUILTIN_TYPE_NAMES, type_name, is_user_type, is_array, array_elem,  # G2 A5: array_elem
@@ -244,6 +245,30 @@ def _moves_count(e, name):
 
 def _mentions_count(e, name):
     return sum(isinstance(x, (Var, Move)) and x.name == name for x in _walk(e))
+
+
+def empty_view_err(e):
+    """R-6g9-3: `[]` outside a `ref [T]` view position"""
+    terr(e, "type_mismatch", "`[]` is the static empty view; it is only allowed in a `ref [T]` position",
+         "use it as a `ref [T]` let, a `ref` field or the result of a `from` function, or alloc(0, v) for an owned array")
+
+
+def reject_stray_empty_views(f):
+    """R-6g9-3: a `[]` that no view position accepted (a call argument, an operand) is an error
+    (several string-literal branches accept a StrLit without typing it)"""
+    stray = []
+    def walk(x):
+        if isinstance(x, list):
+            for y in x: walk(y)
+        elif isinstance(x, StrLit):
+            if x.empty_view and not getattr(x, "view_ok", False):
+                stray.append(x)
+        elif dataclasses.is_dataclass(x) and not isinstance(x, (type, Function)):
+            for fd in dataclasses.fields(x):
+                if fd.name != "ty": walk(getattr(x, fd.name))
+    walk([f.requires, f.ensures, f.decreases, f.body])
+    if stray:
+        empty_view_err(min(stray, key=lambda e: (e.line, e.col)))
 
 
 class _NoTry(Exception):
@@ -648,6 +673,7 @@ class Checker:
         s.in_par = False
         s.in_view = False         # LG6: checking the operands of a subview(...) argument
         s.funcs = {}
+        s.static_lets = set()
         for f in prog.functions:
             if f.name in s.funcs:
                 terr(f, "dup_fn", "function %s defined twice" % f.name)
@@ -738,6 +764,7 @@ class Checker:
         s.check_struct_invariants()
         for f in s.prog.functions:
             s.fn(f)
+            reject_stray_empty_views(f)
         if s.prog.explicit:
             resizes = array_resize_params(s.prog)
             for f in s.prog.functions:
@@ -1840,6 +1867,8 @@ class Checker:
             s.ckind = "code"
             return
         s.used_effects = set()
+        from codegen import static_str_locals   # R-6g9-3: the R-6g8-3 locals Rust emits as `&'static str` need no alloc
+        s.static_lets = static_str_locals(f, s.funcs)
         s.field_move = None
         s.ckind = "requires"
         for r in f.requires:
@@ -2206,6 +2235,8 @@ class Checker:
             if st.ref:
                 s.view_value(st.value, st.type, scope)
             else:
+                if isinstance(st.value, StrLit) and st.name in s.static_lets:   # R-6g9-3: a static text local
+                    st.value.static_str = True
                 s.expect(st.value, st.type, scope)
             s.check_inout_context(st, st.value)
             if not st.ref:
@@ -3021,6 +3052,8 @@ class Checker:
         if isinstance(e, BoolLit):
             return BOOL
         if isinstance(e, StrLit):   # G2 B0
+            if e.empty_view:
+                empty_view_err(e)
             if not c and not e.static_str:
                 s.used_effects.add("alloc")
             return STR
@@ -3399,6 +3432,11 @@ class Checker:
         return isinstance(decl, StructDecl) and any(fd.name == name and fd.ref for fd in decl.fields)
 
     def view_value(s, e, want, scope, contract=False):
+        if isinstance(e, StrLit) and e.empty_view and is_array(want):   # R-6g9-3: `[]` is the static empty view
+            e.ty = want
+            e.static_str = True
+            e.view_ok = True
+            return
         s.user_arg(e, want, scope, contract, True)
         if e.ty != want or not (e.borrowed_view or isinstance(e, StrLit) or isinstance(field_place(e)[0], Var)
                 or isinstance(e, Call) and e.name == "subview"):

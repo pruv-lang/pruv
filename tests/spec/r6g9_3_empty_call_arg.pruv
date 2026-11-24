@@ -1,0 +1,9 @@
+// spec: R-6g9-3 reject
+// `[]` is only a value of a `ref [T]` let, a `ref` field or a `from` result, never a call argument.
+fn width(a: [u8]) -> i64 {
+  return len(a);
+}
+
+pub fn checksum() -> i64 {
+  return width([]);
+}

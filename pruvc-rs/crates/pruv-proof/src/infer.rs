@@ -1211,7 +1211,7 @@ impl Bld {
             Expr::Spent(x) => Expr::Spent(ast::Spent { line, col, ty: x.ty.clone() }),
             Expr::IntLit(x) => Expr::IntLit(ast::IntLit { line, col, value: x.value.clone(), ty: x.ty.clone() }),
             Expr::BoolLit(x) => Expr::BoolLit(ast::BoolLit { line, col, value: x.value, ty: x.ty.clone() }),
-            Expr::StrLit(x) => Expr::StrLit(ast::StrLit { line, col, value: x.value.clone(), ty: x.ty.clone() }),
+            Expr::StrLit(x) => Expr::StrLit(ast::StrLit { line, col, value: x.value.clone(), ty: x.ty.clone(), empty: x.empty }),
             Expr::Unary(x) => Expr::Unary(ast::Unary {
                 line,
                 col,

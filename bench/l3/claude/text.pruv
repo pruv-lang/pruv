@@ -218,7 +218,7 @@ pub fn clip_bytes(s: str, max: i64) -> str ! alloc
 
 // claude.ts engineLine: trimmed text is one of the two interrupt lines, or (only for a task-notification
 // origin) starts with <task-notification> and ends with </task-notification>, non-overlapping.
-pub fn engine_line(text: str, task_origin: bool) -> bool ! alloc
+pub fn engine_line(text: str, task_origin: bool) -> bool
 {
   let b: Span = trim_span(text);
   let m: i64 = b.hi - b.lo;

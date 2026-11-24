@@ -925,23 +925,37 @@ fn is_optres(t: &GType) -> bool {
 /// LB9 SL (R-6g8-3): immutable `let x: str = "lit";` locals whose every read is a borrow (a `str` parameter of a
 /// catalog or user call, `len`, an index, or the source of `subview` / `substr`) stay `&'static str`, as hand Rust
 /// writes `let x = "lit";`. A name bound twice anywhere in the function is left alone (codegen.py static_str_locals).
-fn static_str_locals(f: &Function, fmap: &HashMap<String, &Function>) -> HashSet<String> {
+pub(crate) fn static_str_locals(f: &Function, fmap: &HashMap<String, &Function>) -> HashSet<String> {
     struct Scan<'m, 'f> {
         fmap: &'m HashMap<String, &'f Function>,
         lets: Vec<String>,
         binders: Vec<String>,
         bad: HashSet<String>,
+        hidden: Vec<String>,
     }
     impl Scan<'_, '_> {
         fn visit(&mut self, e: &Expr, ok: bool) {
             match e {
                 Expr::Var(v) => {
-                    if !ok {
+                    if !ok && !self.hidden.contains(&v.name) {
                         self.bad.insert(v.name.clone());
                     }
                 }
                 Expr::Move(m) => {
-                    self.bad.insert(m.name.clone());
+                    if !self.hidden.contains(&m.name) {
+                        self.bad.insert(m.name.clone());
+                    }
+                }
+                Expr::Quant(q) => {
+                    // a quantifier binder shadows a local of the same name (contract expansion may inline one)
+                    self.visit(&q.lo, false);
+                    self.visit(&q.hi, false);
+                    self.hidden.push(q.var.clone());
+                    self.visit(&q.body, false);
+                    for t in &q.triggers {
+                        self.visit(t, false);
+                    }
+                    self.hidden.pop();
                 }
                 Expr::Index(x) => {
                     self.visit(&x.array, true);
@@ -1034,7 +1048,7 @@ fn static_str_locals(f: &Function, fmap: &HashMap<String, &Function>) -> HashSet
             }
         }
     }
-    let mut sc = Scan { fmap, lets: Vec::new(), binders: f.params.iter().map(|p| p.name.clone()).collect(), bad: HashSet::new() };
+    let mut sc = Scan { fmap, lets: Vec::new(), binders: f.params.iter().map(|p| p.name.clone()).collect(), bad: HashSet::new(), hidden: Vec::new() };
     sc.block(&f.body);
     let Scan { lets, binders, bad, .. } = sc;
     lets.into_iter()
@@ -2171,7 +2185,7 @@ impl<'a> Gen<'a> {
         }
         self.emit(0, &format!("{vis}fn {body_name}{lifetime}({ps}){ret} {{"));
         self.cost = !self.verified && f.cost.is_some();
-        self.static_strs = if self.cost { HashSet::new() } else { static_str_locals(f, &self.fmap) };
+        self.static_strs = static_str_locals(f, &self.fmap); // R-6g9-3: also metered, the checker charges them no alloc
         if self.cost {
             let args = join_map(&f.params, ", ", |p| {
                 if self.take_arrays.contains(&p.name)
@@ -2578,6 +2592,7 @@ impl<'a> Gen<'a> {
             // R03L: an owned take array is read through a borrow
             Expr::Var(x) if self.take_arrays.contains(&x.name) => Ok(format!("(&{})", x.name)),
             Expr::Var(x) => Ok(x.name.clone()),
+            Expr::StrLit(x) if x.empty => Ok("&[]".to_string()), // R-6g9-3: the static empty view
             Expr::StrLit(x) => {
                 let literal = lit_str(&x.value);
                 Ok(if x.ty.as_deref() == Some("array_u8") { format!("({literal}).as_bytes()") } else { literal })
@@ -2835,6 +2850,7 @@ impl<'a> Gen<'a> {
                 format!("{}i128", x.value)
             }),
             Expr::BoolLit(x) => Ok((if x.value { "true" } else { "false" }).to_string()),
+            Expr::StrLit(x) if x.empty => Ok("&[]".to_string()), // R-6g9-3: the static empty view
             Expr::StrLit(x) => {
                 let literal = lit_str(&x.value);
                 Ok(if x.ty.as_deref() == Some("array_u8") { format!("({literal}).as_bytes()") } else { literal })
@@ -4638,6 +4654,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
 
     fn borrowed_value(&mut self, e: &Expr) -> R<String> {
         if let Expr::StrLit(x) = e {
+            if x.empty {
+                return Ok("&[]".to_string()); // R-6g9-3: the static empty view, hand `&[]`
+            }
             return Ok(lit_str(&x.value));
         }
         self.arr_ref(e)
@@ -4670,6 +4689,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
 
     fn arr_ref(&mut self, e: &Expr) -> R<String> {
         if let Expr::StrLit(x) = e {
+            if x.empty {
+                return Ok("&[]".to_string()); // R-6g9-3: the static empty view, hand `&[]`
+            }
             if x.ty.as_deref() == Some("array_u8") {
                 return Ok(format!("({}).as_bytes()", lit_str(&x.value)));
             }

@@ -1869,7 +1869,13 @@ impl Parser {
         }
         if t.kind == Kind::Str {
             self.bump();
-            return Ok(Expr::StrLit(StrLit { line, col, value: decode_str_lit(&t.val), ty: None }));
+            return Ok(Expr::StrLit(StrLit { line, col, value: decode_str_lit(&t.val), ty: None, empty: false }));
+        }
+        if self.at("[", 0) && self.at("]", 1) {
+            // R-6g9-3: `[]`, the static empty view
+            self.bump();
+            self.bump();
+            return Ok(Expr::StrLit(StrLit { line, col, value: Vec::new(), ty: None, empty: true }));
         }
         if t.kind == Kind::Move {
             // Parse the full field path so the checker can enforce where a field move is legal.

@@ -1326,6 +1326,11 @@ class Parser:
             s.next(); return IntLit(t.line, t.col, t.val)
         if t.kind == "str":   # G2 B0
             s.next(); return StrLit(t.line, t.col, _decode_string(t.val))
+        if s.at("[") and s.at("]", 1):   # R-6g9-3: `[]`, the static empty view
+            s.next(); s.next()
+            e = StrLit(t.line, t.col, b"")
+            e.empty_view = True
+            return e
         if t.kind == "move":
             s.next()
             n = s.peek()

@@ -1,0 +1,20 @@
+// spec: R-6g9-3 accept
+// A quantifier binder that contract expansion inlines does not hide a static text local of the same name:
+// `tag` stays `&'static str` after `assert yes()` expands, so the `cost 0` function never allocates.
+pred fn yes() -> bool {
+  return forall tag in 0..1: tag == tag;
+}
+
+fn tagged() -> i64
+  ensures result == 3
+  cost 0
+{
+  let tag: str = "lit";
+  assert yes();
+  return len(tag);
+}
+
+pub fn checksum() -> i64 {
+  let tag: str = "abc";
+  return tagged() + len(tag) * 10;
+}

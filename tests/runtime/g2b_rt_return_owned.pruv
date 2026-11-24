@@ -1,4 +1,5 @@
-// a substr of a local str is returned (the original is freed at function end); the host reads the new bytes.
+// a substr of a local str is returned; the host reads the new bytes. The local only lends its bytes, so it is the
+// literal's read-only global (R-6g9-3): never copied, never freed.
 // "héllo wörld": h 0, é 1..3, l 3, l 4, o 5, ' ' 6, w 7, ö 8..10, r 10, l 11, d 12 (len 13).
 fn pre() -> str ! alloc {
   let s: str = "héllo wörld";

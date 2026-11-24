@@ -1,0 +1,21 @@
+{
+  "gen_contains": [
+    "Window { bytes: &[], at: 4i64 }"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "4"
+    ],
+    "alloc_balance": true,
+    "backends": [
+      "rust"
+    ]
+  }
+}

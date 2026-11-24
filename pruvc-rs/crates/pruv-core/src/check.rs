@@ -334,6 +334,12 @@ struct Checker {
     read_context: Option<usize>,
     statement_call: Option<usize>,
     borrowed_text: Option<usize>,
+    /// R-6g9-3: the R-6g8-3 static text locals of the function being checked (they need no `alloc`)
+    static_lets: HashSet<String>,
+    /// R-6g9-3: positions of the `[]` literals a view position accepted; any other `[]` is rejected
+    empty_views: HashSet<(i64, i64)>,
+    /// R-6g9-3: the string literal checked next is a static text local's value
+    static_lit: bool,
     map_roots: Vec<(String, Vec<String>, Vec<String>)>,
     map_iterations: Vec<(String, Vec<String>)>,
     // ---- G9 A0 metadata ----
@@ -1062,6 +1068,9 @@ impl Checker {
             read_context: None,
             statement_call: None,
             borrowed_text: None,
+            static_lets: HashSet::new(),
+            empty_views: HashSet::new(),
+            static_lit: false,
             map_roots: Vec::new(),
             map_iterations: Vec::new(),
             type_sccs: Vec::new(),
@@ -1145,8 +1154,18 @@ impl Checker {
         self.tt = TypeTable::new(&prog.types);
         self.x_prepare(prog)?; // P06: which functions a contract may expand, and their raw bodies
         self.check_invariants(prog)?; // LG16: struct invariant declarations
-        for f in prog.functions.iter_mut() {
+        // R-6g9-3: the R-6g8-3 locals Rust emits as `&'static str` need no alloc (check.py static_lets)
+        let statics: Vec<HashSet<String>> = {
+            let mut fmap: HashMap<String, &Function> = HashMap::new();
+            for f in &prog.functions {
+                fmap.entry(f.name.clone()).or_insert(f);
+            }
+            prog.functions.iter().map(|f| crate::codegen::static_str_locals(f, &fmap)).collect()
+        };
+        for (f, statics) in prog.functions.iter_mut().zip(statics) {
+            self.static_lets = statics;
             self.fn_(f)?;
+            self.reject_stray_empty_views(f)?;
         }
         self.check_fn_sccs(&prog.functions)?; // G9 A0: measures and stable type parameters of recursive call SCCs
         self.check_par_eligibility(&prog.functions)?; // G7 A0: effects, foreign calls, then nested groups
@@ -3684,9 +3703,13 @@ impl Checker {
                     v => self.field_move_out(v, &sty, None, scope, next)?,
                 };
                 let checked = if s.borrowed {
-                    self.expect_user_arg(&mut s.value, &sty, scope, false, true)
+                    self.view_value(&mut s.value, &sty, scope, false)
                 } else {
-                    self.expect(&mut s.value, &sty, scope, false, None).map(|_| ())
+                    // R-6g9-3: a static text local is the literal's read-only global
+                    self.static_lit = matches!(s.value, Expr::StrLit(_)) && self.static_lets.contains(&s.name);
+                    let r = self.expect(&mut s.value, &sty, scope, false, None).map(|_| ());
+                    self.static_lit = false;
+                    r
                 };
                 self.field_move = None;
                 checked?;
@@ -3956,7 +3979,7 @@ impl Checker {
                         }
                         self.boundary = boundary_of(v);
                         let checked = if self.borrowed_result {
-                            self.expect_user_arg(v, &ret, scope, false, true)
+                            self.view_value(v, &ret, scope, false)
                         } else {
                             self.want_alloc(v, &ret);
                             self.expect(v, &ret, scope, false, None).map(|_| ())
@@ -4667,6 +4690,44 @@ impl Checker {
         self.expect_user_arg(e, ty, scope, c, borrow)
     }
 
+    /// a value in a view position: a `ref` let, the result of a `from` function or a `ref` field (check.py view_value)
+    fn view_value(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, c: bool) -> Res<()> {
+        if let Expr::StrLit(lit) = e {
+            if lit.empty {
+                // R-6g9-3: `[]` is the static empty view of an array, never a str
+                if !ty.is_array() {
+                    return Err(empty_view_err(lit.line, lit.col));
+                }
+                lit.ty = Some(ty.to_key());
+                self.empty_views.insert((lit.line, lit.col));
+                return Ok(());
+            }
+        }
+        self.expect_user_arg(e, ty, scope, c, true)
+    }
+
+    /// R-6g9-3: a `[]` that no view position accepted (a call argument, an operand) is an error
+    /// (several string-literal branches accept a StrLit without typing it)
+    fn reject_stray_empty_views(&mut self, f: &Function) -> Res<()> {
+        let mut stray: Option<(i64, i64)> = None;
+        let seen = std::mem::take(&mut self.empty_views);
+        let mut visit = |n: crate::foreign_shim::Node<'_>| {
+            if let crate::foreign_shim::Node::Expr(Expr::StrLit(lit)) = n {
+                if lit.empty && !seen.contains(&(lit.line, lit.col)) && stray.is_none_or(|p| (lit.line, lit.col) < p) {
+                    stray = Some((lit.line, lit.col)); // the first in source order (check.py)
+                }
+            }
+        };
+        for e in f.requires.iter().chain(f.ensures.iter()).chain(f.decreases.iter()) {
+            crate::foreign_shim::walk_expr(e, &mut visit);
+        }
+        crate::foreign_shim::walk_stmts(&f.body, &mut visit);
+        match stray {
+            Some((line, col)) => Err(empty_view_err(line, col)),
+            None => Ok(()),
+        }
+    }
+
     fn expect_user_arg(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, c: bool, borrow_vector: bool) -> Res<()> {
         if let Expr::Call(x) = e {
             if x.name == "subview" {
@@ -4914,8 +4975,11 @@ impl Checker {
                 Ok(i64t())
             }
             Expr::BoolLit(_) => Ok(boolt()),
-            Expr::StrLit(_) => {
-                if !c {
+            Expr::StrLit(x) => {
+                if x.empty {
+                    return Err(empty_view_err(x.line, x.col));
+                }
+                if !c && !std::mem::take(&mut self.static_lit) {
                     self.used_effects.insert("alloc".to_string());
                 }
                 Ok(strt())
@@ -5425,7 +5489,7 @@ impl Checker {
         };
         for ((fi, fd), borrowed) in e.fields.iter_mut().zip(&fields).zip(borrowed_fields) {
             if borrowed {
-                self.expect_user_arg(&mut fi.value, &fd.1, scope, c, true)?;
+                self.view_value(&mut fi.value, &fd.1, scope, c)?;
             } else {
                 self.expect(&mut fi.value, &fd.1, scope, c, None)?;
                 self.own_field(&fi.value, &fd.1, scope, c)?;
@@ -7619,4 +7683,10 @@ fn cost_calls(stmts: &[Stmt], out: &mut Vec<Call>) {
 /// LB7 (R-6g6-3), LB9 (R-6g8-1): catalog text operations whose text argument may be a str subview.
 fn is_text_view_op(n: &str) -> bool {
     matches!(n, "string_push_str" | "string_from" | "proc_args_push")
+}
+
+/// R-6g9-3: `[]` outside a `ref [T]` view position
+fn empty_view_err(line: i64, col: i64) -> PruvError {
+    terr(line, col, "type_mismatch", "`[]` is the static empty view; it is only allowed in a `ref [T]` position",
+        "use it as a `ref [T]` let, a `ref` field or the result of a `from` function, or alloc(0, v) for an owned array")
 }

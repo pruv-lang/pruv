@@ -45,7 +45,7 @@ pub struct IntLit { pub line: i64, pub col: i64, pub value: String, pub ty: Ty }
 #[derive(Debug, Clone, PartialEq)]
 pub struct BoolLit { pub line: i64, pub col: i64, pub value: bool, pub ty: Ty }
 #[derive(Debug, Clone, PartialEq)]
-pub struct StrLit { pub line: i64, pub col: i64, pub value: Vec<u8>, pub ty: Ty }
+pub struct StrLit { pub line: i64, pub col: i64, pub value: Vec<u8>, pub ty: Ty, /** R-6g9-3: `[]`, the static empty view */ pub empty: bool }
 #[derive(Debug, Clone, PartialEq)]
 pub struct Var { pub line: i64, pub col: i64, pub name: String, pub ty: Ty }
 #[derive(Debug, Clone, PartialEq)]

@@ -218,11 +218,11 @@ pub fn clip_bytes(s: str, max: i64) -> ref str from(s)
 
 // claude.ts engineLine: trimmed text is one of the two interrupt lines, or (only for a task-notification
 // origin) starts with <task-notification> and ends with </task-notification>, non-overlapping.
-pub fn engine_line(text: str, task_origin: bool) -> bool ! alloc
+pub fn engine_line(text: str, task_origin: bool) -> bool
 {
   let b: Span = trim_span(text);
   let m: i64 = b.hi - b.lo;
-  // Literals go straight to eq_at as &'static str (a `let x: str = "..."` local would build a String).
+  // Literals go straight to eq_at as &'static str (R-6g9-3: a borrowed-only `let x: str = "..."` local would be one too).
   if m == 29 && eq_at(text, b.lo, "[Request interrupted by user]") { return true; }
   if m == 42 && eq_at(text, b.lo, "[Request interrupted by user for tool use]") { return true; }
   if task_origin && m >= 39 {

@@ -1,0 +1,23 @@
+{
+  "gen_contains": [
+    "return &[];",
+    "= &[];"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "10"
+    ],
+    "alloc_balance": true,
+    "ll_absent": [
+      "@pruv_substr",
+      "@pruv_check_utf8"
+    ]
+  }
+}
