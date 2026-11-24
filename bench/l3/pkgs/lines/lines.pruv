@@ -122,18 +122,11 @@ pub fn build_span(data: [u8], lo: i64, hi: i64, tape: [i64], records: i64) -> cr
   ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= hi - lo)
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
 {
-  // DB21 (D-DB15-3): the span bytes come from copy(subview(...)) (one allocate-and-fill, no zeroed buffer and byte loop).
-  // The tape prefix keeps its loop (gap ZP): copy(subview(tape, 0, m)) and arr_reserve + arr_append(inout exact, tape, 0, m)
-  // both hit "z3 error 6: invalid pattern" (G-DB21-1, checked again in step 2.3).
+  // Hand: Document { source: data[lo..hi].to_vec(), tape: tape[..m].to_vec() }. Both are one exact copy (R-6g6-2).
   let n: i64 = hi - lo;
   let m: i64 = 6 * records;
   let source: [u8] = copy(subview(data, lo, hi));
-  let mut exact: [i64] = alloc(m, 0);
-  let mut t: i64 = 0;
-  while t < m
-    invariant 0 <= t && t <= m && m == 6 * records && m <= len(tape) && len(exact) == m
-    decreases m - t
-  { exact[t] = tape[t]; t = t + 1; }
+  let exact: [i64] = copy(subview(tape, 0, m));
   if !crate::json::check_tape(exact, n) { return crate::json::JsonParse::Failed(crate::json::make_error(0, 18)); }
   return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: move source, tape: move exact });
 }
