@@ -1,0 +1,21 @@
+// spec: R-6g9-6 accept
+// Rebuilding a `let mut` borrowing struct inside a loop from views of the same source: every view taken from
+// the old struct before the rebuild still borrows that source, so the subset rule keeps the loop sound.
+struct Units { raw: ref [u8], pos: i64 }
+pub fn checksum() -> i64 ! alloc {
+  let mut x: [u8] = alloc(6, 2);
+  let mut u: Units = Units { raw: subview(x, 0, 6), pos: 0 };
+  let mut sum: i64 = 0;
+  let mut i: i64 = 0;
+  while i < 3
+    invariant 0 <= i && i <= 3 && len(u.raw) <= 6 && 0 <= sum && sum <= 100 * i
+    decreases 3 - i
+  {
+    let r: ref [u8] = u.raw;
+    u = Units { raw: subview(x, i, i + 2), pos: 0 };
+    sum = sum + len(r) + len(u.raw);
+    i = i + 1;
+  }
+  x[0] = 1;
+  return sum;
+}

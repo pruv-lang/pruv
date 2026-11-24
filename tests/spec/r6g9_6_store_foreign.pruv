@@ -1,0 +1,8 @@
+// spec: R-6g9-6 reject
+// An `inout` borrowing-struct parameter may store in its `ref` field only data it already borrows (Rust
+// `&mut Units<'a>` can hold only `&'a` data); a view of another parameter is type/borrow_escape.
+struct Units { raw: ref [u8], pos: i64 }
+fn rebind(inout u: Units, other: [u8]) -> () {
+  u.raw = subview(other, 0, len(other));
+  u.pos = 0;
+}

@@ -1,0 +1,11 @@
+// spec: R-6g9-6 reject
+// A `ref` field is a shared view into its source: it cannot be passed `inout` (to a user function or to a growing
+// builtin), since the callee could write or regrow data the struct does not own.
+struct Units { raw: ref [u8], pos: i64 }
+fn grow(inout a: [u8]) -> () ! alloc { arr_push(inout a, 1); }
+pub fn checksum() -> i64 ! alloc {
+  let mut x: [u8] = alloc(5, 3);
+  let mut u: Units = Units { raw: subview(x, 1, 4), pos: 0 };
+  grow(inout u.raw);
+  return u.pos + len(u.raw);
+}

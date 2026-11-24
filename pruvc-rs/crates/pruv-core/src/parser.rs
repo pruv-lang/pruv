@@ -1588,7 +1588,7 @@ impl Parser {
                 self.bump();
                 let v = self.expr()?;
                 self.expect(";")?;
-                return Ok(Stmt::FieldAssign(FieldAssign { line: l, col: c, name: n, fields: path, value: v }));
+                return Ok(Stmt::FieldAssign(FieldAssign { line: l, col: c, name: n, fields: path, value: v, ref_store: false }));
             }
             if self.at("[", 0) {
                 // LG4: element write through a field place `p.a.b[i] = e;` (one index level)

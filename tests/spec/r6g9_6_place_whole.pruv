@@ -1,0 +1,12 @@
+// spec: R-6g9-6 reject
+// A place binding of a whole borrowing struct (or of a `ref` field) is type/place_binding: a store through the
+// alias would skip the subset rule on the root's provenance.
+struct Units { raw: ref [u8], pos: i64 }
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(5, 3);
+  let y: [u8] = alloc(5, 4);
+  let mut u: Units = Units { raw: subview(x, 1, 4), pos: 0 };
+  let d = inout u;
+  d = Units { raw: subview(y, 0, 2), pos: 1 };
+  return u.pos + len(u.raw);
+}

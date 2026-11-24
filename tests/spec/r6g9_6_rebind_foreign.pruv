@@ -1,0 +1,11 @@
+// spec: R-6g9-6 reject
+// A `let mut` borrowing struct may be rebuilt only from data it already borrows; a view of another array is
+// type/borrow_escape (the R-6g9-6 subset rule, not the flow-insensitive union of R-6g-11).
+struct Units { raw: ref [u8], pos: i64 }
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(5, 3);
+  let y: [u8] = alloc(5, 4);
+  let mut u: Units = Units { raw: subview(x, 1, 4), pos: 0 };
+  u = Units { raw: subview(y, 0, 2), pos: 1 };
+  return u.pos + len(u.raw);
+}

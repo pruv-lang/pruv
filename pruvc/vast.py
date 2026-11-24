@@ -417,6 +417,7 @@ FieldDecl.ref = False
 StructDecl.borrowing = False
 Let.ref = False
 Let.place = False         # R-6g9-5: `let d = inout P;` (value is InoutArg(P))
+FieldAssign.ref_store = False   # R-6g9-6: the assigned field is a `ref` field or a borrowing struct
 Program.borrow_site = None
 Expr.borrowed_view = False
 Expr.static_str = False

@@ -1,0 +1,10 @@
+{
+  "gen_contains": ["u = (Units {"],
+  "gen_absent": ["to_vec()", ".clone()"],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["16"],
+    "alloc_balance": true
+  }
+}

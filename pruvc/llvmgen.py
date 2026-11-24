@@ -2616,6 +2616,13 @@ class FnGen:
             kind, sl = s.lookup(st.name)
             if kind != "slot":
                 raise Exception("llvmgen: field assignment to non-local %s" % st.name)
+            if st.ref_store and st.value.ty in (ARRAY_U8, STR):
+                # R-6g9-6: replacing a ref field stores its view pair without dropping the old view
+                v = s.ev(st.value)
+                ptr, _ = s.field_ptr_ty(sl, st.fields)
+                s.ins("store %s %s, ptr %s" % (VIEW, s.pack(v, None, False, ref=True), ptr))
+                s.end_temps()
+                return
             s.moving = s.nested_moves(st.value, st.name)     # LG37: a last-use take anywhere in the right side
             if s.regrow_field(st, sl):         # LG34 (G-LG32-3): x.f = resize(x.f, n, v) grows the field in place
                 s.moving = set()

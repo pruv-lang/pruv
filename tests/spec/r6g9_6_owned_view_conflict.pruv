@@ -1,0 +1,13 @@
+// spec: R-6g9-6 reject
+// A whole assignment to a borrowing struct while a view of its owned field is still live is type/borrow_conflict
+// (Rust: cannot assign to `p` because it is borrowed).
+struct Parser { input: ref [u8], pos: i64, tape: [u8] }
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(5, 3);
+  let t0: [u8] = alloc(3, 2);
+  let t1: [u8] = alloc(1, 1);
+  let mut p: Parser = Parser { input: x, pos: 0, tape: move t0 };
+  let t: ref [u8] = subview(p.tape, 0, 2);
+  p = Parser { input: x, pos: 1, tape: move t1 };
+  return len(t) + p.pos;
+}

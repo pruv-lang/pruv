@@ -1,0 +1,37 @@
+// spec: R-6g9-6 accept
+// The hand JSON parser state (`hand_json.rs` `Parser { input, pos, tape }`): a borrowing struct with a `ref` input
+// and an owned tape, a `let mut` local, and a method `fn record(inout p: Parser, ..)` that pushes to the owned
+// tape and advances the position (Rust `fn record(p: &mut Parser<'_>, ..)`).
+struct Parser { input: ref [u8], pos: i64, tape: [i64] }
+fn record(inout p: Parser, kind: i64) -> () ! alloc
+  requires 0 <= p.pos && p.pos < len(p.input) && len(p.tape) == p.pos && len(p.input) <= 100 && 0 <= kind && kind <= 10
+  ensures p.pos == old(p.pos) + 1 && len(p.tape) == len(old(p.tape)) + 1 && len(p.input) == len(old(p.input))
+{
+  arr_push(inout p.tape, kind * 2 + p.input[p.pos]);
+  p.pos = p.pos + 1;
+}
+fn parse(input: [u8]) -> i64 ! alloc
+  requires len(input) <= 100
+{
+  let mut p: Parser = Parser { input: input, pos: 0, tape: alloc(0, 0) };
+  while p.pos < len(p.input)
+    invariant 0 <= p.pos && p.pos <= len(p.input) && len(p.tape) == p.pos && len(p.input) == len(input)
+    decreases len(p.input) - p.pos
+  {
+    record(inout p, 1);
+  }
+  let mut sum: i64 = 0;
+  let mut i: i64 = 0;
+  while i < len(p.tape)
+    invariant 0 <= i && i <= len(p.tape) && 0 <= sum && sum <= 1000 * i
+    decreases len(p.tape) - i
+  {
+    if 0 <= p.tape[i] && p.tape[i] <= 1000 { sum = sum + p.tape[i]; }
+    i = i + 1;
+  }
+  return sum;
+}
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(4, 5);
+  return parse(x);
+}

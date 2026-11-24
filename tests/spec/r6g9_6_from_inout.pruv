@@ -1,0 +1,12 @@
+// spec: R-6g9-6 reject
+// A borrowed result cannot name an `inout` borrowing struct in its from list (no hand form needs it): the
+// result would outlive the `&mut` reborrow. type/borrow_signature.
+struct Units { raw: ref [u8], pos: i64 }
+fn head(inout u: Units) -> ref [u8] from(u) {
+  return u.raw;
+}
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(5, 3);
+  let mut u: Units = Units { raw: subview(x, 1, 4), pos: 0 };
+  return len(head(inout u));
+}

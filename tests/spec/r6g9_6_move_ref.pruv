@@ -1,0 +1,13 @@
+// spec: R-6g9-6 reject
+// A `ref` field is a shared view its record does not own, so it cannot be moved out (type/array_alias), even
+// from an `inout` parameter whose field moves must otherwise be restored.
+struct Units { raw: ref [u8], pos: i64 }
+fn take_raw(inout u: Units) -> i64 {
+  let a: [u8] = move u.raw;
+  return len(a);
+}
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(5, 3);
+  let mut u: Units = Units { raw: x, pos: 0 };
+  return take_raw(inout u);
+}

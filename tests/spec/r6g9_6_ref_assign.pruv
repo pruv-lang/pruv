@@ -1,0 +1,22 @@
+// spec: R-6g9-6 accept
+// A `ref` field of a mutable borrowing struct is replaced by a view it already borrows: a narrower view of its own
+// field through an `inout` parameter, and a view of the same source in a `let mut` local. The store is a plain
+// slice assignment (hand `u.raw = &u.raw[1..]`), with no owned temporary and no drop of the old view.
+struct Units { raw: ref [u8], pos: i64 }
+fn skip(inout u: Units) -> ()
+  requires 1 <= len(u.raw)
+  ensures len(u.raw) == len(old(u.raw)) - 1
+{
+  u.raw = subview(u.raw, 1, len(u.raw));
+}
+pub fn checksum() -> i64 ! alloc {
+  let mut x: [u8] = alloc(5, 3);
+  x[4] = 9;
+  let mut u: Units = Units { raw: subview(x, 1, 4), pos: 0 };
+  skip(inout u);
+  let a: i64 = len(u.raw);
+  u.raw = subview(x, 2, 5);
+  let b: i64 = u.raw[2];
+  x[0] = 1;
+  return a * 100 + b * 10 + x[0];
+}

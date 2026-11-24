@@ -1,0 +1,13 @@
+// spec: R-6g9-6 accept
+// A view copied out of a `ref` field keeps borrowing the source after the struct is rebuilt; the source may be
+// written once both the copy and the rebuilt struct are dead.
+struct Units { raw: ref [u8], pos: i64 }
+pub fn checksum() -> i64 ! alloc {
+  let mut x: [u8] = alloc(5, 3);
+  let mut u: Units = Units { raw: subview(x, 1, 4), pos: 0 };
+  let r: ref [u8] = u.raw;
+  u = Units { raw: subview(x, 0, 2), pos: 1 };
+  let n: i64 = len(r) + u.pos + len(u.raw);
+  x[0] = 9;
+  return n + x[0];
+}
