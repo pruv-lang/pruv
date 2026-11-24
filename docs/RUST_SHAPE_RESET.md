@@ -149,6 +149,12 @@ Each bundle keeps to AGENTS.md: at most 2 subs at a time, 2 hours per bundle, di
 
 ## 7. Done criteria per piece
 
+**Order (user decision, 2026-11-24): structure first, measurement last.** The premise of the reset is that Pruv is written the same as the hand Rust. So:
+
+1. A piece is not finished while its structure table has any difference from the hand Rust (types, ownership, borrows, loops, allocation and copy sites, function by function). The only allowed difference is a proof that removes a check the hand Rust keeps.
+2. If Pruv cannot express what the hand Rust does, the piece stops there. The missing feature is added to the language (a language bundle) before the piece goes on. No near-shape workaround, no "debt row" for a shape difference.
+3. Performance is measured only after the table shows zero differences, once, as a confirmation. There is no measure-fix-measure loop. If a structurally identical piece is still over 1.0x, the cause is in the compiler's code generation; it is shown line by line and fixed in the compiler.
+
 - Oracle match: 0 unexplained differences against the TS implementation on the existing differential suites, with fixed TS bugs listed as known differences.
 - The structure table from §1.5 is filled in, with no unexplained shape difference.
 - Time, peak RSS and allocation count ≤1.0x hand Rust at M and L, measured with interleaved runs on the same machine.
