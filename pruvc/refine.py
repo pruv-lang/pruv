@@ -91,6 +91,8 @@ def _kids(e):
         return [e.value]
     if isinstance(e, InoutArg):     # G5 A0
         return [e.expr]
+    if isinstance(e, PlaceIf):      # R-6g9-5
+        return [e.cond, e.then, e.els]
     return []
 
 

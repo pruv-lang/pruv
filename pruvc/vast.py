@@ -203,6 +203,14 @@ class EnumCtor(Expr):
     ty: Optional[Type] = None
 
 @dataclass
+class PlaceIf(Expr):
+    # R-6g9-5: the conditional place `if c { P } else { P }`; only valid as the operand of a place binding
+    cond: Expr
+    then: Expr
+    els: Expr
+    ty: Optional[Type] = None
+
+@dataclass
 class FieldAccess(Expr):
     base: Expr
     field: str
@@ -408,6 +416,7 @@ Function.ref_result = False
 FieldDecl.ref = False
 StructDecl.borrowing = False
 Let.ref = False
+Let.place = False         # R-6g9-5: `let d = inout P;` (value is InoutArg(P))
 Program.borrow_site = None
 Expr.borrowed_view = False
 Expr.static_str = False

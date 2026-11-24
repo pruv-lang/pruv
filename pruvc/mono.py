@@ -365,6 +365,8 @@ class _Mono:
                 new.static_str = True
         if isinstance(node, Let) and node.ref:
             new.ref = True
+        if isinstance(node, Let) and node.place:
+            new.place = True
         if isinstance(node, Call):
             if getattr(node, "resize_scratch", False):
                 new.resize_scratch = True
