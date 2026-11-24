@@ -1180,6 +1180,10 @@ Gaps found in R bundles, worked around and batched into one language bundle when
 | G-B4-Q1 | `b[0] = m[0]` where this is `m`'s last use is rejected with borrow_conflict, but codegen reads `m[0]` into a temp first (`pruvc/codegen.py` ~3257), so NLL would accept it. Found in the B4 review. | Write the read into a local first. Open. |
 | G-B4-Q2 | borrow_conflict column differs: Python reports the statement column, Rust the access-expression column (`r6g_11_read_exclusive.pruv:13` col 3 vs 20; `r6g9_4_move_in_own_init` col 5 vs 41). Tests compare lines only. | Pick one column rule and align both compilers. Open. |
 | G-B5-R10 | LLVM place bindings over a whole array place work only for an `inout` array parameter; other whole-array places (locals, fields) still report "needs the Rust backend" (B5 review R10, partly fixed). | Lower whole-array place bindings on LLVM like the `inout` parameter path. Open. |
+| G-B2-L1 | The R-6g9-1/2 move restriction rejects moves out of every borrowing struct, not only out of borrowed sources; `r6g9_2_move_tape` shows an owned field cannot be moved out (enum payload, `let mut` and local field moves are all rejected). | Narrow the restriction to borrowed sources so owned fields move like in Rust. Open. |
+| G-B2-L2 | Rust `borrow_signature` reports one message for all positions; Python splits it per position. | Split the Rust messages per position like Python. Open. |
+| G-B2-L3 | `inout str` `from` sources are checked differently (`pruvc/check.py` ~1566 vs `check.rs` check_modes). | Align the accepted sources in both compilers. Open. |
+| G-B2-L4 | SPEC.md ~1506 still says borrowing structs are "Rust only", but B2 added LLVM support. B2 also did not rerun the full suites after its audit fixes (CI covers it). | Fix the wording. Open. |
 
 Queued with the debt list (not product perf):
 
