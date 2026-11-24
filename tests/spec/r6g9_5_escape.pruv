@@ -1,0 +1,10 @@
+// spec: R-6g9-5 reject
+// A place binding cannot leave its region: returning it would move the value out of the borrowed place.
+struct In { v: [i64] }
+struct Out { i: In, j: In }
+
+fn f(inout x: Out) -> In ! alloc
+{
+  let d = inout x.i;
+  return d;
+}

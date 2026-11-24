@@ -1778,6 +1778,30 @@ borrowed value is live.
   [many views](tests/spec/r6g9_4_many_views.pruv), [after return](tests/spec/r6g9_4_after_return.pruv),
   [move in own init](tests/spec/r6g9_4_move_in_own_init.pruv),
   [move after return](tests/spec/r6g9_4_move_after_return.pruv); cost: tests/view_liveness_cost.py.
+- R-6g9-5 **Place bindings.** `let d = inout P;` with P ::= `x` | `P.f` | `P[i]` | `if c { P } else { P }` makes
+  `d` an alias of the place P chooses at the binding (Rust `let d = &mut P;`); the index and the condition are
+  evaluated once, there. The root `x` is a `let mut` local or an `inout` parameter, both arms of an `if` have the
+  same root and type, and an element place indexes an `[i64]` or `[bool]` array; anything else (a call, `subview`,
+  a map lookup, another element type) is `type/place_binding`. `d` behaves like an `inout` parameter of the
+  enclosing scope: reads see the place, writes change it, `inout d` passes it on. A place binding is an exclusive
+  borrow of its root folded into the R-6g9-4 liveness pass (one bit per binding): while it is live, any mention of
+  a path overlapping its footprint, contract clauses included, is `type/borrow_conflict`, reported at the
+  statement that holds the mention (a second place binding over an overlapping footprint is such a mention).
+  A place binding of non-copy type that is returned, stored or moved is `type/borrow_escape`; `let mut d = inout P`
+  is `type/borrow_signature`. Verification copies P into `d` at the binding (proving `verify/index_oob` for an
+  element under the arm's condition) and writes `d` back to the root after the last statement of the binding's
+  block that mentions `d`, and at every `return` while it is live; a loop that uses `d` keeps it live to the loop
+  exit, so there is no write-back on the back edge. This is exact because nothing can observe the root while `d`
+  is live. Struct invariants are checked where they are for owned structs: an `inout` parameter's invariant at
+  function exit (`verify/struct_invariant`), a local's not in mid-body, as for a field assignment (this departs
+  from docs/B_BUNDLE_SPEC.md §5.2, which asked for a separate check at every write-back). The checker cost is the
+  R-6g9-4 bound with B counting place bindings too, so O(statements x roots) per function; verification adds one
+  copy-in and one write-back per binding exit.
+  Tests: [if field](tests/spec/r6g9_5_if_field.pruv), [index bump](tests/spec/r6g9_5_index_bump.pruv),
+  [vector element](tests/spec/r6g9_5_vec_elem.pruv), [loop region](tests/spec/r6g9_5_loop_region.pruv);
+  rejects [two roots](tests/spec/r6g9_5_two_roots.pruv), [root read](tests/spec/r6g9_5_root_read.pruv),
+  [contract mention](tests/spec/r6g9_5_contract_mention.pruv), [escape](tests/spec/r6g9_5_escape.pruv),
+  [root invariant](tests/spec/r6g9_5_root_invariant.pruv).
 
 ## 6h. Files (G10)
 
@@ -2673,6 +2697,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/borrow_conflict` | type | a root of a live borrow is written, moved or lent `inout` (exclusive root: used) (R-6g-11) |
 | `type/borrow_escape` | type | a returned borrow may borrow a local, not only its `from` parameters (R-6g-11) |
 | `type/borrow_signature` | type | a `ref` type or borrowing struct outside its allowed positions, or a bad `from` list (R-6g-11) |
+| `type/place_binding` | type | a place binding `let d = inout P;` whose place is not allowed or overlaps another live place binding (R-6g9-5) |
 | `type/async_unconsumed` | type | a temporary `Loop` is never consumed |
 | `type/bad_trigger` | type | a quantifier trigger on an aggregate, not an array read, or not mentioning the binder (R-6-3) |
 | `type/call_in_contract` | type | a contract calls a function that cannot be expanded there |

@@ -997,6 +997,7 @@ class Checker:
             s.expr(e, scope)
         go(st.value.expr)
         scope[st.name] = (st.type, True, "inout")
+        s.f.__dict__.setdefault("place_names", set()).add(st.name)
 
     def _all_stmts(s, stmts):
         for st in stmts:
@@ -2913,6 +2914,11 @@ class Checker:
         """`value` (already typed) is moved into an owning position (let, assignment, constructor field, return):
         a non-fresh extended value is cloned, which needs `alloc`; constructors, literals and calls are fresh"""
         t = value.ty
+        if (isinstance(value, (Var, Move)) and value.name in getattr(s.f, "place_names", ()) and t is not None
+                and (s.is_extended(t) or is_owned_value(t) or is_array(t) or t == STR)):
+            # R-6g9-5: the value behind a place binding stays in its place; owning it would move it out
+            terr(value, "borrow_escape", "place binding %s cannot be returned, stored or moved" % value.name,
+                 "copy(...) the value, or return / store it from the place's root after the binding's last use")
         if getattr(value, "map_iter_view", False):
             terr(value, "foreign_move", "a map iteration binder cannot be used as an owned value")
         if getattr(value, "map_mut_view", False):

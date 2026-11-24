@@ -1357,6 +1357,42 @@ class FnGen:
         _, sl = s.lookup(root.name)
         return s.field_ptr_ty(sl, path)[0]
 
+    def place_ptr(s, p):
+        """R-6g9-5: the address of a place P ::= x | P.f | P[i] | if c {P} else {P}; only the taken arm of a
+        conditional place is evaluated; an element is bounds-checked like a store (proven in verified mode)"""
+        if isinstance(p, PlaceIf):
+            c = s.ev(p.cond)
+            thn, els, end = s.label("pthen"), s.label("pelse"), s.label("pend")
+            s.condbr(c.a, thn, els)
+            s.place(thn)
+            a = s.place_ptr(p.then)
+            pa = s.cur
+            s.br(end)
+            s.place(els)
+            b = s.place_ptr(p.els)
+            pb = s.cur
+            s.br(end)
+            s.place(end)
+            return s.op("phi ptr [ %s, %%%s ], [ %s, %%%s ]" % (a, pa, b, pb))
+        if isinstance(p, Index):
+            root, path = field_place(p.array)
+            kind, sl = s.lookup(root.name)
+            if path:
+                gp, fty = s.field_ptr_ty(sl, path)
+                dp = s.op("load ptr, ptr %s" % gp)
+                ln = s.op("load i64, ptr %s" % s.op("getelementptr inbounds %s, ptr %s, i32 0, i32 1" % (ARR, gp)))
+                a = V("arr", dp, ln, elem_ty(fty))
+            else:
+                a = sl if kind == "ssa" else s.load(sl)
+            if a.layout != "i64":
+                raise Exception("llvmgen: place binding into a narrowed array %s" % root.name)
+            return s.index_ptr(a, s.ev(p.index))
+        root, path = field_place(p)
+        kind, sl = s.lookup(root.name)
+        if kind != "slot":
+            raise Exception("llvmgen: place binding of non-slot %s" % root.name)
+        return s.field_ptr_ty(sl, path)[0] if path else sl.a
+
     def field_move_root(s, e):
         """the storage a `move d.a` empties: the slot of a record local, or (LB9 R-6g8-4) the payload storage of a struct
         binder of a consuming match, which the scrutinee's drop then finds emptied"""
@@ -2445,6 +2481,18 @@ class FnGen:
             s.store(sl, v)
             s.scopes[-1]["names"][st.name] = ("slot", sl)
             s.end_temps()
+        elif isinstance(st, Let) and isinstance(st.value, InoutArg):
+            # R-6g9-5: `let d = inout P;` binds d to the address of P (a scalar or struct slot viewed through it, like an
+            # inout parameter); nothing is copied and nothing is dropped
+            k = vkind(st.type)
+            if k not in ("i64", "i1", "agg") or is_native_vec(st.type) or s.is_ext(st.type):
+                raise PruvError("codegen", st.line, st.col, "unsupported_type",
+                                "a place binding of type %s needs the Rust backend" % st.type.name, "use the Rust backend",
+                                file=getattr(st, "file", None))
+            s.begin_temps()
+            ptr = s.place_ptr(st.value.expr)
+            s.end_temps()
+            s.scopes[-1]["names"][st.name] = ("slot", Slot(k, ptr, None, st.type))
         elif isinstance(st, Let) and s.m.stack is not None and s.m.stack.contains(st) and st.name not in s.resize_args:
             s.stack_let(st)
         elif isinstance(st, Let) and s.m.stack is not None and s.m.stack.lit(st) and not s.cost:

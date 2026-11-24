@@ -1,0 +1,9 @@
+{
+  "gen_absent": ["to_vec()", ".clone()"],
+  "gen_contains": ["&mut x.total"],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["1207"]
+  }
+}

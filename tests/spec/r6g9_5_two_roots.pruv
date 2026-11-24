@@ -1,0 +1,9 @@
+// spec: R-6g9-5 reject
+// Both arms of a conditional place must have the same root variable.
+struct P { a: i64, b: i64 }
+
+fn f(inout x: P, inout y: P, c: bool) -> ()
+{
+  let d = inout if c { x.a } else { y.a };
+  d = 1;
+}

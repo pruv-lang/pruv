@@ -839,6 +839,8 @@ def _kids(e):
         return [e.base]
     if isinstance(e, (IsVariant, VariantField)):
         return [e.value]
+    if isinstance(e, PlaceIf):
+        return [e.cond, e.then, e.els]
     return []
 
 
@@ -921,6 +923,36 @@ def _stmt_blocks(st):
     if isinstance(st, Match):
         return [a.body for a in st.arms]
     return []
+
+
+def _mentions(stmts, name):
+    """R-6g9-5: does any statement of stmts (nested blocks included) name `name`, as a target or in an expression"""
+    pred = lambda e: isinstance(e, (Var, Move)) and e.name == name
+    for st in stmts:
+        if isinstance(st, (Assign, IndexAssign, FieldAssign)) and st.name == name:
+            return True
+        if any(_expr_has(e, pred) for e in _stmt_exprs(st)):
+            return True
+        if any(_mentions(b, name) for b in _stmt_blocks(st)):
+            return True
+    return False
+
+
+def _place_lets(stmts, out):
+    """R-6g9-5: the place bindings of stmts, nested blocks included"""
+    for st in stmts:
+        if isinstance(st, Let) and getattr(st, "place", False):
+            out.append(st)
+        for b in _stmt_blocks(st):
+            _place_lets(b, out)
+    return out
+
+
+def field_place_root(p):
+    """R-6g9-5: the root variable name of a place"""
+    while not isinstance(p, Var):
+        p = p.base if isinstance(p, FieldAccess) else p.array if isinstance(p, Index) else p.then
+    return p.name
 
 
 def _expr_has(e, pred):
@@ -1134,11 +1166,13 @@ class State:
         s.rev = frozenset()     # P13o: names of the opaque functions revealed on this path
         s.apps = ()             # P13o: (function, application term, argument values, guard, enclosing quantifier constants) met on this path, in order
         s.app_ids = frozenset()     # LG30 (G-LG29-1): (application id, guard ids) of every occurrence in apps
+        s.places = ()           # R-6g9-5: (binding Let, operand snapshots) of the live place bindings on this path
 
     def fork(s, extra=None):
         n = State(dict(s.env), s.pc + ([extra] if extra is not None else []))
         n.obs = s.obs
         n.rev, n.apps, n.app_ids = s.rev, s.apps, s.app_ids
+        n.places = s.places
         return n
 
 
@@ -1400,6 +1434,7 @@ class FnVerifier:
         # Empty for a function without inout parameters.
         s.snap = {}
         s.iter_places = []
+        s.place_dead_memo = {}    # R-6g9-5: id(block) -> (block, {statement index: place bindings dead after it})
 
     def T(s, ty):
         """type of a checked node under the current contract-instantiation substitution"""
@@ -3464,15 +3499,110 @@ class FnVerifier:
             prev.append(ob)
 
     def exec_block(s, stmts, st):
+        dead = s.place_dead(stmts)
         states = [st]
-        for stmt in stmts:
+        for j, stmt in enumerate(stmts):
             nxt = []
             for cur in states:
                 nxt.extend(s.exec(stmt, cur))
             states = nxt
             if not states:
                 break
+            for let in dead.get(j, ()):
+                for cur in states:
+                    s.place_writeback(cur, let)
         return states
+
+    # ---------- R-6g9-5: place bindings ----------
+    def place_dead(s, stmts):
+        """index of the statement after which each place binding of this block is dead (its last mention at this
+        block's level; the binding itself if it is never mentioned). One forward scan per binding: statements x
+        bindings, the bound stated in SPEC R-6g9-5."""
+        key = id(stmts)
+        dead = s.place_dead_memo.get(key)
+        if dead is None:
+            dead = {}
+            for j, let in enumerate(stmts):
+                if isinstance(let, Let) and getattr(let, "place", False):
+                    k = j
+                    for t in range(j + 1, len(stmts)):
+                        if _mentions([stmts[t]], let.name):
+                            k = t
+                    dead.setdefault(k, []).append(let)
+            s.place_dead_memo[key] = (stmts, dead)     # the list is kept alive so its id is not reused
+        else:
+            dead = dead[1]
+        return dead
+
+    @staticmethod
+    def place_ite(c, a, b):
+        if isinstance(a, Arr):
+            return mk_arr(z3.If(c, a.a, b.a), z3.If(c, a.n, b.n), a.name, a.elem)
+        return z3.If(c, a, b)
+
+    def place_read(s, p, st, snaps):
+        """the current value of place p, with its index and condition operands at their binding values"""
+        if isinstance(p, Var):
+            return st.env[p.name]
+        if isinstance(p, FieldAccess):
+            return s.read_field(st, s.place_read(p.base, st, snaps), p.field)
+        if isinstance(p, Index):
+            return z3.Select(s.place_read(p.array, st, snaps).a, snaps[id(p)])
+        return s.place_ite(snaps[id(p)], s.place_read(p.then, st, snaps), s.place_read(p.els, st, snaps))
+
+    def place_write(s, p, st, snaps, v):
+        """store v into place p (the write-back of a place binding)"""
+        if isinstance(p, Var):
+            st.env[p.name] = mk_arr(v.a, v.n, p.name, v.elem) if isinstance(v, Arr) else v
+        elif isinstance(p, FieldAccess):
+            cur = s.place_read(p.base, st, snaps)
+            s.place_write(p.base, st, snaps, s.rebuild(s.model.type_of(cur), cur, (p.field,), v, st))
+        elif isinstance(p, Index):
+            arr = s.place_read(p.array, st, snaps)
+            s.place_write(p.array, st, snaps, mk_arr(z3.Store(arr.a, snaps[id(p)], v), arr.n, arr.name, arr.elem))
+        else:
+            root = field_place_root(p)
+            a, b = st.fork(), st.fork()
+            s.place_write(p.then, a, snaps, v)
+            s.place_write(p.els, b, snaps, v)
+            st.env[root] = s.place_ite(snaps[id(p)], a.env[root], b.env[root])
+
+    def place_bind(s, p, st, snaps, guard, let):
+        """evaluate the operands of place p once, in source order, and prove every index in bounds"""
+        if isinstance(p, FieldAccess):
+            s.place_bind(p.base, st, snaps, guard, let)
+        elif isinstance(p, Index):
+            s.place_bind(p.array, st, snaps, guard, let)
+            i = s.ev(p.index, st, [], True)
+            snaps[id(p)] = i
+            arr = s.place_read(p.array, st, snaps)
+            s.prove(st, [], z3.Implies(guard, z3.And(i >= 0, i < arr.n)), let, "index_oob",
+                    "index in bounds for place binding %s" % let.name)
+        elif isinstance(p, PlaceIf):
+            c = s.ev(p.cond, st, [], True)
+            snaps[id(p)] = c
+            s.place_bind(p.then, st, snaps, z3.And(guard, c), let)
+            s.place_bind(p.els, st, snaps, z3.And(guard, z3.Not(c)), let)
+
+    def place_let(s, let, st):
+        st = st.fork()
+        snaps = {}
+        p = let.value.expr
+        s.place_bind(p, st, snaps, z3.BoolVal(True), let)
+        v = s.place_read(p, st, snaps)
+        if let.type == I64:
+            st.pc.append(in_range(v))       # an element read: the value lies in the i64 range, as with x[i]
+        st.env[let.name] = mk_arr(v.a, v.n, let.name, v.elem) if isinstance(v, Arr) else v
+        st.places = st.places + ((let, snaps),)
+        return [st]
+
+    def place_writeback(s, st, let):
+        """the live-to-dead edge of the binding: its final value goes back to the place"""
+        for k, (l, snaps) in enumerate(st.places):
+            if l is let:
+                s.place_write(let.value.expr, st, snaps, st.env[let.name])
+                st.places = st.places[:k] + st.places[k + 1:]
+                return
 
     def assigned(s, stmts, out):
         for st in stmts:
@@ -3593,6 +3723,8 @@ class FnVerifier:
         return ob
 
     def exec(s, stmt, st):
+        if isinstance(stmt, Let) and getattr(stmt, "place", False):
+            return s.place_let(stmt, st)
         if isinstance(stmt, Let) or isinstance(stmt, Assign):
             st = st.fork()
             v = s.ev(stmt.value, st, [], True)
@@ -3727,6 +3859,8 @@ class FnVerifier:
         if isinstance(stmt, Return):
             st = st.fork()
             v = s.ev(stmt.value, st, [], True) if stmt.value is not None else None
+            for let, _ in st.places[::-1]:      # leaving the function ends every live place binding
+                s.place_writeback(st, let)
             s.ensures_ok(st, v, stmt)
             return []
         if isinstance(stmt, Assert) and stmt.reveal is not None:     # P13o: proof-only, no query
@@ -3778,6 +3912,10 @@ class FnVerifier:
         # operands of resizing calls or whole assignments may lose their length.
         calls = s.call_writes(w.body, set(), select=lambda call, i: call.name not in ("vec_reserve", "arr_reserve"))
         keep = frozenset()
+        # R-6g9-5: a place binding in the body writes its root back; an element write keeps the array length
+        proots = {field_place_root(let.value.expr) for let in _place_lets(w.body, [])}
+        names |= proots
+        calls |= proots
         if calls or s.snap:
             whole = s.whole_assigned(w.body, set())
             resizes = s.call_writes(w.body, set(), select=lambda call, i:

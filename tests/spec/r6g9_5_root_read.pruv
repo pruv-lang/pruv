@@ -1,0 +1,11 @@
+// spec: R-6g9-5 reject
+// While d is live, reading the bound place through its root is a conflict.
+struct P { a: i64, b: i64 }
+
+fn f(inout x: P) -> i64
+{
+  let d = inout x.a;
+  let y: i64 = x.a;
+  d = 1;
+  return y;
+}

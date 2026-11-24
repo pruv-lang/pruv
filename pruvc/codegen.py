@@ -3153,6 +3153,11 @@ class Gen:
             s.emit(ind, "let %s: &'static str = %s;" % (st.name, str_lit(st.value.value)))
             s.vt[st.name] = st.type
             s.refs.add(st.name)
+        elif isinstance(st, Let) and isinstance(st.value, InoutArg):   # R-6g9-5: `let d = inout P;` is `&mut P`
+            s.emit(ind, "let %s%s = %s;" % ("mut " if st.mutable else "", st.name, s.place_ref(st.value.expr)))
+            s.vt[st.name] = st.type
+            s.refs.discard(st.name)
+            s.inouts.add(st.name)
         elif isinstance(st, Let):
             s.moving = s.last_copy(st)
             binding = ("mut " if st.mutable else "") + st.name
@@ -3561,6 +3566,25 @@ class Gen:
         if name in s.inouts:
             return name if not s.cost and name in s.vt and not is_array(s.vt[name]) else "&mut *" + name
         return "&mut " + name
+
+    def place_ref(s, p):
+        """R-6g9-5: the `&mut` borrow of a place P ::= x | P.f | P[i] | if c {P} else {P}; an index is evaluated
+        once before the borrow; a verified element is in bounds (index_oob proven at the binding)"""
+        if isinstance(p, PlaceIf):
+            return "if %s { %s } else { %s }" % (s.e(p.cond), s.place_ref(p.then), s.place_ref(p.els))
+        if isinstance(p, Index):
+            arr = s.place_path(p.array)
+            if s.verified:
+                return "{ let pruv_pi = (%s) as usize; unsafe { %s.get_unchecked_mut(pruv_pi) } }" % (s.e(p.index), arr)
+            return "{ let pruv_pi = pruv_idx(%s, %s.len()); &mut %s[pruv_pi] }" % (s.e(p.index), arr, arr)
+        return "&mut " + s.place_path(p) if not (isinstance(p, Var) and p.name in s.inouts) else "&mut *" + p.name
+
+    def place_path(s, p):
+        """the Rust lvalue of a field place rooted at a local or an inout parameter (auto-deref through `&mut`)"""
+        root, path = field_place(p)
+        if not path and root.name in s.inouts:
+            return "(*%s)" % root.name
+        return ".".join((root.name,) + path)
 
     def inout_ref(s, e, callee, i):
         root, path = field_place(e)
