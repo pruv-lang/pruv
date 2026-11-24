@@ -104,11 +104,11 @@ pub fn trim_span(s: str) -> Span
 }
 
 // ECMAScript String.prototype.trim.
-pub fn trim(s: str) -> str ! alloc
+pub fn trim(s: str) -> ref str from(s)
   ensures len(result) <= len(s)
 {
   let b: Span = trim_span(s);
-  return substr(s, b.lo, b.hi);
+  return subview(s, b.lo, b.hi);
 }
 
 // Byte equality of two strings.
@@ -194,7 +194,7 @@ pub fn one_line(s: str, max: i64) -> str ! alloc
 }
 
 // Longest UTF-8 boundary prefix within the byte budget (genuine U+FFFD is kept, policy P3).
-pub fn clip_bytes(s: str, max: i64) -> str ! alloc
+pub fn clip_bytes(s: str, max: i64) -> ref str from(s)
   requires 0 <= max && max <= 100_000_000
   requires len(s) <= 100_000_000
   ensures len(result) <= max
@@ -213,7 +213,7 @@ pub fn clip_bytes(s: str, max: i64) -> str ! alloc
   {
     i = i - 1;
   }
-  return substr(s, 0, i);
+  return subview(s, 0, i);
 }
 
 // claude.ts engineLine: trimmed text is one of the two interrupt lines, or (only for a task-notification

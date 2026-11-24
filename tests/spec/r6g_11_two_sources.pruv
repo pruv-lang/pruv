@@ -28,3 +28,7 @@ pub fn f(x: [u8]) -> i64 ! alloc requires len(x) >= 6 && len(x) <= 1000
   let t: ref [u8] = text_of(x, 1, 6, inout buf);
   return a + len(t);
 }
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(8, 5);
+  return f(x);
+}

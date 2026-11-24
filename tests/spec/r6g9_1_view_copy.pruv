@@ -1,0 +1,16 @@
+// spec: R-6g9-1 accept
+// A copy of an array a live view still reads stays a copy at the array's last use: writing the copy leaves the view
+// reading the original bytes.
+fn head(s: [u8]) -> ref [u8] from(s)
+  requires len(s) >= 2
+  ensures len(result) == 1
+{
+  return subview(s, 0, 1);
+}
+pub fn checksum() -> i64 ! alloc {
+  let s: [u8] = alloc(2, 7);
+  let v: ref [u8] = head(s);
+  let mut c: [u8] = copy(s);
+  c[0] = 122;
+  return v[0] * 1000 + c[0];
+}

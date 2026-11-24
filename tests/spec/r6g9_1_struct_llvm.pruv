@@ -1,0 +1,8 @@
+// spec: R-6g9-1 reject
+// Views lower to { ptr, i64 } on LLVM; a borrowing struct still needs the Rust backend until bundle B2.
+struct Doc { src: ref [u8], n: i64 }
+pub fn f(x: [u8]) -> i64 requires len(x) >= 2
+{
+  let d: Doc = Doc { src: x, n: 1 };
+  return len(d.src) + d.n;
+}

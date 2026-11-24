@@ -188,7 +188,7 @@ fn feed_user(d: crate::json::JsonDocument, inout st: [i64], inout sl: [i64], ino
     copy_text_range(inout bb, prompt, q[0], n);
     let inner: str = crate::jstr::owned_text(move bb);
     if len(inner) != n { return -1; }
-    prompt = copy(inner);  // MUT:M08 => prompt = crate::text::trim(inner);
+    prompt = copy(inner);  // MUT:M08 => prompt = copy(crate::text::trim(inner));
   } else {
     // <user_info> start without a prompt_index (missing or null) is Grok head text
     let pi: i64 = crate::access::field(d, 0, "prompt_index");
