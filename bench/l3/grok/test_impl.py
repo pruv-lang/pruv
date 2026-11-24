@@ -388,7 +388,8 @@ def build_pair(g, run, compiler, backend, host, reuse=False, verify_only=False):
         built = {'rc': 0, 'rs': str(out / 'root_gen.rs'), 'll': str(out / 'root_gen.ll') if backend == 'llvm' else None}
         assert Path(built['rs']).is_file(), 'run once without --reuse-verified first'
     else:
-        built = g.compile_pruv(compiler, str(HERE / 'root.pruv'), str(out), backend, compile_flags(host[3]))
+        built = g.compile_pruv(compiler, str(HERE / 'root.pruv'), str(out), backend, compile_flags(host[3]),
+                               wall=int(os.environ.get('GROK_COMPILE_WALL', '3600')))
     if built['rc']:
         raise RuntimeError('compile/verify failed: ' + str(built.get('errors') or built.get('stderr') or built))
     print(f'{compiler}/{backend}: ' + ('reusing verified Pruv emission' if reuse else 'verified'), flush=True)
