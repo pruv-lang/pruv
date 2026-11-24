@@ -63,37 +63,40 @@ pub fn string_units(source: [u8], start: i64, end: i64) -> [i64] ! alloc
   ensures len(result) <= end - start
   ensures forall i in 0..len(result): (0 <= result[i] && result[i] <= 65535)
 {
-  let mut buf: [i64] = alloc(end - start, 0);
+  // Hand shape (hand_json.rs query mode 5): `units(raw).count()`, `Vec::with_capacity(count)`, then decode
+  // again and push each unit. One allocation of the exact length.
   let mut p: i64 = start;
   let mut stop: i64 = start;
   if end - start >= 2 { p = start + 1; stop = end - 1; }
-  let mut used: i64 = 0;
+  let first: i64 = p;
+  let mut count: i64 = 0;
   while p < stop
-    invariant start <= p && p <= end && start <= stop && stop <= end
-    invariant 0 <= used && used <= p - start
-    invariant len(buf) == end - start
-    invariant forall i in 0..len(buf): (0 <= buf[i] && buf[i] <= 65535)
+    invariant start <= first && first <= p && p <= end && start <= stop && stop <= end
+    invariant 0 <= count && count <= p - first
+    decreases stop - p
+  {
+    let s: Step = step(source, p, stop);
+    if s.value <= 65535 { count = count + 1; } else { count = count + 2; }
+    p = s.next;
+  }
+  let mut out: [i64] = alloc(0, 0);
+  arr_reserve(inout out, count);
+  p = first;
+  while p < stop
+    invariant start <= first && first <= p && p <= end && start <= stop && stop <= end
+    invariant 0 <= len(out) && len(out) <= p - first
+    invariant forall i in 0..len(out): (0 <= out[i] && out[i] <= 65535)
     decreases stop - p
   {
     let s: Step = step(source, p, stop);
     let v: i64 = s.value;
-    if v <= 65535 { buf[used] = v; used = used + 1; }
+    if v <= 65535 { arr_push(inout out, v); }
     else {
-      buf[used] = 55296 + (v - 65536) / 1024;
-      buf[used + 1] = 56320 + (v - 65536) % 1024;
-      used = used + 2;
+      arr_push(inout out, 55296 + (v - 65536) / 1024);
+      arr_push(inout out, 56320 + (v - 65536) % 1024);
     }
     p = s.next;
   }
-  let mut out: [i64] = alloc(used, 0);
-  let mut i: i64 = 0;
-  while i < used
-    invariant 0 <= i && i <= used && used <= len(buf)
-    invariant len(out) == used
-    invariant forall j in 0..len(buf): (0 <= buf[j] && buf[j] <= 65535)
-    invariant forall j in 0..i: (0 <= out[j] && out[j] <= 65535)
-    decreases used - i
-  { out[i] = buf[i]; i = i + 1; }
   return out;
 }
 
