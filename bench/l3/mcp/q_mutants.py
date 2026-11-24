@@ -16,7 +16,7 @@ MUTANTS=[
  ('drop-title','packet.pruv','"title"','"absentTitle"'),
  ('description-cap','packet.pruv','{ return 65536; }','{ return 10; }'),
  ('readonly','packet.pruv','p[base+6]=1;','p[base+6]=0;'),
- ('destructive','packet.pruv','== 2 { p[base+7]=1; }','== 2 { p[base+7]=0; }'),
+ ('destructive','packet.pruv','{ p[base+7]=0; } else if d.tape[6*ah.b] == 2 { p[base+7]=1; }','{ p[base+7]=-1; } else if d.tape[6*ah.b] == 2 { p[base+7]=-1; }'),
 ]
 def main():
  spec=importlib.util.spec_from_file_location('common',HERE.parent/'supervisor/common.py')

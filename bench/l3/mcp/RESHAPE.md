@@ -87,6 +87,55 @@ Unexplained differences: 0. One contract followed hand rather than the old proof
 wrapper's bound changed to match) instead of clamping. No language gap was needed, so no row was added to
 RUST_SHAPE_RESET §4.
 
+### LB5c: better algorithms on both sides, then line-by-line again (main correction of 2026-11-24)
+
+Rule: an algorithm that hand Rust can also use is not reverted in Pruv; it goes into `core_hand` too, so the two sides
+compare the same algorithm. LB5c put the LB5 algorithms back into `packet.pruv` and added them to
+`perf/hand_packet.rs`:
+
+* `fields4`: one walk over the members for four keys; each member key is scanned once and, when not plain, decoded
+  once (16 units, one more than the longest key) and compared with each key (`tok_eq`). Was: `field` once per key,
+  6 walks per tool (4 tool keys + 2 annotation keys).
+* `put_units`: stop at `cap` units, keep the low unit of a split astral scalar (`spill`) or peek the next unit, drop
+  the high unit when the cut would split a pair. Was: decode `cap+1` units, then cut.
+* `put_name`: each unit is checked as it is pushed (stop at the first bad unit or the 201st). Was: decode 201 units,
+  then scan them.
+* `step`: the escape / `\uXXXX` / UTF-8 / 65533 logic of one scalar, shared by `decode`, `put_units` and `put_name`
+  (as `jstr::step`).
+* Contract stores: on both sides an absent field writes `slot = -1` and leaves `slot+1` untouched; no hint defaults
+  beyond `base+7 = -1`.
+
+Output is unchanged (same oracle counts, `run_perf.py check` 0 mismatches). Kinds as in the LB5b table.
+
+| hand (`perf/hand_packet.rs`) | Pruv (`packet.pruv`) | difference | kind |
+|---|---|---|---|
+| `span` (inline) | the same four tests inline in `field` / `fields4`, `access::raw_span` in `str_span` / `page` | none | = |
+| `hex` | `hex` | none | = |
+| `step`: `\\` with `stop-p >= 2`; `\u` with `stop-p >= 6` → hex value, `p+6`; escape table → `p+2` | same statements (`Step { v, next }` is hand's `(i64, usize)`) | none | = |
+| `step`: lead table `(n, v)`, `stop-p < n` → `(65533, p+1)`, `for k in 1..n { v = v*64+b%64; if v > 16777215 { bad; break } }`, `bad \|\| v > 1114111` → 65533, `n == 1` → `c` | same; `k = n` in tail position lowers to `break` (LB5b codegen), `else { k = k+1 }` is the `for` step | invariants (`bad ==> k == n`, `!bad ==> v <= 16777215`) | = (P) |
+| `decode`: `while p < stop && len-base < limit`, ASCII push, else `step` + one or two pushes | same | invariants | = (P) |
+| `put_units`: `while p < stop && k < cap`, ASCII push `k+1`, else `step`; astral: high, `k+1`, low if `k < cap` else `spill` | same | invariants | = (P) |
+| `put_units`: `k == cap` → `nx = spill`, else peek `step(..).0` (high unit if astral), `last = out[at+k-1]`, low after high → `truncate(at+k-1)`, `k-1` | same (`out = truncate(out, at+k-1)`, in place, R-6g4-3) | none | = |
+| `key_eq` (root lookups only) | `key_eq` | none | = |
+| `field` (root `result` / `tools` only) | `field` | `obj` range, `stop <= len/6`, `v >= stop`, `next <= j` | E1 |
+| `tok_eq`: plain → `&src[p..q] == key`; else length + zip compare | plain → length test + `eq_range`; else length + early-exit loop | none | = |
+| `fields4`: `t[6obj] != 6` → none; `stop`; `j = obj+1`; `u = Vec::new()` | same; `u = alloc(0,0)` | `obj` range and `stop <= len/6` tests | E1 |
+| `fields4` per member: `span` valid → `(p,q)`, plain scan (early exit), `!plain` → `u.truncate(0)` + `decode(.., 16)`, four `tok_eq` → `h[i] = j+1` | same order, same statements; plain scan stops with `i = q` (lowers to `break`) | `v >= stop` stop | E1 |
+| `fields4`: `j = t[6(j+1)+3]` | same | `next <= j` stop | E1 |
+| `is_unit_ok` | `unit_ok` | none | = |
+| `str_span`: `id?`, `t[6id] != 4`, `span` | `access::kind(d,id) != 4`, `raw_span` | `kind` tests the id range | E1 |
+| `put_name`: per unit: ASCII → `is_unit_ok` (else `truncate(at)`, None), push; else `step`, BMP → `is_unit_ok`, push; astral → two pushes; `len-at > 200` → `truncate(at)`, None | same statements, -1 for None | invariants | = (P) |
+| `put_name`: empty → None, else `Some(len-at)` | same | none | = |
+| `put_field`: `slot = -1`, `let Some(sp)` else return, `at`, `n = put_units(..)`, `(!nonempty \|\| n > 0) && at <= MAX-n` → `slot, slot+1`, else `truncate(at)` | same (`Option<Span>` is `Span.status`) | none (`slot+1` untouched when absent, both sides) | = |
+| reserve, fresh buffer, loop head (`cur`, `j`, `seen`, kind 6, `objects`, `count >= 500`) | as in LB5b | `0 <= j` | E1 |
+| `h = fields4(cur, "name", "title", "description", "annotations")`, `at`, `n = None`, `str_span(h[0])` → `put_name`, `let Some(n) else continue` | same; `if n >= 0 { .. }` is the `continue` | `assert`s | = (P) |
+| name slots, title (16000000, nonempty), description (65536), `base+7 = -1` | same; the cap is `desc_cap()` | none | = |
+| `if let Some(a) = h[3]`: `ah = fields4(a, "readOnlyHint", "destructiveHint", "", "")`; `ah[0]` true → `base+6 = 1`; `ah[1]` false/true → `base+7` 0/1 | same | none | = |
+| raw JSON, `count += 1` | as in LB5b | none | = |
+
+Pruv-only differences left: E1 (an explicit range / malformed-tape test where hand would panic or loop) and P (proof
+text). Unexplained differences: 0. No language gap was needed (no RUST_SHAPE_RESET §4 row).
+
 ## 2. Language gaps hit
 
 LB5 closed gaps R, T, G and L (SPEC §6g4: R-6g4-1 `arr_reserve`, R-6g4-2 `arr_push`, R-6g4-3 in-place truncate,
@@ -111,6 +160,7 @@ R-6g4-4 exact resize growth, R-6g4-5 literal as `[u8]`) and added R-6g4-6 `arr_a
 | `q.py` vs the Node reference (2040 cases, 4 pairs) | 0 unexplained on every pair: 2027 exact + known TS differences: exact-decimal-id 3, invalid-utf8 3, byte-line-cap 3, numeric-signal 3, surrogate-safe-cut 1 |
 | `q_mutants.py` (12 mutants) | 12/12 killed: 2 verifier-rejected (page-contract, tool-contract), 10 differential-killed. Run before the `shorten` move (the mutated lines are unchanged by it) |
 | LB5b re-run | `q.py` on the LB5b code: the same counts on all 4 pairs. `q_mutants.py`: the `destructive` anchor moved to `== 2 { p[base+7]=1; }`; result in the LB5b report |
+| LB5c re-run | `q.py` on the LB5c code: the same counts on all 4 pairs (2027 exact + the same known TS differences). The LB5b `destructive` anchor (`== 2 { p[base+7]=1; }` → `0`) survived: none of the 22 fixed fixtures gives a distinguishing output for the `true` branch alone. LB5c restores the original mutant (both values → -1): `{ p[base+7]=0; } else if .. == 2 { p[base+7]=1; }` → `-1`, `-1`. `q_mutants.py` result: QM_RESULT |
 | `run_perf.py check` (new vs old vs hand, 15 pages + 3 chains) | 0 mismatches |
 
 Known edges that no oracle case reaches: a nextCursor over 20 MB (the old `join` quirk) and the room clamp at

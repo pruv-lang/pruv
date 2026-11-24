@@ -28,8 +28,40 @@ fn hex(c: i64) -> i64
   if 97 <= c && c <= 102 { return c - 87; }
   return 0;
 }
-// hand `decode`: the string token src[s..e] (quotes included) decoded to UTF-16 units pushed onto out, the same
-// units as jstr::step; stops once `limit` units were pushed (a step may overshoot by one unit).
+// hand `step`: one scalar of the string body at p (p < stop), as jstr::step: its value (> 65535 for an astral scalar)
+// and the next position.
+struct Step { v: i64, next: i64 }
+fn step(src: [u8], p: i64, stop: i64) -> Step
+  requires 0 <= p && p < stop && stop <= len(src)
+  ensures p < result.next && result.next <= stop
+  ensures 0 <= result.v && result.v <= 1114111
+{
+  let c: i64 = src[p];
+  if c == 92 && stop-p >= 2 {
+    let x: i64 = src[p+1];
+    if x == 117 && stop-p >= 6 {
+      return Step { v: 4096*hex(src[p+2])+256*hex(src[p+3])+16*hex(src[p+4])+hex(src[p+5]), next: p+6 };
+    }
+    let mut v: i64 = x;
+    if x == 98 { v=8; } else if x == 102 { v=12; } else if x == 110 { v=10; } else if x == 114 { v=13; } else if x == 116 { v=9; }
+    return Step { v: v, next: p+2 };
+  }
+  let mut n: i64 = 1; let mut v: i64 = c;
+  if 194 <= c && c <= 223 { n=2; v=c-192; } else if 224 <= c && c <= 239 { n=3; v=c-224; } else if 240 <= c && c <= 244 { n=4; v=c-240; }
+  if stop-p < n { return Step { v: 65533, next: p+1 }; }
+  let mut bad: bool = false; let mut k: i64 = 1;
+  while k < n
+    invariant 1 <= k && k <= n && n <= 4 && n <= stop-p && 0 <= v && v <= 1073741823
+    invariant !bad ==> v <= 16777215
+    invariant bad ==> k == n
+    decreases n-k
+  { v = v*64+src[p+k]%64; if v > 16777215 { bad=true; k=n; } else { k=k+1; } }
+  if bad || v > 1114111 { v=65533; }
+  if n == 1 { v=c; }
+  return Step { v: v, next: p+n };
+}
+// hand `decode`: the string token src[s..e] (quotes included) decoded to UTF-16 units pushed onto out; stops once
+// `limit` units were pushed (a step may overshoot by one unit). A plain byte (< 128, not a backslash) is its own unit.
 fn decode(src: [u8], s: i64, e: i64, inout out: [i64], limit: i64) -> () ! alloc
   requires 0 <= s && s <= e && e <= len(src) && e <= 16777216
   requires len(out) <= 200000000 && 1 <= limit && limit <= 16777216
@@ -47,33 +79,54 @@ fn decode(src: [u8], s: i64, e: i64, inout out: [i64], limit: i64) -> () ! alloc
   {
     let c: i64 = src[p];
     if c < 128 && c != 92 { arr_push(inout out,c); p=p+1; }
-    else if c == 92 && stop-p >= 2 {
-      let x: i64 = src[p+1];
-      if x == 117 && stop-p >= 6 {
-        arr_push(inout out,4096*hex(src[p+2])+256*hex(src[p+3])+16*hex(src[p+4])+hex(src[p+5])); p=p+6;
-      } else {
-        let mut v: i64 = x;
-        if x == 98 { v=8; } else if x == 102 { v=12; } else if x == 110 { v=10; } else if x == 114 { v=13; } else if x == 116 { v=9; }
-        arr_push(inout out,v); p=p+2;
-      }
-    } else {
-      let mut n: i64 = 1; let mut v: i64 = c;
-      if 194 <= c && c <= 223 { n=2; v=c-192; } else if 224 <= c && c <= 239 { n=3; v=c-224; } else if 240 <= c && c <= 244 { n=4; v=c-240; }
-      if stop-p < n { arr_push(inout out,65533); p=p+1; }
+    else {
+      let st: Step = step(src,p,stop); p=st.next;
+      if st.v <= 65535 { arr_push(inout out,st.v); }
+      else { arr_push(inout out,55296+(st.v-65536)/1024); arr_push(inout out,56320+(st.v-65536)%1024); }
+    }
+  }
+}
+// hand `put_units`: the token decoded onto out, at most cap units (an astral scalar whose low unit does not fit keeps
+// it as `spill`), then a peek at the next unit: when the cut would split a surrogate pair the high unit is dropped too.
+// Returns the pair-safe count n; out ends at its old length + n.
+fn put_units(src: [u8], s: i64, e: i64, inout out: [i64], cap: i64) -> i64 ! alloc
+  requires 0 <= s && s <= e && e <= len(src) && e <= 16777216
+  requires len(out) <= 200000000 && 2 <= cap && cap <= 16000000
+  ensures 0 <= result && result <= cap
+  ensures len(out) == len(old(out)) + result
+  ensures forall k in 0..len(old(out)): out[k] == old(out)[k]
+{
+  let at: i64 = len(out);
+  let mut p: i64 = s; let mut stop: i64 = s;
+  if e-s >= 2 { p=s+1; stop=e-1; }
+  let mut k: i64 = 0; let mut spill: i64 = -1;
+  while p < stop && k < cap
+    invariant s <= p && p <= stop && stop <= e && 0 <= k && k <= cap && len(out) == at + k
+    invariant forall x in 0..at: out[x] == old(out)[x]
+    decreases stop-p
+  {
+    let c: i64 = src[p];
+    if c < 128 && c != 92 { arr_push(inout out,c); k=k+1; p=p+1; }
+    else {
+      let st: Step = step(src,p,stop); p=st.next;
+      if st.v <= 65535 { arr_push(inout out,st.v); k=k+1; }
       else {
-        let mut bad: bool = false; let mut k: i64 = 1;
-        while k < n
-          invariant 1 <= k && k <= n && n <= 4 && n <= stop-p && 0 <= v && v <= 16777215
-          decreases n-k
-        { let w: i64 = v*64+src[p+k]%64; if w > 16777215 { bad=true; k=n; } else { v=w; k=k+1; } }
-        p=p+n;
-        if bad || v > 1114111 { v=65533; }
-        if n == 1 { v=c; }
-        if v <= 65535 { arr_push(inout out,v); }
-        else { arr_push(inout out,55296+(v-65536)/1024); arr_push(inout out,56320+(v-65536)%1024); }
+        arr_push(inout out,55296+(st.v-65536)/1024); k=k+1;
+        let lo: i64 = 56320+(st.v-65536)%1024;
+        if k < cap { arr_push(inout out,lo); k=k+1; } else { spill=lo; }
       }
     }
   }
+  if k == cap {
+    let mut nx: i64 = spill;
+    if nx < 0 && p < stop {
+      nx = step(src,p,stop).v;
+      if nx > 65535 { nx = 55296+(nx-65536)/1024; }
+    }
+    let last: i64 = out[at+k-1];
+    if 56320 <= nx && nx <= 57343 && 55296 <= last && last <= 56319 { out = truncate(out,at+k-1); return k-1; }
+  }
+  return k;
 }
 // hand `key_eq`: the decoded string token src[s..e] equals the ASCII key. A plain token (no backslash, no byte >= 128)
 // is compared byte for byte; any other token is decoded into a temporary of capacity len(key)+1.
@@ -129,9 +182,110 @@ pub fn field(d: crate::json::JsonDocument, obj: i64, key: [u8]) -> i64 ! alloc
   }
   return found;
 }
+// hand `tok_eq`: the decoded member key equals the ASCII key; a plain key (no backslash, no byte >= 128) is
+// src[p..q], any other is u, its first 16 units.
+fn tok_eq(src: [u8], p: i64, q: i64, plain: bool, u: [i64], key: [u8]) -> bool
+  requires 0 <= p && p <= q && q <= len(src) && len(key) <= 64
+{
+  if plain {
+    if q-p != len(key) { return false; }
+    return eq_range(src,p,key,0,q-p);
+  }
+  if len(u) != len(key) { return false; }
+  let mut k: i64 = 0;
+  while k < len(u)
+    invariant 0 <= k && k <= len(u) && len(u) == len(key)
+    decreases len(u)-k
+  { if u[k] != key[k] { return false; } k=k+1; }
+  return true;
+}
+// hand `fields4`: field() for four ASCII keys in one walk over the members of obj; each member key is scanned once
+// and, when it is not plain, decoded once (16 units: one more than the longest key, "destructiveHint"); the last
+// match of each key wins, -1 when none. The range tests and the `next <= j` stop are E1, as in `field`.
+pub struct Hits { a: i64, b: i64, c: i64, e: i64 }
+fn fields4(d: crate::json::JsonDocument, obj: i64, k0: [u8], k1: [u8], k2: [u8], k3: [u8]) -> Hits ! alloc
+  requires len(k0) <= 15 && len(k1) <= 15 && len(k2) <= 15 && len(k3) <= 15
+  ensures result.a == -1 || (0 <= result.a && result.a < len(d.tape)/6)
+  ensures result.b == -1 || (0 <= result.b && result.b < len(d.tape)/6)
+  ensures result.c == -1 || (0 <= result.c && result.c < len(d.tape)/6)
+  ensures result.e == -1 || (0 <= result.e && result.e < len(d.tape)/6)
+{
+  let mut h0: i64 = -1; let mut h1: i64 = -1; let mut h2: i64 = -1; let mut h3: i64 = -1;
+  if obj < 0 || obj >= len(d.tape)/6 || d.tape[6*obj] != 6 { return Hits { a: h0, b: h1, c: h2, e: h3 }; }
+  let stop: i64 = d.tape[6*obj+3];
+  if stop > len(d.tape)/6 { return Hits { a: h0, b: h1, c: h2, e: h3 }; }
+  let mut j: i64 = obj+1;
+  let mut u: [i64] = alloc(0,0);
+  while j < stop
+    invariant 0 <= obj && obj < j && stop <= len(d.tape)/6 && len(u) <= 17
+    invariant h0 == -1 || (0 <= h0 && h0 < len(d.tape)/6)
+    invariant h1 == -1 || (0 <= h1 && h1 < len(d.tape)/6)
+    invariant h2 == -1 || (0 <= h2 && h2 < len(d.tape)/6)
+    invariant h3 == -1 || (0 <= h3 && h3 < len(d.tape)/6)
+    decreases stop-j
+  {
+    let v: i64 = j+1;
+    if v >= stop { j=stop; }
+    else {
+      let s: i64 = d.tape[6*j+1]; let e: i64 = d.tape[6*j+2];
+      if 0 <= s && s <= e && e <= len(d.source) && e <= 16777216 {
+        let mut p: i64 = s; let mut q: i64 = s;
+        if e-s >= 2 { p=s+1; q=e-1; }
+        let mut plain: bool = true; let mut i: i64 = p;
+        while i < q
+          invariant p <= i && i <= q && q <= len(d.source)
+          decreases q-i
+        { let c: i64 = d.source[i]; if c == 92 || c >= 128 { plain=false; i=q; } else { i=i+1; } }
+        if !plain { u = truncate(u,0); decode(d.source,s,e,inout u,16); }
+        if tok_eq(d.source,p,q,plain,u,k0) { h0=v; }
+        if tok_eq(d.source,p,q,plain,u,k1) { h1=v; }
+        if tok_eq(d.source,p,q,plain,u,k2) { h2=v; }
+        if tok_eq(d.source,p,q,plain,u,k3) { h3=v; }
+      }
+      let next: i64 = d.tape[6*v+3];
+      if next <= j { j=stop; } else { j=next; }
+    }
+  }
+  return Hits { a: h0, b: h1, c: h2, e: h3 };
+}
 // hand `is_unit_ok`.
 fn unit_ok(u: i64) -> bool { return !(u < 32 || (127 <= u && u <= 159) || u == 8232 || u == 8233); }
-// hand `put_field`: slots (slot, slot+1) get (-1, untouched) or (offset, n); decodes in place at the end of out.
+// hand `put_name`: the name decoded onto out while each unit is checked (unit_ok, 1..200 units); the unit count, or
+// -1 with out cut back when the name is not usable (stops at the first bad unit or the 201st unit).
+fn put_name(src: [u8], s: i64, e: i64, inout out: [i64]) -> i64 ! alloc
+  requires 0 <= s && s <= e && e <= len(src) && e <= 16777216 && len(out) <= 200000000
+  ensures result == -1 || (1 <= result && result <= 200)
+  ensures result == -1 ==> len(out) == len(old(out))
+  ensures result >= 0 ==> len(out) == len(old(out)) + result
+  ensures forall k in 0..len(old(out)): out[k] == old(out)[k]
+{
+  let at: i64 = len(out);
+  let mut p: i64 = s; let mut stop: i64 = s;
+  if e-s >= 2 { p=s+1; stop=e-1; }
+  while p < stop
+    invariant s <= p && p <= stop && stop <= e
+    invariant at <= len(out) && len(out) <= at + 200
+    invariant forall x in 0..at: out[x] == old(out)[x]
+    decreases stop-p
+  {
+    let c: i64 = src[p];
+    if c < 128 && c != 92 {
+      if !unit_ok(c) { out = truncate(out,at); return -1; }
+      arr_push(inout out,c); p=p+1;
+    } else {
+      let st: Step = step(src,p,stop); p=st.next;
+      if st.v <= 65535 {
+        if !unit_ok(st.v) { out = truncate(out,at); return -1; }
+        arr_push(inout out,st.v);
+      } else { arr_push(inout out,55296+(st.v-65536)/1024); arr_push(inout out,56320+(st.v-65536)%1024); }
+    }
+    if len(out)-at > 200 { out = truncate(out,at); return -1; }
+  }
+  if len(out) == at { return -1; }
+  return len(out)-at;
+}
+// hand `put_field`: slots (slot, slot+1) get (-1, untouched) or (offset, n); put_units decodes in place at the end of
+// out.
 fn put_field(src: [u8], sp: crate::access::Span, cap: i64, nonempty: bool, inout out: [i64], slot: i64) -> () ! alloc
   requires 0 <= slot && slot+1 < len(out) && 2 <= cap && cap <= 16000000 && len(out) <= 100100000
   requires sp.status == 0 ==> (0 <= sp.start && sp.start <= sp.end && sp.end <= len(src) && sp.end <= 16777216)
@@ -140,11 +294,8 @@ fn put_field(src: [u8], sp: crate::access::Span, cap: i64, nonempty: bool, inout
   out[slot] = -1;
   if sp.status != 0 { return; }
   let at: i64 = len(out);
-  decode(src,sp.start,sp.end,inout out,cap+1);
-  let m: i64 = len(out)-at;
-  let mut n: i64 = m; if n > cap { n=cap; }
-  if n > 0 && n < m && 55296 <= out[at+n-1] && out[at+n-1] <= 56319 && 56320 <= out[at+n] && out[at+n] <= 57343 { n=n-1; }
-  if (!nonempty || m > 0) && at <= 100000000-n { out = truncate(out,at+n); out[slot]=at; out[slot+1]=n; }
+  let n: i64 = put_units(src,sp.start,sp.end,inout out,cap);
+  if (!nonempty || n > 0) && at <= 100000000-n { out[slot]=at; out[slot+1]=n; }
   else { out = truncate(out,at); }
 }
 // p cut to its first m words (perf harness only; page leaves p at its logical end). `p = truncate(p, m)` on a local
@@ -193,37 +344,27 @@ pub fn page(inout p: [i64], d: crate::json::JsonDocument, tools: i64, count: i64
     if d.tape[6*cur] == 6 {
       obj=obj+1;
       if cnt < 500 {
-        let at: i64 = len(p); let mut ok: bool = false; let mut m: i64 = 0;
-        let ns: crate::access::Span = str_span(d,field(d,cur,"name"));
-        if ns.status == 0 {
-          decode(d.source,ns.start,ns.end,inout p,201);
-          m = len(p)-at;
-          ok = 1 <= m && m <= 200;
-          if ok {
-            let mut i: i64 = at;
-            while i < len(p)
-              invariant at <= i && i <= len(p) && len(p) == at+m && 1 <= m && m <= 200
-              decreases len(p)-i
-            { if !unit_ok(p[i]) { ok=false; i=len(p); } else { i=i+1; } }
-          }
-        }
-        if ok {
+        let h: Hits = fields4(d,cur,"name","title","description","annotations");
+        let at: i64 = len(p); let mut n: i64 = -1;
+        let ns: crate::access::Span = str_span(d,h.a);
+        if ns.status == 0 { n = put_name(d.source,ns.start,ns.end,inout p); }
+        if n >= 0 {
           let base: i64 = 10+10*cnt;
-          assert len(p) == at+m;
-          assert 1 <= m && m <= 200;
+          assert len(p) == at+n;
+          assert 1 <= n && n <= 200;
           assert base+9 < len(p);
           assert len(p) <= 100000000 + 200*(cnt+1);
-          p[base]=at; p[base+1]=m;
-          put_field(d.source,str_span(d,field(d,cur,"title")),16000000,true,inout p,base+2);
+          p[base]=at; p[base+1]=n;
+          put_field(d.source,str_span(d,h.b),16000000,true,inout p,base+2);
           assert base+9 < len(p) && len(p) <= 100000000 + 200*(cnt+1);
-          put_field(d.source,str_span(d,field(d,cur,"description")),desc_cap(),false,inout p,base+4);
+          put_field(d.source,str_span(d,h.c),desc_cap(),false,inout p,base+4);
           assert base+9 < len(p) && len(p) <= 100000000 + 200*(cnt+1);
-          let an: i64 = field(d,cur,"annotations");
-          if an >= 0 { let h: i64 = field(d,an,"readOnlyHint"); if h >= 0 && d.tape[6*h] == 2 { p[base+6]=1; } }
           p[base+7]=-1;
-          if an >= 0 {
-            let h: i64 = field(d,an,"destructiveHint");
-            if h >= 0 { if d.tape[6*h] == 1 { p[base+7]=0; } else if d.tape[6*h] == 2 { p[base+7]=1; } }
+          if h.e >= 0 {
+            // The two empty keys are unused (an empty member key may match them; the hits are ignored).
+            let ah: Hits = fields4(d,h.e,"readOnlyHint","destructiveHint","","");
+            if ah.a >= 0 { if d.tape[6*ah.a] == 2 { p[base+6]=1; } }
+            if ah.b >= 0 { if d.tape[6*ah.b] == 1 { p[base+7]=0; } else if d.tape[6*ah.b] == 2 { p[base+7]=1; } }
           }
           // raw JSON of the tool object, widened one byte per word; an invalid span reads as empty.
           let rs: crate::access::Span = crate::access::raw_span(d,cur);
@@ -234,7 +375,7 @@ pub fn page(inout p: [i64], d: crate::json::JsonDocument, tools: i64, count: i64
             arr_append(inout p,d.source,rstart,rl);
           }
           cnt=cnt+1;
-        } else { p = truncate(p,at); }
+        }
       }
     }
   }
