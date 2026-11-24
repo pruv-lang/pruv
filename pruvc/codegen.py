@@ -1774,6 +1774,7 @@ class Gen:
         s.moving = set()     # owned extended locals a return statement may move (see return_movable)
         s.pinned = set()     # names borrowed as the scrutinee of an enclosing match_ext arm
         s.frames = []        # enclosing blocks being emitted: [names declared so far, names named later, loop body]
+        s.try_values = {}    # `e?` Ok binder -> `e?` text, for the statement that takes the value (try_match)
         s.need_size = set()
         s.need_eq = set()
         s.need_bits = set()  # P2: band/bor/bxor used in a runtime contract (filled while contracts are generated)
@@ -3323,6 +3324,8 @@ class Gen:
             s.parallel(st, ind)
         elif isinstance(st, Match) and s.is_ext(st.scrutinee.ty):
             s.match_ext(st, ind)
+        elif isinstance(st, Match) and s.try_match(st):
+            s.try_stmt(st, ind)
         elif isinstance(st, Match):
             sc = st.scrutinee
             from foreign import MUTABLE_COLLECTION_MATCH
@@ -3385,6 +3388,41 @@ class Gen:
             s.emit(ind, "}")
             if scoped:
                 s.emit(ind - 1, "}")
+
+    def try_match(s, st):
+        """the checker's lowering of `e?` (check.try_arms): `match e { Ok(v) => { rest } Err(__pruv_try_eN) =>
+        { return Err(__pruv_try_eN); } }` with the same error type, where the value is unit or the first statement
+        of rest takes v whole (`let x: T = v;` / `x = v;`). Not under cost metering (its return adds a check)."""
+        if s.cost or len(st.arms) != 2:
+            return False
+        ok, fail = st.arms
+        if ok.enum_name is not None or fail.enum_name is not None or ok.ctor != "Ok" or fail.ctor != "Err":
+            return False
+        if len(fail.binders) != 1 or not fail.binders[0].startswith("__pruv_try_e") or len(fail.body) != 1:
+            return False
+        ret = fail.body[0]
+        if not (isinstance(ret, Return) and isinstance(ret.value, Ctor) and ret.value.name == "Err"
+                and isinstance(ret.value.arg, Var) and ret.value.arg.name == fail.binders[0]):
+            return False
+        if not ok.binders:
+            return True
+        first = ok.body[0] if ok.body else None
+        if isinstance(first, Let) and (getattr(first, "ref", False) or (s.stack is not None and s.stack.contains(first))):
+            return False
+        return (isinstance(first, (Let, Assign)) and isinstance(first.value, Var) and first.value.name == ok.binders[0]
+                and not s.is_ext(first.value.ty))
+
+    def try_stmt(s, st, ind):
+        """`e?` as the hand-written Rust `?` (`From` is the identity: try_arms requires the same error type). The Ok
+        arm holds the rest of the block, so it follows at the same level: `f(..)?;` for a unit Ok, else the first
+        statement of the rest takes `f(..)?` in place of the binder (`let x: T = f(..)?;` / `x = f(..)?;`)."""
+        ok = st.arms[0]
+        value = "%s?" % s.e(st.scrutinee)
+        if ok.binders:
+            s.try_values[ok.binders[0]] = value
+        else:
+            s.emit(ind, value + ";")
+        s.block(ok.body, ind)
 
     def match_ext(s, st, ind):
         """match on an extended enum: the scrutinee is borrowed (a view, never cloned) and every payload binder is an
@@ -3708,6 +3746,8 @@ class Gen:
                 % (s.arr_ref(a[0]), s.e(a[1]), vty, s.e(a[2]), chk, fill))
 
     def e(s, e):
+        if isinstance(e, Var) and e.name in s.try_values:
+            return s.try_values.pop(e.name)
         if isinstance(e, IntLit):
             if e.value == -2 ** 63:
                 return "i64::MIN"

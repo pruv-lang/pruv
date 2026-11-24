@@ -53,7 +53,44 @@ def main(work, binary=None):
         assert out.read_text() == text
         assert ll.exists() and bindings.exists()
         out.unlink()
-    print("12 ordinary bodies x 3 modes; reverse allocation; private std: OK")
+    check_try(work, binary)
+    print("12 ordinary bodies x 3 modes; reverse allocation; private std; e? as hand `?`: OK")
+
+
+TRY_ROOT = """pub struct Fault { code: i64 }
+fn check(x: i64) -> Result<(), Fault> {
+  if x < 0 { return Err::<(), Fault>(Fault { code: x }); }
+  return Ok::<(), Fault>(());
+}
+fn half(x: i64) -> Result<i64, Fault> {
+  if x < 0 { return Err::<i64, Fault>(Fault { code: x }); }
+  return Ok::<i64, Fault>(x / 2);
+}
+pub fn both(a: i64, b: i64) -> Result<i64, Fault> {
+  check(a)?;
+  let h: i64 = half(b)?;
+  let mut t: i64 = 0;
+  t = half(a)?;
+  return Ok::<i64, Fault>(h + t);
+}
+"""
+
+
+def check_try(work, binary):
+    """`f(..)?;` and `let x: T = f(..)?;` (same error type) emit the hand `?`, not a match."""
+    root, out = work / "try.pruv", work / "try.rs"
+    root.write_text(TRY_ROOT)
+    if binary:
+        c = subprocess.run([binary, str(root), "-o", str(out), "--backend", "rust", "--no-verify"],
+                           capture_output=True, text=True, timeout=120)
+        assert c.returncode == 0, c.stdout + c.stderr
+    else:
+        assert not compile_file(str(root), str(out), verify=False)
+    text = out.read_text()
+    assert re.search(r"^\s*pruv_\w*_5_check\(a\)\?;$", text, re.M), text
+    assert re.search(r"^\s*let h: i64 = pruv_\w*_4_half\(b\)\?;$", text, re.M), text
+    assert re.search(r"^\s*t = pruv_\w*_4_half\(a\)\?;$", text, re.M), text
+    assert "__pruv_try" not in text, text
 
 
 if __name__ == "__main__":
