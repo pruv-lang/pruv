@@ -1191,6 +1191,57 @@ fn join_map<T>(xs: &[T], sep: &str, f: impl Fn(&T) -> String) -> String {
 
 // ---------- Gen ----------
 
+/// The leftmost conjunct of a `while` condition when it reads `i < X` (X a literal or another local): `(i, X)`.
+fn exit_bound(cond: &Expr) -> Option<(&str, &Expr)> {
+    let mut c = cond;
+    while let Expr::Binary(b) = c {
+        if b.op != "&&" {
+            break;
+        }
+        c = &b.left;
+    }
+    let Expr::Binary(b) = c else { return None };
+    let Expr::Var(i) = &*b.left else { return None };
+    if b.op != "<" {
+        return None;
+    }
+    match &*b.right {
+        Expr::IntLit(_) => Some((i.name.as_str(), &b.right)),
+        Expr::Var(x) if x.name != i.name => Some((i.name.as_str(), &b.right)),
+        _ => None,
+    }
+}
+
+fn same_bound(a: &Expr, b: &Expr) -> bool {
+    match (a, b) {
+        (Expr::IntLit(x), Expr::IntLit(y)) => x.value == y.value,
+        (Expr::Var(x), Expr::Var(y)) => x.name == y.name,
+        _ => false,
+    }
+}
+
+/// Assignments `i = X` in tail position of a `while i < X && ...` body: nothing runs between them and the next
+/// condition test, whose leftmost conjunct is then false, so the emitted Rust leaves the loop with `break;` right
+/// away. Hand Rust writes this early exit as `break` (or `iter().all`); the dead re-test kept LLVM from treating the
+/// branch as a loop exit (LB5b: the key_eq plain scan ran 1.5x slower than the hand's).
+fn loop_exits(w: &While, out: &mut HashSet<usize>) {
+    fn tail(stmts: &[Stmt], i: &str, bound: &Expr, out: &mut HashSet<usize>) {
+        match stmts.last() {
+            Some(st @ Stmt::Assign(a)) if a.name == i && !a.deref && same_bound(&a.value, bound) => {
+                out.insert(st as *const Stmt as usize);
+            }
+            Some(Stmt::If(x)) => {
+                tail(&x.then, i, bound, out);
+                tail(&x.els, i, bound, out);
+            }
+            _ => {}
+        }
+    }
+    if let Some((i, bound)) = exit_bound(&w.cond) {
+        tail(&w.body, i, bound, out);
+    }
+}
+
 struct Gen<'a> {
     prog: &'a Program,
     storage: crate::storage::StoragePlan,
@@ -1201,6 +1252,8 @@ struct Gen<'a> {
     verified: bool,
     /// LG35: the str_from_utf8 call whose bytes the enclosing `if` checked (utf8_checked)
     utf8_ok: usize,
+    /// loop exits: tail assignments `i = X` of a `while i < X ...` body, followed by `break;` (loop_exits)
+    exits: HashSet<usize>,
     trust: bool,
     out: Vec<String>,
     cost: bool,
@@ -1385,6 +1438,7 @@ impl<'a> Gen<'a> {
             budget,
             verified,
             utf8_ok: 0,
+            exits: HashSet::new(),
             trust: trust_callers,
             out: Vec::new(),
             cost: false,
@@ -3635,6 +3689,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 self.frames.pop();
                 return r;
             }
+            if self.exits.contains(&(st as *const Stmt as usize)) {
+                self.emit(ind, "break;");
+            }
             if let Stmt::Let(x) = st {
                 let top = self.frames.len() - 1;
                 self.frames[top].0.insert(x.name.clone());
@@ -4170,7 +4227,14 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 if self.cost {
                     self.emit(ind + 1, &Self::cost_add("1"));
                 }
-                self.block_in(&x.body, ind + 1, &[], true)?;
+                let mut exits = HashSet::new();
+                if !self.cost {
+                    loop_exits(x, &mut exits);
+                }
+                self.exits.extend(exits.iter().copied());
+                let r = self.block_in(&x.body, ind + 1, &[], true);
+                self.exits.retain(|a| !exits.contains(a));
+                r?;
                 self.emit(ind, "}");
             }
             Stmt::ForMap(x) => {

@@ -10,281 +10,142 @@ pub fn append_bytes(inout p: [i64], b: [u8], s: i64, e: i64) -> () ! alloc
   requires len(p) <= 100000000 && 0 <= s && s <= e && e <= len(b) && e-s <= 20000000
   ensures len(p) == len(old(p))+(e-s)
 { arr_append(inout p,b,s,e-s); }
-pub fn usable(u: [i64]) -> bool
-  ensures result ==> 1 <= len(u) && len(u) <= 200
-  ensures result ==> forall k in 0..len(u): u[k] >= 32 && !(127 <= u[k] && u[k] <= 159) && u[k] != 8232 && u[k] != 8233
-{
-  if len(u) < 1 || len(u) > 200 { return false; } let mut i: i64 = 0;
-  while i < len(u)
-    invariant 0 <= i && i <= len(u)
-    invariant forall k in 0..i: u[k] >= 32 && !(127 <= u[k] && u[k] <= 159) && u[k] != 8232 && u[k] != 8233
-    decreases len(u)-i
-  { if u[i] < 32 || (127 <= u[i] && u[i] <= 159) || u[i] == 8232 || u[i] == 8233 { return false; } i=i+1; }
-  return true;
-}
-pub fn cut(u: [i64], cap: i64) -> i64
-  requires 0 <= cap
-  ensures 0 <= result && result <= len(u) && result <= cap
-{
-  let mut n: i64 = len(u); if n > cap { n=cap; }
-  if n > 0 && n < len(u) { if 55296 <= u[n-1] && u[n-1] <= 56319 && 56320 <= u[n] && u[n] <= 57343 { n=n-1; } }
-  return n;
-}
-// ---- Per-page tool records: one pass in the shape of the hand core (perf/hand_packet.rs core_hand). ----
-// The packet grows once by an upper bound of the page's payload, strings are decoded straight into it at the cursor
-// (the name tentatively, cut back when it is not usable), and the final truncate drops the unused tail.
+// ---- Per-page tool records, line for line in the shape of perf/hand_packet.rs core_hand. ----
 pub fn desc_cap() -> i64 ensures result >= 2 && result <= 65536 { return 65536; }
-fn valid(d: crate::json::JsonDocument, id: i64) -> bool
-  ensures result ==> (0 <= id && id < len(d.tape) / 6 && len(d.tape) <= 6291456)
-  ensures result ==> (0 <= d.tape[6 * id] && d.tape[6 * id] <= 6)
-{
-  if len(d.tape) > 6291456 || id < 0 || id >= len(d.tape) / 6 { return false; }
-  return 0 <= d.tape[6 * id] && d.tape[6 * id] <= 6;
-}
-// Token span of a JSON string node; status 0 only for a string with an ok raw span (same test as access::string_units).
+// Token span of a JSON string node (hand `str_span`); status 0 only for a string with an ok raw span.
 pub fn str_span(d: crate::json::JsonDocument, id: i64) -> crate::access::Span
   ensures result.status == 0 ==> (0 <= result.start && result.start <= result.end && result.end <= len(d.source) && result.end <= 16777216)
 {
   if crate::access::kind(d,id) != 4 { return crate::access::Span { status: -2, start: 0, end: 0 }; }
   return crate::access::raw_span(d,id);
 }
-// usable(string_units(source,start,end)) without allocating: 1..200 units, no controls, no U+2028/2029.
-// A plain byte (< 128, not a backslash) is the unit jstr::step would return for it (n = 1, value = byte), so it skips
-// the step call.
-fn usable_span(src: [u8], start: i64, end: i64) -> bool
-  requires 0 <= start && start <= end && end <= len(src) && end <= 16777216
+// hand `hex`.
+fn hex(c: i64) -> i64
+  ensures 0 <= result && result <= 15
 {
-  let mut p: i64 = start; let mut stop: i64 = start;
-  if end-start >= 2 { p=start+1; stop=end-1; }
-  let mut n: i64 = 0;
-  while p < stop
-    invariant start <= p && p <= stop && stop <= end && 0 <= n && n <= 200
+  if 48 <= c && c <= 57 { return c - 48; }
+  if 65 <= c && c <= 70 { return c - 55; }
+  if 97 <= c && c <= 102 { return c - 87; }
+  return 0;
+}
+// hand `decode`: the string token src[s..e] (quotes included) decoded to UTF-16 units pushed onto out, the same
+// units as jstr::step; stops once `limit` units were pushed (a step may overshoot by one unit).
+fn decode(src: [u8], s: i64, e: i64, inout out: [i64], limit: i64) -> () ! alloc
+  requires 0 <= s && s <= e && e <= len(src) && e <= 16777216
+  requires len(out) <= 200000000 && 1 <= limit && limit <= 16777216
+  ensures len(old(out)) <= len(out) && len(out) <= len(old(out)) + limit + 1
+  ensures forall k in 0..len(old(out)): out[k] == old(out)[k]
+{
+  let base: i64 = len(out);
+  let mut p: i64 = s; let mut stop: i64 = s;
+  if e-s >= 2 { p=s+1; stop=e-1; }
+  while p < stop && len(out)-base < limit
+    invariant s <= p && p <= stop && stop <= e
+    invariant base <= len(out) && len(out) <= base + limit + 1
+    invariant forall k in 0..base: out[k] == old(out)[k]
     decreases stop-p
   {
     let c: i64 = src[p];
-    if c < 128 && c != 92 {
-      if c < 32 || c == 127 { return false; }
-      n=n+1; p=p+1;
+    if c < 128 && c != 92 { arr_push(inout out,c); p=p+1; }
+    else if c == 92 && stop-p >= 2 {
+      let x: i64 = src[p+1];
+      if x == 117 && stop-p >= 6 {
+        arr_push(inout out,4096*hex(src[p+2])+256*hex(src[p+3])+16*hex(src[p+4])+hex(src[p+5])); p=p+6;
+      } else {
+        let mut v: i64 = x;
+        if x == 98 { v=8; } else if x == 102 { v=12; } else if x == 110 { v=10; } else if x == 114 { v=13; } else if x == 116 { v=9; }
+        arr_push(inout out,v); p=p+2;
+      }
     } else {
-      let s: crate::jstr::Step = crate::jstr::step(src,p,stop); let v: i64 = s.value;
-      if v <= 65535 {
-        if v < 32 || (127 <= v && v <= 159) || v == 8232 || v == 8233 { return false; }
-        n=n+1;
-      } else { n=n+2; }
-      p=s.next;
+      let mut n: i64 = 1; let mut v: i64 = c;
+      if 194 <= c && c <= 223 { n=2; v=c-192; } else if 224 <= c && c <= 239 { n=3; v=c-224; } else if 240 <= c && c <= 244 { n=4; v=c-240; }
+      if stop-p < n { arr_push(inout out,65533); p=p+1; }
+      else {
+        let mut bad: bool = false; let mut k: i64 = 1;
+        while k < n
+          invariant 1 <= k && k <= n && n <= 4 && n <= stop-p && 0 <= v && v <= 16777215
+          decreases n-k
+        { let w: i64 = v*64+src[p+k]%64; if w > 16777215 { bad=true; k=n; } else { v=w; k=k+1; } }
+        p=p+n;
+        if bad || v > 1114111 { v=65533; }
+        if n == 1 { v=c; }
+        if v <= 65535 { arr_push(inout out,v); }
+        else { arr_push(inout out,55296+(v-65536)/1024); arr_push(inout out,56320+(v-65536)%1024); }
+      }
     }
-    if n > 200 { return false; }
   }
-  return n >= 1;
 }
-// ---- One walk over an object's members for up to four ASCII keys (access::field semantics per key). ----
-// Each hit is what access::field(d,obj,k) returns: the LAST member whose decoded key equals k, -1 when none, -3 for an
-// invalid id, -2 for a non-object, -4 when the member list is malformed anywhere (find_ascii validates every member
-// before returning, so a malformed list gives -4 for every key). Keys are ASCII literals.
-struct Hits { a: i64, b: i64, c: i64, e: i64 }
-// ascii_equal with a shortcut: a plain token (no backslash, no byte >= 128) decodes to its bytes, so a length mismatch
-// is a miss; everything else goes through jstr::ascii_equal.
-fn key_is(src: [u8], s: i64, e: i64, plain: bool, inner: i64, key: str) -> bool
-  requires 0 <= s && s <= e && e <= len(src) && e <= 16777216
+// hand `key_eq`: the decoded string token src[s..e] equals the ASCII key. A plain token (no backslash, no byte >= 128)
+// is compared byte for byte; any other token is decoded into a temporary of capacity len(key)+1.
+fn key_eq(src: [u8], s: i64, e: i64, key: [u8]) -> bool ! alloc
+  requires 0 <= s && s <= e && e <= len(src) && e <= 16777216 && len(key) <= 64
 {
-  if plain && inner != len(key) { return false; }
-  return crate::jstr::ascii_equal(src,s,e,key);
+  let mut p: i64 = s; let mut q: i64 = s;
+  if e-s >= 2 { p=s+1; q=e-1; }
+  let mut plain: bool = true; let mut i: i64 = p;
+  while i < q
+    invariant p <= i && i <= q && q <= len(src)
+    decreases q-i
+  { let c: i64 = src[i]; if c == 92 || c >= 128 { plain=false; i=q; } else { i=i+1; } }
+  if plain {
+    if q-p != len(key) { return false; }
+    return eq_range(src,p,key,0,q-p);
+  }
+  let mut u: [i64] = alloc(0,0);
+  arr_reserve(inout u,len(key)+1);
+  decode(src,s,e,inout u,len(key)+1);
+  if len(u) != len(key) { return false; }
+  let mut k: i64 = 0;
+  while k < len(u)
+    invariant 0 <= k && k <= len(u) && len(u) == len(key)
+    decreases len(u)-k
+  { if u[k] != key[k] { return false; } k=k+1; }
+  return true;
 }
-fn fields4(d: crate::json::JsonDocument, obj: i64, k0: str, k1: str, k2: str, k3: str) -> Hits
-  ensures result.a >= 0 ==> (result.a < len(d.tape) / 6 && d.tape[6 * result.a + 4] == obj)
-  ensures result.b >= 0 ==> (result.b < len(d.tape) / 6 && d.tape[6 * result.b + 4] == obj)
-  ensures result.c >= 0 ==> (result.c < len(d.tape) / 6 && d.tape[6 * result.c + 4] == obj)
-  ensures result.e >= 0 ==> (result.e < len(d.tape) / 6 && d.tape[6 * result.e + 4] == obj)
+// hand `field`: the LAST member named key of object obj (its value id), -1 when obj is not an object or has no such
+// member. The two range tests and the `next <= j` stop are the bounds and termination checks hand gets from
+// indexing panics.
+pub fn field(d: crate::json::JsonDocument, obj: i64, key: [u8]) -> i64 ! alloc
+  requires len(key) <= 64
+  ensures result == -1 || (0 <= result && result < len(d.tape)/6)
 {
-  if !valid(d,obj) { return Hits { a: -3, b: -3, c: -3, e: -3 }; }
-  if d.tape[6*obj] != 6 { return Hits { a: -2, b: -2, c: -2, e: -2 }; }
-  let bad: Hits = Hits { a: -4, b: -4, c: -4, e: -4 };
+  if obj < 0 || obj >= len(d.tape)/6 || d.tape[6*obj] != 6 { return -1; }
   let stop: i64 = d.tape[6*obj+3];
-  if stop <= obj || stop > len(d.tape)/6 { return bad; }
-  let mut j: i64 = obj+1; let mut h0: i64 = -1; let mut h1: i64 = -1; let mut h2: i64 = -1; let mut h3: i64 = -1;
+  if stop > len(d.tape)/6 { return -1; }
+  let mut j: i64 = obj+1; let mut found: i64 = -1;
   while j < stop
-    invariant 0 <= obj && obj < j && j <= stop && stop <= len(d.tape)/6 && len(d.tape) <= 6291456
-    invariant h0 == -1 || (0 <= h0 && h0 < len(d.tape)/6 && d.tape[6*h0+4] == obj)
-    invariant h1 == -1 || (0 <= h1 && h1 < len(d.tape)/6 && d.tape[6*h1+4] == obj)
-    invariant h2 == -1 || (0 <= h2 && h2 < len(d.tape)/6 && d.tape[6*h2+4] == obj)
-    invariant h3 == -1 || (0 <= h3 && h3 < len(d.tape)/6 && d.tape[6*h3+4] == obj)
+    invariant 0 <= obj && obj < j && stop <= len(d.tape)/6
+    invariant found == -1 || (0 <= found && found < len(d.tape)/6)
     decreases stop-j
   {
-    if d.tape[6*j] != 7 || d.tape[6*j+4] != obj || d.tape[6*j+3] != j+1 { return bad; }
-    let v: i64 = j+1; if v >= stop || !valid(d,v) { return bad; }
-    let next: i64 = d.tape[6*v+3];
-    if next <= v || next > stop || d.tape[6*v+4] != obj { return bad; }
-    let s: i64 = d.tape[6*j+1]; let e: i64 = d.tape[6*j+2];
-    if s < 0 || e < s || e > len(d.source) || e > 16777216 { return bad; }
-    let mut p: i64 = s; let mut q: i64 = s;
-    if e-s >= 2 { p=s+1; q=e-1; }
-    let inner: i64 = q-p; let mut plain: bool = true; let mut i: i64 = p;
-    while i < q
-      invariant p <= i && i <= q && q <= e && e <= len(d.source)
-      decreases q-i
-    { let c: i64 = d.source[i]; if c == 92 || c >= 128 { plain=false; i=q; } else { i=i+1; } }
-    if key_is(d.source,s,e,plain,inner,k0) { h0=v; }
-    if key_is(d.source,s,e,plain,inner,k1) { h1=v; }
-    if key_is(d.source,s,e,plain,inner,k2) { h2=v; }
-    if key_is(d.source,s,e,plain,inner,k3) { h3=v; }
-    j=next;
-  }
-  return Hits { a: h0, b: h1, c: h2, e: h3 };
-}
-// Decode the string token src[start..end] (as access::string_units would) onto the end of q, storing a unit only while
-// len(q) < lim (the logical buffer end); returns the pair-safe cut count n = cut(units, cap). Units past lim are counted,
-// not stored, and units past n may be stored: the caller truncates q back to its logical end.
-fn put_units(src: [u8], start: i64, end: i64, inout q: [i64], cap: i64, lim: i64) -> i64 ! alloc
-  requires 0 <= start && start <= end && end <= len(src) && end <= 16777216 && 2 <= cap && cap <= 16000000
-  requires len(q) <= lim && lim <= 100000000
-  ensures 0 <= result && result <= cap
-  ensures len(old(q)) <= len(q) && len(q) <= lim
-  ensures len(old(q)) + result <= len(q) || len(q) == lim
-  ensures forall k in 0..len(old(q)): q[k] == old(q)[k]
-{
-  let at: i64 = len(q);
-  let mut p: i64 = start; let mut stop: i64 = start;
-  if end-start >= 2 { p=start+1; stop=end-1; }
-  let mut k: i64 = 0; let mut last: i64 = -1; let mut spill: i64 = -1;
-  while p < stop && k < cap
-    invariant start <= p && p <= stop && stop <= end && 0 <= k && k <= cap
-    invariant at <= len(q) && len(q) <= lim && len(q) <= at + k && (len(q) == at + k || len(q) == lim)
-    invariant forall x in 0..at: q[x] == old(q)[x]
-    decreases stop-p
-  {
-    let s: crate::jstr::Step = crate::jstr::step(src,p,stop); let v: i64 = s.value; p=s.next;
-    if v <= 65535 {
-      if len(q) < lim { arr_push(inout q,v); } last=v; k=k+1;
-    } else {
-      let hi: i64 = 55296+(v-65536)/1024; let lo: i64 = 56320+(v-65536)%1024;
-      if len(q) < lim { arr_push(inout q,hi); } last=hi; k=k+1;
-      if k < cap { if len(q) < lim { arr_push(inout q,lo); } last=lo; k=k+1; } else { spill=lo; }
-    }
-  }
-  let mut n: i64 = k;
-  if k == cap {
-    // The next unit, if any, decides whether the cut splits a surrogate pair.
-    let mut nx: i64 = spill;
-    if nx < 0 && p < stop {
-      let s2: crate::jstr::Step = crate::jstr::step(src,p,stop); nx=s2.value;
-      if nx > 65535 { nx=55296+(nx-65536)/1024; }
-    }
-    if nx >= 56320 && nx <= 57343 && last >= 55296 && last <= 56319 { n=cap-1; }
-  }
-  return n;
-}
-// put_units when the caller has room for min(token bytes, cap) units below its logical end: the units are pushed onto
-// q (only written words are touched, as hand's push into a reserved Vec), a plain byte (< 128, not a backslash) is
-// pushed directly (jstr::step returns exactly that byte as one unit), and q ends at exactly old len + n. The unit before
-// the cut is read back from q.
-fn put_units_room(src: [u8], start: i64, end: i64, inout q: [i64], cap: i64) -> i64 ! alloc
-  requires 0 <= start && start <= end && end <= len(src) && end <= 16777216 && 2 <= cap && cap <= 16000000
-  requires len(q) <= 100000000
-  ensures 0 <= result && result <= cap && result <= end - start
-  ensures end - start >= 2 ==> result <= end - start - 2
-  ensures len(q) == len(old(q)) + result
-  ensures forall k in 0..len(old(q)): q[k] == old(q)[k]
-{
-  let at: i64 = len(q);
-  let mut p: i64 = start; let mut stop: i64 = start;
-  if end-start >= 2 { p=start+1; stop=end-1; }
-  let p0: i64 = p;
-  let mut k: i64 = 0; let mut spill: i64 = -1;
-  while p < stop && k < cap
-    invariant start <= p0 && p0 <= p && p <= stop && stop <= end && 0 <= k && k <= cap && k <= p - p0
-    invariant end - start >= 2 ==> (p0 == start + 1 && stop == end - 1)
-    invariant end - start < 2 ==> (p0 == start && stop == start)
-    invariant len(q) == at + k && at <= 100000000
-    invariant forall x in 0..at: q[x] == old(q)[x]
-    decreases stop-p
-  {
-    let c: i64 = src[p];
-    if c < 128 && c != 92 { arr_push(inout q,c); k=k+1; p=p+1; }
+    let v: i64 = j+1;
+    if v >= stop { j=stop; }
     else {
-      let s: crate::jstr::Step = crate::jstr::step(src,p,stop); let v: i64 = s.value; p=s.next;
-      if v <= 65535 { arr_push(inout q,v); k=k+1; }
-      else {
-        arr_push(inout q,55296+(v-65536)/1024); k=k+1;
-        let lo: i64 = 56320+(v-65536)%1024;
-        if k < cap { arr_push(inout q,lo); k=k+1; } else { spill=lo; }
-      }
+      let s: i64 = d.tape[6*j+1]; let e: i64 = d.tape[6*j+2];
+      if 0 <= s && s <= e && e <= len(d.source) && e <= 16777216 { if key_eq(d.source,s,e,key) { found=v; } }
+      let next: i64 = d.tape[6*v+3];
+      if next <= j { j=stop; } else { j=next; }
     }
   }
-  let mut n: i64 = k;
-  if k == cap {
-    let last: i64 = q[at+k-1];
-    let mut nx: i64 = spill;
-    if nx < 0 && p < stop {
-      let s2: crate::jstr::Step = crate::jstr::step(src,p,stop); nx=s2.value;
-      if nx > 65535 { nx=55296+(nx-65536)/1024; }
-    }
-    if nx >= 56320 && nx <= 57343 && last >= 55296 && last <= 56319 { n=cap-1; q = truncate(q,at+n); }
-  }
-  return n;
+  return found;
 }
-// One string field pushed onto q: slots (slot, slot+1) get (-1,0) or (offset,n), and q ends at its old end plus the kept
-// units. lim is the logical end of the page buffer (len(p)+reserve, clamped to 100000000): the room test picks the
-// proved put_units_room whenever the field fits below lim, else the checked put_units. The 100000000 guard is the
-// original one.
-fn put_field(src: [u8], s: i64, e: i64, cap: i64, nonempty: bool, inout q: [i64], slot: i64, lim: i64) -> () ! alloc
-  requires 0 <= slot && slot+1 < len(q) && 2 <= cap && cap <= 16000000 && len(q) <= lim && lim <= 100000000
-  ensures len(old(q)) <= len(q) && len(q) <= lim
+// hand `is_unit_ok`.
+fn unit_ok(u: i64) -> bool { return !(u < 32 || (127 <= u && u <= 159) || u == 8232 || u == 8233); }
+// hand `put_field`: slots (slot, slot+1) get (-1, untouched) or (offset, n); decodes in place at the end of out.
+fn put_field(src: [u8], sp: crate::access::Span, cap: i64, nonempty: bool, inout out: [i64], slot: i64) -> () ! alloc
+  requires 0 <= slot && slot+1 < len(out) && 2 <= cap && cap <= 16000000 && len(out) <= 100100000
+  requires sp.status == 0 ==> (0 <= sp.start && sp.start <= sp.end && sp.end <= len(src) && sp.end <= 16777216)
+  ensures len(old(out)) <= len(out) && (len(out) == len(old(out)) || len(out) <= 100000000)
 {
-  q[slot]=-1; q[slot+1]=0;
-  let cursor: i64 = len(q);
-  if 0 <= s && s <= e && e <= len(src) && e <= 16777216 {
-    let mut n: i64 = 0;
-    let mut inner: i64 = e - s; if inner >= 2 { inner = inner - 2; }
-    if cursor + cap <= lim || cursor + inner <= lim { n = put_units_room(src,s,e,inout q,cap); }
-    else { n = put_units(src,s,e,inout q,cap,lim); }
-    if (!nonempty || n > 0) && n <= 100000000-cursor && n <= lim-cursor {
-      q = truncate(q,cursor+n); q[slot]=cursor; q[slot+1]=n; return;
-    }
-    q = truncate(q,cursor);
-  }
-}
-// The name: pushed onto q while it is checked (access::string_units then usable()); the unit count, or -1 when the name
-// is not usable, in which case q is cut back to its old end (hand: decode, then `out.truncate(at)`). Same unit test as
-// usable_span.
-fn put_name(src: [u8], start: i64, end: i64, inout q: [i64]) -> i64 ! alloc
-  requires 0 <= start && start <= end && end <= len(src) && end <= 16777216 && len(q) <= 100000000
-  ensures result == -1 || (1 <= result && result <= 200 && result <= end - start)
-  ensures result >= 0 && end - start >= 2 ==> result <= end - start - 2
-  ensures result == -1 ==> len(q) == len(old(q))
-  ensures result >= 0 ==> len(q) == len(old(q)) + result
-  ensures forall k in 0..len(old(q)): q[k] == old(q)[k]
-{
-  let at: i64 = len(q);
-  let mut p: i64 = start; let mut stop: i64 = start;
-  if end-start >= 2 { p=start+1; stop=end-1; }
-  let p0: i64 = p; let mut n: i64 = 0;
-  while p < stop
-    invariant start <= p0 && p0 <= p && p <= stop && stop <= end && 0 <= n && n <= 200 && n <= p - p0
-    invariant end - start >= 2 ==> (p0 == start + 1 && stop == end - 1)
-    invariant end - start < 2 ==> (p0 == start && stop == start)
-    invariant n < 200 || p == stop
-    invariant len(q) == at + n && at <= 100000000
-    invariant forall x in 0..at: q[x] == old(q)[x]
-    decreases stop-p
-  {
-    let c: i64 = src[p];
-    if c < 128 && c != 92 {
-      if c < 32 || c == 127 { q = truncate(q,at); return -1; }
-      arr_push(inout q,c); n=n+1; p=p+1;
-    } else {
-      let s: crate::jstr::Step = crate::jstr::step(src,p,stop); let v: i64 = s.value; p=s.next;
-      if v <= 65535 {
-        if v < 32 || (127 <= v && v <= 159) || v == 8232 || v == 8233 { q = truncate(q,at); return -1; }
-        arr_push(inout q,v); n=n+1;
-      } else {
-        if n+2 > 200 { q = truncate(q,at); return -1; }
-        arr_push(inout q,55296+(v-65536)/1024); arr_push(inout q,56320+(v-65536)%1024); n=n+2;
-      }
-    }
-    if n >= 200 && p < stop { q = truncate(q,at); return -1; }
-  }
-  if n < 1 { return -1; }
-  return n;
+  out[slot] = -1;
+  if sp.status != 0 { return; }
+  let at: i64 = len(out);
+  decode(src,sp.start,sp.end,inout out,cap+1);
+  let m: i64 = len(out)-at;
+  let mut n: i64 = m; if n > cap { n=cap; }
+  if n > 0 && n < m && 55296 <= out[at+n-1] && out[at+n-1] <= 56319 && 56320 <= out[at+n] && out[at+n] <= 57343 { n=n-1; }
+  if (!nonempty || m > 0) && at <= 100000000-n { out = truncate(out,at+n); out[slot]=at; out[slot+1]=n; }
+  else { out = truncate(out,at); }
 }
 // p cut to its first m words (perf harness only; page leaves p at its logical end). `p = truncate(p, m)` on a local
 // or a resizable inout is in place (R-6g4-3).
@@ -293,90 +154,94 @@ pub fn shorten(take p0: [i64], m: i64) -> [i64] ! alloc
   ensures len(result) == m
 { let mut p: [i64] = move p0; p = truncate(p,m); return p; }
 pub struct Counts { count: i64, objects: i64, end: i64 }
-// One tools/list page: every element counts as an object while objects < 500; an object whose name is usable is admitted
-// while count < 500 and gets the 10 slots at 10+10*count:
-//   0,1 name  2,3 title (nonempty)  4,5 description (cut at desc_cap)  as (offset, units) or (-1, 0)
-//   6 readOnlyHint==true (0/1)  7 destructiveHint (-1 absent/other, 0, 1)  8,9 raw JSON (offset, bytes) or (0, 0)
-// Shape of perf/hand_packet.rs core_hand: reserve exactly an upper bound of the page's payload once (arr_reserve,
-// hand's with_capacity), then push every unit and append each raw JSON span in one arr_append (only written words are touched; nothing is zero-filled).
-// `want` is the logical end the original resize grew to; every write test against it is unchanged, so the output is
-// the same. Returns the new count and objects, and `end` == len(p). Nothing is allocated when there is no element.
+// One tools/list page (hand `core_hand` after its two root field lookups, which root.pruv does): every element counts
+// as an object while objects < 500; an object whose name is usable is admitted while count < 500 and gets the 10 slots
+// at 10+10*count:
+//   0,1 name  2,3 title (nonempty)  4,5 description (cut at desc_cap)  as (offset, units), offset -1 when absent
+//   6 readOnlyHint==true (1, else untouched)  7 destructiveHint (-1 absent/other, 0, 1)  8,9 raw JSON (offset, bytes)
+// The packet reserves twice the array's bytes once (hand `with_capacity`), every unit is pushed, every raw JSON span is
+// appended in one widening extend (R-6g4-6). Like hand, the name has no 100000000-word guard, so the packet may pass
+// that bound by at most 200 words per admitted tool. Returns the new count and objects, and `end` == len(p).
 pub fn page(inout p: [i64], d: crate::json::JsonDocument, tools: i64, count: i64, objects: i64) -> Counts ! alloc
-  requires 5010 <= len(p) && len(p) <= 100000000 && 0 <= count && count <= 500 && 0 <= objects && objects <= 500
-  ensures 5010 <= len(p) && len(p) <= 100000000
+  requires 5010 <= len(p) && 0 <= count && count <= 500 && 0 <= objects && objects <= 500
+  requires len(p) <= 100000000 + 200*count
+  ensures 5010 <= len(p) && len(p) <= 100000000 + 200*result.count
   ensures count <= result.count && result.count <= 500 && 0 <= result.objects && result.objects <= 500
   ensures 5010 <= result.end && result.end == len(p)
 {
-  if objects >= 500 || !valid(d,tools) || d.tape[6*tools] != 5 { return Counts { count: count, objects: objects, end: len(p) }; }
+  if tools < 0 || tools >= len(d.tape)/6 || d.tape[6*tools] != 5 { return Counts { count: count, objects: objects, end: len(p) }; }
   let stop: i64 = d.tape[6*tools+3];
-  if stop <= tools+1 || stop > len(d.tape)/6 { return Counts { count: count, objects: objects, end: len(p) }; }
-  let total: i64 = d.tape[6*tools+5];
-  if total <= 0 { return Counts { count: count, objects: objects, end: len(p) }; }
-  // Every unit comes from a token byte and every raw word from one byte, so twice the array's bytes bound the payload.
-  let lp: i64 = len(p);
-  let mut room: i64 = 0;
+  if stop <= tools || stop > len(d.tape)/6 { return Counts { count: count, objects: objects, end: len(p) }; }
+  let mut reserve: i64 = 0;
   let a: crate::access::Span = crate::access::raw_span(d,tools);
-  if a.status == 0 { room = 2*(a.end-a.start); }
-  let mut want: i64 = lp+room; if want > 100000000 { want=100000000; }
-  arr_reserve(inout p,want-lp);
-  let mut j: i64 = tools+1; let mut t: i64 = 0;
+  if a.status == 0 { reserve = 2*(a.end-a.start); }
+  // hand: `Vec::with_capacity(p0.len() + reserve)` then `extend_from_slice(p0)` (a fresh buffer, not a regrown one).
+  let mut out: [i64] = alloc(0,0);
+  arr_reserve(inout out,len(p)+reserve);
+  arr_append(inout out,p,0,len(p));
+  p = move out;
+  let lp: i64 = len(p);
+  let mut j: i64 = tools+1; let mut seen: i64 = 0;
   let mut obj: i64 = objects; let mut cnt: i64 = count;
-  while j < stop && t < total && t < 1048576 && obj < 500
-    invariant 0 <= tools && tools < j && j <= stop && stop <= len(d.tape)/6 && len(d.tape) <= 6291456
-    invariant 0 <= t && t <= 1048576 && objects <= obj && obj <= 500 && count <= cnt && cnt <= 500
-    invariant lp <= len(p) && len(p) <= want && want <= 100000000 && 5010 <= lp
-    decreases stop-j
+  while 0 <= j && j < stop && seen < 1048576 && obj < 500
+    invariant stop <= len(d.tape)/6
+    invariant 0 <= seen && seen <= 1048576 && objects <= obj && obj <= 500 && count <= cnt && cnt <= 500
+    invariant 5010 <= lp && lp <= len(p) && len(p) <= 100000000 + 200*cnt
+    decreases 1048576-seen
   {
-    let next: i64 = d.tape[6*j+3]; let cur: i64 = j; t=t+1;
-    if next <= j || next > stop || d.tape[6*j+4] != tools || !valid(d,j) { j=stop; }
-    else {
-      j=next;
-      if d.tape[6*cur] == 6 {
-        obj=obj+1;
-        let h: Hits = fields4(d,cur,"name","title","description","annotations");
-        let ns: crate::access::Span = str_span(d,h.a);
-        if ns.status == 0 && cnt < 500 {
-          let base: i64 = 10+10*cnt;
-          let mut inner: i64 = ns.end-ns.start; if inner >= 2 { inner=inner-2; }
-          let at: i64 = len(p);
-          let mut n: i64 = -1; let mut fits: bool = false;
-          if at + 201 <= want || at + inner <= want {
-            fits=true; n=put_name(d.source,ns.start,ns.end,inout p);
-          } else if usable_span(d.source,ns.start,ns.end) { n=0; }
-          if n >= 0 {
-            p[base]=-1; p[base+1]=0;
-            if fits { p[base]=at; p[base+1]=n; }
-            assert lp <= len(p) && len(p) <= want && base+9 < len(p);
-            let ts: crate::access::Span = str_span(d,h.b);
-            let mut s2: i64 = -1; let mut e2: i64 = -1; if ts.status == 0 { s2=ts.start; e2=ts.end; }
-            put_field(d.source,s2,e2,16000000,true,inout p,base+2,want);
-            let ds: crate::access::Span = str_span(d,h.c);
-            let mut s3: i64 = -1; let mut e3: i64 = -1; if ds.status == 0 { s3=ds.start; e3=ds.end; }
-            put_field(d.source,s3,e3,desc_cap(),false,inout p,base+4,want);
-            // The two empty keys are unused slots (an empty member key may match them; the hits are ignored).
-            let ah: Hits = fields4(d,h.e,"readOnlyHint","destructiveHint","","");
-            p[base+6]=0; if crate::access::boolean(d,ah.a) == 1 { p[base+6]=1; }
-            p[base+7]=-1; let dv: i64 = crate::access::boolean(d,ah.b);
-            if dv == 0 || dv == 1 { p[base+7]=dv; }
-            p[base+8]=0; p[base+9]=0;
-            let rs: crate::access::Span = crate::access::raw_span(d,cur);
-            if rs.status == 0 {
-              let rl: i64 = rs.end-rs.start; let cursor: i64 = len(p);
-              if rl <= 16000000 && rl <= want-cursor {
-                arr_append(inout p,d.source,rs.start,rl);
-                p[base+8]=cursor; p[base+9]=rl;
-              }
-            }
-            cnt=cnt+1;
+    let cur: i64 = j; j = d.tape[6*j+3]; seen=seen+1;
+    if d.tape[6*cur] == 6 {
+      obj=obj+1;
+      if cnt < 500 {
+        let at: i64 = len(p); let mut ok: bool = false; let mut m: i64 = 0;
+        let ns: crate::access::Span = str_span(d,field(d,cur,"name"));
+        if ns.status == 0 {
+          decode(d.source,ns.start,ns.end,inout p,201);
+          m = len(p)-at;
+          ok = 1 <= m && m <= 200;
+          if ok {
+            let mut i: i64 = at;
+            while i < len(p)
+              invariant at <= i && i <= len(p) && len(p) == at+m && 1 <= m && m <= 200
+              decreases len(p)-i
+            { if !unit_ok(p[i]) { ok=false; i=len(p); } else { i=i+1; } }
           }
         }
+        if ok {
+          let base: i64 = 10+10*cnt;
+          assert len(p) == at+m;
+          assert 1 <= m && m <= 200;
+          assert base+9 < len(p);
+          assert len(p) <= 100000000 + 200*(cnt+1);
+          p[base]=at; p[base+1]=m;
+          put_field(d.source,str_span(d,field(d,cur,"title")),16000000,true,inout p,base+2);
+          assert base+9 < len(p) && len(p) <= 100000000 + 200*(cnt+1);
+          put_field(d.source,str_span(d,field(d,cur,"description")),desc_cap(),false,inout p,base+4);
+          assert base+9 < len(p) && len(p) <= 100000000 + 200*(cnt+1);
+          let an: i64 = field(d,cur,"annotations");
+          if an >= 0 { let h: i64 = field(d,an,"readOnlyHint"); if h >= 0 && d.tape[6*h] == 2 { p[base+6]=1; } }
+          p[base+7]=-1;
+          if an >= 0 {
+            let h: i64 = field(d,an,"destructiveHint");
+            if h >= 0 { if d.tape[6*h] == 1 { p[base+7]=0; } else if d.tape[6*h] == 2 { p[base+7]=1; } }
+          }
+          // raw JSON of the tool object, widened one byte per word; an invalid span reads as empty.
+          let rs: crate::access::Span = crate::access::raw_span(d,cur);
+          let mut rstart: i64 = 0; let mut rl: i64 = 0;
+          if rs.status == 0 { rstart=rs.start; rl=rs.end-rs.start; }
+          if rl <= 16000000 && len(p) <= 100000000-rl {
+            p[base+8]=len(p); p[base+9]=rl;
+            arr_append(inout p,d.source,rstart,rl);
+          }
+          cnt=cnt+1;
+        } else { p = truncate(p,at); }
       }
     }
   }
   return Counts { count: cnt, objects: obj, end: len(p) };
 }
-// The error message (access::string_units of id) pushed onto the end of p after one exact reserve; p[6], p[7] =
-// (offset, units). Nothing changes when id is not a string with a valid span.
+// The error message decoded onto the end of p after one exact reserve; p[6], p[7] = (offset, units). Nothing changes
+// when id is not a string with a valid span.
 pub fn put_message(inout p: [i64], d: crate::json::JsonDocument, id: i64) -> () ! alloc
   requires 5010 <= len(p) && len(p) <= 80000000
   ensures 5010 <= len(p) && len(p) <= 100000000
@@ -385,13 +250,7 @@ pub fn put_message(inout p: [i64], d: crate::json::JsonDocument, id: i64) -> () 
   if sp.status != 0 { return; }
   let lp: i64 = len(p);
   let mut inner: i64 = sp.end-sp.start; if inner >= 2 { inner=inner-2; }
-  if inner <= 16000000 {
-    // units <= inner bytes <= cap, so the pair-safe cut never fires and n is the whole string.
-    arr_reserve(inout p,inner);
-    let n: i64 = put_units_room(d.source,sp.start,sp.end,inout p,16000000);
-    p[6]=lp; p[7]=n;
-  } else {
-    let u: crate::access::Units = crate::access::string_units(d,id);
-    if u.status == 0 && len(u.units) <= 20000000 { p[6]=lp; p[7]=len(u.units); append(inout p,u.units); }
-  }
+  arr_reserve(inout p,inner);
+  decode(d.source,sp.start,sp.end,inout p,16777216);
+  p[6]=lp; p[7]=len(p)-lp;
 }

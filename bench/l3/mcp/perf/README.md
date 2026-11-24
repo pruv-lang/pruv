@@ -11,6 +11,12 @@ first, allocates once, and writes each accepted tool once via `inout`.
 
 ## Design
 
+Driver (LB5b): the new and hand rows both own their input packet (a copy of the start packet made outside the timed call) and free it inside the call; the one-call RSS probe hands both a fresh start packet. Before, hand borrowed the start packet on page 0 while the new row freed its input, and the probe kept a dead start copy alive for the new row.
+
+Historical (P05M). The current `packet.pruv` follows `hand_packet.rs` helper by helper (`decode`, `key_eq`,
+`field`, `put_field`, `page`); see RESHAPE.md "LB5b". The names below (`plan`, `write`, `fields4`, `usable_span`,
+`put_units_room`) no longer exist.
+
 | piece | where | what it does |
 |---|---|---|
 | `plan` | packet.pruv | One pure pass over the tools array. It applies the same caps and order as the old loop: 1048576 elements, objects < 500, count < 500, name usability. Output is `[admitted, reserve, count_after, objects_after]` plus 10 slots per accepted tool: name, title and description spans, the readOnly/destructive values and the raw span. `reserve` is an upper bound of the payload words: the units for each string (capped) plus the raw bytes. |
@@ -308,10 +314,10 @@ q_mutants anchors moved with the code:
 
 | mutant | new anchor |
 |---|---|
-| drop-title | `"title"` → `"absentTitle"` (one occurrence, in the `fields4` call) |
+| drop-title | `"title"` → `"absentTitle"` (first occurrence: the `field(d,cur,"title")` call; before LB5b it was in the `fields4` call) |
 | description-cap | `{ return 65536; }` in `desc_cap` |
-| readonly | `q[base+6]=1;` |
-| destructive | `q[base+7]=dv;` |
+| readonly | `p[base+6]=1;` |
+| destructive | `== 2 { p[base+7]=1; }` → `p[base+7]=0` (LB5b) |
 
 ## How to run
 

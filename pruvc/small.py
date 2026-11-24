@@ -195,7 +195,7 @@ def _cyclic(calls):
     return out
 
 
-def plan_small(prog, fmap, layout, stack):
+def plan_small(prog, fmap, layout, stack, resizes=None):
     """({function name: (K, o, elem)}, {id(Let node): (callee, K, elem)}); layout(node) is the storage layout of a
     declaration or function result, stack the P3-S1 plan (or None); elem is the buffer element ("i64" or "u8")"""
     calls = {}
@@ -246,6 +246,11 @@ def plan_small(prog, fmap, layout, stack):
         if not _stmts_ok(f.body[idx[0] + 1:-1], o, True, fmap):
             continue
         fns[f.name] = (k, o, elem)
+
+    # The resizable-slot filter runs before the site walk so ineligible candidates take no budget.
+    if resizes:
+        from check import array_resize_args
+        fns = {n: plan for n, plan in fns.items() if plan[1] not in array_resize_args(fmap[n], resizes)}
 
     sites = {}
     for f in prog.functions:

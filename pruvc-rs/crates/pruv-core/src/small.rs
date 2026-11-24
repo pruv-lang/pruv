@@ -412,6 +412,11 @@ pub fn plan_small(
         plan.fns.insert(f.name.clone(), (k, o, elem));
     }
 
+    // The resizable-slot filter runs before the site walk so ineligible candidates take no budget.
+    // The slice-backed result cannot be passed to a helper that needs a Vec slot.
+    plan.fns.retain(|name, (_, buffer, _)| {
+        !crate::check::resize_slot_names(fmap[name], resizes).contains(buffer)
+    });
     if plan.fns.is_empty() {
         return plan;
     }
@@ -423,11 +428,6 @@ pub fn plan_small(
         let mut w = Sites { fns: &plan.fns, fmap, storage, used: 0, full: false, sites: &mut sites };
         w.walk(&f.body);
     }
-    // The slice-backed result cannot be passed to a helper that needs a Vec slot.
-    plan.fns.retain(|name, (_, buffer, _)| {
-        !crate::check::resize_slot_names(fmap[name], resizes).contains(buffer)
-    });
-    sites.retain(|_, (name, _, _)| plan.fns.contains_key(name));
     plan.sites = sites;
     plan
 }

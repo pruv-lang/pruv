@@ -1341,6 +1341,49 @@ def emit_public_types(prog, order=None):
     return "\n".join(out) + ("\n" if out else "")
 
 
+def _exit_bound(cond):
+    """the leftmost conjunct of a `while` condition when it reads `i < X` (X a literal or another local): (i, X)"""
+    c = cond
+    while isinstance(c, Binary) and c.op == "&&":
+        c = c.left
+    if not (isinstance(c, Binary) and c.op == "<" and isinstance(c.left, Var)):
+        return None
+    x = c.right
+    if isinstance(x, IntLit) or (isinstance(x, Var) and x.name != c.left.name):
+        return c.left.name, x
+    return None
+
+
+def _same_bound(a, b):
+    if isinstance(a, IntLit) and isinstance(b, IntLit):
+        return a.value == b.value
+    return isinstance(a, Var) and isinstance(b, Var) and a.name == b.name
+
+
+def loop_exits(w):
+    """Assignments `i = X` in tail position of a `while i < X && ...` body: nothing runs between them and the next
+    condition test, whose leftmost conjunct is then false, so the emitted Rust leaves the loop with `break;` right
+    away. Hand Rust writes this early exit as `break` (or `iter().all`); the dead re-test kept LLVM from treating the
+    branch as a loop exit (LB5b: the key_eq plain scan ran 1.5x slower than the hand's)."""
+    out = set()
+    b = _exit_bound(w.cond)
+    if b is None:
+        return out
+    i, bound = b
+
+    def tail(stmts):
+        if not stmts:
+            return
+        st = stmts[-1]
+        if isinstance(st, Assign) and st.name == i and not st.deref and _same_bound(st.value, bound):
+            out.add(id(st))
+        elif isinstance(st, If):
+            tail(st.then)
+            tail(st.els)
+    tail(w.body)
+    return out
+
+
 def utf8_checked(st):
     """LG35 (G-DB56-3): the `str_from_utf8(x)` call that is the whole value of the first statement of the `if` st when
     st's condition is an `&&` chain with a conjunct `utf8_valid(x)` and no `inout` argument. The condition has just
@@ -1593,6 +1636,7 @@ class Gen:
         s.budget = budget
         s.prog = prog
         s.verified = verified
+        s.exits = set()    # loop_exits: ids of tail `i = X` assignments followed by `break;`
         s.utf8_ok = None   # LG35: the str_from_utf8 call whose bytes the enclosing `if` checked (utf8_checked)
         s.trust = trust_callers
         s.out = []
@@ -1714,11 +1758,7 @@ class Gen:
         s.small_elem = "i64"   # buffer element of the __pruv_small variant being emitted
         if verified and not trust_callers and not s.cost_used:
             from small import plan_small
-            s.small, s.small_sites = plan_small(prog, s.fmap, s.layout, s.stack)
-            if s.array_resizes:
-                s.small = {n: plan for n, plan in s.small.items()
-                           if plan[1] not in array_resize_args(s.fmap[n], s.array_resizes)}
-                s.small_sites = {site: plan for site, plan in s.small_sites.items() if plan[0] in s.small}
+            s.small, s.small_sites = plan_small(prog, s.fmap, s.layout, s.stack, s.array_resizes)
         s.fp = {}    # P18d: {function name: (K, o)} of the by-value fixed-prefix twins (--proven-entries, see plan_fp)
 
     def plan_fp(s):
@@ -2934,6 +2974,8 @@ class Gen:
             frame[1] = later[i + 1]
             frame[3] = i + 1 < len(stmts) and isinstance(stmts[i + 1], Return)
             s.stmt(st, ind)
+            if id(st) in s.exits:
+                s.emit(ind, "break;")
             if isinstance(st, Let):
                 frame[0].add(st.name)
         s.frames.pop()
@@ -3166,7 +3208,12 @@ class Gen:
             s.emit(ind, "while %s {" % s.e(st.cond))
             if s.cost:
                 s.emit(ind + 1, s.cost_add("1"))
-            s.block(st.body, ind + 1, loop=True)
+            exits = set() if s.cost else loop_exits(st)
+            s.exits |= exits
+            try:
+                s.block(st.body, ind + 1, loop=True)
+            finally:
+                s.exits -= exits
             s.emit(ind, "}")
         elif isinstance(st, ForMap):
             key_ty, val_ty = st.place.ty.args
