@@ -98,7 +98,7 @@ MUTANTS = [
  ('access','first_wins',4,'First duplicate wins','if crate::jstr::units_equal(doc.source, s, e, key, klen) { found = v; }','if crate::jstr::units_equal(doc.source, s, e, key, klen) && found == -1 { found = v; }'),
  ('access','safe_integer',4,'2^53 boundary off by one','if v > (9007199254740991 - d) / 10','if v > (9007199254740992 - d) / 10'),
  ('access','negative_zero',4,'Wrong negative-zero flag','let nz: bool = neg &&','let nz: bool = !neg &&'),
- ('access','array_index',4,'Wrong array index comparison','if n == index { return j; }','if n + 1 == index { return j; }'),
+ ('access','array_index',4,'Wrong array index comparison','while n < index','while n + 1 < index'),
  ('lines','cr_included',5,'Keep CR in physical line','end = i - 1;','end = i;'),
  ('lines','lf_included',5,'Keep LF in physical line','JsonlStep::Line(offset, end, i + 1)','JsonlStep::Line(offset, i + 1, i + 1)'),
  ('lines','next_not_advanced',5,'Do not advance next past LF','JsonlStep::Line(offset, end, i + 1)','JsonlStep::Line(offset, end, i)'),
