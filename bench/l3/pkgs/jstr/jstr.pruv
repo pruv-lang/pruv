@@ -207,7 +207,8 @@ pub fn string_utf8(source: [u8], start: i64, end: i64) -> [u8] ! alloc
   return decode_utf8(source, start, end, false);
 }
 
-// Count the output bytes, reserve capacity once, then push each decoded scalar as UTF-8 (hand: decode_utf16 sum, then encode_utf8 per char).
+// Count the output bytes, reserve capacity once, then copy each escape-free run in one `arr_append` and push each
+// decoded escape scalar as UTF-8 (hand mode 6: the same segments, `extend_from_slice` per run, `encode_utf8` per escape char).
 fn decode_utf8(source: [u8], start: i64, end: i64, scanned: bool) -> [u8] ! alloc
   requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
   ensures len(result) <= 3 * (end - start)
@@ -225,8 +226,13 @@ fn decode_utf8(source: [u8], start: i64, end: i64, scanned: bool) -> [u8] ! allo
   {
     let c: i64 = source[p];
     if c != 92 && (scanned || c < 128) {
-      need = need + 1;
-      p = p + 1;
+      let run: i64 = p;
+      while p < stop && source[p] != 92 && (scanned || source[p] < 128)
+        invariant run < p || p == run
+        invariant start <= first && first <= run && run <= p && p <= stop && stop <= end
+        decreases stop - p
+      { p = p + 1; }
+      need = need + (p - run);
     } else {
       let s: Scalar = scalar(source, p, stop);
       need = need + width(s.value);
@@ -244,8 +250,13 @@ fn decode_utf8(source: [u8], start: i64, end: i64, scanned: bool) -> [u8] ! allo
   {
     let c: i64 = source[p];
     if c != 92 && (scanned || c < 128) {
-      arr_push(inout out, c);
-      p = p + 1;
+      // An escape-free run is copied as it is (hand: `extend_from_slice` of the run).
+      let run: i64 = p;
+      while p < stop && source[p] != 92 && (scanned || source[p] < 128)
+        invariant start <= run && run <= p && p <= stop && stop <= end
+        decreases stop - p
+      { p = p + 1; }
+      arr_append(inout out, source, run, p - run);
     } else {
       let s: Scalar = scalar(source, p, stop);
       let v: i64 = s.value;
