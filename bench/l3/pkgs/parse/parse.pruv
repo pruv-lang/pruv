@@ -550,14 +550,19 @@ pub fn parse(input: [u8]) -> crate::json::JsonParse ! alloc
   let n: i64 = len(input);
   if n > 16777216 { return failure(0, 1); }
   // D33: string tokens validate UTF-8 as they scan and every other accepted byte is ASCII,
-  // so a parsed document is valid UTF-8. Only a failed scan rereads the input, which keeps
+  // so a parsed document is valid UTF-8 and the bytes before a failure position are valid.
+  // As in the hand parser, a grammar failure rereads only the rest of the input, which keeps
   // invalid UTF-8 (kind 4, at its first byte) ahead of any grammar error.
   let wrapped: crate::json::JsonParse = scan_document(input);
   if publication_ok(wrapped, n) { return wrapped; }
-  let invalid: i64 = crate::lex::validate_utf8(input, 0, n);
-  if invalid >= 0 { return failure(invalid, 4); }
   match wrapped {
-    crate::json::JsonParse::Failed(error) => { return failure(error.position, error.kind); }
+    crate::json::JsonParse::Failed(error) => {
+      if error.kind != 4 {
+        let invalid: i64 = crate::lex::validate_utf8(input, error.position, n);
+        if invalid >= 0 { return failure(invalid, 4); }
+      }
+      return failure(error.position, error.kind);
+    }
     crate::json::JsonParse::Parsed(document) => { return failure(0, 18); }
   }
 }

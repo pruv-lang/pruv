@@ -93,11 +93,7 @@ pub fn receive_grow(take l: Loop, slot: i64, overall: i64, init: i64, ready: boo
  q=ev_proc_read(move q,slot,1,65536);
  if ev_ok(q) { let data: [u8] = ev_bytes(q);
  if len(data) <= 65536 {
- let mut k: i64 = 0;
- while k < len(data)
- invariant 0 <= k && k <= len(data) && len(data) <= 65536 && len(chunk) == 65536
- decreases len(data)-k
- { chunk[k]=data[k]; k=k+1; }
+ copy_range(inout chunk, 0, data, 0, len(data));
  st[4]=len(data); st[2]=0;
  } }
  }

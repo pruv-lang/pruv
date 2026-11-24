@@ -259,12 +259,7 @@ pub fn string_utf8(source: [u8], start: i64, end: i64) -> [u8] ! alloc
   // Only plain ASCII bytes: the UTF-8 text is the raw span.
   let mut out: [u8] = alloc(need, 0);
   if plain && need == stop - first {
-    let mut i: i64 = 0;
-    while i < need
-      invariant 0 <= i && i <= need && need == stop - first && len(out) == need && 0 <= first && stop <= len(source)
-      invariant forall j in 0..i: (0 <= out[j] && out[j] <= 255)
-      decreases need - i
-    { out[i] = source[first + i]; i = i + 1; }
+    copy_range(inout out, 0, source, first, need);
     return out;
   }
   p = first;
