@@ -6266,6 +6266,10 @@ impl Checker {
                     if n == "copy" && alen == 1 && !c && !self.in_view && !self.funcs.contains_key(&n) {
                         continue;
                     }
+                    // LB7 (R-6g6-3): string_push_str(move s, subview(t, lo, hi)), string_from(subview(t, lo, hi))
+                    if is_text_view_op(&n) && std::ptr::eq(arg, e.args.last().unwrap()) && !c && !self.in_view && !self.funcs.contains_key(&n) {
+                        continue;
+                    }
                     return Err(Self::view_context(x));
                 }
             }
@@ -6641,6 +6645,8 @@ impl Checker {
                     let want = substitute(p, &m);
                     if cat.is_some() && n == "map_get" && want.to_key() == "string" {
                         self.check_text_key(arg, scope, c, None)?;
+                    } else if cat.is_some() && is_text_view_op(&n) && want == strt() && matches!(arg, Expr::Call(x) if x.name == "subview") {
+                        self.expect_user_arg(arg, &want, scope, c, true)?; // LB7 (R-6g6-3): a borrowed str range, no copy
                     } else if cat.is_none() {
                         self.expect_call_arg(arg, &want, scope, c, !f.foreign && !self.takes[&n][i])?;
                     } else {
@@ -7561,4 +7567,9 @@ fn cost_calls(stmts: &[Stmt], out: &mut Vec<Call>) {
             Stmt::Assert(_) => {},
         }
     }
+}
+
+/// LB7 (R-6g6-3): catalog text operations whose text argument may be a str subview.
+fn is_text_view_op(n: &str) -> bool {
+    matches!(n, "string_push_str" | "string_from")
 }

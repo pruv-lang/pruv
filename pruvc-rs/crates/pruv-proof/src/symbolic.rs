@@ -908,6 +908,8 @@ pub struct FnVerifier<'a> {
     pub(crate) lemma_fn_keys: HashSet<(String, String)>,
     /// The `L.sexpr()` item of `lemma_keys`
     pub(crate) lemma_text_keys: HashSet<String>,
+    /// LB7 (R-6g6-2): array lambda -> its named stand-in in aggregate triggers (verify.py `lam_names`)
+    pub(crate) lam_names: HashMap<String, Ast>,
     /// `s.params`
     pub params: Env,
     /// `s.errors`(collected by verify_program in function order).
@@ -1343,6 +1345,7 @@ impl<'a> FnVerifier<'a> {
             split_lemmas: Vec::new(),
             lemma_fn_keys: HashSet::new(),
             lemma_text_keys: HashSet::new(),
+            lam_names: HashMap::new(),
             params: Env::default(),
             errors: Vec::new(),
             funcs: HashMap::new(),
@@ -2355,6 +2358,52 @@ impl<'a> FnVerifier<'a> {
 
     /// Translates sum/count/max/min over lo<=k<hi into an uninterpreted function `F(lo, hi, *outer)` and unrolling lemmas.
     /// At call time, this aggregate's own variable `k` must already be gone from `qstack` (after `quant_exit`).
+    /// LB7 (R-6g6-2): z3 rejects a pattern that contains a lambda, so each maximal lambda subterm of an
+    /// aggregate bound is replaced by a fresh symbol defined equal to it (verify.py `name_lambdas`).
+    /// A lambda over enclosing quantifier variables becomes a function of them.
+    fn name_lambdas(&mut self, t: &Ast) -> Ast {
+        let mut lams: Vec<Ast> = Vec::new();
+        let mut seen: HashSet<u32> = HashSet::new();
+        let mut todo = vec![t.clone()];
+        while let Some(n) = todo.pop() {
+            if !seen.insert(n.id()) {
+                continue;
+            }
+            if n.is_quantifier() {
+                // A lambda is the quantifier whose sort is not Bool.
+                if !n.sort().is_bool() {
+                    lams.push(n);
+                }
+                continue;
+            }
+            todo.extend(n.children());
+        }
+        if lams.is_empty() {
+            return t.clone();
+        }
+        let mut to = Vec::with_capacity(lams.len());
+        for lam in &lams {
+            let key = lam.sexpr();
+            if !self.lam_names.contains_key(&key) {
+                let free: Vec<Ast> = self.qstack.iter().filter(|c| lam.occurs(c)).cloned().collect();
+                let name = format!("!lam!{}", self.lam_names.len()); // leading "!": no user name or fresh() symbol can match
+                let app = if free.is_empty() {
+                    let c = self.z.constant(&name, &lam.sort());
+                    self.lemmas.push(c.eq(lam));
+                    c
+                } else {
+                    let dom: Vec<Sort> = free.iter().map(|c| c.sort()).collect();
+                    let app = FuncDecl::new(&self.z, &name, &dom, &lam.sort()).apply(&free);
+                    self.lemmas.push(self.z.forall(&free, &app.eq(lam), std::slice::from_ref(&app)));
+                    app
+                };
+                self.lam_names.insert(key.clone(), app);
+            }
+            to.push(self.lam_names[&key].clone());
+        }
+        t.substitute(&lams, &to)
+    }
+
     pub fn aggregate(&mut self, kind: &str, k: &Ast, lo: &Ast, hi: &Ast, t: &Ast) -> Ast {
         let z = self.z.clone();
         let outer: Vec<Ast> = self.qstack.iter().filter(|c| t.occurs(c)).cloned().collect();
@@ -2456,6 +2505,8 @@ impl<'a> FnVerifier<'a> {
             }
         }
 
+        let (lo_n, hi_n) = (self.name_lambdas(lo), self.name_lambdas(hi));
+        let (lo, hi) = (&lo_n, &hi_n);
         let app = fa(lo, hi);
         let mut facts: Vec<Ast> = Vec::new();
         if kind == "count" {

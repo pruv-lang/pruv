@@ -1,0 +1,9 @@
+// spec: R-6g6-2 reject
+fn f(tape: [i64], m: i64) -> [i64] ! alloc
+  requires 0 <= m && m <= len(tape) + 1
+{
+  let mut q: [i64] = alloc(0, 0);
+  arr_reserve(inout q, m);
+  arr_append(inout q, tape, 0, m);
+  return q;
+}

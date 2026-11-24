@@ -1,0 +1,26 @@
+// spec: R-6g6-2 reject
+fn marks(a: [i64]) -> bool
+  ensures result ==> (forall t in 0..len(a): (0 <= a[t] && a[t] <= len(a)))
+  ensures result ==> (forall t in 0..len(a): count(k in 0..a[t]: a[k] == t) <= a[t])
+{
+  let mut i: i64 = 0;
+  while i < len(a)
+    invariant 0 <= i && i <= len(a)
+    invariant forall t in 0..i: (0 <= a[t] && a[t] <= len(a))
+    decreases len(a) - i
+  {
+    if a[i] < 0 || a[i] > len(a) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+fn head(tape: [i64], m: i64) -> i64 ! alloc
+  requires 0 <= m && m <= len(tape)
+  ensures result == -1 || result == 1
+{
+  let p: [i64] = copy(subview(tape, 0, m));
+  if !marks(p) { return -1; }
+  if len(p) == 0 { return 1; }
+  assert count(k in 0..p[0]: p[k] == 0) <= p[0] - 1;
+  return 1;
+}

@@ -41,6 +41,7 @@ ARR_PUSH_MAX = 16   # LB6 SX (R-6g5-5): the most values one arr_push appends
 
 BUILTIN_FNS = ARRAY_GROW_BUILTINS + ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "utf8_valid_span", "str_from_utf8", "truncate", "eq_range", "find_byte", "resize", "copy_range", "copy_within", "subview") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range; L-copy-range
 RESERVED_TYPE_NAMES = ("Option", "Result", "Some", "None", "Ok", "Err")
+TEXT_VIEW_OPS = ("string_push_str", "string_from")   # LB7 (R-6g6-3): text argument may be a str subview
 TYPE_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9_]*\Z")
 FIELD_NAME_RE = re.compile(r"[a-z][A-Za-z0-9_]*\Z")
 
@@ -3959,6 +3960,8 @@ class Checker:
             if isinstance(arg, Call) and arg.name == "subview":
                 if n == "copy" and n not in s.funcs and len(a) == 1 and not c and arg is a[0] and not s.in_view:
                     continue   # LG8: copy(subview(a, lo, hi))
+                if n in TEXT_VIEW_OPS and n not in s.funcs and arg is a[-1] and not c and not s.in_view:
+                    continue   # LB7 (R-6g6-3): string_push_str(move s, subview(t, lo, hi))
                 s.view_context(arg)
         is_old = n == "old" and s.uses_inout and n not in s.funcs   # G5 A0: contextual builtin
         if e.targs is not None and n not in s.funcs and (n in BUILTIN_FNS or n in CONTRACT_ONLY or is_old):
@@ -4141,6 +4144,8 @@ class Checker:
                 want = substitute(p.type, m)
                 if catalog and n in BORROWED_MAP_KEY and want == STRING:
                     s.check_text_key(arg, scope, c)
+                elif catalog and n in TEXT_VIEW_OPS and want == STR and isinstance(arg, Call) and arg.name == "subview":
+                    s.user_arg(arg, want, scope, c, True)   # LB7 (R-6g6-3): a borrowed str range, no copy
                 else:
                     if catalog:
                         s.expect(arg, want, scope, c)

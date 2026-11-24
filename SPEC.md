@@ -1644,6 +1644,29 @@ borrowed value is live.
   [value type](tests/spec/r6g5_5_push_type.pruv), [alias](tests/spec/r6g5_5_push_alias.pruv),
   [order](tests/spec/r6g5_5_push_order.pruv).
 
+## 6g6. Array prefixes and text ranges (LB7)
+
+- R-6g6-2 **Prefix copies in aggregate contracts.** An array built from another array's range, by
+  `copy(subview(a, lo, hi))`, `arr_append(inout b, a, s, n)` or `copy_range`, may be passed to a callee
+  whose contract has a `sum`/`count`/`max`/`min` whose bounds read that array (for example
+  `count(k in 0..b[t]: ..)` under `forall t`). Such a program verifies as for a plain array argument; the
+  verifier never fails with an internal error, and the names it gives such ranges never meet a program
+  name. The range rules are unchanged: a source range past the
+  end is `verify/index_oob` or `verify/call_requires`. Rust emits `a[lo..hi].to_vec()` for the copy and
+  `Vec::extend_from_slice` for the append (unchecked slicing when verified); LLVM copies with `memcpy`.
+  Tests: [prefix count](tests/spec/r6g6_2_prefix_count.pruv), [wrong claim](tests/spec/r6g6_2_prefix_wrong.pruv),
+  [past the end](tests/spec/r6g6_2_prefix_past.pruv),
+  [named ranges stay distinct](tests/spec/r6g6_2_prefix_name.pruv).
+- R-6g6-3 **Text ranges into String builders.** The text argument of the catalog operations
+  `string_push_str(move s, text)` and `string_from(text)` may be `subview(t, lo, hi)` directly, where `t` is a
+  `str` or `[u8]` place. No temporary String is made: the range is borrowed for the call. For a `str` the
+  range must satisfy `0 <= lo <= hi <= len(t)` (`verify/string_slice_range`) and both cuts must be
+  character boundaries (`verify/utf8_boundary`); for a `[u8]` the range is `verify/index_oob` and the
+  chosen bytes must be valid UTF-8 (`verify/utf8_invalid`). A `subview` given to any other text builtin, or kept in a binding,
+  stays `type/view_context`. Rust passes `&t[lo..hi]` (unchecked when verified) straight to the
+  `push_str` / `String::from` wrapper. Tests: [range](tests/spec/r6g6_3_text_range.pruv),
+  [past the end](tests/spec/r6g6_3_text_past.pruv), [other builtin](tests/spec/r6g6_3_text_kept.pruv).
+
 ## 6h. Files (G10)
 
 `fs` is the file-system effect, independent of `io` (stdout) and `alloc`. Direct and transitive calls
