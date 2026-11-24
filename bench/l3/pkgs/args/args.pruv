@@ -9,6 +9,7 @@ pub fn arg_spans(argv: str) -> [i64] ! alloc
   ensures result[0] == 0 ==> forall k in 0..result[1]:
     0 <= result[2 + 2 * k] && result[2 + 2 * k] <= result[3 + 2 * k] && result[3 + 2 * k] <= len(argv)
     && is_char_boundary(argv, result[2 + 2 * k]) && is_char_boundary(argv, result[3 + 2 * k])
+  ensures result[0] == 0 ==> forall k in 0..len(argv): argv[k] == 0 ==> is_char_boundary(argv, k + 1)
 {
   let n: i64 = len(argv);
   let mut bad: [i64] = alloc(2, 0);
@@ -27,6 +28,7 @@ pub fn arg_spans(argv: str) -> [i64] ! alloc
     invariant forall k in 0..cnt:
       0 <= out[2 + 2 * k] && out[2 + 2 * k] <= out[3 + 2 * k] && out[3 + 2 * k] <= n
       && is_char_boundary(argv, out[2 + 2 * k]) && is_char_boundary(argv, out[3 + 2 * k])
+    invariant forall k in 0..i: argv[k] == 0 ==> is_char_boundary(argv, k + 1)
     decreases n - i
   {
     if argv[i] == 0 {
@@ -44,21 +46,26 @@ pub fn arg_spans(argv: str) -> [i64] ! alloc
   return truncate(out, 2 + 2 * cnt);
 }
 
-// ProcessArgs holding every argument of the blob (empty when the blob is malformed; callers check arg_spans first).
+// ProcessArgs holding every NUL-terminated piece of the blob, as `for p in argv.split_terminator('\0') { cmd.arg(p) }`.
+// Callers validate the blob first (arg_spans: size cap and trailing NUL), as the hand validates before the loop.
+// The second requires is the UTF-8 fact the verifier does not know of a str (gap U8 in bench/l3/pkgs/RESHAPE.md).
 pub fn build_args(argv: str) -> ProcessArgs ! alloc
+  requires len(argv) <= 1048576
+  requires forall k in 0..len(argv): argv[k] == 0 ==> is_char_boundary(argv, k + 1)
 {
-  let sp: [i64] = arg_spans(argv);
+  let n: i64 = len(argv);
   let mut a: ProcessArgs = proc_args_new();
-  if sp[0] != 0 { return move a; }
-  let cnt: i64 = sp[1];
-  let mut k: i64 = 0;
-  while k < cnt
-    invariant 0 <= k && k <= cnt && proc_args_len(a) == k
-    decreases cnt - k
+  let mut start: i64 = 0;
+  while start < n
+    invariant 0 <= start && start <= n
+    invariant proc_args_len(a) <= start
+    invariant is_char_boundary(argv, start)
+    decreases n - start
   {
-    let piece: str = substr(argv, sp[2 + 2 * k], sp[3 + 2 * k]);
-    a = proc_args_push(move a, piece);
-    k = k + 1;
+    let end: i64 = find_byte(argv, 0, start, n);
+    a = proc_args_push(move a, subview(argv, start, end));
+    if end == n { return move a; }
+    start = end + 1;
   }
   return move a;
 }

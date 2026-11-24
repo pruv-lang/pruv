@@ -19,10 +19,10 @@ measured only for a package whose table shows zero differences.
 
 | Package | Differences left | Measured |
 |---|---|---|
-| json | 2 (B-LLVM source copy, D32 publication checks; root tape copy TK) | no |
+| json | 2 (B-LLVM source copy, D32 publication checks; root tape move reshaped in step 2.8) | no |
 | text | 2 (`trim`, `clip_bytes`: B-LLVM; `one_line` reshaped in step 2.5) | no |
 | names | 0 (`project_name` reshaped in step 2.2b) | no |
-| args | 1 (`build_args`: rewrite pending; LB9 lets `proc_args_push` take `subview`) | no |
+| args | 1 (`arg_spans`: span packet kept for codex `child_args` and the U8 check; `build_args` reshaped in step 2.8) | no |
 | tail | whole package (hand is UTF-8 `Vec<u8>`; decoder pick: FM) | no |
 | lex | 0 (cursor and return form done in step 2.7; `e?;` codegen row, not a source difference) | yes, `scan_string` M and L (step 2.7) |
 | bytes | 0 | no (not run in this step) |
@@ -38,7 +38,7 @@ measured only for a package whose table shows zero differences.
 | `make_error`, `parse_failed` | `Err((pos, kind))` | — | = | none | none | Constructors with contracts; inlined. |
 | `rec_ok`, `scan_ok`, `check_tape`, `check_subtrees` | none (hand trusts its parser) | `[i64]` read | borrow | per record | none | Proof-only publication checks (debt D32 in L3_RESTRUCTURE_SPEC §7.5). Not in the hand path; removal needs the parse-side proof (parse is step 2.2). Unchanged here. |
 
-| root `Parsed(document) => copy(document.tape)` (`json/a2_root.pruv`) | `Ok(doc) => doc.tape` | `[i64]` | Pruv copies on LLVM | — | LLVM: 1 tape-sized copy | **TK**. The Rust backend already emits `return document.tape`. |
+| root `Parsed(document) => copy(document.tape)` (`json/a2_root.pruv`) | `Ok(doc) => doc.tape` | `[i64]` | Pruv copies on LLVM | — | LLVM: 1 tape-sized copy | **TK**. The Rust backend already emits `return document.tape`. **Changed in step 2.8**: `let tape: [i64] = move document.tape;` (LB9 R-6g8-4), no copy on either backend. |
 
 No source change in `json.pruv` this step. Not measured: differences remain (the earlier step 2.1 measurement was taken
 before this rule and is withdrawn, along with its debt rows).
@@ -70,10 +70,11 @@ before this rule and is withdrawn, along with its debt rows).
 
 | Pruv | Hand Rust | Types | Ownership | Loops | Allocations | Difference and reason |
 |---|---|---|---|---|---|---|
-| `arg_spans(argv) -> [i64]` | `argv.is_empty() \|\| argv.ends_with('\0')` check, no spans | `str -> [i64]` | owned packet | one pass | Pruv 1-2; hand 0 | Unchanged (HEAD). Exists only because `build_args` cannot push from the blob (SR). |
-| `build_args(argv) -> ProcessArgs` | `for p in argv.split_terminator('\0') { cmd.arg(p) }` | `str -> ProcessArgs` | owned result | one pass | hand 1 per argument (inside `arg`); Pruv span packet + `substr` + `String::from` per argument | Unchanged (HEAD). **SR rest**: `proc_args_push` takes no `subview` (LB7 R-6g6-3 covers only `string_push_str` / `string_from`); a wrapper fn would differ from hand. |
+| `arg_spans(argv) -> [i64]` | `argv.is_empty() \|\| argv.ends_with('\0')` check, no spans | `str -> [i64]` | owned packet | one pass | Pruv 1-2; hand 0 | Unchanged in shape (step 2.8 adds one `ensures` and one invariant). No longer needed by `build_args`; kept for codex `rpc.pruv` `child_args` (reads the spans, outside the pkgs bundle) and as the validation step of mcp `root.pruv`. Its runtime `is_char_boundary(argv, i + 1)` check is the **U8** gap (step 2.8). |
+| `build_args(argv) -> ProcessArgs` | `for p in argv.split_terminator('\0') { cmd.arg(p) }` | `str -> ProcessArgs` | owned result | one pass | hand 1 per argument (inside `arg`); Pruv span packet + `substr` + `String::from` per argument | **Changed in step 2.8**: `find_byte` + `proc_args_push(move a, subview(argv, start, end))`, no span packet, no temporary (=). |
 
-Callers (mcp `root.pruv`, codex `rpc.pruv` `child_args`) unchanged.
+Callers (mcp `root.pruv`, codex `rpc.pruv` `child_args`) unchanged. Since step 2.8 `build_args` no longer calls
+`arg_spans`; mcp `root.pruv` already checks `arg_spans` before it calls `build_args`.
 
 ## tail (`tail/tail.pruv`, hand: `supervisor/hand/core_hand.rs`)
 
@@ -450,3 +451,69 @@ The Pruv median is at or under the hand median in every cell (0.96-1.00x hand), 
 | codex | 136 |
 | mcp | 22 |
 | qwen | 26 |
+
+## Step 2.8: rows freed by LB9 (SR `proc_args_push`, TK)
+
+LB9 closed the `proc_args_push` part of SR (SPEC R-6g8-1: `subview(t, lo, hi)` is a direct argument) and TK
+(R-6g8-4: `let t = move binder.f;` in a consuming match). This step rewrites the two rows that waited on them. SL
+(R-6g8-3) has no row in these files (no `let x: str = "lit"` in `args.pruv` or `json/a2_root.pruv`). FM, RU, B-LLVM,
+ABI / V stay open.
+
+| Row | Function | Status | Hand line |
+| --- | --- | --- | --- |
+| args | `args::build_args` | **=**: `find_byte` for the next NUL, `proc_args_push(move a, subview(argv, start, end))`; Rust `a.arg(&argv[start..end])` after `position` | `command.args(argv.split_terminator('\0'))` (`supervisor/hand/supervise_hand.rs:70`) |
+| args | `args::arg_spans` | unchanged in shape: kept for codex `child_args` (spans) and mcp validation; carries the **U8** fact as a contract | `argv.len() > 1048576 \|\| (!argv.is_empty() && !argv.ends_with('\0'))` (`supervise_hand.rs:54-55`) |
+| json TK | root `parse_tape` (`json/a2_root.pruv`) | **=**: `let tape: [i64] = move document.tape; return tape;`; Rust `let tape = document.tape;`, LLVM no `@pruv_copy` | `Ok(doc) => doc.tape` |
+
+### Gap U8: a `str` is not known to be UTF-8
+
+The verifier models a `str` as any byte sequence (the `utf8_boundary` fix text says a counterexample str may not be
+valid UTF-8). So after a NUL byte at `end`, `is_char_boundary(argv, end + 1)` is not provable, though it holds for every
+valid `str` (the byte after an ASCII byte starts a scalar or is the end). Without it, `subview(argv, end + 1, ..)` on the
+next turn is refused (`invariant_preserved` for `is_char_boundary(argv, start)`; counterexample `start = end + 1`).
+
+`build_args` does not add a runtime check for it. It states the fact as a contract instead:
+`requires forall k in 0..len(argv): argv[k] == 0 ==> is_char_boundary(argv, k + 1)`. `arg_spans` already had the
+runtime check (`if !is_char_boundary(argv, i + 1) { return bad; }`, HEAD) and now also `ensures` the same fact when it
+returns `[0, ..]`, so mcp `root.pruv` (checks `sp[0]` first) proves it with no source change. The cost of U8 is this
+check in `arg_spans`, which the hand does not have. Closing U8 needs a verifier axiom that `str` values are UTF-8, which
+is outside this bundle; `docs/RUST_SHAPE_RESET.md` §4 has no U8 row yet.
+
+### Line-by-line structure
+
+`args::build_args(argv)` against `command.args(argv.split_terminator('\0'))`:
+
+| Item | Hand Rust | Pruv (2.8) | Same? |
+| --- | --- | --- | --- |
+| Types | `&str` in, `Command` args | `str` borrowed in, `ProcessArgs` out (`Command` args in the host) | = |
+| Validation | before the loop: size cap and trailing NUL | before the call: caller checks `arg_spans` (`requires len(argv) <= 1048576` + the U8 fact) | = for `build_args`; the U8 runtime check lives in `arg_spans` |
+| Split | `split_terminator('\0')` (memchr per piece) | `find_byte(argv, 0, start, n)` (Rust `position`, LLVM `memchr`) | = |
+| Push | `cmd.arg(p)` with `p: &str` | `proc_args_push(move a, subview(argv, start, end))` (Rust `&argv[start..end]`) | = (was span packet + `substr` `String` per argument) |
+| Last piece | `split_terminator` drops the empty tail | `if end == n { return move a; }` | = on a validated blob (ends with NUL, so the last `find_byte` is `n` only when `start == n`, which the loop test stops) |
+| Allocation sites | one per argument inside `arg` | one per argument inside `proc_args_push` | = (was 1-2 span packets + 1 `String` per argument) |
+
+Behaviour on a malformed blob changes: `build_args` used to return no arguments when `arg_spans` failed; now it pushes
+the `split_terminator` pieces, as the hand loop would. Its only caller (mcp `root.pruv`) returns before the call on a
+malformed blob; supervisor keeps its own `supervisor/args.pruv`.
+
+Root `parse_tape` against `Ok(doc) => doc.tape`:
+
+| Item | Hand Rust | Pruv (2.8) | Same? |
+| --- | --- | --- | --- |
+| Match | `match parse(input)` by value | `match parsed` on an owned local (consuming) | = |
+| Tape | `doc.tape` (partial move) | `move document.tape` (Rust `let tape = document.tape;`) | = (was `copy(document.tape)`; LLVM tape-sized `@pruv_copy`, now none) |
+| Error | `[-1, pos, kind]` | `alloc(3, 0)` + three writes | = (unchanged) |
+
+No performance was measured: `args` keeps the `arg_spans` row (U8, codex spans) and `json` keeps B-LLVM and D32.
+
+### Consumer tests (step 2.8)
+
+| Test | Result |
+| --- | --- |
+| json `run_a0` .. `run_a5` | pass (6/6 on py/rust, py/llvm, rs/rust, rs/llvm) |
+| mcp `test_impl` | pass (22/22 per pair) |
+| codex `test_impl` | pass (136/136 on 4 pairs; TypeScript oracle 136/136) |
+| grok `test_impl` (`GROK_COMPILE_WALL=3600`) | pass (254/254 on 4 pairs; `GROK_TS_TRANSPILER` set for the reference) |
+
+Grok declares `mod args;` but calls nothing from it; it still compiles the package. Supervisor, claude and qwen do not
+use `pkgs/args` or `json/a2_root.pruv` and were not run.
