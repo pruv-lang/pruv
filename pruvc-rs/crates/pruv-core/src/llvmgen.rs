@@ -4296,6 +4296,14 @@ impl<'a> FnGen<'a> {
                     Bind::Slot(s) => s,
                     Bind::Ssa(_) => return Err(format!("llvmgen: field assignment to non-local {}", x.name)),
                 };
+                // R-6g9-6: replacing a ref field stores its view pair without dropping the old view.
+                if x.ref_store && expr_ty(&x.value).as_deref().is_some_and(|ty| matches!(ty, "array_u8" | "str")) {
+                    let v = self.ev(&x.value, false)?;
+                    let (ptr, _) = self.field_ptr_ty(&sl, &x.fields)?;
+                    let value = self.pack_view(&v)?;
+                    self.ins(format!("store {VIEW} {value}, ptr {ptr}"))?;
+                    return self.end_temps();
+                }
                 // LG37: a last-use take anywhere in the right side
                 self.moving = self.nested_moves(&x.value, Some(&x.name), false);
                 let rg = self.regrow_field(x, &sl);

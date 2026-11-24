@@ -1,0 +1,12 @@
+// spec: R-6g9-6 accept
+// Moving an owned field out of a `let mut` borrowing struct consumes the struct (Rust `let t = p.tape;`); the
+// remainder drop skips the `ref` field and drops the other owned fields.
+struct Parser { input: ref [u8], tape: [u8], spare: [u8] }
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(5, 3);
+  let t0: [u8] = alloc(2, 7);
+  let s0: [u8] = alloc(4, 1);
+  let mut p: Parser = Parser { input: subview(x, 1, 4), tape: move t0, spare: move s0 };
+  let t: [u8] = move p.tape;
+  return len(t) * 100 + t[1] * 10 + len(x);
+}

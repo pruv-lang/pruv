@@ -496,6 +496,13 @@ def _field_moves(e):
         yield from _field_moves(child)
 
 
+def _moved_root(value, provenance):
+    """The first root of `provenance` that `value` moves (`Doc { src: x, scratch: move x }`): it conflicts with the
+    view the value builds, reported only where reachable."""
+    roots = {root for root, _ in provenance}
+    return next((e.name for e in _walk(value) if isinstance(e, Move) and e.name in roots), None)
+
+
 def _paths_overlap(p, q):
     """one field path is a prefix of the other (the whole root is the empty path)"""
     n = min(len(p), len(q))
@@ -940,8 +947,10 @@ class Checker:
         for f in s.prog.functions:
             boundary = f.host_entry or f.foreign is not None or bool(f.tparams)
             for p in f.params:
+                # R-6g9-6: a borrowing struct may also be an inout parameter (Rust `&mut Units<'_>`).
                 p.type = s.norm_type(s.borrow_type_position(
-                    f, p.type, not (boundary or p.mode or p.take or p.type.name == "ref")))
+                    f, p.type, not (boundary or p.take or p.type.name == "ref"
+                                    or p.mode and p.type.name not in s.borrowing_structs)))
             borrowed_result = s.borrowed_type(f.ret)
             f.ref_result = f.ret.name == "ref"
             f.ret = s.norm_type(s.borrow_type_position(f, f.ret, not boundary))
@@ -1049,10 +1058,10 @@ class Checker:
         def go(e):
             if isinstance(e, PlaceIf):
                 s.expect(e.cond, BOOL, scope)
-                go(e.then)
-                go(e.els)
+                then_ref = go(e.then)
+                else_ref = go(e.els)
                 e.ty = e.then.ty
-                return
+                return then_ref or else_ref
             root = field_place(e)[0]
             while isinstance(root, Index):
                 root = field_place(root.array)[0]
@@ -1061,7 +1070,14 @@ class Checker:
                 terr(root, "place_binding", "%s is not a `let mut` local or an inout parameter" % root.name,
                      "bind a place of a `let mut` local or an inout parameter")
             s.expr(e, scope)
-        go(st.value.expr)
+            return isinstance(e, FieldAccess) and e.base.ty is not None and s.ref_field(e.base.ty, e.field)
+        borrowed = go(st.value.expr)
+        # R-6g9-6: a place binding of a borrowing struct or a `ref` field would store through the alias without
+        # the subset check on the root's provenance; bind its owned fields instead.
+        ty = st.value.expr.ty
+        if borrowed or ty is not None and s.contains_borrow(ty):
+            terr(st, "place_binding", "a place binding cannot hold a borrowed view or a borrowing struct",
+                 "bind an owned field of it, or write the struct directly")
         scope[st.name] = (st.type, True, "inout")
         s.f.__dict__.setdefault("place_names", set()).add(st.name)
 
@@ -1084,7 +1100,8 @@ class Checker:
                 s.norm_expr(st.value)
             elif isinstance(st, Let):
                 st.ref = st.type.name == "ref"
-                st.type = s.norm_type(s.borrow_type_position(st, st.type, not (st.mutable or generic)))
+                # R-6g9-6: a `let mut` borrowing struct is allowed; a `let mut` view is not.
+                st.type = s.norm_type(s.borrow_type_position(st, st.type, not (st.mutable and st.ref or generic)))
                 s.norm_expr(st.value)
             elif isinstance(st, (Assign, FieldAssign, Return)):
                 if st.value is not None:
@@ -2050,8 +2067,8 @@ class Checker:
         s.block(f.body, dict(scope))
         if s.prog.borrow_site is not None or getattr(f, "places", False):
             f.borrowed_roots = set()
-            s.check_view_block(f.body, {p.name: ({(p.name, None): False}, False) for p in f.params
-                                        if s.borrowed_type(p.type)})
+            f.borrowed_params = {p.name for p in f.params if s.borrowed_type(p.type)}
+            s.check_view_block(f.body, {name: ({(name, None): False}, False) for name in f.borrowed_params})
         if f.ret != UNIT and not s.ends_in_return(f.body):
             terr(f, "missing_return", "function %s may reach its end without returning" % f.name,
                  "end every path with `return ...;`")
@@ -2493,6 +2510,7 @@ class Checker:
             v = s.lookup(st, st.name, scope, tuple(st.fields))
             s.check_borrow(st, st.name, st.fields)
             cur = v[0]
+            ref_target = False
             for fname in st.fields:
                 if cur.owner is not None:
                     terr(st, "generic_operation", "cannot assign field %s: %s is an abstract type parameter" % (
@@ -2500,11 +2518,20 @@ class Checker:
                 if not s.tt.is_struct(cur):
                     terr(st, "not_struct", "cannot assign field %s: %s is not a struct" % (fname, type_name(cur)),
                          "field assignment paths run through structs only; assign the whole enum value instead")
+                ref_target = s.ref_field(cur, fname)
                 cur = s.field_type(st, cur, fname)
-            s.field_move = s.field_move_out(st, cur, scope, next_stmt) or s.field_update_move(st, cur, v, scope)
+            st.ref_store = ref_target or s.borrowed_type(cur)
+            if not ref_target:
+                s.field_move = s.field_move_out(st, cur, scope, next_stmt) or s.field_update_move(st, cur, v, scope)
             if not v[1] and v[2] not in ("inout", "map_mut"):
                 terr(st, "immutable", "%s is not mutable" % st.name,
                      "declare it with `let mut`" if v[2] == "local" else "parameters are immutable; copy into a `let mut` local")
+            if ref_target:
+                # R-6g9-6: a `ref` field takes a view (a place, subview, borrowed result or literal); the view pass
+                # checks that it borrows only what the struct already borrows.
+                s.view_value(st.value, cur, scope)
+                s.check_inout_context(st, st.value)
+                return
             s.alloc_hint_for(st.value, cur)
             s.expect(st.value, cur, scope)
             s.check_inout_context(st, st.value)
@@ -3069,7 +3096,9 @@ class Checker:
         if not isinstance(e, Move) or not e.fields:
             return None
         s.check_borrow(e, e.name, e.fields)
-        _, mutable, kind = s.lookup(e, e.name, scope, e.fields)
+        root_ty, mutable, kind = s.lookup(e, e.name, scope, e.fields)
+        if s.ref_path(root_ty, e.fields):
+            terr(e, "array_alias", "a borrowed view cannot be moved")
         typed = ty == STRING or is_scalar_vec(ty) or ty in (ARRAY, ARRAY_U8, ARRAY_BOOL)
         restored = (isinstance(next_stmt, FieldAssign) and next_stmt.name == e.name
                     and tuple(next_stmt.fields) == tuple(e.fields))
@@ -3609,6 +3638,21 @@ class Checker:
         terr(arg, "type_mismatch", "expected str or a borrowed String read, found %s" % type_name(actual))
 
     # ---- G5 A0: inout call arguments and old(..) ----
+    def check_inout_view(s, arg, op):
+        # R-6g9-6: a mutable record still holds shared views into their sources.
+        if isinstance(op, FieldAccess) and op.base.ty is not None and s.ref_field(op.base.ty, op.field):
+            terr(arg, "inout_argument", "a borrowed view cannot be passed inout")
+
+    def ref_path(s, ty, fields):
+        """R-6g9-6: whether a field path runs through a ref field, a shared view its record does not own."""
+        for field in fields:
+            if ty is None:
+                return False
+            if s.ref_field(ty, field):
+                return True
+            ty = s.lookup_field_type(ty, field)
+        return False
+
     def ref_field(s, ty, name):
         decl = s.decls.get(ty.name)
         return isinstance(decl, StructDecl) and any(fd.name == name and fd.ref for fd in decl.fields)
@@ -3651,8 +3695,7 @@ class Checker:
                 origins, place_binding = loans[root.name]
                 if not path or place_binding:
                     return {name: held or exclusive for name, held in origins.items()}
-            if path and any(
-                    p.name == root.name and s.borrowed_type(p.type) for p in s.f.params):
+            if path and root.name in s.f.borrowed_params:
                 # An owned field of a borrowing-struct parameter lives in the caller's record, which the
                 # Rust signature `&Doc<'a>` does not lend to the result.
                 return {(root.name, None): exclusive, (root.name + ".storage", None): exclusive}
@@ -3683,7 +3726,8 @@ class Checker:
 
     def view_statement(s, st, loans, undo):
         """The borrowed-view checks of one statement that do not depend on liveness; a borrow `let` records its
-        provenance in `loans` and logs the previous entry in `undo` as (name, was present, old value)."""
+        provenance in `loans` and logs the previous entry in `undo` as (name, was present, old value). Returns the
+        provenance of a borrowing store, else None."""
         # Validate borrowed calls even when their results are used only inside the statement.
         for item in s.view_stmt_items(st):
             if isinstance(item, Expr):
@@ -3695,6 +3739,17 @@ class Checker:
             undo.append((st.name, st.name in loans, loans.get(st.name)))
             loans[st.name] = (provenance, False)
             s.f.borrowed_roots.update(root for root, _ in provenance)
+        elif (isinstance(st, (Assign, FieldAssign)) and st.name in loans and not loans[st.name][1]
+              and (isinstance(st, Assign) or st.ref_store)):
+            # R-6g9-6: a `let mut` borrowing struct keeps the provenance of its initializer (an inout parameter its
+            # caller's), so a whole or `ref`-field assignment may borrow only from that: Rust `Units<'a>` holds
+            # `&'a` data only. This keeps one provenance per variable and the liveness pass linear.
+            provenance = s.view_provenance(st.value, loans)
+            held = loans[st.name][0]
+            if any(root not in held or exclusive and not held[root] for root, exclusive in provenance.items()):
+                terr(st, "borrow_escape", "%s can only hold data it already borrows" % st.name,
+                     "build it from a view of the same source, or bind a new borrowing local")
+            return provenance
         elif isinstance(st, Return) and s.f.borrow_from and st.value is not None:
             provenance = s.view_provenance(st.value, loans)
             if any(root not in s.f.borrow_from for root, _ in provenance):
@@ -3716,14 +3771,23 @@ class Checker:
                     g["points"][p]["succ"].append(n)
                 uses = list(s.view_uses(st))
                 point = {"succ": [], "gen": 0, "kill": 0, "uses": uses, "node": st}
-                for name, _, _ in uses:
-                    if name in scope:
+                # R-6g9-6: a whole assignment of a `let mut` borrowing struct kills its borrow like a `let`; the
+                # target itself is not a mention (its value's mentions still are).
+                rebind = isinstance(st, Assign) and st.name in scope and not loans.get(st.name, ({}, False))[1]
+                for k, (name, _, _) in enumerate(uses):
+                    if name in scope and not (rebind and k == 0):
                         point["gen"] |= 1 << scope[name]
+                if rebind:
+                    point["kill"] = 1 << scope[st.name]
                 if g["failure"] is None:
                     try:
-                        s.view_statement(st, loans, loans_undo)
+                        provenance = s.view_statement(st, loans, loans_undo)
                     except PruvError as e:
                         g["failure"] = (n, e)
+                    else:
+                        if rebind and provenance:
+                            # R-6g9-6: a whole rebind that moves a root its new value borrows conflicts like a `let`.
+                            point["own_move"] = _moved_root(st.value, provenance)
                 if isinstance(st, Let) and st.place:
                     # R-6g9-5: borrow the footprint exclusively and keep the access modes of index and condition operands.
                     bit = len(g["borrows"])
@@ -3749,9 +3813,7 @@ class Checker:
                     g["borrows"].append(loans.get(st.name, ({}, False))[0])
                     # A value that moves a root the new view borrows (`Doc { src: x, scratch: move x }`) conflicts
                     # with the view itself; like the other conflicts it is reported only where reachable.
-                    roots = {root for root, _ in g["borrows"][-1]}
-                    point["own_move"] = next((e.name for e in _walk(st.value)
-                                              if isinstance(e, Move) and e.name in roots), None)
+                    point["own_move"] = _moved_root(st.value, g["borrows"][-1])
                 g["points"].append(point)
                 if isinstance(st, If):
                     exits = (s.view_graph(st.then, [n], loans, scope, g)
@@ -4017,6 +4079,7 @@ class Checker:
                     place.name, "parameter" if v[2] == "param" else "binding"),
                      "declare the parameter `inout %s: ...`, or copy into a `let mut` local" % place.name)
             actual = s.expr(op, scope, c) if path else v[0]
+            s.check_inout_view(arg, op)
             if actual != want:
                 terr(arg, "inout_argument", "inout argument %s has type %s but parameter %s of %s expects %s" % (
                     place.name, type_name(actual), p.name, n, type_name(want)),
@@ -4074,6 +4137,7 @@ class Checker:
                     root.name, "parameter" if v[2] == "param" else "binding"),
                      "declare the parameter `inout %s: ...`, or copy into a `let mut` local" % root.name)
             ty = s.expr(op, scope, c) if path else v[0]
+            s.check_inout_view(arg, op)
             if ty != ARRAY_U8:
                 terr(arg, "type_mismatch", "expected %s, found %s" % (type_name(ARRAY_U8), type_name(ty)))
             if root.name in s.active_roots or s.match_path_held(root.name, path):
@@ -4137,6 +4201,7 @@ class Checker:
                 root.name, "parameter" if v[2] == "param" else "binding"),
                  "declare the parameter `inout %s: ...`, or copy into a `let mut` local" % root.name)
         ty = s.expr(op, scope, c) if path else v[0]
+        s.check_inout_view(arg, op)
         if grow and not append:
             if ty not in (ARRAY, ARRAY_U8, ARRAY_BOOL):
                 terr(arg, "type_mismatch", "%s takes [i64], [u8] or [bool], found %s" % (n, type_name(ty)))

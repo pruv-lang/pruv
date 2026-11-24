@@ -47,9 +47,9 @@ fn prepare_block(body: &mut [Stmt], permitted: bool, structs: &HashSet<String>) 
     for st in body {
         match st {
             Stmt::Let(s) if !s.is_place() => {
-                let allow = permitted && !s.mutable;
-                if !(allow && structs.contains(&s.ty)) {
-                    s.borrowed = annotation(&mut s.ty, s.line, s.col, allow, structs)?;
+                // R-6g9-6: mutability is allowed for a borrowing struct, but not for a ref local.
+                if !(permitted && structs.contains(&s.ty)) {
+                    s.borrowed = annotation(&mut s.ty, s.line, s.col, permitted && !s.mutable, structs)?;
                 }
             }
             Stmt::If(s) => {
@@ -91,7 +91,8 @@ pub(crate) fn prepare(prog: &mut Program, hosts: &[bool]) -> Res<()> {
     for (i, f) in prog.functions.iter_mut().enumerate() {
         let permitted = f.tparams.is_empty() && f.foreign.is_none() && !hosts.get(i).copied().unwrap_or(false);
         for p in &mut f.params {
-            if !(permitted && structs.contains(&p.ty) && !p.take && p.mode_pos.is_none()) {
+            // R-6g9-6: borrowing structs may be inout parameters.
+            if !(permitted && structs.contains(&p.ty) && !p.take) {
                 annotation(&mut p.ty, f.line, f.col, false, &structs)?;
             }
         }
@@ -210,6 +211,21 @@ pub(crate) fn walk_statement<'a>(
 
 /// The root accesses of `st` itself: a compound statement contributes its head (condition, contracts, place,
 /// scrutinee); its nested blocks are their own statements in the liveness graph.
+/// The first `move` in the value of a `let` or whole rebind that moves a root the new view borrows
+/// (`Doc { src: x, scratch: move x }`): it conflicts with the view itself, reported only where reachable.
+fn moved_root(st: &Stmt, roots: &Roots) -> Option<(i64, i64)> {
+    let (Stmt::Let(Let { value, .. }) | Stmt::Assign(Assign { value, .. })) = st else { return None };
+    let mut found = None;
+    walk_expr(value, &mut |node| {
+        if let Node::Expr(Expr::Move(m)) = node {
+            if found.is_none() && roots.keys().any(|source| source.root == m.name) {
+                found = Some((m.line, m.col));
+            }
+        }
+    });
+    found
+}
+
 fn own_accesses(st: &Stmt, visit: &mut impl FnMut(&str, &[String], Access)) {
     let mut uses = Vec::new();
     let mut writes = Vec::new();
@@ -425,6 +441,8 @@ impl Graph {
 
 enum Origin {
     View(Roots),
+    // R-6g9-6: a borrowing parameter carries its caller's shared provenance.
+    Param,
     Place(Source),
 }
 
@@ -464,7 +482,7 @@ impl Analysis<'_> {
                         roots = origin.clone();
                     }
                 }
-                None => {
+                Some(Origin::Param) | None => {
                     merge(&mut roots, Source::direct(root), Access::Read);
                     // An owned field of a borrowing-struct parameter lives in the caller's record, which the
                     // Rust signature `&Doc<'a>` does not lend to the result.
@@ -527,7 +545,7 @@ impl Analysis<'_> {
         st: &Stmt,
         locals: &mut HashMap<String, Origin>,
         undo: &mut Vec<(String, Option<Origin>)>,
-    ) -> Res<()> {
+    ) -> Res<Option<Roots>> {
         let mut expressions = Vec::new();
         walk_statement(st, &mut |e| expressions.push(e), &mut |_, _, _, _| {}, &mut |_| {});
         for e in expressions {
@@ -577,8 +595,8 @@ impl Analysis<'_> {
                 undo.push((s.name.clone(), locals.insert(s.name.clone(), Origin::View(roots))));
             }
             Stmt::Let(s) => self.owned(&s.value, locals)?,
-            Stmt::Assign(s) => self.owned(&s.value, locals)?,
-            Stmt::FieldAssign(s) => self.owned(&s.value, locals)?,
+            Stmt::Assign(s) => return self.check_store(&s.name, &s.value, true, st.position(), locals),
+            Stmt::FieldAssign(s) => { self.check_store(&s.name, &s.value, s.ref_store, st.position(), locals)?; }
             Stmt::Return(s) => if let Some(value) = &s.value {
                 if let Some(from) = &f.borrow_from {
                     let roots = self.provenance(value, locals)?;
@@ -591,7 +609,31 @@ impl Analysis<'_> {
             },
             _ => {}
         }
-        Ok(())
+        Ok(None)
+    }
+
+    // R-6g9-6: stores may only reuse the provenance already held by the target. Returns the provenance of a
+    // borrowing store.
+    fn check_store(
+        &self, name: &str, value: &Expr, borrow_store: bool, (line, col): (i64, i64),
+        locals: &HashMap<String, Origin>,
+    ) -> Res<Option<Roots>> {
+        if borrow_store {
+            let held = locals.get(name);
+            if matches!(held, Some(Origin::View(_) | Origin::Param)) {
+                let roots = self.provenance(value, locals)?;
+                if roots.iter().any(|(source, access)| match held {
+                    Some(Origin::View(held)) => held.get(source).is_none_or(|prev| access > prev),
+                    _ => source.root != name || source.binding.is_some() || *access != Access::Read,
+                }) {
+                    return Err(PruvError::new("type", line, col, "borrow_escape",
+                        format!("{name} can only hold data it already borrows"),
+                        "build it from a view of the same source, or bind a new borrowing local"));
+                }
+                return Ok(Some(roots));
+            }
+        }
+        self.owned(value, locals).map(|_| None)
     }
 
     fn borrow_let(&self, s: &Let) -> bool {
@@ -620,21 +662,31 @@ impl Analysis<'_> {
                 graph.points[p].succ.push(n);
             }
             let mut point = Point { succ: Vec::new(), gen: Vec::new(), kill: None, uses: Vec::new(), site: st.position(), own_move: None };
+            // R-6g9-6: a whole rebind kills the old loan. Its target still counts as a write.
+            if let Stmt::Assign(s) = st {
+                if matches!(locals.get(&s.name), Some(Origin::View(_))) {
+                    point.kill = scope.get(s.name.as_str()).copied();
+                }
+            }
             own_accesses(st, &mut |name, path, access| {
-                if let Some(&b) = scope.get(name) {
-                    point.gen.push(b);
+                if !(point.kill.is_some() && point.uses.is_empty()) {
+                    point.gen.extend(scope.get(name).copied());
                 }
                 point.uses.push((name.to_owned(), path.to_vec(), access));
             });
             if graph.failure.is_none() {
-                if let Err(e) = self.statement(f, st, locals, &mut locals_undo) {
-                    graph.failure = Some((n, e));
+                match self.statement(f, st, locals, &mut locals_undo) {
+                    Err(e) => graph.failure = Some((n, e)),
+                    // R-6g9-6: a whole rebind that moves a root its new value borrows conflicts like a `let`.
+                    Ok(Some(roots)) if point.kill.is_some() => point.own_move = moved_root(st, &roots),
+                    Ok(_) => {}
                 }
             }
             if let Stmt::Let(s) = st {
                 if s.is_place() {
                     let (root, footprint) = &self.place_functions[&f.name][&(s.line, s.col)];
                     point.uses.insert(0, (root.clone(), footprint.clone(), Access::Write));
+                    point.gen.extend(scope.get(root.as_str()).copied());
                     let bit = graph.borrows.len();
                     let source = Source { root: root.clone(), binding: Some(bit) };
                     locals_undo.push((s.name.clone(), locals.insert(s.name.clone(), Origin::Place(source))));
@@ -650,16 +702,7 @@ impl Analysis<'_> {
                         _ => Roots::new(),
                     };
                     graph.borrows.push(roots);
-                    // A value that moves a root the new view borrows (`Doc { src: x, scratch: move x }`) conflicts
-                    // with the view itself; like the other conflicts it is reported only where reachable.
-                    let roots = graph.borrows.last().unwrap();
-                    walk_expr(&s.value, &mut |node| {
-                        if let Node::Expr(Expr::Move(m)) = node {
-                            if point.own_move.is_none() && roots.keys().any(|source| source.root == m.name) {
-                                point.own_move = Some((m.line, m.col));
-                            }
-                        }
-                    });
+                    point.own_move = moved_root(st, graph.borrows.last().unwrap());
                 }
             }
             graph.points.push(point);
@@ -716,7 +759,10 @@ pub(crate) fn check(prog: &Program, place_functions: &PlaceFunctions) -> Res<()>
     for f in &prog.functions {
         if !has_views && !place_functions.contains_key(&f.name) { continue; }
         let mut graph = Graph::default();
-        analysis.build(f, &f.body, Vec::new(), &mut HashMap::new(), &mut HashMap::new(), &mut graph);
+        // R-6g9-6: parameters hold provenance, but have no local liveness bit.
+        let mut locals = f.params.iter().filter(|p| analysis.records.contains_key(p.ty.as_str()))
+            .map(|p| (p.name.clone(), Origin::Param)).collect();
+        analysis.build(f, &f.body, Vec::new(), &mut locals, &mut HashMap::new(), &mut graph);
         graph.conflicts()?;
     }
     Ok(())

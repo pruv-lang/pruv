@@ -299,7 +299,15 @@ pub struct Assert {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExprStmt { pub line: i64, pub col: i64, pub expr: Expr }
 #[derive(Debug, Clone, PartialEq)]
-pub struct FieldAssign { pub line: i64, pub col: i64, pub name: String, pub fields: Vec<String>, pub value: Expr }
+pub struct FieldAssign {
+    pub line: i64,
+    pub col: i64,
+    pub name: String,
+    pub fields: Vec<String>,
+    pub value: Expr,
+    // R-6g9-6: the field stores a view or a borrowing struct.
+    pub ref_store: bool,
+}
 #[derive(Debug, Clone, PartialEq)]
 pub struct Match { pub line: i64, pub col: i64, pub scrutinee: Expr, pub arms: Vec<MatchArm> }
 

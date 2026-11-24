@@ -1,0 +1,12 @@
+// spec: R-6g9-6 reject
+// The first borrow error is reported even when a later `let mut` borrowing struct is rebound after it.
+struct Units { raw: ref [u8], pos: i64 }
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(5, 3);
+  let y: [u8] = alloc(5, 4);
+  let mut u: Units = Units { raw: subview(x, 1, 4), pos: 0 };
+  u = Units { raw: subview(y, 0, 2), pos: 1 };
+  let mut w: Units = Units { raw: x, pos: 0 };
+  w = Units { raw: x, pos: 1 };
+  return u.pos + len(u.raw) + w.pos;
+}

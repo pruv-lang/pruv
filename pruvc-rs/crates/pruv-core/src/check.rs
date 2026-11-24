@@ -1665,13 +1665,14 @@ impl Checker {
         }
     }
 
-    fn check_place(&mut self, e: &mut Expr, scope: &Scope) -> Res<()> {
+    fn check_place(&mut self, e: &mut Expr, scope: &Scope) -> Res<bool> {
         if let Expr::Call(c) = e {
             if PlaceIf::matches(c) {
                 let [cond, then, els] = c.args.as_mut_slice() else { unreachable!() };
                 self.expect(cond, &boolt(), scope, false, None)?;
-                self.check_place(then, scope)?;
-                return self.check_place(els, scope);
+                let then_ref = self.check_place(then, scope)?;
+                let else_ref = self.check_place(els, scope)?;
+                return Ok(then_ref || else_ref);
             }
         }
         let (mut root, _) = field_place(e);
@@ -1684,7 +1685,7 @@ impl Checker {
             return Err(Self::bad_place(v.line, v.col, format!("{} is not a `let mut` local or an inout parameter", v.name)));
         }
         self.expr(e, scope, false)?;
-        Ok(())
+        Ok(matches!(e, Expr::FieldAccess(f) if self.is_borrowed_field(&f.base, &f.field)))
     }
 
     fn norm_stmts(&self, stmts: &mut [Stmt]) {
@@ -3653,6 +3654,9 @@ impl Checker {
         }
         self.check_borrow(m.line, m.col, &m.name, &m.fields)?;
         let source = self.lookup(m.line, m.col, &m.name, scope, &m.fields)?;
+        if self.ref_path(&source.ty, &m.fields) {
+            return Err(terr(m.line, m.col, "array_alias", "a borrowed view cannot be moved", ""));
+        }
         let typed = matches!(ty.to_key().as_str(), "string" | "vec<i64>" | "vec<bool>")
             || (ty.args.is_empty() && matches!(ty.name.as_str(), "array" | "array_u8" | "array_bool"));
         let restored = matches!(next, Some(Stmt::FieldAssign(r)) if r.name == m.name && r.fields == m.fields);
@@ -3847,7 +3851,12 @@ impl Checker {
                 let sty = GType::from_key(&s.ty);
                 if s.is_place() {
                     let Expr::InoutArg(arg) = &mut s.value else { unreachable!() };
-                    self.check_place(&mut arg.expr, scope)?;
+                    // R-6g9-6: a place alias would bypass the target's provenance check.
+                    if self.check_place(&mut arg.expr, scope)? || self.borrowed_type_argument(&sty) {
+                        return Err(terr(s.line, s.col, "place_binding",
+                            "a place binding cannot hold a borrowed view or a borrowing struct",
+                            "bind an owned field of it, or write the struct directly"));
+                    }
                     scope.insert(s.name.clone(), Entry { ty: sty, mutable: true, kind: "inout" });
                     return Ok(());
                 }
@@ -3958,6 +3967,10 @@ impl Checker {
                             "field assignment paths run through structs only; assign the whole enum value instead",
                         ));
                     }
+                    // R-6g9-6: a mutable struct can replace its views, but cannot write their elements.
+                    if self.ref_field(&cur.name, fname) {
+                        return Err(terr(s.line, s.col, "immutable", "a borrowed view is read-only", ""));
+                    }
                     cur = self.field_type(s.line, s.col, &cur, fname)?;
                 }
                 let place = format!("{}.{}", s.name, s.fields.join("."));
@@ -4022,6 +4035,7 @@ impl Checker {
                 let v = self.lookup(s.line, s.col, &s.name, scope, &s.fields)?;
                 self.check_borrow(s.line, s.col, &s.name, &s.fields)?; // G9 A0
                 let mut cur = v.ty.clone();
+                let mut ref_target = false;
                 for fname in &s.fields {
                     if cur.owner.is_some() {
                         return Err(terr(
@@ -4041,9 +4055,16 @@ impl Checker {
                             "field assignment paths run through structs only; assign the whole enum value instead",
                         ));
                     }
+                    ref_target = self.ref_field(&cur.name, fname);
                     cur = self.field_type(s.line, s.col, &cur, fname)?;
                 }
-                let moved = self.field_move_out(&s.value, &cur, Some((&s.name, &s.fields)), scope, next)?;
+                // R-6g9-6: a ref field takes a view and the borrow pass checks its provenance.
+                s.ref_store = ref_target || self.decls.get(&cur.name).is_some_and(crate::borrowed::borrowing_struct);
+                let moved = if ref_target {
+                    None
+                } else {
+                    self.field_move_out(&s.value, &cur, Some((&s.name, &s.fields)), scope, next)?
+                };
                 if !v.mutable && !matches!(v.kind, "inout" | "map_inout") {
                     if let Some(m) = first_field_move(&s.value) {
                         self.check_borrow(m.line, m.col, &m.name, &m.fields)?;
@@ -4051,6 +4072,10 @@ impl Checker {
                         return Err(field_move_error(m));
                     }
                     return Err(terr(s.line, s.col, "immutable", format!("{} is not mutable", s.name), Self::immutable_fix(v.kind)));
+                }
+                if ref_target {
+                    self.view_value(&mut s.value, &cur, scope, false)?;
+                    return self.check_inout_context(&[&s.value], InoutContext::PlaceAssignment(&s.name, &s.fields));
                 }
                 let saved = std::mem::replace(&mut self.field_move, moved);
                 if matches!(v.kind, "local" | "inout" | "map_inout")
@@ -4340,8 +4365,27 @@ impl Checker {
     }
 
     fn is_borrowed_field(&self, base: &Expr, field: &str) -> bool {
-        matches!(expr_ty(base).as_ref().and_then(|ty| self.decls.get(ty)),
+        expr_ty(base).as_deref().is_some_and(|ty| self.ref_field(ty, field))
+    }
+
+    /// R-6g9-6: whether a field path runs through a ref field, a shared view its record does not own.
+    fn ref_path(&self, ty: &GType, fields: &[String]) -> bool {
+        let Some((first, rest)) = fields.split_first() else { return false };
+        self.ref_field(&ty.name, first)
+            || self.field_type(0, 0, ty, first).is_ok_and(|next| self.ref_path(&next, rest))
+    }
+
+    fn ref_field(&self, ty: &str, field: &str) -> bool {
+        matches!(self.decls.get(ty),
             Some(TypeDecl::Struct(s)) if s.fields.iter().any(|f| f.name == field && f.borrowed))
+    }
+
+    fn check_inout_view(&self, arg: &InoutArg) -> Res<()> {
+        // R-6g9-6: a mutable record still holds shared views into their sources.
+        if matches!(&*arg.expr, Expr::FieldAccess(f) if self.is_borrowed_field(&f.base, &f.field)) {
+            return Err(terr(arg.line, arg.col, "inout_argument", "a borrowed view cannot be passed inout", ""));
+        }
+        Ok(())
     }
 
     fn par_args(&self, e: &Expr) -> Res<()> {
@@ -5304,6 +5348,10 @@ impl Checker {
                         if !self.is_struct(&ty) {
                             return Err(field_move_error(x));
                         }
+                        // R-6g9-6: ref fields never own the value they store.
+                        if self.ref_field(&ty.name, field) {
+                            return Err(terr(x.line, x.col, "array_alias", "a borrowed view cannot be moved", ""));
+                        }
                         ty = self.field_type(x.line, x.col, &ty, field)?;
                     }
                     if ty.is_array() && self.field_move != Some((x.line, x.col)) {
@@ -5945,6 +5993,7 @@ impl Checker {
                 ));
             }
             let actual = if matches!(&*arg.expr, Expr::Var(_)) { v.ty } else { self.expr(&mut arg.expr, scope, c)? };
+            self.check_inout_view(arg)?;
             if actual != want {
                 return Err(terr(
                     aline,
@@ -6083,6 +6132,7 @@ impl Checker {
                     ));
                 }
                 let ty = if path.is_empty() { v.ty } else { self.expr(&mut arg.expr, scope, c)? };
+                self.check_inout_view(arg)?;
                 if ty != GType::array_u8() {
                     return Err(terr(
                         aline,
@@ -6233,6 +6283,7 @@ impl Checker {
                 ));
             }
             dty = if path.is_empty() { v.ty } else { self.expr(&mut arg.expr, scope, c)? };
+            self.check_inout_view(arg)?;
             if dty != GType::array() && dty != GType::array_u8() && !(grow && !append && dty == GType::array_bool()) {
                 return Err(terr(
                     aline,

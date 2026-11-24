@@ -369,6 +369,8 @@ class _Mono:
             new.ref = True
         if isinstance(node, Let) and node.place:
             new.place = True
+        if isinstance(node, FieldAssign) and node.ref_store:
+            new.ref_store = True      # R-6g9-6: a `ref` field or borrowing-struct store
         if isinstance(node, Call):
             if getattr(node, "resize_scratch", False):
                 new.resize_scratch = True

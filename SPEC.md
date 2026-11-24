@@ -1468,9 +1468,10 @@ borrowed value is live.
   - *Types.* `ref [u8]` and `ref str` (`ref` is contextual, only in type position) are borrowed views. A
     non-generic struct may have `ref` fields; it is then a borrowing struct (Rust `struct Doc<'a>`). A `ref` type or
     a borrowing struct is allowed only as the type of an immutable `let`, a function result, a field of a borrowing
-    struct, and (borrowing struct only) a read parameter. Anywhere else (`let mut`, a parameter declared `ref`,
-    `inout`, `take`, `Vec`/`Option`/map/enum payload/generic argument, a generic function, a host entry or `par`
-    argument) is `type/borrow_signature`.
+    struct, and (borrowing struct only) a read parameter, a `let mut` local or an `inout` parameter (R-6g9-6).
+    Anywhere else (`let mut` of a `ref` type, a parameter declared `ref`, `inout` of a `ref` type, `take`,
+    `Vec`/`Option`/map/enum payload/generic argument, a generic function, a host entry or `par` argument) is
+    `type/borrow_signature`.
   - *Results.* A function whose result is `ref T` or a borrowing struct writes `-> T from(p1, .., pn)` (`from` is
     contextual), naming at least one parameter, each at most once; each `pi` is a `[u8]` / `str` parameter (read or `inout`) or a
     borrowing-struct read parameter. A missing or bad `from` list is `type/borrow_signature`, and so is an `ensures`
@@ -1764,9 +1765,9 @@ borrowed value is live.
   the last-use field move of `copy(d.f)` never applies to a `ref` field. Like any extended aggregate the struct is
   read through a `ptr` parameter and returned through `ptr %out`; the data pointer of a read `from` parameter is
   not `nocapture`, since the result's `ref` field holds it. A borrowing struct may carry an `invariant`, on both
-  backends, and the invariant may mention `ref` fields. Moving one owned field out of a borrowing struct has no
-  source form yet (a borrowing struct is not an enum payload, not `let mut`, and a field move of a local must be
-  restored), so the remainder drop that would follow it is only the skip of `ref` fields above.
+  backends, and the invariant may mention `ref` fields. Moving one owned field out of a `let mut` borrowing struct
+  (R-6g9-6, `let t = move p.tape;`) consumes the struct like an owned one; its remainder drop skips the `ref`
+  fields as above.
   Tests: [document](tests/spec/r6g9_2_doc.pruv), [invariant](tests/spec/r6g9_2_doc_invariant.pruv),
   [forwarded](tests/spec/r6g9_2_forward.pruv), [empty `ref` field](tests/spec/r6g9_3_empty_field.pruv),
   [copy of a borrowed source](tests/spec/r6g9_2_copy_source.pruv), [contract constructor](tests/spec/r6g9_2_contract_ctor.pruv),
@@ -1832,6 +1833,52 @@ borrowed value is live.
   rejects [two roots](tests/spec/r6g9_5_two_roots.pruv), [root read](tests/spec/r6g9_5_root_read.pruv),
   [contract mention](tests/spec/r6g9_5_contract_mention.pruv), [escape](tests/spec/r6g9_5_escape.pruv),
   [root invariant](tests/spec/r6g9_5_root_invariant.pruv).
+- R-6g9-6 **Mutable borrowing structs.** A borrowing struct (R-6g-11) may be the type of a `let mut` local or of an
+  `inout` parameter (Rust `let mut u = Units { .. }` and `fn next(u: &mut Units<'_>)`, the jstr cursor and the hand
+  JSON `Parser { input, pos, tape }`). Owned fields are assigned, pushed to and passed `inout` as in an owned
+  struct; a `ref` field (or a borrowing-struct field) is assigned from a view (`u.raw = subview(x, ..)`).
+  - *Provenance.* A `let mut` borrowing local holds the provenance of its initializer, and an `inout` parameter `u`
+    holds `{u}` (shared), for its whole scope. A whole assignment `u = e`, and an assignment to a `ref` or
+    borrowing-struct field of `u`, must give a provenance that is a subset of what `u` holds (a root exclusive in
+    `e` must be exclusive in `u`); anything else is `type/borrow_escape`. This departs from
+    docs/B_BUNDLE_SPEC.md §4.1, which grew the held set by union at each assignment: the union is not sound for a
+    view copied out of `u` (`let r = u.raw;`) before a later assignment in a loop, because `r` would keep the old
+    set, and the subset rule needs no fixed point, so the R-6g9-4 pass stays one pass. To hold data from another
+    source, bind a new borrowing local.
+  - *Liveness.* A whole assignment `u = e` to a `let mut` borrowing local ends the old borrow, as a `let` does
+    (R-6g9-4 kill of `u`'s bit; the target is not a use of the borrow). A source may therefore be written between
+    the last use of the old value and the assignment, and after the last use of the new value. A view copied out of
+    `u` before the assignment keeps its own bit and stays live to its own last use. A whole assignment while a view
+    of an owned field of `u` is live (`let t = subview(u.tape, ..)`) is `type/borrow_conflict`, as for owned
+    structs. A value that moves a root it borrows (`p = Parser { input: subview(x, 1, 3), tape: move x, .. }`) is
+    `type/borrow_conflict`, as for a `let`. A place binding of an owned field (`let d = inout u.pos;`) uses `u`, so
+    `u`'s borrow is live before it. The cost is the R-6g9-4 bound: one extra kill bit per assignment.
+  - *Limits.* A whole assignment of an `inout` borrowing-struct parameter is rejected as for every `inout` struct;
+    `from(u)` naming an `inout` borrowing struct is `type/borrow_signature` (the result would outlive the `&mut`
+    reborrow; no hand form needs it); a place binding (R-6g9-5) whose place has a borrowed type (`let d = inout u;`,
+    `let d = inout u.raw;`) is `type/place_binding`, while a place binding of an owned field (`let d = inout u.pos;`)
+    is allowed. A `ref` field is a shared view even in a mutable struct: storing to its elements is
+    `type/immutable`, passing it `inout` (to a function or a growing builtin) is `type/inout_argument`, and moving it
+    out is `type/array_alias`. `let mut` of a `ref` view stays `type/borrow_signature`. A field moved out of a borrowing struct
+    follows R-6e-16 like an owned struct (docs/L3_RESTRUCTURE_SPEC.md G-B2-L1).
+  - *Code.* Rust: an `inout` parameter is `&mut Units<'_>`, a local `let mut u: Units = ..` and a reassignment
+    `u = Units { .. };`, with no `clone` or `to_vec`; a `ref` field store is a plain slice assignment
+    (`u.raw = &u.raw[1..];`). LLVM: the struct is the R-6g9-2 aggregate, an `inout` parameter a pointer to it, as
+    for owned structs; a `ref` field store writes the view pair, and no view is dropped on reassignment.
+  - Tests: [jstr cursor](tests/spec/r6g9_6_cursor.pruv), [parser with owned tape](tests/spec/r6g9_6_parser.pruv),
+    [owned-field view then rebuild](tests/spec/r6g9_6_owned_view.pruv),
+    [copied view outlives rebuild](tests/spec/r6g9_6_derived_view.pruv),
+    [rebuild in a loop](tests/spec/r6g9_6_loop_rebind.pruv), [owned-field place](tests/spec/r6g9_6_place_field.pruv),
+    [replace a ref field](tests/spec/r6g9_6_ref_assign.pruv), [move an owned field](tests/spec/r6g9_6_move_owned.pruv);
+    rejects [store a foreign view](tests/spec/r6g9_6_store_foreign.pruv),
+    [rebuild from another source](tests/spec/r6g9_6_rebind_foreign.pruv),
+    [owned-field view live](tests/spec/r6g9_6_owned_view_conflict.pruv),
+    [copied view live](tests/spec/r6g9_6_derived_view_write.pruv), [from inout](tests/spec/r6g9_6_from_inout.pruv),
+    [whole place](tests/spec/r6g9_6_place_whole.pruv), [ref-field place](tests/spec/r6g9_6_ref_place.pruv),
+    [ref field passed inout](tests/spec/r6g9_6_ref_inout.pruv), [ref field moved](tests/spec/r6g9_6_move_ref.pruv),
+    [rebuild moves a borrowed root](tests/spec/r6g9_6_rebind_move.pruv),
+    [write before an owned-field place](tests/spec/r6g9_6_place_root_live.pruv),
+    [rebuild after an earlier error](tests/spec/r6g9_6_rebind_after_error.pruv).
 
 ## 6h. Files (G10)
 
@@ -2725,7 +2772,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/arity` | type | a call or constructor with the wrong number of arguments |
 | `type/array_alias` | type | a borrowed array or str is stored or returned without `copy` |
 | `type/borrow_conflict` | type | a root of a live borrow is written, moved or lent `inout` (exclusive root: used) (R-6g-11) |
-| `type/borrow_escape` | type | a returned borrow may borrow a local, not only its `from` parameters (R-6g-11) |
+| `type/borrow_escape` | type | a returned borrow may borrow a local, not only its `from` parameters (R-6g-11), or a mutable borrowing struct is given data it does not already borrow (R-6g9-6) |
 | `type/borrow_signature` | type | a `ref` type or borrowing struct outside its allowed positions, or a bad `from` list (R-6g-11) |
 | `type/place_binding` | type | a place binding `let d = inout P;` whose place is not allowed or overlaps another live place binding (R-6g9-5) |
 | `type/async_unconsumed` | type | a temporary `Loop` is never consumed |

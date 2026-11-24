@@ -1,0 +1,10 @@
+{
+  "gen_contains": ["u.raw = ", "u: &mut Units<'_>"],
+  "gen_absent": ["to_vec()", ".clone()", "let pruv_v: ::std::vec::Vec<u8>"],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["291"],
+    "alloc_balance": true
+  }
+}

@@ -2037,7 +2037,9 @@ class Gen:
         s.refs = {p.name for p in f.params if s.is_ext(p.type) and not p.take}
         param_types = [
             ("&mut str" if p.type == STR else
-             "&mut " + (rty(p.type, True)[1:] if is_array(p.type) and p.name not in s.resizable else rty(p.type)))
+             "&mut " + (rty(p.type, True)[1:] if is_array(p.type) and p.name not in s.resizable else rty(p.type))
+             # R-6g9-6: an inout borrowing struct is `&mut Units<'_>`, its own lifetime left free.
+             + ("<'_>" if borrowing_struct(s.table.decls.get(p.type.name)) else ""))
             if p.mode == "inout" else s.rt(p.type, not p.take, p) for p in f.params]
         lifetime = "<'a>" if f.borrow_from else ""
         if f.borrow_from:
@@ -3210,6 +3212,10 @@ class Gen:
         elif isinstance(st, FieldAssign):
             vty = st.value.ty
             call = st.value
+            if st.ref_store and vty in (ARRAY_U8, STR):
+                # R-6g9-6: store a slice or str view directly, without an owned temporary
+                s.emit(ind, "%s.%s = %s;" % (st.name, ".".join(st.fields), s.arr_ref(st.value)))
+                return
             if (isinstance(call, Call) and (call.name == "vec_push"
                     or call.name == "map_insert" and (is_nested_collection_field(vty) or is_string_record_map(vty)))
                     and call.name not in s.fmap and isinstance(call.args[0], Move)

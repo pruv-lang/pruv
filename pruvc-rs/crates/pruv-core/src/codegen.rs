@@ -2095,6 +2095,9 @@ impl<'a> Gen<'a> {
                 // G5 A2: resizable arrays borrow the Vec; other arrays borrow its slice
                 if self.resizable_inouts.contains(&p.name) {
                     format!("&mut {}", rty(&p.ty, false))
+                } else if self.table.decl(&p.ty).is_some_and(crate::borrowed::borrowing_struct) {
+                    // R-6g9-6: leave the lifetime of the borrowed fields free.
+                    format!("&mut {}<'_>", p.ty)
                 } else if GType::from_key(&p.ty).is_array() {
                     format!("&mut {}", &rty(&p.ty, true)[1..])
                 } else {
@@ -4318,6 +4321,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 self.emit(ind, &format!("{} = {};", target, v));
             }
             Stmt::FieldAssign(x) => {
+                // R-6g9-6: store a slice or str view directly, without an owned temporary.
+                if x.ref_store && expr_ty(&x.value).as_deref().is_some_and(|ty| matches!(ty, "array_u8" | "str")) {
+                    let value = self.borrowed_value(&x.value)?;
+                    self.emit(ind, &format!("{}.{} = {};", x.name, x.fields.join("."), value));
+                    return Ok(());
+                }
                 if let Expr::Call(call) = &x.value {
                     let nested_insert = call.name == "map_insert"
                         && expr_ty(&x.value).as_deref().is_some_and(|t| {

@@ -1,0 +1,10 @@
+{
+  "gen_contains": ["struct Units<'a>", "u: &mut Units<'_>", "u = (Units {"],
+  "gen_absent": ["to_vec()", ".clone()"],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["938"],
+    "alloc_balance": true
+  }
+}

@@ -1,0 +1,10 @@
+// spec: R-6g9-6 reject
+// A place binding of a `ref` field would let a later whole store replace the view without the provenance check on
+// the struct: rejected; write the field directly (`u.raw = ...`).
+struct Units { raw: ref [u8], pos: i64 }
+pub fn checksum() -> i64 ! alloc {
+  let mut x: [u8] = alloc(5, 3);
+  let mut u: Units = Units { raw: subview(x, 1, 4), pos: 0 };
+  let d = inout u.raw;
+  return u.pos + len(u.raw);
+}

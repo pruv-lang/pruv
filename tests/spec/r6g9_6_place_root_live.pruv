@@ -1,0 +1,12 @@
+// spec: R-6g9-6 reject
+// A place binding of an owned field uses its borrowing struct, so the struct's borrow of x is live at the write
+// before it (rustc E0506 for `x[0] = 3; let d = &mut u.pos;` while `u` borrows `x`).
+struct Units { raw: ref [u8], pos: i64 }
+pub fn checksum() -> i64 ! alloc {
+  let mut x: [u8] = alloc(5, 3);
+  let mut u: Units = Units { raw: subview(x, 1, 4), pos: 0 };
+  x[0] = 3;
+  let d = inout u.pos;
+  d = 4;
+  return d;
+}

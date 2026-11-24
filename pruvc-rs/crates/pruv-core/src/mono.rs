@@ -830,6 +830,7 @@ impl<'a> Mono<'a> {
                 name: x.name.clone(),
                 fields: x.fields.clone(),
                 value: self.cp_e(&x.value)?,
+                ref_store: x.ref_store,
             }),
             Stmt::Match(x) => {
                 let scrutinee = self.cp_e(&x.scrutinee)?;
