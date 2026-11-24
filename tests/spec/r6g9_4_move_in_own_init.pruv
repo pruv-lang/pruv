@@ -1,0 +1,16 @@
+// spec: R-6g9-4 reject
+// A borrowing-struct literal borrows x in one field and moves x in a later field: the move conflicts with
+// the new view's own provenance, as `Doc { src: &x, scratch: x }` does in hand Rust.
+struct Doc { src: ref [u8], scratch: [u8] }
+
+pub fn f(k: i64) -> i64 ! alloc
+{
+  let mut x: [u8] = alloc(1, 0);
+  let prior: ref [u8] = subview(x, 0, 1);
+  if k == 0 {
+    return len(prior);
+  } else {
+    let d: Doc = Doc { src: x, scratch: move x };
+    return len(d.src);
+  }
+}

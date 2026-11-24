@@ -1487,8 +1487,8 @@ borrowed value is live.
     of an owned `[u8]` / `str` field of a local record (`subview(d.scratch, ..)`): the record variable `d` only.
     A struct literal: the union over its `ref` fields. The
     argument at a `from` position must be a variable, field path, `subview` or `ref` value.
-  - *Live range.* A `ref` / borrowing local is live from the statement after its `let` through the last statement
-    of the same block that mentions it (a loop or `if` that mentions it anywhere counts whole).
+  - *Live range.* A `ref` / borrowing local is live at a statement iff some path from that statement reaches a
+    mention of it (path liveness, R-6g9-4).
   - *Exclusivity.* In the live range of a borrow, a shared root may be read but not assigned, stored into (element
     or field), passed `inout` (including `arr_reserve`, `arr_push` and `arr_append`), moved, or given to `resize`/
     `truncate`-assign, `vec_push` or `vec_clear`; an exclusive
@@ -1755,6 +1755,29 @@ borrowed value is live.
   [literal](tests/spec/r6g9_1_literal.pruv), [subview local](tests/spec/r6g_11_local_view.pruv),
   [two sources](tests/spec/r6g_11_two_sources.pruv), [copy then reuse](tests/spec/r6g_11_copy_owned.pruv);
   rejects [borrowing struct](tests/spec/r6g9_1_struct_llvm.pruv), [enum payload](tests/spec/r6g9_1_enum_payload.pruv).
+- R-6g9-4 **Path liveness.** A borrow (a `ref` local or a borrowing-struct local) is live at a statement iff
+  some control-flow path from that statement reaches a mention of the borrow before its `let` is reached again.
+  Paths follow the statements: an `if` goes to either branch, a `match` to any arm, a loop head to its body or
+  past the loop, the end of a loop body back to the head, and a `return` ends the path. The R-6g-11
+  exclusivity rule applies at every statement where the borrow is live, so a view whose last use is inside one
+  branch of an `if` frees its roots for the rest of that branch and for the other branch, as in hand Rust (NLL),
+  while a view used anywhere in a loop body after its `let` outside the loop stays live, through the back edge, on
+  the paths of the body that can reach that use (a path that leaves by `return` frees it). Only statements
+  reachable from the function entry are checked: a statement after a `return` in the same block is not, as rustc
+  does not borrow-check unreachable code. At a borrow `let` itself, a `move` of a root of the new borrow's own
+  provenance (`Doc { src: x, scratch: move x }`) is `type/borrow_conflict`. This replaces the earlier block rule ("a loop or `if` that mentions it counts whole"); it
+  accepts strictly more programs, and every R-6g-11 reject test still rejects with the same diagnostic.
+  The statement graph has one join point per `if` and `match`, so each block has at most one exit; the provenance
+  and scope maps are shared across blocks and restored by an undo log, not copied. Liveness is a backward
+  gen/kill over bit sets (one bit per borrow) computed by reverse-order sweeps until no set changes (at most loop depth
+  + 2 sweeps), and uses meet per-root masks of the shared and exclusive borrows, so the cost is
+  O((d+2)·S·B/64 + M·B/64 + Σ|provenance|) for S statements, loop depth d, B borrows and M root mentions
+  (docs/B_BUNDLE_SPEC.md §4.3).
+  Tests: [dies in if](tests/spec/r6g9_4_dies_in_if.pruv), [loop still live](tests/spec/r6g9_4_loop_still_live.pruv),
+  [nested loops](tests/spec/r6g9_4_nested_loops.pruv), [outer loop live](tests/spec/r6g9_4_nested_outer_live.pruv),
+  [many views](tests/spec/r6g9_4_many_views.pruv), [after return](tests/spec/r6g9_4_after_return.pruv),
+  [move in own init](tests/spec/r6g9_4_move_in_own_init.pruv),
+  [move after return](tests/spec/r6g9_4_move_after_return.pruv); cost: tests/view_liveness_cost.py.
 
 ## 6h. Files (G10)
 

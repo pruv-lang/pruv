@@ -133,9 +133,10 @@ Backward gen/kill liveness over the function body's structured control flow (`if
 `break`, `continue`, `return`). State: a bit set of the borrow variables live after the current statement. A mention
 generates; a `let` and a whole assignment of a `let mut` borrowing struct (B6) kill. `return` starts from the
 variables the result mentions; `continue` / `break` take the set at the loop head / after the loop. Loops are solved
-by one worklist over the statement graph in reverse postorder, not by iterating each loop on its own: with gen/kill
-bit sets each node's set only grows, so every node is processed at most (loop depth + 1) times in total (nested
-loops do not multiply). A statement conflicts with a borrow only where that borrow is live at it.
+by whole-graph sweeps in reverse statement order until no set changes, not by iterating each loop on its own: with
+gen/kill bit sets each node's set only grows, so at most (loop depth + 2) sweeps run (nested loops do not multiply).
+Each `if` / `match` adds one join point, so a nested block hands its parent O(1) exits. A statement conflicts with a
+borrow only where that borrow is live at it, and only statements reachable from the entry are checked.
 
 ### 4.3 Complexity bound (rule 2 of AGENTS.md)
 
@@ -145,7 +146,7 @@ LB2 is O(S x V) per block (S statements, V simultaneously live views). B4 replac
   split into a shared mask and an exclusive mask;
 - per statement: its root mentions (already collected for the effect pass), each tagged read / write / move.
 
-Liveness is a bit set over the B borrow variables of the function: O((d + 1) x S x B / 64) words, d the loop
+Liveness is a bit set over the B borrow variables of the function: O((d + 2) x S x B / 64) words, d the loop
 nesting depth (§4.2). Conflict checking tests each root mention once with `live & root_mask[r] != 0` (the shared or
 the exclusive mask by mention kind): O(B / 64) per mention, so O(M x B / 64) in total, M the number of root
 mentions; only a mention that conflicts scans its mask to name the borrow in the message, and checking stops at the

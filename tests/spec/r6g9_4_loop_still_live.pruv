@@ -1,0 +1,20 @@
+// spec: R-6g9-4 reject
+// The store follows the view's last use in the body, but the back edge reaches that use again.
+pub fn f() -> i64 ! alloc
+{
+  let mut b: [u8] = alloc(4, 7);
+  let m: ref [u8] = subview(b, 0, 2);
+  let mut s: i64 = 0;
+  let mut i: i64 = 0;
+  while i < 3
+    invariant 0 <= i && i <= 3 && len(b) == 4 && s <= 255 * i
+    decreases 3 - i
+  {
+    s = s + m[0];
+    if i == 1 {
+      b[i] = 1;
+    }
+    i = i + 1;
+  }
+  return s;
+}

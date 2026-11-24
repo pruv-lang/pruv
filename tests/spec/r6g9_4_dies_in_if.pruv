@@ -1,0 +1,15 @@
+// spec: R-6g9-4 accept
+// The view's last use is inside the then-branch; after it, and on the else path, the owner is writable.
+pub fn f(x: i64) -> i64 ! alloc
+{
+  let mut b: [u8] = alloc(4, 7);
+  let m: ref [u8] = subview(b, 0, 2);
+  let mut s: i64 = 0;
+  if x > 0 {
+    s = m[0] + m[1];
+    b[0] = 1;
+  } else {
+    b[1] = 2;
+  }
+  return s + b[0] + b[1];
+}

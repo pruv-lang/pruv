@@ -1,0 +1,32 @@
+// spec: R-6g9-4 accept
+// A view made in the outer loop is used by the inner loop and in one branch after it;
+// the other branch writes the owner, which no later use of the view can reach.
+pub fn f() -> i64 ! alloc
+{
+  let mut b: [u8] = alloc(4, 7);
+  let mut s: i64 = 0;
+  let mut i: i64 = 0;
+  while i < 3
+    invariant 0 <= i && i <= 3 && len(b) == 4 && 0 <= s && s <= 1000 * i
+    decreases 3 - i
+  {
+    let m: ref [u8] = subview(b, 0, 2);
+    let mut t: i64 = 0;
+    let mut j: i64 = 0;
+    while j < 2
+      invariant 0 <= j && j <= 2 && 0 <= t && t <= 255 * j
+      decreases 2 - j
+    {
+      t = t + m[j];
+      j = j + 1;
+    }
+    if t > 100 {
+      b[0] = 1;
+    } else {
+      t = t + m[1];
+    }
+    s = s + t;
+    i = i + 1;
+  }
+  return s;
+}

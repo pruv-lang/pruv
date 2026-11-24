@@ -20,6 +20,7 @@ Test format (tests/spec/README.md): a file `NAME.pruv` or a project `NAME/root.p
   gen_contains, gen_absent           strings that must / must not appear in the generated output
   gen_regex, gen_regex_absent        regular expressions (re.M) that must / must not match the generated output
   out_contains     strings that must appear in stdout+stderr
+  max_seconds      upper bound on the compiler's wall time for this test (a compile-time bound, R-6g9-4)
   cache            {"prime": "OTHER.pruv" (optional, relative to the test), "hits": "positive"|"zero"}: compile prime
                    (default: the test itself) with a fresh --proof-cache, then compile the test with the same cache
                    and --trust-report; proof_cache.hits must be > 0 (positive) or == 0 (zero)
@@ -167,6 +168,8 @@ def run_test(drv, src, want, kind, work, seen):
         elif kind == "reject" and c.returncode == 0:
             cls = "false_accept"
         return False, "exit %d (expected %d) %s" % (c.returncode, exit_want, text[-400:]), cls
+    if "max_seconds" in want and c.elapsed > want["max_seconds"]:
+        return False, "compile took %.2fs (max_seconds %s)" % (c.elapsed, want["max_seconds"]), "other"
     if "code" in want:
         matching = [d for d in ds if d.get("stage") == want.get("stage") and d.get("code") == want["code"]]
         if not matching:

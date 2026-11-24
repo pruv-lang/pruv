@@ -1,0 +1,10 @@
+// spec: R-6g9-4 accept
+// A move of a root the new view borrows is a conflict only where it can run; after `return` it is accepted.
+struct Doc { src: ref [u8], scratch: [u8] }
+
+pub fn f() -> i64 ! alloc {
+  let mut x: [u8] = alloc(1, 0);
+  return 0;
+  let d: Doc = Doc { src: x, scratch: move x };
+  return len(d.src);
+}
