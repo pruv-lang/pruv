@@ -1,0 +1,8 @@
+{
+  "run": {
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["703"],
+    "alloc_balance": true
+  }
+}

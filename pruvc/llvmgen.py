@@ -1589,6 +1589,12 @@ class FnGen:
     def owned_slot(s, sl):
         return any(sl is x for sc in s.scopes for x in sc["arrays"])
 
+    def may_take(s):
+        """Every last-use take (move_src, take_src, nested_moves, ret_takable) is on: not a cost build, and R-6g9-1 no
+        `ref` local in the function, since a live view may read the array (local or field) a take would move, shrink,
+        regrow or free"""
+        return not s.cost and not s.views
+
     def ret_movable(s, e):
         """P3 (the LLVM form of the Rust backend's return_movable / consuming match): a return is the last use of every
         local, so an owned extended local, or an unboxed extended payload binder of a match on one, that the returned
@@ -1660,7 +1666,7 @@ class FnGen:
         expression itself, or a field of a constructor / struct literal / enum constructor in it, the same place walk
         as ret_movable) and that the expression names exactly once; the return is their last use, so the call takes the
         buffer and the return's cleanup skips the slot"""
-        if s.cost or e is None or s.views:     # R-6g9-1: a live `ref` local may view the taken array
+        if not s.may_take() or e is None:
             return set()
         counts = {}
 
@@ -1685,7 +1691,7 @@ class FnGen:
         """P3 M3: a let / assignment `y = string_to_str(x)` whose whole right side is that call, at the last use of the
         owned local String x (dead_after), takes x's buffer; returns {x}, else an empty set"""
         e = st.value
-        if s.cost or not (isinstance(e, Call) and e.name == "string_to_str" and len(e.args) == 1):
+        if not s.may_take() or not (isinstance(e, Call) and e.name == "string_to_str" and len(e.args) == 1):
             return set()
         x = e.args[0]
         if not isinstance(x, Var) or x.name == st.name or not s.dead_after(x.name) or not s.takeable(x.name):
@@ -2240,7 +2246,9 @@ class FnGen:
         owned local array, or an array payload binder of a match on an owned extended local that is dead after the
         match; returns {x} (the copy lowering then takes the value and empties its owner), else an empty set"""
         e = st.value
-        if (not s.cost and isinstance(e, Call) and len(e.args) == (2 if e.name == "truncate" else 1)
+        if not s.may_take():
+            return set()
+        if (isinstance(e, Call) and len(e.args) == (2 if e.name == "truncate" else 1)
                 and e.name in ("truncate", "str_from_utf8") and isinstance(e.args[0], Var)):
             # LG33 (G-LG32-5, G-DB54-2): truncate(x, m) / str_from_utf8(x) of an owned local array at its last use
             # hands x's block over (the Rust backend's last_copy); a length argument naming x keeps it borrowed
@@ -2262,7 +2270,7 @@ class FnGen:
             if not (s.dead_after(x.name) or s.return_next(x.name)):
                 return set()
             return {x.name} if kind == "slot" and v.k == "arr" and s.owned_slot(v) else set()
-        if s.cost or not (isinstance(e, Call) and e.name == "copy" and len(e.args) == 1):
+        if not (isinstance(e, Call) and e.name == "copy" and len(e.args) == 1):
             return set()
         x = e.args[0]
         if (isinstance(x, FieldAccess) and isinstance(x.base, Var) and x.base.name != st.name
@@ -2276,8 +2284,7 @@ class FnGen:
                 if is_arr(fd.type) and not s.fb(v.ty, None, fd.name):
                     return {x.base.name}
             return set()
-        if not isinstance(x, Var) or x.name == st.name or not s.dead_after(x.name) or s.views:
-            # R-6g9-1: a live `ref` local may view x, so the copy stays a copy
+        if not isinstance(x, Var) or x.name == st.name or not s.dead_after(x.name):
             return set()
         kind, v = s.lookup(x.name)
         if kind == "slot" and v.k == "arr" and s.owned_slot(v):
@@ -2295,7 +2302,7 @@ class FnGen:
         local); for str_from_utf8 also an array payload binder of a consuming match (as
         move_src).  The str_from_utf8 lowering then hands x's block and cap to the str, the resize lowering grows x's
         block in place (realloc) instead of a fresh block plus a prefix copy."""
-        if s.cost or e is None:
+        if not s.may_take() or e is None:
             return set()
         counts = {}
         calls = []

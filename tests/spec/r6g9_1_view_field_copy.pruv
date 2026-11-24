@@ -1,0 +1,18 @@
+// spec: R-6g9-1 accept
+fn head(s: [u8]) -> ref [u8] from(s)
+  requires len(s) >= 2
+  ensures len(result) == 1
+{
+  return subview(s, 0, 1);
+}
+// A copy of a struct field a live view reads stays a copy at the struct's last use: writing the copy leaves the view
+// reading the original bytes.
+struct Boxed { bytes: [u8] }
+pub fn checksum() -> i64 ! alloc {
+  let a: [u8] = alloc(2, 7);
+  let b: Boxed = Boxed { bytes: move a };
+  let v: ref [u8] = head(b.bytes);
+  let mut c: [u8] = copy(b.bytes);
+  c[0] = 122;
+  return v[0] * 1000 + c[0];
+}
