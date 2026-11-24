@@ -6,26 +6,38 @@ mod lex;
 pub fn literal(input: [u8], pos: i64, end: i64) -> i64
   requires 0 <= pos && pos <= end && end <= len(input) && end <= 16777216
 {
-  let r: crate::lex::Scan = crate::lex::scan_literal(input, pos, end);
-  if r.kind == 0 { return r.position; }
-  return -(r.kind * 33554432 + r.position) - 1;
+  let mut cursor: i64 = pos;
+  let mut r: Result<(), crate::lex::Fault> = Ok::<(), crate::lex::Fault>(());
+  if cursor < end && input[cursor] == 116 { r = crate::lex::scan_literal(input, inout cursor, end, "true"); }
+  else if cursor < end && input[cursor] == 102 { r = crate::lex::scan_literal(input, inout cursor, end, "false"); }
+  else { r = crate::lex::scan_literal(input, inout cursor, end, "null"); }
+  match r {
+    Ok(()) => { return cursor; }
+    Err(fault) => { return -(fault.kind * 33554432 + fault.position) - 1; }
+  }
 }
 
 pub fn number(input: [u8], pos: i64, end: i64) -> i64
   requires 0 <= pos && pos <= end && end <= len(input) && end <= 16777216
 {
-  let r: crate::lex::Scan = crate::lex::scan_number(input, pos, end);
-  if r.kind == 0 { return r.position; }
-  return -(r.kind * 33554432 + r.position) - 1;
+  let mut cursor: i64 = pos;
+  let r: Result<(), crate::lex::Fault> = crate::lex::scan_number(input, inout cursor, end);
+  match r {
+    Ok(()) => { return cursor; }
+    Err(fault) => { return -(fault.kind * 33554432 + fault.position) - 1; }
+  }
 }
 
 pub fn string(input: [u8], pos: i64, end: i64) -> i64
   requires 0 <= pos && pos <= end && end <= len(input) && end <= 16777216
   requires pos < end && input[pos] == 34
 {
-  let r: crate::lex::Scan = crate::lex::scan_string(input, pos, end);
-  if r.kind == 0 { return r.position; }
-  return -(r.kind * 33554432 + r.position) - 1;
+  let mut cursor: i64 = pos;
+  let r: Result<(), crate::lex::Fault> = crate::lex::scan_string(input, inout cursor, end);
+  match r {
+    Ok(()) => { return cursor; }
+    Err(fault) => { return -(fault.kind * 33554432 + fault.position) - 1; }
+  }
 }
 
 pub fn utf8(input: [u8], pos: i64, end: i64) -> i64
@@ -36,4 +48,8 @@ pub fn utf8(input: [u8], pos: i64, end: i64) -> i64
 pub fn whitespace(input: [u8], pos: i64, end: i64) -> i64
   requires 0 <= pos && pos <= end && end <= len(input)
   ensures pos <= result && result <= end
-{ return crate::lex::skip_whitespace(input, pos, end); }
+{
+  let mut cursor: i64 = pos;
+  crate::lex::skip_whitespace(input, inout cursor, end);
+  return cursor;
+}
