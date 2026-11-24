@@ -94,11 +94,11 @@
     "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
     "compiler_commands": {
       "py": [
-        "/Users/spica4345/Projects/pruv/.venv/bin/python",
-        "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/pruvc/pruvc.py"
+        "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/.venv/bin/python",
+        "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/pruvc/pruvc.py"
       ],
       "rs": [
-        "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
+        "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/pruvc-rs/target/release/pruvc"
       ]
     },
     "rust_source_sha256": "050b877420ee65df5bfe19778897a0e1d34bcabe7ffe60baf280fdd32d467225",
@@ -117,5 +117,5 @@
     "mismatches": 0
   },
   "jsonl_steps": 44,
-  "wall_seconds": 73.831
+  "wall_seconds": 216.828
 }

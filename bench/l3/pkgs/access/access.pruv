@@ -34,19 +34,23 @@ pub fn array_at(doc: crate::json::JsonDocument, id: i64, index: i64) -> i64
   ensures result >= 0 ==> (result < len(doc.tape) / 6 && doc.tape[6 * result + 4] == id)
 {
   if !valid(doc, id) { return -3; } if doc.tape[6 * id] != 5 { return -2; }
-  if index < 0 { return -1; }
+  // hand Document::array_at: the count decides a miss, then index steps along the next links.
+  if index < 0 || index >= doc.tape[6 * id + 5] { return -1; }
   let stop: i64 = doc.tape[6 * id + 3];
+  if stop > len(doc.tape) / 6 { return -4; }
   let mut j: i64 = id + 1; let mut n: i64 = 0;
-  while j < stop
-    invariant 0 <= id && id < j && j <= stop && stop <= len(doc.tape) / 6 && len(doc.tape) <= 6291456
-    invariant 0 <= n && n <= j
-    decreases stop - j
+  while n < index
+    invariant 0 <= id && id < j && stop <= len(doc.tape) / 6 && len(doc.tape) <= 6291456
+    invariant 0 <= n && n <= index
+    decreases index - n
   {
+    if j >= stop { return -4; }
     let next: i64 = doc.tape[6 * j + 3];
-    if next > stop || doc.tape[6 * j + 4] != id || !valid(doc, j) { return -4; }
-    if n == index { return j; } n = n + 1; j = next;
+    if next <= j { return -4; }
+    n = n + 1; j = next;
   }
-  return -1;
+  if j >= stop || doc.tape[6 * j + 4] != id || !valid(doc, j) { return -4; }
+  return j;
 }
 // Member lookup against key[0..klen]; no allocation.
 fn find(doc: crate::json::JsonDocument, id: i64, key: [i64], klen: i64) -> i64
@@ -283,11 +287,12 @@ pub fn string_units(doc: crate::json::JsonDocument, id: i64) -> Units ! alloc
   ensures result.status == 0 ==> (0 <= id && id < len(doc.tape) / 6 && len(result.units) <= doc.tape[6 * id + 2] - doc.tape[6 * id + 1])
 {
   let k: i64 = kind(doc, id);
-  if k != 4 { let empty: [i64] = alloc(0, 0); let mut status: i64 = -2; if k < 0 { status = k; } return Units { status: status, units: copy(empty) }; }
+  // hand query mode 5: the decoded units are the result (moved); a miss returns an empty array.
+  if k != 4 { let mut status: i64 = -2; if k < 0 { status = k; } return Units { status: status, units: alloc(0, 0) }; }
   let s: Span = raw_span(doc, id);
-  if s.status != 0 { let empty: [i64] = alloc(0, 0); return Units { status: s.status, units: copy(empty) }; }
+  if s.status != 0 { return Units { status: s.status, units: alloc(0, 0) }; }
   let u: [i64] = crate::jstr::string_units(doc.source, s.start, s.end);
-  return Units { status: 0, units: copy(u) };
+  return Units { status: 0, units: move u };
 }
 pub fn string_text(doc: crate::json::JsonDocument, id: i64) -> crate::jstr::Text ! alloc
   ensures is_variant(result, crate::jstr::Text::Decoded) ==> (0 <= id && id < len(doc.tape) / 6 && len(variant_field(result, crate::jstr::Text::Decoded, text)) <= 3 * (doc.tape[6 * id + 2] - doc.tape[6 * id + 1]))
@@ -300,6 +305,8 @@ pub fn string_text(doc: crate::json::JsonDocument, id: i64) -> crate::jstr::Text
 }
 // 1 when id is a string whose value equals lit, 0 when it is another string or another kind, negative on a
 // bad ID or corrupt tape. ASCII literals are compared without decoding.
+// The plain bit (tape word 5 == 1) is trusted: the document must come from a parser that sets it only for an
+// escape-free, UTF-8-checked string (parse::scan_into); other parsers write 0 and take the decode path.
 pub fn string_is(doc: crate::json::JsonDocument, id: i64, lit: str) -> i64 ! alloc
   ensures result <= 1
 {
@@ -311,6 +318,17 @@ pub fn string_is(doc: crate::json::JsonDocument, id: i64, lit: str) -> i64 ! all
   if len(lit) <= 16777216 && is_ascii(lit) {
     if crate::jstr::ascii_equal(doc.source, s.start, s.end, lit) { return 1; }
     return 0;
+  }
+  // hand get_str: an escape-free string is compared in place (Cow::Borrowed), only an escaped one is decoded.
+  if doc.tape[6 * id + 5] == 1 && s.end - s.start >= 2 {
+    let p: i64 = s.start + 1;
+    if s.end - 1 - p != len(lit) { return 0; }
+    let mut q: i64 = 0;
+    while q < len(lit)
+      invariant 0 <= q && q <= len(lit) && p + len(lit) == s.end - 1 && s.end <= len(doc.source) && 0 <= p
+      decreases len(lit) - q
+    { if doc.source[p + q] != lit[q] { return 0; } q = q + 1; }
+    return 1;
   }
   let b: [u8] = crate::jstr::string_utf8(doc.source, s.start, s.end);
   if len(b) != len(lit) { return 0; }

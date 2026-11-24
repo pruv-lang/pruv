@@ -23,7 +23,7 @@
               "counterexample": {}
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/depth_constant/py/a0_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/depth_constant/py/a0_root_gen.rs",
           "ll": null,
           "stderr": "{\"stage\": \"verify\", \"line\": 48, \"col\": 53, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 48) in @json::limit_depth\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/json/json.pruv\", \"counterexample\": {}}\n"
         },
@@ -41,7 +41,7 @@
               "counterexample": {}
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/depth_constant/rs/a0_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/depth_constant/rs/a0_root_gen.rs",
           "ll": null,
           "stderr": "{\"stage\": \"verify\", \"line\": 48, \"col\": 53, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 48) in @json::limit_depth\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/json/json.pruv\", \"counterexample\": {}}\n"
         }
@@ -77,7 +77,7 @@
               "counterexample": {}
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/record_constant/py/a0_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/record_constant/py/a0_root_gen.rs",
           "ll": null,
           "stderr": "{\"stage\": \"verify\", \"line\": 47, \"col\": 59, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 47) in @json::limit_records\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/json/json.pruv\", \"counterexample\": {}}\n"
         },
@@ -95,7 +95,7 @@
               "counterexample": {}
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/record_constant/rs/a0_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/record_constant/rs/a0_root_gen.rs",
           "ll": null,
           "stderr": "{\"stage\": \"verify\", \"line\": 47, \"col\": 59, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 47) in @json::limit_records\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/json/json.pruv\", \"counterexample\": {}}\n"
         }
@@ -194,7 +194,7 @@
               }
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/span_empty/py/a0_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/span_empty/py/a0_root_gen.rs",
           "ll": null,
           "stderr": "line\": 144, \"col\": 3, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 114) in @json::rec_ok\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/json/json.pruv\", \"counterexample\": {\"tape\": {\"len\": 62718, \"first\": [0, 0, 0, 0, 0, 0, 0, 0]}, \"input_length\": 0, \"r\": 10451, \"m\": 10453, \"b\": 62706, \"kind\": 5, \"s\": 0, \"e\": 0, \"sk\": 10453, \"par\": 10450, \"cnt\": -1, \"pb\": 62700, \"pk\": 5, \"ps\": -9223372036854769955, \"pe\": 28100, \"psk\": 10453}}\n"
         },
@@ -275,7 +275,7 @@
               }
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/span_empty/rs/a0_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/span_empty/rs/a0_root_gen.rs",
           "ll": null,
           "stderr": "\"line\": 144, \"col\": 3, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 114) in @json::rec_ok\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/json/json.pruv\", \"counterexample\": {\"tape\": {\"len\": 62712, \"first\": [0, 0, 0, 0, 0, 0, 0, 0]}, \"input_length\": 0, \"r\": 10451, \"m\": 10452, \"b\": 62706, \"kind\": 5, \"s\": 0, \"e\": 0, \"sk\": 10452, \"par\": 10450, \"cnt\": 1, \"pb\": 62700, \"pk\": 5, \"ps\": -9223372036854769955, \"pe\": 28100, \"psk\": 10452}}\n"
         }
@@ -340,7 +340,7 @@
               }
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/skip_equal/py/a0_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/skip_equal/py/a0_root_gen.rs",
           "ll": null,
           "stderr": "res\", \"message\": \"cannot prove postcondition (line 115) in @json::rec_ok\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/json/json.pruv\", \"counterexample\": {\"tape\": {\"len\": 193722, \"first\": [8366, 8366, 8366, 8366, 8366, 8366, 8366, 8366]}, \"input_length\": 8366, \"r\": 32286, \"m\": 32287, \"b\": 193716, \"kind\": 5, \"s\": 8365, \"e\": 8366, \"sk\": 32286, \"par\": 32285, \"cnt\": -1, \"pb\": 193710, \"pk\": 5, \"ps\": -9223372036854745196, \"pe\": 8366, \"psk\": 32287}}\n"
         },
@@ -387,7 +387,7 @@
               }
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/skip_equal/rs/a0_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/skip_equal/rs/a0_root_gen.rs",
           "ll": null,
           "stderr": "res\", \"message\": \"cannot prove postcondition (line 115) in @json::rec_ok\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/json/json.pruv\", \"counterexample\": {\"tape\": {\"len\": 193722, \"first\": [8366, 8366, 8366, 8366, 8366, 8366, 8366, 8366]}, \"input_length\": 8366, \"r\": 32286, \"m\": 32287, \"b\": 193716, \"kind\": 5, \"s\": 8365, \"e\": 8366, \"sk\": 32286, \"par\": 32285, \"cnt\": -1, \"pb\": 193710, \"pk\": 5, \"ps\": -9223372036854745196, \"pe\": 8366, \"psk\": 32287}}\n"
         }
@@ -416,7 +416,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/leading_zero/py/a1_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/leading_zero/py/a1_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         },
@@ -427,7 +427,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/leading_zero/rs/a1_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/leading_zero/rs/a1_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         }
@@ -457,7 +457,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/control_bound/py/a1_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/control_bound/py/a1_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         },
@@ -468,7 +468,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/control_bound/rs/a1_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/control_bound/rs/a1_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         }
@@ -498,7 +498,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/wrong_escape_kind/py/a1_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/wrong_escape_kind/py/a1_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         },
@@ -509,7 +509,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/wrong_escape_kind/rs/a1_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/wrong_escape_kind/rs/a1_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         }
@@ -539,7 +539,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/wrong_literal_position/py/a1_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/wrong_literal_position/py/a1_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         },
@@ -550,7 +550,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/wrong_literal_position/rs/a1_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/wrong_literal_position/rs/a1_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         }
@@ -580,7 +580,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/utf8_comparison/py/a1_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/utf8_comparison/py/a1_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         },
@@ -591,7 +591,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/utf8_comparison/rs/a1_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/utf8_comparison/rs/a1_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         }
@@ -621,7 +621,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/trailing_comma/py/a2_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/trailing_comma/py/a2_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         },
@@ -632,7 +632,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/trailing_comma/rs/a2_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/trailing_comma/rs/a2_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         }
@@ -800,7 +800,7 @@
               }
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/record_bound/py/a2_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/record_bound/py/a2_root_gen.rs",
           "ll": null,
           "stderr": "stcondition (line 199) in @parse::record\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/parse/parse.pruv\", \"counterexample\": {\"input\": {\"len\": 7368, \"first\": [241, 180, 3, 3, 3, 3, 3, 3]}, \"initial\": 0, \"first\": 1048576, \"pos\": 6825, \"tape\": {\"len\": 6291462, \"first\": [3, 3, 3, 3, 3, 3, 3, 3]}, \"parent\": 8855, \"depth\": 0, \"key\": true, \"end\": 7368, \"start\": 0, \"token\": \"@parse::Lexed::Value(7, false)\", \"kind\": 7, \"base\": 6291456, \"id\": 1048576}}\n"
         },
@@ -942,7 +942,7 @@
               }
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/record_bound/rs/a2_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/record_bound/rs/a2_root_gen.rs",
           "ll": null,
           "stderr": "ostcondition (line 199) in @parse::record\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/parse/parse.pruv\", \"counterexample\": {\"input\": {\"len\": 1, \"first\": [78]}, \"initial\": 0, \"first\": 1048576, \"pos\": 1, \"tape\": {\"len\": 6291462, \"first\": [53130, 53130, 53130, 53130, 53130, 53130, 53130, 53130]}, \"parent\": 8855, \"depth\": 0, \"key\": true, \"end\": 1, \"start\": 0, \"token\": \"@parse::Lexed::Value(7, false)\", \"kind\": 7, \"base\": 6291456, \"id\": 1048576}}\n"
         }
@@ -1016,7 +1016,7 @@
               }
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/depth_bound/py/a2_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/depth_bound/py/a2_root_gen.rs",
           "ll": null,
           "stderr": "not prove precondition of @parse::container (line 240) in @parse::record\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"@pkg/parse/parse.pruv\", \"counterexample\": {\"input\": {\"len\": 5854, \"first\": [3, 3, 3, 3, 3, 3, 3, 3]}, \"initial\": 0, \"first\": 0, \"pos\": 5854, \"tape\": {\"len\": 6, \"first\": [5, 5853, 5854, 1, -1, 0]}, \"parent\": -1, \"depth\": 128, \"key\": false, \"end\": 5854, \"start\": 5853, \"token\": \"@parse::Lexed::Value(5, false)\", \"kind\": 5, \"base\": 0, \"id\": 0, \"opened\": 5854}}\n"
         },
@@ -1072,7 +1072,7 @@
               }
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/depth_bound/rs/a2_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/depth_bound/rs/a2_root_gen.rs",
           "ll": null,
           "stderr": "rd\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"@pkg/parse/parse.pruv\", \"counterexample\": {\"input\": {\"len\": 16777045, \"first\": [110, 110, 142, 110, 110, 110, 110, 110]}, \"initial\": 0, \"first\": 0, \"pos\": 16777045, \"tape\": {\"len\": 6, \"first\": [6, 110, 16777045, 1, -9223372036854767443, 0]}, \"parent\": -9223372036854767443, \"depth\": 128, \"key\": false, \"end\": 16777045, \"start\": 110, \"token\": \"@parse::Lexed::Value(6, false)\", \"kind\": 6, \"base\": 0, \"id\": 0, \"opened\": 16777045}}\n"
         }
@@ -1126,7 +1126,7 @@
               }
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/skip_not_advanced/py/a2_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/skip_not_advanced/py/a2_root_gen.rs",
           "ll": null,
           "stderr": "{\"stage\": \"verify\", \"line\": 162, \"col\": 1, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 166) in @parse::append_record\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/parse/parse.pruv\", \"counterexample\": {\"tape\": {\"len\": 6, \"first\": [0, 0, 0, 0, 0, 0]}, \"r\": 0, \"k\": 0, \"s\": 0, \"e\": 0, \"parent\": 0, \"count\": 0}}\n"
         },
@@ -1162,7 +1162,7 @@
               }
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/skip_not_advanced/rs/a2_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/skip_not_advanced/rs/a2_root_gen.rs",
           "ll": null,
           "stderr": "{\"stage\": \"verify\", \"line\": 162, \"col\": 1, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 166) in @parse::append_record\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/parse/parse.pruv\", \"counterexample\": {\"tape\": {\"len\": 6, \"first\": [0, 0, 0, 0, 0, 0]}, \"r\": 0, \"k\": 0, \"s\": 0, \"e\": 0, \"parent\": 0, \"count\": 0}}\n"
         }
@@ -1191,7 +1191,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/wrong_colon_kind/py/a2_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/wrong_colon_kind/py/a2_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         },
@@ -1202,7 +1202,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/wrong_colon_kind/rs/a2_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/wrong_colon_kind/rs/a2_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         }
@@ -1232,7 +1232,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/surrogate_combine/py/a3_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/surrogate_combine/py/a3_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         },
@@ -1243,7 +1243,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/surrogate_combine/rs/a3_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/surrogate_combine/rs/a3_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         }
@@ -1273,7 +1273,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/replacement_bytes/py/a3_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/replacement_bytes/py/a3_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         },
@@ -1284,7 +1284,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/replacement_bytes/rs/a3_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/replacement_bytes/rs/a3_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         }
@@ -1314,7 +1314,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/newline_decode/py/a3_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/newline_decode/py/a3_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         },
@@ -1325,7 +1325,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/newline_decode/rs/a3_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/newline_decode/rs/a3_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         }
@@ -1364,7 +1364,7 @@
               }
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/hex_digit/py/a3_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/hex_digit/py/a3_root_gen.rs",
           "ll": null,
           "stderr": "{\"stage\": \"verify\", \"line\": 15, \"col\": 28, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 11) in @jstr::hex\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/jstr/jstr.pruv\", \"counterexample\": {\"c\": 102}}\n"
         },
@@ -1384,7 +1384,7 @@
               }
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/hex_digit/rs/a3_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/hex_digit/rs/a3_root_gen.rs",
           "ll": null,
           "stderr": "{\"stage\": \"verify\", \"line\": 15, \"col\": 28, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 11) in @jstr::hex\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/jstr/jstr.pruv\", \"counterexample\": {\"c\": 102}}\n"
         }
@@ -1413,7 +1413,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/first_wins/py/a4_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/first_wins/py/a4_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         },
@@ -1424,7 +1424,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/first_wins/rs/a4_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/first_wins/rs/a4_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         }
@@ -1452,38 +1452,24 @@
           "errors": [
             {
               "stage": "verify",
-              "line": 408,
+              "line": 426,
               "col": 22,
-              "code": "invariant_preserved",
-              "message": "cannot prove loop invariant preserved in @access::number",
+              "code": "verify_unknown",
+              "message": "solver gave up proving loop invariant preserved in @access::number (timeout)",
               "fix": "the invariant must hold again after one body iteration; add facts it depends on as more invariants",
-              "file": "@pkg/access/access.pruv",
-              "counterexample": {
-                "doc": "@json::JsonDocument { source: [45, 43, 46, 43, 43, 43, 50, 43, ...], tape: [5, 0, 19060, 1, 43, 43] }",
-                "id": 0,
-                "k": 3,
-                "status": -2,
-                "s": "@access::Span { status: 0, start: 0, end: 19060 }",
-                "p": 7,
-                "neg": true,
-                "digits": 1,
-                "v": 9007199254740992,
-                "exact": false,
-                "c": 50,
-                "d": 2
-              }
+              "file": "@pkg/access/access.pruv"
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/safe_integer/py/a4_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/safe_integer/py/a4_root_gen.rs",
           "ll": null,
-          "stderr": "oop invariant preserved in @access::number\", \"fix\": \"the invariant must hold again after one body iteration; add facts it depends on as more invariants\", \"file\": \"@pkg/access/access.pruv\", \"counterexample\": {\"doc\": \"@json::JsonDocument { source: [45, 43, 46, 43, 43, 43, 50, 43, ...], tape: [5, 0, 19060, 1, 43, 43] }\", \"id\": 0, \"k\": 3, \"status\": -2, \"s\": \"@access::Span { status: 0, start: 0, end: 19060 }\", \"p\": 7, \"neg\": true, \"digits\": 1, \"v\": 9007199254740992, \"exact\": false, \"c\": 50, \"d\": 2}}\n"
+          "stderr": "{\"stage\": \"verify\", \"line\": 426, \"col\": 22, \"code\": \"verify_unknown\", \"message\": \"solver gave up proving loop invariant preserved in @access::number (timeout)\", \"fix\": \"the invariant must hold again after one body iteration; add facts it depends on as more invariants\", \"file\": \"@pkg/access/access.pruv\"}\n"
         },
         "rs": {
           "rc": 1,
           "errors": [
             {
               "stage": "verify",
-              "line": 408,
+              "line": 426,
               "col": 22,
               "code": "invariant_preserved",
               "message": "cannot prove loop invariant preserved in @access::number",
@@ -1505,7 +1491,7 @@
               }
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/safe_integer/rs/a4_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/safe_integer/rs/a4_root_gen.rs",
           "ll": null,
           "stderr": "ved in @access::number\", \"fix\": \"the invariant must hold again after one body iteration; add facts it depends on as more invariants\", \"file\": \"@pkg/access/access.pruv\", \"counterexample\": {\"doc\": \"@json::JsonDocument { source: [67, 168, 245, 129, 80, 159, 29, 159, ...], tape: [5, 47, 236, 1, 159, 159, 1, 243, ...] }\", \"id\": 0, \"k\": 0, \"status\": -2, \"s\": \"@access::Span { status: 0, start: 47, end: 236 }\", \"p\": 55, \"neg\": true, \"digits\": 48, \"v\": 9007199254740992, \"exact\": false, \"c\": 50, \"d\": 2}}\n"
         }
@@ -1534,7 +1520,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/negative_zero/py/a4_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/negative_zero/py/a4_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         },
@@ -1545,7 +1531,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/negative_zero/rs/a4_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/negative_zero/rs/a4_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         }
@@ -1564,8 +1550,8 @@
       "module": "access.pruv",
       "description": "Wrong array index comparison",
       "replacement": {
-        "old": "if n == index { return j; }",
-        "new": "if n + 1 == index { return j; }"
+        "old": "while n < index",
+        "new": "while n + 1 < index"
       },
       "verification": {
         "py": {
@@ -1575,7 +1561,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/array_index/py/a4_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/array_index/py/a4_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         },
@@ -1586,7 +1572,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/array_index/rs/a4_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/array_index/rs/a4_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         }
@@ -1594,10 +1580,10 @@
       "classification": "behavior-detected",
       "caught_by": {
         "batch": 4,
-        "fixture": 675,
-        "name": "(b'[null,[1,[2,3]],{},false,\"x\"]', [0, 0, 1, 0], [], '', 0)",
-        "expected": "0",
-        "actual": "-1"
+        "fixture": 676,
+        "name": "(b'[null,[1,[2,3]],{},false,\"x\"]', [0, 0, 1, 1], [], '', 0)",
+        "expected": "5",
+        "actual": "0"
       }
     },
     {
@@ -1616,7 +1602,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/cr_included/py/a5_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/cr_included/py/a5_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         },
@@ -1627,7 +1613,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/cr_included/rs/a5_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/cr_included/rs/a5_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         }
@@ -1657,7 +1643,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/lf_included/py/a5_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/lf_included/py/a5_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         },
@@ -1668,7 +1654,7 @@
               "ok": true
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/lf_included/rs/a5_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/lf_included/rs/a5_root_gen.rs",
           "ll": null,
           "stderr": "{\"ok\": true}\n"
         }
@@ -1716,7 +1702,7 @@
               }
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/next_not_advanced/py/a5_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/next_not_advanced/py/a5_root_gen.rs",
           "ll": null,
           "stderr": "{\"stage\": \"verify\", \"line\": 20, \"col\": 7, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 10) in @lines::jsonl_next\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/lines/lines.pruv\", \"counterexample\": {\"data\": {\"len\": 1, \"first\": [10]}, \"offset\": 0, \"is_final\": false, \"i\": 0, \"end\": 0}}\n"
         },
@@ -1745,7 +1731,7 @@
               }
             }
           ],
-          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/bench/l3/json/work/mutants/next_not_advanced/rs/a5_root_gen.rs",
+          "rs": "/Users/spica4345/Projects/.lair-worktrees/pruv-1e40359a/bench/l3/json/work/mutants/next_not_advanced/rs/a5_root_gen.rs",
           "ll": null,
           "stderr": "{\"stage\": \"verify\", \"line\": 20, \"col\": 7, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 10) in @lines::jsonl_next\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"@pkg/lines/lines.pruv\", \"counterexample\": {\"data\": {\"len\": 1, \"first\": [10]}, \"offset\": 0, \"is_final\": false, \"i\": 0, \"end\": 0}}\n"
         }
@@ -1765,5 +1751,5 @@
     "proof-rejected": 10,
     "behavior-detected": 15
   },
-  "elapsed_seconds": 354.588716292
+  "elapsed_seconds": 600.141767167
 }

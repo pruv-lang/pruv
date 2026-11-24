@@ -37,26 +37,9 @@ pub fn parse_range(data: [u8], lo: i64, hi: i64) -> crate::json::JsonParse ! all
   if n > crate::json::limit_input_bytes() {
     return crate::json::JsonParse::Failed(crate::json::make_error(0, crate::json::err_input_too_large()));
   }
-  let mut owned: [u8] = alloc(n, 0);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == hi - lo && len(owned) == n
-    invariant forall j in 0..i: owned[j] == data[lo + j]
-    decreases n - i
-  { owned[i] = data[lo + i]; i = i + 1; }
-  // parse(owned) inlined so the document takes owned and the tape by move.
-  let invalid: i64 = crate::lex::validate_utf8(owned, 0, n);
-  if invalid >= 0 { return crate::json::JsonParse::Failed(crate::json::make_error(invalid, 4)); }
-  let checked: crate::parse::Checked = crate::parse::scan(owned);
-  match checked {
-    crate::parse::Checked::Rejected(position, kind) => {
-      return crate::json::JsonParse::Failed(crate::json::make_error(position, kind));
-    }
-    crate::parse::Checked::Tape(tape) => {
-      if !crate::json::check_tape(tape, n) { return crate::json::JsonParse::Failed(crate::json::make_error(0, 18)); }
-      return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: copy(owned), tape: move tape });
-    }
-  }
+  // hand parse(&data[lo..hi]) borrows the range; the owned document takes one exact copy (B-LLVM), as parse_copy.
+  let owned: [u8] = copy(subview(data, lo, hi));
+  return parse_owned(move owned, n);
 }
 
 // DB55 (G-DB54-1): parse_range(data, 0, hi) for a caller that gives up its buffer: no copy of the bytes; the document's
@@ -140,7 +123,8 @@ pub fn build_span(data: [u8], lo: i64, hi: i64, tape: [i64], records: i64) -> cr
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
 {
   // DB21 (D-DB15-3): the span bytes come from copy(subview(...)) (one allocate-and-fill, no zeroed buffer and byte loop).
-  // The tape prefix keeps its loop: copy(subview(tape, 0, m)) here hits "z3 error 6: invalid pattern" (G-DB21-1).
+  // The tape prefix keeps its loop (gap ZP): copy(subview(tape, 0, m)) and arr_reserve + arr_append(inout exact, tape, 0, m)
+  // both hit "z3 error 6: invalid pattern" (G-DB21-1, checked again in step 2.3).
   let n: i64 = hi - lo;
   let m: i64 = 6 * records;
   let source: [u8] = copy(subview(data, lo, hi));
@@ -151,7 +135,7 @@ pub fn build_span(data: [u8], lo: i64, hi: i64, tape: [i64], records: i64) -> cr
     decreases m - t
   { exact[t] = tape[t]; t = t + 1; }
   if !crate::json::check_tape(exact, n) { return crate::json::JsonParse::Failed(crate::json::make_error(0, 18)); }
-  return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: copy(source), tape: copy(exact) });
+  return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: move source, tape: move exact });
 }
 
 // parse_range with caller scratch: same result for every input; a too-small scratch falls back to parse_range.

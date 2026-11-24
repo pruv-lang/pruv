@@ -257,3 +257,44 @@ longer blocks X3 (the caller reuses one buffer). Gap ids that remain:
 | U | `&[u16]` keys | first-class UTF-16 view | `jstr` key arrays (J8) |
 | SL / S | `""` literal never allocated | `""` in a `str` result emits `String::from` | `jstr::owned_text` invalid-input branch (J6) |
 | FM | ring tail picked by stream | `inout` binding to a run-time chosen field | `transport` stderr tail (X7) |
+
+## Step 2.3: access, lines
+
+Function-level table for `pkgs/access` and `pkgs/lines`, same columns as step 2.2. Hand references:
+`json/hand/hand_json.rs` `Document` (`value`, `array_at`, `field` last-wins, `units`, query modes 3/5/6, `raw_output`),
+`claude/handrust` `get_str` (`Cow::Borrowed` for an escape-free string), and the hand line readers
+(`claude/handrust` `edge_lines`, `qwen/handrust` `window_import`: `split_inclusive(b'\n')` + `strip_suffix`).
+Call paths run from the product entry to the owner of the result. No hand Rust changed: every rewrite below was
+already the hand shape.
+
+| # | Pruv | Hand Rust | Types | Ownership | Loops | Allocations | Id and reason |
+|---|---|---|---|---|---|---|---|
+| A0 | `root`, `valid`, `kind`, `raw_span`, `array_length` | `Document::value`, `tape[i].kind`, `span`, record count | `JsonDocument` read, `i64`/`Span` | borrowed doc | none | none | **=** |
+| A1 | `array_at(doc, id, index)` | `Document::array_at`: `index >= count` is a miss, then `index` steps along `next` | `i64` record id | borrowed doc | `index` link steps | none | **changed in 2.3**: was a walk over the whole array (`j < stop`) with a per-element parent check; now the count decides the miss and the loop runs `index` steps, the parent/valid check once on the hit. Same results on every tape that passes `check_tape` (the count equals the direct children reached along `next`), as the hand trusts the count. = Callers: `json/a4_root.pruv:22`, `json/q_root.pruv:85`, `mcp/perf/perf_root.pruv:35` (`b_root` has its own `array_at`) |
+| A2 | `field_units(doc, id, key: [i64])`, `find` | mode 3 non-ASCII matcher `units(raw).eq(text.encode_utf16())` | key as `[i64]` UTF-16 units | borrowed | members of the object, last match wins | none | **U**: the key is a caller-built `[i64]`; the hand compares against `encode_utf16()` of a `&str` iterator. Callers: `json/q_root`, `a4_root` |
+| A3 | `field(doc, id, key: str)`, `find_ascii`, `may_match`, `is_ascii` | `Document::field` + mode 3 fast path `text.is_ascii() && !body.contains('\\')` | `str` key | borrowed | members, last match wins | ASCII key: none (=). Non-ASCII key: `alloc(len(key))` units | **=** for the ASCII path (every product key is ASCII). The non-ASCII path builds a key unit array: **U** |
+| A4 | `fields_into(doc, id, n, k0..k7, inout out)` + `hit`, `slot_error`, `fill_error`, `field_if_used`, `last_match` | one `get(key)` per key on a `BTreeMap` | 8 `str` keys, `inout [i64]` | `inout out` | one pass over members | none | **W-c**: multi-key one-pass API used by `claude/import.pruv:450` and `claude/entry.pruv:220,248` (owner: the claude import record); the hand does a lookup per key. Consumer step |
+| A5 | `string_units(doc, id) -> Units` | query mode 5 `units(raw).collect::<Vec<u16>>()` | `Units { status, units: [i64] }` | result owns the units | one decode | one (the units) | **changed in 2.3**: miss paths built an empty array and returned `copy(empty)`, the hit returned `copy(u)`; now `alloc(0, 0)` and `move u`. = Callers: `codex/rpc.pruv:418,430`, `codex/root.pruv:276`, `grok/rpc.pruv:706`, `grok/path.pruv:328`, `mcp/perf/perf_root.pruv:37` |
+| A6 | `string_text`, `string_text_scanned` | `get_str` → `String` | `jstr::Text` | result owns | decode | one | **W-c** through `jstr` J5 (status-carrying text). Callers: `qwen` import, `grok/util.pruv:106` (`_scanned_owned`) |
+| A7 | `string_is(doc, id, lit)` | `get_str(..) == Some(lit)`: `Cow::Borrowed` for an escape-free string, decode only with escapes | `i64` | borrowed | ASCII: compare; plain: compare in place; escaped: decode then compare | ASCII and plain: none. Escaped: one decode buffer (= `Cow::Owned`) | **changed in 2.3**: a non-ASCII literal against an escape-free string (tape plain bit) decoded into a fresh `[u8]` before; now compares the source bytes in place. = for documents from `parse::scan_into` (`build_span`: `grok/read.pruv:360`, `qwen` `parse_span`). Documents from the owned parser (`parse::parse`, `parse_owned`/`parse_copy`) always carry plain bit 0 (`parse.pruv:222`), so a non-ASCII literal still decodes there; writing the bit is a `parse` row, outside this step. Static callers pass ASCII literals (`claude/entry.pruv:238,339` through `field_is`, `claude/import.pruv:356..541`, `codex/item.pruv:142..166`), which never reach the decode |
+| A8 | `raw_is`, `view_root_type(data, lo, tape, records)` | mode 3 fast path on the raw bytes | scratch tape view | borrowed | members of the root | none | **W-c**: reads a scratch tape before a document exists (`grok/read.pruv:359`); the hand builds the `Document` first. Consumer step |
+| A9 | `boolean`, `number` | `raw_output`: `parse::<i64>` within ±(2^53-1), `-0` kept | `i64`, `Number` | borrowed | digits | none | **=** Callers: `codex/rpc.pruv:416`, `grok/rpc.pruv:668`, `grok/summary.pruv:154` |
+| A10 | `string_text_owned`, `string_text_scanned_owned` | `String::from_utf8` of the decoded bytes | `Text` | result owns | decode | one | **=** |
+| L0 | `jsonl_next(data, offset, is_final)` | `split_inclusive(b'\n')` + `strip_suffix(b"\n")`/`b"\r"` | `JsonlStep` | borrowed | scan to newline | none | **=** Caller: `claude/framing.pruv:28` |
+| L1 | `parse_range(data, lo, hi)` | `parse(&data[lo..hi])`, borrowed `Document` | `JsonParse` | document owns a copy of the range | UTF-8 check + scan (in `parse_owned`) | one exact copy of the range, the tape | **changed in 2.3**: was a zeroed `alloc(n, 0)`, a byte loop, a scan, then a second `copy(owned)`; now `copy(subview(data, lo, hi))` moved into `parse_owned` (as `parse_copy`). The remaining copy is **B-LLVM** (owned source on LLVM). Callers: `qwen/entry.pruv:12`, `grok/read.pruv:362` (fallback) |
+| L2 | `parse_owned(take data, hi)` | `parse(&data)` on an owned buffer | `JsonParse` | takes the buffer; `truncate` in place | UTF-8 check + scan | the tape | **=** Caller: `grok/rpc.pruv:628` |
+| L3 | `parse_copy(data, lo, hi)` | `parse(&line[lo..hi])` | `JsonParse` | one exact copy | as L2 | copy + tape | **B-LLVM** (copy kept for the owned source). Callers: `codex/rpc.pruv:82`, `mcp/root.pruv:118` |
+| L4 | `scan_span`, `parse_span` | none (hand parses each line into a fresh `Document`) | caller scratch `inout tape`, `inout stack` | `inout` | scan | none in the scan | **W-c**: scratch API like P8. Callers: `qwen/entry.pruv:32`, `grok/read.pruv:570` |
+| L5 | `build_span(data, lo, hi, tape, records)` | `Document { source: data[lo..hi].to_vec(), tape: tape[..m].to_vec() }` | `JsonDocument` | result owns both | tape prefix: element loop | source: one exact copy (=); tape: zeroed `alloc(m, 0)` + loop | **changed in 2.3**: the result took `copy(source)` and `copy(exact)` of locals it owned; now both are moved. The tape prefix loop stays: **ZP** (new in §4). Callers: `grok/read.pruv:360`, `parse_span` |
+| L6 | `absolute_offset(base, start, position)` | `base.checked_add(start)?.checked_add(position)` | `i64` | — | none | none | **=** |
+
+Status count: = 9 rows (A0, A1, A5, A7, A9, A10, L0, L2, L6) plus the ASCII path of A3 and the source half of L5;
+W-c 4 (A4, A6, A8, L4); U 2 (A2, A3 non-ASCII key); B-LLVM 2 (L1, L3); ZP 1 (L5 tape). No W rows remain. No measurement: the structure difference is not zero (U, B-LLVM, ZP, W-c).
+
+### Gap rows found in step 2.3
+
+| Id | Hand Rust form | What Pruv cannot express | Functions left unchanged |
+|---|---|---|---|
+| ZP (new) | `tape[..m].to_vec()` | bulk copy of an `[i64]` prefix: `copy(subview(tape, 0, m))` and `arr_append(inout exact, tape, 0, m)` fail with "z3 error 6: invalid pattern" (G-DB21-1) | `lines::build_span` tape prefix (L5) |
+| U | `text.encode_utf16()` compared to `units(raw)` | first-class UTF-16 key view | `access::field_units`, non-ASCII `field` (A2, A3) |
+| B-LLVM | `Document<'a> { source: &'a [u8] }` | borrowed document source on LLVM | `lines::parse_range`, `parse_copy` copy (L1, L3) |
