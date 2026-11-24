@@ -1,0 +1,6 @@
+// spec: R-6g9-3 reject
+// `[]` is only the static empty view: an owned array local cannot be bound to it.
+pub fn f() -> i64 ! alloc {
+  let a: [u8] = [];
+  return len(a);
+}

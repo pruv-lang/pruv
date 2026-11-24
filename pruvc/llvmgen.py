@@ -1111,6 +1111,8 @@ class FnGen:
         s.utf8_ok = None   # LG35: the str_from_utf8 call whose bytes the enclosing `if` checked (codegen.utf8_checked)
         s.pinned = set()   # LG35: locals borrowed as the scrutinee of an enclosing match arm (codegen's pinned)
         s.cost = not verified and f.cost is not None
+        from codegen import static_str_locals
+        s.static_strs = static_str_locals(f, funcs) if f is not None else set()   # R-6g9-3: R-6g8-3 static text locals bind the read-only global
         s.lines = []
         s.allocas = []
         s.nt = s.nl = s.nslot = s.nq = 0
@@ -2447,8 +2449,10 @@ class FnGen:
             s.end_temps()
         elif isinstance(st, Let) and s.m.stack is not None and s.m.stack.contains(st) and st.name not in s.resize_args:
             s.stack_let(st)
-        elif isinstance(st, Let) and s.m.stack is not None and s.m.stack.lit(st) and not s.cost:
-            # P3: a borrowed literal local binds the read-only global directly: no copy, never freed
+        elif isinstance(st, Let) and (s.m.stack is not None and s.m.stack.lit(st) and not s.cost
+                                      or isinstance(st.value, StrLit) and st.name in s.static_strs):
+            # P3: a borrowed literal local binds the read-only global directly: no copy, never freed (R-6g9-3: so does
+            # a static text local the checker charged no alloc, also in a recursive or metered function)
             s.begin_temps()
             v = s.ev(st.value, False)
             sl = s.new_slot(st.name, st.type)

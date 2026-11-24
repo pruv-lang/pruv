@@ -1,0 +1,9 @@
+// spec: R-6g8-3 R-6g9-3 reject
+// A text local that is returned is an owned String: the literal still allocates, so `alloc` is required.
+fn kept() -> str {
+  let lit: str = "owned";
+  return lit;
+}
+pub fn checksum() -> i64 {
+  return len(kept());
+}

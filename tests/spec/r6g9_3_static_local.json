@@ -1,0 +1,31 @@
+{
+  "gen_contains": [
+    "let sep: &'static str = \", \";",
+    "let head: &'static str = \"pruv\";",
+    "let none: &'static str = \"\";",
+    "let tick: &'static str = \"ab\";"
+  ],
+  "gen_absent": [
+    "String::from"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "130"
+    ],
+    "alloc_balance": true,
+    "llvm_fn_absent": {
+      "checksum": [
+        "call ptr @pruv_copy(",
+        "call ptr @pruv_copy_v2",
+        "call ptr @malloc"
+      ]
+    }
+  }
+}

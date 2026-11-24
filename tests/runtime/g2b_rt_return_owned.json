@@ -1,1 +1,1 @@
-{"flags_matrix": [[], ["--no-verify"], ["--trust-callers"]], "exit": 0, "stdout_lines": ["hé", "wö", "[104, 195, 169]", "3"], "llvm_fn_contains": {"pre": ["@pruv_copy_v2(", "@pruv_free_v2_nn("], "post": ["@pruv_copy_v2(", "@pruv_free_v2_nn("]}}
+{"flags_matrix": [[], ["--no-verify"], ["--trust-callers"]], "exit": 0, "stdout_lines": ["h\u00e9", "w\u00f6", "[104, 195, 169]", "3"], "llvm_fn_contains": {"pre": ["store ptr @.str."], "post": ["store ptr @.str."]}, "llvm_fn_absent": {"post": ["@pruv_free_v2_nn("]}}

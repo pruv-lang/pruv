@@ -1,4 +1,5 @@
-// spec: R-6g8-3 reject
+// spec: R-6g8-3 R-6g9-3 accept
+// A static text local is a read-only view of the literal, so the function needs no `alloc` (R-6g9-3).
 pub fn label() -> i64 {
   let a: str = "lit";
   return len(a);

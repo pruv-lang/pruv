@@ -121,7 +121,8 @@ fn g2_cand_expr(e: &Expr, lits: bool, best: &mut Option<(i64, i64, String)>) {
         Expr::Spent(_) | Expr::IntLit(_) => {}
         Expr::BoolLit(_) => {}
         Expr::StrLit(x) => {
-            if lits {
+            if lits && !x.empty {
+                // R-6g9-3: `[]` is an array view, no text support
                 g2_cand(best, x.line, x.col, "str");
             }
         }

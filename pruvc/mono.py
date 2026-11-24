@@ -363,6 +363,8 @@ class _Mono:
                 new.borrowed_view = True
             if node.static_str:
                 new.static_str = True
+        if isinstance(node, StrLit) and node.empty_view:
+            new.empty_view = True     # R-6g9-3: `[]`, the static empty view
         if isinstance(node, Let) and node.ref:
             new.ref = True
         if isinstance(node, Call):

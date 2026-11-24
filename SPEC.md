@@ -1717,10 +1717,9 @@ borrowed value is live.
   parameter of a catalog or user call, `len(x)`, `x[i]`, or the source of `subview` / `substr`) and whose name is
   bound once in the function is emitted by the Rust backend as `let x: &'static str = "lit";`, as hand Rust
   writes it: no `String::from`, no heap copy. A local that is returned, stored, moved, reassigned or read any
-  other way stays an owned `String`. The rule changes generated code only: the `alloc` effect of the string
-  literal is still required (`effect/missing_effect`).
+  other way stays an owned `String`. Since R-6g9-3 such a local needs no `alloc` effect.
   Tests: [static](tests/spec/r6g8_3_static_str.pruv), [user call](tests/spec/r6g8_3_static_user.pruv),
-  [effect](tests/spec/r6g8_3_static_effect.pruv).
+  [no alloc](tests/spec/r6g8_3_static_effect.pruv), [owned](tests/spec/r6g9_3_owned_still_allocs.pruv).
 - R-6g8-4 **Field moves out of a consuming match binder.** In a consuming match (R-6e-16: the scrutinee
   is an owned `let` local and no arm names it again), a binder whose payload type is a struct may give up
   one field with `let t = move b.f;`. As with G-R09-4, the move consumes the binder (and so the scrutinee):
@@ -1755,6 +1754,20 @@ borrowed value is live.
   [literal](tests/spec/r6g9_1_literal.pruv), [subview local](tests/spec/r6g_11_local_view.pruv),
   [two sources](tests/spec/r6g_11_two_sources.pruv), [copy then reuse](tests/spec/r6g_11_copy_owned.pruv);
   rejects [borrowing struct](tests/spec/r6g9_1_struct_llvm.pruv), [enum payload](tests/spec/r6g9_1_enum_payload.pruv).
+- R-6g9-3 **Static views need no `alloc`.** An R-6g8-3 static text local is the literal's read-only global (Rust
+  `let x: &'static str = "lit";`, LLVM the global with no copy, also in a recursive or metered function), so it
+  needs no `alloc` effect: `effect/missing_effect` no longer fires for it. A literal in any owned position still
+  allocates (R-6g-12 unchanged), so a returned, stored or moved text local keeps `! alloc`. The empty array
+  literal `[]` in a `ref [T]` position (a `ref` let, the result of a `from` function, a `ref` field) is a static
+  empty view with no provenance: it allocates nothing, is never freed, and Rust writes it as hand Rust does,
+  `&[]` (`return &[];` in `text_of`). `[]` anywhere else (a call argument, a string operand, a `ref str`) is
+  `type/type_mismatch`. A quantifier binder that contract expansion inlines does not hide a local of the same name.
+  Tests: [static local](tests/spec/r6g9_3_static_local.pruv), [empty view](tests/spec/r6g9_3_empty_view.pruv),
+  [`ref` field](tests/spec/r6g9_3_empty_field.pruv), [quantifier binder](tests/spec/r6g9_3_quant_shadow.pruv),
+  [no alloc](tests/spec/r6g8_3_static_effect.pruv); rejects
+  [owned still allocates](tests/spec/r6g9_3_owned_still_allocs.pruv), [`[]` owned](tests/spec/r6g9_3_empty_owned.pruv),
+  [call argument](tests/spec/r6g9_3_empty_call_arg.pruv), [string operand](tests/spec/r6g9_3_empty_string_eq.pruv),
+  [`ref str`](tests/spec/r6g9_3_empty_ref_str.pruv).
 - R-6g9-4 **Path liveness.** A borrow (a `ref` local or a borrowing-struct local) is live at a statement iff
   some control-flow path from that statement reaches a mention of the borrow before its `let` is reached again.
   Paths follow the statements: an `if` goes to either branch, a `match` to any arm, a loop head to its body or

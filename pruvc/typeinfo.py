@@ -317,7 +317,7 @@ def _g2_candidates(node, skip, out):
         return
     if isinstance(node, Let) and _g2_hit(node.type, skip):
         out.append((node.line, node.col, node.type))
-    elif isinstance(node, StrLit) and "str" not in skip:
+    elif isinstance(node, StrLit) and "str" not in skip and not node.empty_view:   # R-6g9-3: `[]` is no text
         out.append((node.line, node.col, STR))
     for fname in node.__dataclass_fields__:
         _g2_candidates(getattr(node, fname), skip, out)
@@ -394,7 +394,7 @@ def _has_str_node(node, ghost=True):
     if not hasattr(node, "__dataclass_fields__") or isinstance(node, Type):
         return False
     if isinstance(node, StrLit):
-        return True
+        return not node.empty_view   # R-6g9-3: `[]` is an array view, no text support
     if isinstance(node, Let) and node.type.name == "str":
         return True
     if not ghost and isinstance(node, Assert) and _has_spent(node.cond):

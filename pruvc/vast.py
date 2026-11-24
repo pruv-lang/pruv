@@ -411,6 +411,7 @@ Let.ref = False
 Program.borrow_site = None
 Expr.borrowed_view = False
 Expr.static_str = False
+StrLit.empty_view = False   # R-6g9-3: `[]`, the static empty view (a ref [T] position only)
 
 Param.mode = None          # "inout" for `inout name: [..]` (None = ordinary read parameter)
 Param.mode_pos = None      # (line, col) of the `inout` token of the parameter

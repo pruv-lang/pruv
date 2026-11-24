@@ -1,0 +1,31 @@
+// spec: R-6g9-3 accept
+// R-6g8-3 static text locals need no `alloc`: each is the literal's read-only global (Rust `&'static str`),
+// also in a recursive function, so none of these functions allocates.
+fn weight(t: str) -> i64
+  ensures result == len(t)
+{
+  return len(t);
+}
+
+fn depth(n: i64) -> i64
+  requires 0 <= n && n <= 10
+  ensures 0 <= result && result <= 2 * n + 2
+  decreases n
+{
+  let tick: str = "ab";
+  if n == 0 {
+    return weight(tick);
+  }
+  return len(tick) + depth(n - 1);
+}
+
+pub fn checksum() -> i64 {
+  let sep: str = ", ";
+  let head: str = "pruv";
+  let none: str = "";
+  let mut total: i64 = weight(sep) + weight(none) + len(none);
+  if len(head) == 4 && head[0] == 112 {
+    total = total + weight(subview(head, 1, 3)) + head[3];
+  }
+  return total + depth(3);
+}

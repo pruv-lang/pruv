@@ -1,0 +1,6 @@
+// spec: R-6g9-3 reject
+// `[]` is the empty view of an array, never a `ref str`.
+pub fn checksum() -> i64 {
+  let s: ref str = [];
+  return len(s);
+}

@@ -1283,15 +1283,24 @@ def static_str_locals(f, fmap):
     """LB9 SL (R-6g8-3): immutable `let x: str = "lit";` locals whose every read is a borrow (a `str` parameter of a
     catalog or user call, `len`, an index, or the source of `subview` / `substr`) stay `&'static str`, as hand Rust
     writes `let x = "lit";`. A name bound twice anywhere in the function is left alone."""
-    lets, binders, bad = {}, [p.name for p in f.params], set()
+    lets, binders, bad, hidden = {}, [p.name for p in f.params], set(), []
 
     def str_param(p):
         return p.type == STR and p.mode is None and not p.take
 
     def visit(e, ok=False):
         if isinstance(e, (Var, Move)):
-            if not ok or isinstance(e, Move):
+            if (not ok or isinstance(e, Move)) and e.name not in hidden:
                 bad.add(e.name)
+            return
+        if isinstance(e, Quant):
+            # a quantifier binder shadows a local of the same name (contract expansion may inline one)
+            visit(e.lo)
+            visit(e.hi)
+            hidden.append(e.var)
+            for k in [e.body] + list(e.triggers):
+                visit(k)
+            hidden.pop()
             return
         if isinstance(e, Index):
             visit(e.array, True)
@@ -2074,7 +2083,7 @@ class Gen:
             s.emit_inline(f)
         s.emit(0, "%sfn %s%s(%s)%s {" % (vis, body_name, lifetime, ps, ret))
         s.cost = not s.verified and f.cost is not None
-        s.static_strs = set() if s.cost else static_str_locals(f, s.fmap)
+        s.static_strs = static_str_locals(f, s.fmap)   # R-6g9-3: also metered, the checker charges them no alloc
         if s.cost:
             args = ["&" + p.name if p.name in s.take_arrays or p.name in s.take_ext
                     or p.take and (p.type.name == "string" or is_owned_result(p.type))
@@ -2477,6 +2486,8 @@ class Gen:
 
     def c(s, e):
         if isinstance(e, StrLit):  # G2 B2
+            if e.empty_view:    # R-6g9-3: the static empty view, hand `&[]`
+                return "&[]"
             literal = str_lit(e.value)
             return "(%s).as_bytes()" % literal if e.ty == ARRAY_U8 else literal
         if isinstance(e, IntLit):
@@ -3582,6 +3593,8 @@ class Gen:
     def arr_ref(s, e):
         """an array expression used as a borrowed slice; a string literal is borrowed as its `&'static str` (no alloc)"""
         if isinstance(e, StrLit):
+            if e.empty_view:    # R-6g9-3: hand `&[]`
+                return "&[]"
             if e.ty == ARRAY_U8:
                 return "(%s).as_bytes()" % str_lit(e.value)
             if e.static_str or not s.cost:

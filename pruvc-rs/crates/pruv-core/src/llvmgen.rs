@@ -1563,6 +1563,8 @@ pub struct FnGen<'a> {
     utf8_ok: usize,
     /// LG35: locals borrowed as the scrutinee of an enclosing match arm (codegen's pinned)
     pinned: HashSet<String>,
+    /// R-6g9-3: the R-6g8-3 static text locals (codegen::static_str_locals): each binds the read-only global
+    static_strs: HashSet<String>,
     cost: bool,
     cost_bound: String,
     lines: Vec<String>,
@@ -1616,6 +1618,7 @@ impl<'a> FnGen<'a> {
         verified: bool,
     ) -> FnGen<'a> {
         let resize_slots = crate::check::resize_slot_names(f, &m.resize_params);
+        let static_strs = crate::codegen::static_str_locals(f, funcs);
         FnGen {
             m,
             tt,
@@ -1624,6 +1627,7 @@ impl<'a> FnGen<'a> {
             verified,
             utf8_ok: 0,
             pinned: HashSet::new(),
+            static_strs,
             cost: !verified && f.cost.is_some(),
             cost_bound: String::new(),
             lines: Vec::new(),
@@ -4053,8 +4057,10 @@ impl<'a> FnGen<'a> {
                 self.end_temps()
             }
             Stmt::Let(x) if self.m.stack.contains(x) && !self.resize_slots.contains(&x.name) => self.stack_let(x),
-            Stmt::Let(x) if self.m.stack.lit(x) && !self.cost => {
-                // P3: a borrowed literal local binds the read-only global directly: no copy, never freed
+            Stmt::Let(x) if self.m.stack.lit(x) && !self.cost
+                || matches!(x.value, Expr::StrLit(_)) && self.static_strs.contains(&x.name) => {
+                // P3: a borrowed literal local binds the read-only global directly: no copy, never freed. R-6g9-3: so
+                // does a static text local (the checker charged it no alloc), also in a recursive or metered function
                 self.begin_temps();
                 let v = self.ev(&x.value, false)?;
                 let sl = self.new_slot(&x.name, &x.ty)?;
