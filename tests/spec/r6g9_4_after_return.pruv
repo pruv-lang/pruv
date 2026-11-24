@@ -1,0 +1,11 @@
+// spec: R-6g9-4 accept
+// Statements after a `return` are unreachable: the write there does not conflict with the live view,
+// as rustc does not borrow-check unreachable code.
+pub fn f() -> i64 ! alloc
+{
+  let mut x: [u8] = alloc(4, 0);
+  let v: ref [u8] = subview(x, 0, 2);
+  return len(v);
+  x[0] = 1;
+  return len(v);
+}

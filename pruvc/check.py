@@ -1,6 +1,5 @@
 """Pruv type / effect / structure checker. Fills Expr.ty."""
 import copy
-import heapq
 import re
 from vast import *
 from typeinfo import (TypeTable, BUILTIN_TYPE_NAMES, type_name, is_user_type, is_array, array_elem,  # G2 A5: array_elem
@@ -3461,9 +3460,9 @@ class Checker:
                         if isinstance(root, Var):
                             yield root.name, True
 
-    def view_statement(s, st, loans):
+    def view_statement(s, st, loans, undo):
         """The borrowed-view checks of one statement that do not depend on liveness; a borrow `let` records its
-        provenance in `loans`."""
+        provenance in `loans` and logs the previous entry in `undo` as (name, was present, old value)."""
         # Validate borrowed calls even when their results are used only inside the statement.
         for item in s.view_stmt_items(st):
             if isinstance(item, Expr):
@@ -3472,6 +3471,7 @@ class Checker:
                         s.view_provenance(e, loans)
         if isinstance(st, Let) and (st.ref or s.borrowed_type(st.type)):
             provenance = s.view_provenance(st.value, loans)
+            undo.append((st.name, st.name in loans, loans.get(st.name)))
             loans[st.name] = provenance
             s.f.borrowed_roots.update(provenance)
         elif isinstance(st, Return) and s.f.borrow_from and st.value is not None:
@@ -3481,79 +3481,118 @@ class Checker:
 
     def view_graph(s, stmts, incoming, loans, scope, g):
         """R-6g9-4: add the statements of a block to the liveness graph `g` in pre-order. `incoming` are the points
-        that flow into the block; returns the points that flow out of it. `scope` maps a visible borrow to its bit."""
-        loans, scope = dict(loans), dict(scope)
-        for st in stmts:
-            n = len(g["points"])
-            for p in incoming:
-                g["points"][p]["succ"].append(n)
-            uses = list(s.view_uses(st))
-            point = {"succ": [], "gen": 0, "kill": 0, "uses": uses, "node": st}
-            for name, _ in uses:
-                if name in scope:
-                    point["gen"] |= 1 << scope[name]
-            if g["failure"] is None:
-                try:
-                    s.view_statement(st, loans)
-                except PruvError as e:
-                    g["failure"] = (n, e)
-            if isinstance(st, Let) and (st.ref or s.borrowed_type(st.type)):
-                bit = len(g["borrows"])
-                point["kill"] = 1 << bit
-                scope[st.name] = bit
-                g["borrows"].append(loans.get(st.name, {}))
-            g["points"].append(point)
-            if isinstance(st, If):
-                incoming = (s.view_graph(st.then, [n], loans, scope, g)
-                            + s.view_graph(st.els, [n], loans, scope, g))
-            elif isinstance(st, (While, ForMap)):
-                for p in s.view_graph(st.body, [n], loans, scope, g):
+        that flow into the block; returns the points that flow out of it, at most one: every `if` and `match` ends in
+        one synthetic join point (no uses, no gen/kill) that all its branch exits flow into, so a block never fans
+        out more than one edge per exit. `loans` (provenance) and `scope` (visible borrow -> bit) are ONE shared
+        mutable map each, not copied per block: the block logs every insert in an undo log and restores both maps in
+        reverse order on every return path, so the caller sees them unchanged (a shadowing `let v = subview(v, ..)`
+        still reads the old `v` while its provenance is computed). Cost: O(S + Σ|provenance|) for the graph."""
+        loans_undo, scope_undo = [], []
+        try:
+            for st in stmts:
+                n = len(g["points"])
+                for p in incoming:
                     g["points"][p]["succ"].append(n)
-                incoming = [n]
-            elif isinstance(st, Match):
-                incoming = [p for arm in st.arms for p in s.view_graph(arm.body, [n], loans, scope, g)]
-            elif isinstance(st, Return):
-                incoming = []
-            else:
-                incoming = [n]
-        return incoming
+                uses = list(s.view_uses(st))
+                point = {"succ": [], "gen": 0, "kill": 0, "uses": uses, "node": st}
+                for name, _ in uses:
+                    if name in scope:
+                        point["gen"] |= 1 << scope[name]
+                if g["failure"] is None:
+                    try:
+                        s.view_statement(st, loans, loans_undo)
+                    except PruvError as e:
+                        g["failure"] = (n, e)
+                if isinstance(st, Let) and (st.ref or s.borrowed_type(st.type)):
+                    bit = len(g["borrows"])
+                    point["kill"] = 1 << bit
+                    scope_undo.append((st.name, st.name in scope, scope.get(st.name)))
+                    scope[st.name] = bit
+                    g["borrows"].append(loans.get(st.name, {}))
+                    # A value that moves a root the new view borrows (`Doc { src: x, scratch: move x }`) conflicts
+                    # with the view itself; like the other conflicts it is reported only where reachable.
+                    point["own_move"] = next((e.name for e in _walk(st.value)
+                                              if isinstance(e, Move) and e.name in g["borrows"][-1]), None)
+                g["points"].append(point)
+                if isinstance(st, If):
+                    exits = (s.view_graph(st.then, [n], loans, scope, g)
+                             + s.view_graph(st.els, [n], loans, scope, g))
+                    incoming = s.view_join(g, exits)
+                elif isinstance(st, (While, ForMap)):
+                    for p in s.view_graph(st.body, [n], loans, scope, g):
+                        g["points"][p]["succ"].append(n)
+                    incoming = [n]
+                elif isinstance(st, Match):
+                    exits = [p for arm in st.arms for p in s.view_graph(arm.body, [n], loans, scope, g)]
+                    incoming = s.view_join(g, exits)
+                elif isinstance(st, Return):
+                    incoming = []
+                else:
+                    incoming = [n]
+            return incoming
+        finally:
+            for table, log in ((scope, scope_undo), (loans, loans_undo)):
+                for name, present, old in reversed(log):
+                    if present:
+                        table[name] = old
+                    else:
+                        table.pop(name, None)
+
+    @staticmethod
+    def view_join(g, exits):
+        """One synthetic join point after the branches of an `if` / `match`; returns its single-point exit list, or
+        [] when no branch falls through."""
+        if not exits:
+            return []
+        join = len(g["points"])
+        g["points"].append({"succ": [], "gen": 0, "kill": 0, "uses": [], "node": None})
+        for p in exits:
+            g["points"][p]["succ"].append(join)
+        return [join]
 
     def check_view_block(s, stmts, loans):
         """R-6g9-4 path liveness: a borrow is live at a statement iff some path from it reaches a mention of the
-        borrow before its `let` runs again. Backward gen/kill over bit sets by one worklist, highest point (reverse
-        program order) first, so each point is processed at most loop depth + 1 times. A use conflicts with the
-        borrows live at its point, found through per-root masks (shared, exclusive)."""
+        borrow before its `let` runs again. The graph has one point per statement in pre-order plus one join point
+        per `if` / `match` (see view_graph). Backward gen/kill over bit sets by repeated sweeps over the points from
+        the last to the first, live[n] = gen | (OR of live[succ] & ~kill), until a sweep changes nothing; only loop
+        back edges go to lower indices, so this takes loop depth + 2 sweeps. Only points reachable from the entry
+        (one forward pass in index order) are checked. A use conflicts with the borrows live at its point, found
+        through per-root masks (shared, exclusive). Cost: O((d+2)·S·B/64 + M·B/64 + Σ|provenance|) for loop depth d,
+        S points, B borrows and M uses."""
         g = {"points": [], "borrows": [], "failure": None}
         s.view_graph(stmts, [], loans, {}, g)
         points = g["points"]
-        preds = [[] for _ in points]
-        for n, point in enumerate(points):
-            for succ in point["succ"]:
-                preds[succ].append(n)
         live = [0] * len(points)
-        queued = [True] * len(points)
-        work = [-n for n in range(len(points))]
-        heapq.heapify(work)
-        while work:
-            n = -heapq.heappop(work)
-            queued[n] = False
-            point = points[n]
-            out = 0
-            for succ in point["succ"]:
-                out |= live[succ]
-            out = point["gen"] | (out & ~point["kill"])
-            if out != live[n]:
-                live[n] = out
-                for p in preds[n]:
-                    if not queued[p]:
-                        queued[p] = True
-                        heapq.heappush(work, -p)
+        changed = True
+        while changed:
+            changed = False
+            for n in range(len(points) - 1, -1, -1):
+                point = points[n]
+                out = 0
+                for succ in point["succ"]:
+                    out |= live[succ]
+                out = point["gen"] | (out & ~point["kill"])
+                if out != live[n]:
+                    live[n] = out
+                    changed = True
+        reach = [False] * len(points)
+        if points:
+            reach[0] = True
+        for n, point in enumerate(points):
+            if reach[n]:
+                for succ in point["succ"]:
+                    reach[succ] = True
         masks = {}   # root -> [shared mask, exclusive mask]
         for bit, provenance in enumerate(g["borrows"]):
             for name, exclusive in provenance.items():
                 masks.setdefault(name, [0, 0])[exclusive] |= 1 << bit
         last = len(points) if g["failure"] is None else g["failure"][0] + 1
         for n in range(last):
+            if not reach[n]:
+                continue
+            if points[n].get("own_move"):
+                terr(points[n]["node"], "borrow_conflict",
+                     "%s is moved while the new view borrows it" % points[n]["own_move"])
             for name, write in points[n]["uses"]:
                 if name in masks:
                     shared, exclusive = masks[name]

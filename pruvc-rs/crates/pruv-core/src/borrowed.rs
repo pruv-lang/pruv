@@ -236,6 +236,8 @@ struct Point {
     gen: Vec<usize>,
     kill: Option<usize>,
     uses: Vec<(String, Access, i64, i64)>,
+    /// A borrow `let` whose value moves a root of its own provenance: the position of that move.
+    own_move: Option<(i64, i64)>,
 }
 
 /// The statement graph of one function, the provenance of each borrow variable, and the first error that does not
@@ -248,48 +250,73 @@ struct Graph {
 }
 
 impl Graph {
-    /// Backward liveness by one worklist (highest point first, i.e. reverse program order): a set only grows, so each
-    /// point is processed at most (loop depth + 1) times, plus once to confirm. Returns the live-in set of each point.
+    /// Backward liveness by repeated sweeps over the points from the last to the first:
+    /// live[n] = gen[n] | (union of live[succ] minus kill[n]), stored in place, until a whole sweep changes nothing.
+    /// Points are in pre-order and only loop back edges go to lower indices, so this takes loop depth + 2 sweeps,
+    /// i.e. O((d+2)·S·B/64). Returns the live-in set of each point.
     fn liveness(&self) -> Vec<Bits> {
         let width = self.borrows.len();
         let count = self.points.len();
-        let mut preds = vec![Vec::new(); count];
-        for (n, point) in self.points.iter().enumerate() {
-            for &s in &point.succ {
-                preds[s].push(n);
-            }
-        }
         let mut live = vec![Bits::new(width); count];
-        let mut queued = vec![true; count];
-        let mut work: std::collections::BinaryHeap<usize> = (0..count).collect();
-        while let Some(n) = work.pop() {
-            queued[n] = false;
-            let point = &self.points[n];
-            let mut set = Bits::new(width);
-            for &s in &point.succ {
-                set.union(&live[s]);
-            }
-            if let Some(k) = point.kill {
-                set.clear(k);
-            }
-            for &g in &point.gen {
-                set.set(g);
-            }
-            if set != live[n] {
-                live[n] = set;
-                for &p in &preds[n] {
-                    if !queued[p] {
-                        queued[p] = true;
-                        work.push(p);
-                    }
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for n in (0..count).rev() {
+                let point = &self.points[n];
+                let mut set = Bits::new(width);
+                for &s in &point.succ {
+                    set.union(&live[s]);
+                }
+                if let Some(k) = point.kill {
+                    set.clear(k);
+                }
+                for &g in &point.gen {
+                    set.set(g);
+                }
+                if set != live[n] {
+                    live[n] = set;
+                    changed = true;
                 }
             }
         }
         live
     }
 
+    /// The points reachable from the entry, by one forward pass in index order (the only edges to lower indices are
+    /// loop back edges to a head that is already reachable through its forward predecessor).
+    fn reachable(&self) -> Vec<bool> {
+        let mut reach = vec![false; self.points.len()];
+        if let Some(first) = reach.first_mut() {
+            *first = true;
+        }
+        for n in 0..self.points.len() {
+            if reach[n] {
+                for &s in &self.points[n].succ {
+                    reach[s] = true;
+                }
+            }
+        }
+        reach
+    }
+
+    /// One synthetic join point after the branches of an `if` / `match` (no uses, no gen/kill): every exit flows into
+    /// it. Returns the single-point exit list, or empty when no branch falls through.
+    fn join(&mut self, exits: Vec<usize>) -> Vec<usize> {
+        if exits.is_empty() {
+            return exits;
+        }
+        let join = self.points.len();
+        self.points.push(Point { succ: Vec::new(), gen: Vec::new(), kill: None, uses: Vec::new(), own_move: None });
+        for p in exits {
+            self.points[p].succ.push(join);
+        }
+        vec![join]
+    }
+
     /// R-6g9-4: a use conflicts with the borrows live at its point. Root masks: per root, the borrows that hold it
-    /// shared and those that hold it exclusive; a read meets the exclusive mask, a write either.
+    /// shared and those that hold it exclusive; a read meets the exclusive mask, a write either. Only points
+    /// reachable from the entry are checked; a structural failure is raised regardless of reachability.
+    /// Cost: O((d+2)·S·B/64 + M·B/64 + Σ|provenance|).
     fn conflicts(self) -> Res<()> {
         let width = self.borrows.len();
         let mut masks: HashMap<&str, [Bits; 2]> = HashMap::new();
@@ -300,8 +327,13 @@ impl Graph {
             }
         }
         let live = self.liveness();
+        let reach = self.reachable();
         let last = self.failure.as_ref().map_or(self.points.len(), |(n, _)| n + 1);
-        for (point, live) in self.points[..last].iter().zip(&live) {
+        for ((point, live), &reached) in self.points[..last].iter().zip(&live).zip(&reach) {
+            if !reached { continue; }
+            if let Some((line, col)) = point.own_move {
+                return Err(error(line, col, "borrow_conflict", "a root moved while the new view borrows it"));
+            }
             for &(ref name, access, line, col) in &point.uses {
                 let Some([shared, exclusive]) = masks.get(name.as_str()) else { continue };
                 if live.meets(exclusive) || (access == Access::Write && live.meets(shared)) {
@@ -403,8 +435,15 @@ impl Analysis<'_> {
         Ok(())
     }
 
-    /// The checks of one statement that do not depend on liveness; a borrow `let` records its provenance.
-    fn statement(&self, f: &Function, st: &Stmt, locals: &mut HashMap<String, Roots>) -> Res<()> {
+    /// The checks of one statement that do not depend on liveness; a borrow `let` records its provenance in `locals`
+    /// and logs the previous entry in `undo`.
+    fn statement(
+        &self,
+        f: &Function,
+        st: &Stmt,
+        locals: &mut HashMap<String, Roots>,
+        undo: &mut Vec<(String, Option<Roots>)>,
+    ) -> Res<()> {
         let mut expressions = Vec::new();
         walk_statement(st, &mut |e| expressions.push(e), &mut |_, _, _| {}, &mut |_| {});
         for e in expressions {
@@ -447,7 +486,7 @@ impl Analysis<'_> {
         match st {
             Stmt::Let(s) if self.borrow_let(s) => {
                 let roots = self.provenance(&s.value, locals)?;
-                locals.insert(s.name.clone(), roots);
+                undo.push((s.name.clone(), locals.insert(s.name.clone(), roots)));
             }
             Stmt::Let(s) => self.owned(&s.value, locals)?,
             Stmt::Assign(s) => self.owned(&s.value, locals)?,
@@ -472,22 +511,27 @@ impl Analysis<'_> {
     }
 
     /// Adds the statements of `body` to `graph` in pre-order; `incoming` are the points that flow into the block.
-    /// Returns the points that flow out of it. `scope` maps a visible borrow variable to its bit.
+    /// Returns the points that flow out of it, at most one: every `if` / `match` ends in one synthetic join point.
+    /// `locals` (provenance) and `scope` (visible borrow variable -> bit) are one shared mutable map each; the block
+    /// logs every insert in an undo log and restores both in reverse order before returning, so the caller sees
+    /// them unchanged (a shadowing `let v = subview(v, ..)` still reads the old `v` while computing provenance).
     fn build<'a>(
         &self,
         f: &Function,
         body: &'a [Stmt],
         mut incoming: Vec<usize>,
-        mut locals: HashMap<String, Roots>,
-        mut scope: HashMap<&'a str, usize>,
+        locals: &mut HashMap<String, Roots>,
+        scope: &mut HashMap<&'a str, usize>,
         graph: &mut Graph,
     ) -> Vec<usize> {
+        let mut locals_undo: Vec<(String, Option<Roots>)> = Vec::new();
+        let mut scope_undo: Vec<(&'a str, Option<usize>)> = Vec::new();
         for st in body {
             let n = graph.points.len();
             for p in incoming {
                 graph.points[p].succ.push(n);
             }
-            let mut point = Point { succ: Vec::new(), gen: Vec::new(), kill: None, uses: Vec::new() };
+            let mut point = Point { succ: Vec::new(), gen: Vec::new(), kill: None, uses: Vec::new(), own_move: None };
             own_accesses(st, &mut |name, access, line, col| {
                 if let Some(&b) = scope.get(name) {
                     point.gen.push(b);
@@ -495,36 +539,62 @@ impl Analysis<'_> {
                 point.uses.push((name.to_owned(), access, line, col));
             });
             if graph.failure.is_none() {
-                if let Err(e) = self.statement(f, st, &mut locals) {
+                if let Err(e) = self.statement(f, st, locals, &mut locals_undo) {
                     graph.failure = Some((n, e));
                 }
             }
             if let Stmt::Let(s) = st {
                 if self.borrow_let(s) {
                     point.kill = Some(graph.borrows.len());
-                    scope.insert(&s.name, graph.borrows.len());
+                    scope_undo.push((&s.name, scope.insert(&s.name, graph.borrows.len())));
                     graph.borrows.push(locals.get(&s.name).cloned().unwrap_or_default());
+                    // A value that moves a root the new view borrows (`Doc { src: x, scratch: move x }`) conflicts
+                    // with the view itself; like the other conflicts it is reported only where reachable.
+                    let roots = graph.borrows.last().unwrap();
+                    walk_expr(&s.value, &mut |node| {
+                        if let Node::Expr(Expr::Move(m)) = node {
+                            if point.own_move.is_none() && roots.contains_key(m.name.as_str()) {
+                                point.own_move = Some((m.line, m.col));
+                            }
+                        }
+                    });
                 }
             }
             graph.points.push(point);
             incoming = match st {
                 Stmt::If(s) => {
-                    let mut out = self.build(f, &s.then, vec![n], locals.clone(), scope.clone(), graph);
-                    out.extend(self.build(f, &s.els, vec![n], locals.clone(), scope.clone(), graph));
-                    out
+                    let mut out = self.build(f, &s.then, vec![n], locals, scope, graph);
+                    out.extend(self.build(f, &s.els, vec![n], locals, scope, graph));
+                    graph.join(out)
                 }
                 Stmt::While(While { body, .. }) | Stmt::ForMap(ForMap { body, .. }) => {
-                    for p in self.build(f, body, vec![n], locals.clone(), scope.clone(), graph) {
+                    for p in self.build(f, body, vec![n], locals, scope, graph) {
                         graph.points[p].succ.push(n);
                     }
                     vec![n]
                 }
-                Stmt::Match(s) => s.arms.iter()
-                    .flat_map(|a| self.build(f, &a.body, vec![n], locals.clone(), scope.clone(), graph))
-                    .collect(),
+                Stmt::Match(s) => {
+                    let mut out = Vec::new();
+                    for a in &s.arms {
+                        out.extend(self.build(f, &a.body, vec![n], locals, scope, graph));
+                    }
+                    graph.join(out)
+                }
                 Stmt::Return(_) => Vec::new(),
                 _ => vec![n],
             };
+        }
+        for (name, old) in scope_undo.into_iter().rev() {
+            match old {
+                Some(bit) => { scope.insert(name, bit); }
+                None => { scope.remove(name); }
+            }
+        }
+        for (name, old) in locals_undo.into_iter().rev() {
+            match old {
+                Some(roots) => { locals.insert(name, roots); }
+                None => { locals.remove(&name); }
+            }
         }
         incoming
     }
@@ -543,7 +613,7 @@ pub(crate) fn check(prog: &Program) -> Res<()> {
     };
     for f in &prog.functions {
         let mut graph = Graph::default();
-        analysis.build(f, &f.body, Vec::new(), HashMap::new(), HashMap::new(), &mut graph);
+        analysis.build(f, &f.body, Vec::new(), &mut HashMap::new(), &mut HashMap::new(), &mut graph);
         graph.conflicts()?;
     }
     Ok(())

@@ -1739,15 +1739,23 @@ borrowed value is live.
   past the loop, the end of a loop body back to the head, and a `return` ends the path. The R-6g-11
   exclusivity rule applies at every statement where the borrow is live, so a view whose last use is inside one
   branch of an `if` frees its roots for the rest of that branch and for the other branch, as in hand Rust (NLL),
-  while a view used anywhere in a loop body after its `let` outside the loop stays live on the whole body through
-  the back edge. This replaces the earlier block rule ("a loop or `if` that mentions it counts whole"); it
+  while a view used anywhere in a loop body after its `let` outside the loop stays live, through the back edge, on
+  the paths of the body that can reach that use (a path that leaves by `return` frees it). Only statements
+  reachable from the function entry are checked: a statement after a `return` in the same block is not, as rustc
+  does not borrow-check unreachable code. At a borrow `let` itself, a `move` of a root of the new borrow's own
+  provenance (`Doc { src: x, scratch: move x }`) is `type/borrow_conflict`. This replaces the earlier block rule ("a loop or `if` that mentions it counts whole"); it
   accepts strictly more programs, and every R-6g-11 reject test still rejects with the same diagnostic.
-  The check is a backward worklist over gen/kill bit sets (one bit per borrow) with per-root masks of the
-  shared and exclusive borrows, so its cost is O((d+1)·S·B/64 + M·B/64 + Σ|provenance|) for S statements,
-  loop depth d, B borrows and M root mentions (docs/B_BUNDLE_SPEC.md §4.3).
+  The statement graph has one join point per `if` and `match`, so each block has at most one exit; the provenance
+  and scope maps are shared across blocks and restored by an undo log, not copied. Liveness is a backward
+  gen/kill over bit sets (one bit per borrow) computed by reverse-order sweeps until no set changes (at most loop depth
+  + 2 sweeps), and uses meet per-root masks of the shared and exclusive borrows, so the cost is
+  O((d+2)·S·B/64 + M·B/64 + Σ|provenance|) for S statements, loop depth d, B borrows and M root mentions
+  (docs/B_BUNDLE_SPEC.md §4.3).
   Tests: [dies in if](tests/spec/r6g9_4_dies_in_if.pruv), [loop still live](tests/spec/r6g9_4_loop_still_live.pruv),
   [nested loops](tests/spec/r6g9_4_nested_loops.pruv), [outer loop live](tests/spec/r6g9_4_nested_outer_live.pruv),
-  [many views](tests/spec/r6g9_4_many_views.pruv).
+  [many views](tests/spec/r6g9_4_many_views.pruv), [after return](tests/spec/r6g9_4_after_return.pruv),
+  [move in own init](tests/spec/r6g9_4_move_in_own_init.pruv),
+  [move after return](tests/spec/r6g9_4_move_after_return.pruv); cost: tests/view_liveness_cost.py.
 
 ## 6h. Files (G10)
 
