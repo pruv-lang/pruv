@@ -91,8 +91,8 @@ UTF-16 units and copied the chosen decoder in and out was withdrawn as a non-han
 | `struct Scan { position, kind }` | `ParseResult<()>` = `Result<(), (usize, i64)>`, cursor in `self.pos` | `i64` pair | = | — | none | **Differs**: hand moves `&mut self.pos` and returns `Result<(), E>`; Pruv takes the cursor by value and returns the new position in `Scan`. `Result<(), E>` is **RU**; an `inout pos` cursor (OS closed) changes the API of every `scan_*` and their callers (`parse`, `claude/entry`, `json/a1_root`), not done in step 2.6. |
 | `validate_utf8(input, start, end) -> i64` | `std::str::from_utf8(&input[a..b])` | `[u8]` | borrow | 16-byte ASCII blocks, then per char | none | Same algorithm as std (ASCII fast path, then sequence check); returns the error offset like `valid_up_to`. = |
 | `skip_whitespace` | `while matches!(b, b' '\|b'\t'\|b'\n'\|b'\r')` | `[u8]` | borrow | one pass | none | = |
-| `scan_literal` | `hand_json.rs:66` `literal()`: `required()` per byte, error 12 at the first mismatch | `[u8]` | borrow | ≤5 steps | none | = loop; cursor and return form as `Scan`. |
-| `digits`, `scan_number` | `hand_json.rs:75` `digits()`, `:85` `number()` | `[u8]` | borrow | one pass | none | Hand `digits` requires its first digit itself; Pruv `digits` scans the rest after the caller checked the first one. Cursor and return form as `Scan`. |
+| `scan_literal` | `hand_json.rs:67` `literal()`: `required()` per byte, error 12 at the first mismatch | `[u8]` | borrow | ≤5 steps | none | Same per-byte compare and first-mismatch position; hand walks the given literal, Pruv picks the expected byte from the first byte and the index. Cursor and return form as `Scan`. |
+| `digits`, `scan_number` | `hand_json.rs:77` `digits()`, `:87` `number()` | `[u8]` | borrow | one pass | none | Hand `digits` requires its first digit itself; Pruv `digits` (returns the end as `i64`) scans the rest after the caller checked the first one. `scan_number`: cursor and return form as `Scan`. |
 | `scalar_width(byte)` | `hand_json.rs:235` `utf8_width(byte: u8) -> usize` | `i64` → `i64` (SPEC §6b: no scalar `u8`/`usize`) | — | — | none | Same table (194-223/224-239/240-244/else 1). Named apart from `parse::utf8_width` only to keep the Python verifier stable (step 2.6). |
 | `scan_string` | `hand_json.rs:113` `string()`: `while let Some(byte) = self.peek()` per byte | `[u8]` | borrow | per byte; a byte ≥ 128 checks one scalar `[i, i + width)` with `from_utf8` and jumps over it | none | Loop = since step 2.6 (the 16-byte block skip is gone). The scalar check passes `(input, i, i + width)` where hand passes `&input[i..i + width]`. Cursor and return form as `Scan`. |
 
@@ -323,7 +323,7 @@ With P3 and P6 together (either one alone was fine), the Python verifier timed o
 
 | Pruv | Hand Rust | Types | Ownership | Loops | Allocations | Difference |
 |---|---|---|---|---|---|---|
-| `scan_string` | `Parser::string` | `[u8]`, `i64` positions / `&[u8]`, `usize` | borrow | one per-byte loop; scalar jump on ≥ 128 | none | Loop, branch order, error kinds and positions =. Cursor by value and `Scan` return vs `&mut self.pos` and `Result<(), E>` (RU). Scalar check gets `(input, i, e)`, hand a sub-slice `&input[i..e]` |
+| `scan_string` | `Parser::string` | `[u8]`, `i64` positions / `&[u8]`, `usize` | borrow | one per-byte loop; scalar jump on ≥ 128 | none | Loop, error kinds and positions = (hand tests `\\` before ≥ 128, Pruv the other way; the cases do not overlap). Cursor by value and `Scan` return vs `&mut self.pos` and `Result<(), E>` (RU). Scalar check gets `(input, i, e)`, hand a sub-slice `&input[i..e]` |
 | `scalar_width` | `utf8_width` | `i64` / `u8 → usize` | — | — | none | Same table; `i64` for `u8`/`usize` (SPEC §6b); name differs |
 | `validate_utf8` | `std::str::from_utf8` | `[u8]` | borrow | ASCII blocks, then per sequence | none | = (unchanged) |
 
@@ -340,7 +340,7 @@ The loop difference is gone. The structure difference is not zero: the cursor an
 
 `bench/l3/lib/lex.pruv` is untouched, so its `--lib` users were not run. The lex mutant strings in `json/run_q_mutants.py` still appear exactly once each.
 
-**Measurement (loop only).** The structure difference is not zero, so this is not the gate measurement of RUST_SHAPE_RESET; it compares the reshaped loop and is to be repeated when the cursor form is done. The harness lives outside the repo. It runs hand `Parser::string`, copied verbatim, against Pruv `string` (a1 root, i.e. `lex::scan_string` behind its `requires` checks) over every string in the buffer. Runs alternate hand / Pruv-rust / Pruv-LLVM, 5 rounds each. Results are ns per byte, median and range:
+**Measurement (loop only).** The structure difference is not zero, so this is not the gate measurement of RUST_SHAPE_RESET; it compares the reshaped loop and is to be repeated when the cursor form is done. The harness is not tracked in Git. It runs hand `Parser::string`, copied verbatim, against Pruv `string` (a1 root, i.e. `lex::scan_string` behind its `requires` checks) over every string in the buffer. Runs alternate hand / Pruv-rust / Pruv-LLVM, 5 rounds each. Results are ns per byte, median and range:
 
 | Size | Profile | Hand | Pruv (rust) | Pruv (LLVM) | Max RSS |
 |---|---|---|---|---|---|
