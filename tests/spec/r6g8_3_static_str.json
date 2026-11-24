@@ -1,0 +1,21 @@
+{
+  "gen_contains": [
+    "let sep: &'static str = \", \";",
+    "let head: &'static str = \"pruv\";",
+    "let none: &'static str = \"\";",
+    "let lit: ::std::string::String = ::std::string::String::from(\"owned\");"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "15"
+    ],
+    "alloc_balance": true
+  }
+}

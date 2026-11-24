@@ -319,6 +319,9 @@ def _cat_adapter(helper, op, low):
         return _fn(S, "s: PruvH, p: *const u8, n: i64", "PruvH",
                    "pruv_g6_guard(|| { let pruv_t: &str = pruv_g6_str(p, n); "
                    "pruv_g6_upd::<%s, _>(s, |pruv_o| %s(pruv_o, pruv_t)) })" % (C, helper))
+    if op == "string_push_char":   # LB9 (R-6g8-2)
+        return _fn(S, "s: PruvH, c: i64", "PruvH",
+                   "pruv_g6_guard(|| pruv_g6_upd::<%s, _>(s, |pruv_o| %s(pruv_o, c)))" % (C, helper))
     if op == "string_byte":
         return _fn(S, "s: PruvH, i: i64", "i64", "pruv_g6_guard(|| %s(pruv_g6_ref::<%s>(s), i))" % (helper, C))
     raise Exception("foreign_shim: no adapter for catalog operation %s" % op)

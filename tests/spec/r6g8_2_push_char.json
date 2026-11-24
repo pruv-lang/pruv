@@ -1,0 +1,18 @@
+{
+  "gen_contains": [
+    "s.push(pruv_c);"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "4970855"
+    ],
+    "alloc_balance": true
+  }
+}

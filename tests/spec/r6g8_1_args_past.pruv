@@ -1,0 +1,5 @@
+// spec: R-6g8-1 reject
+pub fn tail(t: str) -> i64 ! alloc {
+  let a: ProcessArgs = proc_args_push(proc_args_new(), subview(t, 1, len(t) + 1));
+  return proc_args_len(a);
+}

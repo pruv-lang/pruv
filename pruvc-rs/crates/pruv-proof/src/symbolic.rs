@@ -4904,6 +4904,52 @@ impl<'a> FnVerifier<'a> {
                 self.assume(st, g, f2);
                 Ok(Val::Arr(res))
             }
+            "string_push_char" => {
+                // LB9 (R-6g8-2): append the UTF-8 encoding of one Unicode scalar value
+                let sv = argv(0)?.try_arr()?.clone();
+                let c = argv(1)?.try_ast()?.clone();
+                if code {
+                    let scalar = z.and(&[c.ge_i(0), c.le_i(0x10FFFF), z.or(&[c.lt_i(0xD800), c.gt_i(0xDFFF)])]);
+                    self.prove_core(&st, g, &scalar, pos(e), "call_requires", &what, None);
+                    let room = sv.n.add_i(4).le_i(MAX_LEN);
+                    self.prove_core(&st, g, &room, pos(e), "call_requires", &what, None);
+                }
+                let res_v = self.try_fresh(n, &Ty::User("string".to_string()))?;
+                let res = res_v.try_arr()?.clone();
+                let w = z.ite(
+                    &c.lt_i(0x80),
+                    &z.int(1),
+                    &z.ite(&c.lt_i(0x800), &z.int(2), &z.ite(&c.lt_i(0x10000), &z.int(3), &z.int(4))),
+                );
+                self.assume(st, g, res.n.eq(&sv.n.add(&w)));
+                let k = z.int_const("str!k");
+                let rng = z.and(&[k.ge_i(0), k.lt(&sv.n)]);
+                let keep = res.a.select(&k).eq(&sv.a.select(&k));
+                self.assume(st, g, z.forall(std::slice::from_ref(&k), &rng.implies(&keep), &[]));
+                let b: Vec<Ast> = (0..4).map(|i| res.a.select(&sv.n.add_i(i))).collect();
+                let dv = |d: i64| c.div(&z.int(d));
+                let lead = |base: i64, d: i64| z.int(base).add(&dv(d));
+                let cont = |d: i64| z.int(128).add(&dv(d).modulo(&z.int(64)));
+                let low = z.int(128).add(&c.modulo(&z.int(64)));
+                self.assume(st, g, w.eq(&z.int(1)).implies(&b[0].eq(&c)));
+                self.assume(st, g, w.eq(&z.int(2)).implies(&z.and(&[b[0].eq(&lead(192, 64)), b[1].eq(&low)])));
+                self.assume(
+                    st,
+                    g,
+                    w.eq(&z.int(3)).implies(&z.and(&[b[0].eq(&lead(224, 4096)), b[1].eq(&cont(64)), b[2].eq(&low)])),
+                );
+                self.assume(
+                    st,
+                    g,
+                    w.eq(&z.int(4)).implies(&z.and(&[
+                        b[0].eq(&lead(240, 262144)),
+                        b[1].eq(&cont(4096)),
+                        b[2].eq(&cont(64)),
+                        b[3].eq(&low),
+                    ])),
+                );
+                Ok(Val::Arr(res))
+            }
             "string_to_str" => {
                 let a = argv(0)?.try_arr()?;
                 let value = Val::Arr(Arr::new(a.a.clone(), a.n.clone(), n.to_string(), Elem::U8));

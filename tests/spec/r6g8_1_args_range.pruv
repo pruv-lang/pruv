@@ -1,0 +1,9 @@
+// spec: R-6g8-1 accept
+pub fn checksum() -> i64 ! alloc {
+  let t: str = "ls -la /tmp";
+  let mut a: ProcessArgs = proc_args_new();
+  a = proc_args_push(move a, subview(t, 0, 2));
+  a = proc_args_push(move a, subview(t, 3, 6));
+  a = proc_args_push(move a, subview(t, 7, 11));
+  return proc_args_len(a);
+}

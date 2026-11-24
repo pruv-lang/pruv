@@ -1,0 +1,19 @@
+// LB9 (R-6g8-4): a field move on one path leaves the binder maybe-moved at the join.
+struct Doc { tape: [i64] }
+enum E { One(d: Doc), Empty }
+
+fn make() -> E ! alloc {
+  let t: [i64] = alloc(1, 65);
+  return E::One(Doc { tape: move t });
+}
+
+pub fn f(flag: bool) -> i64 ! alloc {
+  let e: E = make();
+  match e {
+    E::One(d) => {
+      if flag { let t: [i64] = move d.tape; }
+      return len(d.tape);
+    }
+    E::Empty => { return 0; }
+  }
+}

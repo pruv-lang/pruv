@@ -3486,8 +3486,10 @@ impl Checker {
         if typed
             && !restored
             && target.is_none()
-            && ((source.kind == "local" && source.mutable) || source.kind == "take")
-            && !self.arm_binders.contains(&m.name)
+            && ((((source.kind == "local" && source.mutable) || source.kind == "take")
+                && !self.arm_binders.contains(&m.name))
+                // LB9 (R-6g8-4): or a struct binder of a consuming match (the arm owns the payload; see Match)
+                || (source.kind == "local" && self.match_movable.contains(&m.name)))
         {
             // G-R09-4: `let t = move d.a;` of a `let mut` local record (LG9: or a take record parameter, which the
             // callee owns; LG9 G-LG8-1: any owned buffer field type, any field path) consumes d; foreign.rs marks d
@@ -4443,7 +4445,8 @@ impl Checker {
             if movable_scrut {
                 for (b, bt) in a.binders.iter().zip(ftypes.iter()) {
                     // LG9 (G-DB15-2): a str binder too, for `return x` (see Return)
-                    if bt.is_array() || *bt == strt() {
+                    // LB9 (R-6g8-4): a struct binder too, for `let t = move b.f;` (see field_move_out)
+                    if bt.is_array() || *bt == strt() || self.is_struct(bt) {
                         self.match_movable.insert(b.clone());
                     }
                 }
@@ -7613,7 +7616,7 @@ fn cost_calls(stmts: &[Stmt], out: &mut Vec<Call>) {
     }
 }
 
-/// LB7 (R-6g6-3): catalog text operations whose text argument may be a str subview.
+/// LB7 (R-6g6-3), LB9 (R-6g8-1): catalog text operations whose text argument may be a str subview.
 fn is_text_view_op(n: &str) -> bool {
-    matches!(n, "string_push_str" | "string_from")
+    matches!(n, "string_push_str" | "string_from" | "proc_args_push")
 }

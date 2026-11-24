@@ -1,0 +1,5 @@
+// spec: R-6g8-3 reject
+pub fn label() -> i64 {
+  let a: str = "lit";
+  return len(a);
+}

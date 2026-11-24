@@ -692,7 +692,7 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   `String` hold values. Collections cannot be stored in `Option`, `Result` or arrays, except an owned `String` as the
   error of a `Result<T, String>` (LG11 E2). R-6e-1, R-6e-3 and R-6e-6
   describe collection fields and the permitted nesting. Operations (`vec_*` and `map_*` take explicit type arguments, `string_*` and `len` take none): `vec_new`, `vec_push`,
-  `vec_get`, `map_new`, `map_insert`, `map_get` (returns `Option<V>`), `string_new`, `string_push_str`, `string_byte`,
+  `vec_get`, `map_new`, `map_insert`, `map_get` (returns `Option<V>`), `string_new`, `string_push_str`, `string_push_char`, `string_byte`,
   `string_to_str` (copies into a `str`), `string_from` (copies a `str` into a new `String`), `vec_clear`, `string_eq`, and `len`.
   Allocating operations need `! alloc`. In contracts only: `v[i]`, `s[i]`,
   `map_lookup::<K, V>(m, k)` and `map_updated::<K, V>(after, before, k, v)` (the whole new map: k set, size, others kept).
@@ -1693,6 +1693,43 @@ borrowed value is live.
   [ok_val](tests/spec/r6g7_1_unit_ok_val.pruv), [value of `?`](tests/spec/r6g7_1_unit_try_value.pruv),
   [field](tests/spec/r6g7_1_unit_field.pruv), [type argument](tests/spec/r6g7_1_unit_targ.pruv),
   [binder](tests/spec/r6g7_1_unit_bind.pruv), [pattern on a value](tests/spec/r6g7_1_unit_pattern.pruv).
+
+## 6g8. Builder pushes without temporaries (LB9)
+
+- R-6g8-1 **Text ranges into process arguments.** The text argument of `proc_args_push(move a, arg)` may be
+  `subview(t, lo, hi)` directly, under the same rules as R-6g6-3: no temporary is made, the range is
+  borrowed for the call, a `str` range must satisfy `0 <= lo <= hi <= len(t)` (`verify/string_slice_range`)
+  with both cuts on character boundaries (`verify/utf8_boundary`), and a `[u8]` range is
+  `verify/index_oob` with valid UTF-8 bytes (`verify/utf8_invalid`). Rust passes `&t[lo..hi]` (unchecked
+  when verified) to the wrapper, which pushes it as hand Rust does with `cmd.arg(&t[lo..hi])`.
+  Tests: [range](tests/spec/r6g8_1_args_range.pruv), [past the end](tests/spec/r6g8_1_args_past.pruv).
+- R-6g8-2 **Scalar pushes.** `string_push_char(move s, c: i64) -> String` (effect `alloc`) appends the
+  UTF-8 encoding of the Unicode scalar value `c` without a temporary string. It requires
+  `0 <= c <= 0x10FFFF`, `c` outside `0xD800..=0xDFFF` and `len(s) + 4 <= 2^40` (`verify/call_requires`).
+  The result keeps `s` as its prefix, has length `len(s) + w` where `w` is 1, 2, 3 or 4 for `c` below
+  `0x80`, `0x800`, `0x10000` or above, and its new bytes are the standard UTF-8 encoding of `c`. Rust
+  writes `s.push(c)` with the `char` built unchecked after the requires check (checked, with a runtime
+  failure, when checks are off); LLVM calls the same wrapper through the shim.
+  Tests: [push](tests/spec/r6g8_2_push_char.pruv), [surrogate](tests/spec/r6g8_2_push_surrogate.pruv),
+  [width](tests/spec/r6g8_2_push_width.pruv).
+- R-6g8-3 **Static text locals.** An immutable `let x: str = "lit";` whose every read is a borrow (a `str`
+  parameter of a catalog or user call, `len(x)`, `x[i]`, or the source of `subview` / `substr`) and whose name is
+  bound once in the function is emitted by the Rust backend as `let x: &'static str = "lit";`, as hand Rust
+  writes it: no `String::from`, no heap copy. A local that is returned, stored, moved, reassigned or read any
+  other way stays an owned `String`. The rule changes generated code only: the `alloc` effect of the string
+  literal is still required (`effect/missing_effect`).
+  Tests: [static](tests/spec/r6g8_3_static_str.pruv), [user call](tests/spec/r6g8_3_static_user.pruv),
+  [effect](tests/spec/r6g8_3_static_effect.pruv).
+- R-6g8-4 **Field moves out of a consuming match binder.** In a consuming match (R-6e-16: the scrutinee
+  is an owned `let` local and no arm names it again), a binder whose payload type is a struct may give up
+  one field with `let t = move b.f;`. As with G-R09-4, the move consumes the binder (and so the scrutinee):
+  any later use of `b` in that arm is `type/foreign_move` (a move on only some paths leaves `b` maybe moved),
+  `return move b.f` is still refused, and a whole `move b` stays refused (`type/foreign_move`). A binder of a match that is not consuming keeps the R-6e-16 rule. Rust emits the
+  partial move `let t = b.f;` with no `Clone` and no `mem::take`, as hand Rust writes `Ok(doc) => doc.tape`;
+  LLVM moves the field out of the payload slot and empties it, with no `@pruv_copy`.
+  Tests: [field](tests/spec/r6g8_4_binder_field.pruv), [use after](tests/spec/r6g8_4_binder_after.pruv),
+  [return](tests/spec/r6g8_4_binder_return.pruv), [named scrutinee](tests/spec/r6g8_4_binder_named.pruv),
+  [branch](tests/spec/r6g8_4_binder_branch.pruv), [whole move](tests/spec/r6g8_4_binder_whole.pruv).
 
 ## 6h. Files (G10)
 

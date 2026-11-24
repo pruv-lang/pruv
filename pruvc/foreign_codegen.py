@@ -279,6 +279,24 @@ class ForeignGen:
                            "result[len(s)..] == text")
             body += ["s"]
             return s._fn(name, "mut s: %s, text: &str" % STRING, STRING, body)
+        if op == "string_push_char":   # LB9 (R-6g8-2): `s.push(c)` as hand Rust writes it
+            ok = "c >= 0 && c <= 0x10FFFF && !(c >= 0xD800 && c <= 0xDFFF)"
+            body = s._req(ok, "c is a Unicode scalar value")
+            body += s._req("(s.len() as u64) + 4 <= (1u64 << 40)", "len(s) + 4 <= 2^40")
+            body += s._snap(STRING, "s")
+            if s.req:
+                body += ["let pruv_c: char = unsafe { ::std::char::from_u32_unchecked(c as u32) };"]
+            else:
+                body += ["let pruv_c: char = match u32::try_from(c).ok().and_then(::std::char::from_u32) "
+                         "{ ::std::option::Option::Some(pruv_x) => pruv_x, ::std::option::Option::None => "
+                         "pruv_g6_repr(\"char\") };"]
+            body += ["s.push(pruv_c);"]
+            body += s._ens("s.len() == pruv_snap.len() + pruv_c.len_utf8()", "len(result) == len(s) + width(c)")
+            if s.ens:
+                body += ["pruv_g6_charge(&mut pruv_budget, pruv_snap.len());"]
+            body += s._ens("s.as_bytes()[..pruv_snap.len()] == pruv_snap.as_bytes()[..]", "result[..len(s)] == s")
+            body += ["s"]
+            return s._fn(name, "mut s: %s, c: i64" % STRING, STRING, body)
         if op == "string_byte":
             body = s._req("i >= 0 && (i as u64) < (s.len() as u64)", "0 <= i && i < len(s)")
             body += ["let pruv_k: usize = if i >= 0 && (i as u64) < (s.len() as u64) { i as usize } "

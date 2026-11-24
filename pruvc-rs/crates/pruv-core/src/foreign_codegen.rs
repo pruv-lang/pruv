@@ -582,6 +582,36 @@ impl ForeignGen {
                 body.push("s".to_string());
                 Ok(self.fn_text(name, &format!("mut s: {}, text: &str", STRING), Some(STRING), &body))
             }
+            "string_push_char" => {
+                // LB9 (R-6g8-2): `s.push(c)` as hand Rust writes it
+                let mut body = self.req_line(
+                    "c >= 0 && c <= 0x10FFFF && !(c >= 0xD800 && c <= 0xDFFF)",
+                    "c is a Unicode scalar value",
+                );
+                body.extend(self.req_line("(s.len() as u64) + 4 <= (1u64 << 40)", "len(s) + 4 <= 2^40"));
+                body.extend(self.snap(STRING, "s"));
+                if self.req {
+                    body.push("let pruv_c: char = unsafe { ::std::char::from_u32_unchecked(c as u32) };".to_string());
+                } else {
+                    body.push(
+                        "let pruv_c: char = match u32::try_from(c).ok().and_then(::std::char::from_u32) \
+                         { ::std::option::Option::Some(pruv_x) => pruv_x, ::std::option::Option::None => \
+                         pruv_g6_repr(\"char\") };"
+                            .to_string(),
+                    );
+                }
+                body.push("s.push(pruv_c);".to_string());
+                body.extend(self.ens_line("s.len() == pruv_snap.len() + pruv_c.len_utf8()", "len(result) == len(s) + width(c)"));
+                if self.ens {
+                    body.push("pruv_g6_charge(&mut pruv_budget, pruv_snap.len());".to_string());
+                }
+                body.extend(self.ens_line(
+                    "s.as_bytes()[..pruv_snap.len()] == pruv_snap.as_bytes()[..]",
+                    "result[..len(s)] == s",
+                ));
+                body.push("s".to_string());
+                Ok(self.fn_text(name, &format!("mut s: {}, c: i64", STRING), Some(STRING), &body))
+            }
             "string_byte" => {
                 let mut body = self.req_line("i >= 0 && (i as u64) < (s.len() as u64)", "0 <= i && i < len(s)");
                 body.push(

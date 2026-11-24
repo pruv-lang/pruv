@@ -41,7 +41,7 @@ pub struct CatFn {
 }
 
 /// CATALOG_NAMES of foreign.py (insertion order).
-pub const CATALOG_NAMES: [&str; 106] = [
+pub const CATALOG_NAMES: [&str; 107] = [
     "vec_new",
     "vec_push",
     "vec_get",
@@ -59,6 +59,7 @@ pub const CATALOG_NAMES: [&str; 106] = [
     "string_new",
     "string_from",
     "string_push_str",
+    "string_push_char",
     "string_byte",
     "string_to_str",
     "file_open_read",
@@ -327,6 +328,12 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
         },
         "string_push_str" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("s", string_t(), true), p("text", GType::str(), false)],
+            ret: string_t(),
+            effects: alloc(),
+            tparams: vec![],
+        },
+        "string_push_char" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("s", string_t(), true), p("c", GType::i64(), false)],
             ret: string_t(),
             effects: alloc(),
             tparams: vec![],
@@ -881,6 +888,8 @@ struct Ownership<'a> {
     /// binders of the user-enum match arms being checked (payload views; only owned collection fields are collections)
     arm_bor: Vec<String>,
     string_error_binders: HashSet<String>,
+    /// LB9 (R-6g8-4): record binders of a consuming match (field moves only)
+    field_only: HashSet<String>,
     /// name -> "move" | "borrow" of the outermost call being checked (shared by nested calls)
     track: Option<Track>,
     /// G10 A0: must-consume bindings, name -> "Process" | "Socket" | "Listener"; never File, String or ProcessArgs
@@ -1128,15 +1137,22 @@ impl<'a> Ownership<'a> {
                     // scrutinee that no arm names. A match where some arm moves a binder takes the scrutinee by
                     // value: it is consumed on entry to every arm, and its array binders are tracked owners of the arm
                     let mut srcs: Vec<String> = Vec::new();
+                    let mut records: Vec<String> = Vec::new();
                     if let (Some(sc), Some(en)) = (&consuming, &a.enum_name) {
                         arm_state.set(sc, V::Dead);
                         let fields = self.variants.get(&(en.clone(), a.ctor.clone())).cloned().unwrap_or_default();
                         // LG36 (G-DB59-1): str binders too, so a branch, loop or closed arm sees their moves
-                        srcs = a.binders.iter().zip(&fields).filter(|(_, t)| key_is_array(t) || t.as_str() == "str")
+                        // LB9 (R-6g8-4): user struct and enum binders too, so a use after `let t = move b.f;` is a use
+                        // after move on every path; they stay field-only (a whole `move b` is still refused, see mv)
+                        records = a.binders.iter().zip(&fields).filter(|(_, t)| self.enums.contains(*t))
+                            .map(|(b, _)| b.clone()).collect();
+                        srcs = a.binders.iter().zip(&fields)
+                            .filter(|(b, t)| key_is_array(t) || t.as_str() == "str" || records.contains(*b))
                             .map(|(b, _)| b.clone()).collect();
                         for b in &srcs {
                             arm_state.set(b, V::Live);
                         }
+                        self.field_only.extend(records.iter().cloned());
                     }
                     let string_error = (owned_result && a.ctor == "Err").then(|| &a.binders[0]);
                     if let Some(binder) = string_error {
@@ -1144,6 +1160,9 @@ impl<'a> Ownership<'a> {
                         self.string_error_binders.insert(binder.clone());
                     }
                     let r = self.block(&a.body, arm_state);
+                    for b in &records {
+                        self.field_only.remove(b);
+                    }
                     if let Some(binder) = string_error {
                         self.string_error_binders.remove(binder);
                     }
@@ -1350,7 +1369,8 @@ impl<'a> Ownership<'a> {
         }
         let (line, col) = (e.line, e.col);
         if !is_coll(&e.ty) && !e.ty.as_deref().is_some_and(key_is_array) && e.ty.as_deref() != Some("str")
-            && !(e.ty.as_ref().is_some_and(|t| self.aggregates.contains(t)) && st.contains(&e.name)) {
+            && !(e.ty.as_ref().is_some_and(|t| self.aggregates.contains(t)) && st.contains(&e.name)
+                && !self.field_only.contains(&e.name)) {
             return Err(err(
                 line,
                 col,
@@ -1685,7 +1705,7 @@ pub fn check_ownership(f: &Function, funcs: &Takes, aggregates: &HashSet<String>
                        variants: &HashMap<(String, String), Vec<String>>) -> Res<()> {
     Ownership {
         funcs, aggregates, enums, variants, map_binders: Vec::new(), bor: HashSet::new(), arm_bor: Vec::new(),
-        string_error_binders: HashSet::new(), track: None,
+        string_error_binders: HashSet::new(), field_only: HashSet::new(), track: None,
         proc: HashMap::new(), decl: HashMap::new(), consumed_field: None,
     }.run(f)
 }
@@ -2244,7 +2264,7 @@ mod tests {
 
     #[test]
     fn catalog_shapes() {
-        assert_eq!(CATALOG_NAMES.len(), 106);
+        assert_eq!(CATALOG_NAMES.len(), 107);
         for n in CATALOG_NAMES.iter() {
             assert!(catalog_fn(n).is_some());
         }

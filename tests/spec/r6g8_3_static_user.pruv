@@ -1,0 +1,12 @@
+// LB9 (R-6g8-3): a str literal local lent to a user function stays &'static str
+// in a program without catalog (G6) calls.
+fn weight(t: str) -> i64
+  ensures result == len(t)
+{
+  return len(t);
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let s: str = "abc";
+  return weight(s) + weight(s);
+}

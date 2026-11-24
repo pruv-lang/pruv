@@ -3060,6 +3060,24 @@ class FnVerifier:
             s.assume(st, g, z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < t.n),
                                                        z3.Select(res.a, sv.n + k) == z3.Select(t.a, k))))
             return res
+        if n == "string_push_char":   # LB9 (R-6g8-2): append the UTF-8 encoding of one Unicode scalar value
+            sv, c = args
+            need(z3.And(c >= 0, c <= 0x10FFFF, z3.Or(c < 0xD800, c > 0xDFFF)))
+            need(sv.n + 4 <= MAX_LEN)
+            res = s.fresh(n, _STRING)
+            w = z3.If(c < 0x80, 1, z3.If(c < 0x800, 2, z3.If(c < 0x10000, 3, 4)))
+            s.assume(st, g, res.n == sv.n + w)
+            k = z3.Int("str!k")
+            s.assume(st, g, z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < sv.n),
+                                                       z3.Select(res.a, k) == z3.Select(sv.a, k))))
+            b = [z3.Select(res.a, sv.n + i) for i in range(4)]
+            s.assume(st, g, z3.Implies(w == 1, b[0] == c))
+            s.assume(st, g, z3.Implies(w == 2, z3.And(b[0] == 192 + c / 64, b[1] == 128 + c % 64)))
+            s.assume(st, g, z3.Implies(w == 3, z3.And(b[0] == 224 + c / 4096, b[1] == 128 + (c / 64) % 64,
+                                                       b[2] == 128 + c % 64)))
+            s.assume(st, g, z3.Implies(w == 4, z3.And(b[0] == 240 + c / 262144, b[1] == 128 + (c / 4096) % 64,
+                                                       b[2] == 128 + (c / 64) % 64, b[3] == 128 + c % 64)))
+            return res
         if n == "string_to_str":
             return s.assume_str(st, g, mk_arr(args[0].a, args[0].n, n, U8))   # LG27 (G-LG26-2)
         raise Exception("catalog: " + n)

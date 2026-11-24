@@ -90,7 +90,7 @@ from typeinfo import (TypeTable, is_user_type, is_array, uses_array_type, uses_s
 from foreign import CATALOG
 from inline_policy import PIN_INLINE, PIN_ALWAYS, inline_policy
 from check import ARRAY_GROW_BUILTINS, BIT_BUILTINS, array_resize_params, array_resize_args, same_place
-from refine import _kids as expr_kids, _stmt_names, _expr_names
+from refine import _kids as expr_kids, _kids, _stmt_names, _expr_names
 
 
 def _moves_name(node, names):
@@ -99,7 +99,7 @@ def _moves_name(node, names):
         return any(_moves_name(x, names) for x in node)
     if not hasattr(node, "__dataclass_fields__") or isinstance(node, Type):
         return False
-    if isinstance(node, Move) and not node.fields and node.name in names:
+    if isinstance(node, Move) and node.name in names:    # LB9 (R-6g8-4): `move b.f` of a struct binder too
         return True
     return any(_moves_name(getattr(node, f), names) for f in node.__dataclass_fields__)
 
@@ -1279,6 +1279,70 @@ def condensed_type_order(decls):
     return [decls[names[i]] for comp in comps for i in sorted(comp)]
 
 
+def static_str_locals(f, fmap):
+    """LB9 SL (R-6g8-3): immutable `let x: str = "lit";` locals whose every read is a borrow (a `str` parameter of a
+    catalog or user call, `len`, an index, or the source of `subview` / `substr`) stay `&'static str`, as hand Rust
+    writes `let x = "lit";`. A name bound twice anywhere in the function is left alone."""
+    lets, binders, bad = {}, [p.name for p in f.params], set()
+
+    def str_param(p):
+        return p.type == STR and p.mode is None and not p.take
+
+    def visit(e, ok=False):
+        if isinstance(e, (Var, Move)):
+            if not ok or isinstance(e, Move):
+                bad.add(e.name)
+            return
+        if isinstance(e, Index):
+            visit(e.array, True)
+            visit(e.index)
+            return
+        if isinstance(e, Call):
+            n, a = e.name, e.args
+            if n == "len" and len(a) == 1 or n in ("subview", "substr") and a:
+                flags = [True] + [False] * (len(a) - 1)
+            elif n in fmap:
+                ps = fmap[n].params
+                flags = [i < len(ps) and str_param(ps[i]) for i in range(len(a))]
+            elif n in CATALOG:
+                ps = CATALOG[n].params
+                flags = [i < len(ps) and str_param(ps[i]) for i in range(len(a))]
+            else:
+                flags = [False] * len(a)
+            for x, ok_x in zip(a, flags):
+                visit(x, ok_x)
+            return
+        for k in _kids(e):
+            visit(k)
+
+    def block(stmts):
+        for st in stmts:
+            if isinstance(st, Let):
+                binders.append(st.name)
+                if not st.mutable and st.type == STR and isinstance(st.value, StrLit) and st.refine is None:
+                    lets[st.name] = st
+            elif isinstance(st, ForMap):
+                binders.extend([st.key, st.val])
+            elif isinstance(st, Match):
+                for arm in st.arms:
+                    binders.extend(arm.binders)
+            for name in ("value", "index", "cond", "decreases", "place", "expr", "scrutinee"):
+                x = getattr(st, name, None)
+                if isinstance(x, Expr):
+                    visit(x)
+            for name in ("invariants", "calls"):
+                for x in getattr(st, name, None) or []:
+                    visit(x)
+            for name in ("then", "els", "body"):
+                block(getattr(st, name, None) or [])
+            if isinstance(st, Match):
+                for arm in st.arms:
+                    block(arm.body)
+
+    block(f.body)
+    return {n for n in lets if n not in bad and binders.count(n) == 1}
+
+
 class CondensedTypeTable(TypeTable):
     """TypeTable whose dependency order is computed on the SCC condensation (G9 programs only)."""
     def _build_order(self):
@@ -1641,6 +1705,8 @@ class Gen:
         s.trust = trust_callers
         s.out = []
         s.cost = False
+        s.static_strs = set()
+        s.owned_binders = set()   # LB9 (R-6g8-4): struct binders of a consuming match in the current arm
         s.borrow_from = None
         s.cost_used = not verified and any(f.cost is not None for f in prog.functions)
         s.has_req = {f.name for f in prog.functions if f.requires and f.foreign is None}
@@ -2007,6 +2073,7 @@ class Gen:
             s.emit_inline(f)
         s.emit(0, "%sfn %s%s(%s)%s {" % (vis, body_name, lifetime, ps, ret))
         s.cost = not s.verified and f.cost is not None
+        s.static_strs = set() if s.cost else static_str_locals(f, s.fmap)
         if s.cost:
             args = ["&" + p.name if p.name in s.take_arrays or p.name in s.take_ext
                     or p.take and (p.type.name == "string" or is_owned_result(p.type))
@@ -3081,6 +3148,10 @@ class Gen:
             s.emit(ind, "let %s: &[%s] = &pruv_sb_%s[..pruv_sl_%s];" % (st.name, el, st.name, st.name))
             s.vt[st.name] = st.type
             s.refs.discard(st.name)
+        elif isinstance(st, Let) and st.name in s.static_strs:   # LB9 SL (R-6g8-3): `let x = "lit";`
+            s.emit(ind, "let %s: &'static str = %s;" % (st.name, str_lit(st.value.value)))
+            s.vt[st.name] = st.type
+            s.refs.add(st.name)
         elif isinstance(st, Let):
             s.moving = s.last_copy(st)
             binding = ("mut " if st.mutable else "") + st.name
@@ -3337,6 +3408,7 @@ class Gen:
             pat = name if not a.binders else "%s(%s)" % (name, ", ".join(a.binders))
             s.emit(ind + 1, "%s => {" % pat)
             saved_vt, saved_refs, saved_pinned = dict(s.vt), set(s.refs), set(s.pinned)
+            saved_owned = set(s.owned_binders)
             root = field_place(sc)[0]
             if s.rec_vec_get(root):
                 root = field_place(root.args[0])[0]
@@ -3349,6 +3421,7 @@ class Gen:
                     boxed = ("%s::%s.%s" % (sty.name, a.ctor, fd.name)) in s.boxed
                     s.emit(ind + 2, "let %s: %s = %s%s;" % (b, ft.name, "*" if boxed else "", b))
                     s.refs.discard(b)
+                    s.owned_binders.add(b)    # LB9 (R-6g8-4): `move b.f` is the plain partial move `b.f`
                 elif s.is_ext(ft):
                     s.emit(ind + 2, "let %s: &%s = %s;" % (b, ft.name, b))
                     s.refs.add(b)
@@ -3370,6 +3443,7 @@ class Gen:
                 s.vt[b] = ft
             s.block(a.body, ind + 2, decls=a.binders)
             s.vt, s.refs, s.pinned = saved_vt, saved_refs, saved_pinned
+            s.owned_binders = saved_owned
             s.emit(ind + 1, "}")
         s.emit(ind, "}")
 
@@ -3648,6 +3722,8 @@ class Gen:
                 return "(*%s)" % e.name
             return e.name
         if isinstance(e, Move):   # G6: Rust moves
+            if e.fields and e.name in s.owned_binders:   # LB9 (R-6g8-4): a consuming match binder owns its payload
+                return "%s.%s" % (e.name, ".".join(e.fields))
             if e.fields:
                 return "::std::mem::take(&mut %s.%s)" % (e.name, ".".join(e.fields))
             if e.name in s.resizable:

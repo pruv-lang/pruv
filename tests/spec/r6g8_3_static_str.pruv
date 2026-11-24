@@ -1,0 +1,32 @@
+// spec: R-6g8-3 accept
+fn weight(t: str) -> i64
+  ensures result == len(t)
+{
+  return len(t);
+}
+
+fn joined(flag: bool) -> String ! alloc {
+  let sep: str = ", ";
+  let head: str = "pruv";
+  let mut out: String = string_from(head);
+  if len(sep) <= 2 {
+    out = string_push_str(move out, sep);
+  }
+  out = string_push_str(move out, subview(head, 0, 2));
+  if flag && head[0] == 112 {
+    out = string_push_str(move out, sep);
+  }
+  return move out;
+}
+
+fn kept() -> str ! alloc {
+  let lit: str = "owned";
+  return lit;
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let none: str = "";
+  let j: String = joined(true);
+  let k: str = kept();
+  return len(j) + weight(none) + len(k) + len(none);
+}

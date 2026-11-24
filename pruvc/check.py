@@ -41,7 +41,7 @@ ARR_PUSH_MAX = 16   # LB6 SX (R-6g5-5): the most values one arr_push appends
 
 BUILTIN_FNS = ARRAY_GROW_BUILTINS + ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "utf8_valid_span", "str_from_utf8", "truncate", "eq_range", "find_byte", "resize", "copy_range", "copy_within", "subview") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range; L-copy-range
 RESERVED_TYPE_NAMES = ("Option", "Result", "Some", "None", "Ok", "Err")
-TEXT_VIEW_OPS = ("string_push_str", "string_from")   # LB7 (R-6g6-3): text argument may be a str subview
+TEXT_VIEW_OPS = ("string_push_str", "string_from", "proc_args_push")   # LB7 (R-6g6-3), LB9 (R-6g8-1): text argument may be a str subview
 TYPE_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9_]*\Z")
 FIELD_NAME_RE = re.compile(r"[a-z][A-Za-z0-9_]*\Z")
 
@@ -2503,6 +2503,8 @@ class Checker:
                     s.match_movable = saved_movable | {b for b, bt in zip(a.binders, ftypes) if is_array(bt)}
                     # LG9 (G-DB15-2): `return x` of a str binder of a consuming match moves it (see Return)
                     s.match_movable = s.match_movable | {b for b, bt in zip(a.binders, ftypes) if bt == STR}
+                    # LB9 (R-6g8-4): `let t = move b.f;` of a struct binder consumes the scrutinee like a binder move
+                    s.match_movable = s.match_movable | {b for b, bt in zip(a.binders, ftypes) if s.tt.is_struct(bt)}
                 if root is not None:
                     s.active_roots.append(root)
                 if mpath is not None:
@@ -2869,8 +2871,10 @@ class Checker:
         typed = ty == STRING or is_scalar_vec(ty) or ty in (ARRAY, ARRAY_U8, ARRAY_BOOL)
         restored = (isinstance(next_stmt, FieldAssign) and next_stmt.name == e.name
                     and tuple(next_stmt.fields) == tuple(e.fields))
+        # LB9 (R-6g8-4): or a struct binder of a consuming match (the arm owns the payload; see Match)
+        binder = e.name in s.match_movable and kind == "local"
         if (typed and not restored and isinstance(st, Let)
-                and ((kind == "local" and mutable) or kind == "take") and e.name not in s.arm_binders):
+                and (((kind == "local" and mutable) or kind == "take") and e.name not in s.arm_binders or binder)):
             # G-R09-4: `let t = move d.a;` of a `let mut` local record (LG9: or a take record parameter, which the
             # callee owns; LG9 G-LG8-1: any owned buffer field type, any field path) consumes d; foreign.py marks d
             # moved
