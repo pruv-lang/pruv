@@ -1,0 +1,10 @@
+{
+  "gen_contains": ["struct Doc<'a>", "fn parse<'a>(src: &'a [u8]) -> Doc<'a>", "fn span<'a>(d: &Doc<'a>"],
+  "gen_absent": ["to_vec()", ".clone()"],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["7385"],
+    "alloc_balance": true
+  }
+}

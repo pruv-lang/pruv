@@ -1,0 +1,36 @@
+// spec: R-6g9-2 accept
+// A borrowing struct forwarded through calls on LLVM: `wrap` returns `parse`'s result through its own `%out`,
+// `rebase` builds a new `Doc` whose `ref` field is a subview of another `Doc`'s `ref` field (the pair is copied,
+// the source is never freed), and `total` passes a `Doc` read parameter on to another reader.
+struct Doc { src: ref [u8], tape: [i64], n: i64 }
+fn parse(src: [u8]) -> Doc from(src) ! alloc
+  requires len(src) <= 1000
+  ensures len(result.src) == len(src) && len(result.tape) == len(src) && result.n == len(src)
+{
+  let t: [i64] = alloc(len(src), 3);
+  return Doc { src: src, tape: move t, n: len(src) };
+}
+fn wrap(src: [u8]) -> Doc from(src) ! alloc
+  requires len(src) <= 1000
+  ensures len(result.src) == len(src) && len(result.tape) == len(src) && result.n == len(src)
+{
+  return parse(src);
+}
+fn rebase(d: Doc, lo: i64) -> Doc from(d) ! alloc
+  requires 0 <= lo && lo <= len(d.src)
+  ensures len(result.src) == len(d.src) - lo && result.n == lo
+{
+  let t: [i64] = alloc(1, lo);
+  return Doc { src: subview(d.src, lo, len(d.src)), tape: move t, n: lo };
+}
+fn head(d: Doc) -> i64 requires len(d.src) >= 1 ensures 0 <= result && result <= 255 { return d.src[0]; }
+fn total(d: Doc) -> i64 requires len(d.src) >= 1 && len(d.src) <= 1000 && d.n >= 0 && d.n <= 1000 ensures 0 <= result && result <= 5000 {
+  return head(d) * 10 + len(d.src) + d.n;
+}
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(6, 4);
+  let a: Doc = wrap(x);
+  let b: Doc = rebase(a, 2);
+  let c: ref [u8] = b.src;
+  return total(a) * 1000 + total(b) * 10 + len(c) + len(a.tape) * 100000;
+}

@@ -13,9 +13,6 @@
     "stdout_lines": [
       "4"
     ],
-    "alloc_balance": true,
-    "backends": [
-      "rust"
-    ]
+    "alloc_balance": true
   }
 }

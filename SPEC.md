@@ -1158,8 +1158,8 @@ fn tree_count(t: Tree) -> i64
   On failure (a resource failure or a failed run-time check) the program stops; values owned by the failing call
   are not handed back, and the moved arguments of a call belong to the callee from the call on. A future C ABI for
   owned collections must name the allocator in the symbol version (as `_v1` does) and give the free function with
-  the value. Borrowed views lower to `{ ptr, i64 }` on LLVM (R-6g9-1); borrowing structs (R-6g-11) stay
-  `codegen/unsupported_type` on LLVM.
+  the value. Borrowed views lower to `{ ptr, i64 }` on LLVM (R-6g9-1) and borrowing structs (R-6g-11) to an
+  aggregate whose `ref` fields are that pair (R-6g9-2); neither crosses a host entry (`type/borrow_signature`).
   Tests: [accept LLVM tree](tests/spec/r6e_21_llvm_tree.pruv),
   [reject host entry](tests/spec/r6e_21_host_entry.pruv); measurements and the test table in
   [L3_LB3](docs/L3_LB3.md).
@@ -1508,7 +1508,7 @@ borrowed value is live.
     ::std::vec::Vec<u8>` (resizable `inout`), `&'a mut [u8]` (fixed `inout`) or `&Doc<'a>`, and whose result is
     `&'a [u8]`, `&'a str` or `Doc<'a>`. A `ref` local is `&[u8]` / `&str`; a view is the same unchecked (verified) or
     checked (`--no-verify`) slice expression as a `subview` argument. No `to_vec` or `clone`. LLVM lowers views
-    under R-6g9-1 and rejects a program with a borrowing struct with `codegen/unsupported_type`.
+    under R-6g9-1 and borrowing structs under R-6g9-2.
   - Tests: [document borrowing its input](tests/spec/r6g_11_doc_input.pruv),
     [result from either of two sources](tests/spec/r6g_11_two_sources.pruv),
     [subview bound to a local](tests/spec/r6g_11_local_view.pruv), [copy then reuse](tests/spec/r6g_11_copy_owned.pruv),
@@ -1745,7 +1745,7 @@ borrowed value is live.
   value, so a view there is `type/array_alias`. In a function with a `ref` local no builtin or nested call takes
   an array (local or struct field) at its last use: `copy`, `truncate`, `str_from_utf8` and `resize` of an array a
   live view reads stay copies, and no view is passed to the host ABI. A string literal in a view position is the read-only
-  global. A borrowing struct is still `codegen/unsupported_type` on LLVM until bundle B2.
+  global. Borrowing structs lower under R-6g9-2.
   Tests: [view result](tests/spec/r6g9_1_view_result.pruv), [inout source](tests/spec/r6g9_1_inout_source.pruv),
   [copy beside a view](tests/spec/r6g9_1_view_copy.pruv), [truncate](tests/spec/r6g9_1_view_truncate.pruv),
   [str_from_utf8 in a branch](tests/spec/r6g9_1_view_utf8_branch.pruv),
@@ -1753,7 +1753,22 @@ borrowed value is live.
   [shrink then regrow](tests/spec/r6g9_1_view_shrink_regrow.pruv),
   [literal](tests/spec/r6g9_1_literal.pruv), [subview local](tests/spec/r6g_11_local_view.pruv),
   [two sources](tests/spec/r6g_11_two_sources.pruv), [copy then reuse](tests/spec/r6g_11_copy_owned.pruv);
-  rejects [borrowing struct](tests/spec/r6g9_1_struct_llvm.pruv), [enum payload](tests/spec/r6g9_1_enum_payload.pruv).
+  rejects [enum payload](tests/spec/r6g9_1_enum_payload.pruv).
+- R-6g9-2 **LLVM borrowing structs.** On the LLVM backend a borrowing struct is an extended aggregate whose `ref`
+  field is the `{ ptr, i64 }` view inline, not the owned `{ ptr, i64, i64 }` field form:
+  `struct Doc { src: ref [u8], tape: [i64], n: i64 }` is `{ { ptr, i64 }, { ptr, i64, i64 }, i64 }`, the size and
+  field order of Rust's `Doc<'a>` (`&'a [u8]`, `Vec<i64>`, `i64`). Every reader of a buffer field that needs only
+  its data and length loads the first two words, which a `ref` field and an owned field share. Ownership is decided
+  by type: a constructor evaluates a `ref` field in a borrowing position (a place, `subview` or `from` result is
+  stored as its pair, never copied), the drop helper skips `ref` fields, the clone helper copies their pair, and
+  the last-use field move of `copy(d.f)` never applies to a `ref` field. Like any extended aggregate the struct is
+  read through a `ptr` parameter and returned through `ptr %out`; the data pointer of a read `from` parameter is
+  not `nocapture`, since the result's `ref` field holds it. A borrowing struct may carry an `invariant`, on both
+  backends, and the invariant may mention `ref` fields. Moving one owned field out of a borrowing struct has no
+  source form yet (a borrowing struct is not an enum payload, not `let mut`, and a field move of a local must be
+  restored), so the remainder drop that would follow it is only the skip of `ref` fields above.
+  Tests: [document](tests/spec/r6g9_2_doc.pruv), [invariant](tests/spec/r6g9_2_doc_invariant.pruv),
+  [forwarded](tests/spec/r6g9_2_forward.pruv), [empty `ref` field](tests/spec/r6g9_3_empty_field.pruv).
 - R-6g9-3 **Static views need no `alloc`.** An R-6g8-3 static text local is the literal's read-only global (Rust
   `let x: &'static str = "lit";`, LLVM the global with no copy, also in a recursive or metered function), so it
   needs no `alloc` effect: `effect/missing_effect` no longer fires for it. A literal in any owned position still

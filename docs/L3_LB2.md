@@ -70,7 +70,7 @@ Files: `pruvc/check.py`, `pruvc/codegen.py`, `pruvc/llvmgen.py`, `pruvc/modules.
 | `tests/spec/r6g_11_mut_ref.pruv` | reject `type/borrow_signature`; `let mut` view |
 | `tests/spec/r6g_11_store_view.pruv` | reject `type/immutable`; store into a view |
 | `tests/spec/r6g_11_own_alias.pruv` | reject `type/array_alias`; view in an owned position |
-| `tests/spec/r6g9_1_struct_llvm.pruv` (was `r6g_11_llvm`) | reject `codegen/unsupported_type` for a borrowing struct on the LLVM backend (views lower under R-6g9-1) |
+| `tests/spec/r6g9_2_doc.pruv` (replaces `r6g9_1_struct_llvm`, was `r6g_11_llvm`) | a borrowing struct runs on the LLVM backend (R-6g9-2) |
 | `tests/spec/r6g_12_literal_arg.pruv` | accept; `f("abc")` with no allocation and no `alloc` |
 | `tests/spec/r6g_12_literal_owned.pruv` | reject `effect/missing_effect`; a literal bound to an owned `str` still allocates |
 
@@ -115,7 +115,7 @@ lines as the hand twin (`3 6 224 525 12 5 433 3 224`). Performance is not part o
 
 ## Open items
 
-- **LLVM** rejects borrowed views (LB3).
+- **LLVM** lowers borrowed views (R-6g9-1) and borrowing structs (R-6g9-2).
 - **Mutable views** (`&mut [u8]` locals or fields) are not in the language; only `inout` parameters lend exclusively.
 - **Borrowed collections.** `ref` types cannot be `Vec` / `Option` / map elements, enum payloads or generic
   arguments (`type/borrow_signature`), so a `Vec<&[u8]>` token list needs later work.
