@@ -160,7 +160,7 @@ R-6g4-4 exact resize growth, R-6g4-5 literal as `[u8]`) and added R-6g4-6 `arr_a
 | `q.py` vs the Node reference (2040 cases, 4 pairs) | 0 unexplained on every pair: 2027 exact + known TS differences: exact-decimal-id 3, invalid-utf8 3, byte-line-cap 3, numeric-signal 3, surrogate-safe-cut 1 |
 | `q_mutants.py` (12 mutants) | 12/12 killed: 2 verifier-rejected (page-contract, tool-contract), 10 differential-killed. Run before the `shorten` move (the mutated lines are unchanged by it) |
 | LB5b re-run | `q.py` on the LB5b code: the same counts on all 4 pairs. `q_mutants.py`: the `destructive` anchor moved to `== 2 { p[base+7]=1; }`; result in the LB5b report |
-| LB5c re-run | `q.py` on the LB5c code: the same counts on all 4 pairs (2027 exact + the same known TS differences). The LB5b `destructive` anchor (`== 2 { p[base+7]=1; }` → `0`) survived: none of the 22 fixed fixtures gives a distinguishing output for the `true` branch alone. LB5c restores the original mutant (both values → -1): `{ p[base+7]=0; } else if .. == 2 { p[base+7]=1; }` → `-1`, `-1`. `q_mutants.py` result: QM_RESULT |
+| LB5c re-run | `q.py` on the LB5c code: the same counts on all 4 pairs (2027 exact + the same known TS differences). The LB5b `destructive` anchor (`== 2 { p[base+7]=1; }` → `0`) survived: none of the 22 fixed fixtures gives a distinguishing output for the `true` branch alone. LB5c restores the original mutant (both values → -1): `{ p[base+7]=0; } else if .. == 2 { p[base+7]=1; }` → `-1`, `-1`. `q_mutants.py` on the LB5c code: 12/12 killed (2 verifier-rejected, 10 differential-killed, `destructive` included) |
 | `run_perf.py check` (new vs old vs hand, 15 pages + 3 chains) | 0 mismatches |
 
 Known edges that no oracle case reaches: a nextCursor over 20 MB (the old `join` quirk) and the room clamp at
@@ -204,7 +204,31 @@ shortens in place with `packet::shorten`.
 (RSS moves in 16 KB pages.) This is gap R; it needs the language change in §2 (reserve without fill / append form).
 A tighter `want` would shrink but not remove it and would leave hand's shape.
 
-### LB5b measurement (final; `run_perf.py perf` at commit time, lock `/tmp/pruv-perf.lock`)
+### LB5c measurement (final; one `run_perf.py perf` run after the LB5c table reached 0 unexplained, lock `/tmp/pruv-perf.lock`)
+
+perf_cells: `bench/l3/mcp/perf/work/perf_cells.json` (not committed). check 18 cases, 0 mismatches. Hand now carries
+the same `fields4`/`put_units`/`put_name`/`step` algorithms, so these ratios compare one algorithm in two languages.
+Load average was about 7.5-8 during the run (another worktree's tests were running); medians are interleaved, so
+both rows saw the same load.
+
+| cell | time new/hand (median) | instr/call new/hand | allocs | peak RSS new/hand |
+|---|---:|---:|---:|---:|
+| 0 tools | 1.00x | 19508 / 19609 (0.995x) | 1 / 1 | 1.009x (+16 KB) |
+| 1 tool | 1.20x | 26899 / 28548 (0.942x) | 1 / 1 | 1.010x (+16 KB) |
+| 10 tools | 0.93x | 93382 / 109090 (0.856x) | 1 / 1 | 1.000x |
+| 50 tools | 0.93x | 394147 / 472850 (0.834x) | 1 / 1 | 1.014x (+32 KB) |
+| 100 tools | 0.92x | 769647 / 927477 (0.830x) | 1 / 1 | 1.006x (+16 KB) |
+| 250 tools | 0.91x | 1911002 / 2308755 (0.828x) | 1 / 1 | 1.004x (+16 KB) |
+| 500 tools | 0.92x | 3815239 / 4612697 (0.827x) | 1 / 1 | 1.002x (+16 KB) |
+| 5x100 (chain) | 0.96x | 5013166 / 5811000 (0.863x) | 5 / 5 | 1.000x |
+
+`tools/perf_gate.py`: FAIL (24 cells; 4 fail = RSS at 50/100/250/500 tools; 3 debt = 0-tool RSS, 1-tool time,
+1-tool RSS). Time and allocs pass at every M/L size. Gates on this code: `cargo test --release` ok, `diff_rust.py
+--fuzz-count 20` all same, `g8_frontend` 27/27 (py) and 39/39 (rs), `q.py` 2027 exact on all 4 pairs, `q_mutants.py`
+12/12 killed. Still open, unchanged from LB5b below: item 4 (inline-policy code size, the +16 KB code page) and item
+5 (1-tool time 1.20x with 0.94x instructions, 3 timer ticks).
+
+### LB5b measurement (superseded by LB5c; `run_perf.py perf` at commit time, lock `/tmp/pruv-perf.lock`)
 
 perf_cells: `bench/l3/mcp/perf/work/perf_cells.json` (not committed). check 18 cases, 0 mismatches.
 
