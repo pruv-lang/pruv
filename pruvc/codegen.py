@@ -2998,7 +2998,8 @@ class Gen:
             # P2 batch 4: `return truncate(x, m)` of an owned local array shortens x in place in every program
             if (not s.cost and isinstance(e, Call) and e.name == "truncate" and len(e.args) == 2
                     and isinstance(e.args[0], Var) and e.args[0].name in s.vt and e.args[0].name not in s.params
-                    and e.args[0].name not in s.refs and e.args[0].name not in s.pinned
+                    and e.args[0].name not in s.refs and e.args[0].name not in s.inouts
+                    and e.args[0].name not in s.pinned
                     and e.args[0].name not in s.borrowed_roots):
                 m_names = set()
                 _expr_names(e.args[1], m_names)
@@ -3013,7 +3014,7 @@ class Gen:
                 walk(k)
         walk(e)
         return {n for n, c in counts.items() if c == 1 and n not in s.refs and n not in s.params
-                and n not in s.pinned and n not in s.borrowed_roots}
+                and n not in s.inouts and n not in s.pinned and n not in s.borrowed_roots}
 
     def own_e(s, e):
         """an expression in an OWNING position (let, assignment, constructor field, return). A named value or a field
@@ -3034,6 +3035,7 @@ class Gen:
     def block(s, stmts, ind, decls=(), loop=False):
         saved = dict(s.vt)
         saved_refs = set(s.refs)
+        saved_inouts = set(s.inouts)
         later = [set() for _ in range(len(stmts) + 1)]
         for i in range(len(stmts) - 1, -1, -1):
             later[i] = set(later[i + 1])
@@ -3051,11 +3053,12 @@ class Gen:
         s.frames.pop()
         s.vt = saved
         s.refs = saved_refs
+        s.inouts = saved_inouts
 
     def dead_after(s, name):
         """the statement being emitted is the last use of local `name`: no later statement of any enclosing block up to
         the one declaring it names it, and no loop body lies between (a parameter or binder view is never dead here)."""
-        if name in s.refs or name in s.params or name in s.pinned or name in s.borrowed_roots:
+        if name in s.refs or name in s.inouts or name in s.params or name in s.pinned or name in s.borrowed_roots:
             return False
         for decls, later, loop, _ in reversed(s.frames):
             if name in later:
@@ -3069,7 +3072,7 @@ class Gen:
     def return_next(s, name):
         """R03L: the statement after the one being emitted is a return of the same block that does not name local
         `name`, so `name` is dead even inside a loop body (control leaves the function before any later iteration)."""
-        if name in s.refs or name in s.params or name in s.pinned or name in s.borrowed_roots or not s.frames:
+        if name in s.refs or name in s.inouts or name in s.params or name in s.pinned or name in s.borrowed_roots or not s.frames:
             return False
         return s.frames[-1][3] and name not in s.frames[-1][1]
 

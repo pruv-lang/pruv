@@ -1,0 +1,8 @@
+{
+  "stage": "type",
+  "code": "place_binding",
+  "line": 3,
+  "out_contains": [
+    "a place binding needs a place: this expression is not a place"
+  ]
+}

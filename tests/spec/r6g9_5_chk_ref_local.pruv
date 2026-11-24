@@ -1,0 +1,12 @@
+// spec: R-6g9-5 accept
+fn f(inout a: [u8]) -> i64 {
+  let d = inout a;
+  let v: ref [u8] = d;
+  return len(v);
+}
+
+fn view(inout a: [u8]) -> ref [u8] from(a) {
+  let d = inout a;
+  let v: ref [u8] = d;
+  return v;
+}

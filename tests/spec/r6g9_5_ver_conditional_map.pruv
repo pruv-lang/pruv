@@ -1,0 +1,23 @@
+// spec: R-6g9-5 accept
+struct Rec { n: i64 }
+
+fn map_length(inout m: HashMap<String, Rec>, c: bool) -> i64
+  ensures result == len(m)
+{
+  let d = inout if c { m } else { m };
+  return len(d);
+}
+
+fn map_value(take input: HashMap<String, i64>, c: bool, key: str) -> i64 {
+  let mut m: HashMap<String, i64> = move input;
+  match map_get::<String, i64>(m, key) {
+    Some(before) => {
+      let d = inout if c { m } else { m };
+      match map_get::<String, i64>(d, key) {
+        Some(after) => { assert after == before; return after; }
+        None => { assert false; return 0; }
+      }
+    }
+    None => { return 0; }
+  }
+}

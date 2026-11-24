@@ -3761,6 +3761,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                             if self.vars.contains_key(&v.name)
                                 && !self.params.contains(&v.name)
                                 && !self.refs.contains(&v.name)
+                                && !self.inouts.contains(&v.name)
                                 && !self.pinned.contains(&v.name)
                             {
                                 let mut m_names = HashSet::new();
@@ -3788,7 +3789,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
         let mut counts = HashMap::new();
         walk(e, &mut counts);
         for (n, c) in counts {
-            if c == 1 && !self.refs.contains(&n) && !self.params.contains(&n) && !self.pinned.contains(&n) {
+            if c == 1 && !self.inouts.contains(&n) && !self.refs.contains(&n) && !self.params.contains(&n) && !self.pinned.contains(&n) {
                 out.insert(n);
             }
         }
@@ -3845,7 +3846,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
     /// the statement being emitted is the last use of local `name`: no later statement of any enclosing block up to
     /// the one declaring it names it, and no loop body lies between (a parameter or binder view is never dead here).
     fn dead_after(&self, name: &str) -> bool {
-        if self.refs.contains(name) || self.params.contains(name) || self.pinned.contains(name) {
+        if self.refs.contains(name) || self.inouts.contains(name) || self.params.contains(name) || self.pinned.contains(name) {
             return false;
         }
         for (decls, later, lp, _) in self.frames.iter().rev() {
@@ -3864,7 +3865,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
 
     // A following return can end the lifetime even inside a loop body.
     fn return_next(&self, name: &str) -> bool {
-        !self.refs.contains(name) && !self.params.contains(name) && !self.pinned.contains(name)
+        !self.refs.contains(name) && !self.inouts.contains(name) && !self.params.contains(name) && !self.pinned.contains(name)
             && self.frames.last().is_some_and(|(_, later, _, returns)| *returns && !later.contains(name))
     }
 

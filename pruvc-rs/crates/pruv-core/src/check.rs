@@ -820,8 +820,54 @@ pub fn length_changing_params(prog: &Program) -> HashSet<(String, usize)> {
     resizing_params(prog, true)
 }
 
+// Resizing through a whole-place binding changes the storage of its root.
+fn walk_resize_uses<'a>(
+    body: &'a [Stmt],
+    aliases: &HashMap<&'a str, Option<&'a str>>,
+    visit: &mut impl FnMut(&str, Option<&str>, Option<(&Call, usize)>),
+) {
+    fn root(e: &Expr) -> Option<&str> {
+        match e {
+            Expr::Var(v) => Some(&v.name),
+            Expr::Call(c) if PlaceIf::matches(c) => {
+                let left = root(&c.args[1])?;
+                (root(&c.args[2]) == Some(left)).then_some(left)
+            }
+            _ => None,
+        }
+    }
+    let mut aliases = aliases.clone();
+    for st in body {
+        let canonical = |name: &'a str| aliases.get(name).copied().unwrap_or(Some(name));
+        if let Stmt::Assign(a) = st {
+            visit(&a.name, canonical(&a.name), None);
+        }
+        let mut expressions = Vec::new();
+        let mut blocks = Vec::new();
+        crate::borrowed::walk_statement(st, &mut |e| expressions.push(e),
+            &mut |_, _, _, _| {}, &mut |block| blocks.push(block));
+        for e in expressions {
+            crate::foreign_shim::walk_expr(e, &mut |node| {
+                let crate::foreign_shim::Node::Expr(Expr::Call(call)) = node else { return; };
+                for (i, arg) in call.args.iter().enumerate() {
+                    let Expr::InoutArg(arg) = arg else { continue; };
+                    let Expr::Var(v) = &*arg.expr else { continue; };
+                    visit(&v.name, aliases.get(v.name.as_str()).copied().unwrap_or(Some(&v.name)), Some((call, i)));
+                }
+            });
+        }
+        for block in blocks {
+            walk_resize_uses(block, &aliases, visit);
+        }
+        if let Stmt::Let(l) = st {
+            if let Expr::InoutArg(arg) = &l.value {
+                aliases.insert(&l.name, root(&arg.expr).and_then(canonical));
+            }
+        }
+    }
+}
+
 fn resizing_params(prog: &Program, length_only: bool) -> HashSet<(String, usize)> {
-    use crate::foreign_shim::{walk_stmts, Node};
     let mut resizes = HashSet::new();
     let mut forwarded = HashMap::<_, Vec<_>>::new();
     for f in &prog.functions {
@@ -830,24 +876,17 @@ fn resizing_params(prog: &Program, length_only: bool) -> HashSet<(String, usize)
             .map(|(i, p)| (p.name.as_str(), i))
             .collect();
         if params.is_empty() { continue; }
-        walk_assignments(&f.body, &mut |name, path| {
-            if path.is_empty() {
-                if let Some(&i) = params.get(name) {
-                    resizes.insert((f.name.clone(), i));
-                }
-            }
-        });
-        walk_stmts(&f.body, &mut |node| {
-            let Node::Expr(Expr::Call(call)) = node else { return; };
-            for (i, arg) in call.args.iter().enumerate() {
-                let Expr::InoutArg(arg) = arg else { continue; };
-                let Expr::Var(var) = arg.expr.as_ref() else { continue; };
-                let Some(&index) = params.get(var.name.as_str()) else { continue; };
-                let source = (f.name.clone(), index);
-                if vec_resize_builtin(&call.name) || (array_grow_builtin(&call.name) && (call.name != "arr_reserve" || !length_only)) {
-                    resizes.insert(source);
-                } else {
-                    forwarded.entry((call.name.clone(), i)).or_default().push(source);
+        walk_resize_uses(&f.body, &HashMap::new(), &mut |_, root, call| {
+            let Some(index) = root.and_then(|name| params.get(name)) else { return; };
+            let source = (f.name.clone(), *index);
+            match call {
+                None => { resizes.insert(source); }
+                Some((call, i)) => {
+                    if vec_resize_builtin(&call.name) || (array_grow_builtin(&call.name) && (call.name != "arr_reserve" || !length_only)) {
+                        resizes.insert(source);
+                    } else {
+                        forwarded.entry((call.name.clone(), i)).or_default().push(source);
+                    }
                 }
             }
         });
@@ -865,21 +904,15 @@ fn resizing_params(prog: &Program, length_only: bool) -> HashSet<(String, usize)
 
 /// Bare array arguments to resizing functions need owned, addressable storage.
 pub(crate) fn resize_slot_names(f: &Function, resizes: &HashSet<(String, usize)>) -> HashSet<String> {
-    use crate::foreign_shim::{walk_stmts, Node};
     let mut resize_slots = HashSet::new();
-    walk_stmts(&f.body, &mut |node| {
-        let Node::Expr(Expr::Call(call)) = node else { return; };
-        for (i, arg) in call.args.iter().enumerate() {
-            if let Expr::InoutArg(arg) = arg {
-                if !arg.ty.as_deref().is_some_and(crate::typeinfo::is_array_name)
-                    || !(array_grow_builtin(&call.name) || resizes.contains(&(call.name.clone(), i)))
-                {
-                    continue;
-                }
-                if let Expr::Var(v) = &*arg.expr {
-                    resize_slots.insert(v.name.clone());
-                }
-            }
+    walk_resize_uses(&f.body, &HashMap::new(), &mut |name, root, call| {
+        let Some((call, i)) = call else { return; };
+        let Expr::InoutArg(arg) = &call.args[i] else { unreachable!() };
+        if arg.ty.as_deref().is_some_and(crate::typeinfo::is_array_name)
+            && (array_grow_builtin(&call.name) || resizes.contains(&(call.name.clone(), i)))
+        {
+            resize_slots.insert(name.to_owned());
+            resize_slots.extend(root.map(str::to_owned));
         }
     });
     resize_slots
@@ -1577,13 +1610,12 @@ impl Checker {
             }
             Expr::FieldAccess(f) => {
                 let (root, mut path, ty) = self.resolve_place(&mut f.base, roots)?;
-                let field = match self.decls.get(&ty) {
-                    Some(TypeDecl::Struct(s)) => s.fields.iter().find(|d| d.name == f.field),
-                    _ => None,
-                }.ok_or_else(|| Self::bad_place(f.line, f.col,
-                    format!("{} has no field {}", tn(&GType::from_key(&ty)), f.field)))?;
+                let ty = GType::from_key(&ty);
+                let field = self.field_type(f.line, f.col, &ty, &f.field)
+                    .map_err(|_| Self::bad_place(f.line, f.col,
+                        format!("{} has no field {}", tn(&ty), f.field)))?;
                 path.push(f.field.clone());
-                Ok((root, path, field.ty.clone()))
+                Ok((root, path, field.to_key()))
             }
             Expr::Index(i) => {
                 let (root, path, ty) = self.resolve_place(&mut i.array, roots)?;
@@ -3822,7 +3854,9 @@ impl Checker {
                 if !s.borrowed && (sty.is_array() || sty == strt()) {
                     self.array_source(s.line, s.col, &s.value, scope, false, &sty)?;
                 }
-                self.own(&s.value, scope)?;
+                if !s.borrowed {
+                    self.own(&s.value, scope)?;
+                }
                 scope.insert(s.name.clone(), Entry { ty: sty, mutable: s.mutable, kind: if s.borrowed { "ref_local" } else { "local" } });
             }
             Stmt::Assign(s) => {
@@ -4223,7 +4257,14 @@ impl Checker {
         for e in &p.calls {
             if let Expr::Call(c) = e {
                 for a in &c.args {
-                    if matches!(a, Expr::Var(x) if scope.get(&x.name).is_some_and(|e| e.kind == "ref_local"))
+                    let value = match a {
+                        Expr::InoutArg(arg) => &*arg.expr,
+                        _ => a,
+                    };
+                    let place_binding = place_root(value).and_then(|name| scope.get(name))
+                        .is_some_and(|entry| entry.kind == "inout" && entry.mutable);
+                    if place_binding
+                        || matches!(a, Expr::Var(x) if scope.get(&x.name).is_some_and(|e| e.kind == "ref_local"))
                         || matches!(a, Expr::FieldAccess(x) if self.is_borrowed_field(&x.base, &x.field))
                     {
                         return Err(terr(a.line(), a.col(), "borrow_signature", "borrowed values cannot cross a par branch boundary", ""));
@@ -5460,8 +5501,11 @@ impl Checker {
     /// The type of a struct field: find the field first, then substitute only its type (substituting every field made
     /// `x.f` O(fields)); a struct type without type arguments yields the declared type as is.
     fn field_type(&self, line: i64, col: i64, sty: &GType, name: &str) -> Res<GType> {
-        let fs = self.tt.fields(&sty.name, None).unwrap_or(&[]);
-        for fd in fs {
+        let fields = match self.decls.get(&sty.name) {
+            Some(TypeDecl::Struct(s)) if sty.owner.is_none() => s.fields.as_slice(),
+            _ => &[],
+        };
+        for fd in fields {
             if fd.name == name {
                 let ft = GType::from_key(&fd.ty);
                 if sty.args.is_empty() {

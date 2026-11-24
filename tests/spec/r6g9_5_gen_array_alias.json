@@ -1,0 +1,16 @@
+{
+  "backend": "llvm",
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "true"
+    ],
+    "alloc_balance": true
+  }
+}

@@ -1,0 +1,14 @@
+// spec: R-6g9-5 accept
+fn g(inout a: [i64]) -> () ! alloc
+  requires len(a) < 1099511627776
+{
+  let d = inout a;
+  arr_push(inout d, 1);
+}
+
+fn forward(inout b: [i64]) -> () ! alloc
+  requires len(b) < 1099511627776
+{
+  let e = inout b;
+  g(inout e);
+}

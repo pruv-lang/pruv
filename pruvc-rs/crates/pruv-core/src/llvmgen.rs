@@ -2633,6 +2633,8 @@ impl<'a> FnGen<'a> {
         match e {
             Expr::Var(x) => match self.lookup(&x.name)? {
                 Bind::Slot(s) => Ok(s.a),
+                Bind::Ssa(v) if v.k == Kind::Arr => Err(e2_diag(x.line, x.col,
+                    "forwarding a fixed-length array place to a resizable inout parameter needs the Rust backend")),
                 Bind::Ssa(_) => Err(format!("llvmgen: no mutable storage for {}", x.name)),
             },
             Expr::FieldAccess(x) => {
@@ -4049,11 +4051,15 @@ impl<'a> FnGen<'a> {
                 let end = self.label("pend");
                 self.condbr(&cond.a, &then, &els)?;
                 self.place(&then);
+                self.begin_temps();
                 let a = self.place_ptr(&c.args[1])?;
+                self.end_temps()?;
                 let pa = self.cur.clone();
                 self.br(&end)?;
                 self.place(&els);
+                self.begin_temps();
                 let b = self.place_ptr(&c.args[2])?;
+                self.end_temps()?;
                 let pb = self.cur.clone();
                 self.br(&end)?;
                 self.place(&end);
@@ -4106,6 +4112,17 @@ impl<'a> FnGen<'a> {
             Stmt::Let(x) if x.is_place() => {
                 let Expr::InoutArg(arg) = &x.value else { unreachable!() };
                 let kind = vkind(&x.ty);
+                if kind == Kind::Arr {
+                    if let Expr::Var(place) = &*arg.expr {
+                        if self.f.params.iter().any(|p| p.name == place.name && p.mode_pos.is_some()) {
+                            // Reuse the data/length pair or the caller-owned resizable slot.
+                            let binding = self.lookup(&place.name)?;
+                            self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?
+                                .names.insert(x.name.clone(), binding);
+                            return Ok(());
+                        }
+                    }
+                }
                 if !matches!(kind, Kind::I64 | Kind::I1 | Kind::Agg) || self.is_ext(&x.ty) {
                     let ty = crate::gtype::GType::from_key(&x.ty);
                     return Err(e2_diag(x.line, x.col,
@@ -4182,7 +4199,12 @@ impl<'a> FnGen<'a> {
             }
             Stmt::Assign(x) => {
                 self.begin_temps();
-                let sl = self.lookup(&x.name)?.val().clone();
+                let binding = self.lookup(&x.name)?;
+                if matches!(&binding, Bind::Ssa(v) if v.k == Kind::Arr) {
+                    return Err(e2_diag(x.line, x.col,
+                        "replacing a fixed-length array place needs a resizable inout parameter"));
+                }
+                let sl = binding.val().clone();
                 if sl.k == Kind::Arr && sl.c.is_none() {
                     // R-6g9-1: rebinding a view slot: nothing to free
                     let v = self.ev(&x.value, false)?;

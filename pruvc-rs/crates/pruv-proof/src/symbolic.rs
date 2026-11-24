@@ -491,64 +491,46 @@ fn stmt_blocks(stmt: &Stmt) -> Vec<&[Stmt]> {
     }
 }
 
-fn place_roots(stmts: &[Stmt], out: &mut BTreeSet<String>) {
+fn store_paths<'a>(stmts: &'a [Stmt], out: &mut HashMap<&'a str, Vec<&'a [String]>>) {
+    for stmt in stmts {
+        let place = match stmt {
+            Stmt::Assign(s) => Some((s.name.as_str(), &[][..])),
+            Stmt::FieldAssign(s) => Some((s.name.as_str(), s.fields.as_slice())),
+            Stmt::IndexAssign(s) => Some((s.name.as_str(), s.fields.as_slice())),
+            _ => None,
+        };
+        if let Some((root, path)) = place {
+            out.entry(root).or_default().push(path);
+        }
+        for block in stmt_blocks(stmt) {
+            store_paths(block, out);
+        }
+    }
+}
+
+fn place_aliases(stmts: &[Stmt], out: &mut HashMap<String, BTreeSet<(String, bool)>>) {
     for stmt in stmts {
         if let Stmt::Let(l) = stmt {
             if let Expr::InoutArg(arg) = &l.value {
                 if let Some(root) = place_expr_root(&arg.expr) {
-                    out.insert(root.to_string());
+                    out.entry(l.name.clone()).or_default().insert((root.to_string(), whole_place_expr(&arg.expr)));
                 }
             }
         }
         for block in stmt_blocks(stmt) {
-            place_roots(block, out);
+            place_aliases(block, out);
         }
     }
 }
 
-fn place_mentions(stmt: &Stmt, names: &mut HashSet<String>) {
-    fn expr_names(expr: &Expr, names: &mut HashSet<String>) {
-        match expr {
-            Expr::Var(v) => { names.insert(v.name.clone()); }
-            Expr::Move(v) => { names.insert(v.name.clone()); }
-            Expr::InoutArg(v) => expr_names(&v.expr, names),
-            Expr::Quant(q) => {
-                for trigger in &q.triggers {
-                    expr_names(trigger, names);
-                }
-            }
-            _ => {}
-        }
-        for child in kids(expr) {
-            expr_names(child, names);
-        }
-    }
-
-    let exprs: Vec<&Expr> = match stmt {
-        Stmt::Let(s) => vec![&s.value],
-        Stmt::Assign(s) => { names.insert(s.name.clone()); vec![&s.value] }
-        Stmt::IndexAssign(s) => { names.insert(s.name.clone()); vec![&s.index, &s.value] }
-        Stmt::FieldAssign(s) => { names.insert(s.name.clone()); vec![&s.value] }
-        Stmt::If(s) => vec![&s.cond],
-        Stmt::While(s) => [&s.cond, &s.decreases].into_iter().chain(&s.invariants).collect(),
-        Stmt::ForMap(s) => std::iter::once(&s.place).chain(&s.invariants).collect(),
-        Stmt::Return(s) => s.value.iter().collect(),
-        Stmt::Assert(s) => vec![&s.cond],
-        Stmt::ExprStmt(s) => vec![&s.expr],
-        Stmt::Match(s) => vec![&s.scrutinee],
-        Stmt::Par(s) => s.calls.iter().collect(),
-    };
-    for expr in exprs {
-        expr_names(expr, names);
-    }
-    for block in stmt_blocks(stmt) {
-        for stmt in block {
-            place_mentions(stmt, names);
-        }
+fn whole_place_expr(place: &Expr) -> bool {
+    match place {
+        Expr::Var(_) => true,
+        Expr::Call(c) if ast::PlaceIf::matches(c) => c.args[1..].iter().all(whole_place_expr),
+        _ => false,
     }
 }
 
-/// verify.py `call_writes`: names passed inout in executable expressions, recursively through statement blocks.
 fn call_writes(stmts: &[Stmt], out: &mut BTreeSet<String>, select: &impl Fn(&ast::Call, usize) -> bool) {
     for st in stmts {
         match st {
@@ -843,6 +825,28 @@ enum Place {
 }
 
 impl Place {
+    fn footprint(&self) -> Vec<&str> {
+        match self {
+            Self::Root(_) => Vec::new(),
+            Self::Field(base, field) => {
+                let mut path = base.footprint();
+                path.push(field);
+                path
+            }
+            Self::Index(base, _) => base.footprint(),
+            Self::If(_, a, b) => a.footprint().into_iter().zip(b.footprint())
+                .take_while(|(x, y)| x == y).map(|(x, _)| x).collect(),
+        }
+    }
+
+    fn is_whole(&self) -> bool {
+        match self {
+            Self::Root(_) => true,
+            Self::If(_, a, b) => a.is_whole() && b.is_whole(),
+            _ => false,
+        }
+    }
+
     fn root(&self) -> &str {
         match self {
             Self::Root(name) => name,
@@ -2266,8 +2270,22 @@ impl<'a> FnVerifier<'a> {
     /// `keep` (G5 A1): array names whose havoc retains the length term (inout parameters, and locals changed only by inout
     /// calls); every other array gets an arbitrary well-formed length exactly as before.
     pub fn havoc_set(&mut self, st: &State, names: &BTreeSet<String>, keep: &BTreeSet<String>) -> R<State> {
+        self.havoc_with_places(st, names, keep, &[])
+    }
+
+    fn havoc_with_places(
+        &mut self,
+        st: &State,
+        names: &BTreeSet<String>,
+        keep: &BTreeSet<String>,
+        place_frames: &[std::rc::Rc<LivePlace>],
+    ) -> R<State> {
         let mut h = st.fork(None);
+        let aliases: HashSet<_> = st.places.iter().map(|binding| binding.name.as_str()).collect();
         for n in names {
+            if aliases.contains(n.as_str()) {
+                continue;
+            }
             let Some(old) = h.env.try_get(n).cloned() else { continue };
             match old {
                 Val::File(_) => {
@@ -2359,7 +2377,26 @@ impl<'a> FnVerifier<'a> {
             }
             if matches!(root, Expr::Var(v) if names.contains(&v.name)) {
                 let saved = self.ev0(&place, &mut st.fork(None), &[], false)?;
-                self.store_collection_place(&place, &mut h, saved)?;
+                self.store_collection_place(&place, &mut h, saved, &[])?;
+            }
+        }
+        for binding in place_frames {
+            let saved = self.place_read(&binding.place, &mut st.fork(None))?;
+            self.place_write(&binding.place, &mut h, saved)?;
+        }
+        // A live alias that the loop never writes can still be read after a sibling field changes.
+        for binding in h.places.clone() {
+            if names.contains(&binding.name) {
+                let value = match self.place_read(&binding.place, &mut h)? {
+                    Val::Arr(arr) => Val::Arr(arr.like(arr.a.clone(), arr.n.clone(), &binding.name)),
+                    value => value,
+                };
+                if let Val::Int(term) = &value {
+                    if !binding.place.is_whole() {
+                        h.pc.push(in_range(&self.z, term));
+                    }
+                }
+                h.env.set(&binding.name, value);
             }
         }
         Ok(h)
@@ -3309,7 +3346,7 @@ impl<'a> FnVerifier<'a> {
                 if nv.elem == Elem::U8 {
                     self.assume(st, g, self.u8_dom(&nv));
                 }
-                self.store_collection_place(&place.expr, st, Val::Arr(nv))?;
+                self.store_collection_place(&place.expr, st, Val::Arr(nv), g)?;
                 self.post_refine(e, &[0], st, g)?;
                 return Ok(Val::Unit);
             }
@@ -3334,7 +3371,7 @@ impl<'a> FnVerifier<'a> {
                 if nv.elem == Elem::U8 {
                     self.assume(st, g, self.u8_dom(&nv));
                 }
-                self.store_collection_place(&place.expr, st, Val::Arr(nv))?;
+                self.store_collection_place(&place.expr, st, Val::Arr(nv), g)?;
                 self.post_refine(e, &[0], st, g)?;
                 return Ok(Val::Unit);
             }
@@ -3375,7 +3412,7 @@ impl<'a> FnVerifier<'a> {
                     let dom = self.u8_dom(&nv);
                     self.assume(st, g, dom);
                 }
-                self.store_collection_place(&dst_place.expr, st, Val::Arr(nv))?;
+                self.store_collection_place(&dst_place.expr, st, Val::Arr(nv), g)?;
                 self.post_refine(e, &[0], st, g)?;
                 return Ok(Val::Unit);
             }
@@ -3443,7 +3480,7 @@ impl<'a> FnVerifier<'a> {
                     _ => &av.name,
                 };
                 let value = Val::Arr(av.like(arr, av.n.clone(), name));
-                self.store_collection_place(&dst.expr, st, value)?;
+                self.store_collection_place(&dst.expr, st, value, g)?;
                 self.post_refine(e, &[0], st, g)?;
                 return Ok(Val::Unit);
             }
@@ -4056,7 +4093,7 @@ impl<'a> FnVerifier<'a> {
                 }
             }
             cenv.set(pname, nv.clone());
-            self.store_collection_place(place, st, nv)?;
+            self.store_collection_place(place, st, nv, g)?;
         }
         Ok(())
     }
@@ -4064,7 +4101,7 @@ impl<'a> FnVerifier<'a> {
     /// verify.py `post_refine` (G5 A1, G5_SPEC 5.2 step 8): the refinement of every marked refined local must hold right after
     /// the call (refinement_assign, proved from the callee ensures and the remaining facts; never assumed beforehand). The
     /// assertions were attached to the inout argument by refine.rs.
-    fn post_refine(&mut self, e: &Expr, ios: &[usize], st: &mut State, _g: &[Ast]) -> R<()> {
+    fn post_refine(&mut self, e: &Expr, ios: &[usize], st: &mut State, g: &[Ast]) -> R<()> {
         let call = match e {
             Expr::Call(c) => c,
             _ => return Ok(()),
@@ -4072,8 +4109,8 @@ impl<'a> FnVerifier<'a> {
         for &i in ios {
             if let Some(Expr::InoutArg(ia)) = call.args.get(i) {
                 for a in &ia.post_refine {
-                    let ob = self.check_assert(a, st)?;
-                    st.pc.push(ob);
+                    let ob = self.check_assert_guarded(a, st, g)?;
+                    self.assume(st, g, ob);
                 }
             }
         }
@@ -4082,16 +4119,20 @@ impl<'a> FnVerifier<'a> {
 
     /// verify.py `check_assert` (G5 A1): prove one assertion (user or synthesized by refine.rs) on st; returns its value term.
     fn check_assert(&mut self, s: &ast::Assert, st: &mut State) -> R<Ast> {
+        self.check_assert_guarded(s, st, &[])
+    }
+
+    fn check_assert_guarded(&mut self, s: &ast::Assert, st: &mut State, guard: &[Ast]) -> R<Ast> {
         let spos = mk_pos(s.line, s.col);
-        self.check_dom_e(st, &[], &s.cond, spos, "variant_field lookups in assertion are defined", None)?;
-        let ob = self.ev0_ast(&s.cond, st, &[], false)?;
+        self.check_dom_e(st, guard, &s.cond, spos, "variant_field lookups in assertion are defined", None)?;
+        let ob = self.ev0_ast(&s.cond, st, guard, false)?;
         match &s.origin_code {
-            None => self.prove_core(&st, &[], &ob, spos, "assert", "assertion", None),
+            None => self.prove_core(&st, guard, &ob, spos, "assert", "assertion", None),
             Some(code) => {
                 // An assert synthesized by refine.rs: its own code and the source description. The description also goes into the duplicate-suppression key,
                 // so multiple points of one annotation are all reported.
                 let what = s.origin_what.as_deref().unwrap_or("");
-                self.prove_core(&st, &[], &ob, spos, code, what, Some(what));
+                self.prove_core(&st, guard, &ob, spos, code, what, Some(what));
             }
         }
         Ok(ob)
@@ -4482,8 +4523,8 @@ impl<'a> FnVerifier<'a> {
             let count_after = count_val.try_ast()?.clone();
             if let Some(w) = self.try_wf(&Ty::I64, &count_after)? { self.assume(st, g, w); }
             self.assume(st, g, z.and(&[count_after.ge_i(0), count_after.le(&after.n)]));
-            st.env.set(&dst_var.name, Val::Arr(after));
-            st.env.set(&count_var.name, count_val);
+            self.store(st, &dst_var.name, Val::Arr(after), g)?;
+            self.store(st, &count_var.name, count_val, g)?;
             Some(count_after)
         } else {
             None
@@ -4830,7 +4871,7 @@ impl<'a> FnVerifier<'a> {
                 if let Some(sum) = self.model.vec_sum(&empty.elem_ty(), &empty.a, &empty.n) {
                     self.assume(st, g, sum.eq(&z.int(0)));
                 }
-                self.store_collection_place(&place.expr, st, Val::Arr(empty))?;
+                self.store_collection_place(&place.expr, st, Val::Arr(empty), g)?;
                 Ok(Val::Unit)
             }
             "vec_reserve" => {
@@ -4860,7 +4901,7 @@ impl<'a> FnVerifier<'a> {
                 self.assume(st, g, z.forall(&[k.clone()], &prefix, &[]));
                 self.assume(st, g, z.forall(&[k], &suffix, &[]));
                 let out = v.like(a.clone(), len, &v.name);
-                self.store_collection_place(&place.expr, st, Val::Arr(out))?;
+                self.store_collection_place(&place.expr, st, Val::Arr(out), g)?;
                 Ok(Val::Unit)
             }
             "string_eq" => {
@@ -4953,7 +4994,7 @@ impl<'a> FnVerifier<'a> {
                 m.d = m.d.store(&k, &z.bool_val(false));
                 m.n = m.n.sub(&z.ite(&has, &z.int(1), &z.int(0)));
                 let Expr::InoutArg(place) = &x.args[0] else { return Err("missing inout place".into()) };
-                self.store_collection_place(&place.expr, st, Val::Map(m))?;
+                self.store_collection_place(&place.expr, st, Val::Map(m), g)?;
                 Ok(result)
             }
             "map_updated" => {
@@ -5085,22 +5126,22 @@ impl<'a> FnVerifier<'a> {
         Ok(true)
     }
 
-    fn store_collection_place(&self, mut place: &Expr, st: &mut State, value: Val) -> R<()> {
+    fn store_collection_place(&mut self, mut place: &Expr, st: &mut State, value: Val, guard: &[Ast]) -> R<()> {
         let mut path = Vec::new();
         while let Expr::FieldAccess(f) = place {
             path.push(f.field.as_str());
             place = &f.base;
         }
         let Expr::Var(root) = place else { return Err("invalid collection place".into()) };
-        if path.is_empty() {
-            st.env.set(&root.name, value);
+        let value = if path.is_empty() {
+            value
         } else {
             path.reverse();
             let Val::Dt(term, ty) = st.env.get(&root.name) else { return Err("invalid collection root".into()) };
             let rebuilt = self.try_rebuild_v(ty, term, &path, &value, &mut st.pc)?;
-            st.env.set(&root.name, Val::Dt(rebuilt, ty.clone()));
-        }
-        Ok(())
+            Val::Dt(rebuilt, ty.clone())
+        };
+        self.store(st, &root.name, value, guard)
     }
 
     fn map_key(&self, ty: &GType, value: &Val) -> R<Ast> {
@@ -5445,6 +5486,12 @@ impl<'a> FnVerifier<'a> {
         let ite = |a, b| self.z.ite(cond, a, b);
         Ok(match (a, b) {
             (Val::Arr(a), Val::Arr(b)) => Val::Arr(a.like(ite(&a.a, &b.a), ite(&a.n, &b.n), &a.name)),
+            (Val::Map(a), Val::Map(b)) => Val::Map(MapV {
+                d: ite(&a.d, &b.d),
+                a: ite(&a.a, &b.a),
+                n: ite(&a.n, &b.n),
+                ..a.clone()
+            }),
             (Val::Int(a), Val::Int(b)) => Val::Int(ite(a, b)),
             (Val::Bool(a), Val::Bool(b)) => Val::Bool(ite(a, b)),
             (Val::Dt(a, ty), Val::Dt(b, _)) => Val::Dt(ite(a, b), ty.clone()),
@@ -5509,29 +5556,37 @@ impl<'a> FnVerifier<'a> {
                 let mut b = st.fork(None);
                 self.place_write(then, &mut a, value.clone())?;
                 self.place_write(els, &mut b, value)?;
+                let base = st.pc.len();
+                for (branch, guard) in [(a.pc, cond.clone()), (b.pc, cond.not())] {
+                    for fact in &branch[base..] {
+                        self.assume(st, std::slice::from_ref(&guard), fact.clone());
+                    }
+                }
                 st.env.set(root, self.place_ite(cond, a.env.get(root), b.env.get(root))?);
             }
         }
         Ok(())
     }
 
-    fn place_bind(&mut self, expr: &Expr, st: &mut State, guard: &Ast, binding: &ast::Let) -> R<Place> {
+    fn place_bind(&mut self, expr: &Expr, st: &mut State, guard: &[Ast], binding: &ast::Let) -> R<Place> {
         Ok(match expr {
             Expr::Var(v) => Place::Root(v.name.clone()),
             Expr::FieldAccess(f) => Place::Field(Box::new(self.place_bind(&f.base, st, guard, binding)?), f.field.clone()),
             Expr::Index(i) => {
                 let base = self.place_bind(&i.array, st, guard, binding)?;
-                let index = self.ev0_ast(&i.index, st, &[], true)?;
+                let index = self.ev0_ast(&i.index, st, guard, true)?;
                 let array = self.place_read(&base, st)?;
                 let bounds = self.z.and(&[index.ge_i(0), index.lt(&array.try_arr()?.n)]);
-                self.prove_core(st, &[], &guard.implies(&bounds), mk_pos(binding.line, binding.col), "index_oob",
+                self.prove_core(st, guard, &bounds, mk_pos(binding.line, binding.col), "index_oob",
                     &format!("index in bounds for place binding {}", binding.name), None);
                 Place::Index(Box::new(base), index)
             }
             Expr::Call(c) if ast::PlaceIf::matches(c) => {
-                let cond = self.ev0_ast(&c.args[0], st, &[], true)?;
-                let then_guard = self.z.and(&[guard.clone(), cond.clone()]);
-                let else_guard = self.z.and(&[guard.clone(), cond.not()]);
+                let cond = self.ev0_ast(&c.args[0], st, guard, true)?;
+                let mut then_guard = guard.to_vec();
+                then_guard.push(cond.clone());
+                let mut else_guard = guard.to_vec();
+                else_guard.push(cond.not());
                 let then = self.place_bind(&c.args[1], st, &then_guard, binding)?;
                 let els = self.place_bind(&c.args[2], st, &else_guard, binding)?;
                 Place::If(cond, Box::new(then), Box::new(els))
@@ -5540,35 +5595,36 @@ impl<'a> FnVerifier<'a> {
         })
     }
 
-    fn place_writeback(&mut self, st: &mut State, name: &str) -> R<()> {
-        if let Some(index) = st.places.iter().position(|binding| binding.name == name) {
-            let binding = st.places.remove(index);
-            self.place_write(&binding.place, st, st.env.get(name).clone())?;
+    fn store(&mut self, st: &mut State, name: &str, mut value: Val, guard: &[Ast]) -> R<()> {
+        // Keep the alias's local view in sync with its captured location. The checker
+        // excludes overlapping stores while the view can still be read.
+        let cond = (!guard.is_empty()).then(|| self.z.and(guard));
+        if let Some(binding) = st.places.iter().rev().find(|binding| binding.name == name).cloned() {
+            if let Some(cond) = &cond {
+                let mut branch = st.fork(None);
+                self.place_write(&binding.place, &mut branch, value.clone())?;
+                let root = binding.place.root();
+                let updated = self.place_ite(cond, branch.env.get(root), st.env.get(root))?;
+                for fact in &branch.pc[st.pc.len()..] {
+                    self.assume(st, guard, fact.clone());
+                }
+                st.env.set(root, updated);
+            } else {
+                self.place_write(&binding.place, st, value.clone())?;
+            }
         }
+        if let Some(cond) = &cond {
+            value = self.place_ite(cond, &value, st.env.get(name))?;
+        }
+        st.env.set(name, value);
         Ok(())
     }
 
-    /// verify.py `exec_block` (line 660).
+    /// Execute a block and discard its local place bindings on scope exit.
     pub(crate) fn exec_block(&mut self, stmts: &[Stmt], st: State) -> R<Vec<State>> {
-        let mut dead = HashMap::<usize, Vec<&str>>::new();
-        if stmts.iter().any(|stmt| matches!(stmt, Stmt::Let(l) if l.is_place())) {
-            let mut last = HashMap::new();
-            for (index, stmt) in stmts.iter().enumerate() {
-                let mut names = HashSet::new();
-                place_mentions(stmt, &mut names);
-                last.extend(names.into_iter().map(|name| (name, index)));
-            }
-            for (index, stmt) in stmts.iter().enumerate() {
-                if let Stmt::Let(binding) = stmt {
-                    if binding.is_place() {
-                        let end = last.get(&binding.name).copied().unwrap_or(index).max(index);
-                        dead.entry(end).or_default().push(&binding.name);
-                    }
-                }
-            }
-        }
+        let outer_places = st.places.len();
         let mut states = vec![st];
-        for (index, stmt) in stmts.iter().enumerate() {
+        for stmt in stmts {
             // STAGE1 B2: on budget exhaustion or timeout, Python escapes from here via an exception.
             if self.probe_aborted() {
                 return Ok(Vec::new());
@@ -5581,13 +5637,9 @@ impl<'a> FnVerifier<'a> {
             if states.is_empty() {
                 break;
             }
-            if let Some(names) = dead.get(&index) {
-                for name in names {
-                    for state in &mut states {
-                        self.place_writeback(state, name)?;
-                    }
-                }
-            }
+        }
+        for state in &mut states {
+            state.places.truncate(outer_places);
         }
         Ok(states)
     }
@@ -5600,7 +5652,7 @@ impl<'a> FnVerifier<'a> {
             Val::Arr(a) => Val::Arr(a.like(a.a.clone(), a.n.clone(), name)),
             other => other,
         };
-        st.env.set(name, v);
+        self.store(&mut st, name, v, &[])?;
         Ok(vec![st])
     }
 
@@ -5615,7 +5667,7 @@ impl<'a> FnVerifier<'a> {
             Stmt::Let(s) if s.is_place() => {
                 let Expr::InoutArg(arg) = &s.value else { unreachable!() };
                 let mut st = st.fork(None);
-                let place = self.place_bind(&arg.expr, &mut st, &self.z.bool_val(true), s)?;
+                let place = self.place_bind(&arg.expr, &mut st, &[], s)?;
                 let value = match self.place_read(&place, &mut st)? {
                     Val::Arr(arr) => Val::Arr(arr.like(arr.a.clone(), arr.n.clone(), &s.name)),
                     value => value,
@@ -5674,7 +5726,7 @@ impl<'a> FnVerifier<'a> {
                 let new = Val::Arr(arr.like(arr.a.store(&i, &v), arr.n.clone(), last));
                 let path: Vec<&str> = s.fields.iter().map(|f| f.as_str()).collect();
                 let rebuilt = self.try_rebuild_v(&root_ty, &root_ast, &path, &new, &mut st.pc)?;
-                st.env.set(&s.name, Val::Dt(rebuilt, root_ty));
+                self.store(&mut st, &s.name, Val::Dt(rebuilt, root_ty), &[])?;
                 Ok(vec![st])
             }
             Stmt::IndexAssign(s) => {
@@ -5711,7 +5763,7 @@ impl<'a> FnVerifier<'a> {
                     let ob = self.z.and(&[v.ge_i(lo), v.le_i(hi)]);
                     self.prove_core(&st, &[], &ob, spos, "refinement_assign", what.as_str(), Some(what.as_str()));
                 }
-                st.env.set(&s.name, Val::Arr(arr.like(arr.a.store(&i, &v), arr.n.clone(), &s.name)));
+                self.store(&mut st, &s.name, Val::Arr(arr.like(arr.a.store(&i, &v), arr.n.clone(), &s.name)), &[])?;
                 Ok(vec![st])
             }
             Stmt::If(s) => {
@@ -5842,7 +5894,7 @@ impl<'a> FnVerifier<'a> {
                                 }
                                 _ => return Err("invalid mutable collection".into()),
                             };
-                            self.store_collection_place(place, &mut end, after)?;
+                            self.store_collection_place(place, &mut end, after, &[])?;
                         }
                         // The binder and the arm's local variables end with the arm; only updates to outer variables remain
                         let drop_keys: Vec<String> =
@@ -5865,7 +5917,7 @@ impl<'a> FnVerifier<'a> {
                 };
                 let path: Vec<&str> = s.fields.iter().map(|f| f.as_str()).collect();
                 let new = self.try_rebuild_v(&ty, &root, &path, &v, &mut st.pc)?;
-                st.env.set(&s.name, Val::Dt(new, ty));
+                self.store(&mut st, &s.name, Val::Dt(new, ty), &[])?;
                 Ok(vec![st])
             }
             Stmt::Return(s) => {
@@ -5874,10 +5926,6 @@ impl<'a> FnVerifier<'a> {
                     Some(e) => Some(self.ev0(e, &mut st, &[], true)?),
                     None => None,
                 };
-                while let Some(binding) = st.places.pop() {
-                    let value = st.env.get(&binding.name).clone();
-                    self.place_write(&binding.place, &mut st, value)?;
-                }
                 self.ensures_ok(&mut st, v, spos)?;
                 Ok(Vec::new())
             }
@@ -5968,24 +6016,56 @@ impl<'a> FnVerifier<'a> {
         // Without inout, calls = {} and snap = {}: names/keep (and the SMT) are exactly the old ones.
         let mut calls: BTreeSet<String> = BTreeSet::new();
         call_writes(body, &mut calls, &|call, _| !matches!(call.name.as_str(), "vec_reserve" | "arr_reserve"));
-        place_roots(body, &mut calls);
+        // Translate writes through aliases, including bindings declared during the loop.
+        let mut aliases = HashMap::<String, BTreeSet<(String, bool)>>::new();
+        for binding in &st.places {
+            aliases.entry(binding.name.clone()).or_default().insert((
+                binding.place.root().to_string(), binding.place.is_whole(),
+            ));
+        }
+        place_aliases(body, &mut aliases);
+        let alias_writes: Vec<_> = names.union(&calls).filter_map(|name| aliases.get(name))
+            .flatten().map(|(root, _)| root.clone()).collect();
+        calls.extend(alias_writes);
+        names.extend(calls.iter().cloned());
         let mut keep: BTreeSet<String> = BTreeSet::new();
         if !calls.is_empty() || !self.snap.0.is_empty() {
-            let mut whole: BTreeSet<String> = BTreeSet::new();
+            let mut whole = BTreeSet::new();
             whole_assigned(body, &mut whole);
-            names.extend(calls.iter().cloned());
-            let mut resizes = BTreeSet::new();
-            call_writes(body, &mut resizes, &|call, i| {
+            call_writes(body, &mut whole, &|call, i| {
                 pruv_core::check::vec_resize_builtin(&call.name) || matches!(call.name.as_str(), "arr_push" | "arr_append") || self.resize_params.contains(&(call.name.clone(), i))
             });
+            let mut loses_length = BTreeSet::new();
+            for name in whole {
+                if let Some(places) = aliases.get(&name) {
+                    loses_length.extend(places.iter().filter(|(_, whole)| *whole).map(|(root, _)| root.clone()));
+                } else {
+                    loses_length.insert(name);
+                }
+            }
             for n in &names {
-                if (self.snap.contains(n) || calls.contains(n)) && !whole.contains(n) && !resizes.contains(n) {
+                if (self.snap.contains(n) || calls.contains(n)) && !loses_length.contains(n) {
                     keep.insert(n.clone());
                 }
             }
         }
+        // Preserve captured places when the root is modified only by disjoint field stores.
+        let mut place_frames = Vec::new();
+        if !st.places.is_empty() {
+            let mut stores = HashMap::new();
+            store_paths(body, &mut stores);
+            for binding in &st.places {
+                let root = binding.place.root();
+                if let Some(paths) = stores.get(root).filter(|_| !calls.contains(root)) {
+                    let path = binding.place.footprint();
+                    if paths.iter().all(|written| path.iter().zip(*written).any(|(a, b)| *a != b.as_str())) {
+                        place_frames.push(binding.clone());
+                    }
+                }
+            }
+        }
         // An arbitrary single iteration: at the start the invariants held (and were defined)
-        let mut b = self.havoc_set(st, &names, &keep)?;
+        let mut b = self.havoc_with_places(st, &names, &keep, &place_frames)?;
         self.loop_assume_invariants(&invs, &mut b)?;
         let measure = match head {
             Loop::While(w) => {
@@ -6041,7 +6121,7 @@ impl<'a> FnVerifier<'a> {
             self.prove_core(&end, &[], &ob, dpos, "decreases_decrease", "decreases strictly decreases", None);
         }
         // After the loop
-        let mut a = self.havoc_set(st, &names, &keep)?;
+        let mut a = self.havoc_with_places(st, &names, &keep, &place_frames)?;
         self.loop_assume_invariants(&invs, &mut a)?;
         if let Loop::While(w) = head {
             let c = self.ev0_ast(&w.cond, &mut a, &[], true)?;

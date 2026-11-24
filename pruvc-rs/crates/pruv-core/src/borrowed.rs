@@ -157,14 +157,26 @@ pub(crate) fn static_str_argument(arg: &Expr, p: &Param) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Access { Read, Write }
 
-type Roots = BTreeMap<String, Access>;
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Source {
+    root: String,
+    binding: Option<usize>,
+}
 
-fn merge(roots: &mut Roots, root: &str, access: Access) {
-    let held = roots.entry(root.to_owned()).or_insert(access);
+type Roots = BTreeMap<Source, Access>;
+
+fn merge(roots: &mut Roots, source: Source, access: Access) {
+    let held = roots.entry(source).or_insert(access);
     *held = (*held).max(access);
 }
 
-fn walk_statement<'a>(
+impl Source {
+    fn direct(root: &str) -> Self {
+        Self { root: root.to_owned(), binding: None }
+    }
+}
+
+pub(crate) fn walk_statement<'a>(
     st: &'a Stmt,
     expr: &mut impl FnMut(&'a Expr),
     write: &mut impl FnMut(&'a str, &'a [String], i64, i64),
@@ -285,7 +297,7 @@ struct Point {
 struct Graph {
     points: Vec<Point>,
     borrows: Vec<Roots>,
-    places: Vec<(usize, String, Vec<String>)>,
+    places: HashMap<usize, (String, String, Vec<String>)>,
     failure: Option<(usize, PruvError)>,
 }
 
@@ -360,17 +372,28 @@ impl Graph {
     fn conflicts(self) -> Res<()> {
         let width = self.borrows.len();
         let mut masks: HashMap<&str, [Bits; 2]> = HashMap::new();
-        for (b, roots) in self.borrows.iter().enumerate() {
-            for (root, access) in roots {
-                let mask = masks.entry(root.as_str()).or_insert_with(|| [Bits::new(width), Bits::new(width)]);
-                mask[(*access == Access::Write) as usize].set(b);
-            }
-        }
         let mut places: HashMap<&str, (Bits, Vec<(usize, &[String])>)> = HashMap::new();
-        for (bit, root, footprint) in &self.places {
+        let mut add_place = |bit, root, footprint| {
             let (mask, paths) = places.entry(root).or_insert_with(|| (Bits::new(width), Vec::new()));
-            mask.set(*bit);
-            paths.push((*bit, footprint));
+            mask.set(bit);
+            paths.push((bit, footprint));
+        };
+        for (&bit, (_, root, footprint)) in &self.places {
+            add_place(bit, root.as_str(), footprint.as_slice());
+        }
+        for (bit, roots) in self.borrows.iter().enumerate() {
+            for (source, access) in roots {
+                let name = if let Some(binding) = source.binding {
+                    // The view holds the place's footprint and borrows its alias with the view's own mode.
+                    let (alias, _, footprint) = &self.places[&binding];
+                    add_place(bit, source.root.as_str(), footprint.as_slice());
+                    alias.as_str()
+                } else {
+                    source.root.as_str()
+                };
+                let mask = masks.entry(name).or_insert_with(|| [Bits::new(width), Bits::new(width)]);
+                mask[(*access == Access::Write) as usize].set(bit);
+            }
         }
         let live = self.liveness();
         let reach = self.reachable();
@@ -403,6 +426,11 @@ impl Graph {
     }
 }
 
+enum Origin {
+    View(Roots),
+    Place(Source),
+}
+
 struct Analysis<'a> {
     place_functions: &'a PlaceFunctions,
     functions: HashMap<&'a str, &'a Function>,
@@ -415,9 +443,9 @@ impl Analysis<'_> {
             .is_some_and(|s| s.fields.iter().any(|f| f.name == name && (f.borrowed || self.records.contains_key(f.ty.as_str()))))
     }
 
-    fn is_view(&self, e: &Expr, locals: &HashMap<String, Roots>) -> bool {
+    fn is_view(&self, e: &Expr, locals: &HashMap<String, Origin>) -> bool {
         match e {
-            Expr::Var(x) => locals.contains_key(&x.name)
+            Expr::Var(x) => matches!(locals.get(&x.name), Some(Origin::View(_)))
                 && expr_ty(e).as_deref().is_some_and(is_view_base),
             Expr::Call(x) => self.functions.get(x.name.as_str()).is_some_and(|f| f.borrowed_result),
             Expr::FieldAccess(x) => self.ref_field(&x.base, &x.field)
@@ -426,25 +454,28 @@ impl Analysis<'_> {
         }
     }
 
-    fn provenance(&self, e: &Expr, locals: &HashMap<String, Roots>) -> Res<Roots> {
+    fn provenance(&self, e: &Expr, locals: &HashMap<String, Origin>) -> Res<Roots> {
         let mut roots = Roots::new();
         if let Some(root) = place_root(e) {
-            if let Some(origin) = locals.get(root) {
-                // An owned field (not `ref`, not a borrowing struct: `ref_field` covers those) lives in the
-                // record's storage and carries nothing the record borrows.
-                if matches!(e, Expr::FieldAccess(x) if !self.ref_field(&x.base, &x.field)) {
-                    merge(&mut roots, root, Access::Read);
-                } else {
-                    roots = origin.clone();
+            match locals.get(root) {
+                Some(Origin::Place(source)) => merge(&mut roots, source.clone(), Access::Read),
+                Some(Origin::View(origin)) => {
+                    // An owned field lives in the record's storage and carries nothing the record borrows.
+                    if matches!(e, Expr::FieldAccess(x) if !self.ref_field(&x.base, &x.field)) {
+                        merge(&mut roots, Source::direct(root), Access::Read);
+                    } else {
+                        roots = origin.clone();
+                    }
                 }
-            } else {
-                merge(&mut roots, root, Access::Read);
-                // An owned field of a borrowing-struct parameter lives in the caller's record, which the
-                // Rust signature `&Doc<'a>` does not lend to the result.
-                if matches!(e, Expr::FieldAccess(x) if !self.ref_field(&x.base, &x.field))
-                    && expr_ty(field_place(e).0).as_deref().is_some_and(|ty| self.records.contains_key(ty))
-                {
-                    merge(&mut roots, &format!("{root}.storage"), Access::Read);
+                None => {
+                    merge(&mut roots, Source::direct(root), Access::Read);
+                    // An owned field of a borrowing-struct parameter lives in the caller's record, which the
+                    // Rust signature `&Doc<'a>` does not lend to the result.
+                    if matches!(e, Expr::FieldAccess(x) if !self.ref_field(&x.base, &x.field))
+                        && expr_ty(field_place(e).0).as_deref().is_some_and(|ty| self.records.contains_key(ty))
+                    {
+                        merge(&mut roots, Source::direct(&format!("{root}.storage")), Access::Read);
+                    }
                 }
             }
         } else {
@@ -464,16 +495,16 @@ impl Analysis<'_> {
                                 Expr::InoutArg(x) => (&*x.expr, Access::Write),
                                 _ => (a, Access::Read),
                             };
-                            for (name, access) in self.provenance(value, locals)? {
-                                merge(&mut roots, &name, access.max(mode));
+                            for (source, access) in self.provenance(value, locals)? {
+                                merge(&mut roots, source, access.max(mode));
                             }
                         }
                     }
                 }
                 Expr::StructLit(s) => for f in &s.fields {
                     if self.ref_field(e, &f.name) {
-                        for (name, access) in self.provenance(&f.value, locals)? {
-                            merge(&mut roots, &name, access);
+                        for (source, access) in self.provenance(&f.value, locals)? {
+                            merge(&mut roots, source, access);
                         }
                     }
                 },
@@ -484,7 +515,7 @@ impl Analysis<'_> {
         Ok(roots)
     }
 
-    fn owned(&self, e: &Expr, locals: &HashMap<String, Roots>) -> Res<()> {
+    fn owned(&self, e: &Expr, locals: &HashMap<String, Origin>) -> Res<()> {
         if self.is_view(e, locals) {
             return Err(error(e.line(), e.col(), "array_alias", "use copy to obtain an owned value from a borrowed view"));
         }
@@ -497,8 +528,8 @@ impl Analysis<'_> {
         &self,
         f: &Function,
         st: &Stmt,
-        locals: &mut HashMap<String, Roots>,
-        undo: &mut Vec<(String, Option<Roots>)>,
+        locals: &mut HashMap<String, Origin>,
+        undo: &mut Vec<(String, Option<Origin>)>,
     ) -> Res<()> {
         let mut expressions = Vec::new();
         walk_statement(st, &mut |e| expressions.push(e), &mut |_, _, _, _| {}, &mut |_| {});
@@ -546,7 +577,7 @@ impl Analysis<'_> {
             Stmt::Let(s) if s.is_place() => {}
             Stmt::Let(s) if self.borrow_let(s) => {
                 let roots = self.provenance(&s.value, locals)?;
-                undo.push((s.name.clone(), locals.insert(s.name.clone(), roots)));
+                undo.push((s.name.clone(), locals.insert(s.name.clone(), Origin::View(roots))));
             }
             Stmt::Let(s) => self.owned(&s.value, locals)?,
             Stmt::Assign(s) => self.owned(&s.value, locals)?,
@@ -554,7 +585,7 @@ impl Analysis<'_> {
             Stmt::Return(s) => if let Some(value) = &s.value {
                 if let Some(from) = &f.borrow_from {
                     let roots = self.provenance(value, locals)?;
-                    if roots.keys().any(|name| !from.contains(name)) {
+                    if roots.keys().any(|source| !from.contains(&source.root)) {
                         return Err(error(s.line, s.col, "borrow_escape", "returned value borrows outside its from-list"));
                     }
                 } else {
@@ -580,11 +611,11 @@ impl Analysis<'_> {
         f: &Function,
         body: &'a [Stmt],
         mut incoming: Vec<usize>,
-        locals: &mut HashMap<String, Roots>,
+        locals: &mut HashMap<String, Origin>,
         scope: &mut HashMap<&'a str, usize>,
         graph: &mut Graph,
     ) -> Vec<usize> {
-        let mut locals_undo: Vec<(String, Option<Roots>)> = Vec::new();
+        let mut locals_undo: Vec<(String, Option<Origin>)> = Vec::new();
         let mut scope_undo: Vec<(&'a str, Option<usize>)> = Vec::new();
         for st in body {
             let n = graph.points.len();
@@ -606,21 +637,28 @@ impl Analysis<'_> {
             if let Stmt::Let(s) = st {
                 if s.is_place() {
                     let (root, footprint) = &self.place_functions[&f.name][&(s.line, s.col)];
+                    point.uses.insert(0, (root.clone(), footprint.clone(), Access::Write, s.line, s.col));
                     let bit = graph.borrows.len();
+                    let source = Source { root: root.clone(), binding: Some(bit) };
+                    locals_undo.push((s.name.clone(), locals.insert(s.name.clone(), Origin::Place(source))));
                     point.kill = Some(bit);
                     scope_undo.push((&s.name, scope.insert(&s.name, bit)));
                     graph.borrows.push(Roots::new());
-                    graph.places.push((bit, root.clone(), footprint.clone()));
+                    graph.places.insert(bit, (s.name.clone(), root.clone(), footprint.clone()));
                 } else if self.borrow_let(s) {
                     point.kill = Some(graph.borrows.len());
                     scope_undo.push((&s.name, scope.insert(&s.name, graph.borrows.len())));
-                    graph.borrows.push(locals.get(&s.name).cloned().unwrap_or_default());
+                    let roots = match locals.get(&s.name) {
+                        Some(Origin::View(roots)) => roots.clone(),
+                        _ => Roots::new(),
+                    };
+                    graph.borrows.push(roots);
                     // A value that moves a root the new view borrows (`Doc { src: x, scratch: move x }`) conflicts
                     // with the view itself; like the other conflicts it is reported only where reachable.
                     let roots = graph.borrows.last().unwrap();
                     walk_expr(&s.value, &mut |node| {
                         if let Node::Expr(Expr::Move(m)) = node {
-                            if point.own_move.is_none() && roots.contains_key(m.name.as_str()) {
+                            if point.own_move.is_none() && roots.keys().any(|source| source.root == m.name) {
                                 point.own_move = Some((m.line, m.col));
                             }
                         }

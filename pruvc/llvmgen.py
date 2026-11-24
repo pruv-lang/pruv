@@ -1354,7 +1354,11 @@ class FnGen:
 
     def inout_place_ptr(s, e):
         root, path = field_place(e)
-        _, sl = s.lookup(root.name)
+        kind, sl = s.lookup(root.name)
+        if kind == "ssa" and sl.k == "arr":
+            raise PruvError("codegen", e.line, e.col, "unsupported_type",
+                            "forwarding a fixed-length array place to a resizable inout parameter needs the Rust backend",
+                            "use the Rust backend", file=getattr(e, "file", None))
         return s.field_ptr_ty(sl, path)[0]
 
     def place_ptr(s, p):
@@ -1365,11 +1369,15 @@ class FnGen:
             thn, els, end = s.label("pthen"), s.label("pelse"), s.label("pend")
             s.condbr(c.a, thn, els)
             s.place(thn)
+            s.begin_temps()
             a = s.place_ptr(p.then)
+            s.end_temps()
             pa = s.cur
             s.br(end)
             s.place(els)
+            s.begin_temps()
             b = s.place_ptr(p.els)
+            s.end_temps()
             pb = s.cur
             s.br(end)
             s.place(end)
@@ -2484,13 +2492,19 @@ class FnGen:
         elif isinstance(st, Let) and isinstance(st.value, InoutArg):
             # R-6g9-5: `let d = inout P;` binds d to the address of P (a scalar or struct slot viewed through it, like an
             # inout parameter); nothing is copied and nothing is dropped
+            place = st.value.expr
             k = vkind(st.type)
+            if k == "arr" and isinstance(place, Var) and any(
+                    p.name == place.name and p.mode == "inout" for p in s.f.params):
+                # Reuse the data/length pair or the caller-owned resizable slot.
+                s.scopes[-1]["names"][st.name] = s.lookup(place.name)
+                return
             if k not in ("i64", "i1", "agg") or is_native_vec(st.type) or s.is_ext(st.type):
                 raise PruvError("codegen", st.line, st.col, "unsupported_type",
                                 "a place binding of type %s needs the Rust backend" % st.type.name, "use the Rust backend",
                                 file=getattr(st, "file", None))
             s.begin_temps()
-            ptr = s.place_ptr(st.value.expr)
+            ptr = s.place_ptr(place)
             s.end_temps()
             s.scopes[-1]["names"][st.name] = ("slot", Slot(k, ptr, None, st.type))
         elif isinstance(st, Let) and s.m.stack is not None and s.m.stack.contains(st) and st.name not in s.resize_args:
@@ -2538,7 +2552,11 @@ class FnGen:
             s.end_temps()
         elif isinstance(st, Assign):
             s.begin_temps()
-            sl = s.lookup(st.name)[1]
+            kind, sl = s.lookup(st.name)
+            if kind == "ssa" and sl.k == "arr":
+                raise PruvError("codegen", st.line, st.col, "unsupported_type",
+                                "replacing a fixed-length array place needs a resizable inout parameter",
+                                "use the Rust backend", file=getattr(st, "file", None))
             if sl.k == "arr" and sl.c is None:     # R-6g9-1: a `ref` local takes another view; nothing to drop
                 s.store(sl, s.ev(st.value, False))
                 s.end_temps()

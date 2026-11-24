@@ -306,25 +306,47 @@ fn stmt_inout(st: &Stmt, out: &mut HashSet<String>) {
     }
 }
 
-fn assigned(stmts: &[Stmt], out: &mut HashSet<String>) {
+fn place_root(place: &Expr) -> Option<&str> {
+    match place {
+        Expr::Var(v) => Some(&v.name),
+        Expr::FieldAccess(f) => place_root(&f.base),
+        Expr::Index(i) => place_root(&i.array),
+        Expr::Call(c) if PlaceIf::matches(c) => place_root(&c.args[1]),
+        _ => None,
+    }
+}
+
+fn assigned<'a>(stmts: &'a [Stmt], out: &mut HashSet<String>, aliases: &[(&'a str, &'a str)]) {
+    let mut aliases = aliases.to_vec();
     for st in stmts {
-        stmt_inout(st, out); // G5 A1: an inout argument of a call is a changed variable (no-op without inout)
+        let mut writes = HashSet::new();
+        stmt_inout(st, &mut writes);
         match st {
-            Stmt::Assign(x) => {
-                out.insert(x.name.clone());
-            }
-            Stmt::IndexAssign(x) => {
-                out.insert(x.name.clone());
+            Stmt::Assign(x) => { writes.insert(x.name.clone()); }
+            Stmt::IndexAssign(x) => { writes.insert(x.name.clone()); }
+            _ => {}
+        }
+        out.extend(writes.into_iter().map(|name| {
+            aliases.iter().rev().find(|(alias, _)| *alias == name)
+                .map_or(name, |(_, root)| root.to_string())
+        }));
+        match st {
+            Stmt::Let(l) => {
+                if let Expr::InoutArg(arg) = &l.value {
+                    if let Some(root) = place_root(&arg.expr) {
+                        aliases.push((&l.name, root));
+                    }
+                }
             }
             Stmt::If(x) => {
-                assigned(&x.then, out);
-                assigned(&x.els, out);
+                assigned(&x.then, out, &aliases);
+                assigned(&x.els, out, &aliases);
             }
-            Stmt::While(x) => assigned(&x.body, out),
-            Stmt::ForMap(x) => assigned(&x.body, out),
+            Stmt::While(x) => assigned(&x.body, out, &aliases),
+            Stmt::ForMap(x) => assigned(&x.body, out, &aliases),
             Stmt::Match(x) => {
                 for a in &x.arms {
-                    assigned(&a.body, out);
+                    assigned(&a.body, out, &aliases);
                 }
             }
             _ => {}
@@ -412,6 +434,43 @@ fn scope_set(s: &mut Scope, n: &str, r: Refinement) {
     match s.iter_mut().find(|(k, _)| k == n) {
         Some(slot) => slot.1 = r,
         None => s.push((n.to_string(), r)),
+    }
+}
+
+fn place_refinement(place: &Expr, scope: &Scope) -> Option<Refinement> {
+    match place {
+        Expr::Var(v) => scope_get(scope, &v.name).cloned(),
+        // Both arms have the same root and type.
+        Expr::Call(c) if PlaceIf::matches(c) => place_refinement(&c.args[1], scope),
+        Expr::Index(i) => {
+            let mut r = place_refinement(&i.array, scope)?;
+            if r.shape != "array" || r.base != "i64" || r.lo.is_none() {
+                return None;
+            }
+            r.shape = "scalar".into();
+            r.maxlen = None;
+            Some(r)
+        }
+        _ => None,
+    }
+}
+
+fn intersect_refinements(r: &Refinement, inherited: Option<&Refinement>) -> Refinement {
+    let Some(inherited) = inherited.filter(|other| other.shape == r.shape && other.base == r.base) else {
+        return r.clone();
+    };
+    let bound = |own: &Option<String>, root: &Option<String>, prefer: Ordering| {
+        match (own, root) {
+            (Some(a), Some(b)) if cmp_dec(a, b) == prefer => Some(a.clone()),
+            (_, Some(b)) => Some(b.clone()),
+            _ => own.clone(),
+        }
+    };
+    Refinement {
+        lo: bound(&r.lo, &inherited.lo, Ordering::Greater),
+        hi: bound(&r.hi, &inherited.hi, Ordering::Less),
+        maxlen: bound(&r.maxlen, &inherited.maxlen, Ordering::Less),
+        ..r.clone()
     }
 }
 
@@ -516,8 +575,14 @@ impl Expander {
             }
             match &mut st {
                 Stmt::Let(l) => {
+                    if let Expr::InoutArg(arg) = &l.value {
+                        if let Some(r) = place_refinement(&arg.expr, scope) {
+                            scope_set(scope, &l.name, r);
+                        }
+                    }
                     if let Some(r) = &l.refine {
-                        scope_set(scope, &l.name, r.clone());
+                        let both = intersect_refinements(r, scope_get(scope, &l.name));
+                        scope_set(scope, &l.name, both);
                         for (label, e) in parts(r, &l.name, &self.k) {
                             let what = format!("the {} of local {} at its declaration (line {})", label, l.name, crate::diagnostic::plain_line(l.line));
                             after.push(synth_assert(r, e, "refinement_init", what));
@@ -569,7 +634,7 @@ impl Expander {
 
     fn loop_body(&self, invariants: &mut Vec<Expr>, body: &mut Vec<Stmt>, scope: &Scope) {
         let mut changed = HashSet::new();
-        assigned(body, &mut changed);
+        assigned(body, &mut changed, &[]);
         let mut pre = Vec::new();
         for (name, r) in scope {
             // In declaration order, only those alive at the loop head

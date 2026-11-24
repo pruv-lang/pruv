@@ -1,0 +1,13 @@
+// spec: R-6g9-5 accept
+// The owned local in the else arm has the same name as the then arm's place.
+fn select(inout x: i64, c: bool) -> i64 {
+  if c { let d = inout x; d = 1; return 1; }
+  else { let d: i64 = 3; return d; }
+}
+
+pub fn checksum() -> bool {
+  let mut x: i64 = 0;
+  let left: i64 = select(inout x, true);
+  let right: i64 = select(inout x, false);
+  return left == 1 && right == 3 && x == 1;
+}

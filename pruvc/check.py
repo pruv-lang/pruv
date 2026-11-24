@@ -496,10 +496,43 @@ def same_place(a, b):
     return isinstance(ar, Var) and isinstance(br, Var) and ar.name == br.name and ap == bp
 
 
-def array_resize_params(prog, *, length_only=False):
-    """Find inout arrays that may be replaced or regrown, including through forwarding."""
+def _resize_uses(body, visit):
+    """Visit calls and assignments with the whole-place aliases in scope."""
     from foreign_shim import _walk
 
+    def root(e):
+        if isinstance(e, Var):
+            return e.name
+        if isinstance(e, PlaceIf):
+            left = root(e.then)
+            return left if left == root(e.els) else None
+        return None
+
+    def block(stmts, aliases):
+        aliases = aliases.copy()
+        for st in stmts:
+            visit(st, aliases)
+            for item in vars(st).values():
+                if isinstance(item, Expr):
+                    _walk(item, lambda node: visit(node, aliases))
+                elif isinstance(item, list):
+                    if item and isinstance(item[0], Stmt):
+                        block(item, aliases)
+                    else:
+                        for child in item:
+                            if isinstance(child, MatchArm):
+                                block(child.body, aliases)
+                            elif isinstance(child, Expr):
+                                _walk(child, lambda node: visit(node, aliases))
+            if isinstance(st, Let) and st.place:
+                name = root(st.value.expr)
+                aliases[st.name] = aliases.get(name, name)
+
+    block(body, {})
+
+
+def array_resize_params(prog, *, length_only=False):
+    """Find inout arrays that may be replaced or regrown, including through forwarding."""
     arrays = {(f.name, i) for f in prog.functions for i, p in enumerate(f.params)
               if p.mode == "inout" and is_array(p.type)}
     resizes = set()
@@ -509,21 +542,25 @@ def array_resize_params(prog, *, length_only=False):
         if not params:
             continue
 
-        def visit(node):
-            if isinstance(node, Assign) and node.name in params:
-                resizes.add(params[node.name])
+        def visit(node, aliases):
+            if isinstance(node, Assign):
+                source = params.get(aliases.get(node.name, node.name))
+                if source is not None:
+                    resizes.add(source)
             elif isinstance(node, Call):
                 for i, arg in enumerate(node.args):
                     target = (node.name, i)
-                    if not isinstance(arg, InoutArg) or not isinstance(arg.expr, Var) or arg.expr.name not in params:
+                    if not isinstance(arg, InoutArg) or not isinstance(arg.expr, Var):
                         continue
-                    source = params[arg.expr.name]
+                    source = params.get(aliases.get(arg.expr.name, arg.expr.name))
+                    if source is None:
+                        continue
                     if node.name in ARRAY_GROW_BUILTINS and (node.name != "arr_reserve" or not length_only):
                         resizes.add(source)
                     elif target in arrays:
                         forwarded.setdefault(target, set()).add(source)
 
-        _walk(f.body, visit)
+        _resize_uses(f.body, visit)
     pending = list(resizes)
     while pending:
         for source in forwarded.get(pending.pop(), ()):
@@ -535,18 +572,18 @@ def array_resize_params(prog, *, length_only=False):
 
 def array_resize_args(f, resizes):
     """Bare bindings passed to resizable array parameters in f."""
-    from foreign_shim import _walk
-
     names = set()
 
-    def visit(node):
+    def visit(node, aliases):
         if isinstance(node, Call):
             for i, arg in enumerate(node.args):
                 if (((node.name, i) in resizes or node.name in ARRAY_GROW_BUILTINS) and isinstance(arg, InoutArg)
                         and isinstance(arg.expr, Var)):
                     names.add(arg.expr.name)
+                    if aliases.get(arg.expr.name) is not None:
+                        names.add(aliases[arg.expr.name])
 
-    _walk(f.body, visit)
+    _resize_uses(f.body, visit)
     return names
 
 
@@ -937,18 +974,20 @@ class Checker:
                 return e.name, (), ty_env[e.name]
             if isinstance(e, FieldAccess):
                 r, p, t = place(e.base, env, ty_env)
-                d = s.decls.get(t.name) if t.owner is None and not t.args else None
-                fd = next((f for f in d.fields if f.name == e.field), None) if isinstance(d, StructDecl) else None
-                if fd is None:
+                try:
+                    ft = s.lookup_field_type(t, e.field)
+                except TypeArityError:
+                    ft = None
+                if ft is None:
                     bad(e, "%s has no field %s" % (type_name(t), e.field))
-                return r, p + (e.field,) if p is not None else None, fd.type
+                return r, p + (e.field,) if p is not None else None, ft
             if isinstance(e, Index):
                 r, p, t = place(e.array, env, ty_env)
                 if t not in (Type("array"), ARRAY_BOOL):
                     bad(e, "an element of %s (only [i64] and [bool] elements are places)" % type_name(t))
                 # the footprint stops at the indexed path: an index ends the field path
                 return r, (p if p is not None else None), BOOL if t == ARRAY_BOOL else I64
-            bad(e, "a %s is not a place" % type(e).__name__)
+            bad(e, "this expression is not a place")
 
         def walk(stmts, env, ty_env):
             for st in stmts:
@@ -1982,7 +2021,8 @@ class Checker:
         s.block(f.body, dict(scope))
         if s.prog.borrow_site is not None or getattr(f, "places", False):
             f.borrowed_roots = set()
-            s.check_view_block(f.body, {p.name: {p.name: False} for p in f.params if s.borrowed_type(p.type)})
+            s.check_view_block(f.body, {p.name: ({(p.name, None): False}, False) for p in f.params
+                                        if s.borrowed_type(p.type)})
         if f.ret != UNIT and not s.ends_in_return(f.body):
             terr(f, "missing_return", "function %s may reach its end without returning" % f.name,
                  "end every path with `return ...;`")
@@ -2705,7 +2745,7 @@ class Checker:
         s.in_par = False
         s.boundary = None
         for c in calls:
-            s.par_args(c)
+            s.par_args(c, scope)
         s.par_overlap(calls)
         s.par_groups.append((s.f, st, list(calls)))
 
@@ -2741,8 +2781,12 @@ class Checker:
             return el.owner is not None and (el.owner, el.index) in s.elem_params
         return False
 
-    def par_args(s, c):
+    def par_args(s, c, scope):
         for arg in c.args:
+            root, _ = field_place(arg.expr if isinstance(arg, InoutArg) else arg)
+            if (isinstance(root, Var) and scope.get(root.name, (None, False, None))[1:]
+                    == (True, "inout")):
+                s.borrow_signature(arg, "borrowed values cannot cross a par branch boundary")
             if arg.borrowed_view or arg.ty is not None and s.borrowed_type(arg.ty):
                 s.borrow_signature(arg, "borrowed values cannot cross a par branch boundary")
             if (not isinstance(arg, (InoutArg, Var, IntLit, BoolLit))
@@ -2910,15 +2954,19 @@ class Checker:
         return (isinstance(e, Call) and e.name == "vec_get" and e.name not in s.funcs
                 and e.ty is not None and s.rec_vec_elem(e.ty))
 
-    def own(s, value):
-        """`value` (already typed) is moved into an owning position (let, assignment, constructor field, return):
-        a non-fresh extended value is cloned, which needs `alloc`; constructors, literals and calls are fresh"""
-        t = value.ty
-        if (isinstance(value, (Var, Move)) and value.name in getattr(s.f, "place_names", ()) and t is not None
+    def place_escape(s, value, t):
+        if (isinstance(value, (Var, Move)) and value.name in getattr(s.f, "place_names", ())
                 and (s.is_extended(t) or is_owned_value(t) or is_array(t) or t == STR)):
             # R-6g9-5: the value behind a place binding stays in its place; owning it would move it out
             terr(value, "borrow_escape", "place binding %s cannot be returned, stored or moved" % value.name,
                  "copy(...) the value, or return / store it from the place's root after the binding's last use")
+
+    def own(s, value):
+        """`value` (already typed) is moved into an owning position (let, assignment, constructor field, return):
+        a non-fresh extended value is cloned, which needs `alloc`; constructors, literals and calls are fresh"""
+        t = value.ty
+        if t is not None:
+            s.place_escape(value, t)
         if getattr(value, "map_iter_view", False):
             terr(value, "foreign_move", "a map iteration binder cannot be used as an owned value")
         if getattr(value, "map_mut_view", False):
@@ -3215,6 +3263,9 @@ class Checker:
                 s.expect(e.left, BOOL, scope, c, op="a boolean operation")
                 s.expect(e.right, BOOL, scope, c, op="a boolean operation"); return BOOL
         if isinstance(e, Move):   # G6: liveness and position rules are checked by foreign.check_ownership
+            entry = scope.get(e.name)
+            if entry is not None and entry[1:] == (True, "inout"):
+                s.place_escape(e, entry[0])
             s.check_borrow(e, e.name, tuple(e.fields))
             if scope.get(e.name, (None, None, None))[2] == "map_iter":
                 terr(e, "foreign_move", "a map iteration binder cannot be moved")
@@ -3366,14 +3417,22 @@ class Checker:
         m = bind_args(decl_owner(ty.name), len(d.tparams), ty.args)
         return [(fd, substitute(fd.type, m)) for fd in s.tt.fields(ty, variant)]
 
-    def field_type(s, node, sty, name):
-        # find the field first, then substitute only its type (substituting every field made x.f O(fields))
-        for fd in s.tt.fields(sty, None):
+    def lookup_field_type(s, sty, name):
+        # Find the field first, then substitute only its type.
+        d = s.decls.get(sty.name) if sty.owner is None else None
+        if not isinstance(d, StructDecl):
+            return None
+        for fd in d.fields:
             if fd.name == name:
                 if not sty.args:
                     return fd.type
-                d = s.decls[sty.name]
                 return substitute(fd.type, bind_args(decl_owner(sty.name), len(d.tparams), sty.args))
+        return None
+
+    def field_type(s, node, sty, name):
+        ty = s.lookup_field_type(sty, name)
+        if ty is not None:
+            return ty
         terr(node, "unknown_field", "struct %s has no field %s" % (sty.name, name))
 
     def enum_type(s, node, name):
@@ -3550,14 +3609,16 @@ class Checker:
             root, path = field_place(e)
             if not isinstance(root, Var):
                 s.borrow_signature(e, "a borrowed result source must be a place or a borrowed value")
-            if not path and root.name in loans:
-                return {name: held or exclusive for name, held in loans[root.name].items()}
+            if root.name in loans:
+                origins, place_binding = loans[root.name]
+                if not path or place_binding:
+                    return {name: held or exclusive for name, held in origins.items()}
             if path and any(
                     p.name == root.name and s.borrowed_type(p.type) for p in s.f.params):
                 # An owned field of a borrowing-struct parameter lives in the caller's record, which the
                 # Rust signature `&Doc<'a>` does not lend to the result.
-                return {root.name: exclusive, root.name + ".storage": exclusive}
-            return {root.name: exclusive}
+                return {(root.name, None): exclusive, (root.name + ".storage", None): exclusive}
+            return {(root.name, None): exclusive}
         merged = {}
         for source in sources:
             for name, held in source.items():
@@ -3579,20 +3640,8 @@ class Checker:
         for item in s.view_stmt_items(st):
             if isinstance(item, Expr):
                 if isinstance(st, Let) and st.place and item is st.value:
-                    continue     # the binding's own place is the footprint, not a mention
-                paths = {}
-                for name, path in _place_mentions(item):
-                    paths.setdefault(name, []).append(tuple(path))
-                for e in _walk(item):
-                    if isinstance(e, (Var, Move)):
-                        found = paths.get(e.name) or [()]
-                        for path in found:
-                            yield e.name, isinstance(e, Move), path
-                        paths[e.name] = []
-                    elif isinstance(e, InoutArg):
-                        root, path = field_place(e.expr)
-                        if isinstance(root, Var):
-                            yield root.name, True, tuple(path)
+                    continue     # view_graph records the place and its operands
+                yield from s.view_uses_expr(item)
 
     def view_statement(s, st, loans, undo):
         """The borrowed-view checks of one statement that do not depend on liveness; a borrow `let` records its
@@ -3606,11 +3655,11 @@ class Checker:
         if isinstance(st, Let) and (st.ref or s.borrowed_type(st.type)):
             provenance = s.view_provenance(st.value, loans)
             undo.append((st.name, st.name in loans, loans.get(st.name)))
-            loans[st.name] = provenance
-            s.f.borrowed_roots.update(provenance)
+            loans[st.name] = (provenance, False)
+            s.f.borrowed_roots.update(root for root, _ in provenance)
         elif isinstance(st, Return) and s.f.borrow_from and st.value is not None:
             provenance = s.view_provenance(st.value, loans)
-            if set(provenance) - set(s.f.borrow_from):
+            if any(root not in s.f.borrow_from for root, _ in provenance):
                 terr(st, "borrow_escape", "the result borrows a value outside the from parameters")
 
     def view_graph(s, stmts, incoming, loans, scope, g):
@@ -3642,24 +3691,30 @@ class Checker:
                     # are read once at the binding and are ordinary uses of this point
                     bit = len(g["borrows"])
                     point["kill"] = 1 << bit
-                    point["uses"] += [u for e in s.place_operands(st.value.expr) for u in s.view_uses_expr(e)]
+                    root, path = st.place_root
+                    point["uses"].append((root, True, path))
+                    point["uses"].extend((name, False, path) for e in s.place_operands(st.value.expr)
+                                         for name, _, path in s.view_uses_expr(e))
+                    loans_undo.append((st.name, st.name in loans, loans.get(st.name)))
+                    loans[st.name] = ({(root, bit): False}, True)
                     for name, _, _ in point["uses"]:
                         if name in scope:
                             point["gen"] |= 1 << scope[name]
                     scope_undo.append((st.name, st.name in scope, scope.get(st.name)))
                     scope[st.name] = bit
                     g["borrows"].append({})
-                    g["places"][bit] = st.place_root
+                    g["places"][bit] = (st.name, root, path)
                 elif isinstance(st, Let) and (st.ref or s.borrowed_type(st.type)):
                     bit = len(g["borrows"])
                     point["kill"] = 1 << bit
                     scope_undo.append((st.name, st.name in scope, scope.get(st.name)))
                     scope[st.name] = bit
-                    g["borrows"].append(loans.get(st.name, {}))
+                    g["borrows"].append(loans.get(st.name, ({}, False))[0])
                     # A value that moves a root the new view borrows (`Doc { src: x, scratch: move x }`) conflicts
                     # with the view itself; like the other conflicts it is reported only where reachable.
+                    roots = {root for root, _ in g["borrows"][-1]}
                     point["own_move"] = next((e.name for e in _walk(st.value)
-                                              if isinstance(e, Move) and e.name in g["borrows"][-1]), None)
+                                              if isinstance(e, Move) and e.name in roots), None)
                 g["points"].append(point)
                 if isinstance(st, If):
                     exits = (s.view_graph(st.then, [n], loans, scope, g)
@@ -3699,8 +3754,20 @@ class Checker:
             yield e.index
 
     def view_uses_expr(s, e):
-        for name, path in _place_mentions(e):
-            yield name, False, tuple(path)
+        if isinstance(e, Move):
+            yield e.name, True, tuple(e.fields)
+            return
+        if isinstance(e, InoutArg):
+            root, path = field_place(e.expr)
+            if isinstance(root, Var):
+                yield root.name, True, tuple(path)
+                return
+        root, path = field_place(e)
+        if isinstance(root, Var):
+            yield root.name, False, tuple(path)
+            return
+        for child in expr_kids(e):
+            yield from s.view_uses_expr(child)
 
     @staticmethod
     def view_join(g, exits):
@@ -3747,14 +3814,23 @@ class Checker:
                 for succ in point["succ"]:
                     reach[succ] = True
         masks = {}   # root -> [shared mask, exclusive mask]
-        for bit, provenance in enumerate(g["borrows"]):
-            for name, exclusive in provenance.items():
-                masks.setdefault(name, [0, 0])[exclusive] |= 1 << bit
-        places = {}  # R-6g9-5: root -> [mask of its place bindings, [(bit, footprint)]]
-        for bit, (name, foot) in g["places"].items():
-            entry = places.setdefault(name, [0, []])
+        places = {}  # root -> [mask of its place bindings and derived views, [(bit, footprint)]]
+
+        def add_place(bit, root, foot):
+            entry = places.setdefault(root, [0, []])
             entry[0] |= 1 << bit
             entry[1].append((bit, foot))
+
+        for bit, (_, root, foot) in g["places"].items():
+            add_place(bit, root, foot)
+        for bit, provenance in enumerate(g["borrows"]):
+            for (root, binding), exclusive in provenance.items():
+                if binding is not None:
+                    # A view keeps the original footprint borrowed and borrows the alias with its own mode.
+                    alias, _, foot = g["places"][binding]
+                    add_place(bit, root, foot)
+                    root = alias
+                masks.setdefault(root, [0, 0])[exclusive] |= 1 << bit
         last = len(points) if g["failure"] is None else g["failure"][0] + 1
         for n in range(last):
             if not reach[n]:
