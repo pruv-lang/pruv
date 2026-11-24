@@ -1739,13 +1739,18 @@ borrowed value is live.
   it (a place, `subview`, a call of a `from` function, a string literal), so it is never freed and never copied.
   A `ref` local is a stack slot holding the pair (no capacity word); a read `[u8]` / `str` argument is passed as
   today (`ptr` + length); a `-> ref [u8] from(..)` / `-> ref str from(..)` result is returned by value as
-  `{ ptr, i64 }` (no `%out`), and the data pointer of a read `from` parameter is not `nocapture`. A view of an
-  `inout` buffer is the slot's data and length read after the callee's last write. A string literal in a view
-  position is the read-only global. A borrowing struct is still `codegen/unsupported_type` on LLVM until bundle B2.
+  `{ ptr, i64 }` (no `%out`), and the data pointer of a read `from` parameter is not `nocapture`. A view of a
+  resizable `inout` buffer (one a `from` result borrows) is the slot's data and length read after the callee's last
+  write; that buffer is scratch storage, so `buf = resize(buf, n, v)` may also shrink it (`0 <= n`). A
+  fixed-length `inout` array is viewed through its data pointer and length directly. An enum payload owns its
+  value, so a view there is `type/array_alias`. A copy of an array a live view reads
+  stays a copy, and no view is passed to the host ABI. A string literal in a view position is the read-only
+  global. A borrowing struct is still `codegen/unsupported_type` on LLVM until bundle B2.
   Tests: [view result](tests/spec/r6g9_1_view_result.pruv), [inout source](tests/spec/r6g9_1_inout_source.pruv),
+  [copy beside a view](tests/spec/r6g9_1_view_copy.pruv),
   [literal](tests/spec/r6g9_1_literal.pruv), [subview local](tests/spec/r6g_11_local_view.pruv),
   [two sources](tests/spec/r6g_11_two_sources.pruv), [copy then reuse](tests/spec/r6g_11_copy_owned.pruv);
-  rejects [borrowing struct](tests/spec/r6g9_1_struct_llvm.pruv).
+  rejects [borrowing struct](tests/spec/r6g9_1_struct_llvm.pruv), [enum payload](tests/spec/r6g9_1_enum_payload.pruv).
 
 ## 6h. Files (G10)
 

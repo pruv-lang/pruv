@@ -430,12 +430,12 @@ pub const DECLS_RESIZE_U8: &str = concat!(
 );
 /// LG32 (G-DB52-4): only emitted when `x = resize(x, n, v)` is lowered in place.  The block s (allocated count c, live
 /// count m <= n) grows through pruv_regrow_v2 (realloc, so the old block is never live next to the new one) when n > c,
-/// else it is kept; then the tail [m, n) is set to v exactly like pruv_resize / pruv_resize_u8.  n <= 0 (so the array is
-/// empty) returns s unchanged.
+/// else it is kept; then the tail [m, n) is set to v exactly like pruv_resize / pruv_resize_u8.  n <= m (a shrink, which
+/// R-6g9-1's scratch resize of an inout view source allows, or an empty array) returns s unchanged.
 pub const DECLS_REGROW: &str = concat!(
     "define internal ptr @pruv_regrow(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {\n",
     "entry:\n",
-    "  %e = icmp sle i64 %n, 0\n",
+    "  %e = icmp sle i64 %n, %m\n",
     "  br i1 %e, label %none, label %chk\n",
     "none:\n",
     "  ret ptr %s\n",
@@ -478,7 +478,7 @@ pub const DECLS_REGROW: &str = concat!(
 pub const DECLS_REGROW_U8: &str = concat!(
     "define internal ptr @pruv_regrow_u8(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {\n",
     "entry:\n",
-    "  %e = icmp sle i64 %n, 0\n",
+    "  %e = icmp sle i64 %n, %m\n",
     "  br i1 %e, label %none, label %chk\n",
     "none:\n",
     "  ret ptr %s\n",
@@ -509,7 +509,7 @@ pub const DECLS_REGROW_U8: &str = concat!(
 pub const DECLS_REGROW_NARROW: &str = concat!(
     "define internal ptr @pruv_regrow_narrow(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v, i64 %size, i64 %align) alwaysinline nounwind {\n",
     "entry:\n",
-    "  %e = icmp sle i64 %n, 0\n",
+    "  %e = icmp sle i64 %n, %m\n",
     "  br i1 %e, label %none, label %chk\n",
     "none:\n",
     "  ret ptr %s\n",
@@ -1013,8 +1013,9 @@ pub fn has_take_array(f: &Function) -> bool {
 }
 
 /// Legacy functions with extended, inout, or take-array parameters use only internal entry points.
+/// R-6g9-1: a borrowed result (a { ptr, i64 } view the host would read as an owned array) is internal too
 pub fn is_internal_fn(f: &Function, tt: &TypeTable) -> bool {
-    has_ext_sig(f, tt) || has_inout(f) || has_take_array(f)
+    has_ext_sig(f, tt) || has_inout(f) || has_take_array(f) || view_ret(f)
 }
 
 /// An extended (G9) type in the signature (separate from the inout rule: an explicit host entry may have inout params)
@@ -1569,6 +1570,8 @@ pub struct FnGen<'a> {
     nt: usize,
     nl: usize,
     nslot: usize,
+    /// R-6g9-1: a `ref` local exists, so no last-use copy or resize takes its source
+    views: bool,
     nq: usize,
     cur: String,
     dead: bool,
@@ -1628,6 +1631,7 @@ impl<'a> FnGen<'a> {
             nt: 0,
             nl: 0,
             nslot: 0,
+            views: false,
             nq: 0,
             cur: "None".to_string(),
             dead: false,
@@ -1891,6 +1895,7 @@ impl<'a> FnGen<'a> {
     fn view_slot(&mut self, name: &str, ty: &str) -> Slot {
         let base = format!("%l{}.{}", self.nslot, mangle(name));
         self.nslot += 1;
+        self.views = true;
         let a = format!("{}.a", base);
         let b = format!("{}.b", base);
         self.allocas.push(format!("{} = alloca ptr", a));
@@ -3453,9 +3458,11 @@ impl<'a> FnGen<'a> {
     }
 
     /// --no-verify guards of resize(src, cnt, v): len(src) <= cnt <= 2^40, and v <= 255 for [u8]
-    fn resize_guards(&mut self, src: &V, cnt: &V, v: &V) -> R<()> {
+    /// --no-verify guards of resize(src, cnt, v): len(src) <= cnt <= 2^40 (0 <= cnt for R-6g9-1's scratch resize of
+    /// an inout view source, which may shrink), and v <= 255 for [u8]
+    fn resize_guards(&mut self, src: &V, cnt: &V, v: &V, scratch: bool) -> R<()> {
         if !self.verified {
-            let lo = self.op(format!("icmp sle i64 {}, {}", src.b, cnt.a))?;
+            let lo = self.op(format!("icmp sle i64 {}, {}", if scratch { "0" } else { src.b.as_str() }, cnt.a))?;
             let hi = self.op(format!("icmp ule i64 {}, 1099511627776", cnt.a))?;
             let ok = self.op(format!("and i1 {}, {}", lo, hi))?;
             self.guard(&ok, Fail::Panic1("pruv_panic_arith", "resize length outside len..2^40".to_string()), false)?;
@@ -3543,7 +3550,8 @@ impl<'a> FnGen<'a> {
     fn regrow_val(&mut self, src: &V, c: &Call) -> R<(String, V, String)> {
         let cnt = self.ev(&c.args[1], false)?;
         let v = self.ev(&c.args[2], false)?;
-        self.resize_guards(src, &cnt, &v)?;
+        let scratch = self.f.borrows_inout_buffer(&c.args[0]);
+        self.resize_guards(src, &cnt, &v, scratch)?;
         let (q, nc) = self.regrow_block(src, &cnt, &v)?;
         Ok((q, cnt, nc))
     }
@@ -3733,7 +3741,7 @@ impl<'a> FnGen<'a> {
     /// counted across all of them
     fn nested_moves_all(&self, es: &[&Expr], target: Option<&str>, ret: bool) -> HashSet<String> {
         let mut out = HashSet::new();
-        if self.cost {
+        if self.cost || self.views {   // R-6g9-1: a live `ref` local may view the taken array
             return out;
         }
         fn walk<'a>(x: &'a Expr, counts: &mut HashMap<String, usize>, calls: &mut Vec<&'a Call>) {
@@ -3851,7 +3859,8 @@ impl<'a> FnGen<'a> {
             return out;
         }
         let Expr::Var(x) = &c.args[0] else { return out };
-        if x.name == name || !self.dead_after(&x.name) {
+        // R-6g9-1: a live `ref` local may view x, so the copy stays a copy
+        if x.name == name || !self.dead_after(&x.name) || self.views {
             return out;
         }
         match self.lookup(&x.name) {
@@ -5240,7 +5249,7 @@ impl<'a> FnGen<'a> {
             let cnt = self.ev(arg(a, 1)?, false)?;
             let v = self.ev(arg(a, 2)?, false)?;
             let u8a = src.ty.as_deref() == Some(ARRAY_U8);
-            self.resize_guards(&src, &cnt, &v)?;
+            self.resize_guards(&src, &cnt, &v, false)?;
             if let Expr::Var(x) = arg(a, 0)? {
                 if self.moving.contains(&x.name) {
                     // LG37 (G-DB49-2): an owned local array at its last use (nested_moves): its block grows in place
@@ -8349,6 +8358,7 @@ pub fn is_host_abi_fn(f: &Function, tt: &TypeTable, explicit: bool, host: bool) 
         && !is_coll_fn(f)
         && !has_ext_sig(f, tt)
         && !has_take_array(f)
+        && !view_ret(f) // R-6g9-1: a borrowed result never crosses the host boundary
         && (host || !explicit)
         // an inout entry is exported only as an explicit-mode host entry (legacy inout fns stay internal)
         && (!has_inout(f) || (explicit && host))

@@ -3,7 +3,7 @@
   "run": {
     "exit": 0,
     "flags_matrix": [[], ["--no-verify"]],
-    "stdout_lines": ["22"],
+    "stdout_lines": ["29"],
     "alloc_balance": true
   }
 }

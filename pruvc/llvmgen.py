@@ -425,12 +425,12 @@ done:
 """
 # LG32 (G-DB52-4): only emitted when `x = resize(x, n, v)` is lowered in place.  The block s (allocated count c, live
 # count m <= n) grows through pruv_regrow_v2 (realloc, so the old block is never live next to the new one) when n > c,
-# else it is kept; then the tail [m, n) is set to v exactly like pruv_resize / pruv_resize_u8.  n <= 0 (so the array is
-# empty) returns s unchanged.
+# else it is kept; then the tail [m, n) is set to v exactly like pruv_resize / pruv_resize_u8.  n <= m (a shrink, which
+# R-6g9-1's scratch resize of an inout view source allows, or an empty array) returns s unchanged.
 DECLS_REGROW = """\
 define internal ptr @pruv_regrow(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {
 entry:
-  %e = icmp sle i64 %n, 0
+  %e = icmp sle i64 %n, %m
   br i1 %e, label %none, label %chk
 none:
   ret ptr %s
@@ -473,7 +473,7 @@ done:
 DECLS_REGROW_U8 = """\
 define internal ptr @pruv_regrow_u8(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {
 entry:
-  %e = icmp sle i64 %n, 0
+  %e = icmp sle i64 %n, %m
   br i1 %e, label %none, label %chk
 none:
   ret ptr %s
@@ -504,7 +504,7 @@ have:
 DECLS_REGROW_NARROW = """\
 define internal ptr @pruv_regrow_narrow(ptr %s, i64 %c, i64 %m, i64 %n, i64 %v, i64 %size, i64 %align) alwaysinline nounwind {
 entry:
-  %e = icmp sle i64 %n, 0
+  %e = icmp sle i64 %n, %m
   br i1 %e, label %none, label %chk
 none:
   ret ptr %s
@@ -1033,8 +1033,9 @@ def has_take_array(f):
 
 def is_internal_fn(f, tt):
     """G9: a function with an extended type in its signature has no raw ABI wrapper and no binding;
-    G5 A3: neither has a function with an inout parameter (one host-eligibility rule)"""
-    return has_ext_sig(f, tt) or has_inout(f) or has_take_array(f)
+    G5 A3: neither has a function with an inout parameter (one host-eligibility rule); R-6g9-1: nor a borrowed result
+    (a { ptr, i64 } view the host would read as an owned array)"""
+    return has_ext_sig(f, tt) or has_inout(f) or has_take_array(f) or view_ret(f)
 
 
 def has_ext_sig(f, tt):
@@ -1047,7 +1048,7 @@ def exports_abi(f, tt, explicit):
     not foreign / specialization / collection-bearing / extended, explicit mode => host entry, and an inout parameter
     is exported only from an explicit-mode host entry (mutable host entries; legacy inout fns stay internal)"""
     if (f.foreign is not None or getattr(f, "private", False) or _is_coll_fn(f) or has_ext_sig(f, tt)
-            or has_take_array(f)):
+            or has_take_array(f) or view_ret(f)):   # R-6g9-1: a borrowed result never crosses the host boundary
         return False
     if explicit and not f.host_entry:
         return False
@@ -1113,6 +1114,7 @@ class FnGen:
         s.lines = []
         s.allocas = []
         s.nt = s.nl = s.nslot = s.nq = 0
+        s.views = False    # R-6g9-1: a `ref` local exists, so no last-use copy or resize takes its source
         s.cur = None
         s.dead = False
         s.scopes = []
@@ -1204,6 +1206,7 @@ class FnGen:
         s.nslot += 1
         a, b = base + ".a", base + ".b"
         if view:    # R-6g9-1: a `ref` local is a { ptr, i64 } pair: no cap, never an owner
+            s.views = True
             s.allocas.append("%s = alloca ptr" % a)
             s.allocas.append("%s = alloca i64" % b)
             return Slot("arr", a, b, elem_ty(ty))
@@ -1657,7 +1660,7 @@ class FnGen:
         expression itself, or a field of a constructor / struct literal / enum constructor in it, the same place walk
         as ret_movable) and that the expression names exactly once; the return is their last use, so the call takes the
         buffer and the return's cleanup skips the slot"""
-        if s.cost or e is None:
+        if s.cost or e is None or s.views:     # R-6g9-1: a live `ref` local may view the taken array
             return set()
         counts = {}
 
@@ -2273,7 +2276,8 @@ class FnGen:
                 if is_arr(fd.type) and not s.fb(v.ty, None, fd.name):
                     return {x.base.name}
             return set()
-        if not isinstance(x, Var) or x.name == st.name or not s.dead_after(x.name):
+        if not isinstance(x, Var) or x.name == st.name or not s.dead_after(x.name) or s.views:
+            # R-6g9-1: a live `ref` local may view x, so the copy stays a copy
             return set()
         kind, v = s.lookup(x.name)
         if kind == "slot" and v.k == "arr" and s.owned_slot(v):
@@ -2871,10 +2875,11 @@ class FnGen:
             s.guard(ok, lambda: s.ins("call void @pruv_panic_oob(i64 %s, i64 %s)" % (i.a, a.b)), False)
         return s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (storage_ty(a), a.a, i.a))  # G2 A5: bytes = u8|bool
 
-    def resize_guards(s, src, cnt, v):
-        """--no-verify guards of resize(src, cnt, v): len(src) <= cnt <= 2^40, and v <= 255 for [u8]"""
+    def resize_guards(s, src, cnt, v, scratch=False):
+        """--no-verify guards of resize(src, cnt, v): len(src) <= cnt <= 2^40 (0 <= cnt for R-6g9-1's scratch resize of
+        an inout view source, which may shrink), and v <= 255 for [u8]"""
         if not s.verified:
-            lo = s.op("icmp sle i64 %s, %s" % (src.b, cnt.a))
+            lo = s.op("icmp sle i64 %s, %s" % ("0" if scratch else src.b, cnt.a))
             hi = s.op("icmp ule i64 %s, 1099511627776" % cnt.a)
             ok = s.op("and i1 %s, %s" % (lo, hi))
             s.guard(ok, s.panic1("pruv_panic_arith", "resize length outside len..2^40"), False)
@@ -2927,7 +2932,7 @@ class FnGen:
         """Return the block, length and capacity after an in-place resize."""
         cnt = s.ev(e.args[1])
         v = s.ev(e.args[2])
-        s.resize_guards(src, cnt, v)
+        s.resize_guards(src, cnt, v, getattr(e, "resize_scratch", False))
         q, nc = s.regrow_block(src, cnt, v)
         return q, cnt, nc
 

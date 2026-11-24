@@ -1,6 +1,6 @@
 // spec: R-6g9-1 accept
 // A result that borrows an inout buffer is the { data, len } read from the buffer's slot after the call
-// (hand_rpc.rs `text_of`); the caller's owner keeps the buffer and frees it once.
+// (hand_rpc.rs `text_of`); the caller's owner keeps the buffer and frees it once.  A later call may shrink it.
 fn text_of(src: [u8], lo: i64, hi: i64, inout buf: [u8]) -> ref [u8] from(src, buf) ! alloc
   requires 0 <= lo && lo <= hi && hi <= len(src)
   ensures len(result) <= hi - lo
@@ -34,5 +34,12 @@ pub fn checksum() -> i64 ! alloc {
     b = b + t[0];
   }
   let u: ref [u8] = text_of(x, 0, 8, inout buf);
-  return a + b + len(u);
+  let c: i64 = len(u);
+  // the buffer shrinks from 7 to 2 bytes: the in-place resize keeps the block and fills nothing
+  let w: ref [u8] = text_of(x, 1, 4, inout buf);
+  let mut d: i64 = len(w);
+  if len(w) >= 1 {
+    d = d + w[0];
+  }
+  return a + b + c + d;
 }

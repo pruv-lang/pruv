@@ -903,6 +903,7 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g8_4_binder_field.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_inout_source.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_literal.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_view_copy.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_view_result.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_copy_owned.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_local_view.pruv"}
@@ -1648,6 +1649,7 @@
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g8_4_binder_field.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_inout_source.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_literal.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_view_copy.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_view_result.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_copy_owned.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_local_view.pruv"}
@@ -2571,6 +2573,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g8_4_binder_field.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_inout_source.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_literal.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_view_copy.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_view_result.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_copy_owned.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_local_view.pruv"}
@@ -3328,6 +3331,7 @@
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g8_4_binder_field.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_inout_source.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_literal.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_view_copy.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g9_1_view_result.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_copy_owned.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_local_view.pruv"}
