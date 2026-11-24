@@ -262,6 +262,13 @@ perf_cells: `bench/l3/mcp/perf/work/perf_cells.json` (not committed). check 18 c
    (`/tmp/lb5rss/v2`): RSS equal to hand at 0, 1, 50, 100, 250 tools and 16 KB under at 500; time 0.92x at 100 tools.
    The fix is a global policy change (budget in code bytes rather than lines, or no promotion of a fn with a loop
    and more than one site) that needs a re-measure of every bench; it did not fit the time box.
+   **LI1 tried (2026-11-24, branch `lair/compiler-bundle-li1-inline-pol-aad0`, 8e5ad72a, not merged):** "no forced
+   promotion for a fn over 64 lines with a loop" in both compilers. RSS became equal to hand in every cell, but
+   instructions per call rose 10-12% at 100 and 500 tools (3.82M -> 4.29M) and 500-tool time went 0.91x -> 1.03x.
+   Putting `packet::field` alone back to `always` gives 3.57M (6% under the old compiler) with hand RSS; putting the
+   hot `step` back gives 4.77M. So the cost is not in the demoted bodies: the caller size changes how rustc inlines
+   `step` inside `page`. A rule on callee size and loops cannot separate these three fns; the next attempt needs the
+   `page` assembly and a caller-side rule. The +16 KB is a fixed share (code page), so it stays a debt row, not a gate.
 5. **Open: 1-tool time 1.19x** with 0.96x instructions (1000 vs 834-875 ns, 3 timer ticks); not located.
 
 ### LB5 measurement (superseded: taken on the LB5 shape, before LB5b; kept for the record)
