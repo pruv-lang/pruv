@@ -1380,6 +1380,7 @@ class FnVerifier:
         s.lemmas = []
         s.split_lemmas = []  # LG19: count range split, a third stage only (it slows unrelated proofs)
         s.lemma_keys = set()
+        s.lam_names = {}    # LB7 (R-6g6-2): array lambda -> its named stand-in in aggregate triggers
         s.theta = {}        # G3 A2: callee type-parameter substitution while a callee contract is re-interpreted
         s._opq = {}
         # G9 A1: function SCCs (Program.g9) and the frozen entry value of this function's decreases measure
@@ -2243,6 +2244,41 @@ class FnVerifier:
                 x < y, z3.Or(a1 == a2, z3.And(x <= w, w < y, b1 != b2))), patterns=[z3.MultiPattern(a1, a2)]))
         s.agg_shapes.append((kind, F, Tc, shape))
 
+    def name_lambdas(s, t):
+        """LB7 (R-6g6-2): a z3 trigger cannot contain a lambda, but an array value built by subview, copy_range,
+        arr_append or resize is one, so an aggregate bound such as count(.., c[i]) over such an array cannot be a
+        trigger. Each maximal lambda subterm is replaced by a fresh symbol defined equal to it: a constant when the
+        lambda is closed, else a function of the bound variables it mentions (defined under its own trigger)."""
+        lams, seen, todo = [], set(), [t]
+        while todo:
+            n = todo.pop()
+            if n.get_id() in seen:
+                continue
+            seen.add(n.get_id())
+            if z3.is_quantifier(n):
+                if n.is_lambda():
+                    lams.append(n)
+                continue
+            todo.extend(n.children())
+        if not lams:
+            return t
+        pairs = []
+        for lam in lams:
+            free = [c for c in s.qstack if _occurs(lam, c)]
+            key = lam.sexpr()
+            if key not in s.lam_names:
+                name = "!lam!%d" % len(s.lam_names)   # leading "!": no user name or fresh() symbol can match
+                if free:
+                    C = z3.Function(name, *[c.sort() for c in free], lam.sort())
+                    app = C(*free)
+                    s.lemmas.append(z3.ForAll(free, app == lam, patterns=[app]))
+                else:
+                    app = z3.Const(name, lam.sort())
+                    s.lemmas.append(app == lam)
+                s.lam_names[key] = app
+            pairs.append((lam, s.lam_names[key]))
+        return z3.substitute(t, *pairs)
+
     def aggregate(s, kind, k, lo, hi, T):
         """sum/count/max/min over lo<=k<hi as an uninterpreted F(lo, hi, *outer) plus unfolding lemmas."""
         outer = [c for c in s.qstack if _occurs(T, c)]
@@ -2289,6 +2325,7 @@ class FnVerifier:
                                           patterns=[z3.MultiPattern(fxm, fmy), z3.MultiPattern(fxy, fxm),
                                                     z3.MultiPattern(fxy, fmy)]))
 
+        lo, hi = s.name_lambdas(lo), s.name_lambdas(hi)
         app = F(lo, hi, *outer)
         facts = []
         if kind == "count":

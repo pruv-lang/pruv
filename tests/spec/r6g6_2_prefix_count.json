@@ -1,0 +1,19 @@
+{
+  "gen_contains": [
+    ".to_vec()",
+    ".extend_from_slice("
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "10"
+    ],
+    "alloc_balance": true
+  }
+}

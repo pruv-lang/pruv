@@ -1,0 +1,6 @@
+// spec: R-6g6-3 reject
+pub fn head(t: str) -> i64
+  requires len(t) >= 2
+{
+  return string_byte(subview(t, 0, 2), 0);
+}

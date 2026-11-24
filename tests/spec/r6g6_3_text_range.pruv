@@ -1,0 +1,9 @@
+// spec: R-6g6-3 accept
+pub fn checksum() -> i64 ! alloc {
+  let t: str = "hello world";
+  let mut out: String = string_new();
+  out = string_push_str(move out, subview(t, 0, 5));
+  out = string_push_str(move out, subview(t, 5, 11));
+  let w: String = string_from(subview(t, 6, 11));
+  return len(out) * 100 + len(w) * 10 + string_byte(out, 6) - string_byte(w, 0);
+}

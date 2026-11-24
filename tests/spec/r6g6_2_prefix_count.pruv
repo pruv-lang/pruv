@@ -1,0 +1,26 @@
+// spec: R-6g6-2 accept
+fn marks(a: [i64]) -> bool
+  ensures result ==> (forall t in 0..len(a): (0 <= a[t] && a[t] <= len(a)))
+  ensures result ==> (forall t in 0..len(a): count(k in 0..a[t]: a[k] == t) <= a[t])
+{
+  let mut i: i64 = 0;
+  while i < len(a)
+    invariant 0 <= i && i <= len(a)
+    invariant forall t in 0..i: (0 <= a[t] && a[t] <= len(a))
+    decreases len(a) - i
+  {
+    if a[i] < 0 || a[i] > len(a) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+pub fn checksum() -> i64 ! alloc {
+  let tape: [i64] = alloc(8, 1);
+  let m: i64 = 5;
+  let p: [i64] = copy(subview(tape, 0, m));
+  let mut q: [i64] = alloc(0, 0);
+  arr_reserve(inout q, m);
+  arr_append(inout q, tape, 0, m);
+  if !marks(p) || !marks(q) { return -1; }
+  return len(p) + len(q);
+}
