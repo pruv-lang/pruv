@@ -199,8 +199,16 @@ fn width(v: i64) -> i64
   if v <= 65535 { return 3; }
   return 4;
 }
-// Two passes: count the UTF-8 length, then fill an exactly sized buffer.
 pub fn string_utf8(source: [u8], start: i64, end: i64) -> [u8] ! alloc
+  requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
+  ensures len(result) <= 3 * (end - start)
+  ensures forall i in 0..len(result): (0 <= result[i] && result[i] <= 255)
+{
+  return decode_utf8(source, start, end, false);
+}
+
+// Count the output bytes, reserve capacity once, then push each decoded scalar as UTF-8 (hand: decode_utf16 sum, then encode_utf8 per char).
+fn decode_utf8(source: [u8], start: i64, end: i64, scanned: bool) -> [u8] ! alloc
   requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
   ensures len(result) <= 3 * (end - start)
   ensures forall i in 0..len(result): (0 <= result[i] && result[i] <= 255)
@@ -210,90 +218,53 @@ pub fn string_utf8(source: [u8], start: i64, end: i64) -> [u8] ! alloc
   if end - start >= 2 { p = start + 1; stop = end - 1; }
   let first: i64 = p;
   let mut need: i64 = 0;
-  let mut plain: bool = true;
-  // Count 16-byte blocks of plain ASCII (no high byte, no backslash) at once.
-  // The block index always advances and steps back once after a failing block, so the
-  // loop exit is a predicted branch rather than a data dependency on the reduction.
-  let mut ok: bool = true;
-  while ok && p + 16 <= stop
-    invariant start <= first && first <= p && p <= stop && start <= stop && stop <= end
-    invariant end <= len(source) && end <= 16777216
-    invariant ok || first + 16 <= p
-    decreases stop - p
-  {
-    let mut mh: i64 = 255;
-    let mut mb: i64 = 255;
-    let mut k: i64 = 0;
-    while k < 16
-      invariant 0 <= k && k <= 16 && p + 16 <= stop && stop <= end && end <= len(source) && 0 <= p
-      decreases 16 - k
-    { let r: i64 = 255 - source[p + k]; if r < mh { mh = r; } k = k + 1; }
-    k = 0;
-    while k < 16
-      invariant 0 <= k && k <= 16 && p + 16 <= stop && stop <= end && end <= len(source) && 0 <= p
-      decreases 16 - k
-    {
-      let b: i64 = source[p + k];
-      let mut hi: i64 = b; if hi < 92 { hi = 92; }
-      let mut lo: i64 = b; if lo > 92 { lo = 92; }
-      if hi - lo < mb { mb = hi - lo; }
-      k = k + 1;
-    }
-    ok = mh >= 128 && mb != 0;
-    p = p + 16;
-  }
-  if !ok { p = p - 16; }
-  need = p - first;
   while p < stop
-    invariant start <= first && first <= p && p <= end && start <= stop && stop <= end
-    invariant end <= len(source) && end <= 16777216
+    invariant start <= first && first <= p && p <= stop && stop <= end
     invariant 0 <= need && need <= 3 * (p - start)
     decreases stop - p
   {
     let c: i64 = source[p];
-    if c < 128 && c != 92 { need = need + 1; p = p + 1; }
-    else {
-      plain = false;
+    if c != 92 && (scanned || c < 128) {
+      need = need + 1;
+      p = p + 1;
+    } else {
       let s: Scalar = scalar(source, p, stop);
       need = need + width(s.value);
       p = s.next;
     }
   }
-  // Only plain ASCII bytes: the UTF-8 text is the raw span.
-  let mut out: [u8] = alloc(need, 0);
-  if plain && need == stop - first {
-    copy_range(inout out, 0, source, first, need);
-    return out;
-  }
+
+  let mut out: [u8] = alloc(0, 0);
+  arr_reserve(inout out, need);
   p = first;
-  let mut used: i64 = 0;
   while p < stop
-    invariant start <= p && p <= end && start <= stop && stop <= end
-    invariant end <= len(source) && end <= 16777216
-    invariant len(out) == need && need <= 3 * (end - start)
-    invariant 0 <= used && used <= need
+    invariant start <= p && p <= stop && stop <= end
+    invariant len(out) <= 3 * (p - start)
     decreases stop - p
   {
     let c: i64 = source[p];
-    if c < 128 && c != 92 {
-      if used >= need { return out; }
-      out[used] = c; used = used + 1; p = p + 1;
+    if c != 92 && (scanned || c < 128) {
+      arr_push(inout out, c);
+      p = p + 1;
     } else {
-    let s: Scalar = scalar(source, p, stop);
-    let v: i64 = s.value;
-    let w: i64 = width(v);
-    if used + w > need { return out; }
-    if w == 1 { out[used] = v; }
-    if w == 2 { out[used] = 192 + v / 64; out[used + 1] = 128 + v % 64; }
-    if w == 3 {
-      out[used] = 224 + v / 4096; out[used + 1] = 128 + (v / 64) % 64; out[used + 2] = 128 + v % 64;
-    }
-    if w == 4 {
-      out[used] = 240 + v / 262144; out[used + 1] = 128 + (v / 4096) % 64;
-      out[used + 2] = 128 + (v / 64) % 64; out[used + 3] = 128 + v % 64;
-    }
-    used = used + w;
-    p = s.next;
+      let s: Scalar = scalar(source, p, stop);
+      let v: i64 = s.value;
+      if v <= 127 {
+        arr_push(inout out, v);
+      } else if v <= 2047 {
+        arr_push(inout out, 192 + v / 64);
+        arr_push(inout out, 128 + v % 64);
+      } else if v <= 65535 {
+        arr_push(inout out, 224 + v / 4096);
+        arr_push(inout out, 128 + (v / 64) % 64);
+        arr_push(inout out, 128 + v % 64);
+      } else {
+        arr_push(inout out, 240 + v / 262144);
+        arr_push(inout out, 128 + (v / 4096) % 64);
+        arr_push(inout out, 128 + (v / 64) % 64);
+        arr_push(inout out, 128 + v % 64);
+      }
+      p = s.next;
     }
   }
   return out;
@@ -323,8 +294,9 @@ pub fn string_utf8_plain(source: [u8], start: i64, end: i64) -> [u8] ! alloc
   let mut stop: i64 = start;
   if end - start >= 2 { first = start + 1; stop = end - 1; }
   let need: i64 = stop - first;
-  let mut out: [u8] = alloc(need, 0);
-  copy_range(inout out, 0, source, first, need);
+  let mut out: [u8] = alloc(0, 0);
+  arr_reserve(inout out, need);
+  arr_append(inout out, source, first, need);
   return out;
 }
 
@@ -333,65 +305,7 @@ pub fn string_utf8_scanned(source: [u8], start: i64, end: i64) -> [u8] ! alloc
   ensures len(result) <= 3 * (end - start)
   ensures forall i in 0..len(result): (0 <= result[i] && result[i] <= 255)
 {
-  let mut p: i64 = start;
-  let mut stop: i64 = start;
-  if end - start >= 2 { p = start + 1; stop = end - 1; }
-  let first: i64 = p;
-  let mut need: i64 = 0;
-  let mut plain: bool = true;
-  while p < stop
-    invariant start <= first && first <= p && p <= end && start <= stop && stop <= end
-    invariant end <= len(source) && end <= 16777216
-    invariant 0 <= need && need <= 3 * (p - start)
-    decreases stop - p
-  {
-    let c: i64 = source[p];
-    if c != 92 { need = need + 1; p = p + 1; }
-    else {
-      plain = false;
-      let s: Scalar = scalar(source, p, stop);
-      need = need + width(s.value);
-      p = s.next;
-    }
-  }
-  // Without escapes, the decoded bytes are the raw UTF-8 span.
-  let mut out: [u8] = alloc(need, 0);
-  if plain && need == stop - first {
-    copy_range(inout out, 0, source, first, need);
-    return out;
-  }
-  p = first;
-  let mut used: i64 = 0;
-  while p < stop
-    invariant start <= p && p <= end && start <= stop && stop <= end
-    invariant end <= len(source) && end <= 16777216
-    invariant len(out) == need && need <= 3 * (end - start)
-    invariant 0 <= used && used <= need
-    decreases stop - p
-  {
-    let c: i64 = source[p];
-    if c != 92 {
-      if used >= need { return out; }
-      out[used] = c; used = used + 1; p = p + 1;
-    } else {
-      let s: Scalar = scalar(source, p, stop);
-      let v: i64 = s.value;
-      let w: i64 = width(v);
-      if used + w > need { return out; }
-      if w == 1 { out[used] = v; }
-      if w == 2 { out[used] = 192 + v / 64; out[used + 1] = 128 + v % 64; }
-      if w == 3 {
-        out[used] = 224 + v / 4096; out[used + 1] = 128 + (v / 64) % 64; out[used + 2] = 128 + v % 64;
-      }
-      if w == 4 {
-        out[used] = 240 + v / 262144; out[used + 1] = 128 + (v / 4096) % 64;
-        out[used + 2] = 128 + (v / 64) % 64; out[used + 3] = 128 + v % 64;
-      }
-      used = used + w;
-      p = s.next;
-    }
-  }
-  return out;
+  return decode_utf8(source, start, end, true);
 }
 
 pub fn string_text_scanned(source: [u8], start: i64, end: i64) -> Text ! alloc

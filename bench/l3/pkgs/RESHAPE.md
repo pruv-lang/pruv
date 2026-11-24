@@ -21,7 +21,7 @@ measured only for a package whose table shows zero differences.
 |---|---|---|
 | json | 2 (B-LLVM source copy, D32 publication checks; root tape copy TK) | no |
 | text | 3 (`trim`, `clip_bytes`: B-LLVM; `one_line`: SR) | no |
-| names | 1 (`project_name`: VC) | no |
+| names | 0 (`project_name` reshaped in step 2.2b) | no |
 | args | 1 (`build_args`: SR) | no |
 | tail | whole package (hand is UTF-8 `Vec<u8>`; decoder pick: FM) | no |
 | lex | 1 (`scan_string` block skip, kept by brief) | no |
@@ -63,7 +63,7 @@ before this rule and is withdrawn, along with its debt rows).
 | Pruv | Hand Rust | Types | Ownership | Loops | Allocations | Difference and reason |
 |---|---|---|---|---|---|---|
 | `alnum(x)` | `u8::is_ascii_alphanumeric` | `i64 -> bool` | — | none | none | = |
-| `project_name(data) -> [u8]` | `let mut out = Vec::with_capacity(n); for b in data { out.push(map(b)) }` | `[u8] -> [u8]` | owned result | one pass + copy loop | hand 1; Pruv 2 (scratch + exact copy) | Unchanged (HEAD). **VC**: no reserve-then-push `[u8]` (`alloc` fills; `truncate` adds a conditional shrink realloc, which the confirm audit showed returns a 2x buffer on some inputs). |
+| `project_name(data) -> [u8]` | `let mut out = Vec::with_capacity(n); for b in data { out.push(map(b)) }` | `[u8] -> [u8]` | owned result | one pass | 1 (`alloc(0,0)` + `arr_reserve(len(data))`, then `arr_push`) | **changed in 2.2b** (LB5 closed VC). = |
 | `valid_thread(s) -> bool` | `bytes().enumerate().all(..)` with early exit | `str -> bool` | borrow | one pass, early return | none | **changed**: early `return false` instead of an `ok` flag. = |
 
 ## args (`args/args.pruv`, hand: `s.split_terminator('\0')` into `Command::args`)
@@ -140,24 +140,46 @@ Status ids used here, besides the §4 gap ids:
 
 VC is closed: LB5 added non-filling growth (SPEC R-6g4-1/2/3/6). The step 2.2 rows that blamed VC are W.
 
+Step 2.2b (this revision) rewrote every **W** row toward **=**, **P**, **W-c** or a gap id. Two new gap ids
+(**IF**, **SB**, `docs/RUST_SHAPE_RESET.md` §4) came out of it; each was checked with a minimal file against
+`pruvc-rs` before the row was written. No performance was measured yet.
+
+**Open after the 2.2b audit.** The independent audit still reads these function-level differences as **W**. Until
+they close, the rows below are not zero-difference, so no performance cell may be taken for them:
+
+- J4 `decode_utf8`: the hand gets chars from `decode_utf16(units(raw))` and `encode_utf8`s each; Pruv counts and
+  pushes bytes directly (ASCII and, in `_scanned`, every non-escape byte). The HEAD bulk copy of escape-free runs
+  is gone, so long strings do more single pushes.
+- P1 `token_at`: the cursor matches; the error path is `Scan` → `Lexed` → `Descent` instead of one error type
+  passed with `?`.
+- P3 `append_record`: six `arr_push` per record; the hand does one `extend_from_slice(&[k, s, e, parent, 0, 0])`.
+- P5 `scan_records`: both start at 192 words; the hand reserves 6 words per record boundary, Pruv grows by
+  element push (HEAD's up-to-4,096-word presize for long input is gone).
+- P6 `record`/`container`: one recursion like the hand, but Pruv passes `initial`/`first` and both return
+  `Descent`; the hand returns `()` and the child count.
+- X5 `receive_grow`: the LF is still found byte by byte and the doubled length is zero-filled; the hand uses
+  `read_line`.
+- T2 `answer` and T7 `begin2`/`answer2`: a clipping temporary (`clip_bytes` / owned string) is still built only
+  to get a length, and `begin2`/`answer2` still copy byte by byte; the hand appends the clipped range directly.
+
 ## Status (function level)
 
 | Package | = | Changed in 2.2 | W | W-c | Gap id | P |
 |---|---|---|---|---|---|---|
-| jstr | J2, J2b, J3 (valid input of J6) | J3 `string_units` | J1, J4 | J5 copy variants | SL/S (J6), U (J8) | J5 `adapter_probe`, J6/J7 `InternalInvariant` |
-| parse | P0 | P0 (first pass) | P1-P6 | P8 | B-LLVM (P7) | P2 plain bit, P9 |
-| turns | T3 (operation only) | — | T1, T2, T4, T5, T6 growth, T8 | T7, T9, T10 | ABI / V (T0, T6) | — |
-| transport | X0 | X0 (first pass) | X3, X4, X5 | X1, X2, X6 | C (X3), FM (X7) | — |
+| jstr | J2, J2b, J3 | J3 `string_units`; 2.2b: J4 | J4 `decode_utf8` (audit, open) | J5 copy variants | B (J1), SL/S (J6), U (J8) | J5 `adapter_probe`, J6/J7 `InternalInvariant` |
+| parse | P0, P2, P4 | P0 (first pass); 2.2b: P1-P6 | P1, P3, P5, P6 (audit, open) | P8 | B-LLVM (P7) | P2 plain bit, P9 |
+| turns | T3 (operation only), T4, T5, T8, T2 `put_nl`/`begin` | 2.2b: T2 (part), T4, T5, T8 | T2 `answer`, T7 `begin2`/`answer2` (audit, open) | T1 `grow`, T7, T9, T10 | ABI / V (T0, T1 slabs, T6), IF (T6 growth), SB (T2 `put_str`/`write_piece`) | T1 `empty_buffer` |
+| transport | X0, X3, X4 | X0 (first pass); 2.2b: X3, X4, X5 | X5 LF scan and growth (audit, open) | X1, X2, X6 | FM (X7) | — |
 
 ## jstr (`jstr/jstr.pruv`)
 
 | # | Pruv | Hand Rust | Types | Ownership | Loops | Allocations | Id and reason |
 |---|---|---|---|---|---|---|---|
-| J1 | `hex`, `step`, `scalar`, `width` | `units(raw)` iterator (`hand_json.rs:335`); `hex4` exists only in `claude/handrust:333` and `grok/perf:309` | `[u8]`, `i64` | borrow | one escape or scalar per call | none | **W**: the hand has one stateful iterator; Pruv has free decode helpers returning a `Step` record. Same decode work per unit; an iterator-shaped `Step` cursor is writable. No hand function is one-to-one with these four. |
+| J1 | `hex`, `step`, `scalar`, `width` | `units(raw)` iterator (`hand_json.rs:335`); `hex4` exists only in `claude/handrust:333` and `grok/perf:309` | `[u8]`, `i64` | borrow | one escape or scalar per call | none | **B** (§4): the hand-shape cursor is a struct holding the borrowed bytes (`struct Units<'a> { raw: &'a [u8], pos }`); a Pruv struct with a `ref [u8]` field is `type/borrow_signature` ("borrowed type or from-list is not allowed here"). Left unchanged (free helpers returning `Step`, same decode work per unit). |
 | J2 | `ascii_equal(source,s,e,key)` | query mode 3: `text.is_ascii() && !body.contains('\\')` then slice `==`, else `units(raw).eq(text.encode_utf16())` | `[u8]`, `str` | borrow | one pass, early exit | none | **=** for the ASCII path. Precondition (not in the hand): `key` is ASCII; every caller checks `is_ascii(key)` first (`access.pruv:122`, `:212-217`, `:311`, `json/b_root.pruv:144`) and non-ASCII keys go through `units_equal`. Documented, not a behaviour bug (see note J2 below). |
 | J2b | `units_equal(source,s,e,key,klen)` | `units(raw).eq(key)` | `[u8]`, `[i64]` | borrow | one pass, early exit | none | **=** (slow path of mode 3; key already UTF-16). |
 | J3 | `string_units(source,s,e) -> [i64]` | mode 5: `units(raw).count()`, `Vec::with_capacity`, `extend(units(raw))` | `[u8] -> [i64]` | owned result | count pass, then decode + push pass | 1 exact (was 2: `alloc(e-s)` + exact copy) | **changed** (LB5 `arr_reserve` + `arr_push`). = now. |
-| J4 | `string_utf8`, `string_utf8_plain`, `string_utf8_scanned` | mode 6: `decode_utf16(units(raw))` length sum, then `encode_utf8` per char into `Vec<i64>` | Pruv `[u8]`, hand `Vec<i64>` | owned result | Pruv: 16-byte block scan, count pass, fill pass; hand: two decode passes | 1 each | **W**: reserve-then-push is writable now (was VC). The element type differs on purpose: consumers take `[u8]` bytes, the hand benchmark prints `i64` per byte; the plain-body `copy_range` matches the hand `extend_from_slice`. Rewrite pending (grok consumes `_scanned`, tested in the grok step). |
+| J4 | `string_utf8`, `string_utf8_plain`, `string_utf8_scanned` | mode 6: `decode_utf16(units(raw))` length sum, then `encode_utf8` per char into `Vec<i64>` | Pruv `[u8]`, hand `Vec<i64>` | owned result | count pass (no block skip), then `alloc(0,0)` + `arr_reserve(need)` and a decode pass that `arr_push`es each encoded scalar byte (one shared private `decode_utf8`); `_plain`: `arr_reserve` + one `arr_append` | 1 each | **changed in 2.2b**. = The element type differs on purpose (**W-c** in the hand benchmark only): consumers take `[u8]` bytes, the hand benchmark prints `i64` per byte. `_plain` matches the hand `extend_from_slice`. |
 | J5 | `string_text`, `string_text_scanned`, `string_text_plain`, `utf8_to_string`, `adapter_probe` | `String::from_utf8(vec)` (move); adapter `str_adapter` `to_owned` | `[u8] -> Text` | **copy** into a new `String` | validate + copy | Pruv 2 (bytes, then `String`); hand 1 | **W-c**: the `*_owned` variants are the hand shape; the copy variants stay until consumers switch (consumer steps). `adapter_probe` is **P** (adapter conformance probe, no hand counterpart). |
 | J6 | `string_text_owned`, `*_scanned_owned`, `*_plain_owned`, `owned_text(take data)` | `String::from_utf8(vec)` / adapter: empty `String` on invalid input | `[u8] -> str` / `Text` | move | validate pass | 1 | **=** for valid input. Two Pruv-only branches: `owned_text` returns `""` on invalid UTF-8 (the `str_adapter` contract, builds an empty `String`: **SL/S**), and `*_owned` return `Text::InternalInvariant` when `utf8_valid` fails (**P**: a returned value the caller handles, not a panic; unreachable on real paths, see note J6). |
 | J7 | `Text` enum (`Plain`/`InternalInvariant`) | `Result<String, _>` / `unwrap` | enum | — | — | none | **P**: the verifier cannot yet prove the parse-validated bytes are UTF-8 at this call, so the branch is a value, not `unreachable!()`. |
@@ -168,12 +190,12 @@ VC is closed: LB5 added non-filling growth (SPEC R-6g4-1/2/3/6). The step 2.2 ro
 | # | Pruv | Hand Rust | Types | Ownership | Loops | Allocations | Id and reason |
 |---|---|---|---|---|---|---|---|
 | P0 | `parse(input)` error path | `hand_json.rs:243`: on a grammar error (kind != 4) `from_utf8(&input[position..])` | `[u8]` | borrow | one rescan of the rest | none | **=** (changed in 2.2 first pass: was a full rescan on every failure). |
-| P1 | `Token`/`token_result`/`token_at`/`token_at_span` packets | `Parser { pos }` + `Result<_, Error>` returned from each method | record vs `&mut self` + `Result` | borrow | — | none | **W**: a recursive descent with `inout pos: i64` and a `Result`-like enum is writable (recursion needs `decreases`, SPEC §6e). Pending with P6. |
-| P2 | `utf8_width`, `string_token` | `Parser::string`: per byte, `from_utf8` on the slice | `[u8]` | borrow | Pruv: 16-byte block skip, each block read up to 4 times, plain bit tracked; hand: one byte loop | none | **W** (loop shape): the block skip is a Pruv speed choice, same as `lex::scan_string` (step 2.1); a single-read block loop is writable. The plain bit is **P** (feeds `string_utf8_plain`). |
-| P3 | `write_record`, `close_record` | `Parser::record`: `tape.extend_from_slice(&[k, s, e, parent, 0, 0])` | `[i64]` | `inout` (= `&mut Vec`) | — | none | **W**: Pruv writes 6 words by record id into a pre-sized tape; the hand pushes. Push form is `arr_push`/`arr_append` now. The sixth word's initial value differs by path (0, a negative frame number, or 1) and is closed later; no hand counterpart for that encoding. |
-| P4 | `comma_state`, `initial_state`, `value_state`, `value_increment`, internal error 18 | control flow of the recursive methods | `i64` state | — | — | none | **W** (follows from P6): explicit state integers stand in for the call stack; error 18 is an internal-state error the hand cannot reach. Disappears with a recursive rewrite. |
-| P5 | `first_slots`, `widened`, `regrown` | `Vec::with_capacity(32*WIDTH)`, `tape.reserve` (realloc growth) | `[i64]` | owned | copy loop | new buffer + copy | **W** (was VC): `arr_reserve` growth is writable. `regrown` grows the frame stack, not the tape (the first table said tape); the hand stack is the Rust call stack. |
-| P6 | `scan`, `scan_document` | `Parser::record` recursive descent (`container`/`string`/`number`/`literal`) | `[u8] -> JsonParse` | borrow input | Pruv: two flat loops (validate-only `scan`, tape-building `scan_document`), explicit stack starting at 8 frames; hand: one recursion | tape (+ stack) | **W**: iterative vs recursive descent. Recursion is allowed with `decreases` on every function in the cycle; nothing blocks the hand shape except the borrowed `Parser<'a>` field (B-LLVM, P7 below), which an `inout pos` / `input` parameter replaces. Rewrite pending (largest item of this step). |
+| P1 | `Token`/`token_result`/`token_at`/`token_at_span` packets | `Parser { pos }` + `Result<_, Error>` returned from each method | `enum Lexed { Value(kind, plain), Error(kind) }` + `inout pos` vs `&mut self` + `Result` | borrow | — | none | **changed in 2.2b**: `token_at(.., inout pos) -> Lexed`, `token_at_span` removed. = (`Parser<'a>`'s borrowed `input` field is a parameter, see P7). |
+| P2 | `utf8_width`, `string_token` | `Parser::string`: per byte, `from_utf8` on the slice | `[u8]` | borrow | one byte loop with `inout pos` (block skip removed in 2.2b) | none | **changed in 2.2b**. = The plain bit is **P** (feeds `string_utf8_plain`). |
+| P3 | `write_record`, `close_record` | `Parser::record`: `tape.extend_from_slice(&[k, s, e, parent, 0, 0])` | `[i64]` | `inout` (= `&mut Vec`) | — | none | **changed in 2.2b**: the recursive path (`scan`, `scan_document`) pushes each record with `append_record` (six `arr_push`), then patches end/next/count after the container returns like the hand. = `write_record`/`close_record` stay only for `scan_into` (P8, **W-c**). |
+| P4 | `comma_state`, `initial_state`, `value_state`, `value_increment`, internal error 18 | control flow of the recursive methods | `i64` state | — | — | none | **changed in 2.2b**: gone from the recursive path (`record`/`container` control flow, as the hand). = The state helpers remain only in `scan_into` (P8, **W-c**). |
+| P5 | `first_slots`, `widened`, `regrown` | `Vec::with_capacity(32*WIDTH)`, `tape.reserve` (realloc growth) | `[i64]` | owned | copy loop | new buffer + copy | **changed in 2.2b**: `first_slots`/`widened`/`regrown` removed; `scan_records` does `arr_reserve(32*6)` and the tape grows by `arr_push`; the frame stack is the call stack. = |
+| P6 | `scan`, `scan_document` | `Parser::record` recursive descent (`container`/`string`/`number`/`literal`) | `[u8] -> JsonParse` | borrow input | Pruv: two flat loops (validate-only `scan`, tape-building `scan_document`), explicit stack starting at 8 frames; hand: one recursion | tape (+ stack) | **changed in 2.2b**: one recursive descent, `record` ↔ `container` (`decreases 2*(129-depth)` / `+1`), returning `enum Descent { Done(children), Rejected(position, kind) }`, both entry points through `scan_records`. = Proof-only `pred fn local_records`/`parents_ok` carry the tape shape (**P**). |
 | P7 | `Parsed(JsonDocument{ source: copy(input), .. })` | `Document<'a>{ source: &'a [u8] }` | `[u8]` | **copy** | — | +1 | **B-LLVM** (same row as json step 2.1). Unchanged. |
 | P8 | `scan_into`, `span_reject`, `done` (`Pass`) | none (hand parses each line with `parse`) | `[i64]` scratch | `inout tape`, `inout stack` | — | none | **W-c**: reusable-scratch API used by `lines`/claude entries; the hand allocates per call. Kept until those consumers are reshaped. |
 | P9 | `failure`, `publication_ok` (`json::check_subtrees`) | none | `[i64]` | borrow | per record, after a successful parse | none | **P**: D32 proof-only publication check; `scan_document` does not yet prove the tape shape. Suffix-UTF-8 policy on failure matches the hand (P0). |
@@ -187,14 +209,14 @@ across the host boundary on both backends). Rows below list what differs inside 
 | # | Pruv | Hand Rust | Types | Ownership | Loops | Allocations | Id and reason |
 |---|---|---|---|---|---|---|---|
 | T0 | package API: `st[4]`, working slots `sl[200*8]`, `buf` 65584 bytes per slot, `Collected{turns:[i64],text:[u8],..}` | `Collector { turns: VecDeque<Turn> }`, `finish -> Vec<Turn>` | packets vs `Vec<struct>` | — | — | slabs vs per-turn `String` | **ABI / V**. The 200×8 table is the working slot array `sl` (first table said `Collected`). The modular ring (`% 200`) matches the Grok collector's bounded deque. |
-| T1 | `new_state`, `new_slots`, `new_buffer`, `empty_buffer`, `grow` | `VecDeque::new()`, per-turn `String::new()` | packets | owned | fill loops | up-front slabs; `grow` = new buffer + copy | **W**: `grow` can be `arr_reserve` (was refill + copy). The up-front slabs follow from T0. |
-| T2 | `put_str`, `put_nl`, `write_piece`, `begin` clip | `prompt.push_str(text)`, `clip` on the `&str` | `[u8]` | `inout` | Pruv per byte; `begin` clips through a temporary string | temp string in `begin` | **W**: bulk copy (`copy_range`/`arr_append`) and clipping on the byte range without the temporary are writable. |
+| T1 | `new_state`, `new_slots`, `new_buffer`, `empty_buffer`, `grow` | `VecDeque::new()`, per-turn `String::new()` | packets | owned | fill loops | up-front slabs; `grow` = new buffer + copy | Slabs: **ABI / V** (T0). `grow` is **W-c**: the in-place form (`take buf` + `resize(move buf, ..)`, or a private `inout` + `arr_reserve`, checked to verify) changes the `pub` signature its callers `opencode/convert.pruv:202` and grok `read::window` use (`buf = grow(buf, ..)`), so it moves with those consumers. `empty_buffer` is **P** (DB7 lazy first slab, no hand counterpart). |
+| T2 | `put_str`, `put_nl`, `write_piece`, `begin` clip | `prompt.push_str(text)`, `clip` on the `&str` | `[u8]` | `inout` | Pruv per byte; `begin` clips through a temporary string | `begin`: none (2.2b) | **changed in 2.2b**: `put_nl` is one `copy_span` of `"\n\n"`, `begin` clips with `clip_len` on the byte range (no temporary). = `put_str`/`write_piece` stay per byte: **SB** (§4), `copy_range(inout dst, at, src, ..)` with `src: str` is `type_mismatch` ("expected [u8], found str"). |
 | T3 | `skip_user`, `tool` | `skip_user`, `tool` methods (flag / count updates) | `inout st`, `sl` | — | — | none | **=** in operation; shape is ABI / V (T0). |
-| T4 | `plan` (203-word offset array) | `turns.iter().rev()` with a running byte total | `[i64]` | owned | one pass | one 203-word array | **W**: the offset array is an extra allocation; a two-pass sum without it is writable. |
-| T5 | `finish` | `Collector::finish(self) -> Vec<Turn>` (moves) | `Collected` | **copy** of `turns`/`text` at both returns (`turns.pruv:356`, `:391`) | — | +2 copies | **W**: `move turns, move text` as `finish2` does. Only caller `opencode/convert.pruv:211`; not changed in this step so the running opencode tests stay valid. |
-| T6 | `new_store`, `new_store_hint`, `reserve`, `move_bytes` (`Store` arena) | per-turn `String` allocation | `Store` | `inout` | compaction loop | arena + compaction | **ABI / V** consequence: one byte arena instead of owned `String`s. Growth inside `reserve` is **W** (`arr_reserve`). |
+| T4 | `plan` (203-word offset array) | `turns.iter().rev()` with a running byte total | `[i64]` | owned | one pass | none (2.2b) | **changed in 2.2b**: `plan` returns `Layout { kept, total, text_len }` (two passes, no array); the `finish*` writers walk a cursor down from `text_len` (`finish_inplace` up). = |
+| T5 | `finish` | `Collector::finish(self) -> Vec<Turn>` (moves) | `Collected` | **copy** of `turns`/`text` at both returns (`turns.pruv:356`, `:391`) | — | +2 copies | **changed in 2.2b**: returns `move turns`, `move text` (no copy). = No caller change was needed. |
+| T6 | `new_store`, `new_store_hint`, `reserve`, `move_bytes` (`Store` arena) | per-turn `String` allocation | `Store` | `inout` | compaction loop | arena + compaction | **ABI / V** consequence: one byte arena instead of owned `String`s. Growth inside `reserve` is **IF** (§4): `arr_reserve(inout bk.data, n)` is `type/inout_argument` ("an inout argument must be the whole name of a local array or an inout parameter"). Unchanged. |
 | T7 | `begin2`, `answer2`, `begin3`, `answer3`, `finish2` | same methods | packets + `Store` | `inout` | per byte (2) / span copy (3) | arena | **W-c**: store-backed variants for claude/qwen/grok; the per-byte copies in `*2` are W (as T2). |
-| T8 | `clip_span`, `put_nl_span`, `put_pad`, `write_span` | `clip` + `push_str` on a borrowed slice | `[u8]` | borrow / `inout` | per byte | none | **W**: bulk copy writable (as T2). |
+| T8 | `clip_span`, `put_nl_span`, `put_pad`, `write_span` | `clip` + `push_str` on a borrowed slice | `[u8]` | borrow / `inout` | `copy_span` (2.2b) | none | **changed in 2.2b**: `put_nl_span`, `put_pad` (one `copy_span` of the 4-byte pad scalar), `write_span` copy in bulk. = |
 | T9 | `new_refs`, `begin_ref`, `answer_ref` | none (hand owns `String`s) | `[i64]` refs | `inout` | — | one refs array | **W-c**: reference-only variant for a zero-copy consumer; no hand counterpart (hand copies). |
 | T10 | `text_layout`, `finish_into`, `finish_ref`, `finish_inplace` | `finish` then the consumer serialises `Vec<Turn>` | `Placed` | `inout wire` | per turn | none / turns array | **W-c**: writes straight into the consumer's output; the hand builds `Vec<Turn>` first. Consumer API. |
 
@@ -205,9 +227,9 @@ across the host boundary on both backends). Rows below list what differs inside 
 | X0 | `receive_grow` chunk read | `read_pipe`: `pipe.read(&mut buf)` into `[0; 65536]`, `buf[..n]` | `[u8]` | `inout chunk` | copy | none | **=** (changed in 2.2 first pass: per-byte copy → one `copy_range`). |
 | X1 | `live`, `stdin_closed`, `send` | `child.stdin.write_all` on a writer thread | `Loop` moved through | move | — | none | **W-c**: event-loop handle instead of threads. `send` takes a deadline `ms` with no hand counterpart (hand blocks). Shared API of mcp, codex, grok. |
 | X2 | `close`, `poll`, `expired` | `child.kill`/`wait`, `recv_timeout` | `Loop`, `inout st` | move | `expired`: at most 8 polls | none | **W-c** (same API as X1). The first table's `=` was wrong: the hand has no poll/expiry loop. |
-| X3 | `grow_line(line, cap)` | `read_line` into a reused `String` (`clear`, capacity kept) | `[u8]` | owned | copy | new buffer + `copy_range` | **W** (was VC): `arr_reserve` on the line. The first table's `line.reserve(1)` is not in the hand; the hand reuses one `String`. Keeping capacity across lines is **C** (§4). |
-| X4 | `receive_grow` event bytes | `line.as_bytes().to_vec()` once | `[u8]` | owned copy of `ev_bytes`, then `copy_range` | — | Pruv 2, hand 1 | **W**: one copy is writable. |
-| X5 | `receive_grow` framing | `BufReader::read_line` (newline kept, partial last line returned at EOF) | `[u8]` | `inout line` | Pruv per byte; hand bulk | growth only | **W** (loop shape; bulk scan + `arr_append` writable). Framing semantics differ on purpose: Pruv excludes the newline and drops/flags a partial last line at EOF per the `st` status; consumers rely on that (W-c to change). The first table's `memchr`/`Reader` struct are not in the hand. |
+| X3 | `grow_line(line, cap)` | `read_line` into a reused `String` (`clear`, capacity kept) | `[u8]` | `take line` (2.2b) | — | `let mut b = move line; b = resize(b, n, 0)`: one in-place `reserve_exact` + `resize` (Vec growth) | **changed in 2.2b**: `grow_line(take line, cap)`, the one caller `grok/rpc.pruv:750` passes `move aux` and assigns it back. = for the growth itself. The caller is not a line reader: `aux` holds the error-reply detail and the code bytes already written, which `resize` keeps (**W-c**: error-reply storage API; the hand Grok borrows the code range). |
+| X4 | `receive_grow` event bytes | `line.as_bytes().to_vec()` once | `[u8]` | `ev_proc_read_into(move q, slot, 1, inout chunk, inout got)` | — | 1 (=) | **changed in 2.2b**: reads the event bytes straight into `chunk`. = |
+| X5 | `receive_grow` framing | `BufReader::read_line` (newline kept, partial last line returned at EOF) | `[u8]` | `inout line` | scan to the newline (or cap), then one grow and one `copy_range` | growth only (one `resize` to the capped doubling size) | **changed in 2.2b**: bulk. = Framing semantics differ on purpose (**W-c**): Pruv excludes the newline and drops/flags a partial last line at EOF per the `st` status (-3 at cap kept); consumers rely on that. |
 | X6 | `st: [i64]` 5-slot state | locals of the reader thread | packet | `inout` | — | none | **W-c**: API of mcp/codex/grok; consumer step. |
 | X7 | stderr `tail_push(inout tb, inout ts, ..)` | ring tail per stream | packets | `inout` | — | none | **FM** (step 2.1 `tail` row). Unchanged. |
 
@@ -226,13 +248,16 @@ across the host boundary on both backends). Rows below list what differs inside 
 
 ## Gap rows found in step 2.2
 
-No new gap ids. One new status (W / W-c, defined above). VC is closed by LB5. Gap ids that remain:
+Step 2.2 added no gap ids. Step 2.2b added **IF** and **SB** and cites **B** for J1. VC is closed by LB5; **C** no
+longer blocks X3 (the caller reuses one buffer). Gap ids that remain:
 
 | Id | Hand Rust form | What Pruv cannot express | Functions left unchanged |
 |---|---|---|---|
 | B-LLVM | `Document<'a> { source: &'a [u8] }` | borrowed fields on LLVM | `parse` source copy (P7) |
+| B | `struct Units<'a> { raw: &'a [u8], pos }` iterator | a struct field of borrowed type (`type/borrow_signature`) | `jstr` decode helpers (J1) |
+| IF | `self.data.reserve(n)` on a struct field | `inout` argument that is a field of an `inout` struct (`type/inout_argument`) | `turns::reserve` growth (T6) |
+| SB | `dst[at..at+n].copy_from_slice(&s.as_bytes()[..n])` | a `str` as the byte source of `copy_range` (`type_mismatch`) | `turns::put_str`, `write_piece` (T2) |
 | ABI / V | `Collector { turns: VecDeque<Turn> }` returning `Vec<Turn>` | owned struct collections across the host boundary | `turns` package API (T0, T6) |
 | U | `&[u16]` keys | first-class UTF-16 view | `jstr` key arrays (J8) |
 | SL / S | `""` literal never allocated | `""` in a `str` result emits `String::from` | `jstr::owned_text` invalid-input branch (J6) |
-| C | reused `String` keeps capacity | capacity-keeping clear | `transport` line reuse (X3) |
 | FM | ring tail picked by stream | `inout` binding to a run-time chosen field | `transport` stderr tail (X7) |

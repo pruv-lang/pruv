@@ -95,15 +95,15 @@
     "compiler_commands": {
       "py": [
         "/Users/spica4345/Projects/pruv/.venv/bin/python",
-        "/Users/spica4345/Projects/.lair-worktrees/pruv-7fbddec2/pruvc/pruvc.py"
+        "/Users/spica4345/Projects/.lair-worktrees/pruv-15dda2f4/pruvc/pruvc.py"
       ],
       "rs": [
-        "/Users/spica4345/Projects/.lair-worktrees/pruv-7fbddec2/pruvc-rs/target/release/pruvc"
+        "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
       ]
     },
-    "rust_source_sha256": "0ff799d2c5103be42130adbe0bb2fc0b60711b26e3bcf1244e588c214d93ded9",
-    "rust_binary_sha256": "4a395e3cbae1a7333da6aa3ff2050cc6f36e945143656a47bbbc6eb1f1c3615e",
-    "python_source_sha256": "079d1ff5da77976e9ed2b8189841ceb3c0aa789a27a96408a2dbca3a5aed3b69"
+    "rust_source_sha256": "050b877420ee65df5bfe19778897a0e1d34bcabe7ffe60baf280fdd32d467225",
+    "rust_binary_sha256": "696fd243b0aec2f94acad8cb0ec62802079bd8212263dc62f57fb7f2cd9ae5f2",
+    "python_source_sha256": "1295fc12cc79de8a32cf5507887f9ed946f80cca413ee256d23b124a52ae7692"
   },
   "status": "passed",
   "generated": 20000,
@@ -117,5 +117,5 @@
     "mismatches": 0
   },
   "jsonl_steps": 44,
-  "wall_seconds": 126.629
+  "wall_seconds": 73.831
 }

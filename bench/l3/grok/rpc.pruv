@@ -747,7 +747,7 @@ fn on_reply(d: crate::json::JsonDocument, id: i64, inout ctl: [i64], inout aux: 
           invariant 0 <= k && k <= len(rj) && len(rj) <= 8388608 && 512 + k <= len(aux) && len(aux) <= 8389120 && len(ctl) == 16
           decreases len(rj) - k
         {
-          if 512 + k == len(aux) { aux = crate::transport::grow_line(aux, 8389120); }
+          if 512 + k == len(aux) { aux = crate::transport::grow_line(move aux, 8389120); }
           let c2: i64 = rj[k];
           aux[512 + k] = c2;
           k = k + 1;
