@@ -97,8 +97,7 @@ fn put_nl(inout dst: [u8], at: i64, n: i64) -> ()
   ensures forall k in 0..n: dst[at + k] == 10
   ensures forall k in 0..len(dst): (k < at || k >= at + n) ==> dst[k] == old(dst)[k]
 {
-  if n >= 1 { dst[at] = 10; }
-  if n == 2 { dst[at + 1] = 10; }
+  crate::bytes::copy_span(inout dst, at, "\n\n", 0, n);
 }
 
 // sep LF bytes followed by text[0..n) at dst[at..].
@@ -111,6 +110,27 @@ fn write_piece(inout dst: [u8], at: i64, sep: i64, text: str, n: i64) -> ()
 {
   put_nl(inout dst, at, sep);
   put_str(inout dst, at + sep, text, n);
+}
+
+fn clip_len(s: str, max: i64) -> i64
+  requires 0 <= max && max <= 100_000_000
+  requires len(s) <= 100_000_000
+  ensures result <= max
+  ensures result <= len(s)
+  ensures is_char_boundary(s, result)
+  ensures result == len(s) || (forall t in result+1..max+1: !is_char_boundary(s, t))
+  ensures len(s) <= max ==> result == len(s)
+{
+  let mut i: i64 = max;
+  if i > len(s) { i = len(s); }
+  while i > 0 && !is_char_boundary(s, i)
+    invariant 0 <= i && i <= len(s) && i <= max
+    invariant forall t in i+1..max+1: !is_char_boundary(s, t)
+    decreases i
+  {
+    i = i - 1;
+  }
+  return i;
 }
 
 // begin: new current draft in slot begun % 200 (evicting the oldest), prompt clipped to 32768 bytes (longest
@@ -143,9 +163,8 @@ pub fn begin(inout st: [i64], inout sl: [i64], inout buf: [u8], prompt: str, cre
 {
   let k: i64 = st[0];
   let w: i64 = k % 200;
-  let cp: str = crate::text::clip_bytes(prompt, 32768);
-  let n: i64 = len(cp);
-  put_str(inout buf, 65584 * w, cp, n);
+  let n: i64 = clip_len(prompt, 32768);
+  put_str(inout buf, 65584 * w, prompt, n);
   let mut has: i64 = 0;
   if len(created) == 24 {
     put_str(inout buf, 65584 * w + 65536, created, 24);
@@ -260,54 +279,44 @@ pub fn answer(inout st: [i64], inout sl: [i64], inout buf: [u8], text: str, at: 
   sl[8 * c + 4] = 1;
 }
 
-// Newest-first suffix selection over the ring. Result layout: [0] kept, [1] total prompt+reply bytes of the
-// kept drafts, [2+j] pre[j] = bytes (prompt+reply+stamps) of the j newest kept drafts, j in 0..=kept.
-// Drafts are scanned from the newest; the scan stops at the first draft that would push the total past
-// 2097152 (it is not skipped to fit older ones); at most min(begun,200) drafts exist in the ring.
-fn plan(st: [i64], sl: [i64]) -> [i64] ! alloc
+// First pass: choose the newest contiguous suffix and sum its text and stamp bytes.
+fn plan(st: [i64], sl: [i64]) -> Layout
   requires len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] <= 1000000000000
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-  ensures len(result) == 203
-  ensures 0 <= result[0] && result[0] <= 200 && result[0] <= st[0]
-  ensures 0 <= result[1] && result[1] <= 2097152
-  ensures result[1] == sum(j in 0..result[0]: sl[8 * ((st[0] - 1 - j) % 200)] + sl[8 * ((st[0] - 1 - j) % 200) + 1])
-  ensures (result[0] < st[0] && result[0] < 200) ==> result[1] + sl[8 * ((st[0] - 1 - result[0]) % 200)] + sl[8 * ((st[0] - 1 - result[0]) % 200) + 1] > 2097152
-  ensures result[2] == 0
-  ensures 0 <= result[2 + result[0]] && result[2 + result[0]] <= result[1] + 48 * result[0]
-  ensures result[2 + result[0]] <= 2106752
+  ensures 0 <= result.kept && result.kept <= 200 && result.kept <= st[0]
+  ensures 0 <= result.total && result.total <= 2097152
+  ensures result.total == sum(j in 0..result.kept: sl[8 * ((st[0] - 1 - j) % 200)] + sl[8 * ((st[0] - 1 - j) % 200) + 1])
+  ensures (result.kept < st[0] && result.kept < 200) ==> result.total + sl[8 * ((st[0] - 1 - result.kept) % 200)] + sl[8 * ((st[0] - 1 - result.kept) % 200) + 1] > 2097152
+  ensures 0 <= result.text_len && result.text_len <= result.total + 48 * result.kept
+  ensures result.text_len <= 2106752
 {
   let b: i64 = st[0];
   let mut avail: i64 = b;
   if avail > 200 { avail = 200; }
-  let mut pre: [i64] = alloc(203, 0);
+  let mut text_len: i64 = 0;
   let mut i: i64 = 0;
   let mut total: i64 = 0;
   while i < avail
     invariant 0 <= i && i <= avail && avail <= 200 && avail <= b && 0 <= b && b <= 1000000000000
     invariant (b <= 200 && avail == b) || (b > 200 && avail == 200)
-    invariant len(pre) == 203 && len(sl) == 1600 && len(st) == 4 && st[0] == b
+    invariant len(sl) == 1600 && len(st) == 4 && st[0] == b
     invariant 0 <= total && total <= 2097152
     invariant total == sum(j in 0..i: sl[8 * ((b - 1 - j) % 200)] + sl[8 * ((b - 1 - j) % 200) + 1])
-    invariant pre[2] == 0
-    invariant 0 <= pre[2 + i] && pre[2 + i] <= total + 48 * i
+    invariant 0 <= text_len && text_len <= total + 48 * i
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     decreases avail - i
   {
     let w: i64 = (b - 1 - i) % 200;
     let size: i64 = sl[8 * w] + sl[8 * w + 1];
     if total + size > 2097152 {
-      pre[0] = i;
-      pre[1] = total;
-      return pre;
+      return Layout { kept: i, total: total, text_len: text_len };
     }
     let need: i64 = size + 24 * sl[8 * w + 5] + 24 * sl[8 * w + 6];
     total = total + size;
-    pre[3 + i] = pre[2 + i] + need;
+    text_len = text_len + need;
     i = i + 1;
   }
-  pre[0] = i;
-  pre[1] = total;
-  return pre;
+  return Layout { kept: i, total: total, text_len: text_len };
 }
 
 // finish: newest contiguous suffix (at most 200 drafts, at most 2097152 actual prompt+reply bytes), published
@@ -327,20 +336,21 @@ pub fn finish(st: [i64], sl: [i64], buf: [u8], base: i64) -> Collected ! alloc
   ensures result.total == sum(j in 0..result.kept: sl[8 * ((st[0] - 1 - j) % 200)] + sl[8 * ((st[0] - 1 - j) % 200) + 1])
   ensures (result.kept < st[0] && result.kept < 200) ==> result.total + sl[8 * ((st[0] - 1 - result.kept) % 200)] + sl[8 * ((st[0] - 1 - result.kept) % 200) + 1] > 2097152
 {
-  let p: [i64] = plan(st, sl);
-  let kept: i64 = p[0];
+  let p: Layout = plan(st, sl);
+  let kept: i64 = p.kept;
   let b: i64 = st[0];
-  let tl: i64 = p[2 + kept];
+  let tl: i64 = p.text_len;
   let mut turns: [i64] = alloc(10 * kept, 0);
   let mut text: [u8] = alloc(tl, 0);
   let mut tr: i64 = 0;
   if kept < b { tr = 1; }
+  let mut cursor: i64 = tl;
   let mut j: i64 = 0;
   while j < kept
     invariant (tr == 0 && kept == b) || (tr == 1 && kept < b)
     invariant 0 <= j && j <= kept && 0 <= kept && kept <= 200 && kept <= b && 0 <= b && b <= 1000000000000
-    invariant len(turns) == 10 * kept && len(text) == tl && len(p) == 203 && len(sl) == 1600
-    invariant tl == p[2 + kept] && 0 <= tl && tl <= 2106752
+    invariant len(turns) == 10 * kept && len(text) == tl && len(sl) == 1600
+    invariant 0 <= cursor && cursor <= tl && tl <= 2106752
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     decreases kept - j
   {
@@ -349,13 +359,11 @@ pub fn finish(st: [i64], sl: [i64], buf: [u8], base: i64) -> Collected ! alloc
     let rlen: i64 = sl[8 * w + 1];
     let cp: i64 = sl[8 * w + 5];
     let dp: i64 = sl[8 * w + 6];
-    // plan lays draft j out at [tl - p[3+j], tl - p[2+j]) and the owner grew buf over every written slot;
-    // both checked here instead of proved through plan.
-    let e: i64 = p[3 + j];
-    if e < 0 || e > tl || plen + rlen + 24 * cp + 24 * dp > e || 65584 * w + 65584 > len(buf) {
-      return Collected { turns: copy(turns), text: copy(text), kept: kept, trimmed: tr, total: p[1] };
+    let e: i64 = cursor;
+    if plen + rlen + 24 * cp + 24 * dp > e || 65584 * w + 65584 > len(buf) {
+      return Collected { turns: move turns, text: move text, kept: kept, trimmed: tr, total: p.total };
     }
-    let lo: i64 = tl - e;
+    let lo: i64 = e - plen - rlen - 24 * cp - 24 * dp;
     let sb: i64 = 65584 * w;
     crate::bytes::copy_span(inout text, lo, buf, sb, sb + plen);
     crate::bytes::copy_span(inout text, lo + plen, buf, sb + 32768, sb + 32768 + rlen);
@@ -386,9 +394,10 @@ pub fn finish(st: [i64], sl: [i64], buf: [u8], base: i64) -> Collected ! alloc
     }
     turns[10 * t + 8] = sl[8 * w + 3];
     turns[10 * t + 9] = sl[8 * w + 4];
+    cursor = lo;
     j = j + 1;
   }
-  return Collected { turns: copy(turns), text: copy(text), kept: kept, trimmed: tr, total: p[1] };
+  return Collected { turns: move turns, text: move text, kept: kept, trimmed: tr, total: p.total };
 }
 
 
@@ -655,22 +664,23 @@ pub fn finish2(st: [i64], sl: [i64], inout bk: Store, base: i64) -> Collected ! 
   ensures result.total == sum(j in 0..result.kept: sl[8 * ((st[0] - 1 - j) % 200)] + sl[8 * ((st[0] - 1 - j) % 200) + 1])
   ensures (result.kept < st[0] && result.kept < 200) ==> result.total + sl[8 * ((st[0] - 1 - result.kept) % 200)] + sl[8 * ((st[0] - 1 - result.kept) % 200) + 1] > 2097152
 {
-  let p: [i64] = plan(st, sl);
-  let kept: i64 = p[0];
+  let p: Layout = plan(st, sl);
+  let kept: i64 = p.kept;
   let b: i64 = st[0];
-  let tl: i64 = p[2 + kept];
+  let tl: i64 = p.text_len;
   let mut turns: [i64] = alloc(10 * kept, 0);
   let mut text: [u8] = alloc(tl, 0);
   let mut tr: i64 = 0;
   if kept < b { tr = 1; }
   let dl: i64 = len(bk.data);
+  let mut cursor: i64 = tl;
   let mut j: i64 = 0;
   while j < kept
     invariant (tr == 0 && kept == b) || (tr == 1 && kept < b)
     invariant 0 <= j && j <= kept && 0 <= kept && kept <= 200 && kept <= b && 0 <= b && b <= 1000000000000
-    invariant len(turns) == 10 * kept && len(text) == tl && len(p) == 203 && len(sl) == 1600
+    invariant len(turns) == 10 * kept && len(text) == tl && len(sl) == 1600
     invariant len(bk.off) == 200 && len(bk.stamp) == 9600 && len(bk.data) == dl
-    invariant tl == p[2 + kept] && 0 <= tl && tl <= 2106752
+    invariant 0 <= cursor && cursor <= tl && tl <= 2106752
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     decreases kept - j
   {
@@ -680,12 +690,11 @@ pub fn finish2(st: [i64], sl: [i64], inout bk: Store, base: i64) -> Collected ! 
     let cp: i64 = sl[8 * w + 5];
     let dp: i64 = sl[8 * w + 6];
     let o: i64 = bk.off[w];
-    // plan lays draft j out at [tl - p[3+j], tl - p[2+j]); that and the record offset are checked here.
-    let e: i64 = p[3 + j];
-    if e < 0 || e > tl || plen + rlen + 24 * cp + 24 * dp > e || o < 0 || o > dl - plen - rlen {
-      return Collected { turns: move turns, text: move text, kept: kept, trimmed: tr, total: p[1] };
+    let e: i64 = cursor;
+    if plen + rlen + 24 * cp + 24 * dp > e || o < 0 || o > dl - plen - rlen {
+      return Collected { turns: move turns, text: move text, kept: kept, trimmed: tr, total: p.total };
     }
-    let lo: i64 = tl - e;
+    let lo: i64 = e - plen - rlen - 24 * cp - 24 * dp;
     crate::bytes::copy_span(inout text, lo, bk.data, o, o + plen + rlen);
     if cp == 1 {
       crate::bytes::copy_span(inout text, lo + plen + rlen, bk.stamp, 48 * w, 48 * w + 24);
@@ -714,9 +723,10 @@ pub fn finish2(st: [i64], sl: [i64], inout bk: Store, base: i64) -> Collected ! 
     }
     turns[10 * t + 8] = sl[8 * w + 3];
     turns[10 * t + 9] = sl[8 * w + 4];
+    cursor = lo;
     j = j + 1;
   }
-  return Collected { turns: move turns, text: move text, kept: kept, trimmed: tr, total: p[1] };
+  return Collected { turns: move turns, text: move text, kept: kept, trimmed: tr, total: p.total };
 }
 
 // The same suffix used by finish2, with its byte size including both stamps.
@@ -731,8 +741,7 @@ pub fn text_layout(st: [i64], sl: [i64]) -> Layout ! alloc
   ensures (result.kept < st[0] && result.kept < 200) ==> result.total + sl[8 * ((st[0] - 1 - result.kept) % 200)] + sl[8 * ((st[0] - 1 - result.kept) % 200) + 1] > 2097152
   ensures 0 <= result.text_len && result.text_len <= result.total + 48 * result.kept && result.text_len <= 2106752
 {
-  let p: [i64] = plan(st, sl);
-  return Layout { kept: p[0], total: p[1], text_len: p[2 + p[0]] };
+  return plan(st, sl);
 }
 
 pub struct Placed { turns: [i64], kept: i64, trimmed: i64, total: i64, text_len: i64, ok: bool }
@@ -756,24 +765,25 @@ pub fn finish_into(st: [i64], sl: [i64], bk: Store, base: i64, inout wire: [u8],
   ensures result.total == sum(j in 0..result.kept: sl[8 * ((st[0] - 1 - j) % 200)] + sl[8 * ((st[0] - 1 - j) % 200) + 1])
   ensures (result.kept < st[0] && result.kept < 200) ==> result.total + sl[8 * ((st[0] - 1 - result.kept) % 200)] + sl[8 * ((st[0] - 1 - result.kept) % 200) + 1] > 2097152
 {
-  let p: [i64] = plan(st, sl);
-  let kept: i64 = p[0];
+  let p: Layout = plan(st, sl);
+  let kept: i64 = p.kept;
   let b: i64 = st[0];
-  let tl: i64 = p[2 + kept];
+  let tl: i64 = p.text_len;
   let mut turns: [i64] = alloc(10 * kept, 0);
   let mut tr: i64 = 0;
   if kept < b { tr = 1; }
   if at < 0 || at > len(wire) || tl > len(wire) - at {
-    return Placed { turns: move turns, kept: kept, trimmed: tr, total: p[1], text_len: tl, ok: false };
+    return Placed { turns: move turns, kept: kept, trimmed: tr, total: p.total, text_len: tl, ok: false };
   }
   let dl: i64 = len(bk.data);
+  let mut cursor: i64 = tl;
   let mut j: i64 = 0;
   while j < kept
     invariant (tr == 0 && kept == b) || (tr == 1 && kept < b)
     invariant 0 <= j && j <= kept && 0 <= kept && kept <= 200 && kept <= b && 0 <= b && b <= 1000000000000
-    invariant len(turns) == 10 * kept && 0 <= at && at <= len(wire) && tl <= len(wire) - at && len(wire) == len(old(wire)) && len(p) == 203 && len(sl) == 1600
+    invariant len(turns) == 10 * kept && 0 <= at && at <= len(wire) && tl <= len(wire) - at && len(wire) == len(old(wire)) && len(sl) == 1600
     invariant len(bk.off) == 200 && len(bk.stamp) == 9600 && len(bk.data) == dl
-    invariant tl == p[2 + kept] && 0 <= tl && tl <= 2106752
+    invariant 0 <= cursor && cursor <= tl && tl <= 2106752
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     invariant forall k in 0..len(wire): ((k < at || k >= at + tl) ==> wire[k] == old(wire)[k])
     decreases kept - j
@@ -784,12 +794,11 @@ pub fn finish_into(st: [i64], sl: [i64], bk: Store, base: i64, inout wire: [u8],
     let cp: i64 = sl[8 * w + 5];
     let dp: i64 = sl[8 * w + 6];
     let o: i64 = bk.off[w];
-    // plan lays draft j out at [tl - p[3+j], tl - p[2+j]); that and the record offset are checked here.
-    let e: i64 = p[3 + j];
-    if e < 0 || e > tl || plen + rlen + 24 * cp + 24 * dp > e || o < 0 || o > dl - plen - rlen {
-      return Placed { turns: move turns, kept: kept, trimmed: tr, total: p[1], text_len: tl, ok: false };
+    let e: i64 = cursor;
+    if plen + rlen + 24 * cp + 24 * dp > e || o < 0 || o > dl - plen - rlen {
+      return Placed { turns: move turns, kept: kept, trimmed: tr, total: p.total, text_len: tl, ok: false };
     }
-    let lo: i64 = tl - e;
+    let lo: i64 = e - plen - rlen - 24 * cp - 24 * dp;
     crate::bytes::copy_span(inout wire, at + lo, bk.data, o, o + plen + rlen);
     if cp == 1 {
       crate::bytes::copy_span(inout wire, at + lo + plen + rlen, bk.stamp, 48 * w, 48 * w + 24);
@@ -818,9 +827,10 @@ pub fn finish_into(st: [i64], sl: [i64], bk: Store, base: i64, inout wire: [u8],
     }
     turns[10 * t + 8] = sl[8 * w + 3];
     turns[10 * t + 9] = sl[8 * w + 4];
+    cursor = lo;
     j = j + 1;
   }
-  return Placed { turns: move turns, kept: kept, trimmed: tr, total: p[1], text_len: tl, ok: true };
+  return Placed { turns: move turns, kept: kept, trimmed: tr, total: p.total, text_len: tl, ok: true };
 }
 
 // Span forms (DB32): begin2 / answer2 over a byte span src[lo..lo+n) instead of a str, so a caller that holds the
@@ -868,10 +878,7 @@ fn put_pad(inout dst: [u8], p: i64) -> ()
   ensures dst[p] == 240 && dst[p + 1] == 144 && dst[p + 2] == 128 && dst[p + 3] == 128
   ensures forall k in 0..len(dst): (k < p || k >= p + 4) ==> dst[k] == old(dst)[k]
 {
-  dst[p] = 240;
-  dst[p + 1] = 144;
-  dst[p + 2] = 128;
-  dst[p + 3] = 128;
+  crate::bytes::copy_span(inout dst, p, "𐀀", 0, 4);
 }
 
 // sep LF bytes, src[lo..lo+n), then pad bytes of U+10000 (pad 0 or 4) at dst[at..].
@@ -1108,24 +1115,25 @@ pub fn finish_ref(st: [i64], sl: [i64], rf: [i64], src: [u8], base: i64, inout w
   ensures result.total == sum(j in 0..result.kept: sl[8 * ((st[0] - 1 - j) % 200)] + sl[8 * ((st[0] - 1 - j) % 200) + 1])
   ensures (result.kept < st[0] && result.kept < 200) ==> result.total + sl[8 * ((st[0] - 1 - result.kept) % 200)] + sl[8 * ((st[0] - 1 - result.kept) % 200) + 1] > 2097152
 {
-  let p: [i64] = plan(st, sl);
-  let kept: i64 = p[0];
+  let p: Layout = plan(st, sl);
+  let kept: i64 = p.kept;
   let b: i64 = st[0];
-  let tl: i64 = p[2 + kept];
+  let tl: i64 = p.text_len;
   let mut turns: [i64] = alloc(10 * kept, 0);
   let mut tr: i64 = 0;
   if kept < b { tr = 1; }
   if at < 0 || at > len(wire) || tl > len(wire) - at {
-    return Placed { turns: move turns, kept: kept, trimmed: tr, total: p[1], text_len: tl, ok: false };
+    return Placed { turns: move turns, kept: kept, trimmed: tr, total: p.total, text_len: tl, ok: false };
   }
   let dl: i64 = len(src);
+  let mut cursor: i64 = tl;
   let mut j: i64 = 0;
   while j < kept
     invariant (tr == 0 && kept == b) || (tr == 1 && kept < b)
     invariant 0 <= j && j <= kept && 0 <= kept && kept <= 200 && kept <= b && 0 <= b && b <= 1000000000000
-    invariant len(turns) == 10 * kept && 0 <= at && at <= len(wire) && tl <= len(wire) - at && len(wire) == len(old(wire)) && len(p) == 203 && len(sl) == 1600
+    invariant len(turns) == 10 * kept && 0 <= at && at <= len(wire) && tl <= len(wire) - at && len(wire) == len(old(wire)) && len(sl) == 1600
     invariant len(rf) == 800 && len(src) == dl
-    invariant tl == p[2 + kept] && 0 <= tl && tl <= 2106752
+    invariant 0 <= cursor && cursor <= tl && tl <= 2106752
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     invariant forall k in 0..len(wire): ((k < at || k >= at + tl) ==> wire[k] == old(wire)[k])
     decreases kept - j
@@ -1139,14 +1147,14 @@ pub fn finish_ref(st: [i64], sl: [i64], rf: [i64], src: [u8], base: i64, inout w
     let ro: i64 = rf[4 * w + 1];
     let co: i64 = rf[4 * w + 2];
     let dc: i64 = rf[4 * w + 3];
-    let e: i64 = p[3 + j];
-    if e < 0 || e > tl || plen + rlen + 24 * cp + 24 * dp > e || po < 0 || po > dl - plen
+    let e: i64 = cursor;
+    if plen + rlen + 24 * cp + 24 * dp > e || po < 0 || po > dl - plen
       || ((rlen != 0 || ro != -1) && (ro < 0 || ro > dl - rlen))
       || (cp == 1 && (co < 0 || co > dl - 24))
       || (dp == 1 && (dc < 0 || dc > dl - 24)) {
-      return Placed { turns: move turns, kept: kept, trimmed: tr, total: p[1], text_len: tl, ok: false };
+      return Placed { turns: move turns, kept: kept, trimmed: tr, total: p.total, text_len: tl, ok: false };
     }
-    let lo: i64 = tl - e;
+    let lo: i64 = e - plen - rlen - 24 * cp - 24 * dp;
     crate::bytes::copy_span(inout wire, at + lo, src, po, po + plen);
     if rlen > 0 {
       crate::bytes::copy_span(inout wire, at + lo + plen, src, ro, ro + rlen);
@@ -1178,9 +1186,10 @@ pub fn finish_ref(st: [i64], sl: [i64], rf: [i64], src: [u8], base: i64, inout w
     }
     turns[10 * t + 8] = sl[8 * w + 3];
     turns[10 * t + 9] = sl[8 * w + 4];
+    cursor = lo;
     j = j + 1;
   }
-  return Placed { turns: move turns, kept: kept, trimmed: tr, total: p[1], text_len: tl, ok: true };
+  return Placed { turns: move turns, kept: kept, trimmed: tr, total: p.total, text_len: tl, ok: true };
 }
 
 
@@ -1209,24 +1218,25 @@ pub fn finish_inplace(st: [i64], sl: [i64], rf: [i64], inout buf: [u8], base: i6
   ensures result.total == sum(j in 0..result.kept: sl[8 * ((st[0] - 1 - j) % 200)] + sl[8 * ((st[0] - 1 - j) % 200) + 1])
   ensures (result.kept < st[0] && result.kept < 200) ==> result.total + sl[8 * ((st[0] - 1 - result.kept) % 200)] + sl[8 * ((st[0] - 1 - result.kept) % 200) + 1] > 2097152
 {
-  let p: [i64] = plan(st, sl);
-  let kept: i64 = p[0];
+  let p: Layout = plan(st, sl);
+  let kept: i64 = p.kept;
   let b: i64 = st[0];
-  let tl: i64 = p[2 + kept];
+  let tl: i64 = p.text_len;
   let mut turns: [i64] = alloc(10 * kept, 0);
   let mut tr: i64 = 0;
   if kept < b { tr = 1; }
   if at < 0 || at > len(buf) || tl > len(buf) - at {
-    return Placed { turns: move turns, kept: kept, trimmed: tr, total: p[1], text_len: tl, ok: false };
+    return Placed { turns: move turns, kept: kept, trimmed: tr, total: p.total, text_len: tl, ok: false };
   }
   let dl: i64 = len(buf);
+  let mut cursor: i64 = 0;
   let mut j: i64 = 0;
   while j < kept
     invariant (tr == 0 && kept == b) || (tr == 1 && kept < b)
     invariant 0 <= j && j <= kept && 0 <= kept && kept <= 200 && kept <= b && 0 <= b && b <= 1000000000000
-    invariant len(turns) == 10 * kept && 0 <= at && at <= dl && tl <= dl - at && len(buf) == dl && dl == len(old(buf)) && len(p) == 203 && len(sl) == 1600
+    invariant len(turns) == 10 * kept && 0 <= at && at <= dl && tl <= dl - at && len(buf) == dl && dl == len(old(buf)) && len(sl) == 1600
     invariant len(rf) == 800
-    invariant tl == p[2 + kept] && 0 <= tl && tl <= 2106752
+    invariant 0 <= cursor && cursor <= tl && tl <= 2106752
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     decreases kept - j
   {
@@ -1239,13 +1249,13 @@ pub fn finish_inplace(st: [i64], sl: [i64], rf: [i64], inout buf: [u8], base: i6
     let ro: i64 = rf[4 * w + 1];
     let co: i64 = rf[4 * w + 2];
     let dc: i64 = rf[4 * w + 3];
-    let lo: i64 = p[2 + j];
-    let e: i64 = p[3 + j];
-    if lo < 0 || lo > tl || e < lo || e > tl || lo + plen + rlen + 24 * cp + 24 * dp > e || po < 0 || po > dl - plen
+    let lo: i64 = cursor;
+    let e: i64 = lo + plen + rlen + 24 * cp + 24 * dp;
+    if e > tl || po < 0 || po > dl - plen
       || ((rlen != 0 || ro != -1) && (ro < 0 || ro > dl - rlen))
       || (cp == 1 && (co < 0 || co > dl - 24))
       || (dp == 1 && (dc < 0 || dc > dl - 24)) {
-      return Placed { turns: move turns, kept: kept, trimmed: tr, total: p[1], text_len: tl, ok: false };
+      return Placed { turns: move turns, kept: kept, trimmed: tr, total: p.total, text_len: tl, ok: false };
     }
     copy_within(inout buf, at + lo, po, plen);
     if rlen > 0 {
@@ -1278,7 +1288,8 @@ pub fn finish_inplace(st: [i64], sl: [i64], rf: [i64], inout buf: [u8], base: i6
     }
     turns[10 * t + 8] = sl[8 * w + 3];
     turns[10 * t + 9] = sl[8 * w + 4];
+    cursor = e;
     j = j + 1;
   }
-  return Placed { turns: move turns, kept: kept, trimmed: tr, total: p[1], text_len: tl, ok: true };
+  return Placed { turns: move turns, kept: kept, trimmed: tr, total: p.total, text_len: tl, ok: true };
 }
