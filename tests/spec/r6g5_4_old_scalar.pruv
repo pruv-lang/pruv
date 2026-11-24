@@ -1,0 +1,40 @@
+// spec: R-6g5-4 accept
+fn bump(inout x: i64) -> ()
+  requires x < 1000
+  ensures x == old(x) + 1
+{
+  x = x + 1;
+}
+fn add_up(inout acc: i64, n: i64) -> ()
+  requires 0 <= n && n <= 100 && 0 <= acc && acc <= 1000
+  ensures acc == old(acc) + n
+{
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n
+    invariant acc == old(acc) + i
+    decreases n - i
+  {
+    acc = acc + 1;
+    i = i + 1;
+  }
+}
+fn flip(inout f: bool) -> ()
+  ensures f == !old(f)
+{
+  f = !f;
+}
+pub fn checksum() -> i64 {
+  let mut p: i64 = 5;
+  bump(inout p);
+  assert p == 6;
+  add_up(inout p, 30);
+  assert p == 36;
+  let mut f: bool = false;
+  flip(inout f);
+  assert f;
+  if f {
+    return p * 100 + 7;
+  }
+  return 0;
+}

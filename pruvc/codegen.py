@@ -3456,6 +3456,13 @@ class Gen:
             return "&mut %s[..]" % root.name
         return s.mut_ref(root.name)
 
+    def byte_bind(s, name, e):
+        """LB6 SB (R-6g5-1): bind the source of a [u8] copy; a str is bound first (so a temporary String
+        lives to the end of the block) and then shadowed by its bytes"""
+        if e.ty == STR and not isinstance(e, StrLit):
+            return "let %s = %s; let %s = %s.as_bytes(); " % (name, s.arr_ref(e), name, name)
+        return "let %s = %s; " % (name, s.arr_ref(e))
+
     def arr_ref(s, e):
         """an array expression used as a borrowed slice; a string literal is borrowed as its `&'static str` (no alloc)"""
         if isinstance(e, StrLit):
@@ -3773,19 +3780,19 @@ class Gen:
                 dest = a[0].expr
                 if n == "arr_append":
                     place = s.e(dest)
-                    src, start, cnt = s.arr_ref(a[1]), s.e(a[2]), s.e(a[3])
-                    head = ("{ let pruv_src = %s; let pruv_s: i64 = %s; let pruv_n: i64 = %s; " % (src, start, cnt))
+                    src, start, cnt = s.byte_bind("pruv_src", a[1]), s.e(a[2]), s.e(a[3])
+                    head = ("{ %slet pruv_s: i64 = %s; let pruv_n: i64 = %s; " % (src, start, cnt))
                     if not s.verified:
                         head += ("if pruv_s < 0 || pruv_n < 0 || pruv_s > (pruv_src.len() as i64) - pruv_n "
                                  "{ pruv_oob(pruv_s, pruv_src.len()) } "
                                  'if pruv_n > (1i64 << 40) - (%s.len() as i64) { pruv_ovf("arr_append length exceeds 2^40") } ' % place)
                     span = "(pruv_s as usize)..((pruv_s + pruv_n) as usize)"
                     tail = ("unsafe { pruv_src.get_unchecked(%s) }" if s.verified else "&pruv_src[%s]") % span
-                    if dest.ty == a[1].ty:
+                    if dest.ty == a[1].ty or a[1].ty == STR:   # LB6 SB: a str source appends its bytes
                         return "%s%s.extend_from_slice(%s) }" % (head, place, tail)
                     return "%s%s.extend((%s).iter().map(|&x| x as i64)) }" % (head, place, tail)
-                place = dest.name
-                value = s.e(a[1])
+                place = s.e(dest)     # LB6 IF: a struct field place is pushed in place
+                value = s.e(a[1]) if len(a) == 2 else None
                 if n == "arr_reserve":
                     check = ("" if s.verified else
                              'if pruv_n < 0 || pruv_n > (1i64 << 40) { pruv_ovf("arr_reserve length outside 0..2^40") } ')
@@ -3794,12 +3801,36 @@ class Gen:
                 vty = "bool" if is_bool_array(dest.ty) else "i64"
                 layout = "u8" if u8 else s.layout(dest)
                 elem = "pruv_v" if layout == "i64" or vty == "bool" else "pruv_v as " + layout
+                if len(a) > 2:  # LB6 SX (R-6g5-5): k values in one step, from a stack array as hand Rust does
+                    if s.verified:
+                        vals = [s.e(v) if elem == "pruv_v" else "(%s) as %s" % (s.e(v), layout) for v in a[1:]]
+                        return "%s.extend_from_slice(&[%s])" % (place, ", ".join(vals))
+                    head = "".join("let pruv_v%d: %s = %s; " % (i, vty, s.e(v)) for i, v in enumerate(a[1:]))
+                    check = 'if %s.len() > (1usize << 40) - %d { pruv_ovf("arr_push length exceeds 2^40") } ' % (place, len(a) - 1)
+                    if u8:
+                        check += "".join("if pruv_v%d < 0 || pruv_v%d > 255 { pruv_elem_oor(pruv_v%d) } " % (i, i, i)
+                                         for i in range(len(a) - 1))
+                    vals = [elem.replace("pruv_v", "pruv_v%d" % i) for i in range(len(a) - 1)]
+                    return "{ %s%s%s.extend_from_slice(&[%s]) }" % (head, check, place, ", ".join(vals))
                 check = ""
                 if not s.verified:
                     check = 'if %s.len() >= (1usize << 40) { pruv_ovf("arr_push length exceeds 2^40") } ' % place
                     if u8:
                         check += "if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } "
                 return "{ let pruv_v: %s = %s; %s%s.push(%s) }" % (vty, value, check, place, elem)
+            if n == "find_byte":  # LB6 MC (R-6g5-3): the first b in a[lo..hi], or hi; source order a, b, lo, hi
+                head = ("{ %slet pruv_b: i64 = %s; let pruv_lo: i64 = %s; let pruv_hi: i64 = %s; "
+                        % (s.byte_bind("pruv_fa", a[0]), s.e(a[1]), s.e(a[2]), s.e(a[3])))
+                rng = "(pruv_lo as usize)..(pruv_hi as usize)"
+                if s.verified:
+                    sl = "unsafe { pruv_fa.get_unchecked(%s) }" % rng
+                else:
+                    head += ("if pruv_lo < 0 || pruv_lo > pruv_hi || pruv_hi > (pruv_fa.len() as i64) "
+                             "{ pruv_oob(pruv_hi, pruv_fa.len()) } "
+                             "if pruv_b < 0 || pruv_b > 255 { panic!(\"pruv: element out of range: {} (u8 0..=255)\", pruv_b) } ")
+                    sl = "pruv_fa[%s]" % rng
+                return ("%smatch %s.iter().position(|&pruv_x| pruv_x == pruv_b as u8) "
+                        "{ Some(pruv_p) => pruv_lo + pruv_p as i64, None => pruv_hi } }" % (head, sl))
             if n == "eq_range":  # L3-10: eq_range: slice equality of a[i..i+n] and b[j..j+n]
                 # the five arguments are bound once each, in source order a, i, b, j, n (SPEC.md eq_range)
                 head = ("{ let pruv_ea = %s; let pruv_i: i64 = %s; let pruv_eb = %s; let pruv_j: i64 = %s; "
@@ -3835,8 +3866,8 @@ class Gen:
                                  % (name, name, name, name))
                     return ("%s%s.copy_within((pruv_j as usize)..((pruv_j + pruv_n) as usize), pruv_i as usize); }"
                             % (head, name))
-                head = ("{ let pruv_i: i64 = %s; let pruv_cs = %s; let pruv_j: i64 = %s; let pruv_n: i64 = %s; "
-                        % (s.e(a[1]), s.arr_ref(a[2]), s.e(a[3]), s.e(a[4])))
+                head = ("{ let pruv_i: i64 = %s; %slet pruv_j: i64 = %s; let pruv_n: i64 = %s; "
+                        % (s.e(a[1]), s.byte_bind("pruv_cs", a[2]), s.e(a[3]), s.e(a[4])))
                 ri = "(pruv_i as usize)..((pruv_i + pruv_n) as usize)"
                 rj = "(pruv_j as usize)..((pruv_j + pruv_n) as usize)"
                 if s.verified:

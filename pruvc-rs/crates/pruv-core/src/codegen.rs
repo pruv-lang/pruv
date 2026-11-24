@@ -4463,6 +4463,16 @@ pruv_hi <= (pruv_b.len() as i128) && \
     }
 
     /// An array expression used as a borrowed slice
+    /// LB6 SB (R-6g5-1): the source of a [u8] copy; a str is borrowed as its bytes.
+    /// A str is bound first (so a temporary String lives to the end of the block), then shadowed by its bytes.
+    fn byte_bind(&mut self, name: &str, e: &Expr) -> R<String> {
+        let r = self.arr_ref(e)?;
+        if !matches!(e, Expr::StrLit(_)) && crate::check::expr_ty(e).as_deref() == Some("str") {
+            return Ok(format!("let {name} = {r}; let {name} = {name}.as_bytes(); "));
+        }
+        Ok(format!("let {name} = {r}; "))
+    }
+
     fn arr_ref(&mut self, e: &Expr) -> R<String> {
         if let Expr::StrLit(x) = e {
             if x.ty.as_deref() == Some("array_u8") {
@@ -5098,6 +5108,28 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     let result = self.resize_expr(e, a, None)?;
                     return Ok(self.cost_buffer(result));
                 }
+                if n == "find_byte" {
+                    // LB6 MC (R-6g5-3): the first b in a[lo..hi], or hi; source order a, b, lo, hi (codegen.py)
+                    let a0 = self.byte_bind("pruv_fa", arg(a, 0)?)?;
+                    let b0 = self.e(arg(a, 1)?)?;
+                    let lo0 = self.e(arg(a, 2)?)?;
+                    let hi0 = self.e(arg(a, 3)?)?;
+                    let mut head = format!(
+                        "{{ {}let pruv_b: i64 = {}; let pruv_lo: i64 = {}; let pruv_hi: i64 = {}; ",
+                        a0, b0, lo0, hi0
+                    );
+                    let rng = "(pruv_lo as usize)..(pruv_hi as usize)";
+                    let sl = if self.verified {
+                        format!("unsafe {{ pruv_fa.get_unchecked({}) }}", rng)
+                    } else {
+                        head.push_str("if pruv_lo < 0 || pruv_lo > pruv_hi || pruv_hi > (pruv_fa.len() as i64) { pruv_oob(pruv_hi, pruv_fa.len()) } if pruv_b < 0 || pruv_b > 255 { panic!(\"pruv: element out of range: {} (u8 0..=255)\", pruv_b) } ");
+                        format!("pruv_fa[{}]", rng)
+                    };
+                    return Ok(format!(
+                        "{}match {}.iter().position(|&pruv_x| pruv_x == pruv_b as u8) {{ Some(pruv_p) => pruv_lo + pruv_p as i64, None => pruv_hi }} }}",
+                        head, sl
+                    ));
+                }
                 if n == "eq_range" {
                     // L3-10: eq_range: slice equality of a[i..i+n] and b[j..j+n]; unchecked slices when verified
                     // the five arguments are bound once each, in source order a, i, b, j, n (SPEC.md eq_range)
@@ -5125,10 +5157,10 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     let Expr::InoutArg(dest) = arg(a, 0)? else { return Err("missing inout place".into()); };
                     if n == "arr_append" {
                         let place = self.e(&dest.expr)?;
-                        let src = self.arr_ref(arg(a, 1)?)?;
+                        let src = self.byte_bind("pruv_src", arg(a, 1)?)?;
                         let start = self.e(arg(a, 2)?)?;
                         let cnt = self.e(arg(a, 3)?)?;
-                        let mut head = format!("{{ let pruv_src = {src}; let pruv_s: i64 = {start}; let pruv_n: i64 = {cnt}; ");
+                        let mut head = format!("{{ {src}let pruv_s: i64 = {start}; let pruv_n: i64 = {cnt}; ");
                         if !self.verified {
                             head.push_str(&format!(concat!(
                                 "if pruv_s < 0 || pruv_n < 0 || pruv_s > (pruv_src.len() as i64) - pruv_n ",
@@ -5142,14 +5174,14 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         } else {
                             format!("&pruv_src[{span}]")
                         };
-                        if dest.ty.as_deref() == crate::check::expr_ty(arg(a, 1)?).as_deref() {
+                        let src_ty = crate::check::expr_ty(arg(a, 1)?);
+                        if dest.ty.as_deref() == src_ty.as_deref() || src_ty.as_deref() == Some("str") {   // LB6 SB
                             return Ok(format!("{head}{place}.extend_from_slice({tail}) }}"));
                         }
                         return Ok(format!("{head}{place}.extend(({tail}).iter().map(|&x| x as i64)) }}"));
                     }
-                    let Expr::Var(dest) = dest.expr.as_ref() else { return Err("missing array binding".into()); };
-                    let place = &dest.name;
-                    let value = self.e(arg(a, 1)?)?;
+                    let place = &self.e(&dest.expr)?;     // LB6 IF (R-6g5-2): a field place grows in place
+                    let value = if a.len() == 2 { self.e(arg(a, 1)?)? } else { String::new() };
                     if n == "arr_reserve" {
                         let check = if self.verified { "" } else {
                             "if pruv_n < 0 || pruv_n > (1i64 << 40) { pruv_ovf(\"arr_reserve length outside 0..2^40\") } "
@@ -5160,6 +5192,29 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     let vty = if dest.ty.as_deref() == Some("array_bool") { "bool" } else { "i64" };
                     let layout = if u8 { "u8" } else { self.layout(arg(a, 0)?) };
                     let elem = if layout == "i64" || vty == "bool" { "pruv_v".into() } else { format!("pruv_v as {layout}") };
+                    if a.len() > 2 {   // LB6 SX (R-6g5-5): k values in one step, from a stack array as hand Rust does
+                        if self.verified {
+                            let mut vals = Vec::new();
+                            for v in &a[1..] {
+                                let s = self.e(v)?;
+                                vals.push(if elem == "pruv_v" { s } else { format!("({s}) as {layout}") });
+                            }
+                            return Ok(format!("{place}.extend_from_slice(&[{}])", vals.join(", ")));
+                        }
+                        let mut head = String::new();
+                        for (i, v) in a[1..].iter().enumerate() {
+                            head.push_str(&format!("let pruv_v{i}: {vty} = {}; ", self.e(v)?));
+                        }
+                        let k = a.len() - 1;
+                        let mut check = format!("if {place}.len() > (1usize << 40) - {k} {{ pruv_ovf(\"arr_push length exceeds 2^40\") }} ");
+                        if u8 {
+                            for i in 0..k {
+                                check.push_str(&format!("if pruv_v{i} < 0 || pruv_v{i} > 255 {{ pruv_elem_oor(pruv_v{i}) }} "));
+                            }
+                        }
+                        let vals: Vec<String> = (0..k).map(|i| elem.replace("pruv_v", &format!("pruv_v{i}"))).collect();
+                        return Ok(format!("{{ {head}{check}{place}.extend_from_slice(&[{}]) }}", vals.join(", ")));
+                    }
                     let mut check = String::new();
                     if !self.verified {
                         check = format!("if {place}.len() >= (1usize << 40) {{ pruv_ovf(\"arr_push length exceeds 2^40\") }} ");
@@ -5204,11 +5259,11 @@ pruv_hi <= (pruv_b.len() as i128) && \
                             head, name, name, name, name, name
                         ));
                     }
-                    let s0 = self.arr_ref(arg(a, 2)?)?;
+                    let s0 = self.byte_bind("pruv_cs", arg(a, 2)?)?;
                     let j0 = self.e(arg(a, 3)?)?;
                     let n0 = self.e(arg(a, 4)?)?;
                     let head = format!(
-                        "{{ let pruv_i: i64 = {}; let pruv_cs = {}; let pruv_j: i64 = {}; let pruv_n: i64 = {}; ",
+                        "{{ let pruv_i: i64 = {}; {}let pruv_j: i64 = {}; let pruv_n: i64 = {}; ",
                         i0, s0, j0, n0
                     );
                     if self.verified {

@@ -1,0 +1,2 @@
+// spec: R-6g5-1 reject
+fn f(inout a: [i64], s: str) -> () { copy_range(inout a, 0, s, 0, 0); }

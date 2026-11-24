@@ -1,0 +1,27 @@
+// spec: R-6g5-2 accept
+struct Book { data: [u8], marks: [i64], count: i64 }
+
+fn add(inout bk: Book, b: i64) -> () ! alloc
+  requires 0 <= b && b <= 255 && len(bk.data) < 1099511627776 && len(bk.marks) < 1099511627776
+  ensures len(bk.data) == len(old(bk).data) + 1 && bk.data[len(bk.data) - 1] == b
+  ensures len(bk.marks) == len(old(bk).marks) + 1 && bk.marks[len(bk.marks) - 1] == len(bk.data)
+  ensures forall k in 0..len(old(bk).data): bk.data[k] == old(bk).data[k]
+  ensures forall k in 0..len(old(bk).marks): bk.marks[k] == old(bk).marks[k]
+  ensures bk.count == old(bk).count
+{
+  arr_reserve(inout bk.data, 8);
+  arr_push(inout bk.data, b);
+  arr_push(inout bk.marks, len(bk.data));
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let d: [u8] = alloc(1, 9);
+  let m: [i64] = alloc(0, 0);
+  let mut bk: Book = Book { data: move d, marks: move m, count: 3 };
+  add(inout bk, 200);
+  add(inout bk, 7);
+  arr_push(inout bk.marks, 40);
+  assert len(bk.data) == 3 && bk.data[1] == 200 && bk.data[2] == 7;
+  assert len(bk.marks) == 3 && bk.marks[0] == 2 && bk.marks[1] == 3 && bk.marks[2] == 40;
+  return bk.data[0] + bk.data[1] + bk.data[2] + bk.marks[0] + bk.marks[1] + bk.marks[2] + bk.count;
+}

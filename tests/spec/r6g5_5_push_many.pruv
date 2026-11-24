@@ -1,0 +1,30 @@
+// spec: R-6g5-5 accept
+fn rec(inout tape: [i64], kind: i64, start: i64, pos: i64) -> () ! alloc
+  requires len(tape) < 1000
+  ensures len(tape) == len(old(tape)) + 4
+  ensures forall k in 0..len(old(tape)): tape[k] == old(tape)[k]
+  ensures tape[len(old(tape))] == kind && tape[len(old(tape)) + 1] == start
+  ensures tape[len(old(tape)) + 2] == pos && tape[len(old(tape)) + 3] == 0
+{
+  arr_push(inout tape, kind, start, pos, 0);
+}
+fn bytes(inout b: [u8]) -> () ! alloc
+  requires len(b) < 1000
+  ensures len(b) == len(old(b)) + 3 && b[len(old(b)) + 2] == 33
+{
+  arr_push(inout b, 104, 105, 33);
+}
+pub fn checksum() -> i64 ! alloc {
+  let mut t: [i64] = alloc(0, 0);
+  rec(inout t, 1, 2, 3);
+  rec(inout t, 4, 5, 6);
+  let mut b: [u8] = alloc(0, 0);
+  bytes(inout b);
+  let mut f: [bool] = alloc(0, false);
+  arr_push(inout f, true, false, true);
+  assert len(t) == 8 && t[6] == 6 && t[0] == 1;
+  if f[2] && !f[1] {
+    return t[0] + t[1] * 10 + t[2] * 100 + t[6] * 1000 + b[2] + len(f) * 10000;
+  }
+  return 0;
+}

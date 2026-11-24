@@ -37,8 +37,9 @@ def x_has_bit(e):
 # P2 batch 4: byte-word access on [u8]: load_be(a, i, n) and the statement-only store_be(inout a, i, w, n)
 WORD_BUILTINS = ("load_be", "store_be", "load_le", "store_le")
 ARRAY_GROW_BUILTINS = ("arr_reserve", "arr_push", "arr_append")
+ARR_PUSH_MAX = 16   # LB6 SX (R-6g5-5): the most values one arr_push appends
 
-BUILTIN_FNS = ARRAY_GROW_BUILTINS + ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "utf8_valid_span", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within", "subview") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range; L-copy-range
+BUILTIN_FNS = ARRAY_GROW_BUILTINS + ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "utf8_valid_span", "str_from_utf8", "truncate", "eq_range", "find_byte", "resize", "copy_range", "copy_within", "subview") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range; L-copy-range
 RESERVED_TYPE_NAMES = ("Option", "Result", "Some", "None", "Ok", "Err")
 TYPE_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9_]*\Z")
 FIELD_NAME_RE = re.compile(r"[a-z][A-Za-z0-9_]*\Z")
@@ -3697,8 +3698,11 @@ class Checker:
         if c: terr(e, "effect_in_contract", "%s is not allowed in contracts" % n)
         if grow and e is not s.statement_call:
             terr(e, "inout_context", "%s must be a whole expression statement" % n)
+        if n == "arr_push" and 2 < len(a) <= ARR_PUSH_MAX + 1:
+            argc = len(a)   # LB6 SX (R-6g5-5): arr_push(inout a, v1, .., vk) appends k values in one step
         if len(a) != argc:
-            terr(e, "arity", "%s takes %d argument(s), got %d" % (n, argc, len(a)))
+            terr(e, "arity", "%s takes %s argument(s), got %d" % (
+                n, "2 to %d" % (ARR_PUSH_MAX + 1) if n == "arr_push" else argc, len(a)))
         arg = a[0]
         if not isinstance(arg, InoutArg):
             fix = ("name a `let mut` local array or an inout parameter" if grow else
@@ -3707,7 +3711,7 @@ class Checker:
             terr(arg, "inout_argument", "the destination array of %s needs the `inout` marker" % n, fix)
         op = arg.expr
         root, path = field_place(op)
-        if not isinstance(root, Var) or ((within or (grow and not append)) and path):
+        if not isinstance(root, Var) or (within and path):    # LB6 IF: arr_reserve/arr_push take a field path too
             terr(arg, "inout_argument", "an inout argument must be the whole name of a local array or an inout "
                  "parameter", "name a `let mut` local array or an inout parameter of this function")
         v = s.lookup(root, root.name, scope, path)
@@ -3732,16 +3736,27 @@ class Checker:
             s.check_iteration_borrow(arg, root.name, path)
         op.ty = ty
         arg.ty = ty
+        def byte_src(x):    # LB6 SB (R-6g5-1): a str (or a literal, lent statically) is the byte source of a [u8] copy
+            if ty == ARRAY_U8 and isinstance(x, StrLit):
+                x.ty = ARRAY_U8
+                x.static_str = True
+                return ARRAY_U8
+            got = s.expr(x, scope, c)
+            return ARRAY_U8 if ty == ARRAY_U8 and got == STR else got
         if append:
-            src = s.expr(a[1], scope, c)
+            src = byte_src(a[1])
             if src != ty and not (ty == ARRAY and src == ARRAY_U8):
                 terr(a[1], "type_mismatch", "arr_append cannot append %s to %s" % (type_name(src), type_name(ty)))
             s.expect(a[2], I64, scope, c)
             s.expect(a[3], I64, scope, c)
         else:
-            s.expect(a[1], s.elem_type(ty) if n == "arr_push" else I64, scope, c)
+            for v in (a[1:] if n == "arr_push" else a[1:2]):
+                s.expect(v, s.elem_type(ty) if n == "arr_push" else I64, scope, c)
         if not grow:
-            s.expect(a[2], I64 if within else ty, scope, c)
+            if within:
+                s.expect(a[2], I64, scope, c)
+            elif byte_src(a[2]) != ty:
+                terr(a[2], "type_mismatch", "expected %s, found %s" % (type_name(ty), type_name(a[2].ty)))
             s.expect(a[3], I64, scope, c)
             if not within:
                 s.expect(a[4], I64, scope, c)
@@ -3784,7 +3799,8 @@ class Checker:
             rty = scope[root.name][0]
             # a field step right on an array root is not a place (as pruvc-rs)
             ok = is_nongeneric_struct(rty, s.decls) or (
-                is_array(rty) and not (steps and isinstance(steps[-1], FieldAccess)))
+                is_array(rty) and not (steps and isinstance(steps[-1], FieldAccess))) or (
+                rty in (I64, BOOL) and not steps and not len_op)     # LB6 OS (R-6g5-4): a scalar inout
         if not ok:
             terr(e, "old_argument", "the operand of old must be the name of an inout parameter of this function",
                  "write old(a) where `inout a: [..]` is a parameter of the enclosing function")
@@ -4006,6 +4022,20 @@ class Checker:
             s.expect(a[3], I64, scope, c)
             s.expect(a[4], I64, scope, c)
             return BOOL
+        if n == "find_byte":    # LB6 MC (R-6g5-3): find_byte(a, b, lo, hi) -> i64, code only, a is [u8] or str
+            if c: terr(e, "effect_in_contract", "find_byte is not allowed in contracts")
+            arity(4)
+            if isinstance(a[0], StrLit):  # a literal is borrowed as its static bytes, no alloc
+                a[0].ty = ARRAY_U8; a[0].static_str = True; ta = ARRAY_U8
+            else:
+                ta = s.expr(a[0], scope, c)
+            if ta not in (ARRAY_U8, STR):
+                terr(a[0], "type_mismatch", "expected %s or %s, found %s" % (
+                    type_name(ARRAY_U8), type_name(STR), type_name(ta)))
+            s.expect(a[1], I64, scope, c)
+            s.expect(a[2], I64, scope, c)
+            s.expect(a[3], I64, scope, c)
+            return I64
         if n in ("utf8_valid", "str_from_utf8"):
             if c and n == "str_from_utf8":
                 terr(e, "effect_in_contract", "str_from_utf8 not allowed in contracts")

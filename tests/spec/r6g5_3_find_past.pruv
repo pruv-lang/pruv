@@ -1,0 +1,2 @@
+// spec: R-6g5-3 reject
+fn f(a: [u8]) -> i64 requires len(a) > 0 ensures result < len(a) { return find_byte(a, 9, 0, len(a)); }

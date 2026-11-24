@@ -1374,7 +1374,7 @@ set_at(inout w, 0, 7);
   matching mutable local, inout parameter, field path or mutable scalar collection binder
   with `inout`; the exclusivity rules of R-6g-1 and R-6g-3 apply. In `ensures` the name
   denotes the final value. The caller learns only what those clauses guarantee about it.
-  `old(n)` is `type/old_argument` and a scalar inout root entry is `type/entry_signature`.
+  `old(n)` names the entry value (R-6g5-4) and a scalar inout root entry is `type/entry_signature`.
   Rust uses `n: &mut T`, reads `(*n)`, writes `*n = e;` and passes a mutable borrow.
   The LLVM backend passes a pointer to the scalar (a load on read, a store on write), so both backends support
   scalar `inout`. A scalar `u8` does not exist. Tests: `tests/runtime/lg5_rt_scalar_inout.pruv`,
@@ -1595,6 +1595,54 @@ borrowed value is live.
   [loop framing](tests/spec/r6g4_6_append_loop_frame.pruv), [loop length bound](tests/spec/r6g4_6_append_loop_bound.pruv),
   [nested call](tests/spec/r6g4_6_append_statement.pruv), [reserved name](tests/spec/r6g4_6_append_reserved.pruv),
   [element type](tests/spec/r6g4_6_append_type.pruv).
+
+## 6g5. Byte and field buffers (LB6)
+
+- R-6g5-1 **Copy string bytes.** When the destination of `copy_range(inout a, i, src, j, n)` or
+  `arr_append(inout a, src, s, n)` is `[u8]`, the source may be a `str` value (a parameter, local, or
+  borrowed view). The source is read as the string's UTF-8 bytes, so `len(src)` and `src[k]` are its byte
+  length and bytes. A string literal source is a static read-only byte view and needs no `! alloc` of
+  its own. All other rules of R-5-1 and R-6g4-6 are unchanged. A `str` source for an `[i64]` destination is
+  a type error (`type/type_mismatch`). Rust borrows the source with `.as_bytes()` and calls
+  `copy_from_slice` or `Vec::extend_from_slice`. LLVM copies the bytes with `memcpy`.
+  Tests: [string bytes](tests/spec/r6g5_1_str_bytes.pruv), [i64 destination](tests/spec/r6g5_1_str_words.pruv),
+  [append to i64](tests/spec/r6g5_1_str_append_words.pruv), [source range](tests/spec/r6g5_1_str_range.pruv).
+- R-6g5-2 **Grow an array field.** The destination of `arr_reserve` and `arr_push` may be a mutable array
+  field place under R-6g-3 (for example `inout bk.data` where `bk` is a `let mut` local or an `inout`
+  parameter), as for `arr_append`. The verifier rebuilds the enclosing value with the grown field; the
+  other fields are unchanged. Rust calls `Vec::reserve_exact` and `Vec::push` on the field in place. LLVM
+  grows the field's block in place. A field of a read-only value is rejected (`type/inout_argument`).
+  Tests: [field growth](tests/spec/r6g5_2_field_grow.pruv), [read-only value](tests/spec/r6g5_2_field_readonly.pruv),
+  [byte range](tests/spec/r6g5_2_field_byte_range.pruv).
+- R-6g5-3 **Find a byte.** `find_byte(a, b, lo, hi) -> i64` searches `a[lo..hi]` for the byte `b`. `a` is
+  `[u8]` or `str` (a string literal is a static byte view); `b`, `lo` and `hi` are `i64`. It is code only
+  (`type/effect_in_contract` in a contract) and has no effects. The verifier proves, in order,
+  `0 <= lo`, `lo <= hi`, `hi <= len(a)` (`verify/index_oob`) and `0 <= b <= 255` (`verify/elem_range`).
+  The result `r` then satisfies `lo <= r <= hi`, `forall k in lo..r: a[k] != b`, and `r < hi ==> a[r] == b`:
+  it is the first match, or `hi` when there is none. A non-byte array is `type/type_mismatch`. Rust emits
+  `a[lo..hi].iter().position(|&x| x == b as u8)` (unchecked slicing when verified). LLVM calls `memchr`
+  on a non-empty range. Safe mode checks the range and the byte value at run time.
+  Tests: [find byte](tests/spec/r6g5_3_find_byte.pruv), [contract](tests/spec/r6g5_3_find_contract.pruv),
+  [i64 array](tests/spec/r6g5_3_find_words.pruv), [range](tests/spec/r6g5_3_find_range.pruv),
+  [byte value](tests/spec/r6g5_3_find_value.pruv), [result bound](tests/spec/r6g5_3_find_past.pruv).
+- R-6g5-4 **Entry value of a scalar `inout`.** `old(x)` also names the entry value of a whole `inout`
+  parameter of type `i64` or `bool`, in `ensures`, loop invariants and asserts. The verifier keeps the
+  entry value as an immutable snapshot, as for arrays and structs; at a call site `old(x)` in the callee
+  contract is the caller's argument value before the call. The operand must still be the bare name of an
+  `inout` parameter (`type/old_argument` otherwise). Emitted code is unchanged: `x: &mut i64` with no ghost
+  argument.
+  Tests: [scalar old](tests/spec/r6g5_4_old_scalar.pruv), [non-inout operand](tests/spec/r6g5_4_old_value.pruv),
+  [wrong contract](tests/spec/r6g5_4_old_wrong.pruv), [len of a scalar](tests/spec/r6g5_4_old_len.pruv).
+- R-6g5-5 **Push several values.** `arr_push(inout a, v1, .., vk)` takes 1 to 16 values (2 to 17
+  arguments; `type/arity` otherwise). Each value has the element type of `a`. It means `k` pushes in source
+  order, done in one step: the verifier proves `len(a) + k <= 2^40` (`verify/call_requires`) and, for a
+  `[u8]`, each value in `0..=255` (`verify/elem_range`); then `len(a)` grows by `k` and `a[len + i] == v(i+1)`.
+  The values may not mention `a` (`type/inout_alias`). Rust emits `a.extend_from_slice(&[v1, .., vk])` from a
+  stack array, with no heap temporary; LLVM grows once and stores the `k` values. One value still emits
+  `a.push(v)`.
+  Tests: [several values](tests/spec/r6g5_5_push_many.pruv), [byte range](tests/spec/r6g5_5_push_byte.pruv),
+  [value type](tests/spec/r6g5_5_push_type.pruv), [alias](tests/spec/r6g5_5_push_alias.pruv),
+  [order](tests/spec/r6g5_5_push_order.pruv).
 
 ## 6h. Files (G10)
 

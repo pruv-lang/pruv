@@ -1,0 +1,18 @@
+{
+  "gen_contains": [
+    ".as_bytes();"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "1394"
+    ],
+    "alloc_balance": true
+  }
+}

@@ -1300,6 +1300,8 @@ pub struct Mod {
     pub regrow_narrow: bool,
     /// P17a: some eq_range lowers to a memcmp call (declare i32 @memcmp)
     pub memcmp: bool,
+    /// LB6 MC: some find_byte lowers to a memchr call (declare ptr @memchr)
+    pub memchr: bool,
     /// P3 batch 2: `!range` node bodies in first-use order (index = metadata number)
     pub range_nodes: Vec<String>,
     /// G4 A3: explicit visibility mode (Pruv calls use the Rust-backend routing)
@@ -1348,6 +1350,7 @@ impl Mod {
             regrow_u8: false,
             regrow_narrow: false,
             memcmp: false,
+            memchr: false,
             range_nodes: Vec::new(),
             explicit: false,
             fn_disp: HashMap::new(),
@@ -3515,6 +3518,14 @@ impl<'a> FnGen<'a> {
         let src = self.load(&slot)?;
         let value = self.ev(&c.args[1], false)?;
         let push = c.name == "arr_push";
+        // LB6 SX (R-6g5-5): arr_push stores k values in order
+        let mut values = Vec::new();
+        if push {
+            values.push(value.a.clone());
+            for x in &c.args[2..] {
+                values.push(self.ev(x, false)?.a);
+            }
+        }
         let append = if c.name == "arr_append" {
             Some((self.ev(&c.args[2], false)?.a, self.ev(&c.args[3], false)?.a))
         } else {
@@ -3533,18 +3544,21 @@ impl<'a> FnGen<'a> {
                 let ok = self.op(format!("icmp sle i64 {count}, {remaining}"))?;
                 self.guard(&ok, Fail::Panic1("pruv_panic_arith", "arr_append length exceeds 2^40".into()), false)?;
             } else if push {
-                let ok = self.op(format!("icmp ult i64 {}, 1099511627776", src.b))?;
+                let ok = self.op(format!("icmp ule i64 {}, {}", src.b, 1099511627776i64 - values.len() as i64))?;
                 self.guard(&ok, Fail::Panic1("pruv_panic_arith", "arr_push length exceeds 2^40".into()), false)?;
                 if is_u8_ty(&src.ty) {
-                    let ok = self.op(format!("icmp ule i64 {}, 255", value.a))?;
-                    self.guard(&ok, Fail::Elem(value.a.clone(), "u8 0..=255"), false)?;
+                    for v in values.clone() {
+                        let ok = self.op(format!("icmp ule i64 {v}, 255"))?;
+                        self.guard(&ok, Fail::Elem(v, "u8 0..=255"), false)?;
+                    }
                 }
             } else {
                 let ok = self.op(format!("icmp ule i64 {}, 1099511627776", value.a))?;
                 self.guard(&ok, Fail::Panic1("pruv_panic_arith", "arr_reserve length outside 0..2^40".into()), false)?;
             }
         }
-        let added = if push { "1" } else if let Some((_, count)) = &append { count } else { &value.a };
+        let pushed = values.len().to_string();
+        let added = if push { &pushed } else if let Some((_, count)) = &append { count } else { &value.a };
         let need = self.op(format!("add i64 {}, {added}", src.b))?;
         let cap = capof(&src);
         let grow = self.op(format!("icmp ult i64 {cap}, {need}"))?;
@@ -3583,14 +3597,17 @@ impl<'a> FnGen<'a> {
                     self.append_widen(&dst, &inp, &count)?;
                 }
             } else {
-                let elem = if src.ty.as_deref() == Some(ARRAY_BOOL) {
-                    self.op(format!("zext i1 {} to i8", value.a))?
-                } else if ty != "i64" {
-                    self.op(format!("trunc i64 {} to {ty}", value.a))?
-                } else {
-                    value.a
-                };
-                self.ins(format!("store {ty} {elem}, ptr {dst}"))?;
+                for (i, v) in values.into_iter().enumerate() {
+                    let elem = if src.ty.as_deref() == Some(ARRAY_BOOL) {
+                        self.op(format!("zext i1 {v} to i8"))?
+                    } else if ty != "i64" {
+                        self.op(format!("trunc i64 {v} to {ty}"))?
+                    } else {
+                        v
+                    };
+                    let at = if i == 0 { dst.clone() } else { self.op(format!("getelementptr inbounds {ty}, ptr {dst}, i64 {i}"))? };
+                    self.ins(format!("store {ty} {elem}, ptr {at}"))?;
+                }
             }
             self.ins(format!("store i64 {need}, ptr {}", slot.b))?;
         }
@@ -5251,6 +5268,48 @@ impl<'a> FnGen<'a> {
             let intrinsic = if overlap { "memmove" } else { "memcpy" };
             self.ins(format!("call void @llvm.{intrinsic}.p0.p0.i64(ptr {}, ptr {}, i64 {}, i1 false)", pd, ps, nb))?;
             return Ok(V::unit());
+        }
+        if n == "find_byte" {
+            // LB6 MC (R-6g5-3): the first b in a[lo..hi] via memchr, or hi; source order a, b, lo, hi (llvmgen.py)
+            let av = self.ev(arg(a, 0)?, false)?;
+            let bv = self.ev(arg(a, 1)?, false)?;
+            let lo = self.ev(arg(a, 2)?, false)?;
+            let hi = self.ev(arg(a, 3)?, false)?;
+            if av.k != Kind::Arr || !is_bytes_ty(&av.ty) {
+                return Err("find_byte is not supported by the llvm codegen layer for this operand yet".to_string());
+            }
+            if !self.verified {
+                let c1 = self.op(format!("icmp slt i64 {}, 0", lo.a))?;
+                let c2 = self.op(format!("icmp sgt i64 {}, {}", lo.a, hi.a))?;
+                let c3 = self.op(format!("icmp sgt i64 {}, {}", hi.a, av.b))?;
+                let o = self.op(format!("or i1 {}, {}", c1, c2))?;
+                let o = self.op(format!("or i1 {}, {}", o, c3))?;
+                self.guard(&o, Fail::Oob(hi.a.clone(), av.b.clone()), true)?;
+                let o = self.op(format!("icmp ugt i64 {}, 255", bv.a))?;
+                self.guard(&o, Fail::Elem(bv.a.clone(), "u8 0..=255"), true)?;
+            }
+            self.m.memchr = true;
+            let n = self.op(format!("sub nsw i64 {}, {}", hi.a, lo.a))?;
+            // an empty range has no match; alloc(0) may give a null data pointer, and memchr(null, _, 0) is UB
+            let z = self.op(format!("icmp eq i64 {}, 0", n))?;
+            let pre = self.cur.clone();
+            let lcall = self.label("fb.call");
+            let ljoin = self.label("fb.join");
+            self.condbr(&z, &ljoin, &lcall)?;
+            self.place(&lcall);
+            let p = self.op(format!("getelementptr inbounds i8, ptr {}, i64 {}", av.a, lo.a))?;
+            let b32 = self.op(format!("trunc i64 {} to i32", bv.a))?;
+            let q = self.op(format!("call ptr @memchr(ptr {}, i32 {}, i64 {})", p, b32, n))?;
+            let isnull = self.op(format!("icmp eq ptr {}, null", q))?;
+            let qi = self.op(format!("ptrtoint ptr {} to i64", q))?;
+            let bi = self.op(format!("ptrtoint ptr {} to i64", av.a))?;
+            let d = self.op(format!("sub nsw i64 {}, {}", qi, bi))?;
+            let r1 = self.op(format!("select i1 {}, i64 {}, i64 {}", isnull, hi.a, d))?;
+            let lend = self.cur.clone();
+            self.br(&ljoin)?;
+            self.place(&ljoin);
+            let r = self.op(format!("phi i64 [ {}, %{} ], [ {}, %{} ]", hi.a, pre, r1, lend))?;
+            return Ok(V::new(Kind::I64, r));
         }
         if n == "eq_range" {
             // P17a: a[i..i+n] == b[j..j+n]; source order a, i, b, j, n
@@ -8742,9 +8801,10 @@ fn gen_llvm_body(
         if m.regrow_i64 { DECLS_REGROW } else { "" },
         if m.regrow_u8 { DECLS_REGROW_U8 } else { "" },
         if m.regrow_narrow { DECLS_REGROW_NARROW } else { "" },
-        format!("{}{}",
+        format!("{}{}{}",
             if memmove { "declare void @llvm.memmove.p0.p0.i64(ptr nocapture writeonly, ptr nocapture readonly, i64, i1 immarg)\n" } else { "" },
-            if m.memcmp { "declare i32 @memcmp(ptr nocapture, ptr nocapture, i64) nounwind readonly\n" } else { "" }), // P17a
+            if m.memcmp { "declare i32 @memcmp(ptr nocapture, ptr nocapture, i64) nounwind readonly\n" } else { "" }, // P17a
+            if m.memchr { "declare ptr @memchr(ptr, i32, i64) nounwind readonly\n" } else { "" }), // LB6 MC
         g6decls,
         chunks.join("\n")
     );
