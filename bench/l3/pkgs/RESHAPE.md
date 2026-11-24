@@ -24,7 +24,7 @@ measured only for a package whose table shows zero differences.
 | names | 0 (`project_name` reshaped in step 2.2b) | no |
 | args | 1 (`build_args`: SR) | no |
 | tail | whole package (hand is UTF-8 `Vec<u8>`; decoder pick: FM) | no |
-| lex | 1 (cursor and return form of the `scan_*` API: RU, plus a package API change; loop of `scan_string` = since step 2.6) | loop only (step 2.6), not the gate measurement |
+| lex | 0 (cursor and return form done in step 2.7; `e?;` codegen row, not a source difference) | yes, `scan_string` M and L (step 2.7) |
 | bytes | 0 | no (not run in this step) |
 
 ## json (`json/json.pruv`, hand `json/hand/hand_json.rs`)
@@ -84,19 +84,19 @@ rewrite to the hand shape is open; its decoder pick needs `let d = if s == 1 { &
 which Pruv cannot express (gap **FM**). A first attempt that grouped the state into `Tail` / `Decoder` structs but kept
 UTF-16 units and copied the chosen decoder in and out was withdrawn as a non-hand shape.
 
-## lex (`lex/lex.pruv`, hand: `json/hand/hand_json.rs` scanner) — `scan_string` loop reshaped in step 2.6
+## lex (`lex/lex.pruv`, hand: `json/hand/hand_json.rs` scanner) — `scan_string` loop reshaped in step 2.6, cursor form in step 2.7
 
 | Pruv | Hand Rust | Types | Ownership | Loops | Allocations | Difference and reason |
 |---|---|---|---|---|---|---|
-| `struct Scan { position, kind }` | `ParseResult<()>` = `Result<(), (usize, i64)>`, cursor in `self.pos` | `i64` pair | = | — | none | **Differs**: hand moves `&mut self.pos` and returns `Result<(), E>`; Pruv takes the cursor by value and returns the new position in `Scan`. `Result<(), E>` is **RU**; an `inout pos` cursor (OS closed) changes the API of every `scan_*` and their callers (`parse`, `claude/entry`, `json/a1_root`), not done in step 2.6. |
+| `struct Fault { position, kind }`, every `scan_*(input, inout pos, end, ..) -> Result<(), Fault>` | `ParseResult<()>` = `Result<(), (usize, i64)>`, cursor in `self.pos` | `i64` pair / `(usize, i64)` | `inout pos` ↔ `&mut self.pos` | — | none | = since step 2.7 (`Scan` is gone; RU closed by LB8). The error is a named struct where hand uses a tuple; same two values. |
 | `validate_utf8(input, start, end) -> i64` | `std::str::from_utf8(&input[a..b])` | `[u8]` | borrow | 16-byte ASCII blocks, then per char | none | Same algorithm as std (ASCII fast path, then sequence check); returns the error offset like `valid_up_to`. = |
 | `skip_whitespace` | `while matches!(b, b' '\|b'\t'\|b'\n'\|b'\r')` | `[u8]` | borrow | one pass | none | = |
-| `scan_literal` | `hand_json.rs:67` `literal()`: `required()` per byte, error 12 at the first mismatch | `[u8]` | borrow | ≤5 steps | none | Same per-byte compare and first-mismatch position; hand walks the given literal, Pruv picks the expected byte from the first byte and the index. Cursor and return form as `Scan`. |
-| `digits`, `scan_number` | `hand_json.rs:77` `digits()`, `:87` `number()` | `[u8]` | borrow | one pass | none | Hand `digits` requires its first digit itself; Pruv `digits` (returns the end as `i64`) scans the rest after the caller checked the first one. `scan_number`: cursor and return form as `Scan`. |
+| `scan_literal(input, inout pos, end, literal: str)` | `hand_json.rs:67` `literal(&mut self, literal: &[u8])`: `required()` per byte, error 12 at the first mismatch | `str` for `&[u8]` (no byte-string literal; `literal[k]` emits `as_bytes()` indexing) | borrow | one per expected byte | none | = since step 2.7: walks the given literal; the caller picks it from the first byte like hand `record` (`b't' => self.literal(b"true")?`). |
+| `digits`, `scan_number` | `hand_json.rs:77` `digits()`, `:87` `number()` | `[u8]` | borrow | one pass | none | = since step 2.7: `digits` requires its first digit itself (error 5 / 13) and is called with `?` from `scan_number`, like hand. |
 | `scalar_width(byte)` | `hand_json.rs:235` `utf8_width(byte: u8) -> usize` | `i64` → `i64` (SPEC §6b: no scalar `u8`/`usize`) | — | — | none | Same table (194-223/224-239/240-244/else 1). Named apart from `parse::utf8_width` only to keep the Python verifier stable (step 2.6). |
-| `scan_string` | `hand_json.rs:113` `string()`: `while let Some(byte) = self.peek()` per byte | `[u8]` | borrow | per byte; a byte ≥ 128 checks one scalar `[i, i + width)` with `from_utf8` and jumps over it | none | Loop = since step 2.6 (the 16-byte block skip is gone). The scalar check passes `(input, i, i + width)` where hand passes `&input[i..i + width]`. Cursor and return form as `Scan`. |
+| `scan_string` | `hand_json.rs:113` `string()`: `while let Some(byte) = self.peek()` per byte | `[u8]` | borrow | per byte; a byte ≥ 128 checks one scalar `[i, i + width)` with `from_utf8` and jumps over it | none | Loop = since step 2.6 (the 16-byte block skip is gone). The scalar check passes `(input, i, i + width)` where hand passes `&input[i..i + width]`. Cursor and return form = since step 2.7. |
 
-Step 2.6 rewrote the `scan_string` loop to the hand shape. The cursor and return form (`Scan` row) is left for the whole package.
+Step 2.6 rewrote the `scan_string` loop to the hand shape; step 2.7 moved the whole package to the hand cursor and return form.
 
 ## bytes (`bytes/bytes.pruv`) — keep, one fix
 
@@ -151,7 +151,7 @@ worse shape, the hand Rust changed too:
 - J4: the hand now copies escape-free runs.
 - P5: the hand tape now grows inside the record append.
 
-Four rows kept a residue that Pruv could not express at step 2.2c (all but RU closed by LB6 and rewritten in step 2.4). Each residue is a §4 gap id, not a **W**:
+Four rows kept a residue that Pruv could not express at step 2.2c (all but RU closed by LB6 and rewritten in step 2.4; RU closed by LB8 and rewritten in step 2.7). Each residue is a §4 gap id, not a **W**:
 - **RU** (P6)
 - **OS** (P6)
 - **SX** (P3)
@@ -164,7 +164,7 @@ RU, OS and SX were checked with a minimal file against `pruvc-rs`, and MC agains
 | Package | = | Changed in | W | W-c | Gap id | P |
 |---|---|---|---|---|---|---|
 | jstr | J2, J2b, J3, J4 | J3 `string_units`; 2.2b/2.2c: J4 | — | J5 copy variants | B (J1), SL/S (J6), U (J8) | J5 `adapter_probe`, J6/J7 `InternalInvariant` |
-| parse | P0, P1, P2, P3, P4, P5 | P0 (first pass); 2.2b: P1-P6; 2.2c: P1, P3, P5, P6; 2.4: P3, P6 | — | P8 | B-LLVM (P7), RU (P6) | P2 plain bit, P9 |
+| parse | P0, P1, P2, P3, P4, P5, P6 | P0 (first pass); 2.2b: P1-P6; 2.2c: P1, P3, P5, P6; 2.4: P3, P6; 2.7: P1 literals, P6 `record` | — | P8 | B-LLVM (P7) | P2 plain bit, P9 |
 | turns | T2, T3 (operation only), T4, T5, T8 | 2.2b: T2 (part), T4, T5, T8; 2.2c: T2 `answer`, T7; 2.4: T2 `put_str`/`write_piece`, T7 copies | — | T1 `grow`, T7, T9, T10 | ABI / V (T0, T1 slabs, T6 incl. growth; T2 writes the slot buffer `buf`, T7 writes `bk.data`, neither a per-turn `Vec`) | T1 `empty_buffer` |
 | transport | X0, X3, X4, X5 (scan, growth) | X0 (first pass); 2.2b: X3, X4, X5; 2.2c: X5 growth; 2.4: X5 scan | — | X1, X2, X6, X5 framing | FM (X7) | — |
 
@@ -187,12 +187,12 @@ RU, OS and SX were checked with a minimal file against `pruvc-rs`, and MC agains
 | # | Pruv | Hand Rust | Types | Ownership | Loops | Allocations | Id and reason |
 |---|---|---|---|---|---|---|---|
 | P0 | `parse(input)` error path | `hand_json.rs:243`: on a grammar error (kind != 4) `from_utf8(&input[position..])` | `[u8]` | borrow | one rescan of the rest | none | **=** (changed in 2.2 first pass: was a full rescan on every failure). |
-| P1 | `Lexed`/`token_at`, `string_token`, `record` dispatch | `Parser { pos }` + `Result<_, Error>` returned from each method | `enum Lexed { Value(kind, plain), Error(kind) }` + `inout pos` vs `&mut self` + `Result` | borrow | — | none | **changed in 2.2c**. The recursive path dispatches on the byte inside `record` like the hand. `string_token` returns `Result<bool, Fault>` and is propagated with `?`. Literal and number scans convert to `Fault` once, where the hand's `literal`/`number` return the error. There is one error type, `struct Fault { position, kind }`, and the `Descent` enum is gone. `string_token` still returns the `plain` flag (used by `token_at` for `scan_into`, P8; `record` ignores it), and its `start` argument is used only by its contracts (`requires`, loop invariant, `ensures`) (**P**). Literals go through the shared `lex::scan_literal(input, pos, end) -> Scan` (it picks the expected word from the first byte and returns the position), where the hand's `literal(&[u8])` walks the expected bytes on `self.pos`; `lex` is outside this step's packages (**W-c**, shared with other `lex` users). `token_at -> Lexed` stays only for `scan_into` (P8). = (`Parser<'a>`'s borrowed `input` field is a parameter, see P7). |
+| P1 | `Lexed`/`token_at`, `string_token`, `record` dispatch | `Parser { pos }` + `Result<_, Error>` returned from each method | `enum Lexed { Value(kind, plain), Error(kind) }` + `inout pos` vs `&mut self` + `Result` | borrow | — | none | **changed in 2.2c**. The recursive path dispatches on the byte inside `record` like the hand. `string_token` returns `Result<bool, Fault>` and is propagated with `?`. Literal and number scans return `lex::Fault` and `record` propagates it with `?`, like the hand's `literal`/`number` (2.2c converted a `Scan` once; 2.7 removed that). The `Descent` enum is gone. `string_token` still returns the `plain` flag (used by `token_at` for `scan_into`, P8; `record` ignores it), and its `start` argument is used only by its contracts (`requires`, loop invariant, `ensures`) (**P**). Literals go through the shared `lex::scan_literal(input, inout pos, end, "true")?` with the literal picked from the first byte, like the hand `self.literal(b"true")?` (**changed in 2.7**; before, `scan_literal` picked the word itself and returned a `Scan`). There is one error type, `lex::Fault { position, kind }` (parse's private copy is gone in 2.7). `token_at -> Lexed` stays only for `scan_into` (P8). = (`Parser<'a>`'s borrowed `input` field is a parameter, see P7). |
 | P2 | `utf8_width`, `string_token` | `Parser::string`: per byte, `from_utf8` on the slice | `[u8]` | borrow | one byte loop with `inout pos` (block skip removed in 2.2b) | none | **changed in 2.2b**. = The plain bit is **P** (feeds `string_utf8_plain`). |
 | P3 | `append_record`; `write_record`, `close_record` (scratch) | `Parser::record`: `tape.extend_from_slice(&[kind, start, pos, id + 1, parent, 0])` | `[i64]` | `inout` (= `&mut Vec`) | — | amortized tape growth inside the append (both sides, counted on capacity change); the scratch helpers write a fixed tape, none | The recursive path (`scan`, `scan_document`) pushes each record with `append_record`, then patches end/next/count after the container returns, like the hand. **changed in 2.4**: the append is one `arr_push(inout tape, k, s, e, r + 1, parent, count)` (R-6g5-5), emitted as `tape.extend_from_slice(&[k, s, e, (r + 1), parent, count])`, as `json/hand/hand_json.rs:182-184`. **=** (2.2c residue **SX** closed by LB6). Per-record `arr_reserve(6)` would be `reserve_exact` (quadratic), so it was not used. `write_record`/`close_record` stay only for `scan_into` (P8, **W-c**). |
 | P4 | `comma_state`, `initial_state`, `value_state`, `value_increment`, internal error 18 | control flow of the recursive methods | `i64` state | — | — | none | **changed in 2.2b**: gone from the recursive path (`record`/`container` control flow, as the hand). = The state helpers remain only in `scan_into` (P8, **W-c**). |
 | P5 | `first_slots`, `widened`, `regrown` (removed) | `Vec::with_capacity(32*WIDTH)`, growth inside `extend_from_slice` | `[i64]` | owned | — (2.2b had a copy loop) | initial 192 words, then amortized growth inside the append (2.2b: new buffer + copy) | **changed in 2.2b/2.2c**: `first_slots`/`widened`/`regrown` removed. `scan_records` does `arr_reserve(32*6)`, the tape grows inside the record append (amortized), and the frame stack is the call stack. In 2.2c the hand dropped its explicit per-record `reserve`: `extend_from_slice` grows the tape, and an allocation is counted only when the capacity changes. = |
-| P6 | `scan`, `scan_document` | `Parser::record` recursive descent (`container`/`string`/`number`/`literal`) | `scan`: `[u8] -> Checked` (the built tape moves into `Checked::Tape`), `scan_document`: `[u8] -> JsonParse` | borrow input | one recursion on both sides (2.2b: two flat loops with an explicit stack) | tape | **changed in 2.2c**: one recursive descent, `record` ↔ `container` (`decreases 2*(129-depth)` / `+1`), both entry points through `scan_records`. `container` returns `Result<i64, Fault>` (the child count), like the hand's `ParseResult<i64>`. The ghost `first` argument is gone: the contracts use `len(old(tape))`. **changed in 2.4**: the `initial` argument is gone; the contracts and the `container` loop invariant use `old(pos)` (R-6g5-4), so `record(input, inout pos, inout tape, parent, depth, key)` matches `hand_json.rs:155` `record(&mut self, parent, depth, key)` and `container(input, inout pos, inout tape, id, depth, object)` matches `:197` (`pos`/`tape` are the `self` fields). One residue is a gap: `record` returns `Ok(0)` because `Result<(), Fault>` is `type_argument`: **RU** (§4, still open after LB6). Proof-only `pred fn local_records`/`parents_ok` carry the tape shape (**P**). `container` loops `while pos <= end` with an end-of-input `Err` after the loop, where the hand uses `loop` and gets that error from `required()?`: the bound is the loop's termination measure (`decreases end - pos + 1`), which an unbounded `loop` does not have (**P**). |
+| P6 | `scan`, `scan_document` | `Parser::record` recursive descent (`container`/`string`/`number`/`literal`) | `scan`: `[u8] -> Checked` (the built tape moves into `Checked::Tape`), `scan_document`: `[u8] -> JsonParse` | borrow input | one recursion on both sides (2.2b: two flat loops with an explicit stack) | tape | **changed in 2.2c**: one recursive descent, `record` ↔ `container` (`decreases 2*(129-depth)` / `+1`), both entry points through `scan_records`. `container` returns `Result<i64, Fault>` (the child count), like the hand's `ParseResult<i64>`. The ghost `first` argument is gone: the contracts use `len(old(tape))`. **changed in 2.4**: the `initial` argument is gone; the contracts and the `container` loop invariant use `old(pos)` (R-6g5-4), so `record(input, inout pos, inout tape, parent, depth, key)` matches `hand_json.rs:155` `record(&mut self, parent, depth, key)` and `container(input, inout pos, inout tape, id, depth, object)` matches `:197` (`pos`/`tape` are the `self` fields). **changed in 2.7**: `record` returns `Result<(), lex::Fault>` like the hand `ParseResult<()>` (`Ok(0)` is gone; RU closed by LB8), and `scan_records` propagates it the same way. Proof-only `pred fn local_records`/`parents_ok` carry the tape shape (**P**). `container` loops `while pos <= end` with an end-of-input `Err` after the loop, where the hand uses `loop` and gets that error from `required()?`: the bound is the loop's termination measure (`decreases end - pos + 1`), which an unbounded `loop` does not have (**P**). |
 | P7 | `Parsed(JsonDocument{ source: copy(input), .. })` | `Document<'a>{ source: &'a [u8] }` | `[u8]` | **copy** | — | +1 | **B-LLVM** (same row as json step 2.1). Unchanged. |
 | P8 | `scan_into`, `span_reject`, `done` (`Pass`) | none (hand parses each line with `parse`) | `[i64]` scratch | `inout tape`, `inout stack` | — | none | **W-c**: reusable-scratch API used by `lines`/claude entries; the hand allocates per call. Kept until those consumers are reshaped. |
 | P9 | `failure`, `publication_ok` (`json::check_subtrees`) | none | `[i64]` | borrow | per record, after a successful parse | none | **P**: D32 proof-only publication check; `scan_document` does not yet prove the tape shape. Suffix-UTF-8 policy on failure matches the hand (P0). |
@@ -350,3 +350,48 @@ The loop difference is gone. The structure difference is not zero: the cursor an
 | L 15 MiB | long ASCII | 0.837 (0.73-0.85) | 0.727 (0.71-0.74) | 0.747 (0.66-0.90) | 16.5 MiB all three |
 
 L is 15 MiB because the A1 root requires `end <= 16777216`, and the buffer runs slightly past its target size. The Pruv median is at or under the hand median in every cell, and the ranges overlap. Five runs do not show a difference either way. Max RSS is the same for all three, and neither scanner allocates. A first 1 MiB ASCII smoke run read 2.65 vs 0.78 ns/byte. It did not repeat in three back-to-back pairs (0.87/0.95, 1.12/1.04, 0.80/0.91) or in the alternated runs above. Its cause is not known.
+
+## Step 2.7: lex cursor form, `parse::record` unit result (RU closed by LB8)
+
+**Split.** LB8 (SPEC R-6g7-1) closed **RU**, so the two forms that waited on it are rewritten. Every `lex` scanner moves the caller's cursor and returns the hand `ParseResult<()>`: `scan_*(input, inout pos, end, ..) -> Result<(), Fault>` (the hand `&mut self.pos`). `Scan` is gone. `Fault { position, kind }` is the one error type of `lex` and `parse` (parse's private copy is gone). `scan_literal` takes the literal like the hand `literal(&[u8])`, and the caller picks it from the first byte. `digits` requires its first digit and is called with `?`, like the hand. `parse::record` returns `Result<(), lex::Fault>` (no `Ok(0)`). `container` keeps `Result<i64, lex::Fault>` because the hand is `ParseResult<i64>`. Callers changed with the API: `parse` (`record`, `scan_records`, `token_at`, `scan`, `scan_document`), `json/a1_root.pruv` (host ABI unchanged; it maps `Ok(())` / `Err(fault)` back to the old return code) and `claude/entry.pruv` (`scan_number` with a `match`, because `is_ok` is contract-only).
+
+| Pruv | Hand Rust | Difference |
+|---|---|---|
+| `skip_whitespace(input, inout pos, end) -> ()` | `whitespace(&mut self)` | = |
+| `scan_literal(input, inout pos, end, literal: str) -> Result<(), Fault>` | `literal(&mut self, literal: &[u8]) -> ParseResult<()>` | = (`str` for `&[u8]`: no byte-string literal; `literal[k]` emits `as_bytes()` indexing) |
+| `digits(input, inout pos, end) -> Result<(), Fault>` | `digits(&mut self) -> ParseResult<()>` | = |
+| `scan_number(input, inout pos, end) -> Result<(), Fault>` | `number(&mut self) -> ParseResult<()>` | = (`digits(..)?;` ↔ `self.digits()?`) |
+| `scan_string(input, inout pos, end) -> Result<(), Fault>` | `string(&mut self) -> ParseResult<()>` | = (loop since step 2.6) |
+| `scalar_width`, `validate_utf8` | `utf8_width`, `from_utf8` | = (unchanged) |
+| `parse::record(..) -> Result<(), lex::Fault>` | `record(..) -> ParseResult<()>` | = (`Ok(0)` gone; literals and numbers with `?`) |
+| `parse::scan_records(input, inout tape) -> Result<(), lex::Fault>` | `record(..)?` + trailing check in `parse` | = |
+| `parse::token_at` literal branch | — (Pruv-only, `scan_into`, P8) | picks the literal from the first byte and matches the `Result` once |
+
+Not counted, as in every `=` row of this file: `i64` for `u8`/`usize` (SPEC §6b), `(input, lo, hi)` for a sub-slice, `if` chains and `while` for `match` and `for`. The lex structure difference is 0.
+
+**Codegen difference (not a source difference).** A `f(..)?;` statement on `Result<(), E>` emits `match f(..) { Ok(()) => {} Err(__pruv_try_eN) => { return Err::<(), E>(__pruv_try_eN); } }`, where the hand `?` goes through `Try` and `From` (identity here). Both lower to the same branch on the discriminant. This is recorded, not worked around. No new gap row.
+
+**Mutants.** The lex/parse strings in `json/run_q_mutants.py` follow the new text (`Err::<(), Fault>(..)`, `digits(input, inout pos, end)?;`, `literal[k]`, `crate::lex::Fault`). Each appears exactly once. Run result (`json/mutants.json`): 11 proof-rejected, 14 behavior-detected, no errors (was 10 / 15). The one change is `wrong_literal_position` (`position: pos - k`): it is now rejected by the proof, because every scanner's `ensures` states that an error's position is the cursor.
+
+**Measurement (gate, `scan_string`).** The lex structure difference is 0, so this is the RUST_SHAPE_RESET measurement for the package's hot scanner. The harness is the one of step 2.6 (not tracked in Git): hand `Parser::string`, copied verbatim, against Pruv `string` (the a1 root over `lex::scan_string(input, inout pos, end)`, rebuilt from this step's sources) on every string in the buffer. Runs alternate hand / Pruv-rust / Pruv-LLVM, 5 rounds each (M 20 passes, L 3 passes per run). Results are ns per byte, median and range; Max RSS from `/usr/bin/time -l`:
+
+| Size | Profile | Hand | Pruv (rust) | Pruv (LLVM) | Max RSS |
+|---|---|---|---|---|---|
+| M 1 MiB | mixed (escapes, Latin-1, Hangul, emoji, CJK) | 1.520 (1.50-2.78) | 1.466 (1.43-1.49) | 1.455 (1.45-1.50) | 2.7 MiB all three |
+| M 1 MiB | long ASCII | 0.663 (0.64-0.68) | 0.653 (0.64-0.66) | 0.649 (0.64-0.67) | 2.5-2.6 MiB |
+| L 15 MiB | mixed | 1.540 (1.54-1.54) | 1.475 (1.47-1.48) | 1.492 (1.49-1.50) | 17.7 MiB all three |
+| L 15 MiB | long ASCII | 0.649 (0.64-0.65) | 0.646 (0.64-0.65) | 0.648 (0.65-0.65) | 16.6 MiB all three |
+
+The Pruv median is at or under the hand median in every cell (0.96-1.00x hand), so the 1.0x floor holds on both backends. Max RSS is the same; no scanner allocates. The machine was not idle (load average about 6 on 10 cores from other worktrees' tests), which is why the mixed numbers are higher than in step 2.6 for all three alike; compare within this table only.
+
+**Consumers** (all four compiler/backend pairs, rc 0):
+
+| Runner | Fixtures per pair |
+|---|---|
+| json A0 / A1 / A2 / A3 / A4 / A5 | 37 / 351 / 114 / 454 / 6344 / 83 |
+| claude A0 / A1 / A2 / A3 / A4 | 272 / 2884 / 2443 / 134 / 270 |
+| grok (`--no-ts`) | 254 |
+| opencode | 199 |
+| codex | 136 |
+| mcp | 22 |
+| qwen | 26 |

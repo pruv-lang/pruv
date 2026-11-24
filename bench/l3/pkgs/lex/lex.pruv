@@ -1,12 +1,11 @@
-// A1: absolute byte offsets. Scan.kind == 0 is success; otherwise A0 error kind.
+// A1: absolute byte offsets. Each scanner moves the caller's cursor (`inout pos`, the hand `&mut self.pos`) and
+// returns `Result<(), Fault>` (the hand `ParseResult<()>`); an error is `Fault { position, kind }` at the cursor.
 // Literals blame the first mismatching byte; Unicode escapes the first nonhex byte.
 // Missing required bytes: UnexpectedEof at end. Missing quote: UnterminatedString.
 // Strings validate their own UTF-8 per scalar like the hand parser; validate_utf8 is std `from_utf8`.
 // No string decoding here.
-pub struct Scan { position: i64, kind: i64 }
-fn outcome(position: i64, kind: i64) -> Scan
-  ensures result.position == position && result.kind == kind
-{ return Scan { position: position, kind: kind }; }
+// The hand error `(usize, i64)`: the cursor and an A0 error kind (1..17).
+pub struct Fault { position: i64, kind: i64 }
 
 pub fn validate_utf8(input: [u8], start: i64, end: i64) -> i64
   requires 0 <= start && start <= end && end <= len(input)
@@ -63,124 +62,90 @@ pub fn validate_utf8(input: [u8], start: i64, end: i64) -> i64
   return -1;
 }
 
-pub fn skip_whitespace(input: [u8], pos: i64, end: i64) -> i64
+// The hand `whitespace(&mut self)`.
+pub fn skip_whitespace(input: [u8], inout pos: i64, end: i64) -> ()
   requires 0 <= pos && pos <= end && end <= len(input)
-  ensures pos <= result && result <= end
+  ensures old(pos) <= pos && pos <= end
 {
-  let mut i: i64 = pos;
-  while i < end
-    invariant pos <= i && i <= end
-    decreases end - i
+  while pos < end
+    invariant old(pos) <= pos && pos <= end
+    decreases end - pos
   {
-    let c: i64 = input[i];
-    if c != 32 && c != 9 && c != 10 && c != 13 { return i; }
-    i = i + 1;
+    let c: i64 = input[pos];
+    if c != 32 && c != 9 && c != 10 && c != 13 { return; }
+    pos = pos + 1;
   }
-  return i;
 }
 
-// Dispatch by first byte; the following delimiter is the grammar caller's job.
-pub fn scan_literal(input: [u8], pos: i64, end: i64) -> Scan
-  requires 0 <= pos && pos <= end && end <= len(input)
-  ensures pos <= result.position && result.position <= end
-  ensures 0 <= result.kind && result.kind <= 17
-  ensures result.kind == 0 ==> pos < result.position
+// The hand `literal(&mut self, literal: &[u8])`: `required()` per expected byte, error 12 at the first mismatch.
+// The caller picks the literal from the first byte (hand `record`: `b't' => self.literal(b"true")?`).
+pub fn scan_literal(input: [u8], inout pos: i64, end: i64, literal: str) -> Result<(), Fault>
+  requires 0 <= pos && pos <= end && end <= len(input) && 1 <= len(literal)
+  ensures old(pos) <= pos && pos <= end
+  ensures is_ok(result) ==> old(pos) < pos
+  ensures !is_ok(result) ==> (err_val(result).position == pos && 0 < err_val(result).kind && err_val(result).kind <= 17)
 {
-  if pos == end { return outcome(end, 5); }
-  let c: i64 = input[pos];
-  let mut n: i64 = 4;
-  if c == 102 { n = 5; }
-  if c != 116 && c != 102 && c != 110 { return outcome(pos, 12); }
-  let mut i: i64 = pos;
   let mut k: i64 = 0;
-  while k < n
-    invariant pos <= i && i <= end && i - pos == k
-    invariant 0 <= k && k <= n && 4 <= n && n <= 5
-    decreases n - k
+  while k < len(literal)
+    invariant old(pos) <= pos && pos <= end && pos - old(pos) == k
+    invariant 0 <= k && k <= len(literal)
+    decreases len(literal) - k
   {
-    if i == end { return outcome(end, 5); }
-    // The literal tests form one else-if chain (c is 116, 102 or 110 here), so the verifier no longer walks the
-    // product of all three literals' k tests. The k tests stay independent ifs: a k else-if chain verified
-    // cheaper but its generated Rust measured about 15% slower on a periodic input (DB36).
-    let mut want: i64 = c;
-    if c == 116 {
-      if k == 1 { want = 114; }
-      if k == 2 { want = 117; }
-      if k == 3 { want = 101; }
-    } else if c == 102 {
-      if k == 1 { want = 97; }
-      if k == 2 { want = 108; }
-      if k == 3 { want = 115; }
-      if k == 4 { want = 101; }
-    } else {
-      if k == 1 { want = 117; }
-      if k >= 2 { want = 108; }
-    }
-    if input[i] != want { return outcome(i, 12); }
-    i = i + 1;
+    if pos == end { return Err::<(), Fault>(Fault { position: pos, kind: 5 }); }
+    if input[pos] != literal[k] { return Err::<(), Fault>(Fault { position: pos, kind: 12 }); }
+    pos = pos + 1;
     k = k + 1;
   }
-  return outcome(i, 0);
+  return Ok::<(), Fault>(());
 }
 
-fn digits(input: [u8], pos: i64, end: i64) -> i64
+// The hand `digits()`: one required digit, then the rest.
+fn digits(input: [u8], inout pos: i64, end: i64) -> Result<(), Fault>
   requires 0 <= pos && pos <= end && end <= len(input)
-  ensures pos <= result && result <= end
+  ensures old(pos) <= pos && pos <= end
+  ensures is_ok(result) ==> old(pos) < pos
+  ensures !is_ok(result) ==> (err_val(result).position == pos && 0 < err_val(result).kind && err_val(result).kind <= 17)
 {
-  let mut i: i64 = pos;
-  while i < end
-    invariant pos <= i && i <= end
-    decreases end - i
+  if pos == end { return Err::<(), Fault>(Fault { position: pos, kind: 5 }); }
+  let first: i64 = input[pos];
+  if first < 48 || first > 57 { return Err::<(), Fault>(Fault { position: pos, kind: 13 }); }
+  while pos < end
+    invariant old(pos) <= pos && pos <= end
+    invariant pos == old(pos) ==> (pos < end && 48 <= input[pos] && input[pos] <= 57)
+    decreases end - pos
   {
-    let c: i64 = input[i];
-    if c < 48 || c > 57 { return i; }
-    i = i + 1;
+    let c: i64 = input[pos];
+    if c < 48 || c > 57 { return Ok::<(), Fault>(()); }
+    pos = pos + 1;
   }
-  return i;
+  return Ok::<(), Fault>(());
 }
 
-pub fn scan_number(input: [u8], pos: i64, end: i64) -> Scan
+// The hand `number()`.
+pub fn scan_number(input: [u8], inout pos: i64, end: i64) -> Result<(), Fault>
   requires 0 <= pos && pos <= end && end <= len(input)
-  ensures pos <= result.position && result.position <= end
-  ensures 0 <= result.kind && result.kind <= 17
-  ensures result.kind == 0 ==> pos < result.position
+  ensures old(pos) <= pos && pos <= end
+  ensures is_ok(result) ==> old(pos) < pos
+  ensures !is_ok(result) ==> (err_val(result).position == pos && 0 < err_val(result).kind && err_val(result).kind <= 17)
 {
-  let mut i: i64 = pos;
-  if i == end { return outcome(end, 5); }
-  if input[i] == 45 { i = i + 1; }
-  if i == end { return outcome(end, 5); }
-  let c: i64 = input[i];
-  if c < 48 || c > 57 { return outcome(i, 13); }
-  i = i + 1;
-  if c == 48 {
-    if i < end {
-      let b: i64 = input[i];
-      if b >= 48 && b <= 57 { return outcome(i, 13); }
-    }
-  } else { i = digits(input, i, end); }
-  if i < end {
-    if input[i] == 46 {
-      i = i + 1;
-      if i == end { return outcome(end, 5); }
-      let b: i64 = input[i];
-      if b < 48 || b > 57 { return outcome(i, 13); }
-      i = digits(input, i + 1, end);
-    }
+  if pos < end && input[pos] == 45 { pos = pos + 1; }
+  if pos == end { return Err::<(), Fault>(Fault { position: pos, kind: 5 }); }
+  if input[pos] == 48 {
+    pos = pos + 1;
+    if pos < end && input[pos] >= 48 && input[pos] <= 57 { return Err::<(), Fault>(Fault { position: pos, kind: 13 }); }
+  } else {
+    digits(input, inout pos, end)?;
   }
-  if i < end {
-    let b: i64 = input[i];
-    if b == 101 || b == 69 {
-      i = i + 1;
-      if i == end { return outcome(end, 5); }
-      let sign: i64 = input[i];
-      if sign == 43 || sign == 45 { i = i + 1; }
-      if i == end { return outcome(end, 5); }
-      let d: i64 = input[i];
-      if d < 48 || d > 57 { return outcome(i, 13); }
-      i = digits(input, i + 1, end);
-    }
+  if pos < end && input[pos] == 46 {
+    pos = pos + 1;
+    digits(input, inout pos, end)?;
   }
-  return outcome(i, 0);
+  if pos < end && (input[pos] == 101 || input[pos] == 69) {
+    pos = pos + 1;
+    if pos < end && (input[pos] == 43 || input[pos] == 45) { pos = pos + 1; }
+    digits(input, inout pos, end)?;
+  }
+  return Ok::<(), Fault>(());
 }
 
 // The hand `utf8_width`: the scalar length a lead byte announces (1 for bytes no scalar starts with).
@@ -197,56 +162,55 @@ fn scalar_width(byte: i64) -> i64
 
 // The hand `Parser::string`: requires the opening quote; lone escaped surrogates are accepted.
 // Non-ASCII bytes are validated in place, one scalar at a time (error 4 at the scalar's first byte).
-pub fn scan_string(input: [u8], pos: i64, end: i64) -> Scan
+pub fn scan_string(input: [u8], inout pos: i64, end: i64) -> Result<(), Fault>
   requires 0 <= pos && pos < end && end <= len(input)
   requires input[pos] == 34
-  ensures pos <= result.position && result.position <= end
-  ensures 0 <= result.kind && result.kind <= 17
-  ensures result.kind == 0 ==> pos < result.position
+  ensures old(pos) < pos && pos <= end
+  ensures !is_ok(result) ==> (err_val(result).position == pos && 0 < err_val(result).kind && err_val(result).kind <= 17)
 {
-  let mut i: i64 = pos + 1;
-  while i < end
-    invariant pos < i && i <= end && end <= len(input)
-    decreases end - i
+  pos = pos + 1;
+  while pos < end
+    invariant old(pos) < pos && pos <= end && end <= len(input)
+    decreases end - pos
   {
-    let c: i64 = input[i];
-    if c == 34 { return outcome(i + 1, 0); }
-    if c < 32 { return outcome(i, 16); }
+    let c: i64 = input[pos];
+    if c == 34 { pos = pos + 1; return Ok::<(), Fault>(()); }
+    if c < 32 { return Err::<(), Fault>(Fault { position: pos, kind: 16 }); }
     if c >= 128 {
-      let scalar_end: i64 = i + scalar_width(c);
-      if scalar_end > end { return outcome(i, 4); }
-      if validate_utf8(input, i, scalar_end) >= 0 { return outcome(i, 4); }
-      i = scalar_end;
+      let scalar_end: i64 = pos + scalar_width(c);
+      if scalar_end > end { return Err::<(), Fault>(Fault { position: pos, kind: 4 }); }
+      if validate_utf8(input, pos, scalar_end) >= 0 { return Err::<(), Fault>(Fault { position: pos, kind: 4 }); }
+      pos = scalar_end;
     } else {
-      i = i + 1;
+      pos = pos + 1;
       if c == 92 {
-        if i == end { return outcome(end, 5); }
-        let esc: i64 = input[i];
+        if pos == end { return Err::<(), Fault>(Fault { position: pos, kind: 5 }); }
+        let esc: i64 = input[pos];
         if esc == 117 {
-          i = i + 1;
-          let hex_start: i64 = i;
+          pos = pos + 1;
+          let hex_start: i64 = pos;
           let mut k: i64 = 0;
           while k < 4
-            invariant 0 <= k && k <= 4 && pos < i && i <= end && end <= len(input)
-            invariant i >= hex_start
+            invariant 0 <= k && k <= 4 && old(pos) < pos && pos <= end && end <= len(input)
+            invariant pos >= hex_start
             decreases 4 - k
           {
-            if i == end { return outcome(end, 5); }
-            let h: i64 = input[i];
+            if pos == end { return Err::<(), Fault>(Fault { position: pos, kind: 5 }); }
+            let h: i64 = input[pos];
             if !((48 <= h && h <= 57) || (65 <= h && h <= 70) || (97 <= h && h <= 102)) {
-              return outcome(i, 15);
+              return Err::<(), Fault>(Fault { position: pos, kind: 15 });
             }
-            i = i + 1;
+            pos = pos + 1;
             k = k + 1;
           }
         } else {
           if esc != 34 && esc != 92 && esc != 47 && esc != 98 && esc != 102 && esc != 110 && esc != 114 && esc != 116 {
-            return outcome(i, 14);
+            return Err::<(), Fault>(Fault { position: pos, kind: 14 });
           }
-          i = i + 1;
+          pos = pos + 1;
         }
       }
     }
   }
-  return outcome(end, 17);
+  return Err::<(), Fault>(Fault { position: pos, kind: 17 });
 }

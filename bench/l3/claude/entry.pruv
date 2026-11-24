@@ -58,8 +58,13 @@ fn terminal_array(data: [u8], start: i64, end: i64) -> i64
   {
     number = number - 1;
   }
-  let token: crate::lex::Scan = crate::lex::scan_number(data, number, close);
-  if token.kind != 0 || token.position != close || number - start < depth { return -1; }
+  let mut cursor: i64 = number;
+  let token: Result<(), crate::lex::Fault> = crate::lex::scan_number(data, inout cursor, close);
+  match token {
+    Err(fault) => { return -1; }
+    Ok(()) => {}
+  }
+  if cursor != close || number - start < depth { return -1; }
   let first: i64 = number - depth;
   let mut i: i64 = first;
   while i < number

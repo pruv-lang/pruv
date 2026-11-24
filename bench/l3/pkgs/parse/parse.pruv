@@ -7,8 +7,6 @@ mod lex;
 // TrailingComma blames the closing delimiter, not the comma.
 pub struct Pass { position: i64, kind: i64, records: i64 }
 enum Lexed { Value(kind: i64, plain: bool), Error(kind: i64) }
-// The one error value of the recursive descent (the hand `Err((pos, kind))`).
-struct Fault { position: i64, kind: i64 }
 
 fn utf8_width(byte: i64) -> i64
   ensures 1 <= result && result <= 4
@@ -19,13 +17,14 @@ fn utf8_width(byte: i64) -> i64
   return 1;
 }
 
-// D33: crate::lex::scan_string with the UTF-8 check folded in, so parse reads string bytes once.
+// D33: `crate::lex::scan_string` that also returns the plain bit; used only by `token_at` (scan_into, P8).
+// The recursive path (`record`) calls `crate::lex::scan_string` like the hand `self.string()?`.
 // Non-ASCII bytes are validated in place.
 // An invalid sequence stops the token with error 4; parse then reports the first invalid byte.
 // Like the hand `Parser::string`, an error is returned once as `Fault { position, kind }` at the cursor.
 // The Ok value is the plain bit (no escape), which feeds `string_utf8_plain`.
 // start lets the contract relate the final cursor to its entry position.
-fn string_token(input: [u8], start: i64, end: i64, inout pos: i64) -> Result<bool, Fault>
+fn string_token(input: [u8], start: i64, end: i64, inout pos: i64) -> Result<bool, crate::lex::Fault>
   requires 0 <= start && start < end && end <= len(input) && pos == start
   ensures start <= pos && pos <= end
   ensures is_ok(result) ==> start < pos
@@ -38,18 +37,18 @@ fn string_token(input: [u8], start: i64, end: i64, inout pos: i64) -> Result<boo
     decreases end - pos
   {
     let c: i64 = input[pos];
-    if c == 34 { pos = pos + 1; return Ok::<bool, Fault>(plain); }
-    if c < 32 { return Err::<bool, Fault>(Fault { position: pos, kind: 16 }); }
+    if c == 34 { pos = pos + 1; return Ok::<bool, crate::lex::Fault>(plain); }
+    if c < 32 { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 16 }); }
     if c >= 128 {
       let scalar_end: i64 = pos + utf8_width(c);
-      if scalar_end > end { return Err::<bool, Fault>(Fault { position: pos, kind: 4 }); }
-      if crate::lex::validate_utf8(input, pos, scalar_end) >= 0 { return Err::<bool, Fault>(Fault { position: pos, kind: 4 }); }
+      if scalar_end > end { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 4 }); }
+      if crate::lex::validate_utf8(input, pos, scalar_end) >= 0 { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 4 }); }
       pos = scalar_end;
     } else {
       pos = pos + 1;
       if c == 92 {
         plain = false;
-        if pos == end { return Err::<bool, Fault>(Fault { position: pos, kind: 5 }); }
+        if pos == end { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 5 }); }
         let esc: i64 = input[pos];
         if esc == 117 {
           pos = pos + 1;
@@ -60,24 +59,24 @@ fn string_token(input: [u8], start: i64, end: i64, inout pos: i64) -> Result<boo
             invariant pos >= hex_start
             decreases 4 - k
           {
-            if pos == end { return Err::<bool, Fault>(Fault { position: pos, kind: 5 }); }
+            if pos == end { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 5 }); }
             let h: i64 = input[pos];
             if !((48 <= h && h <= 57) || (65 <= h && h <= 70) || (97 <= h && h <= 102)) {
-              return Err::<bool, Fault>(Fault { position: pos, kind: 15 });
+              return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 15 });
             }
             pos = pos + 1;
             k = k + 1;
           }
         } else {
           if esc != 34 && esc != 92 && esc != 47 && esc != 98 && esc != 102 && esc != 110 && esc != 114 && esc != 116 {
-            return Err::<bool, Fault>(Fault { position: pos, kind: 14 });
+            return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 14 });
           }
           pos = pos + 1;
         }
       }
     }
   }
-  return Err::<bool, Fault>(Fault { position: pos, kind: 17 });
+  return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 17 });
 }
 
 // Token packet for the reusable-scratch path `scan_into` (P8) only; the recursive path dispatches in `record`.
@@ -92,7 +91,7 @@ fn token_at(input: [u8], start: i64, end: i64, key: bool, inout pos: i64) -> Lex
   let c: i64 = input[pos];
   if key && c != 34 { return Lexed::Error(7); }
   if c == 34 {
-    let text: Result<bool, Fault> = string_token(input, start, end, inout pos);
+    let text: Result<bool, crate::lex::Fault> = string_token(input, start, end, inout pos);
     match text {
       Err(fault) => { return Lexed::Error(fault.kind); }
       Ok(plain) => {
@@ -107,17 +106,24 @@ fn token_at(input: [u8], start: i64, end: i64, key: bool, inout pos: i64) -> Lex
     return Lexed::Value(6, false);
   }
   if c == 116 || c == 102 || c == 110 {
-    let r: crate::lex::Scan = crate::lex::scan_literal(input, pos, end);
-    pos = r.position;
-    if r.kind != 0 { return Lexed::Error(r.kind); }
+    let mut r: Result<(), crate::lex::Fault> = Ok::<(), crate::lex::Fault>(());
+    if c == 116 { r = crate::lex::scan_literal(input, inout pos, end, "true"); }
+    else if c == 102 { r = crate::lex::scan_literal(input, inout pos, end, "false"); }
+    else { r = crate::lex::scan_literal(input, inout pos, end, "null"); }
+    match r {
+      Err(fault) => { return Lexed::Error(fault.kind); }
+      Ok(()) => {}
+    }
     if c == 116 { return Lexed::Value(2, false); }
     if c == 102 { return Lexed::Value(1, false); }
     return Lexed::Value(0, false);
   }
   if c == 45 || (48 <= c && c <= 57) {
-    let r: crate::lex::Scan = crate::lex::scan_number(input, pos, end);
-    pos = r.position;
-    if r.kind != 0 { return Lexed::Error(r.kind); }
+    let r: Result<(), crate::lex::Fault> = crate::lex::scan_number(input, inout pos, end);
+    match r {
+      Err(fault) => { return Lexed::Error(fault.kind); }
+      Ok(()) => {}
+    }
     return Lexed::Value(3, false);
   }
   return Lexed::Error(6);
@@ -196,8 +202,7 @@ pred fn parents_ok(tape: [i64], lo: i64, hi: i64) -> bool {
 }
 
 // Hand `Parser::record` / `Parser::container`: one recursion, errors passed up with `?`.
-// `record` returns `Ok(0)`: the hand returns `ParseResult<()>`, and `Result<(), Fault>` is not a type (gap RU).
-fn record(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, depth: i64, key: bool) -> Result<i64, Fault> ! alloc
+fn record(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, depth: i64, key: bool) -> Result<(), crate::lex::Fault> ! alloc
   requires 0 <= pos && pos <= len(input) && len(input) <= 16777216
   requires 0 <= depth && depth <= 128 && len(tape) % 6 == 0 && len(tape) <= 6291456
   requires len(tape) > 0 ==> (0 <= parent && 6 * parent < len(tape) && (tape[6 * parent] == 5 || tape[6 * parent] == 6) && tape[6 * parent + 1] < pos)
@@ -212,14 +217,14 @@ fn record(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, depth: i6
   decreases 2 * (129 - depth)
 {
   let end: i64 = len(input);
-  pos = crate::lex::skip_whitespace(input, pos, end);
+  crate::lex::skip_whitespace(input, inout pos, end);
   let start: i64 = pos;
-  if pos == end { return Err::<i64, Fault>(Fault { position: pos, kind: 5 }); }
+  if pos == end { return Err::<(), crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 5 }); }
   let byte: i64 = input[pos];
-  if key && byte != 34 { return Err::<i64, Fault>(Fault { position: start, kind: 7 }); }
+  if key && byte != 34 { return Err::<(), crate::lex::Fault>(crate::lex::Fault { position: start, kind: 7 }); }
   let mut kind: i64 = 0;
   if byte == 34 {
-    string_token(input, start, end, inout pos)?;
+    crate::lex::scan_string(input, inout pos, end)?;
     kind = 4;
     if key { kind = 7; }
   } else if byte == 91 {
@@ -228,23 +233,24 @@ fn record(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, depth: i6
   } else if byte == 123 {
     pos = pos + 1;
     kind = 6;
-  } else if byte == 116 || byte == 102 || byte == 110 {
-    let r: crate::lex::Scan = crate::lex::scan_literal(input, pos, end);
-    pos = r.position;
-    if r.kind != 0 { return Err::<i64, Fault>(Fault { position: pos, kind: r.kind }); }
-    if byte == 116 { kind = 2; } else if byte == 102 { kind = 1; }
+  } else if byte == 110 {
+    crate::lex::scan_literal(input, inout pos, end, "null")?;
+  } else if byte == 102 {
+    crate::lex::scan_literal(input, inout pos, end, "false")?;
+    kind = 1;
+  } else if byte == 116 {
+    crate::lex::scan_literal(input, inout pos, end, "true")?;
+    kind = 2;
   } else if byte == 45 || (48 <= byte && byte <= 57) {
-    let r: crate::lex::Scan = crate::lex::scan_number(input, pos, end);
-    pos = r.position;
-    if r.kind != 0 { return Err::<i64, Fault>(Fault { position: pos, kind: r.kind }); }
+    crate::lex::scan_number(input, inout pos, end)?;
     kind = 3;
   } else {
-    return Err::<i64, Fault>(Fault { position: start, kind: 6 });
+    return Err::<(), crate::lex::Fault>(crate::lex::Fault { position: start, kind: 6 });
   }
   let base: i64 = len(tape);
   let id: i64 = base / 6;
-  if id == 1048576 { return Err::<i64, Fault>(Fault { position: start, kind: 2 }); }
-  if (kind == 5 || kind == 6) && depth == 128 { return Err::<i64, Fault>(Fault { position: start, kind: 3 }); }
+  if id == 1048576 { return Err::<(), crate::lex::Fault>(crate::lex::Fault { position: start, kind: 2 }); }
+  if (kind == 5 || kind == 6) && depth == 128 { return Err::<(), crate::lex::Fault>(crate::lex::Fault { position: start, kind: 3 }); }
   append_record(inout tape, id, kind, start, pos, parent, 0);
   if kind == 5 || kind == 6 {
     let children: i64 = container(input, inout pos, inout tape, id, depth + 1, kind == 6)?;
@@ -252,10 +258,10 @@ fn record(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, depth: i6
     tape[base + 3] = len(tape) / 6;
     tape[base + 5] = children;
   }
-  return Ok::<i64, Fault>(0);
+  return Ok::<(), crate::lex::Fault>(());
 }
 
-fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64, object: bool) -> Result<i64, Fault> ! alloc
+fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64, object: bool) -> Result<i64, crate::lex::Fault> ! alloc
   requires 0 <= pos && pos <= len(input) && len(input) <= 16777216
   requires 1 <= depth && depth <= 128 && len(tape) % 6 == 0 && len(tape) <= 6291456
   requires 0 <= id && 6 * id < len(tape) && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < pos
@@ -270,10 +276,10 @@ fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64
   let end: i64 = len(input);
   let mut close: i64 = 93;
   if object { close = 125; }
-  pos = crate::lex::skip_whitespace(input, pos, end);
+  crate::lex::skip_whitespace(input, inout pos, end);
   if pos < end && input[pos] == close {
     pos = pos + 1;
-    return Ok::<i64, Fault>(0);
+    return Ok::<i64, crate::lex::Fault>(0);
   }
   let mut children: i64 = 0;
   while pos <= end
@@ -288,29 +294,29 @@ fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64
   {
     if object {
       record(input, inout pos, inout tape, id, depth, true)?;
-      pos = crate::lex::skip_whitespace(input, pos, end);
-      if pos == end { return Err::<i64, Fault>(Fault { position: pos, kind: 5 }); }
-      if input[pos] != 58 { return Err::<i64, Fault>(Fault { position: pos, kind: 8 }); }
+      crate::lex::skip_whitespace(input, inout pos, end);
+      if pos == end { return Err::<i64, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 5 }); }
+      if input[pos] != 58 { return Err::<i64, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 8 }); }
       pos = pos + 1;
     }
     record(input, inout pos, inout tape, id, depth, false)?;
     children = children + 1;
-    pos = crate::lex::skip_whitespace(input, pos, end);
-    if pos == end { return Err::<i64, Fault>(Fault { position: pos, kind: 5 }); }
+    crate::lex::skip_whitespace(input, inout pos, end);
+    if pos == end { return Err::<i64, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 5 }); }
     let byte: i64 = input[pos];
     if byte == close {
       pos = pos + 1;
-      return Ok::<i64, Fault>(children);
+      return Ok::<i64, crate::lex::Fault>(children);
     }
-    if byte != 44 { return Err::<i64, Fault>(Fault { position: pos, kind: 9 }); }
+    if byte != 44 { return Err::<i64, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 9 }); }
     pos = pos + 1;
-    pos = crate::lex::skip_whitespace(input, pos, end);
-    if pos < end && input[pos] == close { return Err::<i64, Fault>(Fault { position: pos, kind: 10 }); }
+    crate::lex::skip_whitespace(input, inout pos, end);
+    if pos < end && input[pos] == close { return Err::<i64, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 10 }); }
   }
-  return Err::<i64, Fault>(Fault { position: end, kind: 5 });
+  return Err::<i64, crate::lex::Fault>(crate::lex::Fault { position: end, kind: 5 });
 }
 // Parse one root and consume its trailing whitespace (hand `parse`).
-fn scan_records(input: [u8], inout tape: [i64]) -> Result<i64, Fault> ! alloc
+fn scan_records(input: [u8], inout tape: [i64]) -> Result<(), crate::lex::Fault> ! alloc
   requires len(input) <= 16777216 && len(tape) == 0
   ensures !is_ok(result) ==> (0 <= err_val(result).position && err_val(result).position <= len(input))
   ensures is_ok(result) ==> (len(input) >= 1 && len(tape) % 6 == 0 && len(tape) >= 6 && len(tape) <= 6291456)
@@ -322,9 +328,9 @@ fn scan_records(input: [u8], inout tape: [i64]) -> Result<i64, Fault> ! alloc
   arr_reserve(inout tape, 32 * 6);
   let mut pos: i64 = 0;
   record(input, inout pos, inout tape, -1, 0, false)?;
-  pos = crate::lex::skip_whitespace(input, pos, n);
-  if pos != n { return Err::<i64, Fault>(Fault { position: pos, kind: 11 }); }
-  return Ok::<i64, Fault>(0);
+  crate::lex::skip_whitespace(input, inout pos, n);
+  if pos != n { return Err::<(), crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 11 }); }
+  return Ok::<(), crate::lex::Fault>(());
 }
 
 // The scan outcome owns its tape so callers can move it into a document.
@@ -334,10 +340,10 @@ pub fn scan(input: [u8]) -> Checked ! alloc
   ensures is_variant(result, Checked::Rejected) ==> (0 <= variant_field(result, Checked::Rejected, position) && variant_field(result, Checked::Rejected, position) <= len(input))
 {
   let mut tape: [i64] = alloc(0, 0);
-  let root: Result<i64, Fault> = scan_records(input, inout tape);
+  let root: Result<(), crate::lex::Fault> = scan_records(input, inout tape);
   match root {
     Err(fault) => { return Checked::Rejected(fault.position, fault.kind); }
-    Ok(ignored) => { return Checked::Tape(move tape); }
+    Ok(()) => { return Checked::Tape(move tape); }
   }
 }
 
@@ -362,10 +368,10 @@ fn scan_document(input: [u8]) -> crate::json::JsonParse ! alloc
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6: ((variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] <= 4 || variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] == 7) ==> variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 5] == 0))
 {
   let mut tape: [i64] = alloc(0, 0);
-  let root: Result<i64, Fault> = scan_records(input, inout tape);
+  let root: Result<(), crate::lex::Fault> = scan_records(input, inout tape);
   match root {
     Err(fault) => { return failure(fault.position, fault.kind); }
-    Ok(ignored) => {
+    Ok(()) => {
       return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: copy(input), tape: move tape });
     }
   }
@@ -475,7 +481,7 @@ pub fn scan_into(input: [u8], lo: i64, hi: i64, inout tape: [i64], inout stack: 
     invariant 6 * records <= len(tape)
     decreases hi - p + 1
   {
-    p = crate::lex::skip_whitespace(input, p, hi);
+    crate::lex::skip_whitespace(input, inout p, hi);
     let state: i64 = stack[4 * depth + 1];
     let parent: i64 = stack[4 * depth + 2];
     let container: i64 = stack[4 * depth];
