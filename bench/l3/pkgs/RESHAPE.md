@@ -368,5 +368,5 @@ Emitted Rust (qwen `rs_rust`, both compilers alike): `build_span` is `data[lo..h
 | supervisor `test_a0` .. `test_a3` | pass (4/4; `test_a3` 35/35 per pair) |
 | claude `test_a0` .. `test_a4` | pass (5/5) |
 | opencode `test_impl` | pass (199/199 on 4 pairs) |
-| codex `test_impl` | PENDING |
-| grok `test_impl` (`GROK_COMPILE_WALL=3600`) | PENDING |
+| codex `test_impl` | pass (136/136 on 4 pairs; rs/llvm rerun alone after the first run was killed) |
+| grok `test_impl` (`GROK_COMPILE_WALL=3600`) | pass (254/254 on 4 pairs) |
