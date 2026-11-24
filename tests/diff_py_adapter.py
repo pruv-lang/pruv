@@ -72,6 +72,7 @@ NODE_FIELDS = {
     "Var": ("name", "ty"),
     "Unary": ("op", "operand", "ty"),
     "Binary": ("op", "left", "right", "ty"),
+    "PlaceIf": ("cond", "then", "els", "ty"),  # R-6g9-5
     "Call": ("name", "args", "ty"),
     "Index": ("array", "index", "ty"),
     "Ctor": ("name", "arg", "ty"),
