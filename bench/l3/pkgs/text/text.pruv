@@ -183,7 +183,7 @@ pub fn one_line(s: str, max: i64) -> str ! alloc
         i = n;
       } else {
         if p == 1 { out = string_push_str(move out, " "); }
-        out = string_push_str(move out, substr(s, i, j));
+        out = string_push_str(move out, subview(s, i, j));
         u = u + p + w;
         p = 0;
         i = j;

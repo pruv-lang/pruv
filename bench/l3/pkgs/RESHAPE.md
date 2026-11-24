@@ -20,9 +20,9 @@ measured only for a package whose table shows zero differences.
 | Package | Differences left | Measured |
 |---|---|---|
 | json | 2 (B-LLVM source copy, D32 publication checks; root tape copy TK) | no |
-| text | 3 (`trim`, `clip_bytes`: B-LLVM; `one_line`: SR) | no |
+| text | 2 (`trim`, `clip_bytes`: B-LLVM; `one_line` reshaped in step 2.5) | no |
 | names | 0 (`project_name` reshaped in step 2.2b) | no |
-| args | 1 (`build_args`: SR) | no |
+| args | 1 (`build_args`: rewrite pending; LB9 lets `proc_args_push` take `subview`) | no |
 | tail | whole package (hand is UTF-8 `Vec<u8>`; decoder pick: FM) | no |
 | lex | 1 (cursor and return form of the `scan_*` API: RU, plus a package API change; loop of `scan_string` = since step 2.6) | loop only (step 2.6), not the gate measurement |
 | bytes | 0 | no (not run in this step) |
@@ -53,7 +53,7 @@ before this rule and is withdrawn, along with its debt rows).
 | `trim_span(s) -> Span` | `s.trim()` bounds | `str -> {lo,hi}` | borrow | two passes | none | = (span form of trim) |
 | `trim(s) -> str` | `s.trim() -> &str` | `str -> str` | Pruv returns an owned copy | — | Pruv: 1 (`substr`) | **B-LLVM** (borrowed result). Callers that only need bounds use `trim_span`. |
 | `same(a, b)` | `a == b` | `str` | borrow | one pass | none | = |
-| `one_line(s, max) -> str` | `qwen/handrust/src/lib.rs:325`: `for c in s.trim_matches(is_es_ws).chars()`, `out.push(c)` per scalar, `push(' ')` per whitespace run | `str -> String` | owned result (=) | one pass (=) | hand: `out` growth only; Pruv: plus one `substr` temporary per scalar | Unchanged (HEAD). **SR**: Pruv has no scalar push, and neither `subview` nor a scalar can be the argument of `string_push_str`. A wrapper fn would differ from hand, so none is used. |
+| `one_line(s, max) -> str` | `qwen/handrust/src/lib.rs:325`: `for c in s.trim_matches(is_es_ws).chars()`, `out.push(c)` per scalar, `push(' ')` per whitespace run | `str -> String` | owned result (=) | one pass (=) | `out` growth only (=) | **changed in 2.5** (LB7, R-6g6-3): the scalar is pushed as `string_push_str(move out, subview(s, i, j))`, Rust `out.push_str(&s[i..j])`, with no temporary (was one `substr` per scalar). = See step 2.5 for the line-by-line comparison. |
 | `clip_bytes(s, max) -> str` | `&s[..floor_char_boundary(max)]` | `str -> str` | Pruv returns an owned copy | ≤3 steps back | Pruv: 1 (`substr`) | **B-LLVM** (borrowed result). |
 | `engine_line(text, task_origin)` | `let t = text.trim(); t == "[Request…]" \|\| …` | `str -> bool` | borrow | `eq_at` per literal | **changed**: the literals are written inline at each comparison like hand (`t == "…"`), so no `let a: str = "…"` local (which emits `String::from`, gap SL) | = now. `! alloc` kept on the signature for caller stability. |
 | `dropped_user` and helpers (`ws_at`, `skip_ws`, `lit_end`, `quoted_end`, `colon_value`, `kv`, `tool_result_after`, `content_hit`, `eq_at`) | byte scans over `as_bytes()` | `[u8]`/`str` | borrow | one pass | none (literal arguments are `&'static str`) | = . The `! alloc` marks are stale but kept for caller stability. |
@@ -71,7 +71,7 @@ before this rule and is withdrawn, along with its debt rows).
 | Pruv | Hand Rust | Types | Ownership | Loops | Allocations | Difference and reason |
 |---|---|---|---|---|---|---|
 | `arg_spans(argv) -> [i64]` | `argv.is_empty() \|\| argv.ends_with('\0')` check, no spans | `str -> [i64]` | owned packet | one pass | Pruv 1-2; hand 0 | Unchanged (HEAD). Exists only because `build_args` cannot push from the blob (SR). |
-| `build_args(argv) -> ProcessArgs` | `for p in argv.split_terminator('\0') { cmd.arg(p) }` | `str -> ProcessArgs` | owned result | one pass | hand 1 per argument (inside `arg`); Pruv span packet + `substr` + `String::from` per argument | Unchanged (HEAD). **SR**: `proc_args_push` takes no `subview`; a wrapper fn would differ from hand. |
+| `build_args(argv) -> ProcessArgs` | `for p in argv.split_terminator('\0') { cmd.arg(p) }` | `str -> ProcessArgs` | owned result | one pass | hand 1 per argument (inside `arg`); Pruv span packet + `substr` + `String::from` per argument | Unchanged (HEAD). **SR rest**: `proc_args_push` takes no `subview` (LB7 R-6g6-3 covers only `string_push_str` / `string_from`); a wrapper fn would differ from hand. |
 
 Callers (mcp `root.pruv`, codex `rpc.pruv` `child_args`) unchanged.
 
@@ -286,7 +286,7 @@ already the hand shape.
 | L2 | `parse_owned(take data, hi)` | `parse(&data)` on an owned buffer | `JsonParse` | takes the buffer; `truncate` in place | UTF-8 check + scan | the tape | **=** Caller: `grok/rpc.pruv:628` |
 | L3 | `parse_copy(data, lo, hi)` | `parse(&line[lo..hi])` | `JsonParse` | one exact copy | as L2 | copy + tape | **B-LLVM** (copy kept for the owned source). Callers: `codex/rpc.pruv:82`, `mcp/root.pruv:118` |
 | L4 | `scan_span`, `parse_span` | none (hand parses each line into a fresh `Document`) | caller scratch `inout tape`, `inout stack` | `inout` | scan | none in the scan | **W-c**: scratch API like P8. Callers: `qwen/entry.pruv:32`, `grok/read.pruv:570` |
-| L5 | `build_span(data, lo, hi, tape, records)` | `Document { source: data[lo..hi].to_vec(), tape: tape[..m].to_vec() }` | `JsonDocument` | result owns both | tape prefix: element loop | source: one exact copy (=); tape: zeroed `alloc(m, 0)` + loop | **changed in 2.3**: the result took `copy(source)` and `copy(exact)` of locals it owned; now both are moved. The tape prefix loop stays: **ZP** (new in §4). Callers: `grok/read.pruv:360`, `parse_span` |
+| L5 | `build_span(data, lo, hi, tape, records)` | `Document { source: data[lo..hi].to_vec(), tape: tape[..m].to_vec() }` | `JsonDocument` | result owns both | tape prefix: element loop | source: one exact copy (=); tape: one exact copy (2.5) | **changed in 2.3**: the result took `copy(source)` and `copy(exact)` of locals it owned; now both are moved. **changed in 2.5**: the tape prefix is `copy(subview(tape, 0, m))` (ZP closed by LB7, R-6g6-2), Rust `tape[..m].to_vec()`. = Callers: `grok/read.pruv:360`, `parse_span` |
 | L6 | `absolute_offset(base, start, position)` | `base.checked_add(start)?.checked_add(position)` | `i64` | — | none | none | **=** |
 
 Status count: = 9 rows (A0, A1, A5, A7, A9, A10, L0, L2, L6) plus the ASCII path of A3 and the source half of L5;
@@ -350,3 +350,58 @@ The loop difference is gone. The structure difference is not zero: the cursor an
 | L 15 MiB | long ASCII | 0.837 (0.73-0.85) | 0.727 (0.71-0.74) | 0.747 (0.66-0.90) | 16.5 MiB all three |
 
 L is 15 MiB because the A1 root requires `end <= 16777216`, and the buffer runs slightly past its target size. The Pruv median is at or under the hand median in every cell, and the ranges overlap. Five runs do not show a difference either way. Max RSS is the same for all three, and neither scanner allocates. A first 1 MiB ASCII smoke run read 2.65 vs 0.78 ns/byte. It did not repeat in three back-to-back pairs (0.87/0.95, 1.12/1.04, 0.80/0.91) or in the alternated runs above. Its cause is not known.
+
+## Step 2.5: rows freed by LB7 (ZP, SR sub-range)
+
+LB7 closed ZP (SPEC R-6g6-2) and the sub-range part of SR (R-6g6-3: `string_push_str` / `string_from` take
+`subview(t, lo, hi)` with no temporary). This step rewrites the rows that waited only on those. The scalar push and
+`proc_args_push` parts of SR, and RU, FM, TK, SL, B-LLVM, ABI / V, stay open; their rows are unchanged.
+
+| Row | Function | Status | Hand line |
+| --- | --- | --- | --- |
+| L5 | `lines::build_span` | **=**: tape prefix is `copy(subview(tape, 0, m))`, Rust `tape[..m].to_vec()` | `Document { source: data[lo..hi].to_vec(), tape: tape[..m].to_vec() }` |
+| text | `text::one_line` | **=**: each kept scalar is `string_push_str(move out, subview(s, i, j))`, Rust `out.push_str(&s[i..j])`; no per-scalar temporary | `qwen/handrust/src/lib.rs:325` |
+| args | `args::build_args`, `arg_spans` | unchanged: **SR rest** (`proc_args_push` takes no `subview`) | `for p in argv.split_terminator('\0') { cmd.arg(p) }` |
+
+### Line-by-line structure
+
+`lines::build_span(data, lo, hi, tape, records)` against the hand `Document` construction:
+
+| Item | Hand Rust | Pruv (2.5) | Same? |
+| --- | --- | --- | --- |
+| Types | `&[u8]`, `&[i64]` in; `Document { source: Vec<u8>, tape: Vec<i64> }` out | `[u8]`, `[i64]` borrowed in; `JsonParse::Parsed(JsonDocument { source: [u8], tape: [i64] })` | = (the `JsonParse` wrapper is the `Result` of the row in step 2.1) |
+| Source bytes | `data[lo..hi].to_vec()` | `copy(subview(data, lo, hi))` | = (one exact allocate-and-copy) |
+| Tape prefix | `tape[..m].to_vec()` | `copy(subview(tape, 0, m))` | = (was zeroed `alloc(m, 0)` + element loop) |
+| Ownership | both vectors moved into the document | `move source`, `move exact` | = |
+| Loops | none | none (`check_tape` is the D32 publication check, **P**, step 2.1 json row) | = apart from **P** |
+| Allocation sites | 2 exact | 2 exact | = |
+
+`text::one_line(s, max)` against `qwen/handrust/src/lib.rs:325`:
+
+| Item | Hand Rust | Pruv (2.5) | Same? |
+| --- | --- | --- | --- |
+| Types | `&str, usize -> String` | `str, i64 -> str` (owned `String` built, returned as `str`) | = |
+| Loop | `for c in s.chars()`, one pass | `while i < n` stepping `next(s, i)` scalar by scalar, one pass | = |
+| Whitespace run | `pending = true` | `p = 1` when `out` is non-empty | = |
+| Pending space | `out.push(' ')` | `string_push_str(move out, " ")` (Rust `push_str(" ")`, `&'static str`) | = (one byte copied, no allocation) |
+| Kept scalar | `out.push(c)` (encodes `c`, 1-4 bytes) | `string_push_str(move out, subview(s, i, j))` (copies the same 1-4 source bytes) | = in bytes copied and allocations; was one `substr` `String` per scalar |
+| Allocation sites | `out` growth only | `out` growth only | = |
+
+No performance was measured: the packages still have open gap rows (B-LLVM in `text`, SR rest in `args`, B-LLVM and U
+in `lines`/`access`).
+
+Emitted Rust (qwen `rs_rust`, both compilers alike): `build_span` is `data[lo..hi].to_vec()` and `tape[0..m].to_vec()`
+(`get_unchecked` ranges) moved into the document; `one_line` pushes `get_unchecked(i..j)` of `s` with `push_str`.
+
+### Consumer tests (step 2.5)
+
+| Test | Result |
+| --- | --- |
+| json `run_a0` .. `run_a5` | pass (6/6) |
+| mcp `test_impl` | pass (22/22 per pair) |
+| qwen `test_impl` | pass (26/26 on py/rust, py/llvm, rs/rust, rs/llvm) |
+| supervisor `test_a0` .. `test_a3` | pass (4/4; `test_a3` 35/35 per pair) |
+| claude `test_a0` .. `test_a4` | pass (5/5) |
+| opencode `test_impl` | pass (199/199 on 4 pairs) |
+| codex `test_impl` | pass (136/136 on 4 pairs; rs/llvm rerun alone after the first run was killed) |
+| grok `test_impl` (`GROK_COMPILE_WALL=3600`) | pass (254/254 on 4 pairs) |
