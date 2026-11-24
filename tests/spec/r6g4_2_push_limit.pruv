@@ -1,0 +1,6 @@
+// spec: R-6g4-2 reject
+fn f(inout a: [i64]) -> () ! alloc
+  requires len(a) == 1099511627776
+{
+  arr_push(inout a, 1);
+}

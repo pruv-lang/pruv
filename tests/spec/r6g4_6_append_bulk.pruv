@@ -1,0 +1,33 @@
+// spec: R-6g4-6 accept
+struct Buffers { bytes: [u8], words: [i64] }
+
+fn widen(inout a: [i64], raw: [u8], s: i64, n: i64) -> () ! alloc
+  requires 0 <= s && 0 <= n && s + n <= len(raw) && len(a) + n <= 1099511627776
+  ensures len(a) == len(old(a)) + n
+  ensures forall k in 0..len(old(a)): a[k] == old(a)[k]
+  ensures forall k in 0..n: a[len(old(a)) + k] == raw[s + k]
+{
+  arr_append(inout a, raw, s, n);
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let mut a: [i64] = alloc(1, 7);
+  let mut raw: [u8] = alloc(4, 2);
+  raw[2] = 250;
+  widen(inout a, raw, 1, 2);
+  assert len(a) == 3 && a[0] == 7 && a[1] == 2 && a[2] == 250;
+
+  let bytes: [u8] = alloc(1, 3);
+  let words: [i64] = alloc(1, 5);
+  let mut b: Buffers = Buffers { bytes: move bytes, words: move words };
+  arr_append(inout b.bytes, raw, 1, 2);
+  assert len(b.bytes) == 3 && b.bytes[0] == 3 && b.bytes[1] == 2 && b.bytes[2] == 250;
+  arr_append(inout b.words, b.bytes, 1, 1);
+  assert len(b.words) == 2 && b.words[0] == 5 && b.words[1] == 2;
+
+  arr_reserve(inout a, 3);
+  arr_append(inout a, b.words, 0, 2);
+  arr_append(inout a, b.words, 2, 0);
+  assert len(a) == 5 && a[2] == 250 && a[3] == 5 && a[4] == 2;
+  return len(a) + len(b.bytes) + a[0] + a[1] + a[2] + a[3] + a[4] + b.bytes[0] + b.bytes[2];
+}

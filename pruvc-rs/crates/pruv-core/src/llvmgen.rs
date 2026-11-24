@@ -1293,6 +1293,7 @@ pub struct Mod {
     pub resize_u8: bool,
     pub resize_narrow: bool,
     /// LG32 (G-DB52-4): in-place resize helpers used (pruv_regrow, pruv_regrow_u8)
+    pub raw_regrow: bool,
     pub regrow_i64: bool,
     pub regrow_u8: bool,
     /// LG34 (G-LG32-3): the narrow-layout regrow helper (pruv_regrow_narrow)
@@ -1342,6 +1343,7 @@ impl Mod {
             resize_i64: false,
             resize_u8: false,
             resize_narrow: false,
+            raw_regrow: false,
             regrow_i64: false,
             regrow_u8: false,
             regrow_narrow: false,
@@ -3380,18 +3382,19 @@ impl<'a> FnGen<'a> {
         Ok(())
     }
 
-    /// LG32 (G-DB52-4): `x = resize(x, n, v)` on an owned local / inout array slot grows the slot's block in place
-    /// (realloc), so the old and new blocks are never live together.  Returns false when the statement does not have
-    /// that shape (the caller then uses the generic path).  LG34 (G-LG32-3): every scalar element kind (u8, bool, i64
-    /// and the narrow layouts).
+    /// Apply a self-assigned resize or truncate to an owned local or inout array slot.
     fn regrow_assign(&mut self, name: &str, value: &Expr, sl: &Slot) -> R<bool> {
         let Expr::Call(c) = value else { return Ok(false) };
-        if self.cost || sl.k != Kind::Arr || c.name != "resize" || c.args.len() != 3 {
+        if self.cost || sl.k != Kind::Arr || !matches!(c.name.as_str(), "resize" | "truncate") || self.funcs.contains_key(&c.name) {
             return Ok(false);
         }
         let Expr::Var(x) = &c.args[0] else { return Ok(false) };
         if x.name != name {
             return Ok(false);
+        }
+        if c.name == "truncate" {
+            self.truncate_len(c, &sl.b)?;
+            return Ok(true);
         }
         let layout = self.slot_layouts.get(&sl.a).copied().unwrap_or(sl.layout);
         let src = self.load(sl)?; // a = ptr, b = len, c = cap
@@ -3405,12 +3408,10 @@ impl<'a> FnGen<'a> {
         Ok(true)
     }
 
-    /// LG34 (G-LG32-3): `x.f = resize(x.f, n, v)` (the same field path on both sides, a buffer field of an extended
-    /// struct local or `inout` struct parameter) grows the field's block in place like regrow_assign; the field keeps
-    /// the block with cap max(n, cap).  Returns false when the statement does not have that shape.
+    /// Apply a self-assigned resize or truncate to an owned buffer field.
     fn regrow_field(&mut self, st: &FieldAssign, sl: &Slot) -> R<bool> {
         let Expr::Call(c) = &st.value else { return Ok(false) };
-        if self.cost || c.name != "resize" || c.args.len() != 3 {
+        if self.cost || !matches!(c.name.as_str(), "resize" | "truncate") || self.funcs.contains_key(&c.name) {
             return Ok(false);
         }
         let Some(sty) = sl.ty.clone() else { return Ok(false) };
@@ -3437,6 +3438,11 @@ impl<'a> FnGen<'a> {
         if !is_arr_name(&fty) {
             return Ok(false);
         }
+        if c.name == "truncate" {
+            let length = self.op(format!("getelementptr inbounds {}, ptr {}, i32 0, i32 1", ARR, gp))?;
+            self.truncate_len(c, &length)?;
+            return Ok(true);
+        }
         let ld = self.op(format!("load {}, ptr {}", ARR, gp))?;
         let src = self.unpack(&ld, &fty, false)?;
         let (q, cnt, nc) = self.regrow_val(&src, c)?;
@@ -3448,8 +3454,7 @@ impl<'a> FnGen<'a> {
         Ok(true)
     }
 
-    /// the in-place regrow of the owned array value src (its block, len and cap) by resize(_, n, v): the guards of
-    /// resize, then the helper of src's element kind; returns (new block, n, new cap)
+    /// Return the block, length and capacity after an in-place resize.
     fn regrow_val(&mut self, src: &V, c: &Call) -> R<(String, V, String)> {
         let cnt = self.ev(&c.args[1], false)?;
         let v = self.ev(&c.args[2], false)?;
@@ -3482,6 +3487,136 @@ impl<'a> FnGen<'a> {
         let gt = self.op(format!("icmp sgt i64 {}, {}", cnt.a, cap))?;
         let nc = self.op(format!("select i1 {}, i64 {}, i64 {}", gt, cnt.a, cap))?;
         Ok((q, nc))
+    }
+
+    fn truncate_guard(&mut self, old_len: &str, new_len: &str) -> R<()> {
+        let ok = self.op(format!("icmp ule i64 {new_len}, {old_len}"))?;
+        self.guard(&ok, Fail::Panic1("pruv_panic_arith", "truncate length outside 0..len".into()), false)
+    }
+
+    fn truncate_len(&mut self, c: &Call, length: &str) -> R<()> {
+        let cnt = self.ev(&c.args[1], false)?;
+        if !self.verified {
+            let old_len = self.op(format!("load i64, ptr {length}"))?;
+            self.truncate_guard(&old_len, &cnt.a)?;
+        }
+        self.ins(format!("store i64 {}, ptr {length}", cnt.a))
+    }
+
+    fn array_grow_stmt(&mut self, c: &Call) -> R<V> {
+        let Expr::InoutArg(dest) = &c.args[0] else { return Err("missing inout place".into()); };
+        let slot = if let Expr::Var(var) = dest.expr.as_ref() {
+            let Bind::Slot(slot) = self.lookup(&var.name)? else { return Err("array needs owned storage".into()); };
+            slot
+        } else {
+            let ptr = self.inout_place_ptr(&dest.expr)?;
+            self.array_slot(ptr, need_ty(&dest.ty)?)?
+        };
+        let src = self.load(&slot)?;
+        let value = self.ev(&c.args[1], false)?;
+        let push = c.name == "arr_push";
+        let append = if c.name == "arr_append" {
+            Some((self.ev(&c.args[2], false)?.a, self.ev(&c.args[3], false)?.a))
+        } else {
+            None
+        };
+        if !self.verified {
+            if let Some((start, count)) = &append {
+                let remaining = self.op(format!("sub i64 {}, {count}", value.b))?;
+                let start_ok = self.op(format!("icmp sge i64 {start}, 0"))?;
+                let count_ok = self.op(format!("icmp sge i64 {count}, 0"))?;
+                let end_ok = self.op(format!("icmp sle i64 {start}, {remaining}"))?;
+                let ok = self.op(format!("and i1 {start_ok}, {count_ok}"))?;
+                let ok = self.op(format!("and i1 {ok}, {end_ok}"))?;
+                self.guard(&ok, Fail::Oob(start.clone(), value.b.clone()), false)?;
+                let remaining = self.op(format!("sub i64 1099511627776, {}", src.b))?;
+                let ok = self.op(format!("icmp sle i64 {count}, {remaining}"))?;
+                self.guard(&ok, Fail::Panic1("pruv_panic_arith", "arr_append length exceeds 2^40".into()), false)?;
+            } else if push {
+                let ok = self.op(format!("icmp ult i64 {}, 1099511627776", src.b))?;
+                self.guard(&ok, Fail::Panic1("pruv_panic_arith", "arr_push length exceeds 2^40".into()), false)?;
+                if is_u8_ty(&src.ty) {
+                    let ok = self.op(format!("icmp ule i64 {}, 255", value.a))?;
+                    self.guard(&ok, Fail::Elem(value.a.clone(), "u8 0..=255"), false)?;
+                }
+            } else {
+                let ok = self.op(format!("icmp ule i64 {}, 1099511627776", value.a))?;
+                self.guard(&ok, Fail::Panic1("pruv_panic_arith", "arr_reserve length outside 0..2^40".into()), false)?;
+            }
+        }
+        let added = if push { "1" } else if let Some((_, count)) = &append { count } else { &value.a };
+        let need = self.op(format!("add i64 {}, {added}", src.b))?;
+        let cap = capof(&src);
+        let grow = self.op(format!("icmp ult i64 {cap}, {need}"))?;
+        let before = self.cur.clone();
+        let regrow = self.label("regrow");
+        let done = self.label("grown");
+        self.condbr(&grow, &regrow, &done)?;
+        self.place(&regrow);
+        let newcap = if push || append.is_some() {
+            let double = self.op(format!("mul i64 {cap}, 2"))?;
+            let enough = self.op(format!("icmp uge i64 {double}, {need}"))?;
+            let target = self.op(format!("select i1 {enough}, i64 {double}, i64 {need}"))?;
+            let enough = self.op(format!("icmp uge i64 {target}, 4"))?;
+            self.op(format!("select i1 {enough}, i64 {target}, i64 4"))?
+        } else {
+            need.clone()
+        };
+        let ty = elem_ir(&src);
+        let size = if is_bytes_ty(&src.ty) { 1 } else { elem_size(src.layout) };
+        self.m.raw_regrow = true;
+        let newptr = self.op(format!("call ptr @pruv_regrow_v2(ptr {}, i64 {cap}, i64 {newcap}, i64 {size}, i64 {size})", src.a))?;
+        self.ins(format!("store ptr {newptr}, ptr {}", slot.a))?;
+        self.ins(format!("store i64 {newcap}, ptr {}", need_c(&slot.c)?))?;
+        self.br(&done)?;
+        self.place(&done);
+        if push || append.is_some() {
+            let ptr = self.op(format!("phi ptr [ {}, %{before} ], [ {newptr}, %{regrow} ]", src.a))?;
+            let dst = self.op(format!("getelementptr inbounds {ty}, ptr {ptr}, i64 {}", src.b))?;
+            if let Some((start, count)) = append {
+                let src_ty = elem_ir(&value);
+                let inp = self.op(format!("getelementptr inbounds {src_ty}, ptr {}, i64 {start}", value.a))?;
+                if ty == src_ty {
+                    let size_bytes = if size == 1 { count } else { self.op(format!("mul nuw nsw i64 {count}, {size}"))? };
+                    self.ins(format!("call void @llvm.memcpy.p0.p0.i64(ptr {dst}, ptr {inp}, i64 {size_bytes}, i1 false)"))?;
+                } else {
+                    self.append_widen(&dst, &inp, &count)?;
+                }
+            } else {
+                let elem = if src.ty.as_deref() == Some(ARRAY_BOOL) {
+                    self.op(format!("zext i1 {} to i8", value.a))?
+                } else if ty != "i64" {
+                    self.op(format!("trunc i64 {} to {ty}", value.a))?
+                } else {
+                    value.a
+                };
+                self.ins(format!("store {ty} {elem}, ptr {dst}"))?;
+            }
+            self.ins(format!("store i64 {need}, ptr {}", slot.b))?;
+        }
+        Ok(V::unit())
+    }
+
+    fn append_widen(&mut self, dst: &str, src: &str, count: &str) -> R<()> {
+        let pre = self.cur.clone();
+        let lp = self.label("append.loop");
+        let done = self.label("append.end");
+        let empty = self.op(format!("icmp eq i64 {count}, 0"))?;
+        self.condbr(&empty, &done, &lp)?;
+        self.place(&lp);
+        let i = self.tmp();
+        let next = self.tmp();
+        self.ins(format!("{i} = phi i64 [ 0, %{pre} ], [ {next}, %{lp} ]"))?;
+        let inp = self.op(format!("getelementptr inbounds i8, ptr {src}, i64 {i}"))?;
+        let out = self.op(format!("getelementptr inbounds i64, ptr {dst}, i64 {i}"))?;
+        let byte = self.op(format!("load i8, ptr {inp}"))?;
+        let value = self.op(format!("zext i8 {byte} to i64"))?;
+        self.ins(format!("store i64 {value}, ptr {out}"))?;
+        self.ins(format!("{next} = add nuw nsw i64 {i}, 1"))?;
+        let end = self.op(format!("icmp eq i64 {next}, {count}"))?;
+        self.condbr(&end, &done, &lp)?;
+        self.place(&done);
+        Ok(())
     }
 
     /// LG37 (G-DB56-4, G-DB49-2): the owned local arrays a `str_from_utf8(x)` or `resize(x, n, v)` anywhere in the
@@ -4045,8 +4180,7 @@ impl<'a> FnGen<'a> {
                     self.moving.clear();
                     let m = m?;
                     if !self.verified {
-                        let ok = self.op(format!("icmp ule i64 {}, {}", m.a, src.b))?;
-                        self.guard(&ok, Fail::Panic1("pruv_panic_arith", "truncate length outside 0..len".to_string()), false)?;
+                        self.truncate_guard(&src.b, &m.a)?;
                     }
                     // P3: no runtime call: the same pointer with length m moves out and keeps the source cap, so the
                     // eventual free still gets the real allocation size
@@ -4493,7 +4627,7 @@ impl<'a> FnGen<'a> {
                 if !owned {
                     // P3: a borrowed literal reads the read-only global directly (nothing to free)
                     let mut rv = V::with_b(Kind::Arr, g, l);
-                    rv.ty = Some(STR.to_string());
+                    rv.ty = x.ty.clone();
                     return Ok(rv);
                 }
                 let p = self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 1, i64 1)", g, l))?;
@@ -4919,8 +5053,7 @@ impl<'a> FnGen<'a> {
             let src = self.ev(arg(a, 0)?, false)?;
             let m = self.ev(arg(a, 1)?, false)?;
             if !self.verified {
-                let ok = self.op(format!("icmp ule i64 {}, {}", m.a, src.b))?;
-                self.guard(&ok, Fail::Panic1("pruv_panic_arith", "truncate length outside 0..len".to_string()), false)?;
+                self.truncate_guard(&src.b, &m.a)?;
             }
             if let Expr::Var(xv) = arg(a, 0)? {
                 if self.ret_cand.contains(&xv.name) {
@@ -5066,6 +5199,9 @@ impl<'a> FnGen<'a> {
             }
             let r = self.op(format!("{} i64 {}, {}", ins, x.a, y.a))?;
             return Ok(V::new(Kind::I64, r));
+        }
+        if crate::check::array_grow_builtin(n) {
+            return self.array_grow_stmt(e);
         }
         if matches!(n, "copy_range" | "copy_within") {
             let target = match arg(a, 0)? {
@@ -6015,7 +6151,7 @@ impl<'a> FnGen<'a> {
             Expr::StrLit(x) => {
                 // G2 B2: point at the global string directly, without copying
                 let g = self.str_global(&x.value);
-                Ok(V { layout: "i64", rng: None, k: Kind::Arr, a: g, b: x.value.len().to_string(), ty: Some(STR.to_string()), p: None, mv: None, c: None })
+                Ok(V { layout: "i64", rng: None, k: Kind::Arr, a: g, b: x.value.len().to_string(), ty: x.ty.clone(), p: None, mv: None, c: None })
             }
             Expr::Var(x) => match self.cenv.get(&x.name) {
                 Some(v) => Ok(v.clone()),
@@ -8602,7 +8738,7 @@ fn gen_llvm_body(
         if m.resize_i64 { DECLS_RESIZE } else { "" },
         if m.resize_u8 { DECLS_RESIZE_U8 } else { "" },
         if m.resize_narrow { DECLS_RESIZE_NARROW } else { "" },
-        if m.regrow_i64 || m.regrow_u8 || m.regrow_narrow { DECL_REGROW_V2 } else { "" },
+        if m.raw_regrow || m.regrow_i64 || m.regrow_u8 || m.regrow_narrow { DECL_REGROW_V2 } else { "" },
         if m.regrow_i64 { DECLS_REGROW } else { "" },
         if m.regrow_u8 { DECLS_REGROW_U8 } else { "" },
         if m.regrow_narrow { DECLS_REGROW_NARROW } else { "" },

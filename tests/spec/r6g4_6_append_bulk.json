@@ -1,0 +1,25 @@
+{
+  "gen_contains": [
+    ".extend_from_slice(",
+    ".iter().map(|&x| x as i64)"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "527"
+    ],
+    "alloc_balance": true,
+    "ll_contains": [
+      "call ptr @pruv_regrow_v2",
+      "call void @llvm.memcpy",
+      "append.loop",
+      "zext i8"
+    ]
+  }
+}

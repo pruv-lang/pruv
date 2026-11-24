@@ -802,8 +802,21 @@ pub fn vec_resize_builtin(name: &str) -> bool {
     matches!(name, "vec_push" | "vec_pop" | "vec_clear" | "vec_extend_from_slice")
 }
 
-/// Array and vector inout parameters whose lengths may change, including through forwarding.
+pub fn array_grow_builtin(name: &str) -> bool {
+    matches!(name, "arr_reserve" | "arr_push" | "arr_append")
+}
+
+/// Array and vector inout parameters whose storage may change, including through forwarding.
 pub fn resize_params(prog: &Program) -> HashSet<(String, usize)> {
+    resizing_params(prog, false)
+}
+
+/// Capacity-only changes do not affect length framing.
+pub fn length_changing_params(prog: &Program) -> HashSet<(String, usize)> {
+    resizing_params(prog, true)
+}
+
+fn resizing_params(prog: &Program, length_only: bool) -> HashSet<(String, usize)> {
     use crate::foreign_shim::{walk_stmts, Node};
     let mut resizes = HashSet::new();
     let mut forwarded = HashMap::<_, Vec<_>>::new();
@@ -827,7 +840,7 @@ pub fn resize_params(prog: &Program) -> HashSet<(String, usize)> {
                 let Expr::Var(var) = arg.expr.as_ref() else { continue; };
                 let Some(&index) = params.get(var.name.as_str()) else { continue; };
                 let source = (f.name.clone(), index);
-                if vec_resize_builtin(&call.name) {
+                if vec_resize_builtin(&call.name) || (array_grow_builtin(&call.name) && (call.name != "arr_reserve" || !length_only)) {
                     resizes.insert(source);
                 } else {
                     forwarded.entry((call.name.clone(), i)).or_default().push(source);
@@ -850,23 +863,21 @@ pub fn resize_params(prog: &Program) -> HashSet<(String, usize)> {
 pub(crate) fn resize_slot_names(f: &Function, resizes: &HashSet<(String, usize)>) -> HashSet<String> {
     use crate::foreign_shim::{walk_stmts, Node};
     let mut resize_slots = HashSet::new();
-    if !resizes.is_empty() {
-        walk_stmts(&f.body, &mut |node| {
-            let Node::Expr(Expr::Call(call)) = node else { return; };
-            for (i, arg) in call.args.iter().enumerate() {
-                if let Expr::InoutArg(arg) = arg {
-                    if !arg.ty.as_deref().is_some_and(crate::typeinfo::is_array_name)
-                        || !resizes.contains(&(call.name.clone(), i))
-                    {
-                        continue;
-                    }
-                    if let Expr::Var(v) = &*arg.expr {
-                        resize_slots.insert(v.name.clone());
-                    }
+    walk_stmts(&f.body, &mut |node| {
+        let Node::Expr(Expr::Call(call)) = node else { return; };
+        for (i, arg) in call.args.iter().enumerate() {
+            if let Expr::InoutArg(arg) = arg {
+                if !arg.ty.as_deref().is_some_and(crate::typeinfo::is_array_name)
+                    || !(array_grow_builtin(&call.name) || resizes.contains(&(call.name.clone(), i)))
+                {
+                    continue;
+                }
+                if let Expr::Var(v) = &*arg.expr {
+                    resize_slots.insert(v.name.clone());
                 }
             }
-        });
-    }
+        }
+    });
     resize_slots
 }
 
@@ -985,7 +996,7 @@ impl Checker {
             if funcs.contains_key(&name) {
                 return Err(terr(f.line, f.col, "dup_fn", format!("function {} defined twice", name), ""));
             }
-            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "utf8_valid_span" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within" | "subview")
+            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "utf8_valid_span" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within" | "arr_reserve" | "arr_push" | "arr_append" | "subview")
                 || is_bit_builtin(&name)
                 || is_word_builtin(&name)
                 || contract_only(&name).is_some()
@@ -3538,7 +3549,8 @@ impl Checker {
         let mut effect_before = false;
         for (call, conditional) in calls {
             let f = self.funcs.get(&call.name);
-            if f.is_some() || matches!(call.name.as_str(), "map_remove" | "map_take" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice" | "ev_read_into" | "ev_proc_read_into") {
+            if f.is_some() || array_grow_builtin(&call.name)
+                || matches!(call.name.as_str(), "map_remove" | "map_take" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice" | "ev_read_into" | "ev_proc_read_into") {
                 let marked: Vec<&crate::ast::InoutArg> = call
                     .args
                     .iter()
@@ -4101,7 +4113,7 @@ impl Checker {
                     format!("{} returns {}: a par branch must return ()", n, tn(&f.ret)),
                     "call a unit Pruv helper and pass results back through whole inout arrays"));
             }
-        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "utf8_valid_span", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within", "subview"].contains(&n.as_str())
+        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "utf8_valid_span", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within", "arr_reserve", "arr_push", "arr_append", "subview"].contains(&n.as_str())
             || is_bit_builtin(n)
             || is_word_builtin(n)
             || contract_only(n).is_some() || is_catalog(n) || (n == "old" && self.uses_inout)
@@ -4620,6 +4632,16 @@ impl Checker {
         let at = r?;
         x.ty = Some(at.to_key());
         Ok(at)
+    }
+
+    fn expect_call_arg(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, c: bool, borrow: bool) -> Res<()> {
+        if borrow && *ty == GType::array_u8() {
+            if let Expr::StrLit(lit) = e {
+                lit.ty = Some(ty.to_key());
+                return Ok(());
+            }
+        }
+        self.expect_user_arg(e, ty, scope, c, borrow)
     }
 
     fn expect_user_arg(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, c: bool, borrow_vector: bool) -> Res<()> {
@@ -5548,7 +5570,7 @@ impl Checker {
                 if collection_place && want.to_key() == "string" {
                     self.check_text_key(&mut e.args[i], scope, c, None)?;
                 } else if user_call {
-                    self.expect_user_arg(&mut e.args[i], &want, scope, c, !f.foreign && !self.takes[&n][i])?;
+                    self.expect_call_arg(&mut e.args[i], &want, scope, c, !f.foreign && !self.takes[&n][i])?;
                 } else {
                     self.expect(&mut e.args[i], &want, scope, c, None)?;
                 }
@@ -5827,14 +5849,19 @@ impl Checker {
         Ok(if store { unitt() } else { i64t() })
     }
 
-    /// R-5-1 and R-5-2: range copy statements with an inout integer array destination.
-    fn copy_range_call(&mut self, e: &mut Call, scope: &Scope, c: bool) -> Res<GType> {
+    /// Array statements with an exclusive destination place.
+    fn array_stmt_call(&mut self, e: &mut Call, scope: &Scope, c: bool) -> Res<GType> {
         let (line, col) = (e.line, e.col);
         let within = e.name == "copy_within";
         let builtin = e.name.as_str();
-        let arity = if within { 4 } else { 5 };
+        let grow = array_grow_builtin(builtin);
+        let append = builtin == "arr_append";
+        let arity = if within || append { 4 } else if grow { 2 } else { 5 };
         if c {
             return Err(terr(line, col, "effect_in_contract", format!("{builtin} is not allowed in contracts"), ""));
+        }
+        if grow && self.statement_call != Some(&*e as *const Call as usize) {
+            return Err(terr(line, col, "inout_context", format!("{builtin} must be a whole expression statement"), ""));
         }
         if e.args.len() != arity {
             return Err(terr(line, col, "arity", format!("{builtin} takes {arity} argument(s), got {}", e.args.len()), ""));
@@ -5852,14 +5879,15 @@ impl Checker {
                         acol,
                         "inout_argument",
                         format!("the destination array of {builtin} needs the `inout` marker"),
-                        if within { "write `copy_within(inout name, dst, src, n)` with a `let mut` local array or an inout parameter" }
+                        if grow { "name a `let mut` local array or an inout parameter" }
+                        else if within { "write `copy_within(inout name, dst, src, n)` with a `let mut` local array or an inout parameter" }
                         else { "write `copy_range(inout name, i, src, j, n)` with a `let mut` local array or an inout parameter" },
                     ))
                 }
             };
             let (root, fields) = field_place(&arg.expr);
             let op = match root {
-                Expr::Var(v) if !within || fields.is_empty() => v,
+                Expr::Var(v) if !(within || (grow && !append)) || fields.is_empty() => v,
                 _ => {
                     return Err(terr(
                         aline,
@@ -5899,12 +5927,13 @@ impl Checker {
                 ));
             }
             dty = if path.is_empty() { v.ty } else { self.expr(&mut arg.expr, scope, c)? };
-            if dty != GType::array() && dty != GType::array_u8() {
+            if dty != GType::array() && dty != GType::array_u8() && !(grow && !append && dty == GType::array_bool()) {
                 return Err(terr(
                     aline,
                     acol,
                     "type_mismatch",
-                    format!("expected {} or {}, found {}", tn(&GType::array()), tn(&GType::array_u8()), tn(&dty)),
+                    if grow && !append { format!("{builtin} takes [i64], [u8] or [bool], found {}", tn(&dty)) }
+                    else { format!("expected {} or {}, found {}", tn(&GType::array()), tn(&GType::array_u8()), tn(&dty)) },
                     "",
                 ));
             }
@@ -5920,15 +5949,28 @@ impl Checker {
             set_ty(&mut arg.expr, &dty);
             arg.ty = Some(dty.to_key());
         }
-        self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
-        self.expect(&mut e.args[2], &if within { i64t() } else { dty }, scope, c, None)?;
-        self.expect(&mut e.args[3], &i64t(), scope, c, None)?;
-        if !within {
-            self.expect(&mut e.args[4], &i64t(), scope, c, None)?;
+        if append {
+            let src = self.expr(&mut e.args[1], scope, c)?;
+            if src != dty && !(dty == GType::array() && src == GType::array_u8()) {
+                return Err(terr(e.args[1].line(), e.args[1].col(), "type_mismatch",
+                    format!("arr_append cannot append {} to {}", tn(&src), tn(&dty)), ""));
+            }
+            self.expect(&mut e.args[2], &i64t(), scope, c, None)?;
+            self.expect(&mut e.args[3], &i64t(), scope, c, None)?;
+        } else {
+            let value_ty = if builtin == "arr_push" { elem_type(&dty) } else { i64t() };
+            self.expect(&mut e.args[1], &value_ty, scope, c, None)?;
+        }
+        if !grow {
+            self.expect(&mut e.args[2], &if within { i64t() } else { dty }, scope, c, None)?;
+            self.expect(&mut e.args[3], &i64t(), scope, c, None)?;
+            if !within {
+                self.expect(&mut e.args[4], &i64t(), scope, c, None)?;
+            }
         }
         let Expr::InoutArg(dst) = &e.args[0] else { unreachable!() };
         if e.args.iter().enumerate().skip(1).any(|(i, arg)| {
-            if !within && i == 2 && same_place(&dst.expr, arg) {
+            if !grow && !within && i == 2 && same_place(&dst.expr, arg) {
                 return false;
             }
             if path.is_empty() {
@@ -5943,11 +5985,12 @@ impl Checker {
                 acol,
                 "inout_alias",
                 format!("{} is passed inout and also used elsewhere in the arguments of this call", name),
-                if within { "compute the index arguments before the call".to_string() }
+                if grow { "compute the value before the call".to_string() }
+                else if within { "compute the index arguments before the call".to_string() }
                 else { format!("copy the source first with `let mut t: [..] = copy({});` (needs alloc), then pass t", name) },
             ));
         }
-        if self.boundary != Some(&*e as *const Call as usize) {
+        if !grow && self.boundary != Some(&*e as *const Call as usize) {
             return Err(terr(
                 line,
                 col,
@@ -5957,6 +6000,7 @@ impl Checker {
                 else { "write `copy_range(inout dst, i, src, j, n);` as a statement" },
             ));
         }
+        if grow { self.used_effects.insert("alloc".to_string()); }
         Ok(unitt())
     }
 
@@ -6057,7 +6101,7 @@ impl Checker {
     /// statements allow it (checked before any body is typed, so every template starts from source).
     fn x_prepare(&mut self, prog: &Program) -> Res<()> {
         for f in &prog.functions {
-            let r = x_sig_reason(f, &self.decls).or_else(|| x_scan_block(f, &f.body, &self.funcs));
+            let r = x_sig_reason(f, &self.decls).or_else(|| x_scan_block(f, &f.body, self));
             if f.pred {
                 // G-LG13-5: a `?` in a pred return is try_position, as in Python (checked before pred_signature)
                 for st in &f.body {
@@ -6194,7 +6238,7 @@ impl Checker {
                 }
             }
         }
-        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "utf8_valid_span" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within" | "subview")
+        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "utf8_valid_span" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within" | "arr_reserve" | "arr_push" | "arr_append" | "subview")
             || is_bit_builtin(&n)
             || is_word_builtin(&n);
         let is_old = n == "old" && self.uses_inout && !self.funcs.contains_key(&n); // G5 A0: contextual builtin
@@ -6296,7 +6340,7 @@ impl Checker {
             // P2 batch 4: load_be / store_be
             _ if is_word_builtin(&n) => return self.word_call(e, scope, c),
             // L-copy-range: copy_range(inout dst: [T], i, src: [T], j, n), a statement, T an integer element type
-            "copy_range" | "copy_within" => return self.copy_range_call(e, scope, c),
+            "copy_range" | "copy_within" | "arr_reserve" | "arr_push" | "arr_append" => return self.array_stmt_call(e, scope, c),
             // L3-10: eq_range(a: [T], i, b: [T], j, n) -> bool, code only, T an integer element type
             "eq_range" => {
                 if c {
@@ -6544,7 +6588,7 @@ impl Checker {
                     if cat.is_some() && n == "map_get" && want.to_key() == "string" {
                         self.check_text_key(arg, scope, c, None)?;
                     } else if cat.is_none() {
-                        self.expect_user_arg(arg, &want, scope, c, !f.foreign && !self.takes[&n][i])?;
+                        self.expect_call_arg(arg, &want, scope, c, !f.foreign && !self.takes[&n][i])?;
                     } else {
                         self.expect(arg, &want, scope, c, None)?;
                     }
@@ -6898,7 +6942,7 @@ fn x_sig_reason(f: &Function, decls: &HashMap<String, TypeDecl>) -> Option<Strin
     None
 }
 
-fn x_scan_block(f: &Function, stmts: &[Stmt], funcs: &HashMap<String, Rc<FuncInfo>>) -> Option<String> {
+fn x_scan_block(f: &Function, stmts: &[Stmt], checker: &Checker) -> Option<String> {
     for (i, st) in stmts.iter().enumerate() {
         match st {
             Stmt::Let(l) => {
@@ -6906,24 +6950,24 @@ fn x_scan_block(f: &Function, stmts: &[Stmt], funcs: &HashMap<String, Rc<FuncInf
                 if l.mutable || l.refine.is_some() || (t != i64t() && t != boolt()) {
                     return Some(X_R_STMT.into());
                 }
-                if let Some(r) = x_scan_expr(&l.value, funcs) {
+                if let Some(r) = x_scan_expr(&l.value, checker) {
                     return Some(r);
                 }
             }
             Stmt::Return(r) => {
                 return match &r.value {
                     None => Some(X_R_STMT.into()),
-                    Some(v) => x_scan_expr(v, funcs),
+                    Some(v) => x_scan_expr(v, checker),
                 };
             }
             Stmt::If(x) => {
                 if GType::from_key(&f.ret) != boolt() {
                     return Some("it returns i64 through an if (only bool functions may branch)".into());
                 }
-                if let Some(r) = x_scan_expr(&x.cond, funcs).or_else(|| x_scan_block(f, &x.then, funcs)) {
+                if let Some(r) = x_scan_expr(&x.cond, checker).or_else(|| x_scan_block(f, &x.then, checker)) {
                     return Some(r);
                 }
-                return if !x.els.is_empty() { x_scan_block(f, &x.els, funcs) } else { x_scan_block(f, &stmts[i + 1..], funcs) };
+                return if !x.els.is_empty() { x_scan_block(f, &x.els, checker) } else { x_scan_block(f, &stmts[i + 1..], checker) };
             }
             _ => return Some(X_R_STMT.into()),
         }
@@ -6931,18 +6975,23 @@ fn x_scan_block(f: &Function, stmts: &[Stmt], funcs: &HashMap<String, Rc<FuncInf
     Some("an if branch does not end in return".into())
 }
 
-fn x_scan_expr(e: &Expr, funcs: &HashMap<String, Rc<FuncInfo>>) -> Option<String> {
+fn x_scan_expr(e: &Expr, checker: &Checker) -> Option<String> {
     match e {
         Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var(_) => None,
-        Expr::Unary(u) if u.op != "?" => x_scan_expr(&u.operand, funcs),
-        Expr::Binary(b) => x_scan_expr(&b.left, funcs).or_else(|| x_scan_expr(&b.right, funcs)),
-        Expr::Index(x) => x_scan_expr(&x.array, funcs).or_else(|| x_scan_expr(&x.index, funcs)),
+        Expr::Unary(u) if u.op != "?" => x_scan_expr(&u.operand, checker),
+        Expr::Binary(b) => x_scan_expr(&b.left, checker).or_else(|| x_scan_expr(&b.right, checker)),
+        Expr::Index(x) => x_scan_expr(&x.array, checker).or_else(|| x_scan_expr(&x.index, checker)),
         Expr::FieldAccess(_) | Expr::Quant(_) => {
-            crate::refine::kids(e).into_iter().find_map(|child| x_scan_expr(child, funcs))
+            crate::refine::kids(e).into_iter().find_map(|child| x_scan_expr(child, checker))
         }
         Expr::Call(c) => {
-            if funcs.contains_key(&c.name) || c.name == "len" || is_bit_builtin(&c.name) || matches!(c.name.as_str(), "load_be" | "load_le" | "utf8_valid" | "utf8_valid_span") {
-                c.args.iter().find_map(|a| x_scan_expr(a, funcs))
+            if checker.funcs.contains_key(&c.name) || c.name == "len" || is_bit_builtin(&c.name) || matches!(c.name.as_str(), "load_be" | "load_le" | "utf8_valid" | "utf8_valid_span") {
+                c.args.iter().enumerate().find_map(|(i, a)| {
+                    let literal_bytes = matches!(a, Expr::StrLit(_)) && checker.funcs.get(&c.name).is_some_and(|f| {
+                        !f.foreign && f.params.get(i) == Some(&GType::array_u8()) && !f.inout[i] && !checker.takes[&c.name][i]
+                    });
+                    if literal_bytes { None } else { x_scan_expr(a, checker) }
+                })
             } else {
                 Some(format!("it calls {}", c.name))
             }

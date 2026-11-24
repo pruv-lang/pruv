@@ -1,0 +1,8 @@
+// spec: R-6g4-5 accept
+pub pred fn p(a: [u8]) -> bool { return len(a) > 0 && a[0] == 120 && load_be(a, 0, 1) == 120; }
+
+pub fn checksum() -> i64
+  requires p("x")
+{
+  return 1;
+}

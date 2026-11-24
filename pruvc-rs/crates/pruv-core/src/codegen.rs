@@ -1283,6 +1283,8 @@ struct Gen<'a> {
     /// P2 batch 4: load_be used in a runtime contract (pruv_cload_be helper)
     need_load_be: bool,
     need_load_le: bool,
+    need_cidx_u8: bool,
+    has_cidx_u8: bool,
     /// G9 A2: the diagnostic raised by g9_unsupported (the R error is only a marker)
     diag: Option<PruvError>,
     /// G4 A2 (explicit visibility mode, docs/G4_SPEC.md 4): only host entries are `pub`. Verified: just the entries that have
@@ -1355,8 +1357,9 @@ impl<'a> Gen<'a> {
             });
         let storage = crate::storage::plan_storage(prog, verified);
         let stack = crate::stack::plan_stack(prog, &storage, verified);
+        let resize_params = crate::check::resize_params(prog);
         let small = if verified && !trust_callers {
-            crate::small::plan_small(prog, &fmap, &storage, &stack)
+            crate::small::plan_small(prog, &fmap, &storage, &stack, &resize_params)
         } else {
             Default::default()
         };
@@ -1400,7 +1403,7 @@ impl<'a> Gen<'a> {
             table: make_type_table(prog),
             params: HashSet::new(),
             inouts: HashSet::new(),
-            resize_params: crate::check::resize_params(prog),
+            resize_params,
             resizable_inouts: HashSet::new(),
             resize_slots: HashSet::new(),
             g5: prog.uses_inout != Some(false),
@@ -1440,6 +1443,8 @@ impl<'a> Gen<'a> {
             printed: false,
             need_load_be: false,
             need_load_le: false,
+            need_cidx_u8: false,
+            has_cidx_u8: false,
             diag: None,
             lg: HashSet::new(),
             body_named: HashSet::new(),
@@ -1745,6 +1750,7 @@ impl<'a> Gen<'a> {
             }
             if u8_used {
                 self.out.push(CONTRACT_PRELUDE_U8.to_string());
+                self.has_cidx_u8 = true;
             }
             if bool_used {
                 self.out.push(CONTRACT_PRELUDE_BOOL.to_string());
@@ -2387,7 +2393,10 @@ impl<'a> Gen<'a> {
             // R03L: an owned take array is read through a borrow
             Expr::Var(x) if self.take_arrays.contains(&x.name) => Ok(format!("(&{})", x.name)),
             Expr::Var(x) => Ok(x.name.clone()),
-            Expr::StrLit(x) => Ok(lit_str(&x.value)), // G2 B2
+            Expr::StrLit(x) => {
+                let literal = lit_str(&x.value);
+                Ok(if x.ty.as_deref() == Some("array_u8") { format!("({literal}).as_bytes()") } else { literal })
+            }
             Expr::Call(x) if x.name == "err_val" && x.ty.as_deref() == Some("string") => self.c(e),
             // G9: a buffer field of a real (extended) value
             Expr::FieldAccess(_) | Expr::VariantField(_) if self.g9 => self.cx(e),
@@ -2637,7 +2646,10 @@ impl<'a> Gen<'a> {
                 format!("{}i128", x.value)
             }),
             Expr::BoolLit(x) => Ok((if x.value { "true" } else { "false" }).to_string()),
-            Expr::StrLit(x) => Ok(lit_str(&x.value)), // G2 B2
+            Expr::StrLit(x) => {
+                let literal = lit_str(&x.value);
+                Ok(if x.ty.as_deref() == Some("array_u8") { format!("({literal}).as_bytes()") } else { literal })
+            }
             Expr::Var(x) => {
                 if self.bound.iter().any(|b| b == &x.name) {
                     return Ok(x.name.clone());
@@ -2726,6 +2738,7 @@ impl<'a> Gen<'a> {
                     return Ok(format!("pruv_cidx_str({}, {})", a, i));
                 }
                 if elem_of(&x.array) == "u8" {
+                    self.need_cidx_u8 = true;
                     return Ok(format!("pruv_cidx_u8({}, {})", a, i));
                 }
                 if elem_of(&x.array) == "bool" {
@@ -3975,7 +3988,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
             Stmt::Assign(x) => {
                 self.moving = self.last_copy(&x.name, &x.value);
                 if let Expr::Call(call) = &x.value {
-                    if !self.cost && self.moving.is_empty() && call.name == "resize"
+                    if !self.cost && self.moving.is_empty() && matches!(call.name.as_str(), "resize" | "truncate")
                         && !self.fmap.contains_key(&call.name) && !self.refs.contains(&x.name)
                         && (!self.params.contains(&x.name) || self.take_arrays.contains(&x.name)
                             || self.resizable_inouts.contains(&x.name))
@@ -3987,7 +4000,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                             _ => false,
                         };
                         if same_place && expr_ty(source).as_deref().is_some_and(is_array_name) {
-                            let v = self.resize_expr(&x.value, &call.args, Some(&x.name))?;
+                            let v = self.array_resize_expr(&x.value, call, &x.name)?;
                             self.emit(ind, &v);
                             return Ok(());
                         }
@@ -4021,14 +4034,14 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         }
                         return Ok(());
                     }
-                    if !self.cost && call.name == "resize" && !self.fmap.contains_key(&call.name)
+                    if !self.cost && matches!(call.name.as_str(), "resize" | "truncate") && !self.fmap.contains_key(&call.name)
                         && expr_ty(&x.value).as_deref().is_some_and(is_array_name)
                         && same_field_path(arg(&call.args, 0)?, &x.name, &x.fields)
                         && !(!self.boxed.is_empty() && self.path_boxed(&x.name, &x.fields))
                     {
                         // LG34 (G-LG32-3): `x.f = resize(x.f, n, v)` grows the field in place, like the plain-name assign
                         let place = format!("{}.{}", x.name, x.fields.join("."));
-                        let v = self.resize_expr(&x.value, &call.args, Some(&place))?;
+                        let v = self.array_resize_expr(&x.value, call, &place)?;
                         self.emit(ind, &v);
                         return Ok(());
                     }
@@ -4388,6 +4401,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
     /// An array expression used as a borrowed slice
     fn arr_ref(&mut self, e: &Expr) -> R<String> {
         if let Expr::StrLit(x) = e {
+            if x.ty.as_deref() == Some("array_u8") {
+                return Ok(format!("({}).as_bytes()", lit_str(&x.value)));
+            }
             if !self.cost {
                 return Ok(lit_str(&x.value)); // a string literal is borrowed as its &'static str (no alloc)
             }
@@ -4692,6 +4708,17 @@ pruv_hi <= (pruv_b.len() as i128) && \
         Ok(self.fg_mut()?.fn_trusted(name, &ps, ret, &body, &disp, checks > 0))
     }
 
+    fn array_resize_expr(&mut self, e: &Expr, call: &Call, place: &str) -> R<String> {
+        if call.name == "resize" {
+            return self.resize_expr(e, &call.args, Some(place));
+        }
+        let m = self.e(arg(&call.args, 1)?)?;
+        let check = if self.verified { String::new() } else {
+            format!("if pruv_m < 0 || (pruv_m as u64) > ({place}.len() as u64) {{ pruv_oob(pruv_m, {place}.len()) }} ")
+        };
+        Ok(format!("{{ let pruv_m: i64 = {m}; {check}{place}.truncate(pruv_m as usize); }}"))
+    }
+
     fn resize_expr(&mut self, e: &Expr, args: &[Expr], place: Option<&str>) -> R<String> {
         let aty = expr_ty(arg(args, 0)?).as_deref();
         let (u8a, boola) = (aty == Some("array_u8"), aty == Some("array_bool"));
@@ -4719,7 +4746,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
             let v = self.e(arg(args, 2)?)?;
             let chk = chk.replace("pruv_a.len()", &format!("{place}.len()"));
             return Ok(format!(
-                "{{ let pruv_n: i64 = {n}; let pruv_v: {vty} = {v}; {chk}{place}.resize(pruv_n as usize, {fill}); }}"
+                "{{ let pruv_n: i64 = {n}; let pruv_v: {vty} = {v}; {chk}{place}.reserve_exact((pruv_n as usize).saturating_sub({place}.len())); {place}.resize(pruv_n as usize, {fill}); }}"
             ));
         }
         // source order: a, n, v
@@ -5029,6 +5056,52 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         "{}if pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > (pruv_ea.len() as i64) - pruv_n || pruv_j > (pruv_eb.len() as i64) - pruv_n {{ pruv_oob(pruv_i, pruv_ea.len()) }} pruv_ea[(pruv_i as usize)..((pruv_i + pruv_n) as usize)] == pruv_eb[(pruv_j as usize)..((pruv_j + pruv_n) as usize)] }}",
                         head
                     ));
+                }
+                if crate::check::array_grow_builtin(n) {
+                    let Expr::InoutArg(dest) = arg(a, 0)? else { return Err("missing inout place".into()); };
+                    if n == "arr_append" {
+                        let place = self.e(&dest.expr)?;
+                        let src = self.arr_ref(arg(a, 1)?)?;
+                        let start = self.e(arg(a, 2)?)?;
+                        let cnt = self.e(arg(a, 3)?)?;
+                        let mut head = format!("{{ let pruv_src = {src}; let pruv_s: i64 = {start}; let pruv_n: i64 = {cnt}; ");
+                        if !self.verified {
+                            head.push_str(&format!(concat!(
+                                "if pruv_s < 0 || pruv_n < 0 || pruv_s > (pruv_src.len() as i64) - pruv_n ",
+                                "{{ pruv_oob(pruv_s, pruv_src.len()) }} ",
+                                "if pruv_n > (1i64 << 40) - ({}.len() as i64) {{ pruv_ovf(\"arr_append length exceeds 2^40\") }} "
+                            ), place));
+                        }
+                        let span = "(pruv_s as usize)..((pruv_s + pruv_n) as usize)";
+                        let tail = if self.verified {
+                            format!("unsafe {{ pruv_src.get_unchecked({span}) }}")
+                        } else {
+                            format!("&pruv_src[{span}]")
+                        };
+                        if dest.ty.as_deref() == crate::check::expr_ty(arg(a, 1)?).as_deref() {
+                            return Ok(format!("{head}{place}.extend_from_slice({tail}) }}"));
+                        }
+                        return Ok(format!("{head}{place}.extend(({tail}).iter().map(|&x| x as i64)) }}"));
+                    }
+                    let Expr::Var(dest) = dest.expr.as_ref() else { return Err("missing array binding".into()); };
+                    let place = &dest.name;
+                    let value = self.e(arg(a, 1)?)?;
+                    if n == "arr_reserve" {
+                        let check = if self.verified { "" } else {
+                            "if pruv_n < 0 || pruv_n > (1i64 << 40) { pruv_ovf(\"arr_reserve length outside 0..2^40\") } "
+                        };
+                        return Ok(format!("{{ let pruv_n: i64 = {value}; {check}{place}.reserve_exact((pruv_n) as usize) }}"));
+                    }
+                    let u8 = dest.ty.as_deref() == Some("array_u8");
+                    let vty = if dest.ty.as_deref() == Some("array_bool") { "bool" } else { "i64" };
+                    let layout = if u8 { "u8" } else { self.layout(arg(a, 0)?) };
+                    let elem = if layout == "i64" || vty == "bool" { "pruv_v".into() } else { format!("pruv_v as {layout}") };
+                    let mut check = String::new();
+                    if !self.verified {
+                        check = format!("if {place}.len() >= (1usize << 40) {{ pruv_ovf(\"arr_push length exceeds 2^40\") }} ");
+                        if u8 { check.push_str("if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } "); }
+                    }
+                    return Ok(format!("{{ let pruv_v: {vty} = {value}; {check}{place}.push({elem}) }}"));
                 }
                 if matches!(n, "copy_range" | "copy_within") {
                     // L-copy-range: dst[i..i+n].copy_from_slice(&src[j..j+n]); i, src, j, n bound once in source order
@@ -5672,6 +5745,9 @@ fn gen_rust_concrete_core(
     }
     // G9: size / equality helpers discovered while the requires checks were generated go in front of the functions
     // (declaration order); nothing at all is added when no runtime requires needs them
+    if g.need_cidx_u8 && !g.has_cidx_u8 {
+        g.out.insert(mark, CONTRACT_PRELUDE_U8.to_string());
+    }
     let g9_texts = g.g9_helper_texts();
     drop(g.out.splice(mark..mark, g9_texts));
     // P2: contract helpers of the bit builtins the requires checks used, in table order

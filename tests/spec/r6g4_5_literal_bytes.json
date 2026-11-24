@@ -1,0 +1,27 @@
+{
+  "gen_contains": [
+    ".as_bytes()"
+  ],
+  "gen_absent": [
+    "::std::string::String::from("
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "503"
+    ],
+    "alloc_balance": true,
+    "ll_contains": [
+      "private unnamed_addr constant"
+    ],
+    "ll_absent": [
+      "call ptr @pruv_copy_v2"
+    ]
+  }
+}
