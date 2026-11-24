@@ -1,0 +1,18 @@
+{
+  "gen_contains": [
+    "get_unchecked("
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "3"
+    ],
+    "alloc_balance": true
+  }
+}

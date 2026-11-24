@@ -606,6 +606,12 @@ fn cat_adapter(helper: &str, op: &str, low: &[GType]) -> R<String> {
                 c, helper
             ),
         )),
+        "string_push_char" => Ok(fn_text(
+            &s,
+            "s: PruvH, c: i64",
+            Some("PruvH"),
+            &format!("pruv_g6_guard(|| pruv_g6_upd::<{}, _>(s, |pruv_o| {}(pruv_o, c)))", c, helper),
+        )),
         "string_byte" => Ok(fn_text(
             &s,
             "s: PruvH, i: i64",

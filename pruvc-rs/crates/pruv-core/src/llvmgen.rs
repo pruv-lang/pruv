@@ -2609,6 +2609,27 @@ impl<'a> FnGen<'a> {
         }
     }
 
+    /// The storage a `move d.a` empties: the slot of a record local, or (LB9 R-6g8-4) the payload storage of a struct
+    /// binder of a consuming match, which the scrutinee's drop then finds emptied.
+    fn field_move_root(&mut self, x: &Move) -> R<Slot> {
+        let bound = self.lookup(&x.name)?;
+        let Bind::Ssa(v) = &bound else {
+            return Ok(bound.val().clone());
+        };
+        let v = v.clone();
+        let base = if let Some(p) = &v.p {
+            p.clone() // a boxed payload: the binder views the child node
+        } else if let Some(mv) = &v.mv {
+            // an inline payload of the owned scrutinee slot
+            let (sl, vn, k, _dead) = (**mv).clone();
+            g9_field_gep(self, need_ty(&sl.ty)?, &sl.a, Some(&vn), k)?
+        } else {
+            return Err(e2_diag(x.line, x.col, &format!(
+                "moving a field of the match binder {} needs the Rust backend", x.name)));
+        };
+        Ok(V { k: Kind::Agg, a: base, p: None, mv: None, ..v })
+    }
+
     /// LG4: (address of the field reached by `path` from the extended root slot `sl`, its declared type); a boxed
     /// intermediate edge is loaded (as `inout_place_ptr` does).
     fn field_ptr_ty(&mut self, sl: &Slot, path: &[String]) -> R<(String, String)> {
@@ -4716,7 +4737,7 @@ impl<'a> FnGen<'a> {
             }
             Expr::Move(x) if !x.fields.is_empty() => {
                 // LG4: move an owned buffer field out of the extended struct slot; the field becomes (null, 0, 0)
-                let sl = self.lookup(&x.name)?.val().clone();
+                let sl = self.field_move_root(x)?;
                 let (gp, fty) = self.field_ptr_ty(&sl, &x.fields)?;
                 let lt = lty(&fty);
                 let old = self.op(format!("load {lt}, ptr {gp}"))?;
@@ -5752,7 +5773,7 @@ impl<'a> FnGen<'a> {
         }
         if matches!(
             n,
-            "vec_new" | "map_new" | "string_from" | "string_new" | "vec_push" | "map_insert" | "string_push_str"
+            "vec_new" | "map_new" | "string_from" | "string_new" | "vec_push" | "map_insert" | "string_push_str" | "string_push_char"
                 | "file_open_read" | "file_create" | "file_read_all" | "file_write_str" | "file_write_bytes"
                 | "proc_args_new" | "proc_args_push" | "proc_spawn" | "proc_spawn_env" | "proc_write_str" | "proc_write_bytes"
                 | "proc_close_stdin" | "proc_read" | "proc_read_all"

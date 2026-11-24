@@ -78,6 +78,7 @@ _add("map_insert", _KV, lambda K, V: ([_p("m", _map(K, V), True), _p("k", K), _p
 _add("string_new", [], lambda: ([], STRING), ["alloc"])
 _add("string_from", [], lambda: ([_p("text", STR)], STRING), ["alloc"])
 _add("string_push_str", [], lambda: ([_p("s", STRING, True), _p("text", STR)], STRING), ["alloc"])
+_add("string_push_char", [], lambda: ([_p("s", STRING, True), _p("c", I64)], STRING), ["alloc"])   # LB9 (R-6g8-2)
 _add("string_byte", [], lambda: ([_p("s", STRING), _p("i", I64)], I64))
 _add("string_to_str", [], lambda: ([_p("s", STRING)], STR), ["alloc"])
 # G10: signatures/effects; section 2.3 contracts are installed below.
@@ -384,6 +385,7 @@ class _Ownership:
         s.funcs = funcs
         s.types = types
         s.aggregates = aggregates   # owned aggregates and recursive vector element types
+        s.field_only = set()   # LB9 (R-6g8-4): record binders of a consuming match (field moves only)
         s.bor = set()
         s.arm_bor = []   # binders of the enclosing user-enum arms (Rust port arm_bor)
         s.track = None   # name -> "move" | "borrow" of the outermost call being checked (shared by nested calls)
@@ -529,10 +531,18 @@ class _Ownership:
                     decl = s.types.get(a.enum_name)
                     variant = next(v for v in decl.variants if v.name == a.ctor)
                     # LG36 (G-DB59-1): str binders too, so a branch, loop or closed arm sees their moves
-                    srcs = [b for b, fd in zip(a.binders, variant.fields) if is_array(fd.type) or fd.type == STR]
+                    # LB9 (R-6g8-4): user struct and enum binders too, so a use after `let t = move b.f;` is a use
+                    # after move on every path; they stay field-only (a whole `move b` is still refused, see move)
+                    records = {b for b, fd in zip(a.binders, variant.fields)
+                               if is_nongeneric_struct(fd.type, s.types) or s.enum_value(fd.type)}
+                    srcs = [b for b, fd in zip(a.binders, variant.fields)
+                            if is_array(fd.type) or fd.type == STR or b in records]
                     for b in srcs:
                         inner[b] = "live"
+                    s.field_only |= records
                 r = s.block(a.body, inner)
+                if consuming and a.enum_name is not None:
+                    s.field_only -= records
                 if r is not None:
                     for b in srcs:
                         r.pop(b, None)
@@ -659,10 +669,10 @@ class _Ownership:
             if e is s.consumed_field:    # G-R09-4: no restore follows, so the record is wholly moved
                 st[e.name] = "dead"
             return       # Otherwise the type checker enforces restoration. The root stays live.
-        if not (is_array(e.ty) or e.ty == STR or is_owned_value(e.ty) or (s.aggregate(e.ty) and e.name in st)):
+        n = e.name
+        if not (is_array(e.ty) or e.ty == STR or is_owned_value(e.ty) or (s.aggregate(e.ty) and e.name in st and n not in s.field_only)):
             _err(e, "foreign_move", "move of a non-collection value",
                  "move applies to Vec, HashMap and String bindings only; use the value directly")
-        n = e.name
         if track is not None and n in track:
             if track[n] == "move":
                 _err(e, "foreign_move", "consumed twice", "consume %s at most once per call" % n)

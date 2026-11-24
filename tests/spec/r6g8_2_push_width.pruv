@@ -1,0 +1,8 @@
+// spec: R-6g8-2 reject
+pub fn wide(c: i64) -> i64 ! alloc
+  requires 0 <= c && c < 55296
+  ensures result == 1
+{
+  let s: String = string_push_char(string_new(), c);
+  return len(s);
+}

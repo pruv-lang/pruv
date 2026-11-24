@@ -1337,6 +1337,21 @@ class FnGen:
         _, sl = s.lookup(root.name)
         return s.field_ptr_ty(sl, path)[0]
 
+    def field_move_root(s, e):
+        """the storage a `move d.a` empties: the slot of a record local, or (LB9 R-6g8-4) the payload storage of a struct
+        binder of a consuming match, which the scrutinee's drop then finds emptied"""
+        kind, x = s.lookup(e.name)
+        if kind != "ssa":
+            return x
+        if x.p is not None:      # a boxed payload: the binder views the child node
+            return Slot("agg", x.p, None, x.ty)
+        if x.mv is not None:     # an inline payload of the owned scrutinee slot
+            sl, vn, k, _dead = x.mv
+            return Slot("agg", g9_field_gep(s, sl.ty, sl.a, vn, k), None, x.ty)
+        raise PruvError("codegen", e.line, e.col, "unsupported_type",
+                        "moving a field of the match binder %s needs the Rust backend" % e.name, "use the Rust backend",
+                        file=getattr(e, "file", None))
+
     def field_ptr_ty(s, sl, path):
         """LG4: (address of the field reached by `path` from the extended root slot sl, its declared type); a boxed
         intermediate edge is loaded"""
@@ -3145,7 +3160,7 @@ class FnGen:
                 return s.clone_val(v)
             return v
         if isinstance(e, Move) and e.fields and (is_native_vec(e.ty) or is_scalar_vec(e.ty)):
-            _, sl = s.lookup(e.name)
+            sl = s.field_move_root(e)
             gp, ty = s.field_ptr_ty(sl, e.fields)
             T = lty(ty)
             old = s.op("load %s, ptr %s" % (T, gp))
@@ -3153,7 +3168,7 @@ class FnGen:
             s.ins("store %s %s, ptr %s" % (T, zero, gp))
             return s.unpack(old, ty, False)
         if isinstance(e, Move) and e.fields:    # LG4: move an owned buffer field out; the field becomes (null, 0, 0)
-            _, x = s.lookup(e.name)
+            x = s.field_move_root(e)
             gp, fty = s.field_ptr_ty(x, e.fields)
             old = s.op("load %s, ptr %s" % (ARR, gp))
             s.ins("store %s zeroinitializer, ptr %s" % (ARR, gp))
@@ -3880,7 +3895,7 @@ class FnGen:
         if n == "vec_reserve":
             s.g6_call(sym, "void", args)
             return V("unit")
-        if n in ("vec_new", "map_new", "string_from", "string_new", "vec_push", "map_insert", "string_push_str",
+        if n in ("vec_new", "map_new", "string_from", "string_new", "vec_push", "map_insert", "string_push_str", "string_push_char",
                  "file_open_read", "file_create", "file_read_all", "file_write_str", "file_write_bytes",
                  "proc_args_new", "proc_args_push", "proc_spawn", "proc_spawn_env", "proc_write_str", "proc_write_bytes",
                  "proc_close_stdin", "proc_read", "proc_read_all",

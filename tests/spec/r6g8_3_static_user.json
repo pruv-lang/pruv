@@ -1,0 +1,11 @@
+{
+  "gen_contains": [
+    "let s: &'static str = \"abc\";"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["6"],
+    "alloc_balance": true
+  }
+}

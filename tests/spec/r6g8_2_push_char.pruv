@@ -1,0 +1,35 @@
+// spec: R-6g8-2 accept
+fn spaced(t: str) -> String ! alloc
+  requires len(t) <= 1000
+  ensures len(result) == 2 * len(t)
+{
+  let mut out: String = string_new();
+  let mut i: i64 = 0;
+  while i < len(t)
+    invariant 0 <= i && i <= len(t) && len(out) == 2 * i
+    decreases len(t) - i
+  {
+    out = string_push_char(move out, 32);
+    out = string_push_char(move out, string_byte_of(t, i));
+    i = i + 1;
+  }
+  return move out;
+}
+
+fn string_byte_of(t: str, i: i64) -> i64
+  requires 0 <= i && i < len(t)
+  ensures 0 <= result && result < 128
+{
+  let b: i64 = t[i];
+  if b < 128 { return b; }
+  return 63;
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let s: String = spaced("ab");
+  let mut u: String = string_new();
+  u = string_push_char(move u, 233);
+  u = string_push_char(move u, 8364);
+  u = string_push_char(move u, 128512);
+  return len(s) * 1000000 + string_byte(s, 1) * 10000 + len(u) * 100 + string_byte(u, 0) - string_byte(u, 5);
+}

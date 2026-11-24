@@ -1,0 +1,29 @@
+// spec: R-6g8-4 accept
+struct Doc { tape: [i64], n: i64 }
+enum Parse { Parsed(d: Doc), Failed(code: i64) }
+
+fn parse(k: i64) -> Parse ! alloc {
+  if k > 0 {
+    let mut t: [i64] = alloc(3, 7);
+    return Parse::Parsed(Doc { tape: move t, n: 3 });
+  }
+  return Parse::Failed(k);
+}
+
+fn root(k: i64) -> [i64] ! alloc {
+  let parsed: Parse = parse(k);
+  match parsed {
+    Parse::Parsed(doc) => {
+      let tape: [i64] = move doc.tape;
+      return move tape;
+    }
+    Parse::Failed(e) => { return alloc(1, e); }
+  }
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let a: [i64] = root(2);
+  let b: [i64] = root(-4);
+  if len(a) != 3 || len(b) != 1 || a[0] != 7 || a[2] != 7 || b[0] != -4 { return 0; }
+  return len(a) + len(b) + 6;
+}

@@ -1,0 +1,19 @@
+// LB9 (R-6g8-4): a whole move of a match binder record is still refused (field moves only).
+struct Doc { tape: [u8] }
+enum E { One(d: Doc), Empty }
+
+fn make() -> E ! alloc {
+  let t: [u8] = alloc(1, 65);
+  return E::One(Doc { tape: move t });
+}
+
+pub fn f() -> i64 ! alloc {
+  let e: E = make();
+  match e {
+    E::One(d) => {
+      let q: Doc = move d;
+      return len(q.tape);
+    }
+    E::Empty => { return 0; }
+  }
+}

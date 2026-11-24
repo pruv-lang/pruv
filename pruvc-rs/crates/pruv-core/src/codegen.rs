@@ -27,7 +27,8 @@ pub(crate) fn match_moves_binder(x: &Match) -> bool {
         if a.enum_name.is_some() && !a.binders.is_empty() {
             crate::foreign_shim::walk_stmts(&a.body, &mut |node| {
                 if let crate::foreign_shim::Node::Expr(Expr::Move(m)) = node {
-                    if m.fields.is_empty() && a.binders.iter().any(|b| *b == m.name) {
+                    // LB9 (R-6g8-4): `move b.f` of a struct binder too
+                    if a.binders.iter().any(|b| *b == m.name) {
                         found = true;
                     }
                 }
@@ -921,6 +922,126 @@ fn is_optres(t: &GType) -> bool {
 }
 
 /// G2 B2: string literal spelling LIT (spec 1.2). The bytes are UTF-8, guaranteed by the parser.
+/// LB9 SL (R-6g8-3): immutable `let x: str = "lit";` locals whose every read is a borrow (a `str` parameter of a
+/// catalog or user call, `len`, an index, or the source of `subview` / `substr`) stay `&'static str`, as hand Rust
+/// writes `let x = "lit";`. A name bound twice anywhere in the function is left alone (codegen.py static_str_locals).
+fn static_str_locals(f: &Function, fmap: &HashMap<String, &Function>) -> HashSet<String> {
+    struct Scan<'m, 'f> {
+        fmap: &'m HashMap<String, &'f Function>,
+        lets: Vec<String>,
+        binders: Vec<String>,
+        bad: HashSet<String>,
+    }
+    impl Scan<'_, '_> {
+        fn visit(&mut self, e: &Expr, ok: bool) {
+            match e {
+                Expr::Var(v) => {
+                    if !ok {
+                        self.bad.insert(v.name.clone());
+                    }
+                }
+                Expr::Move(m) => {
+                    self.bad.insert(m.name.clone());
+                }
+                Expr::Index(x) => {
+                    self.visit(&x.array, true);
+                    self.visit(&x.index, false);
+                }
+                Expr::Call(c) => {
+                    let n = c.name.as_str();
+                    let flags: Vec<bool> = if (n == "len" && c.args.len() == 1) || (matches!(n, "subview" | "substr") && !c.args.is_empty()) {
+                        (0..c.args.len()).map(|i| i == 0).collect()
+                    } else if let Some(g) = self.fmap.get(n) {
+                        (0..c.args.len())
+                            .map(|i| g.params.get(i).map_or(false, |p| p.ty == "str" && p.mode_pos.is_none() && !p.take))
+                            .collect()
+                    } else if let Some(cf) = catalog_fn(n) {
+                        (0..c.args.len())
+                            .map(|i| cf.params.get(i).map_or(false, |p| p.ty == GType::str() && !p.inout && !p.take))
+                            .collect()
+                    } else {
+                        vec![false; c.args.len()]
+                    };
+                    for (x, ok_x) in c.args.iter().zip(flags) {
+                        self.visit(x, ok_x);
+                    }
+                }
+                _ => {
+                    for k in crate::refine::kids(e) {
+                        self.visit(k, false);
+                    }
+                }
+            }
+        }
+        fn block(&mut self, stmts: &[Stmt]) {
+            for st in stmts {
+                match st {
+                    Stmt::Let(x) => {
+                        self.binders.push(x.name.clone());
+                        if !x.mutable && x.ty == "str" && matches!(x.value, Expr::StrLit(_)) && x.refine.is_none() {
+                            self.lets.push(x.name.clone());
+                        }
+                        self.visit(&x.value, false);
+                    }
+                    Stmt::Assign(x) => self.visit(&x.value, false),
+                    Stmt::IndexAssign(x) => {
+                        self.visit(&x.index, false);
+                        self.visit(&x.value, false);
+                    }
+                    Stmt::If(x) => {
+                        self.visit(&x.cond, false);
+                        self.block(&x.then);
+                        self.block(&x.els);
+                    }
+                    Stmt::While(x) => {
+                        self.visit(&x.cond, false);
+                        for i in &x.invariants {
+                            self.visit(i, false);
+                        }
+                        self.visit(&x.decreases, false);
+                        self.block(&x.body);
+                    }
+                    Stmt::ForMap(x) => {
+                        self.binders.push(x.key.clone());
+                        self.binders.push(x.val.clone());
+                        self.visit(&x.place, false);
+                        for i in &x.invariants {
+                            self.visit(i, false);
+                        }
+                        self.block(&x.body);
+                    }
+                    Stmt::Return(x) => {
+                        if let Some(v) = &x.value {
+                            self.visit(v, false);
+                        }
+                    }
+                    Stmt::Assert(x) => self.visit(&x.cond, false),
+                    Stmt::ExprStmt(x) => self.visit(&x.expr, false),
+                    Stmt::FieldAssign(x) => self.visit(&x.value, false),
+                    Stmt::Par(x) => {
+                        for c in &x.calls {
+                            self.visit(c, false);
+                        }
+                    }
+                    Stmt::Match(x) => {
+                        self.visit(&x.scrutinee, false);
+                        for arm in &x.arms {
+                            self.binders.extend(arm.binders.iter().cloned());
+                            self.block(&arm.body);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut sc = Scan { fmap, lets: Vec::new(), binders: f.params.iter().map(|p| p.name.clone()).collect(), bad: HashSet::new() };
+    sc.block(&f.body);
+    let Scan { lets, binders, bad, .. } = sc;
+    lets.into_iter()
+        .filter(|n| !bad.contains(n) && binders.iter().filter(|b| *b == n).count() == 1)
+        .collect()
+}
+
 fn lit_str(bytes: &[u8]) -> String {
     let mut s = String::from("\"");
     for ch in String::from_utf8_lossy(bytes).chars() {
@@ -1314,6 +1435,10 @@ struct Gen<'a> {
     boxed: HashSet<String>,
     /// G9 A2: names bound to a Rust reference (extended parameters, match payload views, buffer payload views)
     refs: HashSet<String>,
+    /// LB9 SL (R-6g8-3): `str` literal locals emitted as `&'static str`
+    static_strs: HashSet<String>,
+    /// LB9 (R-6g8-4): struct binders of a consuming match in the current arm (`move b.f` is the partial move `b.f`)
+    owned_binders: HashSet<String>,
     map_views: HashSet<String>,
     string_error_binders: HashSet<String>,
     /// owned extended locals the current return statement may move (return_movable)
@@ -1483,6 +1608,8 @@ impl<'a> Gen<'a> {
             ext: prog.g9.as_ref().map(|m| m.extended.iter().cloned().collect()).unwrap_or_default(),
             boxed: prog.g9.as_ref().map(|m| m.boxed.iter().cloned().collect()).unwrap_or_default(),
             refs: HashSet::new(),
+            static_strs: HashSet::new(),
+            owned_binders: HashSet::new(),
             map_views: HashSet::new(),
             string_error_binders: HashSet::new(),
             moving: HashSet::new(),
@@ -2041,6 +2168,7 @@ impl<'a> Gen<'a> {
         }
         self.emit(0, &format!("{vis}fn {body_name}{lifetime}({ps}){ret} {{"));
         self.cost = !self.verified && f.cost.is_some();
+        self.static_strs = if self.cost { HashSet::new() } else { static_str_locals(f, &self.fmap) };
         if self.cost {
             let args = join_map(&f.params, ", ", |p| {
                 if self.take_arrays.contains(&p.name)
@@ -3902,6 +4030,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
             let saved_vars = self.vars.clone();
             let saved_refs = self.refs.clone();
             let saved_pinned = self.pinned.clone();
+            let saved_owned = self.owned_binders.clone();
             // the local a field-path scrutinee (h.e) borrows from is pinned too
             let mut root = &x.scrutinee;
             while let Expr::FieldAccess(f) = root {
@@ -3925,6 +4054,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     let boxed = self.boxed.contains(&format!("{}::{}.{}", sty, a.ctor, fd.name));
                     self.emit(ind + 2, &format!("let {}: {} = {}{};", b, ft, if boxed { "*" } else { "" }, b));
                     self.refs.remove(b);
+                    self.owned_binders.insert(b.clone()); // LB9 (R-6g8-4)
                 } else if self.is_ext(Some(ft)) {
                     self.emit(ind + 2, &format!("let {}: &{} = {};", b, ft, b));
                     self.refs.insert(b.clone());
@@ -3950,6 +4080,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
             self.vars = saved_vars;
             self.refs = saved_refs;
             self.pinned = saved_pinned;
+            self.owned_binders = saved_owned;
             self.emit(ind + 1, "}");
         }
         self.emit(ind, "}");
@@ -4029,6 +4160,14 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 self.emit(ind, &format!("let {}: &[{}] = &pruv_sb_{}[..pruv_sl_{}];", x.name, el, x.name, x.name));
                 self.vars.insert(x.name.clone(), x.ty.clone());
                 self.refs.remove(&x.name);
+            }
+            Stmt::Let(x) if self.static_strs.contains(&x.name) => {
+                // LB9 SL (R-6g8-3): `let x = "lit";`
+                if let Expr::StrLit(v) = &x.value {
+                    self.emit(ind, &format!("let {}: &'static str = {};", x.name, lit_str(&v.value)));
+                }
+                self.vars.insert(x.name.clone(), x.ty.clone());
+                self.refs.insert(x.name.clone());
             }
             Stmt::Let(x) => {
                 self.moving = self.last_copy(&x.name, &x.value);
@@ -4846,6 +4985,8 @@ pruv_hi <= (pruv_b.len() as i128) && \
             Expr::Move(x) if x.fields.is_empty() && self.resizable_inouts.contains(&x.name) =>
                 Ok(format!("::std::mem::take({})", x.name)),
             Expr::Move(x) if x.fields.is_empty() => Ok(x.name.clone()),
+            // LB9 (R-6g8-4): a consuming match binder owns its payload
+            Expr::Move(x) if self.owned_binders.contains(&x.name) => Ok(format!("{}.{}", x.name, x.fields.join("."))),
             Expr::Move(x) => Ok(format!("::std::mem::take(&mut {}.{})", x.name, x.fields.join("."))),
             // G5 A0: never reaches the generator (the driver's A0 guard stops the program earlier)
             Expr::InoutArg(_) => Err("G5 inout argument reached the Rust generator".to_string()),
