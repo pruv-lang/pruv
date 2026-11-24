@@ -1,0 +1,4 @@
+// spec: R-6g7-1 reject
+fn f() -> Result<(), i64> {
+  return Ok::<(), i64>(1);
+}

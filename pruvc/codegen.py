@@ -1171,7 +1171,7 @@ def rty(t, param=False):
 def cty(t):
     """contract (i128) mirror of a type"""
     if t.owner is None and t.args and t.name in ("option", "result"):  # G3: C(Option<X>) = Option<C(X)>
-        x = cty(t.args[0])
+        x = "()" if t.name == "result" and t.args[0] == UNIT else cty(t.args[0])  # LB8
         if t.name == "option":
             return "::std::option::Option<%s>" % x
         return "::std::result::Result<%s, %s>" % (x, cty(result_error(t)))
@@ -1194,7 +1194,7 @@ def cty(t):
 def conv(t, x):
     """Rust expression turning the executed value `x` (type t) into its contract value"""
     if t.owner is None and t.args and t.name in ("option", "result"):  # G3: recursive, payload first
-        inner = conv(t.args[0], "v")
+        inner = "v" if t.name == "result" and t.args[0] == UNIT else conv(t.args[0], "v")  # LB8
         if t.name == "option":
             return x if inner == "v" else "%s.map(|v| %s)" % (x, inner)
         ok = x if inner == "v" else "%s.map(|v| %s)" % (x, inner)
@@ -2342,6 +2342,8 @@ class Gen:
             if e.name == "Some":
                 return "Some::<%s>(%s)" % (rx, s.g9_real(e.arg, px))
             err = result_error(t) if t is not None else I64
+            if e.arg is None:   # LB8 R-6g7-1: Ok(())
+                return "Ok::<(), %s>(())" % rty(err)
             return "%s::<%s, %s>(%s)" % (e.name, rx, rty(err), s.g9_real(e.arg, px if e.name == "Ok" else err))
         if t is None or (t.owner is None and t.name == "i64"):
             return "i64::try_from(%s).unwrap_or_else(|_| pruv_ud(\"constructor field out of i64 range\"))" % s.c(e)
@@ -2468,13 +2470,13 @@ class Gen:
             return "pruv_cidx(%s, %s)" % (s.carr(e.array), s.c(e.index))
         if isinstance(e, Ctor):
             if e.ty is not None and e.ty.args:   # G3: Option<X> / Result<X>, X != i64
-                cx = cty(e.ty.args[0])
+                cx = "()" if e.ty.args[0] == UNIT else cty(e.ty.args[0])  # LB8
                 if e.name == "None":
                     return "None::<%s>" % cx
                 if e.name == "Some":
                     return "Some::<%s>(%s)" % (cx, s.c(e.arg))
                 error = result_error(e.ty)
-                arg = s.c(e.arg)
+                arg = "()" if e.arg is None else s.c(e.arg)  # LB8: Ok(()) of Result<(), E>
                 if e.name == "Err" and is_owned_result(e.ty):
                     arg = "%s.clone()" % arg
                 return "%s::<%s, %s>(%s)" % (e.name, cx, cty(error), arg)
@@ -3295,6 +3297,8 @@ class Gen:
                 if map_take and name == "Some":
                     binders = "mut " + binders
                 pat = name if not a.binders else "%s(%s)" % (name, binders)
+                if name == "Ok" and not a.binders:   # LB8 R-6g7-1: the unit payload
+                    pat = "Ok(())"
                 s.emit(ind + 1, "%s => {" % pat)
                 saved_inouts, saved_refs, saved_vt = set(s.inouts), set(s.refs), dict(s.vt)
                 if (collection_call or map_take) and a.binders:
@@ -3688,7 +3692,7 @@ class Gen:
                 if e.name == "Some":
                     return "Some::<%s>(%s)" % (rx, s.e(e.arg))
                 error = rty(result_error(e.ty))
-                return "%s::<%s, %s>(%s)" % (e.name, rx, error, s.e(e.arg))
+                return "%s::<%s, %s>(%s)" % (e.name, rx, error, "()" if e.arg is None else s.e(e.arg))
             return "None" if e.name == "None" else "%s(%s)" % (e.name, s.e(e.arg))
         if isinstance(e, StructLit):
             # declaration order = left-to-right evaluation; parenthesized so `if S { .. }.x` parses

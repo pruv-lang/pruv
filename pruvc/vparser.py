@@ -1029,7 +1029,9 @@ class Parser:
                     if ct.val not in ("Some", "None", "Ok", "Err"):
                         s.err("match arm must be Some(x), None, Ok(x), Err(x) or Enum::Variant(...)", "", ct)
                     binders = []
-                    if ct.val != "None":
+                    if ct.val == "Ok" and s.at("(") and s.at("(", 1) and s.at(")", 2):
+                        s.next(); s.next(); s.next(); s.expect(")")   # LB8 R-6g7-1: `Ok(())` binds nothing
+                    elif ct.val != "None":
                         s.expect("("); binders = [s.ident().val]; s.expect(")")
                     s.expect("=>")
                     arms.append(MatchArm(ct.line, ct.col, None, ct.val, binders, s.block()))
@@ -1348,7 +1350,12 @@ class Parser:
         if s.at("Some") or s.at("Ok") or s.at("Err"):
             s.next()
             targs = s.expr_targs(t.val in ("Ok", "Err")) if (s.at("::") and s.at("<", 1)) else None
-            s.expect("("); a = s.expr(); s.expect(")")
+            s.expect("(")
+            if t.val == "Ok" and s.at("(") and s.at(")", 1):
+                s.next(); s.next(); a = None      # LB8 R-6g7-1: Ok(()) carries the unit value, no payload
+            else:
+                a = s.expr()
+            s.expect(")")
             c = Ctor(t.line, t.col, t.val, a)
             c.targs = targs
             return c

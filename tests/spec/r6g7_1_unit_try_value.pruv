@@ -1,0 +1,8 @@
+// spec: R-6g7-1 reject
+fn g() -> Result<(), i64> {
+  return Ok::<(), i64>(());
+}
+fn f() -> Result<i64, i64> {
+  let x: i64 = g()?;
+  return Ok::<i64, i64>(x);
+}

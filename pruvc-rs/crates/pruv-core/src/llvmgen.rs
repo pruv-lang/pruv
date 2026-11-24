@@ -832,6 +832,8 @@ pub fn st(t: &str, c: bool) -> String {
         return format!("{{ i1, {}, {} }}", x, st(g_error(t), c));
     }
     match t {
+        // LB8 R-6g7-1: the Ok slot of Result<(), E> is empty
+        "unit" => "{}".to_string(),
         "i64" => {
             if c {
                 "i128".to_string()
@@ -1100,6 +1102,8 @@ pub fn words(tt: &TypeTable, ty: &str) -> R<usize> {
     } else {
         match ty {
             "i64" | "bool" => 1,
+            // LB8 R-6g7-1: the Ok payload of Result<(), E> has no words
+            "unit" => 0,
             "option" | "result" => 2,
             _ => match t_decl(tt, ty)? {
                 TypeDecl::Struct(s) => {
@@ -2484,6 +2488,10 @@ impl<'a> FnGen<'a> {
     fn mk_octor(&mut self, e: &Ctor) -> R<V> {
         let ty = need_ty(&e.ty)?;
         let layout = st(ty, false);
+        if e.name == "Ok" && e.arg.is_none() {
+            // LB8 R-6g7-1: Ok(()) of Result<(), String> sets only the tag
+            return Ok(V::agg(self.op(format!("insertvalue {layout} zeroinitializer, i1 true, 0"))?, ty));
+        }
         let arg = e.arg.as_deref().ok_or_else(|| IDX_ERR.to_string())?;
         if e.name == "Ok" {
             let value = self.ev(arg, false)?;
@@ -2524,7 +2532,8 @@ impl<'a> FnGen<'a> {
         }
         let layout = lty(ty);
         let tag = self.op(format!("extractvalue {layout} {}, 0", value.a))?;
-        let ok = self.get(&value, ty, 1, g_arg(ty), false)?;
+        // LB8 R-6g7-1: Result<(), String> has no Ok payload to read
+        let ok = if g_arg(ty) == "unit" { None } else { Some(self.get(&value, ty, 1, g_arg(ty), false)?) };
         let handle = self.op(format!("extractvalue {layout} {}, 2", value.a))?;
         if matches!(scrutinee, Expr::Var(_)) {
             let slot = g9_gep(self, &layout, value.p.as_deref().ok_or_else(|| IDX_ERR.to_string())?, 2)?;
@@ -2542,7 +2551,7 @@ impl<'a> FnGen<'a> {
             let mut own = None;
             if let Some(name) = arm.binders.first() {
                 let binding = if ctor == "Ok" {
-                    Bind::Ssa(ok.clone())
+                    Bind::Ssa(ok.clone().ok_or_else(|| IDX_ERR.to_string())?)
                 } else {
                     let slot = self.new_slot(name, "string")?;
                     self.ins(format!("store ptr {handle}, ptr {}", slot.a))?;
@@ -2912,6 +2921,11 @@ impl<'a> FnGen<'a> {
         if e.name == "None" {
             return Ok(V::agg("zeroinitializer", &ty));
         }
+        if e.arg.is_none() && e.name == "Ok" {
+            // LB8 R-6g7-1: Ok(()) sets only the tag
+            let r = self.op(format!("insertvalue {} zeroinitializer, i1 true, 0", st(&ty, c)))?;
+            return Ok(V::agg(r, &ty));
+        }
         let a = e.arg.as_ref().ok_or_else(|| "llvmgen: constructor without argument".to_string())?;
         let x = self.evf(a, c, false)?;
         if e.name == "Some" || e.name == "Ok" {
@@ -3006,9 +3020,12 @@ impl<'a> FnGen<'a> {
             let xt = g_arg(ty).to_string();
             let t = self.op(format!("extractvalue {} {}, 0", st(ty, false), x.a))?;
             let mut acc = self.op(format!("insertvalue {} zeroinitializer, i1 {}, 0", st(ty, true), t))?;
-            let px = self.get(x, ty, 1, &xt, false)?;
-            let pc = self.to_c(&px, &xt)?;
-            acc = self.put(&acc, ty, 1, &pc, &xt, true)?;
+            if xt != "unit" {
+                // LB8: the Ok slot of Result<(), E> is zero-sized
+                let px = self.get(x, ty, 1, &xt, false)?;
+                let pc = self.to_c(&px, &xt)?;
+                acc = self.put(&acc, ty, 1, &pc, &xt, true)?;
+            }
             if ty.starts_with("result<") {
                 let et = g_error(ty);
                 let er = self.get(x, ty, 2, et, false)?;
@@ -3112,9 +3129,13 @@ impl<'a> FnGen<'a> {
             let tl = self.op(format!("extractvalue {} {}, 0", tc, l.a))?;
             let tr = self.op(format!("extractvalue {} {}, 0", tc, r.a))?;
             let te = self.op(format!("icmp eq i1 {}, {}", tl, tr))?;
-            let lx = self.get(l, ty, 1, &xt, true)?;
-            let rx = self.get(r, ty, 1, &xt, true)?;
-            let pe = self.ceq(&lx, &rx, &xt)?;
+            let pe = if xt == "unit" {
+                "true".to_string() // LB8
+            } else {
+                let lx = self.get(l, ty, 1, &xt, true)?;
+                let rx = self.get(r, ty, 1, &xt, true)?;
+                self.ceq(&lx, &rx, &xt)?
+            };
             let nt = self.op(format!("xor i1 {}, true", tl))?;
             if ty.starts_with("option<") {
                 let o = self.op(format!("or i1 {}, {}", nt, pe))?;
@@ -6091,6 +6112,11 @@ impl<'a> FnGen<'a> {
                 if x.name == "None" {
                     return Ok(V::agg("zeroinitializer", gt));
                 }
+                if x.arg.is_none() && x.name == "Ok" {
+                    // LB8 R-6g7-1: Ok(())
+                    let r = self.op(format!("insertvalue {} zeroinitializer, i1 true, 0", st(gt, false)))?;
+                    return Ok(V::agg(r, gt));
+                }
                 let a = x.arg.as_ref().ok_or_else(|| "llvmgen: constructor without argument".to_string())?;
                 if x.name == "Some" || x.name == "Ok" {
                     let xv = self.g9_real(a, Some(&px))?;
@@ -8381,7 +8407,8 @@ fn typed_result_llvm_error(prog: &Program, specialized: &HashMap<String, Vec<cra
     let in_type = |ty: &GType, in_decl| {
         fn reject<'a>(ty: &'a GType, in_decl: bool, specialized: &'a HashMap<String, Vec<GType>>, decls: Decls) -> Option<&'a GType> {
             if ty.has_string_error() {
-                if in_decl || !is_value(&ty.args[0], decls) {
+                // LB8 R-6g7-1: Result<(), String> has an empty Ok slot, so only the error needs a drop path
+                if in_decl || !(ty.args[0].name == "unit" || is_value(&ty.args[0], decls)) {
                     return Some(ty);
                 }
             } else if ty.args.iter().any(GType::has_string_error) {

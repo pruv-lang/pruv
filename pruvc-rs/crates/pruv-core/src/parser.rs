@@ -1514,7 +1514,13 @@ impl Parser {
                         ));
                     }
                     let mut binders = Vec::new();
-                    if ct.val != "None" {
+                    if ct.val == "Ok" && self.at("(", 0) && self.at("(", 1) && self.at(")", 2) {
+                        // LB8 R-6g7-1: `Ok(())` binds nothing
+                        self.bump();
+                        self.bump();
+                        self.bump();
+                        self.expect(")")?;
+                    } else if ct.val != "None" {
                         self.expect("(")?;
                         binders = vec![self.ident()?.val];
                         self.expect(")")?;
@@ -1908,9 +1914,16 @@ impl Parser {
                 None
             };
             self.expect("(")?;
-            let a = self.expr()?;
+            // LB8 R-6g7-1: Ok(()) carries the unit value, no payload
+            let a = if t.val == "Ok" && self.at("(", 0) && self.at(")", 1) {
+                self.bump();
+                self.bump();
+                None
+            } else {
+                Some(Box::new(self.expr()?))
+            };
             self.expect(")")?;
-            return Ok(Expr::Ctor(Ctor { line, col, name: t.val.clone(), arg: Some(Box::new(a)), ty: None, targs, inst: None }));
+            return Ok(Expr::Ctor(Ctor { line, col, name: t.val.clone(), arg: a, ty: None, targs, inst: None }));
         }
         if self.at("spent", 0) {
             self.next();

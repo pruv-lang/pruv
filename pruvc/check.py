@@ -73,7 +73,7 @@ def try_position_error(at):
          " the statement passes inout or the operator holds a quantifier or a subview or moves a name used outside it"
          " (or uses one moved outside it, or a binding of a type that is not a value used again), or after an operand evaluated before it that cannot be bound to a temporary (one with inout,"
          " a quantifier, a move of a name used again or a type that is not a value)",
-         "bind the value with `let x: T = e?;` first")
+         "bind the value with `let x: T = e?;` first (for a Result<(), E>, write `e?;` as a statement)")
 
 
 def _has_kind(e, kind):
@@ -1007,7 +1007,7 @@ class Checker:
         if ty.owner is not None:
             return
         if ty.name in ("option", "result"):
-            if ty.args:
+            if ty.args and not (ty.name == "result" and ty.args[0] == UNIT):   # LB8 R-6g7-1: Result<(), E>
                 s.check_arg(node, ty.args[0], None)
             if ty.name == "result" and len(ty.args) == 2:
                 s.check_result_error(node, result_error(ty))
@@ -1150,7 +1150,8 @@ class Checker:
                     if d.tparams and (is_array(f.type) or f.type == STR):   # G9 A0
                         terr(f, "field_type", "generic type %s cannot have the array/str field %s" % (d.name, f.name),
                              "use a dedicated non-generic declaration")
-                    if f.type == UNIT or (is_array(f.type) and f.type not in (ARRAY, ARRAY_U8, ARRAY_BOOL)):
+                    if f.type == UNIT or (is_array(f.type) and f.type not in (ARRAY, ARRAY_U8, ARRAY_BOOL)) or (
+                            f.type.owner is None and f.type.name == "result" and len(f.type.args) in (1, 2) and f.type.args[0] == UNIT):
                         terr(f, "field_type", "field %s cannot have type %s" % (f.name, type_name(f.type)),
                              "fields are i64, bool, Option<i64>, Result<i64> or a user struct/enum")
                     s.check_type(f, f.type)
@@ -2102,10 +2103,14 @@ class Checker:
         if error != I64:
             err.targs.append(error)
         early = Return(*pos, err)
-        ok = MatchArm(*pos, None, "Ok", [ok_name], rest)
+        bare = isinstance(st, ExprStmt) and st.expr is target
+        unit = bool(operand.args) and operand.args[0] == UNIT
+        if unit and not bare:   # LB8 R-6g7-1: the unit value of `e?` is only discarded
+            try_position_error(st)
+        ok = MatchArm(*pos, None, "Ok", [] if unit else [ok_name], rest)
         fail = MatchArm(*pos, None, "Err", [err_name], [early])
         nodes = [ok, fail, early, err, err_value]
-        if not (isinstance(st, ExprStmt) and st.expr is target):
+        if not bare:
             value = Var(*pos, ok_name)
             replace_expr(st, target, value)
             ok.body.insert(0, st)
@@ -2481,6 +2486,10 @@ class Checker:
                              "bind every field, in declaration order")
                 else:
                     payload = result_error(t) if a.ctor == "Err" else t.args[0] if t.args else I64
+                    if a.ctor == "Ok" and (payload == UNIT) != (not a.binders):   # LB8 R-6g7-1
+                        terr(a, "match_arity", "Ok of %s %s" % (type_name(t), "binds no value, write `Ok(())`"
+                             if payload == UNIT else "carries a value, the pattern must bind it"),
+                             "write `Ok(())` for Result<(), E> and `Ok(v)` otherwise")
                     ftypes = [payload] * len(a.binders)
                 for b, bt in zip(a.binders, ftypes):
                     if b in sc:
@@ -3308,6 +3317,8 @@ class Checker:
         if e.targs is None:
             if e.name == "None":
                 return OPTION
+            if e.arg is None:      # LB8 R-6g7-1: unqualified Ok keeps Result<i64>
+                s.unit_payload(e, I64)
             s.expect(e.arg, I64, scope, c)
             if not c:
                 s.own(e.arg)
@@ -3321,8 +3332,9 @@ class Checker:
                  "write %s::<T>" % e.name)
         x = e.targs[0]
         s.check_type(e, x)
-        s.check_arg(e, x, None)
-        s.ext_misuse(e, x, "arg")      # G9 A0
+        if not (is_result and x == UNIT):      # LB8 R-6g7-1: Ok::<(), E>(()), Err::<(), E>(e)
+            s.check_arg(e, x, None)
+            s.ext_misuse(e, x, "arg")      # G9 A0
         error = e.targs[1] if len(e.targs) == 2 else I64
         if error != I64:
             s.check_type_arity(e, error)
@@ -3332,10 +3344,22 @@ class Checker:
         e.inst = {"decl": owner, "args": args, "subst": bind_args(owner, len(args), args)}
         if e.name == "None":
             return mk_option(x)
+        if e.name == "Ok" and (x == UNIT) != (e.arg is None):
+            s.unit_payload(e, x)
+        if e.arg is None:
+            return mk_result(x, error)
         s.expect(e.arg, error if e.name == "Err" else x, scope, c)
         if not c:
             s.own(e.arg)
         return mk_option(x) if e.name == "Some" else mk_result(x, error)
+
+    def unit_payload(s, e, x):
+        """LB8 R-6g7-1: the unit value `()` is written only as `Ok::<(), E>(())`, and that Ok takes nothing else"""
+        if e.arg is None:
+            terr(e, "type_mismatch", "expected %s, found ()" % type_name(x),
+                 "`Ok(())` builds a Result<(), E>: write Ok::<(), E>(())")
+        terr(e.arg, "type_mismatch", "expected (), found a value",
+             "the Ok payload of a Result<(), E> is written Ok::<(), E>(())")
 
     def observer_args(s, e, f, m, scope, c):
         """map_lookup / map_updated arguments: a key whose type differs from a map argument's key type is a
@@ -4081,6 +4105,8 @@ class Checker:
                 terr(a[0], "type_mismatch", "expected %s, found %s" % (type_name(OPTION if kind == "option" else RESULT),
                                                                          type_name(t)))
             if rt == "payload":     # G3: the payload type of Option<X> / Result<X>
+                if t.args and t.args[0] == UNIT:   # LB8 R-6g7-1: the unit payload carries nothing to read
+                    terr(e, "type_mismatch", "ok_val of %s has no value" % type_name(t), "use is_ok")
                 return t.args[0] if t.args else I64
             if rt == "error":
                 return result_error(t)

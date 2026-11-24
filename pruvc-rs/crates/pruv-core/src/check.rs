@@ -1754,7 +1754,10 @@ impl Checker {
         }
         if ty.name == "option" || ty.name == "result" {
             if let Some(a) = ty.args.first() {
-                self.check_arg(line, col, a, None)?;
+                // LB8 R-6g7-1: Result<(), E>
+                if !(ty.name == "result" && *a == unitt()) {
+                    self.check_arg(line, col, a, None)?;
+                }
             }
             if let Some(e) = ty.result_error() {
                 self.check_result_error(line, col, e)?;
@@ -2077,6 +2080,7 @@ impl Checker {
                     }
                     if ft == unitt()
                         || (ft.is_array() && ft != GType::array() && ft != GType::array_u8() && ft != GType::array_bool())
+                        || (ft.owner.is_none() && ft.name == "result" && ft.args.len() <= 2 && ft.args.first() == Some(&unitt()))
                     {
                         return Err(terr(
                             f.line,
@@ -3049,7 +3053,7 @@ impl Checker {
              the statement passes inout or the operator holds a quantifier or a subview or moves a name used outside it \
              (or uses one moved outside it, or a binding of a type that is not a value used again), or after an operand evaluated before it that cannot be bound to a temporary (one with inout, \
              a quantifier, a move of a name used again or a type that is not a value)",
-            "bind the value with `let x: T = e?;` first")
+            "bind the value with `let x: T = e?;` first (for a Result<(), E>, write `e?;` as a statement)")
     }
 
     fn check_try_position(e: &Expr, line: i64, col: i64) -> Res<()> {
@@ -3379,7 +3383,13 @@ impl Checker {
                 format!("`?` error type {} does not match the function error type {}", tn(&actual), tn(&expected)),
                 "use an explicit match and convert the error"));
         }
-        if !(whole && matches!(stmt, Stmt::ExprStmt(_))) {
+        let bare = whole && matches!(stmt, Stmt::ExprStmt(_));
+        let unit = ty.args.first() == Some(&unitt());
+        if unit && !bare {
+            // LB8 R-6g7-1: the unit value of `e?` is only discarded
+            return Err(Self::try_position_error(line, col));
+        }
+        if !bare {
             rest.insert(0, stmt);
         }
         let mut targs = self.cur_ret.args.clone();
@@ -3390,7 +3400,7 @@ impl Checker {
             line, col, name: "Err".into(), arg: Some(Box::new(var(&err))), ty: None, targs: Some(targs), inst: None,
         });
         let mut lowered = Match { line, col, scrutinee, arms: vec![
-            MatchArm { line, col, enum_name: None, ctor: "Ok".into(), binders: vec![ok], body: rest },
+            MatchArm { line, col, enum_name: None, ctor: "Ok".into(), binders: if unit { vec![] } else { vec![ok] }, body: rest },
             MatchArm { line, col, enum_name: None, ctor: "Err".into(), binders: vec![err],
                 body: vec![Stmt::Return(Return { line, col, value: Some(ret) })] },
         ] };
@@ -4412,6 +4422,13 @@ impl Checker {
             } else {
                 let payload = if a.ctor == "Err" { t.result_error() } else { t.args.first() };
                 let payload = payload.cloned().unwrap_or_else(i64t);
+                if a.ctor == "Ok" && (payload == unitt()) != a.binders.is_empty() {
+                    // LB8 R-6g7-1
+                    let what = if payload == unitt() { "binds no value, write `Ok(())`" }
+                        else { "carries a value, the pattern must bind it" };
+                    return Err(terr(a.line, a.col, "match_arity", format!("Ok of {} {}", tn(&t), what),
+                        "write `Ok(())` for Result<(), E> and `Ok(v)` otherwise"));
+                }
                 vec![payload; a.binders.len()]
             };
             for (b, bt) in a.binders.iter().zip(ftypes.iter()) {
@@ -5424,6 +5441,10 @@ impl Checker {
                 if name == "None" {
                     return Ok(GType::option());
                 }
+                if e.arg.is_none() {
+                    // LB8 R-6g7-1: unqualified Ok keeps Result<i64>
+                    return Err(Self::unit_payload(e, &i64t()));
+                }
                 if let Some(a) = e.arg.as_mut() {
                     self.expect(a, &i64t(), scope, c, None)?;
                     if !c {
@@ -5451,8 +5472,11 @@ impl Checker {
         }
         let x = targs[0].clone();
         self.check_type(e.line, e.col, &x)?;
-        self.check_arg(e.line, e.col, &x, None)?;
-        self.ext_misuse(e.line, e.col, &x, Some("arg"))?; // G9 A0
+        if !(result && x == unitt()) {
+            // LB8 R-6g7-1: Ok::<(), E>(()), Err::<(), E>(e)
+            self.check_arg(e.line, e.col, &x, None)?;
+            self.ext_misuse(e.line, e.col, &x, Some("arg"))?; // G9 A0
+        }
         let err = targs.get(1).cloned().unwrap_or_else(i64t);
         if targs.len() == 2 {
             let ad = &self.arg_decls;
@@ -5482,6 +5506,12 @@ impl Checker {
         if name == "None" {
             return Ok(mk_option(x));
         }
+        if name == "Ok" && (x == unitt()) != e.arg.is_none() {
+            return Err(Self::unit_payload(e, &x));
+        }
+        if e.arg.is_none() {
+            return Ok(mk_result_with_error(x, err));
+        }
         let want = if name == "Err" { err.clone() } else { x.clone() };
         if let Some(a) = e.arg.as_mut() {
             self.expect(a, &want, scope, c, None)?;
@@ -5490,6 +5520,16 @@ impl Checker {
             }
         }
         Ok(if name == "Some" { mk_option(x) } else { mk_result_with_error(x, err) })
+    }
+
+    /// LB8 R-6g7-1: the unit value `()` is written only as `Ok::<(), E>(())`, and that Ok takes nothing else
+    fn unit_payload(e: &Ctor, x: &GType) -> PruvError {
+        match e.arg.as_ref() {
+            None => terr(e.line, e.col, "type_mismatch", format!("expected {}, found ()", tn(x)),
+                "`Ok(())` builds a Result<(), E>: write Ok::<(), E>(())"),
+            Some(a) => terr(a.line(), a.col(), "type_mismatch", "expected (), found a value",
+                "the Ok payload of a Result<(), E> is written Ok::<(), E>(())"),
+        }
     }
 
     /// map_lookup / map_updated arguments: a key whose type differs from a map argument's key type is a
@@ -6516,6 +6556,10 @@ impl Checker {
                 CRes::ErrorPayload => t.result_error().cloned().unwrap_or_else(i64t),
                 // G3: the payload type of Option<X> / Result<X>
                 CRes::Payload => {
+                    if t.args.first() == Some(&unitt()) {
+                        // LB8 R-6g7-1: the unit payload carries nothing to read
+                        return Err(terr(e.line, e.col, "type_mismatch", format!("ok_val of {} has no value", tn(&t)), "use is_ok"));
+                    }
                     if t.args.is_empty() {
                         i64t()
                     } else {

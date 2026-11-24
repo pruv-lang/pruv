@@ -166,7 +166,12 @@ fn type_repr(t: &str) -> String {
 /// Contract mirror of a structured Option or Result.
 pub fn try_cty_g(g: &GType) -> Result<String, String> {
     if structured_builtin(g) {
-        let x = try_cty_g(&g.args[0])?;
+        // LB8: the Ok payload of Result<(), E> mirrors to ()
+        let x = if g.name == "result" && g.args[0].name == "unit" && g.args[0].owner.is_none() {
+            "()".to_string()
+        } else {
+            try_cty_g(&g.args[0])?
+        };
         if g.name == "option" {
             return Ok(format!("::std::option::Option<{}>", x));
         }
@@ -206,7 +211,11 @@ pub fn cty(t: &str) -> String {
 /// Contract conversion of a structured type (G3): recursive, the payload first.
 pub fn try_conv_g(g: &GType, x: &str) -> Result<String, String> {
     if structured_builtin(g) {
-        let inner = try_conv_g(&g.args[0], "v")?;
+        let inner = if g.name == "result" && g.args[0].name == "unit" && g.args[0].owner.is_none() {
+            "v".to_string()
+        } else {
+            try_conv_g(&g.args[0], "v")?
+        };
         let value = if g.has_string_error() { format!("{}.clone()", x) } else { x.to_string() };
         let mapped = if inner == "v" { value } else { format!("{}.map(|v| {})", value, inner) };
         if g.name == "option" {

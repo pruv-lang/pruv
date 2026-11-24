@@ -1667,6 +1667,33 @@ borrowed value is live.
   `push_str` / `String::from` wrapper. Tests: [range](tests/spec/r6g6_3_text_range.pruv),
   [past the end](tests/spec/r6g6_3_text_past.pruv), [other builtin](tests/spec/r6g6_3_text_kept.pruv).
 
+## 6g7. Unit results (LB8)
+
+- R-6g7-1 **`Result<(), E>`.** A function return, a parameter or a local may have type `Result<(), E>`
+  (`Result<()>` when `E` is `i64`). The unit value `()` is written only as the payload of `Ok`:
+  `Ok::<(), E>(())`. Anywhere else `()` is `parse/syntax`. `Ok(())` for a non-unit payload, and `Ok(v)` with
+  a value for a unit payload, are `type/type_mismatch`. In a `match`, the Ok arm of a unit result is written
+  `Ok(())` and binds nothing; a binder there, or `Ok(())` on a non-unit result, is `type/match_arity`.
+  `ok_val` of a unit result is `type/type_mismatch` (use `is_ok`). `e?` on a unit result is allowed only as
+  a whole expression statement `e?;`; using its value is `type/try_position`. `Result<(), E>` is not a
+  value type: as a struct or enum field it is `type/field_type`, and as a type argument (`Option<..>`,
+  `Vec<..>`, generics) it is `type/type_argument` or `type/foreign_owned_type`. Rust emits
+  `Result<(), E>`, `Ok::<(), E>(())` and `Ok(()) =>` as written by hand; `e?;` lowers to a match whose Ok arm
+  is `Ok(())`. LLVM gives the Ok payload an empty slot (`{}`, zero ABI words), so the layout is
+  `{ i1, {}, E }`; `Result<(), String>` is supported on both backends wherever `Result<T, String>` with a
+  value `T` is. A unit result may cross the host boundary (a parameter or return of a function called from Rust:
+  zero words for the Ok payload, `()` on the Rust side) and may appear in contracts (`is_ok`, `err_val`, `==`
+  and `!=` with `Ok::<(), E>(())`), whose runtime checks compare the tags and, for two `Err`, the errors. An
+  unqualified `Ok(())` stays a `Result<i64>` constructor (§G3) and is therefore `type/type_mismatch`; write
+  `Ok::<(), E>(())`. A field type with the wrong number of type arguments, e.g. `Result<(), i64, bool>`, is
+  `type/type_arity` before the field rule applies.
+  Tests: [unit try](tests/spec/r6g7_1_unit_try.pruv), [String error](tests/spec/r6g7_1_unit_string.pruv),
+  [host boundary and contracts](tests/spec/r6g7_1_unit_abi.pruv), [field arity](tests/spec/r6g7_1_unit_field_arity.pruv), [`()` elsewhere](tests/spec/r6g7_1_unit_outside.pruv),
+  [unit into a value](tests/spec/r6g7_1_unit_payload.pruv), [value into unit](tests/spec/r6g7_1_unit_value.pruv),
+  [ok_val](tests/spec/r6g7_1_unit_ok_val.pruv), [value of `?`](tests/spec/r6g7_1_unit_try_value.pruv),
+  [field](tests/spec/r6g7_1_unit_field.pruv), [type argument](tests/spec/r6g7_1_unit_targ.pruv),
+  [binder](tests/spec/r6g7_1_unit_bind.pruv), [pattern on a value](tests/spec/r6g7_1_unit_pattern.pruv).
+
 ## 6h. Files (G10)
 
 `fs` is the file-system effect, independent of `io` (stdout) and `alloc`. Direct and transitive calls

@@ -1,0 +1,6 @@
+// spec: R-6g7-1 reject
+fn f(r: Result<(), i64>) -> i64
+  requires ok_val(r) == 0
+{
+  return 0;
+}

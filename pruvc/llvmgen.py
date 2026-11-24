@@ -718,6 +718,8 @@ def st(t, c=False):
         if n == "option":
             return "{ i1, %s }" % x
         return "{ i1, %s, %s }" % (x, st(result_error(t), c))   # LG12: L(E) error slot (i64 for Result<X>)
+    if n == "unit":     # LB8 R-6g7-1: the Ok slot of Result<(), E> is empty
+        return "{}"
     if n == "i64":
         return "i128" if c else "i64"
     if n == "bool":
@@ -770,6 +772,8 @@ def words(tt, ty):
     n = ty.name
     if n in ("i64", "bool"):
         r = 1
+    elif n == "unit":   # LB8 R-6g7-1: the Ok payload of Result<(), E> has no words
+        r = 0
     elif gopt(ty):  # G3: 1 + W(X) (+ 1 for the Result error word)
         r = 1 + words(tt, ty.args[0]) + (words(tt, result_error(ty)) if n == "result" else 0)
     elif n in ("option", "result"):
@@ -1463,6 +1467,8 @@ class FnGen:
         null, a fresh String is taken as is: both are owned by the result afterwards)"""
         ty = e.ty
         T = st(ty)
+        if e.name == "Ok" and e.arg is None:     # LB8 R-6g7-1: Ok(()) of Result<(), String> sets only the tag
+            return V("agg", s.op("insertvalue %s zeroinitializer, i1 true, 0" % T), None, ty)
         if e.name == "Ok":
             x = s.ev(e.arg)
             acc = s.op("insertvalue %s zeroinitializer, i1 true, 0" % T)
@@ -1497,7 +1503,7 @@ class FnGen:
                 s.free_val(tv)
         T = lty(ty)
         tag = s.op("extractvalue %s %s, 0" % (T, sv.a))
-        okv = s.get(sv, ty, 1, X, False)
+        okv = None if X == UNIT else s.get(sv, ty, 1, X, False)   # LB8 R-6g7-1: no Ok payload to read
         h = s.op("extractvalue %s %s, 2" % (T, sv.a))
         if isinstance(sc, Var):
             s.ins("store ptr null, ptr %s" % g9_gep(s, T, sv.p, 2))
@@ -1902,6 +1908,8 @@ class FnGen:
         ty = e.ty
         if e.name == "None":
             return V("agg", "zeroinitializer", None, ty)
+        if e.arg is None:   # LB8 R-6g7-1: Ok(()) sets only the tag
+            return V("agg", s.op("insertvalue %s zeroinitializer, i1 true, 0" % st(ty, c)), None, ty)
         x = evf(e.arg)
         if e.name in ("Some", "Ok"):
             acc = s.op("insertvalue %s zeroinitializer, i1 true, 0" % st(ty, c))
@@ -1958,7 +1966,8 @@ class FnGen:
             X = ty.args[0]
             t = s.op("extractvalue %s %s, 0" % (st(ty), x.a))
             acc = s.op("insertvalue %s zeroinitializer, i1 %s, 0" % (st(ty, True), t))
-            acc = s.put(acc, ty, 1, s.to_c(s.get(x, ty, 1, X, False), X), X, True)
+            if X != UNIT:  # LB8: the Ok slot of Result<(), E> is zero-sized
+                acc = s.put(acc, ty, 1, s.to_c(s.get(x, ty, 1, X, False), X), X, True)
             if n == "result":
                 E = result_error(ty)
                 acc = s.put(acc, ty, 2, s.to_c(s.get(x, ty, 2, E, False), E), E, True)
@@ -2008,7 +2017,7 @@ class FnGen:
             tl = s.op("extractvalue %s %s, 0" % (T, l.a))
             tr = s.op("extractvalue %s %s, 0" % (T, r.a))
             te = s.op("icmp eq i1 %s, %s" % (tl, tr))
-            pe = s.ceq(s.get(l, ty, 1, X, True), s.get(r, ty, 1, X, True), X)
+            pe = "true" if X == UNIT else s.ceq(s.get(l, ty, 1, X, True), s.get(r, ty, 1, X, True), X)  # LB8
             nt = s.op("xor i1 %s, true" % tl)
             if n == "option":
                 return s.op("and i1 %s, %s" % (te, s.op("or i1 %s, %s" % (nt, pe))))
@@ -4088,6 +4097,8 @@ class FnGen:
             if t is not None and gopt(t):
                 if e.name == "None":
                     return V("agg", "zeroinitializer", None, t)
+                if e.arg is None:   # LB8 R-6g7-1: Ok(())
+                    return V("agg", s.op("insertvalue %s zeroinitializer, i1 true, 0" % st(t)), None, t)
                 if e.name in ("Some", "Ok"):
                     x = s.g9_real(e.arg, px)
                     acc = s.op("insertvalue %s zeroinitializer, i1 true, 0" % st(t))
@@ -5474,6 +5485,8 @@ class Words:
         active must be < the variant count (recorded in s.checks; the wrapper rejects before requires/body)."""
         n = ty.name
         on = act != "true"
+        if ty == UNIT:      # LB8: the zero-word Ok payload of Result<(), E>
+            return "zeroinitializer"
         if n == "i64":
             w = s.rd(ptr, off)
             return s.op("select i1 %s, i64 %s, i64 0" % (act, w)) if on else w
@@ -5552,6 +5565,8 @@ class Words:
         the tag is set, a Result error word when it is not, an enum payload when the tag selects its variant."""
         n = ty.name
         on = act != "true"
+        if ty == UNIT:      # LB8: the zero-word Ok payload of Result<(), E>
+            return
         if n == "i64":
             s.wr(ptr, off, s.op("select i1 %s, i64 %s, i64 0" % (act, x)) if on else x)
         elif n == "bool":
@@ -5919,6 +5934,8 @@ ALLOW = "#[allow(dead_code, non_snake_case, unused)]"
 def rs_ser(tt, ty, expr, arr, off, ctr):
     """Rust statements writing `expr` (a Copy value of type ty) into the word array `arr` at off"""
     n = ty.name
+    if ty == UNIT:      # LB8: zero words
+        return []
     if n == "i64":
         return ["%s[%d] = %s;" % (arr, off, expr)]
     if n == "bool":
@@ -5966,6 +5983,8 @@ def rs_ser(tt, ty, expr, arr, off, ctr):
 def rs_de(tt, ty, arr, off):
     """Rust expression rebuilding a value of type ty from the word array `arr` at off (safe constructors only)"""
     n = ty.name
+    if ty == UNIT:      # LB8: zero words
+        return "()"
     if n == "i64":
         return "%s[%d]" % (arr, off)
     if n == "bool":
@@ -6803,7 +6822,8 @@ def _typed_result_in(node, specialized_args, extended, in_decl=False):
     is not (it would need a drop path through that type)"""
     if isinstance(node, Type):
         if is_owned_result(node):
-            if in_decl or not _result_ok_value(node.args[0], extended):
+            # LB8 R-6g7-1: Result<(), String> has an empty Ok slot, so only the error needs a drop path
+            if in_decl or not (node.args[0] == UNIT or _result_ok_value(node.args[0], extended)):
                 return node
         elif any(is_owned_result(a) for a in node.args):
             return node
