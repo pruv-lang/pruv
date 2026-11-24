@@ -1,0 +1,4 @@
+// spec: R-6g5-5 reject
+fn f(inout a: [i64]) -> () ! alloc requires len(a) < 10
+  ensures len(a) == len(old(a)) + 2 && a[len(old(a))] == 2
+{ arr_push(inout a, 1, 2); }

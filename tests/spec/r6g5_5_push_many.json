@@ -1,0 +1,19 @@
+{
+  "gen_contains": [
+    "tape.extend_from_slice(&[kind, start, pos, 0i64])",
+    "f.extend_from_slice(&[true, false, true])"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "36354"
+    ],
+    "alloc_balance": true
+  }
+}

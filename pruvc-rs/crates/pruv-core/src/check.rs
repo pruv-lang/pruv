@@ -806,6 +806,9 @@ pub fn array_grow_builtin(name: &str) -> bool {
     matches!(name, "arr_reserve" | "arr_push" | "arr_append")
 }
 
+/// LB6 SX (R-6g5-5): the most values one arr_push appends.
+pub const ARR_PUSH_MAX: usize = 16;
+
 /// Array and vector inout parameters whose storage may change, including through forwarding.
 pub fn resize_params(prog: &Program) -> HashSet<(String, usize)> {
     resizing_params(prog, false)
@@ -996,7 +999,7 @@ impl Checker {
             if funcs.contains_key(&name) {
                 return Err(terr(f.line, f.col, "dup_fn", format!("function {} defined twice", name), ""));
             }
-            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "utf8_valid_span" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within" | "arr_reserve" | "arr_push" | "arr_append" | "subview")
+            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "utf8_valid_span" | "str_from_utf8" | "truncate" | "eq_range" | "find_byte" | "resize" | "copy_range" | "copy_within" | "arr_reserve" | "arr_push" | "arr_append" | "subview")
                 || is_bit_builtin(&name)
                 || is_word_builtin(&name)
                 || contract_only(&name).is_some()
@@ -4113,7 +4116,7 @@ impl Checker {
                     format!("{} returns {}: a par branch must return ()", n, tn(&f.ret)),
                     "call a unit Pruv helper and pass results back through whole inout arrays"));
             }
-        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "utf8_valid_span", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within", "arr_reserve", "arr_push", "arr_append", "subview"].contains(&n.as_str())
+        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "utf8_valid_span", "str_from_utf8", "truncate", "eq_range", "find_byte", "resize", "copy_range", "copy_within", "arr_reserve", "arr_push", "arr_append", "subview"].contains(&n.as_str())
             || is_bit_builtin(n)
             || is_word_builtin(n)
             || contract_only(n).is_some() || is_catalog(n) || (n == "old" && self.uses_inout)
@@ -5856,7 +5859,10 @@ impl Checker {
         let builtin = e.name.as_str();
         let grow = array_grow_builtin(builtin);
         let append = builtin == "arr_append";
-        let arity = if within || append { 4 } else if grow { 2 } else { 5 };
+        // LB6 SX (R-6g5-5): arr_push(inout a, v1, .., vk) appends k values in one step
+        let arity = if within || append { 4 } else if builtin == "arr_push" && (3..=ARR_PUSH_MAX + 1).contains(&e.args.len()) {
+            e.args.len()
+        } else if grow { 2 } else { 5 };
         if c {
             return Err(terr(line, col, "effect_in_contract", format!("{builtin} is not allowed in contracts"), ""));
         }
@@ -5864,7 +5870,8 @@ impl Checker {
             return Err(terr(line, col, "inout_context", format!("{builtin} must be a whole expression statement"), ""));
         }
         if e.args.len() != arity {
-            return Err(terr(line, col, "arity", format!("{builtin} takes {arity} argument(s), got {}", e.args.len()), ""));
+            let want = if builtin == "arr_push" { format!("2 to {}", ARR_PUSH_MAX + 1) } else { arity.to_string() };
+            return Err(terr(line, col, "arity", format!("{builtin} takes {want} argument(s), got {}", e.args.len()), ""));
         }
         let (aline, acol) = (e.args[0].line(), e.args[0].col());
         let name: String;
@@ -5887,7 +5894,8 @@ impl Checker {
             };
             let (root, fields) = field_place(&arg.expr);
             let op = match root {
-                Expr::Var(v) if !(within || (grow && !append)) || fields.is_empty() => v,
+                // LB6 IF (R-6g5-2): arr_reserve / arr_push take a field place like arr_append
+                Expr::Var(v) if !within || fields.is_empty() => v,
                 _ => {
                     return Err(terr(
                         aline,
@@ -5900,9 +5908,6 @@ impl Checker {
             };
             name = op.name.clone();
             path = fields;
-            if !path.is_empty() {
-                self.check_iteration_borrow(aline, acol, &name, &path)?;
-            }
             let v = self.lookup(op.line, op.col, &name, scope, &path)?;
             if v.kind == "local" && !v.mutable {
                 return Err(terr(
@@ -5946,11 +5951,26 @@ impl Checker {
                     "finish the match before the call",
                 ));
             }
+            if !path.is_empty() {
+                // after the type and match checks, in the order of check.py
+                self.check_iteration_borrow(aline, acol, &name, &path)?;
+            }
             set_ty(&mut arg.expr, &dty);
             arg.ty = Some(dty.to_key());
         }
+        // LB6 SB (R-6g5-1): a str (a literal lent statically) is the byte source of a [u8] copy
+        let byte_src = |this: &mut Self, x: &mut Expr| -> Res<GType> {
+            if dty == GType::array_u8() {
+                if let Expr::StrLit(lit) = x {
+                    lit.ty = Some(GType::array_u8().to_key());
+                    return Ok(GType::array_u8());
+                }
+            }
+            let got = this.expr(x, scope, c)?;
+            Ok(if dty == GType::array_u8() && got == strt() { GType::array_u8() } else { got })
+        };
         if append {
-            let src = self.expr(&mut e.args[1], scope, c)?;
+            let src = byte_src(self, &mut e.args[1])?;
             if src != dty && !(dty == GType::array() && src == GType::array_u8()) {
                 return Err(terr(e.args[1].line(), e.args[1].col(), "type_mismatch",
                     format!("arr_append cannot append {} to {}", tn(&src), tn(&dty)), ""));
@@ -5959,10 +5979,20 @@ impl Checker {
             self.expect(&mut e.args[3], &i64t(), scope, c, None)?;
         } else {
             let value_ty = if builtin == "arr_push" { elem_type(&dty) } else { i64t() };
-            self.expect(&mut e.args[1], &value_ty, scope, c, None)?;
+            for i in 1..if builtin == "arr_push" { e.args.len() } else { 2 } {
+                self.expect(&mut e.args[i], &value_ty, scope, c, None)?;
+            }
         }
         if !grow {
-            self.expect(&mut e.args[2], &if within { i64t() } else { dty }, scope, c, None)?;
+            if within {
+                self.expect(&mut e.args[2], &i64t(), scope, c, None)?;
+            } else {
+                let got = byte_src(self, &mut e.args[2])?;
+                if got != dty {
+                    return Err(terr(e.args[2].line(), e.args[2].col(), "type_mismatch",
+                        format!("expected {}, found {}", tn(&dty), tn(&got)), ""));
+                }
+            }
             self.expect(&mut e.args[3], &i64t(), scope, c, None)?;
             if !within {
                 self.expect(&mut e.args[4], &i64t(), scope, c, None)?;
@@ -6066,7 +6096,9 @@ impl Checker {
         }
         let Expr::Var(root) = base else { return Err(bad_operand()) };
         let entry = scope.get(&root.name).filter(|x| {
-            x.kind == "inout" && (!root_field && x.ty.is_array() || self.plain_struct(&x.ty).is_some())
+            // LB6 OS (R-6g5-4): a whole scalar inout (i64, bool) also has an entry value
+            x.kind == "inout" && (!root_field && x.ty.is_array() || self.plain_struct(&x.ty).is_some()
+                || whole && x.ty.args.is_empty() && matches!(x.ty.name.as_str(), "i64" | "bool"))
         }).ok_or_else(bad_operand)?;
         if bad_index {
             return Err(terr(line, col, "old_argument",
@@ -6238,7 +6270,7 @@ impl Checker {
                 }
             }
         }
-        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "utf8_valid_span" | "str_from_utf8" | "truncate" | "eq_range" | "resize" | "copy_range" | "copy_within" | "arr_reserve" | "arr_push" | "arr_append" | "subview")
+        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "utf8_valid_span" | "str_from_utf8" | "truncate" | "eq_range" | "find_byte" | "resize" | "copy_range" | "copy_within" | "arr_reserve" | "arr_push" | "arr_append" | "subview")
             || is_bit_builtin(&n)
             || is_word_builtin(&n);
         let is_old = n == "old" && self.uses_inout && !self.funcs.contains_key(&n); // G5 A0: contextual builtin
@@ -6358,6 +6390,28 @@ impl Checker {
                 self.expect(&mut e.args[3], &i64t(), scope, c, None)?;
                 self.expect(&mut e.args[4], &i64t(), scope, c, None)?;
                 return Ok(boolt());
+            }
+            // LB6 MC (R-6g5-3): find_byte(a: [u8] or str, b, lo, hi) -> i64, code only
+            "find_byte" => {
+                if c {
+                    return Err(terr(line, col, "effect_in_contract", "find_byte is not allowed in contracts", ""));
+                }
+                arity(4)?;
+                // a literal is borrowed as its static bytes, no alloc (check.py)
+                let at = if let Expr::StrLit(lit) = &mut e.args[0] {
+                    lit.ty = Some(GType::array_u8().to_key());
+                    GType::array_u8()
+                } else {
+                    self.expr(&mut e.args[0], scope, c)?
+                };
+                if at != GType::array_u8() && at != strt() {
+                    let (l0, c0) = (e.args[0].line(), e.args[0].col());
+                    return Err(terr(l0, c0, "type_mismatch", format!("expected [u8] or str, found {}", tn(&at)), ""));
+                }
+                self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
+                self.expect(&mut e.args[2], &i64t(), scope, c, None)?;
+                self.expect(&mut e.args[3], &i64t(), scope, c, None)?;
+                return Ok(i64t());
             }
             // LG26 (R-6b-3, G-LG25-1): this predicate is evaluated only by the verifier.
             "utf8_valid_span" => {

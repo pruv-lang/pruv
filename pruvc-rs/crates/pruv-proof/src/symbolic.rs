@@ -3086,6 +3086,37 @@ impl<'a> FnVerifier<'a> {
                 self.assume(st, g, r_ast.eq(&fa));
                 return Ok(r);
             }
+            "find_byte" => {
+                // LB6 MC (R-6g5-3): bounds and byte obligations in order, then a fresh r with lo <= r <= hi,
+                // no b in a[lo..r], and r < hi ==> a[r] == b (verify.py)
+                let av = arg(0)?.try_arr()?.clone();
+                let b = arg(1)?.try_ast()?.clone();
+                let lo = arg(2)?.try_ast()?.clone();
+                let hi = arg(3)?.try_ast()?.clone();
+                if code {
+                    let obs: Vec<(Ast, String)> = vec![
+                        (lo.ge_i(0), format!("find_byte start 0 <= lo for {}", av.name)),
+                        (lo.le(&hi), "find_byte lo <= hi".to_string()),
+                        (hi.le(&av.n), format!("find_byte hi <= len({})", av.name)),
+                    ];
+                    for (ob, msg) in obs {
+                        self.prove_core(&st, g, &ob, pos(e), "index_oob", &msg, None);
+                    }
+                    let ok = self.z.and(&[b.ge_i(0), b.le_i(255)]);
+                    self.prove_core(&st, g, &ok, pos(e), "elem_range", "find_byte byte range 0..=255", None);
+                }
+                let r = self.fresh("find_byte", &Ty::I64);
+                let r_ast = r.ast().clone();
+                self.k += 1;
+                let k = self.z.int_const(&format!("find_byte!q{}", self.k));
+                let rng = self.z.and(&[lo.le(&k), k.lt(&r_ast)]);
+                let body = av.a.select(&k).eq(&b).not();
+                let fa = self.z.forall(std::slice::from_ref(&k), &rng.implies(&body), &[]);
+                let hit = r_ast.lt(&hi).implies(&av.a.select(&r_ast).eq(&b));
+                let facts = self.z.and(&[lo.le(&r_ast), r_ast.le(&hi), fa, hit]);
+                self.assume(st, g, facts);
+                return Ok(r);
+            }
             "arr_reserve" => {
                 let cnt = arg(1)?.try_ast()?;
                 let ok = self.z.and(&[cnt.ge_i(0), cnt.le_i(MAX_LEN)]);
@@ -3093,16 +3124,27 @@ impl<'a> FnVerifier<'a> {
                 return Ok(Val::Unit);
             }
             "arr_push" => {
+                // LB6 SX (R-6g5-5): k values land at len(a)..len(a)+k, in order
                 let av = arg(0)?.try_arr()?;
-                let v = arg(1)?.try_ast()?;
-                self.prove_core(st, g, &av.n.lt_i(MAX_LEN), pos(e), "call_requires", "precondition of arr_push", None);
-                if av.elem == Elem::U8 {
-                    let ok = self.z.and(&[v.ge_i(0), v.le_i(255)]);
-                    self.prove_core(st, g, &ok, pos(e), "elem_range", "u8 element range 0..=255 for the pushed value", None);
+                let k = args.len() as i64 - 1;
+                let room = av.n.add(&self.z.int(k)).le_i(MAX_LEN);
+                self.prove_core(st, g, &room, pos(e), "call_requires", "precondition of arr_push", None);
+                let mut arr = av.a.clone();
+                for i in 1..args.len() {
+                    let v = arg(i)?.try_ast()?;
+                    if av.elem == Elem::U8 {
+                        let ok = self.z.and(&[v.ge_i(0), v.le_i(255)]);
+                        self.prove_core(st, g, &ok, pos(e), "elem_range", "u8 element range 0..=255 for the pushed value", None);
+                    }
+                    arr = arr.store(&av.n.add(&self.z.int(i as i64 - 1)), v);
                 }
                 let Expr::InoutArg(place) = &x.args[0] else { return Err("missing inout place".into()); };
-                let Expr::Var(var) = place.expr.as_ref() else { return Err("missing array binding".into()); };
-                let nv = av.like(av.a.store(&av.n, v), av.n.add(&self.z.int(1)), &var.name);
+                // LB6 IF (R-6g5-2): the place may be a struct field; store_collection_place rebuilds the owner
+                let name = match place.expr.as_ref() {
+                    Expr::Var(var) => &var.name,
+                    _ => &av.name,
+                };
+                let nv = av.like(arr, av.n.add(&self.z.int(k)), name);
                 if nv.elem == Elem::U8 {
                     self.assume(st, g, self.u8_dom(&nv));
                 }
@@ -5769,7 +5811,7 @@ impl<'a> FnVerifier<'a> {
         self.snap = Env(f
             .params
             .iter()
-            .filter(|p| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || matches!(self.inv_decls.get(&p.ty), Some(ast::TypeDecl::Struct(s)) if s.tparams.is_empty())))
+            .filter(|p| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || p.ty == "i64" || p.ty == "bool" || matches!(self.inv_decls.get(&p.ty), Some(ast::TypeDecl::Struct(s)) if s.tparams.is_empty())))
             .map(|p| (p.name.clone(), env.get(&p.name).clone()))
             .collect());
         let mut st = State::new(env.clone(), pc);

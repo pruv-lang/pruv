@@ -2379,19 +2379,38 @@ class FnVerifier:
             s.assume(st, g, r == z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < cnt),
                                                          z3.Select(av.a, i + k) == z3.Select(bv.a, j + k))))
             return r
+        if n == "find_byte":    # LB6 MC (R-6g5-3): bounds and byte obligations, then a fresh r with lo <= r <= hi,
+            # no b in a[lo..r], and r < hi ==> a[r] == b (the first match, or hi when there is none)
+            av, b, lo, hi = args
+            s.prove(st, g, lo >= 0, e, "index_oob", "find_byte start 0 <= lo for %s" % av.name)
+            s.prove(st, g, lo <= hi, e, "index_oob", "find_byte lo <= hi")
+            s.prove(st, g, hi <= av.n, e, "index_oob", "find_byte hi <= len(%s)" % av.name)
+            s.prove(st, g, z3.And(b >= 0, b <= 255), e, "elem_range", "find_byte byte range 0..=255")
+            r = s.fresh("find_byte", I64)
+            s.k += 1
+            k = z3.Int("find_byte!q%d" % s.k)
+            s.assume(st, g, z3.And(lo <= r, r <= hi,
+                                   z3.ForAll([k], z3.Implies(z3.And(lo <= k, k < r), z3.Select(av.a, k) != b)),
+                                   z3.Implies(r < hi, z3.Select(av.a, r) == b)))
+            return r
         if n == "arr_reserve":
             cnt = args[1]
             s.prove(st, g, z3.And(cnt >= 0, cnt <= MAX_LEN), e, "call_requires", "precondition of arr_reserve")
             return None
         if n == "arr_push":
-            av, v = args
-            s.prove(st, g, av.n < MAX_LEN, e, "call_requires", "precondition of arr_push")
+            av, vs = args[0], args[1:]     # LB6 SX (R-6g5-5): k values land at len(a)..len(a)+k, in order
+            s.prove(st, g, av.n + len(vs) <= MAX_LEN, e, "call_requires", "precondition of arr_push")
             if av.elem == U8:
-                s.prove(st, g, z3.And(v >= 0, v <= 255), e, "elem_range", "u8 element range 0..=255 for the pushed value")
-            name = e.args[0].expr.name
-            st.env[name] = mk_arr(z3.Store(av.a, av.n, v), av.n + 1, name, av.elem)
+                for v in vs:
+                    s.prove(st, g, z3.And(v >= 0, v <= 255), e, "elem_range", "u8 element range 0..=255 for the pushed value")
+            root, path = field_place(e.args[0].expr)     # LB6 IF (R-6g5-2): the place may be a struct field
+            arr = av.a
+            for i, v in enumerate(vs):
+                arr = z3.Store(arr, av.n + i, v)
+            nv = mk_arr(arr, av.n + len(vs), ".".join((root.name,) + path), av.elem)
+            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, nv, st, g) if path else nv
             if av.elem == U8:
-                s.assume(st, g, u8_dom(st.env[name]))
+                s.assume(st, g, u8_dom(nv))
             s.post_refine(e, [0], st, g)
             return None
         if n == "arr_append":
@@ -3825,7 +3844,8 @@ class FnVerifier:
         # G5 A1 (5.1): the immutable entry snapshots of the inout parameters; the executable name starts as the same
         # array and is rebound by element stores, calls and loop havoc, never the snapshot
         s.snap = {p.name: env[p.name] for p in f.params if p.mode is not None and (
-            is_array(p.type) or p.type.owner is None and not p.type.args and p.type.name in s.model.struct)}
+            is_array(p.type) or p.type in (I64, BOOL)     # LB6 OS (R-6g5-4): a scalar inout keeps its entry value
+            or p.type.owner is None and not p.type.args and p.type.name in s.model.struct)}
         st = State(env, pc)
         st.obs = frozenset(w_ids)
         if f.opaque and f.x_auto is not None:

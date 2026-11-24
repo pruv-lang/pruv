@@ -1,0 +1,7 @@
+// spec: R-6g5-2 reject
+pub struct S { m: HashMap<String, bool> }
+pub fn f(inout s: S) -> () ! alloc {
+  for (k, v) in s.m {
+    arr_push(inout s.m, 1);
+  }
+}

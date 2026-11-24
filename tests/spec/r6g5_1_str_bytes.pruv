@@ -1,0 +1,29 @@
+// spec: R-6g5-1 accept
+fn put(inout out: [u8], at: i64, s: str) -> () ! alloc
+  requires 0 <= at && at + len(s) <= len(out)
+  ensures len(out) == len(old(out))
+  ensures forall k in 0..len(s): out[at + k] == s[k]
+  ensures forall k in 0..at: out[k] == old(out)[k]
+{
+  copy_range(inout out, at, s, 0, len(s));
+}
+
+fn push_str(inout out: [u8], s: str) -> () ! alloc
+  requires len(out) + len(s) <= 1099511627776
+  ensures len(out) == len(old(out)) + len(s)
+  ensures forall k in 0..len(s): out[len(old(out)) + k] == s[k]
+{
+  arr_append(inout out, s, 0, len(s));
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let mut a: [u8] = alloc(4, 0);
+  put(inout a, 1, "xyz");
+  assert a[0] == 0 && a[1] == 120 && a[3] == 122;
+  copy_range(inout a, 0, "AB", 1, 1);
+  assert a[0] == 66;
+  push_str(inout a, "hi");
+  arr_append(inout a, "!?", 1, 1);
+  assert len(a) == 7 && a[4] == 104 && a[6] == 63;
+  return a[0] + a[1] + a[2] + a[3] + a[4] + a[5] + a[6];
+}

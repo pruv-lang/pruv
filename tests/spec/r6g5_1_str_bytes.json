@@ -1,0 +1,23 @@
+{
+  "gen_contains": [
+    ".copy_from_slice(",
+    ".as_bytes()",
+    ".extend_from_slice("
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "701"
+    ],
+    "alloc_balance": true,
+    "ll_contains": [
+      "call void @llvm.memcpy"
+    ]
+  }
+}

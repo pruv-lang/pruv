@@ -1,0 +1,23 @@
+{
+  "gen_contains": [
+    "bk.data.reserve_exact(",
+    "bk.data.push(",
+    "bk.marks.push("
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "264"
+    ],
+    "alloc_balance": true,
+    "ll_contains": [
+      "call ptr @pruv_regrow_v2"
+    ]
+  }
+}

@@ -985,6 +985,7 @@ class Mod:
         s.tail = set()          # P3: tail-filled alloc helpers used ("i64" -> pruv_alloc_tail, "u8" -> _u8)
         s.memmove = False
         s.memcmp = False        # P17a: some eq_range lowers to a memcmp call (declare i32 @memcmp)
+        s.memchr = False        # LB6 MC: some find_byte lowers to a memchr call (declare ptr @memchr)
         s.resize = set()        # P05G: resize helpers used ("i64" -> pruv_resize, "u8" -> pruv_resize_u8, "narrow")
         s.range_nodes = {}      # P3 batch 2: `iW a, iW b` body -> !N number (first-use order)
         s.explicit = False      # G4 A3: explicit visibility mode (set by gen_llvm); Pruv calls use the Rust-backend routing
@@ -2911,6 +2912,7 @@ class FnGen:
         value = s.ev(e.args[1])
         push = e.name == "arr_push"
         append = e.name == "arr_append"
+        values = [value] + [s.ev(x) for x in e.args[2:]] if push else []   # LB6 SX (R-6g5-5): k values in order
         if append:
             start = s.ev(e.args[2])
             count = s.ev(e.args[3])
@@ -2927,15 +2929,16 @@ class FnGen:
                 ok = s.op("icmp sle i64 %s, %s" % (count.a, remaining))
                 s.guard(ok, s.panic1("pruv_panic_arith", "arr_append length exceeds 2^40"), False)
             elif push:
-                ok = s.op("icmp ult i64 %s, 1099511627776" % src.b)
+                ok = s.op("icmp ule i64 %s, %d" % (src.b, 1099511627776 - len(values)))
                 s.guard(ok, s.panic1("pruv_panic_arith", "arr_push length exceeds 2^40"), False)
                 if is_u8(src):
-                    ok = s.op("icmp ule i64 %s, 255" % value.a)
-                    s.guard(ok, s.panic_elem(value.a), False)
+                    for v in values:
+                        ok = s.op("icmp ule i64 %s, 255" % v.a)
+                        s.guard(ok, s.panic_elem(v.a), False)
             else:
                 ok = s.op("icmp ule i64 %s, 1099511627776" % value.a)
                 s.guard(ok, s.panic1("pruv_panic_arith", "arr_reserve length outside 0..2^40"), False)
-        need = s.op("add i64 %s, %s" % (src.b, "1" if push else count.a if append else value.a))
+        need = s.op("add i64 %s, %s" % (src.b, len(values) if push else count.a if append else value.a))
         cap = capof(src)
         grow = s.op("icmp ult i64 %s, %s" % (cap, need))
         before = s.cur
@@ -2961,13 +2964,14 @@ class FnGen:
         if push or append:
             ptr = s.op("phi ptr [ %s, %%%s ], [ %s, %%%s ]" % (src.a, before, newptr, regrow))
             dst = s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (ty, ptr, src.b))
-        if push:
-            elem = value.a
+        for i, v in enumerate(values):
+            elem = v.a
             if is_boolarr(src):
                 elem = s.op("zext i1 %s to i8" % elem)
             elif ty != "i64":
                 elem = s.op("trunc i64 %s to %s" % (elem, ty))
-            s.ins("store %s %s, ptr %s" % (ty, elem, dst))
+            at = dst if i == 0 else s.op("getelementptr inbounds %s, ptr %s, i64 %d" % (ty, dst, i))
+            s.ins("store %s %s, ptr %s" % (ty, elem, at))
         if append:
             src_ty = storage_ty(value)
             inp = s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (src_ty, value.a, start.a))
@@ -3487,6 +3491,45 @@ class FnGen:
             return V("unit")
         if n in ARRAY_GROW_BUILTINS:
             return s.array_grow_stmt(e)
+        if n == "find_byte":  # LB6 MC (R-6g5-3): the first b in a[lo..hi] via memchr, or hi; source order a, b, lo, hi
+            av = s.ev(a[0])
+            bv = s.ev(a[1])
+            lo = s.ev(a[2])
+            hi = s.ev(a[3])
+            if av.k != "arr" or not is_bytes(av):
+                raise PruvError("codegen", e.line, e.col, "unsupported_type",
+                                "find_byte is not supported by the llvm codegen layer for this operand yet",
+                                "search the bytes in a loop, or use the Rust backend")
+            if not s.verified:
+                c1 = s.op("icmp slt i64 %s, 0" % lo.a)
+                c2 = s.op("icmp sgt i64 %s, %s" % (lo.a, hi.a))
+                c3 = s.op("icmp sgt i64 %s, %s" % (hi.a, av.b))
+                o = s.op("or i1 %s, %s" % (c1, c2))
+                o = s.op("or i1 %s, %s" % (o, c3))
+                s.guard(o, lambda: s.ins("call void @pruv_panic_oob(i64 %s, i64 %s)" % (hi.a, av.b)), True)
+                o = s.op("icmp ugt i64 %s, 255" % bv.a)
+                s.guard(o, s.panic_elem(bv.a), True)
+            s.m.memchr = True
+            n = s.op("sub nsw i64 %s, %s" % (hi.a, lo.a))
+            pre = s.cur
+            lcall, ljoin = s.label("fb.call"), s.label("fb.join")
+            # an empty range has no match; alloc(0) may give a null data pointer, and memchr(null, _, 0) is UB
+            z = s.op("icmp eq i64 %s, 0" % n)
+            s.condbr(z, ljoin, lcall)
+            s.place(lcall)
+            p = s.op("getelementptr inbounds i8, ptr %s, i64 %s" % (av.a, lo.a))
+            b32 = s.op("trunc i64 %s to i32" % bv.a)
+            q = s.op("call ptr @memchr(ptr %s, i32 %s, i64 %s)" % (p, b32, n))
+            isnull = s.op("icmp eq ptr %s, null" % q)
+            qi = s.op("ptrtoint ptr %s to i64" % q)
+            bi = s.op("ptrtoint ptr %s to i64" % av.a)
+            d = s.op("sub nsw i64 %s, %s" % (qi, bi))
+            r1 = s.op("select i1 %s, i64 %s, i64 %s" % (isnull, hi.a, d))
+            lend = s.cur
+            s.br(ljoin)
+            s.place(ljoin)
+            r = s.op("phi i64 [ %s, %%%s ], [ %s, %%%s ]" % (hi.a, pre, r1, lend))
+            return V("i64", r)
         if n == "eq_range":  # P17a: a[i..i+n] == b[j..j+n]; source order a, i, b, j, n
             av = s.ev(a[0])
             iv = s.ev(a[1])
@@ -6998,6 +7041,7 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         "declare void @llvm.memmove.p0.p0.i64(ptr nocapture writeonly, ptr nocapture readonly, i64, i1 immarg)\n"
         if m.memmove else "") + (
         "declare i32 @memcmp(ptr nocapture, ptr nocapture, i64) nounwind readonly\n" if m.memcmp else "") + (
+        "declare ptr @memchr(ptr, i32, i64) nounwind readonly\n" if m.memchr else "") + (
         g6decls + "\n" + "\n".join(chunks))  # G2 A5/B2, G3, G6 A3, G9 A3; P2 batch 4: llvm.bswap when used
     if m.vec_get_check:
         ir += "declare void @pruv_panic_vec_get_v1(i64) noreturn cold nounwind\n"

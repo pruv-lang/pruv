@@ -1,0 +1,10 @@
+// spec: R-6g5-1 R-6g5-3 accept
+pub fn checksum() -> i64 ! alloc {
+  let s: str = "ab,cd";
+  let mut a: [u8] = alloc(2, 0);
+  copy_range(inout a, 0, substr(s, 3, 5), 0, 2);
+  arr_append(inout a, substr(s, 0, 2), 0, 2);
+  let j: i64 = find_byte(substr(s, 1, 5), 44, 0, 4);
+  assert len(a) == 4 && a[0] == 99 && a[3] == 98;
+  return a[0] + a[1] + a[2] + a[3] + j * 1000;
+}

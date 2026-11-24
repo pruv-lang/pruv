@@ -1,0 +1,22 @@
+{
+  "gen_contains": [
+    ".iter().position(|&pruv_x| pruv_x == pruv_b as u8)",
+    ".as_bytes()"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "4323"
+    ],
+    "alloc_balance": true,
+    "ll_contains": [
+      "call ptr @memchr("
+    ]
+  }
+}

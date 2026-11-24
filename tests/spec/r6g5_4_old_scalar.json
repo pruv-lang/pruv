@@ -1,0 +1,19 @@
+{
+  "gen_contains": [
+    "x: &mut i64",
+    "f: &mut bool"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "3607"
+    ],
+    "alloc_balance": true
+  }
+}

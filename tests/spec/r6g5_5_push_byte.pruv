@@ -1,0 +1,2 @@
+// spec: R-6g5-5 reject
+fn f(inout a: [u8]) -> () ! alloc requires len(a) < 10 { arr_push(inout a, 1, 256); }

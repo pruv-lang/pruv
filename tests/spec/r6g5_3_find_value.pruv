@@ -1,0 +1,2 @@
+// spec: R-6g5-3 reject
+fn f(a: [u8]) -> i64 { return find_byte(a, 256, 0, len(a)); }
