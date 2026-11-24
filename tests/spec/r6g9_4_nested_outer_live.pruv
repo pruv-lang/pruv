@@ -1,0 +1,25 @@
+// spec: R-6g9-4 reject
+// A view made before the outer loop stays live through both back edges, so the inner store conflicts.
+pub fn f() -> i64 ! alloc
+{
+  let mut b: [u8] = alloc(4, 7);
+  let m: ref [u8] = subview(b, 0, 2);
+  let mut s: i64 = 0;
+  let mut i: i64 = 0;
+  while i < 3
+    invariant 0 <= i && i <= 3 && len(b) == 4 && 0 <= s && s <= 1000 * i
+    decreases 3 - i
+  {
+    let mut j: i64 = 0;
+    while j < 2
+      invariant 0 <= j && j <= 2 && len(b) == 4
+      decreases 2 - j
+    {
+      b[3] = 5;
+      j = j + 1;
+    }
+    s = s + m[0];
+    i = i + 1;
+  }
+  return s;
+}

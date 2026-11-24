@@ -193,11 +193,12 @@ fn walk_statement<'a>(
     }
 }
 
-fn accesses(st: &Stmt, visit: &mut impl FnMut(&str, Access, i64, i64)) {
+/// The root accesses of `st` itself: a compound statement contributes its head (condition, contracts, place,
+/// scrutinee); its nested blocks are their own statements in the liveness graph.
+fn own_accesses(st: &Stmt, visit: &mut impl FnMut(&str, Access, i64, i64)) {
     let mut uses = Vec::new();
     let mut writes = Vec::new();
-    let mut blocks = Vec::new();
-    walk_statement(st, &mut |e| uses.push(e), &mut |n, l, c| writes.push((n, l, c)), &mut |b| blocks.push(b));
+    walk_statement(st, &mut |e| uses.push(e), &mut |n, l, c| writes.push((n, l, c)), &mut |_| {});
     for (name, line, col) in writes {
         visit(name, Access::Write, line, col);
     }
@@ -215,9 +216,102 @@ fn accesses(st: &Stmt, visit: &mut impl FnMut(&str, Access, i64, i64)) {
             }
         });
     }
-    for body in blocks {
-        for st in body {
-            accesses(st, visit);
+}
+
+/// A fixed-width bit set over the borrow variables of one function (R-6g9-4).
+#[derive(Clone, PartialEq, Eq)]
+struct Bits(Vec<u64>);
+
+impl Bits {
+    fn new(width: usize) -> Bits { Bits(vec![0; width.div_ceil(64)]) }
+    fn set(&mut self, bit: usize) { self.0[bit / 64] |= 1 << (bit % 64); }
+    fn clear(&mut self, bit: usize) { self.0[bit / 64] &= !(1 << (bit % 64)); }
+    fn union(&mut self, other: &Bits) { self.0.iter_mut().zip(&other.0).for_each(|(a, b)| *a |= b); }
+    fn meets(&self, other: &Bits) -> bool { self.0.iter().zip(&other.0).any(|(a, b)| a & b != 0) }
+}
+
+/// One statement of the function body, numbered in pre-order. `gen` / `kill` are borrow variables (bits).
+struct Point {
+    succ: Vec<usize>,
+    gen: Vec<usize>,
+    kill: Option<usize>,
+    uses: Vec<(String, Access, i64, i64)>,
+}
+
+/// The statement graph of one function, the provenance of each borrow variable, and the first error that does not
+/// depend on liveness with the point where it was found (a conflict at that point or before it is reported first).
+#[derive(Default)]
+struct Graph {
+    points: Vec<Point>,
+    borrows: Vec<Roots>,
+    failure: Option<(usize, PruvError)>,
+}
+
+impl Graph {
+    /// Backward liveness by one worklist (highest point first, i.e. reverse program order): a set only grows, so each
+    /// point is processed at most (loop depth + 1) times, plus once to confirm. Returns the live-in set of each point.
+    fn liveness(&self) -> Vec<Bits> {
+        let width = self.borrows.len();
+        let count = self.points.len();
+        let mut preds = vec![Vec::new(); count];
+        for (n, point) in self.points.iter().enumerate() {
+            for &s in &point.succ {
+                preds[s].push(n);
+            }
+        }
+        let mut live = vec![Bits::new(width); count];
+        let mut queued = vec![true; count];
+        let mut work: std::collections::BinaryHeap<usize> = (0..count).collect();
+        while let Some(n) = work.pop() {
+            queued[n] = false;
+            let point = &self.points[n];
+            let mut set = Bits::new(width);
+            for &s in &point.succ {
+                set.union(&live[s]);
+            }
+            if let Some(k) = point.kill {
+                set.clear(k);
+            }
+            for &g in &point.gen {
+                set.set(g);
+            }
+            if set != live[n] {
+                live[n] = set;
+                for &p in &preds[n] {
+                    if !queued[p] {
+                        queued[p] = true;
+                        work.push(p);
+                    }
+                }
+            }
+        }
+        live
+    }
+
+    /// R-6g9-4: a use conflicts with the borrows live at its point. Root masks: per root, the borrows that hold it
+    /// shared and those that hold it exclusive; a read meets the exclusive mask, a write either.
+    fn conflicts(self) -> Res<()> {
+        let width = self.borrows.len();
+        let mut masks: HashMap<&str, [Bits; 2]> = HashMap::new();
+        for (b, roots) in self.borrows.iter().enumerate() {
+            for (root, access) in roots {
+                let mask = masks.entry(root.as_str()).or_insert_with(|| [Bits::new(width), Bits::new(width)]);
+                mask[(*access == Access::Write) as usize].set(b);
+            }
+        }
+        let live = self.liveness();
+        let last = self.failure.as_ref().map_or(self.points.len(), |(n, _)| n + 1);
+        for (point, live) in self.points[..last].iter().zip(&live) {
+            for &(ref name, access, line, col) in &point.uses {
+                let Some([shared, exclusive]) = masks.get(name.as_str()) else { continue };
+                if live.meets(exclusive) || (access == Access::Write && live.meets(shared)) {
+                    return Err(error(line, col, "borrow_conflict", "use conflicts with a live borrowed view"));
+                }
+            }
+        }
+        match self.failure {
+            Some((_, e)) => Err(e),
+            None => Ok(()),
         }
     }
 }
@@ -309,100 +403,130 @@ impl Analysis<'_> {
         Ok(())
     }
 
-    fn block(&self, f: &Function, body: &[Stmt], mut locals: HashMap<String, Roots>) -> Res<()> {
-        let mut live = Vec::<(usize, Roots)>::new();
-        for (index, st) in body.iter().enumerate() {
-            live.retain(|(end, _)| *end >= index);
-            let mut conflict = None;
-            if !live.is_empty() {
-                accesses(st, &mut |name, access, line, col| {
-                    if live.iter().any(|(_, roots)| roots.get(name).is_some_and(|held| {
-                        *held == Access::Write || access == Access::Write
-                    })) {
-                        conflict.get_or_insert(error(line, col, "borrow_conflict", "use conflicts with a live borrowed view"));
+    /// The checks of one statement that do not depend on liveness; a borrow `let` records its provenance.
+    fn statement(&self, f: &Function, st: &Stmt, locals: &mut HashMap<String, Roots>) -> Res<()> {
+        let mut expressions = Vec::new();
+        walk_statement(st, &mut |e| expressions.push(e), &mut |_, _, _| {}, &mut |_| {});
+        for e in expressions {
+            let mut failure = None;
+            walk_expr(e, &mut |node| {
+                let Node::Expr(e) = node else { return };
+                if failure.is_some() { return; }
+                let result = match e {
+                    Expr::Call(c) => {
+                        if let Some(callee) = self.functions.get(c.name.as_str()) {
+                            if callee.borrow_from.is_some() {
+                                if let Err(error) = self.provenance(e, locals) {
+                                    failure = Some(error);
+                                    return;
+                                }
+                            }
+                            c.args.iter().zip(&callee.params)
+                                .filter(|(_, p)| p.take)
+                                .try_for_each(|(a, _)| self.owned(a, locals))
+                        } else {
+                            Ok(())
+                        }
                     }
-                });
-            }
-            if let Some(e) = conflict {
+                    Expr::StructLit(s) => s.fields.iter().try_for_each(|field| {
+                        if self.ref_field(e, &field.name) { self.provenance(&field.value, locals).map(|_| ()) }
+                        else { self.owned(&field.value, locals) }
+                    }),
+                    _ => Ok(()),
+                };
+                failure = result.err();
+                if matches!(st, Stmt::Par(_)) && (self.is_view(e, locals)
+                    || expr_ty(e).as_deref().is_some_and(|ty| self.records.contains_key(ty))) {
+                    failure = Some(signature(e.line(), e.col()));
+                }
+            });
+            if let Some(e) = failure {
                 return Err(e);
             }
-
-            let mut expressions = Vec::new();
-            let mut blocks = Vec::new();
-            walk_statement(st, &mut |e| expressions.push(e), &mut |_, _, _| {}, &mut |b| blocks.push(b));
-            for e in expressions {
-                let mut failure = None;
-                walk_expr(e, &mut |node| {
-                    let Node::Expr(e) = node else { return };
-                    if failure.is_some() { return; }
-                    let result = match e {
-                        Expr::Call(c) => {
-                            if let Some(callee) = self.functions.get(c.name.as_str()) {
-                                if callee.borrow_from.is_some() {
-                                    if let Err(error) = self.provenance(e, &locals) {
-                                        failure = Some(error);
-                                        return;
-                                    }
-                                }
-                                c.args.iter().zip(&callee.params)
-                                    .filter(|(_, p)| p.take)
-                                    .try_for_each(|(a, _)| self.owned(a, &locals))
-                            } else {
-                                Ok(())
-                            }
-                        }
-                        Expr::StructLit(s) => s.fields.iter().try_for_each(|field| {
-                            if self.ref_field(e, &field.name) { self.provenance(&field.value, &locals).map(|_| ()) }
-                            else { self.owned(&field.value, &locals) }
-                        }),
-                        _ => Ok(()),
-                    };
-                    failure = result.err();
-                    if matches!(st, Stmt::Par(_)) && (self.is_view(e, &locals)
-                        || expr_ty(e).as_deref().is_some_and(|ty| self.records.contains_key(ty))) {
-                        failure = Some(signature(e.line(), e.col()));
+        }
+        match st {
+            Stmt::Let(s) if self.borrow_let(s) => {
+                let roots = self.provenance(&s.value, locals)?;
+                locals.insert(s.name.clone(), roots);
+            }
+            Stmt::Let(s) => self.owned(&s.value, locals)?,
+            Stmt::Assign(s) => self.owned(&s.value, locals)?,
+            Stmt::FieldAssign(s) => self.owned(&s.value, locals)?,
+            Stmt::Return(s) => if let Some(value) = &s.value {
+                if let Some(from) = &f.borrow_from {
+                    let roots = self.provenance(value, locals)?;
+                    if roots.keys().any(|name| !from.contains(name)) {
+                        return Err(error(s.line, s.col, "borrow_escape", "returned value borrows outside its from-list"));
                     }
-                });
-                if let Some(e) = failure {
-                    return Err(e);
+                } else {
+                    self.owned(value, locals)?;
                 }
-            }
-
-            match st {
-                Stmt::Let(s) if s.borrowed || self.records.contains_key(s.ty.as_str()) => {
-                    let roots = self.provenance(&s.value, &locals)?;
-                    if !roots.is_empty() {
-                        let end = body[index + 1..].iter().rposition(|st| {
-                            let mut used = false;
-                            accesses(st, &mut |name, _, _, _| used |= name == s.name);
-                            used
-                        });
-                        if let Some(end) = end {
-                            live.push((index + 1 + end, roots.clone()));
-                        }
-                    }
-                    locals.insert(s.name.clone(), roots);
-                }
-                Stmt::Let(s) => self.owned(&s.value, &locals)?,
-                Stmt::Assign(s) => self.owned(&s.value, &locals)?,
-                Stmt::FieldAssign(s) => self.owned(&s.value, &locals)?,
-                Stmt::Return(s) => if let Some(value) = &s.value {
-                    if let Some(from) = &f.borrow_from {
-                        let roots = self.provenance(value, &locals)?;
-                        if roots.keys().any(|name| !from.contains(name)) {
-                            return Err(error(s.line, s.col, "borrow_escape", "returned value borrows outside its from-list"));
-                        }
-                    } else {
-                        self.owned(value, &locals)?;
-                    }
-                },
-                _ => {}
-            }
-            for nested in blocks {
-                self.block(f, nested, locals.clone())?;
-            }
+            },
+            _ => {}
         }
         Ok(())
+    }
+
+    fn borrow_let(&self, s: &Let) -> bool {
+        s.borrowed || self.records.contains_key(s.ty.as_str())
+    }
+
+    /// Adds the statements of `body` to `graph` in pre-order; `incoming` are the points that flow into the block.
+    /// Returns the points that flow out of it. `scope` maps a visible borrow variable to its bit.
+    fn build<'a>(
+        &self,
+        f: &Function,
+        body: &'a [Stmt],
+        mut incoming: Vec<usize>,
+        mut locals: HashMap<String, Roots>,
+        mut scope: HashMap<&'a str, usize>,
+        graph: &mut Graph,
+    ) -> Vec<usize> {
+        for st in body {
+            let n = graph.points.len();
+            for p in incoming {
+                graph.points[p].succ.push(n);
+            }
+            let mut point = Point { succ: Vec::new(), gen: Vec::new(), kill: None, uses: Vec::new() };
+            own_accesses(st, &mut |name, access, line, col| {
+                if let Some(&b) = scope.get(name) {
+                    point.gen.push(b);
+                }
+                point.uses.push((name.to_owned(), access, line, col));
+            });
+            if graph.failure.is_none() {
+                if let Err(e) = self.statement(f, st, &mut locals) {
+                    graph.failure = Some((n, e));
+                }
+            }
+            if let Stmt::Let(s) = st {
+                if self.borrow_let(s) {
+                    point.kill = Some(graph.borrows.len());
+                    scope.insert(&s.name, graph.borrows.len());
+                    graph.borrows.push(locals.get(&s.name).cloned().unwrap_or_default());
+                }
+            }
+            graph.points.push(point);
+            incoming = match st {
+                Stmt::If(s) => {
+                    let mut out = self.build(f, &s.then, vec![n], locals.clone(), scope.clone(), graph);
+                    out.extend(self.build(f, &s.els, vec![n], locals.clone(), scope.clone(), graph));
+                    out
+                }
+                Stmt::While(While { body, .. }) | Stmt::ForMap(ForMap { body, .. }) => {
+                    for p in self.build(f, body, vec![n], locals.clone(), scope.clone(), graph) {
+                        graph.points[p].succ.push(n);
+                    }
+                    vec![n]
+                }
+                Stmt::Match(s) => s.arms.iter()
+                    .flat_map(|a| self.build(f, &a.body, vec![n], locals.clone(), scope.clone(), graph))
+                    .collect(),
+                Stmt::Return(_) => Vec::new(),
+                _ => vec![n],
+            };
+        }
+        incoming
     }
 }
 
@@ -418,7 +542,9 @@ pub(crate) fn check(prog: &Program) -> Res<()> {
         }).collect(),
     };
     for f in &prog.functions {
-        analysis.block(f, &f.body, HashMap::new())?;
+        let mut graph = Graph::default();
+        analysis.build(f, &f.body, Vec::new(), HashMap::new(), HashMap::new(), &mut graph);
+        graph.conflicts()?;
     }
     Ok(())
 }

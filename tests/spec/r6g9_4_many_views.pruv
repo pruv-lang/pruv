@@ -1,0 +1,184 @@
+// spec: R-6g9-4 accept
+// 80 views in nested loops (more than one bitset word), each dying in a branch that then writes
+// the owner; compile time stays bounded.
+pub fn f() -> i64 ! alloc
+{
+  let mut b: [u8] = alloc(4, 7);
+  let mut s: i64 = 0;
+  let mut i: i64 = 0;
+  while i < 3
+    invariant 0 <= i && i <= 3 && len(b) == 4
+    decreases 3 - i
+  {
+    let mut j: i64 = 0;
+    while j < 2
+      invariant 0 <= j && j <= 2 && len(b) == 4
+      decreases 2 - j
+    {
+      let v0: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v0[0]; b[1] = 0; } else { s = v0[1]; }
+      let v1: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v1[0]; b[1] = 1; } else { s = v1[1]; }
+      let v2: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v2[0]; b[1] = 2; } else { s = v2[1]; }
+      let v3: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v3[0]; b[1] = 3; } else { s = v3[1]; }
+      let v4: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v4[0]; b[1] = 4; } else { s = v4[1]; }
+      let v5: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v5[0]; b[1] = 5; } else { s = v5[1]; }
+      let v6: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v6[0]; b[1] = 6; } else { s = v6[1]; }
+      let v7: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v7[0]; b[1] = 7; } else { s = v7[1]; }
+      let v8: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v8[0]; b[1] = 8; } else { s = v8[1]; }
+      let v9: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v9[0]; b[1] = 9; } else { s = v9[1]; }
+      let v10: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v10[0]; b[1] = 10; } else { s = v10[1]; }
+      let v11: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v11[0]; b[1] = 11; } else { s = v11[1]; }
+      let v12: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v12[0]; b[1] = 12; } else { s = v12[1]; }
+      let v13: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v13[0]; b[1] = 13; } else { s = v13[1]; }
+      let v14: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v14[0]; b[1] = 14; } else { s = v14[1]; }
+      let v15: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v15[0]; b[1] = 15; } else { s = v15[1]; }
+      let v16: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v16[0]; b[1] = 16; } else { s = v16[1]; }
+      let v17: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v17[0]; b[1] = 17; } else { s = v17[1]; }
+      let v18: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v18[0]; b[1] = 18; } else { s = v18[1]; }
+      let v19: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v19[0]; b[1] = 19; } else { s = v19[1]; }
+      let v20: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v20[0]; b[1] = 20; } else { s = v20[1]; }
+      let v21: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v21[0]; b[1] = 21; } else { s = v21[1]; }
+      let v22: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v22[0]; b[1] = 22; } else { s = v22[1]; }
+      let v23: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v23[0]; b[1] = 23; } else { s = v23[1]; }
+      let v24: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v24[0]; b[1] = 24; } else { s = v24[1]; }
+      let v25: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v25[0]; b[1] = 25; } else { s = v25[1]; }
+      let v26: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v26[0]; b[1] = 26; } else { s = v26[1]; }
+      let v27: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v27[0]; b[1] = 27; } else { s = v27[1]; }
+      let v28: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v28[0]; b[1] = 28; } else { s = v28[1]; }
+      let v29: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v29[0]; b[1] = 29; } else { s = v29[1]; }
+      let v30: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v30[0]; b[1] = 30; } else { s = v30[1]; }
+      let v31: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v31[0]; b[1] = 31; } else { s = v31[1]; }
+      let v32: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v32[0]; b[1] = 32; } else { s = v32[1]; }
+      let v33: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v33[0]; b[1] = 33; } else { s = v33[1]; }
+      let v34: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v34[0]; b[1] = 34; } else { s = v34[1]; }
+      let v35: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v35[0]; b[1] = 35; } else { s = v35[1]; }
+      let v36: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v36[0]; b[1] = 36; } else { s = v36[1]; }
+      let v37: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v37[0]; b[1] = 37; } else { s = v37[1]; }
+      let v38: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v38[0]; b[1] = 38; } else { s = v38[1]; }
+      let v39: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v39[0]; b[1] = 39; } else { s = v39[1]; }
+      let v40: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v40[0]; b[1] = 40; } else { s = v40[1]; }
+      let v41: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v41[0]; b[1] = 41; } else { s = v41[1]; }
+      let v42: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v42[0]; b[1] = 42; } else { s = v42[1]; }
+      let v43: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v43[0]; b[1] = 43; } else { s = v43[1]; }
+      let v44: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v44[0]; b[1] = 44; } else { s = v44[1]; }
+      let v45: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v45[0]; b[1] = 45; } else { s = v45[1]; }
+      let v46: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v46[0]; b[1] = 46; } else { s = v46[1]; }
+      let v47: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v47[0]; b[1] = 47; } else { s = v47[1]; }
+      let v48: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v48[0]; b[1] = 48; } else { s = v48[1]; }
+      let v49: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v49[0]; b[1] = 49; } else { s = v49[1]; }
+      let v50: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v50[0]; b[1] = 50; } else { s = v50[1]; }
+      let v51: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v51[0]; b[1] = 51; } else { s = v51[1]; }
+      let v52: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v52[0]; b[1] = 52; } else { s = v52[1]; }
+      let v53: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v53[0]; b[1] = 53; } else { s = v53[1]; }
+      let v54: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v54[0]; b[1] = 54; } else { s = v54[1]; }
+      let v55: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v55[0]; b[1] = 55; } else { s = v55[1]; }
+      let v56: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v56[0]; b[1] = 56; } else { s = v56[1]; }
+      let v57: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v57[0]; b[1] = 57; } else { s = v57[1]; }
+      let v58: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v58[0]; b[1] = 58; } else { s = v58[1]; }
+      let v59: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v59[0]; b[1] = 59; } else { s = v59[1]; }
+      let v60: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v60[0]; b[1] = 60; } else { s = v60[1]; }
+      let v61: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v61[0]; b[1] = 61; } else { s = v61[1]; }
+      let v62: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v62[0]; b[1] = 62; } else { s = v62[1]; }
+      let v63: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v63[0]; b[1] = 63; } else { s = v63[1]; }
+      let v64: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v64[0]; b[1] = 64; } else { s = v64[1]; }
+      let v65: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v65[0]; b[1] = 65; } else { s = v65[1]; }
+      let v66: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v66[0]; b[1] = 66; } else { s = v66[1]; }
+      let v67: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v67[0]; b[1] = 67; } else { s = v67[1]; }
+      let v68: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v68[0]; b[1] = 68; } else { s = v68[1]; }
+      let v69: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v69[0]; b[1] = 69; } else { s = v69[1]; }
+      let v70: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v70[0]; b[1] = 70; } else { s = v70[1]; }
+      let v71: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v71[0]; b[1] = 71; } else { s = v71[1]; }
+      let v72: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v72[0]; b[1] = 72; } else { s = v72[1]; }
+      let v73: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v73[0]; b[1] = 73; } else { s = v73[1]; }
+      let v74: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v74[0]; b[1] = 74; } else { s = v74[1]; }
+      let v75: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v75[0]; b[1] = 75; } else { s = v75[1]; }
+      let v76: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v76[0]; b[1] = 76; } else { s = v76[1]; }
+      let v77: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v77[0]; b[1] = 77; } else { s = v77[1]; }
+      let v78: ref [u8] = subview(b, 0, 2);
+      if j == 0 { s = v78[0]; b[1] = 78; } else { s = v78[1]; }
+      let v79: ref [u8] = subview(b, 0, 2);
+      if j == 1 { s = v79[0]; b[1] = 79; } else { s = v79[1]; }
+      b[2] = 3;
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  return s;
+}

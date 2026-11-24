@@ -1,5 +1,6 @@
 """Pruv type / effect / structure checker. Fills Expr.ty."""
 import copy
+import heapq
 import re
 from vast import *
 from typeinfo import (TypeTable, BUILTIN_TYPE_NAMES, type_name, is_user_type, is_array, array_elem,  # G2 A5: array_elem
@@ -3446,8 +3447,8 @@ class Checker:
         for value in vars(st).values():
             yield from value if isinstance(value, list) else (value,)
 
-    def view_uses(s, st, nested=False):
-        """Yield (root, write) for the syntax of this statement."""
+    def view_uses(s, st):
+        """Yield (root, write) for the own syntax of this statement (not its nested statements)."""
         if isinstance(st, (Assign, FieldAssign, IndexAssign)):
             yield st.name, True
         for item in s.view_stmt_items(st):
@@ -3459,50 +3460,107 @@ class Checker:
                         root, _ = field_place(e.expr)
                         if isinstance(root, Var):
                             yield root.name, True
-            elif nested and isinstance(item, Stmt):
-                yield from s.view_uses(item, True)
-            elif nested and isinstance(item, MatchArm):
-                for child in item.body:
-                    yield from s.view_uses(child, True)
 
-    def check_view_block(s, stmts, loans, active=None):
-        loans = dict(loans)
-        inherited = {} if active is None else active
-        live = []
-        last = {name: i for i, st in enumerate(stmts) for name, _ in s.view_uses(st, True)}
-        for i, st in enumerate(stmts):
-            live = [(end, provenance) for end, provenance in live if i <= end]
-            held = dict(inherited)
-            for _, provenance in live:
-                for name, exclusive in provenance.items():
-                    held[name] = held.get(name, False) or exclusive
-            for name, write in s.view_uses(st):
-                if name in held and (write or held[name]):
-                    terr(st, "borrow_conflict", "%s is still borrowed by a live view" % name)
-            # Validate borrowed calls even when their results are used only inside the statement.
-            for item in s.view_stmt_items(st):
-                if isinstance(item, Expr):
-                    for e in _walk(item):
-                        if isinstance(e, Call) and e.name in s.funcs and s.funcs[e.name].borrow_from:
-                            s.view_provenance(e, loans)
+    def view_statement(s, st, loans):
+        """The borrowed-view checks of one statement that do not depend on liveness; a borrow `let` records its
+        provenance in `loans`."""
+        # Validate borrowed calls even when their results are used only inside the statement.
+        for item in s.view_stmt_items(st):
+            if isinstance(item, Expr):
+                for e in _walk(item):
+                    if isinstance(e, Call) and e.name in s.funcs and s.funcs[e.name].borrow_from:
+                        s.view_provenance(e, loans)
+        if isinstance(st, Let) and (st.ref or s.borrowed_type(st.type)):
+            provenance = s.view_provenance(st.value, loans)
+            loans[st.name] = provenance
+            s.f.borrowed_roots.update(provenance)
+        elif isinstance(st, Return) and s.f.borrow_from and st.value is not None:
+            provenance = s.view_provenance(st.value, loans)
+            if set(provenance) - set(s.f.borrow_from):
+                terr(st, "borrow_escape", "the result borrows a value outside the from parameters")
+
+    def view_graph(s, stmts, incoming, loans, scope, g):
+        """R-6g9-4: add the statements of a block to the liveness graph `g` in pre-order. `incoming` are the points
+        that flow into the block; returns the points that flow out of it. `scope` maps a visible borrow to its bit."""
+        loans, scope = dict(loans), dict(scope)
+        for st in stmts:
+            n = len(g["points"])
+            for p in incoming:
+                g["points"][p]["succ"].append(n)
+            uses = list(s.view_uses(st))
+            point = {"succ": [], "gen": 0, "kill": 0, "uses": uses, "node": st}
+            for name, _ in uses:
+                if name in scope:
+                    point["gen"] |= 1 << scope[name]
+            if g["failure"] is None:
+                try:
+                    s.view_statement(st, loans)
+                except PruvError as e:
+                    g["failure"] = (n, e)
             if isinstance(st, Let) and (st.ref or s.borrowed_type(st.type)):
-                provenance = s.view_provenance(st.value, loans)
-                loans[st.name] = provenance
-                s.f.borrowed_roots.update(provenance)
-                if last.get(st.name, i) > i:
-                    live.append((last[st.name], provenance))
-            elif isinstance(st, Return) and s.f.borrow_from and st.value is not None:
-                provenance = s.view_provenance(st.value, loans)
-                if set(provenance) - set(s.f.borrow_from):
-                    terr(st, "borrow_escape", "the result borrows a value outside the from parameters")
+                bit = len(g["borrows"])
+                point["kill"] = 1 << bit
+                scope[st.name] = bit
+                g["borrows"].append(loans.get(st.name, {}))
+            g["points"].append(point)
             if isinstance(st, If):
-                s.check_view_block(st.then, loans, held)
-                s.check_view_block(st.els, loans, held)
+                incoming = (s.view_graph(st.then, [n], loans, scope, g)
+                            + s.view_graph(st.els, [n], loans, scope, g))
             elif isinstance(st, (While, ForMap)):
-                s.check_view_block(st.body, loans, held)
+                for p in s.view_graph(st.body, [n], loans, scope, g):
+                    g["points"][p]["succ"].append(n)
+                incoming = [n]
             elif isinstance(st, Match):
-                for arm in st.arms:
-                    s.check_view_block(arm.body, loans, held)
+                incoming = [p for arm in st.arms for p in s.view_graph(arm.body, [n], loans, scope, g)]
+            elif isinstance(st, Return):
+                incoming = []
+            else:
+                incoming = [n]
+        return incoming
+
+    def check_view_block(s, stmts, loans):
+        """R-6g9-4 path liveness: a borrow is live at a statement iff some path from it reaches a mention of the
+        borrow before its `let` runs again. Backward gen/kill over bit sets by one worklist, highest point (reverse
+        program order) first, so each point is processed at most loop depth + 1 times. A use conflicts with the
+        borrows live at its point, found through per-root masks (shared, exclusive)."""
+        g = {"points": [], "borrows": [], "failure": None}
+        s.view_graph(stmts, [], loans, {}, g)
+        points = g["points"]
+        preds = [[] for _ in points]
+        for n, point in enumerate(points):
+            for succ in point["succ"]:
+                preds[succ].append(n)
+        live = [0] * len(points)
+        queued = [True] * len(points)
+        work = [-n for n in range(len(points))]
+        heapq.heapify(work)
+        while work:
+            n = -heapq.heappop(work)
+            queued[n] = False
+            point = points[n]
+            out = 0
+            for succ in point["succ"]:
+                out |= live[succ]
+            out = point["gen"] | (out & ~point["kill"])
+            if out != live[n]:
+                live[n] = out
+                for p in preds[n]:
+                    if not queued[p]:
+                        queued[p] = True
+                        heapq.heappush(work, -p)
+        masks = {}   # root -> [shared mask, exclusive mask]
+        for bit, provenance in enumerate(g["borrows"]):
+            for name, exclusive in provenance.items():
+                masks.setdefault(name, [0, 0])[exclusive] |= 1 << bit
+        last = len(points) if g["failure"] is None else g["failure"][0] + 1
+        for n in range(last):
+            for name, write in points[n]["uses"]:
+                if name in masks:
+                    shared, exclusive = masks[name]
+                    if live[n] & (exclusive | (shared if write else 0)):
+                        terr(points[n]["node"], "borrow_conflict", "%s is still borrowed by a live view" % name)
+        if g["failure"] is not None:
+            raise g["failure"][1]
 
     @staticmethod
     def view_context(e):

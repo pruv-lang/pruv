@@ -1486,8 +1486,8 @@ borrowed value is live.
     of an owned `[u8]` / `str` field of a local record (`subview(d.scratch, ..)`): the record variable `d` only.
     A struct literal: the union over its `ref` fields. The
     argument at a `from` position must be a variable, field path, `subview` or `ref` value.
-  - *Live range.* A `ref` / borrowing local is live from the statement after its `let` through the last statement
-    of the same block that mentions it (a loop or `if` that mentions it anywhere counts whole).
+  - *Live range.* A `ref` / borrowing local is live at a statement iff some path from that statement reaches a
+    mention of it (path liveness, R-6g9-4).
   - *Exclusivity.* In the live range of a borrow, a shared root may be read but not assigned, stored into (element
     or field), passed `inout` (including `arr_reserve`, `arr_push` and `arr_append`), moved, or given to `resize`/
     `truncate`-assign, `vec_push` or `vec_clear`; an exclusive
@@ -1730,6 +1730,24 @@ borrowed value is live.
   Tests: [field](tests/spec/r6g8_4_binder_field.pruv), [use after](tests/spec/r6g8_4_binder_after.pruv),
   [return](tests/spec/r6g8_4_binder_return.pruv), [named scrutinee](tests/spec/r6g8_4_binder_named.pruv),
   [branch](tests/spec/r6g8_4_binder_branch.pruv), [whole move](tests/spec/r6g8_4_binder_whole.pruv).
+
+## 6g9. Borrows past one call (B bundle)
+
+- R-6g9-4 **Path liveness.** A borrow (a `ref` local or a borrowing-struct local) is live at a statement iff
+  some control-flow path from that statement reaches a mention of the borrow before its `let` is reached again.
+  Paths follow the statements: an `if` goes to either branch, a `match` to any arm, a loop head to its body or
+  past the loop, the end of a loop body back to the head, and a `return` ends the path. The R-6g-11
+  exclusivity rule applies at every statement where the borrow is live, so a view whose last use is inside one
+  branch of an `if` frees its roots for the rest of that branch and for the other branch, as in hand Rust (NLL),
+  while a view used anywhere in a loop body after its `let` outside the loop stays live on the whole body through
+  the back edge. This replaces the earlier block rule ("a loop or `if` that mentions it counts whole"); it
+  accepts strictly more programs, and every R-6g-11 reject test still rejects with the same diagnostic.
+  The check is a backward worklist over gen/kill bit sets (one bit per borrow) with per-root masks of the
+  shared and exclusive borrows, so its cost is O((d+1)·S·B/64 + M·B/64 + Σ|provenance|) for S statements,
+  loop depth d, B borrows and M root mentions (docs/B_BUNDLE_SPEC.md §4.3).
+  Tests: [dies in if](tests/spec/r6g9_4_dies_in_if.pruv), [loop still live](tests/spec/r6g9_4_loop_still_live.pruv),
+  [nested loops](tests/spec/r6g9_4_nested_loops.pruv), [outer loop live](tests/spec/r6g9_4_nested_outer_live.pruv),
+  [many views](tests/spec/r6g9_4_many_views.pruv).
 
 ## 6h. Files (G10)
 
