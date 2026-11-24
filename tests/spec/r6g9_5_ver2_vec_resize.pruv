@@ -1,0 +1,10 @@
+// spec: R-6g9-5 reject
+fn clear(inout v: Vec<i64>) -> () {
+  let d = inout v;
+  vec_clear::<i64>(inout d);
+}
+
+fn wrong(inout v: Vec<i64>) -> () requires len(v) == 1 {
+  clear(inout v);
+  assert len(v) == 1;
+}

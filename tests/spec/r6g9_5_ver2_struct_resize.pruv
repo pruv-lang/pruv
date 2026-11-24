@@ -1,0 +1,32 @@
+// spec: R-6g9-5 reject
+struct S { a: [i64], b: [i64], keep: [i64] }
+
+fn change(inout x: S) -> () ! alloc {
+  let d = inout x.a;
+  d = alloc(0, 0);
+}
+
+fn wrong_assign(inout x: S) -> () ! alloc requires len(x.a) == 1 && len(x.keep) == 1 {
+  change(inout x);
+  assert len(x.keep) == 1;
+  assert len(x.a) == 1;
+}
+
+fn clear(inout a: [i64]) -> () ! alloc {
+  a = alloc(0, 0);
+}
+
+fn change_either(inout x: S, c: bool) -> () ! alloc {
+  let d = inout if c { x.a } else { x.b };
+  clear(inout d);
+}
+
+fn wrong_left(inout x: S, c: bool) -> () ! alloc requires len(x.a) == 1 {
+  change_either(inout x, c);
+  assert len(x.a) == 1;
+}
+
+fn wrong_right(inout x: S, c: bool) -> () ! alloc requires len(x.b) == 1 {
+  change_either(inout x, c);
+  assert len(x.b) == 1;
+}

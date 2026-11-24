@@ -149,10 +149,34 @@ class TraceRecorder:
 VEC_RESIZERS = ("vec_push", "vec_pop", "vec_clear", "vec_extend_from_slice")
 
 
-def _vec_resize_params(prog):
-    """Inout vector parameters whose length can change through vec_clear or forwarding."""
+def _parameter_place_paths(place, aliases):
+    """Resolve possible roots and field paths, excluding element places."""
+    if isinstance(place, Var):
+        return aliases.get(place.name, ((place.name, ()),))
+    if isinstance(place, FieldAccess):
+        return tuple((name, path + (place.field,)) for name, path in _parameter_place_paths(place.base, aliases))
+    if isinstance(place, PlaceIf):
+        return tuple(dict.fromkeys(_parameter_place_paths(place.then, aliases)
+                                   + _parameter_place_paths(place.els, aliases)))
+    return ()
+
+
+def _walk_place_uses(body, visit, aliases=None):
     from foreign_shim import _walk
 
+    aliases = {} if aliases is None else aliases.copy()
+    for stmt in body:
+        visit(stmt, aliases)
+        for expr in _stmt_exprs(stmt):
+            _walk(expr, lambda node: visit(node, aliases))
+        for block in _stmt_blocks(stmt):
+            _walk_place_uses(block, visit, aliases)
+        if isinstance(stmt, Let) and stmt.place:
+            aliases[stmt.name] = _parameter_place_paths(stmt.value.expr, aliases)
+
+
+def _vec_resize_params(prog):
+    """Inout vector parameters whose length can change through a resizer or forwarding."""
     resizes = set()
     forwarded = {}
     for fn in prog.functions:
@@ -160,18 +184,26 @@ def _vec_resize_params(prog):
         if not params:
             continue
 
-        def visit(node):
+        def visit(node, aliases):
+            if isinstance(node, Assign):
+                for name, path in aliases.get(node.name, ((node.name, ()),)):
+                    if not path and name in params:
+                        resizes.add((fn.name, params[name]))
             if not isinstance(node, Call):
                 return
             for i, arg in enumerate(node.args):
-                if isinstance(arg, InoutArg) and isinstance(arg.expr, Var) and arg.expr.name in params:
-                    source = (fn.name, params[arg.expr.name])
+                if not isinstance(arg, InoutArg):
+                    continue
+                for name, path in _parameter_place_paths(arg.expr, aliases):
+                    if path or name not in params:
+                        continue
+                    source = (fn.name, params[name])
                     if node.name in VEC_RESIZERS:
                         resizes.add(source)
                     else:
                         forwarded.setdefault((node.name, i), set()).add(source)
 
-        _walk(fn.body, visit)
+        _walk_place_uses(fn.body, visit)
     pending = list(resizes)
     while pending:
         for source in forwarded.get(pending.pop(), ()):
@@ -192,8 +224,6 @@ def _struct_array_paths(tt, ty, path=()):
 
 def _struct_len_frames(prog, tt, resizes):
     """Per inout struct parameter, find the array leaves whose lengths survive a call."""
-    from foreign_shim import _walk
-
     paths = {(f.name, i): set(_struct_array_paths(tt, p.type))
              for f in prog.functions for i, p in enumerate(f.params)
              if p.mode == "inout" and tt.is_struct(p.type)}
@@ -209,29 +239,30 @@ def _struct_len_frames(prog, tt, resizes):
         if not params:
             continue
 
-        def visit(node):
-            if isinstance(node, Assign) and node.name in params:
-                mark(params[node.name], ())
-            elif isinstance(node, (FieldAssign, Move)) and node.name in params:
-                mark(params[node.name], tuple(node.fields))
+        def visit(node, aliases):
+            if isinstance(node, (Assign, FieldAssign, Move)):
+                fields = () if isinstance(node, Assign) else tuple(node.fields)
+                for name, path in aliases.get(node.name, ((node.name, ()),)):
+                    if name in params:
+                        mark(params[name], path + fields)
             elif isinstance(node, Call):
                 callee = funcs.get(node.name)
                 for i, arg in enumerate(node.args):
                     if not isinstance(arg, InoutArg):
                         continue
-                    root, path = field_place(arg.expr)
-                    if not isinstance(root, Var) or root.name not in params:
-                        continue
-                    source, target = params[root.name], (node.name, i)
-                    if callee is not None and callee.foreign is None:
-                        if target in paths:
-                            forwarded.append((source, path, target))
-                        elif target in resizes:
+                    for name, path in _parameter_place_paths(arg.expr, aliases):
+                        if name not in params:
+                            continue
+                        source, target = params[name], (node.name, i)
+                        if callee is not None and callee.foreign is None:
+                            if target in paths:
+                                forwarded.append((source, path, target))
+                            elif target in resizes:
+                                mark(source, path)
+                        elif node.name not in ("copy_range", "copy_within", "store_be", "store_le", "vec_reserve", "arr_reserve"):
                             mark(source, path)
-                    elif node.name not in ("copy_range", "copy_within", "store_be", "store_le", "arr_reserve"):
-                        mark(source, path)
 
-        _walk(f.body, visit)
+        _walk_place_uses(f.body, visit)
     again = True
     while again:
         again = False
@@ -1170,7 +1201,7 @@ class State:
         s.rev = frozenset()     # P13o: names of the opaque functions revealed on this path
         s.apps = ()             # P13o: (function, application term, argument values, guard, enclosing quantifier constants) met on this path, in order
         s.app_ids = frozenset()     # LG30 (G-LG29-1): (application id, guard ids) of every occurrence in apps
-        s.places = ()           # R-6g9-5: (binding Let, operand snapshots) of the live place bindings on this path
+        s.places = {}           # R-6g9-5: copy on binding, shared by forks and restored on block exit
 
     def fork(s, extra=None):
         n = State(dict(s.env), s.pc + ([extra] if extra is not None else []))
@@ -3517,13 +3548,18 @@ class FnVerifier:
 
     # ---------- R-6g9-5: place bindings ----------
 
-    @staticmethod
-    def place_ite(c, a, b):
+    def place_ite(s, c, a, b):
         if isinstance(a, Arr):
             return mk_arr(z3.If(c, a.a, b.a), z3.If(c, a.n, b.n), a.name, a.elem)
         if isinstance(a, Map):
             return Map(z3.If(c, a.d, b.d), z3.If(c, a.a, b.a), z3.If(c, a.n, b.n),
                        a.name, a.kty, a.vty)
+        if isinstance(a, (File, Process, Socket, Listener, PArgs)):
+            return type(a)(*(s.place_ite(c, getattr(a, field), getattr(b, field)) for field in a.__slots__))
+        if isinstance(a, Loop):
+            return Loop(**{field: s.place_ite(c, value, getattr(b, field)) for field, value in vars(a).items()})
+        if a is None:
+            return None
         return z3.If(c, a, b)
 
     def place_read(s, p, st, snaps):
@@ -3584,7 +3620,8 @@ class FnVerifier:
         if let.type == I64:
             st.pc.append(in_range(v))       # an element read: the value lies in the i64 range, as with x[i]
         st.env[let.name] = mk_arr(v.a, v.n, let.name, v.elem) if isinstance(v, Arr) else v
-        st.places = st.places + ((let, snaps),)
+        st.places = st.places.copy()
+        st.places[let.name] = (let, snaps)
         return [st]
 
     def store(s, st, name, value, guard=()):
@@ -3593,19 +3630,19 @@ class FnVerifier:
         The checker excludes overlapping stores while this view can still be read.
         """
         cond = z3.And(*guard) if guard else None
-        for let, snaps in reversed(st.places):
-            if let.name == name:
-                place = let.value.expr
-                if cond is not None:
-                    branch = st.fork()
-                    s.place_write(place, branch, snaps, value)
-                    root = field_place_root(place)
-                    for fact in branch.pc[len(st.pc):]:
-                        s.assume(st, guard, fact)
-                    st.env[root] = s.place_ite(cond, branch.env[root], st.env[root])
-                else:
-                    s.place_write(place, st, snaps, value)
-                break
+        binding = st.places.get(name)
+        if binding is not None:
+            let, snaps = binding
+            place = let.value.expr
+            if cond is not None:
+                branch = st.fork()
+                s.place_write(place, branch, snaps, value)
+                root = field_place_root(place)
+                for fact in branch.pc[len(st.pc):]:
+                    s.assume(st, guard, fact)
+                st.env[root] = s.place_ite(cond, branch.env[root], st.env[root])
+            else:
+                s.place_write(place, st, snaps, value)
         if cond is not None:
             value = s.place_ite(cond, value, st.env[name])
         st.env[name] = value
@@ -3660,7 +3697,7 @@ class FnVerifier:
         """keep: array names whose havoc retains the length term (G5 A1: inout parameters, and locals changed only by
         inout calls); every other array gets an arbitrary well-formed length exactly as before"""
         h = st.fork()
-        aliases = {let.name for let, _ in st.places}
+        aliases = st.places
         for n in sorted(names):
             if n in aliases or n not in h.env:
                 continue
@@ -3720,7 +3757,7 @@ class FnVerifier:
             saved = s.place_read(place, st.fork(), snaps)
             s.place_write(place, h, snaps, saved)
         # A live alias that the loop never writes can still be read after a sibling field changes.
-        for let, snaps in h.places:
+        for let, snaps in h.places.values():
             p = let.value.expr
             if let.name in names:
                 v = s.place_read(p, h, snaps)
@@ -3931,7 +3968,7 @@ class FnVerifier:
         calls = s.call_writes(w.body, set(), select=lambda call, i: call.name not in ("vec_reserve", "arr_reserve"))
         keep = frozenset()
         # Translate writes through aliases, including bindings declared during the loop.
-        bindings = [let for let, _ in st.places] + _place_lets(w.body, [])
+        bindings = [let for let, _ in st.places.values()] + _place_lets(w.body, [])
         aliases = {}
         for let in bindings:
             place = let.value.expr
@@ -3950,7 +3987,7 @@ class FnVerifier:
         place_frames = []
         if st.places:
             stores = _store_paths(w.body, {})
-            for let, snaps in st.places:
+            for let, snaps in st.places.values():
                 root, path = let.place_root
                 if root in stores and root not in calls and all(
                         any(a != b for a, b in zip(path, written)) for written in stores[root]):

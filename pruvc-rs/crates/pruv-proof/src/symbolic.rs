@@ -858,13 +858,16 @@ impl Place {
 struct LivePlace {
     name: String,
     place: Place,
+    order: usize,
 }
+
+type LivePlaces = std::rc::Rc<HashMap<String, std::rc::Rc<LivePlace>>>;
 
 #[derive(Clone)]
 pub struct State {
     pub env: Env,
     pub pc: Vec<Ast>,
-    places: Vec<std::rc::Rc<LivePlace>>,
+    places: LivePlaces,
     /// G9 A1 (verify.py `State.obs`): ids of the recursive-value facts already in `pc` (immutable, shared by forks).
     pub obs: std::rc::Rc<HashSet<u32>>,
     /// P13o (verify.py `State.rev`): names of the opaque functions revealed on this path.
@@ -882,12 +885,19 @@ impl State {
         State {
             env,
             pc,
-            places: Vec::new(),
+            places: LivePlaces::default(),
             obs: std::rc::Rc::new(HashSet::new()),
             rev: std::rc::Rc::new(BTreeSet::new()),
             apps: std::rc::Rc::new(Vec::new()),
             app_ids: std::rc::Rc::new(HashSet::new()),
         }
+    }
+
+    fn ordered_places(&self) -> Vec<std::rc::Rc<LivePlace>> {
+        // Loop framing emits facts in binding order.
+        let mut bindings: Vec<_> = self.places.values().cloned().collect();
+        bindings.sort_unstable_by_key(|binding| binding.order);
+        bindings
     }
 
     /// verify.py `State.fork` (line 146).
@@ -1295,18 +1305,135 @@ pub(crate) fn inv_decl_table(prog: &ast::Program) -> HashMap<String, &ast::TypeD
 
 type LenChanges = HashMap<(String, usize), BTreeSet<Vec<String>>>;
 
+type PlacePaths<'a> = Vec<(&'a str, Vec<String>)>;
+type PlacePathsByName<'a> = HashMap<&'a str, PlacePaths<'a>>;
+
+fn named_place_paths<'a>(name: &'a str, aliases: &PlacePathsByName<'a>) -> PlacePaths<'a> {
+    aliases.get(name).cloned().unwrap_or_else(|| vec![(name, Vec::new())])
+}
+
+fn parameter_place_paths<'a>(place: &'a Expr, aliases: &PlacePathsByName<'a>) -> PlacePaths<'a> {
+    match place {
+        Expr::Var(v) => named_place_paths(&v.name, aliases),
+        Expr::FieldAccess(f) => parameter_place_paths(&f.base, aliases).into_iter()
+            .map(|(root, mut path)| {
+                path.push(f.field.clone());
+                (root, path)
+            }).collect(),
+        Expr::Call(c) if ast::PlaceIf::matches(c) => {
+            let mut paths = parameter_place_paths(&c.args[1], aliases);
+            for path in parameter_place_paths(&c.args[2], aliases) {
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+            }
+            paths
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn walk_len_uses<'a>(
+    body: &'a [Stmt],
+    aliases: &PlacePathsByName<'a>,
+    visit: &mut impl FnMut(&str, Vec<String>, Option<(&ast::Call, usize)>),
+) {
+    fn visit_expr(
+        expr: &Expr,
+        aliases: &PlacePathsByName<'_>,
+        visit: &mut impl FnMut(&str, Vec<String>, Option<(&ast::Call, usize)>),
+    ) {
+        match expr {
+            Expr::Move(m) => {
+                for (root, mut path) in named_place_paths(&m.name, aliases) {
+                    path.extend_from_slice(&m.fields);
+                    visit(root, path, None);
+                }
+            }
+            Expr::Call(c) => {
+                for (i, arg) in c.args.iter().enumerate() {
+                    if let Expr::InoutArg(arg) = arg {
+                        for (root, path) in parameter_place_paths(&arg.expr, aliases) {
+                            visit(root, path, Some((c, i)));
+                        }
+                    }
+                }
+            }
+            Expr::Quant(q) => {
+                for trigger in &q.triggers {
+                    visit_expr(trigger, aliases, visit);
+                }
+            }
+            Expr::InoutArg(arg) => visit_expr(&arg.expr, aliases, visit),
+            _ => {}
+        }
+        for child in kids(expr) {
+            visit_expr(child, aliases, visit);
+        }
+    }
+
+    let mut aliases = aliases.clone();
+    for stmt in body {
+        let target = match stmt {
+            Stmt::Assign(a) => Some((a.name.as_str(), &[][..])),
+            Stmt::FieldAssign(a) => Some((a.name.as_str(), a.fields.as_slice())),
+            _ => None,
+        };
+        if let Some((name, fields)) = target {
+            for (root, mut path) in named_place_paths(name, &aliases) {
+                path.extend_from_slice(fields);
+                visit(root, path, None);
+            }
+        }
+        let mut expr = |expr: &Expr| visit_expr(expr, &aliases, visit);
+        match stmt {
+            Stmt::Let(s) => expr(&s.value),
+            Stmt::Assign(s) => expr(&s.value),
+            Stmt::FieldAssign(s) => expr(&s.value),
+            Stmt::IndexAssign(s) => {
+                expr(&s.index);
+                expr(&s.value);
+            }
+            Stmt::If(s) => expr(&s.cond),
+            Stmt::While(s) => {
+                expr(&s.cond);
+                s.invariants.iter().for_each(&mut expr);
+                expr(&s.decreases);
+            }
+            Stmt::ForMap(s) => {
+                expr(&s.place);
+                s.invariants.iter().for_each(&mut expr);
+            }
+            Stmt::Return(s) => s.value.iter().for_each(&mut expr),
+            Stmt::Assert(s) => expr(&s.cond),
+            Stmt::Par(s) => s.calls.iter().for_each(&mut expr),
+            Stmt::ExprStmt(s) => expr(&s.expr),
+            Stmt::Match(s) => expr(&s.scrutinee),
+        }
+        for block in stmt_blocks(stmt) {
+            walk_len_uses(block, &aliases, visit);
+        }
+        if let Stmt::Let(l) = stmt {
+            if let Expr::InoutArg(arg) = &l.value {
+                let paths = parameter_place_paths(&arg.expr, &aliases);
+                aliases.insert(&l.name, paths);
+            }
+        }
+    }
+}
+
 /// Each path marks all array fields below it. The empty path marks the entire argument.
 fn struct_len_changes(prog: &ast::Program, resizes: &HashSet<(String, usize)>) -> LenChanges {
-    use pruv_core::foreign_shim::{walk_stmts, Node};
     let structs: HashSet<_> = prog.types.iter().filter_map(|d| {
         if let ast::TypeDecl::Struct(d) = d { Some(d.name.as_str()) } else { None }
     }).collect();
+    let is_struct = |ty: &str| structs.contains(Ty::from_name(ty).name());
     let funcs: HashMap<_, _> = prog.functions.iter().map(|f| (f.name.as_str(), f)).collect();
     let mut changes = LenChanges::new();
     let mut forwarded = Vec::new();
     for f in &prog.functions {
         let params: HashMap<_, _> = f.params.iter().enumerate()
-            .filter(|(_, p)| p.mode_pos.is_some() && structs.contains(p.ty.as_str()))
+            .filter(|(_, p)| p.mode_pos.is_some() && is_struct(&p.ty))
             .map(|(i, p)| (p.name.as_str(), (f.name.clone(), i)))
             .collect();
         if params.is_empty() { continue; }
@@ -1315,46 +1442,23 @@ fn struct_len_changes(prog: &ast::Program, resizes: &HashSet<(String, usize)>) -
                 changes.entry(key.clone()).or_default().insert(Vec::new());
             }
         }
-        pruv_core::check::walk_assignments(&f.body, &mut |name, path| {
-            if let Some(key) = params.get(name) {
-                changes.entry(key.clone()).or_default().insert(path.to_vec());
-            }
-        });
-        walk_stmts(&f.body, &mut |node| {
-            let Node::Expr(expr) = node else { return };
-            match expr {
-                Expr::Move(m) => {
-                    if let Some(key) = params.get(m.name.as_str()) {
-                        changes.entry(key.clone()).or_default().insert(m.fields.clone());
-                    }
+        walk_len_uses(&f.body, &HashMap::new(), &mut |name, path, use_call| {
+            let Some(key) = params.get(name) else { return };
+            let Some((call, i)) = use_call else {
+                changes.entry(key.clone()).or_default().insert(path);
+                return;
+            };
+            let target = (call.name.clone(), i);
+            if let Some(callee) = funcs.get(call.name.as_str()).filter(|f| f.foreign.is_none()) {
+                if callee.params.get(i).is_some_and(|p| is_struct(&p.ty)) {
+                    forwarded.push((key.clone(), path, target));
+                } else if resizes.contains(&target) {
+                    changes.entry(key.clone()).or_default().insert(path);
                 }
-                Expr::Call(call) => {
-                    for (i, arg) in call.args.iter().enumerate() {
-                        let Expr::InoutArg(arg) = arg else { continue };
-                        let mut root = arg.expr.as_ref();
-                        let mut path = Vec::new();
-                        while let Expr::FieldAccess(x) = root {
-                            path.push(x.field.clone());
-                            root = &x.base;
-                        }
-                        let Expr::Var(root) = root else { continue };
-                        let Some(key) = params.get(root.name.as_str()) else { continue };
-                        path.reverse();
-                        let target = (call.name.clone(), i);
-                        if let Some(callee) = funcs.get(call.name.as_str()).filter(|f| f.foreign.is_none()) {
-                            if callee.params.get(i).is_some_and(|p| structs.contains(p.ty.as_str())) {
-                                forwarded.push((key.clone(), path, target));
-                            } else if resizes.contains(&target) {
-                                changes.entry(key.clone()).or_default().insert(path);
-                            }
-                        } else if !matches!(call.name.as_str(),
-                            "copy_range" | "copy_within" | "store_be" | "store_le" | "vec_reserve" | "arr_reserve")
-                        {
-                            changes.entry(key.clone()).or_default().insert(path);
-                        }
-                    }
-                }
-                _ => {}
+            } else if !matches!(call.name.as_str(),
+                "copy_range" | "copy_within" | "store_be" | "store_le" | "vec_reserve" | "arr_reserve")
+            {
+                changes.entry(key.clone()).or_default().insert(path);
             }
         });
     }
@@ -2281,9 +2385,8 @@ impl<'a> FnVerifier<'a> {
         place_frames: &[std::rc::Rc<LivePlace>],
     ) -> R<State> {
         let mut h = st.fork(None);
-        let aliases: HashSet<_> = st.places.iter().map(|binding| binding.name.as_str()).collect();
         for n in names {
-            if aliases.contains(n.as_str()) {
+            if st.places.contains_key(n) {
                 continue;
             }
             let Some(old) = h.env.try_get(n).cloned() else { continue };
@@ -2385,7 +2488,7 @@ impl<'a> FnVerifier<'a> {
             self.place_write(&binding.place, &mut h, saved)?;
         }
         // A live alias that the loop never writes can still be read after a sibling field changes.
-        for binding in h.places.clone() {
+        for binding in h.ordered_places() {
             if names.contains(&binding.name) {
                 let value = match self.place_read(&binding.place, &mut h)? {
                     Val::Arr(arr) => Val::Arr(arr.like(arr.a.clone(), arr.n.clone(), &binding.name)),
@@ -5483,9 +5586,10 @@ impl<'a> FnVerifier<'a> {
     }
 
     fn place_ite(&self, cond: &Ast, a: &Val, b: &Val) -> R<Val> {
-        let ite = |a, b| self.z.ite(cond, a, b);
+        let ite = |a: &Ast, b: &Ast| self.z.ite(cond, a, b);
+        let arr = |a: &Arr, b: &Arr| a.like(ite(&a.a, &b.a), ite(&a.n, &b.n), &a.name);
         Ok(match (a, b) {
-            (Val::Arr(a), Val::Arr(b)) => Val::Arr(a.like(ite(&a.a, &b.a), ite(&a.n, &b.n), &a.name)),
+            (Val::Arr(a), Val::Arr(b)) => Val::Arr(arr(a, b)),
             (Val::Map(a), Val::Map(b)) => Val::Map(MapV {
                 d: ite(&a.d, &b.d),
                 a: ite(&a.a, &b.a),
@@ -5495,6 +5599,45 @@ impl<'a> FnVerifier<'a> {
             (Val::Int(a), Val::Int(b)) => Val::Int(ite(a, b)),
             (Val::Bool(a), Val::Bool(b)) => Val::Bool(ite(a, b)),
             (Val::Dt(a, ty), Val::Dt(b, _)) => Val::Dt(ite(a, b), ty.clone()),
+            (Val::File(a), Val::File(b)) => Val::File(FileV {
+                ok: ite(&a.ok, &b.ok),
+                readable: ite(&a.readable, &b.readable),
+                writable: ite(&a.writable, &b.writable),
+                buf: arr(&a.buf, &b.buf),
+            }),
+            (Val::Proc(a), Val::Proc(b)) => Val::Proc(ProcV {
+                error: ite(&a.error, &b.error),
+                stdin_open: ite(&a.stdin_open, &b.stdin_open),
+                stdout_eof: ite(&a.stdout_eof, &b.stdout_eof),
+                stderr_eof: ite(&a.stderr_eof, &b.stderr_eof),
+                out: arr(&a.out, &b.out),
+                err: arr(&a.err, &b.err),
+            }),
+            (Val::Sock(a), Val::Sock(b)) => Val::Sock(SockV {
+                error: ite(&a.error, &b.error),
+                write_open: ite(&a.write_open, &b.write_open),
+                eof: ite(&a.eof, &b.eof),
+                buf: arr(&a.buf, &b.buf),
+            }),
+            (Val::Lis(a), Val::Lis(b)) => Val::Lis(LisV {
+                error: ite(&a.error, &b.error),
+                port: ite(&a.port, &b.port),
+            }),
+            (Val::Loop(a), Val::Loop(b)) => Val::Loop(LoopV {
+                error: ite(&a.error, &b.error),
+                cap: ite(&a.cap, &b.cap),
+                count: ite(&a.count, &b.count),
+                last: ite(&a.last, &b.last),
+                ev_slot: ite(&a.ev_slot, &b.ev_slot),
+                ev_kind_: ite(&a.ev_kind_, &b.ev_kind_),
+                exit: ite(&a.exit, &b.exit),
+                kind: ite(&a.kind, &b.kind),
+                eof: ite(&a.eof, &b.eof),
+                write_open: ite(&a.write_open, &b.write_open),
+                buf: arr(&a.buf, &b.buf),
+            }),
+            (Val::PArgs(a), Val::PArgs(b)) => Val::PArgs(ite(a, b)),
+            (Val::Unit, Val::Unit) => Val::Unit,
             _ => return Err("invalid conditional place value".into()),
         })
     }
@@ -5599,7 +5742,7 @@ impl<'a> FnVerifier<'a> {
         // Keep the alias's local view in sync with its captured location. The checker
         // excludes overlapping stores while the view can still be read.
         let cond = (!guard.is_empty()).then(|| self.z.and(guard));
-        if let Some(binding) = st.places.iter().rev().find(|binding| binding.name == name).cloned() {
+        if let Some(binding) = st.places.get(name).cloned() {
             if let Some(cond) = &cond {
                 let mut branch = st.fork(None);
                 self.place_write(&binding.place, &mut branch, value.clone())?;
@@ -5622,7 +5765,7 @@ impl<'a> FnVerifier<'a> {
 
     /// Execute a block and discard its local place bindings on scope exit.
     pub(crate) fn exec_block(&mut self, stmts: &[Stmt], st: State) -> R<Vec<State>> {
-        let outer_places = st.places.len();
+        let outer_places = st.places.clone();
         let mut states = vec![st];
         for stmt in stmts {
             // STAGE1 B2: on budget exhaustion or timeout, Python escapes from here via an exception.
@@ -5639,7 +5782,7 @@ impl<'a> FnVerifier<'a> {
             }
         }
         for state in &mut states {
-            state.places.truncate(outer_places);
+            state.places = outer_places.clone();
         }
         Ok(states)
     }
@@ -5666,7 +5809,7 @@ impl<'a> FnVerifier<'a> {
         match stmt {
             Stmt::Let(s) if s.is_place() => {
                 let Expr::InoutArg(arg) = &s.value else { unreachable!() };
-                let mut st = st.fork(None);
+                let mut st = st;
                 let place = self.place_bind(&arg.expr, &mut st, &[], s)?;
                 let value = match self.place_read(&place, &mut st)? {
                     Val::Arr(arr) => Val::Arr(arr.like(arr.a.clone(), arr.n.clone(), &s.name)),
@@ -5676,7 +5819,10 @@ impl<'a> FnVerifier<'a> {
                     st.pc.push(in_range(&self.z, value.try_ast()?));
                 }
                 st.env.set(&s.name, value);
-                st.places.push(std::rc::Rc::new(LivePlace { name: s.name.clone(), place }));
+                let order = st.places.len();
+                std::rc::Rc::make_mut(&mut st.places).insert(s.name.clone(), std::rc::Rc::new(LivePlace {
+                    name: s.name.clone(), place, order,
+                }));
                 Ok(vec![st])
             }
             Stmt::Let(s) => self.exec_bind(&s.name, &s.value, st),
@@ -6018,7 +6164,7 @@ impl<'a> FnVerifier<'a> {
         call_writes(body, &mut calls, &|call, _| !matches!(call.name.as_str(), "vec_reserve" | "arr_reserve"));
         // Translate writes through aliases, including bindings declared during the loop.
         let mut aliases = HashMap::<String, BTreeSet<(String, bool)>>::new();
-        for binding in &st.places {
+        for binding in st.places.values() {
             aliases.entry(binding.name.clone()).or_default().insert((
                 binding.place.root().to_string(), binding.place.is_whole(),
             ));
@@ -6054,12 +6200,12 @@ impl<'a> FnVerifier<'a> {
         if !st.places.is_empty() {
             let mut stores = HashMap::new();
             store_paths(body, &mut stores);
-            for binding in &st.places {
+            for binding in st.ordered_places() {
                 let root = binding.place.root();
                 if let Some(paths) = stores.get(root).filter(|_| !calls.contains(root)) {
                     let path = binding.place.footprint();
                     if paths.iter().all(|written| path.iter().zip(*written).any(|(a, b)| *a != b.as_str())) {
-                        place_frames.push(binding.clone());
+                        place_frames.push(binding);
                     }
                 }
             }
