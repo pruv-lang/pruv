@@ -390,6 +390,7 @@ class _Ownership:
         s.arm_bor = []   # binders of the enclosing user-enum arms (Rust port arm_bor)
         s.track = None   # name -> "move" | "borrow" of the outermost call being checked (shared by nested calls)
         s.proc = {}      # G10 A0: must-consume bindings, name -> "Process" | "Socket" | "Listener"; never File etc.
+        s.borrowed_handles = {}   # place bindings that refer to a must-consume handle
         s.decl = {}      # name -> the Let that declared it (location of a scope-end proc_unconsumed / net_unconsumed)
         s.nxt = None     # G-R09-4: the statement after the one being checked in its block
         s.consumed_field = None   # G-R09-4: the `move d.a` of a `let` that no next statement restores
@@ -416,8 +417,9 @@ class _Ownership:
             else:
                 s.nxt = stmts[i + 1] if i + 1 < len(stmts) else None
                 st = s.stmt(x, st, declared)
-        if st is not None:
-            for n in declared:
+        for n in declared:
+            s.borrowed_handles.pop(n, None)
+            if st is not None:
                 if n in s.proc and st.get(n) in ("live", "maybe"):
                     _handle_lost(s.decl[n], s.proc[n],
                                  "%s %s is not consumed before the end of its scope" % (s.proc[n], n))
@@ -426,6 +428,14 @@ class _Ownership:
 
     def stmt(s, x, st, declared):
         if isinstance(x, Let):
+            if x.place:
+                # Evaluate the borrow while keeping the resource duty on its owner.
+                s.expr(x.value, st)
+                kind = _must_kind(x.type)
+                if kind is not None:
+                    s.borrowed_handles[x.name] = kind
+                    declared.append(x.name)
+                return st
             nxt = s.nxt
             v = x.value
             s.consumed_field = _consumed_field(v, nxt)
@@ -444,9 +454,11 @@ class _Ownership:
             return st
         if isinstance(x, Assign):
             s.consume(x.value, st, "assign")       # the right-hand side is consumed first
-            if x.name in s.proc and st.get(x.name) in ("live", "maybe"):
-                _handle_lost(x, s.proc[x.name], "%s %s is overwritten while it is not consumed" % (
-                    s.proc[x.name], x.name))
+            kind = s.borrowed_handles.get(x.name)
+            if kind is None and st.get(x.name) in ("live", "maybe"):
+                kind = s.proc.get(x.name)
+            if kind is not None:
+                _handle_lost(x, kind, "%s %s is overwritten while it is not consumed" % (kind, x.name))
             if x.name in st:
                 st[x.name] = "live"
             return st
@@ -718,6 +730,13 @@ class _Ownership:
         elif isinstance(e, Index) and isinstance(e.array, Var) and is_array(e.array.ty):
             s.expr(e.index, st)
             s.use(e.array, st)
+        elif isinstance(e, PlaceIf):
+            s.expr(e.cond, st)
+            then, els = dict(st), dict(st)
+            s.expr(e.then, then)
+            s.expr(e.els, els)
+            st.clear()
+            st.update(_join(then, els))
         elif isinstance(e, Call):
             kind = _must_kind(e.ty)
             if not owned and kind is not None:    # a handle temporary that is borrowed or dropped keeps its duty

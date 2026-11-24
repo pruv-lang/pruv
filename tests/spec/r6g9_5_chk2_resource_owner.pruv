@@ -1,0 +1,30 @@
+// spec: R-6g9-5 accept
+fn process(take input: Process) -> Process {
+  let mut x: Process = move input;
+  let d = inout x;
+  return move x;
+}
+
+fn file(take input: File) -> File {
+  let mut x: File = move input;
+  let d = inout x;
+  return move x;
+}
+
+fn socket(take input: Socket) -> Socket {
+  let mut x: Socket = move input;
+  let d = inout x;
+  return move x;
+}
+
+fn listener(take input: Listener) -> Listener {
+  let mut x: Listener = move input;
+  let d = inout x;
+  return move x;
+}
+
+fn event_loop(take input: Loop) -> Loop {
+  let mut x: Loop = move input;
+  let d = inout x;
+  return move x;
+}

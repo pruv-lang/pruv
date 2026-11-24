@@ -210,36 +210,32 @@ pub(crate) fn walk_statement<'a>(
 
 /// The root accesses of `st` itself: a compound statement contributes its head (condition, contracts, place,
 /// scrutinee); its nested blocks are their own statements in the liveness graph.
-fn own_accesses(st: &Stmt, visit: &mut impl FnMut(&str, &[String], Access, i64, i64)) {
+fn own_accesses(st: &Stmt, visit: &mut impl FnMut(&str, &[String], Access)) {
     let mut uses = Vec::new();
     let mut writes = Vec::new();
-    walk_statement(st, &mut |e| uses.push(e), &mut |n, path, l, c| writes.push((n, path, l, c)), &mut |_| {});
-    for (name, path, line, col) in writes {
-        visit(name, path, Access::Write, line, col);
+    walk_statement(st, &mut |e| uses.push(e), &mut |n, path, _, _| writes.push((n, path)), &mut |_| {});
+    for (name, path) in writes {
+        visit(name, path, Access::Write);
     }
-    let place_binding = matches!(st, Stmt::Let(s) if s.is_place());
     for e in uses {
-        expr_accesses(e, &mut |name, path, access, line, col| {
-            let access = if place_binding { Access::Read } else { access };
-            visit(name, path, access, line, col);
-        });
+        expr_accesses(e, visit);
     }
 }
 
-fn expr_accesses(e: &Expr, visit: &mut impl FnMut(&str, &[String], Access, i64, i64)) {
+fn expr_accesses(e: &Expr, visit: &mut impl FnMut(&str, &[String], Access)) {
     match e {
-        Expr::Move(m) => visit(&m.name, &m.fields, Access::Write, m.line, m.col),
+        Expr::Move(m) => visit(&m.name, &m.fields, Access::Write),
         Expr::InoutArg(arg) => {
             let (root, path) = field_place(&arg.expr);
             if let Expr::Var(v) = root {
-                visit(&v.name, &path, Access::Write, arg.line, arg.col);
+                visit(&v.name, &path, Access::Write);
             }
             expr_accesses(&arg.expr, visit);
         }
         _ => {
             let (root, path) = field_place(e);
             if let Expr::Var(v) = root {
-                visit(&v.name, &path, Access::Read, v.line, v.col);
+                visit(&v.name, &path, Access::Read);
                 return;
             }
             for child in crate::refine::kids(e) {
@@ -285,7 +281,7 @@ struct Point {
     succ: Vec<usize>,
     gen: Vec<usize>,
     kill: Option<usize>,
-    uses: Vec<(String, Vec<String>, Access, i64, i64)>,
+    uses: Vec<(String, Vec<String>, Access)>,
     site: (i64, i64),
     /// A borrow `let` whose value moves a root of its own provenance: the position of that move.
     own_move: Option<(i64, i64)>,
@@ -403,7 +399,7 @@ impl Graph {
             if let Some((line, col)) = point.own_move {
                 return Err(error(line, col, "borrow_conflict", "a root moved while the new view borrows it"));
             }
-            for (name, path, access, line, col) in &point.uses {
+            for (name, path, access) in &point.uses {
                 if let Some((mask, paths)) = places.get(name.as_str()) {
                     if live.meets(mask) && paths.iter().any(|(bit, foot)| live.contains(*bit) && paths_overlap(path, foot)) {
                         let place = std::iter::once(name.as_str()).chain(path.iter().map(String::as_str))
@@ -415,7 +411,8 @@ impl Graph {
                 }
                 let Some([shared, exclusive]) = masks.get(name.as_str()) else { continue };
                 if live.meets(exclusive) || (*access == Access::Write && live.meets(shared)) {
-                    return Err(error(*line, *col, "borrow_conflict", "use conflicts with a live borrowed view"));
+                    return Err(PruvError::new("type", point.site.0, point.site.1, "borrow_conflict",
+                        format!("{name} is still borrowed by a live view"), ""));
                 }
             }
         }
@@ -623,11 +620,11 @@ impl Analysis<'_> {
                 graph.points[p].succ.push(n);
             }
             let mut point = Point { succ: Vec::new(), gen: Vec::new(), kill: None, uses: Vec::new(), site: st.position(), own_move: None };
-            own_accesses(st, &mut |name, path, access, line, col| {
+            own_accesses(st, &mut |name, path, access| {
                 if let Some(&b) = scope.get(name) {
                     point.gen.push(b);
                 }
-                point.uses.push((name.to_owned(), path.to_vec(), access, line, col));
+                point.uses.push((name.to_owned(), path.to_vec(), access));
             });
             if graph.failure.is_none() {
                 if let Err(e) = self.statement(f, st, locals, &mut locals_undo) {
@@ -637,7 +634,7 @@ impl Analysis<'_> {
             if let Stmt::Let(s) = st {
                 if s.is_place() {
                     let (root, footprint) = &self.place_functions[&f.name][&(s.line, s.col)];
-                    point.uses.insert(0, (root.clone(), footprint.clone(), Access::Write, s.line, s.col));
+                    point.uses.insert(0, (root.clone(), footprint.clone(), Access::Write));
                     let bit = graph.borrows.len();
                     let source = Source { root: root.clone(), binding: Some(bit) };
                     locals_undo.push((s.name.clone(), locals.insert(s.name.clone(), Origin::Place(source))));

@@ -3687,14 +3687,13 @@ class Checker:
                     except PruvError as e:
                         g["failure"] = (n, e)
                 if isinstance(st, Let) and st.place:
-                    # R-6g9-5: an exclusive borrow of the footprint path of its root; index / condition operands
-                    # are read once at the binding and are ordinary uses of this point
+                    # R-6g9-5: borrow the footprint exclusively and keep the access modes of index and condition operands.
                     bit = len(g["borrows"])
                     point["kill"] = 1 << bit
                     root, path = st.place_root
                     point["uses"].append((root, True, path))
-                    point["uses"].extend((name, False, path) for e in s.place_operands(st.value.expr)
-                                         for name, _, path in s.view_uses_expr(e))
+                    for operand in s.place_operands(st.value.expr):
+                        point["uses"].extend(s.view_uses_expr(operand))
                     loans_undo.append((st.name, st.name in loans, loans.get(st.name)))
                     loans[st.name] = ({(root, bit): False}, True)
                     for name, _, _ in point["uses"]:
