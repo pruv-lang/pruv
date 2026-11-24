@@ -270,8 +270,7 @@ pub fn answer(inout st: [i64], inout sl: [i64], inout buf: [u8], text: str, at: 
   if sep == 2 && room < 2 {
     s2 = room;
   } else {
-    let cp: str = crate::text::clip_bytes(text, room - sep);
-    take = len(cp);
+    take = clip_len(text, room - sep);
   }
   write_piece(inout buf, rb, s2, text, take);
   sl[8 * c + 1] = rl + s2 + take;
@@ -558,13 +557,12 @@ pub fn begin2(inout st: [i64], inout sl: [i64], inout bk: Store, prompt: str, cr
 {
   let k: i64 = st[0];
   let w: i64 = k % 200;
-  let cp: str = crate::text::clip_bytes(prompt, 32768);
-  let n: i64 = len(cp);
+  let n: i64 = clip_len(prompt, 32768);
   let mut cnt: i64 = k;
   if cnt > 199 { cnt = 199; }
   reserve(inout bk, sl, k, cnt, n, n);
   let at: i64 = bk.end;
-  put_str(inout bk.data, at, cp, n);
+  put_str(inout bk.data, at, prompt, n);
   bk.off[w] = at;
   bk.end = at + n;
   let mut has: i64 = 0;
@@ -626,8 +624,7 @@ pub fn answer2(inout st: [i64], inout sl: [i64], inout bk: Store, text: str, at:
       s2 = room;
       take = 0;
     } else {
-      let cp: str = crate::text::clip_bytes(text, room - sep);
-      take = len(cp);
+      take = clip_len(text, room - sep);
     }
   }
   let mut cnt: i64 = st[0];

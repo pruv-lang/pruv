@@ -177,13 +177,14 @@ impl Parser<'_> {
         if matches!(kind, 5 | 6) && depth == MAX_DEPTH {
             return Err((start, 3));
         }
-        if self.tape.capacity() - base < WIDTH {
-            self.tape.reserve(WIDTH);
-            count(|c| c.allocations += 1);
-        }
+        // The tape grows inside the append (Vec doubling), the growth point the Pruv push has.
+        let capacity = self.tape.capacity();
         self.tape.extend_from_slice(&[
             kind, start as i64, self.pos as i64, (id + 1) as i64, parent, 0,
         ]);
+        if self.tape.capacity() != capacity {
+            count(|c| c.allocations += 1);
+        }
         if matches!(kind, 5 | 6) {
             let children = self.container(id as i64, depth + 1, kind == 6)?;
             self.tape[base + 2] = self.pos as i64;
@@ -333,7 +334,11 @@ impl Document<'_> {
 
 // Each escape contributes a UTF-16 code unit, including lone surrogates.
 fn units(raw: &[u8]) -> impl Iterator<Item = u16> + '_ {
-    let mut body = &raw[1..raw.len() - 1];
+    body_units(&raw[1..raw.len() - 1])
+}
+
+// UTF-16 code units of a string body (no quotes).
+fn body_units(mut body: &[u8]) -> impl Iterator<Item = u16> + '_ {
     let mut low = None;
     std::iter::from_fn(move || {
         if let Some(unit) = low.take() {
@@ -366,6 +371,31 @@ fn units(raw: &[u8]) -> impl Iterator<Item = u16> + '_ {
         low = encoded.get(1).copied();
         Some(encoded[0])
     })
+}
+
+// A quoted string as UTF-8 segments: each escape-free run as it is, then one char per escape
+// (UTF-16 pairs joined, lone surrogates U+FFFD).
+enum Piece<'a> { Run(&'a [u8]), Char(char) }
+
+fn utf8_segments<'a>(raw: &'a [u8], mut piece: impl FnMut(Piece<'a>)) {
+    let mut body = &raw[1..raw.len() - 1];
+    while let Some(&byte) = body.first() {
+        let width = if byte == b'\\' {
+            // One scalar per step: a high surrogate escape takes the next `\u` when it is the low half.
+            let ch = char::decode_utf16(body_units(body)).next().unwrap().unwrap_or(char::REPLACEMENT_CHARACTER);
+            piece(Piece::Char(ch));
+            match ch.len_utf16() {
+                2 => 12,
+                _ if body[1] == b'u' => 6,
+                _ => 2,
+            }
+        } else {
+            let width = body.iter().position(|&b| b == b'\\').unwrap_or(body.len());
+            piece(Piece::Run(&body[..width]));
+            width
+        };
+        body = &body[width..];
+    }
 }
 
 fn raw_output(raw: &[u8], number: bool) -> Vec<i64> {
@@ -427,12 +457,19 @@ pub fn query(input: &[u8], ops: &[i64], key: &[i64], text: &str, mode: i64) -> V
         }
         6 if kind == 4 => {
             let raw = doc.span(rec);
-            let chars = || char::decode_utf16(units(raw)).map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER));
-            let mut out = output(chars().map(char::len_utf8).sum());
-            for ch in chars() {
-                let mut buf = [0; 4];
-                out.extend(ch.encode_utf8(&mut buf).bytes().map(i64::from));
-            }
+            let mut need = 0;
+            utf8_segments(raw, |piece| need += match piece {
+                Piece::Run(run) => run.len(),
+                Piece::Char(ch) => ch.len_utf8(),
+            });
+            let mut out = output(need);
+            utf8_segments(raw, |piece| match piece {
+                Piece::Run(run) => out.extend(run.iter().map(|&b| i64::from(b))),
+                Piece::Char(ch) => {
+                    let mut buf = [0; 4];
+                    out.extend(ch.encode_utf8(&mut buf).bytes().map(i64::from));
+                }
+            });
             out
         }
         2..=6 => status(-2),

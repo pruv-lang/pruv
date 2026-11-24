@@ -7,6 +7,8 @@ mod lex;
 // TrailingComma blames the closing delimiter, not the comma.
 pub struct Pass { position: i64, kind: i64, records: i64 }
 enum Lexed { Value(kind: i64, plain: bool), Error(kind: i64) }
+// The one error value of the recursive descent (the hand `Err((pos, kind))`).
+struct Fault { position: i64, kind: i64 }
 
 fn utf8_width(byte: i64) -> i64
   ensures 1 <= result && result <= 4
@@ -20,12 +22,14 @@ fn utf8_width(byte: i64) -> i64
 // D33: crate::lex::scan_string with the UTF-8 check folded in, so parse reads string bytes once.
 // Non-ASCII bytes are validated in place.
 // An invalid sequence stops the token with error 4; parse then reports the first invalid byte.
+// Like the hand `Parser::string`, an error is returned once as `Fault { position, kind }` at the cursor.
+// The Ok value is the plain bit (no escape), which feeds `string_utf8_plain`.
 // start lets the contract relate the final cursor to its entry position.
-fn string_token(input: [u8], start: i64, end: i64, kind: i64, inout pos: i64) -> Lexed
+fn string_token(input: [u8], start: i64, end: i64, inout pos: i64) -> Result<bool, Fault>
   requires 0 <= start && start < end && end <= len(input) && pos == start
   ensures start <= pos && pos <= end
-  ensures is_variant(result, Lexed::Value) ==> (start < pos && variant_field(result, Lexed::Value, kind) == kind)
-  ensures is_variant(result, Lexed::Error) ==> variant_field(result, Lexed::Error, kind) > 0
+  ensures is_ok(result) ==> start < pos
+  ensures !is_ok(result) ==> (err_val(result).position == pos && err_val(result).kind > 0)
 {
   pos = pos + 1;
   let mut plain: bool = true;
@@ -34,18 +38,18 @@ fn string_token(input: [u8], start: i64, end: i64, kind: i64, inout pos: i64) ->
     decreases end - pos
   {
     let c: i64 = input[pos];
-    if c == 34 { pos = pos + 1; return Lexed::Value(kind, plain); }
-    if c < 32 { return Lexed::Error(16); }
+    if c == 34 { pos = pos + 1; return Ok::<bool, Fault>(plain); }
+    if c < 32 { return Err::<bool, Fault>(Fault { position: pos, kind: 16 }); }
     if c >= 128 {
       let scalar_end: i64 = pos + utf8_width(c);
-      if scalar_end > end { return Lexed::Error(4); }
-      if crate::lex::validate_utf8(input, pos, scalar_end) >= 0 { return Lexed::Error(4); }
+      if scalar_end > end { return Err::<bool, Fault>(Fault { position: pos, kind: 4 }); }
+      if crate::lex::validate_utf8(input, pos, scalar_end) >= 0 { return Err::<bool, Fault>(Fault { position: pos, kind: 4 }); }
       pos = scalar_end;
     } else {
       pos = pos + 1;
       if c == 92 {
         plain = false;
-        if pos == end { return Lexed::Error(5); }
+        if pos == end { return Err::<bool, Fault>(Fault { position: pos, kind: 5 }); }
         let esc: i64 = input[pos];
         if esc == 117 {
           pos = pos + 1;
@@ -56,26 +60,27 @@ fn string_token(input: [u8], start: i64, end: i64, kind: i64, inout pos: i64) ->
             invariant pos >= hex_start
             decreases 4 - k
           {
-            if pos == end { return Lexed::Error(5); }
+            if pos == end { return Err::<bool, Fault>(Fault { position: pos, kind: 5 }); }
             let h: i64 = input[pos];
             if !((48 <= h && h <= 57) || (65 <= h && h <= 70) || (97 <= h && h <= 102)) {
-              return Lexed::Error(15);
+              return Err::<bool, Fault>(Fault { position: pos, kind: 15 });
             }
             pos = pos + 1;
             k = k + 1;
           }
         } else {
           if esc != 34 && esc != 92 && esc != 47 && esc != 98 && esc != 102 && esc != 110 && esc != 114 && esc != 116 {
-            return Lexed::Error(14);
+            return Err::<bool, Fault>(Fault { position: pos, kind: 14 });
           }
           pos = pos + 1;
         }
       }
     }
   }
-  return Lexed::Error(17);
+  return Err::<bool, Fault>(Fault { position: pos, kind: 17 });
 }
 
+// Token packet for the reusable-scratch path `scan_into` (P8) only; the recursive path dispatches in `record`.
 fn token_at(input: [u8], start: i64, end: i64, key: bool, inout pos: i64) -> Lexed
   requires 0 <= start && start < end && end <= len(input) && pos == start
   ensures start <= pos && pos <= end
@@ -87,8 +92,14 @@ fn token_at(input: [u8], start: i64, end: i64, key: bool, inout pos: i64) -> Lex
   let c: i64 = input[pos];
   if key && c != 34 { return Lexed::Error(7); }
   if c == 34 {
-    if key { return string_token(input, start, end, 7, inout pos); }
-    return string_token(input, start, end, 4, inout pos);
+    let text: Result<bool, Fault> = string_token(input, start, end, inout pos);
+    match text {
+      Err(fault) => { return Lexed::Error(fault.kind); }
+      Ok(plain) => {
+        if key { return Lexed::Value(7, plain); }
+        return Lexed::Value(4, plain);
+      }
+    }
   }
   if c == 91 || c == 123 {
     pos = pos + 1;
@@ -189,62 +200,78 @@ pred fn parents_ok(tape: [i64], lo: i64, hi: i64) -> bool {
         tape[6 * tape[6 * t + 4] + 1] < tape[6 * t + 1])));
 }
 
-enum Descent { Done(children: i64), Rejected(position: i64, kind: i64) }
-
-fn record(input: [u8], initial: i64, first: i64, inout pos: i64, inout tape: [i64], parent: i64, depth: i64, key: bool) -> Descent ! alloc
+// Hand `Parser::record` / `Parser::container`: one recursion, errors passed up with `?`.
+// `record` returns `Ok(0)`: the hand returns `ParseResult<()>`, and `Result<(), Fault>` is not a type (gap RU).
+// `initial` is the entry cursor the contracts need (gap OS: no `old(pos)` for a scalar `inout`).
+fn record(input: [u8], initial: i64, inout pos: i64, inout tape: [i64], parent: i64, depth: i64, key: bool) -> Result<i64, Fault> ! alloc
   requires pos == initial && 0 <= pos && pos <= len(input) && len(input) <= 16777216
-  requires 0 <= depth && depth <= 128 && len(tape) == 6 * first && 0 <= first && first <= 1048576
-  requires first > 0 ==> (0 <= parent && parent < first && (tape[6 * parent] == 5 || tape[6 * parent] == 6) && tape[6 * parent + 1] < initial)
+  requires 0 <= depth && depth <= 128 && len(tape) % 6 == 0 && len(tape) <= 6291456
+  requires len(tape) > 0 ==> (0 <= parent && 6 * parent < len(tape) && (tape[6 * parent] == 5 || tape[6 * parent] == 6) && tape[6 * parent + 1] < initial)
   ensures initial <= pos && pos <= len(input)
   ensures len(tape) >= len(old(tape)) && len(tape) % 6 == 0 && len(tape) <= 6291456
-  ensures is_variant(result, Descent::Done) ==> (pos > initial && len(tape) > len(old(tape)))
-  ensures forall i in 0..6 * first: tape[i] == old(tape)[i]
-  ensures is_variant(result, Descent::Done) ==> local_records(tape, first, len(tape) / 6, pos)
-  ensures is_variant(result, Descent::Done) ==> parents_ok(tape, first, len(tape) / 6)
-  ensures is_variant(result, Descent::Rejected) ==> (0 <= variant_field(result, Descent::Rejected, position) && variant_field(result, Descent::Rejected, position) <= len(input))
-  ensures is_variant(result, Descent::Done) ==> (tape[6 * first + 3] == len(tape) / 6 && tape[6 * first + 4] == parent && ((tape[6 * first] == 7) == key))
+  ensures is_ok(result) ==> (pos > initial && len(tape) > len(old(tape)))
+  ensures forall i in 0..len(old(tape)): tape[i] == old(tape)[i]
+  ensures is_ok(result) ==> local_records(tape, len(old(tape)) / 6, len(tape) / 6, pos)
+  ensures is_ok(result) ==> parents_ok(tape, len(old(tape)) / 6, len(tape) / 6)
+  ensures !is_ok(result) ==> (0 <= err_val(result).position && err_val(result).position <= len(input))
+  ensures is_ok(result) ==> (tape[len(old(tape)) + 3] == len(tape) / 6 && tape[len(old(tape)) + 4] == parent && ((tape[len(old(tape))] == 7) == key))
   decreases 2 * (129 - depth)
 {
   let end: i64 = len(input);
   pos = crate::lex::skip_whitespace(input, pos, end);
   let start: i64 = pos;
-  if pos == end { return Descent::Rejected(pos, 5); }
-  let token: Lexed = token_at(input, start, end, key, inout pos);
+  if pos == end { return Err::<i64, Fault>(Fault { position: pos, kind: 5 }); }
+  let byte: i64 = input[pos];
+  if key && byte != 34 { return Err::<i64, Fault>(Fault { position: start, kind: 7 }); }
   let mut kind: i64 = 0;
-  match token {
-    Lexed::Error(error) => { return Descent::Rejected(pos, error); }
-    Lexed::Value(value, plain) => { kind = value; }
+  if byte == 34 {
+    string_token(input, start, end, inout pos)?;
+    kind = 4;
+    if key { kind = 7; }
+  } else if byte == 91 {
+    pos = pos + 1;
+    kind = 5;
+  } else if byte == 123 {
+    pos = pos + 1;
+    kind = 6;
+  } else if byte == 116 || byte == 102 || byte == 110 {
+    let r: crate::lex::Scan = crate::lex::scan_literal(input, pos, end);
+    pos = r.position;
+    if r.kind != 0 { return Err::<i64, Fault>(Fault { position: pos, kind: r.kind }); }
+    if byte == 116 { kind = 2; } else if byte == 102 { kind = 1; }
+  } else if byte == 45 || (48 <= byte && byte <= 57) {
+    let r: crate::lex::Scan = crate::lex::scan_number(input, pos, end);
+    pos = r.position;
+    if r.kind != 0 { return Err::<i64, Fault>(Fault { position: pos, kind: r.kind }); }
+    kind = 3;
+  } else {
+    return Err::<i64, Fault>(Fault { position: start, kind: 6 });
   }
   let base: i64 = len(tape);
   let id: i64 = base / 6;
-  if id == 1048576 { return Descent::Rejected(start, 2); }
-  if (kind == 5 || kind == 6) && depth == 128 { return Descent::Rejected(start, 3); }
+  if id == 1048576 { return Err::<i64, Fault>(Fault { position: start, kind: 2 }); }
+  if (kind == 5 || kind == 6) && depth == 128 { return Err::<i64, Fault>(Fault { position: start, kind: 3 }); }
   append_record(inout tape, id, kind, start, pos, parent, 0);
   if kind == 5 || kind == 6 {
     let opened: i64 = pos;
-    let subtree: Descent = container(input, opened, id + 1, inout pos, inout tape, id, depth + 1, kind == 6);
-    match subtree {
-      Descent::Rejected(error_pos, error) => { return Descent::Rejected(error_pos, error); }
-      Descent::Done(children) => {
-        tape[base + 2] = pos;
-        tape[base + 3] = len(tape) / 6;
-        tape[base + 5] = children;
-      }
-    }
+    let children: i64 = container(input, opened, inout pos, inout tape, id, depth + 1, kind == 6)?;
+    tape[base + 2] = pos;
+    tape[base + 3] = len(tape) / 6;
+    tape[base + 5] = children;
   }
-  return Descent::Done(0);
+  return Ok::<i64, Fault>(0);
 }
 
-fn container(input: [u8], initial: i64, first: i64, inout pos: i64, inout tape: [i64], id: i64, depth: i64, object: bool) -> Descent ! alloc
+fn container(input: [u8], initial: i64, inout pos: i64, inout tape: [i64], id: i64, depth: i64, object: bool) -> Result<i64, Fault> ! alloc
   requires pos == initial && 0 <= pos && pos <= len(input) && len(input) <= 16777216
-  requires 1 <= depth && depth <= 128 && len(tape) == 6 * first && 0 <= first && first <= 1048576
-  requires 0 <= id && id < first && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < initial
+  requires 1 <= depth && depth <= 128 && len(tape) % 6 == 0 && len(tape) <= 6291456
+  requires 0 <= id && 6 * id < len(tape) && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < initial
   ensures initial <= pos && pos <= len(input)
   ensures len(tape) >= len(old(tape)) && len(tape) % 6 == 0 && len(tape) <= 6291456
-  ensures forall i in 0..6 * first: tape[i] == old(tape)[i]
-  ensures is_variant(result, Descent::Done) ==> local_records(tape, first, len(tape) / 6, pos)
-  ensures is_variant(result, Descent::Done) ==> parents_ok(tape, first, len(tape) / 6)
-  ensures is_variant(result, Descent::Rejected) ==> (0 <= variant_field(result, Descent::Rejected, position) && variant_field(result, Descent::Rejected, position) <= len(input))
+  ensures forall i in 0..len(old(tape)): tape[i] == old(tape)[i]
+  ensures is_ok(result) ==> local_records(tape, len(old(tape)) / 6, len(tape) / 6, pos)
+  ensures is_ok(result) ==> parents_ok(tape, len(old(tape)) / 6, len(tape) / 6)
+  ensures !is_ok(result) ==> (0 <= err_val(result).position && err_val(result).position <= len(input))
   decreases 2 * (129 - depth) + 1
 {
   let end: i64 = len(input);
@@ -253,75 +280,60 @@ fn container(input: [u8], initial: i64, first: i64, inout pos: i64, inout tape: 
   pos = crate::lex::skip_whitespace(input, pos, end);
   if pos < end && input[pos] == close {
     pos = pos + 1;
-    return Descent::Done(0);
+    return Ok::<i64, Fault>(0);
   }
   let mut children: i64 = 0;
   while pos <= end
     invariant initial <= pos && pos <= end && end == len(input) && end <= 16777216
     invariant len(tape) >= len(old(tape)) && len(tape) % 6 == 0 && len(tape) <= 6291456
-    invariant forall i in 0..6 * first: tape[i] == old(tape)[i]
-    invariant local_records(tape, first, len(tape) / 6, pos)
-    invariant parents_ok(tape, first, len(tape) / 6)
-    invariant 0 <= id && id < first && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < initial
+    invariant forall i in 0..len(old(tape)): tape[i] == old(tape)[i]
+    invariant local_records(tape, len(old(tape)) / 6, len(tape) / 6, pos)
+    invariant parents_ok(tape, len(old(tape)) / 6, len(tape) / 6)
+    invariant 0 <= id && 6 * id < len(old(tape)) && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < initial
     invariant 0 <= children && children <= pos
     decreases end - pos + 1
   {
     if object {
       let key_start: i64 = pos;
-      let key_id: i64 = len(tape) / 6;
-      let key: Descent = record(input, key_start, key_id, inout pos, inout tape, id, depth, true);
-      match key {
-        Descent::Rejected(error_pos, error) => { return Descent::Rejected(error_pos, error); }
-        Descent::Done(ignored) => {}
-      }
+      record(input, key_start, inout pos, inout tape, id, depth, true)?;
       pos = crate::lex::skip_whitespace(input, pos, end);
-      if pos == end { return Descent::Rejected(pos, 5); }
-      if input[pos] != 58 { return Descent::Rejected(pos, 8); }
+      if pos == end { return Err::<i64, Fault>(Fault { position: pos, kind: 5 }); }
+      if input[pos] != 58 { return Err::<i64, Fault>(Fault { position: pos, kind: 8 }); }
       pos = pos + 1;
     }
     let value_start: i64 = pos;
-    let value_id: i64 = len(tape) / 6;
-    let item: Descent = record(input, value_start, value_id, inout pos, inout tape, id, depth, false);
-    match item {
-      Descent::Rejected(error_pos, error) => { return Descent::Rejected(error_pos, error); }
-      Descent::Done(ignored) => {}
-    }
+    record(input, value_start, inout pos, inout tape, id, depth, false)?;
     children = children + 1;
     pos = crate::lex::skip_whitespace(input, pos, end);
-    if pos == end { return Descent::Rejected(pos, 5); }
+    if pos == end { return Err::<i64, Fault>(Fault { position: pos, kind: 5 }); }
     let byte: i64 = input[pos];
     if byte == close {
       pos = pos + 1;
-      return Descent::Done(children);
+      return Ok::<i64, Fault>(children);
     }
-    if byte != 44 { return Descent::Rejected(pos, 9); }
+    if byte != 44 { return Err::<i64, Fault>(Fault { position: pos, kind: 9 }); }
     pos = pos + 1;
     pos = crate::lex::skip_whitespace(input, pos, end);
-    if pos < end && input[pos] == close { return Descent::Rejected(pos, 10); }
+    if pos < end && input[pos] == close { return Err::<i64, Fault>(Fault { position: pos, kind: 10 }); }
   }
-  return Descent::Rejected(end, 5);
+  return Err::<i64, Fault>(Fault { position: end, kind: 5 });
 }
-// Parse one root and consume its trailing whitespace.
-fn scan_records(input: [u8], inout tape: [i64]) -> Descent ! alloc
+// Parse one root and consume its trailing whitespace (hand `parse`).
+fn scan_records(input: [u8], inout tape: [i64]) -> Result<i64, Fault> ! alloc
   requires len(input) <= 16777216 && len(tape) == 0
-  ensures is_variant(result, Descent::Rejected) ==> (0 <= variant_field(result, Descent::Rejected, position) && variant_field(result, Descent::Rejected, position) <= len(input))
-  ensures is_variant(result, Descent::Done) ==> (len(input) >= 1 && len(tape) % 6 == 0 && len(tape) >= 6 && len(tape) <= 6291456)
-  ensures is_variant(result, Descent::Done) ==> local_records(tape, 0, len(tape) / 6, len(input))
-  ensures is_variant(result, Descent::Done) ==> parents_ok(tape, 0, len(tape) / 6)
-  ensures is_variant(result, Descent::Done) ==> (tape[4] == -1 && tape[3] == len(tape) / 6 && tape[0] != 7)
+  ensures !is_ok(result) ==> (0 <= err_val(result).position && err_val(result).position <= len(input))
+  ensures is_ok(result) ==> (len(input) >= 1 && len(tape) % 6 == 0 && len(tape) >= 6 && len(tape) <= 6291456)
+  ensures is_ok(result) ==> local_records(tape, 0, len(tape) / 6, len(input))
+  ensures is_ok(result) ==> parents_ok(tape, 0, len(tape) / 6)
+  ensures is_ok(result) ==> (tape[4] == -1 && tape[3] == len(tape) / 6 && tape[0] != 7)
 {
   let n: i64 = len(input);
   arr_reserve(inout tape, 32 * 6);
   let mut pos: i64 = 0;
-  let root: Descent = record(input, 0, 0, inout pos, inout tape, -1, 0, false);
-  match root {
-    Descent::Rejected(position, kind) => { return Descent::Rejected(position, kind); }
-    Descent::Done(ignored) => {
-      pos = crate::lex::skip_whitespace(input, pos, n);
-      if pos != n { return Descent::Rejected(pos, 11); }
-      return Descent::Done(0);
-    }
-  }
+  record(input, 0, inout pos, inout tape, -1, 0, false)?;
+  pos = crate::lex::skip_whitespace(input, pos, n);
+  if pos != n { return Err::<i64, Fault>(Fault { position: pos, kind: 11 }); }
+  return Ok::<i64, Fault>(0);
 }
 
 // The scan outcome owns its tape so callers can move it into a document.
@@ -331,10 +343,10 @@ pub fn scan(input: [u8]) -> Checked ! alloc
   ensures is_variant(result, Checked::Rejected) ==> (0 <= variant_field(result, Checked::Rejected, position) && variant_field(result, Checked::Rejected, position) <= len(input))
 {
   let mut tape: [i64] = alloc(0, 0);
-  let root: Descent = scan_records(input, inout tape);
+  let root: Result<i64, Fault> = scan_records(input, inout tape);
   match root {
-    Descent::Rejected(position, kind) => { return Checked::Rejected(position, kind); }
-    Descent::Done(ignored) => { return Checked::Tape(move tape); }
+    Err(fault) => { return Checked::Rejected(fault.position, fault.kind); }
+    Ok(ignored) => { return Checked::Tape(move tape); }
   }
 }
 
@@ -359,10 +371,10 @@ fn scan_document(input: [u8]) -> crate::json::JsonParse ! alloc
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6: ((variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] <= 4 || variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] == 7) ==> variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 5] == 0))
 {
   let mut tape: [i64] = alloc(0, 0);
-  let root: Descent = scan_records(input, inout tape);
+  let root: Result<i64, Fault> = scan_records(input, inout tape);
   match root {
-    Descent::Rejected(position, kind) => { return failure(position, kind); }
-    Descent::Done(ignored) => {
+    Err(fault) => { return failure(fault.position, fault.kind); }
+    Ok(ignored) => {
       return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: copy(input), tape: move tape });
     }
   }

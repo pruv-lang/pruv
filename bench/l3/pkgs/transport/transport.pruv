@@ -69,7 +69,8 @@ pub fn grow_line(take line: [u8], cap: i64) -> [u8] ! alloc
  return move b;
 }
 // receive with a growing line buffer: the same framing, st[] protocol and -3 at cap, but `line` may start short (1 <= len(line) <= cap)
-// and grows in place as needed. len(line) is the writable buffer length and st[1] is the number of bytes filled.
+// and grows in place as needed. st[1] is the number of bytes filled; bytes of line past st[1] are stale. A read that adds
+// bytes leaves len(line) == st[1] (the hand's cleared-and-extended read_line String).
 pub fn receive_grow(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool, cap: i64,
  inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64]) -> Loop ! async, proc, alloc
  requires len(st) == 5 && 0 <= st[1] && st[1] <= len(line) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
@@ -106,17 +107,11 @@ pub fn receive_grow(take l: Loop, slot: i64, overall: i64, init: i64, ready: boo
   i = i + 1;
  }
  let needed: i64 = filled + (i - begin);
- // Compute the same capped doubling size before resizing the buffer once.
- let mut size: i64 = len(line);
- while size < needed
-  invariant len(line) <= size && size <= cap
-  decreases cap - size
- {
-  size = size * 2;
-  if size > cap { size = cap; }
+ // Hand read_line: drop the bytes past the filled prefix, then extend_from_slice (Vec growth, no zero fill).
+ if i > begin {
+  line = truncate(line, filled);
+  arr_append(inout line, chunk, begin, i - begin);
  }
- if size > len(line) { line = resize(line, size, 0); }
- copy_range(inout line, filled, chunk, begin, i - begin);
  st[1]=needed;
  // A newline at cap completes the line. Any other byte at cap is consumed and reports -3.
  if i < st[4] {
