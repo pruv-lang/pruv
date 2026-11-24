@@ -1,0 +1,2 @@
+// spec: R-6g4-1 reject
+fn f(a: [u8]) -> () ! alloc { arr_reserve(inout a, 1); }

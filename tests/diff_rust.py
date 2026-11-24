@@ -237,6 +237,8 @@ def build_inputs(selected, args, tmp):
         for name in (
             "r6e_15_string_from.pruv", "r6e_4_replace_binder.pruv",
             "r6e_17_vec_as_slice.pruv", "r6g_4_scalar_inout.pruv", "r6f_4_take_string_entry.pruv",
+            "r6g4_1_reserve_small.pruv", "r6g4_5_literal_contract_index.pruv",
+            "r6g4_5_literal_predicate.pruv", "r6g4_6_append_bulk.pruv",
         ):
             p = os.path.join(ROOT, "tests", "spec", name)
             per["edge"].append((rel(p), p, []))

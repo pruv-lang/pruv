@@ -48,10 +48,11 @@ fn core_old(p0: [i64], d: crate::json::JsonDocument, count0: i64, objects0: i64)
 // The packet is taken and grown in place, as root.pruv does with its `p`; the driver hands over its packet.
 fn core_new(take p0: [i64], d: crate::json::JsonDocument, count0: i64, objects0: i64) -> [i64] ! alloc
   requires 5010 <= len(p0) && len(p0) <= 100000000 && 0 <= count0 && count0 <= 500 && 0 <= objects0 && objects0 <= 500
-  ensures 5010 <= len(result) && len(result) <= 100000000
+  ensures 5010 <= len(result) && len(result) <= 100100000
 {
   let mut p: [i64] = move p0;
-  let result_id: i64 = crate::util::field(d,0,"result"); let tools: i64 = crate::util::field(d,result_id,"tools");
+  // hand: `field(src,t,0,"result").and_then(|r| field(src,t,r,"tools"))`, the lookup the page loop uses (as root.pruv).
+  let result_id: i64 = crate::packet::field(d,0,"result"); let tools: i64 = crate::packet::field(d,result_id,"tools");
   let c: crate::packet::Counts = crate::packet::page(inout p,d,tools,count0,objects0);
   return crate::packet::shorten(move p,c.end);
 }

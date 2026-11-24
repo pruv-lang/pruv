@@ -1,0 +1,26 @@
+{
+  "gen_contains": [
+    ".reserve_exact((pruv_n) as usize)",
+    ".push(pruv_v as u8)",
+    ".push(pruv_v)"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "228"
+    ],
+    "alloc_balance": true,
+    "ll_contains": [
+      "call ptr @pruv_regrow_v2",
+      "mul i64",
+      "phi ptr",
+      "store i8"
+    ]
+  }
+}

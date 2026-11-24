@@ -1,0 +1,5 @@
+// spec: R-6g4-4 reject
+fn f() -> () ! alloc {
+  let mut a: [i64] = alloc(8, 0);
+  a = resize(a, 3, 0);
+}

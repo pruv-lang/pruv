@@ -43,8 +43,9 @@ import compiler_driver as CD  # noqa: E402
 
 SPEC = os.path.join(ROOT, "SPEC.md")
 SPEC_DIR = os.path.join(HERE, "spec")
-RULE_ID = re.compile(r"\bR-[0-9]+[a-z]?-[0-9]+\b")
-HEADER = re.compile(r"^//\s*spec:\s*((?:R-[0-9]+[a-z]?-[0-9]+\s+)+)(accept|reject)\s*$")
+RULE = r"R-[0-9]+(?:[a-z][0-9]*)?-[0-9]+"
+RULE_ID = re.compile(r"\b" + RULE + r"\b")
+HEADER = re.compile(r"^//\s*spec:\s*((?:" + RULE + r"\s+)+)(accept|reject)\s*$")
 TABLE_ROW = re.compile(r"^\|\s*`([a-z_]+)/([a-z0-9_]+)`\s*\|\s*([a-z_]+)\s*\|")
 CLASSES = ("false_reject", "false_accept", "wrong_location", "timeout", "other")
 

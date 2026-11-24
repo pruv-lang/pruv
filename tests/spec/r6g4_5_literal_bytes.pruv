@@ -1,0 +1,21 @@
+// spec: R-6g4-5 accept
+fn sum_bytes(a: [u8]) -> i64
+  requires len(a) == 5 && a[0] == 195 && a[1] == 169 && a[2] == 10 && a[3] == 34 && a[4] == 92
+  ensures result == 500
+{
+  return a[0] + a[1] + a[2] + a[3] + a[4];
+}
+fn async_len(a: [u8]) -> i64 ! async
+  requires len(a) == 3 && a[2] == 172
+  ensures result == 3
+{
+  return len(a);
+}
+pub pred fn is_e_acute(a: [u8]) -> bool {
+  return len(a) == 2 && a[0] == 195 && a[1] == 169;
+}
+pub fn checksum() -> i64 ! async
+  requires is_e_acute("é")
+{
+  return sum_bytes("é\n\"\\") + async_len("€");
+}

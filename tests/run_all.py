@@ -118,8 +118,8 @@ Python runs tests/g3/verify_only.py because its code generator rejects generics.
 (tests/g3/reject/*.pruv + .json, mode "verify_reject") so a verifier that accepts too much fails the group.
 Rows have group "g3_proof" and backend null.
 
---list-rows [FILE]: build the job list, run nothing, and write one JSON row per line (sort_keys, sorted) to FILE
-(stdout if omitted); exit code 0. A row is {"sample", "backend", "flags", "mode", "group", "compiler"[, "name"][, "dup"]};
+--list-rows [FILE]: build the job list (both backends by default), run nothing, and write one JSON row per line
+  (sort_keys, sorted) to FILE (stdout if omitted); exit code 0. A row is {"sample", "backend", "flags", "mode", "group", "compiler"[, "name"][, "dup"]};
 the row key is json.dumps(row, sort_keys=True). "group" is must_reject|examples|runtime (the --only value).
 "mode" is default/no-verify/trust-callers/bad for examples rows, "spec_error" for a runtime row whose json
 spec could not be read (flags null), and null otherwise (runtime rows are told apart by "flags" alone).
@@ -1624,9 +1624,16 @@ def runtime_jobs(backend):
               for j in sorted(glob.glob(os.path.join(ROOT, "tests/runtime/g7_*/spec.json")))]
     specs += [(j, os.path.basename(os.path.dirname(j)))
               for j in sorted(glob.glob(os.path.join(ROOT, "tests/runtime/g8_*/spec.json")))]
+    # Flat rule-traced fixtures may also supply a runtime spec and a Rust driver.
+    specs += [(j, os.path.splitext(os.path.basename(j))[0])
+              for j in sorted(glob.glob(os.path.join(ROOT, "tests/spec/*.json")))]
     for j, t in specs:
         try:
-            spec = json.load(open(j))
+            spec = json.load(open(j, encoding="utf-8"))
+            if os.path.dirname(j) == os.path.join(ROOT, "tests/spec"):
+                if "run" not in spec:
+                    continue
+                spec = spec["run"]
             if backend not in spec.get("backends", ["rust", "llvm"]):
                 continue
             if llvm and isinstance(spec.get("llvm"), dict):   # G4 A3: "llvm": {...} overrides fields on the llvm backend
@@ -1749,7 +1756,8 @@ def main():
                         "g9_proof", "g4_frontend", "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "g8_proof", "l3_frontend", "l3_proof", "l3_abi", "spec_trace", "vacuity", "check_generated", "codegen_boundaries", "shim_edges"):
             print(USAGE)
             return 2
-    backend = "rust"
+    # The unfiltered row inventory includes both backends.
+    backend = "both" if list_rows else "rust"
     if "--backend" in sys.argv:
         i = sys.argv.index("--backend")
         backend = sys.argv[i + 1] if i + 1 < len(sys.argv) else None

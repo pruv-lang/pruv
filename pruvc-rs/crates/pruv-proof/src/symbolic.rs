@@ -1240,7 +1240,7 @@ fn struct_len_changes(prog: &ast::Program, resizes: &HashSet<(String, usize)>) -
                                 changes.entry(key.clone()).or_default().insert(path);
                             }
                         } else if !matches!(call.name.as_str(),
-                            "copy_range" | "copy_within" | "store_be" | "store_le" | "vec_reserve")
+                            "copy_range" | "copy_within" | "store_be" | "store_le" | "vec_reserve" | "arr_reserve")
                         {
                             changes.entry(key.clone()).or_default().insert(path);
                         }
@@ -1450,7 +1450,7 @@ impl<'a> FnVerifier<'a> {
         for g in &prog.functions {
             v.funcs.insert(g.name.clone(), g);
         }
-        v.resize_params = pruv_core::check::resize_params(prog);
+        v.resize_params = pruv_core::check::length_changing_params(prog);
         v.struct_len_changes = struct_len_changes(prog, &v.resize_params);
         for d in &prog.types {
             v.inv_decls.insert(d.name().to_string(), d);
@@ -3085,6 +3085,55 @@ impl<'a> FnVerifier<'a> {
                 let fa = self.z.forall(std::slice::from_ref(&k), &rng.implies(&body), &[]);
                 self.assume(st, g, r_ast.eq(&fa));
                 return Ok(r);
+            }
+            "arr_reserve" => {
+                let cnt = arg(1)?.try_ast()?;
+                let ok = self.z.and(&[cnt.ge_i(0), cnt.le_i(MAX_LEN)]);
+                self.prove_core(st, g, &ok, pos(e), "call_requires", "precondition of arr_reserve", None);
+                return Ok(Val::Unit);
+            }
+            "arr_push" => {
+                let av = arg(0)?.try_arr()?;
+                let v = arg(1)?.try_ast()?;
+                self.prove_core(st, g, &av.n.lt_i(MAX_LEN), pos(e), "call_requires", "precondition of arr_push", None);
+                if av.elem == Elem::U8 {
+                    let ok = self.z.and(&[v.ge_i(0), v.le_i(255)]);
+                    self.prove_core(st, g, &ok, pos(e), "elem_range", "u8 element range 0..=255 for the pushed value", None);
+                }
+                let Expr::InoutArg(place) = &x.args[0] else { return Err("missing inout place".into()); };
+                let Expr::Var(var) = place.expr.as_ref() else { return Err("missing array binding".into()); };
+                let nv = av.like(av.a.store(&av.n, v), av.n.add(&self.z.int(1)), &var.name);
+                if nv.elem == Elem::U8 {
+                    self.assume(st, g, self.u8_dom(&nv));
+                }
+                self.store_collection_place(&place.expr, st, Val::Arr(nv))?;
+                self.post_refine(e, &[0], st, g)?;
+                return Ok(Val::Unit);
+            }
+            "arr_append" => {
+                let dv = arg(0)?.try_arr()?;
+                let sv = arg(1)?.try_arr()?;
+                let start = arg(2)?.try_ast()?;
+                let cnt = arg(3)?.try_ast()?;
+                let need = dv.n.add(cnt);
+                let ok = self.z.and(&[start.ge_i(0), cnt.ge_i(0), start.add(cnt).le(&sv.n), need.le_i(MAX_LEN)]);
+                self.prove_core(st, g, &ok, pos(e), "call_requires", "precondition of arr_append", None);
+                let p = self.z.int_const("arr_append!p");
+                let inr = self.z.and(&[p.ge(&dv.n), p.lt(&need)]);
+                let body = self.z.ite(&inr, &sv.a.select(&start.add(&p).sub(&dv.n)), &dv.a.select(&p));
+                let lam = self.z.lambda(&[p], &body);
+                let Expr::InoutArg(place) = &x.args[0] else { return Err("missing inout place".into()); };
+                let name = match place.expr.as_ref() {
+                    Expr::Var(v) => &v.name,
+                    _ => &dv.name,
+                };
+                let nv = dv.like(lam, need, name);
+                if nv.elem == Elem::U8 {
+                    self.assume(st, g, self.u8_dom(&nv));
+                }
+                self.store_collection_place(&place.expr, st, Val::Arr(nv))?;
+                self.post_refine(e, &[0], st, g)?;
+                return Ok(Val::Unit);
             }
             "copy_range" | "copy_within" => {
                 let dv = arg(0)?.try_arr()?.clone();
@@ -5516,7 +5565,7 @@ impl<'a> FnVerifier<'a> {
         // body can replace the whole array or call a resizing helper.
         // Without inout, calls = {} and snap = {}: names/keep (and the SMT) are exactly the old ones.
         let mut calls: BTreeSet<String> = BTreeSet::new();
-        call_writes(body, &mut calls, &|call, _| call.name != "vec_reserve");
+        call_writes(body, &mut calls, &|call, _| !matches!(call.name.as_str(), "vec_reserve" | "arr_reserve"));
         let mut keep: BTreeSet<String> = BTreeSet::new();
         if !calls.is_empty() || !self.snap.0.is_empty() {
             let mut whole: BTreeSet<String> = BTreeSet::new();
@@ -5524,7 +5573,7 @@ impl<'a> FnVerifier<'a> {
             names.extend(calls.iter().cloned());
             let mut resizes = BTreeSet::new();
             call_writes(body, &mut resizes, &|call, i| {
-                pruv_core::check::vec_resize_builtin(&call.name) || self.resize_params.contains(&(call.name.clone(), i))
+                pruv_core::check::vec_resize_builtin(&call.name) || matches!(call.name.as_str(), "arr_push" | "arr_append") || self.resize_params.contains(&(call.name.clone(), i))
             });
             for n in &names {
                 if (self.snap.contains(n) || calls.contains(n)) && !whole.contains(n) && !resizes.contains(n) {

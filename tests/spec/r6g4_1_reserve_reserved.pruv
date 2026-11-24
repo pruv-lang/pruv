@@ -1,0 +1,2 @@
+// spec: R-6g4-1 reject
+pub fn arr_reserve() -> () { return; }

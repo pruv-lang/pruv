@@ -1,0 +1,6 @@
+// spec: R-6g4-6 reject
+fn f(inout a: [i64], src: [u8]) -> () ! alloc
+  requires len(src) == 1
+{
+  arr_append(inout a, src, 1, 1);
+}

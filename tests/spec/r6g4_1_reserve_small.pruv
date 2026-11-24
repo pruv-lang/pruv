@@ -1,0 +1,27 @@
+// spec: R-6g4-1 accept
+fn reserve(inout a: [i64]) -> () ! alloc { arr_reserve(inout a, 1); }
+fn forward(inout a: [i64]) -> () ! alloc { reserve(inout a); }
+
+fn make_direct(n: i64) -> [i64] ! alloc
+  requires 0 <= n && n <= 4
+  ensures len(result) <= 4
+{
+  let mut a: [i64] = alloc(n, 0);
+  reserve(inout a);
+  return a;
+}
+
+fn make_indirect(n: i64) -> [i64] ! alloc
+  requires 0 <= n && n <= 4
+  ensures len(result) <= 4
+{
+  let mut a: [i64] = alloc(n, 0);
+  forward(inout a);
+  return a;
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let a: [i64] = make_direct(3);
+  let b: [i64] = make_indirect(2);
+  return len(a) + len(b);
+}

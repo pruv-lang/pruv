@@ -1,0 +1,18 @@
+{
+  "gen_absent": [
+    "__pruv_small"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "5"
+    ],
+    "alloc_balance": true
+  }
+}

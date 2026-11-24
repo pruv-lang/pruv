@@ -1,0 +1,2 @@
+// spec: R-6g4-2 reject
+fn f(inout a: [i64]) -> () { arr_push(inout a, 1); }

@@ -94,6 +94,7 @@ it can never be silently dropped.
 - `truncate(a, m)`: new array holding the first m elements of `a` (`0 <= m <= len(a)` must be proven, `verify`
   error `index_oob`). Needs `alloc`. Arrays only (`str` is a type error). When `a` is a local at its last use the
   generated code (Rust and LLVM) shortens it in place instead of copying; this is not observable.
+  Self-assignment also shortens the destination in place under R-6g4-3.
 - `resize(a, n, v)`: new array of length n whose first `len(a)` elements are those of `a` and whose remaining
   `n - len(a)` elements are v. `len(a) <= n <= 2^40` must be proven (`verify` error `index_oob`); for `[u8]` also
   `0 <= v <= 255` (`elem_range`, even when `n == len(a)`). The verifier knows `len(result) == n`,
@@ -102,8 +103,8 @@ it can never be silently dropped.
   its element type. Generic `[T]` and `str` are type errors. Arguments are evaluated a, n, v. The generated code makes
   one allocation of n, copies the prefix once and fills only the tail, so every element is written once. In the Rust
   backend the statement `x = resize(x, n, v)` on a `let mut` local or a resizable `inout` array grows `x` in place
-  (`Vec::resize`, no prefix copy) unless cost accounting is on; the LLVM backend grows the block with one realloc
-  (`pruv_regrow_v2`) and fills only the tail (D-LG32-2). An element read
+  unless cost accounting is on. The Rust backend reserves exactly before `Vec::resize` (R-6g4-4) and the LLVM
+  backend grows the block with one realloc (`pruv_regrow_v2`). Both fill only the tail (D-LG32-2). An element read
   directly off the call (`resize(a, n, v)[k]`, also through `copy`/`truncate`) keeps the array's storage at i64.
 - `band(a, b)`, `bor(a, b)`, `bxor(a, b)`: `(i64, i64) -> i64`, bitwise and/or/xor on the 64-bit two's-complement
   representation. Negative operands are allowed (`band(-1, 255) == 255`); the complement of `x` is `bxor(x, -1)`
@@ -1294,18 +1295,16 @@ set_at(inout w, 0, 7);
   read-only `match` binders, elements and calls are rejected. `inout` is contextual, not a keyword;
   malformed or combined modes (e.g. with `take`) are `parse/inout_syntax`.
 - **What the callee may do.** Read, index, `len`, `copy`, and assign elements (`a[i] = e`, with the usual bounds,
-  `u8` range and refinement proofs). Never `a = ...` (`type/immutable`), resize, move, store or return the view
-  itself (`type/array_alias`; return `copy(a)` instead). (LG5) It may reassign an `inout` array parameter as a
-  whole (`input = repack(input, hi)`, `a = alloc(len(old(a)) + 2, 7)`), the right side obeying the usual rules for
-  assignment to a typed array (section 6c, including the narrow element type of `alloc`). Such a parameter is
-  resizable: the caller learns its new length only from `ensures` (`len(a) == ...`, `len(old(a))`); without a length
-  clause the length is unknown after the call. A host entry (R-6f, explicit mode) with such a parameter is
-  `type/entry_signature` ("host entry F cannot reassign inout array parameter A"), because the host owns the buffer
-  and its length. The Rust backend keeps `&mut Vec<T>` for such a parameter; the LLVM backend passes a pointer to the
-  caller's `{ptr, len, cap}` slot and frees the old buffer on reassignment. A callee that never reassigns the whole
-  parameter is unchanged (`&mut [T]`, pointer and length). Reassigning needs the `alloc` effect when the right side
-  allocates; element assignment still needs none. It may pass `a` unmarked to a read-only parameter or
-  forward it as `inout a`.
+  `u8` range and refinement proofs). A callee may reassign an `inout` array parameter as a whole under the
+  assignment rules in section 6c. It may pass `a` unmarked to a read-only parameter or forward it as `inout a`.
+  Moving, storing or returning the view itself is `type/array_alias`.
+  An `inout` array uses the resizable ABI if its storage may be reallocated or its length changed, through whole
+  reassignment, `resize`, `arr_reserve`, `arr_push`, `arr_append`, or in-place `truncate`. Passing the parameter
+  directly or indirectly to another resizable `inout` parameter also selects this ABI. Rust uses `&mut Vec<T>` and
+  LLVM passes a pointer to the caller's `{ptr, len, cap}` slot. The fixed ABI uses `&mut [T]` in Rust and a
+  pointer and length in LLVM. A host entry (R-6f, explicit mode) requires the fixed ABI (`type/entry_signature`).
+  The caller learns a new length from `ensures` when the callee can change the length. Capacity-only operations
+  preserve the length, including when the parameter is forwarded.
 - **Exclusivity.** A whole marked binding may occur nowhere else in the same call's arguments, including inside nested calls
   or `len(a)`: `f(inout a, a)`, `f(inout a, len(a))` and `f(inout a, inout a)` are `type/inout_alias`. Compute
   `let n: i64 = len(a);` first. Read-only arguments may alias each other. Holds in every mode, also under
@@ -1319,10 +1318,10 @@ set_at(inout w, 0, 7);
   may not mention an `inout` parameter or `old` (`type/old_argument`; write `old(a)[old(b)[0]]` explicitly). Other
   operands (`old(a[0] + 1)`, a generic struct parameter, which cannot be `inout`) stay `type/old_argument`. It always means function entry. In `requires`
   a parameter is its entry value; in `ensures` an `inout` parameter is its final value. `len(a) == len(old(a))` is
-  always known for a fixed-length `inout` parameter (one the callee never reassigns as a whole); for a resizable one
-  (LG5) only `ensures` relate `len(a)` and `len(old(a))`. `old` is a proof object: no copy, no run-time check. Arrays still cannot be compared with `==`.
+  always known for an `inout` parameter whose length the callee cannot change. If the callee can change the length,
+  only `ensures` relate `len(a)` and `len(old(a))`. `old` is a proof object: no copy, no run-time check. Arrays still cannot be compared with `==`.
 - **Frame.** After `f(inout a, ...)` the caller knows only what `f`'s `ensures` says about `a`: fresh contents, and the
-  same length when the parameter is fixed-length (a resizable parameter's length comes only from `ensures`). An unconstrained element is arbitrary, even if the body never writes it, so state the frame
+  same length when the callee cannot change it. An unconstrained element is arbitrary, even if the body never writes it, so state the frame
   (`k != i ==> a[k] == old(a)[k]`). Other variables keep their values. The `requires` are proved on the pre-call
   arrays and `old` refers to them. `ensures` of an `inout` function are always applied at the call.
 - R-6g-1 **Inout calls in expressions.** A user function call with an `inout` argument may occur at any
@@ -1342,7 +1341,7 @@ set_at(inout w, 0, 7);
   Rust and LLVM evaluate the call in place. Expressions evaluate left to right, with arguments evaluated
   before the call they belong to. The verifier may model inout calls in fresh temporaries before the statement,
   in their original evaluation order. The existing checks on whole-expression calls still apply. The builtins
-  `copy_range`, `store_be` and `store_le` remain whole expression statements, and the rules for `par` are unchanged.
+  `copy_range`, `store_be`, `store_le`, `arr_reserve`, `arr_push` and `arr_append` require whole expression statements.
 - R-6g-2 **Struct inout parameters.** `inout x: S` is allowed for a non-generic struct `S`, emitted as
   `x: &mut S`. The callee may assign fields of `x` (also nested), use R-6e-2 on `x.f`, pass `x.f` to
   `map_get_mut` and forward `inout x`. Whole reassignment `x = e` is `type/immutable`. A generic struct is
@@ -1390,9 +1389,9 @@ set_at(inout w, 0, 7);
   (`verify/refinement_assign`), proved from `ensures` (a length-only refinement follows from the preserved length).
 - **Modes and back ends.** Verified and safe (`--no-verify`) modes both work. Safe mode checks the `requires` of an
   `inout` function on every call to it, including under `--trust-callers`, which only skips checks at host entries;
-  other internal calls follow the existing safe-mode rules. Rust emits
-  `&mut [T]`; LLVM passes the existing pointer and length with `noalias nocapture` and no `readonly`, and never frees
-  it. Neither allocates or copies for the parameter. Programs without `inout` compile exactly as before.
+  other internal calls follow the existing safe-mode rules. For fixed ABI arrays, Rust emits
+  `&mut [T]` and LLVM passes the existing pointer and length with `noalias nocapture`. Passing the parameter
+  does not allocate or copy. Programs without `inout` compile exactly as before.
 - **Host limits.** In explicit mode a root `pub` non-generic function may take `inout` array parameters
   (`[i64]`, `[u8]`, `[bool]`) on both back ends: Rust emits `&mut [T]`, the LLVM ABI symbol takes the pointer and
   length, and `--rust-bindings` forwards `b: &mut [T]` (section 7; `tests/runtime/g5_r19_resident_entry`). The host
@@ -1407,7 +1406,7 @@ set_at(inout w, 0, 7);
   `old_argument`; reused: `immutable`, `array_alias`, `recursive_borrow`, `entry_signature`, `foreign_signature`,
   `reserved`, `refinement_assign`.
 - **Field places (LG6).** A scalar field path (`f(inout c.n)`, `f(inout d.c.n)`) and a resizable array field
-  (`f(inout d.a)` where `f` reassigns `a`) work on both back ends. After the call the caller knows the field's
+  (`f(inout d.a)` where `f` uses the resizable ABI for `a`) work on both back ends. After the call the caller knows the field's
   length only from the callee's `ensures`. Tests: `tests/runtime/lg6_rt_field_inout.pruv`,
   `tests/must_reject/lg6_field_inout_reassign_len.pruv`.
 
@@ -1490,7 +1489,8 @@ borrowed value is live.
   - *Live range.* A `ref` / borrowing local is live from the statement after its `let` through the last statement
     of the same block that mentions it (a loop or `if` that mentions it anywhere counts whole).
   - *Exclusivity.* In the live range of a borrow, a shared root may be read but not assigned, stored into (element
-    or field), passed `inout`, moved, or given to `resize`/`truncate`-assign, `vec_push` or `vec_clear`; an exclusive
+    or field), passed `inout` (including `arr_reserve`, `arr_push` and `arr_append`), moved, or given to `resize`/
+    `truncate`-assign, `vec_push` or `vec_clear`; an exclusive
     root may not be used at all. A violation is `type/borrow_conflict`. This is the Rust rule (`&` / `&mut`), so
     the generated Rust borrow-checks.
   - *Escape.* The provenance of a returned borrow must be a subset of the `from` parameters; a local root is
@@ -1523,8 +1523,78 @@ borrowed value is live.
     [owned alias](tests/spec/r6g_11_own_alias.pruv), [LLVM](tests/spec/r6g_11_llvm.pruv).
 - R-6g-12 **String literal arguments (G-DB63-2).** A string literal that is the direct argument of a non-`inout`,
   non-`take` `str` parameter of a Pruv function is a borrowed static string: it needs no `! alloc` (Rust passes
-  `"abc"`, LLVM the read-only global). A literal in an owned position still allocates.
+  `"abc"`, LLVM the read-only global). A literal in an owned position still allocates. R-6g4-5 extends
+  literal lending to read-only `[u8]` parameters.
   Tests: [literal argument](tests/spec/r6g_12_literal_arg.pruv), [owned literal](tests/spec/r6g_12_literal_owned.pruv).
+
+## 6g4. Buffer growth (LB5)
+
+- R-6g4-1 **Reserve array capacity.** `arr_reserve(inout a, n) -> ()` is a whole statement and requires
+  `! alloc`. The destination is a `let mut` local array or a resizable `inout` array parameter of type
+  `[i64]`, `[u8]`, or `[bool]`. The verifier requires `0 <= n <= 2^40` (`call_requires`) and preserves the
+  length and every element. Capacity is not modeled. If capacity is below `len(a) + n`, the Rust backend
+  calls `Vec::reserve_exact` with the additional count and LLVM grows the block to `len(a) + n` with
+  `pruv_regrow_v2`. Neither writes elements. The name `arr_reserve` is reserved.
+  Tests: [reserve and append](tests/spec/r6g4_1_reserve_push.pruv), [count limit](tests/spec/r6g4_1_reserve_limit.pruv),
+  [unreadable tail](tests/spec/r6g4_1_reserve_tail.pruv), [read-only parameter](tests/spec/r6g4_1_reserve_readonly.pruv),
+  [live view](tests/spec/r6g4_1_reserve_borrow.pruv), [missing effect](tests/spec/r6g4_1_reserve_effect.pruv),
+  [nested call](tests/spec/r6g4_1_reserve_statement.pruv), [reserved name](tests/spec/r6g4_1_reserve_reserved.pruv),
+  [resizable small result](tests/spec/r6g4_1_reserve_small.pruv).
+- R-6g4-2 **Append an array element.** `arr_push(inout a, v) -> ()` is a whole statement, accepts the
+  same destinations as R-6g4-1, and requires `! alloc`. The verifier requires `len(a) < 2^40`
+  (`call_requires`) and, for `[u8]`, `0 <= v <= 255` (`elem_range`). The new length is the old length
+  plus one. The old prefix is preserved and the new last element is `v`. The operation assigns to `a` for
+  loop framing and conflicts with live views under R-6g-11. Rust calls `Vec::push`. If the buffer is full,
+  LLVM grows its capacity to `max(2 * cap, len(a) + 1, 4)` with `pruv_regrow_v2`, then writes the new element.
+  Spare capacity is never zero-filled. The name `arr_push` is reserved.
+  Tests: [reserve and append](tests/spec/r6g4_1_reserve_push.pruv), [length limit](tests/spec/r6g4_2_push_limit.pruv),
+  [byte range](tests/spec/r6g4_2_push_byte_range.pruv), [loop framing](tests/spec/r6g4_2_push_loop_frame.pruv),
+  [read-only parameter](tests/spec/r6g4_2_push_readonly.pruv), [live view](tests/spec/r6g4_2_push_borrow.pruv),
+  [missing effect](tests/spec/r6g4_2_push_effect.pruv), [nested call](tests/spec/r6g4_2_push_statement.pruv),
+  [reserved name](tests/spec/r6g4_2_push_reserved.pruv).
+- R-6g4-3 **Truncate in place.** Without cost accounting, `x = truncate(x, m)` shortens an eligible
+  destination in place, using the same place eligibility as `x = resize(x, n, v)`, including eligible array
+  fields. Rust checks the length in safe mode and calls `Vec::truncate`. LLVM applies the same range
+  check as the copy form and updates the tracked length, retaining the block and capacity. The required
+  effect, bounds and prefix semantics of `truncate` are unchanged.
+  Tests: [local, inout, and field truncation](tests/spec/r6g4_3_truncate_assign.pruv),
+  [out-of-range length](tests/spec/r6g4_3_truncate_out_of_range.pruv).
+- R-6g4-4 **Exact capacity on resize growth.** In-place resize in Rust reserves
+  `(n as usize).saturating_sub(x.len())` additional elements with `Vec::reserve_exact` before
+  calling `Vec::resize`. LLVM already grows the block to capacity `n` with `pruv_regrow_v2`
+  when needed. Existing capacity sufficient for `n` is retained.
+  Tests: [exact reserve before resize](tests/spec/r6g4_4_resize_exact.pruv),
+  [length below the existing length](tests/spec/r6g4_4_resize_shrink.pruv).
+- R-6g4-5 **Lend literal UTF-8 bytes.** A string literal passed directly to a non-`inout`, non-`take`
+  `[u8]` parameter of a Pruv function is a static read-only byte view and requires no `! alloc`.
+  Its length and elements are the literal's UTF-8 bytes, including when proving a callee's
+  `requires`. Rust uses the literal's `.as_bytes()` and LLVM passes the read-only global's pointer
+  and byte length. The view also has static lifetime for calls with `! async`. A non-literal `str` remains
+  a type error, and `inout` and `take` parameters do not accept a literal by this rule.
+  Tests: [UTF-8 bytes and async call](tests/spec/r6g4_5_literal_bytes.pruv),
+  [inout parameter](tests/spec/r6g4_5_literal_inout.pruv), [take parameter](tests/spec/r6g4_5_literal_take.pruv),
+  [non-literal string](tests/spec/r6g4_5_literal_value.pruv),
+  [runtime contract indexing](tests/spec/r6g4_5_literal_contract_index.pruv),
+  [literal in a predicate body](tests/spec/r6g4_5_literal_predicate.pruv).
+- R-6g4-6 **Append an array range.** `arr_append(inout a, src, s, n) -> ()` is a whole statement and
+  requires `! alloc`. The destination is a `let mut` local or resizable `inout` array, including a
+  mutable array field under R-6g-3. Both arrays may be `[i64]` or both may be `[u8]`. A `[u8]`
+  source may also append to an `[i64]` destination by widening each byte. The source and scalar
+  arguments must not mention an overlapping destination place (`type/inout_alias`). The verifier
+  requires `0 <= s && 0 <= n && s + n <= len(src) && len(a) + n <= 2^40` (`call_requires`), where
+  `s` and `n` are `i64`. The new length is the old length plus `n`. The old prefix is preserved
+  and `a[old_len + k] == src[s + k]` for `0 <= k < n`. The operation assigns to `a` for loop
+  framing and conflicts with live views under R-6g-11. Rust calls `Vec::extend_from_slice` or
+  `Vec::extend` over a widening iterator. If the new length exceeds capacity, LLVM grows the
+  buffer to `max(2 * cap, len(a) + n, 4)` with `pruv_regrow_v2`, then copies the range with
+  `memcpy` or a widening loop. The name `arr_append` is reserved.
+  Tests: [bulk append](tests/spec/r6g4_6_append_bulk.pruv), [start](tests/spec/r6g4_6_append_start.pruv),
+  [count](tests/spec/r6g4_6_append_count.pruv), [length limit](tests/spec/r6g4_6_append_limit.pruv),
+  [alias](tests/spec/r6g4_6_append_alias.pruv), [missing effect](tests/spec/r6g4_6_append_effect.pruv),
+  [read-only parameter](tests/spec/r6g4_6_append_readonly.pruv), [live view](tests/spec/r6g4_6_append_borrow.pruv),
+  [loop framing](tests/spec/r6g4_6_append_loop_frame.pruv), [loop length bound](tests/spec/r6g4_6_append_loop_bound.pruv),
+  [nested call](tests/spec/r6g4_6_append_statement.pruv), [reserved name](tests/spec/r6g4_6_append_reserved.pruv),
+  [element type](tests/spec/r6g4_6_append_type.pruv).
 
 ## 6h. Files (G10)
 

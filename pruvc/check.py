@@ -36,7 +36,9 @@ def x_has_bit(e):
 
 # P2 batch 4: byte-word access on [u8]: load_be(a, i, n) and the statement-only store_be(inout a, i, w, n)
 WORD_BUILTINS = ("load_be", "store_be", "load_le", "store_le")
-BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "utf8_valid_span", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within", "subview") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range; L-copy-range
+ARRAY_GROW_BUILTINS = ("arr_reserve", "arr_push", "arr_append")
+
+BUILTIN_FNS = ARRAY_GROW_BUILTINS + ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "utf8_valid_span", "str_from_utf8", "truncate", "eq_range", "resize", "copy_range", "copy_within", "subview") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range; L-copy-range
 RESERVED_TYPE_NAMES = ("Option", "Result", "Some", "None", "Ok", "Err")
 TYPE_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9_]*\Z")
 FIELD_NAME_RE = re.compile(r"[a-z][A-Za-z0-9_]*\Z")
@@ -492,8 +494,8 @@ def same_place(a, b):
     return isinstance(ar, Var) and isinstance(br, Var) and ar.name == br.name and ap == bp
 
 
-def array_resize_params(prog):
-    """Find inout arrays replaced directly or forwarded to a parameter that can replace them."""
+def array_resize_params(prog, *, length_only=False):
+    """Find inout arrays that may be replaced or regrown, including through forwarding."""
     from foreign_shim import _walk
 
     arrays = {(f.name, i) for f in prog.functions for i, p in enumerate(f.params)
@@ -511,9 +513,13 @@ def array_resize_params(prog):
             elif isinstance(node, Call):
                 for i, arg in enumerate(node.args):
                     target = (node.name, i)
-                    if (target in arrays and isinstance(arg, InoutArg) and isinstance(arg.expr, Var)
-                            and arg.expr.name in params):
-                        forwarded.setdefault(target, set()).add(params[arg.expr.name])
+                    if not isinstance(arg, InoutArg) or not isinstance(arg.expr, Var) or arg.expr.name not in params:
+                        continue
+                    source = params[arg.expr.name]
+                    if node.name in ARRAY_GROW_BUILTINS and (node.name != "arr_reserve" or not length_only):
+                        resizes.add(source)
+                    elif target in arrays:
+                        forwarded.setdefault(target, set()).add(source)
 
         _walk(f.body, visit)
     pending = list(resizes)
@@ -534,12 +540,11 @@ def array_resize_args(f, resizes):
     def visit(node):
         if isinstance(node, Call):
             for i, arg in enumerate(node.args):
-                if ((node.name, i) in resizes and isinstance(arg, InoutArg)
+                if (((node.name, i) in resizes or node.name in ARRAY_GROW_BUILTINS) and isinstance(arg, InoutArg)
                         and isinstance(arg.expr, Var)):
                     names.add(arg.expr.name)
 
-    if resizes:
-        _walk(f.body, visit)
+    _walk(f.body, visit)
     return names
 
 
@@ -2131,7 +2136,8 @@ class Checker:
         for e, conditional in calls:
             f = s.funcs.get(e.name)
             marked = ([arg for arg in e.args if isinstance(arg, InoutArg)]
-                      if f is not None or e.name in ("map_remove", "map_take", "vec_clear", "vec_reserve", "vec_extend_from_slice", "ev_read_into", "ev_proc_read_into") else [])
+                      if f is not None or e.name in ARRAY_GROW_BUILTINS +
+                      ("map_remove", "map_take", "vec_clear", "vec_reserve", "vec_extend_from_slice", "ev_read_into", "ev_proc_read_into") else [])
             if marked:
                 for arg in marked:
                     root, path = field_place(arg.expr)
@@ -3473,6 +3479,13 @@ class Checker:
         terr(e, "view_context", "subview(...) is only allowed as a direct argument to a non-inout array parameter of a function call",
              "pass it straight to a function, or use copy_range to make an owned array")
 
+    def call_user_arg(s, e, want, scope, c, borrow):
+        if borrow and want == ARRAY_U8 and isinstance(e, StrLit):
+            e.ty = ARRAY_U8
+            e.static_str = True
+            return
+        s.user_arg(e, want, scope, c, borrow)
+
     def user_arg(s, e, want, scope, c, borrow):
         if borrow and want == STR and isinstance(e, StrLit):
             e.static_str = True
@@ -3558,7 +3571,7 @@ class Checker:
                 else:
                     user_call = f is not CATALOG.get(n)
                     if user_call:
-                        s.user_arg(arg, want, scope, c, f.foreign is None and not p.take)
+                        s.call_user_arg(arg, want, scope, c, f.foreign is None and not p.take)
                     else:
                         s.expect(arg, want, scope, c)
                 if p.take and getattr(arg, "map_iter_view", False):
@@ -3673,23 +3686,28 @@ class Checker:
         w.ty = I64
         return UNIT if store else I64
 
-    def copy_range_call(s, e, scope, c):
-        """Check the shared destination-place and exclusivity rules for the range-copy builtins."""
+    def array_stmt_call(s, e, scope, c):
+        """Check array statements with an exclusive destination place."""
         a = e.args
         n = e.name
         within = n == "copy_within"
-        argc = 4 if within else 5
+        grow = n in ARRAY_GROW_BUILTINS
+        append = n == "arr_append"
+        argc = 4 if append or within else 2 if grow else 5
         if c: terr(e, "effect_in_contract", "%s is not allowed in contracts" % n)
+        if grow and e is not s.statement_call:
+            terr(e, "inout_context", "%s must be a whole expression statement" % n)
         if len(a) != argc:
             terr(e, "arity", "%s takes %d argument(s), got %d" % (n, argc, len(a)))
         arg = a[0]
         if not isinstance(arg, InoutArg):
-            terr(arg, "inout_argument", "the destination array of %s needs the `inout` marker" % n,
-                 "write `%s(inout name, %s)` with a `let mut` local array or an inout parameter" %
-                 (n, "dst, src, n" if within else "i, src, j, n"))
+            fix = ("name a `let mut` local array or an inout parameter" if grow else
+                   "write `%s(inout name, %s)` with a `let mut` local array or an inout parameter" %
+                   (n, "dst, src, n" if within else "i, src, j, n"))
+            terr(arg, "inout_argument", "the destination array of %s needs the `inout` marker" % n, fix)
         op = arg.expr
         root, path = field_place(op)
-        if not isinstance(root, Var) or (within and path):
+        if not isinstance(root, Var) or ((within or (grow and not append)) and path):
             terr(arg, "inout_argument", "an inout argument must be the whole name of a local array or an inout "
                  "parameter", "name a `let mut` local array or an inout parameter of this function")
         v = s.lookup(root, root.name, scope, path)
@@ -3701,7 +3719,10 @@ class Checker:
                 root.name, "parameter" if v[2] == "param" else "binding"),
                  "declare the parameter `inout %s: ...`, or copy into a `let mut` local" % root.name)
         ty = s.expr(op, scope, c) if path else v[0]
-        if ty not in (ARRAY, ARRAY_U8):
+        if grow and not append:
+            if ty not in (ARRAY, ARRAY_U8, ARRAY_BOOL):
+                terr(arg, "type_mismatch", "%s takes [i64], [u8] or [bool], found %s" % (n, type_name(ty)))
+        elif ty not in (ARRAY, ARRAY_U8):
             terr(arg, "type_mismatch", "expected %s or %s, found %s" % (
                 type_name(ARRAY), type_name(ARRAY_U8), type_name(ty)))
         if root.name in s.active_roots or s.match_path_held(root.name, path):
@@ -3711,22 +3732,33 @@ class Checker:
             s.check_iteration_borrow(arg, root.name, path)
         op.ty = ty
         arg.ty = ty
-        s.expect(a[1], I64, scope, c)
-        s.expect(a[2], I64 if within else ty, scope, c)
-        s.expect(a[3], I64, scope, c)
-        if not within:
-            s.expect(a[4], I64, scope, c)
-        others = a[1:2] + a[3:] if not within and same_place(op, a[2]) else a[1:]
+        if append:
+            src = s.expr(a[1], scope, c)
+            if src != ty and not (ty == ARRAY and src == ARRAY_U8):
+                terr(a[1], "type_mismatch", "arr_append cannot append %s to %s" % (type_name(src), type_name(ty)))
+            s.expect(a[2], I64, scope, c)
+            s.expect(a[3], I64, scope, c)
+        else:
+            s.expect(a[1], s.elem_type(ty) if n == "arr_push" else I64, scope, c)
+        if not grow:
+            s.expect(a[2], I64 if within else ty, scope, c)
+            s.expect(a[3], I64, scope, c)
+            if not within:
+                s.expect(a[4], I64, scope, c)
+        others = a[1:2] + a[3:] if not grow and not within and same_place(op, a[2]) else a[1:]
         if any(name == root.name and _paths_overlap(path, other)
                for x in others for name, other in _place_mentions(x)):
             terr(arg, "inout_alias", "%s is passed inout and also used elsewhere in the arguments of this call" % root.name,
+                 "compute the value before the call" if grow else
                  "compute the index arguments before the call" if within else
                  "copy the source first with `let mut t: [..] = copy(%s);` (needs alloc), then pass t" %
                  ".".join((root.name,) + path))
-        if e is not s.boundary:
+        if not grow and e is not s.boundary:
             terr(e, "inout_context", "%s must be a whole expression statement" % n,
                  "write `%s(%s);` as a statement" %
                  (n, "inout a, dst, src, n" if within else "inout dst, i, src, j, n"))
+        if grow:
+            s.used_effects.add("alloc")
         return UNIT
 
     def old_call(s, e, scope):
@@ -3960,8 +3992,8 @@ class Checker:
             return I64
         if n in WORD_BUILTINS:  # P2 batch 4
             return s.word_call(e, scope, c)
-        if n in ("copy_range", "copy_within"):
-            return s.copy_range_call(e, scope, c)
+        if n in ("copy_range", "copy_within") + ARRAY_GROW_BUILTINS:
+            return s.array_stmt_call(e, scope, c)
         if n == "eq_range":     # L3-10: eq_range(a, i, b, j, n) -> bool, code only, a and b of one integer array type
             if c: terr(e, "effect_in_contract", "eq_range is not allowed in contracts")
             arity(5)
@@ -4083,7 +4115,7 @@ class Checker:
                     if catalog:
                         s.expect(arg, want, scope, c)
                     else:
-                        s.user_arg(arg, want, scope, c, f.foreign is None and not p.take)
+                        s.call_user_arg(arg, want, scope, c, f.foreign is None and not p.take)
                 if p.take and getattr(arg, "map_iter_view", False):
                     s.own(arg)
         if catalog:
@@ -4242,7 +4274,11 @@ def x_scan_expr(e, funcs):
         return None
     if isinstance(e, Call):
         if e.name in funcs or e.name == "len" or e.name in BIT_BUILTINS or e.name in ("load_be", "load_le", "utf8_valid", "utf8_valid_span"):
-            for a in e.args:
+            f = funcs.get(e.name)
+            for i, a in enumerate(e.args):
+                if (isinstance(a, StrLit) and f is not None and f.foreign is None and i < len(f.params)
+                        and f.params[i].mode is None and not f.params[i].take and f.params[i].type == ARRAY_U8):
+                    continue
                 r = x_scan_expr(a, funcs)
                 if r is not None:
                     return r

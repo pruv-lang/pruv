@@ -1,0 +1,10 @@
+// spec: R-6g4-5 accept
+pub pred fn p(a: [u8]) -> bool { return len(a) == 1; }
+pub pred fn q() -> bool { return p("x"); }
+
+pub fn checksum() -> i64
+  requires q()
+{
+  assert q();
+  return 1;
+}

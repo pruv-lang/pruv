@@ -427,9 +427,10 @@ void *pruv_shrink_v2(void *data, int64_t len, int64_t m, int64_t size, int64_t a
 #endif
 }
 
-/* LG32 (G-DB52-4): grows a block in place for `x = resize(x, n, v)`. The module passes the block (data), its
- * allocated element count (cap), the new element count n and the element layout (size, align). Precondition (checked
- * by the inline @pruv_regrow helpers): n > cap, n >= 1, n <= PRUV_MAX_LEN, valid layout. A NULL block or cap <= 0
+/* Grows an array block in place without initializing the new capacity. The module passes the block (data), its
+ * allocated element count (cap), the new capacity n and the element layout (size, align). Callers ensure
+ * n > cap, n >= 1 and a valid layout. Resize uses n <= PRUV_MAX_LEN. Reserve and push use capacities of up to
+ * 2 * PRUV_MAX_LEN without increasing the logical length past PRUV_MAX_LEN. A NULL block or cap <= 0
  * (an empty array) is a plain pruv_raw_alloc_v3. Otherwise the block is realloc'ed and the old block is gone, so the
  * old and new blocks are never live together. A block that came from the per-thread free cache keeps its exact
  * byte layout (cap * size bytes, align), so realloc with cap is correct for it too. Under -DPRUV_COUNT_ALLOCS a
