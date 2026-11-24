@@ -307,6 +307,7 @@ struct Checker {
     cur_name: String,
     cur_ret: GType,
     borrowed_result: bool,
+    place_functions: crate::borrowed::PlaceFunctions,
     try_count: usize,
     used_effects: BTreeSet<String>,
     /// Expected array type, turned on only when the right-hand expression of a let/reassignment/return is itself an alloc call (alloc takes it right away).
@@ -403,7 +404,7 @@ pub fn check_explicit(
     c.explicit = true;
     c.host_entry = g4.fn_meta.iter().map(|m| m.host_entry).collect();
     c.run(prog)?;
-    crate::borrowed::check(prog)?;
+    crate::borrowed::check(prog, &c.place_functions)?;
     prog.contract_vec_slice = c.contract_vec_slice;
     g4.remove_preds(&prog.functions);
     prog.functions.retain(|f| !f.pred);
@@ -421,7 +422,7 @@ pub fn check_with_externs(prog: &mut Program, externs: &[String]) -> Result<Type
     let mut c = Checker::new(prog, externs, &[])?;
     prog.uses_inout = Some(c.uses_inout); // G5 A0: lets the staging guard skip its walk for inout-free programs
     c.run(prog)?;
-    crate::borrowed::check(prog)?;
+    crate::borrowed::check(prog, &c.place_functions)?;
     prog.contract_vec_slice = c.contract_vec_slice;
     prog.functions.retain(|f| !f.pred);
     Ok(c.tt)
@@ -893,7 +894,7 @@ pub(crate) fn mentions(e: &Expr, name: &str) -> bool {
     crate::refine::kids(e).into_iter().any(|k| mentions(k, name))
 }
 
-fn paths_overlap(a: &[String], b: &[String]) -> bool {
+pub(crate) fn paths_overlap(a: &[String], b: &[String]) -> bool {
     a.starts_with(b) || b.starts_with(a)
 }
 
@@ -1043,6 +1044,7 @@ impl Checker {
             cur_name: String::new(),
             cur_ret: unitt(),
             borrowed_result: false,
+            place_functions: HashMap::new(),
             try_count: 0,
             used_effects: BTreeSet::new(),
             alloc_want: None,
@@ -1115,6 +1117,7 @@ impl Checker {
         for d in &prog.types {
             self.decls.insert(d.name().to_string(), d.clone());
         }
+        self.resolve_places(prog)?;
         // likewise the signatures in `funcs` were taken before normalization (Python reads the shared nodes)
         for f in &prog.functions {
             if let Some(info) = self.funcs.get_mut(&f.name) {
@@ -1514,11 +1517,130 @@ impl Checker {
         }
     }
 
+    fn resolve_places(&mut self, prog: &mut Program) -> Res<()> {
+        for f in &mut prog.functions {
+            if !f.has_places() { continue; }
+            let mut roots = f.params.iter().filter(|p| p.mode_pos.is_some())
+                .map(|p| (p.name.clone(), p.ty.clone())).collect();
+            let mut bindings = HashMap::new();
+            self.resolve_place_block(&mut f.body, &mut roots, &mut bindings)?;
+            self.place_functions.insert(f.name.clone(), bindings);
+        }
+        Ok(())
+    }
+
+    fn resolve_place_block(
+        &self, body: &mut [Stmt], roots: &mut HashMap<String, String>, bindings: &mut crate::borrowed::PlaceRoots,
+    ) -> Res<()> {
+        for st in body {
+            match st {
+                Stmt::Let(s) if s.is_place() => {
+                    if s.mutable {
+                        return Err(terr(s.line, s.col, "borrow_signature", "a place binding cannot be `let mut`",
+                            format!("write `let {} = inout ...;`; the binding itself is writable", s.name)));
+                    }
+                    let Expr::InoutArg(arg) = &mut s.value else { unreachable!() };
+                    let (root, path, ty) = self.resolve_place(&mut arg.expr, roots)?;
+                    arg.ty = Some(ty.clone());
+                    if !s.ty.is_empty() && s.ty != ty {
+                        return Err(terr(s.line, s.col, "type_mismatch", format!("{} is declared {} but the place has type {}",
+                            s.name, tn(&GType::from_key(&s.ty)), tn(&GType::from_key(&ty))), ""));
+                    }
+                    s.ty = ty;
+                    bindings.insert((s.line, s.col), (root, path));
+                }
+                Stmt::Let(s) if s.mutable => { roots.insert(s.name.clone(), s.ty.clone()); }
+                Stmt::If(s) => {
+                    self.resolve_place_block(&mut s.then, roots, bindings)?;
+                    self.resolve_place_block(&mut s.els, roots, bindings)?;
+                }
+                Stmt::While(s) => self.resolve_place_block(&mut s.body, roots, bindings)?,
+                Stmt::ForMap(s) => self.resolve_place_block(&mut s.body, roots, bindings)?,
+                Stmt::Match(s) => for arm in &mut s.arms { self.resolve_place_block(&mut arm.body, roots, bindings)?; },
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn bad_place(line: i64, col: i64, why: impl std::fmt::Display) -> PruvError {
+        terr(line, col, "place_binding", format!("a place binding needs a place: {why}"),
+            "bind `x`, `x.f`, `x[i]` or `if c { x.a } else { x.b }` of a `let mut` local or an inout parameter")
+    }
+
+    fn resolve_place(&self, e: &mut Expr, roots: &HashMap<String, String>) -> Res<(String, Vec<String>, String)> {
+        match e {
+            Expr::Var(v) => {
+                let ty = roots.get(&v.name).ok_or_else(|| Self::bad_place(v.line, v.col,
+                    format!("{} is not a `let mut` local or an inout parameter", v.name)))?;
+                Ok((v.name.clone(), Vec::new(), ty.clone()))
+            }
+            Expr::FieldAccess(f) => {
+                let (root, mut path, ty) = self.resolve_place(&mut f.base, roots)?;
+                let field = match self.decls.get(&ty) {
+                    Some(TypeDecl::Struct(s)) => s.fields.iter().find(|d| d.name == f.field),
+                    _ => None,
+                }.ok_or_else(|| Self::bad_place(f.line, f.col,
+                    format!("{} has no field {}", tn(&GType::from_key(&ty)), f.field)))?;
+                path.push(f.field.clone());
+                Ok((root, path, field.ty.clone()))
+            }
+            Expr::Index(i) => {
+                let (root, path, ty) = self.resolve_place(&mut i.array, roots)?;
+                let elem = match ty.as_str() {
+                    "array" => "i64",
+                    "array_bool" => "bool",
+                    _ => return Err(Self::bad_place(i.line, i.col, format!(
+                        "an element of {} (only [i64] and [bool] elements are places)", tn(&GType::from_key(&ty))))),
+                };
+                Ok((root, path, elem.into()))
+            }
+            Expr::Call(c) if PlaceIf::matches(c) => {
+                let [_, then, els] = c.args.as_mut_slice() else { unreachable!() };
+                let (root, mut path, ty) = self.resolve_place(then, roots)?;
+                let (other, other_path, other_ty) = self.resolve_place(els, roots)?;
+                if root != other {
+                    return Err(Self::bad_place(c.line, c.col, format!("the arms name different roots {root} and {other}")));
+                }
+                if ty != other_ty {
+                    return Err(Self::bad_place(c.line, c.col, format!("the arms have different types {} and {}",
+                        tn(&GType::from_key(&ty)), tn(&GType::from_key(&other_ty)))));
+                }
+                path.truncate(path.iter().zip(&other_path).take_while(|(a, b)| a == b).count());
+                c.ty = Some(ty.clone());
+                Ok((root, path, ty))
+            }
+            _ => Err(Self::bad_place(e.line(), e.col(), "this expression is not a place")),
+        }
+    }
+
+    fn check_place(&mut self, e: &mut Expr, scope: &Scope) -> Res<()> {
+        if let Expr::Call(c) = e {
+            if PlaceIf::matches(c) {
+                let [cond, then, els] = c.args.as_mut_slice() else { unreachable!() };
+                self.expect(cond, &boolt(), scope, false, None)?;
+                self.check_place(then, scope)?;
+                return self.check_place(els, scope);
+            }
+        }
+        let (mut root, _) = field_place(e);
+        while let Expr::Index(i) = root {
+            root = field_place(&i.array).0;
+        }
+        let Expr::Var(v) = root else { unreachable!("resolved place root") };
+        let entry = self.lookup(v.line, v.col, &v.name, scope, &[])?;
+        if !(entry.kind == "inout" || entry.kind == "local" && entry.mutable) {
+            return Err(Self::bad_place(v.line, v.col, format!("{} is not a `let mut` local or an inout parameter", v.name)));
+        }
+        self.expr(e, scope, false)?;
+        Ok(())
+    }
+
     fn norm_stmts(&self, stmts: &mut [Stmt]) {
         for st in stmts.iter_mut() {
             match st {
                 Stmt::Let(s) => {
-                    s.ty = self.norm_key(&s.ty);
+                    if !s.ty.is_empty() { s.ty = self.norm_key(&s.ty); }
                     self.norm_expr(&mut s.value);
                 }
                 Stmt::Assign(s) => self.norm_expr(&mut s.value),
@@ -1625,7 +1747,7 @@ impl Checker {
             Expr::FieldAccess(x) => self.norm_expr(&mut x.base),
             Expr::IsVariant(x) => self.norm_expr(&mut x.value),
             Expr::VariantField(x) => self.norm_expr(&mut x.value),
-            Expr::InoutArg(x) => self.norm_expr(&mut x.expr), // G5 A0
+            Expr::InoutArg(x) => self.norm_expr(&mut x.expr),
             Expr::Spent(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StrLit(_) | Expr::Var(_) | Expr::Move(_) => {}
         }
     }
@@ -3672,6 +3794,12 @@ impl Checker {
                     ));
                 }
                 let sty = GType::from_key(&s.ty);
+                if s.is_place() {
+                    let Expr::InoutArg(arg) = &mut s.value else { unreachable!() };
+                    self.check_place(&mut arg.expr, scope)?;
+                    scope.insert(s.name.clone(), Entry { ty: sty, mutable: true, kind: "inout" });
+                    return Ok(());
+                }
                 if sty == unitt() {
                     return Err(terr(s.line, s.col, "unit_let", "cannot bind a () value", ""));
                 }
@@ -7054,7 +7182,7 @@ fn x_scan_block(f: &Function, stmts: &[Stmt], checker: &Checker) -> Option<Strin
         match st {
             Stmt::Let(l) => {
                 let t = GType::from_key(&l.ty);
-                if l.mutable || l.refine.is_some() || (t != i64t() && t != boolt()) {
+                if l.is_place() || l.mutable || l.refine.is_some() || (t != i64t() && t != boolt()) {
                     return Some(X_R_STMT.into());
                 }
                 if let Some(r) = x_scan_expr(&l.value, checker) {

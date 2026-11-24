@@ -110,6 +110,34 @@ pub struct Move { pub line: i64, pub col: i64, pub name: String, pub fields: Vec
 /// argument names, proved right after the call transition. Not emitted in the dump; empty everywhere else (also in mono copies).
 pub struct InoutArg { pub line: i64, pub col: i64, pub expr: Box<Expr>, pub ty: Ty, pub post_refine: Vec<Assert> }
 
+/// Conditional place syntax, encoded in the expression enum's call payload.
+/// The reserved name cannot be written in source, and the front end handles this
+/// payload as a place node without resolving it as a call.
+pub(crate) struct PlaceIf {
+    pub line: i64,
+    pub col: i64,
+    pub cond: Expr,
+    pub then: Expr,
+    pub els: Expr,
+    pub ty: Ty,
+}
+
+impl PlaceIf {
+    const NAME: &str = "@place_if";
+
+    pub fn into_expr(self) -> Expr {
+        Expr::Call(Call {
+            line: self.line, col: self.col, name: Self::NAME.into(),
+            args: vec![self.cond, self.then, self.els], ty: self.ty,
+            targs: None, inst: None, old: None, opaque_c: false,
+        })
+    }
+
+    pub fn matches(call: &Call) -> bool {
+        call.name == Self::NAME
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Spent(Spent),
@@ -228,8 +256,16 @@ pub enum TypeDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Let {
     pub borrowed: bool,
-    pub line: i64, pub col: i64, pub name: String, pub mutable: bool, pub ty: Type, pub value: Expr,
+    pub line: i64, pub col: i64, pub name: String, pub mutable: bool,
+    /// Empty only for an unannotated place binding before type resolution.
+    pub ty: Type,
+    pub value: Expr,
     pub refine: Option<Refinement>,
+}
+impl Let {
+    pub(crate) fn is_place(&self) -> bool {
+        matches!(&self.value, Expr::InoutArg(_))
+    }
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct Assign { pub line: i64, pub col: i64, pub name: String, pub value: Expr, pub deref: bool }
@@ -286,6 +322,25 @@ pub enum Stmt {
     Match(Match),
 }
 
+impl Stmt {
+    pub(crate) fn position(&self) -> (i64, i64) {
+        match self {
+            Self::Par(s) => (s.line, s.col),
+            Self::Let(s) => (s.line, s.col),
+            Self::Assign(s) => (s.line, s.col),
+            Self::IndexAssign(s) => (s.line, s.col),
+            Self::If(s) => (s.line, s.col),
+            Self::While(s) => (s.line, s.col),
+            Self::ForMap(s) => (s.line, s.col),
+            Self::Return(s) => (s.line, s.col),
+            Self::Assert(s) => (s.line, s.col),
+            Self::ExprStmt(s) => (s.line, s.col),
+            Self::FieldAssign(s) => (s.line, s.col),
+            Self::Match(s) => (s.line, s.col),
+        }
+    }
+}
+
 // ---------- top level ----------
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FnAttribute {
@@ -321,6 +376,20 @@ pub struct Function {
 }
 
 impl Function {
+    pub(crate) fn has_places(&self) -> bool {
+        fn block(body: &[Stmt]) -> bool {
+            body.iter().any(|st| match st {
+                Stmt::Let(s) => s.is_place(),
+                Stmt::If(s) => block(&s.then) || block(&s.els),
+                Stmt::While(s) => block(&s.body),
+                Stmt::ForMap(s) => block(&s.body),
+                Stmt::Match(s) => s.arms.iter().any(|arm| block(&arm.body)),
+                _ => false,
+            })
+        }
+        block(&self.body)
+    }
+
     /// An inout buffer lent by a borrowed result serves as resizable scratch storage.
     pub fn borrows_inout_buffer(&self, source: &Expr) -> bool {
         let name = match source {

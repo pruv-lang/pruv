@@ -494,7 +494,10 @@ impl Expander {
             let mut after: Vec<Stmt> = Vec::new();
             // G5 A1: annotate the inout arguments of the statement's value expression (before the scope update below)
             match &mut st {
-                Stmt::Let(l) => self.annotate(&mut l.value, scope),
+                Stmt::Let(l) => match &mut l.value {
+                    Expr::InoutArg(arg) => self.annotate(&mut arg.expr, scope),
+                    value => self.annotate(value, scope),
+                },
                 Stmt::Assign(a) => self.annotate(&mut a.value, scope),
                 Stmt::Return(r) => {
                     if let Some(v) = r.value.as_mut() {
