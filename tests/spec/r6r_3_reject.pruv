@@ -1,0 +1,6 @@
+// spec: R-6r-3 reject
+fn f(n: i64) -> i64 {
+  let mut i: i64 = 0;
+  while i < n decreases n - i { i = i + 1; break i; }
+  return i;
+}

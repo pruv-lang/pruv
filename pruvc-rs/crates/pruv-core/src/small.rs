@@ -139,6 +139,7 @@ fn stmts_ok(stmts: &[Stmt], name: &str, write_ok: bool, fmap: &Fmap) -> bool {
             }
             Stmt::While(x) => expr_ok(&x.cond, name, write_ok, fmap) && stmts_ok(&x.body, name, write_ok, fmap),
             Stmt::ForMap(x) => expr_ok(&x.place, name, write_ok, fmap) && stmts_ok(&x.body, name, write_ok, fmap),
+            Stmt::Break(_) | Stmt::Continue(_) => true,
             Stmt::Return(x) => x.value.as_ref().map_or(true, |v| expr_ok(v, name, write_ok, fmap)),
             Stmt::ExprStmt(x) => expr_ok(&x.expr, name, write_ok, fmap),
             Stmt::Par(x) => !x.calls.iter().any(|c| mentions(c, name)),
@@ -187,6 +188,7 @@ fn code_calls(stmts: &[Stmt], out: &mut HashSet<String>) {
                 ex(&x.place, out);
                 code_calls(&x.body, out);
             }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return(x) => {
                 if let Some(v) = &x.value {
                     ex(v, out);

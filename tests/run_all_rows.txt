@@ -860,6 +860,8 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_v1_prefilter.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p4_rt_for.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p4_rt_for_layout.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p5_rt_exit.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p5_rt_loop.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/qb_ok.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/qb_skip.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/qb_wide_origin.pruv"}
@@ -1664,6 +1666,8 @@
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_v1_prefilter.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p4_rt_for.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p4_rt_for_layout.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p5_rt_exit.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p5_rt_loop.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/qb_across_requires.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/qb_ok.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/qb_skip.pruv"}
@@ -2653,6 +2657,8 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p4_rt_for.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p4_rt_for_layout.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p4_rt_for_vec.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p5_rt_exit.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p5_rt_loop.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/qb_ok.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/qb_skip.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/qb_wide_origin.pruv"}
@@ -3470,6 +3476,8 @@
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p4_rt_for.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p4_rt_for_layout.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p4_rt_for_vec.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p5_rt_exit.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p5_rt_loop.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/qb_across_requires.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/qb_ok.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/qb_skip.pruv"}
@@ -5468,6 +5476,18 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p4_for_store_be.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p4_for_u32_below.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p4_for_vec_string.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p5_break_semicolon.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p5_continue_decreases.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p5_continue_value.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p5_jump_map.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p5_jump_outside.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p5_jump_unreachable.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p5_label_duplicate.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p5_label_keyword.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p5_label_static.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p5_label_target.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p5_loop.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p5_loop_expr.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/refine_alloc_len.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/refine_base_bool.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/refine_bounds_i64.pruv"}

@@ -1,0 +1,12 @@
+// spec: R-6r-2 reject
+// break 'outer from the inner loop reaches the return with r == 7, so result == 0 is false.
+fn lab(n: i64) -> i64
+  requires 1 <= n && n <= 10
+  ensures result == 0
+{
+  let mut r: i64 = 0;
+  'outer: for i in 0..n invariant r == 0 {
+    for j in 0..n invariant r == 0 { if j == 0 { r = 7; break 'outer; } }
+  }
+  return r;
+}

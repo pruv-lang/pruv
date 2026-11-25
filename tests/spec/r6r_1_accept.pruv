@@ -1,0 +1,62 @@
+// spec: R-6r-1 accept
+// break: the state after the loop joins the normal exit with each break state; continue is a back edge.
+fn first_ge(a: [i64], t: i64) -> i64
+  ensures result >= -1 && result < len(a)
+{
+  let mut r: i64 = -1;
+  for i in 0..len(a) invariant r == -1 {
+    if a[i] >= t { r = i; break; }
+  }
+  return r;
+}
+
+fn upto(n: i64) -> i64
+  requires 0 <= n && n <= 100
+  ensures result == n || result == 3
+{
+  let mut i: i64 = 0;
+  while i < n invariant 0 <= i && i <= n decreases n - i {
+    if i == 3 { break; }
+    i = i + 1;
+  }
+  return i;
+}
+
+fn skip_odd(n: i64) -> i64
+  requires 0 <= n && n <= 100
+  ensures 0 <= result && result <= n
+{
+  let mut c: i64 = 0;
+  for i in 0..n invariant 0 <= c && c <= i {
+    if i % 2 == 1 { continue; }
+    c = c + 1;
+  }
+  return c;
+}
+
+fn wskip(n: i64) -> i64
+  requires 0 <= n && n <= 100
+  ensures 0 <= result && result <= n
+{
+  let mut i: i64 = 0;
+  let mut c: i64 = 0;
+  while i < n invariant 0 <= i && i <= n && 0 <= c && c <= i decreases n - i {
+    i = i + 1;
+    if i % 3 == 0 { continue; }
+    c = c + 1;
+  }
+  return c;
+}
+
+fn sum_bytes(a: [u8]) -> i64
+  requires len(a) <= 1000
+  ensures 0 <= result && result <= 255000
+{
+  let mut s: i64 = 0;
+  for x in a invariant 0 <= s && s <= index(x) * 255 {
+    if x == 0 { break; }
+    if x == 1 { continue; }
+    s = s + x;
+  }
+  return s;
+}

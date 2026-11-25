@@ -142,6 +142,7 @@ impl Analysis {
                     let v = self.expr(&x.value, &scope); let n = scope.get(&x.name).copied().flatten();
                     if n.is_some() || v.is_some() { self.join(n,v); }
                 }
+                Stmt::Break(_) | Stmt::Continue(_) => {}
                 Stmt::Return(x) => { if let Some(e) = &x.value {
                     let v = self.expr(e, &scope); if v.is_some() { self.join(v, self.lookup.get(&StorageKey::Result(self.function.clone())).copied()); }
                 } }

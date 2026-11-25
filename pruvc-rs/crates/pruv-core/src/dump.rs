@@ -323,16 +323,18 @@ pub fn stmt(s: &Stmt) -> Json {
             node("IndexAssign", Some((x.line, x.col)), f)
         }
         Stmt::If(x) => if_node(x),
-        Stmt::While(x) => node(
-            "While",
-            Some((x.line, x.col)),
-            vec![
+        Stmt::While(x) => {
+            let mut f = vec![
                 ("cond", expr(&x.cond)),
                 ("invariants", list(&x.invariants, expr)),
                 ("decreases", expr(&x.decreases)),
                 ("body", list(&x.body, stmt)),
-            ],
-        ),
+            ];
+            if let Some(l) = &x.label {
+                f.push(("label", js(l))); // P5: written only for a labeled loop
+            }
+            node("While", Some((x.line, x.col)), f)
+        }
         Stmt::ForMap(x) => node(
             "ForMap",
             Some((x.line, x.col)),
@@ -343,6 +345,11 @@ pub fn stmt(s: &Stmt) -> Json {
                 ("invariants", list(&x.invariants, expr)),
                 ("body", list(&x.body, stmt)),
             ],
+        ),
+        Stmt::Break(x) | Stmt::Continue(x) => node(
+            if matches!(s, Stmt::Break(_)) { "Break" } else { "Continue" },
+            Some((x.line, x.col)),
+            vec![("label", match &x.label { Some(l) => js(l), None => Json::Null })],
         ),
         Stmt::Return(x) => node(
             "Return",

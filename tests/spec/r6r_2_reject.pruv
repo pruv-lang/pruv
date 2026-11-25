@@ -1,0 +1,7 @@
+// spec: R-6r-2 reject
+fn f(n: i64) -> i64
+  requires 0 <= n && n <= 10
+{
+  'a: while n > 0 decreases n { break 'b; }
+  return 0;
+}

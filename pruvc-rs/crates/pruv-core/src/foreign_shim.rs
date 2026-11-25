@@ -152,6 +152,7 @@ fn walk_stmt(s: &Stmt, f: &mut dyn FnMut(Node<'_>)) {
             }
             walk_stmts(&w.body, f);
         }
+        Stmt::Break(_) | Stmt::Continue(_) => {}
         Stmt::Return(r) => {
             if let Some(v) = &r.value {
                 walk_expr(v, f);

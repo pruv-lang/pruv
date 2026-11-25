@@ -1661,6 +1661,8 @@ pub struct FnGen<'a> {
     cur: String,
     dead: bool,
     scopes: Vec<Scope>,
+    /// P5: enclosing loops, innermost last: (label, continue block, exit block, scope depth outside the body).
+    loops: Vec<(Option<String>, String, String, usize)>,
     // Bindings and cleanup lists clone slots; retain layout by unique slot address.
     resize_slots: HashSet<String>,
     slot_layouts: HashMap<String, &'static str>,
@@ -1723,6 +1725,7 @@ impl<'a> FnGen<'a> {
             cur: "None".to_string(),
             dead: false,
             scopes: Vec::new(),
+            loops: Vec::new(),
             resize_slots,
             slot_layouts: HashMap::new(),
             slot_rngs: HashMap::new(),
@@ -2314,6 +2317,7 @@ impl<'a> FnGen<'a> {
                         && Self::unbox_block(name, &x.body)
                 }
                 Stmt::ForMap(_) => false,
+                Stmt::Break(_) | Stmt::Continue(_) => true,
                 Stmt::Return(x) => x.value.as_ref().map_or(true, |v| Self::unbox_uses(name, v, false)),
                 Stmt::Assert(x) => Self::unbox_uses(name, &x.cond, true),
                 Stmt::ExprStmt(x) => Self::unbox_uses(name, &x.expr, false),
@@ -4509,11 +4513,47 @@ impl<'a> FnGen<'a> {
                 self.condbr(&c.a, &bl, &el)?;
                 self.place(&bl);
                 if self.cost { self.cost_add("1")?; }
-                if self.run_block_in(&x.body, Vec::new(), true)? {
+                // P5: a `for` body whose `continue` must still run the synthesized step gets its own step block
+                let step = (x.for_head.is_some() && continues_to(&x.body, &x.label, true)).then(|| self.label("wstep"));
+                let depth = self.scopes.len();
+                self.loops.push((x.label.clone(), step.clone().unwrap_or_else(|| cl.clone()), el.clone(), depth));
+                let r = match &step {
+                    None => self.run_block_in(&x.body, Vec::new(), true),
+                    Some(sl) => {
+                        let (last, body) = x.body.split_last().expect("for step");
+                        let r = self.run_block_in(body, Vec::new(), true);
+                        match r {
+                            Ok(falls) => {
+                                if falls {
+                                    self.br(sl)?;
+                                }
+                                self.place(sl);
+                                self.stmt(last).map(|()| !self.dead)
+                            }
+                            e => e,
+                        }
+                    }
+                };
+                self.loops.pop();
+                if r? {
                     self.br(&cl)?;
                 }
                 self.place(&el);
                 Ok(())
+            }
+            Stmt::Break(j) | Stmt::Continue(j) => {
+                let at = match &j.label {
+                    None => self.loops.len().checked_sub(1),
+                    Some(l) => self.loops.iter().rposition(|(n, _, _, _)| n.as_deref() == Some(l.as_str())),
+                }
+                .ok_or_else(|| "loop jump without a target loop".to_string())?;
+                let (_, cont, end, depth) = self.loops[at].clone();
+                // every scope the jump leaves frees its owned values, as a return does
+                for i in (depth..self.scopes.len()).rev() {
+                    let arrays = self.scopes[i].arrays.clone();
+                    self.free_scope(&arrays)?;
+                }
+                self.br(if matches!(st, Stmt::Break(_)) { &end } else { &cont })
             }
             Stmt::ForMap(_) => Err("map iteration needs the Rust backend".into()),
             Stmt::Return(x) => {
@@ -9408,4 +9448,19 @@ fn tail_pure(e: &Expr, x: &str) -> bool {
         Expr::Index(i) => tail_pure(&i.array, x) && tail_pure(&i.index, x),
         _ => false,
     }
+}
+
+/// P5: the statements contain a `continue` that targets this loop (unlabeled at this nesting level, or by label).
+fn continues_to(stmts: &[Stmt], label: &Option<String>, top: bool) -> bool {
+    stmts.iter().any(|st| match st {
+        Stmt::Continue(j) => match &j.label {
+            None => top,
+            Some(l) => label.as_deref() == Some(l.as_str()),
+        },
+        Stmt::If(x) => continues_to(&x.then, label, top) || continues_to(&x.els, label, top),
+        Stmt::While(x) => continues_to(&x.body, label, false),
+        Stmt::ForMap(x) => continues_to(&x.body, label, false),
+        Stmt::Match(x) => x.arms.iter().any(|a| continues_to(&a.body, label, top)),
+        _ => false,
+    })
 }

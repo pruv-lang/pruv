@@ -46,6 +46,7 @@ fn calls_stmts(stmts: &[Stmt], out: &mut HashSet<String>) {
             Stmt::Assign(x) => calls_expr(&x.value, out),
             Stmt::IndexAssign(x) => { calls_expr(&x.index, out); calls_expr(&x.value, out); }
             Stmt::FieldAssign(x) => calls_expr(&x.value, out),
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return(x) => { if let Some(v) = &x.value { calls_expr(v, out); } }
             Stmt::If(x) => { calls_expr(&x.cond, out); calls_stmts(&x.then, out); calls_stmts(&x.els, out); }
             Stmt::While(x) => {
@@ -253,6 +254,7 @@ impl<'a> Uses<'a> {
                 self.kill(scope, &x.name);
                 self.expr(&x.value, scope, false);
             }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return(x) => { if let Some(v) = &x.value { self.expr(v, scope, false); } }
             Stmt::If(x) => {
                 self.expr(&x.cond, scope, false);

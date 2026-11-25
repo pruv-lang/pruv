@@ -1278,6 +1278,7 @@ impl<'a> Rs<'a> {
                     }
                     self.rstmts(&mut w.body)?;
                 }
+                Stmt::Break(_) | Stmt::Continue(_) => {}
                 Stmt::Return(r) => {
                     if let Some(v) = r.value.as_mut() {
                         self.rexpr(v)?;

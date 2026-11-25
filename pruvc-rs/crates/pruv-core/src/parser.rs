@@ -1415,6 +1415,56 @@ impl Parser {
         if self.at("if", 0) {
             return Ok(Stmt::If(self.if_()?));
         }
+        if self.peek(0).kind == Kind::Op && self.peek(0).val.starts_with('\'') {
+            // P5: `'label: while ...` or `'label: for x in ...`
+            let lab = self.next();
+            self.expect(":")?;
+            let name = lab.val[1..].to_string();
+            if !(self.at("while", 0) || (self.at("for", 0) && !self.at("(", 1))) {
+                return Err(PruvError::new("parse", lab.line, lab.col, "loop_label_target",
+                    "a loop label must be followed by `while` or `for x in ...`",
+                    "`loop` and labeled blocks are not available; label a while or for loop"));
+            }
+            let mut st = self.stmt()?;
+            let w = match &mut st {
+                Stmt::While(w) => w,
+                Stmt::If(i) => match i.then.last_mut() {
+                    Some(Stmt::While(w)) => w,
+                    _ => unreachable!("for lowering ends with its while"),
+                },
+                _ => unreachable!("labeled statement is a loop"),
+            };
+            w.label = Some(name);
+            return Ok(st);
+        }
+        if self.at("break", 0) || self.at("continue", 0) {
+            let k = self.next();
+            let label = if self.peek(0).kind == Kind::Op && self.peek(0).val.starts_with('\'') {
+                Some(self.next().val[1..].to_string())
+            } else {
+                None
+            };
+            if !self.at(";", 0) {
+                // A value after `break` is break_value; a missing `;` (`break }`) is plain jump syntax.
+                let ends = self.at("}", 0) || self.peek(0).kind == Kind::Eof;
+                let (code, msg, hint) = if k.val == "break" && !ends {
+                    ("break_value", "`break` with a value is not available",
+                     "only `loop` can break with a value and `loop` is not available; assign the value to a `let mut` before `break;`")
+                } else {
+                    ("loop_jump_syntax", "`break` and `continue` take an optional label and then `;`",
+                     "write `break;`, `continue;`, `break 'label;` or `continue 'label;`")
+                };
+                return Err(PruvError::new("parse", k.line, k.col, code, msg, hint));
+            }
+            self.bump();
+            let j = Jump { line: l, col: c, label };
+            return Ok(if k.val == "break" { Stmt::Break(j) } else { Stmt::Continue(j) });
+        }
+        if self.at("loop", 0) {
+            return Err(PruvError::new("parse", l, c, "loop_unsupported",
+                "`loop { }` is not available: every loop needs a measure",
+                "write `while cond decreases m { }` with a `break` inside"));
+        }
         if self.at("while", 0) {
             self.bump();
             let cond = self.expr()?;
@@ -1442,7 +1492,7 @@ impl Parser {
                 }
             };
             let body = self.block()?;
-            return Ok(Stmt::While(While { line: l, col: c, cond, invariants: invs, decreases: dec, body, for_head: None }));
+            return Ok(Stmt::While(While { line: l, col: c, cond, invariants: invs, decreases: dec, body, for_head: None, label: None }));
         }
         if self.at("for", 0) && self.at("(", 1) {
             self.bump();
@@ -1792,7 +1842,7 @@ impl Parser {
         }
         lets.push(Stmt::While(While {
             line: l, col: c, cond: bin("<", i(), e()), invariants, decreases: bin("-", e(), i()), body,
-            for_head: Some(ForHead { var: var.val, counter, slice: !range }),
+            for_head: Some(ForHead { var: var.val, counter, slice: !range }), label: None,
         }));
         Ok(Stmt::If(If { line: l, col: c, cond: Expr::BoolLit(BoolLit { line: l, col: c, value: true, ty: None }),
             then: lets, els: Vec::new() }))
@@ -2081,6 +2131,12 @@ impl Parser {
     fn primary(&mut self) -> R<Expr> {
         let t = self.peek(0).clone();
         let (line, col) = (t.line, t.col);
+        if t.kind == Kind::Kw && t.val == "loop" {
+            // P5: `loop` as an expression (`let x = loop { .. }`) gets the same code as the statement form.
+            return Err(PruvError::new("parse", line, col, "loop_unsupported",
+                "`loop { }` is not available: every loop needs a measure",
+                "write `while cond decreases m { }` with a `break` inside"));
+        }
         if t.kind == Kind::Int {
             self.bump();
             return Ok(Expr::IntLit(IntLit { line, col, value: t.val, ty: None }));
