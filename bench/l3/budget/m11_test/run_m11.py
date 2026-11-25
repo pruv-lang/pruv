@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """L3-10 M11 driver: work cards (bud_card.pruv, RequestBudgets.setCard / hasCard / current / isHalted) against the oracle.
 
-  python3 run_m11.py [--pairs py,rs] [--count 300] [--seed 20261117] [--perf] [--no-build]
+  python3 run_m11.py [--pairs rs] [--vs-py] [--count 300] [--seed 20261117] [--perf] [--no-build]
 
 1. copies root.pruv + bud_card.pruv and the modules it uses into work/m11/src/
 2. compiles with the Python compiler (py/rust) and/or the Rust compiler (rs/rust), then rustc -O harness.rs per pair
@@ -870,7 +870,8 @@ def hdiff_pair(k, harness, work):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--pairs', default='py,rs')
+    ap.add_argument('--pairs', default=None, help='default rs; py,rs with --vs-py')
+    ap.add_argument('--vs-py', action='store_true', help='also run the frozen py reference compiler (PF)')
     ap.add_argument('--count', type=int, default=300)
     ap.add_argument('--seed', type=int, default=q_gen.SEED if hasattr(q_gen, 'SEED') else 20261117)
     ap.add_argument('--perf', action='store_true')
@@ -891,7 +892,8 @@ def main():
     work = a.work_dir or (HERE / 'work' / 'm11_typed' if a.typed else WORK)
     work = work.resolve()
     work.mkdir(parents=True, exist_ok=True)
-    pairs = [p.strip() for p in a.pairs.split(',') if p.strip()]
+    # PF: the Python compiler pruvc/ is frozen; rs only unless --vs-py (or an explicit --pairs) asks for py.
+    pairs = [p.strip() for p in (a.pairs or ('py,rs' if a.vs_py else 'rs')).split(',') if p.strip()]
     root = prepare_sources(work, a.typed)
     harness = {}
     for k in pairs:

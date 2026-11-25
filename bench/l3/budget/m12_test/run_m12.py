@@ -942,7 +942,8 @@ def lifecycle_perf(harness, rounds, reps=64):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--pairs', default='py,rs')
+    parser.add_argument('--pairs', default=None, help='default rs; py,rs with --vs-py')
+    parser.add_argument('--vs-py', action='store_true', help='also run the frozen py reference compiler (PF)')
     parser.add_argument('--count', type=int, default=300)
     parser.add_argument('--seed', type=int, default=20261117)
     parser.add_argument('--no-build', action='store_true')
@@ -958,7 +959,8 @@ def main():
     if args.lane not in ('direct', 'adapter'):
         parser.error('M12_LANE must be direct or adapter')
     os.environ['M12_LANE'] = args.lane
-    pairs = args.pairs.split(',')
+    # PF: the Python compiler pruvc/ is frozen; rs only unless --vs-py (or an explicit --pairs) asks for py.
+    pairs = (args.pairs or ('py,rs' if args.vs_py else 'rs')).split(',')
     if any(p not in PAIRS for p in pairs) or args.count <= 0 or (args.perf is not None and args.perf <= 0):
         parser.error('use py,rs pairs and positive counts')
     if args.typed and args.mutants:
