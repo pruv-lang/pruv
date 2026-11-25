@@ -1,0 +1,33 @@
+struct Px { tag: bool, d: [i32; 3] }
+struct Wrap { p: Px, k: i64 }
+
+fn bump(w: Wrap) -> Wrap
+  requires 0 <= w.k && w.k < 100
+  ensures result.p.d[1] == w.p.d[1] && result.k == w.k + 1 && result.p.d[2] == w.p.d[2] && result.p.d[0] == 7
+{
+  let mut r: Wrap = w;
+  r.p.d[0] = 7;
+  r.k = r.k + 1;
+  return r;
+}
+
+fn swap(inout p: Px) -> ()
+  ensures p.d[0] == old(p).d[2] && p.d[1] == old(p).d[1] && p.d[2] == old(p).d[0]
+{
+  let t: [i32; 3] = p.d;
+  p.d = [t[2], t[1], t[0]];
+}
+
+fn run(i: i64) -> i64
+  requires 0 <= i && i < 3
+{
+  let a: [i32; 3] = [1, 2, 3];
+  let w: Wrap = Wrap { p: Px { tag: true, d: a }, k: 0 };
+  let mut v: Wrap = bump(w);
+  swap(inout v.p);
+  let e: bool = v.p.tag;
+  let d2: [i32; 3] = v.p.d;
+  let mut s: i64 = 0;
+  if e { s = 1000; }
+  return i64(d2[i]) * 10 + i64(w.p.d[i]) * 100 + s + v.k;
+}

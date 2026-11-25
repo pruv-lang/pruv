@@ -1,0 +1,2 @@
+pub struct S { a: [i64; 2] }
+pub fn f(s: S) -> i64 { return 0; }

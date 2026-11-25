@@ -4395,7 +4395,7 @@ impl Checker {
                         "build a new str with substr() or copy() instead",
                     ));
                 }
-                if !(cur.args.is_empty() && crate::typeinfo::is_array_name(&cur.name)) {
+                if !(cur.args.is_empty() && crate::typeinfo::is_array_name(&cur.name)) && !cur.is_fixed() {
                     return Err(terr(s.line, s.col, "not_array", format!("{} is not an array", place), ""));
                 }
                 if !v.mutable && !matches!(v.kind, "inout" | "map_inout") {

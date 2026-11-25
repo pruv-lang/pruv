@@ -1370,7 +1370,11 @@ must_reject|tests/must_reject/p7_fixed_contract.pruv	1 case: obl=0 1	default=469
 must_reject|tests/must_reject/p7_fixed_contract_ensures.pruv	1 case: obl=0 1	default=3274772f0211
 must_reject|tests/must_reject/p7_fixed_count.pruv	1 case: obl=0 1	default=eac4e4636f57
 must_reject|tests/must_reject/p7_fixed_eq.pruv	1 case: obl=0 1	default=d9d0fa53e3fa
-must_reject|tests/must_reject/p7_fixed_field.pruv	1 case: obl=0 1	default=0aee549a6489
+must_reject|tests/must_reject/p7_fixed_field.pruv	1 case: obl=0 1	default=60fd09f962b5
+must_reject|tests/must_reject/p7_fixed_field_frame.pruv	1 case: obl=2 1	default=d23f53fd9a68
+must_reject|tests/must_reject/p7_fixed_field_host.pruv	1 case: obl=0 1	default=1b55091af91f
+must_reject|tests/must_reject/p7_fixed_field_oob.pruv	1 case: obl=1 1	default=1a7d6d498527
+must_reject|tests/must_reject/p7_fixed_field_owned.pruv	1 case: obl=0 1	default=86ed9b494c97
 must_reject|tests/must_reject/p7_fixed_for_in.pruv	1 case: obl=0 1	default=0eeb6f5ebb47
 must_reject|tests/must_reject/p7_fixed_havoc_range.pruv	1 case: obl=7 1	default=1e3dfde0ad56
 must_reject|tests/must_reject/p7_fixed_inout_alias.pruv	1 case: obl=0 1	default=98cad0622213
@@ -1391,7 +1395,7 @@ must_reject|tests/must_reject/p7_fixed_loop_i64.pruv	1 case: obl=7 1	default=afb
 must_reject|tests/must_reject/p7_fixed_mixed.pruv	1 case: obl=0 1	default=c066f1cd1e6a
 must_reject|tests/must_reject/p7_fixed_neg_len.pruv	1 case: obl=0 1	default=2b6cdcdc4a88
 must_reject|tests/must_reject/p7_fixed_neg_repeat.pruv	1 case: obl=0 1	default=09c74ab500be
-must_reject|tests/must_reject/p7_fixed_nested.pruv	1 case: obl=0 1	default=eb78d518a629
+must_reject|tests/must_reject/p7_fixed_nested.pruv	1 case: obl=0 1	default=6b1ee68d8fb4
 must_reject|tests/must_reject/p7_fixed_oob.pruv	1 case: obl=1 1	default=13275f78b8eb
 must_reject|tests/must_reject/p7_fixed_oob_neg.pruv	1 case: obl=1 1	default=fe6d455eeb05
 must_reject|tests/must_reject/p7_fixed_oob_u64.pruv	1 case: obl=1 1	default=c1908503ea41
@@ -1403,9 +1407,9 @@ must_reject|tests/must_reject/p7_fixed_ref_after_str_fn.pruv	1 case: obl=0 1	def
 must_reject|tests/must_reject/p7_fixed_ref_local.pruv	1 case: obl=0 1	default=343f3dba4a48
 must_reject|tests/must_reject/p7_fixed_result.pruv	1 case: obl=0 1	default=24dec80fb7ec
 must_reject|tests/must_reject/p7_fixed_slice_pattern.pruv	1 case: obl=0 1	default=ea2b0f79f13b
-must_reject|tests/must_reject/p7_fixed_tuple.pruv	1 case: obl=0 1	default=eb78d518a629
+must_reject|tests/must_reject/p7_fixed_tuple.pruv	1 case: obl=0 1	default=6b1ee68d8fb4
 must_reject|tests/must_reject/p7_fixed_tuple_elem.pruv	1 case: obl=0 1	default=e86ca6a8b4ec
-must_reject|tests/must_reject/p7_fixed_type_arg.pruv	1 case: obl=0 1	default=16aa13c72c28
+must_reject|tests/must_reject/p7_fixed_type_arg.pruv	1 case: obl=0 1	default=bdb610b3b93b
 must_reject|tests/must_reject/p7_fixed_view.pruv	1 case: obl=0 1	default=e0a4bb79d9d3
 must_reject|tests/must_reject/p7_fixed_zero_read.pruv	1 case: obl=1 1	default=980ff8b950aa
 must_reject|tests/must_reject/p7_fixed_zero_write.pruv	1 case: obl=1 1	default=bfef67a0364f
@@ -1926,6 +1930,8 @@ runtime|tests/runtime/p7_rt_fixed_b_proven.pruv	1 case: obl=24 1	default=97dd3fb
 runtime|tests/runtime/p7_rt_fixed_borrow.pruv	1 case: obl=62 1	default=0c3dce3863a8
 runtime|tests/runtime/p7_rt_fixed_copy.pruv	1 case: obl=49 1	default=43e6d7fa101b
 runtime|tests/runtime/p7_rt_fixed_eval.pruv	1 case: obl=16 1	default=83560f815a00
+runtime|tests/runtime/p7_rt_fixed_field.pruv	1 case: obl=19 1	default=1ebb0e099557
+runtime|tests/runtime/p7_rt_fixed_field_nested.pruv	1 case: obl=22 1	default=bb004ec384cb
 runtime|tests/runtime/p7_rt_fixed_lend_pin.pruv	1 case: obl=17 1	default=59aca6260e80
 runtime|tests/runtime/p7_rt_fixed_literal.pruv	1 case: obl=69 1	default=adf15d71d841
 runtime|tests/runtime/p7_rt_fixed_oob_unverified.pruv	1 case: obl=1 1	default=a5c0bc669232

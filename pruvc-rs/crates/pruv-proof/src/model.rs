@@ -680,7 +680,8 @@ impl Model {
             fn_index,
             g: RefCell::new(GState::default()),
             wf_triv: RefCell::new(HashMap::new()),
-            g9: meta.is_some(),
+            // P7-1 B: a `[T; N]` field is stored as a buffer field, which needs the G9 field paths even without G9 metadata
+            g9: meta.is_some() || uniq.iter().any(|d| d.all_fields().iter().any(|f| matches!(&f.ty, Ty::Inst(g) if g.is_fixed()))),
             scc_of: HashMap::new(),
             recrel: HashSet::new(),
             bufs: RefCell::new(HashMap::new()),
@@ -884,7 +885,7 @@ impl Model {
         match ty {
             Ty::Array(_) | Ty::Str => true,
             Ty::User(n) => n == "string",
-            Ty::Inst(g) => g.owner.is_none() && g.name == "vec",
+            Ty::Inst(g) => g.owner.is_none() && g.name == "vec" || g.is_fixed(),
             _ => false,
         }
     }
@@ -895,6 +896,10 @@ impl Model {
             Ty::Array(elem) => *elem,
             Ty::Str => Elem::U8,
             Ty::User(n) if n == "string" => Elem::U8,
+            // P7-1 B: a `[T; N]` field is a Buf of Int (integer elements) or Bool; its element range comes from the type
+            Ty::Inst(g) if g.is_fixed() => {
+                if g.fixed_parts().is_some_and(|(e, _)| *e == GType::bool()) { Elem::Bool } else { Elem::I64 }
+            }
             Ty::Inst(g) if g.name == "vec" && g.args.first() == Some(&GType::bool()) => Elem::Bool,
             Ty::Inst(g) if g.name == "vec" && g.args.first() != Some(&GType::i64()) => Elem::Abs,
             _ => Elem::I64,

@@ -4578,6 +4578,17 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 let v = self.e(&x.value)?;
                 let place = format!("{}.{}", x.name, x.fields.join("."));
                 let fty = self.field_path_ty(&x.name, &x.fields);
+                if let Some(f) = fty.as_deref().and_then(fixed_key) {
+                    // P7-1 B: an inline `[T; N]` field stores the element at its own type
+                    let elem = rty_g(f.fixed_parts().unwrap().0, false);
+                    let text = if self.verified {
+                        format!("{{ let pruv_i: i64 = {i}; let pruv_x: {elem} = {v}; unsafe {{ *{place}.get_unchecked_mut(pruv_i as usize) = pruv_x; }} }}")
+                    } else {
+                        format!("{{ let pruv_i: i64 = {i}; let pruv_x: {elem} = {v}; let pruv_k = pruv_idx(pruv_i, {place}.len()); {place}[pruv_k] = pruv_x; }}")
+                    };
+                    self.emit(ind, &text);
+                    return Ok(());
+                }
                 let elem = fty.as_deref().and_then(array_elem_name).unwrap_or("i64");
                 let is_bool = fty.as_deref() == Some("array_bool");
                 let text = if is_bool {

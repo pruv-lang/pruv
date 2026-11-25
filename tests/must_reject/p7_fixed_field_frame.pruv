@@ -1,0 +1,7 @@
+struct S { k: i64, a: [u8; 2] }
+fn f(inout s: S, i: i64) -> ()
+  requires 0 <= i && i < 2
+  ensures s.a[0] == old(s).a[0]
+{
+  s.a[i] = 3;
+}

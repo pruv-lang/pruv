@@ -914,6 +914,10 @@ fn g9_pair(g: &mut FnGen, gp: &str) -> R<(String, String)> {
 
 /// Storage type of a value inside an aggregate (c: contract/i128 form)
 pub fn st(t: &str, c: bool) -> String {
+    if fixed_key(t).is_some() {
+        // P7-1 B: an inline `[T; N]` field is its `[N x E]` memory in both forms (contracts read it in place)
+        return lty(t);
+    }
     if view_base(t).is_some() {
         return VIEW.to_string();
     }
@@ -3009,6 +3013,10 @@ impl<'a> FnGen<'a> {
             // G9 A3: a buffer field is stored as { ptr, i64, i64 } (data, len, cap)
             return self.agg(v);
         }
+        if fixed_key(ty).is_some() {
+            // P7-1 B: a fixed-array field is stored inline as `[N x E]`; the value is its storage pointer
+            return self.op(format!("load {}, ptr {}", lty(ty), v.a));
+        }
         Ok(v.a.clone())
     }
 
@@ -3033,6 +3041,14 @@ impl<'a> FnGen<'a> {
         }
         if is_collection(ty) {
             return Ok(V { ty: Some(ty.to_string()), ..V::new(Kind::Coll, x) });
+        }
+        if fixed_key(ty).is_some() {
+            // P7-1 B: spill the inline `[N x E]` field into fresh storage
+            let tmp = format!("%fx{}", self.nslot);
+            self.nslot += 1;
+            self.allocas.push(format!("{} = alloca {}", tmp, lty(ty)));
+            self.ins(format!("store {} {}, ptr {}", lty(ty), x, tmp))?;
+            return Ok(V::agg(tmp, ty));
         }
         if is_arr_name(ty) {
             // G9 A3
@@ -3092,6 +3108,12 @@ impl<'a> FnGen<'a> {
             // Evaluate in source order. R-6g9-2: ownership by type: a `ref` field borrows its value (a place, subview
             // or `from` result), never owns or copies it
             let by_ref = !c && refs.contains(fi.name.as_str());
+            if let Some(t) = expr_ty(&fi.value).as_deref().filter(|t| fixed_key(t).is_some()) {
+                // P7-1 B: a fixed-array field copies from the value's storage
+                let p = self.fixed_ptr(&fi.value)?;
+                vals.insert(fi.name.as_str(), V::agg(p, t));
+                continue;
+            }
             let v = self.evf(&fi.value, c, own && !by_ref)?;
             vals.insert(fi.name.as_str(), v);
         }
@@ -3213,7 +3235,8 @@ impl<'a> FnGen<'a> {
 
     /// Code value -> contract value (integer leaves are extended; for an enum only the active variant is converted)
     pub fn to_c(&mut self, x: &V, ty: &str) -> R<V> {
-        if view_base(ty).is_some() {
+        // P7-1 B: a fixed array keeps its `[N x E]` storage in the contract form
+        if view_base(ty).is_some() || fixed_key(ty).is_some() {
             return Ok(x.clone());
         }
         let tt = self.tt;
@@ -4455,6 +4478,12 @@ impl<'a> FnGen<'a> {
                     self.ins(format!("store {VIEW} {value}, ptr {ptr}"))?;
                     return self.end_temps();
                 }
+                if expr_ty(&x.value).as_deref().and_then(fixed_key).is_some() {
+                    // P7-1 B: an inline `[T; N]` field is filled in place (every element read before the first store)
+                    let (gp, _) = self.field_ptr_ty(&sl, &x.fields)?;
+                    self.fixed_fill(&gp, &x.value)?;
+                    return self.end_temps();
+                }
                 // LG37: a last-use take anywhere in the right side
                 self.moving = self.nested_moves(&x.value, Some(&x.name), false);
                 let rg = self.regrow_field(x, &sl);
@@ -4507,6 +4536,14 @@ impl<'a> FnGen<'a> {
                         return Err(format!("llvmgen: element store through non-local {}", x.name));
                     };
                     let (gp, fty) = self.field_ptr_ty(&sl, &x.fields)?;
+                    if let Some(f) = fixed_key(&fty) {
+                        // P7-1 B: an inline `[T; N]` field is stored in place
+                        let el = f.fixed_parts().unwrap().0.clone();
+                        let g = self.fixed_gep(&f, &gp, &i)?;
+                        let v = self.fixed_elem_value(&el, &v)?;
+                        self.ins(format!("store {} {}, ptr {}", fixed_elem_ir(&el), v, g))?;
+                        return self.end_temps();
+                    }
                     let dp = self.op(format!("load ptr, ptr {}", gp))?;
                     let lp = self.op(format!("getelementptr inbounds {}, ptr {}, i32 0, i32 1", ARR, gp))?;
                     let ln = self.op(format!("load i64, ptr {}", lp))?;
@@ -4920,6 +4957,8 @@ impl<'a> FnGen<'a> {
             Expr::Call(c) if c.name == ARRAY_LIST || array_repeat_len(&c.name).is_some() => {}
             // P7-1 B: a call result already lives in fresh caller storage
             Expr::Call(_) => return Ok(self.ev(e, false)?.a),
+            // P7-1 B: an inline struct field spills into fresh storage
+            Expr::FieldAccess(_) => return Ok(self.ev(e, false)?.a),
             _ => return Err("llvmgen: unsupported fixed array expression".to_string()),
         }
         let ty = expr_ty(e).clone().ok_or_else(|| "llvmgen: untyped fixed array".to_string())?;
