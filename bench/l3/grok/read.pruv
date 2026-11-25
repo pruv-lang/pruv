@@ -326,10 +326,9 @@ pub fn advance(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], rows: [
 
 // ---- window: framing events in order -> collector -> read packet ----
 
-// One line span: parse it (a failed parse is a skipped line; kind 18 is an internal failure) and hand the object to entry::feed.
-// Returns feed's code: 0 handled, 1 grow buf and call again, negative internal failure.
-fn line_step(win: [u8], lo: i64, hi: i64, inout tape: [i64], inout stack: [i64], inout dbuf: [u8], inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
-  requires 0 <= lo && lo <= hi && hi <= len(win)
+// One line span (hand history_window loop body): a line that is not UTF-8 or not JSON is skipped; otherwise the reused
+// Entry is reset, scanned and fed. Returns feed's code: 0 handled, -1 a timestamp defect.
+fn line_step(line: [u8], inout e: crate::line::Entry, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
   requires len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
@@ -338,37 +337,13 @@ fn line_step(win: [u8], lo: i64, hi: i64, inout tape: [i64], inout stack: [i64],
   ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
 {
-  // Scan the span in place into the caller's scratch; only a user/assistant object line gets an owned document.
-  if hi - lo > 16777216 { return 0; }
-  // DB45 one-pass reader on the borrowed line; 3 = out of its scope, the tape path below decides (docs/L3_DB45.md).
-  if len(tape) >= 256 {
-    let r: i64 = crate::line::step(subview(win, lo, hi), inout tape, inout dbuf, inout st, inout sl, inout bk);
-    if r != 3 { return r; }
-  }
-  // The tape is grown to its full 4096 records only when a line first needs this path (DB47).
-  if len(tape) < 24576 { tape = resize(tape, 24576, 0); }
-  // string_token validates UTF-8 inside strings, and token_at_span rejects non-ASCII outside strings.
-  // Positive errors other than 18 all skip the line; scratch exhaustion falls back to UTF-8-validating parse_range.
-  let sp: crate::parse::Pass = crate::parse::scan_into(win, lo, hi, inout tape, inout stack);
-  if sp.kind > 0 {
-    if sp.kind == 18 { return -1; }
-    return 0;
-  }
-  let mut parsed: crate::json::JsonParse = crate::json::parse_failed(0, 18);
-  if sp.kind == 0 {
-    if crate::access::view_root_type(win, lo, tape, sp.records) == 0 { return 0; }
-    parsed = crate::lines::build_span(win, lo, hi, tape, sp.records);
-  } else {
-    parsed = crate::lines::parse_range(win, lo, hi);
-  }
-  match parsed {
-    crate::json::JsonParse::Failed(e) => {
-      if e.kind == 18 { return -1; }
-      return 0;
-    }
-    crate::json::JsonParse::Parsed(doc) => {
-      return crate::entry::feed(doc, inout st, inout sl, inout bk);
-    }
+  if len(line) > 16777216 { return 0; }
+  if !utf8_valid(line) { return 0; }
+  crate::line::reset(inout e);
+  let mut i: i64 = 0;
+  match crate::line::entry(line, inout i, inout e) {
+    Ok(()) => { return crate::entry::feed(line, e, inout st, inout sl, inout bk); }
+    Err(z) => { return 0; }
   }
 }
 
@@ -527,9 +502,8 @@ fn assemble_store(st: [i64], sl: [i64], bk: crate::turns::Store, title: str, mod
   return p;
 }
 
-// One framing event: 0 = consumed, 2 = grow the buffer and call again (state unchanged), 1 = corrupt event or a failed
-// line (the caller reports InternalInvariant).
-fn event_step(win: [u8], kd: i64, lo: i64, hi: i64, inout tape: [i64], inout stack: [i64], inout dbuf: [u8], inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
+// One framing event: 0 = consumed, 1 = corrupt event or a failed line (the caller reports InternalInvariant).
+fn event_step(win: [u8], kd: i64, lo: i64, hi: i64, inout e: crate::line::Entry, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
   requires len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
@@ -545,8 +519,7 @@ fn event_step(win: [u8], kd: i64, lo: i64, hi: i64, inout tape: [i64], inout sta
     if crate::framing::dropped_user(head) { crate::turns::skip_user(inout st); }  // MUT:M10 => if false { crate::turns::skip_user(inout st); }
     return 0;
   }
-  let r: i64 = line_step(win, lo, hi, inout tape, inout stack, inout dbuf, inout st, inout sl, inout bk);
-  if r == 1 { return 2; }
+  let r: i64 = line_step(subview(win, lo, hi), inout e, inout st, inout sl, inout bk);
   if r != 0 { return 1; }
   return 0;
 }
@@ -567,12 +540,8 @@ pub fn window(win: [u8], omitted: bool, title: str, model: str) -> [i64] ! alloc
   let mut sl: [i64] = crate::turns::new_slots();
   // The window size is the Store's growth hint (DB53, G-DB51-2): big ord windows skip the 136 K - 561 K steps.
   let mut bk: crate::turns::Store = crate::turns::new_store_hint(n);
-  // Scratch for the tape path (crate::lines::build_span): 4096 records, 129 stack frames (depth <= 128). The tape starts at the 256 words
-  // crate::line::step uses as its field table and is grown by line_step on the first line that takes the tape path (DB47).
-  let mut tape: [i64] = alloc(256, 0);
-  let mut stack: [i64] = alloc(516, 0);
-  // Decode buffer of crate::line::step, reused across lines (DB47).
-  let mut dbuf: [u8] = alloc(0, 0);
+  // One Entry reused for every line (hand `let mut entry = Entry::new()`).
+  let mut entry: crate::line::Entry = crate::line::new_entry();
   let mut bad: i64 = 0;
   let mut j: i64 = 0;
   let mut p: i64 = crate::framing::scan_start(win, omitted);
@@ -603,7 +572,7 @@ pub fn window(win: [u8], omitted: bool, title: str, model: str) -> [i64] ! alloc
     }
     let mut r: i64 = 0;
     if kd >= 0 {
-      r = event_step(win, kd, lo, hi, inout tape, inout stack, inout dbuf, inout st, inout sl, inout bk);
+      r = event_step(win, kd, lo, hi, inout entry, inout st, inout sl, inout bk);
       j = j + 1;
     }
     if r != 0 { bad = 1; }
