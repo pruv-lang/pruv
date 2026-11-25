@@ -233,6 +233,8 @@ impl<'a> ConstEval<'a> {
             }
         };
         match e {
+            Expr::IntLit(l) if l.kind == LitKind::Int && w.is_char() => Err(Self::fail(e, "const_type",
+                "expected char, found an integer literal".to_string(), "write a char literal such as 'a', or char(X) with X: u32")),
             Expr::IntLit(l) => range(l.value.parse::<i128>().ok(), "literal"),
             Expr::Var(x) => match self.decls.iter().position(|d| d.0.val == x.name) {
                 Some(k) => self.value_of(k),
@@ -250,6 +252,11 @@ impl<'a> ConstEval<'a> {
                     return Err(Self::fail(e, "const_div_zero", format!("division by zero in `{}`", b.op),
                         "a constant divisor must be nonzero"));
                 }
+                if (b.op == "/" || b.op == "%") && (r < 0 || l < 0) {
+                    // the run-time rule (R-6p) asks divisor > 0 and dividend >= 0; Rust truncates where Euclid floors
+                    return Err(Self::fail(e, "const_expr", format!("`{}` on a negative operand", b.op),
+                        "a constant `/` or `%` takes a dividend >= 0 and a divisor > 0, as at run time"));
+                }
                 let v = match b.op.as_str() {
                     "+" => l.checked_add(r),
                     "-" => l.checked_sub(r),
@@ -262,7 +269,7 @@ impl<'a> ConstEval<'a> {
             Expr::Call(c) if c.args.len() == 1 && c.targs.is_none() && intwidth::of(&c.name).is_some() => {
                 let to = intwidth::of(&c.name).unwrap_or(&intwidth::I64);
                 let src = self.ty_of(&c.args[0]).unwrap_or(&intwidth::I64);
-                if (to.is_char() && src.name != "u8" && src.name != "u32") || (src.is_char() && !intwidth::CHAR.fits_in(to)) {
+                if (to.is_char() && !src.is_char() && src.name != "u8" && src.name != "u32") || (src.is_char() && !intwidth::CHAR.fits_in(to)) {
                     return Err(Self::fail(e, "const_type", format!("no cast from {} to {}", src.name, to.name),
                         "char converts from u8 or u32 and to u32 or wider"));
                 }
@@ -422,6 +429,12 @@ impl Parser {
             }
             self.i = j + 1;
             let n = self.ident()?;
+            if !n.val.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_') || !is_upper(&n.val) {
+                // Rust's const style; it also keeps constants apart from parameter and local names in the generated module
+                return Err(PruvError::new("parse", n.line, n.col, "const_name",
+                    format!("constant {} must be written in upper case, e.g. MAX_LEN", repr_str(&n.val)),
+                    "rename it with capital letters, digits and _"));
+            }
             self.expect(":")?;
             let tt = self.next();
             let w = match intwidth::of(&tt.val) {
@@ -454,6 +467,14 @@ impl Parser {
             self.consts.insert(c.name.clone(), (c.ty.clone(), c.value));
         }
         Ok(out)
+    }
+
+    /// P7 row P7-1: fixed-length arrays `[T; N]` are not available yet (at the `;`).
+    fn fixed_array_type(&self) -> PruvError {
+        let p = self.peek(0);
+        PruvError::new("parse", p.line, p.col, "fixed_array",
+            "fixed-length array types [T; N] are not available yet (parity row P7-1)",
+            "use a buffer: alloc(n, x) gives an [i64] of length n")
     }
 
     /// A field name after `.`: an identifier, or a tuple index `0`, `1`, .. (P6).
@@ -1363,6 +1384,9 @@ impl Parser {
         if self.at("[", 0) {
             self.bump();
             let e = if self.at("crate", 0) { self.type_path()? } else { self.ident()? }; // G4: a qualified element type
+            if self.at(";", 0) && self.peek(1).kind != Kind::Op {
+                return Err(self.fixed_array_type());
+            }
             if intwidth::PENDING_INTS.contains(&e.val.as_str()) {
                 return Err(self.small_int_unsupported(&e, "this integer type requires P3"));
             }
@@ -1405,11 +1429,7 @@ impl Parser {
                 let p = self.peek(0).clone();
                 return Err(self.ref_syntax(&p, "expected ']' or '; <=N' after the element range".to_string(), ""));
             } else if self.at(";", 0) && self.peek(1).kind != Kind::Op {
-                // P7 row P7-1: fixed-length arrays `[T; N]` are not available yet
-                let p = self.peek(0).clone();
-                return Err(PruvError::new("parse", p.line, p.col, "fixed_array",
-                    "fixed-length array types [T; N] are not available yet (parity row P7-1)",
-                    "use a buffer: alloc(n, x) gives an [i64] of length n"));
+                return Err(self.fixed_array_type());
             } else if self.at(";", 0) {
                 let p = self.peek(0).clone();
                 return Err(self.ref_syntax(
@@ -1973,7 +1993,7 @@ impl Parser {
         if self.at("for", 0) {
             if self.peek(1).kind == Kind::Id && self.at("in", 2) {
                 self.bump();
-                let var = self.next();
+                let var = self.ident()?;
                 self.bump();
                 return self.for_loop(l, c, var);
             }
@@ -2190,7 +2210,7 @@ impl Parser {
     /// struct literal.
     fn for_operand(&mut self) -> R<Expr> {
         let name = self.peek(0);
-        if name.kind == Kind::Id && is_upper(&name.val) && (self.at("{", 1) || self.at("invariant", 1)) {
+        if name.kind == Kind::Id && is_upper(&name.val) && !self.consts.contains_key(&name.val) && (self.at("{", 1) || self.at("invariant", 1)) {
             let name = self.next();
             return Ok(Expr::Var(Var { line: name.line, col: name.col, name: name.val, ty: None }));
         }

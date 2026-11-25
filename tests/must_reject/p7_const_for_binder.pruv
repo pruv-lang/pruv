@@ -1,0 +1,2 @@
+const N: i64 = 7;
+fn f() -> i64 { let mut s: i64 = 0; for N in 0..2 { s = s + N; } return s; }

@@ -1,6 +1,6 @@
 const LIMIT: i64 = 1000 * 3 + 7;
 const MASK: u8 = u8(LIMIT % 256);
-const NEG: i64 = -7 / 2;
+const NEG: i64 = -(7 / 2);
 const BIG: u32 = u32(MASK) * 1000;
 const START: char = 'a';
 const NEXT: u32 = u32(START) + 1;
@@ -17,6 +17,6 @@ fn run(k: i64) -> i64
 {
     let m: u8 = MASK;
     let c: char = START;
-    let s: i64 = bump(k) + i64(m) * 10000 + NEG * 100000000 + i64(BIG) * 1000000000000 + i64(u32(c)) * 0 + i64(NEXT);
+    let s: i64 = bump(k) + i64(m) * 10000 + NEG * 100000000 + i64(BIG) * 1000000000000 + i64(u32(c)) * 0 + i64(NEXT) + i64(1 + MASK) - i64(MASK);
     return s;
 }

@@ -253,7 +253,7 @@ fn lex_char_lit(src: &[char], start: usize, byte: bool, line: i64, col: i64) -> 
                 }
                 p += 1;
                 let s0 = p;
-                while p < n && (src[p].is_ascii_hexdigit() || src[p] == '_') {
+                while p < n && (src[p].is_ascii_hexdigit() || (p > s0 && src[p] == '_')) {
                     p += 1;
                 }
                 let hex: String = src[s0..p].iter().filter(|&&c| c != '_').collect();
@@ -387,9 +387,13 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
             toks.push(Tok { kind: Kind::Byte, val: v.to_string(), line, col, end: col + (end - pos) as i64 });
             pos = end;
         } else if c == '\'' && pos + 1 < n && (src[pos + 1] == '\\' || src[pos + 1] == '\''
-            || (pos + 2 < n && src[pos + 2] == '\'') || !(src[pos + 1].is_ascii_alphabetic() || src[pos + 1] == '_'))
+            || !(src[pos + 1].is_ascii_alphabetic() || src[pos + 1] == '_') || {
+                // a label `'name` is never followed by a quote; `'a'` and `'if'` are char literals (the second is rejected)
+                let k = src[pos + 1..].iter().position(|d| !(d.is_ascii_alphanumeric() || *d == '_')).map_or(n, |k| pos + 1 + k);
+                k < n && src[k] == '\''
+            })
         {
-            // P7: char literal `'a'` (a label `'name` never has a quote right after its first character)
+            // P7: char literal
             let (v, end) = lex_char_lit(src, pos + 1, false, line, col)?;
             toks.push(Tok { kind: Kind::Char, val: v.to_string(), line, col, end: col + (end - pos) as i64 });
             pos = end;

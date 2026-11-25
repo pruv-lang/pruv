@@ -1,0 +1,2 @@
+const C: char = 97;
+fn f() -> char { return C; }

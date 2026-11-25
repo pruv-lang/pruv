@@ -2634,31 +2634,37 @@ fn is_digit(c: char) -> bool
 }
 ```
 - R-6t-1 **Characters.** `char` is a Unicode scalar value: `0..=0x10FFFF` without the surrogates `0xD800..=0xDFFF`.
-  It is a Copy value with `== != < <= > >=`; arithmetic and unary `-` on it are `type/char_op` and an integer
+  It is a Copy value with `== != < <= > >=`; arithmetic and unary `-` on it are `type/char_op`, a char is not an array index and an integer
   literal where a char is expected is `type/type_mismatch`. Literals: `'a'`, the escapes `\n \r \t \0 \\ \' \"`,
-  `\xHH` up to `\x7F` and `\u{H..}` (1 to 6 hex digits, a scalar value). `b'a'` is a `u8` byte literal (ASCII
+  `\xHH` up to `\x7F` and `\u{H..}` (1 to 6 hex digits, `_` allowed after the first, a scalar value). `b'a'` is a `u8` byte literal (ASCII
   characters and the same escapes, `\xHH` up to `\xFF`). An empty literal, more than one character, a surrogate or an
-  out-of-range escape is `parse/char_literal`. The verifier models a char as an integer with that range. Code: Rust
-  emits `char`, `'a'` and `b'a'` as written; LLVM uses `i32`. Tests: [accept](tests/spec/r6t_1_accept.pruv),
+  out-of-range escape is `parse/char_literal` (`'if'` too: a quote right after a name ends a char literal, not a label). The verifier models a char as an integer with that range. Code: Rust
+  emits `char` and each literal as a Rust literal of the same value (`'\u{1F600}'` may print as `'😀'`); LLVM uses `i32`. Tests: [accept](tests/spec/r6t_1_accept.pruv),
   [reject](tests/spec/r6t_1_reject.pruv), [false contract](tests/spec/r6t_1_reject_contract.pruv),
   [runtime](tests/runtime/p7_rt_char.pruv), [surrogate literal](tests/must_reject/p7_char_literal.pruv),
-  [empty literal](tests/must_reject/p7_char_literal_empty.pruv), [arithmetic](tests/must_reject/p7_char_op.pruv).
+  [empty literal](tests/must_reject/p7_char_literal_empty.pruv), [arithmetic](tests/must_reject/p7_char_op.pruv),
+  [negation](tests/must_reject/p7_char_neg.pruv), [two characters](tests/must_reject/p7_char_multi.pruv),
+  [`\u{_..}`](tests/must_reject/p7_char_u_underscore.pruv), [index](tests/must_reject/p7_char_index.pruv),
+  [word width](tests/must_reject/p7_char_word_width.pruv).
 - R-6t-2 **Char conversions.** `u32(c)` (and any width that holds `0..=0x10FFFF`) converts a char to its code
-  point; `char(x)` converts from `u32` or `u8`. Every other conversion to or from char is `type/char_cast`. `char(b)`
+  point; `char(x)` converts from `u32`, `u8` or `char`. Every other conversion to or from char, including from a non-integer, is `type/char_cast`. `char(b)`
   of a `u8` always fits; `char(x)` of a `u32` is a range obligation: the verifier must prove `x` is a scalar value
   (`verify/cast_range`), and in contracts the conversion is rejected like every narrowing cast. Code: a proven
   conversion is `char::from_u32_unchecked`; under `--no-verify` Rust uses `char::try_from` and LLVM a range test,
   both stopping with "cast out of range". Tests: [accept](tests/spec/r6t_2_accept.pruv),
   [reject](tests/spec/r6t_2_reject.pruv), [false contract](tests/spec/r6t_2_reject_contract.pruv),
   [runtime](tests/runtime/p7_rt_char_proven.pruv), [run-time check](tests/runtime/p7_rt_char_cast_fail.pruv),
-  [narrowing](tests/must_reject/p7_char_narrow.pruv).
+  [narrowing](tests/must_reject/p7_char_narrow.pruv), [from bool](tests/must_reject/p7_char_cast_bool.pruv),
+  [in a contract](tests/must_reject/p7_char_contract_cast.pruv).
 - R-6t-3 **Constants.** `const NAME: T = expr;` at module level declares a constant of an integer width or `char`
   (`type/const_type` for other types, including bool). The compiler evaluates `expr` at compile time from literals,
-  other constants (in any order; a cycle is `type/const_expr`), `+ - * / %` (Euclidean, as at run time), unary `-`
-  and int-width or char conversions; anything else is `type/const_expr`. Every intermediate value must fit `T`
-  (`type/const_range`), a zero divisor is `type/const_div_zero`, and an operand of another type is
-  `type/const_type`. A use of the name is the value, so the verifier knows it exactly. A parameter, local, binder,
-  function or field named like a constant, or a second constant of the same name, is `parse/const_shadow`. Constants
+  other constants (in any order; a cycle is `type/const_expr`), `+ - * / %`, unary `-` and int-width or char
+  conversions; anything else is `type/const_expr`. `/` and `%` take the run-time domain (section 7: dividend >= 0,
+  divisor > 0, so Euclidean and Rust's truncating results agree): a zero divisor is `type/const_div_zero` and a
+  negative operand is `type/const_expr`. Every value is checked against the type it has: the operands and result of an
+  arithmetic step against `T`, the operand of a conversion against its own type and the result against the target
+  (`type/const_range`). An operand of another type, or an integer literal as a char constant, is `type/const_type`. A use of the name is the value, so the verifier knows it exactly. A parameter, local, binder,
+  `for` binder, function or field named like a constant, or a second constant of the same name, is `parse/const_shadow`. A constant name is upper case (`A-Z`, digits, `_`, starting with a letter), as in Rust style; any other name, `result` included, is `parse/const_name`. A constant is an ordinary typed operand: `1 + N` with `N: u8` is `u8`, `0..N` is a range and `a[N]` an index. Constants
   exist only in a single-file program without `pub` or `mod` items; `pub const` and constants next to modules are
   `parse/const_module` (parity row P7-3). Code: Rust emits `const NAME: T = value;` with the evaluated value and
   spells uses by name; LLVM uses the value. Tests: [accept](tests/spec/r6t_3_accept.pruv),
@@ -2668,12 +2674,14 @@ fn is_digit(c: char) -> bool
   [mismatch](tests/must_reject/p7_const_mismatch.pruv), [division](tests/must_reject/p7_const_div_zero.pruv),
   [range](tests/must_reject/p7_const_neg_range.pruv), [char range](tests/must_reject/p7_const_char_range.pruv),
   [shadow](tests/must_reject/p7_const_shadow.pruv), [duplicate](tests/must_reject/p7_const_dup.pruv),
-  [pub](tests/must_reject/p7_const_pub.pruv).
+  [pub](tests/must_reject/p7_const_pub.pruv), [lower case](tests/must_reject/p7_const_result.pruv),
+  [for binder](tests/must_reject/p7_const_for_binder.pruv), [char from int](tests/must_reject/p7_const_char_int.pruv),
+  [negative division](tests/must_reject/p7_const_neg_div.pruv).
 - R-6t-4 **Fixed-length arrays (not yet).** The type `[T; N]` and the literals `[a, b, c]` and `[x; N]` are
   `parse/fixed_array` (parity row P7-1); the length bound `[T; <=N]` (section 7a) is unchanged. Tests:
   [accept](tests/spec/r6t_4_accept.pruv), [reject](tests/spec/r6t_4_reject.pruv),
   [literal](tests/must_reject/p7_array_literal.pruv), [repeat](tests/must_reject/p7_array_repeat.pruv),
-  [type](tests/must_reject/p7_array_type.pruv).
+  [type](tests/must_reject/p7_array_type.pruv), [char element](tests/must_reject/p7_array_char_type.pruv).
 
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
@@ -3107,6 +3115,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/break_value` | parse | `break` followed by a value (not `;`, a label or `}`); bundle P15 (R-6r-3) |
 | `parse/char_literal` | parse | a malformed character or byte literal: empty, several characters, a surrogate or an out-of-range escape (R-6t-1) |
 | `parse/const_module` | parse | `pub const`, or a constant in a program with `pub` or `mod` items (R-6t-3) |
+| `parse/const_name` | parse | a constant name that is not upper case (R-6t-3) |
 | `parse/const_shadow` | parse | a name declared again where a constant of that name exists, or a constant declared twice (R-6t-3) |
 | `parse/cost_syntax` | parse | `cost` needs one expression and must be the last header clause |
 | `parse/decreases_syntax` | parse | a malformed, empty or repeated `decreases` clause |

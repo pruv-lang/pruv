@@ -5510,7 +5510,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     return if !self.verified && !source.fits_in(target) {
                         Ok(format!("{}::try_from({value}).unwrap_or_else(|_| pruv_ovf(\"cast out of range\"))", target.name))
                     } else if target.is_char() && !source.fits_in(target) {
-                        // P7: a proven u32 -> char (R-6t-5); Rust `as char` only takes u8
+                        // P7: a proven u32 -> char (R-6t-2); Rust `as char` only takes u8
                         Ok(format!("(unsafe {{ ::std::char::from_u32_unchecked({value}) }})"))
                     } else {
                         Ok(format!("({value} as {})", target.name))
@@ -6020,7 +6020,8 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     } else if expr_ty(xa).as_deref().map_or(false, |t| is_array_name(t) || t == "str") {
                         args.push(self.arr_ref(xa)?);
                     } else if let Expr::IntLit(lit) = xa {
-                        if self.fmap.get(n).copied().is_some_and(has_struct_inout) && !lit.value.starts_with('-') {
+                        if self.fmap.get(n).copied().is_some_and(has_struct_inout) && !lit.value.starts_with('-')
+                            && lit.kind == crate::ast::LitKind::Int {
                             args.push(lit.value.clone());
                         } else {
                             args.push(self.e(xa)?);
