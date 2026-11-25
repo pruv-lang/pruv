@@ -1,0 +1,6 @@
+// P7-1 B: a zero-length fixed array has no writable element
+fn f() -> i64 {
+  let mut a: [bool; 0] = [true; 0];
+  a[0] = false;
+  return 0;
+}

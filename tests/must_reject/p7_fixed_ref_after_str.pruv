@@ -1,0 +1,8 @@
+// P7-1 B: a string literal argument must not leave the call lend open for a later ref [u8] local
+fn g(s: [u8]) -> i64 { return len(s); }
+fn f() -> i64 {
+  let a: [u8; 2] = [65, 66];
+  let k: i64 = g("xy");
+  let v: ref [u8] = a;
+  return len(v) + k;
+}

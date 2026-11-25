@@ -1,0 +1,6 @@
+// P7-1 B: a ref [u8] local is not a call lend
+fn f() -> i64 {
+  let a: [u8; 2] = [65, 66];
+  let v: ref [u8] = a;
+  return len(v);
+}

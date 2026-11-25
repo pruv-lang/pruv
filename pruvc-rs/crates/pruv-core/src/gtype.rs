@@ -269,6 +269,13 @@ pub(crate) fn key_is_scalar_vec(key: &str) -> bool {
     matches!(key, "vec<i64>" | "vec<bool>")
 }
 
+/// P7-1 B: a fixed-length array `[T; N]` argument borrowed as the read-only legacy array `[T]` of the same element,
+/// for the duration of one internal call.
+pub(crate) fn key_is_fixed_borrow(actual: &str, expected: &str) -> bool {
+    let (a, e) = (GType::from_key(actual), GType::from_key(expected));
+    e.is_array() && e.args.is_empty() && a.fixed_parts().is_some_and(|(el, _)| Some(el.clone()) == e.array_elem())
+}
+
 pub(crate) fn key_is_vec_slice_arg(actual: &str, expected: &str) -> bool {
     matches!((actual, expected), ("vec<i64>", "array") | ("vec<bool>", "array_bool"))
 }

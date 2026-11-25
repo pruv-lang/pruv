@@ -1,0 +1,14 @@
+// P7-1 B: after a loop writes an i64 fixed array its old values are not kept
+fn f() -> i64 {
+  let mut a: [i64; 2] = [0; 2];
+  let mut k: i64 = 0;
+  while k < 2
+    invariant 0 <= k && k <= 2
+    decreases 2 - k
+  {
+    a[k] = 9;
+    k = k + 1;
+  }
+  assert a[1] == 0;
+  return 0;
+}

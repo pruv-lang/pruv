@@ -1,0 +1,4 @@
+// P7-1 B: a fixed-array parameter has exactly N elements
+fn f(a: [i64; 2]) -> i64 {
+  return a[2];
+}

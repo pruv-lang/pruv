@@ -1,0 +1,10 @@
+// P7-1 B: after an inout call only the element range is known, not the old values
+fn bump(inout a: [i64; 2]) -> () {
+  a[0] = 5;
+}
+fn g() -> i64 {
+  let mut a: [i64; 2] = [1, 2];
+  bump(inout a);
+  assert a[1] == 2;
+  return 0;
+}

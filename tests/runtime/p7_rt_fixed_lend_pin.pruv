@@ -1,0 +1,16 @@
+// P7-1 B runtime: in explicit mode a [i64 | 0..=255] parameter shared by a narrowed view and a lent [i64; 3]
+// keeps i64 storage (the lend pins the parameter's element width)
+fn h(a: [i64 | 0..=255]) -> i64
+  requires len(a) == 3
+  ensures result == a[0] + a[1] + a[2]
+{
+  return a[0] + a[1] + a[2];
+}
+
+pub fn run(i: i64) -> i64 ! alloc
+  requires 0 <= i && i < 3
+{
+  let v: [i64 | 0..=255] = alloc(3, 100);
+  let f: [i64; 3] = [i, 200, 255];
+  return h(v) * 10000 + h(f);
+}

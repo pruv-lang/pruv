@@ -1,0 +1,55 @@
+// P7-1 B runtime: [T; N] as a parameter and a result (by value), and an inout parameter
+fn sum3(a: [i32; 3]) -> i64
+  ensures result == i64(a[0]) + i64(a[1]) + i64(a[2])
+{
+  return i64(a[0]) + i64(a[1]) + i64(a[2]);
+}
+
+fn make(x: i32) -> [i32; 3]
+  ensures result[0] == x && result[1] == 7 && result[2] == 0
+{
+  let mut a: [i32; 3] = [0; 3];
+  a[0] = x;
+  a[1] = 7;
+  return a;
+}
+
+fn bump(inout a: [i32; 3], k: i64) -> ()
+  requires 0 <= k && k < 3 && -1000 <= a[k] && a[k] <= 1000
+  ensures a[k] == old(a)[k] + 1
+{
+  a[k] = a[k] + 1;
+}
+
+fn flip(b: [bool; 2]) -> [bool; 2]
+  ensures result[0] == !b[0] && result[1] == !b[1]
+{
+  return [!b[0], !b[1]];
+}
+
+// the by-value argument is a copy: the inout write does not reach it
+fn both(inout a: [i32; 3], c: [i32; 3]) -> i64
+  requires -1000 <= a[0] && a[0] <= 1000
+  ensures result == i64(c[0]) && a[0] == old(a)[0] + 1 && a[1] == old(a)[1]
+{
+  a[0] = a[0] + 1;
+  return i64(c[0]);
+}
+
+fn run(i: i64) -> i64
+  requires 0 <= i && i < 3
+{
+  let mut a: [i32; 3] = make(i32(i));
+  assert i64(a[0]) == i && a[1] == 7;
+  bump(inout a, i);
+  let s: i64 = sum3(a);
+  let f: [bool; 2] = flip([true, false]);
+  let mut t: i64 = 0;
+  if f[1] && !f[0] { t = 1000; }
+  let w: i64 = i64(make(5)[1]);
+  let mut d: [i32; 3] = [1, 2, 3];
+  let e: [i32; 3] = d;
+  let r: i64 = both(inout d, e);
+  assert r == 1 && d[0] == 2 && e[0] == 1;
+  return s + t + w * 10000 + r * 100000;
+}

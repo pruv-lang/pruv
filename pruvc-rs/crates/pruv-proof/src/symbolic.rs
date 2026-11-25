@@ -4120,7 +4120,8 @@ impl<'a> FnVerifier<'a> {
         if let Val::Arr(ra) = &res {
             let w = self.z.and(&[ra.n.ge_i(0), ra.n.le_i(MAX_LEN)]);
             self.assume(st, g, w);
-            if let Some(width) = ra.elem.narrow_width() {
+            if let Some(width) = ra.elem.narrow_width().or_else(|| fixed_elem_width(ra)) {
+                // P7-1 B: a fixed-array result holds values of its element type
                 let d = self.narrow_elem_domain(&ra.a, &ra.n, width);
                 self.assume(st, g, d);
             } else if f.foreign.is_some() && is_vec_i64(&rty) {
@@ -4315,6 +4316,11 @@ impl<'a> FnVerifier<'a> {
                     let fa = fv.try_arr()?;
                     let nv = pre.like(fa.a.clone(), pre.n.clone(), name);
                     if let Some(width) = nv.elem.narrow_width() {
+                        let d = self.narrow_elem_domain(&nv.a, &nv.n, width);
+                        self.assume(st, g, d);
+                    }
+                    // P7-1 B: a fixed inout keeps the range of its element type across the call
+                    if let Some(width) = fixed_elem_width(&nv) {
                         let d = self.narrow_elem_domain(&nv.a, &nv.n, width);
                         self.assume(st, g, d);
                     }
@@ -6560,6 +6566,11 @@ impl<'a> FnVerifier<'a> {
                         pc.push(self.narrow_elem_domain(&a.a, &a.n, width));
                         shape.push(pc[pc.len() - 1].clone());
                     }
+                    // P7-1 B: a fixed-array parameter holds values of its element type
+                    if let Some(width) = fixed_elem_width(a) {
+                        pc.push(self.narrow_elem_domain(&a.a, &a.n, width));
+                        shape.push(pc[pc.len() - 1].clone());
+                    }
                 }
                 Val::File(f) => pc.push(self.wf_file(f)),
                 Val::Proc(p) => pc.push(self.wf_proc(p)),
@@ -6592,7 +6603,7 @@ impl<'a> FnVerifier<'a> {
         self.snap = Env(f
             .params
             .iter()
-            .filter(|p| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || intwidth::of(&p.ty).is_some() || p.ty == "bool" || matches!(self.inv_decls.get(&p.ty), Some(ast::TypeDecl::Struct(s)) if s.tparams.is_empty())))
+            .filter(|p| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || GType::from_key(&p.ty).is_fixed() || intwidth::of(&p.ty).is_some() || p.ty == "bool" || matches!(self.inv_decls.get(&p.ty), Some(ast::TypeDecl::Struct(s)) if s.tparams.is_empty())))
             .map(|p| (p.name.clone(), env.get(&p.name).clone()))
             .collect());
         let mut st = State::new(env.clone(), pc);
@@ -6694,4 +6705,9 @@ fn arr_shape(t: &Ast) -> String {
         return format!("({} {})", t.decl_name().unwrap_or_default(), parts.join(" "));
     }
     t.sexpr()
+}
+
+/// P7-1 B: the integer width of a fixed array's element type (None for bool and for other arrays)
+fn fixed_elem_width(a: &Arr) -> Option<&'static IntWidth> {
+    a.fix.as_ref().and_then(|f| f.fixed_parts()).and_then(|(e, _)| intwidth::of(&e.name))
 }
