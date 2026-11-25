@@ -917,6 +917,9 @@ pub struct Solver {
     /// is copied into a fresh context that holds only the sorts and declarations its terms reach, so the datatypes,
     /// terms and ids built for the rest of the crate do not change how the solver searches.
     iso: Option<(Z3, RawSolver)>,
+    /// CI-1a: the rlimit cap of the shared-context first check of a query with an rlimit (`SHARED_FIRST_RL`; a test
+    /// lowers it with `set_shared_first_rlimit` to reach the capped-retry path with a small query).
+    first_cap: u32,
 }
 
 /// A solver of `z` with these options (inc_ref'd; the caller dec_refs it).
@@ -954,7 +957,12 @@ impl Solver {
     /// z3py `s.set("timeout", t)`, (if present) `s.set("rlimit", r)`, (if present) `s.set("random_seed", s)`, in this order.
     pub fn with_options(z: &Z3, timeout_ms: u32, rlimit: Option<u32>, seed: Option<u32>) -> Solver {
         let raw = mk_solver_raw(z, timeout_ms, rlimit, seed);
-        Solver { z: z.clone(), raw, opts: (timeout_ms, rlimit, seed), iso: None }
+        Solver { z: z.clone(), raw, opts: (timeout_ms, rlimit, seed), iso: None, first_cap: SHARED_FIRST_RL }
+    }
+    /// CI-1a: the rlimit cap of the shared-context first check (default `SHARED_FIRST_RL`). Tests only: the compiler
+    /// keeps the default so its verdicts match the measured budget.
+    pub fn set_shared_first_rlimit(&mut self, cap: u32) {
+        self.first_cap = cap;
     }
     pub fn add(&mut self, a: &Ast) {
         // SAFETY: S1 S2 — a is a Bool expression of the same context.
@@ -1019,14 +1027,21 @@ impl Solver {
         // LG21 (G-LG20-1): the shared check gets at most SHARED_FIRST_MS. A query it cannot decide in that time is
         // one the isolated check (full timeout) decides as well as the shared one would; giving the shared check the
         // full timeout doubled the cost of every query that ends unknown (8 s + 8 s per stage-0 timeout in a3).
-        let full = self.opts.0;
-        let first = full.min(SHARED_FIRST_MS);
-        if first < full {
-            set_timeout(&self.z, self.raw, first);
+        // CI-1a: with an rlimit the first check is capped by SHARED_FIRST_RL instead of the wall clock, so which
+        // context answers (and so which model a counterexample prints) does not depend on machine load. Without an
+        // rlimit the wall-clock cap stays.
+        let (full, rl) = (self.opts.0, self.opts.1);
+        let (first, first_rl) = match rl {
+            Some(r) => (full, Some(r.min(self.first_cap))),
+            None => (full.min(SHARED_FIRST_MS), None),
+        };
+        let capped = first < full || first_rl != rl;
+        if capped {
+            set_limits(&self.z, self.raw, first, first_rl);
         }
         let r = unsafe { z::Z3_solver_check(self.z.raw(), self.raw) } as i32;
-        if first < full {
-            set_timeout(&self.z, self.raw, full);
+        if capped {
+            set_limits(&self.z, self.raw, full, rl);
         }
         match r {
             LBOOL_TRUE => return Sat::Sat,
@@ -1041,8 +1056,11 @@ impl Solver {
         // (its context has another history: inf_budget reads `canceled` there and `max. resource limit exceeded`
         // here); tests/diff_trace.py treats that as same_unknown when the query text is identical (G-LG21-3).
         // SAFETY: S1 S4.
+        // CI-1a: a stop at the first-check rlimit cap is retried like a timeout. z3 reports an rlimit stop as `canceled`
+        // (the `canceled` test below) or as "max. resource limit exceeded" / "Resource limits hit in push", so match case-insensitively.
         let why = unsafe { take_string(z::Z3_solver_get_reason_unknown(self.z.raw(), self.raw)) };
-        if !(why.contains("timeout") || why.contains("canceled")) {
+        let capped_stop = first_rl != rl && why.to_ascii_lowercase().contains("resource limit");
+        if !(why.contains("timeout") || why.contains("canceled") || capped_stop) {
             return Sat::Unknown;
         }
         let iz = Z3::new();
@@ -1062,17 +1080,27 @@ impl Solver {
         }
     }
 }
-/// LG21 (G-LG20-1): the timeout of the first check in the shared context (see `Solver::check`).
+/// LG21 (G-LG20-1): the timeout of the first check in the shared context of a query without an rlimit (see `Solver::check`).
 const SHARED_FIRST_MS: u32 = 2000;
-/// z3py `s.set("timeout", ms)` on an existing solver.
-fn set_timeout(z: &Z3, s: RawSolver, ms: u32) {
+/// CI-1a: the rlimit of the first check in the shared context of a query with an rlimit (see `Solver::check`). The
+/// largest decided verification query of the test suite uses about 7.8M (symbolic::RLIMIT); a query above 10M is
+/// still decided, in the isolated context, under the same full rlimit.
+/// Inference queries (infer::RLIMIT 100000) are below it, so they keep one rlimit for both checks.
+const SHARED_FIRST_RL: u32 = 10_000_000;
+/// z3py `s.set("timeout", ms)` (and, if present, `s.set("rlimit", r)`) on an existing solver.
+fn set_limits(z: &Z3, s: RawSolver, ms: u32, rlimit: Option<u32>) {
     let key = z.sym("timeout");
+    let rkey = rlimit.map(|_| z.sym("rlimit"));
     let c = z.raw();
     // SAFETY: S1 — `s` is a live solver of `z`; the params object is inc_ref'd for its use here and dec_ref'd after.
+    // The symbols were made in the same context.
     unsafe {
         let p = nn(z::Z3_mk_params(c));
         z::Z3_params_inc_ref(c, p);
         z::Z3_params_set_uint(c, p, key, ms as c_uint);
+        if let (Some(k), Some(r)) = (rkey, rlimit) {
+            z::Z3_params_set_uint(c, p, k, r as c_uint);
+        }
         z::Z3_solver_set_params(c, s, p);
         z::Z3_params_dec_ref(c, p);
     }

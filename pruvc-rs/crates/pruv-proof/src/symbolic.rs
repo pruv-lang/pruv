@@ -42,8 +42,14 @@ pub type R<T> = Result<T, String>;
 
 /// verify.py line 7.
 pub const MAX_LEN: i64 = 1 << 40;
-/// verify.py line 8.
-pub const TIMEOUT_MS: u32 = 8000;
+/// CI-1a: in verification the z3 resource limit decides each query, so a verdict does not depend on machine load.
+/// The largest count a decided (sat or unsat) verification query of the test suite uses is about 7.8M
+/// (tests/runtime/g10a_r21_backpressure.pruv --infer); 20M leaves 2.5x headroom. The shared-context check of `sys::Solver::check`
+/// gets `SHARED_FIRST_RL` of it first. The wall clock is a safety net only, far above any test (an rlimit-bounded
+/// query that ends unknown stops in under 10 s): a test that hits it is a bug. verify.py (frozen) keeps 8000 ms.
+pub const RLIMIT: u32 = 20_000_000;
+/// per-query wall clock (safety net)
+pub const TIMEOUT_MS: u32 = 60000;
 
 /// verify.py `QueryConfig`: recording boundary of one solver query (phase, round, resource limits).
 #[derive(Clone, Debug)]
@@ -58,7 +64,7 @@ pub struct QueryConfig {
 
 impl Default for QueryConfig {
     fn default() -> Self {
-        QueryConfig { phase: "verification".to_string(), round: None, timeout_ms: TIMEOUT_MS, rlimit: None, seed: None }
+        QueryConfig { phase: "verification".to_string(), round: None, timeout_ms: TIMEOUT_MS, rlimit: Some(RLIMIT), seed: None }
     }
 }
 
@@ -1073,7 +1079,7 @@ pub struct FnVerifier<'a> {
     pub(crate) funcs: HashMap<String, &'a ast::Function>,
     /// `s.f`: the function being proved (None on the prototype path).
     pub(crate) f: Option<&'a ast::Function>,
-    /// Solver query configuration (default: verification, TIMEOUT_MS, no rlimit/seed).
+    /// Solver query configuration (default: verification, TIMEOUT_MS, RLIMIT, no seed).
     pub qcfg: QueryConfig,
     /// STAGE1 B2 `extra`: loop number → candidates. If empty, the existing path (fresh numbers, SMT and errors unchanged).
     pub extra: Extra,

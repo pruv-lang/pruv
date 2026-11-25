@@ -4,7 +4,7 @@
 //! - `sys`        : a small wrapper over z3-sys. **unsafe lives only in this module** (see `deny` below).
 //! - `model`      : `Opt`/`Res` Datatype, user struct/enum `Model`, `_MODEL_SEQ`
 //! - `symbolic`   : `State`/`Arr`/`FnVerifier`: fresh, wf, havoc, aggregate lemmas, expression `ev`, domain `dom`, statement `exec`, `run`
-//! - `obligation` : `prove` (pc → guard → (lemmas) → Not(ob), timeout 8000ms, seen key), counterexample `cex`/`fmt_val`, trace
+//! - `obligation` : `prove` (pc → guard → (lemmas) → Not(ob), rlimit-decided with a wall-clock safety net, seen key), counterexample `cex`/`fmt_val`, trace
 //! - `samples`    : builders hand-porting the obligations of the 6 sample .pruv files (0B prototype; used by `pruv-proof-spike`)
 //!
 //! The public entry point is [`verify_program`]. For the same input, the SMT-LIB text passed to z3 per obligation, the verdicts and the error JSON

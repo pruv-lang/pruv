@@ -3267,8 +3267,10 @@ G3 added the error codes `generic_syntax`, `type_parameter`, `type_arity`, `type
 `generic_bound`, `generic_main` and `specialization_limit` (section 6c).
 
 `verify_unknown` is not a counterexample: the solver gave up on that one obligation (the message usually ends in
-`(timeout)`). Each attempt gets 8 seconds of wall time (a second attempt with aggregate lemmas when aggregates are
-used), so a loaded machine can also cause it. The program may be correct; make the proof easier. What helps, in order:
+`max. resource limit exceeded`). Each attempt gets a fixed z3 resource budget (20M; the first try in the shared
+context gets 10M and, if it runs out, the query is retried alone with the full budget; a second attempt with aggregate
+lemmas when aggregates are used), so the verdict does not depend on machine load. A 60 s wall clock per check is only a
+safety net. The program may be correct; make the proof easier. What helps, in order:
 - Keep each loop invariant to one simple fact, and state a fact about one position without a quantifier when you can:
   "`last` is the last negative index before `i`" is `-1 <= last && last < i`, `last == -1 || a[last] < 0` and
   `forall k in last + 1..i: a[k] >= 0`, not `forall s in 0..i: (exists k in s..i: a[k] < 0) ==> s <= last`.

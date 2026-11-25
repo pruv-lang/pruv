@@ -26,7 +26,7 @@ fn every_sample_has_well_formed_trace() {
                 assert_ne!(attempts[j - 1]["result"], "unsat", "no retry after unsat");
             }
             for a in attempts {
-                assert!(a["smt2"].as_str().unwrap().starts_with("(set-option :timeout 8000)\n"));
+                assert!(a["smt2"].as_str().unwrap().starts_with("(set-option :timeout 60000)\n(set-option :rlimit 20000000)\n"));
                 assert!(matches!(a["result"].as_str().unwrap(), "sat" | "unsat" | "unknown"));
             }
         }

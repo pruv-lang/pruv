@@ -14,7 +14,7 @@
 | Exploration query `random_seed` | 0 |
 | Inference time safeguard per function | 5 s (wall clock) |
 
-Final verification is as before (timeout 8000, no rlimit or seed).
+Final verification uses its own resource limit (CI-1a: rlimit 20M, wall clock 60 s as a safety net, no seed).
 
 ## 2. Loop numbering
 
