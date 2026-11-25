@@ -1,0 +1,17 @@
+# golden l3_abi_proven_entries.txt: check_proven_entries: generated Rust text per case
+proven_entries|app --no-verify	2 cases: rust-plain 1, rust-proven 1	rust-plain=ce79537022f0	rust-proven=a4308ca0da63
+proven_entries|app --trust-callers	2 cases: rust-plain 1, rust-proven 1	rust-plain=2f04a1790346	rust-proven=5b171b4de7bd
+proven_entries|app default	2 cases: rust-plain 1, rust-proven 1	rust-plain=d512278e503a	rust-proven=92bec64e33a3
+proven_entries|attrs	1 case: rust-proven 1	rust-proven=c2fe07aa4ca0
+proven_entries|clash	2 cases: diagnostic 1, rust-plain 1	diagnostic=028129dbb122	rust-plain=264843f4faef
+proven_entries|fp --no-verify	2 cases: rust-plain 1, rust-proven 1	rust-plain=85de9a99a21a	rust-proven=1d64ea77b4b3
+proven_entries|fp --trust-callers	2 cases: rust-plain 1, rust-proven 1	rust-plain=4b8e67a06753	rust-proven=4cfeece0c21b
+proven_entries|fp default	2 cases: rust-plain 1, rust-proven 1	rust-plain=4b8e67a06753	rust-proven=4cfeece0c21b
+proven_entries|fp-print --trust-callers --foreign-checks all	1 case: rust-proven 1	rust-proven=ab93a50814f5
+proven_entries|fp-print --trust-callers --foreign-checks off	1 case: rust-proven 1	rust-proven=e7b2b61f890c
+proven_entries|fp-print --trust-callers --foreign-checks requires	1 case: rust-proven 1	rust-proven=68096129c971
+proven_entries|fp-print default --foreign-checks all	1 case: rust-proven 1	rust-proven=ab93a50814f5
+proven_entries|fp-print default --foreign-checks off	1 case: rust-proven 1	rust-proven=e7b2b61f890c
+proven_entries|fp-print default --foreign-checks requires	1 case: rust-proven 1	rust-proven=68096129c971
+proven_entries|manifest crate	2 cases: rust-plain 1, rust-proven 1	rust-plain=0c489bc6e863	rust-proven=0c489bc6e863
+proven_entries|manifest unsafe	2 cases: rust-plain 1, rust-proven 1	rust-plain=3cbfd611c52e	rust-proven=7dc36e046862

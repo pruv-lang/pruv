@@ -1,3 +1,6 @@
+# PF: the rs goldens are captured from LF sources (mutants, byte offsets); a CRLF checkout (Windows autocrlf) must not
+# change them. The -text lines below override this for the samples that keep raw bytes.
+*.pruv text eol=lf
 # G2 B0: the first four samples must end without a trailing newline; str_err_del keeps its raw DEL (0x7F) byte
 tests/must_reject/g2b_unterminated.pruv -text
 tests/must_reject/g2b_unterminated_escape.pruv -text

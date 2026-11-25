@@ -1,9 +1,12 @@
-"""G4b-2 (docs/G4B_SPEC.md section 6): `--trust-report PATH` on the Python compiler and, with --rs, on the Rust driver.
+"""G4b-2 (docs/G4B_SPEC.md section 6): `--trust-report PATH` on the Rust driver (and, with --vs-py, the Python compiler).
 
-usage: check_trust.py WORK [--rs PATH]     (PATH: the Rust driver; the Python compiler always runs)
+usage: check_trust.py WORK --rs PATH [--vs-py]     (PATH: the Rust driver; --vs-py also runs the frozen Python compiler)
 Every case runs on each selected compiler. Per report: content checks, the canonical format (keys sorted, indent 2,
-non-ASCII kept, final newline), the `compiler` object. With --rs the two reports must also be identical after removing
-the `compiler` object. Prints one line per failing check and `trust: N/N passed`; exit 0 only if all pass."""
+non-ASCII kept, final newline), the `compiler` object. With --vs-py the two reports must also be identical after
+removing the `compiler` object. Prints one line per failing check and `trust: N/N passed`; exit 0 only if all pass.
+
+PF change: pruvc/ is frozen, so the default run only uses the Rust driver: it never runs pruvc.py and never reads
+pruvc/*.py sources. The py-vs-rs report comparisons and the Python catalog/parser source scans need --vs-py."""
 from pathlib import Path
 import hashlib
 import json
@@ -169,12 +172,15 @@ class R:
 
 
 class Harness:
-    def __init__(self, work, binary):
+    def __init__(self, work, binary, vs_py=False):
         self.work = Path(work) / "g4b_trust"
         self.work.mkdir(parents=True)
-        self.comps = [("py", [sys.executable, str(ROOT / "pruvc" / "pruvc.py")])]
+        self.comps = []
+        if vs_py:   # PF: the frozen Python compiler is a reference only, opt-in
+            self.comps.append(("py", [sys.executable, str(ROOT / "pruvc" / "pruvc.py")]))
         if binary:
             self.comps.append(("rs", [binary]))
+        self.vs_py = vs_py
         self.n = 0
 
     def project(self, files):
@@ -288,6 +294,8 @@ def basic(name, res, rc=0):
         errs = schema_errors(r.rep, label)
         check(tag + ": schema", not errs, "; ".join(errs))
     reps = [r.rep for r in res.values()]
+    # PF: py-vs-rs comparison dropped from the default run; it caught any report difference (packages, trusted items,
+    # catalog, flags, hashes) between the Python and Rust compilers. Runs only under --vs-py (two compilers).
     if len(res) == 2 and all(x is not None for x in reps):
         a, b = strip(reps[0]), strip(reps[1])
         check(name + ": reports equal across compilers", a == b, "py: %s\nrs: %s" % (
@@ -554,15 +562,19 @@ def case_backend(h):
               and strip(r.rep) == strip(rust[label].rep), r.text)
         check(tag + ": llvm canonical bytes", r.raw is not None and r.rep is not None and r.raw == canon(r.rep).encode("utf-8"), "")
     live = {k: v for k, v in llvm.items() if v.rc != 2}
+    # PF: py-vs-rs comparison dropped from the default run; it caught llvm-backend reports differing between the
+    # Python and Rust compilers (the per-compiler llvm == rust-backend check above stays).
     if len(live) == 2:
         check("backend: llvm reports equal across compilers", strip(live["py"].rep or {}) == strip(live["rs"].rep or {}), "")
 
 
-def scan_ops():
-    """catalog op names from pruvc/foreign.py (_add calls) and foreign.rs (CATALOG_NAMES)"""
-    py = (ROOT / "pruvc" / "foreign.py").read_text(encoding="utf-8")
+def scan_ops(vs_py=False):
+    """catalog op names from foreign.rs (CATALOG_NAMES) and, only under --vs-py, pruvc/foreign.py (_add calls, read as text)"""
     rs = (ROOT / "pruvc-rs" / "crates" / "pruv-core" / "src" / "foreign.rs").read_text(encoding="utf-8")
-    py_ops = set(re.findall(r"""^_add\(\s*["'](\w+)["']""", py, re.M))
+    py_ops = None
+    if vs_py:
+        py = (ROOT / "pruvc" / "foreign.py").read_text(encoding="utf-8")
+        py_ops = set(re.findall(r"""^_add\(\s*["'](\w+)["']""", py, re.M))
     i = rs.index("CATALOG_NAMES: [&str;")
     j = rs.index("];", i)
     rs_ops = set(re.findall(r'"(\w+)"', rs[i:j]))
@@ -571,17 +583,23 @@ def scan_ops():
 
 def case_completeness(h):
     """9. every trust construct has a report case"""
-    py_ops, rs_ops = scan_ops()
-    check("completeness: catalog scan found ops", len(py_ops) >= 50 and len(rs_ops) >= 50, "%d / %d" % (len(py_ops), len(rs_ops)))
-    check("completeness: both compilers list the same catalog ops", py_ops == rs_ops, sorted(py_ops ^ rs_ops))
-    for op in sorted(py_ops | rs_ops):
+    py_ops, rs_ops = scan_ops(h.vs_py)
+    check("completeness: catalog scan found ops", len(rs_ops) >= 50 and (py_ops is None or len(py_ops) >= 50),
+          "%s / %d" % (None if py_ops is None else len(py_ops), len(rs_ops)))
+    # PF: py-vs-rs comparison dropped from the default run; it caught the Python and Rust catalog op lists drifting apart.
+    if py_ops is not None:
+        check("completeness: both compilers list the same catalog ops", py_ops == rs_ops, sorted(py_ops ^ rs_ops))
+    for op in sorted(rs_ops | (py_ops or set())):
         p = op.split("_")[0] + "_"
         check("completeness: family of %s has a case" % op, p in CATALOG_FAMILIES, "add %r to CATALOG_FAMILIES" % p)
     for p, case in sorted(CATALOG_FAMILIES.items()):
         for label, _ in h.comps:
             check("completeness: case %s produced %s* ops [%s]" % (case, p, label),
                   p in FAMILIES_SEEN.get((case, label), set()), sorted(FAMILIES_SEEN.get((case, label), set())))
-    for path in ("pruvc/vparser.py", "pruvc-rs/crates/pruv-core/src/parser.rs"):
+    parsers = ["pruvc-rs/crates/pruv-core/src/parser.rs"]
+    if h.vs_py:
+        parsers.insert(0, "pruvc/vparser.py")
+    for path in parsers:
         check("completeness: `trusted rust` parsed in " + path, "trusted rust" in (ROOT / path).read_text(encoding="utf-8"), path)
     check("completeness: every kind seen is known", KINDS_SEEN <= TRUST_KINDS, sorted(KINDS_SEEN - TRUST_KINDS))
     check("completeness: every known kind was seen", TRUST_KINDS <= KINDS_SEEN, sorted(TRUST_KINDS - KINDS_SEEN))
@@ -618,8 +636,8 @@ def case_mcp(h):
             check(tag + ": catalog families", fams <= {"string_", "proc_", "ev_", "vec_", "map_"}, sorted(fams))
 
 
-def main(work, binary=None):
-    h = Harness(work, binary)
+def main(work, binary=None, vs_py=False):
+    h = Harness(work, binary, vs_py)
     for fn in (case_trusted, case_catalog, case_flags, case_fail, case_nomanifest, case_std_and_paths, case_sorting,
                case_determinism,
                case_backend, case_mcp, case_completeness):   # completeness last: it needs what the others saw
@@ -639,11 +657,17 @@ def main(work, binary=None):
 if __name__ == "__main__":
     args = sys.argv[1:]
     rs = None
+    vs_py = "--vs-py" in args
+    while "--vs-py" in args:
+        args.remove("--vs-py")
     if "--rs" in args:
         i = args.index("--rs")
+        if i + 1 >= len(args):
+            print(__doc__)
+            sys.exit(2)
         rs = args[i + 1]
         del args[i:i + 2]
-    if len(args) != 1:
+    if len(args) != 1 or (rs is None and not vs_py):
         print(__doc__)
         sys.exit(2)
-    sys.exit(main(args[0], rs))
+    sys.exit(main(args[0], rs, vs_py))

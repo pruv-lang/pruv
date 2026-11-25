@@ -6,6 +6,10 @@ with an SMT solver (z3), proves every array access in bounds and every arithmeti
 operation free of i64 overflow, then emits Rust with all those runtime checks removed.
 If anything cannot be proven, compilation fails with a JSON error containing a counterexample.
 
+Reference implementation: the Rust compiler `pruvc-rs/` is the reference and the product compiler. The Python
+compiler `pruvc/` is FROZEN since bundle PF (2026-11-25): it stays in the tree but gets no new features, so newer
+language features may be implemented only in `pruvc-rs/`.
+
 Design rules: one way to do each thing; everything a function does is visible in its
 signature; no null, no exceptions, no implicit conversions, no globals, no overloading.
 

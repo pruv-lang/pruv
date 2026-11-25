@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""Runner for the Python-implementation <-> Rust-implementation cross-check tools (runs them one after
-another via sys.executable, no shell).
+"""Runner for the Rust-compiler test tools (runs them one after another via sys.executable, no shell).
+
+Since bundle PF the Python compiler (pruvc/) is frozen. The diff_* stages no longer compare Python output with Rust output:
+by default they run only the Rust binaries and check the result against saved golden files (tests/golden/*.txt,
+tests/golden.py). The default run never needs the Python compiler or z3.
 
 Usage:
     python tests/m3_all.py [--only NAME[,NAME]] [--skip NAME[,NAME]] [--quick]
-                           [--rs-dir DIR] [--log-dir DIR] [--timeout SEC]
+                           [--rs-dir DIR] [--log-dir DIR] [--timeout SEC] [--vs-py] [--update-golden]
 
 Stages (in order): parse, check, trace, trace_infer, llvm, rust, compilers, standalone, abi, abi_v2, abi_bool, abi_utf8
-  parse      tests/diff_parse.py --mode parse   (pruv-parse-dump)
-  check      tests/diff_parse.py --mode check   (pruv-check-dump)
-  trace      tests/diff_trace.py                (pruv-trace-dump)
-  trace_infer tests/diff_trace.py --flags=--infer (invariant inference search, down to the final query)
-  llvm       tests/diff_llvm.py                 (pruv-llvm-dump)
-  rust       tests/diff_rust.py                 (pruv-rust-dump)
-  compilers  tests/diff_compilers.py --b rs --backend both (pruvc)
-  standalone tests/standalone/run.py            (pruvc)
+  parse      tests/diff_parse.py --mode parse   (pruv-parse-dump; golden)
+  check      tests/diff_parse.py --mode check   (pruv-check-dump; golden)
+  trace      tests/diff_trace.py                (pruv-trace-dump; golden)
+  trace_infer tests/diff_trace.py --flags=--infer (invariant inference search, down to the final query; golden)
+  llvm       tests/diff_llvm.py                 (pruv-llvm-dump; golden)
+  rust       tests/diff_rust.py                 (pruv-rust-dump; golden)
+  compilers  tests/diff_compilers.py --b rs --backend both (pruvc; golden)
+  standalone tests/standalone/run.py            (pruvc; golden)
   abi        tests/abi/check_generated.py       (pruvc)
   abi_v2     tests/abi/check_runtime_v2.py      (pruvc; runtime v2 link: 6 success/failure cases)
   abi_bool   tests/abi/check_bool_repr.py       (pruvc; [bool] raw ABI representation check pruv_check_bool)
@@ -24,6 +27,12 @@ Options:
   --only/--skip  comma-separated stage names (if both are given, skip is subtracted from only)
   --quick        small inputs: --fuzz-count 20 for parse/check/llvm/rust, --fuzz-count 5 for trace/trace_infer
                  (diff_compilers, standalone, abi, abi_v2 have no such option and run unchanged)
+  --vs-py        opt-in, NOT used by CI: passes --vs-py to the stages that have a frozen Python reference (parse, check,
+                 trace, trace_infer, llvm, rust, compilers, standalone, abi_bool, abi_utf8), which then also run the FROZEN
+                 Python compiler and compare it with Rust (the old behaviour).
+  --update-golden  passes --update-golden to the golden stages (parse ... compilers, standalone): rewrite the golden files from this run's Rust output and print
+                 every changed key (together with --vs-py this is the capture path: run both, report py/rs disagreements).
+                 Other stages ignore it.
   --rs-dir       Rust binary directory (default pruvc-rs/target/release; relative paths are relative to the repo root)
   --log-dir      directory for the per-stage NAME.log (stdout+stderr, written as the stage runs)
                  (default tempfile.mkdtemp; relative paths are relative to the repo root)
@@ -61,6 +70,10 @@ STAGES = [
     ("abi_utf8", "tests/abi/check_utf8_repr.py", "pruvc", "--pruvc", [], []),
 ]
 NAMES = [s[0] for s in STAGES]
+# stages that compare/check against goldens (they accept --vs-py and --update-golden)
+GOLDEN_STAGES = {"parse", "check", "trace", "trace_infer", "llvm", "rust", "compilers", "standalone"}
+# stages with fixed expectations that accept --vs-py (also run the frozen Python compiler) but have no golden
+VS_PY_STAGES = GOLDEN_STAGES | {"abi_bool", "abi_utf8"}
 
 
 def split_names(text, ap, opt):
@@ -116,7 +129,12 @@ def last_line(text):
 
 
 def main(argv):
-    ap = argparse.ArgumentParser(description="Run the Python<->Rust cross-check tools as a batch")
+    ap = argparse.ArgumentParser(description="Run the Rust-compiler golden/check tools as a batch")
+    ap.add_argument("--vs-py", action="store_true",
+                    help="opt-in (not CI): these stages also compare with the frozen Python compiler: "
+                         + " ".join(n for n in NAMES if n in VS_PY_STAGES))
+    ap.add_argument("--update-golden", action="store_true",
+                    help="golden stages rewrite their golden files from the Rust output (with --vs-py: capture path)")
     ap.add_argument("--only", default=None, help="comma-separated stage list: " + " ".join(NAMES))
     ap.add_argument("--skip", default=None, help="comma-separated list of stages to skip")
     ap.add_argument("--quick", action="store_true", help="small inputs (--fuzz-count 20, 5 for trace)")
@@ -161,6 +179,10 @@ def main(argv):
         cmd = [sys.executable, str(ROOT / script)] + fixed + [path_opt, str(binpath)]
         if args.quick:
             cmd += quick
+        if args.vs_py and name in VS_PY_STAGES:
+            cmd.append("--vs-py")
+        if args.update_golden and name in GOLDEN_STAGES:
+            cmd.append("--update-golden")
         print("[%s] start: %s" % (name, " ".join(cmd[1:])), flush=True)
         t0 = time.time()
         log_path = log_dir / (name + ".log")

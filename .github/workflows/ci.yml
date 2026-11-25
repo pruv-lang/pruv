@@ -6,14 +6,19 @@
 #     Linux   = llvm-22-dev and clang-22 from apt.llvm.org
 #     Windows = official release archive clang+llvm-*-x86_64-pc-windows-msvc (has llvm-config and static .lib; cached)
 # - z3 is vendored (z3-src), so every OS builds it from source. That is slow, so the cargo cache (rust-cache) is used.
-# - The Python reference compiler (pruvc/pruvc.py) runs from .venv with z3-solver (tests/compiler_driver.py looks there).
+# - The Python compiler pruvc/ is frozen (bundle PF, 2026-11-25) and is not built or run here; CI tests Rust only.
+#   The test harness is plain Python 3.9 with no packages (no .venv, no z3-solver): the default (rs) mode of every
+#   harness script imports neither z3 nor pruvc/. The frozen py-vs-rs comparisons (--vs-py, --compiler py) are local only.
+# - Golden files (tests/golden/*.txt) hold the expected Rust output; the m3_all stages and the run_all rows l3_abi,
+#   g8_frontend/llvm and the standalone stage check against them.
 #
 # Tests left out on Windows, and why
 # - run_all groups examples and runtime, and m3_all stages compilers, standalone, abi, abi_v2, abi_bool, abi_utf8:
 #   they link the generated code into an executable and run it, and linking Windows executables is not supported
 #   yet (see README). Running the Windows ABI is covered by the separate workflow windows-abi.yml.
 # - Windows runs only the tests that need no linking: cargo test, run_all must_reject (programs that must be
-#   rejected), and m3_all parse, check, trace, trace_infer, llvm, rust (comparison of the two compilers' output).
+#   rejected), and m3_all parse, check, trace, trace_infer, llvm, rust (golden-file checks of the Rust compiler's output).
+#   The Windows Rust run is the check for OS-dependent bugs (it replaces the old Python-vs-Rust comparison).
 
 name: ci
 
@@ -41,7 +46,6 @@ env:
   PYTHONIOENCODING: "utf-8"
   CARGO_TERM_COLOR: always
   LLVM_VERSION: "22.1.8"
-  Z3_SOLVER_VERSION: "5.3.3.0"
 
 jobs:
   build-test:
@@ -119,14 +123,6 @@ jobs:
           ls /c/winsdk/psapi.lib
           echo "RUSTFLAGS=-L native=C:\\xml2stub -L native=C:\\winsdk -C target-feature=+crt-static" >> "$GITHUB_ENV"
 
-      # ---------- Python reference compiler ----------
-      - name: Python reference environment (.venv + z3-solver)
-        run: |
-          python -m venv .venv
-          if [ "$RUNNER_OS" = Windows ]; then py=.venv/Scripts/python.exe; else py=.venv/bin/python; fi
-          "$py" -m pip install -q "z3-solver==${Z3_SOLVER_VERSION}"
-          "$py" -c "import z3; print('z3', z3.get_version_string())"
-
       # ---------- Build ----------
       - uses: Swatinem/rust-cache@v2
         with:
@@ -151,16 +147,16 @@ jobs:
       # ---------- Tests: macOS and Linux (everything) ----------
       - name: run_all, both backends (compared with the saved row list)
         if: runner.os != 'Windows'
-        run: python tests/run_all.py --backend both --compare-rows tests/run_all_rows.txt
+        run: python tests/run_all.py --compiler rs --backend both --compare-rows tests/run_all_rows.txt
 
-      - name: m3_all, Python vs Rust comparison (--quick)
+      - name: m3_all, golden-file checks (--quick)
         if: runner.os != 'Windows'
         run: python tests/m3_all.py --quick --log-dir m3-logs
 
       # ---------- Tests: Windows (no linking; see the header comment) ----------
       - name: run_all must_reject (Windows)
         if: runner.os == 'Windows'
-        run: python tests/run_all.py --only must_reject
+        run: python tests/run_all.py --compiler rs --only must_reject
 
       - name: m3_all stages without linking (Windows, --quick)
         if: runner.os == 'Windows'

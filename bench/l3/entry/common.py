@@ -12,13 +12,16 @@ HERE = Path(__file__).resolve().parent
 WORK = HERE / 'work'
 FIXTURES = HERE / 'fixtures'
 NODE = os.environ.get('ENTRY_NODE') or shutil.which('node') or '/opt/homebrew/bin/node'
-PAIRS = ('py_rust', 'py_llvm', 'rs_rust', 'rs_llvm')
+# PF: the Python compiler pruvc/ is frozen (bundle PF); the Rust compiler is the product. Default pairs are rs only;
+# the py pairs stay valid (ALL_PAIRS) and are selected explicitly with --pairs py/rust,... as the frozen reference.
+ALL_PAIRS = ('py_rust', 'py_llvm', 'rs_rust', 'rs_llvm')
+PAIRS = ('rs_rust', 'rs_llvm')
 IGNORED_KEYS = ('name', 'expect', 'probe', 'integration', 'group', 'parent', 'subs')
 
 
 def host_path(pair):
     """work/<pair>/harness for pair in py_rust, py_llvm, rs_rust, rs_llvm."""
-    if pair not in PAIRS:
+    if pair not in ALL_PAIRS:
         raise ValueError(f'unknown pair {pair!r}')
     return WORK / pair / 'harness'
 

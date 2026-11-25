@@ -1,0 +1,28 @@
+# golden standalone.txt: standalone: result of the Rust --emit exe programs (run) and error JSON (reject)
+standalone|tests/standalone/f01_div_zero.pruv	1 case: run 1	run --no-verify=303462779c99
+standalone|tests/standalone/f02_overflow_add.pruv	1 case: run 1	run --no-verify=be2c175a5797
+standalone|tests/standalone/f03_index_oob.pruv	1 case: run 1	run --no-verify=9882df5ebdda
+standalone|tests/standalone/f04_alloc_negative.pruv	1 case: run 1	run --no-verify=4f03c2c78a3a
+standalone|tests/standalone/f05_requires_violated.pruv	1 case: run 1	run --no-verify=a04943863124
+standalone|tests/standalone/f06_requires_undefined.pruv	1 case: run 1	run --no-verify=ce81318bdf69
+standalone|tests/standalone/f07_div_negative_loop_overflow.pruv	1 case: run 1	run --no-verify=c69ed5217d20
+standalone|tests/standalone/p01_path_space_korean.pruv	1 case: run 1	run default=a12bcbaaac26
+standalone|tests/standalone/p02_path_nested_srcdir.pruv	2 cases: run 2	run --no-verify=d6dcfd8d41a6	run default=d6dcfd8d41a6
+standalone|tests/standalone/s01_print_basic.pruv	2 cases: run 2	run --no-verify=dc6d2b1f7a13	run default=dc6d2b1f7a13
+standalone|tests/standalone/s02_print_extremes.pruv	2 cases: run 2	run --no-verify=5f7f3e284182	run default=5f7f3e284182
+standalone|tests/standalone/s03_effects_io.pruv	1 case: run 1	run default=a8b8225cdddc
+standalone|tests/standalone/s04_alloc_basic.pruv	2 cases: run 2	run --no-verify=9d8a818722a3	run default=9d8a818722a3
+standalone|tests/standalone/s05_copy_count.pruv	2 cases: run 2	run --no-verify=086f07e63d38	run default=086f07e63d38
+standalone|tests/standalone/s06_helper_contracts.pruv	4 cases: run 4	run --contract-budget 1000=81caa0d5640f	run --no-verify=81caa0d5640f	run --trust-callers=81caa0d5640f	run default=81caa0d5640f
+standalone|tests/standalone/s07_while_count.pruv	2 cases: run 2	run --no-verify=1f680ac50075	run default=1f680ac50075
+standalone|tests/standalone/s08_struct.pruv	2 cases: run 2	run --no-verify=7d897e670e34	run default=7d897e670e34
+standalone|tests/standalone/s09_enum_match.pruv	2 cases: run 2	run --no-verify=0899ac51ce3a	run default=0899ac51ce3a
+standalone|tests/standalone/s10_option.pruv	2 cases: run 2	run --no-verify=c20a0af1fa84	run default=c20a0af1fa84
+standalone|tests/standalone/s11_result.pruv	2 cases: run 2	run --no-verify=1ed83305d118	run default=1ed83305d118
+standalone|tests/standalone/s12_array_return.pruv	2 cases: run 2	run --no-verify=50367bc677d3	run default=50367bc677d3
+standalone|tests/standalone/s13_churn_alloc.pruv	2 cases: run 2	run --no-verify=3e4b8f66c09c	run default=3e4b8f66c09c
+standalone|tests/standalone/s14_churn_copy.pruv	2 cases: run 2	run --no-verify=347f3d0afa6f	run default=347f3d0afa6f
+standalone|tests/standalone/s15_nested_calls.pruv	3 cases: run 3	run --no-verify=07b9104ca766	run --trust-callers=07b9104ca766	run default=07b9104ca766
+standalone|tests/standalone/s16_div_mod_loop.pruv	2 cases: run 2	run --no-verify=163518eda326	run default=163518eda326
+standalone|tests/standalone/x01_reject_overflow.pruv	1 case: reject 1	reject default=546b33ca0ad4
+standalone|tests/standalone/x02_reject_effect.pruv	2 cases: reject 2	reject --no-verify=bd855d85b945	reject default=bd855d85b945

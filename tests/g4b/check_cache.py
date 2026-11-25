@@ -1,14 +1,19 @@
-"""G4b-3 (docs/G4B_SPEC.md section 7): `--proof-cache DIR` on the Python compiler and, with --rs, on the Rust driver.
+"""G4b-3 (docs/G4B_SPEC.md section 7): `--proof-cache DIR` on the Rust driver (and, with --vs-py, on the Python compiler).
 
-usage: check_cache.py WORK [--rs PATH] [--py PATH] [--only py|rs] [--case NAME]...
-  --rs PATH: the Rust driver (adds the rs compiler); --py PATH: the pruvc.py to test (default pruvc/pruvc.py; its
-  directory also serves the Python trace tool); --only: run one compiler; --case: run only the named cases
-  (case_cold_warm, case_contract_change, case_never_stored, case_corrupt, case_readonly, case_concurrent, case_keys,
-  case_off, case_noverify), repeatable. The Python compiler always runs unless --only rs.
+usage: check_cache.py WORK --rs PATH [--vs-py [--py PATH]] [--only py|rs] [--case NAME]...
+  --rs PATH: the Rust driver (the rs compiler); --vs-py: also run the frozen Python compiler as a reference (needs
+  pruvc/ and tests/diff_py_adapter.py; never used by CI); --py PATH: the pruvc.py to test (only with --vs-py; default
+  pruvc/pruvc.py; its directory also serves the Python trace tool); --only: run one compiler (`--only py` needs
+  --vs-py); --case: run only the named cases (case_cold_warm, case_contract_change, case_never_stored, case_corrupt,
+  case_readonly, case_concurrent, case_keys, case_off, case_noverify), repeatable.
 Every case runs on each selected compiler (own cache directories per compiler). Compiles use `pruvc --proof-cache`;
-traces use `tests/diff_py_adapter.py trace ... --proof-cache DIR` (py) and `pruv-trace-dump [--infer]
-[--proof-cache DIR] FILE` next to the Rust driver (rs). Prints one line per failing check and `cache: N/N passed`;
-exit 0 only if all pass."""
+traces use `pruv-trace-dump [--infer] [--proof-cache DIR] FILE` next to the Rust driver (rs) and, under --vs-py,
+`tests/diff_py_adapter.py trace ... --proof-cache DIR` (py). Prints one line per failing check and
+`cache: N/N passed`; exit 0 only if all pass.
+
+PF change: pruvc/ is frozen, so the default run no longer registers the py compiler, never runs pruvc.py or
+diff_py_adapter.py and imports nothing from pruvc/. All py-side runs and the py-vs-rs key-disjointness check need
+--vs-py."""
 from pathlib import Path
 import json
 import os
@@ -173,11 +178,11 @@ class R:
 
 
 class Harness:
-    def __init__(self, work, binary, py=None, only=None):
+    def __init__(self, work, binary, py=None, only=None, vs_py=False):
         self.work = Path(work) / "g4b_cache"
         self.work.mkdir(parents=True)
         self.comps = []
-        if only != "rs":
+        if vs_py and only != "rs":   # PF: the frozen Python compiler is a reference only, opt-in
             if py:
                 pyc = Path(py).resolve()
                 # the adapter imports pruvc from a fixed path: run it through a wrapper that serves every top-level
@@ -540,6 +545,8 @@ def case_keys(h):
         check(tag + ": some formula was asked with two option sets", len(pairs) > 0, "no such pair in the traces")
         for ts in pairs:
             check(tag + ": option change changes the key", ts <= livetexts, "%d of %d live" % (len(ts & livetexts), len(ts)))
+    # PF: py-vs-rs comparison dropped from the default run; it caught py and rs proof-cache keys colliding (a shared
+    # cache directory answering the other compiler's queries). Runs only under --vs-py.
     if "py" in sets and "rs" in sets:
         check("keys: py and rs entry sets are disjoint", not (sets["py"] & sets["rs"]) and sets["py"] and sets["rs"],
               "%d common" % len(sets["py"] & sets["rs"]))
@@ -583,7 +590,7 @@ CASES = (case_cold_warm, case_contract_change, case_never_stored, case_corrupt, 
          case_concurrent, case_keys, case_off, case_noverify)
 
 
-def main(work, binary=None, py=None, only=None, cases=()):
+def main(work, binary=None, py=None, only=None, cases=(), vs_py=False):
     names = [f.__name__ for f in CASES]
     for c in cases:
         if c not in names:
@@ -592,7 +599,16 @@ def main(work, binary=None, py=None, only=None, cases=()):
     if only == "rs" and not binary:
         print("--only rs needs --rs PATH")
         return 2
-    h = Harness(work, binary, py, only)
+    if (only == "py" or py) and not vs_py:
+        print("--only py / --py need --vs-py (pruvc/ is frozen)")
+        return 2
+    if not binary and not vs_py:
+        print("--rs PATH is required (or --vs-py for the frozen Python reference)")
+        return 2
+    h = Harness(work, binary, py, only, vs_py)
+    if not h.comps:
+        print("no compiler selected")
+        return 2
     for fn in CASES:
         if cases and fn.__name__ not in cases:
             continue
@@ -613,6 +629,9 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     opts = {}
     cases = []
+    vs_py = "--vs-py" in args
+    while "--vs-py" in args:
+        args.remove("--vs-py")
     for flag in ("--rs", "--py", "--only", "--case"):
         while flag in args:
             i = args.index(flag)
@@ -627,4 +646,4 @@ if __name__ == "__main__":
     if len(args) != 1 or opts.get("--only") not in (None, "py", "rs"):
         print(__doc__)
         sys.exit(2)
-    sys.exit(main(args[0], opts.get("--rs"), opts.get("--py"), opts.get("--only"), tuple(cases)))
+    sys.exit(main(args[0], opts.get("--rs"), opts.get("--py"), opts.get("--only"), tuple(cases), vs_py))

@@ -1,4 +1,4 @@
-"""L3-6 Grok import: builds the four verified pairs (py/rust, py/llvm, rs/rust, rs/llvm), runs every fixture of fixtures/*.json
+"""L3-6 Grok import: builds the verified pairs (default rs/rust, rs/llvm; py/rust, py/llvm only via --pairs), runs every fixture of fixtures/*.json
 on the pinned TypeScript (Node, reference.mjs) and on each pair, and compares them with oracle.compare (results, ACP transcript,
 primitive trace, final trees). A difference passes only when oracle.py names the policy whose trigger is in the fixture.
 Only this piece is built; no repository-wide suites.
@@ -36,7 +36,10 @@ from common import HERE, WORK, bytes_of, clean, reference_command, run_side
 from oracle import compare, norm_result, p14_case, p1_case, p4_case, triggers, unexplained
 
 FIXTURES = HERE / 'fixtures'
-PAIRS = [(c, b) for c in ('py', 'rs') for b in ('rust', 'llvm')]
+# PF: the Python compiler pruvc/ is frozen (bundle PF); the Rust compiler is the product. Default pairs are rs only;
+# ALL_PAIRS keeps the py pairs selectable with --pairs py/rust,... as the frozen reference (not used by CI).
+ALL_PAIRS = [(c, b) for c in ('py', 'rs') for b in ('rust', 'llvm')]
+PAIRS = [(c, b) for c in ('rs',) for b in ('rust', 'llvm')]
 
 
 # ---- fixtures: expansion of the conveniences --------------------------------------------------------------------------
@@ -403,7 +406,7 @@ def parse_pairs(text):
     out = []
     for p in text.split(','):
         c, b = p.strip().split('/')
-        if (c, b) not in PAIRS:
+        if (c, b) not in ALL_PAIRS:
             raise SystemExit('unknown pair ' + p)
         out.append((c, b))
     return out
@@ -415,7 +418,7 @@ def main(argv=None):
     ap.add_argument('--reuse-verified', action='store_true', help='reuse work/<pair>/root_gen.* of an earlier verified run')
     ap.add_argument('--only', action='append', default=[], help='fixtures whose name contains SUBSTRING (repeatable)')
     ap.add_argument('--category', action='append', default=[], help='fixture file stem (paths, identity, ...; repeatable)')
-    ap.add_argument('--pairs', help='comma list of py/rust,py/llvm,rs/rust,rs/llvm (default all four)')
+    ap.add_argument('--pairs', help='comma list of py/rust,py/llvm,rs/rust,rs/llvm (default rs/rust,rs/llvm; py is the frozen PF reference)')
     ap.add_argument('--no-ts', action='store_true', help='no TypeScript run: only the `expected` blocks are checked, on the pairs')
     ap.add_argument('--ts-transpiler', help='typescript package for the reference (else $GROK_TS_TRANSPILER)')
     ap.add_argument('--jobs', type=int, default=4)

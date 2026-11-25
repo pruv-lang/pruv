@@ -1,10 +1,13 @@
 """T1 (docs/TIDY_SPEC.md, "T1 spec sync"): trace SPEC.md rule IDs to tests and diagnostic codes to the code table.
 
-usage: spec_trace.py [--py PATH] [--rs PATH] [--only-py | --only-rs] [--work DIR] [--no-run]
+usage: spec_trace.py [--rs PATH] [--only-rs | --vs-py [--py PATH] | --only-py [--py PATH]] [--work DIR] [--no-run]
+
+Default: the Rust compiler only (pruvc/ is frozen since bundle PF). --vs-py also runs the frozen Python compiler
+(the old default: a rule passes only if it passes on both); --only-py runs only the frozen Python compiler.
 
 Checks (each failure prints one line; the last line is `spec_trace: N/N passed`):
   1. every rule ID `R-<section>-<n>` that SPEC.md names has at least one accept and one reject test under tests/spec/,
-     and each of them passed with both compilers (Python pruvc and Rust pruvc-rs) in this run;
+     and each of them passed with every compiler run here (Rust pruvc-rs; with --vs-py also the frozen Python pruvc);
   2. every rule ID a test names exists in SPEC.md;
   3. every diagnostic `stage/code` that a test expects (any JSON object with string "stage" and "code" under tests/)
      or that a compiler emitted while running tests/spec is a row of the diagnostic code table in SPEC.md section 8.
@@ -214,7 +217,7 @@ def run_test(drv, src, want, kind, work, seen):
 
 def main(argv):
     py_path = rs_path = None
-    kinds = ["py", "rs"]
+    kinds = ["rs"]
     work = None
     run = True
     i = 0
@@ -233,6 +236,8 @@ def main(argv):
             kinds = ["py"]
         elif a == "--only-rs":
             kinds = ["rs"]
+        elif a == "--vs-py":
+            kinds = ["py", "rs"]
         elif a == "--no-run":
             run = False
         else:

@@ -1,0 +1,8 @@
+# golden l3_abi_c_handle.txt: check_c_handle: generated bindings / LLVM IR / Rust text per case
+c_handle|raw_entries=c/app	2 cases: llvm-ir 1, rust-bindings 1	llvm-ir=e22d25e2ec61	rust-bindings=5ba90be0eb6a
+c_handle|raw_entries=c/app2	2 cases: llvm-ir 1, rust-bindings 1	llvm-ir=2a6c503b74bf	rust-bindings=d936f3b774e9
+c_handle|raw_entries=crate/app	2 cases: llvm-ir 1, rust-bindings 1	llvm-ir=e22d25e2ec61	rust-bindings=4a6a77056497
+c_handle|rust-backend raw_entries=c	1 case: rust-lib 1	rust-lib=876c4ace8521
+c_handle|rust-backend raw_entries=crate	1 case: rust-lib 1	rust-lib=0575638d0b12
+c_handle|two_programs/twoa	2 cases: llvm-ir 1, rust-bindings 1	llvm-ir=0568d6778bef	rust-bindings=fe85ff882a66
+c_handle|two_programs/twob	2 cases: llvm-ir 1, rust-bindings 1	llvm-ir=1d640cc79034	rust-bindings=b3356bb928b7

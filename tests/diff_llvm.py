@@ -1,10 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Compare, byte for byte, the output (IR + bindings) of the canonical Python gen_llvm and Rust pruv-llvm-dump.
+"""Check the output (IR + bindings) of Rust pruv-llvm-dump against the saved golden file tests/golden/diff_llvm.txt.
 
   python tests/diff_llvm.py [--rs-path PATH] [--only GROUP,...] [--seeds 41,56,57]
                             [--fuzz-count 200] [--mutations 3] [--save-dir DIR]
                             [--modes VT,Vt,vT,vt,B]
+                            [--golden PATH] [--update-golden [--prune-golden]] [--vs-py]
+
+Default mode = golden mode: no Python compiler is used (the tool runs without pruvc/ or z3). Every case is run through
+the Rust dump and its normalized output digest is compared with the golden file. Key = "<group>|<case name>|<mode>"
+(case name = repo-relative input path, or fuzz:<seed>:<idx> / <path>#<k> for fuzz/mutate). Statuses: same (matches the
+golden), golden_mismatch, golden_missing, rs_crash. See tests/golden.py for the file format.
+  --update-golden  rewrite the golden file from this run's Rust output; prints every CHANGED / NEW / REMOVED key.
+  --prune-golden   with --update-golden: also drop keys this run did not produce (a partial run keeps them otherwise).
+  --golden PATH    use another golden file.
+  --vs-py          the OLD behaviour: byte-compare with the frozen Python reference (pruvc/ is frozen since bundle PF; this
+                   is opt-in and not run by CI). With --vs-py --update-golden both sides run, the golden is written from the
+                   Rust lines AND py-vs-rs disagreements are reported as before (exit 0 only if no diff/crash): the capture path.
+The rest of this docstring describes the --vs-py comparison.
+
 
 Groups: must_reject examples runtime bench g9 g4 edge fuzz mutate
   g9 = tests/g9/frontend/*.pruv (G9 A3: both compilers must produce byte-identical LLVM IR and bindings).
@@ -37,18 +51,31 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(ROOT, "pruvc"))
+sys.path.insert(0, HERE)
 
-from vast import PruvError  # noqa: E402
-from modules import load_program  # noqa: E402
-from check import check  # noqa: E402
-from llvmgen import gen_llvm  # noqa: E402
+import golden  # noqa: E402
+
+# The frozen Python compiler, loaded only by load_py() (--vs-py). Golden mode never imports pruvc.
+PruvError = load_program = check = gen_llvm = None
+
+
+def load_py():
+    """Import the frozen Python compiler (pruvc/); only called in --vs-py mode."""
+    global PruvError, load_program, check, gen_llvm
+    if gen_llvm is not None:
+        return
+    sys.path.insert(0, os.path.join(ROOT, "pruvc"))
+    from vast import PruvError as _PruvError
+    from modules import load_program as _load_program
+    from check import check as _check
+    from llvmgen import gen_llvm as _gen_llvm
+    PruvError, load_program, check, gen_llvm = _PruvError, _load_program, _check, _gen_llvm
 
 BATCH = 200
 RS_TIMEOUT = 300
 MAX_SHOWN = 10
 DEFAULT_BUDGET = 1 << 30
-STATUSES = ("same", "diff", "py_recursion", "py_crash", "rs_crash")
+STATUSES = ("same", "diff", "py_recursion", "py_crash", "rs_crash", "golden_mismatch", "golden_missing")
 
 GROUP_DIRS = [
     ("must_reject", "tests/must_reject"),
@@ -319,7 +346,7 @@ def run_batch(rs, flags, paths):
     return lines, None
 
 
-def eval_rust(rs, cases, problems):
+def eval_rust(rs, cases, problems, vs_py=True):
     groups = collections.OrderedDict()
     for c in cases:
         if c.status is None:
@@ -337,7 +364,8 @@ def eval_rust(rs, cases, problems):
                 continue
             for c, line in zip(chunk, lines):
                 c.rs = line
-                c.status = "same" if line == c.py else "diff"
+                # golden mode: provisional "same"; main() sets the real status from the golden check
+                c.status = ("same" if line == c.py else "diff") if vs_py else "same"
 
 
 # ---------------------------------------------------------------------------
@@ -430,14 +458,31 @@ RE_FIRST = re.compile(r"^\s*([A-Za-z_]\w*)")
 NON_INSN = {"define", "declare", "target", "source_filename", "attributes", "module", "ret_"}
 
 
-def coverage(all_cases):
+def rs_summary(line):
+    """Short golden summary tag of one Rust output line."""
+    o = load(line)
+    if o is None:
+        return "unparsable"
+    if isinstance(o.get("ir"), str):
+        return "ok %dB" % len(o["ir"].encode("utf-8"))
+    if isinstance(o.get("error"), dict):
+        return "error %s/%s" % (o["error"].get("stage"), o["error"].get("code"))
+    if "internal" in o:
+        return "internal"
+    if "adapter_error" in o:
+        return "adapter_error"
+    return "unparsable"
+
+
+def coverage(all_cases, vs_py=True):
     insn = collections.Counter()
     ok_n = err_n = internal_n = adapter_n = 0
     wrappers = nsw = ovf = utype = cdiv = panic = 0
     for c in all_cases:
-        if c.py is None or c.status in ("py_recursion", "py_crash"):
+        line = c.py if vs_py else c.rs
+        if line is None or c.status in ("py_recursion", "py_crash"):
             continue
-        o = load(c.py)
+        o = load(line)
         if o is None:
             continue
         if "adapter_error" in o:
@@ -490,7 +535,11 @@ def default_rs_path():
 
 
 def main(argv):
-    ap = argparse.ArgumentParser(prog="diff_llvm.py", description="Byte-compare Python/Rust LLVM output (IR+bindings)")
+    ap = argparse.ArgumentParser(prog="diff_llvm.py", description="Check the LLVM output (IR+bindings) of pruv-llvm-dump against the golden file "
+                                 "(--vs-py: byte-compare with the frozen Python generator)")
+    golden.add_args(ap)
+    ap.add_argument("--vs-py", action="store_true",
+                    help="frozen Python reference (opt-in, not run by CI): byte-compare Python and Rust instead of checking the golden")
     ap.add_argument("--rs-path", default=None, help="path to pruv-llvm-dump")
     ap.add_argument("--only", default=None, help="group list (comma-separated): " + " ".join(ALL_GROUPS))
     ap.add_argument("--seeds", default="41,56,57", help="fuzzer seed list (comma-separated)")
@@ -522,7 +571,15 @@ def main(argv):
               "  build it first, or pass the pruv-llvm-dump path with --rs-path." % rs, file=sys.stderr)
         return 2
 
+    vs_py = args.vs_py
+    if vs_py:
+        load_py()
+
     with tempfile.TemporaryDirectory(prefix="diff_llvm_") as tmp:
+        gold = golden.Golden.from_args(
+            args, "diff_llvm.txt", "diff_llvm: LLVM IR + bindings (pruv-llvm-dump) per (group, input, mode)", tmp_dirs=[tmp])
+        use_gold = (not vs_py) or args.update_golden
+        used_keys = set()
         per, notes = build_inputs(set(selected), args, tmp)
         problems = []
         stats = collections.OrderedDict()
@@ -533,9 +590,24 @@ def main(argv):
             if g not in selected:
                 continue
             cases = make_cases(g, per[g], modes)
-            for c in cases:
-                eval_python(c)
-            eval_rust(rs, cases, problems)
+            if vs_py:
+                for c in cases:
+                    eval_python(c)
+            eval_rust(rs, cases, problems, vs_py)
+            if use_gold:
+                for c in cases:
+                    if c.rs is None:
+                        continue
+                    key = "%s|%s|%s" % (c.group, c.name, c.mode)
+                    n = 1
+                    while key in used_keys:   # keep keys unique, deterministically
+                        n += 1
+                        key = "%s|%s|%s#dup%d" % (c.group, c.name, c.mode, n)
+                    used_keys.add(key)
+                    known = key in gold.saved
+                    ok = gold.check(key, c.rs, rs_summary(c.rs))
+                    if not vs_py:
+                        c.status = "same" if ok else ("golden_mismatch" if known else "golden_missing")
             st = collections.Counter(c.status for c in cases)
             st["inputs"] = len(per[g])
             st["cases"] = len(cases)
@@ -544,7 +616,7 @@ def main(argv):
             for c in cases:
                 key = "B" if c.mode.startswith("B") and c.mode != "B" and c.mode[1:].isdigit() else c.mode
                 mode_stats.setdefault(key, collections.Counter())[c.status] += 1
-                if c.status == "diff":
+                if c.status in ("diff", "golden_mismatch", "golden_missing"):
                     diffs.append(c)
                 elif c.status in ("py_crash", "rs_crash"):
                     crashes.append(c)
@@ -561,20 +633,27 @@ def main(argv):
         print("rs: %s" % rs)
         print("modes: %s" % ",".join(modes))
         print("")
-        cols = ("inputs", "cases", "same", "diff", "py_recursion", "rs_crash")
-        print("%-12s" % "group" + "".join("%14s" % c for c in cols) + "%12s" % "py_crash")
+        if vs_py:
+            cols = ("inputs", "cases", "same", "diff", "py_recursion", "rs_crash")
+            last, w = "py_crash", 14
+            mcols = ("same", "diff")
+        else:
+            cols = ("inputs", "cases", "same", "golden_mismatch", "golden_missing")
+            last, w = "rs_crash", 16
+            mcols = ("same", "golden_mismatch", "golden_missing")
+        print("%-12s" % "group" + "".join("%*s" % (w, c) for c in cols) + "%12s" % last)
         for g, st in stats.items():
-            print("%-12s" % g + "".join("%14d" % st[c] for c in cols) + "%12d" % st["py_crash"])
+            print("%-12s" % g + "".join("%*d" % (w, st[c]) for c in cols) + "%12d" % st[last])
             total.update(st)
-        print("%-12s" % "TOTAL" + "".join("%14d" % total[c] for c in cols) + "%12d" % total["py_crash"])
+        print("%-12s" % "TOTAL" + "".join("%*d" % (w, total[c]) for c in cols) + "%12d" % total[last])
         print("")
-        print("%-12s%10s%10s" % ("mode", "same", "diff"))
+        print("%-12s" % "mode" + "".join("%*s" % (w, c) for c in mcols))
         for m, st in mode_stats.items():
-            print("%-12s%10d%10d" % (m, st["same"], st["diff"]))
+            print("%-12s" % m + "".join("%*d" % (w, st[c]) for c in mcols))
         for n in notes:
             print(n)
 
-        if diffs:
+        if diffs and vs_py:
             print("")
             print("== first differing cases (up to %d / %d diff in total) ==" % (MAX_SHOWN, len(diffs)))
             for c in diffs[:MAX_SHOWN]:
@@ -596,11 +675,21 @@ def main(argv):
             print("")
             print("saved: %d cases -> %s" % (saved, args.save_dir))
 
-        coverage(all_cases)
+        coverage(all_cases, vs_py)
 
-    clean = all(total[k] == 0 for k in ("diff", "py_crash", "rs_crash"))
-    print("")
-    print("result: %s" % ("success (all same)" if clean else "fail"))
+        gold_ok = True
+        if use_gold:
+            print("")
+            gold_ok = gold.finish()
+
+    if vs_py:
+        clean = all(total[k] == 0 for k in ("diff", "py_crash", "rs_crash"))
+        print("")
+        print("result: %s" % ("success (all same)" if clean else "fail"))
+    else:
+        clean = gold_ok and total["rs_crash"] == 0
+        print("")
+        print("result: %s" % ("success (all match golden)" if clean else "fail"))
     return 0 if clean else 1
 
 

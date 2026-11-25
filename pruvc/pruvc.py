@@ -1,5 +1,7 @@
 """pruvc: Pruv compiler CLI.
 
+FROZEN since bundle PF (2026-11-25): no new features; the product compiler is pruvc-rs/.
+
   python pruvc/pruvc.py in.pruv -o OUT [--no-verify] [--trust-callers] [--proven-entries]
                       [--backend rust|llvm] [--rust-bindings PATH] [--infer [--show-inferred]]
 

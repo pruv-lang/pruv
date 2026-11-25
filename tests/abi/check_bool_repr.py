@@ -2,12 +2,15 @@
 # -*- coding: utf-8 -*-
 """[bool] raw ABI representation check test (docs/G2_A5_IMPL.md section 0 decision 5, sections 4.2, 4.3, 5; standard library only, Python 3.9).
 
-Usage: python3 tests/abi/check_bool_repr.py [--pruvc PATH] [--py-pruvc PATH] [--keep DIR]
+Usage: python3 tests/abi/check_bool_repr.py [--pruvc PATH] [--vs-py [--py-pruvc PATH]] [--keep DIR]
   --pruvc     Rust implementation of pruvc (default pruvc-rs/target/release/pruvc)
-  --py-pruvc  Python implementation pruvc.py (default pruvc/pruvc.py; uses the .venv Python if present)
+  --vs-py     opt-in, not CI: also run every case on the FROZEN Python compiler (bundle PF); without it pruvc.py is never run
+  --py-pruvc  with --vs-py: Python implementation pruvc.py (default pruvc/pruvc.py; uses the .venv Python if present)
   --keep      keep the artifacts in DIR
-Links the .ll that both compilers (py, rs) emit for the same [bool]-argument function with the plain runtime
-(pruvc/runtime.c, not RUST_ALLOCATOR) and a C caller, and calls `pruv_abi_tcount(const uint8_t *, int64_t)` directly. Cases (per compiler):
+PF: since bundle PF the Python compiler (pruvc/) is frozen. Every case is an expectation on the behaviour of the linked program (exit code, stdout, stderr text), not a comparison of
+py and rs output, so the default run needs no golden file: it checks the Rust compiler only.
+Links the .ll that the compiler (rs; with --vs-py also py) emits for the same [bool]-argument function with the plain runtime
+(pruvc/runtime.c, a C file, not RUST_ALLOCATOR) and a C caller, and calls `pruv_abi_tcount(const uint8_t *, int64_t)` directly. Cases (per compiler):
   ok            bytes 1 0 1           -> exit 0, stdout 2
   ok_all_true   bytes 1 1 1 1         -> exit 0, stdout 4
   bad_byte      bytes 1 2 1           -> exit 101, stderr `pruv: invalid representation: 2 (bool 0..=1)`
@@ -198,7 +201,9 @@ def run_case(ctx, comp, case):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pruvc", default=str(REPO / "pruvc-rs" / "target" / "release" / ("pruvc.exe" if os.name == "nt" else "pruvc")))
-    ap.add_argument("--py-pruvc", default=str(REPO / "pruvc" / "pruvc.py"))
+    ap.add_argument("--vs-py", action="store_true",
+                    help="opt-in, not CI: also run the cases on the frozen Python compiler")
+    ap.add_argument("--py-pruvc", default=str(REPO / "pruvc" / "pruvc.py"), help="only with --vs-py")
     ap.add_argument("--keep", default=None)
     a = ap.parse_args()
     a.clang = shutil.which("clang") or "/usr/bin/clang"
@@ -206,7 +211,7 @@ def main():
     missing = []
     if not Path(a.pruvc).exists():
         missing.append("pruvc(%s)" % a.pruvc)
-    if not Path(a.py_pruvc).exists():
+    if a.vs_py and not Path(a.py_pruvc).exists():
         missing.append("pruvc.py(%s)" % a.py_pruvc)
     if not (os.path.exists(a.clang) or shutil.which(a.clang)):
         missing.append("clang")
@@ -226,7 +231,7 @@ def main():
     try:
         ctx = Ctx(a, work)
         total = ok = 0
-        for comp in ("py", "rs"):
+        for comp in (("py", "rs") if a.vs_py else ("rs",)):
             for case in CASES:
                 total += 1
                 try:

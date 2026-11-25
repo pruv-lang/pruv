@@ -7,7 +7,10 @@ import sys
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
-PAIRS = [(c, b) for c in ('py', 'rs') for b in ('rust', 'llvm')]
+# PF: the Python compiler pruvc/ is frozen (bundle PF); the Rust compiler is the product. Default pairs are rs only;
+# ALL_PAIRS adds the py pairs as the frozen reference, to be selected explicitly (not used by CI).
+ALL_PAIRS = [(c, b) for c in ('py', 'rs') for b in ('rust', 'llvm')]
+PAIRS = [(c, b) for c in ('rs',) for b in ('rust', 'llvm')]
 PKGS = HERE.parent / 'pkgs'
 
 

@@ -1,8 +1,8 @@
-"""L3-5 Codex import: builds the four verified pairs (py/rust, py/llvm, rs/rust, rs/llvm) and runs the fixed fixtures
+"""L3-5 Codex import: builds the verified pairs (default rs/rust, rs/llvm; --vs-py adds the frozen py/rust, py/llvm) and runs the fixed fixtures
 against the scripted fake app-server, comparing each pair with the checked-in expected JSON, with the pinned TypeScript
 (Node, reference.mjs) and with the requests the fake recorded. Only this piece is built; no repository-wide suites.
 
-    PATH="$HOME/.cargo/bin:$PATH" python3 bench/l3/codex/test_impl.py [--verify-only] [--reuse-verified] [--only SUBSTRING]
+    PATH="$HOME/.cargo/bin:$PATH" python3 bench/l3/codex/test_impl.py [--verify-only] [--reuse-verified] [--only SUBSTRING] [--vs-py]
 """
 import os
 import sys
@@ -78,7 +78,8 @@ def main():
             passed += 1
     if ts_results:
         print(f'ts/oracle: {passed}/{len(cases)} passed (pinned TypeScript against the expected JSON)', flush=True)
-    for compiler, backend in c.PAIRS:
+    # PF: default rs pairs only; --vs-py adds the frozen py reference pairs (c.ALL_PAIRS)
+    for compiler, backend in (c.ALL_PAIRS if '--vs-py' in sys.argv else c.PAIRS):
         key = f'{compiler}/{backend}'
         exe = build_pair(g, run, compiler, backend, flags, host, '--reuse-verified' in sys.argv)
         if '--verify-only' in sys.argv:
