@@ -58,17 +58,18 @@ pub fn empty_buffer() -> [u8] ! alloc
   return alloc(0, 0);
 }
 
-// A copy of buf at the full 200 slots, so it fits slot begun % 200; the old bytes are kept. It jumps straight to the
-// full size: doubling through 32, 64 and 128 slots zeroed and copied about 40 MiB on a full ring, against 13 MiB here.
-pub fn grow(buf: [u8], begun: i64) -> [u8] ! alloc
+// buf grown in place to the full 200 slots, so it fits slot begun % 200; the old bytes are kept (hand: Vec::resize,
+// one realloc, no fresh buffer and copy; step 2.9). It jumps straight to the full size: doubling through 32, 64 and
+// 128 slots zeroed and copied about 40 MiB on a full ring, against 13 MiB here.
+pub fn grow(take buf: [u8], begun: i64) -> [u8] ! alloc
   requires 0 <= begun && len(buf) <= 13116800
   ensures len(buf) <= len(result) && len(result) <= 13116800
   ensures 65584 * (begun % 200) + 65584 <= len(result)
   ensures forall k in 0..len(buf): result[k] == buf[k]
 {
-  let mut nb: [u8] = alloc(13116800, 0);
-  crate::bytes::copy_span(inout nb, 0, buf, 0, len(buf));
-  return nb;
+  let mut b: [u8] = move buf;
+  b = resize(b, 13116800, 0);
+  return move b;
 }
 
 // dst[at..at+n) = src[0..n); everything else unchanged.

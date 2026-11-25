@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""L3-1 A3 fixtures: the turn collector (turns.pruv) on py/rust, py/llvm, rs/rust, rs/llvm.
+"""L3-1 A3 fixtures: the turn collector (turns.pruv) on rs/rust, rs/llvm (`--vs-py` adds py/rust, py/llvm).
 
 Each fixture is a transition program (see a3_root.pruv) run on fresh collector state. The oracle is independent of
 the Pruv code: drafts are an ordinary Python list, transitions follow tail.ts TurnCollector with the spec policies
@@ -22,6 +22,10 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 JSON_DIR = HERE.parent / 'json'
 WORK = HERE / 'work' / 'a3'
+# PF: the Python compiler pruvc/ is frozen (bundle PF); the Rust compiler is the product. Default is rs only;
+# `--vs-py` adds the py reference (pruvc/pruvc.py), which is not used by CI.
+VS_PY = '--vs-py' in sys.argv
+COMPILER_SET = ('py', 'rs') if VS_PY else ('rs',)
 
 HARNESS = r'''#![allow(dead_code, unused_imports)]
 #[path = "@SOL@"] mod sol;
@@ -417,7 +421,7 @@ def main():
     payload = ''.join('run ' + enc(w) + '\n' for _, w, _ in cases)
     expected = [enc(want) for *_, want in cases]
     failed = False
-    for compiler in ('py', 'rs'):
+    for compiler in COMPILER_SET:
         for backend in ('rust', 'llvm'):
             key = f'{compiler}/{backend}'
             try:

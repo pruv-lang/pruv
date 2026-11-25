@@ -30,7 +30,7 @@ pub fn text_of(input: [u8]) -> str ! alloc
       if len(d.tape) >= 6 && d.tape[0] == 4 {
         let s: i64 = d.tape[1]; let e: i64 = d.tape[2];
         if 0 <= s && s <= e && e <= len(d.source) && e <= 16777216 {
-          let t: crate::jstr::Text = crate::jstr::string_text(d.source, s, e);
+          let t: crate::jstr::Text = crate::jstr::string_text_owned(d.source, s, e);
           match t {
             crate::jstr::Text::Decoded(text) => { return copy(text); }
             crate::jstr::Text::InternalInvariant(kind) => { return "InternalInvariant"; }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """L3-1 A4 fixtures: the complete pure API (head_packet, tail_packet, window_packet of a4_root.pruv) on
-py/rust, py/llvm, rs/rust, rs/llvm.
+rs/rust, rs/llvm (`--vs-py` adds py/rust, py/llvm).
 
 Fixed end-to-end transcripts: malformed middle lines, dropped (oversized) users, synthetic/error assistants, a model
 without a current draft, tools-only replies, head/tail/window disagreement, option presence, caps and policy cases.
@@ -28,6 +28,10 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 JSON_DIR = HERE.parent / 'json'
 WORK = HERE / 'work' / 'a4'
+# PF: the Python compiler pruvc/ is frozen (bundle PF); the Rust compiler is the product. Default is rs only;
+# `--vs-py` adds the py reference (pruvc/pruvc.py), which is not used by CI.
+VS_PY = '--vs-py' in sys.argv
+COMPILER_SET = ('py', 'rs') if VS_PY else ('rs',)
 
 _spec = importlib.util.spec_from_file_location('l3_oracle', HERE / 'oracle.py')
 oracle = importlib.util.module_from_spec(_spec)
@@ -518,7 +522,7 @@ def main():
     payload = ''.join(f'{op} {flag}|{enc_bytes(data)}\n' for _, op, flag, data, _ in cases)
     expected = [a3.enc(want) for *_, want in cases]
     failed = False
-    for compiler in ('py', 'rs'):
+    for compiler in COMPILER_SET:
         for backend in ('rust', 'llvm'):
             key = f'{compiler}/{backend}'
             try:

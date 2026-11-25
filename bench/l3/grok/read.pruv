@@ -567,7 +567,7 @@ pub fn window(win: [u8], omitted: bool, title: str, model: str) -> [i64] ! alloc
   let mut sl: [i64] = crate::turns::new_slots();
   // The window size is the Store's growth hint (DB53, G-DB51-2): big ord windows skip the 136 K - 561 K steps.
   let mut bk: crate::turns::Store = crate::turns::new_store_hint(n);
-  // Scratch for crate::lines::scan_span: 4096 records, 129 stack frames (depth <= 128). The tape starts at the 256 words
+  // Scratch for the tape path (crate::lines::build_span): 4096 records, 129 stack frames (depth <= 128). The tape starts at the 256 words
   // crate::line::step uses as its field table and is grown by line_step on the first line that takes the tape path (DB47).
   let mut tape: [i64] = alloc(256, 0);
   let mut stack: [i64] = alloc(516, 0);

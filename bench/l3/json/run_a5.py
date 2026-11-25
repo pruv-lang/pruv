@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A5 JSON Lines fixtures on Python/Rust compilers and Rust/LLVM backends."""
+"""A5 JSON Lines fixtures on pruvc-rs and Rust/LLVM backends (`--vs-py` adds the Python compiler)."""
 import importlib.util
 import json
 import os
@@ -11,6 +11,10 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 WORK = HERE / 'work' / 'a5'
+# PF: the Python compiler pruvc/ is frozen (bundle PF); the Rust compiler is the product. Default is rs only;
+# `--vs-py` adds the py reference (pruvc/pruvc.py), which is not used by CI.
+VS_PY = '--vs-py' in sys.argv
+COMPILER_SET = ('py', 'rs') if VS_PY else ('rs',)
 
 HARNESS = r'''#![allow(dead_code, unused_imports)]
 #[path = "@SOL@"] mod sol;
@@ -161,7 +165,7 @@ def main():
                       for op,a,b,c,data,_ in cases)
     expected = [' '.join(map(str, want)) for *_, want in cases]
     failed = False
-    for compiler in ('py', 'rs'):
+    for compiler in COMPILER_SET:
         for backend in ('rust', 'llvm'):
             key = f'{compiler}/{backend}'
             try:

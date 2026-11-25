@@ -559,8 +559,6 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
   let records: [u8] = alloc(len(data) / 4, 0);
   let text: [u8] = alloc(len(data) / 4, 0);
   let mut log: Events = Events { records: move records, used: 0, text: move text, end: 0 };
-  let mut tape: [i64] = alloc(24576, 0);
-  let mut stack: [i64] = alloc(516, 0);
   let mut ordinal: i64 = 0;
   let mut offset: i64 = crate::framing::skip_first(data, cut_before);
   while offset < len(data)
@@ -576,7 +574,7 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
     let step: crate::framing::Frame = crate::framing::window_next(data, offset);
     match step {
       crate::framing::Frame::Entry(start, end, next) => {
-        let line: crate::entry::Line = crate::entry::parse_line_span(data, start, end, inout tape, inout stack);
+        let line: crate::entry::Line = crate::entry::parse_line(data, start, end);
         match line {
           crate::entry::Line::Object(d) => {
             if !crate::chain::note(inout index, d, ordinal) { return wfail_zero(); }

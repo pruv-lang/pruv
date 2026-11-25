@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A3 string decoding, verified with both compilers on both backends."""
+"""A3 string decoding, verified with pruvc-rs on both backends (`--vs-py` adds py)."""
 import importlib.util
 import json
 import os
@@ -13,6 +13,10 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 WORK = HERE / 'work'
+# PF: the Python compiler pruvc/ is frozen (bundle PF); the Rust compiler is the product. Default is rs only;
+# `--vs-py` adds the py reference (pruvc/pruvc.py), which is not used by CI.
+VS_PY = '--vs-py' in sys.argv
+COMPILER_SET = ('py', 'rs') if VS_PY else ('rs',)
 
 def run(cmd, data=None):
     p = subprocess.run([str(x) for x in cmd], input=data, text=True,
@@ -31,14 +35,16 @@ def configure():
     git = ROOT / '.git'
     if git.is_file() and git.read_text().startswith('gitdir: '):
         main = Path(git.read_text().strip()[8:]).resolve().parents[2]
-    py = os.environ.get('PRUV_PYTHON') or next(
-        (str(p) for p in [ROOT / '.venv/bin/python', main / '.venv/bin/python'] if p.exists()), sys.executable)
     binary = Path(os.environ.get('PRUVC_RS', ROOT / 'pruvc-rs/target/release/pruvc'))
     if not binary.exists():
         binary = main / 'pruvc-rs/target/release/pruvc'
     if not binary.exists():
         raise RuntimeError('pruvc-rs binary not found')
-    g2.COMPILERS = {'py': [py, str(ROOT / 'pruvc/pruvc.py')], 'rs': [str(binary)]}
+    g2.COMPILERS = {'rs': [str(binary)]}
+    if VS_PY:
+        py = os.environ.get('PRUV_PYTHON') or next(
+            (str(p) for p in [ROOT / '.venv/bin/python', main / '.venv/bin/python'] if p.exists()), sys.executable)
+        g2.COMPILERS['py'] = [py, str(ROOT / 'pruvc/pruvc.py')]
     return g2
 
 HARNESS = r'''#![allow(dead_code, unused_imports)]
@@ -125,7 +131,7 @@ def main():
     payload = ''.join(op + ':' + nums(data) + '\n' for op, data, _ in cases)
     expected = [want for _, _, want in cases]
     failed = False
-    for compiler in ('py', 'rs'):
+    for compiler in COMPILER_SET:
         for backend in ('rust', 'llvm'):
             key = f'{compiler}/{backend}'
             try:

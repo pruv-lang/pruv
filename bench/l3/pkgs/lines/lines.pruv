@@ -89,32 +89,7 @@ pub fn parse_copy(data: [u8], lo: i64, hi: i64) -> crate::json::JsonParse ! allo
   return parse_owned(move owned, n);
 }
 
-// ---- borrowed-span parsing: scan into caller scratch, then (optionally) build an exact-size owned document ----
-
-// Validate and scan data[lo..hi) in place, with no allocation. Same outcome as parse_range except that the document is not built:
-//   kind == 0: accepted, `records` records in tape[0 .. 6 * records) (span offsets relative to lo);
-//   kind > 0: parse_range's Failed kind at the same (relative) position (>16777216 bytes: kind 1 at 0; bad UTF-8: kind 4);
-//   kind < 0: the scratch is too small (tape 6 * records slots, stack 516 slots); the caller falls back to parse_range.
-pub fn scan_span(data: [u8], lo: i64, hi: i64, inout tape: [i64], inout stack: [i64]) -> crate::parse::Pass
-  requires 0 <= lo && lo <= hi && hi <= len(data)
-  ensures len(tape) == len(old(tape)) && len(stack) == len(old(stack))
-  ensures result.kind == 0 ==> (0 <= result.records && result.records <= 1048576 && 6 * result.records <= len(tape))
-  ensures result.kind > 0 ==> (0 <= result.position && result.position <= hi - lo)
-  ensures result.kind == 0 || result.kind == -1 || result.kind == -2 || result.kind > 0
-  ensures hi - lo > 16777216 ==> (result.kind == 1 && result.position == 0)
-{
-  let n: i64 = hi - lo;
-  if n > crate::json::limit_input_bytes() {
-    return crate::parse::Pass { position: 0, kind: crate::json::err_input_too_large(), records: 0 };
-  }
-  let invalid: i64 = crate::lex::validate_utf8(data, lo, hi);
-  if invalid >= 0 {
-    return crate::parse::Pass { position: invalid - lo, kind: crate::json::err_invalid_utf8(), records: 0 };
-  }
-  return crate::parse::scan_into(data, lo, hi, inout tape, inout stack);
-}
-
-// The owned document of a span that scan_span accepted: the span bytes copied once, the tape prefix in an exact-size array.
+// The owned document of a span that parse::scan_into accepted (grok read): the span bytes copied once, the tape prefix in an exact-size array.
 // Failed (0, 18) when the tape does not pass check_tape, as parse_range does.
 pub fn build_span(data: [u8], lo: i64, hi: i64, tape: [i64], records: i64) -> crate::json::JsonParse ! alloc
   requires 0 <= lo && lo <= hi && hi <= len(data) && hi - lo <= 16777216
@@ -129,21 +104,6 @@ pub fn build_span(data: [u8], lo: i64, hi: i64, tape: [i64], records: i64) -> cr
   let exact: [i64] = copy(subview(tape, 0, m));
   if !crate::json::check_tape(exact, n) { return crate::json::JsonParse::Failed(crate::json::make_error(0, 18)); }
   return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: move source, tape: move exact });
-}
-
-// parse_range with caller scratch: same result for every input; a too-small scratch falls back to parse_range.
-pub fn parse_span(data: [u8], lo: i64, hi: i64, inout tape: [i64], inout stack: [i64]) -> crate::json::JsonParse ! alloc
-  requires 0 <= lo && lo <= hi && hi <= len(data)
-  ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= hi - lo)
-  ensures hi - lo > 16777216 ==> is_variant(result, crate::json::JsonParse::Failed)
-  ensures hi - lo > 16777216 ==> (variant_field(result, crate::json::JsonParse::Failed, error).position == 0 && variant_field(result, crate::json::JsonParse::Failed, error).kind == 1)
-  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
-{
-  let sp: crate::parse::Pass = scan_span(data, lo, hi, inout tape, inout stack);
-  if sp.kind < 0 { return parse_range(data, lo, hi); }
-  if sp.kind > 0 { return crate::json::JsonParse::Failed(crate::json::make_error(sp.position, sp.kind)); }
-  if hi - lo > 16777216 { return crate::json::JsonParse::Failed(crate::json::make_error(0, 1)); }
-  return build_span(data, lo, hi, tape, sp.records);
 }
 
 // -1 denotes negative input or an unrepresentable absolute offset.

@@ -199,7 +199,7 @@ fn convert_doc(doc: crate::json::JsonDocument, fallback: str) -> [i64] ! alloc
     } else {
       let mut r: i64 = crate::entry::feed(doc, m, inout st, inout sl, inout buf, inout mt);
       if r == 1 {
-        buf = crate::turns::grow(buf, st[0]);
+        buf = crate::turns::grow(move buf, st[0]);
         r = crate::entry::feed(doc, m, inout st, inout sl, inout buf, inout mt);
       }
       if r != 0 { bad = 2; }
