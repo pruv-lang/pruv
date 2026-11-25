@@ -4890,10 +4890,13 @@ impl<'a> FnGen<'a> {
 
     /// P7-1: the storage of a fixed-array expression: a local's own slot, otherwise a fresh temporary filled from it.
     fn fixed_ptr(&mut self, e: &Expr) -> R<String> {
-        if let Expr::Var(v) = e {
-            if let Bind::Slot(sl) = self.lookup(&v.name)? {
-                return Ok(sl.a);
-            }
+        match e {
+            Expr::Var(v) => match self.lookup(&v.name)? {
+                Bind::Slot(sl) => return Ok(sl.a),
+                _ => return Err(format!("llvmgen: fixed array `{}` is not in a slot", v.name)),
+            },
+            Expr::Call(c) if c.name == ARRAY_LIST || array_repeat_len(&c.name).is_some() => {}
+            _ => return Err("llvmgen: unsupported fixed array expression".to_string()),
         }
         let ty = expr_ty(e).clone().ok_or_else(|| "llvmgen: untyped fixed array".to_string())?;
         let tmp = format!("%fx{}", self.nslot);
@@ -4987,7 +4990,7 @@ impl<'a> FnGen<'a> {
             Kind::Narrow(w) if w.bits < 64 => {
                 self.op(format!("{} {} {} to i64", if w.signed { "sext" } else { "zext" }, w.llvm(), i.a))
             }
-            Kind::I128 => self.op(format!("trunc i128 {} to i64", i.a)),
+            Kind::I128 => Err("llvmgen: fixed array index in a contract".to_string()),
             _ => Ok(i.a.clone()),
         }
     }

@@ -2687,7 +2687,7 @@ fn is_digit(c: char) -> bool
   annotation fixes it, otherwise the first element that is not a bare integer literal, otherwise `i64`) and `[x; N]`
   (`x` evaluated once). Elements are evaluated left to right; an index target is evaluated before its index, and
   `a[i] = v` evaluates `i`, then `v`, then stores. Assignment and `let b: [T; N] = a` copy the whole array, and
-  `a = [a[1], a[0]]` evaluates the whole right side before storing. `len(a)` is `N` (`usize`). Proof: the array is
+  `a = [a[1], a[0]]` evaluates the whole right side before storing. `len(a)` is `N` (an `i64`). Proof: the array is
   an SMT array with the constant length `N`; an index `0 <= i < N` is an obligation (`verify/index_oob`), so a
   constant in-range index needs no runtime check, and a read is known to lie in the element's range. Code: Rust
   `[T; N]` by value, a proven index as `get_unchecked`, an unproven one checked with the usual out-of-bounds panic;
@@ -2695,9 +2695,10 @@ fn is_digit(c: char) -> bool
   written `[x; 0]` (`[]` stays the empty view). Rejected: `[T; N]` as a parameter, result, field, tuple component
   or type argument, and nested arrays, are `type/fixed_array_position`; an element type other than a scalar is
   `type/fixed_array_element`; a negative or oversized length is `type/fixed_array_length`; a non-constant length is
-  `type/const_expr` and a `bool` or `char` length `type/const_type`; whole-array `==`/`!=` and use as a view `[T]`
-  (an argument, a `[T]` local) are `type/fixed_array_operation`; a wrong element count is `type/type_mismatch`.
-  Passing, borrowing as `[T]`, `inout`, fields and `old()` are parity row P7-1 B. The length bound `[T; <=N]`
+  `type/const_expr` and a `bool` or `char` length `type/const_type`; whole-array `==`/`!=`, use as a view `[T]`
+  (an argument, a `[T]` local) and a literal inside a contract are `type/fixed_array_operation`; a wrong element
+  count is `type/type_mismatch`. Passing, borrowing as `[T]`, `inout`, fields, `old()` and contract literals are
+  parity row P7-1 B. The length bound `[T; <=N]`
   (section 7a) is unchanged. Tests: [accept](tests/spec/r6t_4_accept.pruv), [reject](tests/spec/r6t_4_reject.pruv),
   [index](tests/spec/r6t_4_reject_index.pruv), [literals](tests/runtime/p7_rt_fixed_literal.pruv),
   [order](tests/runtime/p7_rt_fixed_eval.pruv), [proven](tests/runtime/p7_rt_fixed_proven.pruv),
@@ -3295,7 +3296,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/field_name` | type | a field name does not start with a lower-case letter |
 | `type/fixed_array_element` | type | a fixed-length array element that is not a scalar integer, `char` or `bool` (R-6t-4) |
 | `type/fixed_array_length` | type | a negative fixed-length array length, or an array larger than 65536 bytes (R-6t-4) |
-| `type/fixed_array_operation` | type | `==`/`!=` on fixed-length arrays, or a fixed-length array used as a view `[T]` (R-6t-4) |
+| `type/fixed_array_operation` | type | `==`/`!=` on fixed-length arrays, a fixed-length array used as a view `[T]`, or a fixed-length array literal in a contract (R-6t-4) |
 | `type/fixed_array_position` | type | `[T; N]` outside a `let` annotation: a parameter, result, field, tuple, type argument or nested array (R-6t-4) |
 | `type/for_enumerate` | type | `for (i, x) in` over an array, view or `Vec`; enumeration is bundle P15 (R-6q-3) |
 | `type/for_iterable` | type | a `for` range with non-integer bounds, or a `for` over a value that is not a slice or a `Vec` of integer/bool elements (R-6q-3) |

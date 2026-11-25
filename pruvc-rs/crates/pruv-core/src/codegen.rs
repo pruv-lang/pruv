@@ -5627,16 +5627,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 Ok(format!("{}.{}", self.e(&x.base)?, x.field))
             },
             Expr::Call(x) if crate::check::is_array_lit(&x.name) => {
-                // P7-1: `[a, b]` / `[x; N]` literals; the element type is spelled on the literal
-                let elem = x.ty.as_deref().and_then(fixed_key).map(|g| rty_g(g.fixed_parts().unwrap().0, false)).unwrap_or_else(|| "i64".into());
+                // P7-1: `[a, b]` / `[x; N]` literals (the let annotation spells the element type)
                 if let Some(n) = crate::ast::array_repeat_len(&x.name) {
                     let v = self.e(arg(&x.args, 0)?)?;
                     return Ok(format!("[{v}; {n}]"));
                 }
                 let vs = x.args.iter().map(|a| self.e(a)).collect::<R<Vec<_>>>()?;
-                if vs.is_empty() {
-                    return Ok(format!("{{ let pruv_e: [{elem}; 0] = []; pruv_e }}"));
-                }
                 Ok(format!("[{}]", vs.join(", ")))
             }
             Expr::Call(x) => {
