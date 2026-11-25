@@ -722,3 +722,96 @@ no difference beyond the tables above. Points it raised and where they stand:
   rewrite, not a row-sized change. Not started.
 - `turns` T7, T9, T10 and `transport` X1-X6: not started in this step.
 - Gap rows B, B-LLVM, V, ABI, U, U8, S, P7-1 and the new CW, BV: open.
+
+## Step 2.11: the grok read path in the hand shape (rows P8, A8, W-c `scan_into`)
+
+Hand counterpart: `grok/perf/hand_history.rs` — `Kind`, `Stamp`, `Entry` (`new`, `reset`, `at`, lines 194-260), the
+line scanner `P` (`hex4` .. `entry`, lines 309-691), `Collector::feed` (776-805) and the `history_window` loop body
+(904-944). The DB45 one-pass reader (old `grok/line.pruv`, scratch `f` / `d`) and the tape path behind it
+(`read::line_step`: `parse::scan_into`, `access::view_root_type`, `lines::build_span` / `parse_range`, the
+`JsonDocument` `entry::feed` with `feed_user` / `feed_assistant` / `entry_at` / `content` / `copy_text_range`) are gone.
+`grok/line.pruv` is now one `Entry` scanner, one Pruv function per hand function; `entry::feed` takes that `Entry`.
+`parse`, `access` and `lines` are untouched shared packages (still used by grok `path`, `rpc`, `summary`, `util` and
+the perf root), so no other consumer changed.
+
+### Line-by-line structure
+
+| Hand Rust | Pruv | Types | Ownership / borrow | Loops | Alloc / copy | Difference and reason |
+|---|---|---|---|---|---|---|
+| `enum Kind { Missing, Null, Other, Str, Arr }` | `line::Kind`, same variants | — | value | — | — | = |
+| `enum Stamp { Missing, Null, Other, Canon([u8; 24]) }` | `line::Stamp { Missing, Null, Other, Canon(at: i64), Num(value: i64) }` | offset for `[u8; 24]` | `Canon` borrows from the line | — | none (hand copies 24 bytes) | **P7-1**: no `[u8; 24]` value, so `Canon` keeps the offset of the 24 bytes in the line and `feed` borrows them. **NUM** (scope): `Num` is the integer timestamp of `time::iso_of` (a number `-?digits` or an unescaped digit string, trimmed, at most 2^53 - 1) that the fixtures test and the hand leaves out |
+| `struct Entry { is_obj, ty, synthetic, prompt_index, content_kind, content: Vec<u8>, scratch: Vec<u8>, timestamp, created_at, tool_calls: Option<i64> }` | `line::Entry`, same fields | `[u8]` = `Vec<u8>`, `i64` for `u8` `ty` | owned by `read::window` | — | — | = |
+| `Entry::new()` | `new_entry()` | — | result owns | — | two empty buffers | = |
+| `Entry::reset(&mut self)`: all but `scratch`, `content.clear()` | `reset(inout e)`: same, `e.content = truncate(e.content, 0)` | — | `inout` | — | none, capacity kept | = |
+| `Entry::at()`: `timestamp`, or `created_at` when `Missing \| Null`; `Canon` → `Some` | first lines of `entry::feed`: two `match`es pick the stamp | — | borrows the line | — | `Num` only: `time::format_iso` builds the 24 bytes | = for `Canon`; **ORD**: `at` is resolved before the user skips (hand: inside `begin`/`answer` calls, after them). Only a `Num` stamp can fail (`format_iso` returning 0 bytes, `-1`), and only then can a skipped user line report it; `format_iso`'s contract does not rule the defect out, no fixture reaches it |
+| `hex4(s, at) -> Option<u32>` | `hex4(s, at) -> Result<i64, i64>` | **R**: `Result` for `Option` | borrowed | `for k in 0..4` | none | = (`?` works only on `Result`, LG11) |
+| `P::ws(&mut self)` | `ws(s, inout i)` | cursor `inout i` = `self.i` | borrowed line | one `while` | none | = |
+| `P::lit(&mut self, w: &[u8])` | `lit(s, inout i, w: [u8])`: `eq_range(s, i, w, 0, len(w))` | **R** | literal is a static `[u8]` view | — | none | = |
+| `P::skip_string() -> Option<(usize, usize)>` | `skip_string(s, inout i) -> Result<Raw, i64>` | **T**: `struct Raw { lo, hi }` for the tuple | borrowed | one `while`, escapes `\"\\/bfnrt` and `\u`+`hex4` | none | = (no tuples in a module) |
+| `P::decode_string(&mut self, out: &mut Vec<u8>)`: runs to `"`, `\` or `< 0x20` with `extend_from_slice`; simple escapes push one byte; `\u` + surrogate pair; `char::from_u32(..).unwrap_or('\u{FFFD}')` + `encode_utf8` | `decode_string(s, inout i, inout out: [u8])`: same runs with `arr_append` (LG30: the run lies between ASCII bytes of a valid line), simple escapes `arr_push`, same pair combination; `push_char` encodes the scalar | **R** | `inout out` = `&mut Vec<u8>` | outer `while` + run `while` | appends into `out`'s capacity | **CH**: no `char::from_u32` / `encode_utf8` on `i64`, so `push_char` writes the 1-4 UTF-8 bytes arithmetically (surrogates → U+FFFD); same bytes, proved UTF-8 |
+| `P::number()` | `number(s, inout i)` | **R** | borrowed | three digit `while`s | none | = |
+| `P::skip_value(depth) -> Option<Kind>`: `depth > 128` → `None`; `{` → `members(skip_value(depth + 1))` | `skip_value(s, inout i, depth) -> Result<Kind, i64>`; the object arm writes `members` out | **R** | borrowed | members `while` inline | none | **CL**: no closures, so `members(f)` is written out in each caller (`skip_value`, `part_members`, `fields`). Mutual recursion with `skip_array` carries `decreases 2 * (129 - depth) + 1` / `2 * (129 - depth)` |
+| `P::skip_array(depth) -> Option<i64>` | `skip_array(s, inout i, depth) -> Result<i64, i64>` | **R** | borrowed | one `while` | none | = |
+| `P::members(f)` | `part_members`, `fields`, `skip_value`'s object arm | — | — | one `while` each | none | **CL** (above) |
+| `P::stamp() -> Option<Stamp>`: a string of 24 bytes that is `canonical_iso` → `Canon(copy)`, other strings `Other`; else `skip_value(1)`: `Null` → `Null`, else `Other` | `stamp(s, inout i)`: same, with `Canon(r.lo)`; unescaped other strings → `digit_stamp`, numbers → `number_stamp` (`Num` or `Other`) | **R** | borrowed | digit loops in the helpers | none | **P7-1**, **NUM** (above). An escaped string stays `Other` |
+| `P::part(&mut self, e)`: `let mut scratch = take(&mut e.scratch)`; `"text"` + string → `scratch.clear()`, decode, `has = true`; other `"text"` → `has = false`; then `"\n\n"` + scratch into `content`; restore | `part(s, inout i, inout e)`: `e.scratch = truncate(..)` once, `part_members(s, inout i, inout e.scratch, inout has)`, then the same join with `arr_append` | **R** | disjoint field borrows (`inout e.scratch` while `e` is held) | members `while` | appends into `content`'s capacity | **SC**: the scratch is emptied once at the start of `part` instead of only before a `"text"` decode (the earlier bytes are never read, so the text is the same); no `take` needed |
+| `P::content(&mut self, e)` | `content(s, inout i, inout e)` | **R** | `inout e` | one `while` over the array | decodes into `e.content` | = |
+| `P::entry(&mut self, e)`: members over the line with `type`, `synthetic_reason`, `prompt_index`, `content`, `timestamp`, `created_at`, `tool_calls` | `entry(s, inout i, inout e)` + `fields` | **R** | `inout e` | `fields` `while` | none | **CL**; keys compared with `raw_is` (**KQ**: no slice `==` on a range of `s`; `eq_range` compares the same bytes) |
+| `Collector::feed(&mut self, e: &Entry)` | `entry::feed(line, e, inout st, inout sl, inout bk)` → `user_view` / `assistant_view` | — | `e` borrowed (`&Entry` in Rust) | — | none for `Canon` | = decisions (`synthetic` not `Missing \| Null` skips, `query_range`, `<user_info>` with no `prompt_index`, `is_blank`, `answer` + `tool(n)`); **G**: a run-time guard re-checks that `Canon`'s offset lies between ASCII bytes of the line (what `stamp` found), so the 24 bytes pass as a `str` |
+| `history_window` loop body: `from_utf8(line)` ok → `entry.reset()`, `P { s: line, i: 0 }.entry(&mut entry)`, `Some` → `col.feed(&entry)` | `read::line_step(line, inout e, ..)`: `utf8_valid(line)`, `line::reset`, `line::entry(line, inout i, inout e)`, `Ok` → `entry::feed` | — | the line is a borrowed `subview` of the window | — | none per line | = (`event_step` passes `subview(win, lo, hi)`; the 16 MiB guard stays) |
+| `let mut entry = Entry::new()` once per window | `window`: `let mut entry = line::new_entry();` | — | owned, `inout` to each line | — | one `Entry` | = (the `tape` / `stack` / `dbuf` scratch and its growth are gone) |
+
+The Q mutant markers that lived in the removed tape code moved to the same decisions in the new code (`q_mutants.py
+--check` applies them): M08 at the `<user_query>` `begin2` in `user_view`, M09 at the `synthetic_reason` `Other` arm of
+`feed`, M11 at `add_tools` in `assistant_view`.
+
+### Gap rows found in this step
+
+| Id | Hand Rust form | What Pruv cannot express | Where it shows |
+|---|---|---|---|
+| R | `Option<T>` with `?` | `?` only on `Result` (LG11) | every scanner function returns `Result<_, i64>` |
+| CL | `members<F: FnMut(..)>(&mut self, f: F)` | no closures | `members` written out three times in `line.pruv` |
+| T | `Option<(usize, usize)>` | no tuples in a module | `skip_string` returns `struct Raw` |
+| CH | `char::from_u32(v).unwrap_or('\u{FFFD}').encode_utf8(..)` on a `u32` | no `char` from a run-time `i64` with fallback | `line::push_char` |
+| KQ | `key == b"text"` on a subslice | `subview` only as a call argument; no slice `==` | `line::raw_is` (`eq_range`) |
+| P7-1 | `Stamp::Canon([u8; 24])` | no fixed-size array value (existing row) | `Canon(at)` offset + guard **G** in `entry::feed` |
+
+Scope rows (not language gaps): **NUM** (integer timestamps, beyond the hand), **ORD** (stamp resolved before the
+user skips), **SC** (scratch emptied once per part).
+
+### Consumer tests (step 2.11)
+
+Only grok files changed (`line.pruv`, `entry.pruv`, `read.pruv`); no shared package changed, so only the grok runner
+was run. Pairs are rs/rust and rs/llvm (pruvc-rs).
+
+| Runner | Fixtures per pair (rs/rust, rs/llvm) |
+| --- | --- |
+| grok `test_impl --no-ts` (`GROK_COMPILE_WALL=3600`) | 254 / 254, 254 / 254 (run again after the `event_step` cleanup: 254 / 254, 254 / 254) |
+
+Nothing was measured.
+
+### Independent structure comparison
+
+Before the commit a separate read of the same files against the same hand sources (Codex gpt-6.2-astra, high, static
+reading plus the generated Rust) found no line that one side accepts and the other rejects, and the same user and
+assistant text and tool counts fed to the collector. Points it raised and where they stand:
+
+- Integer timestamps: `{"type":"user","content":"x","timestamp":0}` starts prompt `x` on both sides, with no time in the
+  hand and `1970-01-01T00:00:00.000Z` in Pruv. That is **NUM** (the TypeScript reference and the fixtures want it).
+- `entry::feed` on a hand-made `Entry` whose `Canon` offset is wrong returns `-1`; `window` always passes the line the
+  `Entry` was scanned from, so guard **G** never fires there.
+- `part` empties the scratch on entry as well as before each `"text"` decode: **SC**, same joined text.
+- `assistant_view` adds tools with `n` calls of `turns::tool` (`add_tools`), the hand with one `tool(n)`; same saturated
+  count. That is the open `turns` row (one `tool(n)` needs the T-rows rewrite).
+- `query_range` returns a 2-slot array where the hand returns `Option<(usize, usize)>` (**T**, unchanged code).
+- The dropped-line arm of `event_step` copies the first 8192 bytes (`util::span_bytes`) where the hand borrows them
+  (unchanged code, listed below).
+- `event_step` still mapped a `line_step` result of 1 to "grow and retry" (2), which no path returns any more
+  (`line_step` and `feed` return 0 or -1): removed after the comparison, with its comment.
+
+### Rows still open after step 2.11
+
+- `turns` T7, T9, T10 and `transport` X1-X6: not started.
+- Gap rows B, B-LLVM, V, ABI, U, U8, S, P7-1, CW, BV and the new R, CL, T, CH, KQ: open.
+- grok `assistant_view`: `n` calls of `turns::tool` where the hand makes one `tool(n)` (waits on the T-rows rewrite).
+- grok `event_step`: the dropped-line arm copies 8192 bytes with `util::span_bytes` (the hand borrows).
