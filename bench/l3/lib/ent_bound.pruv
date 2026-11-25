@@ -19,10 +19,10 @@ fn colon_at(w: [i64], p: i64, pool: i64) -> i64
   return crate::ent_value::pstr_find_byte(w, p, pool, 58);
 }
 
-// om = packet::new_meta(w): its offset table gives section starts in O(1) (sessions are many, sections are many).
+// starts = packet::section_starts(w, head): section starts in O(1) (sessions are many, sections are many).
 // the (engine, thread) pairs of the session at p, in order, starting at index k0; with fill != 0 they are recorded.
 // returns the index after the last pair
-fn ses_pairs(w: [i64], om: [i64], ns: i64, p0: i64, inout ep: [i64], inout el: [i64], inout tp: [i64], k0: i64, fill: i64) -> i64
+fn ses_pairs(w: [i64], starts: [i64], p0: i64, inout ep: [i64], inout el: [i64], inout tp: [i64], k0: i64, fill: i64) -> i64
   ensures 0 <= result && result <= 100000000 && len(ep) == len(old(ep)) && len(el) == len(old(el)) && len(tp) == len(old(tp))
 {
   let p: i64 = crate::ent_u16::clamp(p0, 100000000);
@@ -34,7 +34,7 @@ fn ses_pairs(w: [i64], om: [i64], ns: i64, p0: i64, inout ep: [i64], inout el: [
     if crate::ent_value::tag_at(w, p + 18) == 7 {
       let sec: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 19), 1000000);
       let cnt: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 20), 16777216);
-      let base: i64 = crate::ent_packet::meta_start(om, ns, sec);
+      let base: i64 = crate::ent_packet::start_in(starts, sec);
       let k1: i64 = k;
       let mut i: i64 = 0;
       while i < cnt
@@ -59,8 +59,8 @@ fn ses_pairs(w: [i64], om: [i64], ns: i64, p0: i64, inout ep: [i64], inout el: [
   if crate::ent_value::tag_at(w, p + 27) == 8 {
     let sec: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 28), 1000000);
     let cnt: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 29), 16777216);
-    let base: i64 = crate::ent_packet::meta_start(om, ns, sec);
-    let ps: i64 = crate::ent_packet::meta_start(om, ns, 0);
+    let base: i64 = crate::ent_packet::start_in(starts, sec);
+    let ps: i64 = crate::ent_packet::start_in(starts, 0);
     let k2: i64 = k;
     let mut i: i64 = 0;
     while i < cnt
@@ -112,17 +112,17 @@ fn temp_true(w: [i64], p: i64) -> bool
 // ---- op 7 ----
 pub fn threads_item(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
 {
-  let om: [i64] = crate::ent_packet::new_meta(cx.blob);
+  let starts: [i64] = crate::ent_packet::section_starts(cx.blob, 0);
   let r0: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.blob, 1), 33554432);
   let mut ep: [i64] = crate::ent_u16::empty();
   let mut el: [i64] = crate::ent_u16::empty();
   let mut tp: [i64] = crate::ent_u16::empty();
-  let n: i64 = ses_pairs(cx.blob, om, crate::ent_packet::nsec(cx.blob), r0, inout ep, inout el, inout tp, 0, 0);
+  let n: i64 = ses_pairs(cx.blob, starts, r0, inout ep, inout el, inout tp, 0, 0);
   if n > 2796202 { return crate::ent_state::too_big(cx); }
   let mut ep2: [i64] = alloc(n, 0);
   let mut el2: [i64] = alloc(n, 0);
   let mut tp2: [i64] = alloc(n, 0);
-  let n2: i64 = ses_pairs(cx.blob, om, crate::ent_packet::nsec(cx.blob), r0, inout ep2, inout el2, inout tp2, 0, 1);
+  let n2: i64 = ses_pairs(cx.blob, starts, r0, inout ep2, inout el2, inout tp2, 0, 1);
   let mut pool: [i64] = crate::ent_dispatch::blob_pool(cx.blob);
   let codex: [i64] = crate::ent_u16::lit("codex");
   let codex_off: i64 = crate::ent_value::pool_add(inout pool, codex);
@@ -285,9 +285,8 @@ pub fn index_complete(w: [i64], head: i64, id: i64, seq: i64, answer: [i64], pro
     let rsec: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(answer, rp + 2), 1000000);
     rbase = crate::ent_u16::clamp(crate::ent_packet::sec_start(answer, rsec), 33554432);
   }
-  let ns: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, head + 6), 1000000);
-  let om: [i64] = crate::ent_packet::new_meta_at(w, head);
-  let ps: i64 = crate::ent_packet::meta_start(om, ns, 0);
+  let starts: [i64] = crate::ent_packet::section_starts(w, head);
+  let ps: i64 = crate::ent_packet::start_in(starts, 0);
   let pl: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, ps), 16777216);
   let nb: i64 = crate::ent_value::pool_bytes(w, ps);
   let delta: i64 = pl - crate::ent_u16::clamp(crate::ent_u16::rd(w, head + 7), 16777216);
@@ -303,7 +302,7 @@ pub fn index_complete(w: [i64], head: i64, id: i64, seq: i64, answer: [i64], pro
   {
     if !crate::ent_value::truthy(answer, rbase + 3 * a) {
       let p: i64 = head + crate::ent_u16::clamp(crate::ent_u16::rd(progress, a + 1), 16777216) - delta;
-      total = ses_pairs(w, om, ns, p, inout ep, inout el, inout tp, total, 0);
+      total = ses_pairs(w, starts, p, inout ep, inout el, inout tp, total, 0);
       if total > 16777216 { return crate::ent_packet::boundary(9, id, 1); }
     }
     a = a + 1;
@@ -323,7 +322,7 @@ pub fn index_complete(w: [i64], head: i64, id: i64, seq: i64, answer: [i64], pro
     if !crate::ent_value::truthy(answer, rbase + 3 * b) {
       let p: i64 = head + crate::ent_u16::clamp(crate::ent_u16::rd(progress, b + 1), 16777216) - delta;
       let from: i64 = t2;
-      t2 = ses_pairs(w, om, ns, p, inout ep2, inout el2, inout tp2, t2, 1);
+      t2 = ses_pairs(w, starts, p, inout ep2, inout el2, inout tp2, t2, 1);
       let mut q: i64 = crate::ent_u16::clamp(from, n);
       while q < t2 && q < n
         invariant 0 <= q && q <= n && len(sp) == n

@@ -1,14 +1,31 @@
-// Section 0 is [nu, nb, W_1..W_m] on both sides of the entry boundary.
-// Validate WTF-8 in place, including zero byte padding. The pool length is exact: l0 = 2 + ceil(nb/7) (D-DB18-2).
-// Return -1 past the stream or for a word outside the seven-byte range.
-fn byte_at(w: [i64], p: i64, k: i64, nb: i64) -> i64
-  requires 0 <= p && p <= 33554432 && 0 <= k && k <= 4294967296
+// The entry wire check, in the shape of lib/hand/ent_wire.rs (Rust-shape reset step 3.2).
+// The packet is the external input format (host.rs is the layout authority): borrowed words,
+//   packet = [1, kind, op_id, seq, len, op, nsec, len_0..len_{nsec-1}, section data...]
+// and section 0 is the packed WTF-8 pool [nu, nb, W_1..W_m], seven bytes per word, high byte first. The pool length
+// is exact: m = ceil(nb/7) (D-DB18-2). The check runs once on a view of the pool words and never copies the input;
+// `poison` is the only allocation.
+
+// a pool word holds seven bytes: 0 <= W <= 2^56 - 1
+fn word_ok(x: i64) -> bool
+{
+  return x >= 0 && x <= 72057594037927935;
+}
+
+// Byte k of the packed stream (hand `byte`); the words were range checked first, rd keeps the read total.
+fn byte(pool: [i64], k: i64) -> i64
+  requires 0 <= k && k <= 4294967296
+  ensures 0 <= result && result <= 255
+{
+  return (crate::ent_u16::rd(pool, 2 + k / 7) >> (8 * (6 - k % 7))) & 255;
+}
+
+// Byte k, or -1 past the stream (hand's `at` closure).
+fn at(pool: [i64], k: i64, nb: i64) -> i64
+  requires 0 <= k && k <= 4294967296
   ensures -1 <= result && result <= 255
 {
   if k >= nb { return -1; }
-  let x: i64 = crate::ent_u16::rd(w, p + 2 + k / 7);
-  if x < 0 || x > 72057594037927935 { return -1; }
-  return crate::ent_value::pool_byte(w, p, k);
+  return byte(pool, k);
 }
 
 fn cont(b: i64) -> bool
@@ -16,13 +33,15 @@ fn cont(b: i64) -> bool
   return b >= 128 && b <= 191;
 }
 
-// section table shape: 2 <= nsec, every length >= 0, lengths sum to the words after the table, at most 2^24 words
-fn shape_ok(w: [i64]) -> bool
+// The section table: 2 <= nsec, every length >= 0, the lengths sum to the words after the table, at most 2^24
+// words. Returns nsec, or -1 (hand `sections` -> Option<usize>).
+fn sections(w: [i64]) -> i64
+  ensures result == -1 || (8 <= len(w) && len(w) <= 16777216 && 2 <= result && result <= len(w) - 7)
 {
   let n: i64 = len(w);
-  if n > 16777216 || n < 8 { return false; }
+  if n > 16777216 || n < 8 { return -1; }
   let ns: i64 = w[6];
-  if ns < 2 || ns > n - 7 { return false; }
+  if ns < 2 || ns > n - 7 { return -1; }
   let mut rest: i64 = n - 7 - ns;
   let mut i: i64 = 0;
   while i < ns
@@ -30,148 +49,167 @@ fn shape_ok(w: [i64]) -> bool
     decreases ns - i
   {
     let l: i64 = w[7 + i];
-    if l < 0 || l > rest { return false; }
+    if l < 0 || l > rest { return -1; }
     rest = rest - l;
     i = i + 1;
   }
-  return rest == 0;
+  if rest != 0 { return -1; }
+  return ns;
 }
 
-// w with section 0 replaced by the l-word pool held in o's prefix layout: allocate, copy the header, the tail and fix the lengths
-fn with_pool_len(w: [i64], l: i64) -> [i64] ! alloc
-  requires 0 <= l && l <= 16777216
-  ensures len(result) >= 0
+// Start of section 0 when the header and its length fit in the words (the rest of the table is not checked), or -1
+// (hand `pool_bounds`; the length is w[7]).
+fn pool_start(w: [i64]) -> i64
+  ensures result == -1 || (8 <= len(w) && len(w) <= 16777216 && 9 <= result && 0 <= w[7] && w[7] <= len(w) - result)
 {
   let n: i64 = len(w);
-  if n < 8 || n > 16777216 { return copy(w); }
+  if n < 8 || n > 16777216 { return -1; }
   let ns: i64 = w[6];
-  if ns < 2 || ns > n - 7 { return copy(w); }
+  if ns < 2 || ns > n - 7 { return -1; }
   let p0: i64 = 7 + ns;
   let l0: i64 = w[7];
-  if l0 < 0 || l0 > n - p0 { return copy(w); }
-  let m: i64 = n - l0 + l;
-  let mut o: [i64] = alloc(m, 0);
-  let a: i64 = crate::ent_u16::put_range(inout o, 0, w, 0, p0);
-  let b: i64 = crate::ent_u16::put_range(inout o, p0 + l, w, p0 + l0, n - p0 - l0);
-  crate::ent_u16::wr(inout o, 4, m - 5);
-  crate::ent_u16::wr(inout o, 7, l);
-  return o;
+  if l0 < 0 || l0 > n - p0 { return -1; }
+  return p0;
 }
 
-// the packet with the rejected pool [-1]
+// The packet with section 0 replaced by the one-word pool [-1] (env_check rejects it). A packet whose table does not
+// hold section 0 is copied as is, with the same write at 7 + nsec.
 pub fn poison(w: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  let mut o: [i64] = with_pool_len(w, 1);
-  crate::ent_u16::wr(inout o, 7 + crate::ent_u16::clamp(crate::ent_u16::rd(w, 6), 16777216), -1);
+  let n: i64 = len(w);
+  let ns: i64 = crate::ent_u16::rd(w, 6);
+  let p0: i64 = pool_start(w);
+  let mut o: [i64] = alloc(0, 0);
+  if p0 >= 0 {
+    let l0: i64 = w[7];
+    let m: i64 = n - l0 + 1;
+    arr_reserve(inout o, m);
+    arr_append(inout o, w, 0, p0);
+    arr_push(inout o, -1);
+    arr_append(inout o, w, p0 + l0, n - p0 - l0);
+    crate::ent_u16::wr(inout o, 4, m - 5);
+    crate::ent_u16::wr(inout o, 7, 1);
+  } else {
+    o = copy(w);
+    crate::ent_u16::wr(inout o, 7 + crate::ent_u16::clamp(ns, 16777216), -1);
+  }
   // env_check looks for the pool at 7 + min(nsec, 1000000); above that cap also break the version so it still rejects
-  if crate::ent_u16::rd(w, 6) > 1000000 { crate::ent_u16::wr(inout o, 0, 0); }
+  if ns > 1000000 { crate::ent_u16::wr(inout o, 0, 0); }
   return o;
 }
 
-// Malformed outer envelopes go to the packet layer for the existing error classification.
+// false only for a well-formed envelope whose pool is not valid packed WTF-8. Malformed envelopes go to the packet
+// layer for the existing error classification.
 pub fn wire_in(w: [i64]) -> bool
 {
-  if !shape_ok(w) { return true; }
-  let n: i64 = len(w);
-  if n < 8 || n > 16777216 || w[4] != n - 5 { return true; }
-  let ns: i64 = w[6];
-  if ns < 2 || ns > n - 7 { return true; }
+  let ns: i64 = sections(w);
+  if ns < 0 { return true; }
+  if w[4] != len(w) - 5 { return true; }
   return pool_ok(w, 7 + ns, w[7]);
 }
 
+// The pool at w[p0 .. p0 + l0], if it lies inside w.
 pub fn pool_ok(w: [i64], p0: i64, l0: i64) -> bool
 {
   if p0 < 0 || p0 > 33554432 || l0 < 2 || l0 > 16777216 || l0 > len(w) - p0 { return false; }
-  let nu: i64 = crate::ent_u16::rd(w, p0);
-  let nb: i64 = crate::ent_u16::rd(w, p0 + 1);
+  return pool_valid(subview(w, p0, p0 + l0));
+}
+
+// A packed WTF-8 pool: the exact word count, every word in seven bytes, valid forms (a lone high and a lone low
+// surrogate may be split by the 0xFF separator, which counts no unit), zero padding.
+pub fn pool_valid(pool: [i64]) -> bool
+{
+  let l0: i64 = len(pool);
+  if l0 < 2 || l0 > 16777216 { return false; }
+  let nu: i64 = pool[0];
+  let nb: i64 = pool[1];
   let cap: i64 = 7 * (l0 - 2);
   if nu < 0 || nu > 16777216 || nb < nu || nb > cap || nb > 3 * nu + nu / 2 { return false; }
   // MUTANT M17: the exact pool length check is dropped (trailing zero words are accepted again).
   // No trailing zero words and no missing word: the pool is exactly as long as its bytes need.
   if l0 != 2 + (nb + 6) / 7 { return false; }
-  // Equal counts imply an ASCII-only stream. Check all seven high bits in each word.
-  if nb == nu { return ascii_pool_ok(w, p0, l0, nb); }
+  // Equal counts imply an ASCII-only stream: check all seven high bits in each word with the word range.
+  if !words_ok(pool, nb == nu) { return false; }
+  if nb == nu { return padding_ok(pool, nb); }
   let mut u: i64 = 0;
   let mut k: i64 = 0;
   let mut hi3: bool = false;
   while k < nb
-    invariant 0 <= nb && nb <= 58720256 && 0 <= k && k <= nb + 3 && 0 <= u && u <= k && 0 <= p0 && p0 <= 33554432
+    invariant 0 <= nb && nb <= 58720256 && 0 <= k && k <= nb + 3 && 0 <= u && u <= k
     decreases nb - k
   {
-    let b0: i64 = byte_at(w, p0, k, nb);
-    if b0 < 0 { return false; }
+    let b0: i64 = byte(pool, k);
     if b0 < 128 {
       k = k + 1; u = u + 1; hi3 = false;
     } else if b0 == 255 {
-      // The separator byte: only between a lone high and a lone low, and it counts no unit.
-      if !hi3 || !crate::ent_value::starts_low(w, p0, k + 1, nb - k - 1) { return false; }
+      // The separator byte: only between a lone high and a lone low.
+      if !hi3 || k + 3 >= nb { return false; }
+      let s1: i64 = byte(pool, k + 1);
+      let s2: i64 = byte(pool, k + 2);
+      if s1 != 237 || s2 < 176 || s2 > 191 { return false; }
       k = k + 1; hi3 = false;
     } else if b0 < 194 {
       return false;
     } else if b0 < 224 {
-      let b1: i64 = byte_at(w, p0, k + 1, nb);
-      if !cont(b1) { return false; }
+      if !cont(at(pool, k + 1, nb)) { return false; }
       k = k + 2; u = u + 1; hi3 = false;
     } else if b0 < 240 {
-      let b1: i64 = byte_at(w, p0, k + 1, nb);
-      let b2: i64 = byte_at(w, p0, k + 2, nb);
-      if !cont(b1) || !cont(b2) { return false; }
-      if b0 == 224 && b1 < 160 { return false; }
+      let b1: i64 = at(pool, k + 1, nb);
+      let b2: i64 = at(pool, k + 2, nb);
+      if !cont(b1) || !cont(b2) || (b0 == 224 && b1 < 160) { return false; }
       let v: i64 = (b0 - 224) * 4096 + (b1 - 128) * 64 + (b2 - 128);
       if hi3 && v >= 56320 && v <= 57343 { return false; }
       hi3 = v >= 55296 && v <= 56319;
       k = k + 3; u = u + 1;
     } else if b0 < 245 {
-      let b1: i64 = byte_at(w, p0, k + 1, nb);
-      let b2: i64 = byte_at(w, p0, k + 2, nb);
-      let b3: i64 = byte_at(w, p0, k + 3, nb);
-      if !cont(b1) || !cont(b2) || !cont(b3) { return false; }
-      if b0 == 240 && b1 < 144 { return false; }
-      if b0 == 244 && b1 > 143 { return false; }
+      let b1: i64 = at(pool, k + 1, nb);
+      let b2: i64 = at(pool, k + 2, nb);
+      let b3: i64 = at(pool, k + 3, nb);
+      if !cont(b1) || !cont(b2) || !cont(b3) || (b0 == 240 && b1 < 144) || (b0 == 244 && b1 > 143) { return false; }
       k = k + 4; u = u + 2; hi3 = false;
     } else {
       return false;
     }
   }
   if k != nb || u != nu { return false; }
-  return padding_ok(w, p0, l0, nb);
+  return padding_ok(pool, nb);
 }
 
-fn ascii_pool_ok(w: [i64], p0: i64, l0: i64, nb: i64) -> bool
-  requires 0 <= p0 && p0 <= 33554432 && 0 <= nb && nb <= 58720256 && 2 <= l0 && l0 <= 16777216 && nb <= 7 * (l0 - 2)
+// Every word after [nu, nb] is in seven bytes; with ascii also no packed byte has its high bit
+// (0x80808080808080 = 36170086419038336).
+fn words_ok(pool: [i64], ascii: bool) -> bool
+  requires len(pool) >= 2
 {
-  let used: i64 = (nb + 6) / 7;
-  let mut i: i64 = 0;
-  while i < used
-    invariant 0 <= i && i <= used && used <= 16777216 && 0 <= p0 && p0 <= 33554432
-    decreases used - i
+  let mut i: i64 = 2;
+  while i < len(pool)
+    invariant 2 <= i && i <= len(pool)
+    decreases len(pool) - i
   {
-    let word: i64 = crate::ent_u16::rd(w, p0 + 2 + i);
-    // 0x80808080808080: the same high-bit mask in every packed byte.
-    if word < 0 || word > 72057594037927935 || (word & 36170086419038336) != 0 { return false; }
+    let x: i64 = pool[i];
+    if !word_ok(x) || (ascii && (x & 36170086419038336) != 0) { return false; }
     i = i + 1;
   }
-  return padding_ok(w, p0, l0, nb);
+  return true;
 }
 
-fn padding_ok(w: [i64], p0: i64, l0: i64, nb: i64) -> bool
-  requires 0 <= p0 && p0 <= 33554432 && 0 <= nb && nb <= 58720256 && 2 <= l0 && l0 <= 16777216 && nb <= 7 * (l0 - 2)
+// The bytes after the stream up to the end of its last word are zero.
+fn padding_ok(pool: [i64], nb: i64) -> bool
+  requires 0 <= nb && nb <= 58720256
 {
-  let used: i64 = (nb + 6) / 7;
-  let end: i64 = used * 7;
+  let end: i64 = (nb + 6) / 7 * 7;
   let mut k: i64 = nb;
   while k < end
-    invariant 0 <= k && k <= end && end <= 58720262 && 0 <= p0 && p0 <= 33554432
+    invariant nb <= k && k <= end && end <= 58720262
     decreases end - k
   {
-    if byte_at(w, p0, k, end) != 0 { return false; }
+    if byte(pool, k) != 0 { return false; }
     k = k + 1;
   }
   return true;
 }
 
-// Pools have one canonical length (pool_ok checks l0 exactly), so equal awaits are equal word for word.
+// Pools have one canonical length (pool_valid checks it exactly), so equal awaits are equal word for word.
 pub fn same_packet(a: [i64], b: [i64]) -> bool
 {
   let na: i64 = len(a);
