@@ -1393,6 +1393,7 @@ must_reject|must_reject/p5_jump_outside.pruv	2 cases: exit 2	llvm=b736592208b0	r
 must_reject|must_reject/p5_jump_unreachable.pruv	2 cases: exit 2	llvm=d2993704557d	rust=d2993704557d
 must_reject|must_reject/p5_label_duplicate.pruv	2 cases: exit 2	llvm=9c56f5a10e72	rust=9c56f5a10e72
 must_reject|must_reject/p5_label_keyword.pruv	2 cases: exit 2	llvm=07ff5da11740	rust=07ff5da11740
+must_reject|must_reject/p5_label_ref.pruv	2 cases: exit 2	llvm=33793de12689	rust=33793de12689
 must_reject|must_reject/p5_label_static.pruv	2 cases: exit 2	llvm=05b9f0e7ea3e	rust=05b9f0e7ea3e
 must_reject|must_reject/p5_label_target.pruv	2 cases: exit 2	llvm=d5638e1528f3	rust=d5638e1528f3
 must_reject|must_reject/p5_loop.pruv	2 cases: exit 2	llvm=b246b6959e85	rust=b246b6959e85

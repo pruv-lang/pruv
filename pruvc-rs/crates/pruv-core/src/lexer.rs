@@ -347,7 +347,7 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
             let name = &v[1..];
             if v.contains("__") || name.starts_with("pruv_") || name == "static" || name == "_"
                 || KEYWORDS.contains(&name) || RUST_KEYWORDS.contains(&name)
-                || matches!(name, "for" | "break" | "continue" | "loop" | "while" | "if" | "else")
+                || matches!(name, "for" | "break" | "continue" | "loop" | "while" | "if" | "else" | "ref")
             {
                 return Err(PruvError::new("parse", line, col, "loop_label_name",
                     format!("loop label {} is reserved", repr_str(&v)),

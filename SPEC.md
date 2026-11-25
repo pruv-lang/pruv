@@ -2545,13 +2545,13 @@ fn pair(n: i64) -> i64
   [map](tests/must_reject/p5_jump_map.pruv).
 - R-6r-2 **Labels.** `'name: while` and `'name: for` label a loop; `break 'name;` and `continue 'name;` target it
   from any depth of nested loops. A label names a loop only (`parse/loop_label_target`); `'static`, `'_` and keyword
-  labels such as `'fn` or `'loop` (Rust rejects them) are `parse/loop_label_name`; a label already used by an enclosing loop is `type/loop_label_duplicate`; a jump to a
+  labels such as `'fn`, `'loop` or `'ref` (Rust rejects them) are `parse/loop_label_name`; a label already used by an enclosing loop is `type/loop_label_duplicate`; a jump to a
   label no enclosing loop has is `type/loop_label_unknown`. The verifier rules of R-6r-1 apply to the targeted loop:
   a labeled `continue` is a back edge of that loop and a labeled `break` joins its exit state. Code: Rust emits
   `'name: for`/`'name: while` with `break 'name;`/`continue 'name;`. Tests: [accept](tests/spec/r6r_2_accept.pruv),
   [reject](tests/spec/r6r_2_reject.pruv), [false contract](tests/spec/r6r_2_reject_contract.pruv),
   [duplicate](tests/must_reject/p5_label_duplicate.pruv), [target](tests/must_reject/p5_label_target.pruv),
-  [reserved name](tests/must_reject/p5_label_static.pruv), [keyword](tests/must_reject/p5_label_keyword.pruv).
+  [reserved name](tests/must_reject/p5_label_static.pruv), [keyword](tests/must_reject/p5_label_keyword.pruv), [ref](tests/must_reject/p5_label_ref.pruv).
 - R-6r-3 **Not yet supported.** `break` followed by a value is `parse/break_value`; `loop { .. }`, as a statement or
   as an expression, is `parse/loop_unsupported` (write a `while` with a measure); a `continue` followed by anything
   but an optional label and `;`, and a `break` missing its `;` before `}`, are `parse/loop_jump_syntax`;

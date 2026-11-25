@@ -1307,6 +1307,7 @@ must_reject|tests/must_reject/p5_jump_outside.pruv	1 case: obl=0 1	--infer=116d8
 must_reject|tests/must_reject/p5_jump_unreachable.pruv	1 case: obl=0 1	--infer=8220c1f04de4
 must_reject|tests/must_reject/p5_label_duplicate.pruv	1 case: obl=0 1	--infer=5634bc9ee034
 must_reject|tests/must_reject/p5_label_keyword.pruv	1 case: obl=0 1	--infer=d2af38340559
+must_reject|tests/must_reject/p5_label_ref.pruv	1 case: obl=0 1	--infer=68762e9f4e40
 must_reject|tests/must_reject/p5_label_static.pruv	1 case: obl=0 1	--infer=03cd757c5733
 must_reject|tests/must_reject/p5_label_target.pruv	1 case: obl=0 1	--infer=be0e0a53c967
 must_reject|tests/must_reject/p5_loop.pruv	1 case: obl=0 1	--infer=1f668fb6d750
