@@ -30,4 +30,13 @@ fn main() {
     println!("{}", line.trim_end());
     println!("{}", if line == hand { "same as hand" } else { "differs from hand" });
     println!("{}", sol::grow());
+    let n1 = std::hint::black_box(1i64);
+    println!(
+        "{} {} {} {} {}",
+        sol::eq_units(0, 256, n1),
+        sol::eq_units(256, 256, n1),
+        sol::eq_units(0, 256, std::hint::black_box(0i64)),
+        sol::eq_one(0, 256),
+        sol::eq_one(0xFFFF, 0xFFFF)
+    );
 }

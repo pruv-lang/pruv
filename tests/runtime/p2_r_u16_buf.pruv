@@ -87,3 +87,22 @@ fn grow() -> i64 ! alloc {
   }
   return first * 1000000000 + sum_units(view) * 10 + tag;
 }
+
+// One-unit compares whose low bytes match (0 vs 256): a byte count of n instead of 2*n would say equal.
+// `n` comes from the caller so LLVM takes the dynamic inline loop; `eq_one` uses a literal length (memcmp).
+fn eq_units(x: i64, y: i64, n: i64) -> bool ! alloc
+  requires 0 <= x && x <= 65535 && 0 <= y && y <= 65535
+  requires 0 <= n && n <= 1
+{
+  let a: [u16] = alloc(1, x);
+  let b: [u16] = alloc(1, y);
+  return eq_range(a, 0, b, 0, n);
+}
+
+fn eq_one(x: i64, y: i64) -> bool ! alloc
+  requires 0 <= x && x <= 65535 && 0 <= y && y <= 65535
+{
+  let a: [u16] = alloc(4, x);
+  let b: [u16] = alloc(4, y);
+  return eq_range(a, 0, b, 0, 4);
+}

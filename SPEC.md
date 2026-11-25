@@ -155,21 +155,23 @@ it can never be silently dropped.
   `j + n <= len(b)` (`verify` error `index_oob`). It then knows the result exactly: `r == forall k in 0..n: a[i+k] ==
   b[j+k]`, over the array values at the call (later writes do not change `r`). Both backends evaluate the five
   arguments once each, in source order. The Rust backend compares the two slices in one call; the LLVM backend
-  compares bytes with `memcmp` (a literal `n > 0`, or a dynamic `n >= 4`) or an inline early-exit loop (a dynamic
-  `n < 4`); a literal `n == 0` is `true` without a compare. An operand layout other than `[u8]` bytes or 64-bit
-  elements is `codegen` error `unsupported_type` (today a `[u8]` operand is stored as bytes and the storage plan keeps
-  an `[i64]` operand, refined or not, as 64-bit elements, so it is not reached).
+  compares bytes with `memcmp` (a literal `n > 0`, or a dynamic `n >= 4`; `n` times the element size) or an inline
+  early-exit loop (a dynamic `n < 4`); a literal `n == 0` is `true` without a compare. An operand layout other than
+  `[u8]` bytes, `[u16]` 16-bit elements or 64-bit elements is `codegen` error `unsupported_type` (today a `[u8]`
+  operand is stored as bytes, a `[u16]` operand as 16-bit units, and the storage plan keeps an `[i64]` operand,
+  refined or not, as 64-bit elements, so it is not reached).
 - `copy_range(inout dst, i, src, j, n);` (R-5-1): a whole expression statement (like
   `store_be`; as an expression it is `type/inout_context`). `dst` is a mutable local array or an `inout` array
   parameter (a missing `inout` marker or a non-mutable place is `type/inout_argument`); `dst` and `src` have one type,
-  `[i64]` or `[u8]` (else `type_mismatch`); `i, j, n: i64`. Code only (`effect_in_contract` in a contract), name
+  `[i64]`, `[u8]` or `[u16]` (else `type_mismatch`); `i, j, n: i64`. Code only (`effect_in_contract` in a contract), name
   reserved. It copies `src[j..j+n]` into `dst[i..i+n]` and leaves every other element and `len(dst)` unchanged; `n == 0`
   copies nothing. The verifier must prove, in this order, `0 <= i`, `0 <= j`, `0 <= n`, `i + n <= len(dst)`,
   `j + n <= len(src)` (`verify` error `index_oob`; only the first one that fails is reported). It then knows
   `len(dst') == len(dst)`, `forall k in 0..n: dst'[i+k] == src[j+k]` (`src` as it is at the call) and
   `forall p: (p < i || p >= i + n) ==> dst'[p] == dst[p]`. These facts are one array-theory update of `dst`
   (`dst' = fun p. if i <= p < i + n then src[j + p - i] else dst[p]`), not a quantified assumption, so they are exact
-  (no vacuous or missing fact) and cost the callers no quantifier instantiation; a `[u8]` result stays in `0..=255`.
+  (no vacuous or missing fact) and cost the callers no quantifier instantiation; a `[u8]` result stays in `0..=255`
+  and a `[u16]` result in `0..=65535`.
   Aliasing (LG5): `src` may be exactly `dst`, the same variable or an identical field path
   (`copy_range(inout a, 2, a, 0, 4)`). The copy then has memmove semantics: the source range is read before the
   destination range is written, so overlapping ranges copy the old contents (the Rust backend emits `copy_within`,
@@ -180,14 +182,15 @@ it can never be silently dropped.
   in source order dst, i, src, j, n. For a `src` that is not `dst`, the Rust backend emits one `copy_from_slice` of
   the two slices (unchecked slices when verified, a checked failure `pruv_oob` with `--no-verify`); the LLVM backend
   emits one `llvm.memcpy` of `n` times the element size (`llvm.memmove` when `src` is `dst`), and an operand layout
-  other than `[u8]` bytes or 64-bit elements is `codegen` error `unsupported_type`, as for `eq_range`. Tests:
+  other than `[u8]` bytes, `[u16]` 16-bit elements or 64-bit elements is `codegen` error `unsupported_type`, as for
+  `eq_range`. Tests:
   `tests/spec/r5_1_copy_range_*.pruv`
   (accept: `_u8`, `_i64`, `_zero`, `_eq`, `_caller`; reject: `_i`, `_j`, `_n`, `_dst_end`, `_src_end`, `_order`,
   `_type`, `_nonarray`, `_noinout`, `_contract`, `_expr`, `_alias`, `_idx_alias`, `_fact_outside`, `_fact_nocopy`),
   `tests/runtime/l3_rt_copy_range*.pruv`, `tests/runtime/lg5_rt_copy_range_overlap.pruv`,
   `tests/must_reject/lg5_copy_range_overlap_oob.pruv`, `tests/must_reject/lg5_copy_range_self_idx_alias.pruv`.
 - `copy_within(inout a, dst, src, n);` (R-5-2): an overlap-safe move inside one array (memmove). Same statement,
-  place, type, contract and name rules as `copy_range` (`a` is `[i64]` or `[u8]`, `dst, src, n: i64`). It sets
+  place, type, contract and name rules as `copy_range` (`a` is `[i64]`, `[u8]` or `[u16]`, `dst, src, n: i64`). It sets
   `a[dst..dst+n]` to the old `a[src..src+n]`, even when the two ranges overlap, and leaves every other element and
   `len(a)` unchanged. The verifier must prove, in this order, `0 <= dst`, `0 <= src`, `0 <= n`, `dst + n <= len(a)`,
   `src + n <= len(a)` (`verify` error `index_oob`, first failure only), and then knows the array-theory update

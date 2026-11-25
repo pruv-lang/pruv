@@ -3027,7 +3027,7 @@ mutate|tests/runtime/lg9_rt_utf8_ascii.pruv	12 cases: error parse/syntax 12	0/VT
 mutate|tests/runtime/p1_r_bounds.pruv	12 cases: error parse/syntax 8, error parse/bad_char 4	0/VT=e02b69313273	0/Vt=e02b69313273	0/vT=e02b69313273	0/vt=e02b69313273	1/VT=33d170dcefcc	1/Vt=33d170dcefcc	1/vT=33d170dcefcc	1/vt=33d170dcefcc	2/VT=11f4ad2e5444	2/Vt=11f4ad2e5444	2/vT=11f4ad2e5444	2/vt=11f4ad2e5444
 mutate|tests/runtime/p1_r_cast_fail.pruv	12 cases: error parse/syntax 4, error type/unknown_type 4, ok 4	0/VT=621da66a985f	0/Vt=621da66a985f	0/vT=621da66a985f	0/vt=621da66a985f	1/VT=0a4d3f0ebcfd	1/Vt=0a4d3f0ebcfd	1/vT=0a4d3f0ebcfd	1/vt=0a4d3f0ebcfd	2/VT=ed51fa5bb8bc	2/Vt=ed51fa5bb8bc	2/vT=1669a5214df2	2/vt=1669a5214df2
 mutate|tests/runtime/p1_r_overflow.pruv	12 cases: ok 8, error type/unknown_type 4	0/VT=ed51fa5bb8bc	0/Vt=ed51fa5bb8bc	0/vT=1669a5214df2	0/vt=1669a5214df2	1/VT=e11417cc2b98	1/Vt=e11417cc2b98	1/vT=6ddfa0be89cf	1/vt=6ddfa0be89cf	2/VT=356a7118967e	2/Vt=356a7118967e	2/vT=356a7118967e	2/vt=356a7118967e
-mutate|tests/runtime/p2_r_u16_buf.pruv	12 cases: error parse/syntax 8, error parse/bad_char 4	0/VT=6bc38ec527f2	0/Vt=6bc38ec527f2	0/vT=6bc38ec527f2	0/vt=6bc38ec527f2	1/VT=7199aa0a2233	1/Vt=7199aa0a2233	1/vT=7199aa0a2233	1/vt=7199aa0a2233	2/VT=01a32d3f3da2	2/Vt=01a32d3f3da2	2/vT=01a32d3f3da2	2/vt=01a32d3f3da2
+mutate|tests/runtime/p2_r_u16_buf.pruv	12 cases: error parse/syntax 12	0/VT=6bc38ec527f2	0/Vt=6bc38ec527f2	0/vT=6bc38ec527f2	0/vt=6bc38ec527f2	1/VT=67e20ddf6ffb	1/Vt=67e20ddf6ffb	1/vT=67e20ddf6ffb	1/vt=67e20ddf6ffb	2/VT=4cdb8383dd79	2/Vt=4cdb8383dd79	2/vT=4cdb8383dd79	2/vt=4cdb8383dd79
 mutate|tests/runtime/p2_rt_bits.pruv	12 cases: error parse/syntax 12	0/VT=156a6195c5b1	0/Vt=156a6195c5b1	0/vT=156a6195c5b1	0/vt=156a6195c5b1	1/VT=d5222e0fae86	1/Vt=d5222e0fae86	1/vT=d5222e0fae86	1/vt=d5222e0fae86	2/VT=aea4c447c3a6	2/Vt=aea4c447c3a6	2/vT=aea4c447c3a6	2/vt=aea4c447c3a6
 mutate|tests/runtime/p2_rt_contract_guard.pruv	12 cases: error parse/syntax 8, error parse/bad_int 4	0/VT=68794174fc94	0/Vt=68794174fc94	0/vT=68794174fc94	0/vt=68794174fc94	1/VT=3511666c1af9	1/Vt=3511666c1af9	1/vT=3511666c1af9	1/vt=3511666c1af9	2/VT=874d6eadecbe	2/Vt=874d6eadecbe	2/vT=874d6eadecbe	2/vt=874d6eadecbe
 mutate|tests/runtime/p2_rt_kernels.pruv	12 cases: error parse/syntax 12	0/VT=2fdb92c85c27	0/Vt=2fdb92c85c27	0/vT=2fdb92c85c27	0/vt=2fdb92c85c27	1/VT=326c0c64dc35	1/Vt=326c0c64dc35	1/vT=326c0c64dc35	1/vt=326c0c64dc35	2/VT=61b58fe760fa	2/Vt=61b58fe760fa	2/vT=61b58fe760fa	2/vt=61b58fe760fa
@@ -3489,7 +3489,7 @@ runtime|tests/runtime/lg9_rt_utf8_ascii.pruv	4 cases: ok 4	VT=c2f820eff1a4	Vt=c2
 runtime|tests/runtime/p1_r_bounds.pruv	4 cases: ok 4	VT=88be2da4b6a8	Vt=687f03a0ce9a	vT=0c17e6815e94	vt=b9226d1e2688
 runtime|tests/runtime/p1_r_cast_fail.pruv	4 cases: ok 4	VT=e70d9a7d38ff	Vt=e70d9a7d38ff	vT=ae275aa11a0b	vt=ae275aa11a0b
 runtime|tests/runtime/p1_r_overflow.pruv	4 cases: ok 4	VT=e11417cc2b98	Vt=e11417cc2b98	vT=6ddfa0be89cf	vt=6ddfa0be89cf
-runtime|tests/runtime/p2_r_u16_buf.pruv	4 cases: ok 4	VT=f519efe8beb1	Vt=fddf5c29e619	vT=ca03c606688b	vt=31278d1a073a
+runtime|tests/runtime/p2_r_u16_buf.pruv	4 cases: ok 4	VT=63dd81db4ab5	Vt=d74bfd40eec9	vT=5d9b71367382	vt=1ca6adec3943
 runtime|tests/runtime/p2_rt_bits.pruv	4 cases: ok 4	VT=d6b7557bc95d	Vt=d6b7557bc95d	vT=ad48a8be2e4d	vt=ad48a8be2e4d
 runtime|tests/runtime/p2_rt_contract_guard.pruv	4 cases: ok 4	VT=da415611fbc0	Vt=2018d19939ae	vT=c0637ebf2530	vt=031dba9e5f97
 runtime|tests/runtime/p2_rt_kernels.pruv	4 cases: ok 4	VT=951c0367f27c	Vt=a7b1e6105cca	vT=08df4e0055da	vt=df79cbc96a02

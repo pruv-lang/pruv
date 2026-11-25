@@ -1,1 +1,1 @@
-{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["0 -1 -1 -1 -1 -1 -1 1 0 -1 -1 -1 -1 -1 1 1 0 1 1 -1 1 1 1 -1 0 -1 -1 1 1 1 -1 1 0 -1 1 1 1 1 1 1 0 1 1 1 -1 -1 -1 -1 0", "same as hand", "655350003665871"], "gen_contains": ["&[u16]", "Vec<u16>"]}
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["0 -1 -1 -1 -1 -1 -1 1 0 -1 -1 -1 -1 -1 1 1 0 1 1 -1 1 1 1 -1 0 -1 -1 1 1 1 -1 1 0 -1 1 1 1 1 1 1 0 1 1 1 -1 -1 -1 -1 0", "same as hand", "655350003665871", "false true true false true"], "gen_contains": ["&[u16]", "Vec<u16>"]}
