@@ -1,0 +1,7 @@
+// P7-1 R1 audit: == on a type parameter in a cost clause is checked too (two zero-length arrays are equal)
+struct S { a: [i64; 0] }
+fn g<T>(x: T, y: T) -> i64 cost count(k in 0..1: x == y) { return 0; }
+fn f() -> i64 cost 1 {
+  let x: S = S { a: [0; 0] }; let y: S = S { a: [1; 0] };
+  let z: i64 = g::<S>(x, y); assert spent == 1; return z;
+}

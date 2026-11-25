@@ -2685,6 +2685,18 @@ impl<'a> Gen<'a> {
 
     // ---------- contract (requires) evaluation, i128 ----------
 
+    /// P7-1 B: a contract constructor argument. A fixed-length array variable is code storage (`[i64; N]`),
+    /// the contract mirror field is `[i128; N]`, so the variable is converted element by element.
+    fn cfixed_arg(&mut self, a: &Expr) -> Result<String, String> {
+        let s = self.c(a)?;
+        if matches!(a, Expr::Var(_)) {
+            if let Some(g) = expr_ty(a).as_deref().and_then(fixed_key) {
+                return Ok(format!("({})", try_conv_g(&g, &format!("({})", s))?));
+            }
+        }
+        Ok(s)
+    }
+
     fn carr(&mut self, e: &Expr) -> R<String> {
         match e {
             // R03L: an owned take array is read through a borrow
@@ -2703,6 +2715,7 @@ impl<'a> Gen<'a> {
             Expr::FieldAccess(_) | Expr::VariantField(_) if self.g9 => self.cx(e),
             // P7-1 B: a fixed-array field of a contract mirror struct is already `[i128; N]`
             Expr::FieldAccess(x) if x.ty.as_deref().is_some_and(|t| fixed_key(t).is_some()) => self.c(e),
+            Expr::VariantField(x) if x.ty.as_deref().is_some_and(|t| fixed_key(t).is_some()) => self.c(e),
             // P7-1 B: a fixed-array literal in a contract is an array of contract values
             Expr::Call(x) if x.name == "@array" => {
                 let mut parts = Vec::new();
@@ -2917,6 +2930,14 @@ impl<'a> Gen<'a> {
                 w
             ));
         }
+        // P7-1 B: a fixed-length array field is a plain copy at code width (it adds nothing to the size)
+        if fixed_key(tk).is_some() {
+            return match e {
+                Expr::Var(_) => self.c(e),
+                Expr::FieldAccess(_) | Expr::VariantField(_) => Ok(format!("::std::clone::Clone::clone({})", self.cx(e)?)),
+                _ => Err(self.g9_unsupported(e, "this expression as a constructor field of an aggregate operand")),
+            };
+        }
         if is_array_name(tk) {
             let a = self.carr(e)?;
             // the buffer expression is evaluated once: bound, charged by its length, then copied
@@ -3122,7 +3143,7 @@ impl<'a> Gen<'a> {
                 let mut parts: Vec<String> = Vec::new();
                 for f in &fs {
                     let v = init_value(&vals, &f.name)?;
-                    parts.push(format!("{}: {}", f.name, self.c(v)?));
+                    parts.push(format!("{}: {}", f.name, self.cfixed_arg(v)?));
                 }
                 if let Some(t) = tuple_lit(&x.name, &fs, &parts) {
                     return Ok(t);
@@ -3141,7 +3162,7 @@ impl<'a> Gen<'a> {
                 }
                 let mut parts: Vec<String> = Vec::new();
                 for a in &x.args {
-                    parts.push(self.c(a)?);
+                    parts.push(self.cfixed_arg(a)?);
                 }
                 Ok(format!("{}({})", ctor, parts.join(", ")))
             }

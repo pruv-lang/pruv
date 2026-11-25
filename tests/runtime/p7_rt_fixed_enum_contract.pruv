@@ -1,0 +1,26 @@
+// P7-1 B step 3 audit: [T; N] variant fields read in contracts (constructor from places, variant_field)
+enum E { A(a: [i64; 2]), B }
+struct S { a: [i64; 2] }
+
+fn f(s: S, p: [i64; 2]) -> i64
+  requires variant_field(E::A(s.a), E::A, a)[1] > 0 && variant_field(E::A(p), E::A, a)[0] > 0 && S { a: p }.a[1] > 0
+  ensures result == 1
+{ return 1; }
+
+fn g(e: E) -> i64
+  requires is_variant(e, E::A) && variant_field(e, E::A, a)[1] > 0 && variant_field(e, E::A, a)[1] < 1000
+  ensures result == variant_field(e, E::A, a)[1]
+{
+  match e {
+    E::A(a) => { return a[1]; }
+    E::B => { return 0; }
+  }
+}
+
+fn run(i: i64) -> i64
+  requires 0 <= i && i < 3
+{
+  let p: [i64; 2] = [i + 1, i + 2];
+  let s: S = S { a: p };
+  return f(s, p) * 1000 + g(E::A(p));
+}

@@ -1,0 +1,12 @@
+// P7-1 R1: == on a type parameter in a contract, instantiated with a struct holding [T; N], would compare SMT
+// array cells past N, so the caller could prove a false requires
+struct S { a: [i64; 2] }
+fn neq<T>(x: T, y: T) -> i64
+  requires !(x == y)
+{ return 0; }
+fn f() -> i64
+{
+  let s: S = S { a: [0, 5] };
+  let t: S = S { a: [0, 5] };
+  return neq::<S>(s, t);
+}

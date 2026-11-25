@@ -1,0 +1,5 @@
+// P7-1 B audit: == on Option<S> where S holds a [T; N] compares SMT array cells past N
+struct S { a: [i64; 2] }
+fn f(s: S, t: S) -> i64
+  requires !(Some::<S>(s) == Some::<S>(t))
+{ return 0; }

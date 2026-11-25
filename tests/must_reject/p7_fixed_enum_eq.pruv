@@ -1,0 +1,6 @@
+// P7-1 B audit: == on an enum whose variant holds a struct with a [T; N] field
+struct S { a: [i64; 2] }
+enum E { A(s: S), B }
+fn f(s: S, t: S) -> i64
+  requires !(E::A(s) == E::A(t))
+{ return 0; }

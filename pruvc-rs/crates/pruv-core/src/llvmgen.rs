@@ -3110,7 +3110,7 @@ impl<'a> FnGen<'a> {
             let by_ref = !c && refs.contains(fi.name.as_str());
             if let Some(t) = expr_ty(&fi.value).as_deref().filter(|t| fixed_key(t).is_some()) {
                 // P7-1 B: a fixed-array field copies from the value's storage
-                let p = self.fixed_ptr(&fi.value)?;
+                let p = if c { self.cfixed_ptr(&fi.value)? } else { self.fixed_ptr(&fi.value)? };
                 vals.insert(fi.name.as_str(), V::agg(p, t));
                 continue;
             }
@@ -3134,6 +3134,12 @@ impl<'a> FnGen<'a> {
         let ty = e.enum_name.as_str();
         let mut vals: Vec<V> = Vec::new();
         for x in &e.args {
+            if let Some(t) = expr_ty(x).as_deref().filter(|t| fixed_key(t).is_some()) {
+                // P7-1 B: a fixed-array variant field copies from the value's storage (like a struct field)
+                let p = if c { self.cfixed_ptr(x)? } else { self.fixed_ptr(x)? };
+                vals.push(V::agg(p, t));
+                continue;
+            }
             vals.push(self.evf(x, c, own)?);
         }
         let tag = t_variant_index(tt, ty, &e.variant)?;
@@ -4897,6 +4903,11 @@ impl<'a> FnGen<'a> {
                         v.mv = Some(Box::new((o.clone(), a.ctor.clone(), i, own_dead)));
                     }
                 }
+                // P7-1 B: a fixed-array variant field unpacks into fresh storage, which the binder owns as its slot
+                if fixed_key(&fd.ty).is_some() {
+                    bind.push((name.clone(), Bind::Slot(v)));
+                    continue;
+                }
                 bind.push((name.clone(), Bind::Ssa(v)));
             }
             if self.run_block(&a.body, bind)? {
@@ -4953,15 +4964,15 @@ impl<'a> FnGen<'a> {
         self.op(format!("{} {} {} to {}", if layout.starts_with('i') { "sext" } else { "zext" }, ty, x, target))
     }
 
-    /// P7-1: the storage of a fixed-array expression: a local's own slot, otherwise a fresh temporary filled from it.
     /// P7-1 B: `fixed_ptr` in contract form: a field path reads the contract value of its base
     fn cfixed_ptr(&mut self, e: &Expr) -> R<String> {
         match e {
-            Expr::FieldAccess(_) => Ok(self.cev(e)?.a),
+            Expr::FieldAccess(_) | Expr::VariantField(_) => Ok(self.cev(e)?.a),
             _ => self.fixed_ptr(e),
         }
     }
 
+    /// P7-1: the storage of a fixed-array expression: a local's own slot, otherwise a fresh temporary filled from it.
     fn fixed_ptr(&mut self, e: &Expr) -> R<String> {
         match e {
             Expr::Var(v) => match self.lookup(&v.name) {
@@ -6942,6 +6953,15 @@ impl<'a> FnGen<'a> {
             let x = self.op(format!("load {}, ptr {}", lty(&t), p))?;
             return self.unpack(&x, &t, false);
         }
+        // P7-1 B: a fixed-length array field is copied from its storage at code width (it adds nothing to the size)
+        if fixed_key(&t).is_some() {
+            let p = match e {
+                Expr::Var(_) => self.fixed_ptr(e)?,
+                Expr::FieldAccess(_) | Expr::VariantField(_) => self.cx(e)?,
+                _ => return Err(g9_diag_err(e.line(), e.col(), "this expression as a constructor field of an aggregate operand")),
+            };
+            return Ok(V::agg(p, &t));
+        }
         if is_arr_name(&t) {
             let a = self.cev(e)?;
             self.spend_n(&a.b)?;
@@ -7384,7 +7404,8 @@ impl<'a> FnGen<'a> {
                 if n == "len" && expr_ty(arg(a, 0)?).as_deref().and_then(fixed_key).is_some() {
                     let f = expr_ty(arg(a, 0)?).as_deref().and_then(fixed_key).unwrap();
                     match arg(a, 0)? {
-                        Expr::Var(_) => {}
+                        // a variable or field path has no effect to evaluate, and its length is the constant N
+                        x if crate::check::place_root(x).is_some() => {}
                         // P7-1 B: a literal's elements are still evaluated in contract form
                         Expr::Call(c) if c.name == ARRAY_LIST || array_repeat_len(&c.name).is_some() => {
                             self.fixed_lit_cev(c)?;

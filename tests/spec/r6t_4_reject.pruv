@@ -1,4 +1,4 @@
 // spec: R-6t-4 reject
-// A fixed-length array is not an enum variant field yet (parity row P7-1 B).
-enum E { A(a: [i64; 3]), B }
+// A fixed-length array is not a field of a generic enum yet (parity row P7-8).
+enum E<T> { A(a: [i64; 3], t: T), B }
 fn f() -> i64 { return 0; }

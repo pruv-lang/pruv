@@ -1,0 +1,8 @@
+// P7-1 B step 3: a [T; N] variant binder keeps its length N in the proof
+enum E { A(a: [i64; 2]), B }
+fn f(x: E) -> i64 {
+  match x {
+    E::A(a) => { return a[2]; }
+    E::B => { return 0; }
+  }
+}
