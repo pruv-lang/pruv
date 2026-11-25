@@ -1,0 +1,5 @@
+// P4: a for over Vec<String> (owned elements) is not available
+fn f(v: Vec<String>) -> ()
+{
+  for x in v { }
+}

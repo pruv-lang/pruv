@@ -1,0 +1,23 @@
+// P4 runtime: a for loop over a refined array kept in a narrow storage layout, and a loop that writes a
+// sibling field of the iterated field path
+struct S { v: [i64], w: i64 }
+
+fn last(inout s: S) -> ()
+{
+  for x in s.v { s.w = x; }
+}
+
+fn run(k: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 10
+{
+  let b: [i64 | 0..=9] = alloc(k, 3);
+  let mut t: i64 = 0;
+  for x in b invariant 0 <= t && t <= index(x) * 9 { t = t + x; }
+  let mut v: [i64] = alloc(k, 4);
+  if k > 0 { v[k - 1] = 6; }
+  let mut s: S = S { v: move v, w: -1 };
+  last(inout s);
+  let w: i64 = s.w;
+  if 0 <= w && w <= 9 { return t * 100 + w; }
+  return t * 100 - 1;
+}

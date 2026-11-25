@@ -1,0 +1,6 @@
+// P4: an inclusive range a..=b is not available
+fn f(n: i64) -> ()
+  requires 0 <= n && n <= 10
+{
+  for i in 0..=n { }
+}

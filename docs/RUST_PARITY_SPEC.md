@@ -111,6 +111,17 @@ the B-bundle average (about 80 minutes per feature) and adjust bundle size.
 - P3-1: arrays of the P3 widths (`[u32]`, `[i32]`, `[usize]`, `[isize]`, `[u64]`, `[i8]`, `[i16]`) stay rejected (`small_int_unsupported`); add them through the element table when a workload needs one.
 - P3-2: unary `-`, `!`, bitwise operators and shifts on non-`i64` widths stay `small_int_op`; add with a BV model per width (and wrapping ops) when a workload needs them.
 - P3-3: a proven array store with a non-`i64` index converts it through `i64` before `get_unchecked_mut`; emit `as usize` directly (Rust shape only, no extra check).
-- P3-4: `Vec`, `str` and hash map indexes, and signed non-`i64` array indexes, still need `i64`; numeric range bounds of other widths are P4.
+- P3-4: `Vec`, `str` and hash map indexes, and signed non-`i64` array indexes, still need `i64`; the range-bound part is closed in P4 (`for i in a..b` takes any P3 width, R-6q-1).
 - P3-5: non-`i64` widths at the host boundary (pub/extern/foreign signatures) stay P12.
 - P3-6: a `u64` index above i64 max prints a negative value in the out-of-bounds message, and the overlap `uadd` declaration filter path has no test (P3 audit recommendations).
+- P4-1: `enumerate`, `zip`, `rev`, `.iter()` and other adapters are rejected (`type/for_enumerate`, `parse/for_iterable`); write `for i in 0..len(a)` with `a[i]` until P15.
+- P4-2: `for x in v` over `Vec<T>` with a non-scalar `T` (`Vec<str>`, `Vec<Vec<T>>`, structs) is rejected (`type/for_iterable`); the borrowed binder of an owned element joins P11/P16.
+- P4-3: inclusive ranges `a..=b` are rejected (`parse/for_iterable`); add them with an end-at-max rule when a workload needs one.
+- P4-4: the binder of `for x in a` over `[u8]`/`[u16]` is `i64` (the type of an index read today), so the Rust loop is `for &x in a.iter() { let x = x as i64; ... }`; hand Rust keeps `x: u8`. Same machine code after the widen; change it when element reads keep their width.
+- P4-5: `for x in v` over `Vec<T>` is Rust only until LLVM has `Vec` (`codegen/unsupported_type`, P12).
+- P4-6: `break`/`continue` inside `for` come with P5 (the exit edges must also leave the hidden counter and bound unread).
+- P4-7: an outer loop's `index(x)` is not in scope in an inner loop's invariant; state the outer position through the outer counter or a local copy.
+- P4-8: an invariant ending in an uppercase name before `{` parses as a struct literal; parenthesize it until the invariant is parsed without struct literals.
+- P4-9: `for x in a` over a generic `[T]` (T an integer or bool after monomorphization) is accepted but not yet stated in R-6q-2.
+- P4-10: assigning the slice binder reports the `let mut` hint of an immutable local; a for-binder message is queued.
+- P4-11: missing tests from the P4 audit: reverse range `a > b` at runtime, `u8` 255 / `i8` / `i64` max bounds, `Vec<u8>`/`Vec<bool>`/`Vec<u32>` runtime, nested for over the same collection, binder-assignment reject.

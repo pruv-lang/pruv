@@ -549,7 +549,8 @@ impl<'a> FnVerifier<'a> {
         // G3 A2 (4.7): the opaque ordinals are per counterexample
         self.opq.borrow_mut().clear();
         let mut out: Vec<(String, Json)> = Vec::new();
-        for (name, v) in &senv.0 {
+        // P4: the hidden locals of a lowered `for` (bounds and slice position) are not user names
+        for (name, v) in senv.0.iter().filter(|(n, _)| !n.starts_with("__pruv_for_")) {
             if let Some(j) = self.cex_one(m, v) {
                 set_key(&mut out, name, j);
             }

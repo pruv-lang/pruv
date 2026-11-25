@@ -298,7 +298,7 @@ g9|tests/g9/proof/p36_ctor_payload_operand.pruv	1 case: obl=0 1	--infer=dbbd2d12
 g9|tests/g9/proof/p37_payload_subfield_read.pruv	1 case: obl=0 1	--infer=dbbd2d126742
 g9|tests/g9/proof/p38_spec_tree_count.pruv	1 case: obl=11 1	--infer=45473dd122c5
 inference|tests/inference/inf_absent_shapes.pruv	1 case: obl=59 1	--infer=99ee2c5df979
-inference|tests/inference/inf_budget.pruv	1 case: obl=1197 1	--infer=189555feb9e7
+inference|tests/inference/inf_budget.pruv	1 case: obl=905 1	--infer=a7cd157e96c7
 inference|tests/inference/inf_budget_fallback.pruv	1 case: obl=530 1	--infer=b3025bc08765
 inference|tests/inference/inf_copy_len.pruv	1 case: obl=44 1	--infer=52eaf88a63e0
 inference|tests/inference/inf_count.pruv	1 case: obl=72 1	--infer=370493f0c1b5
@@ -1289,6 +1289,16 @@ must_reject|tests/must_reject/p3_pub_u64.pruv	1 case: obl=0 1	--infer=e33d8d0068
 must_reject|tests/must_reject/p3_sub_i16.pruv	1 case: obl=1 1	--infer=2a8c05331f80
 must_reject|tests/must_reject/p3_sub_u64.pruv	1 case: obl=1 1	--infer=e9b410cef6e7
 must_reject|tests/must_reject/p3_vec_idx.pruv	1 case: obl=0 1	--infer=7ca9dc1436fa
+must_reject|tests/must_reject/p4_for_adapter.pruv	1 case: obl=0 1	--infer=2c117a5a2b0e
+must_reject|tests/must_reject/p4_for_bool_range.pruv	1 case: obl=0 1	--infer=89ef45116740
+must_reject|tests/must_reject/p4_for_decreases.pruv	1 case: obl=0 1	--infer=3d249a2c85e0
+must_reject|tests/must_reject/p4_for_inclusive.pruv	1 case: obl=0 1	--infer=158f369e3b7b
+must_reject|tests/must_reject/p4_for_index_past.pruv	1 case: obl=15 1	--infer=197fa405d7c5
+must_reject|tests/must_reject/p4_for_move.pruv	1 case: obl=0 1	--infer=62346dc9cbcb
+must_reject|tests/must_reject/p4_for_place_bind.pruv	1 case: obl=0 1	--infer=d24106059373
+must_reject|tests/must_reject/p4_for_store_be.pruv	1 case: obl=0 1	--infer=94350f4b35d6
+must_reject|tests/must_reject/p4_for_u32_below.pruv	1 case: obl=6 1	--infer=722e715d0a5d
+must_reject|tests/must_reject/p4_for_vec_string.pruv	1 case: obl=0 1	--infer=7189c563044d
 must_reject|tests/must_reject/refine_alloc_len.pruv	1 case: obl=4 1	--infer=6996b0a59ee1
 must_reject|tests/must_reject/refine_base_bool.pruv	1 case: obl=0 1	--infer=df4b068e07a3
 must_reject|tests/must_reject/refine_bounds_i64.pruv	1 case: obl=0 1	--infer=7c3e5998f1e1
@@ -1775,6 +1785,9 @@ runtime|tests/runtime/p3_s1_stack.pruv	1 case: obl=171 1	--infer=07dac3611324
 runtime|tests/runtime/p3_v1_budget.pruv	1 case: obl=2 1	--infer=1fe91e4926fb
 runtime|tests/runtime/p3_v1_fail.pruv	1 case: obl=1 1	--infer=3bc01d6b8d7b
 runtime|tests/runtime/p3_v1_prefilter.pruv	1 case: obl=7 1	--infer=69e42b2848d3
+runtime|tests/runtime/p4_rt_for.pruv	1 case: obl=277 1	--infer=9ebd6be792ed
+runtime|tests/runtime/p4_rt_for_layout.pruv	1 case: obl=68 1	--infer=4de518dcf9db
+runtime|tests/runtime/p4_rt_for_vec.pruv	1 case: obl=47 1	--infer=b03f83c4b97c
 runtime|tests/runtime/qb_across_requires.pruv	1 case: obl=0 1	--infer=dbbd2d126742
 runtime|tests/runtime/qb_budget_edge.pruv	1 case: obl=0 1	--infer=dbbd2d126742
 runtime|tests/runtime/qb_nested_budget.pruv	1 case: obl=0 1	--infer=dbbd2d126742

@@ -1,0 +1,9 @@
+// spec: R-6q-1 reject
+fn f(n: i64) -> i64
+  requires 0 <= n && n <= 10
+  ensures result == n + 1
+{
+  let mut c: i64 = 0;
+  for i in 0..n invariant c == i { c = c + 1; }
+  return c;
+}

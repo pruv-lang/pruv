@@ -1,0 +1,5 @@
+// P4: iterator adapters such as a.iter() are P15
+fn f(a: [i64]) -> ()
+{
+  for x in a.iter() { }
+}

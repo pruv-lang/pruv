@@ -1,0 +1,5 @@
+// P4: range bounds must be integers
+fn f(b: bool) -> ()
+{
+  for i in 0..b { }
+}

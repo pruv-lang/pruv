@@ -1,0 +1,11 @@
+// spec: R-6q-3 accept
+// The P15 enumerate shape written today: a range over the indexes with an index read.
+fn weighted(a: [i64]) -> i64
+  requires len(a) <= 100
+  requires forall k in 0..len(a): 0 <= a[k] && a[k] <= 10
+  ensures 0 <= result && result <= 100000
+{
+  let mut s: i64 = 0;
+  for i in 0..len(a) invariant 0 <= s && s <= i * 1000 { s = s + i * a[i]; }
+  return s;
+}

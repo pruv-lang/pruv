@@ -1,0 +1,5 @@
+// P4 must_reject: a place binding (`let e = inout a[0]`) writes the collection a for loop iterates
+fn f(inout a: [i64]) -> ()
+{
+  for x in a { let e = inout a[0]; e = x; }
+}

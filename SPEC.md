@@ -994,7 +994,7 @@ fn tree_count(t: Tree) -> i64
   `HashMap<String, V>`, with `V` equal to `i64`, `bool` or an owned aggregate (including R-6e-6
   records). Here `for` is contextual at the start of a statement and must be followed by `(`.
   A non-place expression is `type/foreign_contract` and an unsupported place type is
-  `type/foreign_owned_type`. The loop may have zero or more invariants and has no `decreases` clause.
+  `type/foreign_owned_type`; an array, view or `Vec` place is `type/for_enumerate` (R-6q-3). The loop may have zero or more invariants and has no `decreases` clause.
   Invariants are checked in the enclosing scope. In the body, fresh names `k` and `v` bind a borrowed
   `String` view and the current value, respectively. Scalar values are copied and aggregate values
   are borrowed as in a `map_get` arm. The key can be read as an R-6e-5 key or passed to `string_eq`,
@@ -2459,6 +2459,55 @@ read by the checker, the verifier and both backends.
   Tests: [accept](tests/spec/r6p_5_accept.pruv), [reject](tests/spec/r6p_5_reject.pruv),
   [false contract](tests/spec/r6p_5_reject_contract.pruv).
 
+## 6q. For loops (P4)
+```
+fn sum(a: ref [u16], n: u32) -> u64
+  requires len(a) <= 1000 && n <= 1000
+{
+  let mut s: i64 = 0;
+  for x in a invariant 0 <= s && s <= index(x) * 65535 { s = s + x; }
+  let mut t: u64 = 0;
+  for i in 0..n invariant t <= u64(i) * 1000 { t = t + u64(i); }
+  return t;
+}
+```
+The parser lowers each `for` to a `while` in a scope of its own (`if true { let ..; while .. }`), so drops, borrow
+write-back, invariants and the cost bound take the `while` path. `for` is contextual at the start of a statement.
+
+- R-6q-1 **Numeric ranges.** `for i in a..b invariant <bool>* { body }` runs `body` for `i = a, a+1, .., b-1` and
+  not at all when `a >= b`. `a` and `b` are evaluated once, in that order, before the first iteration, so changing a
+  variable named in `b` inside the body does not change the count. The bounds are of one integer type (R-6p-1, R-6p-5;
+  a literal bound takes the type of the other bound, two literals are `i64`) and `i` has that type. `i` is
+  read-only in the body (`type/immutable`). The loop has no `decreases` clause (`parse/for_decreases`): the verifier
+  uses the generated measure `b - i`. It proves the user invariants on entry and after each step, as for `while`, and
+  in the body it knows `a <= i < b` (so `a[i]` with `b <= len(a)` needs no other fact); after the loop the invariants
+  hold with `i == max(a, b)`. Code: Rust emits `for i in a..b { .. }` and LLVM the counted `while` loop; a proven
+  `a[i]` in the body is an unchecked read. Tests: [accept](tests/spec/r6q_1_accept.pruv),
+  [reject](tests/spec/r6q_1_reject.pruv), [false contract](tests/spec/r6q_1_reject_contract.pruv),
+  [runtime](tests/runtime/p4_rt_for.pruv).
+- R-6q-2 **Slice and Vec loops.** `for x in P invariant <bool>* { body }` iterates the elements of a place `P` (a
+  local or parameter, or a field path of one) of type `[i64]`, `[u8]`, `[u16]`, `[bool]`, `ref [T]` of those, or
+  `Vec<T>` with `T` an integer type or `bool`, in index order. `x` is a read-only copy of the element, typed as the
+  index read `P[k]` is (`i64` for `[u8]`/`[u16]`, with its range known). In an invariant, `index(x)` is the number of
+  elements already visited (the position of `x` in the body, `len(P)` after the loop); `index` is only defined
+  there. The body holds `P` read-only: assigning, storing into, moving, place-binding (`let d = inout ..`) or passing `inout` an overlapping path,
+  including the whole root, is `type/recursive_borrow`; disjoint sibling paths stay usable. The verifier treats the
+  loop as `while k < len(P)` with `x == P[k]` and the invariants `0 <= k <= len(P)` and `len(P)` unchanged. Whole-name
+  builtins that write `P` (`store_be`, `copy_within`, `arr_push` and the like) are `type/recursive_borrow` too. Code:
+  Rust emits `for &x in P.iter() { .. }` (with `let x = x as i64;` for `[u8]`/`[u16]` and for a refined array kept in
+  a narrow storage layout), with no index or bound check; LLVM
+  emits the counted loop with unchecked element reads. `Vec` loops are Rust only until LLVM has `Vec` (G6).
+  Tests: [accept](tests/spec/r6q_2_accept.pruv), [reject](tests/spec/r6q_2_reject.pruv),
+  [false contract](tests/spec/r6q_2_reject_contract.pruv), [runtime](tests/runtime/p4_rt_for.pruv),
+  [Vec runtime](tests/runtime/p4_rt_for_vec.pruv), [layout and sibling runtime](tests/runtime/p4_rt_for_layout.pruv),
+  [builtin write](tests/must_reject/p4_for_store_be.pruv), [place binding](tests/must_reject/p4_for_place_bind.pruv).
+- R-6q-3 **Not yet supported.** `for (i, x) in` over an array, view or `Vec` is `type/for_enumerate` (bundle P15);
+  inclusive ranges `a..=b`, iterator expressions such as `P.iter()` and adapters (`enumerate`, `zip`, `rev`, `map`,
+  `filter`) are `parse/for_iterable` (P15); non-integer range bounds and `Vec` of other element types are
+  `type/for_iterable`; `break`/`continue` are P5. Map iteration stays R-6e-13.
+  Tests: [reject](tests/spec/r6q_3_reject.pruv), [accept](tests/spec/r6q_3_accept.pruv), [adapter](tests/must_reject/p4_for_adapter.pruv),
+  [inclusive](tests/must_reject/p4_for_inclusive.pruv), [Vec of String](tests/must_reject/p4_for_vec_string.pruv).
+
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
 2. Every `+ - * unary-` in code: result within i64 range.
@@ -2890,6 +2939,8 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/cost_syntax` | parse | `cost` needs one expression and must be the last header clause |
 | `parse/decreases_syntax` | parse | a malformed, empty or repeated `decreases` clause |
 | `parse/element_storage_type` | parse | `u8` used outside an array element type |
+| `parse/for_decreases` | parse | a `for` loop with a `decreases` clause; the measure is generated (R-6q-1) |
+| `parse/for_iterable` | parse | a `for` head other than `a..b` or a slice/Vec place, such as `a..=b` or `a.iter()` (R-6q-3) |
 | `parse/foreign_syntax` | parse | a malformed `trusted rust fn` declaration |
 | `parse/generic_syntax` | parse | a malformed type parameter list or type argument list |
 | `parse/inout_syntax` | parse | a malformed `inout` parameter or argument |
@@ -2945,6 +2996,8 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/eq_type` | type | `==` or `!=` on a type that does not support whole-value equality |
 | `type/field_type` | type | a field type that is not allowed (unit, an array in a generic type, ...) |
 | `type/field_name` | type | a field name does not start with a lower-case letter |
+| `type/for_enumerate` | type | `for (i, x) in` over an array, view or `Vec`; enumeration is bundle P15 (R-6q-3) |
+| `type/for_iterable` | type | a `for` range with non-integer bounds, or a `for` over a value that is not a slice or a `Vec` of integer/bool elements (R-6q-3) |
 | `type/foreign_borrow` | type | one value is borrowed and moved in the same call |
 | `type/foreign_contract` | type | a catalog or foreign operation used against its contract rules |
 | `type/foreign_export` | type | `main` takes or returns a collection |

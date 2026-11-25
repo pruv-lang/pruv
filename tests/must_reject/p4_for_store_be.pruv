@@ -1,0 +1,6 @@
+// P4 must_reject: a whole-name array builtin (store_be) writes the collection a for loop iterates
+fn f(inout a: [u8]) -> ()
+  requires len(a) >= 8
+{
+  for x in a { store_be(inout a, 0, 7, 1); }
+}

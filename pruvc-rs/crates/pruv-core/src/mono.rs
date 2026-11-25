@@ -806,7 +806,7 @@ impl<'a> Mono<'a> {
                 let invariants = self.cp_es(&x.invariants)?;
                 let decreases = self.cp_e(&x.decreases)?;
                 let body = self.cp_stmts(&x.body)?;
-                Stmt::While(While { line: x.line, col: x.col, cond, invariants, decreases, body })
+                Stmt::While(While { line: x.line, col: x.col, cond, invariants, decreases, body, for_head: x.for_head.clone() })
             }
             Stmt::ForMap(x) => Stmt::ForMap(ForMap {
                 line: x.line,

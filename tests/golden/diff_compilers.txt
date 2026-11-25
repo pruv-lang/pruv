@@ -1375,6 +1375,16 @@ must_reject|must_reject/p3_pub_u64.pruv	2 cases: exit 2	llvm=91633d8ebe01	rust=9
 must_reject|must_reject/p3_sub_i16.pruv	2 cases: exit 2	llvm=dd94e6f04226	rust=dd94e6f04226
 must_reject|must_reject/p3_sub_u64.pruv	2 cases: exit 2	llvm=74a9511cc940	rust=74a9511cc940
 must_reject|must_reject/p3_vec_idx.pruv	2 cases: exit 2	llvm=f6b44572dec6	rust=f6b44572dec6
+must_reject|must_reject/p4_for_adapter.pruv	2 cases: exit 2	llvm=89bb81c5c1fd	rust=89bb81c5c1fd
+must_reject|must_reject/p4_for_bool_range.pruv	2 cases: exit 2	llvm=d60afb9d15e2	rust=d60afb9d15e2
+must_reject|must_reject/p4_for_decreases.pruv	2 cases: exit 2	llvm=50395fd40f6d	rust=50395fd40f6d
+must_reject|must_reject/p4_for_inclusive.pruv	2 cases: exit 2	llvm=204512fbf7d5	rust=204512fbf7d5
+must_reject|must_reject/p4_for_index_past.pruv	2 cases: exit 2	llvm=04cd63ee4992	rust=04cd63ee4992
+must_reject|must_reject/p4_for_move.pruv	2 cases: exit 2	llvm=ca611b510c24	rust=ca611b510c24
+must_reject|must_reject/p4_for_place_bind.pruv	2 cases: exit 2	llvm=c9ed7880b4c6	rust=c9ed7880b4c6
+must_reject|must_reject/p4_for_store_be.pruv	2 cases: exit 2	llvm=c6cbd0a30af3	rust=c6cbd0a30af3
+must_reject|must_reject/p4_for_u32_below.pruv	2 cases: exit 2	llvm=042686cf98c4	rust=042686cf98c4
+must_reject|must_reject/p4_for_vec_string.pruv	2 cases: exit 2	llvm=818f94e31ef5	rust=818f94e31ef5
 must_reject|must_reject/refine_alloc_len.pruv	2 cases: exit 2	llvm=91183d4f0e90	rust=91183d4f0e90
 must_reject|must_reject/refine_base_bool.pruv	2 cases: exit 2	llvm=345aab8fdc3a	rust=345aab8fdc3a
 must_reject|must_reject/refine_bounds_i64.pruv	2 cases: exit 2	llvm=f53a5fc811dd	rust=f53a5fc811dd
@@ -2573,6 +2583,12 @@ runtime|runtime/p3_v1_fail [--no-verify]	2 cases: exit 2	llvm=d7188f42af55	rust=
 runtime|runtime/p3_v1_fail [default]	2 cases: exit 2	llvm=d7188f42af55	rust=881f571c8e35
 runtime|runtime/p3_v1_prefilter [--no-verify]	2 cases: exit 2	llvm=a1d939595ccf	rust=f4ebd118c7d5
 runtime|runtime/p3_v1_prefilter [default]	2 cases: exit 2	llvm=a1d939595ccf	rust=0dfdfd2e6721
+runtime|runtime/p4_rt_for [--no-verify]	2 cases: exit 2	llvm=e9643fe951b0	rust=c0a46a703972
+runtime|runtime/p4_rt_for [default]	2 cases: exit 2	llvm=4465d9c11dc5	rust=4ec96c95aff8
+runtime|runtime/p4_rt_for_layout [--no-verify]	2 cases: exit 2	llvm=c38ee8c1afb8	rust=efa2864dda90
+runtime|runtime/p4_rt_for_layout [default]	2 cases: exit 2	llvm=89f41e6d8f6c	rust=7b0d94b23b6f
+runtime|runtime/p4_rt_for_vec [--no-verify]	2 cases: exit 2	llvm=8adc3473b046	rust=8d9324aec892
+runtime|runtime/p4_rt_for_vec [default]	2 cases: exit 2	llvm=f17fbbb72d53	rust=34e9c5b13cd3
 runtime|runtime/qb_across_requires [default]	2 cases: exit 2	llvm=ff5c2dfbf8ac	rust=58621f5fc757
 runtime|runtime/qb_budget_edge [--no-verify]	2 cases: exit 2	llvm=0e7eca380e0a	rust=f6027668c6f1
 runtime|runtime/qb_budget_edge [default]	2 cases: exit 2	llvm=0e7eca380e0a	rust=c0e4464978ad

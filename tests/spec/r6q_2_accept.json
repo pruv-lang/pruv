@@ -1,0 +1,1 @@
+{"gen_contains": ["for &x in a.iter() {", "let x = x as i64;", "for &x in b.items.iter() {", "for &x in v.iter() {"], "gen_absent": ["__pruv_for_", "get_unchecked"]}

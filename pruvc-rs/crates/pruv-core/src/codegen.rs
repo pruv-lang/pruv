@@ -3896,6 +3896,51 @@ pruv_hi <= (pruv_b.len() as i128) && \
         self.block_in(stmts, ind, &[], false)
     }
 
+    /// P4: a lowered `for` (`if true { let ..; while .. }`, parser `for_loop`) is emitted as the native Rust loop hand
+    /// Rust writes: `for i in a..b` (bounds evaluated once) or `for &x in v.iter()` (no index or bound check). The
+    /// lets and the step statement only feed the proof; the body runs between them unchanged.
+    fn for_loop(&mut self, x: &If, ind: usize) -> R<()> {
+        let w = crate::check::for_loop_of(x).expect("for loop");
+        let head = w.for_head.as_ref().expect("for head");
+        let saved_vars = self.vars.clone();
+        let (header, inner, binder_cast) = if head.slice {
+            let (place, _) = crate::check::for_element_read(&w.body);
+            let Stmt::Let(binder) = &w.body[0] else { unreachable!("lowered for element binder") };
+            let place_ty = GType::from_key(expr_ty(place).as_deref().unwrap_or(""));
+            let base = place_ty.view_base().cloned().unwrap_or(place_ty);
+            let stored = if base.name == "vec" {
+                base.args[0].to_key()
+            } else if self.layout(place) != "i64" {
+                // a narrow storage layout (`[i64 | 0..=9]` kept as u8) yields its stored width, like the index read
+                self.layout(place).to_string()
+            } else {
+                array_elem_name(&base.name).unwrap_or("i64").to_string()
+            };
+            let p = self.e(place)?;
+            self.vars.insert(binder.name.clone(), binder.ty.clone());
+            let cast = (stored != binder.ty).then(|| format!("let {} = {} as {};", binder.name, binder.name, binder.ty));
+            (format!("for &{} in {}.iter() {{", binder.name, p), &w.body[1..w.body.len() - 1], cast)
+        } else {
+            let (Stmt::Let(start), Stmt::Let(end)) = (&x.then[0], &x.then[1]) else { unreachable!("lowered for range") };
+            let a = self.e(&start.value)?;
+            let b = self.e(&end.value)?;
+            self.vars.insert(head.var.clone(), start.ty.clone());
+            (format!("for {} in {}..{} {{", head.var, a, b), &w.body[..w.body.len() - 1], None)
+        };
+        self.emit(ind, &header);
+        if self.cost {
+            self.emit(ind + 1, &Self::cost_add("1"));
+        }
+        if let Some(c) = binder_cast {
+            self.emit(ind + 1, &c);
+        }
+        let r = self.block_in(inner, ind + 1, &[], true);
+        self.vars = saved_vars;
+        r?;
+        self.emit(ind, "}");
+        Ok(())
+    }
+
     fn block_in(&mut self, stmts: &[Stmt], ind: usize, decls: &[String], lp: bool) -> R<()> {
         let saved = self.vars.clone();
         let saved_refs = self.refs.clone();
@@ -4538,6 +4583,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     );
                 }
             }
+            Stmt::If(x) if crate::check::for_loop_of(x).is_some() => self.for_loop(x, ind)?,
             Stmt::If(x) => {
                 let c = self.e(&x.cond)?;
                 self.emit(ind, &format!("if {} {{", c));
