@@ -1,0 +1,7 @@
+// P7-1 B: a u64 index above i64::MAX must not wrap into the bounds of a fixed array
+fn f(i: u64) -> i64
+  requires i < 3 || i > 18446744073709551000
+{
+  let a: [i64; 3] = [1, 2, 3];
+  return a[i];
+}

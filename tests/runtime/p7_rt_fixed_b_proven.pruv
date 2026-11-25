@@ -1,0 +1,33 @@
+// P7-1 B runtime: copies, self-assignment, u64 indexes and loop-written fixed arrays proven by asserts
+fn get(a: [i64; 3], i: u64) -> i64
+  requires i < 3
+  ensures result == a[i]
+{
+  return a[i];
+}
+
+fn run(n: i64) -> i64
+  requires 0 <= n && n < 3
+{
+  let mut a: [i64; 3] = [1, 2, 3];
+  let mut b: [i64; 3] = a;
+  b[0] = 9;
+  assert a[0] == 1 && b[0] == 9 && b[1] == 2;
+  a = a;
+  a[0] = a[1];
+  assert a[0] == 2 && a[1] == 2 && a[2] == 3;
+  let mut c: [i64; 4] = [0; 4];
+  let mut f: [bool; 4] = [false; 4];
+  let mut k: i64 = 0;
+  while k < 4
+    invariant 0 <= k && k <= 4 && forall j in 0..k: c[j] == 7 && f[j]
+    decreases 4 - k
+  {
+    c[k] = 7;
+    f[k] = true;
+    k = k + 1;
+  }
+  assert c[3] == 7 && f[0];
+  let g: i64 = get(b, u64(n));
+  return g * 100 + c[n] + a[n];
+}

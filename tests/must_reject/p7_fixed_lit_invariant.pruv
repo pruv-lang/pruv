@@ -1,0 +1,11 @@
+// P7-1 B: a fixed-array literal inside a loop invariant is still rejected
+fn f() -> i64 {
+  let mut k: i64 = 0;
+  while k < 2
+    invariant 0 <= k && k <= [2; 1][0]
+    decreases 2 - k
+  {
+    k = k + 1;
+  }
+  return k;
+}

@@ -1,0 +1,5 @@
+// P7-1 B: a zero-length fixed array has no readable element
+fn f() -> i64 {
+  let a: [i64; 0] = [0; 0];
+  return a[0];
+}

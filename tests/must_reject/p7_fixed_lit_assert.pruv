@@ -1,0 +1,7 @@
+// P7-1 B: a fixed-array literal inside an assert is still rejected
+fn f(i: i64) -> i64
+  requires 0 <= i && i < 2
+{
+  assert [i, 1][1] == 1;
+  return i;
+}
