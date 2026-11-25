@@ -1368,6 +1368,8 @@ must_reject|tests/must_reject/p7_fixed_call_len.pruv	1 case: obl=0 1	default=cf7
 must_reject|tests/must_reject/p7_fixed_char_len.pruv	1 case: obl=0 1	default=ff611ae49462
 must_reject|tests/must_reject/p7_fixed_contract.pruv	1 case: obl=2 1	default=379014eeff22
 must_reject|tests/must_reject/p7_fixed_contract_ensures.pruv	1 case: obl=1 1	default=cfda170bd53c
+must_reject|tests/must_reject/p7_fixed_contract_enum_lit.pruv	1 case: obl=0 1	default=6e102885cb0d
+must_reject|tests/must_reject/p7_fixed_contract_struct_lit.pruv	1 case: obl=0 1	default=fd1416fb6616
 must_reject|tests/must_reject/p7_fixed_copy.pruv	1 case: obl=0 1	default=d6376a4616f6
 must_reject|tests/must_reject/p7_fixed_count.pruv	1 case: obl=0 1	default=eac4e4636f57
 must_reject|tests/must_reject/p7_fixed_enum_eq.pruv	1 case: obl=0 1	default=c9d0249740dc
@@ -1387,6 +1389,7 @@ must_reject|tests/must_reject/p7_fixed_for_in.pruv	1 case: obl=0 1	default=e5b02
 must_reject|tests/must_reject/p7_fixed_for_literal.pruv	1 case: obl=0 1	default=ab1f2e256330
 must_reject|tests/must_reject/p7_fixed_generic_eq.pruv	1 case: obl=0 1	default=af29ed8d0193
 must_reject|tests/must_reject/p7_fixed_generic_eq_chain.pruv	1 case: obl=0 1	default=29b0b902567f
+must_reject|tests/must_reject/p7_fixed_generic_eq_cost.pruv	1 case: obl=0 1	default=e686fa2173aa
 must_reject|tests/must_reject/p7_fixed_generic_eq_option.pruv	1 case: obl=0 1	default=52d58ec1edcd
 must_reject|tests/must_reject/p7_fixed_havoc_range.pruv	1 case: obl=7 1	default=1e3dfde0ad56
 must_reject|tests/must_reject/p7_fixed_inout_alias.pruv	1 case: obl=0 1	default=98cad0622213
@@ -1950,6 +1953,7 @@ runtime|tests/runtime/p7_rt_fixed_borrow.pruv	1 case: obl=62 1	default=0c3dce386
 runtime|tests/runtime/p7_rt_fixed_contract_lit.pruv	1 case: obl=25 1	default=6f0293e50a5b
 runtime|tests/runtime/p7_rt_fixed_copy.pruv	1 case: obl=49 1	default=43e6d7fa101b
 runtime|tests/runtime/p7_rt_fixed_enum.pruv	1 case: obl=52 1	default=d4a2a9143dda
+runtime|tests/runtime/p7_rt_fixed_enum_contract.pruv	1 case: obl=13 1	default=4948b4908ab6
 runtime|tests/runtime/p7_rt_fixed_eval.pruv	1 case: obl=16 1	default=83560f815a00
 runtime|tests/runtime/p7_rt_fixed_field.pruv	1 case: obl=19 1	default=1ebb0e099557
 runtime|tests/runtime/p7_rt_fixed_field_inout.pruv	1 case: obl=12 1	default=25d59a4ffcf5

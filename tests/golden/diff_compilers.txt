@@ -1453,6 +1453,8 @@ must_reject|must_reject/p7_fixed_call_len.pruv	2 cases: exit 2	llvm=220886ae2ef9
 must_reject|must_reject/p7_fixed_char_len.pruv	2 cases: exit 2	llvm=e9a12be65717	rust=e9a12be65717
 must_reject|must_reject/p7_fixed_contract.pruv	2 cases: exit 2	llvm=ff1c60cac157	rust=ff1c60cac157
 must_reject|must_reject/p7_fixed_contract_ensures.pruv	2 cases: exit 2	llvm=bbf73ebc6f00	rust=bbf73ebc6f00
+must_reject|must_reject/p7_fixed_contract_enum_lit.pruv	2 cases: exit 2	llvm=e5bd72d8db79	rust=e5bd72d8db79
+must_reject|must_reject/p7_fixed_contract_struct_lit.pruv	2 cases: exit 2	llvm=06eec9d6d68c	rust=06eec9d6d68c
 must_reject|must_reject/p7_fixed_copy.pruv	2 cases: exit 2	llvm=f627ddbb7a00	rust=f627ddbb7a00
 must_reject|must_reject/p7_fixed_count.pruv	2 cases: exit 2	llvm=f874588a791c	rust=f874588a791c
 must_reject|must_reject/p7_fixed_enum_eq.pruv	2 cases: exit 2	llvm=31fecb83f765	rust=31fecb83f765
@@ -1472,6 +1474,7 @@ must_reject|must_reject/p7_fixed_for_in.pruv	2 cases: exit 2	llvm=7198ea418d5f	r
 must_reject|must_reject/p7_fixed_for_literal.pruv	2 cases: exit 2	llvm=bd3548ba819b	rust=bd3548ba819b
 must_reject|must_reject/p7_fixed_generic_eq.pruv	2 cases: exit 2	llvm=13c589dbfbbf	rust=13c589dbfbbf
 must_reject|must_reject/p7_fixed_generic_eq_chain.pruv	2 cases: exit 2	llvm=ea0480042d3e	rust=ea0480042d3e
+must_reject|must_reject/p7_fixed_generic_eq_cost.pruv	2 cases: exit 2	llvm=d085ad1111f8	rust=d085ad1111f8
 must_reject|must_reject/p7_fixed_generic_eq_option.pruv	2 cases: exit 2	llvm=d32af7c2d256	rust=d32af7c2d256
 must_reject|must_reject/p7_fixed_havoc_range.pruv	2 cases: exit 2	llvm=6f7c9739aa99	rust=6f7c9739aa99
 must_reject|must_reject/p7_fixed_inout_alias.pruv	2 cases: exit 2	llvm=4711df840774	rust=4711df840774
@@ -2765,6 +2768,8 @@ runtime|runtime/p7_rt_fixed_copy [--no-verify]	2 cases: exit 2	llvm=49e9f648fa8d
 runtime|runtime/p7_rt_fixed_copy [default]	2 cases: exit 2	llvm=4add6908765d	rust=0aac2b703146
 runtime|runtime/p7_rt_fixed_enum [--no-verify]	2 cases: exit 2	llvm=0183ba8d6c6f	rust=89e725a99d69
 runtime|runtime/p7_rt_fixed_enum [default]	2 cases: exit 2	llvm=4486e2ea7244	rust=595b6e49110d
+runtime|runtime/p7_rt_fixed_enum_contract [--no-verify]	2 cases: exit 2	llvm=2a00fa50a63a	rust=063e90dc8529
+runtime|runtime/p7_rt_fixed_enum_contract [default]	2 cases: exit 2	llvm=2b8abb5d47a6	rust=c78da380e71b
 runtime|runtime/p7_rt_fixed_eval [--no-verify]	2 cases: exit 2	llvm=ce7955a071c8	rust=d56a8dfea516
 runtime|runtime/p7_rt_fixed_eval [default]	2 cases: exit 2	llvm=c27cbfa49bec	rust=f9598a994746
 runtime|runtime/p7_rt_fixed_field [--no-verify]	2 cases: exit 2	llvm=1a1cb94788d8	rust=d2e4bd1260f1

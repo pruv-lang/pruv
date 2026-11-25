@@ -3110,7 +3110,7 @@ impl<'a> FnGen<'a> {
             let by_ref = !c && refs.contains(fi.name.as_str());
             if let Some(t) = expr_ty(&fi.value).as_deref().filter(|t| fixed_key(t).is_some()) {
                 // P7-1 B: a fixed-array field copies from the value's storage
-                let p = self.fixed_ptr(&fi.value)?;
+                let p = if c { self.cfixed_ptr(&fi.value)? } else { self.fixed_ptr(&fi.value)? };
                 vals.insert(fi.name.as_str(), V::agg(p, t));
                 continue;
             }
@@ -3136,7 +3136,7 @@ impl<'a> FnGen<'a> {
         for x in &e.args {
             if let Some(t) = expr_ty(x).as_deref().filter(|t| fixed_key(t).is_some()) {
                 // P7-1 B: a fixed-array variant field copies from the value's storage (like a struct field)
-                let p = self.fixed_ptr(x)?;
+                let p = if c { self.cfixed_ptr(x)? } else { self.fixed_ptr(x)? };
                 vals.push(V::agg(p, t));
                 continue;
             }
@@ -4967,7 +4967,7 @@ impl<'a> FnGen<'a> {
     /// P7-1 B: `fixed_ptr` in contract form: a field path reads the contract value of its base
     fn cfixed_ptr(&mut self, e: &Expr) -> R<String> {
         match e {
-            Expr::FieldAccess(_) => Ok(self.cev(e)?.a),
+            Expr::FieldAccess(_) | Expr::VariantField(_) => Ok(self.cev(e)?.a),
             _ => self.fixed_ptr(e),
         }
     }

@@ -1484,10 +1484,10 @@ impl Checker {
             self.fn_(f)?;
             self.reject_stray_empty_views(f)?;
         }
-        self.check_eq_targs()?; // P7-1 R1
         self.check_fn_sccs(&prog.functions)?; // G9 A0: measures and stable type parameters of recursive call SCCs
         self.check_par_eligibility(&prog.functions)?; // G7 A0: effects, foreign calls, then nested groups
         self.check_costs(prog)?;
+        self.check_eq_targs()?; // P7-1 R1: after cost clauses, which may compare type parameters too
         self.record_g9(prog);
         self.x_auto(prog)?; // P07: code calls of an expandable function know its body (result == expansion)
         Ok(())
@@ -6399,6 +6399,7 @@ impl Checker {
                     ));
                 }
                 for (arg, fd) in x.args.iter_mut().zip(fields.iter()) {
+                    fixed_contract_field(arg, &fd.1, c)?;
                     self.expect(arg, &fd.1, scope, c, None)?;
                     self.own_field(arg, &fd.1, scope, c)?; // G9 A0
                 }
@@ -6629,6 +6630,7 @@ impl Checker {
             if borrowed {
                 self.view_value(&mut fi.value, &fd.1, scope, c)?;
             } else {
+                fixed_contract_field(&fi.value, &fd.1, c)?;
                 self.expect(&mut fi.value, &fd.1, scope, c, None)?;
                 self.own_field(&fi.value, &fd.1, scope, c)?;
             }
@@ -8914,4 +8916,15 @@ fn collect_tparams(t: &GType, out: &mut HashSet<(String, usize)>) {
     for a in &t.args {
         collect_tparams(a, out);
     }
+}
+
+/// P7-1 B: inside a contract a `[T; N]` struct or variant field takes a place (a variable or field path); a literal
+/// or call there has no contract storage yet (parity row P7-8).
+fn fixed_contract_field(arg: &Expr, fty: &GType, c: bool) -> Res<()> {
+    if c && fty.is_fixed() && matches!(arg, Expr::Call(_)) {
+        return Err(terr(arg.line(), arg.col(), "fixed_array_operation",
+            "inside a contract a fixed-length array field of a struct literal or enum constructor must be a variable or field path, not a literal or call",
+            "bind the array with a let before the function, or compare its elements directly"));
+    }
+    Ok(())
 }
