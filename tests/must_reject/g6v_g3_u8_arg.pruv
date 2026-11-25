@@ -1,4 +1,4 @@
-// G6 A1 element_storage_type: u8 is only an array element type, so Vec<u8> is not a valid type argument
+// G6 A1 (P1): Vec<u8> is not a valid type argument yet (P2/P11); scalar u8 itself is a value type since P1
 fn f(v: Vec<u8>) -> i64 {
   return len(v);
 }

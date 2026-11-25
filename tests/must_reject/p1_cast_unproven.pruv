@@ -1,0 +1,4 @@
+// P1: narrowing cast without a range proof is rejected (no silent wrap)
+fn f(x: i64) -> u8 {
+  return u8(x);
+}

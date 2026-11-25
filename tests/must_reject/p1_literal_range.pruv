@@ -1,0 +1,4 @@
+// P1: a literal takes the expected type and must fit it
+fn f() -> u8 {
+  return 256;
+}

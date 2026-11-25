@@ -115,6 +115,7 @@ examples|examples/g9_parser.pruv	1 case: obl=38 1	default=3632f09773cd
 examples|examples/g9_phase_measure.pruv	1 case: obl=15 1	default=1ee9be8824f2
 examples|examples/g9_suffix_scan.pruv	1 case: obl=41 1	default=4bf012896038
 examples|examples/g9_tree_walk.pruv	1 case: obl=37 1	default=2de1ab0540a7
+examples|examples/p1_small_ints.pruv	1 case: obl=21 1	default=c997016c2aa9
 examples|examples/prefix.pruv	1 case: obl=21 1	default=d8a728500c45
 examples|examples/sum.pruv	1 case: obl=10 1	default=b697e7b40473
 fuzz|fuzz:41	40 cases: obl=5 5, obl=6 4, obl=7 4, obl=2 3, ...	0/default=882917db0f55	1/default=05fe461dcf1e	2/default=27787e60d292	3/default=1bf58f6e4950	4/default=de8ea8574b74	5/default=882917db0f55	6/default=46d42aef2ac5	7/default=199fdfa13c07	8/default=22e5d388e536	9/default=43c86948a17d	10/default=1d8f80182376	11/default=85dd5138a4e6	12/default=aa59b93c5c86	13/default=7b7549571d77	14/default=ae0f6b4f7b39	15/default=d7adfe17075a	16/default=d26118f22807	17/default=a86d41cb329f	18/default=be932601f9c2	19/default=670d1701a72d	20/default=88278f0dc7b2	21/default=c7c333522bca	22/default=5c31bdf579c3	23/default=4edd51f36b2b	24/default=2bb9068d41ad	25/default=4d16a5540922	26/default=af561b0b94a4	27/default=aaee9cc54090	28/default=01210dcb968e	29/default=e8c7469e366e	30/default=9156ff8f37b1	31/default=764ed0d1dfe6	32/default=93b61cec500f	33/default=c55df823fb31	34/default=bc8b6a1d3a2d	35/default=948e1caf49ff	36/default=212f371a3cc6	37/default=2e952e296fb0	38/default=3239d44300a7	39/default=afd7fb501300
@@ -615,12 +616,12 @@ must_reject|tests/must_reject/g2a_missing_alloc.pruv	1 case: obl=0 1	default=e30
 must_reject|tests/must_reject/g2a_mixed_argument.pruv	1 case: obl=0 1	default=4f2967b6353b
 must_reject|tests/must_reject/g2a_mixed_bool.pruv	1 case: obl=0 1	default=25ae417db884
 must_reject|tests/must_reject/g2a_nested_array.pruv	1 case: obl=0 1	default=2d60b6269390
-must_reject|tests/must_reject/g2a_option_u8.pruv	1 case: obl=0 1	default=4d991135b7e8
+must_reject|tests/must_reject/g2a_option_u8.pruv	1 case: obl=0 1	default=8755ec504389
 must_reject|tests/must_reject/g2a_param_store.pruv	1 case: obl=0 1	default=011230358ce2
 must_reject|tests/must_reject/g2a_refine_wide.pruv	1 case: obl=0 1	default=6cb12c506560
 must_reject|tests/must_reject/g2a_refined_store.pruv	1 case: obl=8 1	default=67073fecd9ca
 must_reject|tests/must_reject/g2a_return_mismatch.pruv	1 case: obl=0 1	default=e7b0153d41e8
-must_reject|tests/must_reject/g2a_scalar_i32.pruv	1 case: obl=0 1	default=6d40d536fec6
+must_reject|tests/must_reject/g2a_scalar_i32.pruv	1 case: obl=0 1	default=159b9eeb5f6f
 must_reject|tests/must_reject/g2a_scalar_u8.pruv	1 case: obl=0 1	default=3acdd621fd78
 must_reject|tests/must_reject/g2a_store_index.pruv	1 case: obl=4 1	default=457d857a506b
 must_reject|tests/must_reject/g2a_store_then_read.pruv	1 case: obl=7 1	default=2fb5795fd773
@@ -854,7 +855,7 @@ must_reject|tests/must_reject/g6v_ens_string_bytes.pruv	1 case: obl=4 1	default=
 must_reject|tests/must_reject/g6v_ens_vec_prefix.pruv	1 case: obl=4 1	default=14af848f5486
 must_reject|tests/must_reject/g6v_g3_eq_aggregate.pruv	1 case: obl=0 1	default=75d26b6be021
 must_reject|tests/must_reject/g6v_g3_key_param.pruv	1 case: obl=0 1	default=aeba0b9bfa79
-must_reject|tests/must_reject/g6v_g3_u8_arg.pruv	1 case: obl=0 1	default=134a768f6cf6
+must_reject|tests/must_reject/g6v_g3_u8_arg.pruv	1 case: obl=0 1	default=716a5e171380
 must_reject|tests/must_reject/g6v_infer_len_claim.pruv	1 case: obl=4 1	default=d2ef79731997
 must_reject|tests/must_reject/g6v_infer_push_loop.pruv	1 case: obl=5 1	default=8a2c72d2569b
 must_reject|tests/must_reject/g6v_req_push_limit.pruv	1 case: obl=1 1	default=1c763f120c3a
@@ -1227,6 +1228,21 @@ must_reject|tests/must_reject/lg9_move_field_arg_borrowed.pruv	1 case: obl=0 1	d
 must_reject|tests/must_reject/lg9_move_field_arg_other_mention.pruv	1 case: obl=0 1	default=f6152ef126d1
 must_reject|tests/must_reject/lg9_move_field_arg_use_after.pruv	1 case: obl=0 1	default=721c1ca8afc7
 must_reject|tests/must_reject/lg9_utf8_ascii_partial.pruv	1 case: obl=2 1	default=64bd350e077c
+must_reject|tests/must_reject/p1_add_overflow.pruv	1 case: obl=1 1	default=b296f096625c
+must_reject|tests/must_reject/p1_bit_and.pruv	1 case: obl=0 1	default=b2b35db29007
+must_reject|tests/must_reject/p1_cast_in_contract.pruv	1 case: obl=0 1	default=0403482cabf8
+must_reject|tests/must_reject/p1_cast_max_plus_one.pruv	1 case: obl=1 1	default=3e7ce330c82a
+must_reject|tests/must_reject/p1_cast_unproven.pruv	1 case: obl=1 1	default=92835d693bd9
+must_reject|tests/must_reject/p1_false_ensures.pruv	1 case: obl=1 1	default=98fd227bf8a2
+must_reject|tests/must_reject/p1_false_range.pruv	1 case: obl=1 1	default=1744d49e91a1
+must_reject|tests/must_reject/p1_index.pruv	1 case: obl=0 1	default=26f89ad64635
+must_reject|tests/must_reject/p1_literal_range.pruv	1 case: obl=0 1	default=94385281dedc
+must_reject|tests/must_reject/p1_mixed_width.pruv	1 case: obl=0 1	default=31dc84e1ce33
+must_reject|tests/must_reject/p1_neg.pruv	1 case: obl=0 1	default=366cd64eeaf6
+must_reject|tests/must_reject/p1_pub_sig.pruv	1 case: obl=0 1	default=b73c7e3111b4
+must_reject|tests/must_reject/p1_sub_underflow.pruv	1 case: obl=1 1	default=4418d2d4811f
+must_reject|tests/must_reject/p1_u16_array.pruv	1 case: obl=0 1	default=ca925a52791b
+must_reject|tests/must_reject/p1_u32.pruv	1 case: obl=0 1	default=fd319b69a22d
 must_reject|tests/must_reject/p2_bits_arity.pruv	1 case: obl=0 1	default=88892a92856b
 must_reject|tests/must_reject/p2_bits_type.pruv	1 case: obl=0 1	default=db430cec404e
 must_reject|tests/must_reject/p2_contract_shift.pruv	1 case: obl=1 1	default=a511d5b987e0
@@ -1677,6 +1693,9 @@ runtime|tests/runtime/lg9_rt_record_move.pruv	1 case: obl=4 1	default=cf168881e4
 runtime|tests/runtime/lg9_rt_take_field_move.pruv	1 case: obl=4 1	default=2cdefe4e02e4
 runtime|tests/runtime/lg9_rt_take_record.pruv	1 case: obl=8 1	default=34b2df6b55a8
 runtime|tests/runtime/lg9_rt_utf8_ascii.pruv	1 case: obl=19 1	default=cc6ef53a0a54
+runtime|tests/runtime/p1_r_bounds.pruv	1 case: obl=9 1	default=90d42728568f
+runtime|tests/runtime/p1_r_cast_fail.pruv	1 case: obl=1 1	default=e47c209eb034
+runtime|tests/runtime/p1_r_overflow.pruv	1 case: obl=2 1	default=08a40f170646
 runtime|tests/runtime/p2_rt_bits.pruv	1 case: obl=16 1	default=a6bf6a392464
 runtime|tests/runtime/p2_rt_contract_guard.pruv	1 case: obl=1 1	default=8ac5dd123e00
 runtime|tests/runtime/p2_rt_kernels.pruv	1 case: obl=190 1	default=c10ca6c59eab

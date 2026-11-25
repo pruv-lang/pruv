@@ -1,0 +1,6 @@
+// P1: an index must be i64; write i64(i)
+fn f(a: [i64], i: u8) -> i64
+  requires len(a) > 255
+{
+  return a[i];
+}

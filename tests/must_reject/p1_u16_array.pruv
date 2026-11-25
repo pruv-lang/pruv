@@ -1,0 +1,4 @@
+// P1: [u16] buffers are bundle P2
+fn f(a: [u16]) -> i64 {
+  return len(a);
+}

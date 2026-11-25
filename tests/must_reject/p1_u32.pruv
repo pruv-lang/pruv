@@ -1,0 +1,4 @@
+// P1: other integer widths are bundle P3
+fn f(x: u32) -> i64 {
+  return 0;
+}

@@ -593,6 +593,10 @@ impl<'a> Mono<'a> {
             Expr::Call(x) => {
                 let args = self.cp_es(&x.args)?;
                 let ty = self.ty_opt(&x.ty)?;
+                // Casts keep their spelling and their checked operand and result types.
+                if crate::intwidth::of(&x.name).is_some() {
+                    return Ok(Expr::Call(Call { args, ty, ..x.clone() }));
+                }
                 let mut name = x.name.clone();
                 let mut new_inst: Option<Inst> = None;
                 if is_catalog(&x.name) {

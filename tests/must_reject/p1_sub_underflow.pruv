@@ -1,0 +1,4 @@
+// P1: u16 - u16 can go below 0
+fn f(a: u16, b: u16) -> u16 {
+  return a - b;
+}

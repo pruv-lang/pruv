@@ -25,6 +25,7 @@ signature; no null, no exceptions, no implicit conversions, no globals, no overl
 | Pruv | meaning | Rust |
 |---|---|---|
 | `i64` | 64-bit signed int | `i64` |
+| `u8`, `u16` | unsigned 8/16-bit int, scalar values only (section 6p) | `u8`, `u16` |
 | `bool` | boolean | `bool` |
 | `()` | unit | `()` |
 | `[i64]` | array of i64 | param: `&[i64]`, local/return: `Vec<i64>` |
@@ -386,8 +387,8 @@ match e {                                  // statement; every variant exactly o
   keep such functions, write the program in explicit mode, where unmarked functions are private.
 
 ## 6b. Byte arrays, bool arrays and strings (G2)
-Full contract: `docs/G2_SPEC.md`. There are no scalar `u8` types, no casts and no narrow arithmetic: reading `[u8]` or
-`str` gives an `i64`, reading `[bool]` gives a `bool`, and all arithmetic stays i64.
+Full contract: `docs/G2_SPEC.md`. Reading `[u8]` or `str` gives an `i64` (not a scalar `u8`, section 6p), reading `[bool]`
+gives a `bool`, and element arithmetic stays i64.
 
 **Arrays `[u8]` and `[bool]`.** Same positions and rules as `[i64]` (parameters read-only, `let mut` locals mutable,
 return a parameter with `copy`). Refinements: `[u8 | L..=U; <=N]` with `0 <= L <= U <= 255`; `[bool; <=N]` (length only).
@@ -2369,6 +2370,52 @@ Tests: [accept](tests/spec/r6o_1_opaque_bool.pruv) (all four rules);
 reject [R-6o-1](tests/spec/r6o_1_opaque_i64.pruv), [R-6o-2](tests/spec/r6o_2_no_reveal.pruv),
 [R-6o-3](tests/spec/r6o_3_reveal_target.pruv), [R-6o-4](tests/spec/r6o_4_total.pruv).
 
+## 6p. Small integers: u8 and u16 (P1)
+```
+struct Pixel { r: u8, count: u16 }
+
+fn mix(a: u8, b: u8) -> u8
+  requires i64(a) + i64(b) <= 255
+  ensures i64(result) == i64(a) + i64(b)
+{ return a + b; }
+
+fn to_byte(x: i64) -> u8
+  requires 0 <= x && x <= 255
+{ return u8(x); }
+```
+The width, signedness and range of every scalar integer type come from one table (`pruvc-rs/crates/pruv-core/src/intwidth.rs`),
+read by the checker, the verifier and both backends.
+
+- R-6p-1 **Types, literals and arithmetic.** `u8` (0..=255) and `u16` (0..=65535) are scalar value types (Copy) for
+  parameters and returns of private functions, `let`/`let mut` locals, assignment, struct fields, and contracts.
+  An integer literal takes the type the context expects (a `let` annotation, an argument, a return, a field, an
+  assignment target, or the other operand when that operand is `u8`/`u16`), else `i64`; a literal outside the
+  range of that type is `type/int_range`. `+ - * / %` and the comparisons take two operands of one integer type and
+  `+ - * / %` give that type; mixing `u8`, `u16` and `i64` is `type/type_mismatch` (there are no implicit
+  conversions). The verifier proves each result is in the range of its type (`verify/overflow`, which for `-`
+  includes `result >= 0`) and each divisor non-zero (`verify/div`). It models `u8`/`u16` values as integers with
+  range facts (parameters, call results, field reads and loop-changed variables are known to be in range); bit-vector
+  terms are used only for bitwise operators. Bitwise operators, shifts, unary `-` and `!` on `u8`/`u16` are
+  `type/small_int_op`. Code: Rust spells the types `u8`/`u16` and proven operations are plain operators; LLVM uses
+  `i8`/`i16`, `add/sub/mul nuw`, `udiv`/`urem` and unsigned compares. With `--no-verify` an out-of-range result stops
+  the program with `pruv: arithmetic error: overflow in +` (exit 101) on both backends; nothing wraps. `print` of a
+  `u8`/`u16` prints its value. Tests: [accept](tests/spec/r6p_1_accept.pruv), [reject](tests/spec/r6p_1_reject.pruv).
+- R-6p-2 **Casts.** The one conversion syntax is a call named by the target type: `u8(x)`, `u16(x)`, `i64(x)`, with
+  `x` of any scalar integer type (`as` stays reserved). A widening cast (every value of the source type is a value of
+  the target: `u8` to `u16`/`i64`, `u16` to `i64`, or the same type) always succeeds and the verifier knows
+  `result == x`. A narrowing cast (`i64` to `u8`/`u16`, `u16` to `u8`) must be proven in range: the verifier proves
+  `min <= x <= max` of the target type (`verify/cast_range`), and nothing wraps or saturates. In a contract only
+  widening casts are allowed (a narrowing cast there is `type/cast_range`); write ranges with `i64(..)`. Code: proven
+  narrowing is `x as u8` in Rust and `trunc` in LLVM; with `--no-verify` an out-of-range value stops the program with
+  `pruv: arithmetic error: cast out of range` (exit 101). Tests: [accept](tests/spec/r6p_2_accept.pruv),
+  [reject](tests/spec/r6p_2_reject.pruv), [contract](tests/spec/r6p_2_reject_contract.pruv).
+- R-6p-3 **Not yet supported.** These are rejected with `small_int_unsupported` (stage `parse` or `type`) and a
+  message naming the later bundle: `[u16]` arrays (P2); `u8`/`u16` as a type argument (`Option<u8>`, `Vec<u16>`,
+  generics; P2/P11) or an enum payload (P11); `u8`/`u16` in the signature of a `pub`, `extern` or foreign function
+  (P12; a private function whose signature holds `u8`/`u16`, directly or inside a struct, is never a host entry); an
+  index or a `decreases` measure of type `u8`/`u16` (write `i64(x)`); and the integer types `u32 i32 usize isize u64 i8
+  i16` (P3). Tests: [accept](tests/spec/r6p_3_accept.pruv), [reject](tests/spec/r6p_3_reject.pruv).
+
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
 2. Every `+ - * unary-` in code: result within i64 range.
@@ -2811,6 +2858,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/refinement_position` | parse | a refinement `\| L..=U` outside a parameter, return or `let` type |
 | `parse/refinement_syntax` | parse | malformed refinement bounds |
 | `parse/reserved_name` | parse | a name reserved for the compiler (`pruv_` prefix, `__`, a Rust keyword) |
+| `parse/small_int_unsupported` | parse | a `u8`/`u16` use or integer type that a later bundle adds (R-6p-3) |
 | `parse/std_import_location` | parse | `mod std;` outside the program root |
 | `parse/std_module_conflict` | parse | a local `std.pruv` conflicts with the bundled std module |
 | `parse/std_source` | parse | the bundled std module cannot be read |
@@ -2833,6 +2881,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/borrow_conflict` | type | a root of a live borrow is written, moved or lent `inout` (exclusive root: used) (R-6g-11) |
 | `type/borrow_escape` | type | a returned borrow may borrow a local, not only its `from` parameters (R-6g-11), or a mutable borrowing struct is given data it does not already borrow (R-6g9-6) |
 | `type/borrow_signature` | type | a `ref` type or borrowing struct outside its allowed positions, or a bad `from` list (R-6g-11) |
+| `type/cast_range` | type | a narrowing cast in a contract (R-6p-2) |
 | `type/place_binding` | type | a place binding `let d = inout P;` whose place is not allowed or overlaps another live place binding (R-6g9-5) |
 | `type/async_unconsumed` | type | a temporary `Loop` is never consumed |
 | `type/bad_trigger` | type | a quantifier trigger on an aggregate, not an array read, or not mentioning the binder (R-6-3) |
@@ -2870,7 +2919,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/inout_argument` | type | an `inout` marker where the parameter is not `inout` |
 | `type/inout_context` | type | an `inout` call in a position forbidden by section 6g or by a builtin's statement-only rule |
 | `type/inout_type` | type | an `inout` parameter of a type that cannot be `inout` |
-| `type/int_range` | type | an integer literal outside the i64 range |
+| `type/int_range` | type | an integer literal outside the range of its type (`i64`, or `u8`/`u16`, R-6p-1) |
 | `type/internal` | type | an unknown statement or expression reached the checker |
 | `type/invariant_decl` | type | a struct invariant clause that is not bool, uses `old()` or `result`, sits on a generic struct, or a parameter `result` of that struct type |
 | `type/match_arity` | type | a match arm binds the wrong number of fields |
@@ -2906,6 +2955,8 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/refinement_bounds` | type | refinement bounds outside i64, or an empty range |
 | `type/reserved` | type | a function named like a builtin |
 | `type/result_error_type` | type | a `Result<T, E>` error type `E` that E1/E2 do not support (section 6c) |
+| `type/small_int_op` | type | a bitwise operator, shift, unary `-` or `!` on `u8`/`u16` (R-6p-1) |
+| `type/small_int_unsupported` | type | a `u8`/`u16` index, measure, payload or signature that a later bundle adds (R-6p-3) |
 | `type/try_position` | type | a `?` outside the value of a let, a local assignment, a return, an expression statement or an if condition, in a quantifier, in the right operand of `==>`, in the right operand of `&&` / `\|\|` when the statement passes `inout` or the operator has a quantifier or `subview`, moves a name used outside it, mentions one moved outside it or mentions a non-value binding used again (LG15) or a `pred fn` return, after an operand evaluated before it that cannot be bound to a temporary (it has a quantifier or `subview`, moves a name used again, mentions a non-value binding that the same call mentions again other than as a borrowed user-function argument, or is not of a value type other than an owned call result or `move` passed directly to a user function's `take` parameter of the same type, LG14/LG18, or whose arguments are not plain, LG19/LG20; in a statement that passes `inout`, also when it or any `?` operand mentions an inout root or has an effect call, or it passes `inout`, LG18), or with an `inout` argument in its operand while the statement reads a local outside it (section 6c) |
 | `type/try_operand` | type | a `?` operand that is not a `Result` (section 6c) |
 | `type/try_return` | type | a `?` in a function that does not return a `Result` (section 6c) |
@@ -2941,6 +2992,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `verify/alloc_negative` | verify | an allocation length not proved in `0..=2^40` |
 | `verify/assert` | verify | an `assert` not proved |
 | `verify/call_requires` | verify | a callee's `requires` not proved at the call |
+| `verify/cast_range` | verify | a narrowing cast not proved in the target range (R-6p-2) |
 | `verify/contract_domain` | verify | a partial operation in a contract not guarded (index range, divisor, ...) |
 | `verify/cost_bound` | verify | `spent <= cost` not proved |
 | `verify/decreases_decrease` | verify | a loop's `decreases` not proved to shrink |

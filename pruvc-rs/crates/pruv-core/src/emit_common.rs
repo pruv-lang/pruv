@@ -56,7 +56,20 @@ pub fn key_name(t: &str) -> &str {
 
 /// A user struct/enum name; a structured key (`option<bool>`) is not one.
 pub fn is_user_key(t: &str) -> bool {
-    !is_g3_key(t) && is_user_type(t)
+    !is_g3_key(t) && !crate::intwidth::is_narrow(t) && is_user_type(t)
+}
+
+pub(crate) const SMALL_INT_HOST_MESSAGE: &str = "u8/u16 at the host boundary is bundle P12";
+pub(crate) const SMALL_INT_HOST_ERROR: &str = "small_int_unsupported: u8/u16 at the host boundary is bundle P12";
+
+/// A u8/u16 value in the signature, directly or inside a user struct/enum (P1: such functions stay off the host boundary).
+pub(crate) fn has_narrow_scalar_sig(f: &crate::ast::Function, tt: &TypeTable) -> bool {
+    has_narrow(tt, &f.ret, 0) || f.params.iter().any(|p| has_narrow(tt, &p.ty, 0))
+}
+
+fn has_narrow(tt: &TypeTable, ty: &str, depth: usize) -> bool {
+    crate::intwidth::is_narrow(ty)
+        || (depth < 16 && tt.decl(ty).is_some_and(|d| d.all_fields().iter().any(|x| has_narrow(tt, &x.ty, depth + 1))))
 }
 
 fn structured_builtin(g: &GType) -> bool {
@@ -129,7 +142,7 @@ pub fn rty(t: &str, param: bool) -> String {
 
 fn rty_name(t: &str, param: bool) -> String {
     match t {
-        "i64" => "i64".to_string(),
+        _ if crate::intwidth::of(t).is_some() => t.to_string(),
         "bool" => "bool".to_string(),
         "unit" => "()".to_string(),
         "option" => "::std::option::Option<i64>".to_string(),
@@ -213,7 +226,7 @@ pub fn try_cty(t: &str) -> Result<String, String> {
 
 fn try_cty_name(t: &str) -> Result<String, String> {
     match t {
-        "i64" => Ok("i128".to_string()),
+        _ if crate::intwidth::of(t).is_some() => Ok("i128".to_string()),
         "bool" => Ok("bool".to_string()),
         "option" => Ok("::std::option::Option<i128>".to_string()),
         "result" => Ok("::std::result::Result<i128, i128>".to_string()),
@@ -268,7 +281,7 @@ pub fn try_conv(t: &str, x: &str) -> Result<String, String> {
 
 fn try_conv_name(t: &str, x: &str) -> Result<String, String> {
     match t {
-        "i64" => Ok(format!("({} as i128)", x)),
+        _ if crate::intwidth::of(t).is_some() => Ok(format!("({} as i128)", x)),
         "bool" => Ok(x.to_string()),
         "option" => Ok(format!("{}.map(|v| v as i128)", x)),
         "result" => Ok(format!("{}.map(|v| v as i128).map_err(|v| v as i128)", x)),

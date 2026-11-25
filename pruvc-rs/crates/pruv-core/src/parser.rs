@@ -1,5 +1,6 @@
 //! Recursive-descent parser (a line-by-line port of Parser in vparser.py).
 
+use crate::intwidth;
 use crate::ast::*;
 use crate::diagnostic::PruvError;
 use crate::gtype::{fn_owner, decl_owner, mk_array, mk_option, mk_param, mk_result, mk_result_with_error, GType};
@@ -268,6 +269,10 @@ impl Parser {
                 self.ty_pub.push(is_pub);
                 p.types.push(d);
                 self.items.push(Item::Ty(p.types.len() - 1));
+            } else if self.at("extern", 0) {
+                let tok = self.next();
+                self.function(Some(tok.clone()), is_pub)?;
+                return Err(self.reserved_name(&tok));
             } else if self.peek(0).kind == Kind::Id && self.peek(0).val == "trusted" {
                 // G6 A0: `trusted rust fn name(..) -> T ensures .. = "::path";`
                 let t = self.peek(0).clone();
@@ -287,21 +292,21 @@ impl Parser {
                 }
                 self.bump();
                 self.bump();
-                let f = self.function(Some(t))?;
+                let f = self.function(Some(t), false)?;
                 self.fn_pub.push(false);
                 p.functions.push(f);
                 self.items.push(Item::Fn(p.functions.len() - 1));
             } else if self.peek(0).kind == Kind::Id && self.peek(0).val == "opaque" && self.at("fn", 1) {
                 // P13o: `opaque fn` keeps its body out of contracts until `reveal`
                 self.bump();
-                let mut f = self.function(None)?;
+                let mut f = self.function(None, is_pub)?;
                 f.opaque = true;
                 self.fn_pub.push(is_pub);
                 p.functions.push(f);
                 self.items.push(Item::Fn(p.functions.len() - 1));
             } else if self.peek(0).kind == Kind::Id && self.peek(0).val == "pred" && self.at("fn", 1) {
                 self.bump();
-                let mut f = self.function(None)?;
+                let mut f = self.function(None, is_pub)?;
                 f.pred = true;
                 self.fn_pub.push(is_pub);
                 p.functions.push(f);
@@ -310,7 +315,7 @@ impl Parser {
                 let t = self.peek(0).clone();
                 return Err(self.foreign_syntax(&t, "missing `trusted`", "write `trusted rust fn ...`"));
             } else {
-                let mut f = self.function(None)?;
+                let mut f = self.function(None, is_pub)?;
                 f.attribute = attribute;
                 self.fn_pub.push(is_pub);
                 p.functions.push(f);
@@ -343,6 +348,11 @@ impl Parser {
             "a function attribute must be followed by a private fn item",
             "put one attribute directly before a private fn",
         )
+    }
+
+    fn small_int_unsupported(&self, tok: &Tok, msg: &str) -> PruvError {
+        PruvError::new("parse", tok.line, tok.col, "small_int_unsupported",
+            format!("{}: {}", tok.val, msg), "use i64")
     }
 
     fn foreign_syntax(&self, tok: &Tok, msg: &str, fix: &str) -> PruvError {
@@ -582,15 +592,10 @@ impl Parser {
         }))
     }
 
-    fn unsupported(&self, what: &str, tok: &Tok) -> PruvError {
-        PruvError::new(
-            "parse",
-            tok.line,
-            tok.col,
-            "unsupported_type",
-            format!("{} is not supported", what),
-            "arrays hold i64 and Option/Result hold i64; user types can only be used directly",
-        )
+    fn reserved_name(&self, tok: &Tok) -> PruvError {
+        PruvError::new("parse", tok.line, tok.col, "reserved_name",
+            format!("name {} is reserved for the compiler", repr_str(&tok.val)),
+            "rename it; names starting with pruv_, containing __, `_` and Rust keywords are reserved")
     }
 
     fn field_decl(&mut self) -> R<FieldDecl> {
@@ -670,7 +675,7 @@ impl Parser {
 
     /// Type arguments after an already consumed `<`, through the closing `>`. expr: expression position,
     /// where a malformed list is a generic_syntax error.
-    fn type_arg_list(&mut self, expr: bool, result: bool) -> R<Vec<GType>> {
+    fn type_arg_list(&mut self, expr: bool) -> R<Vec<GType>> {
         let mut out: Vec<GType> = Vec::new();
         loop {
             if self.at(">", 0) || self.at(",", 0) {
@@ -681,14 +686,12 @@ impl Parser {
                     "write a type between the angle brackets, e.g. Pair<i64, bool>",
                 ));
             }
-            if result && out.len() == 1 && (self.peek(0).val == "u8" || self.peek(0).val == "i32") {
-                // The checker reports unsupported Result error payloads.
-                let v = self.peek(0).val.clone();
-                self.bump();
-                out.push(GType::new(&v, Vec::new()));
-            } else {
-                out.push(self.type_g(false)?.0);
+            let at = self.peek(0).clone();
+            let arg = self.type_g(false)?.0;
+            if intwidth::is_narrow(&arg.name) {
+                return Err(self.small_int_unsupported(&at, "scalar integer type arguments require P2/P11"));
             }
+            out.push(arg);
             if !self.at(",", 0) {
                 break;
             }
@@ -717,7 +720,7 @@ impl Parser {
     fn expr_targs_for_result(&mut self, result: bool) -> R<Vec<GType>> {
         self.expect("::")?;
         self.expect("<")?;
-        let mut args = self.type_arg_list(true, result)?;
+        let mut args = self.type_arg_list(true)?;
         // `Ok::<T, i64>` / `Err::<T, i64>` is the one-argument form (canonical Result<T>).
         if result && args.len() == 2 && args[1] == GType::new("i64", Vec::new()) {
             args.pop();
@@ -730,12 +733,8 @@ impl Parser {
     fn named_type(&mut self, n: &Tok) -> R<GType> {
         if n.val == "Option" || n.val == "Result" {
             self.expect("<")?;
-            let a = self.peek(0).clone();
-            if a.kind == Kind::Id && (a.val == "u8" || a.val == "i32") {
-                return Err(self.unsupported(&format!("{}<{}>", n.val, a.val), &a));
-            }
             let result = n.val == "Result";
-            let mut args = self.type_arg_list(false, result)?;
+            let mut args = self.type_arg_list(false)?;
             if result && args.len() == 2 {
                 let e = args.pop().unwrap();
                 return Ok(mk_result_with_error(args.pop().unwrap(), e));
@@ -750,7 +749,7 @@ impl Parser {
         if self.at("<", 0) {
             self.bump();
             // also a parameter applied to arguments (`T<X>`): kept unresolved, the checker reports it
-            let args = self.type_arg_list(false, false)?;
+            let args = self.type_arg_list(false)?;
             return Ok(GType::new(&n.val, args));
         }
         if let Some(t) = self.scope.get(&n.val) {
@@ -939,6 +938,12 @@ impl Parser {
         if self.at("[", 0) {
             self.bump();
             let e = if self.at("crate", 0) { self.type_path()? } else { self.ident()? }; // G4: a qualified element type
+            if intwidth::PENDING_INTS.contains(&e.val.as_str()) {
+                return Err(self.small_int_unsupported(&e, "this integer type requires P3"));
+            }
+            if intwidth::is_narrow(&e.val) && e.val != "u8" {
+                return Err(self.small_int_unsupported(&e, "this array element type requires P2"));
+            }
             let elem: GType = if e.val == "i64" {
                 GType::i64()
             } else if e.val == "u8" {
@@ -991,17 +996,10 @@ impl Parser {
         }
         let n = if self.at("crate", 0) { self.type_path()? } else { self.ident()? }; // G4: a qualified type path
         let ty: GType;
-        if n.val == "u8" || n.val == "i32" {
-            return Err(PruvError::new(
-                "parse",
-                n.line,
-                n.col,
-                "element_storage_type",
-                format!("{} is only an array element type", n.val),
-                "use i64 for a scalar, or [u8] for a byte array",
-            ));
-        } else if n.val == "i64" {
-            ty = GType::i64();
+        if intwidth::PENDING_INTS.contains(&n.val.as_str()) {
+            return Err(self.small_int_unsupported(&n, "this integer type requires P3"));
+        } else if intwidth::of(&n.val).is_some() {
+            ty = GType::new(&n.val, Vec::new());
         } else if n.val == "bool" {
             ty = GType::bool();
         } else if n.val == "str" {
@@ -1034,12 +1032,17 @@ impl Parser {
     }
 
     /// foreign: the `trusted` token of a `trusted rust fn` declaration (its `rust` was consumed), else None.
-    fn function(&mut self, foreign: Option<Tok>) -> R<Function> {
+    fn function(&mut self, foreign: Option<Tok>, is_pub: bool) -> R<Function> {
         let mut kw = self.expect_tok("fn")?;
         if let Some(t) = &foreign {
             kw = t.clone();
         }
-        let name = self.ident()?.val;
+        let name_tok = self.ident()?;
+        if intwidth::of(&name_tok.val).is_some() {
+            return Err(PruvError::new("parse", name_tok.line, name_tok.col, "reserved",
+                format!("{} is a builtin name", name_tok.val), "rename the function"));
+        }
+        let name = name_tok.val;
         let tparams = if self.at("<", 0) { self.type_params(&fn_owner(&name))? } else { Vec::new() };
         self.expect("(")?;
         let mut params = Vec::new();
@@ -1091,6 +1094,14 @@ impl Parser {
         }
         self.expect("->")?;
         let (ret, ret_refine) = self.type_r(true)?;
+        if (is_pub || foreign.is_some())
+            && std::iter::once(&ret).chain(params.iter().map(|p| &p.ty)).any(|ty| intwidth::is_narrow(ty))
+        {
+            return Err(self.small_int_unsupported(&kw, "scalar u8/u16 in public or foreign signatures requires P12"));
+        }
+        if kw.val == "extern" {
+            return Err(self.reserved_name(&kw));
+        }
         let borrow_from = if self.at_ident("from", 0) && self.at("(", 1) {
             self.bump();
             self.expect("(")?;
@@ -1414,6 +1425,14 @@ impl Parser {
             }
             let body = self.block()?;
             return Ok(Stmt::ForMap(ForMap { line: l, col: c, key, val, place, invariants, body }));
+        }
+        if self.at("for", 0) {
+            if self.peek(1).kind == Kind::Id && self.at("in", 2) {
+                return Err(PruvError::new("parse", l, c, "small_int_unsupported",
+                    "numeric for-ranges are unavailable; narrow range bounds require P3",
+                    "use a while loop and convert narrow bounds with i64(x)"));
+            }
+            return Err(self.reserved_name(&t));
         }
         if self.at("return", 0) {
             self.bump();

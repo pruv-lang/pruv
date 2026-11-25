@@ -1,0 +1,6 @@
+// spec: R-6p-2 reject
+fn to_byte(x: i64) -> u8
+  requires 0 <= x && x <= 256
+{
+  return u8(x);
+}

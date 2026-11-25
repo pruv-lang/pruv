@@ -1,0 +1,13 @@
+// spec: R-6p-2 accept
+fn to_byte(x: i64) -> u8
+  requires 0 <= x && x <= 255
+  ensures i64(result) == x
+{
+  return u8(x);
+}
+
+fn widen(x: u8) -> u16
+  ensures u16(x) == result && i64(result) <= 255
+{
+  return u16(x);
+}

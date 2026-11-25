@@ -15,6 +15,7 @@ use crate::gtype::{
     bind_args, check_arity, collection_arity, decl_owner, dependencies, fn_owner, format_type, is_element, is_value,
     key_is_collection_owner, key_is_vec_slice_arg, mk_array, mk_nominal, mk_option, mk_result_with_error, substitute, GType, Mapping, ParamId,
 };
+use crate::intwidth::{self, IntWidth};
 use crate::typeinfo::{program_uses_inout, TypeTable, BUILTIN_TYPE_NAMES};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
@@ -258,18 +259,32 @@ fn tn(t: &GType) -> String {
     format_type(t)
 }
 
-/// Whether the integer literal (sign plus decimal string) is in the i64 range: -2^63 <= v < 2^63.
-fn int_in_range(v: &str) -> bool {
-    let (neg, rest) = if let Some(r) = v.strip_prefix('-') {
-        (true, r)
-    } else if let Some(r) = v.strip_prefix('+') {
-        (false, r)
-    } else {
-        (false, v)
-    };
-    let d = rest.trim_start_matches('0');
-    let limit = if neg { "9223372036854775808" } else { "9223372036854775807" };
-    d.len() < limit.len() || (d.len() == limit.len() && d <= limit)
+/// Whether the integer literal (sign plus decimal string) fits the given scalar type.
+fn int_in_range(v: &str, width: &IntWidth) -> bool {
+    v.parse::<i128>().is_ok_and(|n| width.contains(n))
+}
+
+fn check_int_literal(lit: &IntLit, width: &IntWidth) -> Res<GType> {
+    if !int_in_range(&lit.value, width) {
+        return Err(terr(lit.line, lit.col, "int_range", format!("integer literal out of {} range", width.name), ""));
+    }
+    Ok(GType::new(width.name, Vec::new()))
+}
+
+fn is_narrow(ty: &GType) -> bool {
+    ty.int_width().is_some_and(|width| intwidth::is_narrow(width.name))
+}
+
+fn contains_narrow_arg(ty: &GType) -> bool {
+    is_narrow(ty) || ty.args.iter().any(contains_narrow_arg)
+}
+
+fn small_int_unsupported(line: i64, col: i64, msg: impl Into<String>, fix: &str) -> PruvError {
+    terr(line, col, "small_int_unsupported", msg, fix)
+}
+
+fn small_int_op(line: i64, col: i64, op: &str) -> PruvError {
+    terr(line, col, "small_int_op", format!("operator `{}` is unsupported on u8/u16", op), "use i64(x) to widen the operand")
 }
 
 #[derive(Clone)]
@@ -1040,6 +1055,7 @@ impl Checker {
                 return Err(terr(f.line, f.col, "dup_fn", format!("function {} defined twice", name), ""));
             }
             if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "utf8_valid_span" | "str_from_utf8" | "truncate" | "eq_range" | "find_byte" | "resize" | "copy_range" | "copy_within" | "arr_reserve" | "arr_push" | "arr_append" | "subview")
+                || intwidth::of(src_names.get(fi).map_or(name.as_str(), String::as_str)).is_some()
                 || is_bit_builtin(&name)
                 || is_word_builtin(&name)
                 || contract_only(&name).is_some()
@@ -1905,6 +1921,9 @@ impl Checker {
 
     /// Every type reference: arity, known names, type-argument and bound rules (G3_SPEC 3.1, 3.2, 3.4).
     fn check_type(&self, line: i64, col: i64, ty: &GType) -> Res<()> {
+        if ty.args.iter().any(contains_narrow_arg) {
+            return Err(small_int_unsupported(line, col, "scalar u8/u16 type arguments require P2/P11", "use i64"));
+        }
         if ty.view_payload().is_some() {
             return Ok(());
         }
@@ -2025,7 +2044,7 @@ impl Checker {
             }
             return Ok(());
         }
-        if BUILTIN_TYPE_NAMES.contains(&ty.name.as_str()) {
+        if ty.int_width().is_some() || BUILTIN_TYPE_NAMES.contains(&ty.name.as_str()) {
             return Ok(());
         }
         if self.ctx_names.contains(&ty.name) {
@@ -2102,6 +2121,9 @@ impl Checker {
     }
 
     fn check_result_error(&self, line: i64, col: i64, e: &GType) -> Res<()> {
+        if is_narrow(e) {
+            return Err(small_int_unsupported(line, col, "scalar u8/u16 Result error types require P2/P11", "use i64"));
+        }
         if self.borrowed_type_argument(e) {
             return Err(terr(line, col, "borrow_signature", "borrowed types cannot be generic arguments", ""));
         }
@@ -2130,6 +2152,9 @@ impl Checker {
 
     /// a: a type argument; tp: the TypeParam it instantiates (None for Option/Result).
     fn check_arg(&self, line: i64, col: i64, a: &GType, tp: Option<&TParam>) -> Res<()> {
+        if is_narrow(a) {
+            return Err(small_int_unsupported(line, col, "scalar u8/u16 type arguments require P2/P11", "use i64"));
+        }
         if self.borrowed_type_argument(a) {
             return Err(terr(line, col, "borrow_signature", "borrowed types cannot be generic arguments", ""));
         }
@@ -2248,6 +2273,9 @@ impl Checker {
             for fields in groups {
                 for f in fields {
                     let ft = GType::from_key(&f.ty);
+                    if matches!(d, TypeDecl::Enum(_)) && is_narrow(&ft) {
+                        return Err(small_int_unsupported(f.line, f.col, "scalar u8/u16 enum payloads require P11", "use i64"));
+                    }
                     if !d.tparams().is_empty() && (ft.is_array() || ft == strt()) {
                         // G9 A0
                         return Err(terr(
@@ -2304,6 +2332,9 @@ impl Checker {
         }
         for f in &prog.functions {
             self.enter(&fn_owner(&f.name), &f.tparams);
+            if f.foreign.is_some() && std::iter::once(&f.ret).chain(f.params.iter().map(|p| &p.ty)).any(|ty| intwidth::is_narrow(ty)) {
+                return Err(small_int_unsupported(f.line, f.col, "scalar u8/u16 foreign signatures require P12", "use i64"));
+            }
             for p in &f.params {
                 self.check_type(f.line, f.col, &GType::from_key(&p.ty))?;
             }
@@ -2720,7 +2751,7 @@ impl Checker {
                     let pt = GType::from_key(&p.ty);
                     let aggregate_collection = pt.owner.is_none() && pt.name == "hashmap"
                         && pt.args.last().is_some_and(|payload| self.owned_aggregate(payload));
-                    if pt != i64t() && pt != boolt() && !pt.is_array()
+                    if pt.int_width().is_none() && pt != boolt() && !pt.is_array()
                         && !(pt.owner.is_none() && pt.name == "vec") && !aggregate_collection
                         && !(pt.args.is_empty() && matches!(self.decls.get(&pt.name), Some(TypeDecl::Struct(_)))) {
                         return Err(terr(
@@ -3063,7 +3094,7 @@ impl Checker {
         self.ckind = "decreases";
         if let Some(d) = f.decreases.as_mut() {
             // G9 A0: scalar measure over the parameters only (no result)
-            self.expect(d, &i64t(), &scope, true, None)?;
+            self.expect(d, &i64t(), &scope, true, Some("decreases measure"))?;
         }
         self.ckind = "code";
         if f.foreign.is_some() {
@@ -3903,7 +3934,7 @@ impl Checker {
                 let scalar_binder = v.kind == "map_inout" && (v.ty == i64t() || v.ty == boolt());
                 let record_binder = v.kind == "map_inout"
                     && (self.owned_aggregate(&v.ty) || self.recursive_vec_element(&v.ty));
-                let scalar_inout = v.kind == "inout" && (v.ty == i64t() || v.ty == boolt());
+                let scalar_inout = v.kind == "inout" && (v.ty.int_width().is_some() || v.ty == boolt());
                 if s.deref && !(scalar_binder || record_binder) {
                     return Err(terr(s.line, s.col, "type_mismatch",
                         "dereference requires a mutable scalar or record collection binder", ""));
@@ -3995,7 +4026,7 @@ impl Checker {
                 if !v.mutable && !matches!(v.kind, "inout" | "map_inout") {
                     return Err(terr(s.line, s.col, "immutable", format!("{} is not mutable", s.name), Self::immutable_fix(v.kind)));
                 }
-                self.expect(&mut s.index, &i64t(), scope, false, None)?;
+                self.expect(&mut s.index, &i64t(), scope, false, Some("index"))?;
                 let want_val = elem_type(&cur);
                 self.expect(&mut s.value, &want_val, scope, false, None)?;
                 if Self::is_iteration_binder(&s.value, scope) {
@@ -4028,7 +4059,7 @@ impl Checker {
                         format!("use `let mut b: {} = copy({});` (needs alloc)", tn(&v.ty), s.name),
                     ));
                 }
-                self.expect(&mut s.index, &i64t(), scope, false, None)?;
+                self.expect(&mut s.index, &i64t(), scope, false, Some("index"))?;
                                 // G2 A5: stored value is bool for a bool array; G3: exactly T for a [T]
                 let want_val = elem_type(&v.ty);
                 self.expect(&mut s.value, &want_val, scope, false, None)?;
@@ -4130,7 +4161,7 @@ impl Checker {
                     self.expect(i, &boolt(), scope, true, None)?;
                 }
                 self.ckind = "decreases";
-                self.expect(&mut s.decreases, &i64t(), scope, true, None)?;
+                self.expect(&mut s.decreases, &i64t(), scope, true, Some("decreases measure"))?;
                 self.ckind = "code";
                 let mut sc = scope.clone();
                 self.block(&mut s.body, &mut sc)?;
@@ -5025,6 +5056,9 @@ impl Checker {
             }
             return self.expect_str_arg(e, scope, c).map(|_| false);
         }
+        if is_narrow(ty) && matches!(e, Expr::IntLit(_)) {
+            return self.expect(e, ty, scope, c, None).map(|_| false);
+        }
         let got = if borrow_vector && self.recursive_vec_element(ty) {
             self.read_expr(e, scope, c, &["vec_get"])?
         } else {
@@ -5139,6 +5173,11 @@ impl Checker {
     /// op: what the operand is used for (arithmetic, comparison, ...) when the operation needs a concrete type:
     /// an abstract type parameter there is a generic_operation error rather than a plain mismatch.
     fn expect(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, contract: bool, op: Option<&str>) -> Res<GType> {
+        if let (Expr::IntLit(lit), Some(width)) = (&*e, ty.int_width()) {
+            let t = check_int_literal(lit, width)?;
+            set_ty(e, &t);
+            return Ok(t);
+        }
         let t = self.expr(e, scope, contract)?;
         self.check_expected_type(e, ty, op, t)
     }
@@ -5146,12 +5185,24 @@ impl Checker {
     fn check_expected_type(&self, e: &Expr, ty: &GType, op: Option<&str>, t: GType) -> Res<GType> {
         if t != *ty {
             if let Some(op) = op {
-                if t.owner.is_some() {
+                if is_narrow(&t) {
+                    match op {
+                        "unary minus" | "~" | "!" | "&" | "|" | "^" | "<<" | ">>" => {
+                            return Err(small_int_op(e.line(), e.col(), op));
+                        }
+                        "index" | "decreases measure" | "range bound" => {
+                            return Err(small_int_unsupported(e.line(), e.col(),
+                                format!("{} must be i64; scalar u8/u16 here requires P2/P3", op), "write i64(x)"));
+                        }
+                        _ => {}
+                    }
+                }
+                if t.owner.is_some() && !matches!(op, "~" | "&" | "|" | "^" | "<<" | ">>" | "index" | "decreases measure" | "range bound") {
                     return Err(terr(
                         e.line(),
                         e.col(),
                         "generic_operation",
-                        format!("{} is not allowed on the abstract type {}", op, t.name),
+                        format!("{} is not allowed on the abstract type {}", if op == "!" { "a boolean operation" } else { op }, t.name),
                         "a type parameter can be copied, passed, returned and stored; == works on it in contracts only",
                     ));
                 }
@@ -5165,6 +5216,17 @@ impl Checker {
             ));
         }
         Ok(t)
+    }
+
+    // The right operand supplies a literal on the left with its width.
+    // Return its type as well when it has already been checked.
+    fn scalar_left(&mut self, left: &mut Expr, right: &mut Expr, scope: &Scope, c: bool) -> Res<(GType, Option<GType>)> {
+        if matches!(left, Expr::IntLit(_)) && !matches!(right, Expr::IntLit(_)) {
+            let rt = self.expr(right, scope, c)?;
+            let lt = if is_narrow(&rt) { self.expect(left, &rt, scope, c, None)? } else { self.expr(left, scope, c)? };
+            return Ok((lt, Some(rt)));
+        }
+        Ok((self.expr(left, scope, c)?, None))
     }
 
     fn read_expr(&mut self, e: &mut Expr, scope: &Scope, c: bool, allowed: &[&str]) -> Res<GType> {
@@ -5219,12 +5281,7 @@ impl Checker {
         }
         match e {
             Expr::Spent(_) => unreachable!("spent handled above"),
-            Expr::IntLit(x) => {
-                if !int_in_range(&x.value) {
-                    return Err(terr(x.line, x.col, "int_range", "integer literal out of i64 range", ""));
-                }
-                Ok(i64t())
-            }
+            Expr::IntLit(x) => check_int_literal(x, &intwidth::I64),
             Expr::BoolLit(_) => Ok(boolt()),
             Expr::StrLit(x) => {
                 if x.empty {
@@ -5257,33 +5314,39 @@ impl Checker {
                     self.expect(&mut x.operand, &i64t(), scope, c, Some("unary minus"))?;
                     Ok(i64t())
                 } else if x.op == "~" {
-                    self.expect(&mut x.operand, &i64t(), scope, c, None)?;
+                    self.expect(&mut x.operand, &i64t(), scope, c, Some("~"))?;
                     Ok(i64t())
                 } else {
-                    self.expect(&mut x.operand, &boolt(), scope, c, Some("a boolean operation"))?;
+                    self.expect(&mut x.operand, &boolt(), scope, c, Some("!"))?;
                     Ok(boolt())
                 }
             }
             Expr::Binary(x) => {
                 let op = x.op.clone();
                 match op.as_str() {
-                    "+" | "-" | "*" | "/" | "%" => {
-                        self.expect(&mut x.left, &i64t(), scope, c, Some("arithmetic"))?;
-                        self.expect(&mut x.right, &i64t(), scope, c, Some("arithmetic"))?;
-                        Ok(i64t())
+                    "+" | "-" | "*" | "/" | "%" | "<" | "<=" | ">" | ">=" => {
+                        let ordering = matches!(op.as_str(), "<" | "<=" | ">" | ">=");
+                        let operation = Some(if ordering { "ordering" } else { "arithmetic" });
+                        let (lt, rt) = self.scalar_left(&mut x.left, &mut x.right, scope, c)?;
+                        let lt = if lt.int_width().is_some() {
+                            lt
+                        } else {
+                            self.check_expected_type(&x.left, &i64t(), operation, lt)?
+                        };
+                        if let Some(rt) = rt {
+                            self.check_expected_type(&x.right, &lt, operation, rt)?;
+                        } else {
+                            self.expect(&mut x.right, &lt, scope, c, operation)?;
+                        }
+                        Ok(if ordering { boolt() } else { lt })
                     }
                     "&" | "|" | "^" | "<<" | ">>" => {
-                        self.expect(&mut x.left, &i64t(), scope, c, None)?;
-                        self.expect(&mut x.right, &i64t(), scope, c, None)?;
+                        self.expect(&mut x.left, &i64t(), scope, c, Some(&op))?;
+                        self.expect(&mut x.right, &i64t(), scope, c, Some(&op))?;
                         Ok(i64t())
                     }
-                    "<" | "<=" | ">" | ">=" => {
-                        self.expect(&mut x.left, &i64t(), scope, c, Some("ordering"))?;
-                        self.expect(&mut x.right, &i64t(), scope, c, Some("ordering"))?;
-                        Ok(boolt())
-                    }
                     "==" | "!=" => {
-                        let lt = self.expr(&mut x.left, scope, c)?;
+                        let (lt, rt) = self.scalar_left(&mut x.left, &mut x.right, scope, c)?;
                         if lt.is_collection_owner() {
                             // G6
                             return Err(terr(
@@ -5332,10 +5395,14 @@ impl Checker {
                                 "runtime equality only compares i64 or bool; == on a type parameter works in contracts",
                             ));
                         }
-                        if lt != i64t() && lt != boolt() && !c {
+                        if lt.int_width().is_none() && lt != boolt() && !c {
                             return Err(terr(x.line, x.col, "eq_type", "== only compares i64 or bool in code", "use match"));
                         }
-                        self.expect(&mut x.right, &lt, scope, c, None)?;
+                        if let Some(rt) = rt {
+                            self.check_expected_type(&x.right, &lt, None, rt)?;
+                        } else {
+                            self.expect(&mut x.right, &lt, scope, c, None)?;
+                        }
                         Ok(boolt())
                     }
                     "&&" | "||" => {
@@ -5421,7 +5488,7 @@ impl Checker {
                         "",
                     ));
                 }
-                self.expect(&mut x.index, &i64t(), scope, c, None)?;
+                self.expect(&mut x.index, &i64t(), scope, c, Some("index"))?;
                 if at.is_collection() {
                     // G6: contract-only observation of a Vec / String
                     if !c {
@@ -5456,8 +5523,8 @@ impl Checker {
                     }
                     return Err(terr(x.line, x.col, "contract_only", format!("{} is only allowed in contracts", x.kind), ""));
                 }
-                self.expect(&mut x.lo, &i64t(), scope, c, None)?;
-                self.expect(&mut x.hi, &i64t(), scope, c, None)?;
+                self.expect(&mut x.lo, &i64t(), scope, c, Some("range bound"))?;
+                self.expect(&mut x.hi, &i64t(), scope, c, Some("range bound"))?;
                 if scope.contains_key(&x.var) {
                     return Err(terr(x.line, x.col, "shadow", format!("{} is already defined", x.var), "use a new name"));
                 }
@@ -6476,9 +6543,9 @@ impl Checker {
         }
         let Expr::Var(root) = base else { return Err(bad_operand()) };
         let entry = scope.get(&root.name).filter(|x| {
-            // LB6 OS (R-6g5-4): a whole scalar inout (i64, bool) also has an entry value
+            // LB6 OS (R-6g5-4): a whole scalar inout also has an entry value
             x.kind == "inout" && (!root_field && x.ty.is_array() || self.plain_struct(&x.ty).is_some()
-                || whole && x.ty.args.is_empty() && matches!(x.ty.name.as_str(), "i64" | "bool"))
+                || whole && (x.ty.int_width().is_some() || x.ty == boolt()))
         }).ok_or_else(bad_operand)?;
         if bad_index {
             return Err(terr(line, col, "old_argument",
@@ -6631,6 +6698,24 @@ impl Checker {
             }
             Ok(())
         };
+        if intwidth::PENDING_INTS.contains(&n.as_str()) && !self.funcs.contains_key(&n) {
+            return Err(small_int_unsupported(line, col, format!("{} casts require P3", n), "use i64, u8 or u16"));
+        }
+        if let Some(target) = intwidth::of(&n) {
+            arity(1)?;
+            if targs.is_some() {
+                return Err(terr(line, col, "type_arity", "integer casts take no type arguments", ""));
+            }
+            let arg = &mut e.args[0];
+            let source = self.expr(arg, scope, c)?;
+            let width = source.int_width().ok_or_else(|| terr(arg.line(), arg.col(), "type_mismatch",
+                format!("expected a scalar integer, found {}", tn(&source)), ""))?;
+            if c && !width.fits_in(target) {
+                return Err(terr(line, col, "cast_range", format!("narrowing from {} to {} is unsupported in contracts", width.name, target.name),
+                    "widen the other value or do the conversion before the contract expression"));
+            }
+            return Ok(GType::new(target.name, Vec::new()));
+        }
         if n == "subview" {
             return Err(Self::view_context(e));
         }
@@ -6846,7 +6931,7 @@ impl Checker {
                         "print takes a concrete i64 or bool",
                     ));
                 }
-                if t != i64t() && t != boolt() {
+                if t.int_width().is_none() && t != boolt() {
                     return Err(terr(line, col, "print_type", "print takes i64 or bool", ""));
                 }
                 self.used_effects.insert("io".to_string());
@@ -7718,12 +7803,12 @@ mod tests {
 
     #[test]
     fn int_range_edges() {
-        assert!(int_in_range("9223372036854775807"));
-        assert!(!int_in_range("9223372036854775808"));
-        assert!(int_in_range("-9223372036854775808"));
-        assert!(!int_in_range("-9223372036854775809"));
-        assert!(int_in_range("0"));
-        assert!(!int_in_range("100000000000000000000000000000000000000000"));
+        assert!(int_in_range("9223372036854775807", &intwidth::I64));
+        assert!(!int_in_range("9223372036854775808", &intwidth::I64));
+        assert!(int_in_range("-9223372036854775808", &intwidth::I64));
+        assert!(!int_in_range("-9223372036854775809", &intwidth::I64));
+        assert!(int_in_range("0", &intwidth::I64));
+        assert!(!int_in_range("100000000000000000000000000000000000000000", &intwidth::I64));
     }
 
     #[test]

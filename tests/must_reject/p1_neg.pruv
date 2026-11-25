@@ -1,0 +1,4 @@
+// P1: unary minus on an unsigned type is rejected
+fn f(a: u16) -> u16 {
+  return -a;
+}

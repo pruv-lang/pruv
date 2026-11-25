@@ -1,0 +1,6 @@
+// P1 false contract: a u8 parameter is at most 255, so result > 255 is false
+fn f(x: u8) -> u16
+  ensures result > 255
+{
+  return u16(x);
+}

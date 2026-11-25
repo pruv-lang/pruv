@@ -1,0 +1,24 @@
+// spec: R-6p-1 accept
+struct Pixel { r: u8, count: u16 }
+
+fn add(a: u8, b: u8) -> u8
+  requires i64(a) + i64(b) <= 255
+  ensures i64(result) == i64(a) + i64(b)
+{
+  return a + b;
+}
+
+fn step(p: Pixel) -> Pixel
+  requires p.count < 65535 && p.r >= 1
+{
+  let mut q: Pixel = p;
+  q.count = q.count + 1;
+  q.r = q.r - 1;
+  return q;
+}
+
+fn main_value() -> i64
+{
+  let p: Pixel = step(Pixel { r: add(200, 55), count: 7 });
+  return i64(p.r) + i64(p.count / 2);
+}
