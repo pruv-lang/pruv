@@ -779,7 +779,11 @@ class Parser:
             s.expect("(")
             borrow_from = []
             while not s.at(")"):
-                borrow_from.append(s.ident().val)
+                path = [s.ident().val]
+                while s.at("."):
+                    s.next()
+                    path.append(s.ident().val)
+                borrow_from.append(".".join(path))
                 if not s.at(")"):
                     s.expect(",")
             s.expect(")")

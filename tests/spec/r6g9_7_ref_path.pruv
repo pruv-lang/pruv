@@ -1,0 +1,8 @@
+// spec: R-6g9-7 reject
+// `from(doc.source)` names a `ref` field: the struct only borrows it, so it cannot be lent as the struct's own
+// storage (write `from(doc)` instead); type/borrow_signature.
+struct Document { source: ref [u8], tape: [i64] }
+fn head(doc: Document) -> ref [u8] from(doc.source)
+{
+  return subview(doc.source, 0, 0);
+}

@@ -2106,7 +2106,13 @@ impl<'a> Gen<'a> {
             } else {
                 self.rt_width(&p.ty, !p.take, self.storage.layout_of(p))
             };
-            if f.borrow_from.as_ref().is_some_and(|from| from.contains(&p.name)) {
+            if f.lent_fields(&p.name).next().is_some() {
+                if self.table.decl(&p.ty).is_some_and(crate::borrowed::borrowing_struct) {
+                    format!("&'a {}<'_>", p.ty)
+                } else {
+                    format!("&'a {}", p.ty)
+                }
+            } else if f.borrow_from.as_ref().is_some_and(|from| from.contains(&p.name)) {
                 if self.table.decl(&p.ty).is_some_and(crate::borrowed::borrowing_struct) {
                     format!("&{}<'a>", p.ty)
                 } else {
@@ -4322,7 +4328,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
             }
             Stmt::FieldAssign(x) => {
                 // R-6g9-6: store a slice or str view directly, without an owned temporary.
-                if x.ref_store && expr_ty(&x.value).as_deref().is_some_and(|ty| matches!(ty, "array_u8" | "str")) {
+                if x.ref_store && expr_ty(&x.value).as_deref().is_some_and(crate::borrowed::is_view_base) {
                     let value = self.borrowed_value(&x.value)?;
                     self.emit(ind, &format!("{}.{} = {};", x.name, x.fields.join("."), value));
                     return Ok(());
@@ -5072,7 +5078,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
         };
         let mut chk = String::new();
         if !self.verified {
-            if self.fmap.get(&self.function_name).is_some_and(|f| f.borrows_inout_buffer(&args[0])) {
+            if self.fmap.get(&self.function_name).is_some_and(|f| {
+                f.borrows_inout_buffer(&args[0]) && place.is_some_and(|p| f.resize_scratch(p, args))
+            }) {
                 chk.push_str("if pruv_n < 0 || pruv_n > (1i64 << 40) { pruv_ovf(\"resize length outside 0..2^40\") } ");
             } else {
                 chk.push_str("if pruv_n < (pruv_a.len() as i64) || pruv_n > (1i64 << 40) { pruv_ovf(\"resize length outside len..2^40\") } ");

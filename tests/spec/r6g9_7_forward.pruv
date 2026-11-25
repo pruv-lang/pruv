@@ -1,0 +1,41 @@
+// spec: R-6g9-7 accept
+// A field-lending function may forward another one (`from(doc.tape)` argument `doc` is a parameter of the
+// caller), lend a nested owned field of an owned struct (`from(b.doc.tape)`, Rust `b: &'a Batch`), and return the
+// static empty view `[]` as a `ref [i64]`. The lent document may be written after the view's last use.
+struct Document { source: ref [u8], tape: [i64] }
+struct Inner { tape: [i64], n: i64 }
+struct Batch { doc: Inner, k: i64 }
+fn record(doc: Document, id: i64) -> ref [i64] from(doc.tape)
+  requires 0 <= id && id + 2 <= len(doc.tape)
+  ensures len(result) == 2
+{
+  return subview(doc.tape, id, id + 2);
+}
+fn first_record(doc: Document) -> ref [i64] from(doc.tape)
+  ensures len(doc.tape) < 2 || len(result) == 2
+{
+  if len(doc.tape) < 2 { return []; }
+  return record(doc, 0);
+}
+fn inner_tail(b: Batch) -> ref [i64] from(b.doc.tape)
+  requires 1 <= len(b.doc.tape)
+  ensures len(result) == len(b.doc.tape) - 1
+{
+  return subview(b.doc.tape, 1, len(b.doc.tape));
+}
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(3, 1);
+  let t: [i64] = alloc(4, 6);
+  let mut d: Document = Document { source: x, tape: move t };
+  let r: ref [i64] = first_record(d);
+  let mut a: i64 = len(r) * 10;
+  if r[1] == 6 { a = a + 6; }
+  d.tape[0] = 9;
+  let u: [i64] = alloc(3, 4);
+  let b: Batch = Batch { doc: Inner { tape: move u, n: 1 }, k: 2 };
+  let s: ref [i64] = inner_tail(b);
+  let mut c: i64 = 0;
+  if s[0] == 4 { c = 4; }
+  if d.tape[0] == 9 { c = c + 9000; }
+  return a * 100 + len(s) * 10 + c;
+}

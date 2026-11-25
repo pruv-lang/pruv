@@ -150,7 +150,7 @@ pub const ARR: &str = "{ ptr, i64, i64 }"; // P3: owned buffer inside the module
 /// R-6g9-1: a borrowed view result `{ data, len }`; it owns nothing and is never freed
 pub const VIEW: &str = "{ ptr, i64 }";
 
-/// R-6g9-1: the function returns a `ref [u8]` / `ref str` view of its `from` sources
+/// The function returns a view of its `from` sources.
 pub fn view_ret(f: &Function) -> bool {
     f.borrowed_result && is_arr_name(&f.ret)
 }
@@ -1487,9 +1487,11 @@ pub fn sig_text(params: &[(String, String)], f: Option<&Function>) -> String {
         .map(|p| format!("%p.{}", mangle(&p.name)))
         .collect();
     // R-6g9-1/R-6g9-2: the data pointer of a read `from` source escapes through the borrowed result (a view, or a
-    // borrowing struct's `ref` field written through %out), so it is not nocapture
+    // borrowing struct's `ref` field written through %out), so it is not nocapture. A field path lends a data
+    // pointer loaded from the struct, so the struct pointer itself stays nocapture.
     let escapes: Vec<_> = f.into_iter()
         .flat_map(|f| f.borrow_from.iter().flatten())
+        .filter(|n| !n.contains('.'))
         .map(|n| format!("%p.{}.a", mangle(n)))
         .collect();
     params
@@ -4147,7 +4149,7 @@ impl<'a> FnGen<'a> {
     pub fn stmt(&mut self, st: &Stmt) -> R<()> {
         match st {
             Stmt::Let(x) if x.borrowed && is_arr_name(&x.ty) => {
-                // R-6g9-1: a `ref [u8]` / `ref str` local is a view: no copy, never freed
+                // A ref local holds a view pair without owning the buffer.
                 self.begin_temps();
                 let v = self.ev(&x.value, false)?;
                 let sl = self.view_slot(&x.name, &x.ty);
@@ -4297,7 +4299,7 @@ impl<'a> FnGen<'a> {
                     Bind::Ssa(_) => return Err(format!("llvmgen: field assignment to non-local {}", x.name)),
                 };
                 // R-6g9-6: replacing a ref field stores its view pair without dropping the old view.
-                if x.ref_store && expr_ty(&x.value).as_deref().is_some_and(|ty| matches!(ty, "array_u8" | "str")) {
+                if x.ref_store && expr_ty(&x.value).as_deref().is_some_and(crate::borrowed::is_view_base) {
                     let v = self.ev(&x.value, false)?;
                     let (ptr, _) = self.field_ptr_ty(&sl, &x.fields)?;
                     let value = self.pack_view(&v)?;

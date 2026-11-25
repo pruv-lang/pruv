@@ -1,0 +1,10 @@
+{
+  "gen_contains": ["fn record<'a>(doc: &'a Document<'_>, id: i64) -> &'a [i64]", "-> &'a [bool]", "let r: &[i64]", "let b: &[bool]"],
+  "gen_absent": ["to_vec()", ".clone()"],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["1379"],
+    "alloc_balance": true
+  }
+}

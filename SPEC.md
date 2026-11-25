@@ -1504,7 +1504,7 @@ borrowed value is live.
     R-6g-10: `len == hi - lo`, element `k` is `x[lo + k]`, the str boundary / UTF-8 obligations), with no copy at
     run time. A call result is a fresh value constrained by the callee's `ensures`, and a field read is the field.
     Exclusivity freezes every root while a borrow is live, so these facts stay true.
-  - *Code.* Rust only. A borrowing struct is `struct Doc<'a>` with `&'a [u8]` / `&'a str` fields; a `ref` function
+  - *Code.* Both backends; this item gives the Rust form. A borrowing struct is `struct Doc<'a>` with `&'a [u8]` / `&'a str` fields; a `ref` function
     is `fn f<'a>(..)` (body and wrapper) whose `from` parameters are `&'a [u8]`, `&'a str`, `&'a mut
     ::std::vec::Vec<u8>` (resizable `inout`), `&'a mut [u8]` (fixed `inout`) or `&Doc<'a>`, and whose result is
     `&'a [u8]`, `&'a str` or `Doc<'a>`. A `ref` local is `&[u8]` / `&str`; a view is the same unchecked (verified) or
@@ -1879,6 +1879,35 @@ borrowed value is live.
     [rebuild moves a borrowed root](tests/spec/r6g9_6_rebind_move.pruv),
     [write before an owned-field place](tests/spec/r6g9_6_place_root_live.pruv),
     [rebuild after an earlier error](tests/spec/r6g9_6_rebind_after_error.pruv).
+- R-6g9-7 **Typed views and field lending.** `ref [i64]` and `ref [bool]` are views like `ref [u8]` (R-6g9-1): a
+  `let` local, a `from` result, a `ref` field, a `subview` of an `[i64]` / `[bool]` buffer, and the static empty view
+  `[]` (R-6g9-3). The UTF-8 and string-literal forms stay `ref [u8]` / `ref str` only. A `from` entry may also be a
+  field path `p.f` or `p.f.g` (the hand JSON tape access `fn record<'a>(doc: &'a Document<'_>, id: i64) -> &'a [i64]`
+  returning `&doc.tape[a..b]`).
+  - *Signature.* `p` is a read parameter of struct type (owned or borrowing); every step names a field, every step
+    but the last is an owned struct field (not a `ref` field and not a borrowing-struct field), and the last field
+    is an owned buffer (`[u8]`, `[i64]`, `[bool]`, `str`). Anything else, an `inout` or `take` parameter, a
+    repeated entry, or both `p` and a path of `p` in one list, is `type/borrow_signature`. A `ref` field is named
+    through its struct (`from(doc)`), since the struct only borrows it.
+  - *Provenance.* In the callee a view of the owned field path `p.f` holds the roots `{p, p.f}`; `from(p.f)` permits
+    exactly those, so returning a view of another owned field is `type/borrow_escape`, and `from(p)` still does not
+    permit a view of an owned field of `p` (R-6g-11). At a call the argument for `p` must be a place; the result
+    borrows its root variable, shared, plus the matching field path when that root is itself a read struct parameter
+    (so a lending function can forward another). Rust borrows all of `&doc`, so writing, assigning or moving any part
+    of the root, or a buffer that a borrowing root itself borrows (`&'a Document<'_>` keeps those borrows alive),
+    while the view is live (R-6g9-4) is `type/borrow_conflict`; after the last use it is allowed.
+  - *Code.* Rust: the named parameter is `doc: &'a Document<'_>` (borrowing struct) or `b: &'a Batch` (owned
+    struct), the result `&'a [i64]`, locals `&[i64]` / `&[bool]`, with no `clone` or `to_vec`. LLVM: the parameter
+    is the struct pointer (`nocapture` as for `from(p)`), and a view of an owned `{ ptr, i64, i64 }` field is the
+    `{ ptr, i64 }` pair of its data pointer and range; element widths follow the element type.
+  - Tests: [tape record and bool window](tests/spec/r6g9_7_record.pruv),
+    [forward, nested owned field, empty view](tests/spec/r6g9_7_forward.pruv);
+    rejects [write while lent](tests/spec/r6g9_7_lend_then_write.pruv),
+    [move while lent](tests/spec/r6g9_7_lend_then_move.pruv), [another field](tests/spec/r6g9_7_other_field.pruv),
+    [path to a scalar](tests/spec/r6g9_7_bad_path.pruv), [path to a ref field](tests/spec/r6g9_7_ref_path.pruv),
+    [inout parameter](tests/spec/r6g9_7_inout_param.pruv), [write the document's source](tests/spec/r6g9_7_source_write.pruv),
+    [store into the lender](tests/spec/r6g9_7_store_self.pruv), [a borrowed ref field](tests/spec/r6g9_7_other_ref.pruv),
+    [nested record's source](tests/spec/r6g9_7_nested_source.pruv), [an owned Vec](tests/spec/r6g9_7_vec_view.pruv).
 
 ## 6h. Files (G10)
 

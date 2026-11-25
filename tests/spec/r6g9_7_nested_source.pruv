@@ -1,0 +1,13 @@
+// spec: R-6g9-7 reject
+// A view lent by a nested record keeps the outer record's borrows alive: writing x is type/borrow_conflict.
+struct Doc { tape: [i64] }
+struct W { src: ref [u8], doc: Doc }
+fn record(d: Doc, id: i64) -> ref [i64] from(d.tape) { return d.tape; }
+pub fn checksum() -> i64 ! alloc {
+  let mut x: [u8] = alloc(4, 0);
+
+  let w: W = W { src: x, doc: Doc { tape: alloc(4, 0) } };
+  let r: ref [i64] = record(w.doc, 1);
+  x[0] = 1;
+  return len(r);
+}

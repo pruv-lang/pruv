@@ -1096,7 +1096,13 @@ impl Parser {
             self.expect("(")?;
             let mut names = Vec::new();
             while !self.at(")", 0) {
-                names.push(self.ident()?.val);
+                let mut path = self.ident()?.val;
+                while self.at(".", 0) {
+                    self.bump();
+                    path.push('.');
+                    path.push_str(&self.ident()?.val);
+                }
+                names.push(path);
                 if !self.at(")", 0) {
                     self.expect(",")?;
                 }

@@ -3,7 +3,7 @@ use crate::ast::*;
 use crate::check::{expr_ty, field_place, mentions, paths_overlap, place_root};
 use crate::diagnostic::PruvError;
 use crate::foreign_shim::{walk_expr, Node};
-use crate::gtype::GType;
+use crate::gtype::{bind_args, decl_owner, substitute, GType};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 type Res<T> = Result<T, PruvError>;
@@ -27,13 +27,13 @@ fn contains_borrow(ty: &GType, structs: &HashSet<String>) -> bool {
         || ty.args.iter().any(|t| contains_borrow(t, structs))
 }
 
-fn is_view_base(ty: &str) -> bool {
-    matches!(ty, "str" | "array_u8")
+pub(crate) fn is_view_base(ty: &str) -> bool {
+    matches!(ty, "array" | "array_u8" | "array_bool" | "str")
 }
 
 fn annotation(ty: &mut String, line: i64, col: i64, permitted: bool, structs: &HashSet<String>) -> Res<bool> {
     let parsed = GType::from_key(ty);
-    if parsed.name == "@ref" && permitted && is_view_base(&parsed.args[0].to_key()) {
+    if parsed.name == "@ref" && permitted && parsed.args.len() == 1 && is_view_base(&parsed.args[0].to_key()) {
         *ty = parsed.args[0].to_key();
         Ok(true)
     } else if contains_borrow(&parsed, structs) {
@@ -65,6 +65,22 @@ fn prepare_block(body: &mut [Stmt], permitted: bool, structs: &HashSet<String>) 
     Ok(())
 }
 
+fn owned_buffer_path(
+    ty: &str, path: &str, declarations: &HashMap<&str, &StructDecl>, borrowing: &HashSet<String>,
+) -> Option<()> {
+    let mut ty = GType::from_key(ty);
+    for (i, name) in path.split('.').enumerate() {
+        if ty.owner.is_some() || (i > 0 && borrowing.contains(&ty.name)) {
+            return None;
+        }
+        let decl = declarations.get(ty.name.as_str())?;
+        let field = decl.fields.iter().find(|f| f.name == name && !f.borrowed)?;
+        let args = bind_args(&decl_owner(&ty.name), decl.tparams.len(), &ty.args).ok()?;
+        ty = substitute(&GType::from_key(&field.ty), &args);
+    }
+    is_view_base(&ty.to_key()).then_some(())
+}
+
 pub(crate) fn prepare(prog: &mut Program, hosts: &[bool]) -> Res<()> {
     let structs: HashSet<String> = prog.types.iter().filter_map(|d| match d {
         TypeDecl::Struct(s) if s.fields.iter().any(|f| GType::from_key(&f.ty).name == "@ref") => Some(s.name.clone()),
@@ -88,6 +104,10 @@ pub(crate) fn prepare(prog: &mut Program, hosts: &[bool]) -> Res<()> {
             }
         }
     }
+    let declarations: HashMap<_, _> = prog.types.iter().filter_map(|d| match d {
+        TypeDecl::Struct(s) => Some((s.name.as_str(), s)),
+        _ => None,
+    }).collect();
     for (i, f) in prog.functions.iter_mut().enumerate() {
         let permitted = f.tparams.is_empty() && f.foreign.is_none() && !hosts.get(i).copied().unwrap_or(false);
         for p in &mut f.params {
@@ -106,14 +126,26 @@ pub(crate) fn prepare(prog: &mut Program, hosts: &[bool]) -> Res<()> {
                     if names[..i].contains(name) {
                         return Err(signature(f.line, f.col));
                     }
-                    let Some(p) = f.params.iter().find(|p| p.name == *name) else {
+                    let (root, path) = name.split_once('.').map_or((name.as_str(), None), |(root, path)| (root, Some(path)));
+                    let Some(p) = f.params.iter().find(|p| p.name == root) else {
                         return Err(signature(f.line, f.col));
                     };
-                    if p.take || !(is_view_base(&p.ty) || (structs.contains(&p.ty) && p.mode_pos.is_none()))
-                        || (p.mode_pos.is_some() && f.ensures.iter().any(|e| mentions(e, name)))
-                    {
+                    if let Some(path) = path {
+                        if p.take || p.mode_pos.is_some() || names.contains(&p.name)
+                            || owned_buffer_path(&p.ty, path, &declarations, &structs).is_none()
+                        {
+                            return Err(signature(f.line, f.col));
+                        }
+                        continue;
+                    }
+                    if p.take || !(is_view_base(&p.ty) || (structs.contains(&p.ty) && p.mode_pos.is_none())) {
                         return Err(signature(f.line, f.col));
                     }
+                }
+                let inouts: Vec<&String> = names.iter()
+                    .filter(|n| f.params.iter().any(|p| p.name == **n && p.mode_pos.is_some())).collect();
+                if let Some(e) = f.ensures.iter().find(|e| inouts.iter().any(|n| mentions(e, n))) {
+                    return Err(signature(e.line(), e.col()));
                 }
             }
             None if !borrowed_result => {}
@@ -441,7 +473,7 @@ impl Graph {
 
 enum Origin {
     View(Roots),
-    // R-6g9-6: a borrowing parameter carries its caller's shared provenance.
+    // A struct parameter can carry its caller's shared provenance.
     Param,
     Place(Source),
 }
@@ -450,6 +482,7 @@ struct Analysis<'a> {
     place_functions: &'a PlaceFunctions,
     functions: HashMap<&'a str, &'a Function>,
     records: HashMap<&'a str, &'a StructDecl>,
+    structs: HashSet<&'a str>,
 }
 
 impl Analysis<'_> {
@@ -482,14 +515,14 @@ impl Analysis<'_> {
                         roots = origin.clone();
                     }
                 }
-                Some(Origin::Param) | None => {
+                origin => {
                     merge(&mut roots, Source::direct(root), Access::Read);
-                    // An owned field of a borrowing-struct parameter lives in the caller's record, which the
-                    // Rust signature `&Doc<'a>` does not lend to the result.
+                    // Owned field storage needs its own from entry.
                     if matches!(e, Expr::FieldAccess(x) if !self.ref_field(&x.base, &x.field))
-                        && expr_ty(field_place(e).0).as_deref().is_some_and(|ty| self.records.contains_key(ty))
+                        && matches!(origin, Some(Origin::Param))
                     {
-                        merge(&mut roots, Source::direct(&format!("{root}.storage")), Access::Read);
+                        let (_, path) = field_place(e);
+                        merge(&mut roots, Source::direct(&format!("{root}.{}", path.join("."))), Access::Read);
                     }
                 }
             }
@@ -505,6 +538,31 @@ impl Analysis<'_> {
                         return Err(signature(e.line(), e.col()));
                     };
                     for (p, a) in f.params.iter().zip(&c.args) {
+                        let mut fields = f.lent_fields(&p.name).peekable();
+                        if fields.peek().is_some() {
+                            let (base, prefix) = field_place(a);
+                            let Expr::Var(v) = base else { return Err(signature(a.line(), a.col())); };
+                            let origin = locals.get(&v.name);
+                            let source = match origin {
+                                Some(Origin::Place(source)) => source.clone(),
+                                _ => Source::direct(&v.name),
+                            };
+                            merge(&mut roots, source, Access::Read);
+                            // A shared reference into a borrowing root keeps that root's loans live too:
+                            // `&'a Doc<'_>` requires the borrowed fields to outlive `'a`.
+                            if let Some(Origin::View(held)) = origin {
+                                for (source, access) in held {
+                                    merge(&mut roots, source.clone(), *access);
+                                }
+                            }
+                            if matches!(origin, Some(Origin::Param)) {
+                                let prefix = std::iter::once(v.name.as_str())
+                                    .chain(prefix.iter().map(String::as_str)).collect::<Vec<_>>().join(".");
+                                for path in fields {
+                                    merge(&mut roots, Source::direct(&format!("{prefix}.{path}")), Access::Read);
+                                }
+                            }
+                        }
                         if from.contains(&p.name) {
                             let (value, mode) = match a {
                                 Expr::InoutArg(x) => (&*x.expr, Access::Write),
@@ -600,7 +658,12 @@ impl Analysis<'_> {
             Stmt::Return(s) => if let Some(value) = &s.value {
                 if let Some(from) = &f.borrow_from {
                     let roots = self.provenance(value, locals)?;
-                    if roots.keys().any(|source| !from.contains(&source.root)) {
+                    // A bare parameter root is permitted only beside one of its lent field paths.
+                    let listed = |root: &str| from.iter().any(|entry| entry == root);
+                    if roots.keys().any(|source| !listed(&source.root) && !roots.keys().any(|other| {
+                        listed(&other.root)
+                            && other.root.strip_prefix(source.root.as_str()).is_some_and(|rest| rest.starts_with('.'))
+                    })) {
                         return Err(error(s.line, s.col, "borrow_escape", "returned value borrows outside its from-list"));
                     }
                 } else {
@@ -755,13 +818,21 @@ pub(crate) fn check(prog: &Program, place_functions: &PlaceFunctions) -> Res<()>
             TypeDecl::Struct(s) if borrowing_struct(d) => Some((s.name.as_str(), s)),
             _ => None,
         }).collect(),
+        structs: prog.types.iter().filter_map(|d| match d {
+            TypeDecl::Struct(s) => Some(s.name.as_str()),
+            _ => None,
+        }).collect(),
     };
     for f in &prog.functions {
         if !has_views && !place_functions.contains_key(&f.name) { continue; }
         let mut graph = Graph::default();
         // R-6g9-6: parameters hold provenance, but have no local liveness bit.
-        let mut locals = f.params.iter().filter(|p| analysis.records.contains_key(p.ty.as_str()))
-            .map(|p| (p.name.clone(), Origin::Param)).collect();
+        let mut locals = f.params.iter().filter_map(|p| {
+            let read = !p.take && p.mode_pos.is_none();
+            let ty = GType::from_key(&p.ty);
+            (analysis.records.contains_key(ty.name.as_str()) || (read && analysis.structs.contains(ty.name.as_str())))
+                .then(|| (p.name.clone(), Origin::Param))
+        }).collect();
         analysis.build(f, &f.body, Vec::new(), &mut locals, &mut HashMap::new(), &mut graph);
         graph.conflicts()?;
     }

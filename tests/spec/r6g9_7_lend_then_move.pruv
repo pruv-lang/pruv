@@ -1,0 +1,16 @@
+// spec: R-6g9-7 reject
+// Moving the lent field out while the lent view is live is type/borrow_conflict.
+struct Document { source: ref [u8], tape: [i64] }
+fn record(doc: Document, id: i64) -> ref [i64] from(doc.tape)
+  requires 0 <= id && id + 1 <= len(doc.tape)
+{
+  return subview(doc.tape, id, id + 1);
+}
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(5, 7);
+  let t: [i64] = alloc(4, 3);
+  let mut d: Document = Document { source: x, tape: move t };
+  let r: ref [i64] = record(d, 1);
+  let t2: [i64] = move d.tape;
+  return r[0] + len(t2);
+}

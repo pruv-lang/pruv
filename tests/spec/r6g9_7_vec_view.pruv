@@ -1,0 +1,7 @@
+// spec: R-6g9-7 reject
+// A view binding needs a place view, not an owned Vec: type/borrow_signature.
+pub fn checksum() -> i64 ! alloc {
+  let mut v: Vec<i64> = vec_new::<i64>();
+  let r: ref [i64] = v;
+  return len(r);
+}

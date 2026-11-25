@@ -1,0 +1,6 @@
+// spec: R-6g9-7 reject
+// A field view lent by a record cannot be stored back into that record: type/borrow_escape.
+struct Doc { seen: ref [u8], bytes: [u8] }
+fn lend(d: Doc) -> ref [u8] from(d.bytes) { return d.bytes; }
+fn store(inout d: Doc) -> () { d.seen = lend(d); }
+pub fn checksum() -> i64 { return 0; }

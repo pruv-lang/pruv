@@ -99,9 +99,10 @@ def plan_storage(program_after_mono, verified=True):
         for j, p in enumerate(f.params):
             if array(p.type):
                 key = ('param', f.name, j)
-                node(key, p, p.refine, True, host or p.mode == 'inout' or f.foreign is not None)
+                node(key, p, p.refine, True,
+                     host or p.mode == 'inout' or f.foreign is not None or p.name in (f.borrow_from or ()))
                 out.params[f.name, p.name] = key
-        if array(f.ret): node(('result', f.name), f, f.ret_refine, True, host or f.foreign is not None)
+        if array(f.ret): node(('result', f.name), f, f.ret_refine, True, host or f.foreign is not None or f.ref_result)
     for f in prog.functions:
         env = {p.name: lookup.get(('param', f.name, j)) for j, p in enumerate(f.params)}
         sn = en = 0
@@ -171,7 +172,7 @@ def plan_storage(program_after_mono, verified=True):
             for st in stmts:
                 number = sn; sn += 1
                 if isinstance(st, Let):
-                    n = node(('binding', f.name, number), st, st.refine, True) if array(st.type) else None
+                    n = node(('binding', f.name, number), st, st.refine, True, st.ref) if array(st.type) else None
                     v = expr(st.value, scope)
                     if n is not None or v is not None: join(n, v)
                     scope[st.name] = n

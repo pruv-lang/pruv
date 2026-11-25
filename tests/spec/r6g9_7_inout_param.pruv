@@ -1,0 +1,7 @@
+// spec: R-6g9-7 reject
+// Field lending names a read parameter; an `inout` parameter's field is type/borrow_signature.
+struct Inner { tape: [i64], n: i64 }
+fn tail(inout b: Inner) -> ref [i64] from(b.tape)
+{
+  return subview(b.tape, 0, 0);
+}

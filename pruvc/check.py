@@ -9,7 +9,7 @@ from typeinfo import (TypeTable, BUILTIN_TYPE_NAMES, type_name, is_user_type, is
                       COLLECTION_ARITY, COLLECTION_SPELLING, is_collection, contains_collection,  # G6 A0
                       program_uses_inout, is_owned_field_type, is_scalar_vec, is_nongeneric_struct,
                       field_place, is_nested_collection_field, is_string_record_map, is_vec_slice_arg, is_owned_value,
-                      borrowing_copy)
+                      borrowing_copy, VIEW_BASES)
 from refine import expand as refine_expand
 from refine import _kids as expr_kids, _stmt_names
 from foreign import (CATALOG, CATALOG_NAMES, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS, ASYNC_OBSERVERS, ASYNC_OPS,
@@ -928,13 +928,46 @@ class Checker:
         if not s.contains_borrow(ty):
             return ty
         if (not allowed or not s.borrowed_type(ty) or
-                (ty.name == "ref" and ty.args not in ((ARRAY_U8,), (STR,)))):
+                (ty.name == "ref" and (len(ty.args) != 1 or s.norm_type(ty.args[0]) not in VIEW_BASES))):
             s.borrow_signature(node, "borrowed type is not allowed in this position")
         if s.prog.borrow_site is None:
             s.prog.borrow_site = node
         # The verifier uses the ordinary value type. Checking and lowering retain
         # borrow information on the declaring node and on borrowed expressions.
         return ty.args[0] if ty.name == "ref" else ty
+
+    def lending_field(s, ty, path):
+        """Whether a struct path reaches an owned buffer through owned struct fields."""
+        for field in path:
+            decl = s.decls.get(ty.name) if ty.owner is None else None
+            if (not isinstance(decl, StructDecl) or len(ty.args) != len(decl.tparams)
+                    or s.ref_field(ty, field)):
+                return False
+            ty = s.lookup_field_type(ty, field)
+            if ty is None or s.borrowed_type(ty):
+                return False
+        return ty in VIEW_BASES
+
+    def check_borrow_sources(s, f, borrowed_result):
+        message = "a borrowed result needs a from list naming its source parameters"
+        entries = set(f.borrow_from or ())
+        if not borrowed_result or not entries or len(entries) != len(f.borrow_from):
+            s.borrow_signature(f, message)
+        params = {p.name: p for p in f.params}
+        for entry in f.borrow_from:
+            name, *path = entry.split(".")
+            p = params.get(name)
+            if p is None or p.take:
+                s.borrow_signature(f, message)
+            if path:
+                if p.mode or name in entries or not s.lending_field(p.type, path):
+                    s.borrow_signature(f, message)
+            elif p.type not in VIEW_BASES and (p.mode or not s.borrowed_type(p.type)):
+                s.borrow_signature(f, message)
+        inouts = [p.name for p in f.params if p.mode and p.name in entries]
+        for ens in f.ensures:
+            if any(_mentions(ens, name) for name in inouts):
+                s.borrow_signature(ens, "ensures cannot read an inout source of a borrowed result")
 
     def normalize_types(s):
         for d in s.prog.types:
@@ -955,16 +988,7 @@ class Checker:
             f.ref_result = f.ret.name == "ref"
             f.ret = s.norm_type(s.borrow_type_position(f, f.ret, not boundary))
             if borrowed_result or f.borrow_from is not None:
-                params = {p.name: p for p in f.params}
-                if (not borrowed_result or not f.borrow_from or len(set(f.borrow_from)) != len(f.borrow_from)
-                        or any(n not in params or params[n].take
-                               or not (params[n].type in (ARRAY_U8, STR)
-                                       or not params[n].mode and s.borrowed_type(params[n].type))
-                               for n in f.borrow_from)):
-                    s.borrow_signature(f, "a borrowed result needs a from list naming its source parameters")
-                for ens in f.ensures:
-                    if any(params[n].mode and _mentions(ens, n) for n in f.borrow_from):
-                        s.borrow_signature(ens, "ensures cannot read an inout source of a borrowed result")
+                s.check_borrow_sources(f, borrowed_result)
             for e in f.requires + f.ensures:
                 s.norm_expr(e)
             if f.decreases is not None:
@@ -2068,6 +2092,9 @@ class Checker:
         if s.prog.borrow_site is not None or getattr(f, "places", False):
             f.borrowed_roots = set()
             f.borrowed_params = {p.name for p in f.params if s.borrowed_type(p.type)}
+            # Struct parameters whose owned field views also carry the field path, to tell escapes apart.
+            s.path_params = f.borrowed_params | {p.name for p in f.params if not (p.mode or p.take)
+                                                 and isinstance(s.decls.get(p.type.name), StructDecl)}
             s.check_view_block(f.body, {name: ({(name, None): False}, False) for name in f.borrowed_params})
         if f.ret != UNIT and not s.ends_in_return(f.body):
             terr(f, "missing_return", "function %s may reach its end without returning" % f.name,
@@ -3679,8 +3706,22 @@ class Checker:
             f = s.funcs.get(e.name)
             if f is None or not f.borrow_from:
                 s.borrow_signature(e, "a borrowed result source must be a place or a borrowed value")
-            sources = [s.view_provenance(arg, loans, exclusive or bool(p.mode))
-                       for p, arg in zip(f.params, e.args) if p.name in f.borrow_from]
+            sources = []
+            for p, arg in zip(f.params, e.args):
+                lent = [tuple(entry.split(".")[1:]) for entry in f.borrow_from if entry.startswith(p.name + ".")]
+                if lent:
+                    root, path = field_place(arg)
+                    if not isinstance(root, Var):
+                        s.borrow_signature(arg, "a field-lending argument must be a place")
+                    origins, place_binding = loans.get(root.name, ({}, False))
+                    # A place binding denotes its underlying storage; a borrowing root keeps its own loans live,
+                    # since `&'a Doc<'_>` needs the struct's borrows to outlive the lent view.
+                    sources.append(origins)
+                    if not place_binding:
+                        for fields in lent:
+                            sources.append(s.field_view_roots(root.name, path + fields))
+                if p.name in f.borrow_from:
+                    sources.append(s.view_provenance(arg, loans, exclusive or bool(p.mode)))
         elif isinstance(e, FieldAccess) and (e.borrowed_view or s.borrowed_type(e.ty)):
             return s.view_provenance(e.base, loans, exclusive)
         elif isinstance(e, StructLit) and s.borrowed_type(e.ty):
@@ -3695,16 +3736,21 @@ class Checker:
                 origins, place_binding = loans[root.name]
                 if not path or place_binding:
                     return {name: held or exclusive for name, held in origins.items()}
-            if path and root.name in s.f.borrowed_params:
-                # An owned field of a borrowing-struct parameter lives in the caller's record, which the
-                # Rust signature `&Doc<'a>` does not lend to the result.
-                return {(root.name, None): exclusive, (root.name + ".storage", None): exclusive}
+            if path:
+                return s.field_view_roots(root.name, path, exclusive)
             return {(root.name, None): exclusive}
         merged = {}
         for source in sources:
             for name, held in source.items():
                 merged[name] = merged.get(name, False) or held
         return merged
+
+    def field_view_roots(s, name, path, exclusive=False):
+        # The field distinguishes escapes, while the whole record is borrowed for liveness.
+        roots = {(name, None): exclusive}
+        if name in s.path_params:
+            roots[(".".join((name,) + path), None)] = exclusive
+        return roots
 
     @staticmethod
     def view_stmt_items(st):
@@ -3752,7 +3798,11 @@ class Checker:
             return provenance
         elif isinstance(st, Return) and s.f.borrow_from and st.value is not None:
             provenance = s.view_provenance(st.value, loans)
-            if any(root not in s.f.borrow_from for root, _ in provenance):
+            # A bare parameter root is permitted only beside one of its lent field paths.
+            roots = {root for root, _ in provenance}
+            listed = set(s.f.borrow_from)
+            if any(root not in listed and not any(other in listed and other.startswith(root + ".") for other in roots)
+                   for root in roots):
                 terr(st, "borrow_escape", "the result borrows a value outside the from parameters")
 
     def view_graph(s, stmts, incoming, loans, scope, g):
