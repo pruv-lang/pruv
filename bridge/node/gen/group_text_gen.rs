@@ -311,7 +311,7 @@ fn group_bounds__pruv_body(s: &str, ends: &[i64], max: i64) -> ::std::vec::Vec<i
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn group_bounds(s: &str, ends: &[i64], max: i64) -> ::std::vec::Vec<i64> {
     #[cold] #[inline(never)] fn pruv_len_slow(s: usize, ends: usize) -> ! { if (s as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", s) } if (ends as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", ends) } unreachable!() }
     if ((s.len() as u64) > (1u64 << 40)) | ((ends.len() as u64) > (1u64 << 40)) { pruv_len_slow(s.len(), ends.len()) }

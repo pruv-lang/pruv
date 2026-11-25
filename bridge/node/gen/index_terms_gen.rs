@@ -71,7 +71,7 @@ fn index_terms__pruv_body(tok: &[i64], vocab: i64) -> ::std::vec::Vec<i64> {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn index_terms(tok: &[i64], vocab: i64) -> ::std::vec::Vec<i64> {
     #[cold] #[inline(never)] fn pruv_len_slow(tok: usize) -> ! { if (tok as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", tok) } unreachable!() }
     if ((tok.len() as u64) > (1u64 << 40)) { pruv_len_slow(tok.len()) }

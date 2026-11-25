@@ -100,7 +100,6 @@ on:
 
 env:
   PYTHONUTF8: "1"
-  Z3_SOLVER_VERSION: "5.3.3.0"  # same value as ci.yml
 
 concurrency:
   group: node-bridge-${{ github.ref }}
@@ -109,7 +108,8 @@ concurrency:
 jobs:
   regen:
     runs-on: ubuntu-24.04
-    # Builds pruvc-rs and proves every bridge source with both compilers.
+    # Builds pruvc-rs and proves every bridge source with it. The Python compiler pruvc/ is frozen (bundle PF)
+    # and is not used; regen.py is a plain Python 3.9 script with no packages (no z3-solver).
     # The first run builds vendored z3 and links static LLVM (slow); later runs hit the cargo cache.
     timeout-minutes: 75
     steps:
@@ -117,8 +117,6 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.9"
-      - run: python -m pip install -q "z3-solver==${Z3_SOLVER_VERSION}"
-        shell: bash
       # pruvc-rs links LLVM 22 through llvm-sys; same packages as the Linux job of ci.yml.
       - name: Install LLVM 22
         run: |

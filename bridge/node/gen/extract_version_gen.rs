@@ -120,8 +120,8 @@ fn pruv_m_f_1_5_word8__pruv_body(s: &str, at: i64) -> i64 {
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
 #[inline(always)]
 fn pruv_m_f_1_6_kconst__pruv_body(t: i64) -> i64 {
-    let k: ::std::string::String = ::std::string::String::from("428a2f9871374491b5c0fbcfe9b5dba53956c25b59f111f1923f82a4ab1c5ed5d807aa9812835b01243185be550c7dc372be5d7480deb1fe9bdc06a7c19bf174e49b69c1efbe47860fc19dc6240ca1cc2de92c6f4a7484aa5cb0a9dc76f988da983e5152a831c66db00327c8bf597fc7c6e00bf3d5a7914706ca63511429296727b70a852e1b21384d2c6dfc53380d13650a7354766a0abb81c2c92e92722c85a2bfe8a1a81a664bc24b8b70c76c51a3d192e819d6990624f40e3585106aa07019a4c1161e376c082748774c34b0bcb5391c0cb34ed8aa4a5b9cca4f682e6ff3748f82ee78a5636f84c878148cc7020890befffaa4506cebbef9a3f7c67178f2");
-    return pruv_m_f_1_5_word8__pruv_body(&k, (8i64 * t));
+    let k: &'static str = "428a2f9871374491b5c0fbcfe9b5dba53956c25b59f111f1923f82a4ab1c5ed5d807aa9812835b01243185be550c7dc372be5d7480deb1fe9bdc06a7c19bf174e49b69c1efbe47860fc19dc6240ca1cc2de92c6f4a7484aa5cb0a9dc76f988da983e5152a831c66db00327c8bf597fc7c6e00bf3d5a7914706ca63511429296727b70a852e1b21384d2c6dfc53380d13650a7354766a0abb81c2c92e92722c85a2bfe8a1a81a664bc24b8b70c76c51a3d192e819d6990624f40e3585106aa07019a4c1161e376c082748774c34b0bcb5391c0cb34ed8aa4a5b9cca4f682e6ff3748f82ee78a5636f84c878148cc7020890befffaa4506cebbef9a3f7c67178f2";
+    return pruv_m_f_1_5_word8__pruv_body(k, (8i64 * t));
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
@@ -229,13 +229,13 @@ fn pruv_m_f_1_8_msg_byte__pruv_body(s: &str, i: i64, total: i64) -> i64 {
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
 #[inline(always)]
 fn pruv_m_f_1_4_hex8__pruv_body(x: i64) -> ::std::string::String {
-    let hex: ::std::string::String = ::std::string::String::from("0123456789abcdef");
+    let hex: &'static str = "0123456789abcdef";
     let mut o: ::std::string::String = pruv_g6_string_new();
     let mut v: i64 = x;
     let mut k: i64 = 0i64;
     while (k < 8i64) {
         let d: i64 = (v / 268435456i64);
-        o = pruv_g6_string_push_str(o, &{ let pruv_s: &str = &hex; let pruv_lo: i64 = d; let pruv_hi: i64 = (d + 1i64); ::std::string::String::from(unsafe { pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize)) }) });
+        o = pruv_g6_string_push_str(o, &{ let pruv_s: &str = hex; let pruv_lo: i64 = d; let pruv_hi: i64 = (d + 1i64); ::std::string::String::from(unsafe { pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize)) }) });
         v = ((v % 268435456i64) * 16i64);
         k = (k + 1i64);
     }
@@ -312,7 +312,7 @@ fn sha256_hex__pruv_body(s: &str) -> ::std::string::String {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn sha256_hex(s: &str) -> ::std::string::String {
     #[cold] #[inline(never)] fn pruv_len_slow(s: usize) -> ! { if (s as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", s) } unreachable!() }
     if ((s.len() as u64) > (1u64 << 40)) { pruv_len_slow(s.len()) }
@@ -336,7 +336,7 @@ fn extract_version_of__pruv_body(source: &str, kind: &str, variant: &str) -> ::s
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn extract_version_of(source: &str, kind: &str, variant: &str) -> ::std::string::String {
     #[cold] #[inline(never)] fn pruv_len_slow(source: usize, kind: usize, variant: usize) -> ! { if (source as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", source) } if (kind as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", kind) } if (variant as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", variant) } unreachable!() }
     if ((source.len() as u64) > (1u64 << 40)) | ((kind.len() as u64) > (1u64 << 40)) | ((variant.len() as u64) > (1u64 << 40)) { pruv_len_slow(source.len(), kind.len(), variant.len()) }

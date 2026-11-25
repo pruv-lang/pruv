@@ -61,7 +61,7 @@ fn png_step__pruv_body(width: i64, height: i64, max_pixels: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn png_step(width: i64, height: i64, max_pixels: i64) -> i64 {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((((1i128 <= (width as i128)) && (1i128 <= (height as i128))) && ((width as i128) <= 1099511627776i128)) && ((height as i128) <= 1099511627776i128))) { panic!("{}", "pruv: requires violated: crate::png_step: ((((1 <= width) && (1 <= height)) && (width <= 1099511627776)) && (height <= 1099511627776))"); }
@@ -211,7 +211,7 @@ fn png_scanlines__pruv_body(data: &[u8], width: i64, height: i64, kind: i64, max
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn png_scanlines(data: &[u8], width: i64, height: i64, kind: i64, max_pixels: i64) -> ::std::vec::Vec<u8> {
     #[cold] #[inline(never)] fn pruv_len_slow(data: usize) -> ! { if (data as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", data) } unreachable!() }
     if ((data.len() as u64) > (1u64 << 40)) { pruv_len_slow(data.len()) }

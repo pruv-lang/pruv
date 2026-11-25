@@ -10,7 +10,7 @@
 // Domain: 1 <= width, height <= 65535 (the JPEG limit), 1 <= orientation <= 8.
 
 // Big- or little-endian 16-bit value at i.
-fn u16(b: [u8], i: i64, little: i64) -> i64
+fn read_u16(b: [u8], i: i64, little: i64) -> i64
   requires 0 <= i && i + 2 <= len(b)
   ensures 0 <= result && result <= 65535
 {
@@ -19,7 +19,7 @@ fn u16(b: [u8], i: i64, little: i64) -> i64
 }
 
 // Big- or little-endian unsigned 32-bit value at i.
-fn u32(b: [u8], i: i64, little: i64) -> i64
+fn read_u32(b: [u8], i: i64, little: i64) -> i64
   requires 0 <= i && i + 4 <= len(b)
   ensures 0 <= result && result <= 4294967295
 {
@@ -41,10 +41,10 @@ fn orientation_from_tiff(b: [u8], tiff: i64, end: i64) -> i64
   } else {
     return 1;
   }
-  if u16(b, tiff + 2, little) != 42 { return 1; }
-  let ifd: i64 = tiff + u32(b, tiff + 4, little);
+  if read_u16(b, tiff + 2, little) != 42 { return 1; }
+  let ifd: i64 = tiff + read_u32(b, tiff + 4, little);
   if ifd + 2 > end { return 1; }
-  let count: i64 = u16(b, ifd, little);
+  let count: i64 = read_u16(b, ifd, little);
   let mut i: i64 = 0;
   while i < count
     invariant 0 <= i && i <= count
@@ -52,8 +52,8 @@ fn orientation_from_tiff(b: [u8], tiff: i64, end: i64) -> i64
   {
     let entry: i64 = ifd + 2 + i * 12;
     if entry + 12 > end { return 1; }
-    if u16(b, entry, little) == 274 {
-      let value: i64 = u16(b, entry + 8, little);
+    if read_u16(b, entry, little) == 274 {
+      let value: i64 = read_u16(b, entry + 8, little);
       if value >= 1 && value <= 8 { return value; }
       return 1;
     }

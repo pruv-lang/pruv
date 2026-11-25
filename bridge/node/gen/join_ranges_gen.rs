@@ -194,7 +194,7 @@ fn join_ranges__pruv_body(text: &str, ends: &[i64]) -> ::std::string::String {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn join_ranges(text: &str, ends: &[i64]) -> ::std::string::String {
     #[cold] #[inline(never)] fn pruv_len_slow(text: usize, ends: usize) -> ! { if (text as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", text) } if (ends as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", ends) } unreachable!() }
     if ((text.len() as u64) > (1u64 << 40)) | ((ends.len() as u64) > (1u64 << 40)) { pruv_len_slow(text.len(), ends.len()) }

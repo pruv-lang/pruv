@@ -105,7 +105,7 @@ fn extension_at__pruv_body(name: &str) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn extension_at(name: &str) -> i64 {
     #[cold] #[inline(never)] fn pruv_len_slow(name: usize) -> ! { if (name as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", name) } unreachable!() }
     if ((name.len() as u64) > (1u64 << 40)) { pruv_len_slow(name.len()) }
@@ -217,7 +217,7 @@ fn kind_of__pruv_body(name: &str) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn kind_of(name: &str) -> i64 {
     #[cold] #[inline(never)] fn pruv_len_slow(name: usize) -> ! { if (name as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", name) } unreachable!() }
     if ((name.len() as u64) > (1u64 << 40)) { pruv_len_slow(name.len()) }

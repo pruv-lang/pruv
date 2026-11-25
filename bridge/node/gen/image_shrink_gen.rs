@@ -47,7 +47,7 @@ fn pruv_cidx_u8(a: &[u8], i: i128) -> i128 { if i >= 0 && i < (a.len() as i128) 
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
 #[inline(always)]
-fn pruv_m_f_1_3_u16__pruv_body(b: &[u8], i: i64, little: i64) -> i64 {
+fn pruv_m_f_1_8_read_u16__pruv_body(b: &[u8], i: i64, little: i64) -> i64 {
     if (little == 1i64) {
         return (((unsafe { *b.get_unchecked((i) as usize) }) as i64) + (256i64 * ((unsafe { *b.get_unchecked(((i + 1i64)) as usize) }) as i64)));
     }
@@ -56,7 +56,7 @@ fn pruv_m_f_1_3_u16__pruv_body(b: &[u8], i: i64, little: i64) -> i64 {
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
 #[inline(always)]
-fn pruv_m_f_1_3_u32__pruv_body(b: &[u8], i: i64, little: i64) -> i64 {
+fn pruv_m_f_1_8_read_u32__pruv_body(b: &[u8], i: i64, little: i64) -> i64 {
     if (little == 1i64) {
         return (((((unsafe { *b.get_unchecked((i) as usize) }) as i64) + (256i64 * ((unsafe { *b.get_unchecked(((i + 1i64)) as usize) }) as i64))) + (65536i64 * ((unsafe { *b.get_unchecked(((i + 2i64)) as usize) }) as i64))) + (16777216i64 * ((unsafe { *b.get_unchecked(((i + 3i64)) as usize) }) as i64)));
     }
@@ -79,22 +79,22 @@ fn pruv_m_f_1_21_orientation_from_tiff__pruv_body(b: &[u8], tiff: i64, end: i64)
             return 1i64;
         }
     }
-    if (pruv_m_f_1_3_u16__pruv_body(b, (tiff + 2i64), little) != 42i64) {
+    if (pruv_m_f_1_8_read_u16__pruv_body(b, (tiff + 2i64), little) != 42i64) {
         return 1i64;
     }
-    let ifd: i64 = (tiff + pruv_m_f_1_3_u32__pruv_body(b, (tiff + 4i64), little));
+    let ifd: i64 = (tiff + pruv_m_f_1_8_read_u32__pruv_body(b, (tiff + 4i64), little));
     if ((ifd + 2i64) > end) {
         return 1i64;
     }
-    let count: i64 = pruv_m_f_1_3_u16__pruv_body(b, ifd, little);
+    let count: i64 = pruv_m_f_1_8_read_u16__pruv_body(b, ifd, little);
     let mut i: i64 = 0i64;
     while (i < count) {
         let entry: i64 = ((ifd + 2i64) + (i * 12i64));
         if ((entry + 12i64) > end) {
             return 1i64;
         }
-        if (pruv_m_f_1_3_u16__pruv_body(b, entry, little) == 274i64) {
-            let value: i64 = pruv_m_f_1_3_u16__pruv_body(b, (entry + 8i64), little);
+        if (pruv_m_f_1_8_read_u16__pruv_body(b, entry, little) == 274i64) {
+            let value: i64 = pruv_m_f_1_8_read_u16__pruv_body(b, (entry + 8i64), little);
             if ((value >= 1i64) && (value <= 8i64)) {
                 return value;
             }
@@ -142,7 +142,7 @@ fn jpeg_orientation__pruv_body(b: &[u8]) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn jpeg_orientation(b: &[u8]) -> i64 {
     #[cold] #[inline(never)] fn pruv_len_slow(b: usize) -> ! { if (b as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", b) } unreachable!() }
     if ((b.len() as u64) > (1u64 << 40)) { pruv_len_slow(b.len()) }
@@ -183,7 +183,7 @@ fn shrink_width__pruv_body(width: i64, height: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn shrink_width(width: i64, height: i64) -> i64 {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((((1i128 <= (width as i128)) && ((width as i128) <= 65535i128)) && (1i128 <= (height as i128))) && ((height as i128) <= 65535i128))) { panic!("{}", "pruv: requires violated: crate::shrink_width: ((((1 <= width) && (width <= 65535)) && (1 <= height)) && (height <= 65535))"); }
@@ -197,7 +197,7 @@ fn shrink_height__pruv_body(width: i64, height: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn shrink_height(width: i64, height: i64) -> i64 {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((((1i128 <= (width as i128)) && ((width as i128) <= 65535i128)) && (1i128 <= (height as i128))) && ((height as i128) <= 65535i128))) { panic!("{}", "pruv: requires violated: crate::shrink_height: ((((1 <= width) && (width <= 65535)) && (1 <= height)) && (height <= 65535))"); }
@@ -364,7 +364,7 @@ fn shrink_pixels__pruv_body(data: &[u8], width: i64, height: i64, orientation: i
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn shrink_pixels(data: &[u8], width: i64, height: i64, orientation: i64) -> ::std::vec::Vec<u8> {
     #[cold] #[inline(never)] fn pruv_len_slow(data: usize) -> ! { if (data as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", data) } unreachable!() }
     if ((data.len() as u64) > (1u64 << 40)) { pruv_len_slow(data.len()) }

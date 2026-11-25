@@ -266,7 +266,7 @@ fn tokenize__pruv_body(s: &str) -> ::std::vec::Vec<i64> {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn tokenize(s: &str) -> ::std::vec::Vec<i64> {
     #[cold] #[inline(never)] fn pruv_len_slow(s: usize) -> ! { if (s as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", s) } unreachable!() }
     if ((s.len() as u64) > (1u64 << 40)) { pruv_len_slow(s.len()) }

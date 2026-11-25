@@ -130,7 +130,7 @@ fn emit__pruv_body(skip: bool, c: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn emit(skip: bool, c: i64) -> i64 {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((0i128 <= (c as i128)) && ((c as i128) <= 256i128))) { panic!("{}", "pruv: requires violated: emit: ((0 <= c) && (c <= 256))"); }
@@ -199,7 +199,7 @@ fn trans__pruv_body(st: i64, c: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn trans(st: i64, c: i64) -> i64 {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((((0i128 <= (st as i128)) && ((st as i128) < 12i128)) && (0i128 <= (c as i128))) && ((c as i128) <= 256i128))) { panic!("{}", "pruv: requires violated: trans: ((((0 <= st) && (st < 12)) && (0 <= c)) && (c <= 256))"); }
@@ -222,7 +222,7 @@ fn class__pruv_body(s: &str, i: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn class(s: &str, i: i64) -> i64 {
     #[cold] #[inline(never)] fn pruv_len_slow(s: usize) -> ! { if (s as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", s) } unreachable!() }
     if ((s.len() as u64) > (1u64 << 40)) { pruv_len_slow(s.len()) }
@@ -242,7 +242,7 @@ fn next__pruv_body(s: &str, i: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn next(s: &str, i: i64) -> i64 {
     #[cold] #[inline(never)] fn pruv_len_slow(s: usize) -> ! { if (s as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", s) } unreachable!() }
     if ((s.len() as u64) > (1u64 << 40)) { pruv_len_slow(s.len()) }
@@ -275,7 +275,7 @@ fn term_plain__pruv_body(state: i64, data: &str) -> ::std::string::String {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn term_plain(state: i64, data: &str) -> ::std::string::String {
     #[cold] #[inline(never)] fn pruv_len_slow(data: usize) -> ! { if (data as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", data) } unreachable!() }
     if ((data.len() as u64) > (1u64 << 40)) { pruv_len_slow(data.len()) }
@@ -298,7 +298,7 @@ fn term_state__pruv_body(state: i64, data: &str) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn term_state(state: i64, data: &str) -> i64 {
     #[cold] #[inline(never)] fn pruv_len_slow(data: usize) -> ! { if (data as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", data) } unreachable!() }
     if ((data.len() as u64) > (1u64 << 40)) { pruv_len_slow(data.len()) }

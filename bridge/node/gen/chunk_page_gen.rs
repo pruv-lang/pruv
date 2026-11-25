@@ -242,7 +242,7 @@ fn chunk_page__pruv_body(page: i64, s: &str, max: i64) -> ::std::vec::Vec<i64> {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn chunk_page(page: i64, s: &str, max: i64) -> ::std::vec::Vec<i64> {
     #[cold] #[inline(never)] fn pruv_len_slow(s: usize) -> ! { if (s as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", s) } unreachable!() }
     if ((s.len() as u64) > (1u64 << 40)) { pruv_len_slow(s.len()) }
@@ -263,7 +263,7 @@ fn chunk_image__pruv_body(s: &str, max: i64) -> ::std::vec::Vec<i64> {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn chunk_image(s: &str, max: i64) -> ::std::vec::Vec<i64> {
     #[cold] #[inline(never)] fn pruv_len_slow(s: usize) -> ! { if (s as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", s) } unreachable!() }
     if ((s.len() as u64) > (1u64 << 40)) { pruv_len_slow(s.len()) }

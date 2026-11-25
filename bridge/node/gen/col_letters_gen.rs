@@ -106,9 +106,9 @@ fn col_letters__pruv_body(col: i64) -> ::std::string::String {
         return ::std::string::String::from("");
     }
     let prefix: ::std::string::String = col_letters__pruv_body(((col - 1i64) / 26i64));
-    let alphabet: ::std::string::String = ::std::string::String::from("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    let alphabet: &'static str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let digit: i64 = ((col - 1i64) % 26i64);
-    let letter: ::std::string::String = { let pruv_s: &str = &alphabet; let pruv_lo: i64 = digit; let pruv_hi: i64 = (digit + 1i64); ::std::string::String::from(unsafe { pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize)) }) };
+    let letter: ::std::string::String = { let pruv_s: &str = alphabet; let pruv_lo: i64 = digit; let pruv_hi: i64 = (digit + 1i64); ::std::string::String::from(unsafe { pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize)) }) };
     let mut out: ::std::string::String = pruv_g6_string_new();
     out = pruv_g6_string_push_str(out, &prefix);
     out = pruv_g6_string_push_str(out, &letter);

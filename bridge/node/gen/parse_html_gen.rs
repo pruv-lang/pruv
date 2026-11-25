@@ -348,7 +348,7 @@ fn pruv_m_f_1_3_set(out: &mut [i64], at: i64, v: i64) {
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
 #[inline(always)]
 fn pruv_m_f_1_11_decode_into__pruv_body(s: &str, a: i64, b: i64, out: &mut [i64], p: i64) -> i64 {
-    let ctor: ::std::string::String = ::std::string::String::from("function Object() { [native code] }");
+    let ctor: &'static str = "function Object() { [native code] }";
     let mut i: i64 = a;
     let mut q: i64 = p;
     while (i < b) {
@@ -490,6 +490,7 @@ fn pruv_m_f_1_10_last_solid__pruv_body(s: &str, w: i64, r: i64) -> i64 {
             k = (k + l);
             if (k > r) {
                 k = r;
+                break;
             }
         } else {
             k = (k + pruv_m_f_1_4_clen__pruv_body(s, k, r));
@@ -780,7 +781,7 @@ fn parse_html__pruv_body(s: &str) -> ::std::vec::Vec<i64> {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn parse_html(s: &str) -> ::std::vec::Vec<i64> {
     #[cold] #[inline(never)] fn pruv_len_slow(s: usize) -> ! { if (s as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", s) } unreachable!() }
     if ((s.len() as u64) > (1u64 << 40)) { pruv_len_slow(s.len()) }

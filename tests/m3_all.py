@@ -9,7 +9,7 @@ Usage:
     python tests/m3_all.py [--only NAME[,NAME]] [--skip NAME[,NAME]] [--quick]
                            [--rs-dir DIR] [--log-dir DIR] [--timeout SEC] [--vs-py] [--update-golden]
 
-Stages (in order): parse, check, trace, trace_infer, llvm, rust, compilers, standalone, abi, abi_v2, abi_bool, abi_utf8
+Stages (in order): parse, check, trace, trace_infer, llvm, rust, compilers, input_replay, standalone, abi, abi_v2, abi_bool, abi_utf8
   parse      tests/diff_parse.py --mode parse   (pruv-parse-dump; golden)
   check      tests/diff_parse.py --mode check   (pruv-check-dump; golden)
   trace      tests/diff_trace.py                (pruv-trace-dump; golden)
@@ -17,6 +17,7 @@ Stages (in order): parse, check, trace, trace_infer, llvm, rust, compilers, stan
   llvm       tests/diff_llvm.py                 (pruv-llvm-dump; golden)
   rust       tests/diff_rust.py                 (pruv-rust-dump; golden)
   compilers  tests/diff_compilers.py --b rs --backend both (pruvc; golden)
+  input_replay tests/check_input_replay.py      (pruvc; multi-file --input save + replay self-test, PF-3; no golden)
   standalone tests/standalone/run.py            (pruvc; golden)
   abi        tests/abi/check_generated.py       (pruvc)
   abi_v2     tests/abi/check_runtime_v2.py      (pruvc; runtime v2 link: 6 success/failure cases)
@@ -63,6 +64,7 @@ STAGES = [
     ("llvm", "tests/diff_llvm.py", "pruv-llvm-dump", "--rs-path", [], ["--fuzz-count", "20"]),
     ("rust", "tests/diff_rust.py", "pruv-rust-dump", "--rs-path", [], ["--fuzz-count", "20"]),
     ("compilers", "tests/diff_compilers.py", "pruvc", "--b-path", ["--b", "rs", "--backend", "both"], []),
+    ("input_replay", "tests/check_input_replay.py", "pruvc", "--b-path", [], []),
     ("standalone", "tests/standalone/run.py", "pruvc", "--rs-path", [], []),
     ("abi", "tests/abi/check_generated.py", "pruvc", "--pruvc", [], []),
     ("abi_v2", "tests/abi/check_runtime_v2.py", "pruvc", "--pruvc", [], []),

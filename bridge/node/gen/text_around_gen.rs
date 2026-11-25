@@ -206,7 +206,7 @@ fn around_plan__pruv_body(buf: &[u8], target: i64, before: i64, after: i64, max_
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn around_plan(buf: &[u8], target: i64, before: i64, after: i64, max_bytes: i64) -> ::std::vec::Vec<i64> {
     #[cold] #[inline(never)] fn pruv_len_slow(buf: usize) -> ! { if (buf as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", buf) } unreachable!() }
     if ((buf.len() as u64) > (1u64 << 40)) { pruv_len_slow(buf.len()) }
