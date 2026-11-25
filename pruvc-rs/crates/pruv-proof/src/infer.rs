@@ -28,10 +28,13 @@ use crate::sys::Z3;
 /// INFER_CONFIG
 pub const MAX_CANDIDATES: usize = 64; // per loop, after sorting and dedup (the truncated count is `capped`)
 pub const MAX_QUERIES: usize = 512; // per function, all solver attempts (a lemma retry counts as 1)
+// CI-1: the z3 resource limit decides each query and MAX_QUERIES decides each function, so the inference result does
+// not depend on machine load. The two wall-clock limits are safety nets only, set far above what any test needs
+// (an rlimit-bounded query takes well under 1 s; tests/inference/inf_budget.pruv, the 1024-query case, under 3 s).
 pub const RLIMIT: u32 = 100000;
-pub const TIMEOUT_MS: u32 = 500;
+pub const TIMEOUT_MS: u32 = 10000; // per-query wall clock (safety net)
 pub const SEED: u32 = 0;
-pub const MAX_SECONDS: u64 = 5; // per-function wall clock
+pub const MAX_SECONDS: u64 = 60; // per-function wall clock (safety net)
 
 const I64_MAX: i128 = pruv_core::intwidth::I64.max;
 

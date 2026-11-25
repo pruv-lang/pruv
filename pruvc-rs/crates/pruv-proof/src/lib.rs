@@ -125,8 +125,10 @@ pub fn verify_program_opts(
                     col: f.col,
                     code: "inference_timeout".to_string(),
                     message: format!(
-                        "invariant inference for {} hit the time safety limit (5 s per function, 500 ms per query)",
-                        f.name
+                        "invariant inference for {} hit the time safety limit ({} s per function, {} ms per query)",
+                        f.name,
+                        infer::MAX_SECONDS,
+                        infer::TIMEOUT_MS
                     ),
                     fix: "write the loop invariants explicitly, or compile without --infer".to_string(),
                     counterexample: None,
