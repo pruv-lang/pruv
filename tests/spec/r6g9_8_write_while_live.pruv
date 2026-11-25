@@ -1,0 +1,16 @@
+// spec: R-6g9-8 reject
+// The wrapper borrows the tape: writing it before the payload's last use is a conflict.
+struct Document { source: ref [u8], tape: [i64] }
+fn value(doc: Document, id: i64) -> Result<ref [i64]> from(doc.tape)
+  requires 0 <= id && id <= 1000
+{
+  if 2 * id + 2 > len(doc.tape) { return Err::<ref [i64]>(id); }
+  return Ok::<ref [i64]>(subview(doc.tape, 2 * id, 2 * id + 2));
+}
+fn f(src: [u8]) -> i64 ! alloc {
+  let t: [i64] = alloc(8, 1);
+  let mut d: Document = Document { source: src, tape: move t };
+  let r: Result<ref [i64]> = value(d, 1);
+  d.tape[2] = 5;
+  match r { Ok(v) => { return v[0]; } Err(e) => { return e; } }
+}

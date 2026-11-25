@@ -1,0 +1,4 @@
+// spec: R-6g9-8 reject
+// Only `Result<ref [T]>` with the i64 error code carries a view (hand `Result<&[i64], i64>`).
+struct E { code: i64 }
+fn head(s: [u8]) -> Result<ref [u8], E> from(s) { return Ok::<ref [u8], E>(s); }

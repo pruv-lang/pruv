@@ -4,7 +4,7 @@ import z3
 import proof_cache
 from vast import *
 from typeinfo import (TypeTable, is_array, array_elem, array_of, bind_args, substitute, decl_owner, format_type,
-                      is_collection, field_place)
+                      is_collection, field_place, view_base, view_payload)
 from foreign import CATALOG, CATALOG_NAMES, FILE, FILE_OBSERVERS, PROCESS, PROCESS_ARGS, SOCKET, LISTENER, LOOP, MUTABLE_COLLECTION_MATCH
 from refine import _stmt_inout
 from check import array_resize_params
@@ -462,6 +462,7 @@ class Model:
 
     def field_get(s, fty, term, name="field"):
         """adapt a stored field value to the verifier's own model: a buffer field becomes an Arr"""
+        fty = view_base(fty) or fty
         if fty.name == "hashmap" and fty.owner is None:
             _, _, d, a, n = s.map_fields(fty)
             return Map(d(term), a(term), n(term), name, *fty.args)
@@ -473,6 +474,7 @@ class Model:
 
     def field_put(s, fty, val):
         """inverse of field_get: an Arr stored into a buffer field becomes a Buf value"""
+        fty = view_base(fty) or fty
         if isinstance(val, Map):
             return s.map_fields(fty)[1](val.d, val.a, val.n)
         if not (s.is_buf(fty) and isinstance(val, Arr)):
@@ -628,6 +630,7 @@ class Model:
         return ty.owner is None and ty.name in s.tt.decls
 
     def sort_of(s, ty):
+        ty = view_base(ty) or ty
         if ty == I64:
             return z3.IntSort()
         if ty == BOOL:
@@ -666,7 +669,7 @@ class Model:
         r = cache.get(ty)
         if r is not None:
             return r
-        if ty == I64 or ty == OPTION or ty == RESULT or ty == _STRING:
+        if ty == I64 or ty == OPTION or ty == RESULT or ty == _STRING or view_base(ty) is not None:
             r = False
         elif ty.owner is not None:
             r = True
@@ -1215,6 +1218,8 @@ def _wf_of(m, ty, v):
     """well_formed(ty, v): every active leaf is an i64. None when trivially true. m: the Model.
     G9 A1: a recursive nominal type is the application of its wf_D definition; a buffer field (v is an Arr
     adapted by Model.field_get) has 0 <= len <= 2^40 and, for u8/str, the byte domain."""
+    if (base := view_base(ty)) is not None:
+        return _wf_of(m, base, m.field_get(ty, v))
     if ty == I64:
         return in_range(v)
     if isinstance(v, Arr) and m.is_buf(ty):
@@ -2078,6 +2083,8 @@ class FnVerifier:
             if e.arg is None:       # LB8 R-6g7-1: Ok::<(), E>(())
                 return s.model.res(cty).ok()
             v = s.ev(e.arg, st, g, code, env)
+            if e.name in ("Some", "Ok") and view_payload(cty) is not None:
+                v = s.model.field_put(cty.args[0], v)
             if e.name == "Some":
                 return s.model.opt(cty).some(v)
             o = s.model.res(cty)
@@ -2671,13 +2678,24 @@ class FnVerifier:
         if n == "print":
             return None
         if n in ("is_some", "some_val"):
-            o = s.model.opt(s.model.type_of(args[0]))     # G3: the datatype of the argument's own sort
-            return o.is_some(args[0]) if n == "is_some" else o.sval(args[0])
+            ty = s.model.type_of(args[0])
+            o = s.model.opt(ty)
+            if n == "is_some":
+                return o.is_some(args[0])
+            v = o.sval(args[0])
+            if (base := view_payload(ty)) is not None:
+                v = s.model.field_get(base, v, n)
+                if base == STR:
+                    s.assume_str(st, list(g) + [o.is_some(args[0])], v)
+            return v
         if n in ("is_ok", "ok_val", "err_val"):
             ty = s.model.type_of(args[0])
             o = s.model.res(ty)
             if n == "err_val" and result_error(ty) == _STRING:
                 return s.model.field_get(_STRING, o.eval(args[0]), "err_val")
+            if n == "ok_val" and (base := view_payload(ty)) is not None:
+                v = s.model.field_get(base, o.oval(args[0]), n)
+                return s.assume_str(st, list(g) + [o.is_ok(args[0])], v) if base == STR else v
             return o.is_ok(args[0]) if n == "is_ok" else o.oval(args[0]) if n == "ok_val" else o.eval(args[0])
         f = s.funcs[n]
         if f.opaque and not code:   # P13o: a contract application of an opaque function is its symbol
@@ -3877,7 +3895,12 @@ class FnVerifier:
                     ftys = [result_error(sty) if a.ctor == "Err" else payload] * len(vals)
                 b = st.fork(cond)
                 for name, val, fty in zip(a.binders, vals, ftys):
-                    if s.model.g9:       # G9 A1: buffer payloads become Arr views; nominal payloads are observed
+                    if (base := view_base(fty)) is not None:
+                        fty = base
+                        val = s.model.field_get(fty, val, name)
+                        if fty == STR:
+                            s.assume_str(b, [], val)
+                    elif s.model.g9:       # G9 A1: buffer payloads become Arr views; nominal payloads are observed
                         val = s.model.field_get(fty, val, name)
                         s.observe(b, val, fty)
                     elif fty == _STRING and a.ctor == "Err":

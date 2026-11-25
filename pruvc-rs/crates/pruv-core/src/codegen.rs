@@ -1383,6 +1383,7 @@ struct Gen<'a> {
     /// P3-S1: local arrays that live on the stack
     stack: crate::stack::StackPlan,
     function_name: String,
+    view_wrappers: bool,
     budget: u64,
     verified: bool,
     /// LG35: the str_from_utf8 call whose bytes the enclosing `if` checked (utf8_checked)
@@ -1567,6 +1568,7 @@ impl<'a> Gen<'a> {
             small_elem: "i64",
             fp: HashMap::new(),
             function_name: String::new(),
+            view_wrappers: false,
             prog,
             explicit,
             raw: if explicit { prog.raw_entries.clone() } else { None },
@@ -2051,6 +2053,7 @@ impl<'a> Gen<'a> {
 
     fn func(&mut self, f: &Function) -> R<()> {
         self.function_name = f.name.clone();
+        self.view_wrappers = crate::borrowed::uses_view_wrappers(f);
         // G4b-2: the package of the function being emitted (identity `@NAME::...` = package NAME, else the program package)
         if let Some(fg) = self.fg.as_mut() {
             fg.cur_pkg = match &self.prog.explicit {
@@ -2140,7 +2143,10 @@ impl<'a> Gen<'a> {
             })
             .collect::<Vec<_>>().join(", ");
         let lifetime = if f.borrow_from.is_some() { "<'a>" } else { "" };
-        let ret = if f.borrowed_result {
+        let result = GType::from_key(&f.ret);
+        let ret = if let Some(base) = result.view_payload() {
+            format!(" -> {}", crate::emit_common::view_wrapper_rty(&result, base, "'a "))
+        } else if f.borrowed_result {
             format!(" -> &'a {}", &rty(&f.ret, true)[1..])
         } else if f.borrow_from.is_some() {
             format!(" -> {}<'a>", f.ret)
@@ -2607,6 +2613,9 @@ impl<'a> Gen<'a> {
                 Ok(if x.ty.as_deref() == Some("array_u8") { format!("({literal}).as_bytes()") } else { literal })
             }
             Expr::Call(x) if x.name == "err_val" && x.ty.as_deref() == Some("string") => self.c(e),
+            Expr::Call(x) if matches!(x.name.as_str(), "some_val" | "ok_val")
+                && x.args.first().and_then(|arg| expr_ty(arg).as_deref())
+                    .is_some_and(crate::borrowed::is_view_wrapper) => self.c(e),
             // G9: a buffer field of a real (extended) value
             Expr::FieldAccess(_) | Expr::VariantField(_) if self.g9 => self.cx(e),
             other => Err(format!("codegen: unsupported array expression in contract: {:?}", other)),
@@ -2974,6 +2983,7 @@ impl<'a> Gen<'a> {
                     }
                     let a = match &x.arg {
                         Some(a) if x.name == "Err" && g.has_string_error() => format!("{}.clone()", self.c(a)?),
+                        Some(a) if x.name != "Err" && g.view_payload().is_some() => self.carr(a)?,
                         Some(a) => self.c(a)?,
                         None if x.name == "Ok" => "()".to_string(),
                         None => return Err("codegen: unsupported expression in requires: None".to_string()),
@@ -3774,6 +3784,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
     /// reference (parameter / payload view) and not the scrutinee of an enclosing match arm moves.
     fn return_movable(&self, e: Option<&Expr>) -> HashSet<String> {
         let mut out = HashSet::new();
+        if self.view_wrappers {
+            return out;
+        }
         let e = match e {
             Some(e) => e,
             None => return out,
@@ -3898,7 +3911,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
     /// a let / assignment whose value is copy(v) of an owned local v at its last use moves v (see dead_after)
     fn last_copy(&self, target: &str, e: &Expr) -> HashSet<String> {
         let mut out = HashSet::new();
-        if !self.cost {
+        if !self.cost && !self.view_wrappers {
             if let Expr::Call(c) = e {
                 if c.name == "truncate" && c.args.len() == 2 {
                     if let Expr::Var(v) = &c.args[0] {
@@ -4051,8 +4064,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
             return false;
         }
         let Some(binder) = ok.binders.first() else { return true };
+        let view_payload = expr_ty(&x.scrutinee).as_deref().is_some_and(crate::borrowed::is_view_wrapper);
         let value = match ok.body.first() {
-            Some(Stmt::Let(l)) if l.borrowed || self.stack.contains(l) => return false,
+            Some(Stmt::Let(l)) if (l.borrowed && !view_payload) || self.stack.contains(l) => return false,
             Some(Stmt::Let(l)) => &l.value,
             Some(Stmt::Assign(a)) => &a.value,
             _ => return false,
@@ -4081,7 +4095,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
         // that local's last use, so it is matched by value and payloads bind as owned values a return or copy moves.
         let mut consume = match &x.scrutinee {
             // G-DB16-1: an arm that moves an array binder consumes the scrutinee, also under cost metering
-            Expr::Var(v) => match_moves_binder(x) || (!self.cost && self.dead_after(&v.name)),
+            Expr::Var(v) => match_moves_binder(x) || (!self.cost && !self.view_wrappers && self.dead_after(&v.name)),
             _ => false,
         };
         if consume {
@@ -4283,7 +4297,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
             }
             Stmt::Let(x) => {
                 self.moving = self.last_copy(&x.name, &x.value);
-                let v = if x.borrowed { self.borrowed_value(&x.value) } else { self.own_e(&x.value) };
+                let v = if x.borrowed && !crate::borrowed::is_view_wrapper(&x.ty) {
+                    self.borrowed_value(&x.value)
+                } else { self.own_e(&x.value) };
                 self.moving.clear();
                 let v = v?;
                 let mut binding = format!("{}{}", if x.mutable { "mut " } else { "" }, x.name);
@@ -4293,7 +4309,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 }
                 self.emit(ind, &format!("let {binding} = {v};"));
                 self.vars.insert(x.name.clone(), x.ty.clone());
-                if x.borrowed {
+                if x.borrowed && !crate::borrowed::is_view_wrapper(&x.ty) {
                     self.refs.insert(x.name.clone());
                 } else {
                     self.refs.remove(&x.name);
@@ -4567,8 +4583,8 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 self.try_stmt(x, ind)?;
             }
             Stmt::Match(x) => {
-                let owned_result = expr_ty(&x.scrutinee).as_deref()
-                    .is_some_and(|t| GType::from_key(t).has_string_error());
+                let scrutinee_ty = expr_ty(&x.scrutinee).as_deref().map(GType::from_key);
+                let owned_result = scrutinee_ty.as_ref().is_some_and(GType::has_string_error);
                 let s = self.e(&x.scrutinee)?;
                 self.emit(ind, &format!("match {} {{", s));
                 for a in &x.arms {
@@ -4582,7 +4598,15 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     if let Some(binder) = string_error {
                         self.string_error_binders.insert(binder.clone());
                     }
+                    let view_binder = a.binders.first().filter(|_| matches!(a.ctor.as_str(), "Some" | "Ok")
+                        && scrutinee_ty.as_ref().and_then(GType::view_payload).is_some());
+                    if let Some(binder) = view_binder {
+                        self.refs.insert(binder.clone());
+                    }
                     self.block(&a.body, ind + 2)?;
+                    if let Some(binder) = view_binder {
+                        self.refs.remove(binder);
+                    }
                     if let Some(binder) = string_error {
                         self.string_error_binders.remove(binder);
                     }
@@ -4718,12 +4742,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
     }
 
     fn returns_view(&self) -> bool {
-        self.fmap.get(&self.function_name).is_some_and(|f| f.borrowed_result)
+        self.fmap.get(&self.function_name).is_some_and(|f| f.borrowed_result && crate::borrowed::is_view_base(&f.ret))
     }
 
     fn is_ref_value(&self, e: &Expr) -> bool {
         match e {
-            Expr::Call(x) => self.fmap.get(&x.name).is_some_and(|f| f.borrowed_result),
+            Expr::Call(x) => self.fmap.get(&x.name).is_some_and(|f| f.borrowed_result && crate::borrowed::is_view_base(&f.ret)),
             Expr::FieldAccess(x) => expr_ty(&x.base).as_deref()
                 .and_then(|name| self.table.fields(name, None))
                 .is_some_and(|fields| fields.iter().any(|f| f.name == x.field && f.borrowed)),
@@ -4755,8 +4779,8 @@ pruv_hi <= (pruv_b.len() as i128) && \
             }
         }
         if let Expr::Var(x) = e {
-            if self.refs.contains(&x.name) {
-                return Ok(x.name.clone()); // G9: a buffer payload view is already a reference
+            if self.refs.contains(&x.name) || self.try_values.contains_key(&x.name) {
+                return self.e(e); // A buffer payload view is already a reference
             }
             if self.inouts.contains(&x.name) {
                 return Ok(format!("&*{}", x.name)); // G5: a shared reborrow of an inout parameter
@@ -5199,6 +5223,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         return Ok(format!("None::<{}>", rx));
                     }
                     let a = match &x.arg {
+                        Some(a) if x.name != "Err" && g.view_payload().is_some() => self.borrowed_value(a)?,
                         Some(a) => self.e(a)?,
                         // R-6g7-1: Ok(()) of a Result<(), E>
                         None if x.name == "Ok" => "()".to_string(),

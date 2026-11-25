@@ -663,6 +663,10 @@ pub fn g_arg(t: &str) -> &str {
     g_args(t).0
 }
 
+fn view_base(t: &str) -> Option<&str> {
+    t.strip_prefix("@ref<")?.strip_suffix('>').filter(|base| crate::borrowed::is_view_base(base))
+}
+
 pub fn g_error(t: &str) -> &str {
     g_args(t).1
 }
@@ -840,6 +844,9 @@ fn g9_pair(g: &mut FnGen, gp: &str) -> R<(String, String)> {
 
 /// Storage type of a value inside an aggregate (c: contract/i128 form)
 pub fn st(t: &str, c: bool) -> String {
+    if view_base(t).is_some() {
+        return VIEW.to_string();
+    }
     if native_vec_elem(t).is_some() {
         return ARR.to_string();
     }
@@ -1030,7 +1037,7 @@ pub fn has_take_array(f: &Function) -> bool {
 /// Legacy functions with extended, inout, or take-array parameters use only internal entry points.
 /// R-6g9-1: a borrowed result (a { ptr, i64 } view the host would read as an owned array) is internal too
 pub fn is_internal_fn(f: &Function, tt: &TypeTable) -> bool {
-    has_ext_sig(f, tt) || has_inout(f) || has_take_array(f) || view_ret(f)
+    has_ext_sig(f, tt) || has_inout(f) || has_take_array(f) || f.borrowed_result
 }
 
 /// An extended (G9) type in the signature (separate from the inout rule: an explicit host entry may have inout params)
@@ -1653,7 +1660,7 @@ impl<'a> FnGen<'a> {
             nt: 0,
             nl: 0,
             nslot: 0,
-            views: false,
+            views: crate::borrowed::uses_view_wrappers(f),
             nq: 0,
             cur: "None".to_string(),
             dead: false,
@@ -2906,6 +2913,9 @@ impl<'a> FnGen<'a> {
     // ---------- user aggregates (G1) ----------
     /// SSA of the storage type st(ty, c) of value v
     pub fn pack(&mut self, v: &V, ty: &str, c: bool) -> R<String> {
+        if view_base(ty).is_some() {
+            return self.pack_view(v);
+        }
         if ty == "option" || ty == "result" {
             let (ot, pt) = if c { (COPT, "i128") } else { (OPT, "i64") };
             let a = self.op(format!("insertvalue {} undef, i1 {}, 0", ot, v.a))?;
@@ -2934,6 +2944,9 @@ impl<'a> FnGen<'a> {
     }
 
     pub fn unpack(&mut self, x: &str, ty: &str, c: bool) -> R<V> {
+        if let Some(base) = view_base(ty) {
+            return self.unpack_view(x, base);
+        }
         if is_collection(ty) {
             return Ok(V { ty: Some(ty.to_string()), ..V::new(Kind::Coll, x) });
         }
@@ -3116,6 +3129,9 @@ impl<'a> FnGen<'a> {
 
     /// Code value -> contract value (i64 leaves are sign-extended; for an enum only the active variant is converted)
     pub fn to_c(&mut self, x: &V, ty: &str) -> R<V> {
+        if view_base(ty).is_some() {
+            return Ok(x.clone());
+        }
         let tt = self.tt;
         match ty {
             "i64" => {
@@ -8512,7 +8528,7 @@ pub fn is_host_abi_fn(f: &Function, tt: &TypeTable, explicit: bool, host: bool) 
         && !is_coll_fn(f)
         && !has_ext_sig(f, tt)
         && !has_take_array(f)
-        && !view_ret(f) // R-6g9-1: a borrowed result never crosses the host boundary
+        && !f.borrowed_result // A borrowed result never crosses the host boundary
         && (host || !explicit)
         // an inout entry is exported only as an explicit-mode host entry (legacy inout fns stay internal)
         && (!has_inout(f) || (explicit && host))

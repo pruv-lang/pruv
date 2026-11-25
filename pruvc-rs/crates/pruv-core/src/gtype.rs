@@ -92,6 +92,25 @@ impl GType {
         GType::new("result", Vec::new())
     }
 
+    /// The underlying buffer type of a supported borrowed view.
+    pub fn view_base(&self) -> Option<&GType> {
+        match self.args.as_slice() {
+            [base] if self.owner.is_none() && self.name == "@ref"
+                && base.owner.is_none() && base.args.is_empty()
+                && crate::borrowed::is_view_base(&base.name) => Some(base),
+            _ => None,
+        }
+    }
+
+    /// The buffer type carried directly by an Option or a Result with an i64 error.
+    pub fn view_payload(&self) -> Option<&GType> {
+        match (self.owner.as_ref(), self.name.as_str(), self.args.as_slice()) {
+            (None, "option" | "result", [view]) => view.view_base(),
+            (None, "result", [view, err]) if *err == Self::i64() => view.view_base(),
+            _ => None,
+        }
+    }
+
     /// The error payload when it differs from the implicit i64.
     pub fn result_error(&self) -> Option<&GType> {
         match (self.owner.as_ref(), self.name.as_str(), self.args.as_slice()) {
@@ -427,6 +446,7 @@ pub fn format_type(ty: &GType) -> String {
     }
     let inner = ty.args.iter().map(format_type).collect::<Vec<_>>().join(", ");
     match ty.name.as_str() {
+        "@ref" => format!("ref {}", inner),
         "array" => format!("[{}]", inner),
         "option" => format!("Option<{}>", inner),
         "result" => format!("Result<{}>", inner),
@@ -543,6 +563,9 @@ pub fn nominal_fields(ty: &GType, decls: Decls) -> Result<Vec<GType>, TypeArityE
 // substituted fields, and it is linear: Box<Box<i64>> passes, Grow<T> { g: Grow<Option<T>> } is a cycle.
 fn is_value_seen(ty: &GType, decls: Decls, seen: &[String]) -> bool {
     if *ty == GType::i64() || *ty == GType::bool() || ty.owner.is_some() {
+        return true;
+    }
+    if ty.view_payload().is_some() {
         return true;
     }
     if ty.name == "option" || ty.name == "result" {

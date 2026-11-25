@@ -1,0 +1,7 @@
+// spec: R-6g9-8 reject
+// The payload view of a returned Option borrows `t`, which is not in the `from` list.
+fn pick(s: [u8], t: [u8]) -> Option<ref [u8]> from(s)
+  requires len(t) >= 1
+{
+  return Some::<ref [u8]>(subview(t, 0, 1));
+}

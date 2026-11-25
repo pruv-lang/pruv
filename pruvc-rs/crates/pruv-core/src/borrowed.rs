@@ -31,12 +31,33 @@ pub(crate) fn is_view_base(ty: &str) -> bool {
     matches!(ty, "array" | "array_u8" | "array_bool" | "str")
 }
 
-fn annotation(ty: &mut String, line: i64, col: i64, permitted: bool, structs: &HashSet<String>) -> Res<bool> {
+pub(crate) fn is_view_wrapper(ty: &str) -> bool {
+    (ty.starts_with("option<") || ty.starts_with("result<"))
+        && GType::from_key(ty).view_payload().is_some()
+}
+
+pub(crate) fn uses_view_wrappers(f: &Function) -> bool {
+    let mut found = is_view_wrapper(&f.ret);
+    crate::foreign_shim::walk_stmts(&f.body, &mut |node| {
+        if let Node::Expr(e) = node {
+            found |= expr_ty(e).as_deref().is_some_and(is_view_wrapper);
+        }
+    });
+    found
+}
+
+fn annotation(ty: &mut String, line: i64, col: i64, permitted: bool, wrapper: bool, structs: &HashSet<String>) -> Res<bool> {
     let parsed = GType::from_key(ty);
-    if parsed.name == "@ref" && permitted && parsed.args.len() == 1 && is_view_base(&parsed.args[0].to_key()) {
-        *ty = parsed.args[0].to_key();
-        Ok(true)
-    } else if contains_borrow(&parsed, structs) {
+    if permitted {
+        if let Some(base) = parsed.view_base() {
+            *ty = base.to_key();
+            return Ok(true);
+        }
+        if wrapper && parsed.view_payload().is_some() {
+            return Ok(true);
+        }
+    }
+    if contains_borrow(&parsed, structs) {
         Err(signature(line, col))
     } else {
         Ok(false)
@@ -49,7 +70,7 @@ fn prepare_block(body: &mut [Stmt], permitted: bool, structs: &HashSet<String>) 
             Stmt::Let(s) if !s.is_place() => {
                 // R-6g9-6: mutability is allowed for a borrowing struct, but not for a ref local.
                 if !(permitted && structs.contains(&s.ty)) {
-                    s.borrowed = annotation(&mut s.ty, s.line, s.col, permitted && !s.mutable, structs)?;
+                    s.borrowed = annotation(&mut s.ty, s.line, s.col, permitted && !s.mutable, true, structs)?;
                 }
             }
             Stmt::If(s) => {
@@ -91,14 +112,14 @@ pub(crate) fn prepare(prog: &mut Program, hosts: &[bool]) -> Res<()> {
             TypeDecl::Struct(s) => {
                 for f in &mut s.fields {
                     if !(s.tparams.is_empty() && structs.contains(&s.name) && structs.contains(&f.ty)) {
-                        f.borrowed = annotation(&mut f.ty, f.line, f.col, s.tparams.is_empty(), &structs)?;
+                        f.borrowed = annotation(&mut f.ty, f.line, f.col, s.tparams.is_empty(), false, &structs)?;
                     }
                 }
             }
             TypeDecl::Enum(e) => {
                 for v in &mut e.variants {
                     for f in &mut v.fields {
-                        annotation(&mut f.ty, f.line, f.col, false, &structs)?;
+                        annotation(&mut f.ty, f.line, f.col, false, false, &structs)?;
                     }
                 }
             }
@@ -113,11 +134,11 @@ pub(crate) fn prepare(prog: &mut Program, hosts: &[bool]) -> Res<()> {
         for p in &mut f.params {
             // R-6g9-6: borrowing structs may be inout parameters.
             if !(permitted && structs.contains(&p.ty) && !p.take) {
-                annotation(&mut p.ty, f.line, f.col, false, &structs)?;
+                annotation(&mut p.ty, f.line, f.col, false, false, &structs)?;
             }
         }
         if !(permitted && structs.contains(&f.ret)) {
-            f.borrowed_result = annotation(&mut f.ret, f.line, f.col, permitted, &structs)?;
+            f.borrowed_result = annotation(&mut f.ret, f.line, f.col, permitted, true, &structs)?;
         }
         let borrowed_result = f.borrowed_result || structs.contains(&f.ret);
         match &f.borrow_from {
@@ -170,10 +191,14 @@ pub(crate) fn first_borrow(prog: &Program) -> Option<(i64, i64)> {
         }
         let mut position = None;
         crate::foreign_shim::walk_stmts(&f.body, &mut |node| {
-            if let Node::Let(s) = node {
-                if s.borrowed {
+            match node {
+                Node::Let(s) if s.borrowed => {
                     position.get_or_insert((s.line, s.col));
                 }
+                Node::Expr(e @ Expr::Ctor(_)) if expr_ty(e).as_deref().is_some_and(is_view_wrapper) => {
+                    position.get_or_insert((e.line(), e.col()));
+                }
+                _ => {}
             }
         });
         if position.is_some() {
@@ -529,6 +554,11 @@ impl Analysis<'_> {
         } else {
             match e {
                 Expr::StrLit(_) => {}
+                Expr::Ctor(c) if expr_ty(e).as_deref().is_some_and(is_view_wrapper) => {
+                    if matches!(c.name.as_str(), "Some" | "Ok") {
+                        return self.provenance(c.arg.as_deref().unwrap(), locals);
+                    }
+                }
                 Expr::Call(c) if c.name == "subview" => return self.provenance(&c.args[0], locals),
                 Expr::Call(c) => {
                     let Some(f) = self.functions.get(c.name.as_str()) else {
@@ -631,8 +661,10 @@ impl Analysis<'_> {
                         if self.ref_field(e, &field.name) { self.provenance(&field.value, locals).map(|_| ()) }
                         else { self.owned(&field.value, locals) }
                     }),
-                    // R-6g9-1: an enum (or Option / Result) payload owns its value, so it cannot hold a view
+                    // Only the explicit builtin view wrapper can carry a borrowed payload.
                     Expr::EnumCtor(x) => x.args.iter().try_for_each(|a| self.owned(a, locals)),
+                    Expr::Ctor(_) if expr_ty(e).as_deref().is_some_and(is_view_wrapper) =>
+                        self.provenance(e, locals).map(|_| ()),
                     Expr::Ctor(x) => x.arg.iter().try_for_each(|a| self.owned(a, locals)),
                     _ => Ok(()),
                 };
@@ -783,8 +815,35 @@ impl Analysis<'_> {
                 }
                 Stmt::Match(s) => {
                     let mut out = Vec::new();
+                    let wrapper = expr_ty(&s.scrutinee).as_deref().is_some_and(is_view_wrapper);
                     for a in &s.arms {
-                        out.extend(self.build(f, &a.body, vec![n], locals, scope, graph));
+                        if let Some(binder) = a.binders.first().filter(|_| wrapper && matches!(a.ctor.as_str(), "Some" | "Ok")) {
+                            let roots = match self.provenance(&s.scrutinee, locals) {
+                                Ok(roots) => roots,
+                                Err(e) => {
+                                    graph.failure.get_or_insert((n, e));
+                                    Roots::new()
+                                }
+                            };
+                            let bit = graph.borrows.len();
+                            graph.borrows.push(roots.clone());
+                            let old_origin = locals.insert(binder.clone(), Origin::View(roots));
+                            let old_bit = scope.insert(binder, bit);
+                            // The arm defines a fresh loan, including when this match is in a loop.
+                            let entry = graph.points.len();
+                            graph.points[n].succ.push(entry);
+                            graph.points.push(Point {
+                                succ: Vec::new(), gen: Vec::new(), kill: Some(bit),
+                                uses: Vec::new(), site: st.position(), own_move: None,
+                            });
+                            out.extend(self.build(f, &a.body, vec![entry], locals, scope, graph));
+                            if let Some(old) = old_origin { locals.insert(binder.clone(), old); }
+                            else { locals.remove(binder); }
+                            if let Some(old) = old_bit { scope.insert(binder, old); }
+                            else { scope.remove(binder.as_str()); }
+                        } else {
+                            out.extend(self.build(f, &a.body, vec![n], locals, scope, graph));
+                        }
                     }
                     graph.join(out)
                 }

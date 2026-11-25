@@ -49,8 +49,8 @@ G1 (structs/enums): user types are `Copy` and emitted by emit_public_types(prog)
 the file.  Contract evaluation uses mirror types `pruv_contract__Name` (every i64 leaf is i128,
 Option/Result carry i128) and converters `pruv_to_c__Name(value)` (recursive; an enum converts
 only its active variant), so contract arithmetic never goes through i64.
-Standard types are always written `::std::vec::Vec` / `::std::option::Option` /
-`::std::result::Result` so user types named Vec etc. cannot collide.
+Standard types are generally qualified so user types named Vec etc. cannot collide.
+View wrappers use the prelude's reserved Option and Result names.
 
 G3 (generics): gen_rust first builds the shared specialization plan (mono.py) and generates from the CONCRETE program
 it contains, so there is no generic Rust. Generic function specializations are private fns named `pruv_g3_f_...`
@@ -85,6 +85,7 @@ go through it), under trust_callers the pub entry is unchecked and `<entry>__pru
 from collections import namedtuple
 from vast import *
 from typeinfo import (TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection, VIEW_BASES,
+                      view_base, view_payload,
                       dependencies, is_owned_field_type, is_nested_collection_field, is_string_record_map,
                       field_place, is_vec_slice_arg, is_owned_result, is_owned_value, borrowing_struct, borrowing_copy)
 from foreign import CATALOG
@@ -1123,9 +1124,13 @@ def nominals_in(t):
     return []
 
 
-def rty(t, param=False):
+def rty(t, param=False, lifetime=""):
+    if (base := view_base(t)) is not None:
+        return "&" + lifetime + rty(base, True)[1:]
     if t.owner is None and t.args and t.name in ("option", "result"):  # G3: Option<X> / Result<X>, X != i64
-        x = rty(t.args[0])
+        x = rty(t.args[0], lifetime=lifetime)
+        if view_payload(t) is not None:
+            return "Option<%s>" % x if t.name == "option" else "Result<%s, i64>" % x
         if t.name == "option":
             return "::std::option::Option<%s>" % x
         e = result_error(t)
@@ -1170,6 +1175,8 @@ def rty(t, param=False):
 
 def cty(t):
     """contract (i128) mirror of a type"""
+    if view_base(t) is not None:
+        return rty(t)
     if t.owner is None and t.args and t.name in ("option", "result"):  # G3: C(Option<X>) = Option<C(X)>
         x = "()" if t.name == "result" and t.args[0] == UNIT else cty(t.args[0])  # LB8
         if t.name == "option":
@@ -1205,7 +1212,7 @@ def conv(t, x):
     n = t.name
     if n == "i64":
         return "(%s as i128)" % x
-    if n in ("bool", "string"):
+    if n in ("bool", "string") or view_base(t) is not None:
         return x
     if n == "option":
         return "%s.map(|v| v as i128)" % x
@@ -2015,7 +2022,7 @@ class Gen:
         """G3 specializations, G6 collection-bearing functions and (G9) functions with an extended type in their
         signature are private Rust items (no raw ABI); this includes their checked entry wrappers"""
         return (getattr(f, "private", False) or any(is_owned_value(p.type) for p in f.params) or is_owned_value(f.ret)
-                or any(s.is_ext(p.type) for p in f.params) or s.is_ext(f.ret)
+                or any(s.is_ext(p.type) for p in f.params) or s.is_ext(f.ret) or view_payload(f.ret) is not None
                 or (s.g5 and any(p.mode == "inout" for p in f.params)))   # G5: no public API for a mutable borrow
 
     def fn(s, f):
@@ -2065,6 +2072,8 @@ class Gen:
         ret = "" if f.ret == UNIT else " -> " + s.rt(f.ret, site=f)
         if f.ref_result:
             ret = " -> &'a " + rty(f.ret, True)[1:]
+        elif view_payload(f.ret) is not None:
+            ret = " -> " + rty(f.ret, lifetime="'a ")
         elif f.borrow_from:
             ret += lifetime
         body_name = name + "__pruv_body" if f.name in s.body_named else name
@@ -2307,7 +2316,8 @@ class Gen:
             return "(&%s)" % e.name if e.name in s.take_arrays else e.name
         if isinstance(e, StrLit):  # G2 B2
             return s.c(e)
-        if isinstance(e, Call) and e.name == "err_val" and e.ty == Type("string"):
+        if isinstance(e, Call) and (e.name == "err_val" and e.ty == Type("string")
+                                    or e.name in ("some_val", "ok_val") and e.borrowed_view):
             return s.c(e)
         if s.g9 and isinstance(e, (FieldAccess, VariantField)):   # G9: a buffer field of a real (extended) value
             return s.cx(e)
@@ -2558,10 +2568,11 @@ class Gen:
                 cx = "()" if e.ty.args[0] == UNIT else cty(e.ty.args[0])  # LB8
                 if e.name == "None":
                     return "None::<%s>" % cx
+                view = e.name in ("Some", "Ok") and view_payload(e.ty) is not None
+                arg = "()" if e.arg is None else s.carr(e.arg) if view else s.c(e.arg)
                 if e.name == "Some":
-                    return "Some::<%s>(%s)" % (cx, s.c(e.arg))
+                    return "Some::<%s>(%s)" % (cx, arg)
                 error = result_error(e.ty)
-                arg = "()" if e.arg is None else s.c(e.arg)  # LB8: Ok(()) of Result<(), E>
                 if e.name == "Err" and is_owned_result(e.ty):
                     arg = "%s.clone()" % arg
                 return "%s::<%s, %s>(%s)" % (e.name, cx, cty(error), arg)
@@ -3404,7 +3415,11 @@ class Gen:
                     pat = "Ok(())"
                 s.emit(ind + 1, "%s => {" % pat)
                 saved_inouts, saved_refs, saved_vt = set(s.inouts), set(s.refs), dict(s.vt)
-                if (collection_call or map_take) and a.binders:
+                if a.ctor in ("Some", "Ok") and a.binders and (base := view_payload(sc.ty)) is not None:
+                    b = a.binders[0]
+                    s.vt[b] = base
+                    s.refs.add(b)
+                elif (collection_call or map_take) and a.binders:
                     b = a.binders[0]
                     s.vt[b] = ty
                     if mutable_map:
@@ -3855,10 +3870,12 @@ class Gen:
                 rx = rty(e.ty.args[0])
                 if e.name == "None":
                     return "None::<%s>" % rx
+                view = e.name in ("Some", "Ok") and view_payload(e.ty) is not None
+                arg = "()" if e.arg is None else s.arr_ref(e.arg) if view else s.e(e.arg)
                 if e.name == "Some":
-                    return "Some::<%s>(%s)" % (rx, s.e(e.arg))
+                    return "Some::<%s>(%s)" % (rx, arg)
                 error = rty(result_error(e.ty))
-                return "%s::<%s, %s>(%s)" % (e.name, rx, error, "()" if e.arg is None else s.e(e.arg))
+                return "%s::<%s, %s>(%s)" % (e.name, rx, error, arg)
             return "None" if e.name == "None" else "%s(%s)" % (e.name, s.e(e.arg))
         if isinstance(e, StructLit):
             # declaration order = left-to-right evaluation; parenthesized so `if S { .. }.x` parses

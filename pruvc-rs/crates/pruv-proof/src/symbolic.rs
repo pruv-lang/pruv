@@ -1958,13 +1958,13 @@ impl<'a> FnVerifier<'a> {
             // G3: Option<X>, X other than i64
             Ty::Inst(g) if g.name == "option" => {
                 let o = m.opt(Some(ty))?;
-                let w = self.try_wf(&Ty::from_gtype(&g.args[0]), &o.sval.apply1(v))?;
+                let w = self.wf_payload(g, &o.sval.apply1(v))?;
                 w.map(|w| o.is_some.apply1(v).implies(&w))
             }
             Ty::Inst(g) if g.name == "result" => {
                 let o = m.res(Some(ty))?;
                 let w = match &o.oval {
-                    Some(ov) => self.try_wf(&Ty::from_gtype(&g.args[0]), &ov.apply1(v))?,
+                    Some(ov) => self.wf_payload(g, &ov.apply1(v))?,
                     None => None,
                 };
                 let mut parts: Vec<Option<Ast>> = Vec::new();
@@ -2027,6 +2027,16 @@ impl<'a> FnVerifier<'a> {
             return Ok(Some(self.z.and(&[n.ge_i(0), n.le_i(MAX_LEN)])));
         }
         self.try_wf(ft, term)
+    }
+
+    /// The active view payload keeps the same length, byte and UTF-8 facts as a view result.
+    fn wf_payload(&self, wrapper: &GType, term: &Ast) -> R<Option<Ast>> {
+        let payload = Ty::from_gtype(&wrapper.args[0]);
+        if wrapper.view_payload().is_some() && self.utf8_aware && payload == Ty::Str {
+            let (a, n) = self.model.buf_parts(&payload, term)?;
+            return Ok(Some(self.z.and(&[self.wf_buf(&payload, &n, &a), self.model.utf8_valid(&n, &a)])));
+        }
+        self.wf_field(&payload, term)
     }
 
     /// The Arr branch of verify.py `_wf_of` for a buffer field: `0 <= len <= 2^40` and, for u8/str, the byte domain.
@@ -3781,7 +3791,7 @@ impl<'a> FnVerifier<'a> {
                 return if n == "is_some" {
                     Ok(Val::Bool(o.is_some.apply1(a)))
                 } else {
-                    Val::from_field(&payload_ty(Some(ty), false), o.sval.apply1(a))
+                    self.field_val(&payload_ty(Some(ty), false), o.sval.apply1(a), n)
                 };
             }
             "is_ok" | "ok_val" | "err_val" => {
@@ -3789,9 +3799,10 @@ impl<'a> FnVerifier<'a> {
                 let o = self.model.res(Some(ty))?;
                 return match n {
                     "is_ok" => Ok(Val::Bool(o.is_ok.apply1(a))),
-                    "ok_val" => Val::from_field(
+                    "ok_val" => self.field_val(
                         &payload_ty(Some(ty), false),
                         o.oval.as_ref().ok_or("ok_val of Result<(), E>")?.apply1(a),
+                        n,
                     ),
                     _ => self.field_val(&payload_ty(Some(ty), true), o.eval.apply1(a), n),
                 };

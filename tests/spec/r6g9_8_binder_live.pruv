@@ -1,0 +1,13 @@
+// spec: R-6g9-8 reject
+// The `Ok` binder is a view with the wrapper's roots: writing the source before its last use is a conflict.
+fn head(s: [u8]) -> Option<ref [u8]> from(s) {
+  if len(s) < 2 { return None::<ref [u8]>; }
+  return Some::<ref [u8]>(subview(s, 0, 2));
+}
+fn f() -> i64 ! alloc {
+  let mut b: [u8] = alloc(4, 1);
+  match head(b) {
+    Some(v) => { b[0] = 9; return v[1]; }
+    None => { return 0; }
+  }
+}

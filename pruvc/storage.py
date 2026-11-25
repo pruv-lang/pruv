@@ -27,7 +27,7 @@ entries: ordered tuple of (key, width). elem_size/alignment(width): byte count.
 """
 from vast import *
 from refine import _kids
-from typeinfo import is_collection, is_vec_slice_arg
+from typeinfo import is_collection, is_vec_slice_arg, view_payload
 
 
 def range_layout(lo, hi):
@@ -94,7 +94,7 @@ def plan_storage(program_after_mono, verified=True):
     ext = (prog.g9 or {}).get('extended', ())
     for f in prog.functions:
         private = (getattr(f, 'private', False) or any(is_collection(p.type) or p.type.name in ext or p.mode == 'inout' for p in f.params)
-                   or is_collection(f.ret) or f.ret.name in ext)
+                   or is_collection(f.ret) or f.ret.name in ext or view_payload(f.ret) is not None)
         host = f.host_entry if prog.explicit else not private
         for j, p in enumerate(f.params):
             if array(p.type):

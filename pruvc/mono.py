@@ -307,7 +307,7 @@ class _Mono:
             return mk_option(self.lower(c.args[0]))
         if c.name == "result":
             return mk_result(*(self.lower(a) for a in c.args))
-        if c.name in COLLECTION_ARITY:   # G6: Vec<T> / HashMap<K, V> keep their name, arguments are lowered
+        if c.name in COLLECTION_ARITY or c.name == "ref":
             return Type(c.name, tuple(self.lower(a) for a in c.args))
         return Type(self.request_type(c.name, c.args))
 

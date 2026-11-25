@@ -1908,6 +1908,32 @@ borrowed value is live.
     [inout parameter](tests/spec/r6g9_7_inout_param.pruv), [write the document's source](tests/spec/r6g9_7_source_write.pruv),
     [store into the lender](tests/spec/r6g9_7_store_self.pruv), [a borrowed ref field](tests/spec/r6g9_7_other_ref.pruv),
     [nested record's source](tests/spec/r6g9_7_nested_source.pruv), [an owned Vec](tests/spec/r6g9_7_vec_view.pruv).
+- R-6g9-8 **View payloads.** A *view wrapper* is `Option<V>` or `Result<V>` (= `Result<V, i64>`) whose first type
+  argument is directly a view `V` (`ref [u8]`, `ref [i64]`, `ref [bool]`, `ref str`; not a borrowing struct). It is
+  allowed as a `from` function result, as the type of an immutable `let`, and as the first type argument of
+  `Some` / `None` / `Ok` / `Err` (the hand tape access `fn value<'a>(doc: &'a Document<'_>, id: i64) ->
+  Result<&'a [i64], i64>`).
+  - *Signature.* A wrapper anywhere else (parameter, `let mut`, field, nested in another type, a typed error
+    `Result<V, E>`, a `Vec` or user generic argument, a host or foreign boundary) is `type/borrow_signature`.
+  - *Provenance.* A wrapper is a borrow local like a view (R-6g9-4: its own liveness bit). `Some::<V>(e)` /
+    `Ok::<V>(e)` take the provenance of the view `e`; `None` / `Err` borrow nothing; a `from` call that yields a
+    wrapper borrows its arguments as a view result does (R-6g9-7). Returning a wrapper whose payload is not covered
+    by the `from` list is `type/borrow_escape`. A `match` on a wrapper (and `?`, which is a `match`) does not
+    consume it: the `Some` / `Ok` binder is a view with the scrutinee's provenance and its own liveness, so writing
+    the source while the wrapper or the binder is live is `type/borrow_conflict`.
+  - *Proof.* The payload uses the copy model of a view: `Some` / `Ok` wrap the view value, `some_val` / `ok_val`
+    and the binder give it back with the view's well-formedness. The accessors stay contract-only.
+  - *Code.* Rust: `Option<&'a [T]>` / `Result<&'a [T], i64>` with the result lifetime on the payload, locals
+    `Option<&[T]>` / `Result<&[T], i64>`, no `clone` or `to_vec`. LLVM: `{ i1, { ptr, i64 } }` /
+    `{ i1, { ptr, i64 }, i64 }` returned by value on both backends; the wrapper is never owned or dropped.
+  - Tests: [tape value, forward, `?`, `ref [u8]` / `ref str` payloads](tests/spec/r6g9_8_value.pruv);
+    rejects [escaping payload](tests/spec/r6g9_8_payload_escape.pruv),
+    [payload of a local](tests/spec/r6g9_8_payload_local.pruv),
+    [write while live](tests/spec/r6g9_8_write_while_live.pruv),
+    [write while the binder is live](tests/spec/r6g9_8_binder_live.pruv),
+    [`let mut`](tests/spec/r6g9_8_let_mut.pruv), [parameter](tests/spec/r6g9_8_param.pruv),
+    [field](tests/spec/r6g9_8_field.pruv), [typed error](tests/spec/r6g9_8_typed_err.pruv),
+    [nested](tests/spec/r6g9_8_nested.pruv), [inside a generic function](tests/spec/r6g9_8_generic.pruv).
 
 ## 6h. Files (G10)
 

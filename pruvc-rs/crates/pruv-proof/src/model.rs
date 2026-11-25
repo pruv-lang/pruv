@@ -145,6 +145,9 @@ impl Ty {
         if g.owner.is_some() {
             return Ty::Param(g.clone());
         }
+        if let Some(base) = g.view_base() {
+            return Ty::from_plain(&base.name);
+        }
         if g.args.is_empty() {
             return Ty::from_plain(&g.name);
         }
@@ -1430,6 +1433,7 @@ impl Model {
         let r = match ty {
             Ty::I64 | Ty::Opt | Ty::Res => false,
             Ty::Param(_) => true,
+            Ty::Inst(g) if g.view_payload().is_some() => false,
             Ty::Inst(g) if g.name == "result" => match g.result_error() {
                 Some(e) => !Self::is_buf(&Ty::from_gtype(e))
                     && self.wf_trivial(&Ty::from_gtype(&g.args[0]))?

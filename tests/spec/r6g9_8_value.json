@@ -1,0 +1,11 @@
+{
+  "gen_contains": ["fn value<'a>(doc: &'a Document<'_>, id: i64) -> Result<&'a [i64], i64>", "-> Option<&'a [u8]>", "-> Option<&'a str>", "let r: Result<&[i64], i64>", "let h: Option<&[u8]>"],
+  "gen_absent": ["to_vec()", ".clone()"],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["441340909379"],
+    "alloc_balance": true,
+    "ll_contains": ["{ i1, { ptr, i64 }, i64 }"]
+  }
+}
