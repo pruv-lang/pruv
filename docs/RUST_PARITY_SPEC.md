@@ -66,7 +66,8 @@ mutable closures) at bench/l3/budget/m12_test/hand_life.rs. U's key order is `&[
 | P15 | Iterators | slice/range iterators with `next`; `enumerate`/`zip`/`rev`; `map`/`filter`/`collect` (fused loops, allocation only in `collect`) | V, U | high |
 | P16 | Mutable traversal and collections | `iter_mut`/`split_at_mut`; `clone_from`/`retain`/`drain`; map `entry` | B, C, V, P31 | high |
 | P17 | Text | integer parse/format; typed formatting builder (no macros) | P27 | medium |
-| P18 | f64 | first a z3 FP spike (proof time on sample contracts); then FP64 sort, literals, classify, arithmetic/compare, explicit casts; then Rust/LLVM codegen with no fast-math and a fixed NaN payload rule; then f64 parse/format | V, P27, ABI | high |
+| P18a | f64 (exact FP) | FP64 sort (RNE, NaN kept), literals, IEEE compare, classify (`is_nan`/`is_finite`), selection (if, clamp, `min`/`max` encoded as ite), arithmetic with constant coefficients, explicit casts with range obligations (`i64(f)`: finite and in [-2^63, 2^63), truncate toward zero); no overflow obligation on f64 arithmetic; NaN payload and sign bit unobservable (no `to_bits`/`copysign`/`is_sign_negative`); Rust/LLVM codegen with no fast-math and no FMA contraction; f64 parse/format | V, P27, ABI | high |
+| P18b | f64 range contracts | contracts over variable-by-variable arithmetic (lerp, midpoint, `a<=b => a+c<=b+c`) and mixed Int/FP invariants (sums, round trips); needs a redesign: sound interval facts from rounding monotonicity generated before the query; spike shows plain FP queries exceed rlimit 20M and 60s | P18a | high |
 | P19 | Search and sort | `lower_bound`/`binary_search` with a sorted precondition; sort proven sorted and a permutation (one algorithm and type first, then `Ord` generic) | G8, std | high |
 
 `i128`/`u128` are not scheduled until a Lair path needs them.
@@ -80,7 +81,10 @@ mutable closures) at bench/l3/budget/m12_test/hand_life.rs. U's key order is `&[
 - **`usize` is target dependent.** Keep the current `len` meaning and the `2^40` cap (TIDY_SPEC §4.2-3);
   state the 32/64-bit rule explicitly.
 - **f64 in z3 is unmeasured.** No FP model exists. Modelling IEEE values as reals or silently excluding NaN is not allowed.
-  P18 starts with a measured spike; if proofs are too slow, the plan for P18 changes before any implementation.
+  Spike result (2026-11-25, z3 5.3.3, FP(11,53) RNE, rlimit 20M): clamp, compare, min/max, classify and constant-coefficient
+  arithmetic prove in 0.4-470 ms; true contracts over variable-by-variable arithmetic and mixed Int/FP queries return unknown
+  (over 60 s with no rlimit under default, qffp and bit-blast). FP queries cost 100-1000x integer ones. P18 is split into P18a
+  (exact FP, those cheap forms) and P18b (redesign of range contracts).
 - **Tuples, closures and iterators create new borrow provenance.** Borrow analysis is tied to names, branches, and the loop graph
   (pruvc-rs/crates/pruv-core/src/borrowed.rs). P5 should leave one core CFG that the later bundles reuse.
 - **JSON objects stay `Vec` in V.** Hand Rust relies on order, duplicate keys and last-match updates;
