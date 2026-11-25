@@ -302,6 +302,17 @@ impl Parser {
         self.ident()
     }
 
+    /// A variant binder of a match arm; a tuple pattern there is bundle P8 (P6 row P6-1).
+    fn arm_binder(&mut self) -> R<Tok> {
+        if self.at("(", 0) {
+            let t = self.peek(0).clone();
+            return Err(PruvError::new("parse", t.line, t.col, "tuple_match_pattern",
+                "tuple patterns in match arms are not available yet (bundle P8)",
+                "bind the payload, then destructure it: `E::V(p) => { let (a, b): (A, B) = p; .. }`"));
+        }
+        self.ident()
+    }
+
     /// P6: the tuple type with these components; registers its synthetic struct.
     fn tuple_type(&mut self, open: &Tok, comps: Vec<GType>) -> R<GType> {
         if comps.len() < 2 || comps.len() > crate::gtype::TUPLE_MAX_ARITY {
@@ -1843,7 +1854,7 @@ impl Parser {
                             ));
                         }
                         loop {
-                            binders.push(self.ident()?.val);
+                            binders.push(self.arm_binder()?.val);
                             if !self.at(",", 0) {
                                 break;
                             }
@@ -1874,7 +1885,7 @@ impl Parser {
                             ));
                         }
                         loop {
-                            binders.push(self.ident()?.val);
+                            binders.push(self.arm_binder()?.val);
                             if !self.at(",", 0) {
                                 break;
                             }

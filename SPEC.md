@@ -2597,7 +2597,9 @@ borrows.
   `t` once; `t` is consumed. `let k: String = move t.0;` moves one component out of a `let mut` tuple under the field
   move rules and consumes the tuple, so a later read of `t` or of another component is `type/foreign_move`
   (rebuild the tuple, or destructure it to keep the other components). Each owned component is dropped once.
-  Owned tuples need the Rust backend; LLVM reports `codegen/tuple_llvm_owned` (P12). Tests:
+  An owned tuple is an Option/Result payload only where an owned struct is (`type/type_argument` otherwise). A
+  tuple whose components LLVM stores like struct fields (arrays, `Vec<i64>`, `Vec<bool>`) runs on LLVM; one with a
+  `String` or another owned collection needs the Rust backend, and LLVM reports `codegen/tuple_llvm_owned` (P12). Tests:
   [accept](tests/spec/r6s_3_accept.pruv), [reject](tests/spec/r6s_3_reject.pruv),
   [false contract](tests/spec/r6s_3_reject_contract.pruv), [runtime](tests/runtime/p6_rt_owned.pruv),
   [moved tuple](tests/must_reject/p6_moved_reuse.pruv), [partial move](tests/must_reject/p6_partial_move.pruv),
@@ -3244,7 +3246,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `verify/variant_domain` | verify | a `variant_field` lookup not guarded by its variant |
 | `verify/verify_unknown` | verify | the solver gave up on one obligation (see below) |
 | `codegen/foreign_target` | codegen | a program with foreign or file operations sent to native emission without the Rust host build |
-| `codegen/tuple_llvm_owned` | codegen | a tuple with an owned component (`String`, `Vec`, array) sent to the LLVM backend (R-6s-3, P12) |
+| `codegen/tuple_llvm_owned` | codegen | a tuple with a `String` or owned-collection component LLVM cannot store as a struct field, sent to the LLVM backend (R-6s-3, P12) |
 | `codegen/llvm_emit` | codegen | LLVM could not emit the object file (Rust compiler) |
 | `codegen/llvm_target` | codegen | LLVM has no target machine for the target (Rust compiler) |
 | `codegen/parallel_target` | codegen | native `--emit obj/exe` of a program with `par` |

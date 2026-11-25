@@ -1827,7 +1827,7 @@ impl<'a> Gen<'a> {
     /// rty, except that an extended parameter is a shared reference `&Name` (read view)
     fn rt(&self, t: &str, param: bool) -> String {
         if param && self.is_ext(Some(t)) {
-            return format!("&{}", t);
+            return format!("&{}", rty(t, false)); // P6: a tuple name spells as the native tuple
         }
         rty(t, param)
     }
@@ -3655,7 +3655,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
         let n = d.name();
         let mut lines: Vec<String> = vec![
             G9_HELPER_ALLOW.to_string(),
-            format!("fn pruv_csize__{}(v: &{}, pruv_budget: &mut i64) -> i128 {{", n, n),
+            format!("fn pruv_csize__{}(v: &{}, pruv_budget: &mut i64) -> i128 {{", n, rty(n, false)),
             "    pruv_g9_tick(pruv_budget);".to_string(),
         ];
         let unit = |fields: &[FieldDecl]| -> (Vec<String>, Vec<String>) {
@@ -3693,7 +3693,11 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 if !s.fields.is_empty() {
                     let parts: Vec<String> =
                         s.fields.iter().zip(binds.iter()).map(|(f, b)| format!("{}: {}", f.name, b)).collect();
-                    lines.push(format!("    let {} {{ {} }} = v;", n, parts.join(", ")));
+                    if crate::gtype::is_tuple_name(n) {
+                        lines.push(format!("    let ({}) = v;", binds.join(", "))); // P6: a native tuple
+                    } else {
+                        lines.push(format!("    let {} {{ {} }} = v;", n, parts.join(", ")));
+                    }
                 }
                 if ws.len() >= 2 {
                     for x in stmts(&ws) {
@@ -3726,7 +3730,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
         let n = d.name();
         let mut lines: Vec<String> = vec![
             G9_HELPER_ALLOW.to_string(),
-            format!("fn pruv_ceq__{}(a: &{}, b: &{}, pruv_budget: &mut i64) -> bool {{", n, n, n),
+            format!("fn pruv_ceq__{}(a: &{}, b: &{}, pruv_budget: &mut i64) -> bool {{", n, rty(n, false), rty(n, false)),
             "    pruv_g9_tick(pruv_budget);".to_string(),
         ];
         let conj = |fields: &[FieldDecl]| -> String {
@@ -3746,7 +3750,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     for (side, var) in [("a", "pruv_a"), ("b", "pruv_b")] {
                         let parts: Vec<String> =
                             s.fields.iter().enumerate().map(|(i, f)| format!("{}: {}{}", f.name, var, i)).collect();
-                        lines.push(format!("    let {} {{ {} }} = {};", n, parts.join(", "), side));
+                        if crate::gtype::is_tuple_name(n) {
+                            let vs: Vec<String> = (0..s.fields.len()).map(|i| format!("{}{}", var, i)).collect();
+                            lines.push(format!("    let ({}) = {};", vs.join(", "), side)); // P6: a native tuple
+                        } else {
+                            lines.push(format!("    let {} {{ {} }} = {};", n, parts.join(", "), side));
+                        }
                     }
                 }
                 lines.push(format!("    {}", conj(&s.fields)));
@@ -5302,6 +5311,11 @@ pruv_hi <= (pruv_b.len() as i128) && \
             Expr::Move(x) if x.fields.is_empty() => Ok(x.name.clone()),
             // LB9 (R-6g8-4): a consuming match binder owns its payload
             Expr::Move(x) if self.owned_binders.contains(&x.name) => Ok(format!("{}.{}", x.name, x.fields.join("."))),
+            // P6: a destructuring temp, or a tuple-typed component of an owned local, moves out by a partial move
+            // (`mem::take` would need `Default`, which a tuple holding a struct or an enum lacks)
+            Expr::Move(x) if x.name.starts_with("pruv_tup_d")
+                || (x.ty.as_deref().is_some_and(crate::gtype::is_tuple_name) && !self.inouts.contains(&x.name)) =>
+                Ok(format!("{}.{}", x.name, x.fields.join("."))),
             Expr::Move(x) => Ok(format!("::std::mem::take(&mut {}.{})", x.name, x.fields.join("."))),
             // G5 A0: never reaches the generator (the driver's A0 guard stops the program earlier)
             Expr::InoutArg(_) => Err("G5 inout argument reached the Rust generator".to_string()),
@@ -6893,9 +6907,9 @@ fn fold_destructure(group: &[Stmt], lines: &[String]) -> Option<String> {
         let line = line.trim_start();
         let rest = line.strip_prefix(&format!("let mut {}", l.name))
             .or_else(|| line.strip_prefix(&format!("let {}", l.name)))?;
-        // a plain read `: T = tmp.i;`, or the component move `= ::std::mem::take(&mut tmp.i);`
+        // a plain read `: T = tmp.i;`, or the component move `= tmp.i;` (a partial move of the temp)
         let read = rest.starts_with(": ") && rest.ends_with(&format!(" = {}.{};", base, field));
-        if !read && rest != format!(" = ::std::mem::take(&mut {}.{});", base, field) {
+        if !read && rest != format!(" = {}.{};", base, field) {
             return None;
         }
     }

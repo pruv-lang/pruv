@@ -1572,6 +1572,11 @@ impl Checker {
         if ty.owner.is_some() {
             return ty.clone();
         }
+        if let Some(cs) = crate::gtype::tuple_components(&ty.name) {
+            // P6: a tuple name spells its component keys; normalize them so `(Vec<i64>, i64)` names the catalog vec
+            let cs: Vec<GType> = cs.iter().map(|k| self.norm_type(&GType::from_key(k))).collect();
+            return GType::new(&crate::gtype::tuple_name(&cs), Vec::new());
+        }
         let args: Vec<GType> = ty.args.iter().map(|a| self.norm_type(a)).collect();
         let mut name = ty.name.clone();
         if !self.decls.contains_key(&name) {
@@ -1617,7 +1622,8 @@ impl Checker {
     /// `norm_type` on an AST type key that may need normalization.
     fn norm_key(&self, key: &str) -> String {
         if !(key.contains("Vec") || key.contains("HashMap") || key.contains("String") || key.contains("File") || key.contains("Process")
-            || key.contains("Socket") || key.contains("Listener") || key.contains("Loop") || key.contains("result<"))
+            || key.contains("Socket") || key.contains("Listener") || key.contains("Loop") || key.contains("result<")
+            || key.contains(crate::gtype::TUPLE_PREFIX))
         {
             return key.to_string();
         }
@@ -1628,6 +1634,9 @@ impl Checker {
         for d in prog.types.iter_mut() {
             match d {
                 TypeDecl::Struct(s) => {
+                    if crate::gtype::is_tuple_name(&s.name) {
+                        s.name = self.norm_key(&s.name);
+                    }
                     for fd in s.fields.iter_mut() {
                         fd.ty = self.norm_key(&fd.ty);
                     }

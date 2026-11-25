@@ -1,0 +1,7 @@
+enum E { A(p: (i64, i64)), B(y: i64) }
+fn f(e: E) -> i64 {
+  match e {
+    E::A((a, b)) => { return a; }
+    E::B(y) => { return y; }
+  }
+}

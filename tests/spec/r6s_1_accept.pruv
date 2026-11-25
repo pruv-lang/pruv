@@ -16,3 +16,10 @@ fn bump(n: i64) -> (i64, (bool, S))
   t.0 = t.0 + 1;
   return t;
 }
+
+fn eight(t: (i64, i64, i64, i64, i64, i64, i64, bool)) -> i64
+  requires 0 <= t.0 && t.0 <= 10 && 0 <= t.6 && t.6 <= 10
+  ensures result == t.0 + t.6
+{
+  return t.0 + t.6;
+}
