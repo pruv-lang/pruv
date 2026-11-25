@@ -1,0 +1,14 @@
+// P7-1 A: after a loop writes a fixed array only the element type's range is known, not the values
+fn f() -> i64 {
+  let mut a: [u8; 1] = [0; 1];
+  let mut k: i64 = 0;
+  while k < 1
+    invariant 0 <= k && k <= 1
+    decreases 1 - k
+  {
+    a[0] = 255;
+    k = k + 1;
+  }
+  assert a[0] <= 254;
+  return 0;
+}

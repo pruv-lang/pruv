@@ -1,0 +1,2 @@
+// P7-1 A: a length that is a bool by its form (here `!true`) is type/const_type, like a bool literal
+fn f() -> i64 { let a: [i64; !true] = [0; 1]; return 0; }

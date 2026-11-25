@@ -1359,6 +1359,7 @@ must_reject|tests/must_reject/p7_const_type.pruv	1 case: obl=0 1	--infer=a329f7f
 must_reject|tests/must_reject/p7_fixed_arg.pruv	1 case: obl=0 1	--infer=625361dbc6ee
 must_reject|tests/must_reject/p7_fixed_arg_lit.pruv	1 case: obl=0 1	--infer=8d2a96f9fc3c
 must_reject|tests/must_reject/p7_fixed_assign_len.pruv	1 case: obl=0 1	--infer=f3e5e36383b5
+must_reject|tests/must_reject/p7_fixed_bool_expr_len.pruv	1 case: obl=0 1	--infer=4f22020e539b
 must_reject|tests/must_reject/p7_fixed_bool_len.pruv	1 case: obl=0 1	--infer=476a93728c41
 must_reject|tests/must_reject/p7_fixed_call_len.pruv	1 case: obl=0 1	--infer=999c0336d631
 must_reject|tests/must_reject/p7_fixed_char_len.pruv	1 case: obl=0 1	--infer=a58220f88b03
@@ -1368,6 +1369,7 @@ must_reject|tests/must_reject/p7_fixed_count.pruv	1 case: obl=0 1	--infer=9a54b0
 must_reject|tests/must_reject/p7_fixed_eq.pruv	1 case: obl=0 1	--infer=5ab923008844
 must_reject|tests/must_reject/p7_fixed_field.pruv	1 case: obl=0 1	--infer=68b3bde2fa85
 must_reject|tests/must_reject/p7_fixed_for_in.pruv	1 case: obl=0 1	--infer=d38deeb36593
+must_reject|tests/must_reject/p7_fixed_havoc_range.pruv	1 case: obl=19 1	--infer=8d1546628dbf
 must_reject|tests/must_reject/p7_fixed_large.pruv	1 case: obl=0 1	--infer=b335efae4cbd
 must_reject|tests/must_reject/p7_fixed_len_div0.pruv	1 case: obl=0 1	--infer=abd7334bae6e
 must_reject|tests/must_reject/p7_fixed_len_overflow.pruv	1 case: obl=0 1	--infer=bedf2a8fe76f
@@ -1903,7 +1905,7 @@ runtime|tests/runtime/p7_rt_fixed_eval.pruv	1 case: obl=16 1	--infer=fea0333854d
 runtime|tests/runtime/p7_rt_fixed_literal.pruv	1 case: obl=69 1	--infer=8278b5cc1dae
 runtime|tests/runtime/p7_rt_fixed_oob_unverified.pruv	1 case: obl=1 1	--infer=2569ac780474
 runtime|tests/runtime/p7_rt_fixed_oob_write.pruv	1 case: obl=4 1	--infer=f5e9c2ddef2b
-runtime|tests/runtime/p7_rt_fixed_proven.pruv	1 case: obl=17 1	--infer=88dc19edd374
+runtime|tests/runtime/p7_rt_fixed_proven.pruv	1 case: obl=17 1	--infer=917f2c1ced00
 runtime|tests/runtime/p8_rt_if_let.pruv	1 case: obl=51 1	--infer=ef05923a9246
 runtime|tests/runtime/p8_rt_let_else.pruv	1 case: obl=80 1	--infer=1b711500226c
 runtime|tests/runtime/p8_rt_slice.pruv	1 case: obl=96 1	--infer=be5ee26f4e88

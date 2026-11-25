@@ -2689,13 +2689,14 @@ fn is_digit(c: char) -> bool
   `a[i] = v` evaluates `i`, then `v`, then stores. Assignment and `let b: [T; N] = a` copy the whole array, and
   `a = [a[1], a[0]]` evaluates the whole right side before storing. `len(a)` is `N` (an `i64`). Proof: the array is
   an SMT array with the constant length `N`; an index `0 <= i < N` is an obligation (`verify/index_oob`), so a
-  constant in-range index needs no runtime check, and a read is known to lie in the element's range. Code: Rust
+  constant in-range index needs no runtime check, and a read is known to lie in the element's range (also after a
+  loop that writes the array, which forgets the values). Code: Rust
   `[T; N]` by value, a proven index as `get_unchecked`, an unproven one checked with the usual out-of-bounds panic;
   LLVM `[N x E]` (bool as `i8`, char as `i32`) in a stack slot, copies by `memcpy`. A zero-length literal is
   written `[x; 0]` (`[]` stays the empty view). Rejected: `[T; N]` as a parameter, result, field, tuple component
-  or type argument, and nested arrays, are `type/fixed_array_position`; an element type other than a scalar is
+  or type argument, and nested fixed arrays, are `type/fixed_array_position`; an element type other than a scalar (a view `[T]` too) is
   `type/fixed_array_element`; a negative or oversized length is `type/fixed_array_length`; a non-constant length is
-  `type/const_expr` and a `bool` or `char` length `type/const_type`; whole-array `==`/`!=`, use as a view `[T]`
+  `type/const_expr` and a `bool` (a literal, `!`, a comparison, `&&`/`||`) or `char` length `type/const_type`; whole-array `==`/`!=`, use as a view `[T]`
   (an argument, a `[T]` local) and a literal inside a contract are `type/fixed_array_operation`; a wrong element
   count is `type/type_mismatch`. Passing, borrowing as `[T]`, `inout`, fields, `old()` and contract literals are
   parity row P7-1 B. The length bound `[T; <=N]`

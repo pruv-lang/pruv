@@ -1360,6 +1360,7 @@ must_reject|tests/must_reject/p7_const_type.pruv	1 case: obl=0 1	default=d608eab
 must_reject|tests/must_reject/p7_fixed_arg.pruv	1 case: obl=0 1	default=ebb6008d220d
 must_reject|tests/must_reject/p7_fixed_arg_lit.pruv	1 case: obl=0 1	default=2eeb7688cef1
 must_reject|tests/must_reject/p7_fixed_assign_len.pruv	1 case: obl=0 1	default=bfe5905fbc3a
+must_reject|tests/must_reject/p7_fixed_bool_expr_len.pruv	1 case: obl=0 1	default=875c39f4f5a8
 must_reject|tests/must_reject/p7_fixed_bool_len.pruv	1 case: obl=0 1	default=1ac26b1f8daa
 must_reject|tests/must_reject/p7_fixed_call_len.pruv	1 case: obl=0 1	default=cf7413118727
 must_reject|tests/must_reject/p7_fixed_char_len.pruv	1 case: obl=0 1	default=ff611ae49462
@@ -1369,6 +1370,7 @@ must_reject|tests/must_reject/p7_fixed_count.pruv	1 case: obl=0 1	default=eac4e4
 must_reject|tests/must_reject/p7_fixed_eq.pruv	1 case: obl=0 1	default=d9d0fa53e3fa
 must_reject|tests/must_reject/p7_fixed_field.pruv	1 case: obl=0 1	default=c05453411a8c
 must_reject|tests/must_reject/p7_fixed_for_in.pruv	1 case: obl=0 1	default=0eeb6f5ebb47
+must_reject|tests/must_reject/p7_fixed_havoc_range.pruv	1 case: obl=7 1	default=1e3dfde0ad56
 must_reject|tests/must_reject/p7_fixed_large.pruv	1 case: obl=0 1	default=8af18648add9
 must_reject|tests/must_reject/p7_fixed_len_div0.pruv	1 case: obl=0 1	default=dae8e75d455b
 must_reject|tests/must_reject/p7_fixed_len_overflow.pruv	1 case: obl=0 1	default=d3afc9bb3fe4
@@ -1904,7 +1906,7 @@ runtime|tests/runtime/p7_rt_fixed_eval.pruv	1 case: obl=16 1	default=83560f815a0
 runtime|tests/runtime/p7_rt_fixed_literal.pruv	1 case: obl=69 1	default=adf15d71d841
 runtime|tests/runtime/p7_rt_fixed_oob_unverified.pruv	1 case: obl=1 1	default=a5c0bc669232
 runtime|tests/runtime/p7_rt_fixed_oob_write.pruv	1 case: obl=4 1	default=0a04283194da
-runtime|tests/runtime/p7_rt_fixed_proven.pruv	1 case: obl=13 1	default=f25e5f1b5184
+runtime|tests/runtime/p7_rt_fixed_proven.pruv	1 case: obl=13 1	default=f498f3463dcb
 runtime|tests/runtime/p8_rt_if_let.pruv	1 case: obl=51 1	default=f0e0293b4746
 runtime|tests/runtime/p8_rt_let_else.pruv	1 case: obl=56 1	default=2551d510aedf
 runtime|tests/runtime/p8_rt_slice.pruv	1 case: obl=59 1	default=6b65b6544a30

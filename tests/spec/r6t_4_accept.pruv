@@ -22,3 +22,24 @@ fn table(k: i64) -> u16
   }
   return a[k] + b[3] + u16(len(a));
 }
+
+// A loop that writes a fixed array forgets its element values but keeps the element type's range.
+fn ranges() -> i64 {
+  let mut a: [u8; 2] = [0; 2];
+  let mut s: [i16; 2] = [0; 2];
+  let mut h: [char; 1] = ['a'; 1];
+  let mut k: i64 = 0;
+  while k < 2
+    invariant 0 <= k && k <= 2
+    decreases 2 - k
+  {
+    a[k] = 255;
+    s[k] = -32768;
+    h[0] = 'b';
+    k = k + 1;
+  }
+  assert a[1] <= 255 && a[0] >= 0;
+  assert s[1] >= -32768 && s[0] <= 32767;
+  assert u32(h[0]) <= 1114111 && (u32(h[0]) < 55296 || u32(h[0]) > 57343);
+  return 0;
+}

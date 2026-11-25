@@ -2522,8 +2522,12 @@ impl<'a> FnVerifier<'a> {
                     };
                     let nv = self.try_fresh(n, &fty)?;
                     let mut a = nv.try_arr()?.clone();
-                    if a.fix.is_some() {
-                        // P7-1: the length of a fixed array is the constant N (set by try_fresh)
+                    if let Some(f) = &a.fix {
+                        // P7-1: the length of a fixed array is the constant N (set by try_fresh); its elements keep
+                        // the range of the element type, which contract reads do not assume
+                        if let Some(width) = f.fixed_parts().and_then(|(e, _)| intwidth::of(&e.name)) {
+                            h.pc.push(self.narrow_elem_domain(&a.a, &a.n, width));
+                        }
                     } else if keep.contains(n) {
                         a.n = old_arr.n.clone();
                     } else {

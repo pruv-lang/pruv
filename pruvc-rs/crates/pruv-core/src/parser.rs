@@ -285,6 +285,17 @@ impl<'a> ConstEval<'a> {
     }
 }
 
+/// P7-1: an expression that is a bool by its form (a literal, `!`, a comparison or `&&`/`||`), so a fixed-array
+/// length written that way is `type/const_type` rather than `type/const_expr`.
+fn is_bool_shaped(e: &Expr) -> bool {
+    match e {
+        Expr::BoolLit(_) => true,
+        Expr::Unary(u) => u.op == "!",
+        Expr::Binary(b) => matches!(b.op.as_str(), "==" | "!=" | "<" | "<=" | ">" | ">=" | "&&" | "||"),
+        _ => false,
+    }
+}
+
 /// P7-1: an element type a fixed-length array cannot hold yet.
 fn fixed_element(line: i64, col: i64, what: &str) -> PruvError {
     PruvError::new("type", line, col, "fixed_array_element",
@@ -491,8 +502,8 @@ impl Parser {
     /// width (an untyped literal expression in i64), then taken as a nonnegative length.
     fn fixed_len(&mut self) -> R<u64> {
         let e = self.expr()?;
-        if let Expr::BoolLit(b) = &e {
-            return Err(PruvError::new("type", b.line, b.col, "const_type",
+        if is_bool_shaped(&e) {
+            return Err(PruvError::new("type", e.line(), e.col(), "const_type",
                 "an array length is an integer, found bool", "write an integer constant expression"));
         }
         let mut ev = ConstEval { decls: &[], vals: HashMap::new(), busy: Vec::new() };
