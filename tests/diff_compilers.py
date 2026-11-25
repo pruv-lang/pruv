@@ -213,7 +213,13 @@ def build_cases(args):
         name = "input/" + rel.replace(os.sep, "/")
         if args.flag:
             name += " [" + " ".join(args.flag) + "]"
-        cases.append({"name": name, "src": ap_, "flags": list(args.flag or [])})
+        # a source that declares a module needs its sibling files: save/replay it as a project (whole directory copied)
+        try:
+            with open(ap_, encoding="utf-8", errors="replace") as fh:
+                has_mod = re.search(r"^\s*(pub\s+)?mod\s+\w+\s*;", fh.read(), re.M) is not None
+        except OSError:
+            has_mod = False
+        cases.append({"name": name, "src": ap_, "flags": list(args.flag or []), "project": has_mod})
     return cases, errors
 
 
