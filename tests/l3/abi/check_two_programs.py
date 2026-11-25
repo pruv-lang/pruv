@@ -1,6 +1,10 @@
 """L3 P10H: two LLVM-backend programs with different package names link into ONE binary.
 
-Called by check_c_handle.py in the same run (`run_case`), so it runs for the Python and for the Rust compiler. Two small
+PF: the Python compiler (pruvc/) is frozen since bundle PF; this module never imports it, and runs it only when
+check_c_handle.py passes tools["vs_py"] (its opt-in --vs-py). Otherwise the Rust output goes to the golden object that
+check_c_handle.py passes as tools["golden"] (keys "c_handle|two_programs/<pkg>|rust-bindings" and "...|llvm-ir").
+
+Called by check_c_handle.py in the same run (`run_case`), so it runs for the selected compiler. Two small
 programs, packages `twoa` and `twob`, both define the entry `calc` (same name, different result) and both lower the same
 G6 builtins (vec_new / vec_push / vec_get on a Vec<i64>, so the .ll imports the shim adapters pruv_g6_v1_*, drop__vec__i
 ... and the bridge marker pruv_g6_bridge_v1 from its own Rust module), with raw_entries = "c".
@@ -43,7 +47,9 @@ def run_case(work, rs, py, check, run, tools):
     failure; run(cmd, timeout) -> (rc, output); tools: dict with rustc, clang, runtime_c, sel_cmd, py_cmd."""
     work = Path(work) / "two_programs"
     work.mkdir(parents=True)
-    sel_cmd, py_cmd = tools["sel_cmd"], tools["py_cmd"]
+    sel_cmd, py_cmd = tools["sel_cmd"], tools.get("py_cmd")
+    vs_py = bool(rs and tools.get("vs_py") and py_cmd)   # opt-in frozen-reference comparison
+    g = tools.get("golden")                              # tests/golden.py object, or None
     built = {}
     for pkg, mult, const in PKGS:
         base = work / pkg
@@ -53,7 +59,7 @@ def run_case(work, rs, py, check, run, tools):
                                                      "raw_entries": "c"}))
         (pdir / "app.pruv").write_text(source(mult, const))
         outs = {}
-        for tag, cmd in [("sel", sel_cmd)] + ([("py", py_cmd)] if rs else []):
+        for tag, cmd in [("sel", sel_cmd)] + ([("py", py_cmd)] if vs_py else []):
             d = base / tag
             d.mkdir()
             rc, txt = run(list(cmd) + [str(pdir / "app.pruv"), "-o", str(d / "out.ll"), "--no-verify", "--manifest",
@@ -61,10 +67,15 @@ def run_case(work, rs, py, check, run, tools):
             if not check("two programs %s: %s compile" % (pkg, tag), rc == 0, "exit %d %s" % (rc, txt)):
                 return
             outs[tag] = (d / "B.rs", d / "out.ll")
-        if rs:
+        if g is not None:
+            for i, what in enumerate(("rust-bindings", "llvm-ir")):
+                g.check("c_handle|two_programs/%s|%s" % (pkg, what), outs["sel"][i].read_text(), "%s %s" % (what, pkg))
+        if vs_py:
             for i, what in enumerate(("B.rs", "out.ll")):
-                check("two programs %s: rs %s identical to python" % (pkg, what),
-                      outs["sel"][i].read_bytes() == outs["py"][i].read_bytes(), "differs")
+                same = outs["sel"][i].read_bytes() == outs["py"][i].read_bytes()
+                if not same and tools.get("update_golden"):
+                    print("PY/RS DISAGREE two programs %s %s" % (pkg, what))
+                check("two programs %s: rs %s identical to python" % (pkg, what), same, "differs")
         built[pkg] = outs["sel"]
 
     # ---- text facts: the prefix on every program-specific global symbol, both sides ---------------------------------------

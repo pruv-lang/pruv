@@ -1,10 +1,10 @@
-"""L3-9 engine-import request handlers: 160 fixtures x four verified pairs (py/rust, py/llvm, rs/rust, rs/llvm).
+"""L3-9 engine-import request handlers: 160 fixtures x the verified pairs (default rs/rust, rs/llvm; py/rust, py/llvm only via --pairs).
 
 For each pair the runner builds work/build/<pair>/harness from bench/l3/req/root.pruv (compiled and verified with --lib
 bench/l3/lib), the req_host crate (bench/l3/req/host) and harness.rs. Every fixture scenario then goes through the pinned-TypeScript
 oracle and through each pair harness (one process per pair; JSON lines in, one observation line per scenario out). Each result is
 classified by compare.py (exact / P5 / P6 / engine-policy / excluded-domain / unexplained; P08 through the explicit 32-active-request
-P6 policy), and the four pairs are compared with each other (must be identical). Exit code nonzero on any unexplained difference.
+P6 policy), and the selected pairs are compared with each other (must be identical). Exit code nonzero on any unexplained difference.
 First differences are saved in work/test_impl/<pair>/<id>.json and work/test_impl/summary.json.
 
   python3 test_impl.py [--pairs py/rust,rs/llvm] [--group S,F | --only S ...] [--id P08 ...] [--list]
@@ -25,7 +25,10 @@ import compare
 from common import GROUPS, HERE, load_all, strip_case
 from oracle import run_oracle
 
-PAIRS = ('py/rust', 'py/llvm', 'rs/rust', 'rs/llvm')
+# PF: the Python compiler pruvc/ is frozen (bundle PF); the Rust compiler is the product. Default pairs are rs only;
+# ALL_PAIRS keeps the py pairs selectable with --pairs py/rust,... as the frozen reference (not used by CI).
+ALL_PAIRS = ('py/rust', 'py/llvm', 'rs/rust', 'rs/llvm')
+PAIRS = ('rs/rust', 'rs/llvm')
 ROOT = HERE / 'root.pruv'
 HOST = HERE / 'host'
 HARNESS = HERE / 'harness.rs'
@@ -151,8 +154,8 @@ def parse_pairs(text):
     out = []
     for p in text.split(','):
         p = p.strip()
-        if p not in PAIRS:
-            raise SystemExit('unknown pair %s (use %s)' % (p, ', '.join(PAIRS)))
+        if p not in ALL_PAIRS:
+            raise SystemExit('unknown pair %s (use %s)' % (p, ', '.join(ALL_PAIRS)))
         out.append(p)
     return out
 
@@ -194,7 +197,7 @@ def table(rows, keys, label):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    ap.add_argument('--pairs', help='comma list of ' + ','.join(PAIRS) + ' (default all four)')
+    ap.add_argument('--pairs', help='comma list of ' + ','.join(ALL_PAIRS) + ' (default ' + ','.join(PAIRS) + '; py is the frozen PF reference)')
     ap.add_argument('--group', action='append', default=[], help='fixture group letters, comma list or repeated (S F B L A O T U G R E C D I P X)')
     ap.add_argument('--only', action='append', default=[], help='same as --group (entry/test_impl.py spelling)')
     ap.add_argument('--id', action='append', default=[], help='one fixture id (P08), repeatable')
@@ -281,7 +284,7 @@ def main(argv=None):
             print(f"{pair}: extra result {res.get('id')}")
         summary['pairs'][pair] = {'counts': batch['counts'], 'first': [r for r in batch['results'] if r['class'] != 'exact'][:50]}
 
-    # the four pairs must agree with each other exactly (same policy-free comparison)
+    # the selected pairs must agree with each other exactly (same policy-free comparison)
     keys = list(parsed)
     for i, case in enumerate(cases):
         base = parsed[keys[0]][i] if keys else None

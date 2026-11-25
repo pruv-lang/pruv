@@ -12,7 +12,8 @@ Safeguards that have been proven (range checks, overflow checks) are erased so t
 ## Current status (prototype v0.1)
 The canonical compiler is the Rust implementation `pruvc` (`pruvc-rs/`). It is a single executable that statically includes z3 and LLVM (the macOS build still depends dynamically on Homebrew libzstd; the release build is on hold),
 and `--emit rs|ll|obj|exe` produces Rust source, LLVM IR, an object file, or an executable.
-The Python implementation `pruvc/` is kept as the cross-check reference (it is not deleted; it serves as the counterpart for the test tools' cross-checks).
+The Python implementation `pruvc/` is FROZEN since bundle PF (decision 2026-11-25): it stays in the tree but gets no new features; new language features go into the Rust compiler `pruvc-rs/` only.
+The test harness runs Rust only by default. The old py-vs-rs comparisons (`tests/diff_parse.py`, `diff_trace.py`, `diff_llvm.py`, `diff_rust.py`, `diff_compilers.py`, `m3_all.py`) became golden-file checks (`tests/golden.py`, files in `tests/golden/`); the old comparison is opt-in via `--vs-py` and not run by CI. `tests/run_all.py --compiler py` is also opt-in and not run by CI.
 The default tests target the Rust implementation (the release build is on hold).
 
 ### Build and usage (Rust implementation)
@@ -29,7 +30,7 @@ If `-o` is omitted, `--emit exe` uses the input name with its extension stripped
 `--no-verify`, `--trust-callers`, `--contract-budget N` (for testing), `--target TRIPLE`, `-mcpu=CPU`, `--backend rust|llvm`, `--rust-bindings PATH`, `--also-llvm LL RS` (together with `--emit rs`, for testing).
 The test tools (`tests/run_all.py` etc.) use this binary by default (`--compiler py` for the Python implementation, `--compiler-path` for another location).
 
-### Cross-check reference (Python implementation)
+### Frozen Python implementation (no new features since bundle PF, 2026-11-25)
 A Python 3.9 + z3 prototype: parser → type and effect checking → z3 proof → Rust code generation → rustc.
 
 ```
@@ -38,8 +39,7 @@ python3 -m venv .venv && .venv/bin/pip install z3-solver
 ```
 
 ### Policy for new features
-A new language feature goes into the Python implementation first (quick prototype, independent cross-check), and in the same batch it is ported to the Rust implementation
-and made to pass the `tests/m3_all.py` cross-check. The default tests target the Rust implementation (the release build is on hold).
+A new language feature goes into the Rust implementation `pruvc-rs/` only (the Python `pruvc/` is frozen) and is covered by the golden-file checks (`tests/m3_all.py`, `tests/golden.py`). The default tests target the Rust implementation (the release build is on hold).
 
 ## License
 You may choose either MIT or Apache-2.0 ([LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE)).

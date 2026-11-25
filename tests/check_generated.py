@@ -2,8 +2,12 @@
 the Python inline policy accepts and rejects at the spec thresholds (INLINE_SMALL 8/9, INLINE_BUDGET 1500/1501), so a
 wrong value in pruvc/data/inline_policy.json is caught (pruvc-rs has the same pairs in inline_policy.rs tests).
 
-python tests/check_generated.py
+python tests/check_generated.py [--vs-py | --py-units]
 (--only-py, --only-rs, --py PATH, --rs PATH, --work DIR are accepted and ignored: run_all passes them.)
+
+PF change: pruvc/ is frozen, so by default this script imports nothing from pruvc/ (and no z3). Only the shared-table
+freshness check runs. The Python inline_policy unit test is skipped (one line is printed) unless --vs-py (or its
+alias --py-units) is given; that frozen-reference mode is never used by CI.
 """
 import glob
 import os
@@ -11,10 +15,18 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
-sys.path.insert(0, os.path.join(ROOT, "pruvc"))
 
 import gen_shared  # noqa: E402
-from inline_policy import inline_policy  # noqa: E402
+
+inline_policy = None  # set lazily by load_py_policy() under --vs-py only
+
+
+def load_py_policy():
+    """import the frozen Python inline_policy module (only under --vs-py / --py-units)"""
+    global inline_policy
+    sys.path.insert(0, os.path.join(ROOT, "pruvc"))
+    from inline_policy import inline_policy as fn  # noqa: E402
+    inline_policy = fn
 
 
 def inline_case(lines, sites):
@@ -41,7 +53,7 @@ def inline_fp_case(sites, triple=True):
     return "#[inline(always)]\nfn f__pruv_fp(" in inline_policy(text)
 
 
-def main():
+def main(vs_py=False):
     bad = False
     for path in sorted(glob.glob(os.path.join(ROOT, "pruvc", "data", "*.json"))):
         name = os.path.splitext(os.path.basename(path))[0]
@@ -57,15 +69,22 @@ def main():
     if current != gen_shared.render().encode("utf-8"):
         print("stale: %s; run tools/gen_shared.py" % gen_shared.OUT)
         bad = True
-    for lines, sites, want in INLINE_PAIRS:
-        if inline_case(lines, sites) != want:
-            print("inline policy: %d lines, %d sites: want %s" % (lines, sites, "always" if want else "inline"))
-            bad = True
-    for sites, triple, want in ((300, True, False), (1, True, True), (300, False, True)):
-        if inline_fp_case(sites, triple) != want:
-            print("inline policy: __pruv_fp twin (triple %s), %d base sites: want %s"
-                  % (triple, sites, "always" if want else "inline"))
-            bad = True
+    if vs_py:
+        load_py_policy()
+        for lines, sites, want in INLINE_PAIRS:
+            if inline_case(lines, sites) != want:
+                print("inline policy: %d lines, %d sites: want %s" % (lines, sites, "always" if want else "inline"))
+                bad = True
+        for sites, triple, want in ((300, True, False), (1, True, True), (300, False, True)):
+            if inline_fp_case(sites, triple) != want:
+                print("inline policy: __pruv_fp twin (triple %s), %d base sites: want %s"
+                      % (triple, sites, "always" if want else "inline"))
+                bad = True
+    else:
+        # PF: py-vs-rs comparison dropped from the default run; the Python inline_policy thresholds (INLINE_SMALL 8/9,
+        # INLINE_BUDGET 1500/1501, __pruv_fp twin) were checked only against the Python module, i.e. a wrong value in
+        # pruvc/data/inline_policy.json (pruvc-rs keeps the same pairs in its own inline_policy.rs tests).
+        print("check_generated: Python inline_policy unit test skipped (pruvc/ is frozen; use --vs-py to run it)")
     if bad:
         return 1
     print("check_generated: ok (%d tables)" % len(gen_shared.TABLES))
@@ -73,4 +92,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main("--vs-py" in sys.argv[1:] or "--py-units" in sys.argv[1:]))

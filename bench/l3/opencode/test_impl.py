@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""L3-7 OpenCode import: builds the four verified pairs (py/rust, py/llvm, rs/rust, rs/llvm), runs every fixture of
+"""L3-7 OpenCode import: builds the verified pairs (default rs/rust, rs/llvm; py/rust, py/llvm only via --pairs), runs every fixture of
 fixtures/_defaults.json + fixtures/F*.json on the pinned TypeScript (node reference.mjs) and on each pair, and compares them with
 oracle.compare (result, primitive trace, final trees). A difference passes only when oracle.py names a policy whose trigger is in
 the fixture. Only this piece is built; no repository-wide suites.
@@ -51,7 +51,10 @@ from common import (HERE, WORK, TraceAssertion, bytes_of, clean, normalize_trace
                     reference_command, run_side, tokens_of)
 
 FIXTURES = HERE / 'fixtures'
-PAIRS = [(c, b) for c in ('py', 'rs') for b in ('rust', 'llvm')]
+# PF: the Python compiler pruvc/ is frozen (bundle PF); the Rust compiler is the product. Default pairs are rs only;
+# ALL_PAIRS keeps the py pairs selectable with --pairs py/rust,... as the frozen reference (not used by CI).
+ALL_PAIRS = [(c, b) for c in ('py', 'rs') for b in ('rust', 'llvm')]
+PAIRS = [(c, b) for c in ('rs',) for b in ('rust', 'llvm')]
 SCOPES = {'A': ['util', 'packet'], 'B': ['util', 'packet', 'path', 'admit', 'sql', 'rows', 'list'], 'C': ['util', 'packet', 'export'],
           'D': ['util', 'packet', 'entry', 'convert', 'plan']}
 UNIT_SELECT = {'packet': ['F16-data-dir', 'F16-folder', 'F16-plan', 'F01-xdg'],
@@ -826,7 +829,7 @@ def parse_pairs(text):
     out = []
     for p in text.split(','):
         c, b = p.strip().split('/')
-        if (c, b) not in PAIRS:
+        if (c, b) not in ALL_PAIRS:
             raise SystemExit('unknown pair ' + p)
         out.append((c, b))
     return out
@@ -847,7 +850,7 @@ def run_batch(cases, fn, jobs):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    ap.add_argument('--pairs', help='comma list of py/rust,py/llvm,rs/rust,rs/llvm (default all four)')
+    ap.add_argument('--pairs', help='comma list of py/rust,py/llvm,rs/rust,rs/llvm (default rs/rust,rs/llvm; py is the frozen PF reference)')
     ap.add_argument('--only', action='append', default=[], help='fixtures whose name contains SUBSTRING (repeatable)')
     ap.add_argument('--verify-only', action='store_true', help='true verification of root and what it reaches on the selected compilers; no linking or execution')
     ap.add_argument('--scope', choices=sorted(SCOPES), help="with --verify-only: only that package's modules via a temporary entry")

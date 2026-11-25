@@ -1,10 +1,10 @@
-"""L3-8 engine-import common entry: fixtures x four verified pairs (py/rust, py/llvm, rs/rust, rs/llvm).
+"""L3-8 engine-import common entry: fixtures x the verified pairs (default rs/rust, rs/llvm; py/rust, py/llvm only via --pairs, frozen PF reference).
 
 For every fixture variant (I group excluded; integrate.py runs it) and each pair the runner (work/<pair>/harness, built from the
 verified root.pruv, harness.rs and the entry_host crate) is compared
   - with the fixture's `expect` (terminal, value, trace; driver when recorded),
   - with the pinned-TypeScript oracle (including exact-limit probes),
-  - across the pairs (all four identical).
+  - across the pairs (all selected pairs identical).
 The comparison classes are those of common.compare. Exit code is nonzero on any unexplained difference.
 
   python3 test_impl.py [--pairs py/rust,rs/llvm] [--only GROUP ...] [--case ID ...] [--reuse-verified] [--list]
@@ -16,7 +16,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from common import HERE, PAIRS, WORK, compare, host_path, load_cases, strip_case
+from common import ALL_PAIRS, HERE, PAIRS, WORK, compare, host_path, load_cases, strip_case
 from oracle import run_oracle
 
 ROOT = HERE / 'root.pruv'
@@ -142,7 +142,7 @@ def parse_pairs(text):
     out = []
     for p in text.split(','):
         c, b = p.strip().split('/')
-        if f'{c}_{b}' not in PAIRS:
+        if f'{c}_{b}' not in ALL_PAIRS:
             raise SystemExit('unknown pair ' + p)
         out.append((c, b))
     return out
@@ -150,7 +150,7 @@ def parse_pairs(text):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    ap.add_argument('--pairs', help='comma list of py/rust,py/llvm,rs/rust,rs/llvm (default all four)')
+    ap.add_argument('--pairs', help='comma list of py/rust,py/llvm,rs/rust,rs/llvm (default rs/rust,rs/llvm; py is the frozen PF reference)')
     ap.add_argument('--only', action='append', default=[], help='fixture group letter (S..P), repeatable')
     ap.add_argument('--case', action='append', default=[], help='one variant id (D01/list) or a fixture id (D01), repeatable')
     ap.add_argument('--reuse-verified', action='store_true', help='reuse work/<pair>/root_gen.* of an earlier verified run')

@@ -17,7 +17,8 @@ adapter=WORK/'libpruv_str.rlib'
 run([g.RUSTC,'--crate-name','pruv_str','--crate-type','rlib',HERE/'str_adapter.rs','-o',adapter])
 flags=['--rust-extern',f'mcp_host={lib}','--rust-extern',f'pruv_str={adapter}','--manifest',str(HERE/'pruv.json')]
 failures=[]
-for compiler,backend in c.PAIRS:
+# PF: default rs pairs only; --vs-py adds the frozen py reference pairs (c.ALL_PAIRS)
+for compiler,backend in (c.ALL_PAIRS if '--vs-py' in sys.argv else c.PAIRS):
  out=WORK/f'{compiler}_{backend}';out.mkdir(exist_ok=True)
  if '--reuse-verified' in sys.argv:
   built={'rc':0,'rs':str(out/'root_gen.rs'),'ll':str(out/'root_gen.ll') if backend=='llvm' else None}

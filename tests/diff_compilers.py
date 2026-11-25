@@ -1,12 +1,26 @@
 #!/usr/bin/env python3
-"""Differential cross-check of the two Pruv compiler implementations (default a=py, b=rs) (docs/M3_C4_SPEC.md section 5).
+"""Golden check of the Rust compiler (b = pruvc-rs) over the whole input set (docs/M3_C4_SPEC.md section 5).
+
+Default mode = golden: only the Rust compiler runs (one new process per input and backend, at most --jobs at once) and its
+result is compared with tests/golden/diff_compilers.txt (tests/golden.py; one file for all backends, the backend is in the key).
+Neither pruvc/ nor z3 is imported or run. Key: "<group>|<case name>|<backend>" (case name = repo-relative, e.g.
+"examples/foo.pruv [no-verify]"; "@<kind>" is appended if --b is not rs). The hashed normalized text is: exit code, the stdout
+JSON lines (counterexample VALUES removed, only their presence kept; keys that carry timing are dropped; work directory, input
+path and compiler name normalized), and the generated files (name + sha256 of the bytes, sorted). stderr and elapsed times are
+not part of it. A b crash (exit other than 0, 1, 2) or timeout is a failure and is not recorded.
 
     python tests/diff_compilers.py [--b-path P] (default pruvc-rs/target/release/pruvc, .exe on Windows) [--backend rust|llvm|both]
-        [--a py|rs] [--a-path P] [--b py|rs] [--b-path P] [--input FILE ...] [--flag F ...]
-        [--only must_reject|examples|runtime|bench|g4|g4b|g5] [--jobs N] [--timeout 300] [--save-dir DIR]
-    python tests/diff_compilers.py --replay CASE_DIR
+        [--b rs] [--input FILE ...] [--flag F ...] [--only must_reject|examples|runtime|bench|g4|g4b|g5] [--jobs N]
+        [--timeout 300] [--save-dir DIR] [--golden PATH] [--update-golden [--prune-golden]]
+    python tests/diff_compilers.py --update-golden    # after an intended change: rewrites the golden, prints every CHANGED/NEW key
+    python tests/diff_compilers.py --vs-py [--a py|rs] [--a-path P]   # old py-vs-rs comparison (below)
+    python tests/diff_compilers.py --vs-py --update-golden            # capture: run both, write the golden from Rust, report a/b disagreements
+    python tests/diff_compilers.py --replay CASE_DIR                  # only for cases saved by a --vs-py run
 
-Runs both compilers on the same input, flags and backend, each in a new process per input (a, then b, in order within one worker ->
+--vs-py uses the FROZEN Python compiler (bundle PF) as reference and is NOT run by CI; the rest of this docstring describes it.
+Plain --vs-py does not read or write the golden. --a/--a-path are ignored without --vs-py.
+
+--vs-py runs both compilers on the same input, flags and backend, each in a new process per input (a, then b, in order within one worker ->
 the number of concurrent processes is at most --jobs (default os.cpu_count())), and compares them.
 Default inputs: tests/must_reject/*.pruv, examples/*.pruv (default/no-verify/trust-callers),
 tests/runtime/*.pruv (flags_matrix, flags and contract_budget from the .json), bench/solutions/pruv_agg/*.pruv,
@@ -42,6 +56,7 @@ import argparse
 import concurrent.futures as cf
 import datetime
 import glob
+import hashlib
 import json
 import os
 import re
@@ -54,6 +69,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import compiler_driver as CD  # noqa: E402
+import golden  # noqa: E402   (no pruvc / z3 import anywhere: the compilers are only run as processes)
 
 CLASSES = ["same", "diff", "a_crash", "b_crash", "a_timeout", "b_timeout", "not_implemented"]
 FAILING = ("diff", "a_crash", "b_crash", "a_timeout", "b_timeout")
@@ -340,21 +356,90 @@ def fill(tmpl, src, out, bind, manifest=None):
     return [m.get(t, t) for t in tmpl]
 
 
+def run_side(spec, side, tmpl, work, timeout):
+    """Run one compiler (side "a" or "b") on one case in work/<side>. -> side dict (argv, res, dir, reps)."""
+    backend = spec["backend"]
+    d = os.path.join(work, side)
+    os.makedirs(d, exist_ok=True)
+    out = os.path.join(d, "out.ll" if backend == "llvm" else "out.rs")
+    bind = os.path.join(d, "bind.rs")
+    argv = fill(tmpl, spec["src"], out, bind, spec.get("manifest"))
+    prefix = tmpl[:tmpl.index(SRC_T)]
+    res = CD.run_argv(argv, timeout=timeout)
+    return {"argv": argv, "res": res, "dir": d,
+            "reps": norm_replacements(d, spec["src"], prefix, spec.get("manifest"))}
+
+
+# Stdout keys whose value depends on timing; they never go into the golden text.
+TIMING_KEY_RE = re.compile(r"(?i)^(?:time|.*(?:elapsed|duration|seconds|millis|timing|_ms|_time|time_).*)$")
+
+
+def _scrub(v, reps):
+    """JSON value -> value for the golden text: counterexample values reduced to presence, timing keys dropped,
+    strings normalized (work directory, input path, compiler name)."""
+    if isinstance(v, dict):
+        out = {}
+        for k, x in v.items():
+            if k == CEX_KEY:
+                out[k] = "<present>"
+            elif TIMING_KEY_RE.match(k):
+                continue
+            else:
+                out[k] = _scrub(x, reps)
+        return out
+    if isinstance(v, list):
+        return [_scrub(x, reps) for x in v]
+    return norm_text(v, reps) if isinstance(v, str) else v
+
+
+def golden_text(side, names):
+    """Normalized text of one compiler run for the golden digest: exit code, stdout JSON lines (counterexample values
+    removed), generated files (name + sha256 of the bytes, sorted). stderr and elapsed time are not part of it."""
+    res, reps = side["res"], side["reps"]
+    lines = ["exit %d" % res.returncode]
+    for item in parse_stdout(res.stdout, reps):
+        if isinstance(item, dict):
+            lines.append("stdout " + json.dumps(_scrub(item, reps), sort_keys=True, ensure_ascii=False))
+        else:
+            lines.append("stdout-text " + item)
+    for n in sorted(names):
+        data = read_bytes(os.path.join(side["dir"], n))
+        if data is not None:
+            lines.append("file %s %s" % (n, hashlib.sha256(data).hexdigest()))
+    return "\n".join(lines) + "\n"
+
+
+def golden_summary(res, names, side):
+    n_files = sum(1 for n in names if os.path.exists(os.path.join(side["dir"], n)))
+    return "exit %d, %d file%s" % (res.returncode, n_files, "" if n_files == 1 else "s")
+
+
+def run_golden(spec, tmpl_b, work, timeout):
+    """Golden mode: run only b. -> outcome dict (cls same / b_crash / b_timeout) with the golden text and summary."""
+    names = out_names(spec["backend"])
+    side = run_side(spec, "b", tmpl_b, work, timeout)
+    rb = side["res"]
+    if rb.timed_out:
+        cls = "b_timeout"
+    elif rb.kind == "crash":
+        cls = "b_crash"
+    else:
+        cls = "same"
+    details = []
+    if cls != "same":
+        details = ["b: exit %s%s %s" % (rb.returncode, " (timeout)" if rb.timed_out else "",
+                                        (rb.stderr or rb.stdout).strip()[-200:])]
+    return {"cls": cls, "details": details, "crlf_only": False, "sides": {"b": side}, "names": names,
+            "cex_differs": False, "gtext": golden_text(side, names), "gsummary": golden_summary(rb, names, side)}
+
+
 def run_pair(spec, tmpl_a, tmpl_b, work, timeout):
-    """Run and compare one case, a then b. -> outcome dict (including the result objects and work directories)."""
+    """Run and compare one case, a then b (--vs-py). -> outcome dict (including the result objects and work directories)."""
     backend = spec["backend"]
     names = out_names(backend)
     sides = {}
     for side, tmpl in (("a", tmpl_a), ("b", tmpl_b)):
-        d = os.path.join(work, side)
-        os.makedirs(d, exist_ok=True)
-        out = os.path.join(d, "out.ll" if backend == "llvm" else "out.rs")
-        bind = os.path.join(d, "bind.rs")
-        argv = fill(tmpl, spec["src"], out, bind, spec.get("manifest"))
-        prefix = tmpl[:tmpl.index(SRC_T)]
-        res = CD.run_argv(argv, timeout=timeout)
-        sides[side] = {"argv": argv, "res": res, "dir": d,
-                       "reps": norm_replacements(d, spec["src"], prefix, spec.get("manifest"))}
+        sides[side] = run_side(spec, side, tmpl, work, timeout)
     ra, rb = sides["a"]["res"], sides["b"]["res"]
     details = []
     if ra.returncode != rb.returncode:
@@ -370,8 +455,10 @@ def run_pair(spec, tmpl_a, tmpl_b, work, timeout):
         bad = ra if cls.startswith("a_") else rb
         details = ["%s: exit %s%s %s" % (cls[0], bad.returncode, " (timeout)" if bad.timed_out else "",
                                           (bad.stderr or bad.stdout).strip()[-200:])] + details
+    # b's golden text is computed here, while the work directory still exists (used by --vs-py --update-golden)
     return {"cls": cls, "details": details, "crlf_only": crlf and cls == "same", "sides": sides, "names": names,
-            "cex_differs": bool(cex)}
+            "cex_differs": bool(cex), "gtext": golden_text(sides["b"], names),
+            "gsummary": golden_summary(rb, names, sides["b"])}
 
 
 def write_text(path, text):
@@ -397,9 +484,10 @@ def save_case(case_dir, spec, tmpl_a, tmpl_b, outcome, versions, case_id):
         shutil.copyfile(spec["src"], os.path.join(case_dir, "input.pruv"))
     sides = outcome["sides"]
     write_text(os.path.join(case_dir, "argv.json"), json.dumps(
-        {"a": sides["a"]["argv"], "b": sides["b"]["argv"], "a_template": tmpl_a, "b_template": tmpl_b}, indent=1))
+        {"a": sides["a"]["argv"] if "a" in sides else None, "b": sides["b"]["argv"],
+         "a_template": tmpl_a, "b_template": tmpl_b}, indent=1))
     write_text(os.path.join(case_dir, "version.json"), json.dumps(versions, indent=1))
-    for s in ("a", "b"):
+    for s in [x for x in ("a", "b") if x in sides]:
         sd = os.path.join(case_dir, s)
         os.makedirs(sd, exist_ok=True)
         r = sides[s]["res"]
@@ -410,13 +498,15 @@ def save_case(case_dir, spec, tmpl_a, tmpl_b, outcome, versions, case_id):
             if os.path.exists(p):
                 shutil.copyfile(p, os.path.join(sd, n))
     write_text(os.path.join(case_dir, "timing.json"), json.dumps(
-        {"a_seconds": round(sides["a"]["res"].elapsed, 3), "b_seconds": round(sides["b"]["res"].elapsed, 3)}, indent=1))
+        {"a_seconds": round(sides["a"]["res"].elapsed, 3) if "a" in sides else None,
+         "b_seconds": round(sides["b"]["res"].elapsed, 3)}, indent=1))
     write_text(os.path.join(case_dir, "case.json"), json.dumps(
         {"id": case_id, "name": spec["name"], "original_src": spec["src"], "flags": spec["flags"],
          "backend": spec["backend"], "classification": outcome["cls"], "details": outcome["details"],
          "cex_differs": outcome.get("cex_differs", False), "project_root": project_root,
          "workspace": ws_info,
-         "exit": {"a": sides["a"]["res"].returncode, "b": sides["b"]["res"].returncode}}, indent=1, ensure_ascii=False))
+         "exit": {"a": sides["a"]["res"].returncode if "a" in sides else None,
+                  "b": sides["b"]["res"].returncode}}, indent=1, ensure_ascii=False))
 
 
 # ---------------------------------------------------------------- replay
@@ -450,6 +540,9 @@ def replay(case_dir, args):
     spec = {"name": meta["name"], "src": src, "flags": meta["flags"], "backend": meta["backend"]}
     if manifest:
         spec["manifest"] = manifest
+    if not argv.get("a_template"):
+        print("replay: case %s was saved by a golden-mode run (no a side); rerun it by hand with argv.json b" % case_dir)
+        return 2
     print("replay %s  (saved classification: %s)" % (meta["name"], meta["classification"]))
     for s in ("a", "b"):
         print("  %s: %s" % (s, json.dumps(versions.get(s), ensure_ascii=False)))
@@ -483,8 +576,8 @@ def main():
                "3 = only not_implemented, with no diff/crash/timeout (not a pass).")
     ap.add_argument("--allow-unimplemented", action="store_true",
                     help="if there are only not_implemented cases, exit 0 instead of 3 (the printed 'N not implemented, not a pass' is unchanged)")
-    ap.add_argument("--a", choices=["py", "rs"], default="py")
-    ap.add_argument("--a-path", default=None)
+    ap.add_argument("--a", choices=["py", "rs"], default="py", help="reference compiler (only with --vs-py)")
+    ap.add_argument("--a-path", default=None, help="reference compiler path (only with --vs-py)")
     ap.add_argument("--b", choices=["py", "rs"], default="rs")
     ap.add_argument("--b-path", default=None)
     ap.add_argument("--backend", choices=["rust", "llvm", "both"], default="both")
@@ -497,15 +590,25 @@ def main():
     ap.add_argument("--save-dir", default=None, help="folder for failing cases (default tests/_diff_fail/<timestamp>/)")
     ap.add_argument("--keep-work", action="store_true")
     ap.add_argument("--replay", default=None, metavar="CASE_DIR")
+    ap.add_argument("--vs-py", action="store_true",
+                    help="old behaviour: also run the frozen reference compiler (a) and compare a with b (not run by CI); "
+                         "with --update-golden: capture path (run both, write the golden from b, report a/b disagreements)")
+    golden.add_args(ap)
     args = ap.parse_args()
     if args.replay:
         return replay(args.replay, args)
 
-    da = CD.make_driver(args.a, args.a_path)
+    da = CD.make_driver(args.a, args.a_path) if args.vs_py else None   # a (the frozen py compiler) only with --vs-py
     db = CD.make_driver(args.b, args.b_path)
-    versions = {"a": da.version_info(), "b": db.version_info()}
-    print("a: %s %s" % (da.name, da.path))
+    versions = {"b": db.version_info()}
+    if da:
+        versions["a"] = da.version_info()
+        print("a: %s %s" % (da.name, da.path))
     print("b: %s %s" % (db.name, db.path))
+    g = golden.Golden.from_args(
+        args, "diff_compilers.txt",
+        "diff_compilers: exit code, stdout JSON (no counterexample values) and generated files of the Rust compiler "
+        "per (group, case, backend)")
 
     if args.no_default_inputs:
         args.only = "none"
@@ -514,6 +617,7 @@ def main():
     specs = [dict(c, backend=b) for c in cases for b in backends]
     save_root = args.save_dir or os.path.join(HERE, "_diff_fail", datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     root = tempfile.mkdtemp(prefix="diffc_")
+    g.add_tmp(root)   # the random work directory name must not reach the golden digest
     counts = dict((c, 0) for c in CLASSES)
     per_backend = dict((b, dict((c, 0) for c in CLASSES)) for b in backends)
     crlf_count = 0
@@ -522,10 +626,13 @@ def main():
     failed_dirs = []
 
     def job(idx, spec):
-        tmpl_a = template_argv(da, spec["backend"], spec["flags"])
+        tmpl_a = template_argv(da, spec["backend"], spec["flags"]) if da else None
         tmpl_b = template_argv(db, spec["backend"], spec["flags"])
         work = os.path.join(root, "%05d" % idx)
-        oc = run_pair(spec, tmpl_a, tmpl_b, work, args.timeout)
+        if da:
+            oc = run_pair(spec, tmpl_a, tmpl_b, work, args.timeout)
+        else:
+            oc = run_golden(spec, tmpl_b, work, args.timeout)
         case_id = "%05d_%s__%s" % (idx, re.sub(r"[^A-Za-z0-9._-]+", "_", spec["name"]).strip("_"), spec["backend"])
         if oc["cls"] in FAILING:
             cdir = os.path.join(save_root, oc["cls"] + "__" + case_id)
@@ -550,6 +657,13 @@ def main():
                     continue
                 counts[oc["cls"]] += 1
                 per_backend[spec["backend"]][oc["cls"]] += 1
+                # golden: only cases where b ran normally (a b crash/timeout is already a failure, and a not_implemented
+                # case has no usable output); plain --vs-py does not touch the golden, --vs-py --update-golden captures it
+                if (not da or args.update_golden) and oc["cls"] in ("same", "diff", "a_crash", "a_timeout"):
+                    key = "%s|%s|%s" % (spec["name"].split("/", 1)[0], spec["name"], spec["backend"])
+                    if args.b != "rs":
+                        key += "@" + args.b
+                    g.check(key, oc["gtext"], oc["gsummary"])
                 if oc["crlf_only"]:
                     crlf_count += 1
                 if oc["cex_differs"]:
@@ -566,7 +680,10 @@ def main():
         else:
             shutil.rmtree(root, ignore_errors=True)
 
-    print("---- summary (a=%s, b=%s) ----" % (da.name, db.name))
+    if da:
+        print("---- summary (a=%s, b=%s; --vs-py: frozen reference, not run by CI) ----" % (da.name, db.name))
+    else:
+        print("---- summary (golden mode, b=%s only; 'same' = b ran without crash/timeout) ----" % db.name)
     print("%-16s %6s" % ("class", "count") + "".join(" %8s" % b for b in backends))
     for c in CLASSES:
         print("%-16s %6d" % (c, counts[c]) + "".join(" %8d" % per_backend[b][c] for b in backends))
@@ -582,6 +699,10 @@ def main():
     bad = sum(counts[c] for c in FAILING) + len(errors)
     if counts["not_implemented"]:
         print("%d not implemented, not a pass" % counts["not_implemented"])
+    if not da or args.update_golden:
+        golden_ok = g.finish()
+        if not golden_ok:
+            bad += 1
     if bad:
         return 1
     if counts["not_implemented"] and not args.allow_unimplemented:

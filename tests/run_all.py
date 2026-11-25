@@ -2,10 +2,10 @@
 python tests/run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi|spec_trace|vacuity|check_generated|shim_edges]
                         [--backend rust|llvm|both]
 
-group l3_abi (backend null rows): tests/l3/abi/check_raw_entries.py WORK --rs|--py PATH checks manifest
+group l3_abi (backend null rows): tests/l3/abi/check_raw_entries.py WORK --rs PATH checks manifest
 raw_entries ("crate" / "unsafe"): text facts, rustc visibility / unsafe / privacy errors, panic poisoning of
 pruv_raw::PruvStore. The l3_p09_* roots are ordinary must_reject rows. Row l3_abi/c_handle (L3 P10):
-tests/l3/abi/check_c_handle.py WORK --rs|--py PATH checks raw_entries "c" (pruv_c text, rs == py, C probe c_probe.c).
+tests/l3/abi/check_c_handle.py WORK --rs PATH checks raw_entries "c" (pruv_c text against its golden, C probe c_probe.c).
 Row l3_abi/proven_entries (L3 P18b/P18c) compares --proven-entries output and runs optimized Rust host probes.
 
 group spec_trace (T1; one backend null row): tests/spec_trace.py --only-py|--only-rs --py|--rs PATH checks that
@@ -263,6 +263,17 @@ def _driver():
     if DRIVER is None:
         DRIVER = CD.default_driver()
     return DRIVER
+
+
+def _rs_tool_args(py_path_flag="--py"):
+    """Compiler arguments for the tools that are Rust-only since bundle PF (pruvc/ is frozen).
+    rs driver: --rs PATH. py driver (opt-in, never CI): --rs <default Rust binary> --vs-py [<py_path_flag> PATH],
+    i.e. the tool's frozen py-vs-rs comparison."""
+    d = _driver()
+    if d.kind == "rs":
+        return ["--rs", d.path]
+    out = ["--rs", CD.make_driver("rs", None).path, "--vs-py"]
+    return out + ([py_path_flag, d.path] if py_path_flag else [])
 
 
 def pruvc(src, out, flags=(), backend="rust"):
@@ -566,7 +577,7 @@ def g4b_frontend_jobs():
         return c.returncode == 0, c.stdout + c.stderr
     def trust_checks():
         c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g4b/check_trust.py"), WORK] +
-                           (["--rs", _driver().path] if _driver().kind == "rs" else []),
+                           _rs_tool_args(None),
                            capture_output=True, text=True, timeout=1200)
         return c.returncode == 0, c.stdout + c.stderr
     return [safe("g4b_frontend/pkg", pkg_checks,
@@ -581,7 +592,7 @@ def l3_abi_jobs():
     """L3 ABI probes for raw entries, C handles and checked-length Rust entries."""
     def abi_check(name):
         c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/l3/abi", name), WORK] +
-                           ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
+                           _rs_tool_args(),
                            capture_output=True, text=True, timeout=1800)
         return c.returncode == 0, c.stdout + c.stderr
     return [safe("l3_abi/raw_entries", lambda: abi_check("check_raw_entries.py"),
@@ -600,7 +611,7 @@ def g4b_proof_jobs():
     one row; backend null."""
     def cache_checks():
         c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g4b/check_cache.py"), WORK] +
-                           ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
+                           _rs_tool_args(),
                            capture_output=True, text=True, timeout=1800)
         return c.returncode == 0, c.stdout + c.stderr
     def module_checks():
@@ -649,7 +660,8 @@ def check_generated_jobs():
     def generated_checks():
         k = _driver().kind
         c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/check_generated.py"), "--only-" + k,
-                            "--" + k, _driver().path, "--work", os.path.join(WORK, "check_generated")],
+                            "--" + k, _driver().path, "--work", os.path.join(WORK, "check_generated")] +
+                           ([] if k == "rs" else ["--vs-py"]),
                            capture_output=True, text=True, timeout=1800)
         return c.returncode == 0, c.stdout + c.stderr
     return [safe("check_generated/tables", generated_checks,
@@ -1169,7 +1181,7 @@ def g8_frontend_jobs():
                 meta["only_compiler"] = "rs"  # rows file comparisons skip these on the Python compiler
             jobs.append(safe("g8_frontend/%s [%s]" % (entry["name"], mode), fn, meta))
     def resources():
-        c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g8/check_bundle.py"), WORK],
+        c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g8/check_bundle.py"), WORK] + _rs_tool_args(None),
                            capture_output=True, text=True, timeout=120)
         return c.returncode == 0, c.stdout + c.stderr
     jobs.append(safe("g8_frontend/bundle", resources,
@@ -1177,7 +1189,7 @@ def g8_frontend_jobs():
                       "mode": "resources", "group": "g8_frontend"}))
     def codegen_checks():
         c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g8/check_codegen.py"), WORK] +
-                           ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
+                           _rs_tool_args(),
                            capture_output=True, text=True, timeout=120)
         return c.returncode == 0, c.stdout + c.stderr
     jobs.append(safe("g8_frontend/codegen", codegen_checks,
@@ -1185,7 +1197,7 @@ def g8_frontend_jobs():
                       "mode": "codegen", "group": "g8_frontend"}))
     def llvm_checks():
         c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g8/check_llvm.py"), WORK] +
-                           ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
+                           _rs_tool_args(),
                            capture_output=True, text=True, timeout=600)
         return c.returncode == 0, c.stdout + c.stderr
     jobs.append(safe("g8_frontend/llvm", llvm_checks,

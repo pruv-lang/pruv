@@ -1,10 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Compare, byte for byte, the parse results of the canonical Python parser and Rust pruv-parse-dump.
+"""Check the parse/check dumps of Rust pruv-parse-dump / pruv-check-dump against saved golden files.
 
   python tests/diff_parse.py [--mode parse|check] [--rs-path PATH] [--seeds 41,56,57]
                              [--fuzz-count 200] [--mutations 6] [--save-dir DIR]
                              [--only GROUP[,GROUP...]]
+                             [--golden PATH] [--update-golden] [--prune-golden] [--vs-py]
+
+Default mode (golden): only the Rust binary is run (no Python compiler, no z3). Each case's Rust dump line is hashed
+  (tests/golden.py) and compared with tests/golden/diff_parse_<mode>.txt (override with --golden PATH). Key per case:
+  "<group>|<case name>|<mode>" (case name = repo-relative input path, or the stable bytes/fuzz/mutate name).
+  Per group: same (golden match), golden_mismatch, golden_missing, rs_crash. Exit 0 only if every case matches and
+  nothing crashed.
+--update-golden: rewrite the golden file from this run's Rust output and print every CHANGED / NEW / REMOVED key
+  (exit 0 unless the Rust side crashed). --prune-golden (with --update-golden) also drops keys this run did not produce.
+--vs-py: the OLD behaviour, Python (diff_py_adapter / pruvc) against Rust byte for byte. Frozen Python reference, not run
+  by CI; pruvc/ is frozen since bundle PF. Needs the Python compiler. With --vs-py --update-golden both sides are run, the
+  golden file is written from the Rust output, and py-vs-rs disagreements are reported as before (exit 0 only if there
+  is no diff/crash).
 
 Groups: must_reject examples runtime bench edge g6 g9 g4 g5 bytes fuzz mutate
   g6 = tests/g6/frontend, g9 = tests/g9/frontend (the g9_* must_reject sources are part of must_reject).
@@ -17,7 +30,7 @@ Groups: must_reject examples runtime bench edge g6 g9 g4 g5 bytes fuzz mutate
   edge = tests/parse_edge.
 --mode check: expected line = diff_py_adapter.dumps(check_result(FILE)), Rust = pruv-check-dump,
   edge = tests/check_edge (also used as mutate sources), coverage is the check one (52 error codes, etc.).
-Expected line = diff_py_adapter.dumps(parse_result(FILE)) (called directly in the same process).
+--vs-py: expected line = diff_py_adapter.dumps(parse_result(FILE)) (called directly in the same process).
   UnicodeDecodeError -> {"adapter_error": "decode"}, RecursionError -> excluded from comparison (py_recursion),
   any other exception -> py_crash (fail).
 Rust: one `pruv-parse-dump FILE...` run per 200 files (no shell, timeout 300). If the line count differs, the exit code is != 0,
@@ -41,7 +54,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
-import diff_py_adapter as A  # noqa: E402  (importing the module puts ../pruvc on sys.path)
+import golden  # noqa: E402
+
+A = None   # diff_py_adapter, loaded only by load_adapter() in --vs-py mode (importing it puts ../pruvc on sys.path)
+
+
+def load_adapter():
+    global A
+    if A is None:
+        import diff_py_adapter
+        A = diff_py_adapter
+    return A
+
 
 BATCH = 200
 RS_TIMEOUT = 300
@@ -81,6 +105,13 @@ def group_dirs(mode):
         return [(g, CHECK_EDGE_DIR if g == "edge" else d) for g, d in GROUP_DIRS]
     return GROUP_DIRS
 STATUSES = ("same", "diff", "py_recursion", "py_crash", "rs_crash")
+GOLDEN_STATUSES = ("same", "golden_mismatch", "golden_missing", "rs_crash")
+# The node kinds of diff_py_adapter.NODE_FIELDS (the Python side is frozen); used by the coverage report in golden
+# mode, where the adapter is not imported. --vs-py uses A.NODE_FIELDS itself.
+NODE_KINDS = (
+    "IntLit BoolLit StrLit Var Unary Binary PlaceIf Call Index Ctor Quant StructLit EnumCtor FieldAccess IsVariant "
+    "VariantField Move InoutArg FieldDecl VariantDecl StructDecl EnumDecl FieldInit MatchArm Param Spent Function "
+    "Program Let Assign IndexAssign If ForMap While Return Assert ExprStmt FieldAssign Match Par Refinement").split()
 
 # ---------------------------------------------------------------------------
 # mutate fragments (fixed order: determinism)
@@ -361,20 +392,58 @@ def run_batch(rs, paths):
     return lines, None
 
 
-def eval_rust(rs, cases, problems):
-    todo = [c for c in cases if c.status is None]
+def eval_rust(rs, cases, problems, vs_py=True, run_all=False):
+    """Run the Rust dump over the cases. vs_py: compare with the Python line (status same/diff); otherwise the status
+    is the placeholder "rs_ok" until the golden check. run_all (capture): also run cases Python could not evaluate,
+    so the golden file gets them; their py_* status is kept."""
+    todo = [c for c in cases if c.status is None or run_all]
     for i in range(0, len(todo), BATCH):
         chunk = todo[i:i + BATCH]
         lines, err = run_batch(rs, [c.path for c in chunk])
         if err is not None:
             for c in chunk:
-                c.status, c.note = "rs_crash", err
+                if c.status in (None, "py_recursion"):
+                    c.status = "rs_crash"
+                c.note = err
             problems.append("%s: batch %d (%d files, first file %s): %s" % (
                 chunk[0].group, i // BATCH, len(chunk), chunk[0].name, err))
             continue
         for c, line in zip(chunk, lines):
             c.rs = line
-            c.status = "same" if line == c.py else "diff"
+            if c.status is None:
+                c.status = ("same" if line == c.py else "diff") if vs_py else "rs_ok"
+
+
+def summarize(line, mode):
+    """Short golden summary tag of one Rust dump line: ok <N>B / error <stage>/<code> / adapter_error <x>."""
+    try:
+        obj = json.loads(line.decode("utf-8"))
+    except (ValueError, RecursionError):
+        return "nonjson %dB" % len(line)
+    if not isinstance(obj, dict):
+        return "ok %dB" % len(line)
+    if "adapter_error" in obj:
+        return ("adapter_error %s" % obj["adapter_error"])[:60]
+    err = obj.get("error")
+    if isinstance(err, dict):
+        return ("error %s/%s" % (err.get("stage") or mode, err.get("code")))[:60]
+    return "ok %dB" % len(line)
+
+
+def golden_check(gold, keys, label, cases, vs_py):
+    """g.check for every case that has a Rust line. Not vs_py: also turns the status into same / golden_*."""
+    for c in cases:
+        if c.rs is None:
+            continue
+        key = "%s|%s|%s" % (c.group, c.name, label)
+        n = keys.get(key, 0)
+        keys[key] = n + 1
+        if n:
+            key += "~%d" % (n + 1)   # deterministic disambiguation of a repeated case name
+        miss = len(gold.missing)
+        ok = gold.check(key, c.rs, summarize(c.rs, label))
+        if not vs_py:
+            c.status = "same" if ok else ("golden_missing" if len(gold.missing) > miss else "golden_mismatch")
 
 
 def first_diff(a, b):
@@ -447,15 +516,17 @@ def message_head(msg):
     return head or "<starts with a quote>"
 
 
-def coverage(all_cases, enforce):
-    expected = set(A.NODE_FIELDS)
+def coverage(all_cases, enforce, side="py"):
+    """side: the case attribute holding the dump line to analyse ("py" with --vs-py, else "rs")."""
+    expected = set(A.NODE_FIELDS) if A is not None else set(NODE_KINDS)
     kinds, codes, heads = set(), collections.Counter(), collections.Counter()
     edge_ints, fold_ok = set(), None
     for c in all_cases:
-        if c.py is None or c.status in ("py_recursion", "py_crash"):
+        raw = getattr(c, side)
+        if raw is None or c.status in ("py_recursion", "py_crash"):
             continue
         try:
-            obj = json.loads(c.py.decode("utf-8"))
+            obj = json.loads(raw.decode("utf-8"))
         except (ValueError, RecursionError):
             continue
         if "adapter_error" in obj:
@@ -519,7 +590,8 @@ def collect_ty(obj, tys):
             stack.extend(o)
 
 
-def coverage_check(all_cases, enforce):
+def coverage_check(all_cases, enforce, side="py"):
+    """side: the case attribute holding the dump line to analyse ("py" with --vs-py, else "rs")."""
     tys, codes, stages = set(), collections.Counter(), collections.Counter()
     ok_n = tt_n = tt2_n = adapter_n = 0
     crash = collections.Counter()
@@ -527,10 +599,11 @@ def coverage_check(all_cases, enforce):
         if c.status == "py_crash":
             crash[c.note[:160]] += 1
             continue
-        if c.py is None or c.status == "py_recursion":
+        raw = getattr(c, side)
+        if raw is None or c.status == "py_recursion":
             continue
         try:
-            obj = json.loads(c.py.decode("utf-8"))
+            obj = json.loads(raw.decode("utf-8"))
         except (ValueError, RecursionError):
             continue
         if "adapter_error" in obj:
@@ -602,7 +675,15 @@ def main(argv):
     ap.add_argument("--mutations", type=int, default=6, help="number of mutations per file")
     ap.add_argument("--save-dir", default=None, help="directory in which to save differing cases")
     ap.add_argument("--only", default=None, help="one group or a comma-separated list: " + " ".join(ALL_GROUPS))
+    ap.add_argument("--vs-py", action="store_true",
+                    help="old behaviour: compare with the Python compiler (frozen Python reference, not run by CI)")
+    golden.add_args(ap)
     args = ap.parse_args(argv)
+    vs_py = args.vs_py
+    capture = vs_py and args.update_golden       # --vs-py --update-golden: run both, write golden from Rust
+    use_golden = (not vs_py) or capture
+    if args.prune_golden and not args.update_golden:
+        ap.error("--prune-golden needs --update-golden")
 
     args.seeds = [parse_seed(t) for t in args.seeds.split(",") if t.strip() != ""]
     if args.fuzz_count < 0 or args.mutations < 0:
@@ -619,12 +700,25 @@ def main(argv):
         print("error: Rust binary not found or not executable: %s\n"
               "  build it first, or pass the pruv-%s-dump path with --rs-path." % (rs, args.mode), file=sys.stderr)
         return 2
-    enc = (locale.getpreferredencoding(False) or "").lower().replace("-", "").replace("_", "")
-    if enc != "utf8":
-        print("warning: the default encoding is %s. The canonical read_source uses it, so running with PYTHONUTF8=1 is safer." %
-              enc, file=sys.stderr)
+    py_fn = None
+    if vs_py:
+        load_adapter()
+        py_fn = A.check_result if args.mode == "check" else A.parse_result
+        enc = (locale.getpreferredencoding(False) or "").lower().replace("-", "").replace("_", "")
+        if enc != "utf8":
+            print("warning: the default encoding is %s. The canonical read_source uses it, so running with PYTHONUTF8=1 is safer." %
+                  enc, file=sys.stderr)
+    gold = None
+    if use_golden:
+        gold = golden.Golden.from_args(
+            args, "diff_parse_%s.txt" % args.mode,
+            "diff_parse %s: Rust pruv-%s-dump line per (group, input)" % (args.mode, args.mode))
+    keys = {}
+    status_cols = STATUSES if vs_py else GOLDEN_STATUSES
 
     with tempfile.TemporaryDirectory(prefix="diff_parse_") as tmp:
+        if gold is not None:
+            gold.add_tmp(tmp)
         per_group, notes = build_cases(set(selected), args, tmp)
         problems = []
         stats = collections.OrderedDict()
@@ -634,10 +728,12 @@ def main(argv):
             if g not in selected:
                 continue
             cases = per_group[g]
-            py_fn = A.check_result if args.mode == "check" else A.parse_result
-            for c in cases:
-                eval_python(c, py_fn)
-            eval_rust(rs, cases, problems)
+            if vs_py:
+                for c in cases:
+                    eval_python(c, py_fn)
+            eval_rust(rs, cases, problems, vs_py, capture)
+            if gold is not None:
+                golden_check(gold, keys, args.mode, cases, vs_py)
             stats[g] = collections.Counter(c.status for c in cases)
             stats[g]["inputs"] = len(cases)
             all_cases.extend(cases)
@@ -650,7 +746,11 @@ def main(argv):
         saved = 0
         if args.save_dir:
             seq = 0
-            for c in diffs + [c for c in crashes if c.status == "py_crash"]:
+            if vs_py:
+                to_save = diffs + [c for c in crashes if c.status == "py_crash"]
+            else:   # golden mode: mismatching / missing cases with the Rust output
+                to_save = [c for c in all_cases if c.status in ("golden_mismatch", "golden_missing")]
+            for c in to_save:
                 save_case(args.save_dir, seq, c)
                 seq += 1
             saved = seq
@@ -660,7 +760,8 @@ def main(argv):
 
         print("rs: %s" % rs)
         print("")
-        cols = ("inputs",) + STATUSES
+        print("mode: %s" % ("vs-py (frozen Python reference)" if vs_py else "golden"))
+        cols = ("inputs",) + status_cols
         print("%-12s" % "group" + "".join("%14s" % c for c in cols))
         total = collections.Counter()
         for g, st in stats.items():
@@ -694,10 +795,16 @@ def main(argv):
             print("saved: %d cases -> %s" % (saved, args.save_dir))
 
         cov_fn = coverage_check if args.mode == "check" else coverage
-        cov_ok = cov_fn(all_cases, enforce=(args.only is None))
+        cov_ok = cov_fn(all_cases, enforce=(args.only is None), side="py" if vs_py else "rs")
 
-    clean = all(total[k] == 0 for k in ("diff", "py_crash", "rs_crash"))
-    ok = clean and cov_ok
+        print("")
+        gold_ok = gold.finish() if gold is not None else True
+
+    if vs_py:
+        clean = all(total[k] == 0 for k in ("diff", "py_crash", "rs_crash"))
+    else:   # golden mismatches are judged by finish() (an --update-golden run accepts them)
+        clean = total["rs_crash"] == 0
+    ok = clean and cov_ok and gold_ok
     print("")
     print("result: %s" % ("success (all same, coverage pass)" if ok else "fail"))
     return 0 if ok else 1

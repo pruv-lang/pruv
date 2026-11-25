@@ -1,11 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Compare, per input, the trace of the canonical Python verifier with that of Rust pruv-trace-dump (M3 stage 3).
+"""Check, per input, the trace of Rust pruv-trace-dump against a saved golden file (M3 stage 3).
 
-  python tests/diff_trace.py [--rs-path P] [--python P] [--only GROUP[,GROUP]] [--seeds 41,56,57]
+  python tests/diff_trace.py [--rs-path P] [--only GROUP[,GROUP]] [--seeds 41,56,57]
                              [--fuzz-count 40] [--jobs N] [--save-dir DIR] [--input FILE ...]
-                             [--flags "STR"]
+                             [--flags "STR"] [--golden PATH] [--update-golden] [--prune-golden]
+                             [--vs-py [--python P]]
 
+Default mode (golden): only the Rust binary is run (no Python compiler, no z3). The trace of each input is hashed
+  (tests/golden.py) and compared with tests/golden/diff_trace.txt (with --flags: tests/golden/diff_trace_<flags>.txt,
+  e.g. --flags=--infer -> diff_trace_infer.txt; override with --golden PATH). Key per case:
+  "<group>|<repo-relative input path or fuzz name>|<flags, or "default">".
+  Machine/run dependent parts are normalized before hashing: for attempts whose result is "unknown" the z3
+  reason_unknown text and the status (resource_unknown / timeout / ...; they depend on where an rlimit or wall clock
+  stopped z3), and the status of dropped inference candidates (not_proved / resource_unknown / timeout). Temp
+  directories become <TMP> and the repo root <ROOT> (golden.normalize). An inference_timeout result is still
+  wall-clock dependent and shows up as a golden mismatch on a slow machine.
+  Per group: same (golden match), golden_mismatch, golden_missing, rs_crash (crash, timeout, not one JSON line,
+  or wrong "options"). Exit 0 only if everything matches and nothing crashed.
+--update-golden: rewrite the golden file from this run's Rust output and print every CHANGED / NEW / REMOVED key
+  (exit 0 unless the Rust side crashed). --prune-golden (with --update-golden) also drops keys this run did not produce.
+--vs-py: the OLD behaviour below, Python against Rust. Frozen Python reference, not run by CI (needs z3; pruvc/ is frozen
+  since bundle PF). With --vs-py --update-golden both sides are run, the golden file is written from the Rust output,
+  and py-vs-rs disagreements are reported as before (exit 0 only if there is no diff/crash).
+
+Old (--vs-py) behaviour:
 Groups: must_reject examples runtime bench check_edge g6 g9 g4 g4_reject fuzz input
   (g6 = tests/g6/*/*.pruv, g9 = tests/g9/{frontend,proof}/*.pruv,
    g4 = tests/g4/{frontend,proof}/*/root.pruv, g4_reject = tests/must_reject/g4_*/root.pruv)
@@ -56,6 +75,9 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+
+import golden  # noqa: E402
 
 PROC_TIMEOUT = 300
 MAX_SHOWN = 10
@@ -79,6 +101,7 @@ GROUP_DIRS = [
 ALL_GROUPS = [g for g, _, _ in GROUP_DIRS] + ["fuzz", "input"]
 COLS = ("inputs", "same", "same_unknown", "cex_only", "flaky_unknown", "py_recursion", "diff", "option_mismatch",
         "py_crash", "rs_crash", "timeout")
+GOLDEN_COLS = ("inputs", "same", "golden_mismatch", "golden_missing", "rs_crash")
 
 
 class Case(object):
@@ -194,6 +217,105 @@ def evaluate(case, py_argv, rs_argv, env, expected):
         case.note = "rs: " + note2
         return
     case.status = classify(case, expected)
+
+
+def evaluate_rs(case, rs_argv, env, expected):
+    """Golden mode: run only Rust. status: "rs_ok" (placeholder until the golden check) or "rs_crash"."""
+    case.py_raw = case.rs_raw = case.py_obj = case.rs_obj = None
+    case.note = ""
+    k, case.rs_raw, case.rs_obj, note = run_one_proc(rs_argv + [case.path], env)
+    if k != "ok":
+        case.status = "rs_crash"
+        case.note = "rs: " + note
+    elif case.rs_obj.get("options") != expected:
+        case.status = "rs_crash"
+        case.note = "rs: options %s, expected %s" % (short(case.rs_obj.get("options")), json.dumps(expected, sort_keys=True))
+    else:
+        case.status = "rs_ok"
+
+
+def rs_usable(case, expected):
+    return case.rs_raw is not None and isinstance(case.rs_obj, dict) and case.rs_obj.get("options") == expected
+
+
+def golden_normalize(obj):
+    """Copy of a Rust trace object without the parts that depend on the machine / run (not on the compiler):
+    - attempts whose result is "unknown": reason_unknown and status (z3 words the stop by where its rlimit or wall
+      clock ran out: "max. resource limit exceeded", "push canceled", "timeout", ...);
+    - inference "dropped" candidates with status not_proved / resource_unknown / timeout: status (same cause).
+    Everything else (smt2, results, counterexample values, errors) is kept."""
+    o = dict(obj)
+    obs = []
+    for ob in o.get("obligations", []):
+        if isinstance(ob, dict) and ob.get("attempts"):
+            ob = dict(ob)
+            ob["attempts"] = [dict(a, reason_unknown="<reason>", status="<status>")
+                              if isinstance(a, dict) and a.get("result") == "unknown" else a for a in ob["attempts"]]
+        obs.append(ob)
+    o["obligations"] = obs
+    if isinstance(o.get("inference"), list):
+        o["inference"] = [dict(e, dropped=[dict(d, status="<dropped>")
+                                           if isinstance(d, dict) and d.get("status") in DROP_STATUSES + ("timeout",) else d
+                                           for d in e["dropped"]])
+                          if isinstance(e, dict) and e.get("dropped") else e for e in o["inference"]]
+    return o
+
+
+def golden_text(case):
+    """The text that is hashed: the raw Rust line, or its canonical dump when golden_normalize changed something."""
+    norm = golden_normalize(case.rs_obj)
+    if norm == case.rs_obj:
+        return case.rs_raw
+    return canon(norm)
+
+
+def golden_summary(obj):
+    return "obl=%d errs=%d" % (len(obj.get("obligations", [])), len(obj.get("errors", [])))
+
+
+def golden_default_name(flag_toks):
+    tag = re.sub(r"_+", "_", re.sub(r"[^a-z0-9_]", "_", "_".join(flag_toks).lower())).strip("_")
+    return "diff_trace_%s.txt" % tag if tag else "diff_trace.txt"
+
+
+def golden_keys(all_cases, expected, label):
+    """[(case, golden key)] for every case with a usable Rust trace, in case order."""
+    keys, out = {}, []
+    for c in all_cases:
+        if not rs_usable(c, expected):
+            continue
+        name = rel(c.path) if c.group == "input" else c.name   # never an absolute / temp path
+        key = "%s|%s|%s" % (c.group, name, label)
+        n = keys.get(key, 0)
+        keys[key] = n + 1
+        if n:
+            key += "~%d" % (n + 1)   # deterministic disambiguation of a repeated case name
+        out.append((c, key))
+    return out
+
+
+def golden_retry_mismatches(gold, all_cases, expected, label, rs_argv, env):
+    """Golden mode, before golden_check_all: rerun serially (--jobs 1) each case whose digest differs from the file.
+    A z3 query that hits its wall-clock timeout_ms on a loaded machine changes a trace (seen on
+    g10a_r10_proc_drain while other captures ran in parallel); a real change still differs after the retry."""
+    retried = []
+    for c, key in golden_keys(all_cases, expected, label):
+        old = gold.saved.get(key)
+        if old is None or golden.digest(golden_text(c), gold.tmp_dirs) == old[0]:
+            continue
+        evaluate_rs(c, rs_argv, env, expected)
+        c.note = (c.note + " " if c.note else "") + "(golden retry)"
+        retried.append(c)
+    return retried
+
+
+def golden_check_all(gold, all_cases, expected, label, vs_py):
+    """g.check for every case with a usable Rust trace, in case order. Not vs_py: sets the final status."""
+    for c, key in golden_keys(all_cases, expected, label):
+        miss = len(gold.missing)
+        ok = gold.check(key, golden_text(c), golden_summary(c.rs_obj))
+        if not vs_py:
+            c.status = "same" if ok else ("golden_missing" if len(gold.missing) > miss else "golden_mismatch")
 
 
 def strip_cex(obj):
@@ -532,7 +654,15 @@ def main(argv):
     ap.add_argument("--save-dir", default=None)
     ap.add_argument("--input", action="append", default=[], metavar="FILE", help="file for the input group (may be repeated)")
     ap.add_argument("--flags", default="", help="options passed identically to both implementations (whitespace-separated), e.g. --flags=--infer")
+    ap.add_argument("--vs-py", action="store_true",
+                    help="old behaviour: compare with the Python verifier (frozen Python reference, not run by CI)")
+    golden.add_args(ap)
     args = ap.parse_args(argv)
+    vs_py = args.vs_py
+    capture = vs_py and args.update_golden       # --vs-py --update-golden: run both, write golden from Rust
+    use_golden = (not vs_py) or capture
+    if args.prune_golden and not args.update_golden:
+        ap.error("--prune-golden needs --update-golden")
     flag_toks = args.flags.split()
     expected = {"infer": "--infer" in flag_toks, "no_verify": "--no-verify" in flag_toks}
 
@@ -558,27 +688,41 @@ def main(argv):
         print("error: Rust binary not found or not executable: %s\n"
               "  build it first, or pass the pruv-trace-dump path with --rs-path." % rs, file=sys.stderr)
         return 2
-    py = default_python(args.python)
-    if os.sep in py or "/" in py:
-        if not os.path.isfile(py):
-            print("error: Python not found: %s" % py, file=sys.stderr)
+    py, py_argv = None, None
+    if vs_py:
+        py = default_python(args.python)
+        if os.sep in py or "/" in py:
+            if not os.path.isfile(py):
+                print("error: Python not found: %s" % py, file=sys.stderr)
+                return 2
+        adapter = os.path.join(HERE, "diff_py_adapter.py")
+        if not os.path.isfile(adapter):
+            print("error: %s not found" % adapter, file=sys.stderr)
             return 2
-    adapter = os.path.join(HERE, "diff_py_adapter.py")
-    if not os.path.isfile(adapter):
-        print("error: %s not found" % adapter, file=sys.stderr)
-        return 2
-    py_argv = [py, adapter, "trace"] + flag_toks
+        py_argv = [py, adapter, "trace"] + flag_toks
     rs_argv = [rs] + flag_toks
     env = dict(os.environ)
     env.setdefault("PYTHONUTF8", "1")
+    gold = None
+    if use_golden:
+        gold = golden.Golden.from_args(
+            args, golden_default_name(flag_toks),
+            "diff_trace%s: Rust pruv-trace-dump trace per (group, input)" % (
+                " " + " ".join(flag_toks) if flag_toks else ""))
+    label = " ".join(flag_toks) or "default"
 
     t0 = time.time()
     with tempfile.TemporaryDirectory(prefix="diff_trace_") as tmp:
+        if gold is not None:
+            gold.add_tmp(tmp)
         per_group, notes = build_cases(set(selected), args, tmp)
         all_cases = [c for g in ALL_GROUPS for c in per_group[g]]
 
         def work(c):
-            evaluate(c, py_argv, rs_argv, env, expected)
+            if vs_py:
+                evaluate(c, py_argv, rs_argv, env, expected)
+            else:
+                evaluate_rs(c, rs_argv, env, expected)
             return c
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as ex:
@@ -605,7 +749,16 @@ def main(argv):
                 c.status = "diff"              # still differs
             c.note = (c.note + " " if c.note else "") + "(after retry)"
 
+        if gold is not None:
+            if not vs_py and not gold.update:
+                retried = golden_retry_mismatches(gold, all_cases, expected, label, rs_argv, env)
+                if retried:
+                    print("golden: %d case(s) differed from the file and were rerun serially" % len(retried))
+            golden_check_all(gold, all_cases, expected, label, vs_py)
+
         def verified(c):
+            if not vs_py:   # golden mode: the Rust trace matches the golden file and verification completed
+                return c.status == "same" and c.rs_obj is not None and c.rs_obj.get("errors") == []
             return c.status in ("same", "cex_only") and c.py_obj is not None and c.py_obj.get("errors") == []
 
         def inf_timeout(c):
@@ -616,16 +769,23 @@ def main(argv):
         crashes = [c for c in all_cases if c.status in ("py_crash", "rs_crash", "timeout")]
         saved = 0
         if args.save_dir:
-            for c in diffs + crashes:
+            if vs_py:
+                to_save = diffs + crashes
+            else:   # golden mode: mismatching / missing cases with the Rust output (and crashes)
+                to_save = [c for c in all_cases if c.status in ("golden_mismatch", "golden_missing", "rs_crash")]
+            for c in to_save:
                 save_case(args.save_dir, saved, c)
                 saved += 1
 
+        cols = COLS if vs_py else GOLDEN_COLS
         print("rs: %s" % rs)
-        print("py: %s" % py)
+        if vs_py:
+            print("py: %s" % py)
+        print("mode: %s" % ("vs-py (frozen Python reference)" if vs_py else "golden"))
         print("jobs: %d" % args.jobs)
         print("")
         print("flags: %s (expected options=%s)" % (args.flags or "(none)", json.dumps(expected, sort_keys=True)))
-        print("%-12s" % "group" + "".join("%16s" % c for c in COLS) + "%15s" % "| verified")
+        print("%-12s" % "group" + "".join("%16s" % c for c in cols) + "%15s" % "| verified")
         total = collections.Counter()
         for g in ALL_GROUPS:
             if g not in selected:
@@ -633,24 +793,27 @@ def main(argv):
             st = collections.Counter(c.status for c in per_group[g])
             st["inputs"] = len(per_group[g])
             st["verified"] = sum(1 for c in per_group[g] if verified(c))
-            print("%-12s" % g + "".join("%16d" % st[c] for c in COLS) + "%15d" % st["verified"])
+            print("%-12s" % g + "".join("%16d" % st[c] for c in cols) + "%15d" % st["verified"])
             total.update(st)
-        print("%-12s" % "TOTAL" + "".join("%16d" % total[c] for c in COLS) + "%15d" % total["verified"])
-        print("(%d cex_only are counted as pass; flaky_unknown is the number resolved by the serial retry, not added to the success column)" % total["cex_only"])
-        print("(verified = inputs that are same or cex_only and have empty py errors: both implementations agree and verification completed)")
-        print("(%d same_unknown: byte-identical in both implementations but containing unknown/error/verify_unknown/inference_timeout, "
-              "not counted as success; of these, %d with inference_timeout are failures)" % (
-                  total["same_unknown"], sum(1 for c in all_cases if inf_timeout(c))))
+        print("%-12s" % "TOTAL" + "".join("%16d" % total[c] for c in cols) + "%15d" % total["verified"])
+        if vs_py:
+            print("(%d cex_only are counted as pass; flaky_unknown is the number resolved by the serial retry, not added to the success column)" % total["cex_only"])
+            print("(verified = inputs that are same or cex_only and have empty py errors: both implementations agree and verification completed)")
+            print("(%d same_unknown: byte-identical in both implementations but containing unknown/error/verify_unknown/inference_timeout, "
+                  "not counted as success; of these, %d with inference_timeout are failures)" % (
+                      total["same_unknown"], sum(1 for c in all_cases if inf_timeout(c))))
+        else:
+            print("(verified = inputs that match the golden file and have empty errors: verification completed)")
         for n in notes:
             print(n)
 
-        # Tally: based on the canonical (py) output
+        # Tally: based on the canonical (py) output with --vs-py, else on the Rust output
         n_obl = n_att = n_retry = n_skipped = 0
         res = collections.Counter()
         codes = collections.Counter()
         stages = collections.Counter()
         for c in all_cases:
-            o = c.py_obj
+            o = c.py_obj if vs_py else c.rs_obj
             if not o:
                 continue
             for ob in o.get("obligations", []):
@@ -667,7 +830,7 @@ def main(argv):
                     codes[e.get("code")] += 1
                     stages[e.get("stage")] += 1
         print("")
-        print("== tally based on the canonical (py) output ==")
+        print("== tally based on the %s output ==" % ("canonical (py)" if vs_py else "Rust"))
         print("obligations %d (skipped %d), attempts %d, retries (lemmas true) %d" % (n_obl, n_skipped, n_att, n_retry))
         print("by result: sat=%d unsat=%d unknown=%d other=%d" % (
             res["sat"], res["unsat"], res["unknown"],
@@ -709,9 +872,17 @@ def main(argv):
             print("saved: %d cases -> %s" % (saved, args.save_dir))
         print("")
         print("elapsed: %.1f s" % (time.time() - t0))
+        gold_ok = True
+        if gold is not None:
+            print("")
+            gold_ok = gold.finish()
 
-    clean = all(total[k] == 0 for k in ("diff", "py_crash", "rs_crash", "timeout", "option_mismatch")) \
-        and not any(inf_timeout(c) for c in all_cases)
+    if vs_py:
+        clean = all(total[k] == 0 for k in ("diff", "py_crash", "rs_crash", "timeout", "option_mismatch")) \
+            and not any(inf_timeout(c) for c in all_cases)
+    else:   # golden mismatches are judged by finish() (an --update-golden run accepts them)
+        clean = total["rs_crash"] == 0
+    clean = clean and gold_ok
     print("result: %s" % ("success" if clean else "fail"))
     return 0 if clean else 1
 

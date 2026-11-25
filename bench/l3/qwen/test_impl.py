@@ -4,6 +4,10 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 WORK = HERE / "work"
+# PF: the Python compiler pruvc/ is frozen (bundle PF); the Rust compiler is the product. Default is rs only;
+# `--vs-py` adds the py reference (pruvc/pruvc.py), which is not used by CI.
+VS_PY = '--vs-py' in sys.argv
+COMPILER_SET = ('py', 'rs') if VS_PY else ('rs',)
 def configure():
     WORK.mkdir(parents=True, exist_ok=True)
     os.environ['TMPDIR'] = str(WORK)
@@ -14,14 +18,16 @@ def configure():
     git = ROOT / '.git'
     if git.is_file() and git.read_text().startswith('gitdir: '):
         main = Path(git.read_text().strip()[8:]).resolve().parents[2]
-    py = os.environ.get('PRUV_PYTHON') or next(
-        (str(p) for p in [ROOT / '.venv/bin/python', main / '.venv/bin/python'] if p.exists()), sys.executable)
     binary = Path(os.environ.get('PRUVC_RS', ROOT / 'pruvc-rs/target/release/pruvc'))
     if not binary.exists():
         binary = main / 'pruvc-rs/target/release/pruvc'
     if not binary.exists():
         raise RuntimeError('pruvc-rs binary not found; build it or set PRUVC_RS')
-    g2.COMPILERS = {'py': [py, str(ROOT / 'pruvc/pruvc.py')], 'rs': [str(binary)]}
+    g2.COMPILERS = {'rs': [str(binary)]}
+    if VS_PY:
+        py = os.environ.get('PRUV_PYTHON') or next(
+            (str(p) for p in [ROOT / '.venv/bin/python', main / '.venv/bin/python'] if p.exists()), sys.executable)
+        g2.COMPILERS['py'] = [py, str(ROOT / 'pruvc/pruvc.py')]
     return g2
 
 
@@ -53,7 +59,7 @@ def main():
  fixtures=sorted((HERE/'fixtures').glob('*.jsonl'))
  expected=[json.loads(f.with_suffix('.expected.json').read_text()) for f in fixtures]
  failed=False
- for compiler in ('py','rs'):
+ for compiler in COMPILER_SET:
   for backend in ('rust','llvm'):
    key=f'{compiler}/{backend}'
    try:
@@ -100,9 +106,9 @@ def main():
     failed=True;print(f'{key}: ERROR {e}',flush=True)
  return int(failed)
 if __name__=='__main__':
- if sys.argv[1:]==['--host-policy']:
+ if [a for a in sys.argv[1:] if a!='--vs-py']==['--host-policy']:
   configure()
-  for compiler in ('py','rs'):
+  for compiler in COMPILER_SET:
    for backend in ('rust','llvm'):
     w=WORK/f'{compiler}_{backend}'
     host_policy(w/'runner',w)

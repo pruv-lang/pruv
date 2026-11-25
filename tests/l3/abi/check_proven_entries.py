@@ -1,4 +1,16 @@
-"""Check P18b/P18c output parity and the checked-length and by-value Rust host APIs."""
+"""Check P18b/P18c output and the checked-length and by-value Rust host APIs of --proven-entries.
+
+usage: check_proven_entries.py WORK [--rs PATH] [--py PATH] [--vs-py] [--golden PATH] [--update-golden] [--prune-golden]
+  (no option)  the Rust compiler (pruvc-rs/target/release/pruvc); every generated Rust text is checked against
+               tests/golden/l3_abi_proven_entries.txt
+  --rs PATH    the Rust driver binary
+  --py PATH    alone (no --rs, no --vs-py): the Python compiler is the main compiler, no golden check (old run_all call
+               form `--py PATH`); with --vs-py: the pruvc.py used as the reference
+  --vs-py      opt-in: also compile with the frozen Python compiler and require byte-identical output. Never used in CI.
+               With --update-golden it writes the golden from the Rust output and prints py/rs disagreements.
+
+PF: the Python compiler (pruvc/) is frozen since bundle PF; by default this script neither runs it, imports it nor
+imports z3. The old rs == py byte equality lives behind --vs-py; the default check is the golden file."""
 import argparse
 import re
 import json
@@ -9,6 +21,31 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import compiler_driver as CD
+import golden
+
+
+class Ctx:
+    """The drivers of this run (drivers[0] is the main one, drivers[1] the py reference with --vs-py) and the golden."""
+
+    def __init__(self, drivers, g, update):
+        self.drivers, self.g, self.update = drivers, g, update
+
+
+def settle(ctx, key, outs, msg, summary):
+    """outs: one output per driver. With two drivers they must be identical (under --update-golden a disagreement is
+    printed instead); the main driver's output goes to the golden. Returns the main driver's output."""
+    if len(outs) > 1 and outs[0] != outs[1]:
+        if ctx.update:
+            print("PY/RS DISAGREE %s: %s" % (key, msg))
+        else:
+            raise AssertionError(msg)
+    if ctx.g is not None:
+        ctx.g.check(key, outs[0], summary)
+    return outs[0]
+
+
+def flag_tag(flags):
+    return " ".join(flags) or "default"
 
 
 SOURCE = """\
@@ -391,19 +428,23 @@ fn main() {
 """
 
 
-def check_fixed_prefix(work, drivers, rustc):
-    """P18d: the by-value twin exists exactly for the proved functions, both compilers print the same text, and the
-    optimized host probes (normal entry, proven twin, val::<K>) see the same results and untouched words."""
+def check_fixed_prefix(work, ctx, rustc):
+    """P18d: the by-value twin exists exactly for the proved functions, the text matches the golden (and the Python
+    compiler with --vs-py), and the optimized host probes (normal entry, proven twin, val::<K>) see the same results and
+    untouched words."""
+    drivers = ctx.drivers
     source = work / "fp.pruv"
     source.write_text(FP_SOURCE, encoding="utf-8")
     flag = "--proven-entries"
     for flags in ((), ("--trust-callers",), ("--no-verify",)):
-        plain = [compile_source(driver, source, work / "fp_plain.rs", flags) for driver in drivers]
-        proven = [compile_source(driver, source, work / "fp_gen.rs", (*flags, flag)) for driver in drivers]
-        assert plain[0] == plain[1], "fixed-prefix plain output differs"
-        assert proven[0] == proven[1], "fixed-prefix proven output differs"
-        assert b"__pruv_fp" not in plain[0], "twin without --proven-entries"
-        code = unwrap(proven[0])
+        plain = settle(ctx, "proven_entries|fp %s|rust-plain" % flag_tag(flags),
+                       [compile_source(driver, source, work / "fp_plain.rs", flags) for driver in drivers],
+                       "fixed-prefix plain output differs", "rust-plain fp")
+        proven = settle(ctx, "proven_entries|fp %s|rust-proven" % flag_tag(flags),
+                        [compile_source(driver, source, work / "fp_gen.rs", (*flags, flag)) for driver in drivers],
+                        "fixed-prefix proven output differs", "rust-proven fp")
+        assert b"__pruv_fp" not in plain, "twin without --proven-entries"
+        code = unwrap(proven)
         if flags == ("--no-verify",):
             # must-reject: an unverified build may panic inside a body (overflow, index), and the adapter would drop
             # the words written before the panic; the plan needs a verified, unwind-free program
@@ -417,8 +458,9 @@ def check_fixed_prefix(work, drivers, rustc):
             for mode in ("requires", "all", "off"):
                 fc = ("--foreign-checks", mode)
                 outs = [compile_source(driver, printing, work / "fp_print.rs", (*flags, flag, *fc)) for driver in drivers]
-                assert outs[0] == outs[1], "fixed-prefix print output differs"
-                code = unwrap(outs[0])
+                out = settle(ctx, "proven_entries|fp-print %s %s|rust-proven" % (flag_tag(flags), " ".join(fc)), outs,
+                             "fixed-prefix print output differs", "rust-proven fp-print %s" % mode)
+                code = unwrap(out)
                 check_fp_twins(code)
                 for name in (b"say", b"pw", b"pc", b"run_p", b"ap", b"pk", b"pkc", b"run_k"):
                     assert re.search(rb"\nfn \w*" + name + rb"__pruv_fpb?\(", code) is None, (mode, name)
@@ -459,10 +501,21 @@ def inline_attr(code, name):
     return lines[index - 1].lstrip()
 
 
-def main(work, rs, py):
+def main(work, rs, py, vs_py=False, gargs=None):
     work = Path(work).resolve() / "l3_abi_proven"
     work.mkdir(parents=True, exist_ok=True)
-    drivers = (CD.make_driver("py", py), CD.make_driver("rs", rs))
+    # --py alone keeps the old run_all call form: the Python compiler is then the main one (no golden). Otherwise the
+    # Rust compiler is main and the Python compiler is only created for --vs-py.
+    py_main = bool(py) and not rs and not vs_py
+    if py_main:
+        drivers = (CD.make_driver("py", py),)
+    else:
+        drivers = (CD.make_driver("rs", rs),) + ((CD.make_driver("py", py),) if vs_py else ())
+    g = None
+    if not py_main and gargs is not None:
+        g = golden.Golden.from_args(gargs, "l3_abi_proven_entries.txt",
+                                    "check_proven_entries: generated Rust text per case", tmp_dirs=[str(work)])
+    ctx = Ctx(drivers, g, bool(gargs is not None and gargs.update_golden))
     source = work / "app.pruv"
     source.write_text(SOURCE, encoding="utf-8")
     flag = "--proven-entries"
@@ -472,9 +525,11 @@ def main(work, rs, py):
         for driver in drivers:
             plain.append(compile_source(driver, source, work / "plain.rs", flags))
             proven.append(compile_source(driver, source, work / "gen.rs", (*flags, flag)))
-        assert plain[0] == plain[1], "plain output differs"
-        assert proven[0] == proven[1], "proven output differs"
-        plain, proven = [unwrap(code) for code in plain], [unwrap(code) for code in proven]
+        plain = unwrap(settle(ctx, "proven_entries|app %s|rust-plain" % flag_tag(flags), plain,
+                              "plain output differs", "rust-plain app"))
+        proven = unwrap(settle(ctx, "proven_entries|app %s|rust-proven" % flag_tag(flags), proven,
+                               "proven output differs", "rust-proven app"))
+        plain, proven = [plain], [proven]
         assert proven[0].startswith(plain[0]), "guarded output changed"
         assert all(name not in plain[0] for name in (b"PruvArr", b"PruvStr", b"pruv_proven"))
         twins = proven[0].split(b"pub mod pruv_proven {", 1)[1]
@@ -552,8 +607,11 @@ def main(work, rs, py):
         flags = ("--manifest", str(manifest))
         plain = [compile_source(driver, source, work / "plain.rs", flags) for driver in drivers]
         proven = [compile_source(driver, source, work / "gen.rs", (*flags, flag)) for driver in drivers]
-        assert plain[0] == plain[1] and proven[0] == proven[1], mode
-        plain, proven = [unwrap(code) for code in plain], [unwrap(code) for code in proven]
+        plain = unwrap(settle(ctx, "proven_entries|manifest %s|rust-plain" % mode, plain, "plain output differs: " + mode,
+                              "rust-plain manifest %s" % mode))
+        proven = unwrap(settle(ctx, "proven_entries|manifest %s|rust-proven" % mode, proven,
+                               "proven output differs: " + mode, "rust-proven manifest %s" % mode))
+        plain, proven = [plain], [proven]
         assert proven[0].startswith(plain[0]), mode
         if mode == "crate":
             assert proven[0] == plain[0], mode
@@ -566,15 +624,17 @@ def main(work, rs, py):
     clash = work / "clash.pruv"
     clash.write_text("pub struct PruvArr { x: i64 }\n" + SOURCE, encoding="utf-8")
     diagnostics = []
+    clash_plain = []
     for driver in drivers:
-        compile_source(driver, clash, work / "plain.rs")
+        clash_plain.append(compile_source(driver, clash, work / "plain.rs"))
         result = run(driver.argv(str(clash), str(work / "clash.rs"), [flag], "rust"))
         assert result.returncode == 1 and "conflicts with Rust name PruvArr" in result.stdout, result.stdout + result.stderr
         diagnostics.append(result.stdout)
         result = run(driver.argv(str(source), str(work / "app.ll"), [flag], "llvm"))
         assert result.returncode == 2 and result.stderr.strip().endswith(
             "--proven-entries requires --backend rust"), result.stdout + result.stderr
-    assert diagnostics[0] == diagnostics[1], "clash diagnostics differ"
+    settle(ctx, "proven_entries|clash|rust-plain", clash_plain, "clash plain output differs", "rust-plain clash")
+    settle(ctx, "proven_entries|clash|diagnostic", diagnostics, "clash diagnostics differ", "diagnostic clash")
 
     # R-7-3: proven twins retain each source directive.
     attrs = work / "attrs.pruv"
@@ -582,9 +642,10 @@ def main(work, rs, py):
         "#[cold] fn f(a: [i64]) -> i64 { return 0; }\n"
         "#[inline] fn g(a: [i64]) -> i64 { return 1; }\n"
         "#[inline(always)] fn h(a: [i64]) -> i64 { return 2; }\n", encoding="utf-8")
-    proven = [unwrap(compile_source(driver, attrs, work / "attrs.rs", (flag,))) for driver in drivers]
-    assert proven[0] == proven[1], "attribute proven output differs"
-    twins = proven[0].split(b"pub mod pruv_proven {", 1)[1]
+    proven = unwrap(settle(ctx, "proven_entries|attrs|rust-proven",
+                           [compile_source(driver, attrs, work / "attrs.rs", (flag,)) for driver in drivers],
+                           "attribute proven output differs", "rust-proven attrs"))
+    twins = proven.split(b"pub mod pruv_proven {", 1)[1]
     for name, directive in (("f", "#[cold]\n    #[inline(never)]"), ("g", "#[inline]"), ("h", "#[inline(always)]")):
         assert f"    {directive}\n    pub fn {name}(a: &PruvArr<i64>) -> i64 {{".encode() in twins, twins
     (work / "main.rs").write_text(
@@ -597,15 +658,21 @@ def main(work, rs, py):
     assert result.returncode == 0, result.stderr
     result = run([str(work / "host")])
     assert result.returncode == 0, result.stderr
-    check_fixed_prefix(work, drivers, rustc)
+    check_fixed_prefix(work, ctx, rustc)
+    if g is not None and not g.finish():
+        return 1
     print("P18d: by-value fixed-prefix twins in 3 compiler modes, 5 must-reject shapes, no twin under --no-verify or reaching print or a G6 catalog operation, 2 optimized host runs")
-    print("P18b/P18c: parity in 3 compiler modes and 2 manifest modes, 3 host runs, privacy, %d body rejects, %d macro shadows and diagnostics pass" % (rejects, shadows))
+    print("P18b/P18c: %s in 3 compiler modes and 2 manifest modes, 3 host runs, privacy, %d body rejects, %d macro shadows and diagnostics pass"
+          % ("golden" + (" + rs == py" if vs_py else "") if g is not None else "single compiler", rejects, shadows))
+    return 0
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("work")
     parser.add_argument("--rs")
     parser.add_argument("--py")
+    parser.add_argument("--vs-py", action="store_true", dest="vs_py")
+    golden.add_args(parser)
     args = parser.parse_args()
-    main(args.work, args.rs, args.py)
+    sys.exit(main(args.work, args.rs, args.py, args.vs_py, args))

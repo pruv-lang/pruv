@@ -1,9 +1,13 @@
 """L3 P10: the C adapter handle (manifest `raw_entries = "c"`, module `pruv_c` in the LLVM Rust bindings).
 
-usage: check_c_handle.py WORK [--rs PATH] [--py PATH]
-  --rs PATH: the Rust driver (default: the Python compiler); every generated file (.rs bindings, .ll) must also be
-             byte-identical to the Python compiler's output
-  --py PATH: the pruvc.py to run (default: pruvc/pruvc.py of this repository)
+usage: check_c_handle.py WORK [--rs PATH] [--py PATH] [--vs-py] [--golden PATH] [--update-golden] [--prune-golden]
+  --rs PATH: the Rust driver (default: the Python compiler as the main compiler, no golden check). With --rs every
+             generated text (.rs bindings, .ll, Rust-backend .rs) is checked against tests/golden/l3_abi_c_handle.txt
+  --py PATH: the pruvc.py to run (default: pruvc/pruvc.py of this repository); only used as the main compiler when
+             --rs is absent, or as the reference with --vs-py
+  --vs-py:   opt-in (needs --rs): also compile with the frozen Python compiler and require byte-identical output
+             (here and in check_two_programs.py). Never used in CI. With --update-golden it writes the golden from the
+             Rust output and prints py/rs disagreements.
 Steps: (1) compile a small program with raw_entries = "c" (--backend llvm --rust-bindings), (2) text facts of B.rs
 (pruv_c present for "c", absent for "crate"; the entry symbols pruv_h_* / pruv_hr_grow), (2b) the same program compiled
 with the Rust backend (no --backend flag, -o out.rs) for raw_entries "crate" and "c": the two outputs are byte-identical
@@ -18,8 +22,13 @@ All global C symbols carry the manifest package name as prefix ("app__"); text-l
 The batch entry refuses up front with *done = 0 when done is usable (n = -1 with done preset to 77, NULL items with n = 1).
 Two programs (packages twoa / twob, same entry name, same G6 builtins) are compiled with the LLVM backend and linked into
 ONE binary (check_two_programs.py, c_two.c): the pruv_abi_* / pruv_g6_v1_* / pruv_g6_bridge_v1 symbols carry the prefix.
-Prints one FAIL line per failing case; exit 0 only if every case passes. Needs rustc and clang (PATH, else ~/.cargo/bin, /usr/bin)."""
+Prints one FAIL line per failing case; exit 0 only if every case passes. Needs rustc and clang (PATH, else ~/.cargo/bin, /usr/bin).
+
+PF: the Python compiler (pruvc/) is frozen since bundle PF; by default this script neither runs it, imports it nor
+imports z3 (it only compiles pruvc/runtime.c, a C file, with clang). The old rs == py byte equality lives behind
+--vs-py; the default check is the golden file."""
 from pathlib import Path
+import argparse
 import json
 import os
 import platform
@@ -29,6 +38,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT / "tests"))
+import golden  # noqa: E402  (stdlib only; saved expected outputs)
 RUSTC = shutil.which("rustc") or os.path.expanduser("~/.cargo/bin/rustc")
 CLANG = shutil.which("clang") or "/usr/bin/clang"
 RUNTIME_C = ROOT / "pruvc" / "runtime.c"
@@ -96,12 +107,20 @@ SRC = ("pub fn setup(inout st: [i64]) -> ()\n"
 FLAGS = ["--no-verify"]
 
 
-def main(work, rs=None, py=None):
+def main(work, rs=None, py=None, vs_py=False, gargs=None):
     work = Path(work) / "l3_abi_chandle"
     work.mkdir(parents=True)
-    pyc = str(Path(py).resolve()) if py else str(ROOT / "pruvc" / "pruvc.py")
-    py_cmd = [sys.executable, pyc]
+    # the Python compiler is only touched when it is the main compiler (no --rs) or the --vs-py reference
+    py_cmd = None
+    if vs_py or not rs:
+        pyc = str(Path(py).resolve()) if py else str(ROOT / "pruvc" / "pruvc.py")
+        py_cmd = [sys.executable, pyc]
     sel_cmd = [rs] if rs else py_cmd
+    # golden check of the Rust compiler's generated text (not used when the Python compiler is the main compiler)
+    g = None
+    if rs and gargs is not None:
+        g = golden.Golden.from_args(gargs, "l3_abi_c_handle.txt",
+                                    "check_c_handle: generated bindings / LLVM IR / Rust text per case", tmp_dirs=[str(work)])
     fails = []
 
     def check(name, ok, detail=""):
@@ -128,7 +147,7 @@ def main(work, rs=None, py=None):
         (pdir / "pruv.json").write_text(json.dumps(man))
         (pdir / "app.pruv").write_text(SRC)
         outs = {}
-        for tag, cmd in [("sel", sel_cmd)] + ([("py", py_cmd)] if rs else []):
+        for tag, cmd in [("sel", sel_cmd)] + ([("py", py_cmd)] if (rs and vs_py) else []):
             d = base / tag
             d.mkdir()
             args = list(cmd) + [str(pdir / "app.pruv"), "-o", str(d / "out.ll")] + FLAGS + [
@@ -137,10 +156,16 @@ def main(work, rs=None, py=None):
             if not check("raw_entries=%s: %s compile" % (key, tag), rc == 0, "exit %d %s" % (rc, txt)):
                 return None
             outs[tag] = (d / "B.rs", d / "out.ll")
-        if rs:
+        if g is not None:
+            for i, what in enumerate(("rust-bindings", "llvm-ir")):
+                g.check("c_handle|raw_entries=%s/%s|%s" % (key, name, what), outs["sel"][i].read_text(),
+                        "%s %s %s" % (what, key, name))
+        if rs and vs_py:
             for i, what in enumerate(("B.rs", "out.ll")):
-                check("raw_entries=%s: rs %s identical to python" % (key, what),
-                      outs["sel"][i].read_bytes() == outs["py"][i].read_bytes(), "differs")
+                same = outs["sel"][i].read_bytes() == outs["py"][i].read_bytes()
+                if not same and gargs is not None and gargs.update_golden:
+                    print("PY/RS DISAGREE raw_entries=%s %s %s" % (key, name, what))
+                check("raw_entries=%s: rs %s identical to python" % (key, what), same, "differs")
         return outs["sel"]
 
     # ---- text facts: the C module only for "c" ----------------------------------------------------------------------
@@ -152,6 +177,8 @@ def main(work, rs=None, py=None):
     if built is None:
         for line in fails:
             print(line)
+        if g is not None:
+            g.finish()
         return 1
     b_rs, ll = built
     t = b_rs.read_text()
@@ -200,6 +227,9 @@ def main(work, rs=None, py=None):
                       ["--manifest", str(pdir / "pruv.json")], 300)
         if check("rust backend raw_entries=%s: compile" % key, rc == 0, "exit %d %s" % (rc, txt)):
             rust_out[key] = out.read_bytes()
+            if g is not None:
+                g.check("c_handle|rust-backend raw_entries=%s|rust-lib" % key, rust_out[key].decode("utf-8", "replace"),
+                        "rust-lib %s" % key)
     if len(rust_out) == 2:
         # T0: "c" is the "crate" output except that "c" keeps the entry length checks (SPEC 7, host length bound)
         check("rust backend: raw_entries c keeps the length checks, crate leaves them to the adapter",
@@ -249,31 +279,29 @@ def main(work, rs=None, py=None):
     two = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(two)
     two.run_case(work, rs, py, check, run, {"rustc": RUSTC, "clang": CLANG, "runtime_c": RUNTIME_C,
-                                            "sel_cmd": sel_cmd, "py_cmd": py_cmd})
+                                            "sel_cmd": sel_cmd, "py_cmd": py_cmd, "vs_py": vs_py, "golden": g,
+                                            "update_golden": bool(gargs is not None and gargs.update_golden)})
 
     for line in fails:
         print(line)
-    if fails:
+    golden_ok = g.finish() if g is not None else True
+    if fails or not golden_ok:
         return 1
     print("c_handle: two programs (packages twoa, twob; same entry name, same G6 builtins) in one binary, pruv_c text facts, Rust backend c == crate except length checks, without extern \"C\", staticlib + C probe (ABI, provenance, "
           "lifetime, positional parameter names, [u8]/str/[bool] args, zero-length NULL, BAD_ARGS incl. address overflow, "
           "length limit, handle overlap, rebuild new_len, poison-before-argument-checks, panic with panicking payload "
-          "Drop)%s: OK" % (", rs == py" if rs else ""))
+          "Drop)%s: OK" % ((", golden" if g is not None else "") + (", rs == py" if (rs and vs_py) else "")))
     return 0
 
 
 if __name__ == "__main__":
-    args = sys.argv[1:]
-    opts = {}
-    for flag in ("--rs", "--py"):
-        if flag in args:
-            i = args.index(flag)
-            if i + 1 >= len(args):
-                print(__doc__)
-                sys.exit(2)
-            opts[flag] = args[i + 1]
-            del args[i:i + 2]
-    if len(args) != 1:
-        print(__doc__)
-        sys.exit(2)
-    sys.exit(main(args[0], opts.get("--rs"), opts.get("--py")))
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("work")
+    ap.add_argument("--rs", default=None)
+    ap.add_argument("--py", default=None)
+    ap.add_argument("--vs-py", action="store_true", dest="vs_py")
+    golden.add_args(ap)
+    a = ap.parse_args()
+    if a.vs_py and not a.rs:
+        ap.error("--vs-py needs --rs")
+    sys.exit(main(a.work, a.rs, a.py, a.vs_py, a))

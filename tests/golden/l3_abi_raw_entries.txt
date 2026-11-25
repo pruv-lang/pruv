@@ -1,0 +1,37 @@
+# golden l3_abi_raw_entries.txt: check_raw_entries: generated Rust / LLVM text per case
+raw_entries|clash crate/llvm	2 cases: llvm-ir 1, rust-lib 1	llvm-ir=859d67937f4e	rust-lib=b86fce0b8856
+raw_entries|clash crate/rust	1 case: rust-lib 1	rust-lib=3d78c98ff7da
+raw_entries|clash unsafe/llvm	2 cases: llvm-ir 1, rust-lib 1	llvm-ir=859d67937f4e	rust-lib=a485c85ae026
+raw_entries|clash unsafe/rust	1 case: rust-lib 1	rust-lib=bdb30fcd5fcf
+raw_entries|panic host	1 case: rust-lib 1	rust-lib=ecec133b3ad0
+raw_entries|rustc crate/llvm	2 cases: llvm-ir 1, rust-lib 1	llvm-ir=41483c6e4ef6	rust-lib=616fbaceaae1
+raw_entries|rustc crate/rust	1 case: rust-lib 1	rust-lib=69da72287ca3
+raw_entries|rustc nokey/llvm	2 cases: llvm-ir 1, rust-lib 1	llvm-ir=41483c6e4ef6	rust-lib=f5bca9db3912
+raw_entries|rustc nokey/rust	1 case: rust-lib 1	rust-lib=c8dc8766c818
+raw_entries|rustc unsafe/llvm	2 cases: llvm-ir 1, rust-lib 1	llvm-ir=41483c6e4ef6	rust-lib=79e5aea1a22b
+raw_entries|rustc unsafe/rust	1 case: rust-lib 1	rust-lib=b72c7cf55cef
+raw_entries|text c/default/rust	1 case: rust-lib 1	rust-lib=c291abf3610b
+raw_entries|text c/noverify/rust	1 case: rust-lib 1	rust-lib=7e34c6c5fa3a
+raw_entries|text c/trust/rust	1 case: rust-lib 1	rust-lib=ef1b06cd6b04
+raw_entries|text crate/default/llvm	2 cases: llvm-ir 1, rust-lib 1	llvm-ir=41483c6e4ef6	rust-lib=616fbaceaae1
+raw_entries|text crate/default/rust	1 case: rust-lib 1	rust-lib=69da72287ca3
+raw_entries|text crate/noverify/llvm	2 cases: llvm-ir 1, rust-lib 1	llvm-ir=60589c112ec8	rust-lib=616fbaceaae1
+raw_entries|text crate/noverify/rust	1 case: rust-lib 1	rust-lib=9908bd4cb8f8
+raw_entries|text crate/trust/llvm	2 cases: llvm-ir 1, rust-lib 1	llvm-ir=a09081965201	rust-lib=616fbaceaae1
+raw_entries|text crate/trust/rust	1 case: rust-lib 1	rust-lib=34e6b17ed6e8
+raw_entries|text foreign crate	1 case: rust-lib 1	rust-lib=5f6053eab30d
+raw_entries|text foreign unsafe	1 case: rust-lib 1	rust-lib=8eba55368910
+raw_entries|text nokey/default/llvm	2 cases: llvm-ir 1, rust-lib 1	llvm-ir=41483c6e4ef6	rust-lib=f5bca9db3912
+raw_entries|text nokey/default/rust	1 case: rust-lib 1	rust-lib=c8dc8766c818
+raw_entries|text nokey/noverify/llvm	2 cases: llvm-ir 1, rust-lib 1	llvm-ir=60589c112ec8	rust-lib=f5bca9db3912
+raw_entries|text nokey/noverify/rust	1 case: rust-lib 1	rust-lib=1adc95f73b7b
+raw_entries|text nokey/trust/llvm	2 cases: llvm-ir 1, rust-lib 1	llvm-ir=a09081965201	rust-lib=f5bca9db3912
+raw_entries|text nokey/trust/rust	1 case: rust-lib 1	rust-lib=c5636e5d683b
+raw_entries|text print crate	1 case: rust-lib 1	rust-lib=2dfe5b00d1b7
+raw_entries|text print unsafe	1 case: rust-lib 1	rust-lib=8c684e91fa51
+raw_entries|text unsafe/default/llvm	2 cases: llvm-ir 1, rust-lib 1	llvm-ir=41483c6e4ef6	rust-lib=79e5aea1a22b
+raw_entries|text unsafe/default/rust	1 case: rust-lib 1	rust-lib=b72c7cf55cef
+raw_entries|text unsafe/noverify/llvm	2 cases: llvm-ir 1, rust-lib 1	llvm-ir=60589c112ec8	rust-lib=79e5aea1a22b
+raw_entries|text unsafe/noverify/rust	1 case: rust-lib 1	rust-lib=768723fae1dc
+raw_entries|text unsafe/trust/llvm	2 cases: llvm-ir 1, rust-lib 1	llvm-ir=a09081965201	rust-lib=79e5aea1a22b
+raw_entries|text unsafe/trust/rust	1 case: rust-lib 1	rust-lib=0ecd54bdd278
