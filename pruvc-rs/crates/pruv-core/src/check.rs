@@ -560,6 +560,15 @@ fn lower_arm_pat(tmp: &str, ps: &[TuplePat], g: &GType, line: i64, col: i64, out
     Ok(())
 }
 
+/// P8b: the shape of a slice pattern arm (parser `slice_arm`): `None` for a constructor arm, `Some(None)` for an
+/// exact length `[a, b]`, `Some(Some(""))` for an unnamed rest `[a, ..]` and `Some(Some(name))` for `[a, name @ ..]`.
+pub(crate) fn slice_arm_shape(ctor: &str) -> Option<Option<&str>> {
+    match ctor {
+        "[]" => Some(None),
+        _ => ctor.strip_prefix("[..").and_then(|r| r.strip_suffix(']')).map(Some),
+    }
+}
+
 /// Whether control never leaves the end of the block (P8 `let ... else`).
 fn diverges(stmts: &[Stmt]) -> bool {
     match stmts.last() {
@@ -615,6 +624,11 @@ fn expand_forms_block(
                 };
                 if others.is_empty() && !m.els.is_empty() {
                     let (l, c) = m.els[0].position();
+                    if m.form == MatchForm::WhileLet {
+                        return Err(terr(l, c, "irrefutable_pattern",
+                            "the `while let` pattern matches every value, so the loop never ends by a failed match",
+                            "use a `while` loop and bind the payload with `match` or a `let`"));
+                    }
                     return Err(terr(l, c, "irrefutable_pattern",
                         "the pattern matches every value, so the else block never runs",
                         "bind the payload with `match` or drop the else block"));
@@ -3435,6 +3449,19 @@ impl Checker {
         let mut i = 0;
         while i < stmts.len() {
             if let Stmt::Match(m) = &stmts[i] {
+                if m.arms.iter().any(|a| slice_arm_shape(&a.ctor).is_some()) {
+                    let one = m.arms.len() == 1;
+                    let st = self.slice_match(m, scope)?;
+                    if one && i + 1 == stmts.len() {
+                        // a lone `[..]`/`[rest @ ..]` arm as the last statement is spliced in place, as tuple_match is
+                        let Stmt::If(w) = st else { unreachable!("slice_match builds an if") };
+                        stmts.pop();
+                        stmts.extend(w.then);
+                    } else {
+                        stmts[i] = st;
+                    }
+                    continue;
+                }
                 if m.arms.iter().any(|a| a.ctor == "()") {
                     let st = self.tuple_match(m, scope)?;
                     if i + 1 == stmts.len() {
@@ -4911,6 +4938,96 @@ impl Checker {
         then.extend(a.body.iter().cloned());
         Ok(Stmt::If(If { line: m.line, col: m.col,
             cond: Expr::BoolLit(BoolLit { line: m.line, col: m.col, value: true, ty: None }), then, els: Vec::new() }))
+    }
+
+    /// P8b: a match of slice patterns over an array place `s` is the length test chain
+    /// `if len(s) == k { let a: T = s[0]; .. A } else if len(s) >= k { .. let tail: ref [T] = subview(s, k, len(s)); B }
+    /// else { .. }`, tested in source order; the last arm takes what the earlier arms leave and has no test. Lengths
+    /// must be covered and every arm must match some length (type/match_arms).
+    fn slice_match(&mut self, m: &Match, scope: &Scope) -> Res<Stmt> {
+        let (line, col) = (m.line, m.col);
+        if let Some(a) = m.arms.iter().find(|a| slice_arm_shape(&a.ctor).is_none()) {
+            return Err(terr(a.line, a.col, "match_type", "a match mixes slice patterns with other patterns",
+                "write every arm as a slice pattern"));
+        }
+        if !matches!(m.scrutinee, Expr::Var(_) | Expr::FieldAccess(_)) || place_root(&m.scrutinee).is_none() {
+            return Err(terr(line, col, "match_type",
+                "a slice pattern matches a local, a parameter or a field path rooted at one",
+                "bind the value with a let first"));
+        }
+        let mut probe = m.scrutinee.clone();
+        let t = self.match_scrutinee(&mut probe, scope)?;
+        let elem = t.array_elem().filter(|_| t.args.is_empty() && t.is_array());
+        let Some(elem) = elem else {
+            return Err(terr(line, col, "match_type",
+                format!("a slice pattern matches an array ([i64], [u8], [u16] or [bool]), found {}", tn(&t)),
+                "match a slice place, or use an if on len(..)"));
+        };
+        let (mut exact, mut min_rest): (BTreeSet<usize>, Option<usize>) = (BTreeSet::new(), None);
+        for a in &m.arms {
+            let k = a.binders.len();
+            let rest = slice_arm_shape(&a.ctor).is_some_and(|r| r.is_some());
+            let shadowed = if rest {
+                min_rest.is_some_and(|r| r <= k || (k..r).all(|n| exact.contains(&n)))
+            } else {
+                exact.contains(&k) || min_rest.is_some_and(|r| r <= k)
+            };
+            if shadowed {
+                return Err(terr(a.line, a.col, "match_arms", "this slice pattern only matches lengths an earlier arm takes",
+                    "remove the arm or move it before the arm that covers it"));
+            }
+            if rest {
+                min_rest = Some(min_rest.map_or(k, |r| r.min(k)));
+            } else {
+                exact.insert(k);
+            }
+        }
+        let missing = match min_rest {
+            None => (0..).find(|n| !exact.contains(n)),
+            Some(r) => (0..r).find(|n| !exact.contains(n)),
+        };
+        if let Some(n) = missing {
+            return Err(terr(line, col, "match_arms", format!("no arm matches a slice of length {}", n),
+                "add an arm such as `[..]` or `[a, rest @ ..]` for the remaining lengths"));
+        }
+        // An element read widens integer elements to i64 (as `s[i]` does), so prefix binders are i64 or bool.
+        let elem = if elem.name == "bool" { elem } else { GType::i64() };
+        let s = &m.scrutinee;
+        let int = |v: usize| Expr::IntLit(IntLit { line, col, value: v.to_string(), ty: None, kind: LitKind::Int });
+        let call = |name: &str, args: Vec<Expr>| Expr::Call(Call { line, col, name: name.into(), args, ty: None,
+            targs: None, inst: None, old: None, opaque_c: false });
+        let len = || call("len", vec![s.clone()]);
+        let arm_block = |a: &MatchArm| {
+            let mut out = Vec::new();
+            for (i, b) in a.binders.iter().enumerate() {
+                if b != "_" {
+                    out.push(Stmt::Let(Let { borrowed: false, line: a.line, col: a.col, name: b.clone(), mutable: false,
+                        ty: elem.to_key(), refine: None,
+                        value: Expr::Index(Index { line: a.line, col: a.col, array: Box::new(s.clone()),
+                            index: Box::new(int(i)), ty: None }) }));
+                }
+            }
+            if let Some(Some(r)) = slice_arm_shape(&a.ctor).filter(|r| r.is_some_and(|n| !n.is_empty())) {
+                out.push(Stmt::Let(Let { borrowed: true, line: a.line, col: a.col, name: r.to_string(), mutable: false,
+                    ty: t.to_key(), refine: None, value: call("subview", vec![s.clone(), int(a.binders.len()), len()]) }));
+            }
+            out.extend(a.body.iter().cloned());
+            out
+        };
+        let last = m.arms.last().expect("a match has an arm");
+        let mut els = arm_block(last);
+        for a in m.arms[..m.arms.len() - 1].iter().rev() {
+            let k = a.binders.len();
+            let op = if slice_arm_shape(&a.ctor).is_some_and(|r| r.is_some()) { ">=" } else { "==" };
+            let cond = Expr::Binary(Binary { line: a.line, col: a.col, op: op.into(), left: Box::new(len()),
+                right: Box::new(int(k)), ty: None });
+            els = vec![Stmt::If(If { line: a.line, col: a.col, cond, then: arm_block(a), els })];
+        }
+        if m.arms.len() == 1 {
+            return Ok(Stmt::If(If { line, col, cond: Expr::BoolLit(BoolLit { line, col, value: true, ty: None }),
+                then: els, els: Vec::new() }));
+        }
+        Ok(els.pop().expect("the chain is one if"))
     }
 
     fn match_stmt(&mut self, m: &mut Match, scope: &mut Scope) -> Res<()> {

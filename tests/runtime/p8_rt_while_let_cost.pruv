@@ -1,0 +1,63 @@
+// P8b runtime: a `while let` loop in a cost function charges one unit per matched head and none for the failed
+// one (R-6u-5). drain(k) runs k iterations and k + 1 head calls, so the exact bound 2k + 1 must hold at run time.
+fn pop(inout n: i64) -> Option<i64>
+  requires 0 <= n && n <= 100
+  ensures old(n) == 0 ==> !is_some(result) && n == 0
+  ensures old(n) > 0 ==> is_some(result) && n == old(n) - 1
+  cost 0
+{
+  if n == 0 { return None; }
+  n = n - 1;
+  return Some(n + 1);
+}
+
+fn drain(k: i64) -> i64
+  requires 0 <= k && k <= 10
+  cost 2 * k + 1
+{
+  let mut n: i64 = k;
+  let mut s: i64 = 0;
+  while let Some(v) = pop(inout n)
+    invariant 0 <= n && n <= k && s == k - n && spent == 2 * (k - n)
+    decreases n
+  {
+    s = s + 1;
+  }
+  return s;
+}
+
+// A tuple pattern head: the charge sits after the pattern's lowered lets.
+fn pair(inout n: i64) -> Option<(i64, i64)>
+  requires 0 <= n && n <= 100
+  ensures old(n) == 0 ==> !is_some(result) && n == 0
+  ensures old(n) > 0 ==> is_some(result) && n == old(n) - 1 && some_val(result).1 == 1
+  cost 0
+{
+  if n == 0 { return None::<(i64, i64)>; }
+  n = n - 1;
+  let p: (i64, i64) = (n, 1);
+  return Some::<(i64, i64)>(p);
+}
+
+fn drain_pairs(k: i64) -> i64
+  requires 0 <= k && k <= 10
+  cost 2 * k + 1
+{
+  let mut n: i64 = k;
+  let mut s: i64 = 0;
+  while let Some((a, b)) = pair(inout n)
+    invariant 0 <= n && n <= k && s == k - n && spent == 2 * (k - n)
+    decreases n
+  {
+    s = s + b;
+  }
+  return s;
+}
+
+fn run() -> () ! io {
+  print(drain(0));
+  print(drain(3));
+  print(drain(10));
+  print(drain_pairs(0));
+  print(drain_pairs(4));
+}

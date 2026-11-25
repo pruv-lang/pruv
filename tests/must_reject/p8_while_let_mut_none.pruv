@@ -1,0 +1,10 @@
+// P8b: `while let None = map_get_mut(..)` ends through the Some arm, which a break cannot leave (type/loop_jump_map)
+struct Rec { id: i64 }
+fn f(inout m: HashMap<i64, Rec>, k: i64) -> i64 {
+  let mut n: i64 = 3;
+  while let None = map_get_mut::<i64, Rec>(inout m, k) invariant n >= 0 decreases n {
+    if n == 0 { return 0; }
+    n = n - 1;
+  }
+  return 1;
+}

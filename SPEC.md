@@ -84,6 +84,8 @@ match e {                        // e: Option<i64>, Result<i64> or a user enum (
 match r { Ok(v) => { ... } Err(c) => { ... } }
 if let Some(v) = e { ... } else { ... }   // else optional (R-6u-2)
 let Some(v) = e else { return ..; };     // else block must not reach its end (R-6u-3)
+while let Some(v) = e invariant .. decreases .. { ... }   // e re-evaluated per iteration (R-6u-5)
+match a { [] => { .. } [x, rest @ ..] => { .. } }       // slice patterns on arrays and views (R-6u-4)
 f(args);                 // call as statement only if f returns ()
 f(inout a, args);        // mutating call: subject to the expression rules of section 6g
 ```
@@ -2690,8 +2692,9 @@ Tuple patterns in match arms, `if let` and `let else` (bundle P8a). The checker 
 `if let` and `let else` into a full `match` whose missing variants take the else block, and lowers each tuple pattern
 into one `let` per component of the bound payload. The verifier and both backends read that one result. The Rust
 backend prints the source form back (`if let`, `let .. else`, nested tuple patterns) for scalar targets; a borrowed
-enum or collection target prints the equivalent full `match`. `while let` and slice patterns
-are bundle P8b.
+enum or collection target prints the equivalent full `match`. Slice patterns lower to a chain of length tests
+over the target (R-6u-4) and `while let` lowers to a loop whose head is a full `match` that breaks on the other
+variants (R-6u-5).
 
 - R-6u-1 **Tuple patterns in arms.** A match arm binds a tuple payload by components: `Some((a, b))`, `Ok((a, _))`,
   `E::V((x, (y, _)))`, and a top-level `match t { (a, b) => { .. } }` over a tuple value (one arm, the whole
@@ -2725,6 +2728,35 @@ are bundle P8b.
   [inner loop](tests/spec/p8_let_else_reject_loop.pruv), [irrefutable](tests/spec/p8_let_else_irrefutable.pruv),
   [syntax](tests/spec/p8_let_else_syntax.pruv), [false contract](tests/spec/p8_let_else_reject_contract.pruv),
   [runtime](tests/runtime/p8_rt_let_else.pruv), [borrowed target](tests/must_reject/p8_borrow_target_let.pruv).
+- R-6u-4 **Slice patterns.** A `match` over an array place (`[i64]`, `[u8]`, `[u16]`, `[bool]` or a `ref` view of
+  one; a local, a parameter or a field path rooted at one) may use slice arms: `[]`, `[a, b]` (exact length), `[a, ..]`
+  (at least that length), `[a, rest @ ..]` and `[..]`. Each prefix element is a binder or `_`; a binder holds the
+  element as a scalar (`i64` for integer elements, `bool` for `bool`). A named rest is a read-only view of the
+  elements after the prefix (`subview(a, k, len(a))`, a `ref` local checked like one, R-6g-11, live by R-6g9-4). Arms are tried in source
+  order, so an arm is a length test. Every arm of such a match is a slice arm (`type/match_type` otherwise, and for a
+  target that is not an array place: bind a call result with a `let` first). An arm whose lengths earlier arms already
+  take, and a length no arm takes, are `type/match_arms`. The rest `..` appears once, as the last element
+  (`parse/slice_pattern_rest`). Slice patterns are not accepted in `if let`, `let else` or `while let`. Tests:
+  [accept](tests/spec/p8_slice_accept.pruv), [reject](tests/spec/p8_slice_reject.pruv),
+  [false contract](tests/spec/p8_slice_reject_contract.pruv), [rest](tests/spec/p8_slice_rest.pruv),
+  [target](tests/spec/p8_slice_target.pruv), [runtime](tests/runtime/p8_rt_slice.pruv),
+  [shadowed arm](tests/must_reject/p8_slice_shadowed_arm.pruv), [call target](tests/must_reject/p8_slice_call_target.pruv),
+  [mixed arms](tests/must_reject/p8_slice_mixed_arms.pruv), [lone arm](tests/spec/p8_slice_one_arm.pruv),
+  [view target](tests/must_reject/p8_slice_view_call.pruv), [rest write](tests/must_reject/p8_slice_rest_write.pruv).
+- R-6u-5 **`while let`.** `'l: while let P = e invariant I decreases D { B }` (label and invariants optional,
+  `decreases` required as for `while`, R-6r-1) evaluates `e` before each iteration, including after `continue`, and
+  runs `B` with the binders of `P` when `e` matches; when it does not match the loop ends. `break` leaves without
+  evaluating `e` again. `D` is evaluated before `e`: an iteration whose head matches must have `D >= 0`, and each back
+  edge must make `D` smaller than at that iteration's start; a head that fails needs neither and costs no iteration.
+  The invariant holds before each evaluation of `e`. Patterns are those of `if let` (R-6u-2); a pattern that matches
+  every value is `type/irrefutable_pattern`, and a value both borrowed and moved in `e` is `type/foreign_borrow`.
+  `while let None = ..` over a mutable collection target (`map_get_mut`, `vec_at_mut`) ends through the `Some` arm,
+  which cannot be left by `break` (`type/loop_jump_map`, R-6r-1); match the `Some` arm instead.
+  Tests: [accept](tests/spec/p8_while_let_accept.pruv), [reject](tests/spec/p8_while_let_reject.pruv),
+  [false contract](tests/spec/p8_while_let_reject_contract.pruv), [runtime](tests/runtime/p8_rt_while_let.pruv), [cost](tests/runtime/p8_rt_while_let_cost.pruv),
+  [irrefutable](tests/must_reject/p8_while_let_irrefutable.pruv),
+  [borrowed target](tests/must_reject/p8_borrow_target_while.pruv),
+  [mutable None](tests/must_reject/p8_while_let_mut_none.pruv).
 
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
@@ -3170,6 +3202,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/generic_syntax` | parse | a malformed type parameter list or type argument list |
 | `parse/inout_syntax` | parse | a malformed `inout` parameter or argument |
 | `parse/let_else_syntax` | parse | a constructor pattern after `let` followed by `;` instead of `else { .. }` (R-6u-3) |
+| `parse/slice_pattern_rest` | parse | a slice pattern with a rest `..` that is not its last element, or more than one rest (R-6u-4) |
 | `parse/lib_module_conflict` | parse | a module is found both in the program and in a library path |
 | `parse/loop_jump_syntax` | parse | a `continue` followed by anything but an optional label and `;`, or a `break` whose `;` is missing before `}` (R-6r-3) |
 | `parse/loop_label_name` | parse | a reserved loop label: `'static`, `'_` or a keyword such as `'fn` (R-6r-2) |
@@ -3262,15 +3295,15 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/int_range` | type | an integer literal outside the range of its type (R-6p-1, R-6p-5) |
 | `type/internal` | type | an unknown statement or expression reached the checker |
 | `type/invariant_decl` | type | a struct invariant clause that is not bool, uses `old()` or `result`, sits on a generic struct, or a parameter `result` of that struct type |
-| `type/irrefutable_pattern` | type | an `if let` or `let else` pattern that matches every value, with an else block (R-6u-3) |
+| `type/irrefutable_pattern` | type | an `if let` or `let else` pattern that matches every value, with a non-empty else block, or such a `while let` pattern (R-6u-3, R-6u-5) |
 | `type/loop_jump_map` | type | a `break`/`continue` that would leave a map iteration or a mutable collection `Some` arm (R-6r-1) |
 | `type/loop_jump_outside` | type | a `break`/`continue` outside a `while` or `for` body (R-6r-1) |
 | `type/loop_jump_unreachable` | type | statements after a `break`/`continue` in the same block (R-6r-1) |
 | `type/loop_label_duplicate` | type | a loop label already used by an enclosing loop (R-6r-2) |
 | `type/loop_label_unknown` | type | a `break`/`continue` label that no enclosing loop has (R-6r-2) |
 | `type/match_arity` | type | a match arm binds the wrong number of fields |
-| `type/match_arms` | type | match arms that are missing or repeated |
-| `type/match_type` | type | a match on a value that is not Option, Result or an enum |
+| `type/match_arms` | type | match arms that are missing or repeated; a slice length no arm takes or a slice arm earlier arms cover (R-6u-4) |
+| `type/match_type` | type | a match on a value that is not Option, Result or an enum (or an array place with slice arms); slice arms on a target that is not an array place, or mixed with other arms (R-6u-4) |
 | `type/missing_return` | type | a function may reach its end without returning |
 | `type/name_collision` | type | one name is both a type and a function |
 | `type/net_unconsumed` | type | a temporary `Socket` or `Listener` is never consumed |

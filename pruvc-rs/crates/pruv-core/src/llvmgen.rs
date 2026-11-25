@@ -1663,6 +1663,8 @@ pub struct FnGen<'a> {
     scopes: Vec<Scope>,
     /// P5: enclosing loops, innermost last: (label, continue block, exit block, scope depth outside the body).
     loops: Vec<(Option<String>, String, String, usize)>,
+    /// P8b: the next `While` is a cost-mode `while let` whose iteration charge sits in arm 0
+    let_tick: bool,
     // Bindings and cleanup lists clone slots; retain layout by unique slot address.
     resize_slots: HashSet<String>,
     slot_layouts: HashMap<String, &'static str>,
@@ -1726,6 +1728,7 @@ impl<'a> FnGen<'a> {
             dead: false,
             scopes: Vec::new(),
             loops: Vec::new(),
+            let_tick: false,
             resize_slots,
             slot_layouts: HashMap::new(),
             slot_rngs: HashMap::new(),
@@ -4501,7 +4504,16 @@ impl<'a> FnGen<'a> {
                 }
                 Ok(())
             }
+            Stmt::While(x) if self.cost && x.let_head().is_some() && !self.let_tick => {
+                // P8b: a failed `while let` head costs no iteration; arm 0 charges instead (While::cost_let_loop)
+                let w = x.cost_let_loop().expect("let head");
+                self.let_tick = true;
+                let r = self.stmt(&Stmt::While(w));
+                self.let_tick = false;
+                r
+            }
             Stmt::While(x) => {
+                let tick = !std::mem::take(&mut self.let_tick);
                 let cl = self.label("wcond");
                 let bl = self.label("wbody");
                 let el = self.label("wend");
@@ -4512,7 +4524,7 @@ impl<'a> FnGen<'a> {
                 self.end_temps()?;
                 self.condbr(&c.a, &bl, &el)?;
                 self.place(&bl);
-                if self.cost { self.cost_add("1")?; }
+                if self.cost && tick { self.cost_add("1")?; }
                 // P5: a `for` body whose `continue` must still run the synthesized step gets its own step block
                 let step = (x.for_head.is_some() && continues_to(&x.body, &x.label, true)).then(|| self.label("wstep"));
                 let depth = self.scopes.len();

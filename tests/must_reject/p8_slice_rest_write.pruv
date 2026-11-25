@@ -1,0 +1,11 @@
+// P8b: writing the owner while a named rest is still read later is a borrow conflict
+fn f(inout a: [i64]) -> i64 {
+  match a {
+    [_, rest @ ..] => {
+      a[0] = 5;
+      if len(rest) > 0 { return rest[0]; }
+      return 0;
+    }
+    [] => { return 0; }
+  }
+}

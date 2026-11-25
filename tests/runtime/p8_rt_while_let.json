@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["1 1 1", "102 100002 2102", "303 100003 4303", "604 1 6804", "1005 2 9005", "1506 3 11906", "2107 4 14107"], "gen_contains": ["    while let Some(v) = pop(&mut c, &mut n) {", "'outer: while let Some(v) = pop(&mut c, &mut n) {", "break 'outer;", "continue 'outer;"]}

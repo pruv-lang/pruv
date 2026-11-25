@@ -1093,6 +1093,9 @@ pub struct FnVerifier<'a> {
     pub extra: Extra,
     /// Loop (While node address) → loop number. Filled only when `extra` is non-empty (`set_extra`).
     pub(crate) loop_no: HashMap<usize, usize>,
+    /// P8b: per `while let` head match being verified (by address), the loop measure at the head and its position:
+    /// `decreases >= 0` and the iteration cost are checked on the success arm only (see `loop_`).
+    while_heads: HashMap<usize, (Ast, (u64, u32))>,
     /// LG31: loop number -> automatic frame clause candidates (ids `F{n}#{k}`); separate from `extra`. Empty = the old path.
     pub frame: Extra,
     /// LG31: frame candidates whose obligation failed in this run, in first-failure order: (id, (code, status)).
@@ -1620,6 +1623,7 @@ impl<'a> FnVerifier<'a> {
             qcfg: QueryConfig::default(),
             extra: HashMap::new(),
             loop_no: HashMap::new(),
+            while_heads: HashMap::new(),
             frame: HashMap::new(),
             frame_failed: Vec::new(),
             probe: None,
@@ -6049,7 +6053,8 @@ impl<'a> FnVerifier<'a> {
                 if model.is_g9() {
                     self.observe(&mut st, &v, sty.as_ref(), false)?; // G9 A1: one-step facts of the matched value
                 }
-                for a in &s.arms {
+                let while_head = self.while_heads.get(&(s as *const ast::Match as usize)).cloned();
+                for (arm_no, a) in s.arms.iter().enumerate() {
                     let cond: Ast;
                     let vals: Vec<Ast>;
                     let ftys: Vec<Ty>;
@@ -6101,6 +6106,11 @@ impl<'a> FnVerifier<'a> {
                         if let Some(w) = self.wf_field(fty, val)? {
                             b.pc.push(w);
                         }
+                    }
+                    if let (0, Some((d0, dpos))) = (arm_no, &while_head) {
+                        // P8b: the `while let` head matched, so this iteration runs (see `loop_`)
+                        self.prove_core(&b, &[], &d0.ge_i(0), *dpos, "decreases_nonneg", "decreases >= 0", None);
+                        self.spend(&mut b, &[], self.z.int(1));
                     }
                     for mut end in self.exec_block(&a.body, b)? {
                         if let (Some((place, before, key)), Some(name)) = (&collection_update, a.binders.first()) {
@@ -6317,8 +6327,14 @@ impl<'a> FnVerifier<'a> {
                 let dpos = pos(&w.decreases);
                 self.check_dom_e(&mut b, &[], &w.decreases, dpos, "variant_field lookups in decreases are defined", None)?;
                 let d0 = self.ev0_ast(&w.decreases, &mut b, &[], false)?;
-                let ob = d0.ge_i(0);
-                self.prove_core(&b, &[], &ob, dpos, "decreases_nonneg", "decreases >= 0", None);
+                if let Some(m) = w.let_head() {
+                    // P8b: a failed `while let` head leaves the loop like a false condition, so the measure need
+                    // not be >= 0 there and the iteration is not charged; the head match checks both on arm 0
+                    self.while_heads.insert(m as *const ast::Match as usize, (d0.clone(), dpos));
+                } else {
+                    let ob = d0.ge_i(0);
+                    self.prove_core(&b, &[], &ob, dpos, "decreases_nonneg", "decreases >= 0", None);
+                }
                 Some((&w.decreases, d0))
             }
             Loop::Map(w) => {
@@ -6326,13 +6342,18 @@ impl<'a> FnVerifier<'a> {
                 None
             }
         };
-        self.spend(&mut b, &[], self.z.int(1));
+        if !matches!(head, Loop::While(w) if w.let_head().is_some()) {
+            self.spend(&mut b, &[], self.z.int(1));
+        }
         let (body_places, body_widths) = (b.places.clone(), b.narrow_bindings.clone());
         let label = match head {
             Loop::While(w) => { self.jumps.push((w.label.clone(), Vec::new(), Vec::new())); Some(w) }
             Loop::Map(_) => None,
         };
         let ran = self.exec_block(body, b);
+        if let Some(m) = label.and_then(ast::While::let_head) {
+            self.while_heads.remove(&(m as *const ast::Match as usize));
+        }
         let (breaks, continues) = match label {
             Some(_) => { let f = self.jumps.pop().unwrap(); (f.1, f.2) }
             None => (Vec::new(), Vec::new()),

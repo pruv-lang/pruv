@@ -1,0 +1,24 @@
+// spec: R-6u-5 reject
+// The measure must be >= 0 at the start of every iteration whose head matches: the head keeps matching after
+// n reaches 0, so an iteration starts with n == -1.
+fn step(inout n: i64) -> Option<i64>
+  requires n >= -1
+  ensures n == old(n) - 1
+  ensures is_some(result) && some_val(result) == n
+{
+  n = n - 1;
+  return Some(n);
+}
+
+fn f(k: i64) -> i64
+  requires 0 <= k && k <= 10
+{
+  let mut n: i64 = k;
+  while let Some(v) = step(inout n)
+    invariant -1 <= n && n <= k
+    decreases n
+  {
+    if v < -1 { break; }
+  }
+  return 0;
+}

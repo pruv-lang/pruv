@@ -1,0 +1,6 @@
+// P8b: a while let pattern that matches every value (the only variant of an enum) is type/irrefutable_pattern
+enum One { Only(n: i64) }
+fn f(o: One) -> i64 {
+  while let One::Only(n) = o decreases 0 { return n; }
+  return 0;
+}

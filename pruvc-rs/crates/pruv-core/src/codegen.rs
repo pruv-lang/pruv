@@ -1548,6 +1548,10 @@ struct Gen<'a> {
     small: crate::small::SmallPlan,
     /// the local `o` while a `__pruv_small` variant is emitted
     small_o: Option<String>,
+    /// P8b: set by a `while let` loop for its head match: the loop label prefix to print `'l: while let P = e {`.
+    while_let: Option<String>,
+    /// P8b: the next `While` is a cost-mode `while let` whose iteration charge sits in arm 0
+    let_tick: bool,
     /// address of the Call being emitted as a rewritten call site (0 = none) and the name of its binding
     small_call: usize,
     small_buf: String,
@@ -1607,6 +1611,8 @@ impl<'a> Gen<'a> {
             stack,
             small,
             small_o: None,
+            while_let: None,
+            let_tick: false,
             small_call: 0,
             small_buf: String::new(),
             small_elem: "i64",
@@ -4655,10 +4661,32 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     None => self.emit(ind, &format!("{};", kw)),
                 }
             }
+            Stmt::While(x) if x.let_head().is_some_and(|m| !self.cost && m.arms.len() >= 2
+                && self.map_match_call(m).is_none() && !self.is_ext(expr_ty(&m.scrutinee).as_deref())
+                && !self.try_match(m)) => {
+                // P8b: `'l: while let P = e { B }`; the head match prints the loop line (Stmt::Match, WhileLet)
+                let mut exits = HashSet::new();
+                loop_exits(x, &mut exits);
+                self.exits.extend(exits.iter().copied());
+                self.while_let = Some(loop_label(&x.label));
+                let r = self.block_in(&x.body, ind, &[], true);
+                self.while_let = None;
+                self.exits.retain(|a| !exits.contains(a));
+                r?;
+            }
+            Stmt::While(x) if self.cost && x.let_head().is_some() && !self.let_tick => {
+                // P8b: a failed `while let` head costs no iteration; arm 0 charges instead (While::cost_let_loop)
+                let w = x.cost_let_loop().expect("let head");
+                self.let_tick = true;
+                let r = self.stmt(&Stmt::While(w), ind);
+                self.let_tick = false;
+                r?;
+            }
             Stmt::While(x) => {
                 let c = self.e(&x.cond)?;
                 self.emit(ind, &format!("{}while {} {{", loop_label(&x.label), c));
-                if self.cost {
+                let tick = !std::mem::take(&mut self.let_tick);
+                if self.cost && tick {
                     self.emit(ind + 1, &Self::cost_add("1"));
                 }
                 let mut exits = HashSet::new();
@@ -4744,6 +4772,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 // P8: `if let` / `let ... else` print as written; arm 0 is the pattern, the other arms all carry a copy
                 // of the else block (check::expand_match_forms)
                 let form = if x.arms.len() >= 2 { x.form } else { MatchForm::Match };
+                // P8b: a `while let` head prints as the loop line only when its loop asked for it (else full match)
+                let while_let = self.while_let.take();
+                let form = if form == MatchForm::WhileLet && while_let.is_none() { MatchForm::Match } else { form };
                 if form == MatchForm::Match {
                     self.emit(ind, &format!("match {} {{", s));
                 }
@@ -4780,6 +4811,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
                             self.emit(ind, "} else {");
                         }
                         (MatchForm::LetElse, _) => break,
+                        (MatchForm::WhileLet, 0) => self.emit(ind,
+                            &format!("{}while let {} = {} {{", while_let.as_deref().unwrap_or(""), pat, s)),
+                        (MatchForm::WhileLet, _) => break,
                     }
                     let saved_vars = fold.then(|| self.vars.clone());
                     let body: &[Stmt] = if fold {
@@ -4803,7 +4837,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     }
                     match form {
                         MatchForm::Match => self.block(body, ind + 2)?,
-                        MatchForm::IfLet => self.block(body, ind + 1)?,
+                        MatchForm::IfLet | MatchForm::WhileLet => self.block(body, ind + 1)?,
                         MatchForm::LetElse => self.block(body, ind)?,
                     }
                     if let Some(v) = saved_vars {

@@ -1,0 +1,20 @@
+// spec: R-6u-5 reject
+// A `while let` loop needs `decreases` like any `while` loop.
+fn pop(inout n: i64) -> Option<i64>
+  requires n >= 0
+{
+  if n == 0 { return None; }
+  n = n - 1;
+  return Some(n);
+}
+
+fn f(k: i64) -> i64
+  requires k >= 0
+{
+  let mut n: i64 = k;
+  while let Some(v) = pop(inout n)
+    invariant n >= 0
+  {
+  }
+  return n;
+}

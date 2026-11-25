@@ -575,6 +575,54 @@ impl Parser {
         Ok(arm(&ct, None, ct.val.clone(), (binders, pats)))
     }
 
+    /// P8b: a slice pattern arm `[]`, `[a, _, b]`, `[a, ..]`, `[a, tail @ ..]` or `[..]`. The prefix binders are
+    /// `binders` (`_` skips an element); the shape is in `ctor`: `[]` for an exact length, `[..]` for an unnamed rest
+    /// and `[..name]` for a named rest (see `check::slice_arm_shape`). A rest that is not last is
+    /// parse/slice_pattern_rest.
+    fn slice_arm(&mut self) -> R<MatchArm> {
+        let open = self.next();
+        let mut binders = Vec::new();
+        let mut rest: Option<String> = None;
+        let mut has_rest = false;
+        while !self.at("]", 0) {
+            if has_rest {
+                let t = self.peek(0).clone();
+                return Err(PruvError::new("parse", t.line, t.col, "slice_pattern_rest",
+                    "a slice pattern has at most one rest `..`, and it is the last element",
+                    "match the prefix and bind the remainder with `name @ ..` at the end"));
+            }
+            if self.at("..", 0) {
+                self.bump();
+                has_rest = true;
+            } else if self.at("_", 0) && self.peek(0).kind == Kind::Op {
+                self.bump();
+                binders.push("_".to_string());
+            } else {
+                let n = self.ident()?;
+                if self.at("@", 0) {
+                    self.bump();
+                    self.expect("..")?;
+                    has_rest = true;
+                    rest = Some(n.val);
+                } else {
+                    binders.push(n.val);
+                }
+            }
+            if !self.at(",", 0) {
+                break;
+            }
+            self.bump();
+        }
+        self.expect("]")?;
+        let ctor = match (has_rest, rest) {
+            (false, _) => "[]".to_string(),
+            (true, None) => "[..]".to_string(),
+            (true, Some(n)) => format!("[..{}]", n),
+        };
+        Ok(MatchArm { line: open.line, col: open.col, enum_name: None, ctor, binders, body: Vec::new(),
+            pats: Vec::new(), pat_lets: 0 })
+    }
+
     /// P6: the tuple type with these components; registers its synthetic struct.
     fn tuple_type(&mut self, open: &Tok, comps: Vec<GType>) -> R<GType> {
         if comps.len() < 2 || comps.len() > crate::gtype::TUPLE_MAX_ARITY {
@@ -2086,7 +2134,19 @@ impl Parser {
         }
         if self.at("while", 0) {
             self.bump();
-            let cond = self.expr()?;
+            // P8b: `while let P = e` is the loop `while true` whose body is the head match (MatchForm::WhileLet)
+            let head = if self.at("let", 0) {
+                self.bump();
+                let arm = self.arm_pattern()?;
+                self.expect("=")?;
+                Some((arm, self.expr()?))
+            } else {
+                None
+            };
+            let cond = match head {
+                Some(_) => Expr::BoolLit(BoolLit { line: l, col: c, value: true, ty: None }),
+                None => self.expr()?,
+            };
             let mut invs = Vec::new();
             let mut dec: Option<Expr> = None;
             while self.at("invariant", 0) || self.at("decreases", 0) {
@@ -2110,7 +2170,12 @@ impl Parser {
                     ))
                 }
             };
-            let body = self.block()?;
+            let mut body = self.block()?;
+            if let Some((mut arm, scrutinee)) = head {
+                arm.body = body;
+                body = vec![Stmt::Match(Match { line: l, col: c, scrutinee, arms: vec![arm], form: MatchForm::WhileLet,
+                    els: vec![Stmt::Break(Jump { line: l, col: c, label: None })] })];
+            }
             return Ok(Stmt::While(While { line: l, col: c, cond, invariants: invs, decreases: dec, body, for_head: None, label: None }));
         }
         if self.at("for", 0) && self.at("(", 1) {
@@ -2192,6 +2257,8 @@ impl Parser {
                     self.arm_binder(&mut binders, &mut pats)?;
                     MatchArm { line: ct.line, col: ct.col, enum_name: None, ctor: "()".to_string(), binders,
                         body: Vec::new(), pats, pat_lets: 0 }
+                } else if self.at("[", 0) {
+                    self.slice_arm()?
                 } else {
                     self.arm_pattern()?
                 };
@@ -3010,7 +3077,7 @@ mod tests {
 
     #[test]
     fn crlf_and_cr() {
-        let e = parse_source("fn f() -> i64 {\r  @").unwrap_err();
+        let e = parse_source("fn f() -> i64 {\r  $").unwrap_err();
         assert_eq!((e.code.as_str(), e.line, e.col), ("bad_char", 2, 3));
     }
 }

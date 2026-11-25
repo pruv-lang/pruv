@@ -1,0 +1,88 @@
+// P8b runtime: slice patterns over [i64], [u8], [u16] and [bool]: lengths 0, k-1, k and k+1, a named rest
+// (length 0 and its first element), u16 value 513 and source-order arm selection.
+fn tail_first(t: [i64]) -> i64
+  ensures len(t) == 0 ==> result == -1
+  ensures len(t) > 0 ==> result == t[0]
+{
+  match t {
+    [x, ..] => { return x; }
+    [] => { return -1; }
+  }
+}
+
+fn shape(s: [u8]) -> i64
+  ensures 0 <= result && result <= 1000000
+{
+  match s {
+    [] => { return 0; }
+    [a] => { return 100000 + a; }
+    [a, b] => { return 200000 + a * 256 + b; }
+    [a, _, rest @ ..] => { return 300000 + a * 100 + len(rest) % 100; }
+  }
+}
+
+// The rest starts at element 2 of the source: rest[0] is v[2], not v[0].
+fn rest_view(v: [i64]) -> i64
+  requires len(v) >= 2 && len(v) <= 100
+  requires v[0] == 7
+  ensures len(v) > 2 ==> result == v[2]
+  ensures len(v) == 2 ==> result == -1
+{
+  match v {
+    [_, _, rest @ ..] => { return tail_first(rest); }
+    [..] => { return -2; }
+  }
+}
+
+fn units(u: [u16]) -> i64
+  ensures 0 <= result && result <= 65535
+{
+  match u {
+    [a, ..] => { return a; }
+    [] => { return 0; }
+  }
+}
+
+fn flags(f: [bool]) -> i64 {
+  match f {
+    [true_first, b] => {
+      if true_first && !b { return 1; }
+      return 2;
+    }
+    [..] => { return 3; }
+  }
+}
+
+fn bytes(n: i64) -> [u8] ! alloc
+  requires 0 <= n && n <= 5
+  ensures len(result) == n
+{
+  let mut b: [u8] = alloc(n, 0);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && len(b) == n
+    decreases n - i
+  {
+    b[i] = i + 1;
+    i = i + 1;
+  }
+  return b;
+}
+
+fn run(k: i64, part: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 4
+{
+  let s: [u8] = bytes(k);
+  let mut v: [i64] = alloc(k + 2, 9);
+  v[0] = 7;
+  v[k + 1] = 40 + k;
+  let u: [u16] = alloc(k % 2, 513);
+  let mut f: [bool] = alloc(2, true);
+  f[1] = k > 2;
+  let fl: [bool] = alloc(k, false);
+  if part == 0 { return shape(s); }
+  if part == 1 { return rest_view(v); }
+  if part == 2 { return units(u); }
+  if part == 3 { return flags(f); }
+  return flags(fl);
+}
