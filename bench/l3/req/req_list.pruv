@@ -387,7 +387,7 @@ pub fn w_full(w: [i64], crec: [i64], m: i64, base: i64) -> [i64] ! alloc
   {
     let ps: i64 = pos + 32;
     let nb: i64 = crate::ent_value::pool_bytes(crec, ps);
-    if prev_high && crate::ent_value::starts_low(crec, ps, 0, nb) {
+    if prev_high && crate::ent_value::starts_low(crate::ent_value::pool_at(crec, ps), 0, nb) {
       ub = crate::ent_u16::clamp(ub + 1, 1073741823);
     }
     let mut x: i64 = 0;
@@ -399,7 +399,7 @@ pub fn w_full(w: [i64], crec: [i64], m: i64, base: i64) -> [i64] ! alloc
       x = x + 1;
     }
     ub = crate::ent_u16::clamp(ub + nb, 1073741823);
-    if nb > 0 { prev_high = crate::ent_value::ends_high(crec, ps, nb); }
+    if nb > 0 { prev_high = crate::ent_value::ends_high(crate::ent_value::pool_at(crec, ps), nb); }
     pos = crate::ent_u16::clamp(pos + 1 + crate::ent_u16::clamp(crate::ent_u16::rd(crec, pos), 1073741823), 999999000);
     k = k + 1;
   }

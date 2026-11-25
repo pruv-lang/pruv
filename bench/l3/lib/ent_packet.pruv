@@ -181,7 +181,7 @@ pub fn vs(inout c: Check, p0: i64, mask: i64, width0: i64) -> ()
   } else if tag == 6 {
     ok = crate::ent_value::span_ok(c.w, start_in(c.starts, 0), a, b);
     if ok {
-      let hi: i64 = crate::ent_u16::clamp(a, 4294967296) + crate::ent_u16::clamp(b, 4294967296);
+      let hi: i64 = a + b;
       if hi > c.pool_hi { c.pool_hi = hi; }
     }
   } else if tag == 9 {

@@ -15,7 +15,9 @@ Gap ids refer to `docs/RUST_SHAPE_RESET.md` §4. This file is the step 3 RESHAPE
 | `ent_u16` | `hand/ent_u16.rs` (new in 3.1) | U, F, P-cat, P-put, API rows (`max_alloc`, `index_of`) |
 | `ent_path` | `hand/ent_path.rs` (new in 3.1) | U, J, L, R, I, BL, P-guard rows, API rows (`resolve_need*`) |
 | `ent_wire` | `hand/ent_wire.rs` (new in 3.2) | O (`sections` / `pool_start` return `-1`) |
-| `ent_packet` | `hand/ent_packet.rs` (new in 3.2) | K, E, O, S, V, L, P-hi, P-start |
+| `ent_packet` | `hand/ent_packet.rs` (new in 3.2) | K, E, O, S, L, P-start (V, P-hi closed in 3.3) |
+| `ent_value` | `hand/ent_value.rs` (new in 3.3) | U, O, VE, PB, CMP, API rows (`(w, start)` wrappers) |
+| `ent_state` | none yet (deferred, see step 3.3) | whole module: CX |
 
 ## Step 3.1: `ent_u16` and `ent_path`
 
@@ -293,3 +295,107 @@ was done:
 - S: consumer rows, closed by each step that owns the `sec_start` call sites.
 - V, P-hi: closed by 3.3 (`span_ok` `ensures`, one pool view in `ent_value`).
 - P-start: proof-only, open until the verifier keeps element facts for an array built by a push loop.
+
+## Step 3.3: `ent_value` (`ent_state` deferred)
+
+`ent_value` had no hand counterpart, so `hand/ent_value.rs` is new (`rustc --edition 2021 --test`, 4 tests: round
+trip and units, the lone-surrogate separator and `span_ok`, value semantics, UTF-16 order). The hand parses a slot once
+into `enum Value` and reads the pool through one borrowed view `Pool<'a>(&'a [i64])` (`Pool::at(w, s)` is `&w[s..]`),
+bytes through `Pool::byte`. The Pruv now has the same pool shape: `pool_at(w, s) -> ref [i64] from(w)` (generated Rust
+`fn pool_at<'a>(w: &'a [i64], s: i64) -> &'a [i64]`), `nbytes(view)`, `byte(view, k)`, and every reader takes the view.
+
+### `ent_value` pool readers (`lib/ent_value.pruv`, hand `lib/hand/ent_value.rs`)
+
+| Pruv | Hand | Before 3.3 | After 3.3 | Same as hand |
+|---|---|---|---|---|
+| `pool_at` (new, `pub`) | `Pool::at(w, s)` | none: every reader took `(w, start)` | `subview(w, clamp(s, len(w)), len(w))`, a borrowed view | = |
+| `nbytes`, `byte` (new, private) | `Pool::nbytes`, `Pool::byte` | `pool_byte(w, pool0, k0)` clamped `pool0` and `k0` on every byte, `pool_bytes(w, pool0)` | `byte` reads `rd(view, 2 + k/7)` with a `requires` on `k`; no clamp per byte | = |
+| `pool_bytes(w, start)` | `Pool::at(w, s).nbytes()` | | `nbytes(pool_at(w, start))`; kept for its 25 consumer sites | API row |
+| `span_ok(w, pool, off, n)` | `span_ok(Pool, off, n)` | no `ensures`; `pool_byte` per byte | one view; `ensures result ==> 0 <= off && 0 <= n && off + n <= 2^30 - 1` | = (closes V, P-hi) |
+| `form_code`, `units_in`, `prefix_in`, `decode_into`, `decode_span` | `form_code`, `units_in`, `prefix_in`, `units` / `decode_into`, `decode_span` | `(w, start, ..)` and `pool_byte` | take the view; positions clamped once at entry | = except U |
+| `span_units`, `prefix_bytes` | | the readers themselves | thin `pub` wrappers `units_in(pool_at(w, s), ..)` / `prefix_in(..)` for consumers | API row |
+| `starts_low`, `ends_high` | inside `PoolBuf::append_span` / `ends_high` | `(w, start, ..)` | take the view (`req_list` passes `pool_at(crec, ps)`) | = |
+| `append_span`, `append_units` | `PoolBuf::append_span`, `PoolBuf::append_units` | `pool_byte` per byte, `ends_high(o, dest, ..)` | source read through one view `sv`, destination through one view `dv = pool_at(o, dest)` (`nbytes(dv)`, `ends_high(dv, nb)`) | = except PB |
+| `pool_base`, `pool_cat` | `PoolBuf::join`, `PoolBuf::cat` | `pool_bytes(a, 0)` | `nbytes(a)`, view readers | = except PB |
+| `str_len`, `str_units`, `str_eq_arr`, `str_eq_lit`, `str_eq` | `units_in`, `decode_span`, `str_eq_lit`, `str_eq` over a `Span` | `(w, sec_start(w, 0))` passed down to per-byte readers | one `pool_at(w, sec_start(w, 0))` per call | = except VE |
+| `pstr_len` (`pstr_len_at` removed), `pstr_chunk_bytes`, `pstr_part`, `pstr_units` | the same readers on a `Span` | `(pool, 0, ..)` | `units_in` / `prefix_in` / `decode_span` on the pool | = except VE |
+| `pstr_eq_lit` (`pstr_eq_lit_at` merged), `pstr_eq` (`pstr_eq_at` merged), `span_eq` | `str_eq_lit`, `str_eq` | a `_at(pool, start, ..)` core plus a wrapper passing 0 | one function each, `byte(view, ..)` | = except VE |
+| `pstr_find_byte`, `title_cut`, `prefix_pool_units`, `key_put_at`, `pool_copy_into` | iterator `position` / `prefix_in` / `decode_into` | `pool_byte(w, ps, ..)` | one view `pv` per call | = except VE |
+| `put_prefix`, `write_prefix`, `put_title_prefix` | `PoolBuf::append_span` | `write_prefix` took `(w, ps)` and re-derived the source per byte | `put_prefix` builds the view `src` once; `write_prefix(.., src: [i64], ..)` | = except PB |
+| `pstr_cmp`, `pair_cmp` | `units(a).cmp(units(b))` | `pool_byte(pool, 0, ..)` | `byte(pool, ..)`; still the byte walk with the surrogate fix-ups | CMP |
+| `truthy`, `nullish`, `ntag`, `strict_eq`, `num_int`, `key_len`, `key_put` | `Value::truthy`, `nullish`, `strict_eq`, `num_int -> Option<i64>`, `key -> Option<Vec<u16>>` | | unchanged | VE, O |
+| `pkt_size`, `logical_pool_words` | `ent_packet` `logical_size` | | unchanged, on `ent_packet::sec_len` / `sec_start` (the V option "keep") | = |
+
+`lib/ent_packet.pruv` `vs`: the high-water is `let hi: i64 = a + b;` (was `clamp(a, 2^32) + clamp(b, 2^32)`); it
+verifies from the `span_ok` `ensures`. That closes **V** and **P-hi**.
+
+Rows:
+
+- **VE** (API row, owner: the consumer steps): a slot stays three words read by position (`tag_at(w, p)`, `slot_off`,
+  `slot_bytes`) where the hand parses it once into `enum Value` (`Undefined`, `Null`, `Bool`, `Ref`, `Num`, `Str(Span)`,
+  `Id`, `Absent`, `Object`, `Other`). Pruv has payload enums (SPEC 6a), so this is no language gap: about 75 public
+  `(w, p)` functions are called from `req/*`, `ent_*` and `entry_api`, and each consumer step parses its slots.
+- **PB** (API row): writers take `inout o: [i64]` plus a word offset `dest` (the pool lives inside a packet being
+  built), where the hand appends to a `PoolBuf { units, nbytes, words: Vec<i64> }`. Same consumers as VE.
+- **CMP** (kept): `pstr_cmp` walks bytes and fixes up the four-byte / lone-surrogate order (`pair_cmp`); the hand
+  compares the lazy UTF-16 unit iterators. Pruv has no iterator adaptors (row I), so the byte walk stays; same order.
+- **O** (from 3.2): `key_len` returns `-1` and `num_int` returns `2^53` for `None`.
+- **U** (from 3.1): units are `[i64]`, offsets `i64`.
+
+### `ent_state` (deferred)
+
+`ent_state` is not reshaped in 3.3 (time cap). No language gap blocks it; recorded so 3.4 can take it with
+`ent_dispatch`:
+
+- **CX** (open, whole module): `Ctx` is threaded by value (`fn f(cx0: Ctx, ..) -> Ctx`, `let mut cx: Ctx = cx0;`
+  then return it) with `stalled` / `bad` as `i64` flags checked after every observation. The hand shape is
+  `&mut Ctx` methods (`inout cx: Ctx`, closed as IF / B5) and an observation result `enum Obs { Answer, Stalled, Bad }`
+  (or `Result`), with the request (`rcode`, `raux`, `rpool`, `rrec`, `rtab`, `rntab`) and the recorded `prev` request
+  (`qon`, `qexact`, `qns`, `qpool`, `qrec`, `qtab`) as two `Option<Request>` fields instead of 13 loose fields.
+  `ctx_new` fills ten `empty()` temporaries (hand `Vec::new()`), and `ctx_new` / `obs` copy `blob`, `lg`, `rpool`,
+  `rrec`, `rtab`.
+- **Boundary with `ent_dispatch`**: `ent_state::with_prev` calls `ent_dispatch::blob_pool(prev)`, and `ent_dispatch`
+  calls `ent_state` 17 times (`ctx_new`, `with_prev`, `finish`, `replay_await`, `state_ok`, `st_*`, `log_*`). `Ctx`
+  is used by `ent_sources` (59 sites), `ent_canon` (63), `entry_api` (18), `ent_bound` (12), `ent_dispatch` (17), and
+  `q_mutants.py` (M04 targets `ent_state`; M08 to M12 target `ent_dispatch`). 3.4 must: move `blob_pool` next to the pool readers (it is a
+  pool slice of a packet: `ent_value`), so `ent_state` no longer calls `ent_dispatch`; then change `obs` / `ctx_*` to
+  `inout cx: Ctx` one caller module at a time (`ent_dispatch` first, then `ent_bound`, `ent_sources`, `ent_canon`,
+  `entry_api`), keeping the item contract "check after every observation" as the `Obs` result.
+- `ent_state` state words (`[magic, op, code, aux, ck0..7, L, G, blob, log]`) are the await packet format (section 2),
+  external input: the hand parses them once (`state_ok` + `st_*`) into a struct; today every `st_*` slices again.
+
+### Codex structure comparison
+
+One read-only comparison (Codex gpt-6.2-astra high) of `ent_value` against the hand and HEAD. Findings and what was done:
+
+| Finding | Done |
+|---|---|
+| no per-byte view or clamp left in the readers | = |
+| `append_span` / `append_units` re-derived the destination (`pool_at(o, dest)` in `ends_high` plus `rd(o, dest + 1)`) | Pruv: one `dv` view per call, `nbytes(dv)` and `ends_high(dv, nb)` (the hand reads `self` once) |
+| `write_prefix` calls `append_span(src, 0)`; `append_slot`, `pool_head`, `pool_cat`, `pslot_ok` build the view at the call | kept: `(w, start)` API wrappers for the consumers (VE / PB) |
+| `append_units` past 16,777,216 units, `pstr_cmp` on a span `span_ok` rejects, decode of an `F4 90..` form, `truthy` on a number word `>= 2^32` differ from the hand | kept: all outside the checked domain (`wire_check` / `span_ok` reject the input first) |
+| `enum Value`, the `(w, start)` API, `PoolBuf`, iterators / `pair_cmp`, `Option` results | rows VE, PB, CMP, O, API |
+
+### Tests (after the last code change)
+
+`bench/l3/lib/hand`: `rustc --edition 2021 --test` on `ent_value.rs` (4 tests), pass. Budget m11 / m12 do not use
+`ent_value` or `ent_state` (they use only `ent_u16`), so they were not run.
+
+| Test | Pairs | Result |
+|---|---|---|
+| `entry/test_impl.py` | rs/rust, rs/llvm | 296 variants x 2 = 592 runs, unexplained 0 |
+| `entry/judge_test.py` | rs | failures 0 |
+| `entry/q.py --count 400` | rs/rust, rs/llvm | 399 exact, 1 excluded-domain, unexplained 0 |
+| `req/test_impl.py` | rs/rust, rs/llvm | 160 variants x 2 = 320 runs, unexplained 0 |
+| `req/q.py` (q_gen, 2000 cases) | rs/rust, rs/llvm | 2000/2000 equal on each pair |
+| `entry/integrate.py` (after qwen 26/26 + codex 136/136 on both pairs, opencode 199/199 and grok `--no-ts` 254/254 on rs/rust) | rs/rust | 10 integration cases, 18 checks PASS, 2 integration limits (I01/I02 claude, known; exit 2 as in 3.1 / 3.2) |
+
+The first opencode run (concurrent with the entry tests) failed one fixture in setup (`F01-xdg-blank`: the two sides
+built different trees, before any implementation result is compared); run alone it passed 199/199.
+
+### Rows open after 3.3
+
+- Closed: **V**, **P-hi**.
+- New: **VE**, **PB** (API rows, owned by the consumer steps), **CMP** (row I, no iterator adaptors), **CX**
+  (`ent_state`, 3.4 with `ent_dispatch`).
+- Still open: U, K, L (language / API gaps), E, O (API rows), S (consumer rows), P-start (proof-only).
