@@ -67,7 +67,7 @@ pub fn is_user_key(t: &str) -> bool {
 pub(crate) const SMALL_INT_HOST_MESSAGE: &str = "integer types other than i64 at the host boundary is bundle P12";
 pub(crate) const SMALL_INT_HOST_ERROR: &str = "small_int_unsupported: integer types other than i64 at the host boundary is bundle P12";
 
-/// A u8/u16 value in the signature, directly or inside a user struct/enum (P1: such functions stay off the host boundary).
+/// A u8/u16 value or a fixed-length array in the signature, directly or inside a user struct/enum (P1: such functions stay off the host boundary).
 pub(crate) fn has_narrow_scalar_sig(f: &crate::ast::Function, tt: &TypeTable) -> bool {
     let mut seen = std::collections::HashSet::new();
     has_narrow(tt, &f.ret, &mut seen) || f.params.iter().any(|p| has_narrow(tt, &p.ty, &mut seen))
@@ -79,6 +79,7 @@ fn has_narrow(tt: &TypeTable, ty: &str, seen: &mut std::collections::HashSet<Str
         .filter(|n| !n.is_empty())
         .any(|n| {
             crate::intwidth::is_narrow(n)
+                || n.starts_with(&crate::gtype::FIXED_PREFIX[1..]) // P7-1: `[T; N]` stays off the host boundary too
                 || (seen.insert(n.to_string())
                     && tt.decl(n).is_some_and(|d| d.all_fields().iter().any(|x| has_narrow(tt, &x.ty, seen))))
         })

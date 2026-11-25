@@ -1118,7 +1118,7 @@ pub fn has_ext_sig(f: &Function, tt: &TypeTable) -> bool {
 
 /// internal LLVM result type: an extended (G9) aggregate result goes through explicit output storage
 pub fn ir_ret(tt: &TypeTable, f: &Function) -> String {
-    if is_ext_t(tt, &f.ret) {
+    if is_ext_t(tt, &f.ret) || fixed_key(&f.ret).is_some() {
         "void".to_string()
     } else if view_ret(f) {
         VIEW.to_string()
@@ -1524,11 +1524,13 @@ fn inout_slot_param(param: &Param, resize: bool) -> bool {
 /// caller-owned storage (see sig_text for its attributes).
 pub fn ir_params(f: &Function, tt: &TypeTable, resizes: &HashSet<(String, usize)>) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    if is_ext_t(tt, &f.ret) {
+    if is_ext_t(tt, &f.ret) || fixed_key(&f.ret).is_some() {
+        // P7-1: a fixed-array result is written into caller storage too
         out.push(("ptr".to_string(), "%out".to_string()));
     }
     for (i, p) in f.params.iter().enumerate() {
-        if is_ext_t(tt, &p.ty) || inout_slot_param(p, resizes.contains(&(f.name.clone(), i))) {
+        // P7-1: a fixed-array parameter is a pointer to a copy (by value) or to the caller's array (inout)
+        if is_ext_t(tt, &p.ty) || fixed_key(&p.ty).is_some() || inout_slot_param(p, resizes.contains(&(f.name.clone(), i))) {
             out.push(("ptr".to_string(), format!("%p.{}", mangle(&p.name))));
             continue;
         }
@@ -3427,7 +3429,10 @@ impl<'a> FnGen<'a> {
         let mut owned: Vec<Slot> = Vec::new();
         for (i, p) in f.params.iter().enumerate() {
             let n = mangle(&p.name);
-            if p.mode_pos.is_some() && is_array_name(&p.ty) && self.m.resize_params.contains(&(f.name.clone(), i)) {
+            if fixed_key(&p.ty).is_some() {
+                // P7-1: the callee's own copy (by value) or the caller's array (inout)
+                names.insert(p.name.clone(), Bind::Slot(V::agg(format!("%p.{n}"), &p.ty)));
+            } else if p.mode_pos.is_some() && is_array_name(&p.ty) && self.m.resize_params.contains(&(f.name.clone(), i)) {
                 let slot = self.array_slot(format!("%p.{n}"), &p.ty)?;
                 names.insert(p.name.clone(), Bind::Slot(slot));
             } else if p.mode_pos.is_some() && (p.ty == "bool" || crate::intwidth::of(&p.ty).is_some()) {
@@ -3511,6 +3516,8 @@ impl<'a> FnGen<'a> {
             let g0 = self.op(format!("insertvalue {VIEW} undef, ptr {}, 0", v.a))?;
             let g1 = self.op(format!("insertvalue {VIEW} {g0}, i64 {}, 1", v.b))?;
             self.term(format!("ret {VIEW} {g1}"))
+        } else if fixed_key(rt).is_some() {
+            self.term("ret void".to_string()) // P7-1: written to %out by the return statement
         } else if self.is_ext(rt) {
             // G9 A3: explicit output storage; v is an owned value
             self.ins(format!("store {} {}, ptr %out", lty(rt), v.a))?;
@@ -4628,6 +4635,9 @@ impl<'a> FnGen<'a> {
                 if let (true, Some(val)) = (view_ret(self.f), x.value.as_ref()) {
                     // R-6g9-1: a view result borrows its `from` sources; nothing moves out
                     v = self.ev(val, false)?;
+                } else if let (Some(_), Some(val)) = (fixed_key(&self.f.ret), x.value.as_ref()) {
+                    // P7-1: the result array is copied into the caller's %out storage
+                    self.fixed_fill("%out", val)?;
                 } else if let (Some(sl), Some(Expr::Call(c))) = (tm, x.value.as_ref()) {
                     // P2 batch 4: `return truncate(x, m)` of an owned local array: the same pointer with length m moves out
                     let src = self.load(&sl)?;
@@ -4891,11 +4901,15 @@ impl<'a> FnGen<'a> {
     /// P7-1: the storage of a fixed-array expression: a local's own slot, otherwise a fresh temporary filled from it.
     fn fixed_ptr(&mut self, e: &Expr) -> R<String> {
         match e {
-            Expr::Var(v) => match self.lookup(&v.name)? {
-                Bind::Slot(sl) => return Ok(sl.a),
+            Expr::Var(v) => match self.lookup(&v.name) {
+                Ok(Bind::Slot(sl)) => return Ok(sl.a),
+                // P7-1 B: a parameter read in a requires check
+                Err(_) if self.cenv.contains_key(&v.name) => return Ok(self.cenv[&v.name].a.clone()),
                 _ => return Err(format!("llvmgen: fixed array `{}` is not in a slot", v.name)),
             },
             Expr::Call(c) if c.name == ARRAY_LIST || array_repeat_len(&c.name).is_some() => {}
+            // P7-1 B: a call result already lives in fresh caller storage
+            Expr::Call(_) => return Ok(self.ev(e, false)?.a),
             _ => return Err("llvmgen: unsupported fixed array expression".to_string()),
         }
         let ty = expr_ty(e).clone().ok_or_else(|| "llvmgen: untyped fixed array".to_string())?;
@@ -6165,6 +6179,20 @@ impl<'a> FnGen<'a> {
         let mut args: Vec<String> = Vec::new();
         for (i, x) in a.iter().enumerate() {
             let prm = f.params.get(i).ok_or_else(|| IDX_ERR.to_string())?;
+            if fixed_key(&prm.ty).is_some() {
+                // P7-1: inout passes the caller's array; by value passes a fresh copy (so the callee never sees a
+                // later write through an inout argument of the same call)
+                let p = match x {
+                    Expr::InoutArg(ix) => self.fixed_ptr(&ix.expr)?,
+                    _ => {
+                        let tmp = self.new_out(&prm.ty);
+                        self.fixed_fill(&tmp, x)?;
+                        tmp
+                    }
+                };
+                args.push(format!("ptr {}", p));
+                continue;
+            }
             if let Expr::InoutArg(ix) = x {
                 if self.is_ext(&prm.ty) || inout_slot_param(prm, self.m.resize_params.contains(&(f.name.clone(), i))) {
                     let p = self.inout_place_ptr(&ix.expr)?;
@@ -6191,6 +6219,14 @@ impl<'a> FnGen<'a> {
                 // G9 A3: a read argument is a pointer to valid caller-owned storage
                 let vp = self.view_ptr(x)?;
                 args.push(format!("ptr {}", vp));
+                continue;
+            }
+            if let Some(n) = expr_ty(x).as_deref().filter(|t| crate::gtype::key_is_fixed_borrow(t, &prm.ty)).and_then(fixed_key)
+                .and_then(|f| f.fixed_parts().map(|(_, n)| n)) {
+                // P7-1 B: a [T; N] borrowed as a read-only [T] for the call: its address and the constant length
+                let p = self.fixed_ptr(x)?;
+                args.push(format!("ptr {}", p));
+                args.push(format!("i64 {}", n));
                 continue;
             }
             let take = prm.take;
@@ -6223,6 +6259,14 @@ impl<'a> FnGen<'a> {
         } else {
             format!("@{}__pruv_{}", mangle(&f.name), if self.verified { "body" } else { "entry" })
         };
+        if fixed_key(&f.ret).is_some() {
+            // P7-1: the callee writes the array into fresh caller storage; the value is that address
+            let outp = self.new_out(&f.ret);
+            let mut all: Vec<String> = vec![format!("ptr {}", outp)];
+            all.extend(args.iter().cloned());
+            self.ins(format!("call void {}({})", callee, all.join(", ")))?;
+            return Ok(V::agg(outp, &f.ret));
+        }
         if self.is_ext(&f.ret) {
             // G9 A3: explicit output storage; the result is a fresh owned value
             let outp = self.new_out(&f.ret);
@@ -6562,7 +6606,9 @@ impl<'a> FnGen<'a> {
         self.cparams = f.params.iter().map(|p| p.name.clone()).collect();
         for (i, p) in f.params.iter().enumerate() {
             let n = mangle(&p.name);
-            if p.mode_pos.is_some() && is_array_name(&p.ty) && self.m.resize_params.contains(&(f.name.clone(), i)) {
+            if fixed_key(&p.ty).is_some() {
+                self.cenv.insert(p.name.clone(), V::agg(format!("%p.{n}"), &p.ty)); // P7-1: the array's address
+            } else if p.mode_pos.is_some() && is_array_name(&p.ty) && self.m.resize_params.contains(&(f.name.clone(), i)) {
                 let slot = self.array_slot(format!("%p.{n}"), &p.ty)?;
                 let v = self.load(&slot)?;
                 self.cenv.insert(p.name.clone(), v);

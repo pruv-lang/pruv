@@ -4318,6 +4318,11 @@ impl<'a> FnVerifier<'a> {
                         let d = self.narrow_elem_domain(&nv.a, &nv.n, width);
                         self.assume(st, g, d);
                     }
+                    // P7-1 B: a fixed inout keeps the range of its element type across the call
+                    if let Some(width) = nv.fix.as_ref().and_then(|f| f.fixed_parts()).and_then(|(e, _)| intwidth::of(&e.name)) {
+                        let d = self.narrow_elem_domain(&nv.a, &nv.n, width);
+                        self.assume(st, g, d);
+                    }
                     Val::Arr(nv)
                 }
                 _ => {
@@ -6592,7 +6597,7 @@ impl<'a> FnVerifier<'a> {
         self.snap = Env(f
             .params
             .iter()
-            .filter(|p| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || intwidth::of(&p.ty).is_some() || p.ty == "bool" || matches!(self.inv_decls.get(&p.ty), Some(ast::TypeDecl::Struct(s)) if s.tparams.is_empty())))
+            .filter(|p| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || GType::from_key(&p.ty).is_fixed() || intwidth::of(&p.ty).is_some() || p.ty == "bool" || matches!(self.inv_decls.get(&p.ty), Some(ast::TypeDecl::Struct(s)) if s.tparams.is_empty())))
             .map(|p| (p.name.clone(), env.get(&p.name).clone()))
             .collect());
         let mut st = State::new(env.clone(), pc);

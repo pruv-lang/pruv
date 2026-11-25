@@ -1,0 +1,103 @@
+// P7-1 B runtime: a [T; N] borrowed as a read-only [T] for one internal call
+fn total(a: [i64]) -> i64
+  requires len(a) <= 8 && forall k in 0..len(a): -1000 <= a[k] && a[k] <= 1000
+  ensures -8000 <= result && result <= 8000 && (len(a) == 0 ==> result == 0)
+{
+  let mut s: i64 = 0;
+  let mut k: i64 = 0;
+  while k < len(a)
+    invariant 0 <= k && k <= len(a) && -1000 * k <= s && s <= 1000 * k
+    decreases len(a) - k
+  {
+    s = s + a[k];
+    k = k + 1;
+  }
+  return s;
+}
+
+fn first(a: [i64]) -> i64
+  requires len(a) >= 1
+  ensures result == a[0]
+{
+  return a[0];
+}
+
+fn count_true(b: [bool]) -> i64
+  requires len(b) <= 8
+  ensures 0 <= result && result <= len(b)
+{
+  let mut c: i64 = 0;
+  let mut k: i64 = 0;
+  while k < len(b)
+    invariant 0 <= k && k <= len(b) && 0 <= c && c <= k
+    decreases len(b) - k
+  {
+    if b[k] { c = c + 1; }
+    k = k + 1;
+  }
+  return c;
+}
+
+fn byte_at(s: [u8], k: i64) -> i64
+  requires 0 <= k && k < len(s)
+  ensures result == i64(s[k])
+{
+  return i64(s[k]);
+}
+
+fn wide(s: [u16]) -> i64
+  requires len(s) == 2
+  ensures result == i64(s[0]) + i64(s[1])
+{
+  return i64(s[0]) + i64(s[1]);
+}
+
+fn trio(x: i64) -> [i64; 3]
+  requires -100 <= x && x <= 100
+  ensures result[0] == x && result[1] == x && result[2] == x
+{
+  return [x; 3];
+}
+
+fn via_param(a: [i64; 3]) -> i64
+  requires a[0] == 4
+  ensures result == 4
+{
+  return first(a);
+}
+
+fn via_inout(inout a: [i64; 3]) -> i64
+  requires a[0] == 6
+  ensures a[0] == 7 && result == 7
+{
+  a[0] = 7;
+  return first(a);
+}
+
+fn run(i: i64) -> i64
+  requires 0 <= i && i < 3
+{
+  let a: [i64; 4] = [i, 10, 20, 30];
+  let s: i64 = total(a);
+  let z: [i64; 0] = [0; 0];
+  let s0: i64 = total(z);
+  assert s0 == 0;
+  let f: i64 = first(a);
+  assert f == i;
+  let b: [bool; 3] = [true, i == 1, true];
+  let c: i64 = count_true(b);
+  let bs: [u8; 2] = [65, 66];
+  let y: i64 = byte_at(bs, 1);
+  assert y == 66;
+  let w: [u16; 2] = [300, 400];
+  let ww: i64 = wide(w);
+  assert ww == 700;
+  let t: i64 = first(trio(i));
+  assert t == i;
+  let p: i64 = via_param([4, 0, 0]);
+  assert p == 4;
+  let mut m: [i64; 3] = [6, 0, 0];
+  let q: i64 = via_inout(inout m);
+  assert m[0] == 7;
+  return s * 1000 + c * 100 + y + ww + t + p + q;
+}

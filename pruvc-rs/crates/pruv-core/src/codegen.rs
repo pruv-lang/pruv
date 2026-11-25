@@ -3040,6 +3040,11 @@ impl<'a> Gen<'a> {
                         try_conv(et, "pruv_x")?
                     ));
                 }
+                if let Some(et) = aty.and_then(|t| GType::from_key(t).fixed_parts().map(|(e, _)| e.clone())) {
+                    // P7-1 B: a fixed-length array read in a runtime contract, through a shared borrow
+                    let conv = if et.name == "bool" { "" } else { " as i128" };
+                    return Ok(format!("{{ let pruv_a = &({}); let pruv_i: i128 = {}; if pruv_i >= 0 && pruv_i < pruv_a.len() as i128 {{ pruv_a[pruv_i as usize]{} }} else {{ pruv_ud(\"array index out of range\") }} }}", a, i, conv));
+                }
                 if aty == Some("string") {
                     // G6
                     return Ok(format!("pruv_cidx_str(&{}, {})", a, i));
@@ -6137,6 +6142,11 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     } else if callee.is_some_and(|c| c.params.get(i).is_some_and(|p| p.ty == "str"))
                         && expr_ty(xa).as_deref() == Some("string") {
                         args.push(self.borrowed_map_key(xa)?);
+                    } else if self.fmap.get(n).and_then(|c| c.params.get(i)).is_some_and(|p| {
+                        expr_ty(xa).as_deref().is_some_and(|ty| crate::gtype::key_is_fixed_borrow(ty, &p.ty))
+                    }) {
+                        // P7-1 B: a [T; N] borrowed as a read-only [T] for the call
+                        args.push(format!("&({})[..]", self.e(xa)?));
                     } else if callee.and_then(|c| c.params.get(i)).is_some_and(|p| {
                         expr_ty(xa).as_deref().is_some_and(|ty| key_is_vec_slice_arg(ty, &p.ty))
                     }) {

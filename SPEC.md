@@ -2680,7 +2680,7 @@ fn is_digit(c: char) -> bool
   [pub](tests/must_reject/p7_const_pub.pruv), [lower case](tests/must_reject/p7_const_result.pruv),
   [for binder](tests/must_reject/p7_const_for_binder.pruv), [char from int](tests/must_reject/p7_const_char_int.pruv),
   [negative division](tests/must_reject/p7_const_neg_div.pruv).
-- R-6t-4 **Fixed-length arrays (local values).** `[T; N]` is a local value type written in a `let` annotation;
+- R-6t-4 **Fixed-length arrays (values).** `[T; N]` is a local value type written in a `let` annotation;
   `T` is a scalar integer of any width, `char` or `bool`, and `N` is a closed constant expression (literals,
   constants, `+ - * / %`, casts) evaluated in its own width, `>= 0`; `N = 0` is allowed. One array holds at most
   65536 bytes (element size times `N`, overflow included). The literals are `[a, b, c]` (all elements of one type; an
@@ -2693,13 +2693,25 @@ fn is_digit(c: char) -> bool
   loop that writes the array, which forgets the values). Code: Rust
   `[T; N]` by value, a proven index as `get_unchecked`, an unproven one checked with the usual out-of-bounds panic;
   LLVM `[N x E]` (bool as `i8`, char as `i32`) in a stack slot, copies by `memcpy`. A zero-length literal is
-  written `[x; 0]` (`[]` stays the empty view). Rejected: `[T; N]` as a parameter, result, field, tuple component
-  or type argument, and nested fixed arrays, are `type/fixed_array_position`; an element type other than a scalar (a view `[T]` too) is
+  written `[x; 0]` (`[]` stays the empty view). Parameters and results (P7-1 B): a `[T; N]` parameter is passed by
+  value (a copy, no `alloc` effect) and a `[T; N]` result is returned by value; an `inout a: [T; N]` parameter
+  writes the caller's array in place, keeps its length `N` and element range across the call, and `old(a)`,
+  `old(a)[i]` and `len(old(a))` name its entry value. A `[T; N]` argument is lent as the read-only `[T]` of the same
+  element (`[i64]`, `[u8]`, `[u16]`, `[bool]`) for the duration of one call of a Pruv function whose parameter is a
+  plain `[T]` (not `take`, not `inout`, not `trusted`/extern, and not a function whose result borrows its arguments
+  with `from`); the callee sees `len(a) == N`. Code: Rust passes `[T; N]` by value and lends `&a[..]`; LLVM passes a
+  pointer to a fresh caller copy (by value), to the caller's slot (`inout`) or to caller storage for the result,
+  and lends the slot address with the constant length. A `pub`, host entry or extern function with a fixed-length
+  array anywhere in its signature is `type/fixed_array_position`, and in the legacy (no `pub`) mode such a function
+  is internal only. Rejected: `[T; N]` as a field, tuple component or type argument, and nested fixed arrays, are
+  `type/fixed_array_position`; an element type other than a scalar (a view `[T]` too) is
   `type/fixed_array_element`; a negative or oversized length is `type/fixed_array_length`; a non-constant length is
   `type/const_expr` and a `bool` (a literal, `!`, a comparison, `&&`/`||`) or `char` length `type/const_type`; whole-array `==`/`!=`, use as a view `[T]`
-  (an argument, a `[T]` local) and a literal inside a contract are `type/fixed_array_operation`; a wrong element
-  count is `type/type_mismatch`. Passing, borrowing as `[T]`, `inout`, fields, `old()` and contract literals are
-  parity row P7-1 B. The length bound `[T; <=N]`
+  outside the call-duration lend (a `[T]` or `ref [T]` local, a `take` argument, an argument of a `from` function or
+  of a call inside a contract) and a literal inside a contract are `type/fixed_array_operation`; a wrong element
+  count is `type/type_mismatch`, and an `inout [T]` parameter given a `[T; N]` is `type/inout_argument`. Fields,
+  tuples, type arguments, nested arrays, `for x in a`, slice patterns and contract literals are parity row P7-1 B
+  (remaining). The length bound `[T; <=N]`
   (section 7a) is unchanged. Tests: [accept](tests/spec/r6t_4_accept.pruv), [reject](tests/spec/r6t_4_reject.pruv),
   [index](tests/spec/r6t_4_reject_index.pruv), [literals](tests/runtime/p7_rt_fixed_literal.pruv),
   [order](tests/runtime/p7_rt_fixed_eval.pruv), [proven](tests/runtime/p7_rt_fixed_proven.pruv),
@@ -2707,7 +2719,10 @@ fn is_digit(c: char) -> bool
   [char element](tests/must_reject/p7_array_char_type.pruv), [owned](tests/must_reject/p7_fixed_owned.pruv),
   [nested](tests/must_reject/p7_fixed_nested.pruv), [length](tests/must_reject/p7_fixed_large.pruv),
   [equality](tests/must_reject/p7_fixed_eq.pruv), [argument](tests/must_reject/p7_fixed_arg.pruv),
-  [count](tests/must_reject/p7_fixed_count.pruv), [out of bounds](tests/must_reject/p7_fixed_oob.pruv).
+  [count](tests/must_reject/p7_fixed_count.pruv), [out of bounds](tests/must_reject/p7_fixed_oob.pruv),
+  [by value and inout](tests/runtime/p7_rt_fixed_param.pruv), [lend](tests/runtime/p7_rt_fixed_borrow.pruv),
+  [lend to from](tests/must_reject/p7_fixed_borrow_from.pruv), [inout view](tests/must_reject/p7_fixed_inout_view.pruv),
+  [lend element](tests/must_reject/p7_fixed_borrow_elem.pruv).
 
 ## 6u. Patterns (P8)
 
@@ -3297,8 +3312,8 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/field_name` | type | a field name does not start with a lower-case letter |
 | `type/fixed_array_element` | type | a fixed-length array element that is not a scalar integer, `char` or `bool` (R-6t-4) |
 | `type/fixed_array_length` | type | a negative fixed-length array length, or an array larger than 65536 bytes (R-6t-4) |
-| `type/fixed_array_operation` | type | `==`/`!=` on fixed-length arrays, a fixed-length array used as a view `[T]`, or a fixed-length array literal in a contract (R-6t-4) |
-| `type/fixed_array_position` | type | `[T; N]` outside a `let` annotation: a parameter, result, field, tuple, type argument or nested array (R-6t-4) |
+| `type/fixed_array_operation` | type | `==`/`!=` on fixed-length arrays, a fixed-length array used as a view `[T]` outside a call-duration lend, or a fixed-length array literal in a contract (R-6t-4) |
+| `type/fixed_array_position` | type | `[T; N]` as a field, tuple component, type argument or nested array, or in the signature of a `pub`, host entry or extern function (R-6t-4) |
 | `type/for_enumerate` | type | `for (i, x) in` over an array, view or `Vec`; enumeration is bundle P15 (R-6q-3) |
 | `type/for_iterable` | type | a `for` range with non-integer bounds, or a `for` over a value that is not a slice or a `Vec` of integer/bool elements (R-6q-3) |
 | `type/foreign_borrow` | type | one value is borrowed and moved in the same call |

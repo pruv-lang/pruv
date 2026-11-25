@@ -1734,6 +1734,7 @@ impl Parser {
             }
             let pn = self.ident()?.val;
             self.expect(":")?;
+            self.fixed_ok = true; // P7-1 B: a fixed-length array parameter is passed by value
             let (ty, refine) = self.type_r(true)?;
             params.push(Param { name: pn, ty, refine, take, mode_pos: mode_tok.map(|t| (t.line, t.col)) });
             if !self.at(")", 0) {
@@ -1745,6 +1746,7 @@ impl Parser {
             return Err(cost_syntax(self.peek(0)));
         }
         self.expect("->")?;
+        self.fixed_ok = true; // P7-1 B: a fixed-length array result is returned by value
         let (ret, ret_refine) = self.type_r(true)?;
         if is_pub || foreign.is_some() {
             let signature = || std::iter::once(&ret).chain(params.iter().map(|p| &p.ty));

@@ -324,6 +324,8 @@ struct FuncInfo {
     /// P13o: an `opaque fn` (a contract call stays an uninterpreted application until `reveal`)
     opaque: bool,
     pred: bool,
+    /// P7-1 B: the result may borrow from the arguments (`from`), so no argument is a call-duration `[T; N]` borrow
+    holds_args: bool,
 }
 
 struct Checker {
@@ -424,16 +426,18 @@ struct Checker {
     cur_params: Vec<String>,
     /// LG6: checking the operands of a subview(...) argument
     in_view: bool,
+    /// P7-1 B: the next user_arg_slices is a direct internal call argument, which may borrow a [T; N] as [T]
+    fixed_borrow: bool,
 }
 
-/// Reject [u16] at explicit boundaries even when a struct or enum hides the buffer.
+/// Reject [u16] and fixed-length arrays at explicit boundaries even when a struct or enum hides them.
 fn check_u16_boundary(prog: &Program, public: impl Fn(usize) -> bool) -> Res<()> {
-    fn contains_u16_buffer(ty: &GType, decls: &HashMap<&str, &TypeDecl>, seen: &mut HashSet<String>) -> bool {
-        ty.name == "array_u16"
-            || ty.args.iter().any(|arg| contains_u16_buffer(arg, decls, seen))
+    fn contains(ty: &GType, decls: &HashMap<&str, &TypeDecl>, seen: &mut HashSet<String>, hit: fn(&GType) -> bool) -> bool {
+        hit(ty)
+            || ty.args.iter().any(|arg| contains(arg, decls, seen, hit))
             || (ty.is_user_type() && seen.insert(ty.name.clone())
                 && decls.get(ty.name.as_str()).is_some_and(|decl| {
-                    decl_fields(decl).iter().any(|(_, field)| contains_u16_buffer(&GType::from_key(&field.ty), decls, seen))
+                    decl_fields(decl).iter().any(|(_, field)| contains(&GType::from_key(&field.ty), decls, seen, hit))
                 }))
     }
 
@@ -442,13 +446,19 @@ fn check_u16_boundary(prog: &Program, public: impl Fn(usize) -> bool) -> Res<()>
         if f.foreign.is_none() && !public(i) {
             continue;
         }
+        let sig = || std::iter::once(&f.ret).chain(f.params.iter().map(|p| &p.ty));
         let mut seen = HashSet::new();
-        if std::iter::once(&f.ret).chain(f.params.iter().map(|p| &p.ty))
-            .any(|ty| contains_u16_buffer(&GType::from_key(ty), &decls, &mut seen))
-        {
+        if sig().any(|ty| contains(&GType::from_key(ty), &decls, &mut seen, |t| t.name == "array_u16")) {
             return Err(small_int_unsupported(
                 f.line, f.col, "[u16] at the host boundary is bundle P12", "use a host-supported type",
             ));
+        }
+        let mut seen = HashSet::new();
+        if sig().any(|ty| contains(&GType::from_key(ty), &decls, &mut seen, GType::is_fixed)) {
+            // P7-1: no host or foreign ABI carries [T; N] (directly or inside a struct field)
+            return Err(terr(f.line, f.col, "fixed_array_position",
+                format!("{} has a fixed-length array in its signature, which a pub, host entry or extern function cannot have", f.name),
+                "keep the fixed-length array inside the Pruv code: pass a buffer ([T]) or its elements at the boundary"));
         }
     }
     Ok(())
@@ -1333,6 +1343,7 @@ impl Checker {
                     foreign: f.foreign.is_some(),
                     opaque: f.opaque,
                     pred: f.pred,
+                    holds_args: f.borrow_from.is_some() || f.borrowed_result,
                 }),
             );
         }
@@ -1386,6 +1397,7 @@ impl Checker {
             s5_errors: Vec::new(),
             par_groups: Vec::new(),
             in_view: false,
+            fixed_borrow: false,
             explicit: false,
             host_entry: Vec::new(),
             uses_inout,
@@ -3014,7 +3026,7 @@ impl Checker {
                     let pt = GType::from_key(&p.ty);
                     let aggregate_collection = pt.owner.is_none() && pt.name == "hashmap"
                         && pt.args.last().is_some_and(|payload| self.owned_aggregate(payload));
-                    if pt.int_width().is_none() && pt != boolt() && !pt.is_array()
+                    if pt.int_width().is_none() && pt != boolt() && !pt.is_array() && !pt.is_fixed()
                         && !(pt.owner.is_none() && pt.name == "vec") && !aggregate_collection
                         && !(pt.args.is_empty() && matches!(self.decls.get(&pt.name), Some(TypeDecl::Struct(_)))) {
                         return Err(terr(
@@ -5514,7 +5526,9 @@ impl Checker {
         Ok(at)
     }
 
-    fn expect_call_arg(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, c: bool, borrow: bool) -> Res<()> {
+    /// `fixed`: the call's result cannot hold a borrow of its arguments, so a `[T; N]` may be lent as `[T]` (P7-1 B).
+    fn expect_call_arg(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, c: bool, borrow: bool, fixed: bool) -> Res<()> {
+        self.fixed_borrow = borrow && fixed && !c; // P7-1 B: read by user_arg_slices on entry
         if borrow && *ty == GType::array_u8() {
             if let Expr::StrLit(lit) = e {
                 lit.ty = Some(ty.to_key());
@@ -5573,6 +5587,7 @@ impl Checker {
 
     /// `expect_user_arg`, answering whether a `Vec` place was taken as an array slice argument.
     fn user_arg_slices(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, c: bool, borrow_vector: bool) -> Res<bool> {
+        let fixed_borrow = std::mem::take(&mut self.fixed_borrow);
         if let Expr::Call(x) = e {
             if x.name == "subview" {
                 let string_view = *ty == strt();
@@ -5631,6 +5646,10 @@ impl Checker {
         };
         if borrow_vector && place_root(e).is_some() && key_is_vec_slice_arg(&got.to_key(), &ty.to_key()) {
             return Ok(true);
+        }
+        if fixed_borrow && crate::gtype::key_is_fixed_borrow(&got.to_key(), &ty.to_key()) {
+            // P7-1 B: a [T; N] argument is borrowed as a read-only [T] for this internal call only
+            return Ok(false);
         }
         self.check_expected_type(e, ty, None, got)?;
         Ok(false)
@@ -5856,11 +5875,11 @@ impl Checker {
                     ));
                 }
             }
-            if t.is_fixed() && !ty.is_fixed() && ty.is_array() {
-                // P7-1 B: the borrow of a fixed-length array as a view is not lowered yet
+            if crate::gtype::key_is_fixed_borrow(&t.to_key(), &ty.to_key()) {
+                // P7-1 B: the only [T; N] -> [T] conversion is a read argument of an internal call (user_arg_slices)
                 return Err(terr(e.line(), e.col(), "fixed_array_operation",
-                    format!("a fixed-length array {} cannot be used as {} yet (parity row P7-1 B)", tn(&t), tn(ty)),
-                    "copy the elements into a buffer, or index the array directly"));
+                    format!("a fixed-length array {} is lent as {} only as a read argument of a Pruv function call", tn(&t), tn(ty)),
+                    "pass it directly to a function with a plain [T] parameter (not take, inout, extern, or one whose result borrows it), or copy the elements into a buffer"));
             }
             return Err(terr(
                 e.line(),
@@ -6709,7 +6728,7 @@ impl Checker {
                 if collection_place && want.to_key() == "string" {
                     self.check_text_key(&mut e.args[i], scope, c, None)?;
                 } else if user_call {
-                    self.expect_call_arg(&mut e.args[i], &want, scope, c, !f.foreign && !self.takes[&n][i])?;
+                    self.expect_call_arg(&mut e.args[i], &want, scope, c, !f.foreign && !self.takes[&n][i], !f.holds_args)?;
                 } else {
                     self.expect(&mut e.args[i], &want, scope, c, None)?;
                 }
@@ -7236,7 +7255,7 @@ impl Checker {
         let Expr::Var(root) = base else { return Err(bad_operand()) };
         let entry = scope.get(&root.name).filter(|x| {
             // LB6 OS (R-6g5-4): a whole scalar inout also has an entry value
-            x.kind == "inout" && (!root_field && x.ty.is_array() || self.plain_struct(&x.ty).is_some()
+            x.kind == "inout" && (!root_field && (x.ty.is_array() || x.ty.is_fixed()) || self.plain_struct(&x.ty).is_some()
                 || whole && (x.ty.int_width().is_some() || x.ty == boolt()))
         }).ok_or_else(bad_operand)?;
         if bad_index {
@@ -7258,7 +7277,7 @@ impl Checker {
         let checked = self.expr(&mut lowered, scope, true);
         // Ordinary len also accepts strings and collections, which are excluded here.
         if let Expr::Call(c) = &lowered {
-            if len && expr_ty(&c.args[0]).as_deref().is_some_and(|ty| !GType::from_key(ty).is_array()) {
+            if len && expr_ty(&c.args[0]).as_deref().is_some_and(|ty| { let t = GType::from_key(ty); !t.is_array() && !t.is_fixed() }) {
                 return Err(bad_operand());
             }
         }
@@ -7742,6 +7761,7 @@ impl Checker {
                 foreign: false,
                 opaque: false,
                 pred: false,
+                holds_args: true,
             })
         } else {
             match self.funcs.get(&n) {
@@ -7827,7 +7847,7 @@ impl Checker {
                     } else if cat.is_some() && is_text_view_op(&n) && want == strt() && matches!(arg, Expr::Call(x) if x.name == "subview") {
                         self.expect_user_arg(arg, &want, scope, c, true)?; // LB7 (R-6g6-3): a borrowed str range, no copy
                     } else if cat.is_none() {
-                        self.expect_call_arg(arg, &want, scope, c, !f.foreign && !self.takes[&n][i])?;
+                        self.expect_call_arg(arg, &want, scope, c, !f.foreign && !self.takes[&n][i], !f.holds_args)?;
                     } else {
                         self.expect(arg, &want, scope, c, None)?;
                     }

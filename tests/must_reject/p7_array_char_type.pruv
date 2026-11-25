@@ -1,1 +1,2 @@
-fn f(a: [char; 4]) -> i64 { return 0; }
+// P7-1 B: a pub function (explicit host boundary) cannot take a fixed-length array
+pub fn f(a: [char; 4]) -> i64 { return 0; }

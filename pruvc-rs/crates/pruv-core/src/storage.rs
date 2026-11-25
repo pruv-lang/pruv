@@ -107,7 +107,7 @@ impl Analysis {
                         let formal = self.lookup.get(&StorageKey::Param(name.into(), j)).copied();
                         if c.is_some() {
                             self.join(*c, formal);
-                        } else if formal.is_some() && expr_ty(&x.args[j]).as_deref().is_some_and(|ty| crate::gtype::key_is_vec_slice_arg(ty, "array")) {
+                        } else if formal.is_some() && expr_ty(&x.args[j]).as_deref().is_some_and(|ty| crate::gtype::key_is_vec_slice_arg(ty, "array") || crate::gtype::key_is_fixed_borrow(ty, "array")) {
                             self.pin(formal);
                         }
                     }
