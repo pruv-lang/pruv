@@ -1,0 +1,30 @@
+// spec: R-6u-3 accept
+// `let PAT = e else { ... };` binds the pattern for the rest of the block; the else block leaves it.
+fn get(o: Option<i64>) -> i64
+  ensures is_some(o) ==> result == some_val(o)
+  ensures !is_some(o) ==> result == -1
+{
+  let Some(v) = o else { return -1; };
+  return v;
+}
+
+fn count(a: [i64]) -> i64 {
+  let mut n: i64 = 0;
+  for x in a {
+    let r: Option<i64> = if_pos(x);
+    let Some(p) = r else { continue; };
+    if n < 1000 { n = n + 1; }
+  }
+  return n;
+}
+
+fn if_pos(x: i64) -> Option<i64> {
+  if x > 0 { return Some(x); }
+  return None;
+}
+
+// An `if let` with its own else inside the else block diverges through both of its branches.
+fn nested(o: Option<i64>, p: Option<i64>) -> i64 {
+  let Some(x) = o else { if let Some(y) = p { return y; } else { return 0; } };
+  return x;
+}

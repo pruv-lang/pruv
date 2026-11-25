@@ -460,6 +460,7 @@ pub fn check_explicit(
     externs: &[String],
 ) -> Result<TypeTable, PruvError> {
     crate::modules::resolve(prog, g4)?;
+    expand_match_forms(prog)?;
     check_u16_boundary(prog, |i| g4.fn_meta.get(i).is_some_and(|m| m.is_pub || m.host_entry))?;
     let src_names: Vec<String> = g4.fn_meta.iter().map(|m| m.src_name.clone()).collect();
     let hosts: Vec<bool> = g4.fn_meta.iter().map(|m| m.host_entry).collect();
@@ -486,6 +487,7 @@ pub fn check_with_externs(prog: &mut Program, externs: &[String]) -> Result<Type
     check_u16_boundary(prog, |i| {
         prog.explicit.as_ref().and_then(|e| e.fns.get(i)).is_some_and(|m| m.is_pub || m.host_entry)
     })?;
+    expand_match_forms(prog)?;
     crate::borrowed::prepare(prog, &[])?;
     let mut c = Checker::new(prog, externs, &[])?;
     prog.uses_inout = Some(c.uses_inout); // G5 A0: lets the staging guard skip its walk for inout-free programs
@@ -494,6 +496,142 @@ pub fn check_with_externs(prog: &mut Program, externs: &[String]) -> Result<Type
     prog.contract_vec_slice = c.contract_vec_slice;
     prog.functions.retain(|f| !f.pred);
     Ok(c.tt)
+}
+
+/// P8: completes every `if let` and `let ... else` into a full match before any pass reads the program: arm 0 is the
+/// written pattern, and every other variant of the scrutinee type gets an arm whose body is a copy of `els` (the
+/// else block) and whose binders are fresh unused names. `els` is emptied, so later passes see an ordinary match and
+/// the form only steers how the Rust backend prints it. A `let ... else` block must diverge
+/// (type/let_else_fallthrough). The binder count of a synthesized `Ok` arm is fixed by `match_arms` once the payload
+/// type is known (`Ok(())` binds nothing).
+pub(crate) fn expand_match_forms(prog: &mut Program) -> Result<(), PruvError> {
+    let variants: HashMap<String, Vec<(String, usize)>> = prog.types.iter().filter_map(|d| match d {
+        TypeDecl::Enum(e) => Some((e.name.clone(), e.variants.iter().map(|v| (v.name.clone(), v.fields.len())).collect())),
+        TypeDecl::Struct(_) => None,
+    }).collect();
+    let mut n = 0usize;
+    for f in prog.functions.iter_mut() {
+        expand_forms_block(&mut f.body, &variants, &mut n)?;
+    }
+    Ok(())
+}
+
+/// P8: the lets that destructure the arm temporary `tmp` of tuple type `g` by the patterns `ps`, in source order.
+/// Components are scalars (integers, `bool`, `char`) or tuples of them: an owned or struct component would need a
+/// move out of the matched value (type/tuple_pattern_owned).
+fn lower_arm_pat(tmp: &str, ps: &[TuplePat], g: &GType, line: i64, col: i64, out: &mut Vec<Stmt>) -> Result<(), PruvError> {
+    let comps = if g.args.is_empty() { crate::gtype::tuple_components(&g.name) } else { None };
+    let Some(comps) = comps else {
+        return Err(terr(line, col, "tuple_pattern_type", format!("a tuple pattern needs a tuple payload, found {}", tn(g)),
+            "bind the payload with a name"));
+    };
+    if comps.len() != ps.len() {
+        return Err(terr(line, col, "tuple_pattern_type",
+            format!("the pattern has {} components but {} has {}", ps.len(), tn(g), comps.len()),
+            "write one binder or `_` per component"));
+    }
+    for (i, (p, k)) in ps.iter().zip(comps.iter()).enumerate() {
+        let read = |l: i64, c: i64| Expr::FieldAccess(FieldAccess {
+            line: l, col: c, ty: None, field: i.to_string(),
+            base: Box::new(Expr::Var(Var { line: l, col: c, name: tmp.to_string(), ty: None })),
+        });
+        let kg = GType::from_key(k);
+        let scalar = kg.args.is_empty() && (crate::intwidth::of(&kg.name).is_some() || kg.name == "bool");
+        match p {
+            TuplePat::Wild => {}
+            TuplePat::Bind(l, c, name, mutable) => {
+                if !scalar {
+                    return Err(terr(*l, *c, "tuple_pattern_owned",
+                        format!("the tuple pattern component {} has type {}; a match pattern binds only integer, bool \
+                                 and char components", name, tn(&kg)),
+                        "bind the whole tuple and destructure it with a let"));
+                }
+                out.push(Stmt::Let(Let { borrowed: false, line: *l, col: *c, name: name.clone(), mutable: *mutable,
+                    ty: k.clone(), value: read(*l, *c), refine: None }));
+            }
+            TuplePat::Tuple(l, c, inner) => {
+                let t = format!("{}_{}", tmp, i);
+                out.push(Stmt::Let(Let { borrowed: false, line: *l, col: *c, name: t.clone(), mutable: false,
+                    ty: k.clone(), value: read(*l, *c), refine: None }));
+                lower_arm_pat(&t, inner, &kg, *l, *c, out)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether control never leaves the end of the block (P8 `let ... else`).
+fn diverges(stmts: &[Stmt]) -> bool {
+    match stmts.last() {
+        Some(Stmt::Return(_) | Stmt::Break(_) | Stmt::Continue(_)) => true,
+        Some(Stmt::If(i)) => diverges(&i.then) && diverges(&i.els),
+        // an expanded `if let`/`let else` holds its else block in the complement arms and has an empty els
+        Some(Stmt::Match(m)) => m.arms.iter().all(|a| diverges(&a.body))
+            && (m.form == MatchForm::Match || diverges(&m.els) || (m.els.is_empty() && m.arms.len() > 1)),
+        _ => false,
+    }
+}
+
+fn expand_forms_block(
+    stmts: &mut [Stmt],
+    variants: &HashMap<String, Vec<(String, usize)>>,
+    n: &mut usize,
+) -> Result<(), PruvError> {
+    for st in stmts.iter_mut() {
+        match st {
+            Stmt::If(s) => {
+                expand_forms_block(&mut s.then, variants, n)?;
+                expand_forms_block(&mut s.els, variants, n)?;
+            }
+            Stmt::While(s) => expand_forms_block(&mut s.body, variants, n)?,
+            Stmt::ForMap(s) => expand_forms_block(&mut s.body, variants, n)?,
+            Stmt::Match(m) => {
+                for a in m.arms.iter_mut() {
+                    expand_forms_block(&mut a.body, variants, n)?;
+                }
+                expand_forms_block(&mut m.els, variants, n)?;
+                if m.form == MatchForm::Match || m.arms.len() != 1 {
+                    continue;
+                }
+                if m.form == MatchForm::LetElse && !diverges(&m.els) {
+                    let (l, c) = m.els.last().map(Stmt::position).unwrap_or((m.line, m.col));
+                    return Err(terr(l, c, "let_else_fallthrough",
+                        "the else block of `let ... else` must not reach its end",
+                        "end the else block with return, break or continue"));
+                }
+                let a0 = &m.arms[0];
+                let others: Vec<(String, usize)> = match (&a0.enum_name, a0.ctor.as_str()) {
+                    (None, "Some") => vec![("None".into(), 0)],
+                    (None, "None") => vec![("Some".into(), 1)],
+                    (None, "Ok") => vec![("Err".into(), 1)],
+                    (None, "Err") => vec![("Ok".into(), 1)],
+                    (Some(en), ctor) => match variants.get(en) {
+                        Some(vs) if vs.iter().any(|(v, _)| v == ctor) => {
+                            vs.iter().filter(|(v, _)| v != ctor).cloned().collect()
+                        }
+                        _ => continue, // match_arms reports the unknown enum or variant
+                    },
+                    _ => continue,
+                };
+                if others.is_empty() && !m.els.is_empty() {
+                    let (l, c) = m.els[0].position();
+                    return Err(terr(l, c, "irrefutable_pattern",
+                        "the pattern matches every value, so the else block never runs",
+                        "bind the payload with `match` or drop the else block"));
+                }
+                let els = std::mem::take(&mut m.els);
+                let (line, col, enum_name) = (a0.line, a0.col, a0.enum_name.clone());
+                for (ctor, k) in others {
+                    *n += 1;
+                    let binders = (0..k).map(|i| format!("pruv_else_{}_{}", n, i)).collect();
+                    m.arms.push(MatchArm { line, col, enum_name: enum_name.clone(), ctor, binders,
+                        body: els.clone(), pats: Vec::new(), pat_lets: 0 });
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn ends_in_return(stmts: &[Stmt]) -> bool {
@@ -1110,10 +1248,11 @@ fn for_collection(body: &[Stmt]) -> (String, Vec<String>) {
     (v.name.clone(), path)
 }
 
+/// An untyped integer literal (optionally negated). Char, byte and constant uses carry their own type (P7).
 fn is_int_literal(e: &Expr) -> bool {
     match e {
-        Expr::IntLit(_) => true,
-        Expr::Unary(u) => u.op == "-" && matches!(*u.operand, Expr::IntLit(_)),
+        Expr::IntLit(_) => bare_lit(e),
+        Expr::Unary(u) => u.op == "-" && bare_lit(&u.operand),
         _ => false,
     }
 }
@@ -3295,6 +3434,20 @@ impl Checker {
     fn block(&mut self, stmts: &mut Vec<Stmt>, scope: &mut Scope) -> Res<()> {
         let mut i = 0;
         while i < stmts.len() {
+            if let Stmt::Match(m) = &stmts[i] {
+                if m.arms.iter().any(|a| a.ctor == "()") {
+                    let st = self.tuple_match(m, scope)?;
+                    if i + 1 == stmts.len() {
+                        // the last statement: its lets end with the block anyway, so they are spliced in place
+                        let Stmt::If(w) = st else { unreachable!("tuple_match builds an if") };
+                        stmts.pop();
+                        stmts.extend(w.then);
+                    } else {
+                        stmts[i] = st;
+                    }
+                    continue;
+                }
+            }
             if let Stmt::Assign(s) = &stmts[i] {
                 if !s.deref && has_try(&s.value) {
                     // G-LG13-6: the target passed inout inside a statement with a `?`
@@ -3712,10 +3865,11 @@ impl Checker {
         let ret = Expr::Ctor(Ctor {
             line, col, name: "Err".into(), arg: Some(Box::new(var(&err))), ty: None, targs: Some(targs), inst: None,
         });
-        let mut lowered = Match { line, col, scrutinee, arms: vec![
-            MatchArm { line, col, enum_name: None, ctor: "Ok".into(), binders: if unit { vec![] } else { vec![ok] }, body: rest },
+        let mut lowered = Match { line, col, scrutinee, form: MatchForm::Match, els: Vec::new(), arms: vec![
+            MatchArm { line, col, enum_name: None, ctor: "Ok".into(), binders: if unit { vec![] } else { vec![ok] }, body: rest,
+                pats: Vec::new(), pat_lets: 0 },
             MatchArm { line, col, enum_name: None, ctor: "Err".into(), binders: vec![err],
-                body: vec![Stmt::Return(Return { line, col, value: Some(ret) })] },
+                body: vec![Stmt::Return(Return { line, col, value: Some(ret) })], pats: Vec::new(), pat_lets: 0 },
         ] };
         // The operand was already checked in match context.
         self.match_arms(&mut lowered, scope, ty)?;
@@ -4737,6 +4891,28 @@ impl Checker {
         self.read_expr(e, scope, false, &["map_get", "map_get_mut", "map_take", "vec_at_mut", "vec_get"])
     }
 
+    /// P8: `match t { (a, b) => { B } }` is the destructuring `if true { let tmp: T = t; let a = tmp.0; ..; B }`
+    /// (one shape, one arm; the components follow the match-pattern rule of `lower_arm_pat`).
+    fn tuple_match(&mut self, m: &Match, scope: &Scope) -> Res<Stmt> {
+        if m.arms.len() != 1 {
+            return Err(terr(m.line, m.col, "match_arms", "a tuple has one shape, so its match has exactly one arm",
+                "write one `(a, b) =>` arm"));
+        }
+        let a = &m.arms[0];
+        let mut probe = m.scrutinee.clone();
+        let t = self.match_scrutinee(&mut probe, scope)?;
+        let tmp = a.binders[0].clone();
+        let Some(Some(TuplePat::Tuple(l, c, ps))) = a.pats.first() else {
+            return Err(terr(a.line, a.col, "match_arms", "a tuple arm is written (a, b) =>", ""));
+        };
+        let mut then = vec![Stmt::Let(Let { borrowed: false, line: a.line, col: a.col, name: tmp.clone(), mutable: false,
+            ty: t.to_key(), value: m.scrutinee.clone(), refine: None })];
+        lower_arm_pat(&tmp, ps, &t, *l, *c, &mut then)?;
+        then.extend(a.body.iter().cloned());
+        Ok(Stmt::If(If { line: m.line, col: m.col,
+            cond: Expr::BoolLit(BoolLit { line: m.line, col: m.col, value: true, ty: None }), then, els: Vec::new() }))
+    }
+
     fn match_stmt(&mut self, m: &mut Match, scope: &mut Scope) -> Res<()> {
         let t = self.match_scrutinee(&mut m.scrutinee, scope)?;
         self.match_arms(m, scope, t)
@@ -4887,6 +5063,9 @@ impl Checker {
             } else {
                 let payload = if a.ctor == "Err" { t.result_error() } else { t.view_payload().or_else(|| t.args.first()) };
                 let payload = payload.cloned().unwrap_or_else(i64t);
+                if a.ctor == "Ok" && payload == unitt() && a.binders.len() == 1 && a.binders[0].starts_with("pruv_else_") {
+                    a.binders.clear(); // P8: the synthesized complement of `Err(e)` for Result<(), E>
+                }
                 if a.ctor == "Ok" && (payload == unitt()) != a.binders.is_empty() {
                     // LB8 R-6g7-1
                     let what = if payload == unitt() { "binds no value, write `Ok(())`" }
@@ -4896,6 +5075,18 @@ impl Checker {
                 }
                 vec![payload; a.binders.len()]
             };
+            if a.pat_lets == 0 && !a.pats.is_empty() {
+                // P8: `Some((a, b))` binds the temporary a.binders[k]; its components become leading lets
+                let mut lets = Vec::new();
+                for (k, pat) in a.pats.iter().enumerate() {
+                    if let (Some(TuplePat::Tuple(l, c, ps)), Some(bt)) = (pat, ftypes.get(k)) {
+                        lower_arm_pat(&a.binders[k], ps, bt, *l, *c, &mut lets)?;
+                    }
+                }
+                a.pat_lets = lets.len();
+                lets.append(&mut a.body);
+                a.body = lets;
+            }
             for (b, bt) in a.binders.iter().zip(ftypes.iter()) {
                 if sc.contains_key(b) {
                     return Err(terr(nl, nc, "shadow", format!("{} is already defined", b), "use a new name"));
@@ -5464,7 +5655,8 @@ impl Checker {
             return self.expect(e, &i64t(), scope, contract, Some("decreases measure"));
         }
         let t = self.expr(e, scope, contract)?;
-        if t.int_width().is_some() {
+        // P7: `char` is an integer width in the table but has no arithmetic, so it is not a measure (R-6p-5)
+        if t.int_width().is_some_and(|w| !w.is_char()) {
             return Ok(t);
         }
         self.check_expected_type(e, &i64t(), Some("decreases measure"), t)

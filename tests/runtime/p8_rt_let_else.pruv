@@ -1,0 +1,52 @@
+// P8 runtime: `let ... else` success continuation, failure return, outer labeled continue and break, and an
+// inout write made before the else block leaves
+fn pick(k: i64) -> Option<i64>
+  requires 0 <= k && k <= 100
+  ensures is_some(result) ==> some_val(result) == k + 1
+{
+  if k % 4 == 0 { return None; }
+  return Some(k + 1);
+}
+
+fn first(k: i64) -> i64
+  requires 0 <= k && k <= 100
+  ensures result == -1 || result == k + 1
+{
+  let Some(v) = pick(k) else { return -1; };
+  return v;
+}
+
+fn scan(n: i64) -> i64
+  requires 0 <= n && n <= 20
+  ensures 0 <= result && result <= 10000
+{
+  let mut s: i64 = 0;
+  'outer: for i in 0..n invariant 0 <= s && s <= i * 100 {
+    for j in 0..3 invariant 0 <= s && s <= i * 100 + j * 30 {
+      let Some(v) = pick(i + j) else { continue 'outer; };
+      if v > 14 { break 'outer; }
+      s = s + v;
+    }
+  }
+  return s;
+}
+
+fn mark(inout m: i64, r: Result<i64, i64>) -> i64
+  requires 0 <= m && m <= 100
+  ensures m == old(m) + 1
+  ensures -1 <= result && result <= 200
+{
+  m = m + 1;
+  let Ok(x) = r else { return -1; };
+  if x < 0 || x > 100 { return 0; }
+  return x * 2;
+}
+
+fn run(k: i64) -> i64
+  requires 0 <= k && k <= 9
+{
+  let mut m: i64 = k;
+  let a: i64 = mark(inout m, Ok(k));
+  let b: i64 = mark(inout m, Err(k));
+  return first(k) * 100000 + scan(k + 5) * 100 + a + b * 10 + m * 1000;
+}

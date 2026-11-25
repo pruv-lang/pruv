@@ -1,3 +1,0 @@
-fn f(o: Option<(i64, i64)>) -> i64 {
-  match o { Some((a, b)) => { return a; } None => { return 0; } }
-}

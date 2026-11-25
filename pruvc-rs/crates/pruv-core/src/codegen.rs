@@ -4287,11 +4287,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 let ft = fd.ty.as_str();
                 if self.is_ext(Some(ft)) && consume {
                     let boxed = self.boxed.contains(&format!("{}::{}.{}", sty, a.ctor, fd.name));
-                    self.emit(ind + 2, &format!("let {}: {} = {}{};", b, ft, if boxed { "*" } else { "" }, b));
+                    // P8a: a tuple key spells as a native Rust tuple, a user type as its name (rty covers both)
+                    self.emit(ind + 2, &format!("let {}: {} = {}{};", b, rty(ft, false), if boxed { "*" } else { "" }, b));
                     self.refs.remove(b);
                     self.owned_binders.insert(b.clone()); // LB9 (R-6g8-4)
                 } else if self.is_ext(Some(ft)) {
-                    self.emit(ind + 2, &format!("let {}: &{} = {};", b, ft, b));
+                    self.emit(ind + 2, &format!("let {}: &{} = {};", b, rty(ft, false), b));
                     self.refs.insert(b.clone());
                 } else if (is_array_name(ft) || ft == "str") && consume {
                     self.emit(ind + 2, &format!("let {}: {} = {};", b, rty(ft, false), b));
@@ -4740,14 +4741,57 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 let scrutinee_ty = expr_ty(&x.scrutinee).as_deref().map(GType::from_key);
                 let owned_result = scrutinee_ty.as_ref().is_some_and(GType::has_string_error);
                 let s = self.e(&x.scrutinee)?;
-                self.emit(ind, &format!("match {} {{", s));
-                for a in &x.arms {
+                // P8: `if let` / `let ... else` print as written; arm 0 is the pattern, the other arms all carry a copy
+                // of the else block (check::expand_match_forms)
+                let form = if x.arms.len() >= 2 { x.form } else { MatchForm::Match };
+                if form == MatchForm::Match {
+                    self.emit(ind, &format!("match {} {{", s));
+                }
+                for (k, a) in x.arms.iter().enumerate() {
+                    if form != MatchForm::Match && k > 1 {
+                        break;
+                    }
                     let name = match &a.enum_name {
                         None => a.ctor.clone(),
                         Some(en) => format!("{}::{}", en, a.ctor),
                     };
-                    let pat = if a.binders.is_empty() && a.enum_name.is_none() && a.ctor == "Ok" { "Ok(())".to_string() } else if a.binders.is_empty() { name } else { format!("{}({})", name, a.binders.join(", ")) };
-                    self.emit(ind + 1, &format!("{} => {{", pat));
+                    let string_error_arm = owned_result && a.ctor == "Err";
+                    let view_arm = matches!(a.ctor.as_str(), "Some" | "Ok") && scrutinee_ty.as_ref().and_then(GType::view_payload).is_some();
+                    // P8: a tuple pattern of scalar components prints as written in place of its lowered lets
+                    let fold = a.pat_lets > 0 && !string_error_arm && !view_arm;
+                    let binders: Vec<String> = a.binders.iter().enumerate().map(|(i, b)| match a.pats.get(i) {
+                        Some(Some(p)) if fold => tuple_pat_text(p),
+                        _ => b.clone(),
+                    }).collect();
+                    let pat = if a.binders.is_empty() && a.enum_name.is_none() && a.ctor == "Ok" { "Ok(())".to_string() } else if a.binders.is_empty() { name } else { format!("{}({})", name, binders.join(", ")) };
+                    match (form, k) {
+                        (MatchForm::Match, _) => self.emit(ind + 1, &format!("{} => {{", pat)),
+                        (MatchForm::IfLet, 0) => self.emit(ind, &format!("if let {} = {} {{", pat, s)),
+                        (MatchForm::LetElse, 0) => {
+                            // the pattern arm's body is the rest of the block: print the else block first
+                            self.emit(ind, &format!("let {} = {} else {{", pat, s));
+                            self.block(&x.arms[1].body, ind + 1)?;
+                            self.emit(ind, "};");
+                        }
+                        (MatchForm::IfLet, _) => {
+                            if a.body.is_empty() {
+                                break;
+                            }
+                            self.emit(ind, "} else {");
+                        }
+                        (MatchForm::LetElse, _) => break,
+                    }
+                    let saved_vars = fold.then(|| self.vars.clone());
+                    let body: &[Stmt] = if fold {
+                        for st in &a.body[..a.pat_lets] {
+                            if let Stmt::Let(l) = st {
+                                self.vars.insert(l.name.clone(), l.ty.clone());
+                            }
+                        }
+                        &a.body[a.pat_lets..]
+                    } else {
+                        &a.body
+                    };
                     let string_error = (owned_result && a.ctor == "Err").then(|| &a.binders[0]);
                     if let Some(binder) = string_error {
                         self.string_error_binders.insert(binder.clone());
@@ -4757,16 +4801,27 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     if let Some(binder) = view_binder {
                         self.refs.insert(binder.clone());
                     }
-                    self.block(&a.body, ind + 2)?;
+                    match form {
+                        MatchForm::Match => self.block(body, ind + 2)?,
+                        MatchForm::IfLet => self.block(body, ind + 1)?,
+                        MatchForm::LetElse => self.block(body, ind)?,
+                    }
+                    if let Some(v) = saved_vars {
+                        self.vars = v;
+                    }
                     if let Some(binder) = view_binder {
                         self.refs.remove(binder);
                     }
                     if let Some(binder) = string_error {
                         self.string_error_binders.remove(binder);
                     }
-                    self.emit(ind + 1, "}");
+                    if form == MatchForm::Match {
+                        self.emit(ind + 1, "}");
+                    }
                 }
-                self.emit(ind, "}");
+                if form != MatchForm::LetElse {
+                    self.emit(ind, "}");
+                }
             }
         }
         Ok(())
@@ -6890,6 +6945,15 @@ fn g9_charge(n: &str) -> String {
 
 /// P6: the number of statements of the destructuring group that starts `stmts` (the parser's `pruv_tup_d<N>` temp
 /// let followed by the field lets that read it, nested temps included), or None.
+/// P8: the Rust text of a match-arm tuple pattern.
+fn tuple_pat_text(p: &TuplePat) -> String {
+    match p {
+        TuplePat::Wild => "_".to_string(),
+        TuplePat::Bind(_, _, n, m) => format!("{}{}", if *m { "mut " } else { "" }, n),
+        TuplePat::Tuple(_, _, ps) => format!("({})", ps.iter().map(tuple_pat_text).collect::<Vec<_>>().join(", ")),
+    }
+}
+
 fn destructure_group(stmts: &[Stmt]) -> Option<usize> {
     let Some(Stmt::Let(t)) = stmts.first() else { return None };
     if !t.name.starts_with("pruv_tup_d") || !crate::gtype::is_tuple_name(&t.ty) {

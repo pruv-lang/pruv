@@ -1,0 +1,37 @@
+// spec: R-6u-2 accept
+// `if let` takes the pattern's branch on a match and the else branch (or nothing) otherwise.
+enum Cmd { Add(n: i64), Stop, Skip }
+
+fn get(o: Option<i64>) -> i64
+  ensures is_some(o) ==> result == some_val(o)
+  ensures !is_some(o) ==> result == 0
+{
+  if let Some(v) = o { return v; } else { return 0; }
+}
+
+fn bump(c: Cmd) -> i64
+  ensures result >= 0 && result <= 1
+{
+  let mut k: i64 = 0;
+  if let Cmd::Stop = c { k = 1; }
+  return k;
+}
+
+fn code(r: Result<i64>) -> i64
+  ensures !is_ok(r) ==> result == 1
+{
+  if let Err(e) = r { return 1; }
+  return 0;
+}
+
+// A user name that looks like a compiler binder stays the user's own variable (the Err arm gets a binder).
+// A one-variant enum pattern without an else block is accepted.
+fn own(r: Result<i64, i64>) -> i64 {
+  if let Ok(x) = r { return x; } else { let _pruv_else_1_0: i64 = 3; return _pruv_else_1_0; }
+}
+
+enum One { A }
+fn one(e: One) -> i64 {
+  if let One::A = e { return 3; }
+  return 0;
+}

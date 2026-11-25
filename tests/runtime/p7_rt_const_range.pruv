@@ -1,0 +1,13 @@
+// P7 follow-up: a constant keeps its declared type in range inference, so `0..N` with `N: u8` is a u8 range.
+const N: u8 = 5;
+
+fn run(k: i64) -> i64
+    requires 0 <= k && k <= 10
+{
+    let mut s: i64 = 0;
+    for i in 0..N invariant 0 <= s && s <= i64(i) * 60 {
+        let w: u8 = i;
+        s = s + i64(w) * 10 + k;
+    }
+    return s;
+}

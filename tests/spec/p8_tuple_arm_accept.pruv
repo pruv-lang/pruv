@@ -1,0 +1,33 @@
+// spec: R-6u-1 accept
+// Tuple patterns in match arms: a top-level tuple, a tuple inside Some, a tuple variant field, nesting and `_`.
+// Each binder equals its component, so the contracts are proven.
+enum Shape { Circle(r: i64), Pair(p: (i64, i64)), Deep(d: ((i64, bool), u8)), Empty }
+
+fn swap(t: (i64, i64)) -> (i64, i64)
+  ensures result.0 == t.1 && result.1 == t.0
+{
+  match t {
+    (a, b) => { let r: (i64, i64) = (b, a); return r; }
+  }
+}
+
+fn first(o: Option<(i64, i64)>) -> i64
+  ensures is_some(o) ==> result == some_val(o).0
+  ensures !is_some(o) ==> result == -1
+{
+  match o {
+    Some((a, _)) => { return a; }
+    None => { return -1; }
+  }
+}
+
+fn area(s: Shape) -> i64
+  requires 0 <= 1
+{
+  match s {
+    Shape::Circle(r) => { return 0; }
+    Shape::Pair((x, y)) => { if x == y { return 1; } return 2; }
+    Shape::Deep(((k, f), _)) => { if f { return k; } return 0; }
+    Shape::Empty => { return 3; }
+  }
+}

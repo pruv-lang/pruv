@@ -1,0 +1,7 @@
+// B8-1 (P8): an if let target that borrows and moves the same value in one call is type/foreign_borrow, as for match
+struct Rec { text: String }
+fn pick(s: String, take r: Rec) -> Option<i64> ! alloc { if len(s) > 0 { return Some(len(s)); } return None; }
+fn f(take r: Rec) -> i64 ! alloc {
+  if let Some(n) = pick(r.text, move r) { return n; }
+  return 0;
+}

@@ -1,0 +1,10 @@
+// spec: R-6u-1 reject
+// The binders follow component order, so swapping them breaks the postcondition when the components differ.
+fn first(o: Option<(i64, i64)>) -> i64
+  ensures is_some(o) ==> result == some_val(o).0
+{
+  match o {
+    Some((b, a)) => { return a; }
+    None => { return 0; }
+  }
+}

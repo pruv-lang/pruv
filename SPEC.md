@@ -82,6 +82,8 @@ match e {                        // e: Option<i64>, Result<i64> or a user enum (
   None => { ... }
 }
 match r { Ok(v) => { ... } Err(c) => { ... } }
+if let Some(v) = e { ... } else { ... }   // else optional (R-6u-2)
+let Some(v) = e else { return ..; };     // else block must not reach its end (R-6u-3)
 f(args);                 // call as statement only if f returns ()
 f(inout a, args);        // mutating call: subject to the expression rules of section 6g
 ```
@@ -326,7 +328,7 @@ match e {                                  // statement; every variant exactly o
 - Declared at top level, in any order. Type and variant names start upper-case, field names lower-case.
 - Fields: `i64`, `bool`, `Option<i64>`, `Result<i64>`, or another struct/enum. No `()` fields, no `[Point]`, no
   `Option<Point>`. Non-generic structs/enums may also have `[i64]`/`[u8]`/`[bool]`/`str` fields and be recursive (section 6e). Empty structs are allowed; an enum needs at least one variant.
-- Read struct fields with `v.field`. Enum payloads are read only with `match` in code.
+- Read struct fields with `v.field`. Enum payloads are read only with `match`, `if let` or `let else` in code (6u).
 - `==` / `!=` on structs and enums: contracts only, same type. Enums compare the variant and its fields.
 - Contract-only: `is_variant(e, Event::Hit)` (bool) and `variant_field(e, Event::Hit, point)` (that field).
   `variant_field` is defined only when `e` is that variant; the verifier proves this wherever the contract is
@@ -2613,13 +2615,12 @@ borrows.
   [reject](tests/spec/r6s_4_reject.pruv), [runtime](tests/runtime/p6_rt_owned.pruv),
   [for](tests/must_reject/p6_for_owned.pruv).
 - R-6s-5 **Payloads and limits.** Tuples are `Result`/`Option` payloads and function parameters and results;
-  contracts project through `ok_val(result).0` and `some_val(result).1`. Not yet supported: tuple patterns in `match`
-  arms, including `Some((a, b))` (`parse/tuple_match_pattern`, bundle P8); tuple structs `struct P(A, B);`
+  contracts project through `ok_val(result).0` and `some_val(result).1`; `match` arms take tuple patterns such as
+  `Some((a, b))` (R-6u-1). Not yet supported: tuple structs `struct P(A, B);`
   (`parse/tuple_struct`); tuple types inside a generic declaration (`parse/tuple_generic`); tuples in a program with
   `pub` or `mod` items (`parse/tuple_module`, P12). Tests: [accept](tests/spec/r6s_5_accept.pruv),
   [reject](tests/spec/r6s_5_reject.pruv), [false contract](tests/spec/r6s_5_reject_contract.pruv),
-  [runtime](tests/runtime/p6_rt_result.pruv), [match](tests/must_reject/p6_match_pattern.pruv),
-  [Some pattern](tests/must_reject/p6_some_pattern.pruv), [tuple struct](tests/must_reject/p6_tuple_struct.pruv),
+  [runtime](tests/runtime/p6_rt_result.pruv), [tuple struct](tests/must_reject/p6_tuple_struct.pruv),
   [generic](tests/must_reject/p6_generic.pruv), [module](tests/must_reject/p6_module.pruv).
 
 ## 6t. Constants and characters (P7)
@@ -2682,6 +2683,48 @@ fn is_digit(c: char) -> bool
   [accept](tests/spec/r6t_4_accept.pruv), [reject](tests/spec/r6t_4_reject.pruv),
   [literal](tests/must_reject/p7_array_literal.pruv), [repeat](tests/must_reject/p7_array_repeat.pruv),
   [type](tests/must_reject/p7_array_type.pruv), [char element](tests/must_reject/p7_array_char_type.pruv).
+
+## 6u. Patterns (P8)
+
+Tuple patterns in match arms, `if let` and `let else` (bundle P8a). The checker decides each pattern once: it expands
+`if let` and `let else` into a full `match` whose missing variants take the else block, and lowers each tuple pattern
+into one `let` per component of the bound payload. The verifier and both backends read that one result. The Rust
+backend prints the source form back (`if let`, `let .. else`, nested tuple patterns) for scalar targets; a borrowed
+enum or collection target prints the equivalent full `match`. `while let` and slice patterns
+are bundle P8b.
+
+- R-6u-1 **Tuple patterns in arms.** A match arm binds a tuple payload by components: `Some((a, b))`, `Ok((a, _))`,
+  `E::V((x, (y, _)))`, and a top-level `match t { (a, b) => { .. } }` over a tuple value (one arm, the whole
+  product). `E::V((a, b))` reads one tuple field; `E::V(a, b)` reads two fields. Each binder equals its component
+  and `_` skips one. The pattern has one binder or `_` per component and the payload must be a tuple
+  (`type/tuple_pattern_type`); constructor arity stays `type/match_arity` and a repeated or outer name is
+  `type/shadow`. Components bound by a pattern are integers, `bool` or `char` (`type/tuple_pattern_owned`); bind the
+  payload and destructure it with a `let` (R-6s-2, R-6s-3) for owned components. Tests:
+  [accept](tests/spec/p8_tuple_arm_accept.pruv), [reject](tests/spec/p8_tuple_arm_reject.pruv),
+  [owned](tests/spec/p8_tuple_arm_owned.pruv), [false contract](tests/spec/p8_tuple_arm_reject_contract.pruv),
+  [Some](tests/spec/p8_tuple_arm_some.pruv), [enum](tests/spec/p8_tuple_arm_enum.pruv),
+  [top level](tests/spec/p8_tuple_arm_top.pruv), [runtime](tests/runtime/p8_rt_tuple_arm.pruv).
+- R-6u-2 **`if let`.** `if let P = e { A } else { B }` evaluates `e` once and runs `A` with the pattern's binders
+  when `e` matches `P` (a constructor of `Option`, `Result` or a user enum, with tuple patterns as in R-6u-1), and
+  `B` otherwise; `else` is optional and `else if ..` chains. It checks as the full `match` whose other variants run
+  `B`, so a contract must hold on both paths, and a borrow or move in `e` is checked as for `match` (a value both
+  borrowed and moved in `e` is `type/foreign_borrow`). Binders are scoped to `A` (`type/shadow` on reuse). Tests:
+  [accept](tests/spec/p8_if_let_accept.pruv), [reject](tests/spec/p8_if_let_reject.pruv),
+  [false contract](tests/spec/p8_if_let_reject_contract.pruv), [irrefutable](tests/spec/p8_if_let_irrefutable.pruv),
+  [runtime](tests/runtime/p8_rt_if_let.pruv),
+  [borrowed target](tests/must_reject/p8_borrow_target_if.pruv),
+  [match target](tests/must_reject/p8_borrow_target_match.pruv).
+- R-6u-3 **`let else`.** `let P = e else { B };` evaluates `e` once; when it matches, the binders of `P` are in scope
+  for the rest of the enclosing block, and otherwise `B` runs. `B` must not reach its end: it ends with `return`,
+  `break` or `continue` (labels as in R-6r-2), or an `if`/`match` whose every branch does
+  (`type/let_else_fallthrough`; a `break` inside an inner loop leaves only that loop). A pattern that matches every
+  value (the only variant of an enum) with an else block is `type/irrefutable_pattern`, for `if let` as well. An
+  early `return` in `B` must meet the function's `ensures`. A plain name after `let` keeps the typed `let`; a
+  constructor pattern followed by `;` instead of `else { .. }` is `parse/let_else_syntax`. Tests:
+  [accept](tests/spec/p8_let_else_accept.pruv), [reject](tests/spec/p8_let_else_reject.pruv),
+  [inner loop](tests/spec/p8_let_else_reject_loop.pruv), [irrefutable](tests/spec/p8_let_else_irrefutable.pruv),
+  [syntax](tests/spec/p8_let_else_syntax.pruv), [false contract](tests/spec/p8_let_else_reject_contract.pruv),
+  [runtime](tests/runtime/p8_rt_let_else.pruv), [borrowed target](tests/must_reject/p8_borrow_target_let.pruv).
 
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
@@ -3126,6 +3169,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/foreign_syntax` | parse | a malformed `trusted rust fn` declaration |
 | `parse/generic_syntax` | parse | a malformed type parameter list or type argument list |
 | `parse/inout_syntax` | parse | a malformed `inout` parameter or argument |
+| `parse/let_else_syntax` | parse | a constructor pattern after `let` followed by `;` instead of `else { .. }` (R-6u-3) |
 | `parse/lib_module_conflict` | parse | a module is found both in the program and in a library path |
 | `parse/loop_jump_syntax` | parse | a `continue` followed by anything but an optional label and `;`, or a `break` whose `;` is missing before `}` (R-6r-3) |
 | `parse/loop_label_name` | parse | a reserved loop label: `'static`, `'_` or a keyword such as `'fn` (R-6r-2) |
@@ -3151,7 +3195,6 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/tuple_component` | parse | `()` as a tuple component (R-6s-1) |
 | `parse/tuple_generic` | parse | a tuple type inside a generic declaration (R-6s-5) |
 | `parse/tuple_index` | parse | a tuple projection index that is not a plain decimal number, such as `t.01` (R-6s-1) |
-| `parse/tuple_match_pattern` | parse | a tuple pattern in a `match` arm, including `Some((a, b))` (R-6s-5, bundle P8) |
 | `parse/tuple_module` | parse | a tuple type in a program with `pub` or `mod` items (R-6s-5) |
 | `parse/tuple_needs_type` | parse | a destructuring `let` without its tuple type (R-6s-2) |
 | `parse/tuple_pattern_type` | parse | a destructuring pattern whose component count does not match its tuple type (R-6s-2) |
@@ -3219,6 +3262,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/int_range` | type | an integer literal outside the range of its type (R-6p-1, R-6p-5) |
 | `type/internal` | type | an unknown statement or expression reached the checker |
 | `type/invariant_decl` | type | a struct invariant clause that is not bool, uses `old()` or `result`, sits on a generic struct, or a parameter `result` of that struct type |
+| `type/irrefutable_pattern` | type | an `if let` or `let else` pattern that matches every value, with an else block (R-6u-3) |
 | `type/loop_jump_map` | type | a `break`/`continue` that would leave a map iteration or a mutable collection `Some` arm (R-6r-1) |
 | `type/loop_jump_outside` | type | a `break`/`continue` outside a `while` or `for` body (R-6r-1) |
 | `type/loop_jump_unreachable` | type | statements after a `break`/`continue` in the same block (R-6r-1) |
@@ -3286,6 +3330,9 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/unused_value` | type | a non-unit value is dropped |
 | `type/useless_expr` | type | an expression statement that is not a call |
 | `type/tuple_needs_type` | type | a tuple literal where no tuple type is expected; bind it with a typed `let` (R-6s-1) |
+| `type/tuple_pattern_type` | type | a tuple pattern in a match arm whose payload is not a tuple or has another component count (R-6u-1) |
+| `type/tuple_pattern_owned` | type | a tuple pattern in a match arm that binds a component other than an integer, `bool` or `char` (R-6u-1) |
+| `type/let_else_fallthrough` | type | the else block of `let .. else` can reach its end (R-6u-3) |
 | `type/variant_name` | type | a variant name does not start with an upper-case letter |
 | `type/view_context` | type | `subview(...)` anywhere but a direct non-`inout` array argument of a Pruv call (R-6g-6) |
 | `effect/cost_callee` | effect | a cost function calls a function without `cost` |

@@ -1312,6 +1312,7 @@ impl<'a> Rs<'a> {
                         }
                         self.rstmts(&mut a.body)?;
                     }
+                    self.rstmts(&mut m.els)?; // P8: the else block of `if let` / `let ... else`
                 }
             }
         }

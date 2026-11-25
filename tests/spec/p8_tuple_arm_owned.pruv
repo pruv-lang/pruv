@@ -1,0 +1,9 @@
+// spec: R-6u-1 reject
+// Tuple arm components are scalars; a String component is read through a destructuring let instead.
+enum E { A(p: (i64, String)), B }
+fn f(e: E) -> i64 ! alloc {
+  match e {
+    E::A((a, s)) => { return a; }
+    E::B => { return 0; }
+  }
+}

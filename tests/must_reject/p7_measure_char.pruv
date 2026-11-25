@@ -1,0 +1,2 @@
+// P7 follow-up: `char` has no arithmetic, so it is not a decreases measure (R-6p-5)
+fn f() -> i64 { while false decreases 'a' { } return 0; }

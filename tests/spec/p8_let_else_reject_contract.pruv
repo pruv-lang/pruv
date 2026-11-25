@@ -1,0 +1,9 @@
+// spec: R-6u-3 reject
+// The else block's early return must also meet the postcondition.
+fn get(o: Option<i64>) -> i64
+  ensures result >= 0
+{
+  let Some(v) = o else { return -1; };
+  if v < 0 { return 0; }
+  return v;
+}

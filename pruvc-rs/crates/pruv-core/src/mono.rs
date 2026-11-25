@@ -854,6 +854,8 @@ impl<'a> Mono<'a> {
                         ctor: a.ctor.clone(),
                         binders: a.binders.clone(),
                         body: self.cp_stmts(&a.body)?,
+                        pats: a.pats.clone(),
+                        pat_lets: a.pat_lets,
                     });
                 }
                 // the arms name the scrutinee's (lowered) enum
@@ -873,7 +875,7 @@ impl<'a> Mono<'a> {
                         }
                     }
                 }
-                Stmt::Match(Match { line: x.line, col: x.col, scrutinee, arms })
+                Stmt::Match(Match { line: x.line, col: x.col, scrutinee, arms, form: x.form, els: self.cp_stmts(&x.els)? })
             }
         })
     }

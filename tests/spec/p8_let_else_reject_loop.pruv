@@ -1,0 +1,6 @@
+// spec: R-6u-3 reject
+// A break inside an inner loop leaves only that loop, so the else block still reaches its end.
+fn get(o: Option<i64>) -> i64 {
+  let Some(v) = o else { for i in 0..3 { break; } };
+  return v;
+}
