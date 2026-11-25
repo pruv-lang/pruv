@@ -914,6 +914,10 @@ fn g9_pair(g: &mut FnGen, gp: &str) -> R<(String, String)> {
 
 /// Storage type of a value inside an aggregate (c: contract/i128 form)
 pub fn st(t: &str, c: bool) -> String {
+    if fixed_key(t).is_some() {
+        // P7-1 B: an inline `[T; N]` field is its `[N x E]` memory in both forms (contracts read it in place)
+        return lty(t);
+    }
     if view_base(t).is_some() {
         return VIEW.to_string();
     }
@@ -3009,6 +3013,10 @@ impl<'a> FnGen<'a> {
             // G9 A3: a buffer field is stored as { ptr, i64, i64 } (data, len, cap)
             return self.agg(v);
         }
+        if fixed_key(ty).is_some() {
+            // P7-1 B: a fixed-array field is stored inline as `[N x E]`; the value is its storage pointer
+            return self.op(format!("load {}, ptr {}", lty(ty), v.a));
+        }
         Ok(v.a.clone())
     }
 
@@ -3033,6 +3041,14 @@ impl<'a> FnGen<'a> {
         }
         if is_collection(ty) {
             return Ok(V { ty: Some(ty.to_string()), ..V::new(Kind::Coll, x) });
+        }
+        if fixed_key(ty).is_some() {
+            // P7-1 B: spill the inline `[N x E]` field into fresh storage
+            let tmp = format!("%fx{}", self.nslot);
+            self.nslot += 1;
+            self.allocas.push(format!("{} = alloca {}", tmp, lty(ty)));
+            self.ins(format!("store {} {}, ptr {}", lty(ty), x, tmp))?;
+            return Ok(V::agg(tmp, ty));
         }
         if is_arr_name(ty) {
             // G9 A3
@@ -3092,6 +3108,12 @@ impl<'a> FnGen<'a> {
             // Evaluate in source order. R-6g9-2: ownership by type: a `ref` field borrows its value (a place, subview
             // or `from` result), never owns or copies it
             let by_ref = !c && refs.contains(fi.name.as_str());
+            if let Some(t) = expr_ty(&fi.value).as_deref().filter(|t| fixed_key(t).is_some()) {
+                // P7-1 B: a fixed-array field copies from the value's storage
+                let p = self.fixed_ptr(&fi.value)?;
+                vals.insert(fi.name.as_str(), V::agg(p, t));
+                continue;
+            }
             let v = self.evf(&fi.value, c, own && !by_ref)?;
             vals.insert(fi.name.as_str(), v);
         }
@@ -3213,7 +3235,8 @@ impl<'a> FnGen<'a> {
 
     /// Code value -> contract value (integer leaves are extended; for an enum only the active variant is converted)
     pub fn to_c(&mut self, x: &V, ty: &str) -> R<V> {
-        if view_base(ty).is_some() {
+        // P7-1 B: a fixed array keeps its `[N x E]` storage in the contract form
+        if view_base(ty).is_some() || fixed_key(ty).is_some() {
             return Ok(x.clone());
         }
         let tt = self.tt;
@@ -4264,7 +4287,15 @@ impl<'a> FnGen<'a> {
                 // `let d = inout a` names the same `[N x E]` slot: no copy
                 let Expr::InoutArg(arg) = &x.value else { unreachable!() };
                 let Expr::Var(place) = &*arg.expr else {
-                    return Err("llvmgen: unsupported fixed array place binding".to_string());
+                    // P7-1 B: `inout if c { a } else { b }` or a field path: bind the chosen storage address
+                    self.begin_temps();
+                    let ptr = self.place_ptr(&arg.expr)?;
+                    self.end_temps()?;
+                    let sl = self.new_slot(&x.name, &x.ty)?;
+                    let slot = Slot { a: ptr, ..sl };
+                    self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?
+                        .names.insert(x.name.clone(), Bind::Slot(slot));
+                    return Ok(());
                 };
                 let binding = self.lookup(&place.name)?;
                 self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?.names.insert(x.name.clone(), binding);
@@ -4455,6 +4486,12 @@ impl<'a> FnGen<'a> {
                     self.ins(format!("store {VIEW} {value}, ptr {ptr}"))?;
                     return self.end_temps();
                 }
+                if expr_ty(&x.value).as_deref().and_then(fixed_key).is_some() {
+                    // P7-1 B: an inline `[T; N]` field is filled in place (every element read before the first store)
+                    let (gp, _) = self.field_ptr_ty(&sl, &x.fields)?;
+                    self.fixed_fill(&gp, &x.value)?;
+                    return self.end_temps();
+                }
                 // LG37: a last-use take anywhere in the right side
                 self.moving = self.nested_moves(&x.value, Some(&x.name), false);
                 let rg = self.regrow_field(x, &sl);
@@ -4507,6 +4544,14 @@ impl<'a> FnGen<'a> {
                         return Err(format!("llvmgen: element store through non-local {}", x.name));
                     };
                     let (gp, fty) = self.field_ptr_ty(&sl, &x.fields)?;
+                    if let Some(f) = fixed_key(&fty) {
+                        // P7-1 B: an inline `[T; N]` field is stored in place
+                        let el = f.fixed_parts().unwrap().0.clone();
+                        let g = self.fixed_gep(&f, &gp, &i)?;
+                        let v = self.fixed_elem_value(&el, &v)?;
+                        self.ins(format!("store {} {}, ptr {}", fixed_elem_ir(&el), v, g))?;
+                        return self.end_temps();
+                    }
                     let dp = self.op(format!("load ptr, ptr {}", gp))?;
                     let lp = self.op(format!("getelementptr inbounds {}, ptr {}, i32 0, i32 1", ARR, gp))?;
                     let ln = self.op(format!("load i64, ptr {}", lp))?;
@@ -4909,6 +4954,14 @@ impl<'a> FnGen<'a> {
     }
 
     /// P7-1: the storage of a fixed-array expression: a local's own slot, otherwise a fresh temporary filled from it.
+    /// P7-1 B: `fixed_ptr` in contract form: a field path reads the contract value of its base
+    fn cfixed_ptr(&mut self, e: &Expr) -> R<String> {
+        match e {
+            Expr::FieldAccess(_) => Ok(self.cev(e)?.a),
+            _ => self.fixed_ptr(e),
+        }
+    }
+
     fn fixed_ptr(&mut self, e: &Expr) -> R<String> {
         match e {
             Expr::Var(v) => match self.lookup(&v.name) {
@@ -4920,6 +4973,8 @@ impl<'a> FnGen<'a> {
             Expr::Call(c) if c.name == ARRAY_LIST || array_repeat_len(&c.name).is_some() => {}
             // P7-1 B: a call result already lives in fresh caller storage
             Expr::Call(_) => return Ok(self.ev(e, false)?.a),
+            // P7-1 B: an inline struct field spills into fresh storage
+            Expr::FieldAccess(_) => return Ok(self.ev(e, false)?.a),
             _ => return Err("llvmgen: unsupported fixed array expression".to_string()),
         }
         let ty = expr_ty(e).clone().ok_or_else(|| "llvmgen: untyped fixed array".to_string())?;
@@ -4928,6 +4983,19 @@ impl<'a> FnGen<'a> {
         self.allocas.push(format!("{} = alloca {}", tmp, lty(&ty)));
         self.fixed_fill(&tmp, e)?;
         Ok(tmp)
+    }
+
+    /// P7-1 B: the elements of a fixed-array literal in contract form (`[x; N]` evaluates `x` once).
+    fn fixed_lit_cev(&mut self, c: &Call) -> R<Vec<V>> {
+        if let Some(n) = array_repeat_len(&c.name) {
+            let v = self.cev(arg(&c.args, 0)?)?;
+            return Ok((0..n).map(|_| v.clone()).collect());
+        }
+        let mut vs = Vec::new();
+        for a in &c.args {
+            vs.push(self.cev(a)?);
+        }
+        Ok(vs)
     }
 
     /// P7-1: write the value of fixed-array expression `e` into `dst`. Every element is computed before the first
@@ -6193,6 +6261,8 @@ impl<'a> FnGen<'a> {
                 // P7-1: inout passes the caller's array; by value passes a fresh copy (so the callee never sees a
                 // later write through an inout argument of the same call)
                 let p = match x {
+                    // P7-1 B: a field path passes the field's own storage, not a spilled copy
+                    Expr::InoutArg(ix) if matches!(&*ix.expr, Expr::FieldAccess(_)) => self.place_ptr(&ix.expr)?,
                     Expr::InoutArg(ix) => self.fixed_ptr(&ix.expr)?,
                     _ => {
                         let tmp = self.new_out(&prm.ty);
@@ -7059,7 +7129,30 @@ impl<'a> FnGen<'a> {
                 let f = expr_ty(&x.array).as_deref().and_then(fixed_key).unwrap();
                 let (el, n) = f.fixed_parts().unwrap();
                 let el = el.clone();
-                let p = self.fixed_ptr(&x.array)?;
+                if let Expr::Call(c) = &*x.array {
+                    if c.name == ARRAY_LIST || array_repeat_len(&c.name).is_some() {
+                        // P7-1 B: a literal indexed in a contract: every element in contract form, then a select chain
+                        let vs = self.fixed_lit_cev(c)?;
+                        let i = self.cev(&x.index)?;
+                        let ok = self.op(format!("icmp ult i128 {}, {}", i.a, n))?;
+                        self.guard(&ok, und("array index out of range".to_string()), false)?;
+                        if vs.is_empty() {
+                            // `[x; 0][i]`: the guard above always fails
+                            let kind = if el.name == "bool" { Kind::I1 } else { Kind::I128 };
+                            let zero = if matches!(kind, Kind::I1) { "false" } else { "0" };
+                            return Ok(V::new(kind, zero));
+                        }
+                        let k0 = vs[0].k.clone();
+                        let ty = if matches!(k0, Kind::I1) { "i1" } else { "i128" };
+                        let mut r = vs[0].a.clone();
+                        for (k, v) in vs.iter().enumerate().skip(1) {
+                            let hit = self.op(format!("icmp eq i128 {}, {}", i.a, k))?;
+                            r = self.op(format!("select i1 {hit}, {ty} {}, {ty} {r}", v.a))?;
+                        }
+                        return Ok(V::new(k0, r));
+                    }
+                }
+                let p = self.cfixed_ptr(&x.array)?;
                 let i = self.cev(&x.index)?;
                 let ok = self.op(format!("icmp ult i128 {}, {}", i.a, n))?;
                 self.guard(&ok, und("array index out of range".to_string()), false)?;
@@ -7290,8 +7383,15 @@ impl<'a> FnGen<'a> {
                 }
                 if n == "len" && expr_ty(arg(a, 0)?).as_deref().and_then(fixed_key).is_some() {
                     let f = expr_ty(arg(a, 0)?).as_deref().and_then(fixed_key).unwrap();
-                    if !matches!(arg(a, 0)?, Expr::Var(_)) {
-                        self.fixed_ptr(arg(a, 0)?)?;
+                    match arg(a, 0)? {
+                        Expr::Var(_) => {}
+                        // P7-1 B: a literal's elements are still evaluated in contract form
+                        Expr::Call(c) if c.name == ARRAY_LIST || array_repeat_len(&c.name).is_some() => {
+                            self.fixed_lit_cev(c)?;
+                        }
+                        other => {
+                            self.cfixed_ptr(other)?;
+                        }
                     }
                     return Ok(V::new(Kind::I128, f.fixed_parts().unwrap().1.to_string()));
                 }

@@ -1183,7 +1183,7 @@ fn tree_count(t: Tree) -> i64
   and do not allocate (the one exception: R-6e-12a moves an array binder out of a consumed scrutinee). Putting an existing value into an owning place (`let`, assignment, constructor field,
   `return`) copies it and needs `! alloc`; a fresh constructor or call result moves without a copy. Any constructor
   of a recursive value needs `! alloc`. While a `match` arm views part of a mutable local, that local cannot be
-  changed (`type/recursive_borrow`). Whole-value `==`/`!=` on values that contain arrays, strings or owned collections is rejected
+  changed (`type/recursive_borrow`). Whole-value `==`/`!=` on values that contain arrays (including a `[T; N]` struct field), strings or owned collections is rejected
   (`type/eq_type`); compare tags, lengths and elements instead.
 - **Limits.** Recursive and buffer-field types cannot be generic arguments, `Option`/`Result` payloads or G6
   collection elements, except the owned aggregates of R-6e-3 and the vector edges of R-6e-20. Functions whose signatures use these types are internal, except
@@ -2494,7 +2494,8 @@ write-back, invariants and the cost bound take the `while` path. `for` is contex
   [runtime](tests/runtime/p4_rt_for.pruv).
 - R-6q-2 **Slice and Vec loops.** `for x in P invariant <bool>* { body }` iterates the elements of a place `P` (a
   local or parameter, or a field path of one) of type `[i64]`, `[u8]`, `[u16]`, `[bool]`, `ref [T]` of those, or
-  `Vec<T>` with `T` an integer type or `bool`, in index order. `x` is a read-only copy of the element, typed as the
+  `Vec<T>` with `T` an integer type or `bool`, or a fixed array `[T; N]` (P7-1 B, a local, parameter or struct field;
+  its `N` elements, typed as `a[k]` is), in index order. `x` is a read-only copy of the element, typed as the
   index read `P[k]` is (`i64` for `[u8]`/`[u16]`, with its range known). In an invariant, `index(x)` is the number of
   elements already visited (the position of `x` in the body, `len(P)` after the loop); `index` is only defined
   there. The body holds `P` read-only: assigning, storing into, moving, place-binding (`let d = inout ..`) or passing `inout` an overlapping path,
@@ -2699,25 +2700,46 @@ fn is_digit(c: char) -> bool
   `old(a)[i]` and `len(old(a))` name its entry value. A `[T; N]` argument is lent as the read-only `[T]` of the same
   element (`[i64]`, `[u8]`, `[u16]`, `[bool]`) for the duration of one call of a Pruv function whose parameter is a
   plain `[T]` (not `take`, not `inout`, not `trusted`/extern, and not a function whose result borrows its arguments
-  with `from`); the callee sees `len(a) == N`. Code: Rust passes `[T; N]` by value and lends `&a[..]`; LLVM passes a
+  with `from`), generic ones included (`count::<i64>(a)` for `fn count<T: Element>(a: [T])`); the callee sees
+  `len(a) == N`. A place binding `let d = inout a` (also `inout if c { a } else { a }` or a choice between fixed
+  fields of one struct) names the same storage and can be passed on as `inout d`. Code: Rust passes `[T; N]` by value and lends `&a[..]`; LLVM passes a
   pointer to a fresh caller copy (by value), to the caller's slot (`inout`) or to caller storage for the result,
   and lends the slot address with the constant length. A `pub`, host entry or extern function with a fixed-length
   array anywhere in its signature is `type/fixed_array_position`, and in the legacy (no `pub`) mode such a function
-  is internal only. Rejected: `[T; N]` as a field, tuple component or type argument, and nested fixed arrays, are
-  `type/fixed_array_position`; an element type other than a scalar (a view `[T]` too) is
+  is internal only. Fields (P7-1 B): a non-generic struct may hold `[T; N]` fields by value; the struct stays a plain
+  value (copy on assignment), `s.f[i]`, `s.f[i] = v` (also through `inout` and nested struct paths) and
+  `s.f = <array>` work like a local array, a contract sees `len(s.f) == N` and the element range, and `old(s).f[i]`
+  names the entry value. The `pub`/host/extern signature check looks through struct fields, so such a struct cannot
+  cross that boundary either. Code: Rust a `[T; N]` struct field; LLVM `[N x E]` inline in the struct.
+  Contracts (P7-1 B): a literal `[a, b]` / `[x; N]` may appear in `requires`, `ensures`, `assert`, `invariant`,
+  `decreases` and quantifier bodies; its index must be proven in range like any contract index (`contract_domain` in
+  `requires`), and `len` of a literal is `N`. `for x in a` over a fixed array is R-6q-2. Slice patterns (P7-1 B): a
+  `match` on a `[T; N]` place takes prefix patterns of exactly `N` elements or of at most `N` with an unnamed `..`;
+  binders read `a[i]` with the element type. Another length or a later arm (only the first arm can match) is
+  `type/match_arms`, and a named rest `rest @ ..` (a view of the array) `type/fixed_array_operation`.
+  Rejected: `[T; N]` as a field of a generic struct or an enum variant, a tuple component or type argument, and
+  nested fixed arrays, are `type/fixed_array_position`; an element type other than a scalar (a view `[T]` too) is
   `type/fixed_array_element`; a negative or oversized length is `type/fixed_array_length`; a non-constant length is
   `type/const_expr` and a `bool` (a literal, `!`, a comparison, `&&`/`||`) or `char` length `type/const_type`; whole-array `==`/`!=`, use as a view `[T]`
   outside the call-duration lend (a `[T]` or `ref [T]` local, a `take` argument, an argument of a `from` function or
-  of a call inside a contract) and a literal inside a contract are `type/fixed_array_operation`; a wrong element
-  count is `type/type_mismatch`, and an `inout [T]` parameter given a `[T; N]` is `type/inout_argument`. Fields,
-  tuples, type arguments, nested arrays, `for x in a`, slice patterns and contract literals are parity row P7-1 B
+  of a call inside a contract) are `type/fixed_array_operation`; a wrong element
+  count is `type/type_mismatch`, and an `inout [T]` parameter given a `[T; N]` is `type/inout_argument`; `copy(a)`
+  (it takes a view) is `type/type_mismatch`, `move a` `type/foreign_move` (a fixed array is a plain value) and a
+  fixed array as a `par` branch argument `type/parallel_argument`. Generic and
+  enum fields, tuples, type arguments and nested arrays are parity row P7-1 B
   (remaining). The length bound `[T; <=N]`
   (section 7a) is unchanged. Tests: [accept](tests/spec/r6t_4_accept.pruv), [reject](tests/spec/r6t_4_reject.pruv),
   [index](tests/spec/r6t_4_reject_index.pruv), [literals](tests/runtime/p7_rt_fixed_literal.pruv),
   [order](tests/runtime/p7_rt_fixed_eval.pruv), [proven](tests/runtime/p7_rt_fixed_proven.pruv),
-  [unverified](tests/runtime/p7_rt_fixed_oob_unverified.pruv), [type](tests/must_reject/p7_array_type.pruv),
+  [unverified](tests/runtime/p7_rt_fixed_oob_unverified.pruv), [for](tests/runtime/p7_rt_fixed_for.pruv),
+  [contract literals](tests/runtime/p7_rt_fixed_contract_lit.pruv),
+  [slice patterns](tests/runtime/p7_rt_fixed_slice_pattern.pruv), [place if](tests/runtime/p7_rt_fixed_place_if.pruv), [generic lend](tests/runtime/p7_rt_fixed_generic_lend.pruv),
+  [move](tests/must_reject/p7_fixed_move.pruv), [par](tests/must_reject/p7_fixed_par.pruv), [copy](tests/must_reject/p7_fixed_copy.pruv),
+  [type](tests/must_reject/p7_array_type.pruv),
   [char element](tests/must_reject/p7_array_char_type.pruv), [owned](tests/must_reject/p7_fixed_owned.pruv),
-  [nested](tests/must_reject/p7_fixed_nested.pruv), [length](tests/must_reject/p7_fixed_large.pruv),
+  [nested](tests/must_reject/p7_fixed_nested.pruv), [field](tests/runtime/p7_rt_fixed_field.pruv),
+  [nested field](tests/runtime/p7_rt_fixed_field_nested.pruv), [host field](tests/must_reject/p7_fixed_field_host.pruv),
+  [length](tests/must_reject/p7_fixed_large.pruv),
   [equality](tests/must_reject/p7_fixed_eq.pruv), [argument](tests/must_reject/p7_fixed_arg.pruv),
   [count](tests/must_reject/p7_fixed_count.pruv), [out of bounds](tests/must_reject/p7_fixed_oob.pruv),
   [by value and inout](tests/runtime/p7_rt_fixed_param.pruv), [lend](tests/runtime/p7_rt_fixed_borrow.pruv),
@@ -2774,7 +2796,8 @@ variants (R-6u-5).
   order, so an arm is a length test. Every arm of such a match is a slice arm (`type/match_type` otherwise, and for a
   target that is not an array place: bind a call result with a `let` first). An arm whose lengths earlier arms already
   take, and a length no arm takes, are `type/match_arms`. The rest `..` appears once, as the last element
-  (`parse/slice_pattern_rest`). Slice patterns are not accepted in `if let`, `let else` or `while let`. Tests:
+  (`parse/slice_pattern_rest`). Slice patterns are not accepted in `if let`, `let else` or `while let`. A fixed-length
+  array `[T; N]` place is R-6t-4. Tests:
   [accept](tests/spec/p8_slice_accept.pruv), [reject](tests/spec/p8_slice_reject.pruv),
   [false contract](tests/spec/p8_slice_reject_contract.pruv), [rest](tests/spec/p8_slice_rest.pruv),
   [target](tests/spec/p8_slice_target.pruv), [runtime](tests/runtime/p8_rt_slice.pruv),
@@ -3312,8 +3335,8 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/field_name` | type | a field name does not start with a lower-case letter |
 | `type/fixed_array_element` | type | a fixed-length array element that is not a scalar integer, `char` or `bool` (R-6t-4) |
 | `type/fixed_array_length` | type | a negative fixed-length array length, or an array larger than 65536 bytes (R-6t-4) |
-| `type/fixed_array_operation` | type | `==`/`!=` on fixed-length arrays, a fixed-length array used as a view `[T]` outside a call-duration lend, or a fixed-length array literal in a contract (R-6t-4) |
-| `type/fixed_array_position` | type | `[T; N]` as a field, tuple component, type argument or nested array, or in the signature of a `pub`, host entry or extern function (R-6t-4) |
+| `type/fixed_array_operation` | type | `==`/`!=` on fixed-length arrays, a fixed-length array used as a view `[T]` outside a call-duration lend (R-6t-4) |
+| `type/fixed_array_position` | type | `[T; N]` as a field of a generic struct or enum, tuple component, type argument or nested array, or in the signature (struct fields included) of a `pub`, host entry or extern function (R-6t-4) |
 | `type/for_enumerate` | type | `for (i, x) in` over an array, view or `Vec`; enumeration is bundle P15 (R-6q-3) |
 | `type/for_iterable` | type | a `for` range with non-integer bounds, or a `for` over a value that is not a slice or a `Vec` of integer/bool elements (R-6q-3) |
 | `type/foreign_borrow` | type | one value is borrowed and moved in the same call |

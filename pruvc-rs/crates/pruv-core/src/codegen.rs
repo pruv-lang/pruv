@@ -2701,6 +2701,20 @@ impl<'a> Gen<'a> {
                     .is_some_and(crate::borrowed::is_view_wrapper) => self.c(e),
             // G9: a buffer field of a real (extended) value
             Expr::FieldAccess(_) | Expr::VariantField(_) if self.g9 => self.cx(e),
+            // P7-1 B: a fixed-array field of a contract mirror struct is already `[i128; N]`
+            Expr::FieldAccess(x) if x.ty.as_deref().is_some_and(|t| fixed_key(t).is_some()) => self.c(e),
+            // P7-1 B: a fixed-array literal in a contract is an array of contract values
+            Expr::Call(x) if x.name == "@array" => {
+                let mut parts = Vec::new();
+                for a in &x.args {
+                    parts.push(self.c(a)?);
+                }
+                Ok(format!("[{}]", parts.join(", ")))
+            }
+            Expr::Call(x) if crate::ast::array_repeat_len(&x.name).is_some() && x.args.len() == 1 => {
+                let n = crate::ast::array_repeat_len(&x.name).unwrap_or(0);
+                Ok(format!("[{}; {}]", self.c(&x.args[0])?, n))
+            }
             other => Err(format!("codegen: unsupported array expression in contract: {:?}", other)),
         }
     }
@@ -4578,6 +4592,17 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 let v = self.e(&x.value)?;
                 let place = format!("{}.{}", x.name, x.fields.join("."));
                 let fty = self.field_path_ty(&x.name, &x.fields);
+                if let Some(f) = fty.as_deref().and_then(fixed_key) {
+                    // P7-1 B: an inline `[T; N]` field stores the element at its own type
+                    let elem = rty_g(f.fixed_parts().unwrap().0, false);
+                    let text = if self.verified {
+                        format!("{{ let pruv_i: i64 = {i}; let pruv_x: {elem} = {v}; unsafe {{ *{place}.get_unchecked_mut(pruv_i as usize) = pruv_x; }} }}")
+                    } else {
+                        format!("{{ let pruv_i: i64 = {i}; let pruv_x: {elem} = {v}; let pruv_k = pruv_idx(pruv_i, {place}.len()); {place}[pruv_k] = pruv_x; }}")
+                    };
+                    self.emit(ind, &text);
+                    return Ok(());
+                }
                 let elem = fty.as_deref().and_then(array_elem_name).unwrap_or("i64");
                 let is_bool = fty.as_deref() == Some("array_bool");
                 let text = if is_bool {

@@ -218,6 +218,10 @@ fn type_repr(t: &str) -> String {
 
 /// Contract mirror of a structured Option or Result.
 pub fn try_cty_g(g: &GType) -> Result<String, String> {
+    if let Some((e, n)) = g.fixed_parts() {
+        // P7-1 B: a `[T; N]` struct field mirrors to `[i128; N]` (`[bool; N]`)
+        return Ok(format!("[{}; {}]", try_cty_g(e)?, n));
+    }
     if let Some(base) = g.view_base() {
         return Ok(rty_g(base, true));
     }
@@ -270,6 +274,10 @@ pub fn cty(t: &str) -> String {
 
 /// Contract conversion of a structured type (G3): recursive, the payload first.
 pub fn try_conv_g(g: &GType, x: &str) -> Result<String, String> {
+    if let Some((e, _)) = g.fixed_parts() {
+        let inner = try_conv_g(e, "pruv_e")?;
+        return Ok(if inner == "pruv_e" { x.to_string() } else { format!("{}.map(|pruv_e| {})", x, inner) });
+    }
     if g.view_base().is_some() {
         return Ok(x.to_string());
     }

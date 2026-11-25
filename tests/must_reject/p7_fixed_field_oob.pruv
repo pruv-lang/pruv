@@ -1,0 +1,6 @@
+struct S { k: i64, a: [i64; 2] }
+fn f(s: S, i: i64) -> i64
+  requires 0 <= i && i <= 2
+{
+  return s.a[i];
+}

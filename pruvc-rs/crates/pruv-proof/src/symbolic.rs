@@ -2116,6 +2116,16 @@ impl<'a> FnVerifier<'a> {
 
     /// The Arr branch of verify.py `_wf_of` for a buffer field: `0 <= len <= 2^40` and, for narrow integers, the element domain.
     fn wf_buf(&self, ty: &Ty, n: &Ast, a: &Ast) -> Ast {
+        if let Ty::Inst(g) = ty {
+            if let Some((e, len)) = g.fixed_parts() {
+                // P7-1 B: a stored `[T; N]` field has the length N and its element range
+                let ln = n.eq(&int_const(&self.z, len as i128));
+                return match intwidth::of(&e.name) {
+                    Some(w) => self.z.and(&[ln, self.narrow_elem_domain(a, n, w)]),
+                    None => ln,
+                };
+            }
+        }
         let ln = self.z.and(&[n.ge_i(0), n.le_i(MAX_LEN)]);
         if let Some(width) = Model::buf_elem(ty).narrow_width() {
             self.z.and(&[ln, self.narrow_elem_domain(a, n, width)])
@@ -2150,6 +2160,12 @@ impl<'a> FnVerifier<'a> {
             let (a, n) = self.model.buf_parts(fty, &term)?;
             let arr = if let Some(Coll::Vec(elem)) = fty.coll() {
                 coll_arr(a, n, name, &elem)
+            } else if let Some(g) = match fty { Ty::Inst(g) if g.is_fixed() => Some(g.clone()), _ => None } {
+                // P7-1 B: a `[T; N]` field read back keeps its type and the constant length N
+                let len = g.fixed_parts().map_or(0, |(_, k)| k);
+                let mut arr = Arr::new(a, int_const(&self.z, len as i128), name.to_string(), Model::buf_elem(fty));
+                arr.fix = Some(g);
+                arr
             } else {
                 Arr::new(a, n, name.to_string(), Model::buf_elem(fty))
             };

@@ -1,0 +1,2 @@
+// P7-1 B: a fixed-array literal is not a place, so it cannot be a for iterable
+fn f() -> i64 { let mut s: i64 = 0; for k in [1, 2] { s = s + k; } return s; }

@@ -533,8 +533,8 @@ impl Parser {
         self.expect("]")?;
         if !fixed_ok {
             return Err(PruvError::new("type", open.line, open.col, "fixed_array_position",
-                "a fixed-length array is a local, parameter or result type only for now: not a field, tuple component, type argument, nested array or `ref` (parity row P7-1 B)",
-                "keep the array in a let, a parameter or a result"));
+                "a fixed-length array is a local, parameter, result or field of a non-generic struct only for now: not a generic or enum field, tuple component, type argument, nested array or `ref` (parity row P7-1 B)",
+                "keep the array in a let, a parameter, a result or a field of a non-generic struct"));
         }
         fixed_size(open.line, open.col, &elem, n)?;
         Ok(GType::fixed(elem, n))
@@ -1380,7 +1380,16 @@ impl Parser {
         // LG16: fields, then zero or more `invariant <expr>` clauses, each optionally followed by `,`
         let mut fields = Vec::new();
         while !self.at("}", 0) && !self.at("invariant", 0) {
-            fields.push(self.field_decl()?);
+            // P7-1 B: a non-generic struct may hold `[T; N]` inline (a by-value field)
+            if tparams.is_empty() && self.at(":", 1) {
+                let fd = self.ident()?;
+                self.expect(":")?;
+                self.fixed_ok = true;
+                let ty = self.type_()?;
+                fields.push(FieldDecl { borrowed: false, line: fd.line, col: fd.col, name: fd.val, ty });
+            } else {
+                fields.push(self.field_decl()?);
+            }
             if !self.at("}", 0) && !self.at("invariant", 0) {
                 self.expect(",")?;
             }

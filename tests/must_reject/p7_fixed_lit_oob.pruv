@@ -1,0 +1,4 @@
+// P7-1 B: a fixed-array literal index in a contract must be proven in range
+fn f(i: i64) -> i64
+  requires i >= 0 && [1, 2][i] == 1
+{ return i; }

@@ -1,1 +1,2 @@
-fn f() -> i64 { let a: [i64; 2] = [1, 2]; let mut s: i64 = 0; for k in a { s = s + k; } return s; }
+// P7-1 B: mutating the iterated fixed array inside the for body is recursive_borrow
+fn f() -> i64 { let mut a: [i64; 2] = [1, 2]; let mut s: i64 = 0; for k in a { a[0] = 5; s = s + k; } return s; }

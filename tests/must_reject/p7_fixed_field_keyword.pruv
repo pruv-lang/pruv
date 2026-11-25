@@ -1,0 +1,3 @@
+// P7-1 B audit: a non-generic struct field name is still an identifier
+struct S { match: i64 }
+fn f(s: S) -> i64 { return 0; }

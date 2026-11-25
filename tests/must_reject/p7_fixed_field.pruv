@@ -1,2 +1,2 @@
-struct S { a: [i64; 2] }
+struct S<T> { a: [i64; 2], b: T }
 fn f() -> i64 { return 0; }

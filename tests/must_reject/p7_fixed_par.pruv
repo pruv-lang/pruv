@@ -1,0 +1,11 @@
+// P7-1 B: a fixed array cannot cross a par branch boundary yet
+fn put(inout a: [i64; 2]) -> () { a[0] = 1; }
+fn f() -> i64 {
+  let mut a: [i64; 2] = [1, 2];
+  let mut b: [i64; 2] = [1, 2];
+  par {
+    put(inout a);
+    put(inout b);
+  }
+  return a[0];
+}
