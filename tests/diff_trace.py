@@ -299,7 +299,7 @@ def load_dependent_outcome(obj):
 
 def golden_text(case):
     """The text that is hashed: the raw Rust line, or its canonical dump when golden_normalize changed something."""
-    if load_dependent(case):
+    if load_dependent(case) and case.rs_obj.get("inference"):   # without --infer the trace is deterministic
         return canon(load_dependent_outcome(case.rs_obj))
     norm = golden_normalize(case.rs_obj)
     if norm == case.rs_obj:
