@@ -106,3 +106,5 @@ the B-bundle average (about 80 minutes per feature) and adjust bundle size.
 - P2-3: `Vec<u16>`, `Option<[u16]>` and other `u16` type arguments stay rejected (P11).
 - P2-4: `[u16]` in pub/extern/foreign signatures stays rejected (P12).
 - P2-5: `find` (memchr) on `[u16]` stays rejected (`type_mismatch`); add a u16 search when a workload needs it.
+- P2-6: missing `[u16]` tests: `--no-verify` runtime stores out of range (`resize` fill -1, `arr_push` 65536, struct field), and `[u16]` through `inout` calls, struct fields and `par` block boundaries (the `par` path is open but untested). Add with P3.
+- P2-7: the `[u16]` scan runs for every program, and `[i64]` store proofs build an unused diagnostic string; measure compile time in P3 and drop both if they show.
