@@ -1,0 +1,5 @@
+fn f(t: (i64, i64)) -> i64 {
+  match t {
+    (a, b) => { return a; }
+  }
+}

@@ -1,0 +1,2 @@
+struct P(i64, i64);
+fn f() -> i64 { return 0; }

@@ -1,0 +1,9 @@
+// spec: R-6s-3 reject
+// The String component has length 3, so len(k) == 4 is false.
+fn take() -> i64 ! alloc
+  ensures result == 4
+{
+  let t: (String, i64) = (string_from("abc"), 1);
+  let (k, n): (String, i64) = move t;
+  return len(k);
+}

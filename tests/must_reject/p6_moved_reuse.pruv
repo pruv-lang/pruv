@@ -1,0 +1,5 @@
+fn f() -> i64 ! alloc {
+  let t: (String, i64) = (string_from("ab"), 3);
+  let (k, n): (String, i64) = move t;
+  return len(k) + n + t.1;
+}

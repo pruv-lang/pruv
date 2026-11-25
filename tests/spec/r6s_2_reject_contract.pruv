@@ -1,0 +1,10 @@
+// spec: R-6s-2 reject
+// The binders are the components in order, so a == n and b == 0, and a < b is false.
+fn split(n: i64) -> bool
+  requires 0 <= n && n <= 100
+  ensures result
+{
+  let t: (i64, i64) = (n, 0);
+  let (a, b): (i64, i64) = t;
+  return a < b;
+}

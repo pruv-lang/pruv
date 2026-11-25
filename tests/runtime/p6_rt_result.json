@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["100", "112", "136", "163", "136"], "gen_contains": ["Result<(i64, i64), ::std::string::String>", "Option<(i64, bool)>"], "alloc_balance": true}

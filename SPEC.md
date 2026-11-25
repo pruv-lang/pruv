@@ -2560,6 +2560,65 @@ fn pair(n: i64) -> i64
   [loop expression](tests/must_reject/p5_loop_expr.pruv), [continue value](tests/must_reject/p5_continue_value.pruv),
   [missing semicolon](tests/must_reject/p5_break_semicolon.pruv).
 
+## 6s. Tuples (P6)
+```
+fn div(a: i64, b: i64) -> Result<(i64, i64), String> ! alloc
+  requires 0 <= a && 1 <= b && b <= 1000
+  ensures is_ok(result) ==> ok_val(result).0 * b + ok_val(result).1 == a
+{
+  return Ok::<(i64, i64), String>((a / b, a % b));
+}
+```
+A tuple type `(T1, .., Tn)` has 2 to 8 components (`parse/tuple_arity`); `()` stays the unit type and is not a
+component (`parse/tuple_component`). Components are scalars, structs, enums, tuples and owned values (`String`,
+`Vec<T>`, arrays). A tuple is a value type with fields `0`, `1`, .. and follows the struct rules for moves, drops and
+borrows.
+
+- R-6s-1 **Literals and projection.** `(a, b)` builds a tuple where its type is known: a typed `let`, a call argument,
+  a `return`, a field or a turbofish constructor payload such as `Ok::<(A, B), E>((a, b))`; elsewhere it is
+  `type/tuple_needs_type`. `t.0`, `t.1`, .. read a component (`t.1.0` for nested tuples); an index past the last
+  component is `type/unknown_field` and a non-decimal index such as `t.01` is `parse/tuple_index`. `t.i = e;`
+  assigns a component of a `let mut` tuple. The verifier models a tuple as a struct with one field per component, so
+  contracts state facts about components (`result.0 == p.1`). Code: Rust emits native tuples, `(A, B)` types,
+  `(a, b)` literals and `t.0` projections; LLVM lays a scalar tuple out like a struct. Tests:
+  [accept](tests/spec/r6s_1_accept.pruv), [reject](tests/spec/r6s_1_reject.pruv),
+  [false contract](tests/spec/r6s_1_reject_contract.pruv), [runtime](tests/runtime/p6_rt_scalar.pruv),
+  [arity](tests/must_reject/p6_arity.pruv), [unit component](tests/must_reject/p6_component.pruv),
+  [index](tests/must_reject/p6_index.pruv), [range](tests/must_reject/p6_field_range.pruv),
+  [untyped literal](tests/must_reject/p6_literal_untyped.pruv).
+- R-6s-2 **Destructuring.** `let (a, mut b, _): (A, B, C) = e;` binds each component; patterns nest
+  (`let (x, (mut y, _)): (i64, (i64, i64)) = t;`) and `_` skips a component. The type annotation is required
+  (`parse/tuple_needs_type`) and the pattern has one binder or `_` per component (`parse/tuple_pattern_type`). The
+  verifier sees one `let` per component of a fresh temporary, so each binder equals its component. Code: Rust folds
+  the lowered lets back into one `let PAT: T = e;`. Tests: [accept](tests/spec/r6s_2_accept.pruv),
+  [reject](tests/spec/r6s_2_reject.pruv), [false contract](tests/spec/r6s_2_reject_contract.pruv),
+  [pattern arity](tests/must_reject/p6_pattern_arity.pruv), [needs type](tests/must_reject/p6_needs_type.pruv).
+- R-6s-3 **Owned components.** Destructuring `let (k, s): (String, S) = move t;` moves every owned component out of
+  `t` once; `t` is consumed. `let k: String = move t.0;` moves one component out of a `let mut` tuple under the field
+  move rules and consumes the tuple, so a later read of `t` or of another component is `type/foreign_move`
+  (rebuild the tuple, or destructure it to keep the other components). Each owned component is dropped once.
+  An owned tuple is an Option/Result payload only where an owned struct is (`type/type_argument` otherwise). A
+  tuple whose components LLVM stores like struct fields (arrays, `Vec<i64>`, `Vec<bool>`) runs on LLVM; one with a
+  `String` or another owned collection needs the Rust backend, and LLVM reports `codegen/tuple_llvm_owned` (P12). Tests:
+  [accept](tests/spec/r6s_3_accept.pruv), [reject](tests/spec/r6s_3_reject.pruv),
+  [false contract](tests/spec/r6s_3_reject_contract.pruv), [runtime](tests/runtime/p6_rt_owned.pruv),
+  [moved tuple](tests/must_reject/p6_moved_reuse.pruv), [partial move](tests/must_reject/p6_partial_move.pruv),
+  [LLVM](tests/must_reject/p6_llvm_owned.pruv).
+- R-6s-4 **Tuples in collections.** `Vec<(A, B)>` holds tuples, also with owned components: `vec_push` moves a tuple
+  in, `vec_get::<(A, B)>(v, i).0` borrows a component. `for x in v` over elements with owned components stays
+  `type/for_iterable` (bundles P15/P16); index the Vec instead. Tests: [accept](tests/spec/r6s_4_accept.pruv),
+  [reject](tests/spec/r6s_4_reject.pruv), [runtime](tests/runtime/p6_rt_owned.pruv),
+  [for](tests/must_reject/p6_for_owned.pruv).
+- R-6s-5 **Payloads and limits.** Tuples are `Result`/`Option` payloads and function parameters and results;
+  contracts project through `ok_val(result).0` and `some_val(result).1`. Not yet supported: tuple patterns in `match`
+  arms, including `Some((a, b))` (`parse/tuple_match_pattern`, bundle P8); tuple structs `struct P(A, B);`
+  (`parse/tuple_struct`); tuple types inside a generic declaration (`parse/tuple_generic`); tuples in a program with
+  `pub` or `mod` items (`parse/tuple_module`, P12). Tests: [accept](tests/spec/r6s_5_accept.pruv),
+  [reject](tests/spec/r6s_5_reject.pruv), [false contract](tests/spec/r6s_5_reject_contract.pruv),
+  [runtime](tests/runtime/p6_rt_result.pruv), [match](tests/must_reject/p6_match_pattern.pruv),
+  [Some pattern](tests/must_reject/p6_some_pattern.pruv), [tuple struct](tests/must_reject/p6_tuple_struct.pruv),
+  [generic](tests/must_reject/p6_generic.pruv), [module](tests/must_reject/p6_module.pruv).
+
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
 2. Every `+ - * unary-` in code: result within i64 range.
@@ -3019,6 +3078,15 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/string_unterminated` | parse | a string literal without its closing quote |
 | `parse/syntax` | parse | any other syntax error |
 | `parse/unknown_attribute` | parse | an attribute other than `#[cold]`, `#[inline]` or `#[inline(always)]` |
+| `parse/tuple_arity` | parse | a tuple type with fewer than 2 or more than 8 components (R-6s-1) |
+| `parse/tuple_component` | parse | `()` as a tuple component (R-6s-1) |
+| `parse/tuple_generic` | parse | a tuple type inside a generic declaration (R-6s-5) |
+| `parse/tuple_index` | parse | a tuple projection index that is not a plain decimal number, such as `t.01` (R-6s-1) |
+| `parse/tuple_match_pattern` | parse | a tuple pattern in a `match` arm, including `Some((a, b))` (R-6s-5, bundle P8) |
+| `parse/tuple_module` | parse | a tuple type in a program with `pub` or `mod` items (R-6s-5) |
+| `parse/tuple_needs_type` | parse | a destructuring `let` without its tuple type (R-6s-2) |
+| `parse/tuple_pattern_type` | parse | a destructuring pattern whose component count does not match its tuple type (R-6s-2) |
+| `parse/tuple_struct` | parse | a tuple struct declaration `struct P(A, B);` (R-6s-5) |
 | `parse/unsupported_type` | parse | a type the parser knows but this compiler does not implement yet |
 | `parse/visibility_syntax` | parse | a misplaced or malformed `pub` |
 | `pkg/dependency_cycle` | pkg | the package dependencies form a cycle |
@@ -3142,6 +3210,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/unknown_variant` | type | a variant the enum does not have |
 | `type/unused_value` | type | a non-unit value is dropped |
 | `type/useless_expr` | type | an expression statement that is not a call |
+| `type/tuple_needs_type` | type | a tuple literal where no tuple type is expected; bind it with a typed `let` (R-6s-1) |
 | `type/variant_name` | type | a variant name does not start with an upper-case letter |
 | `type/view_context` | type | `subview(...)` anywhere but a direct non-`inout` array argument of a Pruv call (R-6g-6) |
 | `effect/cost_callee` | effect | a cost function calls a function without `cost` |
@@ -3177,6 +3246,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `verify/variant_domain` | verify | a `variant_field` lookup not guarded by its variant |
 | `verify/verify_unknown` | verify | the solver gave up on one obligation (see below) |
 | `codegen/foreign_target` | codegen | a program with foreign or file operations sent to native emission without the Rust host build |
+| `codegen/tuple_llvm_owned` | codegen | a tuple with a `String` or owned-collection component LLVM cannot store as a struct field, sent to the LLVM backend (R-6s-3, P12) |
 | `codegen/llvm_emit` | codegen | LLVM could not emit the object file (Rust compiler) |
 | `codegen/llvm_target` | codegen | LLVM has no target machine for the target (Rust compiler) |
 | `codegen/parallel_target` | codegen | native `--emit obj/exe` of a program with `par` |

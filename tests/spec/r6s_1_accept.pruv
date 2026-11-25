@@ -1,0 +1,25 @@
+// spec: R-6s-1 accept
+// A tuple is a value: literal, projection t.i, assignment into a field of a mut tuple, nested components.
+struct S { a: i64, b: i64 }
+
+fn swap(p: (i64, i64)) -> (i64, i64)
+  ensures result.0 == p.1 && result.1 == p.0
+{
+  return (p.1, p.0);
+}
+
+fn bump(n: i64) -> (i64, (bool, S))
+  requires 0 <= n && n <= 100
+  ensures result.0 == n + 1 && result.1.1.a == n && (result.1.0 == (n > 5))
+{
+  let mut t: (i64, (bool, S)) = (n, (n > 5, S { a: n, b: 0 }));
+  t.0 = t.0 + 1;
+  return t;
+}
+
+fn eight(t: (i64, i64, i64, i64, i64, i64, i64, bool)) -> i64
+  requires 0 <= t.0 && t.0 <= 10 && 0 <= t.6 && t.6 <= 10
+  ensures result == t.0 + t.6
+{
+  return t.0 + t.6;
+}

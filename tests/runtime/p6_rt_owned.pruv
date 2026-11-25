@@ -1,0 +1,108 @@
+struct S { a: i64, b: i64 }
+
+fn mk(n: i64) -> (String, S) ! alloc
+  requires 1 <= n && n <= 50
+  ensures result.1.a == n && len(result.0) == 3
+{
+  return (string_from("abc"), S { a: n, b: 2 });
+}
+
+fn take(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50
+{
+  let t: (String, S) = mk(n);
+  let (k, s): (String, S) = move t;
+  return len(k) * 100 + s.a;
+}
+
+fn proj(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50
+{
+  let mut t: (String, S) = mk(n);
+  let k: String = move t.0;
+  return len(k) + 10 * n;
+}
+
+fn vecs(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 20
+{
+  let mut v: Vec<(String, S)> = vec_new::<(String, S)>();
+  let t: (String, S) = mk(n);
+  v = vec_push::<(String, S)>(move v, move t);
+  v = vec_push::<(String, S)>(move v, mk(n + 1));
+  if len(v) != 2 { return 0; }
+  let r: i64 = len(vec_get::<(String, S)>(v, 1).0);
+  let a: i64 = vec_get::<(String, S)>(v, 0).1.a;
+  if r > 1000 || a > 1000 || a < 0 { return 0; }
+  return r * 10 + a;
+}
+
+fn total(v: Vec<(String, S)>) -> i64
+  requires len(v) <= 10
+{
+  let mut s: i64 = 0;
+  for i in 0..len(v) invariant 0 <= s && s <= i * 100 {
+    let a: i64 = vec_get::<(String, S)>(v, i).1.a;
+    if 0 <= a && a <= 100 { s = s + a; }
+  }
+  return s;
+}
+
+enum E { A(x: i64), B(y: i64) }
+struct N { s: String, k: i64 }
+
+fn mk2(n: i64) -> (i64, (String, S)) ! alloc
+  requires 1 <= n && n <= 50
+  ensures result.0 == n && result.1.1.a == n && len(result.1.0) == 3
+{
+  return (n, mk(n));
+}
+
+fn nested(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50
+{
+  let mut t: (i64, (String, S)) = mk2(n);
+  let u: (String, S) = move t.1;
+  let mut w: (String, E) = (string_from("xy"), E::A(n));
+  let p: (String, E) = move w;
+  let (q, e): (String, E) = move p;
+  let mut z: i64 = 0;
+  match e { E::A(x) => { z = x; } E::B(y) => { z = y; } }
+  if z > 100 || z < 0 { return 0; }
+  return len(u.0) * 100 + u.1.a + len(q) * 10 + z;
+}
+
+fn deep(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 10
+{
+  let t: ((String, S), N) = ((string_from("ab"), S { a: n, b: 1 }), N { s: string_from("c"), k: n });
+  let ((s, x), m): ((String, S), N) = t;
+  return len(s) + x.a + m.k + len(m.s);
+}
+
+fn vsum(p: (Vec<i64>, String)) -> i64 {
+  return len(p.0) + len(p.1);
+}
+
+fn vcomp(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 10
+{
+  let mut v: Vec<i64> = vec_new::<i64>();
+  v = vec_push::<i64>(move v, n);
+  v = vec_push::<i64>(move v, n);
+  let p: (Vec<i64>, String) = (move v, string_from("abcd"));
+  return vsum(p);
+}
+
+fn run() -> () ! io, alloc {
+  print(take(3));
+  print(proj(4));
+  print(vecs(2));
+  let mut w: Vec<(String, S)> = vec_new::<(String, S)>();
+  w = vec_push::<(String, S)>(move w, mk(5));
+  w = vec_push::<(String, S)>(move w, mk(7));
+  print(total(w));
+  print(nested(6));
+  print(deep(4));
+  print(vcomp(3));
+}

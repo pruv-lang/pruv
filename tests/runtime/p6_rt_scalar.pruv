@@ -1,0 +1,27 @@
+struct S { a: i64, b: i64 }
+
+fn swap(p: (i64, i64)) -> (i64, i64)
+  ensures result.0 == p.1 && result.1 == p.0
+{
+  return (p.1, p.0);
+}
+
+fn mk(x: i64) -> (i64, bool)
+  requires 0 <= x && x <= 100
+  ensures result.0 == x + 1
+{
+  let t: (i64, bool) = (x + 1, x > 5);
+  return t;
+}
+
+fn run(k: i64) -> i64
+  requires 0 <= k && k <= 10
+{
+  let (a, b): (i64, i64) = swap((k, 2));
+  let mut t: (i64, (i64, i64)) = (a, (b, 3));
+  t.1.0 = t.1.0 + 7;
+  let (x, (mut y, _)): (i64, (i64, i64)) = t;
+  y = y + 1;
+  let s: (S, i64) = (S { a: 1, b: 2 }, 4);
+  return x + y + t.1.1 + s.0.b + s.1;
+}

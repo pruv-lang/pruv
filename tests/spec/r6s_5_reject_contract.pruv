@@ -1,0 +1,8 @@
+// spec: R-6s-5 reject
+// The Ok payload is (a / b, a % b), so its second component can be nonzero.
+fn div(a: i64, b: i64) -> Result<(i64, i64), String> ! alloc
+  requires 0 <= a && a <= 1000 && 1 <= b && b <= 1000
+  ensures is_ok(result) ==> ok_val(result).1 == 0
+{
+  return Ok::<(i64, i64), String>((a / b, a % b));
+}

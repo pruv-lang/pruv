@@ -1572,6 +1572,11 @@ impl Checker {
         if ty.owner.is_some() {
             return ty.clone();
         }
+        if let Some(cs) = crate::gtype::tuple_components(&ty.name) {
+            // P6: a tuple name spells its component keys; normalize them so `(Vec<i64>, i64)` names the catalog vec
+            let cs: Vec<GType> = cs.iter().map(|k| self.norm_type(&GType::from_key(k))).collect();
+            return GType::new(&crate::gtype::tuple_name(&cs), Vec::new());
+        }
         let args: Vec<GType> = ty.args.iter().map(|a| self.norm_type(a)).collect();
         let mut name = ty.name.clone();
         if !self.decls.contains_key(&name) {
@@ -1617,7 +1622,8 @@ impl Checker {
     /// `norm_type` on an AST type key that may need normalization.
     fn norm_key(&self, key: &str) -> String {
         if !(key.contains("Vec") || key.contains("HashMap") || key.contains("String") || key.contains("File") || key.contains("Process")
-            || key.contains("Socket") || key.contains("Listener") || key.contains("Loop") || key.contains("result<"))
+            || key.contains("Socket") || key.contains("Listener") || key.contains("Loop") || key.contains("result<")
+            || key.contains(crate::gtype::TUPLE_PREFIX))
         {
             return key.to_string();
         }
@@ -1628,6 +1634,9 @@ impl Checker {
         for d in prog.types.iter_mut() {
             match d {
                 TypeDecl::Struct(s) => {
+                    if crate::gtype::is_tuple_name(&s.name) {
+                        s.name = self.norm_key(&s.name);
+                    }
                     for fd in s.fields.iter_mut() {
                         fd.ty = self.norm_key(&fd.ty);
                     }
@@ -1910,7 +1919,8 @@ impl Checker {
     fn check_field_names(&self, fields: &[FieldDecl], wher: &str) -> Res<()> {
         let mut seen: HashSet<&str> = HashSet::new();
         for f in fields {
-            if !field_name_ok(&f.name) {
+            // P6: tuple fields are the indexes 0, 1, ..
+            if !field_name_ok(&f.name) && !(f.name.bytes().all(|b| b.is_ascii_digit()) && !f.name.is_empty()) {
                 return Err(terr(
                     f.line,
                     f.col,
@@ -3760,7 +3770,8 @@ impl Checker {
             ty = self.field_type(m.line, m.col, &ty, field)?;
         }
         let typed = matches!(ty.to_key().as_str(), "string" | "vec<i64>" | "vec<bool>")
-            || (ty.args.is_empty() && crate::typeinfo::is_array_name(&ty.name));
+            || (ty.args.is_empty() && crate::typeinfo::is_array_name(&ty.name))
+            || crate::gtype::is_tuple_name(&ty.name); // P6: a tuple component moves like a buffer field
         Ok(typed.then_some((m.line, m.col)))
     }
 
@@ -3782,7 +3793,8 @@ impl Checker {
             return Err(terr(m.line, m.col, "array_alias", "a borrowed view cannot be moved", ""));
         }
         let typed = matches!(ty.to_key().as_str(), "string" | "vec<i64>" | "vec<bool>")
-            || (ty.args.is_empty() && crate::typeinfo::is_array_name(&ty.name));
+            || (ty.args.is_empty() && crate::typeinfo::is_array_name(&ty.name))
+            || crate::gtype::is_tuple_name(&ty.name); // P6: a tuple component moves like a buffer field
         let restored = matches!(next, Some(Stmt::FieldAssign(r)) if r.name == m.name && r.fields == m.fields);
         if typed
             && !restored
@@ -5417,6 +5429,7 @@ impl Checker {
             set_ty(e, &t);
             return Ok(t);
         }
+        resolve_tuple_lit(e, ty);
         let t = self.expr(e, scope, contract)?;
         self.check_expected_type(e, ty, op, t)
     }
@@ -6032,6 +6045,11 @@ impl Checker {
     }
 
     fn struct_lit(&mut self, e: &mut StructLit, scope: &Scope, c: bool) -> Res<GType> {
+        if e.name == crate::gtype::TUPLE_PENDING {
+            return Err(terr(e.line, e.col, "tuple_needs_type",
+                "the type of this tuple literal is not known here",
+                "bind it first with a typed let: `let t: (A, B) = (a, b);`"));
+        }
         let name = e.name.clone();
         let targs = e.targs.clone();
         if !self.decls.contains_key(&name) {
@@ -7350,6 +7368,9 @@ impl Checker {
         }
         let m = m.unwrap_or_default();
         arity(f.params.len())?;
+        for (arg, p) in e.args.iter_mut().zip(f.params.iter()) {
+            resolve_tuple_lit(arg, &substitute(p, &m)); // P6
+        }
         let direct = self.read_context == call_site;
         let string_element = cat.is_some() && n == "vec_get"
             && targs.as_ref().unwrap()[0].to_key() == "string";
@@ -8063,6 +8084,22 @@ pub fn opaque_inline(prog: &mut Program) {
             ex(e, &defs);
         }
         st(&mut f.body, &defs);
+    }
+}
+
+/// P6: a tuple literal takes its tuple type from the expected type (same arity); nested literals too.
+fn resolve_tuple_lit(e: &mut Expr, ty: &GType) {
+    let Expr::StructLit(lit) = e else { return };
+    if lit.name != crate::gtype::TUPLE_PENDING || !ty.args.is_empty() {
+        return;
+    }
+    let Some(comps) = crate::gtype::tuple_components(&ty.name) else { return };
+    if comps.len() != lit.fields.len() {
+        return;
+    }
+    lit.name = ty.name.clone();
+    for (f, k) in lit.fields.iter_mut().zip(comps.iter()) {
+        resolve_tuple_lit(&mut f.value, &GType::from_key(k));
     }
 }
 

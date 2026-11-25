@@ -1827,7 +1827,7 @@ impl<'a> Gen<'a> {
     /// rty, except that an extended parameter is a shared reference `&Name` (read view)
     fn rt(&self, t: &str, param: bool) -> String {
         if param && self.is_ext(Some(t)) {
-            return format!("&{}", t);
+            return format!("&{}", rty(t, false)); // P6: a tuple name spells as the native tuple
         }
         rty(t, param)
     }
@@ -2026,6 +2026,20 @@ impl<'a> Gen<'a> {
         for d in self.table.ordered() {
             if self.ext.contains(d.name()) {
                 continue; // G9: extended values have no i128 mirror; contracts read them through references (cx)
+            }
+            if let TypeDecl::Struct(s) = d {
+                if crate::gtype::is_tuple_name(&s.name) {
+                    // P6: the mirror of a tuple is the tuple of the component mirrors
+                    let mut inits: Vec<String> = Vec::new();
+                    for f in &s.fields {
+                        inits.push(try_conv(&f.ty, &format!("v.{}", f.name))?);
+                    }
+                    out.push(attrs.to_string());
+                    out.push("#[inline]".to_string());
+                    out.push(format!("fn pruv_to_c__{}(v: {}) -> {} {{ ({}) }}",
+                        s.name, rty(&s.name, false), try_cty(&s.name)?, inits.join(", ")));
+                    continue;
+                }
             }
             let cn = format!("pruv_contract__{}", d.name());
             out.push(attrs.to_string());
@@ -2789,6 +2803,9 @@ impl<'a> Gen<'a> {
                     let fv = if f.borrowed { self.carr(v)? } else { self.g9_field_real(v, &f.ty, &format!("{}.{}", x.name, f.name))? };
                     parts.push(format!("{}: {}", f.name, fv));
                 }
+                if let Some(t) = tuple_lit(&x.name, &fs, &parts) {
+                    return Ok(t);
+                }
                 return Ok(format!("{} {{ {} }}", x.name, parts.join(", ")));
             }
             Expr::EnumCtor(x) => {
@@ -3068,6 +3085,9 @@ impl<'a> Gen<'a> {
                 for f in &fs {
                     let v = init_value(&vals, &f.name)?;
                     parts.push(format!("{}: {}", f.name, self.c(v)?));
+                }
+                if let Some(t) = tuple_lit(&x.name, &fs, &parts) {
+                    return Ok(t);
                 }
                 let body = parts.join(", ");
                 if !fs.is_empty() {
@@ -3635,7 +3655,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
         let n = d.name();
         let mut lines: Vec<String> = vec![
             G9_HELPER_ALLOW.to_string(),
-            format!("fn pruv_csize__{}(v: &{}, pruv_budget: &mut i64) -> i128 {{", n, n),
+            format!("fn pruv_csize__{}(v: &{}, pruv_budget: &mut i64) -> i128 {{", n, rty(n, false)),
             "    pruv_g9_tick(pruv_budget);".to_string(),
         ];
         let unit = |fields: &[FieldDecl]| -> (Vec<String>, Vec<String>) {
@@ -3673,7 +3693,11 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 if !s.fields.is_empty() {
                     let parts: Vec<String> =
                         s.fields.iter().zip(binds.iter()).map(|(f, b)| format!("{}: {}", f.name, b)).collect();
-                    lines.push(format!("    let {} {{ {} }} = v;", n, parts.join(", ")));
+                    if crate::gtype::is_tuple_name(n) {
+                        lines.push(format!("    let ({}) = v;", binds.join(", "))); // P6: a native tuple
+                    } else {
+                        lines.push(format!("    let {} {{ {} }} = v;", n, parts.join(", ")));
+                    }
                 }
                 if ws.len() >= 2 {
                     for x in stmts(&ws) {
@@ -3706,7 +3730,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
         let n = d.name();
         let mut lines: Vec<String> = vec![
             G9_HELPER_ALLOW.to_string(),
-            format!("fn pruv_ceq__{}(a: &{}, b: &{}, pruv_budget: &mut i64) -> bool {{", n, n, n),
+            format!("fn pruv_ceq__{}(a: &{}, b: &{}, pruv_budget: &mut i64) -> bool {{", n, rty(n, false), rty(n, false)),
             "    pruv_g9_tick(pruv_budget);".to_string(),
         ];
         let conj = |fields: &[FieldDecl]| -> String {
@@ -3726,7 +3750,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     for (side, var) in [("a", "pruv_a"), ("b", "pruv_b")] {
                         let parts: Vec<String> =
                             s.fields.iter().enumerate().map(|(i, f)| format!("{}: {}{}", f.name, var, i)).collect();
-                        lines.push(format!("    let {} {{ {} }} = {};", n, parts.join(", "), side));
+                        if crate::gtype::is_tuple_name(n) {
+                            let vs: Vec<String> = (0..s.fields.len()).map(|i| format!("{}{}", var, i)).collect();
+                            lines.push(format!("    let ({}) = {};", vs.join(", "), side)); // P6: a native tuple
+                        } else {
+                            lines.push(format!("    let {} {{ {} }} = {};", n, parts.join(", "), side));
+                        }
                     }
                 }
                 lines.push(format!("    {}", conj(&s.fields)));
@@ -3958,14 +3987,30 @@ pruv_hi <= (pruv_b.len() as i128) && \
             later[i] = n;
         }
         self.frames.push((decls.iter().cloned().collect(), HashSet::new(), lp, false));
+        // P6: a destructuring group (the temp let and its field lets), folded into one `let (a, b) = e;`
+        let mut group: Option<(usize, usize, usize)> = None; // (first and last statement index, first output line)
         for (i, st) in stmts.iter().enumerate() {
             let top = self.frames.len() - 1;
             self.frames[top].1 = std::mem::take(&mut later[i + 1]);
             self.frames[top].3 = matches!(stmts.get(i + 1), Some(Stmt::Return(_)));
+            if group.is_none() {
+                if let Some(n) = destructure_group(&stmts[i..]) {
+                    group = Some((i, i + n - 1, self.out.len()));
+                }
+            }
             let r = self.stmt(st, ind);
             if r.is_err() {
                 self.frames.pop();
                 return r;
+            }
+            if let Some((lo, last, from)) = group {
+                if i == last {
+                    group = None;
+                    if let Some(line) = fold_destructure(&stmts[lo..=i], &self.out[from..]) {
+                        self.out.truncate(from);
+                        self.emit(ind, &line);
+                    }
+                }
             }
             if self.exits.contains(&(st as *const Stmt as usize)) {
                 self.emit(ind, "break;");
@@ -5266,6 +5311,11 @@ pruv_hi <= (pruv_b.len() as i128) && \
             Expr::Move(x) if x.fields.is_empty() => Ok(x.name.clone()),
             // LB9 (R-6g8-4): a consuming match binder owns its payload
             Expr::Move(x) if self.owned_binders.contains(&x.name) => Ok(format!("{}.{}", x.name, x.fields.join("."))),
+            // P6: a destructuring temp, or a tuple-typed component of an owned local, moves out by a partial move
+            // (`mem::take` would need `Default`, which a tuple holding a struct or an enum lacks)
+            Expr::Move(x) if x.name.starts_with("pruv_tup_d")
+                || (x.ty.as_deref().is_some_and(crate::gtype::is_tuple_name) && !self.inouts.contains(&x.name)) =>
+                Ok(format!("{}.{}", x.name, x.fields.join("."))),
             Expr::Move(x) => Ok(format!("::std::mem::take(&mut {}.{})", x.name, x.fields.join("."))),
             // G5 A0: never reaches the generator (the driver's A0 guard stops the program earlier)
             Expr::InoutArg(_) => Err("G5 inout argument reached the Rust generator".to_string()),
@@ -5389,6 +5439,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     } else {
                         parts.push(format!("{}: {}", f.name, self.e(v)?));
                     }
+                }
+                if let Some(t) = tuple_lit(&x.name, &fs, &parts) {
+                    return Ok(t);
                 }
                 Ok(format!("({} {{ {} }})", x.name, parts.join(", ")))
             }
@@ -6812,6 +6865,95 @@ fn g9_charge(n: &str) -> String {
         "{{ let pruv_n: usize = {}; pruv_budget = pruv_budget.saturating_sub(i64::try_from(pruv_n).unwrap_or(i64::MAX)); if pruv_budget < 0 {{ pruv_ud(\"contract iteration budget exceeded\") }} }}",
         n
     )
+}
+
+
+
+/// P6: the number of statements of the destructuring group that starts `stmts` (the parser's `pruv_tup_d<N>` temp
+/// let followed by the field lets that read it, nested temps included), or None.
+fn destructure_group(stmts: &[Stmt]) -> Option<usize> {
+    let Some(Stmt::Let(t)) = stmts.first() else { return None };
+    if !t.name.starts_with("pruv_tup_d") || !crate::gtype::is_tuple_name(&t.ty) {
+        return None;
+    }
+    let mut temps = vec![t.name.clone()];
+    let mut n = 1;
+    while let Some(Stmt::Let(l)) = stmts.get(n) {
+        let Some((base, _)) = tuple_read(&l.value) else { break };
+        if !temps.iter().any(|t| t == base) {
+            break;
+        }
+        if l.name.starts_with("pruv_tup_d") {
+            temps.push(l.name.clone());
+        }
+        n += 1;
+    }
+    Some(n)
+}
+
+/// Folds the emitted lines of a destructuring group into `let PAT: T = e;` when every field let was emitted as the
+/// plain `let [mut ]x: T = tmp.i;`; otherwise None (the lowered lets stay, same meaning).
+fn fold_destructure(group: &[Stmt], lines: &[String]) -> Option<String> {
+    if lines.len() != group.len() {
+        return None;
+    }
+    let Stmt::Let(t) = &group[0] else { return None };
+    let first = lines[0].trim_start();
+    let head = first.strip_prefix(&format!("let {}: ", t.name))
+        .or_else(|| first.strip_prefix(&format!("let mut {}: ", t.name)))?;
+    for (st, line) in group[1..].iter().zip(&lines[1..]) {
+        let Stmt::Let(l) = st else { return None };
+        let (base, field) = tuple_read(&l.value)?;
+        let line = line.trim_start();
+        let rest = line.strip_prefix(&format!("let mut {}", l.name))
+            .or_else(|| line.strip_prefix(&format!("let {}", l.name)))?;
+        // a plain read `: T = tmp.i;`, or the component move `= tmp.i;` (a partial move of the temp)
+        let read = rest.starts_with(": ") && rest.ends_with(&format!(" = {}.{};", base, field));
+        if !read && rest != format!(" = {}.{};", base, field) {
+            return None;
+        }
+    }
+    fn pat(tmp: &str, ty: &str, group: &[Stmt]) -> Option<String> {
+        let arity = crate::gtype::tuple_components(ty)?.len();
+        let mut ps = Vec::new();
+        for i in 0..arity {
+            let l = group.iter().find_map(|st| match st {
+                Stmt::Let(l) => match tuple_read(&l.value) {
+                    Some((b, f)) if b == tmp && f == i.to_string() => Some(l),
+                    _ => None,
+                },
+                _ => None,
+            });
+            ps.push(match l {
+                None => "_".to_string(),
+                Some(l) if l.name.starts_with("pruv_tup_d") => pat(&l.name, &l.ty, group)?,
+                Some(l) => format!("{}{}", if l.mutable { "mut " } else { "" }, l.name),
+            });
+        }
+        Some(format!("({})", ps.join(", ")))
+    }
+    Some(format!("let {}: {}", pat(&t.name, &t.ty, group)?, head))
+}
+
+/// The (temporary, component) a lowered destructuring let reads: `tmp.i` or `move tmp.i`.
+fn tuple_read(e: &Expr) -> Option<(&str, &str)> {
+    match e {
+        Expr::FieldAccess(fa) => match &*fa.base {
+            Expr::Var(v) => Some((v.name.as_str(), fa.field.as_str())),
+            _ => None,
+        },
+        Expr::Move(m) if m.fields.len() == 1 => Some((m.name.as_str(), m.fields[0].as_str())),
+        _ => None,
+    }
+}
+
+/// P6: a tuple literal is the native `(v0, v1, ..)`; `parts` are the `i: value` field inits in declaration order.
+fn tuple_lit(name: &str, fs: &[FieldDecl], parts: &[String]) -> Option<String> {
+    if !crate::gtype::is_tuple_name(name) {
+        return None;
+    }
+    let vs: Vec<&str> = fs.iter().zip(parts).map(|(f, p)| &p[f.name.len() + 2..]).collect();
+    Some(format!("({})", vs.join(", ")))
 }
 
 #[cfg(test)]
