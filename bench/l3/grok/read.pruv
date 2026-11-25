@@ -515,8 +515,8 @@ fn event_step(win: [u8], kd: i64, lo: i64, hi: i64, inout e: crate::line::Entry,
   if (kd != 0 && kd != 1) || lo < 0 || hi < lo || hi > len(win) { return 1; }
   if kd == 1 {
     // a dropped over-long line: a user line there detaches the draft and marks the next one clipped
-    let head: [u8] = crate::util::span_bytes(win, lo, hi - lo);
-    if crate::framing::dropped_user(head) { crate::turns::skip_user(inout st); }  // MUT:M10 => if false { crate::turns::skip_user(inout st); }
+    // (hand `dropped_user(&win[p..p + DROP_HEAD])`: the head is borrowed from the window, not copied)
+    if crate::framing::dropped_user(subview(win, lo, hi)) { crate::turns::skip_user(inout st); }  // MUT:M10 => if false { crate::turns::skip_user(inout st); }
     return 0;
   }
   let r: i64 = line_step(subview(win, lo, hi), inout e, inout st, inout sl, inout bk);

@@ -68,7 +68,7 @@ MUTANTS = [
          variants=[[('marker',)]]),
     dict(id='M11', name='tool-count-one', file='entry.pruv',
          bug='an assistant tool_calls array adds one tool instead of its length',
-         variants=[[('marker',)], [('inject', 'add_tools', 'let n: i64 = 1;')]]),
+         variants=[[('marker',)]]),
     dict(id='M12', name='omit-budget-flag', file='read.pruv',
          bug='omittedBefore ignores the collector trimmed flag (only the window cut sets it)',
          variants=[[('marker',)]]),

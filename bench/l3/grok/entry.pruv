@@ -3,30 +3,7 @@
 // assistant_view hold the decisions of the hand user and assistant arms on borrowed strs.
 //  1. feed requires st[0] < 100000000 (a window has at most 4194304 lines) and ensures st[0] <= 100000000, so the owner can
 //     chain calls without carrying the 1e12 bound of turns::begin.
-//  2. add_tools loops once per slot with turns::tool (collector contract: tools saturate at 1e15), as the codex importer does.
-
-// n tool items on the current draft, one turns::tool per array slot (no-op without a current draft).
-pub fn add_tools(n: i64, inout st: [i64], inout sl: [i64]) -> ()
-  requires len(st) == 4 && len(sl) == 1600 && 0 <= st[3] && st[3] < 200 && 0 <= n
-  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-  ensures len(st) == 4 && len(sl) == 1600 && st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
-  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-{
-  let mut k: i64 = 0;
-  while k < n
-    invariant 0 <= k && k <= n && len(st) == 4 && len(sl) == 1600
-    invariant st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
-    invariant 0 <= st[3] && st[3] < 200
-    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-    invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-    decreases n - k
-  {
-    crate::turns::tool(inout st, inout sl);
-    k = k + 1;
-  }
-}
+//  2. assistant_view adds the tool calls with one turns::tool(n) (hand `tool(n)`; saturates at 1e15).
 
 // isoOf(timestamp ?? created_at) of the entry object (root id 0): "" absent, 24 bytes present, 1 byte = iso_of defect.
 // A present timestamp that is not null never falls back to created_at (an invalid one is simply absent).
@@ -214,6 +191,6 @@ pub fn assistant_view(text: str, at: str, tools: i64, inout st: [i64], inout sl:
 {
   if len(text) > 100000000 { return -1; }
   crate::turns::answer2(inout st, inout sl, inout bk, text, at);
-  if tools > 0 { add_tools(tools, inout st, inout sl); }  // MUT:M11 => if tools > 0 { add_tools(1, inout st, inout sl); }
+  if tools > 0 { crate::turns::tool(inout st, inout sl, tools); }  // MUT:M11 => if tools > 0 { crate::turns::tool(inout st, inout sl, 1); }
   return 0;
 }

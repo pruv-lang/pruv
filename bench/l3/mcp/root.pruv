@@ -90,7 +90,7 @@ pub fn mcp_check(command: str, argv: str, cwd: str, timeout_ms: i64) -> [i64] ! 
   l=ev_add_timer(move l,30000); let init: i64 = ev_last(l);
   // writes before ready are bounded by the 30000 ms init timer too
   let mut im: i64 = ms; if im > 30000 { im=30000; }
-  let mut st: [i64] = alloc(5,0);
+  let mut st: crate::transport::Reader = crate::transport::reader_new();
   let mut line: [u8] = alloc(4096,0); let mut chunk: [u8] = alloc(65536,0);
   let mut tl: crate::tail::Tail = crate::tail::new(1024);
   let mut id: i64 = 1; let mut ready: bool = false; let mut page: i64 = 0; let mut objects: i64 = 0;
@@ -101,16 +101,16 @@ pub fn mcp_check(command: str, argv: str, cwd: str, timeout_ms: i64) -> [i64] ! 
     invariant 1 <= id && id <= 7 && 0 <= page && page <= 5
     invariant 0 <= objects && objects <= 500 && 0 <= count && count <= 500
     invariant 5010 <= len(p) && len(p) <= 100000000 + 200*count
-    invariant len(st) == 5 && 0 <= st[1] && st[1] <= len(line) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+    invariant 0 <= st.filled && st.filled <= len(line) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
     invariant 1 <= len(line) && len(line) <= 4194304
     invariant crate::tail::tail_ok(tl) && tl.limit == 1024
     decreases 1000000-events
   {
-    events=events+1; l=crate::transport::receive_grow(move l,slot,overall,init,ready,4194304,inout st,inout line,inout chunk,inout tl); let n: i64 = st[0];
+    events=events+1; l=crate::transport::receive_grow(move l,slot,overall,init,ready,4194304,inout st,inout line,inout chunk,inout tl); let n: i64 = st.status;
     if n < 0 && n != -6 {
       p[2]=3;
       if n == -2 { p[2]=4; } if n == -3 { p[2]=5; p[1]=1; }
-      if n == -4 { p[2]=6; p[3]=st[3]; } if n == -5 { p[2]=7; }
+      if n == -4 { p[2]=6; p[3]=st.exit; } if n == -5 { p[2]=7; }
       done=true;
     } else if n >= 0 && n <= len(line) {
       // The trimmed line is parsed from its bounds in the line buffer: one exact-size copy for the document source.
@@ -160,8 +160,8 @@ pub fn mcp_check(command: str, argv: str, cwd: str, timeout_ms: i64) -> [i64] ! 
     }
   }
   if !done { p[2]=9; }
-  st[0]=-6; l=crate::transport::poll(move l,overall,init,true,inout st,0);
-  if st[0] == -1 { p[0]=0; p[2]=3; p[8]=0; }
+  st.status=-6; l=crate::transport::poll(move l,overall,init,true,inout st,0);
+  if st.status == -1 { p[0]=0; p[2]=3; p[8]=0; }
   let err: [u8] = crate::tail::finish(move tl);
   let e: crate::util::Bounds = crate::util::last_line(err); let sn: i64 = e.hi-e.lo;
   if len(p) <= 99995904 && sn <= 20000000 { p[4]=len(p); p[5]=sn; crate::packet::append_bytes(inout p,err,e.lo,e.hi); }

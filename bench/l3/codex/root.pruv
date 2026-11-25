@@ -31,7 +31,7 @@ pub fn codex_list(binary: str, argv: str, cwd: str, folder: str, timeout_ms: i64
   let mut l: Loop = crate::rpc::start(binary, argv, cwd, timeout_ms, inout ctl);
   let slot: i64 = ctl[2];
   let overall: i64 = ctl[3];
-  let mut st: [i64] = alloc(5, 0);
+  let mut st: crate::transport::Reader = crate::transport::reader_new();
   let mut line: crate::util::ByteBuffer = crate::util::byte_buffer(4096);
   let mut chunk: [u8] = alloc(65536, 0);
   let mut tl: crate::tail::Tail = crate::tail::new(1024);
@@ -45,7 +45,7 @@ pub fn codex_list(binary: str, argv: str, cwd: str, folder: str, timeout_ms: i64
     ctl[4] = 2;
     if crate::transport::stdin_closed(l, slot) {
       l = crate::transport::expired(move l, overall, inout st);
-      if st[0] == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
+      if st.status == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
     }
     l = crate::transport::send(move l, slot, crate::rpc::req_list(2, folder), timeout_ms);
     let mut done: bool = false;
@@ -53,7 +53,7 @@ pub fn codex_list(binary: str, argv: str, cwd: str, folder: str, timeout_ms: i64
     while ctl[0] == 0 && !done && events < 1000000
       invariant 0 <= events && events <= 1000000 && len(p) >= 3
       invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
-      invariant len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+      invariant 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
       invariant len(line.data) <= 8388608
       invariant crate::tail::tail_ok(tl) && tl.limit == 1024
       decreases 1000000 - events
@@ -113,7 +113,7 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
   let mut l: Loop = crate::rpc::start(binary, argv, cwd, timeout_ms, inout ctl);
   let slot: i64 = ctl[2];
   let overall: i64 = ctl[3];
-  let mut st: [i64] = alloc(5, 0);
+  let mut st: crate::transport::Reader = crate::transport::reader_new();
   let mut line: crate::util::ByteBuffer = crate::util::byte_buffer(4096);
   let mut chunk: [u8] = alloc(65536, 0);
   let mut tl: crate::tail::Tail = crate::tail::new(1024);
@@ -139,7 +139,7 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
     ctl[4] = 2;
     if crate::transport::stdin_closed(l, slot) {
       l = crate::transport::expired(move l, overall, inout st);
-      if st[0] == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
+      if st.status == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
     }
     l = crate::transport::send(move l, slot, crate::rpc::req_read(2, thread), timeout_ms);
     let mut done: bool = false;
@@ -147,7 +147,7 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
     while ctl[0] == 0 && !done && events < 1000000
       invariant 0 <= events && events <= 1000000
       invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
-      invariant len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+      invariant 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
       invariant len(line.data) <= 8388608
       invariant crate::tail::tail_ok(tl) && tl.limit == 1024
       decreases 1000000 - events
@@ -212,7 +212,7 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
   while ctl[0] == 0 && !fin && page < 40
     invariant id == 2 + page && 0 <= page && page <= 40
     invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
-    invariant len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+    invariant 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
     invariant len(line.data) <= 8388608
     invariant crate::tail::tail_ok(tl) && tl.limit == 1024
     invariant len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024 && len(fs) == 3 && len(fb) == 32768
@@ -227,7 +227,7 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
     ctl[4] = id;
     if crate::transport::stdin_closed(l, slot) {
       l = crate::transport::expired(move l, overall, inout st);
-      if st[0] == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
+      if st.status == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
     }
     l = crate::transport::send(move l, slot, crate::rpc::req_turns(id, thread, cursor), timeout_ms);
     let mut done: bool = false;
@@ -235,7 +235,7 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
     while ctl[0] == 0 && !done && events < 1000000
       invariant 0 <= events && events <= 1000000
       invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
-      invariant len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+      invariant 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
       invariant len(line.data) <= 8388608
       invariant crate::tail::tail_ok(tl) && tl.limit == 1024
       invariant id == 2 + page && 0 <= page && page <= 40

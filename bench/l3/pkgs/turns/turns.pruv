@@ -188,10 +188,10 @@ pub fn skip_user(inout st: [i64]) -> ()
   st[2] = 1;
 }
 
-// tool: one increment of the current draft's tool count (saturating); no timestamp update; nothing without a
-// current draft.
-pub fn tool(inout st: [i64], inout sl: [i64]) -> ()
-  requires len(st) == 4 && len(sl) == 1600 && 0 <= st[3] && st[3] < 200
+// tool: n more tool calls on the current draft's tool count, saturating at 1e15 (hand `tool(&mut self, n)`:
+// `s.tools = (s.tools + n).min(TOOLS_MAX)`); no timestamp update; nothing without a current draft.
+pub fn tool(inout st: [i64], inout sl: [i64], n: i64) -> ()
+  requires len(st) == 4 && len(sl) == 1600 && 0 <= st[3] && st[3] < 200 && 0 <= n
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   ensures len(st) == 4 && len(sl) == 1600
   ensures st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
@@ -199,13 +199,13 @@ pub fn tool(inout st: [i64], inout sl: [i64]) -> ()
   ensures forall s in 0..200: sl[8 * s + 7] == old(sl)[8 * s + 7]
   ensures st[1] == 0 ==> (forall k in 0..1600: sl[k] == old(sl)[k])
   ensures st[1] == 1 ==> (forall k in 0..1600: (k != 8 * st[3] + 3) ==> sl[k] == old(sl)[k])
-  ensures (st[1] == 1 && old(sl)[8 * st[3] + 3] < 1000000000000000) ==> sl[8 * st[3] + 3] == old(sl)[8 * st[3] + 3] + 1
-  ensures (st[1] == 1 && old(sl)[8 * st[3] + 3] >= 1000000000000000) ==> sl[8 * st[3] + 3] == old(sl)[8 * st[3] + 3]
+  ensures (st[1] == 1 && n < 1000000000000000 - old(sl)[8 * st[3] + 3]) ==> sl[8 * st[3] + 3] == old(sl)[8 * st[3] + 3] + n
+  ensures (st[1] == 1 && n >= 1000000000000000 - old(sl)[8 * st[3] + 3]) ==> sl[8 * st[3] + 3] == 1000000000000000
 {
   if st[1] == 0 { return; }
   let c: i64 = st[3];
   let t: i64 = sl[8 * c + 3];
-  if t < 1000000000000000 { sl[8 * c + 3] = t + 1; }
+  if n < 1000000000000000 - t { sl[8 * c + 3] = t + n; } else { sl[8 * c + 3] = 1000000000000000; }
 }
 
 // answer: no current draft => nothing. Otherwise completedAt is updated first (even for empty text or a full
