@@ -1,0 +1,2 @@
+// P7-1 B: the first arm already covers the only length of a fixed array
+fn f() -> i64 { let a: [i64; 2] = [1, 2]; match a { [x, ..] => { return x; } [x, y] => { return y; } } }

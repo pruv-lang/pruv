@@ -1,0 +1,2 @@
+// P7-1 B: a slice pattern of another length never matches a fixed array (Rust E0527)
+fn f() -> i64 { let a: [i64; 2] = [1, 2]; match a { [x, y, z] => { return x; } [..] => { return 0; } } }

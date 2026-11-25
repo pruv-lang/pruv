@@ -1411,7 +1411,9 @@ must_reject|tests/must_reject/p7_fixed_ref_after_str.pruv	1 case: obl=0 1	--infe
 must_reject|tests/must_reject/p7_fixed_ref_after_str_fn.pruv	1 case: obl=0 1	--infer=480019b851fe
 must_reject|tests/must_reject/p7_fixed_ref_local.pruv	1 case: obl=0 1	--infer=48c42c7d1933
 must_reject|tests/must_reject/p7_fixed_result.pruv	1 case: obl=0 1	--infer=a84e527a6220
-must_reject|tests/must_reject/p7_fixed_slice_pattern.pruv	1 case: obl=0 1	--infer=42a829dd7364
+must_reject|tests/must_reject/p7_fixed_slice_arms.pruv	1 case: obl=0 1	--infer=503faf5c6339
+must_reject|tests/must_reject/p7_fixed_slice_length.pruv	1 case: obl=0 1	--infer=7e2ea679a370
+must_reject|tests/must_reject/p7_fixed_slice_pattern.pruv	1 case: obl=0 1	--infer=f0137aac2a92
 must_reject|tests/must_reject/p7_fixed_tuple.pruv	1 case: obl=0 1	--infer=bee4374d1919
 must_reject|tests/must_reject/p7_fixed_tuple_elem.pruv	1 case: obl=0 1	--infer=2084e5c6dce0
 must_reject|tests/must_reject/p7_fixed_type_arg.pruv	1 case: obl=0 1	--infer=19850360c6e5
@@ -1949,6 +1951,7 @@ runtime|tests/runtime/p7_rt_fixed_place.pruv	1 case: obl=14 1	--infer=40b7915291
 runtime|tests/runtime/p7_rt_fixed_place_if.pruv	1 case: obl=24 1	--infer=93d48111f615
 runtime|tests/runtime/p7_rt_fixed_proven.pruv	1 case: obl=17 1	--infer=917f2c1ced00
 runtime|tests/runtime/p7_rt_fixed_range.pruv	1 case: obl=18 1	--infer=59cfafce3238
+runtime|tests/runtime/p7_rt_fixed_slice_pattern.pruv	1 case: obl=62 1	--infer=64c54be127a3
 runtime|tests/runtime/p8_rt_if_let.pruv	1 case: obl=51 1	--infer=ef05923a9246
 runtime|tests/runtime/p8_rt_let_else.pruv	1 case: obl=80 1	--infer=1b711500226c
 runtime|tests/runtime/p8_rt_slice.pruv	1 case: obl=96 1	--infer=be5ee26f4e88

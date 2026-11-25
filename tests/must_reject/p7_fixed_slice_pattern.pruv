@@ -1,1 +1,2 @@
-fn f() -> i64 { let a: [i64; 2] = [1, 2]; match a { [x, y] => { return x; } } }
+// P7-1 B: a named rest would view the fixed array as a slice beyond a call-duration lend
+fn f() -> i64 { let a: [i64; 2] = [1, 2]; match a { [x, rest @ ..] => { return x + len(rest); } } }

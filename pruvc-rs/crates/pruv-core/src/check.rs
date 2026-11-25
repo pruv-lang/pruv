@@ -4977,6 +4977,9 @@ impl Checker {
         }
         let mut probe = m.scrutinee.clone();
         let t = self.match_scrutinee(&mut probe, scope)?;
+        if let Some((el, n)) = t.fixed_parts() {
+            return self.fixed_slice_match(m, el.clone(), n);
+        }
         let elem = t.array_elem().filter(|_| t.args.is_empty() && t.is_array());
         let Some(elem) = elem else {
             return Err(terr(line, col, "match_type",
@@ -5048,6 +5051,47 @@ impl Checker {
                 then: els, els: Vec::new() }));
         }
         Ok(els.pop().expect("the chain is one if"))
+    }
+
+    /// P7-1 B: a slice pattern on a `[T; N]` place. Every arm must match length `N` (Rust rejects the others), so
+    /// the first arm is the only reachable one; it binds element reads `a[i]` of the element type. A named rest
+    /// (`rest @ ..`) would view the array beyond a call-duration lend and stays `type/fixed_array_operation`.
+    fn fixed_slice_match(&mut self, m: &Match, el: GType, n: u64) -> Res<Stmt> {
+        let (line, col) = (m.line, m.col);
+        for (k, a) in m.arms.iter().enumerate() {
+            let rest = slice_arm_shape(&a.ctor).flatten();
+            let width = a.binders.len() as u64;
+            if rest.is_some_and(|r| !r.is_empty()) {
+                return Err(terr(a.line, a.col, "fixed_array_operation",
+                    format!("a rest binding would view the fixed-length array [{}; {}] as a slice", tn(&el), n),
+                    "use `..` without a name, or index the array directly"));
+            }
+            let fits = if rest.is_some() { width <= n } else { width == n };
+            if !fits {
+                return Err(terr(a.line, a.col, "match_arms",
+                    format!("this slice pattern never matches a fixed-length array of length {}", n),
+                    format!("write {} element patterns, or fewer with `..`", n)));
+            }
+            if k > 0 {
+                return Err(terr(a.line, a.col, "match_arms", "this slice pattern only matches lengths an earlier arm takes",
+                    "remove the arm or move it before the arm that covers it"));
+            }
+        }
+        let s = &m.scrutinee;
+        let a = m.arms.first().expect("a match has an arm");
+        let mut out = Vec::new();
+        for (i, b) in a.binders.iter().enumerate() {
+            if b != "_" {
+                let index = Expr::IntLit(IntLit { line, col, value: i.to_string(), ty: None, kind: LitKind::Int });
+                out.push(Stmt::Let(Let { borrowed: false, line: a.line, col: a.col, name: b.clone(), mutable: false,
+                    ty: el.to_key(), refine: None,
+                    value: Expr::Index(Index { line: a.line, col: a.col, array: Box::new(s.clone()),
+                        index: Box::new(index), ty: None }) }));
+            }
+        }
+        out.extend(a.body.iter().cloned());
+        Ok(Stmt::If(If { line, col, cond: Expr::BoolLit(BoolLit { line, col, value: true, ty: None }),
+            then: out, els: Vec::new() }))
     }
 
     fn match_stmt(&mut self, m: &mut Match, scope: &mut Scope) -> Res<()> {
