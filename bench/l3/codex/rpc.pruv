@@ -1,5 +1,5 @@
 // Codex app-server conversation (withRpcChild with jsonrpc false, withCodex) on the G10 event loop.
-// The caller owns the receive state: st [5], line (up to 8388608 bytes), chunk [65536], tb [2050], ts [12] (see receive below)
+// The caller owns the receive state: st [5], line (up to 8388608 bytes), chunk [65536], tl (the stderr tail, limit 1024) (see receive below)
 // and the control array ctl [8]:
 //   ctl[0] failure code (0 none; 2 internal, 3 not-found, 4 codex-unsupported, 5 timeout, 6 read-failed, 7 engine-missing)
 //   ctl[1] stage (0 pre-spawn, 1 spawn, 2 initialize, 3 thread/list, 4 thread/read, 5 thread/turns/list, 6 result)
@@ -85,13 +85,13 @@ pub fn parse_line(inout line: crate::util::ByteBuffer, n: i64, st: [i64]) -> cra
 // The shared transport requires a full-sized line buffer. Keep its polling and event order
 // here, growing only the line storage while keeping the wire limit fixed.
 fn receive(take l: Loop, slot: i64, overall: i64,
-  inout st: [i64], inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tb: [i64], inout ts: [i64]) -> Loop ! async, proc, alloc
+  inout st: [i64], inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
   requires len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
   requires len(line.data) <= 8388608
-  requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  requires crate::tail::tail_ok(tl) && tl.limit == 1024
   ensures len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
   ensures len(line.data) <= 8388608
-  ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
   st[0] = -6;
   let mut q: Loop = crate::transport::poll(move l, overall, -1, true, inout st, 0);
@@ -101,7 +101,7 @@ fn receive(take l: Loop, slot: i64, overall: i64,
     q = ev_proc_read(move q, slot, 2, 65536);
     if ev_ok(q) {
       let err: [u8] = ev_bytes(q);
-      crate::tail::tail_push(inout tb, inout ts, 2, err);
+      crate::tail::push(inout tl, 1, err);
     }
   }
   if st[2] == st[4] && ev_ok(q) && crate::transport::live(q, slot) && !ev_eof(q, slot) {
@@ -161,17 +161,17 @@ fn receive(take l: Loop, slot: i64, overall: i64,
 // One receive step of a caller's pump loop (the caller parses each line once and keeps the document; a document cannot
 // travel back with the loop). ctl[5] = 1 when a line of ctl[6] bytes is in `line`, 0 when nothing usable arrived.
 // An oversized line, a closed child, a timeout or a transport failure sets ctl[0].
-pub fn step(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64], inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tb: [i64], inout ts: [i64]) -> Loop ! async, proc, alloc
+pub fn step(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64], inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
   requires len(ctl) == 8
   requires len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
   requires len(line.data) <= 8388608
-  requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  requires crate::tail::tail_ok(tl) && tl.limit == 1024
   ensures len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
   ensures len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
   ensures len(line.data) <= 8388608
-  ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
-  let mut q: Loop = receive(move l, slot, overall, inout st, inout line, inout chunk, inout tb, inout ts);
+  let mut q: Loop = receive(move l, slot, overall, inout st, inout line, inout chunk, inout tl);
   let n: i64 = st[0];
   ctl[5] = 0;
   ctl[6] = 0;
@@ -210,15 +210,15 @@ pub fn not_handled(d: crate::json::JsonDocument) -> [u8] ! alloc
 }
 
 // initialize (id 1), then the initialized notification. An error response to initialize is read-failed at stage 2.
-pub fn open(take l: Loop, inout ctl: [i64], inout st: [i64], inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tb: [i64], inout ts: [i64], ms: i64) -> Loop ! async, proc, alloc
+pub fn open(take l: Loop, inout ctl: [i64], inout st: [i64], inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tl: crate::tail::Tail, ms: i64) -> Loop ! async, proc, alloc
   requires len(ctl) == 8
   requires len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
   requires len(line.data) <= 8388608
-  requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  requires crate::tail::tail_ok(tl) && tl.limit == 1024
   ensures len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
   ensures len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
   ensures len(line.data) <= 8388608
-  ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
   let slot: i64 = ctl[2];
   let overall: i64 = ctl[3];
@@ -234,11 +234,11 @@ pub fn open(take l: Loop, inout ctl: [i64], inout st: [i64], inout line: crate::
     invariant 0 <= events && events <= 1000000 && len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
     invariant len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
     invariant len(line.data) <= 8388608
-    invariant len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+    invariant crate::tail::tail_ok(tl) && tl.limit == 1024
     decreases 1000000 - events
   {
     events = events + 1;
-    q = step(move q, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
+    q = step(move q, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tl);
     if ctl[0] == 0 && ctl[5] == 1 {
       let parsed: crate::json::JsonParse = parse_line(inout line, ctl[6], st);
       ctl[6] = 0;

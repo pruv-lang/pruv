@@ -79,22 +79,18 @@ pub fn skip_whitespace(input: [u8], inout pos: i64, end: i64) -> ()
 
 // The hand `literal(&mut self, literal: &[u8])`: `required()` per expected byte, error 12 at the first mismatch.
 // The caller picks the literal from the first byte (hand `record`: `b't' => self.literal(b"true")?`).
-pub fn scan_literal(input: [u8], inout pos: i64, end: i64, literal: str) -> Result<(), Fault>
+pub fn scan_literal(input: [u8], inout pos: i64, end: i64, literal: [u8]) -> Result<(), Fault>
   requires 0 <= pos && pos <= end && end <= len(input) && 1 <= len(literal)
   ensures old(pos) <= pos && pos <= end
   ensures is_ok(result) ==> old(pos) < pos
   ensures !is_ok(result) ==> (err_val(result).position == pos && 0 < err_val(result).kind && err_val(result).kind <= 17)
 {
-  let mut k: i64 = 0;
-  while k < len(literal)
-    invariant old(pos) <= pos && pos <= end && pos - old(pos) == k
-    invariant 0 <= k && k <= len(literal)
-    decreases len(literal) - k
+  for expected in literal
+    invariant old(pos) <= pos && pos <= end && pos - old(pos) == index(expected)
   {
     if pos == end { return Err::<(), Fault>(Fault { position: pos, kind: 5 }); }
-    if input[pos] != literal[k] { return Err::<(), Fault>(Fault { position: pos, kind: 12 }); }
+    if input[pos] != expected { return Err::<(), Fault>(Fault { position: pos, kind: 12 }); }
     pos = pos + 1;
-    k = k + 1;
   }
   return Ok::<(), Fault>(());
 }

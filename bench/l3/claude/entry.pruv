@@ -216,13 +216,20 @@ pub fn true_of(doc: crate::json::JsonDocument, f: i64) -> i64
   return 0;
 }
 
-// Raw lookup results of the root members, including missing fields and tape errors, in one pass:
-// [0] type, [1] timestamp, [2] isMeta, [3] isSidechain, [4] message, [5] isApiErrorMessage, [6] origin.
+// Raw lookup results of the root members, including missing fields and tape errors, one `field` per key (hand
+// `get(key)` per key): [0] type, [1] timestamp, [2] isMeta, [3] isSidechain, [4] message, [5] isApiErrorMessage,
+// [6] origin, [7] -1.
 pub fn root_of(doc: crate::json::JsonDocument) -> [i64] ! alloc
   ensures len(result) == 8
 {
-  let mut r: [i64] = alloc(8, 0);
-  crate::access::fields_into(doc, 0, 7, "type", "timestamp", "isMeta", "isSidechain", "message", "isApiErrorMessage", "origin", "", inout r);
+  let mut r: [i64] = alloc(8, -1);
+  r[0] = crate::access::field(doc, 0, "type");
+  r[1] = crate::access::field(doc, 0, "timestamp");
+  r[2] = crate::access::field(doc, 0, "isMeta");
+  r[3] = crate::access::field(doc, 0, "isSidechain");
+  r[4] = crate::access::field(doc, 0, "message");
+  r[5] = crate::access::field(doc, 0, "isApiErrorMessage");
+  r[6] = crate::access::field(doc, 0, "origin");
   return r;
 }
 
@@ -249,9 +256,7 @@ fn block_of(doc: crate::json::JsonDocument, j: i64) -> Block ! alloc
   let k: i64 = crate::access::kind(doc, j);
   if k < 0 { return Block::Broken(k); }
   if k != 6 { return Block::Ignore; }
-  let mut b: [i64] = alloc(8, 0);
-  crate::access::fields_into(doc, j, 2, "type", "text", "", "", "", "", "", "", inout b);
-  let ty: i64 = string_of(doc, b[0]);
+  let ty: i64 = string_of(doc, crate::access::field(doc, j, "type"));
   if ty == -1 { return Block::Ignore; }
   if ty < 0 { return Block::Broken(ty); }
   let veto: i64 = crate::access::string_is(doc, ty, "tool_result");
@@ -260,7 +265,7 @@ fn block_of(doc: crate::json::JsonDocument, j: i64) -> Block ! alloc
   let txt: i64 = crate::access::string_is(doc, ty, "text");
   if txt < 0 { return Block::Broken(txt); }
   if txt == 0 { return Block::Ignore; }
-  let tx: Field = string_field_of(doc, b[1]);
+  let tx: Field = string_field_of(doc, crate::access::field(doc, j, "text"));
   match tx {
     Field::Value(x) => { return Block::Piece(copy(x)); }
     Field::Missing => { return Block::Ignore; }

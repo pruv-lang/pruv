@@ -1,237 +1,204 @@
-// L3-2 A1: output tail. Two WHATWG UTF-8 decoders (one per stream) feed one buffer of UTF-16 units.
-//
-// ts layout (len 12): [0] count of units in buf, [1] T = tail_chars,
-//   stream 1 decoder at 2..7, stream 2 decoder at 7..12: needed, seen, cp, lower, upper.
-// buf has 2T+2 slots and holds at most 2T units between calls. When a code point pushes the count past 2T, the
-// last T units move to the front (TS keeps the last tailChars units of its string at each trim).
+// Output tail in the shape of `supervisor/hand/core_hand.rs` (`Tail`, `Decoder`): two WHATWG UTF-8 decoders (one
+// per stream) feed one UTF-8 byte buffer; the UTF-16 length of the buffer is kept in `units`. When an appended
+// character takes the units past 2 * limit (or the bytes past 6 * limit), whole characters leave the front until at
+// most `limit` units and 3 * limit bytes remain. `finish` returns the buffer.
 
-pub fn tail_state(t: i64) -> [i64] ! alloc
-  requires 1 <= t && t <= 65536
-  ensures len(result) == 12
-  ensures result[0] == 0 && result[1] == t
-{
-  let mut ts: [i64] = alloc(12, 0);
-  ts[1] = t;
-  ts[5] = 128;
-  ts[6] = 191;
-  ts[10] = 128;
-  ts[11] = 191;
-  return ts;
+pub struct Decoder { remaining: i64, cp: i64, lower: i64, upper: i64 }
+
+// Stream 0 is `d0`, stream 1 is `d1` (hand `decoders: [Decoder; 2]`; Pruv has no fixed-length arrays, P7-1).
+pub struct Tail { d0: Decoder, d1: Decoder, bytes: [u8], units: i64, limit: i64 }
+
+// The decoder states the hand decoder can reach. With them `char::from_u32(cp).unwrap()` never fails: the lead
+// byte and the first continuation range (`lower..=upper`) keep the finished code point a scalar value.
+pub pred fn dec_ok(d: Decoder) -> bool {
+  return 128 <= d.lower && d.lower <= d.upper && d.upper <= 191 && 0 <= d.cp && 0 <= d.remaining && d.remaining <= 3
+    && (d.remaining == 3 ==> (d.cp <= 4 && (d.cp == 0 ==> d.lower >= 144) && (d.cp == 4 ==> d.upper <= 143)))
+    && (d.remaining == 2 ==> (d.cp <= 271 && (d.cp == 0 ==> d.lower >= 160) && (d.cp == 13 ==> d.upper <= 159)))
+    && (d.remaining == 1 ==> (d.cp <= 17407 && (d.cp < 864 || d.cp > 895)));
 }
 
-pub fn tail_buf(t: i64) -> [i64] ! alloc
-  requires 1 <= t && t <= 65536
-  ensures len(result) == 2 * t + 2
-{
-  let b: [i64] = alloc(2 * t + 2, 0);
-  return b;
+pub pred fn tail_ok(tl: Tail) -> bool {
+  return 1 <= tl.limit && tl.limit <= 65536 && len(tl.bytes) <= 6 * tl.limit && 0 <= tl.units && tl.units <= 2 * tl.limit
+    && dec_ok(tl.d0) && dec_ok(tl.d1);
 }
 
-// Appends one code point (anything outside the scalar values becomes U+FFFD) as one or two UTF-16 units.
-fn put_cp(inout buf: [i64], inout ts: [i64], cp0: i64) -> ()
-  requires len(ts) == 12
-  requires 1 <= ts[1] && ts[1] <= 65536
-  requires len(buf) == 2 * ts[1] + 2
-  requires 0 <= ts[0] && ts[0] <= 2 * ts[1]
-  ensures ts[1] == old(ts)[1]
-  ensures 0 <= ts[0] && ts[0] <= 2 * ts[1]
-  ensures forall k in 2..12: ts[k] == old(ts)[k]
+fn decoder_new() -> Decoder
+  ensures dec_ok(result) && result.remaining == 0
 {
-  let mut cp: i64 = cp0;
-  if cp < 0 || cp > 1114111 || (cp >= 55296 && cp <= 57343) { cp = 65533; }
-  let mut n: i64 = ts[0];
-  if cp < 65536 {
-    buf[n] = cp;
-    n = n + 1;
-  } else {
-    buf[n] = 55296 + (cp - 65536) / 1024;
-    buf[n + 1] = 56320 + (cp - 65536) % 1024;
-    n = n + 2;
-  }
-  let t: i64 = ts[1];
-  if n > 2 * t {
-    let start: i64 = n - t;
-    let mut k: i64 = 0;
-    while k < t
-      invariant 0 <= k && k <= t
-      invariant len(buf) == 2 * t + 2
-      decreases t - k
-    {
-      buf[k] = buf[start + k];
-      k = k + 1;
-    }
-    n = t;
-  }
-  ts[0] = n;
+  return Decoder { remaining: 0, cp: 0, lower: 128, upper: 191 };
 }
 
-fn reset(inout ts: [i64], base: i64) -> ()
-  requires len(ts) == 12
-  requires base == 2 || base == 7
-  ensures forall k in 0..12: (k < base || k >= base + 5) ==> ts[k] == old(ts)[k]
+pub fn new(limit: i64) -> Tail ! alloc
+  requires 1 <= limit && limit <= 65536
+  ensures tail_ok(result) && result.limit == limit
 {
-  ts[base] = 0;
-  ts[base + 1] = 0;
-  ts[base + 2] = 0;
-  ts[base + 3] = 128;
-  ts[base + 4] = 191;
+  let mut bytes: [u8] = alloc(0, 0);
+  arr_reserve(inout bytes, 6 * limit + 4);
+  return Tail { d0: decoder_new(), d1: decoder_new(), bytes: move bytes, units: 0, limit: limit };
 }
 
-// One byte through the decoder at ts[base..base+5] (WHATWG UTF-8 decoder, maximal-subpart replacement).
-fn dec_byte(inout buf: [i64], inout ts: [i64], base: i64, b: i64) -> ()
-  requires len(ts) == 12
-  requires 1 <= ts[1] && ts[1] <= 65536
-  requires len(buf) == 2 * ts[1] + 2
-  requires 0 <= ts[0] && ts[0] <= 2 * ts[1]
-  requires base == 2 || base == 7
-  requires 0 <= b && b <= 255
-  ensures ts[1] == old(ts)[1]
-  ensures 0 <= ts[0] && ts[0] <= 2 * ts[1]
+// hand `self.bytes.copy_within(start.., 0); self.bytes.truncate(len - start);`. `copy_within` takes a whole array
+// name, not a field (gap CW), so the buffer moves through this `take` call and back (no copy).
+fn shift_front(take bytes: [u8], start: i64) -> [u8] ! alloc
+  requires 0 <= start && start <= len(bytes)
+  ensures len(result) == len(bytes) - start
 {
-  if ts[base] != 0 {
-    if b < ts[base + 3] || b > ts[base + 4] {
-      // Not a continuation here: one U+FFFD for the pending sequence, then the byte starts over.
-      reset(inout ts, base);
-      put_cp(inout buf, inout ts, 65533);
-    } else {
-      ts[base + 3] = 128;
-      ts[base + 4] = 191;
-      // A pending code point has at most 15 bits (3 lead bits + two continuations), so the mask is a no-op.
-      let c: i64 = band(ts[base + 2], 32767) * 64 + b % 64;
-      let seen: i64 = band(ts[base + 1], 3) + 1;
-      if seen >= ts[base] {
-        reset(inout ts, base);
-        put_cp(inout buf, inout ts, c);
-      } else {
-        ts[base + 1] = seen;
-        ts[base + 2] = c;
-      }
-      return;
-    }
-  }
-  if b <= 127 {
-    put_cp(inout buf, inout ts, b);
-  } else if b >= 194 && b <= 223 {
-    ts[base] = 1;
-    ts[base + 1] = 0;
-    ts[base + 2] = b % 32;
-  } else if b >= 224 && b <= 239 {
-    if b == 224 { ts[base + 3] = 160; }
-    if b == 237 { ts[base + 4] = 159; }
-    ts[base] = 2;
-    ts[base + 1] = 0;
-    ts[base + 2] = b % 16;
-  } else if b >= 240 && b <= 244 {
-    if b == 240 { ts[base + 3] = 144; }
-    if b == 244 { ts[base + 4] = 143; }
-    ts[base] = 3;
-    ts[base + 1] = 0;
-    ts[base + 2] = b % 8;
-  } else {
-    put_cp(inout buf, inout ts, 65533);
-  }
+  let len: i64 = len(bytes);
+  let mut b: [u8] = move bytes;
+  copy_within(inout b, 0, start, len - start);
+  b = truncate(b, len - start);
+  return move b;
 }
 
-// Decodes one chunk of stream s (1 or 2) into the tail.
-pub fn tail_push(inout buf: [i64], inout ts: [i64], s: i64, data: [u8]) -> ()
-  requires len(ts) == 12
-  requires 1 <= ts[1] && ts[1] <= 65536
-  requires len(buf) == 2 * ts[1] + 2
-  requires 0 <= ts[0] && ts[0] <= 2 * ts[1]
-  requires s == 1 || s == 2
-  ensures ts[1] == old(ts)[1]
-  ensures 0 <= ts[0] && ts[0] <= 2 * ts[1]
+fn trim(inout tl: Tail) -> () ! alloc
+  requires 1 <= tl.limit && tl.limit <= 65536 && len(tl.bytes) <= 6 * tl.limit + 4
+  requires 0 <= tl.units && tl.units <= 2 * tl.limit + 2
+  ensures tl.limit == old(tl.limit) && len(tl.bytes) <= 3 * tl.limit && 0 <= tl.units && tl.units <= tl.limit
+  ensures tl.d0 == old(tl.d0) && tl.d1 == old(tl.d1)
 {
-  let mut base: i64 = 2;
-  if s == 2 { base = 7; }
-  let mut i: i64 = 0;
-  while i < len(data)
-    invariant 0 <= i && i <= len(data)
-    invariant ts[1] == old(ts)[1]
-    invariant 0 <= ts[0] && ts[0] <= 2 * ts[1]
-    decreases len(data) - i
-  {
-    dec_byte(inout buf, inout ts, base, data[i]);
-    i = i + 1;
-  }
-}
-
-// End of input: an incomplete sequence becomes one U+FFFD, stream 1 first.
-pub fn tail_flush(inout buf: [i64], inout ts: [i64]) -> ()
-  requires len(ts) == 12
-  requires 1 <= ts[1] && ts[1] <= 65536
-  requires len(buf) == 2 * ts[1] + 2
-  requires 0 <= ts[0] && ts[0] <= 2 * ts[1]
-  ensures ts[1] == old(ts)[1]
-  ensures 0 <= ts[0] && ts[0] <= 2 * ts[1]
-{
-  if ts[2] != 0 {
-    reset(inout ts, 2);
-    put_cp(inout buf, inout ts, 65533);
-  }
-  if ts[7] != 0 {
-    reset(inout ts, 7);
-    put_cp(inout buf, inout ts, 65533);
-  }
-}
-
-fn put3(inout out: [u8], w: i64, c: i64) -> i64
-  requires 0 <= w && w + 3 <= len(out)
-  requires 0 <= c && c <= 65535
-  ensures w + 1 <= result && result <= w + 3
-{
-  if c < 128 {
-    out[w] = c;
-    return w + 1;
-  }
-  if c < 2048 {
-    out[w] = 192 + c / 64;
-    out[w + 1] = 128 + c % 64;
-    return w + 2;
-  }
-  out[w] = 224 + c / 4096;
-  out[w + 1] = 128 + (c / 64) % 64;
-  out[w + 2] = 128 + c % 64;
-  return w + 3;
-}
-
-// The last T units as UTF-8; a low surrogate whose high half was cut off is dropped (policy P5).
-pub fn tail_bytes(buf: [i64], ts: [i64]) -> [u8] ! alloc
-  requires len(ts) == 12
-  requires 1 <= ts[1] && ts[1] <= 65536
-  requires len(buf) == 2 * ts[1] + 2
-  requires 0 <= ts[0] && ts[0] <= 2 * ts[1]
-  ensures len(result) <= 3 * ts[1]
-{
-  let t: i64 = ts[1];
-  let n: i64 = ts[0];
   let mut start: i64 = 0;
-  if n > t { start = n - t; }
-  if start < n && buf[start] >= 56320 && buf[start] <= 57343 { start = start + 1; }
-  let mut out: [u8] = alloc(3 * t, 0);
-  let mut w: i64 = 0;
-  let mut i: i64 = start;
-  while i < n
-    invariant start <= i && i <= n
-    invariant 0 <= w && w <= 3 * (i - start)
-    invariant len(out) == 3 * t
-    decreases n - i
+  let len: i64 = len(tl.bytes);
+  // `start < len`, the two clamps of `start` and `units` and the reset after the loop stand for the UTF-8 validity
+  // of `bytes` (and `units` being its UTF-16 length) that hand trusts (gap U8); on valid bytes none of them fires.
+  while start < len && (tl.units > tl.limit || len - start > 3 * tl.limit)
+    invariant 0 <= start && start <= len && len == len(tl.bytes) && 0 <= tl.units && tl.units <= 2 * tl.limit + 2
+    invariant tl.limit == old(tl.limit) && tl.d0 == old(tl.d0) && tl.d1 == old(tl.d1)
+    decreases len - start
   {
-    let u: i64 = buf[i];
-    if u >= 55296 && u <= 56319 && i + 1 < n && buf[i + 1] >= 56320 && buf[i + 1] <= 57343 {
-      let cp: i64 = 65536 + (u - 55296) * 1024 + (buf[i + 1] - 56320);
-      out[w] = 240 + cp / 262144;
-      out[w + 1] = 128 + (cp / 4096) % 64;
-      out[w + 2] = 128 + (cp / 64) % 64;
-      out[w + 3] = 128 + cp % 64;
-      w = w + 4;
-      i = i + 2;
+    let b: i64 = tl.bytes[start];
+    let mut width: i64 = 4;
+    if b <= 127 { width = 1; } else if b <= 223 { width = 2; } else if b <= 239 { width = 3; }
+    start = start + width;
+    if width == 4 { tl.units = tl.units - 2; } else { tl.units = tl.units - 1; }
+    if start > len { start = len; }
+    if tl.units < 0 { tl.units = 0; }
+  }
+  if start == len { tl.units = 0; }
+  if start != 0 {
+    let bytes: [u8] = move tl.bytes;
+    tl.bytes = shift_front(move bytes, start);
+  }
+}
+
+fn append(inout tl: Tail, ch: char) -> () ! alloc
+  requires 1 <= tl.limit && tl.limit <= 65536 && len(tl.bytes) <= 6 * tl.limit
+  requires 0 <= tl.units && tl.units <= 2 * tl.limit
+  ensures tl.limit == old(tl.limit) && len(tl.bytes) <= 6 * tl.limit && 0 <= tl.units && tl.units <= 2 * tl.limit
+  ensures tl.d0 == old(tl.d0) && tl.d1 == old(tl.d1)
+{
+  // hand: `ch.encode_utf8(&mut [0; 4])` then one `extend_from_slice`, `units += ch.len_utf16()`
+  let c: i64 = i64(u32(ch));
+  if c < 128 {
+    arr_push(inout tl.bytes, c);
+    tl.units = tl.units + 1;
+  } else if c < 2048 {
+    arr_push(inout tl.bytes, 192 + c / 64);
+    arr_push(inout tl.bytes, 128 + c % 64);
+    tl.units = tl.units + 1;
+  } else if c < 65536 {
+    arr_push(inout tl.bytes, 224 + c / 4096);
+    arr_push(inout tl.bytes, 128 + (c / 64) % 64);
+    arr_push(inout tl.bytes, 128 + c % 64);
+    tl.units = tl.units + 1;
+  } else {
+    arr_push(inout tl.bytes, 240 + c / 262144);
+    arr_push(inout tl.bytes, 128 + (c / 4096) % 64);
+    arr_push(inout tl.bytes, 128 + (c / 64) % 64);
+    arr_push(inout tl.bytes, 128 + c % 64);
+    tl.units = tl.units + 2;
+  }
+  if tl.units > 2 * tl.limit || len(tl.bytes) > 6 * tl.limit {
+    trim(inout tl);
+  }
+}
+
+// Decodes one chunk of stream 0 or 1 into the tail (WHATWG UTF-8 decoder, maximal-subpart replacement).
+pub fn push(inout tl: Tail, stream: i64, bytes: [u8]) -> () ! alloc
+  requires tail_ok(tl)
+  requires stream == 0 || stream == 1
+  ensures tail_ok(tl) && tl.limit == old(tl.limit)
+{
+  for byte in bytes
+    invariant tail_ok(tl) && tl.limit == old(tl.limit)
+  {
+    let decoder = inout if stream == 0 { tl.d0 } else { tl.d1 };
+    if decoder.remaining != 0 {
+      if decoder.lower <= byte && byte <= decoder.upper {
+        decoder.remaining = decoder.remaining - 1;
+        // hand `(cp << 6) | (byte & 0x3f)`; the low six bits of `cp << 6` are zero, so `+` gives the same value. With `|`
+        // the solver gives up on the char range of the finished code point (gap BV).
+        decoder.cp = (decoder.cp << 6) + (byte & 63);
+        decoder.lower = 128;
+        decoder.upper = 191;
+        if decoder.remaining == 0 {
+          let ch: char = char(u32(decoder.cp));
+          append(inout tl, ch);
+        }
+        continue;
+      }
+      decoder = decoder_new();
+      append(inout tl, '\u{FFFD}');
+    }
+
+    let mut remaining: i64 = 0;
+    let mut mask: i64 = 0;
+    let mut lower: i64 = 128;
+    let mut upper: i64 = 191;
+    if byte <= 127 {
+      append(inout tl, char(u8(byte)));
+      continue;
+    } else if byte >= 194 && byte <= 223 {
+      remaining = 1;
+      mask = 31;
+    } else if byte == 224 {
+      remaining = 2;
+      mask = 15;
+      lower = 160;
+    } else if byte == 237 {
+      remaining = 2;
+      mask = 15;
+      upper = 159;
+    } else if byte >= 225 && byte <= 239 {
+      remaining = 2;
+      mask = 15;
+    } else if byte == 240 {
+      remaining = 3;
+      mask = 7;
+      lower = 144;
+    } else if byte == 244 {
+      remaining = 3;
+      mask = 7;
+      upper = 143;
+    } else if byte >= 241 && byte <= 243 {
+      remaining = 3;
+      mask = 7;
     } else {
-      let mut c: i64 = u;
-      if c < 0 || c > 65535 || (c >= 55296 && c <= 57343) { c = 65533; }
-      w = put3(inout out, w, c);
-      i = i + 1;
+      append(inout tl, '\u{FFFD}');
+      continue;
+    }
+    let slot = inout if stream == 0 { tl.d0 } else { tl.d1 };
+    slot = Decoder { remaining: remaining, cp: byte & mask, lower: lower, upper: upper };
+  }
+}
+
+// End of input: an incomplete sequence becomes one U+FFFD, stream 0 first; then the last trim. Consumes the tail.
+pub fn finish(take tl: Tail) -> [u8] ! alloc
+  requires tail_ok(tl)
+  ensures len(result) <= 3 * tl.limit
+{
+  // hand `finish(mut self)`: the taken value rebinds as mutable.
+  let limit: i64 = tl.limit;
+  let mut t: Tail = move tl;
+  for stream in 0..2
+    invariant tail_ok(t) && t.limit == limit
+  {
+    let mut remaining: i64 = t.d0.remaining;
+    if stream == 1 { remaining = t.d1.remaining; }
+    if remaining != 0 {
+      append(inout t, '\u{FFFD}');
     }
   }
-  return truncate(out, w);
+  trim(inout t);
+  let bytes: [u8] = move t.bytes;
+  return move bytes;
 }
