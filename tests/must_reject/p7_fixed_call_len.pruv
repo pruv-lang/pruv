@@ -1,0 +1,2 @@
+fn g() -> i64 { return 3; }
+fn f() -> i64 { let a: [i64; 3] = [0; g()]; return 0; }

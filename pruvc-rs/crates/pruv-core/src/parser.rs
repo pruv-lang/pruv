@@ -50,6 +50,7 @@ pub fn parse_file(src: &str, tag: usize) -> R<ParsedFile> {
         tup_tmp: 0,
         pending: Vec::new(),
         consts: HashMap::new(),
+        fixed_ok: false,
     };
     let consts = p.const_prepass()?;
     let mut prog = p.program()?;
@@ -208,6 +209,8 @@ impl<'a> ConstEval<'a> {
             Expr::IntLit(l) => match l.kind {
                 LitKind::Char => Some(&intwidth::CHAR),
                 LitKind::Byte => Some(&intwidth::U8),
+                // P7-1: a constant use inside an array length keeps its declared width
+                LitKind::Const(_) => l.ty.as_deref().and_then(intwidth::of),
                 _ => None,
             },
             Expr::Var(x) => self.decls.iter().find(|d| d.0.val == x.name).map(|d| d.1),
@@ -282,6 +285,25 @@ impl<'a> ConstEval<'a> {
     }
 }
 
+/// P7-1: an element type a fixed-length array cannot hold yet.
+fn fixed_element(line: i64, col: i64, what: &str) -> PruvError {
+    PruvError::new("type", line, col, "fixed_array_element",
+        format!("a fixed-length array holds scalar integers, char or bool, found {}", what),
+        "use a buffer ([T]) or a Vec for other elements")
+}
+
+/// P7-1: the storage cap of one fixed-length array (checked_mul of the element size and the length).
+pub(crate) fn fixed_size(line: i64, col: i64, elem: &GType, n: u64) -> R<()> {
+    let bytes = elem.int_width().map_or(1, |w| (w.bits / 8) as u64);
+    match bytes.checked_mul(n) {
+        Some(b) if b <= crate::gtype::FIXED_MAX_BYTES => Ok(()),
+        _ => Err(PruvError::new("type", line, col, "fixed_array_length",
+            format!("a fixed-length array is at most {} bytes; [{}; {}] is larger", crate::gtype::FIXED_MAX_BYTES,
+                crate::gtype::format_type(elem), n),
+            "use a buffer (alloc) for large arrays")),
+    }
+}
+
 fn is_upper(s: &str) -> bool {
     s.chars().next().map_or(false, |c| c.is_ascii_uppercase())
 }
@@ -310,6 +332,8 @@ struct Parser {
     // ---- P7 constants ----
     /// evaluated module constants: name -> (type name, value); a use of the name parses as that literal
     consts: HashMap<String, (String, i128)>,
+    /// P7-1: the next `type_g` may read a fixed-length array (only a local `let` annotation for now, P7-1 A)
+    fixed_ok: bool,
 }
 
 
@@ -463,12 +487,46 @@ impl Parser {
         Ok(out)
     }
 
-    /// P7 row P7-1: fixed-length arrays `[T; N]` are not available yet (at the `;`).
-    fn fixed_array_type(&self) -> PruvError {
-        let p = self.peek(0);
-        PruvError::new("parse", p.line, p.col, "fixed_array",
-            "fixed-length array types [T; N] are not available yet (parity row P7-1)",
-            "use a buffer: alloc(n, x) gives an [i64] of length n")
+    /// P7-1: the length of `[T; N]` / `[x; N]` after the `;`: a closed constant expression, computed in its own
+    /// width (an untyped literal expression in i64), then taken as a nonnegative length.
+    fn fixed_len(&mut self) -> R<u64> {
+        let e = self.expr()?;
+        if let Expr::BoolLit(b) = &e {
+            return Err(PruvError::new("type", b.line, b.col, "const_type",
+                "an array length is an integer, found bool", "write an integer constant expression"));
+        }
+        let mut ev = ConstEval { decls: &[], vals: HashMap::new(), busy: Vec::new() };
+        let w = ev.ty_of(&e).unwrap_or(&intwidth::I64);
+        if w.is_char() {
+            return Err(PruvError::new("type", e.line(), e.col(), "const_type",
+                "an array length is an integer, found char", "write an integer constant expression"));
+        }
+        let v = ev.eval(&e, w)?;
+        if v < 0 {
+            return Err(PruvError::new("type", e.line(), e.col(), "fixed_array_length",
+                format!("an array length must be >= 0, found {}", v), "write a nonnegative length"));
+        }
+        u64::try_from(v).map_err(|_| PruvError::new("type", e.line(), e.col(), "fixed_array_length",
+            "the array length is too large", ""))
+    }
+
+    /// P7-1: `[T; N]` after `[T` (at the `;`): only scalar integer and bool elements, at most FIXED_MAX_BYTES.
+    fn fixed_array_type(&mut self, open: &Tok, e: &Tok, fixed_ok: bool) -> R<GType> {
+        let elem = if e.val == "bool" { GType::bool() } else if intwidth::of(&e.val).is_some() {
+            GType::new(&e.val, Vec::new())
+        } else {
+            return Err(fixed_element(e.line, e.col, &e.val));
+        };
+        self.expect(";")?;
+        let n = self.fixed_len()?;
+        self.expect("]")?;
+        if !fixed_ok {
+            return Err(PruvError::new("type", open.line, open.col, "fixed_array_position",
+                "a fixed-length array is a local value only for now: not a parameter, result, field or type argument (parity row P7-1 B)",
+                "declare it with let inside the function body"));
+        }
+        fixed_size(open.line, open.col, &elem, n)?;
+        Ok(GType::fixed(elem, n))
     }
 
     /// A field name after `.`: an identifier, or a tuple index `0`, `1`, .. (P6).
@@ -1469,6 +1527,7 @@ impl Parser {
 
     /// The structured form of `type_r`.
     fn type_g(&mut self, allow: bool) -> R<(GType, Option<Refinement>)> {
+        let fixed_ok = std::mem::replace(&mut self.fixed_ok, false);
         if self.at_ident(crate::lexer::REF_IDENT, 0) && (self.at("[", 1) || self.at_ident("str", 1)) {
             self.bump();
             let (base, refinement) = self.type_g(allow)?;
@@ -1504,10 +1563,19 @@ impl Parser {
             return Ok((self.tuple_type(&open, comps)?, None));
         }
         if self.at("[", 0) {
-            self.bump();
+            let open = self.next();
+            if self.at("[", 0) || self.at("(", 0) {
+                // P7-1: a nested or tuple element of a fixed-length array
+                let inner = self.peek(0).clone();
+                let _ = self.type_g(false)?;
+                if self.at(";", 0) {
+                    return Err(fixed_element(inner.line, inner.col, "a compound type"));
+                }
+                return Err(self.err("only [i64], [u8], [u16] and [bool] arrays exist", "use [i64], [u8], [u16] or [bool]", Some(&inner)));
+            }
             let e = if self.at("crate", 0) { self.type_path()? } else { self.ident()? }; // G4: a qualified element type
-            if self.at(";", 0) && self.peek(1).kind != Kind::Op {
-                return Err(self.fixed_array_type());
+            if self.at(";", 0) && !self.at("<=", 1) {
+                return Ok((self.fixed_array_type(&open, &e, fixed_ok)?, None));
             }
             if intwidth::PENDING_INTS.contains(&e.val.as_str()) {
                 return Err(self.small_int_unsupported(&e, "this integer type requires P3"));
@@ -1550,8 +1618,6 @@ impl Parser {
             } else if lo.is_some() && self.at(";", 0) {
                 let p = self.peek(0).clone();
                 return Err(self.ref_syntax(&p, "expected ']' or '; <=N' after the element range".to_string(), ""));
-            } else if self.at(";", 0) && self.peek(1).kind != Kind::Op {
-                return Err(self.fixed_array_type());
             } else if self.at(";", 0) {
                 let p = self.peek(0).clone();
                 return Err(self.ref_syntax(
@@ -2060,6 +2126,7 @@ impl Parser {
             let n = self.ident()?.val;
             let (ty, refine) = if self.at(":", 0) {
                 self.bump();
+                self.fixed_ok = true;
                 self.type_r(true)?
             } else if self.at("=", 0) && self.at_ident("inout", 1) {
                 (String::new(), None)
@@ -2775,10 +2842,27 @@ impl Parser {
             return Ok(Expr::StrLit(StrLit { line, col, value: Vec::new(), ty: None, empty: true }));
         }
         if self.at("[", 0) {
-            // P7 row P7-1: array literals `[a, b]` and `[x; N]` come with fixed-length arrays
-            return Err(PruvError::new("parse", line, col, "fixed_array",
-                "array literals [a, b, c] and [x; N] are not available yet (parity row P7-1)",
-                "build a buffer with alloc(n, x) and assign its elements"));
+            // P7-1: array literals `[a, b, c]` (a trailing comma is allowed) and `[x; N]`
+            self.bump();
+            let first = self.expr()?;
+            if self.at(";", 0) {
+                self.bump();
+                let n = self.fixed_len()?;
+                self.expect("]")?;
+                return Ok(Expr::Call(Call { line, col, name: format!("{}{}", crate::ast::ARRAY_REPEAT, n), args: vec![first],
+                    ty: None, targs: None, inst: None, old: None, opaque_c: false }));
+            }
+            let mut args = vec![first];
+            while self.at(",", 0) {
+                self.bump();
+                if self.at("]", 0) {
+                    break;
+                }
+                args.push(self.expr()?);
+            }
+            self.expect("]")?;
+            return Ok(Expr::Call(Call { line, col, name: crate::ast::ARRAY_LIST.to_string(), args,
+                ty: None, targs: None, inst: None, old: None, opaque_c: false }));
         }
         if t.kind == Kind::Move {
             // Parse the full field path so the checker can enforce where a field move is legal.

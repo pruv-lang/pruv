@@ -1,0 +1,16 @@
+// P7-1 A runtime: proven fixed-array indexes have no bounds check on either backend (the length is the constant N)
+fn run(n: i64) -> i64
+  requires 0 <= n && n < 8
+{
+  let mut a: [u16; 8] = [0; 8];
+  let mut k: i64 = 0;
+  while k < len(a)
+    invariant 0 <= k && k <= 8
+    decreases 8 - k
+  {
+    a[k] = u16(k * 1000);
+    k = k + 1;
+  }
+  let m: [char; 2] = ['x', 'y'];
+  return i64(a[n]) + i64(a[7]) + i64(u32(m[1]));
+}

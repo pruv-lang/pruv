@@ -1,0 +1,2 @@
+fn g(a: [i64]) -> i64 { return 0; }
+fn f() -> i64 { return g([1, 2, 3]); }

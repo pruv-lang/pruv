@@ -1,0 +1,1 @@
+fn f() -> i64 { let a: [String; 2] = [String::new(), String::new()]; return 0; }

@@ -1,0 +1,1 @@
+{"flags_matrix": [["--no-verify"]], "exit": 101, "stdout_lines": ["4"], "stderr_contains": "pruv: index out of bounds: 4 (len 4)"}

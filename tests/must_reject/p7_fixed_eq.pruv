@@ -1,0 +1,1 @@
+fn f() -> bool { let a: [i64; 2] = [1, 2]; let b: [i64; 2] = [1, 2]; return a == b; }

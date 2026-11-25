@@ -1,7 +1,25 @@
 // spec: R-6t-4 accept
+// A fixed-length array is a local value: literals, repeat literals, constant lengths, indexing and copies.
 // The `<=N` length bound is not a fixed-length array and keeps working.
+const K: usize = 2 * 2;
+
 fn first(a: [i64; <=8]) -> i64
   requires len(a) >= 1
 {
   return a[0];
+}
+
+fn table(k: i64) -> u16
+  requires k >= 0 && k < 4
+  ensures [1, 2][0] == 1
+{
+  let mut a: [u16; K] = [7; K];
+  let b: [u16; 4] = a;
+  a[1] = 9;
+  let c: [bool; 2] = [true, false];
+  let z: [char; 0] = ['x'; 0];
+  if c[1] || len(z) != 0 {
+    return 0;
+  }
+  return a[k] + b[3] + u16(len(a));
 }
