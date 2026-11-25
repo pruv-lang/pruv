@@ -298,7 +298,7 @@ g9|tests/g9/proof/p36_ctor_payload_operand.pruv	1 case: obl=0 1	--infer=dbbd2d12
 g9|tests/g9/proof/p37_payload_subfield_read.pruv	1 case: obl=0 1	--infer=dbbd2d126742
 g9|tests/g9/proof/p38_spec_tree_count.pruv	1 case: obl=11 1	--infer=45473dd122c5
 inference|tests/inference/inf_absent_shapes.pruv	1 case: obl=59 1	--infer=99ee2c5df979
-inference|tests/inference/inf_budget.pruv	1 case: obl=905 1	--infer=a7cd157e96c7
+inference|tests/inference/inf_budget.pruv	1 case: obl=1197 1	--infer=189555feb9e7
 inference|tests/inference/inf_budget_fallback.pruv	1 case: obl=530 1	--infer=b3025bc08765
 inference|tests/inference/inf_copy_len.pruv	1 case: obl=44 1	--infer=52eaf88a63e0
 inference|tests/inference/inf_count.pruv	1 case: obl=72 1	--infer=370493f0c1b5

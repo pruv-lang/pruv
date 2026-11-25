@@ -125,3 +125,4 @@ the B-bundle average (about 80 minutes per feature) and adjust bundle size.
 - P4-9: `for x in a` over a generic `[T]` (T an integer or bool after monomorphization) is accepted but not yet stated in R-6q-2.
 - P4-10: assigning the slice binder reports the `let mut` hint of an immutable local; a for-binder message is queued.
 - P4-11: missing tests from the P4 audit: reverse range `a > b` at runtime, `u8` 255 / `i8` / `i64` max bounds, `Vec<u8>`/`Vec<bool>`/`Vec<u32>` runtime, nested for over the same collection, binder-assignment reject.
+- CI-1: `tests/inference/inf_budget.pruv --infer` is load dependent: z3 per-query time limits turn 783 to 1177 queries `unknown` across three local runs, so the trace hash and `errs` change between runs (main CI 45560012284 failed on it; P4 had refreshed its golden to one such run, reverted). Make the budget case deterministic (resource limit instead of wall time, or fewer candidates) before relying on its golden.
