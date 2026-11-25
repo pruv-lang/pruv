@@ -267,6 +267,82 @@ pub(crate) fn key_is_owned_field(key: &str) -> bool {
 // ---------- keys: the string form carried in the AST (ast.rs `Type = String`) ----------
 
 /// Whether an AST type string is a structured (G3) key rather than a legacy plain name.
+/// P6: a tuple type `(T0, T1, ..)` is a synthetic non-generic struct with fields `0`, `1`, .. whose name encodes
+/// the component type keys: `pruv_tup` then `_<len>_<escaped key>` per component (`_` -> `__`, `<` -> `_l`,
+/// `>` -> `_r`, `,` -> `_c`), so the name is an identifier and decodes back to the components.
+pub const TUPLE_PREFIX: &str = "Pruv__tup";
+/// The name of a tuple literal whose type the checker has not resolved yet.
+pub const TUPLE_PENDING: &str = "Pruv__tup";
+/// Fixed arity cap of P6 tuples (SPEC R-6s-1).
+pub const TUPLE_MAX_ARITY: usize = 8;
+
+pub fn tuple_name(comps: &[GType]) -> String {
+    let mut s = TUPLE_PREFIX.to_string();
+    for c in comps {
+        let mut e = String::new();
+        for ch in c.to_key().chars() {
+            match ch {
+                '_' => e.push_str("__"),
+                '<' => e.push_str("_l"),
+                '>' => e.push_str("_r"),
+                ',' => e.push_str("_c"),
+                o => e.push(o),
+            }
+        }
+        s.push_str(&format!("_{}_{}", e.len(), e));
+    }
+    s
+}
+
+/// The component type keys of a tuple name (None for any other name, including TUPLE_PENDING).
+pub fn tuple_components(name: &str) -> Option<Vec<String>> {
+    let rest = name.strip_prefix(TUPLE_PREFIX)?;
+    let b = rest.as_bytes();
+    let mut i = 0usize;
+    let mut out = Vec::new();
+    while i < b.len() {
+        if b[i] != b'_' {
+            return None;
+        }
+        i += 1;
+        let st = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        let n: usize = rest.get(st..i)?.parse().ok()?;
+        if i >= b.len() || b[i] != b'_' {
+            return None;
+        }
+        i += 1;
+        let enc = rest.get(i..i + n)?;
+        i += n;
+        let mut k = String::new();
+        let mut it = enc.chars();
+        while let Some(ch) = it.next() {
+            if ch == '_' {
+                match it.next()? {
+                    '_' => k.push('_'),
+                    'l' => k.push('<'),
+                    'r' => k.push('>'),
+                    'c' => k.push(','),
+                    _ => return None,
+                }
+            } else {
+                k.push(ch);
+            }
+        }
+        out.push(k);
+    }
+    if out.len() < 2 {
+        return None;
+    }
+    Some(out)
+}
+
+pub fn is_tuple_name(name: &str) -> bool {
+    tuple_components(name).is_some()
+}
+
 pub fn is_g3_key(s: &str) -> bool {
     s.contains('<') || s.contains('\u{1}')
 }
@@ -453,6 +529,10 @@ pub fn format_type(ty: &GType) -> String {
         return ty.name.clone();
     }
     if ty.args.is_empty() {
+        if let Some(ks) = tuple_components(&ty.name) {
+            let parts: Vec<String> = ks.iter().map(|k| format_type(&GType::from_key(k))).collect();
+            return format!("({})", parts.join(", "));
+        }
         return crate::typeinfo::type_name(&ty.name);
     }
     let inner = ty.args.iter().map(format_type).collect::<Vec<_>>().join(", ");

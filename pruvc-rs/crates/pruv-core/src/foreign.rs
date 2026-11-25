@@ -992,7 +992,9 @@ impl<'a> Ownership<'a> {
                 if let Some(m) = moved {
                     let restored = matches!(stmts.get(i + 1), Some(Stmt::FieldAssign(r))
                         if r.name == m.name && r.fields == m.fields);
-                    if !m.fields.is_empty() && !restored {
+                    // P6: a destructuring temporary gives each component up once and is never named again, so
+                    // moving one component leaves the others readable
+                    if !m.fields.is_empty() && !restored && !m.name.starts_with("pruv_tup_d") {
                         self.consumed_field = Some((m.line, m.col));
                     }
                 }

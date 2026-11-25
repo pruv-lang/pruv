@@ -128,4 +128,11 @@ the B-bundle average (about 80 minutes per feature) and adjust bundle size.
 - P5-1: `break` with a value is `parse/break_value` and `loop { .. }` is `parse/loop_unsupported` (P15); write a measured `while` with a result local.
 - P5-2: a `break`/`continue` that would leave a map iteration `for (k, v) in m` or a mutable collection `Some` arm is `type/loop_jump_map`; lift it when map iteration and the `Some` arm write-back have per-edge exits.
 - P5-3: iterator adapters with `break` (`take_while`, `position`, `find`) stay P15.
+- P6-1: tuple patterns in `match` arms and `Some((a, b))` are `parse/tuple_match_pattern`; add them with `if let`/`let else` in P8.
+- P6-2: tuple types in programs with `pub` or `mod` items are `parse/tuple_module` (the synthetic tuple structs have no module identity yet); tuples at the pub/extern/foreign boundary join P12.
+- P6-3: owned tuples (a `String`, `Vec` or array component) on LLVM are `codegen/tuple_llvm_owned` (P12).
+- P6-4: tuple structs `struct P(A, B);` are `parse/tuple_struct`; add them when a workload needs one.
+- P6-5: `for x in v` over `Vec<(A, B)>` with owned components stays `type/for_iterable` (P15/P16, same as P4-2).
+- P6-6: tuple types inside generic declarations are `parse/tuple_generic`; `str` components cannot be moved out (not a field-movable type), use `String`.
+- P6-7: a projection move `let k = move t.0;` emits `::std::mem::take(&mut t.0)` (the existing field-move shape) where hand Rust writes `let k = t.0;`; a struct literal component prints with extra parentheses `((S { .. }), 4)`; counterexamples show the internal tuple struct name.
 - CI-1: `tests/inference/inf_budget.pruv --infer` is load dependent: z3 per-query time limits turn 783 to 1177 queries `unknown` across three local runs, so the trace hash and `errs` change between runs (main CI 45560012284 failed on it; P4 had refreshed its golden to one such run, reverted). Make the budget case deterministic (resource limit instead of wall time, or fewer candidates) before relying on its golden. Interim (2026-11-25): `tests/diff_trace.py` `LOAD_DEPENDENT` hashes only this case's inference outcome (fallback, kept invariants, stopped early); under load the 5 s whole-inference deadline stops it with `timeout` instead of `budget_exhausted`, and both count as stopped. Remove the entry once the case is deterministic.

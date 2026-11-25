@@ -1,0 +1,16 @@
+// spec: R-6s-5 accept
+// Tuples as Result/Option payloads; contracts read components through ok_val / some_val.
+fn div(a: i64, b: i64) -> Result<(i64, i64), String> ! alloc
+  requires 0 <= a && a <= 1000 && 0 <= b && b <= 1000
+  ensures is_ok(result) ==> ok_val(result).0 * b + ok_val(result).1 == a
+{
+  if b == 0 { return Err::<(i64, i64), String>(string_from("zero")); }
+  return Ok::<(i64, i64), String>((a / b, a % b));
+}
+
+fn opt(a: i64) -> Option<(i64, bool)>
+  ensures is_some(result) ==> some_val(result).0 == a
+{
+  if a > 5 { return Some::<(i64, bool)>((a, true)); }
+  return None::<(i64, bool)>;
+}

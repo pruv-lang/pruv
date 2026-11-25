@@ -1,0 +1,1 @@
+{"stage": "codegen", "code": "tuple_llvm_owned", "flags": ["--backend", "llvm", "--emit", "ll", "--rust-bindings", "/tmp/pruv_p6_llvm_owned_bindings.rs"]}

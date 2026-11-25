@@ -153,6 +153,11 @@ pub fn rty(t: &str, param: bool) -> String {
 }
 
 fn rty_name(t: &str, param: bool) -> String {
+    if let Some(comps) = crate::gtype::tuple_components(t) {
+        // P6: a native Rust tuple; a component is stored by value, so it uses the non-parameter spelling
+        let cs: Vec<String> = comps.iter().map(|k| rty(k, false)).collect();
+        return format!("({})", cs.join(", "));
+    }
     match t {
         _ if crate::intwidth::of(t).is_some() => t.to_string(),
         "bool" => "bool".to_string(),
@@ -238,6 +243,10 @@ pub fn try_cty(t: &str) -> Result<String, String> {
 }
 
 fn try_cty_name(t: &str) -> Result<String, String> {
+    if let Some(comps) = crate::gtype::tuple_components(t) {
+        let cs: Result<Vec<String>, String> = comps.iter().map(|k| try_cty(k)).collect();
+        return Ok(format!("({})", cs?.join(", ")));
+    }
     match t {
         _ if crate::intwidth::of(t).is_some() => Ok("i128".to_string()),
         "bool" => Ok("bool".to_string()),
@@ -422,6 +431,9 @@ pub fn emit_public_types_with(prog: &Program, tt: &TypeTable) -> String {
     };
     let mut out: Vec<String> = Vec::new();
     for d in tt.ordered() {
+        if crate::gtype::is_tuple_name(d.name()) {
+            continue; // P6: a tuple is a native Rust tuple, no declaration
+        }
         let pv = if explicit.is_none() || pubs.get(d.name()).copied().unwrap_or(true) { "pub " } else { "" };
         out.push(format!(
             "#[allow(dead_code, non_camel_case_types, non_snake_case{})]",

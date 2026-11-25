@@ -46,8 +46,28 @@ pub fn parse_file(src: &str, tag: usize) -> R<ParsedFile> {
         items: Vec::new(),
         fn_pub: Vec::new(),
         ty_pub: Vec::new(),
+        tuples: Vec::new(),
+        tup_tmp: 0,
+        pending: Vec::new(),
     };
-    let prog = p.program()?;
+    let mut prog = p.program()?;
+    if let Some(first) = p.tuples.first() {
+        if tag != 0 || p.has_pub || !p.mods.is_empty() {
+            // P6 row P6-2: module identities of the synthetic tuple structs are not designed yet.
+            return Err(PruvError::new("parse", first.2, first.3, "tuple_module",
+                "tuple types are available only in a single-file program without `pub` or `mod` items (parity row P6-2)",
+                "declare a named struct for this module program"));
+        }
+    }
+    for (name, comps, line, col) in std::mem::take(&mut p.tuples) {
+        let fields = comps.iter().enumerate().map(|(i, k)| FieldDecl {
+            borrowed: false, line, col, name: i.to_string(), ty: k.to_key(),
+        }).collect();
+        prog.types.push(TypeDecl::Struct(StructDecl { line, col, name, fields, tparams: Vec::new(),
+            invariants: Vec::new(), invariant_lines: Vec::new() }));
+        p.ty_pub.push(false);
+        p.items.push(Item::Ty(prog.types.len() - 1));
+    }
     Ok(ParsedFile { prog, mods: p.mods, has_pub: p.has_pub, items: p.items, fn_pub: p.fn_pub, ty_pub: p.ty_pub })
 }
 
@@ -161,6 +181,29 @@ struct Parser {
     items: Vec<Item>,
     fn_pub: Vec<bool>,
     ty_pub: Vec<bool>,
+    // ---- P6 tuples ----
+    /// tuple types in order of first use: (name, components, line, col of the first use)
+    tuples: Vec<(String, Vec<GType>, i64, i64)>,
+    /// counter of the destructuring temporaries `pruv_tup_d<N>`
+    tup_tmp: usize,
+    /// statements a destructuring `let` adds after the one `stmt` returns
+    pending: Vec<Stmt>,
+}
+
+/// P6: a destructuring `let` pattern.
+enum TuplePat {
+    Wild,
+    Bind(i64, i64, String, bool),
+    Tuple(i64, i64, Vec<TuplePat>),
+}
+
+/// P6: a type key that owns a heap payload the destructuring let must move (str, a buffer, a Vec, or a tuple of one).
+fn owned_key(k: &str) -> bool {
+    let g = GType::from_key(k);
+    if let Some(cs) = crate::gtype::tuple_components(&g.name) {
+        return cs.iter().any(|c| owned_key(c));
+    }
+    matches!(g.name.as_str(), "str" | "string" | "String" | "vec" | "Vec") || (g.args.is_empty() && crate::typeinfo::is_array_name(&g.name))
 }
 
 /// AST depth limit. Python stops with RecursionError at about 1000 levels (outside the cross-check range), so this is set much larger than that,
@@ -237,10 +280,140 @@ impl Parser {
 
     fn ident(&mut self) -> R<Tok> {
         let t = self.peek(0);
+        if t.kind == Kind::Op && t.val == "_" {
+            return Err(self.reserved_name(&t.clone()));
+        }
         if t.kind != Kind::Id {
             return Err(self.err(format!("expected identifier, found {}", t.repr()), "", None));
         }
         Ok(self.next())
+    }
+
+    /// A field name after `.`: an identifier, or a tuple index `0`, `1`, .. (P6).
+    fn field_ident(&mut self) -> R<Tok> {
+        let t = self.peek(0).clone();
+        if t.kind == Kind::Int {
+            if t.end - t.col != t.val.len() as i64 {
+                return Err(PruvError::new("parse", t.line, t.col, "tuple_index",
+                    "a tuple index is a plain decimal number", "write t.0, t.1, .."));
+            }
+            return Ok(self.next());
+        }
+        self.ident()
+    }
+
+    /// P6: the tuple type with these components; registers its synthetic struct.
+    fn tuple_type(&mut self, open: &Tok, comps: Vec<GType>) -> R<GType> {
+        if comps.len() < 2 || comps.len() > crate::gtype::TUPLE_MAX_ARITY {
+            return Err(PruvError::new("parse", open.line, open.col, "tuple_arity",
+                format!("a tuple type has 2 to {} components, found {}", crate::gtype::TUPLE_MAX_ARITY, comps.len()),
+                "write (A, B) up to 8 components; a single type needs no parentheses"));
+        }
+        if !self.scope.is_empty() {
+            return Err(PruvError::new("parse", open.line, open.col, "tuple_generic",
+                "tuple types are not available inside a generic declaration",
+                "declare a named generic struct, or use the tuple in a non-generic function"));
+        }
+        for c in &comps {
+            if c == &GType::unit() || c.name == "@ref" || c.view_base().is_some() || c.view_payload().is_some() {
+                return Err(PruvError::new("parse", open.line, open.col, "tuple_component",
+                    format!("{} cannot be a tuple component", crate::gtype::format_type(c)),
+                    "tuple components are scalars, structs, enums and owned values; use a named struct for views"));
+            }
+        }
+        let name = crate::gtype::tuple_name(&comps);
+        if !self.tuples.iter().any(|t| t.0 == name) {
+            self.tuples.push((name.clone(), comps, open.line, open.col));
+        }
+        Ok(GType::new(&name, Vec::new()))
+    }
+
+    /// P6 destructuring pattern: `_`, `[mut] name` or `(p0, p1, ..)`.
+    fn tuple_pat(&mut self) -> R<TuplePat> {
+        if self.at("_", 0) && self.peek(0).kind == Kind::Op {
+            self.bump();
+            return Ok(TuplePat::Wild);
+        }
+        if self.at("(", 0) {
+            let open = self.next();
+            let mut ps = Vec::new();
+            loop {
+                ps.push(self.tuple_pat()?);
+                if self.at(",", 0) {
+                    self.bump();
+                    if self.at(")", 0) {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
+            self.expect(")")?;
+            if ps.len() < 2 || ps.len() > crate::gtype::TUPLE_MAX_ARITY {
+                return Err(PruvError::new("parse", open.line, open.col, "tuple_arity",
+                    format!("a tuple pattern has 2 to {} components, found {}", crate::gtype::TUPLE_MAX_ARITY, ps.len()),
+                    "write let (a, b) = e;"));
+            }
+            return Ok(TuplePat::Tuple(open.line, open.col, ps));
+        }
+        let mut mutable = false;
+        if self.at("mut", 0) {
+            self.bump();
+            mutable = true;
+        }
+        let n = self.ident()?;
+        Ok(TuplePat::Bind(n.line, n.col, n.val, mutable))
+    }
+
+    /// The component types of the lets `lower_pat` emits for `pats` matched against tuple type `g`, in the same order.
+    fn type_pat(g: &GType, pats: &[TuplePat], line: i64, col: i64, out: &mut Vec<String>) -> R<()> {
+        let comps = if g.args.is_empty() { crate::gtype::tuple_components(&g.name) } else { None };
+        let Some(comps) = comps else {
+            return Err(PruvError::new("parse", line, col, "tuple_pattern_type",
+                format!("a tuple pattern needs a tuple type, found {}", crate::gtype::format_type(g)),
+                "annotate the let with the tuple type (A, B)"));
+        };
+        if comps.len() != pats.len() {
+            return Err(PruvError::new("parse", line, col, "tuple_pattern_type",
+                format!("the pattern has {} components but {} has {}", pats.len(), crate::gtype::format_type(g), comps.len()),
+                "write one binder or `_` per component"));
+        }
+        for (p, k) in pats.iter().zip(comps.iter()) {
+            match p {
+                TuplePat::Wild => {}
+                TuplePat::Bind(..) => out.push(k.clone()),
+                TuplePat::Tuple(l, c, inner) => {
+                    out.push(k.clone());
+                    Self::type_pat(&GType::from_key(k), inner, *l, *c, out)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Lowers a destructuring pattern bound to `tmp` into field lets (pushed onto `self.pending`).
+    fn lower_pat(&mut self, tmp: &str, pats: Vec<TuplePat>, line: i64, col: i64) {
+        for (i, p) in pats.into_iter().enumerate() {
+            let read = |l: i64, c: i64| Expr::FieldAccess(FieldAccess {
+                line: l, col: c,
+                base: Box::new(Expr::Var(Var { line: l, col: c, name: tmp.to_string(), ty: None })),
+                field: i.to_string(), ty: None,
+            });
+            match p {
+                TuplePat::Wild => {}
+                TuplePat::Bind(l, c, name, mutable) => {
+                    self.pending.push(Stmt::Let(Let { borrowed: false, line: l, col: c, name, mutable,
+                        ty: String::new(), value: read(l, c), refine: None }));
+                }
+                TuplePat::Tuple(l, c, inner) => {
+                    let t = format!("pruv_tup_d{}", self.tup_tmp);
+                    self.tup_tmp += 1;
+                    self.pending.push(Stmt::Let(Let { borrowed: false, line: l, col: c, name: t.clone(), mutable: false,
+                        ty: String::new(), value: read(l, c), refine: None }));
+                    self.lower_pat(&t, inner, line, col);
+                }
+            }
+        }
     }
 
     // ---- program ----
@@ -791,6 +964,12 @@ impl Parser {
         let kw = self.expect_tok("struct")?;
         let n = self.ident()?;
         let tparams = if self.at("<", 0) { self.type_params(&decl_owner(&n.val))? } else { Vec::new() };
+        if self.at("(", 0) {
+            // P6: tuple structs are not part of the tuple bundle
+            return Err(PruvError::new("parse", n.line, n.col, "tuple_struct",
+                format!("tuple struct {} is not available; structs have named fields", n.val),
+                format!("write `struct {} {{ a: A, b: B }}`, or use a tuple type (A, B)", n.val)));
+        }
         self.expect("{")?;
         // LG16: fields, then zero or more `invariant <expr>` clauses, each optionally followed by `,`
         let mut fields = Vec::new();
@@ -960,9 +1139,32 @@ impl Parser {
         }
         let t = self.peek(0).clone();
         if self.at("(", 0) {
-            self.bump();
+            let open = self.next();
+            if self.at(")", 0) {
+                self.bump();
+                return Ok((GType::unit(), None));
+            }
+            // P6: a tuple type `(T1, T2, ..)`
+            let mut comps = Vec::new();
+            loop {
+                let (c, r) = self.type_g(false)?;
+                if r.is_some() {
+                    return Err(PruvError::new("parse", open.line, open.col, "tuple_component",
+                        "a tuple component cannot carry a refinement",
+                        "refine the whole binding with a named struct invariant, or state it as a contract"));
+                }
+                comps.push(c);
+                if self.at(",", 0) {
+                    self.bump();
+                    if self.at(")", 0) {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
             self.expect(")")?;
-            return Ok((GType::unit(), None));
+            return Ok((self.tuple_type(&open, comps)?, None));
         }
         if self.at("[", 0) {
             self.bump();
@@ -1331,6 +1533,7 @@ impl Parser {
                 return Err(self.err("unclosed block", "add '}'", None));
             }
             out.push(self.stmt()?);
+            out.append(&mut self.pending);
         }
         self.expect("}")?;
         Ok(out)
@@ -1382,6 +1585,62 @@ impl Parser {
         let (l, c) = (t.line, t.col);
         if t.kind == Kind::Id && t.val == "par" && self.at("{", 1) {
             return self.par_stmt();
+        }
+        if self.at("let", 0) && self.at("(", 1) {
+            // P6: `let (a, mut b, _): (A, B, C) = e;` lowers to a temporary and one field let per binder.
+            self.bump();
+            let pat = self.tuple_pat()?;
+            let TuplePat::Tuple(pl, pc, pats) = pat else { unreachable!("pattern starts with `(`") };
+            if !self.at(":", 0) {
+                return Err(PruvError::new("parse", pl, pc, "tuple_needs_type",
+                    "a destructuring let needs the tuple type", "write `let (a, b): (i64, i64) = e;`"));
+            }
+            self.bump();
+            let (g, refine) = self.type_g(false)?;
+            if refine.is_some() {
+                return Err(self.err("a destructuring let cannot carry a refinement", "drop the refinement", None));
+            }
+            self.expect("=")?;
+            let value = self.expr()?;
+            self.expect(";")?;
+            let tmp = format!("pruv_tup_d{}", self.tup_tmp);
+            self.tup_tmp += 1;
+            let mut lets = Vec::new();
+            Self::type_pat(&g, &pats, pl, pc, &mut lets)?;
+            let save = std::mem::take(&mut self.pending);
+            self.lower_pat(&tmp, pats, pl, pc);
+            // fill each lowered let with its component type, in lowering order
+            let mut lowered = std::mem::take(&mut self.pending);
+            for (st, ty) in lowered.iter_mut().zip(lets.into_iter()) {
+                if let Stmt::Let(lt) = st {
+                    lt.ty = ty;
+                }
+            }
+            // an owned component (str, a buffer, a Vec, or a tuple holding one) is moved out of its temporary, which
+            // is then a `let mut` the existing field-move rule consumes
+            let mut movers: Vec<String> = Vec::new();
+            for st in lowered.iter_mut() {
+                let Stmt::Let(lt) = st else { continue };
+                if !owned_key(&lt.ty) {
+                    continue;
+                }
+                let Expr::FieldAccess(fa) = &lt.value else { continue };
+                let Expr::Var(v) = &*fa.base else { continue };
+                movers.push(v.name.clone());
+                lt.value = Expr::Move(Move { line: fa.line, col: fa.col, name: v.name.clone(),
+                    fields: vec![fa.field.clone()], ty: None });
+            }
+            for st in lowered.iter_mut() {
+                if let Stmt::Let(lt) = st {
+                    if movers.contains(&lt.name) {
+                        lt.mutable = true;
+                    }
+                }
+            }
+            self.pending = save;
+            self.pending.append(&mut lowered);
+            return Ok(Stmt::Let(Let { borrowed: false, line: l, col: c, mutable: movers.contains(&tmp), name: tmp,
+                ty: g.to_key(), value, refine: None }));
         }
         if self.at("let", 0) {
             self.bump();
@@ -1628,6 +1887,13 @@ impl Parser {
                     arms.push(MatchArm { line: ct.line, col: ct.col, enum_name: Some(ct.val.clone()), ctor: vt.val, binders, body });
                 } else {
                     let is_ctor = ct.kind != Kind::Int && matches!(ct.val.as_str(), "Some" | "None" | "Ok" | "Err");
+                    // P6: tuple patterns in a match arm are bundle P8
+                    let tup_inner = is_ctor && self.at("(", 0) && self.at("(", 1) && !self.at(")", 2);
+                    if ct.val == "(" || tup_inner {
+                        return Err(PruvError::new("parse", ct.line, ct.col, "tuple_match_pattern",
+                            "tuple patterns in match arms are not available yet (bundle P8)",
+                            "bind the tuple, then project: `Some(p) => { let (a, b): (A, B) = p; .. }`"));
+                    }
                     if !is_ctor {
                         return Err(self.err(
                             "match arm must be Some(x), None, Ok(x), Err(x) or Enum::Variant(...)",
@@ -1693,7 +1959,7 @@ impl Parser {
             let mut path = Vec::new();
             while self.at(".", 0) {
                 self.bump();
-                path.push(self.ident()?.val);
+                path.push(self.field_ident()?.val);
             }
             if self.at("=", 0) {
                 self.bump();
@@ -2093,7 +2359,7 @@ impl Parser {
                 e = Expr::Index(Index { line: t.line, col: t.col, array: Box::new(e), index: Box::new(i), ty: None });
             } else if self.at(".", 0) {
                 self.bump();
-                let f = self.ident()?;
+                let f = self.field_ident()?;
                 e = Expr::FieldAccess(FieldAccess { line: e.line(), col: e.col(), base: Box::new(e), field: f.val, ty: None });
             } else {
                 break;
@@ -2162,7 +2428,7 @@ impl Parser {
             let mut fields = Vec::new();
             while self.at(".", 0) {
                 self.bump();
-                fields.push(self.ident()?.val);
+                fields.push(self.field_ident()?.val);
                 self.enter(1)?;
             }
             self.leave(fields.len());
@@ -2175,6 +2441,26 @@ impl Parser {
         if self.at("(", 0) {
             self.bump();
             let e = self.expr()?;
+            if self.at(",", 0) {
+                // P6: a tuple literal `(e0, e1, ..)`; the checker takes its type from the expected type.
+                let mut fields = vec![FieldInit { line: e.line(), col: e.col(), name: "0".into(), value: e }];
+                while self.at(",", 0) {
+                    self.bump();
+                    if self.at(")", 0) {
+                        break;
+                    }
+                    let v = self.expr()?;
+                    fields.push(FieldInit { line: v.line(), col: v.col(), name: fields.len().to_string(), value: v });
+                }
+                self.expect(")")?;
+                if fields.len() < 2 || fields.len() > crate::gtype::TUPLE_MAX_ARITY {
+                    return Err(PruvError::new("parse", line, col, "tuple_arity",
+                        format!("a tuple has 2 to {} components, found {}", crate::gtype::TUPLE_MAX_ARITY, fields.len()),
+                        "write (a, b) up to 8 components; `(a,)` is not a tuple in Pruv"));
+                }
+                return Ok(Expr::StructLit(StructLit { line, col, name: crate::gtype::TUPLE_PENDING.to_string(),
+                    fields, ty: None, targs: None, inst: None }));
+            }
             self.expect(")")?;
             return Ok(e);
         }

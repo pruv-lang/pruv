@@ -1,0 +1,7 @@
+// spec: R-6s-1 reject
+// swap exchanges the components, so result.0 == p.0 is false whenever p.0 != p.1.
+fn swap(p: (i64, i64)) -> (i64, i64)
+  ensures result.0 == p.0
+{
+  return (p.1, p.0);
+}

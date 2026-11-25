@@ -1,0 +1,6 @@
+struct S { a: i64, b: i64 }
+fn total(v: Vec<(String, S)>) -> i64 {
+  let mut s: i64 = 0;
+  for x in v { s = s + 1; }
+  return s;
+}

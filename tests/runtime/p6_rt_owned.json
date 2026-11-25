@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["303", "43", "32", "12"], "backends": ["rust"], "gen_contains": ["let (k, s): (String, S) = t;", "Vec<(String, S)>", "-> (String, S)"], "alloc_balance": true}

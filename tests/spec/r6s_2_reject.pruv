@@ -1,0 +1,4 @@
+// spec: R-6s-2 reject
+// A destructuring let names its tuple type.
+fn g() -> (i64, i64) { return (1, 2); }
+fn f() -> i64 { let (a, b) = g(); return a + b; }

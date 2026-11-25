@@ -322,6 +322,12 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
             // P5: `break`, `continue` and `loop` are statement keywords inside a body (the parser rejects `loop`).
             let stmt_jump = matches!(v.as_str(), "break" | "continue" | "loop") && brace_depth > 0;
             let is_kw = stmt_for || stmt_jump || KEYWORDS.contains(&v.as_str());
+            // P6: `_` right after `(` or `,` is a wildcard token for tuple patterns (`let (_, b) = e;`);
+            // the parser reports reserved_name for it anywhere else.
+            if v == "_" && toks.last().is_some_and(|t| t.kind == Kind::Op && matches!(t.val.as_str(), "(" | ",")) {
+                toks.push(Tok { kind: Kind::Op, val: v, line, col, end: col + 1 });
+                continue;
+            }
             if !is_kw && (v.starts_with("pruv_") || v.contains("__") || RUST_KEYWORDS.contains(&v.as_str())) {
                 return Err(PruvError::new(
                     "parse",

@@ -1,0 +1,27 @@
+// spec: R-6s-3 accept
+// Owned components move out once: destructuring moves each component, a projection move consumes the tuple.
+struct S { a: i64, b: i64 }
+
+fn mk(n: i64) -> (String, S) ! alloc
+  requires 1 <= n && n <= 50
+  ensures result.1.a == n && len(result.0) == 3
+{
+  return (string_from("abc"), S { a: n, b: 2 });
+}
+
+fn take(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50
+  ensures result == 300 + n
+{
+  let t: (String, S) = mk(n);
+  let (k, s): (String, S) = move t;
+  return len(k) * 100 + s.a;
+}
+
+fn proj(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 50
+{
+  let mut t: (String, S) = mk(n);
+  let k: String = move t.0;
+  return len(k) + n;
+}

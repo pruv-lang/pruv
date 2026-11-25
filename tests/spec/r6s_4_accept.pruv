@@ -1,0 +1,14 @@
+// spec: R-6s-4 accept
+// Vec<(A, B)> with owned components: functional push, element borrow through vec_get and component reads.
+struct S { a: i64, b: i64 }
+
+fn vecs(n: i64) -> i64 ! alloc
+  requires 1 <= n && n <= 20
+{
+  let mut v: Vec<(String, S)> = vec_new::<(String, S)>();
+  v = vec_push::<(String, S)>(move v, (string_from("ab"), S { a: n, b: 0 }));
+  if len(v) != 1 { return 0; }
+  let r: i64 = len(vec_get::<(String, S)>(v, 0).0);
+  if r > 1000 { return 0; }
+  return r;
+}

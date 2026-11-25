@@ -1,0 +1,2 @@
+fn g(a: i64) -> i64 { return a; }
+fn f() -> i64 { if (1, 2) == (1, 2) { return 1; } return 0; }

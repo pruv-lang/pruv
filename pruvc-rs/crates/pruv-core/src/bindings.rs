@@ -99,6 +99,10 @@ fn rust_ty(t: &str, param: bool) -> String {
         // G3: ::std::option::Option<R(X)> / ::std::result::Result<R(X), i64>
         return rty(t, false);
     }
+    if crate::gtype::is_tuple_name(t) {
+        // P6: a scalar tuple crosses the binding as a native Rust tuple
+        return rty(t, false);
+    }
     if is_user_type(t) {
         return t.to_string();
     }
@@ -237,6 +241,11 @@ fn rs_de(tt: &TypeTable, ty: &str, arr: &str, off: i64) -> Result<String, String
                 parts.push(format!("{}: {}", f.name, rs_de(tt, &f.ty, arr, o)?));
                 o += words(tt, &f.ty)?;
             }
+            if crate::gtype::is_tuple_name(&s.name) {
+                // P6: rebuild a native tuple; the fields are "0", "1", ..
+                let vals: Vec<&str> = parts.iter().map(|p| p.split_once(": ").map_or(p.as_str(), |x| x.1)).collect();
+                return Ok(format!("({})", vals.join(", ")));
+            }
             Ok(format!("{} {{ {} }}", s.name, parts.join(", ")))
         }
         TypeDecl::Enum(d) => {
@@ -358,6 +367,13 @@ pub fn owned_collection_abi_error(
                 && !crate::gtype::key_is_scalar_vec(&f.ty)
                 && !crate::llvmgen::native_vec_elem(&f.ty).is_some_and(|elem| vec_elems.contains(elem))
         }) {
+            if crate::gtype::is_tuple_name(d.name()) {
+                // P6: an owned-component tuple is a Rust-backend type until P12 (native LLVM aggregates for scalars)
+                let shown = crate::gtype::format_type(&crate::gtype::GType::new(d.name(), Vec::new()));
+                return Some(crate::diagnostic::PruvError::new("codegen", d.line(), d.col(), "tuple_llvm_owned",
+                    format!("the tuple {} has owned components, which need the Rust backend (P12)", shown),
+                    "use the Rust backend, or keep owned values out of tuples"));
+            }
             let name = prog.explicit.as_ref().and_then(|e| e.tdisp.get(d.name())).map_or(d.name(), String::as_str);
             return Some(err(d.line(), d.col(), format!("{} has owned collection fields, which need the Rust backend", name)));
         }

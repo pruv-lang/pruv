@@ -1,0 +1,11 @@
+// spec: R-6s-2 accept
+// A typed destructuring let binds each component, with mut binders, nested patterns and `_`.
+fn split(n: i64) -> i64
+  requires 0 <= n && n <= 100
+  ensures result == 2 * n + 1
+{
+  let t: (i64, (i64, i64)) = (n, (n, 7));
+  let (a, (mut b, _)): (i64, (i64, i64)) = t;
+  b = b + 1;
+  return a + b;
+}

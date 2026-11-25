@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["19", "20", "22", "24", "29"], "gen_contains": ["let (a, b): (i64, i64) = swap((k, 2i64));", "let (x, (mut y, _)): (i64, (i64, i64)) = t;", "pub fn swap(p: (i64, i64)) -> (i64, i64)"]}
