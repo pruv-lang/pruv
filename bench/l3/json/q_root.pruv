@@ -53,7 +53,7 @@ fn canonical(d: crate::json::JsonDocument) -> [i64] ! alloc {
    invariant 0 <= i && i <= len(u.units) && 0 <= p && p <= len(a)
    decreases len(u.units)-i
    { p = put(inout a,p,u.units[i]); i = i+1; }
-   let t: crate::jstr::Text = crate::access::string_text(view,id);
+   let t: crate::jstr::Text = crate::access::string_text_owned(view,id);
    match t {
     crate::jstr::Text::InternalInvariant(error) => { return fail(0,18); }
     crate::jstr::Text::Decoded(s) => {

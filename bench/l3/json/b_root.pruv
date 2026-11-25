@@ -208,7 +208,7 @@ pub fn query(input: [u8], ops: [i64], key: [i64], text: str, mode: i64) -> [i64]
         if u.status != 0 { return one(u.status); } return copy(u.units);
       }
       if mode == 6 {
-        let t: crate::jstr::Text = crate::access::string_text(d, id);
+        let t: crate::jstr::Text = crate::access::string_text_owned(d, id);
         match t {
           crate::jstr::Text::InternalInvariant(k) => { return one(k); }
           crate::jstr::Text::Decoded(s) => {

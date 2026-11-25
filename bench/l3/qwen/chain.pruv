@@ -62,7 +62,7 @@ fn put_field(doc: crate::json::JsonDocument, id: i64, key: str, inout arena: [u8
   let k: i64 = crate::access::kind(doc, f);
   if k < 0 { return -2; }
   if k != 4 { return -1; }
-  let t: crate::jstr::Text = crate::access::string_text(doc, f);
+  let t: crate::jstr::Text = crate::access::string_text_owned(doc, f);
   match t {
     crate::jstr::Text::InternalInvariant(e) => { return -2; }
     crate::jstr::Text::Decoded(v) => {

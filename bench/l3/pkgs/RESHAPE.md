@@ -178,7 +178,7 @@ RU, OS and SX were checked with a minimal file against `pruvc-rs`, and MC agains
 | J2b | `units_equal(source,s,e,key,klen)` | `units(raw).eq(key)` | `[u8]`, `[i64]` | borrow | one pass, early exit | none | **=** (slow path of mode 3; key already UTF-16). |
 | J3 | `string_units(source,s,e) -> [i64]` | mode 5: `units(raw).count()`, `Vec::with_capacity`, `extend(units(raw))` | `[u8] -> [i64]` | owned result | count pass, then decode + push pass | 1 exact (was 2: `alloc(e-s)` + exact copy) | **changed** (LB5 `arr_reserve` + `arr_push`). = now. |
 | J4 | `string_utf8`, `string_utf8_plain`, `string_utf8_scanned` | mode 6: `decode_utf16(units(raw))` length sum, then `encode_utf8` per char into `Vec<i64>` | Pruv `[u8]`, hand `Vec<i64>` | owned result | count pass, then `alloc(0,0)` + `arr_reserve(need)` and a decode pass (one shared private `decode_utf8`). Both passes take each escape-free run (up to the next `\\`; in `_utf8` also up to the next byte >= 128) as one segment: the count adds its length, the decode does one `arr_append` (`extend_from_slice`). Escapes are decoded and pushed per encoded byte. `_plain`: `arr_reserve` + one `arr_append` | 1 each | **changed in 2.2c**. The hand changed to the same segments: `utf8_segments` hands each escape-free run to one `extend` and decodes each escape as it meets it, in both the count pass and the copy pass. Escapes: both sides decode one scalar per step (a high surrogate takes the next `\\u` when it is the low half, else U+FFFD) with no look-ahead scan; Pruv pushes its 1-4 bytes, the hand `encode_utf8`s into a 4-byte stack buffer. Neither side allocates (=; the hand's earlier escape-run pre-scan was removed after the 2.2c confirmation). **P**: `string_utf8` (unscanned input) also ends a run at a byte >= 128 and decodes that scalar with `step` (lenient: a lone lead byte keeps its value and continuation bits are not checked), because nothing proves its input is UTF-8. The hand only sees parser-validated input, so its counterpart is `string_utf8_scanned`, whose runs end only at `\\`. = The element type differs on purpose (**W-c** in the hand benchmark only): consumers take `[u8]` bytes, the hand benchmark prints `i64` per byte. `_plain` (no count pass, one `arr_append`) is selected by the parser's plain bit, which the hand does not keep: without escapes the hand still runs both segment passes, each one `position` search (**P**, as P2's plain bit). |
-| J5 | `string_text`, `string_text_scanned`, `string_text_plain`, `utf8_to_string`, `adapter_probe` | `String::from_utf8(vec)` (move); adapter `str_adapter` `to_owned` | `[u8] -> Text` | **copy** into a new `String` | validate + copy | Pruv 2 (bytes, then `String`); hand 1 | **W-c**: the `*_owned` variants are the hand shape; the copy variants stay until consumers switch (consumer steps). `adapter_probe` is **P** (adapter conformance probe, no hand counterpart). |
+| J5 | `string_text`, `string_text_scanned`, `string_text_plain`, `utf8_to_string`, `adapter_probe` | `String::from_utf8(vec)` (move); adapter `str_adapter` `to_owned` | `[u8] -> Text` | **copy** into a new `String` | validate + copy | Pruv 2 (bytes, then `String`); hand 1 | **=** (step 2.9): the copy variants `string_text`, `string_text_scanned`, `string_text_plain` are removed; every caller uses a `*_owned` variant (`String::from_utf8`, a move). The decode itself stays **P** (two passes, always owned; the hand borrows an unescaped string, gap B). `utf8_to_string` stays for the adapter. `adapter_probe` is **P** (adapter conformance probe, no hand counterpart). |
 | J6 | `string_text_owned`, `*_scanned_owned`, `*_plain_owned`, `owned_text(take data)` | `String::from_utf8(vec)` / adapter: empty `String` on invalid input | `[u8] -> str` / `Text` | move | validate pass | 1 | **=** for valid input. Two Pruv-only branches: `owned_text` returns `""` on invalid UTF-8 (the `str_adapter` contract, builds an empty `String`: **SL/S**), and `*_owned` return `Text::InternalInvariant` when `utf8_valid` fails (**P**: a returned value the caller handles, not a panic; unreachable on real paths, see note J6). |
 | J7 | `Text` enum (`Plain`/`InternalInvariant`) | `Result<String, _>` / `unwrap` | enum | — | — | none | **P**: the verifier cannot yet prove the parse-validated bytes are UTF-8 at this call, so the branch is a value, not `unreachable!()`. |
 | J8 | UTF-16 key views (`[i64]` units) | `&[u16]` / `encode_utf16()` | `[i64]` vs `[u16]` | — | — | — | **U** (§4): no first-class UTF-16 view; `[i64]` holds one unit per word. |
@@ -207,7 +207,7 @@ across the host boundary on both backends). Rows below list what differs inside 
 | # | Pruv | Hand Rust | Types | Ownership | Loops | Allocations | Id and reason |
 |---|---|---|---|---|---|---|---|
 | T0 | package API: `st[4]`, working slots `sl[200*8]`, `buf` 65584 bytes per slot, `Collected{turns:[i64],text:[u8],..}` | `Collector { turns: VecDeque<Turn> }`, `finish -> Vec<Turn>` | packets vs `Vec<struct>` | — | — | slabs vs per-turn `String` | **ABI / V**. The 200×8 table is the working slot array `sl` (first table said `Collected`). The modular ring (`% 200`) matches the Grok collector's bounded deque. |
-| T1 | `new_state`, `new_slots`, `new_buffer`, `empty_buffer`, `grow` | `VecDeque::new()`, per-turn `String::new()` | packets | owned | fill loops | up-front slabs; `grow` = new buffer + copy | Slabs: **ABI / V** (T0). `grow` is **W-c**: the in-place form (`take buf` + `resize(move buf, ..)`, or a private `inout` + `arr_reserve`, checked to verify) changes the `pub` signature its callers `opencode/convert.pruv:202` and grok `read::window` use (`buf = grow(buf, ..)`), so it moves with those consumers. `empty_buffer` is **P** (DB7 lazy first slab, no hand counterpart). |
+| T1 | `new_state`, `new_slots`, `new_buffer`, `empty_buffer`, `grow` | `VecDeque::new()`, per-turn `String::new()` | packets | owned | fill loops | up-front slabs; `grow` = new buffer + copy | Slabs: **ABI / V** (T0). `grow` is **=** (step 2.9): `take buf` + `resize(move b, ..)` (`Vec::resize`, one realloc, no new buffer); caller `opencode/convert.pruv:202` passes `move buf`. `empty_buffer` is **P** (DB7 lazy first slab, no hand counterpart). |
 | T2 | `put_str`, `put_nl`, `write_piece`, `begin`/`answer` clip | Grok `hand_history.rs`: `&[u8]` clip and `Vec<u8>::extend_from_slice` | `[u8]` | `inout` | one bulk copy each (2.4); `clip_len` scans only for the UTF-8 cut | `begin`, `answer`: none (2.2b/2.2c) | **changed in 2.2b/2.2c**: `put_nl` is one `copy_span` of `"\n\n"`. `begin` and (2.2c) `answer` clip with `clip_len` on the byte range, so there is no temporary. **changed in 2.4**: `put_str` is one `copy_range(inout dst, at, src, 0, n)` from the `str` (R-6g5-1, Rust `copy_from_slice` of `src.as_bytes()`), so `write_piece` is `put_nl` + one bulk copy, as `grok/perf/hand_history.rs:769-770` (`extend_from_slice(&b"\n\n"[..s2])`, `extend_from_slice(&text[..take])`) and `begin` as `:724`. **=** at the function level (2.2b residue **SB** closed by LB6). Destinations: `begin`/`answer` write the fixed slot buffer `buf`; `begin2`/`answer2` (T7) write `bk.data` of the `Store` arena. Neither is the hand's per-turn `Vec`: **ABI / V** (T0, T6). |
 | T3 | `skip_user`, `tool` | `skip_user`, `tool` methods (flag / count updates) | `inout st`, `sl` | — | — | none | **=** in operation; shape is ABI / V (T0). |
 | T4 | `plan` (203-word offset array) | `turns.iter().rev()` with a running byte total | `[i64]` | owned | one pass | none (2.2b) | **changed in 2.2b**: `plan` returns `Layout { kept, total, text_len }` (two passes, no array); the `finish*` writers walk a cursor down from `text_len` (`finish_inplace` up). = |
@@ -272,12 +272,12 @@ already the hand shape.
 | # | Pruv | Hand Rust | Types | Ownership | Loops | Allocations | Id and reason |
 |---|---|---|---|---|---|---|---|
 | A0 | `root`, `valid`, `kind`, `raw_span`, `array_length` | `Document::value`, `tape[i].kind`, `span`, record count | `JsonDocument` read, `i64`/`Span` | borrowed doc | none | none | **=** |
-| A1 | `array_at(doc, id, index)` | `Document::array_at`: `index >= count` is a miss, then `index` steps along `next` | `i64` record id | borrowed doc | `index` link steps | none | **changed in 2.3**: was a walk over the whole array (`j < stop`) with a per-element parent check; now the count decides the miss and the loop runs `index` steps, the parent/valid check once on the hit. Same results on every tape that passes `check_tape` (the count equals the direct children reached along `next`), as the hand trusts the count. = Callers: `json/a4_root.pruv:22`, `json/q_root.pruv:85`, `mcp/perf/perf_root.pruv:35` (`b_root` has its own `array_at`) |
+| A1 | `array_at(doc, id, index)` | `Document::array_at`: `index >= count` is a miss, then `index` steps along `next` | `i64` record id | borrowed doc | `index` link steps | none | **changed in 2.3**: was a walk over the whole array (`j < stop`) with a per-element parent check; now the count decides the miss and the loop runs `index` steps, the parent/valid check once on the hit; step 2.9 writes the walk as `for n in 0..index` (P4). Same results on every tape that passes `check_tape` (the count equals the direct children reached along `next`), as the hand trusts the count. = Callers: `json/a4_root.pruv:22`, `json/q_root.pruv:85`, `mcp/perf/perf_root.pruv:35` (`b_root` has its own `array_at`) |
 | A2 | `field_units(doc, id, key: [i64])`, `find` | mode 3 non-ASCII matcher `units(raw).eq(text.encode_utf16())` | key as `[i64]` UTF-16 units | borrowed | members of the object, last match wins | none | **U**: the key is a caller-built `[i64]`; the hand compares against `encode_utf16()` of a `&str` iterator. Callers: `json/q_root`, `a4_root` |
 | A3 | `field(doc, id, key: str)`, `find_ascii`, `may_match`, `is_ascii` | `Document::field` + mode 3 fast path `text.is_ascii() && !body.contains('\\')` | `str` key | borrowed | members, last match wins | ASCII key: none (=). Non-ASCII key: `alloc(len(key))` units | **=** for the ASCII path (every product key is ASCII). The non-ASCII path builds a key unit array: **U** |
 | A4 | `fields_into(doc, id, n, k0..k7, inout out)` + `hit`, `slot_error`, `fill_error`, `field_if_used`, `last_match` | one `get(key)` per key on a `BTreeMap` | 8 `str` keys, `inout [i64]` | `inout out` | one pass over members | none | **W-c**: multi-key one-pass API used by `claude/import.pruv:450` and `claude/entry.pruv:220,248` (owner: the claude import record); the hand does a lookup per key. Consumer step |
 | A5 | `string_units(doc, id) -> Units` | query mode 5 `units(raw).collect::<Vec<u16>>()` | `Units { status, units: [i64] }` | result owns the units | one decode | one (the units) | **changed in 2.3**: miss paths built an empty array and returned `copy(empty)`, the hit returned `copy(u)`; now `alloc(0, 0)` and `move u`. = Callers: `codex/rpc.pruv:418,430`, `codex/root.pruv:276`, `grok/rpc.pruv:706`, `grok/path.pruv:328`, `mcp/perf/perf_root.pruv:37` |
-| A6 | `string_text`, `string_text_scanned` | `get_str` → `String` | `jstr::Text` | result owns | decode | one | **W-c** through `jstr` J5 (status-carrying text). Callers: `qwen` import, `grok/util.pruv:106` (`_scanned_owned`) |
+| A6 | `string_text`, `string_text_scanned` | `get_str` → `String` | `jstr::Text` | result owns | decode | one | **=** (step 2.9): `string_text` / `string_text_scanned` removed; callers use `string_text_owned` / `string_text_scanned_owned` (`get_str` then `String::from_utf8`, no copy). Callers: `qwen/entry.pruv`, `qwen/chain.pruv`, `json/{a4,b,q}_root.pruv`, `grok/util.pruv:106` |
 | A7 | `string_is(doc, id, lit)` | `get_str(..) == Some(lit)`: `Cow::Borrowed` for an escape-free string, decode only with escapes | `i64` | borrowed | ASCII: compare; plain: compare in place; escaped: decode then compare | ASCII and plain: none. Escaped: one decode buffer (= `Cow::Owned`) | **changed in 2.3**: a non-ASCII literal against an escape-free string (tape plain bit) decoded into a fresh `[u8]` before; now compares the source bytes in place. = for documents from `parse::scan_into` (`build_span`: `grok/read.pruv:360`, `qwen` `parse_span`). Documents from the owned parser (`parse::parse`, `parse_owned`/`parse_copy`) always carry plain bit 0 (`parse.pruv:222`), so a non-ASCII literal still decodes there; writing the bit is a `parse` row, outside this step. Static callers pass ASCII literals (`claude/entry.pruv:238,339` through `field_is`, `claude/import.pruv:356..541`, `codex/item.pruv:142..166`), which never reach the decode |
 | A8 | `raw_is`, `view_root_type(data, lo, tape, records)` | mode 3 fast path on the raw bytes | scratch tape view | borrowed | members of the root | none | **W-c**: reads a scratch tape before a document exists (`grok/read.pruv:359`); the hand builds the `Document` first. Consumer step |
 | A9 | `boolean`, `number` | `raw_output`: `parse::<i64>` within ±(2^53-1), `-0` kept | `i64`, `Number` | borrowed | digits | none | **=** Callers: `codex/rpc.pruv:416`, `grok/rpc.pruv:668`, `grok/summary.pruv:154` |
@@ -286,7 +286,7 @@ already the hand shape.
 | L1 | `parse_range(data, lo, hi)` | `parse(&data[lo..hi])`, borrowed `Document` | `JsonParse` | document owns a copy of the range | UTF-8 check + scan (in `parse_owned`) | one exact copy of the range, the tape | **changed in 2.3**: was a zeroed `alloc(n, 0)`, a byte loop, a scan, then a second `copy(owned)`; now `copy(subview(data, lo, hi))` moved into `parse_owned` (as `parse_copy`). The remaining copy is **B-LLVM** (owned source on LLVM). Callers: `qwen/entry.pruv:12`, `grok/read.pruv:362` (fallback) |
 | L2 | `parse_owned(take data, hi)` | `parse(&data)` on an owned buffer | `JsonParse` | takes the buffer; `truncate` in place | UTF-8 check + scan | the tape | **=** Caller: `grok/rpc.pruv:628` |
 | L3 | `parse_copy(data, lo, hi)` | `parse(&line[lo..hi])` | `JsonParse` | one exact copy | as L2 | copy + tape | **B-LLVM** (copy kept for the owned source). Callers: `codex/rpc.pruv:82`, `mcp/root.pruv:118` |
-| L4 | `scan_span`, `parse_span` | none (hand parses each line into a fresh `Document`) | caller scratch `inout tape`, `inout stack` | `inout` | scan | none in the scan | **W-c**: scratch API like P8. Callers: `qwen/entry.pruv:32`, `grok/read.pruv:570` |
+| L4 | `scan_span`, `parse_span` | none (hand parses each line into a fresh `Document`) | caller scratch `inout tape`, `inout stack` | `inout` | scan | none in the scan | **=** (step 2.9): `scan_span` / `parse_span` removed; qwen `window_wire` parses each line with `entry::parse_line` (a fresh document per line, as the hand). grok never called them (its tape path is `build_span` after `parse::scan_into`, a P8 row). |
 | L5 | `build_span(data, lo, hi, tape, records)` | `Document { source: data[lo..hi].to_vec(), tape: tape[..m].to_vec() }` | `JsonDocument` | result owns both | tape prefix: element loop | source: one exact copy (=); tape: one exact copy (2.5) | **changed in 2.3**: the result took `copy(source)` and `copy(exact)` of locals it owned; now both are moved. **changed in 2.5**: the tape prefix is `copy(subview(tape, 0, m))` (ZP closed by LB7, R-6g6-2), Rust `tape[..m].to_vec()`. = Callers: `grok/read.pruv:360`, `parse_span` |
 | L6 | `absolute_offset(base, start, position)` | `base.checked_add(start)?.checked_add(position)` | `i64` | — | none | none | **=** |
 
@@ -544,3 +544,89 @@ hand. The grok mutant M08 (`grok/entry.pruv`) now reads `copy(crate::text::trim(
 | opencode | 199 |
 | qwen | 26 |
 | claude A0 / A1 / A2 / A3 / A4 (own `claude/text.pruv`, unchanged) | 272 / 2884 / 2443 / 134 / 270 |
+
+## Step 2.9: W-c rows whose consumers can move, and P4 range loops
+
+There are no plain **W** rows left in this file; every open row is **W-c** (waits on a consumer), **P**, or a gap. This
+step takes the W-c rows whose consumers can switch now, and the two counted loops that P4 (`for i in a..b`, SPEC §6q)
+writes in the hand form. No performance was measured.
+
+| Row | Function | Status | Hand line |
+| --- | --- | --- | --- |
+| J5 | `jstr::string_text`, `string_text_scanned`, `string_text_plain` | **removed**: callers use the `*_owned` variants (`utf8_valid` then `str_from_utf8(bytes)`, which consumes the buffer) | `String::from_utf8(bytes)` on the unescaped `Vec<u8>` (`claude/handrust/src/lib.rs:383-407`) |
+| A6 | `access::string_text`, `string_text_scanned` | **removed**: callers use `string_text_owned` / `string_text_scanned_owned` | `get_str` (`claude/handrust/src/lib.rs:485-488`) |
+| L4 | `lines::scan_span`, `parse_span` (and qwen `entry::parse_line_span`) | **removed**: qwen `window_wire` calls `entry::parse_line(data, start, end)`; the caller scratch `tape` (24576 words) and `stack` (516 words) are gone | the hand parses each line with `serde_json::from_slice::<Value>` (`qwen/handrust/src/lib.rs:690-723`) |
+| T1 | `turns::grow` | **=**: `take buf`, `b = resize(b, 13116800, 0)`; caller `buf = grow(move buf, ..)` | `buf.resize(n, 0)` (`Vec::resize`, at most one realloc) |
+| lex | `scan_string` `\u` digits | **=**: `for k in 0..4` | `for _ in 0..4` (`json/hand/hand_json.rs:127`) |
+| A1 | `access::array_at` walk | **=** for the loop: `for n in 0..index` (the body keeps its 2.3 tape guards) | `for _ in 0..index { child = self.record(child)[3]; }` (`hand_json.rs:311`) |
+
+### Line-by-line structure
+
+`jstr::string_text_owned` / `access::string_text_owned` against `String::from_utf8`:
+
+| Item | Hand Rust | Pruv (2.9) | Same? |
+| --- | --- | --- | --- |
+| No escape | borrows the source slice (no allocation) | always builds an owned `[u8]` | **P**, unchanged by this step: a borrowed result from the document needs gap **B** |
+| Decode | one pass, `Vec<u8>` started at the first escape | two passes (count, reserve once, then write) in `string_utf8*` (`jstr.pruv:202-310`) | **P**, unchanged by this step |
+| To text | `String::from_utf8(v)` moves `v` | `utf8_valid(b)` then `str_from_utf8(b)` (consumes `b`) | = (the removed variants called `utf8_to_string`, a second buffer and a copy) |
+| Allocation sites (escaped string) | one (the `Vec`) | one (the `[u8]`) | = (was two) |
+
+qwen `window_wire` per line against the hand `parse_line`:
+
+| Item | Hand Rust | Pruv (2.9) | Same? |
+| --- | --- | --- | --- |
+| Filter | parses only when the first non-blank byte is `{` | parses every entry, then checks the root kind | **P**, unchanged by this step |
+| Parse | `serde_json::from_slice::<Value>(line)` on the borrowed slice, a fresh value | `entry::parse_line` -> `lines::parse_range`: copies the line once, then a fresh tape | **P**: the line copy is gap **B** (borrowed source in the document); tape vs `Value` is **V** |
+| Scratch | `scratch: &mut Vec<u8>` reused only by the slow rewrite path (`parse_slow`) | none (was caller `tape` + `stack` passed `inout` to `parse_span`) | = on the common path (the rewrite path is a separate qwen row) |
+
+`turns::grow` against `Vec::resize`:
+
+| Item | Hand Rust | Pruv (2.9) | Same? |
+| --- | --- | --- | --- |
+| Signature | `&mut Vec<u8>` (or by value) | `take buf: [u8]` -> `[u8]` | = (ownership moves in and out; no borrow kept) |
+| Body | `buf.resize(n, 0)` | `b = resize(b, 13116800, 0)` | = (was `alloc` of a new buffer plus a copy of the old bytes) |
+| Allocation sites | at most one realloc | at most one realloc | = (was alloc + copy + free) |
+
+`lex::scan_string` `\u` and `access::array_at`:
+
+| Item | Hand Rust | Pruv (2.9) | Same? |
+| --- | --- | --- | --- |
+| `\u` loop | `for _ in 0..4` | `for k in 0..4`, invariant `pos >= hex_start` (feeds the outer loop's `decreases end - pos`) | = (was `while k < 4` with a manual counter and `decreases 4 - k`) |
+| `array_at` loop | `for _ in 0..index` | `for n in 0..index` | = (was `while` with a counter) |
+| `array_at` body | `child = self.record(child)[3]` | `j = doc.tape[6 * j + 3]` after `j >= stop` and `next <= j` guards | **P** (guards unchanged from 2.3: they keep the tape index in range without a `check_tape` fact; the hand trusts the tape) |
+| Loop variable | `_` | named (`k`, `n`); unused in the body | = in code; Rust emits `for k in 0i64..4i64` |
+
+### Gap rows freed since step 2.8, and what this step did with them
+
+| Gap / feature | Freed by | This step |
+| --- | --- | --- |
+| P4 range `for` | P4 | used for the two counted loops above; the other `while` loops in the touched modules are cursor loops (the cursor moves by data), like the hand `while self.pos < ..`. `tail::tail_push` steps by one and is left for the `tail` bundle |
+| U (`[u16]` keys) | P2 (owned and borrowed `[u16]`) | partly freed; not taken: `jstr` J8 and `access::field_units` (A2) take or return `[i64]` unit arrays that consumers build or read (A3 `field` takes a `str` and builds the units inside), so moving them to `[u16]` is a consumer API change |
+| FM | B5 (place bindings `let d = inout P`) | language part closed; the `tail` decoder-pick rewrite is a package rewrite left to a later bundle |
+| §6b integer widths | P1-P3 | not taken: changing `i64` record fields to narrower types touches every tape consumer |
+| SX | LB6 (step 2.4) | nothing left |
+
+### Consumer tests (step 2.9)
+
+Pairs are rs/rust and rs/llvm (pruvc-rs). The Python compiler `pruvc/` is frozen (PF) and has no P4 `for`
+(`parse/reserved_name` on `for`), so py pairs are not run; the runners now take `--vs-py` for them.
+
+| Runner | Fixtures per pair (rs/rust, rs/llvm) |
+| --- | --- |
+| json `run_a0` .. `run_a5` | 37 / 351 / 114 / 454 / 6344 / 83, all pass |
+| claude `test_a0` .. `test_a4` | 272 / 2884 / 2443 / 134 / 270, all pass |
+| grok `test_impl --no-ts` (`GROK_COMPILE_WALL=3600`) | 254, all pass |
+| opencode `test_impl` | 199, all pass (TypeScript `expected` 199/199) |
+| codex `test_impl` | 136, all pass (TypeScript oracle 136/136) |
+| mcp `test_impl` | 22, all pass |
+| qwen `test_impl` | 26, all pass |
+
+Supervisor does not use the changed packages and was not run. Nothing was measured.
+
+### Rows still open after step 2.9
+
+- `access` A4 (claude multi-key lookup to per-key `field`): consumer change in claude.
+- grok `read::window` scratch `tape` / `stack` and the `build_span` path (P8, A8): needs the grok read rewrite.
+- `lex::scan_literal` taking a `[u8]` literal, `tail_push` as a `for`: small, not in this step.
+- `turns` T7, T9, T10 and `transport` X1-X6: consumer API and behaviour, unchanged.
+- Gap rows B, B-LLVM, V, ABI, U, U8, S: unchanged.

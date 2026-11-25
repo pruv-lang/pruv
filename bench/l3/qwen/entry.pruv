@@ -22,26 +22,6 @@ pub fn parse_line(data: [u8], start: i64, end: i64) -> Line ! alloc
   }
 }
 
-// DB23: parse_line over a borrowed span with caller scratch (lines::parse_span): no per-line owned copy or tape
-// growth; same Line for every input (a too-small scratch falls back to parse_range inside parse_span).
-pub fn parse_line_span(data: [u8], start: i64, end: i64, inout tape: [i64], inout stack: [i64]) -> Line ! alloc
-  requires 0 <= start && start <= end && end <= len(data)
-  ensures len(tape) == len(old(tape)) && len(stack) == len(old(stack))
-  ensures is_variant(result, Line::Object) ==> crate::json::doc_local(variant_field(result, Line::Object, doc))
-{
-  let parsed: crate::json::JsonParse = crate::lines::parse_span(data, start, end, inout tape, inout stack);
-  match parsed {
-    crate::json::JsonParse::Parsed(d) => {
-      if crate::access::kind(d, crate::access::root(d)) == 6 { return Line::Object(d); }
-      return Line::Skip;
-    }
-    crate::json::JsonParse::Failed(error) => {
-      if error.kind == crate::json::err_internal_invariant() { return Line::Defect(error.position); }
-      return Line::Skip;
-    }
-  }
-}
-
 pub fn string_field(doc: crate::json::JsonDocument, id: i64, key: str) -> Field ! alloc
   ensures is_variant(result, Field::Value) ==> len(variant_field(result, Field::Value, text)) <= 50331648
 {
@@ -51,7 +31,7 @@ pub fn string_field(doc: crate::json::JsonDocument, id: i64, key: str) -> Field 
   let k: i64 = crate::access::kind(doc, f);
   if k < 0 { return Field::Defect(k); }
   if k != 4 { return Field::Missing; }
-  let t: crate::jstr::Text = crate::access::string_text(doc, f);
+  let t: crate::jstr::Text = crate::access::string_text_owned(doc, f);
   match t {
     crate::jstr::Text::InternalInvariant(e) => { return Field::Defect(e); }
     crate::jstr::Text::Decoded(v) => {
@@ -133,7 +113,7 @@ fn block_of(doc: crate::json::JsonDocument, j: i64) -> Block ! alloc
 
 fn string_content(doc: crate::json::JsonDocument, c: i64) -> Field ! alloc
 {
-  let t: crate::jstr::Text = crate::access::string_text(doc, c);
+  let t: crate::jstr::Text = crate::access::string_text_owned(doc, c);
   match t {
     crate::jstr::Text::InternalInvariant(e) => { return Field::Defect(e); }
     crate::jstr::Text::Decoded(v) => {
