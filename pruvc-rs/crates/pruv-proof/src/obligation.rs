@@ -2,7 +2,7 @@
 //!
 //! This ports the flow of `prove` as is:
 //! 1. If the `seen` key `(line, col, code[, key_extra])` is present, finish without a query (the adapter trace leaves a `skipped` entry).
-//! 2. `run(false)`: in a new Solver (timeout 8000ms), assert pc → guard → `Not(ob)` in that order and check.
+//! 2. `run(false)`: in a new Solver (rlimit symbolic::RLIMIT, wall-clock safety net symbolic::TIMEOUT_MS), assert pc → guard → `Not(ob)` in that order and check.
 //! 3. If unsat, done (not added to `seen`).
 //! 4. Otherwise, if `lemmas` is non-empty: if the first attempt was sat, extract the counterexample (relaxed), then `run(true)`
 //!    (pc → guard → lemmas → `Not(ob)`). If unsat, done (not added to seen).
@@ -10,7 +10,7 @@
 //!    else `verify_unknown`.
 //!
 //! Each attempt's SMT-LIB is `(set-option :timeout T)\n` + (if rlimit is set, `(set-option :rlimit R)\n`) +
-//! (if seed is set, `(set-option :random_seed S)\n`) + `Solver::to_smt2()`, extracted **before check** (T defaults to 8000).
+//! (if seed is set, `(set-option :random_seed S)\n`) + `Solver::to_smt2()`, extracted **before check** (T defaults to symbolic::TIMEOUT_MS; the head also carries `(set-option :rlimit R)`).
 //!
 //! trace v2 (adapter format): an obligation records `phase` ("verification"|"inference"), `round`, `cand` (null if absent), and (only when skipped) `skipped`;
 //! an attempt records `status` (proved|not_proved|timeout|resource_unknown), `timeout_ms`, `rlimit`, `seed`, and `reason_unknown` (only when Unknown).
