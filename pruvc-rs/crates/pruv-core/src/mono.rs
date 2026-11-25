@@ -453,6 +453,7 @@ impl<'a> Mono<'a> {
             return Ok(self.nom(c));
         }
         match c.name.as_str() {
+            "@ref" => Ok(c.clone()),
             "array" => Ok(mk_array(self.lower(&c.args[0])?)),
             "option" => Ok(mk_option(self.lower(&c.args[0])?)),
             "result" => {

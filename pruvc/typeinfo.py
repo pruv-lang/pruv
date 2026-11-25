@@ -93,6 +93,21 @@ VIEW_BASES = (ARRAY, ARRAY_U8, ARRAY_BOOL, STR)
 _ARRAY_OF = {"i64": ARRAY, "u8": ARRAY_U8, "bool": ARRAY_BOOL}
 
 
+def view_base(ty):
+    """The buffer type of a direct ref view, if any."""
+    if ty.owner is None and ty.name == "ref" and len(ty.args) == 1 and ty.args[0] in VIEW_BASES:
+        return ty.args[0]
+    return None
+
+
+def view_payload(ty):
+    """The buffer type of the direct view payload of Option or Result with i64 errors."""
+    if ty.owner is None and (ty.name == "option" and len(ty.args) == 1
+                            or ty.name == "result" and len(ty.args) in (1, 2) and result_error(ty) == I64):
+        return view_base(ty.args[0])
+    return None
+
+
 def is_array(ty: Type) -> bool:
     return ty.name in ARRAY_ELEM
 
@@ -154,6 +169,8 @@ def format_type(ty: Type) -> str:
     inner = ", ".join(format_type(a) for a in ty.args)
     if ty.name == "array":
         return "[%s]" % inner
+    if ty.name == "ref":
+        return "ref %s" % inner
     if ty.name == "option":
         return "Option<%s>" % inner
     if ty.name == "result":

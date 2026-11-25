@@ -1905,6 +1905,9 @@ impl Checker {
 
     /// Every type reference: arity, known names, type-argument and bound rules (G3_SPEC 3.1, 3.2, 3.4).
     fn check_type(&self, line: i64, col: i64, ty: &GType) -> Res<()> {
+        if ty.view_payload().is_some() {
+            return Ok(());
+        }
         if ty.name == "@ref" || ty.args.iter().any(|t| self.borrowed_type_argument(t)) {
             return Err(terr(line, col, "borrow_signature", "borrowed types cannot be generic arguments", ""));
         }
@@ -2099,6 +2102,9 @@ impl Checker {
     }
 
     fn check_result_error(&self, line: i64, col: i64, e: &GType) -> Res<()> {
+        if self.borrowed_type_argument(e) {
+            return Err(terr(line, col, "borrow_signature", "borrowed types cannot be generic arguments", ""));
+        }
         if e.owner.is_none() && e.name == "string" {
             return self.check_type(line, col, e);
         }
@@ -3871,7 +3877,7 @@ impl Checker {
                     Expr::Call(call) => self.field_move_arg(call, scope, next)?, // LG9 (G-LG8-1)
                     v => self.field_move_out(v, &sty, None, scope, next)?,
                 };
-                let checked = if s.borrowed {
+                let checked = if s.borrowed && sty.view_payload().is_none() {
                     self.view_value(&mut s.value, &sty, scope, false)
                 } else {
                     // R-6g9-3: a static text local is the literal's read-only global
@@ -4165,7 +4171,7 @@ impl Checker {
                             return Err(terr(s.line, s.col, "return_type", "function returns (); use `return;`", ""));
                         }
                         self.boundary = boundary_of(v);
-                        let checked = if self.borrowed_result {
+                        let checked = if self.borrowed_result && ret.view_payload().is_none() {
                             self.view_value(v, &ret, scope, false)
                         } else {
                             self.want_alloc(v, &ret);
@@ -4658,7 +4664,7 @@ impl Checker {
                 }
                 v
             } else {
-                let payload = if a.ctor == "Err" { t.result_error() } else { t.args.first() };
+                let payload = if a.ctor == "Err" { t.result_error() } else { t.view_payload().or_else(|| t.args.first()) };
                 let payload = payload.cloned().unwrap_or_else(i64t);
                 if a.ctor == "Ok" && (payload == unitt()) != a.binders.is_empty() {
                     // LB8 R-6g7-1
@@ -4674,7 +4680,8 @@ impl Checker {
                     return Err(terr(nl, nc, "shadow", format!("{} is already defined", b), "use a new name"));
                 }
                 // G9 A0: a buffer payload is a read view (like a parameter): returning it needs copy()
-                let kind = if map_mut { "map_inout" } else if map_borrow { "map_view" }
+                let kind = if a.ctor != "Err" && t.view_payload().is_some() { "ref_local" }
+                    else if map_mut { "map_inout" } else if map_borrow { "map_view" }
                     else if bt.is_array() || *bt == strt() { "param" } else { "local" };
                 sc.insert(b.clone(), Entry { ty: bt.clone(), mutable: map_take, kind });
             }
@@ -5305,7 +5312,8 @@ impl Checker {
                                 "compare lengths and bytes: len(a) == len(b) && forall k in 0..len(a): a[k] == b[k]",
                             ));
                         }
-                        if lt.owner.is_none() && dependencies(&lt).iter().any(|n| self.buffered.contains(n)) {
+                        if lt.view_payload().is_some()
+                            || (lt.owner.is_none() && dependencies(&lt).iter().any(|n| self.buffered.contains(n))) {
                             // G9 A0
                             return Err(terr(
                                 x.line,
@@ -5790,8 +5798,14 @@ impl Checker {
             ));
         }
         let x = targs[0].clone();
-        self.check_type(e.line, e.col, &x)?;
-        if !(result && x == unitt()) {
+        let view = x.view_base();
+        if view.is_some() && targs.get(1).is_some_and(|err| *err != i64t()) {
+            return Err(terr(e.line, e.col, "borrow_signature", "view payloads require an i64 error type", ""));
+        }
+        if view.is_none() {
+            self.check_type(e.line, e.col, &x)?;
+        }
+        if view.is_none() && !(result && x == unitt()) {
             // LB8 R-6g7-1: Ok::<(), E>(()), Err::<(), E>(e)
             self.check_arg(e.line, e.col, &x, None)?;
             self.ext_misuse(e.line, e.col, &x, Some("arg"))?; // G9 A0
@@ -5833,9 +5847,13 @@ impl Checker {
         }
         let want = if name == "Err" { err.clone() } else { x.clone() };
         if let Some(a) = e.arg.as_mut() {
-            self.expect(a, &want, scope, c, None)?;
-            if !c {
-                self.own(a, scope)?;
+            if let Some(base) = view.filter(|_| name != "Err") {
+                self.view_value(a, base, scope, c)?;
+            } else {
+                self.expect(a, &want, scope, c, None)?;
+                if !c {
+                    self.own(a, scope)?;
+                }
             }
         }
         Ok(if name == "Some" { mk_option(x) } else { mk_result_with_error(x, err) })
@@ -6885,7 +6903,7 @@ impl Checker {
                     if t.args.is_empty() {
                         i64t()
                     } else {
-                        t.args[0].clone()
+                        t.view_payload().unwrap_or(&t.args[0]).clone()
                     }
                 }
             });

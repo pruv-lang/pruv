@@ -1,0 +1,7 @@
+// spec: R-6g9-8 reject
+// A Result holding a view of a local cannot be returned, even through an immutable `let`.
+fn make(s: [u8]) -> Result<ref [u8]> from(s) ! alloc {
+  let tmp: [u8] = alloc(3, 1);
+  let r: Result<ref [u8]> = Ok::<ref [u8]>(subview(tmp, 0, 2));
+  return r;
+}

@@ -9,7 +9,7 @@ from typeinfo import (TypeTable, BUILTIN_TYPE_NAMES, type_name, is_user_type, is
                       COLLECTION_ARITY, COLLECTION_SPELLING, is_collection, contains_collection,  # G6 A0
                       program_uses_inout, is_owned_field_type, is_scalar_vec, is_nongeneric_struct,
                       field_place, is_nested_collection_field, is_string_record_map, is_vec_slice_arg, is_owned_value,
-                      borrowing_copy, VIEW_BASES)
+                      borrowing_copy, VIEW_BASES, view_base, view_payload)
 from refine import expand as refine_expand
 from refine import _kids as expr_kids, _stmt_names
 from foreign import (CATALOG, CATALOG_NAMES, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS, ASYNC_OBSERVERS, ASYNC_OPS,
@@ -924,16 +924,16 @@ class Checker:
     def borrow_signature(s, node, message):
         terr(node, "borrow_signature", message)
 
-    def borrow_type_position(s, node, ty, allowed):
+    def borrow_type_position(s, node, ty, allowed, wrapper=False):
         if not s.contains_borrow(ty):
             return ty
-        if (not allowed or not s.borrowed_type(ty) or
-                (ty.name == "ref" and (len(ty.args) != 1 or s.norm_type(ty.args[0]) not in VIEW_BASES))):
+        direct = s.borrowed_type(ty) and (ty.name != "ref" or view_base(s.norm_type(ty)) is not None)
+        if not (allowed and (direct or wrapper and view_payload(s.norm_type(ty)) is not None)):
             s.borrow_signature(node, "borrowed type is not allowed in this position")
         if s.prog.borrow_site is None:
             s.prog.borrow_site = node
-        # The verifier uses the ordinary value type. Checking and lowering retain
-        # borrow information on the declaring node and on borrowed expressions.
+        # Bare views use the buffer type with borrow information on the AST.
+        # Wrappers keep the ref marker on their payload.
         return ty.args[0] if ty.name == "ref" else ty
 
     def lending_field(s, ty, path):
@@ -984,9 +984,9 @@ class Checker:
                 p.type = s.norm_type(s.borrow_type_position(
                     f, p.type, not (boundary or p.take or p.type.name == "ref"
                                     or p.mode and p.type.name not in s.borrowing_structs)))
-            borrowed_result = s.borrowed_type(f.ret)
+            borrowed_result = s.borrowed_type(f.ret) or view_payload(s.norm_type(f.ret)) is not None
             f.ref_result = f.ret.name == "ref"
-            f.ret = s.norm_type(s.borrow_type_position(f, f.ret, not boundary))
+            f.ret = s.norm_type(s.borrow_type_position(f, f.ret, not boundary, wrapper=not boundary))
             if borrowed_result or f.borrow_from is not None:
                 s.check_borrow_sources(f, borrowed_result)
             for e in f.requires + f.ensures:
@@ -1125,7 +1125,8 @@ class Checker:
             elif isinstance(st, Let):
                 st.ref = st.type.name == "ref"
                 # R-6g9-6: a `let mut` borrowing struct is allowed; a `let mut` view is not.
-                st.type = s.norm_type(s.borrow_type_position(st, st.type, not (st.mutable and st.ref or generic)))
+                st.type = s.norm_type(s.borrow_type_position(
+                    st, st.type, not (st.mutable and st.ref or generic), wrapper=not st.mutable))
                 s.norm_expr(st.value)
             elif isinstance(st, (Assign, FieldAssign, Return)):
                 if st.value is not None:
@@ -1163,7 +1164,15 @@ class Checker:
     def norm_expr(s, e):
         targs = getattr(e, "targs", None)
         if targs is not None:
-            e.targs = [s.norm_type(s.borrow_type_position(e, t, False)) for t in targs]
+            wrapper = None
+            if isinstance(e, Ctor):
+                kind = "option" if e.name in ("Some", "None") else "result"
+                wrapper = view_payload(s.norm_type(Type(kind, tuple(targs))))
+            if wrapper is not None:
+                s.borrow_type_position(e, targs[0], True)
+                e.targs = [s.norm_type(t) for t in targs]
+            else:
+                e.targs = [s.norm_type(s.borrow_type_position(e, t, False)) for t in targs]
             if (isinstance(e, Call) and e.name in CATALOG and e.name not in s.funcs
                     and e.name.startswith(("vec_", "map_")) and e.targs
                     and e.targs[-1].owner is None and not e.targs[-1].args):
@@ -1229,6 +1238,8 @@ class Checker:
         if ty.owner is not None:
             return
         if ty.name in ("option", "result"):
+            if view_payload(ty) is not None:
+                return
             if ty.args and not (ty.name == "result" and ty.args[0] == UNIT):   # LB8 R-6g7-1: Result<(), E>
                 s.check_arg(node, ty.args[0], None)
             if ty.name == "result" and len(ty.args) == 2:
@@ -2721,6 +2732,7 @@ class Checker:
                 node = a if user else st
                 saved_movable, saved_binders = s.match_movable, s.arm_binders
                 s.arm_binders = saved_binders | set(a.binders)
+                view = None if user or a.ctor not in ("Some", "Ok") else view_payload(t)
                 if user:
                     ftypes = [ft for _, ft in s.fields_of(t, a.ctor)]
                     if len(a.binders) != len(ftypes):
@@ -2728,7 +2740,7 @@ class Checker:
                             t.name, a.ctor, len(ftypes), len(a.binders)),
                              "bind every field, in declaration order")
                 else:
-                    payload = result_error(t) if a.ctor == "Err" else t.args[0] if t.args else I64
+                    payload = result_error(t) if a.ctor == "Err" else view or (t.args[0] if t.args else I64)
                     if a.ctor == "Ok" and (payload == UNIT) != (not a.binders):   # LB8 R-6g7-1
                         terr(a, "match_arity", "Ok of %s %s" % (type_name(t), "binds no value, write `Ok(())`"
                              if payload == UNIT else "carries a value, the pattern must bind it"),
@@ -2739,6 +2751,8 @@ class Checker:
                         terr(node, "shadow", "%s is already defined" % b, "use a new name")
                     # G9 A0: a buffer payload is a read view (like a parameter): returning it needs copy()
                     kind = "param" if (is_array(bt) or bt == STR or s.rec_vec(bt)) else "local"
+                    if view is not None:
+                        kind = "ref"
                     if a.ctor == "Err" and not user and bt == STRING:
                         kind = "result_error"
                     sc[b] = (bt, map_take and a.ctor == "Some", kind)
@@ -3487,9 +3501,11 @@ class Checker:
             terr(e, "inout_argument", "the `inout` marker is only valid on an argument of a function whose parameter is inout",
                  "remove `inout`")
         if isinstance(e, Call):
-            callee = s.funcs.get(e.name)   # s.call can rewrite e in place (old(c).f becomes a field read)
+            name = e.name
+            callee = s.funcs.get(name)   # s.call can rewrite e in place (old(c).f becomes a field read)
             t = s.call(e, scope, c, borrow_element)
-            e.borrowed_view = callee is not None and callee.ref_result
+            e.borrowed_view = (callee is not None and callee.ref_result
+                               or name in ("some_val", "ok_val") and view_payload(e.args[0].ty) is not None)
             x = s.x_pending
             if x is not None:     # P06: a contract call to a user function becomes its expansion, in place
                 s.x_pending = None
@@ -3606,11 +3622,20 @@ class Checker:
             terr(e, "type_arity", "%s::<..> takes exactly 1 type argument, got %d" % (e.name, len(e.targs)),
                  "write %s::<T>" % e.name)
         x = e.targs[0]
+        error = e.targs[1] if len(e.targs) == 2 else I64
+        ty = mk_result(x, error) if is_result else mk_option(x)
+        if (base := view_payload(ty)) is not None:
+            if e.name in ("Some", "Ok"):
+                if e.arg is None:
+                    s.unit_payload(e, base)
+                s.view_value(e.arg, base, scope, c)
+            elif e.name == "Err":
+                s.expect(e.arg, I64, scope, c)
+            return ty
         s.check_type(e, x)
         if not (is_result and x == UNIT):      # LB8 R-6g7-1: Ok::<(), E>(()), Err::<(), E>(e)
             s.check_arg(e, x, None)
             s.ext_misuse(e, x, "arg")      # G9 A0
-        error = e.targs[1] if len(e.targs) == 2 else I64
         if error != I64:
             s.check_type_arity(e, error)
             s.check_result_error(e, error)
@@ -3700,8 +3725,10 @@ class Checker:
             return {}
         if isinstance(e, InoutArg):
             return s.view_provenance(e.expr, loans, True)
+        if isinstance(e, Ctor) and view_payload(e.ty) is not None:
+            return s.view_provenance(e.arg, loans, exclusive) if e.name in ("Some", "Ok") else {}
         if isinstance(e, Call):
-            if e.name == "subview":
+            if e.name in ("subview", "some_val", "ok_val"):
                 return s.view_provenance(e.args[0], loans, exclusive)
             f = s.funcs.get(e.name)
             if f is None or not f.borrow_from:
@@ -3772,15 +3799,19 @@ class Checker:
 
     def view_statement(s, st, loans, undo):
         """The borrowed-view checks of one statement that do not depend on liveness; a borrow `let` records its
-        provenance in `loans` and logs the previous entry in `undo` as (name, was present, old value). Returns the
-        provenance of a borrowing store, else None."""
+        provenance in `loans` and logs the previous entry in `undo` as (name, was present, old value).
+        Returns the provenance of a borrowing store or a view wrapper scrutinee, else None."""
         # Validate borrowed calls even when their results are used only inside the statement.
         for item in s.view_stmt_items(st):
             if isinstance(item, Expr):
                 for e in _walk(item):
                     if isinstance(e, Call) and e.name in s.funcs and s.funcs[e.name].borrow_from:
                         s.view_provenance(e, loans)
-        if isinstance(st, Let) and (st.ref or s.borrowed_type(st.type)):
+        if isinstance(st, Match) and view_payload(st.scrutinee.ty) is not None:
+            provenance = s.view_provenance(st.scrutinee, loans)
+            s.f.borrowed_roots.update(root for root, _ in provenance)
+            return provenance
+        if isinstance(st, Let) and (st.ref or s.borrowed_type(st.type) or view_payload(st.type) is not None):
             provenance = s.view_provenance(st.value, loans)
             undo.append((st.name, st.name in loans, loans.get(st.name)))
             loans[st.name] = (provenance, False)
@@ -3805,7 +3836,7 @@ class Checker:
                    for root in roots):
                 terr(st, "borrow_escape", "the result borrows a value outside the from parameters")
 
-    def view_graph(s, stmts, incoming, loans, scope, g):
+    def view_graph(s, stmts, incoming, loans, scope, g, binder=None):
         """R-6g9-4: add the statements of a block to the liveness graph `g` in pre-order. `incoming` are the points
         that flow into the block; returns the points that flow out of it, at most one: every `if` and `match` ends in
         one synthetic join point (no uses, no gen/kill) that all its branch exits flow into, so a block never fans
@@ -3815,6 +3846,20 @@ class Checker:
         still reads the old `v` while its provenance is computed). Cost: O(S + Σ|provenance|) for the graph."""
         loans_undo, scope_undo = [], []
         try:
+            if binder is not None:
+                # A match arm defines its view anew on each entry, including across loop back edges.
+                name, provenance = binder
+                bit = len(g["borrows"])
+                g["borrows"].append(provenance)
+                loans_undo.append((name, name in loans, loans.get(name)))
+                loans[name] = (provenance, False)
+                scope_undo.append((name, name in scope, scope.get(name)))
+                scope[name] = bit
+                n = len(g["points"])
+                for p in incoming:
+                    g["points"][p]["succ"].append(n)
+                g["points"].append({"succ": [], "gen": 0, "kill": 1 << bit, "uses": [], "node": None})
+                incoming = [n]
             for st in stmts:
                 n = len(g["points"])
                 for p in incoming:
@@ -3829,15 +3874,16 @@ class Checker:
                         point["gen"] |= 1 << scope[name]
                 if rebind:
                     point["kill"] = 1 << scope[st.name]
+                provenance = None
                 if g["failure"] is None:
                     try:
                         provenance = s.view_statement(st, loans, loans_undo)
                     except PruvError as e:
                         g["failure"] = (n, e)
                     else:
-                        if rebind and provenance:
-                            # R-6g9-6: a whole rebind that moves a root its new value borrows conflicts like a `let`.
-                            point["own_move"] = _moved_root(st.value, provenance)
+                        if provenance and (rebind or isinstance(st, Match)):
+                            value = st.value if rebind else st.scrutinee
+                            point["own_move"] = _moved_root(value, provenance)
                 if isinstance(st, Let) and st.place:
                     # R-6g9-5: borrow the footprint exclusively and keep the access modes of index and condition operands.
                     bit = len(g["borrows"])
@@ -3855,7 +3901,7 @@ class Checker:
                     scope[st.name] = bit
                     g["borrows"].append({})
                     g["places"][bit] = (st.name, root, path)
-                elif isinstance(st, Let) and (st.ref or s.borrowed_type(st.type)):
+                elif isinstance(st, Let) and (st.ref or s.borrowed_type(st.type) or view_payload(st.type) is not None):
                     bit = len(g["borrows"])
                     point["kill"] = 1 << bit
                     scope_undo.append((st.name, st.name in scope, scope.get(st.name)))
@@ -3874,7 +3920,12 @@ class Checker:
                         g["points"][p]["succ"].append(n)
                     incoming = [n]
                 elif isinstance(st, Match):
-                    exits = [p for arm in st.arms for p in s.view_graph(arm.body, [n], loans, scope, g)]
+                    exits = []
+                    for arm in st.arms:
+                        binding = None
+                        if provenance is not None and arm.ctor in ("Some", "Ok") and arm.binders:
+                            binding = (arm.binders[0], provenance)
+                        exits.extend(s.view_graph(arm.body, [n], loans, scope, g, binding))
                     incoming = s.view_join(g, exits)
                 elif isinstance(st, Return):
                     incoming = []
@@ -3932,8 +3983,8 @@ class Checker:
 
     def check_view_block(s, stmts, loans):
         """R-6g9-4 path liveness: a borrow is live at a statement iff some path from it reaches a mention of the
-        borrow before its `let` runs again. The graph has one point per statement in pre-order plus one join point
-        per `if` / `match` (see view_graph). Backward gen/kill over bit sets by repeated sweeps over the points from
+        borrow before its binding runs again. The graph has one point per statement in pre-order, a join point
+        per `if` / `match`, and an entry point per view payload binder. Backward gen/kill over bit sets over the points from
         the last to the first, live[n] = gen | (OR of live[succ] & ~kill), until a sweep changes nothing; only loop
         back edges go to lower indices, so this takes loop depth + 2 sweeps. Only points reachable from the entry
         (one forward pass in index order) are checked. A use conflicts with the borrows live at its point, found
@@ -4611,7 +4662,7 @@ class Checker:
             if rt == "payload":     # G3: the payload type of Option<X> / Result<X>
                 if t.args and t.args[0] == UNIT:   # LB8 R-6g7-1: the unit payload carries nothing to read
                     terr(e, "type_mismatch", "ok_val of %s has no value" % type_name(t), "use is_ok")
-                return t.args[0] if t.args else I64
+                return view_payload(t) or (t.args[0] if t.args else I64)
             if rt == "error":
                 return result_error(t)
             return rt

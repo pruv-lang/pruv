@@ -63,8 +63,25 @@ fn structured_builtin(g: &GType) -> bool {
     g.owner.is_none() && !g.args.is_empty() && (g.name == "option" || g.name == "result")
 }
 
+/// Rust spelling of a view wrapper, with the optional result lifetime on its payload.
+pub(crate) fn view_wrapper_rty(g: &GType, base: &GType, lifetime: &str) -> String {
+    let view = rty_g(base, true);
+    let payload = format!("&{lifetime}{}", &view[1..]);
+    if g.name == "option" {
+        format!("Option<{payload}>")
+    } else {
+        format!("Result<{payload}, i64>")
+    }
+}
+
 /// Rust type spelling of a structured Option or Result.
 pub fn rty_g(g: &GType, param: bool) -> String {
+    if let Some(base) = g.view_base() {
+        return rty_g(base, true);
+    }
+    if let Some(base) = g.view_payload() {
+        return view_wrapper_rty(g, base, "");
+    }
     if structured_builtin(g) {
         let x = rty_g(&g.args[0], false);
         if g.name == "option" {
@@ -165,6 +182,9 @@ fn type_repr(t: &str) -> String {
 
 /// Contract mirror of a structured Option or Result.
 pub fn try_cty_g(g: &GType) -> Result<String, String> {
+    if let Some(base) = g.view_base() {
+        return Ok(rty_g(base, true));
+    }
     if structured_builtin(g) {
         // LB8: the Ok payload of Result<(), E> mirrors to ()
         let x = if g.name == "result" && g.args[0].name == "unit" && g.args[0].owner.is_none() {
@@ -210,6 +230,9 @@ pub fn cty(t: &str) -> String {
 
 /// Contract conversion of a structured type (G3): recursive, the payload first.
 pub fn try_conv_g(g: &GType, x: &str) -> Result<String, String> {
+    if g.view_base().is_some() {
+        return Ok(x.to_string());
+    }
     if structured_builtin(g) {
         let inner = if g.name == "result" && g.args[0].name == "unit" && g.args[0].owner.is_none() {
             "v".to_string()

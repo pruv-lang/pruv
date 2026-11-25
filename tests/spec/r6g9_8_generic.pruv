@@ -1,0 +1,8 @@
+// spec: R-6g9-8 reject
+// A generic function may not hold a view, and that includes a view inside an Option / Result `let`.
+fn head(s: [u8]) -> Option<ref [u8]> from(s) { return Some::<ref [u8]>(s); }
+fn f<T>(x: T) -> i64 ! alloc {
+  let b: [u8] = alloc(4, 1);
+  let h: Option<ref [u8]> = head(b);
+  match h { Some(v) => { return len(v); } None => { return 0; } }
+}

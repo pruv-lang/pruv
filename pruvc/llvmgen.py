@@ -47,7 +47,7 @@ import codegen
 from codegen import show
 from llvm_inline import llvm_inline
 from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str  # G2 B2: uses_str
-from typeinfo import field_place, VIEW_BASES
+from typeinfo import field_place, VIEW_BASES, view_base, view_payload
 from check import ARRAY_GROW_BUILTINS, array_resize_params, array_resize_args, same_place
 from typeinfo import is_collection, contains_collection, encode, is_scalar_vec, is_vec_slice_arg, is_owned_result
 from foreign import CATALOG, CATALOG_CONTRACT_ONLY, first_g6_use, _owned_result, NET_OBSERVERS, ASYNC_OBSERVERS  # G6 A3, G6b, G10 net A3
@@ -715,6 +715,8 @@ def vkind(t):
 def st(t, c=False):
     """storage type of a value of type t inside an aggregate (c: contract/i128 form)"""
     n = t.name
+    if view_base(t) is not None:
+        return VIEW
     if is_native_vec(t):
         return ARR
     if is_collection(t):    # LG12 E2: the error slot of Result<T, String> holds the String handle
@@ -1048,8 +1050,8 @@ def has_take_array(f):
 def is_internal_fn(f, tt):
     """G9: a function with an extended type in its signature has no raw ABI wrapper and no binding;
     G5 A3: neither has a function with an inout parameter (one host-eligibility rule); R-6g9-1: nor a borrowed result
-    (a { ptr, i64 } view the host would read as an owned array)"""
-    return has_ext_sig(f, tt) or has_inout(f) or has_take_array(f) or view_ret(f)
+    (a view pair or a wrapper containing one)"""
+    return has_ext_sig(f, tt) or has_inout(f) or has_take_array(f) or view_ret(f) or view_payload(f.ret) is not None
 
 
 def has_ext_sig(f, tt):
@@ -1062,7 +1064,7 @@ def exports_abi(f, tt, explicit):
     not foreign / specialization / collection-bearing / extended, explicit mode => host entry, and an inout parameter
     is exported only from an explicit-mode host entry (mutable host entries; legacy inout fns stay internal)"""
     if (f.foreign is not None or getattr(f, "private", False) or _is_coll_fn(f) or has_ext_sig(f, tt)
-            or has_take_array(f) or view_ret(f)):   # R-6g9-1: a borrowed result never crosses the host boundary
+            or has_take_array(f) or view_ret(f) or view_payload(f.ret) is not None):
         return False
     if explicit and not f.host_entry:
         return False
@@ -1228,8 +1230,8 @@ class FnGen:
             s.allocas.append("%s = alloca ptr" % a)
             s.allocas.append("%s = alloca i64" % b)
             return Slot("arr", a, b, elem_ty(ty))
-        if getattr(s.tt.decls.get(ty.name), "borrowing", False):
-            s.views = True  # R-6g9-2: a borrowing struct local reads its source array like a `ref` local
+        if getattr(s.tt.decls.get(ty.name), "borrowing", False) or view_payload(ty) is not None:
+            s.views = True
         if kind == "i64":
             s.allocas.append("%s = alloca i64" % a)
             return Slot("i64", a)
@@ -1653,9 +1655,8 @@ class FnGen:
         return any(sl is x for sc in s.scopes for x in sc["arrays"])
 
     def may_take(s):
-        """Every last-use take (move_src, take_src, nested_moves, ret_takable) is on: not a cost build, and R-6g9-1 no
-        `ref` local (nor R-6g9-2 borrowing struct local) in the function, since a live view may read the array (local or field) a take would move, shrink,
-        regrow or free"""
+        """Last-use takes are disabled under cost metering or when locals hold views, including borrowing
+        structs and view wrappers. A live view may read the buffer a take would move, resize or free."""
         return not s.cost and not s.views
 
     def ret_movable(s, e):
@@ -1945,7 +1946,7 @@ class FnGen:
     # ---------- user aggregates (G1) ----------
     def pack(s, v, ty, c, ref=False):
         """SSA value of storage type st(ty, c) (VIEW for a `ref` field) for the value v"""
-        if ref:     # R-6g9-2: a `ref` field stores only the borrowed pair
+        if ref or view_base(ty) is not None:
             a = s.op("insertvalue %s undef, ptr %s, 0" % (VIEW, v.a))
             return s.op("insertvalue %s %s, i64 %s, 1" % (VIEW, a, v.b))
         if ty.name in ("option", "result") and not gopt(ty):
@@ -1960,6 +1961,9 @@ class FnGen:
         s.ins("store %s %s, ptr %s" % (st(ty), s.pack(v, ty, False), ptr))
 
     def unpack(s, x, ty, c, ref=False):
+        base = view_base(ty)
+        if base is not None:
+            ty, ref = base, True
         n = ty.name
         if ref:     # R-6g9-2: a `ref` field is a view: no cap, never freed through this value
             return V("arr", s.op("extractvalue %s %s, 0" % (VIEW, x)), s.op("extractvalue %s %s, 1" % (VIEW, x)),
@@ -2034,6 +2038,8 @@ class FnGen:
         """match on a new Option<X>/Result<X>: branch on the tag, bind the active payload only inside its arm"""
         ty = sv.ty
         X = ty.args[0]
+        if view_payload(ty) is not None:
+            s.views = True
         pos = [a for a in st_.arms if a.ctor in ("Some", "Ok")][0]
         neg = [a for a in st_.arms if a.ctor in ("None", "Err")][0]
         tag = s.op("extractvalue %s %s, 0" % (st(ty), sv.a))
@@ -2073,7 +2079,7 @@ class FnGen:
         n = ty.name
         if n == "i64":
             return V("i128", s.op("sext i64 %s to i128" % x.a))
-        if n == "bool":
+        if n == "bool" or view_base(ty) is not None:
             return x
         if gopt(ty):  # G3: widen the payload (and the Result error); the unused payload stays zero
             X = ty.args[0]

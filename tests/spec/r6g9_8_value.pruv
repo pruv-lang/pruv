@@ -1,0 +1,103 @@
+// spec: R-6g9-8 accept
+// A view as an Option / Result payload (hand `fn value(&self, id) -> Result<&[i64], i64>`): the wrapper of a
+// `from` result or an immutable `let` borrows what its payload borrows, `match` and `?` bind the payload as a view
+// with the same roots, and `None` / `Err` borrow nothing. Rust `Result<&'a [i64], i64>`; LLVM returns the
+// `{ i1, { ptr, i64 }, i64 }` aggregate by value and never frees it. The source may be written after the last use.
+struct Document { source: ref [u8], tape: [i64] }
+fn parse(src: [u8]) -> Document from(src) ! alloc
+  requires len(src) <= 100
+  ensures len(result.source) == len(src) && len(result.tape) == 2 * len(src)
+{
+  let mut t: [i64] = alloc(2 * len(src), 0);
+  let mut i: i64 = 0;
+  while i < len(src)
+    invariant 0 <= i && i <= len(src) && len(t) == 2 * len(src)
+    decreases len(src) - i
+  {
+    t[2 * i] = i;
+    t[2 * i + 1] = src[i];
+    i = i + 1;
+  }
+  return Document { source: src, tape: move t };
+}
+fn digit(x: i64) -> i64
+  ensures 0 <= result && result < 10
+{
+  if x < 0 || x > 9 { return 0; }
+  return x;
+}
+fn value(doc: Document, id: i64) -> Result<ref [i64]> from(doc.tape)
+  requires 0 <= id && id <= 1000
+  ensures is_ok(result) ==> len(ok_val(result)) == 2
+  ensures !is_ok(result) ==> err_val(result) == id
+{
+  if 2 * id + 2 > len(doc.tape) { return Err::<ref [i64]>(id); }
+  return Ok::<ref [i64]>(subview(doc.tape, 2 * id, 2 * id + 2));
+}
+fn again(doc: Document, id: i64) -> Result<ref [i64]> from(doc.tape)
+  requires 0 <= id && id <= 1000
+  ensures is_ok(result) ==> len(ok_val(result)) == 2
+  ensures !is_ok(result) ==> err_val(result) == id
+{
+  let r: Result<ref [i64]> = value(doc, id);
+  return r;
+}
+fn pair(doc: Document, id: i64) -> Result<i64>
+  requires 0 <= id && id <= 1000
+  ensures is_ok(result) ==> -20 < ok_val(result) && ok_val(result) < 20
+{
+  let v: ref [i64] = value(doc, id)?;
+  return Ok(digit(v[0]) + digit(v[1]));
+}
+fn head(s: [u8], n: i64) -> Option<ref [u8]> from(s)
+  requires 0 <= n
+  ensures is_some(result) ==> len(some_val(result)) == n
+{
+  if n > len(s) { return None::<ref [u8]>; }
+  return Some::<ref [u8]>(subview(s, 0, n));
+}
+fn name(s: str, pick: bool) -> Option<ref str> from(s) {
+  if pick { return Some::<ref str>(s); }
+  return Some::<ref str>("none");
+}
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(5, 7);
+  let mut d: Document = parse(x);
+  let r: Result<ref [i64]> = again(d, 3);
+  let mut total: i64 = 0;
+  match r {
+    Ok(v) => { total = total + 100 * digit(v[0]) + 10 * digit(v[1]) + len(v); }
+    Err(e) => { total = total - e; }
+  }
+  match value(d, 9) {
+    Ok(v) => { total = total + 5000; }
+    Err(e) => { total = total + 1000 * e; }
+  }
+  match pair(d, 2) {
+    Ok(s) => { total = total + 100000 * s; }
+    Err(e) => { total = total - 1; }
+  }
+  d.tape[6] = 4;
+  match value(d, 3) {
+    Ok(v) => { total = total + 10000000 * digit(v[0]); }
+    Err(e) => { total = total - 1; }
+  }
+  let h: Option<ref [u8]> = head(x, 3);
+  match h {
+    Some(b) => { total = total + 100000000 * len(b) + b[2]; }
+    None => { total = total - 1; }
+  }
+  match head(x, 9) {
+    Some(b) => { total = total - 1; }
+    None => { total = total + 1000000000; }
+  }
+  match name("pruv", true) {
+    Some(w) => { total = total + 10000000000 * (len(w) % 10); }
+    None => { total = total - 1; }
+  }
+  match name("pruv", false) {
+    Some(w) => { total = total + 100000000000 * (len(w) % 10); }
+    None => { total = total - 1; }
+  }
+  return total;
+}
