@@ -125,7 +125,7 @@ All runs use `PRUVC_RS=/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pr
 | `req/q.py` (q_gen, 2000 cases) | rs/rust, rs/llvm | 2000/2000 exact on each pair |
 | `budget/m12_test/run_m12.py --pairs rs` | rs/rust | Q7P 300 exact, L 10, crafted 8, lifecycle 7, fail 0 |
 | `budget/m11_test/run_m11.py --pairs rs` | rs/rust | Q6 exact 213, prefix-ok 87 (same as `M11_NOTES.md`), fail 0 |
-| `entry/integrate.py` | rs/rust | not in this commit: needs the qwen, codex, grok and opencode runners built first (running at commit time) |
+| `entry/integrate.py` (after qwen 26/26 + codex 136/136 on both pairs, opencode 199/199 and grok `--no-ts` 254/254 on rs/rust) | rs/rust | 10 integration cases, 18 checks PASS, 2 integration limits (I01/I02 claude, the packet-only API; known) |
 
 ### Independent structure comparison
 
