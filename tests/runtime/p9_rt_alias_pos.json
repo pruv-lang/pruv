@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["5373", "10328", "14372"], "gen_contains": ["type Code = i64;", "type Byte = u8;", "type Trio = [i64; 3];", "type Pair = (i64, bool);"]}

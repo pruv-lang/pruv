@@ -1,0 +1,4 @@
+// P9a: an alias parameter cannot shadow a declared type
+struct K<T> { v: T }
+type F<K> = K<i64>;
+fn f(x: F<bool>) -> i64 { return x.v; }

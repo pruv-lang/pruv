@@ -1,0 +1,3 @@
+// P9a: a tuple behind an alias is still a tuple inside a generic declaration
+type Pair = (i64, bool);
+fn f<T: Element>(x: T, y: Pair) -> T { return x; }

@@ -1,0 +1,4 @@
+// P9a: a cycle through an array element is still a cycle
+type A = Option<B>;
+type B = [A];
+fn f() -> i64 { return 1; }

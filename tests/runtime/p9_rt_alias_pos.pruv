@@ -1,0 +1,51 @@
+// P9a audit: aliases in every type position (array element, fixed-array element, use-site refinement,
+// `ref` of an alias, a constant's type, a tuple alias in a non-generic function)
+type Code = i64;
+type Byte = u8;
+type Text = str;
+type Trio = [Code; 3];
+type Pair = (Code, bool);
+const BASE: Code = 7;
+
+fn total(a: [Code]) -> Code
+  requires len(a) <= 4 && forall i in 0..len(a): a[i] >= 0 && a[i] <= 100
+  ensures result >= 0 && result <= 400
+{
+  let mut s: Code = 0;
+  for i in 0..len(a)
+    invariant s >= 0 && s <= 100 * i
+  {
+    s = s + a[i];
+  }
+  return s;
+}
+
+fn clamp(x: Code | 0..=9) -> Code ensures result == x + BASE {
+  return x + BASE;
+}
+
+fn pick(a: str, b: str, first: bool) -> ref Text from(a, b) {
+  if first { return a; }
+  return b;
+}
+
+fn head(t: Trio, p: Pair) -> Code requires t[0] < 100 && t[0] > -100 && p.0 < 100 && p.0 > -100
+  ensures result > -200 && result < 200
+{
+  if p.1 { return t[0] + p.0; }
+  return t[0];
+}
+
+fn nbytes(b: [Byte]) -> i64 requires len(b) <= 8 ensures result == len(b) {
+  return len(b);
+}
+
+fn run(k: i64) -> i64 requires k >= 0 && k <= 9 {
+  let v: Trio = [k, 2, 3];
+  let bs: [Byte; 2] = [1, 2];
+  let t: Trio = [k, 0, 0];
+  let s: ref Text = pick("ab", "xyz", k > 4);
+  let ls: i64 = len(s);
+  if ls > 10 { return 0; }
+  return total(v) * 1000 + clamp(k) * 10 + nbytes(bs) + ls * 100 + head(t, (1, true));
+}

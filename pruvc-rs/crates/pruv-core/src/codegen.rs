@@ -6566,9 +6566,9 @@ fn gen_rust_concrete_core(
             let v = if c.ty == "char" { rust_char_lit(&c.value.to_string(), false) } else { c.value.to_string() };
             g.out.push(format!("#[allow(dead_code)]\nconst {}: {} = {};", c.name, c.ty, v));
         }
-        // P9: the used non-generic type aliases over built-in or non-generic declared types (uses print expanded, row P9a-2)
+        // P9: the used non-generic aliases of scalar, fixed-array and tuple types (uses print expanded, row P9a-2)
         for a in &prog.aliases {
-            if a.params.is_empty() && alias_printable(&GType::from_key(&a.rhs), prog) {
+            if a.params.is_empty() && alias_name_free(&a.name) && alias_printable(&GType::from_key(&a.rhs)) {
                 g.out.push(format!("#[allow(dead_code)]\ntype {} = {};", a.name, rty(&a.rhs, false)));
             }
         }
@@ -8426,23 +8426,21 @@ pub fn async_prelude(hook:&str)->String {async_filter(ASYNC_PRELUDE,hook,"//@hoo
 pub fn async_proc_prelude(proc_hook:&str, hook:&str)->String {async_filter(&async_filter(ASYNC_PROC_PRELUDE,proc_hook,"//@hook"),hook,"//@async_hook")}
 
 /// P9: a type alias right side the Rust module can name as written: no user type with type arguments or parameters.
-fn alias_printable(g: &GType, prog: &Program) -> bool {
-    if g.owner.is_some() {
-        return false;
-    }
-    if g.name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
-        let ok = prog.types.iter().any(|t| match t {
-            TypeDecl::Struct(d) => d.name == g.name && d.tparams.is_empty(),
-            TypeDecl::Enum(d) => d.name == g.name && d.tparams.is_empty(),
-        });
-        if !ok || !g.args.is_empty() {
-            return false;
-        }
+fn alias_printable(g: &GType) -> bool {
+    // scalars, fixed arrays of scalars and tuples of these: their Rust spelling is the same at every use and
+    // carries no lifetime; buffers, str, views, Option/Result and user types print only expanded (row P9a-2)
+    if let Some((e, _)) = g.fixed_parts() {
+        return alias_printable(e);
     }
     if let Some(cs) = crate::gtype::tuple_components(&g.name) {
-        if !cs.iter().all(|c| alias_printable(&GType::from_key(c), prog)) {
-            return false;
-        }
+        return cs.iter().all(|c| alias_printable(&GType::from_key(c)));
     }
-    g.args.iter().all(|a| alias_printable(a, prog))
+    g.owner.is_none() && g.args.is_empty() && (g.name == "bool" || crate::intwidth::of(&g.name).is_some())
+}
+
+/// P9: an alias item lives in `mod pruv_impl` next to the runtime prelude, so it must not take a std or generated name.
+fn alias_name_free(name: &str) -> bool {
+    !name.starts_with("Pruv")
+        && !matches!(name, "Vec" | "String" | "Box" | "Option" | "Result" | "HashMap" | "HashSet" | "BTreeMap" | "Rc"
+            | "Arc" | "Cell" | "RefCell" | "Ordering" | "Self")
 }

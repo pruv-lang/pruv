@@ -1,0 +1,3 @@
+// P9a: an alias cannot redefine a built-in type name
+type Option<T> = T;
+fn f(x: Option<bool>) -> bool { return x; }
