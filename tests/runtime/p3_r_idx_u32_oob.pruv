@@ -1,0 +1,6 @@
+// P3 runtime: unverified u32 index one past the end fails the bounds check (zext index path)
+fn f(a: i64, b: i64) -> i64 ! alloc {
+  let v: [i64] = alloc(4, 7);
+  let k: u32 = u32(a);
+  return v[k] + b;
+}

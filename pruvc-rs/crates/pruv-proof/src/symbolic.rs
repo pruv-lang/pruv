@@ -1857,6 +1857,8 @@ impl<'a> FnVerifier<'a> {
                         Ty::Bool => (z.bool_sort(), Elem::Bool),
                         Ty::Narrow(w) if w.name == "u8" => (z.int_sort(), Elem::U8),
                         Ty::Narrow(w) if w.name == "u16" => (z.int_sort(), Elem::U16),
+                        // P3-1: arrays of the other widths are rejected by the parser; never model them as [i64]
+                        Ty::Narrow(w) => return Err(format!("array of {} has no element model (parity row P3-1)", w.name)),
                         _ => (z.int_sort(), Elem::I64),
                     };
                     let arr_sort = z.array_sort(&int, &esort);

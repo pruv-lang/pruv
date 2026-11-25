@@ -1,0 +1,6 @@
+// P3 runtime: unverified i32 division with a negative dividend fails (signed div/rem domain)
+fn f(a: i64, b: i64) -> i64 {
+  let x: i32 = i32(a);
+  let y: i32 = i32(b);
+  return i64(x / y);
+}

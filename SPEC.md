@@ -2451,9 +2451,11 @@ read by the checker, the verifier and both backends.
   **Measures:** a `decreases` measure may be of any integer type. **Arrays** of these widths (`[u32]`, `[usize]`, ...)
   are `parse/small_int_unsupported` (parity row P3-1). Code: Rust spells each type by its name, proven arithmetic is
   plain operators, and a proven `usize` index is `*a.get_unchecked(i)` (other unsigned widths add `as usize`); LLVM
-  uses `i8 i16 i32 i64` with signed or unsigned instructions and zero-extends a narrower index. With `--no-verify`
-  out-of-range arithmetic stops the program with `pruv: arithmetic error: overflow in OP` and an out-of-range cast
-  with `pruv: arithmetic error: cast out of range` (exit 101) on both backends; nothing wraps.
+  uses `i8 i16 i32 i64` with signed or unsigned instructions and zero-extends a narrower index; `/` and `%` are
+  `udiv`/`urem` for every width, since the signed domain rule leaves only non-negative operands. With `--no-verify`
+  out-of-range arithmetic stops the program with `pruv: arithmetic error: overflow in OP`, an out-of-range cast
+  with `pruv: arithmetic error: cast out of range`, and a signed `/` or `%` outside the domain with
+  `pruv: arithmetic error: division outside domain: ...` (exit 101) on both backends; nothing wraps.
   Tests: [accept](tests/spec/r6p_5_accept.pruv), [reject](tests/spec/r6p_5_reject.pruv),
   [false contract](tests/spec/r6p_5_reject_contract.pruv).
 

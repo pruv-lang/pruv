@@ -1,0 +1,27 @@
+// P3 runtime: u64 compare, divide and remainder on values above i64 max (a signed instruction gives a
+// different answer for every line), and print of u64/usize/isize/i32/i16/i8 at the ends of their ranges
+fn ops(n: i64, s: i64) -> () ! io
+  requires 0 <= n && n <= 1000
+  requires -128 <= s && s <= 127
+{
+  let big: u64 = 18446744073709551615;
+  let h: u64 = 9223372036854775808;
+  let x: u64 = big - u64(n);
+  print(x);
+  print(h);
+  if x > 1 { print(1); } else { print(0); }
+  if 1 < h { print(1); } else { print(0); }
+  if x >= h { print(1); } else { print(0); }
+  print(i64(x % 10));
+  print(i64(x / 3));
+  print(i64(h / 4));
+  let u: usize = usize(x);
+  print(u);
+  let m: isize = isize(-9223372036854775807 - 1);
+  print(m);
+  print(isize(9223372036854775807));
+  print(i8(s));
+  print(i16(s * 256));
+  print(i32(s * 16777216));
+  print(u32(4294967295));
+}

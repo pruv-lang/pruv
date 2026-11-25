@@ -1,0 +1,5 @@
+// P3 runtime: unverified u64 0 - 1 fails with the out-of-range arithmetic error
+fn f(a: i64, b: i64) -> i64 {
+  let x: u64 = u64(a) - u64(b);
+  return i64(x);
+}
