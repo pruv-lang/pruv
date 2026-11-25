@@ -6953,6 +6953,15 @@ impl<'a> FnGen<'a> {
             let x = self.op(format!("load {}, ptr {}", lty(&t), p))?;
             return self.unpack(&x, &t, false);
         }
+        // P7-1 B: a fixed-length array field is copied from its storage at code width (it adds nothing to the size)
+        if fixed_key(&t).is_some() {
+            let p = match e {
+                Expr::Var(_) => self.fixed_ptr(e)?,
+                Expr::FieldAccess(_) | Expr::VariantField(_) => self.cx(e)?,
+                _ => return Err(g9_diag_err(e.line(), e.col(), "this expression as a constructor field of an aggregate operand")),
+            };
+            return Ok(V::agg(p, &t));
+        }
         if is_arr_name(&t) {
             let a = self.cev(e)?;
             self.spend_n(&a.b)?;

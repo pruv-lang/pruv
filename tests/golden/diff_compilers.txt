@@ -2780,6 +2780,8 @@ runtime|runtime/p7_rt_fixed_field_nested [--no-verify]	2 cases: exit 2	llvm=da1a
 runtime|runtime/p7_rt_fixed_field_nested [default]	2 cases: exit 2	llvm=0d2545b83bcf	rust=6db35cfb9874
 runtime|runtime/p7_rt_fixed_for [--no-verify]	2 cases: exit 2	llvm=52a9cbd1f9ce	rust=63c1e145f8a5
 runtime|runtime/p7_rt_fixed_for [default]	2 cases: exit 2	llvm=5dcdda408d6b	rust=38a2f1ce590b
+runtime|runtime/p7_rt_fixed_g9_ctor [--no-verify]	2 cases: exit 2	llvm=563f207b2a36	rust=c4a6b2497dcd
+runtime|runtime/p7_rt_fixed_g9_ctor [default]	2 cases: exit 2	llvm=0605a4a87b27	rust=bc14a1853046
 runtime|runtime/p7_rt_fixed_generic_lend [--no-verify]	2 cases: exit 2	llvm=4ca5907908da	rust=84969fd4373e
 runtime|runtime/p7_rt_fixed_generic_lend [default]	2 cases: exit 2	llvm=bc51d7d949e1	rust=f2773aac5834
 runtime|runtime/p7_rt_fixed_lend_pin [--no-verify]	2 cases: exit 2	llvm=69eaf88a9b36	rust=ca5484bc03e1

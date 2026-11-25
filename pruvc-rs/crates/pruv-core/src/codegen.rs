@@ -2930,6 +2930,14 @@ impl<'a> Gen<'a> {
                 w
             ));
         }
+        // P7-1 B: a fixed-length array field is a plain copy at code width (it adds nothing to the size)
+        if fixed_key(tk).is_some() {
+            return match e {
+                Expr::Var(_) => self.c(e),
+                Expr::FieldAccess(_) | Expr::VariantField(_) => Ok(format!("::std::clone::Clone::clone({})", self.cx(e)?)),
+                _ => Err(self.g9_unsupported(e, "this expression as a constructor field of an aggregate operand")),
+            };
+        }
         if is_array_name(tk) {
             let a = self.carr(e)?;
             // the buffer expression is evaluated once: bound, charged by its length, then copied

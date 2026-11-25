@@ -2725,7 +2725,8 @@ fn is_digit(c: char) -> bool
   `type/match_arms`, and a named rest `rest @ ..` (a view of the array) `type/fixed_array_operation`.
   In a contract a struct literal or enum constructor takes a `[T; N]` field from a variable or a field path
   (`S { a: p }`, `E::A(s.a)`), and `variant_field(e, E::A, a)` reads a fixed field; a literal or call there is
-  `type/fixed_array_operation` (bind it with a `let` first).
+  `type/fixed_array_operation` (bind it with a `let` first). Such a constructor also works where the contract builds a real value
+  (`size(S { a: p })`, `variant_field` in a program with recursive types); the array adds nothing to `size`.
   Rejected: `[T; N]` as a field of a generic struct or enum, a tuple component or type argument, and
   nested fixed arrays, are `type/fixed_array_position`; an element type other than a scalar (a view `[T]` too) is
   `type/fixed_array_element`; a negative or oversized length is `type/fixed_array_length`; a non-constant length is
@@ -2741,7 +2742,7 @@ fn is_digit(c: char) -> bool
   [order](tests/runtime/p7_rt_fixed_eval.pruv), [proven](tests/runtime/p7_rt_fixed_proven.pruv),
   [unverified](tests/runtime/p7_rt_fixed_oob_unverified.pruv), [for](tests/runtime/p7_rt_fixed_for.pruv),
   [contract literals](tests/runtime/p7_rt_fixed_contract_lit.pruv),
-  [slice patterns](tests/runtime/p7_rt_fixed_slice_pattern.pruv), [enum fields](tests/runtime/p7_rt_fixed_enum.pruv), [contract ctors](tests/runtime/p7_rt_fixed_enum_contract.pruv), [place if](tests/runtime/p7_rt_fixed_place_if.pruv), [generic lend](tests/runtime/p7_rt_fixed_generic_lend.pruv),
+  [slice patterns](tests/runtime/p7_rt_fixed_slice_pattern.pruv), [enum fields](tests/runtime/p7_rt_fixed_enum.pruv), [contract ctors](tests/runtime/p7_rt_fixed_enum_contract.pruv), [real ctors](tests/runtime/p7_rt_fixed_g9_ctor.pruv), [place if](tests/runtime/p7_rt_fixed_place_if.pruv), [generic lend](tests/runtime/p7_rt_fixed_generic_lend.pruv),
   [move](tests/must_reject/p7_fixed_move.pruv), [par](tests/must_reject/p7_fixed_par.pruv), [copy](tests/must_reject/p7_fixed_copy.pruv),
   [type](tests/must_reject/p7_array_type.pruv),
   [char element](tests/must_reject/p7_array_char_type.pruv), [owned](tests/must_reject/p7_fixed_owned.pruv),

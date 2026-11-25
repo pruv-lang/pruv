@@ -1959,6 +1959,7 @@ runtime|tests/runtime/p7_rt_fixed_field.pruv	1 case: obl=19 1	default=1ebb0e0995
 runtime|tests/runtime/p7_rt_fixed_field_inout.pruv	1 case: obl=12 1	default=25d59a4ffcf5
 runtime|tests/runtime/p7_rt_fixed_field_nested.pruv	1 case: obl=22 1	default=bb004ec384cb
 runtime|tests/runtime/p7_rt_fixed_for.pruv	1 case: obl=73 1	default=56025c72f4f0
+runtime|tests/runtime/p7_rt_fixed_g9_ctor.pruv	1 case: obl=8 1	default=12206cc5d290
 runtime|tests/runtime/p7_rt_fixed_generic_lend.pruv	1 case: obl=14 1	default=fdb18694a66b
 runtime|tests/runtime/p7_rt_fixed_lend_pin.pruv	1 case: obl=17 1	default=59aca6260e80
 runtime|tests/runtime/p7_rt_fixed_literal.pruv	1 case: obl=69 1	default=adf15d71d841
