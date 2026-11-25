@@ -80,7 +80,7 @@ fn note_pairs__pruv_body(n0: i64, has: i64, pre: &[i64], keys: &[i64]) -> ::std:
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn note_pairs(n0: i64, has: i64, pre: &[i64], keys: &[i64]) -> ::std::vec::Vec<i64> {
     #[cold] #[inline(never)] fn pruv_len_slow(pre: usize, keys: usize) -> ! { if (pre as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", pre) } if (keys as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", keys) } unreachable!() }
     if ((pre.len() as u64) > (1u64 << 40)) | ((keys.len() as u64) > (1u64 << 40)) { pruv_len_slow(pre.len(), keys.len()) }

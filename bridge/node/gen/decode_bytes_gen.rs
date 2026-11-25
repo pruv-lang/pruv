@@ -200,7 +200,7 @@ fn utf8_ok__pruv_body(a: &[u8]) -> bool {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn utf8_ok(a: &[u8]) -> bool {
     #[cold] #[inline(never)] fn pruv_len_slow(a: usize) -> ! { if (a as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", a) } unreachable!() }
     if ((a.len() as u64) > (1u64 << 40)) { pruv_len_slow(a.len()) }
@@ -228,7 +228,7 @@ fn decode_kind__pruv_body(data: &[u8]) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn decode_kind(data: &[u8]) -> i64 {
     #[cold] #[inline(never)] fn pruv_len_slow(data: usize) -> ! { if (data as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", data) } unreachable!() }
     if ((data.len() as u64) > (1u64 << 40)) { pruv_len_slow(data.len()) }
@@ -258,7 +258,7 @@ fn decode_text__pruv_body(data: &[u8]) -> ::std::string::String {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn decode_text(data: &[u8]) -> ::std::string::String {
     #[cold] #[inline(never)] fn pruv_len_slow(data: usize) -> ! { if (data as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", data) } unreachable!() }
     if ((data.len() as u64) > (1u64 << 40)) { pruv_len_slow(data.len()) }
@@ -281,7 +281,7 @@ fn looks_binary__pruv_body(data: &[u8]) -> bool {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn looks_binary(data: &[u8]) -> bool {
     #[cold] #[inline(never)] fn pruv_len_slow(data: usize) -> ! { if (data as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", data) } unreachable!() }
     if ((data.len() as u64) > (1u64 << 40)) { pruv_len_slow(data.len()) }

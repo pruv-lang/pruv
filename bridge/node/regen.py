@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Regenerate (or with --check, verify) bridge/node/gen/*_gen.rs from bench/l0/*.pruv.
 
-Uses both compilers and requires byte-identical output. If verification fails, the compiler's exit
-code is returned and nothing is overwritten: the bridge must not be built.
+Uses the Rust compiler pruvc-rs only (the Python compiler pruvc/ is frozen, bundle PF); set PRUVC_RS to pick
+the binary. pruvc proves each source before generating it. If verification fails, the compiler's exit code
+is returned and nothing is overwritten: the bridge must not be built.
 """
 import subprocess
 import sys
@@ -29,22 +30,12 @@ def main() -> int:
             out = Path(tmp) / f"{name}_gen.rs"
             src = ROOT / "bench" / "l0" / f"{name}.pruv"
             extra = flags[EXTERN[name]] if name in EXTERN else []
-            r = subprocess.run(
-                g2.COMPILERS['py'] + [str(src), "-o", str(out)] + extra,
-                cwd=str(ROOT),
-            )
+            r = subprocess.run(g2.COMPILERS['rs'] + [str(src), "-o", str(out)] + extra, cwd=str(ROOT))
             if r.returncode != 0:
                 print(f"compile failed for {name}", file=sys.stderr)
                 return r.returncode
             dest = GEN / f"{name}_gen.rs"
             new = out.read_bytes()
-            rs_out = Path(tmp) / f"{name}_rs.rs"
-            r = subprocess.run(g2.COMPILERS['rs'] + [str(src), '-o', str(rs_out)] + extra, cwd=ROOT)
-            if r.returncode:
-                return r.returncode
-            if rs_out.read_bytes() != new:
-                print(f"compiler outputs differ: {name}", file=sys.stderr)
-                return 1
             if check:
                 if not dest.exists() or dest.read_bytes() != new:
                     stale.append(str(dest))

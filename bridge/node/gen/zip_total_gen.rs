@@ -54,7 +54,7 @@ fn u16le__pruv_body(b: &[u8], at: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn u16le(b: &[u8], at: i64) -> i64 {
     #[cold] #[inline(never)] fn pruv_len_slow(b: usize) -> ! { if (b as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", b) } unreachable!() }
     if ((b.len() as u64) > (1u64 << 40)) { pruv_len_slow(b.len()) }
@@ -74,7 +74,7 @@ fn u32le__pruv_body(b: &[u8], at: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn u32le(b: &[u8], at: i64) -> i64 {
     #[cold] #[inline(never)] fn pruv_len_slow(b: usize) -> ! { if (b as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", b) } unreachable!() }
     if ((b.len() as u64) > (1u64 << 40)) { pruv_len_slow(b.len()) }
@@ -102,7 +102,7 @@ fn find_eocd__pruv_body(buf: &[u8]) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn find_eocd(buf: &[u8]) -> i64 {
     #[cold] #[inline(never)] fn pruv_len_slow(buf: usize) -> ! { if (buf as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", buf) } unreachable!() }
     if ((buf.len() as u64) > (1u64 << 40)) { pruv_len_slow(buf.len()) }
@@ -145,7 +145,7 @@ fn zip_uncompressed_total__pruv_body(buf: &[u8]) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn zip_uncompressed_total(buf: &[u8]) -> i64 {
     #[cold] #[inline(never)] fn pruv_len_slow(buf: usize) -> ! { if (buf as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", buf) } unreachable!() }
     if ((buf.len() as u64) > (1u64 << 40)) { pruv_len_slow(buf.len()) }

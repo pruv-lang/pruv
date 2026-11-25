@@ -102,7 +102,7 @@ fn pruv_g6_string_to_str(s: &::std::string::String) -> ::std::string::String {
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
 #[inline(always)]
 fn pruv_m_f_1_3_dec__pruv_body(n: i64, width: i64) -> ::std::string::String {
-    let ten: ::std::string::String = ::std::string::String::from("0123456789");
+    let ten: &'static str = "0123456789";
     let mut out: ::std::string::String = pruv_g6_string_new();
     let mut p: i64 = 100000i64;
     let mut k: i64 = 0i64;
@@ -110,7 +110,7 @@ fn pruv_m_f_1_3_dec__pruv_body(n: i64, width: i64) -> ::std::string::String {
         if (p > 0i64) {
             let d: i64 = ((n / p) % 10i64);
             if ((((out.len() as i64) > 0i64) || (d != 0i64)) || ((6i64 - k) <= width)) {
-                out = pruv_g6_string_push_str(out, &{ let pruv_s: &str = &ten; let pruv_lo: i64 = d; let pruv_hi: i64 = (d + 1i64); ::std::string::String::from(unsafe { pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize)) }) });
+                out = pruv_g6_string_push_str(out, &{ let pruv_s: &str = ten; let pruv_lo: i64 = d; let pruv_hi: i64 = (d + 1i64); ::std::string::String::from(unsafe { pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize)) }) });
             }
         }
         p = (p / 10i64);
@@ -165,7 +165,7 @@ fn cell_date__pruv_body(t: i64) -> ::std::string::String {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn cell_date(t: i64) -> ::std::string::String {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !((((-8640000000000000i128) <= (t as i128)) && ((t as i128) <= 8640000000000000i128))) { panic!("{}", "pruv: requires violated: crate::cell_date: ((-8640000000000000 <= t) && (t <= 8640000000000000))"); }

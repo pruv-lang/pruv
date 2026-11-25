@@ -407,7 +407,7 @@ fn pruv_m_f_1_11_draw_fitted__pruv_body(s: &mut [u8], data: &[u8], width: i64, h
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn clip_sheet_background() -> ::std::vec::Vec<u8> {
     let mut s: ::std::vec::Vec<u8> = { let pruv_n: i64 = pruv_m_f_1_11_sheet_bytes(); let pruv_v: i64 = 0i64; vec![pruv_v as u8; pruv_n as usize] };
     pruv_m_f_1_9_fill_rect__pruv_body(&mut s, 0i64, 0i64, 1560i64, 920i64, 13i64, 17i64, 23i64);
@@ -436,7 +436,7 @@ fn clip_sheet_cell__pruv_body(sheet: &[u8], index: i64, data: &[u8], width: i64,
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn clip_sheet_cell(sheet: &[u8], index: i64, data: &[u8], width: i64, height: i64, out_w: i64, out_h: i64, label: &str, number: &str) -> ::std::vec::Vec<u8> {
     #[cold] #[inline(never)] fn pruv_len_slow(sheet: usize, data: usize, label: usize, number: usize) -> ! { if (sheet as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", sheet) } if (data as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", data) } if (label as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", label) } if (number as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", number) } unreachable!() }
     if ((sheet.len() as u64) > (1u64 << 40)) | ((data.len() as u64) > (1u64 << 40)) | ((label.len() as u64) > (1u64 << 40)) | ((number.len() as u64) > (1u64 << 40)) { pruv_len_slow(sheet.len(), data.len(), label.len(), number.len()) }

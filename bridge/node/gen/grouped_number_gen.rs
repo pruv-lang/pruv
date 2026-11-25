@@ -102,7 +102,7 @@ fn pruv_g6_string_to_str(s: &::std::string::String) -> ::std::string::String {
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
 #[inline(always)]
 fn pruv_m_f_1_14_grouped_digits__pruv_body(n: i64) -> ::std::string::String {
-    let ten: ::std::string::String = ::std::string::String::from("0123456789");
+    let ten: &'static str = "0123456789";
     let mut out: ::std::string::String = pruv_g6_string_new();
     let mut p: i64 = 1000000000000000i64;
     let mut k: i64 = 0i64;
@@ -113,7 +113,7 @@ fn pruv_m_f_1_14_grouped_digits__pruv_body(n: i64) -> ::std::string::String {
                 if (((out.len() as i64) > 0i64) && (((15i64 - k) % 3i64) == 2i64)) {
                     out = pruv_g6_string_push_str(out, ",");
                 }
-                out = pruv_g6_string_push_str(out, &{ let pruv_s: &str = &ten; let pruv_lo: i64 = d; let pruv_hi: i64 = (d + 1i64); ::std::string::String::from(unsafe { pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize)) }) });
+                out = pruv_g6_string_push_str(out, &{ let pruv_s: &str = ten; let pruv_lo: i64 = d; let pruv_hi: i64 = (d + 1i64); ::std::string::String::from(unsafe { pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize)) }) });
             }
         }
         p = (p / 10i64);
@@ -136,7 +136,7 @@ fn grouped_number__pruv_body(value: i64) -> ::std::string::String {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn grouped_number(value: i64) -> ::std::string::String {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !((((-1000000000000000i128) <= (value as i128)) && ((value as i128) <= 1000000000000000i128))) { panic!("{}", "pruv: requires violated: crate::grouped_number: ((-1000000000000000 <= value) && (value <= 1000000000000000))"); }

@@ -106,9 +106,9 @@ fn pruv_m_f_1_11_col_letters__pruv_body(col: i64) -> ::std::string::String {
         return ::std::string::String::from("");
     }
     let prefix: ::std::string::String = pruv_m_f_1_11_col_letters__pruv_body(((col - 1i64) / 26i64));
-    let alphabet: ::std::string::String = ::std::string::String::from("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    let alphabet: &'static str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let digit: i64 = ((col - 1i64) % 26i64);
-    let letter: ::std::string::String = { let pruv_s: &str = &alphabet; let pruv_lo: i64 = digit; let pruv_hi: i64 = (digit + 1i64); ::std::string::String::from(unsafe { pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize)) }) };
+    let letter: ::std::string::String = { let pruv_s: &str = alphabet; let pruv_lo: i64 = digit; let pruv_hi: i64 = (digit + 1i64); ::std::string::String::from(unsafe { pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize)) }) };
     let mut out: ::std::string::String = pruv_g6_string_new();
     out = pruv_g6_string_push_str(out, &prefix);
     out = pruv_g6_string_push_str(out, &letter);
@@ -118,7 +118,7 @@ fn pruv_m_f_1_11_col_letters__pruv_body(col: i64) -> ::std::string::String {
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
 #[inline(always)]
 fn pruv_m_f_1_6_digits__pruv_body(n: i64) -> ::std::string::String {
-    let ten: ::std::string::String = ::std::string::String::from("0123456789");
+    let ten: &'static str = "0123456789";
     let mut out: ::std::string::String = pruv_g6_string_new();
     let mut p: i64 = 1000000000000000i64;
     let mut k: i64 = 0i64;
@@ -126,7 +126,7 @@ fn pruv_m_f_1_6_digits__pruv_body(n: i64) -> ::std::string::String {
         if (p > 0i64) {
             let d: i64 = ((n / p) % 10i64);
             if ((((out.len() as i64) > 0i64) || (d != 0i64)) || (p == 1i64)) {
-                out = pruv_g6_string_push_str(out, &{ let pruv_s: &str = &ten; let pruv_lo: i64 = d; let pruv_hi: i64 = (d + 1i64); ::std::string::String::from(unsafe { pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize)) }) });
+                out = pruv_g6_string_push_str(out, &{ let pruv_s: &str = ten; let pruv_lo: i64 = d; let pruv_hi: i64 = (d + 1i64); ::std::string::String::from(unsafe { pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize)) }) });
             }
         }
         p = (p / 10i64);
@@ -150,7 +150,7 @@ fn range_of__pruv_body(row1: i64, row2: i64, col1: i64, col2: i64) -> ::std::str
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn range_of(row1: i64, row2: i64, col1: i64, col2: i64) -> ::std::string::String {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((((1i128 <= (row1 as i128)) && ((row1 as i128) <= 1000000000000000i128)) && (1i128 <= (row2 as i128))) && ((row2 as i128) <= 1000000000000000i128))) { panic!("{}", "pruv: requires violated: crate::range_of: ((((1 <= row1) && (row1 <= 1000000000000000)) && (1 <= row2)) && (row2 <= 1000000000000000))"); }
@@ -251,7 +251,7 @@ fn sheet_groups__pruv_body(rows: &[i64], col1s: &[i64], col2s: &[i64], lens: &[i
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn sheet_groups(rows: &[i64], col1s: &[i64], col2s: &[i64], lens: &[i64], header: i64, max: i64) -> ::std::vec::Vec<i64> {
     #[cold] #[inline(never)] fn pruv_len_slow(rows: usize, col1s: usize, col2s: usize, lens: usize) -> ! { if (rows as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", rows) } if (col1s as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", col1s) } if (col2s as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", col2s) } if (lens as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", lens) } unreachable!() }
     if ((rows.len() as u64) > (1u64 << 40)) | ((col1s.len() as u64) > (1u64 << 40)) | ((col2s.len() as u64) > (1u64 << 40)) | ((lens.len() as u64) > (1u64 << 40)) { pruv_len_slow(rows.len(), col1s.len(), col2s.len(), lens.len()) }

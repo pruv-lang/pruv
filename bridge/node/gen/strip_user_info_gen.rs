@@ -223,7 +223,7 @@ fn strip_user_info__pruv_body(text: &str) -> ::std::string::String {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn strip_user_info(text: &str) -> ::std::string::String {
     #[cold] #[inline(never)] fn pruv_len_slow(text: usize) -> ! { if (text as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", text) } unreachable!() }
     if ((text.len() as u64) > (1u64 << 40)) { pruv_len_slow(text.len()) }

@@ -80,10 +80,10 @@ python bridge/node/regen.py          # overwrite gen/*.rs
 python bridge/node/regen.py --check  # exit 1 if gen/*.rs is stale
 ```
 
-Needs both compilers and Python with `z3-solver`. `PRUV_PYTHON` and `PRUVC_RS`
-select installed tools (including read-only tools in a main checkout).
-Regeneration verifies with both compilers and requires byte-identical Rust output
-for all fifteen generated files. `decode_bytes` is compiled against the adapter rlib,
+Needs the Rust compiler pruvc-rs and plain Python 3.9 (no packages; the frozen
+Python compiler `pruvc/` and `z3-solver` are not used). `PRUVC_RS` selects an
+installed binary (including a read-only one in a main checkout).
+pruvc-rs proves each source before it generates the Rust file. `decode_bytes` is compiled against the adapter rlib,
 which regen builds first (`cargo build --locked` under `bench/l0/work/decode-adapter`). Temporary output stays under `bench/l0/work`.
 If verification fails the
 compiler's exit code is returned and the bridge must not be built.
@@ -262,6 +262,9 @@ become U+FFFD. All byte limits count UTF-8 bytes.
 builds and tests on macOS (arm64 and Intel), Windows and Linux. It runs only on
 manual dispatch and on pushes to `main` touching `bridge/node/**`,
 `bench/l0/*.pruv`, the decode adapter, oracle, TS copy and index, or the workflow itself.
+Compiler changes alone do not trigger it, so `gen/` can go stale after a pruvc-rs change;
+run `regen.py --check` locally after codegen changes (the gen files were last refreshed
+on 2026-11-25, with identical `test.mjs` output before and after).
 
 ## Status
 

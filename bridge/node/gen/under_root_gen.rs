@@ -76,7 +76,7 @@ fn under__pruv_body(path: &str, root: &str, sep: i64) -> bool {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn under(path: &str, root: &str, sep: i64) -> bool {
     #[cold] #[inline(never)] fn pruv_len_slow(path: usize, root: usize) -> ! { if (path as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", path) } if (root as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", root) } unreachable!() }
     if ((path.len() as u64) > (1u64 << 40)) | ((root.len() as u64) > (1u64 << 40)) { pruv_len_slow(path.len(), root.len()) }

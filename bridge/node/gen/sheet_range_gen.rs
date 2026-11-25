@@ -70,7 +70,7 @@ fn window_start__pruv_body(v: i64, present: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn window_start(v: i64, present: i64) -> i64 {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !((((-9007199254740991i128) <= (v as i128)) && ((v as i128) <= 9007199254740991i128))) { panic!("{}", "pruv: requires violated: crate::window_start: ((-9007199254740991 <= v) && (v <= 9007199254740991))"); }
@@ -102,7 +102,7 @@ fn window_count__pruv_body(total: i64, start: i64, want: i64, present: i64, cap:
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn window_count(total: i64, start: i64, want: i64, present: i64, cap: i64, def: i64) -> i64 {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((0i128 <= (total as i128)) && ((total as i128) <= 1000000000000i128))) { panic!("{}", "pruv: requires violated: crate::window_count: ((0 <= total) && (total <= 1000000000000))"); }
@@ -126,7 +126,7 @@ fn sheet_range__pruv_body(total_rows: i64, total_cols: i64, row: i64, col: i64, 
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn sheet_range(total_rows: i64, total_cols: i64, row: i64, col: i64, rows: i64, cols: i64, given: i64) -> ::std::vec::Vec<i64> {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((0i128 <= (total_rows as i128)) && ((total_rows as i128) <= 1000000000000i128))) { panic!("{}", "pruv: requires violated: crate::sheet_range: ((0 <= total_rows) && (total_rows <= 1000000000000))"); }

@@ -661,7 +661,7 @@ fn pruv_m_f_1_10_https_href(rec: &[i64], t: &[i64], c: i64) -> bool {
     if (((m < 8i64) || (k < 0i64)) || (k > 3298534883328i64)) {
         return false;
     }
-    let w: ::std::string::String = ::std::string::String::from("https://");
+    let w: &'static str = "https://";
     let mut j: i64 = 0i64;
     while (j < 8i64) {
         let y: i64 = ((unsafe { *w.as_bytes().get_unchecked((j) as usize) }) as i64);
@@ -854,6 +854,7 @@ fn docx_parts__pruv_body(rec: &[i64]) -> ::std::vec::Vec<i64> {
         let nxt: i64 = pruv_m_f_1_8_rec_next__pruv_body(rec, p, en);
         if (((nxt < 0i64) || ((unsafe { *rec.get_unchecked(((p + 2i64)) as usize) }) < 0i64)) || ((unsafe { *rec.get_unchecked(((p + 2i64)) as usize) }) > l)) {
             p = l;
+            break;
         } else {
             let kind: i64 = (unsafe { *rec.get_unchecked((p) as usize) });
             let par: i64 = (unsafe { *rec.get_unchecked(((p + 1i64)) as usize) });
@@ -900,7 +901,7 @@ fn docx_parts__pruv_body(rec: &[i64]) -> ::std::vec::Vec<i64> {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn docx_parts(rec: &[i64]) -> ::std::vec::Vec<i64> {
     #[cold] #[inline(never)] fn pruv_len_slow(rec: usize) -> ! { if (rec as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", rec) } unreachable!() }
     if ((rec.len() as u64) > (1u64 << 40)) { pruv_len_slow(rec.len()) }
@@ -931,7 +932,7 @@ fn img_count__pruv_body(s: &str) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn img_count(s: &str) -> i64 {
     #[cold] #[inline(never)] fn pruv_len_slow(s: usize) -> ! { if (s as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", s) } unreachable!() }
     if ((s.len() as u64) > (1u64 << 40)) { pruv_len_slow(s.len()) }

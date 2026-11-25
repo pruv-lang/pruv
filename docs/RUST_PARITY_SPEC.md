@@ -94,7 +94,7 @@ the B-bundle average (about 80 minutes per feature) and adjust bundle size.
 ## 7. Open rows carried in
 
 - PF-1: `check_bundle` rs path checks less than the old py path; bring it to parity (tidy).
-- PF-2: `bridge/node/regen.py` and `.github/workflows/node-bridge.yml` still use the Python compiler and z3; move to rs.
+- PF-2: closed in PF-2/PF-3: `bridge/node/regen.py` and `.github/workflows/node-bridge.yml` use pruvc-rs only (no pruvc/, no z3-solver). `gen/` was stale since the 2026-11-19 codegen changes and is regenerated; `test.mjs` output is identical before and after. `bench/l0/image_shrink.pruv` renames its helpers `u16`/`u32` (now reserved type names) to `read_u16`/`read_u32`.
 - PF-3: multi-file `--input` replay in the golden harness is recorded, not yet covered.
 - B8-1: moving a borrowed match target reports `borrow_conflict` (py) vs `foreign_borrow` (rs); the golden keeps rs. Decide the code in P8.
 - B8-2: B8's verify/llvmgen/proof changes were not audited; audit them with P10.

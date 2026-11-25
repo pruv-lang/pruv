@@ -77,7 +77,7 @@ fn host_within__pruv_body(host: &str, site: &str) -> bool {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline(always)]
+#[inline]
 pub fn host_within(host: &str, site: &str) -> bool {
     #[cold] #[inline(never)] fn pruv_len_slow(host: usize, site: usize) -> ! { if (host as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", host) } if (site as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", site) } unreachable!() }
     if ((host.len() as u64) > (1u64 << 40)) | ((site.len() as u64) > (1u64 << 40)) { pruv_len_slow(host.len(), site.len()) }

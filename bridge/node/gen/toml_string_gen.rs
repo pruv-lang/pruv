@@ -112,7 +112,7 @@ fn pruv_m_f_1_4_next__pruv_body(s: &str, i: i64) -> i64 {
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
 #[inline(always)]
 fn toml_string__pruv_body(value: &str) -> ::std::string::String {
-    let digits: ::std::string::String = ::std::string::String::from("0123456789abcdef");
+    let digits: &'static str = "0123456789abcdef";
     let mut out: ::std::string::String = pruv_g6_string_new();
     out = pruv_g6_string_push_str(out, "\u{22}");
     let mut i: i64 = 0i64;
@@ -132,7 +132,7 @@ fn toml_string__pruv_body(value: &str) -> ::std::string::String {
                         out = pruv_g6_string_push_str(out, "\u{5c}u001");
                     }
                     let d: i64 = (b % 16i64);
-                    let hex: ::std::string::String = { let pruv_s: &str = &digits; let pruv_lo: i64 = d; let pruv_hi: i64 = (d + 1i64); ::std::string::String::from(unsafe { pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize)) }) };
+                    let hex: ::std::string::String = { let pruv_s: &str = digits; let pruv_lo: i64 = d; let pruv_hi: i64 = (d + 1i64); ::std::string::String::from(unsafe { pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize)) }) };
                     out = pruv_g6_string_push_str(out, &hex);
                 } else {
                     if (b == 127i64) {
@@ -159,7 +159,7 @@ fn toml_string__pruv_body(value: &str) -> ::std::string::String {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
+#[inline]
 pub fn toml_string(value: &str) -> ::std::string::String {
     #[cold] #[inline(never)] fn pruv_len_slow(value: usize) -> ! { if (value as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", value) } unreachable!() }
     if ((value.len() as u64) > (1u64 << 40)) { pruv_len_slow(value.len()) }
