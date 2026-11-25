@@ -113,3 +113,4 @@ the B-bundle average (about 80 minutes per feature) and adjust bundle size.
 - P3-3: a proven array store with a non-`i64` index converts it through `i64` before `get_unchecked_mut`; emit `as usize` directly (Rust shape only, no extra check).
 - P3-4: `Vec`, `str` and hash map indexes, and signed non-`i64` array indexes, still need `i64`; numeric range bounds of other widths are P4.
 - P3-5: non-`i64` widths at the host boundary (pub/extern/foreign signatures) stay P12.
+- P3-6: a `u64` index above i64 max prints a negative value in the out-of-bounds message, and the overlap `uadd` declaration filter path has no test (P3 audit recommendations).
