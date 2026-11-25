@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """L3-1 A2 fixtures: time.pruv (iso_of and helpers) and import.pruv (read_head, tail_info, selection helpers) on
-py/rust, py/llvm, rs/rust, rs/llvm.
+rs/rust, rs/llvm (`--vs-py` adds py/rust, py/llvm).
 
 The oracle is independent of the Pruv code. It follows tail.ts/claude.ts with the policies of
 docs/CLAUDE_IMPORT_SPEC.md (P1 strict UTF-8/JSON, P2 lone surrogates -> U+FFFD, P4 restricted iso_of). JSON is
@@ -29,6 +29,10 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 JSON_DIR = HERE.parent / 'json'
 WORK = HERE / 'work' / 'a2'
+# PF: the Python compiler pruvc/ is frozen (bundle PF); the Rust compiler is the product. Default is rs only;
+# `--vs-py` adds the py reference (pruvc/pruvc.py), which is not used by CI.
+VS_PY = '--vs-py' in sys.argv
+COMPILER_SET = ('py', 'rs') if VS_PY else ('rs',)
 
 _spec = importlib.util.spec_from_file_location('test_a1_oracle', HERE / 'test_a1.py')
 a1 = importlib.util.module_from_spec(_spec)
@@ -765,7 +769,7 @@ def main():
     payload = ''.join(f'{op} {a}|' + '|'.join(enc(list(x)) for x in w) + '\n' for op, a, w, _ in cases)
     expected = [' '.join(map(str, want)) for *_, want in cases]
     failed = False
-    for compiler in ('py', 'rs'):
+    for compiler in COMPILER_SET:
         for backend in ('rust', 'llvm'):
             key = f'{compiler}/{backend}'
             try:

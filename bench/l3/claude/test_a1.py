@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""L3-1 A1 fixtures: text helpers and entry classification on py/rust, py/llvm, rs/rust, rs/llvm.
+"""L3-1 A1 fixtures: text helpers and entry classification on rs/rust, rs/llvm (`--vs-py` adds py/rust, py/llvm).
 
 The oracle is independent of the Pruv code. It follows the TS rules of claude.ts/tail.ts with the policies of
 docs/CLAUDE_IMPORT_SPEC.md: strict UTF-8 + strict JSON (last duplicate key wins, NaN/Infinity rejected, container
@@ -21,6 +21,10 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 JSON_DIR = HERE.parent / 'json'
 WORK = HERE / 'work' / 'a1'
+# PF: the Python compiler pruvc/ is frozen (bundle PF); the Rust compiler is the product. Default is rs only;
+# `--vs-py` adds the py reference (pruvc/pruvc.py), which is not used by CI.
+VS_PY = '--vs-py' in sys.argv
+COMPILER_SET = ('py', 'rs') if VS_PY else ('rs',)
 
 HARNESS = r'''#![allow(dead_code, unused_imports)]
 #[path = "@SOL@"] mod sol;
@@ -851,7 +855,7 @@ def main():
     payload = ''.join(f'{op} {a}|' + '|'.join(enc(list(x)) for x in w) + '\n' for op, a, w, _ in cases)
     expected = [' '.join(map(str, want)) for *_, want in cases]
     failed = False
-    for compiler in ('py', 'rs'):
+    for compiler in COMPILER_SET:
         for backend in ('rust', 'llvm'):
             key = f'{compiler}/{backend}'
             try:

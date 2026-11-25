@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""L3-1 A0 fixtures: edge/window framing, packet checking and copy_span on py/rust, py/llvm, rs/rust, rs/llvm.
+"""L3-1 A0 fixtures: edge/window framing, packet checking and copy_span on rs/rust, rs/llvm (`--vs-py` adds py/rust, py/llvm).
 
 Oracles are independent of the Pruv code: the edge oracle follows the TS split/pop/shift rules, the window
 oracle is a literal port of the TS openLineWindow chunk loop, and the packet checker is a separate Python
@@ -14,6 +14,10 @@ import sys
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 WORK = HERE / 'work' / 'a0'
+# PF: the Python compiler pruvc/ is frozen (bundle PF); the Rust compiler is the product. Default is rs only;
+# `--vs-py` adds the py reference (pruvc/pruvc.py), which is not used by CI.
+VS_PY = '--vs-py' in sys.argv
+COMPILER_SET = ('py', 'rs') if VS_PY else ('rs',)
 
 HARNESS = r'''#![allow(dead_code, unused_imports)]
 #[path = "@SOL@"] mod sol;
@@ -433,7 +437,7 @@ def main():
     payload = ''.join(f'{op} {a} {b} {c} {words}\n' for op, a, b, c, words, _ in cases)
     expected = [' '.join(map(str, want)) for *_, want in cases]
     failed = False
-    for compiler in ('py', 'rs'):
+    for compiler in COMPILER_SET:
         for backend in ('rust', 'llvm'):
             key = f'{compiler}/{backend}'
             try:

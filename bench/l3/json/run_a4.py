@@ -13,6 +13,10 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 WORK = HERE / 'work/a4'
+# PF: the Python compiler pruvc/ is frozen (bundle PF); the Rust compiler is the product. Default is rs only;
+# `--vs-py` adds the py reference (pruvc/pruvc.py), which is not used by CI.
+VS_PY = '--vs-py' in sys.argv
+COMPILER_SET = ('py', 'rs') if VS_PY else ('rs',)
 spec = importlib.util.spec_from_file_location('a3', HERE / 'run_a3.py')
 a3 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(a3)
@@ -193,7 +197,7 @@ def main():
     expected = [nums(c[-1]) for c in cases]
     failed = False
     print(f'seed=404; random documents=400; fixtures={len(cases)}',flush=True)
-    for compiler in ('py','rs'):
+    for compiler in COMPILER_SET:
         for backend in ('rust','llvm'):
             name = f'{compiler}/{backend}'
             try:
