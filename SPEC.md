@@ -2840,7 +2840,7 @@ fn head(r: Row) -> Res<i64> { if r[0] < 0 { return Err(r[0]); } return Ok(r[0]);
   arguments in place of the parameters. An alias adds no type of its own: invariants, integer ranges, `Result`
   payloads, proofs and both backends' layouts are those of `T`. Aliases may be used before their declaration and may
   name other aliases. They appear in every type position (parameters, results, `let` annotations, fields, type
-  arguments, array and fixed-array elements, after `ref`, a constant's type through non-generic aliases); values and
+  arguments, array and fixed-array elements, after `ref`, a constant's type, which counts as a use); values and
   patterns use the original constructors. A use-site refinement refines `T` (`x: Code | 0..=9`). A position limit of
   `T` still applies at each use (a `[T; N]` alias as a type argument is `type/fixed_array_position`, `ref` of a
   non-array alias `parse/syntax`); a tuple reached through an alias inside a generic declaration, and a generic alias
@@ -2859,7 +2859,8 @@ fn head(r: Row) -> Res<i64> { if r[0] < 0 { return Err(r[0]); } return Ok(r[0]);
   [growing cycle](tests/must_reject/p9_alias_growing_cycle.pruv), [duplicate](tests/must_reject/p9_alias_duplicate.pruv),
   [arity](tests/must_reject/p9_alias_arity.pruv), [module](tests/must_reject/p9_alias_module.pruv),
   [false contract](tests/must_reject/p9_alias_false_ensures.pruv), [positions](tests/runtime/p9_rt_alias_pos.pruv),
-  [array cycle](tests/must_reject/p9_alias_array_cycle.pruv), [tuple in generic](tests/must_reject/p9_alias_tuple_generic.pruv),
+  [array cycle](tests/must_reject/p9_alias_array_cycle.pruv), [constants](tests/runtime/p9_rt_alias_const.pruv),
+  [constant cycle](tests/must_reject/p9_alias_const_cycle.pruv), [tuple in generic](tests/must_reject/p9_alias_tuple_generic.pruv),
   [parameter shadow](tests/must_reject/p9_alias_param_shadow.pruv), [reserved](tests/must_reject/p9_alias_reserved.pruv),
   [ref of a scalar](tests/must_reject/p9_alias_ref_scalar.pruv), [refined use](tests/must_reject/p9_alias_refine_false.pruv),
   [prelude names in async code](tests/runtime/p9_rt_alias_async.pruv).

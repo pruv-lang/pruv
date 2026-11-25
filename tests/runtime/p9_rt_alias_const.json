@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["45", "40", "42"], "gen_contains": ["type Byte = u8;", "const TOP: u8 = 255;", "const BASE: i64 = 40;"]}

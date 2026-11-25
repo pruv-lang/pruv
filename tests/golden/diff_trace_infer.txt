@@ -1448,6 +1448,7 @@ must_reject|tests/must_reject/p8_while_let_irrefutable.pruv	1 case: obl=0 1	--in
 must_reject|tests/must_reject/p8_while_let_mut_none.pruv	1 case: obl=0 1	--infer=b8cab933589d
 must_reject|tests/must_reject/p9_alias_arity.pruv	1 case: obl=0 1	--infer=cbf0ff3f7c4f
 must_reject|tests/must_reject/p9_alias_array_cycle.pruv	1 case: obl=0 1	--infer=519ec3f362fe
+must_reject|tests/must_reject/p9_alias_const_cycle.pruv	1 case: obl=0 1	--infer=2808fef53886
 must_reject|tests/must_reject/p9_alias_cycle.pruv	1 case: obl=0 1	--infer=2808fef53886
 must_reject|tests/must_reject/p9_alias_duplicate.pruv	1 case: obl=0 1	--infer=e25394e00fba
 must_reject|tests/must_reject/p9_alias_false_ensures.pruv	1 case: obl=3 1	--infer=01c32cdfc445
@@ -1992,6 +1993,7 @@ runtime|tests/runtime/p8_rt_while_let.pruv	1 case: obl=149 1	--infer=e70479b0954
 runtime|tests/runtime/p8_rt_while_let_cost.pruv	1 case: obl=52 1	--infer=543800c576f8
 runtime|tests/runtime/p9_rt_alias.pruv	1 case: obl=15 1	--infer=6c8fc86e7798
 runtime|tests/runtime/p9_rt_alias_async.pruv	1 case: obl=182 1	--infer=48af9457b96a
+runtime|tests/runtime/p9_rt_alias_const.pruv	1 case: obl=2 1	--infer=9ab57d6f3332
 runtime|tests/runtime/p9_rt_alias_p8.pruv	1 case: obl=8 1	--infer=4b6344307cae
 runtime|tests/runtime/p9_rt_alias_pos.pruv	1 case: obl=39 1	--infer=4b2f3d5141e2
 runtime|tests/runtime/qb_across_requires.pruv	1 case: obl=0 1	--infer=a887fdcb74d6

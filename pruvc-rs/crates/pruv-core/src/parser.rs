@@ -55,8 +55,9 @@ pub fn parse_file(src: &str, tag: usize) -> R<ParsedFile> {
         alias_busy: Vec::new(),
         alias_generic: Vec::new(),
     };
+    let alias_order = p.alias_collect()?;
     let consts = p.const_prepass()?;
-    p.alias_prepass()?;
+    p.alias_validate(alias_order)?;
     let mut prog = p.program()?;
     if !p.aliases.is_empty() {
         let mut al: Vec<&AliasDef> = p.aliases.values().collect();
@@ -511,9 +512,10 @@ impl Parser {
             }
             self.expect(":")?;
             let mut tt = self.next();
-            if tt.kind == Kind::Id {
-                // P9: a constant typed with a non-generic alias of an integer width (const_prepass runs before alias_prepass)
-                tt.val = self.const_alias_target(&tt.val);
+            if tt.kind == Kind::Id && self.aliases.contains_key(&tt.val) && !self.at("::", 0) {
+                // P9: a constant typed with an alias: the alias's expansion (marks it used; reports alias cycles)
+                let g = self.alias_use(&tt, false)?;
+                tt.val = g.to_key();
             }
             let w = match intwidth::of(&tt.val) {
                 Some(w) if tt.kind == Kind::Id => w,
@@ -547,29 +549,9 @@ impl Parser {
         Ok(out)
     }
 
-    /// P9: follows `type NAME = OTHER;` items (non-generic, one-token right sides) from `name`; the last name reached.
-    fn const_alias_target(&self, name: &str) -> String {
-        let mut cur = name.to_string();
-        for _ in 0..16 {
-            let mut next = None;
-            for k in 0..self.t.len().saturating_sub(4) {
-                if self.t[k].kind == Kind::Kw && self.t[k].val == "type" && self.t[k + 1].val == cur
-                    && self.t[k + 2].val == "=" && self.t[k + 3].kind == Kind::Id && self.t[k + 4].val == ";" {
-                    next = Some(self.t[k + 3].val.clone());
-                    break;
-                }
-            }
-            match next {
-                Some(n) => cur = n,
-                None => break,
-            }
-        }
-        cur
-    }
-
-    /// P9: collects every `[pub] type Name<P..> = T;` item (forward uses are allowed), then parses each right side once
-    /// with its parameters bound to themselves, which reports bad types and alias cycles even for unused aliases.
-    fn alias_prepass(&mut self) -> R<()> {
+    /// P9: collects every `[pub] type Name<P..> = T;` item (forward uses are allowed) before the constants are read,
+    /// so a constant's type can be an alias; returns the aliases in file order for alias_validate.
+    fn alias_collect(&mut self) -> R<Vec<String>> {
         let mut order = Vec::new();
         // the struct, enum and alias names of the file: an alias parameter must not shadow one
         let mut decl_names: Vec<String> = Vec::new();
@@ -635,6 +617,15 @@ impl Parser {
             }
             j = k + 1;
         }
+        self.i = 0;
+        Ok(order)
+    }
+
+    /// P9: parses each alias right side once with its parameters bound to themselves (after the constants, which a
+    /// fixed length may name), which reports bad types and alias cycles even for unused aliases.
+    fn alias_validate(&mut self, order: Vec<String>) -> R<()> {
+        // only uses from the program mark an alias used (for the Rust item): keep the constants' uses, drop the validation's
+        let used_before: Vec<String> = self.aliases.iter().filter(|(_, a)| a.used.get()).map(|(k, _)| k.clone()).collect();
         for name in order {
             let a = self.aliases[&name].clone();
             let scope: HashMap<String, GType> = a.params.iter().enumerate()
@@ -651,9 +642,8 @@ impl Parser {
             self.scope = saved;
             *self.aliases[&name].key.borrow_mut() = g.to_key();
         }
-        // the validation above is not a use: only uses from the program mark an alias used (for the Rust item)
-        for a in self.aliases.values() {
-            a.used.set(false);
+        for (k, a) in self.aliases.iter() {
+            a.used.set(used_before.contains(k));
         }
         self.i = 0;
         self.fixed_ok = false;
