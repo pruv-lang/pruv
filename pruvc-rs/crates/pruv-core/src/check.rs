@@ -5528,13 +5528,14 @@ impl Checker {
 
     /// `fixed`: the call's result cannot hold a borrow of its arguments, so a `[T; N]` may be lent as `[T]` (P7-1 B).
     fn expect_call_arg(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, c: bool, borrow: bool, fixed: bool) -> Res<()> {
-        self.fixed_borrow = borrow && fixed && !c; // P7-1 B: read by user_arg_slices on entry
         if borrow && *ty == GType::array_u8() {
             if let Expr::StrLit(lit) = e {
                 lit.ty = Some(ty.to_key());
                 return Ok(());
             }
         }
+        // P7-1 B: set right before user_arg_slices, which takes it on entry (a set flag must never outlive this call)
+        self.fixed_borrow = borrow && fixed && !c;
         self.expect_user_arg(e, ty, scope, c, borrow)
     }
 

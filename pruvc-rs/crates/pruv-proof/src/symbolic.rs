@@ -4120,7 +4120,8 @@ impl<'a> FnVerifier<'a> {
         if let Val::Arr(ra) = &res {
             let w = self.z.and(&[ra.n.ge_i(0), ra.n.le_i(MAX_LEN)]);
             self.assume(st, g, w);
-            if let Some(width) = ra.elem.narrow_width() {
+            if let Some(width) = ra.elem.narrow_width().or_else(|| fixed_elem_width(ra)) {
+                // P7-1 B: a fixed-array result holds values of its element type
                 let d = self.narrow_elem_domain(&ra.a, &ra.n, width);
                 self.assume(st, g, d);
             } else if f.foreign.is_some() && is_vec_i64(&rty) {
@@ -4319,7 +4320,7 @@ impl<'a> FnVerifier<'a> {
                         self.assume(st, g, d);
                     }
                     // P7-1 B: a fixed inout keeps the range of its element type across the call
-                    if let Some(width) = nv.fix.as_ref().and_then(|f| f.fixed_parts()).and_then(|(e, _)| intwidth::of(&e.name)) {
+                    if let Some(width) = fixed_elem_width(&nv) {
                         let d = self.narrow_elem_domain(&nv.a, &nv.n, width);
                         self.assume(st, g, d);
                     }
@@ -6565,6 +6566,11 @@ impl<'a> FnVerifier<'a> {
                         pc.push(self.narrow_elem_domain(&a.a, &a.n, width));
                         shape.push(pc[pc.len() - 1].clone());
                     }
+                    // P7-1 B: a fixed-array parameter holds values of its element type
+                    if let Some(width) = fixed_elem_width(a) {
+                        pc.push(self.narrow_elem_domain(&a.a, &a.n, width));
+                        shape.push(pc[pc.len() - 1].clone());
+                    }
                 }
                 Val::File(f) => pc.push(self.wf_file(f)),
                 Val::Proc(p) => pc.push(self.wf_proc(p)),
@@ -6699,4 +6705,9 @@ fn arr_shape(t: &Ast) -> String {
         return format!("({} {})", t.decl_name().unwrap_or_default(), parts.join(" "));
     }
     t.sexpr()
+}
+
+/// P7-1 B: the integer width of a fixed array's element type (None for bool and for other arrays)
+fn fixed_elem_width(a: &Arr) -> Option<&'static IntWidth> {
+    a.fix.as_ref().and_then(|f| f.fixed_parts()).and_then(|(e, _)| intwidth::of(&e.name))
 }

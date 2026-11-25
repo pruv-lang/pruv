@@ -1,0 +1,6 @@
+// P7-1 B: the same fixed array passed inout and by value in one call is rejected
+fn both(inout a: [i64; 2], c: [i64; 2]) -> i64 { a[0] = 1; return c[0]; }
+fn f() -> i64 {
+  let mut d: [i64; 2] = [0, 0];
+  return both(inout d, d);
+}

@@ -4260,6 +4260,16 @@ impl<'a> FnGen<'a> {
 
     pub fn stmt(&mut self, st: &Stmt) -> R<()> {
         match st {
+            Stmt::Let(x) if fixed_key(&x.ty).is_some() && x.is_place() => {
+                // `let d = inout a` names the same `[N x E]` slot: no copy
+                let Expr::InoutArg(arg) = &x.value else { unreachable!() };
+                let Expr::Var(place) = &*arg.expr else {
+                    return Err("llvmgen: unsupported fixed array place binding".to_string());
+                };
+                let binding = self.lookup(&place.name)?;
+                self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?.names.insert(x.name.clone(), binding);
+                Ok(())
+            }
             Stmt::Let(x) if fixed_key(&x.ty).is_some() => {
                 // P7-1: a fixed array lives in its own `[N x E]` slot; copies are memcpy
                 self.begin_temps();

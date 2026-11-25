@@ -533,8 +533,8 @@ impl Parser {
         self.expect("]")?;
         if !fixed_ok {
             return Err(PruvError::new("type", open.line, open.col, "fixed_array_position",
-                "a fixed-length array is a local value only for now: not a parameter, result, field or type argument (parity row P7-1 B)",
-                "declare it with let inside the function body"));
+                "a fixed-length array is a local, parameter or result type only for now: not a field, tuple component, type argument, nested array or `ref` (parity row P7-1 B)",
+                "keep the array in a let, a parameter or a result"));
         }
         fixed_size(open.line, open.col, &elem, n)?;
         Ok(GType::fixed(elem, n))

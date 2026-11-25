@@ -1,0 +1,26 @@
+// P7-1 B runtime: a whole fixed array bound as a place (`let d = inout a`) writes the same array on both backends
+fn first(a: [i64]) -> i64
+  requires len(a) >= 1
+  ensures result == a[0]
+{
+  return a[0];
+}
+
+fn g(inout a: [i64; 3]) -> ()
+  ensures a[0] == 7 && a[1] == old(a)[1] && a[2] == old(a)[2]
+{
+  let d = inout a;
+  d[0] = 7;
+}
+
+fn run(i: i64) -> i64
+  requires 0 <= i && i < 3
+{
+  let mut x: [i64; 3] = [i, 0, 0];
+  g(inout x);
+  let d = inout x;
+  d[1] = 5;
+  let f: i64 = first(d);
+  assert x[0] == 7 && x[1] == 5 && f == 7;
+  return x[0] * 100 + x[1] * 10 + i;
+}
