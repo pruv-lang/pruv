@@ -1326,7 +1326,7 @@ pub struct Mod {
     pub need_eq: BTreeSet<String>,
     /// P2 batch 4: widths of the llvm.bswap declarations the byte-word accesses used
     pub bswap: BTreeSet<u32>,
-    narrow_overflow_decls: BTreeSet<String>,
+    narrow_overflow_decls: BTreeSet<(&'static str, &'static str, &'static str)>,
     pub uses_utf8_valid: bool,
     pub uses_utf8_panic: bool,
     /// P3: some external array-return wrapper normalizes cap to len with @pruv_shrink_v2
@@ -5199,9 +5199,7 @@ impl<'a> FnGen<'a> {
             let prefix = if width.signed { "s" } else { "u" };
             let intrinsic = format!("{prefix}{name}");
             if matches!(l.k, Kind::Narrow(_)) {
-                self.m.narrow_overflow_decls.insert(format!(
-                    "declare {{ {ty}, i1 }} @llvm.{intrinsic}.with.overflow.{ty}({ty}, {ty})\n"
-                ));
+                self.m.narrow_overflow_decls.insert((ty, prefix, name));
             }
             let v = self.checked(ty, &intrinsic, op, &l.a, &r.a)?;
             return Ok(V::new(l.k, v));
@@ -8845,11 +8843,14 @@ pub fn gen_llvm_with_specializations(
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
     }
-    let tt0 = crate::emit_common::make_type_table(prog);
+    // Built only when a host-facing function exists (the generator builds its own table later).
+    let mut tt0 = None;
     for (i, f) in prog.functions.iter().enumerate() {
         let public = prog.explicit.as_ref().and_then(|meta| meta.fns.get(i))
             .is_some_and(|mark| mark.is_pub || mark.host_entry);
-        if (public || f.foreign.is_some()) && crate::emit_common::has_narrow_scalar_sig(f, &tt0) {
+        if (public || f.foreign.is_some())
+            && crate::emit_common::has_narrow_scalar_sig(f, tt0.get_or_insert_with(|| crate::emit_common::make_type_table(prog)))
+        {
             return Err(GenError::Msg(crate::emit_common::SMALL_INT_HOST_ERROR.into()));
         }
     }
@@ -9131,7 +9132,9 @@ fn gen_llvm_body(
         m.render_strings(),
         type_defs(&tt),
         if prog.types.is_empty() { "" } else { "\n" },
-        format!("{}{}", DECLS, m.narrow_overflow_decls.iter().cloned().collect::<String>()),
+        format!("{}{}", DECLS, m.narrow_overflow_decls.iter().map(|(ty, prefix, name)| format!(
+            "declare {{ {ty}, i1 }} @llvm.{prefix}{name}.with.overflow.{ty}({ty}, {ty})\n"
+        )).collect::<String>()),
         // G2 A5: DECLS_U8 if u8 or bool is used, and DECLS_BOOL after it if bool is used
         // G2 B2: DECLS_U8 if u8, bool or str is used, and DECLS_STR at the very end if str is used
         // G6 A3: DECLS_U8 also when string_to_str copies through pruv_copy_v2

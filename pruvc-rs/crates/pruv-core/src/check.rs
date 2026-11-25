@@ -4385,6 +4385,7 @@ impl Checker {
         } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "utf8_valid_span", "str_from_utf8", "truncate", "eq_range", "find_byte", "resize", "copy_range", "copy_within", "arr_reserve", "arr_push", "arr_append", "subview"].contains(&n.as_str())
             || is_bit_builtin(n)
             || is_word_builtin(n)
+            || crate::intwidth::of(n).is_some()
             || contract_only(n).is_some() || is_catalog(n) || (n == "old" && self.uses_inout)
         {
             return Err(terr(c.line, c.col, "parallel_call",

@@ -595,7 +595,10 @@ impl<'a> Mono<'a> {
                 let ty = self.ty_opt(&x.ty)?;
                 // Casts keep their spelling and their checked operand and result types.
                 if crate::intwidth::of(&x.name).is_some() {
-                    return Ok(Expr::Call(Call { args, ty, ..x.clone() }));
+                    return Ok(Expr::Call(Call {
+                        line: x.line, col: x.col, name: x.name.clone(), args, ty, targs: x.targs.clone(),
+                        inst: x.inst.clone(), old: x.old.clone(), opaque_c: x.opaque_c,
+                    }));
                 }
                 let mut name = x.name.clone();
                 let mut new_inst: Option<Inst> = None;

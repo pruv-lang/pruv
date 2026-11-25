@@ -64,12 +64,19 @@ pub(crate) const SMALL_INT_HOST_ERROR: &str = "small_int_unsupported: u8/u16 at 
 
 /// A u8/u16 value in the signature, directly or inside a user struct/enum (P1: such functions stay off the host boundary).
 pub(crate) fn has_narrow_scalar_sig(f: &crate::ast::Function, tt: &TypeTable) -> bool {
-    has_narrow(tt, &f.ret, 0) || f.params.iter().any(|p| has_narrow(tt, &p.ty, 0))
+    let mut seen = std::collections::HashSet::new();
+    has_narrow(tt, &f.ret, &mut seen) || f.params.iter().any(|p| has_narrow(tt, &p.ty, &mut seen))
 }
 
-fn has_narrow(tt: &TypeTable, ty: &str, depth: usize) -> bool {
-    crate::intwidth::is_narrow(ty)
-        || (depth < 16 && tt.decl(ty).is_some_and(|d| d.all_fields().iter().any(|x| has_narrow(tt, &x.ty, depth + 1))))
+/// Every type name in a key (`option<Byte>` reaches `Byte`), each user type visited once.
+fn has_narrow(tt: &TypeTable, ty: &str, seen: &mut std::collections::HashSet<String>) -> bool {
+    ty.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.' || c == ':'))
+        .filter(|n| !n.is_empty())
+        .any(|n| {
+            crate::intwidth::is_narrow(n)
+                || (seen.insert(n.to_string())
+                    && tt.decl(n).is_some_and(|d| d.all_fields().iter().any(|x| has_narrow(tt, &x.ty, seen))))
+        })
 }
 
 fn structured_builtin(g: &GType) -> bool {

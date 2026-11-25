@@ -1480,7 +1480,7 @@ struct Gen<'a> {
     need_bits: HashSet<String>,
     /// P2 batch 2: shifts used in code under --no-verify (pruv_shl / pruv_ushr helpers)
     need_shift: HashSet<String>,
-    small_int_helpers: std::collections::BTreeSet<String>,
+    small_int_helpers: std::collections::BTreeSet<(&'static str, &'static str, &'static str)>,
     /// P13a.10: print lowers to println!, which panics when stdout fails (raw_unwind_free).
     printed: bool,
     /// P2 batch 4: load_be used in a runtime contract (pruv_cload_be helper)
@@ -5194,7 +5194,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         let l = self.e(&x.left)?;
                         let r = self.e(&x.right)?;
                         if let Some(width) = x.ty.as_deref().and_then(crate::intwidth::of).filter(|width| !width.signed) {
-                            self.small_int_helpers.insert(safe_small_int_helper(width.name, method, message));
+                            self.small_int_helpers.insert((method, width.name, message));
                             return Ok(format!("pruv_{method}_{}({l}, {r})", width.name));
                         }
                         return Ok(format!("pruv_{method}({l}, {r})"));
@@ -6143,11 +6143,14 @@ fn gen_rust_concrete_core(
     if let Some(e) = crate::typeinfo::g2_unimplemented_error(prog, "codegen", None, &["array_u8", "array_bool", "str"], None) { // G2 B2
         return Err(GenError::Msg(format!("unsupported_type: {}", e.message)));
     }
-    let tt0 = make_type_table(prog);
+    // Built only when a host-facing function exists (the generator builds its own table later).
+    let mut tt0 = None;
     for (i, f) in prog.functions.iter().enumerate() {
         let public = prog.explicit.as_ref().and_then(|meta| meta.fns.get(i))
             .is_some_and(|mark| mark.is_pub || mark.host_entry);
-        if (public || f.foreign.is_some()) && crate::emit_common::has_narrow_scalar_sig(f, &tt0) {
+        if (public || f.foreign.is_some())
+            && crate::emit_common::has_narrow_scalar_sig(f, tt0.get_or_insert_with(|| make_type_table(prog)))
+        {
             return Err(GenError::Msg(crate::emit_common::SMALL_INT_HOST_ERROR.into()));
         }
     }
@@ -6253,7 +6256,8 @@ fn gen_rust_concrete_core(
         .map(|k| contract_op_helper(k))
         .collect();
     drop(g.out.splice(mark..mark, op_bit_texts));
-    drop(g.out.splice(mark..mark, std::mem::take(&mut g.small_int_helpers)));
+    drop(g.out.splice(mark..mark, std::mem::take(&mut g.small_int_helpers).into_iter()
+        .map(|(method, ty, message)| safe_small_int_helper(ty, method, message))));
     // P2 batch 4: the load_be contract helper, when a runtime contract used it
     if g.need_load_le {
         let helper = CONTRACT_LOAD_HELPER.replace("pruv_cload_be", "pruv_cload_le")

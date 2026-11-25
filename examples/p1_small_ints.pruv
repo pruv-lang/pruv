@@ -54,6 +54,14 @@ fn count_up(n: u16) -> u16
   return i;
 }
 
+// A u8 field inside an Option payload keeps the function off the host boundary.
+fn count_of(o: Option<Pixel>) -> i64 {
+  match o {
+    Some(p) => { return i64(p.count); }
+    None => { return 0; }
+  }
+}
+
 fn run(x: i64) -> i64
   requires 0 <= x && x <= 255
 {

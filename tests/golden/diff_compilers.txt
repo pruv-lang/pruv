@@ -228,9 +228,9 @@ examples|examples/g9_suffix_scan.pruv [trust-callers]	2 cases: exit 2	llvm=d15c3
 examples|examples/g9_tree_walk.pruv [default]	2 cases: exit 2	llvm=a108ede49a0f	rust=e30076f80166
 examples|examples/g9_tree_walk.pruv [no-verify]	2 cases: exit 2	llvm=f37481a979d9	rust=03b208a46b7f
 examples|examples/g9_tree_walk.pruv [trust-callers]	2 cases: exit 2	llvm=c3330eeae5b9	rust=fd715a85d65e
-examples|examples/p1_small_ints.pruv [default]	2 cases: exit 2	llvm=257cfce67501	rust=7f547427d58b
-examples|examples/p1_small_ints.pruv [no-verify]	2 cases: exit 2	llvm=f48393030182	rust=dea0095608b4
-examples|examples/p1_small_ints.pruv [trust-callers]	2 cases: exit 2	llvm=7aaf01cdd932	rust=9d2c30c27840
+examples|examples/p1_small_ints.pruv [default]	2 cases: exit 2	llvm=a23f235f4766	rust=cb1142920ca8
+examples|examples/p1_small_ints.pruv [no-verify]	2 cases: exit 2	llvm=5ab3b8e0c0a1	rust=a9656ec9e85e
+examples|examples/p1_small_ints.pruv [trust-callers]	2 cases: exit 2	llvm=6d8505032c3f	rust=8220a6404f7e
 examples|examples/prefix.pruv [default]	2 cases: exit 2	llvm=1cae3fc9f613	rust=53d6d01e934f
 examples|examples/prefix.pruv [no-verify]	2 cases: exit 2	llvm=f1fd8d1a75df	rust=2acbe9ec70eb
 examples|examples/prefix.pruv [trust-callers]	2 cases: exit 2	llvm=79299d95e186	rust=40c95f934e73
@@ -1322,6 +1322,7 @@ must_reject|must_reject/p1_index.pruv	2 cases: exit 2	llvm=83b7f47db4de	rust=83b
 must_reject|must_reject/p1_literal_range.pruv	2 cases: exit 2	llvm=4c6964b6908f	rust=4c6964b6908f
 must_reject|must_reject/p1_mixed_width.pruv	2 cases: exit 2	llvm=2db491293687	rust=2db491293687
 must_reject|must_reject/p1_neg.pruv	2 cases: exit 2	llvm=a025208ad3fc	rust=a025208ad3fc
+must_reject|must_reject/p1_par_cast.pruv	2 cases: exit 2	llvm=f95c8d02c9eb	rust=f95c8d02c9eb
 must_reject|must_reject/p1_pub_sig.pruv	2 cases: exit 2	llvm=b2bf2084b5f8	rust=b2bf2084b5f8
 must_reject|must_reject/p1_sub_underflow.pruv	2 cases: exit 2	llvm=b6cd9c6248b2	rust=b6cd9c6248b2
 must_reject|must_reject/p1_u16_array.pruv	2 cases: exit 2	llvm=d83484da2f0e	rust=d83484da2f0e
