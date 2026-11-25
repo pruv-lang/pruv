@@ -5454,6 +5454,9 @@ impl Checker {
         let base = ct.view_base().cloned().unwrap_or_else(|| ct.clone());
         let elem = if base.is_array() {
             elem_type(&base)
+        } else if let Some((el, _)) = base.fixed_parts() {
+            // P7-1 B: a fixed array iterates its N elements like a slice
+            el.clone()
         } else if base.owner.is_none() && base.name == "vec" && base.args.len() == 1
             && (base.args[0].int_width().is_some() || base.args[0] == boolt()) {
             let elem = base.args[0].clone();

@@ -1460,7 +1460,8 @@ must_reject|must_reject/p7_fixed_field_frame.pruv	2 cases: exit 2	llvm=fd8ba2502
 must_reject|must_reject/p7_fixed_field_host.pruv	2 cases: exit 2	llvm=b9d218bc9034	rust=b9d218bc9034
 must_reject|must_reject/p7_fixed_field_oob.pruv	2 cases: exit 2	llvm=1c29e0f14164	rust=1c29e0f14164
 must_reject|must_reject/p7_fixed_field_owned.pruv	2 cases: exit 2	llvm=68f2eadb80a8	rust=68f2eadb80a8
-must_reject|must_reject/p7_fixed_for_in.pruv	2 cases: exit 2	llvm=9d1c2a059fd2	rust=9d1c2a059fd2
+must_reject|must_reject/p7_fixed_for_in.pruv	2 cases: exit 2	llvm=7198ea418d5f	rust=7198ea418d5f
+must_reject|must_reject/p7_fixed_for_literal.pruv	2 cases: exit 2	llvm=bd3548ba819b	rust=bd3548ba819b
 must_reject|must_reject/p7_fixed_havoc_range.pruv	2 cases: exit 2	llvm=6f7c9739aa99	rust=6f7c9739aa99
 must_reject|must_reject/p7_fixed_inout_alias.pruv	2 cases: exit 2	llvm=4711df840774	rust=4711df840774
 must_reject|must_reject/p7_fixed_inout_range.pruv	2 cases: exit 2	llvm=06d524c238bd	rust=06d524c238bd
@@ -2748,6 +2749,8 @@ runtime|runtime/p7_rt_fixed_field [--no-verify]	2 cases: exit 2	llvm=1a1cb94788d
 runtime|runtime/p7_rt_fixed_field [default]	2 cases: exit 2	llvm=badafc84efd0	rust=9487c50d928d
 runtime|runtime/p7_rt_fixed_field_nested [--no-verify]	2 cases: exit 2	llvm=da1af037e0c1	rust=9367030b376b
 runtime|runtime/p7_rt_fixed_field_nested [default]	2 cases: exit 2	llvm=0d2545b83bcf	rust=6db35cfb9874
+runtime|runtime/p7_rt_fixed_for [--no-verify]	2 cases: exit 2	llvm=52a9cbd1f9ce	rust=63c1e145f8a5
+runtime|runtime/p7_rt_fixed_for [default]	2 cases: exit 2	llvm=5dcdda408d6b	rust=38a2f1ce590b
 runtime|runtime/p7_rt_fixed_lend_pin [--no-verify]	2 cases: exit 2	llvm=69eaf88a9b36	rust=ca5484bc03e1
 runtime|runtime/p7_rt_fixed_lend_pin [default]	2 cases: exit 2	llvm=b2cec03f8deb	rust=ddff63e9da83
 runtime|runtime/p7_rt_fixed_literal [--no-verify]	2 cases: exit 2	llvm=d2d16c082935	rust=309593023a3b

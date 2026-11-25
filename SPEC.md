@@ -2494,7 +2494,8 @@ write-back, invariants and the cost bound take the `while` path. `for` is contex
   [runtime](tests/runtime/p4_rt_for.pruv).
 - R-6q-2 **Slice and Vec loops.** `for x in P invariant <bool>* { body }` iterates the elements of a place `P` (a
   local or parameter, or a field path of one) of type `[i64]`, `[u8]`, `[u16]`, `[bool]`, `ref [T]` of those, or
-  `Vec<T>` with `T` an integer type or `bool`, in index order. `x` is a read-only copy of the element, typed as the
+  `Vec<T>` with `T` an integer type or `bool`, or a fixed array `[T; N]` (P7-1 B, a local, parameter or struct field;
+  its `N` elements, typed as `a[k]` is), in index order. `x` is a read-only copy of the element, typed as the
   index read `P[k]` is (`i64` for `[u8]`/`[u16]`, with its range known). In an invariant, `index(x)` is the number of
   elements already visited (the position of `x` in the body, `len(P)` after the loop); `index` is only defined
   there. The body holds `P` read-only: assigning, storing into, moving, place-binding (`let d = inout ..`) or passing `inout` an overlapping path,
@@ -2715,12 +2716,12 @@ fn is_digit(c: char) -> bool
   outside the call-duration lend (a `[T]` or `ref [T]` local, a `take` argument, an argument of a `from` function or
   of a call inside a contract) and a literal inside a contract are `type/fixed_array_operation`; a wrong element
   count is `type/type_mismatch`, and an `inout [T]` parameter given a `[T; N]` is `type/inout_argument`. Generic and
-  enum fields, tuples, type arguments, nested arrays, `for x in a`, slice patterns and contract literals are parity row P7-1 B
+  enum fields, tuples, type arguments, nested arrays, slice patterns and contract literals are parity row P7-1 B
   (remaining). The length bound `[T; <=N]`
   (section 7a) is unchanged. Tests: [accept](tests/spec/r6t_4_accept.pruv), [reject](tests/spec/r6t_4_reject.pruv),
   [index](tests/spec/r6t_4_reject_index.pruv), [literals](tests/runtime/p7_rt_fixed_literal.pruv),
   [order](tests/runtime/p7_rt_fixed_eval.pruv), [proven](tests/runtime/p7_rt_fixed_proven.pruv),
-  [unverified](tests/runtime/p7_rt_fixed_oob_unverified.pruv), [type](tests/must_reject/p7_array_type.pruv),
+  [unverified](tests/runtime/p7_rt_fixed_oob_unverified.pruv), [for](tests/runtime/p7_rt_fixed_for.pruv), [type](tests/must_reject/p7_array_type.pruv),
   [char element](tests/must_reject/p7_array_char_type.pruv), [owned](tests/must_reject/p7_fixed_owned.pruv),
   [nested](tests/must_reject/p7_fixed_nested.pruv), [field](tests/runtime/p7_rt_fixed_field.pruv),
   [nested field](tests/runtime/p7_rt_fixed_field_nested.pruv), [host field](tests/must_reject/p7_fixed_field_host.pruv),

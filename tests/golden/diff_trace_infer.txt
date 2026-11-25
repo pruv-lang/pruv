@@ -1374,7 +1374,8 @@ must_reject|tests/must_reject/p7_fixed_field_frame.pruv	1 case: obl=2 1	--infer=
 must_reject|tests/must_reject/p7_fixed_field_host.pruv	1 case: obl=0 1	--infer=3fedc1a73e5a
 must_reject|tests/must_reject/p7_fixed_field_oob.pruv	1 case: obl=1 1	--infer=41852a3019ee
 must_reject|tests/must_reject/p7_fixed_field_owned.pruv	1 case: obl=0 1	--infer=dc279c95cf77
-must_reject|tests/must_reject/p7_fixed_for_in.pruv	1 case: obl=0 1	--infer=d38deeb36593
+must_reject|tests/must_reject/p7_fixed_for_in.pruv	1 case: obl=0 1	--infer=d79063d98561
+must_reject|tests/must_reject/p7_fixed_for_literal.pruv	1 case: obl=0 1	--infer=bbc3cfe9de86
 must_reject|tests/must_reject/p7_fixed_havoc_range.pruv	1 case: obl=19 1	--infer=8d1546628dbf
 must_reject|tests/must_reject/p7_fixed_inout_alias.pruv	1 case: obl=0 1	--infer=62b1fdd15c71
 must_reject|tests/must_reject/p7_fixed_inout_range.pruv	1 case: obl=2 1	--infer=c8e5005e23fe
@@ -1931,6 +1932,7 @@ runtime|tests/runtime/p7_rt_fixed_copy.pruv	1 case: obl=57 1	--infer=b9a3f33a7bc
 runtime|tests/runtime/p7_rt_fixed_eval.pruv	1 case: obl=16 1	--infer=fea0333854d6
 runtime|tests/runtime/p7_rt_fixed_field.pruv	1 case: obl=19 1	--infer=75dd2be3e2db
 runtime|tests/runtime/p7_rt_fixed_field_nested.pruv	1 case: obl=22 1	--infer=84894e275fef
+runtime|tests/runtime/p7_rt_fixed_for.pruv	1 case: obl=133 1	--infer=c91055aec10c
 runtime|tests/runtime/p7_rt_fixed_lend_pin.pruv	1 case: obl=17 1	--infer=ee17d95e2ed0
 runtime|tests/runtime/p7_rt_fixed_literal.pruv	1 case: obl=69 1	--infer=8278b5cc1dae
 runtime|tests/runtime/p7_rt_fixed_oob_unverified.pruv	1 case: obl=1 1	--infer=2569ac780474
