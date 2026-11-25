@@ -1,0 +1,6 @@
+// P2-6 runtime: an unverified resize fill of -1 into [u16] stops instead of wrapping
+fn widen(v: i64) -> i64 ! alloc {
+  let a: [u16] = alloc(1, 7);
+  let b: [u16] = resize(a, 3, v);
+  return b[0] + b[2];
+}

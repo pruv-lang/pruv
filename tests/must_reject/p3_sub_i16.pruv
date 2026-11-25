@@ -1,0 +1,2 @@
+// P3: i16 - must stay >= -32768
+fn f(a: i16) -> i16 requires a <= 0 { return a - 1; }

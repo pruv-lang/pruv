@@ -1,0 +1,6 @@
+// P3 runtime: unverified u64 division by zero fails
+fn f(a: i64, b: i64) -> i64 {
+  let x: u64 = u64(a);
+  let y: u64 = u64(b);
+  return i64(x / y);
+}

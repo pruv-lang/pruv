@@ -1,0 +1,6 @@
+// P3 runtime: unverified u64 index u64 max (above i64 max) fails the bounds check
+fn f(a: i64, b: i64) -> i64 ! alloc {
+  let v: [i64] = alloc(4, 7);
+  let k: u64 = u64(a) * 2 + 1;
+  return v[k] + b;
+}

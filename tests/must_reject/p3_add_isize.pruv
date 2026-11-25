@@ -1,0 +1,2 @@
+// P3: isize + must stay <= i64 max
+fn f(a: isize) -> isize requires a >= 0 { return a + 1; }

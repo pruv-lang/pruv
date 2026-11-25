@@ -64,8 +64,8 @@ pub fn is_user_key(t: &str) -> bool {
     !is_g3_key(t) && !crate::intwidth::is_narrow(t) && is_user_type(t)
 }
 
-pub(crate) const SMALL_INT_HOST_MESSAGE: &str = "u8/u16 at the host boundary is bundle P12";
-pub(crate) const SMALL_INT_HOST_ERROR: &str = "small_int_unsupported: u8/u16 at the host boundary is bundle P12";
+pub(crate) const SMALL_INT_HOST_MESSAGE: &str = "integer types other than i64 at the host boundary is bundle P12";
+pub(crate) const SMALL_INT_HOST_ERROR: &str = "small_int_unsupported: integer types other than i64 at the host boundary is bundle P12";
 
 /// A u8/u16 value in the signature, directly or inside a user struct/enum (P1: such functions stay off the host boundary).
 pub(crate) fn has_narrow_scalar_sig(f: &crate::ast::Function, tt: &TypeTable) -> bool {

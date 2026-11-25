@@ -1,0 +1,2 @@
+// P3: [u32] arrays stay rejected (row P3-1)
+fn f(a: [u32]) -> i64 { return 0; }

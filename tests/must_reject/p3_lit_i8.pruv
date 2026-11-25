@@ -1,0 +1,2 @@
+// P3: an i8 literal below -128 is int_range
+fn f() -> i8 { return -129; }

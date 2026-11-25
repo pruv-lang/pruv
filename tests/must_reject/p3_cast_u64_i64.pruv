@@ -1,0 +1,2 @@
+// P3: u64 to i64 needs a proven x <= i64 max
+fn f(x: u64) -> i64 { return i64(x); }

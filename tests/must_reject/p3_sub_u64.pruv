@@ -1,0 +1,2 @@
+// P3: u64 - must stay >= 0
+fn f(a: u64) -> u64 { return a - 1; }

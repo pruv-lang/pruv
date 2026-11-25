@@ -1,6 +1,6 @@
-// P1: an index must be i64; write i64(i)
-fn f(a: [i64], i: u8) -> i64
-  requires len(a) > 255
+// P1/P3: an index must be i64 or unsigned; a signed i8 index is rejected (write i64(i))
+fn f(a: [i64], i: i8) -> i64
+  requires len(a) > 127 && i >= 0
 {
   return a[i];
 }

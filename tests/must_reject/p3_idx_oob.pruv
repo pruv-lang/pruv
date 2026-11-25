@@ -1,0 +1,2 @@
+// P3: a usize index still needs a proven bound
+fn f(a: [i64], i: usize) -> i64 requires len(a) > 0 { return a[i]; }

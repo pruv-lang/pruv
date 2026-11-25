@@ -1,0 +1,2 @@
+// P3: i8 * must stay <= 127
+fn f(a: i8) -> i8 requires a >= 0 && a <= 64 { return a * 2; }

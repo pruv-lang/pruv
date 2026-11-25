@@ -691,7 +691,7 @@ impl Parser {
             if intwidth::is_narrow(&arg.name) || arg.name == "array_u16"
                 || arg.view_base().is_some_and(|base| base.name == "array_u16")
             {
-                return Err(self.small_int_unsupported(&at, "scalar u8/u16 and [u16] type arguments require P11"));
+                return Err(self.small_int_unsupported(&at, "non-i64 integer and [u16] type arguments require P11"));
             }
             out.push(arg);
             if !self.at(",", 0) {
@@ -951,6 +951,10 @@ impl Parser {
                 GType::u16()
             } else if e.val == "bool" {
                 GType::bool()
+            } else if crate::intwidth::is_narrow(&e.val) {
+                // P3: the other scalar widths have no buffer type yet (parity row P3-1)
+                return Err(self.small_int_unsupported(&e,
+                    "arrays of this width are not available yet (parity row P3-1); only [i64], [u8], [u16] and [bool] arrays exist"));
             } else if is_upper(&e.val) || e.val.starts_with("crate::") {
                 // G3: a type parameter (the checker: needs Element); other types: the checker rejects them
                 self.named_type(&e)?
@@ -1100,7 +1104,7 @@ impl Parser {
                 return Err(self.small_int_unsupported(&kw, "[u16] at the host boundary is bundle P12"));
             }
             if signature().any(|ty| intwidth::is_narrow(ty)) {
-                return Err(self.small_int_unsupported(&kw, "scalar u8/u16 in public or foreign signatures requires P12"));
+                return Err(self.small_int_unsupported(&kw, "non-i64 integers in public or foreign signatures require P12"));
             }
         }
         if kw.val == "extern" {
@@ -1433,7 +1437,7 @@ impl Parser {
         if self.at("for", 0) {
             if self.peek(1).kind == Kind::Id && self.at("in", 2) {
                 return Err(PruvError::new("parse", l, c, "small_int_unsupported",
-                    "numeric for-ranges are unavailable; narrow range bounds require P3",
+                    "numeric for-ranges are unavailable (bundle P4)",
                     "use a while loop and convert narrow bounds with i64(x)"));
             }
             return Err(self.reserved_name(&t));

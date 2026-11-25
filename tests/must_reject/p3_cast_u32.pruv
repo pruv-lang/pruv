@@ -1,0 +1,2 @@
+// P3: i64 to u32 needs a proven upper bound
+fn f(x: i64) -> u32 requires x >= 0 { return u32(x); }

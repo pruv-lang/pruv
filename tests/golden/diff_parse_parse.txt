@@ -134,7 +134,7 @@ bytes|vt_ff_in_comment	1 case: ok 1	parse=949f8106afae
 bytes|whitespace_only	1 case: ok 1	parse=ee2352f9fd2c
 edge|tests/parse_edge/agg_call_disambiguation.pruv	1 case: ok 1	parse=4485d20890d7
 edge|tests/parse_edge/all_nodes.pruv	1 case: ok 1	parse=6e6e07404c32
-edge|tests/parse_edge/array_only_i64.pruv	1 case: error parse/small_int_unsupported 1	parse=aa1d32aafff6
+edge|tests/parse_edge/array_only_i64.pruv	1 case: error parse/small_int_unsupported 1	parse=1b1bfea79c2f
 edge|tests/parse_edge/badchar_backslash.pruv	1 case: error parse/bad_char 1	parse=ae238c6d35c2
 edge|tests/parse_edge/badchar_dquote.pruv	1 case: ok 1	parse=997f738c8408
 edge|tests/parse_edge/badchar_squote.pruv	1 case: error parse/bad_char 1	parse=cbd5437b0360
@@ -715,12 +715,12 @@ must_reject|tests/must_reject/g2a_missing_alloc.pruv	1 case: ok 1	parse=c7c238ce
 must_reject|tests/must_reject/g2a_mixed_argument.pruv	1 case: ok 1	parse=c44432771977
 must_reject|tests/must_reject/g2a_mixed_bool.pruv	1 case: ok 1	parse=259d45c2159f
 must_reject|tests/must_reject/g2a_nested_array.pruv	1 case: error parse/syntax 1	parse=218afa7e2533
-must_reject|tests/must_reject/g2a_option_u8.pruv	1 case: error parse/small_int_unsupported 1	parse=9dae342d25f5
+must_reject|tests/must_reject/g2a_option_u8.pruv	1 case: error parse/small_int_unsupported 1	parse=d456b6bb80f0
 must_reject|tests/must_reject/g2a_param_store.pruv	1 case: ok 1	parse=03513fb5991c
 must_reject|tests/must_reject/g2a_refine_wide.pruv	1 case: ok 1	parse=05ce86ab65f2
 must_reject|tests/must_reject/g2a_refined_store.pruv	1 case: ok 1	parse=7958d19598ec
 must_reject|tests/must_reject/g2a_return_mismatch.pruv	1 case: ok 1	parse=703ebeff9079
-must_reject|tests/must_reject/g2a_scalar_i32.pruv	1 case: error parse/small_int_unsupported 1	parse=ef3dcb80b5df
+must_reject|tests/must_reject/g2a_scalar_i32.pruv	1 case: error parse/small_int_unsupported 1	parse=c9fc983c268f
 must_reject|tests/must_reject/g2a_scalar_u8.pruv	1 case: error parse/element_storage_type 1	parse=65f8b1e90b7c
 must_reject|tests/must_reject/g2a_store_index.pruv	1 case: ok 1	parse=5c9778b20805
 must_reject|tests/must_reject/g2a_store_then_read.pruv	1 case: ok 1	parse=7a07f8a24e09
@@ -954,7 +954,7 @@ must_reject|tests/must_reject/g6v_ens_string_bytes.pruv	1 case: ok 1	parse=b78c8
 must_reject|tests/must_reject/g6v_ens_vec_prefix.pruv	1 case: ok 1	parse=c60cf2ec80c5
 must_reject|tests/must_reject/g6v_g3_eq_aggregate.pruv	1 case: ok 1	parse=4f8d07cff7dc
 must_reject|tests/must_reject/g6v_g3_key_param.pruv	1 case: ok 1	parse=35a7ee19c789
-must_reject|tests/must_reject/g6v_g3_u8_arg.pruv	1 case: error parse/small_int_unsupported 1	parse=b58bf4b9a8b3
+must_reject|tests/must_reject/g6v_g3_u8_arg.pruv	1 case: error parse/small_int_unsupported 1	parse=1520a62d67b0
 must_reject|tests/must_reject/g6v_infer_len_claim.pruv	1 case: ok 1	parse=2887ffbb475a
 must_reject|tests/must_reject/g6v_infer_push_loop.pruv	1 case: ok 1	parse=eee653f2fa3f
 must_reject|tests/must_reject/g6v_req_push_limit.pruv	1 case: ok 1	parse=c776e2ba72a0
@@ -1334,15 +1334,15 @@ must_reject|tests/must_reject/p1_cast_max_plus_one.pruv	1 case: ok 1	parse=d73d0
 must_reject|tests/must_reject/p1_cast_unproven.pruv	1 case: ok 1	parse=da346e66f542
 must_reject|tests/must_reject/p1_false_ensures.pruv	1 case: ok 1	parse=6d4dd7b73b70
 must_reject|tests/must_reject/p1_false_range.pruv	1 case: ok 1	parse=241a00ae9d24
-must_reject|tests/must_reject/p1_index.pruv	1 case: ok 1	parse=19d85c309ca0
+must_reject|tests/must_reject/p1_index.pruv	1 case: ok 1	parse=8c1329cb77d6
 must_reject|tests/must_reject/p1_literal_range.pruv	1 case: ok 1	parse=b3c783585103
 must_reject|tests/must_reject/p1_mixed_width.pruv	1 case: ok 1	parse=c8fb562ab676
 must_reject|tests/must_reject/p1_neg.pruv	1 case: ok 1	parse=c1aa3849c05e
 must_reject|tests/must_reject/p1_par_cast.pruv	1 case: ok 1	parse=7c0b8ea930b0
-must_reject|tests/must_reject/p1_pub_sig.pruv	1 case: error parse/small_int_unsupported 1	parse=18956c71f8d1
+must_reject|tests/must_reject/p1_pub_sig.pruv	1 case: error parse/small_int_unsupported 1	parse=a10e56786a20
 must_reject|tests/must_reject/p1_sub_underflow.pruv	1 case: ok 1	parse=8d5f6c8d2c95
 must_reject|tests/must_reject/p1_u16_array.pruv	1 case: error parse/small_int_unsupported 1	parse=9ab5020447e4
-must_reject|tests/must_reject/p1_u32.pruv	1 case: error parse/small_int_unsupported 1	parse=a1bc6652c244
+must_reject|tests/must_reject/p1_u32.pruv	1 case: error parse/small_int_unsupported 1	parse=b4324d1ad04a
 must_reject|tests/must_reject/p2_bits_arity.pruv	1 case: ok 1	parse=a556c30301a9
 must_reject|tests/must_reject/p2_bits_type.pruv	1 case: ok 1	parse=953f938f5772
 must_reject|tests/must_reject/p2_contract_shift.pruv	1 case: ok 1	parse=3fe06f565539
@@ -1358,12 +1358,36 @@ must_reject|tests/must_reject/p2_u16_index.pruv	1 case: ok 1	parse=746c3664bd1c
 must_reject|tests/must_reject/p2_u16_mixed_append.pruv	1 case: ok 1	parse=ca3b80166010
 must_reject|tests/must_reject/p2_u16_pub_sig.pruv	1 case: error parse/small_int_unsupported 1	parse=ad49e56b7df4
 must_reject|tests/must_reject/p2_u16_store_range.pruv	1 case: ok 1	parse=8cf623842b45
-must_reject|tests/must_reject/p2_u16_vec.pruv	1 case: error parse/small_int_unsupported 1	parse=dad80ad04f39
+must_reject|tests/must_reject/p2_u16_vec.pruv	1 case: error parse/small_int_unsupported 1	parse=777241ab73c2
 must_reject|tests/must_reject/p2_word_index.pruv	1 case: ok 1	parse=5f109d1b8871
 must_reject|tests/must_reject/p2_word_literal.pruv	1 case: ok 1	parse=9676cf008a01
 must_reject|tests/must_reject/p2_word_refine.pruv	1 case: ok 1	parse=9baf87409f65
 must_reject|tests/must_reject/p2_word_store_index.pruv	1 case: ok 1	parse=45806ce9e2a9
 must_reject|tests/must_reject/p2_word_width.pruv	1 case: ok 1	parse=8ad43754def4
+must_reject|tests/must_reject/p3_add_i32.pruv	1 case: ok 1	parse=cedb09ee3da1
+must_reject|tests/must_reject/p3_add_isize.pruv	1 case: ok 1	parse=526ed44abd79
+must_reject|tests/must_reject/p3_add_usize.pruv	1 case: ok 1	parse=e2d38af17541
+must_reject|tests/must_reject/p3_arr_u32.pruv	1 case: error parse/small_int_unsupported 1	parse=bbe4a5149ae8
+must_reject|tests/must_reject/p3_arr_usize.pruv	1 case: error parse/small_int_unsupported 1	parse=e57d50e75986
+must_reject|tests/must_reject/p3_bit_u32.pruv	1 case: ok 1	parse=bc4336c052a9
+must_reject|tests/must_reject/p3_cast_i8.pruv	1 case: ok 1	parse=d9988a703bd9
+must_reject|tests/must_reject/p3_cast_isize_usize.pruv	1 case: ok 1	parse=9bfaad6dd464
+must_reject|tests/must_reject/p3_cast_u32.pruv	1 case: ok 1	parse=9ceeb7b0ea3b
+must_reject|tests/must_reject/p3_cast_u64_i64.pruv	1 case: ok 1	parse=d3f7ae9ca2ea
+must_reject|tests/must_reject/p3_ctr_cast.pruv	1 case: ok 1	parse=25700e0c6c78
+must_reject|tests/must_reject/p3_dec_bad.pruv	1 case: ok 1	parse=213c69052060
+must_reject|tests/must_reject/p3_div_i32.pruv	1 case: ok 1	parse=5b36783ec8f9
+must_reject|tests/must_reject/p3_false_ens.pruv	1 case: ok 1	parse=9eb7b4d5e522
+must_reject|tests/must_reject/p3_idx_oob.pruv	1 case: ok 1	parse=df542694b5fa
+must_reject|tests/must_reject/p3_lit_i8.pruv	1 case: ok 1	parse=67f7db961503
+must_reject|tests/must_reject/p3_lit_u64.pruv	1 case: ok 1	parse=b2bd32e480f0
+must_reject|tests/must_reject/p3_mix.pruv	1 case: ok 1	parse=814676d0a90e
+must_reject|tests/must_reject/p3_mul_i8.pruv	1 case: ok 1	parse=bf41c148bb6a
+must_reject|tests/must_reject/p3_neg_i32.pruv	1 case: ok 1	parse=28c44e8e2f8b
+must_reject|tests/must_reject/p3_pub_u64.pruv	1 case: error parse/small_int_unsupported 1	parse=1c7dea7a0714
+must_reject|tests/must_reject/p3_sub_i16.pruv	1 case: ok 1	parse=b013b56d4be2
+must_reject|tests/must_reject/p3_sub_u64.pruv	1 case: ok 1	parse=9aff913e0d5e
+must_reject|tests/must_reject/p3_vec_idx.pruv	1 case: ok 1	parse=e070dac0cdac
 must_reject|tests/must_reject/refine_alloc_len.pruv	1 case: ok 1	parse=8e0e5aa1c969
 must_reject|tests/must_reject/refine_base_bool.pruv	1 case: ok 1	parse=733f07a1da84
 must_reject|tests/must_reject/refine_bounds_i64.pruv	1 case: ok 1	parse=c95ebe2312cc
@@ -1512,19 +1536,19 @@ mutate|examples/g3_swap_ends.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=8c
 mutate|examples/g3_swap_pair.pruv	6 cases: error parse/syntax 4, error parse/reserved_name 1, ok 1	0/parse=08a1ac0a0855	1/parse=03eb2fc187d2	2/parse=fb39bfc79e3b	3/parse=a29f56f9e1fc	4/parse=fee70c07cddf	5/parse=c979b080bece
 mutate|examples/g3_tagged_bump.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=c3a029c2a2ed	1/parse=c0c0b66ed032	2/parse=29f42f334834	3/parse=177b0cf30dd2	4/parse=007ff4670a40	5/parse=89cdd9703049
 mutate|examples/g3_wrapper_instances.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=08e0fac9ef26	1/parse=e0ccdf5596d2	2/parse=698914a33562	3/parse=817b42877db0	4/parse=04d9b58aa194	5/parse=3fad664e7f92
-mutate|examples/g5_buffer_service.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=15eb990659b2	1/parse=3fa773741c2f	2/parse=f7948e9df407	3/parse=bf07b5eb58b5	4/parse=accf0d56bd2f	5/parse=1695e650f037
-mutate|examples/g5_generic_swap.pruv	6 cases: error parse/syntax 3, ok 2, error parse/string_character 1	0/parse=4ffb9ed4d77c	1/parse=fc3a5a5d70c9	2/parse=3667af759d02	3/parse=1d6f867708c3	4/parse=d676b5b40cb7	5/parse=a331969ffb29
-mutate|examples/g5_reverse.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, error parse/reserved_name	0/parse=c4c0d30a2b03	1/parse=b5e6a86ff0e6	2/parse=89e927820ea8	3/parse=1ecde5192f7a	4/parse=2d6c1a08fbd7	5/parse=df4f934a20cd
-mutate|examples/g5_rotate.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=4e5f2de83a7b	1/parse=ee2352f9fd2c	2/parse=4ca0dcd41850	3/parse=3c7c5eebb757	4/parse=928279ece5b4	5/parse=ee2352f9fd2c
-mutate|examples/g5_set_exchange.pruv	6 cases: error parse/bad_char 2, error parse/syntax 2, error parse/reserved_name	0/parse=c3445f4ce7dc	1/parse=811203416846	2/parse=5afeec2e67a1	3/parse=9f5bf75d119a	4/parse=578f096aa930	5/parse=2a0271d372f5
+mutate|examples/g5_buffer_service.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=c0085e93b819	1/parse=df66d3e9e916	2/parse=fc87d88939d8	3/parse=840cb4064e73	4/parse=9046a0744f46	5/parse=cd9708827f12
+mutate|examples/g5_generic_swap.pruv	6 cases: error parse/syntax 3, ok 2, error parse/string_character 1	0/parse=000d80b12cf7	1/parse=d94ba3aa7ded	2/parse=3667af759d02	3/parse=1d6f867708c3	4/parse=ed6cbdff6b08	5/parse=368475b082a1
+mutate|examples/g5_reverse.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, error parse/reserved_name	0/parse=bf903e5614d6	1/parse=b5e6a86ff0e6	2/parse=89e927820ea8	3/parse=1ecde5192f7a	4/parse=2d6c1a08fbd7	5/parse=df4f934a20cd
+mutate|examples/g5_rotate.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=0c1430af3ec1	1/parse=ee2352f9fd2c	2/parse=39f2e4e6e1ed	3/parse=3512d73c9a38	4/parse=e941d080b21f	5/parse=ee2352f9fd2c
+mutate|examples/g5_set_exchange.pruv	6 cases: error parse/bad_char 2, error parse/syntax 2, error parse/reserved_name	0/parse=ca6231908b25	1/parse=b13bc0f93ffc	2/parse=5afeec2e67a1	3/parse=9f5bf75d119a	4/parse=578f096aa930	5/parse=2a0271d372f5
 mutate|examples/g6_histogram.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=d55ddd0233a0	1/parse=3b9d136f9211	2/parse=c6965eee2f45	3/parse=2a6ff522d3df	4/parse=c2f25bef10e4	5/parse=f0c7e9e4d565
 mutate|examples/g6_min_clamp.pruv	6 cases: error parse/string_character 2, error parse/syntax 2, ok 2	0/parse=228a93e386c5	1/parse=d2e854d0f3bd	2/parse=f89c0ddd992d	3/parse=cd79df6f3ec5	4/parse=ff68b8734172	5/parse=ee2352f9fd2c
 mutate|examples/g6_string_build.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=98c02b132c04	1/parse=96300cff62bf	2/parse=0d60d21b188e	3/parse=0140d37cf889	4/parse=8aca9e49100f	5/parse=ee2352f9fd2c
 mutate|examples/g6_vec_running_sum.pruv	6 cases: error parse/syntax 4, error parse/reserved_name 1, ok 1	0/parse=d57e25d5a588	1/parse=26712d4bb11a	2/parse=c95c4fd854e2	3/parse=350703eae987	4/parse=d1a6f49bad43	5/parse=0426d967c416
 mutate|examples/g7_disjoint.pruv	6 cases: error parse/syntax 6	0/parse=7c5a2438b4c3	1/parse=d7635048d37d	2/parse=9730e87f2f8b	3/parse=d2627c9af40f	4/parse=ae28e17d7f9f	5/parse=07eac4f2813c
 mutate|examples/g7_shared_reads.pruv	6 cases: error parse/syntax 4, error parse/parallel_syntax 1, ok 1	0/parse=7324f53bf4e6	1/parse=1914400548bc	2/parse=5c1b00701c9f	3/parse=c31490df6f49	4/parse=ab6286c85cd8	5/parse=10ab21383794
-mutate|examples/g8_std_clamp.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, error parse/path_syntax 1	0/parse=33509cdf1401	1/parse=5453333661ae	2/parse=33152d1786bd	3/parse=0be524b914c5	4/parse=17a19d7f6d60	5/parse=ed3c9fe65146
-mutate|examples/g8_std_index.pruv	6 cases: error parse/syntax 6	0/parse=99245670f712	1/parse=32c8cd080629	2/parse=4f7f286bbcb9	3/parse=40627fa25645	4/parse=fd233105b17e	5/parse=f25cfd47a574
+mutate|examples/g8_std_clamp.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, error parse/path_syntax 1	0/parse=6af45f5ca0c0	1/parse=3b3267196c9d	2/parse=ec19834dcdf3	3/parse=4207eb23ae9f	4/parse=a5ec12a984ba	5/parse=06ee188c4e25
+mutate|examples/g8_std_index.pruv	6 cases: error parse/syntax 6	0/parse=f7c9da3491a3	1/parse=6ddcaaf46bef	2/parse=cd67d5456dc4	3/parse=13c0c1d773b9	4/parse=e016807b3e2a	5/parse=13ddc92777a5
 mutate|examples/g9_buffer_copy.pruv	6 cases: error parse/syntax 4, error parse/string_character 1, ok 1	0/parse=25c5bcd156d0	1/parse=aa4f7e166b29	2/parse=ee2352f9fd2c	3/parse=cee68ae43c9b	4/parse=e94e004e7255	5/parse=d17432565ecc
 mutate|examples/g9_even_odd.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, ok 1	0/parse=e80eeff4930a	1/parse=f75105434f84	2/parse=80b49c54eeea	3/parse=e0f5a675e216	4/parse=683489f228a5	5/parse=5232aade99af
 mutate|examples/g9_json_build.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=d08555635059	1/parse=4d83286b502c	2/parse=5dab4c4b7767	3/parse=ce7e2c90c3ef	4/parse=0a63431150ae	5/parse=4fe5cfa19110
@@ -1537,28 +1561,28 @@ mutate|examples/p1_small_ints.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=c
 mutate|examples/p2_u16_keys.pruv	6 cases: error parse/syntax 2, ok 2, error parse/bad_char 1, error parse/reserve	0/parse=2ec95b1a6435	1/parse=90fb1bcc5b80	2/parse=c5e5baaaf81d	3/parse=83dbafe0d2dc	4/parse=9726373e33b0	5/parse=d2806a6f2d05
 mutate|examples/prefix.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=1a723f7760db	1/parse=0a2f8c4700f4	2/parse=17e3e1dca6a8	3/parse=46e7f74dde1a	4/parse=3ce3d16586d9	5/parse=7c9a952a5820
 mutate|examples/sum.pruv	6 cases: error parse/syntax 6	0/parse=677f0c54ce35	1/parse=2e4636cb660a	2/parse=62006ec5d5b9	3/parse=afe54cbceae0	4/parse=b949d2b466ae	5/parse=7998c249319a
-mutate|tests/g4/frontend/f01_nested_files/root.pruv	6 cases: error parse/syntax 3, error parse/path_syntax 1, error parse/reserved_n	0/parse=fb0c530004ef	1/parse=2f270009db6c	2/parse=5e3900676486	3/parse=ee2352f9fd2c	4/parse=0ec6c442b2c2	5/parse=94891ebbff70
-mutate|tests/g4/frontend/f02_forward_cycles/root.pruv	6 cases: error parse/module_file 4, error parse/reserved_name 1, error parse/syn	0/parse=d4b02a6f3e31	1/parse=0cf3832e6cc5	2/parse=3990b49b9238	3/parse=53685b0e14de	4/parse=91e1ee3a7b0e	5/parse=21ed3a9c601e
-mutate|tests/g4/frontend/f03_generic_paths/root.pruv	6 cases: error parse/syntax 3, error parse/reserved_name 2, error parse/module_f	0/parse=9102e9720c1b	1/parse=ddff9a0c3efb	2/parse=fd07bd7195af	3/parse=591cba345ada	4/parse=0fda991aaf72	5/parse=9dc2c21dc75e
-mutate|tests/g4/frontend/f04_qualified_patterns/root.pruv	6 cases: error parse/syntax 4, error parse/path_syntax 1, error parse/reserved_n	0/parse=174572c0abee	1/parse=9f0bef013060	2/parse=ec87415db6f6	3/parse=4cc3dd6e3e9e	4/parse=c3bfb228c131	5/parse=013bb6989634
-mutate|tests/g4/frontend/f05_local_catalog_shadow/root.pruv	6 cases: error parse/module_file 3, error parse/syntax 2, ok 1	0/parse=cf1c2f6118e2	1/parse=69fed6da2d6e	2/parse=c55d91eac378	3/parse=a09c1edc8c97	4/parse=38c055c5400c	5/parse=ee2352f9fd2c
-mutate|tests/g4/frontend/f06_same_leaf_names/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, error parse/path_synta	0/parse=aca3578c2964	1/parse=1f5859c7c819	2/parse=3d6448e44e17	3/parse=88bdeb8724c0	4/parse=75002461e167	5/parse=0a956fde93d9
-mutate|tests/g4/frontend/f07_pub_single_file/root.pruv	6 cases: error parse/syntax 3, ok 2, error parse/bad_char 1	0/parse=eddea7e7d20d	1/parse=27eed814bb25	2/parse=ee2352f9fd2c	3/parse=15df1a1f307d	4/parse=c728b216b8a2	5/parse=cd4912c1fc7c
-mutate|tests/g4/frontend/f08_entry_main/root.pruv	6 cases: error parse/bad_char 2, error parse/syntax 2, error parse/reserved_name	0/parse=0fb85ad3a88a	1/parse=1f5a49042a59	2/parse=32568da2f3e3	3/parse=b4f3e41eceb6	4/parse=02c66431480c	5/parse=ee2352f9fd2c
-mutate|tests/g4/frontend/f09_own_module_private/root.pruv	6 cases: error parse/module_file 3, ok 2, error parse/syntax 1	0/parse=a81bc8236a31	1/parse=d0b85e7542c0	2/parse=2f7a3212811b	3/parse=ee2352f9fd2c	4/parse=ee2352f9fd2c	5/parse=2afa5533bb70
-mutate|tests/g4/frontend/f10_refinements/root.pruv	6 cases: error parse/module_file 4, error parse/syntax 1, ok 1	0/parse=da62ab070e4a	1/parse=1d881e2ef1ea	2/parse=86c9e6485237	3/parse=ee2352f9fd2c	4/parse=2716e2e2b11b	5/parse=d37e725f6b10
-mutate|tests/g4/frontend/f11_cross_file_recursion/root.pruv	6 cases: error parse/syntax 3, error parse/module_file 2, error parse/path_synta	0/parse=1ad41bda2dd8	1/parse=8458a9170502	2/parse=b3e769b21cf3	3/parse=93e80d7dcea1	4/parse=cbf9790a61a8	5/parse=8027419654f9
-mutate|tests/g4/frontend/f12_cross_module_types/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, error parse/bad_int 1,	0/parse=d29ba4c03d4b	1/parse=95f060a1499f	2/parse=bfb961d6312e	3/parse=d1387c38dca9	4/parse=9d0462825464	5/parse=523bd3a9bf62
-mutate|tests/g4/proof/p01_same_spelled_types/root.pruv	6 cases: error parse/syntax 3, error parse/module_file 2, error parse/reserved_n	0/parse=dc224504cc37	1/parse=a8f030431f9f	2/parse=b31a38a3ed7a	3/parse=138939ecc632	4/parse=7537ab1a6b2e	5/parse=daf06f316414
-mutate|tests/g4/proof/p02_cross_file_generics/root.pruv	6 cases: error parse/module_file 4, error parse/path_syntax 1, error parse/synta	0/parse=b33fbc10b2c3	1/parse=66fdfed60715	2/parse=fb3f2f9cf532	3/parse=e6aa3d59e482	4/parse=a9dbe1fcfc73	5/parse=63699ba29c08
-mutate|tests/g4/proof/p03_recursive_fn_scc/root.pruv	6 cases: error parse/syntax 3, error parse/module_file 2, error parse/reserved_n	0/parse=a8b0bc5c0526	1/parse=a96f3d2a9ab5	2/parse=dbceb66b3ea4	3/parse=0dfc4ca528d6	4/parse=6e4a02204eb6	5/parse=5a9eab2da6a4
-mutate|tests/g4/proof/p04_recursive_type_scc/root.pruv	6 cases: error parse/module_file 3, error parse/syntax 2, error parse/bad_char 1	0/parse=f43f825fcba0	1/parse=678d1ea53ea7	2/parse=41eb4a09fe2d	3/parse=002ca176ddd2	4/parse=fbd1770c83e5	5/parse=035d52e5670c
-mutate|tests/g4/proof/p05_public_unit_post/root.pruv	6 cases: error parse/reserved_name 2, error parse/syntax 2, error parse/string_c	0/parse=ee2352f9fd2c	1/parse=e63bb5536c30	2/parse=e2f23e0ecbb6	3/parse=db4b5e5ae522	4/parse=013bb6989634	5/parse=fb5f12578a99
-mutate|tests/g4/proof/p06_caller_name_capture/root.pruv	6 cases: error parse/reserved_name 3, error parse/syntax 2, error parse/module_f	0/parse=0e96d3b1e835	1/parse=effd84598a2d	2/parse=bcaf07cffbfa	3/parse=2c13ed38ba4d	4/parse=e80c451c77aa	5/parse=d7be5cf4f836
-mutate|tests/g4/proof/p07_identical_contracts/root.pruv	6 cases: error parse/syntax 3, error parse/reserved_name 2, ok 1	0/parse=8bd59bd35708	1/parse=1968ef1a157d	2/parse=ee2352f9fd2c	3/parse=418baa4041f0	4/parse=013bb6989634	5/parse=bef68c86a8cb
-mutate|tests/g4/proof/p08_private_unused_verified/root.pruv	6 cases: error parse/reserved_name 3, error parse/module_file 1, error parse/pat	0/parse=3990b49b9238	1/parse=92ccd58343a2	2/parse=013bb6989634	3/parse=0cba03b25ee2	4/parse=39819ecb68f8	5/parse=8fc8efeb943a
-mutate|tests/g4/proof/p09_nested_public_closure/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, ok 2	0/parse=50e3dfa24eed	1/parse=ee2352f9fd2c	2/parse=6987b599ff98	3/parse=ee2352f9fd2c	4/parse=6195441d85f0	5/parse=086ea33b9728
-mutate|tests/g4/proof/p10_generic_types_cross_file/root.pruv	6 cases: error parse/reserved_name 3, error parse/module_file 2, error parse/syn	0/parse=89bc2c6e8e71	1/parse=33d4f601fb37	2/parse=27eb00bf9fdc	3/parse=3e5457cbf264	4/parse=c52b114680a7	5/parse=c0e1362348e5
+mutate|tests/g4/frontend/f01_nested_files/root.pruv	6 cases: error parse/syntax 3, error parse/path_syntax 1, error parse/reserved_n	0/parse=37f8e8563063	1/parse=2f270009db6c	2/parse=e122ae6946ad	3/parse=ee2352f9fd2c	4/parse=e45044cfd463	5/parse=07addd3c1c3d
+mutate|tests/g4/frontend/f02_forward_cycles/root.pruv	6 cases: error parse/module_file 4, error parse/reserved_name 1, error parse/syn	0/parse=2500cc13b034	1/parse=3efc7ccc58aa	2/parse=3990b49b9238	3/parse=d6b65750edd9	4/parse=12e367d3e1ba	5/parse=8b82d06aa555
+mutate|tests/g4/frontend/f03_generic_paths/root.pruv	6 cases: error parse/syntax 3, error parse/reserved_name 2, error parse/module_f	0/parse=c8326d14051d	1/parse=dc37c6031efb	2/parse=578a1d704dba	3/parse=eb368abcc4ab	4/parse=0fda991aaf72	5/parse=9dc2c21dc75e
+mutate|tests/g4/frontend/f04_qualified_patterns/root.pruv	6 cases: error parse/syntax 4, error parse/path_syntax 1, error parse/reserved_n	0/parse=7a479dc29f08	1/parse=2391e665d41d	2/parse=d436e1214121	3/parse=6c314731ff16	4/parse=c419d3d022a9	5/parse=013bb6989634
+mutate|tests/g4/frontend/f05_local_catalog_shadow/root.pruv	6 cases: error parse/module_file 3, error parse/syntax 2, ok 1	0/parse=f64867dafb60	1/parse=fe8d28714086	2/parse=962afa953373	3/parse=ee824255a914	4/parse=f8a71f1eba57	5/parse=ee2352f9fd2c
+mutate|tests/g4/frontend/f06_same_leaf_names/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, error parse/path_synta	0/parse=84ff921fffe9	1/parse=c37096d8660f	2/parse=fc70b11029bd	3/parse=1fb37cd89f94	4/parse=cdf9cb478738	5/parse=aa25d06017ac
+mutate|tests/g4/frontend/f07_pub_single_file/root.pruv	6 cases: error parse/syntax 3, ok 2, error parse/bad_char 1	0/parse=f5d4a4e7cdd7	1/parse=9ff2338f912a	2/parse=ee2352f9fd2c	3/parse=15df1a1f307d	4/parse=dc8ac1036dda	5/parse=723db9405272
+mutate|tests/g4/frontend/f08_entry_main/root.pruv	6 cases: error parse/bad_char 2, error parse/syntax 2, error parse/reserved_name	0/parse=313dbe0937df	1/parse=f54f9fc606f9	2/parse=32568da2f3e3	3/parse=eff46acf1b94	4/parse=64d7792e35dd	5/parse=ee2352f9fd2c
+mutate|tests/g4/frontend/f09_own_module_private/root.pruv	6 cases: error parse/module_file 3, ok 2, error parse/syntax 1	0/parse=5a63d5d8687b	1/parse=e75bc41285d1	2/parse=cd550cc178dd	3/parse=ee2352f9fd2c	4/parse=ee2352f9fd2c	5/parse=b5b1736ad37c
+mutate|tests/g4/frontend/f10_refinements/root.pruv	6 cases: error parse/module_file 4, error parse/syntax 1, ok 1	0/parse=cff7ba7a1b4c	1/parse=b61114994bbd	2/parse=fb0a342f6e6b	3/parse=ee2352f9fd2c	4/parse=e47535918612	5/parse=067c70e5bfe7
+mutate|tests/g4/frontend/f11_cross_file_recursion/root.pruv	6 cases: error parse/syntax 3, error parse/module_file 2, error parse/path_synta	0/parse=8acd3990b611	1/parse=1ec8a83f553d	2/parse=06947aec3141	3/parse=2c7d4631997e	4/parse=a422752f4cbc	5/parse=c471f75bdd8c
+mutate|tests/g4/frontend/f12_cross_module_types/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, error parse/bad_int 1,	0/parse=2741bc6c05b4	1/parse=db02a16192cb	2/parse=8ff5461696b7	3/parse=789d1313811f	4/parse=1e33db8d9445	5/parse=372ab08d470d
+mutate|tests/g4/proof/p01_same_spelled_types/root.pruv	6 cases: error parse/syntax 3, error parse/module_file 2, error parse/reserved_n	0/parse=f64a0daf63c5	1/parse=adb13b0d4174	2/parse=6a07bb14ff05	3/parse=55e92da51aa4	4/parse=b77755b1ae74	5/parse=7177a777e39f
+mutate|tests/g4/proof/p02_cross_file_generics/root.pruv	6 cases: error parse/module_file 4, error parse/path_syntax 1, error parse/synta	0/parse=a17e629ab526	1/parse=861df0e2218d	2/parse=81109b2f2936	3/parse=db191613b7a4	4/parse=013eab901c1a	5/parse=52ff805c6545
+mutate|tests/g4/proof/p03_recursive_fn_scc/root.pruv	6 cases: error parse/syntax 3, error parse/module_file 2, error parse/reserved_n	0/parse=c624f01964d6	1/parse=2303efbc6fbb	2/parse=86b08eeb3acf	3/parse=87f3a9db888b	4/parse=e6a102733a1c	5/parse=4cde47beb44f
+mutate|tests/g4/proof/p04_recursive_type_scc/root.pruv	6 cases: error parse/module_file 3, error parse/syntax 2, error parse/bad_char 1	0/parse=e874a06f008b	1/parse=fd5b097755e4	2/parse=d835080cbc01	3/parse=d0513285c0d1	4/parse=26123422c595	5/parse=3047d1dd2a10
+mutate|tests/g4/proof/p05_public_unit_post/root.pruv	6 cases: error parse/reserved_name 2, error parse/syntax 2, error parse/string_c	0/parse=ee2352f9fd2c	1/parse=a1c2543eddad	2/parse=ce465a0847dc	3/parse=cf92a0003821	4/parse=013bb6989634	5/parse=235d74bb947e
+mutate|tests/g4/proof/p06_caller_name_capture/root.pruv	6 cases: error parse/reserved_name 3, error parse/syntax 2, error parse/module_f	0/parse=8c9502387103	1/parse=45cebab6fcd4	2/parse=4b06ad6de176	3/parse=5df745d69f67	4/parse=47d4957b95cd	5/parse=541e40e32add
+mutate|tests/g4/proof/p07_identical_contracts/root.pruv	6 cases: error parse/syntax 3, error parse/reserved_name 2, ok 1	0/parse=b3833b6ebd62	1/parse=4c917f7a249e	2/parse=ee2352f9fd2c	3/parse=fd62690e9143	4/parse=013bb6989634	5/parse=1772405a196f
+mutate|tests/g4/proof/p08_private_unused_verified/root.pruv	6 cases: error parse/reserved_name 3, error parse/module_file 1, error parse/pat	0/parse=3990b49b9238	1/parse=28c186633a49	2/parse=013bb6989634	3/parse=aee392b5c568	4/parse=73a7d1e091ba	5/parse=c0408f082b70
+mutate|tests/g4/proof/p09_nested_public_closure/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, ok 2	0/parse=b3b0be5bea1b	1/parse=ee2352f9fd2c	2/parse=99fb5d839d3d	3/parse=ee2352f9fd2c	4/parse=e479dd464984	5/parse=27a39594d40b
+mutate|tests/g4/proof/p10_generic_types_cross_file/root.pruv	6 cases: error parse/reserved_name 3, error parse/module_file 2, error parse/syn	0/parse=ce47e362187c	1/parse=b31fe1be1081	2/parse=27eb00bf9fdc	3/parse=0b4a13597072	4/parse=a90b63271bc3	5/parse=440b467bf374
 mutate|tests/g5/frontend/f01_i64_set_at.pruv	6 cases: ok 3, error parse/syntax 2, error parse/bad_char 1	0/parse=ee2352f9fd2c	1/parse=f51e1adb8af4	2/parse=1b9df6e40028	3/parse=94343d12361a	4/parse=1f3856626488	5/parse=ee2352f9fd2c
 mutate|tests/g5/frontend/f02_u8_store.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=deb2a01ba3cc	1/parse=b44ab50df41f	2/parse=31e74b36afcd	3/parse=9bee01c7e157	4/parse=302b7439021a	5/parse=84b54c75ce75
 mutate|tests/g5/frontend/f03_bool_store.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=a0d2afe5bee9	1/parse=cb65e3316066	2/parse=321db7207e0a	3/parse=1d3d2e47cb96	4/parse=a7f294642354	5/parse=aa59ef017d1f
@@ -1569,7 +1593,7 @@ mutate|tests/g5/frontend/f07_read_forwarding.pruv	6 cases: error parse/syntax 4,
 mutate|tests/g5/frontend/f08_two_arrays.pruv	6 cases: error parse/bad_char 2, error parse/syntax 2, ok 2	0/parse=519ae76ea181	1/parse=6660b1146d74	2/parse=3824ef733209	3/parse=a271a73f7223	4/parse=cd923448094b	5/parse=4c17d0a89c60
 mutate|tests/g5/frontend/f09_copy_of_inout.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=b64e0d262e25	1/parse=c7c04cae77d9	2/parse=fe63d7c22e3c	3/parse=deb2a01ba3cc	4/parse=5f2a2f947c4a	5/parse=deb2a01ba3cc
 mutate|tests/g5/frontend/f10_call_results.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=fd0b68c2a4da	1/parse=ee2352f9fd2c	2/parse=41039b5c2cdb	3/parse=7785a9c96bf0	4/parse=ee2352f9fd2c	5/parse=43c41a7ede86
-mutate|tests/g5/frontend/f11_module_call/root.pruv	6 cases: error parse/bad_char 2, error parse/module_file 2, ok 2	0/parse=ee2352f9fd2c	1/parse=ee2352f9fd2c	2/parse=4aa7d677dc1d	3/parse=83f37bf10ab0	4/parse=c63699b45191	5/parse=1a96e397c28b
+mutate|tests/g5/frontend/f11_module_call/root.pruv	6 cases: error parse/bad_char 2, error parse/module_file 2, ok 2	0/parse=ee2352f9fd2c	1/parse=ee2352f9fd2c	2/parse=3b4bb1a5e393	3/parse=d6103d9b40b0	4/parse=c63699b45191	5/parse=a205a8ec992d
 mutate|tests/g5/frontend/f12_old_in_ensures.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=8c446eea792f	1/parse=f1327095c9a2	2/parse=092b85c2553c	3/parse=8c7812663e7a	4/parse=46bfcbf792f4	5/parse=60669100d579
 mutate|tests/g5/frontend/f13_old_invariant_assert.pruv	6 cases: error parse/syntax 3, error parse/reserved_name 2, error parse/bad_char	0/parse=cc67679bcf56	1/parse=e9df8cc82272	2/parse=d88b0b31100b	3/parse=47e4aadb0994	4/parse=71fd06fd9a22	5/parse=f4a47b774a44
 mutate|tests/g5/frontend/f14_compat_identifiers.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=b81d5f13569b	1/parse=f5451610bf69	2/parse=ee2352f9fd2c	3/parse=cf400e6088b0	4/parse=2489950aa566	5/parse=7bbbbe5bce67
@@ -1584,9 +1608,9 @@ mutate|tests/g5/proof/p06_forwarding.pruv	6 cases: error parse/syntax 4, error p
 mutate|tests/g5/proof/p07_old_across_calls.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=597672e09275	1/parse=49120454a828	2/parse=6c42af8dd955	3/parse=42080cc107dc	4/parse=deb2a01ba3cc	5/parse=39b49f764c68
 mutate|tests/g5/proof/p08_untouched_locals.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=957c7fedf00e	1/parse=e59fd86db6a4	2/parse=b664a2f9dccb	3/parse=be44d8d4b6c6	4/parse=d4f84f98c1ef	5/parse=6b56d6423960
 mutate|tests/g5/proof/p09_legacy_unit_ensures.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=df16ab8a8ac3	1/parse=7cfdce91cebb	2/parse=c3865bb86d78	3/parse=e14cec80d407	4/parse=ee2352f9fd2c	5/parse=d57e25d5a588
-mutate|tests/g5/proof/p10_explicit_unit_post/root.pruv	6 cases: error parse/syntax 3, ok 2, error parse/module_file 1	0/parse=2cafc7679ec7	1/parse=f6c6d5f42cf9	2/parse=ee2352f9fd2c	3/parse=ee2352f9fd2c	4/parse=e9afd82a6e00	5/parse=456768ce938d
+mutate|tests/g5/proof/p10_explicit_unit_post/root.pruv	6 cases: error parse/syntax 3, ok 2, error parse/module_file 1	0/parse=10dc116779f8	1/parse=303ae59d48ed	2/parse=ee2352f9fd2c	3/parse=ee2352f9fd2c	4/parse=25b5715eb09b	5/parse=c498e5125c5f
 mutate|tests/g5/proof/p11_direct_recursion.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=60669100d579	1/parse=4f5755dc19eb	2/parse=c7e876b08bd2	3/parse=4f5755dc19eb	4/parse=66c563e2ad33	5/parse=31500e0389b6
-mutate|tests/g5/proof/p12_cross_module_mutual/root.pruv	6 cases: error parse/module_file 3, error parse/reserved_name 2, ok 1	0/parse=ee2352f9fd2c	1/parse=371e3448b425	2/parse=1c151bc4e42f	3/parse=3990b49b9238	4/parse=efa407ee23a5	5/parse=9190c25dd913
+mutate|tests/g5/proof/p12_cross_module_mutual/root.pruv	6 cases: error parse/module_file 3, error parse/reserved_name 2, ok 1	0/parse=ee2352f9fd2c	1/parse=9873e83f9240	2/parse=d885a04651b6	3/parse=3990b49b9238	4/parse=9168f10a3d98	5/parse=ecca1d4707d4
 mutate|tests/g5/proof/p13_loop_calls_old.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=0cec47ae94f6	1/parse=3b9868d2723f	2/parse=5199c18c06e1	3/parse=dd51ed28a7c8	4/parse=ad929658a146	5/parse=5e02dd47c1c1
 mutate|tests/g5/proof/p14_refined_local.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=a82c73f0f5e8	1/parse=7ec99043afeb	2/parse=8c446eea792f	3/parse=d9de2ab7469a	4/parse=d7b4c8e07f96	5/parse=fdc05ce9cd77
 mutate|tests/g5/proof/p15_old_loop_invariants.pruv	6 cases: error parse/syntax 5, error parse/string_character 1	0/parse=05f533887ebd	1/parse=f349ee1326f7	2/parse=0600a38901f9	3/parse=92062b44fa1f	4/parse=ca32a29e2fc4	5/parse=7e8f6abd2a46
@@ -1940,12 +1964,12 @@ mutate|tests/must_reject/g2a_missing_alloc.pruv	6 cases: error parse/syntax 3, e
 mutate|tests/must_reject/g2a_mixed_argument.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=15723fc4a3bb	1/parse=2c84f4645437	2/parse=ae241c45831e	3/parse=828875e13fd9	4/parse=3764c271cccb	5/parse=bbe400c15458
 mutate|tests/must_reject/g2a_mixed_bool.pruv	6 cases: error parse/bad_char 2, error parse/syntax 2, ok 2	0/parse=74c86233f5fe	1/parse=35c9328c8928	2/parse=b8822e24d0e9	3/parse=56459d8269b5	4/parse=259d45c2159f	5/parse=259d45c2159f
 mutate|tests/must_reject/g2a_nested_array.pruv	6 cases: error parse/syntax 6	0/parse=b8d0fd6fa89c	1/parse=218afa7e2533	2/parse=49b2c19951d9	3/parse=b8d0fd6fa89c	4/parse=47f459cd8e8a	5/parse=894e23d2faa3
-mutate|tests/must_reject/g2a_option_u8.pruv	6 cases: error parse/small_int_unsupported 6	0/parse=9dae342d25f5	1/parse=9dae342d25f5	2/parse=9dae342d25f5	3/parse=9dae342d25f5	4/parse=9dae342d25f5	5/parse=9dae342d25f5
+mutate|tests/must_reject/g2a_option_u8.pruv	6 cases: error parse/small_int_unsupported 6	0/parse=d456b6bb80f0	1/parse=d456b6bb80f0	2/parse=d456b6bb80f0	3/parse=d456b6bb80f0	4/parse=d456b6bb80f0	5/parse=d456b6bb80f0
 mutate|tests/must_reject/g2a_param_store.pruv	6 cases: error parse/syntax 5, error parse/bad_char 1	0/parse=76eac66002fd	1/parse=08578a0f273a	2/parse=c3fa94e5d63a	3/parse=585d576a6454	4/parse=91c27a17ccba	5/parse=90ac5129bd52
 mutate|tests/must_reject/g2a_refine_wide.pruv	6 cases: error parse/syntax 5, error parse/reserved_name 1	0/parse=2d0f74185679	1/parse=eaac4a0810ec	2/parse=07350338e598	3/parse=2bada9fb3a8b	4/parse=cc0546aa2e41	5/parse=ac0dd95ee0e7
 mutate|tests/must_reject/g2a_refined_store.pruv	6 cases: error parse/syntax 2, ok 2, error parse/refinement_syntax 1, error pars	0/parse=1790a9eea5e6	1/parse=1ec280179864	2/parse=3c4751fef204	3/parse=7958d19598ec	4/parse=7958d19598ec	5/parse=654d89c3c8dc
 mutate|tests/must_reject/g2a_return_mismatch.pruv	6 cases: error parse/syntax 6	0/parse=74ed71680f6b	1/parse=01b0040efe6c	2/parse=41c9384143bd	3/parse=6f59ca9c0cad	4/parse=e89fda3e14ce	5/parse=0faf78ba3cbd
-mutate|tests/must_reject/g2a_scalar_i32.pruv	6 cases: error parse/small_int_unsupported 3, error parse/syntax 2, ok 1	0/parse=19e6bf37a124	1/parse=ef3dcb80b5df	2/parse=48358b1d1727	3/parse=ef3dcb80b5df	4/parse=ef3dcb80b5df	5/parse=297a850eb9ad
+mutate|tests/must_reject/g2a_scalar_i32.pruv	6 cases: error parse/small_int_unsupported 3, error parse/syntax 3	0/parse=333658612bf9	1/parse=f225800b7322	2/parse=6ba76d276b19	3/parse=c248b14e70f2	4/parse=777f7c03d6c6	5/parse=2d27fecda943
 mutate|tests/must_reject/g2a_scalar_u8.pruv	6 cases: error parse/element_storage_type 5, error parse/syntax 1	0/parse=65f8b1e90b7c	1/parse=65f8b1e90b7c	2/parse=65f8b1e90b7c	3/parse=a634b659d80d	4/parse=65f8b1e90b7c	5/parse=65f8b1e90b7c
 mutate|tests/must_reject/g2a_store_index.pruv	6 cases: error parse/syntax 6	0/parse=69c3c730945b	1/parse=3824ef733209	2/parse=2106c586d789	3/parse=97c745e8adff	4/parse=885e4f62109a	5/parse=a87cfc2b8e03
 mutate|tests/must_reject/g2a_store_then_read.pruv	6 cases: error parse/syntax 5, error parse/bad_char 1	0/parse=e6cbf01c8c13	1/parse=cc5c600687c1	2/parse=7631300edbae	3/parse=5e6c07ae6e31	4/parse=febd9d0703bd	5/parse=eb45666de5cb
@@ -2058,31 +2082,31 @@ mutate|tests/must_reject/g3_syntax_bound_list.pruv	6 cases: error parse/generic_
 mutate|tests/must_reject/g3_syntax_empty_params.pruv	6 cases: error parse/generic_syntax 4, error parse/syntax 1, ok 1	0/parse=665eac0d7180	1/parse=017d09c16290	2/parse=665eac0d7180	3/parse=ee2352f9fd2c	4/parse=665eac0d7180	5/parse=665eac0d7180
 mutate|tests/must_reject/g3_syntax_expr_application.pruv	6 cases: error parse/generic_syntax 3, error parse/bad_char 1, error parse/reser	0/parse=22d38662ceff	1/parse=aed093bb3a4a	2/parse=9386994b65c6	3/parse=22d38662ceff	4/parse=e4bba80271bc	5/parse=22d38662ceff
 mutate|tests/must_reject/g3_syntax_missing_type_arg.pruv	6 cases: error parse/generic_syntax 3, error parse/reserved_name 1, error parse/	0/parse=c4dab4b9d024	1/parse=f327ded7ea14	2/parse=ee2352f9fd2c	3/parse=f327ded7ea14	4/parse=f327ded7ea14	5/parse=c3db76c160e5
-mutate|tests/must_reject/g4_r01_missing_child/root.pruv	6 cases: error parse/syntax 3, error parse/bad_char 2, error parse/module_file 1	0/parse=8446159aa5ea	1/parse=12be2da51412	2/parse=98f1158fc133	3/parse=96a894a41598	4/parse=6de923e5df75	5/parse=237fb82121ef
-mutate|tests/must_reject/g4_r02_duplicate_module/root.pruv	6 cases: error parse/syntax 2, ok 2, error parse/module_file 1, error parse/rese	0/parse=3162b6f1f047	1/parse=ee2352f9fd2c	2/parse=b8127d88878e	3/parse=ee2352f9fd2c	4/parse=fc86b6f4abb1	5/parse=852158c642ea
-mutate|tests/must_reject/g4_r03_module_alias/root.pruv	6 cases: error parse/module_file 5, error parse/bad_char 1	0/parse=bf162dc2f0c3	1/parse=10c535d34141	2/parse=552c9ee937fe	3/parse=9bc4de45a7f9	4/parse=334346a0aa74	5/parse=41710faa6100
-mutate|tests/must_reject/g4_r04_sibling_privacy/root.pruv	6 cases: error parse/module_file 4, error parse/syntax 1, ok 1	0/parse=18cea972ac1a	1/parse=ee2352f9fd2c	2/parse=33aa40194017	3/parse=1c877d2bb479	4/parse=cc9f5f5b94ba	5/parse=6efa39c65e42
-mutate|tests/must_reject/g4_r05_private_root_access/root.pruv	6 cases: error parse/syntax 3, error parse/module_file 1, error parse/path_synta	0/parse=79e464732084	1/parse=ca885d1d9e57	2/parse=87f0ff748538	3/parse=0491558bb41a	4/parse=7d3004679e7e	5/parse=27d7a8ccb12a
-mutate|tests/must_reject/g4_r06_public_type_leak/root.pruv	6 cases: error parse/module_file 3, error parse/syntax 2, ok 1	0/parse=c2dff7c18d15	1/parse=d911d681e7f2	2/parse=ee2352f9fd2c	3/parse=f5d86ecf8b1e	4/parse=7e213ff50aa2	5/parse=4e5450dc0701
-mutate|tests/must_reject/g4_r07_unknown_module/root.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=c49357e8b139	1/parse=d2cf69ea5c6a	2/parse=ab0d67fd0462	3/parse=0981cbc035a4	4/parse=ee2352f9fd2c	5/parse=256588ab089e
-mutate|tests/must_reject/g4_r08_inline_module/root.pruv	6 cases: error parse/module_syntax 4, ok 2	0/parse=6c623d35016a	1/parse=ee2352f9fd2c	2/parse=ee2352f9fd2c	3/parse=7261422d7b74	4/parse=e9f5b51dcc98	5/parse=4008ecd9696a
-mutate|tests/must_reject/g4_r09_pub_trusted/root.pruv	6 cases: error parse/visibility_syntax 5, error parse/string_unterminated 1	0/parse=fc03c12d2e84	1/parse=bceb9402daa6	2/parse=0f91f50c8b6c	3/parse=4ee6fdbea4ad	4/parse=3039ec1a9150	5/parse=7ef755069256
-mutate|tests/must_reject/g4_r10_entry_signature/root.pruv	6 cases: ok 3, error parse/syntax 2, error parse/bad_char 1	0/parse=6ba289f3b5ff	1/parse=10e5da487ffa	2/parse=f4f8c7232a20	3/parse=3f2f1fecef1c	4/parse=c98e71158c5a	5/parse=2301bbd6e5c4
-mutate|tests/must_reject/g4_r11_reserved_name_kept/root.pruv	6 cases: error parse/reserved_name 5, error parse/bad_char 1	0/parse=58656ef114d5	1/parse=08709cf65c9d	2/parse=9d5546cf326d	3/parse=58bd87d3e3ee	4/parse=867ffeb504b1	5/parse=6f1ad5ba2792
-mutate|tests/must_reject/g4_r12_entry_main/root.pruv	6 cases: ok 4, error parse/reserved_name 1, error parse/syntax 1	0/parse=ef00c39fda87	1/parse=4e100877d5af	2/parse=be3eefc7faf5	3/parse=fddec9226fee	4/parse=9a1a6ccc6743	5/parse=5ce879a8a815
-mutate|tests/must_reject/g4_r13_same_spelled_mismatch/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, error parse/module_syn	0/parse=da313da076ca	1/parse=b100bb9da10b	2/parse=23e6ab20c666	3/parse=8548b9b2c2a3	4/parse=b9b781a76012	5/parse=ee2352f9fd2c
-mutate|tests/must_reject/g4_r14_false_private_ensures/root.pruv	6 cases: error parse/module_file 2, ok 2, error parse/bad_char 1, error parse/sy	0/parse=ee2352f9fd2c	1/parse=147e03ed7add	2/parse=ee2352f9fd2c	3/parse=8d58c36c1a1c	4/parse=f03f478260b1	5/parse=e16350b0b1da
-mutate|tests/must_reject/g4_r15_missing_call_precondition/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, error parse/module_syn	0/parse=2cb1e082364f	1/parse=57abd5d77f31	2/parse=ee2352f9fd2c	3/parse=c2f2a0151b7a	4/parse=b83e20ddef05	5/parse=d7671e1da8ca
-mutate|tests/must_reject/g4_r16_unchanged_measure/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, error parse/reserved_n	0/parse=c09ee792ce4b	1/parse=054dd1ffbaa5	2/parse=ee2352f9fd2c	3/parse=c2cc77b7daf3	4/parse=4fec9fdbf467	5/parse=ed044f6e9a1b
-mutate|tests/must_reject/g4_r17_hidden_interface_dependency/root.pruv	6 cases: error parse/module_file 5, ok 1	0/parse=d5862c141ab3	1/parse=ee2352f9fd2c	2/parse=393e8ce38023	3/parse=0c9704848742	4/parse=50eb47588350	5/parse=d69116084388
-mutate|tests/must_reject/g4_r18_interface_short_circuit/root.pruv	6 cases: error parse/module_file 2, ok 2, error parse/reserved_name 1, error par	0/parse=2b0783d745bd	1/parse=c237225c76b2	2/parse=8aa2d33925d0	3/parse=ee2352f9fd2c	4/parse=d29475c3f0eb	5/parse=ee2352f9fd2c
-mutate|tests/must_reject/g4_r19_body_facts_not_leaked/root.pruv	6 cases: error parse/module_file 2, error parse/reserved_name 2, error parse/syn	0/parse=064632c5d22a	1/parse=df8ff5600cbc	2/parse=7de2ce55de8d	3/parse=e7a939acc81e	4/parse=9706cc179f7e	5/parse=6c4191a69c30
-mutate|tests/must_reject/g4_r20_unit_post_not_stronger/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, ok 2	0/parse=ee2352f9fd2c	1/parse=c5f07fd9b4c8	2/parse=4536431a7072	3/parse=626c51d8b547	4/parse=ee2352f9fd2c	5/parse=de27ed3865ea
-mutate|tests/must_reject/g4_r21_generic_missing_requires/root.pruv	6 cases: error parse/module_file 3, ok 2, error parse/path_syntax 1	0/parse=20df0fe391df	1/parse=ee2352f9fd2c	2/parse=59d926972e44	3/parse=ee2352f9fd2c	4/parse=23f914b4e5a4	5/parse=e95908a6fc43
-mutate|tests/must_reject/g4_r22_unused_generic_false_ensures/root.pruv	6 cases: error parse/module_file 3, ok 3	0/parse=ee2352f9fd2c	1/parse=ee2352f9fd2c	2/parse=ee2352f9fd2c	3/parse=081c1d8a7847	4/parse=cab9b714998e	5/parse=75f9eaab7070
-mutate|tests/must_reject/g4_r23_lex_after_pub/root.pruv	6 cases: error parse/bad_char 5, ok 1	0/parse=ee2352f9fd2c	1/parse=d9dd318baea7	2/parse=a0a19cbf0e7e	3/parse=e85c9078cdd8	4/parse=940f30c32634	5/parse=077b3d5ab9f0
-mutate|tests/must_reject/g4_r24_child_foreign_path/root.pruv	6 cases: error parse/module_file 4, ok 2	0/parse=25b91ea8b728	1/parse=6625b3db3f11	2/parse=ee2352f9fd2c	3/parse=f28240c28887	4/parse=b23c56c8ac85	5/parse=ee2352f9fd2c
-mutate|tests/must_reject/g4_r25_escape_after_pub/root.pruv	6 cases: error parse/string_escape 4, ok 2	0/parse=3300e614f2d9	1/parse=ee2352f9fd2c	2/parse=56424c0dc227	3/parse=ee2352f9fd2c	4/parse=d3fc2abdb89a	5/parse=af3ed0da96f9
+mutate|tests/must_reject/g4_r01_missing_child/root.pruv	6 cases: error parse/syntax 3, error parse/bad_char 2, error parse/module_file 1	0/parse=ac81e4cf7759	1/parse=c5cbfeb3e496	2/parse=f7f99ee12c37	3/parse=96a894a41598	4/parse=74eb76b99949	5/parse=237fb82121ef
+mutate|tests/must_reject/g4_r02_duplicate_module/root.pruv	6 cases: error parse/syntax 2, ok 2, error parse/module_file 1, error parse/rese	0/parse=5f0183e5c9d4	1/parse=ee2352f9fd2c	2/parse=6931b766c146	3/parse=ee2352f9fd2c	4/parse=147c57f5122f	5/parse=3d21e74190bb
+mutate|tests/must_reject/g4_r03_module_alias/root.pruv	6 cases: error parse/module_file 5, error parse/bad_char 1	0/parse=6eeb563ac8d7	1/parse=c35e72ebb58d	2/parse=169c1447890a	3/parse=70b71dafe66e	4/parse=2c6efd1f8b84	5/parse=3f3b754360c2
+mutate|tests/must_reject/g4_r04_sibling_privacy/root.pruv	6 cases: error parse/module_file 4, error parse/syntax 1, ok 1	0/parse=32cf068d7792	1/parse=ee2352f9fd2c	2/parse=6348b90cda5f	3/parse=3ac121d31060	4/parse=69d36461d8da	5/parse=43543b78d3ec
+mutate|tests/must_reject/g4_r05_private_root_access/root.pruv	6 cases: error parse/syntax 3, error parse/module_file 1, error parse/path_synta	0/parse=a64705231ce9	1/parse=5152bf54b70e	2/parse=9ab79088fb77	3/parse=caa459c4c999	4/parse=943c0b2992c8	5/parse=69cfd305cc5f
+mutate|tests/must_reject/g4_r06_public_type_leak/root.pruv	6 cases: error parse/module_file 3, error parse/syntax 2, ok 1	0/parse=2c55969d00c7	1/parse=879b3e3061d4	2/parse=ee2352f9fd2c	3/parse=6b0a2f3ccba3	4/parse=bff82b36f577	5/parse=fc428c43ab6a
+mutate|tests/must_reject/g4_r07_unknown_module/root.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=2bbb94aaa8bf	1/parse=1636c4136fcd	2/parse=d4b6ab1b77c6	3/parse=8aaa75295eb2	4/parse=ee2352f9fd2c	5/parse=718bae8cfbc3
+mutate|tests/must_reject/g4_r08_inline_module/root.pruv	6 cases: error parse/module_syntax 4, ok 2	0/parse=9ab97b7b177d	1/parse=ee2352f9fd2c	2/parse=ee2352f9fd2c	3/parse=811681d45c70	4/parse=74939cb61547	5/parse=d83a75883b73
+mutate|tests/must_reject/g4_r09_pub_trusted/root.pruv	6 cases: error parse/visibility_syntax 5, error parse/string_unterminated 1	0/parse=3aa472b087cc	1/parse=5e4432f6af77	2/parse=3e889561ca2a	3/parse=bba3133c785d	4/parse=2790317b7a89	5/parse=6820a96cf129
+mutate|tests/must_reject/g4_r10_entry_signature/root.pruv	6 cases: ok 3, error parse/syntax 2, error parse/bad_char 1	0/parse=311518a02110	1/parse=bf730f04f68b	2/parse=a8ddba5dbd98	3/parse=5606a140a7e0	4/parse=cc1192bd8f6b	5/parse=6a4ae7cc163c
+mutate|tests/must_reject/g4_r11_reserved_name_kept/root.pruv	6 cases: error parse/reserved_name 5, error parse/bad_char 1	0/parse=4e1951d4034b	1/parse=76e7ed8cf34e	2/parse=7e33309599ba	3/parse=84db98dcaa93	4/parse=460092b2d880	5/parse=5ba9496d0db3
+mutate|tests/must_reject/g4_r12_entry_main/root.pruv	6 cases: ok 4, error parse/reserved_name 1, error parse/syntax 1	0/parse=f4d25e5b3165	1/parse=40357d879db9	2/parse=c37a3a9e3850	3/parse=fddec9226fee	4/parse=f5217fb714e2	5/parse=857bf3504d95
+mutate|tests/must_reject/g4_r13_same_spelled_mismatch/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, error parse/module_syn	0/parse=9282eebc7792	1/parse=d49cd615ea75	2/parse=61457d3c1246	3/parse=562bd2724894	4/parse=4d74159e5c42	5/parse=ee2352f9fd2c
+mutate|tests/must_reject/g4_r14_false_private_ensures/root.pruv	6 cases: error parse/module_file 2, ok 2, error parse/bad_char 1, error parse/sy	0/parse=ee2352f9fd2c	1/parse=9a6407a4724d	2/parse=ee2352f9fd2c	3/parse=851d3fbd50f1	4/parse=ffaf02c93338	5/parse=45e8a4fc176a
+mutate|tests/must_reject/g4_r15_missing_call_precondition/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, error parse/module_syn	0/parse=3a4ed1092d36	1/parse=0d1312bf6570	2/parse=ee2352f9fd2c	3/parse=630a08f2c053	4/parse=d45cb1e40e3b	5/parse=5881a91dcd1b
+mutate|tests/must_reject/g4_r16_unchanged_measure/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, error parse/reserved_n	0/parse=802a72e9070c	1/parse=d2379724dec7	2/parse=ee2352f9fd2c	3/parse=f15ede00f33b	4/parse=ead2a9fd387a	5/parse=7a5b177811a5
+mutate|tests/must_reject/g4_r17_hidden_interface_dependency/root.pruv	6 cases: error parse/module_file 5, ok 1	0/parse=9dab3dd033f2	1/parse=ee2352f9fd2c	2/parse=cbf998f2e086	3/parse=bc502edf59f2	4/parse=951b4b654475	5/parse=7f64a5a5c87a
+mutate|tests/must_reject/g4_r18_interface_short_circuit/root.pruv	6 cases: error parse/module_file 2, ok 2, error parse/reserved_name 1, error par	0/parse=205544bde880	1/parse=f070ed75a4b7	2/parse=473b426e5f58	3/parse=ee2352f9fd2c	4/parse=866ee134df0f	5/parse=ee2352f9fd2c
+mutate|tests/must_reject/g4_r19_body_facts_not_leaked/root.pruv	6 cases: error parse/module_file 2, error parse/reserved_name 2, error parse/syn	0/parse=7270539e6f40	1/parse=42f6d1cb0e35	2/parse=71292fa82821	3/parse=e7a939acc81e	4/parse=9706cc179f7e	5/parse=ce472359f795
+mutate|tests/must_reject/g4_r20_unit_post_not_stronger/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, ok 2	0/parse=ee2352f9fd2c	1/parse=e8ea526a1587	2/parse=6a7cc1f2bd9f	3/parse=74d285cf65ec	4/parse=ee2352f9fd2c	5/parse=996d34d5c41c
+mutate|tests/must_reject/g4_r21_generic_missing_requires/root.pruv	6 cases: error parse/module_file 3, ok 2, error parse/path_syntax 1	0/parse=2b2a7c42c8ab	1/parse=ee2352f9fd2c	2/parse=de3a93b97c5c	3/parse=ee2352f9fd2c	4/parse=bac6584ce48a	5/parse=d7194a9a1190
+mutate|tests/must_reject/g4_r22_unused_generic_false_ensures/root.pruv	6 cases: error parse/module_file 3, ok 3	0/parse=ee2352f9fd2c	1/parse=ee2352f9fd2c	2/parse=ee2352f9fd2c	3/parse=c341abc49054	4/parse=36606bafa15b	5/parse=a5e762888cc7
+mutate|tests/must_reject/g4_r23_lex_after_pub/root.pruv	6 cases: error parse/bad_char 5, ok 1	0/parse=ee2352f9fd2c	1/parse=46771b375818	2/parse=49f34146d453	3/parse=cac042cf0437	4/parse=02e76a199aa3	5/parse=4c561a3494a8
+mutate|tests/must_reject/g4_r24_child_foreign_path/root.pruv	6 cases: error parse/module_file 4, ok 2	0/parse=11ce74a1ed9f	1/parse=afd34bccdac5	2/parse=ee2352f9fd2c	3/parse=e835d153feec	4/parse=15eb83423e74	5/parse=ee2352f9fd2c
+mutate|tests/must_reject/g4_r25_escape_after_pub/root.pruv	6 cases: error parse/string_escape 4, ok 2	0/parse=ffa67249fb7d	1/parse=ee2352f9fd2c	2/parse=e0c2e3c1f69d	3/parse=ee2352f9fd2c	4/parse=a823e59175a6	5/parse=dcaa293de5ad
 mutate|tests/must_reject/g5_alias_len.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, ok 1	0/parse=6f3326889c70	1/parse=f738dc1044b0	2/parse=136d73cdccff	3/parse=2f2b12b4c775	4/parse=d3162491b742	5/parse=b6782cc33408
 mutate|tests/must_reject/g5_alias_marked_and_plain.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=dd51ed28a7c8	1/parse=4adb426e17ee	2/parse=8ce94429e240	3/parse=56a452eb1288	4/parse=50eee81084f4	5/parse=177b0cf30dd2
 mutate|tests/must_reject/g5_alias_nested_call.pruv	6 cases: error parse/syntax 3, ok 2, error parse/bad_char 1	0/parse=d2d8259ee20a	1/parse=22073842443c	2/parse=1c57ee843284	3/parse=93a04ac80d4d	4/parse=2ab6215a80da	5/parse=d2d8259ee20a
@@ -2098,7 +2122,7 @@ mutate|tests/must_reject/g5_escape_return.pruv	6 cases: ok 5, error parse/syntax
 mutate|tests/must_reject/g5_escape_store.pruv	6 cases: ok 5, error parse/syntax 1	0/parse=7217c1ec74c9	1/parse=401607887c97	2/parse=401607887c97	3/parse=401607887c97	4/parse=ee2352f9fd2c	5/parse=ee2352f9fd2c
 mutate|tests/must_reject/g5_field_place.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=debc14707f20	1/parse=debc14707f20	2/parse=d533539cc29e	3/parse=558a5a14568a	4/parse=15161b0e5eff	5/parse=2cb8fe5f5c9a
 mutate|tests/must_reject/g5_foreign_inout.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, ok 1	0/parse=c01ed420a1c5	1/parse=dd018be58932	2/parse=c8d661478ffc	3/parse=65cef2e68a36	4/parse=5ea898cbfa8c	5/parse=1487b6cdf0dd
-mutate|tests/must_reject/g5_host_entry/root.pruv	6 cases: error parse/syntax 3, error parse/module_file 2, error parse/reserved_n	0/parse=4544f623090e	1/parse=c40f90207e4c	2/parse=7ddcc0b50d8e	3/parse=d39290078016	4/parse=7fb58c237327	5/parse=08c81327888e
+mutate|tests/must_reject/g5_host_entry/root.pruv	6 cases: error parse/syntax 3, error parse/module_file 2, error parse/reserved_n	0/parse=4544f623090e	1/parse=d5116dacafd7	2/parse=df18adec532a	3/parse=1c40ac37962a	4/parse=a4866279f284	5/parse=9f44b7e96bd4
 mutate|tests/must_reject/g5_immutable_local.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, ok 1	0/parse=0e25685c105c	1/parse=fe2eb6480edb	2/parse=a726d3820650	3/parse=57c70d1243a3	4/parse=f9ebe8ec07cb	5/parse=b658d36478a2
 mutate|tests/must_reject/g5_inout_type_bool.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=8b4bbbaacc8f	1/parse=c59138578681	2/parse=2e491fa09346	3/parse=5d6ecb62cdc3	4/parse=ee2352f9fd2c	5/parse=0efb961e4be1
 mutate|tests/must_reject/g5_inout_type_i64.pruv	6 cases: ok 5, error parse/syntax 1	0/parse=ee2352f9fd2c	1/parse=404aea433812	2/parse=c575da29fef2	3/parse=404aea433812	4/parse=404aea433812	5/parse=3f02b207246b
@@ -2205,7 +2229,7 @@ mutate|tests/must_reject/g6v_ens_string_bytes.pruv	6 cases: ok 3, error parse/sy
 mutate|tests/must_reject/g6v_ens_vec_prefix.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=5044f3a3c40a	1/parse=c60cf2ec80c5	2/parse=e9eb0a0cc765	3/parse=b348a73611d1	4/parse=917641a20097	5/parse=c60cf2ec80c5
 mutate|tests/must_reject/g6v_g3_eq_aggregate.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=09a0e38c35f5	1/parse=177b0cf30dd2	2/parse=ce59b704758c	3/parse=4f8d07cff7dc	4/parse=ee1745fea9f1	5/parse=ee2352f9fd2c
 mutate|tests/must_reject/g6v_g3_key_param.pruv	6 cases: ok 4, error parse/reserved_name 1, error parse/syntax 1	0/parse=35a7ee19c789	1/parse=35a7ee19c789	2/parse=35a7ee19c789	3/parse=35a7ee19c789	4/parse=88ad7f18eb1d	5/parse=92d230a16ab4
-mutate|tests/must_reject/g6v_g3_u8_arg.pruv	6 cases: error parse/small_int_unsupported 5, ok 1	0/parse=b58bf4b9a8b3	1/parse=b58bf4b9a8b3	2/parse=b58bf4b9a8b3	3/parse=b58bf4b9a8b3	4/parse=b58bf4b9a8b3	5/parse=ee2352f9fd2c
+mutate|tests/must_reject/g6v_g3_u8_arg.pruv	6 cases: error parse/small_int_unsupported 5, ok 1	0/parse=1520a62d67b0	1/parse=1520a62d67b0	2/parse=1520a62d67b0	3/parse=1520a62d67b0	4/parse=1520a62d67b0	5/parse=ee2352f9fd2c
 mutate|tests/must_reject/g6v_infer_len_claim.pruv	6 cases: ok 3, error parse/reserved_name 2, error parse/syntax 1	0/parse=42082dabf5eb	1/parse=76057612d26c	2/parse=be699303bca6	3/parse=476404f024f0	4/parse=2887ffbb475a	5/parse=cc215ba10914
 mutate|tests/must_reject/g6v_infer_push_loop.pruv	6 cases: error parse/syntax 4, error parse/reserved_name 1, ok 1	0/parse=d28a53a4430b	1/parse=41844a47a3d0	2/parse=4a649e03fd05	3/parse=28bb95124edd	4/parse=c211ba3f1a05	5/parse=99d106d49887
 mutate|tests/must_reject/g6v_req_push_limit.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=ee2352f9fd2c	1/parse=4a3b37f86c0b	2/parse=ee2352f9fd2c	3/parse=ee2352f9fd2c	4/parse=4b279a5e79b3	5/parse=5480babff775
@@ -2585,15 +2609,15 @@ mutate|tests/must_reject/p1_cast_max_plus_one.pruv	6 cases: error parse/syntax 3
 mutate|tests/must_reject/p1_cast_unproven.pruv	6 cases: ok 3, error parse/syntax 2, error parse/bad_char 1	0/parse=c498bb0f5179	1/parse=6beddba54ac6	2/parse=da346e66f542	3/parse=da346e66f542	4/parse=97c3188f8906	5/parse=da346e66f542
 mutate|tests/must_reject/p1_false_ensures.pruv	6 cases: ok 3, error parse/syntax 2, error parse/bad_char 1	0/parse=3384fd33081a	1/parse=6d4dd7b73b70	2/parse=dd8d5273fb6e	3/parse=6d4dd7b73b70	4/parse=83465cc92d0a	5/parse=6d4dd7b73b70
 mutate|tests/must_reject/p1_false_range.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=257ba2054bf1	1/parse=ee2352f9fd2c	2/parse=6729db4106b8	3/parse=e6499849bc87	4/parse=241a00ae9d24	5/parse=c57e143dfca7
-mutate|tests/must_reject/p1_index.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=ee2352f9fd2c	1/parse=deb2a01ba3cc	2/parse=3bf25c3f12ea	3/parse=0d518ec65a21	4/parse=ee2352f9fd2c	5/parse=612cf911731f
+mutate|tests/must_reject/p1_index.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=ee2352f9fd2c	1/parse=3e48d4f9ff2e	2/parse=789e7dd5c987	3/parse=8c1329cb77d6	4/parse=ee2352f9fd2c	5/parse=7cc972904e1c
 mutate|tests/must_reject/p1_literal_range.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=37505bf6cf61	1/parse=e6ae0a7bd224	2/parse=3eecc6a5e657	3/parse=c6c1017c7936	4/parse=b3c783585103	5/parse=dbba652e49e1
 mutate|tests/must_reject/p1_mixed_width.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=ee2352f9fd2c	1/parse=a1c35fa72a41	2/parse=a0179efd7e52	3/parse=c8fb562ab676	4/parse=ee2352f9fd2c	5/parse=c8fb562ab676
 mutate|tests/must_reject/p1_neg.pruv	6 cases: ok 5, error parse/syntax 1	0/parse=ee2352f9fd2c	1/parse=ee2352f9fd2c	2/parse=dd9a2955165b	3/parse=c1aa3849c05e	4/parse=ee2352f9fd2c	5/parse=c1aa3849c05e
 mutate|tests/must_reject/p1_par_cast.pruv	6 cases: error parse/syntax 3, error parse/parallel_syntax 1, error parse/reserv	0/parse=d2d567f56b4f	1/parse=3dc98e658dc8	2/parse=98ed7d07e1dd	3/parse=1db9193fe4fa	4/parse=1ef030b38523	5/parse=845c9376530c
-mutate|tests/must_reject/p1_pub_sig.pruv	6 cases: error parse/small_int_unsupported 5, error parse/reserved_name 1	0/parse=b8faf9790984	1/parse=aef1bf97e57d	2/parse=b48f2e57984d	3/parse=0347fccca008	4/parse=10ce0bb99dbf	5/parse=5eca6af508cd
+mutate|tests/must_reject/p1_pub_sig.pruv	6 cases: error parse/small_int_unsupported 5, error parse/reserved_name 1	0/parse=b8faf9790984	1/parse=7a8de3d3c703	2/parse=6cb09c004fe4	3/parse=f01e6b11765d	4/parse=3640e928b520	5/parse=92430dad31bd
 mutate|tests/must_reject/p1_sub_underflow.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=26ecc0aab97a	1/parse=8d5f6c8d2c95	2/parse=474f88b78176	3/parse=cf0fbbc3cb59	4/parse=32568da2f3e3	5/parse=8a7a0c03344d
 mutate|tests/must_reject/p1_u16_array.pruv	6 cases: error parse/small_int_unsupported 4, error parse/syntax 1, ok 1	0/parse=9ab5020447e4	1/parse=9ab5020447e4	2/parse=9ab5020447e4	3/parse=ee2352f9fd2c	4/parse=9ab5020447e4	5/parse=c73709b1fcf8
-mutate|tests/must_reject/p1_u32.pruv	6 cases: error parse/small_int_unsupported 5, error parse/syntax 1	0/parse=6ef07d0f5e94	1/parse=a1bc6652c244	2/parse=a1bc6652c244	3/parse=0a41dce64d2d	4/parse=a1bc6652c244	5/parse=a1bc6652c244
+mutate|tests/must_reject/p1_u32.pruv	6 cases: error parse/small_int_unsupported 4, error parse/syntax 1, ok 1	0/parse=b4324d1ad04a	1/parse=08baf5e55b4c	2/parse=6292c3d3d3bc	3/parse=b4324d1ad04a	4/parse=b4324d1ad04a	5/parse=ee2352f9fd2c
 mutate|tests/must_reject/p2_bits_arity.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=a44f24ea0e71	1/parse=a0328a901cfe	2/parse=733abd115221	3/parse=af420802354d	4/parse=4057631d2578	5/parse=167bb9a2eb5a
 mutate|tests/must_reject/p2_bits_type.pruv	6 cases: error parse/syntax 6	0/parse=b8d0fd6fa89c	1/parse=b87809609cab	2/parse=af74e45d9759	3/parse=af420802354d	4/parse=411712dae792	5/parse=4cc488a4b9c8
 mutate|tests/must_reject/p2_contract_shift.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=5b6ffcbe9e52	1/parse=0e4cd004bf01	2/parse=61c4befd6fa0	3/parse=4cc6db11a67e	4/parse=3fe06f565539	5/parse=303ac08ec938
@@ -2609,12 +2633,36 @@ mutate|tests/must_reject/p2_u16_index.pruv	6 cases: error parse/syntax 4, ok 2	0
 mutate|tests/must_reject/p2_u16_mixed_append.pruv	6 cases: error parse/syntax 4, error parse/reserved_name 1, ok 1	0/parse=41d54d144b0d	1/parse=85ef5260ecd2	2/parse=ca3b80166010	3/parse=74c86233f5fe	4/parse=e9e324307659	5/parse=a91c6a398295
 mutate|tests/must_reject/p2_u16_pub_sig.pruv	6 cases: error parse/syntax 3, error parse/small_int_unsupported 2, error parse/	0/parse=52ac5c1968ed	1/parse=d23ede0912b2	2/parse=eb3fe82ebbb1	3/parse=9b3958bf0529	4/parse=c3305034794b	5/parse=7269673d22e6
 mutate|tests/must_reject/p2_u16_store_range.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=4c7a4d1686ff	1/parse=a5bf62d289c5	2/parse=3484fd34d545	3/parse=8cf623842b45	4/parse=deb2a01ba3cc	5/parse=05e39442728d
-mutate|tests/must_reject/p2_u16_vec.pruv	6 cases: error parse/small_int_unsupported 4, error parse/reserved_name 1, error	0/parse=dad80ad04f39	1/parse=c768670c5c57	2/parse=dad80ad04f39	3/parse=dad80ad04f39	4/parse=3103d1f6060e	5/parse=dad80ad04f39
+mutate|tests/must_reject/p2_u16_vec.pruv	6 cases: error parse/small_int_unsupported 4, error parse/reserved_name 1, error	0/parse=777241ab73c2	1/parse=c768670c5c57	2/parse=777241ab73c2	3/parse=777241ab73c2	4/parse=3103d1f6060e	5/parse=777241ab73c2
 mutate|tests/must_reject/p2_word_index.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=d0e0cea98e05	1/parse=c3555e1980be	2/parse=6836e0a64fe0	3/parse=5f109d1b8871	4/parse=5f109d1b8871	5/parse=5f109d1b8871
 mutate|tests/must_reject/p2_word_literal.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=9676cf008a01	1/parse=ee2352f9fd2c	2/parse=d49453b52b4b	3/parse=8ab0c09622fe	4/parse=25b1e15a06af	5/parse=5f2a2f947c4a
 mutate|tests/must_reject/p2_word_refine.pruv	6 cases: error parse/syntax 4, error parse/refinement_syntax 1, ok 1	0/parse=0d473c8eb021	1/parse=e72b6563bbd8	2/parse=8d58bfd69576	3/parse=2105e0a3faf7	4/parse=4964b7004c21	5/parse=f61018dbd4ed
 mutate|tests/must_reject/p2_word_store_index.pruv	6 cases: error parse/syntax 4, error parse/inout_syntax 1, ok 1	0/parse=4b279a5e79b3	1/parse=deb2a01ba3cc	2/parse=45806ce9e2a9	3/parse=e37d4d76befd	4/parse=3872843c49e9	5/parse=fdf3382aa0e4
 mutate|tests/must_reject/p2_word_width.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=c8769210b50c	1/parse=8ad43754def4	2/parse=9e9f96d7aa0d	3/parse=86fa71025191	4/parse=442e0cdbe624	5/parse=ee2352f9fd2c
+mutate|tests/must_reject/p3_add_i32.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=2bd06ff280e3	1/parse=0dc04994a836	2/parse=0e5094b1d0b0	3/parse=eb1951b117e9	4/parse=f214cabd2090	5/parse=b9617b99901a
+mutate|tests/must_reject/p3_add_isize.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=2a3834494ba3	1/parse=526ed44abd79	2/parse=546afd178159	3/parse=526ed44abd79	4/parse=53900ba9d24d	5/parse=96bcdec09986
+mutate|tests/must_reject/p3_add_usize.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=e2d38af17541	1/parse=4b7f4546d31e	2/parse=ee2352f9fd2c	3/parse=69ac6a6bea76	4/parse=12b1aed2ed8a	5/parse=4b7f4546d31e
+mutate|tests/must_reject/p3_arr_u32.pruv	6 cases: error parse/syntax 3, error parse/small_int_unsupported 2, error parse/	0/parse=bbe4a5149ae8	1/parse=4ffb19cd38e0	2/parse=d0e0cea98e05	3/parse=3480cbb3d144	4/parse=bbe4a5149ae8	5/parse=aadc6ac34d98
+mutate|tests/must_reject/p3_arr_usize.pruv	6 cases: ok 4, error parse/small_int_unsupported 2	0/parse=ee2352f9fd2c	1/parse=ee2352f9fd2c	2/parse=e57d50e75986	3/parse=ee2352f9fd2c	4/parse=e57d50e75986	5/parse=ee2352f9fd2c
+mutate|tests/must_reject/p3_bit_u32.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=bc4336c052a9	1/parse=bc5601e94e28	2/parse=ee2352f9fd2c	3/parse=f0c221fff80b	4/parse=e1c740f42f75	5/parse=bc4336c052a9
+mutate|tests/must_reject/p3_cast_i8.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=ee2352f9fd2c	1/parse=637b5520e244	2/parse=d9988a703bd9	3/parse=eb1951b117e9	4/parse=6d68b2a93e49	5/parse=d9988a703bd9
+mutate|tests/must_reject/p3_cast_isize_usize.pruv	6 cases: ok 3, error parse/syntax 2, error parse/bad_char 1	0/parse=9bfaad6dd464	1/parse=9bfaad6dd464	2/parse=237fb82121ef	3/parse=32568da2f3e3	4/parse=9bfaad6dd464	5/parse=83c73141a2e8
+mutate|tests/must_reject/p3_cast_u32.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=9ceeb7b0ea3b	1/parse=077cffef2665	2/parse=5b2f003a2f71	3/parse=ee2352f9fd2c	4/parse=b1be3cb72428	5/parse=d42a65ee13f2
+mutate|tests/must_reject/p3_cast_u64_i64.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=9bf2ca37ceef	1/parse=d3f7ae9ca2ea	2/parse=ee2352f9fd2c	3/parse=ee2352f9fd2c	4/parse=939239815cfa	5/parse=d3f7ae9ca2ea
+mutate|tests/must_reject/p3_ctr_cast.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=25700e0c6c78	1/parse=d44d9b3bb398	2/parse=25700e0c6c78	3/parse=756bb95d8e52	4/parse=8d077a218c9e	5/parse=3e06aee4bbd9
+mutate|tests/must_reject/p3_dec_bad.pruv	6 cases: error parse/syntax 6	0/parse=7c6d5a7c6cfe	1/parse=136f85228730	2/parse=147add361b94	3/parse=780ab264702e	4/parse=ee89f3cb6b0d	5/parse=ec070b1d9877
+mutate|tests/must_reject/p3_div_i32.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=ee2352f9fd2c	1/parse=9e2067b0fb26	2/parse=5b36783ec8f9	3/parse=ee2352f9fd2c	4/parse=ee627d2dcd96	5/parse=358e6f430f57
+mutate|tests/must_reject/p3_false_ens.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=5b4cae0e7d36	1/parse=4f92cc3e8cc0	2/parse=2b71d70d616f	3/parse=ddfb12e103b0	4/parse=9eb7b4d5e522	5/parse=9eb7b4d5e522
+mutate|tests/must_reject/p3_idx_oob.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, ok 1	0/parse=85d22e8875ae	1/parse=cecc42b03cd3	2/parse=f680b7e0a744	3/parse=df542694b5fa	4/parse=3a739fd93f24	5/parse=8d1ea2de83fc
+mutate|tests/must_reject/p3_lit_i8.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=67f7db961503	1/parse=a5b8a623dcec	2/parse=693a16e3fab3	3/parse=ee00879ffc69	4/parse=ee2352f9fd2c	5/parse=67f7db961503
+mutate|tests/must_reject/p3_lit_u64.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=b2bd32e480f0	1/parse=dadda7f9eb1f	2/parse=b2bd32e480f0	3/parse=b2bd32e480f0	4/parse=1d70d10963ad	5/parse=b2bd32e480f0
+mutate|tests/must_reject/p3_mix.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=966cb1ca2077	1/parse=6beddba54ac6	2/parse=814676d0a90e	3/parse=91d05637d893	4/parse=86718b71ee03	5/parse=814676d0a90e
+mutate|tests/must_reject/p3_mul_i8.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=d25e7dc681be	1/parse=39ac21954ee6	2/parse=1bdb84caa5ec	3/parse=79351f6e4cc6	4/parse=eddb5c202e25	5/parse=f05bb86512c7
+mutate|tests/must_reject/p3_neg_i32.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=28c44e8e2f8b	1/parse=fbc9fd70ce36	2/parse=c3f4695d1ab7	3/parse=581ea678e56b	4/parse=73cf4ffb3caa	5/parse=28c44e8e2f8b
+mutate|tests/must_reject/p3_pub_u64.pruv	6 cases: error parse/small_int_unsupported 3, error parse/bad_char 1, error pars	0/parse=e1f77d0b1ef5	1/parse=ee2352f9fd2c	2/parse=148649e7fa88	3/parse=675e9943081c	4/parse=e9333625b104	5/parse=05c28f15e518
+mutate|tests/must_reject/p3_sub_i16.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=32568da2f3e3	1/parse=b013b56d4be2	2/parse=4c2267a5e382	3/parse=b7c940275024	4/parse=7d8c447e6f14	5/parse=95fb016b2b32
+mutate|tests/must_reject/p3_sub_u64.pruv	6 cases: error parse/syntax 6	0/parse=dce94824fbb6	1/parse=ba2b0418d596	2/parse=db75be7429e9	3/parse=e5c437f1599e	4/parse=a9b8338d0cb1	5/parse=4291940f8f4c
+mutate|tests/must_reject/p3_vec_idx.pruv	6 cases: error parse/syntax 3, ok 2, error parse/bad_char 1	0/parse=a2553d6d7419	1/parse=3963a258c0ae	2/parse=fb73271047f7	3/parse=e070dac0cdac	4/parse=fa46fb620f12	5/parse=fff981eb369e
 mutate|tests/must_reject/refine_alloc_len.pruv	6 cases: error parse/syntax 2, ok 2, error parse/bad_char 1, error parse/refinem	0/parse=56c9689dc5f1	1/parse=1e370cd7ebac	2/parse=ca54981e5697	3/parse=1bc86fca4614	4/parse=8e0e5aa1c969	5/parse=81fb945d003c
 mutate|tests/must_reject/refine_base_bool.pruv	6 cases: error parse/syntax 3, ok 2, error parse/reserved_name 1	0/parse=bf39f7462274	1/parse=2a313debb1e7	2/parse=b4f590850d33	3/parse=d8eab90f9303	4/parse=0948ee85696e	5/parse=49404f092bd4
 mutate|tests/must_reject/refine_bounds_i64.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=b17d045d4215	1/parse=aeaaf13a21d8	2/parse=49f3c7800b86	3/parse=005da99f0136	4/parse=e7ed771a0c7f	5/parse=9e62c89790bb
@@ -2703,7 +2751,7 @@ mutate|tests/must_reject/t23_reserved_dunder.pruv	6 cases: error parse/reserved_
 mutate|tests/must_reject/t24_reserved_rust_kw.pruv	6 cases: error parse/reserved_name 6	0/parse=ab3d4eeb05df	1/parse=ab3d4eeb05df	2/parse=ab3d4eeb05df	3/parse=ab3d4eeb05df	4/parse=ab3d4eeb05df	5/parse=7ff3b84dc781
 mutate|tests/parse_edge/agg_call_disambiguation.pruv	6 cases: ok 3, error parse/syntax 2, error parse/bad_char 1	0/parse=aefa56f73b53	1/parse=6c8dbc9d7abe	2/parse=6a2ddf77c280	3/parse=99f6e88d8b4e	4/parse=1253c6835be7	5/parse=4485d20890d7
 mutate|tests/parse_edge/all_nodes.pruv	6 cases: error parse/syntax 6	0/parse=3e6d53d85984	1/parse=e5dd045dfdb2	2/parse=209e74c4f933	3/parse=2d91d9a9fdbd	4/parse=7265b7e55594	5/parse=729b938a899f
-mutate|tests/parse_edge/array_only_i64.pruv	6 cases: error parse/small_int_unsupported 5, ok 1	0/parse=aa1d32aafff6	1/parse=ee2352f9fd2c	2/parse=aa1d32aafff6	3/parse=aa1d32aafff6	4/parse=aa1d32aafff6	5/parse=aa1d32aafff6
+mutate|tests/parse_edge/array_only_i64.pruv	6 cases: error parse/small_int_unsupported 5, ok 1	0/parse=1b1bfea79c2f	1/parse=ee2352f9fd2c	2/parse=1b1bfea79c2f	3/parse=1b1bfea79c2f	4/parse=1b1bfea79c2f	5/parse=1b1bfea79c2f
 mutate|tests/parse_edge/badchar_backslash.pruv	6 cases: error parse/bad_char 4, error parse/syntax 1, ok 1	0/parse=0725e29fd40e	1/parse=32568da2f3e3	2/parse=8620cb22acdc	3/parse=81d21fe674f8	4/parse=ee2352f9fd2c	5/parse=ae238c6d35c2
 mutate|tests/parse_edge/badchar_dquote.pruv	6 cases: ok 6	0/parse=997f738c8408	1/parse=ee2352f9fd2c	2/parse=997f738c8408	3/parse=997f738c8408	4/parse=ee2352f9fd2c	5/parse=ee2352f9fd2c
 mutate|tests/parse_edge/badchar_squote.pruv	6 cases: error parse/bad_char 6	0/parse=c5e4997dd203	1/parse=6827c2009c1f	2/parse=cbd5437b0360	3/parse=cbd5437b0360	4/parse=cbd5437b0360	5/parse=cbd5437b0360
@@ -2728,7 +2776,7 @@ mutate|tests/parse_edge/let_no_type.pruv	6 cases: error parse/syntax 3, ok 3	0/p
 mutate|tests/parse_edge/lex_before_parse.pruv	6 cases: error parse/bad_char 3, error parse/syntax 2, ok 1	0/parse=cec19ed277b4	1/parse=cec19ed277b4	2/parse=80531fd94f7a	3/parse=53546083f682	4/parse=b943459b720f	5/parse=ee2352f9fd2c
 mutate|tests/parse_edge/match_bad_arm_ident.pruv	6 cases: error parse/syntax 5, error parse/bad_char 1	0/parse=71631613d425	1/parse=127013256b3d	2/parse=27d005128764	3/parse=c592e1534357	4/parse=c592e1534357	5/parse=c592e1534357
 mutate|tests/parse_edge/match_empty_parens.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, error parse/reserved_name	0/parse=e7436a1e7868	1/parse=d8de659ba3a2	2/parse=23052b8c67f3	3/parse=1cccef78ab1b	4/parse=1cccef78ab1b	5/parse=86ef4f6b04df
-mutate|tests/parse_edge/place_if.pruv	6 cases: error parse/syntax 4, error parse/bad_int 1, ok 1	0/parse=058a730c0df4	1/parse=8c9c02d1c531	2/parse=2cc6607952be	3/parse=a315bdddaa03	4/parse=8547cfebe7e2	5/parse=c7150aac8912
+mutate|tests/parse_edge/place_if.pruv	6 cases: error parse/syntax 4, error parse/bad_int 1, ok 1	0/parse=1708ffa4a98d	1/parse=8c9c02d1c531	2/parse=2cc6607952be	3/parse=3466717bdf0d	4/parse=62076745b22c	5/parse=b67053c61c0b
 mutate|tests/parse_edge/precedence_assoc.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, ok 1	0/parse=7d7a69de0aef	1/parse=6ae7b9eb45ec	2/parse=94e3df40ae32	3/parse=99dcfe6713df	4/parse=b6d31d34ad74	5/parse=cd9840371429
 mutate|tests/parse_edge/reserved_double_underscore.pruv	6 cases: error parse/reserved_name 6	0/parse=6ad9a42a97b4	1/parse=6ad9a42a97b4	2/parse=6ad9a42a97b4	3/parse=6ad9a42a97b4	4/parse=466fb48cfd35	5/parse=6ad9a42a97b4
 mutate|tests/parse_edge/reserved_pruv_prefix.pruv	6 cases: error parse/reserved_name 5, error parse/syntax 1	0/parse=2c02310eb5db	1/parse=2c02310eb5db	2/parse=fabf23863147	3/parse=2c02310eb5db	4/parse=2c02310eb5db	5/parse=2c02310eb5db
@@ -2788,18 +2836,18 @@ mutate|tests/runtime/g10a_r11_proc_cancel.pruv	6 cases: error parse/syntax 5, ok
 mutate|tests/runtime/g10a_r12_proc_proc_io.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, error parse/reserved_name	0/parse=ad6ac4433e60	1/parse=d9fddb8ca738	2/parse=659ed268a660	3/parse=0c7cbb7105e1	4/parse=4ddbf64c0c2a	5/parse=6260c34efdbd
 mutate|tests/runtime/g10a_r13_proc_reap.pruv	6 cases: error parse/syntax 6	0/parse=b87c08e0dcb0	1/parse=31be82d8df8c	2/parse=59a59985f09f	3/parse=68a9d2244598	4/parse=231a52625072	5/parse=ab183f6550a9
 mutate|tests/runtime/g10a_r14_proc_spawn.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=32299a1ad914	1/parse=0194c7564ae4	2/parse=e00595b05384	3/parse=8e9fa16d8d14	4/parse=6c611bbbc2b7	5/parse=0051f403472b
-mutate|tests/runtime/g10a_r15_two_clients.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=3c6cbb63c313	1/parse=48200dbd8e40	2/parse=2ce6383525ed	3/parse=5b0d17596ef4	4/parse=e0f43f5b76ba	5/parse=31fedb69a7c6
-mutate|tests/runtime/g10a_r16_relay.pruv	6 cases: error parse/syntax 3, ok 2, error parse/reserved_name 1	0/parse=bb2f2701b944	1/parse=24fa76dc3166	2/parse=ef383d4f745c	3/parse=b02bc5726b27	4/parse=ab25b51998ba	5/parse=bffb4638ad97
-mutate|tests/runtime/g10a_r17_deadline.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=e9029005272a	1/parse=81e1eb497324	2/parse=d233ad884281	3/parse=1b972c64fa76	4/parse=f50fcc632a1b	5/parse=cbd76c62538e
+mutate|tests/runtime/g10a_r15_two_clients.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=400a8c30abe9	1/parse=646e06291f9b	2/parse=85da26187539	3/parse=f0192c0ea136	4/parse=b4562c79c6e0	5/parse=6fe40be74d34
+mutate|tests/runtime/g10a_r16_relay.pruv	6 cases: error parse/syntax 3, ok 2, error parse/reserved_name 1	0/parse=0a6fc412a0cf	1/parse=4e9e92ac12e8	2/parse=0e9e6599e096	3/parse=eace335cf542	4/parse=d3646a23dc03	5/parse=2a7987377ee0
+mutate|tests/runtime/g10a_r17_deadline.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=2a900f1e0a0b	1/parse=3124dd556531	2/parse=b91ddf93f9aa	3/parse=011146fa6f51	4/parse=756ee04d5f1e	5/parse=4de6ee5b8667
 mutate|tests/runtime/g10a_r18_accept_error.pruv	6 cases: error parse/syntax 4, error parse/string_character 1, ok 1	0/parse=c6e71c6388d4	1/parse=ede73d2e5908	2/parse=f74231a22d04	3/parse=a1f03a765839	4/parse=ae1044ce86ab	5/parse=eb04c73d5a58
 mutate|tests/runtime/g10a_r19_requires_exit.pruv	6 cases: error parse/syntax 6	0/parse=3ce229c1d8f3	1/parse=e293d2e8a7ad	2/parse=d840cb15560f	3/parse=f42acd95b206	4/parse=a9a6a67b8767	5/parse=175d7e51fdcd
 mutate|tests/runtime/g10a_r20_fairness.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=2339b8cb2c84	1/parse=d0e5a0dfbcf9	2/parse=79a6dd7907c0	3/parse=768852513e78	4/parse=594cf17bc572	5/parse=69ab558d63ea
 mutate|tests/runtime/g10a_r21_backpressure.pruv	6 cases: error parse/syntax 6	0/parse=ad6a909eff80	1/parse=ddb3224a33a4	2/parse=26d02b30845c	3/parse=97059daa3ca3	4/parse=39a7114db0d2	5/parse=fb0a41a5c1c7
 mutate|tests/runtime/g10a_r22_copy_contract.pruv	6 cases: ok 3, error parse/bad_char 1, error parse/reserved_name 1, error parse/	0/parse=5b7fdbcb738c	1/parse=6de5996c9d6d	2/parse=da243d3f8a39	3/parse=abff437695e4	4/parse=6e490872241e	5/parse=c7a67725f134
-mutate|tests/runtime/g10a_r23_wait_for.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=ef7d475e6d1a	1/parse=c71fdd8b3ca0	2/parse=13b1363a7914	3/parse=37aca5397f0f	4/parse=91c3f7f7aee9	5/parse=3664fcf47bcc
-mutate|tests/runtime/g10a_r24_write_for.pruv	6 cases: error parse/syntax 3, error parse/bad_int 1, error parse/reserved_name 	0/parse=1b6aa0b07dd5	1/parse=90c5d7f1481e	2/parse=9d92d1e27fbb	3/parse=5f6cbc0f63a6	4/parse=655b35e60194	5/parse=50b2e4b9d97b
-mutate|tests/runtime/g10a_r25_write_hook.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=72c26b0ca18d	1/parse=6c37acc2486f	2/parse=52c47eb9b5bd	3/parse=019a98cb0b60	4/parse=4345a1486a0a	5/parse=fbd273236c14
-mutate|tests/runtime/g10a_r26_writer_panic.pruv	6 cases: error parse/syntax 2, ok 2, error parse/bad_char 1, error parse/reserve	0/parse=d4f2c2cb3765	1/parse=4b25f85a6693	2/parse=25e037db0519	3/parse=0abd32474da4	4/parse=6a6c5824fd14	5/parse=cf0cba595e2f
+mutate|tests/runtime/g10a_r23_wait_for.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=0bc9f2b88393	1/parse=a0eb338b1a71	2/parse=92700498385b	3/parse=f639273c32e7	4/parse=2984f6ceccac	5/parse=708a598113a5
+mutate|tests/runtime/g10a_r24_write_for.pruv	6 cases: error parse/syntax 3, error parse/bad_int 1, error parse/reserved_name 	0/parse=eae6fb8866b9	1/parse=d79e895a6f2b	2/parse=47b0a024f447	3/parse=f18a989e84cc	4/parse=655b35e60194	5/parse=965a001ddfe7
+mutate|tests/runtime/g10a_r25_write_hook.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=eefb213be752	1/parse=f5282cef38ac	2/parse=a1e2ab6b74a1	3/parse=7d6928d37dec	4/parse=5c49830a6545	5/parse=1bb3a2e60958
+mutate|tests/runtime/g10a_r26_writer_panic.pruv	6 cases: error parse/syntax 2, ok 2, error parse/bad_char 1, error parse/reserve	0/parse=c8195408394d	1/parse=4b25f85a6693	2/parse=29588ce81296	3/parse=f1ef7a902f17	4/parse=83a3ba1152b5	5/parse=b35a7b386d97
 mutate|tests/runtime/g10n_r01_echo_bytes.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=d49a7a5ad50a	1/parse=648b616434ff	2/parse=c97579816609	3/parse=9e3c40c5a5b2	4/parse=b8577242e958	5/parse=ae14a132e063
 mutate|tests/runtime/g10n_r02_chunks.pruv	6 cases: error parse/syntax 3, ok 2, error parse/bad_char 1	0/parse=008e62dbba68	1/parse=7dd18a9fc365	2/parse=7e197642fd7e	3/parse=ee2352f9fd2c	4/parse=9b2d33ff6b8e	5/parse=ee2352f9fd2c
 mutate|tests/runtime/g10n_r03_half_close.pruv	6 cases: error parse/syntax 4, error parse/reserved_name 1, ok 1	0/parse=8571ac9cc7d9	1/parse=a75f0bc3df7d	2/parse=829dcd76bd49	3/parse=59e5e9fd597b	4/parse=6bf07b63a0dc	5/parse=261a00017cfd
@@ -2917,38 +2965,38 @@ mutate|tests/runtime/g3_r21_repeated_instances.pruv	6 cases: error parse/syntax 
 mutate|tests/runtime/g3_r22_contract_budget.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=2e6a8dacd3b1	1/parse=7b8ddc8be992	2/parse=fdea54b63d06	3/parse=9980e4ebc6fb	4/parse=7ba4b4832ebc	5/parse=ced02e0c5eae
 mutate|tests/runtime/g3_r23_str_with_generics.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=ff5bd06398ce	1/parse=51b184767b14	2/parse=635aed06f8d8	3/parse=d6c33f081101	4/parse=ee2352f9fd2c	5/parse=3c45ee057a98
 mutate|tests/runtime/g3_r24_instance_order.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=763f4607965a	1/parse=60114e61fe34	2/parse=10c8030bcf83	3/parse=c55102d933ab	4/parse=9c9238817b66	5/parse=2e10e617aeeb
-mutate|tests/runtime/g4_r01_host_reject/root.pruv	6 cases: error parse/syntax 3, error parse/bad_char 1, error parse/module_file 1	0/parse=e7a939acc81e	1/parse=d5af9dc6ba54	2/parse=c800404d6688	3/parse=2bfac9acf734	4/parse=e3cf37f8944d	5/parse=dd120450c48b
-mutate|tests/runtime/g4_r02_safe_private/root.pruv	6 cases: error parse/module_file 5, error parse/path_syntax 1	0/parse=a30a0a789311	1/parse=51abbed8d4c7	2/parse=2ffe47a3dd1b	3/parse=ccb455b3464f	4/parse=cbf474a03460	5/parse=d7d7ce489e1b
-mutate|tests/runtime/g4_r03_trust_matrix/root.pruv	6 cases: error parse/syntax 3, error parse/module_file 2, ok 1	0/parse=ee2352f9fd2c	1/parse=159dbd9cdc0e	2/parse=f64c840bcfcc	3/parse=2da6cbd64b08	4/parse=d1344d304a99	5/parse=23b64a45f576
-mutate|tests/runtime/g4_r04_module_types/root.pruv	6 cases: error parse/syntax 4, error parse/module_file 1, error parse/refinement	0/parse=2c57b7ec50b0	1/parse=dab804e3b729	2/parse=1ba399d371c5	3/parse=439833d510dd	4/parse=44ee4b029d54	5/parse=87428d4b592c
-mutate|tests/runtime/g4_r05_generic_wrappers/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, error parse/reserved_n	0/parse=04234a025612	1/parse=839dca84d51e	2/parse=4dbab0b63d66	3/parse=c208375a24a0	4/parse=8d5a3f813ce0	5/parse=ee2352f9fd2c
-mutate|tests/runtime/g4_r06_repeated_leaf/root.pruv	6 cases: error parse/module_file 3, error parse/syntax 2, error parse/path_synta	0/parse=8349ca8a8230	1/parse=e75bc41285d1	2/parse=17620b004ed1	3/parse=3286f65d82a3	4/parse=b3423f15177e	5/parse=fe578474de02
-mutate|tests/runtime/g4_r07_underscore_names/root.pruv	6 cases: error parse/reserved_name 2, error parse/syntax 2, error parse/bad_char	0/parse=6eed0069e0e9	1/parse=44f009b591c8	2/parse=83b0ebf519c1	3/parse=2f270009db6c	4/parse=013bb6989634	5/parse=fed80b19af17
-mutate|tests/runtime/g4_r08_foreign/root.pruv	6 cases: ok 4, error parse/module_file 2	0/parse=dd7d87c323f2	1/parse=ee2352f9fd2c	2/parse=ee2352f9fd2c	3/parse=ee2352f9fd2c	4/parse=cfd45e3914a0	5/parse=ee2352f9fd2c
-mutate|tests/runtime/g4_r09_cross_file_recursion/root.pruv	6 cases: error parse/syntax 3, error parse/bad_char 1, error parse/module_file 1	0/parse=0ecdc0b1efd7	1/parse=62aebeeb7697	2/parse=a0670307fff7	3/parse=58b29ba3e132	4/parse=c7e480c03386	5/parse=826dd6561faa
-mutate|tests/runtime/g4_r10_visibility/root.pruv	6 cases: error parse/module_file 3, error parse/reserved_name 1, error parse/syn	0/parse=33e11ddc2a97	1/parse=675d9f5d3bae	2/parse=10a0cb884ffd	3/parse=bada520de690	4/parse=2ac3e0b90568	5/parse=ee2352f9fd2c
-mutate|tests/runtime/g4_r11_entry_type_closure/root.pruv	6 cases: error parse/syntax 3, error parse/reserved_name 2, error parse/module_f	0/parse=298870e7bb3f	1/parse=013bb6989634	2/parse=db1f1509da22	3/parse=4756e75f7889	4/parse=36ff37945402	5/parse=712c5a83ce01
-mutate|tests/runtime/g4_r12_raw_validation/root.pruv	6 cases: error parse/module_file 4, error parse/reserved_name 1, error parse/syn	0/parse=ea4a097ff775	1/parse=774db21f9091	2/parse=e7a939acc81e	3/parse=2945802f9a96	4/parse=072a1e6d84fe	5/parse=4a2cc361b040
-mutate|tests/runtime/g4_r13_same_spelled_layouts/root.pruv	6 cases: error parse/syntax 4, error parse/reserved_name 2	0/parse=298fbe7305b9	1/parse=25e3f569c15a	2/parse=12dfecd6fb6f	3/parse=2112ccbf5817	4/parse=d602fcd87529	5/parse=7d8f97a10fad
-mutate|tests/runtime/g4_r14_child_main/root.pruv	6 cases: error parse/module_file 3, error parse/bad_char 2, error parse/syntax 1	0/parse=bc4ef9d50ce7	1/parse=f9af81280b4c	2/parse=13e038cec7d9	3/parse=13c8a915d552	4/parse=cb0ce7878e25	5/parse=16f31b8ebc58
-mutate|tests/runtime/g5_r01_i64_update.pruv	6 cases: error parse/syntax 3, ok 2, error parse/bad_int 1	0/parse=ee2352f9fd2c	1/parse=bf2d77cd5d79	2/parse=a081be043db0	3/parse=8a7e5187f2a0	4/parse=552db780a272	5/parse=15f5ef3caacb
-mutate|tests/runtime/g5_r02_u8_bool_update.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=b6b14aecdf84	1/parse=7268989cf17b	2/parse=47c85897ab6d	3/parse=a2b1ea94b905	4/parse=711e969c99a8	5/parse=a9020da37431
-mutate|tests/runtime/g5_r03_generic_instances.pruv	6 cases: error parse/syntax 3, ok 2, error parse/reserved_name 1	0/parse=3e2a40606daf	1/parse=d804c48ac8fa	2/parse=92a467a15afb	3/parse=4b2b6f4bbed9	4/parse=e500037d096d	5/parse=0e13bef1a5a6
-mutate|tests/runtime/g5_r04_repeated_reborrows.pruv	6 cases: error parse/syntax 3, error parse/bad_char 2, ok 1	0/parse=44bc14275ce5	1/parse=2c923fa96151	2/parse=73c7dfca56ed	3/parse=bf4a1c1209fd	4/parse=e7e7921cba49	5/parse=023473b91b58
-mutate|tests/runtime/g5_r05_read_forwarding.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=d76421aec758	1/parse=359ce67f7776	2/parse=22af02aa821b	3/parse=b046fb64f384	4/parse=ee2352f9fd2c	5/parse=42248094fdcc
-mutate|tests/runtime/g5_r06_two_outputs.pruv	6 cases: ok 3, error parse/syntax 2, error parse/bad_char 1	0/parse=a0bd839a1193	1/parse=73b14a4cfcc1	2/parse=5e9c5c2bd48a	3/parse=1e43291a3023	4/parse=f365ad5cfd9a	5/parse=4bdcc60d9267
-mutate|tests/runtime/g5_r07_recursive_call.pruv	6 cases: error parse/syntax 4, error parse/string_character 1, ok 1	0/parse=2fb61d55c67a	1/parse=b90f8c783aa5	2/parse=29c92e0ce4fe	3/parse=d3a20e1b4223	4/parse=2cc6607952be	5/parse=541851fa0a76
-mutate|tests/runtime/g5_r08_module_call/root.pruv	6 cases: error parse/syntax 3, error parse/module_file 2, error parse/reserved_n	0/parse=3bf3ba887fcb	1/parse=9049b7467d22	2/parse=a25757973b34	3/parse=e96fe8a54b83	4/parse=6c1977f42a96	5/parse=4d3ce6f7245e
-mutate|tests/runtime/g5_r09_copied_owner.pruv	6 cases: error parse/reserved_name 2, error parse/syntax 2, ok 2	0/parse=7cd935953d40	1/parse=5ccfb0f5fd55	2/parse=ee2352f9fd2c	3/parse=9ebb8a1f1877	4/parse=f8ae6a7c8071	5/parse=0d564f8dcd52
-mutate|tests/runtime/g5_r10_early_return.pruv	6 cases: error parse/syntax 2, ok 2, error parse/bad_char 1, error parse/reserve	0/parse=c2d8ee9d7fea	1/parse=54869e40329f	2/parse=cebb3417d305	3/parse=0a2fb4093872	4/parse=4d3cacbcd788	5/parse=ee2352f9fd2c
-mutate|tests/runtime/g5_r11_safe_requires_violation.pruv	6 cases: error parse/bad_char 2, error parse/syntax 2, ok 2	0/parse=81e611afadfd	1/parse=99abcd8ed8fb	2/parse=9d8d80678355	3/parse=fc70af44992e	4/parse=5b11a6cb1589	5/parse=610a01bfc532
-mutate|tests/runtime/g5_r12_safe_bounds_u8_range.pruv	6 cases: error parse/syntax 6	0/parse=fdd62ccc389f	1/parse=6a434944c881	2/parse=5225905d5867	3/parse=5d573f14839a	4/parse=c51c09114bab	5/parse=1b603a720d2e
-mutate|tests/runtime/g5_r13_optimized_multi_array.pruv	6 cases: ok 3, error parse/bad_char 1, error parse/reserved_name 1, error parse/	0/parse=847e6eb81e1b	1/parse=4a90c5da8abb	2/parse=36bede5a5b1c	3/parse=2c81707c8d31	4/parse=d9ee73899ead	5/parse=ba707ebe858c
-mutate|tests/runtime/g5_r14_aliased_read_args.pruv	6 cases: error parse/syntax 5, error parse/reserved_name 1	0/parse=938750aecc34	1/parse=e82e51b5d0d4	2/parse=7a2bbd8b66c3	3/parse=5a3ff6b3440a	4/parse=0c9f65c373d4	5/parse=a6e95e91dbd0
-mutate|tests/runtime/g5_r15_safe_private_failure.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=eb070b91695d	1/parse=d4f1fe4fc89f	2/parse=770f6b0641ba	3/parse=1dfb1f690d1a	4/parse=efc8a4321d99	5/parse=1a5f12639e5e
+mutate|tests/runtime/g4_r01_host_reject/root.pruv	6 cases: error parse/syntax 3, error parse/bad_char 1, error parse/module_file 1	0/parse=e7a939acc81e	1/parse=98ed01ca96b4	2/parse=c6ecc5555842	3/parse=6447cbf0283f	4/parse=d3e3935840c4	5/parse=47956e3b419f
+mutate|tests/runtime/g4_r02_safe_private/root.pruv	6 cases: error parse/module_file 5, error parse/path_syntax 1	0/parse=464a7d6a4007	1/parse=e4999fcabe6a	2/parse=750d9251d9c7	3/parse=3c814054cc37	4/parse=9427c7b99b63	5/parse=4eed8ee43b40
+mutate|tests/runtime/g4_r03_trust_matrix/root.pruv	6 cases: error parse/syntax 3, error parse/module_file 2, ok 1	0/parse=ee2352f9fd2c	1/parse=0a84ec5493da	2/parse=9ce426872f17	3/parse=0e3b1dbf7b39	4/parse=f373b1075944	5/parse=b9619bd429c8
+mutate|tests/runtime/g4_r04_module_types/root.pruv	6 cases: error parse/syntax 4, error parse/module_file 1, error parse/refinement	0/parse=df41ca66fbfb	1/parse=414e92307b5f	2/parse=681861f6a5a3	3/parse=9bd9dfa53cb7	4/parse=f3e37fe06092	5/parse=7b0b80cd3cad
+mutate|tests/runtime/g4_r05_generic_wrappers/root.pruv	6 cases: error parse/module_file 2, error parse/syntax 2, error parse/reserved_n	0/parse=d7e0146e0ccd	1/parse=3586628fc163	2/parse=7f7ec81e26b7	3/parse=576fcc89fb49	4/parse=6f834c3a85db	5/parse=ee2352f9fd2c
+mutate|tests/runtime/g4_r06_repeated_leaf/root.pruv	6 cases: error parse/module_file 3, error parse/syntax 2, error parse/path_synta	0/parse=1612932d10f4	1/parse=86c0eb3fdf4a	2/parse=b47be7cfed3b	3/parse=64146a247d65	4/parse=5e315d4d3946	5/parse=cfb974159aa3
+mutate|tests/runtime/g4_r07_underscore_names/root.pruv	6 cases: error parse/reserved_name 2, error parse/syntax 2, error parse/bad_char	0/parse=99235ee6868b	1/parse=2f3137925bcb	2/parse=9baa828bc428	3/parse=2f270009db6c	4/parse=013bb6989634	5/parse=695cb8bf2899
+mutate|tests/runtime/g4_r08_foreign/root.pruv	6 cases: ok 4, error parse/module_file 2	0/parse=c9677c41d466	1/parse=ee2352f9fd2c	2/parse=ee2352f9fd2c	3/parse=ee2352f9fd2c	4/parse=5f86a7da6f16	5/parse=ee2352f9fd2c
+mutate|tests/runtime/g4_r09_cross_file_recursion/root.pruv	6 cases: error parse/syntax 3, error parse/bad_char 1, error parse/module_file 1	0/parse=730cc9a8f347	1/parse=c8cf2bab14b5	2/parse=e6ac8f5ce81c	3/parse=25641e0de069	4/parse=5326f4166588	5/parse=fb61c26bbccd
+mutate|tests/runtime/g4_r10_visibility/root.pruv	6 cases: error parse/module_file 3, error parse/reserved_name 1, error parse/syn	0/parse=7bb89460119f	1/parse=2791c096a384	2/parse=c43f4a3fc0c4	3/parse=44d342d2bfa8	4/parse=4fe81d9520b5	5/parse=ee2352f9fd2c
+mutate|tests/runtime/g4_r11_entry_type_closure/root.pruv	6 cases: error parse/syntax 3, error parse/reserved_name 2, error parse/module_f	0/parse=120db02e8a2e	1/parse=013bb6989634	2/parse=3b2b6d5a6863	3/parse=87ffbe6e2d74	4/parse=45a3aab479cd	5/parse=92be88f2d8b6
+mutate|tests/runtime/g4_r12_raw_validation/root.pruv	6 cases: error parse/module_file 4, error parse/reserved_name 1, error parse/syn	0/parse=56a0f699554e	1/parse=0897e6264de7	2/parse=e7a939acc81e	3/parse=7b91562a2386	4/parse=4e6147250fee	5/parse=75195225e21f
+mutate|tests/runtime/g4_r13_same_spelled_layouts/root.pruv	6 cases: error parse/syntax 4, error parse/reserved_name 2	0/parse=c64415162a2c	1/parse=dfaf709db51f	2/parse=5e29d30938ce	3/parse=892409297a24	4/parse=1c9f7e8d4aca	5/parse=7bfe0bcb2cb5
+mutate|tests/runtime/g4_r14_child_main/root.pruv	6 cases: error parse/module_file 3, error parse/bad_char 2, error parse/syntax 1	0/parse=7f13cc6c5c6f	1/parse=47efaf287e87	2/parse=2480df3acf40	3/parse=63c6961383a8	4/parse=ff1ba7579b24	5/parse=58a6469ba5da
+mutate|tests/runtime/g5_r01_i64_update.pruv	6 cases: error parse/syntax 3, ok 2, error parse/bad_int 1	0/parse=ee2352f9fd2c	1/parse=d54720b5666f	2/parse=2256aefd1843	3/parse=4b7394a59ae3	4/parse=2001c5e73406	5/parse=1155032fbe8b
+mutate|tests/runtime/g5_r02_u8_bool_update.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=b9e2f56b7ccc	1/parse=bb6503278ef5	2/parse=f9aeae4c1535	3/parse=9d12cd17d1f7	4/parse=6a02e233321a	5/parse=24e65103fddc
+mutate|tests/runtime/g5_r03_generic_instances.pruv	6 cases: error parse/syntax 3, ok 2, error parse/reserved_name 1	0/parse=77a098f48384	1/parse=476ffb894205	2/parse=897fa0ff8cb3	3/parse=32c8d978f1d5	4/parse=e500037d096d	5/parse=2429f2eb35e3
+mutate|tests/runtime/g5_r04_repeated_reborrows.pruv	6 cases: error parse/syntax 3, error parse/bad_char 2, ok 1	0/parse=5979c214fe0e	1/parse=7456062d7409	2/parse=73c7dfca56ed	3/parse=2f272dc31008	4/parse=362f01997baa	5/parse=81b0f58f745a
+mutate|tests/runtime/g5_r05_read_forwarding.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=b78bcea8ed8b	1/parse=31f9e38ad11c	2/parse=42165b04a863	3/parse=b046fb64f384	4/parse=ee2352f9fd2c	5/parse=0bace0c3abfa
+mutate|tests/runtime/g5_r06_two_outputs.pruv	6 cases: ok 3, error parse/syntax 2, error parse/bad_char 1	0/parse=3c7ea8233503	1/parse=c537eba5d811	2/parse=02716deda1a3	3/parse=ef4e790bfee2	4/parse=12a1abeb285c	5/parse=f680cf7dc5e2
+mutate|tests/runtime/g5_r07_recursive_call.pruv	6 cases: error parse/syntax 4, error parse/string_character 1, ok 1	0/parse=a0a47c3fb9ed	1/parse=b90f8c783aa5	2/parse=c1427f298507	3/parse=04ea53a57603	4/parse=2cc6607952be	5/parse=541851fa0a76
+mutate|tests/runtime/g5_r08_module_call/root.pruv	6 cases: error parse/syntax 3, error parse/module_file 2, error parse/reserved_n	0/parse=cc2fcf7e1b66	1/parse=83b0edb88532	2/parse=16ba4ac7a78a	3/parse=a412b0c7331d	4/parse=e472602d5dab	5/parse=145c64fc5954
+mutate|tests/runtime/g5_r09_copied_owner.pruv	6 cases: error parse/reserved_name 2, error parse/syntax 2, ok 2	0/parse=9761966341c3	1/parse=c428d32cf24e	2/parse=ee2352f9fd2c	3/parse=9ebb8a1f1877	4/parse=41ef91da8588	5/parse=45f26e58e0a7
+mutate|tests/runtime/g5_r10_early_return.pruv	6 cases: error parse/syntax 2, ok 2, error parse/bad_char 1, error parse/reserve	0/parse=3063576b77bc	1/parse=54869e40329f	2/parse=c0971bfa892c	3/parse=4397c6602c45	4/parse=7f82fe4cb50a	5/parse=ee2352f9fd2c
+mutate|tests/runtime/g5_r11_safe_requires_violation.pruv	6 cases: error parse/bad_char 2, error parse/syntax 2, ok 2	0/parse=ab4079d96fd6	1/parse=8579d07d300e	2/parse=8e868b2fbc70	3/parse=fc70af44992e	4/parse=f6e2be400262	5/parse=10679c8734d7
+mutate|tests/runtime/g5_r12_safe_bounds_u8_range.pruv	6 cases: error parse/syntax 6	0/parse=36b4968689e1	1/parse=69a3a9d08352	2/parse=5225905d5867	3/parse=c7a63544ad1d	4/parse=bbea238fb54e	5/parse=bee71207f7e3
+mutate|tests/runtime/g5_r13_optimized_multi_array.pruv	6 cases: ok 3, error parse/bad_char 1, error parse/reserved_name 1, error parse/	0/parse=19270c4e1829	1/parse=6d258dd6fb49	2/parse=ea0143e5e71a	3/parse=e2fda75b3f03	4/parse=f7b2697ce62c	5/parse=ba707ebe858c
+mutate|tests/runtime/g5_r14_aliased_read_args.pruv	6 cases: error parse/syntax 5, error parse/reserved_name 1	0/parse=938750aecc34	1/parse=9aa07f7e7195	2/parse=1613f5a1fdae	3/parse=b4fec794bdbf	4/parse=d9e99d7c8b18	5/parse=6b455f0c51ee
+mutate|tests/runtime/g5_r15_safe_private_failure.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=412dbc69813d	1/parse=41bf6e881862	2/parse=3ed2f9fb2c16	3/parse=bd44914d752d	4/parse=9e61fd919c10	5/parse=fb05f2d25705
 mutate|tests/runtime/g5_r16_host_wrappers.pruv	6 cases: error parse/syntax 6	0/parse=3972bd5917ce	1/parse=694f226265e8	2/parse=99e43564d28b	3/parse=4cb741e09035	4/parse=5a22b420b440	5/parse=8c446eea792f
-mutate|tests/runtime/g5_r17_borrowed_lifetime.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=485ef1aef068	1/parse=3f51f4768e6c	2/parse=302973a283a3	3/parse=1df5277152a4	4/parse=7a8bd7d69c24	5/parse=ee2352f9fd2c
-mutate|tests/runtime/g5_r18_cross_module_generic/root.pruv	6 cases: error parse/module_file 3, error parse/syntax 3	0/parse=77307a1838f6	1/parse=0d3312c286ee	2/parse=a5abed4a0b9f	3/parse=d6b70b093917	4/parse=54d13d5c1cfa	5/parse=4e79978509cc
+mutate|tests/runtime/g5_r17_borrowed_lifetime.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=aa04a0ae9284	1/parse=50a8c2d305c7	2/parse=302973a283a3	3/parse=3b3dd6343279	4/parse=0d994d3e8862	5/parse=ee2352f9fd2c
+mutate|tests/runtime/g5_r18_cross_module_generic/root.pruv	6 cases: error parse/module_file 3, error parse/syntax 3	0/parse=ee7ac5abcc8c	1/parse=a4a1b2e9e056	2/parse=d1bd32f0ac70	3/parse=c15df207890f	4/parse=d262f3c24150	5/parse=b92a07d4630a
 mutate|tests/runtime/g5_r19_prefix_sums.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=293fcdb06e7f	1/parse=eb4ab4f9d565	2/parse=8555554f0d09	3/parse=00051fcaf2ec	4/parse=a303b515f62d	5/parse=ffa854fdd8a5
 mutate|tests/runtime/g5_r20_two_inout_ranges.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, ok 1	0/parse=4f56fa061e21	1/parse=3ad386ad9af6	2/parse=7dacbaec0dac	3/parse=47b9634c1ba7	4/parse=7d14890b9cd8	5/parse=e29811af59e6
 mutate|tests/runtime/g6_a01_min_max.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=3824ef733209	1/parse=40e5a384fdd4	2/parse=356759735cd7	3/parse=f441513b07c0	4/parse=6a4074dd1b13	5/parse=f142700f5580
@@ -3041,7 +3089,7 @@ mutate|tests/runtime/l3_rt_eq_range_edges.pruv	6 cases: error parse/syntax 5, ok
 mutate|tests/runtime/l3_rt_eq_range_nv_oob.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=d1358091c052	1/parse=21424b2858ab	2/parse=48523e536a5b	3/parse=eff34fe1d713	4/parse=1c45a803f764	5/parse=3eecc6a5e657
 mutate|tests/runtime/l3_rt_eq_range_order.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=8c446eea792f	1/parse=b9cc6c3d4dc9	2/parse=c2af63e159d0	3/parse=d9de8aeab894	4/parse=4c4587db6f62	5/parse=5bbb7fb1e63d
 mutate|tests/runtime/l3_rt_resize.pruv	6 cases: error parse/syntax 5, error parse/reserved_name 1	0/parse=bb2fb3383ace	1/parse=db2d32c87a54	2/parse=d9c9796ffd34	3/parse=c492bfd3bbbc	4/parse=1d74ce4356a7	5/parse=f9675d106c33
-mutate|tests/runtime/l3_rt_resize_narrow.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, ok 1	0/parse=ae56e1386823	1/parse=ea79a937f9b2	2/parse=804cf75eecca	3/parse=cb6d86152062	4/parse=9d736edd0de1	5/parse=b7c0ff035dea
+mutate|tests/runtime/l3_rt_resize_narrow.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, ok 1	0/parse=c8dc2a299aa6	1/parse=e9f5adae0f7b	2/parse=592880d20e34	3/parse=abc94092cfd8	4/parse=9d736edd0de1	5/parse=b7c0ff035dea
 mutate|tests/runtime/l3_rt_truncate.pruv	6 cases: error parse/syntax 6	0/parse=fecd2b813c83	1/parse=60b8f17e2f47	2/parse=058f69be0836	3/parse=c42deafc9113	4/parse=0154f7fe6530	5/parse=4f038290a84b
 mutate|tests/runtime/lg10_e1_bool_err.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=250d5aa7b7f1	1/parse=b00496e8b9af	2/parse=dc8475578c02	3/parse=15717b926973	4/parse=18273389352f	5/parse=2fa2401c35e3
 mutate|tests/runtime/lg10_e1_enum_err.pruv	6 cases: error parse/syntax 4, error parse/reserved_name 1, ok 1	0/parse=28f6ab2a8cbf	1/parse=048ac5bdb5c9	2/parse=7c22ee0d9681	3/parse=88c829cd4deb	4/parse=6889ca10a6bb	5/parse=c6516d3b0772
@@ -3061,8 +3109,8 @@ mutate|tests/runtime/lg13_try_expr.pruv	6 cases: error parse/syntax 3, ok 3	0/pa
 mutate|tests/runtime/lg14_try_temps.pruv	6 cases: error parse/syntax 5, error parse/bad_char 1	0/parse=3584e8618adf	1/parse=00e7ba564b01	2/parse=d8e70d79cec2	3/parse=68ac267a00ea	4/parse=5ce283acb21f	5/parse=47a9948d7fee
 mutate|tests/runtime/lg15_e2_contract.pruv	6 cases: error parse/reserved_name 2, error parse/bad_char 1, error parse/generi	0/parse=a6884e045f33	1/parse=dcabc4332b0b	2/parse=8f5822cdb35b	3/parse=05811dbcaa41	4/parse=395ce20fb8a0	5/parse=ab44016cf65c
 mutate|tests/runtime/lg15_try_short.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, ok 1	0/parse=254f1fc6de20	1/parse=5825452a1b1c	2/parse=deb2a01ba3cc	3/parse=d568fb1df54b	4/parse=68ab9270a18b	5/parse=2299859449b5
-mutate|tests/runtime/lg16_inv_basic.pruv	6 cases: error parse/reserved_name 2, error parse/syntax 2, ok 2	0/parse=96a06fc9fb50	1/parse=4152b394fa80	2/parse=5860365b824d	3/parse=3e587e7eb279	4/parse=c5826af6d175	5/parse=575b070dfd53
-mutate|tests/runtime/lg16_inv_store.pruv	6 cases: error parse/syntax 3, error parse/refinement_syntax 1, error parse/rese	0/parse=ee2352f9fd2c	1/parse=03641528eb65	2/parse=3b456b73441a	3/parse=da1f09d564a2	4/parse=bd6f582ec795	5/parse=cee0edcef3b8
+mutate|tests/runtime/lg16_inv_basic.pruv	6 cases: error parse/reserved_name 2, error parse/syntax 2, ok 2	0/parse=cf343d3cd115	1/parse=b9de9433076d	2/parse=a70c96e01c6f	3/parse=3e587e7eb279	4/parse=b638c8f1787f	5/parse=c73aee9d00f8
+mutate|tests/runtime/lg16_inv_store.pruv	6 cases: error parse/syntax 3, error parse/refinement_syntax 1, error parse/rese	0/parse=ee2352f9fd2c	1/parse=03641528eb65	2/parse=ae770e33533d	3/parse=bc665fc618e0	4/parse=bd6f582ec795	5/parse=a28d850e0001
 mutate|tests/runtime/lg16_resize_inplace.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=d69e33f844ed	1/parse=bea62943823e	2/parse=c2dfe29918b3	3/parse=05c7053e5c52	4/parse=39809e9da9d7	5/parse=adf4651178cf
 mutate|tests/runtime/lg17_str_move.pruv	6 cases: error parse/syntax 3, ok 2, error parse/bad_char 1	0/parse=a76e4c47dcbe	1/parse=fc2e73845d55	2/parse=c6cb47c39184	3/parse=12ecb0c1cfdf	4/parse=5fed37c376a4	5/parse=7faf4c5a834e
 mutate|tests/runtime/lg18_ok_val_agg.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=68b6a5ac1c0c	1/parse=3e856853816e	2/parse=38f9f59553fe	3/parse=0bbe801523ab	4/parse=0bcea9635640	5/parse=784cc8d1bec8
@@ -3071,24 +3119,24 @@ mutate|tests/runtime/lg19_try_plain_args.pruv	6 cases: error parse/syntax 3, ok 
 mutate|tests/runtime/lg20_try_value_call_args.pruv	6 cases: error parse/bad_char 3, error parse/reserved_name 1, error parse/syntax	0/parse=e8dc7734a245	1/parse=b9269387ad9b	2/parse=6bc661f15ce5	3/parse=87698bb4c721	4/parse=76356bb8289b	5/parse=f7feab0697fd
 mutate|tests/runtime/lg21_try_borrow_move_other.pruv	6 cases: ok 3, error parse/bad_char 2, error parse/syntax 1	0/parse=3712ddd087f6	1/parse=a4706eb43b84	2/parse=201ee764c2b2	3/parse=ee2352f9fd2c	4/parse=632411bb1047	5/parse=c9fad011f486
 mutate|tests/runtime/lg21_try_len_and_inout_inside.pruv	6 cases: error parse/syntax 3, error parse/bad_char 1, error parse/string_charac	0/parse=5ba8f89cc218	1/parse=e76993ba4f35	2/parse=fe32cd86e6e3	3/parse=47f1677228b0	4/parse=2c3fc6bc82d6	5/parse=602f644b9df7
-mutate|tests/runtime/lg22_nested_invariant.pruv	6 cases: error parse/bad_char 3, error parse/reserved_name 1, error parse/syntax	0/parse=f4a288768ceb	1/parse=28977e10b4d0	2/parse=2e337880ce95	3/parse=5384b7cf21f6	4/parse=29835afa7cdc	5/parse=f6e3f5af7f20
-mutate|tests/runtime/lg22_old_struct.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=7e4148d7a293	1/parse=2464a6678c2b	2/parse=141568ba4142	3/parse=e2ecbb5e15cd	4/parse=ee2352f9fd2c	5/parse=07226af36d4f
-mutate|tests/runtime/lg22_store_field.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=949cf161fe93	1/parse=d588afa767ff	2/parse=4250d2e60ebe	3/parse=83fdef6ad357	4/parse=2030a39a6db4	5/parse=17ab79ad475c
+mutate|tests/runtime/lg22_nested_invariant.pruv	6 cases: error parse/bad_char 3, error parse/reserved_name 1, error parse/syntax	0/parse=cea85a7bc2b5	1/parse=7d9f97d767f5	2/parse=2e337880ce95	3/parse=5384b7cf21f6	4/parse=29835afa7cdc	5/parse=f6e3f5af7f20
+mutate|tests/runtime/lg22_old_struct.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=18e340a46da1	1/parse=df57e0ec0a9d	2/parse=141568ba4142	3/parse=e92b9ff20da0	4/parse=ee2352f9fd2c	5/parse=07226af36d4f
+mutate|tests/runtime/lg22_store_field.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=6180657ddb0a	1/parse=ba8743a95fff	2/parse=ee4c3da47a69	3/parse=8ffe5d0c7ae5	4/parse=5c5dbcb314cd	5/parse=5ad5fc051977
 mutate|tests/runtime/lg23_ok_val_legacy.pruv	6 cases: error parse/syntax 3, error parse/bad_char 1, error parse/refinement_po	0/parse=ee2352f9fd2c	1/parse=4a5d97704f56	2/parse=9d82b928388a	3/parse=3be309b3693a	4/parse=8c446eea792f	5/parse=deb2a01ba3cc
-mutate|tests/runtime/lg23_old_elem.pruv	6 cases: error parse/syntax 3, ok 2, error parse/reserved_name 1	0/parse=21804a8421d0	1/parse=f5e1384ed9d8	2/parse=9553f7d53848	3/parse=471af18bd998	4/parse=ee2352f9fd2c	5/parse=d743ba318f4b
-mutate|tests/runtime/lg23_payload_invariant.pruv	6 cases: error parse/syntax 6	0/parse=924962d684b6	1/parse=620ac151ceef	2/parse=f4c9199030ac	3/parse=cea13d387d71	4/parse=b8d48433229e	5/parse=78167ed6f66c
-mutate|tests/runtime/lg24_generic_invariant.pruv	6 cases: error parse/syntax 6	0/parse=1c68da082dfd	1/parse=ff8320da6fc9	2/parse=7c9a9d861b28	3/parse=94eac1ddbe7b	4/parse=e21902f24e7f	5/parse=efe920a4ae6a
-mutate|tests/runtime/lg25_str_view.pruv	6 cases: error parse/reserved_name 2, error parse/syntax 2, ok 2	0/parse=8bf5e350ecde	1/parse=eb3dabbf1296	2/parse=b5dc5fd25a32	3/parse=5f5d3b243864	4/parse=e45d40f308a6	5/parse=184c725f822e
-mutate|tests/runtime/lg26_utf8_span.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=f3386b85680f	1/parse=209e466a4e34	2/parse=44322501f14a	3/parse=027118a1087e	4/parse=0cf52a5a3ab4	5/parse=155263bbfeb2
-mutate|tests/runtime/lg27_elem_inv.pruv	6 cases: ok 3, error parse/bad_char 1, error parse/reserved_name 1, error parse/	0/parse=0340b2d3d81a	1/parse=96cdd4da93ad	2/parse=d74d1998f405	3/parse=ee6727c97961	4/parse=50a1328b96c4	5/parse=dfafbac6d579
-mutate|tests/runtime/lg27_string_to_str_w.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=cb5f8f3f054b	1/parse=247e50013121	2/parse=8d3cea1389cb	3/parse=eb6dad88adf7	4/parse=ee2352f9fd2c	5/parse=8c32620fdc78
+mutate|tests/runtime/lg23_old_elem.pruv	6 cases: error parse/syntax 3, ok 2, error parse/reserved_name 1	0/parse=31c1ac1990b6	1/parse=f31740c48da1	2/parse=c96e9eae548a	3/parse=471af18bd998	4/parse=ee2352f9fd2c	5/parse=6177e694c2a9
+mutate|tests/runtime/lg23_payload_invariant.pruv	6 cases: error parse/syntax 6	0/parse=5d95436a65b8	1/parse=133383c9b7aa	2/parse=ee3739eeb77e	3/parse=b4c3411689ef	4/parse=fec5a26c1fc9	5/parse=74c054974718
+mutate|tests/runtime/lg24_generic_invariant.pruv	6 cases: error parse/syntax 6	0/parse=1c68da082dfd	1/parse=ff8320da6fc9	2/parse=5af8cd49fed2	3/parse=0979e9cc1b12	4/parse=c7a72c85f3ed	5/parse=a98398520bfb
+mutate|tests/runtime/lg25_str_view.pruv	6 cases: error parse/reserved_name 2, error parse/syntax 2, ok 2	0/parse=b2f91e7e2b99	1/parse=c36838e7c9d4	2/parse=b5dc5fd25a32	3/parse=5f5d3b243864	4/parse=e45d40f308a6	5/parse=fe41131923d1
+mutate|tests/runtime/lg26_utf8_span.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=f3386b85680f	1/parse=586b5eb95247	2/parse=887aa63b1586	3/parse=4b3aac810c6f	4/parse=00fb6296334f	5/parse=8084283ce912
+mutate|tests/runtime/lg27_elem_inv.pruv	6 cases: ok 3, error parse/bad_char 1, error parse/reserved_name 1, error parse/	0/parse=0340b2d3d81a	1/parse=96cdd4da93ad	2/parse=117fe214a626	3/parse=985d1639489f	4/parse=da6652be5cb5	5/parse=dfafbac6d579
+mutate|tests/runtime/lg27_string_to_str_w.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=4642d632b6ce	1/parse=e47adb0246a9	2/parse=8d3cea1389cb	3/parse=dba69cb33139	4/parse=ee2352f9fd2c	5/parse=e72c105fd33e
 mutate|tests/runtime/lg2_rt_u8_field_move.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=af266d5aaebf	1/parse=b80778b800e1	2/parse=7e66a0b52835	3/parse=3d54811b7d83	4/parse=667f59b2c6d1	5/parse=7543107331da
 mutate|tests/runtime/lg2_rt_utf8.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, ok 1	0/parse=07e0e7b07442	1/parse=4fd810176fcf	2/parse=5a7ec8239946	3/parse=b3742a7f79fb	4/parse=f1d30b8d0ada	5/parse=208d55619ea5
 mutate|tests/runtime/lg2_rt_utf8_panic.pruv	6 cases: error parse/syntax 5, error parse/bad_char 1	0/parse=2485ba9b53bc	1/parse=6adb1e2756cc	2/parse=67c2d172e461	3/parse=28d0296d179f	4/parse=61b1444d525a	5/parse=d46fe116cce1
 mutate|tests/runtime/lg2_rt_words_le.pruv	6 cases: error parse/syntax 4, error parse/reserved_name 1, ok 1	0/parse=22dd09f8ebbc	1/parse=3138e80f99f1	2/parse=625a77813ebd	3/parse=c1dfec8cbaf5	4/parse=04a34239b18e	5/parse=379512d65e43
-mutate|tests/runtime/lg30_opq_guard.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=ed9230e9621c	1/parse=2aa531473477	2/parse=040dfa561f48	3/parse=a8fd8b87ee81	4/parse=9a4be2cad782	5/parse=875f43bd1f13
-mutate|tests/runtime/lg30_utf8_after_ascii.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=9a6598021352	1/parse=035e1542184b	2/parse=b9f5b78970f6	3/parse=1b17220fe696	4/parse=50454c8d4770	5/parse=412a8b5ec946
-mutate|tests/runtime/lg31_push_frame.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=368635e1769d	1/parse=68c3bddaf422	2/parse=47a61f9e7b25	3/parse=029c47573c7a	4/parse=c9f3a0ff0ee3	5/parse=3a5bf9d9e70b
+mutate|tests/runtime/lg30_opq_guard.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=0505d24c7d2c	1/parse=3d8f42dea0f4	2/parse=040dfa561f48	3/parse=ffcdc35c35cf	4/parse=9a4be2cad782	5/parse=875f43bd1f13
+mutate|tests/runtime/lg30_utf8_after_ascii.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=857a4c665bb0	1/parse=27318c098097	2/parse=75eb1a74257b	3/parse=eee6b7f400d5	4/parse=b040c437f314	5/parse=f96461725bb9
+mutate|tests/runtime/lg31_push_frame.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=da0c42adbbdf	1/parse=6c9d9be0cf95	2/parse=1bd5cc1662bf	3/parse=029c47573c7a	4/parse=06f763bd1440	5/parse=3a5bf9d9e70b
 mutate|tests/runtime/lg33_rt_move.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=d8a0d8e547a6	1/parse=d81027982aef	2/parse=2c65f4abad45	3/parse=ee2352f9fd2c	4/parse=1e69e3438ed4	5/parse=3982f5e56ce2
 mutate|tests/runtime/lg34_rt_field_regrow.pruv	6 cases: error parse/syntax 6	0/parse=447f5b413c56	1/parse=3da96296421e	2/parse=a942fed5fdc2	3/parse=bc4038fd425c	4/parse=1025f7d9f578	5/parse=e2239c29b335
 mutate|tests/runtime/lg34_rt_move_return.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=1654a7c78fac	1/parse=47c658984ba0	2/parse=5ca486792622	3/parse=0ccab866b780	4/parse=ba261acb5a74	5/parse=fd070d3a989d
@@ -3130,6 +3178,10 @@ mutate|tests/runtime/p1_r_bounds.pruv	6 cases: error parse/syntax 5, ok 1	0/pars
 mutate|tests/runtime/p1_r_cast_fail.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=d97a668b67b0	1/parse=41aec5016ce6	2/parse=ee2352f9fd2c	3/parse=1b8f92a143a5	4/parse=dd51ed28a7c8	5/parse=f19b2eecdece
 mutate|tests/runtime/p1_r_overflow.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=ee2352f9fd2c	1/parse=1eaad1ad7343	2/parse=1c4ccb266817	3/parse=1eaad1ad7343	4/parse=61b0dea0a557	5/parse=a5bc18a24c38
 mutate|tests/runtime/p2_r_u16_buf.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=67b9311c44d0	1/parse=4d4df648cf63	2/parse=09d88d55dddd	3/parse=198a38eb913b	4/parse=75257af2639f	5/parse=3c236cd40810
+mutate|tests/runtime/p2_r_u16_field_oor.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=886a1e70a494	1/parse=d9098050f32d	2/parse=f6e9fab20784	3/parse=77b38b441e0e	4/parse=886a1e70a494	5/parse=3b931d504f30
+mutate|tests/runtime/p2_r_u16_fill_oor.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=046853915216	1/parse=7ae035ade66a	2/parse=8e8d52aa7705	3/parse=79b9184b8ad6	4/parse=2c1c5d6c2ca7	5/parse=291e458024a6
+mutate|tests/runtime/p2_r_u16_paths.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, ok 1	0/parse=9685a0e73796	1/parse=5c82a7055dd0	2/parse=860eeafa66cf	3/parse=be2f776c5723	4/parse=d30b16d3a7c5	5/parse=1b65c56f72aa
+mutate|tests/runtime/p2_r_u16_push_oor.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=21e91465040b	1/parse=ababf6a8335d	2/parse=fe237651daea	3/parse=dd51ed28a7c8	4/parse=6ea5df512ee9	5/parse=ee2352f9fd2c
 mutate|tests/runtime/p2_rt_bits.pruv	6 cases: error parse/syntax 3, ok 2, error parse/reserved_name 1	0/parse=c17c00475af7	1/parse=4e5e995700f8	2/parse=1d6fab6daec6	3/parse=8b1af5789ae5	4/parse=ee2352f9fd2c	5/parse=296999481ee2
 mutate|tests/runtime/p2_rt_contract_guard.pruv	6 cases: error parse/syntax 4, error parse/bad_int 1, ok 1	0/parse=34a3502ee689	1/parse=4ffb19cd38e0	2/parse=a63b0796f8a5	3/parse=2fff046d04c4	4/parse=6db81917a19a	5/parse=f7511cdb7b52
 mutate|tests/runtime/p2_rt_kernels.pruv	6 cases: error parse/syntax 6	0/parse=aa47323474a1	1/parse=3bff33022ace	2/parse=cec19a8a10b3	3/parse=67424ddab3aa	4/parse=bca40aeed155	5/parse=a44722ef7a65
@@ -3137,9 +3189,9 @@ mutate|tests/runtime/p2_rt_shift_guard.pruv	6 cases: error parse/syntax 6	0/pars
 mutate|tests/runtime/p2_rt_shifts.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=b8ba10c08d13	1/parse=205bcd31b282	2/parse=d1edbde76382	3/parse=46abd974f18b	4/parse=698adfe5de23	5/parse=ddbe45af1c4e
 mutate|tests/runtime/p2_rt_words.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=a81f609fcd4e	1/parse=7b55750f4e9c	2/parse=7a5bed5adb7c	3/parse=ff824956c49b	4/parse=ff824956c49b	5/parse=22c44b3f3a4d
 mutate|tests/runtime/p2_rt_wrap.pruv	6 cases: error parse/syntax 4, error parse/string_character 1, ok 1	0/parse=0487f8f04c40	1/parse=baf45b6b4c33	2/parse=57b5126d8b2c	3/parse=d4802d941f37	4/parse=504e3d67d384	5/parse=95ec251af25c
-mutate|tests/runtime/p31f_inout_field.pruv	6 cases: error parse/syntax 4, error parse/generic_syntax 1, ok 1	0/parse=fae3a5128e4b	1/parse=44d870487f1a	2/parse=0e911a089ad9	3/parse=02efffff048b	4/parse=6e2a00b1173b	5/parse=1380d9b3602c
-mutate|tests/runtime/p31f_map_iter.pruv	6 cases: error parse/reserved_name 2, error parse/syntax 2, ok 2	0/parse=51a838049f39	1/parse=ee2352f9fd2c	2/parse=1c1e301bcb19	3/parse=209c6979560b	4/parse=b3f77b328d17	5/parse=bed352ae3689
-mutate|tests/runtime/p31f_nested_record_map.pruv	6 cases: error parse/syntax 2, ok 2, error parse/reserved_name 1, error parse/st	0/parse=4b2551f959ed	1/parse=b4b3ccccae39	2/parse=bc75f3b74181	3/parse=e3fe8af7f929	4/parse=8eb22d50b58f	5/parse=bb3adf0c8839
+mutate|tests/runtime/p31f_inout_field.pruv	6 cases: error parse/syntax 4, error parse/generic_syntax 1, ok 1	0/parse=ea1015c4522e	1/parse=eed680235ae6	2/parse=1ce93968566a	3/parse=d4f28de6d61e	4/parse=b2efd263168f	5/parse=f6c51655712e
+mutate|tests/runtime/p31f_map_iter.pruv	6 cases: error parse/reserved_name 2, error parse/syntax 2, ok 2	0/parse=08c1008ab255	1/parse=ee2352f9fd2c	2/parse=1fac55905f23	3/parse=702c8fabb8b9	4/parse=87754209972a	5/parse=1b2eac0fd43a
+mutate|tests/runtime/p31f_nested_record_map.pruv	6 cases: error parse/syntax 2, ok 2, error parse/reserved_name 1, error parse/st	0/parse=01fd4b622dc4	1/parse=032cff20f5b7	2/parse=0f396566d842	3/parse=e3fe8af7f929	4/parse=5103b572972b	5/parse=12a0a7b0a4a4
 mutate|tests/runtime/p3_f1_budget.pruv	6 cases: error parse/syntax 3, ok 2, error parse/bad_char 1	0/parse=e9d646293acd	1/parse=54c323b58a95	2/parse=3cc18281b789	3/parse=cf806374c4b2	4/parse=e138ccb00227	5/parse=3cc18281b789
 mutate|tests/runtime/p3_f1_len.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=048091314f29	1/parse=b9a9be910160	2/parse=048091314f29	3/parse=017709dff061	4/parse=048091314f29	5/parse=048091314f29
 mutate|tests/runtime/p3_f1_map.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=deb2a01ba3cc	1/parse=deb2a01ba3cc	2/parse=02831929ced7	3/parse=70e3f3e1ac9d	4/parse=ee2352f9fd2c	5/parse=eecc09af9562
@@ -3149,8 +3201,24 @@ mutate|tests/runtime/p3_m2_lit_let.pruv	6 cases: error parse/syntax 5, ok 1	0/pa
 mutate|tests/runtime/p3_m3_str_take.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=ee2352f9fd2c	1/parse=2872377a4926	2/parse=3e9fe45150ca	3/parse=12a122c1e433	4/parse=e0994a1a0c9a	5/parse=ee2352f9fd2c
 mutate|tests/runtime/p3_m4_trunc_ctor.pruv	6 cases: error parse/syntax 4, error parse/bad_char 1, ok 1	0/parse=b9b586610cc5	1/parse=e135033c4518	2/parse=e4b6a7fe5aa5	3/parse=d8cb8f6ad40c	4/parse=a42730af9a9c	5/parse=6ea391fcf81b
 mutate|tests/runtime/p3_m5_unbox_str.pruv	6 cases: error parse/syntax 4, error parse/string_character 1, ok 1	0/parse=100584b8fe2b	1/parse=af2b812ca133	2/parse=240d9778547b	3/parse=47315c4d6ead	4/parse=3ed1e136ba53	5/parse=c92fd2985dde
-mutate|tests/runtime/p3_n1_noverify.pruv	6 cases: error parse/syntax 3, error parse/refinement_syntax 1, error parse/stri	0/parse=ba16cc8f90aa	1/parse=425931276a41	2/parse=bf30c9d468ed	3/parse=d4535bed901a	4/parse=b47b9c38cf60	5/parse=acc4401e663b
+mutate|tests/runtime/p3_n1_noverify.pruv	6 cases: error parse/syntax 3, error parse/refinement_syntax 1, error parse/stri	0/parse=5ce2feb4fbe7	1/parse=089aa0aaa3a8	2/parse=7a1ff01235cb	3/parse=e11c33df49d6	4/parse=1727afdb21a2	5/parse=e0f0835f7d74
 mutate|tests/runtime/p3_n1_storage.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=3c0c2dbacb9f	1/parse=882aaf7b23c3	2/parse=e8617a224293	3/parse=dca302de97f0	4/parse=fe9c643acd39	5/parse=26dff8d144a7
+mutate|tests/runtime/p3_r_cast_fail.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=2aa7cc5cac07	1/parse=6196fe940ad7	2/parse=fc3c77c12d5e	3/parse=5df6488c6707	4/parse=2aa7cc5cac07	5/parse=2aa7cc5cac07
+mutate|tests/runtime/p3_r_cast_fail_i16.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=4422a2436cb8	1/parse=e1a21ed8be58	2/parse=ac14fd2ba27e	3/parse=dd51ed28a7c8	4/parse=4422a2436cb8	5/parse=417f7abd8e5e
+mutate|tests/runtime/p3_r_cast_u64_big.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=02881879e9c3	1/parse=538216932ed0	2/parse=8daa1c37b38b	3/parse=32568da2f3e3	4/parse=0440e7a38051	5/parse=abcc810784dc
+mutate|tests/runtime/p3_r_idx_u32_oob.pruv	6 cases: error parse/syntax 6	0/parse=e2ed4f92c36c	1/parse=27362971828b	2/parse=dca23c5117cf	3/parse=7b6fecfc075b	4/parse=4cc640919d7e	5/parse=36dc1c6d8a0e
+mutate|tests/runtime/p3_r_idx_u64_oob.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=417f7abd8e5e	1/parse=4e35ad5d3a24	2/parse=fc5df914c751	3/parse=8bf906455924	4/parse=8ca783d044f6	5/parse=ee2352f9fd2c
+mutate|tests/runtime/p3_r_mul_i32.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=83c73141a2e8	1/parse=550cc6e33ef9	2/parse=ee2352f9fd2c	3/parse=c9db7d49b997	4/parse=550cc6e33ef9	5/parse=550cc6e33ef9
+mutate|tests/runtime/p3_r_mul_u32.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=d910fad2c22d	1/parse=32568da2f3e3	2/parse=25993b86ab4a	3/parse=411982fe48b9	4/parse=3f460a32a14c	5/parse=dd51ed28a7c8
+mutate|tests/runtime/p3_r_overflow.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=f10125f66769	1/parse=ee2352f9fd2c	2/parse=35d499cd1125	3/parse=84803a59bdd2	4/parse=197c5711cf97	5/parse=84803a59bdd2
+mutate|tests/runtime/p3_r_sdiv_neg.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=0a84c9c5c5f2	1/parse=0a84c9c5c5f2	2/parse=6124431c88f1	3/parse=d3cbc548ffc8	4/parse=391f358df130	5/parse=ee2352f9fd2c
+mutate|tests/runtime/p3_r_sdiv_negdiv.pruv	6 cases: ok 3, error parse/bad_char 1, error parse/reserved 1, error parse/synta	0/parse=0a84c9c5c5f2	1/parse=6f298ad4479d	2/parse=0a84c9c5c5f2	3/parse=de748fb9985c	4/parse=3974c88b2c9c	5/parse=ee2352f9fd2c
+mutate|tests/runtime/p3_r_srem_zero.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=66e0fa7f7996	1/parse=3693dc2b03b2	2/parse=9ac9ac6fab73	3/parse=dd51ed28a7c8	4/parse=3693dc2b03b2	5/parse=ee2352f9fd2c
+mutate|tests/runtime/p3_r_sub_u64.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=ee2352f9fd2c	1/parse=875ba351d7b0	2/parse=760100a2d893	3/parse=21369d9ae9d2	4/parse=385e86a4fa41	5/parse=11c702783b47
+mutate|tests/runtime/p3_r_udiv_zero.pruv	6 cases: error parse/syntax 3, ok 2, error parse/reserved_name 1	0/parse=a6b7b7c5f0de	1/parse=0299e1077dc7	2/parse=33a649264e31	3/parse=955b5294b250	4/parse=dd51ed28a7c8	5/parse=fcd05c2a608a
+mutate|tests/runtime/p3_r_underflow_i8.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=ee2352f9fd2c	1/parse=146835456243	2/parse=146835456243	3/parse=0fa9f477adc7	4/parse=61c06304e76f	5/parse=a114ed9e32ef
+mutate|tests/runtime/p3_r_unsigned_ops.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=70b3172f594c	1/parse=51f19b509f03	2/parse=ee2352f9fd2c	3/parse=210523905139	4/parse=7f14665ba91b	5/parse=acace9d484a1
+mutate|tests/runtime/p3_r_widths.pruv	6 cases: error parse/syntax 6	0/parse=7ad1029b5906	1/parse=004449ccaddd	2/parse=b2553ec33baa	3/parse=56da822e4b1c	4/parse=e03c5c99747b	5/parse=87792d06b53d
 mutate|tests/runtime/p3_s1_stack.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=e7e9ba2b5908	1/parse=b691450d1569	2/parse=aeb155f281a3	3/parse=417e89884db6	4/parse=feadd91822f8	5/parse=c525e71f2a33
 mutate|tests/runtime/p3_v1_budget.pruv	6 cases: error parse/syntax 3, ok 2, error parse/reserved_name 1	0/parse=b2ce0422557e	1/parse=ee2352f9fd2c	2/parse=c36be5474170	3/parse=8dd7f72570cc	4/parse=ba194f916760	5/parse=deb2a01ba3cc
 mutate|tests/runtime/p3_v1_fail.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=ee2352f9fd2c	1/parse=8ad718c0a7c5	2/parse=3c114f57a30d	3/parse=044c2216b6b3	4/parse=ee2352f9fd2c	5/parse=7e3aa3e0539d
@@ -3592,6 +3660,10 @@ runtime|tests/runtime/p1_r_bounds.pruv	1 case: ok 1	parse=d4360e25064e
 runtime|tests/runtime/p1_r_cast_fail.pruv	1 case: ok 1	parse=f19b2eecdece
 runtime|tests/runtime/p1_r_overflow.pruv	1 case: ok 1	parse=1eaad1ad7343
 runtime|tests/runtime/p2_r_u16_buf.pruv	1 case: ok 1	parse=a7c246ed57a9
+runtime|tests/runtime/p2_r_u16_field_oor.pruv	1 case: ok 1	parse=886a1e70a494
+runtime|tests/runtime/p2_r_u16_fill_oor.pruv	1 case: ok 1	parse=2c1c5d6c2ca7
+runtime|tests/runtime/p2_r_u16_paths.pruv	1 case: ok 1	parse=f5649b3a9512
+runtime|tests/runtime/p2_r_u16_push_oor.pruv	1 case: ok 1	parse=e64f17e24a23
 runtime|tests/runtime/p2_rt_bits.pruv	1 case: ok 1	parse=4e8e67e5da09
 runtime|tests/runtime/p2_rt_contract_guard.pruv	1 case: ok 1	parse=f7511cdb7b52
 runtime|tests/runtime/p2_rt_kernels.pruv	1 case: ok 1	parse=cb072777599c
@@ -3613,6 +3685,22 @@ runtime|tests/runtime/p3_m4_trunc_ctor.pruv	1 case: ok 1	parse=e135033c4518
 runtime|tests/runtime/p3_m5_unbox_str.pruv	1 case: ok 1	parse=fc9d76d6dbb3
 runtime|tests/runtime/p3_n1_noverify.pruv	1 case: ok 1	parse=ee15506ab4cd
 runtime|tests/runtime/p3_n1_storage.pruv	1 case: ok 1	parse=51fb84b04ab7
+runtime|tests/runtime/p3_r_cast_fail.pruv	1 case: ok 1	parse=2aa7cc5cac07
+runtime|tests/runtime/p3_r_cast_fail_i16.pruv	1 case: ok 1	parse=4422a2436cb8
+runtime|tests/runtime/p3_r_cast_u64_big.pruv	1 case: ok 1	parse=bfa10584d292
+runtime|tests/runtime/p3_r_idx_u32_oob.pruv	1 case: ok 1	parse=70d948a02d66
+runtime|tests/runtime/p3_r_idx_u64_oob.pruv	1 case: ok 1	parse=5a366c1840da
+runtime|tests/runtime/p3_r_mul_i32.pruv	1 case: ok 1	parse=550cc6e33ef9
+runtime|tests/runtime/p3_r_mul_u32.pruv	1 case: ok 1	parse=32c4df14b00f
+runtime|tests/runtime/p3_r_overflow.pruv	1 case: ok 1	parse=84803a59bdd2
+runtime|tests/runtime/p3_r_sdiv_neg.pruv	1 case: ok 1	parse=0a84c9c5c5f2
+runtime|tests/runtime/p3_r_sdiv_negdiv.pruv	1 case: ok 1	parse=0a84c9c5c5f2
+runtime|tests/runtime/p3_r_srem_zero.pruv	1 case: ok 1	parse=3693dc2b03b2
+runtime|tests/runtime/p3_r_sub_u64.pruv	1 case: ok 1	parse=43ed516a143b
+runtime|tests/runtime/p3_r_udiv_zero.pruv	1 case: ok 1	parse=fcd05c2a608a
+runtime|tests/runtime/p3_r_underflow_i8.pruv	1 case: ok 1	parse=146835456243
+runtime|tests/runtime/p3_r_unsigned_ops.pruv	1 case: ok 1	parse=81460b0ab14a
+runtime|tests/runtime/p3_r_widths.pruv	1 case: ok 1	parse=3630415f5623
 runtime|tests/runtime/p3_s1_stack.pruv	1 case: ok 1	parse=5190c2676054
 runtime|tests/runtime/p3_v1_budget.pruv	1 case: ok 1	parse=c36be5474170
 runtime|tests/runtime/p3_v1_fail.pruv	1 case: ok 1	parse=7e3aa3e0539d

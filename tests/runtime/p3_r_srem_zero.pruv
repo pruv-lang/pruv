@@ -1,0 +1,6 @@
+// P3 runtime: unverified isize remainder by zero fails (signed div/rem domain)
+fn f(a: i64, b: i64) -> i64 {
+  let x: isize = isize(a);
+  let y: isize = isize(b);
+  return i64(x % y);
+}

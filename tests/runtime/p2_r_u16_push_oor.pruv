@@ -1,0 +1,6 @@
+// P2-6 runtime: an unverified arr_push of 65536 into [u16] stops instead of wrapping
+fn push(v: i64) -> i64 ! alloc {
+  let mut a: [u16] = alloc(1, 7);
+  arr_push(inout a, v);
+  return a[1];
+}

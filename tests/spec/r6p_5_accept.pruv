@@ -1,0 +1,28 @@
+// spec: R-6p-5 accept
+fn widths(a: [i64], n: usize, k: u32, s: i8, w: u64) -> i64
+  requires len(a) == i64(n) && i64(n) > 0 && i64(k) < len(a) && i64(s) > -100 && i64(w) > 9223372036854775807
+  requires forall j in 0..len(a): -1000 <= a[j] && a[j] <= 1000
+{
+  let big: u64 = 18446744073709551615;
+  let d: u64 = big - w;
+  let t: i8 = s - 1;
+  let c: i32 = i32(k / 2);
+  let m: isize = isize(c) * 3;
+  let mut i: usize = 0;
+  let mut acc: i64 = 0;
+  while i < n
+    invariant i <= n && -1000 <= acc && acc <= 1000
+    decreases n - i
+  {
+    acc = a[i];
+    i = i + 1;
+  }
+  return acc + a[k] + i64(t) + i64(m) + i64(d / 4) + i64(u16(0));
+}
+
+fn down(x: u32) -> i64
+  decreases x
+{
+  if x == 0 { return 0; }
+  return down(x - 1);
+}

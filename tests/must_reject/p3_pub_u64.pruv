@@ -1,0 +1,2 @@
+// P3: u64 at the host boundary is bundle P12
+pub fn f(x: u64) -> i64 { return 0; }

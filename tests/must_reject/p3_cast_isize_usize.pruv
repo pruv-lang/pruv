@@ -1,0 +1,2 @@
+// P3: isize to usize needs a proven x >= 0
+fn f(x: isize) -> usize { return usize(x); }

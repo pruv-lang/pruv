@@ -1,0 +1,2 @@
+// P3: unary minus on i32 is small_int_op
+fn f(x: i32) -> i32 requires x > 0 { return -x; }

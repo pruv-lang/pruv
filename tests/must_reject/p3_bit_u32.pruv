@@ -1,0 +1,2 @@
+// P3: & on u32 is small_int_op
+fn f(x: u32) -> u32 { return x & 1; }
