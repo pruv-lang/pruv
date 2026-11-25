@@ -1455,6 +1455,7 @@ must_reject|must_reject/p7_fixed_contract.pruv	2 cases: exit 2	llvm=ff1c60cac157
 must_reject|must_reject/p7_fixed_contract_ensures.pruv	2 cases: exit 2	llvm=bbf73ebc6f00	rust=bbf73ebc6f00
 must_reject|must_reject/p7_fixed_copy.pruv	2 cases: exit 2	llvm=f627ddbb7a00	rust=f627ddbb7a00
 must_reject|must_reject/p7_fixed_count.pruv	2 cases: exit 2	llvm=f874588a791c	rust=f874588a791c
+must_reject|must_reject/p7_fixed_enum_eq.pruv	2 cases: exit 2	llvm=31fecb83f765	rust=31fecb83f765
 must_reject|must_reject/p7_fixed_eq.pruv	2 cases: exit 2	llvm=5d997fecbb6a	rust=5d997fecbb6a
 must_reject|must_reject/p7_fixed_field.pruv	2 cases: exit 2	llvm=e7fc8ddf9839	rust=e7fc8ddf9839
 must_reject|must_reject/p7_fixed_field_eq.pruv	2 cases: exit 2	llvm=5a4461e2d149	rust=5a4461e2d149
@@ -1465,6 +1466,9 @@ must_reject|must_reject/p7_fixed_field_oob.pruv	2 cases: exit 2	llvm=1c29e0f1416
 must_reject|must_reject/p7_fixed_field_owned.pruv	2 cases: exit 2	llvm=68f2eadb80a8	rust=68f2eadb80a8
 must_reject|must_reject/p7_fixed_for_in.pruv	2 cases: exit 2	llvm=7198ea418d5f	rust=7198ea418d5f
 must_reject|must_reject/p7_fixed_for_literal.pruv	2 cases: exit 2	llvm=bd3548ba819b	rust=bd3548ba819b
+must_reject|must_reject/p7_fixed_generic_eq.pruv	2 cases: exit 2	llvm=13c589dbfbbf	rust=13c589dbfbbf
+must_reject|must_reject/p7_fixed_generic_eq_chain.pruv	2 cases: exit 2	llvm=ea0480042d3e	rust=ea0480042d3e
+must_reject|must_reject/p7_fixed_generic_eq_option.pruv	2 cases: exit 2	llvm=d32af7c2d256	rust=d32af7c2d256
 must_reject|must_reject/p7_fixed_havoc_range.pruv	2 cases: exit 2	llvm=6f7c9739aa99	rust=6f7c9739aa99
 must_reject|must_reject/p7_fixed_inout_alias.pruv	2 cases: exit 2	llvm=4711df840774	rust=4711df840774
 must_reject|must_reject/p7_fixed_inout_range.pruv	2 cases: exit 2	llvm=06d524c238bd	rust=06d524c238bd
@@ -1492,6 +1496,7 @@ must_reject|must_reject/p7_fixed_oob.pruv	2 cases: exit 2	llvm=73caa40a8048	rust
 must_reject|must_reject/p7_fixed_oob_neg.pruv	2 cases: exit 2	llvm=a8eb0252ecbc	rust=a8eb0252ecbc
 must_reject|must_reject/p7_fixed_oob_u64.pruv	2 cases: exit 2	llvm=a8eb0252ecbc	rust=a8eb0252ecbc
 must_reject|must_reject/p7_fixed_oob_write.pruv	2 cases: exit 2	llvm=9a2d9b1e139c	rust=9a2d9b1e139c
+must_reject|must_reject/p7_fixed_option_eq.pruv	2 cases: exit 2	llvm=1d1486220e7d	rust=1d1486220e7d
 must_reject|must_reject/p7_fixed_owned.pruv	2 cases: exit 2	llvm=a9b8032154f1	rust=a9b8032154f1
 must_reject|must_reject/p7_fixed_par.pruv	2 cases: exit 2	llvm=56767184780f	rust=56767184780f
 must_reject|must_reject/p7_fixed_param_oob.pruv	2 cases: exit 2	llvm=73caa40a8048	rust=73caa40a8048
@@ -2758,7 +2763,7 @@ runtime|runtime/p7_rt_fixed_eval [--no-verify]	2 cases: exit 2	llvm=ce7955a071c8
 runtime|runtime/p7_rt_fixed_eval [default]	2 cases: exit 2	llvm=c27cbfa49bec	rust=f9598a994746
 runtime|runtime/p7_rt_fixed_field [--no-verify]	2 cases: exit 2	llvm=1a1cb94788d8	rust=d2e4bd1260f1
 runtime|runtime/p7_rt_fixed_field [default]	2 cases: exit 2	llvm=badafc84efd0	rust=9487c50d928d
-runtime|runtime/p7_rt_fixed_field_inout [--no-verify]	2 cases: exit 2	llvm=c0d0ee0b3b3b	rust=83e4d6c4f82c
+runtime|runtime/p7_rt_fixed_field_inout [--no-verify]	2 cases: exit 2	llvm=76b685a2cda0	rust=83e4d6c4f82c
 runtime|runtime/p7_rt_fixed_field_inout [default]	2 cases: exit 2	llvm=e8e7f7bf24ae	rust=52fe011d8718
 runtime|runtime/p7_rt_fixed_field_nested [--no-verify]	2 cases: exit 2	llvm=da1af037e0c1	rust=9367030b376b
 runtime|runtime/p7_rt_fixed_field_nested [default]	2 cases: exit 2	llvm=0d2545b83bcf	rust=6db35cfb9874
@@ -2779,6 +2784,8 @@ runtime|runtime/p7_rt_fixed_place [default]	2 cases: exit 2	llvm=2b5a07104244	ru
 runtime|runtime/p7_rt_fixed_place_if [--no-verify]	2 cases: exit 2	llvm=2749998ed9b2	rust=c2fb8fb180dd
 runtime|runtime/p7_rt_fixed_place_if [default]	2 cases: exit 2	llvm=503d712e341b	rust=94e312c95198
 runtime|runtime/p7_rt_fixed_proven [default]	2 cases: exit 2	llvm=5abd70d7a6de	rust=c1a350b9e4cc
+runtime|runtime/p7_rt_fixed_r1 [--no-verify]	2 cases: exit 2	llvm=f2a17a560b9e	rust=49927eed7988
+runtime|runtime/p7_rt_fixed_r1 [default]	2 cases: exit 2	llvm=084f1b437c6e	rust=6248df3fcfc2
 runtime|runtime/p7_rt_fixed_range [--no-verify]	2 cases: exit 2	llvm=632ad87159b1	rust=170d5bdc2498
 runtime|runtime/p7_rt_fixed_range [default]	2 cases: exit 2	llvm=cf5e57d8635a	rust=8cdb16e4e91f
 runtime|runtime/p7_rt_fixed_slice_pattern [--no-verify]	2 cases: exit 2	llvm=119274c160c1	rust=33f6f90fa6ee

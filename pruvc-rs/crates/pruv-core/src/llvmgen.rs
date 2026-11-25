@@ -4953,7 +4953,6 @@ impl<'a> FnGen<'a> {
         self.op(format!("{} {} {} to {}", if layout.starts_with('i') { "sext" } else { "zext" }, ty, x, target))
     }
 
-    /// P7-1: the storage of a fixed-array expression: a local's own slot, otherwise a fresh temporary filled from it.
     /// P7-1 B: `fixed_ptr` in contract form: a field path reads the contract value of its base
     fn cfixed_ptr(&mut self, e: &Expr) -> R<String> {
         match e {
@@ -4962,6 +4961,7 @@ impl<'a> FnGen<'a> {
         }
     }
 
+    /// P7-1: the storage of a fixed-array expression: a local's own slot, otherwise a fresh temporary filled from it.
     fn fixed_ptr(&mut self, e: &Expr) -> R<String> {
         match e {
             Expr::Var(v) => match self.lookup(&v.name) {
@@ -7384,7 +7384,8 @@ impl<'a> FnGen<'a> {
                 if n == "len" && expr_ty(arg(a, 0)?).as_deref().and_then(fixed_key).is_some() {
                     let f = expr_ty(arg(a, 0)?).as_deref().and_then(fixed_key).unwrap();
                     match arg(a, 0)? {
-                        Expr::Var(_) => {}
+                        // a variable or field path has no effect to evaluate, and its length is the constant N
+                        x if crate::check::place_root(x).is_some() => {}
                         // P7-1 B: a literal's elements are still evaluated in contract form
                         Expr::Call(c) if c.name == ARRAY_LIST || array_repeat_len(&c.name).is_some() => {
                             self.fixed_lit_cev(c)?;

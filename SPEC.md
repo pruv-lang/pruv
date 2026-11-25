@@ -1184,7 +1184,10 @@ fn tree_count(t: Tree) -> i64
   `return`) copies it and needs `! alloc`; a fresh constructor or call result moves without a copy. Any constructor
   of a recursive value needs `! alloc`. While a `match` arm views part of a mutable local, that local cannot be
   changed (`type/recursive_borrow`). Whole-value `==`/`!=` on values that contain arrays (including a `[T; N]` struct field), strings or owned collections is rejected
-  (`type/eq_type`); compare tags, lengths and elements instead.
+  (`type/eq_type`); compare tags, lengths and elements instead. The same holds through generics (P7-1 R1): a call
+  that binds a type parameter compared with `==`/`!=` in the callee's contracts (directly, or by passing it on to
+  such a callee) to a type holding a `[T; N]` (alone, in a struct, or in an `Option`/enum payload) is `type/eq_type`
+  at that call; other generic calls take such types as usual.
 - **Limits.** Recursive and buffer-field types cannot be generic arguments, `Option`/`Result` payloads or G6
   collection elements, except the owned aggregates of R-6e-3 and the vector edges of R-6e-20. Functions whose signatures use these types are internal, except
   the Rust entries in R-6e-5, R-6e-6 and R-6f-2. In explicit mode other host entry signatures

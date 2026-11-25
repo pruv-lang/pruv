@@ -1,0 +1,17 @@
+// P7-1 R1: the == reaches S through the caller's own type parameter (g<U> passes U on to neq, and g has no
+// == of its own); a generic without == still takes S
+struct S { a: [i64; 2] }
+fn neq<T>(x: T, y: T) -> i64
+  requires !(x == y)
+{ return 0; }
+fn g<U>(x: U, y: U) -> i64
+{ return neq::<U>(x, y); }
+fn h<V>(x: V, y: V) -> i64
+{ return 0; }
+fn f() -> i64
+{
+  let s: S = S { a: [0, 5] };
+  let t: S = S { a: [0, 5] };
+  let k: i64 = h::<S>(s, t);
+  return k + g::<S>(s, t);
+}

@@ -393,6 +393,10 @@ struct Checker {
     fn_sccs: Vec<Vec<String>>,
     /// (caller name, call line, call col, call targs, callee name) of every checked user call
     call_log: Vec<(String, i64, i64, Option<Vec<GType>>, String)>,
+    /// P7-1 R1: type parameters (owner, index) compared with `==` in a contract
+    eq_tparams: HashSet<(String, usize)>,
+    /// P7-1 R1: (call line, call col, call targs, callee name) of every user call with type arguments, contracts included
+    targ_log: Vec<(i64, i64, Vec<GType>, String)>,
     /// Roots of enclosing extended matches, with a flag for map_get scrutinees.
     active_roots: Vec<(String, bool)>,
     /// Places held by map_get Some arms, checked for overlap when taking an entry.
@@ -1390,6 +1394,8 @@ impl Checker {
             buffered: HashSet::new(),
             fn_sccs: Vec::new(),
             call_log: Vec::new(),
+            eq_tparams: HashSet::new(),
+            targ_log: Vec::new(),
             active_roots: Vec::new(),
             map_read_paths: Vec::new(),
             match_paths: Vec::new(),
@@ -1478,6 +1484,7 @@ impl Checker {
             self.fn_(f)?;
             self.reject_stray_empty_views(f)?;
         }
+        self.check_eq_targs()?; // P7-1 R1
         self.check_fn_sccs(&prog.functions)?; // G9 A0: measures and stable type parameters of recursive call SCCs
         self.check_par_eligibility(&prog.functions)?; // G7 A0: effects, foreign calls, then nested groups
         self.check_costs(prog)?;
@@ -3173,6 +3180,46 @@ impl Checker {
             }
         }
         Ok(())
+    }
+
+    /// P7-1 R1: `==` on a type parameter in a contract compares whole SMT values, and a `[T; N]` (alone or inside a
+    /// struct) is an SMT array whose cells past N are free, so the proof could tell equal values apart. A call that
+    /// binds such a parameter, directly or through the caller's own parameters, to a type holding a fixed array is
+    /// `type/eq_type`.
+    fn check_eq_targs(&mut self) -> Res<()> {
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (_, _, targs, callee) in &self.targ_log {
+                let owner = fn_owner(callee);
+                for (k, t) in targs.iter().enumerate() {
+                    if self.eq_tparams.contains(&(owner.clone(), k)) {
+                        let mut found = HashSet::new();
+                        collect_tparams(t, &mut found);
+                        for tp in found {
+                            changed |= self.eq_tparams.insert(tp);
+                        }
+                    }
+                }
+            }
+        }
+        for (line, col, targs, callee) in &self.targ_log {
+            let owner = fn_owner(callee);
+            for (k, t) in targs.iter().enumerate() {
+                if self.eq_tparams.contains(&(owner.clone(), k)) && self.holds_fixed(t) {
+                    return Err(terr(*line, *col, "eq_type",
+                        format!("{} compares its type parameter with == in a contract (directly or through a call), and {} holds a fixed-length array",
+                            callee, tn(t)),
+                        "compare the elements in a dedicated non-generic function"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// a `[T; N]` itself, or a declaration that holds one (buffered), anywhere in `t`
+    fn holds_fixed(&self, t: &GType) -> bool {
+        t.is_fixed() || (t.owner.is_none() && self.buffered.contains(&t.name)) || t.args.iter().any(|a| self.holds_fixed(a))
     }
 
     fn check_fn_sccs(&mut self, functions: &[Function]) -> Res<()> {
@@ -6130,6 +6177,10 @@ impl Checker {
                                 "compare tags, lengths and indexed contents instead",
                             ));
                         }
+                        if c {
+                            // P7-1 R1: an instantiation holding a [T; N] makes this == unsound (check_eq_targs)
+                            collect_tparams(&lt, &mut self.eq_tparams);
+                        }
                         if lt.owner.is_some() && !c {
                             return Err(terr(
                                 x.line,
@@ -7851,6 +7902,11 @@ impl Checker {
         if let Some(m) = &m {
             e.inst = Some(inst_of(fn_owner(&n), targs.as_deref().unwrap_or(&[]), m));
         }
+        if cat.is_none() {
+            if let Some(ta) = &targs {
+                self.targ_log.push((line, col, ta.clone(), n.clone()));
+            }
+        }
         let m = m.unwrap_or_default();
         arity(f.params.len())?;
         for (arg, p) in e.args.iter_mut().zip(f.params.iter()) {
@@ -8848,4 +8904,14 @@ fn is_text_view_op(n: &str) -> bool {
 fn empty_view_err(line: i64, col: i64) -> PruvError {
     terr(line, col, "type_mismatch", "`[]` is the static empty view; it is only allowed in a `ref [T]` position",
         "use it as a `ref [T]` let, a `ref` field or the result of a `from` function, or alloc(0, v) for an owned array")
+}
+
+/// P7-1 R1: the type parameters (owner, index) mentioned anywhere in `t`
+fn collect_tparams(t: &GType, out: &mut HashSet<(String, usize)>) {
+    if let Some(o) = &t.owner {
+        out.insert((o.clone(), t.index));
+    }
+    for a in &t.args {
+        collect_tparams(a, out);
+    }
 }

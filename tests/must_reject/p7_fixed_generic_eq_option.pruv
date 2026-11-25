@@ -1,0 +1,9 @@
+// P7-1 R1: the type argument Option<S> holds a [T; N] through S
+struct S { a: [i64; 2] }
+fn neq<T>(x: T, y: T) -> i64
+  requires !(x == y)
+{ return 0; }
+fn f(s: S, t: S) -> i64
+{
+  return neq::<Option<S>>(Some::<S>(s), Some::<S>(t));
+}
