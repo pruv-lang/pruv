@@ -276,8 +276,31 @@ def _unknown_attempt(a):
     return a
 
 
+# Cases whose whole trace depends on machine load (CI-1 in docs/RUST_PARITY_SPEC.md §7): z3's per-query wall-clock
+# limit turns a load-dependent number of inference queries "unknown", which changes the exploration, the obligation
+# list and the final errors; on a loaded machine the whole-inference deadline stops it first (status timeout instead
+# of budget_exhausted). For these only the inference outcome per loop (function, loop, fallback, kept invariants, and
+# whether it stopped early) is hashed, so the golden still checks that the stop path fires and drops every candidate. Remove an entry once its case is
+# deterministic (resource limit only).
+LOAD_DEPENDENT = ("tests/inference/inf_budget.pruv",)
+
+
+def load_dependent(case):
+    p = os.path.normpath(case.path).replace(os.sep, "/")
+    return any(p == s or p.endswith("/" + s) for s in LOAD_DEPENDENT)
+
+
+def load_dependent_outcome(obj):
+    return {"options": obj.get("options"),
+            "inference": [dict({k: e.get(k) for k in ("fn", "loop", "fallback", "invariants")},
+                               status="<stopped>" if e.get("status") in ("budget_exhausted", "timeout") else e.get("status"))
+                          for e in (obj.get("inference") or []) if isinstance(e, dict)]}
+
+
 def golden_text(case):
     """The text that is hashed: the raw Rust line, or its canonical dump when golden_normalize changed something."""
+    if load_dependent(case):
+        return canon(load_dependent_outcome(case.rs_obj))
     norm = golden_normalize(case.rs_obj)
     if norm == case.rs_obj:
         return case.rs_raw
