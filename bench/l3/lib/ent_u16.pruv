@@ -1,4 +1,6 @@
 // L3-8 entry: UTF-16 unit buffers ([i64], every element 0..65535) and total accessors.
+// Hand Rust baseline: hand/ent_u16.rs (`&[u16]` / `Vec<u16>`); the one-unit-per-`i64` element type is gap U
+// (consumer API), see RESHAPE.md step 3.1.
 // Total accessors (rd/wr/slice) make every index in-bounds by construction: an out-of-range read gives 0 and an
 // out-of-range write is dropped. Validation of packets happens before use, so these are defence in depth, not control flow.
 
@@ -47,10 +49,7 @@ pub fn slice(a: [i64], s: i64, e: i64) -> [i64] ! alloc
   if lo < 0 { lo = 0; }
   if hi > n { hi = n; }
   if hi <= lo { return empty(); }
-  let m: i64 = hi - lo;
-  let mut o: [i64] = alloc(m, 0);
-  copy_range(inout o, 0, a, lo, m);
-  return o;
+  return copy(subview(a, lo, hi));
 }
 
 pub fn cat(a: [i64], b: [i64]) -> [i64] ! alloc
@@ -59,9 +58,10 @@ pub fn cat(a: [i64], b: [i64]) -> [i64] ! alloc
   let na: i64 = len(a);
   let nb: i64 = len(b);
   if na > 1073741823 || nb > 1073741823 { return empty(); }
-  let mut o: [i64] = alloc(na + nb, 0);
-  copy_range(inout o, 0, a, 0, na);
-  copy_range(inout o, na, b, 0, nb);
+  let mut o: [i64] = alloc(0, 0);
+  arr_reserve(inout o, na + nb);
+  arr_append(inout o, a, 0, na);
+  arr_append(inout o, b, 0, nb);
   return o;
 }
 
@@ -70,20 +70,20 @@ pub fn lit(s: str) -> [i64] ! alloc
   ensures len(result) == len(s)
 {
   let n: i64 = len(s);
-  let mut o: [i64] = alloc(n, 0);
+  let mut o: [i64] = alloc(0, 0);
+  arr_reserve(inout o, n);
   let mut i: i64 = 0;
   while i < n
-    invariant 0 <= i && i <= n && n == len(s) && len(o) == n
+    invariant 0 <= i && i <= n && n == len(s) && len(o) == i
     decreases n - i
-  { o[i] = s[i]; i = i + 1; }
+  { arr_push(inout o, s[i]); i = i + 1; }
   return o;
 }
 
 pub fn one(u: i64) -> [i64] ! alloc
   ensures len(result) == 1
 {
-  let mut o: [i64] = alloc(1, 0);
-  o[0] = u;
+  let o: [i64] = alloc(1, u);
   return o;
 }
 
@@ -91,15 +91,7 @@ pub fn eq(a: [i64], b: [i64]) -> bool
 {
   let n: i64 = len(a);
   if n != len(b) { return false; }
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(a) && n == len(b)
-    decreases n - i
-  {
-    if a[i] != b[i] { return false; }
-    i = i + 1;
-  }
-  return true;
+  return eq_range(a, 0, b, 0, n);
 }
 
 // a equals the ASCII literal s
@@ -161,7 +153,7 @@ pub fn trim(a: [i64]) -> [i64] ! alloc
     invariant s <= e && e <= n && 0 <= s && n == len(a)
     decreases e - s
   { e = e - 1; }
-  return slice(a, s, e);
+  return copy(subview(a, s, e));
 }
 
 // ---- W4core additions (new helpers only; nothing above is changed) ----
@@ -172,6 +164,7 @@ pub fn clamp(x: i64, hi: i64) -> i64
   ensures 0 <= result && result <= hi
   ensures (0 <= x && x <= hi) ==> result == x
   ensures x > hi ==> result == hi
+  ensures x < 0 ==> result == 0
 {
   if x < 0 { return 0; }
   if x > hi { return hi; }
@@ -184,20 +177,17 @@ pub fn put_range(inout o: [i64], at: i64, src: [i64], s: i64, m: i64) -> i64
   requires 0 <= at && at <= 4294967296 && 0 <= s && s <= 4294967296
   ensures len(o) == len(old(o)) && at <= result && result <= at + 1073741824
 {
-  let mut mm: i64 = m;
-  if mm < 0 { mm = 0; }
-  if mm > 1073741824 { mm = 1073741824; }
-  if mm >= 8 && at + mm <= len(o) && s + mm <= len(src) {
-    copy_range(inout o, at, src, s, mm);
-    return at + mm;
-  }
-  let mut k: i64 = 0;
-  while k < mm
-    invariant 0 <= k && k <= mm && mm <= 1073741824 && 0 <= at && at <= 4294967296 && 0 <= s && s <= 4294967296 && len(o) == len(old(o))
-    decreases mm - k
-  {
-    wr(inout o, at + k, rd(src, s + k));
-    k = k + 1;
+  let mm: i64 = clamp(m, 1073741824);
+  // room: the part of [at, at + mm) inside o; k: the part of that with a source unit; the rest of room writes 0
+  let room: i64 = clamp(len(o) - at, mm);
+  if room > 0 {
+    let k: i64 = clamp(len(src) - s, room);
+    if k > 0 { copy_range(inout o, at, src, s, k); }
+    let mut j: i64 = at + k;
+    while j < at + room
+      invariant at + k <= j && j <= at + room && at + room <= len(o) && len(o) == len(old(o))
+      decreases at + room - j
+    { o[j] = 0; j = j + 1; }
   }
   return at + mm;
 }
