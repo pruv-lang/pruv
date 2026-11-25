@@ -9,8 +9,8 @@ verifier and test runs changed.
 - `rpc::start` ensures `len(ctl) == 8 && ctl[6] == 0` (the paging loop invariant needs the line length bound on entry).
 - `rpc::child_args` reads each argument span into `lo`/`hi` and checks bounds and char boundaries at run time before
   `substr` (the solver timed out proving them from the split array).
-- `read::replay` is split: `feed` (one turn: `begin`, optional `answer`, `add_tools`) and `add_tools` (the `tool`
-  loop) carry small contracts, so the replay loop no longer holds the collector's full ensures in one context.
+- `read::replay` calls `feed` (one turn: `begin`, optional `answer`, one `turns::tool(n)` with the item sum, where the hand adds 1 per item;
+  `add_tools` and its loop were removed in reset step 2.12), which carries a small contract, so the replay loop no longer holds the collector's full ensures in one context.
   `turns::grow` stays in the caller (an inout parameter cannot be reassigned as a whole).
 - Overflow-safe guards are written `po > len(hb) - pn` rather than `po + pn > len(hb)`.
 - `read::finish` checks each plan item offset (`0..18000`) at run time and carries the text-length bounds in the row

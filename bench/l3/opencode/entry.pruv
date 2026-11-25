@@ -77,29 +77,6 @@ fn count_tools(d: crate::json::JsonDocument, ids: [i64]) -> i64 ! alloc
   return c;
 }
 
-// n tool items on the current draft, one turns::tool call per tool part (no-op without a current draft).
-fn add_tools(n: i64, inout st: [i64], inout sl: [i64]) -> ()
-  requires len(st) == 4 && len(sl) == 1600 && 0 <= st[3] && st[3] < 200 && 0 <= n
-  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-  ensures len(st) == 4 && len(sl) == 1600 && st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
-  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-{
-  let mut k: i64 = 0;
-  while k < n
-    invariant 0 <= k && k <= n && len(st) == 4 && len(sl) == 1600
-    invariant st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
-    invariant 0 <= st[3] && st[3] < 200
-    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-    invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-    decreases n - k
-  {
-    crate::turns::tool(inout st, inout sl);
-    k = k + 1;
-  }
-}
-
 // isoOf of tape value id as bytes: empty = absent (also a missing id), 24 bytes = present, 1 byte = iso_of defect (corrupt tape).
 pub fn iso_bytes(d: crate::json::JsonDocument, id: i64) -> [u8] ! alloc
   ensures len(result) == 0 || len(result) == 1 || len(result) == 24
@@ -214,7 +191,7 @@ fn feed_assistant(d: crate::json::JsonDocument, info: i64, parts: i64, inout st:
   if len(at) == 1 { return -1; }
   crate::turns::answer(inout st, inout sl, inout buf, txt, at);
   let tools: i64 = count_tools(d, ids);
-  add_tools(tools, inout st, inout sl);
+  crate::turns::tool(inout st, inout sl, tools);
   return 0;
 }
 

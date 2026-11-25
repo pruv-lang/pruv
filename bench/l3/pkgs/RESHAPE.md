@@ -225,7 +225,7 @@ across the host boundary on both backends). Rows below list what differs inside 
 | X3 | `grow_line(line, cap)` | `read_line` into a reused `String` (`clear`, capacity kept) | `[u8]` | `take line` (2.2b) | — | `let mut b = move line; b = resize(b, n, 0)`: one in-place `reserve_exact` + `resize` (Vec growth) | **changed in 2.2b**: `grow_line(take line, cap)`, the one caller `grok/rpc.pruv:750` passes `move aux` and assigns it back. = for the growth itself. The caller is not a line reader: `aux` holds the error-reply detail and the code bytes already written, which `resize` keeps (**W-c**: error-reply storage API; the hand Grok borrows the code range). |
 | X4 | `receive_grow` event bytes | `line.as_bytes().to_vec()` once | `[u8]` | `ev_proc_read_into(move q, slot, 1, inout chunk, inout got)` | — | 1 (=) | **changed in 2.2b**: reads the event bytes straight into `chunk`. = |
 | X5 | `receive_grow` framing | `BufReader::read_line` (newline kept, partial last line returned at EOF) | `[u8]` | `inout line` | scan to the newline (or cap), then `truncate` to the filled length and one `arr_append` of the chunk | growth only (amortized inside `arr_append`, no zero fill) | **changed in 2.2c**: growth is the hand's append (the 2.2b `resize` zero fill is gone). **changed in 2.4**: the newline scan is one `find_byte(chunk, 10, begin, stop)` (R-6g5-3; Rust `position`, LLVM `memchr`) with `stop` the buffered end bounded by the room under cap, as `read_line` (`codex/hand/reader.rs:30`, `memchr` in `read_until`). **=** for scan and growth (2.2c residue **MC** closed by LB6). Framing semantics differ on purpose (**W-c**): Pruv appends raw bytes with no UTF-8 check (consumers parse the line as JSON, which checks it), where `read_line` into a `String` validates and returns its error with `?`; Pruv excludes the newline and drops/flags a partial last line at EOF per the `st` status (-3 at cap kept); consumers rely on that. |
-| X6 | `st: [i64]` 5-slot state | locals of the reader thread | packet | `inout` | — | none | **W-c**: API of mcp/codex/grok; consumer step. |
+| X6 | `Reader { status, filled, at, exit, end }` (was `st: [i64]` 5-slot state) | locals of the reader (`codex/hand/reader.rs` `Rpc { output, line }`, blocking `read_line`) | named struct | `inout` | — | none | **changed in 2.12**: the packet is a named struct built by `transport::reader_new`; every consumer (mcp, codex, grok) uses the field names. The chunk cursor `at..end` and `status` stay as fields because the event loop returns between reads (**W-c**, see X1). |
 | X7 | stderr `crate::tail::push(inout tl, 1, err)` | `tail.push(1, &bytes)` | `tail::Tail` | `inout tl` (= `&mut tail`) | — | none | = since step 2.10 (was `tail_push(inout tb, inout ts, 2, ..)`, FM). |
 
 ## Notes on review findings judged not to be bugs
@@ -815,3 +815,77 @@ assistant text and tool counts fed to the collector. Points it raised and where 
 - Gap rows B, B-LLVM, V, ABI, U, U8, S, P7-1, CW, BV and the new R, CL, T, CH, KQ: open.
 - grok `assistant_view`: `n` calls of `turns::tool` where the hand makes one `tool(n)` (waits on the T-rows rewrite).
 - grok `event_step`: the dropped-line arm copies 8192 bytes with `util::span_bytes` (the hand borrows).
+
+## Step 2.12: consumer API changes for `turns` and `transport`
+
+Hand counterparts: `grok/perf/hand_history.rs` (`Collector`, `Slot`, `tool(&mut self, n)`, `dropped_user`),
+`codex/hand/reader.rs` (`Rpc { output: BufReader, line: String }`, `turn.tools += 1` per tool item; Pruv passes the item sum once), `claude/handrust` `tool`.
+`claude` keeps its own frozen `claude/turns.pruv` (its manifests reach only `json` and `jstr`), so the `pkgs/turns`
+consumers are qwen, grok, codex and opencode.
+
+### Changed
+
+| Row | Before | After | Hand |
+|---|---|---|---|
+| T4 `tool` | `tool(inout st, inout sl)`: one call per tool call; codex, opencode and grok each had a private `add_tools(n, ..)` loop | `tool(inout st, inout sl, n)`: `tools = min(tools + n, 1e15)` in one step; the three `add_tools` loops are gone, qwen passes 1 | `tool(&mut self, n)`: `(s.tools + n).min(TOOLS_MAX)` |
+| grok `assistant_view` | `add_tools(tools, ..)` = `tools` calls of `turns::tool` | one `turns::tool(.., tools)` | one `tool(n)` |
+| grok `read::event_step` (dropped line) | copied the head with `util::span_bytes(win, lo, hi)` (up to 8192 bytes) | `framing::dropped_user(subview(win, lo, hi))`: borrowed | `dropped_user(&win[p..p + DROP_HEAD])` |
+| X6 | `st: [i64]` 5-slot packet | `transport::Reader { status, filled, at, exit, end }` from `reader_new()`; mcp, codex and grok use the field names | reader state as named locals/fields |
+
+grok `q_mutants.py` M11 keeps only the marker variant (the `add_tools` inject target is gone; the marker now makes
+`tool(.., 1)`). Docs that named `add_tools` (codex `IMPL_NOTES.md`, grok `Q_README.md`, grok `DESIGN.md`) are updated;
+the step 2.4 and 2.11 mentions above are history and stay.
+
+### Not changed (gap rows)
+
+- **T7, T9, T10** stay. The hand shape is `Collector { slots: Vec<Slot> }` with an owned `Vec<u8>` (`String`) per
+  prompt and reply, filled in place and then serialised by the consumer. Probes on pruvc-rs (main, this step):
+  a struct with a `Vec<Slot>` field is rejected on LLVM ("has owned collection fields, which need the Rust backend"),
+  an `inout Vec<Slot>` parameter is rejected ("G6 foreign calls and collections are not implemented by the llvm
+  codegen layer yet"), and `vec_at_mut` on a local `Vec<Slot>` with a `[u8]` field is rejected ("vec_at_mut needs the
+  Rust backend"). All four consumers run on LLVM, so the rewrite would leave the LLVM pair. New gap id **VL** below;
+  T7/T9/T10 keep **W-c** with **ABI / V** and **VL**.
+- **X1, X2** stay **W-c** with no hand counterpart: the hand blocks on `read_line`/`write_all` (codex) or uses a
+  reader thread with `recv_timeout` (supervisor), Pruv keeps one event loop with host effects. So `send` keeps its
+  deadline `ms`, `poll` and the 8-poll `expired` stay, and `Reader.status`/`at..end` stay as fields because the loop
+  returns between reads. The API is already send / close / poll; nothing Node-style is left in it after X6.
+- **X3** (`grow_line` used by grok for the error-reply buffer `aux`) is unchanged; still the **W-c** error-reply
+  storage row.
+- **X4, X5** were already `=`.
+
+| Id | Hand Rust form | What Pruv cannot express | Functions left unchanged |
+|---|---|---|---|
+| VL | `Collector { slots: Vec<Slot> }`, `Slot { prompt: String, reply: String, .. }` filled in place | `Vec<S>` of a non-recursive struct with owned `[u8]` fields on LLVM (struct field, `inout` parameter and `vec_at_mut`; R-6e-21 covers only recursive groups) | `turns` T7, T9, T10 (and the slot packet of T0) |
+
+### Consumer tests (step 2.12)
+
+pruvc-rs, pairs rs/rust and rs/llvm. claude is not a `pkgs/turns` consumer and was not run.
+
+| Runner | rs/rust | rs/llvm |
+|---|---|---|
+| qwen `test_impl.py` | 26 / 26 | 26 / 26 |
+| opencode `test_impl.py` | 199 / 199 | 199 / 199 |
+| codex `test_impl.py` | 136 / 136 | 136 / 136 |
+| mcp `test_impl.py` | 22 / 22 | 22 / 22 |
+| grok `test_impl --no-ts` (`GROK_COMPILE_WALL=3600`) | 254 / 254 | 254 / 254 |
+
+Nothing was measured.
+
+### Independent structure comparison
+
+Before the commit a separate static read (Codex gpt-6.2-astra, high) against `HEAD` and the hand sources found no input
+whose Pruv output changes: the tool counts of all four callers, the borrowed `[lo, hi)` range of `event_step` (the same
+range `span_bytes` copied and the hand slices) and every `Reader` field (0 status, 1 filled, 2 at, 3 exit, 4 end) are
+kept. `reader_new` starts `status` at -6 instead of 0; every reader writes -6 before the first read. Points it raised:
+
+- `turns::tool` with `n` near `i64::MAX` saturates to 1e15 where the hand `(t + n).min(..)` would overflow; no caller
+  reaches it (grok counts array elements of a line under 1 MiB, codex checks `0..=1e8`).
+- grok `assistant_view` skips the call for 0 tools where the hand calls `tool(0)`; same value.
+- Existing differences (unchanged here): the codex RPC framing vs hand `Rpc::call` (EOF without LF, a bad line skipped,
+  the 8 MiB cap), the event pump and the 8-poll `expired` (X1, X2), and the codex `parse_line` trim copy.
+
+### Rows still open after step 2.12
+
+- `turns` T7, T9, T10 (**VL**, **ABI / V**).
+- `transport` X1, X2, X3 (**W-c**, no hand counterpart for the event loop).
+- Gap rows B, B-LLVM, V, ABI, U, U8, S, P7-1, CW, BV, R, CL, T, CH, KQ and the new VL: open.

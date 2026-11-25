@@ -71,10 +71,10 @@ pub fn start(binary: str, argv: str, cwd: str, timeout_ms: i64, inout ctl: [i64]
 // trim the line, parse it as JSON (P1: invalid UTF-8 is a parse failure and the line is skipped).
 // DB59 (G-DB58-1): line.data stays with the caller and is reused for the next line (its size stays at the longest
 // line so far, as hand's cleared `self.line`); the document copies out only the trimmed line, once.
-pub fn parse_line(inout line: crate::util::ByteBuffer, n: i64, st: [i64]) -> crate::json::JsonParse ! alloc
+pub fn parse_line(inout line: crate::util::ByteBuffer, n: i64, st: crate::transport::Reader) -> crate::json::JsonParse ! alloc
   requires 0 <= n && n <= len(line.data) && len(line.data) <= 8388608
-  requires len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data)
-  ensures len(line.data) <= 8388608 && st[1] <= len(line.data)
+  requires 0 <= st.filled && st.filled <= len(line.data)
+  ensures len(line.data) <= 8388608 && st.filled <= len(line.data)
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
 {
   let mut r: [i64] = alloc(2, 0);
@@ -85,18 +85,18 @@ pub fn parse_line(inout line: crate::util::ByteBuffer, n: i64, st: [i64]) -> cra
 // The shared transport requires a full-sized line buffer. Keep its polling and event order
 // here, growing only the line storage while keeping the wire limit fixed.
 fn receive(take l: Loop, slot: i64, overall: i64,
-  inout st: [i64], inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
-  requires len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  inout st: crate::transport::Reader, inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
+  requires 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
   requires len(line.data) <= 8388608
   requires crate::tail::tail_ok(tl) && tl.limit == 1024
-  ensures len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  ensures 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
   ensures len(line.data) <= 8388608
   ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
-  st[0] = -6;
+  st.status = -6;
   let mut q: Loop = crate::transport::poll(move l, overall, -1, true, inout st, 0);
-  if st[0] != -6 { return move q; }
-  if !ev_ok(q) || !crate::transport::live(q, slot) { st[0] = -5; return move q; }
+  if st.status != -6 { return move q; }
+  if !ev_ok(q) || !crate::transport::live(q, slot) { st.status = -5; return move q; }
   if !ev_eof(q, slot) {
     q = ev_proc_read(move q, slot, 2, 65536);
     if ev_ok(q) {
@@ -104,48 +104,48 @@ fn receive(take l: Loop, slot: i64, overall: i64,
       crate::tail::push(inout tl, 1, err);
     }
   }
-  if st[2] == st[4] && ev_ok(q) && crate::transport::live(q, slot) && !ev_eof(q, slot) {
+  if st.at == st.end && ev_ok(q) && crate::transport::live(q, slot) && !ev_eof(q, slot) {
     // DB58: read straight into `chunk` (no `ev_bytes` copy of the loop buffer per read)
     let mut got: i64 = 0;
     q = ev_proc_read_into(move q, slot, 1, inout chunk, inout got);
     if ev_ok(q) {
-      st[4] = got;
-      st[2] = 0;
+      st.end = got;
+      st.at = 0;
     }
   }
-  let begin: i64 = st[2];
-  let filled: i64 = st[1];
+  let begin: i64 = st.at;
+  let filled: i64 = st.filled;
   let mut i: i64 = begin;
-  while i < st[4] && i - begin < 8388608 - filled && chunk[i] != 10
-    invariant 0 <= begin && begin <= i && i <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  while i < st.end && i - begin < 8388608 - filled && chunk[i] != 10
+    invariant 0 <= begin && begin <= i && i <= st.end && st.end <= 65536 && len(chunk) == 65536
     invariant i - begin <= 8388608 - filled
-    decreases st[4] - i
+    decreases st.end - i
   {
     i = i + 1;
   }
   let needed: i64 = filled + (i - begin);
   if needed > len(line.data) { crate::util::grow_bytes(inout line.data, needed, 8388608); }
   crate::bytes::copy_span(inout line.data, filled, chunk, begin, i);
-  st[1] = needed;
-  if i < st[4] {
+  st.filled = needed;
+  if i < st.end {
     if chunk[i] == 10 {
-      st[0] = needed;
-      st[1] = 0;
+      st.status = needed;
+      st.filled = 0;
     } else {
-      st[0] = -3;
+      st.status = -3;
     }
     i = i + 1;
   }
-  st[2] = i;
-  if st[0] == -6 && ev_ok(q) {
-    if crate::transport::live(q, slot) && ev_eof(q, slot) && st[2] == st[4] {
+  st.at = i;
+  if st.status == -6 && ev_ok(q) {
+    if crate::transport::live(q, slot) && ev_eof(q, slot) && st.at == st.end {
       q = ev_proc_wait_for(move q, slot, 10);
       if ev_ok(q) {
         if slot >= 0 && slot < ev_cap(q) && ev_kind(q, slot) == 0 {
           // A timer that fired during the wait takes precedence over the exit.
-          st[3] = ev_exit(q);
+          st.exit = ev_exit(q);
           q = crate::transport::poll(move q, overall, -1, true, inout st, 0);
-          if st[0] == -6 { st[0] = -4; }
+          if st.status == -6 { st.status = -4; }
         } else {
           q = crate::transport::poll(move q, overall, -1, true, inout st, 0);
         }
@@ -154,31 +154,31 @@ fn receive(take l: Loop, slot: i64, overall: i64,
       q = crate::transport::poll(move q, overall, -1, true, inout st, 10);
     }
   }
-  if !ev_ok(q) { st[0] = -5; }
+  if !ev_ok(q) { st.status = -5; }
   return move q;
 }
 
 // One receive step of a caller's pump loop (the caller parses each line once and keeps the document; a document cannot
 // travel back with the loop). ctl[5] = 1 when a line of ctl[6] bytes is in `line`, 0 when nothing usable arrived.
 // An oversized line, a closed child, a timeout or a transport failure sets ctl[0].
-pub fn step(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64], inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
+pub fn step(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: crate::transport::Reader, inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
   requires len(ctl) == 8
-  requires len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  requires 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
   requires len(line.data) <= 8388608
   requires crate::tail::tail_ok(tl) && tl.limit == 1024
   ensures len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
-  ensures len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  ensures 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
   ensures len(line.data) <= 8388608
   ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
   let mut q: Loop = receive(move l, slot, overall, inout st, inout line, inout chunk, inout tl);
-  let n: i64 = st[0];
+  let n: i64 = st.status;
   ctl[5] = 0;
   ctl[6] = 0;
   if n < 0 && n != -6 {
     ctl[0] = 6;
     if n == -1 { ctl[0] = 5; }
-    if n == -4 { ctl[7] = st[3]; }
+    if n == -4 { ctl[7] = st.exit; }
   } else if n >= 0 && n <= len(line.data) {
     ctl[5] = 1;
     ctl[6] = n;
@@ -210,13 +210,13 @@ pub fn not_handled(d: crate::json::JsonDocument) -> [u8] ! alloc
 }
 
 // initialize (id 1), then the initialized notification. An error response to initialize is read-failed at stage 2.
-pub fn open(take l: Loop, inout ctl: [i64], inout st: [i64], inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tl: crate::tail::Tail, ms: i64) -> Loop ! async, proc, alloc
+pub fn open(take l: Loop, inout ctl: [i64], inout st: crate::transport::Reader, inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tl: crate::tail::Tail, ms: i64) -> Loop ! async, proc, alloc
   requires len(ctl) == 8
-  requires len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  requires 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
   requires len(line.data) <= 8388608
   requires crate::tail::tail_ok(tl) && tl.limit == 1024
   ensures len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
-  ensures len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  ensures 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
   ensures len(line.data) <= 8388608
   ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
@@ -232,7 +232,7 @@ pub fn open(take l: Loop, inout ctl: [i64], inout st: [i64], inout line: crate::
   let mut events: i64 = 0;
   while ctl[0] == 0 && !done && events < 1000000
     invariant 0 <= events && events <= 1000000 && len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
-    invariant len(st) == 5 && 0 <= st[1] && st[1] <= len(line.data) && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+    invariant 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
     invariant len(line.data) <= 8388608
     invariant crate::tail::tail_ok(tl) && tl.limit == 1024
     decreases 1000000 - events
@@ -253,7 +253,7 @@ pub fn open(take l: Loop, inout ctl: [i64], inout st: [i64], inout line: crate::
             if crate::access::kind(d, error) == 6 { ctl[0] = 6; }
             else if crate::transport::stdin_closed(q, slot) {
               q = crate::transport::expired(move q, overall, inout st);
-              if st[0] == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
+              if st.status == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
             }
             else { q = crate::transport::send(move q, slot, crate::util::to_bytes("{\"method\":\"initialized\",\"params\":{}}\n"), ms); }
           }

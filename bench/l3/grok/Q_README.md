@@ -93,7 +93,7 @@ per mutant; the whole line is replaced, indent kept), then a function-body injec
 | M08 | trim-query-interior | unwrapped query trimmed, not one LF removed | entry | marker | `tags-query-crlf-interior-kept`, `tags-query-lf-and-boundaries` |
 | M09 | synthetic-truthiness | synthetic_reason false/0/"" no longer skips | entry | marker | `synthetic-reason-truthiness`, `synthetic-reason-only-skips-no-detach` |
 | M10 | drop-without-detach | dropped oversized user line does not call skipUser | read/framing | marker | the 10 `dropped-*` / `framing-cap-*-plus-one-dropped` fixtures |
-| M11 | tool-count-one | tool_calls adds 1, not its length | entry | marker, inject `add_tools` | `content-tool-calls-three-junk`, `content-tool-calls-many-turns` |
+| M11 | tool-count-one | tool_calls adds 1, not its length | entry | marker | `content-tool-calls-three-junk`, `content-tool-calls-many-turns` |
 | M12 | omit-budget-flag | omittedBefore ignores the collector's trimmed flag | read | marker | `budgets-201-turns-omitted`, `budgets-2mib-suffix-omitted` |
 | M13 | allow-all-files | allow-list accepts every name | copy | marker, inject `allowed` | `copy-allow-all-13`, `copy-skip-nonallowed-names`, `copy-skip-nonregular-allowed-names` |
 | M14 | omit-second-exists | second target lstat result ignored before rename | copy | marker | `copy-raced-target-appears-before-second-lstat`, `copy-raced-file-appears-before-second-lstat` |
@@ -128,6 +128,6 @@ Intended edits for the markers (what the replacement statement does; one marker 
   comparison of the fstat completion against the lstat expectation is replaced by "equal". M04 the info.cwd folderKey comparison is replaced by "equal".
   M05 the "start the next candidate" test also requires fewer than 50 finished candidates. M06 in the comparator, a missing date makes `cmp` return +1
   (b newer) or -1 instead of 0. M07 the empty-id check that stops the fallback is removed. M08 the unwrapped text is trimmed. M09 the synthetic_reason
-  test accepts only a string value. M10 the drop marker no longer detaches the draft / marks the next prompt clipped. M11 `add_tools(1, ...)` instead of the
+  test accepts only a string value. M10 the drop marker no longer detaches the draft / marks the next prompt clipped. M11 `turns::tool(.., 1)` instead of the
   array length. M12 `omitted = window_omitted` (the collector trimmed flag removed). M13 the allow-list test returns true. M14 the second-lstat success no
   longer raises grok-exists. M15 the post-verify-failure remove request is not issued. M16 the capability test is `!= null` instead of `== true`.

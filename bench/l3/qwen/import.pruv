@@ -516,7 +516,7 @@ fn replay(log: Events, chain: crate::chain::Chain, selected: [u8], inout st: [i6
     } else if event.kind == 9 {
       if chosen { return Replay { title: move best, model: move model, defect: start }; }
     } else if event.kind == 8 {
-      if chosen { crate::turns::tool(inout st, inout sl); }
+      if chosen { crate::turns::tool(inout st, inout sl, 1); }
     } else if event.kind == 2 || chosen {
       if event.a > log.end || event.b > log.end - event.a {
         return Replay { title: move best, model: move model, defect: 0 };
