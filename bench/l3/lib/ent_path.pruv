@@ -13,42 +13,24 @@
 //   resolve_need(p, ncwd, cwd1, cwd2)        true iff one more cwd call is needed after ncwd calls (ncwd 0, 1, 2)
 //   resolve_finish(p, ncwd, cwd1, cwd2)      the result once resolve_need is false
 // A cwd call that throws escapes resolve in Node; the caller handles that before calling these.
+// Hand Rust baseline: hand/ent_path.rs (`&[u16]` in, `Vec<u16>` out, one growing buffer per result); the
+// one-unit-per-`i64` element type is gap U (consumer API), see RESHAPE.md step 3.1.
 
 pub fn is_abs(p: [i64]) -> bool
 {
-  return crate::ent_u16::rd(p, 0) == 47 && len(p) > 0;
+  return len(p) > 0 && p[0] == 47;
 }
 
-// copy m units of p starting at s into o at position at (all clamped); returns the new end position
-fn copy_into(inout o: [i64], at: i64, p: [i64], s: i64, m: i64) -> i64
-  requires 0 <= at && at <= 4294967296 && 0 <= s && s <= 4294967296
-  ensures len(o) == len(old(o)) && at <= result && result <= at + 1073741824
+// last index of '/' in a, or -1 (hand `rposition`)
+fn last_slash_idx(a: [i64]) -> i64
+  ensures result >= -1 && result < len(a)
 {
-  let mut mm: i64 = m;
-  if mm < 0 { mm = 0; }
-  if mm > 1073741824 { mm = 1073741824; }
-  let mut k: i64 = 0;
-  while k < mm
-    invariant 0 <= k && k <= mm && mm <= 1073741824 && 0 <= at && at <= 4294967296 && 0 <= s && s <= 4294967296
-    decreases mm - k
-  {
-    crate::ent_u16::wr(inout o, at + k, crate::ent_u16::rd(p, s + k));
-    k = k + 1;
-  }
-  return at + mm;
-}
-
-// last index of '/' in a[0..u), or -1
-fn last_slash_idx(a: [i64], u: i64) -> i64
-  ensures result >= -1 && result < u
-  requires 0 <= u
-{
-  let mut k: i64 = u;
+  let mut k: i64 = len(a);
   while k > 0
-    invariant 0 <= k && k <= u
+    invariant 0 <= k && k <= len(a)
     decreases k
   {
-    if crate::ent_u16::rd(a, k - 1) == 47 { return k - 1; }
+    if a[k - 1] == 47 { return k - 1; }
     k = k - 1;
   }
   return -1;
@@ -59,171 +41,172 @@ pub fn normalize_string(p: [i64], allow_above_root: bool) -> [i64] ! alloc
   ensures len(result) >= 0
 {
   let n: i64 = len(p);
-  if n > 1073741823 { return crate::ent_u16::empty(); }
-  let cap: i64 = 2 * n + 8;
-  let mut res: [i64] = alloc(cap, 0);
-  let mut u: i64 = 0;          // res.length
+  let mut res: [i64] = alloc(0, 0);
+  if n > 1073741823 { return res; }
+  arr_reserve(inout res, n);
   let mut lsl: i64 = 0;        // lastSegmentLength
   let mut last_slash: i64 = -1;
   let mut dots: i64 = 0;
   let mut code: i64 = 0;
-  let mut i: i64 = 0;
-  while i <= n
-    invariant 0 <= i && i <= n + 1 && n == len(p) && len(res) == cap && cap == 2 * n + 8 && 0 <= n && n <= 1073741823
-      && 0 <= u && u <= cap && -1 <= last_slash && last_slash <= i && -1 <= dots && dots <= 3
-    decreases n + 1 - i
+  for i in 0..n + 1
+    invariant n == len(p) && n <= 1073741823 && -1 <= last_slash && last_slash < i
+      && len(res) <= last_slash + 3 && -1 <= dots && (dots >= 0 ==> last_slash + dots < i)
   {
-    let mut brk: bool = false;
-    if i < n { code = crate::ent_u16::rd(p, i); }
-    else if code == 47 { brk = true; }
+    if i < n { code = p[i]; }
+    else if code == 47 { break; }
     else { code = 47; }
-    if brk {
-      i = n + 1;
-    } else {
-      if code == 47 {
-        let mut cont: bool = false;
-        if last_slash == i - 1 || dots == 1 {
-          // NOOP
-        } else if dots == 2 {
-          let tail_dd: bool = u >= 2 && lsl == 2 && crate::ent_u16::rd(res, u - 1) == 46 && crate::ent_u16::rd(res, u - 2) == 46;
-          if !tail_dd {
-            if u > 2 {
-              let li: i64 = last_slash_idx(res, u);
-              if li == -1 {
-                u = 0;
-                lsl = 0;
-              } else {
-                u = li;
-                lsl = u - 1 - last_slash_idx(res, u);
-              }
-              last_slash = i;
-              dots = 0;
-              cont = true;
-            } else if u != 0 {
-              u = 0;
+    if code == 47 {
+      if last_slash == i - 1 || dots == 1 {
+        // NOOP
+      } else if dots == 2 {
+        let u: i64 = len(res);
+        if u < 2 || lsl != 2 || res[u - 1] != 46 || res[u - 2] != 46 {
+          if u > 2 {
+            let li: i64 = last_slash_idx(res);
+            if li == -1 {
+              res = truncate(res, 0);
               lsl = 0;
-              last_slash = i;
-              dots = 0;
-              cont = true;
-            }
-          }
-          if !cont && allow_above_root {
-            if u > 0 {
-              crate::ent_u16::wr(inout res, u, 47);
-              crate::ent_u16::wr(inout res, u + 1, 46);
-              crate::ent_u16::wr(inout res, u + 2, 46);
-              u = u + 3;
             } else {
-              crate::ent_u16::wr(inout res, 0, 46);
-              crate::ent_u16::wr(inout res, 1, 46);
-              u = 2;
+              res = truncate(res, li);
+              lsl = li - 1 - last_slash_idx(res);
             }
-            if u > cap { u = cap; }
-            lsl = 2;
+            last_slash = i;
+            dots = 0;
+            continue;
+          } else if u != 0 {
+            res = truncate(res, 0);
+            lsl = 0;
+            last_slash = i;
+            dots = 0;
+            continue;
           }
-        } else {
-          let mut at: i64 = u;
-          if u > 0 {
-            crate::ent_u16::wr(inout res, u, 47);
-            at = u + 1;
-          }
-          u = copy_into(inout res, at, p, last_slash + 1, i - last_slash - 1);
-          if u > cap { u = cap; }
-          lsl = i - last_slash - 1;
         }
-        if !cont {
-          last_slash = i;
-          dots = 0;
+        if allow_above_root {
+          if len(res) > 0 { arr_push(inout res, 47); }
+          arr_push(inout res, 46, 46);
+          lsl = 2;
         }
-      } else if code == 46 && dots != -1 {
-        if dots < 3 { dots = dots + 1; }
       } else {
-        dots = -1;
+        if len(res) > 0 { arr_push(inout res, 47); }
+        arr_append(inout res, p, last_slash + 1, i - last_slash - 1);
+        lsl = i - last_slash - 1;
       }
-      i = i + 1;
+      last_slash = i;
+      dots = 0;
+    } else if code == 46 && dots != -1 {
+      dots = dots + 1;
+    } else {
+      dots = -1;
     }
   }
-  return crate::ent_u16::slice(res, 0, u);
+  return res;
 }
 
 pub fn normalize(p: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  if len(p) == 0 { return crate::ent_u16::lit("."); }
+  if len(p) == 0 { return crate::ent_u16::one(46); }
   let absolute: bool = is_abs(p);
-  let trailing: bool = crate::ent_u16::rd(p, len(p) - 1) == 47;
+  let trailing: bool = p[len(p) - 1] == 47;
   let r: [i64] = normalize_string(p, !absolute);
   if len(r) == 0 {
-    if absolute { return crate::ent_u16::lit("/"); }
+    if absolute { return crate::ent_u16::one(47); }
     if trailing { return crate::ent_u16::lit("./"); }
-    return crate::ent_u16::lit(".");
+    return crate::ent_u16::one(46);
   }
-  let mut x: [i64] = crate::ent_u16::cat(r, crate::ent_u16::empty());
-  if trailing { x = crate::ent_u16::cat(x, crate::ent_u16::lit("/")); }
-  if absolute { x = crate::ent_u16::cat(crate::ent_u16::lit("/"), x); }
-  return x;
+  let mut out: [i64] = alloc(0, 0);
+  if len(r) > 1073741823 { return r; }
+  arr_reserve(inout out, len(r) + 2);
+  if absolute { arr_push(inout out, 47); }
+  arr_append(inout out, r, 0, len(r));
+  if trailing { arr_push(inout out, 47); }
+  return out;
 }
 
-// raw join of two arguments: empty ones dropped, the rest joined with '/'
-fn pjoin(a: [i64], b: [i64]) -> [i64] ! alloc
-  ensures len(result) >= 0
+// Node join: a non-empty part goes after a '/' when joined is not empty (hand `push_part`)
+fn push_part(inout joined: [i64], part: [i64]) -> () ! alloc
+  requires len(joined) <= 4294967296 && len(part) <= 1073741823
+  ensures len(joined) <= len(old(joined)) + len(part) + 1
 {
-  if len(a) == 0 { return copy(b); }
-  if len(b) == 0 { return copy(a); }
-  return crate::ent_u16::cat(crate::ent_u16::cat(a, crate::ent_u16::lit("/")), b);
+  if len(part) == 0 { return; }
+  if len(joined) > 0 { arr_push(inout joined, 47); }
+  arr_append(inout joined, part, 0, len(part));
 }
 
 pub fn join2(a: [i64], b: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  return normalize(pjoin(a, b));
+  let mut joined: [i64] = alloc(0, 0);
+  if len(a) > 1073741823 || len(b) > 1073741823 { return normalize(joined); }
+  arr_reserve(inout joined, len(a) + len(b) + 2);
+  push_part(inout joined, a);
+  push_part(inout joined, b);
+  return normalize(joined);
 }
 
 pub fn join3(a: [i64], b: [i64], c: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  return normalize(pjoin(pjoin(a, b), c));
+  let mut joined: [i64] = alloc(0, 0);
+  if len(a) > 1073741823 || len(b) > 1073741823 || len(c) > 1073741823 { return normalize(joined); }
+  arr_reserve(inout joined, len(a) + len(b) + len(c) + 3);
+  push_part(inout joined, a);
+  push_part(inout joined, b);
+  push_part(inout joined, c);
+  return normalize(joined);
 }
 
 pub fn join4(a: [i64], b: [i64], c: [i64], d: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  return normalize(pjoin(pjoin(pjoin(a, b), c), d));
+  let mut joined: [i64] = alloc(0, 0);
+  if len(a) > 1073741823 || len(b) > 1073741823 || len(c) > 1073741823 || len(d) > 1073741823 { return normalize(joined); }
+  arr_reserve(inout joined, len(a) + len(b) + len(c) + len(d) + 4);
+  push_part(inout joined, a);
+  push_part(inout joined, b);
+  push_part(inout joined, c);
+  push_part(inout joined, d);
+  return normalize(joined);
 }
 
 // join(base, ...segments) where segs holds non-empty '/'-free segments joined by '/' (empty segs: join(base))
 pub fn join_segs(base: [i64], segs: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  return normalize(pjoin(base, segs));
+  let mut joined: [i64] = alloc(0, 0);
+  if len(base) > 1073741823 || len(segs) > 1073741823 { return normalize(joined); }
+  arr_reserve(inout joined, len(base) + len(segs) + 2);
+  push_part(inout joined, base);
+  push_part(inout joined, segs);
+  return normalize(joined);
 }
 
 pub fn dirname(p: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0
 {
   let n: i64 = len(p);
-  if n == 0 { return crate::ent_u16::lit("."); }
-  let root: bool = crate::ent_u16::rd(p, 0) == 47;
+  if n == 0 { return crate::ent_u16::one(46); }
+  let root: bool = p[0] == 47;
   let mut endp: i64 = -1;
   let mut matched: bool = true;
   let mut i: i64 = n - 1;
-  while i >= 1 && endp == -1
-    invariant 0 <= i && i <= n - 1 && n == len(p) && -1 <= endp
+  while i >= 1
+    invariant 0 <= i && i <= n - 1 && n == len(p) && endp == -1
     decreases i
   {
-    if crate::ent_u16::rd(p, i) == 47 {
-      if !matched { endp = i; }
+    if p[i] == 47 {
+      if !matched { endp = i; break; }
     } else {
       matched = false;
     }
     i = i - 1;
   }
   if endp == -1 {
-    if root { return crate::ent_u16::lit("/"); }
-    return crate::ent_u16::lit(".");
+    if root { return crate::ent_u16::one(47); }
+    return crate::ent_u16::one(46);
   }
   if root && endp == 1 { return crate::ent_u16::lit("//"); }
-  return crate::ent_u16::slice(p, 0, endp);
+  return copy(subview(p, 0, endp));
 }
 
 pub fn basename(p: [i64]) -> [i64] ! alloc
@@ -234,15 +217,14 @@ pub fn basename(p: [i64]) -> [i64] ! alloc
   let mut endp: i64 = -1;
   let mut matched: bool = true;
   let mut i: i64 = n - 1;
-  let mut stop: bool = false;
-  while i >= 0 && !stop
-    invariant -1 <= i && i <= n - 1 && n == len(p) && 0 <= start && start <= n && -1 <= endp
+  while i >= 0
+    invariant -1 <= i && i <= n - 1 && n == len(p) && start == 0 && (endp == -1 || (i < endp && endp <= n))
     decreases i + 1
   {
-    if crate::ent_u16::rd(p, i) == 47 {
+    if p[i] == 47 {
       if !matched {
         start = i + 1;
-        stop = true;
+        break;
       }
     } else if endp == -1 {
       matched = false;
@@ -251,7 +233,7 @@ pub fn basename(p: [i64]) -> [i64] ! alloc
     i = i - 1;
   }
   if endp == -1 { return crate::ent_u16::empty(); }
-  return crate::ent_u16::slice(p, start, endp);
+  return copy(subview(p, start, endp));
 }
 
 // ---- resolve(p) with one argument, split around process.cwd() ----
@@ -262,7 +244,7 @@ pub fn resolve_needs_first_cwd(p: [i64]) -> bool
 
 fn is_fast(p: [i64]) -> bool
 {
-  return len(p) == 0 || (len(p) == 1 && crate::ent_u16::rd(p, 0) == 46);
+  return len(p) == 0 || (len(p) == 1 && p[0] == 46);
 }
 
 pub fn resolve_need(p: [i64], ncwd: i64, cwd1: [i64], cwd2: [i64]) -> bool
@@ -273,24 +255,45 @@ pub fn resolve_need(p: [i64], ncwd: i64, cwd1: [i64], cwd2: [i64]) -> bool
   return false;
 }
 
+// the cwd result the resolve uses (hand `let c = if ncwd >= 2 { cwd2 } else { cwd1 };`)
+fn used_cwd(ncwd: i64, cwd1: [i64], cwd2: [i64]) -> ref [i64] from(cwd1, cwd2)
+  ensures len(result) <= len(cwd1) || len(result) <= len(cwd2)
+{
+  if ncwd >= 2 { return subview(cwd2, 0, len(cwd2)); }
+  return subview(cwd1, 0, len(cwd1));
+}
+
 pub fn resolve_finish(p: [i64], ncwd: i64, cwd1: [i64], cwd2: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  let mut resolved: [i64] = crate::ent_u16::empty();
+  let mut resolved: [i64] = alloc(0, 0);
   let mut absolute: bool = true;
+  if len(p) > 1073741823 || len(cwd1) > 1073741823 || len(cwd2) > 1073741823 { return resolved; }
   if is_abs(p) {
-    resolved = crate::ent_u16::cat(p, crate::ent_u16::lit("/"));
+    arr_reserve(inout resolved, len(p) + 1);
+    arr_append(inout resolved, p, 0, len(p));
+    arr_push(inout resolved, 47);
   } else {
-    let mut c: [i64] = copy(cwd1);
-    if ncwd >= 2 { c = copy(cwd2); }
     if ncwd == 1 && is_fast(p) && is_abs(cwd1) { return copy(cwd1); }
-    let mut tail: [i64] = crate::ent_u16::empty();
-    if len(p) > 0 { tail = crate::ent_u16::cat(p, crate::ent_u16::lit("/")); }
-    resolved = crate::ent_u16::cat(crate::ent_u16::cat(c, crate::ent_u16::lit("/")), tail);
+    let c: ref [i64] = used_cwd(ncwd, cwd1, cwd2);
+    arr_reserve(inout resolved, len(c) + len(p) + 2);
+    arr_append(inout resolved, c, 0, len(c));
+    arr_push(inout resolved, 47);
+    if len(p) > 0 {
+      arr_append(inout resolved, p, 0, len(p));
+      arr_push(inout resolved, 47);
+    }
     absolute = is_abs(c);
   }
   let r: [i64] = normalize_string(resolved, !absolute);
-  if absolute { return crate::ent_u16::cat(crate::ent_u16::lit("/"), r); }
-  if len(r) > 0 { return r; }
-  return crate::ent_u16::lit(".");
+  if absolute {
+    let mut out: [i64] = alloc(0, 0);
+    if len(r) > 1073741823 { return r; }
+    arr_reserve(inout out, len(r) + 1);
+    arr_push(inout out, 47);
+    arr_append(inout out, r, 0, len(r));
+    return out;
+  }
+  if len(r) == 0 { return crate::ent_u16::one(46); }
+  return r;
 }
