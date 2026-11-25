@@ -917,6 +917,9 @@ pub struct Solver {
     /// is copied into a fresh context that holds only the sorts and declarations its terms reach, so the datatypes,
     /// terms and ids built for the rest of the crate do not change how the solver searches.
     iso: Option<(Z3, RawSolver)>,
+    /// CI-1a: the rlimit cap of the shared-context first check of a query with an rlimit (`SHARED_FIRST_RL`; a test
+    /// lowers it with `set_shared_first_rlimit` to reach the capped-retry path with a small query).
+    first_cap: u32,
 }
 
 /// A solver of `z` with these options (inc_ref'd; the caller dec_refs it).
@@ -954,7 +957,12 @@ impl Solver {
     /// z3py `s.set("timeout", t)`, (if present) `s.set("rlimit", r)`, (if present) `s.set("random_seed", s)`, in this order.
     pub fn with_options(z: &Z3, timeout_ms: u32, rlimit: Option<u32>, seed: Option<u32>) -> Solver {
         let raw = mk_solver_raw(z, timeout_ms, rlimit, seed);
-        Solver { z: z.clone(), raw, opts: (timeout_ms, rlimit, seed), iso: None }
+        Solver { z: z.clone(), raw, opts: (timeout_ms, rlimit, seed), iso: None, first_cap: SHARED_FIRST_RL }
+    }
+    /// CI-1a: the rlimit cap of the shared-context first check (default `SHARED_FIRST_RL`). Tests only: the compiler
+    /// keeps the default so its verdicts match the measured budget.
+    pub fn set_shared_first_rlimit(&mut self, cap: u32) {
+        self.first_cap = cap;
     }
     pub fn add(&mut self, a: &Ast) {
         // SAFETY: S1 S2 — a is a Bool expression of the same context.
@@ -1024,7 +1032,7 @@ impl Solver {
         // rlimit the wall-clock cap stays.
         let (full, rl) = (self.opts.0, self.opts.1);
         let (first, first_rl) = match rl {
-            Some(r) => (full, Some(r.min(SHARED_FIRST_RL))),
+            Some(r) => (full, Some(r.min(self.first_cap))),
             None => (full.min(SHARED_FIRST_MS), None),
         };
         let capped = first < full || first_rl != rl;
@@ -1048,9 +1056,10 @@ impl Solver {
         // (its context has another history: inf_budget reads `canceled` there and `max. resource limit exceeded`
         // here); tests/diff_trace.py treats that as same_unknown when the query text is identical (G-LG21-3).
         // SAFETY: S1 S4.
-        // CI-1a: a stop at the first-check rlimit cap ("max. resource limit exceeded") is retried like a timeout.
+        // CI-1a: a stop at the first-check rlimit cap is retried like a timeout. z3 reports an rlimit stop as `canceled`
+        // (the `canceled` test below) or as "max. resource limit exceeded" / "Resource limits hit in push", so match case-insensitively.
         let why = unsafe { take_string(z::Z3_solver_get_reason_unknown(self.z.raw(), self.raw)) };
-        let capped_stop = first_rl != rl && why.contains("resource limit");
+        let capped_stop = first_rl != rl && why.to_ascii_lowercase().contains("resource limit");
         if !(why.contains("timeout") || why.contains("canceled") || capped_stop) {
             return Sat::Unknown;
         }
