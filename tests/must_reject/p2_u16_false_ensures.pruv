@@ -1,0 +1,7 @@
+// P2: a [u16] read is at most 65535, not at most 255
+fn f(a: ref [u16]) -> i64
+  requires len(a) > 0
+  ensures result <= 255
+{
+  return a[0];
+}

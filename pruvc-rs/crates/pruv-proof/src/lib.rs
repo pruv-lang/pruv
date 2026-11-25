@@ -84,7 +84,7 @@ pub fn verify_program_opts(
 ) -> Result<Vec<PruvError>, String> {
     // G3 A2: the verifier handles generics (no guard here); the code generators and the driver still reject them.
     // The structured `[T]` is never a G2 hit (the plain `[i64]` is not either), so "array" needs no skip entry.
-    if let Some(e) = pruv_core::typeinfo::g2_unimplemented_error(prog, "verify", None, &["array_u8", "array_bool", "str"], None) { return Ok(vec![e]); } // G2 B1
+    if let Some(e) = pruv_core::typeinfo::g2_unimplemented_error(prog, "verify", None, &["array_u8", "array_u16", "array_bool", "str"], None) { return Ok(vec![e]); } // G2 B1
     // PR1: module records apply only without a trace and without an inference report (as in Python).
     // A plan is used once: consumed here even when trace/report turn records off, so a later call cannot reuse its keys.
     let plan = opts.modules.as_deref().filter(|p| !p.spent.replace(true));

@@ -9,18 +9,17 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-use crate::typeinfo::BUILTIN_TYPE_NAMES;
 
 /// A structured type, mirroring Python's `Type(name, args, owner, index)`.
 ///
-/// * legacy types: `name` only (`i64`, `bool`, `unit`, `array`, `option`, `result`, `array_u8`, `array_bool`, `str`, `u8`,
+/// * legacy types: `name` only (`i64`, `bool`, `unit`, `array`, `option`, `result`, `array_u8`, `array_u16`, `array_bool`, `str`, `u8`, `u16`,
 ///   or a non-generic user type name), `args` empty;
 /// * structured types: `args` holds the type arguments (`Option<X>`, `Result<X>`, `[X]` -> `[X]`; `D<X0,..>` -> `[X0,..]`);
 /// * a bound type parameter: `owner` is the declaration identity (`fn:<name>` / `type:<name>`) and `index` its position;
 ///   `name` is only for printing.
 ///
 /// Build structured types with the `mk_*` functions: they normalize to the legacy form
-/// (`Option<i64>` -> `option`, `Result<i64>` -> `result`, `[i64]`/`[u8]`/`[bool]` -> `array`/`array_u8`/`array_bool`).
+/// (`Option<i64>` -> `option`, `Result<i64>` -> `result`, `[i64]`/`[u8]`/`[u16]`/`[bool]` -> `array`/`array_u8`/`array_u16`/`array_bool`).
 ///
 /// Equality and hashing are structural; a parameter's identity is (owner, index), its name is ignored.
 #[derive(Debug, Clone)]
@@ -76,6 +75,9 @@ impl GType {
     pub fn u8() -> GType {
         GType::new("u8", Vec::new())
     }
+    pub fn u16() -> GType {
+        GType::new("u16", Vec::new())
+    }
     pub fn str() -> GType {
         GType::new("str", Vec::new())
     }
@@ -121,6 +123,9 @@ impl GType {
     pub fn array_u8() -> GType {
         GType::new("array_u8", Vec::new())
     }
+    pub fn array_u16() -> GType {
+        GType::new("array_u16", Vec::new())
+    }
     pub fn array_bool() -> GType {
         GType::new("array_bool", Vec::new())
     }
@@ -162,12 +167,12 @@ impl GType {
 
     /// Whether this names a user struct/enum (declared or not); not a built-in name and not a parameter.
     pub fn is_user_type(&self) -> bool {
-        self.owner.is_none() && self.int_width().is_none() && !BUILTIN_TYPE_NAMES.contains(&self.name.as_str())
+        self.owner.is_none() && self.int_width().is_none() && !crate::typeinfo::is_builtin_type_name(&self.name)
     }
 
     /// Whether this is an array type (legacy or structured).
     pub fn is_array(&self) -> bool {
-        matches!(self.name.as_str(), "array" | "array_u8" | "array_bool")
+        matches!(self.name.as_str(), "array" | "array_u8" | "array_u16" | "array_bool")
     }
 
     /// Element type of an array type; None when this is not an array type.
@@ -178,6 +183,7 @@ impl GType {
         match self.name.as_str() {
             "array" => Some(GType::i64()),
             "array_u8" => Some(GType::u8()),
+            "array_u16" => Some(GType::u16()),
             "array_bool" => Some(GType::bool()),
             _ => None,
         }
@@ -189,6 +195,8 @@ impl GType {
             Some(GType::array())
         } else if *elem == GType::u8() {
             Some(GType::array_u8())
+        } else if *elem == GType::u16() {
+            Some(GType::array_u16())
         } else if *elem == GType::bool() {
             Some(GType::array_bool())
         } else {
@@ -387,6 +395,8 @@ pub fn mk_array(x: GType) -> GType {
         GType::array()
     } else if x == GType::u8() {
         GType::array_u8()
+    } else if x == GType::u16() {
+        GType::array_u16()
     } else if x == GType::bool() {
         GType::array_bool()
     } else {
@@ -437,20 +447,13 @@ pub fn param_id(ty: &GType) -> Option<ParamId> {
 
 // ---------- printing ----------
 
-fn builtin_print(name: &str) -> &str {
-    match crate::shared_tables::builtin_types::BUILTIN_PRINT.iter().find(|(k, _)| *k == name) {
-        Some((_, v)) => v,
-        None => name,
-    }
-}
-
 /// Source spelling: "Pair<i64, bool>", "[T]", "Option<bool>". Legacy types print as in the old dumps.
 pub fn format_type(ty: &GType) -> String {
     if ty.owner.is_some() {
         return ty.name.clone();
     }
     if ty.args.is_empty() {
-        return builtin_print(&ty.name).to_string();
+        return crate::typeinfo::type_name(&ty.name);
     }
     let inner = ty.args.iter().map(format_type).collect::<Vec<_>>().join(", ");
     match ty.name.as_str() {
@@ -1065,6 +1068,10 @@ mod tests {
         assert_eq!(GType::array().array_elem(), Some(GType::i64()));
         assert_eq!(GType::array_bool().array_elem(), Some(GType::bool()));
         assert_eq!(GType::array_of(&GType::u8()), Some(GType::array_u8()));
+        assert!(GType::array_u16().is_array());
+        assert_eq!(GType::array_of(&GType::u16()), Some(GType::array_u16()));
+        assert_eq!(GType::array_u16().array_elem(), Some(GType::u16()));
+        assert_eq!(mk_array(GType::u16()), GType::array_u16());
         assert!(!GType::option().is_user_type());
         assert!(point().is_user_type());
         assert!(!ft().is_user_type());

@@ -1,0 +1,7 @@
+// spec: R-6p-4 reject
+fn first(a: ref [u16]) -> i64
+  requires len(a) > 0
+  ensures result < 65535
+{
+  return a[0];
+}

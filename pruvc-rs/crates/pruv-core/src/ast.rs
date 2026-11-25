@@ -416,7 +416,7 @@ impl Function {
         };
         self.borrow_from.as_ref().is_some_and(|from| from.contains(name))
             && self.params.iter().any(|p| p.name == *name && p.mode_pos.is_some()
-                && matches!(p.ty.as_str(), "array" | "array_u8" | "array_bool"))
+                && crate::typeinfo::is_array_name(&p.ty))
     }
 
     /// Only `buf = resize(buf, ..)` on such a buffer may shrink it in place (Python `Call.resize_scratch`).

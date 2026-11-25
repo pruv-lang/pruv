@@ -560,11 +560,12 @@ fn conj_terms(e: &Expr) -> Vec<&Expr> {
     }
 }
 
-/// Array internal type name → element kind ("i64"/"u8"/"bool", "abs" for a G3 `[T]` = abstract element). None if not an array.
+/// Array internal type name → element kind ("i64"/"u8"/"u16"/"bool", "abs" for a G3 `[T]` = abstract element). None if not an array.
 fn arr_elem_of(ty: &str) -> Option<&'static str> {
     match ty {
         "array" => Some("i64"),
         "array_u8" => Some("u8"),
+        "array_u16" => Some("u16"),
         "array_bool" => Some("bool"),
         _ => {
             if pruv_core::gtype::is_g3_key(ty) {

@@ -1,0 +1,4 @@
+// P2: [u16] buffers exist; Vec<u16> (a u16 type argument) is bundle P11
+fn f(v: Vec<u16>) -> i64 {
+  return 0;
+}

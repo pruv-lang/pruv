@@ -273,7 +273,7 @@ fn write_trust_report(
         None
     };
     let cprog: &Program = plan.as_ref().unwrap_or(prog);
-    if let Some(e) = pruv_core::typeinfo::g2_unimplemented_error(cprog, "codegen", None, &["array_u8", "array_bool", "str"], None) {
+    if let Some(e) = pruv_core::typeinfo::g2_unimplemented_error(cprog, "codegen", None, &["array_u8", "array_u16", "array_bool", "str"], None) {
         return Err(Fail::Lang(vec![e]));
     }
     let data = pruv_core::codegen::gen_rust_trust_data(
@@ -420,7 +420,7 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
     let gprog: &Program = plan.as_ref().map_or(&prog, |plan| &plan.program);
     // G2: even after verify, reject array types that do not yet have a code-generation layer.
     // A4, A5: [u8] and [bool] are allowed on every path (rust, llvm, ll, obj, exe, also_llvm).
-    let g2_err = pruv_core::typeinfo::g2_unimplemented_error(gprog, "codegen", None, &["array_u8", "array_bool", "str"], None); // G2 B2
+    let g2_err = pruv_core::typeinfo::g2_unimplemented_error(gprog, "codegen", None, &["array_u8", "array_u16", "array_bool", "str"], None); // G2 B2
     if let Some(e) = g2_err {
         return Err(Fail::Lang(vec![e]));
     }

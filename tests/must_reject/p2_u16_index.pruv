@@ -1,0 +1,6 @@
+// P2: a [u16] index must be proven in bounds
+fn f(a: ref [u16], i: i64) -> i64
+  requires 0 <= i && i <= len(a)
+{
+  return a[i];
+}

@@ -569,7 +569,7 @@ pub const DECL_REGROW_V2: &str = "declare ptr @pruv_regrow_v2(ptr, i64, i64, i64
 /// P05G: resize of a narrow (u8/i8/u16/i16/u32/i32) storage layout, size/align are the element's constant byte width
 /// (1, 2 or 4) so the branches fold after inlining.  Same shape as pruv_resize: one uninitialized block, one memcpy
 /// of the prefix, the tail set once (a memset for 0 or byte elements, else one store loop).  n <= 2^40 is proved
-/// (narrow layouts exist only in verified builds); the check mirrors pruv_resize_u8.
+/// or checked by the caller before the helper runs.
 pub const DECLS_RESIZE_NARROW: &str = concat!(
     "define internal noalias ptr @pruv_resize_narrow(ptr nocapture readonly %s, i64 %m, i64 %n, i64 %v, i64 %size, i64 %align) alwaysinline nounwind {\n",
     "entry:\n",
@@ -664,7 +664,7 @@ pub fn g_arg(t: &str) -> &str {
 }
 
 fn view_base(t: &str) -> Option<&str> {
-    t.strip_prefix("@ref<")?.strip_suffix('>').filter(|base| crate::borrowed::is_view_base(base))
+    t.strip_prefix("@ref<")?.strip_suffix('>').filter(|base| *base == ARRAY_U16 || crate::borrowed::is_view_base(base))
 }
 
 pub fn g_error(t: &str) -> &str {
@@ -697,6 +697,7 @@ pub fn is_new_app(t: &str) -> bool {
     is_gopt(t) || (is_user_type(t) && t.starts_with(G3_TYPE_PREFIX))
 }
 
+const ARRAY_U16: &str = "array_u16";
 const ARRAY_U8: &str = "array_u8";
 const ARRAY_BOOL: &str = "array_bool"; // G2 A5
 const STR: &str = "str"; // G2 B2
@@ -720,9 +721,10 @@ fn is_bytes_ty(t: &Option<String>) -> bool {
     matches!(t.as_deref(), Some(ARRAY_U8) | Some(ARRAY_BOOL) | Some(STR))
 }
 
-/// G2 A5: array type name -> the ty carried in V/Slot (Some only for u8, bool, str)
+/// Declared buffer type carried through values and slots. Plain i64 arrays use the storage plan.
 fn elem_ty(t: &str) -> Option<String> {
     match t {
+        ARRAY_U16 => Some(ARRAY_U16.to_string()),
         ARRAY_U8 => Some(ARRAY_U8.to_string()),
         ARRAY_BOOL => Some(ARRAY_BOOL.to_string()),
         STR => Some(STR.to_string()),
@@ -730,12 +732,37 @@ fn elem_ty(t: &str) -> Option<String> {
     }
 }
 
+/// The layout of declared u16 buffers is fixed independently of storage inference.
+fn buffer_layout(v: &V) -> &'static str {
+    if v.ty.as_deref() == Some(ARRAY_U16) { "u16" } else { v.layout }
+}
+
+fn declared_buffer_size(ty: &Option<String>) -> Option<usize> {
+    if is_bytes_ty(ty) {
+        Some(1)
+    } else if ty.as_deref() == Some(ARRAY_U16) {
+        Some(2)
+    } else {
+        None
+    }
+}
+
+fn buffer_size(v: &V) -> usize {
+    declared_buffer_size(&v.ty).unwrap_or_else(|| elem_size(v.layout))
+}
+
+fn same_range_layout(a: &V, b: &V) -> bool {
+    (is_bytes_ty(&a.ty) && is_bytes_ty(&b.ty))
+        || (a.ty.as_deref() == Some(ARRAY_U16) && a.ty == b.ty)
+        || (elem_ir(a) == "i64" && elem_ir(b) == "i64")
+}
+
 /// Physical element type, independent of the logical array element type.
 fn elem_ir(v: &V) -> &'static str {
     if is_bytes_ty(&v.ty) {
         "i8"
     } else {
-        match v.layout { "u8" | "i8" => "i8", "u16" | "i16" => "i16", "u32" | "i32" => "i32", _ => "i64" }
+        match buffer_layout(v) { "u8" | "i8" => "i8", "u16" | "i16" => "i16", "u32" | "i32" => "i32", _ => "i64" }
     }
 }
 
@@ -772,7 +799,7 @@ pub fn lty(t: &str) -> String {
         _ if crate::intwidth::of(t).is_some() => vkind(t).name().to_string(),
         "bool" => "i1".to_string(),
         "unit" => "void".to_string(),
-        "array" | "array_u8" | "array_bool" | "str" => ARR.to_string(), // G2 A5, B2
+        "array" | "array_u8" | "array_u16" | "array_bool" | "str" => ARR.to_string(), // G2 A5, B2
         "option" | "result" => OPT.to_string(),
         _ => format!("%pruv_t_{}", t),
     }
@@ -833,7 +860,7 @@ pub fn vkind(t: &str) -> Kind {
     match t {
         "bool" => Kind::I1,
         "unit" => Kind::Unit,
-        "array" | "array_u8" | "array_bool" | "str" => Kind::Arr, // G2 A5, B2
+        "array" | "array_u8" | "array_u16" | "array_bool" | "str" => Kind::Arr, // G2 A5, B2
         "option" | "result" => Kind::Opt,
         _ => Kind::Agg,
     }
@@ -887,7 +914,7 @@ pub fn st(t: &str, c: bool) -> String {
             }
         }
         // G9 A3: buffer fields keep the { ptr, i64 } form
-        "array" | "array_u8" | "array_bool" | "str" => ARR.to_string(),
+        "array" | "array_u8" | "array_u16" | "array_bool" | "str" => ARR.to_string(),
         _ => format!("%pruv_{}_{}", if c { "c" } else { "t" }, t),
     }
 }
@@ -977,7 +1004,7 @@ fn enum_union_words(tt: &TypeTable, abi_types: &HashSet<String>) -> HashMap<Stri
         match ty {
             "bool" => return Some((1, 1)),
             "option" | "result" => return Some((2, 2)),
-            "array" | "array_u8" | "array_bool" | "str" => return Some((3, 24)),
+            "array" | "array_u8" | "array_u16" | "array_bool" | "str" => return Some((3, 24)),
             _ => {}
         }
         if let Some(&words) = bounds.get(ty) {
@@ -1052,9 +1079,10 @@ pub fn is_internal_fn(f: &Function, tt: &TypeTable) -> bool {
         || crate::emit_common::has_narrow_scalar_sig(f, tt)
 }
 
-/// An extended (G9) type in the signature (separate from the inout rule: an explicit host entry may have inout params)
+/// A signature excluded from C ABI generation: extended aggregates or internal u16 buffers.
 pub fn has_ext_sig(f: &Function, tt: &TypeTable) -> bool {
-    f.params.iter().any(|p| is_ext_t(tt, &p.ty)) || is_ext_t(tt, &f.ret)
+    crate::emit_common::has_u16_buffer_sig(f)
+        || f.params.iter().any(|p| is_ext_t(tt, &p.ty)) || is_ext_t(tt, &f.ret)
 }
 
 /// internal LLVM result type: an extended (G9) aggregate result goes through explicit output storage
@@ -1334,9 +1362,10 @@ pub struct Mod {
     /// some host wrapper of an inout entry calls @pruv_overlap (module gets DECLS_OVERLAP)
     pub overlap: bool,
     /// P3-S1: the stack plan (set by gen_llvm; empty = every array on the heap)
-    pub stack: crate::stack::StackPlan,
+    pub stack: crate::emit_common::BufferStackPlan,
     /// P3-S1: some stack array calls @pruv_fill_v2
     pub fill: bool,
+    alloc_narrow: bool,
     /// P3: tail-filled alloc helpers used (pruv_alloc_tail, pruv_alloc_tail_u8)
     pub tail_i64: bool,
     pub tail_u8: bool,
@@ -1391,8 +1420,9 @@ impl Mod {
             uses_utf8_panic: false,
             shrink: false,
             overlap: false,
-            stack: crate::stack::StackPlan::default(),
+            stack: crate::emit_common::BufferStackPlan::default(),
             fill: false,
+            alloc_narrow: false,
             tail_i64: false,
             tail_u8: false,
             resize_i64: false,
@@ -1980,7 +2010,7 @@ impl<'a> FnGen<'a> {
                 self.allocas.push(format!("{} = alloca ptr", a));
                 self.allocas.push(format!("{} = alloca i64", b));
                 let mut sl = V::with_b(Kind::Arr, a, b);
-                sl.ty = elem_ty(ty); // G2 A5: Some only for u8 and bool, None otherwise (default unchanged)
+                sl.ty = elem_ty(ty);
                 let c = format!("{}.c", base); // P3: the cap lives next to the len
                 self.allocas.push(format!("{} = alloca i64", c));
                 sl.c = Some(c);
@@ -2082,11 +2112,9 @@ impl<'a> FnGen<'a> {
             // G9 A3: an extended temporary
             return self.drop_agg(v);
         }
-        if v.layout != "i64" {
-            return self.ins(format!("call void @pruv_free_v2_nn(ptr {}, i64 {}, i64 {}, i64 {})", v.a, capof(v), elem_size(v.layout), alignment(v.layout)));
-        }
-        if is_bytes_ty(&v.ty) {
-            return self.ins(format!("call void @pruv_free_v2_nn(ptr {}, i64 {}, i64 1, i64 1)", v.a, capof(v)));
+        let size = buffer_size(v);
+        if size != 8 {
+            return self.ins(format!("call void @pruv_free_v2_nn(ptr {}, i64 {}, i64 {size}, i64 {size})", v.a, capof(v)));
         }
         self.ins(format!("call void @pruv_free_nn(ptr {}, i64 {})", v.a, capof(v))) // P3: the size is the cap, not the len
     }
@@ -3540,19 +3568,26 @@ impl<'a> FnGen<'a> {
         !self.scopes.first().is_some_and(|sc| sc.arrays.iter().any(|y| y.a == v.a))
     }
 
-    /// --no-verify guards of resize(src, cnt, v): len(src) <= cnt <= 2^40, and v <= 255 for [u8]
+    fn guard_buffer_elem(&mut self, ty: Option<&str>, value: &str) -> R<()> {
+        if self.verified { return Ok(()); }
+        let (max, range) = match ty {
+            Some(ARRAY_U8) => (255, "u8 0..=255"),
+            Some(ARRAY_U16) => (65535, "u16 0..=65535"),
+            _ => return Ok(()),
+        };
+        let ok = self.op(format!("icmp ule i64 {value}, {max}"))?;
+        self.guard(&ok, Fail::Elem(value.to_string(), range), false)
+    }
+
     /// --no-verify guards of resize(src, cnt, v): len(src) <= cnt <= 2^40 (0 <= cnt for R-6g9-1's scratch resize of
-    /// an inout view source, which may shrink), and v <= 255 for [u8]
+    /// an inout view source, which may shrink), plus the element range for u8 and u16.
     fn resize_guards(&mut self, src: &V, cnt: &V, v: &V, scratch: bool) -> R<()> {
         if !self.verified {
             let lo = self.op(format!("icmp sle i64 {}, {}", if scratch { "0" } else { src.b.as_str() }, cnt.a))?;
             let hi = self.op(format!("icmp ule i64 {}, 1099511627776", cnt.a))?;
             let ok = self.op(format!("and i1 {}, {}", lo, hi))?;
             self.guard(&ok, Fail::Panic1("pruv_panic_arith", "resize length outside len..2^40".to_string()), false)?;
-            if src.ty.as_deref() == Some(ARRAY_U8) {
-                let ok2 = self.op(format!("icmp ule i64 {}, 255", v.a))?;
-                self.guard(&ok2, Fail::Elem(v.a.clone(), "u8 0..=255"), false)?;
-            }
+            self.guard_buffer_elem(src.ty.as_deref(), &v.a)?;
         }
         Ok(())
     }
@@ -3650,11 +3685,12 @@ impl<'a> FnGen<'a> {
         } else if src.ty.as_deref() == Some(ARRAY_U8) {
             self.m.regrow_u8 = true;
             self.op(format!("call ptr @pruv_regrow_u8(ptr {}, i64 {}, i64 {}, i64 {}, i64 {})", src.a, cap, src.b, cnt.a, v.a))?
-        } else if src.layout != "i64" {
+        } else if buffer_layout(src) != "i64" {
+            let size = buffer_size(src);
             self.m.regrow_narrow = true;
             self.op(format!(
                 "call ptr @pruv_regrow_narrow(ptr {}, i64 {}, i64 {}, i64 {}, i64 {}, i64 {}, i64 {})",
-                src.a, cap, src.b, cnt.a, v.a, elem_size(src.layout), alignment(src.layout)
+                src.a, cap, src.b, cnt.a, v.a, size, size
             ))?
         } else {
             self.m.regrow_i64 = true;
@@ -3719,11 +3755,8 @@ impl<'a> FnGen<'a> {
             } else if push {
                 let ok = self.op(format!("icmp ule i64 {}, {}", src.b, 1099511627776i64 - values.len() as i64))?;
                 self.guard(&ok, Fail::Panic1("pruv_panic_arith", "arr_push length exceeds 2^40".into()), false)?;
-                if is_u8_ty(&src.ty) {
-                    for v in values.clone() {
-                        let ok = self.op(format!("icmp ule i64 {v}, 255"))?;
-                        self.guard(&ok, Fail::Elem(v, "u8 0..=255"), false)?;
-                    }
+                for v in &values {
+                    self.guard_buffer_elem(src.ty.as_deref(), v)?;
                 }
             } else {
                 let ok = self.op(format!("icmp ule i64 {}, 1099511627776", value.a))?;
@@ -3750,7 +3783,7 @@ impl<'a> FnGen<'a> {
             need.clone()
         };
         let ty = elem_ir(&src);
-        let size = if is_bytes_ty(&src.ty) { 1 } else { elem_size(src.layout) };
+        let size = buffer_size(&src);
         self.m.raw_regrow = true;
         let newptr = self.op(format!("call ptr @pruv_regrow_v2(ptr {}, i64 {cap}, i64 {newcap}, i64 {size}, i64 {size})", src.a))?;
         self.ins(format!("store ptr {newptr}, ptr {}", slot.a))?;
@@ -4081,11 +4114,12 @@ impl<'a> FnGen<'a> {
         if x.ty == "array_bool" {
             val = v.a.clone(); // i1; widened to the fill byte below (no code at all when n == 0)
             layout = "i64"; size = 1; ety = "i8".to_string();
-        } else if x.ty == "array_u8" {
-            if !self.verified {
-                let ok = self.op(format!("icmp ule i64 {}, 255", v.a))?;
-                self.guard(&ok, Fail::Elem(v.a.clone(), "u8 0..=255"), false)?;
-            }
+        } else if x.ty == ARRAY_U16 {
+            self.guard_buffer_elem(Some(&x.ty), &v.a)?;
+            val = v.a.clone();
+            layout = "u16"; size = 2; ety = "i16".to_string();
+        } else if x.ty == ARRAY_U8 {
+            self.guard_buffer_elem(Some(&x.ty), &v.a)?;
             val = v.a.clone();
             layout = "i64"; size = 1; ety = "i8".to_string();
         } else {
@@ -4164,7 +4198,7 @@ impl<'a> FnGen<'a> {
                 }
                 _ => return Err(format!("llvmgen: place binding of non-slot {}", root.name)),
             };
-            if arr.layout != "i64" {
+            if buffer_layout(&arr) != "i64" {
                 return Err(format!("llvmgen: place binding into a narrowed array {}", root.name));
             }
             let index = self.ev(&i.index, false)?;
@@ -4217,7 +4251,7 @@ impl<'a> FnGen<'a> {
                 Ok(())
             }
             Stmt::Let(x) if self.m.stack.contains(x) && !self.resize_slots.contains(&x.name) => self.stack_let(x),
-            Stmt::Let(x) if self.m.stack.lit(x) && !self.cost
+            Stmt::Let(x) if self.m.stack.base.lit(x) && !self.cost
                 || matches!(x.value, Expr::StrLit(_)) && self.static_strs.contains(&x.name) => {
                 // P3: a borrowed literal local binds the read-only global directly: no copy, never freed. R-6g9-3: so
                 // does a static text local (the checker charged it no alloc), also in a recursive or metered function
@@ -4401,7 +4435,8 @@ impl<'a> FnGen<'a> {
                     }
                 };
                 let g = self.index_ptr(&a, &i)?;
-                if a.layout != "i64" {
+                if buffer_layout(&a) != "i64" {
+                    self.guard_buffer_elem(a.ty.as_deref(), &v.a)?;
                     let ty = elem_ir(&a);
                     let z = self.op(format!("trunc i64 {} to {}", v.a, ty))?;
                     self.ins(format!("store {} {}, ptr {}", ty, z, g))?;
@@ -4410,10 +4445,7 @@ impl<'a> FnGen<'a> {
                     let z = self.op(format!("zext i1 {} to i8", v.a))?;
                     self.ins(format!("store i8 {}, ptr {}", z, g))?;
                 } else if is_u8_ty(&a.ty) {
-                    if !self.verified {
-                        let ok = self.op(format!("icmp ule i64 {}, 255", v.a))?;
-                        self.guard(&ok, Fail::Elem(v.a.clone(), "u8 0..=255"), false)?;
-                    }
+                    self.guard_buffer_elem(a.ty.as_deref(), &v.a)?;
                     let b = self.op(format!("trunc i64 {} to i8", v.a))?;
                     self.ins(format!("store i8 {}, ptr {}", b, g))?;
                 } else {
@@ -4737,9 +4769,10 @@ impl<'a> FnGen<'a> {
 
     fn narrow_load(&mut self, a: &V, ptr: &str, target: &str) -> R<String> {
         let ty = elem_ir(a);
-        let md = self.range_md(a.layout, a.rng);
+        let layout = buffer_layout(a);
+        let md = self.range_md(layout, a.rng);
         let x = self.op(format!("load {}, ptr {}{}", ty, ptr, md))?;
-        self.op(format!("{} {} {} to {}", if a.layout.starts_with('i') { "sext" } else { "zext" }, ty, x, target))
+        self.op(format!("{} {} {} to {}", if layout.starts_with('i') { "sext" } else { "zext" }, ty, x, target))
     }
 
     pub fn index_ptr(&mut self, a: &V, i: &V) -> R<String> {
@@ -4786,7 +4819,7 @@ impl<'a> FnGen<'a> {
     }
 
     /// P17a: one memcmp of n * sz bytes; returns the i1 result
-    fn eqr_mem(&mut self, pa: &str, pb: &str, cnt: &str, sz: i64) -> R<String> {
+    fn eqr_mem(&mut self, pa: &str, pb: &str, cnt: &str, sz: usize) -> R<String> {
         self.m.memcmp = true;
         let nb = if sz == 1 { cnt.to_string() } else { self.op(format!("mul nuw nsw i64 {}, {}", cnt, sz))? };
         let rc = self.op(format!("call i32 @memcmp(ptr {}, ptr {}, i64 {})", pa, pb, nb))?;
@@ -5072,7 +5105,7 @@ impl<'a> FnGen<'a> {
                     let r = self.op(format!("zext i8 {} to i64", x8))?;
                     return Ok(V::new(Kind::I64, r));
                 }
-                if a.layout != "i64" {
+                if buffer_layout(&a) != "i64" {
                     return Ok(V::new(Kind::I64, self.narrow_load(&a, &g, "i64")?));
                 }
                 let md = self.range_md(a.layout, a.rng);
@@ -5325,10 +5358,7 @@ impl<'a> FnGen<'a> {
             if !self.verified {
                 let ok = self.op(format!("icmp ult i64 {}, 1099511627777", cnt.a))?;
                 self.guard(&ok, Fail::Panic1("pruv_panic_arith", "alloc length outside 0..2^40".to_string()), false)?;
-                if u8a {
-                    let ok2 = self.op(format!("icmp ule i64 {}, 255", v.a))?;
-                    self.guard(&ok2, Fail::Elem(v.a.clone(), "u8 0..=255"), false)?;
-                }
+                self.guard_buffer_elem(e.ty.as_deref(), &v.a)?;
             }
             if e.ty.as_deref() == Some(ARRAY_BOOL) {
                 // G2 A5: zext i1 -> i64, allocate with pruv_alloc_u8
@@ -5357,9 +5387,12 @@ impl<'a> FnGen<'a> {
                 rv.ty = Some(ARRAY_U8.to_string());
                 return self.temp_arr(rv, owned);
             }
+            let layout = if e.ty.as_deref() == Some(ARRAY_U16) { "u16" } else { layout };
             if layout != "i64" {
+                self.m.alloc_narrow = true;
                 let p = self.op(format!("call ptr @pruv_alloc_narrow(i64 {}, i64 {}, i64 {}, i64 {})", cnt.a, v.a, elem_size(layout), alignment(layout)))?;
                 let mut rv = V::with_b(Kind::Arr, p, cnt.a.clone());
+                rv.ty = e.ty.as_deref().and_then(elem_ty);
                 rv.layout = layout;
                 rv.rng = rng;
                 return self.temp_arr(rv, owned);
@@ -5383,16 +5416,9 @@ impl<'a> FnGen<'a> {
                 return self.temp_arr(mv, owned);
             }
             let src = self.ev(arg(a, 0)?, false)?;
-            if src.layout != "i64" {
-                let p = self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 {}, i64 {})", src.a, src.b, elem_size(src.layout), alignment(src.layout)))?;
-                let mut rv = V::with_b(Kind::Arr, p, src.b.clone());
-                rv.ty = src.ty.clone();
-                rv.layout = src.layout;
-                rv.rng = src.rng;
-                return self.temp_arr(rv, owned);
-            }
-            if is_bytes_ty(&src.ty) {
-                let p = self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 1, i64 1)", src.a, src.b))?;
+            let size = buffer_size(&src);
+            if size != 8 {
+                let p = self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 {size}, i64 {size})", src.a, src.b))?;
                 let mut rv = V::with_b(Kind::Arr, p, src.b.clone());
                 rv.ty = src.ty.clone();
                 rv.layout = src.layout;
@@ -5441,8 +5467,8 @@ impl<'a> FnGen<'a> {
                     let cut = self.op(format!("icmp ugt i64 {}, {}", half, m.a))?;
                     let nc = self.op(format!("select i1 {}, i64 {}, i64 {}", cut, m.a, cap))?;
                     self.m.shrink = true;
-                    let (sz, al) = if is_bytes_ty(&src.ty) { (1, 1) } else { (elem_size(src.layout), alignment(src.layout)) };
-                    let p = self.op(format!("call ptr @pruv_shrink_v2(ptr {}, i64 {}, i64 {}, i64 {}, i64 {})", src.a, cap, nc, sz, al))?;
+                    let sz = buffer_size(&src);
+                    let p = self.op(format!("call ptr @pruv_shrink_v2(ptr {}, i64 {}, i64 {}, i64 {}, i64 {})", src.a, cap, nc, sz, sz))?;
                     let mut rv = V::with_b(Kind::Arr, p, m.a.clone());
                     rv.ty = src.ty.clone();
                     rv.layout = src.layout;
@@ -5451,16 +5477,9 @@ impl<'a> FnGen<'a> {
                     return self.temp_arr(rv, owned);
                 }
             }
-            if src.layout != "i64" {
-                let p = self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 {}, i64 {})", src.a, m.a, elem_size(src.layout), alignment(src.layout)))?;
-                let mut rv = V::with_b(Kind::Arr, p, m.a.clone());
-                rv.ty = src.ty.clone();
-                rv.layout = src.layout;
-                rv.rng = src.rng;
-                return self.temp_arr(rv, owned);
-            }
-            if is_bytes_ty(&src.ty) {
-                let p = self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 1, i64 1)", src.a, m.a))?;
+            let size = buffer_size(&src);
+            if size != 8 {
+                let p = self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 {size}, i64 {size})", src.a, m.a))?;
                 let mut rv = V::with_b(Kind::Arr, p, m.a.clone());
                 rv.ty = src.ty.clone();
                 rv.layout = src.layout;
@@ -5508,12 +5527,13 @@ impl<'a> FnGen<'a> {
                 rv.ty = Some(ARRAY_U8.to_string());
                 return self.temp_arr(rv, owned);
             }
-            if src.layout != "i64" {
+            if buffer_layout(&src) != "i64" {
+                let size = buffer_size(&src);
                 // a narrow layout: the same single pass at the element's width (prefix memcpy, tail fill)
                 self.m.resize_narrow = true;
                 let p = self.op(format!(
                     "call ptr @pruv_resize_narrow(ptr {}, i64 {}, i64 {}, i64 {}, i64 {}, i64 {})",
-                    src.a, src.b, cnt.a, v.a, elem_size(src.layout), alignment(src.layout)
+                    src.a, src.b, cnt.a, v.a, size, size
                 ))?;
                 let mut rv = V::with_b(Kind::Arr, p, cnt.a.clone());
                 rv.ty = src.ty.clone();
@@ -5602,13 +5622,14 @@ impl<'a> FnGen<'a> {
             }
             let tyd = elem_ir(&dv);
             let tys = elem_ir(&sv);
-            if !((is_bytes_ty(&dv.ty) && is_bytes_ty(&sv.ty)) || (tyd == "i64" && tys == "i64")) {
-                // the storage plan pins copy_range operands to i64 or bytes, as for eq_range; any other pair is not lowered
+            if !same_range_layout(&dv, &sv) {
+                // Inferred layouts are pinned by the storage plan.
                 return Err(format!("{}{n}:{}:{}:array layout", CPR_DIAG_TAG, e.line, e.col));
             }
             let pd = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", tyd, dv.a, iv.a))?;
             let ps = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", tys, sv.a, jv.a))?;
-            let nb = if tyd == "i8" { cnt.a.clone() } else { self.op(format!("mul nuw nsw i64 {}, 8", cnt.a))? };
+            let size = buffer_size(&dv);
+            let nb = if size == 1 { cnt.a.clone() } else { self.op(format!("mul nuw nsw i64 {}, {size}", cnt.a))? };
             let intrinsic = if overlap { "memmove" } else { "memcpy" };
             self.ins(format!("call void @llvm.{intrinsic}.p0.p0.i64(ptr {}, ptr {}, i64 {}, i1 false)", pd, ps, nb))?;
             return Ok(V::unit());
@@ -5682,8 +5703,7 @@ impl<'a> FnGen<'a> {
             }
             let tya = elem_ir(&av);
             let tyb = elem_ir(&bv);
-            if !((is_bytes_ty(&av.ty) && is_bytes_ty(&bv.ty)) || (tya == "i64" && tyb == "i64")) {
-                // the storage plan pins eq_range operands to i64 or bytes; any other pair is not lowered
+            if !same_range_layout(&av, &bv) {
                 return Err(format!("{}{}:{}:array layout", EQR_DIAG_TAG, e.line, e.col));
             }
             if matches!(arg(a, 4)?, Expr::IntLit(_)) && cnt.a == "0" {
@@ -5692,7 +5712,7 @@ impl<'a> FnGen<'a> {
             }
             let pa = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", tya, av.a, iv.a))?;
             let pb = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", tyb, bv.a, jv.a))?;
-            let sz: i64 = if tya == "i8" { 1 } else { 8 };
+            let sz = buffer_size(&av);
             // Measured against hand Rust slice == (work/p16/perf, docs/L3_RESTRUCTURE_SPEC.md Appendix P16/P17a):
             // a literal n is a constant-size memcmp, which LLVM expands into wide loads; a dynamic n below
             // EQR_LOOP_MAX elements takes the inline loop, otherwise memcmp.
@@ -6500,8 +6520,8 @@ impl<'a> FnGen<'a> {
         if is_arr_name(&t) {
             let a = self.cev(e)?;
             self.spend_n(&a.b)?;
-            let np = if is_bytes_ty(&a.ty) {
-                self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 1, i64 1)", a.a, a.b))?
+            let np = if let Some(size) = declared_buffer_size(&elem_ty(&t)) {
+                self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 {size}, i64 {size})", a.a, a.b))?
             } else {
                 self.op(format!("call ptr @pruv_copy(ptr {}, i64 {})", a.a, a.b))?
             };
@@ -6703,7 +6723,7 @@ impl<'a> FnGen<'a> {
                     let r = self.op(format!("zext i8 {} to i128", x8))?;
                     return Ok(V::new(Kind::I128, r));
                 }
-                if a.layout != "i64" {
+                if buffer_layout(&a) != "i64" {
                     let g = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", elem_ir(&a), a.a, ii))?;
                     return Ok(V::new(Kind::I128, self.narrow_load(&a, &g, "i128")?));
                 }
@@ -7113,7 +7133,7 @@ impl<'a> FnGen<'a> {
         self.spend()?;
         let pk = self.op(format!("sub i64 {}, 1", kv))?;
         let le;
-        if arr.layout != "i64" {
+        if buffer_layout(&arr) != "i64" {
             let g0 = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", elem_ir(&arr), arr.a, pk))?;
             let z0 = self.narrow_load(&arr, &g0, "i64")?;
             let g1 = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", elem_ir(&arr), arr.a, kv))?;
@@ -7262,8 +7282,8 @@ impl<'a> FnGen<'a> {
                 self.op(format!("sext i64 {} to i128", x))
             }
             Expr::Index(ix) => {
-                let (name, u8a) = match &*ix.array {
-                    Expr::Var(v) => (v.name.clone(), v.ty.as_deref() == Some("array_u8")),
+                let (name, ty) = match &*ix.array {
+                    Expr::Var(v) => (v.name.clone(), v.ty.as_deref()),
                     _ => return Err("llvmgen: internal error: fast_forall array".to_string()),
                 };
                 let base = self.cenv.get(&name).map(|v| v.a.clone()).ok_or_else(|| format!("'{}'", name))?;
@@ -7277,10 +7297,11 @@ impl<'a> FnGen<'a> {
                     },
                     _ => jv.to_string(),
                 };
-                if u8a {
-                    let g = self.op(format!("getelementptr inbounds i8, ptr {}, i64 {}", base, i))?;
-                    let x = self.op(format!("load i8, ptr {}", g))?;
-                    return self.op(format!("zext i8 {} to i128", x));
+                if matches!(ty, Some(ARRAY_U8 | ARRAY_U16)) {
+                    let elem = if ty == Some(ARRAY_U16) { "i16" } else { "i8" };
+                    let g = self.op(format!("getelementptr inbounds {elem}, ptr {base}, i64 {i}"))?;
+                    let x = self.op(format!("load {elem}, ptr {g}"))?;
+                    return self.op(format!("zext {elem} {x} to i128"));
                 }
                 let g = self.op(format!("getelementptr inbounds i64, ptr {}, i64 {}", base, i))?;
                 let x = self.op(format!("load i64, ptr {}", g))?;
@@ -7340,7 +7361,7 @@ impl<'a> FnGen<'a> {
             let me = &*self;
             let ok = |x: &Expr| match x {
                 Expr::Var(v) => me.cenv.get(&v.name).map_or(false, |c| {
-                    c.k == Kind::Arr && (v.ty.as_deref() == Some("array_u8") || c.layout == "i64")
+                    c.k == Kind::Arr && (matches!(v.ty.as_deref(), Some(ARRAY_U8 | ARRAY_U16)) || c.layout == "i64")
                 }),
                 _ => false,
             };
@@ -7781,8 +7802,8 @@ fn g9_clone_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
                 let x = g.op(format!("load {}, ptr {}", ARR, gs))?;
                 let p = g.op(format!("extractvalue {} {}, 0", ARR, x))?;
                 let n = g.op(format!("extractvalue {} {}, 1", ARR, x))?;
-                let np = if is_bytes_ty(&elem_ty(ft)) {
-                    g.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 1, i64 1)", p, n))?
+                let np = if let Some(size) = declared_buffer_size(&elem_ty(ft)) {
+                    g.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 {size}, i64 {size})", p, n))?
                 } else {
                     g.op(format!("call ptr @pruv_copy(ptr {}, i64 {})", p, n))?
                 };
@@ -8980,7 +9001,7 @@ fn gen_llvm_body(
     let mut par_targets = BTreeSet::new();
     for f in &prog.functions { collect_par(&f.body, &mut par_targets); }
     let is_g6 = crate::foreign::first_g6_use(prog).is_some();
-    if let Some(e) = crate::typeinfo::g2_unimplemented_error(prog, "codegen", None, &["array_u8", "array_bool", "str"], None) {
+    if let Some(e) = crate::typeinfo::g2_unimplemented_error(prog, "codegen", None, &["array_u8", "array_u16", "array_bool", "str"], None) {
         // G2 B2: str also opens the generation layer
         return Err(format!("unsupported_type: {}", e.message));
     }
@@ -9005,7 +9026,7 @@ fn gen_llvm_body(
     m.sym_pre = sym_prefix(prog.pkg_name.as_deref());
     m.resize_params = crate::check::resize_params(prog);
     m.storage = plan_storage(prog, verified);
-    m.stack = crate::stack::plan_stack(prog, &m.storage, verified);
+    m.stack = crate::emit_common::BufferStackPlan::new(prog, &m.storage, verified);
     let narrowed = m.storage.entries.iter().any(|(_, w)| *w != "i64");
     let explicit = prog.explicit.is_some();
     m.explicit = explicit;
@@ -9125,6 +9146,8 @@ fn gen_llvm_body(
             g6decls.push('\n');
         }
     }
+    let alloc_narrow = narrowed || m.alloc_narrow;
+    let u16_used = uses_array_type(prog, ARRAY_U16) || type_has_field(prog, ARRAY_U16);
     let memmove = chunks.iter().any(|chunk| chunk.contains("call void @llvm.memmove.p0.p0.i64("));
     let mut ir = format!(
         "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
@@ -9139,12 +9162,12 @@ fn gen_llvm_body(
         // G2 B2: DECLS_U8 if u8, bool or str is used, and DECLS_STR at the very end if str is used
         // G6 A3: DECLS_U8 also when string_to_str copies through pruv_copy_v2
         // G9 A3: DECLS_U8 also for a [u8] / [bool] buffer field
-        if uses_array_type(prog, "array_u8") || uses_array_type(prog, "array_bool") || has_str || m.g6_v2 || g9_u8 || narrowed {
+        if uses_array_type(prog, "array_u8") || uses_array_type(prog, "array_bool") || has_str || m.g6_v2 || g9_u8 || u16_used || alloc_narrow {
             DECLS_U8
         } else {
             ""
         },
-        if narrowed { "declare noalias ptr @pruv_alloc_narrow(i64, i64, i64, i64) nounwind\n" } else { "" },
+        if alloc_narrow { "declare noalias ptr @pruv_alloc_narrow(i64, i64, i64, i64) nounwind\n" } else { "" },
         if uses_array_type(prog, "array_bool") { DECLS_BOOL } else { "" },
         if has_str { DECLS_STR } else { "" },
         if m.uses_repr { DECLS_REPR } else { "" }, // G3

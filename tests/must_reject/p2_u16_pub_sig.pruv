@@ -1,0 +1,4 @@
+// P2: [u16] at the host boundary (pub fn) is bundle P12
+pub fn f(a: [u16]) -> i64 {
+  return len(a);
+}

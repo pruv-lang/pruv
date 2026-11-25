@@ -1,0 +1,6 @@
+// P2: arr_append needs one element type; [u16] into [i64] is not widened
+fn f(inout a: [i64], b: ref [u16]) -> () ! alloc
+  requires len(a) <= 1000 && len(b) <= 1000
+{
+  arr_append(inout a, b, 0, len(b));
+}

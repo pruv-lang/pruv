@@ -28,7 +28,7 @@ fn contains_borrow(ty: &GType, structs: &HashSet<String>) -> bool {
 }
 
 pub(crate) fn is_view_base(ty: &str) -> bool {
-    matches!(ty, "array" | "array_u8" | "array_bool" | "str")
+    crate::typeinfo::is_array_name(ty) || ty == "str"
 }
 
 pub(crate) fn is_view_wrapper(ty: &str) -> bool {
@@ -132,9 +132,11 @@ pub(crate) fn prepare(prog: &mut Program, hosts: &[bool]) -> Res<()> {
     for (i, f) in prog.functions.iter_mut().enumerate() {
         let permitted = f.tparams.is_empty() && f.foreign.is_none() && !hosts.get(i).copied().unwrap_or(false);
         for p in &mut f.params {
+            // A read-only ref [u16] parameter has the same lifetime as a plain read parameter.
+            let read_u16_view = permitted && !p.take && p.mode_pos.is_none() && p.ty == "@ref<array_u16>";
             // R-6g9-6: borrowing structs may be inout parameters.
             if !(permitted && structs.contains(&p.ty) && !p.take) {
-                annotation(&mut p.ty, f.line, f.col, false, false, &structs)?;
+                annotation(&mut p.ty, f.line, f.col, read_u16_view, false, &structs)?;
             }
         }
         if !(permitted && structs.contains(&f.ret)) {

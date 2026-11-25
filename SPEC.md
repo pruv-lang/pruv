@@ -149,7 +149,7 @@ it can never be silently dropped.
   `type/inout_alias`. No struct invariant is checked at the store (invariants are checked at handoffs).
 - `load_le(a, i, n)` and `store_le(inout a, i, w, n);` follow the same rules as `load_be` and `store_be`,
   respectively, using little-endian byte order (byte `a[i+k]` has weight `256^k`). Both names are reserved.
-- `eq_range(a, i, b, j, n)`: `a` and `b` of one type, `[i64]` or `[u8]` (else `type_mismatch`); `i, j, n: i64`; a
+- `eq_range(a, i, b, j, n)`: `a` and `b` of one type, `[i64]`, `[u8]` or `[u16]` (R-6p-4) (else `type_mismatch`); `i, j, n: i64`; a
   `bool`, true iff `a[i+k] == b[j+k]` for every `k` in `0..n` (true for `n == 0`). Code only (`effect_in_contract` in a
   contract), name reserved. The verifier must prove, in this order, `0 <= i`, `0 <= j`, `0 <= n`, `i + n <= len(a)`,
   `j + n <= len(b)` (`verify` error `index_oob`). It then knows the result exactly: `r == forall k in 0..n: a[i+k] ==
@@ -1585,8 +1585,8 @@ borrowed value is live.
   [literal in a predicate body](tests/spec/r6g4_5_literal_predicate.pruv).
 - R-6g4-6 **Append an array range.** `arr_append(inout a, src, s, n) -> ()` is a whole statement and
   requires `! alloc`. The destination is a `let mut` local or resizable `inout` array, including a
-  mutable array field under R-6g-3. Both arrays may be `[i64]` or both may be `[u8]`. A `[u8]`
-  source may also append to an `[i64]` destination by widening each byte. The source and scalar
+  mutable array field under R-6g-3. Both arrays may be `[i64]`, both `[u8]`, or both `[u16]`.
+  A `[u8]` source may also append to an `[i64]` destination by widening each byte. The source and scalar
   arguments must not mention an overlapping destination place (`type/inout_alias`). The verifier
   requires `0 <= s && 0 <= n && s + n <= len(src) && len(a) + n <= 2^40` (`call_requires`), where
   `s` and `n` are `i64`. The new length is the old length plus `n`. The old prefix is preserved
@@ -2410,11 +2410,25 @@ read by the checker, the verifier and both backends.
   `pruv: arithmetic error: cast out of range` (exit 101). Tests: [accept](tests/spec/r6p_2_accept.pruv),
   [reject](tests/spec/r6p_2_reject.pruv), [contract](tests/spec/r6p_2_reject_contract.pruv).
 - R-6p-3 **Not yet supported.** These are rejected with `small_int_unsupported` (stage `parse` or `type`) and a
-  message naming the later bundle: `[u16]` arrays (P2); `u8`/`u16` as a type argument (`Option<u8>`, `Vec<u16>`,
-  generics; P2/P11) or an enum payload (P11); `u8`/`u16` in the signature of a `pub`, `extern` or foreign function
-  (P12; a private function whose signature holds `u8`/`u16`, directly or inside a struct, is never a host entry); an
+  message naming the later bundle: `u8`/`u16` as a type argument (`Option<u8>`, `Vec<u16>`,
+  generics; P11) or an enum payload (P11); `u8`/`u16` or `[u16]` in the signature of a `pub`, `extern` or foreign function
+  (P12; a private function whose signature holds `u8`/`u16`/`[u16]`, directly or inside a struct, is never a host entry); an
   index or a `decreases` measure of type `u8`/`u16` (write `i64(x)`); and the integer types `u32 i32 usize isize u64 i8
   i16` (P3). Tests: [accept](tests/spec/r6p_3_accept.pruv), [reject](tests/spec/r6p_3_reject.pruv).
+- R-6p-4 **`[u16]` buffers (P2).** `[u16]` (owned) and `ref [u16]` (borrowed, with the `from(...)` and `subview` rules
+  of R-6g-5..11 and R-6g9) hold UTF-16 code units, or any 16-bit unsigned values: Pruv never validates or normalises
+  them, so lone surrogates (`0xD800`, `0xDFFF`) and reversed pairs are plain values. They follow the `[u8]` rules
+  with the range `0..=65535` taken from the width table: a read `a[i]` is an `i64` the verifier knows is in
+  `0..=65535`; a write `a[i] = v`, the fill of `alloc(n, v)` and `resize(a, n, v)`, and `arr_push(inout a, v)` must prove
+  `0 <= v <= 65535` (`verify/elem_range`). `len`, `copy`, `truncate`, `resize`, `copy_range`, `copy_within`,
+  `arr_reserve`, `arr_push`, `arr_append` and `eq_range` take `[u16]` with operands of one type (`[u16]` is never
+  widened into `[i64]`; mixing is `type/type_mismatch`). `find_byte`, `str`/UTF-8 builtins, `load_*`/`store_*`,
+  `string_eq` and IO buffers stay `[u8]`. There is no builtin `[u8]`/`[u16]` conversion and no builtin key order
+  or hash: compare and hash keys with a Pruv function over `ref [u16]` (lexicographic code-unit order is the order of
+  Rust `&[u16]`; see [example](examples/p2_u16_keys.pruv)). Code: Rust stores `Vec<u16>` and borrows `&[u16]`
+  (`a[i] as i64` reads, `v as u16` proven writes, `pruv_set_u16` with `--no-verify`); LLVM stores `i16` elements (2
+  bytes, align 2), zero-extends reads and truncates proven writes. Tests: [accept](tests/spec/r6p_4_accept.pruv),
+  [reject](tests/spec/r6p_4_reject.pruv), [false contract](tests/spec/r6p_4_reject_contract.pruv).
 
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.

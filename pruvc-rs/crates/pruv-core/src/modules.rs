@@ -18,7 +18,6 @@ use crate::diagnostic::{set_files, tagged_line, PruvError};
 use crate::foreign::is_catalog;
 use crate::gtype::{decl_owner, dependencies, fn_owner, GType};
 use crate::pyio::{io_error_message, utf8_error_message};
-use crate::typeinfo::BUILTIN_TYPE_NAMES;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -112,7 +111,7 @@ pub fn safe_type_cow(ty: &GType) -> std::borrow::Cow<'_, GType> {
         return Cow::Borrowed(ty);
     }
     let args: Vec<Cow<'_, GType>> = ty.args.iter().map(safe_type_cow).collect();
-    if BUILTIN_TYPE_NAMES.contains(&ty.name.as_str()) || !(ty.name.starts_with("crate::") || ty.name.starts_with('@')) {
+    if crate::typeinfo::is_builtin_type_name(&ty.name) || !(ty.name.starts_with("crate::") || ty.name.starts_with('@')) {
         if args.iter().all(|a| matches!(a, Cow::Borrowed(_))) {
             return Cow::Borrowed(ty);
         }
@@ -1140,14 +1139,14 @@ impl<'a> Rs<'a> {
             }
             return Ok(ty.clone());
         }
-        if ty.args.is_empty() && BUILTIN_TYPE_NAMES.contains(&ty.name.as_str()) {
+        if ty.args.is_empty() && crate::typeinfo::is_builtin_type_name(&ty.name) {
             return Ok(ty.clone());
         }
         let mut args: Vec<GType> = Vec::with_capacity(ty.args.len());
         for a in &ty.args {
             args.push(self.rtype(a, line, col)?);
         }
-        let name = if ty.name == "@ref" || BUILTIN_TYPE_NAMES.contains(&ty.name.as_str()) {
+        let name = if ty.name == "@ref" || crate::typeinfo::is_builtin_type_name(&ty.name) {
             ty.name.clone()
         } else {
             self.local_or_path_type(&ty.name, line, col)?
@@ -1182,7 +1181,7 @@ impl<'a> Rs<'a> {
 
     fn rrefine(&self, r: &mut Option<Refinement>) -> Res<()> {
         if let Some(r) = r {
-            if !BUILTIN_TYPE_NAMES.contains(&r.base.as_str()) {
+            if !crate::typeinfo::is_builtin_type_name(&r.base) {
                 r.base = self.local_or_path_type(&r.base, r.line, r.col)?;
             }
         }
