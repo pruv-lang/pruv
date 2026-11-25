@@ -29,12 +29,17 @@ impl IntWidth {
 
     /// True when every value of `self` is a value of `to` (widening or same type).
     pub fn fits_in(&self, to: &IntWidth) -> bool {
-        to.min <= self.min && self.max <= to.max
+        to.min <= self.min && self.max <= to.max && !(to.is_char() && !self.is_char() && self.max >= SURROGATE_LO)
+    }
+
+    /// P7: the `char` type (a Unicode scalar value, SPEC §6t).
+    pub fn is_char(&self) -> bool {
+        self.name == "char"
     }
 
     /// True when `v` is a value of this type.
     pub fn contains(&self, v: i128) -> bool {
-        self.min <= v && v <= self.max
+        self.min <= v && v <= self.max && !(self.is_char() && (SURROGATE_LO..=SURROGATE_HI).contains(&v))
     }
 }
 
@@ -50,8 +55,15 @@ pub const U64: IntWidth = IntWidth { name: "u64", signed: false, bits: 64, min: 
 pub const I8: IntWidth = IntWidth { name: "i8", signed: true, bits: 8, min: i8::MIN as i128, max: i8::MAX as i128 };
 pub const I16: IntWidth = IntWidth { name: "i16", signed: true, bits: 16, min: i16::MIN as i128, max: i16::MAX as i128 };
 
+/// P7: `char` is stored as a 32-bit code and modelled like an integer width whose values are the Unicode scalar
+/// values: 0..=0x10FFFF without the surrogate range [`SURROGATE_LO`]..=[`SURROGATE_HI`] (SPEC R-6t-4).
+/// It has no arithmetic and converts only to and from `u32` (and from `u8`).
+pub const CHAR: IntWidth = IntWidth { name: "char", signed: false, bits: 32, min: 0, max: 0x10FFFF };
+pub const SURROGATE_LO: i128 = 0xD800;
+pub const SURROGATE_HI: i128 = 0xDFFF;
+
 /// All scalar integer types, in declaration order.
-pub const SCALAR_INTS: [IntWidth; 10] = [I64, U8, U16, U32, I32, USIZE, ISIZE, U64, I8, I16];
+pub const SCALAR_INTS: [IntWidth; 11] = [I64, U8, U16, U32, I32, USIZE, ISIZE, U64, I8, I16, CHAR];
 
 /// Integer type names that are reserved for later bundles and rejected today (none since P3).
 pub const PENDING_INTS: [&str; 0] = [];
@@ -77,6 +89,8 @@ mod tests {
         assert_eq!(of("u16").unwrap().max, 65535);
         assert_eq!(of("i64").unwrap().min, -(1i128 << 63));
         assert!(of("u128").is_none());
+        assert!(CHAR.contains(0x41) && !CHAR.contains(0xD800) && !CHAR.contains(0x110000));
+        assert!(U8.fits_in(&CHAR) && !U16.fits_in(&CHAR) && CHAR.fits_in(&U32) && !U32.fits_in(&CHAR));
         assert_eq!(of("u64").unwrap().max, u64::MAX as i128);
         assert!(U32.fits_in(&I64) && !U64.fits_in(&I64) && I8.fits_in(&I16) && !I8.fits_in(&U8));
         assert!(U8.fits_in(&U16) && U16.fits_in(&I64) && !I64.fits_in(&U16));

@@ -1,0 +1,10 @@
+// spec: R-6t-3 reject
+// LIMIT is 10, so x < LIMIT does not give x < 5.
+const LIMIT: i64 = 10;
+
+fn f(x: i64) -> i64
+  requires 0 <= x && x < LIMIT
+  ensures result < 5
+{
+  return x;
+}

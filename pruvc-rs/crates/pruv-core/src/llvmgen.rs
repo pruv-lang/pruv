@@ -5349,6 +5349,16 @@ impl<'a> FnGen<'a> {
                     None => lo,
                 });
             }
+            if target.is_char() && source.max >= crate::intwidth::SURROGATE_LO {
+                // P7 (R-6t-4): the surrogate range 0xD800..=0xDFFF is not a char
+                let off = self.op(format!("sub {from} {}, {}", value.a, crate::intwidth::SURROGATE_LO))?;
+                let gap = crate::intwidth::SURROGATE_HI - crate::intwidth::SURROGATE_LO;
+                let out = self.op(format!("icmp ugt {from} {off}, {gap}"))?;
+                ok = Some(match ok {
+                    Some(prev) => self.op(format!("and i1 {prev}, {out}"))?,
+                    None => out,
+                });
+            }
             if let Some(ok) = ok {
                 self.guard(&ok, Fail::Panic1("pruv_panic_arith", "cast out of range".to_string()), false)?;
             }
@@ -9408,6 +9418,7 @@ mod tests {
             uses_inout: None, contract_vec_slice: None,
             raw_entries: None,
             pkg_name: None,
+            consts: Vec::new(),
         }
     }
 

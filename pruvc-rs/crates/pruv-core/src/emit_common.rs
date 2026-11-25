@@ -638,7 +638,7 @@ mod tests {
         Expr::Var(Var { line: 1, col: 1, name: n.into(), ty: None })
     }
     fn int(v: &str) -> Expr {
-        Expr::IntLit(IntLit { line: 1, col: 1, value: v.into(), ty: None })
+        Expr::IntLit(IntLit { line: 1, col: 1, value: v.into(), ty: None, kind: Default::default() })
     }
     fn bin(op: &str, l: Expr, r: Expr) -> Expr {
         Expr::Binary(Binary { line: 1, col: 1, op: op.into(), left: Box::new(l), right: Box::new(r), ty: None })

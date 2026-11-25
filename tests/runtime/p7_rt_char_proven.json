@@ -1,0 +1,1 @@
+{"flags_matrix": [[]], "exit": 0, "stdout_lines": ["57344", "57351", "58344"], "gen_contains": ["(unsafe { ::std::char::from_u32_unchecked(x) })"], "llvm_fn_absent": {"to_char": ["pruv_panic_arith"]}}

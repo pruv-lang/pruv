@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["5034", "12034"], "gen_contains": ["put(&mut s, 'a', b'\"', K);"]}

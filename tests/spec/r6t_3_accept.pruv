@@ -1,0 +1,64 @@
+// spec: R-6t-3 accept
+// Constants are evaluated at compile time; the proof sees their values.
+const SIZE: i64 = 4 * 1024;
+const HALF: i64 = SIZE / 2;
+const LOW: u8 = u8(HALF % 200);
+const FIRST: char = 'A';
+
+fn half(x: i64) -> i64
+  requires 0 <= x && x <= SIZE
+  ensures result <= HALF
+{
+  return x / 2;
+}
+
+fn low() -> u8
+  ensures result == 48
+{
+  return LOW;
+}
+
+fn first() -> char
+  ensures u32(result) == 65
+{
+  return FIRST;
+}
+
+// A constant is an ordinary operand: a loop bound, an index, a typed operand next to an untyped literal.
+const COUNT: i64 = 4;
+const AT: u8 = 1;
+const SMALL: u8 = 200;
+const SAME: char = char('z');
+
+fn count() -> i64 {
+  let mut n: i64 = 0;
+  for i in 0..COUNT invariant 0 <= n && n <= i {
+    n = n + 1;
+  }
+  return n;
+}
+
+fn pick(a: [i64]) -> i64
+  requires len(a) >= 2
+  ensures result == a[1]
+{
+  return a[AT];
+}
+
+fn grow() -> u8
+  ensures result == 201
+{
+  return 1 + SMALL;
+}
+
+fn shrink() -> u8
+  ensures result == 199
+{
+  return SMALL - 1;
+}
+
+fn same() -> char
+  ensures u32(result) == 122
+{
+  return SAME;
+}

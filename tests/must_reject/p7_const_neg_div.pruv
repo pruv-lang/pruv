@@ -1,0 +1,2 @@
+const D: i64 = -7 / 2;
+fn f() -> i64 { return D; }

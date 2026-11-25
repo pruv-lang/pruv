@@ -1,0 +1,1 @@
+fn f(b: bool) -> char { return char(b); }

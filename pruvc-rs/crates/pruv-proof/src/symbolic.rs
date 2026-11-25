@@ -191,6 +191,14 @@ pub fn in_range(z: &Z3, x: &Ast) -> Ast {
 }
 
 fn in_int_range(z: &Z3, x: &Ast, width: &IntWidth) -> Ast {
+    if width.is_char() {
+        // P7 (R-6t-4): a Unicode scalar value, the surrogate range excluded
+        return z.and(&[
+            x.raw_ge(&int_const(z, width.min)),
+            x.raw_le(&int_const(z, width.max)),
+            z.or(&[x.raw_lt(&int_const(z, intwidth::SURROGATE_LO)), x.raw_gt(&int_const(z, intwidth::SURROGATE_HI))]),
+        ]);
+    }
     z.and(&[x.raw_ge(&int_const(z, width.min)), x.raw_le(&int_const(z, width.max))])
 }
 
@@ -1329,7 +1337,7 @@ pub(crate) fn inv_type_clauses(
                 expr = Expr::Quant(ast::Quant {
                     line, col, kind: "forall".into(), var: INV_ELEM.into(),
                     lo: Box::new(Expr::IntLit(ast::IntLit {
-                        line, col, value: "0".into(), ty: Some("i64".into()),
+                        line, col, value: "0".into(), ty: Some("i64".into()), kind: Default::default(),
                     })),
                     hi: Box::new(Expr::Call(ast::Call {
                         line, col, name: "len".into(), args: vec![arg], ty: Some("i64".into()),
@@ -3329,7 +3337,12 @@ impl<'a> FnVerifier<'a> {
             if code && !source.fits_in(target) {
                 let ob = in_int_range(&self.z, value.try_ast()?, target);
                 self.prove_core(st, g, &ob, pos(e), "cast_range",
-                    &format!("value within {} range {}..={}", target.name, target.min, target.max), None);
+                    &if target.is_char() {
+                        format!("value within {} range {}..={} outside the surrogates {}..={}", target.name, target.min, target.max,
+                            intwidth::SURROGATE_LO, intwidth::SURROGATE_HI)
+                    } else {
+                        format!("value within {} range {}..={}", target.name, target.min, target.max)
+                    }, None);
                 self.assume(st, g, ob);
             }
             return Ok(value.clone());

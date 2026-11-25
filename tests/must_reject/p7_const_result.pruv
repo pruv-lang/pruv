@@ -1,0 +1,2 @@
+const result: i64 = 0;
+fn f() -> i64 ensures result == 0 { return 1; }

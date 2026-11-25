@@ -61,9 +61,14 @@ pub(crate) fn is_word_builtin(n: &str) -> bool {
 /// P2 batch 4: the value of an integer literal width argument n of load_be / store_be, 1..=8 (None otherwise).
 pub(crate) fn word_width(e: &Expr) -> Option<i64> {
     match e {
-        Expr::IntLit(l) => l.value.parse::<i64>().ok().filter(|v| (1..=8).contains(v)),
+        Expr::IntLit(l) if l.kind == crate::ast::LitKind::Int => l.value.parse::<i64>().ok().filter(|v| (1..=8).contains(v)),
         _ => None,
     }
+}
+
+/// P7: an integer literal without a type of its own (char/byte literals and constant uses carry theirs).
+fn bare_lit(e: &Expr) -> bool {
+    matches!(e, Expr::IntLit(l) if l.kind == crate::ast::LitKind::Int)
 }
 
 /// Built-ins used only in contracts: name -> (argument kind, result).
@@ -5425,9 +5430,16 @@ impl Checker {
     /// an abstract type parameter there is a generic_operation error rather than a plain mismatch.
     fn expect(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, contract: bool, op: Option<&str>) -> Res<GType> {
         if let (Expr::IntLit(lit), Some(width)) = (&*e, ty.int_width()) {
-            let t = check_int_literal(lit, width)?;
-            set_ty(e, &t);
-            return Ok(t);
+            // P7: char/byte literals and constant uses have a fixed type and are compared below
+            if lit.kind == crate::ast::LitKind::Int {
+                if width.is_char() {
+                    return Err(terr(lit.line, lit.col, "type_mismatch", "expected char, found an integer literal",
+                        "write a char literal such as 'a', or char(x) with x: u32"));
+                }
+                let t = check_int_literal(lit, width)?;
+                set_ty(e, &t);
+                return Ok(t);
+            }
         }
         resolve_tuple_lit(e, ty);
         let t = self.expr(e, scope, contract)?;
@@ -5436,11 +5448,11 @@ impl Checker {
 
     /// P3: an index is i64 or any unsigned scalar integer (`u8`..`usize`); a literal index stays i64.
     fn expect_index(&mut self, e: &mut Expr, scope: &Scope, contract: bool) -> Res<GType> {
-        if matches!(e, Expr::IntLit(_)) {
+        if bare_lit(e) {
             return self.expect(e, &i64t(), scope, contract, Some("index"));
         }
         let t = self.expr(e, scope, contract)?;
-        if t.int_width().is_some_and(|w| !w.signed) {
+        if t.int_width().is_some_and(|w| !w.signed && !w.is_char()) {
             return Ok(t);
         }
         self.check_expected_type(e, &i64t(), Some("index"), t)
@@ -5448,7 +5460,7 @@ impl Checker {
 
     /// P3: a `decreases` measure is any scalar integer type (proved >= 0 and decreasing as an Int).
     fn expect_measure(&mut self, e: &mut Expr, scope: &Scope, contract: bool) -> Res<GType> {
-        if matches!(e, Expr::IntLit(_)) {
+        if bare_lit(e) {
             return self.expect(e, &i64t(), scope, contract, Some("decreases measure"));
         }
         let t = self.expr(e, scope, contract)?;
@@ -5501,7 +5513,7 @@ impl Checker {
     // The right operand supplies a literal on the left with its width.
     // Return its type as well when it has already been checked.
     fn scalar_left(&mut self, left: &mut Expr, right: &mut Expr, scope: &Scope, c: bool) -> Res<(GType, Option<GType>)> {
-        if matches!(left, Expr::IntLit(_)) && !matches!(right, Expr::IntLit(_)) {
+        if bare_lit(left) && !bare_lit(right) {
             let rt = self.expr(right, scope, c)?;
             let lt = if is_narrow(&rt) { self.expect(left, &rt, scope, c, None)? } else { self.expr(left, scope, c)? };
             return Ok((lt, Some(rt)));
@@ -5561,6 +5573,7 @@ impl Checker {
         }
         match e {
             Expr::Spent(_) => unreachable!("spent handled above"),
+            Expr::IntLit(x) if x.kind != crate::ast::LitKind::Int => Ok(GType::from_key(x.ty.as_deref().unwrap_or("i64"))),
             Expr::IntLit(x) => check_int_literal(x, &intwidth::I64),
             Expr::BoolLit(_) => Ok(boolt()),
             Expr::StrLit(x) => {
@@ -5591,6 +5604,15 @@ impl Checker {
                     return Ok(binding.ty);
                 }
                 if x.op == "-" {
+                    if !bare_lit(&x.operand) {
+                        let t = self.expr(&mut x.operand, scope, c)?;
+                        if t.int_width().is_some_and(|w| w.is_char()) {
+                            return Err(terr(x.line, x.col, "char_op", "operator `unary minus` is unsupported on char",
+                                "convert first: u32(c)"));
+                        }
+                        self.check_expected_type(&x.operand, &i64t(), Some("unary minus"), t)?;
+                        return Ok(i64t());
+                    }
                     self.expect(&mut x.operand, &i64t(), scope, c, Some("unary minus"))?;
                     Ok(i64t())
                 } else if x.op == "~" {
@@ -5613,6 +5635,11 @@ impl Checker {
                         } else {
                             self.check_expected_type(&x.left, &i64t(), operation, lt)?
                         };
+                        if !ordering && lt.int_width().is_some_and(|w| w.is_char()) {
+                            // P7 (R-6t-1): a char is not a number
+                            return Err(terr(x.line, x.col, "char_op", format!("operator `{}` is not defined on char", op),
+                                "convert to a number first: u32(c), and back with char(x)"));
+                        }
                         if let Some(rt) = rt {
                             self.check_expected_type(&x.right, &lt, operation, rt)?;
                         } else {
@@ -6997,8 +7024,15 @@ impl Checker {
             }
             let arg = &mut e.args[0];
             let source = self.expr(arg, scope, c)?;
-            let width = source.int_width().ok_or_else(|| terr(arg.line(), arg.col(), "type_mismatch",
+            let width = source.int_width().ok_or_else(|| terr(arg.line(), arg.col(), if target.is_char() { "char_cast" } else { "type_mismatch" },
                 format!("expected a scalar integer, found {}", tn(&source)), ""))?;
+            // P7 (R-6t-2): `char` converts to the widths that hold every char and from `u8`/`u32` only
+            if (target.is_char() && !width.is_char() && !matches!(width.name, "u8" | "u32"))
+                || (width.is_char() && !target.is_char() && !width.fits_in(target))
+            {
+                return Err(terr(line, col, "char_cast", format!("no conversion from {} to {}", width.name, target.name),
+                    "convert a char through u32: u32(c) and char(x) with x: u32 (or u8)"));
+            }
             // P3: 64-bit pairs (i64/isize/u64/usize) have no common wider type, so a contract may convert between them;
             // contracts compute on unbounded integers, so the cast keeps the value (SPEC R-6p-5).
             if c && !width.fits_in(target) && !(width.bits == 64 && target.bits == 64) {
@@ -7919,7 +7953,7 @@ fn x_instantiate(tpl: &Expr, pnames: &[String], args: &[Expr], line: i64, col: i
             Some(k) => args[k].clone(),
             None => Expr::Var(Var { line, col, name: v.name.clone(), ty: v.ty.clone() }),
         },
-        Expr::IntLit(x) => Expr::IntLit(IntLit { line, col, value: x.value.clone(), ty: x.ty.clone() }),
+        Expr::IntLit(x) => Expr::IntLit(IntLit { line, col, value: x.value.clone(), ty: x.ty.clone(), kind: x.kind.clone() }),
         Expr::BoolLit(x) => Expr::BoolLit(BoolLit { line, col, value: x.value, ty: x.ty.clone() }),
         Expr::Unary(u) => Expr::Unary(Unary {
             line, col, op: u.op.clone(), operand: Box::new(x_instantiate(&u.operand, pnames, args, line, col)), ty: u.ty.clone(),

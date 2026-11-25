@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["190999999701913106", "190999999701913111"], "gen_contains": ["const LIMIT: i64 = 3007;", "const MASK: u8 = 191;", "const NEG: i64 = -3;", "const START: char = 'a';", "let m: u8 = MASK;"]}

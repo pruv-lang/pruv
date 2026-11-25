@@ -1,0 +1,1 @@
+fn f(a: [u8]) -> i64 requires len(a) >= 8 { return load_be(a, 0, '\x01'); }

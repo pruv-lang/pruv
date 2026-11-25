@@ -1,0 +1,7 @@
+// spec: R-6t-2 reject
+// The range below includes the surrogates 0xD800..=0xDFFF, which are not chars.
+fn f(x: u32) -> char
+  requires x <= 1114111
+{
+  return char(x);
+}

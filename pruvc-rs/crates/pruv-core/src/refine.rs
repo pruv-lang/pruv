@@ -368,7 +368,7 @@ impl At {
         At { line: r.line, col: r.col }
     }
     fn lit(&self, v: &str) -> Expr {
-        Expr::IntLit(IntLit { line: self.line, col: self.col, value: v.to_string(), ty: None })
+        Expr::IntLit(IntLit { line: self.line, col: self.col, value: v.to_string(), ty: None, kind: Default::default() })
     }
     fn var(&self, n: &str) -> Expr {
         Expr::Var(Var { line: self.line, col: self.col, name: n.to_string(), ty: None })

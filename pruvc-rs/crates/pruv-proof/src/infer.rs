@@ -1109,7 +1109,7 @@ struct Bld {
 
 impl Bld {
     fn int(&self, n: i128) -> Expr {
-        Expr::IntLit(ast::IntLit { line: self.line, col: self.col, value: n.to_string(), ty: None })
+        Expr::IntLit(ast::IntLit { line: self.line, col: self.col, value: n.to_string(), ty: None, kind: Default::default() })
     }
     /// Literal. None if |n| > i64 max (Python `_Skip`). Negatives are unary minus.
     fn lit(&self, n: i128) -> Option<Expr> {
@@ -1215,7 +1215,7 @@ impl Bld {
                 })
             }
             Expr::Spent(x) => Expr::Spent(ast::Spent { line, col, ty: x.ty.clone() }),
-            Expr::IntLit(x) => Expr::IntLit(ast::IntLit { line, col, value: x.value.clone(), ty: x.ty.clone() }),
+            Expr::IntLit(x) => Expr::IntLit(ast::IntLit { line, col, value: x.value.clone(), ty: x.ty.clone(), kind: x.kind.clone() }),
             Expr::BoolLit(x) => Expr::BoolLit(ast::BoolLit { line, col, value: x.value, ty: x.ty.clone() }),
             Expr::StrLit(x) => Expr::StrLit(ast::StrLit { line, col, value: x.value.clone(), ty: x.ty.clone(), empty: x.empty }),
             Expr::Unary(x) => Expr::Unary(ast::Unary {

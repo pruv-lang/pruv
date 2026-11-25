@@ -41,7 +41,19 @@ pub struct Inst {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Spent { pub line: i64, pub col: i64, pub ty: Ty }
 #[derive(Debug, Clone, PartialEq)]
-pub struct IntLit { pub line: i64, pub col: i64, pub value: String, pub ty: Ty }
+pub struct IntLit { pub line: i64, pub col: i64, pub value: String, pub ty: Ty, /** P7: how the literal was written */ pub kind: LitKind }
+/// P7: the source spelling of an integer-valued literal. The value is always the decimal `value`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum LitKind {
+    #[default]
+    Int,
+    /// `'a'`: type `char`, value = the code point.
+    Char,
+    /// `b'a'`: type `u8`.
+    Byte,
+    /// A use of the module constant of this name, replaced by its evaluated value (SPEC §6t).
+    Const(String),
+}
 #[derive(Debug, Clone, PartialEq)]
 pub struct BoolLit { pub line: i64, pub col: i64, pub value: bool, pub ty: Ty }
 #[derive(Debug, Clone, PartialEq)]
@@ -517,4 +529,16 @@ pub struct Program {
     pub raw_entries: Option<String>,
     /// P10H: the manifest's program package name (Python `Program.pkg_name`); prefix `<pkg>__` of every global C symbol
     pub pkg_name: Option<String>,
+    /// P7: module-level `const NAME: T = expr;` items, evaluated by the parser (uses are already literals)
+    pub consts: Vec<ConstItem>,
+}
+
+/// P7: one evaluated module constant; `ty` is an int width name or `char`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ConstItem {
+    pub line: i64,
+    pub col: i64,
+    pub name: String,
+    pub ty: String,
+    pub value: i128,
 }
