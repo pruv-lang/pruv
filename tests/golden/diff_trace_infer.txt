@@ -1991,6 +1991,7 @@ runtime|tests/runtime/p8_rt_tuple_arm_owned.pruv	1 case: obl=8 1	--infer=6f8ce73
 runtime|tests/runtime/p8_rt_while_let.pruv	1 case: obl=149 1	--infer=e70479b0954a
 runtime|tests/runtime/p8_rt_while_let_cost.pruv	1 case: obl=52 1	--infer=543800c576f8
 runtime|tests/runtime/p9_rt_alias.pruv	1 case: obl=15 1	--infer=6c8fc86e7798
+runtime|tests/runtime/p9_rt_alias_async.pruv	1 case: obl=182 1	--infer=48af9457b96a
 runtime|tests/runtime/p9_rt_alias_p8.pruv	1 case: obl=8 1	--infer=4b6344307cae
 runtime|tests/runtime/p9_rt_alias_pos.pruv	1 case: obl=39 1	--infer=4b2f3d5141e2
 runtime|tests/runtime/qb_across_requires.pruv	1 case: obl=0 1	--infer=a887fdcb74d6

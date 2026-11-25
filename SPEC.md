@@ -2853,7 +2853,7 @@ fn head(r: Row) -> Res<i64> { if r[0] < 0 { return Err(r[0]); } return Ok(r[0]);
   arguments that only grow, `type A<T> = Option<A<Option<T>>>`) `type/alias_cycle`, reported for unused aliases too.
   Aliases exist only in a single-file program without `pub` or `mod` items (`parse/alias_module`, parity row P9a-1).
   Code: the Rust module keeps a `type Name = T;` item for each used non-generic alias of a scalar, a fixed array of
-  scalars or a tuple of these whose name is not a std or `Pruv` runtime name; uses print the expanded type (parity row
+  scalars or a tuple of these whose name is not a Rust 2021 prelude, common std or `Pruv` runtime name; uses print the expanded type (parity row
   P9a-2). Tests: [runtime](tests/runtime/p9_rt_alias.pruv),
   [with patterns](tests/runtime/p9_rt_alias_p8.pruv), [cycle](tests/must_reject/p9_alias_cycle.pruv),
   [growing cycle](tests/must_reject/p9_alias_growing_cycle.pruv), [duplicate](tests/must_reject/p9_alias_duplicate.pruv),
@@ -2861,7 +2861,8 @@ fn head(r: Row) -> Res<i64> { if r[0] < 0 { return Err(r[0]); } return Ok(r[0]);
   [false contract](tests/must_reject/p9_alias_false_ensures.pruv), [positions](tests/runtime/p9_rt_alias_pos.pruv),
   [array cycle](tests/must_reject/p9_alias_array_cycle.pruv), [tuple in generic](tests/must_reject/p9_alias_tuple_generic.pruv),
   [parameter shadow](tests/must_reject/p9_alias_param_shadow.pruv), [reserved](tests/must_reject/p9_alias_reserved.pruv),
-  [ref of a scalar](tests/must_reject/p9_alias_ref_scalar.pruv), [refined use](tests/must_reject/p9_alias_refine_false.pruv).
+  [ref of a scalar](tests/must_reject/p9_alias_ref_scalar.pruv), [refined use](tests/must_reject/p9_alias_refine_false.pruv),
+  [prelude names in async code](tests/runtime/p9_rt_alias_async.pruv).
 
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.

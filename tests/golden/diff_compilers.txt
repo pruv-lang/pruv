@@ -2831,6 +2831,8 @@ runtime|runtime/p8_rt_while_let_cost [--no-verify]	2 cases: exit 2	llvm=0b292d7d
 runtime|runtime/p8_rt_while_let_cost [default]	2 cases: exit 2	llvm=853f480ecb84	rust=42d4b45c2515
 runtime|runtime/p9_rt_alias [--no-verify]	2 cases: exit 2	llvm=81560451379c	rust=354c6447dcf2
 runtime|runtime/p9_rt_alias [default]	2 cases: exit 2	llvm=3d166844e1a9	rust=2a32a5d6df77
+runtime|runtime/p9_rt_alias_async [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=bb9e583fbddc	rust=f65cf5a591f0
+runtime|runtime/p9_rt_alias_async [--no-verify]	2 cases: exit 2	llvm=48e519282e92	rust=733ccb35cd90
 runtime|runtime/p9_rt_alias_p8 [--no-verify]	2 cases: exit 2	llvm=746f0d03e0ef	rust=8989c285844c
 runtime|runtime/p9_rt_alias_p8 [default]	2 cases: exit 2	llvm=55ab582bb994	rust=4d83574d4bbd
 runtime|runtime/p9_rt_alias_pos [--no-verify]	2 cases: exit 2	llvm=ff9b27b5479b	rust=905634baed7a

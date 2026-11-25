@@ -8438,9 +8438,18 @@ fn alias_printable(g: &GType) -> bool {
     g.owner.is_none() && g.args.is_empty() && (g.name == "bool" || crate::intwidth::of(&g.name).is_some())
 }
 
-/// P9: an alias item lives in `mod pruv_impl` next to the runtime prelude, so it must not take a std or generated name.
+/// P9: an alias item lives in `mod pruv_impl` next to the runtime prelude, which spells std prelude names unqualified
+/// (`impl Drop`, `F: FnOnce() + Send`, `Default::default()`) and has no `use` items, so an item must not take a name
+/// of the Rust 2021 prelude, a common std type, or a generated `Pruv..` name.
 fn alias_name_free(name: &str) -> bool {
-    !name.starts_with("Pruv")
-        && !matches!(name, "Vec" | "String" | "Box" | "Option" | "Result" | "HashMap" | "HashSet" | "BTreeMap" | "Rc"
-            | "Arc" | "Cell" | "RefCell" | "Ordering" | "Self")
+    const STD_NAMES: &[&str] = &[
+        // the Rust 2021 prelude (types and traits)
+        "Copy", "Send", "Sized", "Sync", "Unpin", "Drop", "Fn", "FnMut", "FnOnce", "Box", "ToOwned", "Clone",
+        "PartialEq", "PartialOrd", "Eq", "Ord", "AsRef", "AsMut", "Into", "From", "Default", "Iterator", "Extend",
+        "IntoIterator", "DoubleEndedIterator", "ExactSizeIterator", "Option", "Result", "String", "ToString", "Vec",
+        "TryFrom", "TryInto", "FromIterator",
+        // std names the generated code may spell, and `Self`
+        "HashMap", "HashSet", "BTreeMap", "Rc", "Arc", "Cell", "RefCell", "Ordering", "Self",
+    ];
+    !name.starts_with("Pruv") && !STD_NAMES.contains(&name)
 }
