@@ -17,7 +17,9 @@ signature; no null, no exceptions, no implicit conversions, no globals, no overl
 - Comments: `// ...` to end of line.
 - Identifiers: `[a-zA-Z_][a-zA-Z0-9_]*`.
 - R-1-2 Integer literals: a decimal digit followed by digits and `_` separators (`1_000_000`; repeated separators such as `1__0` are accepted and mean `10`). A literal ending in `_` is rejected (`parse/bad_int`). Tests: [accept](tests/spec/r1_2_underscore.pruv), [reject](tests/spec/r1_2_trailing_underscore.pruv).
-- Keywords: `fn let mut if else while return match true false cost spent invariant decreases requires ensures assert forall exists in Some None Ok Err struct enum is_variant variant_field async`.
+- Keywords: `fn let mut if else while return match true false cost spent invariant decreases requires ensures assert forall exists in Some None Ok Err struct enum is_variant variant_field async`, and `const` at the start of a
+  top-level item (section 6t).
+- Character and byte literals: `'a'`, `'\n'`, `'\u{1F600}'` and `b'a'` (section 6t).
 - R-1-1 `result` is not a keyword: it is an ordinary name (a local may be called `result`), and inside `ensures` it names the return value. Used as the return value where there is none yet (for example in `requires`), it is rejected (`type/result_scope`). Tests: [accept](tests/spec/r1_1_result_name.pruv), [reject](tests/spec/r1_1_result_scope.pruv).
 - Names starting with `pruv_` or containing `__`, the name `_`, and Rust keywords (`type`, `loop`, `self`, `for`, ...) are reserved; the parser rejects them (`reserved_name`).
 
@@ -27,6 +29,7 @@ signature; no null, no exceptions, no implicit conversions, no globals, no overl
 | `i64` | 64-bit signed int | `i64` |
 | `u8`, `u16` | unsigned 8/16-bit int, scalar values only (section 6p) | `u8`, `u16` |
 | `bool` | boolean | `bool` |
+| `char` | Unicode scalar value (section 6t) | `char` |
 | `()` | unit | `()` |
 | `[i64]` | array of i64 | param: `&[i64]`, local/return: `Vec<i64>` |
 | `[u8]`, `[bool]` | array of bytes 0..=255 / of bools (section 6b) | `&[u8]`/`Vec<u8>`, `&[bool]`/`Vec<bool>` |
@@ -2619,6 +2622,59 @@ borrows.
   [Some pattern](tests/must_reject/p6_some_pattern.pruv), [tuple struct](tests/must_reject/p6_tuple_struct.pruv),
   [generic](tests/must_reject/p6_generic.pruv), [module](tests/must_reject/p6_module.pruv).
 
+## 6t. Constants and characters (P7)
+```
+const LIMIT: i64 = 4 * 1024;
+const FIRST: char = 'A';
+
+fn is_digit(c: char) -> bool
+  ensures result == ('0' <= c && c <= '9')
+{
+  return '0' <= c && c <= '9';
+}
+```
+- R-6t-1 **Characters.** `char` is a Unicode scalar value: `0..=0x10FFFF` without the surrogates `0xD800..=0xDFFF`.
+  It is a Copy value with `== != < <= > >=`; arithmetic and unary `-` on it are `type/char_op` and an integer
+  literal where a char is expected is `type/type_mismatch`. Literals: `'a'`, the escapes `\n \r \t \0 \\ \' \"`,
+  `\xHH` up to `\x7F` and `\u{H..}` (1 to 6 hex digits, a scalar value). `b'a'` is a `u8` byte literal (ASCII
+  characters and the same escapes, `\xHH` up to `\xFF`). An empty literal, more than one character, a surrogate or an
+  out-of-range escape is `parse/char_literal`. The verifier models a char as an integer with that range. Code: Rust
+  emits `char`, `'a'` and `b'a'` as written; LLVM uses `i32`. Tests: [accept](tests/spec/r6t_1_accept.pruv),
+  [reject](tests/spec/r6t_1_reject.pruv), [false contract](tests/spec/r6t_1_reject_contract.pruv),
+  [runtime](tests/runtime/p7_rt_char.pruv), [surrogate literal](tests/must_reject/p7_char_literal.pruv),
+  [empty literal](tests/must_reject/p7_char_literal_empty.pruv), [arithmetic](tests/must_reject/p7_char_op.pruv).
+- R-6t-2 **Char conversions.** `u32(c)` (and any width that holds `0..=0x10FFFF`) converts a char to its code
+  point; `char(x)` converts from `u32` or `u8`. Every other conversion to or from char is `type/char_cast`. `char(b)`
+  of a `u8` always fits; `char(x)` of a `u32` is a range obligation: the verifier must prove `x` is a scalar value
+  (`verify/cast_range`), and in contracts the conversion is rejected like every narrowing cast. Code: a proven
+  conversion is `char::from_u32_unchecked`; under `--no-verify` Rust uses `char::try_from` and LLVM a range test,
+  both stopping with "cast out of range". Tests: [accept](tests/spec/r6t_2_accept.pruv),
+  [reject](tests/spec/r6t_2_reject.pruv), [false contract](tests/spec/r6t_2_reject_contract.pruv),
+  [runtime](tests/runtime/p7_rt_char_proven.pruv), [run-time check](tests/runtime/p7_rt_char_cast_fail.pruv),
+  [narrowing](tests/must_reject/p7_char_narrow.pruv).
+- R-6t-3 **Constants.** `const NAME: T = expr;` at module level declares a constant of an integer width or `char`
+  (`type/const_type` for other types, including bool). The compiler evaluates `expr` at compile time from literals,
+  other constants (in any order; a cycle is `type/const_expr`), `+ - * / %` (Euclidean, as at run time), unary `-`
+  and int-width or char conversions; anything else is `type/const_expr`. Every intermediate value must fit `T`
+  (`type/const_range`), a zero divisor is `type/const_div_zero`, and an operand of another type is
+  `type/const_type`. A use of the name is the value, so the verifier knows it exactly. A parameter, local, binder,
+  function or field named like a constant, or a second constant of the same name, is `parse/const_shadow`. Constants
+  exist only in a single-file program without `pub` or `mod` items; `pub const` and constants next to modules are
+  `parse/const_module` (parity row P7-3). Code: Rust emits `const NAME: T = value;` with the evaluated value and
+  spells uses by name; LLVM uses the value. Tests: [accept](tests/spec/r6t_3_accept.pruv),
+  [reject](tests/spec/r6t_3_reject.pruv), [false contract](tests/spec/r6t_3_reject_contract.pruv),
+  [runtime](tests/runtime/p7_rt_const.pruv), [call](tests/must_reject/p7_const_expr.pruv),
+  [cycle](tests/must_reject/p7_const_cycle.pruv), [bool](tests/must_reject/p7_const_type.pruv),
+  [mismatch](tests/must_reject/p7_const_mismatch.pruv), [division](tests/must_reject/p7_const_div_zero.pruv),
+  [range](tests/must_reject/p7_const_neg_range.pruv), [char range](tests/must_reject/p7_const_char_range.pruv),
+  [shadow](tests/must_reject/p7_const_shadow.pruv), [duplicate](tests/must_reject/p7_const_dup.pruv),
+  [pub](tests/must_reject/p7_const_pub.pruv).
+- R-6t-4 **Fixed-length arrays (not yet).** The type `[T; N]` and the literals `[a, b, c]` and `[x; N]` are
+  `parse/fixed_array` (parity row P7-1); the length bound `[T; <=N]` (section 7a) is unchanged. Tests:
+  [accept](tests/spec/r6t_4_accept.pruv), [reject](tests/spec/r6t_4_reject.pruv),
+  [literal](tests/must_reject/p7_array_literal.pruv), [repeat](tests/must_reject/p7_array_repeat.pruv),
+  [type](tests/must_reject/p7_array_type.pruv).
+
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
 2. Every `+ - * unary-` in code: result within i64 range.
@@ -3049,9 +3105,13 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/bad_char` | parse | a character that starts no token |
 | `parse/bad_int` | parse | a malformed integer literal, such as a trailing `_` (R-1-2) |
 | `parse/break_value` | parse | `break` followed by a value (not `;`, a label or `}`); bundle P15 (R-6r-3) |
+| `parse/char_literal` | parse | a malformed character or byte literal: empty, several characters, a surrogate or an out-of-range escape (R-6t-1) |
+| `parse/const_module` | parse | `pub const`, or a constant in a program with `pub` or `mod` items (R-6t-3) |
+| `parse/const_shadow` | parse | a name declared again where a constant of that name exists, or a constant declared twice (R-6t-3) |
 | `parse/cost_syntax` | parse | `cost` needs one expression and must be the last header clause |
 | `parse/decreases_syntax` | parse | a malformed, empty or repeated `decreases` clause |
 | `parse/element_storage_type` | parse | `u8` used outside an array element type |
+| `parse/fixed_array` | parse | a fixed-length array type `[T; N]` or an array literal `[a, b]` / `[x; N]` (R-6t-4) |
 | `parse/for_decreases` | parse | a `for` loop with a `decreases` clause; the measure is generated (R-6q-1) |
 | `parse/for_iterable` | parse | a `for` head other than `a..b` or a slice/Vec place, such as `a..=b` or `a.iter()` (R-6q-3) |
 | `parse/foreign_syntax` | parse | a malformed `trusted rust fn` declaration |
@@ -3102,6 +3162,12 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/borrow_escape` | type | a returned borrow may borrow a local, not only its `from` parameters (R-6g-11), or a mutable borrowing struct is given data it does not already borrow (R-6g9-6) |
 | `type/borrow_signature` | type | a `ref` type or borrowing struct outside its allowed positions, or a bad `from` list (R-6g-11) |
 | `type/cast_range` | type | a narrowing cast in a contract, other than between two 64-bit types (R-6p-2, R-6p-5) |
+| `type/char_cast` | type | a conversion to char from a type other than `u32` or `u8`, or from char to a width that cannot hold it (R-6t-2) |
+| `type/char_op` | type | arithmetic on a char (R-6t-1) |
+| `type/const_div_zero` | type | a zero divisor while evaluating a constant (R-6t-3) |
+| `type/const_expr` | type | a constant expression the compile-time evaluator cannot evaluate, or a constant cycle (R-6t-3) |
+| `type/const_range` | type | a constant value or intermediate value outside its type (R-6t-3) |
+| `type/const_type` | type | a constant of a type other than an integer width or char, or an operand of another type (R-6t-3) |
 | `type/place_binding` | type | a place binding `let d = inout P;` whose place is not allowed or overlaps another live place binding (R-6g9-5) |
 | `type/async_unconsumed` | type | a temporary `Loop` is never consumed |
 | `type/bad_trigger` | type | a quantifier trigger on an aggregate, not an array read, or not mentioning the binder (R-6-3) |

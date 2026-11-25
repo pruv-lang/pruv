@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["48040295472", "51040295472", "57040295472"], "gen_contains": ["let a: char = 'a';", "let nl: char = '\\n';", "let q: char = '\\'';", "let b: u8 = b'z';", "let bx: u8 = b'\\xff';", "(c as u32)", "fn code(c: char) -> u32"]}

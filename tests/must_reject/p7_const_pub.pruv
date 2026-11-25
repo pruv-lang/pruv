@@ -1,0 +1,2 @@
+pub const N: i64 = 3;
+pub fn f() -> i64 { return N; }

@@ -29,6 +29,10 @@ pub enum Kind {
     Str,
     /// G6 A0: the contextual `move` token (see `move_token`).
     Move,
+    /// P7: a char literal `'a'`; val is the decimal code point.
+    Char,
+    /// P7: a byte literal `b'a'`; val is the decimal byte value.
+    Byte,
     Eof,
 }
 
@@ -47,7 +51,7 @@ impl Tok {
     /// Python repr(t.val): decimal for integers, None for eof, string repr for the rest.
     pub fn repr(&self) -> String {
         match self.kind {
-            Kind::Int => self.val.clone(),
+            Kind::Int | Kind::Char | Kind::Byte => self.val.clone(),
             Kind::Eof => "None".to_string(),
             _ => repr_str(&self.val),
         }
@@ -180,7 +184,7 @@ fn g4_token(word: &str, src: &[char], end: usize, toks: &[Tok], depth: usize) ->
     if word == "extern" {
         return w == "fn";
     }
-    matches!(w.as_str(), "fn" | "struct" | "enum" | "mod" | "pub" | "trusted" | "rust" | "opaque" | "pred" | "extern")
+    matches!(w.as_str(), "fn" | "struct" | "enum" | "mod" | "pub" | "const" | "trusted" | "rust" | "opaque" | "pred" | "extern")
 }
 
 /// The operator token starting at pos (regex order: 3 characters, 2 characters, 1 character).
@@ -200,6 +204,86 @@ fn match_op(src: &[char], pos: usize) -> Option<&'static str> {
 
 pub fn lex(src: &[char]) -> Result<Vec<Tok>, PruvError> {
     lex_tagged(src, 0)
+}
+
+/// P7: lex one char literal body starting after the opening quote at `start` (`'a'`, `'\n'`, `'\u{1F600}'`).
+/// Returns the code point and the position after the closing quote. `byte`: a `b'..'` literal (ASCII or `\xHH`, no `\u`).
+fn lex_char_lit(src: &[char], start: usize, byte: bool, line: i64, col: i64) -> Result<(u32, usize), PruvError> {
+    let what = if byte { "byte literal" } else { "char literal" };
+    let bad = |msg: String| {
+        PruvError::new("parse", line, col, "char_literal", msg,
+            if byte { "write one ASCII character or an escape \\n \\r \\t \\0 \\\\ \\' \\\" \\xHH, e.g. b'a'" }
+            else { "write one character or an escape \\n \\r \\t \\0 \\\\ \\' \\\" \\x00..\\x7F \\u{..}, e.g. 'a'" })
+    };
+    let n = src.len();
+    let mut p = start;
+    if p >= n || src[p] == '\n' || src[p] == '\'' {
+        return Err(bad(format!("empty or unterminated {}", what)));
+    }
+    let v: u32;
+    if src[p] == '\\' {
+        if p + 1 >= n {
+            return Err(bad(format!("unterminated {}", what)));
+        }
+        let e = src[p + 1];
+        p += 2;
+        v = match e {
+            'n' => 10,
+            'r' => 13,
+            't' => 9,
+            '0' => 0,
+            '\\' => 92,
+            '\'' => 39,
+            '"' => 34,
+            'x' => {
+                let hex: String = src[p..n.min(p + 2)].iter().collect();
+                if hex.len() != 2 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Err(bad(format!("\\x in a {} needs two hex digits", what)));
+                }
+                p += 2;
+                let x = u32::from_str_radix(&hex, 16).unwrap();
+                if !byte && x > 0x7F {
+                    return Err(bad("\\x in a char literal is at most \\x7F; use \\u{..}".to_string()));
+                }
+                x
+            }
+            'u' if !byte => {
+                if p >= n || src[p] != '{' {
+                    return Err(bad("\\u needs braces, e.g. '\\u{1F600}'".to_string()));
+                }
+                p += 1;
+                let s0 = p;
+                while p < n && (src[p].is_ascii_hexdigit() || src[p] == '_') {
+                    p += 1;
+                }
+                let hex: String = src[s0..p].iter().filter(|&&c| c != '_').collect();
+                if p >= n || src[p] != '}' || hex.is_empty() || hex.len() > 6 {
+                    return Err(bad("\\u{..} needs 1 to 6 hex digits".to_string()));
+                }
+                p += 1;
+                let x = u32::from_str_radix(&hex, 16).unwrap();
+                if char::from_u32(x).is_none() {
+                    return Err(bad(format!("\\u{{{:X}}} is not a Unicode scalar value (0..=0x10FFFF without 0xD800..=0xDFFF)", x)));
+                }
+                x
+            }
+            _ => return Err(bad(format!("unsupported escape in a {}", what))),
+        };
+    } else {
+        let c = src[p];
+        if (c as u32) < 0x20 || c as u32 == 0x7F || c == '\t' {
+            return Err(bad(format!("a {} cannot hold a control character; write an escape", what)));
+        }
+        if byte && !c.is_ascii() {
+            return Err(bad("a byte literal holds one ASCII character; write \\xHH for other bytes".to_string()));
+        }
+        v = c as u32;
+        p += 1;
+    }
+    if p >= n || src[p] != '\'' {
+        return Err(bad(format!("a {} holds exactly one character", what)));
+    }
+    Ok((v, p + 1))
 }
 
 /// `lex` for module file number `tag` (G4: the line numbers carry the tag, see diagnostic.rs; tag 0 = plain lines).
@@ -297,6 +381,18 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
             let trimmed = digits.trim_start_matches('0');
             let val = if trimmed.is_empty() { "0".to_string() } else { trimmed.to_string() };
             toks.push(Tok { kind: Kind::Int, val, line, col, end: col + (pos - start) as i64 });
+        } else if c == 'b' && pos + 1 < n && src[pos + 1] == '\'' {
+            // P7: byte literal `b'a'` (u8)
+            let (v, end) = lex_char_lit(src, pos + 2, true, line, col)?;
+            toks.push(Tok { kind: Kind::Byte, val: v.to_string(), line, col, end: col + (end - pos) as i64 });
+            pos = end;
+        } else if c == '\'' && pos + 1 < n && (src[pos + 1] == '\\' || src[pos + 1] == '\''
+            || (pos + 2 < n && src[pos + 2] == '\'') || !(src[pos + 1].is_ascii_alphabetic() || src[pos + 1] == '_'))
+        {
+            // P7: char literal `'a'` (a label `'name` never has a quote right after its first character)
+            let (v, end) = lex_char_lit(src, pos + 1, false, line, col)?;
+            toks.push(Tok { kind: Kind::Char, val: v.to_string(), line, col, end: col + (end - pos) as i64 });
+            pos = end;
         } else if c.is_ascii_alphabetic() || c == '_' {
             let start = pos;
             while pos < n && (src[pos].is_ascii_alphanumeric() || src[pos] == '_') {
@@ -307,6 +403,15 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
             if v == "move" && (toks.last().map_or(false, |t| t.kind == Kind::Move) || move_token(src, pos, &toks)) {
                 let end = col + (pos - start) as i64;
                 toks.push(Tok { kind: Kind::Move, val: v, line, col, end });
+                continue;
+            }
+            // P7: `const` at item start (top level, after `}`, `;` or `pub`) is a keyword
+            if v == "const" && brace_depth == 0
+                && toks.last().map_or(true, |t| (t.kind == Kind::Op && matches!(t.val.as_str(), "}" | ";"))
+                    || (t.kind == Kind::Kw && t.val == "pub"))
+            {
+                let end = col + (pos - start) as i64;
+                toks.push(Tok { kind: Kind::Kw, val: v, line, col, end });
                 continue;
             }
             if matches!(v.as_str(), "mod" | "pub" | "crate" | "extern") && g4_token(&v, src, pos, &toks, brace_depth) {

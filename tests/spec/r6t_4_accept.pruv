@@ -1,0 +1,7 @@
+// spec: R-6t-4 accept
+// The `<=N` length bound is not a fixed-length array and keeps working.
+fn first(a: [i64; <=8]) -> i64
+  requires len(a) >= 1
+{
+  return a[0];
+}

@@ -618,7 +618,7 @@ fn file_contracts(name: &str) -> (Vec<Expr>, Vec<Expr>) {
         Expr::Binary(Binary { line: 0, col: 0, op: op.into(), left: Box::new(a), right: Box::new(b), ty: Some("bool".into()) })
     }
     fn neg(a: Expr) -> Expr { Expr::Unary(Unary { line: 0, col: 0, op: "!".into(), operand: Box::new(a), ty: Some("bool".into()) }) }
-    fn int(n: &str) -> Expr { Expr::IntLit(IntLit { line: 0, col: 0, value: n.into(), ty: Some("i64".into()) }) }
+    fn int(n: &str) -> Expr { Expr::IntLit(IntLit { line: 0, col: 0, value: n.into(), ty: Some("i64".into()), kind: Default::default() }) }
     let result = var("result", "file");
     let f = var("f", "file");
     let ok = obs("ok", result.clone());

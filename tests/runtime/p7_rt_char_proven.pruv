@@ -1,0 +1,14 @@
+// P7 runtime: a proven u32 -> char cast has no runtime check on either backend
+fn to_char(x: u32) -> char
+  requires x <= 1114111 && (x < 55296 || x > 57343)
+  ensures u32(result) == x
+{
+  return char(x);
+}
+
+fn run(k: i64) -> i64
+  requires 0 <= k && k <= 1000
+{
+  let c: char = to_char(u32(57344 + k));
+  return i64(u32(c));
+}

@@ -1,0 +1,7 @@
+// spec: R-6t-1 reject
+// '9' is a digit, so the claim that no digit is returned is false.
+fn last() -> char
+  ensures result < '9'
+{
+  return '9';
+}

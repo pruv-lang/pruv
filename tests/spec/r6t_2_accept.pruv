@@ -1,0 +1,20 @@
+// spec: R-6t-2 accept
+// char -> u32 always fits; u32 -> char needs a proof that the value is a Unicode scalar value.
+fn code(c: char) -> u32
+  ensures result <= 1114111
+{
+  return u32(c);
+}
+
+fn to_char(x: u32) -> char
+  requires x <= 55295 || (57344 <= x && x <= 1114111)
+  ensures u32(result) == x
+{
+  return char(x);
+}
+
+fn ascii(b: u8) -> char
+  ensures u32(result) <= 255
+{
+  return char(b);
+}

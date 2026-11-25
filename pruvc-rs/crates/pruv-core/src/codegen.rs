@@ -3425,7 +3425,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 let (line, col) = (e.line(), e.col());
                 let arr_ty: Option<String> = arr_ty0.clone();
                 let var = |n: &str| Expr::Var(Var { line, col, name: n.to_string(), ty: None });
-                let one = Expr::IntLit(IntLit { line, col, value: "1".to_string(), ty: None });
+                let one = Expr::IntLit(IntLit { line, col, value: "1".to_string(), ty: None, kind: Default::default() });
                 let kv = var("pruv_sk");
                 let idx = |ix: Expr| {
                     Expr::Index(Index {
@@ -5320,6 +5320,13 @@ pruv_hi <= (pruv_b.len() as i128) && \
             // G5 A0: never reaches the generator (the driver's A0 guard stops the program earlier)
             Expr::InoutArg(_) => Err("G5 inout argument reached the Rust generator".to_string()),
             Expr::IntLit(x) => {
+                // P7: char/byte literals and constant uses keep the hand-Rust spelling
+                match &x.kind {
+                    crate::ast::LitKind::Char => return Ok(rust_char_lit(&x.value, false)),
+                    crate::ast::LitKind::Byte => return Ok(rust_char_lit(&x.value, true)),
+                    crate::ast::LitKind::Const(name) => return Ok(name.clone()),
+                    crate::ast::LitKind::Int => {}
+                }
                 let width = x.ty.as_deref().and_then(crate::intwidth::of).unwrap_or(&crate::intwidth::I64);
                 let ty = width.name;
                 if width.signed && x.value.starts_with('-') && x.value == width.min.to_string() {
@@ -5502,6 +5509,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     let value = self.e(src)?;
                     return if !self.verified && !source.fits_in(target) {
                         Ok(format!("{}::try_from({value}).unwrap_or_else(|_| pruv_ovf(\"cast out of range\"))", target.name))
+                    } else if target.is_char() && !source.fits_in(target) {
+                        // P7: a proven u32 -> char (R-6t-5); Rust `as char` only takes u8
+                        Ok(format!("(unsafe {{ ::std::char::from_u32_unchecked({value}) }})"))
                     } else {
                         Ok(format!("({value} as {})", target.name))
                     };
@@ -6356,6 +6366,14 @@ fn gen_rust_concrete_core(
     let res: R<()> = (|| {
         g.prelude()?;
         mark = g.out.len();
+        // P7: module constants, by their evaluated value, in declaration order
+        if !prog.consts.is_empty() {
+            g.out.push(String::new());
+        }
+        for c in &prog.consts {
+            let v = if c.ty == "char" { rust_char_lit(&c.value.to_string(), false) } else { c.value.to_string() };
+            g.out.push(format!("#[allow(dead_code)]\nconst {}: {} = {};", c.name, c.ty, v));
+        }
         for f in &prog.functions {
             g.func(f)?;
         }
@@ -6956,6 +6974,19 @@ fn tuple_lit(name: &str, fs: &[FieldDecl], parts: &[String]) -> Option<String> {
     Some(format!("({})", vs.join(", ")))
 }
 
+/// P7: the Rust spelling of a char literal (`'a'`, `'\\n'`, `'\\u{1f600}'`) or a byte literal (`b'a'`, `b'\\xff'`).
+pub(crate) fn rust_char_lit(value: &str, byte: bool) -> String {
+    let v: u32 = value.parse().unwrap_or(0);
+    if byte {
+        let esc: String = std::ascii::escape_default(v as u8).map(char::from).collect();
+        let esc = if esc == "\\\"" { "\"".to_string() } else { esc };
+        return format!("b'{}'", esc);
+    }
+    let c = char::from_u32(v).unwrap_or('\0');
+    let esc: String = if c == '"' { "\"".to_string() } else { c.escape_debug().collect() };
+    format!("'{}'", esc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6994,7 +7025,7 @@ mod tests {
         Expr::Var(Var { line: 1, col: 1, name: n.into(), ty: Some(ty.into()) })
     }
     fn int(v: &str) -> Expr {
-        Expr::IntLit(IntLit { line: 1, col: 1, value: v.into(), ty: Some("i64".into()) })
+        Expr::IntLit(IntLit { line: 1, col: 1, value: v.into(), ty: Some("i64".into()), kind: Default::default() })
     }
     fn bin(op: &str, l: Expr, r: Expr) -> Expr {
         Expr::Binary(Binary { line: 1, col: 1, op: op.into(), left: Box::new(l), right: Box::new(r), ty: Some("i64".into()) })
@@ -7015,7 +7046,7 @@ mod tests {
             foreign: None,
             cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
         };
-        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None }
+        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new() }
     }
 
     #[test]
@@ -7066,7 +7097,7 @@ mod tests {
             foreign: None,
             cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
         };
-        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None }
+        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new() }
     }
 
     // L3-10: eq_range
@@ -7307,7 +7338,7 @@ mod tests {
     // Model the checker's P1 output while exercising both concrete generators.
     fn narrow_scalars_program() -> Program {
         let literal = |value: &str, ty: &str| Expr::IntLit(IntLit {
-            line: 1, col: 1, value: value.into(), ty: Some(ty.into()),
+            line: 1, col: 1, value: value.into(), ty: Some(ty.into()), kind: Default::default(),
         });
         let binary = |op: &str, left, right, ty: &str| Expr::Binary(Binary {
             line: 1, col: 1, op: op.into(), left: Box::new(left), right: Box::new(right), ty: Some(ty.into()),
@@ -7438,7 +7469,7 @@ mod tests {
                 Stmt::Return(Return { line: 1, col: 1, value: Some(call("len", vec![var("r", "array")], "i64")) }),
             ],
         );
-        Program { functions: vec![mk, g], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None }
+        Program { functions: vec![mk, g], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new() }
     }
 
     #[test]

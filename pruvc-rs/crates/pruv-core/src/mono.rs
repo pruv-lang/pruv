@@ -571,7 +571,7 @@ impl<'a> Mono<'a> {
         Ok(match e {
             Expr::Spent(x) => Expr::Spent(Spent { line: x.line, col: x.col, ty: self.ty_opt(&x.ty)? }),
             Expr::IntLit(x) => {
-                Expr::IntLit(IntLit { line: x.line, col: x.col, value: x.value.clone(), ty: self.ty_opt(&x.ty)? })
+                Expr::IntLit(IntLit { line: x.line, col: x.col, value: x.value.clone(), ty: self.ty_opt(&x.ty)?, kind: x.kind.clone() })
             }
             Expr::BoolLit(x) => Expr::BoolLit(BoolLit { line: x.line, col: x.col, value: x.value, ty: self.ty_opt(&x.ty)? }),
             Expr::StrLit(x) => {
@@ -1081,6 +1081,8 @@ impl<'a> Mono<'a> {
             raw_entries: prog.raw_entries.clone(),
             // P10H: program package name (prefix of every global C symbol)
             pkg_name: prog.pkg_name.clone(),
+            // P7: module-level constants (evaluated at parse time)
+            consts: prog.consts.clone(),
         };
         let args = self.types.into_iter().map(|spec| (spec.stem, spec.args))
             .chain(self.fns.into_iter().map(|spec| (spec.stem, spec.args)))

@@ -1,0 +1,40 @@
+// P7 runtime: char and byte literals, char <-> u32 conversions, char comparisons
+fn code(c: char) -> u32
+  ensures result <= 1114111
+{
+  return u32(c);
+}
+
+fn to_char(x: u32) -> char
+  requires x <= 1114111 && (x < 55296 || x > 57343)
+  ensures u32(result) == x
+{
+  return char(x);
+}
+
+fn is_digit(c: char) -> bool
+  ensures result == ('0' <= c && c <= '9')
+{
+  return '0' <= c && c <= '9';
+}
+
+fn run(k: i64) -> i64
+  requires 0 <= k && k <= 9
+{
+  let a: char = 'a';
+  let nl: char = '\n';
+  let q: char = '\'';
+  let e: char = '\u{1F600}';
+  let b: u8 = b'z';
+  let bx: u8 = b'\xff';
+  let d: char = to_char(u32(48 + k));
+  let wide: char = char(b);
+  let mut s: i64 = i64(code(a)) + i64(code(nl)) * 1000 + i64(code(q)) * 1000000;
+  if is_digit(d) && !is_digit(a) && wide == 'z' {
+    s = s + i64(code(d)) * 1000000000 + i64(bx);
+  }
+  if e != a && e > a {
+    s = s + i64(code(e)) * 10;
+  }
+  return s;
+}

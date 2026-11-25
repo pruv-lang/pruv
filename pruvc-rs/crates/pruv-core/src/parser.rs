@@ -49,8 +49,19 @@ pub fn parse_file(src: &str, tag: usize) -> R<ParsedFile> {
         tuples: Vec::new(),
         tup_tmp: 0,
         pending: Vec::new(),
+        consts: HashMap::new(),
     };
+    let consts = p.const_prepass()?;
     let mut prog = p.program()?;
+    if let Some(first) = consts.first() {
+        if tag != 0 || p.has_pub || !p.mods.is_empty() {
+            // P7 row P7-3: constants in module programs (paths, `pub const`) are not designed yet.
+            return Err(PruvError::new("parse", first.line, first.col, "const_module",
+                "constants are available only in a single-file program without `pub` or `mod` items (parity row P7-3)",
+                "write the value inline, or keep the program in one file"));
+        }
+    }
+    prog.consts = consts;
     if let Some(first) = p.tuples.first() {
         if tag != 0 || p.has_pub || !p.mods.is_empty() {
             // P6 row P6-2: module identities of the synthetic tuple structs are not designed yet.
@@ -163,6 +174,107 @@ fn for_index_rewrite(e: &mut Expr, binder: &str, counter: &str) {
     }
 }
 
+/// P7: the closed evaluator of module constants.
+struct ConstEval<'a> {
+    decls: &'a [(Tok, &'static intwidth::IntWidth, Expr)],
+    vals: HashMap<String, i128>,
+    busy: Vec<String>,
+}
+
+impl<'a> ConstEval<'a> {
+    fn fail(e: &Expr, code: &str, msg: String, fix: &str) -> PruvError {
+        PruvError::new("type", e.line(), e.col(), code, msg, fix)
+    }
+
+    fn value_of(&mut self, k: usize) -> R<i128> {
+        let (n, w, e) = &self.decls[k];
+        if let Some(v) = self.vals.get(&n.val) {
+            return Ok(*v);
+        }
+        if self.busy.contains(&n.val) {
+            return Err(PruvError::new("type", n.line, n.col, "const_expr",
+                format!("constant {} depends on itself", repr_str(&n.val)), "break the cycle"));
+        }
+        self.busy.push(n.val.clone());
+        let v = self.eval(e, w)?;
+        self.busy.pop();
+        self.vals.insert(n.val.clone(), v);
+        Ok(v)
+    }
+
+    /// The type an expression has on its own; None for an untyped integer literal.
+    fn ty_of(&self, e: &Expr) -> Option<&'static intwidth::IntWidth> {
+        match e {
+            Expr::IntLit(l) => match l.kind {
+                LitKind::Char => Some(&intwidth::CHAR),
+                LitKind::Byte => Some(&intwidth::U8),
+                _ => None,
+            },
+            Expr::Var(x) => self.decls.iter().find(|d| d.0.val == x.name).map(|d| d.1),
+            Expr::Call(c) if c.args.len() == 1 && c.targs.is_none() => intwidth::of(&c.name),
+            Expr::Unary(u) => self.ty_of(&u.operand),
+            Expr::Binary(b) => self.ty_of(&b.left).or_else(|| self.ty_of(&b.right)),
+            _ => None,
+        }
+    }
+
+    fn eval(&mut self, e: &Expr, w: &'static intwidth::IntWidth) -> R<i128> {
+        if let Some(t) = self.ty_of(e) {
+            if t.name != w.name {
+                return Err(Self::fail(e, "const_type", format!("expected {}, found {}", w.name, t.name),
+                    "convert explicitly, e.g. u32(X)"));
+            }
+        }
+        let range = |v: Option<i128>, what: &str| -> R<i128> {
+            match v {
+                Some(v) if w.contains(v) => Ok(v),
+                _ => Err(Self::fail(e, "const_range", format!("constant {} is out of range for {}", what, w.name),
+                    "keep every intermediate value within the declared type")),
+            }
+        };
+        match e {
+            Expr::IntLit(l) => range(l.value.parse::<i128>().ok(), "literal"),
+            Expr::Var(x) => match self.decls.iter().position(|d| d.0.val == x.name) {
+                Some(k) => self.value_of(k),
+                None => Err(Self::fail(e, "const_expr", format!("{} is not a constant", repr_str(&x.name)),
+                    "a constant uses only literals, other constants, arithmetic and int-width casts")),
+            },
+            Expr::Unary(u) if u.op == "-" && !w.is_char() => {
+                let v = self.eval(&u.operand, w)?;
+                range(v.checked_neg(), "negation")
+            }
+            Expr::Binary(b) if matches!(b.op.as_str(), "+" | "-" | "*" | "/" | "%") && !w.is_char() => {
+                let l = self.eval(&b.left, w)?;
+                let r = self.eval(&b.right, w)?;
+                if (b.op == "/" || b.op == "%") && r == 0 {
+                    return Err(Self::fail(e, "const_div_zero", format!("division by zero in `{}`", b.op),
+                        "a constant divisor must be nonzero"));
+                }
+                let v = match b.op.as_str() {
+                    "+" => l.checked_add(r),
+                    "-" => l.checked_sub(r),
+                    "*" => l.checked_mul(r),
+                    "/" => l.checked_div_euclid(r),
+                    _ => l.checked_rem_euclid(r),
+                };
+                range(v, &format!("arithmetic `{}`", b.op))
+            }
+            Expr::Call(c) if c.args.len() == 1 && c.targs.is_none() && intwidth::of(&c.name).is_some() => {
+                let to = intwidth::of(&c.name).unwrap_or(&intwidth::I64);
+                let src = self.ty_of(&c.args[0]).unwrap_or(&intwidth::I64);
+                if (to.is_char() && src.name != "u8" && src.name != "u32") || (src.is_char() && !intwidth::CHAR.fits_in(to)) {
+                    return Err(Self::fail(e, "const_type", format!("no cast from {} to {}", src.name, to.name),
+                        "char converts from u8 or u32 and to u32 or wider"));
+                }
+                let v = self.eval(&c.args[0], src)?;
+                range(Some(v).filter(|v| to.contains(*v)), "cast")
+            }
+            _ => Err(Self::fail(e, "const_expr", "this expression cannot be evaluated at compile time".to_string(),
+                "a constant uses only literals, other constants, + - * / %, unary - and int-width casts")),
+        }
+    }
+}
+
 fn is_upper(s: &str) -> bool {
     s.chars().next().map_or(false, |c| c.is_ascii_uppercase())
 }
@@ -188,6 +300,9 @@ struct Parser {
     tup_tmp: usize,
     /// statements a destructuring `let` adds after the one `stmt` returns
     pending: Vec<Stmt>,
+    // ---- P7 constants ----
+    /// evaluated module constants: name -> (type name, value); a use of the name parses as that literal
+    consts: HashMap<String, (String, i128)>,
 }
 
 /// P6: a destructuring `let` pattern.
@@ -286,7 +401,59 @@ impl Parser {
         if t.kind != Kind::Id {
             return Err(self.err(format!("expected identifier, found {}", t.repr()), "", None));
         }
+        if self.consts.contains_key(&t.val) {
+            // P7: Rust reads a binder named like a constant as a pattern; a declared name never reuses a constant's.
+            return Err(PruvError::new("parse", t.line, t.col, "const_shadow",
+                format!("{} is a constant and cannot be declared again here", repr_str(&t.val)),
+                "pick another name"));
+        }
         Ok(self.next())
+    }
+
+    /// P7: reads every `const NAME: T = expr;` item up front and evaluates them with a closed evaluator
+    /// (literals, other constants, arithmetic and int-width casts), so uses anywhere in the file parse as literals.
+    fn const_prepass(&mut self) -> R<Vec<ConstItem>> {
+        let mut decls: Vec<(Tok, &'static intwidth::IntWidth, Expr)> = Vec::new();
+        let mut j = 0;
+        while j < self.t.len() {
+            if !(self.t[j].kind == Kind::Kw && self.t[j].val == "const") {
+                j += 1;
+                continue;
+            }
+            self.i = j + 1;
+            let n = self.ident()?;
+            self.expect(":")?;
+            let tt = self.next();
+            let w = match intwidth::of(&tt.val) {
+                Some(w) if tt.kind == Kind::Id => w,
+                _ => {
+                    return Err(PruvError::new("type", tt.line, tt.col, "const_type",
+                        format!("a constant has an integer width or char type, found {}", tt.repr()),
+                        "bool and compound constants are not available yet (parity row P7-4); write the value inline"));
+                }
+            };
+            self.expect("=")?;
+            let v = self.expr()?;
+            self.expect(";")?;
+            if decls.iter().any(|d| d.0.val == n.val) {
+                return Err(PruvError::new("parse", n.line, n.col, "const_shadow",
+                    format!("constant {} is declared twice", repr_str(&n.val)), "remove one declaration"));
+            }
+            decls.push((n, w, v));
+            j = self.i;
+        }
+        self.i = 0;
+        let mut ev = ConstEval { decls: &decls, vals: HashMap::new(), busy: Vec::new() };
+        let mut out = Vec::new();
+        for k in 0..decls.len() {
+            let v = ev.value_of(k)?;
+            out.push(ConstItem { line: decls[k].0.line, col: decls[k].0.col, name: decls[k].0.val.clone(),
+                ty: decls[k].1.name.to_string(), value: v });
+        }
+        for c in &out {
+            self.consts.insert(c.name.clone(), (c.ty.clone(), c.value));
+        }
+        Ok(out)
     }
 
     /// A field name after `.`: an identifier, or a tuple index `0`, `1`, .. (P6).
@@ -467,6 +634,22 @@ impl Parser {
                 pub_tok = Some(pt);
             }
             let is_pub = pub_tok.is_some();
+            if self.at("const", 0) {
+                let ct = self.next();
+                if let Some(pt) = &pub_tok {
+                    return Err(PruvError::new("parse", pt.line, pt.col, "const_module",
+                        "`pub const` is not available yet (parity row P7-3)", "drop `pub`; the constant stays private"));
+                }
+                // already parsed and evaluated by const_prepass: skip to the closing `;`
+                while !self.at(";", 0) {
+                    if self.peek(0).kind == Kind::Eof {
+                        return Err(self.err("expected ';' after a constant", "", Some(&ct)));
+                    }
+                    self.bump();
+                }
+                self.bump();
+                continue;
+            }
             if self.at("mod", 0) {
                 let m = self.mod_decl()?;
                 self.mods.push(m);
@@ -1221,6 +1404,12 @@ impl Parser {
             } else if lo.is_some() && self.at(";", 0) {
                 let p = self.peek(0).clone();
                 return Err(self.ref_syntax(&p, "expected ']' or '; <=N' after the element range".to_string(), ""));
+            } else if self.at(";", 0) && self.peek(1).kind != Kind::Op {
+                // P7 row P7-1: fixed-length arrays `[T; N]` are not available yet
+                let p = self.peek(0).clone();
+                return Err(PruvError::new("parse", p.line, p.col, "fixed_array",
+                    "fixed-length array types [T; N] are not available yet (parity row P7-1)",
+                    "use a buffer: alloc(n, x) gives an [i64] of length n"));
             } else if self.at(";", 0) {
                 let p = self.peek(0).clone();
                 return Err(self.ref_syntax(
@@ -2056,7 +2245,7 @@ impl Parser {
         }
         let mut body = self.block()?;
         let var_ = |name: &str| Expr::Var(Var { line: l, col: c, name: name.to_string(), ty: None });
-        let lit = |v: &str| Expr::IntLit(IntLit { line: l, col: c, value: v.to_string(), ty: None });
+        let lit = |v: &str| Expr::IntLit(IntLit { line: l, col: c, value: v.to_string(), ty: None, kind: Default::default() });
         let bin = |op: &str, a: Expr, b: Expr| Expr::Binary(Binary {
             line: l, col: c, op: op.to_string(), left: Box::new(a), right: Box::new(b), ty: None,
         });
@@ -2329,8 +2518,11 @@ impl Parser {
             self.leave(1);
             let o = o?;
             if t.val == "-" {
-                if let Expr::IntLit(il) = &o {
-                    return Ok(Expr::IntLit(IntLit { line: t.line, col: t.col, value: negate(&il.value), ty: None }));
+                match &o {
+                    Expr::IntLit(il) if il.kind == crate::ast::LitKind::Int => {
+                        return Ok(Expr::IntLit(IntLit { line: t.line, col: t.col, value: negate(&il.value), ty: None, kind: Default::default() }));
+                    }
+                    _ => {}
                 }
             }
             return Ok(Expr::Unary(Unary { line: t.line, col: t.col, op: t.val, operand: Box::new(o), ty: None }));
@@ -2416,7 +2608,13 @@ impl Parser {
         }
         if t.kind == Kind::Int {
             self.bump();
-            return Ok(Expr::IntLit(IntLit { line, col, value: t.val, ty: None }));
+            return Ok(Expr::IntLit(IntLit { line, col, value: t.val, ty: None, kind: Default::default() }));
+        }
+        if t.kind == Kind::Char || t.kind == Kind::Byte {
+            // P7: a char literal is a `char`, a byte literal a `u8`, whatever the context
+            self.bump();
+            let (ty, kind) = if t.kind == Kind::Char { ("char", crate::ast::LitKind::Char) } else { ("u8", crate::ast::LitKind::Byte) };
+            return Ok(Expr::IntLit(IntLit { line, col, value: t.val, ty: Some(ty.to_string()), kind }));
         }
         if t.kind == Kind::Str {
             self.bump();
@@ -2427,6 +2625,12 @@ impl Parser {
             self.bump();
             self.bump();
             return Ok(Expr::StrLit(StrLit { line, col, value: Vec::new(), ty: None, empty: true }));
+        }
+        if self.at("[", 0) {
+            // P7 row P7-1: array literals `[a, b]` and `[x; N]` come with fixed-length arrays
+            return Err(PruvError::new("parse", line, col, "fixed_array",
+                "array literals [a, b, c] and [x; N] are not available yet (parity row P7-1)",
+                "build a buffer with alloc(n, x) and assign its elements"));
         }
         if t.kind == Kind::Move {
             // Parse the full field path so the checker can enforce where a field move is legal.
@@ -2568,6 +2772,13 @@ impl Parser {
         }
         if t.kind == Kind::Id {
             self.bump();
+            if let Some((ty, v)) = self.consts.get(&t.val) {
+                if !self.at("(", 0) && !self.at("::", 0) {
+                    // P7: a constant use is its evaluated literal; codegen spells it by name
+                    return Ok(Expr::IntLit(IntLit { line, col, value: v.to_string(), ty: Some(ty.clone()),
+                        kind: LitKind::Const(t.val.clone()) }));
+                }
+            }
             let mut targs: Option<Vec<GType>> = None;
             if self.at("::", 0) && self.at("<", 1) {
                 // G3: f::<T>(x), S::<A, B> { .. }, E::<A, B>::V(x)

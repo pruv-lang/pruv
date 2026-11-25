@@ -1,0 +1,1 @@
+fn f(c: char) -> char { return c + c; }

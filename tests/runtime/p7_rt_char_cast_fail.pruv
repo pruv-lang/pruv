@@ -1,0 +1,6 @@
+// P7 runtime: an unverified u32 -> char cast stops on a surrogate and above 0x10FFFF
+fn conv(n: i64) -> i64 {
+  let x: u32 = u32(n);
+  let c: char = char(x);
+  return i64(u32(c));
+}

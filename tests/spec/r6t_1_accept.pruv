@@ -1,0 +1,22 @@
+// spec: R-6t-1 accept
+// char literals, escapes, byte literals and comparisons.
+fn is_digit(c: char) -> bool
+  ensures result == ('0' <= c && c <= '9')
+{
+  return '0' <= c && c <= '9';
+}
+
+fn pick(k: i64) -> char
+  requires 0 <= k && k <= 2
+  ensures result != '\0'
+{
+  if k == 0 { return 'a'; }
+  if k == 1 { return '\n'; }
+  return '\u{1F600}';
+}
+
+fn byte() -> u8
+  ensures result == 122
+{
+  return b'z';
+}

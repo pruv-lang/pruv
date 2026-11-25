@@ -1551,7 +1551,7 @@ mod tests {
 
     #[test]
     fn raw_entries_c_order() {
-        let mut prog = Program { functions: vec![func("f", vec![("x", "i64")], "i64")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: Some("c".into()), pkg_name: Some("app".into()) };
+        let mut prog = Program { functions: vec![func("f", vec![("x", "i64")], "i64")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: Some("c".into()), pkg_name: Some("app".into()), consts: Vec::new() };
         // not explicit: raw_entries is ignored, so no pruv_c
         assert!(!gen_bindings(&prog).unwrap().contains("pub mod pruv_c"));
         prog.raw_entries = None;
@@ -1560,7 +1560,7 @@ mod tests {
 
     #[test]
     fn simple_function() {
-        let prog = Program { functions: vec![func("f", vec![("x", "i64"), ("a", "array")], "bool")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None };
+        let prog = Program { functions: vec![func("f", vec![("x", "i64"), ("a", "array")], "bool")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new() };
         let s = gen_bindings(&prog).unwrap();
         assert!(s.contains("    fn pruv_abi_f(p0: i64, p1: *const i64, p2: i64) -> i64;"));
         assert!(s.contains("pub fn f(x: i64, a: &[i64]) -> bool {"));
@@ -1571,7 +1571,7 @@ mod tests {
     #[test]
     fn abi_symbols_carry_the_package_prefix() {
         // P10H: with a package name every pruv_abi_* reference is `<pkg>__pruv_abi_*`; without one the names stay
-        let prog = Program { functions: vec![func("f", vec![("x", "i64"), ("a", "array")], "bool")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: Some("app".into()) };
+        let prog = Program { functions: vec![func("f", vec![("x", "i64"), ("a", "array")], "bool")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: Some("app".into()), consts: Vec::new() };
         let s = gen_bindings(&prog).unwrap();
         assert!(s.contains("    fn app__pruv_abi_f(p0: i64, p1: *const i64, p2: i64) -> i64;"));
         assert!(s.contains("        app__pruv_abi_f(x, a.as_ptr(), a.len() as i64) != 0"));
@@ -1580,7 +1580,7 @@ mod tests {
 
     #[test]
     fn mangling_error() {
-        let prog = Program { functions: vec![func("f\u{e9}", vec![], "unit")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None };
+        let prog = Program { functions: vec![func("f\u{e9}", vec![], "unit")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new() };
         assert_eq!(
             gen_bindings(&prog).unwrap_err(),
             "llvmgen: function name f\u{e9} needs mangling; the bindings use the raw name"
