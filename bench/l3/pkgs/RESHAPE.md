@@ -23,7 +23,7 @@ measured only for a package whose table shows zero differences.
 | text | 0 (`trim`, `clip_bytes` reshaped in B1; `one_line` reshaped in step 2.5) | no |
 | names | 0 (`project_name` reshaped in step 2.2b) | no |
 | args | 1 (`arg_spans`: span packet kept for codex `child_args` and the U8 check; `build_args` reshaped in step 2.8) | no |
-| tail | whole package (hand is UTF-8 `Vec<u8>`; decoder pick: FM) | no |
+| tail | 0 shape rows (rewritten to the hand `Tail` in step 2.10); per-line differences CW, BV, U8, P7-1 in the step 2.10 table | no |
 | lex | 0 (cursor and return form done in step 2.7; `e?;` emits the hand `f(..)?;` since LB-Q) | yes, `scan_string` M and L (step 2.7) |
 | bytes | 0 | no (not run in this step) |
 
@@ -78,12 +78,9 @@ Callers (mcp `root.pruv`, codex `rpc.pruv` `child_args`) unchanged. Since step 2
 
 ## tail (`tail/tail.pruv`, hand: `supervisor/hand/core_hand.rs`)
 
-Unchanged (HEAD). Hand keeps the tail as UTF-8 `Vec<u8>` (`Vec::with_capacity(6 * limit + 4)`, `trim` drops whole
-scalars from the front by lead byte, `finish(self)` returns the same vector). Pruv keeps a ring of UTF-16 units in two
-loose arrays (`tb`, 12-word `ts` packet), with `tail_bytes` re-encoding into a new buffer. Every function differs. The
-rewrite to the hand shape is open; its decoder pick needs `let d = if s == 1 { &mut tl.d1 } else { &mut tl.d2 }`,
-which Pruv cannot express (gap **FM**). A first attempt that grouped the state into `Tail` / `Decoder` structs but kept
-UTF-16 units and copied the chosen decoder in and out was withdrawn as a non-hand shape.
+**Rewritten in step 2.10** to the hand shape (see the step 2.10 section). Until then Pruv kept a ring of UTF-16 units
+in two loose arrays (`tb`, 12-word `ts` packet) with `tail_bytes` re-encoding into a new buffer, and the decoder pick
+`let d = if s == 1 { &mut tl.d1 } else { &mut tl.d2 }` was gap **FM** (language part closed by B5, R-6g9-5).
 
 ## lex (`lex/lex.pruv`, hand: `json/hand/hand_json.rs` scanner) — `scan_string` loop reshaped in step 2.6, cursor form in step 2.7
 
@@ -92,7 +89,7 @@ UTF-16 units and copied the chosen decoder in and out was withdrawn as a non-han
 | `struct Fault { position, kind }`, every `scan_*(input, inout pos, end, ..) -> Result<(), Fault>` | `ParseResult<()>` = `Result<(), (usize, i64)>`, cursor in `self.pos` | `i64` pair / `(usize, i64)` | `inout pos` ↔ `&mut self.pos` | — | none | = since step 2.7 (`Scan` is gone; RU closed by LB8). The error is a named struct where hand uses a tuple; same two values. |
 | `validate_utf8(input, start, end) -> i64` | `std::str::from_utf8(&input[a..b])` | `[u8]` | borrow | 16-byte ASCII blocks, then per char | none | Same algorithm as std (ASCII fast path, then sequence check); returns the error offset like `valid_up_to`. = |
 | `skip_whitespace` | `while matches!(b, b' '\|b'\t'\|b'\n'\|b'\r')` | `[u8]` | borrow | one pass | none | = |
-| `scan_literal(input, inout pos, end, literal: str)` | `hand_json.rs:67` `literal(&mut self, literal: &[u8])`: `required()` per byte, error 12 at the first mismatch | `str` for `&[u8]` (no byte-string literal; `literal[k]` emits `as_bytes()` indexing) | borrow | one per expected byte | none | = since step 2.7: walks the given literal; the caller picks it from the first byte like hand `record` (`b't' => self.literal(b"true")?`). |
+| `scan_literal(input, inout pos, end, literal: [u8])` | `hand_json.rs:67` `literal(&mut self, literal: &[u8])`: `for &expected in literal`, `required()` per byte, error 12 at the first mismatch | `[u8]` (step 2.10; callers pass `"true"`, a static byte view, R-6g4-5, Rust `"true".as_bytes()`) | borrow | `for expected in literal` (P4, step 2.10) | none | = since step 2.10 (was a `str` literal and a `while k < len(literal)` index loop). The caller picks the literal from the first byte like hand `record` (`b't' => self.literal(b"true")?`). |
 | `digits`, `scan_number` | `hand_json.rs:77` `digits()`, `:87` `number()` | `[u8]` | borrow | one pass | none | = since step 2.7: `digits` requires its first digit itself (error 5 / 13) and is called with `?` from `scan_number`, like hand. |
 | `scalar_width(byte)` | `hand_json.rs:235` `utf8_width(byte: u8) -> usize` | `i64` → `i64` (SPEC §6b: no scalar `u8`/`usize`) | — | — | none | Same table (194-223/224-239/240-244/else 1). Named apart from `parse::utf8_width` only to keep the Python verifier stable (step 2.6). |
 | `scan_string` | `hand_json.rs:113` `string()`: `while let Some(byte) = self.peek()` per byte | `[u8]` | borrow | per byte; a byte ≥ 128 checks one scalar `[i, i + width)` with `from_utf8` and jumps over it | none | Loop = since step 2.6 (the 16-byte block skip is gone). The scalar check passes `(input, i, i + width)` where hand passes `&input[i..i + width]`. Cursor and return form = since step 2.7. |
@@ -114,7 +111,7 @@ Added to `docs/RUST_SHAPE_RESET.md` §4. Each function hit by a gap is left unch
 | B-LLVM | `Document<'a> { source: &'a [u8] }` | Borrowed results and locals reach LLVM in bundle B1 (R-6g9-1); borrowing structs stay Rust-backend only (`codegen/unsupported_type` on LLVM) until bundle B2. | `json` source copy (`text::trim`, `text::clip_bytes` closed in B1) |
 | SR | `out.push(c)`, `out.push_str(&s[i..j])`, `cmd.arg(&s[i..j])` | No scalar push; `subview(s,lo,hi)` cannot be the direct argument of `string_push_str` / `proc_args_push` (only of a plain `str` parameter of a Pruv fn, R-6g-10). | `text::one_line`, `args::build_args` (+ `arg_spans`) |
 | VC | `Vec::with_capacity(n)` then `push` | No reserve-without-fill `[u8]`; `alloc` fills and `truncate` may shrink-realloc (LB5 non-filling growth). | `names::project_name` |
-| FM | `let d = if c { &mut x.a } else { &mut x.b };` | No `inout` binding to one of two fields chosen at run time. | `tail` rewrite (blocked part: decoder pick) |
+| FM | `let d = if c { &mut x.a } else { &mut x.b };` | No `inout` binding to one of two fields chosen at run time. Closed by B5 (R-6g9-5); `tail` rewritten in step 2.10. | — |
 | TK | `Ok(doc) => doc.tape` | The tape cannot be moved out of a match binder: `let mut` clones, `move binder` of a struct is `type/foreign_move`, a `take` record parameter is refused for a struct with an `[i64]` field. The Rust backend emits a move anyway; LLVM emits `@pruv_copy`. | `json/a2_root.pruv` root |
 | SL | `let a = "lit";` (`&'static str`) | `let a: str = "lit"` emits `String::from`. Not needed in `text::engine_line` (hand writes the literal inline, and so does Pruv now). | — (other pieces: codex, claude, grok `let none: str = ""`) |
 
@@ -229,7 +226,7 @@ across the host boundary on both backends). Rows below list what differs inside 
 | X4 | `receive_grow` event bytes | `line.as_bytes().to_vec()` once | `[u8]` | `ev_proc_read_into(move q, slot, 1, inout chunk, inout got)` | — | 1 (=) | **changed in 2.2b**: reads the event bytes straight into `chunk`. = |
 | X5 | `receive_grow` framing | `BufReader::read_line` (newline kept, partial last line returned at EOF) | `[u8]` | `inout line` | scan to the newline (or cap), then `truncate` to the filled length and one `arr_append` of the chunk | growth only (amortized inside `arr_append`, no zero fill) | **changed in 2.2c**: growth is the hand's append (the 2.2b `resize` zero fill is gone). **changed in 2.4**: the newline scan is one `find_byte(chunk, 10, begin, stop)` (R-6g5-3; Rust `position`, LLVM `memchr`) with `stop` the buffered end bounded by the room under cap, as `read_line` (`codex/hand/reader.rs:30`, `memchr` in `read_until`). **=** for scan and growth (2.2c residue **MC** closed by LB6). Framing semantics differ on purpose (**W-c**): Pruv appends raw bytes with no UTF-8 check (consumers parse the line as JSON, which checks it), where `read_line` into a `String` validates and returns its error with `?`; Pruv excludes the newline and drops/flags a partial last line at EOF per the `st` status (-3 at cap kept); consumers rely on that. |
 | X6 | `st: [i64]` 5-slot state | locals of the reader thread | packet | `inout` | — | none | **W-c**: API of mcp/codex/grok; consumer step. |
-| X7 | stderr `tail_push(inout tb, inout ts, ..)` | ring tail per stream | packets | `inout` | — | none | **FM** (step 2.1 `tail` row). Unchanged. |
+| X7 | stderr `crate::tail::push(inout tl, 1, err)` | `tail.push(1, &bytes)` | `tail::Tail` | `inout tl` (= `&mut tail`) | — | none | = since step 2.10 (was `tail_push(inout tb, inout ts, 2, ..)`, FM). |
 
 ## Notes on review findings judged not to be bugs
 
@@ -258,7 +255,7 @@ longer blocks X3 (the caller reuses one buffer). Gap ids as of step 2.2 (IF and 
 | ABI / V | `Collector { turns: VecDeque<Turn> }` returning `Vec<Turn>` | owned struct collections across the host boundary | `turns` package API (T0, T6) |
 | U | `&[u16]` keys | first-class UTF-16 view | `jstr` key arrays (J8) |
 | SL / S | `""` literal never allocated | `""` in a `str` result emits `String::from` | `jstr::owned_text` invalid-input branch (J6) |
-| FM | ring tail picked by stream | `inout` binding to a run-time chosen field | `transport` stderr tail (X7) |
+| FM | ring tail picked by stream | `inout` binding to a run-time chosen field (closed by B5; X7 rewritten in step 2.10) | — |
 
 ## Step 2.3: access, lines
 
@@ -275,7 +272,7 @@ already the hand shape.
 | A1 | `array_at(doc, id, index)` | `Document::array_at`: `index >= count` is a miss, then `index` steps along `next` | `i64` record id | borrowed doc | `index` link steps | none | **changed in 2.3**: was a walk over the whole array (`j < stop`) with a per-element parent check; now the count decides the miss and the loop runs `index` steps, the parent/valid check once on the hit; step 2.9 writes the walk as `for n in 0..index` (P4). Same results on every tape that passes `check_tape` (the count equals the direct children reached along `next`), as the hand trusts the count. = Callers: `json/a4_root.pruv:22`, `json/q_root.pruv:85`, `mcp/perf/perf_root.pruv:35` (`b_root` has its own `array_at`) |
 | A2 | `field_units(doc, id, key: [i64])`, `find` | mode 3 non-ASCII matcher `units(raw).eq(text.encode_utf16())` | key as `[i64]` UTF-16 units | borrowed | members of the object, last match wins | none | **U**: the key is a caller-built `[i64]`; the hand compares against `encode_utf16()` of a `&str` iterator. Callers: `json/q_root`, `a4_root` |
 | A3 | `field(doc, id, key: str)`, `find_ascii`, `may_match`, `is_ascii` | `Document::field` + mode 3 fast path `text.is_ascii() && !body.contains('\\')` | `str` key | borrowed | members, last match wins | ASCII key: none (=). Non-ASCII key: `alloc(len(key))` units | **=** for the ASCII path (every product key is ASCII). The non-ASCII path builds a key unit array: **U** |
-| A4 | `fields_into(doc, id, n, k0..k7, inout out)` + `hit`, `slot_error`, `fill_error`, `field_if_used`, `last_match` | one `get(key)` per key on a `BTreeMap` | 8 `str` keys, `inout [i64]` | `inout out` | one pass over members | none | **W-c**: multi-key one-pass API used by `claude/import.pruv:450` and `claude/entry.pruv:220,248` (owner: the claude import record); the hand does a lookup per key. Consumer step |
+| A4 | (removed in step 2.10) `fields_into(doc, id, n, k0..k7, inout out)` + `hit`, `slot_error`, `fill_error`, `field_if_used`, `last_match` | one `get(key)` per key | — | — | — | — | = since step 2.10: the three claude callers (`entry::root_of`, `entry::block_of`, `import.pruv` assistant `message`) call `field(doc, id, key)` once per key, as hand `get_str(e, key)` / `is_true(e, key)`; the multi-key API and its helpers are gone |
 | A5 | `string_units(doc, id) -> Units` | query mode 5 `units(raw).collect::<Vec<u16>>()` | `Units { status, units: [i64] }` | result owns the units | one decode | one (the units) | **changed in 2.3**: miss paths built an empty array and returned `copy(empty)`, the hit returned `copy(u)`; now `alloc(0, 0)` and `move u`. = Callers: `codex/rpc.pruv:418,430`, `codex/root.pruv:276`, `grok/rpc.pruv:706`, `grok/path.pruv:328`, `mcp/perf/perf_root.pruv:37` |
 | A6 | `string_text`, `string_text_scanned` | `get_str` → `String` | `jstr::Text` | result owns | decode | one | **=** (step 2.9): `string_text` / `string_text_scanned` removed; callers use `string_text_owned` / `string_text_scanned_owned` (`get_str` then `String::from_utf8`, no copy). Callers: `qwen/entry.pruv`, `qwen/chain.pruv`, `json/{a4,b,q}_root.pruv`, `grok/util.pruv:106` |
 | A7 | `string_is(doc, id, lit)` | `get_str(..) == Some(lit)`: `Cow::Borrowed` for an escape-free string, decode only with escapes | `i64` | borrowed | ASCII: compare; plain: compare in place; escaped: decode then compare | ASCII and plain: none. Escaped: one decode buffer (= `Cow::Owned`) | **changed in 2.3**: a non-ASCII literal against an escape-free string (tape plain bit) decoded into a fresh `[u8]` before; now compares the source bytes in place. = for documents from `parse::scan_into` (`build_span`: `grok/read.pruv:360`, `qwen` `parse_span`). Documents from the owned parser (`parse::parse`, `parse_owned`/`parse_copy`) always carry plain bit 0 (`parse.pruv:222`), so a non-ASCII literal still decodes there; writing the bit is a `parse` row, outside this step. Static callers pass ASCII literals (`claude/entry.pruv:238,339` through `field_is`, `claude/import.pruv:356..541`, `codex/item.pruv:142..166`), which never reach the decode |
@@ -630,3 +627,98 @@ Supervisor does not use the changed packages and was not run. Nothing was measur
 - `lex::scan_literal` taking a `[u8]` literal, `tail_push` as a `for`: small, not in this step.
 - `turns` T7, T9, T10 and `transport` X1-X6: consumer API and behaviour, unchanged.
 - Gap rows B, B-LLVM, V, ABI, U, U8, S: unchanged.
+
+## Step 2.10: `tail` in the hand shape, `scan_literal` on `[u8]`, claude per-key lookups
+
+Hand counterparts: `supervisor/hand/core_hand.rs` (`Decoder`, `Tail`) for `tail`; `json/hand/hand_json.rs:67`
+`literal` for `lex::scan_literal`; `claude/handrust/src/lib.rs` `get_str` / `is_true` (one lookup per key) for `access`
+A4. Language used: P4 `for`, P5 `continue`, P7 char literals and `char(u32(..))`, B5 place bindings
+(`let d = inout if ..`, R-6g9-5), field move-and-restore (R-6e-16).
+
+### tail (`tail/tail.pruv`) against `core_hand.rs`
+
+| Hand Rust | Pruv | Types | Ownership / borrow | Loops | Alloc / copy | Difference and reason |
+|---|---|---|---|---|---|---|
+| `struct Decoder { remaining: u8, cp: u32, lower: u8, upper: u8 }` | `struct Decoder { remaining, cp, lower, upper: i64 }` | `i64` for `u8`/`u32` | value | — | — | Field widths: `Decoder` is reachable from the `pub` `Tail` and `push`, and shifts (`<<`) are on `i64` only. Same values |
+| `struct Tail { decoders: [Decoder; 2], bytes: Vec<u8>, units: usize, limit: usize }` | `struct Tail { d0, d1: Decoder, bytes: [u8], units, limit: i64 }` | `[u8]` = `Vec<u8>` | owned | — | — | **P7-1**: no `[T; N]`, so the two decoders are two fields; `decoders[stream]` becomes `inout if stream == 0 { tl.d0 } else { tl.d1 }` |
+| — (unchecked) | `pred fn dec_ok`, `tail_ok` | — | — | — | — | Contracts only. `dec_ok` lists the decoder states the hand reaches, which proves `char::from_u32(cp)` succeeds |
+| `Decoder::new()` | `decoder_new()` | — | value | — | — | = |
+| `Tail::new(limit)`: `Vec::with_capacity(6 * limit + 4)` | `new(limit)`: `alloc(0, 0)` + `arr_reserve(inout bytes, 6 * limit + 4)` | — | result owns | — | one reserve | = (Rust: `vec![]` + `reserve_exact`) |
+| `trim`: `while units > limit \|\| len - start > 3 * limit`, width from the lead byte (`0..=0x7f` 1, `..=0xdf` 2, `..=0xef` 3, else 4), `units -= 2` for 4 else 1 | `trim`: same condition and table as an `if` chain | `i64` | `inout tl` (= `&mut self`) | one `while` | none | **U8**: the loop also stops at `start == len`, clamps `start` to `len` and `units` to 0, and sets `units = 0` when everything is dropped. On valid UTF-8 bytes with `units` their UTF-16 length (what hand trusts) none of these fires; the verifier knows neither fact |
+| `copy_within(start.., 0)` + `truncate(len - start)` on `self.bytes` | `let bytes = move tl.bytes; tl.bytes = shift_front(move bytes, start);` with `copy_within(inout b, ..)` + `truncate` inside | `[u8]` | field moved out and restored in the next statement (R-6e-16); Rust `mem::take` + call | — | none (`ptr::copy` in place) | **CW** (new): `copy_within` / `inout` builtins take a whole array name, not a field place (`type/inout_argument`), and `tl.bytes = f(move tl.bytes)` is `type/array_alias`. The buffer moves through a `take` helper and back, no copy |
+| `append(ch)`: `ch.encode_utf8(&mut [0; 4])`, `extend_from_slice`, `units += ch.len_utf16()`; trim past `2 * limit` units or `6 * limit` bytes | `append(inout tl, ch: char)`: 1-4 `arr_push` by `u32(ch)` range, `units += 1` or 2; same trim test | `char` | `inout tl` | — | pushes into reserved capacity | **P7-1**: no fixed scratch array for `encode_utf8`, so the bytes are pushed one by one (same bytes) |
+| `push(stream, bytes)`: `for &byte in bytes`, `let decoder = &mut self.decoders[stream];` | `push(inout tl, stream, bytes: [u8])`: `for byte in bytes`, `let decoder = inout if stream == 0 { tl.d0 } else { tl.d1 };` | `[u8]` borrowed | place binding (B5) | P4 `for` | none | = (stream index 0/1 like hand; was 1/2) |
+| continuation: `cp = (cp << 6) \| (byte & 0x3f)`, `char::from_u32(cp).unwrap()` | `cp = (cp << 6) + (byte & 63)`, `char(u32(cp))` proved | `i64` | — | — | — | **BV** (new): with `\|` the solver gives up on the char range of the finished code point (`verify_unknown`); the low six bits of `cp << 6` are zero, so `+` gives the same value. The `unwrap` check is gone (proved) |
+| mismatch: `*decoder = Decoder::new(); self.append(U+FFFD)`, then the byte again as a lead | same, `decoder = decoder_new(); append(inout tl, '\u{FFFD}')` | — | place binding | — | — | = |
+| lead `match byte { 0..=0x7f, 0xc2..=0xdf, 0xe0, 0xed, 0xe1..=0xef, 0xf0, 0xf4, 0xf1..=0xf3, _ }` | `if` chain in the same order; ASCII `append(char(u8(byte)))`, others set `remaining`, `mask`, `lower`, `upper`, then `slot = Decoder { .. }` through a second place binding | — | — | — | — | No integer range patterns in `match`; same arms in the same order |
+| `finish(mut self) -> Vec<u8>`: `for stream in 0..2 { if remaining != 0 { append(U+FFFD) } }`, `trim`, return `self.bytes` | `finish(take tl) -> [u8]`: `let mut t = move tl;`, `for stream in 0..2`, `trim(inout t)`, `let bytes = move t.bytes; return move bytes;` | — | consumes the tail | P4 `for` | none | = (`take` + `let mut` rebinding is `mut self`; the remaining count is read by an `if` on `stream` instead of `decoders[stream]`, P7-1) |
+
+Checked outside the runners: `work`-local root calling `new` / `push` (alternating streams per chunk) / `finish`,
+compiled with pruvc-rs (Rust), run against `core_hand.rs` `core()` on 200,000 random inputs (lengths 0-63 mixing
+valid, truncated and invalid UTF-8; limits 1-8; chunks 1-9): 0 differences.
+
+Callers rewritten (the old `tail_buf` / `tail_state` / `tail_push(.., 2, ..)` / `tail_flush` + `tail_bytes` API is
+gone): `transport::receive_grow` (X7), `codex/root.pruv` + `codex/rpc.pruv`, `grok/rpc.pruv`, `mcp/root.pruv`. Each
+holds `let mut tl: crate::tail::Tail = crate::tail::new(1024);`, passes `inout tl`, and states
+`crate::tail::tail_ok(tl) && tl.limit == 1024` where the packet bounds were. mcp reads the tail once at the end:
+`let err: [u8] = crate::tail::finish(move tl);` (hand `tail.finish()`), replacing `tail_flush` + `tail_bytes`. The
+old `tail_bytes` kept the last `limit` UTF-16 units and dropped a low surrogate cut from its pair; hand `trim` drops
+whole characters until at most `limit` units remain, which is the same text.
+
+### lex and access
+
+| Hand Rust | Pruv | Difference |
+|---|---|---|
+| `literal(&mut self, literal: &[u8])`: `for &expected in literal` | `scan_literal(input, inout pos, end, literal: [u8])`: `for expected in literal`, invariant `pos - old(pos) == index(expected)`; per byte `if pos == end` (error 5, hand `required()?`), `if input[pos] != expected` (error 12), `pos += 1` | = (callers in `parse.pruv` unchanged: a string literal argument is a static `[u8]` view; `end` is the P7 borrowed-input bound; `requires 1 <= len(literal)` is a contract only, every caller passes a 4- or 5-byte word) |
+| claude `get_str(e, "type")`, `is_true(e, "isSidechain")`, `msg.and_then(\|m\| get_str(m, "model"))`, block `get_str(b, "type")` / `"text"` | `crate::access::field(doc, id, key)` per key at the three sites; `entry::root_of` still returns its 8-slot array, now filled by seven `field` calls | = per key. `root_of` keeps the array its callers (`import::consume_entry_of`, `user_text_of`) take; each slot equals the old one-pass slot. `fields_into`, `hit`, `slot_error`, `fill_error`, `field_if_used`, `last_match` removed (no other caller) |
+
+### Gap rows found in this step
+
+| Id | Hand Rust form | What Pruv cannot express | Where it shows |
+|---|---|---|---|
+| CW | `self.bytes.copy_within(start.., 0)` on a field | `copy_within` and the other `inout` array builtins take a whole array name, not a field place; `tl.bytes = f(move tl.bytes)` is `type/array_alias` | `tail::trim` (moves the field through `shift_front`, no copy) |
+| BV | `(cp << 6) \| (byte & 0x3f)` feeding `char::from_u32` | with `\|`, the char-range obligation of the result times out (`verify_unknown`); `+` proves | `tail::push` |
+
+### Consumer tests (step 2.10)
+
+Pairs are rs/rust and rs/llvm (pruvc-rs), no `--vs-py`.
+
+| Runner | Fixtures per pair (rs/rust, rs/llvm) |
+| --- | --- |
+| json `run_a0` .. `run_a5` | 37 / 351 / 114 / 454 / 6344 / 83, all pass |
+| claude `test_a0` .. `test_a4` | 272 / 2884 / 2443 / 134 / 270, all pass |
+| grok `test_impl --no-ts` (`GROK_COMPILE_WALL=3600`) | 254, all pass |
+| opencode `test_impl` | 199, all pass |
+| codex `test_impl` | 136, all pass (TypeScript oracle 136/136) |
+| mcp `test_impl` | 22, all pass |
+| qwen `test_impl` | 26, all pass |
+
+Supervisor does not use the changed packages and was not run. Nothing was measured.
+
+### Independent structure comparison
+
+Before the commit a separate read of the same files against the same hand sources (Codex gpt-6.2-astra, high) found
+no difference beyond the tables above. Points it raised and where they stand:
+
+- `tail_ok` bounds bytes and units separately and does not tie `units` to the UTF-16 length of `bytes`: that is U8
+  (the `trim` clamps above).
+- `push` takes `stream` 0 or 1 as a contract; the hand indexes `decoders[stream]` and panics on anything else.
+  Contract for a run-time check, as everywhere in Pruv.
+- The process read in `transport::receive_grow` / codex `receive` still asks for stderr as fd 2; only the decoder
+  number passed to `push` moved from 2 to 1.
+- mcp `finish` versus the old `tail_flush` + `tail_bytes`: same final `last_line` bytes for the same stderr input
+  (decoder output keeps bytes at most 3 x units, so only the unit bound cuts).
+- `supervisor/core_root.pruv`, `supervise.pruv` and `a1_root.pruv` use their own `supervisor/btail.pruv`, and
+  `lib/tail.pruv` is the old library copy; neither is the `pkgs/tail` package, so they were not touched here.
+
+### Rows still open after step 2.10
+
+- grok `read::window` scratch `tape` / `stack` and the `build_span` path (P8, A8, and W-c `scan_into`). The hand
+  (`grok/perf/hand_history.rs:912-936`) reuses one `Entry`, resets it per line and parses the line straight into it
+  (`e.ty` from the `"type"` value, then `col.feed(&entry)`); it builds no `Document` and has no tape fallback. Pruv has
+  the DB45 one-pass reader (`grok/line.pruv`, scratch `f` / `d`) with the tape path behind it (`read::line_step`:
+  `parse::scan_into`, `access::view_root_type`, `lines::build_span`, `entry::feed`). Matching the hand means one
+  `Entry` parser replacing both `line.pruv` and the tape path, and `entry::feed` taking that `Entry`: a grok read
+  rewrite, not a row-sized change. Not started.
+- `turns` T7, T9, T10 and `transport` X1-X6: not started in this step.
+- Gap rows B, B-LLVM, V, ABI, U, U8, S, P7-1 and the new CW, BV: open.

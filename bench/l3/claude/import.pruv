@@ -446,9 +446,7 @@ fn consume_entry_of(doc: crate::json::JsonDocument, ty: i64, r: [i64], inout st:
   let msg: i64 = crate::entry::object_of(doc, r[4]);
   if msg == -1 { return Effect::Done(-1); }
   if msg < 0 { return Effect::Defect(msg); }
-  let mut m: [i64] = alloc(8, 0);
-  crate::access::fields_into(doc, msg, 2, "model", "content", "", "", "", "", "", "", inout m);
-  let mut model_id: i64 = crate::entry::string_of(doc, m[0]);
+  let mut model_id: i64 = crate::entry::string_of(doc, crate::access::field(doc, msg, "model"));
   if model_id < -1 { return Effect::Defect(model_id); }
   if model_id >= 0 {
     let synthetic: i64 = crate::access::string_is(doc, model_id, "<synthetic>");
@@ -460,7 +458,7 @@ fn consume_entry_of(doc: crate::json::JsonDocument, ty: i64, r: [i64], inout st:
       model_id = -1;
     }
   }
-  let c: i64 = m[1];
+  let c: i64 = crate::access::field(doc, msg, "content");
   if c == -1 || c == -2 { return Effect::Done(model_id); }
   if c < 0 { return Effect::Defect(c); }
   if c >= len(doc.tape) / 6 { return Effect::Defect(-4); }

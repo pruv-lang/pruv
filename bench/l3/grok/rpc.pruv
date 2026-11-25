@@ -630,17 +630,17 @@ pub fn parse_line(line: [u8], n: i64) -> crate::json::JsonParse ! alloc
 
 // One receive step of the pump (same contract as the Codex rpc::step with a 16-word ctl). ctl[5] = 1 when a line of ctl[6] bytes is
 // in `line`, 0 when nothing usable arrived; a closed child, a timeout or a transport failure sets ctl[0].
-pub fn step(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64]) -> Loop ! async, proc, alloc
+pub fn step(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
   requires len(ctl) == 16
   requires len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
   requires 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line)
-  requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  requires crate::tail::tail_ok(tl) && tl.limit == 1024
   ensures len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
   ensures len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
   ensures 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line) && ctl[6] <= len(line)
-  ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
-  let mut q: Loop = crate::transport::receive_grow(move l, slot, overall, -1, true, 8388608, inout st, inout line, inout chunk, inout tb, inout ts);
+  let mut q: Loop = crate::transport::receive_grow(move l, slot, overall, -1, true, 8388608, inout st, inout line, inout chunk, inout tl);
   let n: i64 = st[0];
   ctl[5] = 0;
   ctl[6] = 0;
@@ -771,15 +771,15 @@ fn on_reply(d: crate::json::JsonDocument, id: i64, inout ctl: [i64], inout aux: 
 // Writes go through transport::send with the overall budget ctl[10]. Spec P11 is resolved: a failed stdin write half-closes stdin
 // and the reader keeps reading stdout (as TS does); the slot is not failed.
 
-fn pump(take l: Loop, slot: i64, overall: i64, id: i64, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64], inout aux: [u8]) -> Loop ! async, proc, alloc
+fn pump(take l: Loop, slot: i64, overall: i64, id: i64, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail, inout aux: [u8]) -> Loop ! async, proc, alloc
   requires len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && 1 <= id && id <= 2 && 512 <= len(aux) && len(aux) <= 8389120
   requires len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
   requires 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line)
-  requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  requires crate::tail::tail_ok(tl) && tl.limit == 1024
   ensures len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && 512 <= len(aux) && len(aux) <= 8389120
   ensures len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
   ensures 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line)
-  ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
   let mut q: Loop = move l;
   let mut c: Cap = cap_new();
@@ -789,11 +789,11 @@ fn pump(take l: Loop, slot: i64, overall: i64, id: i64, inout ctl: [i64], inout 
     invariant 0 <= events && events <= 1000000 && len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && 512 <= len(aux) && len(aux) <= 8389120
     invariant len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
     invariant 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line) && 1 <= id && id <= 2
-    invariant len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+    invariant crate::tail::tail_ok(tl) && tl.limit == 1024
     decreases 1000000 - events
   {
     events = events + 1;
-    q = step(move q, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
+    q = step(move q, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tl);
     if ctl[0] == 0 && ctl[5] == 1 {
       // DB65: the span scan decides the line in place; the tape path only for fast_kind 3
       let fk: i64 = fast_kind(line, ctl[6], id, inout c);
@@ -824,15 +824,15 @@ fn pump(take l: Loop, slot: i64, overall: i64, id: i64, inout ctl: [i64], inout 
 
 // After a response settled a request: the remaining complete lines of the current chunk are processed with nothing outstanding
 // (server requests answered, everything else ignored) before the next request is written. Each step eats at least one chunk byte.
-fn drain(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64]) -> Loop ! async, proc, alloc
+fn drain(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
   requires len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
   requires len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
   requires 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line)
-  requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  requires crate::tail::tail_ok(tl) && tl.limit == 1024
   ensures len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
   ensures len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
   ensures 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line)
-  ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
   let mut q: Loop = move l;
   let mut c: Cap = cap_new();
@@ -841,11 +841,11 @@ fn drain(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64
     invariant 0 <= n && n <= 70000 && len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
     invariant len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
     invariant 1 <= len(line) && len(line) <= 8388608 && st[1] <= len(line)
-    invariant len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+    invariant crate::tail::tail_ok(tl) && tl.limit == 1024
     decreases 70000 - n
   {
     n = n + 1;
-    q = step(move q, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
+    q = step(move q, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tl);
     if ctl[0] == 0 && ctl[5] == 1 {
       // an id of 99 is never outstanding: only server requests (kind 1) matter here
       let fk: i64 = fast_kind(line, ctl[6], 99, inout c);
@@ -911,8 +911,7 @@ pub fn load_check(binary: str, home: str, folder: str, thread: str, timeout_ms: 
   let mut st: [i64] = alloc(5, 0);
   let mut line: [u8] = alloc(4096, 0);
   let mut chunk: [u8] = alloc(65536, 0);
-  let mut tb: [i64] = crate::tail::tail_buf(1024);
-  let mut ts: [i64] = crate::tail::tail_state(1024);
+  let mut tl: crate::tail::Tail = crate::tail::new(1024);
   let mut aux: [u8] = alloc(512, 0);
   if ctl[0] == 0 {
     ctl[1] = 25;
@@ -922,10 +921,10 @@ pub fn load_check(binary: str, home: str, folder: str, thread: str, timeout_ms: 
       if st[0] == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
     }
     l = crate::transport::send(move l, slot, req_init(), ctl[10]);
-    l = pump(move l, slot, overall, 1, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts, inout aux);
+    l = pump(move l, slot, overall, 1, inout ctl, inout st, inout line, inout chunk, inout tl, inout aux);
   }
   if ctl[0] == 0 {
-    l = drain(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
+    l = drain(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tl);
   }
   if ctl[0] == 0 {
     ctl[1] = 26;
@@ -935,14 +934,14 @@ pub fn load_check(binary: str, home: str, folder: str, thread: str, timeout_ms: 
       if st[0] == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
     }
     l = crate::transport::send(move l, slot, req_load(thread, folder), ctl[10]);
-    l = pump(move l, slot, overall, 2, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts, inout aux);
+    l = pump(move l, slot, overall, 2, inout ctl, inout st, inout line, inout chunk, inout tl, inout aux);
   }
   // A settling response (0 ok, 2/3 error object, 4 bad capabilities) leaves the rest of its chunk: the reference's data handler still
   // answers server requests in it before the child is closed. The outcome is already settled, so a failed write there only half-closes stdin and is ignored.
   let settled: i64 = ctl[0];
   if settled == 0 || settled == 2 || settled == 3 || settled == 4 {
     ctl[0] = 0;
-    l = drain(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
+    l = drain(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tl);
     ctl[0] = settled;
   }
   let code: i64 = ctl[0];
