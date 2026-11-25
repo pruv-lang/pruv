@@ -5,6 +5,11 @@ use crate::ast::*;
 use crate::gtype::{is_g3_key, GType};
 use crate::typeinfo::{is_user_type, TypeTable};
 
+/// A directly declared u16 buffer in an internal function's signature.
+pub(crate) fn has_u16_buffer_sig(f: &Function) -> bool {
+    f.ret == "array_u16" || f.params.iter().any(|p| p.ty == "array_u16")
+}
+
 /// G3: a generic specialization function (stem `pruv_g3_f_...`); such functions are private Rust items.
 /// The prefix `pruv_` is reserved, so no user function can carry it.
 pub fn is_spec_fn(name: &str) -> bool {
@@ -157,8 +162,9 @@ fn rty_name(t: &str, param: bool) -> String {
         "array" => {
             if param { "&[i64]".to_string() } else { "::std::vec::Vec<i64>".to_string() }
         }
-        "array_u8" => {
-            if param { "&[u8]".to_string() } else { "::std::vec::Vec<u8>".to_string() }
+        "array_u8" | "array_u16" => {
+            let elem = crate::typeinfo::array_elem_name(t).unwrap();
+            if param { format!("&[{elem}]") } else { format!("::std::vec::Vec<{elem}>") }
         }
         // G2 A5: stated explicitly instead of relying on the fallback
         "array_bool" => {
@@ -671,9 +677,100 @@ mod tests {
         assert_eq!(rty("array", false), "::std::vec::Vec<i64>");
         assert_eq!(rty("array_u8", true), "&[u8]");
         assert_eq!(rty("array_u8", false), "::std::vec::Vec<u8>");
+        assert_eq!(rty("array_u16", true), "&[u16]");
+        assert_eq!(rty("array_u16", false), "::std::vec::Vec<u16>");
         assert_eq!(cty("Point"), "pruv_contract__Point");
         assert_eq!(conv("option", "x"), "x.map(|v| v as i128)");
         assert!(try_cty("unit").is_err());
+    }
+}
+
+/// Share the existing escape analysis for fixed u16 buffers. Its byte-buffer
+/// model gets twice the element count so the same stack limits apply.
+#[derive(Default)]
+pub struct BufferStackPlan {
+    pub base: crate::stack::StackPlan,
+    u16_lengths: std::collections::HashMap<usize, usize>,
+}
+
+impl BufferStackPlan {
+    pub fn new(prog: &Program, storage: &crate::storage::StoragePlan, verified: bool) -> Self {
+        let base = crate::stack::plan_stack(prog, storage, verified);
+        let mut u16_lengths = std::collections::HashMap::new();
+        if crate::typeinfo::uses_array_type(prog, "array_u16") {
+            fn project(stmts: &mut [Stmt], lets: &mut Vec<usize>, ordinal: &mut usize) {
+                for stmt in stmts {
+                    let number = *ordinal;
+                    *ordinal += 1;
+                    match stmt {
+                        Stmt::Let(l) => {
+                            lets.push(number);
+                            if l.ty == "array_u16" && !l.borrowed {
+                                if let Expr::Call(c) = &mut l.value {
+                                    if let Some(Expr::IntLit(n)) = c.args.first_mut().filter(|_| c.name == "alloc") {
+                                        if let Some(bytes) = n.value.parse::<usize>().ok().and_then(|n| n.checked_mul(2)) {
+                                            n.value = bytes.to_string();
+                                            l.ty = "array_u8".into();
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+                            l.ty.clear();
+                        }
+                        Stmt::If(s) => {
+                            project(&mut s.then, lets, ordinal);
+                            project(&mut s.els, lets, ordinal);
+                        }
+                        Stmt::While(s) => project(&mut s.body, lets, ordinal),
+                        Stmt::ForMap(s) => project(&mut s.body, lets, ordinal),
+                        Stmt::Match(s) => {
+                            for arm in &mut s.arms { project(&mut arm.body, lets, ordinal); }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            let mut projected = prog.clone();
+            let mut original = std::collections::HashMap::new();
+            for (source, proxy) in prog.functions.iter().zip(&mut projected.functions) {
+                if source.foreign.is_some() { continue; }
+                for p in &mut proxy.params {
+                    if p.ty == "array_u16" { p.ty = "array_u8".into(); }
+                }
+                let mut lets = Vec::new();
+                let mut ordinal = 0;
+                project(&mut proxy.body, &mut lets, &mut ordinal);
+                let mut ordinals = lets.into_iter();
+                crate::foreign_shim::walk_stmts(&source.body, &mut |node| {
+                    if let crate::foreign_shim::Node::Let(l) = node {
+                        original.insert((source.name.as_str(), ordinals.next().unwrap()), l as *const Let as usize);
+                    }
+                });
+            }
+            let mut used = std::collections::HashMap::new();
+            for (f, _, _, len, size) in &base.entries {
+                *used.entry(f.as_str()).or_insert(0) += len * size;
+            }
+            let extra = crate::stack::plan_stack(&projected, &Default::default(), verified);
+            for (f, ordinal, _, bytes, _) in &extra.entries {
+                let total = used.entry(f.as_str()).or_insert(0);
+                if *total + bytes <= crate::stack::MAX_TOTAL_BYTES {
+                    *total += bytes;
+                    u16_lengths.insert(original[&(f.as_str(), *ordinal)], bytes / 2);
+                }
+            }
+        }
+        Self { base, u16_lengths }
+    }
+
+    pub fn contains(&self, node: &Let) -> bool {
+        self.base.contains(node) || self.u16_lengths.contains_key(&(node as *const Let as usize))
+    }
+
+    pub fn length(&self, node: &Let) -> usize {
+        self.u16_lengths.get(&(node as *const Let as usize)).copied().unwrap_or_else(|| self.base.length(node))
     }
 }
 
@@ -689,7 +786,7 @@ pub fn fast_forall(e: &Quant, arr_ok: &dyn Fn(&Expr) -> bool) -> Option<Vec<(Str
     fn arr(x: &Expr, q: &Quant, arr_ok: &dyn Fn(&Expr) -> bool) -> bool {
         match x {
             Expr::Var(v) => {
-                matches!(v.ty.as_deref(), Some("array") | Some("array_u8")) && v.name != q.var && arr_ok(x)
+                matches!(v.ty.as_deref(), Some("array") | Some("array_u8") | Some("array_u16")) && v.name != q.var && arr_ok(x)
             }
             _ => false,
         }

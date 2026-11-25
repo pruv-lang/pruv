@@ -164,7 +164,7 @@ fn fix_for(code: &str) -> &'static str {
         "opaque_total" => "an opaque body must be defined for every argument: guard each partial operation inside the body (for example i < len(a) && a[i] > 0)",
         "variant_domain" => "guard the lookup so it is only reached for that variant, e.g. `is_variant(e, E::V) && variant_field(e, E::V, f) > 0` or `!is_variant(e, E::V) || ...`",
         "contract_domain" => "guard the partial operation earlier in the same contract or in an earlier clause: index range, divisor != 0, is_some/is_ok before some_val/ok_val/err_val, lo < hi before max/min",
-        "elem_range" => "store or fill only values in 0..=255 into a [u8] array: bound the value with requires, an if, or a loop invariant",
+        "elem_range" => "bound the value to the indicated range with requires, an if, or a loop invariant",
         "utf8_invalid" => "guard str_from_utf8(b) with utf8_valid(b) in a requires clause or an if",
         "string_slice_range" => "keep 0 <= lo <= hi <= len(s) for substr(s, lo, hi): bound lo and hi with requires, an if, or a loop invariant (a counterexample str may not be valid UTF-8)",
         "utf8_boundary" => "cut a str only at character boundaries: require or check is_char_boundary(s, lo) and is_char_boundary(s, hi) (a counterexample str may not be valid UTF-8)",

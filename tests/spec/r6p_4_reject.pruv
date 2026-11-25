@@ -1,0 +1,6 @@
+// spec: R-6p-4 reject
+fn put(inout a: [u16], v: i64) -> () ! alloc
+  requires v >= 0 && len(a) < 1000
+{
+  arr_push(inout a, v);
+}

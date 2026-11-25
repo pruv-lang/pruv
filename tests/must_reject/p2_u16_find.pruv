@@ -1,0 +1,4 @@
+// P2: find_byte stays [u8]/str only
+fn f(a: ref [u16]) -> i64 {
+  return find_byte(a, 0, 0, len(a));
+}

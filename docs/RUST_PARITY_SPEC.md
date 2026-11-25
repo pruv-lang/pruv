@@ -101,3 +101,8 @@ the B-bundle average (about 80 minutes per feature) and adjust bundle size.
 - P1-1: the type table is built twice when pub/host/foreign functions exist; build it once (tidy).
 - P1-2: the LLVM harness accepts a function in proof mode if it has a single `nuw`; check every elided-check site.
 - P1-3: `u8`/`u16` used directly as an index or in `decreases` needs `i64(x)`; allow it in P3/P4.
+- P2-1: `[u8]` <-> `[u16]` transcoding (UTF-8 <-> UTF-16) is not built in; add it as builtins when a workload needs it.
+- P2-2: built-in slice order and hash for `[u16]` (hand Rust `a.cmp(b)` / `Hash for [u16]`) and `[u16]` map keys; today they are Pruv loops over `ref [u16]` (P11/P14).
+- P2-3: `Vec<u16>`, `Option<[u16]>` and other `u16` type arguments stay rejected (P11).
+- P2-4: `[u16]` in pub/extern/foreign signatures stays rejected (P12).
+- P2-5: `find` (memchr) on `[u16]` stays rejected (`type_mismatch`); add a u16 search when a workload needs it.

@@ -16,7 +16,7 @@ use crate::gtype::{
     key_is_collection_owner, key_is_vec_slice_arg, mk_array, mk_nominal, mk_option, mk_result_with_error, substitute, GType, Mapping, ParamId,
 };
 use crate::intwidth::{self, IntWidth};
-use crate::typeinfo::{program_uses_inout, TypeTable, BUILTIN_TYPE_NAMES};
+use crate::typeinfo::{program_uses_inout, TypeTable};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
@@ -275,8 +275,12 @@ fn is_narrow(ty: &GType) -> bool {
     ty.int_width().is_some_and(|width| intwidth::is_narrow(width.name))
 }
 
-fn contains_narrow_arg(ty: &GType) -> bool {
-    is_narrow(ty) || ty.args.iter().any(contains_narrow_arg)
+fn unsupported_small_int_arg(ty: &GType) -> bool {
+    is_narrow(ty) || ty.name == "array_u16"
+}
+
+fn contains_unsupported_small_int_arg(ty: &GType) -> bool {
+    unsupported_small_int_arg(ty) || ty.args.iter().any(contains_unsupported_small_int_arg)
 }
 
 fn small_int_unsupported(line: i64, col: i64, msg: impl Into<String>, fix: &str) -> PruvError {
@@ -409,6 +413,34 @@ struct Checker {
     in_view: bool,
 }
 
+/// Reject [u16] at explicit boundaries even when a struct or enum hides the buffer.
+fn check_u16_boundary(prog: &Program, public: impl Fn(usize) -> bool) -> Res<()> {
+    fn contains_u16_buffer(ty: &GType, decls: &HashMap<&str, &TypeDecl>, seen: &mut HashSet<String>) -> bool {
+        ty.name == "array_u16"
+            || ty.args.iter().any(|arg| contains_u16_buffer(arg, decls, seen))
+            || (ty.is_user_type() && seen.insert(ty.name.clone())
+                && decls.get(ty.name.as_str()).is_some_and(|decl| {
+                    decl_fields(decl).iter().any(|(_, field)| contains_u16_buffer(&GType::from_key(&field.ty), decls, seen))
+                }))
+    }
+
+    let decls = prog.types.iter().map(|d| (d.name(), d)).collect();
+    for (i, f) in prog.functions.iter().enumerate() {
+        if f.foreign.is_none() && !public(i) {
+            continue;
+        }
+        let mut seen = HashSet::new();
+        if std::iter::once(&f.ret).chain(f.params.iter().map(|p| &p.ty))
+            .any(|ty| contains_u16_buffer(&GType::from_key(ty), &decls, &mut seen))
+        {
+            return Err(small_int_unsupported(
+                f.line, f.col, "[u16] at the host boundary is bundle P12", "use a host-supported type",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// G4 A0: `check_with_externs` for an explicit-mode program: resolves the names of the whole program to identities first
 /// (modules::resolve), then runs the same checker plus the host-entry signature rules.
 pub fn check_explicit(
@@ -417,6 +449,7 @@ pub fn check_explicit(
     externs: &[String],
 ) -> Result<TypeTable, PruvError> {
     crate::modules::resolve(prog, g4)?;
+    check_u16_boundary(prog, |i| g4.fn_meta.get(i).is_some_and(|m| m.is_pub || m.host_entry))?;
     let src_names: Vec<String> = g4.fn_meta.iter().map(|m| m.src_name.clone()).collect();
     let hosts: Vec<bool> = g4.fn_meta.iter().map(|m| m.host_entry).collect();
     crate::borrowed::prepare(prog, &hosts)?;
@@ -439,6 +472,9 @@ pub fn check(prog: &mut Program) -> Result<TypeTable, PruvError> {
 
 /// `check` with the crate names given with --rust-extern (G6: crates a trusted rust fn path may start with besides std).
 pub fn check_with_externs(prog: &mut Program, externs: &[String]) -> Result<TypeTable, PruvError> {
+    check_u16_boundary(prog, |i| {
+        prog.explicit.as_ref().and_then(|e| e.fns.get(i)).is_some_and(|m| m.is_pub || m.host_entry)
+    })?;
     crate::borrowed::prepare(prog, &[])?;
     let mut c = Checker::new(prog, externs, &[])?;
     prog.uses_inout = Some(c.uses_inout); // G5 A0: lets the staging guard skip its walk for inout-free programs
@@ -1029,6 +1065,10 @@ fn inst_of(decl: String, targs: &[GType], m: &Mapping) -> Inst {
     let mut subst: Vec<(String, usize, GType)> = m.iter().map(|((o, i), t)| (o.clone(), *i, t.clone())).collect();
     subst.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
     Inst { decl, args: targs.to_vec(), subst, src_args: None }
+}
+
+fn is_concrete_int_buffer(ty: &GType) -> bool {
+    ty.args.is_empty() && crate::typeinfo::array_elem_name(&ty.name).and_then(intwidth::of).is_some()
 }
 
 /// Type of an element read from / stored into the array type `at`: T for [T]; bool for [bool]; else i64.
@@ -1921,8 +1961,8 @@ impl Checker {
 
     /// Every type reference: arity, known names, type-argument and bound rules (G3_SPEC 3.1, 3.2, 3.4).
     fn check_type(&self, line: i64, col: i64, ty: &GType) -> Res<()> {
-        if ty.args.iter().any(contains_narrow_arg) {
-            return Err(small_int_unsupported(line, col, "scalar u8/u16 type arguments require P2/P11", "use i64"));
+        if ty.view_base().is_none() && ty.args.iter().any(contains_unsupported_small_int_arg) {
+            return Err(small_int_unsupported(line, col, "scalar u8/u16 and [u16] type arguments require P11", "use i64"));
         }
         if ty.view_payload().is_some() {
             return Ok(());
@@ -1992,11 +2032,11 @@ impl Checker {
                 if !text_key && *k != i64t() && v.owner.is_none() {
                     if let Some(TypeDecl::Struct(d)) = self.decls.get(&v.name) {
                         if d.tparams.is_empty()
-                            && d.fields.iter().any(|f| crate::gtype::key_is_collection(&f.ty) || f.ty == "array_u8")
+                            && d.fields.iter().any(|f| crate::gtype::key_is_collection(&f.ty) || matches!(f.ty.as_str(), "array_u8" | "array_u16"))
                             && d.fields.iter().all(|f| {
                                 let ft = GType::from_key(&f.ty);
                                 crate::gtype::key_is_owned_field(&f.ty)
-                                    || f.ty == "array_u8"
+                                    || matches!(f.ty.as_str(), "array_u8" | "array_u16")
                                     || self.record_map_field(&ft)
                                     || is_value(&ft, &|n| self.value_decl(n))
                             })
@@ -2044,7 +2084,7 @@ impl Checker {
             }
             return Ok(());
         }
-        if ty.int_width().is_some() || BUILTIN_TYPE_NAMES.contains(&ty.name.as_str()) {
+        if ty.int_width().is_some() || crate::typeinfo::is_builtin_type_name(&ty.name) {
             return Ok(());
         }
         if self.ctx_names.contains(&ty.name) {
@@ -2121,8 +2161,8 @@ impl Checker {
     }
 
     fn check_result_error(&self, line: i64, col: i64, e: &GType) -> Res<()> {
-        if is_narrow(e) {
-            return Err(small_int_unsupported(line, col, "scalar u8/u16 Result error types require P2/P11", "use i64"));
+        if unsupported_small_int_arg(e) {
+            return Err(small_int_unsupported(line, col, "scalar u8/u16 and [u16] Result error types require P11", "use i64"));
         }
         if self.borrowed_type_argument(e) {
             return Err(terr(line, col, "borrow_signature", "borrowed types cannot be generic arguments", ""));
@@ -2152,8 +2192,8 @@ impl Checker {
 
     /// a: a type argument; tp: the TypeParam it instantiates (None for Option/Result).
     fn check_arg(&self, line: i64, col: i64, a: &GType, tp: Option<&TParam>) -> Res<()> {
-        if is_narrow(a) {
-            return Err(small_int_unsupported(line, col, "scalar u8/u16 type arguments require P2/P11", "use i64"));
+        if unsupported_small_int_arg(a) {
+            return Err(small_int_unsupported(line, col, "scalar u8/u16 and [u16] type arguments require P11", "use i64"));
         }
         if self.borrowed_type_argument(a) {
             return Err(terr(line, col, "borrow_signature", "borrowed types cannot be generic arguments", ""));
@@ -2287,7 +2327,7 @@ impl Checker {
                         ));
                     }
                     if ft == unitt()
-                        || (ft.is_array() && ft != GType::array() && ft != GType::array_u8() && ft != GType::array_bool())
+                        || (ft.is_array() && !ft.args.is_empty())
                         || (ft.owner.is_none() && ft.name == "result" && ft.args.len() <= 2 && ft.args.first() == Some(&unitt()))
                     {
                         return Err(terr(
@@ -2349,7 +2389,7 @@ impl Checker {
         ty.owner.is_none()
             && ty.args.is_empty()
             && self.decls.contains_key(&ty.name)
-            && !BUILTIN_TYPE_NAMES.contains(&ty.name.as_str())
+            && !crate::typeinfo::is_builtin_type_name(&ty.name)
     }
 
     /// R-6e-20: `e` is a catalog `vec_get` of a recursive vector element (a borrowed read).
@@ -2578,7 +2618,7 @@ impl Checker {
                     && d.fields.iter().all(|f| {
                         let t = GType::from_key(&f.ty);
                         crate::gtype::key_is_owned_field(&f.ty)
-                            || f.ty == "array_u8"
+                            || matches!(f.ty.as_str(), "array_u8" | "array_u16")
                             || self.collection_records.borrow().contains(&ty.name) && self.record_map_field(&t)
                             || (!t.contains_collection() && !t.is_array() && t != strt()
                                 && dependencies(&t).iter().all(|n| !self.extended.contains(n)))
@@ -2609,7 +2649,7 @@ impl Checker {
                     let ty = GType::from_key(&f.ty);
                     self.nested_child_type(&ty)
                         || crate::gtype::key_is_owned_field(&f.ty)
-                        || f.ty == "array_u8"
+                        || matches!(f.ty.as_str(), "array_u8" | "array_u16")
                         || is_value(&ty, &|n| self.value_decl(n))
                 })).then(|| name.clone())
         }).collect();
@@ -2622,7 +2662,7 @@ impl Checker {
                 if d.tparams.is_empty() && d.fields.iter().all(|f| {
                     let ft = GType::from_key(&f.ty);
                     crate::gtype::key_is_owned_field(&f.ty)
-                        || f.ty == "array_u8"
+                        || matches!(f.ty.as_str(), "array_u8" | "array_u16")
                         || self.collection_records.borrow().contains(&ty.name) && self.record_map_field(&ft)
                         || is_value(&ft, &|n| self.value_decl(n))
                 }))
@@ -3673,7 +3713,7 @@ impl Checker {
             ty = self.field_type(m.line, m.col, &ty, field)?;
         }
         let typed = matches!(ty.to_key().as_str(), "string" | "vec<i64>" | "vec<bool>")
-            || (ty.args.is_empty() && matches!(ty.name.as_str(), "array" | "array_u8" | "array_bool"));
+            || (ty.args.is_empty() && crate::typeinfo::is_array_name(&ty.name));
         Ok(typed.then_some((m.line, m.col)))
     }
 
@@ -3695,7 +3735,7 @@ impl Checker {
             return Err(terr(m.line, m.col, "array_alias", "a borrowed view cannot be moved", ""));
         }
         let typed = matches!(ty.to_key().as_str(), "string" | "vec<i64>" | "vec<bool>")
-            || (ty.args.is_empty() && matches!(ty.name.as_str(), "array" | "array_u8" | "array_bool"));
+            || (ty.args.is_empty() && crate::typeinfo::is_array_name(&ty.name));
         let restored = matches!(next, Some(Stmt::FieldAssign(r)) if r.name == m.name && r.fields == m.fields);
         if typed
             && !restored
@@ -4020,7 +4060,7 @@ impl Checker {
                         "build a new str with substr() or copy() instead",
                     ));
                 }
-                if !(cur.args.is_empty() && matches!(cur.name.as_str(), "array" | "array_u8" | "array_bool")) {
+                if !(cur.args.is_empty() && crate::typeinfo::is_array_name(&cur.name)) {
                     return Err(terr(s.line, s.col, "not_array", format!("{} is not an array", place), ""));
                 }
                 if !v.mutable && !matches!(v.kind, "inout" | "map_inout") {
@@ -4397,7 +4437,7 @@ impl Checker {
 
     fn par_type_ok(&self, t: &GType) -> bool {
         is_element(t, &self.elem_params)
-            || matches!(t.to_key().as_str(), "array" | "array_u8" | "array_bool")
+            || (t.args.is_empty() && t.is_array())
             || (t.name == "array" && t.args.len() == 1
                 && t.args[0].owner.is_some() && is_element(&t.args[0], &self.elem_params))
     }
@@ -4444,7 +4484,7 @@ impl Checker {
                     return Err(terr(arg.line(), arg.col(), "parallel_argument",
                         format!("an argument of type {} cannot cross a par branch boundary",
                             t.as_ref().map(tn).unwrap_or("?".into())),
-                        "bind a scalar first, or pass whole [i64], [u8] or [bool] arrays"));
+                        "bind a scalar first, or pass whole [i64], [u8], [u16] or [bool] arrays"));
                 }
             }
         }
@@ -5193,7 +5233,7 @@ impl Checker {
                         }
                         "index" | "decreases measure" | "range bound" => {
                             return Err(small_int_unsupported(e.line(), e.col(),
-                                format!("{} must be i64; scalar u8/u16 here requires P2/P3", op), "write i64(x)"));
+                                format!("{} must be i64; scalar u8/u16 here requires P3", op), "write i64(x)"));
                         }
                         _ => {}
                     }
@@ -6380,13 +6420,13 @@ impl Checker {
             }
             dty = if path.is_empty() { v.ty } else { self.expr(&mut arg.expr, scope, c)? };
             self.check_inout_view(arg)?;
-            if dty != GType::array() && dty != GType::array_u8() && !(grow && !append && dty == GType::array_bool()) {
+            if !(is_concrete_int_buffer(&dty) || grow && !append && dty == GType::array_bool()) {
                 return Err(terr(
                     aline,
                     acol,
                     "type_mismatch",
-                    if grow && !append { format!("{builtin} takes [i64], [u8] or [bool], found {}", tn(&dty)) }
-                    else { format!("expected {} or {}, found {}", tn(&GType::array()), tn(&GType::array_u8()), tn(&dty)) },
+                    if grow && !append { format!("{builtin} takes [i64], [u8], [u16] or [bool], found {}", tn(&dty)) }
+                    else { format!("expected [i64], [u8] or [u16], found {}", tn(&dty)) },
                     "",
                 ));
             }
@@ -6818,7 +6858,7 @@ impl Checker {
                 }
                 if !at.args.is_empty() {
                     return Err(terr(l0, c0, "type_mismatch",
-                        format!("resize takes [i64], [u8] or [bool], found {}", tn(&at)),
+                        format!("resize takes [i64], [u8], [u16] or [bool], found {}", tn(&at)),
                         "use alloc and a copy loop for other element types"));
                 }
                 self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
@@ -6850,10 +6890,10 @@ impl Checker {
                 }
                 arity(5)?;
                 let at = self.expect_array(&mut e.args[0], scope, c, false)?;
-                // check.py: a must be [i64] or [u8]; b must have exactly a's type
-                if !(at.is_array() && matches!(at.array_elem(), Some(el) if el == i64t() || el == GType::u8())) {
+                // Both operands must have the same concrete integer buffer type.
+                if !is_concrete_int_buffer(&at) {
                     let (l0, c0) = (e.args[0].line(), e.args[0].col());
-                    return Err(terr(l0, c0, "type_mismatch", format!("expected [i64] or [u8], found {}", tn(&at)), ""));
+                    return Err(terr(l0, c0, "type_mismatch", format!("expected [i64], [u8] or [u16], found {}", tn(&at)), ""));
                 }
                 self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
                 self.expect(&mut e.args[2], &at, scope, c, None)?;
@@ -7449,7 +7489,7 @@ fn x_sig_reason(f: &Function, decls: &HashMap<String, TypeDecl>) -> Option<Strin
     if f.params.iter().any(|p| p.mode_pos.is_some() || p.take) {
         return Some("it has an inout or take parameter".into());
     }
-    let ok = [i64t(), boolt(), GType::array(), GType::array_u8(), GType::array_bool()];
+    let ok = [i64t(), boolt(), GType::array(), GType::array_u8(), GType::array_u16(), GType::array_bool()];
     if f.params.iter().any(|p| {
         let ty = GType::from_key(&p.ty);
         !ok.contains(&ty) && !x_record(&ty, decls)
@@ -7834,6 +7874,7 @@ mod tests {
     #[test]
     fn eq_range_checks_in_code() {
         assert!(run("fn f(a: [u8], b: [u8]) -> bool { return eq_range(a, 0, b, 1, 2); }").is_ok());
+        assert!(run("fn f(a: [u16], b: [u16]) -> bool { return eq_range(a, 0, b, 1, 2); }").is_ok());
         assert!(run("fn f(a: [i64], b: [i64]) -> bool { return eq_range(a, 0, b, 1, 2); }").is_ok());
     }
 
@@ -7861,6 +7902,7 @@ mod tests {
     #[test]
     fn copy_within_checks() {
         assert!(run("fn f(inout a: [u8]) -> () { copy_within(inout a, 1, 0, 2); }").is_ok());
+        assert!(run("fn f(inout a: [u16]) -> () { copy_within(inout a, 1, 0, 2); }").is_ok());
         assert!(run("fn f(inout a: [i64]) -> () { copy_within(inout a, 1, 0, 2); }").is_ok());
         let cases = [
             ("fn f(inout a: [u8]) -> () { copy_within(inout a, 1, 0); }", "arity"),
@@ -7878,6 +7920,7 @@ mod tests {
     #[test]
     fn copy_range_checks_as_a_statement() {
         assert!(run("fn f(inout d: [u8], s: [u8]) -> () { copy_range(inout d, 0, s, 1, 2); }").is_ok());
+        assert!(run("fn f(inout d: [u16], s: [u16]) -> () { copy_range(inout d, 0, s, 1, 2); }").is_ok());
         assert!(run("fn f(inout d: [i64], s: [i64]) -> () { copy_range(inout d, 0, s, 1, 2); }").is_ok());
     }
 

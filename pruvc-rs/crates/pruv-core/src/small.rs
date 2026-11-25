@@ -12,23 +12,19 @@ pub const MAX_BOUND: i64 = 64;
 /// bytes of rewritten buffers per function
 pub const STACK_CAP: i64 = 4096;
 
-/// result type -> buffer element (P27.5: `[u8]` beside `[i64]`); both need the unnarrowed storage layout ("i64" in
+/// result type -> integer buffer element; small results need the unnarrowed storage layout ("i64" in
 /// StoragePlan terms)
 pub fn elem_of(ret: &str) -> Option<&'static str> {
-    match ret {
-        "array" => Some("i64"),
-        "array_u8" => Some("u8"),
-        _ => None,
-    }
+    crate::typeinfo::array_elem_name(ret).filter(|elem| crate::intwidth::of(elem).is_some())
 }
 
 fn elem_size(elem: &str) -> i64 {
-    if elem == "u8" { 1 } else { 8 }
+    i64::from(crate::intwidth::of(elem).expect("integer buffer element").bits / 8)
 }
 
 #[derive(Debug, Default)]
 pub struct SmallPlan {
-    /// function name -> (K, the local `o` that is returned, buffer element "i64" or "u8")
+    /// function name -> (K, the local `o` that is returned, buffer element)
     pub fns: HashMap<String, (i64, String, &'static str)>,
     /// address of a rewritten `Let` -> (callee, K, buffer element)
     pub sites: HashMap<usize, (String, i64, &'static str)>,
@@ -47,7 +43,7 @@ fn conjuncts<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
     out.push(e);
 }
 
-/// K of a top-level `len(result) <= K` conjunct (literal, 1..=64) of a non-generic, non-foreign `[i64]` or `[u8]`
+/// K of a top-level `len(result) <= K` conjunct (literal, 1..=64) of a non-generic, non-foreign integer buffer
 /// function
 pub fn declared_bound(f: &Function) -> Option<i64> {
     if !f.tparams.is_empty() || f.foreign.is_some() || elem_of(&f.ret).is_none() {

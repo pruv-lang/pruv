@@ -1,0 +1,6 @@
+// P2: an alloc fill of [u16] must prove 0 <= v <= 65535
+fn f(v: i64) -> [u16] ! alloc
+  requires v >= 0
+{
+  return alloc(4, v);
+}

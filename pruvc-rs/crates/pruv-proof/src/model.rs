@@ -69,25 +69,36 @@ fn greg_number(seq: u32, ty: &GType) -> usize {
 pub enum Elem {
     I64,
     U8,
+    U16,
     Bool,
     /// G3: an element whose type is a type parameter (the parameter itself is kept in `Arr.ety`).
     Abs,
 }
 
 impl Elem {
-    /// Element type name ("i64"/"u8"/"bool").
+    /// Element type name ("i64"/"u8"/"u16"/"bool").
     pub fn name(self) -> &'static str {
         match self {
             Elem::I64 => "i64",
             Elem::U8 => "u8",
+            Elem::U16 => "u16",
             Elem::Bool => "bool",
             Elem::Abs => "abs",
         }
     }
+    /// Range descriptor for integer elements narrower than i64.
+    pub fn narrow_width(self) -> Option<&'static pruv_core::intwidth::IntWidth> {
+        match self {
+            Elem::U8 | Elem::U16 => pruv_core::intwidth::of(self.name()),
+            _ => None,
+        }
+    }
+
     pub fn from_name(n: &str) -> Option<Elem> {
         match n {
             "i64" => Some(Elem::I64),
             "u8" => Some(Elem::U8),
+            "u16" => Some(Elem::U16),
             "bool" => Some(Elem::Bool),
             _ => None,
         }
@@ -171,6 +182,7 @@ impl Ty {
             Ty::Opt => GType::option(),
             Ty::Res => GType::result(),
             Ty::Array(Elem::U8) => GType::array_u8(),
+            Ty::Array(Elem::U16) => GType::array_u16(),
             Ty::Array(Elem::Bool) => GType::array_bool(),
             Ty::Array(_) => GType::array(),
             Ty::User(n) => GType::new(n, Vec::new()),
@@ -508,7 +520,7 @@ pub struct Model {
     scc_of: HashMap<String, Vec<String>>,
     /// names of non-generic types that are recursive or (transitively) contain a recursive type
     recrel: HashSet<String>,
-    /// `false` = "int" (i64/u8/str elements), `true` = "bool": buffer datatypes built lazily
+    /// `false` = "int" (i64/u8/u16/str elements), `true` = "bool": buffer datatypes built lazily
     bufs: RefCell<HashMap<String, BufFns>>,
     vec_handles: HashMap<String, Sort>,
     vec_sums: HashMap<String, FuncDecl>,
@@ -882,8 +894,8 @@ impl Model {
     /// verify.py `Model.buf_elem`.
     pub fn buf_elem(ty: &Ty) -> Elem {
         match ty {
-            Ty::Array(Elem::Bool) => Elem::Bool,
-            Ty::Array(Elem::U8) | Ty::Str => Elem::U8,
+            Ty::Array(elem) => *elem,
+            Ty::Str => Elem::U8,
             Ty::User(n) if n == "string" => Elem::U8,
             Ty::Inst(g) if g.name == "vec" && g.args.first() == Some(&GType::bool()) => Elem::Bool,
             Ty::Inst(g) if g.name == "vec" && g.args.first() != Some(&GType::i64()) => Elem::Abs,
@@ -892,7 +904,7 @@ impl Model {
     }
 
     /// verify.py `Model.bufsort` (the whole `bufs` entry): datatype Buf(len: Int, arr: Array(Int, elem sort)); one per element
-    /// sort (Int for i64/u8/str, Bool).
+    /// sort (Int for i64/u8/u16/str, Bool).
     pub fn buf_entry(&self, ty: &Ty) -> Result<BufFns, String> {
         let (key, esort) = match Self::buf_elem(ty) {
             Elem::Bool => ("bool".to_string(), self.bool_sort.clone()),
@@ -1719,11 +1731,12 @@ mod tests {
 
     #[test]
     fn array_type_names_round_trip() {
-        for e in [Elem::I64, Elem::U8, Elem::Bool] {
+        for e in [Elem::I64, Elem::U8, Elem::U16, Elem::Bool] {
             let n = pruv_core::typeinfo::array_of_elem_name(e.name()).expect("array name for every Elem");
             let t = Ty::from_name(n);
             assert_eq!(t, Ty::Array(e));
             assert_eq!(t.name(), n);
+            assert_eq!(Ty::from_gtype(&t.to_gtype()), t);
             assert!(t.is_array());
         }
         for ty in [Ty::U8, Ty::U16] {

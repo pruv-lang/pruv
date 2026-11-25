@@ -75,8 +75,8 @@ fn validate(r: &Refinement, user: &HashSet<String>) -> Res<()> {
             "remove `| L..=U`; keep `; <=N` if a length bound is needed",
         ));
     }
-    // G3: an element range applies to concrete i64/u8 elements only, never to a type parameter or other element
-    if r.shape == "array" && !matches!(r.base.as_str(), "i64" | "u8" | "bool") && r.lo.is_some() {
+    // G3: an element range applies to concrete integer elements only, never to a type parameter or other element
+    if r.shape == "array" && crate::intwidth::of(&r.base).is_none() && r.base != "bool" && r.lo.is_some() {
         return Err(terr(
             r,
             "refinement_base",
@@ -116,14 +116,16 @@ fn validate(r: &Refinement, user: &HashSet<String>) -> Res<()> {
             ));
         }
     }
-    if r.shape == "array" && r.base == "u8" {
-        if let (Some(lo), Some(hi)) = (&r.lo, &r.hi) {
-            if cmp_dec(lo, "0") == Ordering::Less || cmp_dec(hi, "255") == Ordering::Greater {
+    if r.shape == "array" {
+        if let (Some(lo), Some(hi), Some(width)) = (&r.lo, &r.hi, crate::intwidth::of(&r.base)) {
+            if cmp_dec(lo, &width.min.to_string()) == Ordering::Less
+                || cmp_dec(hi, &width.max.to_string()) == Ordering::Greater
+            {
                 return Err(terr(
                     r,
                     "refinement_bounds",
-                    format!("element range {}..={} is outside the u8 range 0..=255", lo, hi),
-                    "use bounds within 0..=255",
+                    format!("element range {}..={} is outside the {} range {}..={}", lo, hi, width.name, width.min, width.max),
+                    &format!("use bounds within {}..={}", width.min, width.max),
                 ));
             }
         }

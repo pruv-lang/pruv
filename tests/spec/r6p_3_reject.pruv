@@ -1,5 +1,5 @@
 // spec: R-6p-3 reject
-fn f(a: [u16]) -> i64
+fn f(v: Vec<u16>) -> i64
 {
   return 0;
 }

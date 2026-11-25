@@ -839,6 +839,29 @@ fn pruv_set_u8(a: &mut [u8], i: i64, v: i64) { let k = pruv_idx(i, a.len()); if 
 fn pruv_alloc_u8(n: i64, v: i64) -> ::std::vec::Vec<u8> { if n < 0 || n > (1i64 << 40) { pruv_ovf("alloc length outside 0..2^40") } if v < 0 || v > 255 { pruv_elem_oor(v) } vec![v as u8; n as usize] }
 "##;
 
+const SAFE_PRELUDE_U16: &str = r##"#[allow(dead_code)]
+#[cold]
+#[inline(never)]
+fn pruv_elem_oor_u16(v: i64) -> ! { panic!("pruv: element out of range: {} (u16 0..=65535)", v) }
+#[allow(dead_code)]
+#[inline]
+fn pruv_get_u16(a: &[u16], i: i64) -> i64 { a[pruv_idx(i, a.len())] as i64 }
+#[allow(dead_code)]
+#[inline]
+fn pruv_set_u16(a: &mut [u16], i: i64, v: i64) { let k = pruv_idx(i, a.len()); if v < 0 || v > 65535 { pruv_elem_oor_u16(v) } a[k] = v as u16; }
+#[allow(dead_code)]
+#[inline]
+fn pruv_alloc_u16(n: i64, v: i64) -> ::std::vec::Vec<u16> { if n < 0 || n > (1i64 << 40) { pruv_ovf("alloc length outside 0..2^40") } if v < 0 || v > 65535 { pruv_elem_oor_u16(v) } vec![v as u16; n as usize] }
+"##;
+
+fn buffer_elem_check(elem: &str, value: &str) -> String {
+    match elem {
+        "u8" => format!("if {value} < 0 || {value} > 255 {{ pruv_elem_oor({value}) }} "),
+        "u16" => format!("if {value} < 0 || {value} > 65535 {{ pruv_elem_oor_u16({value}) }} "),
+        _ => String::new(),
+    }
+}
+
 /// Appended right after CONTRACT_PRELUDE only for the runtime requires check of programs that use `[u8]`.
 pub const CONTRACT_PRELUDE_U8: &str = r##"#[allow(dead_code)]
 #[inline]
@@ -1388,7 +1411,7 @@ struct Gen<'a> {
     prog: &'a Program,
     storage: crate::storage::StoragePlan,
     /// P3-S1: local arrays that live on the stack
-    stack: crate::stack::StackPlan,
+    stack: crate::emit_common::BufferStackPlan,
     function_name: String,
     view_wrappers: bool,
     budget: u64,
@@ -1559,10 +1582,10 @@ impl<'a> Gen<'a> {
                     && (!verified || f.borrow_from.is_some() || (is_host(f) && !trust_callers))
             });
         let storage = crate::storage::plan_storage(prog, verified);
-        let stack = crate::stack::plan_stack(prog, &storage, verified);
+        let stack = crate::emit_common::BufferStackPlan::new(prog, &storage, verified);
         let resize_params = crate::check::resize_params(prog);
         let small = if verified && !trust_callers {
-            crate::small::plan_small(prog, &fmap, &storage, &stack, &resize_params)
+            crate::small::plan_small(prog, &fmap, &storage, &stack.base, &resize_params)
         } else {
             Default::default()
         };
@@ -1880,6 +1903,7 @@ impl<'a> Gen<'a> {
     /// are private Rust items (this includes their checked entry wrappers)
     fn private(&self, f: &Function) -> bool {
         is_spec_fn(&f.name)
+            || crate::emit_common::has_u16_buffer_sig(f)
             || crate::emit_common::has_narrow_scalar_sig(f, &self.table)
             || f.params.iter().any(|p| key_is_collection_owner(&p.ty))
             || key_is_collection_owner(&f.ret)
@@ -1939,6 +1963,9 @@ impl<'a> Gen<'a> {
             self.out.push(SAFE_PRELUDE.to_string());
             if u8_used {
                 self.out.push(SAFE_PRELUDE_U8.to_string());
+            }
+            if uses_array_type(self.prog, "array_u16") || self.field_uses("array_u16") {
+                self.out.push(SAFE_PRELUDE_U16.to_string());
             }
             if bool_used {
                 self.out.push(SAFE_PRELUDE_BOOL.to_string());
@@ -2980,7 +3007,7 @@ impl<'a> Gen<'a> {
                     // G2 A5
                     return Ok(format!("pruv_cidx_bool({}, {})", a, i));
                 }
-                if self.layout(&x.array) != "i64" {
+                if elem_of(&x.array) == "u16" || self.layout(&x.array) != "i64" {
                     return Ok(format!("{{ let pruv_a = {}; let pruv_i: i128 = {}; if pruv_i >= 0 && pruv_i < pruv_a.len() as i128 {{ pruv_a[pruv_i as usize] as i128 }} else {{ pruv_ud(\"array index out of range\") }} }}", a, i));
                 }
                 Ok(format!("pruv_cidx({}, {})", a, i))
@@ -3435,7 +3462,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
         let kind = q.kind.as_str();
         let reads = if self.verified {
             let me = &*self;
-            let ok = |x: &Expr| me.layout(x) == "i64" || expr_ty(x).as_deref() == Some("array_u8");
+            let ok = |x: &Expr| me.layout(x) == "i64" || matches!(elem_of(x), "u8" | "u16");
             fast_forall(q, &ok)
         } else {
             None
@@ -4197,6 +4224,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
         match x.ty.as_str() {
             "array_bool" => "bool".to_string(),
             "array_u8" => "u8".to_string(),
+            "array_u16" => "u16".to_string(),
             _ => self.storage.layout_of(x).to_string(),
         }
     }
@@ -4216,7 +4244,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
         if elem == "bool" {
             return Ok(format!("{{ let pruv_v: bool = {}; [pruv_v; {}] }}", v, n));
         }
-        let chk = if elem == "u8" && !self.verified { "if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } " } else { "" };
+        let chk = if self.verified || x.ty == "array" { String::new() } else { buffer_elem_check(&elem, "pruv_v") };
         let cast = if elem == "i64" { String::new() } else { format!(" as {}", elem) };
         Ok(format!("{{ let pruv_v: i64 = {}; {}[pruv_v{}; {}] }}", v, chk, cast, n))
     }
@@ -4422,7 +4450,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 let v = self.e(&x.value)?;
                 let place = format!("{}.{}", x.name, x.fields.join("."));
                 let fty = self.field_path_ty(&x.name, &x.fields);
-                let is_u8 = fty.as_deref() == Some("array_u8");
+                let elem = fty.as_deref().and_then(array_elem_name).unwrap_or("i64");
                 let is_bool = fty.as_deref() == Some("array_bool");
                 let text = if is_bool {
                     if self.verified {
@@ -4430,11 +4458,11 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     } else {
                         format!("{{ let pruv_i: i64 = {}; let pruv_x: bool = {}; pruv_set_bool(&mut {}, pruv_i, pruv_x); }}", i, v, place)
                     }
-                } else if is_u8 {
+                } else if matches!(elem, "u8" | "u16") {
                     if self.verified {
-                        format!("{{ let pruv_i: i64 = {}; let pruv_x: i64 = {}; unsafe {{ *{}.get_unchecked_mut(pruv_i as usize) = pruv_x as u8; }} }}", i, v, place)
+                        format!("{{ let pruv_i: i64 = {}; let pruv_x: i64 = {}; unsafe {{ *{}.get_unchecked_mut(pruv_i as usize) = pruv_x as {elem}; }} }}", i, v, place)
                     } else {
-                        format!("{{ let pruv_i: i64 = {}; let pruv_x: i64 = {}; pruv_set_u8(&mut {}, pruv_i, pruv_x); }}", i, v, place)
+                        format!("{{ let pruv_i: i64 = {}; let pruv_x: i64 = {}; pruv_set_{elem}(&mut {}, pruv_i, pruv_x); }}", i, v, place)
                     }
                 } else if self.verified {
                     format!("{{ let pruv_i: i64 = {}; let pruv_x: i64 = {}; unsafe {{ *{}.get_unchecked_mut(pruv_i as usize) = pruv_x; }} }}", i, v, place)
@@ -4446,7 +4474,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
             Stmt::IndexAssign(x) => {
                 let i = self.e(&x.index)?;
                 let v = self.e(&x.value)?;
-                let is_u8 = self.vars.get(&x.name).map(|t| t.as_str()) == Some("array_u8");
+                let elem = self.vars.get(&x.name).and_then(|t| array_elem_name(t)).unwrap_or("i64");
                 let is_bool = self.vars.get(&x.name).map(|t| t.as_str()) == Some("array_bool"); // G2 A5
                 if is_bool {
                     if self.verified {
@@ -4466,12 +4494,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
                             ),
                         );
                     }
-                } else if is_u8 {
+                } else if matches!(elem, "u8" | "u16") {
                     if self.verified {
                         self.emit(
                             ind,
                             &format!(
-                                "{{ let pruv_i: i64 = {}; let pruv_x: i64 = {}; unsafe {{ *{}.get_unchecked_mut(pruv_i as usize) = pruv_x as u8; }} }}",
+                                "{{ let pruv_i: i64 = {}; let pruv_x: i64 = {}; unsafe {{ *{}.get_unchecked_mut(pruv_i as usize) = pruv_x as {elem}; }} }}",
                                 i, v, x.name
                             ),
                         );
@@ -4479,7 +4507,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         self.emit(
                             ind,
                             &format!(
-                                "{{ let pruv_i: i64 = {}; let pruv_x: i64 = {}; pruv_set_u8({}, pruv_i, pruv_x); }}",
+                                "{{ let pruv_i: i64 = {}; let pruv_x: i64 = {}; pruv_set_{elem}({}, pruv_i, pruv_x); }}",
                                 i, v, self.mut_ref(&x.name)
                             ),
                         );
@@ -4757,12 +4785,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
     }
 
     fn returns_view(&self) -> bool {
-        self.fmap.get(&self.function_name).is_some_and(|f| f.borrowed_result && crate::borrowed::is_view_base(&f.ret))
+        self.fmap.get(&self.function_name).is_some_and(|f| f.borrowed_result && (f.ret == "array_u16" || crate::borrowed::is_view_base(&f.ret)))
     }
 
     fn is_ref_value(&self, e: &Expr) -> bool {
         match e {
-            Expr::Call(x) => self.fmap.get(&x.name).is_some_and(|f| f.borrowed_result && crate::borrowed::is_view_base(&f.ret)),
+            Expr::Call(x) => self.fmap.get(&x.name).is_some_and(|f| f.borrowed_result && (f.ret == "array_u16" || crate::borrowed::is_view_base(&f.ret))),
             Expr::FieldAccess(x) => expr_ty(&x.base).as_deref()
                 .and_then(|name| self.table.fields(name, None))
                 .is_some_and(|fields| fields.iter().any(|f| f.name == x.field && f.borrowed)),
@@ -5105,12 +5133,11 @@ pruv_hi <= (pruv_b.len() as i128) && \
     }
 
     fn resize_expr(&mut self, e: &Expr, args: &[Expr], place: Option<&str>) -> R<String> {
-        let aty = expr_ty(arg(args, 0)?).as_deref();
-        let (u8a, boola) = (aty == Some("array_u8"), aty == Some("array_bool"));
-        let vty = if boola { "bool" } else { "i64" };
-        let fill = if u8a {
-            "pruv_v as u8".to_string()
-        } else if boola || !self.verified || self.layout(e) == "i64" {
+        let elem = elem_of(arg(args, 0)?);
+        let vty = if elem == "bool" { "bool" } else { "i64" };
+        let fill = if matches!(elem, "u8" | "u16") {
+            format!("pruv_v as {elem}")
+        } else if elem == "bool" || !self.verified || self.layout(e) == "i64" {
             "pruv_v".to_string()
         } else {
             format!("pruv_v as {}", self.layout(e))
@@ -5124,9 +5151,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
             } else {
                 chk.push_str("if pruv_n < (pruv_a.len() as i64) || pruv_n > (1i64 << 40) { pruv_ovf(\"resize length outside len..2^40\") } ");
             }
-            if u8a {
-                chk.push_str("if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } ");
-            }
+            chk.push_str(&buffer_elem_check(elem, "pruv_v"));
         }
         if let Some(place) = place {
             let n = self.e(arg(args, 1)?)?;
@@ -5216,22 +5241,18 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 Ok(format!("((unsafe {{ *{}.as_bytes().get_unchecked(({}) as usize) }}) as i64)", a, i))
             }
             Expr::Index(x) => {
-                let u8r = elem_of(&x.array) == "u8";
-                let boolr = elem_of(&x.array) == "bool"; // G2 A5
+                let elem = elem_of(&x.array);
                 if !self.verified {
                     let a = self.arr_ref(&x.array)?;
                     let i = self.e(&x.index)?;
-                    if boolr {
-                        return Ok(format!("pruv_get_bool({}, {})", a, i));
-                    }
-                    if u8r {
-                        return Ok(format!("pruv_get_u8({}, {})", a, i));
+                    if elem != "i64" {
+                        return Ok(format!("pruv_get_{elem}({}, {})", a, i));
                     }
                     return Ok(format!("pruv_get({}, {})", a, i));
                 }
                 let a = self.e(&x.array)?;
                 let i = self.e(&x.index)?;
-                if u8r || self.layout(&x.array) != "i64" {
+                if matches!(elem, "u8" | "u16") || self.layout(&x.array) != "i64" {
                     return Ok(format!("((unsafe {{ *{}.get_unchecked(({}) as usize) }}) as i64)", a, i));
                 }
                 Ok(format!("(unsafe {{ *{}.get_unchecked(({}) as usize) }})", a, i))
@@ -5351,24 +5372,17 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     return Ok(format!("({}.len() as i64)", self.e(arg(a, 0)?)?));
                 }
                 if n == "alloc" {
-                    let u8a = x.ty.as_deref() == Some("array_u8");
-                    let boola = x.ty.as_deref() == Some("array_bool"); // G2 A5
+                    let elem = x.ty.as_deref().and_then(array_elem_name).unwrap_or("i64");
                     if !self.verified {
                         let n0 = self.e(arg(a, 0)?)?;
                         let v0 = self.e(arg(a, 1)?)?;
-                        let f = if boola {
-                            "pruv_alloc_bool"
-                        } else if u8a {
-                            "pruv_alloc_u8"
-                        } else {
-                            "pruv_alloc"
-                        };
+                        let f = if elem == "i64" { "pruv_alloc".to_string() } else { format!("pruv_alloc_{elem}") };
                         return Ok(self.cost_buffer(format!("{}({}, {})", f, n0, v0)));
                     }
                     // Source order: n first, v later (vec![v; n] evaluates v first)
                     let n0 = self.e(arg(a, 0)?)?;
                     let v0 = self.e(arg(a, 1)?)?;
-                    if boola {
+                    if elem == "bool" {
                         return Ok(format!(
                             "{{ let pruv_n: i64 = {}; let pruv_v: bool = {}; vec![pruv_v; pruv_n as usize] }}",
                             n0, v0
@@ -5378,7 +5392,10 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         "{{ let pruv_n: i64 = {}; let pruv_v: i64 = {}; vec![pruv_v{}; pruv_n as usize] }}",
                         n0,
                         v0,
-                        if u8a { " as u8".to_string() } else if self.layout(e) != "i64" { format!(" as {}", self.layout(e)) } else { String::new() }
+                        {
+                            let layout = if elem == "i64" { self.layout(e) } else { elem };
+                            if layout == "i64" { String::new() } else { format!(" as {layout}") }
+                        }
                     ));
                 }
                 if n == "copy" {
@@ -5523,9 +5540,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         };
                         return Ok(format!("{{ let pruv_n: i64 = {value}; {check}{place}.reserve_exact((pruv_n) as usize) }}"));
                     }
-                    let u8 = dest.ty.as_deref() == Some("array_u8");
-                    let vty = if dest.ty.as_deref() == Some("array_bool") { "bool" } else { "i64" };
-                    let layout = if u8 { "u8" } else { self.layout(arg(a, 0)?) };
+                    let declared = dest.ty.as_deref().and_then(array_elem_name).unwrap_or("i64");
+                    let vty = if declared == "bool" { "bool" } else { "i64" };
+                    let layout = if declared == "i64" { self.layout(arg(a, 0)?) } else { declared };
                     let elem = if layout == "i64" || vty == "bool" { "pruv_v".into() } else { format!("pruv_v as {layout}") };
                     if a.len() > 2 {   // LB6 SX (R-6g5-5): k values in one step, from a stack array as hand Rust does
                         if self.verified {
@@ -5542,10 +5559,8 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         }
                         let k = a.len() - 1;
                         let mut check = format!("if {place}.len() > (1usize << 40) - {k} {{ pruv_ovf(\"arr_push length exceeds 2^40\") }} ");
-                        if u8 {
-                            for i in 0..k {
-                                check.push_str(&format!("if pruv_v{i} < 0 || pruv_v{i} > 255 {{ pruv_elem_oor(pruv_v{i}) }} "));
-                            }
+                        for i in 0..k {
+                            check.push_str(&buffer_elem_check(declared, &format!("pruv_v{i}")));
                         }
                         let vals: Vec<String> = (0..k).map(|i| elem.replace("pruv_v", &format!("pruv_v{i}"))).collect();
                         return Ok(format!("{{ {head}{check}{place}.extend_from_slice(&[{}]) }}", vals.join(", ")));
@@ -5553,7 +5568,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     let mut check = String::new();
                     if !self.verified {
                         check = format!("if {place}.len() >= (1usize << 40) {{ pruv_ovf(\"arr_push length exceeds 2^40\") }} ");
-                        if u8 { check.push_str("if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } "); }
+                        check.push_str(&buffer_elem_check(declared, "pruv_v"));
                     }
                     return Ok(format!("{{ let pruv_v: {vty} = {value}; {check}{place}.push({elem}) }}"));
                 }
@@ -6140,7 +6155,7 @@ fn gen_rust_concrete_core(
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
     }
-    if let Some(e) = crate::typeinfo::g2_unimplemented_error(prog, "codegen", None, &["array_u8", "array_bool", "str"], None) { // G2 B2
+    if let Some(e) = crate::typeinfo::g2_unimplemented_error(prog, "codegen", None, &["array_u8", "array_u16", "array_bool", "str"], None) { // G2 B2
         return Err(GenError::Msg(format!("unsupported_type: {}", e.message)));
     }
     // Built only when a host-facing function exists (the generator builds its own table later).
@@ -6891,6 +6906,149 @@ mod tests {
         let i = gen_rust(&arr_prog("array"), false, false, 1 << 30).unwrap();
         assert!(!i.contains(SAFE_PRELUDE_U8));
         assert!(i.contains("pruv_get(a, 0i64)"));
+    }
+
+
+    #[test]
+    fn u16_buffers_in_both_backends() {
+        // Type-check the byte-buffer equivalent and retag it at the backend boundary.
+        let mut p = crate::parse(r#"
+            fn sum(a: [u8]) -> i64
+              requires forall k in 0..len(a): a[k] <= 65535
+            {
+              let mut i: i64 = 0;
+              let mut total: i64 = 0;
+              while i < len(a)
+                invariant 0 <= i && i <= len(a)
+                decreases len(a) - i
+              {
+                total = wrapping_add(total, a[i]);
+                i = i + 1;
+              }
+              return total;
+            }
+
+            fn clear_first(inout a: [u8]) -> () { a[0] = 0; }
+
+            fn sample(a: [u8], n: i64) -> i64 ! alloc {
+              let mut b: [u8] = alloc(n, 253);
+              clear_first(inout b);
+              b[0] = 255;
+              b[1] = 0;
+              copy_range(inout b, 1, a, 0, 1);
+              copy_within(inout b, 2, 0, 1);
+              arr_reserve(inout b, 3);
+              arr_push(inout b, 255, 253);
+              arr_append(inout b, a, 0, 2);
+              b = resize(b, n + 5, 253);
+              let t: [u8] = truncate(b, n + 1);
+              let z: [u8] = resize(t, n + 3, 253);
+              let view: [u8] = copy(subview(b, 0, n));
+              let mut c: [u8] = copy(view);
+              if eq_range(c, 0, b, 0, n) {
+                c[0] = 254;
+                if eq_range(c, 0, b, 0, 1) { return 0; }
+                return sum(view) + t[0] + z[n + 2] + b[n] + b[n + 1] + b[n + 2] + b[n + 4];
+              }
+              return 0;
+            }
+
+            fn run() -> i64 ! alloc {
+              let a: [u8] = alloc(3, 253);
+              return sample(a, 3);
+            }
+        "#).unwrap();
+        crate::check::check(&mut p).unwrap();
+
+        fn ty(t: &mut String) {
+            if t == "array_u8" { *t = "array_u16".into(); }
+        }
+
+        fn expr(e: &mut Expr) {
+            let t = match e {
+                Expr::IntLit(l) => {
+                    match l.value.as_str() {
+                        "253" => l.value = "4660".into(),
+                        "254" => l.value = "255".into(),
+                        "255" => l.value = "65535".into(),
+                        _ => {}
+                    }
+                    &mut l.ty
+                }
+                Expr::Var(v) => &mut v.ty,
+                Expr::InoutArg(a) => { expr(&mut a.expr); &mut a.ty }
+                Expr::Index(i) => { expr(&mut i.array); expr(&mut i.index); &mut i.ty }
+                Expr::Binary(b) => { expr(&mut b.left); expr(&mut b.right); &mut b.ty }
+                Expr::Call(c) => { c.args.iter_mut().for_each(expr); &mut c.ty }
+                Expr::Quant(q) => { expr(&mut q.lo); expr(&mut q.hi); expr(&mut q.body); &mut q.ty }
+                _ => panic!("unexpected test expression: {e:?}"),
+            };
+            if let Some(t) = t { ty(t); }
+        }
+
+        fn block(stmts: &mut [Stmt]) {
+            for s in stmts {
+                match s {
+                    Stmt::Let(l) => {
+                        ty(&mut l.ty);
+                        if l.name == "view" {
+                            let Expr::Call(copy) = &mut l.value else { unreachable!() };
+                            l.value = copy.args.remove(0);
+                            l.borrowed = true;
+                        }
+                        expr(&mut l.value);
+                    }
+                    Stmt::Assign(a) => expr(&mut a.value),
+                    Stmt::IndexAssign(a) => { expr(&mut a.index); expr(&mut a.value); }
+                    Stmt::ExprStmt(s) => expr(&mut s.expr),
+                    Stmt::Return(r) => expr(r.value.as_mut().unwrap()),
+                    Stmt::If(i) => { expr(&mut i.cond); block(&mut i.then); block(&mut i.els); }
+                    Stmt::While(w) => { expr(&mut w.cond); block(&mut w.body); }
+                    _ => panic!("unexpected test statement: {s:?}"),
+                }
+            }
+        }
+        for f in &mut p.functions {
+            f.params.iter_mut().for_each(|p| ty(&mut p.ty));
+            f.requires.iter_mut().for_each(expr);
+            block(&mut f.body);
+        }
+
+        for verified in [true, false] {
+            let rust = gen_rust(&p, verified, false, 1 << 30).unwrap();
+            assert!(rust.contains("a: &[u16]"));
+            assert!(rust.contains("a: &mut [u16]"));
+            assert!(rust.contains("let view: &[u16]"));
+            assert!(rust.contains("b: ::std::vec::Vec<u16>"));
+            assert!(rust.contains("a: [u16; 3]"));
+            if verified {
+                assert!(rust.contains("*a.get_unchecked((i) as usize) }) as i64"));
+                assert!(rust.contains("pruv_x: i64 = 65535i64; unsafe { *b.get_unchecked_mut(pruv_i as usize) = pruv_x as u16; }"));
+            } else {
+                assert!(rust.contains("pruv_get_u16(a, i)"));
+                assert!(rust.contains("pruv_set_u16(&mut b, pruv_i, pruv_x)"));
+            }
+            let (ir, bindings) = crate::llvmgen::gen_llvm(&p, verified, false, 1 << 30).unwrap();
+            for expected in [
+                "alloca [3 x i16], align 2",
+                "i64 3, i64 4660, i64 2)",
+                "i64 4660, i64 2, i64 2)",
+                "zext i16 ",
+                "trunc i64 65535 to i16",
+                "call ptr @pruv_resize_narrow(ptr ",
+                "call ptr @pruv_regrow_narrow(ptr ",
+                "call ptr @pruv_regrow_v2(ptr ",
+                "call ptr @pruv_copy_v2(ptr ",
+                "call void @pruv_free_v2_nn(ptr ",
+                "@llvm.memmove.p0.p0.i64(",
+                "call i32 @memcmp(",
+            ] {
+                assert!(ir.contains(expected), "missing {expected}");
+            }
+            assert!(ir.contains("mul nuw nsw i64 1, 2"));
+            assert!(!bindings.contains("pruv_abi_sample"));
+            assert!(!ir.contains("call ptr @pruv_alloc_u8("));
+        }
     }
 
     fn call(name: &str, args: Vec<Expr>, ty: &str) -> Expr {

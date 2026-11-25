@@ -9,7 +9,7 @@
 //!    code generation treats the reserved prefix as "private" (the Python AST has a `private` flag, this AST none),
 //!  * every generic nominal application is an ordinary StructDecl / EnumDecl named by its stem (`pruv_g3_t_...`),
 //!  * every type key is concrete: a nominal application is its stem, Option<X> / Result<X> keep their argument unless
-//!    X is i64 (legacy `option` / `result`), arrays are the legacy `array` / `array_u8` / `array_bool`.
+//!    X is i64 (legacy `option` / `result`), concrete arrays use builtin keys.
 //!
 //! Roots are all non-generic functions. Concrete generic calls, struct literals and enum constructors (recorded in
 //! `.inst` by the checker) are substituted and followed with a work list. `ensures` is dropped; loop invariants,
@@ -82,7 +82,7 @@ enum Item {
 }
 
 /// (depth, tree node count) of a (virtually substituted) type; `kind` tells whether it is exactly i64 (1), bool (2)
-/// or u8 (3) so `[X]` / `Option<X>` / `Result<X>` normalize like gtype::substitute; `args` whether it has arguments.
+/// u8 (3) or u16 (4) so `[X]` / `Option<X>` / `Result<X>` normalize like gtype::substitute; `args` whether it has arguments.
 #[derive(Clone, Copy)]
 struct Meas {
     depth: u64,
@@ -102,6 +102,7 @@ fn meas_with(t: &GType, pm: &HashMap<ParamId, Meas>) -> Meas {
             "i64" => 1,
             "bool" => 2,
             "u8" => 3,
+            "u16" => 4,
             _ => 0,
         };
         // the legacy Option<i64> / Result<i64> constants stand for a one-argument application (depth 2)
@@ -118,7 +119,7 @@ fn meas_with(t: &GType, pm: &HashMap<ParamId, Meas>) -> Meas {
     let nodes = ms.iter().fold(1u64, |s, m| s.saturating_add(m.nodes));
     if ms.len() == 1 {
         let k = ms[0].kind;
-        if t.name == "array" && (1..=3).contains(&k) {
+        if t.name == "array" && (1..=4).contains(&k) {
             return LEAF; // mk_array normalizes to the legacy array
         }
         if (t.name == "option" || t.name == "result") && k == 1 {
@@ -358,6 +359,7 @@ impl<'a> Mono<'a> {
                 ("array", 1) => Some("[i64]"),
                 ("array", 2) => Some("[bool]"),
                 ("array", 3) => Some("[u8]"),
+                ("array", 4) => Some("[u16]"),
                 _ => None,
             };
             if let Some(s) = leaf {

@@ -1,0 +1,108 @@
+// P2 runtime: [u16] buffers on both backends (verified and unverified): empty, one element, 0xFFFF,
+// lone surrogates, growth and copies. Compare codes are checked against hand Rust `&[u16]` Ord in the driver.
+fn cmp_units(a: ref [u16], b: ref [u16]) -> i64
+  ensures result == -1 || result == 0 || result == 1
+{
+  let mut i: i64 = 0;
+  while i < len(a) && i < len(b)
+    invariant 0 <= i && i <= len(a) && i <= len(b)
+    decreases len(a) - i
+  {
+    if a[i] < b[i] {
+      return -1;
+    }
+    if a[i] > b[i] {
+      return 1;
+    }
+    i = i + 1;
+  }
+  if len(a) < len(b) {
+    return -1;
+  }
+  if len(a) > len(b) {
+    return 1;
+  }
+  return 0;
+}
+
+fn sum_units(a: ref [u16]) -> i64
+  ensures result >= 0 && result <= len(a) * 65535
+{
+  let mut s: i64 = 0;
+  let mut i: i64 = 0;
+  while i < len(a)
+    invariant 0 <= i && i <= len(a)
+    invariant s >= 0 && s <= i * 65535
+    decreases len(a) - i
+  {
+    s = s + a[i];
+    i = i + 1;
+  }
+  return s;
+}
+
+// Key made of up to two code units; n = number of units (0, 1 or 2).
+fn key(n: i64, x: i64, y: i64) -> [u16] ! alloc
+  requires 0 <= n && n <= 2
+  requires 0 <= x && x <= 65535
+  requires 0 <= y && y <= 65535
+  ensures len(result) == n
+{
+  let mut k: [u16] = alloc(n, x);
+  if n == 2 {
+    k[1] = y;
+  }
+  return k;
+}
+
+fn compare(n: i64, x: i64, y: i64, m: i64, u: i64, v: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 2 && 0 <= m && m <= 2
+  requires 0 <= x && x <= 65535 && 0 <= y && y <= 65535
+  requires 0 <= u && u <= 65535 && 0 <= v && v <= 65535
+{
+  let a: [u16] = key(n, x, y);
+  let b: [u16] = key(m, u, v);
+  return cmp_units(a, b);
+}
+
+// Empty buffer, a single 0xFFFF element, then growth by push/append/resize/copy_range/truncate.
+fn grow() -> i64 ! alloc {
+  let empty: [u16] = alloc(0, 0);
+  let mut a: [u16] = alloc(1, 65535);
+  let first: i64 = a[0] * 10 + len(empty);
+  arr_reserve(inout a, 8);
+  arr_push(inout a, 55296);
+  arr_push(inout a, 57343);
+  let b: [u16] = copy(a);
+  arr_append(inout a, b, 0, len(b));
+  a = resize(a, 8, 1);
+  copy_range(inout a, 6, b, 0, 2);
+  copy_within(inout a, 0, 5, 2);
+  let c: [u16] = truncate(a, 7);
+  let view: ref [u16] = subview(c, 1, 7);
+  let same: bool = eq_range(a, 6, b, 0, 2);
+  let mut tag: i64 = 0;
+  if same {
+    tag = 1;
+  }
+  return first * 1000000000 + sum_units(view) * 10 + tag;
+}
+
+// One-unit compares whose low bytes match (0 vs 256): a byte count of n instead of 2*n would say equal.
+// `n` comes from the caller so LLVM takes the dynamic inline loop; `eq_one` uses a literal length (memcmp).
+fn eq_units(x: i64, y: i64, n: i64) -> bool ! alloc
+  requires 0 <= x && x <= 65535 && 0 <= y && y <= 65535
+  requires 0 <= n && n <= 1
+{
+  let a: [u16] = alloc(1, x);
+  let b: [u16] = alloc(1, y);
+  return eq_range(a, 0, b, 0, n);
+}
+
+fn eq_one(x: i64, y: i64) -> bool ! alloc
+  requires 0 <= x && x <= 65535 && 0 <= y && y <= 65535
+{
+  let a: [u16] = alloc(4, x);
+  let b: [u16] = alloc(4, y);
+  return eq_range(a, 0, b, 0, 4);
+}

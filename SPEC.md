@@ -149,27 +149,29 @@ it can never be silently dropped.
   `type/inout_alias`. No struct invariant is checked at the store (invariants are checked at handoffs).
 - `load_le(a, i, n)` and `store_le(inout a, i, w, n);` follow the same rules as `load_be` and `store_be`,
   respectively, using little-endian byte order (byte `a[i+k]` has weight `256^k`). Both names are reserved.
-- `eq_range(a, i, b, j, n)`: `a` and `b` of one type, `[i64]` or `[u8]` (else `type_mismatch`); `i, j, n: i64`; a
+- `eq_range(a, i, b, j, n)`: `a` and `b` of one type, `[i64]`, `[u8]` or `[u16]` (R-6p-4) (else `type_mismatch`); `i, j, n: i64`; a
   `bool`, true iff `a[i+k] == b[j+k]` for every `k` in `0..n` (true for `n == 0`). Code only (`effect_in_contract` in a
   contract), name reserved. The verifier must prove, in this order, `0 <= i`, `0 <= j`, `0 <= n`, `i + n <= len(a)`,
   `j + n <= len(b)` (`verify` error `index_oob`). It then knows the result exactly: `r == forall k in 0..n: a[i+k] ==
   b[j+k]`, over the array values at the call (later writes do not change `r`). Both backends evaluate the five
   arguments once each, in source order. The Rust backend compares the two slices in one call; the LLVM backend
-  compares bytes with `memcmp` (a literal `n > 0`, or a dynamic `n >= 4`) or an inline early-exit loop (a dynamic
-  `n < 4`); a literal `n == 0` is `true` without a compare. An operand layout other than `[u8]` bytes or 64-bit
-  elements is `codegen` error `unsupported_type` (today a `[u8]` operand is stored as bytes and the storage plan keeps
-  an `[i64]` operand, refined or not, as 64-bit elements, so it is not reached).
+  compares bytes with `memcmp` (a literal `n > 0`, or a dynamic `n >= 4`; `n` times the element size) or an inline
+  early-exit loop (a dynamic `n < 4`); a literal `n == 0` is `true` without a compare. An operand layout other than
+  `[u8]` bytes, `[u16]` 16-bit elements or 64-bit elements is `codegen` error `unsupported_type` (today a `[u8]`
+  operand is stored as bytes, a `[u16]` operand as 16-bit units, and the storage plan keeps an `[i64]` operand,
+  refined or not, as 64-bit elements, so it is not reached).
 - `copy_range(inout dst, i, src, j, n);` (R-5-1): a whole expression statement (like
   `store_be`; as an expression it is `type/inout_context`). `dst` is a mutable local array or an `inout` array
   parameter (a missing `inout` marker or a non-mutable place is `type/inout_argument`); `dst` and `src` have one type,
-  `[i64]` or `[u8]` (else `type_mismatch`); `i, j, n: i64`. Code only (`effect_in_contract` in a contract), name
+  `[i64]`, `[u8]` or `[u16]` (else `type_mismatch`); `i, j, n: i64`. Code only (`effect_in_contract` in a contract), name
   reserved. It copies `src[j..j+n]` into `dst[i..i+n]` and leaves every other element and `len(dst)` unchanged; `n == 0`
   copies nothing. The verifier must prove, in this order, `0 <= i`, `0 <= j`, `0 <= n`, `i + n <= len(dst)`,
   `j + n <= len(src)` (`verify` error `index_oob`; only the first one that fails is reported). It then knows
   `len(dst') == len(dst)`, `forall k in 0..n: dst'[i+k] == src[j+k]` (`src` as it is at the call) and
   `forall p: (p < i || p >= i + n) ==> dst'[p] == dst[p]`. These facts are one array-theory update of `dst`
   (`dst' = fun p. if i <= p < i + n then src[j + p - i] else dst[p]`), not a quantified assumption, so they are exact
-  (no vacuous or missing fact) and cost the callers no quantifier instantiation; a `[u8]` result stays in `0..=255`.
+  (no vacuous or missing fact) and cost the callers no quantifier instantiation; a `[u8]` result stays in `0..=255`
+  and a `[u16]` result in `0..=65535`.
   Aliasing (LG5): `src` may be exactly `dst`, the same variable or an identical field path
   (`copy_range(inout a, 2, a, 0, 4)`). The copy then has memmove semantics: the source range is read before the
   destination range is written, so overlapping ranges copy the old contents (the Rust backend emits `copy_within`,
@@ -180,14 +182,15 @@ it can never be silently dropped.
   in source order dst, i, src, j, n. For a `src` that is not `dst`, the Rust backend emits one `copy_from_slice` of
   the two slices (unchecked slices when verified, a checked failure `pruv_oob` with `--no-verify`); the LLVM backend
   emits one `llvm.memcpy` of `n` times the element size (`llvm.memmove` when `src` is `dst`), and an operand layout
-  other than `[u8]` bytes or 64-bit elements is `codegen` error `unsupported_type`, as for `eq_range`. Tests:
+  other than `[u8]` bytes, `[u16]` 16-bit elements or 64-bit elements is `codegen` error `unsupported_type`, as for
+  `eq_range`. Tests:
   `tests/spec/r5_1_copy_range_*.pruv`
   (accept: `_u8`, `_i64`, `_zero`, `_eq`, `_caller`; reject: `_i`, `_j`, `_n`, `_dst_end`, `_src_end`, `_order`,
   `_type`, `_nonarray`, `_noinout`, `_contract`, `_expr`, `_alias`, `_idx_alias`, `_fact_outside`, `_fact_nocopy`),
   `tests/runtime/l3_rt_copy_range*.pruv`, `tests/runtime/lg5_rt_copy_range_overlap.pruv`,
   `tests/must_reject/lg5_copy_range_overlap_oob.pruv`, `tests/must_reject/lg5_copy_range_self_idx_alias.pruv`.
 - `copy_within(inout a, dst, src, n);` (R-5-2): an overlap-safe move inside one array (memmove). Same statement,
-  place, type, contract and name rules as `copy_range` (`a` is `[i64]` or `[u8]`, `dst, src, n: i64`). It sets
+  place, type, contract and name rules as `copy_range` (`a` is `[i64]`, `[u8]` or `[u16]`, `dst, src, n: i64`). It sets
   `a[dst..dst+n]` to the old `a[src..src+n]`, even when the two ranges overlap, and leaves every other element and
   `len(a)` unchanged. The verifier must prove, in this order, `0 <= dst`, `0 <= src`, `0 <= n`, `dst + n <= len(a)`,
   `src + n <= len(a)` (`verify` error `index_oob`, first failure only), and then knows the array-theory update
@@ -1585,8 +1588,8 @@ borrowed value is live.
   [literal in a predicate body](tests/spec/r6g4_5_literal_predicate.pruv).
 - R-6g4-6 **Append an array range.** `arr_append(inout a, src, s, n) -> ()` is a whole statement and
   requires `! alloc`. The destination is a `let mut` local or resizable `inout` array, including a
-  mutable array field under R-6g-3. Both arrays may be `[i64]` or both may be `[u8]`. A `[u8]`
-  source may also append to an `[i64]` destination by widening each byte. The source and scalar
+  mutable array field under R-6g-3. Both arrays may be `[i64]`, both `[u8]`, or both `[u16]`.
+  A `[u8]` source may also append to an `[i64]` destination by widening each byte. The source and scalar
   arguments must not mention an overlapping destination place (`type/inout_alias`). The verifier
   requires `0 <= s && 0 <= n && s + n <= len(src) && len(a) + n <= 2^40` (`call_requires`), where
   `s` and `n` are `i64`. The new length is the old length plus `n`. The old prefix is preserved
@@ -2410,11 +2413,25 @@ read by the checker, the verifier and both backends.
   `pruv: arithmetic error: cast out of range` (exit 101). Tests: [accept](tests/spec/r6p_2_accept.pruv),
   [reject](tests/spec/r6p_2_reject.pruv), [contract](tests/spec/r6p_2_reject_contract.pruv).
 - R-6p-3 **Not yet supported.** These are rejected with `small_int_unsupported` (stage `parse` or `type`) and a
-  message naming the later bundle: `[u16]` arrays (P2); `u8`/`u16` as a type argument (`Option<u8>`, `Vec<u16>`,
-  generics; P2/P11) or an enum payload (P11); `u8`/`u16` in the signature of a `pub`, `extern` or foreign function
-  (P12; a private function whose signature holds `u8`/`u16`, directly or inside a struct, is never a host entry); an
+  message naming the later bundle: `u8`/`u16` as a type argument (`Option<u8>`, `Vec<u16>`,
+  generics; P11) or an enum payload (P11); `u8`/`u16` or `[u16]` in the signature of a `pub`, `extern` or foreign function
+  (P12; a private function whose signature holds `u8`/`u16`/`[u16]`, directly or inside a struct, is never a host entry); an
   index or a `decreases` measure of type `u8`/`u16` (write `i64(x)`); and the integer types `u32 i32 usize isize u64 i8
   i16` (P3). Tests: [accept](tests/spec/r6p_3_accept.pruv), [reject](tests/spec/r6p_3_reject.pruv).
+- R-6p-4 **`[u16]` buffers (P2).** `[u16]` (owned) and `ref [u16]` (borrowed, with the `from(...)` and `subview` rules
+  of R-6g-5..11 and R-6g9) hold UTF-16 code units, or any 16-bit unsigned values: Pruv never validates or normalises
+  them, so lone surrogates (`0xD800`, `0xDFFF`) and reversed pairs are plain values. They follow the `[u8]` rules
+  with the range `0..=65535` taken from the width table: a read `a[i]` is an `i64` the verifier knows is in
+  `0..=65535`; a write `a[i] = v`, the fill of `alloc(n, v)` and `resize(a, n, v)`, and `arr_push(inout a, v)` must prove
+  `0 <= v <= 65535` (`verify/elem_range`). `len`, `copy`, `truncate`, `resize`, `copy_range`, `copy_within`,
+  `arr_reserve`, `arr_push`, `arr_append` and `eq_range` take `[u16]` with operands of one type (`[u16]` is never
+  widened into `[i64]`; mixing is `type/type_mismatch`). `find_byte`, `str`/UTF-8 builtins, `load_*`/`store_*`,
+  `string_eq` and IO buffers stay `[u8]`. There is no builtin `[u8]`/`[u16]` conversion and no builtin key order
+  or hash: compare and hash keys with a Pruv function over `ref [u16]` (lexicographic code-unit order is the order of
+  Rust `&[u16]`; see [example](examples/p2_u16_keys.pruv)). Code: Rust stores `Vec<u16>` and borrows `&[u16]`
+  (`a[i] as i64` reads, `v as u16` proven writes, `pruv_set_u16` with `--no-verify`); LLVM stores `i16` elements (2
+  bytes, align 2), zero-extends reads and truncates proven writes. Tests: [accept](tests/spec/r6p_4_accept.pruv),
+  [reject](tests/spec/r6p_4_reject.pruv), [false contract](tests/spec/r6p_4_reject_contract.pruv).
 
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.

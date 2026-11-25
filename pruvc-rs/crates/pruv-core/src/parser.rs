@@ -688,8 +688,10 @@ impl Parser {
             }
             let at = self.peek(0).clone();
             let arg = self.type_g(false)?.0;
-            if intwidth::is_narrow(&arg.name) {
-                return Err(self.small_int_unsupported(&at, "scalar integer type arguments require P2/P11"));
+            if intwidth::is_narrow(&arg.name) || arg.name == "array_u16"
+                || arg.view_base().is_some_and(|base| base.name == "array_u16")
+            {
+                return Err(self.small_int_unsupported(&at, "scalar u8/u16 and [u16] type arguments require P11"));
             }
             out.push(arg);
             if !self.at(",", 0) {
@@ -941,23 +943,21 @@ impl Parser {
             if intwidth::PENDING_INTS.contains(&e.val.as_str()) {
                 return Err(self.small_int_unsupported(&e, "this integer type requires P3"));
             }
-            if intwidth::is_narrow(&e.val) && e.val != "u8" {
-                return Err(self.small_int_unsupported(&e, "this array element type requires P2"));
-            }
             let elem: GType = if e.val == "i64" {
                 GType::i64()
             } else if e.val == "u8" {
                 GType::u8()
+            } else if e.val == "u16" {
+                GType::u16()
             } else if e.val == "bool" {
                 GType::bool()
             } else if is_upper(&e.val) || e.val.starts_with("crate::") {
                 // G3: a type parameter (the checker: needs Element); other types: the checker rejects them
                 self.named_type(&e)?
             } else {
-                // G2 A5: [bool] joins the element names
-                return Err(self.err("only [i64], [u8] and [bool] arrays exist", "use [i64], [u8] or [bool]", Some(&e)));
+                return Err(self.err("only [i64], [u8], [u16] and [bool] arrays exist", "use [i64], [u8], [u16] or [bool]", Some(&e)));
             };
-            // [i64]/[u8]/[bool] -> the legacy constants (G2 A5)
+            // Concrete arrays use their builtin type names.
             let arr_ty = mk_array(elem);
             let (mut lo, mut hi, mut maxlen): (Option<String>, Option<String>, Option<String>) = (None, None, None);
             if self.at("|", 0) {
@@ -1007,7 +1007,7 @@ impl Parser {
         } else {
             // Option/Result, a type parameter or a user type (G3: with optional type arguments); the checker resolves the names.
             // The lowercase spelling of a built-in Type name must not become an alias.
-            if matches!(n.val.as_str(), "unit" | "array" | "option" | "result" | "array_u8" | "array_bool" | "array_i32") {
+            if matches!(n.val.as_str(), "unit" | "array" | "option" | "result" | "array_u8" | "array_u16" | "array_bool" | "array_i32") {
                 return Err(self.err(
                     format!("unknown type {}", repr_str(&n.val)),
                     "use i64, bool, (), [i64], Option<i64>, Result<i64> or a declared struct/enum",
@@ -1094,10 +1094,14 @@ impl Parser {
         }
         self.expect("->")?;
         let (ret, ret_refine) = self.type_r(true)?;
-        if (is_pub || foreign.is_some())
-            && std::iter::once(&ret).chain(params.iter().map(|p| &p.ty)).any(|ty| intwidth::is_narrow(ty))
-        {
-            return Err(self.small_int_unsupported(&kw, "scalar u8/u16 in public or foreign signatures requires P12"));
+        if is_pub || foreign.is_some() {
+            let signature = || std::iter::once(&ret).chain(params.iter().map(|p| &p.ty));
+            if signature().any(|ty| matches!(ty.as_str(), "array_u16" | "@ref<array_u16>")) {
+                return Err(self.small_int_unsupported(&kw, "[u16] at the host boundary is bundle P12"));
+            }
+            if signature().any(|ty| intwidth::is_narrow(ty)) {
+                return Err(self.small_int_unsupported(&kw, "scalar u8/u16 in public or foreign signatures requires P12"));
+            }
         }
         if kw.val == "extern" {
             return Err(self.reserved_name(&kw));

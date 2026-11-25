@@ -1847,7 +1847,8 @@ impl<'a> FnVerifier<'a> {
                 } else {
                     let (esort, elem) = match Ty::from_gtype(e) {
                         Ty::Bool => (z.bool_sort(), Elem::Bool),
-                        Ty::User(u) if u == "u8" => (z.int_sort(), Elem::U8),
+                        Ty::U8 => (z.int_sort(), Elem::U8),
+                        Ty::U16 => (z.int_sort(), Elem::U16),
                         _ => (z.int_sort(), Elem::I64),
                     };
                     let arr_sort = z.array_sort(&int, &esort);
@@ -2064,12 +2065,11 @@ impl<'a> FnVerifier<'a> {
         self.wf_field(&payload, term)
     }
 
-    /// The Arr branch of verify.py `_wf_of` for a buffer field: `0 <= len <= 2^40` and, for u8/str, the byte domain.
+    /// The Arr branch of verify.py `_wf_of` for a buffer field: `0 <= len <= 2^40` and, for narrow integers, the element domain.
     fn wf_buf(&self, ty: &Ty, n: &Ast, a: &Ast) -> Ast {
         let ln = self.z.and(&[n.ge_i(0), n.le_i(MAX_LEN)]);
-        if Model::buf_elem(ty) == Elem::U8 {
-            let arr = Arr::new(a.clone(), n.clone(), String::new(), Elem::U8);
-            self.z.and(&[ln, self.u8_dom(&arr)])
+        if let Some(width) = Model::buf_elem(ty).narrow_width() {
+            self.z.and(&[ln, self.narrow_elem_domain(a, n, width)])
         } else {
             ln
         }
@@ -2163,7 +2163,7 @@ impl<'a> FnVerifier<'a> {
     /// verify.py `Model.facts`: valid facts about one observed term `t` of the non-generic nominal type `ty` (see
     /// tests/g9/model_notes.md): size positivity, the one-step size equation, for a recursive type the one-step wf equation, and
     /// positivity of the size of every direct nominal child (so child-smaller follows from the equation). It lives here
-    /// because the wf step needs `in_range` / `u8_dom` / `conj`.
+    /// because the wf step needs `in_range` / element domains / `conj`.
     pub(crate) fn facts(&self, ty: &Ty, t: &Ast) -> R<Vec<Ast>> {
         let m = self.model;
         let n = ty.name().to_string();
@@ -2478,8 +2478,8 @@ impl<'a> FnVerifier<'a> {
                     } else {
                         h.pc.push(self.z.and(&[a.n.ge_i(0), a.n.le_i(MAX_LEN)]));
                     }
-                    if a.elem == Elem::U8 {
-                        h.pc.push(self.u8_dom(&a));
+                    if let Some(width) = a.elem.narrow_width() {
+                        h.pc.push(self.narrow_elem_domain(&a.a, &a.n, width));
                     }
                     h.env.set(n, Val::Arr(a));
                 }
@@ -2579,14 +2579,24 @@ impl<'a> FnVerifier<'a> {
         self.z.exists(std::slice::from_ref(k), &self.z.and(&[rng, body.clone()]), &[])
     }
 
-    /// G2 A2: element domain of a U8 array`ForAll([k], Implies(And(k >= 0, k < n), And(A[k] >= 0, A[k] <= 255)))`.
-    /// The bound variable has the fixed name `elem!k` (does not touch self.k). No patterns.
-    pub fn u8_dom(&self, arr: &Arr) -> Ast {
+    /// Every element at a valid index falls within the range of its storage type.
+    fn narrow_elem_domain(&self, a: &Ast, n: &Ast, width: &IntWidth) -> Ast {
         let k = self.z.int_const("elem!k");
-        let rng = self.z.and(&[k.ge_i(0), k.lt(&arr.n)]);
-        let sel = arr.a.select(&k);
-        let body = self.z.and(&[sel.ge_i(0), sel.le_i(255)]);
+        let rng = self.z.and(&[k.ge_i(0), k.lt(n)]);
+        let body = in_int_range(&self.z, &a.select(&k), width);
         self.z.forall(std::slice::from_ref(&k), &rng.implies(&body), &[])
+    }
+
+    fn u8_dom(&self, arr: &Arr) -> Ast {
+        self.narrow_elem_domain(&arr.a, &arr.n, &intwidth::U8)
+    }
+
+    fn prove_elem_range(&mut self, st: &State, g: &[Ast], pos: Pos, elem: Elem, value: &Ast, context: &str) {
+        if let Some(width) = elem.narrow_width() {
+            let ob = in_int_range(&self.z, value, width);
+            let what = format!("[{}] element range {}..={} {}", width.name, width.min, width.max, context);
+            self.prove_core(st, g, &ob, pos, "elem_range", &what, None);
+        }
     }
 
     /// G6b: verify.py `i64_dom`: every element of a Vec<i64> returned by a trusted rust fn is an i64
@@ -2867,10 +2877,10 @@ impl<'a> FnVerifier<'a> {
             Expr::BoolLit(x) => Ok(Val::Bool(self.z.bool_val(x.value))),
             Expr::StrLit(x) => {
                 // The parser represents a static empty view as a literal with no bytes.
-                let empty_elem = match (x.empty, x.ty.as_deref()) {
-                    (true, Some("array")) => Some(Elem::I64),
-                    (true, Some("array_bool")) => Some(Elem::Bool),
-                    _ => None,
+                let empty_elem = if x.empty {
+                    x.ty.as_deref().and_then(pruv_core::typeinfo::array_elem_name).and_then(Elem::from_name)
+                } else {
+                    None
                 };
                 if let Some(elem) = empty_elem {
                     let zero = if elem == Elem::Bool { self.z.bool_val(false) } else { self.z.int(0) };
@@ -3327,39 +3337,19 @@ impl<'a> FnVerifier<'a> {
                 // the element kind comes from the unsubstituted type name (verify.py `tname`), then a structured [T] overrides it
                 let tname: Option<String> =
                     x.ty.as_deref().and_then(|k| GType::try_from_key(k).ok()).map(|g| g.name);
-                let mut aelem = match tname.as_deref() {
-                    Some("array_u8") => Elem::U8,
-                    Some("array_bool") => Elem::Bool, // G2 A5
-                    _ => Elem::I64,
-                };
+                let mut aelem = tname.as_deref().and_then(pruv_core::typeinfo::array_elem_name)
+                    .and_then(Elem::from_name).unwrap_or(Elem::I64);
                 let mut aety: Option<GType> = None;
                 if let Some(Ty::GArray(el)) = self.t(x.ty.as_deref()) {
                     // G3: alloc of a [T]
-                    aelem = if el.owner.is_some() {
-                        Elem::Abs
-                    } else if el == GType::bool() {
-                        Elem::Bool
-                    } else if el == GType::u8() {
-                        Elem::U8
-                    } else {
-                        Elem::I64
-                    };
                     if el.owner.is_some() {
+                        aelem = Elem::Abs;
                         aety = Some(el);
+                    } else {
+                        aelem = Elem::from_name(&el.name).unwrap_or(Elem::I64);
                     }
                 }
-                if aelem == Elem::U8 {
-                    let ob = self.z.and(&[a1.ge_i(0), a1.le_i(255)]);
-                    self.prove_core(
-                        &st,
-                        g,
-                        &ob,
-                        pos(e),
-                        "elem_range",
-                        "u8 element range 0..=255 for the alloc fill value",
-                        None,
-                    );
-                }
+                self.prove_elem_range(&st, g, pos(e), aelem, &a1, "for the alloc fill value");
                 self.spend(st, g, self.z.int(1).add(&a0));
                 self.k += 1;
                 let ka = self.z.const_array(&self.z.int_sort(), &a1);
@@ -3413,18 +3403,7 @@ impl<'a> FnVerifier<'a> {
                     &format!("resize length {} <= n <= 2^40", bound),
                     None,
                 );
-                if av.elem == Elem::U8 {
-                    let ob = self.z.and(&[v.ge_i(0), v.le_i(255)]);
-                    self.prove_core(
-                        &st,
-                        g,
-                        &ob,
-                        pos(e),
-                        "elem_range",
-                        "u8 element range 0..=255 for the resize fill value",
-                        None,
-                    );
-                }
+                self.prove_elem_range(&st, g, pos(e), av.elem, &v, "for the resize fill value");
                 self.spend(st, g, self.z.int(1).add(&m));
                 let k = self.z.int_const("resize_k");
                 let body = self.z.ite(&k.lt(&av.n), &av.a.select(&k), &v);
@@ -3482,7 +3461,7 @@ impl<'a> FnVerifier<'a> {
                     for (ob, msg) in obs {
                         self.prove_core(&st, g, &ob, pos(e), "index_oob", &msg, None);
                     }
-                    let ok = self.z.and(&[b.ge_i(0), b.le_i(255)]);
+                    let ok = in_int_range(&self.z, &b, &intwidth::U8);
                     self.prove_core(&st, g, &ok, pos(e), "elem_range", "find_byte byte range 0..=255", None);
                 }
                 let r = self.fresh("find_byte", &Ty::I64);
@@ -3512,10 +3491,7 @@ impl<'a> FnVerifier<'a> {
                 let mut arr = av.a.clone();
                 for i in 1..args.len() {
                     let v = arg(i)?.try_ast()?;
-                    if av.elem == Elem::U8 {
-                        let ok = self.z.and(&[v.ge_i(0), v.le_i(255)]);
-                        self.prove_core(st, g, &ok, pos(e), "elem_range", "u8 element range 0..=255 for the pushed value", None);
-                    }
+                    self.prove_elem_range(st, g, pos(e), av.elem, v, "for the pushed value");
                     arr = arr.store(&av.n.add(&self.z.int(i as i64 - 1)), v);
                 }
                 let Expr::InoutArg(place) = &x.args[0] else { return Err("missing inout place".into()); };
@@ -3525,8 +3501,8 @@ impl<'a> FnVerifier<'a> {
                     _ => &av.name,
                 };
                 let nv = av.like(arr, av.n.add(&self.z.int(k)), name);
-                if nv.elem == Elem::U8 {
-                    self.assume(st, g, self.u8_dom(&nv));
+                if let Some(width) = nv.elem.narrow_width() {
+                    self.assume(st, g, self.narrow_elem_domain(&nv.a, &nv.n, width));
                 }
                 self.store_collection_place(&place.expr, st, Val::Arr(nv), g)?;
                 self.post_refine(e, &[0], st, g)?;
@@ -3550,8 +3526,8 @@ impl<'a> FnVerifier<'a> {
                     _ => &dv.name,
                 };
                 let nv = dv.like(lam, need, name);
-                if nv.elem == Elem::U8 {
-                    self.assume(st, g, self.u8_dom(&nv));
+                if let Some(width) = nv.elem.narrow_width() {
+                    self.assume(st, g, self.narrow_elem_domain(&nv.a, &nv.n, width));
                 }
                 self.store_collection_place(&place.expr, st, Val::Arr(nv), g)?;
                 self.post_refine(e, &[0], st, g)?;
@@ -3589,9 +3565,9 @@ impl<'a> FnVerifier<'a> {
                     _ => &dv.name,
                 };
                 let nv = dv.like(lam, dv.n.clone(), name);
-                if nv.elem == Elem::U8 {
-                    // both operands are in the byte domain, so the result is too
-                    let dom = self.u8_dom(&nv);
+                if let Some(width) = nv.elem.narrow_width() {
+                    // Both operands have the same narrow element domain.
+                    let dom = self.narrow_elem_domain(&nv.a, &nv.n, width);
                     self.assume(st, g, dom);
                 }
                 self.store_collection_place(&dst_place.expr, st, Val::Arr(nv), g)?;
@@ -4056,8 +4032,8 @@ impl<'a> FnVerifier<'a> {
         if let Val::Arr(ra) = &res {
             let w = self.z.and(&[ra.n.ge_i(0), ra.n.le_i(MAX_LEN)]);
             self.assume(st, g, w);
-            if ra.elem == Elem::U8 {
-                let d = self.u8_dom(ra);
+            if let Some(width) = ra.elem.narrow_width() {
+                let d = self.narrow_elem_domain(&ra.a, &ra.n, width);
                 self.assume(st, g, d);
             } else if f.foreign.is_some() && is_vec_i64(&rty) {
                 // G6b: a fresh foreign Vec<i64>
@@ -4213,7 +4189,7 @@ impl<'a> FnVerifier<'a> {
     }
 
     /// verify.py `inout_finals` (G5 A1, G5_SPEC 5.2 step 5): for every inout argument in parameter order, fresh contents of
-    /// exactly the pre-call length (same length term, same element type, u8 domain for [u8]). The final array is what the
+    /// exactly the pre-call length (same length term, same element type, the element domain for narrow integers). The final array is what the
     /// callee's ensures denote by the parameter name, and it rebinds the caller's marked place. All finals exist before any
     /// ensures clause is assumed, so relational ensures may connect several of them.
     fn inout_finals(
@@ -4250,8 +4226,8 @@ impl<'a> FnVerifier<'a> {
                     let fv = self.try_fresh(name, &fresh_ty)?;
                     let fa = fv.try_arr()?;
                     let nv = pre.like(fa.a.clone(), pre.n.clone(), name);
-                    if nv.elem == Elem::U8 {
-                        let d = self.u8_dom(&nv);
+                    if let Some(width) = nv.elem.narrow_width() {
+                        let d = self.narrow_elem_domain(&nv.a, &nv.n, width);
                         self.assume(st, g, d);
                     }
                     Val::Arr(nv)
@@ -5130,8 +5106,8 @@ impl<'a> FnVerifier<'a> {
                         }
                         Ok(Val::Dt(r, ty))
                     },
-                    Elem::I64 | Elem::U8 => {
-                        // as an array read: an i64/u8 element is a machine integer
+                    Elem::I64 | Elem::U8 | Elem::U16 => {
+                        // as an array read: an integer element is read as i64
                         if code {
                             let w = in_range(&z, &r);
                             self.assume(st, g, w);
@@ -5946,18 +5922,7 @@ impl<'a> FnVerifier<'a> {
                 let v = self.ev0_ast(&s.value, &mut st, &[], true)?;
                 let ob = self.z.and(&[i.ge_i(0), i.lt(&arr.n)]);
                 self.prove_core(&st, &[], &ob, spos, "index_oob", &format!("index in bounds for {}[...] =", place), None);
-                if arr.elem == Elem::U8 {
-                    let ob = self.z.and(&[v.ge_i(0), v.le_i(255)]);
-                    self.prove_core(
-                        &st,
-                        &[],
-                        &ob,
-                        spos,
-                        "elem_range",
-                        &format!("u8 element range 0..=255 for {}[...] =", place),
-                        None,
-                    );
-                }
+                self.prove_elem_range(&st, &[], spos, arr.elem, &v, &format!("for {}[...] =", place));
                 if let Some((lo, hi, what)) = &s.elem_refine {
                     let lo: i64 = lo.parse().map_err(|_| format!("refinement bound '{}'", lo))?;
                     let hi: i64 = hi.parse().map_err(|_| format!("refinement bound '{}'", hi))?;
@@ -5986,18 +5951,7 @@ impl<'a> FnVerifier<'a> {
                     &format!("index in bounds for {}[...] =", s.name),
                     None,
                 );
-                if arr.elem == Elem::U8 {
-                    let ob = self.z.and(&[v.ge_i(0), v.le_i(255)]);
-                    self.prove_core(
-                        &st,
-                        &[],
-                        &ob,
-                        spos,
-                        "elem_range",
-                        &format!("u8 element range 0..=255 for {}[...] =", s.name),
-                        None,
-                    );
-                }
+                self.prove_elem_range(&st, &[], spos, arr.elem, &v, &format!("for {}[...] =", s.name));
                 if let Some((lo, hi, what)) = &s.elem_refine {
                     // refine.rs: one range obligation on the stored value (already computed). No domain check, re-evaluation or forall, and it is not assumed afterwards.
                     let lo: i64 = lo.parse().map_err(|_| format!("refinement bound '{}'", lo))?;
@@ -6405,8 +6359,8 @@ impl<'a> FnVerifier<'a> {
             match &res {
                 Val::Arr(a) => {
                     st.pc.push(self.z.and(&[a.n.ge_i(0), a.n.le_i(MAX_LEN)]));
-                    if a.elem == Elem::U8 {
-                        let d = self.u8_dom(a);
+                    if let Some(width) = a.elem.narrow_width() {
+                        let d = self.narrow_elem_domain(&a.a, &a.n, width);
                         st.pc.push(d);
                     } else if is_vec_i64(&rty) {
                         // G6b: a foreign Vec<i64> result has i64 elements
@@ -6458,8 +6412,8 @@ impl<'a> FnVerifier<'a> {
                 Val::Arr(a) => {
                     pc.push(self.z.and(&[a.n.ge_i(0), a.n.le_i(MAX_LEN)]));
                     shape.push(pc[pc.len() - 1].clone());
-                    if a.elem == Elem::U8 {
-                        pc.push(self.u8_dom(a));
+                    if let Some(width) = a.elem.narrow_width() {
+                        pc.push(self.narrow_elem_domain(&a.a, &a.n, width));
                         shape.push(pc[pc.len() - 1].clone());
                     }
                 }

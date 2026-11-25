@@ -9,12 +9,21 @@ use std::collections::{HashMap, HashSet};
 /// Shared with pruvc (pruvc/data/builtin_types.json, tools/gen_shared.py).
 pub use crate::shared_tables::builtin_types::BUILTIN_TYPE_NAMES;
 
-/// A name that is not built in is a user type (whether or not it is declared).
-pub fn is_user_type(ty: &str) -> bool {
-    !BUILTIN_TYPE_NAMES.contains(&ty)
+/// Builtin internal type names that only the Rust compiler knows (the Python compiler is frozen,
+/// so they are not in the shared table): `array_u16` is `[u16]` (P2).
+pub const RS_ONLY_TYPE_NAMES: &[(&str, &str)] = &[("array_u16", "[u16]")];
+
+/// Whether `ty` is a builtin internal type name (shared table or Rust-only).
+pub fn is_builtin_type_name(ty: &str) -> bool {
+    BUILTIN_TYPE_NAMES.contains(&ty) || RS_ONLY_TYPE_NAMES.iter().any(|(k, _)| *k == ty)
 }
 
-/// Whether this is an internal array type name ("array"/"array_u8"/"array_bool").
+/// A name that is not built in is a user type (whether or not it is declared).
+pub fn is_user_type(ty: &str) -> bool {
+    !is_builtin_type_name(ty)
+}
+
+/// Whether this is an internal array type name ("array"/"array_u8"/"array_u16"/"array_bool").
 pub fn is_array_name(n: &str) -> bool {
     array_elem_name(n).is_some()
 }
@@ -24,6 +33,7 @@ pub fn array_elem_name(n: &str) -> Option<&'static str> {
     match n {
         "array" => Some("i64"),
         "array_u8" => Some("u8"),
+        "array_u16" => Some("u16"),
         "array_bool" => Some("bool"),
         _ => None,
     }
@@ -34,6 +44,7 @@ pub fn array_of_elem_name(e: &str) -> Option<&'static str> {
     match e {
         "i64" => Some("array"),
         "u8" => Some("array_u8"),
+        "u16" => Some("array_u16"),
         "bool" => Some("array_bool"),
         _ => None,
     }
@@ -41,7 +52,7 @@ pub fn array_of_elem_name(e: &str) -> Option<&'static str> {
 
 /// Source-level spelling. A user type keeps its own name.
 pub fn type_name(ty: &str) -> String {
-    match crate::shared_tables::builtin_types::BUILTIN_PRINT.iter().find(|(k, _)| *k == ty) {
+    match crate::shared_tables::builtin_types::BUILTIN_PRINT.iter().chain(RS_ONLY_TYPE_NAMES.iter()).find(|(k, _)| *k == ty) {
         Some((_, v)) => v.to_string(),
         None => ty.to_string(),
     }
@@ -988,6 +999,8 @@ mod tests {
         assert!(is_user_type("Point"));
         assert!(!is_user_type("i64"));
         assert_eq!(type_name("array_u8"), "[u8]");
+        assert_eq!(type_name("array_u16"), "[u16]");
+        assert!(!is_user_type("array_u16"));
         assert_eq!(type_name("array_bool"), "[bool]");
         assert!(!is_user_type("array_u8"));
         assert!(!is_user_type("array_bool"));

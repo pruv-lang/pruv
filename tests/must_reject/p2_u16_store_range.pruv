@@ -1,0 +1,6 @@
+// P2: a [u16] store must prove 0 <= v <= 65535
+fn f(inout a: [u16]) -> ()
+  requires len(a) > 0
+{
+  a[0] = 65536;
+}

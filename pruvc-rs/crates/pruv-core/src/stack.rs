@@ -103,6 +103,7 @@ pub fn recursive_functions(prog: &Program) -> HashSet<String> {
 fn elem_bytes(x: &Let, storage: &StoragePlan) -> Option<usize> {
     match x.ty.as_str() {
         "array_u8" | "array_bool" => Some(1),
+        "array_u16" => Some(crate::intwidth::U16.bits as usize / 8),
         "array" => Some(elem_size(storage.layout_of(x))),
         _ => None,
     }
@@ -193,7 +194,7 @@ impl<'a> Uses<'a> {
                     if c.foreign.is_none() && j < c.params.len()
                         && !matches!(e.name.as_str(), "len" | "alloc" | "copy" | "truncate" | "resize" | "print") {
                         let p = &c.params[j];
-                        let array = matches!(p.ty.as_str(), "array" | "array_u8" | "array_bool" | "str");
+                        let array = crate::borrowed::is_view_base(&p.ty);
                         if array && !p.take {
                             match a {
                                 Expr::Var(_) if p.mode_pos.is_none() => ok = true,
@@ -310,4 +311,25 @@ pub fn plan_stack(prog: &Program, storage: &StoragePlan, verified: bool) -> Stac
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn u16_allocations_use_two_bytes_per_element() {
+        let mut prog = crate::parse(
+            "fn f() -> i64 ! alloc {
+                let fits: [u16] = alloc(8192, 65535);
+                let too_large: [u16] = alloc(8193, 65535);
+                return fits[0] + too_large[0];
+            }",
+        ).unwrap();
+        crate::check::check(&mut prog).unwrap();
+        let plan = plan_stack(&prog, &StoragePlan::default(), true);
+        assert_eq!(plan.entries.len(), 1);
+        let (_, _, name, len, elem_bytes) = &plan.entries[0];
+        assert_eq!((name.as_str(), *len, *elem_bytes), ("fits", 8192, 2));
+    }
 }
