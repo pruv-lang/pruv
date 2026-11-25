@@ -1110,10 +1110,11 @@ fn for_collection(body: &[Stmt]) -> (String, Vec<String>) {
     (v.name.clone(), path)
 }
 
+/// An untyped integer literal (optionally negated). Char, byte and constant uses carry their own type (P7).
 fn is_int_literal(e: &Expr) -> bool {
     match e {
-        Expr::IntLit(_) => true,
-        Expr::Unary(u) => u.op == "-" && matches!(*u.operand, Expr::IntLit(_)),
+        Expr::IntLit(_) => bare_lit(e),
+        Expr::Unary(u) => u.op == "-" && bare_lit(&u.operand),
         _ => false,
     }
 }
@@ -5464,7 +5465,8 @@ impl Checker {
             return self.expect(e, &i64t(), scope, contract, Some("decreases measure"));
         }
         let t = self.expr(e, scope, contract)?;
-        if t.int_width().is_some() {
+        // P7: `char` is an integer width in the table but has no arithmetic, so it is not a measure (R-6p-5)
+        if t.int_width().is_some_and(|w| !w.is_char()) {
             return Ok(t);
         }
         self.check_expected_type(e, &i64t(), Some("decreases measure"), t)
