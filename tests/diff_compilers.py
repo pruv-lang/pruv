@@ -5,9 +5,11 @@ Default mode = golden: only the Rust compiler runs (one new process per input an
 result is compared with tests/golden/diff_compilers.txt (tests/golden.py; one file for all backends, the backend is in the key).
 Neither pruvc/ nor z3 is imported or run. Key: "<group>|<case name>|<backend>" (case name = repo-relative, e.g.
 "examples/foo.pruv [no-verify]"; "@<kind>" is appended if --b is not rs). The hashed normalized text is: exit code, the stdout
-JSON lines (counterexample VALUES removed, only their presence kept; keys that carry timing are dropped; work directory, input
+JSON lines (counterexample VALUES removed, only their presence kept; work directory, input
 path and compiler name normalized), and the generated files (name + sha256 of the bytes, sorted). stderr and elapsed times are
-not part of it. A b crash (exit other than 0, 1, 2) or timeout is a failure and is not recorded.
+not part of it. A b crash (exit other than 0, 1, 2) or timeout is a failure and is not recorded. --input names are
+"input/<path relative to the repo root>" (+ " [flags]"); a duplicate key fails even with --update-golden. A golden mismatch
+is class golden_mismatch and the case is saved (replayable: --replay also works for golden-mode cases).
 
     python tests/diff_compilers.py [--b-path P] (default pruvc-rs/target/release/pruvc, .exe on Windows) [--backend rust|llvm|both]
         [--b rs] [--input FILE ...] [--flag F ...] [--only must_reject|examples|runtime|bench|g4|g4b|g5] [--jobs N]
@@ -15,7 +17,7 @@ not part of it. A b crash (exit other than 0, 1, 2) or timeout is a failure and 
     python tests/diff_compilers.py --update-golden    # after an intended change: rewrites the golden, prints every CHANGED/NEW key
     python tests/diff_compilers.py --vs-py [--a py|rs] [--a-path P]   # old py-vs-rs comparison (below)
     python tests/diff_compilers.py --vs-py --update-golden            # capture: run both, write the golden from Rust, report a/b disagreements
-    python tests/diff_compilers.py --replay CASE_DIR                  # only for cases saved by a --vs-py run
+    python tests/diff_compilers.py --replay CASE_DIR                  # replay a saved failing case (golden-mode or --vs-py)
 
 --vs-py uses the FROZEN Python compiler (bundle PF) as reference and is NOT run by CI; the rest of this docstring describes it.
 Plain --vs-py does not read or write the golden. --a/--a-path are ignored without --vs-py.
@@ -71,8 +73,8 @@ sys.path.insert(0, HERE)
 import compiler_driver as CD  # noqa: E402
 import golden  # noqa: E402   (no pruvc / z3 import anywhere: the compilers are only run as processes)
 
-CLASSES = ["same", "diff", "a_crash", "b_crash", "a_timeout", "b_timeout", "not_implemented"]
-FAILING = ("diff", "a_crash", "b_crash", "a_timeout", "b_timeout")
+CLASSES = ["same", "diff", "a_crash", "b_crash", "a_timeout", "b_timeout", "not_implemented", "golden_mismatch"]
+FAILING = ("diff", "a_crash", "b_crash", "a_timeout", "b_timeout", "golden_mismatch")
 REQUIRED_KEYS = ("stage", "line", "col", "code")
 COMPARED_TEXT_KEYS = ("message", "fix")
 # NOTE: the Korean alternative below is intentionally kept: NI_RE is matched against the compiler's stderr.
@@ -203,7 +205,12 @@ def build_cases(args):
         if not os.path.isfile(f):
             errors.append("--input: no such file: %s" % f)
             continue
-        cases.append({"name": "input/" + os.path.basename(f), "src": os.path.abspath(f), "flags": list(args.flag or [])})
+        ap_ = os.path.abspath(f)
+        rel = os.path.relpath(ap_, ROOT) if ap_.startswith(ROOT + os.sep) else ap_
+        name = "input/" + rel.replace(os.sep, "/")
+        if args.flag:
+            name += " [" + " ".join(args.flag) + "]"
+        cases.append({"name": name, "src": ap_, "flags": list(args.flag or [])})
     return cases, errors
 
 
@@ -370,20 +377,14 @@ def run_side(spec, side, tmpl, work, timeout):
             "reps": norm_replacements(d, spec["src"], prefix, spec.get("manifest"))}
 
 
-# Stdout keys whose value depends on timing; they never go into the golden text.
-TIMING_KEY_RE = re.compile(r"(?i)^(?:time|.*(?:elapsed|duration|seconds|millis|timing|_ms|_time|time_).*)$")
-
-
 def _scrub(v, reps):
-    """JSON value -> value for the golden text: counterexample values reduced to presence, timing keys dropped,
+    """JSON value -> value for the golden text: counterexample values reduced to presence,
     strings normalized (work directory, input path, compiler name)."""
     if isinstance(v, dict):
         out = {}
         for k, x in v.items():
             if k == CEX_KEY:
                 out[k] = "<present>"
-            elif TIMING_KEY_RE.match(k):
-                continue
             else:
                 out[k] = _scrub(x, reps)
         return out
@@ -421,12 +422,16 @@ def run_golden(spec, tmpl_b, work, timeout):
     rb = side["res"]
     if rb.timed_out:
         cls = "b_timeout"
+    elif rb.returncode == 2 and NI_RE.search(rb.stderr):
+        cls = "not_implemented"
     elif rb.kind == "crash":
         cls = "b_crash"
     else:
         cls = "same"
     details = []
-    if cls != "same":
+    if cls == "not_implemented":
+        details = ["b: " + (rb.stderr or rb.stdout).strip()[:200]]
+    elif cls != "same":
         details = ["b: exit %s%s %s" % (rb.returncode, " (timeout)" if rb.timed_out else "",
                                         (rb.stderr or rb.stdout).strip()[-200:])]
     return {"cls": cls, "details": details, "crlf_only": False, "sides": {"b": side}, "names": names,
@@ -540,10 +545,21 @@ def replay(case_dir, args):
     spec = {"name": meta["name"], "src": src, "flags": meta["flags"], "backend": meta["backend"]}
     if manifest:
         spec["manifest"] = manifest
-    if not argv.get("a_template"):
-        print("replay: case %s was saved by a golden-mode run (no a side); rerun it by hand with argv.json b" % case_dir)
-        return 2
     print("replay %s  (saved classification: %s)" % (meta["name"], meta["classification"]))
+    if not argv.get("a_template"):   # saved by a golden-mode run: only b
+        print("  b: %s" % json.dumps(versions.get("b"), ensure_ascii=False))
+        work = tempfile.mkdtemp(prefix="diffc_replay_")
+        try:
+            oc = run_golden(spec, argv["b_template"], work, args.timeout)
+            print("result: %s [%s]" % (oc["cls"], spec["backend"]))
+            for d in oc["details"]:
+                print("  - " + d)
+            r = oc["sides"]["b"]["res"]
+            print("  b: exit %s, %.2fs" % (r.returncode, r.elapsed))
+            print("golden text digest: " + golden.digest(oc["gtext"]))
+            return 1 if oc["cls"] in FAILING else 0
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
     for s in ("a", "b"):
         print("  %s: %s" % (s, json.dumps(versions.get(s), ensure_ascii=False)))
     work = tempfile.mkdtemp(prefix="diffc_replay_")
@@ -624,6 +640,8 @@ def main():
     cex_count = 0
     lock = threading.Lock()
     failed_dirs = []
+    seen_keys = set()
+    dup_keys = set()
 
     def job(idx, spec):
         tmpl_a = template_argv(da, spec["backend"], spec["flags"]) if da else None
@@ -634,6 +652,22 @@ def main():
         else:
             oc = run_golden(spec, tmpl_b, work, args.timeout)
         case_id = "%05d_%s__%s" % (idx, re.sub(r"[^A-Za-z0-9._-]+", "_", spec["name"]).strip("_"), spec["backend"])
+        # golden check while the work directory still exists: only cases where b ran normally (a b crash/timeout is already
+        # a failure, and a not_implemented case has no usable output); plain --vs-py does not touch the golden,
+        # --vs-py --update-golden captures it
+        if (not da or args.update_golden) and oc["cls"] in ("same", "diff", "a_crash", "a_timeout"):
+            key = "%s|%s|%s" % (spec["name"].split("/", 1)[0], spec["name"], spec["backend"])
+            if args.b != "rs":
+                key += "@" + args.b
+            with lock:
+                if key in seen_keys:
+                    dup_keys.add(key)
+                    print("golden: duplicate key " + key, flush=True)
+                seen_keys.add(key)
+                ok = g.check(key, oc["gtext"], oc["gsummary"])
+                if not da and not ok and not args.update_golden:
+                    oc["cls"] = "golden_mismatch"
+                    oc["details"] = ["golden: digest differs from (or missing in) " + g.name]
         if oc["cls"] in FAILING:
             cdir = os.path.join(save_root, oc["cls"] + "__" + case_id)
             try:
@@ -657,13 +691,6 @@ def main():
                     continue
                 counts[oc["cls"]] += 1
                 per_backend[spec["backend"]][oc["cls"]] += 1
-                # golden: only cases where b ran normally (a b crash/timeout is already a failure, and a not_implemented
-                # case has no usable output); plain --vs-py does not touch the golden, --vs-py --update-golden captures it
-                if (not da or args.update_golden) and oc["cls"] in ("same", "diff", "a_crash", "a_timeout"):
-                    key = "%s|%s|%s" % (spec["name"].split("/", 1)[0], spec["name"], spec["backend"])
-                    if args.b != "rs":
-                        key += "@" + args.b
-                    g.check(key, oc["gtext"], oc["gsummary"])
                 if oc["crlf_only"]:
                     crlf_count += 1
                 if oc["cex_differs"]:
@@ -696,7 +723,7 @@ def main():
         print("input/harness error: " + e)
     if failed_dirs:
         print("%d failing cases saved: %s  (replay: --replay <folder>)" % (len(failed_dirs), save_root))
-    bad = sum(counts[c] for c in FAILING) + len(errors)
+    bad = sum(counts[c] for c in FAILING) + len(errors) + len(dup_keys)
     if counts["not_implemented"]:
         print("%d not implemented, not a pass" % counts["not_implemented"])
     if not da or args.update_golden:

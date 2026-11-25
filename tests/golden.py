@@ -65,20 +65,30 @@ def _forms(path):
     return out
 
 
+_SUBS = {}
+
+
+def _subs(tmp_dirs):
+    """(path spelling, placeholder) pairs, longest first; cached per tmp_dirs (normalize runs once per case)."""
+    k = tuple(tmp_dirs)
+    s = _SUBS.get(k)
+    if s is None:
+        import tempfile
+        s = [(f, "<TMP>") for d in k for f in _forms(d)]
+        s += [(f, "<ROOT>") for f in _forms(ROOT)]
+        s += [(f, "<TMP>") for f in _forms(tempfile.gettempdir())]
+        # longest first so a temp dir inside the repo (or /private/var vs /var) is replaced as a whole
+        s = _SUBS[k] = [x for x in sorted(s, key=lambda x: -len(x[0])) if x[0]]
+    return s
+
+
 def normalize(text, tmp_dirs=()):
-    """Machine-independent form of a compiler output text (str or bytes)."""
+    """Machine-independent form of a compiler output text (str or bytes; invalid UTF-8 bytes stay distinct)."""
     if isinstance(text, bytes):
-        text = text.decode("utf-8", errors="replace")
+        text = text.decode("utf-8", errors="surrogateescape")
     text = text.replace("\r\n", "\n")
-    subs = []
-    for d in tmp_dirs:
-        subs += [(f, "<TMP>") for f in _forms(d)]
-    subs += [(f, "<ROOT>") for f in _forms(ROOT)]
-    import tempfile
-    subs += [(f, "<TMP>") for f in _forms(tempfile.gettempdir())]
-    # longest first so a temp dir inside the repo (or /private/var vs /var) is replaced as a whole
-    for f, rep in sorted(subs, key=lambda s: -len(s[0])):
-        if f and f in text:
+    for f, rep in _subs(tmp_dirs):
+        if f in text:
             text = text.replace(f, rep)
     # after the prefix, the rest of a replaced path may still use backslashes on Windows
     text = re.sub(r"(<(?:ROOT|TMP)>)((?:\\\\|\\)[^\s\"'<>|:*?]*)",
@@ -86,8 +96,13 @@ def normalize(text, tmp_dirs=()):
     return text
 
 
-def digest(text, tmp_dirs=()):
-    return hashlib.sha256(normalize(text, tmp_dirs).encode("utf-8")).hexdigest()[:DIGEST_LEN]
+def digest(text, tmp_dirs=(), raw=False):
+    """raw=True: hash bytes as they are (program output whose bytes and line endings matter), no normalization."""
+    if raw:
+        data = text if isinstance(text, bytes) else text.encode("utf-8", errors="surrogateescape")
+    else:
+        data = normalize(text, tmp_dirs).encode("utf-8", errors="surrogateescape")
+    return hashlib.sha256(data).hexdigest()[:DIGEST_LEN]
 
 
 def _clean(s, limit):
@@ -194,9 +209,10 @@ class Golden:
     def add_tmp(self, d):
         self.tmp_dirs.append(d)
 
-    def check(self, key, text, summary=""):
+    def check(self, key, text, summary="", raw=False, dg=None):
+        """dg: the digest of text when the tool already computed it (text is then not hashed again)."""
         key = _clean(key, 1000)
-        new = (digest(text, self.tmp_dirs), _clean(summary, SUMMARY_MAX))
+        new = (dg or digest(text, self.tmp_dirs, raw), _clean(summary, SUMMARY_MAX))
         if key in self.seen and self.seen[key][0] != new[0]:
             # the same key twice in one run with different output: the tool's keys are not unique
             self.mismatch.append((key, self.seen[key], new))

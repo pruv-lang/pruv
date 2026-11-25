@@ -243,14 +243,15 @@ def golden_normalize(obj):
     - attempts whose result is "unknown": reason_unknown and status (z3 words the stop by where its rlimit or wall
       clock ran out: "max. resource limit exceeded", "push canceled", "timeout", ...);
     - inference "dropped" candidates with status not_proved / resource_unknown / timeout: status (same cause).
-    Everything else (smt2, results, counterexample values, errors) is kept."""
-    o = dict(obj)
+    - counterexample values in errors (z3 may return another valid model; presence is kept, as strip_cex does).
+    Only fields that are present and statuses z3 can produce for "unknown" are replaced, so a dropped field or a wrong
+    status class still changes the digest. Everything else (smt2, results, errors) is kept."""
+    o = strip_cex(obj)
     obs = []
     for ob in o.get("obligations", []):
         if isinstance(ob, dict) and ob.get("attempts"):
             ob = dict(ob)
-            ob["attempts"] = [dict(a, reason_unknown="<reason>", status="<status>")
-                              if isinstance(a, dict) and a.get("result") == "unknown" else a for a in ob["attempts"]]
+            ob["attempts"] = [_unknown_attempt(a) for a in ob["attempts"]]
         obs.append(ob)
     o["obligations"] = obs
     if isinstance(o.get("inference"), list):
@@ -261,12 +262,33 @@ def golden_normalize(obj):
     return o
 
 
+UNKNOWN_STATUSES = ("resource_unknown", "timeout")   # query_status of an "unknown" z3 answer
+
+
+def _unknown_attempt(a):
+    if not (isinstance(a, dict) and a.get("result") == "unknown"):
+        return a
+    a = dict(a)
+    if "reason_unknown" in a:
+        a["reason_unknown"] = "<reason>"
+    if a.get("status") in UNKNOWN_STATUSES:
+        a["status"] = "<status>"
+    return a
+
+
 def golden_text(case):
     """The text that is hashed: the raw Rust line, or its canonical dump when golden_normalize changed something."""
     norm = golden_normalize(case.rs_obj)
     if norm == case.rs_obj:
         return case.rs_raw
     return canon(norm)
+
+
+def golden_digest(case, gold):
+    """golden.digest of golden_text, computed once per Rust result (retry and check both use it)."""
+    if getattr(case, "gdig_raw", None) is not case.rs_raw:
+        case.gdig_raw, case.gdig = case.rs_raw, golden.digest(golden_text(case), gold.tmp_dirs)
+    return case.gdig
 
 
 def golden_summary(obj):
@@ -294,15 +316,22 @@ def golden_keys(all_cases, expected, label):
     return out
 
 
+RETRY_MAX = 10   # golden mismatches rerun serially at most (solver stops under load hit a few cases, not hundreds)
+
+
 def golden_retry_mismatches(gold, all_cases, expected, label, rs_argv, env):
     """Golden mode, before golden_check_all: rerun serially (--jobs 1) each case whose digest differs from the file.
     A z3 query that hits its wall-clock timeout_ms on a loaded machine changes a trace (seen on
     g10a_r10_proc_drain while other captures ran in parallel); a real change still differs after the retry."""
     retried = []
-    for c, key in golden_keys(all_cases, expected, label):
-        old = gold.saved.get(key)
-        if old is None or golden.digest(golden_text(c), gold.tmp_dirs) == old[0]:
-            continue
+    differ = [c for c, key in golden_keys(all_cases, expected, label)
+              if key in gold.saved and golden_digest(c, gold) != gold.saved[key][0]]
+    if len(differ) > RETRY_MAX:
+        # many cases changed: a real (e.g. format) change, not a solver stop under load; rerunning them serially
+        # would only make the failing run slow
+        print("golden: %d cases differ from the file; not rerun (more than %d)" % (len(differ), RETRY_MAX))
+        return retried
+    for c in differ:
         evaluate_rs(c, rs_argv, env, expected)
         c.note = (c.note + " " if c.note else "") + "(golden retry)"
         retried.append(c)
@@ -313,7 +342,7 @@ def golden_check_all(gold, all_cases, expected, label, vs_py):
     """g.check for every case with a usable Rust trace, in case order. Not vs_py: sets the final status."""
     for c, key in golden_keys(all_cases, expected, label):
         miss = len(gold.missing)
-        ok = gold.check(key, golden_text(c), golden_summary(c.rs_obj))
+        ok = gold.check(key, None, golden_summary(c.rs_obj), dg=golden_digest(c, gold))
         if not vs_py:
             c.status = "same" if ok else ("golden_missing" if len(gold.missing) > miss else "golden_mismatch")
 

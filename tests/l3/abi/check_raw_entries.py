@@ -1,7 +1,7 @@
 """L3 P09: manifest `raw_entries` ("crate" / "unsafe") on the selected compiler.
 
 usage: check_raw_entries.py WORK [--rs PATH] [--py PATH] [--vs-py] [--golden PATH] [--update-golden] [--prune-golden]
-  --rs PATH: the Rust driver (default: the Python compiler as the main compiler, no golden check). With --rs every
+  --rs PATH: the Rust driver (default: pruvc-rs/target/release/pruvc; --py PATH alone: Python, no golden). With --rs every
              generated Rust / LLVM text is checked against tests/golden/l3_abi_raw_entries.txt
   --py PATH: the pruvc.py to run (default: pruvc/pruvc.py of this repository); only used as the main compiler when
              --rs is absent, or as the reference with --vs-py
@@ -307,6 +307,9 @@ if __name__ == "__main__":
     ap.add_argument("--vs-py", action="store_true", dest="vs_py")
     golden.add_args(ap)
     a = ap.parse_args()
+    if not a.rs and not a.py:   # default: the Rust compiler with the golden check (--py alone selects Python)
+        import compiler_driver as CD  # noqa: E402
+        a.rs = CD.make_driver("rs", None).path
     if a.vs_py and not a.rs:
         ap.error("--vs-py needs --rs")
     sys.exit(main(a.work, a.rs, a.py, a.vs_py, a))

@@ -134,10 +134,11 @@ def build_rust_exe(rs_path, src, exe, flags):
 
 
 def run_text(res):
-    """Golden text of one exe run: exit code, stdout, `pruv:` stderr lines (no timings, no machine paths)."""
+    """Golden bytes of one exe run: exit code, stdout bytes as they are, `pruv:` stderr lines (no timings, no machine
+    paths). Bytes, so the golden hashes them raw (line endings and invalid UTF-8 included)."""
     rc, out, err = res
-    return "exit=%s\nstdout=%s\npruv=%s\n" % (rc, out.decode("utf-8", "backslashreplace"),
-                                              json.dumps(pruv_lines(err), ensure_ascii=False))
+    return (b"exit=%s\nstdout=" % str(rc).encode() + out
+            + b"\npruv=" + json.dumps(pruv_lines(err), ensure_ascii=False).encode("utf-8") + b"\n")
 
 
 def json_text(rc, js):
@@ -331,7 +332,7 @@ def main():
     for name, mode, expect, status, detail, secs, key, gtext in raw:
         # golden: only cases whose Rust side ran normally (a build failure has no usable output)
         if use_golden and gtext is not None and status != "build_fail":
-            if not g.check(key, gtext, "%s %s" % (expect, status)) and status == "same" and not args.update_golden:
+            if not g.check(key, gtext, "%s %s" % (expect, status), raw=isinstance(gtext, bytes)) and status == "same" and not args.update_golden:
                 status, detail = "diff", "output differs from the golden (see GOLDEN lines below)"
         results.append((name, mode, expect, status, detail, secs))
     w = max(len(r[0]) for r in results)

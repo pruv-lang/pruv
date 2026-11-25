@@ -120,7 +120,7 @@ def main(argv):
                 continue
             rsll, rsbind = work / "rs.ll", work / "rs.rs"
             compile_rs(args.rs, src, flags, rsll, rsbind)
-            text, bind = rsll.read_text(), rsbind.read_text()
+            text, bind = rsll.read_bytes().decode("utf-8"), rsbind.read_bytes().decode("utf-8")  # keep line endings
             structural(src, mode, flags, text, bind, names)
             if use_golden:
                 g.check("g8_llvm|%s|ll-%s" % (src, mode), text, "ll")

@@ -135,7 +135,7 @@ def probe(fault, kind, tree, tmp):
     if script == "pkg":
         cmd += ["--rs", TARGET / "release" / "pruvc"] if kind == "rs" else ["--py", tree / "pruvc" / "pruvc.py"]
     else:
-        cmd += ["--only", kind]
+        cmd += ["--only", kind] + (["--vs-py"] if kind == "py" else [])   # PF: py is opt-in behind --vs-py
         cmd += ["--rs", TARGET / "release" / "pruvc"] if kind == "rs" else ["--py", tree / "pruvc" / "pruvc.py"]
         cmd += extra
     rc, out = run(cmd, PY_TIMEOUT)

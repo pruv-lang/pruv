@@ -29,6 +29,7 @@ class Ctx:
 
     def __init__(self, drivers, g, update):
         self.drivers, self.g, self.update = drivers, g, update
+        self.disagree = 0   # PY/RS disagreements printed under --update-golden (the run then exits 1)
 
 
 def settle(ctx, key, outs, msg, summary):
@@ -37,6 +38,7 @@ def settle(ctx, key, outs, msg, summary):
     if len(outs) > 1 and outs[0] != outs[1]:
         if ctx.update:
             print("PY/RS DISAGREE %s: %s" % (key, msg))
+            ctx.disagree += 1
         else:
             raise AssertionError(msg)
     if ctx.g is not None:
@@ -664,6 +666,9 @@ def main(work, rs, py, vs_py=False, gargs=None):
     print("P18d: by-value fixed-prefix twins in 3 compiler modes, 5 must-reject shapes, no twin under --no-verify or reaching print or a G6 catalog operation, 2 optimized host runs")
     print("P18b/P18c: %s in 3 compiler modes and 2 manifest modes, 3 host runs, privacy, %d body rejects, %d macro shadows and diagnostics pass"
           % ("golden" + (" + rs == py" if vs_py else "") if g is not None else "single compiler", rejects, shadows))
+    if ctx.disagree:
+        print("FAIL: %d PY/RS disagreement(s); see work/pf_disagreements.md" % ctx.disagree)
+        return 1
     return 0
 
 
