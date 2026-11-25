@@ -533,8 +533,8 @@ impl Parser {
         self.expect("]")?;
         if !fixed_ok {
             return Err(PruvError::new("type", open.line, open.col, "fixed_array_position",
-                "a fixed-length array is a local, parameter, result or field of a non-generic struct only for now: not a generic or enum field, tuple component, type argument, nested array or `ref` (parity row P7-1 B)",
-                "keep the array in a let, a parameter, a result or a field of a non-generic struct"));
+                "a fixed-length array is a local, parameter, result or field of a non-generic struct or enum variant only for now: not a field of a generic type, tuple component, type argument, nested array or `ref` (parity row P7-8)",
+                "keep the array in a let, a parameter, a result or a field of a non-generic struct or enum"));
         }
         fixed_size(open.line, open.col, &elem, n)?;
         Ok(GType::fixed(elem, n))
@@ -1426,7 +1426,21 @@ impl Parser {
                         Some(&lp),
                     ));
                 }
-                fields = self.field_list(")")?;
+                if tparams.is_empty() {
+                    // P7-1 B: a variant of a non-generic enum may hold `[T; N]` inline (a by-value field)
+                    while !self.at(")", 0) {
+                        let fd = self.ident()?;
+                        self.expect(":")?;
+                        self.fixed_ok = true;
+                        let ty = self.type_()?;
+                        fields.push(FieldDecl { borrowed: false, line: fd.line, col: fd.col, name: fd.val, ty });
+                        if !self.at(")", 0) {
+                            self.expect(",")?;
+                        }
+                    }
+                } else {
+                    fields = self.field_list(")")?;
+                }
                 self.expect(")")?;
             }
             variants.push(VariantDecl { line: v.line, col: v.col, name: v.val, fields });

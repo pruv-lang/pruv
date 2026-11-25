@@ -1,0 +1,53 @@
+// P7-1 B step 3: [T; N] fields in variants of a non-generic enum
+enum Shape { Empty, Pts(n: i64, d: [i32; 3]), Flags(f: [bool; 2], b: [u8; 0]) }
+struct Holder { s: Shape, k: i64 }
+
+fn total(s: Shape) -> i64
+  ensures result >= -10000000000 && result <= 10000000000
+{
+  match s {
+    Shape::Empty => { return 0; }
+    Shape::Pts(n, d) => { return i64(d[0]) + i64(d[1]) + i64(d[2]) + len(d); }
+    Shape::Flags(f, b) => { if f[1] { return 7 + len(b); } return 8; }
+  }
+}
+
+fn mk(k: i64) -> Shape
+  requires 0 <= k && k < 100
+{
+  let a: [i32; 3] = [1, 2, i32(k)];
+  return Shape::Pts(k, a);
+}
+
+fn pick(o: Option<Shape>, i: i64) -> i64
+  requires 0 <= i && i < 3
+  ensures result >= -2147483648 && result <= 2147483647
+{
+  match o {
+    Some(s) => {
+      match s {
+        Shape::Pts(n, d) => { return i64(d[i]); }
+        Shape::Empty => { return 1; }
+        Shape::Flags(f, b) => { return 2; }
+      }
+    }
+    None => { return 0; }
+  }
+}
+
+fn run(i: i64) -> i64
+  requires 0 <= i && i < 3
+{
+  let s: Shape = mk(i);
+  let mut r: i64 = total(s);
+  match s {
+    Shape::Pts(n, d) => { r = r + 100 * i64(d[i]); }
+    Shape::Empty => { }
+    Shape::Flags(f, b) => { }
+  }
+  let h: Holder = Holder { s: Shape::Flags([false, i == 1], [u8(0); 0]), k: 5 };
+  r = r + 10000 * total(h.s) + h.k * 1000000;
+  let o: Option<Shape> = Some::<Shape>(mk(i + 4));
+  r = r + 100000000 * pick(o, i);
+  return r;
+}

@@ -3134,6 +3134,12 @@ impl<'a> FnGen<'a> {
         let ty = e.enum_name.as_str();
         let mut vals: Vec<V> = Vec::new();
         for x in &e.args {
+            if let Some(t) = expr_ty(x).as_deref().filter(|t| fixed_key(t).is_some()) {
+                // P7-1 B: a fixed-array variant field copies from the value's storage (like a struct field)
+                let p = self.fixed_ptr(x)?;
+                vals.push(V::agg(p, t));
+                continue;
+            }
             vals.push(self.evf(x, c, own)?);
         }
         let tag = t_variant_index(tt, ty, &e.variant)?;
@@ -4896,6 +4902,11 @@ impl<'a> FnGen<'a> {
                     if (self.is_ext(&fd.ty) || is_arr_name(&fd.ty) || is_collection(&fd.ty)) && !self.fb(&ty, Some(&a.ctor), &fd.name) {
                         v.mv = Some(Box::new((o.clone(), a.ctor.clone(), i, own_dead)));
                     }
+                }
+                // P7-1 B: a fixed-array variant field unpacks into fresh storage, which the binder owns as its slot
+                if fixed_key(&fd.ty).is_some() {
+                    bind.push((name.clone(), Bind::Slot(v)));
+                    continue;
                 }
                 bind.push((name.clone(), Bind::Ssa(v)));
             }

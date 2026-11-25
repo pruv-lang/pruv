@@ -2713,14 +2713,17 @@ fn is_digit(c: char) -> bool
   value (copy on assignment), `s.f[i]`, `s.f[i] = v` (also through `inout` and nested struct paths) and
   `s.f = <array>` work like a local array, a contract sees `len(s.f) == N` and the element range, and `old(s).f[i]`
   names the entry value. The `pub`/host/extern signature check looks through struct fields, so such a struct cannot
-  cross that boundary either. Code: Rust a `[T; N]` struct field; LLVM `[N x E]` inline in the struct.
+  cross that boundary either. Code: Rust a `[T; N]` struct field; LLVM `[N x E]` inline in the struct. A variant
+  of a non-generic enum may hold `[T; N]` fields the same way (`E::A(a)` copies `a` in, a `match` binder is a
+  read-only copy with length `N` and the element range); `==` on such an enum is `type/eq_type`, and the `pub`
+  signature check looks through variant fields too. Code: Rust a `[T; N]` variant field; LLVM `[N x E]` in the payload.
   Contracts (P7-1 B): a literal `[a, b]` / `[x; N]` may appear in `requires`, `ensures`, `assert`, `invariant`,
   `decreases` and quantifier bodies; its index must be proven in range like any contract index (`contract_domain` in
   `requires`), and `len` of a literal is `N`. `for x in a` over a fixed array is R-6q-2. Slice patterns (P7-1 B): a
   `match` on a `[T; N]` place takes prefix patterns of exactly `N` elements or of at most `N` with an unnamed `..`;
   binders read `a[i]` with the element type. Another length or a later arm (only the first arm can match) is
   `type/match_arms`, and a named rest `rest @ ..` (a view of the array) `type/fixed_array_operation`.
-  Rejected: `[T; N]` as a field of a generic struct or an enum variant, a tuple component or type argument, and
+  Rejected: `[T; N]` as a field of a generic struct or enum, a tuple component or type argument, and
   nested fixed arrays, are `type/fixed_array_position`; an element type other than a scalar (a view `[T]` too) is
   `type/fixed_array_element`; a negative or oversized length is `type/fixed_array_length`; a non-constant length is
   `type/const_expr` and a `bool` (a literal, `!`, a comparison, `&&`/`||`) or `char` length `type/const_type`; whole-array `==`/`!=`, use as a view `[T]`
@@ -2728,15 +2731,14 @@ fn is_digit(c: char) -> bool
   of a call inside a contract) are `type/fixed_array_operation`; a wrong element
   count is `type/type_mismatch`, and an `inout [T]` parameter given a `[T; N]` is `type/inout_argument`; `copy(a)`
   (it takes a view) is `type/type_mismatch`, `move a` `type/foreign_move` (a fixed array is a plain value) and a
-  fixed array as a `par` branch argument `type/parallel_argument`. Generic and
-  enum fields, tuples, type arguments and nested arrays are parity row P7-1 B
-  (remaining). The length bound `[T; <=N]`
+  fixed array as a `par` branch argument `type/parallel_argument`. Fields of generic types, tuples, type
+  arguments, nested arrays and a named rest in a slice pattern are parity row P7-8. The length bound `[T; <=N]`
   (section 7a) is unchanged. Tests: [accept](tests/spec/r6t_4_accept.pruv), [reject](tests/spec/r6t_4_reject.pruv),
   [index](tests/spec/r6t_4_reject_index.pruv), [literals](tests/runtime/p7_rt_fixed_literal.pruv),
   [order](tests/runtime/p7_rt_fixed_eval.pruv), [proven](tests/runtime/p7_rt_fixed_proven.pruv),
   [unverified](tests/runtime/p7_rt_fixed_oob_unverified.pruv), [for](tests/runtime/p7_rt_fixed_for.pruv),
   [contract literals](tests/runtime/p7_rt_fixed_contract_lit.pruv),
-  [slice patterns](tests/runtime/p7_rt_fixed_slice_pattern.pruv), [place if](tests/runtime/p7_rt_fixed_place_if.pruv), [generic lend](tests/runtime/p7_rt_fixed_generic_lend.pruv),
+  [slice patterns](tests/runtime/p7_rt_fixed_slice_pattern.pruv), [enum fields](tests/runtime/p7_rt_fixed_enum.pruv), [place if](tests/runtime/p7_rt_fixed_place_if.pruv), [generic lend](tests/runtime/p7_rt_fixed_generic_lend.pruv),
   [move](tests/must_reject/p7_fixed_move.pruv), [par](tests/must_reject/p7_fixed_par.pruv), [copy](tests/must_reject/p7_fixed_copy.pruv),
   [type](tests/must_reject/p7_array_type.pruv),
   [char element](tests/must_reject/p7_array_char_type.pruv), [owned](tests/must_reject/p7_fixed_owned.pruv),

@@ -1,0 +1,5 @@
+// P7-1 B step 3: == on an enum whose variant holds a [T; N] field directly
+enum E { A(a: [i64; 2]), B }
+fn f(x: E, y: E) -> i64
+  requires !(x == y)
+{ return 0; }
