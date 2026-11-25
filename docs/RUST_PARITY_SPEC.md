@@ -98,3 +98,6 @@ the B-bundle average (about 80 minutes per feature) and adjust bundle size.
 - PF-3: multi-file `--input` replay in the golden harness is recorded, not yet covered.
 - B8-1: moving a borrowed match target reports `borrow_conflict` (py) vs `foreign_borrow` (rs); the golden keeps rs. Decide the code in P8.
 - B8-2: B8's verify/llvmgen/proof changes were not audited; audit them with P10.
+- P1-1: the type table is built twice when pub/host/foreign functions exist; build it once (tidy).
+- P1-2: the LLVM harness accepts a function in proof mode if it has a single `nuw`; check every elided-check site.
+- P1-3: `u8`/`u16` used directly as an index or in `decreases` needs `i64(x)`; allow it in P3/P4.
