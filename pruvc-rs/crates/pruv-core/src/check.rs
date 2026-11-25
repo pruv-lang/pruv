@@ -366,6 +366,8 @@ struct Checker {
     for_holds: Vec<(String, Vec<String>)>,
     /// P4: enclosing range `for` loops: (position of the synthesized step, loop variable).
     for_steps: Vec<(i64, i64, String)>,
+    /// P5: enclosing while/for loops: (label, map_roots depth, map_iterations depth) at loop entry.
+    loop_frames: Vec<(Option<String>, usize, usize, Option<(i64, i64, String)>)>,
     // ---- G9 A0 metadata ----
     /// recursive type SCCs (names in declaration order), SCC-number order
     type_sccs: Vec<Vec<String>>,
@@ -1205,6 +1207,7 @@ impl Checker {
             map_iterations: Vec::new(),
             for_holds: Vec::new(),
             for_steps: Vec::new(),
+            loop_frames: Vec::new(),
             type_sccs: Vec::new(),
             recursive_vec_elements: HashSet::new(),
             boxed: Vec::new(),
@@ -1796,6 +1799,7 @@ impl Checker {
                 }
                 Stmt::Assign(s) => self.norm_expr(&mut s.value),
                 Stmt::FieldAssign(s) => self.norm_expr(&mut s.value),
+                Stmt::Break(_) | Stmt::Continue(_) => {}
                 Stmt::Return(s) => {
                     if let Some(v) = s.value.as_mut() {
                         self.norm_expr(v);
@@ -3920,6 +3924,69 @@ impl Checker {
         Ok(())
     }
 
+    /// P4/P5: checks a loop body (a `for` loop keeps its binder read-only and its collection held).
+    fn loop_body(&mut self, s: &mut While, scope: &mut Scope) -> Res<()> {
+        let mut sc = scope.clone();
+        match s.for_head.clone() {
+            None => self.block(&mut s.body, &mut sc)?,
+            Some(head) if head.slice => {
+                let (root, path) = for_collection(&s.body);
+                self.for_holds.push((root, path));
+                let r = self.block(&mut s.body, &mut sc);
+                self.for_holds.pop();
+                r?;
+            }
+            Some(head) => {
+                if let Some(e) = sc.get_mut(&head.var) {
+                    e.mutable = false;
+                }
+                self.for_steps.push((s.line, s.col, head.var));
+                let r = self.block(&mut s.body, &mut sc);
+                self.for_steps.pop();
+                r?;
+            }
+        }
+        Ok(())
+    }
+
+    /// P5: a `break`/`continue` needs a target loop it may leave, and ends its block.
+    fn loop_jump(&self, j: &Jump, what: &str, next: Option<&Stmt>) -> Res<()> {
+        let frame = match &j.label {
+            None => self.loop_frames.last(),
+            Some(l) => self.loop_frames.iter().rev().find(|(n, _, _, _)| n.as_ref() == Some(l)),
+        };
+        let Some(&(_, roots, iters, _)) = frame else {
+            return Err(match &j.label {
+                None => terr(j.line, j.col, "loop_jump_outside", format!("`{}` outside a while or for loop", what),
+                    "use `break`/`continue` only inside a while or for loop body"),
+                Some(l) => terr(j.line, j.col, "loop_label_unknown",
+                    format!("no enclosing loop has the label '{}", l),
+                    "label an enclosing loop with `'name: while` or `'name: for`"),
+            });
+        };
+        if self.map_iterations.len() > iters {
+            return Err(terr(j.line, j.col, "loop_jump_map",
+                format!("`{}` cannot leave a map iteration `for (k, v) in m`", what),
+                "map iterations always visit every entry; use a flag in the invariant instead"));
+        }
+        if self.map_roots.len() > roots {
+            return Err(terr(j.line, j.col, "loop_jump_map",
+                format!("`{}` cannot leave a mutable collection Some arm", what),
+                "end the arm first, then break or continue after the match"));
+        }
+        // the synthesized step of the innermost `for` follows a jump at the end of its body
+        let step_next = match (next, self.loop_frames.last()) {
+            (Some(Stmt::Assign(a)), Some((_, _, _, Some((l, c, n))))) => a.line == *l && a.col == *c && a.name == *n,
+            _ => false,
+        };
+        if next.is_some() && !step_next {
+            return Err(terr(j.line, j.col, "loop_jump_unreachable",
+                format!("statements after `{}` in the same block never run", what),
+                "remove them or move them before the jump"));
+        }
+        Ok(())
+    }
+
     fn stmt(&mut self, st: &mut Stmt, scope: &mut Scope, next: Option<&Stmt>) -> Res<()> {
         self.ckind = "code";
         self.boundary = None; // G5: only the statements below that allow a mutating call set it
@@ -3943,6 +4010,7 @@ impl Checker {
                     position(e, s.line, s.col)?;
                 }
             }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return(s) => {
                 if let Some(v) = &s.value {
                     position(v, s.line, s.col)?;
@@ -4255,27 +4323,21 @@ impl Checker {
                 self.ckind = "decreases";
                 self.expect_measure(&mut s.decreases, scope, true)?;
                 self.ckind = "code";
-                let mut sc = scope.clone();
-                match s.for_head.clone() {
-                    None => self.block(&mut s.body, &mut sc)?,
-                    Some(head) if head.slice => {
-                        let (root, path) = for_collection(&s.body);
-                        self.for_holds.push((root, path));
-                        let r = self.block(&mut s.body, &mut sc);
-                        self.for_holds.pop();
-                        r?;
-                    }
-                    Some(head) => {
-                        if let Some(e) = sc.get_mut(&head.var) {
-                            e.mutable = false;
-                        }
-                        self.for_steps.push((s.line, s.col, head.var));
-                        let r = self.block(&mut s.body, &mut sc);
-                        self.for_steps.pop();
-                        r?;
+                if let Some(l) = &s.label {
+                    if self.loop_frames.iter().any(|(n, _, _, _)| n.as_ref() == Some(l)) {
+                        return Err(terr(s.line, s.col, "loop_label_duplicate",
+                            format!("loop label '{} is already used by an enclosing loop", l),
+                            "give the inner loop a different label"));
                     }
                 }
+                let step = s.for_head.as_ref().map(|h| (s.line, s.col, h.counter.clone()));
+                self.loop_frames.push((s.label.clone(), self.map_roots.len(), self.map_iterations.len(), step));
+                let r = self.loop_body(s, scope);
+                self.loop_frames.pop();
+                r?;
             }
+            Stmt::Break(j) => self.loop_jump(j, "break", next)?,
+            Stmt::Continue(j) => self.loop_jump(j, "continue", next)?,
             Stmt::ForMap(s) => self.for_map(s, scope)?,
             Stmt::Return(s) => {
                 // LG9 (G-LG8-1): `return f(move d.a);` with a take parameter
@@ -7973,6 +8035,7 @@ pub fn opaque_inline(prog: &mut Program) {
                     x.invariants.iter_mut().for_each(|a| ex(a, d));
                     st(&mut x.body, d);
                 }
+                Stmt::Break(_) | Stmt::Continue(_) => {}
                 Stmt::Return(x) => {
                     if let Some(v) = x.value.as_mut() {
                         ex(v, d);
@@ -8182,6 +8245,7 @@ fn par_info(f: &Function, funcs: &HashMap<String, Rc<FuncInfo>>) -> ParInfo {
                     ex(&x.place, info, funcs);
                     walk(&x.body, info, funcs);
                 }
+                Stmt::Break(_) | Stmt::Continue(_) => {}
                 Stmt::Return(x) => if let Some(v) = &x.value { ex(v, info, funcs); },
                 Stmt::ExprStmt(x) => ex(&x.expr, info, funcs),
                 Stmt::Par(x) => {
@@ -8240,6 +8304,7 @@ fn cost_calls(stmts: &[Stmt], out: &mut Vec<Call>) {
             Stmt::If(x) => { ex(&x.cond, out); cost_calls(&x.then, out); cost_calls(&x.els, out); }
             Stmt::While(x) => { ex(&x.cond, out); cost_calls(&x.body, out); }
             Stmt::ForMap(x) => cost_calls(&x.body, out),
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return(x) => if let Some(v) = &x.value { ex(v, out); },
             Stmt::ExprStmt(x) => ex(&x.expr, out),
             Stmt::Par(x) => for c in &x.calls { ex(c, out); },

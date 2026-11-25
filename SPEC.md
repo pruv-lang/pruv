@@ -2481,7 +2481,7 @@ write-back, invariants and the cost bound take the `while` path. `for` is contex
   read-only in the body (`type/immutable`). The loop has no `decreases` clause (`parse/for_decreases`): the verifier
   uses the generated measure `b - i`. It proves the user invariants on entry and after each step, as for `while`, and
   in the body it knows `a <= i < b` (so `a[i]` with `b <= len(a)` needs no other fact); after the loop the invariants
-  hold with `i == max(a, b)`. Code: Rust emits `for i in a..b { .. }` and LLVM the counted `while` loop; a proven
+  hold with `i == max(a, b)`, joined with the state of each `break` (R-6r-1). Code: Rust emits `for i in a..b { .. }` and LLVM the counted `while` loop; a proven
   `a[i]` in the body is an unchecked read. Tests: [accept](tests/spec/r6q_1_accept.pruv),
   [reject](tests/spec/r6q_1_reject.pruv), [false contract](tests/spec/r6q_1_reject_contract.pruv),
   [runtime](tests/runtime/p4_rt_for.pruv).
@@ -2504,16 +2504,69 @@ write-back, invariants and the cost bound take the `while` path. `for` is contex
 - R-6q-3 **Not yet supported.** `for (i, x) in` over an array, view or `Vec` is `type/for_enumerate` (bundle P15);
   inclusive ranges `a..=b`, iterator expressions such as `P.iter()` and adapters (`enumerate`, `zip`, `rev`, `map`,
   `filter`) are `parse/for_iterable` (P15); non-integer range bounds and `Vec` of other element types are
-  `type/for_iterable`; `break`/`continue` are P5. Map iteration stays R-6e-13.
+  `type/for_iterable`; `break`/`continue` are R-6r. Map iteration stays R-6e-13.
   Tests: [reject](tests/spec/r6q_3_reject.pruv), [accept](tests/spec/r6q_3_accept.pruv), [adapter](tests/must_reject/p4_for_adapter.pruv),
   [inclusive](tests/must_reject/p4_for_inclusive.pruv), [Vec of String](tests/must_reject/p4_for_vec_string.pruv).
+
+## 6r. Loop control (P5)
+```
+fn pair(n: i64) -> i64
+  requires 0 <= n && n <= 50
+  ensures result >= -1
+{
+  let mut r: i64 = -1;
+  'outer: for i in 0..n invariant r == -1 {
+    for j in 0..n invariant r == -1 {
+      if i * j == 12 { r = i * 100 + j; break 'outer; }
+      if j > i { continue 'outer; }
+    }
+  }
+  return r;
+}
+```
+`break` and `continue` are statements; each ends its block (statements after one in the same block are
+`type/loop_jump_unreachable`). Outside a `while` or `for` body they are `type/loop_jump_outside`.
+
+- R-6r-1 **Break and continue.** `break;` leaves the innermost `while` or `for`; `continue;` ends the current
+  iteration. In a `for` loop, `continue` runs the step (the next `i` or the next element), as in Rust. The verifier
+  treats each `continue` as a back edge: the loop invariants must hold there and, for `while`, the `decreases`
+  measure must be strictly below its value at the iteration start (`verify/invariant_preserved`,
+  `verify/decreases_decrease`); as on the end-of-body edge, `>= 0` is checked at each iteration start (section 7
+  item 5), so the measure may go negative only on an edge after which the condition is false; a `for` measure is generated and decreases by the step. After the loop the state is
+  the join of the normal exit (invariants and the negated condition) and the state at each `break`, so a fact holds
+  after the loop only if it holds on every exit. Drops of owned locals and the write-back of live `inout` place
+  bindings run on every exit edge (`break`, `continue`, the end of the body and `return`). A jump may not leave a
+  map iteration `for (k, v) in m` or a mutable collection `Some` arm (`type/loop_jump_map`). Code: Rust emits native
+  `break;`/`continue;` with no flag variables, and LLVM branches to the loop exit, the condition, or (for a `for`
+  `continue`) the step block. Tests: [accept](tests/spec/r6r_1_accept.pruv), [reject](tests/spec/r6r_1_reject.pruv),
+  [false contract](tests/spec/r6r_1_reject_contract.pruv), [runtime](tests/runtime/p5_rt_loop.pruv),
+  [exit edges runtime](tests/runtime/p5_rt_exit.pruv), [decreases](tests/must_reject/p5_continue_decreases.pruv),
+  [outside](tests/must_reject/p5_jump_outside.pruv), [unreachable](tests/must_reject/p5_jump_unreachable.pruv),
+  [map](tests/must_reject/p5_jump_map.pruv).
+- R-6r-2 **Labels.** `'name: while` and `'name: for` label a loop; `break 'name;` and `continue 'name;` target it
+  from any depth of nested loops. A label names a loop only (`parse/loop_label_target`); `'static`, `'_` and keyword
+  labels such as `'fn`, `'loop` or `'ref` (Rust rejects them) are `parse/loop_label_name`; a label already used by an enclosing loop is `type/loop_label_duplicate`; a jump to a
+  label no enclosing loop has is `type/loop_label_unknown`. The verifier rules of R-6r-1 apply to the targeted loop:
+  a labeled `continue` is a back edge of that loop and a labeled `break` joins its exit state. Code: Rust emits
+  `'name: for`/`'name: while` with `break 'name;`/`continue 'name;`. Tests: [accept](tests/spec/r6r_2_accept.pruv),
+  [reject](tests/spec/r6r_2_reject.pruv), [false contract](tests/spec/r6r_2_reject_contract.pruv),
+  [duplicate](tests/must_reject/p5_label_duplicate.pruv), [target](tests/must_reject/p5_label_target.pruv),
+  [reserved name](tests/must_reject/p5_label_static.pruv), [keyword](tests/must_reject/p5_label_keyword.pruv), [ref](tests/must_reject/p5_label_ref.pruv).
+- R-6r-3 **Not yet supported.** `break` followed by a value is `parse/break_value`; `loop { .. }`, as a statement or
+  as an expression, is `parse/loop_unsupported` (write a `while` with a measure); a `continue` followed by anything
+  but an optional label and `;`, and a `break` missing its `;` before `}`, are `parse/loop_jump_syntax`;
+  iterator adapters stay `parse/for_iterable` (bundle P15). Tests: [reject](tests/spec/r6r_3_reject.pruv),
+  [accept](tests/spec/r6r_3_accept.pruv), [loop](tests/must_reject/p5_loop.pruv),
+  [loop expression](tests/must_reject/p5_loop_expr.pruv), [continue value](tests/must_reject/p5_continue_value.pruv),
+  [missing semicolon](tests/must_reject/p5_break_semicolon.pruv).
 
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
 2. Every `+ - * unary-` in code: result within i64 range.
 3. `/ %`: divisor > 0, dividend >= 0. `alloc(n, v)`: 0 <= n <= 2^40.
 4. Callee `requires` at each call; `ensures` at each return; `assert`s.
-5. Loop invariants hold on entry and are preserved; `decreases` is >= 0 at each iteration start and strictly decreases.
+5. Loop invariants hold on entry and are preserved on every back edge (the end of the body and each `continue`);
+   `decreases` is >= 0 at each iteration start and strictly decreases on every back edge (R-6r-1).
    For a recursive call, the callee's `decreases` (evaluated on the arguments) is >= 0 and strictly below the caller's
    value at entry (section 6e).
 6. Array parameters have `0 <= len(a) <= 2^40` and elements in i64 range (assumed; guaranteed for Pruv callers because every alloc is proven <= 2^40;
@@ -2936,6 +2989,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/attribute_position` | parse | a recognized attribute not directly before a private `fn` item, or a `#[` that does not start a top-level item |
 | `parse/bad_char` | parse | a character that starts no token |
 | `parse/bad_int` | parse | a malformed integer literal, such as a trailing `_` (R-1-2) |
+| `parse/break_value` | parse | `break` followed by a value (not `;`, a label or `}`); bundle P15 (R-6r-3) |
 | `parse/cost_syntax` | parse | `cost` needs one expression and must be the last header clause |
 | `parse/decreases_syntax` | parse | a malformed, empty or repeated `decreases` clause |
 | `parse/element_storage_type` | parse | `u8` used outside an array element type |
@@ -2945,6 +2999,10 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/generic_syntax` | parse | a malformed type parameter list or type argument list |
 | `parse/inout_syntax` | parse | a malformed `inout` parameter or argument |
 | `parse/lib_module_conflict` | parse | a module is found both in the program and in a library path |
+| `parse/loop_jump_syntax` | parse | a `continue` followed by anything but an optional label and `;`, or a `break` whose `;` is missing before `}` (R-6r-3) |
+| `parse/loop_label_name` | parse | a reserved loop label: `'static`, `'_` or a keyword such as `'fn` (R-6r-2) |
+| `parse/loop_label_target` | parse | a loop label not followed by `while` or `for` (R-6r-2) |
+| `parse/loop_unsupported` | parse | `loop { .. }` as a statement or an expression; write a `while` with a `decreases` measure (R-6r-3) |
 | `parse/module_alias` | parse | one file is loaded as two modules |
 | `parse/module_file` | parse | a module's file is missing, unreadable or not UTF-8 |
 | `parse/module_syntax` | parse | a malformed `mod` declaration |
@@ -3018,6 +3076,11 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/int_range` | type | an integer literal outside the range of its type (R-6p-1, R-6p-5) |
 | `type/internal` | type | an unknown statement or expression reached the checker |
 | `type/invariant_decl` | type | a struct invariant clause that is not bool, uses `old()` or `result`, sits on a generic struct, or a parameter `result` of that struct type |
+| `type/loop_jump_map` | type | a `break`/`continue` that would leave a map iteration or a mutable collection `Some` arm (R-6r-1) |
+| `type/loop_jump_outside` | type | a `break`/`continue` outside a `while` or `for` body (R-6r-1) |
+| `type/loop_jump_unreachable` | type | statements after a `break`/`continue` in the same block (R-6r-1) |
+| `type/loop_label_duplicate` | type | a loop label already used by an enclosing loop (R-6r-2) |
+| `type/loop_label_unknown` | type | a `break`/`continue` label that no enclosing loop has (R-6r-2) |
 | `type/match_arity` | type | a match arm binds the wrong number of fields |
 | `type/match_arms` | type | match arms that are missing or repeated |
 | `type/match_type` | type | a match on a value that is not Option, Result or an enum |

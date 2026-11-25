@@ -236,6 +236,7 @@ fn g2_cand_stmts(stmts: &[Stmt], pick: &dyn Fn(&str) -> bool, lits: bool, ghost:
                 }
                 g2_cand_stmts(&w.body, pick, lits, ghost, best);
             }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     g2_cand_expr(v, lits, best);
@@ -459,6 +460,7 @@ fn g3_stmts(stmts: &[Stmt], out: &mut G3Cands) {
                 }
                 g3_stmts(&w.body, out);
             }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     g3_expr(v, out);
@@ -606,6 +608,7 @@ fn g9_size_stmts(stmts: &[Stmt], out: &mut Vec<(i64, i64)>) {
                 }
                 g9_size_stmts(&w.body, out);
             }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     g9_size_expr(v, out);
@@ -746,6 +749,7 @@ fn g5_walk_stmts(stmts: &[Stmt], f: &mut dyn FnMut(&Expr)) {
                 }
                 g5_walk_stmts(&w.body, f);
             }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     g5_walk_expr(v, f);

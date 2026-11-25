@@ -236,6 +236,7 @@ fn stmt_names(stmts: &[Stmt], out: &mut HashSet<String>) {
                     stmt_names(&a.body, out);
                 }
             }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
         }
     }
 }
@@ -821,6 +822,7 @@ fn lg31_stmts_ok(stmts: &[Stmt], w: &str, pushes: &mut usize) -> bool {
                 && m.arms.iter().all(|a| a.binders.iter().all(|b| b != w) && lg31_stmts_ok(&a.body, w, pushes))
         }
         Stmt::Par(p) => p.calls.iter().all(|c| lg31_expr_ok(c, w)),
+        Stmt::Break(_) | Stmt::Continue(_) => true,
     })
 }
 

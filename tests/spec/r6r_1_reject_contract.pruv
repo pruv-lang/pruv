@@ -1,0 +1,13 @@
+// spec: R-6r-1 reject
+// After the loop the break state (i == 3) joins the normal exit, so result == n is false for n > 3.
+fn upto(n: i64) -> i64
+  requires 0 <= n && n <= 100
+  ensures result == n
+{
+  let mut i: i64 = 0;
+  while i < n invariant 0 <= i && i <= n decreases n - i {
+    if i == 3 { break; }
+    i = i + 1;
+  }
+  return i;
+}

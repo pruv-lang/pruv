@@ -1,0 +1,13 @@
+pub struct Value { n: i64 }
+pub struct State { values: HashMap<String, Value> }
+
+pub fn f(inout st: State) -> i64 {
+  let mut c: i64 = 0;
+  while c < 1 invariant 0 <= c && c <= 1 decreases 1 - c {
+    for (k, v) in st.values invariant 0 <= c && c <= 1 {
+      if v.n > 0 { break; }
+    }
+    c = 1;
+  }
+  return c;
+}

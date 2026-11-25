@@ -119,10 +119,13 @@ the B-bundle average (about 80 minutes per feature) and adjust bundle size.
 - P4-3: inclusive ranges `a..=b` are rejected (`parse/for_iterable`); add them with an end-at-max rule when a workload needs one.
 - P4-4: the binder of `for x in a` over `[u8]`/`[u16]` is `i64` (the type of an index read today), so the Rust loop is `for &x in a.iter() { let x = x as i64; ... }`; hand Rust keeps `x: u8`. Same machine code after the widen; change it when element reads keep their width.
 - P4-5: `for x in v` over `Vec<T>` is Rust only until LLVM has `Vec` (`codegen/unsupported_type`, P12).
-- P4-6: `break`/`continue` inside `for` come with P5 (the exit edges must also leave the hidden counter and bound unread).
+- P4-6: closed in P5 (`break`/`continue` in `for`, R-6r-1; Rust emits native jumps in the native `for`, so the hidden counter and bound stay unread).
 - P4-7: an outer loop's `index(x)` is not in scope in an inner loop's invariant; state the outer position through the outer counter or a local copy.
 - P4-8: an invariant ending in an uppercase name before `{` parses as a struct literal; parenthesize it until the invariant is parsed without struct literals.
 - P4-9: `for x in a` over a generic `[T]` (T an integer or bool after monomorphization) is accepted but not yet stated in R-6q-2.
 - P4-10: assigning the slice binder reports the `let mut` hint of an immutable local; a for-binder message is queued.
 - P4-11: missing tests from the P4 audit: reverse range `a > b` at runtime, `u8` 255 / `i8` / `i64` max bounds, `Vec<u8>`/`Vec<bool>`/`Vec<u32>` runtime, nested for over the same collection, binder-assignment reject.
+- P5-1: `break` with a value is `parse/break_value` and `loop { .. }` is `parse/loop_unsupported` (P15); write a measured `while` with a result local.
+- P5-2: a `break`/`continue` that would leave a map iteration `for (k, v) in m` or a mutable collection `Some` arm is `type/loop_jump_map`; lift it when map iteration and the `Some` arm write-back have per-edge exits.
+- P5-3: iterator adapters with `break` (`take_while`, `position`, `find`) stay P15.
 - CI-1: `tests/inference/inf_budget.pruv --infer` is load dependent: z3 per-query time limits turn 783 to 1177 queries `unknown` across three local runs, so the trace hash and `errs` change between runs (main CI 45560012284 failed on it; P4 had refreshed its golden to one such run, reverted). Make the budget case deterministic (resource limit instead of wall time, or fewer candidates) before relying on its golden. Interim (2026-11-25): `tests/diff_trace.py` `LOAD_DEPENDENT` hashes only this case's inference outcome (fallback, kept invariants, stopped early); under load the 5 s whole-inference deadline stops it with `timeout` instead of `budget_exhausted`, and both count as stopped. Remove the entry once the case is deterministic.

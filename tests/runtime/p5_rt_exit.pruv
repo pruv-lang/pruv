@@ -1,0 +1,74 @@
+// P5 runtime: exit edges with a live inout borrow (write-back), an owned Vec dropped on break/continue,
+// early return mixed with break, break on the last iteration, break in a for over a Vec
+fn bump_until(inout v: [i64], lim: i64) -> i64
+  requires len(v) <= 100
+  requires forall k in 0..len(v): 0 <= v[k] && v[k] <= 100
+  requires 0 <= lim && lim <= 1000
+  ensures len(v) == old(len(v))
+  ensures result >= -1 && result < len(v)
+{
+  let mut r: i64 = -1;
+  for i in 0..len(v) invariant r == -1 && len(v) == old(len(v)) {
+    let d = inout v[i];
+    if d < 1000 && d > -1000 { d = d + 10; }
+    if d > lim { r = i; break; }
+    if d == 15 { continue; }
+  }
+  return r;
+}
+
+fn owned(n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 50
+  ensures 0 <= result && result <= 50
+{
+  let mut c: i64 = 0;
+  for i in 0..n invariant 0 <= c && c <= i {
+    let t: Vec<i64> = vec_push::<i64>(vec_new::<i64>(), i);
+    if i == 7 { break; }
+    if i % 2 == 0 { continue; }
+    c = c + len(t);
+  }
+  return c;
+}
+
+fn mixed(a: [i64]) -> i64
+  requires len(a) <= 100
+  ensures result >= -2 && result < 100
+{
+  let mut i: i64 = 0;
+  let mut r: i64 = -1;
+  while i < len(a) invariant 0 <= i && i <= len(a) && r == -1 decreases len(a) - i {
+    if a[i] < 0 { return -2; }
+    if a[i] == 0 { r = i; break; }
+    i = i + 1;
+  }
+  return r;
+}
+
+fn last(n: i64) -> i64
+  requires 1 <= n && n <= 50
+  ensures result == n - 1 || result == -1
+{
+  let mut r: i64 = -1;
+  for i in 0..n invariant r == -1 {
+    if i == n - 1 { r = i; break; }
+  }
+  return r;
+}
+
+fn run(k: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 10
+{
+  let mut v: [i64] = alloc(k, 5);
+  if k > 3 { v[3] = 50; }
+  let b: i64 = bump_until(inout v, 40);
+  let mut s: i64 = 0;
+  for x in v invariant 0 <= s && s <= index(x) * 1000 {
+    if x < 0 || x > 1000 { break; }
+    s = s + x;
+  }
+  let mut a: [i64] = alloc(k, 3);
+  if k > 5 { a[5] = 0; }
+  if k > 8 { a[1] = -4; }
+  return (b + 1) + s * 100 + owned(k) * 1000000 + (mixed(a) + 2) * 100000000 + (last(k + 1) + 1) * 10000000000;
+}

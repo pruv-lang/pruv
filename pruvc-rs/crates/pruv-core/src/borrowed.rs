@@ -261,6 +261,7 @@ pub(crate) fn walk_statement<'a>(
             block(&s.body);
         }
         Stmt::Match(s) => { expr(&s.scrutinee); for a in &s.arms { block(&a.body); } }
+        Stmt::Break(_) | Stmt::Continue(_) => {}
         Stmt::Return(s) => s.value.iter().for_each(expr),
         Stmt::Assert(s) => expr(&s.cond),
         Stmt::ExprStmt(s) => expr(&s.expr),
@@ -370,6 +371,8 @@ struct Graph {
     borrows: Vec<Roots>,
     places: HashMap<usize, (String, String, Vec<String>)>,
     failure: Option<(usize, PruvError)>,
+    /// P5: enclosing while loops during `build`: (label, head point, break points).
+    loops: Vec<(Option<String>, usize, Vec<usize>)>,
 }
 
 impl Graph {
@@ -809,11 +812,28 @@ impl Analysis<'_> {
                     out.extend(self.build(f, &s.els, vec![n], locals, scope, graph));
                     graph.join(out)
                 }
-                Stmt::While(While { body, .. }) | Stmt::ForMap(ForMap { body, .. }) => {
+                Stmt::While(While { body, label, .. }) => {
+                    // P5: `continue` is a back edge to the head, `break` an exit edge after the loop.
+                    graph.loops.push((label.clone(), n, Vec::new()));
+                    for p in self.build(f, body, vec![n], locals, scope, graph) {
+                        graph.points[p].succ.push(n);
+                    }
+                    let mut out = graph.loops.pop().map(|l| l.2).unwrap_or_default();
+                    out.insert(0, n);
+                    out
+                }
+                Stmt::ForMap(ForMap { body, .. }) => {
                     for p in self.build(f, body, vec![n], locals, scope, graph) {
                         graph.points[p].succ.push(n);
                     }
                     vec![n]
+                }
+                Stmt::Break(j) | Stmt::Continue(j) => {
+                    let brk = matches!(st, Stmt::Break(_));
+                    if let Some(l) = graph.loops.iter_mut().rev().find(|l| j.label.is_none() || l.0 == j.label) {
+                        if brk { l.2.push(n) } else { let head = l.1; graph.points[n].succ.push(head) }
+                    }
+                    Vec::new()
                 }
                 Stmt::Match(s) => {
                     let mut out = Vec::new();

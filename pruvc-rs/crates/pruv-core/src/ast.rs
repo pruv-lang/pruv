@@ -284,7 +284,12 @@ pub struct While {
     pub line: i64, pub col: i64, pub cond: Expr, pub invariants: Vec<Expr>, pub decreases: Expr, pub body: Vec<Stmt>,
     /// P4: set when the parser lowered a `for` loop into this `while` (see parser `for_loop`).
     pub for_head: Option<ForHead>,
+    /// P5: the Rust-style loop label `'name` (without the quote), on `'name: while` or `'name: for`.
+    pub label: Option<String>,
 }
+/// P5: `break ['label];` or `continue ['label];`. `label` is the name without the quote.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Jump { pub line: i64, pub col: i64, pub label: Option<String> }
 /// P4: a `for` loop lowered by the parser to `if true { let ...; while ... }`. The wrapper `If` holds the hidden
 /// bound lets; the last body statement is the synthesized step `idx = idx + 1` at the `for` position.
 #[derive(Debug, Clone, PartialEq)]
@@ -343,6 +348,10 @@ pub enum Stmt {
     ExprStmt(ExprStmt),
     FieldAssign(FieldAssign),
     Match(Match),
+    /// P5: leaves the target loop.
+    Break(Jump),
+    /// P5: goes to the next iteration of the target loop (a `for` loop runs its step first).
+    Continue(Jump),
 }
 
 impl Stmt {
@@ -360,6 +369,7 @@ impl Stmt {
             Self::ExprStmt(s) => (s.line, s.col),
             Self::FieldAssign(s) => (s.line, s.col),
             Self::Match(s) => (s.line, s.col),
+            Self::Break(s) | Self::Continue(s) => (s.line, s.col),
         }
     }
 }

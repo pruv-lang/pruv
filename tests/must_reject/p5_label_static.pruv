@@ -1,0 +1,1 @@
+fn f(n: i64) -> i64 { 'static: while n > 0 decreases n { break; } return 0; }

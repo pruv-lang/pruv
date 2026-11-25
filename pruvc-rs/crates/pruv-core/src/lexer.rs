@@ -315,8 +315,13 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
                 continue;
             }
             let stmt_for = v == "for" && brace_depth > 0
-                && toks.last().is_some_and(|t| t.kind == Kind::Op && matches!(t.val.as_str(), "{" | "}" | ";"));
-            let is_kw = stmt_for || KEYWORDS.contains(&v.as_str());
+                && (toks.last().is_some_and(|t| t.kind == Kind::Op && matches!(t.val.as_str(), "{" | "}" | ";"))
+                    // P5: `'l: for`
+                    || (toks.last().is_some_and(|t| t.kind == Kind::Op && t.val == ":")
+                        && toks.len() >= 2 && toks[toks.len() - 2].val.starts_with('\'')));
+            // P5: `break`, `continue` and `loop` are statement keywords inside a body (the parser rejects `loop`).
+            let stmt_jump = matches!(v.as_str(), "break" | "continue" | "loop") && brace_depth > 0;
+            let is_kw = stmt_for || stmt_jump || KEYWORDS.contains(&v.as_str());
             if !is_kw && (v.starts_with("pruv_") || v.contains("__") || RUST_KEYWORDS.contains(&v.as_str())) {
                 return Err(PruvError::new(
                     "parse",
@@ -330,6 +335,25 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
             let end = col + (pos - start) as i64;
             let val = if v == "ref" { REF_IDENT.to_string() } else { v };
             toks.push(Tok { kind: if is_kw { Kind::Kw } else { Kind::Id }, val, line, col, end });
+        } else if c == '\'' && pos + 1 < n && (src[pos + 1].is_ascii_alphabetic() || src[pos + 1] == '_') {
+            // P5: a loop label `'name`, kept as one Op token whose val includes the quote.
+            let start = pos;
+            pos += 1;
+            while pos < n && (src[pos].is_ascii_alphanumeric() || src[pos] == '_') {
+                pos += 1;
+            }
+            let v: String = src[start..pos].iter().collect();
+            // Rust rejects keyword labels (`'fn`, `'loop`, `'self`), so Pruv and Rust keywords are reserved too.
+            let name = &v[1..];
+            if v.contains("__") || name.starts_with("pruv_") || name == "static" || name == "_"
+                || KEYWORDS.contains(&name) || RUST_KEYWORDS.contains(&name)
+                || matches!(name, "for" | "break" | "continue" | "loop" | "while" | "if" | "else" | "ref")
+            {
+                return Err(PruvError::new("parse", line, col, "loop_label_name",
+                    format!("loop label {} is reserved", repr_str(&v)),
+                    "pick another label name; `'static`, `'_`, keywords, names with __ and pruv_ names are reserved"));
+            }
+            toks.push(Tok { kind: Kind::Op, val: v, line, col, end: col + (pos - start) as i64 });
         } else if let Some(op) = match_op(src, pos) {
             if op == "#[" {
                 // An attribute must start a top-level item. Let the parser reject stacked attributes.

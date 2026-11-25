@@ -1,0 +1,26 @@
+// spec: R-6r-2 accept
+// Labels: break 'outer leaves both loops, continue 'outer steps the outer counter.
+fn pair(n: i64) -> i64
+  requires 0 <= n && n <= 50
+  ensures result >= -1 && result < 5100
+{
+  let mut r: i64 = -1;
+  'outer: for i in 0..n invariant r == -1 {
+    for j in 0..n invariant r == -1 {
+      if i * j == 12 { r = i * 100 + j; break 'outer; }
+      if j > i { continue 'outer; }
+    }
+  }
+  return r;
+}
+
+fn lab() -> i64
+  ensures result == 7
+{
+  let mut r: i64 = 0;
+  'a: while r < 1 invariant r == 0 decreases 1 - r {
+    'b: while true invariant r == 0 decreases 0 { r = 7; break 'a; }
+    r = 1;
+  }
+  return r;
+}

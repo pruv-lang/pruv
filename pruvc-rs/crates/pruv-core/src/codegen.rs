@@ -1047,6 +1047,7 @@ pub(crate) fn static_str_locals(f: &Function, fmap: &HashMap<String, &Function>)
                         }
                         self.block(&x.body);
                     }
+                    Stmt::Break(_) | Stmt::Continue(_) => {}
                     Stmt::Return(x) => {
                         if let Some(v) = &x.value {
                             self.visit(v, false);
@@ -1390,6 +1391,11 @@ fn same_bound(a: &Expr, b: &Expr) -> bool {
         (Expr::Var(x), Expr::Var(y)) => x.name == y.name,
         _ => false,
     }
+}
+
+/// P5: the Rust label prefix of a labeled loop, `'name: `.
+fn loop_label(label: &Option<String>) -> String {
+    label.as_ref().map_or(String::new(), |l| format!("'{}: ", l))
 }
 
 /// Assignments `i = X` in tail position of a `while i < X && ...` body: nothing runs between them and the next
@@ -3927,7 +3933,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
             self.vars.insert(head.var.clone(), start.ty.clone());
             (format!("for {} in {}..{} {{", head.var, a, b), &w.body[..w.body.len() - 1], None)
         };
-        self.emit(ind, &header);
+        self.emit(ind, &format!("{}{}", loop_label(&w.label), header));
         if self.cost {
             self.emit(ind + 1, &Self::cost_add("1"));
         }
@@ -4596,9 +4602,16 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 }
                 self.emit(ind, "}");
             }
+            Stmt::Break(j) | Stmt::Continue(j) => {
+                let kw = if matches!(st, Stmt::Break(_)) { "break" } else { "continue" };
+                match &j.label {
+                    Some(l) => self.emit(ind, &format!("{} '{};", kw, l)),
+                    None => self.emit(ind, &format!("{};", kw)),
+                }
+            }
             Stmt::While(x) => {
                 let c = self.e(&x.cond)?;
-                self.emit(ind, &format!("while {} {{", c));
+                self.emit(ind, &format!("{}while {} {{", loop_label(&x.label), c));
                 if self.cost {
                     self.emit(ind + 1, &Self::cost_add("1"));
                 }

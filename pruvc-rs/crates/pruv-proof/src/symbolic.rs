@@ -354,6 +354,7 @@ fn uses_utf8(f: &ast::Function, funcs: &HashMap<String, &ast::Function>) -> bool
             Stmt::ExprStmt(s) => uses(&s.expr),
             Stmt::Match(s) => uses(&s.scrutinee) || s.arms.iter().any(|a| block(&a.body, uses)),
             Stmt::Par(s) => s.calls.iter().any(uses),
+            Stmt::Break(_) | Stmt::Continue(_) => false,
         })
     }
 
@@ -434,6 +435,7 @@ fn stmt_pos(s: &Stmt) -> Pos {
         Stmt::ExprStmt(x) => (x.line, x.col),
         Stmt::FieldAssign(x) => (x.line, x.col),
         Stmt::Match(x) => (x.line, x.col),
+        Stmt::Break(x) | Stmt::Continue(x) => (x.line, x.col),
     };
     mk_pos(l, c)
 }
@@ -577,7 +579,7 @@ fn call_writes(stmts: &[Stmt], out: &mut BTreeSet<String>, select: &impl Fn(&ast
                     call_writes(&a.body, out, select);
                 }
             }
-            Stmt::Assert(_) | Stmt::FieldAssign(_) | Stmt::IndexAssign(_) => {}
+            Stmt::Assert(_) | Stmt::FieldAssign(_) | Stmt::IndexAssign(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
         }
     }
 }
@@ -1101,6 +1103,8 @@ pub struct FnVerifier<'a> {
     /// environment. Empty for a function without inout parameters.
     pub(crate) snap: Env,
     iter_places: Vec<Expr>,
+    /// P5: one frame per enclosing while loop: (label, break states, continue states).
+    jumps: Vec<(Option<String>, Vec<State>, Vec<State>)>,
     /// G4b-3 (verify.py `s._kmemo`): AST id -> key piece of that assertion (digest, fresh names; obligation.rs
     /// `key_text`).
     pub(crate) kmemo: HashMap<u32, (String, Vec<String>)>,
@@ -1444,6 +1448,7 @@ fn walk_len_uses<'a>(
             Stmt::Par(s) => s.calls.iter().for_each(&mut expr),
             Stmt::ExprStmt(s) => expr(&s.expr),
             Stmt::Match(s) => expr(&s.scrutinee),
+            Stmt::Break(_) | Stmt::Continue(_) => {}
         }
         for block in stmt_blocks(stmt) {
             walk_len_uses(block, &aliases, visit);
@@ -1612,6 +1617,7 @@ impl<'a> FnVerifier<'a> {
             fn_tag: 0,
             snap: Env::default(),
             iter_places: Vec::new(),
+            jumps: Vec::new(),
             kmemo: HashMap::new(),
             inv_decls: HashMap::new(),
         }
@@ -6158,6 +6164,14 @@ impl<'a> FnVerifier<'a> {
                 let mut st = st;
                 self.loop_(Loop::While(w), &mut st)
             }
+            Stmt::Break(j) | Stmt::Continue(j) => {
+                // P5: the state at the jump flows to its loop (the checker resolved the target, so it exists).
+                let frame = self.jumps.iter_mut().rev()
+                    .find(|f| j.label.is_none() || f.0 == j.label)
+                    .ok_or_else(|| "break/continue outside a loop".to_string())?;
+                if matches!(stmt, Stmt::Break(_)) { frame.1.push(st) } else { frame.2.push(st) }
+                Ok(Vec::new())
+            }
             Stmt::ForMap(w) => {
                 let mut st = st;
                 self.iter_places.push(w.place.clone());
@@ -6294,7 +6308,27 @@ impl<'a> FnVerifier<'a> {
             }
         };
         self.spend(&mut b, &[], self.z.int(1));
-        for mut end in self.exec_block(body, b)? {
+        let (body_places, body_widths) = (b.places.clone(), b.narrow_bindings.clone());
+        let label = match head {
+            Loop::While(w) => { self.jumps.push((w.label.clone(), Vec::new(), Vec::new())); Some(w) }
+            Loop::Map(_) => None,
+        };
+        let ran = self.exec_block(body, b);
+        let (breaks, continues) = match label {
+            Some(_) => { let f = self.jumps.pop().unwrap(); (f.1, f.2) }
+            None => (Vec::new(), Vec::new()),
+        };
+        let mut ends = ran?;
+        // P5: a continue edge is a back edge. In a `for` loop it runs the synthesized step (the last body statement) first.
+        for mut c in continues {
+            c.places = body_places.clone();
+            c.narrow_bindings = body_widths.clone();
+            match label.filter(|w| w.for_head.is_some()).and_then(|_| body.last()) {
+                Some(step) => ends.extend(self.exec(step, c)?),
+                None => ends.push(c),
+            }
+        }
+        for mut end in ends {
             let mut prev: Vec<Ast> = Vec::new();
             for &(cid, inv, text) in &invs {
                 let (w_dom, w_ob) = inv_what(cid, text, "preserved");
@@ -6337,7 +6371,14 @@ impl<'a> FnVerifier<'a> {
             let c = self.ev0_ast(&w.cond, &mut a, &[], true)?;
             a.pc.push(c.not());
         }
-        Ok(vec![a])
+        // P5: the state after the loop is the normal exit joined with every break state (the facts known at the break).
+        let mut out = vec![a];
+        for mut br in breaks {
+            br.places = st.places.clone();
+            br.narrow_bindings = st.narrow_bindings.clone();
+            out.push(br);
+        }
+        Ok(out)
     }
 
     fn map_iteration(&mut self, w: &ast::ForMap, st: &mut State) -> R<()> {

@@ -222,6 +222,7 @@ pub(crate) fn stmt_names(stmts: &[Stmt], out: &mut HashSet<String>) {
                 }
                 stmt_names(&x.body, out);
             }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return(x) => {
                 if let Some(v) = &x.value {
                     expr_names(v, out);

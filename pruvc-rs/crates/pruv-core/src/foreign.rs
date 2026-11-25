@@ -907,6 +907,8 @@ struct Ownership<'a> {
     borrowed_handles: HashMap<String, &'static str>,
     /// name -> (line, col) of the Let that declared it (location of a scope-end proc_unconsumed / net_unconsumed)
     decl: HashMap<String, (i64, i64)>,
+    /// P5: enclosing while/for loops, innermost last: (label, state at loop entry, states at each `break`).
+    loops: Vec<(Option<String>, St, Vec<St>)>,
 }
 
 type Track = HashMap<String, &'static str>;
@@ -1095,7 +1097,40 @@ impl<'a> Ownership<'a> {
                 }
                 self.expr(&w.cond, &mut st)?;
                 self.array_reads(&w.decreases, &st)?;
-                self.loop_body(w.line, w.col, &w.body, &entry, st)
+                self.loops.push((w.label.clone(), entry.clone(), Vec::new()));
+                let out = self.loop_body(w.line, w.col, &w.body, &entry, st);
+                let (_, _, breaks) = self.loops.pop().expect("loop frame");
+                // P5: the state after the loop joins the normal exit and every `break`
+                Ok(breaks.into_iter().fold(out?, |acc, b| join(acc, Some(b))))
+            }
+            Stmt::Break(j) | Stmt::Continue(j) => {
+                let brk = matches!(x, Stmt::Break(_));
+                let at = match &j.label {
+                    None => self.loops.len().checked_sub(1),
+                    Some(l) => self.loops.iter().rposition(|(n, _, _)| n.as_deref() == Some(l.as_str())),
+                };
+                let Some(at) = at else { return Ok(None) }; // the checker rejects a jump with no target
+                let entry = &self.loops[at].1;
+                // a handle declared inside the loops being left must already be consumed
+                for (n, v) in st.iter() {
+                    if let Some(kind) = self.proc.get(n) {
+                        if !entry.contains(n) && *v != V::Dead {
+                            let what = if brk { "break" } else { "continue" };
+                            return Err(handle_lost(kind, j.line, j.col, format!("{} {} is not consumed before {}", kind, n, what)));
+                        }
+                    }
+                }
+                if brk {
+                    self.loops[at].2.push(st);
+                } else {
+                    for (n, v) in entry.iter() {
+                        if *v == V::Live && st.get(n) != Some(V::Live) {
+                            return Err(err(j.line, j.col, "foreign_loop_move", "moved in the loop body and not restored",
+                                format!("{} must be live again at every `continue` and at the end of every path of the body", n)));
+                        }
+                    }
+                }
+                Ok(None)
             }
             Stmt::ForMap(w) => {
                 let entry = st.clone();
@@ -1240,6 +1275,7 @@ impl<'a> Ownership<'a> {
             Stmt::Let(l) => self.dead_expr(&l.value, true)?,
             Stmt::Assign(a) => self.dead_expr(&a.value, true)?,
             Stmt::FieldAssign(a) => self.dead_expr(&a.value, true)?,
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     self.dead_expr(v, true)?;
@@ -1739,6 +1775,7 @@ pub fn check_ownership(f: &Function, funcs: &Takes, aggregates: &HashSet<String>
         funcs, aggregates, enums, variants, map_binders: Vec::new(), bor: HashSet::new(), arm_bor: Vec::new(),
         string_error_binders: HashSet::new(), field_only: HashSet::new(), track: None,
         proc: HashMap::new(), borrowed_handles: HashMap::new(), decl: HashMap::new(), consumed_field: None,
+        loops: Vec::new(),
     }.run(f)
 }
 
@@ -1860,6 +1897,7 @@ fn g6_stmts(stmts: &[Stmt], out: &mut Cands) {
                 }
                 g6_stmts(&w.body, out);
             }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     g6_expr(v, out);
@@ -2038,6 +2076,7 @@ fn proc_stmts(stmts: &[Stmt], out: &mut Cands) {
                 }
                 proc_stmts(&w.body, out);
             }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     proc_expr(v, out);
@@ -2176,6 +2215,7 @@ fn net_stmts(stmts: &[Stmt], out: &mut Cands) {
                 }
                 net_stmts(&w.body, out);
             }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     net_expr(v, out);
@@ -2256,6 +2296,7 @@ fn g10_stmts(stmts: &[Stmt]) -> bool {
         Stmt::ForMap(w) => {
             g10_expr(&w.place) || w.invariants.iter().any(g10_expr) || g10_stmts(&w.body)
         }
+        Stmt::Break(_) | Stmt::Continue(_) => false,
         Stmt::Return(r) => r.value.as_ref().map_or(false, g10_expr),
         Stmt::Assert(a) => g10_expr(&a.cond),
         Stmt::Par(e) => e.calls.iter().any(g10_expr),
@@ -2330,7 +2371,7 @@ pub fn first_par(stmts: &[Stmt]) -> Option<&Par> {
         Stmt::While(x) => first_par(&x.body),
         Stmt::ForMap(x) => first_par(&x.body),
         Stmt::Match(x) => x.arms.iter().filter_map(|a| first_par(&a.body)).min_by_key(|p| (p.line,p.col)),
-        Stmt::Let(_) | Stmt::Assign(_) | Stmt::IndexAssign(_) | Stmt::FieldAssign(_) | Stmt::Return(_) | Stmt::Assert(_) | Stmt::ExprStmt(_) => None,
+        Stmt::Let(_) | Stmt::Assign(_) | Stmt::IndexAssign(_) | Stmt::FieldAssign(_) | Stmt::Return(_) | Stmt::Assert(_) | Stmt::ExprStmt(_) | Stmt::Break(_) | Stmt::Continue(_) => None,
     }).min_by_key(|p| (p.line,p.col))
 }
 pub fn g7_target_error(prog: &Program) -> Option<PruvError> {
@@ -2431,6 +2472,7 @@ fn async_stmts(stmts: &[Stmt], out: &mut Cands, names: &HashSet<&str>) {
                 }
                 async_stmts(&w.body, out, names);
             }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     async_expr(v, out, names);
