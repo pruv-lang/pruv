@@ -1,0 +1,2 @@
+// P7-1 B: copy(a) takes a view [T]; a fixed array is already a value (use `let b: [T; N] = a`)
+fn f() -> i64 ! alloc { let a: [i64; 3] = [1, 2, 3]; let b: [i64] = copy(a); return len(b); }

@@ -4287,7 +4287,15 @@ impl<'a> FnGen<'a> {
                 // `let d = inout a` names the same `[N x E]` slot: no copy
                 let Expr::InoutArg(arg) = &x.value else { unreachable!() };
                 let Expr::Var(place) = &*arg.expr else {
-                    return Err("llvmgen: unsupported fixed array place binding".to_string());
+                    // P7-1 B: `inout if c { a } else { b }` or a field path: bind the chosen storage address
+                    self.begin_temps();
+                    let ptr = self.place_ptr(&arg.expr)?;
+                    self.end_temps()?;
+                    let sl = self.new_slot(&x.name, &x.ty)?;
+                    let slot = Slot { a: ptr, ..sl };
+                    self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?
+                        .names.insert(x.name.clone(), Bind::Slot(slot));
+                    return Ok(());
                 };
                 let binding = self.lookup(&place.name)?;
                 self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?.names.insert(x.name.clone(), binding);

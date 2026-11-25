@@ -2700,7 +2700,9 @@ fn is_digit(c: char) -> bool
   `old(a)[i]` and `len(old(a))` name its entry value. A `[T; N]` argument is lent as the read-only `[T]` of the same
   element (`[i64]`, `[u8]`, `[u16]`, `[bool]`) for the duration of one call of a Pruv function whose parameter is a
   plain `[T]` (not `take`, not `inout`, not `trusted`/extern, and not a function whose result borrows its arguments
-  with `from`); the callee sees `len(a) == N`. Code: Rust passes `[T; N]` by value and lends `&a[..]`; LLVM passes a
+  with `from`), generic ones included (`count::<i64>(a)` for `fn count<T: Element>(a: [T])`); the callee sees
+  `len(a) == N`. A place binding `let d = inout a` (also `inout if c { a } else { a }` or a choice between fixed
+  fields of one struct) names the same storage and can be passed on as `inout d`. Code: Rust passes `[T; N]` by value and lends `&a[..]`; LLVM passes a
   pointer to a fresh caller copy (by value), to the caller's slot (`inout`) or to caller storage for the result,
   and lends the slot address with the constant length. A `pub`, host entry or extern function with a fixed-length
   array anywhere in its signature is `type/fixed_array_position`, and in the legacy (no `pub`) mode such a function
@@ -2718,13 +2720,19 @@ fn is_digit(c: char) -> bool
   `type/const_expr` and a `bool` (a literal, `!`, a comparison, `&&`/`||`) or `char` length `type/const_type`; whole-array `==`/`!=`, use as a view `[T]`
   outside the call-duration lend (a `[T]` or `ref [T]` local, a `take` argument, an argument of a `from` function or
   of a call inside a contract) are `type/fixed_array_operation`; a wrong element
-  count is `type/type_mismatch`, and an `inout [T]` parameter given a `[T; N]` is `type/inout_argument`. Generic and
+  count is `type/type_mismatch`, and an `inout [T]` parameter given a `[T; N]` is `type/inout_argument`; `copy(a)`
+  (it takes a view) is `type/type_mismatch`, `move a` `type/foreign_move` (a fixed array is a plain value) and a
+  fixed array as a `par` branch argument `type/parallel_argument`. Generic and
   enum fields, tuples, type arguments, nested arrays and slice patterns are parity row P7-1 B
   (remaining). The length bound `[T; <=N]`
   (section 7a) is unchanged. Tests: [accept](tests/spec/r6t_4_accept.pruv), [reject](tests/spec/r6t_4_reject.pruv),
   [index](tests/spec/r6t_4_reject_index.pruv), [literals](tests/runtime/p7_rt_fixed_literal.pruv),
   [order](tests/runtime/p7_rt_fixed_eval.pruv), [proven](tests/runtime/p7_rt_fixed_proven.pruv),
-  [unverified](tests/runtime/p7_rt_fixed_oob_unverified.pruv), [for](tests/runtime/p7_rt_fixed_for.pruv), [contract literals](tests/runtime/p7_rt_fixed_contract_lit.pruv), [type](tests/must_reject/p7_array_type.pruv),
+  [unverified](tests/runtime/p7_rt_fixed_oob_unverified.pruv), [for](tests/runtime/p7_rt_fixed_for.pruv),
+  [contract literals](tests/runtime/p7_rt_fixed_contract_lit.pruv),
+  [place if](tests/runtime/p7_rt_fixed_place_if.pruv), [generic lend](tests/runtime/p7_rt_fixed_generic_lend.pruv),
+  [move](tests/must_reject/p7_fixed_move.pruv), [par](tests/must_reject/p7_fixed_par.pruv), [copy](tests/must_reject/p7_fixed_copy.pruv),
+  [type](tests/must_reject/p7_array_type.pruv),
   [char element](tests/must_reject/p7_array_char_type.pruv), [owned](tests/must_reject/p7_fixed_owned.pruv),
   [nested](tests/must_reject/p7_fixed_nested.pruv), [field](tests/runtime/p7_rt_fixed_field.pruv),
   [nested field](tests/runtime/p7_rt_fixed_field_nested.pruv), [host field](tests/must_reject/p7_fixed_field_host.pruv),
