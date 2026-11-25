@@ -1,0 +1,76 @@
+enum Shape { Circle(r: i64), Pair(p: (i64, i64)), Deep(d: ((i64, bool), u8)), Empty }
+
+fn pairsum(t: (i64, i64)) -> i64
+  requires 0 <= t.0 && t.0 <= 100 && 0 <= t.1 && t.1 <= 100
+  ensures result == t.0 * 10 + t.1
+{
+  match t {
+    (a, b) => { return a * 10 + b; }
+  }
+}
+
+fn optsum(o: Option<(i64, i64)>) -> i64
+  ensures -1 <= result && result <= 1100
+  ensures is_some(o) && some_val(o).0 == 2 && some_val(o).1 == 9 ==> result == 29
+{
+  match o {
+    Some((a, b)) => {
+      if a < 0 || a > 100 || b < 0 || b > 100 { return 0; }
+      return a * 10 + b;
+    }
+    None => { return -1; }
+  }
+}
+
+fn shape(s: Shape) -> i64
+  ensures -100 <= result && result <= 100
+{
+  match s {
+    Shape::Circle(r) => { if r < 0 || r > 100 { return 0; } return r; }
+    Shape::Pair((x, y)) => { if x < 0 || x > 100 || y < 0 || y > 100 { return 0; } return x - y; }
+    Shape::Deep(((k, f), _)) => { if k < 0 || k > 100 { return 0; } if f { return k; } return 0 - k; }
+    Shape::Empty => { return 7; }
+  }
+}
+
+fn unit(r: Result<(), i64>) -> i64
+  ensures 0 <= result && result <= 200
+{
+  match r {
+    Ok(()) => { return 1; }
+    Err(e) => { if e < 0 || e > 100 { return 0; } return e + 100; }
+  }
+}
+
+fn mid(t: (i64, (i64, i64))) -> i64
+  requires 0 <= t.1.0 && t.1.0 <= 50
+  ensures result == t.1.0 + 1
+{
+  let mut z: i64 = 0;
+  match t {
+    (_, (m, _)) => { z = m + 1; }
+  }
+  return z;
+}
+
+fn run(k: i64) -> i64
+  requires 0 <= k && k <= 9
+{
+  let p: (i64, i64) = (2, k);
+  let q: (i64, i64) = (k, 2);
+  let dd: ((i64, bool), u8) = ((k, false), 3);
+  let n: (i64, (i64, i64)) = (5, (k, 4));
+  let a: i64 = pairsum(p);
+  let op: Option<(i64, i64)> = Some::<(i64, i64)>(p);
+  let b: i64 = optsum(op);
+  let on: Option<(i64, i64)> = None::<(i64, i64)>;
+  let c: i64 = optsum(on);
+  let d: i64 = shape(Shape::Pair(q));
+  let e: i64 = shape(Shape::Deep(dd));
+  let ru: Result<(), i64> = Ok::<(), i64>(());
+  let f: i64 = unit(ru);
+  let re: Result<(), i64> = Err::<(), i64>(k);
+  let g: i64 = unit(re);
+  let h: i64 = mid(n);
+  return a + b + c + d + e + f + g + h + shape(Shape::Empty);
+}

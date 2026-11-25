@@ -1,0 +1,7 @@
+// spec: R-6u-1 accept
+// Moved from tests/must_reject/p6_match_pattern (P8 accepts tuple patterns in match arms).
+fn f(t: (i64, i64)) -> i64 {
+  match t {
+    (a, b) => { return a; }
+  }
+}

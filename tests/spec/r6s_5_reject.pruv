@@ -1,5 +1,4 @@
 // spec: R-6s-5 reject
-// Tuple patterns in match arms are bundle P8; bind the payload and project it.
-fn f(o: Option<(i64, i64)>) -> i64 {
-  match o { Some((a, b)) => { return a; } None => { return 0; } }
-}
+// Tuple structs are not supported; declare a struct with named fields or use a tuple type.
+struct P(i64, i64);
+fn f(p: P) -> i64 { return 0; }

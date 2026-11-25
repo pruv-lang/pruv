@@ -1,0 +1,6 @@
+// spec: R-6u-3 reject
+// A constructor pattern after `let` needs `else { ... }`.
+fn get(o: Option<i64>) -> i64 {
+  let Some(v) = o;
+  return v;
+}

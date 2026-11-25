@@ -1,0 +1,5 @@
+// spec: R-6u-1 accept
+// Moved from tests/must_reject/p6_some_pattern (P8 accepts tuple patterns in match arms).
+fn f(o: Option<(i64, i64)>) -> i64 {
+  match o { Some((a, b)) => { return a; } None => { return 0; } }
+}

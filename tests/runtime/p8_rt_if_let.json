@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["52216210", "2717211", "54025219"], "gen_contains": ["if let Some(v) = probe(&mut c, k) {", "if let Cmd::Add(n) = x {", "if let Err(e) = r {"]}

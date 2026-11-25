@@ -1,0 +1,6 @@
+// spec: R-6u-2 reject
+// A one-variant enum pattern matches every value, so the else block of `if let` could never run.
+enum E { A }
+fn f(e: E) -> i64 {
+  if let E::A = e { return 0; } else { return 1; }
+}

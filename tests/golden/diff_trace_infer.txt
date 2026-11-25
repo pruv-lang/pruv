@@ -1358,6 +1358,10 @@ must_reject|tests/must_reject/p7_const_pub.pruv	1 case: obl=0 1	--infer=23087af1
 must_reject|tests/must_reject/p7_const_result.pruv	1 case: obl=0 1	--infer=7ce9a26ba7ee
 must_reject|tests/must_reject/p7_const_shadow.pruv	1 case: obl=0 1	--infer=12616c96d4e1
 must_reject|tests/must_reject/p7_const_type.pruv	1 case: obl=0 1	--infer=a329f7fbcec3
+must_reject|tests/must_reject/p7_measure_char.pruv	1 case: obl=0 1	--infer=d7d08887e56e
+must_reject|tests/must_reject/p8_borrow_target_if.pruv	1 case: obl=0 1	--infer=9aee743b10f8
+must_reject|tests/must_reject/p8_borrow_target_let.pruv	1 case: obl=0 1	--infer=cef4a71cfc44
+must_reject|tests/must_reject/p8_borrow_target_match.pruv	1 case: obl=0 1	--infer=150a25ded856
 must_reject|tests/must_reject/refine_alloc_len.pruv	1 case: obl=4 1	--infer=cb1feac1781b
 must_reject|tests/must_reject/refine_base_bool.pruv	1 case: obl=0 1	--infer=df4b068e07a3
 must_reject|tests/must_reject/refine_bounds_i64.pruv	1 case: obl=0 1	--infer=7c3e5998f1e1
@@ -1858,6 +1862,11 @@ runtime|tests/runtime/p7_rt_char_cast_hi.pruv	1 case: obl=2 1	--infer=a078f6570c
 runtime|tests/runtime/p7_rt_char_proven.pruv	1 case: obl=5 1	--infer=f432c2b9545b
 runtime|tests/runtime/p7_rt_const.pruv	1 case: obl=15 1	--infer=816e304ccc7f
 runtime|tests/runtime/p7_rt_const_inout.pruv	1 case: obl=13 1	--infer=639b2f83ce88
+runtime|tests/runtime/p7_rt_const_range.pruv	1 case: obl=10 1	--infer=24c3f182aeac
+runtime|tests/runtime/p8_rt_if_let.pruv	1 case: obl=51 1	--infer=ef05923a9246
+runtime|tests/runtime/p8_rt_let_else.pruv	1 case: obl=80 1	--infer=1b711500226c
+runtime|tests/runtime/p8_rt_tuple_arm.pruv	1 case: obl=41 1	--infer=26febef862e7
+runtime|tests/runtime/p8_rt_tuple_arm_owned.pruv	1 case: obl=8 1	--infer=6f8ce736ce22
 runtime|tests/runtime/qb_across_requires.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 runtime|tests/runtime/qb_budget_edge.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 runtime|tests/runtime/qb_nested_budget.pruv	1 case: obl=0 1	--infer=a887fdcb74d6

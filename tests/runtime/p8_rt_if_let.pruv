@@ -1,0 +1,61 @@
+// P8 runtime: `if let` success, failure and the omitted else; the scrutinee call runs once (counter)
+enum Cmd { Add(n: i64), Neg, Stop }
+
+fn probe(inout c: i64, k: i64) -> Option<i64>
+  requires 0 <= c && c <= 100 && 0 <= k && k <= 100
+  ensures c == old(c) + 1
+  ensures is_some(result) ==> some_val(result) == k * 2
+{
+  c = c + 1;
+  if k % 3 == 0 { return None; }
+  return Some(k * 2);
+}
+
+fn step(k: i64) -> i64
+  requires 0 <= k && k <= 99
+  ensures 0 <= result && result <= 10000
+{
+  let mut c: i64 = 0;
+  let mut r: i64 = 0;
+  if let Some(v) = probe(inout c, k) {
+    r = v + 1;
+  } else {
+    r = 500;
+  }
+  if let Some(w) = probe(inout c, k + 1) {
+    r = r + w;
+  }
+  return r * 10 + c;
+}
+
+fn cmd(x: Cmd) -> i64
+  ensures -1000 <= result && result <= 1000
+{
+  if let Cmd::Add(n) = x {
+    if n < 0 || n > 900 { return 0; }
+    return n + 1;
+  } else if let Cmd::Stop = x {
+    return -1;
+  }
+  return 999;
+}
+
+fn res(r: Result<i64, i64>) -> i64
+  ensures 0 <= result && result <= 300
+{
+  if let Err(e) = r {
+    if e < 0 || e > 100 { return 0; }
+    return e + 200;
+  }
+  return 1;
+}
+
+fn run(k: i64) -> i64
+  requires 0 <= k && k <= 9
+{
+  let a: i64 = step(k);
+  let b: i64 = cmd(Cmd::Add(k)) + cmd(Cmd::Neg) * 2 + cmd(Cmd::Stop) * 3;
+  let ok: Result<i64, i64> = Ok(k);
+  let er: Result<i64, i64> = Err(k);
+  return a * 10000 + b * 1000 + res(ok) * 10 + res(er);
+}

@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["146", "150", "182"], "gen_contains": ["Some((a, b)) => {", "Shape::Pair((x, y)) => {", "Shape::Deep(((k, f), _)) => {", "let (a, b): (i64, i64) = t;"]}

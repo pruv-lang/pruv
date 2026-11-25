@@ -237,6 +237,30 @@ pub struct FieldInit { pub line: i64, pub col: i64, pub name: String, pub value:
 pub struct MatchArm {
     pub line: i64, pub col: i64, pub enum_name: Option<String>, pub ctor: String,
     pub binders: Vec<String>, pub body: Vec<Stmt>,
+    /// P8: per binder, the tuple pattern it was written as (`Some((a, b))`); the binder is then the temporary
+    /// `pruv_tup_d<N>` the checker destructures into the first `pat_lets` statements of `body`. Empty = no tuple.
+    pub pats: Vec<Option<TuplePat>>,
+    /// P8: the number of leading `body` lets the checker lowered from `pats` (0 until checked).
+    pub pat_lets: usize,
+}
+
+/// P6/P8: a destructuring pattern: `_`, `[mut] name` or `(p0, p1, ..)`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TuplePat {
+    Wild,
+    Bind(i64, i64, String, bool),
+    Tuple(i64, i64, Vec<TuplePat>),
+}
+
+/// P8: the source form of a `Match`. `IfLet` and `LetElse` are lowered to a full match by the checker: arm 0 is the
+/// written pattern (for `LetElse` its body is the rest of the enclosing block), every other arm is a complement
+/// variant whose body is the `else` block. The Rust backend prints the source form back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MatchForm {
+    #[default]
+    Match,
+    IfLet,
+    LetElse,
 }
 /// STAGE1 A refinement annotation (vast.Refinement). Position = the first token of the annotated type. Type stays the base type.
 /// shape "scalar" | "array". lo/hi/maxlen are a sign plus a normalized decimal string (arbitrary length; range checks are in refine.rs).
@@ -341,7 +365,10 @@ pub struct FieldAssign {
     pub ref_store: bool,
 }
 #[derive(Debug, Clone, PartialEq)]
-pub struct Match { pub line: i64, pub col: i64, pub scrutinee: Expr, pub arms: Vec<MatchArm> }
+pub struct Match { pub line: i64, pub col: i64, pub scrutinee: Expr, pub arms: Vec<MatchArm>,
+    /// P8: source form; for `IfLet`/`LetElse` before checking, `arms` holds only the written pattern and `els` the
+    /// else block, which the checker copies into the complement arms (then `els` is emptied).
+    pub form: MatchForm, pub els: Vec<Stmt> }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Par { pub line: i64, pub col: i64, pub calls: Vec<Expr> }

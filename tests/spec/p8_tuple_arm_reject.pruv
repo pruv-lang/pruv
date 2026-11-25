@@ -1,0 +1,8 @@
+// spec: R-6u-1 reject
+// The pattern has two components but the payload is a three-component tuple.
+fn f(o: Option<(i64, i64, i64)>) -> i64 {
+  match o {
+    Some((a, b)) => { return a; }
+    None => { return 0; }
+  }
+}

@@ -1,0 +1,33 @@
+// P8a audit: a tuple payload with an owned component, read from a borrowed enum (match and if let).
+// The Rust backend spells the payload as a native tuple reference; LLVM rejects owned tuples (tuple_llvm_owned).
+enum E { V(p: (i64, String)), X }
+
+fn first(e: E) -> i64 {
+    match e { E::V((a, _)) => { return a; } E::X => { return 0; } }
+}
+
+fn whole(e: E) -> i64 {
+    match e { E::V(p) => { return p.0; } E::X => { return -1; } }
+}
+
+fn opt(e: E) -> i64 {
+    if let E::V((a, _)) = e { return a; }
+    return -2;
+}
+
+fn run(k: i64) -> i64 ! alloc
+    requires 0 <= k && k <= 10
+{
+    let s: String = string_from("ab");
+    let e: E = E::V((k, move s));
+    let x: E = E::X;
+    let a: i64 = first(e);
+    let b: i64 = whole(e);
+    let c: i64 = opt(e);
+    let d: i64 = first(x);
+    let f: i64 = whole(x);
+    let g: i64 = opt(x);
+    if a < 0 || a > 10 || b < -1 || b > 10 || c < -2 || c > 10 { return -100; }
+    if d < -2 || d > 10 || f < -2 || f > 10 || g < -2 || g > 10 { return -200; }
+    return a * 10000 + b * 100 + c + d + f + g;
+}

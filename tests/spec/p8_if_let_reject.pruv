@@ -1,0 +1,7 @@
+// spec: R-6u-2 reject
+// The binder shadows a local in scope.
+fn f(o: Option<i64>) -> i64 {
+  let v: i64 = 3;
+  if let Some(v) = o { return v; }
+  return v;
+}

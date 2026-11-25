@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["-96010", "207092", "1025608"], "gen_contains": ["let Some(v) = pick", "let Ok(x) = r else {"]}

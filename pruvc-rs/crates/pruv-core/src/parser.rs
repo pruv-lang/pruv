@@ -312,12 +312,6 @@ struct Parser {
     consts: HashMap<String, (String, i128)>,
 }
 
-/// P6: a destructuring `let` pattern.
-enum TuplePat {
-    Wild,
-    Bind(i64, i64, String, bool),
-    Tuple(i64, i64, Vec<TuplePat>),
-}
 
 /// P6: a type key that owns a heap payload the destructuring let must move (str, a buffer, a Vec, or a tuple of one).
 fn owned_key(k: &str) -> bool {
@@ -490,15 +484,95 @@ impl Parser {
         self.ident()
     }
 
-    /// A variant binder of a match arm; a tuple pattern there is bundle P8 (P6 row P6-1).
-    fn arm_binder(&mut self) -> R<Tok> {
+    /// A variant binder of a pattern: a name, or (P8) a tuple pattern bound to a fresh `pruv_tup_d<N>` temporary
+    /// the checker destructures.
+    fn arm_binder(&mut self, binders: &mut Vec<String>, pats: &mut Vec<Option<TuplePat>>) -> R<()> {
         if self.at("(", 0) {
-            let t = self.peek(0).clone();
-            return Err(PruvError::new("parse", t.line, t.col, "tuple_match_pattern",
-                "tuple patterns in match arms are not available yet (bundle P8)",
-                "bind the payload, then destructure it: `E::V(p) => { let (a, b): (A, B) = p; .. }`"));
+            let pat = self.tuple_pat()?;
+            binders.push(format!("pruv_tup_d{}", self.tup_tmp));
+            self.tup_tmp += 1;
+            pats.push(Some(pat));
+        } else {
+            binders.push(self.ident()?.val);
+            pats.push(None);
         }
-        self.ident()
+        Ok(())
+    }
+
+    /// The `(b0, b1, ..)` binder list of a variant pattern.
+    fn arm_binders(&mut self, what: &str) -> R<(Vec<String>, Vec<Option<TuplePat>>)> {
+        let (mut binders, mut pats) = (Vec::new(), Vec::new());
+        if self.at("(", 0) {
+            let lp = self.next();
+            if self.at(")", 0) {
+                return Err(self.err(
+                    "a pattern lists one name per field; a variant without fields has no parentheses",
+                    format!("write `{} =>`", what),
+                    Some(&lp),
+                ));
+            }
+            loop {
+                self.arm_binder(&mut binders, &mut pats)?;
+                if !self.at(",", 0) {
+                    break;
+                }
+                self.bump();
+            }
+            self.expect(")")?;
+        }
+        if pats.iter().all(Option::is_none) {
+            pats.clear();
+        }
+        Ok((binders, pats))
+    }
+
+    /// One variant pattern of a match arm, `if let` or `let else`, without its body: `crate::m::E::V(..)`,
+    /// `E::V(..)`, `Some(x)`, `None`, `Ok(x)`, `Ok(())` or `Err(e)`; a binder may be a tuple pattern (P8).
+    fn arm_pattern(&mut self) -> R<MatchArm> {
+        let arm = |ct: &Tok, enum_name: Option<String>, ctor: String, (binders, pats): (Vec<String>, Vec<Option<TuplePat>>)|
+            MatchArm { line: ct.line, col: ct.col, enum_name, ctor, binders, body: Vec::new(), pats, pat_lets: 0 };
+        if self.at("crate", 0) {
+            // G4: `crate::m::Enum::Variant(x) =>`; the last segment is the variant
+            let (ct, segs) = self.crate_path(false)?;
+            if segs.len() < 2 {
+                return Err(self.path_syntax(&ct, "a variant pattern is written crate::module::Enum::Variant"));
+            }
+            let enum_path = format!("crate::{}", segs[..segs.len() - 1].join("::"));
+            let variant = segs[segs.len() - 1].clone();
+            let bs = self.arm_binders(&format!("{}::{}", enum_path, variant))?;
+            return Ok(arm(&ct, Some(enum_path), variant, bs));
+        }
+        let ct = self.next();
+        if ct.kind == Kind::Id && self.at("::", 0) {
+            self.bump();
+            let vt = self.ident()?;
+            let bs = self.arm_binders(&format!("{}::{}", ct.val, vt.val))?;
+            return Ok(arm(&ct, Some(ct.val.clone()), vt.val, bs));
+        }
+        let is_ctor = ct.kind != Kind::Int && matches!(ct.val.as_str(), "Some" | "None" | "Ok" | "Err");
+        if !is_ctor {
+            return Err(self.err(
+                "match arm must be Some(x), None, Ok(x), Err(x) or Enum::Variant(...)",
+                "",
+                Some(&ct),
+            ));
+        }
+        let (mut binders, mut pats) = (Vec::new(), Vec::new());
+        if ct.val == "Ok" && self.at("(", 0) && self.at("(", 1) && self.at(")", 2) {
+            // LB8 R-6g7-1: `Ok(())` binds nothing
+            self.bump();
+            self.bump();
+            self.bump();
+            self.expect(")")?;
+        } else if ct.val != "None" {
+            self.expect("(")?;
+            self.arm_binder(&mut binders, &mut pats)?;
+            self.expect(")")?;
+        }
+        if pats.iter().all(Option::is_none) {
+            pats.clear();
+        }
+        Ok(arm(&ct, None, ct.val.clone(), (binders, pats)))
     }
 
     /// P6: the tuple type with these components; registers its synthetic struct.
@@ -1747,16 +1821,63 @@ impl Parser {
 
     fn block_inner(&mut self) -> R<Vec<Stmt>> {
         self.expect("{")?;
+        let out = self.block_rest()?;
+        self.expect("}")?;
+        Ok(out)
+    }
+
+    /// The statements up to the closing `}` (not consumed). P8: the statements after a `let P = e else { .. };`
+    /// become the body of its pattern arm, where the binders are in scope.
+    fn block_rest(&mut self) -> R<Vec<Stmt>> {
         let mut out = Vec::new();
         while !self.at("}", 0) {
             if self.peek(0).kind == Kind::Eof {
                 return Err(self.err("unclosed block", "add '}'", None));
             }
-            out.push(self.stmt()?);
+            let st = self.stmt()?;
+            let let_else = matches!(&st, Stmt::Match(m) if m.form == MatchForm::LetElse);
+            out.push(st);
             out.append(&mut self.pending);
+            if let_else {
+                self.enter(1)?;
+                let rest = self.block_rest();
+                self.leave(1);
+                let Some(Stmt::Match(m)) = out.last_mut() else { unreachable!("pushed above") };
+                m.arms[0].body = rest?;
+                break;
+            }
         }
-        self.expect("}")?;
         Ok(out)
+    }
+
+    /// P8: `if let P = e { A } [else { B } | else if ..]`, lowered by the checker to a match.
+    fn if_let(&mut self) -> R<Stmt> {
+        let t = self.expect_tok("if")?;
+        self.expect("let")?;
+        let mut arm = self.arm_pattern()?;
+        self.expect("=")?;
+        let scr = self.expr()?;
+        arm.body = self.block()?;
+        let mut els = Vec::new();
+        if self.at("else", 0) {
+            self.bump();
+            if self.at("if", 0) {
+                self.enter(1)?;
+                let r = if self.at("let", 1) { self.if_let() } else { self.if_().map(Stmt::If) };
+                self.leave(1);
+                els = vec![r?];
+            } else {
+                els = self.block()?;
+            }
+        }
+        Ok(Stmt::Match(Match { line: t.line, col: t.col, scrutinee: scr, arms: vec![arm], form: MatchForm::IfLet, els }))
+    }
+
+    /// P8: whether `let` at 0 starts `let P = e else { .. };` (a variant pattern, not a binding name).
+    fn at_let_else(&self) -> bool {
+        let p = self.peek(1);
+        (p.kind == Kind::Kw && matches!(p.val.as_str(), "Some" | "None" | "Ok" | "Err" | "crate"))
+            || (p.kind == Kind::Id && (self.at("(", 2) || self.at("::", 2)))
     }
 
     /// Contextual `par {`: members must be semicolon-terminated calls, with no trailing semicolon.
@@ -1805,6 +1926,25 @@ impl Parser {
         let (l, c) = (t.line, t.col);
         if t.kind == Kind::Id && t.val == "par" && self.at("{", 1) {
             return self.par_stmt();
+        }
+        if self.at("let", 0) && self.at_let_else() {
+            // P8: `let P = e else { .. };`; block_rest moves the following statements into the pattern arm
+            self.bump();
+            let arm = self.arm_pattern()?;
+            self.expect("=")?;
+            let scr = self.expr()?;
+            if !self.at("else", 0) {
+                let n = self.peek(0).clone();
+                return Err(PruvError::new("parse", n.line, n.col, "let_else_syntax",
+                    "a variant pattern in let needs an else block", "write `let Some(x) = e else { return ..; };`"));
+            }
+            self.bump();
+            let els = self.block()?;
+            self.expect(";")?;
+            return Ok(Stmt::Match(Match { line: l, col: c, scrutinee: scr, arms: vec![arm], form: MatchForm::LetElse, els }));
+        }
+        if self.at("if", 0) && self.at("let", 1) {
+            return self.if_let();
         }
         if self.at("let", 0) && self.at("(", 1) {
             // P6: `let (a, mut b, _): (A, B, C) = e;` lowers to a temporary and one field let per binder.
@@ -2044,105 +2184,26 @@ impl Parser {
             self.expect("{")?;
             let mut arms = Vec::new();
             while !self.at("}", 0) {
-                if self.at("crate", 0) {
-                    // G4: `crate::m::Enum::Variant(x) =>`; the last segment is the variant
-                    let (ct, segs) = self.crate_path(false)?;
-                    if segs.len() < 2 {
-                        return Err(self.path_syntax(&ct, "a variant pattern is written crate::module::Enum::Variant"));
-                    }
-                    let enum_path = format!("crate::{}", segs[..segs.len() - 1].join("::"));
-                    let variant = segs[segs.len() - 1].clone();
-                    let mut binders = Vec::new();
-                    if self.at("(", 0) {
-                        let lp = self.next();
-                        if self.at(")", 0) {
-                            return Err(self.err(
-                                "a pattern lists one name per field; a variant without fields has no parentheses",
-                                format!("write `{}::{} =>`", enum_path, variant),
-                                Some(&lp),
-                            ));
-                        }
-                        loop {
-                            binders.push(self.arm_binder()?.val);
-                            if !self.at(",", 0) {
-                                break;
-                            }
-                            self.bump();
-                        }
-                        self.expect(")")?;
-                    }
-                    self.expect("=>")?;
-                    let body = self.block()?;
-                    arms.push(MatchArm { line: ct.line, col: ct.col, enum_name: Some(enum_path), ctor: variant, binders, body });
-                    if self.at(",", 0) {
-                        self.bump();
-                    }
-                    continue;
-                }
-                let ct = self.next();
-                if ct.kind == Kind::Id && self.at("::", 0) {
-                    self.bump();
-                    let vt = self.ident()?;
-                    let mut binders = Vec::new();
-                    if self.at("(", 0) {
-                        let lp = self.next();
-                        if self.at(")", 0) {
-                            return Err(self.err(
-                                "a pattern lists one name per field; a variant without fields has no parentheses",
-                                format!("write `{}::{} =>`", ct.val, vt.val),
-                                Some(&lp),
-                            ));
-                        }
-                        loop {
-                            binders.push(self.arm_binder()?.val);
-                            if !self.at(",", 0) {
-                                break;
-                            }
-                            self.bump();
-                        }
-                        self.expect(")")?;
-                    }
-                    self.expect("=>")?;
-                    let body = self.block()?;
-                    arms.push(MatchArm { line: ct.line, col: ct.col, enum_name: Some(ct.val.clone()), ctor: vt.val, binders, body });
+                let mut arm = if self.at("(", 0) {
+                    // P8: `(a, b) =>` destructures a tuple scrutinee; the checker (Checker::block) turns the
+                    // single-arm match into the destructuring lets
+                    let ct = self.peek(0).clone();
+                    let (mut binders, mut pats) = (Vec::new(), Vec::new());
+                    self.arm_binder(&mut binders, &mut pats)?;
+                    MatchArm { line: ct.line, col: ct.col, enum_name: None, ctor: "()".to_string(), binders,
+                        body: Vec::new(), pats, pat_lets: 0 }
                 } else {
-                    let is_ctor = ct.kind != Kind::Int && matches!(ct.val.as_str(), "Some" | "None" | "Ok" | "Err");
-                    // P6: tuple patterns in a match arm are bundle P8
-                    let tup_inner = is_ctor && self.at("(", 0) && self.at("(", 1) && !self.at(")", 2);
-                    if ct.val == "(" || tup_inner {
-                        return Err(PruvError::new("parse", ct.line, ct.col, "tuple_match_pattern",
-                            "tuple patterns in match arms are not available yet (bundle P8)",
-                            "bind the tuple, then project: `Some(p) => { let (a, b): (A, B) = p; .. }`"));
-                    }
-                    if !is_ctor {
-                        return Err(self.err(
-                            "match arm must be Some(x), None, Ok(x), Err(x) or Enum::Variant(...)",
-                            "",
-                            Some(&ct),
-                        ));
-                    }
-                    let mut binders = Vec::new();
-                    if ct.val == "Ok" && self.at("(", 0) && self.at("(", 1) && self.at(")", 2) {
-                        // LB8 R-6g7-1: `Ok(())` binds nothing
-                        self.bump();
-                        self.bump();
-                        self.bump();
-                        self.expect(")")?;
-                    } else if ct.val != "None" {
-                        self.expect("(")?;
-                        binders = vec![self.ident()?.val];
-                        self.expect(")")?;
-                    }
-                    self.expect("=>")?;
-                    let body = self.block()?;
-                    arms.push(MatchArm { line: ct.line, col: ct.col, enum_name: None, ctor: ct.val.clone(), binders, body });
-                }
+                    self.arm_pattern()?
+                };
+                self.expect("=>")?;
+                arm.body = self.block()?;
+                arms.push(arm);
                 if self.at(",", 0) {
                     self.bump();
                 }
             }
             self.expect("}")?;
-            return Ok(Stmt::Match(Match { line: l, col: c, scrutinee: scr, arms }));
+            return Ok(Stmt::Match(Match { line: l, col: c, scrutinee: scr, arms, form: MatchForm::Match, els: Vec::new() }));
         }
         let deref = self.at("*", 0) && self.at("=", 2);
         if deref || t.kind == Kind::Id && self.at("=", 1) {
@@ -2361,9 +2422,9 @@ impl Parser {
             if self.at("if", 0) {
                 // An else-if chain is counted as depth too (checked after the fix: outside the count, a million of them overflowed the stack)
                 self.enter(1)?;
-                let r = self.if_();
+                let r = if self.at("let", 1) { self.if_let() } else { self.if_().map(Stmt::If) };
                 self.leave(1);
-                els = vec![Stmt::If(r?)];
+                els = vec![r?];
             } else {
                 els = self.block()?;
             }

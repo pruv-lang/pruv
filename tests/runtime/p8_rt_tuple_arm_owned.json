@@ -1,0 +1,1 @@
+{"backends": ["rust"], "flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["-3", "70704"], "gen_contains": ["let pruv_tup_d0: &(i64, ::std::string::String) = pruv_tup_d0;"]}
