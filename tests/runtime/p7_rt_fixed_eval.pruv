@@ -1,0 +1,24 @@
+// P7-1 A runtime: literal elements run left to right, `[x; 0]` still runs x once, and an element store
+// evaluates the index, then the value, then writes; `a = [a[1], a[0]]` reads the old array.
+fn tick(k: i64) -> i64 ! io
+  ensures result == k
+{
+  print(k);
+  return k;
+}
+
+fn ix() -> i64 ! io
+  ensures result == 1
+{
+  print(30);
+  return 1;
+}
+
+fn f() -> i64 ! io {
+  let mut a: [i64; 3] = [tick(1), tick(2), tick(3)];
+  let z: [i64; 0] = [tick(4); 0];
+  let r: [i64; 2] = [tick(5); 2];
+  a[ix()] = tick(40);
+  a = [a[2], a[1], tick(a[0])];
+  return a[0] * 100 + a[1] * 10 + a[2] + len(z) + r[1];
+}

@@ -1104,6 +1104,19 @@ fn ctor_type(ty: &Option<String>) -> Option<GType> {
     is_optres(&g).then_some(g)
 }
 
+/// P7-1: the fixed-array type of a type key.
+fn fixed_key(t: &str) -> Option<GType> {
+    if !is_g3_key(t) {
+        return None;
+    }
+    GType::try_from_key(t).ok().filter(GType::is_fixed)
+}
+
+/// P7-1: the fixed-array type of an expression.
+fn fixed_of(e: &Expr) -> Option<GType> {
+    expr_ty(e).as_deref().and_then(fixed_key)
+}
+
 /// The array element type name of the expression ("i64" if it is not an array).
 fn elem_of(e: &Expr) -> &'static str {
     expr_ty(e).as_deref().and_then(array_elem_name).unwrap_or("i64")
@@ -4581,6 +4594,20 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 };
                 self.emit(ind, &text);
             }
+            Stmt::IndexAssign(x) if self.vars.get(&x.name).is_some_and(|t| fixed_key(t).is_some()) => {
+                // P7-1: index and value first, then the store (the value may read the array)
+                let elem = rty_g(fixed_key(&self.vars[&x.name]).unwrap().fixed_parts().unwrap().0, false);
+                let v = |s: &mut Self| s.e(&x.value);
+                if self.verified {
+                    let i = self.idx_usize(&x.index)?;
+                    let v = v(self)?;
+                    self.emit(ind, &format!("{{ let pruv_i: usize = {i}; let pruv_x: {elem} = {v}; unsafe {{ *{}.get_unchecked_mut(pruv_i) = pruv_x; }} }}", x.name));
+                } else {
+                    let i = self.idx_i64(&x.index)?;
+                    let v = v(self)?;
+                    self.emit(ind, &format!("{{ let pruv_i: i64 = {i}; let pruv_x: {elem} = {v}; let pruv_k = pruv_idx(pruv_i, {}.len()); {}[pruv_k] = pruv_x; }}", x.name, x.name));
+                }
+            }
             Stmt::IndexAssign(x) => {
                 let i = self.idx_i64(&x.index)?;
                 let v = self.e(&x.value)?;
@@ -5471,6 +5498,16 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 let i = self.e(&x.index)?;
                 Ok(format!("((unsafe {{ *{}.as_bytes().get_unchecked(({}) as usize) }}) as i64)", a, i))
             }
+            Expr::Index(x) if fixed_of(&x.array).is_some() => {
+                // P7-1: a fixed array element is read at its own type (no widening)
+                let a = self.e(&x.array)?;
+                if !self.verified {
+                    let i = self.idx_i64(&x.index)?;
+                    return Ok(format!("{{ let pruv_fa = &{a}; pruv_fa[pruv_idx({i}, pruv_fa.len())] }}"));
+                }
+                let i = self.idx_usize(&x.index)?;
+                Ok(format!("(unsafe {{ *{a}.get_unchecked({i}) }})"))
+            }
             Expr::Index(x) => {
                 let elem = elem_of(&x.array);
                 if !self.verified {
@@ -5589,6 +5626,15 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 }
                 Ok(format!("{}.{}", self.e(&x.base)?, x.field))
             },
+            Expr::Call(x) if crate::check::is_array_lit(&x.name) => {
+                // P7-1: `[a, b]` / `[x; N]` literals (the let annotation spells the element type)
+                if let Some(n) = crate::ast::array_repeat_len(&x.name) {
+                    let v = self.e(arg(&x.args, 0)?)?;
+                    return Ok(format!("[{v}; {n}]"));
+                }
+                let vs = x.args.iter().map(|a| self.e(a)).collect::<R<Vec<_>>>()?;
+                Ok(format!("[{}]", vs.join(", ")))
+            }
             Expr::Call(x) => {
                 let n = x.name.as_str();
                 let a = &x.args;

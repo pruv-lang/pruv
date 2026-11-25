@@ -1,0 +1,5 @@
+// P7-1 A runtime: without verification a fixed-array index is checked at run time
+fn run(i: i64) -> i64 {
+  let a: [i64; 4] = [1, 2, 3, 4];
+  return a[i];
+}

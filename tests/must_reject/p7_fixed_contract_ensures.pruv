@@ -1,0 +1,6 @@
+// P7-1 A: a fixed-length array literal in an ensures clause is rejected the same way (parity row P7-1 B)
+fn table(k: i64) -> i64
+  ensures [1, 2][0] == 1
+{
+  return k;
+}

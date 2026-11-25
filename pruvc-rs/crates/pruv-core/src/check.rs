@@ -66,6 +66,8 @@ pub(crate) fn word_width(e: &Expr) -> Option<i64> {
     }
 }
 
+pub(crate) use crate::ast::is_array_lit;
+
 /// P7: an integer literal without a type of its own (char/byte literals and constant uses carry theirs).
 fn bare_lit(e: &Expr) -> bool {
     matches!(e, Expr::IntLit(l) if l.kind == crate::ast::LitKind::Int)
@@ -1272,6 +1274,9 @@ fn is_int_literal(e: &Expr) -> bool {
 }
 
 fn elem_type(at: &GType) -> GType {
+    if let Some((e, _)) = at.fixed_parts() {
+        return e.clone(); // P7-1: [T; N] reads exactly T
+    }
     if at.name == "array" && !at.args.is_empty() {
         return at.args[0].clone();
     }
@@ -2176,6 +2181,9 @@ impl Checker {
 
     /// Every type reference: arity, known names, type-argument and bound rules (G3_SPEC 3.1, 3.2, 3.4).
     fn check_type(&self, line: i64, col: i64, ty: &GType) -> Res<()> {
+        if ty.is_fixed() {
+            return Ok(()); // P7-1: the parser admitted the element and the size
+        }
         if ty.view_base().is_none() && ty.args.iter().any(contains_unsupported_small_int_arg) {
             return Err(small_int_unsupported(line, col, "non-i64 integer and [u16] type arguments require P11", "use i64"));
         }
@@ -4401,7 +4409,7 @@ impl Checker {
                         "build a new str with substr() or copy() instead",
                     ));
                 }
-                if !v.ty.is_array() {
+                if !v.ty.is_array() && !v.ty.is_fixed() {
                     return Err(terr(s.line, s.col, "not_array", format!("{} is not an array", s.name), ""));
                 }
                 if !v.mutable && v.kind != "inout" {
@@ -5737,6 +5745,14 @@ impl Checker {
     /// op: what the operand is used for (arithmetic, comparison, ...) when the operation needs a concrete type:
     /// an abstract type parameter there is a generic_operation error rather than a plain mismatch.
     fn expect(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, contract: bool, op: Option<&str>) -> Res<GType> {
+        if let (Expr::Call(call), Some((el, _))) = (&mut *e, ty.fixed_parts()) {
+            if is_array_lit(&call.name) {
+                // P7-1: the expected [T; N] types the literal's elements
+                let t = self.array_lit(call, Some(el), scope, contract)?;
+                set_ty(e, &t);
+                return self.check_expected_type(e, ty, op, t);
+            }
+        }
         if let (Expr::IntLit(lit), Some(width)) = (&*e, ty.int_width()) {
             // P7: char/byte literals and constant uses have a fixed type and are compared below
             if lit.kind == crate::ast::LitKind::Int {
@@ -5752,6 +5768,38 @@ impl Checker {
         resolve_tuple_lit(e, ty);
         let t = self.expr(e, scope, contract)?;
         self.check_expected_type(e, ty, op, t)
+    }
+
+    /// P7-1: `[a, b, c]` / `[x; N]`. With `want` every element is checked against it; without it the first
+    /// element that is not a bare integer literal fixes T (all bare literals: i64).
+    fn array_lit(&mut self, call: &mut Call, want: Option<&GType>, scope: &Scope, c: bool) -> Res<GType> {
+        if c {
+            // P7-1 B: neither backend lowers a fixed-array literal inside a contract yet
+            return Err(terr(call.line, call.col, "fixed_array_operation",
+                "a fixed-length array literal cannot appear in a contract yet (parity row P7-1 B)".to_string(),
+                "bind the array to a local in the body, or state the property on its elements"));
+        }
+        let n = match crate::ast::array_repeat_len(&call.name) {
+            Some(n) => n,
+            None => call.args.len() as u64,
+        };
+        let el = match want {
+            Some(w) => w.clone(),
+            None => match call.args.iter_mut().find(|a| !bare_lit(a)) {
+                Some(a) => self.expr(a, scope, c)?,
+                None => i64t(),
+            },
+        };
+        if el != boolt() && el.int_width().is_none() {
+            return Err(terr(call.line, call.col, "fixed_array_element",
+                format!("a fixed-length array holds scalar integers, char or bool, found {}", tn(&el)),
+                "use a buffer ([T]) or a Vec for other elements"));
+        }
+        for a in call.args.iter_mut() {
+            self.expect(a, &el, scope, c, None)?;
+        }
+        crate::parser::fixed_size(call.line, call.col, &el, n)?;
+        Ok(GType::fixed(el, n))
     }
 
     /// P3: an index is i64 or any unsigned scalar integer (`u8`..`usize`); a literal index stays i64.
@@ -5807,6 +5855,12 @@ impl Checker {
                         "a type parameter can be copied, passed, returned and stored; == works on it in contracts only",
                     ));
                 }
+            }
+            if t.is_fixed() && !ty.is_fixed() && ty.is_array() {
+                // P7-1 B: the borrow of a fixed-length array as a view is not lowered yet
+                return Err(terr(e.line(), e.col(), "fixed_array_operation",
+                    format!("a fixed-length array {} cannot be used as {} yet (parity row P7-1 B)", tn(&t), tn(ty)),
+                    "copy the elements into a buffer, or index the array directly"));
             }
             return Err(terr(
                 e.line(),
@@ -5973,6 +6027,12 @@ impl Checker {
                                 "compare lengths and elements: len(a) == len(b) && forall k in 0..len(a): a[k] == b[k]",
                             ));
                         }
+                        if lt.is_fixed() || rt.as_ref().is_some_and(|t| t.is_fixed()) {
+                            // P7-1: z3 array equality would also compare the elements past N
+                            return Err(terr(x.line, x.col, "fixed_array_operation",
+                                "fixed-length arrays cannot be compared with == yet",
+                                "compare the elements: forall k in 0..N: a[k] == b[k]"));
+                        }
                         if lt.is_array() {
                             return Err(terr(
                                 x.line,
@@ -6090,7 +6150,14 @@ impl Checker {
                 Ok(entry.ty)
             }
             Expr::Index(x) => {
-                let at = self.expect_array(&mut x.array, scope, c, true)?;
+                let at = self.expr(&mut x.array, scope, c)?;
+                if let Some((el, _)) = at.fixed_parts() {
+                    // P7-1: a[i] on [T; N] is a T; the proof asks 0 <= i < N
+                    let el = el.clone();
+                    self.expect_index(&mut x.index, scope, c)?;
+                    return Ok(el);
+                }
+                let at = self.check_array_type(&x.array, true, at)?;
                 if matches!(&*x.array, Expr::Move(_)) && at.is_array() {
                     return Err(terr(x.array.line(), x.array.col(), "array_alias", "an array element cannot be moved",
                         "read the element without move"));
@@ -7313,6 +7380,9 @@ impl Checker {
     }
 
     fn call(&mut self, e: &mut Call, scope: &Scope, c: bool) -> Res<GType> {
+        if is_array_lit(&e.name) {
+            return self.array_lit(e, None, scope, c);
+        }
         let n = e.name.clone();
         let targs = e.targs.clone();
         let (line, col) = (e.line, e.col);
@@ -7387,6 +7457,9 @@ impl Checker {
             "len" => {
                 arity(1)?;
                 let ty = self.text_expr(&mut e.args[0], scope, c)?;
+                if ty.is_fixed() {
+                    return Ok(i64t()); // P7-1: len(a) is N
+                }
                 self.check_array_type(&e.args[0], true, ty)?;
                 return Ok(i64t());
             }

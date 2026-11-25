@@ -189,6 +189,24 @@ impl GType {
         }
     }
 
+    /// P7-1: the fixed-length array `[elem; n]` (name `@fixed:<n>`, one argument).
+    pub fn fixed(elem: GType, n: u64) -> GType {
+        GType::new(&format!("{}{}", FIXED_PREFIX, n), vec![elem])
+    }
+
+    /// P7-1: (element, length) of a fixed-length array type.
+    pub fn fixed_parts(&self) -> Option<(&GType, u64)> {
+        if self.owner.is_some() || self.args.len() != 1 {
+            return None;
+        }
+        let n = self.name.strip_prefix(FIXED_PREFIX)?.parse().ok()?;
+        Some((&self.args[0], n))
+    }
+
+    pub fn is_fixed(&self) -> bool {
+        self.fixed_parts().is_some()
+    }
+
     /// Legacy array type holding `elem`; None when no such legacy array type exists.
     pub fn array_of(elem: &GType) -> Option<GType> {
         if *elem == GType::i64() {
@@ -271,6 +289,10 @@ pub(crate) fn key_is_owned_field(key: &str) -> bool {
 /// the component type keys: `pruv_tup` then `_<len>_<escaped key>` per component (`_` -> `__`, `<` -> `_l`,
 /// `>` -> `_r`, `,` -> `_c`), so the name is an identifier and decodes back to the components.
 pub const TUPLE_PREFIX: &str = "Pruv__tup";
+/// P7-1: the name prefix of a fixed-length array type `[T; N]` (`@fixed:N<T>`).
+pub const FIXED_PREFIX: &str = "@fixed:";
+/// P7-1: the storage cap of one fixed-length array, in bytes.
+pub const FIXED_MAX_BYTES: u64 = 65536;
 /// The name of a tuple literal whose type the checker has not resolved yet.
 pub const TUPLE_PENDING: &str = "Pruv__tup";
 /// Fixed arity cap of P6 tuples (SPEC R-6s-1).
@@ -534,6 +556,9 @@ pub fn format_type(ty: &GType) -> String {
             return format!("({})", parts.join(", "));
         }
         return crate::typeinfo::type_name(&ty.name);
+    }
+    if let Some((e, n)) = ty.fixed_parts() {
+        return format!("[{}; {}]", format_type(e), n);
     }
     let inner = ty.args.iter().map(format_type).collect::<Vec<_>>().join(", ");
     match ty.name.as_str() {

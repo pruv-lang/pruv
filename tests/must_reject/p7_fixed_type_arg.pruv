@@ -1,0 +1,1 @@
+fn f() -> i64 { let v: Vec<[i64; 2]> = Vec::new(); return 0; }

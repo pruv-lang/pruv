@@ -2680,11 +2680,34 @@ fn is_digit(c: char) -> bool
   [pub](tests/must_reject/p7_const_pub.pruv), [lower case](tests/must_reject/p7_const_result.pruv),
   [for binder](tests/must_reject/p7_const_for_binder.pruv), [char from int](tests/must_reject/p7_const_char_int.pruv),
   [negative division](tests/must_reject/p7_const_neg_div.pruv).
-- R-6t-4 **Fixed-length arrays (not yet).** The type `[T; N]` and the literals `[a, b, c]` and `[x; N]` are
-  `parse/fixed_array` (parity row P7-1); the length bound `[T; <=N]` (section 7a) is unchanged. Tests:
-  [accept](tests/spec/r6t_4_accept.pruv), [reject](tests/spec/r6t_4_reject.pruv),
-  [literal](tests/must_reject/p7_array_literal.pruv), [repeat](tests/must_reject/p7_array_repeat.pruv),
-  [type](tests/must_reject/p7_array_type.pruv), [char element](tests/must_reject/p7_array_char_type.pruv).
+- R-6t-4 **Fixed-length arrays (local values).** `[T; N]` is a local value type written in a `let` annotation;
+  `T` is a scalar integer of any width, `char` or `bool`, and `N` is a closed constant expression (literals,
+  constants, `+ - * / %`, casts) evaluated in its own width, `>= 0`; `N = 0` is allowed. One array holds at most
+  65536 bytes (element size times `N`, overflow included). The literals are `[a, b, c]` (all elements of one type; an
+  annotation fixes it, otherwise the first element that is not a bare integer literal, otherwise `i64`) and `[x; N]`
+  (`x` evaluated once). Elements are evaluated left to right; an index target is evaluated before its index, and
+  `a[i] = v` evaluates `i`, then `v`, then stores. Assignment and `let b: [T; N] = a` copy the whole array, and
+  `a = [a[1], a[0]]` evaluates the whole right side before storing. `len(a)` is `N` (an `i64`). Proof: the array is
+  an SMT array with the constant length `N`; an index `0 <= i < N` is an obligation (`verify/index_oob`), so a
+  constant in-range index needs no runtime check, and a read is known to lie in the element's range (also after a
+  loop that writes the array, which forgets the values). Code: Rust
+  `[T; N]` by value, a proven index as `get_unchecked`, an unproven one checked with the usual out-of-bounds panic;
+  LLVM `[N x E]` (bool as `i8`, char as `i32`) in a stack slot, copies by `memcpy`. A zero-length literal is
+  written `[x; 0]` (`[]` stays the empty view). Rejected: `[T; N]` as a parameter, result, field, tuple component
+  or type argument, and nested fixed arrays, are `type/fixed_array_position`; an element type other than a scalar (a view `[T]` too) is
+  `type/fixed_array_element`; a negative or oversized length is `type/fixed_array_length`; a non-constant length is
+  `type/const_expr` and a `bool` (a literal, `!`, a comparison, `&&`/`||`) or `char` length `type/const_type`; whole-array `==`/`!=`, use as a view `[T]`
+  (an argument, a `[T]` local) and a literal inside a contract are `type/fixed_array_operation`; a wrong element
+  count is `type/type_mismatch`. Passing, borrowing as `[T]`, `inout`, fields, `old()` and contract literals are
+  parity row P7-1 B. The length bound `[T; <=N]`
+  (section 7a) is unchanged. Tests: [accept](tests/spec/r6t_4_accept.pruv), [reject](tests/spec/r6t_4_reject.pruv),
+  [index](tests/spec/r6t_4_reject_index.pruv), [literals](tests/runtime/p7_rt_fixed_literal.pruv),
+  [order](tests/runtime/p7_rt_fixed_eval.pruv), [proven](tests/runtime/p7_rt_fixed_proven.pruv),
+  [unverified](tests/runtime/p7_rt_fixed_oob_unverified.pruv), [type](tests/must_reject/p7_array_type.pruv),
+  [char element](tests/must_reject/p7_array_char_type.pruv), [owned](tests/must_reject/p7_fixed_owned.pruv),
+  [nested](tests/must_reject/p7_fixed_nested.pruv), [length](tests/must_reject/p7_fixed_large.pruv),
+  [equality](tests/must_reject/p7_fixed_eq.pruv), [argument](tests/must_reject/p7_fixed_arg.pruv),
+  [count](tests/must_reject/p7_fixed_count.pruv), [out of bounds](tests/must_reject/p7_fixed_oob.pruv).
 
 ## 6u. Patterns (P8)
 
@@ -3195,7 +3218,6 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/cost_syntax` | parse | `cost` needs one expression and must be the last header clause |
 | `parse/decreases_syntax` | parse | a malformed, empty or repeated `decreases` clause |
 | `parse/element_storage_type` | parse | `u8` used outside an array element type |
-| `parse/fixed_array` | parse | a fixed-length array type `[T; N]` or an array literal `[a, b]` / `[x; N]` (R-6t-4) |
 | `parse/for_decreases` | parse | a `for` loop with a `decreases` clause; the measure is generated (R-6q-1) |
 | `parse/for_iterable` | parse | a `for` head other than `a..b` or a slice/Vec place, such as `a..=b` or `a.iter()` (R-6q-3) |
 | `parse/foreign_syntax` | parse | a malformed `trusted rust fn` declaration |
@@ -3252,7 +3274,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/const_div_zero` | type | a zero divisor while evaluating a constant (R-6t-3) |
 | `type/const_expr` | type | a constant expression the compile-time evaluator cannot evaluate, or a constant cycle (R-6t-3) |
 | `type/const_range` | type | a constant value or intermediate value outside its type (R-6t-3) |
-| `type/const_type` | type | a constant of a type other than an integer width or char, or an operand of another type (R-6t-3) |
+| `type/const_type` | type | a constant of a type other than an integer width or char, an operand of another type, or a `bool`/`char` array length (R-6t-3, R-6t-4) |
 | `type/place_binding` | type | a place binding `let d = inout P;` whose place is not allowed or overlaps another live place binding (R-6g9-5) |
 | `type/async_unconsumed` | type | a temporary `Loop` is never consumed |
 | `type/bad_trigger` | type | a quantifier trigger on an aggregate, not an array read, or not mentioning the binder (R-6-3) |
@@ -3273,6 +3295,10 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/eq_type` | type | `==` or `!=` on a type that does not support whole-value equality |
 | `type/field_type` | type | a field type that is not allowed (unit, an array in a generic type, ...) |
 | `type/field_name` | type | a field name does not start with a lower-case letter |
+| `type/fixed_array_element` | type | a fixed-length array element that is not a scalar integer, `char` or `bool` (R-6t-4) |
+| `type/fixed_array_length` | type | a negative fixed-length array length, or an array larger than 65536 bytes (R-6t-4) |
+| `type/fixed_array_operation` | type | `==`/`!=` on fixed-length arrays, a fixed-length array used as a view `[T]`, or a fixed-length array literal in a contract (R-6t-4) |
+| `type/fixed_array_position` | type | `[T; N]` outside a `let` annotation: a parameter, result, field, tuple, type argument or nested array (R-6t-4) |
 | `type/for_enumerate` | type | `for (i, x) in` over an array, view or `Vec`; enumeration is bundle P15 (R-6q-3) |
 | `type/for_iterable` | type | a `for` range with non-integer bounds, or a `for` over a value that is not a slice or a `Vec` of integer/bool elements (R-6q-3) |
 | `type/foreign_borrow` | type | one value is borrowed and moved in the same call |

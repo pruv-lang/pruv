@@ -456,6 +456,7 @@ impl<'a> Mono<'a> {
         }
         match c.name.as_str() {
             "@ref" => Ok(c.clone()),
+            _ if c.is_fixed() => Ok(c.clone()), // P7-1: [T; N] has scalar elements only
             "array" => Ok(mk_array(self.lower(&c.args[0])?)),
             "option" => Ok(mk_option(self.lower(&c.args[0])?)),
             "result" => {

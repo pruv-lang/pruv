@@ -1,0 +1,7 @@
+fn f(k: i64) -> i64
+  requires k >= 0 && k <= 4
+{
+  let mut a: [u8; 4] = [0; 4];
+  a[k] = 1;
+  return 0;
+}

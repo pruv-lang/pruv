@@ -783,8 +783,31 @@ pub fn mangle(n: &str) -> String {
     out
 }
 
+/// P7-1: the fixed-array type of a type key.
+fn fixed_key(t: &str) -> Option<crate::gtype::GType> {
+    if !crate::gtype::is_g3_key(t) {
+        return None;
+    }
+    crate::gtype::GType::try_from_key(t).ok().filter(crate::gtype::GType::is_fixed)
+}
+
+/// P7-1: the byte size of a fixed-array element in memory.
+fn fixed_elem_bytes(e: &crate::gtype::GType) -> u64 {
+    if e.name == "bool" { 1 } else { crate::intwidth::of(&e.name).map_or(8, |w| u64::from(w.bits / 8)) }
+}
+
+/// P7-1: the in-memory IR type of a fixed-array element.
+fn fixed_elem_ir(e: &crate::gtype::GType) -> &'static str {
+    if e.name == "bool" { "i8" } else { vkind(&e.name).name() }
+}
+
 /// The internal SSA type of a Pruv type
 pub fn lty(t: &str) -> String {
+    if let Some(f) = fixed_key(t) {
+        // P7-1: `[T; N]` is `[N x E]` in memory (bool is i8, char i32)
+        let (e, n) = f.fixed_parts().unwrap();
+        return format!("[{} x {}]", n, fixed_elem_ir(e));
+    }
     if native_vec_elem(t).is_some() {
         return ARR.to_string();
     }
@@ -4230,6 +4253,33 @@ impl<'a> FnGen<'a> {
 
     pub fn stmt(&mut self, st: &Stmt) -> R<()> {
         match st {
+            Stmt::Let(x) if fixed_key(&x.ty).is_some() => {
+                // P7-1: a fixed array lives in its own `[N x E]` slot; copies are memcpy
+                self.begin_temps();
+                let sl = self.new_slot(&x.name, &x.ty)?;
+                self.fixed_fill(&sl.a, &x.value)?;
+                let sc = self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?;
+                sc.names.insert(x.name.clone(), Bind::Slot(sl));
+                self.end_temps()
+            }
+            Stmt::Assign(x) if self.fixed_slot(&x.name).is_some() => {
+                self.begin_temps();
+                let (sl, _) = self.fixed_slot(&x.name).unwrap();
+                self.fixed_fill(&sl.a, &x.value)?;
+                self.end_temps()
+            }
+            Stmt::IndexAssign(x) if x.fields.is_empty() && self.fixed_slot(&x.name).is_some() => {
+                // index first, then the value, then the store
+                self.begin_temps();
+                let (sl, f) = self.fixed_slot(&x.name).unwrap();
+                let el = f.fixed_parts().unwrap().0.clone();
+                let i = self.ev(&x.index, false)?;
+                let v = self.ev(&x.value, false)?;
+                let g = self.fixed_gep(&f, &sl.a, &i)?;
+                let v = self.fixed_elem_value(&el, &v)?;
+                self.ins(format!("store {} {}, ptr {}", fixed_elem_ir(&el), v, g))?;
+                self.end_temps()
+            }
             Stmt::Let(x) if x.borrowed && is_arr_name(&x.ty) => {
                 // A ref local holds a view pair without owning the buffer.
                 self.begin_temps();
@@ -4838,6 +4888,136 @@ impl<'a> FnGen<'a> {
         self.op(format!("{} {} {} to {}", if layout.starts_with('i') { "sext" } else { "zext" }, ty, x, target))
     }
 
+    /// P7-1: the storage of a fixed-array expression: a local's own slot, otherwise a fresh temporary filled from it.
+    fn fixed_ptr(&mut self, e: &Expr) -> R<String> {
+        match e {
+            Expr::Var(v) => match self.lookup(&v.name)? {
+                Bind::Slot(sl) => return Ok(sl.a),
+                _ => return Err(format!("llvmgen: fixed array `{}` is not in a slot", v.name)),
+            },
+            Expr::Call(c) if c.name == ARRAY_LIST || array_repeat_len(&c.name).is_some() => {}
+            _ => return Err("llvmgen: unsupported fixed array expression".to_string()),
+        }
+        let ty = expr_ty(e).clone().ok_or_else(|| "llvmgen: untyped fixed array".to_string())?;
+        let tmp = format!("%fx{}", self.nslot);
+        self.nslot += 1;
+        self.allocas.push(format!("{} = alloca {}", tmp, lty(&ty)));
+        self.fixed_fill(&tmp, e)?;
+        Ok(tmp)
+    }
+
+    /// P7-1: write the value of fixed-array expression `e` into `dst`. Every element is computed before the first
+    /// store, so `a = [a[1], a[0]]` reads the old `a`.
+    fn fixed_fill(&mut self, dst: &str, e: &Expr) -> R<()> {
+        let ty = expr_ty(e).clone().ok_or_else(|| "llvmgen: untyped fixed array".to_string())?;
+        let f = fixed_key(&ty).ok_or_else(|| format!("llvmgen: not a fixed array: {}", ty))?;
+        let (el, n) = f.fixed_parts().unwrap();
+        let (el, aty, eir) = (el.clone(), lty(&ty), fixed_elem_ir(el));
+        let bytes = n * fixed_elem_bytes(&el);
+        match e {
+            Expr::Call(c) if c.name == ARRAY_LIST => {
+                let mut vs = Vec::new();
+                for a in &c.args {
+                    let v = self.ev(a, false)?;
+                    vs.push(self.fixed_elem_value(&el, &v)?);
+                }
+                for (k, v) in vs.iter().enumerate() {
+                    let g = self.op(format!("getelementptr inbounds {aty}, ptr {dst}, i64 0, i64 {k}"))?;
+                    self.ins(format!("store {eir} {v}, ptr {g}"))?;
+                }
+            }
+            Expr::Call(c) if array_repeat_len(&c.name).is_some() => {
+                let v = self.ev(arg(&c.args, 0)?, false)?;
+                let v = self.fixed_elem_value(&el, &v)?;
+                if n == 0 {
+                    return Ok(());
+                }
+                if eir == "i8" {
+                    self.ins(format!("call void @llvm.memset.p0.i64(ptr {dst}, i8 {v}, i64 {bytes}, i1 false)"))?;
+                    return Ok(());
+                }
+                // a counted fill loop (LLVM turns it into memset or vector stores)
+                let j = format!("%fj{}", self.nslot);
+                self.nslot += 1;
+                self.allocas.push(format!("{j} = alloca i64"));
+                self.ins(format!("store i64 0, ptr {j}"))?;
+                let (head, body, end) = (self.label("fxh"), self.label("fxb"), self.label("fxe"));
+                self.br(&head)?;
+                self.place(&head);
+                let k = self.op(format!("load i64, ptr {j}"))?;
+                let more = self.op(format!("icmp ult i64 {k}, {n}"))?;
+                self.condbr(&more, &body, &end)?;
+                self.place(&body);
+                let g = self.op(format!("getelementptr inbounds {aty}, ptr {dst}, i64 0, i64 {k}"))?;
+                self.ins(format!("store {eir} {v}, ptr {g}"))?;
+                let k1 = self.op(format!("add nuw i64 {k}, 1"))?;
+                self.ins(format!("store i64 {k1}, ptr {j}"))?;
+                self.br(&head)?;
+                self.place(&end);
+            }
+            _ => {
+                let src = self.fixed_ptr(e)?;
+                if src != dst && bytes > 0 {
+                    self.ins(format!("call void @llvm.memcpy.p0.p0.i64(ptr {dst}, ptr {src}, i64 {bytes}, i1 false)"))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// P7-1: an element value in its in-memory form (bool widened to i8).
+    fn fixed_elem_value(&mut self, el: &crate::gtype::GType, v: &V) -> R<String> {
+        if el.name == "bool" {
+            return self.op(format!("zext i1 {} to i8", v.a));
+        }
+        Ok(v.a.clone())
+    }
+
+    /// P7-1: the address of element `i` of the fixed array at `p` (`[N x E]`); unverified code checks `i < N`.
+    fn fixed_gep(&mut self, f: &crate::gtype::GType, p: &str, i: &V) -> R<String> {
+        let (_, n) = f.fixed_parts().unwrap();
+        let i = self.fixed_index(i)?;
+        if !self.verified {
+            let ok = self.op(format!("icmp ult i64 {}, {}", i, n))?;
+            self.guard(&ok, Fail::Oob(i.clone(), n.to_string()), false)?;
+        }
+        self.op(format!("getelementptr inbounds {}, ptr {}, i64 0, i64 {}", lty(&f.to_key()), p, i))
+    }
+
+    /// P7-1: an index as i64 (a narrow index is extended by its signedness; a contract index is i128).
+    fn fixed_index(&mut self, i: &V) -> R<String> {
+        match i.k {
+            Kind::Narrow(w) if w.bits < 64 => {
+                self.op(format!("{} {} {} to i64", if w.signed { "sext" } else { "zext" }, w.llvm(), i.a))
+            }
+            Kind::I128 => Err("llvmgen: fixed array index in a contract".to_string()),
+            _ => Ok(i.a.clone()),
+        }
+    }
+
+    /// P7-1: read the element at `g` as a value of the element type.
+    fn fixed_load(&mut self, el: &crate::gtype::GType, g: &str) -> R<V> {
+        if el.name == "bool" {
+            let x8 = self.op(format!("load i8, ptr {}", g))?;
+            let b = self.op(format!("icmp ne i8 {}, 0", x8))?;
+            return Ok(V::new(Kind::I1, b));
+        }
+        let k = vkind(&el.name);
+        let r = self.op(format!("load {}, ptr {}", k.name(), g))?;
+        Ok(V::new(k, r))
+    }
+
+    /// P7-1: the local fixed-array slot named `name`, if it is one.
+    fn fixed_slot(&self, name: &str) -> Option<(Slot, crate::gtype::GType)> {
+        match self.lookup(name).ok()? {
+            Bind::Slot(sl) => {
+                let f = sl.ty.as_deref().and_then(fixed_key)?;
+                Some((sl, f))
+            }
+            Bind::Ssa(_) => None,
+        }
+    }
+
     pub fn index_ptr(&mut self, a: &V, i: &V) -> R<String> {
         // P3: an unsigned index of another width is zero-extended to i64 (64-bit ones are already i64 in IR;
         // the unsigned bounds compare below also catches a u64 index above i64 max)
@@ -5164,6 +5344,13 @@ impl<'a> FnGen<'a> {
                 Ok(V::new(Kind::I64, r))
             }
             Expr::Binary(x) => self.ev_binary(x),
+            Expr::Index(x) if expr_ty(&x.array).as_deref().and_then(fixed_key).is_some() => {
+                let f = expr_ty(&x.array).as_deref().and_then(fixed_key).unwrap();
+                let p = self.fixed_ptr(&x.array)?;
+                let i = self.ev(&x.index, false)?;
+                let g = self.fixed_gep(&f, &p, &i)?;
+                self.fixed_load(f.fixed_parts().unwrap().0, &g)
+            }
             Expr::Index(x) => {
                 let a = self.ev(&x.array, false)?;
                 let i = self.ev(&x.index, false)?;
@@ -5405,6 +5592,13 @@ impl<'a> FnGen<'a> {
             return self.ev_cast(arg(a, 0)?, target);
         }
         if n == "len" {
+            if let Some(f) = expr_ty(arg(a, 0)?).as_deref().and_then(fixed_key) {
+                // P7-1: the length is the constant N (a literal operand is still evaluated)
+                if !matches!(arg(a, 0)?, Expr::Var(_)) {
+                    self.fixed_ptr(arg(a, 0)?)?;
+                }
+                return Ok(V::new(Kind::I64, f.fixed_parts().unwrap().1.to_string()));
+            }
             let x = self.ev(arg(a, 0)?, false)?;
             if x.ty.as_deref().and_then(native_vec_elem).is_some() {
                 let len = self.op(format!("extractvalue {ARR} {}, 1", x.a))?;
@@ -6804,6 +6998,30 @@ impl<'a> FnGen<'a> {
                 Ok(V::new(Kind::I1, v))
             }
             Expr::Index(x) if expr_ty(&x.array).as_deref().and_then(native_vec_elem).is_some() => self.cload(e),
+            Expr::Index(x) if expr_ty(&x.array).as_deref().and_then(fixed_key).is_some() => {
+                // P7-1: a contract read of a fixed array element, widened to the contract's i128
+                let f = expr_ty(&x.array).as_deref().and_then(fixed_key).unwrap();
+                let (el, n) = f.fixed_parts().unwrap();
+                let el = el.clone();
+                let p = self.fixed_ptr(&x.array)?;
+                let i = self.cev(&x.index)?;
+                let ok = self.op(format!("icmp ult i128 {}, {}", i.a, n))?;
+                self.guard(&ok, und("array index out of range".to_string()), false)?;
+                let ii = self.op(format!("trunc i128 {} to i64", i.a))?;
+                let g = self.op(format!("getelementptr inbounds {}, ptr {}, i64 0, i64 {}", lty(&f.to_key()), p, ii))?;
+                let v = self.fixed_load(&el, &g)?;
+                match v.k {
+                    Kind::I1 => Ok(v),
+                    Kind::Narrow(w) => {
+                        let r = self.op(format!("{} {} {} to i128", if w.signed { "sext" } else { "zext" }, w.llvm(), v.a))?;
+                        Ok(V::new(Kind::I128, r))
+                    }
+                    _ => {
+                        let r = self.op(format!("sext i64 {} to i128", v.a))?;
+                        Ok(V::new(Kind::I128, r))
+                    }
+                }
+            }
             Expr::Index(x) => {
                 if expr_ty(&x.array).as_deref().map_or(false, is_collection) {
                     // G6 A3: not evaluable on LLVM yet
@@ -7013,6 +7231,13 @@ impl<'a> FnGen<'a> {
                         .ok_or_else(|| "'FnGen' object has no attribute 'budget'".to_string())?;
                     let r = self.op(format!("call i128 @pruv_csize__{}(ptr {}, ptr {})", aty, p, bud))?;
                     return Ok(V::new(Kind::I128, r));
+                }
+                if n == "len" && expr_ty(arg(a, 0)?).as_deref().and_then(fixed_key).is_some() {
+                    let f = expr_ty(arg(a, 0)?).as_deref().and_then(fixed_key).unwrap();
+                    if !matches!(arg(a, 0)?, Expr::Var(_)) {
+                        self.fixed_ptr(arg(a, 0)?)?;
+                    }
+                    return Ok(V::new(Kind::I128, f.fixed_parts().unwrap().1.to_string()));
                 }
                 if n == "len" {
                     let operand = arg(a, 0)?;

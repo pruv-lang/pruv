@@ -4,6 +4,20 @@
 
 pub type Type = String;
 pub type Ty = Option<String>;
+/// P7-1: a fixed-length array literal `[a, b, c]` is a `Call` of this name with the elements as arguments.
+pub const ARRAY_LIST: &str = "@array";
+/// P7-1: `[x; N]` is a `Call` named `@repeat:<N>` with the one argument `x`.
+pub const ARRAY_REPEAT: &str = "@repeat:";
+
+/// P7-1: the length of a `[x; N]` literal call name.
+pub fn array_repeat_len(name: &str) -> Option<u64> {
+    name.strip_prefix(ARRAY_REPEAT)?.parse().ok()
+}
+
+/// P7-1: a fixed-length array literal (`[a, b]` or `[x; N]`, both parsed as a reserved `Call`).
+pub fn is_array_lit(name: &str) -> bool {
+    name == ARRAY_LIST || array_repeat_len(name).is_some()
+}
 
 // ---------- G3: generics ----------
 // Names are always plain. The G3 extras are real optional fields (Python keeps them as class attributes, vast.py):

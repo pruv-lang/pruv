@@ -107,6 +107,10 @@ pub fn rty_g(g: &GType, param: bool) -> String {
     if let Some(base) = g.view_payload() {
         return view_wrapper_rty(g, base, "");
     }
+    if let Some((elem, n)) = g.fixed_parts() {
+        // P7-1: a fixed-length array is a Rust array by value
+        return format!("[{}; {}]", rty_g(elem, false), n);
+    }
     if structured_builtin(g) {
         let x = rty_g(&g.args[0], false);
         if g.name == "option" {

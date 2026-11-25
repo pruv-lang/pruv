@@ -1,0 +1,1 @@
+fn f() -> i64 { let a: [i64; 2] = [1, 2]; let v: [i64] = a; return len(v); }

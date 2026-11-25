@@ -1,0 +1,6 @@
+// P7-1 A runtime: without verification a fixed-array write index is checked at run time, before the store
+fn run(i: i64) -> i64 {
+  let mut a: [u8; 4] = [1, 2, 3, 4];
+  a[i] = 9;
+  return i64(a[0]) + i64(a[3]);
+}

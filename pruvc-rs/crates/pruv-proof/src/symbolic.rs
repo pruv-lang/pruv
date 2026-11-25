@@ -619,20 +619,22 @@ pub struct Arr {
     pub elem: Elem,
     /// G3: the element type of an array of abstract elements (`elem == Elem::Abs`), None otherwise.
     pub ety: Option<GType>,
+    /// P7-1: the `[T; N]` type of a fixed-length array value (its length is always the constant N).
+    pub fix: Option<GType>,
 }
 
 impl Arr {
     /// Pure assembly (does not touch the fresh counter).
     pub fn new(a: Ast, n: Ast, name: String, elem: Elem) -> Arr {
-        Arr { a, n, name, elem, ety: None }
+        Arr { a, n, name, elem, ety: None, fix: None }
     }
     /// An array whose elements have the abstract type `ety` (a type parameter).
     pub fn abs(a: Ast, n: Ast, name: String, ety: GType) -> Arr {
-        Arr { a, n, name, elem: Elem::Abs, ety: Some(ety) }
+        Arr { a, n, name, elem: Elem::Abs, ety: Some(ety), fix: None }
     }
     /// A new array value of the same element type (mk_arr(.., arr.elem)).
     pub fn like(&self, a: Ast, n: Ast, name: &str) -> Arr {
-        Arr { a, n, name: name.to_string(), elem: self.elem, ety: self.ety.clone() }
+        Arr { a, n, name: name.to_string(), elem: self.elem, ety: self.ety.clone(), fix: self.fix.clone() }
     }
     /// The Pruv type of an element read from an abstract array.
     pub fn elem_ty(&self) -> Ty {
@@ -643,6 +645,9 @@ impl Arr {
     }
     /// The array type of this value (to make a fresh one of the same shape).
     pub fn array_ty(&self) -> Ty {
+        if let Some(f) = &self.fix {
+            return Ty::Inst(f.clone());
+        }
         match &self.ety {
             Some(g) => Ty::GArray(g.clone()),
             None => Ty::Array(self.elem),
@@ -1863,6 +1868,16 @@ impl<'a> FnVerifier<'a> {
                 Some(s) => Ok(Val::Dt(z.constant(&n, s), ty.clone())),
                 None => Err(format!("fresh: {}", name)),
             },
+            // P7-1: [T; N] = (Array Int Int|Bool, N); the length is the constant N, the element domain is assumed on reads
+            Ty::Inst(f) if f.is_fixed() => {
+                let (e, len) = f.fixed_parts().unwrap();
+                let int = z.int_sort();
+                let (esort, elem) = if *e == GType::bool() { (z.bool_sort(), Elem::Bool) } else { (z.int_sort(), Elem::I64) };
+                let arr_sort = z.array_sort(&int, &esort);
+                let mut a = Arr::new(z.constant(&n, &arr_sort), int_const(z, len as i128), base.to_string(), elem);
+                a.fix = Some(f.clone());
+                Ok(Val::Arr(a))
+            }
             // G3: an abstract value, or an instance Option<X> / Result<X> / D<..>
             Ty::Param(_) | Ty::Inst(_) => {
                 let s = self.model.try_sort_of(ty)?;
@@ -2507,7 +2522,13 @@ impl<'a> FnVerifier<'a> {
                     };
                     let nv = self.try_fresh(n, &fty)?;
                     let mut a = nv.try_arr()?.clone();
-                    if keep.contains(n) {
+                    if let Some(f) = &a.fix {
+                        // P7-1: the length of a fixed array is the constant N (set by try_fresh); its elements keep
+                        // the range of the element type, which contract reads do not assume
+                        if let Some(width) = f.fixed_parts().and_then(|(e, _)| intwidth::of(&e.name)) {
+                            h.pc.push(self.narrow_elem_domain(&a.a, &a.n, width));
+                        }
+                    } else if keep.contains(n) {
                         a.n = old_arr.n.clone();
                     } else {
                         h.pc.push(self.z.and(&[a.n.ge_i(0), a.n.le_i(MAX_LEN)]));
@@ -3100,7 +3121,9 @@ impl<'a> FnVerifier<'a> {
                     return Ok(Val::Dt(v, arr.elem_ty()));
                 }
                 if code {
-                    let w = in_range(&self.z, &v);
+                    // P7-1: a fixed array holds only values of its element type
+                    let width = arr.fix.as_ref().and_then(|f| intwidth::of(&f.fixed_parts()?.0.name)).unwrap_or(&intwidth::I64);
+                    let w = in_int_range(&self.z, &v, width);
                     self.assume(st, g, w);
                 }
                 Ok(Val::Int(v))
@@ -3319,6 +3342,29 @@ impl<'a> FnVerifier<'a> {
     }
 
     /// verify.py `call` (line 604).
+    /// P7-1: `[a, b, ..]` stores each element over a constant array; `[x; N]` is the constant array of x.
+    fn array_lit(&mut self, x: &ast::Call, args: Vec<Val>) -> R<Val> {
+        let f = x.ty.as_deref().and_then(|k| GType::try_from_key(k).ok()).filter(GType::is_fixed)
+            .ok_or_else(|| format!("array literal without a fixed type: {:?}", x.ty))?;
+        let (e, len) = f.fixed_parts().unwrap();
+        let is_bool = *e == GType::bool();
+        let int = self.z.int_sort();
+        let fill = match args.first() {
+            Some(v) => v.try_ast()?.clone(),
+            None if is_bool => self.z.bool_val(false),
+            None => self.z.int(0),
+        };
+        let mut a = self.z.const_array(&int, &fill);
+        if pruv_core::ast::array_repeat_len(&x.name).is_none() {
+            for (k, v) in args.iter().enumerate().skip(1) {
+                a = a.store(&self.z.int(k as i64), v.try_ast()?);
+            }
+        }
+        let mut arr = Arr::new(a, int_const(&self.z, len as i128), "array".to_string(), if is_bool { Elem::Bool } else { Elem::I64 });
+        arr.fix = Some(f.clone());
+        Ok(Val::Arr(arr))
+    }
+
     fn call(&mut self, e: &Expr, x: &ast::Call, st: &mut State, g: &[Ast], code: bool, env: &Env) -> R<Val> {
         let n = x.name.as_str();
         if let Some((param, _)) = &x.old {
@@ -3350,6 +3396,9 @@ impl<'a> FnVerifier<'a> {
                 self.assume(st, g, ob);
             }
             return Ok(value.clone());
+        }
+        if pruv_core::ast::is_array_lit(n) {
+            return self.array_lit(x, args);
         }
         match n {
             "len" => {
