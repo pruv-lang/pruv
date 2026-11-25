@@ -1532,6 +1532,12 @@ must_reject|must_reject/p8_slice_shadowed_arm.pruv	2 cases: exit 2	llvm=7a463465
 must_reject|must_reject/p8_slice_view_call.pruv	2 cases: exit 2	llvm=06ba21006804	rust=06ba21006804
 must_reject|must_reject/p8_while_let_irrefutable.pruv	2 cases: exit 2	llvm=0544206b4d20	rust=0544206b4d20
 must_reject|must_reject/p8_while_let_mut_none.pruv	2 cases: exit 2	llvm=edff8bb10be6	rust=edff8bb10be6
+must_reject|must_reject/p9_alias_arity.pruv	2 cases: exit 2	llvm=8f096f7742bb	rust=8f096f7742bb
+must_reject|must_reject/p9_alias_cycle.pruv	2 cases: exit 2	llvm=1b3b5ae3c8c9	rust=1b3b5ae3c8c9
+must_reject|must_reject/p9_alias_duplicate.pruv	2 cases: exit 2	llvm=a01eda05eb13	rust=a01eda05eb13
+must_reject|must_reject/p9_alias_false_ensures.pruv	2 cases: exit 2	llvm=56521001349e	rust=56521001349e
+must_reject|must_reject/p9_alias_growing_cycle.pruv	2 cases: exit 2	llvm=649af8ff8292	rust=649af8ff8292
+must_reject|must_reject/p9_alias_module.pruv	2 cases: exit 2	llvm=24899bf5cbc9	rust=24899bf5cbc9
 must_reject|must_reject/refine_alloc_len.pruv	2 cases: exit 2	llvm=91183d4f0e90	rust=91183d4f0e90
 must_reject|must_reject/refine_base_bool.pruv	2 cases: exit 2	llvm=345aab8fdc3a	rust=345aab8fdc3a
 must_reject|must_reject/refine_bounds_i64.pruv	2 cases: exit 2	llvm=f53a5fc811dd	rust=f53a5fc811dd
@@ -2817,6 +2823,10 @@ runtime|runtime/p8_rt_while_let [--no-verify]	2 cases: exit 2	llvm=77b25b176aad	
 runtime|runtime/p8_rt_while_let [default]	2 cases: exit 2	llvm=7d771709a88a	rust=4832da22cd51
 runtime|runtime/p8_rt_while_let_cost [--no-verify]	2 cases: exit 2	llvm=0b292d7d1d98	rust=17046dae3dae
 runtime|runtime/p8_rt_while_let_cost [default]	2 cases: exit 2	llvm=853f480ecb84	rust=42d4b45c2515
+runtime|runtime/p9_rt_alias [--no-verify]	2 cases: exit 2	llvm=81560451379c	rust=354c6447dcf2
+runtime|runtime/p9_rt_alias [default]	2 cases: exit 2	llvm=3d166844e1a9	rust=2a32a5d6df77
+runtime|runtime/p9_rt_alias_p8 [--no-verify]	2 cases: exit 2	llvm=746f0d03e0ef	rust=8989c285844c
+runtime|runtime/p9_rt_alias_p8 [default]	2 cases: exit 2	llvm=55ab582bb994	rust=4d83574d4bbd
 runtime|runtime/qb_across_requires [default]	2 cases: exit 2	llvm=ff5c2dfbf8ac	rust=58621f5fc757
 runtime|runtime/qb_budget_edge [--no-verify]	2 cases: exit 2	llvm=0e7eca380e0a	rust=f6027668c6f1
 runtime|runtime/qb_budget_edge [default]	2 cases: exit 2	llvm=0e7eca380e0a	rust=c0e4464978ad

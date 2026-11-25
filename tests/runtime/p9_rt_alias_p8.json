@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["50", "7", "0"], "gen_contains": ["type Row = [i64; 3];"]}

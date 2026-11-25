@@ -1,0 +1,2 @@
+type A<T> = Option<A<Option<T>>>;
+fn f(x: i64) -> i64 { return x; }

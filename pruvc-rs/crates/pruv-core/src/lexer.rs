@@ -176,6 +176,10 @@ fn g4_token(word: &str, src: &[char], end: usize, toks: &[Tok], depth: usize) ->
     if word == "mod" {
         return q < n && (src[q].is_ascii_alphabetic() || matches!(src[q], '_' | '"' | '{'));
     }
+    if word == "type" {
+        // P9: `type Name<..> = T;` at item start
+        return q < n && src[q].is_ascii_uppercase();
+    }
     let mut r = q;
     while r < n && (src[r].is_ascii_alphanumeric() || src[r] == '_') {
         r += 1;
@@ -184,7 +188,7 @@ fn g4_token(word: &str, src: &[char], end: usize, toks: &[Tok], depth: usize) ->
     if word == "extern" {
         return w == "fn";
     }
-    matches!(w.as_str(), "fn" | "struct" | "enum" | "mod" | "pub" | "const" | "trusted" | "rust" | "opaque" | "pred" | "extern")
+    matches!(w.as_str(), "fn" | "struct" | "enum" | "mod" | "pub" | "const" | "trusted" | "rust" | "opaque" | "pred" | "extern" | "type")
 }
 
 /// The operator token starting at pos (regex order: 3 characters, 2 characters, 1 character).
@@ -418,7 +422,7 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
                 toks.push(Tok { kind: Kind::Kw, val: v, line, col, end });
                 continue;
             }
-            if matches!(v.as_str(), "mod" | "pub" | "crate" | "extern") && g4_token(&v, src, pos, &toks, brace_depth) {
+            if matches!(v.as_str(), "mod" | "pub" | "crate" | "extern" | "type") && g4_token(&v, src, pos, &toks, brace_depth) {
                 let end = col + (pos - start) as i64;
                 toks.push(Tok { kind: Kind::Kw, val: v, line, col, end });
                 continue;

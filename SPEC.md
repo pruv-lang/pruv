@@ -2828,6 +2828,32 @@ variants (R-6u-5).
   [borrowed target](tests/must_reject/p8_borrow_target_while.pruv),
   [mutable None](tests/must_reject/p8_while_let_mut_none.pruv).
 
+## 6v. Type aliases (P9a)
+```
+type Code = i64;
+type Res<T> = Result<T, Code>;
+type Row = [i64; 3];
+
+fn head(r: Row) -> Res<i64> { if r[0] < 0 { return Err(r[0]); } return Ok(r[0]); }
+```
+- R-6v-1 **Transparent aliases.** `type Name<P, ..> = T;` names an existing type; every use is that type, with the
+  arguments in place of the parameters. An alias adds no type of its own: invariants, integer ranges, `Result`
+  payloads, proofs and both backends' layouts are those of `T`. Aliases may be used before their declaration and may
+  name other aliases. They appear in type positions (parameters, results, `let` annotations, fields, type arguments);
+  values and patterns use the original constructors. A position limit of `T` still applies at each use (a
+  `[T; N]` alias as a type argument is `type/fixed_array_position`), and a generic alias whose right side is a tuple is
+  `parse/tuple_generic` (R-6s). The name starts with a capital letter and refinements are not allowed on the right side
+  (`parse/refinement_position`). A name declared as both an alias and a struct or enum, or two aliases with one name,
+  is `type/dup_type`; a wrong number of arguments `type/type_arity`; an alias that reaches itself (also through
+  arguments that only grow, `type A<T> = Option<A<Option<T>>>`) `type/alias_cycle`, reported for unused aliases too.
+  Aliases exist only in a single-file program without `pub` or `mod` items (`parse/alias_module`, parity row P9a-1).
+  Code: the Rust module keeps a `type Name = T;` item for each used non-generic alias over built-in or non-generic
+  declared types; uses print the expanded type (parity row P9a-2). Tests: [runtime](tests/runtime/p9_rt_alias.pruv),
+  [with patterns](tests/runtime/p9_rt_alias_p8.pruv), [cycle](tests/must_reject/p9_alias_cycle.pruv),
+  [growing cycle](tests/must_reject/p9_alias_growing_cycle.pruv), [duplicate](tests/must_reject/p9_alias_duplicate.pruv),
+  [arity](tests/must_reject/p9_alias_arity.pruv), [module](tests/must_reject/p9_alias_module.pruv),
+  [false contract](tests/must_reject/p9_alias_false_ensures.pruv).
+
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
 2. Every `+ - * unary-` in code: result within i64 range.
@@ -3259,6 +3285,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/bad_int` | parse | a malformed integer literal, such as a trailing `_` (R-1-2) |
 | `parse/break_value` | parse | `break` followed by a value (not `;`, a label or `}`); bundle P15 (R-6r-3) |
 | `parse/char_literal` | parse | a malformed character or byte literal: empty, several characters, a surrogate or an out-of-range escape (R-6t-1) |
+| `parse/alias_module` | parse | a type alias in a program with `pub` or `mod` items (R-6v-1) |
 | `parse/const_module` | parse | `pub const`, or a constant in a program with `pub` or `mod` items (R-6t-3) |
 | `parse/const_name` | parse | a constant name that is not upper case (R-6t-3) |
 | `parse/const_shadow` | parse | a name declared again where a constant of that name exists, or a constant declared twice (R-6t-3) |
@@ -3310,6 +3337,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `pkg/std_in_dependency` | pkg | `mod std;` inside a dependency package |
 | `pkg/unused_dependency` | pkg | a declared dependency is not mounted by `mod` in the package root |
 | `pkg/version_unsatisfied` | pkg | a package version does not satisfy a requirement |
+| `type/alias_cycle` | type | a type alias reaches itself (R-6v-1) |
 | `type/arity` | type | a call or constructor with the wrong number of arguments |
 | `type/array_alias` | type | a borrowed array or str is stored or returned without `copy` |
 | `type/borrow_conflict` | type | a root of a live borrow is written, moved or lent `inout` (exclusive root: used) (R-6g-11) |

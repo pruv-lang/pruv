@@ -1,0 +1,9 @@
+// the alias return type changes nothing: a wrong promise on the Err path only is still caught
+type Res<T> = Result<T, i64>;
+fn f(x: i64) -> Res<i64>
+  requires -100 < x && x < 100
+  ensures result == Ok(x) || result == Err(x)
+{
+  if x < 0 { return Err(x - 1); }
+  return Ok(x);
+}

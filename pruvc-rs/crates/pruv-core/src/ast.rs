@@ -607,6 +607,16 @@ pub struct Program {
     pub pkg_name: Option<String>,
     /// P7: module-level `const NAME: T = expr;` items, evaluated by the parser (uses are already literals)
     pub consts: Vec<ConstItem>,
+    /// P9: the used type aliases of a single-file program (uses are already expanded); only the Rust output prints them
+    pub aliases: Vec<AliasItem>,
+}
+
+/// P9: `type name<params> = rhs;` with `rhs` a type key whose parameters are plain names.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AliasItem {
+    pub name: String,
+    pub params: Vec<String>,
+    pub rhs: String,
 }
 
 /// P7: one evaluated module constant; `ty` is an int width name or `char`.
