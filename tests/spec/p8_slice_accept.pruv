@@ -1,0 +1,49 @@
+// spec: R-6u-4 accept
+// Slice patterns pick the first arm whose length test holds; prefix binders read elements and a named rest is a
+// read-only view of the remaining elements (here indexed). A view (`ref [u8]`) is a target like its owner.
+fn head(t: [i64]) -> i64
+  ensures len(t) == 0 ==> result == -1
+  ensures len(t) > 0 ==> result == t[0]
+{
+  match t {
+    [x, ..] => { return x; }
+    [] => { return -1; }
+  }
+}
+
+fn second(u: [u8]) -> i64
+  ensures len(u) >= 3 ==> result == u[2]
+  ensures len(u) == 2 ==> result == -1
+  ensures len(u) <= 1 ==> result == 0
+{
+  if len(u) == 0 { return 0; }
+  let v: ref [u8] = subview(u, 1, len(u));
+  match v {
+    [] => { return 0; }
+    [_] => { return -1; }
+    [_, b, ..] => { return b; }
+  }
+}
+
+fn after_two(v: [u16]) -> i64
+  requires len(v) <= 100
+  ensures len(v) >= 3 ==> result == v[2]
+{
+  match v {
+    [_, _, rest @ ..] => {
+      if len(rest) == 0 { return -1; }
+      return rest[0];
+    }
+    [..] => { return -2; }
+  }
+}
+
+fn pair(f: [bool]) -> bool
+  ensures len(f) == 2 ==> result == (f[0] && f[1])
+  ensures len(f) != 2 ==> !result
+{
+  match f {
+    [a, b] => { return a && b; }
+    [..] => { return false; }
+  }
+}

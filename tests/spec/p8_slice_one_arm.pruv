@@ -1,0 +1,28 @@
+// spec: R-6u-4 accept
+// A lone `[..]` or `[rest @ ..]` arm takes every length, so a function may end with it.
+fn all(a: [i64]) -> i64
+  ensures result == len(a)
+{
+  match a {
+    [..] => { return len(a); }
+  }
+}
+
+fn whole(a: [u8]) -> i64
+  ensures result == len(a)
+{
+  let k: i64 = 1;
+  match a {
+    [rest @ ..] => { return len(rest) * k; }
+  }
+}
+
+fn mid(a: [bool]) -> i64
+  ensures result == len(a) + 1
+{
+  let mut r: i64 = 0;
+  match a {
+    [rest @ ..] => { r = len(rest); }
+  }
+  return r + 1;
+}

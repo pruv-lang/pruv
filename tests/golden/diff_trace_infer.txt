@@ -1362,6 +1362,14 @@ must_reject|tests/must_reject/p7_measure_char.pruv	1 case: obl=0 1	--infer=d7d08
 must_reject|tests/must_reject/p8_borrow_target_if.pruv	1 case: obl=0 1	--infer=9aee743b10f8
 must_reject|tests/must_reject/p8_borrow_target_let.pruv	1 case: obl=0 1	--infer=cef4a71cfc44
 must_reject|tests/must_reject/p8_borrow_target_match.pruv	1 case: obl=0 1	--infer=150a25ded856
+must_reject|tests/must_reject/p8_borrow_target_while.pruv	1 case: obl=0 1	--infer=7c0d951f7a63
+must_reject|tests/must_reject/p8_slice_call_target.pruv	1 case: obl=0 1	--infer=d561a666feb4
+must_reject|tests/must_reject/p8_slice_mixed_arms.pruv	1 case: obl=0 1	--infer=54be549f6f55
+must_reject|tests/must_reject/p8_slice_rest_write.pruv	1 case: obl=0 1	--infer=79a15144dcf4
+must_reject|tests/must_reject/p8_slice_shadowed_arm.pruv	1 case: obl=0 1	--infer=0607d22d073a
+must_reject|tests/must_reject/p8_slice_view_call.pruv	1 case: obl=0 1	--infer=961009c1d754
+must_reject|tests/must_reject/p8_while_let_irrefutable.pruv	1 case: obl=0 1	--infer=0d29c25caee3
+must_reject|tests/must_reject/p8_while_let_mut_none.pruv	1 case: obl=0 1	--infer=b8cab933589d
 must_reject|tests/must_reject/refine_alloc_len.pruv	1 case: obl=4 1	--infer=cb1feac1781b
 must_reject|tests/must_reject/refine_base_bool.pruv	1 case: obl=0 1	--infer=df4b068e07a3
 must_reject|tests/must_reject/refine_bounds_i64.pruv	1 case: obl=0 1	--infer=7c3e5998f1e1
@@ -1865,8 +1873,11 @@ runtime|tests/runtime/p7_rt_const_inout.pruv	1 case: obl=13 1	--infer=639b2f83ce
 runtime|tests/runtime/p7_rt_const_range.pruv	1 case: obl=10 1	--infer=24c3f182aeac
 runtime|tests/runtime/p8_rt_if_let.pruv	1 case: obl=51 1	--infer=ef05923a9246
 runtime|tests/runtime/p8_rt_let_else.pruv	1 case: obl=80 1	--infer=1b711500226c
+runtime|tests/runtime/p8_rt_slice.pruv	1 case: obl=96 1	--infer=be5ee26f4e88
 runtime|tests/runtime/p8_rt_tuple_arm.pruv	1 case: obl=41 1	--infer=26febef862e7
 runtime|tests/runtime/p8_rt_tuple_arm_owned.pruv	1 case: obl=8 1	--infer=6f8ce736ce22
+runtime|tests/runtime/p8_rt_while_let.pruv	1 case: obl=149 1	--infer=e70479b0954a
+runtime|tests/runtime/p8_rt_while_let_cost.pruv	1 case: obl=52 1	--infer=543800c576f8
 runtime|tests/runtime/qb_across_requires.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 runtime|tests/runtime/qb_budget_edge.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 runtime|tests/runtime/qb_nested_budget.pruv	1 case: obl=0 1	--infer=a887fdcb74d6

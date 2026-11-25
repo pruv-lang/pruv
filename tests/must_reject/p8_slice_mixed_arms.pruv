@@ -1,0 +1,7 @@
+// P8b: slice arms cannot be mixed with constructor arms in one match (type/match_type)
+fn f(t: [i64]) -> i64 {
+  match t {
+    [a, ..] => { return a; }
+    None => { return 0; }
+  }
+}

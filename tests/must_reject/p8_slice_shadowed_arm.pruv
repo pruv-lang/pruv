@@ -1,0 +1,8 @@
+// P8b: a slice arm whose lengths an earlier arm already takes is type/match_arms
+fn f(t: [i64]) -> i64 {
+  match t {
+    [a, ..] => { return a; }
+    [a, b] => { return a + b; }
+    [] => { return 0; }
+  }
+}

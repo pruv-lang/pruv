@@ -1,0 +1,11 @@
+// spec: R-6u-4 reject
+// The rest starts after the prefix: its first element is t[1], not t[0].
+fn g(t: [i64]) -> i64
+  requires len(t) >= 2
+  ensures result == t[0]
+{
+  match t {
+    [_, rest @ ..] => { return rest[0]; }
+    [] => { return 0; }
+  }
+}

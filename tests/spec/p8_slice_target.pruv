@@ -1,0 +1,8 @@
+// spec: R-6u-4 reject
+// A slice pattern needs an array place; a str target is a type error.
+fn f(s: str) -> i64 {
+  match s {
+    [] => { return 0; }
+    [..] => { return 1; }
+  }
+}

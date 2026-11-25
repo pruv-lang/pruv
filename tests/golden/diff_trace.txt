@@ -1363,6 +1363,14 @@ must_reject|tests/must_reject/p7_measure_char.pruv	1 case: obl=0 1	default=c80d0
 must_reject|tests/must_reject/p8_borrow_target_if.pruv	1 case: obl=0 1	default=09794008cce7
 must_reject|tests/must_reject/p8_borrow_target_let.pruv	1 case: obl=0 1	default=2b4913842ed6
 must_reject|tests/must_reject/p8_borrow_target_match.pruv	1 case: obl=0 1	default=e919d84d4e70
+must_reject|tests/must_reject/p8_borrow_target_while.pruv	1 case: obl=0 1	default=d2c3ab51fc86
+must_reject|tests/must_reject/p8_slice_call_target.pruv	1 case: obl=0 1	default=501ad1749409
+must_reject|tests/must_reject/p8_slice_mixed_arms.pruv	1 case: obl=0 1	default=beb7fb3571a3
+must_reject|tests/must_reject/p8_slice_rest_write.pruv	1 case: obl=0 1	default=57d0d85be30a
+must_reject|tests/must_reject/p8_slice_shadowed_arm.pruv	1 case: obl=0 1	default=a921114e2e3f
+must_reject|tests/must_reject/p8_slice_view_call.pruv	1 case: obl=0 1	default=7f93ff1b16dc
+must_reject|tests/must_reject/p8_while_let_irrefutable.pruv	1 case: obl=0 1	default=eadec0c15b95
+must_reject|tests/must_reject/p8_while_let_mut_none.pruv	1 case: obl=0 1	default=33c8451bc5c2
 must_reject|tests/must_reject/refine_alloc_len.pruv	1 case: obl=4 1	default=14a4c91b9d32
 must_reject|tests/must_reject/refine_base_bool.pruv	1 case: obl=0 1	default=ee830c6079aa
 must_reject|tests/must_reject/refine_bounds_i64.pruv	1 case: obl=0 1	default=d4b00a9eb36d
@@ -1866,8 +1874,11 @@ runtime|tests/runtime/p7_rt_const_inout.pruv	1 case: obl=13 1	default=e7ce2e58dd
 runtime|tests/runtime/p7_rt_const_range.pruv	1 case: obl=10 1	default=dd309feac065
 runtime|tests/runtime/p8_rt_if_let.pruv	1 case: obl=51 1	default=f0e0293b4746
 runtime|tests/runtime/p8_rt_let_else.pruv	1 case: obl=56 1	default=2551d510aedf
+runtime|tests/runtime/p8_rt_slice.pruv	1 case: obl=59 1	default=6b65b6544a30
 runtime|tests/runtime/p8_rt_tuple_arm.pruv	1 case: obl=41 1	default=117c13a6050f
 runtime|tests/runtime/p8_rt_tuple_arm_owned.pruv	1 case: obl=8 1	default=714fabc549b4
+runtime|tests/runtime/p8_rt_while_let.pruv	1 case: obl=79 1	default=5c4dd42fadba
+runtime|tests/runtime/p8_rt_while_let_cost.pruv	1 case: obl=36 1	default=70b71c777dc5
 runtime|tests/runtime/qb_across_requires.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 runtime|tests/runtime/qb_budget_edge.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 runtime|tests/runtime/qb_nested_budget.pruv	1 case: obl=0 1	default=c0f6163aeb7a

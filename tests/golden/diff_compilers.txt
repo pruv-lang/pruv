@@ -1448,6 +1448,14 @@ must_reject|must_reject/p7_measure_char.pruv	2 cases: exit 2	llvm=21f36fcc625f	r
 must_reject|must_reject/p8_borrow_target_if.pruv	2 cases: exit 2	llvm=a56d991e23eb	rust=a56d991e23eb
 must_reject|must_reject/p8_borrow_target_let.pruv	2 cases: exit 2	llvm=7f13c14f7513	rust=7f13c14f7513
 must_reject|must_reject/p8_borrow_target_match.pruv	2 cases: exit 2	llvm=36b0371e4724	rust=36b0371e4724
+must_reject|must_reject/p8_borrow_target_while.pruv	2 cases: exit 2	llvm=1ffe45bf9e55	rust=1ffe45bf9e55
+must_reject|must_reject/p8_slice_call_target.pruv	2 cases: exit 2	llvm=60cd11ed32e6	rust=60cd11ed32e6
+must_reject|must_reject/p8_slice_mixed_arms.pruv	2 cases: exit 2	llvm=a2d0d6b261c4	rust=a2d0d6b261c4
+must_reject|must_reject/p8_slice_rest_write.pruv	2 cases: exit 2	llvm=3b9686057f58	rust=3b9686057f58
+must_reject|must_reject/p8_slice_shadowed_arm.pruv	2 cases: exit 2	llvm=7a463465762a	rust=7a463465762a
+must_reject|must_reject/p8_slice_view_call.pruv	2 cases: exit 2	llvm=06ba21006804	rust=06ba21006804
+must_reject|must_reject/p8_while_let_irrefutable.pruv	2 cases: exit 2	llvm=0544206b4d20	rust=0544206b4d20
+must_reject|must_reject/p8_while_let_mut_none.pruv	2 cases: exit 2	llvm=edff8bb10be6	rust=edff8bb10be6
 must_reject|must_reject/refine_alloc_len.pruv	2 cases: exit 2	llvm=91183d4f0e90	rust=91183d4f0e90
 must_reject|must_reject/refine_base_bool.pruv	2 cases: exit 2	llvm=345aab8fdc3a	rust=345aab8fdc3a
 must_reject|must_reject/refine_bounds_i64.pruv	2 cases: exit 2	llvm=f53a5fc811dd	rust=f53a5fc811dd
@@ -2678,10 +2686,16 @@ runtime|runtime/p8_rt_if_let [--no-verify]	2 cases: exit 2	llvm=5ea4323a4d80	rus
 runtime|runtime/p8_rt_if_let [default]	2 cases: exit 2	llvm=635f939d6541	rust=3c0c9af28ec9
 runtime|runtime/p8_rt_let_else [--no-verify]	2 cases: exit 2	llvm=e71d764c84da	rust=b96487bd08e9
 runtime|runtime/p8_rt_let_else [default]	2 cases: exit 2	llvm=91d5636a0abb	rust=1eaf3733150f
+runtime|runtime/p8_rt_slice [--no-verify]	2 cases: exit 2	llvm=464210779a84	rust=57c5619f6149
+runtime|runtime/p8_rt_slice [default]	2 cases: exit 2	llvm=1942fa4bce4a	rust=3f559e901bdb
 runtime|runtime/p8_rt_tuple_arm [--no-verify]	2 cases: exit 2	llvm=55548021744a	rust=773201ccb448
 runtime|runtime/p8_rt_tuple_arm [default]	2 cases: exit 2	llvm=98f45355579b	rust=17a78f481fc7
 runtime|runtime/p8_rt_tuple_arm_owned [--no-verify]	2 cases: exit 2	llvm=cc16f2f1dcc1	rust=a47cd60dce81
 runtime|runtime/p8_rt_tuple_arm_owned [default]	2 cases: exit 2	llvm=cc16f2f1dcc1	rust=23d44b215e94
+runtime|runtime/p8_rt_while_let [--no-verify]	2 cases: exit 2	llvm=77b25b176aad	rust=57aa5723f1d3
+runtime|runtime/p8_rt_while_let [default]	2 cases: exit 2	llvm=7d771709a88a	rust=4832da22cd51
+runtime|runtime/p8_rt_while_let_cost [--no-verify]	2 cases: exit 2	llvm=0b292d7d1d98	rust=17046dae3dae
+runtime|runtime/p8_rt_while_let_cost [default]	2 cases: exit 2	llvm=853f480ecb84	rust=42d4b45c2515
 runtime|runtime/qb_across_requires [default]	2 cases: exit 2	llvm=ff5c2dfbf8ac	rust=58621f5fc757
 runtime|runtime/qb_budget_edge [--no-verify]	2 cases: exit 2	llvm=0e7eca380e0a	rust=f6027668c6f1
 runtime|runtime/qb_budget_edge [default]	2 cases: exit 2	llvm=0e7eca380e0a	rust=c0e4464978ad

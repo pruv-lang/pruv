@@ -1,0 +1,8 @@
+// P8b: a slice pattern target must be a place (local, parameter or field path); a call result is type/match_type
+fn mk() -> [i64] ! alloc { return alloc(2, 0); }
+fn f() -> i64 ! alloc {
+  match mk() {
+    [a, ..] => { return a; }
+    [] => { return 0; }
+  }
+}

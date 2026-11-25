@@ -1,0 +1,8 @@
+// spec: R-6u-4 reject
+// A rest `..` must be the last element of a slice pattern.
+fn f(t: [i64]) -> i64 {
+  match t {
+    [.., x] => { return x; }
+    [] => { return 0; }
+  }
+}

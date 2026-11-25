@@ -1,0 +1,96 @@
+// P8b runtime: `while let` with zero, one and many iterations; the head call runs once per check
+// (the counter `c` ends at iterations + 1), `continue` re-evaluates the head, `break` does not,
+// labeled jumps from a nested loop, and an inout write-back through the head call.
+fn pop(inout c: i64, inout n: i64) -> Option<i64>
+  requires 0 <= n && n <= 100 && 0 <= c && c <= 1000
+  ensures c == old(c) + 1
+  ensures old(n) == 0 ==> !is_some(result) && n == 0
+  ensures old(n) > 0 ==> is_some(result) && some_val(result) == old(n) && n == old(n) - 1
+{
+  c = c + 1;
+  if n == 0 { return None; }
+  n = n - 1;
+  return Some(n + 1);
+}
+
+// Sum k + (k-1) + ... + 1; the head runs k + 1 times.
+fn drain(k: i64) -> i64
+  requires 0 <= k && k <= 10
+{
+  let mut c: i64 = 0;
+  let mut n: i64 = k;
+  let mut s: i64 = 0;
+  while let Some(v) = pop(inout c, inout n)
+    invariant 0 <= n && n <= k && c == k - n && 0 <= s && s <= (k - n) * 10
+    decreases n
+  {
+    s = s + v;
+  }
+  return s * 100 + c;
+}
+
+// Even values `continue` (the head runs again); 3 breaks the outer loop from a nested one (the head does not
+// run again); 5 continues the outer loop from the nested one.
+fn jumps(k: i64) -> i64
+  requires 0 <= k && k <= 10
+{
+  let mut c: i64 = 0;
+  let mut n: i64 = k;
+  let mut s: i64 = 0;
+  'outer: while let Some(v) = pop(inout c, inout n)
+    invariant 0 <= n && n <= k && c == k - n && 0 <= s && s <= (k - n) * 1000
+    decreases n
+  {
+    if v % 2 == 0 { continue; }
+    let mut j: i64 = 0;
+    while j < 3
+      invariant 0 <= j && j <= 3
+      decreases 3 - j
+    {
+      if v == 3 { break 'outer; }
+      if j == 1 && v == 5 { continue 'outer; }
+      j = j + 1;
+    }
+    s = s + 1000;
+  }
+  return s * 100 + c;
+}
+
+// A named rest is live up to `continue`; the next iteration reads the owner again and the body
+// writes it after the match, so each head sees the previous write.
+fn cross(k: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 6
+{
+  let mut buf: [i64] = alloc(3, 1);
+  let mut c: i64 = 0;
+  let mut n: i64 = k;
+  let mut s: i64 = 0;
+  while let Some(v) = pop(inout c, inout n)
+    invariant 0 <= n && n <= k && c == k - n && len(buf) == 3
+    invariant 0 <= s && s <= (k - n) * 100
+    invariant buf[0] >= 0 && buf[0] <= 10 && buf[1] == 1
+    decreases n
+  {
+    match buf {
+      [first, rest @ ..] => {
+        s = s + first + len(rest) * 10;
+        if v % 2 == 0 {
+          let keep: i64 = rest[0];
+          s = s + keep;
+          continue;
+        }
+      }
+      [] => { }
+    }
+    buf[0] = v;
+  }
+  return s * 100 + c;
+}
+
+fn run(k: i64, part: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 6
+{
+  if part == 0 { return drain(k); }
+  if part == 1 { return jumps(k); }
+  return cross(k);
+}

@@ -261,6 +261,9 @@ pub enum MatchForm {
     Match,
     IfLet,
     LetElse,
+    /// P8b: the head of `while let P = e { B }`, which the parser writes as `while true { match e { P => B } }` with
+    /// this form and `els = [break;]`; the checker adds the complement arms (`While::let_head`).
+    WhileLet,
 }
 /// STAGE1 A refinement annotation (vast.Refinement). Position = the first token of the annotated type. Type stays the base type.
 /// shape "scalar" | "array". lo/hi/maxlen are a sign plus a normalized decimal string (arbitrary length; range checks are in refine.rs).
@@ -322,6 +325,38 @@ pub struct While {
     pub for_head: Option<ForHead>,
     /// P5: the Rust-style loop label `'name` (without the quote), on `'name: while` or `'name: for`.
     pub label: Option<String>,
+}
+impl While {
+    /// P8b: the head match of a `while let` loop (see `MatchForm::WhileLet`).
+    pub fn let_head(&self) -> Option<&Match> {
+        match (&self.cond, self.body.first()) {
+            (Expr::BoolLit(b), Some(Stmt::Match(m))) if b.value && m.form == MatchForm::WhileLet => Some(m),
+            _ => None,
+        }
+    }
+
+    /// P8b: the cost-mode form of a `while let` loop. A failed head costs no iteration (R-6u-5), so the loop
+    /// line does not charge; arm 0 starts (after its pattern lets) with `while true { break; }`, one iteration of an empty loop, which
+    /// charges the unit in both backends. Callers drop their own per-iteration charge for this loop.
+    pub fn cost_let_loop(&self) -> Option<While> {
+        self.let_head()?;
+        let mut w = self.clone();
+        let Some(Stmt::Match(m)) = w.body.first_mut() else { return None };
+        let (line, col) = (m.arms[0].line, m.arms[0].col);
+        let tick = Stmt::While(While {
+            line, col,
+            cond: Expr::BoolLit(BoolLit { line, col, value: true, ty: Some("bool".into()) }),
+            invariants: Vec::new(),
+            decreases: Expr::IntLit(IntLit { line, col, value: "1".into(), ty: Some("i64".into()), kind: LitKind::default() }),
+            body: vec![Stmt::Break(Jump { line, col, label: None })],
+            for_head: None,
+            label: None,
+        });
+        // after the lowered tuple-pattern lets, which the Rust backend folds back into the pattern
+        let at = m.arms[0].pat_lets;
+        m.arms[0].body.insert(at, tick);
+        Some(w)
+    }
 }
 /// P5: `break ['label];` or `continue ['label];`. `label` is the name without the quote.
 #[derive(Debug, Clone, PartialEq)]

@@ -1,0 +1,6 @@
+// P8b: a slice pattern target that is a view-producing call is not a place (type/match_type before view rules)
+fn f(a: [i64]) -> i64 {
+  match subview(a, 0, len(a)) {
+    [..] => { return 0; }
+  }
+}

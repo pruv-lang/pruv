@@ -1,0 +1,29 @@
+// spec: R-6u-5 accept
+// `while let` re-evaluates its target before each iteration (after `continue` too) and leaves the loop when the
+// pattern fails; the invariant and decreases are checked on each back edge, and a failed head needs no decreases.
+fn pop(inout n: i64) -> Option<i64>
+  requires n >= 0
+  ensures old(n) == 0 ==> !is_some(result) && n == 0
+  ensures old(n) > 0 ==> is_some(result) && some_val(result) == old(n) && n == old(n) - 1
+{
+  if n == 0 { return None; }
+  n = n - 1;
+  return Some(n + 1);
+}
+
+fn total(k: i64) -> i64
+  requires 0 <= k && k <= 100
+  ensures result >= 0
+{
+  let mut n: i64 = k;
+  let mut s: i64 = 0;
+  'top: while let Some(v) = pop(inout n)
+    invariant 0 <= n && n <= k && 0 <= s && s <= (k - n) * 100
+    decreases n
+  {
+    if v % 2 == 0 { continue 'top; }
+    if v > 90 { break; }
+    s = s + v;
+  }
+  return s;
+}

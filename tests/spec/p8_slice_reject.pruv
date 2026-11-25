@@ -1,0 +1,8 @@
+// spec: R-6u-4 reject
+// Lengths 2 and up are covered, but no arm takes a slice of length 1.
+fn f(t: [i64]) -> i64 {
+  match t {
+    [] => { return 0; }
+    [a, b, ..] => { return a + b; }
+  }
+}
