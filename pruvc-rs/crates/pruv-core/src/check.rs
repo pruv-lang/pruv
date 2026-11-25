@@ -2812,7 +2812,14 @@ impl Checker {
             }
         }
         let mut ext: HashSet<String> = rec.union(&direct).cloned().collect();
+        // P7-1 B: an inline `[T; N]` field makes `==` unsound in proofs (Buf compares the whole SMT array), so a
+        // struct holding one is buffered for `==` without becoming extended
         let mut buf: HashSet<String> = direct.clone();
+        for d in types {
+            if decl_fields(d).iter().any(|(_, fd)| GType::from_key(&fd.ty).is_fixed()) {
+                buf.insert(d.name().to_string());
+            }
+        }
         // reverse dependency edges built once: mentioned name -> declaration names mentioning it
         let mut rev: HashMap<String, Vec<String>> = HashMap::new();
         for d in types {

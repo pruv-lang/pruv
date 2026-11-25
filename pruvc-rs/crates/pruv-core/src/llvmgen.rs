@@ -4954,6 +4954,14 @@ impl<'a> FnGen<'a> {
     }
 
     /// P7-1: the storage of a fixed-array expression: a local's own slot, otherwise a fresh temporary filled from it.
+    /// P7-1 B: `fixed_ptr` in contract form: a field path reads the contract value of its base
+    fn cfixed_ptr(&mut self, e: &Expr) -> R<String> {
+        match e {
+            Expr::FieldAccess(_) => Ok(self.cev(e)?.a),
+            _ => self.fixed_ptr(e),
+        }
+    }
+
     fn fixed_ptr(&mut self, e: &Expr) -> R<String> {
         match e {
             Expr::Var(v) => match self.lookup(&v.name) {
@@ -6253,6 +6261,8 @@ impl<'a> FnGen<'a> {
                 // P7-1: inout passes the caller's array; by value passes a fresh copy (so the callee never sees a
                 // later write through an inout argument of the same call)
                 let p = match x {
+                    // P7-1 B: a field path passes the field's own storage, not a spilled copy
+                    Expr::InoutArg(ix) if matches!(&*ix.expr, Expr::FieldAccess(_)) => self.place_ptr(&ix.expr)?,
                     Expr::InoutArg(ix) => self.fixed_ptr(&ix.expr)?,
                     _ => {
                         let tmp = self.new_out(&prm.ty);
@@ -7142,7 +7152,7 @@ impl<'a> FnGen<'a> {
                         return Ok(V::new(k0, r));
                     }
                 }
-                let p = self.fixed_ptr(&x.array)?;
+                let p = self.cfixed_ptr(&x.array)?;
                 let i = self.cev(&x.index)?;
                 let ok = self.op(format!("icmp ult i128 {}, {}", i.a, n))?;
                 self.guard(&ok, und("array index out of range".to_string()), false)?;
@@ -7380,7 +7390,7 @@ impl<'a> FnGen<'a> {
                             self.fixed_lit_cev(c)?;
                         }
                         other => {
-                            self.fixed_ptr(other)?;
+                            self.cfixed_ptr(other)?;
                         }
                     }
                     return Ok(V::new(Kind::I128, f.fixed_parts().unwrap().1.to_string()));

@@ -1,4 +1,4 @@
 // spec: R-6t-4 reject
-// A fixed-length array is not a struct field yet (parity row P7-1 B).
-struct S { a: [i64; 3] }
+// A fixed-length array is not an enum variant field yet (parity row P7-1 B).
+enum E { A(a: [i64; 3]), B }
 fn f() -> i64 { return 0; }

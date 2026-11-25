@@ -1457,8 +1457,10 @@ must_reject|must_reject/p7_fixed_copy.pruv	2 cases: exit 2	llvm=f627ddbb7a00	rus
 must_reject|must_reject/p7_fixed_count.pruv	2 cases: exit 2	llvm=f874588a791c	rust=f874588a791c
 must_reject|must_reject/p7_fixed_eq.pruv	2 cases: exit 2	llvm=5d997fecbb6a	rust=5d997fecbb6a
 must_reject|must_reject/p7_fixed_field.pruv	2 cases: exit 2	llvm=e7fc8ddf9839	rust=e7fc8ddf9839
+must_reject|must_reject/p7_fixed_field_eq.pruv	2 cases: exit 2	llvm=5a4461e2d149	rust=5a4461e2d149
 must_reject|must_reject/p7_fixed_field_frame.pruv	2 cases: exit 2	llvm=fd8ba2502001	rust=fd8ba2502001
 must_reject|must_reject/p7_fixed_field_host.pruv	2 cases: exit 2	llvm=b9d218bc9034	rust=b9d218bc9034
+must_reject|must_reject/p7_fixed_field_keyword.pruv	2 cases: exit 2	llvm=948ad109f3a0	rust=948ad109f3a0
 must_reject|must_reject/p7_fixed_field_oob.pruv	2 cases: exit 2	llvm=1c29e0f14164	rust=1c29e0f14164
 must_reject|must_reject/p7_fixed_field_owned.pruv	2 cases: exit 2	llvm=68f2eadb80a8	rust=68f2eadb80a8
 must_reject|must_reject/p7_fixed_for_in.pruv	2 cases: exit 2	llvm=7198ea418d5f	rust=7198ea418d5f
@@ -2756,6 +2758,8 @@ runtime|runtime/p7_rt_fixed_eval [--no-verify]	2 cases: exit 2	llvm=ce7955a071c8
 runtime|runtime/p7_rt_fixed_eval [default]	2 cases: exit 2	llvm=c27cbfa49bec	rust=f9598a994746
 runtime|runtime/p7_rt_fixed_field [--no-verify]	2 cases: exit 2	llvm=1a1cb94788d8	rust=d2e4bd1260f1
 runtime|runtime/p7_rt_fixed_field [default]	2 cases: exit 2	llvm=badafc84efd0	rust=9487c50d928d
+runtime|runtime/p7_rt_fixed_field_inout [--no-verify]	2 cases: exit 2	llvm=c0d0ee0b3b3b	rust=83e4d6c4f82c
+runtime|runtime/p7_rt_fixed_field_inout [default]	2 cases: exit 2	llvm=e8e7f7bf24ae	rust=52fe011d8718
 runtime|runtime/p7_rt_fixed_field_nested [--no-verify]	2 cases: exit 2	llvm=da1af037e0c1	rust=9367030b376b
 runtime|runtime/p7_rt_fixed_field_nested [default]	2 cases: exit 2	llvm=0d2545b83bcf	rust=6db35cfb9874
 runtime|runtime/p7_rt_fixed_for [--no-verify]	2 cases: exit 2	llvm=52a9cbd1f9ce	rust=63c1e145f8a5

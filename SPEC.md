@@ -1183,7 +1183,7 @@ fn tree_count(t: Tree) -> i64
   and do not allocate (the one exception: R-6e-12a moves an array binder out of a consumed scrutinee). Putting an existing value into an owning place (`let`, assignment, constructor field,
   `return`) copies it and needs `! alloc`; a fresh constructor or call result moves without a copy. Any constructor
   of a recursive value needs `! alloc`. While a `match` arm views part of a mutable local, that local cannot be
-  changed (`type/recursive_borrow`). Whole-value `==`/`!=` on values that contain arrays, strings or owned collections is rejected
+  changed (`type/recursive_borrow`). Whole-value `==`/`!=` on values that contain arrays (including a `[T; N]` struct field), strings or owned collections is rejected
   (`type/eq_type`); compare tags, lengths and elements instead.
 - **Limits.** Recursive and buffer-field types cannot be generic arguments, `Option`/`Result` payloads or G6
   collection elements, except the owned aggregates of R-6e-3 and the vector edges of R-6e-20. Functions whose signatures use these types are internal, except

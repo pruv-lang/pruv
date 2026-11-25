@@ -1381,10 +1381,9 @@ impl Parser {
         let mut fields = Vec::new();
         while !self.at("}", 0) && !self.at("invariant", 0) {
             // P7-1 B: a non-generic struct may hold `[T; N]` inline (a by-value field)
-            let fd = self.peek(0).clone();
             if tparams.is_empty() && self.at(":", 1) {
-                self.bump();
-                self.bump();
+                let fd = self.ident()?;
+                self.expect(":")?;
                 self.fixed_ok = true;
                 let ty = self.type_()?;
                 fields.push(FieldDecl { borrowed: false, line: fd.line, col: fd.col, name: fd.val, ty });

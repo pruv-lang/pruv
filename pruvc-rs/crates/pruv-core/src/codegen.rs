@@ -2701,6 +2701,8 @@ impl<'a> Gen<'a> {
                     .is_some_and(crate::borrowed::is_view_wrapper) => self.c(e),
             // G9: a buffer field of a real (extended) value
             Expr::FieldAccess(_) | Expr::VariantField(_) if self.g9 => self.cx(e),
+            // P7-1 B: a fixed-array field of a contract mirror struct is already `[i128; N]`
+            Expr::FieldAccess(x) if x.ty.as_deref().is_some_and(|t| fixed_key(t).is_some()) => self.c(e),
             // P7-1 B: a fixed-array literal in a contract is an array of contract values
             Expr::Call(x) if x.name == "@array" => {
                 let mut parts = Vec::new();

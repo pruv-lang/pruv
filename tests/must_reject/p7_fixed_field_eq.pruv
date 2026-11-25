@@ -1,0 +1,11 @@
+// P7-1 B audit: == on a struct with a fixed field would compare SMT array cells past N
+struct S { a: [i64; 2] }
+fn f() -> i64
+{
+  let mut b: [i64; 2] = [5; 2];
+  b[0] = 0;
+  let s: S = S { a: [0, 5] };
+  let t: S = S { a: b };
+  assert !(s == t);
+  return 0;
+}
