@@ -1,0 +1,5 @@
+// P3 runtime: unverified narrowing of u32 max+1 fails instead of wrapping
+fn narrow(n: i64) -> i64 {
+  let b: u32 = u32(n);
+  return i64(b);
+}

@@ -1,4 +1,4 @@
-// P1: other integer widths are bundle P3
-fn f(x: u32) -> i64 {
+// P1/P3: the P3 widths are scalars only; as a type argument they are bundle P11
+fn f(x: Option<u32>) -> i64 {
   return 0;
 }

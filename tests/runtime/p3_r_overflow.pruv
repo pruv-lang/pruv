@@ -1,0 +1,8 @@
+// P3 runtime: unverified u64 max+1 fails with the overflow error (u64 values above i64 max on both backends);
+// the Vec makes the LLVM module declare umul.with.overflow.i64 for Vec growth, shared with the u64 `*`
+fn inc(n: i64) -> i64 ! alloc {
+  let v: Vec<i64> = vec_push::<i64>(vec_new::<i64>(), 0);
+  let x: u64 = u64(n) * 2 + 1;
+  let y: u64 = x + 1;
+  return i64(y / 4) + len(v) - 1;
+}

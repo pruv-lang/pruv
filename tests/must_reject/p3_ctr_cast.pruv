@@ -1,0 +1,2 @@
+// P3: i64 to u32 in a contract is a narrowing cast (only 64-bit pairs are allowed)
+fn f(x: i64) -> i64 requires u32(x) > 0 { return x; }

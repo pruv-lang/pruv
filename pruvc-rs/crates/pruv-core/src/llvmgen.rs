@@ -846,6 +846,14 @@ impl Kind {
     }
 }
 
+/// P3: IR spelling of an integer literal; values above i64 max (u64/usize) become their two's-complement i64 form
+fn ir_int(v: &str) -> String {
+    match v.parse::<i128>() {
+        Ok(n) if n > i64::MAX as i128 && n <= u64::MAX as i128 => (n as u64 as i64).to_string(),
+        _ => v.to_string(),
+    }
+}
+
 pub fn vkind(t: &str) -> Kind {
     if is_collection(t) {
         // G6 A3
@@ -1355,6 +1363,8 @@ pub struct Mod {
     /// P2 batch 4: widths of the llvm.bswap declarations the byte-word accesses used
     pub bswap: BTreeSet<u32>,
     narrow_overflow_decls: BTreeSet<(&'static str, &'static str, &'static str)>,
+    /// P3: some `print` of a u64/usize value calls @pruv_print_u64 (declared only then)
+    print_u64: bool,
     pub uses_utf8_valid: bool,
     pub uses_utf8_panic: bool,
     /// P3: some external array-return wrapper normalizes cap to len with @pruv_shrink_v2
@@ -1416,6 +1426,7 @@ impl Mod {
             need_eq: BTreeSet::new(),
             bswap: BTreeSet::new(),
             narrow_overflow_decls: BTreeSet::new(),
+            print_u64: false,
             uses_utf8_valid: false,
             uses_utf8_panic: false,
             shrink: false,
@@ -4776,6 +4787,16 @@ impl<'a> FnGen<'a> {
     }
 
     pub fn index_ptr(&mut self, a: &V, i: &V) -> R<String> {
+        // P3: an unsigned index of another width is zero-extended to i64 (64-bit ones are already i64 in IR;
+        // the unsigned bounds compare below also catches a u64 index above i64 max)
+        let widened;
+        let i = match i.k {
+            Kind::Narrow(w) if w.bits < 64 => {
+                widened = V::new(Kind::I64, self.op(format!("zext {} {} to i64", w.llvm(), i.a))?);
+                &widened
+            }
+            _ => i,
+        };
         if !self.verified {
             let ok = self.op(format!("icmp ult i64 {}, {}", i.a, a.b))?;
             self.guard(&ok, Fail::Oob(i.a.clone(), a.b.clone()), false)?;
@@ -4963,7 +4984,8 @@ impl<'a> FnGen<'a> {
     pub fn ev(&mut self, e: &Expr, owned: bool) -> R<V> {
         match e {
             Expr::Spent(_) => Err("cost_unavailable: Stage 5 cost verification is not implemented yet".into()),
-            Expr::IntLit(x) => Ok(V::new(vkind(x.ty.as_deref().unwrap_or("i64")), x.value.clone())),
+            // P3: a u64/usize literal above i64 max is written in its two's-complement i64 IR form
+            Expr::IntLit(x) => Ok(V::new(vkind(x.ty.as_deref().unwrap_or("i64")), ir_int(&x.value))),
             Expr::BoolLit(x) => Ok(V::new(Kind::I1, if x.value { "true" } else { "false" })),
             Expr::StrLit(x) => {
                 // G2 B2: copy the global string into a new buffer (for an empty string pruv_copy_v2 gives NULL)
@@ -5231,7 +5253,8 @@ impl<'a> FnGen<'a> {
             }
             let prefix = if width.signed { "s" } else { "u" };
             let intrinsic = format!("{prefix}{name}");
-            if matches!(l.k, Kind::Narrow(_)) {
+            // DECLS already declares the signed i64 intrinsics (isize uses them).
+            if matches!(l.k, Kind::Narrow(_)) && !(ty == "i64" && width.signed) {
                 self.m.narrow_overflow_decls.insert((ty, prefix, name));
             }
             let v = self.checked(ty, &intrinsic, op, &l.a, &r.a)?;
@@ -5269,21 +5292,34 @@ impl<'a> FnGen<'a> {
         }
         let from = source.llvm();
         let to = target.llvm();
-        let op = if source.fits_in(target) {
-            if source.signed { "sext" } else { "zext" }
-        } else {
-            if !self.verified {
+        if !source.fits_in(target) && !self.verified {
+            // --no-verify: check only the sides where the source range leaves the target range. The constants are
+            // written in the source's IR form (a u64 bound above i64 max is its two's-complement i64 spelling).
+            let lit = |v: i128| (v as i64).to_string();
+            let mut ok: Option<String> = None;
+            if source.max > target.max {
                 let cmp = if source.signed { "sle" } else { "ule" };
-                let hi = self.op(format!("icmp {cmp} {from} {}, {}", value.a, target.max))?;
-                let ok = if source.min < target.min {
-                    let cmp = if source.signed { "sge" } else { "uge" };
-                    let lo = self.op(format!("icmp {cmp} {from} {}, {}", value.a, target.min))?;
-                    self.op(format!("and i1 {lo}, {hi}"))?
-                } else {
-                    hi
-                };
+                ok = Some(self.op(format!("icmp {cmp} {from} {}, {}", value.a, lit(target.max)))?);
+            }
+            if source.min < target.min {
+                // target.min is 0 or negative; a signed source compares signed
+                let lo = self.op(format!("icmp sge {from} {}, {}", value.a, lit(target.min)))?;
+                ok = Some(match ok {
+                    Some(hi) => self.op(format!("and i1 {lo}, {hi}"))?,
+                    None => lo,
+                });
+            }
+            if let Some(ok) = ok {
                 self.guard(&ok, Fail::Panic1("pruv_panic_arith", "cast out of range".to_string()), false)?;
             }
+        }
+        if source.bits == target.bits {
+            // same IR type (i64/isize/u64/usize, or a sign change at one width): no instruction
+            return Ok(V::new(vkind(target.name), value.a));
+        }
+        let op = if source.bits < target.bits {
+            if source.signed { "sext" } else { "zext" }
+        } else {
             "trunc"
         };
         let result = self.op(format!("{op} {from} {} to {to}", value.a))?;
@@ -5553,12 +5589,19 @@ impl<'a> FnGen<'a> {
                 let z = self.op(format!("zext i1 {} to i64", x.a))?;
                 self.ins(format!("call void @pruv_print_bool(i64 {})", z))?;
             } else {
-                let value = if let Kind::Narrow(width) = x.k {
-                    self.op(format!("zext {} {} to {}", width.llvm(), x.a, crate::intwidth::I64.llvm()))?
-                } else {
-                    x.a
-                };
-                self.ins(format!("call void @pruv_print_i64(i64 {})", value))?;
+                match x.k {
+                    // P3: u64/usize values above i64 max print through the unsigned runtime entry
+                    Kind::Narrow(width) if width.bits == 64 && !width.signed => {
+                        self.m.print_u64 = true;
+                        self.ins(format!("call void @pruv_print_u64(i64 {})", x.a))?;
+                    }
+                    Kind::Narrow(width) if width.bits < 64 => {
+                        let ext = if width.signed { "sext" } else { "zext" };
+                        let value = self.op(format!("{ext} {} {} to i64", width.llvm(), x.a))?;
+                        self.ins(format!("call void @pruv_print_i64(i64 {})", value))?;
+                    }
+                    _ => self.ins(format!("call void @pruv_print_i64(i64 {})", x.a))?,
+                }
             }
             return Ok(V::unit());
         }
@@ -9147,7 +9190,6 @@ fn gen_llvm_body(
         }
     }
     let alloc_narrow = narrowed || m.alloc_narrow;
-    let u16_used = uses_array_type(prog, ARRAY_U16) || type_has_field(prog, ARRAY_U16);
     let memmove = chunks.iter().any(|chunk| chunk.contains("call void @llvm.memmove.p0.p0.i64("));
     let mut ir = format!(
         "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
@@ -9155,14 +9197,19 @@ fn gen_llvm_body(
         m.render_strings(),
         type_defs(&tt),
         if prog.types.is_empty() { "" } else { "\n" },
-        format!("{}{}", DECLS, m.narrow_overflow_decls.iter().map(|(ty, prefix, name)| format!(
+        // u64/usize share the unsigned i64 intrinsics that Vec growth and DECLS_OVERLAP declare below
+        format!("{}{}", DECLS, m.narrow_overflow_decls.iter().filter(|(ty, prefix, name)| !(*ty == "i64" && *prefix == "u"
+            && ((*name == "mul" && (!m.vec_elems.is_empty() || m.overlap)) || (*name == "add" && m.overlap))))
+            .map(|(ty, prefix, name)| format!(
             "declare {{ {ty}, i1 }} @llvm.{prefix}{name}.with.overflow.{ty}({ty}, {ty})\n"
-        )).collect::<String>()),
+        )).collect::<String>() + if m.print_u64 { "declare void @pruv_print_u64(i64) nounwind\n" } else { "" }),
         // G2 A5: DECLS_U8 if u8 or bool is used, and DECLS_BOOL after it if bool is used
         // G2 B2: DECLS_U8 if u8, bool or str is used, and DECLS_STR at the very end if str is used
         // G6 A3: DECLS_U8 also when string_to_str copies through pruv_copy_v2
         // G9 A3: DECLS_U8 also for a [u8] / [bool] buffer field
-        if uses_array_type(prog, "array_u8") || uses_array_type(prog, "array_bool") || has_str || m.g6_v2 || g9_u8 || u16_used || alloc_narrow {
+        if uses_array_type(prog, "array_u8") || uses_array_type(prog, "array_bool") || has_str || m.g6_v2 || g9_u8 || alloc_narrow
+            // P2-7: the [u16] scan runs last, only when nothing cheaper already needs DECLS_U8
+            || uses_array_type(prog, ARRAY_U16) || type_has_field(prog, ARRAY_U16) {
             DECLS_U8
         } else {
             ""

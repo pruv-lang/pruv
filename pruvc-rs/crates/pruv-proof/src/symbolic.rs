@@ -185,7 +185,15 @@ pub fn in_range(z: &Z3, x: &Ast) -> Ast {
 }
 
 fn in_int_range(z: &Z3, x: &Ast, width: &IntWidth) -> Ast {
-    z.and(&[x.raw_ge(&z.int(width.min as i64)), x.raw_le(&z.int(width.max as i64))])
+    z.and(&[x.raw_ge(&int_const(z, width.min)), x.raw_le(&int_const(z, width.max))])
+}
+
+/// An Int constant for a width bound; `u64`/`usize` max does not fit in i64, so it goes in as a decimal string.
+fn int_const(z: &Z3, v: i128) -> Ast {
+    match i64::try_from(v) {
+        Ok(v) => z.int(v),
+        Err(_) => z.int_str(&v.to_string()),
+    }
 }
 
 fn expr_int_width(ty: Option<&str>) -> &'static IntWidth {
@@ -789,7 +797,7 @@ impl Val {
     /// The value tag of accessor result `a` whose field type is `ty` (the same classification as Python, which distinguishes by z3 sort).
     pub fn from_field(ty: &Ty, a: Ast) -> R<Val> {
         match ty {
-            Ty::I64 | Ty::U8 | Ty::U16 => Ok(Val::Int(a)),
+            Ty::I64 | Ty::Narrow(_) => Ok(Val::Int(a)),
             Ty::Bool => Ok(Val::Bool(a)),
             Ty::Opt | Ty::Res | Ty::User(_) | Ty::Param(_) | Ty::Inst(_) => Ok(Val::Dt(a, ty.clone())),
             Ty::Array(_) | Ty::GArray(_) | Ty::Str | Ty::Unit => Err(format!("'{}'", ty.name())),
@@ -1802,7 +1810,7 @@ impl<'a> FnVerifier<'a> {
             };
         }
         match ty {
-            Ty::I64 | Ty::U8 | Ty::U16 => Ok(Val::Int(z.int_const(&n))),
+            Ty::I64 | Ty::Narrow(_) => Ok(Val::Int(z.int_const(&n))),
             Ty::Bool => Ok(Val::Bool(z.bool_const(&n))),
             Ty::Opt => Ok(Val::Dt(z.constant(&n, &self.prelude.opt.sort), ty.clone())),
             Ty::Res => Ok(Val::Dt(z.constant(&n, &self.prelude.res.sort), ty.clone())),
@@ -1847,8 +1855,8 @@ impl<'a> FnVerifier<'a> {
                 } else {
                     let (esort, elem) = match Ty::from_gtype(e) {
                         Ty::Bool => (z.bool_sort(), Elem::Bool),
-                        Ty::U8 => (z.int_sort(), Elem::U8),
-                        Ty::U16 => (z.int_sort(), Elem::U16),
+                        Ty::Narrow(w) if w.name == "u8" => (z.int_sort(), Elem::U8),
+                        Ty::Narrow(w) if w.name == "u16" => (z.int_sort(), Elem::U16),
                         _ => (z.int_sort(), Elem::I64),
                     };
                     let arr_sort = z.array_sort(&int, &esort);
@@ -1973,7 +1981,7 @@ impl<'a> FnVerifier<'a> {
             return Ok(None);
         }
         Ok(match ty {
-            Ty::I64 | Ty::U8 | Ty::U16 => Some(in_int_range(z, v, expr_int_width(Some(ty.name())))),
+            Ty::I64 | Ty::Narrow(_) => Some(in_int_range(z, v, expr_int_width(Some(ty.name())))),
             Ty::Opt => Some(p.is_some(v).implies(&in_range(z, &p.sval(v)))),
             Ty::Res => Some(z.and(&[
                 p.is_ok(v).implies(&in_range(z, &p.oval(v))),
@@ -5922,7 +5930,9 @@ impl<'a> FnVerifier<'a> {
                 let v = self.ev0_ast(&s.value, &mut st, &[], true)?;
                 let ob = self.z.and(&[i.ge_i(0), i.lt(&arr.n)]);
                 self.prove_core(&st, &[], &ob, spos, "index_oob", &format!("index in bounds for {}[...] =", place), None);
-                self.prove_elem_range(&st, &[], spos, arr.elem, &v, &format!("for {}[...] =", place));
+                if arr.elem.narrow_width().is_some() {
+                    self.prove_elem_range(&st, &[], spos, arr.elem, &v, &format!("for {}[...] =", place));
+                }
                 if let Some((lo, hi, what)) = &s.elem_refine {
                     let lo: i64 = lo.parse().map_err(|_| format!("refinement bound '{}'", lo))?;
                     let hi: i64 = hi.parse().map_err(|_| format!("refinement bound '{}'", hi))?;
@@ -5951,7 +5961,9 @@ impl<'a> FnVerifier<'a> {
                     &format!("index in bounds for {}[...] =", s.name),
                     None,
                 );
-                self.prove_elem_range(&st, &[], spos, arr.elem, &v, &format!("for {}[...] =", s.name));
+                if arr.elem.narrow_width().is_some() {
+                    self.prove_elem_range(&st, &[], spos, arr.elem, &v, &format!("for {}[...] =", s.name));
+                }
                 if let Some((lo, hi, what)) = &s.elem_refine {
                     // refine.rs: one range obligation on the stored value (already computed). No domain check, re-evaluation or forall, and it is not assumed afterwards.
                     let lo: i64 = lo.parse().map_err(|_| format!("refinement bound '{}'", lo))?;

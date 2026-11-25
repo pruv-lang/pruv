@@ -71,6 +71,7 @@ int64_t *pruv_alloc(int64_t len, int64_t value);
 int64_t *pruv_copy(const int64_t *src, int64_t len);
 void pruv_free(int64_t *data, int64_t len);
 void pruv_print_i64(int64_t v);
+void pruv_print_u64(int64_t v);
 void pruv_print_bool(int64_t v);
 _Noreturn void pruv_panic_oob(int64_t i, int64_t len);
 _Noreturn void pruv_panic_arith(const char *detail);
@@ -587,6 +588,12 @@ void pruv_check_utf8(const uint8_t *data, int64_t len) {
 
 void pruv_print_i64(int64_t v) {
     printf("%" PRId64 "\n", v);
+    fflush(stdout);
+}
+
+/* P3 (pruvc-rs): u64/usize values travel as i64 bits in IR; print them unsigned */
+void pruv_print_u64(int64_t v) {
+    printf("%" PRIu64 "\n", (uint64_t)v);
     fflush(stdout);
 }
 

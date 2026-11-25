@@ -1,0 +1,121 @@
+// P3 runtime: u32 i32 usize isize u64 i8 i16 at min and max on both backends (verified and unverified)
+fn e_u32(n: i64) -> i64
+  requires 0 <= n && n < 4294967295
+{
+  let x: u32 = u32(n);
+  let y: u32 = x + 1;
+  let z: u32 = y - 1;
+  if z != x || y <= x {
+    return -1;
+  }
+  return i64(y);
+}
+
+fn e_i32(n: i64) -> i64
+  requires -2147483648 <= n && n < 2147483647
+{
+  let x: i32 = i32(n);
+  let y: i32 = x + 1;
+  let z: i32 = y - 1;
+  if z != x || y <= x {
+    return -1;
+  }
+  return i64(y);
+}
+
+fn e_i8(n: i64) -> i64
+  requires -128 <= n && n < 127
+{
+  let x: i8 = i8(n);
+  let y: i8 = x + 1;
+  let z: i8 = y - 1;
+  if z != x || y <= x {
+    return -1;
+  }
+  return i64(y);
+}
+
+fn e_i16(n: i64) -> i64
+  requires -32768 <= n && n < 32767
+{
+  let x: i16 = i16(n);
+  let y: i16 = x + 1;
+  let z: i16 = y - 1;
+  if z != x || y <= x {
+    return -1;
+  }
+  return i64(y);
+}
+
+fn e_isize(n: i64) -> i64
+  requires n < 9223372036854775807
+{
+  let x: isize = isize(n);
+  let y: isize = x + 1;
+  let z: isize = y - 1;
+  if z != x || y <= x {
+    return -1;
+  }
+  return i64(y);
+}
+
+// n = i64 max gives x = u64 max (above i64 max): the u64 compare, divide and cast back run on the full range
+fn e_u64(n: i64) -> i64
+  requires 0 <= n
+{
+  let x: u64 = u64(n) * 2 + 1;
+  let y: u64 = x - 1;
+  if y >= x {
+    return -2;
+  }
+  if x == 18446744073709551615 {
+    return -1;
+  }
+  return i64(x / 2);
+}
+
+// usize index and decreases; usize arithmetic near the top of its range
+fn total(a: [i64], n: usize) -> i64
+  requires i64(n) == len(a)
+  requires forall k in 0..len(a): 0 <= a[k] && a[k] <= 1000
+  requires len(a) <= 1000
+{
+  let mut s: i64 = 0;
+  let mut i: usize = 0;
+  while i < n
+    invariant i64(i) <= len(a)
+    invariant 0 <= s && s <= 1000 * i64(i)
+    decreases n - i
+  {
+    s = s + a[i];
+    i = i + 1;
+  }
+  return s;
+}
+
+fn e_usize(n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 1000
+{
+  let a: [i64] = alloc(n, 7);
+  let big: usize = 18446744073709551614;
+  let top: usize = big + 1;
+  let k: u32 = 0;
+  if top != 18446744073709551615 {
+    return -1;
+  }
+  if n > 0 && a[k] != 7 {
+    return -2;
+  }
+  return total(a, usize(n));
+}
+
+fn narrow8(n: i64) -> i64
+  requires 0 <= n && n <= 127
+{
+  let x: i16 = i16(n);
+  let y: i8 = i8(x);
+  let z: u8 = u8(y);
+  let w: u32 = u32(z);
+  let v: usize = usize(w);
+  return i64(v);
+}

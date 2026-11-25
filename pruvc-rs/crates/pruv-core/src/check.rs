@@ -288,7 +288,7 @@ fn small_int_unsupported(line: i64, col: i64, msg: impl Into<String>, fix: &str)
 }
 
 fn small_int_op(line: i64, col: i64, op: &str) -> PruvError {
-    terr(line, col, "small_int_op", format!("operator `{}` is unsupported on u8/u16", op), "use i64(x) to widen the operand")
+    terr(line, col, "small_int_op", format!("operator `{}` is unsupported on integer types other than i64", op), "use i64(x) to widen the operand")
 }
 
 #[derive(Clone)]
@@ -1962,7 +1962,7 @@ impl Checker {
     /// Every type reference: arity, known names, type-argument and bound rules (G3_SPEC 3.1, 3.2, 3.4).
     fn check_type(&self, line: i64, col: i64, ty: &GType) -> Res<()> {
         if ty.view_base().is_none() && ty.args.iter().any(contains_unsupported_small_int_arg) {
-            return Err(small_int_unsupported(line, col, "scalar u8/u16 and [u16] type arguments require P11", "use i64"));
+            return Err(small_int_unsupported(line, col, "non-i64 integer and [u16] type arguments require P11", "use i64"));
         }
         if ty.view_payload().is_some() {
             return Ok(());
@@ -2162,7 +2162,7 @@ impl Checker {
 
     fn check_result_error(&self, line: i64, col: i64, e: &GType) -> Res<()> {
         if unsupported_small_int_arg(e) {
-            return Err(small_int_unsupported(line, col, "scalar u8/u16 and [u16] Result error types require P11", "use i64"));
+            return Err(small_int_unsupported(line, col, "non-i64 integer and [u16] Result error types require P11", "use i64"));
         }
         if self.borrowed_type_argument(e) {
             return Err(terr(line, col, "borrow_signature", "borrowed types cannot be generic arguments", ""));
@@ -2193,7 +2193,7 @@ impl Checker {
     /// a: a type argument; tp: the TypeParam it instantiates (None for Option/Result).
     fn check_arg(&self, line: i64, col: i64, a: &GType, tp: Option<&TParam>) -> Res<()> {
         if unsupported_small_int_arg(a) {
-            return Err(small_int_unsupported(line, col, "scalar u8/u16 and [u16] type arguments require P11", "use i64"));
+            return Err(small_int_unsupported(line, col, "non-i64 integer and [u16] type arguments require P11", "use i64"));
         }
         if self.borrowed_type_argument(a) {
             return Err(terr(line, col, "borrow_signature", "borrowed types cannot be generic arguments", ""));
@@ -2314,7 +2314,7 @@ impl Checker {
                 for f in fields {
                     let ft = GType::from_key(&f.ty);
                     if matches!(d, TypeDecl::Enum(_)) && is_narrow(&ft) {
-                        return Err(small_int_unsupported(f.line, f.col, "scalar u8/u16 enum payloads require P11", "use i64"));
+                        return Err(small_int_unsupported(f.line, f.col, "non-i64 integer enum payloads require P11", "use i64"));
                     }
                     if !d.tparams().is_empty() && (ft.is_array() || ft == strt()) {
                         // G9 A0
@@ -2373,7 +2373,7 @@ impl Checker {
         for f in &prog.functions {
             self.enter(&fn_owner(&f.name), &f.tparams);
             if f.foreign.is_some() && std::iter::once(&f.ret).chain(f.params.iter().map(|p| &p.ty)).any(|ty| intwidth::is_narrow(ty)) {
-                return Err(small_int_unsupported(f.line, f.col, "scalar u8/u16 foreign signatures require P12", "use i64"));
+                return Err(small_int_unsupported(f.line, f.col, "non-i64 integers in foreign signatures require P12", "use i64"));
             }
             for p in &f.params {
                 self.check_type(f.line, f.col, &GType::from_key(&p.ty))?;
@@ -3134,7 +3134,7 @@ impl Checker {
         self.ckind = "decreases";
         if let Some(d) = f.decreases.as_mut() {
             // G9 A0: scalar measure over the parameters only (no result)
-            self.expect(d, &i64t(), &scope, true, Some("decreases measure"))?;
+            self.expect_measure(d, &scope, true)?;
         }
         self.ckind = "code";
         if f.foreign.is_some() {
@@ -4066,7 +4066,7 @@ impl Checker {
                 if !v.mutable && !matches!(v.kind, "inout" | "map_inout") {
                     return Err(terr(s.line, s.col, "immutable", format!("{} is not mutable", s.name), Self::immutable_fix(v.kind)));
                 }
-                self.expect(&mut s.index, &i64t(), scope, false, Some("index"))?;
+                self.expect_index(&mut s.index, scope, false)?;
                 let want_val = elem_type(&cur);
                 self.expect(&mut s.value, &want_val, scope, false, None)?;
                 if Self::is_iteration_binder(&s.value, scope) {
@@ -4099,7 +4099,7 @@ impl Checker {
                         format!("use `let mut b: {} = copy({});` (needs alloc)", tn(&v.ty), s.name),
                     ));
                 }
-                self.expect(&mut s.index, &i64t(), scope, false, Some("index"))?;
+                self.expect_index(&mut s.index, scope, false)?;
                                 // G2 A5: stored value is bool for a bool array; G3: exactly T for a [T]
                 let want_val = elem_type(&v.ty);
                 self.expect(&mut s.value, &want_val, scope, false, None)?;
@@ -4201,7 +4201,7 @@ impl Checker {
                     self.expect(i, &boolt(), scope, true, None)?;
                 }
                 self.ckind = "decreases";
-                self.expect(&mut s.decreases, &i64t(), scope, true, Some("decreases measure"))?;
+                self.expect_measure(&mut s.decreases, scope, true)?;
                 self.ckind = "code";
                 let mut sc = scope.clone();
                 self.block(&mut s.body, &mut sc)?;
@@ -5223,6 +5223,30 @@ impl Checker {
         self.check_expected_type(e, ty, op, t)
     }
 
+    /// P3: an index is i64 or any unsigned scalar integer (`u8`..`usize`); a literal index stays i64.
+    fn expect_index(&mut self, e: &mut Expr, scope: &Scope, contract: bool) -> Res<GType> {
+        if matches!(e, Expr::IntLit(_)) {
+            return self.expect(e, &i64t(), scope, contract, Some("index"));
+        }
+        let t = self.expr(e, scope, contract)?;
+        if t.int_width().is_some_and(|w| !w.signed) {
+            return Ok(t);
+        }
+        self.check_expected_type(e, &i64t(), Some("index"), t)
+    }
+
+    /// P3: a `decreases` measure is any scalar integer type (proved >= 0 and decreasing as an Int).
+    fn expect_measure(&mut self, e: &mut Expr, scope: &Scope, contract: bool) -> Res<GType> {
+        if matches!(e, Expr::IntLit(_)) {
+            return self.expect(e, &i64t(), scope, contract, Some("decreases measure"));
+        }
+        let t = self.expr(e, scope, contract)?;
+        if t.int_width().is_some() {
+            return Ok(t);
+        }
+        self.check_expected_type(e, &i64t(), Some("decreases measure"), t)
+    }
+
     fn check_expected_type(&self, e: &Expr, ty: &GType, op: Option<&str>, t: GType) -> Res<GType> {
         if t != *ty {
             if let Some(op) = op {
@@ -5231,9 +5255,13 @@ impl Checker {
                         "unary minus" | "~" | "!" | "&" | "|" | "^" | "<<" | ">>" => {
                             return Err(small_int_op(e.line(), e.col(), op));
                         }
-                        "index" | "decreases measure" | "range bound" => {
+                        "index" => {
                             return Err(small_int_unsupported(e.line(), e.col(),
-                                format!("{} must be i64; scalar u8/u16 here requires P3", op), "write i64(x)"));
+                                format!("index must be i64 or an unsigned integer type, found {}", t.name), "write i64(x) or usize(x)"));
+                        }
+                        "range bound" => {
+                            return Err(small_int_unsupported(e.line(), e.col(),
+                                format!("{} must be i64; {} here requires P4", op, t.name), "write i64(x)"));
                         }
                         _ => {}
                     }
@@ -5529,7 +5557,11 @@ impl Checker {
                         "",
                     ));
                 }
-                self.expect(&mut x.index, &i64t(), scope, c, Some("index"))?;
+                let it = self.expect_index(&mut x.index, scope, c)?;
+                if is_narrow(&it) && !at.is_array() {
+                    return Err(small_int_unsupported(x.index.line(), x.index.col(),
+                        format!("a {} index is allowed on an array only; here it must be i64", it.name), "write i64(x)"));
+                }
                 if at.is_collection() {
                     // G6: contract-only observation of a Vec / String
                     if !c {
@@ -6740,7 +6772,7 @@ impl Checker {
             Ok(())
         };
         if intwidth::PENDING_INTS.contains(&n.as_str()) && !self.funcs.contains_key(&n) {
-            return Err(small_int_unsupported(line, col, format!("{} casts require P3", n), "use i64, u8 or u16"));
+            return Err(small_int_unsupported(line, col, format!("{} casts are not available yet", n), "use a scalar integer type"));
         }
         if let Some(target) = intwidth::of(&n) {
             arity(1)?;
@@ -6751,7 +6783,9 @@ impl Checker {
             let source = self.expr(arg, scope, c)?;
             let width = source.int_width().ok_or_else(|| terr(arg.line(), arg.col(), "type_mismatch",
                 format!("expected a scalar integer, found {}", tn(&source)), ""))?;
-            if c && !width.fits_in(target) {
+            // P3: 64-bit pairs (i64/isize/u64/usize) have no common wider type, so a contract may convert between them;
+            // contracts compute on unbounded integers, so the cast keeps the value (SPEC R-6p-5).
+            if c && !width.fits_in(target) && !(width.bits == 64 && target.bits == 64) {
                 return Err(terr(line, col, "cast_range", format!("narrowing from {} to {} is unsupported in contracts", width.name, target.name),
                     "widen the other value or do the conversion before the contract expression"));
             }

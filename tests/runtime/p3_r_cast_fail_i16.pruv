@@ -1,0 +1,6 @@
+// P3 runtime: unverified narrowing of i16 min-1 (a signed lower bound) fails instead of wrapping
+fn narrow(n: i64) -> i64 {
+  let x: i32 = i32(n);
+  let b: i16 = i16(x);
+  return i64(b);
+}

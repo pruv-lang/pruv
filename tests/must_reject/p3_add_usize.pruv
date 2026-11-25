@@ -1,0 +1,2 @@
+// P3: usize + must stay <= u64 max
+fn f(a: usize) -> usize { return a + 1; }

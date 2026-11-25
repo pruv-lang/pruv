@@ -1,0 +1,11 @@
+// P2-6 runtime: an unverified store of 65536 into a [u16] struct field stops instead of wrapping
+struct Buf {
+  units: [u16],
+}
+
+fn store(v: i64) -> i64 ! alloc {
+  let u: [u16] = alloc(2, 0);
+  let mut s: Buf = Buf { units: move u };
+  s.units[1] = v;
+  return s.units[1];
+}

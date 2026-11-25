@@ -1,0 +1,2 @@
+// P3: a u32 decreases measure must decrease
+fn f(n: u32) -> i64 decreases n { if n == 0 { return 0; } return f(n); }

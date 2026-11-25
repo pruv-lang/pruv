@@ -1,0 +1,2 @@
+// P3: a false ensures over u32 is rejected
+fn f(a: u32) -> u32 requires a < 10 ensures i64(result) < 10 { return a + 1; }

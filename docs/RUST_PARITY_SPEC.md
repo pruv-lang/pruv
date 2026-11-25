@@ -100,11 +100,16 @@ the B-bundle average (about 80 minutes per feature) and adjust bundle size.
 - B8-2: B8's verify/llvmgen/proof changes were not audited; audit them with P10.
 - P1-1: the type table is built twice when pub/host/foreign functions exist; build it once (tidy).
 - P1-2: the LLVM harness accepts a function in proof mode if it has a single `nuw`; check every elided-check site.
-- P1-3: `u8`/`u16` used directly as an index or in `decreases` needs `i64(x)`; allow it in P3/P4.
+- P1-3: closed in P3 (an unsigned index and any-width `decreases` measure, R-6p-5).
 - P2-1: `[u8]` <-> `[u16]` transcoding (UTF-8 <-> UTF-16) is not built in; add it as builtins when a workload needs it.
 - P2-2: built-in slice order and hash for `[u16]` (hand Rust `a.cmp(b)` / `Hash for [u16]`) and `[u16]` map keys; today they are Pruv loops over `ref [u16]` (P11/P14).
 - P2-3: `Vec<u16>`, `Option<[u16]>` and other `u16` type arguments stay rejected (P11).
 - P2-4: `[u16]` in pub/extern/foreign signatures stays rejected (P12).
 - P2-5: `find` (memchr) on `[u16]` stays rejected (`type_mismatch`); add a u16 search when a workload needs it.
-- P2-6: missing `[u16]` tests: `--no-verify` runtime stores out of range (`resize` fill -1, `arr_push` 65536, struct field), and `[u16]` through `inout` calls, struct fields and `par` block boundaries (the `par` path is open but untested). Add with P3.
-- P2-7: the `[u16]` scan runs for every program, and `[i64]` store proofs build an unused diagnostic string; measure compile time in P3 and drop both if they show.
+- P2-6: closed in P3 (runtime p2_r_u16_paths, p2_r_u16_fill_oor, p2_r_u16_push_oor, p2_r_u16_field_oor on both backends).
+- P2-7: closed in P3: neither showed in compile time (within run-to-run noise); the `[i64]` store proof no longer builds the string and the LLVM `[u16]` scan runs only when no cheaper check already needs DECLS_U8.
+- P3-1: arrays of the P3 widths (`[u32]`, `[i32]`, `[usize]`, `[isize]`, `[u64]`, `[i8]`, `[i16]`) stay rejected (`small_int_unsupported`); add them through the element table when a workload needs one.
+- P3-2: unary `-`, `!`, bitwise operators and shifts on non-`i64` widths stay `small_int_op`; add with a BV model per width (and wrapping ops) when a workload needs them.
+- P3-3: a proven array store with a non-`i64` index converts it through `i64` before `get_unchecked_mut`; emit `as usize` directly (Rust shape only, no extra check).
+- P3-4: `Vec`, `str` and hash map indexes, and signed non-`i64` array indexes, still need `i64`; numeric range bounds of other widths are P4.
+- P3-5: non-`i64` widths at the host boundary (pub/extern/foreign signatures) stay P12.

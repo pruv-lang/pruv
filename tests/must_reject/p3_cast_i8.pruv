@@ -1,0 +1,2 @@
+// P3: i32 to i8 needs a proven lower bound
+fn f(x: i32) -> i8 requires x <= 127 { return i8(x); }

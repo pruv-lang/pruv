@@ -1,0 +1,2 @@
+// P3: a usize index on a Vec must be i64
+fn f(v: Vec<i64>, i: usize) -> i64 requires i64(i) < len(v) { return v[i]; }

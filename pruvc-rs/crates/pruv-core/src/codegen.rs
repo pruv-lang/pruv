@@ -1122,6 +1122,13 @@ fn safe_arith(op: &str) -> Option<(&'static str, &'static str)> {
 }
 
 fn safe_small_int_helper(ty: &str, method: &str, message: &str) -> String {
+    // P3: a signed width also needs the Pruv division domain (dividend >= 0), which checked_div does not test
+    if crate::intwidth::of(ty).is_some_and(|w| w.signed) && matches!(method, "div" | "rem") {
+        let op = if method == "div" { "/" } else { "%" };
+        return format!(
+            "#[inline]\nfn pruv_{method}_{ty}(a: {ty}, b: {ty}) -> {ty} {{ if a < 0 || b <= 0 {{ pruv_ovf({message:?}) }} a {op} b }}\n"
+        );
+    }
     format!(
         "#[inline]\nfn pruv_{method}_{ty}(a: {ty}, b: {ty}) -> {ty} {{ a.checked_{method}(b).unwrap_or_else(|| pruv_ovf({message:?})) }}\n"
     )
@@ -4264,9 +4271,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 self.e(&c.args[0])?, self.place_ref(&c.args[1])?, self.place_ref(&c.args[2])?)),
             Expr::Index(i) => {
                 let arr = self.place_path(&i.array)?;
-                let idx = self.e(&i.index)?;
+                let idx = if self.verified { self.idx_usize(&i.index)? } else { self.idx_i64(&i.index)? };
                 if self.verified {
-                    Ok(format!("{{ let pruv_pi = ({idx}) as usize; unsafe {{ {arr}.get_unchecked_mut(pruv_pi) }} }}"))
+                    Ok(format!("{{ let pruv_pi = {idx}; unsafe {{ {arr}.get_unchecked_mut(pruv_pi) }} }}"))
                 } else {
                     Ok(format!("{{ let pruv_pi = pruv_idx({idx}, {arr}.len()); &mut {arr}[pruv_pi] }}"))
                 }
@@ -4446,7 +4453,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
             }
             Stmt::IndexAssign(x) if !x.fields.is_empty() => {
                 // LG4: `p.a.b[i] = e` on the place `p.a.b` (auto-deref through `&mut S` and Box edges)
-                let i = self.e(&x.index)?;
+                let i = self.idx_i64(&x.index)?;
                 let v = self.e(&x.value)?;
                 let place = format!("{}.{}", x.name, x.fields.join("."));
                 let fty = self.field_path_ty(&x.name, &x.fields);
@@ -4472,7 +4479,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 self.emit(ind, &text);
             }
             Stmt::IndexAssign(x) => {
-                let i = self.e(&x.index)?;
+                let i = self.idx_i64(&x.index)?;
                 let v = self.e(&x.value)?;
                 let elem = self.vars.get(&x.name).and_then(|t| array_elem_name(t)).unwrap_or("i64");
                 let is_bool = self.vars.get(&x.name).map(|t| t.as_str()) == Some("array_bool"); // G2 A5
@@ -5172,6 +5179,25 @@ pruv_hi <= (pruv_b.len() as i128) && \
         Ok(result)
     }
 
+    /// P3: an index as an i64 expression (the shared checked/--no-verify helpers take i64).
+    /// A u64/usize index above i64::MAX becomes negative and still fails the bounds check.
+    fn idx_i64(&mut self, e: &Expr) -> R<String> {
+        let i = self.e(e)?;
+        Ok(match expr_ty(e).as_deref().and_then(crate::intwidth::of) {
+            Some(w) if w.name != "i64" => format!("(({}) as i64)", i),
+            _ => i,
+        })
+    }
+
+    /// P3: an index as a usize expression for a proven access; a usize index is used as is (hand-Rust shape).
+    fn idx_usize(&mut self, e: &Expr) -> R<String> {
+        let i = self.e(e)?;
+        Ok(match expr_ty(e).as_deref() {
+            Some("usize") => i,
+            _ => format!("({}) as usize", i),
+        })
+    }
+
     fn e(&mut self, e: &Expr) -> R<String> {
         match e {
             Expr::Spent(_) => Err("cost_unavailable: Stage 5 cost verification is not implemented yet".into()),
@@ -5218,7 +5244,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     if let Some((method, message)) = safe_arith(&x.op) {
                         let l = self.e(&x.left)?;
                         let r = self.e(&x.right)?;
-                        if let Some(width) = x.ty.as_deref().and_then(crate::intwidth::of).filter(|width| !width.signed) {
+                        if let Some(width) = x.ty.as_deref().and_then(crate::intwidth::of).filter(|width| width.name != "i64") {
                             self.small_int_helpers.insert((method, width.name, message));
                             return Ok(format!("pruv_{method}_{}({l}, {r})", width.name));
                         }
@@ -5244,18 +5270,18 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 let elem = elem_of(&x.array);
                 if !self.verified {
                     let a = self.arr_ref(&x.array)?;
-                    let i = self.e(&x.index)?;
+                    let i = self.idx_i64(&x.index)?;
                     if elem != "i64" {
                         return Ok(format!("pruv_get_{elem}({}, {})", a, i));
                     }
                     return Ok(format!("pruv_get({}, {})", a, i));
                 }
                 let a = self.e(&x.array)?;
-                let i = self.e(&x.index)?;
+                let i = self.idx_usize(&x.index)?;
                 if matches!(elem, "u8" | "u16") || self.layout(&x.array) != "i64" {
-                    return Ok(format!("((unsafe {{ *{}.get_unchecked(({}) as usize) }}) as i64)", a, i));
+                    return Ok(format!("((unsafe {{ *{}.get_unchecked({}) }}) as i64)", a, i));
                 }
-                Ok(format!("(unsafe {{ *{}.get_unchecked(({}) as usize) }})", a, i))
+                Ok(format!("(unsafe {{ *{}.get_unchecked({}) }})", a, i))
             }
             Expr::Ctor(x) => {
                 // G3: explicit payload type, never left to Rust inference
@@ -5691,7 +5717,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     self.printed = true;
                     let input = arg(a, 0)?;
                     let mut value = self.e(input)?;
-                    if expr_ty(input).as_deref().is_some_and(crate::intwidth::is_narrow) {
+                    // P3: u64/usize values above i64::MAX print as themselves, so only widths inside i64 are widened
+                    if expr_ty(input).as_deref().and_then(crate::intwidth::of)
+                        .is_some_and(|w| w.name != "i64" && w.fits_in(&crate::intwidth::I64)) {
                         value = format!("({value} as {})", crate::intwidth::I64.name);
                     }
                     return Ok(format!("println!(\"{{}}\", {value})"));

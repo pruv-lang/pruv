@@ -1,0 +1,2 @@
+// P3: a u64 literal above u64 max is int_range
+fn f() -> u64 { return 18446744073709551616; }

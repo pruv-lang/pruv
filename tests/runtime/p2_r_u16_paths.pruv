@@ -1,0 +1,36 @@
+// P2-6 runtime: [u16] through inout calls, a par block and a struct field (verified and unverified)
+struct Buf {
+  units: [u16],
+  tag: u16,
+}
+
+fn put(inout a: [u16], i: i64, v: i64) -> ()
+  requires 0 <= i && i < len(a)
+  requires 0 <= v && v <= 65535
+  ensures len(a) == len(old(a))
+{
+  a[i] = v;
+}
+
+fn grow(inout a: [u16], v: i64) -> () ! alloc
+  requires len(a) <= 1000
+  requires 0 <= v && v <= 65535
+  ensures len(a) == len(old(a)) + 1
+{
+  arr_push(inout a, v);
+}
+
+fn run(x: i64) -> i64 ! alloc
+  requires 0 <= x && x <= 65535
+{
+  let mut a: [u16] = alloc(2, 0);
+  let mut b: [u16] = alloc(2, 1);
+  par {
+    put(inout a, 0, x);
+    put(inout b, 1, 65535);
+  }
+  grow(inout a, 55296);
+  let mut s: Buf = Buf { units: move a, tag: 65535 };
+  s.units[1] = 57343;
+  return s.units[0] + s.units[1] + s.units[2] + b[1] + i64(s.tag);
+}

@@ -1,0 +1,2 @@
+// P3: [usize] arrays stay rejected (row P3-1)
+fn f(n: i64) -> i64 ! alloc requires 0 <= n && n <= 10 { let a: [usize] = alloc(n, 0); return len(a); }
