@@ -8,7 +8,7 @@ Neither pruvc/ nor z3 is imported or run. Key: "<group>|<case name>|<backend>" (
 JSON lines (counterexample VALUES removed, only their presence kept; work directory, input
 path and compiler name normalized), and the generated files (name + sha256 of the bytes, sorted). stderr and elapsed times are
 not part of it. A b crash (exit other than 0, 1, 2) or timeout is a failure and is not recorded. --input names are
-"input/<path relative to the repo root>" (+ " [flags]"); a duplicate key fails even with --update-golden. A golden mismatch
+"input/<path relative to the repo root>" (+ " [flags]"); a duplicate key fails before any case runs (also with --update-golden). A golden mismatch
 is class golden_mismatch and the case is saved (replayable: --replay also works for golden-mode cases).
 
     python tests/diff_compilers.py [--b-path P] (default pruvc-rs/target/release/pruvc, .exe on Windows) [--backend rust|llvm|both]
@@ -206,7 +206,10 @@ def build_cases(args):
             errors.append("--input: no such file: %s" % f)
             continue
         ap_ = os.path.abspath(f)
-        rel = os.path.relpath(ap_, ROOT) if ap_.startswith(ROOT + os.sep) else ap_
+        try:   # repo-relative also outside the repo (../x.pruv), so the key does not depend on the checkout location
+            rel = os.path.relpath(ap_, ROOT)
+        except ValueError:   # another drive on Windows: no relative path exists
+            rel = ap_
         name = "input/" + rel.replace(os.sep, "/")
         if args.flag:
             name += " [" + " ".join(args.flag) + "]"
@@ -509,6 +512,7 @@ def save_case(case_dir, spec, tmpl_a, tmpl_b, outcome, versions, case_id):
         {"id": case_id, "name": spec["name"], "original_src": spec["src"], "flags": spec["flags"],
          "backend": spec["backend"], "classification": outcome["cls"], "details": outcome["details"],
          "cex_differs": outcome.get("cex_differs", False), "project_root": project_root,
+         "golden_key": outcome.get("golden_key"), "golden_expected": outcome.get("golden_expected"),
          "workspace": ws_info,
          "exit": {"a": sides["a"]["res"].returncode if "a" in sides else None,
                   "b": sides["b"]["res"].returncode}}, indent=1, ensure_ascii=False))
@@ -556,8 +560,15 @@ def replay(case_dir, args):
                 print("  - " + d)
             r = oc["sides"]["b"]["res"]
             print("  b: exit %s, %.2fs" % (r.returncode, r.elapsed))
-            print("golden text digest: " + golden.digest(oc["gtext"]))
-            return 1 if oc["cls"] in FAILING else 0
+            if oc["cls"] in FAILING:
+                return 1
+            if oc["cls"] == "not_implemented":
+                print("1 not implemented, not a pass")
+                return 0 if args.allow_unimplemented else 3
+            # the same comparison as the run that saved the case: the golden digest recorded at save time
+            got, want = golden.digest(oc["gtext"], [work]), meta.get("golden_expected")
+            print("golden text digest: %s (golden: %s)" % (got, want or "missing"))
+            return 0 if got == want else 1
         finally:
             shutil.rmtree(work, ignore_errors=True)
     for s in ("a", "b"):
@@ -640,8 +651,21 @@ def main():
     cex_count = 0
     lock = threading.Lock()
     failed_dirs = []
-    seen_keys = set()
-    dup_keys = set()
+
+    def golden_key(spec):
+        key = "%s|%s|%s" % (spec["name"].split("/", 1)[0], spec["name"], spec["backend"])
+        return golden._clean(key + ("@" + args.b if args.b != "rs" else ""), 1000)   # the key as the golden stores it
+
+    # duplicate keys (e.g. the same --input twice) fail before anything runs, so --update-golden never writes them
+    seen_keys, dup_keys = set(), set()
+    for spec in specs:
+        k = golden_key(spec)
+        (dup_keys if k in seen_keys else seen_keys).add(k)
+    if dup_keys:
+        for k in sorted(dup_keys):
+            print("golden: duplicate key " + k)
+        shutil.rmtree(root, ignore_errors=True)
+        return 1
 
     def job(idx, spec):
         tmpl_a = template_argv(da, spec["backend"], spec["flags"]) if da else None
@@ -651,20 +675,17 @@ def main():
             oc = run_pair(spec, tmpl_a, tmpl_b, work, args.timeout)
         else:
             oc = run_golden(spec, tmpl_b, work, args.timeout)
-        case_id = "%05d_%s__%s" % (idx, re.sub(r"[^A-Za-z0-9._-]+", "_", spec["name"]).strip("_"), spec["backend"])
+        # folder name: index + at most 80 characters of the name (the full name and flags are in case.json)
+        case_id = "%05d_%s__%s" % (idx, re.sub(r"[^A-Za-z0-9._-]+", "_", spec["name"]).strip("_")[-80:], spec["backend"])
         # golden check while the work directory still exists: only cases where b ran normally (a b crash/timeout is already
         # a failure, and a not_implemented case has no usable output); plain --vs-py does not touch the golden,
         # --vs-py --update-golden captures it
         if (not da or args.update_golden) and oc["cls"] in ("same", "diff", "a_crash", "a_timeout"):
-            key = "%s|%s|%s" % (spec["name"].split("/", 1)[0], spec["name"], spec["backend"])
-            if args.b != "rs":
-                key += "@" + args.b
+            key = golden_key(spec)
             with lock:
-                if key in seen_keys:
-                    dup_keys.add(key)
-                    print("golden: duplicate key " + key, flush=True)
-                seen_keys.add(key)
                 ok = g.check(key, oc["gtext"], oc["gsummary"])
+                oc["golden_key"] = key
+                oc["golden_expected"] = (g.saved.get(key) or (None,))[0]
                 if not da and not ok and not args.update_golden:
                     oc["cls"] = "golden_mismatch"
                     oc["details"] = ["golden: digest differs from (or missing in) " + g.name]
@@ -723,7 +744,7 @@ def main():
         print("input/harness error: " + e)
     if failed_dirs:
         print("%d failing cases saved: %s  (replay: --replay <folder>)" % (len(failed_dirs), save_root))
-    bad = sum(counts[c] for c in FAILING) + len(errors) + len(dup_keys)
+    bad = sum(counts[c] for c in FAILING) + len(errors)
     if counts["not_implemented"]:
         print("%d not implemented, not a pass" % counts["not_implemented"])
     if not da or args.update_golden:

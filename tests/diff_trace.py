@@ -350,13 +350,14 @@ def golden_check_all(gold, all_cases, expected, label, vs_py):
 def strip_cex(obj):
     """Copy with the counterexample values in errors replaced by a placeholder (key presence is still compared)"""
     o = dict(obj)
-    errs = []
-    for e in o.get("errors", []):
-        if isinstance(e, dict) and CEX_KEY in e:
-            e = dict(e)
-            e[CEX_KEY] = "<cex>"
-        errs.append(e)
-    o["errors"] = errs
+    if isinstance(o.get("errors"), list):   # a missing or non-list errors field stays as it is (it must change the digest)
+        errs = []
+        for e in o["errors"]:
+            if isinstance(e, dict) and CEX_KEY in e:
+                e = dict(e)
+                e[CEX_KEY] = "<cex>"
+            errs.append(e)
+        o["errors"] = errs
     return o
 
 

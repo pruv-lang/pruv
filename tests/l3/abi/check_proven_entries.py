@@ -663,12 +663,12 @@ def main(work, rs, py, vs_py=False, gargs=None):
     check_fixed_prefix(work, ctx, rustc)
     if g is not None and not g.finish():
         return 1
+    if ctx.disagree:   # the golden was written from rs, but py and rs did not agree: not a pass
+        print("FAIL: %d PY/RS disagreement(s); see the PY/RS DISAGREE lines above" % ctx.disagree)
+        return 1
     print("P18d: by-value fixed-prefix twins in 3 compiler modes, 5 must-reject shapes, no twin under --no-verify or reaching print or a G6 catalog operation, 2 optimized host runs")
     print("P18b/P18c: %s in 3 compiler modes and 2 manifest modes, 3 host runs, privacy, %d body rejects, %d macro shadows and diagnostics pass"
           % ("golden" + (" + rs == py" if vs_py else "") if g is not None else "single compiler", rejects, shadows))
-    if ctx.disagree:
-        print("FAIL: %d PY/RS disagreement(s); see work/pf_disagreements.md" % ctx.disagree)
-        return 1
     return 0
 
 
