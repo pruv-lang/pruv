@@ -1,0 +1,17 @@
+// spec: R-6g9-7 reject
+// A `from(doc.tape)` result borrows the caller's document: writing the lent field while the view is live is
+// type/borrow_conflict (Rust: cannot assign to `d.tape` because it is borrowed).
+struct Document { source: ref [u8], tape: [i64] }
+fn record(doc: Document, id: i64) -> ref [i64] from(doc.tape)
+  requires 0 <= id && id + 1 <= len(doc.tape)
+{
+  return subview(doc.tape, id, id + 1);
+}
+pub fn checksum() -> i64 ! alloc {
+  let x: [u8] = alloc(5, 7);
+  let t: [i64] = alloc(4, 3);
+  let mut d: Document = Document { source: x, tape: move t };
+  let r: ref [i64] = record(d, 1);
+  d.tape[0] = 9;
+  return r[0];
+}

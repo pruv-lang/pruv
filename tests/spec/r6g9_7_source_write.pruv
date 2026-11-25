@@ -1,0 +1,17 @@
+// spec: R-6g9-7 reject
+// `&'a Document<'_>` needs the document's own borrows to outlive the lent view, so writing the buffer the
+// document borrows while the view is live is type/borrow_conflict.
+struct Document { source: ref [u8], tape: [i64] }
+fn record(doc: Document, id: i64) -> ref [i64] from(doc.tape)
+  requires 0 <= id && id + 1 <= len(doc.tape)
+{
+  return subview(doc.tape, id, id + 1);
+}
+pub fn checksum() -> i64 ! alloc {
+  let mut x: [u8] = alloc(5, 7);
+  let t: [i64] = alloc(4, 3);
+  let d: Document = Document { source: x, tape: move t };
+  let r: ref [i64] = record(d, 1);
+  x[0] = 1;
+  return r[0];
+}

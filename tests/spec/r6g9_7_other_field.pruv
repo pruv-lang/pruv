@@ -1,0 +1,7 @@
+// spec: R-6g9-7 reject
+// `from(doc.tape)` lends only that field: returning a view of another owned field is type/borrow_escape.
+struct Document { source: ref [u8], tape: [i64], keys: [i64] }
+fn record(doc: Document) -> ref [i64] from(doc.tape)
+{
+  return subview(doc.keys, 0, 0);
+}

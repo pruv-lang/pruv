@@ -4934,7 +4934,12 @@ impl Checker {
                 return Ok(());
             }
         }
-        self.expect_user_arg(e, ty, scope, c, true)
+        // A view position holds a borrow of a place, not an owned `Vec` (check.py `view_value`).
+        if self.user_arg_slices(e, ty, scope, c, true)? {
+            return Err(terr(e.line(), e.col(), "borrow_signature",
+                "a borrowed view needs a place, subview, borrowed result or string literal", ""));
+        }
+        Ok(())
     }
 
     /// R-6g9-3: a `[]` that no view position accepted (a call argument, an operand) is an error
@@ -4960,6 +4965,11 @@ impl Checker {
     }
 
     fn expect_user_arg(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, c: bool, borrow_vector: bool) -> Res<()> {
+        self.user_arg_slices(e, ty, scope, c, borrow_vector).map(|_| ())
+    }
+
+    /// `expect_user_arg`, answering whether a `Vec` place was taken as an array slice argument.
+    fn user_arg_slices(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, c: bool, borrow_vector: bool) -> Res<bool> {
         if let Expr::Call(x) = e {
             if x.name == "subview" {
                 let string_view = *ty == strt();
@@ -4996,17 +5006,17 @@ impl Checker {
                 self.in_view = false;
                 r?;
                 x.ty = Some(ty.to_key());
-                return Ok(());
+                return Ok(false);
             }
         }
         if *ty == strt() {
             if borrow_vector {
                 if let Expr::StrLit(lit) = e {
                     lit.ty = Some(ty.to_key());
-                    return Ok(());
+                    return Ok(false);
                 }
             }
-            return self.expect_str_arg(e, scope, c);
+            return self.expect_str_arg(e, scope, c).map(|_| false);
         }
         let got = if borrow_vector && self.recursive_vec_element(ty) {
             self.read_expr(e, scope, c, &["vec_get"])?
@@ -5014,10 +5024,10 @@ impl Checker {
             self.expr(e, scope, c)?
         };
         if borrow_vector && place_root(e).is_some() && key_is_vec_slice_arg(&got.to_key(), &ty.to_key()) {
-            return Ok(());
+            return Ok(true);
         }
         self.check_expected_type(e, ty, None, got)?;
-        Ok(())
+        Ok(false)
     }
 
     fn match_path_held(&self, name: &str, path: &[String]) -> bool {

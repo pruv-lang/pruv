@@ -1974,6 +1974,10 @@ class FnVerifier:
         if isinstance(e, BoolLit):
             return z3.BoolVal(e.value)
         if isinstance(e, StrLit):   # G2 B1: constant byte array, no counter, no assumption
+            if e.empty_view and e.ty != ARRAY_U8:
+                elem = Model.buf_elem(e.ty)
+                zero = z3.BoolVal(False) if elem == BOOL else z3.IntVal(0)
+                return mk_arr(z3.K(z3.IntSort(), zero), z3.IntVal(0), "literal", elem)
             a = z3.K(z3.IntSort(), z3.IntVal(0))
             for i, b in enumerate(e.value):
                 a = z3.Store(a, z3.IntVal(i), z3.IntVal(b))

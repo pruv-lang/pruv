@@ -133,7 +133,7 @@ impl Analysis {
             let number = self.sn; self.sn += 1;
             match st {
                 Stmt::Let(x) => {
-                    let n = if x.ty == "array" { Some(self.node(StorageKey::Binding(self.function.clone(), number), x, x.refine.as_ref(), true, false)) } else { None };
+                    let n = if x.ty == "array" { Some(self.node(StorageKey::Binding(self.function.clone(), number), x, x.refine.as_ref(), true, x.borrowed)) } else { None };
                     let v = self.expr(&x.value, &scope);
                     if n.is_some() || v.is_some() { self.join(n,v); }
                     scope.insert(x.name.clone(), n);
@@ -176,10 +176,11 @@ pub fn plan_storage(prog: &Program, verified: bool) -> StoragePlan {
         let host = prog.explicit.as_ref().map_or(!private, |e| e.fns[i].host_entry);
         for (j,p) in f.params.iter().enumerate() { if p.ty == "array" {
             let key = StorageKey::Param(f.name.clone(), j);
-            a.node(key.clone(), p, p.refine.as_ref(), true, host || p.mode_pos.is_some() || f.foreign.is_some());
+            let lent = f.borrow_from.as_ref().is_some_and(|from| from.contains(&p.name));
+            a.node(key.clone(), p, p.refine.as_ref(), true, host || p.mode_pos.is_some() || f.foreign.is_some() || lent);
             a.out.params.insert((f.name.clone(), p.name.clone()), key);
         } }
-        if f.ret == "array" { a.node(StorageKey::Result(f.name.clone()), f, f.ret_refine.as_ref(), true, host || f.foreign.is_some()); }
+        if f.ret == "array" { a.node(StorageKey::Result(f.name.clone()), f, f.ret_refine.as_ref(), true, host || f.foreign.is_some() || f.borrowed_result); }
     }
     for f in &prog.functions {
         a.function = f.name.clone(); a.sn = 0; a.en = 0;

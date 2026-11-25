@@ -1,0 +1,26 @@
+{
+  "gen_contains": [
+    "fn first_record<'a>(doc: &'a Document<'_>) -> &'a [i64]",
+    "return &[];"
+  ],
+  "gen_absent": [
+    "to_vec()",
+    ".clone()"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "11624"
+    ],
+    "alloc_balance": true
+  },
+  "gen_regex": [
+    "fn inner_tail<'a>\\(b: &'a \\w+\\) -> &'a \\[i64\\]"
+  ]
+}

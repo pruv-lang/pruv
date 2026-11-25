@@ -89,6 +89,7 @@ def contains_collection(ty: Type) -> bool:
 
 # G2 A0: one place for array type queries (internal array types -> element type).
 ARRAY_ELEM = {"array": I64, "array_u8": U8, "array_bool": BOOL}
+VIEW_BASES = (ARRAY, ARRAY_U8, ARRAY_BOOL, STR)
 _ARRAY_OF = {"i64": ARRAY, "u8": ARRAY_U8, "bool": ARRAY_BOOL}
 
 

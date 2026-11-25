@@ -47,7 +47,7 @@ import codegen
 from codegen import show
 from llvm_inline import llvm_inline
 from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str  # G2 B2: uses_str
-from typeinfo import field_place
+from typeinfo import field_place, VIEW_BASES
 from check import ARRAY_GROW_BUILTINS, array_resize_params, array_resize_args, same_place
 from typeinfo import is_collection, contains_collection, encode, is_scalar_vec, is_vec_slice_arg, is_owned_result
 from foreign import CATALOG, CATALOG_CONTRACT_ONLY, first_g6_use, _owned_result, NET_OBSERVERS, ASYNC_OBSERVERS  # G6 A3, G6b, G10 net A3
@@ -1112,7 +1112,8 @@ def sig_text(params, f):
     reads = {"%%p.%s" % mangle(p.name) for p in f.params if is_native_vec(p.type)}
     # R-6g9-1/R-6g9-2: the data pointer of a read from source escapes through the borrowed result (a view, or a
     # borrowing struct's `ref` field written through %out), so it is not nocapture
-    escapes = {"%%p.%s.a" % mangle(n) for n in (f.borrow_from or ())}
+    # A field path lends a data pointer loaded from the struct, so the struct pointer itself stays nocapture.
+    escapes = {"%%p.%s.a" % mangle(n) for n in (f.borrow_from or ()) if "." not in n}
     def attrs(n):
         a = "ptr noalias nocapture" if n in mut else ("ptr nocapture readonly" if n in reads else "ptr noalias nocapture readonly")
         return a.replace(" nocapture", "") if n in escapes else a
@@ -2616,7 +2617,7 @@ class FnGen:
             kind, sl = s.lookup(st.name)
             if kind != "slot":
                 raise Exception("llvmgen: field assignment to non-local %s" % st.name)
-            if st.ref_store and st.value.ty in (ARRAY_U8, STR):
+            if st.ref_store and st.value.ty in VIEW_BASES:
                 # R-6g9-6: replacing a ref field stores its view pair without dropping the old view
                 v = s.ev(st.value)
                 ptr, _ = s.field_ptr_ty(sl, st.fields)

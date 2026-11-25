@@ -1007,6 +1007,8 @@ pub struct FnVerifier<'a> {
     pub model: &'a Model,
     pub trace: &'a mut Trace,
     pub fname: String,
+    /// The position of the value of `buf = resize(buf, ..)` on an inout lent buffer (Python `Call.resize_scratch`).
+    scratch_resize: Option<Pos>,
     /// `s.k`
     pub k: u32,
     pub(crate) seen: HashSet<(u32, u32, String, Option<String>)>,
@@ -1545,6 +1547,7 @@ impl<'a> FnVerifier<'a> {
             model,
             trace,
             fname: fname.to_string(),
+            scratch_resize: None,
             k: 0,
             seen: HashSet::new(),
             qstack: Vec::new(),
@@ -2820,6 +2823,17 @@ impl<'a> FnVerifier<'a> {
             Expr::IntLit(x) => Ok(Val::Int(self.z.int_str(&norm_int(&x.value)))),
             Expr::BoolLit(x) => Ok(Val::Bool(self.z.bool_val(x.value))),
             Expr::StrLit(x) => {
+                // The parser represents a static empty view as a literal with no bytes.
+                let empty_elem = match (x.empty, x.ty.as_deref()) {
+                    (true, Some("array")) => Some(Elem::I64),
+                    (true, Some("array_bool")) => Some(Elem::Bool),
+                    _ => None,
+                };
+                if let Some(elem) = empty_elem {
+                    let zero = if elem == Elem::Bool { self.z.bool_val(false) } else { self.z.int(0) };
+                    let a = self.z.const_array(&self.z.int_sort(), &zero);
+                    return Ok(Val::Arr(Arr::new(a, self.z.int(0), "literal".to_string(), elem)));
+                }
                 // G2 B1: constant byte array.
                 let mut a = self.z.const_array(&self.z.int_sort(), &self.z.int(0));
                 for (i, b) in x.value.iter().enumerate() {
@@ -3321,7 +3335,8 @@ impl<'a> FnVerifier<'a> {
                 let av = arg(0)?.try_arr()?.clone();
                 let m = arg(1)?.try_ast()?.clone();
                 let v = arg(2)?.try_ast()?.clone();
-                let scratch = self.funcs.get(self.fname.as_str()).is_some_and(|f| f.borrows_inout_buffer(&x.args[0]));
+                let scratch = self.scratch_resize == Some(pos(e))
+                    && self.funcs.get(self.fname.as_str()).is_some_and(|f| f.borrows_inout_buffer(&x.args[0]));
                 let lower = if scratch { m.ge_i(0) } else { av.n.le(&m) };
                 let ob = self.z.and(&[lower, m.le_i(MAX_LEN)]);
                 let bound = if scratch { "0".to_string() } else { format!("len({})", av.name) };
@@ -5826,7 +5841,14 @@ impl<'a> FnVerifier<'a> {
                 Ok(vec![st])
             }
             Stmt::Let(s) => self.exec_bind(&s.name, &s.value, st),
-            Stmt::Assign(s) => self.exec_bind(&s.name, &s.value, st),
+            Stmt::Assign(s) => {
+                let scratch = matches!(&s.value, Expr::Call(c) if c.name == "resize"
+                    && self.funcs.get(self.fname.as_str()).is_some_and(|f| f.resize_scratch(&s.name, &c.args)));
+                self.scratch_resize = scratch.then(|| pos(&s.value));
+                let out = self.exec_bind(&s.name, &s.value, st);
+                self.scratch_resize = None;
+                out
+            }
             Stmt::IndexAssign(s) if !s.fields.is_empty() => {
                 // LG4: `p.a.b[i] = e`: the field array is read with the ordinary field read (an Arr from the Buf field);
                 // index, then value, in the state before the write; same obligations as `x[i] = v`

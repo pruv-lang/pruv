@@ -359,6 +359,7 @@ pub enum FnAttribute {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
+    /// Parameter names and dotted paths to owned buffer fields.
     pub borrow_from: Option<Vec<String>>,
     pub borrowed_result: bool,
     pub line: i64, pub col: i64, pub name: String, pub params: Vec<Param>, pub ret: Type,
@@ -398,6 +399,14 @@ impl Function {
         block(&self.body)
     }
 
+    /// Field paths lent by this parameter, relative to the parameter itself.
+    pub(crate) fn lent_fields<'a>(&'a self, param: &'a str) -> impl Iterator<Item = &'a str> {
+        self.borrow_from.iter().flatten().filter_map(move |entry| {
+            let (root, path) = entry.split_once('.')?;
+            (root == param).then_some(path)
+        })
+    }
+
     /// An inout buffer lent by a borrowed result serves as resizable scratch storage.
     pub fn borrows_inout_buffer(&self, source: &Expr) -> bool {
         let name = match source {
@@ -406,7 +415,14 @@ impl Function {
             _ => return false,
         };
         self.borrow_from.as_ref().is_some_and(|from| from.contains(name))
-            && self.params.iter().any(|p| p.name == *name && p.mode_pos.is_some() && p.ty == "array_u8")
+            && self.params.iter().any(|p| p.name == *name && p.mode_pos.is_some()
+                && matches!(p.ty.as_str(), "array" | "array_u8" | "array_bool"))
+    }
+
+    /// Only `buf = resize(buf, ..)` on such a buffer may shrink it in place (Python `Call.resize_scratch`).
+    pub fn resize_scratch(&self, target: &str, args: &[Expr]) -> bool {
+        matches!(args.first(), Some(Expr::Var(v)) if v.name == target)
+            || matches!(args.first(), Some(Expr::Move(m)) if m.name == target && m.fields.is_empty())
     }
 }
 

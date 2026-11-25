@@ -1183,7 +1183,7 @@ Gaps found in R bundles, worked around and batched into one language bundle when
 | G-B2-L1 | Moving an owned field out (`return move p.tape`, `let t = move p.f` in some positions) is rejected with `foreign_move` for plain owned structs too, so this is an R-6e-16 gap, not a borrowing-struct one (found in B6; the `r6g9_2_move_tape` test named earlier does not exist). B6 made `let t = move p.tape;` work for borrowing structs (`r6g9_6_move_owned`). | Allow moving an owned field out of an owned struct value per R-6e-16 in both compilers. Open. |
 | G-B2-L2 | Rust `borrow_signature` reports one message for all positions; Python splits it per position. | Split the Rust messages per position like Python. Open. |
 | G-B2-L3 | `inout str` `from` sources are checked differently (`pruvc/check.py` ~1566 vs `check.rs` check_modes). | Align the accepted sources in both compilers. Open. |
-| G-B2-L4 | SPEC.md ~1506 still says borrowing structs are "Rust only", but B2 added LLVM support. B2 also did not rerun the full suites after its audit fixes (CI covers it). | Fix the wording. Open. |
+| G-B2-L4 | SPEC.md ~1506 still says borrowing structs are "Rust only", but B2 added LLVM support. B2 also did not rerun the full suites after its audit fixes (CI covers it). | Fix the wording. Closed in B7: the R-6g-11 *Code* item now says both backends and points to R-6g9-1 / R-6g9-2 for LLVM. |
 
 Queued with the debt list (not product perf):
 

@@ -84,7 +84,7 @@ go through it), under trust_callers the pub entry is unchecked and `<entry>__pru
 """
 from collections import namedtuple
 from vast import *
-from typeinfo import (TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection,
+from typeinfo import (TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection, VIEW_BASES,
                       dependencies, is_owned_field_type, is_nested_collection_field, is_string_record_map,
                       field_place, is_vec_slice_arg, is_owned_result, is_owned_value, borrowing_struct, borrowing_copy)
 from foreign import CATALOG
@@ -2043,11 +2043,13 @@ class Gen:
             if p.mode == "inout" else s.rt(p.type, not p.take, p) for p in f.params]
         lifetime = "<'a>" if f.borrow_from else ""
         if f.borrow_from:
-            param_types = [
-                ("&" if borrowing_struct(s.table.decls.get(p.type.name)) else "&'a ") + ty[1:]
-                + ("<'a>" if borrowing_struct(s.table.decls.get(p.type.name)) else "")
-                if p.name in f.borrow_from else ty
-                for p, ty in zip(f.params, param_types)]
+            field_sources = {entry.split(".")[0] for entry in f.borrow_from if "." in entry}
+            for i, (p, ty) in enumerate(zip(f.params, param_types)):
+                borrowing = borrowing_struct(s.table.decls.get(p.type.name))
+                if p.name in field_sources:
+                    param_types[i] = "&'a " + ty[1:] + ("<'_>" if borrowing else "")
+                elif p.name in f.borrow_from:
+                    param_types[i] = ty + "<'a>" if borrowing else "&'a " + ty[1:]
         s.ref_result = f.ref_result
         s.borrowed_roots = getattr(f, "borrowed_roots", ())
         from foreign_shim import _walk
@@ -3212,7 +3214,7 @@ class Gen:
         elif isinstance(st, FieldAssign):
             vty = st.value.ty
             call = st.value
-            if st.ref_store and vty in (ARRAY_U8, STR):
+            if st.ref_store and vty in VIEW_BASES:
                 # R-6g9-6: store a slice or str view directly, without an owned temporary
                 s.emit(ind, "%s.%s = %s;" % (st.name, ".".join(st.fields), s.arr_ref(st.value)))
                 return
