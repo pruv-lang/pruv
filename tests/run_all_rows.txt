@@ -327,6 +327,7 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_mul_u32.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_overflow.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_sdiv_neg.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_sdiv_negdiv.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_srem_zero.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_sub_u64.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_udiv_zero.pruv"}
@@ -847,6 +848,7 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_mul_u32.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_overflow.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_sdiv_neg.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_sdiv_negdiv.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_srem_zero.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_sub_u64.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_udiv_zero.pruv"}
@@ -2104,6 +2106,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_mul_u32.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_overflow.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_sdiv_neg.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_sdiv_negdiv.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_srem_zero.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_sub_u64.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--trust-callers"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_udiv_zero.pruv"}
@@ -2633,6 +2636,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_mul_u32.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_overflow.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_sdiv_neg.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_sdiv_negdiv.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_srem_zero.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_sub_u64.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_r_udiv_zero.pruv"}

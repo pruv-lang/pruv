@@ -1,1 +1,1 @@
-{"flags_matrix": [["--no-verify"], ["--no-verify", "--trust-callers"]], "exit": 101, "stdout_lines": ["3"], "stderr_contains": "pruv: arithmetic error: cast out of range"}
+{"flags_matrix": [["--no-verify"], ["--no-verify", "--trust-callers"]], "exit": 101, "stdout_lines": ["3", "9223372036854775807"], "stderr_contains": "pruv: arithmetic error: cast out of range"}

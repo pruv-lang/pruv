@@ -1,5 +1,5 @@
-// P3 runtime: u64 compare, divide and remainder on values above i64 max (a signed instruction gives a
-// different answer for every line), and print of u64/usize/isize/i32/i16/i8 at the ends of their ranges
+// P3 runtime: u64 compare (all four orders, each with an operand above i64 max so a signed compare
+// prints 0), divide and remainder on values above i64 max, and print of u64/usize/isize/i32/i16/i8 at the ends of their ranges
 fn ops(n: i64, s: i64) -> () ! io
   requires 0 <= n && n <= 1000
   requires -128 <= s && s <= 127
@@ -12,6 +12,8 @@ fn ops(n: i64, s: i64) -> () ! io
   if x > 1 { print(1); } else { print(0); }
   if 1 < h { print(1); } else { print(0); }
   if x >= h { print(1); } else { print(0); }
+  if x >= 1 { print(1); } else { print(0); }
+  if 1 <= x { print(1); } else { print(0); }
   print(i64(x % 10));
   print(i64(x / 3));
   print(i64(h / 4));
