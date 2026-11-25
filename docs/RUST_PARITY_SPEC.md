@@ -90,3 +90,11 @@ mutable closures) at bench/l3/budget/m12_test/hand_life.rs. U's key order is `&[
 
 Record wall time per bundle and per feature in docs/notes/main_state.md. After three bundles, compare against
 the B-bundle average (about 80 minutes per feature) and adjust bundle size.
+
+## 7. Open rows carried in
+
+- PF-1: `check_bundle` rs path checks less than the old py path; bring it to parity (tidy).
+- PF-2: `bridge/node/regen.py` and `.github/workflows/node-bridge.yml` still use the Python compiler and z3; move to rs.
+- PF-3: multi-file `--input` replay in the golden harness is recorded, not yet covered.
+- B8-1: moving a borrowed match target reports `borrow_conflict` (py) vs `foreign_borrow` (rs); the golden keeps rs. Decide the code in P8.
+- B8-2: B8's verify/llvmgen/proof changes were not audited; audit them with P10.
