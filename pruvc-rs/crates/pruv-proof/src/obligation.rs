@@ -406,7 +406,7 @@ impl<'a> FnVerifier<'a> {
 
     /// verify.py `_probe_attempts`: search of a single candidate obligation. Same stages as `prove` (without lemmas → if the first attempt is not unsat
     /// and lemmas exist, with them too). Before each attempt, the budget and wall clock are checked first (`Probe::tick`; if exceeded, mark abort and finish).
-    /// If an attempt's result is unknown and the z3 reason is exactly "timeout" (the 500ms per-query wall-clock deadline), the whole function ends with a timeout (abort Timeout).
+    /// If an attempt's result is unknown and the z3 reason is exactly "timeout" (the per-query wall-clock safety net, infer::TIMEOUT_MS), the whole function ends with a timeout (abort Timeout).
     /// Otherwise, if the last attempt is not proved (including other unknown wordings such as rlimit-exhausted canceled), only that candidate is left failed for this round (status as in query_status).
     /// The wall clock (`Probe::tick`) also stops the whole function.
     /// Python's z3.Z3Exception → status "error" branch is not ported: Rust's `Solver::check` does not throw exceptions.
