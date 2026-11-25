@@ -2709,19 +2709,22 @@ fn is_digit(c: char) -> bool
   `s.f = <array>` work like a local array, a contract sees `len(s.f) == N` and the element range, and `old(s).f[i]`
   names the entry value. The `pub`/host/extern signature check looks through struct fields, so such a struct cannot
   cross that boundary either. Code: Rust a `[T; N]` struct field; LLVM `[N x E]` inline in the struct.
+  Contracts (P7-1 B): a literal `[a, b]` / `[x; N]` may appear in `requires`, `ensures`, `assert`, `invariant`,
+  `decreases` and quantifier bodies; its index must be proven in range like any contract index (`contract_domain` in
+  `requires`), and `len` of a literal is `N`. `for x in a` over a fixed array is R-6q-2.
   Rejected: `[T; N]` as a field of a generic struct or an enum variant, a tuple component or type argument, and
   nested fixed arrays, are `type/fixed_array_position`; an element type other than a scalar (a view `[T]` too) is
   `type/fixed_array_element`; a negative or oversized length is `type/fixed_array_length`; a non-constant length is
   `type/const_expr` and a `bool` (a literal, `!`, a comparison, `&&`/`||`) or `char` length `type/const_type`; whole-array `==`/`!=`, use as a view `[T]`
   outside the call-duration lend (a `[T]` or `ref [T]` local, a `take` argument, an argument of a `from` function or
-  of a call inside a contract) and a literal inside a contract are `type/fixed_array_operation`; a wrong element
+  of a call inside a contract) are `type/fixed_array_operation`; a wrong element
   count is `type/type_mismatch`, and an `inout [T]` parameter given a `[T; N]` is `type/inout_argument`. Generic and
-  enum fields, tuples, type arguments, nested arrays, slice patterns and contract literals are parity row P7-1 B
+  enum fields, tuples, type arguments, nested arrays and slice patterns are parity row P7-1 B
   (remaining). The length bound `[T; <=N]`
   (section 7a) is unchanged. Tests: [accept](tests/spec/r6t_4_accept.pruv), [reject](tests/spec/r6t_4_reject.pruv),
   [index](tests/spec/r6t_4_reject_index.pruv), [literals](tests/runtime/p7_rt_fixed_literal.pruv),
   [order](tests/runtime/p7_rt_fixed_eval.pruv), [proven](tests/runtime/p7_rt_fixed_proven.pruv),
-  [unverified](tests/runtime/p7_rt_fixed_oob_unverified.pruv), [for](tests/runtime/p7_rt_fixed_for.pruv), [type](tests/must_reject/p7_array_type.pruv),
+  [unverified](tests/runtime/p7_rt_fixed_oob_unverified.pruv), [for](tests/runtime/p7_rt_fixed_for.pruv), [contract literals](tests/runtime/p7_rt_fixed_contract_lit.pruv), [type](tests/must_reject/p7_array_type.pruv),
   [char element](tests/must_reject/p7_array_char_type.pruv), [owned](tests/must_reject/p7_fixed_owned.pruv),
   [nested](tests/must_reject/p7_fixed_nested.pruv), [field](tests/runtime/p7_rt_fixed_field.pruv),
   [nested field](tests/runtime/p7_rt_fixed_field_nested.pruv), [host field](tests/must_reject/p7_fixed_field_host.pruv),
@@ -3320,7 +3323,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/field_name` | type | a field name does not start with a lower-case letter |
 | `type/fixed_array_element` | type | a fixed-length array element that is not a scalar integer, `char` or `bool` (R-6t-4) |
 | `type/fixed_array_length` | type | a negative fixed-length array length, or an array larger than 65536 bytes (R-6t-4) |
-| `type/fixed_array_operation` | type | `==`/`!=` on fixed-length arrays, a fixed-length array used as a view `[T]` outside a call-duration lend, or a fixed-length array literal in a contract (R-6t-4) |
+| `type/fixed_array_operation` | type | `==`/`!=` on fixed-length arrays, a fixed-length array used as a view `[T]` outside a call-duration lend (R-6t-4) |
 | `type/fixed_array_position` | type | `[T; N]` as a field of a generic struct or enum, tuple component, type argument or nested array, or in the signature (struct fields included) of a `pub`, host entry or extern function (R-6t-4) |
 | `type/for_enumerate` | type | `for (i, x) in` over an array, view or `Vec`; enumeration is bundle P15 (R-6q-3) |
 | `type/for_iterable` | type | a `for` range with non-integer bounds, or a `for` over a value that is not a slice or a `Vec` of integer/bool elements (R-6q-3) |

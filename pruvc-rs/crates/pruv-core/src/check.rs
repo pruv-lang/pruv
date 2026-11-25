@@ -5796,12 +5796,6 @@ impl Checker {
     /// P7-1: `[a, b, c]` / `[x; N]`. With `want` every element is checked against it; without it the first
     /// element that is not a bare integer literal fixes T (all bare literals: i64).
     fn array_lit(&mut self, call: &mut Call, want: Option<&GType>, scope: &Scope, c: bool) -> Res<GType> {
-        if c {
-            // P7-1 B: neither backend lowers a fixed-array literal inside a contract yet
-            return Err(terr(call.line, call.col, "fixed_array_operation",
-                "a fixed-length array literal cannot appear in a contract yet (parity row P7-1 B)".to_string(),
-                "bind the array to a local in the body, or state the property on its elements"));
-        }
         let n = match crate::ast::array_repeat_len(&call.name) {
             Some(n) => n,
             None => call.args.len() as u64,

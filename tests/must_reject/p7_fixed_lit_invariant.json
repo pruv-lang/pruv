@@ -1,1 +1,1 @@
-{"stage": "type", "code": "fixed_array_operation"}
+{"stage": "verify", "code": "invariant_preserved"}

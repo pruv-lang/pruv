@@ -1451,8 +1451,8 @@ must_reject|must_reject/p7_fixed_borrow_elem.pruv	2 cases: exit 2	llvm=b27c72a6d
 must_reject|must_reject/p7_fixed_borrow_from.pruv	2 cases: exit 2	llvm=4f31d219aa5f	rust=4f31d219aa5f
 must_reject|must_reject/p7_fixed_call_len.pruv	2 cases: exit 2	llvm=220886ae2ef9	rust=220886ae2ef9
 must_reject|must_reject/p7_fixed_char_len.pruv	2 cases: exit 2	llvm=e9a12be65717	rust=e9a12be65717
-must_reject|must_reject/p7_fixed_contract.pruv	2 cases: exit 2	llvm=8d62eeb43acc	rust=8d62eeb43acc
-must_reject|must_reject/p7_fixed_contract_ensures.pruv	2 cases: exit 2	llvm=c6e9b32a4db0	rust=c6e9b32a4db0
+must_reject|must_reject/p7_fixed_contract.pruv	2 cases: exit 2	llvm=ff1c60cac157	rust=ff1c60cac157
+must_reject|must_reject/p7_fixed_contract_ensures.pruv	2 cases: exit 2	llvm=bbf73ebc6f00	rust=bbf73ebc6f00
 must_reject|must_reject/p7_fixed_count.pruv	2 cases: exit 2	llvm=f874588a791c	rust=f874588a791c
 must_reject|must_reject/p7_fixed_eq.pruv	2 cases: exit 2	llvm=5d997fecbb6a	rust=5d997fecbb6a
 must_reject|must_reject/p7_fixed_field.pruv	2 cases: exit 2	llvm=e7fc8ddf9839	rust=e7fc8ddf9839
@@ -1471,10 +1471,12 @@ must_reject|must_reject/p7_fixed_len_div0.pruv	2 cases: exit 2	llvm=c08e4fa1b13f
 must_reject|must_reject/p7_fixed_len_overflow.pruv	2 cases: exit 2	llvm=b66938eb77f9	rust=b66938eb77f9
 must_reject|must_reject/p7_fixed_len_overflow_mul.pruv	2 cases: exit 2	llvm=13a1a875c685	rust=13a1a875c685
 must_reject|must_reject/p7_fixed_lend_assert.pruv	2 cases: exit 2	llvm=426828300f2f	rust=426828300f2f
-must_reject|must_reject/p7_fixed_lit_assert.pruv	2 cases: exit 2	llvm=b6d852856057	rust=b6d852856057
-must_reject|must_reject/p7_fixed_lit_decreases.pruv	2 cases: exit 2	llvm=0ee07f9ce091	rust=0ee07f9ce091
-must_reject|must_reject/p7_fixed_lit_forall.pruv	2 cases: exit 2	llvm=b4dcb4e2d512	rust=b4dcb4e2d512
-must_reject|must_reject/p7_fixed_lit_invariant.pruv	2 cases: exit 2	llvm=8ce463031d9c	rust=8ce463031d9c
+must_reject|must_reject/p7_fixed_lit_assert.pruv	2 cases: exit 2	llvm=876a56d388d3	rust=876a56d388d3
+must_reject|must_reject/p7_fixed_lit_decreases.pruv	2 cases: exit 2	llvm=d10d6517ab3a	rust=d10d6517ab3a
+must_reject|must_reject/p7_fixed_lit_forall.pruv	2 cases: exit 2	llvm=604a87bc90ef	rust=604a87bc90ef
+must_reject|must_reject/p7_fixed_lit_invariant.pruv	2 cases: exit 2	llvm=95671fd96411	rust=95671fd96411
+must_reject|must_reject/p7_fixed_lit_oob.pruv	2 cases: exit 2	llvm=7d00ce7a08e2	rust=7d00ce7a08e2
+must_reject|must_reject/p7_fixed_lit_zero.pruv	2 cases: exit 2	llvm=28ab618d6787	rust=28ab618d6787
 must_reject|must_reject/p7_fixed_local_len.pruv	2 cases: exit 2	llvm=5950c85f93d6	rust=5950c85f93d6
 must_reject|must_reject/p7_fixed_loop_bool.pruv	2 cases: exit 2	llvm=6f7c9739aa99	rust=6f7c9739aa99
 must_reject|must_reject/p7_fixed_loop_i64.pruv	2 cases: exit 2	llvm=6f7c9739aa99	rust=6f7c9739aa99
@@ -2741,6 +2743,8 @@ runtime|runtime/p7_rt_fixed_b_proven [--no-verify]	2 cases: exit 2	llvm=58871a6c
 runtime|runtime/p7_rt_fixed_b_proven [default]	2 cases: exit 2	llvm=379c5208cfaa	rust=c890f212aa81
 runtime|runtime/p7_rt_fixed_borrow [--no-verify]	2 cases: exit 2	llvm=ac4489b8a15e	rust=21a0e66ac38f
 runtime|runtime/p7_rt_fixed_borrow [default]	2 cases: exit 2	llvm=aa9f1476450b	rust=b3486c482793
+runtime|runtime/p7_rt_fixed_contract_lit [--no-verify]	2 cases: exit 2	llvm=dc03493bdf99	rust=5ae95d92e614
+runtime|runtime/p7_rt_fixed_contract_lit [default]	2 cases: exit 2	llvm=87b9ce4a8745	rust=76883807fce9
 runtime|runtime/p7_rt_fixed_copy [--no-verify]	2 cases: exit 2	llvm=49e9f648fa8d	rust=77fa5a4859f8
 runtime|runtime/p7_rt_fixed_copy [default]	2 cases: exit 2	llvm=4add6908765d	rust=0aac2b703146
 runtime|runtime/p7_rt_fixed_eval [--no-verify]	2 cases: exit 2	llvm=ce7955a071c8	rust=d56a8dfea516

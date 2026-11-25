@@ -1,9 +1,9 @@
-// P7-1 B: a fixed-array literal inside decreases is still rejected
+// P7-1 B: a decreases term read from a fixed-array literal must still decrease
 fn f() -> i64 {
   let mut k: i64 = 0;
   while k < 2
     invariant 0 <= k && k <= 2
-    decreases [2 - k, 0][0]
+    decreases [2 - k, 0][1]
   {
     k = k + 1;
   }

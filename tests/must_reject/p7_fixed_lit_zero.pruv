@@ -1,0 +1,4 @@
+// P7-1 B: any index into a zero-length literal in a contract is out of range
+fn f(i: i64) -> i64
+  requires i >= 0 && i < 1 && [true; 0][i]
+{ return i; }

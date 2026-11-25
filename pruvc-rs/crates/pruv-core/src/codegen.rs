@@ -2701,6 +2701,18 @@ impl<'a> Gen<'a> {
                     .is_some_and(crate::borrowed::is_view_wrapper) => self.c(e),
             // G9: a buffer field of a real (extended) value
             Expr::FieldAccess(_) | Expr::VariantField(_) if self.g9 => self.cx(e),
+            // P7-1 B: a fixed-array literal in a contract is an array of contract values
+            Expr::Call(x) if x.name == "@array" => {
+                let mut parts = Vec::new();
+                for a in &x.args {
+                    parts.push(self.c(a)?);
+                }
+                Ok(format!("[{}]", parts.join(", ")))
+            }
+            Expr::Call(x) if crate::ast::array_repeat_len(&x.name).is_some() && x.args.len() == 1 => {
+                let n = crate::ast::array_repeat_len(&x.name).unwrap_or(0);
+                Ok(format!("[{}; {}]", self.c(&x.args[0])?, n))
+            }
             other => Err(format!("codegen: unsupported array expression in contract: {:?}", other)),
         }
     }

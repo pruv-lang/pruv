@@ -1,6 +1,7 @@
-// P7-1 B: a fixed-array literal inside a quantifier is still rejected
-fn f(a: [i64]) -> i64
+// P7-1 B: a fixed-array literal inside a quantifier in requires
+fn g(a: [i64]) -> i64
   requires forall i in 0..len(a): a[i] >= [0; 2][1]
 {
   return 0;
 }
+fn f() -> i64 { let a: [i64; 2] = [3, -1]; return g(a); }

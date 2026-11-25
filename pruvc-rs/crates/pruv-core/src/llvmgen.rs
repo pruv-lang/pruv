@@ -4969,6 +4969,19 @@ impl<'a> FnGen<'a> {
         Ok(tmp)
     }
 
+    /// P7-1 B: the elements of a fixed-array literal in contract form (`[x; N]` evaluates `x` once).
+    fn fixed_lit_cev(&mut self, c: &Call) -> R<Vec<V>> {
+        if let Some(n) = array_repeat_len(&c.name) {
+            let v = self.cev(arg(&c.args, 0)?)?;
+            return Ok((0..n).map(|_| v.clone()).collect());
+        }
+        let mut vs = Vec::new();
+        for a in &c.args {
+            vs.push(self.cev(a)?);
+        }
+        Ok(vs)
+    }
+
     /// P7-1: write the value of fixed-array expression `e` into `dst`. Every element is computed before the first
     /// store, so `a = [a[1], a[0]]` reads the old `a`.
     fn fixed_fill(&mut self, dst: &str, e: &Expr) -> R<()> {
@@ -7098,6 +7111,29 @@ impl<'a> FnGen<'a> {
                 let f = expr_ty(&x.array).as_deref().and_then(fixed_key).unwrap();
                 let (el, n) = f.fixed_parts().unwrap();
                 let el = el.clone();
+                if let Expr::Call(c) = &*x.array {
+                    if c.name == ARRAY_LIST || array_repeat_len(&c.name).is_some() {
+                        // P7-1 B: a literal indexed in a contract: every element in contract form, then a select chain
+                        let vs = self.fixed_lit_cev(c)?;
+                        let i = self.cev(&x.index)?;
+                        let ok = self.op(format!("icmp ult i128 {}, {}", i.a, n))?;
+                        self.guard(&ok, und("array index out of range".to_string()), false)?;
+                        if vs.is_empty() {
+                            // `[x; 0][i]`: the guard above always fails
+                            let kind = if el.name == "bool" { Kind::I1 } else { Kind::I128 };
+                            let zero = if matches!(kind, Kind::I1) { "false" } else { "0" };
+                            return Ok(V::new(kind, zero));
+                        }
+                        let k0 = vs[0].k.clone();
+                        let ty = if matches!(k0, Kind::I1) { "i1" } else { "i128" };
+                        let mut r = vs[0].a.clone();
+                        for (k, v) in vs.iter().enumerate().skip(1) {
+                            let hit = self.op(format!("icmp eq i128 {}, {}", i.a, k))?;
+                            r = self.op(format!("select i1 {hit}, {ty} {}, {ty} {r}", v.a))?;
+                        }
+                        return Ok(V::new(k0, r));
+                    }
+                }
                 let p = self.fixed_ptr(&x.array)?;
                 let i = self.cev(&x.index)?;
                 let ok = self.op(format!("icmp ult i128 {}, {}", i.a, n))?;
@@ -7329,8 +7365,15 @@ impl<'a> FnGen<'a> {
                 }
                 if n == "len" && expr_ty(arg(a, 0)?).as_deref().and_then(fixed_key).is_some() {
                     let f = expr_ty(arg(a, 0)?).as_deref().and_then(fixed_key).unwrap();
-                    if !matches!(arg(a, 0)?, Expr::Var(_)) {
-                        self.fixed_ptr(arg(a, 0)?)?;
+                    match arg(a, 0)? {
+                        Expr::Var(_) => {}
+                        // P7-1 B: a literal's elements are still evaluated in contract form
+                        Expr::Call(c) if c.name == ARRAY_LIST || array_repeat_len(&c.name).is_some() => {
+                            self.fixed_lit_cev(c)?;
+                        }
+                        other => {
+                            self.fixed_ptr(other)?;
+                        }
                     }
                     return Ok(V::new(Kind::I128, f.fixed_parts().unwrap().1.to_string()));
                 }
