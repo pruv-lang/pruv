@@ -1,0 +1,22 @@
+// spec: R-6q-1 accept
+fn wsum(a: u32, b: u32) -> u64
+  requires a <= b && b <= 1000
+  ensures result <= 1000000
+{
+  let mut s: u64 = 0;
+  for i in a..b
+    invariant s <= u64(i) * 1000
+  {
+    s = s + u64(i);
+  }
+  return s;
+}
+
+fn find(a: [i64], t: i64) -> i64
+  ensures result >= -1 && result < len(a)
+{
+  for i in 0..len(a) {
+    if a[i] == t { return i; }
+  }
+  return -1;
+}

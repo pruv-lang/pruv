@@ -116,6 +116,33 @@ fn negate(v: &str) -> String {
     }
 }
 
+/// P4: in the invariants of `for x in v`, `index(x)` is the number of elements already visited (the hidden counter).
+/// The binder cannot shadow an outer name, so `index(x)` cannot mean a user call on another `x`.
+fn for_index_rewrite(e: &mut Expr, binder: &str, counter: &str) {
+    if let Expr::Call(c) = e {
+        if c.name == "index" && c.targs.is_none() && matches!(c.args.as_slice(), [Expr::Var(v)] if v.name == binder) {
+            *e = Expr::Var(Var { line: c.line, col: c.col, name: counter.to_string(), ty: None });
+            return;
+        }
+    }
+    let mut go = |x: &mut Expr| for_index_rewrite(x, binder, counter);
+    match e {
+        Expr::Unary(u) => go(&mut u.operand),
+        Expr::Binary(b) => { go(&mut b.left); go(&mut b.right); }
+        Expr::Call(c) => c.args.iter_mut().for_each(go),
+        Expr::Index(i) => { go(&mut i.array); go(&mut i.index); }
+        Expr::Ctor(c) => if let Some(a) = c.arg.as_mut() { go(a) },
+        Expr::Quant(q) => { go(&mut q.lo); go(&mut q.hi); go(&mut q.body); }
+        Expr::StructLit(l) => l.fields.iter_mut().for_each(|f| go(&mut f.value)),
+        Expr::EnumCtor(c) => c.args.iter_mut().for_each(go),
+        Expr::FieldAccess(f) => go(&mut f.base),
+        Expr::IsVariant(v) => go(&mut v.value),
+        Expr::VariantField(v) => go(&mut v.value),
+        Expr::InoutArg(a) => go(&mut a.expr),
+        _ => {}
+    }
+}
+
 fn is_upper(s: &str) -> bool {
     s.chars().next().map_or(false, |c| c.is_ascii_uppercase())
 }
@@ -1415,7 +1442,7 @@ impl Parser {
                 }
             };
             let body = self.block()?;
-            return Ok(Stmt::While(While { line: l, col: c, cond, invariants: invs, decreases: dec, body }));
+            return Ok(Stmt::While(While { line: l, col: c, cond, invariants: invs, decreases: dec, body, for_head: None }));
         }
         if self.at("for", 0) && self.at("(", 1) {
             self.bump();
@@ -1436,9 +1463,10 @@ impl Parser {
         }
         if self.at("for", 0) {
             if self.peek(1).kind == Kind::Id && self.at("in", 2) {
-                return Err(PruvError::new("parse", l, c, "small_int_unsupported",
-                    "numeric for-ranges are unavailable (bundle P4)",
-                    "use a while loop and convert narrow bounds with i64(x)"));
+                self.bump();
+                let var = self.next();
+                self.bump();
+                return self.for_loop(l, c, var);
             }
             return Err(self.reserved_name(&t));
         }
@@ -1640,6 +1668,134 @@ impl Parser {
         let e = self.expr()?;
         self.expect(";")?;
         Ok(Stmt::ExprStmt(ExprStmt { line: l, col: c, expr: e }))
+    }
+
+    /// P4: a `for` bound or iterated place. An uppercase binding followed by the body block is a variable, not a
+    /// struct literal.
+    fn for_operand(&mut self) -> R<Expr> {
+        let name = self.peek(0);
+        if name.kind == Kind::Id && is_upper(&name.val) && (self.at("{", 1) || self.at("invariant", 1)) {
+            let name = self.next();
+            return Ok(Expr::Var(Var { line: name.line, col: name.col, name: name.val, ty: None }));
+        }
+        self.add()
+    }
+
+    /// P4: `for i in a..b { ... }` and `for x in v { ... }`, lowered here to the `while` CFG so drops, borrow
+    /// write-back and invariants take the one `while` path:
+    ///
+    /// ```text
+    /// if true {                                        if true {
+    ///   let S: T = a; let E: T = b;                      let E: i64 = len(v);
+    ///   let mut i: T = S;                                let mut K: i64 = 0;
+    ///   while i < E                                      while K < E
+    ///     invariant S <= i && (i <= E || i == S)           invariant 0 <= K && K <= E
+    ///     invariant <user>                                 invariant <user>
+    ///     decreases E - i                                  decreases E - K
+    ///   { body; i = i + 1; }                             { let x: _ = v[K]; body; K = K + 1; }
+    /// }                                                }
+    /// ```
+    ///
+    /// The bounds are evaluated once, `a` before `b`. `T` (written `i64` here) is resolved by the checker from the
+    /// bounds; the checker also makes `i` read-only in the body except for the synthesized step, holds `v` read-only,
+    /// and turns a `Vec` element read into `vec_get`. The `if true` scope drops the hidden names after the loop.
+    fn for_loop(&mut self, l: i64, c: i64, var: Tok) -> R<Stmt> {
+        let first = self.for_operand()?;
+        let range = self.at("..", 0);
+        let end = if range {
+            self.bump();
+            if self.at("=", 0) {
+                return Err(PruvError::new("parse", l, c, "for_iterable",
+                    "a for loop takes a half-open range `a..b`; `a..=b` is not available",
+                    "write `a..b + 1` with a proof that b + 1 is in range"));
+            }
+            Some(self.for_operand()?)
+        } else {
+            None
+        };
+        let mut user_invs = Vec::new();
+        while self.at("invariant", 0) {
+            self.bump();
+            user_invs.push(self.expr()?);
+        }
+        if self.at("decreases", 0) {
+            return Err(PruvError::new("parse", l, c, "for_decreases",
+                "a for loop generates its own measure; remove the decreases clause", ""));
+        }
+        if !self.at("{", 0) {
+            return Err(PruvError::new("parse", l, c, "for_iterable",
+                "a for loop iterates a half-open range `a..b` or a slice/Vec place `v`",
+                "iterator adapters (iter, enumerate, zip, rev, map, filter) are not available yet (bundle P15)"));
+        }
+        let mut body = self.block()?;
+        let var_ = |name: &str| Expr::Var(Var { line: l, col: c, name: name.to_string(), ty: None });
+        let lit = |v: &str| Expr::IntLit(IntLit { line: l, col: c, value: v.to_string(), ty: None });
+        let bin = |op: &str, a: Expr, b: Expr| Expr::Binary(Binary {
+            line: l, col: c, op: op.to_string(), left: Box::new(a), right: Box::new(b), ty: None,
+        });
+        let let_ = |name: &str, mutable: bool, value: Expr, line: i64, col: i64| Stmt::Let(Let {
+            borrowed: false, line, col, name: name.to_string(), mutable, ty: "i64".to_string(), value, refine: None,
+        });
+        let end_name = format!("__pruv_for_end_{l}_{c}");
+        let mut lets = Vec::new();
+        // R-6q-2: a slice loop also keeps `len(P) == E`, so a write to a sibling place (not P) cannot lose the bound
+        let mut len_inv = None;
+        let (counter, lower) = match end {
+            Some(end) => {
+                let start_name = format!("__pruv_for_start_{l}_{c}");
+                lets.push(let_(&start_name, false, first, l, c));
+                lets.push(let_(&end_name, false, end, l, c));
+                lets.push(let_(&var.val, true, var_(&start_name), var.line, var.col));
+                (var.val.clone(), var_(&start_name))
+            }
+            None => {
+                let mut place = &first;
+                while let Expr::FieldAccess(f) = place {
+                    place = &f.base;
+                }
+                if !matches!(place, Expr::Var(_)) {
+                    return Err(PruvError::new("parse", first.line(), first.col(), "for_iterable",
+                        "a for loop iterates a half-open range `a..b` or a slice/Vec place `v` (a binding or field path)",
+                        "bind the collection to a local first; iterator adapters are bundle P15"));
+                }
+                let counter = format!("__pruv_for_i_{l}_{c}");
+                let len = Expr::Call(Call {
+                    line: l, col: c, name: "len".to_string(), args: vec![first.clone()], ty: None,
+                    targs: None, inst: None, old: None, opaque_c: false,
+                });
+                len_inv = Some(bin("==", len.clone(), var_(&end_name)));
+                lets.push(let_(&end_name, false, len, l, c));
+                lets.push(let_(&counter, true, lit("0"), l, c));
+                let read = Expr::Index(Index {
+                    line: l, col: c, array: Box::new(first), index: Box::new(var_(&counter)), ty: None,
+                });
+                body.insert(0, let_(&var.val, false, read, var.line, var.col));
+                (counter, lit("0"))
+            }
+        };
+        body.push(Stmt::Assign(Assign {
+            line: l, col: c, name: counter.clone(), value: bin("+", var_(&counter), lit("1")), deref: false,
+        }));
+        let i = || var_(&counter);
+        let e = || var_(&end_name);
+        let mut invariants = vec![if range {
+            bin("&&", bin("<=", lower.clone(), i()), bin("||", bin("<=", i(), e()), bin("==", i(), lower.clone())))
+        } else {
+            bin("&&", bin("<=", lower.clone(), i()), bin("<=", i(), e()))
+        }];
+        invariants.extend(len_inv);
+        for mut inv in user_invs {
+            if !range {
+                for_index_rewrite(&mut inv, &var.val, &counter);
+            }
+            invariants.push(inv);
+        }
+        lets.push(Stmt::While(While {
+            line: l, col: c, cond: bin("<", i(), e()), invariants, decreases: bin("-", e(), i()), body,
+            for_head: Some(ForHead { var: var.val, counter, slice: !range }),
+        }));
+        Ok(Stmt::If(If { line: l, col: c, cond: Expr::BoolLit(BoolLit { line: l, col: c, value: true, ty: None }),
+            then: lets, els: Vec::new() }))
     }
 
     fn map_iteration_place(&mut self) -> R<Expr> {

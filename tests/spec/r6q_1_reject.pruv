@@ -1,0 +1,8 @@
+// spec: R-6q-1 reject
+fn f(n: i64) -> i64
+  requires 0 <= n && n <= 10
+{
+  let mut s: i64 = 0;
+  for i in 0..n { i = i + 1; s = s + 1; }
+  return s;
+}

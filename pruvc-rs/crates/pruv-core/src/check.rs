@@ -362,6 +362,10 @@ struct Checker {
     static_lit: bool,
     map_roots: Vec<(String, Vec<String>, Vec<String>)>,
     map_iterations: Vec<(String, Vec<String>)>,
+    /// P4: collections iterated by an enclosing `for x in v` (read-only while the loop runs).
+    for_holds: Vec<(String, Vec<String>)>,
+    /// P4: enclosing range `for` loops: (position of the synthesized step, loop variable).
+    for_steps: Vec<(i64, i64, String)>,
     // ---- G9 A0 metadata ----
     /// recursive type SCCs (names in declaration order), SCC-number order
     type_sccs: Vec<Vec<String>>,
@@ -1072,6 +1076,41 @@ fn is_concrete_int_buffer(ty: &GType) -> bool {
 }
 
 /// Type of an element read from / stored into the array type `at`: T for [T]; bool for [bool]; else i64.
+/// P4: the lowered `for` loop inside a parser `if true { ... }` wrapper (parser `for_loop`).
+pub(crate) fn for_loop_of(s: &If) -> Option<&While> {
+    match (s.then.last(), &s.cond, s.els.is_empty()) {
+        (Some(Stmt::While(w)), Expr::BoolLit(b), true) if b.value && w.for_head.is_some() => Some(w),
+        _ => None,
+    }
+}
+
+/// P4: the iterated place of a lowered slice `for`: its first body statement reads `v[K]` or `vec_get(v, K)`.
+pub(crate) fn for_element_read(body: &[Stmt]) -> (&Expr, &Expr) {
+    match body.first() {
+        Some(Stmt::Let(l)) => match &l.value {
+            Expr::Index(i) => (&i.array, &i.index),
+            Expr::Call(c) if c.args.len() == 2 => (&c.args[0], &c.args[1]),
+            _ => unreachable!("lowered for element read"),
+        },
+        _ => unreachable!("lowered for element binder"),
+    }
+}
+
+fn for_collection(body: &[Stmt]) -> (String, Vec<String>) {
+    let (place, _) = for_element_read(body);
+    let (root, path) = field_place(place);
+    let Expr::Var(v) = root else { unreachable!("parser checks the for place") };
+    (v.name.clone(), path)
+}
+
+fn is_int_literal(e: &Expr) -> bool {
+    match e {
+        Expr::IntLit(_) => true,
+        Expr::Unary(u) => u.op == "-" && matches!(*u.operand, Expr::IntLit(_)),
+        _ => false,
+    }
+}
+
 fn elem_type(at: &GType) -> GType {
     if at.name == "array" && !at.args.is_empty() {
         return at.args[0].clone();
@@ -1164,6 +1203,8 @@ impl Checker {
             static_lit: false,
             map_roots: Vec::new(),
             map_iterations: Vec::new(),
+            for_holds: Vec::new(),
+            for_steps: Vec::new(),
             type_sccs: Vec::new(),
             recursive_vec_elements: HashSet::new(),
             boxed: Vec::new(),
@@ -1731,15 +1772,17 @@ impl Checker {
                 return Ok(then_ref || else_ref);
             }
         }
-        let (mut root, _) = field_place(e);
+        let (mut root, mut path) = field_place(e);
         while let Expr::Index(i) = root {
-            root = field_place(&i.array).0;
+            (root, path) = field_place(&i.array);
         }
         let Expr::Var(v) = root else { unreachable!("resolved place root") };
         let entry = self.lookup(v.line, v.col, &v.name, scope, &[])?;
         if !(entry.kind == "inout" || entry.kind == "local" && entry.mutable) {
             return Err(Self::bad_place(v.line, v.col, format!("{} is not a `let mut` local or an inout parameter", v.name)));
         }
+        // R-6q-2: a place binding (`let d = inout P[..]`) writes P through `d`, so it is held like a direct write
+        self.check_iteration_borrow(v.line, v.col, &v.name, &path)?;
         self.expr(e, scope, false)?;
         Ok(matches!(e, Expr::FieldAccess(f) if self.is_borrowed_field(&f.base, &f.field)))
     }
@@ -3980,7 +4023,13 @@ impl Checker {
                         "dereference requires a mutable scalar or record collection binder", ""));
                 }
                 let array_inout = v.kind == "inout" && v.ty.is_array();
-                if !(v.mutable || scalar_binder || record_binder || scalar_inout || array_inout) {
+                let for_step = self.for_steps.iter().any(|(l, c, n)| (*l, *c) == (s.line, s.col) && *n == s.name);
+                if !(v.mutable || scalar_binder || record_binder || scalar_inout || array_inout || for_step) {
+                    if self.for_steps.iter().any(|(_, _, n)| *n == s.name) {
+                        return Err(terr(s.line, s.col, "immutable",
+                            format!("the for loop variable {} cannot be assigned in the loop body", s.name),
+                            "copy it into a `let mut` local, or use a while loop"));
+                    }
                     if matches!(v.kind, "inout" | "map_inout") {
                         // G5 A0: element stores are allowed, replacing the binding is not
                         return Err(terr(
@@ -4186,6 +4235,9 @@ impl Checker {
                 self.own(&s.value, scope)?;
             }
             Stmt::If(s) => {
+                if for_loop_of(s).is_some() {
+                    self.for_types(s, scope)?;
+                }
                 self.expect(&mut s.cond, &boolt(), scope, false, Some("a condition"))?;
                 self.check_inout_context(&[&s.cond], InoutContext::Value)?;
                 let mut sc = scope.clone();
@@ -4204,7 +4256,25 @@ impl Checker {
                 self.expect_measure(&mut s.decreases, scope, true)?;
                 self.ckind = "code";
                 let mut sc = scope.clone();
-                self.block(&mut s.body, &mut sc)?;
+                match s.for_head.clone() {
+                    None => self.block(&mut s.body, &mut sc)?,
+                    Some(head) if head.slice => {
+                        let (root, path) = for_collection(&s.body);
+                        self.for_holds.push((root, path));
+                        let r = self.block(&mut s.body, &mut sc);
+                        self.for_holds.pop();
+                        r?;
+                    }
+                    Some(head) => {
+                        if let Some(e) = sc.get_mut(&head.var) {
+                            e.mutable = false;
+                        }
+                        self.for_steps.push((s.line, s.col, head.var));
+                        let r = self.block(&mut s.body, &mut sc);
+                        self.for_steps.pop();
+                        r?;
+                    }
+                }
             }
             Stmt::ForMap(s) => self.for_map(s, scope)?,
             Stmt::Return(s) => {
@@ -4920,6 +4990,10 @@ impl Checker {
         let val = match (ty.owner.is_none(), ty.name.as_str(), ty.args.as_slice()) {
             (true, "hashmap", [k, v]) if k.to_key() == "string"
                 && (*v == i64t() || *v == boolt() || self.owned_aggregate(v)) => v.clone(),
+            _ if ty.is_array() || ty.view_base().is_some() || ty.owner.is_none() && ty.name == "vec" =>
+                return Err(terr(st.line, st.col, "for_enumerate",
+                    format!("`for (i, x) in` over {} is not available yet (bundle P15)", tn(&ty)),
+                    "write `for i in 0..len(v)` and read the element by index")),
             _ => return Err(terr(st.place.line(), st.place.col(), "foreign_owned_type",
                 "map iteration requires HashMap<String, V> with scalar or owned aggregate values", "")),
         };
@@ -4939,6 +5013,61 @@ impl Checker {
         let result = self.block(&mut st.body, &mut inner);
         self.map_iterations.pop();
         result
+    }
+
+    /// P4: resolves the types the parser left as `i64` in a lowered `for` (see parser `for_loop`). A range takes the
+    /// width of its non-literal bound (the end bound first); a slice binder takes the element type, and a `Vec<T>`
+    /// element read becomes `vec_get::<T>(v, K)`.
+    fn for_types(&mut self, s: &mut If, scope: &Scope) -> Res<()> {
+        let slice = for_loop_of(s).is_some_and(|w| w.for_head.as_ref().is_some_and(|h| h.slice));
+        if !slice {
+            let mut ty = None;
+            for k in [1, 0] {
+                let Stmt::Let(l) = &s.then[k] else { unreachable!() };
+                if ty.is_none() && !is_int_literal(&l.value) {
+                    ty = Some(self.expr(&mut l.value.clone(), scope, false)?);
+                }
+            }
+            let ty = ty.unwrap_or_else(i64t);
+            if ty.int_width().is_none() {
+                let Stmt::Let(l) = &s.then[1] else { unreachable!() };
+                return Err(terr(l.value.line(), l.value.col(), "for_iterable",
+                    format!("a for range needs integer bounds, found {}", tn(&ty)), ""));
+            }
+            for k in 0..3 {
+                let Stmt::Let(l) = &mut s.then[k] else { unreachable!() };
+                l.ty = ty.to_key();
+            }
+            return Ok(());
+        }
+        let Some(Stmt::While(w)) = s.then.last_mut() else { unreachable!() };
+        let (place, _) = for_element_read(&w.body);
+        let (line, col) = (place.line(), place.col());
+        let ct = self.expr(&mut place.clone(), scope, false)?;
+        let base = ct.view_base().cloned().unwrap_or_else(|| ct.clone());
+        let elem = if base.is_array() {
+            elem_type(&base)
+        } else if base.owner.is_none() && base.name == "vec" && base.args.len() == 1
+            && (base.args[0].int_width().is_some() || base.args[0] == boolt()) {
+            let elem = base.args[0].clone();
+            let Some(Stmt::Let(l)) = w.body.first_mut() else { unreachable!() };
+            let Expr::Index(i) = std::mem::replace(&mut l.value, Expr::BoolLit(BoolLit { line, col, value: true, ty: None }))
+                else { unreachable!() };
+            l.value = Expr::Call(Call { line: i.line, col: i.col, name: "vec_get".into(), args: vec![*i.array, *i.index],
+                ty: None, targs: Some(vec![elem.clone()]), inst: None, old: None, opaque_c: false });
+            elem
+        } else if base.name == "vec" {
+            return Err(terr(line, col, "for_iterable",
+                format!("a for loop over {} is not available: only Vec elements of integer or bool type", tn(&ct)),
+                "iterate the indexes with `for i in 0..len(v)` and read with vec_get (owned elements: bundle P15/P16)"));
+        } else {
+            return Err(terr(line, col, "for_iterable",
+                format!("a for loop iterates a half-open range or a slice/Vec, found {}", tn(&ct)),
+                "write `for i in a..b`; map iteration is `for (k, v) in m`"));
+        };
+        let Some(Stmt::Let(l)) = w.body.first_mut() else { unreachable!() };
+        l.ty = elem.to_key();
+        Ok(())
     }
 
     fn is_iteration_binder(e: &Expr, scope: &Scope) -> bool {
@@ -5117,6 +5246,13 @@ impl Checker {
     }
 
     fn check_iteration_borrow(&self, line: i64, col: i64, name: &str, path: &[String]) -> Res<()> {
+        if self.for_holds.iter().any(|(root, held)|
+            root == name && (path.starts_with(held) || held.starts_with(path))) {
+            let place = std::iter::once(name).chain(path.iter().map(String::as_str)).collect::<Vec<_>>().join(".");
+            return Err(terr(line, col, "recursive_borrow",
+                format!("cannot mutate or move {} while a for loop iterates it", place),
+                "collect the changes and apply them after the loop, or use a while loop over indexes"));
+        }
         if self.map_iterations.iter().any(|(root, held)|
             root == name && (path.starts_with(held) || held.starts_with(path))) {
             let place = std::iter::once(name).chain(path.iter().map(String::as_str)).collect::<Vec<_>>().join(".");
@@ -6273,7 +6409,7 @@ impl Checker {
                 };
                 name = op.name.clone();
                 path = fields;
-                if !path.is_empty() {
+                if !path.is_empty() || self.for_holds.iter().any(|(root, _)| *root == name) {
                     self.check_iteration_borrow(aline, acol, &name, &path)?;
                 }
                 let v = self.lookup(op.line, op.col, &name, scope, &path)?;
@@ -6471,7 +6607,7 @@ impl Checker {
                     "finish the match before the call",
                 ));
             }
-            if !path.is_empty() {
+            if !path.is_empty() || self.for_holds.iter().any(|(root, _)| *root == name) {
                 // after the type and match checks, in the order of check.py
                 self.check_iteration_borrow(aline, acol, &name, &path)?;
             }

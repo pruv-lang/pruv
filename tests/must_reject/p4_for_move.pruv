@@ -1,0 +1,9 @@
+// P4: moving the iterated slice in a for body is recursive_borrow
+fn g(a: [i64]) -> i64 { return len(a); }
+fn f(a: [i64]) -> i64 ! alloc
+{
+  let mut b: [i64] = copy(a);
+  let mut s: i64 = 0;
+  for x in b { let c: [i64] = move b; s = len(c); }
+  return s;
+}

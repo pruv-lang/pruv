@@ -1,0 +1,8 @@
+// P4: a u32 loop variable starting at 0 cannot be decremented without proof
+fn f(a: u32, b: u32) -> u32
+  requires a < b
+{
+  let mut s: u32 = 0;
+  for i in a..b { s = i - 1; }
+  return s;
+}

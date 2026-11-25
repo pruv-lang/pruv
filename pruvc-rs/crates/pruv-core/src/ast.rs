@@ -280,7 +280,22 @@ pub struct IndexAssign {
 #[derive(Debug, Clone, PartialEq)]
 pub struct If { pub line: i64, pub col: i64, pub cond: Expr, pub then: Vec<Stmt>, pub els: Vec<Stmt> }
 #[derive(Debug, Clone, PartialEq)]
-pub struct While { pub line: i64, pub col: i64, pub cond: Expr, pub invariants: Vec<Expr>, pub decreases: Expr, pub body: Vec<Stmt> }
+pub struct While {
+    pub line: i64, pub col: i64, pub cond: Expr, pub invariants: Vec<Expr>, pub decreases: Expr, pub body: Vec<Stmt>,
+    /// P4: set when the parser lowered a `for` loop into this `while` (see parser `for_loop`).
+    pub for_head: Option<ForHead>,
+}
+/// P4: a `for` loop lowered by the parser to `if true { let ...; while ... }`. The wrapper `If` holds the hidden
+/// bound lets; the last body statement is the synthesized step `idx = idx + 1` at the `for` position.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForHead {
+    /// The user binder: the range variable, or the slice element binder.
+    pub var: String,
+    /// The counter the step advances: `var` for a range, a hidden index for a slice.
+    pub counter: String,
+    /// `for x in v` over a slice or Vec (the first body statement binds `x`); false for `for i in a..b`.
+    pub slice: bool,
+}
 #[derive(Debug, Clone, PartialEq)]
 pub struct ForMap {
     pub line: i64, pub col: i64, pub key: String, pub val: String, pub place: Expr,

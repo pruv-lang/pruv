@@ -1,0 +1,1 @@
+{"gen_contains": ["for i in a..b {", "for i in 0i64..(a.len() as i64) {", "*a.get_unchecked((i) as usize)"], "gen_absent": ["__pruv_for_"]}

@@ -1,0 +1,7 @@
+// P4: the body knows only a <= i < b: a[i + 1] is not proven
+fn f(a: [i64]) -> i64
+{
+  let mut s: i64 = 0;
+  for i in 0..len(a) { s = a[i + 1]; }
+  return s;
+}

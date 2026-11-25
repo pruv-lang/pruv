@@ -1,0 +1,6 @@
+// P4: a for loop takes no decreases clause
+fn f(n: i64) -> ()
+  requires 0 <= n && n <= 10
+{
+  for i in 0..n decreases n - i { }
+}
