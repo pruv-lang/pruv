@@ -689,7 +689,7 @@ fn g_args(t: &str) -> (&str, &str) {
 
 /// A user struct/enum (including generated generic instances) or a new Option/Result application.
 pub fn is_agg(t: &str) -> bool {
-    native_vec_elem(t).is_some() || is_gopt(t) || (is_user_type(t) && !crate::gtype::is_g3_key(t))
+    native_vec_elem(t).is_some() || is_gopt(t) || crate::emit_common::is_user_key(t)
 }
 
 /// Types whose external word form follows the G3 rules (tag normalization, inactive words zero, enum check).
@@ -769,7 +769,7 @@ pub fn lty(t: &str) -> String {
         return st(t, false);
     }
     match t {
-        "i64" => "i64".to_string(),
+        _ if crate::intwidth::of(t).is_some() => vkind(t).name().to_string(),
         "bool" => "i1".to_string(),
         "unit" => "void".to_string(),
         "array" | "array_u8" | "array_bool" | "str" => ARR.to_string(), // G2 A5, B2
@@ -781,6 +781,7 @@ pub fn lty(t: &str) -> String {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
     I64,
+    Narrow(&'static crate::intwidth::IntWidth),
     I1,
     I128,
     Arr,
@@ -798,13 +799,22 @@ impl Kind {
         match self {
             Kind::Coll => "coll",
             Kind::Ref => "ref",
-            Kind::I64 => "i64",
+            Kind::I64 => crate::intwidth::I64.llvm(),
+            Kind::Narrow(width) => width.llvm(),
             Kind::I1 => "i1",
             Kind::I128 => "i128",
             Kind::Arr => "arr",
             Kind::Opt => "opt",
             Kind::Unit => "unit",
             Kind::Agg => "agg",
+        }
+    }
+
+    fn int_width(self) -> Option<&'static crate::intwidth::IntWidth> {
+        match self {
+            Kind::I64 => Some(&crate::intwidth::I64),
+            Kind::Narrow(width) => Some(width),
+            _ => None,
         }
     }
 }
@@ -817,8 +827,10 @@ pub fn vkind(t: &str) -> Kind {
     if is_gopt(t) {
         return Kind::Agg;
     }
+    if let Some(width) = crate::intwidth::of(t) {
+        return if width == &crate::intwidth::I64 { Kind::I64 } else { Kind::Narrow(width) };
+    }
     match t {
-        "i64" => Kind::I64,
         "bool" => Kind::I1,
         "unit" => Kind::Unit,
         "array" | "array_u8" | "array_bool" | "str" => Kind::Arr, // G2 A5, B2
@@ -863,12 +875,8 @@ pub fn st(t: &str, c: bool) -> String {
     match t {
         // LB8 R-6g7-1: the Ok slot of Result<(), E> is empty
         "unit" => "{}".to_string(),
-        "i64" => {
-            if c {
-                "i128".to_string()
-            } else {
-                "i64".to_string()
-            }
+        _ if crate::intwidth::of(t).is_some() => {
+            if c { "i128" } else { vkind(t).name() }.to_string()
         }
         "bool" => "i1".to_string(),
         "option" | "result" => {
@@ -962,8 +970,11 @@ fn enum_union_words(tt: &TypeTable, abi_types: &HashSet<String>) -> HashMap<Stri
             };
             return limited((1 + ok.0 + err.0, 1 + ok.1 + err.1));
         }
+        if let Some(width) = crate::intwidth::of(ty) {
+            // A field takes at most one word including alignment padding.
+            return Some((1, width.bits.div_ceil(8) as usize));
+        }
         match ty {
-            "i64" => return Some((1, 8)),
             "bool" => return Some((1, 1)),
             "option" | "result" => return Some((2, 2)),
             "array" | "array_u8" | "array_bool" | "str" => return Some((3, 24)),
@@ -1034,10 +1045,11 @@ pub fn has_take_array(f: &Function) -> bool {
     f.params.iter().any(|p| p.take && is_array_name(&p.ty))
 }
 
-/// Legacy functions with extended, inout, or take-array parameters use only internal entry points.
+/// Legacy functions with extended, inout, take-array or narrow scalar signatures use only internal entry points.
 /// R-6g9-1: a borrowed result (a { ptr, i64 } view the host would read as an owned array) is internal too
 pub fn is_internal_fn(f: &Function, tt: &TypeTable) -> bool {
     has_ext_sig(f, tt) || has_inout(f) || has_take_array(f) || f.borrowed_result
+        || crate::emit_common::has_narrow_scalar_sig(f, tt)
 }
 
 /// An extended (G9) type in the signature (separate from the inout rule: an explicit host entry may have inout params)
@@ -1124,6 +1136,9 @@ fn field_index(tt: &TypeTable, ty: &str, variant: Option<&str>, i: usize, c: boo
 /// W(T): number of i64 words in the external (pruv_abi_*) form.  Memoized per type table (a nested generic value
 /// would otherwise recompute every subtree: quadratic).
 pub fn words(tt: &TypeTable, ty: &str) -> R<usize> {
+    if crate::intwidth::is_narrow(ty) {
+        return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+    }
     if let Some(&n) = tt.words_memo.borrow().get(ty) {
         return Ok(n);
     }
@@ -1311,6 +1326,7 @@ pub struct Mod {
     pub need_eq: BTreeSet<String>,
     /// P2 batch 4: widths of the llvm.bswap declarations the byte-word accesses used
     pub bswap: BTreeSet<u32>,
+    narrow_overflow_decls: BTreeSet<(&'static str, &'static str, &'static str)>,
     pub uses_utf8_valid: bool,
     pub uses_utf8_panic: bool,
     /// P3: some external array-return wrapper normalizes cap to len with @pruv_shrink_v2
@@ -1370,6 +1386,7 @@ impl Mod {
             need_size: BTreeSet::new(),
             need_eq: BTreeSet::new(),
             bswap: BTreeSet::new(),
+            narrow_overflow_decls: BTreeSet::new(),
             uses_utf8_valid: false,
             uses_utf8_panic: false,
             shrink: false,
@@ -1434,7 +1451,7 @@ impl Default for Mod {
 
 /// These inout parameters borrow the mutable slot itself.
 fn inout_slot_param(param: &Param, resize: bool) -> bool {
-    param.mode_pos.is_some() && (matches!(param.ty.as_str(), "i64" | "bool")
+    param.mode_pos.is_some() && (crate::intwidth::of(&param.ty).is_some() || param.ty == "bool"
         || is_agg(&param.ty) || (is_array_name(&param.ty) && resize))
 }
 
@@ -1460,8 +1477,8 @@ pub fn ir_params(f: &Function, tt: &TypeTable, resizes: &HashSet<(String, usize)
             }
         } else if p.ty == "bool" {
             out.push(("i1".to_string(), format!("%p.{}", n)));
-        } else if p.ty == "i64" {
-            out.push(("i64".to_string(), format!("%p.{}", n)));
+        } else if let Some(width) = crate::intwidth::of(&p.ty) {
+            out.push((width.llvm().to_string(), format!("%p.{}", n)));
         } else if is_collection(&p.ty) {
             // G6 A3: plain opaque handle %p.NAME.h (no readonly/noalias attributes)
             out.push(("ptr".to_string(), format!("%p.{}.h", n)));
@@ -1944,13 +1961,9 @@ impl<'a> FnGen<'a> {
         let a = format!("{}.a", base);
         let b = format!("{}.b", base);
         Ok(match kind {
-            Kind::I64 => {
-                self.allocas.push(format!("{} = alloca i64", a));
-                V::new(Kind::I64, a)
-            }
-            Kind::I1 => {
-                self.allocas.push(format!("{} = alloca i1", a));
-                V::new(Kind::I1, a)
+            Kind::I64 | Kind::Narrow(_) | Kind::I1 => {
+                self.allocas.push(format!("{} = alloca {}", a, kind.name()));
+                V::new(kind, a)
             }
             Kind::Coll => {
                 // G6 A3: owner slot, null-initialized
@@ -1987,7 +2000,7 @@ impl<'a> FnGen<'a> {
 
     pub fn load(&mut self, sl: &Slot) -> R<V> {
         match sl.k {
-            Kind::I64 | Kind::I1 => {
+            Kind::I64 | Kind::Narrow(_) | Kind::I1 => {
                 let r = self.op(format!("load {}, ptr {}", sl.k.name(), sl.a))?;
                 Ok(V::new(sl.k, r))
             }
@@ -2023,7 +2036,7 @@ impl<'a> FnGen<'a> {
 
     pub fn store(&mut self, sl: &Slot, v: &V) -> R<()> {
         match sl.k {
-            Kind::I64 | Kind::I1 => self.ins(format!("store {} {}, ptr {}", sl.k.name(), v.a, sl.a)),
+            Kind::I64 | Kind::Narrow(_) | Kind::I1 => self.ins(format!("store {} {}, ptr {}", sl.k.name(), v.a, sl.a)),
             Kind::Agg => {
                 let ty = need_ty(&sl.ty)?.to_string();
                 self.ins(format!("store {} {}, ptr {}", lty(&ty), v.a, sl.a))
@@ -2960,7 +2973,7 @@ impl<'a> FnGen<'a> {
             return Ok(v);
         }
         match ty {
-            "i64" => Ok(V::new(if c { Kind::I128 } else { Kind::I64 }, x)),
+            _ if crate::intwidth::of(ty).is_some() => Ok(V::new(if c { Kind::I128 } else { vkind(ty) }, x)),
             "bool" => Ok(V::new(Kind::I1, x)),
             "option" | "result" => {
                 let ot = if c { COPT } else { OPT };
@@ -3127,17 +3140,18 @@ impl<'a> FnGen<'a> {
         Ok(V::agg(r, ty))
     }
 
-    /// Code value -> contract value (i64 leaves are sign-extended; for an enum only the active variant is converted)
+    /// Code value -> contract value (integer leaves are extended; for an enum only the active variant is converted)
     pub fn to_c(&mut self, x: &V, ty: &str) -> R<V> {
         if view_base(ty).is_some() {
             return Ok(x.clone());
         }
         let tt = self.tt;
+        if let Some(width) = crate::intwidth::of(ty) {
+            let op = if width.signed { "sext" } else { "zext" };
+            let r = self.op(format!("{op} {} {} to i128", width.llvm(), x.a))?;
+            return Ok(V::new(Kind::I128, r));
+        }
         match ty {
-            "i64" => {
-                let r = self.op(format!("sext i64 {} to i128", x.a))?;
-                return Ok(V::new(Kind::I128, r));
-            }
             "bool" => return Ok(x.clone()),
             "option" | "result" => {
                 let r = self.op(format!("sext i64 {} to i128", x.b))?;
@@ -3238,7 +3252,7 @@ impl<'a> FnGen<'a> {
     pub fn ceq(&mut self, l: &V, r: &V, ty: &str) -> R<String> {
         let tt = self.tt;
         match ty {
-            "i64" => return self.op(format!("icmp eq i128 {}, {}", l.a, r.a)),
+            _ if crate::intwidth::of(ty).is_some() => return self.op(format!("icmp eq i128 {}, {}", l.a, r.a)),
             "bool" => return self.op(format!("icmp eq i1 {}, {}", l.a, r.a)),
             "option" | "result" => {
                 let te = self.op(format!("icmp eq i1 {}, {}", l.a, r.a))?;
@@ -3347,7 +3361,7 @@ impl<'a> FnGen<'a> {
             if p.mode_pos.is_some() && is_array_name(&p.ty) && self.m.resize_params.contains(&(f.name.clone(), i)) {
                 let slot = self.array_slot(format!("%p.{n}"), &p.ty)?;
                 names.insert(p.name.clone(), Bind::Slot(slot));
-            } else if p.mode_pos.is_some() && matches!(p.ty.as_str(), "bool" | "i64") {
+            } else if p.mode_pos.is_some() && (p.ty == "bool" || crate::intwidth::of(&p.ty).is_some()) {
                 let slot = V::new(vkind(&p.ty), format!("%p.{n}"));
                 names.insert(p.name.clone(), Bind::Slot(slot));
             } else if is_arr_name(&p.ty) {
@@ -3368,8 +3382,8 @@ impl<'a> FnGen<'a> {
                 }
             } else if p.ty == "bool" {
                 names.insert(p.name.clone(), Bind::Ssa(V::new(Kind::I1, format!("%p.{}", n))));
-            } else if p.ty == "i64" {
-                names.insert(p.name.clone(), Bind::Ssa(V::new(Kind::I64, format!("%p.{}", n))));
+            } else if crate::intwidth::of(&p.ty).is_some() {
+                names.insert(p.name.clone(), Bind::Ssa(V::new(vkind(&p.ty), format!("%p.{}", n))));
             } else if is_collection(&p.ty) {
                 // G6 A3
                 self.bridge = true;
@@ -3434,7 +3448,7 @@ impl<'a> FnGen<'a> {
             self.term("ret void".to_string())
         } else if rt == "unit" {
             self.term("ret void".to_string())
-        } else if rt == "i64" || rt == "bool" || is_collection(rt) {
+        } else if crate::intwidth::of(rt).is_some() || rt == "bool" || is_collection(rt) {
             self.term(format!("ret {} {}", lty(rt), v.a))
         } else {
             let g = self.agg(v)?;
@@ -4188,7 +4202,7 @@ impl<'a> FnGen<'a> {
                         }
                     }
                 }
-                if !matches!(kind, Kind::I64 | Kind::I1 | Kind::Agg) || self.is_ext(&x.ty) {
+                if !matches!(kind, Kind::I64 | Kind::Narrow(_) | Kind::I1 | Kind::Agg) || self.is_ext(&x.ty) {
                     let ty = crate::gtype::GType::from_key(&x.ty);
                     return Err(e2_diag(x.line, x.col,
                         &format!("a place binding of type {} needs the Rust backend", ty.name)));
@@ -4875,7 +4889,7 @@ impl<'a> FnGen<'a> {
         let r = self.op(format!("call {{ {}, i1 }} @llvm.{}.with.overflow.{}({} {}, {} {})", ty, name, ty, ty, a, ty, b))?;
         let v = self.op(format!("extractvalue {{ {}, i1 }} {}, 0", ty, r))?;
         let o = self.op(format!("extractvalue {{ {}, i1 }} {}, 1", ty, r))?;
-        if ty == "i64" {
+        if ty != Kind::I128.name() {
             self.guard(&o, Fail::Panic1("pruv_panic_arith", format!("overflow in {}", sym)), true)?;
         } else {
             self.guard(&o, Fail::Panic1("pruv_panic_undefined", format!("i128 overflow in {}", sym)), true)?;
@@ -4916,7 +4930,7 @@ impl<'a> FnGen<'a> {
     pub fn ev(&mut self, e: &Expr, owned: bool) -> R<V> {
         match e {
             Expr::Spent(_) => Err("cost_unavailable: Stage 5 cost verification is not implemented yet".into()),
-            Expr::IntLit(x) => Ok(V::new(Kind::I64, x.value.clone())),
+            Expr::IntLit(x) => Ok(V::new(vkind(x.ty.as_deref().unwrap_or("i64")), x.value.clone())),
             Expr::BoolLit(x) => Ok(V::new(Kind::I1, if x.value { "true" } else { "false" })),
             Expr::StrLit(x) => {
                 // G2 B2: copy the global string into a new buffer (for an empty string pruv_copy_v2 gives NULL)
@@ -5097,7 +5111,7 @@ impl<'a> FnGen<'a> {
                 self.mk_enum(x, false, false)
             }
             Expr::FieldAccess(x) => {
-                if matches!(x.ty.as_deref(), Some("i64" | "bool" | "u8")) {
+                if x.ty.as_deref().is_some_and(|t| t == "bool" || crate::intwidth::of(t).is_some()) {
                     let mut path = vec![x.field.clone()];
                     let mut base = x.base.as_ref();
                     while let Expr::FieldAccess(field) = base {
@@ -5169,6 +5183,8 @@ impl<'a> FnGen<'a> {
             }
             return Ok(V::new(Kind::I64, v));
         }
+        let width = l.k.int_width().unwrap_or(&crate::intwidth::I64);
+        let ty = width.llvm();
         if op == "+" || op == "-" || op == "*" {
             let name = match op {
                 "+" => "add",
@@ -5176,30 +5192,69 @@ impl<'a> FnGen<'a> {
                 _ => "mul",
             };
             if self.verified {
-                let v = self.op(format!("{} nsw i64 {}, {}", name, l.a, r.a))?;
-                return Ok(V::new(Kind::I64, v));
+                let flag = if width.signed { "nsw" } else { "nuw" };
+                let v = self.op(format!("{name} {flag} {ty} {}, {}", l.a, r.a))?;
+                return Ok(V::new(l.k, v));
             }
-            let v = self.checked("i64", &format!("s{}", name), op, &l.a, &r.a)?;
-            return Ok(V::new(Kind::I64, v));
+            let prefix = if width.signed { "s" } else { "u" };
+            let intrinsic = format!("{prefix}{name}");
+            if matches!(l.k, Kind::Narrow(_)) {
+                self.m.narrow_overflow_decls.insert((ty, prefix, name));
+            }
+            let v = self.checked(ty, &intrinsic, op, &l.a, &r.a)?;
+            return Ok(V::new(l.k, v));
         }
         if op == "/" || op == "%" {
             if !self.verified {
-                let c1 = self.op(format!("icmp sgt i64 {}, 0", r.a))?;
-                let c2 = self.op(format!("icmp sge i64 {}, 0", l.a))?;
-                let ok = self.op(format!("and i1 {}, {}", c1, c2))?;
+                let ok = if width.signed {
+                    let c1 = self.op(format!("icmp sgt {ty} {}, 0", r.a))?;
+                    let c2 = self.op(format!("icmp sge {ty} {}, 0", l.a))?;
+                    self.op(format!("and i1 {}, {}", c1, c2))?
+                } else {
+                    self.op(format!("icmp ne {ty} {}, 0", r.a))?
+                };
                 self.guard(
                     &ok,
                     Fail::Panic1("pruv_panic_arith", "division outside domain: need divisor > 0 and dividend >= 0".to_string()),
                     false,
                 )?;
             }
-            let v = self.op(format!("{} i64 {}, {}", if op == "/" { "udiv" } else { "urem" }, l.a, r.a))?;
-            return Ok(V::new(Kind::I64, v));
+            let v = self.op(format!("{} {ty} {}, {}", if op == "/" { "udiv" } else { "urem" }, l.a, r.a))?;
+            return Ok(V::new(l.k, v));
         }
-        let cmp = cmp_name(op)?;
-        let ty = if l.k == Kind::I1 { "i1" } else { "i64" };
+        let cmp = cmp_name(op, width.signed)?;
+        let ty = if l.k == Kind::I1 { "i1" } else { ty };
         let v = self.op(format!("icmp {} {} {}, {}", cmp, ty, l.a, r.a))?;
         Ok(V::new(Kind::I1, v))
+    }
+
+    fn ev_cast(&mut self, input: &Expr, target: &crate::intwidth::IntWidth) -> R<V> {
+        let value = self.ev(input, false)?;
+        let source = value.k.int_width().ok_or_else(|| "llvmgen: cast requires a scalar integer".to_string())?;
+        if source == target {
+            return Ok(value);
+        }
+        let from = source.llvm();
+        let to = target.llvm();
+        let op = if source.fits_in(target) {
+            if source.signed { "sext" } else { "zext" }
+        } else {
+            if !self.verified {
+                let cmp = if source.signed { "sle" } else { "ule" };
+                let hi = self.op(format!("icmp {cmp} {from} {}, {}", value.a, target.max))?;
+                let ok = if source.min < target.min {
+                    let cmp = if source.signed { "sge" } else { "uge" };
+                    let lo = self.op(format!("icmp {cmp} {from} {}, {}", value.a, target.min))?;
+                    self.op(format!("and i1 {lo}, {hi}"))?
+                } else {
+                    hi
+                };
+                self.guard(&ok, Fail::Panic1("pruv_panic_arith", "cast out of range".to_string()), false)?;
+            }
+            "trunc"
+        };
+        let result = self.op(format!("{op} {from} {} to {to}", value.a))?;
+        Ok(V::new(vkind(target.name), result))
     }
 
     pub fn ev_call(&mut self, e: &Call, owned: bool, layout: &'static str, rng: Option<(i128, i128)>) -> R<V> {
@@ -5215,6 +5270,9 @@ impl<'a> FnGen<'a> {
     fn ev_call_inner(&mut self, e: &Call, owned: bool, layout: &'static str, rng: Option<(i128, i128)>) -> R<V> {
         let n = e.name.as_str();
         let a = &e.args;
+        if let Some(target) = crate::intwidth::of(n) {
+            return self.ev_cast(arg(a, 0)?, target);
+        }
         if n == "len" {
             let x = self.ev(arg(a, 0)?, false)?;
             if x.ty.as_deref().and_then(native_vec_elem).is_some() {
@@ -5475,7 +5533,12 @@ impl<'a> FnGen<'a> {
                 let z = self.op(format!("zext i1 {} to i64", x.a))?;
                 self.ins(format!("call void @pruv_print_bool(i64 {})", z))?;
             } else {
-                self.ins(format!("call void @pruv_print_i64(i64 {})", x.a))?;
+                let value = if let Kind::Narrow(width) = x.k {
+                    self.op(format!("zext {} {} to {}", width.llvm(), x.a, crate::intwidth::I64.llvm()))?
+                } else {
+                    x.a
+                };
+                self.ins(format!("call void @pruv_print_i64(i64 {})", value))?;
             }
             return Ok(V::unit());
         }
@@ -5867,7 +5930,7 @@ impl<'a> FnGen<'a> {
             return Ok(rv);
         }
         let r = self.op(format!("call {} {}({})", lty(&f.ret), callee, argl))?;
-        if f.ret == "i64" || f.ret == "bool" {
+        if crate::intwidth::of(&f.ret).is_some() || f.ret == "bool" {
             return Ok(V::new(vkind(&f.ret), r));
         }
         if is_collection(&f.ret) {
@@ -6184,13 +6247,9 @@ impl<'a> FnGen<'a> {
                 let slot = self.array_slot(format!("%p.{n}"), &p.ty)?;
                 let v = self.load(&slot)?;
                 self.cenv.insert(p.name.clone(), v);
-            } else if p.mode_pos.is_some() && matches!(p.ty.as_str(), "bool" | "i64") {
+            } else if p.mode_pos.is_some() && (p.ty == "bool" || crate::intwidth::of(&p.ty).is_some()) {
                 let v = self.load(&V::new(vkind(&p.ty), format!("%p.{n}")))?;
-                let v = if v.k == Kind::I64 {
-                    V::new(Kind::I128, self.op(format!("sext i64 {} to i128", v.a))?)
-                } else {
-                    v
-                };
+                let v = self.to_c(&v, &p.ty)?;
                 self.cenv.insert(p.name.clone(), v);
             } else if is_arr_name(&p.ty) {
                 let mut av = V::with_b(Kind::Arr, format!("%p.{}.a", n), format!("%p.{}.n", n));
@@ -6202,9 +6261,10 @@ impl<'a> FnGen<'a> {
                 self.cenv.insert(p.name.clone(), av);
             } else if p.ty == "bool" {
                 self.cenv.insert(p.name.clone(), V::new(Kind::I1, format!("%p.{}", n)));
-            } else if p.ty == "i64" {
-                let r = self.op(format!("sext i64 %p.{} to i128", n))?;
-                self.cenv.insert(p.name.clone(), V::new(Kind::I128, r));
+            } else if crate::intwidth::of(&p.ty).is_some() {
+                let param = V::new(vkind(&p.ty), format!("%p.{n}"));
+                let v = self.to_c(&param, &p.ty)?;
+                self.cenv.insert(p.name.clone(), v);
             } else if is_collection(&p.ty) {
                 // G6 A3: only len(c) is evaluable in a requires on LLVM
                 self.cenv.insert(
@@ -6408,13 +6468,15 @@ impl<'a> FnGen<'a> {
             let xv = self.g9_real(a, Some(if x.name == "Err" { "i64" } else { px.as_str() }))?;
             return Ok(V::with_b(Kind::Opt, if x.name == "Some" || x.name == "Ok" { "true" } else { "false" }, xv.a));
         }
-        if t.is_none() || t.as_deref() == Some("i64") {
+        if let Some(width) = crate::intwidth::of(t.as_deref().unwrap_or("i64")) {
             let x = self.cev(e)?;
-            let tr = self.op(format!("trunc i128 {} to i64", x.a))?;
-            let back = self.op(format!("sext i64 {} to i128", tr))?;
+            let ty = width.llvm();
+            let tr = self.op(format!("trunc i128 {} to {ty}", x.a))?;
+            let op = if width.signed { "sext" } else { "zext" };
+            let back = self.op(format!("{op} {ty} {tr} to i128"))?;
             let ok = self.op(format!("icmp eq i128 {}, {}", back, x.a))?;
-            self.guard(&ok, Fail::Panic1("pruv_panic_undefined", "constructor field out of i64 range".to_string()), false)?;
-            return Ok(V::new(Kind::I64, tr));
+            self.guard(&ok, Fail::Panic1("pruv_panic_undefined", format!("constructor field out of {} range", width.name)), false)?;
+            return Ok(V::new(vkind(width.name), tr));
         }
         let t = need_ty(&t)?.to_string();
         if t == "bool" {
@@ -6611,7 +6673,7 @@ impl<'a> FnGen<'a> {
                     }
                     return Ok(V::new(Kind::I1, eq));
                 }
-                let cmp = cmp_name(op)?;
+                let cmp = cmp_name(op, true)?;
                 let ty = if l.k == Kind::I1 { "i1" } else { "i128" };
                 let v = self.op(format!("icmp {} {} {}, {}", cmp, ty, l.a, r.a))?;
                 Ok(V::new(Kind::I1, v))
@@ -6721,6 +6783,10 @@ impl<'a> FnGen<'a> {
             Expr::Call(x) => {
                 let n = x.name.as_str();
                 let a = &x.args;
+                if crate::intwidth::of(n).is_some() {
+                    // Widening casts preserve the mathematical integer used in contracts.
+                    return self.cev(arg(a, 0)?);
+                }
                 if crate::foreign::FILE_OBSERVERS.contains(&n) {
                     let v = self.cev(arg(a, 0)?)?;
                     let mut args = vec![("ptr".to_string(), v.a)];
@@ -7345,14 +7411,14 @@ impl<'a> FnGen<'a> {
     }
 }
 
-fn cmp_name(op: &str) -> R<&'static str> {
+fn cmp_name(op: &str, signed: bool) -> R<&'static str> {
     match op {
         "==" => Ok("eq"),
         "!=" => Ok("ne"),
-        "<" => Ok("slt"),
-        "<=" => Ok("sle"),
-        ">" => Ok("sgt"),
-        ">=" => Ok("sge"),
+        "<" => Ok(if signed { "slt" } else { "ult" }),
+        "<=" => Ok(if signed { "sle" } else { "ule" }),
+        ">" => Ok(if signed { "sgt" } else { "ugt" }),
+        ">=" => Ok(if signed { "sge" } else { "uge" }),
         _ => Err(format!("'{}'", op)),
     }
 }
@@ -8153,8 +8219,8 @@ fn g9_eq_val(g: &mut FnGen, t: &str, pa: &str, pb: &str) -> R<String> {
         }
         return g.op(format!("and i1 {}, {}", te, pe));
     }
-    if t == "i64" || t == "bool" {
-        let ty = if t == "i64" { "i64" } else { "i1" };
+    if crate::intwidth::of(t).is_some() || t == "bool" {
+        let ty = vkind(t).name();
         let la = g.op(format!("load {}, ptr {}", ty, pa))?;
         let lb = g.op(format!("load {}, ptr {}", ty, pb))?;
         return g.op(format!("icmp eq {} {}, {}", ty, la, lb));
@@ -8529,7 +8595,7 @@ pub fn is_host_abi_fn(f: &Function, tt: &TypeTable, explicit: bool, host: bool) 
         && !has_ext_sig(f, tt)
         && !has_take_array(f)
         && !f.borrowed_result // A borrowed result never crosses the host boundary
-        && (host || !explicit)
+        && (host || (!explicit && !crate::emit_common::has_narrow_scalar_sig(f, tt)))
         // an inout entry is exported only as an explicit-mode host entry (legacy inout fns stay internal)
         && (!has_inout(f) || (explicit && host))
 }
@@ -8776,6 +8842,17 @@ pub fn gen_llvm_with_specializations(
     use crate::codegen::GenError;
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
+    }
+    // Built only when a host-facing function exists (the generator builds its own table later).
+    let mut tt0 = None;
+    for (i, f) in prog.functions.iter().enumerate() {
+        let public = prog.explicit.as_ref().and_then(|meta| meta.fns.get(i))
+            .is_some_and(|mark| mark.is_pub || mark.host_entry);
+        if (public || f.foreign.is_some())
+            && crate::emit_common::has_narrow_scalar_sig(f, tt0.get_or_insert_with(|| crate::emit_common::make_type_table(prog)))
+        {
+            return Err(GenError::Msg(crate::emit_common::SMALL_INT_HOST_ERROR.into()));
+        }
     }
     if let Some(e) = crate::bindings::owned_collection_abi_error(prog, None) {
         return Err(GenError::Diag(e));
@@ -9055,7 +9132,9 @@ fn gen_llvm_body(
         m.render_strings(),
         type_defs(&tt),
         if prog.types.is_empty() { "" } else { "\n" },
-        DECLS,
+        format!("{}{}", DECLS, m.narrow_overflow_decls.iter().map(|(ty, prefix, name)| format!(
+            "declare {{ {ty}, i1 }} @llvm.{prefix}{name}.with.overflow.{ty}({ty}, {ty})\n"
+        )).collect::<String>()),
         // G2 A5: DECLS_U8 if u8 or bool is used, and DECLS_BOOL after it if bool is used
         // G2 B2: DECLS_U8 if u8, bool or str is used, and DECLS_STR at the very end if str is used
         // G6 A3: DECLS_U8 also when string_to_str copies through pruv_copy_v2

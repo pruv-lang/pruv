@@ -1,0 +1,5 @@
+// P1 runtime: unverified narrowing of max+1 fails instead of wrapping
+fn narrow(n: i64) -> i64 {
+  let b: u8 = u8(n);
+  return i64(b);
+}

@@ -1,0 +1,6 @@
+// P1: max+1 is outside u8 even though the lower bound holds
+fn f(x: i64) -> u8
+  requires 0 <= x && x <= 256
+{
+  return u8(x);
+}

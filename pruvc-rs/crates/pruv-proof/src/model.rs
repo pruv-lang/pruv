@@ -98,6 +98,8 @@ impl Elem {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Ty {
     I64,
+    U8,
+    U16,
     Bool,
     Unit,
     Array(Elem),
@@ -126,6 +128,8 @@ impl Ty {
     fn from_plain(n: &str) -> Ty {
         match n {
             "i64" => Ty::I64,
+            "u8" => Ty::U8,
+            "u16" => Ty::U16,
             "bool" => Ty::Bool,
             "unit" => Ty::Unit,
             "str" => Ty::Str,
@@ -160,6 +164,7 @@ impl Ty {
     pub fn to_gtype(&self) -> GType {
         match self {
             Ty::I64 => GType::i64(),
+            Ty::U8 | Ty::U16 => GType::new(self.name(), Vec::new()),
             Ty::Bool => GType::bool(),
             Ty::Unit => GType::unit(),
             Ty::Str => GType::str(),
@@ -177,6 +182,8 @@ impl Ty {
     pub fn name(&self) -> &str {
         match self {
             Ty::I64 => "i64",
+            Ty::U8 => "u8",
+            Ty::U16 => "u16",
             Ty::Bool => "bool",
             Ty::Unit => "unit",
             Ty::Array(e) => pruv_core::typeinfo::array_of_elem_name(e.name()).unwrap_or("array"),
@@ -1031,7 +1038,7 @@ impl Model {
     /// verify.py `Model.weight`: size weight of a field value `t` of type `fty` (None = always 0): nominal values count their
     /// own size, constructors count their active payload, everything else is 0.
     pub fn weight(&self, fty: &Ty, t: &Ast) -> Result<Option<Ast>, String> {
-        let early = matches!(fty, Ty::Param(_) | Ty::I64 | Ty::Bool | Ty::Opt | Ty::Res);
+        let early = matches!(fty, Ty::Param(_) | Ty::I64 | Ty::U8 | Ty::U16 | Ty::Bool | Ty::Opt | Ty::Res);
         if early || Model::is_buf(fty) || fty.coll().is_some() {
             return Ok(None);
         }
@@ -1091,7 +1098,7 @@ impl Model {
                     k = None;
                     break;
                 }
-                if matches!(fty, Ty::Param(_) | Ty::I64 | Ty::Bool) || Model::is_buf(&fty) || fty.coll().is_some() {
+                if matches!(fty, Ty::Param(_) | Ty::I64 | Ty::U8 | Ty::U16 | Ty::Bool) || Model::is_buf(&fty) || fty.coll().is_some() {
                     continue;
                 }
                 let is_opt_res = matches!(&fty, Ty::Opt | Ty::Res)
@@ -1431,7 +1438,7 @@ impl Model {
             }
         }
         let r = match ty {
-            Ty::I64 | Ty::Opt | Ty::Res => false,
+            Ty::I64 | Ty::U8 | Ty::U16 | Ty::Opt | Ty::Res => false,
             Ty::Param(_) => true,
             Ty::Inst(g) if g.view_payload().is_some() => false,
             Ty::Inst(g) if g.name == "result" => match g.result_error() {
@@ -1613,7 +1620,7 @@ impl Model {
 
     pub fn try_sort_of(&self, ty: &Ty) -> Result<Sort, String> {
         match ty {
-            Ty::I64 => Ok(self.int_sort.clone()),
+            Ty::I64 | Ty::U8 | Ty::U16 => Ok(self.int_sort.clone()),
             Ty::Bool => Ok(self.bool_sort.clone()),
             // G9 A1: a buffer field of a struct/enum (checked before the Opt/Res cases, like verify.py sort_of)
             Ty::Array(_) | Ty::Str => self.bufsort(ty),
@@ -1719,7 +1726,11 @@ mod tests {
             assert_eq!(t.name(), n);
             assert!(t.is_array());
         }
-        assert_eq!(Ty::from_name("u8"), Ty::User("u8".to_string()));
+        for ty in [Ty::U8, Ty::U16] {
+            assert_eq!(Ty::from_name(ty.name()), ty);
+            assert_eq!(Ty::from_gtype(&ty.to_gtype()), ty);
+            assert!(!ty.is_array());
+        }
         assert_eq!(Ty::from_name("str"), Ty::Str);
         assert_eq!(Ty::Str.name(), "str");
     }

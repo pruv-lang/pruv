@@ -137,6 +137,7 @@ fn attribute_close(toks: &[Tok]) -> bool {
 /// syntax. They become a `kw` token only in these positions; everywhere else they stay the old reserved_name error.
 ///   mod   at top level (brace depth 0), at the start of an item (first token, after `}` or `;`, or after `pub`), and
 ///         followed by a name, a string or `{`
+///   extern at the start of an item before fn, to diagnose unsupported signatures
 ///   pub   at top level, at the start of an item (or after another `pub`), followed by fn/struct/enum/mod/trusted/rust/pub
 ///   crate right before `::`, not after fn/let/mut/struct/enum and not after `.` or `::`
 fn g4_token(word: &str, src: &[char], end: usize, toks: &[Tok], depth: usize) -> bool {
@@ -176,7 +177,10 @@ fn g4_token(word: &str, src: &[char], end: usize, toks: &[Tok], depth: usize) ->
         r += 1;
     }
     let w: String = src[q..r].iter().collect();
-    matches!(w.as_str(), "fn" | "struct" | "enum" | "mod" | "pub" | "trusted" | "rust" | "opaque" | "pred")
+    if word == "extern" {
+        return w == "fn";
+    }
+    matches!(w.as_str(), "fn" | "struct" | "enum" | "mod" | "pub" | "trusted" | "rust" | "opaque" | "pred" | "extern")
 }
 
 /// The operator token starting at pos (regex order: 3 characters, 2 characters, 1 character).
@@ -305,15 +309,14 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
                 toks.push(Tok { kind: Kind::Move, val: v, line, col, end });
                 continue;
             }
-            if matches!(v.as_str(), "mod" | "pub" | "crate") && g4_token(&v, src, pos, &toks, brace_depth) {
+            if matches!(v.as_str(), "mod" | "pub" | "crate" | "extern") && g4_token(&v, src, pos, &toks, brace_depth) {
                 let end = col + (pos - start) as i64;
                 toks.push(Tok { kind: Kind::Kw, val: v, line, col, end });
                 continue;
             }
-            let map_for = v == "for" && brace_depth > 0
-                && toks.last().is_some_and(|t| t.kind == Kind::Op && matches!(t.val.as_str(), "{" | "}" | ";"))
-                && src.get(g4_skip(src, pos)) == Some(&'(');
-            let is_kw = map_for || KEYWORDS.contains(&v.as_str());
+            let stmt_for = v == "for" && brace_depth > 0
+                && toks.last().is_some_and(|t| t.kind == Kind::Op && matches!(t.val.as_str(), "{" | "}" | ";"));
+            let is_kw = stmt_for || KEYWORDS.contains(&v.as_str());
             if !is_kw && (v.starts_with("pruv_") || v.contains("__") || RUST_KEYWORDS.contains(&v.as_str())) {
                 return Err(PruvError::new(
                     "parse",

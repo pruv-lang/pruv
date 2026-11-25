@@ -911,7 +911,7 @@ fn nominals_in(t: &GType) -> Vec<String> {
     if t.owner.is_none() && !t.args.is_empty() && (t.name == "option" || t.name == "result") {
         return t.args.iter().flat_map(nominals_in).collect();
     }
-    if t.is_user_type() {
+    if t.is_user_type() && !crate::intwidth::is_narrow(&t.name) {
         return vec![t.name.clone()];
     }
     Vec::new()
@@ -1085,16 +1085,23 @@ fn elem_of(e: &Expr) -> &'static str {
     expr_ty(e).as_deref().and_then(array_elem_name).unwrap_or("i64")
 }
 
-/// SAFE_ARITH table
-fn safe_arith(op: &str) -> Option<&'static str> {
+/// Checked integer operation and its runtime failure message.
+fn safe_arith(op: &str) -> Option<(&'static str, &'static str)> {
+    const DIV_DOMAIN: &str = "division outside domain: need divisor > 0 and dividend >= 0";
     match op {
-        "+" => Some("pruv_add"),
-        "-" => Some("pruv_sub"),
-        "*" => Some("pruv_mul"),
-        "/" => Some("pruv_div"),
-        "%" => Some("pruv_rem"),
+        "+" => Some(("add", "overflow in +")),
+        "-" => Some(("sub", "overflow in -")),
+        "*" => Some(("mul", "overflow in *")),
+        "/" => Some(("div", DIV_DOMAIN)),
+        "%" => Some(("rem", DIV_DOMAIN)),
         _ => None,
     }
+}
+
+fn safe_small_int_helper(ty: &str, method: &str, message: &str) -> String {
+    format!(
+        "#[inline]\nfn pruv_{method}_{ty}(a: {ty}, b: {ty}) -> {ty} {{ a.checked_{method}(b).unwrap_or_else(|| pruv_ovf({message:?})) }}\n"
+    )
 }
 
 /// CONTRACT_ARITH table
@@ -1473,6 +1480,7 @@ struct Gen<'a> {
     need_bits: HashSet<String>,
     /// P2 batch 2: shifts used in code under --no-verify (pruv_shl / pruv_ushr helpers)
     need_shift: HashSet<String>,
+    small_int_helpers: std::collections::BTreeSet<(&'static str, &'static str, &'static str)>,
     /// P13a.10: print lowers to println!, which panics when stdout fails (raw_unwind_free).
     printed: bool,
     /// P2 batch 4: load_be used in a runtime contract (pruv_cload_be helper)
@@ -1640,6 +1648,7 @@ impl<'a> Gen<'a> {
             need_eq: HashSet::new(),
             need_bits: HashSet::new(),
             need_shift: HashSet::new(),
+            small_int_helpers: Default::default(),
             printed: false,
             need_load_be: false,
             need_load_le: false,
@@ -1871,6 +1880,7 @@ impl<'a> Gen<'a> {
     /// are private Rust items (this includes their checked entry wrappers)
     fn private(&self, f: &Function) -> bool {
         is_spec_fn(&f.name)
+            || crate::emit_common::has_narrow_scalar_sig(f, &self.table)
             || f.params.iter().any(|p| key_is_collection_owner(&p.ty))
             || key_is_collection_owner(&f.ret)
             || f.params.iter().any(|p| self.is_ext(Some(&p.ty)))
@@ -2783,9 +2793,10 @@ impl<'a> Gen<'a> {
             return Ok(format!("{}::<{}, {}>({})", x.name, rx, re, self.g9_real(a, Some(at))?));
         }
         let tk: Option<&str> = t.as_deref();
-        if tk.is_none() || tk == Some("i64") {
+        if let Some(width) = crate::intwidth::of(tk.unwrap_or("i64")) {
+            let ty = width.name;
             return Ok(format!(
-                "i64::try_from({}).unwrap_or_else(|_| pruv_ud(\"constructor field out of i64 range\"))",
+                "{ty}::try_from({}).unwrap_or_else(|_| pruv_ud(\"constructor field out of {ty} range\"))",
                 self.c(e)?
             ));
         }
@@ -2892,12 +2903,12 @@ impl<'a> Gen<'a> {
                 }
                 let t = x.ty.as_deref().unwrap_or("i64");
                 let tn = key_name(t);
-                let name = if self.inouts.contains(&x.name) && matches!(tn, "i64" | "bool") {
+                let name = if self.inouts.contains(&x.name) && (crate::intwidth::of(tn).is_some() || tn == "bool") {
                     format!("(*{})", x.name)
                 } else {
                     x.name.clone()
                 };
-                if tn == "i64" || tn == "option" || tn == "result" || is_user_key(t) {
+                if crate::intwidth::of(tn).is_some() || tn == "option" || tn == "result" || is_user_key(t) {
                     return try_conv(t, &name);
                 }
                 Ok(name)
@@ -3114,6 +3125,10 @@ impl<'a> Gen<'a> {
             Expr::Call(x) => {
                 let n = x.name.as_str();
                 let a = &x.args;
+                if crate::intwidth::of(n).is_some() {
+                    // Widening casts preserve the mathematical integer used in contracts.
+                    return self.c(arg(a, 0)?);
+                }
                 if n == "len" {
                     return Ok(format!("({}.len() as i128)", self.carr(arg(a, 0)?)?));
                 }
@@ -3523,7 +3538,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 x, inner, err_bind, error
             );
         }
-        if t.is_user_type() {
+        if t.is_user_type() && !crate::intwidth::is_narrow(&t.name) {
             return format!("pruv_csize__{}({}, {})", t.name, x, bud);
         }
         "0i128".to_string()
@@ -3534,7 +3549,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
         if is_optres(t) {
             return t.args.iter().any(|a| self.g9_walks(a));
         }
-        t.is_user_type()
+        t.is_user_type() && !crate::intwidth::is_narrow(&t.name)
     }
 
     /// Rust bool expression: structural equality of the values behind the references x and y (type `&R(t)`)
@@ -3556,7 +3571,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 x, y, inner, error
             );
         }
-        if t.is_user_type() {
+        if t.is_user_type() && !crate::intwidth::is_narrow(&t.name) {
             return format!("pruv_ceq__{}({}, {}, pruv_budget)", t.name, x, y);
         }
         format!("(*{} == *{})", x, y)
@@ -5145,10 +5160,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
             // G5 A0: never reaches the generator (the driver's A0 guard stops the program earlier)
             Expr::InoutArg(_) => Err("G5 inout argument reached the Rust generator".to_string()),
             Expr::IntLit(x) => {
-                if x.value == "-9223372036854775808" {
-                    return Ok("i64::MIN".to_string());
+                let width = x.ty.as_deref().and_then(crate::intwidth::of).unwrap_or(&crate::intwidth::I64);
+                let ty = width.name;
+                if width.signed && x.value.starts_with('-') && x.value == width.min.to_string() {
+                    return Ok(format!("{ty}::MIN"));
                 }
-                Ok(if x.value.starts_with('-') { format!("({}i64)", x.value) } else { format!("{}i64", x.value) })
+                Ok(if x.value.starts_with('-') { format!("({}{ty})", x.value) } else { format!("{}{}", x.value, ty) })
             }
             Expr::BoolLit(x) => Ok((if x.value { "true" } else { "false" }).to_string()),
             Expr::StrLit(x) => Ok(format!("::std::string::String::from({})", lit_str(&x.value))), // G2 B2
@@ -5173,10 +5190,14 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         self.need_shift.insert(x.op.clone());
                         return Ok(format!("{}({}, {})", f, l, r));
                     }
-                    if let Some(f) = safe_arith(&x.op) {
+                    if let Some((method, message)) = safe_arith(&x.op) {
                         let l = self.e(&x.left)?;
                         let r = self.e(&x.right)?;
-                        return Ok(format!("{}({}, {})", f, l, r));
+                        if let Some(width) = x.ty.as_deref().and_then(crate::intwidth::of).filter(|width| !width.signed) {
+                            self.small_int_helpers.insert((method, width.name, message));
+                            return Ok(format!("pruv_{method}_{}({l}, {r})", width.name));
+                        }
+                        return Ok(format!("pruv_{method}({l}, {r})"));
                     }
                 }
                 let l = self.e(&x.left)?;
@@ -5316,6 +5337,16 @@ pruv_hi <= (pruv_b.len() as i128) && \
             Expr::Call(x) => {
                 let n = x.name.as_str();
                 let a = &x.args;
+                if let Some(target) = crate::intwidth::of(n) {
+                    let src = arg(a, 0)?;
+                    let source = expr_ty(src).as_deref().and_then(crate::intwidth::of).unwrap_or(&crate::intwidth::I64);
+                    let value = self.e(src)?;
+                    return if !self.verified && !source.fits_in(target) {
+                        Ok(format!("{}::try_from({value}).unwrap_or_else(|_| pruv_ovf(\"cast out of range\"))", target.name))
+                    } else {
+                        Ok(format!("({value} as {})", target.name))
+                    };
+                }
                 if n == "len" {
                     return Ok(format!("({}.len() as i64)", self.e(arg(a, 0)?)?));
                 }
@@ -5643,7 +5674,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 }
                 if n == "print" {
                     self.printed = true;
-                    return Ok(format!("println!(\"{{}}\", {})", self.e(arg(a, 0)?)?));
+                    let input = arg(a, 0)?;
+                    let mut value = self.e(input)?;
+                    if expr_ty(input).as_deref().is_some_and(crate::intwidth::is_narrow) {
+                        value = format!("({value} as {})", crate::intwidth::I64.name);
+                    }
+                    return Ok(format!("println!(\"{{}}\", {value})"));
                 }
                 if n == "is_char_boundary" {
                     // G2 B2
@@ -6107,6 +6143,17 @@ fn gen_rust_concrete_core(
     if let Some(e) = crate::typeinfo::g2_unimplemented_error(prog, "codegen", None, &["array_u8", "array_bool", "str"], None) { // G2 B2
         return Err(GenError::Msg(format!("unsupported_type: {}", e.message)));
     }
+    // Built only when a host-facing function exists (the generator builds its own table later).
+    let mut tt0 = None;
+    for (i, f) in prog.functions.iter().enumerate() {
+        let public = prog.explicit.as_ref().and_then(|meta| meta.fns.get(i))
+            .is_some_and(|mark| mark.is_pub || mark.host_entry);
+        if (public || f.foreign.is_some())
+            && crate::emit_common::has_narrow_scalar_sig(f, tt0.get_or_insert_with(|| make_type_table(prog)))
+        {
+            return Err(GenError::Msg(crate::emit_common::SMALL_INT_HOST_ERROR.into()));
+        }
+    }
     if prog.raw_entries.as_deref() == Some("c") {
         if let Some(e) = crate::bindings::struct_inout_abi_error(prog, true, None) {
             return Err(GenError::Diag(e));
@@ -6209,6 +6256,8 @@ fn gen_rust_concrete_core(
         .map(|k| contract_op_helper(k))
         .collect();
     drop(g.out.splice(mark..mark, op_bit_texts));
+    drop(g.out.splice(mark..mark, std::mem::take(&mut g.small_int_helpers).into_iter()
+        .map(|(method, ty, message)| safe_small_int_helper(ty, method, message))));
     // P2 batch 4: the load_be contract helper, when a runtime contract used it
     if g.need_load_le {
         let helper = CONTRACT_LOAD_HELPER.replace("pruv_cload_be", "pruv_cload_le")
@@ -6866,6 +6915,103 @@ mod tests {
             decreases: None,
             small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
         }
+    }
+
+    // Model the checker's P1 output while exercising both concrete generators.
+    fn narrow_scalars_program() -> Program {
+        let literal = |value: &str, ty: &str| Expr::IntLit(IntLit {
+            line: 1, col: 1, value: value.into(), ty: Some(ty.into()),
+        });
+        let binary = |op: &str, left, right, ty: &str| Expr::Binary(Binary {
+            line: 1, col: 1, op: op.into(), left: Box::new(left), right: Box::new(right), ty: Some(ty.into()),
+        });
+        let cast = |ty: &str, input| call(ty, vec![input], ty);
+        let field = || Expr::FieldAccess(FieldAccess {
+            line: 1, col: 1, base: Box::new(var("pair", "Pair")), field: "byte".into(), ty: Some("u8".into()),
+        });
+        let make_field = |name: &str, value| FieldInit { line: 1, col: 1, name: name.into(), value };
+        let pair = Expr::StructLit(StructLit {
+            line: 1, col: 1, name: "Pair".into(), ty: Some("Pair".into()), targs: None, inst: None,
+            fields: vec![make_field("byte", cast("u8", var("word", "u16"))), make_field("word", var("word", "u16"))],
+        });
+        let binding = |name: &str, ty: &str, value| Stmt::Let(Let {
+            line: 1, col: 1, borrowed: false, name: name.into(), mutable: true, ty: ty.into(), value, refine: None,
+        });
+        let ret = |value| Stmt::Return(Return { line: 1, col: 1, value: Some(value) });
+        let mut narrow = small_func("narrow", "u8", vec![], vec![
+            binding("word", "u16", var("n", "u16")),
+            binding("pair", "Pair", pair),
+            Stmt::ExprStmt(ExprStmt { line: 1, col: 1, expr: call("print", vec![field()], "unit") }),
+            ret(binary("+", field(), literal("1", "u8"), "u8")),
+        ]);
+        narrow.params[0].ty = "u16".into();
+        narrow.requires.push(binary(">", cast("i64", var("n", "u16")), int("0"), "bool"));
+        let run = small_func("run", "i64", vec![], vec![
+            ret(cast("i64", call("narrow", vec![cast("u16", var("n", "i64"))], "u8"))),
+        ]);
+        Program {
+            functions: vec![narrow, run],
+            types: vec![TypeDecl::Struct(StructDecl {
+                line: 1, col: 1, name: "Pair".into(), tparams: vec![], invariants: vec![], invariant_lines: vec![],
+                fields: [("byte", "u8"), ("word", "u16")].into_iter()
+                    .map(|(name, ty)| FieldDecl { line: 1, col: 1, borrowed: false, name: name.into(), ty: ty.into() })
+                    .collect(),
+            })],
+            explicit: Some(Explicit {
+                fns: vec![
+                    FnMark { is_pub: false, host_entry: false, disp: "narrow".into() },
+                    FnMark { is_pub: true, host_entry: true, disp: "run".into() },
+                ],
+                type_pub: vec![false],
+                ..Explicit::default()
+            }),
+            ..Program::default()
+        }
+    }
+
+    #[test]
+    fn narrow_scalars_in_both_backends() {
+        use crate::abi::AbiTarget;
+        use crate::intwidth::{U8, U16};
+
+        let p = narrow_scalars_program();
+        let narrow = U8.llvm();
+        let wide = U16.llvm();
+        let rust = |verified| gen_rust_concrete(&p, verified, false, 100).unwrap();
+        let llvm = |verified| crate::llvmgen::gen_llvm_concrete(&p, verified, false, 100, AbiTarget::SysV).unwrap().0;
+
+        let checked = rust(false);
+        assert!(checked.contains("struct Pair { byte: u8, word: u16 }"));
+        assert!(checked.contains("let mut word: u16 = n;"));
+        assert!(checked.contains("u8::try_from(word).unwrap_or_else(|_| pruv_ovf(\"cast out of range\"))"));
+        assert!(checked.contains("println!(\"{}\", (pair.byte as i64))"));
+        assert!(checked.contains("((n as i128) > 0i128)"));
+        assert!(checked.contains("pruv_add_u8(pair.byte, 1u8)"));
+        let checked = llvm(false);
+        assert!(checked.contains(&format!("%pruv_t_Pair = type {{ {narrow}, {wide} }}")));
+        assert!(checked.contains(&format!("alloca {wide}")));
+        assert!(checked.contains(&format!("zext {wide} %p.n to i128")));
+        assert!(checked.contains(&format!("icmp ule {wide}")));
+        assert!(checked.contains(&format!("trunc {wide}")));
+        assert!(checked.contains(&format!("zext {narrow}")));
+        assert!(checked.contains(&format!("declare {{ {narrow}, i1 }} @llvm.uadd.with.overflow.{narrow}")));
+        assert!(checked.contains("cast out of range"));
+
+        let verified = rust(true);
+        assert!(verified.contains("(word as u8)"));
+        assert!(verified.contains("(pair.byte + 1u8)"));
+        assert!(!verified.contains("pruv_add_u8"));
+        let verified = llvm(true);
+        assert!(verified.contains(&format!("add nuw {narrow}")));
+        assert!(!verified.contains(&format!("@llvm.uadd.with.overflow.{narrow}")));
+        assert!(!verified.contains("cast out of range"));
+
+        let mut invalid = p;
+        invalid.explicit.as_mut().unwrap().fns[0].host_entry = true;
+        let err = crate::emit_common::SMALL_INT_HOST_ERROR;
+        assert_eq!(gen_rust_concrete(&invalid, false, false, 100).unwrap_err(), err);
+        assert_eq!(crate::llvmgen::gen_llvm_concrete(&invalid, false, false, 100, AbiTarget::SysV).unwrap_err(), err);
+        assert_eq!(crate::bindings::gen_bindings(&invalid).unwrap_err(), err);
     }
 
     /// `mk(n) -> [i64] ensures len(result) <= k` building `o` with alloc, and `g(n) -> i64` binding `let r = mk(n)`

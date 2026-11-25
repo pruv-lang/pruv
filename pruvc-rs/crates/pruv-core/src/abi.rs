@@ -116,6 +116,9 @@ impl<'a> Words<'a> {
     /// application reached through legacy structs/enums, whose ordinal check happens only when its whole path is
     /// active (an inactive one reads zero).
     pub fn de(&mut self, ty: &str, ptr: &str, off: usize, act: Option<&str>) -> R<String> {
+        if crate::intwidth::is_narrow(ty) {
+            return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+        }
         let tt = self.tt;
         if is_new_app(ty) {
             // G3 application (new Option/Result, generated generic instance) and everything below it
@@ -183,6 +186,9 @@ impl<'a> Words<'a> {
     /// nonzero-to-true, and the ordinal of every active nominal enum must be < the variant count (recorded in
     /// `checks`; the wrapper rejects before requires/body).
     pub fn de_new(&mut self, ty: &str, ptr: &str, off: usize, act: Option<&str>) -> R<String> {
+        if crate::intwidth::is_narrow(ty) {
+            return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+        }
         let tt = self.tt;
         let on = act.is_some();
         if ty == "unit" {
@@ -308,6 +314,9 @@ impl<'a> Words<'a> {
     /// value may carry dirty inactive storage), propagating the activity recursively: an Option payload is active when
     /// the tag is set, a Result error word when it is not, an enum payload when the tag selects its variant.
     pub fn ser_new(&mut self, ty: &str, x: &str, ptr: &str, off: usize, act: Option<&str>) -> R<()> {
+        if crate::intwidth::is_narrow(ty) {
+            return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+        }
         let tt = self.tt;
         if ty == "unit" {
             // LB8: the zero-word Ok payload of Result<(), E>
@@ -417,6 +426,9 @@ impl<'a> Words<'a> {
     /// legacy ABI output stays byte-identical); a G3 application and everything nested in it goes through ser_new,
     /// also when it hangs below a legacy struct/enum (`act`: whether that legacy value is active).
     pub fn ser(&mut self, ty: &str, x: &str, ptr: &str, off: usize, act: Option<&str>) -> R<()> {
+        if crate::intwidth::is_narrow(ty) {
+            return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+        }
         let tt = self.tt;
         if is_new_app(ty) {
             return self.ser_new(ty, x, ptr, off, act);
@@ -503,6 +515,9 @@ pub fn abi_of(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mod) -> R
 /// Python `abi_of(f, tt, m, target)`: `callee` is the internal function the wrapper calls, `entry` (checked, legacy) or
 /// `body` (G4 explicit mode when the host boundary needs no requires check). The representation checks run in every mode.
 pub fn abi_of_target(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mod, callee: &str) -> R<String> {
+    if crate::emit_common::has_narrow_scalar_sig(f, tt) {
+        return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+    }
     // G5 A3: defensive; an inout function is host-visible only as an explicit-mode host entry (the caller filters host)
     if crate::llvmgen::has_ext_sig(f, tt) || (crate::llvmgen::has_inout(f) && !m.explicit) {
         return Err(format!("llvmgen: {} has no host ABI wrapper (inout or extended signature)", f.name));

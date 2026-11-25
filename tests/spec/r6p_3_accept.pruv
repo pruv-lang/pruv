@@ -1,0 +1,6 @@
+// spec: R-6p-3 accept
+fn at(a: [i64], i: u8) -> i64
+  requires len(a) > 255
+{
+  return a[i64(i)];
+}

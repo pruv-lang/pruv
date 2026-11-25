@@ -152,9 +152,17 @@ impl GType {
         }
     }
 
+    pub(crate) fn int_width(&self) -> Option<&'static crate::intwidth::IntWidth> {
+        if self.owner.is_none() && self.args.is_empty() {
+            crate::intwidth::of(&self.name)
+        } else {
+            None
+        }
+    }
+
     /// Whether this names a user struct/enum (declared or not); not a built-in name and not a parameter.
     pub fn is_user_type(&self) -> bool {
-        self.owner.is_none() && !BUILTIN_TYPE_NAMES.contains(&self.name.as_str())
+        self.owner.is_none() && self.int_width().is_none() && !BUILTIN_TYPE_NAMES.contains(&self.name.as_str())
     }
 
     /// Whether this is an array type (legacy or structured).
@@ -460,7 +468,7 @@ pub fn format_type(ty: &GType) -> String {
 // ---------- substitution, arity ----------
 
 fn is_nominal(ty: &GType) -> bool {
-    ty.owner.is_none() && !BUILTIN_TYPE_NAMES.contains(&ty.name.as_str())
+    ty.is_user_type()
 }
 
 /// Substitution mapping for a declaration's parameters; TypeArityError on a count mismatch.
@@ -562,11 +570,14 @@ pub fn nominal_fields(ty: &GType, decls: Decls) -> Result<Vec<GType>, TypeArityE
 // values, so checking the declared fields once with the parameters left abstract is equivalent to checking the
 // substituted fields, and it is linear: Box<Box<i64>> passes, Grow<T> { g: Grow<Option<T>> } is a cycle.
 fn is_value_seen(ty: &GType, decls: Decls, seen: &[String]) -> bool {
-    if *ty == GType::i64() || *ty == GType::bool() || ty.owner.is_some() {
+    if ty.int_width().is_some() || *ty == GType::bool() || ty.owner.is_some() {
         return true;
     }
     if ty.view_payload().is_some() {
         return true;
+    }
+    if ty.args.iter().any(|a| a.int_width().is_some_and(|w| crate::intwidth::is_narrow(w.name))) {
+        return false;
     }
     if ty.name == "option" || ty.name == "result" {
         return ty.args.iter().all(|a| is_value_seen(a, decls, seen));
@@ -590,8 +601,8 @@ fn is_value_seen(ty: &GType, decls: Decls, seen: &[String]) -> bool {
     fields.iter().all(|f| is_value_seen(f, decls, &inner))
 }
 
-/// Admissible value (G3_SPEC 3.1): i64, bool, Option<V>, Result<V>, D<V..> whose substituted fields are
-/// values, or a type parameter (it ranges over values). Not arrays, str, unit, u8.
+/// Admissible value (G3_SPEC 3.1): scalar integers, bool, Option<V>, Result<V>, D<V..> whose substituted fields are
+/// values, or a type parameter (it ranges over values). Not arrays, str or unit.
 pub fn is_value(ty: &GType, decls: Decls) -> bool {
     is_value_seen(ty, decls, &[])
 }
@@ -894,6 +905,8 @@ mod tests {
     #[test]
     fn admissible_scalars_and_builtins() {
         assert!(is_value(&GType::i64(), &decls));
+        assert!(is_value(&GType::u8(), &decls));
+        assert!(is_value(&GType::new("u16", Vec::new()), &decls));
         assert!(is_value(&GType::bool(), &decls));
         assert!(is_value(&GType::option(), &decls));
         assert!(is_value(&GType::result(), &decls));
@@ -909,7 +922,6 @@ mod tests {
             GType::array_bool(),
             GType::str(),
             GType::unit(),
-            GType::u8(),
             mk_option(GType::u8()),
             mk_option(GType::array()),
             mk_option(GType::str()),

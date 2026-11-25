@@ -145,6 +145,7 @@ impl Trace {
 fn fix_for(code: &str) -> &'static str {
     match code {
         "index_oob" => "add a requires/invariant/if that bounds the index, e.g. `invariant 0 <= i && i <= len(a)`",
+        "cast_range" => "bound the value before casting with requires, a branch condition or a loop invariant",
         "overflow" => "bound the operands with requires (element ranges, len(a) <= N) and loop invariants on accumulators",
         "div" => "prove divisor > 0 and dividend >= 0 (add an if or requires)",
         "shift_range" => "prove 0 <= shift count < 64 (add an if or requires)",

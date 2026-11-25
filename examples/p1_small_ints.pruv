@@ -1,0 +1,78 @@
+// P1: scalar u8/u16 values, typed literals, proven arithmetic, explicit casts and struct fields.
+struct Pixel {
+  r: u8,
+  g: u8,
+  count: u16,
+}
+
+fn mix(a: u8, b: u8) -> u8
+  requires i64(a) + i64(b) <= 255
+  ensures i64(result) == i64(a) + i64(b)
+{
+  return a + b;
+}
+
+fn half(x: u16) -> u16
+  ensures result <= x
+{
+  return x / 2;
+}
+
+fn to_byte(x: i64) -> u8
+  requires 0 <= x && x <= 255
+  ensures i64(result) == x
+{
+  return u8(x);
+}
+
+fn widen(x: u8) -> u16
+  ensures u16(x) == result
+  ensures result <= 255
+{
+  return u16(x);
+}
+
+fn bump(p: Pixel) -> Pixel
+  requires p.count < 65535
+  ensures result.count == p.count + 1
+{
+  let mut q: Pixel = p;
+  q.count = q.count + 1;
+  return q;
+}
+
+fn count_up(n: u16) -> u16
+  ensures result == n
+{
+  let mut i: u16 = 0;
+  while i < n
+    invariant i <= n
+    decreases i64(n) - i64(i)
+  {
+    i = i + 1;
+  }
+  return i;
+}
+
+// A u8 field inside an Option payload keeps the function off the host boundary.
+fn count_of(o: Option<Pixel>) -> i64 {
+  match o {
+    Some(p) => { return i64(p.count); }
+    None => { return 0; }
+  }
+}
+
+fn run(x: i64) -> i64
+  requires 0 <= x && x <= 255
+{
+  let b: u8 = to_byte(x);
+  let p: Pixel = Pixel { r: b, g: 0, count: 65534 };
+  let q: Pixel = bump(p);
+  let w: u16 = widen(q.r);
+  let h: u16 = half(w);
+  let m: u8 = mix(u8(h), 0);
+  if m == 255 {
+    return 1;
+  }
+  return i64(count_up(h)) + i64(q.count);
+}

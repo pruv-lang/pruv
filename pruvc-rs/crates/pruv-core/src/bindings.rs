@@ -117,6 +117,9 @@ fn rust_ty(t: &str, param: bool) -> String {
 
 /// Rust statements that write the value `expr` (Copy) into the word array `arr` at `off`.
 fn rs_ser(tt: &TypeTable, ty: &str, expr: &str, arr: &str, off: i64, ctr: &mut i64) -> Result<Vec<String>, String> {
+    if crate::intwidth::is_narrow(ty) {
+        return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+    }
     if ty == "unit" {
         // LB8: zero words
         return Ok(Vec::new());
@@ -195,6 +198,9 @@ fn rs_ser(tt: &TypeTable, ty: &str, expr: &str, arr: &str, off: i64, ctr: &mut i
 
 /// Rust expression that rebuilds a ty value from the word array `arr` at `off` (safe constructors only).
 fn rs_de(tt: &TypeTable, ty: &str, arr: &str, off: i64) -> Result<String, String> {
+    if crate::intwidth::is_narrow(ty) {
+        return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+    }
     if ty == "unit" {
         // LB8: zero words
         return Ok("()".to_string());
@@ -505,7 +511,8 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
         .iter()
         .enumerate()
         .filter(|(i, f)| {
-            (!explicit || hosts.get(*i).copied().unwrap_or(false))
+            (if explicit { hosts.get(*i).copied().unwrap_or(false) }
+             else { !crate::emit_common::has_narrow_scalar_sig(f, &tt) })
                 && !is_spec_fn(&f.name)
                 && f.foreign.is_none()
                 && !(f.params.iter().any(|p| crate::llvmgen::is_collection(&p.ty)) || crate::llvmgen::is_collection(&f.ret))
@@ -519,6 +526,9 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
     let returns_array = pubs.iter().any(|f| is_array_name(&f.ret) || f.ret == "str"); // G2 B2: str returns are counted too
     let mut decls: Vec<String> = Vec::new();
     for f in &pubs {
+        if crate::emit_common::has_narrow_scalar_sig(f, &tt) {
+            return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+        }
         if needs_mangling(&f.name) {
             return Err(format!(
                 "llvmgen: function name {} needs mangling; the bindings use the raw name",

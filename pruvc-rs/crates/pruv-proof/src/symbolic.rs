@@ -12,6 +12,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Instant;
 
+use pruv_core::intwidth::{self, IntWidth};
 use pruv_core::check::InvariantStep;
 use pruv_core::ast::{self as ast, Expr, Stmt};
 use pruv_core::diagnostic::PruvError;
@@ -180,7 +181,15 @@ fn is_vec_i64(t: &Ty) -> bool {
 
 /// verify.py `in_range` (line 168). `x >= I64_MIN` is a comparison with a Python int, so it is not flipped (raw).
 pub fn in_range(z: &Z3, x: &Ast) -> Ast {
-    z.and(&[x.raw_ge(&z.int(i64::MIN)), x.raw_le(&z.int(i64::MAX))])
+    in_int_range(z, x, &intwidth::I64)
+}
+
+fn in_int_range(z: &Z3, x: &Ast, width: &IntWidth) -> Ast {
+    z.and(&[x.raw_ge(&z.int(width.min as i64)), x.raw_le(&z.int(width.max as i64))])
+}
+
+fn expr_int_width(ty: Option<&str>) -> &'static IntWidth {
+    ty.and_then(intwidth::of).unwrap_or(&intwidth::I64)
 }
 
 /// verify.py `_conj` (line 72): None is skipped, one item is returned as is, two or more become And.
@@ -780,7 +789,7 @@ impl Val {
     /// The value tag of accessor result `a` whose field type is `ty` (the same classification as Python, which distinguishes by z3 sort).
     pub fn from_field(ty: &Ty, a: Ast) -> R<Val> {
         match ty {
-            Ty::I64 => Ok(Val::Int(a)),
+            Ty::I64 | Ty::U8 | Ty::U16 => Ok(Val::Int(a)),
             Ty::Bool => Ok(Val::Bool(a)),
             Ty::Opt | Ty::Res | Ty::User(_) | Ty::Param(_) | Ty::Inst(_) => Ok(Val::Dt(a, ty.clone())),
             Ty::Array(_) | Ty::GArray(_) | Ty::Str | Ty::Unit => Err(format!("'{}'", ty.name())),
@@ -859,6 +868,7 @@ struct LivePlace {
     name: String,
     place: Place,
     order: usize,
+    ty: Ty,
 }
 
 type LivePlaces = std::rc::Rc<HashMap<String, std::rc::Rc<LivePlace>>>;
@@ -868,6 +878,8 @@ pub struct State {
     pub env: Env,
     pub pc: Vec<Ast>,
     places: LivePlaces,
+    // Int values share a Z3 sort. Only narrow bindings need a separate width for havoc.
+    narrow_bindings: Option<std::rc::Rc<HashMap<String, Ty>>>,
     /// G9 A1 (verify.py `State.obs`): ids of the recursive-value facts already in `pc` (immutable, shared by forks).
     pub obs: std::rc::Rc<HashSet<u32>>,
     /// P13o (verify.py `State.rev`): names of the opaque functions revealed on this path.
@@ -886,10 +898,22 @@ impl State {
             env,
             pc,
             places: LivePlaces::default(),
+            narrow_bindings: None,
             obs: std::rc::Rc::new(HashSet::new()),
             rev: std::rc::Rc::new(BTreeSet::new()),
             apps: std::rc::Rc::new(Vec::new()),
             app_ids: std::rc::Rc::new(HashSet::new()),
+        }
+    }
+
+    fn record_binding_type(&mut self, name: &str, ty: &str) {
+        if intwidth::is_narrow(ty) {
+            let widths = self.narrow_bindings.get_or_insert_with(Default::default);
+            std::rc::Rc::make_mut(widths).insert(name.to_string(), Ty::from_name(ty));
+        } else if let Some(widths) = &mut self.narrow_bindings {
+            if widths.contains_key(name) {
+                std::rc::Rc::make_mut(widths).remove(name);
+            }
         }
     }
 
@@ -910,6 +934,7 @@ impl State {
             env: self.env.clone(),
             pc,
             places: self.places.clone(),
+            narrow_bindings: self.narrow_bindings.clone(),
             obs: std::rc::Rc::clone(&self.obs),
             rev: std::rc::Rc::clone(&self.rev),
             apps: std::rc::Rc::clone(&self.apps),
@@ -1777,7 +1802,7 @@ impl<'a> FnVerifier<'a> {
             };
         }
         match ty {
-            Ty::I64 => Ok(Val::Int(z.int_const(&n))),
+            Ty::I64 | Ty::U8 | Ty::U16 => Ok(Val::Int(z.int_const(&n))),
             Ty::Bool => Ok(Val::Bool(z.bool_const(&n))),
             Ty::Opt => Ok(Val::Dt(z.constant(&n, &self.prelude.opt.sort), ty.clone())),
             Ty::Res => Ok(Val::Dt(z.constant(&n, &self.prelude.res.sort), ty.clone())),
@@ -1947,7 +1972,7 @@ impl<'a> FnVerifier<'a> {
             return Ok(None);
         }
         Ok(match ty {
-            Ty::I64 => Some(in_range(z, v)),
+            Ty::I64 | Ty::U8 | Ty::U16 => Some(in_int_range(z, v, expr_int_width(Some(ty.name())))),
             Ty::Opt => Some(p.is_some(v).implies(&in_range(z, &p.sval(v)))),
             Ty::Res => Some(z.and(&[
                 p.is_ok(v).implies(&in_range(z, &p.oval(v))),
@@ -2250,7 +2275,11 @@ impl<'a> FnVerifier<'a> {
             env.set(name, v);
         }
         self.params = env.clone();
-        State::new(env, pc)
+        let mut st = State::new(env, pc);
+        for (name, ty) in params {
+            st.record_binding_type(name, ty.name());
+        }
+        st
     }
 
     /// First part of `ensures_ok` (line 647): overlays the parameters' original values on the current env and inserts `result`.
@@ -2461,12 +2490,14 @@ impl<'a> FnVerifier<'a> {
                     h.env.set(n, Val::Map(m));
                 }
                 Val::Int(_) => {
-                    let nv = self.try_fresh(n, &Ty::I64)?;
-                    let a = nv.try_ast()?.clone();
+                    let ty = h.narrow_bindings.as_ref().and_then(|widths| widths.get(n)).unwrap_or(&Ty::I64);
+                    let nv = self.try_fresh(n, ty)?;
                     if n != "spent" || !self.has_cost() {
-                        h.pc.push(in_range(&self.z, &a));
+                        if let Some(w) = self.try_wf(ty, nv.try_ast()?)? {
+                            h.pc.push(w);
+                        }
                     }
-                    h.env.set(n, Val::Int(a));
+                    h.env.set(n, nv);
                 }
                 Val::Bool(_) => {
                     let nv = self.try_fresh(n, &Ty::Bool)?;
@@ -2509,7 +2540,9 @@ impl<'a> FnVerifier<'a> {
                 };
                 if let Val::Int(term) = &value {
                     if !binding.place.is_whole() {
-                        h.pc.push(in_range(&self.z, term));
+                        if let Some(w) = self.try_wf(&binding.ty, term)? {
+                            h.pc.push(w);
+                        }
                     }
                 }
                 h.env.set(&binding.name, value);
@@ -2825,7 +2858,7 @@ impl<'a> FnVerifier<'a> {
         Ok(v.try_ast()?.clone())
     }
 
-    /// verify.py `ev(e, st, g, code, env)`. code=True: generates proof obligations and i64 semantics.
+    /// verify.py `ev(e, st, g, code, env)`. code=True: checks executable arithmetic and cast ranges.
     pub(crate) fn ev(&mut self, e: &Expr, st: &mut State, g: &[Ast], code: bool, env: &Env) -> R<Val> {
         let model: &'a Model = self.model;
         let value: R<Val> = match e {
@@ -2870,8 +2903,9 @@ impl<'a> FnVerifier<'a> {
                     return Ok(Val::Int(v.neg().sub(&self.z.int(1))));
                 }
                 if code {
-                    let ob = in_range(&self.z, &v.neg());
-                    self.prove_core(&st, g, &ob, pos(e), "overflow", "no overflow in unary -", None);
+                    let width = expr_int_width(x.ty.as_deref());
+                    let ob = in_int_range(&self.z, &v.neg(), width);
+                    self.prove_core(st, g, &ob, pos(e), "overflow", "no overflow in unary -", None);
                 }
                 Ok(Val::Int(v.neg()))
             }
@@ -2963,8 +2997,13 @@ impl<'a> FnVerifier<'a> {
                     "*" => l.mul(&r),
                     "/" | "%" => {
                         if code {
-                            let ob = self.z.and(&[r.gt_i(0), l.ge_i(0)]);
-                            self.prove_core(&st, g, &ob, pos(e), "div", "divisor > 0 and dividend >= 0", None);
+                            let width = expr_int_width(x.ty.as_deref());
+                            let (ob, what) = if width.signed {
+                                (self.z.and(&[r.gt_i(0), l.ge_i(0)]), "divisor > 0 and dividend >= 0")
+                            } else {
+                                (r.gt_i(0), "divisor > 0")
+                            };
+                            self.prove_core(st, g, &ob, pos(e), "div", what, None);
                         }
                         return Ok(Val::Int(if op == "/" { l.div(&r) } else { l.modulo(&r) }));
                     }
@@ -2978,8 +3017,12 @@ impl<'a> FnVerifier<'a> {
                     other => return Err(format!("local variable 'res' referenced before assignment ({})", other)),
                 };
                 if code {
-                    let ob = in_range(&self.z, &res);
-                    self.prove_core(&st, g, &ob, pos(e), "overflow", &format!("no i64 overflow in `{}`", op), None);
+                    let width = expr_int_width(x.ty.as_deref());
+                    let ob = in_int_range(&self.z, &res, width);
+                    self.prove_core(st, g, &ob, pos(e), "overflow", &format!("no {} overflow in `{}`", width.name, op), None);
+                    if intwidth::is_narrow(width.name) {
+                        self.assume(st, g, ob);
+                    }
                 }
                 Ok(Val::Int(res))
             }
@@ -3248,6 +3291,17 @@ impl<'a> FnVerifier<'a> {
             args.push(self.ev(a, st, g, code, env)?);
         }
         let arg = |i: usize| -> R<&Val> { args.get(i).ok_or_else(|| "tuple index out of range".to_string()) };
+        if let Some(target) = intwidth::of(n) {
+            let value = arg(0)?;
+            let source = expr_int_width(crate::infer::expr_ty(&x.args[0]).map(String::as_str));
+            if code && !source.fits_in(target) {
+                let ob = in_int_range(&self.z, value.try_ast()?, target);
+                self.prove_core(st, g, &ob, pos(e), "cast_range",
+                    &format!("value within {} range {}..={}", target.name, target.min, target.max), None);
+                self.assume(st, g, ob);
+            }
+            return Ok(value.clone());
+        }
         match n {
             "len" => {
                 // G6 A1: `len(c)` is `c.n` for an array, a Vec, a String and a HashMap alike
@@ -5789,9 +5843,10 @@ impl<'a> FnVerifier<'a> {
         Ok(())
     }
 
-    /// Execute a block and discard its local place bindings on scope exit.
+    /// Execute a block and discard its local place bindings and width metadata on scope exit.
     pub(crate) fn exec_block(&mut self, stmts: &[Stmt], st: State) -> R<Vec<State>> {
         let outer_places = st.places.clone();
+        let outer_widths = st.narrow_bindings.clone();
         let mut states = vec![st];
         for stmt in stmts {
             // STAGE1 B2: on budget exhaustion or timeout, Python escapes from here via an exception.
@@ -5809,6 +5864,7 @@ impl<'a> FnVerifier<'a> {
         }
         for state in &mut states {
             state.places = outer_places.clone();
+            state.narrow_bindings = outer_widths.clone();
         }
         Ok(states)
     }
@@ -5841,17 +5897,24 @@ impl<'a> FnVerifier<'a> {
                     Val::Arr(arr) => Val::Arr(arr.like(arr.a.clone(), arr.n.clone(), &s.name)),
                     value => value,
                 };
-                if s.ty == "i64" {
-                    st.pc.push(in_range(&self.z, value.try_ast()?));
+                let ty = Ty::from_name(&s.ty);
+                if intwidth::of(ty.name()).is_some() {
+                    if let Some(w) = self.try_wf(&ty, value.try_ast()?)? {
+                        st.pc.push(w);
+                    }
                 }
                 st.env.set(&s.name, value);
                 let order = st.places.len();
                 std::rc::Rc::make_mut(&mut st.places).insert(s.name.clone(), std::rc::Rc::new(LivePlace {
-                    name: s.name.clone(), place, order,
+                    name: s.name.clone(), place, order, ty,
                 }));
                 Ok(vec![st])
             }
-            Stmt::Let(s) => self.exec_bind(&s.name, &s.value, st),
+            Stmt::Let(s) => {
+                let mut st = st;
+                st.record_binding_type(&s.name, &s.ty);
+                self.exec_bind(&s.name, &s.value, st)
+            }
             Stmt::Assign(s) => {
                 let scratch = matches!(&s.value, Expr::Call(c) if c.name == "resize"
                     && self.funcs.get(self.fname.as_str()).is_some_and(|f| f.resize_scratch(&s.name, &c.args)));
@@ -6431,10 +6494,13 @@ impl<'a> FnVerifier<'a> {
         self.snap = Env(f
             .params
             .iter()
-            .filter(|p| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || p.ty == "i64" || p.ty == "bool" || matches!(self.inv_decls.get(&p.ty), Some(ast::TypeDecl::Struct(s)) if s.tparams.is_empty())))
+            .filter(|p| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || intwidth::of(&p.ty).is_some() || p.ty == "bool" || matches!(self.inv_decls.get(&p.ty), Some(ast::TypeDecl::Struct(s)) if s.tparams.is_empty())))
             .map(|p| (p.name.clone(), env.get(&p.name).clone()))
             .collect());
         let mut st = State::new(env.clone(), pc);
+        for p in &f.params {
+            st.record_binding_type(&p.name, &p.ty);
+        }
         std::rc::Rc::make_mut(&mut st.obs).extend(w_ids);
         if let (true, Some(xa)) = (f.opaque, &f.x_auto) {
             // P13o (P13o.1 totality): the body is defined for every argument, proven once here, so a reveal equation

@@ -1,0 +1,4 @@
+// P1: no implicit conversion between u8 and u16
+fn f(a: u8, b: u16) -> u16 {
+  return a + b;
+}

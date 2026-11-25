@@ -33,7 +33,7 @@ pub const TIMEOUT_MS: u32 = 500;
 pub const SEED: u32 = 0;
 pub const MAX_SECONDS: u64 = 5; // per-function wall clock
 
-const I64_MAX: i128 = i64::MAX as i128;
+const I64_MAX: i128 = pruv_core::intwidth::I64.max;
 
 type Rng = (i128, i128);
 
@@ -932,7 +932,7 @@ fn reads_bool_elem(e: &Expr, tab: &[(String, &'static str)]) -> bool {
 }
 
 /// The checker type of an expression node (None before checking and on freshly built nodes).
-fn expr_ty(e: &Expr) -> Option<&String> {
+pub(crate) fn expr_ty(e: &Expr) -> Option<&String> {
     match e {
         Expr::Spent(x) => x.ty.as_ref(),
         Expr::IntLit(x) => x.ty.as_ref(),
@@ -958,18 +958,18 @@ fn expr_ty(e: &Expr) -> Option<&String> {
 /// G3 A2 (4.8): does the candidate expression read a value whose static type involves a type parameter?
 /// Decided on typed expressions: checker types on cloned nodes, and the position-based type table for names.
 /// `len(x)` only reads the length, so it stays allowed for an abstract array.
-fn abstract_expr(e: &Expr, tenv: &[(String, String)]) -> bool {
+fn abstract_or_narrow_expr(e: &Expr, tenv: &[(String, String)]) -> bool {
     if let Expr::Call(c) = e {
         if c.name == "len" {
             return false;
         }
     }
     if let Expr::Var(v) = e {
-        if tyenv_get(tenv, &v.name).map_or(false, key_has_param) {
+        if tyenv_get(tenv, &v.name).is_some_and(|t| key_has_param(t) || pruv_core::intwidth::is_narrow(t)) {
             return true;
         }
     }
-    if expr_ty(e).map_or(false, |t| key_has_param(t)) {
+    if expr_ty(e).is_some_and(|t| key_has_param(t) || pruv_core::intwidth::is_narrow(t)) {
         return true;
     }
     if let Expr::Index(x) = e {
@@ -979,7 +979,7 @@ fn abstract_expr(e: &Expr, tenv: &[(String, String)]) -> bool {
             }
         }
     }
-    kids(e).into_iter().any(|c| abstract_expr(c, tenv))
+    kids(e).into_iter().any(|c| abstract_or_narrow_expr(c, tenv))
 }
 
 /// G6 A1 (G6_SPEC 11.4; infer.py `_mentions_collection`): does the candidate mention a variable of collection type
@@ -1959,9 +1959,9 @@ fn gen(
             push(&mut out, 5, e5);
         }
     }
-    // G3 A2 (4.8): no template may read an abstract value (decided on typed expressions; all kinds).
+    // Templates cannot read abstract values (G3 A2) or narrow integers: the numeric templates use i64.
     let tenv = scope_types(f, w);
-    out.retain(|c| !abstract_expr(&c.expr, &tenv));
+    out.retain(|c| !abstract_or_narrow_expr(&c.expr, &tenv));
     // G6 A1 (G6_SPEC 11.4): no candidate about a collection-typed variable (infer.py `_mentions_collection`).
     out.retain(|c| !mentions_collection(&c.expr, &tenv));
     // No candidates (kinds 5-14) that read or write an array whose element type is bool (G3: or abstract).

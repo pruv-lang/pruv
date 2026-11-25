@@ -1384,11 +1384,11 @@ def example_job(f, mode, flags, llvm, name):
             bad = None
             for fname, btxt in bodies.items():
                 if mode == "no-verify":
-                    if " nsw " in btxt:
-                        bad = "--no-verify body %s contains nsw" % fname
+                    if " nsw " in btxt or " nuw " in btxt:  # P1: unsigned u8/u16 proof arithmetic uses nuw
+                        bad = "--no-verify body %s contains nsw/nuw" % fname
                 elif mode == "default":
-                    if ARITH_OR_INDEX.search(btxt) and "nsw" not in btxt and "inbounds" not in btxt:
-                        bad = "proof-mode body %s has neither nsw nor inbounds" % fname
+                    if ARITH_OR_INDEX.search(btxt) and "nsw" not in btxt and "nuw" not in btxt and "inbounds" not in btxt:
+                        bad = "proof-mode body %s has neither nsw/nuw nor inbounds" % fname
                 if bad:
                     break
             if bad:

@@ -688,6 +688,15 @@ fn path_ok(path: &str) -> bool {
 /// signature (foreign_signature), then path (foreign_path) of a trusted rust fn
 pub fn check_foreign_decl(f: &Function, externs: &[String]) -> Res<()> {
     let (fl, fc) = (f.line, f.col);
+    if crate::intwidth::is_narrow(&f.ret) || f.params.iter().any(|p| crate::intwidth::is_narrow(&p.ty)) {
+        return Err(err(
+            fl,
+            fc,
+            "small_int_unsupported",
+            crate::emit_common::SMALL_INT_HOST_MESSAGE,
+            "use i64 in the host signature",
+        ));
+    }
     if !f.tparams.is_empty() {
         return Err(err(
             fl,

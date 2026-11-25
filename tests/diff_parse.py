@@ -71,7 +71,8 @@ BATCH = 200
 RS_TIMEOUT = 300
 MAX_SHOWN = 10
 CONTEXT = 60
-REQUIRED_CODES = ("bad_char", "bad_int", "reserved_name", "unsupported_type", "syntax",
+# P1: the parser's unsupported_type (Option<u8> and friends) became small_int_unsupported.
+REQUIRED_CODES = ("bad_char", "bad_int", "reserved_name", "small_int_unsupported", "syntax",
                   "string_escape", "string_unterminated", "string_character")
 QUANT_KINDS = ("forall", "exists", "sum", "count", "max", "min")   # serialization overwrites a Quant's kind with one of these values
 

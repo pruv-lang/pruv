@@ -1,0 +1,4 @@
+// P1: u8/u16 at the host boundary (pub fn) is bundle P12
+pub fn f(x: u8) -> i64 {
+  return i64(x);
+}

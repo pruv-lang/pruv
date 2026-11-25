@@ -1,0 +1,24 @@
+// P1 runtime: u8/u16 values at 0 and at max on both backends (verified and unverified)
+struct Acc {
+  lo: u8,
+  hi: u16,
+}
+
+fn grow(a: Acc, d: u8) -> Acc
+  requires i64(a.lo) + i64(d) <= 255
+  requires a.hi < 65535
+{
+  return Acc { lo: a.lo + d, hi: a.hi + 1 };
+}
+
+fn edge(n: i64) -> i64
+  requires 0 <= n && n <= 255
+{
+  let b: u8 = u8(n);
+  let a: Acc = grow(Acc { lo: 0, hi: 65534 }, b);
+  let w: u16 = u16(a.lo) * 257;
+  if w == 65535 {
+    return i64(a.hi) * 1000 + 255;
+  }
+  return i64(w) + i64(a.hi);
+}
