@@ -1341,3 +1341,43 @@ All after the last code change (F1 / F4 from the structure comparison).
   4. OpenCode leftovers 4.4b-SP (check first), 4.3g-T2, 4.4b-NC, 4.3g-A2 / A3, 4.3g-K3 (`opencode/` only), and
      4.4b-CV with a `pkgs/time` `civil`.
   5. req port (REQ-PORT) once P10H passes on both backends.
+
+## Step 4.4c: Claude bench rows (4.3h-T, R, W, Z, V, L, A, part of P)
+
+- `claude/RESHAPE.md` §5. `claude/` only (`q_mutants.py` retargeted to the new code); no `lib` / `pkgs` module changed,
+  so no consumer runs were needed.
+- Closed: 4.3h-T (`answer` writes `completedAt` first and returns before any copy), 4.3h-R (`root_of` / `user_text_of`
+  removed, keys read where the hand reads them), 4.3h-W (`is_human_text`: one trim, `task_origin` only after both
+  tags), 4.3h-Z (stamps cross as borrowed `[u8]`, no `adapter_probe`), 4.3h-V (one `canonical_at`, `format_iso` from a
+  template with `put_digits`), 4.3h-L (`one_line` in the hand loop shape, called only for a ranked title), 4.3h-A
+  (packets reserve once and extend: header, turns, widened text; `text` and `turns` built apart; `write_bytes` /
+  `put_str` / `write_turns` removed).
+- Partly closed: 4.3h-P (`plan` no longer stores planned ends; the ordinal column itself stays).
+- One Codex structure comparison (gpt-6.2-astra, high; Codex 2 account, the default was at its limit): no packet
+  difference found; two new structure findings applied (tail text reserve, A3 single reserve); older findings kept
+  as rows.
+- Tests: `claude/RESHAPE.md` §5 (all roots verify under the 300 s cap, test_a0..a4 and `q.py --count 300` on both rs
+  pairs, mutants all detected or proof-rejected).
+
+### Rows open after 4.4c
+
+- New (language): 4.4c-SV (a non-literal `str` cannot be lent as `[u8]`; `time::from_string` copies 24 bytes before
+  the check, the A2 probe keeps `adapter_probe`), 4.4c-IS (`time::Iso` holds a heap `[u8]`; no fixed-size array value).
+- New (bench): 4.4c-TS (`completedAt` moves 24 bytes per later answer, with VL), 4.4c-DC (`stamp_from` defects
+  collapse to -4), 4.4c-TR (`from_string` owns the trimmed text), 4.4c-MB (model / title replaced, not reused),
+  4.4c-OL (`one_line` reads the first byte twice).
+- Still open from 4.3h: 4.3h-P (ordinal column), 4.3h-O, 4.3h-D (hand candidate), 4.3h-Q.
+- Still open from 4.4b and before: 4.4b-NV, 4.4b-CV, 4.3g-T2, 4.4b-NC, 4.4b-P208, 4.4b-SP, 4.3g-A2, 4.3g-A3, 4.3g-K3,
+  4.3g-M07, 4.3g-BS, 4.3g-SQ, U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB,
+  TH, FO, FV, UL, VP, IW, VL, 4.3d-M, 4.3d-H, 4.3f-S, 4.3f-E and the 4.4 rows (P10H, REQ-*).
+- Next:
+  1. Grok bench rows 4.3c-T, 4.3c-B, 4.3c-G and `pkgs/turns` dead code; Qwen bench rows 4.3e-D, 4.3e-L, 4.3e-J,
+     4.3e-S, then 4.3e-F (touches `lib/access`; run all consumers).
+  2. Codex bench rows 4.3f-A, 4.3f-O, 4.3f-N, 4.3f-K, 4.3f-L, 4.3f-T, 4.3f-P, 4.3f-R, 4.3f-D (`codex/` only), then
+     4.3f-B, 4.3f-E, 4.3f-F (shared modules; run all consumers).
+  3. OpenCode leftovers: 4.4b-SP first (check spawn cwd / argv against the TypeScript reference), then 4.3g-T2,
+     4.4b-NC, 4.3g-A2 / A3, 4.3g-K3 (`opencode/` only), and 4.4b-CV with a `pkgs/time` `civil`.
+  4. Claude leftovers: 4.3h-P (ordinal column, with the A3 snapshot), 4.4c-TS / 4.4c-MB / 4.4c-TR / 4.4c-OL, then 4.3h-O
+     (shared packages; run all consumers) and 4.3h-Q (move `framing` to `pkgs` with the Qwen consumer).
+  5. req port (REQ-PORT) once P10H passes on both backends.
+

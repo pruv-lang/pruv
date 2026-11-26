@@ -140,7 +140,7 @@ fn write_piece(inout dst: [u8], at: i64, sep: i64, text: str, n: i64) -> ()
 // begin: new current draft in slot begun % 200 (evicting the oldest), prompt clipped to 32768 bytes (longest
 // whole-scalar prefix), clipped set when the original exceeded the cap or lost_before was set, lost_before
 // cleared, reply/budget/tools/completedAt reset, optional createdAt stored.
-pub fn begin(inout st: [i64], inout sl: [i64], inout buf: [u8], prompt: str, created: str) -> () ! alloc
+pub fn begin(inout st: [i64], inout sl: [i64], inout buf: [u8], prompt: str, created: [u8]) -> () ! alloc
   requires spans(st, sl, len(buf)) && st[4] <= 1000000000000 - 32792
   requires 0 <= st[0] && st[0] < 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
   requires fields(sl)
@@ -192,7 +192,7 @@ pub fn begin(inout st: [i64], inout sl: [i64], inout buf: [u8], prompt: str, cre
   st[3] = w;
 }
 
-fn write_begin(inout dst: [u8], start: i64, prompt: str, n: i64, created: str) -> ()
+fn write_begin(inout dst: [u8], start: i64, prompt: str, n: i64, created: [u8]) -> ()
   requires 0 <= n && n <= len(prompt)
   requires 0 <= start && start <= len(dst) && n + len(created) <= len(dst) - start
   ensures len(dst) == len(old(dst))
@@ -232,11 +232,11 @@ pub fn tool(inout st: [i64], inout sl: [i64]) -> ()
 }
 
 // answer: no current draft => nothing. Otherwise completedAt is updated first (even for empty text or a full
-// reply); empty text or budget >= 32768 stops; else piece = text (empty reply) or "\n\n"+text, appended when
+// reply); empty text or budget >= 32768 returns; else piece = text (empty reply) or "\n\n"+text, appended when
 // it fits the remaining budget, else its longest whole-scalar prefix is appended, the budget counter saturates
 // at 32768 and clipped is set. The counter is separate from the actual reply length (a multibyte cut leaves
 // unused bytes that later calls must not fill).
-pub fn answer(inout st: [i64], inout sl: [i64], inout buf: [u8], text: str, at: str, limit: i64) -> () ! alloc
+pub fn answer(inout st: [i64], inout sl: [i64], inout buf: [u8], text: str, at: [u8], limit: i64) -> () ! alloc
   requires spans(st, sl, len(buf)) && reply_room(st, sl, limit) && limit <= 1000000000000
   requires 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
   requires fields(sl)
@@ -259,104 +259,86 @@ pub fn answer(inout st: [i64], inout sl: [i64], inout buf: [u8], text: str, at: 
 {
   if st[1] == 0 { return; }
   let c: i64 = st[3];
+  if len(at) == 24 { complete(inout st, inout sl, inout buf, at, limit); }
   let rl: i64 = sl[8 * c + 1];
   let used: i64 = sl[8 * c + 2];
+  if len(text) == 0 || used >= 32768 { return; }
   let room: i64 = 32768 - used;
   let mut sep: i64 = 0;
   let mut take: i64 = 0;
-  let mut budget: i64 = used;
-  let mut clipped: i64 = sl[8 * c + 4];
-  if len(text) > 0 && room > 0 {
-    if rl > 0 { sep = 2; }
-    if sep + len(text) <= room {
-      take = len(text);
-      budget = used + sep + take;
+  let mut budget: i64 = 32768;
+  if rl > 0 { sep = 2; }
+  if sep + len(text) <= room {
+    take = len(text);
+    budget = used + sep + take;
+  } else {
+    if sep > room {
+      sep = room;
     } else {
-      if sep > room {
-        sep = room;
-      } else {
-        take = crate::text::clip_len(text, room - sep);
-      }
-      budget = 32768;
-      clipped = 1;
+      take = crate::text::clip_len(text, room - sep);
     }
+    sl[8 * c + 4] = 1;
   }
   let added: i64 = sep + take;
-  let was: i64 = sl[8 * c + 6];
-  let mut has: i64 = was;
-  if len(at) == 24 { has = 1; }
-  let stamp: i64 = st[4] - 24 * was;
-  let end: i64 = stamp + added + 24 * has;
+  let has: i64 = sl[8 * c + 6];
+  let stamp: i64 = st[4] - 24 * has;
+  let end: i64 = st[4] + added;
   reserve(inout buf, end);
-  write_answer(inout buf, stamp, sep, text, take, at, was, has);
+  write_answer(inout buf, stamp, sep, text, take, has);
   sl[8 * c + 1] = rl + added;
   sl[8 * c + 2] = budget;
-  sl[8 * c + 4] = clipped;
-  sl[8 * c + 6] = has;
   st[4] = end;
 }
 
-// The completed stamp sits immediately after the reply, including when the reply is empty.
-fn write_answer(inout dst: [u8], stamp: i64, sep: i64, text: str, take: i64, at: str, was: i64, has: i64) -> ()
+// completedAt of the current draft (hand: d.completed = at): overwrite the stamp in place, or append it after
+// the reply.
+fn complete(inout st: [i64], inout sl: [i64], inout buf: [u8], at: [u8], limit: i64) -> () ! alloc
+  requires spans(st, sl, len(buf)) && reply_room(st, sl, limit) && limit <= 1000000000000
+  requires st[1] == 1 && 0 <= st[3] && st[3] < 200
+  requires fields(sl)
+  requires len(at) == 24
+  ensures len(old(buf)) <= len(buf) && reply_room(st, sl, limit)
+  ensures spans(st, sl, len(buf))
+  ensures st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
+  ensures fields(sl)
+  ensures old(st)[4] <= st[4]
+  ensures sl[8 * st[3] + 6] == 1
+  ensures forall k in 0..1800: k != 8 * st[3] + 6 ==> sl[k] == old(sl)[k]
+{
+  let c: i64 = st[3];
+  if sl[8 * c + 6] == 1 {
+    copy_range(inout buf, st[4] - 24, at, 0, 24);
+    return;
+  }
+  let end: i64 = st[4] + 24;
+  reserve(inout buf, end);
+  copy_range(inout buf, st[4], at, 0, 24);
+  sl[8 * c + 6] = 1;
+  st[4] = end;
+}
+
+// The completed stamp sits immediately after the reply: move it forward, then write the piece.
+fn write_answer(inout dst: [u8], stamp: i64, sep: i64, text: str, take: i64, has: i64) -> ()
   requires 0 <= stamp && stamp <= len(dst) && 0 <= sep && sep <= 2 && 0 <= take && take <= len(text)
-  requires 0 <= was && was <= has && has <= 1 && (len(at) == 0 || (len(at) == 24 && has == 1))
+  requires 0 <= has && has <= 1
   requires sep + take + 24 * has <= len(dst) - stamp
   ensures len(dst) == len(old(dst))
 {
-  let added: i64 = sep + take;
-  if len(at) == 24 {
-    copy_range(inout dst, stamp + added, at, 0, 24);
-  } else {
-    // Move the existing completed stamp forward before extending a reply without a new stamp.
-    if was == 1 && added > 0 {
-      copy_within(inout dst, stamp + added, stamp, 24);
-    }
+  if has == 1 {
+    copy_within(inout dst, stamp + sep + take, stamp, 24);
   }
   write_piece(inout dst, stamp, sep, text, take);
 }
 
-pub pred fn planned_spans(sl: [i64], b: i64, kept: i64, bytes: i64) -> bool {
-  return len(sl) == 1800 && 0 <= kept && kept <= 200 && kept <= b &&
-    (forall j in 0..kept: 0 <= sl[1600 + j] && sl[1600 + j] <= bytes) &&
-    (forall j in 0..kept: (
-      sl[8 * ((b - 1 - j) % 200)] + sl[8 * ((b - 1 - j) % 200) + 1] +
-        24 * sl[8 * ((b - 1 - j) % 200) + 5] + 24 * sl[8 * ((b - 1 - j) % 200) + 6] <= sl[1600 + j]));
-}
-
-// planned_spans with the end slot as trigger, for plan_end's requires only (G-LG29). Without a
-// trigger z3 picks the row reads as patterns and the ensures proof turns into a long integer
-// search. A trigger only matters where the pred is assumed, so plan_end's ensures and the loops
-// in plan and write_turns keep the untriggered planned_spans.
-pred fn planned_spans_slot(sl: [i64], b: i64, kept: i64, bytes: i64) -> bool {
-  return len(sl) == 1800 && 0 <= kept && kept <= 200 && kept <= b &&
-    (forall j in 0..kept trigger sl[1600 + j]: 0 <= sl[1600 + j] && sl[1600 + j] <= bytes) &&
-    (forall j in 0..kept trigger sl[1600 + j]: (
-      sl[8 * ((b - 1 - j) % 200)] + sl[8 * ((b - 1 - j) % 200) + 1] +
-        24 * sl[8 * ((b - 1 - j) % 200) + 5] + 24 * sl[8 * ((b - 1 - j) % 200) + 6] <= sl[1600 + j]));
-}
-
-fn plan_end(inout sl: [i64], b: i64, i: i64, prior: i64, end: i64) -> ()
-  requires 0 <= i && i < 200 && i < b && b <= 1000000000000 && 0 <= prior && prior <= end
-  requires planned_spans_slot(sl, b, i, prior)
-  requires sl[8 * ((b - 1 - i) % 200)] + sl[8 * ((b - 1 - i) % 200) + 1] +
-    24 * sl[8 * ((b - 1 - i) % 200) + 5] + 24 * sl[8 * ((b - 1 - i) % 200) + 6] <= end
-  ensures planned_spans(sl, b, i + 1, end)
-  ensures forall k in 0..1600: sl[k] == old(sl)[k]
-{
-  sl[1600 + i] = end;
-}
-
-// Plan the newest suffix, counting only prompt and reply bytes toward the trim cap.
-// Reuse the ordinal column after collection for inclusive prefix lengths in newest-first order.
-pub fn plan(st: [i64], inout sl: [i64], cap: i64) -> Plan
+// Count the newest kept turns, counting only prompt and reply bytes toward the trim cap (hand
+// Collector::kept). bytes is the text those turns take, used only to reserve the text buffer.
+pub fn plan(st: [i64], sl: [i64], cap: i64) -> Plan
   requires len(st) == 5 && 0 <= st[0] && st[0] <= 1000000000000 && fields(sl) && spans(st, sl, cap)
-  ensures fields(sl) && spans(st, sl, cap)
   ensures 0 <= result.kept && result.kept <= 200 && result.kept <= st[0]
   ensures 0 <= result.total && result.total <= 2097152
-  ensures result.total == sum(j in 0..result.kept: old(sl)[8 * ((st[0] - 1 - j) % 200)] + old(sl)[8 * ((st[0] - 1 - j) % 200) + 1])
+  ensures result.total == sum(j in 0..result.kept: sl[8 * ((st[0] - 1 - j) % 200)] + sl[8 * ((st[0] - 1 - j) % 200) + 1])
   ensures (result.kept < st[0] && result.kept < 200) ==> result.total + sl[8 * ((st[0] - 1 - result.kept) % 200)] + sl[8 * ((st[0] - 1 - result.kept) % 200) + 1] > 2097152
   ensures 0 <= result.bytes && result.bytes <= 2106752
-  ensures planned_spans(sl, st[0], result.kept, result.bytes)
 {
   let b: i64 = st[0];
   let mut avail: i64 = b;
@@ -369,12 +351,9 @@ pub fn plan(st: [i64], inout sl: [i64], cap: i64) -> Plan
     invariant (b <= 200 && avail == b) || (b > 200 && avail == 200)
     invariant len(st) == 5 && st[0] == b
     invariant fields(sl)
-    invariant spans(st, sl, cap)
-    invariant forall k in 0..1600: sl[k] == old(sl)[k]
     invariant 0 <= total && total <= 2097152
-    invariant total == sum(j in 0..i: old(sl)[8 * ((b - 1 - j) % 200)] + old(sl)[8 * ((b - 1 - j) % 200) + 1])
+    invariant total == sum(j in 0..i: sl[8 * ((b - 1 - j) % 200)] + sl[8 * ((b - 1 - j) % 200) + 1])
     invariant 0 <= bytes && bytes <= total + 48 * i
-    invariant planned_spans(sl, b, i, bytes)
     decreases avail - i
   {
     let w: i64 = (b - 1 - i) % 200;
@@ -382,44 +361,32 @@ pub fn plan(st: [i64], inout sl: [i64], cap: i64) -> Plan
     if total + size > 2097152 {
       return Plan { kept: i, total: total, bytes: bytes };
     }
-    let next_bytes: i64 = bytes + size + 24 * sl[8 * w + 5] + 24 * sl[8 * w + 6];
-    plan_end(inout sl, b, i, bytes, next_bytes);
+    bytes = bytes + size + 24 * sl[8 * w + 5] + 24 * sl[8 * w + 6];
     total = total + size;
-    bytes = next_bytes;
     i = i + 1;
   }
   return Plan { kept: i, total: total, bytes: bytes };
 }
 
-fn planned_end(sl: [i64], b: i64, j: i64, kept: i64, bytes: i64) -> i64
-  requires 0 <= j && j < kept && planned_spans(sl, b, kept, bytes)
-  ensures 0 <= result && result <= bytes
-  ensures sl[8 * ((b - 1 - j) % 200)] + sl[8 * ((b - 1 - j) % 200) + 1] +
-    24 * sl[8 * ((b - 1 - j) % 200) + 5] + 24 * sl[8 * ((b - 1 - j) % 200) + 6] <= result
-{
-  return sl[1600 + j];
-}
-
-// Write records and their text into the owning packet, oldest first. Prefix is the physical
-// text prefix size; base is its logical size for the A3 fixture, which omits those bytes.
-pub fn write_turns(inout out: [i64], records: i64, prefix: i64, base: i64, st: [i64], sl: [i64], buf: [u8], p: Plan) -> ()
+// Append the kept records to turns and their text to text, oldest first (hand window_packet loop
+// over put). Each text ref is shift + its offset in text; the A3 fixture passes the omitted prefix.
+pub fn put_turns(inout turns: [i64], inout text: [u8], shift: i64, st: [i64], sl: [i64], buf: [u8], kept: i64) -> () ! alloc
   requires fields(sl) && spans(st, sl, len(buf))
-  requires 0 <= p.kept && p.kept <= 200 && p.kept <= st[0] && st[0] <= 1000000000000
-  requires 0 <= p.bytes && p.bytes <= 2106752 && 0 <= base && base <= 3500000 && 0 <= prefix && 0 <= records
-  requires len(out) == records + 10 * p.kept + prefix + p.bytes
-  requires planned_spans(sl, st[0], p.kept, p.bytes)
-  ensures len(out) == len(old(out))
+  requires 0 <= kept && kept <= 200 && kept <= st[0] && st[0] <= 1000000000000
+  requires 0 <= shift && shift <= 3500000 && len(turns) <= 2000 && len(text) <= 10000000
+  ensures len(turns) == len(old(turns)) + 10 * kept
+  ensures len(old(text)) <= len(text) && len(text) <= len(old(text)) + 65584 * kept
 {
-  let kept: i64 = p.kept;
   let b: i64 = st[0];
-  let start: i64 = records + 10 * kept + prefix;
+  let t0: i64 = len(turns);
+  let x0: i64 = len(text);
   let mut left: i64 = kept;
   while left > 0
-    invariant 0 <= left && left <= kept && kept == p.kept && 0 <= kept && kept <= 200 && kept <= b && b <= 1000000000000
+    invariant 0 <= left && left <= kept && 0 <= kept && kept <= 200 && kept <= b && b <= 1000000000000
     invariant fields(sl) && spans(st, sl, len(buf)) && b == st[0]
-    invariant 0 <= records && start == records + 10 * kept + prefix && 0 <= prefix && 0 <= base && base <= 3500000
-    invariant len(out) == start + p.bytes
-    invariant planned_spans(sl, b, kept, p.bytes)
+    invariant 0 <= shift && shift <= 3500000 && 0 <= t0 && t0 <= 2000 && 0 <= x0 && x0 <= 10000000
+    invariant len(turns) == t0 + 10 * (kept - left)
+    invariant x0 <= len(text) && len(text) <= x0 + 65584 * (kept - left)
     decreases left
   {
     let j: i64 = left - 1;
@@ -429,29 +396,17 @@ pub fn write_turns(inout out: [i64], records: i64, prefix: i64, base: i64, st: [
     let cn: i64 = 24 * sl[8 * w + 5];
     let dn: i64 = 24 * sl[8 * w + 6];
     let sb: i64 = sl[8 * w + 7];
-    let bytes: i64 = plen + rlen + cn + dn;
-    let end: i64 = planned_end(sl, b, j, kept, p.bytes);
-    let off: i64 = p.bytes - end;
-    let pos: i64 = start + off;
-    assert 0 <= sb && sb + bytes <= len(buf) && 0 <= pos && pos + bytes <= len(out);
-    crate::boundary::write_bytes(inout out, pos, buf, sb, plen);
-    crate::boundary::write_bytes(inout out, pos + plen, buf, sb + plen + cn, rlen);
-    crate::boundary::write_bytes(inout out, pos + plen + rlen, buf, sb + plen, cn);
-    crate::boundary::write_bytes(inout out, pos + plen + rlen + cn, buf, sb + plen + cn + rlen, dn);
-    let t: i64 = kept - 1 - j;
-    let r: i64 = records + 10 * t;
-    out[r] = base + off;
-    out[r + 1] = plen;
-    out[r + 2] = base + off + plen;
-    out[r + 3] = rlen;
-    out[r + 4] = -1;
-    out[r + 5] = cn;
-    if cn > 0 { out[r + 4] = base + off + plen + rlen; }
-    out[r + 6] = -1;
-    out[r + 7] = dn;
-    if dn > 0 { out[r + 6] = base + off + plen + rlen + cn; }
-    out[r + 8] = sl[8 * w + 3];
-    out[r + 9] = sl[8 * w + 4];
+    assert 0 <= sb && sb + plen + rlen + cn + dn <= len(buf);
+    let at: i64 = shift + len(text);
+    arr_append(inout text, buf, sb, plen);
+    arr_append(inout text, buf, sb + plen + cn, rlen);
+    arr_append(inout text, buf, sb + plen, cn);
+    arr_append(inout text, buf, sb + plen + cn + rlen, dn);
+    let mut ca: i64 = -1;
+    if cn > 0 { ca = at + plen + rlen; }
+    let mut da: i64 = -1;
+    if dn > 0 { da = at + plen + rlen + cn; }
+    arr_push(inout turns, at, plen, at + plen, rlen, ca, cn, da, dn, sl[8 * w + 3], sl[8 * w + 4]);
     left = j;
   }
 }

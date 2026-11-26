@@ -544,7 +544,7 @@ fn task_origin(e: &Object<'_>) -> bool {
     matches!(e.get(b"origin".as_slice()), Some(Value::Object(o)) if get_str(o, "kind") == Some("task-notification"))
 }
 
-// Pruv: entry::string_content, text::engine_line
+// Pruv: entry::is_human_text, text::interrupt_line, text::task_tags
 fn is_human_text(e: &Object<'_>, text: &str) -> bool {
     let t = es_trim(text);
     if t.is_empty() {
@@ -559,7 +559,7 @@ fn is_human_text(e: &Object<'_>, text: &str) -> bool {
         && task_origin(e))
 }
 
-// Pruv: entry::human_text, entry::user_text, entry::user_text_of, entry::array_content, entry::block_of
+// Pruv: entry::human_text, entry::user_text, entry::string_content, entry::array_content, entry::block_of
 fn human_text<'a>(e: &'a Object<'_>) -> Option<Cow<'a, str>> {
     if get_str(e, "type") != Some("user") || is_true(e, "isMeta") || is_true(e, "isSidechain") {
         return None;
@@ -736,7 +736,7 @@ impl Collector {
     }
 
     /// Number of newest drafts kept (<= MAXTURNS, <= TOTAL bytes).
-    // Pruv: turns::plan, turns::plan_end
+    // Pruv: turns::plan
     fn kept(&self) -> usize {
         let (mut n, mut total) = (0usize, 0usize);
         for d in self.drafts.iter().rev() {
@@ -838,7 +838,7 @@ fn consume(e: &Object<'_>, col: &mut Collector, st: &mut State) {
 }
 
 // ---------------- packet ----------------
-// Pruv: boundary::write_bytes, import::put_str
+// Pruv: arr_append into the text [u8] (import::head_result / tail_result, turns::put_turns)
 fn put(text: &mut Vec<u8>, b: &[u8]) -> [i64; 2] {
     let start = text.len() as i64;
     text.extend_from_slice(b);
@@ -923,7 +923,7 @@ pub fn tail_packet(data: &[u8], cut_before: i64) -> Vec<i64> {
     edge_packet(1, [title.as_deref().map(str::as_bytes), None, None, last.as_ref().map(|s| s.as_slice())])
 }
 
-// Pruv: import::read_window, framing::window_next, turns::write_turns
+// Pruv: import::read_window, framing::window_next, turns::put_turns
 pub fn window_packet(data: &[u8], cut_before: i64) -> Vec<i64> {
     if data.len() > WINDOW {
         return vec![1, 0];
