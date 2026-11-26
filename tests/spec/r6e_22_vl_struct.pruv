@@ -1,0 +1,66 @@
+// spec: R-6e-22 accept
+// L-gaps VL: Vec<S> of a non-recursive struct with an owned [u8] field on LLVM, as a struct field, an inout
+// parameter and through vec_at_mut; the output and the allocation balance match the Rust backend.
+struct Rec { tag: [u8], n: i64 }
+struct Bag { items: Vec<Rec>, k: i64 }
+
+fn mkrec(n: i64) -> Rec ! alloc
+  requires 0 <= n && n < 100
+{
+  let t: [u8] = alloc(2, 5);
+  return Rec { tag: move t, n: n };
+}
+
+fn add(take v: Vec<Rec>, n: i64) -> Vec<Rec> ! alloc
+  requires 0 <= n && n < 100 && len(v) < 100
+  ensures len(result) == len(v) + 1
+{
+  return vec_push::<Rec>(move v, mkrec(n));
+}
+
+fn bump(inout v: Vec<Rec>) -> () ! alloc {
+  match vec_at_mut::<Rec>(inout v, 0) {
+    Some(r) => {
+      if r.n >= 0 && r.n < 1000 { r.n = r.n + 100; }
+      let t: [u8] = alloc(3, 1);
+      r.tag = move t;
+    }
+    None => { }
+  }
+}
+
+fn total(inout v: Vec<Rec>) -> i64 {
+  let mut i: i64 = 0;
+  let mut s: i64 = 0;
+  while i < len(v)
+    invariant 0 <= i && i <= len(v)
+    invariant 0 <= s && s < 200000
+    decreases len(v) - i
+  {
+    match vec_at_mut::<Rec>(inout v, i) {
+      Some(r) => { if r.n >= 0 && r.n < 1000 && len(r.tag) < 1000 && s < 100000 { s = s + r.n + len(r.tag); } }
+      None => { }
+    }
+    i = i + 1;
+  }
+  return s;
+}
+
+fn refill(inout b: Bag) -> () ! alloc {
+  b.items = add(vec_new::<Rec>(), 9);
+  b.k = b.k + 0;
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let v0: Vec<Rec> = add(add(vec_new::<Rec>(), 3), 4);
+  let mut bag: Bag = Bag { items: move v0, k: 1 };
+  bump(inout bag.items);
+  let a: i64 = total(inout bag.items);
+  let mut loc: Vec<Rec> = add(vec_new::<Rec>(), 7);
+  bump(inout loc);
+  let b: i64 = total(inout loc);
+  refill(inout bag);
+  let c: i64 = total(inout bag.items);
+  if a < 0 || a >= 1000 || b < 0 || b >= 1000 || c < 0 || c >= 1000 { return 0; }
+  return a * 1000000 + b * 1000 + c;
+}

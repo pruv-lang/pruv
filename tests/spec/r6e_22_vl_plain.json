@@ -1,0 +1,1 @@
+{"backend": "llvm", "gen_contains": ["define internal void @pruv_vdrop__pruv_m_t_1_2_Sh(ptr %v)", "define internal void @pruv_vdrop__pruv_m_t_1_3_Rec(ptr %v)"], "run": {"exit": 0, "flags_matrix": [[], ["--no-verify"]], "stdout_lines": ["356"], "alloc_balance": true}}

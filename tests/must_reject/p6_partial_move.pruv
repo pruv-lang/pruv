@@ -1,5 +1,5 @@
 fn f() -> i64 ! alloc {
   let mut t: (String, i64) = (string_from("ab"), 3);
   let k: String = move t.0;
-  return len(k) + t.1;
+  return len(k) + len(t.0);
 }

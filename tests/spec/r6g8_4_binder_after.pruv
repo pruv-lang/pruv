@@ -15,7 +15,7 @@ fn root(k: i64) -> [i64] ! alloc {
   match parsed {
     Parse::Parsed(doc) => {
       let tape: [i64] = move doc.tape;
-      let m: i64 = doc.n;
+      let m: i64 = len(doc.tape);
       return move tape;
     }
     Parse::Failed(e) => { return alloc(1, e); }

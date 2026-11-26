@@ -1435,6 +1435,8 @@ fn loop_exits(w: &While, out: &mut HashSet<usize>) {
 
 struct Gen<'a> {
     prog: &'a Program,
+    /// L-gaps M (R-6g8-5): names a field move takes from in the function being emitted (`mem::take` needs `mut`)
+    field_moved: HashSet<String>,
     storage: crate::storage::StoragePlan,
     /// P3-S1: local arrays that live on the stack
     stack: crate::emit_common::BufferStackPlan,
@@ -1663,6 +1665,7 @@ impl<'a> Gen<'a> {
             table: make_type_table(prog),
             params: HashSet::new(),
             inouts: HashSet::new(),
+            field_moved: HashSet::new(),
             resize_params,
             resizable_inouts: HashSet::new(),
             resize_slots: HashSet::new(),
@@ -2209,16 +2212,16 @@ impl<'a> Gen<'a> {
             }
         }).collect();
         // LG9 (G-LG8-3): a take record parameter a consuming field move empties is a `mut` binding
+        // L-gaps M (R-6g8-5): so is an immutable local one empties
         let mut moved: HashSet<String> = HashSet::new();
-        if f.params.iter().any(|p| p.take && crate::typeinfo::is_user_type(&p.ty)) {
-            crate::foreign_shim::walk_stmts(&f.body, &mut |node| {
-                if let crate::foreign_shim::Node::Expr(Expr::Move(m)) = node {
-                    if !m.fields.is_empty() {
-                        moved.insert(m.name.clone());
-                    }
+        crate::foreign_shim::walk_stmts(&f.body, &mut |node| {
+            if let crate::foreign_shim::Node::Expr(Expr::Move(m)) = node {
+                if !m.fields.is_empty() {
+                    moved.insert(m.name.clone());
                 }
-            });
-        }
+            }
+        });
+        self.field_moved = moved.clone();
         let ps = f.params.iter().zip(&param_types)
             .map(|(p, ty)| {
                 let m = if p.take && crate::typeinfo::is_user_type(&p.ty) && moved.contains(&p.name) { "mut " } else { "" };
@@ -4525,7 +4528,8 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 } else { self.own_e(&x.value) };
                 self.moving.clear();
                 let v = v?;
-                let mut binding = format!("{}{}", if x.mutable { "mut " } else { "" }, x.name);
+                let mutable = x.mutable || self.field_moved.contains(&x.name);
+                let mut binding = format!("{}{}", if mutable { "mut " } else { "" }, x.name);
                 if !matches!(&x.value, Expr::Move(m) if !m.fields.is_empty()) {
                     binding.push_str(": ");
                     binding.push_str(&self.rt_width(&x.ty, x.borrowed, self.storage.layout_of(x)));

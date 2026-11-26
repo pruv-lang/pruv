@@ -1,0 +1,9 @@
+// spec: R-6e-22 reject
+// L-gaps VL: the element of a native Vec<S> on LLVM may own [u8] buffers but not a String field (R-6e-3 limit).
+struct Rec { name: String, n: i64 }
+
+pub fn checksum() -> i64 ! alloc {
+  let s: String = string_from("ab");
+  let v: Vec<Rec> = vec_push::<Rec>(vec_new::<Rec>(), Rec { name: move s, n: 1 });
+  return len(v);
+}

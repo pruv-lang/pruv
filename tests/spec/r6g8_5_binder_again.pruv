@@ -1,0 +1,29 @@
+// spec: R-6g8-5 accept (a binder's moved field does not outlive its arm)
+struct Doc { tape: [i64], n: i64 }
+enum E { One(d: Doc), Empty }
+
+fn make() -> E ! alloc {
+  let t: [i64] = alloc(1, 65);
+  return E::One(Doc { tape: move t, n: 1 });
+}
+
+fn f() -> i64 ! alloc {
+  let e: E = make();
+  let mut acc: i64 = 0;
+  match e {
+    E::One(d) => {
+      let t: [i64] = move d.tape;
+      acc = len(t);
+    }
+    E::Empty => {}
+  }
+  let e2: E = make();
+  match e2 {
+    E::One(d) => { return acc + len(d.tape); }
+    E::Empty => { return acc; }
+  }
+}
+
+pub fn checksum() -> i64 ! alloc {
+  return f();
+}

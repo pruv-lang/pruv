@@ -1,4 +1,4 @@
-// G-R09-4: a record whose field is moved without a restore on one path may be moved after the join
+// G-R09-4 / R-6g8-5: a field moved without a restore on one path may be moved after the join
 struct D { n: i64, a: [i64] }
 
 fn run(flag: bool) -> i64 ! alloc {
@@ -6,5 +6,5 @@ fn run(flag: bool) -> i64 ! alloc {
   if flag {
     let t: [i64] = move d.a;
   }
-  return d.n;
+  return len(d.a);
 }

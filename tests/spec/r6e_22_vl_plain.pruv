@@ -1,0 +1,26 @@
+// spec: R-6e-22 accept
+// L-gaps VL: native Vec of a struct with a Vec<i64> handle field, of a plain enum and of a copy struct on LLVM.
+struct Rec { xs: Vec<i64>, n: i64 }
+enum Sh { Dot(x: i64), Box(w: i64) }
+struct Pt { x: i64, y: i64 }
+
+pub fn checksum() -> i64 ! alloc {
+  let v: Vec<Rec> = vec_push::<Rec>(vec_new::<Rec>(), Rec { xs: vec_push::<i64>(vec_new::<i64>(), 7), n: 1 });
+  let mut v2: Vec<Rec> = move v;
+  match vec_at_mut::<Rec>(inout v2, 0) {
+    Some(r) => { r.xs = vec_push::<i64>(vec_new::<i64>(), 8); r.n = 3; }
+    None => { }
+  }
+  let mut sh: Vec<Sh> = vec_push::<Sh>(vec_push::<Sh>(vec_new::<Sh>(), Sh::Dot(4)), Sh::Box(5));
+  let mut t: i64 = 0;
+  match vec_get::<Sh>(sh, 1) { Sh::Box(w) => { t = w; } Sh::Dot(x) => { } }
+  let ps: Vec<Pt> = vec_push::<Pt>(vec_new::<Pt>(), Pt { x: 6, y: 0 });
+  let p: Pt = vec_get::<Pt>(ps, 0);
+  let mut n: i64 = 0;
+  match vec_at_mut::<Rec>(inout v2, 0) {
+    Some(r) => { if r.n >= 0 && r.n < 10 { n = r.n; } }
+    None => { }
+  }
+  if p.x < 0 || p.x > 9 { return 0; }
+  return n * 100 + t * 10 + p.x;
+}

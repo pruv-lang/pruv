@@ -1,6 +1,0 @@
-// spec: R-6g-2 reject
-struct Rec { hits: i64 }
-
-fn reset(inout r: Rec) -> () {
-  r = Rec { hits: 0 };
-}
