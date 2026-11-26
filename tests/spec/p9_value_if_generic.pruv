@@ -1,5 +1,14 @@
-// spec: R-6w-2 reject
-// A value `if` of a type parameter is not supported.
-fn pick<T>(c: bool, a: T, b: T) -> T {
+// spec: R-6w-2 accept
+// P9a-8: a value `if` of a type parameter: every type argument is a value, so each application is proved and
+// compiled with its own type.
+fn pick<T>(c: bool, a: T, b: T) -> T
+  ensures c ==> result == a
+  ensures !c ==> result == b
+{
   return if c { a } else { b };
+}
+
+fn main() -> () ! io {
+  print(pick::<i64>(true, 4, 5));
+  print(pick::<bool>(false, true, false));
 }

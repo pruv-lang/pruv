@@ -1,0 +1,10 @@
+// P9a-8 confirm audit: a value match in a guard that binds a renamed arm binder again is a shadow
+enum E { N(a: i64), C }
+fn f(e: E, o: Option<i64>) -> i64 {
+  match e {
+    E::N(a) if a > 100 => { return 1; }
+    E::N(b) if (match o { Some(b) => b > 5, None => false }) => { return b; }
+    E::N(c) => { return c; }
+    E::C => { return 0; }
+  }
+}

@@ -1,5 +1,21 @@
-// spec: R-6w-6 reject
-// A value `match` whose arms yield a type-parameter payload stays `type/value_branch_type` (P9a-6 leftover).
-fn pick<T>(o: Option<T>, d: T) -> T {
+// spec: R-6w-6 accept
+// P9a-8: a value `match` whose arms yield a type-parameter payload (`Option<T>`, a guarded arm included).
+fn pick<T>(o: Option<T>, d: T) -> T
+  ensures is_some(o) ==> result == some_val(o)
+  ensures !is_some(o) ==> result == d
+{
   return match o { Some(x) => x, None => d };
+}
+
+fn first<T>(o: Option<T>, c: bool, d: T) -> T {
+  return match o {
+    Some(x) if c => x,
+    Some(_) | None => d,
+  };
+}
+
+fn main() -> () ! io {
+  print(pick::<i64>(Some::<i64>(3), 9));
+  print(pick::<bool>(None::<bool>, true));
+  print(first::<i64>(Some::<i64>(2), true, 5));
 }

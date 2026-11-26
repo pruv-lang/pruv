@@ -949,9 +949,146 @@ impl Parser {
         Ok(Some(self.expr()?))
     }
 
+    /// P9a-8: `|` inside a payload (`Err(A | B)`, `Some(Some(1 | 2) | None)`) is distributed over the pattern before it is
+    /// parsed: the token stream of the arm pattern (up to `=>`, a guard `if` or the `=` of a let form) is rewritten
+    /// into top-level alternatives (`Err(A) | Err(B)`), which arm_alts then parses as written. The tokens keep
+    /// their source positions, so a name mismatch is `parse/or_pattern` at the inner `|`.
+    fn distribute_payload_or(&mut self) -> R<()> {
+        const MAX_ALTS: usize = 64;
+        let start = self.i;
+        loop {
+            // the end of the pattern and its top-level alternatives
+            let (mut end, mut depth) = (start, 0i64);
+            let mut tops = vec![start];
+            // the shallowest inner `|` first, so `Some(Some(1 | 2) | None)` does not copy `None` per inner alternative
+            let mut inner: Option<(usize, i64)> = None;
+            while end < self.t.len() {
+                let t = &self.t[end];
+                let op = t.kind == Kind::Op || t.kind == Kind::Kw;
+                if op && matches!(t.val.as_str(), "(" | "[" | "{") {
+                    depth += 1;
+                } else if op && matches!(t.val.as_str(), ")" | "]" | "}") {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                } else if depth == 0 && op && matches!(t.val.as_str(), "=>" | "if" | "=" | ";") {
+                    break;
+                } else if op && t.val == "|" {
+                    if depth == 0 {
+                        tops.push(end + 1);
+                    } else if inner.is_none_or(|(_, d)| depth < d) {
+                        inner = Some((end, depth));
+                    }
+                } else if t.kind == Kind::Eof {
+                    break;
+                }
+                end += 1;
+            }
+            let Some((bar, _)) = inner else { return Ok(()) };
+            // the element around `bar`: between the nearest `(`/`,` before and `,`/`)` after, at bar's depth
+            let (mut lo, mut d) = (bar, 0i64);
+            while lo > start {
+                let t = &self.t[lo - 1];
+                let op = t.kind == Kind::Op || t.kind == Kind::Kw;
+                if op && matches!(t.val.as_str(), ")" | "]" | "}") {
+                    d += 1;
+                } else if op && matches!(t.val.as_str(), "(" | "[" | "{") {
+                    if d == 0 {
+                        break;
+                    }
+                    d -= 1;
+                } else if d == 0 && op && t.val == "," {
+                    break;
+                }
+                lo -= 1;
+            }
+            if lo == start || !(self.t[lo - 1].val == "(" || self.t[lo - 1].val == ",") || self.enclosing_open(lo) != Some("(") {
+                // `|` inside a slice pattern or a block: left to the parser's own error
+                return Ok(());
+            }
+            let (mut hi, mut d) = (bar, 0i64);
+            let mut cuts = vec![lo];
+            while hi < end {
+                let t = &self.t[hi];
+                let op = t.kind == Kind::Op || t.kind == Kind::Kw;
+                if op && matches!(t.val.as_str(), "(" | "[" | "{") {
+                    d += 1;
+                } else if op && matches!(t.val.as_str(), ")" | "]" | "}") {
+                    if d == 0 {
+                        break;
+                    }
+                    d -= 1;
+                } else if d == 0 && op && t.val == "," {
+                    break;
+                }
+                hi += 1;
+            }
+            // the `|`s of the element at its own depth
+            let mut d = 0i64;
+            for k in lo..hi {
+                let t = &self.t[k];
+                let op = t.kind == Kind::Op || t.kind == Kind::Kw;
+                if op && matches!(t.val.as_str(), "(" | "[" | "{") {
+                    d += 1;
+                } else if op && matches!(t.val.as_str(), ")" | "]" | "}") {
+                    d -= 1;
+                } else if d == 0 && op && t.val == "|" {
+                    cuts.push(k + 1);
+                }
+            }
+            cuts.push(hi + 1);
+            // the top-level alternative holding the element
+            let a0 = *tops.iter().filter(|&&s| s <= lo).max().expect("the first alternative starts the pattern");
+            let a1 = tops.iter().filter(|&&s| s > lo).min().map(|s| s - 1).unwrap_or(end);
+            let bar_tok = self.t[bar].clone();
+            let mut rep: Vec<Tok> = Vec::new();
+            for (n, w) in cuts.windows(2).enumerate() {
+                if n > 0 {
+                    rep.push(bar_tok.clone());
+                }
+                rep.extend_from_slice(&self.t[a0..lo]);
+                rep.extend_from_slice(&self.t[w[0]..w[1] - 1]);
+                rep.extend_from_slice(&self.t[hi..a1]);
+            }
+            self.t.splice(a0..a1, rep);
+            // every round adds at least one top-level alternative, so the bound also ends the loop
+            if tops.len() - 1 + (cuts.len() - 1) > MAX_ALTS {
+                return Err(PruvError::new("parse", bar_tok.line, bar_tok.col, "or_pattern",
+                    format!("an or-pattern expands to more than {} alternatives", MAX_ALTS),
+                    "split the arm into several arms"));
+            }
+        }
+    }
+
+    /// The opening bracket that encloses token `k` (the nearest unmatched one before it).
+    fn enclosing_open(&self, k: usize) -> Option<&'static str> {
+        let mut d = 0i64;
+        let mut j = k;
+        while j > 0 {
+            j -= 1;
+            let t = &self.t[j];
+            if !(t.kind == Kind::Op || t.kind == Kind::Kw) {
+                continue;
+            }
+            match t.val.as_str() {
+                ")" | "]" | "}" => d += 1,
+                "(" | "[" | "{" => {
+                    if d == 0 {
+                        return Some(match t.val.as_str() { "(" => "(", "[" => "[", _ => "{" });
+                    }
+                    d -= 1;
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     /// P9a-7: `P1 | P2 | ..`: the alternatives of one arm, each an arm of its own that gets a copy of the body.
     /// Every alternative binds the same names (`parse/or_pattern`).
     fn arm_alts(&mut self) -> R<Vec<MatchArm>> {
+        self.distribute_payload_or()?;
         let mut alts = vec![self.one_arm_pat()?];
         while self.at("|", 0) {
             let bar = self.next();

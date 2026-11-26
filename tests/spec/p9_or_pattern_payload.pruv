@@ -1,0 +1,28 @@
+// spec: R-6u-10 accept
+// P9a-8: `|` inside a payload (`Err(Halt::Done | Halt::Stalled)`, `Some(Some(1 | 2) | None)`) in match arms,
+// value arms, `if let` and `let else`; it is distributed into top-level alternatives.
+enum Halt { Done, Stalled, Bad(c: i64) }
+
+fn a(r: Result<i64, Halt>) -> i64 {
+  match r {
+    Err(Halt::Done | Halt::Stalled) => { return 1; }
+    Err(Halt::Bad(n)) => { return n & 255; }
+    Ok(1 | 2 | 3) => { return 2; }
+    Ok(_) => { return 3; }
+  }
+}
+
+fn b(o: Option<Option<i64>>) -> i64 {
+  return match o {
+    Some(Some(1 | 2) | None) => 10,
+    Some(Some(x)) if x > 5 => x & 255,
+    _ => 0,
+  };
+}
+
+fn c(o: Option<i64>) -> i64 {
+  if let Some(4 | 5) = o { return 1; }
+  let Some(7 | 8) | None = o else { return 2; };
+  return 3;
+}
+

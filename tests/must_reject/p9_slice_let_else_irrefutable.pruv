@@ -1,0 +1,4 @@
+fn h(xs: [i64]) -> i64 {
+  let [..] = xs else { return 0; };
+  return 1;
+}

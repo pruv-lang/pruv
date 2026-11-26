@@ -1,0 +1,11 @@
+// P9a-8 audit: a renamed binder declared again in the arm body (let) is a shadow
+enum E { A(k: i64), C }
+fn f(e: E) -> i64
+  ensures result != 5
+{
+  match e {
+    E::A(s) if s == 5 => { return 1; }
+    E::A(t) => { let t: i64 = 5; return t; }
+    E::C => { return 0; }
+  }
+}

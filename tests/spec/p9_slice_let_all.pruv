@@ -1,0 +1,12 @@
+// spec: R-6u-9 accept
+// P9a-8: a slice pattern of an `if let` without else (or with an empty one) that matches every array runs its
+// block, as a pattern that is not a slice does.
+fn h(xs: [i64]) -> i64 {
+  if let [..] = xs { return 1; }
+  return 2;
+}
+
+fn k(xs: [i64]) -> i64 {
+  if let [_, ..] | [] = xs { return len(xs); } else {}
+  return -1;
+}

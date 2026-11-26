@@ -1,0 +1,22 @@
+// spec: R-6u-12 accept
+// P9a-8: an owned payload bound under different names by different arms (a guarded arm then a fallback arm, or
+// `Pair(s, 1)` then `Pair(t, n)`) is renamed in the arm body: no copy, so no `! alloc` and no array alias.
+enum E { A(xs: [i64]), Pair(p: [i64], k: i64), C }
+
+fn f(e: E) -> i64 {
+  match e {
+    E::A(s) if len(s) > 2 => { return len(s); }
+    E::A(t) => { let s: i64 = 5; return len(t) + s; }
+    E::Pair(s, 1) => { return len(s); }
+    E::Pair(t, n) => { return len(t) + (n & 255); }
+    E::C => { return 0; }
+  }
+}
+
+fn g(take r: Result<i64, String>) -> i64 {
+  match r {
+    Err(s) if len(s) > 3 => { return len(s); }
+    Err(t) => { return 30 + len(t); }
+    Ok(_) => { return 0; }
+  }
+}

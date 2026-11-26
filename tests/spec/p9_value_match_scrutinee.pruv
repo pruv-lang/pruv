@@ -1,7 +1,17 @@
-// spec: R-6w-6 reject
-// A mutable accessor (`vec_at_mut`, `map_get_mut`) is a statement `match` scrutinee only.
+// spec: R-6w-6 accept
+// P9a-8: a value `match` on a mutable accessor (`vec_at_mut`, `map_get_mut`) reads the element; the arms see the
+// value the accessor found, and nothing is written back.
 struct P { x: i64, y: i64 }
 
-fn f(inout v: Vec<P>) -> i64 {
-  return match vec_at_mut::<P>(inout v, 0) { Some(p) => p.x, None => 0 };
+fn f(inout v: Vec<P>) -> i64
+{
+  return match vec_at_mut::<P>(inout v, 0) { Some(p) => p.x & 255, None => -1 };
+}
+
+fn g(inout m: HashMap<i64, P>, k: i64) -> i64 {
+  return match map_get_mut::<i64, P>(inout m, k) {
+    Some(p) if p.x > 0 => p.x & 255,
+    Some(_) => 0,
+    None => -1,
+  };
 }

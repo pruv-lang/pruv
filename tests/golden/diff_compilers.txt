@@ -1592,6 +1592,9 @@ must_reject|must_reject/p9_match_owned_borrow.pruv	2 cases: exit 2	llvm=f1894cca
 must_reject|must_reject/p9_match_pattern.pruv	2 cases: exit 2	llvm=bc7affdade2b	rust=bc7affdade2b
 must_reject|must_reject/p9_match_types.pruv	2 cases: exit 2	llvm=6a6cc0b3d26b	rust=6a6cc0b3d26b
 must_reject|must_reject/p9_or_pattern_names.pruv	2 cases: exit 2	llvm=fe31ca542d62	rust=fe31ca542d62
+must_reject|must_reject/p9_or_pattern_value_type.pruv	2 cases: exit 2	llvm=2be66d1135a5	rust=2be66d1135a5
+must_reject|must_reject/p9_or_payload_limit.pruv	2 cases: exit 2	llvm=4ca13b83d2b7	rust=4ca13b83d2b7
+must_reject|must_reject/p9_or_payload_names.pruv	2 cases: exit 2	llvm=0ffa40c34efd	rust=0ffa40c34efd
 must_reject|must_reject/p9_pattern_arity.pruv	2 cases: exit 2	llvm=0584de8b8383	rust=0584de8b8383
 must_reject|must_reject/p9_pattern_arm_index.pruv	2 cases: exit 2	llvm=16f9c3151984	rust=16f9c3151984
 must_reject|must_reject/p9_pattern_ctor_scalar.pruv	2 cases: exit 2	llvm=ca1337e65e8b	rust=ca1337e65e8b
@@ -1607,6 +1610,11 @@ must_reject|must_reject/p9_pattern_unreachable.pruv	2 cases: exit 2	llvm=cd3d496
 must_reject|must_reject/p9_pattern_unreachable_wild.pruv	2 cases: exit 2	llvm=6587b8c68f6a	rust=6587b8c68f6a
 must_reject|must_reject/p9_pattern_variant_type.pruv	2 cases: exit 2	llvm=f94502a08672	rust=f94502a08672
 must_reject|must_reject/p9_pattern_wild_requires.pruv	2 cases: exit 2	llvm=1bc1fb656f55	rust=1bc1fb656f55
+must_reject|must_reject/p9_rename_shadow_guard.pruv	2 cases: exit 2	llvm=a33711216a27	rust=a33711216a27
+must_reject|must_reject/p9_rename_shadow_guard_value.pruv	2 cases: exit 2	llvm=a33711216a27	rust=a33711216a27
+must_reject|must_reject/p9_rename_shadow_let.pruv	2 cases: exit 2	llvm=f7ffb1df4c7d	rust=f7ffb1df4c7d
+must_reject|must_reject/p9_rename_shadow_match.pruv	2 cases: exit 2	llvm=dd2cb4867cf6	rust=dd2cb4867cf6
+must_reject|must_reject/p9_slice_let_else_irrefutable.pruv	2 cases: exit 2	llvm=13ba84c22fc7	rust=13ba84c22fc7
 must_reject|must_reject/p9_value_match_empty.pruv	2 cases: exit 2	llvm=b9082d9e1005	rust=b9082d9e1005
 must_reject|must_reject/p9_vmatch_fixed_ensures.pruv	2 cases: exit 2	llvm=bbf73ebc6f00	rust=bbf73ebc6f00
 must_reject|must_reject/p9_vmatch_nested_shadow_payload.pruv	2 cases: exit 2	llvm=a098054ac44c	rust=a098054ac44c
@@ -2957,18 +2965,28 @@ runtime|runtime/p9_rt_match_tuple_slice [default]	2 cases: exit 2	llvm=1071424b3
 runtime|runtime/p9_rt_match_unchecked [default]	2 cases: exit 2	llvm=e5b2c25010a1	rust=9b9b4bbfacb4
 runtime|runtime/p9_rt_match_value [--no-verify]	2 cases: exit 2	llvm=6c442e0ba031	rust=f362b942a3c5
 runtime|runtime/p9_rt_match_value [default]	2 cases: exit 2	llvm=2c99b34c459a	rust=26395e2a772f
+runtime|runtime/p9_rt_or_payload [--no-verify]	2 cases: exit 2	llvm=70d38a9c0d5e	rust=6c9137e7ee08
+runtime|runtime/p9_rt_or_payload [default]	2 cases: exit 2	llvm=e3debc67d7ca	rust=04bd8cfa221c
 runtime|runtime/p9_rt_owned_arm [--no-verify]	2 cases: exit 2	llvm=38fb2aee186f	rust=c74115593777
 runtime|runtime/p9_rt_owned_arm [default]	2 cases: exit 2	llvm=e598c143c90e	rust=7bd1a3c72fbe
 runtime|runtime/p9_rt_pattern_let [--no-verify]	2 cases: exit 2	llvm=cef321c211c9	rust=cd4ac7929feb
 runtime|runtime/p9_rt_pattern_let [default]	2 cases: exit 2	llvm=4e40193bfe7e	rust=8e596fde6d40
-runtime|runtime/p9_rt_pattern_names [--no-verify]	2 cases: exit 2	llvm=b70f6b5462d2	rust=4b1466264814
-runtime|runtime/p9_rt_pattern_names [default]	2 cases: exit 2	llvm=be078c0e4722	rust=3e5daa00b0d4
+runtime|runtime/p9_rt_pattern_names [--no-verify]	2 cases: exit 2	llvm=b102b7766dfd	rust=c9991335275f
+runtime|runtime/p9_rt_pattern_names [default]	2 cases: exit 2	llvm=803fb2973525	rust=674a0728dd88
 runtime|runtime/p9_rt_pattern_order [--no-verify]	2 cases: exit 2	llvm=f3309f98613f	rust=acf5580162c9
 runtime|runtime/p9_rt_pattern_order [default]	2 cases: exit 2	llvm=bb8cda691885	rust=7350026f1955
 runtime|runtime/p9_rt_pattern_owned [--no-verify]	2 cases: exit 2	llvm=5dc4e9e41a84	rust=88c057502f12
 runtime|runtime/p9_rt_pattern_owned [default]	2 cases: exit 2	llvm=0d332f040ce4	rust=454b51428360
+runtime|runtime/p9_rt_pattern_rename [--no-verify]	2 cases: exit 2	llvm=a662a575695b	rust=6dfa6f82ee14
+runtime|runtime/p9_rt_pattern_rename [default]	2 cases: exit 2	llvm=0da6e3feb743	rust=957c687c36d5
 runtime|runtime/p9_rt_pattern_wild [--no-verify]	2 cases: exit 2	llvm=d3bd0cbf1920	rust=ab6ae71c5c31
 runtime|runtime/p9_rt_pattern_wild [default]	2 cases: exit 2	llvm=b540452601fb	rust=1419c32b943b
+runtime|runtime/p9_rt_value_generic [--no-verify]	2 cases: exit 2	llvm=239fe45a3171	rust=4151fe7806ff
+runtime|runtime/p9_rt_value_generic [default]	2 cases: exit 2	llvm=8d32ef84c6b2	rust=1585d8104d1e
+runtime|runtime/p9_rt_value_match_mut [--no-verify]	2 cases: exit 2	llvm=e80a831d33d7	rust=2b5cc075d544
+runtime|runtime/p9_rt_value_match_mut [default]	2 cases: exit 2	llvm=e80a831d33d7	rust=2697ca27ed1e
+runtime|runtime/p9_rt_value_match_vec_mut [--no-verify]	2 cases: exit 2	llvm=aea64ea91cd8	rust=6f5e938046eb
+runtime|runtime/p9_rt_value_match_vec_mut [default]	2 cases: exit 2	llvm=59333df2f215	rust=52b3c6922cb5
 runtime|runtime/p9b2_rt_panic_name [--no-verify]	2 cases: exit 2	llvm=dc5cd373b273	rust=d27903444d92
 runtime|runtime/p9b2_rt_trait_names [--no-verify]	2 cases: exit 2	llvm=db6d2d07e4f5	rust=0af904952aba
 runtime|runtime/p9b2_rt_trait_names [default]	2 cases: exit 2	llvm=77748a2348d1	rust=9c07b556da83

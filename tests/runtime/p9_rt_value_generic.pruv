@@ -1,0 +1,17 @@
+// P9a-8: a value `if` and a value `match` whose result is a type parameter, one proof and one body per
+// application (i64, bool, a value struct).
+fn pick<T>(o: Option<T>, d: T) -> T {
+  return match o { Some(x) => x, None => d };
+}
+fn pick2<T>(c: bool, a: T, b: T) -> T {
+  let r: T = if c { a } else { b };
+  return r;
+}
+struct P { x: i64, y: i64 }
+fn run() -> () ! io {
+  print(pick::<i64>(Some::<i64>(4), 9));
+  print(pick::<i64>(None::<i64>, 9));
+  let p: P = pick::<P>(None::<P>, P { x: 1, y: 2 });
+  print(p.y);
+  print(pick2::<bool>(false, true, false));
+}

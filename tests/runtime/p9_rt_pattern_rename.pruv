@@ -1,0 +1,61 @@
+// P9a-8: an owned payload bound under different names by different arms on the same variant (a guarded arm then
+// a fallback arm, `Pair(s, 1)` then `Pair(t, n)`) is renamed inside the statement arm body, as the value form
+// does: no copy and no `! alloc` in the matching function, for array and `String` payloads alike.
+enum E { A(s: str), B(xs: [i64]), Pair(p: [i64], k: i64), C }
+
+fn mk(n: i64) -> E ! alloc
+  requires 0 <= n && n <= 10
+{
+  let a: [i64] = alloc(n, 4);
+  return E::B(copy(a));
+}
+
+fn pair(k: i64) -> E ! alloc {
+  let a: [i64] = alloc(2, 1);
+  return E::Pair(copy(a), k);
+}
+
+fn f(e: E) -> i64 {
+  match e {
+    E::A(s) if len(s) > 2 => { return len(s); }
+    E::A(t) => { return 0 - len(t); }
+    E::B(xs) if len(xs) > 1 => { return (xs[0] & 255) + 10; }
+    E::B(ys) => { return len(ys); }
+    E::Pair(s, 1) => { return len(s) * 100; }
+    E::Pair(t, n) => { return len(t) + (n & 255); }
+    E::C => { return 99; }
+  }
+}
+
+fn h(take r: Result<i64, String>) -> i64 {
+  match r {
+    Err(s) if len(s) > 3 => { return len(s); }
+    Err(s) if len(s) > 1 => { return 20; }
+    Err(t) => { return 30 + len(t); }
+    Ok(_) => { return 0; }
+  }
+}
+
+fn g(e: E) -> i64 {
+  return match e {
+    E::A(s) if len(s) > 2 => len(s),
+    E::A(t) => 0 - len(t),
+    _ => 7,
+  };
+}
+
+fn run() -> () ! io, alloc {
+  print(f(E::A(copy("hello"))));
+  print(f(E::A(copy("h"))));
+  print(f(mk(3)));
+  print(f(mk(1)));
+  print(f(pair(1)));
+  print(f(pair(5)));
+  print(f(E::C));
+  print(h(Err::<i64, String>(string_from("hello"))));
+  print(h(Err::<i64, String>(string_from("ab"))));
+  print(h(Err::<i64, String>(string_from(""))));
+  print(h(Ok::<i64, String>(4)));
+  print(g(E::A(copy("abc"))));
+  print(g(E::C));
+}

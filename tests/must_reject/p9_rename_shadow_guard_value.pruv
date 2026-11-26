@@ -1,0 +1,10 @@
+// P9a-8 confirm audit: the value form of p9_rename_shadow_guard
+enum E { N(a: i64), C }
+fn f(e: E, o: Option<i64>) -> i64 {
+  return match e {
+    E::N(a) if a > 100 => 1,
+    E::N(b) if (match o { Some(b) => b > 5, None => false }) => b,
+    E::N(c) => c,
+    E::C => 0,
+  };
+}

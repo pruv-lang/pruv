@@ -5386,6 +5386,7 @@ impl Checker {
         let guards: Vec<Option<Expr>> = m.arms.iter().map(|a| arm_guard_of(&a.body).cloned()).collect();
         let guarded: Vec<bool> = guards.iter().map(Option::is_some).collect();
         guards_without_inout(&guards)?;
+        let groups = or_groups(&m.arms.iter().map(|a| a.body.as_slice()).collect::<Vec<_>>());
         let mut m = std::borrow::Cow::Borrowed(m);
         if guarded.iter().any(|g| *g) {
             let mm = m.to_mut();
@@ -5432,6 +5433,7 @@ impl Checker {
         let bodies: Vec<Vec<Stmt>> = m.arms.iter().map(|a| a.body.clone()).collect();
         let tuples: Vec<Vec<(String, TuplePat)>> = m.arms.iter().map(|a| a.binders.iter().zip(a.pats.iter())
             .filter_map(|(b, p)| p.clone().map(|p| (b.clone(), p))).collect()).collect();
+        tree_or_types(&node, &groups, &tuples, &m.arms.iter().map(|a| (a.line, a.col)).collect::<Vec<_>>())?;
         if (matches!(&node, PNode::Test(v, ..) if v.is_empty()) || matches!(&node, PNode::Guard(..))) && !is_plain_place(&m.scrutinee) {
             // row VP: literal arms over a computed integer or `bool` test one local, so the scrutinee is evaluated once
             self.pat_tmp += 1;
@@ -5518,6 +5520,22 @@ impl Checker {
             } else {
                 exact.contains(&k) || min_rest.is_some_and(|r| r <= k)
             };
+            if shadowed && is_else_arm(m, a) {
+                // P9a-8 (R-6u-9): the slice pattern of an `if let`/`let else`/`while let` matches every array
+                if let Some(first) = a.body.first() {
+                    let (l, c) = first.position();
+                    let msg = if m.form == MatchForm::WhileLet {
+                        "the `while let` pattern matches every value, so the loop never ends by a failed match"
+                    } else {
+                        "the pattern matches every value, so the else block never runs"
+                    };
+                    return Err(terr(l, c, "irrefutable_pattern", msg, "bind the value with `match` or a `let`"));
+                }
+                let mut m2 = m.clone();
+                m2.arms.pop();
+                m2.form = MatchForm::Match;
+                return self.slice_match(&m2, scope);
+            }
             if shadowed {
                 return Err(terr(a.line, a.col, "match_arms", "this slice pattern only matches lengths an earlier arm takes",
                     "remove the arm or move it before the arm that covers it"));
@@ -5746,7 +5764,9 @@ impl Checker {
                 }
             }
         }
-        for a in m.arms.iter_mut() {
+        let groups = or_groups(&m.arms.iter().map(|a| a.body.as_slice()).collect::<Vec<_>>());
+        let mut alt_names: Vec<Option<Vec<(String, GType)>>> = vec![None; m.arms.len()];
+        for (ai, a) in m.arms.iter_mut().enumerate() {
             let mut sc = scope.clone();
             let (nl, nc) = if user { (a.line, a.col) } else { (line, col) };
             let saved_movable = self.match_movable.clone();
@@ -5791,6 +5811,16 @@ impl Checker {
                 lets.append(&mut a.body);
                 a.body = lets;
             }
+            // P9a-8 (R-6u-10): the alternatives of one or-pattern arm give each shared name one type
+            let mut names: Vec<(String, GType)> = a.binders.iter().zip(ftypes.iter()).enumerate()
+                .filter(|(k, _)| !matches!(a.pats.get(*k), Some(Some(TuplePat::Tuple(..)))))
+                .map(|(_, (b, bt))| (b.clone(), bt.clone())).collect();
+            names.extend(a.body[..a.pat_lets.min(a.body.len())].iter().filter_map(|s| match s {
+                Stmt::Let(l) => Some((l.name.clone(), GType::from_key(&l.ty))),
+                _ => None,
+            }));
+            or_alt_types(&groups, ai, &alt_names, &names, a.line, a.col)?;
+            alt_names[ai] = Some(names);
             for (b, bt) in a.binders.iter().zip(ftypes.iter()) {
                 if sc.contains_key(b) {
                     return Err(terr(nl, nc, "shadow", format!("{} is already defined", b), "use a new name"));
@@ -7079,6 +7109,10 @@ impl Checker {
                 Self::fresh_binders(&names, scope, v, *l, *c)?;
             }
             let node = self.lower_patterns(&arms, &uses, &guarded, true, &t, line, col)?;
+            // P9a-8 (R-6u-10): the alternatives of one arm share one clone of the arm value (same source positions)
+            let vargs = &call.args[1..];
+            let groups: Vec<usize> = (0..vargs.len()).map(|j| (0..j).find(|&i| vargs[i] == vargs[j]).unwrap_or(j)).collect();
+            tree_or_types(&node, &groups, &tuples, &arms.iter().map(|a| (a.0, a.1)).collect::<Vec<_>>())?;
             if matches!(node, PNode::Guard(..)) && !is_plain_place(&call.args[0]) {
                 // a value position has no `let`: a guard on a computed scrutinee would evaluate it twice
                 return Err(terr(line, col, "match_type",
@@ -7115,15 +7149,6 @@ impl Checker {
         }
         self.static_lit = false;
         let mut m = crate::ast::ValueMatch::as_match(call);
-        if let Expr::Call(sc) = &m.scrutinee {
-            // P9a-6 remaining: `map_get`, `vec_get` and `map_take` (Rust backend, as the statement form) are matched
-            // directly; the mutable accessors are statement scrutinees only
-            if !self.funcs.contains_key(&sc.name) && matches!(sc.name.as_str(), "map_get_mut" | "vec_at_mut") {
-                return Err(terr(sc.line, sc.col, "value_branch_type",
-                    format!("a value `match` on `{}` is not supported yet", sc.name),
-                    "use `map_get`/`vec_get` to read, or a `match` statement"));
-            }
-        }
         // P9a-6 remaining: an owned or borrowed scrutinee is matched with the statement form's ownership (the
         // ownership pass consumes a `Result<_, String>` as the statement form does; other payloads are borrowed)
         let st = self.match_scrutinee(&mut m.scrutinee, scope)?;
@@ -7334,10 +7359,14 @@ impl Checker {
     }
 
     /// P9a-3: Some(true) when a value of `t` owns storage, Some(false) when it is copied, None when a value branch of
-    /// this type is not supported (type parameters, views, borrowing structs, fixed arrays, handles). A tuple is owned
-    /// when a component is.
+    /// this type is not supported (views, borrowing structs, fixed arrays, handles). A type parameter is copied (P9a-8:
+    /// type arguments are value types). A tuple is owned when a component is.
     fn value_branch_kind(&self, t: &GType) -> Option<bool> {
-        if t.owner.is_some() || crate::llvmgen::is_owned_result(&t.to_key()) || t.is_fixed() || t.view_base().is_some() || t.view_payload().is_some() {
+        if t.owner.is_some() {
+            // P9a-8: a type parameter: every type argument is a value (check_arg), so the result is copied
+            return Some(false);
+        }
+        if crate::llvmgen::is_owned_result(&t.to_key()) || t.is_fixed() || t.view_base().is_some() || t.view_payload().is_some() {
             return None;
         }
         if t.int_width().is_some() || *t == boolt() {
@@ -9696,17 +9725,28 @@ fn pat_stmts(node: &PNode, scrut: &Expr, bodies: &[Vec<Stmt>], tuples: &[Vec<(St
 {
     Ok(match node {
         PNode::Leaf(k, binds) => {
+            // P9a-8: a binder the tree names differently (another arm on the same payload bound it first) is
+            // renamed in the arm body, as `pat_value` does, so the payload is never copied into a second local
             let mut out = Vec::new();
+            let mut body = bodies[*k].clone();
+            let mut renames = Vec::new();
             for (n, v, ty) in binds {
-                if n != v {
-                    out.push(Stmt::Let(Let { borrowed: false, line, col, name: n.clone(), mutable: false, ty: ty.to_key(),
-                        value: pat_var(line, col, v), refine: None }));
-                }
-                if let Some((_, TuplePat::Tuple(l, c, ps))) = tuples[*k].iter().find(|(t, _)| t == n) {
-                    lower_arm_pat(n, ps, ty, *l, *c, &mut out)?;
+                match tuples[*k].iter().find(|(t, _)| t == n) {
+                    Some((_, TuplePat::Tuple(l, c, ps))) => lower_arm_pat(v, ps, ty, *l, *c, &mut out)?,
+                    _ if n != v => renames.push((n.clone(), v.clone())),
+                    _ => {}
                 }
             }
-            out.extend(bodies[*k].iter().cloned());
+            if !renames.is_empty() {
+                // renaming only rewrites uses, so a body that declares the binder again would read the payload where
+                // the source reads its own name: the shadow the copy `let n = v` used to report
+                let decls = body_decls(&body);
+                if let Some((n, _)) = renames.iter().find(|(n, _)| decls.contains(n)) {
+                    return Err(terr(line, col, "shadow", format!("{} is already defined", n), "use a new name"));
+                }
+            }
+            rename_stmts_all(&mut body, &renames);
+            out.extend(body);
             out
         }
         PNode::Match(v, arms) => {
@@ -9776,6 +9816,21 @@ fn pat_value(node: &PNode, scrut: &Expr, vals: &[Expr], tuples: &[Vec<(String, T
 /// P9a-6/P9a-7: replaces an arm's bound names in `e` (its value or guard) by the values they name: a renamed binder
 /// by its field, a tuple pattern by component reads of its payload binder (scalars only, P9a-6c).
 fn subst_binds(e: &mut Expr, binds: &[(String, String, GType)], tuples: &[(String, TuplePat)]) -> Result<(), PruvError> {
+    // P9a-8: substitution rewrites uses only, so a value match in the guard that binds an arm binder again would read
+    // the payload: the shadow the unrenamed form reports
+    let inner = nested_binders(e);
+    if !inner.is_empty() {
+        for (n, _, _) in binds {
+            let mut names = HashSet::new();
+            match tuples.iter().find(|(t, _)| t == n) {
+                Some((_, p)) => pat_tuple_names(p, &mut names),
+                None => { names.insert(n.clone()); }
+            }
+            if let Some(b) = names.iter().find(|b| inner.contains(*b)) {
+                return Err(terr(e.line(), e.col(), "shadow", format!("{} is already defined", b), "use a new name"));
+            }
+        }
+    }
     for (n, v, ty) in binds {
         if let Some((_, TuplePat::Tuple(_, _, ps))) = tuples.iter().find(|(t, _)| t == n) {
             let mut reads = Vec::new();
@@ -9805,6 +9860,45 @@ fn value_guard_of(v: &Expr) -> (Option<&Expr>, &Expr) {
         Expr::Call(c) if c.name == crate::ast::ARM_GUARD && c.args.len() == 2 => (Some(&c.args[0]), &c.args[1]),
         _ => (None, v),
     }
+}
+
+/// P9a-8: the names statements declare (lets, nested match binders and tuple patterns, value-match binders, `for`
+/// and map-loop variables, quantifier variables).
+fn body_decls(stmts: &[Stmt]) -> HashSet<String> {
+    use crate::foreign_shim::Node;
+    fn arms(stmts: &[Stmt], out: &mut HashSet<String>) {
+        for s in stmts {
+            match s {
+                Stmt::If(x) => { arms(&x.then, out); arms(&x.els, out); }
+                Stmt::While(x) => {
+                    if let Some(h) = &x.for_head {
+                        out.insert(h.var.clone());
+                    }
+                    arms(&x.body, out);
+                }
+                Stmt::ForMap(x) => arms(&x.body, out),
+                Stmt::Match(m) => {
+                    for a in &m.arms {
+                        a.binders.iter().for_each(|b| pat_slot_names(b, out));
+                        a.pats.iter().flatten().for_each(|p| pat_tuple_names(p, out));
+                        arms(&a.body, out);
+                    }
+                    arms(&m.els, out);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = HashSet::new();
+    crate::foreign_shim::walk_stmts(stmts, &mut |n| match n {
+        Node::Let(l) => { out.insert(l.name.clone()); }
+        Node::ForMap(f) => { out.insert(f.key.clone()); out.insert(f.val.clone()); }
+        Node::Expr(Expr::Quant(q)) => { out.insert(q.var.clone()); }
+        Node::Expr(e @ Expr::Call(c)) if ValueMatch::matches(c) => out.extend(nested_binders(e)),
+        _ => {}
+    });
+    arms(stmts, &mut out);
+    out
 }
 
 /// P9a-6c: the names the nested value matches of an arm value bind (variant slots, tuple patterns, slice binders).
@@ -10024,6 +10118,152 @@ fn rename_var(e: &mut Expr, from: &str, to: &str) {
         Expr::IsVariant(x) => rename_var(&mut x.value, from, to),
         Expr::VariantField(x) => rename_var(&mut x.value, from, to),
         _ => {}
+    }
+}
+
+/// P9a-8 (R-6u-10): the or-pattern group of each arm, the index of its first alternative. The parser gives the
+/// alternatives of one source arm one clone of the body (statements at the same source positions, the guard
+/// marker included), and two source arms never share positions, so equal non-empty bodies mark one group.
+fn or_groups(bodies: &[&[Stmt]]) -> Vec<usize> {
+    (0..bodies.len()).map(|j| {
+        if bodies[j].is_empty() {
+            return j;
+        }
+        (0..j).find(|&i| bodies[i] == bodies[j]).unwrap_or(j)
+    }).collect()
+}
+
+/// P9a-8 (R-6u-10): arm `j`'s names against those of the first alternative of its group: a shared name has one
+/// type in every alternative, as in Rust (`type/or_pattern_type`).
+fn or_alt_types(groups: &[usize], j: usize, seen: &[Option<Vec<(String, GType)>>], names: &[(String, GType)],
+                line: i64, col: i64) -> Result<(), PruvError> {
+    let g = groups.get(j).copied().unwrap_or(j);
+    if g == j {
+        return Ok(());
+    }
+    let Some(Some(first)) = seen.get(g) else { return Ok(()) };
+    for (n, ty) in names {
+        if let Some((_, t0)) = first.iter().find(|(m, _)| m == n) {
+            if t0.to_key() != ty.to_key() {
+                return Err(terr(line, col, "or_pattern_type",
+                    format!("{} is {} in the first alternative of the or-pattern and {} in this one", n, tn(t0), tn(ty)),
+                    "give the name one type in every alternative, or write separate arms"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// P9a-8: the names a decision-tree leaf binds for arm `k`, with their types (tuple binders by component).
+fn leaf_names(binds: &[(String, String, GType)], tuples: &[(String, TuplePat)]) -> Vec<(String, GType)> {
+    let mut out = Vec::new();
+    for (n, v, ty) in binds {
+        match tuples.iter().find(|(t, _)| t == n) {
+            Some((_, TuplePat::Tuple(l, c, ps))) => {
+                let mut lets = Vec::new();
+                if lower_arm_pat(v, ps, ty, *l, *c, &mut lets).is_ok() {
+                    out.extend(lets.iter().filter_map(|s| match s {
+                        Stmt::Let(l) => Some((l.name.clone(), GType::from_key(&l.ty))),
+                        _ => None,
+                    }));
+                }
+            }
+            _ => out.push((n.clone(), ty.clone())),
+        }
+    }
+    out
+}
+
+/// P9a-8: per arm, the names its first leaf in the tree binds.
+fn tree_names(node: &PNode, tuples: &[Vec<(String, TuplePat)>], out: &mut Vec<Option<Vec<(String, GType)>>>) {
+    match node {
+        PNode::Leaf(k, binds) | PNode::Guard(k, binds, _) => {
+            if out.get(*k).is_some_and(Option::is_none) {
+                out[*k] = Some(leaf_names(binds, tuples.get(*k).map(Vec::as_slice).unwrap_or(&[])));
+            }
+            if let PNode::Guard(_, _, rest) = node {
+                tree_names(rest, tuples, out);
+            }
+        }
+        PNode::Match(_, arms) => arms.iter().for_each(|(_, _, _, n)| tree_names(n, tuples, out)),
+        PNode::Test(_, _, a, b) => {
+            tree_names(a, tuples, out);
+            tree_names(b, tuples, out);
+        }
+    }
+}
+
+/// P9a-8 (R-6u-10): the or-pattern check of a lowered tree.
+fn tree_or_types(node: &PNode, groups: &[usize], tuples: &[Vec<(String, TuplePat)>], pos: &[(i64, i64)]) -> Result<(), PruvError> {
+    let mut names = vec![None; groups.len()];
+    tree_names(node, tuples, &mut names);
+    for j in 0..groups.len() {
+        if let Some(n) = &names[j] {
+            let (l, c) = pos.get(j).copied().unwrap_or((0, 0));
+            or_alt_types(groups, j, &names, n, l, c)?;
+        }
+    }
+    Ok(())
+}
+
+/// P9a-8: renames every `(from, to)` pair at once in statements (through a fresh intermediate name, so a pair whose
+/// `to` is another pair's `from` is not renamed twice). Only uses are renamed: the caller rejects a body that declares
+/// `from` again (`body_decls`, type/shadow).
+fn rename_stmts_all(stmts: &mut [Stmt], pairs: &[(String, String)]) {
+    let mids: Vec<String> = (0..pairs.len()).map(|i| format!("pruv\u{1}ren{}", i)).collect();
+    for ((from, _), mid) in pairs.iter().zip(&mids) {
+        rename_stmts(stmts, from, mid);
+    }
+    for ((_, to), mid) in pairs.iter().zip(&mids) {
+        rename_stmts(stmts, mid, to);
+    }
+}
+
+fn rename_stmts(stmts: &mut [Stmt], from: &str, to: &str) {
+    let name = |n: &mut String| if n == from { *n = to.to_string() };
+    for s in stmts {
+        match s {
+            Stmt::Let(l) => rename_var(&mut l.value, from, to),
+            Stmt::Assign(a) => {
+                name(&mut a.name);
+                rename_var(&mut a.value, from, to);
+            }
+            Stmt::IndexAssign(a) => {
+                name(&mut a.name);
+                rename_var(&mut a.index, from, to);
+                rename_var(&mut a.value, from, to);
+            }
+            Stmt::FieldAssign(a) => {
+                name(&mut a.name);
+                rename_var(&mut a.value, from, to);
+            }
+            Stmt::If(x) => {
+                rename_var(&mut x.cond, from, to);
+                rename_stmts(&mut x.then, from, to);
+                rename_stmts(&mut x.els, from, to);
+            }
+            Stmt::While(w) => {
+                rename_var(&mut w.cond, from, to);
+                w.invariants.iter_mut().for_each(|e| rename_var(e, from, to));
+                rename_var(&mut w.decreases, from, to);
+                rename_stmts(&mut w.body, from, to);
+            }
+            Stmt::ForMap(w) => {
+                rename_var(&mut w.place, from, to);
+                w.invariants.iter_mut().for_each(|e| rename_var(e, from, to));
+                rename_stmts(&mut w.body, from, to);
+            }
+            Stmt::Return(r) => r.value.iter_mut().for_each(|e| rename_var(e, from, to)),
+            Stmt::Assert(a) => rename_var(&mut a.cond, from, to),
+            Stmt::Par(x) => x.calls.iter_mut().for_each(|e| rename_var(e, from, to)),
+            Stmt::ExprStmt(x) => rename_var(&mut x.expr, from, to),
+            Stmt::Match(m) => {
+                rename_var(&mut m.scrutinee, from, to);
+                m.arms.iter_mut().for_each(|a| rename_stmts(&mut a.body, from, to));
+                rename_stmts(&mut m.els, from, to);
+            }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
+        }
     }
 }
 

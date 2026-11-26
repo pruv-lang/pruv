@@ -1,3 +1,0 @@
-fn pick<T: Element>(c: bool, a: T, b: T) -> T {
-  return if c { a } else { b };
-}
