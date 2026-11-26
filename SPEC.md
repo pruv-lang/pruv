@@ -3307,7 +3307,7 @@ header is a candidate, its size is its number of body lines up to the first line
 attribute and clang's heuristics. Runtime helpers that already carry `alwaysinline` and ABI wrappers are not
 candidates; source attributes (section 6f) are not read. Why: clang -O2 kept calls to small Pruv bodies that the
 Rust backend's `#[inline(always)]` removes (D-R10-1). The rule does not promote `put_cp` of
-`bench/l3/supervisor/btail.pruv`: its inclusive size is 353 lines and it has 6 call sites, 353 * 5 = 1765 > 1500. Tests: [accept](tests/spec/r7_7_llvm_inline.pruv),
+`bench/l3/supervisor/btail.pruv` (the supervisor uses `bench/l3/pkgs/tail` since reset step 4.2): its inclusive size is 353 lines and it has 6 call sites, 353 * 5 = 1765 > 1500. Tests: [accept](tests/spec/r7_7_llvm_inline.pruv),
 [reject](tests/spec/r7_7_llvm_inline_recursive.pruv).
 
 Tests: [accept](tests/spec/r7_3_inline.pruv) (a small fn called once gets `#[inline(always)]`),
