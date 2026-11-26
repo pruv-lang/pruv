@@ -64,52 +64,43 @@ fn fold_bytes(s0: i64, b: [u8]) -> i64
   return s;
 }
 
-// hand text_of(): fold a member borrowed from the line, or decoded into the reused scratch buf
-fn fold_text(line: [u8], c: crate::rpc::Cap, which: i64, inout buf: [u8], inout acc: [i64], ln: i64, fo: i64) -> () ! alloc
-  requires len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007) && 0 <= ln && ln < 15 && 0 <= fo && fo < 15
-  ensures len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
-{
-  let sp: crate::rpc::Span = crate::rpc::text_span(line, c, which, inout buf);
-  if sp.inbuf == 1 {
-    acc[ln] = bump(acc[ln], sp.e);
-    acc[fo] = fold_bytes(acc[fo], subview(buf, 0, sp.e));
-  } else if sp.inbuf == 0 {
-    acc[ln] = bump(acc[ln], sp.e - sp.s);
-    acc[fo] = fold_bytes(acc[fo], subview(line, sp.s, sp.e));
-  }
-}
-
-// DB65 / reset 4.3: the hand_rpc.rs line() shape. One span scan of the trimmed line (no copy, no tape, an object error included);
-// c, buf and out are reused across lines.
-fn rpc_line(line: [u8], inout acc: [i64], inout c: crate::rpc::Cap, inout buf: [u8], inout out: [u8]) -> () ! alloc
+// DB65 / reset 4.3b: the hand_rpc.rs line() shape. The line is trimmed here, one span scan of the trimmed view t (no copy, no tape,
+// an object error included); c, buf and out are reused across lines. text_of borrows t or the scratch buf (hand text_of()).
+fn rpc_line(raw: [u8], inout acc: [i64], inout c: crate::rpc::Cap, inout buf: [u8], inout out: [u8]) -> () ! alloc
   requires len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
   ensures len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
 {
   acc[0] = bump(acc[0], 1);
-  let r: i64 = crate::rpc::scan(line, len(line), inout c);
-  if r == 0 { acc[1] = bump(acc[1], 1); return; }
-  let k: i64 = crate::rpc::line_kind(line, c, 2);
+  let tb: crate::rpc::Bounds = crate::rpc::trim_bounds(raw);
+  let t: ref [u8] = subview(raw, tb.lo, tb.hi);
+  if len(t) == 0 || len(t) > 16777216 { acc[1] = bump(acc[1], 1); return; }
+  if !crate::rpc::scan(t, inout c) { acc[1] = bump(acc[1], 1); return; }
+  let k: i64 = crate::rpc::line_kind(t, c, 2);
   if k == 1 {
     acc[3] = bump(acc[3], 1);
-    let nh: [u8] = crate::rpc::not_handled_line(line, c);
+    let nh: [u8] = crate::rpc::not_handled_line(t, c);
     acc[7] = bump(acc[7], len(nh));
     acc[8] = fold_bytes(acc[8], nh);
   } else if k == 2 {
     acc[4] = bump(acc[4], 1);
-    if c.err == 6 && 0 <= c.lo && c.lo <= c.hi && c.hi <= len(line) {
-      crate::rpc::detail(subview(line, c.lo, c.hi), c, inout out);
+    if c.err == 6 {
+      crate::rpc::detail(t, c, inout out);
       acc[9] = bump(acc[9], len(out));
       acc[10] = fold_bytes(acc[10], out);
-      if c.c_k != -1 && 0 <= c.c_s && c.c_s <= c.c_e && c.c_e <= c.hi - c.lo && c.c_e - c.c_s <= 8388608 {
-        crate::rpc::compact(subview(line, c.lo, c.hi), c.c_s, c.c_e, inout out, inout buf);
+      if c.c_k != -1 && 0 <= c.c_s && c.c_s <= c.c_e && c.c_e <= len(t) {
+        crate::rpc::compact(t, c.c_s, c.c_e, inout out, inout buf);
         acc[11] = bump(acc[11], len(out));
         acc[12] = fold_bytes(acc[12], out);
       }
     }
   } else {
     acc[2] = bump(acc[2], 1);
-    fold_text(line, c, 0, inout buf, inout acc, 13, 14);
-    fold_text(line, c, 1, inout buf, inout acc, 5, 6);
+    let m: ref [u8] = crate::rpc::text_of(t, c, 0, inout buf);
+    acc[13] = bump(acc[13], len(m));
+    acc[14] = fold_bytes(acc[14], m);
+    let x: ref [u8] = crate::rpc::text_of(t, c, 1, inout buf);
+    acc[5] = bump(acc[5], len(x));
+    acc[6] = fold_bytes(acc[6], x);
   }
 }
 
