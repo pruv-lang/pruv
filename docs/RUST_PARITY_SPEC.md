@@ -184,3 +184,41 @@ the B-bundle average (about 80 minutes per feature) and adjust bundle size.
 - P7-6: `parse/const_shadow` is stricter than Rust: it also rejects a struct field, struct or enum name equal to a constant name, which Rust keeps in other namespaces. A constant name must be upper case (`parse/const_name`), where Rust only warns.
 - P7-7 (perf debt): LLVM passes a by-value `[T; N]` argument as a pointer to a fresh caller copy and returns a result through caller storage that `let c = g(a)` then copies into `c`'s slot. After inlining `opt -O3` removes the caller copies (a 64-element probe keeps one 512-byte `memcpy`, the callee's own `let mut b = a`), but a call that is not inlined pays both. Skip the argument copy when the callee never writes the parameter and no `inout` argument of the same call aliases it, and write the result straight into the destination slot. Reading one element `s.f[i]` of a struct field loads the whole struct and spills the `[N x E]` field to a temporary before the GEP (O(N) per read before optimisation); a place base should GEP the field directly.
 - CI-1: closed (2026-11-25). `tests/inference/inf_budget.pruv --infer` was load dependent: the 500 ms per-query and 5 s per-function wall-clock limits of inference turned queries `unknown`/`timeout` under load, so the trace hash and `errs` changed between runs (main CI 45560012284). Rule: in inference the z3 resource limit (`RLIMIT` 100000) decides each query and `MAX_QUERIES` (512, with the fallback round) decides each function; the wall clocks (`TIMEOUT_MS` 10000 per query, `MAX_SECONDS` 60 per function, `pruvc-rs/crates/pruv-proof/src/infer.rs`) are safety nets far above any test (inf_budget, 1024 queries, runs in about 3 s), so a test that hits them is a bug. Unloaded results are unchanged (all 41 inference cases equal modulo the recorded timeout); 3 runs under 6 busy processes plus background QoS give the same trace hash. The `LOAD_DEPENDENT` interim in `tests/diff_trace.py` is removed. The frozen Python `pruvc/` keeps 500 ms / 5 s. CI-1a and CI-1b: closed (2026-11-25). `tests/must_reject/lg4_agg_frame_changed.pruv` flaked because its third attempt (counterexample retry with aggregate definitions) hit the 8000 ms verification wall clock, and `tests/runtime/g10a_r21_backpressure.pruv --infer` printed varying counterexample values because the 2000 ms wall-clock cap of the shared-context first check in `sys::Solver::check` (LG21) decided which context, and so which model, answered. Rule: in verification the z3 resource limit (`symbolic::RLIMIT` 20M) decides each query, and the shared-context first check is capped by rlimit (`SHARED_FIRST_RL` 10M) instead of time; the wall clock (`symbolic::TIMEOUT_MS` 60000) is a safety net far above any test. 20M was measured: the largest decided verification query of the diff_trace groups (all 1989 inputs, with and without `--infer`, plus the l3/spec probes) uses about 7.8M (g10a_r21 `--infer`), so 2.5x headroom; inference keeps its rlimit (`infer::RLIMIT` 100000, below the cap), but its shared-context first check now gets the full 10 s wall-clock safety net instead of the 2 s cap. z3 reports an rlimit stop as `canceled` or a resource-limit reason (matched case-insensitively); `pruvc-rs/crates/pruv-proof/tests/rlimit_check.rs` pins the capped retry and full-rlimit exhaustion with a pigeonhole query. No verdict changes: old and new binaries give equal attempt results and error codes/lines/messages on all 1989 inputs, except lg4, whose third attempt now ends `unknown` by the rlimit (note reason `canceled`) instead of sat-or-timeout depending on load; same error. Every trace digest changes through the head `(set-option :timeout 60000)` / `(set-option :rlimit 20000000)` and `timeout_ms`; goldens refreshed with equal obligation counts. 3 runs each under 6 busy processes give one trace hash for lg4 and g10a_r21 `--infer` (the old binary gives two for g10a_r21). The frozen Python `pruvc/` keeps 8000 ms.
+
+## 8. L-gaps from the reset
+
+Language gaps found while reshaping the bench rows to the hand-Rust shape (AGENTS rule 4: what Rust writes and
+Pruv cannot is fixed in the language). Bundle of 2026-11-27, capped at 2 hours.
+
+- IW: done (R-6g-13). `c = e` on a struct `inout` parameter replaces the caller's value whole (Rust `*c = e`).
+  Only the checker gate was missing: the verifier already writes the new value (`old(c)` keeps the entry value),
+  the LG5 frame already treats a whole assignment as changing every array field, Rust already printed `*c = ..`
+  and LLVM already drops the old value before the store. `*c = e` stays `type/type_mismatch`. A borrowing-struct
+  `inout` follows the same rule (its views must outlive the caller's borrow). Still open: `move c.f` out of an
+  `inout` struct (Rust `mem::take(&mut c.f)`) is "an array field cannot be moved"; the IW tests use `copy(c.f)`.
+- 4.3d-M: done (R-6g8-5). A consuming field move takes only the path: the ownership pass keeps path keys
+  (`s.f` Dead/Maybe) beside whole names, so other fields stay usable while `s.f` and `s` whole are refused until
+  the field (or `s`) is reassigned; branch joins give Maybe, a loop body (and every `continue`) must restore
+  the field; a match binder's moved fields end with its arm. An immutable `let` is a move source (Rust prints
+  `let mut s` for `mem::take`). Tests that encoded the old whole-record consumption (lg4/lg8/lg9 field-move
+  rejects, p6_partial_move, r6g8_4_binder_after) now read the moved field instead. Left: the Rust output
+  declares every binding of the moved name `let mut` (name-based, allowed by `unused_mut`); a tuple local still
+  cannot be partially moved in a module program (tuples are single-file only, P6-2).
+- VL: done (R-6e-22). The LLVM backend already had the native `{ ptr, i64, i64 }` vector with per-element drop
+  and push helpers, but only for elements of a recursive SCC (`recursive_vec_elements`). That set now also takes
+  every declared user type that appears as `Vec<S>` in a type field, a signature, a `let` or a `vec_*` call, so a
+  `Vec<S>` struct field, an `inout Vec<S>` parameter and `vec_at_mut` on it run on LLVM with the Rust output and
+  allocation balance (tests r6e_22_vl_struct, r6e_22_vl_plain). Old rejects moved: r6e_7_vec_llvm now rejects
+  `map_remove` on LLVM. Left: an element with a `String` field still needs the Rust backend (the
+  existing LLVM limit on `String` struct fields, R-6e-3), and the checker's element rules are unchanged (`[i64]`
+  fields and enums with buffers are not vector elements on either backend).
+- 4.3d-H (design note only): map keys that borrow, `HashMap<&str, &Entry>`. Rust ties the map's lifetime to
+  the key and value owners. Proposed Pruv shape: `map<ref str, ref Entry> from(names, entries)`, a borrowing
+  map type whose `from(..)` owners follow R-6g9 (the map is a borrowing local: it cannot be returned past the
+  owners, stored in an owning struct, or live across a write to an owner). Keys hash and compare by content as
+  `str` keys do today; `map_get` gives `Option<ref Entry>` (a view, no copy). Rust prints
+  `HashMap<&str, &Entry>`; LLVM stores `{ptr, len}` key views and element pointers, and the map's drop frees
+  only its table. The verifier models it as today's map with view elements, plus the R-6g9 frame: a write to
+  an owner while the map is live is `type/borrow_conflict`. Not designed: borrowed keys of a map that also owns
+  values (mixed lifetimes), and `HashMap<&str, usize>` built from a loop over a slice of strings (needs the
+  slice element view `ref str` from `[String]`).

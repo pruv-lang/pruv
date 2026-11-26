@@ -1,9 +1,9 @@
 // spec: R-6e-2 reject
-// LG9: a `let mut` root now takes the R-6e-16 consuming form, so the reject case uses a plain `let` root
+// LG9: a `let mut` root now takes the R-6e-16 consuming form, and a `let` root a partial move (R-6g8-5), so the
+// reject case moves out of a struct `inout` parameter, which must get the field back
 struct Rec { id: i64, data: Vec<i64> }
 
-fn extract() -> Vec<i64> ! alloc {
-  let p: Rec = Rec { id: 7, data: vec_new::<i64>() };
+fn extract(inout p: Rec) -> Vec<i64> ! alloc {
   let w: Vec<i64> = move p.data;
   return move w;
 }

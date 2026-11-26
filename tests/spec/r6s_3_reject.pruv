@@ -1,7 +1,7 @@
 // spec: R-6s-3 reject
-// Moving a component out of a tuple consumes the tuple; a later read is a use after move.
+// Moving a component out of a tuple is a partial move; a later read of that component is a use after move.
 fn f() -> i64 ! alloc {
   let mut t: (String, i64) = (string_from("ab"), 3);
   let k: String = move t.0;
-  return len(k) + t.1;
+  return len(k) + len(t.0);
 }

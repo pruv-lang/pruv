@@ -1281,7 +1281,7 @@ must_reject|tests/must_reject/lg4_field_index_immutable.pruv	1 case: ok 1	parse=
 must_reject|tests/must_reject/lg4_field_index_oob.pruv	1 case: ok 1	parse=23803d8b71eb
 must_reject|tests/must_reject/lg4_field_index_u8_range.pruv	1 case: ok 1	parse=5ae8754b7595
 must_reject|tests/must_reject/lg4_move_array_field_nested.pruv	1 case: ok 1	parse=e8800ac57e04
-must_reject|tests/must_reject/lg4_move_array_field_no_restore.pruv	1 case: ok 1	parse=cdcb07a9bdba
+must_reject|tests/must_reject/lg4_move_array_field_no_restore.pruv	1 case: ok 1	parse=a32f4c7f72c7
 must_reject|tests/must_reject/lg5_copy_range_overlap_oob.pruv	1 case: ok 1	parse=9ccb7c3f945a
 must_reject|tests/must_reject/lg5_copy_range_self_idx_alias.pruv	1 case: ok 1	parse=fe731190b2e0
 must_reject|tests/must_reject/lg5_field_alloc_u8_range.pruv	1 case: ok 1	parse=298c01bca20f
@@ -1317,16 +1317,16 @@ must_reject|tests/must_reject/lg8_match_move_borrowed.pruv	1 case: ok 1	parse=ba
 must_reject|tests/must_reject/lg8_match_move_branch_binder.pruv	1 case: ok 1	parse=492c322efe9e
 must_reject|tests/must_reject/lg8_match_move_early_return.pruv	1 case: ok 1	parse=86dddaa14e7d
 must_reject|tests/must_reject/lg8_match_move_use_after.pruv	1 case: ok 1	parse=b2ae6e7e4f0c
-must_reject|tests/must_reject/lg8_move_field_consume_assert.pruv	1 case: ok 1	parse=dbc70be0ed6a
-must_reject|tests/must_reject/lg8_move_field_consume_branch.pruv	1 case: ok 1	parse=d83ecd189e7b
-must_reject|tests/must_reject/lg8_move_field_consume_use_after.pruv	1 case: ok 1	parse=54be024e82e9
+must_reject|tests/must_reject/lg8_move_field_consume_assert.pruv	1 case: ok 1	parse=fd49ce1b52e4
+must_reject|tests/must_reject/lg8_move_field_consume_branch.pruv	1 case: ok 1	parse=bf5b3913adca
+must_reject|tests/must_reject/lg8_move_field_consume_use_after.pruv	1 case: ok 1	parse=daec528cc3ba
 must_reject|tests/must_reject/lg8_move_field_map_take_binder.pruv	1 case: ok 1	parse=8e233e6d2e27
-must_reject|tests/must_reject/lg8_move_field_take_param.pruv	1 case: ok 1	parse=57e455fb7a4c
+must_reject|tests/must_reject/lg8_move_field_take_param.pruv	1 case: ok 1	parse=ffb8b0f2efe7
 must_reject|tests/must_reject/lg9_match_str_return_named.pruv	1 case: ok 1	parse=106f44b3e249
 must_reject|tests/must_reject/lg9_match_str_return_param.pruv	1 case: ok 1	parse=e199cfa33f08
 must_reject|tests/must_reject/lg9_move_field_arg_borrowed.pruv	1 case: ok 1	parse=1bca9813424c
 must_reject|tests/must_reject/lg9_move_field_arg_other_mention.pruv	1 case: ok 1	parse=691af163abc8
-must_reject|tests/must_reject/lg9_move_field_arg_use_after.pruv	1 case: ok 1	parse=9ba894cc5ba5
+must_reject|tests/must_reject/lg9_move_field_arg_use_after.pruv	1 case: ok 1	parse=d9f53854db87
 must_reject|tests/must_reject/lg9_utf8_ascii_partial.pruv	1 case: ok 1	parse=b9bba4b7332b
 must_reject|tests/must_reject/p1_add_overflow.pruv	1 case: ok 1	parse=b72642afe8f6
 must_reject|tests/must_reject/p1_bit_and.pruv	1 case: ok 1	parse=3e1ed02ee136
@@ -1425,7 +1425,7 @@ must_reject|tests/must_reject/p6_match_pattern.pruv	1 case: error parse/tuple_ma
 must_reject|tests/must_reject/p6_module.pruv	1 case: error parse/tuple_module 1	parse=ce738c2d0e53
 must_reject|tests/must_reject/p6_moved_reuse.pruv	1 case: ok 1	parse=a281888be939
 must_reject|tests/must_reject/p6_needs_type.pruv	1 case: error parse/tuple_needs_type 1	parse=e76e3fbe3e84
-must_reject|tests/must_reject/p6_partial_move.pruv	1 case: ok 1	parse=1f4c1a81fcae
+must_reject|tests/must_reject/p6_partial_move.pruv	1 case: ok 1	parse=673ec1dfc86c
 must_reject|tests/must_reject/p6_pattern_arity.pruv	1 case: error parse/tuple_pattern_type 1	parse=a201631b9cf8
 must_reject|tests/must_reject/p6_some_pattern.pruv	1 case: error parse/tuple_match_pattern 1	parse=33018cb138e7
 must_reject|tests/must_reject/p6_tuple_struct.pruv	1 case: error parse/tuple_struct 1	parse=b86ff98f6df0
@@ -2798,7 +2798,7 @@ mutate|tests/must_reject/lg4_field_index_immutable.pruv	6 cases: error parse/syn
 mutate|tests/must_reject/lg4_field_index_oob.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=79bda6b9dc50	1/parse=f1aefedd8e15	2/parse=5f2f9e699ed2	3/parse=f96ac0b19e36	4/parse=7a94212bd853	5/parse=625437757597
 mutate|tests/must_reject/lg4_field_index_u8_range.pruv	6 cases: error parse/syntax 4, error parse/string_character 1, ok 1	0/parse=ca21ff7718c6	1/parse=f5f1a0363a4d	2/parse=6bde4f912320	3/parse=1203f76ded6e	4/parse=4de0d9d9c0b8	5/parse=5da3c57f8b76
 mutate|tests/must_reject/lg4_move_array_field_nested.pruv	6 cases: error parse/syntax 6	0/parse=66919c45814f	1/parse=f09d70568870	2/parse=76538d6c4887	3/parse=fa89473a77f0	4/parse=39634ef6195b	5/parse=722e4891a8aa
-mutate|tests/must_reject/lg4_move_array_field_no_restore.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=c835286995b2	1/parse=2b54fe2f3788	2/parse=0a19e3a7d41b	3/parse=ec1a71685239	4/parse=5e2e2c199b95	5/parse=fbf920a861fa
+mutate|tests/must_reject/lg4_move_array_field_no_restore.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=c835286995b2	1/parse=2b54fe2f3788	2/parse=d11e4a91cfcd	3/parse=bf570c14d0f9	4/parse=5e2e2c199b95	5/parse=fbf920a861fa
 mutate|tests/must_reject/lg5_copy_range_overlap_oob.pruv	6 cases: error parse/syntax 6	0/parse=b3945e1ef7cb	1/parse=c9db7d49b997	2/parse=b3dd93be2717	3/parse=797ffa4982df	4/parse=d72047971c95	5/parse=2106c586d789
 mutate|tests/must_reject/lg5_copy_range_self_idx_alias.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=ee627d2dcd96	1/parse=4ee13167369d	2/parse=bda34d231d9b	3/parse=31fb7859f1db	4/parse=1d6cd991b631	5/parse=ff37ee009d3a
 mutate|tests/must_reject/lg5_field_alloc_u8_range.pruv	6 cases: error parse/syntax 6	0/parse=5f1de1de4950	1/parse=fdbd17cc4af7	2/parse=6f2f5528e23e	3/parse=57f3cc94e7e5	4/parse=db4b32902d86	5/parse=a8392cdb7e7b
@@ -2834,16 +2834,16 @@ mutate|tests/must_reject/lg8_match_move_borrowed.pruv	6 cases: error parse/synta
 mutate|tests/must_reject/lg8_match_move_branch_binder.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=c0d8eb085c56	1/parse=2c14c03a5873	2/parse=51fbe7b83e44	3/parse=b2e0f84fe04a	4/parse=505e8003460a	5/parse=492c322efe9e
 mutate|tests/must_reject/lg8_match_move_early_return.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=ef047275e69b	1/parse=2e55ea6461d7	2/parse=ca1102898b03	3/parse=59863c71afb4	4/parse=86dddaa14e7d	5/parse=93581b2cf664
 mutate|tests/must_reject/lg8_match_move_use_after.pruv	6 cases: error parse/syntax 4, error parse/reserved_name 1, ok 1	0/parse=032c4f079072	1/parse=0b9212c1a4b3	2/parse=9e31c22df447	3/parse=4c51f67d0d23	4/parse=74aef509ad74	5/parse=b2ae6e7e4f0c
-mutate|tests/must_reject/lg8_move_field_consume_assert.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=3fec3a3a4ad8	1/parse=d2c5d48490a0	2/parse=2a7637d4b667	3/parse=dbc70be0ed6a	4/parse=7a6a983b0246	5/parse=dbc70be0ed6a
-mutate|tests/must_reject/lg8_move_field_consume_branch.pruv	6 cases: error parse/syntax 3, ok 2, error parse/bad_int 1	0/parse=65c79eb5b9d8	1/parse=d83ecd189e7b	2/parse=74b02f2562ab	3/parse=1e4a94d946b3	4/parse=ee2352f9fd2c	5/parse=ff44559d6fbe
-mutate|tests/must_reject/lg8_move_field_consume_use_after.pruv	6 cases: ok 3, error parse/syntax 2, error parse/string_character 1	0/parse=c68a6b347288	1/parse=54be024e82e9	2/parse=54be024e82e9	3/parse=ecb6a5c3c36c	4/parse=d701ba68b692	5/parse=54be024e82e9
+mutate|tests/must_reject/lg8_move_field_consume_assert.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=57f3cc94e7e5	1/parse=93af668374a5	2/parse=760c3e78743f	3/parse=fd49ce1b52e4	4/parse=3b7ef195599d	5/parse=fd49ce1b52e4
+mutate|tests/must_reject/lg8_move_field_consume_branch.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=076cee7d63a2	1/parse=bf5b3913adca	2/parse=c4d5fe9ff55e	3/parse=b22c33f7cea9	4/parse=ee2352f9fd2c	5/parse=e1adfdaf95bb
+mutate|tests/must_reject/lg8_move_field_consume_use_after.pruv	6 cases: ok 3, error parse/char_literal 1, error parse/string_character 1, error	0/parse=0349b25fb9f0	1/parse=daec528cc3ba	2/parse=daec528cc3ba	3/parse=ecb6a5c3c36c	4/parse=2ce70ccab869	5/parse=daec528cc3ba
 mutate|tests/must_reject/lg8_move_field_map_take_binder.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=df461efd8644	1/parse=8e233e6d2e27	2/parse=0a8086e9ad70	3/parse=a11379ad8f6a	4/parse=70ea1ec9788b	5/parse=c89ae2ca5b54
 mutate|tests/must_reject/lg8_move_field_take_param.pruv	6 cases: error parse/syntax 6	0/parse=c60739475fe3	1/parse=6deb85d3133b	2/parse=262661707aa9	3/parse=28c7ddcfad56	4/parse=4f0256022566	5/parse=8137ba1b58ae
 mutate|tests/must_reject/lg9_match_str_return_named.pruv	6 cases: ok 3, error parse/syntax 2, error parse/bad_char 1	0/parse=106f44b3e249	1/parse=aa839988aedd	2/parse=123f0f507614	3/parse=ee2352f9fd2c	4/parse=8773d9e401b8	5/parse=ee2352f9fd2c
 mutate|tests/must_reject/lg9_match_str_return_param.pruv	6 cases: error parse/syntax 3, error parse/bad_char 2, ok 1	0/parse=443b4fe77c50	1/parse=14ab851b0b43	2/parse=e2dac913ba7e	3/parse=c7d955c60cae	4/parse=ee2352f9fd2c	5/parse=948e6dc166d9
 mutate|tests/must_reject/lg9_move_field_arg_borrowed.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=096090bdc215	1/parse=ee2352f9fd2c	2/parse=f1dc5128d222	3/parse=8f0f37efca53	4/parse=fc6d5e1a4dfb	5/parse=1bca9813424c
 mutate|tests/must_reject/lg9_move_field_arg_other_mention.pruv	6 cases: ok 5, error parse/syntax 1	0/parse=ee2352f9fd2c	1/parse=e542065dfd02	2/parse=ee2352f9fd2c	3/parse=ee2352f9fd2c	4/parse=691af163abc8	5/parse=691af163abc8
-mutate|tests/must_reject/lg9_move_field_arg_use_after.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=0e12b56faccb	1/parse=47804e60396f	2/parse=9ba894cc5ba5	3/parse=e9941a68d8d7	4/parse=cf636350093c	5/parse=1e0e2b5b70d2
+mutate|tests/must_reject/lg9_move_field_arg_use_after.pruv	6 cases: error parse/syntax 4, error parse/foreign_syntax 1, ok 1	0/parse=123f0f507614	1/parse=8cfaf1707b70	2/parse=d9f53854db87	3/parse=36fabc5df6e4	4/parse=47f0f498d605	5/parse=88443d980b0a
 mutate|tests/must_reject/lg9_utf8_ascii_partial.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=5bcc47df88cb	1/parse=5e591e0a4e79	2/parse=4e7d6c027107	3/parse=ee2352f9fd2c	4/parse=96786caf6ff9	5/parse=00fa1f956d42
 mutate|tests/must_reject/p1_add_overflow.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=5661eb230056	1/parse=9252dfff655e	2/parse=b72642afe8f6	3/parse=32568da2f3e3	4/parse=b72642afe8f6	5/parse=407ac6ad3b30
 mutate|tests/must_reject/p1_bit_and.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=51f38a5c9738	1/parse=aec0df2e85a3	2/parse=8b8b17faf803	3/parse=eae47c6d467c	4/parse=3e1ed02ee136	5/parse=3e1ed02ee136
@@ -2942,7 +2942,7 @@ mutate|tests/must_reject/p6_match_pattern.pruv	6 cases: error parse/syntax 4, er
 mutate|tests/must_reject/p6_module.pruv	6 cases: error parse/syntax 6	0/parse=093b41098be2	1/parse=dbafe2404b50	2/parse=ef6854ac717d	3/parse=92420e7f9f68	4/parse=605b877a9c7f	5/parse=83f28f55e6b0
 mutate|tests/must_reject/p6_moved_reuse.pruv	6 cases: error parse/syntax 3, error parse/reserved_name 1, error parse/string_c	0/parse=519a2b84d034	1/parse=81687b1eeeef	2/parse=a25fd8d5974d	3/parse=e9880f0c3e54	4/parse=9c2fd1d349b4	5/parse=219827a9b1d7
 mutate|tests/must_reject/p6_needs_type.pruv	6 cases: error parse/tuple_needs_type 3, error parse/syntax 2, error parse/bad_c	0/parse=e76e3fbe3e84	1/parse=3a3f629c065a	2/parse=f234bfb6eafd	3/parse=e76e3fbe3e84	4/parse=e76e3fbe3e84	5/parse=fa447e507a3e
-mutate|tests/must_reject/p6_partial_move.pruv	6 cases: error parse/syntax 4, error parse/bad_int 1, error parse/string_charact	0/parse=3887031fa37b	1/parse=a23ad6291269	2/parse=1ec280179864	3/parse=b3dbc04ff176	4/parse=7c4f888a2825	5/parse=942f03c43a81
+mutate|tests/must_reject/p6_partial_move.pruv	6 cases: error parse/syntax 4, error parse/bad_int 1, error parse/string_charact	0/parse=0776ef0a6197	1/parse=a23ad6291269	2/parse=1ec280179864	3/parse=b3dbc04ff176	4/parse=7c4f888a2825	5/parse=942f03c43a81
 mutate|tests/must_reject/p6_pattern_arity.pruv	6 cases: error parse/syntax 4, error parse/tuple_pattern_type 2	0/parse=a201631b9cf8	1/parse=7ffbaef62bf5	2/parse=f43a13cb9095	3/parse=7956e7fc4146	4/parse=845c9376530c	5/parse=a201631b9cf8
 mutate|tests/must_reject/p6_some_pattern.pruv	6 cases: error parse/syntax 4, error parse/bad_int 1, error parse/tuple_match_pa	0/parse=33018cb138e7	1/parse=80bbb53053b8	2/parse=6b7b6a3f331c	3/parse=49f3bc176910	4/parse=5dda76b2b2ca	5/parse=a47e8935e43f
 mutate|tests/must_reject/p6_tuple_struct.pruv	6 cases: error parse/tuple_struct 4, error parse/syntax 2	0/parse=b86ff98f6df0	1/parse=f4d613128434	2/parse=b86ff98f6df0	3/parse=4057631d2578	4/parse=b8861b7294fa	5/parse=b86ff98f6df0

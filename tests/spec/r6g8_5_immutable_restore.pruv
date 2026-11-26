@@ -1,0 +1,19 @@
+// spec: R-6g8-5 reject
+// Restoring a field of an immutable local is an assignment to it (Rust E0594).
+struct Iso { text: [u8], n: i64, tag: [u8] }
+
+fn mk(x: i64) -> Iso ! alloc
+  requires 0 <= x && x <= 100
+  ensures result.n == x
+{
+  let a: [u8] = alloc(3, 1);
+  let b: [u8] = alloc(2, 2);
+  return Iso { text: move a, n: x, tag: move b };
+}
+
+pub fn f() -> i64 ! alloc {
+  let s: Iso = mk(4);
+  let t: [u8] = move s.text;
+  s.text = move t;
+  return s.n;
+}

@@ -4065,7 +4065,8 @@ impl Checker {
         }
         self.check_borrow(m.line, m.col, &m.name, &m.fields)?;
         let source = self.lookup(m.line, m.col, &m.name, scope, &m.fields)?;
-        if !((source.kind == "local" && source.mutable) || source.kind == "take") || self.arm_binders.contains(&m.name) {
+        // L-gaps M (R-6g8-5): an immutable local is a move source too (a Rust partial move)
+        if !(source.kind == "local" || source.kind == "take") || self.arm_binders.contains(&m.name) {
             return Ok(None);
         }
         let mut ty = source.ty.clone();
@@ -4105,7 +4106,7 @@ impl Checker {
         if typed
             && !restored
             && target.is_none()
-            && ((((source.kind == "local" && source.mutable) || source.kind == "take")
+            && (((source.kind == "local" || source.kind == "take") // L-gaps M (R-6g8-5): immutable local too
                 && !self.arm_binders.contains(&m.name))
                 // LB9 (R-6g8-4): or a struct binder of a consuming match (the arm owns the payload; see Match)
                 || (source.kind == "local" && self.match_movable.contains(&m.name)))
@@ -4114,6 +4115,11 @@ impl Checker {
             // callee owns; LG9 G-LG8-1: any owned buffer field type, any field path) consumes d; foreign.rs marks d
             // moved
             return Ok(Some((m.line, m.col)));
+        }
+        if restored && typed && target.is_none() && !source.mutable && source.kind == "local" {
+            // L-gaps M (R-6g8-5): restoring a field of an immutable local is an assignment to it (Rust E0594)
+            let Some(Stmt::FieldAssign(r)) = next else { unreachable!() };
+            return Err(terr(r.line, r.col, "immutable", format!("{} is not mutable", m.name), Self::immutable_fix(source.kind)));
         }
         if !(source.mutable || matches!(source.kind, "inout" | "map_inout"))
             || !typed
@@ -4409,8 +4415,10 @@ impl Checker {
                         "dereference requires a mutable scalar or record collection binder", ""));
                 }
                 let array_inout = v.kind == "inout" && v.ty.is_array();
+                // IW: a struct inout parameter is the caller's storage, so `x = e` replaces it whole (Rust `*x = e`)
+                let struct_inout = v.kind == "inout" && !s.deref && self.is_struct(&v.ty);
                 let for_step = self.for_steps.iter().any(|(l, c, n)| (*l, *c) == (s.line, s.col) && *n == s.name);
-                if !(v.mutable || scalar_binder || record_binder || scalar_inout || array_inout || for_step) {
+                if !(v.mutable || scalar_binder || record_binder || scalar_inout || array_inout || struct_inout || for_step) {
                     if self.for_steps.iter().any(|(_, _, n)| *n == s.name) {
                         return Err(terr(s.line, s.col, "immutable",
                             format!("the for loop variable {} cannot be assigned in the loop body", s.name),
@@ -4578,7 +4586,7 @@ impl Checker {
                     self.field_move_out(&s.value, &cur, Some((&s.name, &s.fields)), scope, next)?
                 };
                 if !v.mutable && !matches!(v.kind, "inout" | "map_inout") {
-                    if let Some(m) = first_field_move(&s.value) {
+                    if let Some(m) = first_field_move(&s.value).filter(|m| m.name != s.name) {
                         self.check_borrow(m.line, m.col, &m.name, &m.fields)?;
                         self.lookup(m.line, m.col, &m.name, scope, &m.fields)?;
                         return Err(field_move_error(m));

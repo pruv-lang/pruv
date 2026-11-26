@@ -1,11 +1,6 @@
 // spec: R-6e-7 reject
-struct Rec { hits: i64 }
-
-fn f(i: i64) -> i64 ! alloc {
-  let mut v: Vec<Rec> = vec_new::<Rec>();
-  match vec_at_mut::<Rec>(inout v, i) {
-    Some(r) => { r.hits = 1; }
-    None => { }
-  }
-  return len(v);
+// map_remove requires the Rust backend; vec_at_mut on Vec<S> runs on LLVM (R-6e-22).
+fn f(k: i64) -> bool ! alloc {
+  let mut m: HashMap<i64, i64> = map_insert::<i64, i64>(map_new::<i64, i64>(), k, 42);
+  return map_remove::<i64, i64>(inout m, k);
 }

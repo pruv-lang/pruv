@@ -1,0 +1,4 @@
+{
+  "gen_contains": ["*c = "],
+  "run": {"exit": 0, "flags_matrix": [[], ["--no-verify"]], "stdout_lines": ["1361"], "alloc_balance": true}
+}

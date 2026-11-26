@@ -1269,7 +1269,7 @@ must_reject|must_reject/lg4_field_index_immutable.pruv	2 cases: exit 2	llvm=c87c
 must_reject|must_reject/lg4_field_index_oob.pruv	2 cases: exit 2	llvm=ad67d3b33dac	rust=ad67d3b33dac
 must_reject|must_reject/lg4_field_index_u8_range.pruv	2 cases: exit 2	llvm=45fb821a9e5a	rust=45fb821a9e5a
 must_reject|must_reject/lg4_move_array_field_nested.pruv	2 cases: exit 2	llvm=7096ddafece2	rust=7096ddafece2
-must_reject|must_reject/lg4_move_array_field_no_restore.pruv	2 cases: exit 2	llvm=49e00f63685a	rust=49e00f63685a
+must_reject|must_reject/lg4_move_array_field_no_restore.pruv	2 cases: exit 2	llvm=339ac3b999b2	rust=339ac3b999b2
 must_reject|must_reject/lg5_copy_range_overlap_oob.pruv	2 cases: exit 2	llvm=0fec02241a11	rust=0fec02241a11
 must_reject|must_reject/lg5_copy_range_self_idx_alias.pruv	2 cases: exit 2	llvm=cae541ea1943	rust=cae541ea1943
 must_reject|must_reject/lg5_field_alloc_u8_range.pruv	2 cases: exit 2	llvm=554d229e7387	rust=554d229e7387
@@ -1305,16 +1305,16 @@ must_reject|must_reject/lg8_match_move_borrowed.pruv	2 cases: exit 2	llvm=7f695f
 must_reject|must_reject/lg8_match_move_branch_binder.pruv	2 cases: exit 2	llvm=60d99da1b767	rust=60d99da1b767
 must_reject|must_reject/lg8_match_move_early_return.pruv	2 cases: exit 2	llvm=a327200e4fb3	rust=a327200e4fb3
 must_reject|must_reject/lg8_match_move_use_after.pruv	2 cases: exit 2	llvm=38c2ec0cd318	rust=38c2ec0cd318
-must_reject|must_reject/lg8_move_field_consume_assert.pruv	2 cases: exit 2	llvm=e766cc05d8bc	rust=e766cc05d8bc
-must_reject|must_reject/lg8_move_field_consume_branch.pruv	2 cases: exit 2	llvm=523667a49fb6	rust=523667a49fb6
-must_reject|must_reject/lg8_move_field_consume_use_after.pruv	2 cases: exit 2	llvm=e766cc05d8bc	rust=e766cc05d8bc
+must_reject|must_reject/lg8_move_field_consume_assert.pruv	2 cases: exit 2	llvm=9b0edc51a740	rust=9b0edc51a740
+must_reject|must_reject/lg8_move_field_consume_branch.pruv	2 cases: exit 2	llvm=7bb0b39933f7	rust=7bb0b39933f7
+must_reject|must_reject/lg8_move_field_consume_use_after.pruv	2 cases: exit 2	llvm=9b0edc51a740	rust=9b0edc51a740
 must_reject|must_reject/lg8_move_field_map_take_binder.pruv	2 cases: exit 2	llvm=a2b7b6a5e960	rust=a2b7b6a5e960
-must_reject|must_reject/lg8_move_field_take_param.pruv	2 cases: exit 2	llvm=110f98a7041e	rust=110f98a7041e
+must_reject|must_reject/lg8_move_field_take_param.pruv	2 cases: exit 2	llvm=f64cb5a6d9e4	rust=f64cb5a6d9e4
 must_reject|must_reject/lg9_match_str_return_named.pruv	2 cases: exit 2	llvm=33ead805d8b5	rust=33ead805d8b5
 must_reject|must_reject/lg9_match_str_return_param.pruv	2 cases: exit 2	llvm=b225ba52e34a	rust=b225ba52e34a
 must_reject|must_reject/lg9_move_field_arg_borrowed.pruv	2 cases: exit 2	llvm=ea29717b2412	rust=ea29717b2412
 must_reject|must_reject/lg9_move_field_arg_other_mention.pruv	2 cases: exit 2	llvm=6e8fd7281beb	rust=6e8fd7281beb
-must_reject|must_reject/lg9_move_field_arg_use_after.pruv	2 cases: exit 2	llvm=a1d08b563914	rust=a1d08b563914
+must_reject|must_reject/lg9_move_field_arg_use_after.pruv	2 cases: exit 2	llvm=af929059b4a1	rust=af929059b4a1
 must_reject|must_reject/lg9_utf8_ascii_partial.pruv	2 cases: exit 2	llvm=25668fcdaef2	rust=25668fcdaef2
 must_reject|must_reject/p1_add_overflow.pruv	2 cases: exit 2	llvm=bbdc5f856ac9	rust=bbdc5f856ac9
 must_reject|must_reject/p1_bit_and.pruv	2 cases: exit 2	llvm=1fca1e362b66	rust=1fca1e362b66
@@ -1413,7 +1413,7 @@ must_reject|must_reject/p6_match_pattern.pruv	2 cases: exit 2	llvm=af91daa383dc	
 must_reject|must_reject/p6_module.pruv	2 cases: exit 2	llvm=8ee7a7403815	rust=8ee7a7403815
 must_reject|must_reject/p6_moved_reuse.pruv	2 cases: exit 2	llvm=725f92d8a44a	rust=725f92d8a44a
 must_reject|must_reject/p6_needs_type.pruv	2 cases: exit 2	llvm=8aedff9198e3	rust=8aedff9198e3
-must_reject|must_reject/p6_partial_move.pruv	2 cases: exit 2	llvm=49d3809e7298	rust=49d3809e7298
+must_reject|must_reject/p6_partial_move.pruv	2 cases: exit 2	llvm=6383c0864342	rust=6383c0864342
 must_reject|must_reject/p6_pattern_arity.pruv	2 cases: exit 2	llvm=56ade1657c01	rust=56ade1657c01
 must_reject|must_reject/p6_some_pattern.pruv	2 cases: exit 2	llvm=c2b71eb23774	rust=c2b71eb23774
 must_reject|must_reject/p6_tuple_struct.pruv	2 cases: exit 2	llvm=8f6b3bfa9b9c	rust=8f6b3bfa9b9c
@@ -2634,9 +2634,9 @@ runtime|runtime/lg25_str_view [default]	2 cases: exit 2	llvm=94ef010a7045	rust=b
 runtime|runtime/lg26_utf8_span [--no-verify]	2 cases: exit 2	llvm=c6d7caab84aa	rust=7e076ddfb22d
 runtime|runtime/lg26_utf8_span [--trust-callers]	2 cases: exit 2	llvm=dc17a7b24a87	rust=c505fc90bce5
 runtime|runtime/lg26_utf8_span [default]	2 cases: exit 2	llvm=3a1ee20f7314	rust=2ec885ce17b1
-runtime|runtime/lg27_elem_inv [--no-verify]	2 cases: exit 2	llvm=3963dac63dc9	rust=26a9014ddf97
-runtime|runtime/lg27_elem_inv [--trust-callers]	2 cases: exit 2	llvm=3963dac63dc9	rust=d93f8915828e
-runtime|runtime/lg27_elem_inv [default]	2 cases: exit 2	llvm=3963dac63dc9	rust=4d624d3ee07e
+runtime|runtime/lg27_elem_inv [--no-verify]	2 cases: exit 2	llvm=98cec94fc50e	rust=26a9014ddf97
+runtime|runtime/lg27_elem_inv [--trust-callers]	2 cases: exit 2	llvm=f54923ba9afd	rust=d93f8915828e
+runtime|runtime/lg27_elem_inv [default]	2 cases: exit 2	llvm=c5ad70dfc5c3	rust=4d624d3ee07e
 runtime|runtime/lg27_string_to_str_w [--no-verify]	2 cases: exit 2	llvm=5fb7a42b4d80	rust=bdd3cf9beb1c
 runtime|runtime/lg27_string_to_str_w [--trust-callers]	2 cases: exit 2	llvm=10d3a68a9880	rust=6cd1fca9f7d7
 runtime|runtime/lg27_string_to_str_w [default]	2 cases: exit 2	llvm=7d876e5f36bd	rust=32f58cb71b43
@@ -2653,10 +2653,10 @@ runtime|runtime/lg30_opq_guard [default]	2 cases: exit 2	llvm=5fab217a31fe	rust=
 runtime|runtime/lg30_utf8_after_ascii [--no-verify]	2 cases: exit 2	llvm=c3478ba07e89	rust=12e0957a9e3d
 runtime|runtime/lg30_utf8_after_ascii [--trust-callers]	2 cases: exit 2	llvm=a88eeb630fff	rust=8a575910b215
 runtime|runtime/lg30_utf8_after_ascii [default]	2 cases: exit 2	llvm=9b5803574df5	rust=30f17c781ac9
-runtime|runtime/lg31_push_frame [--infer]	2 cases: exit 2	llvm=64856fa4728e	rust=73c69c40c657
-runtime|runtime/lg31_push_frame [--no-verify]	2 cases: exit 2	llvm=64856fa4728e	rust=747db44efbbf
-runtime|runtime/lg31_push_frame [--trust-callers]	2 cases: exit 2	llvm=64856fa4728e	rust=cd938628657d
-runtime|runtime/lg31_push_frame [default]	2 cases: exit 2	llvm=64856fa4728e	rust=73c69c40c657
+runtime|runtime/lg31_push_frame [--infer]	2 cases: exit 2	llvm=757980757c51	rust=73c69c40c657
+runtime|runtime/lg31_push_frame [--no-verify]	2 cases: exit 2	llvm=9c97375f0eab	rust=747db44efbbf
+runtime|runtime/lg31_push_frame [--trust-callers]	2 cases: exit 2	llvm=b63ac6126981	rust=cd938628657d
+runtime|runtime/lg31_push_frame [default]	2 cases: exit 2	llvm=757980757c51	rust=73c69c40c657
 runtime|runtime/lg33_rt_move [--no-verify]	2 cases: exit 2	llvm=d506cb916ebe	rust=175189ee3164
 runtime|runtime/lg33_rt_move [default]	2 cases: exit 2	llvm=012f0cda46f2	rust=523f2d4d749f
 runtime|runtime/lg34_rt_field_regrow [--no-verify]	2 cases: exit 2	llvm=7666eaba323e	rust=7ad276e37ca4

@@ -908,7 +908,8 @@ fn tree_count(t: Tree) -> i64
   element type is an owned aggregate struct; R-6e-10 extends this to every supported vector element type.
   Other collection types stay `type/inout_type`. Rust emits `match P.get_mut(<usize as ::std::convert::TryFrom<i64>>::try_from(i).unwrap_or(usize::MAX))`, so no target truncates `i` (the qualified `TryFrom` path compiles in every Rust edition). The verifier selects `Some` when
   `0 <= i < len(P)` and writes the final binder back to that index with unchanged length.
-  These operations and the new collection types require the Rust backend.
+  `map_remove` and the new map types require the Rust backend; `vec_at_mut` and `Vec<S>` run on LLVM for the
+  element types of R-6e-22 (an element with a `String` field is `codegen/unsupported_type` there).
 - R-6e-8 **Disjoint field borrows.** Inside the `Some` arm of `map_get_mut` or `vec_at_mut` on the field
   path `P = x.f1...fn`, the arm may use any other field path `x.g1...gm` of the same root that is
   disjoint from `P`: neither path is a prefix of the other. It may read and assign it, pass it as an
@@ -1067,14 +1068,16 @@ fn tree_count(t: Tree) -> i64
   For example, `let t: String = move p.f; p.f = move p.g; p.g = move t;` swaps two fields.
   Consuming form (G-R09-4, extended by LG9 G-LG8-1/G-LG8-3): `let t: T = move d.f;` of any field type this rule
   moves (`String`, `Vec<i64>`, `Vec<bool>`, `[i64]`, `[u8]`, `[bool]`), at any nested struct field path, may stand
-  without a restore when `d` is a `let mut` local record or a `take` record parameter (which the callee owns). The
+  without a restore when `d` is a `let` local record (since R-6g8-5 also an immutable one) or a `take` record
+  parameter (which the callee owns). The
   same holds for `f(move d.f)` as a `let` initializer, a call statement or a `return` value when the field move is
   the direct argument of a `take` parameter of `f`, it is the only field move of the call, and no other argument
   names `d` (otherwise the field move keeps its non-consuming errors, e.g. `type/array_alias` for
   `let n = f(move d.a, d.n);`, while `return f(move d.a, d.n);` gives `type/foreign_move` from the return check). The consuming form on a match binder (also a `map_take` binder) and on a plain or `inout` root stays
-  `type/foreign_move`. It moves `d` wholly: a later use of `d` is
-  `type/foreign_move` "use after move" ("binding may have been moved" on some
-  paths, `type/foreign_loop_move` for a loop that does not restore it); assigning `d` again revives it. A restore in the
+  `type/foreign_move`. It moves the field out of `d` (a partial move, R-6g8-5): a later use of that field or of
+  `d` whole is `type/foreign_move` "use after move" ("binding may have been moved" on some
+  paths, `type/foreign_loop_move` for a loop that does not restore it), the other fields stay usable, and
+  assigning the field or `d` again revives it. A restore in the
   next statement keeps the form above. `p.g = move p.f;` and moves from `inout` and plain roots keep
   the errors below. Rust emits `::std::mem::take(&mut d.f)` (the root is declared `mut`, also for a `take`
   parameter). LLVM lowers buffer fields at any path as above; `String`/`Vec` fields need the Rust backend.
@@ -1180,6 +1183,16 @@ fn tree_count(t: Tree) -> i64
   Tests: [accept LLVM tree](tests/spec/r6e_21_llvm_tree.pruv),
   [reject host entry](tests/spec/r6e_21_host_entry.pruv); measurements and the test table in
   [L3_LB3](docs/L3_LB3.md).
+- R-6e-22 **Vectors of plain structs on LLVM (L-gaps VL).** The native vector of R-6e-21 also holds a declared
+  non-recursive struct or enum `S`, wherever `Vec<S>` occurs: a struct field, a parameter (including `inout`), a
+  result, a `let`, or a `vec_new` / `vec_push` / `vec_get` / `vec_at_mut` call, for every element type the checker
+  admits as a vector element (a plain value, or an owned aggregate with `[u8]` buffers or `Vec<i64>` / `Vec<bool>`
+  handles); each element is dropped with its owned fields when the vector
+  is dropped or replaced, and a field assignment through `vec_at_mut` drops the old field value. Output and the
+  allocation balance match the Rust backend. An element type with a `String` field stays a Rust-backend type
+  (`codegen/unsupported_type`, as in R-6e-3). Tests: [accept field, inout and vec_at_mut](tests/spec/r6e_22_vl_struct.pruv),
+  [accept handle field, plain enum and copy struct](tests/spec/r6e_22_vl_plain.pruv),
+  [reject String element field](tests/spec/r6e_22_vl_string.pruv).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate (the one exception: R-6e-12a moves an array binder out of a consumed scrutinee). Putting an existing value into an owning place (`let`, assignment, constructor field,
@@ -1365,7 +1378,7 @@ set_at(inout w, 0, 7);
   `copy_range`, `store_be`, `store_le`, `arr_reserve`, `arr_push` and `arr_append` require whole expression statements.
 - R-6g-2 **Struct inout parameters.** `inout x: S` is allowed for a non-generic struct `S`, emitted as
   `x: &mut S`. The callee may assign fields of `x` (also nested), use R-6e-2 on `x.f`, pass `x.f` to
-  `map_get_mut` and forward `inout x`. Whole reassignment `x = e` is `type/immutable`. A generic struct is
+  `map_get_mut`, forward `inout x` and replace `x` whole under R-6g-13. A generic struct is
   `type/inout_type`. The caller passes `inout y` for a `let mut` local or `inout` parameter `y`, with the alias
   rules for arrays. `old(x)` and `old(x.f)` give the entry value (LG22). After the call the caller
   knows only the callee's `ensures` about `y`, with one frame rule (LG5): the caller keeps `len` of every array
@@ -1377,6 +1390,16 @@ set_at(inout w, 0, 7);
   `p.b = alloc(2, true)` for a `[bool]` field; `alloc(3, 300)` for a `[u8]` field is `verify/elem_range`).
   Tests: `tests/runtime/lg5_rt_struct_len_frame.pruv`, `tests/runtime/lg5_rt_field_alloc_hint.pruv`,
   `tests/must_reject/lg5_struct_len_changed.pruv`, `tests/must_reject/lg5_field_alloc_u8_range.pruv`.
+- R-6g-13 **Whole assignment of a struct `inout` parameter (IW).** `x = e;` on `inout x: S` (S a non-generic
+  struct) stores the value of `e` into the caller's storage, as a field assignment does for one field: Rust emits
+  `*x = e;`, LLVM evaluates `e` completely, drops the old value (its owned buffers and collections) and stores the new
+  one through the parameter pointer. `e` follows the ordinary struct assignment rules (a constructor, call result,
+  `move` of an owned local, or a value whose array fields come from `copy`, `alloc`, a call or a move) and may read
+  `x`. The verifier writes the new value to `x`, so `ensures` see it and `old(x)` keeps the entry value; the LG5
+  frame of R-6g-2 treats the statement as a change of every array field, so after the call the caller knows `x`
+  only from the callee's `ensures`. `*x = e` stays the collection binder form (`type/type_mismatch`).
+  Tests: `tests/spec/r6g_13_iw_whole.pruv` (runtime, both backends), `tests/spec/r6g_13_iw_frame.pruv`,
+  `tests/spec/r6g_13_iw_post.pruv`, `tests/spec/r6g_13_iw_deref.pruv`.
 - R-6g-3 **Inout field paths.** A user call may pass `inout x.f1...fn` with at least one field.
   The root must be a `let mut` local, an `inout` parameter, or the mutable binder of a
   `map_get_mut` or `vec_at_mut` `Some` arm. The field type must exactly match the parameter type.
@@ -1743,14 +1766,36 @@ borrowed value is live.
   [no alloc](tests/spec/r6g8_3_static_effect.pruv), [owned](tests/spec/r6g9_3_owned_still_allocs.pruv).
 - R-6g8-4 **Field moves out of a consuming match binder.** In a consuming match (R-6e-16: the scrutinee
   is an owned `let` local and no arm names it again), a binder whose payload type is a struct may give up
-  one field with `let t = move b.f;`. As with G-R09-4, the move consumes the binder (and so the scrutinee):
-  any later use of `b` in that arm is `type/foreign_move` (a move on only some paths leaves `b` maybe moved),
+  one field with `let t = move b.f;`. As with G-R09-4 the move is a partial move (R-6g8-5): a later use of
+  `b.f` or of `b` whole in that arm is `type/foreign_move` (a move on only some paths leaves it maybe moved),
+  the other fields of `b` stay readable,
   `return move b.f` is still refused, and a whole `move b` stays refused (`type/foreign_move`). A binder of a match that is not consuming keeps the R-6e-16 rule. Rust emits the
   partial move `let t = b.f;` with no `Clone` and no `mem::take`, as hand Rust writes `Ok(doc) => doc.tape`;
   LLVM moves the field out of the payload slot and empties it, with no `@pruv_copy`.
   Tests: [field](tests/spec/r6g8_4_binder_field.pruv), [use after](tests/spec/r6g8_4_binder_after.pruv),
   [return](tests/spec/r6g8_4_binder_return.pruv), [named scrutinee](tests/spec/r6g8_4_binder_named.pruv),
   [branch](tests/spec/r6g8_4_binder_branch.pruv), [whole move](tests/spec/r6g8_4_binder_whole.pruv).
+- R-6g8-5 **Partial moves (L-gaps M).** A consuming field move (G-R09-4: `let t = move s.f;` or the single
+  `f(move s.f)` take argument, with no restore in the next statement) may take from an immutable `let` local
+  record as well as a `let mut` one, a `take` parameter or a consuming-match binder, as Rust's partial move
+  `let t = s.f;`. It moves only the path `s.f`, not `s`: afterwards a read or move of `s.f` (or a path under
+  it), and any use of `s` whole (a read argument, `inout s`, `move s`, `return s`), is
+  `type/foreign_move` "use after move"; a proof clause is checked after its calls are expanded, so it conflicts
+  only where it reads the moved path; reads, moves and writes of the other fields (`s.n`, `s.g`, `s.f2.h` when
+  `f2` is not `f`) stay legal. Assigning `s.f` (or `s` whole) revives it; for an immutable `let` source that assignment is `type/immutable`. A field moved on only some paths is
+  maybe moved after the join ("binding may have been moved"); a field of an outer record moved in a loop body
+  and not reassigned by the end of every path of the body and before every `continue` (labeled too) is
+  `type/foreign_loop_move`. `s.g[i] = v` needs only `s.g`. A match binder's moved fields end with its arm. Moves from `inout` and
+  plain parameters keep their errors. Rust emits `::std::mem::take(&mut s.f)` and declares an immutable source
+  `let mut s` (a match binder keeps the real move `let t = b.f;`); LLVM moves the field out and empties its slot,
+  and the scope-end drop of `s` frees the other fields once (the emptied slot frees nothing).
+  Tests: [accept](tests/spec/r6g8_5_partial_move.pruv) (runtime on both backends, allocation balance),
+  [whole after](tests/spec/r6g8_5_whole_after.pruv), [field after](tests/spec/r6g8_5_field_after.pruv),
+  [maybe](tests/spec/r6g8_5_maybe.pruv), [read whole](tests/spec/r6g8_5_read_whole.pruv),
+  [loop](tests/spec/r6g8_5_loop.pruv), [continue](tests/spec/r6g8_5_continue.pruv),
+  [labeled continue](tests/spec/r6g8_5_labeled_continue.pruv), [inout whole](tests/spec/r6g8_5_inout_whole.pruv),
+  [immutable restore](tests/spec/r6g8_5_immutable_restore.pruv), [proof clause field](tests/spec/r6g8_5_proof_field.pruv),
+  [binder again](tests/spec/r6g8_5_binder_again.pruv) (runtime on both backends).
 
 ## 6g9. Borrows past one call (B bundle)
 
@@ -1873,7 +1918,8 @@ borrowed value is live.
     structs. A value that moves a root it borrows (`p = Parser { input: subview(x, 1, 3), tape: move x, .. }`) is
     `type/borrow_conflict`, as for a `let`. A place binding of an owned field (`let d = inout u.pos;`) uses `u`, so
     `u`'s borrow is live before it. The cost is the R-6g9-4 bound: one extra kill bit per assignment.
-  - *Limits.* A whole assignment of an `inout` borrowing-struct parameter is rejected as for every `inout` struct;
+  - *Limits.* A whole assignment of an `inout` borrowing-struct parameter follows R-6g-13 (its views must come from
+    data that outlives the caller's borrow, else `type/borrow_escape`);
     `from(u)` naming an `inout` borrowing struct is `type/borrow_signature` (the result would outlive the `&mut`
     reborrow; no hand form needs it); a place binding (R-6g9-5) whose place has a borrowed type (`let d = inout u;`,
     `let d = inout u.raw;`) is `type/place_binding`, while a place binding of an owned field (`let d = inout u.pos;`)
@@ -2607,9 +2653,9 @@ borrows.
   [reject](tests/spec/r6s_2_reject.pruv), [false contract](tests/spec/r6s_2_reject_contract.pruv),
   [pattern arity](tests/must_reject/p6_pattern_arity.pruv), [needs type](tests/must_reject/p6_needs_type.pruv).
 - R-6s-3 **Owned components.** Destructuring `let (k, s): (String, S) = move t;` moves every owned component out of
-  `t` once; `t` is consumed. `let k: String = move t.0;` moves one component out of a `let mut` tuple under the field
-  move rules and consumes the tuple, so a later read of `t` or of another component is `type/foreign_move`
-  (rebuild the tuple, or destructure it to keep the other components). Each owned component is dropped once.
+  `t` once; `t` is consumed. `let k: String = move t.0;` moves one component out of a tuple local as a partial move
+  (R-6g8-5): the other components stay readable, and a later read of `t` whole or of `t.0` is `type/foreign_move`
+  until `t.0` or `t` is assigned again. Each owned component is dropped once.
   An owned tuple is an Option/Result payload only where an owned struct is (`type/type_argument` otherwise). A
   tuple whose components LLVM stores like struct fields (arrays, `Vec<i64>`, `Vec<bool>`) runs on LLVM; one with a
   `String` or another owned collection needs the Rust backend, and LLVM reports `codegen/tuple_llvm_owned` (P12). Tests:

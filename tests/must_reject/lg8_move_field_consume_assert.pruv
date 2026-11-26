@@ -1,9 +1,9 @@
-// G-R09-4: an assert reading a consumed record is a use after move
+// G-R09-4 / R-6g8-5: an assert reading a moved-out field is a use after move
 struct D { n: i64, a: [i64] }
 
 fn run() -> i64 ! alloc {
   let mut d: D = D { n: 1, a: alloc(2, 3) };
   let t: [i64] = move d.a;
-  assert d.n == 1;
+  assert len(d.a) == 2;
   return len(t);
 }

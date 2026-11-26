@@ -851,6 +851,14 @@ impl St {
     fn iter(&self) -> impl Iterator<Item = &(String, V)> {
         self.slots.iter().flatten()
     }
+    /// L-gaps M (R-6g8-5): drop the partial-move keys `name.f..` of a binding that is replaced whole or ends
+    fn pop_partials(&mut self, name: &str) {
+        let pre = format!("{name}.");
+        let ks: Vec<String> = self.iter().filter(|(k, _)| k.starts_with(&pre)).map(|(k, _)| k.clone()).collect();
+        for k in ks {
+            self.pop(&k);
+        }
+    }
 }
 
 fn join(a: Option<St>, b: Option<St>) -> Option<St> {
@@ -866,9 +874,34 @@ fn join(a: Option<St>, b: Option<St>) -> Option<St> {
     for (n, v) in a.iter() {
         if let Some(bv) = b.get(n) {
             out.set(n, if bv == *v { *v } else { V::Maybe });
+        } else if n.contains('.') && *v != V::Live {
+            // L-gaps M (R-6g8-5): a field moved on one path only is maybe-moved after the join
+            out.set(n, V::Maybe);
+        }
+    }
+    for (n, v) in b.iter() {
+        if n.contains('.') && *v != V::Live && a.get(n).is_none() {
+            out.set(n, V::Maybe);
         }
     }
     Some(out)
+}
+
+/// L-gaps M: the root variable and field path of a field-access chain `v.f.g`
+fn field_root(e: &Expr) -> Option<(&Var, Vec<String>)> {
+    let mut fields = Vec::new();
+    let mut cur = e;
+    while let Expr::FieldAccess(x) = cur {
+        fields.push(x.field.clone());
+        cur = &x.base;
+    }
+    match cur {
+        Expr::Var(v) if !fields.is_empty() => {
+            fields.reverse();
+            Some((v, fields))
+        }
+        _ => None,
+    }
 }
 
 fn key_is_array(key: &str) -> bool {
@@ -892,6 +925,8 @@ struct Ownership<'a> {
     variants: &'a HashMap<(String, String), Vec<String>>,
     /// G-R09-4: position of the `move d.a` of a `let` that no next statement restores
     consumed_field: Option<(i64, i64)>,
+    /// L-gaps M: some field was moved out in this function (partial-move keys `name.f..` exist)
+    partial: bool,
     map_binders: Vec<String>,
     bor: HashSet<String>,
     /// binders of the user-enum match arms being checked (payload views; only owned collection fields are collections)
@@ -1013,6 +1048,7 @@ impl<'a> Ownership<'a> {
                     }
                 }
                 s.pop(n);
+                s.pop_partials(n);
             }
         }
         Ok(cur)
@@ -1026,6 +1062,15 @@ impl<'a> Ownership<'a> {
                     return Err(err(line, col, "foreign_loop_move", "moved in the loop body and not restored",
                         format!("{} must be live again at the end of every path of the body: reassign it, e.g. \
                                  {} = f(move {}, ..), or do not consume it inside the loop", n, n, n)));
+                }
+            }
+            // L-gaps M (R-6g8-5): a field of an outer binding moved in the body must be restored by its end
+            for (n, v) in end.iter() {
+                if n.contains('.') && *v != V::Live && entry.contains(n.split('.').next().unwrap_or(""))
+                    && entry.get(n) != Some(*v) {
+                    return Err(err(line, col, "foreign_loop_move", "moved in the loop body and not restored",
+                        format!("field {} must be reassigned before the end of every path of the body, or do not \
+                                 move it inside the loop", n)));
                 }
             }
         }
@@ -1046,6 +1091,7 @@ impl<'a> Ownership<'a> {
             Stmt::Let(l) => {
                 self.consume(&l.value, &mut st, "let")?;
                 self.consumed_field = None;
+                st.pop_partials(&l.name);
                 if key_is_array(&l.ty) || l.ty == "str" || crate::gtype::key_is_collection_owner(&l.ty) || self.aggregates.contains(&l.ty)
                     || self.enums.contains(&l.ty)
                 {
@@ -1072,17 +1118,28 @@ impl<'a> Ownership<'a> {
                 if st.contains(&a.name) {
                     st.set(&a.name, V::Live);
                 }
+                st.pop_partials(&a.name);
                 Ok(Some(st))
             }
             Stmt::IndexAssign(a) => {
                 self.expr(&a.index, &mut st)?;
                 self.expr(&a.value, &mut st)?;
-                self.use_(&a.name, a.line, a.col, &st)?;
+                if a.fields.is_empty() {
+                    self.use_(&a.name, a.line, a.col, &st)?;
+                } else {
+                    // L-gaps M (R-6g8-5): `s.g[i] = v` needs only `s.g` live
+                    self.use_path(&a.name, &a.fields, a.line, a.col, &st, false)?;
+                }
                 Ok(Some(st))
             }
             Stmt::FieldAssign(a) => {
-                self.use_(&a.name, a.line, a.col, &st)?;
+                // L-gaps M (R-6g8-5): writing a moved field (or a field under it) restores it; writing inside a
+                // moved field is a use of the moved value
+                self.use_path(&a.name, &a.fields, a.line, a.col, &st, true)?;
                 self.consume(&a.value, &mut st, "assign")?;
+                let path = format!("{}.{}", a.name, a.fields.join("."));
+                st.pop(&path);
+                st.pop_partials(&path);
                 Ok(Some(st))
             }
             Stmt::If(i) => {
@@ -1129,6 +1186,15 @@ impl<'a> Ownership<'a> {
                         if *v == V::Live && st.get(n) != Some(V::Live) {
                             return Err(err(j.line, j.col, "foreign_loop_move", "moved in the loop body and not restored",
                                 format!("{} must be live again at every `continue` and at the end of every path of the body", n)));
+                        }
+                    }
+                    // L-gaps M (R-6g8-5): so must a field of a binding declared outside the loop
+                    for (n, v) in st.iter() {
+                        let root = n.split('.').next().unwrap_or("");
+                        if n.contains('.') && *v != V::Live && entry.contains(root) && entry.get(n) != Some(*v) {
+                            return Err(err(j.line, j.col, "foreign_loop_move", "moved in the loop body and not restored",
+                                format!("field {} must be reassigned before every `continue` and the end of every path \
+                                         of the body, or do not move it inside the loop", n)));
                         }
                     }
                 }
@@ -1187,6 +1253,14 @@ impl<'a> Ownership<'a> {
                         self.map_binders.extend(a.binders.iter().cloned());
                     }
                     let mut arm_state = st.clone();
+                    // L-gaps M (R-6g8-5): an arm binder's moved fields live in the arm only; an outer binding of
+                    // the same name keeps its own
+                    let outer_partials: Vec<(String, V)> = arm_state.iter()
+                        .filter(|(k, _)| a.binders.iter().any(|b| k.starts_with(&format!("{b}."))))
+                        .cloned().collect();
+                    for b in &a.binders {
+                        arm_state.pop_partials(b);
+                    }
                     if take {
                         for binder in &a.binders {
                             arm_state.set(binder, V::Live);
@@ -1236,6 +1310,12 @@ impl<'a> Ownership<'a> {
                         for b in &srcs {
                             state.pop(b);
                         }
+                        for b in &a.binders {
+                            state.pop_partials(b);
+                        }
+                        for (k, v) in &outer_partials {
+                            state.set(k, *v);
+                        }
                     }
                     if let (true, Some(state)) = (take, &mut r) {
                         for binder in &a.binders {
@@ -1256,6 +1336,13 @@ impl<'a> Ownership<'a> {
 
     /// Check array reads in proof clauses without applying executable call rules.
     fn array_reads(&self, e: &Expr, st: &St) -> Res<()> {
+        if let (true, Some((v, fields))) = (self.partial, field_root(e)) {
+            // L-gaps M (R-6g8-5): a field read in a proof clause checks only its own path
+            if matches!(st.get(&v.name), Some(V::Dead | V::Maybe)) {
+                self.use_(&v.name, e.line(), e.col(), st)?;
+            }
+            return self.use_path(&v.name, &fields, e.line(), e.col(), st, false);
+        }
         if let Expr::Var(v) = e {
             // LG8: a record or enum root consumed by a field or binder move is checked too
             if v.ty.as_deref().is_some_and(|t| key_is_array(t) || t == "str")
@@ -1264,6 +1351,8 @@ impl<'a> Ownership<'a> {
             {
                 self.use_(&v.name, v.line, v.col, st)?;
             }
+            // L-gaps M (R-6g8-5): a proof clause naming a record whole conflicts with a field moved out of it
+            self.use_path(&v.name, &[], v.line, v.col, st, false)?;
         }
         for child in expr_kids(e) {
             self.array_reads(child, st)?;
@@ -1415,15 +1504,54 @@ impl<'a> Ownership<'a> {
                 "binding may have been moved",
                 format!("{} is moved on some paths; make every path leave it live, or do not use it afterwards", name),
             )),
-            _ => Ok(()),
+            _ => self.use_path(name, &[], line, col, st, false),
         }
+    }
+
+    /// L-gaps M (R-6g8-5): a use of `name.fields` conflicts with a moved field on the same path: a prefix of it
+    /// (the read is inside the moved value) or, unless `write`, an extension of it (the read contains the hole)
+    fn use_path(&self, name: &str, fields: &[String], line: i64, col: i64, st: &St, write: bool) -> Res<()> {
+        if !self.partial {
+            return Ok(());
+        }
+        if !fields.is_empty() {
+            if let Some(v @ (V::Dead | V::Maybe)) = st.get(name) {
+                let _ = v;
+                return self.use_(name, line, col, st);
+            }
+        }
+        let pre = format!("{name}.");
+        for (k, v) in st.iter() {
+            let Some(rest) = k.strip_prefix(&pre) else { continue };
+            if *v == V::Live {
+                continue;
+            }
+            let kp: Vec<&str> = rest.split('.').collect();
+            let n = kp.len().min(fields.len());
+            if kp[..n].iter().zip(&fields[..n]).any(|(a, b)| *a != b.as_str()) {
+                continue;
+            }
+            if write && kp.len() >= fields.len() {
+                continue;
+            }
+            let what = if *v == V::Dead { "use after move" } else { "binding may have been moved" };
+            return Err(err(line, col, "foreign_move", what,
+                format!("field {} was moved out of {}; reassign the field before using it or {} whole", k, name, name)));
+        }
+        Ok(())
     }
 
     fn mv(&mut self, e: &Move, st: &mut St, consuming: bool, tracked: bool) -> Res<()> {
         if !e.fields.is_empty() {
-            self.use_(&e.name, e.line, e.col, st)?;
+            self.use_path(&e.name, &e.fields, e.line, e.col, st, false)?;
+            if matches!(st.get(&e.name), Some(V::Dead | V::Maybe)) {
+                self.use_(&e.name, e.line, e.col, st)?;
+            }
             if self.consumed_field == Some((e.line, e.col)) {
-                st.set(&e.name, V::Dead); // G-R09-4: no restore follows, so the record is wholly moved
+                // G-R09-4 / L-gaps M (R-6g8-5): no restore follows, so the field is moved out (a Rust partial
+                // move); the record is unusable whole until the field is reassigned, its other fields stay usable
+                st.set(&format!("{}.{}", e.name, e.fields.join(".")), V::Dead);
+                self.partial = true;
             }
             // Otherwise the type checker enforces restoration. The root stays live.
             return Ok(());
@@ -1568,6 +1696,14 @@ impl<'a> Ownership<'a> {
                     self.use_(&v.name, v.line, v.col, st)?;
                 }
                 Ok(())
+            }
+            Expr::FieldAccess(_) if self.partial && field_root(e).is_some() => {
+                // L-gaps M (R-6g8-5): a field read checks only its own path against the moved fields
+                let (v, fields) = field_root(e).unwrap();
+                if matches!(st.get(&v.name), Some(V::Dead | V::Maybe)) {
+                    self.use_(&v.name, e.line(), e.col(), st)?;
+                }
+                self.use_path(&v.name, &fields, e.line(), e.col(), st, false)
             }
             Expr::Move(m) => self.mv(m, st, false, false),
             Expr::Index(x) if matches!(&*x.array, Expr::Var(v) if v.ty.as_deref().is_some_and(key_is_array)) => {
@@ -1801,7 +1937,7 @@ pub fn check_ownership(f: &Function, funcs: &Takes, aggregates: &HashSet<String>
     Ownership {
         funcs, aggregates, enums, variants, map_binders: Vec::new(), bor: HashSet::new(), arm_bor: Vec::new(),
         string_error_binders: HashSet::new(), field_only: HashSet::new(), track: None,
-        proc: HashMap::new(), borrowed_handles: HashMap::new(), decl: HashMap::new(), consumed_field: None,
+        proc: HashMap::new(), borrowed_handles: HashMap::new(), decl: HashMap::new(), consumed_field: None, partial: false,
         loops: Vec::new(),
     }.run(f)
 }

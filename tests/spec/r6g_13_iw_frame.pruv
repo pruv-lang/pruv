@@ -1,0 +1,17 @@
+// spec: R-6g-13 reject
+// After a whole assignment the caller keeps no array length of the parameter: only `ensures` say what it is.
+struct Cap { n: i64, buf: [u8] }
+
+fn reset(inout c: Cap) -> () ! alloc
+  ensures c.n == 0
+{
+  let b: [u8] = alloc(1, 0);
+  c = Cap { n: 0, buf: move b };
+}
+
+pub fn f() -> i64 ! alloc {
+  let b: [u8] = alloc(10, 1);
+  let mut c: Cap = Cap { n: 5, buf: move b };
+  reset(inout c);
+  return c.buf[5];
+}

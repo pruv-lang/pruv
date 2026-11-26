@@ -98,6 +98,41 @@ pub(crate) fn recursive_vec_elements(prog: &Program) -> BTreeSet<String> {
             }
         }
     }
+    // L-gaps VL: a Vec<S> of any declared (non-recursive) user type uses the same native vector header, wherever it
+    // occurs: a type field, a signature, a let, or a vec_* call. The element keeps its own drop (owned fields).
+    let declared: BTreeSet<&str> = prog.types.iter().map(|d| d.name()).collect();
+    let add = |t: &str, elems: &mut BTreeSet<String>| {
+        if let Some(elem) = native_vec_elem(t) {
+            if declared.contains(elem) {
+                elems.insert(elem.to_string());
+            }
+        }
+    };
+    for decl in &prog.types {
+        for field in decl.all_fields() {
+            add(&field.ty, &mut elems);
+        }
+    }
+    for f in prog.functions.iter().filter(|f| f.foreign.is_none()) {
+        for p in &f.params {
+            add(&p.ty, &mut elems);
+        }
+        add(&f.ret, &mut elems);
+        crate::foreign_shim::walk_stmts(&f.body, &mut |n| match n {
+            crate::foreign_shim::Node::Let(l) => add(&l.ty, &mut elems),
+            crate::foreign_shim::Node::Expr(e) => {
+                if let Some(t) = expr_ty(e) {
+                    add(t, &mut elems);
+                }
+                if let Expr::Call(c) = e {
+                    if let Some(elem) = native_vec_call_elem(c) {
+                        add(&format!("vec<{elem}>"), &mut elems);
+                    }
+                }
+            }
+            _ => {}
+        });
+    }
     elems
 }
 

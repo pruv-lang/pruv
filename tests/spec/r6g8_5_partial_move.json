@@ -1,0 +1,1 @@
+{"gen_contains": ["let mut s"], "run": {"exit": 0, "flags_matrix": [[], ["--no-verify"]], "stdout_lines": ["10901276"], "alloc_balance": true}}

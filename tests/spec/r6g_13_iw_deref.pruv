@@ -1,0 +1,8 @@
+// spec: R-6g-13 reject
+// `*c = e` is the collection binder form; an inout struct parameter is assigned as `c = e`.
+struct Cap { n: i64 }
+
+fn reset(inout c: Cap) -> ()
+{
+  *c = Cap { n: 0 };
+}

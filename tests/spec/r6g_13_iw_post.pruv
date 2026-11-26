@@ -1,0 +1,9 @@
+// spec: R-6g-13 reject
+// The callee's post-state is the new value, not the entry value.
+struct Cap { n: i64, k: i64 }
+
+fn reset(inout c: Cap) -> ()
+  ensures c.k == old(c).k
+{
+  c = Cap { n: 0, k: 7 };
+}

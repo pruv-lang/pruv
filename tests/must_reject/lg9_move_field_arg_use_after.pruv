@@ -1,8 +1,8 @@
-// LG9 (G-LG8-1): `f(move d.a)` consumes d; a later read of d is a use after move
+// LG9 (G-LG8-1) / R-6g8-5: `f(move d.a)` moves the field out; a later read of it is a use after move
 struct D { n: i64, a: [i64] }
 fn alen(take a: [i64]) -> i64 { return len(a); }
 fn run() -> i64 ! alloc {
   let mut d: D = D { n: 1, a: alloc(2, 3) };
   let k: i64 = alen(move d.a);
-  return k + d.n;
+  return k + len(d.a);
 }

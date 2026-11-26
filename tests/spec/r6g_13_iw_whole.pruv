@@ -1,0 +1,44 @@
+// spec: R-6g-13 accept
+// IW: `*c = cap_new();` on `c: &mut Cap` -- an inout struct parameter is replaced whole (hand `scan` returns a fresh Cap).
+struct Cap { n: i64, buf: [u8], k: i64 }
+
+fn cap_new() -> Cap ! alloc
+  ensures result.n == 0 && len(result.buf) == 2 && result.k == 7
+{
+  let b: [u8] = alloc(2, 9);
+  return Cap { n: 0, buf: move b, k: 7 };
+}
+
+fn reset(inout c: Cap) -> () ! alloc
+  ensures c.n == 0 && len(c.buf) == 2 && c.k == 7
+{
+  c = cap_new();
+}
+
+fn bump(inout c: Cap) -> () ! alloc
+  requires c.n >= 0 && c.n < 1000
+  ensures c.n == old(c).n + 1 && c.k == old(c).k && len(c.buf) == len(old(c).buf)
+{
+  c = Cap { n: c.n + 1, buf: copy(c.buf), k: c.k };
+}
+
+fn twice(inout c: Cap, z: bool) -> () ! alloc
+  ensures c.n <= 1 && len(c.buf) == 2
+{
+  if z {
+    reset(inout c);
+  } else {
+    c = cap_new();
+    bump(inout c);
+  }
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let b: [u8] = alloc(10, 1);
+  let mut c: Cap = Cap { n: 5, buf: move b, k: 1 };
+  reset(inout c);
+  bump(inout c);
+  let r: i64 = c.n * 100 + len(c.buf) * 10 + c.k + c.buf[1];
+  twice(inout c, false);
+  return r * 10 + c.n;
+}

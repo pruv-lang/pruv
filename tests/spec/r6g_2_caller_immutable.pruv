@@ -1,0 +1,13 @@
+// spec: R-6g-2 reject
+// The caller passes inout only for a `let mut` local or an inout parameter.
+struct Rec { hits: i64 }
+
+fn bump(inout r: Rec) -> () {
+  r.hits = r.hits + 1;
+}
+
+fn f() -> i64 {
+  let r: Rec = Rec { hits: 0 };
+  bump(inout r);
+  return r.hits;
+}
