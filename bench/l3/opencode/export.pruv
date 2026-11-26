@@ -32,10 +32,10 @@ fn with_span(pool: [u8], t: [u8], s: i64, l: i64) -> [u8] ! alloc
   requires 0 <= s && 0 <= l && l <= len(t) - s && len(pool) <= 1073741823 && l <= 1073741823 - len(pool)
   ensures len(result) == len(pool) + l
 {
-  let np: i64 = len(pool);
-  let mut o: [u8] = alloc(np + l, 0);
-  crate::bytes::copy_span(inout o, 0, pool, 0, np);
-  crate::bytes::copy_span(inout o, np, t, s, s + l);
+  let mut o: [u8] = alloc(0, 0);
+  arr_reserve(inout o, len(pool) + l);
+  arr_append(inout o, pool, 0, len(pool));
+  arr_append(inout o, t, s, l);
   return o;
 }
 

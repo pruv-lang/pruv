@@ -54,9 +54,10 @@ pub fn cat_words(a: [i64], b: [i64]) -> [i64] ! alloc
   requires len(a) <= 1073741823 && len(b) <= 1073741823
   ensures len(result) == len(a) + len(b)
 {
-  let mut o: [i64] = alloc(len(a) + len(b), 0);
-  put_words(inout o, 0, a);
-  put_words(inout o, len(a), b);
+  let mut o: [i64] = alloc(0, 0);
+  arr_reserve(inout o, len(a) + len(b));
+  arr_append(inout o, a, 0, len(a));
+  arr_append(inout o, b, 0, len(b));
   return o;
 }
 pub fn cat_bytes(a: [u8], b: [u8]) -> [u8] ! alloc
@@ -65,17 +66,10 @@ pub fn cat_bytes(a: [u8], b: [u8]) -> [u8] ! alloc
 {
   let na: i64 = len(a);
   let nb: i64 = len(b);
-  let mut o: [u8] = alloc(na + nb, 0);
-  let mut i: i64 = 0;
-  while i < na
-    invariant 0 <= i && i <= na && na == len(a) && nb == len(b) && len(o) == na + nb
-    decreases na - i
-  { o[i] = a[i]; i = i + 1; }
-  let mut j: i64 = 0;
-  while j < nb
-    invariant 0 <= j && j <= nb && na == len(a) && nb == len(b) && len(o) == na + nb
-    decreases nb - j
-  { o[na + j] = b[j]; j = j + 1; }
+  let mut o: [u8] = alloc(0, 0);
+  arr_reserve(inout o, na + nb);
+  arr_append(inout o, a, 0, na);
+  arr_append(inout o, b, 0, nb);
   return o;
 }
 // a followed by the UTF-8 bytes of s; the new bytes start at len(a)
@@ -85,17 +79,10 @@ pub fn append_str(a: [u8], s: str) -> [u8] ! alloc
 {
   let na: i64 = len(a);
   let ns: i64 = len(s);
-  let mut o: [u8] = alloc(na + ns, 0);
-  let mut i: i64 = 0;
-  while i < na
-    invariant 0 <= i && i <= na && na == len(a) && ns == len(s) && len(o) == na + ns
-    decreases na - i
-  { o[i] = a[i]; i = i + 1; }
-  let mut j: i64 = 0;
-  while j < ns
-    invariant 0 <= j && j <= ns && na == len(a) && ns == len(s) && len(o) == na + ns
-    decreases ns - j
-  { o[na + j] = s[j]; j = j + 1; }
+  let mut o: [u8] = alloc(0, 0);
+  arr_reserve(inout o, na + ns);
+  arr_append(inout o, a, 0, na);
+  arr_append(inout o, s, 0, ns);
   return o;
 }
 

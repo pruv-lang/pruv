@@ -5,12 +5,9 @@
 pub fn to_bytes(s: str) -> [u8] ! alloc
   ensures len(result) == len(s)
 {
-  let mut b: [u8] = alloc(len(s), 0);
-  let mut i: i64 = 0;
-  while i < len(s)
-    invariant 0 <= i && i <= len(s) && len(b) == len(s)
-    decreases len(s) - i
-  { b[i] = s[i]; i = i + 1; }
+  let mut b: [u8] = alloc(0, 0);
+  arr_reserve(inout b, len(s));
+  arr_append(inout b, s, 0, len(s));
   return b;
 }
 
@@ -20,9 +17,7 @@ pub fn span_bytes(t: [u8], s: i64, l: i64) -> [u8] ! alloc
 {
   let empty: [u8] = alloc(0, 0);
   if !crate::packet::ref_ok(s, l, len(t)) || s < 0 { return empty; }
-  let mut b: [u8] = alloc(l, 0);
-  crate::bytes::copy_span(inout b, 0, t, s, s + l);
-  return b;
+  return copy(subview(t, s, s + l));
 }
 
 // cfg_text[s..s+l] as text ("" for an absent/invalid ref or invalid UTF-8). Begin refuses a configuration text over
@@ -203,13 +198,7 @@ pub fn raw(d: crate::json::JsonDocument, id: i64) -> [u8] ! alloc
 {
   let s: crate::access::Span = crate::access::raw_span(d, id);
   if s.status != 0 { let e: [u8] = alloc(0, 0); return e; }
-  let mut b: [u8] = alloc(s.end - s.start, 0);
-  let mut i: i64 = 0;
-  while i < len(b)
-    invariant 0 <= i && i <= len(b) && len(b) == s.end - s.start
-    decreases len(b) - i
-  { b[i] = d.source[s.start + i]; i = i + 1; }
-  return b;
+  return copy(subview(d.source, s.start, s.end));
 }
 
 // The decoded text of string value id (lone surrogates became U+FFFD, policy P2); "" for anything else.

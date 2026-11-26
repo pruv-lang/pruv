@@ -134,7 +134,6 @@ fn has_name(event: [i64], completion: [u8], lit: str) -> i64
   let nr: i64 = event[17];
   if nr < 0 || nr > 100000000 || nw != 4 + 4 * nr { return -1; }
   let mut r: i64 = 0;
-  let mut found: bool = false;
   while r < nr
     invariant 0 <= r && r <= nr && nr <= 100000000 && len(event) == 20 + 4 * nr
     decreases nr - r
@@ -144,12 +143,11 @@ fn has_name(event: [i64], completion: [u8], lit: str) -> i64
       let a: i64 = event[b + 1];
       let l: i64 = event[b + 2];
       if a >= 0 && crate::packet::ref_ok(a, l, len(completion)) {
-        if lit_eq(completion, a, l, lit) { found = true; }
+        if lit_eq(completion, a, l, lit) { return 1; }
       }
     }
     r = r + 1;
   }
-  if found { return 1; }
   return 0;
 }
 
