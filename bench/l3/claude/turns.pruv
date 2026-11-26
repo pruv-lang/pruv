@@ -125,37 +125,7 @@ fn reserve(inout buf: [u8], need: i64) -> () ! alloc
   buf = resize(buf, next, 0);
 }
 
-// dst[at..at+n) = src[0..n); everything else unchanged.
-fn put_str(inout dst: [u8], at: i64, src: str, n: i64) -> ()
-  requires 0 <= n && n <= len(src) && 0 <= at && at <= len(dst) && n <= len(dst) - at
-  ensures len(dst) == len(old(dst))
-  ensures forall k in 0..n: dst[at + k] == src[k]
-  ensures forall k in 0..len(dst): (k < at || k >= at + n) ==> dst[k] == old(dst)[k]
-{
-  let mut j: i64 = 0;
-  while j < n
-    invariant 0 <= j && j <= n && n <= len(src) && 0 <= at && at <= len(dst) && n <= len(dst) - at && len(dst) == len(old(dst))
-    invariant forall k in 0..j: dst[at + k] == src[k]
-    invariant forall k in 0..len(dst): (k < at || k >= at + j) ==> dst[k] == old(dst)[k]
-    decreases n - j
-  {
-    dst[at + j] = src[j];
-    j = j + 1;
-  }
-}
-
-// n (0..2) LF bytes at dst[at..].
-fn put_nl(inout dst: [u8], at: i64, n: i64) -> ()
-  requires 0 <= n && n <= 2 && 0 <= at && at <= len(dst) && n <= len(dst) - at
-  ensures len(dst) == len(old(dst))
-  ensures forall k in 0..n: dst[at + k] == 10
-  ensures forall k in 0..len(dst): (k < at || k >= at + n) ==> dst[k] == old(dst)[k]
-{
-  if n >= 1 { dst[at] = 10; }
-  if n == 2 { dst[at + 1] = 10; }
-}
-
-// sep LF bytes followed by text[0..n) at dst[at..].
+// sep LF bytes followed by text[0..n) at dst[at..] (hand: extend "\n\n"[..sep], then text[..n]).
 fn write_piece(inout dst: [u8], at: i64, sep: i64, text: str, n: i64) -> ()
   requires 0 <= sep && sep <= 2 && 0 <= n && n <= len(text) && 0 <= at && at <= len(dst) && sep + n <= len(dst) - at
   ensures len(dst) == len(old(dst))
@@ -163,8 +133,8 @@ fn write_piece(inout dst: [u8], at: i64, sep: i64, text: str, n: i64) -> ()
   ensures forall k in 0..n: dst[at + sep + k] == text[k]
   ensures forall k in 0..len(dst): (k < at || k >= at + sep + n) ==> dst[k] == old(dst)[k]
 {
-  put_nl(inout dst, at, sep);
-  put_str(inout dst, at + sep, text, n);
+  copy_range(inout dst, at, "\n\n", 0, sep);
+  copy_range(inout dst, at + sep, text, 0, n);
 }
 
 // begin: new current draft in slot begun % 200 (evicting the oldest), prompt clipped to 32768 bytes (longest
@@ -198,12 +168,11 @@ pub fn begin(inout st: [i64], inout sl: [i64], inout buf: [u8], prompt: str, cre
 {
   let k: i64 = st[0];
   let w: i64 = k % 200;
-  let cp: str = crate::text::clip_bytes(prompt, 32768);
-  let n: i64 = len(cp);
+  let n: i64 = crate::text::clip_len(prompt, 32768);
   let start: i64 = st[4];
   let end: i64 = start + n + len(created);
   reserve(inout buf, end);
-  write_begin(inout buf, start, cp, created);
+  write_begin(inout buf, start, prompt, n, created);
   let has: i64 = len(created) / 24;
   let mut cl: i64 = 0;
   if len(prompt) > 32768 || st[2] == 1 { cl = 1; }
@@ -223,12 +192,13 @@ pub fn begin(inout st: [i64], inout sl: [i64], inout buf: [u8], prompt: str, cre
   st[3] = w;
 }
 
-fn write_begin(inout dst: [u8], start: i64, prompt: str, created: str) -> ()
-  requires 0 <= start && start <= len(dst) && len(prompt) + len(created) <= len(dst) - start
+fn write_begin(inout dst: [u8], start: i64, prompt: str, n: i64, created: str) -> ()
+  requires 0 <= n && n <= len(prompt)
+  requires 0 <= start && start <= len(dst) && n + len(created) <= len(dst) - start
   ensures len(dst) == len(old(dst))
 {
-  put_str(inout dst, start, prompt, len(prompt));
-  put_str(inout dst, start + len(prompt), created, len(created));
+  copy_range(inout dst, start, prompt, 0, n);
+  copy_range(inout dst, start + n, created, 0, len(created));
 }
 
 // skip_user: detach the current draft (the earlier draft stays in the ring) and mark the next one clipped.
@@ -305,8 +275,7 @@ pub fn answer(inout st: [i64], inout sl: [i64], inout buf: [u8], text: str, at: 
       if sep > room {
         sep = room;
       } else {
-        let cp: str = crate::text::clip_bytes(text, room - sep);
-        take = len(cp);
+        take = crate::text::clip_len(text, room - sep);
       }
       budget = 32768;
       clipped = 1;
@@ -336,33 +305,14 @@ fn write_answer(inout dst: [u8], stamp: i64, sep: i64, text: str, take: i64, at:
 {
   let added: i64 = sep + take;
   if len(at) == 24 {
-    put_str(inout dst, stamp + added, at, 24);
+    copy_range(inout dst, stamp + added, at, 0, 24);
   } else {
+    // Move the existing completed stamp forward before extending a reply without a new stamp.
     if was == 1 && added > 0 {
-      move_stamp(inout dst, stamp, stamp + added);
+      copy_within(inout dst, stamp + added, stamp, 24);
     }
   }
   write_piece(inout dst, stamp, sep, text, take);
-}
-
-// Move the existing completed stamp forward before extending a reply without a new stamp.
-fn move_stamp(inout data: [u8], from: i64, to: i64) -> ()
-  requires 0 <= from && from <= to && to + 24 <= len(data)
-  ensures len(data) == len(old(data))
-  ensures forall k in 0..24: data[to + k] == old(data)[from + k]
-  ensures forall k in 0..len(data): (k < to || k >= to + 24) ==> data[k] == old(data)[k]
-{
-  let mut j: i64 = 24;
-  while j > 0
-    invariant 0 <= j && j <= 24 && 0 <= from && from <= to && to + 24 <= len(data) && len(data) == len(old(data))
-    invariant forall k in j..24: data[to + k] == old(data)[from + k]
-    invariant forall k in 0..len(data): (k < to + j || k >= to + 24) ==> data[k] == old(data)[k]
-    decreases j
-  {
-    j = j - 1;
-    assert data[from + j] == old(data)[from + j];
-    data[to + j] = data[from + j];
-  }
 }
 
 pub pred fn planned_spans(sl: [i64], b: i64, kept: i64, bytes: i64) -> bool {

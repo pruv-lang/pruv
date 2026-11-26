@@ -230,7 +230,7 @@ pub fn title_of_w(line: [u8]) -> [i64] ! alloc
   let l: crate::entry::Line = crate::entry::parse_line(line, 0, len(line));
   match l {
     crate::entry::Line::Object(d) => {
-      let t: crate::entry::Title = crate::entry::title_of(d);
+      let t: crate::entry::Title = crate::entry::title_of(d, 0);
       return pack_title(t);
     }
     crate::entry::Line::Skip => { return lead2(9, 0); }

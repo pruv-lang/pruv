@@ -1183,3 +1183,43 @@ All after the last code change (F1 / F4 from the structure comparison).
      4.3e-S, then 4.3e-F (touches `lib/access`; run all consumers).
   5. Codex bench rows 4.3f-A, 4.3f-O, 4.3f-N, 4.3f-K, 4.3f-L, 4.3f-T, 4.3f-P, 4.3f-R, 4.3f-D (`codex/` only), then
      4.3f-B, 4.3f-E, 4.3f-F (shared modules; run all consumers).
+
+## Step 4.3h: Claude R08 import
+
+- `claude/RESHAPE.md`. The hand baseline `claude/handrust/src/lib.rs` (safe std Rust) gained `// Pruv: module::fn`
+  comments on every function and a header naming the Pruv functions with no hand counterpart; its code did not
+  change, `cargo build --release`, no warnings. This step supersedes the AGENTS.md "claude frozen" note (§6).
+- Arena writes are `copy_range` / `copy_within` (`turns::put_str` / `put_nl` / `move_stamp` removed); the clip is
+  `text::clip_len` with no `substr` copy; the LF search is `find_byte`; the dropped-user scan takes a `subview`;
+  `idle` flags and `offset = len(data)` exits are `break`; binders and owned locals `move`; the timestamp is read
+  where the hand reads it and `consume_entry` is one function.
+- One Codex review (gpt-6.2-astra, high): one behavior difference fixed (`entry::window_line` returned a document
+  parsed from a shortened copy; the projection is removed and `read_window` calls `parse_line`), plus the first-piece
+  hold in `array_content`, the rank check before the title read, `move` / `copy_range` in `time`, and `break` in
+  `trim_span`. `q_mutants.py` originals 4 and 6 follow the new text (18/18 present exactly once).
+- D-R08-3 (text crosses as one `i64` per byte): the hand widens the same way, so it needs a packet ABI change on
+  both sides; kept as a row. D-R08-2 (drop evicted turns): the ring stays (row VL).
+- No module moved to `lib` / `pkgs`; no shared module changed, so no consumer runs were needed.
+- Tests: `claude/RESHAPE.md` §4.
+
+### Rows open after 4.3h
+
+- New (bench, `claude/RESHAPE.md` §3): 4.3h-R (`root_of` 7 lookups per object), 4.3h-W (double trim and early
+  `origin` read), 4.3h-O (owned decode for read-only uses, touches `pkgs/access` / `pkgs/jstr`), 4.3h-Z (stamp `str`
+  round trip through `adapter_probe`), 4.3h-T (`turns::answer` empty / full path), 4.3h-P (slot ordinals and stored
+  plan ends), 4.3h-V (two ISO validators, `format_iso` zero fill), 4.3h-L (`one_line` per-char `substr`),
+  4.3h-D (hand `dropped_user` multi-pass; hand candidate), 4.3h-A (`new_packet` zero fill), 4.3h-Q (`claude/framing`
+  equals `qwen/framing`; a `pkgs` candidate, run both consumers when moved).
+- Kept as rows from the step text: D-R08-3 (packet ABI, same widening as the hand), D-R08-2 with VL.
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB, TH, FO, FV, UL, VP,
+  IW, VL, 4.3d-M (also `last = copy(iso.text)` in `claude/import`), 4.3d-H, 4.3f-S, 4.3f-E, 4.3g-SQ.
+- Next:
+  1. Step 4.4 (`docs/RUST_SHAPE_RESET.md` §6).
+  2. OpenCode bench rows 4.3g-P, 4.3g-R, 4.3g-Q, 4.3g-K, 4.3g-D, 4.3g-N, 4.3g-A, 4.3g-X, 4.3g-F, 4.3g-E (`opencode/`
+     only; 4.3g-P first).
+  3. Claude bench rows 4.3h-T, 4.3h-R, 4.3h-W, 4.3h-Z, 4.3h-P, 4.3h-V, 4.3h-L, 4.3h-A (`claude/` only), then 4.3h-O
+     (shared packages; run all consumers) and 4.3h-Q (move `framing` to `pkgs` with the Qwen consumer).
+  4. Grok bench rows 4.3c-T, 4.3c-B, 4.3c-G and `pkgs/turns` dead code; Qwen bench rows 4.3e-D, 4.3e-L, 4.3e-J,
+     4.3e-S, then 4.3e-F (touches `lib/access`; run all consumers).
+  5. Codex bench rows 4.3f-A, 4.3f-O, 4.3f-N, 4.3f-K, 4.3f-L, 4.3f-T, 4.3f-P, 4.3f-R, 4.3f-D (`codex/` only), then
+     4.3f-B, 4.3f-E, 4.3f-F (shared modules; run all consumers).

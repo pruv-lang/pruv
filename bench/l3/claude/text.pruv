@@ -81,24 +81,22 @@ pub fn trim_span(s: str) -> Span
   ensures is_char_boundary(s, result.lo) && is_char_boundary(s, result.hi)
 {
   let n: i64 = len(s);
-  let mut i: i64 = 0;
-  let mut lo: i64 = n;
-  while i < n
-    invariant 0 <= i && i <= n && is_char_boundary(s, i)
+  let mut lo: i64 = 0;
+  while lo < n
     invariant 0 <= lo && lo <= n && is_char_boundary(s, lo)
-    decreases n - i
+    decreases n - lo
   {
-    if space_len(s, i) == 0 { lo = i; i = n; } else { i = next(s, i); }
+    if space_len(s, lo) == 0 { break; }
+    lo = next(s, lo);
   }
-  let mut k: i64 = n;
   let mut hi: i64 = n;
-  while k > lo
-    invariant lo <= k && k <= n && is_char_boundary(s, k)
+  while hi > lo
     invariant lo <= hi && hi <= n && is_char_boundary(s, hi)
-    decreases k
+    decreases hi
   {
-    let j: i64 = prev(s, k, lo);
-    if space_len(s, j) == k - j { k = j; hi = j; } else { hi = k; k = lo; }
+    let j: i64 = prev(s, hi, lo);
+    if space_len(s, j) != hi - j { break; }
+    hi = j;
   }
   return Span { lo: lo, hi: hi };
 }
@@ -179,8 +177,7 @@ pub fn one_line(s: str, max: i64) -> str ! alloc
         if p == 1 && u + 1 <= max {
           out = string_push_str(move out, " ");
         }
-        p = 0;
-        i = n;
+        break;
       } else {
         if p == 1 { out = string_push_str(move out, " "); }
         out = string_push_str(move out, substr(s, i, j));
@@ -193,7 +190,29 @@ pub fn one_line(s: str, max: i64) -> str ! alloc
   return string_to_str(out);
 }
 
-// Longest UTF-8 boundary prefix within the byte budget (genuine U+FFFD is kept, policy P3).
+// Length of the longest UTF-8 boundary prefix within the byte budget (hand clip_len; genuine U+FFFD is kept,
+// policy P3).
+pub fn clip_len(s: str, max: i64) -> i64
+  requires 0 <= max && max <= 100_000_000
+  requires len(s) <= 100_000_000
+  ensures 0 <= result && result <= max && result <= len(s)
+  ensures is_char_boundary(s, result)
+  ensures result == len(s) || (forall t in result+1..max+1: !is_char_boundary(s, t))
+  ensures len(s) <= max ==> result == len(s)
+{
+  if len(s) <= max { return len(s); }
+  let mut i: i64 = max;
+  while i > 0 && !is_char_boundary(s, i)
+    invariant 0 <= i && i <= len(s) && i <= max
+    invariant forall t in i+1..max+1: !is_char_boundary(s, t)
+    decreases i
+  {
+    i = i - 1;
+  }
+  return i;
+}
+
+// The clip_len prefix as a new string (the A1 probe; the collector copies the prefix itself).
 pub fn clip_bytes(s: str, max: i64) -> str ! alloc
   requires 0 <= max && max <= 100_000_000
   requires len(s) <= 100_000_000
@@ -204,16 +223,7 @@ pub fn clip_bytes(s: str, max: i64) -> str ! alloc
   ensures len(result) == len(s) || (forall t in len(result)+1..max+1: !is_char_boundary(s, t))
   ensures len(s) <= max ==> len(result) == len(s)
 {
-  let mut i: i64 = max;
-  if i > len(s) { i = len(s); }
-  while i > 0 && !is_char_boundary(s, i)
-    invariant 0 <= i && i <= len(s) && i <= max
-    invariant forall t in i+1..max+1: !is_char_boundary(s, t)
-    decreases i
-  {
-    i = i - 1;
-  }
-  return substr(s, 0, i);
+  return substr(s, 0, clip_len(s, max));
 }
 
 // claude.ts engineLine: trimmed text is one of the two interrupt lines, or (only for a task-notification
