@@ -43,24 +43,28 @@ fn p100(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8], event: [i64]) -> [i6
     let thread: str = crate::util::cfg_str(cfg_text, cfg[10], cfg[11]);
     if !crate::names::valid_thread(thread) { return crate::packet::done_simple(ctl, 0, 1, 1); }
   }
-  if crate::path::db_none(cfg, cfg_text) { return absent_db(ctl); }
-  let p: str = crate::path::db_path(cfg, cfg_text);
-  let pb: [u8] = crate::util::to_bytes(p);
-  let parent: [u8] = crate::path::dirname_bytes(pb);
-  let np: i64 = len(pb);
-  let nq: i64 = len(parent);
-  let cur: i64 = len(text);
-  if !crate::util::bank_fits(cur, np) || np > 1073741823 || nq > 1073741823 { return crate::packet::done_simple(ctl, 1, 3, 5); }
-  let pool: [u8] = crate::util::pool_bytes(pb, parent);
-  let patches: [i64] = crate::path::append_patch(3, cur, np, 4, 0);
-  let mut c: [i64] = copy(ctl);
-  c[23] = mode;
-  c[24] = cur;
-  c[25] = np;
-  let mut words: [i64] = alloc(2, 0);
-  words[0] = np;
-  words[1] = nq;
-  return crate::path::ask(c, 101, 1, 1, 0, -1, patches, words, 2, pool);
+  let db: crate::path::DbPath = crate::path::db_path(cfg, cfg_text);
+  match db {
+    crate::path::DbPath::Memory => { return absent_db(ctl); }
+    crate::path::DbPath::File(p) => {
+      let np: i64 = len(p);
+      let cur: i64 = len(text);
+      if !crate::util::bank_fits(cur, np) || np > 1073741823 { return crate::packet::done_simple(ctl, 1, 3, 5); }
+      let mut pool: [u8] = crate::util::to_bytes(p);
+      let parent: [u8] = crate::path::dirname_bytes(pool);
+      let nq: i64 = len(parent);
+      arr_append(inout pool, parent, 0, nq);
+      let patches: [i64] = crate::path::append_patch(3, cur, np, 4, 0);
+      let mut c: [i64] = copy(ctl);
+      c[23] = mode;
+      c[24] = cur;
+      c[25] = np;
+      let mut words: [i64] = alloc(2, 0);
+      words[0] = np;
+      words[1] = nq;
+      return crate::path::ask(c, 101, 1, 1, 0, -1, patches, words, 2, pool);
+    }
+  }
 }
 
 // 101: realpath(dirname) completed: append the resolved parent, lstat(DB) (no following of the final link)
@@ -78,7 +82,7 @@ fn p101(ctl: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
   if rl < 1 { return absent_db(ctl); }
   let cur: i64 = len(text);
   if !crate::util::bank_fits(cur, rl) { return crate::packet::done_simple(ctl, 1, 3, 5); }
-  let dbp: [u8] = crate::util::span_bytes(text, ctl[24], ctl[25]);
+  let dbp: ref [u8] = crate::util::span_view(text, ctl[24], ctl[25]);
   if len(dbp) == 0 { return crate::packet::done_internal(ctl, 2); }
   let patches: [i64] = crate::path::append_patch(3, cur, rl, 2, rs);
   let mut c: [i64] = copy(ctl);
@@ -100,7 +104,7 @@ fn p102(ctl: [i64], text: [u8], event: [i64]) -> [i64] ! alloc
   if !crate::path::ok_event(event, 2, 2) { return crate::packet::done_internal(ctl, 28); }
   let kind: i64 = event[16];
   if kind != 1 { return absent_db(ctl); }  // MUT:M02 => if kind != 1 && kind != 3 { return absent_db(ctl); }
-  let dbp: [u8] = crate::util::span_bytes(text, ctl[24], ctl[25]);
+  let dbp: ref [u8] = crate::util::span_view(text, ctl[24], ctl[25]);
   if len(dbp) == 0 { return crate::packet::done_internal(ctl, 3); }
   let ep: [i64] = alloc(0, 0);
   let mut words: [i64] = alloc(2, 0);
@@ -121,8 +125,8 @@ fn p103(ctl: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
   let rs: i64 = event[16];
   let rl: i64 = event[17];
   if !crate::packet::ref_ok(rs, rl, len(completion)) || rs < 0 { return crate::packet::done_internal(ctl, 3); }
-  let file: [u8] = crate::util::span_bytes(completion, rs, rl);
-  let parent: [u8] = crate::util::span_bytes(text, ctl[26], ctl[27]);
+  let file: ref [u8] = crate::util::span_view(completion, rs, rl);
+  let parent: ref [u8] = crate::util::span_view(text, ctl[26], ctl[27]);
   if !crate::path::contained(parent, file) { return absent_db(ctl); }
   let ep: [i64] = alloc(0, 0);
   return crate::path::proceed(ctl, 200, ep);

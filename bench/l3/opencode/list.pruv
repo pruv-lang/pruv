@@ -195,17 +195,18 @@ fn list_result(ctl: [i64], rows: [i64], text: [u8], now: i64) -> [i64] ! alloc
   let n: i64 = ctl[21];
   if !crate::path::rows_ok(rows, n) || n > 100000000 { return crate::path::internal_at(ctl, 12); }
   let ord: [i64] = sql_order(n);  // MUT:M07 => let ord: [i64] = by_updated_desc(rows, n);
-  let mut out: [i64] = alloc(10 * n, 0);
+  let mut out: [i64] = alloc(0, 0);
+  arr_reserve(inout out, 10 * n);
   let mut pool: [u8] = alloc(0, 0);
   let mut i: i64 = 0;
   while i < n
-    invariant 0 <= i && i <= n && n <= 100000000 && 8 * n <= len(rows) && len(out) == 10 * n && len(text) <= 2147483647 && len(ord) == n
+    invariant 0 <= i && i <= n && n <= 100000000 && 8 * n <= len(rows) && len(out) == 10 * i && len(text) <= 2147483647 && len(ord) == n
+    invariant len(pool) <= 500000000 + 300000000
     decreases n - i
   {
     let r: i64 = ord[i];
     if r < 0 || r >= n { return crate::path::internal_at(ctl, 12); }
     let b: i64 = 7 * r;
-    let ob: i64 = 10 * i;
     let ids: i64 = rows[b];
     let il: i64 = rows[b + 1];
     let ts: i64 = rows[b + 4];
@@ -216,30 +217,27 @@ fn list_result(ctl: [i64], rows: [i64], text: [u8], now: i64) -> [i64] ! alloc
       return crate::path::internal_at(ctl, 12);
     }
     if upd < -9007199254740991 || upd > 9007199254740991 { return crate::path::internal_at(ctl, 12); }
-    let idb: [u8] = crate::util::span_bytes(text, ids, il);
-    let tb: [u8] = crate::util::span_bytes(text, ts, tl);
-    if len(pool) > 500000000 || len(idb) > 100000000 || len(tb) > 100000000 { return crate::path::toobig_at(ctl, 12); }
+    if len(pool) > 500000000 || il > 100000000 || tl > 100000000 { return crate::path::toobig_at(ctl, 12); }
     let iso: [u8] = crate::rows::db_iso(upd);
-    out[ob] = len(pool);
-    out[ob + 1] = len(idb);
-    pool = crate::packet::cat_bytes(pool, idb);
-    out[ob + 2] = len(pool);
-    out[ob + 3] = len(tb);
-    pool = crate::packet::cat_bytes(pool, tb);
-    if len(iso) > 0 {
-      out[ob + 4] = len(pool);
-      out[ob + 5] = len(iso);
-      pool = crate::packet::cat_bytes(pool, iso);
-    } else {
-      out[ob + 4] = -1;
-      out[ob + 5] = 0;
+    let r0: i64 = len(pool);
+    arr_append(inout pool, text, ids, il);
+    let r1: i64 = len(pool);
+    arr_append(inout pool, text, ts, tl);
+    let mut r2: i64 = -1;
+    let li: i64 = len(iso);
+    if li > 0 {
+      r2 = len(pool);
+      arr_append(inout pool, iso, 0, li);
     }
+    let mut seen: i64 = 0;
+    let mut msgs: i64 = 0;
     if cnt >= 0 {
-      out[ob + 6] = 1;
-      out[ob + 7] = cnt;
+      seen = 1;
+      msgs = cnt;
     }
-    if upd > 0 && now - upd < 120000 { out[ob + 8] = 1; }  // MUT:M08 => if upd > 0 && now - upd <= 120000 { out[ob + 8] = 1; }
-    out[ob + 9] = 0;
+    let mut open: i64 = 0;
+    if upd > 0 && now - upd < 120000 { open = 1; }  // MUT:M08 => if upd > 0 && now - upd <= 120000 { open = 1; }
+    arr_push(inout out, r0, il, r1, tl, r2, li, seen, msgs, open, 0);
     i = i + 1;
   }
   if len(pool) > 1073741823 { return crate::path::toobig_at(ctl, 12); }
@@ -261,23 +259,18 @@ fn rows_result(ctl: [i64], rows: [i64], text: [u8]) -> [i64] ! alloc
   let l0: i64 = ctl[27];
   if b0 < 0 || l0 < 0 || b0 > len(text) || l0 > len(text) - b0 { return crate::path::internal_at(ctl, 10); }
   let base: i64 = b0 + l0;
-  let pool: [u8] = crate::util::span_bytes(text, base, len(text) - base);
+  let pool: ref [u8] = crate::util::span_view(text, base, len(text) - base);
   if len(pool) > 1073741823 { return crate::path::toobig_at(ctl, 10); }
-  let mut out: [i64] = alloc(7 * n, 0);
+  let mut out: [i64] = alloc(0, 0);
+  arr_reserve(inout out, 7 * n);
   let mut i: i64 = 0;
   while i < n
-    invariant 0 <= i && i <= n && n <= 100000000 && 8 * n <= len(rows) && len(out) == 7 * n && 0 <= base
+    invariant 0 <= i && i <= n && n <= 100000000 && 8 * n <= len(rows) && len(out) == 7 * i && 0 <= base
     decreases n - i
   {
     let b: i64 = 7 * i;
     if rows[b] < base || rows[b + 2] < base || rows[b + 4] < base { return crate::path::internal_at(ctl, 10); }
-    out[b] = rows[b] - base;
-    out[b + 1] = rows[b + 1];
-    out[b + 2] = rows[b + 2] - base;
-    out[b + 3] = rows[b + 3];
-    out[b + 4] = rows[b + 4] - base;
-    out[b + 5] = rows[b + 5];
-    out[b + 6] = rows[b + 6];
+    arr_push(inout out, rows[b] - base, rows[b + 1], rows[b + 2] - base, rows[b + 3], rows[b + 4] - base, rows[b + 5], rows[b + 6]);
     i = i + 1;
   }
   let mut m: [i64] = crate::packet::meta_new(2);
@@ -298,8 +291,8 @@ fn read_handoff(cfg: [i64], cfg_text: [u8], ctl: [i64], rows: [i64], text: [u8])
   if !crate::packet::ref_ok(rows[0], rows[1], len(text)) || !crate::packet::ref_ok(rows[2], rows[3], len(text)) || !crate::packet::ref_ok(rows[4], rows[5], len(text)) {
     return crate::packet::done_internal(ctl, 11);
   }
-  let dir: [u8] = crate::util::span_bytes(text, rows[2], rows[3]);
-  let folder: [u8] = crate::util::span_bytes(cfg_text, cfg[8], cfg[9]);
+  let dir: ref [u8] = crate::util::span_view(text, rows[2], rows[3]);
+  let folder: ref [u8] = crate::util::span_view(cfg_text, cfg[8], cfg[9]);
   if !crate::path::same_key(dir, folder) { return crate::packet::done_simple(ctl, 11, 1, 1); }  // MUT:M09 => if false { return crate::packet::done_simple(ctl, 11, 1, 1); }
   if cfg[13] < 1 || cfg[15] < 1 { return crate::packet::done_simple(ctl, 11, 1, 3); }
   let mut c: [i64] = copy(ctl);
@@ -340,11 +333,10 @@ fn p391(ctl: [i64], rows: [i64], text: [u8], event: [i64], completion: [u8]) -> 
 {
   if ctl[6] != 1 { return crate::packet::done_internal(ctl, 28); }
   if event[3] == 1 {
-    let none: str = "";
     let raw: [u8] = crate::util::span_bytes(completion, event[8], event[9]);
     let mut native: i64 = event[5];
     if native < 0 { native = 0; }
-    return crate::packet::done_error(ctl, 12, 2, 0, native, raw, none, none);
+    return crate::packet::done_error(ctl, 12, 2, 0, native, raw, "", "");
   }
   if !crate::path::ok_event(event, 15, 1) { return crate::packet::done_internal(ctl, 12); }
   let now: i64 = event[16];

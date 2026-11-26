@@ -107,7 +107,7 @@ let req: [i64] = crate::packet::request(id, 4, 5, 0, ctl[8], 0, 0, 0, 0, 2); // 
 return crate::packet::step_packet(c, patches, req, words, bytes, ep, 0);      // action 0: exactly one request
 ```
 
-Argument words are in the step `words`; string/blob refs in them point into the step `bytes` pool (put each string with `append_str`/`cat_bytes`, remember `len(pool_before)` as its start).
+Argument words are in the step `words`; string/blob refs in them point into the step `bytes` pool (grow one pool `inout` with `arr_reserve` / `arr_append`, remember `len(pool)` before each string as its start).
 `step_packet` checks per opcode: 1,2,3,6,7,12,13,14 and prepare (opcode 4, flags 0) take exactly `[pathRef]` = 2 words (present, inside `bytes`); 5,9,10,11,15 take 0 words;
 execute (opcode 4, flags 1 = all, 2 = get, per DESIGN 3) takes `[P, 4*P typed values]`; spawn (8) takes `12 + 2*argc + 4*envCount` words (scalars as in DESIGN 3, refs inside `bytes`).
 Request ids are exactly `ctl[3]` and the new `ctl[3]` is `id+1` (**(A-added)**: one request at a time, ids consecutive, guard: no request when `ctl[3] >= 1000000000`).
@@ -128,8 +128,7 @@ and `ctl[6]==1`; a done has phase 999, `ctl[4]=ctl[5]=0`, `ctl[6]==2`, no patche
 | `step_magic() / result_magic()` | | `0x4f435331` = 1329812273 / `0x4f435231` = 1329812017 |
 | `ctl_len() head_len() step_head() request_words() patch_words() event_head() result_head() bank_max()` | | 64, 76, 12, 12, 8, 16, 40, 2147483647 |
 | `ref_ok(s,n,total) -> bool` | none | true ⇒ `total>=0 && ((s==-1 && n==0) \|\| (0<=s && s<=total && 0<=n && n<=total-s))` |
-| `cat_words(a,b) -> [i64]`, `cat_bytes(a,b) -> [u8]` | each `len <= 1073741823` | `len == len(a)+len(b)` (join patch rows / request rows / pools) |
-| `append_str(a:[u8], s:str) -> [u8]` | `len(a), len(s) <= 1073741823` | `len == len(a)+len(s)`; new bytes start at `len(a)` |
+| `cat_words(a,b) -> [i64]` | each `len <= 1073741823` | `len == len(a)+len(b)` (join patch rows / request rows) |
 | `ctl_init(mode,phase) -> [i64]` | `0<=mode<=5 && 0<=phase<=999` | `len==64`, `[1]==mode`, `[2]==phase`, `[3]==1` |
 | `ctl_final(ctl) -> [i64]` | `len(ctl)==64` | phase 999, `[4]=[5]=0`, `[6]=2` |
 | `ctl_next(ctl,phase) -> [i64]` | `len(ctl)==64 && 0<=phase<=998` | `[2]==phase`, `[4]=[5]=[6]=0`, next id unchanged. Change another word too if the phase is unchanged |
@@ -139,7 +138,7 @@ and `ctl[6]==1`; a done has phase 999, `ctl[4]=ctl[5]=0`, `ctl[6]==2`, no patche
 | `request(id,opcode,stage,flags,handle,a,b,c,arg_start,arg_words) -> [i64]` | `1<=id && 1<=opcode<=15 && 0<=stage<=28 && 0<=flags && -1<=handle && 0<=a,b,c && 0<=arg_start && 0<=arg_words` | `len==12` |
 | `step_packet(ctl,patches,requests,words,bytes,res,action) -> [i64]` | `len(ctl)==64 && len(patches)<=4096 && len(requests)<=4096 && len(words),len(bytes),len(res)<=2147483647` | `len>=76`. Runtime shape check, else a done packet with InternalInvariant stage 28: ctl version 1, phase 0..999, `len(patches)%8==0` (≤512 rows), requests 0 or exactly 12 words, action 0 ⇒ one request and `ctl[4]/[5]/[6]` = id/opcode/1, action 1 ⇒ no patches/requests + `result_shape(res)` + terminal ctl, action 2 ⇒ no request + `ctl[4]=[5]=[6]=0` + phase ≠ 999; patch ranges, bank/source type match, literal-source bounds; request fields and per-opcode argument shape |
 | `done_wrap(ctl,res) -> [i64]` | `len(ctl)==64` | `len>=76`; finalises ctl, action 1; a malformed `res` becomes InternalInvariant |
-| `done_error(ctl,stage,cls,code,native,raw_code:[u8],name:str,detail:str) -> [i64]` | `len(ctl)==64` | `len>=76`; mode from `ctl[1]` |
+| `done_error(ctl,stage,cls,code,native,raw_code:[u8],name:[u8],detail:[u8]) -> [i64]` | `len(ctl)==64` | `len>=76`; mode from `ctl[1]` |
 | `done_simple(ctl,stage,cls,code) -> [i64]` | `len(ctl)==64` | text-free error; out-of-range enums give InternalInvariant |
 | `done_internal(ctl,stage) -> [i64]` | `len(ctl)==64` | CoreError (3) / InternalInvariant (6) at `stage` |
 | `meta_new(mode) -> [i64]` | `0<=mode<=5` | `len==40`, magic/version/mode set, status 0, refs at 10,12,14,16,23,25,27 absent. Caller sets `[4]` N, `[5]` W, `[8]` omitted, `[9]` planPresent, `[10..17]` refs, `[18]` more |
@@ -148,7 +147,7 @@ and `ctl[6]==1`; a done has phase 999, `ctl[4]=ctl[5]=0`, `ctl[6]==2`, no patche
 | `ok_plan_absent() -> [i64]` | | mode 5 with planPresent 0 |
 | `simple_error(mode,stage,cls,code) -> [i64]` | `0<=mode<=5 && 0<=stage<=28 && 1<=cls<=3 && 0<=code<=6` | `len==40` |
 | `internal_packet(mode) -> [i64]` | `0<=mode<=5` | `len==40`: CoreError/InternalInvariant stage 28 |
-| `error(mode,stage,cls,code,native,raw_code:[u8],name:str,detail:str) -> [i64]` | none | `len>=40`; bytes `raw_code ++ name ++ detail`, an empty string is an absent ref; bad enums or strings over 10 MB → internal |
+| `error(mode,stage,cls,code,native,raw_code:[u8],name:[u8],detail:[u8]) -> [i64]` | none | `len>=40`; bytes `raw_code ++ name ++ detail`, an empty string is an absent ref; bad enums or strings over 10 MB → internal |
 | `result_shape(res) -> bool` | `len(res) <= 2147483647` | see below |
 | `event_empty(event) -> bool` | `len(event) >= 16` | version 1, everything 0, code/message refs `(-1,0)`, exactly 16 words |
 | `event_shape(event, clen) -> bool` | none | true ⇒ `len(event) >= 16`; version 1, id/native ≥ 0, opcode 0..15, status 0/1, class 0..5, `len == 16 + event[6]`, `event[7] == clen`, words 12..15 zero, refs inside the completion, status 1 ⇒ class ≥ 1 and no payload |
@@ -176,8 +175,7 @@ Root itself only reports stage 0 (invalid config, banks over 2^31-1 = InputTooLa
 | `bank_limit() -> i64` | `== 2147483647` | |
 | `fits(used,add,limit) -> bool` | true ⇒ `0<=used<=limit && 0<=add<=limit-used` | overflow-free |
 | `bank_fits(cur,add) -> bool` | true ⇒ `cur+add <= 2147483647` (both ≥0) | false ⇒ report CoreError/InputTooLarge (stage 0 or the current stage), no partial success |
-| `pool_bytes(pool,add)`, `pool_str(pool,s)`, `pool_dec(pool,n)` | lens ≤ 1073741823, `n >= -9223372036854775807` | pool ++ add; `pool_dec` appends the decimal |
-| `format_i64(n) -> [u8]` | `n >= -9223372036854775807` ⇒ `1<=len<=20` | decimal, no leading zeros |
+| `span_view(t,s,l) -> ref [u8] from(t)` | none | `len <= len(t)`; `t[s..s+l]` borrowed, empty for an absent / invalid ref |
 | `real_50_hi()` / `real_50_lo()` | `== 1078525952` (0x40490000) / `== 0` | the LIMIT parameter 50.0 as REAL `[2, hi, lo, 0]` |
 | `limbs_ok(hi,lo)`, `real_negative(hi)`, `real_exp(hi)` (0..2047), `real_mantissa(hi,lo)` (0..2^52-1), `real_is_finite(hi)` | limbs in 0..4294967295 | binary64 from unsigned limbs |
 | `real_is_integral(hi,lo)` | | finite whole number (±0 included) |
@@ -193,5 +191,5 @@ Root itself only reports stage 0 (invalid config, banks over 2^31-1 = InputTooLa
 - **Expected-event and pending words are packet-checked** (`step_packet`), not only root-checked, so a module cannot build a malformed packet even in unit tests.
 - **Event stricter than DESIGN:** a failed completion (status 1) must have class ≥ 1 and no payload; the empty event requires code/message refs `(-1,0)`.
 - **Result-shape strictness (A-added):** UTF-8 scalar-boundary refs, list rows need present thread/title, read has exactly one row, class/code pairs as above.
-- **Verifier-sensitive spots (unproven; expect fixes):** `packet::result_shape` (`n*w` handled per width), `packet::values_ok`/`args_ok` index arithmetic, `root::out_ok` (`76+8*pc` indexing), `root::env_ok` nested loops, `util::format_i64` (`48 + v % 10` stored into `u8`).
+- **Verifier-sensitive spots (unproven; expect fixes):** `packet::result_shape` (`n*w` handled per width), `packet::values_ok`/`args_ok` index arithmetic, `root::out_ok` (`76+8*pc` indexing), `root::env_ok` nested loops.
 - Not done in package A: any module marked B/C/D above, host, fixtures, harness. Nothing was compiled, built or run.

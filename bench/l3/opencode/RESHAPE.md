@@ -43,10 +43,10 @@ What went:
 | `key_eq`, `has_prefix`, `lit_eq` | byte loops on `str` | same | `==`, `starts_with` | row 4.3f-S |
 | folder key / dirname / spans | `alloc` + `copy_span` | `copy(subview(..))` | `to_owned()` of a slice | 1 vs 1 |
 | dirname of a `str` | `to_bytes` / `to_str` round trip | same | `rsplit_once('/')` | row 4.3g-T |
-| pool append (`cat_bytes`, `append_str`, `cat_words`) | zero-filled `alloc(a+b)` + two loops | `arr_reserve` + two `arr_append` | `extend_from_slice` on one `Vec` | 1 new array per append vs 0 (row 4.3g-P) |
+| pool append (`cat_bytes`, `append_str`, `pool_*`) | zero-filled `alloc(a+b)` + two loops | one pool grown `inout` (`arr_reserve` + `arr_append`); helpers removed (4.3g rows step) | `extend_from_slice` on one `Vec` | 0 vs 0 |
 | column check (`has_name`) | full scan with `found` | return at first match | `iter().any` | 0 vs 0 |
 | rows decode | zero-filled `rows` / `pool`, own `grow`, `fr` / `fp` copies | same | `Vec<Row>` push | row 4.3g-R |
-| select SQL / pool | `pool_str` chain, 4 buffers in mode 0 | same | one `String`, `format!` | row 4.3g-Q |
+| select SQL / pool | `pool_str` chain, 4 buffers in mode 0 | one SQL buffer, `match mode`; mode 0 one pool from a borrowed `folder_key` (rows step) | one `String`, `format!` | 1 vs 1 |
 | export temp prefix / spawn args | second normalizer, zero-filled `out`, `to_bytes` of literals | same; `with_span` now reserve + append | `join(root, "opencode-")`, `&str` args | row 4.3g-X |
 | message attach state | `mt: [i64]` 4 slots | `Attach { open, pid, mid }` inout | `Option<(String, String)>` + `bool` | tape ids vs owned strings (row 4.3g-T) |
 | message text | `out` + `total` + `first` | `out` + `first`, `continue` exits | `String` + `first` | 0 extra vs 0 |
@@ -57,7 +57,7 @@ What went:
 | plan time | `copy(c)` / `copy(d)` | move | owned return | 0 vs 0 |
 | convert loop | `bad` flag | `return shape_error()` | `?` | same |
 | model text | `put_str` byte loops | reserve + `arr_append` + `arr_push(47)` | `format!("{p}/{m}")` | 1 vs 1 |
-| result packet | zero-filled `40+N+K+T`, `put_*` loops, `result_shape` twice | same | `Vec::with_capacity` + `extend` | row 4.3g-A |
+| result packet | zero-filled `40+N+K+T`, `put_*` loops, `result_shape` twice | reserve + `arr_append` of each part (rows step); `result_shape` still twice | `Vec::with_capacity` + `extend` | 1 vs 1; row 4.3g-A2 |
 
 ## 2. Differences that remain
 
@@ -100,15 +100,62 @@ Not applied (rows). Each needs more than the time cap allowed or an API change a
 
 ## 4. Results
 
-After the last code change (whole root verified by `test_impl.py`), `rs/rust` and `rs/llvm`:
+After the last code change of the rows step (§5), `rs/rust` and `rs/llvm`:
 
 | check | rs/rust | rs/llvm |
 |---|---|---|
-| scope verify A-D (`--verify-only --scope`, 300 s each) | B, C, D VERIFIED after the last change | - |
+| scope verify A-D (`--verify-only --scope`, 300 s each) | A, B, C, D VERIFIED | A, B, C, D VERIFIED |
 | `opencode/test_impl.py` (verifier + fixtures) | PASS, 199/199 | PASS, 199/199 |
 | `q.py` 300 random + 199 fixed | exact 406, P1 6, P2 5, P3 1, P4 6, P5 2, P8 5, P9 29, P2+P9 37, P3+P4+P8 1, P2+P4+P8 1, unexplained 0 | same |
-| `q_mutants.py --check` | 16 / 16 present exactly once | - |
-| hand `opencode.rs` | builds with `cargo build --release` (serde_json, rusqlite 0.40 bundled), 0 warnings | - |
+| `q_mutants.py --check` | 16 / 16 present exactly once (M01, M05, M08 follow the new text) | - |
+| hand `opencode.rs` | `cargo build --release`, 0 warnings | - |
 
-No case needed a rerun. The frozen py pairs were not built (PF); `q.py` ran on the two rs pairs only. No perf timing
-was run.
+No case needed a rerun. No perf timing was run.
+
+## 5. Rows step (4.3g rows closed after 4.4)
+
+Every changed Pruv function was brought to the structure of its hand function; the hand changed only for 4.3g-E.
+
+| row | status | what changed |
+|---|---|---|
+| 4.3g-P | closed | `packet::cat_bytes` / `append_str` / `put_bytes` and `util::pool_bytes` / `pool_str` / `pool_dec` removed; each pool is one buffer grown `inout` with `arr_reserve` + `arr_append` (`list::list_result` appends ids / titles / ISO straight from the text, `plan::plan_result`, `export::start` / `on_mkdtemp`) |
+| 4.3g-Q | closed | `sql::select_sql` builds one buffer from the SQL literals with `match mode`; `select_pool` mode 0 borrows `folder_key` and appends it twice into one pool, mode 1 returns the thread without a copy |
+| 4.3g-D | closed | `path::db_none` removed; `db_path` returns `enum DbPath { Memory, File(path: str) }` and reads `OPENCODE_DB` once; `admit::p100` matches on it |
+| 4.3g-A | closed except A2 | `assemble_result`, `build_error`, `assemble_step`: reserve the total, append the header and each part (no zero fill, no fill loops) |
+| 4.3g-E | closed | hand: `Fail.name`, `engine_error` (spawn / wait failure carries the native errno, raw code and `EngineImportError`), `encode_error` writes raw / name / detail with words 25 / 26 like Pruv `build_error` |
+| 4.3g-K | partly closed | new `util::span_view -> ref [u8] from(t)`; `read_handoff`, `path::utility` mode 4, `select_pool`, `admit::p101..p103`, `sql::p200` borrow instead of copying; `folder_key` returns a view |
+| 4.3g-F | partly closed | `util::format_i64` / `pool_dec` removed (no callers); `plan::items_at` and `list::rows_result` reserve + `arr_push` instead of zero fill |
+
+Left as rows:
+
+| row | what stays | why |
+|---|---|---|
+| 4.3g-A2 | `result_shape` runs twice (`ok_result`, then `step_args_ok`) | wire check on both sides of the packet (4.3g-SQ) |
+| 4.3g-K2 | `rows::clean_title` / `updated_number` still copy through `span_bytes` | they need a `str` borrowed from bytes (`owned_text` takes an owned array); with 4.3g-R |
+| 4.3g-F2 | `rows::format_ext` repeats the civil-date arithmetic | with 4.3g-R |
+| 4.3g-R | `rows::decode` zero fill, own doubling, `fr` / `fp`, `relocate` / `p208` copies | not started (time cap) |
+| 4.3g-N | `normalize` scratch `2n + 4` and a second buffer | needs a segment list (`Vec<&str>`) of views; not started |
+| 4.3g-X | `export::join_prefix` second normalizer, `spawn_pool` zero fill | not started; depends on 4.3g-N |
+| 4.3g-T | `Attach` tape ids; `dirname` / `iso_str` `str` / `[u8]` round trips | `admit::p100` appends the parent into the pool it was taken from, so a borrowed `dirname` aliases the `inout` pool; the hand borrows from an owned `String` |
+| 4.3g-BS (language, new) | `build_error` / `error` / `done_error` take `name: [u8]`, `detail: [u8]` | `arr_append` of a `str` into `[i64]` is a type error; literals pass as static views, so callers did not change |
+
+Codex structure comparison (gpt-6.2-astra, high; Codex 2 account, the default was at its limit). Applied:
+
+- Hand bug: the raw code of an fs / exec failure was `ErrorKind`'s text; it is now the errno symbol the host reports
+  (`errno_code`, e.g. `ENOENT`). A spawn that fails with `ENOENT` / `EACCES` is reported at stage 16 (Node raises it
+  on the child's error event, as the host and fixture F08 do), other spawn failures at 15.
+- `export::code_bytes -> ref [u8] from(completion)`; `rm_step` / `path_step` pass the path as a `subview`, `rm_step`
+  builds its words in one reserved buffer; `on_mkdtemp` checks the bank first and writes `dir ++ "/export.json"` once
+  (the directory ref is its prefix); `sql::select_pool` mode 1 checks a view, then copies once.
+
+Not applied (rows):
+
+| row | finding | why |
+|---|---|---|
+| 4.3g-A3 | `build_error` / `assemble_step` start from a 40 / 12-word buffer and grow it; the hand reserves the total first | header words are set by index after `meta_new`; with A2 |
+| 4.3g-K3 | `admit::p100` owns the thread id for `valid_thread` and copies the parent; `db_path` owns `home` before the absolute check; `utility` mode 3 `to_bytes(d)` | p100 with 4.3g-T; the others need `str` byte views (4.3f-S family) |
+| 4.3g-M07 | `list_result` reads rows through `sql_order` (identity) | the array is the M07 mutant hook (`q_mutants.py`); changing it needs a new mutant form |
+| (contract) | `plan::items_at` drops a trailing partial triple (before: zero words up to `len(items)`) | only `fit` outputs reach it and they are whole triples; the hand has no partial triples |
+
+Observation (hand, not changed): `hand::dirname("//a")` returns `""` (`t[..1]` trimmed), Node `path.posix.dirname`
+returns `"//"`; no fixture reaches it (the DB path comes from `join(home, ..)`).
