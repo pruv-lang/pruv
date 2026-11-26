@@ -1,0 +1,1 @@
+{"flags_matrix": [[]], "exit": 0, "stdout_lines": ["4", "4", "-1", "-1"], "alloc_balance": true, "gen_contains": ["return (if (i < (a.len() as i64)) { (unsafe { *a.get_unchecked((i) as usize) }) } else { (-1i64) });"]}

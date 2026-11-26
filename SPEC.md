@@ -83,6 +83,7 @@ match e {                        // e: Option<i64>, Result<i64> or a user enum (
 }
 match r { Ok(v) => { ... } Err(c) => { ... } }
 if let Some(v) = e { ... } else { ... }   // else optional (R-6u-2)
+let v: i64 = if c { a } else { b };    // value if: else required, one expression per arm (R-6w-1)
 let Some(v) = e else { return ..; };     // else block must not reach its end (R-6u-3)
 while let Some(v) = e invariant .. decreases .. { ... }   // e re-evaluated per iteration (R-6u-5)
 match a { [] => { .. } [x, rest @ ..] => { .. } }       // slice patterns on arrays and views (R-6u-4)
@@ -2865,6 +2866,44 @@ fn head(r: Row) -> Res<i64> { if r[0] < 0 { return Err(r[0]); } return Ok(r[0]);
   [ref of a scalar](tests/must_reject/p9_alias_ref_scalar.pruv), [refined use](tests/must_reject/p9_alias_refine_false.pruv),
   [prelude names in async code](tests/runtime/p9_rt_alias_async.pruv).
 
+## 6w. Value `if` (P9a-3)
+```
+let v: u8 = if b { 200 } else { k };
+return if i < len(a) { a[i] } else { -1 };
+let y: [i64] = if c { move x } else { mk(n) };
+```
+- R-6w-1 **Value `if`.** `if c { e1 } else { e2 }` is an expression wherever a value is read (a `let` initializer,
+  an assignment, a `return`, an operand, a call argument). `c` is `bool`; `else` is required (`parse/syntax`), and
+  `else if` chains nest. Each arm block holds exactly one expression and no statements (`parse/syntax`). Evaluation
+  order: `c`, then only the chosen arm; operands to the left of the `if` run before `c`, operands to the right after
+  the arm (`a() + (if c { b() } else { d() })` calls `a`, then one of `b`, `d`). An `if` at the start of a statement
+  stays the statement form; write a value `if` there inside parentheses or as an initializer.
+- R-6w-2 **Types.** The expected type of the position types every arm, so a narrow literal arm takes it
+  (`let v: u8 = if b { 200 } else { k }`) and a tuple literal arm takes the tuple type; without one, the first arm that
+  is not a bare literal fixes the type and the other arm is checked against it (`type/type_mismatch`). The result
+  type is an integer, `bool`, `char`, a non-borrowing struct or enum, an `Option`/`Result` of these, a tuple, an array,
+  a `String`/`str`, a collection or an extended struct. A type parameter, a fixed array, a view, a borrowing struct,
+  `unit`, a handle and a `Result` with a `String` error are `type/value_branch_type`. For an owned type (arrays,
+  strings, collections, extended structs and tuples) every arm is a new value: a call, a literal, a constructor or a
+  bare `move x` (`type/value_branch_owned`; write `move x` or `copy(x)`). A value `if` in a contract is
+  `type/value_branch_context` (write the cases with `==>`).
+- R-6w-3 **Proof and ownership.** The verifier evaluates each arm under its path condition: an arm's obligations
+  (an index, a division, a callee's `requires`) and a callee's `ensures` hold only when the arm is chosen, and the
+  result is `ite(c, v1, v2)`. A value moved in one arm is maybe-moved after the `if` (`type/foreign_move` on a later
+  use). An `inout` call in an arm is `type/inout_context`, as for the right operand of `&&`.
+- R-6w-4 **Code.** Rust prints its own value `if` (`(if c { e1 } else { e2 })`), so a proved index in an arm stays an
+  unchecked read. LLVM branches to the chosen arm, joins a scalar with `phi` and any other value through an
+  entry-block slot; each arm's temporaries end inside the arm, and an owned result read in place is a statement
+  temporary. Value `match` is parity row P9a-5. Tests: [values](tests/runtime/p9_rt_if_value.pruv),
+  [unchecked index](tests/runtime/p9_rt_if_unchecked.pruv), [call order](tests/runtime/p9_rt_branch_order.pruv),
+  [owned arms](tests/runtime/p9_rt_owned_arm.pruv), [tuples](tests/runtime/p9_rt_if_tuple.pruv),
+  [owned tuple](tests/runtime/p9_rt_if_tuple_owned.pruv), [no else](tests/must_reject/p9_if_no_else.pruv),
+  [two expressions](tests/must_reject/p9_if_two_exprs.pruv), [arm types](tests/must_reject/p9_if_types.pruv),
+  [condition type](tests/must_reject/p9_if_cond_type.pruv), [arm move](tests/must_reject/p9_if_arm_move.pruv),
+  [arm inout](tests/must_reject/p9_if_arm_inout.pruv), [false contract](tests/must_reject/p9_if_false_ensures.pruv),
+  [borrowed owned arm](tests/must_reject/p9_if_owned_borrow.pruv), [contract](tests/must_reject/p9_if_contract.pruv),
+  [type parameter](tests/must_reject/p9_if_generic.pruv).
+
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
 2. Every `+ - * unary-` in code: result within i64 range.
@@ -3474,6 +3513,9 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/unknown_variant` | type | a variant the enum does not have |
 | `type/unused_value` | type | a non-unit value is dropped |
 | `type/useless_expr` | type | an expression statement that is not a call |
+| `type/value_branch_context` | type | a value `if` in a contract (R-6w-2) |
+| `type/value_branch_owned` | type | an arm of a value `if` of an owned type that is not a new value (R-6w-2) |
+| `type/value_branch_type` | type | a value `if` whose type is not supported (R-6w-2) |
 | `type/tuple_needs_type` | type | a tuple literal where no tuple type is expected; bind it with a typed `let` (R-6s-1) |
 | `type/tuple_pattern_type` | type | a tuple pattern in a match arm whose payload is not a tuple or has another component count (R-6u-1) |
 | `type/tuple_pattern_owned` | type | a tuple pattern in a match arm that binds a component other than an integer, `bool` or `char` (R-6u-1) |

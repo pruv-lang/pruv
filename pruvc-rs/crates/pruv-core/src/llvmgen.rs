@@ -5299,6 +5299,60 @@ impl<'a> FnGen<'a> {
         Ok(v)
     }
 
+    /// P9a-3: `if c { a } else { b }` as a value. Only the chosen arm runs (its temporaries end inside the arm). A
+    /// scalar joins with a phi; any other value goes through an entry-block slot. The checker admits only fresh arms
+    /// for an owned type, so each arm is evaluated owned and the joined value becomes a statement temporary when the
+    /// destination borrows it.
+    fn value_if(&mut self, x: &Call, owned: bool) -> R<V> {
+        let ty = need_ty(&x.ty)?;
+        let kind = vkind(&ty);
+        let cond = self.ev(&x.args[0], false)?;
+        let then = self.label("vthen");
+        let els = self.label("velse");
+        let end = self.label("vend");
+        self.condbr(&cond.a, &then, &els)?;
+        let scalar = matches!(kind, Kind::I64 | Kind::Narrow(_) | Kind::I1);
+        let slot = if scalar { None } else { Some(self.new_slot("vif", &ty)?) };
+        let mut incoming = Vec::new();
+        let mut arms = Vec::new();
+        for (label, arm) in [(&then, &x.args[1]), (&els, &x.args[2])] {
+            self.place(label);
+            self.begin_temps();
+            let v = self.ev(arm, true)?;
+            if let Some(sl) = &slot {
+                self.store(sl, &v)?;
+            }
+            self.end_temps()?;
+            incoming.push((v.a.clone(), self.cur.clone()));
+            arms.push(v);
+            self.br(&end)?;
+        }
+        self.place(&end);
+        let mut v = match &slot {
+            None => {
+                let [(a, pa), (b, pb)] = incoming.as_slice() else { unreachable!() };
+                let r = self.op(format!("phi {} [ {a}, %{pa} ], [ {b}, %{pb} ]", kind.name()))?;
+                V::new(kind.clone(), r)
+            }
+            Some(sl) => self.load(sl)?,
+        };
+        if kind == Kind::Arr {
+            if arms[0].layout != arms[1].layout {
+                return Err("llvmgen: value if arms with different array layouts".into());
+            }
+            v.layout = arms[0].layout;
+            v.rng = arms[0].rng.zip(arms[1].rng).map(|(a, b)| (a.0.min(b.0), a.1.max(b.1)));
+            if v.ty.is_none() {
+                v.ty = arms[0].ty.clone();
+            }
+        }
+        let drops = matches!(kind, Kind::Arr | Kind::Coll) || (kind == Kind::Agg && self.is_ext(&ty));
+        if drops && !owned {
+            self.temps.last_mut().ok_or_else(|| IDX_ERR.to_string())?.push(v.clone());
+        }
+        Ok(v)
+    }
+
     pub fn shortcircuit(&mut self, l: &str, is_or: bool, rhs: &dyn Fn(&mut FnGen<'a>) -> R<String>) -> R<String> {
         let lcur = self.cur.clone();
         let rl = self.label("rhs");
@@ -5491,6 +5545,7 @@ impl<'a> FnGen<'a> {
                 let v = self.ev(a, false)?;
                 Ok(V::with_b(Kind::Opt, if x.name == "Some" || x.name == "Ok" { "true" } else { "false" }, v.a))
             }
+            Expr::Call(x) if crate::ast::ValueIf::matches(x) => self.value_if(x, owned),
             Expr::Call(x) => self.ev_call(x, owned, self.m.storage.layout_of(e), self.m.storage.range_of(e)),
             Expr::StructLit(x) => {
                 if self.is_ext(&x.name) {

@@ -1,0 +1,14 @@
+// P9a-3: a value `if` of a tuple type; the expected type types both arms, so the literal `(1, 2)` arm is (u8, i64)
+// and does not fix (i64, i64) from the first arm.
+fn f(c: bool, k: u8) -> (u8, i64)
+  ensures c ==> result.1 == 2
+  ensures !c ==> result.1 == 3
+{
+  let t: (u8, i64) = if c { (1, 2) } else { (k, 3) };
+  return t;
+}
+
+fn run(c: bool) -> i64 {
+  let (a, b): (u8, i64) = f(c, 9);
+  return b + (if a == 1 { 100 } else { 200 });
+}

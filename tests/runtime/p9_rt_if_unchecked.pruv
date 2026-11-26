@@ -1,0 +1,14 @@
+// P9a-3: an index in a value `if` arm is proved under the arm's guard, so the verified Rust reads it unchecked
+// (the hand shape `if i < a.len() { a[i] } else { -1 }` without a second bounds check)
+fn at(a: [i64], i: i64) -> i64
+  requires 0 <= i
+{
+  return if i < len(a) { a[i] } else { -1 };
+}
+
+fn run(i: i64) -> i64 ! alloc
+  requires 0 <= i && i < 10
+{
+  let a: [i64] = alloc(3, 4);
+  return at(a, i);
+}

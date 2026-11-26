@@ -3220,6 +3220,19 @@ impl<'a> FnVerifier<'a> {
                     }
                 }
             }
+            Expr::Call(x) if ast::ValueIf::matches(x) => {
+                // P9a-3: each arm is evaluated under its own path guard, so an obligation or an effect of the arm that
+                // does not run is vacuous; the result is the guarded choice of the two arm values
+                let [cond, then, els] = x.args.as_slice() else { unreachable!("value if") };
+                let c = self.ev_ast(cond, st, g, code, env)?;
+                let mut g1: Vec<Ast> = g.to_vec();
+                g1.push(c.clone());
+                let a = self.ev(then, st, &g1, code, env)?;
+                let mut g2: Vec<Ast> = g.to_vec();
+                g2.push(c.not());
+                let b = self.ev(els, st, &g2, code, env)?;
+                self.place_ite(&c, &a, &b)
+            }
             Expr::Call(x) => self.call(e, x, st, g, code, env),
             Expr::StructLit(x) => {
                 if model.is_g9() {

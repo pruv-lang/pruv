@@ -164,6 +164,26 @@ impl PlaceIf {
     }
 }
 
+/// P9a-3: the value `if c { e1 } else { e2 }`, encoded like `PlaceIf` in the call payload with the arguments
+/// `[cond, then, els]` (an `else if` chain nests in `els`). Only the chosen arm is evaluated; the reserved name cannot
+/// be written in source and is never resolved as a function.
+pub struct ValueIf;
+
+impl ValueIf {
+    pub const NAME: &str = "@value_if";
+
+    pub fn expr(line: i64, col: i64, cond: Expr, then: Expr, els: Expr) -> Expr {
+        Expr::Call(Call {
+            line, col, name: Self::NAME.into(), args: vec![cond, then, els], ty: None,
+            targs: None, inst: None, old: None, opaque_c: false,
+        })
+    }
+
+    pub fn matches(call: &Call) -> bool {
+        call.name == Self::NAME
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Spent(Spent),

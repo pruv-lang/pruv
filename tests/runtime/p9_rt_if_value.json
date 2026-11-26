@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["7020910", "7110010", "2230110", "5520099"], "alloc_balance": true, "gen_contains": ["let v: u8 = (if b { 200u8 } else { k });", "(if (x > 0i64) { 1i64 } else { (if (x == 0i64) { 0i64 } else { (-1i64) }) })"]}

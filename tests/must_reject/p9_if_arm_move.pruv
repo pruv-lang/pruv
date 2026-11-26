@@ -1,0 +1,7 @@
+fn mk() -> [i64] ! alloc { return alloc(2, 0); }
+
+fn f(c: bool) -> i64 ! alloc {
+  let mut x: [i64] = mk();
+  let y: [i64] = if c { move x } else { mk() };
+  return len(x) + len(y);
+}

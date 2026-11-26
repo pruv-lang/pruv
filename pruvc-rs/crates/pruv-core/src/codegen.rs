@@ -3195,6 +3195,9 @@ impl<'a> Gen<'a> {
             Expr::Move(_) => Err("G6 move reached the Rust generator".to_string()),
             // G5 A0: an inout marker is checked but never lowered (the driver's A0 guard stops the program earlier)
             Expr::InoutArg(_) => Err("G5 inout argument reached the Rust generator".to_string()),
+            // P9a-3: Rust's own value `if`; only the chosen block runs
+            Expr::Call(c) if crate::ast::ValueIf::matches(c) => Ok(format!("(if {} {{ {} }} else {{ {} }})",
+                self.c(&c.args[0])?, self.c(&c.args[1])?, self.c(&c.args[2])?)),
             Expr::VariantField(x) if self.is_ext(expr_ty(&x.value).as_deref()) || self.g9_real_path(&x.value) => {
                 let fty = expr_ty(e);
                 if self.is_ext(fty.as_deref()) || fty.as_deref().map_or(false, |t| is_array_name(t) || t == "str") {
@@ -5486,6 +5489,8 @@ pruv_hi <= (pruv_b.len() as i128) && \
             Expr::Move(x) => Ok(format!("::std::mem::take(&mut {}.{})", x.name, x.fields.join("."))),
             // G5 A0: never reaches the generator (the driver's A0 guard stops the program earlier)
             Expr::InoutArg(_) => Err("G5 inout argument reached the Rust generator".to_string()),
+            Expr::Call(c) if crate::ast::ValueIf::matches(c) => Ok(format!("(if {} {{ {} }} else {{ {} }})",
+                self.e(&c.args[0])?, self.e(&c.args[1])?, self.e(&c.args[2])?)),
             Expr::IntLit(x) => {
                 // P7: char/byte literals and constant uses keep the hand-Rust spelling
                 match &x.kind {

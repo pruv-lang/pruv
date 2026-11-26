@@ -3036,6 +3036,35 @@ impl Parser {
         Ok(PlaceIf { line: t.line, col: t.col, cond, then, els, ty: None }.into_expr())
     }
 
+    /// P9a-3: `if c { e1 } else { e2 }` (or `else if ..`) as a value; every arm block holds one tail expression.
+    fn value_if(&mut self) -> R<Expr> {
+        self.enter(1)?;
+        let t = self.next();
+        let cond = self.expr()?;
+        let then = self.value_arm()?;
+        if !self.at("else", 0) {
+            let p = self.peek(0).clone();
+            return Err(PruvError::new("parse", p.line, p.col, "syntax",
+                "a value `if` needs an `else` arm", "add `else { value }`"));
+        }
+        self.bump();
+        let els = if self.at("if", 0) && !self.at("let", 1) { self.value_if()? } else { self.value_arm()? };
+        self.leave(1);
+        Ok(crate::ast::ValueIf::expr(t.line, t.col, cond, then, els))
+    }
+
+    fn value_arm(&mut self) -> R<Expr> {
+        self.expect("{")?;
+        let e = self.expr()?;
+        if !self.at("}", 0) {
+            let p = self.peek(0).clone();
+            return Err(PruvError::new("parse", p.line, p.col, "syntax",
+                "an arm of a value `if` holds one expression", "move statements before the `if`"));
+        }
+        self.bump();
+        Ok(e)
+    }
+
     fn postfix(&mut self) -> R<Expr> {
         let mut e = self.primary()?;
         let mut chain = 0; // a postfix chain that piles up to the left, like a[i][j].f, is counted as depth too
@@ -3093,6 +3122,9 @@ impl Parser {
             return Err(PruvError::new("parse", line, col, "loop_unsupported",
                 "`loop { }` is not available: every loop needs a measure",
                 "write `while cond decreases m { }` with a `break` inside"));
+        }
+        if t.kind == Kind::Kw && t.val == "if" && !self.at("let", 1) {
+            return self.value_if();
         }
         if t.kind == Kind::Int {
             self.bump();
