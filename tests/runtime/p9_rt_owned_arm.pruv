@@ -1,0 +1,44 @@
+// P9a-3: a value `if` of an owned type (a string, an array, a collection, an extended struct). Every arm is a new
+// value (a call, a literal, a constructor or a `move`); only the chosen arm allocates, and the result is owned by
+// a binding or freed at the end of the statement when it is only read.
+struct Box2 { name: [i64], xs: [i64] }
+
+fn mk(n: i64) -> [i64] ! alloc
+  requires 0 <= n && n <= 10
+  ensures len(result) == n
+{
+  return alloc(n, 7);
+}
+
+fn label(c: bool) -> String ! alloc
+  ensures len(result) <= 5
+{
+  return if c { string_from("yes") } else { string_from("no!no") };
+}
+
+fn pick(c: bool, n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 5
+{
+  let mut x: [i64] = mk(n);
+  let y: [i64] = if c { move x } else { mk(n + 2) };
+  return len(y) * 10 + len(label(c));
+}
+
+fn boxed(c: bool) -> Box2 ! alloc {
+  return if c { Box2 { name: mk(2), xs: mk(2) } } else { Box2 { name: mk(3), xs: mk(4) } };
+}
+
+fn vec_of(c: bool) -> Vec<i64> ! alloc {
+  let mut v: Vec<i64> = vec_new::<i64>();
+  v = vec_push::<i64>(move v, 4);
+  return if c { move v } else { vec_new::<i64>() };
+}
+
+fn run() -> () ! io, alloc {
+  print(pick(true, 3));
+  print(pick(false, 3));
+  print(len(if true { mk(1) } else { mk(9) }) + len(if false { label(true) } else { label(false) }));
+  let b: Box2 = boxed(false);
+  print(len(b.name) * 10 + len(b.xs));
+  print(len(vec_of(true)) * 10 + len(vec_of(false)));
+}

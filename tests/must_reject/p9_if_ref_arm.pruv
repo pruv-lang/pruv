@@ -1,0 +1,10 @@
+fn view(src: [i64]) -> ref [i64] from(src) {
+  return src;
+}
+pub fn g(c: bool, n: i64) -> i64 ! alloc
+  requires 0 <= n && n < 100
+{
+  let x: [i64] = alloc(n, 7);
+  let k: i64 = len(if c { view(x) } else { alloc(2, 0) });
+  return k + len(x);
+}

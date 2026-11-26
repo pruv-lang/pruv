@@ -1,0 +1,6 @@
+fn f(c: bool, x: i64) -> i64
+  ensures result == (if c { x } else { 0 })
+{
+  if c { return x; }
+  return 0;
+}

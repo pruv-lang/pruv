@@ -1,0 +1,45 @@
+// P9a-3: a value `if` evaluates its condition, then only the chosen arm, in source order with the operands around
+// it: `a() + (if c { b() } else { d() })` calls a first and then exactly one of b and d.
+fn a(n: i64) -> i64 ! io
+  requires -100 < n && n < 100
+  ensures result == n
+{
+  print(1);
+  return n;
+}
+
+fn b(n: i64) -> i64 ! io
+  requires -100 < n && n < 100
+  ensures result == n * 2
+{
+  print(2);
+  return n * 2;
+}
+
+fn d(n: i64) -> i64 ! io
+  requires -100 < n && n < 100
+  ensures result == n * 3
+{
+  print(3);
+  return n * 3;
+}
+
+fn cond(c: bool) -> bool ! io
+  ensures result == c
+{
+  print(0);
+  return c;
+}
+
+fn mix(c: bool, n: i64) -> i64 ! io
+  requires -50 < n && n < 50
+{
+  return a(n) + (if cond(c) { b(n) } else { d(n) }) + a(n + 1);
+}
+
+fn run() -> () ! io {
+  print(mix(true, 5));
+  print(mix(false, 5));
+  let x: i64 = if cond(false) { b(1) } else if cond(true) { d(2) } else { a(3) };
+  print(x);
+}

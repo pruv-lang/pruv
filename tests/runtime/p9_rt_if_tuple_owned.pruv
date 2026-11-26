@@ -1,0 +1,11 @@
+// P9a-3: a value `if` of a tuple with a String component is an owned result (each arm is a new tuple)
+fn g(c: bool) -> i64 ! alloc {
+  let t: (String, i64) = if c { (string_from("ab"), 20) } else { (string_from("c"), 30) };
+  let (s, n): (String, i64) = move t;
+  if n > 100 { return 0; }
+  return len(s) + n;
+}
+
+fn run(c: bool) -> i64 ! alloc {
+  return g(c);
+}

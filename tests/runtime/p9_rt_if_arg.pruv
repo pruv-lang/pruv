@@ -1,0 +1,15 @@
+// P9a-3: a call argument types each value `if` arm (narrow literal, tuple), and an `alloc` arm takes the array type
+fn g(x: u8) -> u8 { return x; }
+
+fn h(t: (u8, i64)) -> i64
+  requires 0 <= t.1 && t.1 < 10
+  ensures 0 <= result && result < 2000
+{
+  return t.1 * 100 + i64(t.0);
+}
+
+fn run(c: bool) -> i64 ! alloc {
+  let a: [u8] = if c { alloc(3, 200) } else { alloc(4, 1) };
+  let n: i64 = if len(a) == 3 { 1 } else { 2 };
+  return i64(g(if c { 200 } else { 1 })) * 100000 + h(if c { (7, 2) } else { (9, 4) }) * 10 + n;
+}

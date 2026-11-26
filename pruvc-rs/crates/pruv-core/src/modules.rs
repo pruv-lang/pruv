@@ -1322,7 +1322,7 @@ impl<'a> Rs<'a> {
     // ---- expressions ----
     fn rexpr(&self, e: &mut Expr) -> Res<()> {
         if let Expr::Call(call) = e {
-            if PlaceIf::matches(call) {
+            if PlaceIf::matches(call) || crate::ast::ValueIf::matches(call) {
                 return call.args.iter_mut().try_for_each(|arg| self.rexpr(arg));
             }
         }

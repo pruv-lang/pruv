@@ -166,6 +166,12 @@ pub fn expr(e: &Expr) -> Json {
                 ("cond", bx(cond)), ("then", bx(then)), ("els", bx(els)), ("ty", ty(&x.ty)),
             ])
         }
+        Expr::Call(x) if crate::ast::ValueIf::matches(x) => {
+            let [cond, then, els] = x.args.as_slice() else { unreachable!() };
+            node("ValueIf", Some((x.line, x.col)), vec![
+                ("cond", bx(cond)), ("then", bx(then)), ("els", bx(els)), ("ty", ty(&x.ty)),
+            ])
+        }
         Expr::Call(x) => {
             let mut f: Fields = vec![("name", js(&x.name)), ("args", list(&x.args, expr)), ("ty", ty(&x.ty))];
             targs_extra(&mut f, &x.targs, &x.inst);

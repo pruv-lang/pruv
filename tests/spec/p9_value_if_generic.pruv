@@ -1,0 +1,5 @@
+// spec: R-6w-2 reject
+// A value `if` of a type parameter is not supported.
+fn pick<T>(c: bool, a: T, b: T) -> T {
+  return if c { a } else { b };
+}

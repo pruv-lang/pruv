@@ -1231,6 +1231,15 @@ fn inout_statement_calls<'a>(
             return;
         }
     }
+    if let Expr::Call(c) = e {
+        if crate::ast::ValueIf::matches(c) {
+            // P9a-3: only one arm runs
+            inout_statement_calls(&c.args[0], conditional, calls);
+            inout_statement_calls(&c.args[1], true, calls);
+            inout_statement_calls(&c.args[2], true, calls);
+            return;
+        }
+    }
     for child in crate::refine::kids(e) {
         inout_statement_calls(child, conditional, calls);
     }
@@ -5741,6 +5750,10 @@ impl Checker {
         if is_narrow(ty) && matches!(e, Expr::IntLit(_)) {
             return self.expect(e, ty, scope, c, None).map(|_| false);
         }
+        // R-6w-2: the parameter type is the expected type of each value `if` arm (a narrow literal, a tuple literal)
+        if (is_narrow(ty) || crate::gtype::is_tuple_name(&ty.name)) && matches!(e, Expr::Call(x) if ValueIf::matches(x)) {
+            return self.expect(e, ty, scope, c, None).map(|_| false);
+        }
         let got = if borrow_vector && self.recursive_vec_element(ty) {
             self.read_expr(e, scope, c, &["vec_get"])?
         } else {
@@ -5866,6 +5879,11 @@ impl Checker {
     /// op: what the operand is used for (arithmetic, comparison, ...) when the operation needs a concrete type:
     /// an abstract type parameter there is a generic_operation error rather than a plain mismatch.
     fn expect(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, contract: bool, op: Option<&str>) -> Res<GType> {
+        if matches!(e, Expr::Call(call) if crate::ast::ValueIf::matches(call)) {
+            // P9a-3: the expected type types every arm (a narrow literal arm takes it, not the first arm's i64)
+            let t = self.value_if(e, Some(ty), scope, contract)?;
+            return self.check_expected_type(e, ty, op, t);
+        }
         if let (Expr::Call(call), Some((el, _))) = (&mut *e, ty.fixed_parts()) {
             if is_array_lit(&call.name) {
                 // P7-1: the expected [T; N] types the literal's elements
@@ -6474,6 +6492,7 @@ impl Checker {
                     "remove `inout`",
                 ))
             }
+            Expr::Call(x) if crate::ast::ValueIf::matches(x) => self.value_if(e, None, scope, c),
             Expr::Call(x) => {
                 let t = self.call(x, scope, c)?;
                 if let Some(xe) = self.x_pending.take() {
@@ -6481,6 +6500,75 @@ impl Checker {
                 }
                 Ok(t)
             }
+        }
+    }
+
+    /// P9a-3: a value `if`. The condition is bool; with `want` every arm is checked against it, otherwise the first
+    /// arm that is not a bare literal fixes the type. A result type that owns storage takes only fresh arms (a call,
+    /// a literal, a `move` or a constructor), so the value is new on either path, like a call result.
+    fn value_if(&mut self, e: &mut Expr, want: Option<&GType>, scope: &Scope, c: bool) -> Res<GType> {
+        let Expr::Call(call) = e else { unreachable!("value if") };
+        let (line, col) = (call.line, call.col);
+        if c {
+            return Err(terr(line, col, "value_branch_context", "a value `if` is not allowed in a contract",
+                "write the cases with `==>`, or `&&` and `||`"));
+        }
+        self.static_lit = false;
+        let [cond, then, els] = call.args.as_mut_slice() else { unreachable!("value if arity") };
+        self.expect(cond, &boolt(), scope, c, None)?;
+        let t = match want {
+            Some(w) => w.clone(),
+            None if bare_lit(then) && !bare_lit(els) => self.expr(els, scope, c)?,
+            None => self.expr(then, scope, c)?,
+        };
+        for arm in [&mut *then, &mut *els] {
+            self.static_lit = false;
+            self.want_alloc(arm, &t); // `alloc` takes the arm type, as in a `let`
+            self.expect(arm, &t, scope, c, None)?;
+        }
+        let owned = self.value_branch_kind(&t).ok_or_else(|| terr(line, col, "value_branch_type",
+            format!("a value `if` of type {} is not supported yet", tn(&t)),
+            "use an `if` statement that assigns a `let mut` local"))?;
+        if owned {
+            for arm in [&*then, &*els] {
+                let fresh = match arm {
+                    // a call result borrowed from an argument (`from`, a `ref` result) is not a new value
+                    Expr::Call(x) => !PlaceIf::matches(x) && !self.funcs.get(&x.name).is_some_and(|f| f.holds_args),
+                    Expr::Move(m) => m.fields.is_empty(),
+                    Expr::StrLit(_) | Expr::StructLit(_) | Expr::EnumCtor(_) | Expr::Ctor(_) => true,
+                    _ => false,
+                };
+                if !fresh {
+                    return Err(terr(arm.line(), arm.col(), "value_branch_owned",
+                        format!("an arm of a value `if` of type {} must be a new value", tn(&t)),
+                        "write `move x` or `copy(x)`, or call a function"));
+                }
+            }
+        }
+        call.ty = Some(t.to_key());
+        Ok(t)
+    }
+
+    /// P9a-3: Some(true) when a value of `t` owns storage, Some(false) when it is copied, None when a value branch of
+    /// this type is not supported (type parameters, views, borrowing structs, fixed arrays, handles). A tuple is owned
+    /// when a component is.
+    fn value_branch_kind(&self, t: &GType) -> Option<bool> {
+        if t.owner.is_some() || crate::llvmgen::is_owned_result(&t.to_key()) || t.is_fixed() || t.view_base().is_some() || t.view_payload().is_some() {
+            return None;
+        }
+        if t.int_width().is_some() || *t == boolt() {
+            return Some(false);
+        }
+        if t.is_array() || *t == strt() || t.is_collection() || self.is_extended(t) {
+            return Some(true);
+        }
+        if matches!(t.name.as_str(), "option" | "result") {
+            return t.args.iter().all(|a| self.value_branch_kind(a) == Some(false)).then_some(false);
+        }
+        match self.decls.get(&t.name) {
+            Some(d) if !crate::borrowed::borrowing_struct(d)
+                && t.args.iter().all(|a| self.value_branch_kind(a) == Some(false)) => Some(false),
+            _ => None,
         }
     }
 
@@ -8350,6 +8438,8 @@ fn x_scan_expr(e: &Expr, checker: &Checker) -> Option<String> {
         Expr::FieldAccess(_) | Expr::Quant(_) => {
             crate::refine::kids(e).into_iter().find_map(|child| x_scan_expr(child, checker))
         }
+        // R-6w-2: a value `if` is not a contract expression, so a body using one is not expanded
+        Expr::Call(c) if ValueIf::matches(c) => Some("it uses a value `if`".into()),
         Expr::Call(c) => {
             if checker.funcs.contains_key(&c.name) || c.name == "len" || is_bit_builtin(&c.name) || matches!(c.name.as_str(), "load_be" | "load_le" | "utf8_valid" | "utf8_valid_span") {
                 c.args.iter().enumerate().find_map(|(i, a)| {
