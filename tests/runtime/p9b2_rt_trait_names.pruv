@@ -1,0 +1,21 @@
+// P9b-2 (R-6x-3, R-6x-4): methods named like prelude trait methods (`eq`, `into`) keep the path form `C::eq(..)`
+// in the Rust shape, so Rust's method probe cannot pick `PartialEq::eq` on `&mut C`; a `take self` method takes
+// a call result as its value.
+struct C { n: i64 }
+impl C {
+  fn new(k: i64) -> C ensures result.n == k { return C { n: k }; }
+  fn eq(self, o: C) -> bool ensures result == (self.n == o.n) { return self.n == o.n; }
+  fn into(self) -> i64 ensures result == self.n { return self.n; }
+  fn same(inout self, o: C) -> bool ensures result == (self.n == o.n) && self.n == old(self).n { return self.eq(o); }
+  fn grab(inout self) -> i64 ensures result == self.n && self.n == old(self).n { return self.into(); }
+  fn consume(take self) -> i64 ensures result == self.n { return self.n; }
+}
+fn run(k: i64) -> i64
+  requires k >= 0 && k <= 10
+{
+  let mut c: C = C::new(k);
+  let mut t: i64 = c.grab() + C::new(k).consume();
+  if c.same(C { n: k }) { t = t + 100; }
+  if c.eq(C { n: k + 1 }) { t = t + 1000; }
+  return t;
+}

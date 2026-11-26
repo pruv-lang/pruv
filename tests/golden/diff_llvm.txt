@@ -1481,8 +1481,8 @@ must_reject|tests/must_reject/p9_pattern_unreachable_wild.pruv	4 cases: error ty
 must_reject|tests/must_reject/p9_pattern_variant_type.pruv	4 cases: error type/match_type 4	VT=bd7a244529b1	Vt=bd7a244529b1	vT=bd7a244529b1	vt=bd7a244529b1
 must_reject|tests/must_reject/p9_pattern_wild_requires.pruv	4 cases: ok 4	VT=067c28c0fb6d	Vt=77a8b368deb5	vT=aaff02bb841e	vt=efe926ae3171
 must_reject|tests/must_reject/p9_value_match_empty.pruv	4 cases: error type/match_arms 4	VT=cb188e16ab3e	Vt=cb188e16ab3e	vT=cb188e16ab3e	vt=cb188e16ab3e
-must_reject|tests/must_reject/p9b_call_requires.pruv	4 cases: ok 4	VT=6a29fa6d38ac	Vt=ca5cc21ca178	vT=98324263d53a	vt=62f8cfe407fa
-must_reject|tests/must_reject/p9b_false_ensures.pruv	4 cases: ok 4	VT=13d780c868f7	Vt=4f8ecd5d738f	vT=0829028e523a	vt=0829028e523a
+must_reject|tests/must_reject/p9b_call_requires.pruv	4 cases: ok 4	VT=6a29fa6d38ac	Vt=ca5cc21ca178	vT=1d3efda1cada	vt=a6830171e4bc
+must_reject|tests/must_reject/p9b_false_ensures.pruv	4 cases: ok 4	VT=13d780c868f7	Vt=4f8ecd5d738f	vT=8a6d5ce6b2bb	vt=8a6d5ce6b2bb
 must_reject|tests/must_reject/p9b_take_use.pruv	4 cases: error type/foreign_move 4	VT=bdb5581e52f0	Vt=bdb5581e52f0	vT=bdb5581e52f0	vt=bdb5581e52f0
 must_reject|tests/must_reject/p9b_unknown_method.pruv	4 cases: error type/unknown_method 4	VT=9318c7bb168c	Vt=9318c7bb168c	vT=9318c7bb168c	vt=9318c7bb168c
 must_reject|tests/must_reject/refine_alloc_len.pruv	4 cases: ok 4	VT=e0d5d582b2c4	Vt=e0d5d582b2c4	vT=2a1588980a20	vt=2a1588980a20
@@ -3543,12 +3543,14 @@ mutate|tests/runtime/p9_rt_pattern_names.pruv	12 cases: error parse/syntax 8, er
 mutate|tests/runtime/p9_rt_pattern_order.pruv	12 cases: ok 8, error parse/syntax 4	0/VT=0e8daac5f883	0/Vt=0e8daac5f883	0/vT=0e8daac5f883	0/vt=0e8daac5f883	1/VT=0e8daac5f883	1/Vt=0e8daac5f883	1/vT=0e8daac5f883	1/vt=0e8daac5f883	2/VT=32832189d92f	2/Vt=32832189d92f	2/vT=32832189d92f	2/vt=32832189d92f
 mutate|tests/runtime/p9_rt_pattern_owned.pruv	12 cases: error parse/syntax 4, error type/unknown_name 4, ok 4	0/VT=9ebe7ca65085	0/Vt=9ebe7ca65085	0/vT=9ebe7ca65085	0/vt=9ebe7ca65085	1/VT=7c17c45f6b33	1/Vt=93955acd0a83	1/vT=caf0a286c530	1/vt=b88eba805fc7	2/VT=1be88794648a	2/Vt=1be88794648a	2/vT=1be88794648a	2/vt=1be88794648a
 mutate|tests/runtime/p9_rt_pattern_wild.pruv	12 cases: error parse/syntax 8, error parse/reserved_name 4	0/VT=13b4ec758607	0/Vt=13b4ec758607	0/vT=13b4ec758607	0/vt=13b4ec758607	1/VT=24b62a1a07a8	1/Vt=24b62a1a07a8	1/vT=24b62a1a07a8	1/vt=24b62a1a07a8	2/VT=4f8b6e6a8d10	2/Vt=4f8b6e6a8d10	2/vT=4f8b6e6a8d10	2/vt=4f8b6e6a8d10
+mutate|tests/runtime/p9b2_rt_panic_name.pruv	12 cases: error parse/syntax 8, error parse/impl_syntax 4	0/VT=eb4355b245d4	0/Vt=eb4355b245d4	0/vT=eb4355b245d4	0/vt=eb4355b245d4	1/VT=6bb87be97c3a	1/Vt=6bb87be97c3a	1/vT=6bb87be97c3a	1/vt=6bb87be97c3a	2/VT=93e2ba0dda07	2/Vt=93e2ba0dda07	2/vT=93e2ba0dda07	2/vt=93e2ba0dda07
+mutate|tests/runtime/p9b2_rt_trait_names.pruv	12 cases: error parse/syntax 8, error parse/bad_char 4	0/VT=75d65aeb33aa	0/Vt=75d65aeb33aa	0/vT=75d65aeb33aa	0/vt=75d65aeb33aa	1/VT=5ef5945cdccd	1/Vt=5ef5945cdccd	1/vT=5ef5945cdccd	1/vt=5ef5945cdccd	2/VT=3464cdb17255	2/Vt=3464cdb17255	2/vT=3464cdb17255	2/vt=3464cdb17255
 mutate|tests/runtime/p9b_rt_counter.pruv	12 cases: error parse/impl_syntax 4, error parse/reserved_name 4, error parse/sy	0/VT=1b824e97b770	0/Vt=1b824e97b770	0/vT=1b824e97b770	0/vt=1b824e97b770	1/VT=a8aca45997b2	1/Vt=a8aca45997b2	1/vT=a8aca45997b2	1/vt=a8aca45997b2	2/VT=1b4c54d2b3af	2/Vt=1b4c54d2b3af	2/vT=1b4c54d2b3af	2/vt=1b4c54d2b3af
 mutate|tests/runtime/p9b_rt_enum_field.pruv	12 cases: error parse/bad_char 4, error parse/reserved_name 4, error type/unknow	0/VT=c28f485fce22	0/Vt=c28f485fce22	0/vT=c28f485fce22	0/vt=c28f485fce22	1/VT=2a390f1ba1e2	1/Vt=2a390f1ba1e2	1/vT=2a390f1ba1e2	1/vt=2a390f1ba1e2	2/VT=34961d0e5810	2/Vt=34961d0e5810	2/vT=34961d0e5810	2/vt=34961d0e5810
 mutate|tests/runtime/p9b_rt_names.pruv	12 cases: error type/unknown_method 8, error parse/syntax 4	0/VT=6e06365f4b61	0/Vt=6e06365f4b61	0/vT=6e06365f4b61	0/vt=6e06365f4b61	1/VT=c268b58b1eb6	1/Vt=c268b58b1eb6	1/vT=c268b58b1eb6	1/vt=c268b58b1eb6	2/VT=50ef5f82a926	2/Vt=50ef5f82a926	2/vT=50ef5f82a926	2/vt=50ef5f82a926
 mutate|tests/runtime/p9b_rt_proven.pruv	12 cases: error parse/bad_char 4, error parse/string_character 4, error parse/sy	0/VT=b65bb2ddbe75	0/Vt=b65bb2ddbe75	0/vT=b65bb2ddbe75	0/vt=b65bb2ddbe75	1/VT=d578f150a10d	1/Vt=d578f150a10d	1/vT=d578f150a10d	1/vt=d578f150a10d	2/VT=584040f0b244	2/Vt=584040f0b244	2/vT=584040f0b244	2/vt=584040f0b244
 mutate|tests/runtime/p9b_rt_small.pruv	12 cases: error parse/syntax 8, error parse/reserved_name 4	0/VT=ea5aa0d758ef	0/Vt=ea5aa0d758ef	0/vT=ea5aa0d758ef	0/vt=ea5aa0d758ef	1/VT=7cdf922a7a25	1/Vt=7cdf922a7a25	1/vT=7cdf922a7a25	1/vt=7cdf922a7a25	2/VT=0b76db0aa2e8	2/Vt=0b76db0aa2e8	2/vT=0b76db0aa2e8	2/vt=0b76db0aa2e8
-mutate|tests/runtime/p9b_rt_vec_rec.pruv	12 cases: error parse/syntax 8, ok 4	0/VT=84a3b6a15b66	0/Vt=84a3b6a15b66	0/vT=84a3b6a15b66	0/vt=84a3b6a15b66	1/VT=c2033dda3438	1/Vt=c2033dda3438	1/vT=c2033dda3438	1/vt=c2033dda3438	2/VT=b174955945f9	2/Vt=e380575007dd	2/vT=7a09910a8e55	2/vt=9f5a66cd3c38
+mutate|tests/runtime/p9b_rt_vec_rec.pruv	12 cases: error parse/syntax 8, ok 4	0/VT=84a3b6a15b66	0/Vt=84a3b6a15b66	0/vT=84a3b6a15b66	0/vt=84a3b6a15b66	1/VT=c2033dda3438	1/Vt=c2033dda3438	1/vT=c2033dda3438	1/vt=c2033dda3438	2/VT=b174955945f9	2/Vt=e380575007dd	2/vT=d0840fc30504	2/vt=f18b6b4b1c08
 mutate|tests/runtime/qb_across_requires.pruv	12 cases: error parse/syntax 8, error parse/reserved_name 4	0/VT=2c161e630bee	0/Vt=2c161e630bee	0/vT=2c161e630bee	0/vt=2c161e630bee	1/VT=3463a0035982	1/Vt=3463a0035982	1/vT=3463a0035982	1/vt=3463a0035982	2/VT=f1d31fca7351	2/Vt=f1d31fca7351	2/vT=f1d31fca7351	2/vt=f1d31fca7351
 mutate|tests/runtime/qb_budget_edge.pruv	12 cases: error parse/syntax 8, error parse/string_character 4	0/VT=66a52ae24896	0/Vt=66a52ae24896	0/vT=66a52ae24896	0/vt=66a52ae24896	1/VT=4ee068d1d9dc	1/Vt=4ee068d1d9dc	1/vT=4ee068d1d9dc	1/vt=4ee068d1d9dc	2/VT=ddcb2ebb44fe	2/Vt=ddcb2ebb44fe	2/vT=ddcb2ebb44fe	2/vt=ddcb2ebb44fe
 mutate|tests/runtime/qb_nested_budget.pruv	12 cases: error parse/syntax 8, error parse/bad_char 4	0/VT=3c9b34b881bc	0/Vt=3c9b34b881bc	0/vT=3c9b34b881bc	0/vt=3c9b34b881bc	1/VT=f3e6007e0583	1/Vt=f3e6007e0583	1/vT=f3e6007e0583	1/vt=f3e6007e0583	2/VT=9b1906c81bf3	2/Vt=9b1906c81bf3	2/vT=9b1906c81bf3	2/vt=9b1906c81bf3
@@ -4100,12 +4102,14 @@ runtime|tests/runtime/p9_rt_pattern_names.pruv	4 cases: ok 4	VT=fbce9f506174	Vt=
 runtime|tests/runtime/p9_rt_pattern_order.pruv	4 cases: ok 4	VT=88354be8ee1d	Vt=cf8f969fe133	vT=8c76571577f7	vt=5ad00e6ebc8e
 runtime|tests/runtime/p9_rt_pattern_owned.pruv	4 cases: ok 4	VT=7c17c45f6b33	Vt=93955acd0a83	vT=caf0a286c530	vt=b88eba805fc7
 runtime|tests/runtime/p9_rt_pattern_wild.pruv	4 cases: ok 4	VT=24bf6e742f13	Vt=347152681bda	vT=fb987c34bdc8	vt=c1b87a772328
-runtime|tests/runtime/p9b_rt_counter.pruv	4 cases: ok 4	VT=10478ac531fb	Vt=dfac5f0b9c9f	vT=680caddb396f	vt=84eb75e2009d
-runtime|tests/runtime/p9b_rt_enum_field.pruv	4 cases: ok 4	VT=5699e4185e9a	Vt=47558d427788	vT=44d4301f3d6c	vt=e7cc52b7c6cd
-runtime|tests/runtime/p9b_rt_names.pruv	4 cases: ok 4	VT=421ca7c916b0	Vt=69ed4c94ef4b	vT=939c60818f14	vt=3d3955245a9e
-runtime|tests/runtime/p9b_rt_proven.pruv	4 cases: ok 4	VT=09923bfc5826	Vt=c4d1ed820ac4	vT=425d28bea791	vt=8435b2184228
-runtime|tests/runtime/p9b_rt_small.pruv	4 cases: ok 4	VT=0d6756a98d4b	Vt=905b99c4f618	vT=84eab391da0a	vt=7b010bf0dbc2
-runtime|tests/runtime/p9b_rt_vec_rec.pruv	4 cases: ok 4	VT=b174955945f9	Vt=e380575007dd	vT=7a09910a8e55	vt=9f5a66cd3c38
+runtime|tests/runtime/p9b2_rt_panic_name.pruv	4 cases: ok 4	VT=9a6022ed5d36	Vt=b59377da0330	vT=6158f448939a	vt=3991361df5be
+runtime|tests/runtime/p9b2_rt_trait_names.pruv	4 cases: ok 4	VT=fc1e24dcf0c5	Vt=301791ca5fa5	vT=4df1c618dbb0	vt=059fdcd64a66
+runtime|tests/runtime/p9b_rt_counter.pruv	4 cases: ok 4	VT=10478ac531fb	Vt=70fe43a279f4	vT=fad28498c22f	vt=5af3ddefd26a
+runtime|tests/runtime/p9b_rt_enum_field.pruv	4 cases: ok 4	VT=5699e4185e9a	Vt=6d208fdacf18	vT=ef465a308ff4	vt=ddf91596bcc4
+runtime|tests/runtime/p9b_rt_names.pruv	4 cases: ok 4	VT=421ca7c916b0	Vt=2a60cb591e0a	vT=939c60818f14	vt=fe33ee28ba53
+runtime|tests/runtime/p9b_rt_proven.pruv	4 cases: ok 4	VT=09923bfc5826	Vt=dac5957620c3	vT=425d28bea791	vt=61433b670864
+runtime|tests/runtime/p9b_rt_small.pruv	4 cases: ok 4	VT=0d6756a98d4b	Vt=d1de70a0eece	vT=84eab391da0a	vt=205eb0c66c80
+runtime|tests/runtime/p9b_rt_vec_rec.pruv	4 cases: ok 4	VT=b174955945f9	Vt=e380575007dd	vT=d0840fc30504	vt=f18b6b4b1c08
 runtime|tests/runtime/qb_across_requires.pruv	4 cases: ok 4	VT=ef2f0d4586a9	Vt=7b3d8797cf95	vT=ef2f0d4586a9	vt=7b3d8797cf95
 runtime|tests/runtime/qb_budget_edge.pruv	5 cases: ok 5	B1000=d0e4102bacdd	VT=ef2f0d4586a9	Vt=7b3d8797cf95	vT=ef2f0d4586a9	vt=7b3d8797cf95
 runtime|tests/runtime/qb_nested_budget.pruv	5 cases: ok 5	B1000=ee3c3bcf9bc8	VT=ef2f0d4586a9	Vt=47664785d29d	vT=ef2f0d4586a9	vt=47664785d29d

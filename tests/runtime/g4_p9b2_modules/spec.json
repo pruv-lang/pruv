@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "llvm_exports": ["pruv_abi_area"], "exit": 0, "stdout_lines": ["112", "2", "2004002"], "gen_contains": ["impl pruv_m_t_2_6_shapes_4_Rect {", "fn new(w: i64, h: i64) -> pruv_m_t_2_6_shapes_4_Rect", "pruv_m_t_2_6_shapes_4_Rect::new(w, h)", "self.tick()"], "gen_absent": ["Rect__", "(*self).tick()"]}

@@ -1,0 +1,8 @@
+// P9b-2 (R-6x-5): pub methods of a type of a child module, called by path `crate::m::T::f` and with dot calls
+mod shapes;
+pub fn area(w: i64, h: i64) -> i64 requires 0 <= w && w <= 1000 requires 0 <= h && h <= 1000 {
+  let mut r: crate::shapes::Rect = crate::shapes::Rect::new(w, h);
+  r.grow(1);
+  let k: i64 = crate::shapes::Rect::area(r);
+  return k + r.area() - r.w * 0;
+}

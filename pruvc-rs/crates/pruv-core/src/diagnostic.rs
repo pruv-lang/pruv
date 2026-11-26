@@ -50,6 +50,46 @@ pub fn file_of_tag(tag: usize) -> Option<String> {
     g.get(tag - 1).cloned()
 }
 
+// ---------- P9b-2: methods show under their written name ----------
+// An impl method is lowered to the function `T__f` (`crate::m::T__f` in explicit mode). Diagnostics are built from
+// function names, so `PruvError::to_json_value` turns each lowered name back into `T::f` in message and fix.
+static METHOD_NAMES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// Registers (lowered name, written name) of every method of the program being compiled; empty for none.
+pub fn set_method_names(mut names: Vec<(String, String)>) {
+    names.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    let mut g = METHOD_NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    *g = names;
+}
+
+/// `text` with every whole-word lowered method name replaced by its written name.
+pub fn method_text(text: &str) -> String {
+    let g = METHOD_NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    if g.is_empty() || !text.contains("__") {
+        return text.to_string();
+    }
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let b = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    'scan: while i < b.len() {
+        if i == 0 || !word(b[i - 1]) {
+            for (low, shown) in g.iter() {
+                let e = i + low.len();
+                if text[i..].starts_with(low.as_str()) && (e == b.len() || !word(b[e])) {
+                    out.push_str(shown);
+                    i = e;
+                    continue 'scan;
+                }
+            }
+        }
+        let c = text[i..].chars().next().unwrap_or(' ');
+        out.push(c);
+        i += c.len_utf8();
+    }
+    out
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PruvError {
     pub stage: String,
@@ -84,8 +124,8 @@ impl PruvError {
             ("line".to_string(), Json::int(plain_line(self.line))),
             ("col".to_string(), Json::int(self.col)),
             ("code".to_string(), Json::Str(self.code.clone())),
-            ("message".to_string(), Json::Str(self.message.clone())),
-            ("fix".to_string(), Json::Str(self.fix.clone())),
+            ("message".to_string(), Json::Str(method_text(&self.message))),
+            ("fix".to_string(), Json::Str(method_text(&self.fix))),
         ];
         if let Some(f) = file {
             kv.push(("file".to_string(), Json::Str(f)));

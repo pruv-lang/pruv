@@ -1,0 +1,8 @@
+// spec: R-6x-5 reject
+// A path call to a method without `pub` from another module is rejected like a private function.
+mod geo;
+pub fn run(a: i64) -> i64 {
+  let p: crate::geo::Pt = crate::geo::Pt::at(a);
+  crate::geo::Pt::check(p);
+  return a;
+}

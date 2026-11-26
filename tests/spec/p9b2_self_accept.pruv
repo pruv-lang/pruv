@@ -1,0 +1,14 @@
+// spec: R-6x-1 accept
+// `Self` inside an impl block names the owner type: in parameter and result types, struct literals and paths `Self::f`.
+struct P { x: i64 }
+impl P {
+  fn new(x: i64) -> Self ensures result.x == x { return Self { x: x }; }
+  fn get(self) -> i64 ensures result == self.x { return self.x; }
+  fn same(self, o: Self) -> bool ensures result == (self.x == o.x) { return self.x == o.x; }
+  fn copy(self) -> Self ensures result.x == self.x { return Self::new(self.x); }
+}
+fn f(k: i64) -> i64 ensures result == k {
+  let a: P = P::new(k);
+  let b: P = a.copy();
+  return b.get();
+}

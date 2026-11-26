@@ -1,5 +1,5 @@
 // spec: R-6x-3 reject
-// The receiver must be a place of declared type, not a call result (parity row P9b-2).
+// An `inout self` method needs a place receiver: a call result is type/method_receiver.
 struct C { n: i64 }
-impl C { fn make(n: i64) -> C { return C { n: n }; } fn get(self) -> i64 { return self.n; } }
-fn f(k: i64) -> i64 { return C::make(k).get(); }
+impl C { fn make(n: i64) -> C { return C { n: n }; } fn bump(inout self) -> () requires self.n < 100 { self.n = self.n + 1; } }
+fn f(k: i64) -> () { C::make(k).bump(); }

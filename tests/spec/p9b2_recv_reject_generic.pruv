@@ -1,0 +1,6 @@
+// spec: R-6x-3 reject
+// The result of a call of a generic function has no static type before type checking.
+struct C { n: i64 }
+impl C { fn get(self) -> i64 { return self.n; } }
+fn mk<T>(x: T, k: i64) -> C { return C { n: k }; }
+fn f(k: i64) -> i64 { return mk::<i64>(1, k).get(); }

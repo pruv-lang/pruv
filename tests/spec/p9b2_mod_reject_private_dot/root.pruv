@@ -1,0 +1,8 @@
+// spec: R-6x-5 reject
+// A dot call to a method without `pub` from another module is type/private_item.
+mod geo;
+pub fn run(a: i64) -> i64 {
+  let p: crate::geo::Pt = crate::geo::Pt::at(a);
+  p.check();
+  return a;
+}

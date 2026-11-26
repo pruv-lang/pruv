@@ -482,8 +482,13 @@ pub fn check_explicit(
 ) -> Result<TypeTable, PruvError> {
     crate::modules::resolve(prog, g4)?;
     crate::methods::resolve(prog)?; // P9b: method calls become calls of the impl functions
+    crate::modules::contract_methods(prog, g4)?;
     expand_match_forms(prog)?;
-    check_u16_boundary(prog, |i| g4.fn_meta.get(i).is_some_and(|m| m.is_pub || m.host_entry))?;
+    // P9b-2: a method is never a host entry (R-6x-5), so its signature is not a host boundary
+    let methods: HashSet<&str> = prog.methods.iter().map(|m| m.func.as_str()).collect();
+    check_u16_boundary(prog, |i| {
+        g4.fn_meta.get(i).is_some_and(|m| m.is_pub || m.host_entry) && !methods.contains(prog.functions[i].name.as_str())
+    })?;
     let src_names: Vec<String> = g4.fn_meta.iter().map(|m| m.src_name.clone()).collect();
     let hosts: Vec<bool> = g4.fn_meta.iter().map(|m| m.host_entry).collect();
     crate::borrowed::prepare(prog, &hosts)?;
@@ -507,8 +512,10 @@ pub fn check(prog: &mut Program) -> Result<TypeTable, PruvError> {
 /// `check` with the crate names given with --rust-extern (G6: crates a trusted rust fn path may start with besides std).
 pub fn check_with_externs(prog: &mut Program, externs: &[String]) -> Result<TypeTable, PruvError> {
     crate::methods::resolve(prog)?; // P9b: method calls become calls of the impl functions
+    let methods: HashSet<&str> = prog.methods.iter().map(|m| m.func.as_str()).collect();
     check_u16_boundary(prog, |i| {
         prog.explicit.as_ref().and_then(|e| e.fns.get(i)).is_some_and(|m| m.is_pub || m.host_entry)
+            && !methods.contains(prog.functions[i].name.as_str())
     })?;
     expand_match_forms(prog)?;
     crate::borrowed::prepare(prog, &[])?;

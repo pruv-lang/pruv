@@ -1586,8 +1586,8 @@ must_reject|must_reject/p9_pattern_unreachable_wild.pruv	2 cases: exit 2	llvm=65
 must_reject|must_reject/p9_pattern_variant_type.pruv	2 cases: exit 2	llvm=f94502a08672	rust=f94502a08672
 must_reject|must_reject/p9_pattern_wild_requires.pruv	2 cases: exit 2	llvm=1bc1fb656f55	rust=1bc1fb656f55
 must_reject|must_reject/p9_value_match_empty.pruv	2 cases: exit 2	llvm=b9082d9e1005	rust=b9082d9e1005
-must_reject|must_reject/p9b_call_requires.pruv	2 cases: exit 2	llvm=e74aa92113a1	rust=e74aa92113a1
-must_reject|must_reject/p9b_false_ensures.pruv	2 cases: exit 2	llvm=1b2e40bad352	rust=1b2e40bad352
+must_reject|must_reject/p9b_call_requires.pruv	2 cases: exit 2	llvm=9a6d17225d72	rust=9a6d17225d72
+must_reject|must_reject/p9b_false_ensures.pruv	2 cases: exit 2	llvm=93d55cbda7f8	rust=93d55cbda7f8
 must_reject|must_reject/p9b_take_use.pruv	2 cases: exit 2	llvm=47303e2e629b	rust=47303e2e629b
 must_reject|must_reject/p9b_unknown_method.pruv	2 cases: exit 2	llvm=b7e7a6ffcfe9	rust=b7e7a6ffcfe9
 must_reject|must_reject/refine_alloc_len.pruv	2 cases: exit 2	llvm=91183d4f0e90	rust=91183d4f0e90
@@ -2919,16 +2919,19 @@ runtime|runtime/p9_rt_pattern_owned [--no-verify]	2 cases: exit 2	llvm=5dc4e9e41
 runtime|runtime/p9_rt_pattern_owned [default]	2 cases: exit 2	llvm=0d332f040ce4	rust=df210c91b55f
 runtime|runtime/p9_rt_pattern_wild [--no-verify]	2 cases: exit 2	llvm=d3bd0cbf1920	rust=ab6ae71c5c31
 runtime|runtime/p9_rt_pattern_wild [default]	2 cases: exit 2	llvm=b540452601fb	rust=1419c32b943b
-runtime|runtime/p9b_rt_counter [--no-verify]	2 cases: exit 2	llvm=8c6113c3c265	rust=a53737ccdec4
-runtime|runtime/p9b_rt_counter [default]	2 cases: exit 2	llvm=59727d3858c1	rust=4f314996e6ec
-runtime|runtime/p9b_rt_enum_field [--no-verify]	2 cases: exit 2	llvm=a0f94224b6f3	rust=86843a8ad4ab
-runtime|runtime/p9b_rt_enum_field [default]	2 cases: exit 2	llvm=b74c80758d07	rust=d7765d2a5a4e
-runtime|runtime/p9b_rt_names [--no-verify]	2 cases: exit 2	llvm=cd89a1d9513f	rust=68614a7f3e09
-runtime|runtime/p9b_rt_names [default]	2 cases: exit 2	llvm=b13497f787ab	rust=b008504aa910
-runtime|runtime/p9b_rt_proven [--proven-entries]	2 cases: exit 2	llvm=0155787dccfb	rust=d7dbb54b5005
-runtime|runtime/p9b_rt_small [default]	2 cases: exit 2	llvm=1ee4b7e412b7	rust=43a63ad79efa
-runtime|runtime/p9b_rt_vec_rec [--no-verify]	2 cases: exit 2	llvm=7f989f41e694	rust=cf907d181cdf
-runtime|runtime/p9b_rt_vec_rec [default]	2 cases: exit 2	llvm=22e22c7c4bb2	rust=1fd8b888673d
+runtime|runtime/p9b2_rt_panic_name [--no-verify]	2 cases: exit 2	llvm=dc5cd373b273	rust=d27903444d92
+runtime|runtime/p9b2_rt_trait_names [--no-verify]	2 cases: exit 2	llvm=db6d2d07e4f5	rust=0af904952aba
+runtime|runtime/p9b2_rt_trait_names [default]	2 cases: exit 2	llvm=77748a2348d1	rust=9c07b556da83
+runtime|runtime/p9b_rt_counter [--no-verify]	2 cases: exit 2	llvm=dfd26bab038f	rust=890d912ac185
+runtime|runtime/p9b_rt_counter [default]	2 cases: exit 2	llvm=9e38a8400f08	rust=be2837b729d8
+runtime|runtime/p9b_rt_enum_field [--no-verify]	2 cases: exit 2	llvm=be9a721693ae	rust=cf81223817e7
+runtime|runtime/p9b_rt_enum_field [default]	2 cases: exit 2	llvm=25c5a910816f	rust=0127cd37e602
+runtime|runtime/p9b_rt_names [--no-verify]	2 cases: exit 2	llvm=3b598aadc76a	rust=6c8bceb00d45
+runtime|runtime/p9b_rt_names [default]	2 cases: exit 2	llvm=4b93d40663f0	rust=846da701faf6
+runtime|runtime/p9b_rt_proven [--proven-entries]	2 cases: exit 2	llvm=0155787dccfb	rust=16be5cc88868
+runtime|runtime/p9b_rt_small [default]	2 cases: exit 2	llvm=69bfa7151b96	rust=705ab12eee20
+runtime|runtime/p9b_rt_vec_rec [--no-verify]	2 cases: exit 2	llvm=a4f2208e0e94	rust=307bf556e5ed
+runtime|runtime/p9b_rt_vec_rec [default]	2 cases: exit 2	llvm=22e22c7c4bb2	rust=bc95065cfe3a
 runtime|runtime/qb_across_requires [default]	2 cases: exit 2	llvm=ff5c2dfbf8ac	rust=58621f5fc757
 runtime|runtime/qb_budget_edge [--no-verify]	2 cases: exit 2	llvm=0e7eca380e0a	rust=f6027668c6f1
 runtime|runtime/qb_budget_edge [default]	2 cases: exit 2	llvm=0e7eca380e0a	rust=c0e4464978ad

@@ -14,22 +14,39 @@ fn terr(line: i64, col: i64, code: &str, msg: String, fix: &str) -> PruvError {
     PruvError::new("type", line, col, code, msg, fix)
 }
 
-/// A binding's declared type key, or None when the pass does not know it (match binders, `for` element binders,
-/// quantifier variables): a method call on such a receiver is rejected (type/method_receiver).
+/// A binding's type key, or None when the pass does not know it (quantifier variables, `for` binders over a `Vec`, a `let`
+/// without a type whose value has no static type here): a method call on such a receiver is rejected
+/// (type/method_receiver).
 type Scopes = Vec<HashMap<String, Option<String>>>;
 
 struct Resolver<'a> {
-    methods: HashMap<(String, String), (String, Receiver)>,
+    /// (owner, method name) -> (function, receiver, `pub`)
+    methods: HashMap<(String, String), (String, Receiver, bool)>,
     /// struct name -> field name -> field type key (non-generic structs only)
     fields: HashMap<String, HashMap<String, String>>,
     types: &'a HashMap<String, bool>,
+    /// P9b-2: return type key of each non-generic function (types call results and chains `C::new(k).get()`)
+    fn_ret: HashMap<String, String>,
+    /// P9b-2: (enum, variant) -> payload field type keys (non-generic enums only; types match binders)
+    variant_fields: HashMap<(String, String), Vec<String>>,
+    /// P9b-2: module of the function being resolved (`crate::a` of `crate::a::f`; empty in a single-file program)
+    cur_mod: String,
+}
+
+/// `crate::a` of the identity `crate::a::f` (empty for a single-file name)
+fn module_of(name: &str) -> &str {
+    name.rfind("::").map_or("", |k| &name[..k])
 }
 
 pub fn resolve(prog: &mut Program) -> Result<(), PruvError> {
+    crate::diagnostic::set_method_names(
+        prog.methods.iter().map(|m| (m.func.clone(), format!("{}::{}", m.owner, m.name))).collect(),
+    );
     // owner name -> generic?
     let mut types: HashMap<String, bool> = HashMap::new();
     let mut fields: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut variants: HashMap<String, Vec<String>> = HashMap::new();
+    let mut variant_fields: HashMap<(String, String), Vec<String>> = HashMap::new();
     for d in &prog.types {
         match d {
             TypeDecl::Struct(s) => {
@@ -41,6 +58,11 @@ pub fn resolve(prog: &mut Program) -> Result<(), PruvError> {
             TypeDecl::Enum(e) => {
                 types.insert(e.name.clone(), !e.tparams.is_empty());
                 variants.insert(e.name.clone(), e.variants.iter().map(|v| v.name.clone()).collect());
+                if e.tparams.is_empty() {
+                    for v in &e.variants {
+                        variant_fields.insert((e.name.clone(), v.name.clone()), v.fields.iter().map(|f| f.ty.clone()).collect());
+                    }
+                }
             }
         }
     }
@@ -53,27 +75,30 @@ pub fn resolve(prog: &mut Program) -> Result<(), PruvError> {
             }
             Some(true) => {
                 return Err(terr(*line, *col, "impl_type",
-                    format!("impl blocks of the generic type {} are not available yet (parity row P9b-2)", repr_str(owner)),
+                    format!("impl blocks of the generic type {} are not available yet (parity row P9b-3)", repr_str(owner)),
                     "write free generic functions for this type"));
             }
             Some(false) => {}
         }
     }
-    let mut methods: HashMap<(String, String), (String, Receiver)> = HashMap::new();
+    let mut methods: HashMap<(String, String), (String, Receiver, bool)> = HashMap::new();
     for m in &prog.methods {
         if variants.get(&m.owner).is_some_and(|vs| vs.contains(&m.name)) {
             return Err(terr(m.line, m.col, "method_name_clash",
                 format!("{}::{} is both a variant and an impl function", m.owner, m.name),
                 "rename the function"));
         }
-        if methods.insert((m.owner.clone(), m.name.clone()), (m.func.clone(), m.recv)).is_some() {
+        if methods.insert((m.owner.clone(), m.name.clone()), (m.func.clone(), m.recv, m.is_pub)).is_some() {
             return Err(terr(m.line, m.col, "dup_method",
                 format!("{} has two impl functions named {}", repr_str(&m.owner), repr_str(&m.name)),
                 "rename one of them"));
         }
     }
-    let r = Resolver { methods, fields, types: &types };
+    let fn_ret: HashMap<String, String> =
+        prog.functions.iter().filter(|f| f.tparams.is_empty()).map(|f| (f.name.clone(), f.ret.clone())).collect();
+    let mut r = Resolver { methods, fields, types: &types, fn_ret, variant_fields, cur_mod: String::new() };
     for f in prog.functions.iter_mut() {
+        r.cur_mod = module_of(&f.name).to_string();
         let mut scopes: Scopes = vec![f.params.iter().map(|p| (p.name.clone(), Some(p.ty.clone()))).collect()];
         for e in f.requires.iter_mut().chain(f.decreases.iter_mut()).chain(f.cost.iter_mut()) {
             r.expr(e, &mut scopes)?;
@@ -103,7 +128,9 @@ impl Resolver<'_> {
             Stmt::Let(l) => {
                 self.expr(&mut l.value, scopes)?;
                 let known = !(l.ty.is_empty() || l.ty == "_");
-                scopes.last_mut().unwrap().insert(l.name.clone(), known.then(|| l.ty.clone()));
+                // P9b-2: `let x = ..;` takes the static type of its value when this pass knows it
+                let ty = if known { Some(l.ty.clone()) } else { self.value_type(&l.value, scopes) };
+                scopes.last_mut().unwrap().insert(l.name.clone(), ty);
             }
             Stmt::Assign(a) => self.expr(&mut a.value, scopes)?,
             Stmt::IndexAssign(a) => {
@@ -122,7 +149,24 @@ impl Resolver<'_> {
                     self.expr(e, scopes)?;
                 }
                 self.expr(&mut w.decreases, scopes)?;
-                self.block(&mut w.body, scopes)?;
+                if w.for_head.as_ref().is_some_and(|h| h.slice) {
+                    // P9b-2: the parser binds the element of `for x in v` with the placeholder type `i64` (the
+                    // checker sets the real one), so the binder takes the element type of `v[i]` here
+                    scopes.push(HashMap::new());
+                    for (k, s) in w.body.iter_mut().enumerate() {
+                        match s {
+                            Stmt::Let(l) if k == 0 => {
+                                self.expr(&mut l.value, scopes)?;
+                                let ty = self.value_type(&l.value, scopes);
+                                scopes.last_mut().unwrap().insert(l.name.clone(), ty);
+                            }
+                            _ => self.stmt(s, scopes)?,
+                        }
+                    }
+                    scopes.pop();
+                } else {
+                    self.block(&mut w.body, scopes)?;
+                }
             }
             Stmt::ForMap(m) => {
                 self.expr(&mut m.place, scopes)?;
@@ -142,8 +186,14 @@ impl Resolver<'_> {
             Stmt::ExprStmt(e) => self.expr(&mut e.expr, scopes)?,
             Stmt::Match(m) => {
                 self.expr(&mut m.scrutinee, scopes)?;
+                let scrut = self.value_type(&m.scrutinee, scopes);
                 for arm in m.arms.iter_mut() {
-                    scopes.push(arm.binders.iter().map(|b| (b.clone(), None)).collect());
+                    // P9b-2: a binder of a variant of a non-generic enum has the payload field's type
+                    let payload = scrut.as_ref().and_then(|t| self.variant_fields.get(&(t.clone(), arm.ctor.clone())));
+                    let plain = arm.pats.iter().all(Option::is_none);
+                    scopes.push(arm.binders.iter().enumerate()
+                        .map(|(k, b)| (b.clone(), payload.filter(|p| plain && p.len() == arm.binders.len()).map(|p| p[k].clone())))
+                        .collect());
                     self.block(&mut arm.body, scopes)?;
                     scopes.pop();
                 }
@@ -163,21 +213,30 @@ impl Resolver<'_> {
         scopes.iter().rev().find_map(|s| s.get(name).cloned())
     }
 
-    /// The static type key of a receiver place `v.f.g`, or the error for a non-place / unknown receiver.
-    fn place_type(&self, e: &Expr, scopes: &Scopes, line: i64, col: i64, m: &str) -> Result<String, PruvError> {
-        let bad = || terr(line, col, "method_receiver",
-            format!("the receiver of .{}(..) must be a variable, a parameter, `self` or a field of one, declared with its type", m),
-            "bind the value with `let x: T = ..;` first (parity row P9b-2)");
+    /// P9b-2: the static type key of a value as far as this pass knows it (before the checker): a binding, a field of
+    /// a typed value, an element of a typed array, the result of a non-generic function (method calls inside are
+    /// already resolved, so chains work), a struct literal or a variant of a non-generic type.
+    fn value_type(&self, e: &Expr, scopes: &Scopes) -> Option<String> {
         match e {
-            Expr::Var(v) => match Self::lookup(scopes, &v.name) {
-                Some(Some(t)) => Ok(t),
-                _ => Err(bad()),
-            },
+            Expr::Var(v) => Self::lookup(scopes, &v.name).flatten(),
             Expr::FieldAccess(fa) => {
-                let base = self.place_type(&fa.base, scopes, line, col, m)?;
-                self.fields.get(&base).and_then(|fs| fs.get(&fa.field)).cloned().ok_or_else(bad)
+                let base = self.value_type(&fa.base, scopes)?;
+                self.fields.get(&base).and_then(|fs| fs.get(&fa.field)).cloned()
             }
-            _ => Err(bad()),
+            Expr::Index(x) => GType::from_key(&self.value_type(&x.array, scopes)?).array_elem().map(|t| t.to_key()),
+            Expr::Call(c) if c.targs.is_none() => self.fn_ret.get(&c.name).cloned(),
+            Expr::StructLit(x) if x.targs.is_none() && self.types.get(&x.name) == Some(&false) => Some(x.name.clone()),
+            Expr::EnumCtor(x) if x.targs.is_none() && self.types.get(&x.enum_name) == Some(&false) => Some(x.enum_name.clone()),
+            _ => None,
+        }
+    }
+
+    /// A place `v.f.g` (an `inout self` or `take self` receiver must be one).
+    fn is_place(e: &Expr) -> bool {
+        match e {
+            Expr::Var(_) => true,
+            Expr::FieldAccess(fa) => Self::is_place(&fa.base),
+            _ => false,
         }
     }
 
@@ -189,14 +248,18 @@ impl Resolver<'_> {
                 }
                 if let Some(m) = c.name.strip_prefix(METHOD_CALL) {
                     let m = m.to_string();
-                    let ty = self.place_type(&c.args[0], scopes, c.line, c.col, &m)?;
+                    let Some(ty) = self.value_type(&c.args[0], scopes) else {
+                        return Err(terr(c.line, c.col, "method_receiver",
+                            format!("the type of the receiver of .{}(..) is not known before type checking", m),
+                            "bind the value with `let x: T = ..;` first"));
+                    };
                     let owner = GType::from_key(&ty);
                     let found = if owner.args.is_empty() && self.types.contains_key(&owner.name) {
                         self.methods.get(&(owner.name.clone(), m.clone()))
                     } else {
                         None
                     };
-                    let Some((func, recv)) = found else {
+                    let Some((func, recv, is_pub)) = found else {
                         return Err(terr(c.line, c.col, "unknown_method",
                             format!("type {} has no method {}", repr_str(&ty), repr_str(&m)),
                             "declare it in an `impl` block of the type, or call a free function"));
@@ -206,18 +269,29 @@ impl Resolver<'_> {
                             format!("{}::{} has no receiver, so it is not a method", owner.name, m),
                             "call it as an associated function: Owner::f(..)"));
                     }
+                    if !*is_pub && module_of(func) != self.cur_mod {
+                        // P9b-2: as for a path call (modules.rs `access`)
+                        return Err(terr(c.line, c.col, "private_item",
+                            format!("{}::{} is private to module {}", owner.name, m, module_of(func)),
+                            "mark it `pub fn` in its impl block, or call it through a public item of that module"));
+                    }
                     let r = c.args[0].clone();
                     let (line, col) = (r.line(), r.col());
+                    if *recv == Receiver::Inout && !Self::is_place(&r) {
+                        return Err(terr(c.line, c.col, "method_receiver",
+                            format!("{}::{} takes `inout self`, so its receiver must be a variable or a field of one", owner.name, m),
+                            "bind the value with `let mut x: T = ..;` and call the method on x"));
+                    }
                     c.args[0] = match recv {
                         Receiver::Inout => Expr::InoutArg(InoutArg { line, col, expr: Box::new(r), ty: None, post_refine: Vec::new() }),
-                        Receiver::Take => {
+                        Receiver::Take if Self::is_place(&r) => {
                             let mut path = Vec::new();
                             let mut cur = &r;
                             while let Expr::FieldAccess(fa) = cur {
                                 path.push(fa.field.clone());
                                 cur = &fa.base;
                             }
-                            let Expr::Var(v) = cur else { unreachable!("place_type accepted the receiver") };
+                            let Expr::Var(v) = cur else { unreachable!("is_place accepted the receiver") };
                             path.reverse();
                             Expr::Move(Move { line, col, name: v.name.clone(), fields: path, ty: None })
                         }

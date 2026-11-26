@@ -9,23 +9,42 @@
 //!   printed receiver is dropped: method auto-referencing restores it); every other use prints as `Owner::name`.
 //!
 //! `__` is reserved in source names, so an identifier `Owner__..` of a type with methods is always one of these
-//! generated names. String, raw string and char literals are copied unchanged (panic texts keep the internal name,
-//! as the LLVM backend prints it).
+//! generated names. String, raw string and char literals are copied unchanged (panic texts already name a method
+//! `Owner::name`, as the LLVM backend prints it).
+//!
+//! P9b-2: the names are looked up per function (`prog.methods` carries the printed names: Rust stems in a program with
+//! modules, such as `pruv_m_f_..` for the function and `pruv_m_t_..` for its owner type), so no name shape is assumed.
 
 use crate::ast::{Program, Receiver};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// the suffixes of the generated items that take the receiver first (the function itself, its checked body and the
 /// entry checks); other generated items of a method are called by path
 const DOT_SUFFIXES: [&str; 4] = ["", "__pruv_body", "__pruv_chk", "__pruv_par_chk"];
 
 struct Shape {
-    /// (owner, name) of every impl function
-    all: HashSet<(String, String)>,
-    /// (owner, method name) of the impl functions with a receiver
-    recv: HashSet<(String, String)>,
+    /// printed name of every impl function -> (printed owner type, method name, receiver)
+    funcs: HashMap<String, (String, String, Receiver)>,
     /// generated helpers that take the receiver after other parameters: they stay free functions
     free: HashSet<String>,
+}
+
+/// Methods of prelude traits that the derived (`Clone, Copy, Debug, PartialEq, Eq`) or blanket impls give a user type
+/// or a reference to it. A dot call `p.eq(o)` would let Rust's method probe pick the trait method (on `&mut C` or
+/// `&C`) before the inherent one, so a method with one of these names keeps the path form `C::eq(p, o)`.
+const PRELUDE_TRAIT_METHODS: &[&str] = &[
+    "eq", "ne", "lt", "le", "gt", "ge", "cmp", "partial_cmp", "max", "min", "clamp", "clone", "clone_from",
+    "to_owned", "clone_into", "to_string", "into", "try_into", "from", "try_from", "borrow", "borrow_mut", "as_ref",
+    "as_mut", "fmt", "hash", "type_id", "into_iter", "assert_receiver_is_total_eq",
+];
+
+/// One generated item name `base[__suffix]` of the impl function `base`.
+struct Hit<'a> {
+    owner: &'a str,
+    name: &'a str,
+    /// the generated suffix (`""`, `__pruv_body`, ..)
+    suffix: &'a str,
+    recv: Receiver,
 }
 
 pub(crate) fn impl_shape(text: String, prog: &Program) -> String {
@@ -33,8 +52,7 @@ pub(crate) fn impl_shape(text: String, prog: &Program) -> String {
         return text;
     }
     let mut sh = Shape {
-        all: prog.methods.iter().map(|m| (m.owner.clone(), m.name.clone())).collect(),
-        recv: prog.methods.iter().filter(|m| m.recv != Receiver::None).map(|m| (m.owner.clone(), m.name.clone())).collect(),
+        funcs: prog.methods.iter().map(|m| (m.func.clone(), (m.owner.clone(), m.name.clone(), m.recv))).collect(),
         free: HashSet::new(),
     };
     for l in text.split('\n') {
@@ -153,28 +171,43 @@ fn simple_receiver(r: &str) -> bool {
             return close == b.len() - 1;
         }
     }
-    false
+    // P9b-2: a postfix chain of paths and calls (`C::new(k)`, `b.twice()`) binds tighter than `.`, as in hand Rust
+    if !b.first().is_some_and(|&c| ident_byte(c)) {
+        return false;
+    }
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            c if ident_byte(c) || c == b'.' || c == b':' => i += 1,
+            b'(' => match call_args(b, i) {
+                Some((close, _)) => i = close + 1,
+                None => return false,
+            },
+            _ => return false,
+        }
+    }
+    true
 }
 
 impl Shape {
-    /// (owner, rest) when `id` is a generated `Owner__name[__suffix]` name of an impl function `name` of `Owner`
-    /// (other generated names such as the bindings' `Pruv__Array` are left alone). An owner may end with `_`
-    /// (`A___get` is `A_` + `get`) and an impl function name never starts with `_` (parse/impl_syntax), so at most
-    /// one split fits. The name may end with `_` (`A__get___pruv_body` is `get_` + `__pruv_body`): the name is the
-    /// whole rest or the part before a `__` that is followed by a generated suffix (never starting with `_`).
-    fn split<'a>(&self, id: &'a str) -> Option<(&'a str, &'a str)> {
-        let seps = |s: &'a str| (1..s.len().saturating_sub(1)).filter(move |&k| s.as_bytes()[k] == b'_' && s.as_bytes()[k + 1] == b'_');
-        seps(id).map(|k| (&id[..k], &id[k + 2..])).find(|(o, rest)| {
-            !rest.is_empty() && !rest.starts_with('_')
-                && std::iter::once(rest.len()).chain(seps(rest).filter(|&j| rest.as_bytes().get(j + 2).is_some_and(|&c| c != b'_')))
-                    .any(|j| self.all.contains(&(o.to_string(), rest[..j].to_string())))
-        })
+    /// The impl function and suffix when `id` is the printed name of an impl function or one of its generated items
+    /// `name__suffix` (other generated names such as the bindings' `Pruv__Array` are left alone). `__` is reserved in
+    /// source names and a generated suffix never starts with `_`, so the base is the whole name or the part before a
+    /// `__` followed by another character than `_` (`A__get___pruv_body` is `A__get_` + `__pruv_body`).
+    fn split<'a>(&'a self, id: &'a str) -> Option<Hit<'a>> {
+        let b = id.as_bytes();
+        let cuts = std::iter::once(id.len())
+            .chain((1..id.len().saturating_sub(2)).filter(|&k| b[k] == b'_' && b[k + 1] == b'_' && b[k + 2] != b'_'));
+        for k in cuts {
+            if let Some((owner, name, recv)) = self.funcs.get(&id[..k]) {
+                return Some(Hit { owner, name, suffix: &id[k..], recv: *recv });
+            }
+        }
+        None
     }
 
-    fn dot_call(&self, owner: &str, rest: &str) -> bool {
-        DOT_SUFFIXES.iter().any(|s| {
-            rest.strip_suffix(s).is_some_and(|m| !m.is_empty() && !m.contains("__") && self.recv.contains(&(owner.to_string(), m.to_string())))
-        })
+    fn dot_call(h: &Hit) -> bool {
+        h.recv != Receiver::None && DOT_SUFFIXES.contains(&h.suffix) && !PRELUDE_TRAIT_METHODS.contains(&h.name)
     }
 
     fn calls(&self, text: &str) -> String {
@@ -197,7 +230,7 @@ impl Shape {
                 e += 1;
             }
             let id = &text[i..e];
-            let Some((owner, rest)) = self.split(id).filter(|_| !self.free.contains(id)) else {
+            let Some(hit) = self.split(id).filter(|_| !self.free.contains(id)) else {
                 i = e;
                 continue;
             };
@@ -208,7 +241,7 @@ impl Shape {
             out.push_str(&text[copied..i]);
             // `super::Owner__m(..)` (a module copy of a body) keeps the path form `super::Owner::m(..)`
             let qualified = i >= 2 && &b[i - 2..i] == b"::";
-            if e < n && b[e] == b'(' && !qualified && self.dot_call(owner, rest) {
+            if e < n && b[e] == b'(' && !qualified && Self::dot_call(&hit) {
                 if let Some((close, pieces)) = call_args(b, e) {
                     if let Some(&(s0, e0)) = pieces.first() {
                         let mut r = text[s0..e0].trim();
@@ -217,7 +250,13 @@ impl Shape {
                         } else if let Some(x) = r.strip_prefix('&') {
                             r = x;
                         }
-                        let r = self.calls(r);
+                        let mut r = self.calls(r);
+                        // `(*p).m()` is `p.m()` in hand Rust: the dot call dereferences the place itself
+                        if let Some(inner) = r.strip_prefix("(*").and_then(|x| x.strip_suffix(')')) {
+                            if !inner.is_empty() && inner.bytes().all(ident_byte) {
+                                r = inner.to_string();
+                            }
+                        }
                         if simple_receiver(&r) {
                             out.push_str(&r);
                         } else {
@@ -226,7 +265,8 @@ impl Shape {
                             out.push(')');
                         }
                         out.push('.');
-                        out.push_str(rest);
+                        out.push_str(hit.name);
+                        out.push_str(hit.suffix);
                         out.push('(');
                         let others: Vec<String> = pieces[1..].iter().map(|&(s, t)| self.calls(text[s..t].trim())).collect();
                         out.push_str(&others.join(", "));
@@ -237,9 +277,10 @@ impl Shape {
                     }
                 }
             }
-            out.push_str(owner);
+            out.push_str(hit.owner);
             out.push_str("::");
-            out.push_str(rest);
+            out.push_str(hit.name);
+            out.push_str(hit.suffix);
             i = e;
             copied = e;
         }
@@ -247,8 +288,8 @@ impl Shape {
         out
     }
 
-    /// the owner and the item name when line `h` is the header of an `Owner__*` function item
-    fn item_header<'a>(&self, h: &'a str) -> Option<(&'a str, &'a str)> {
+    /// the impl function when line `h` is the header of one of its items
+    fn item_header<'a>(&'a self, h: &'a str) -> Option<Hit<'a>> {
         self.split(self.item_name(h)?)
     }
 
@@ -272,7 +313,7 @@ impl Shape {
         let mut items: Vec<(usize, usize, String)> = Vec::new();
         let mut i = 0;
         while i < lines.len() {
-            let Some((owner, _)) = self.item_header(lines[i]) else {
+            let Some(hit) = self.item_header(lines[i]) else {
                 i += 1;
                 continue;
             };
@@ -291,7 +332,7 @@ impl Shape {
                     end += 1;
                 }
             }
-            items.push((start, end.min(lines.len() - 1), owner.to_string()));
+            items.push((start, end.min(lines.len() - 1), hit.owner.to_string()));
             i = end + 1;
         }
         let mut out: Vec<String> = Vec::with_capacity(lines.len() + 2 * items.len());
@@ -312,8 +353,11 @@ impl Shape {
                     out.push(String::new());
                     continue;
                 }
-                let l = if self.item_header(l).is_some() && items[k..=last].iter().any(|it| it.0 <= li && li <= it.1) {
-                    receiver_header(&l.replacen(&format!("fn {}__", owner), "fn ", 1), &owner)
+                let hit = self.item_header(l).filter(|_| items[k..=last].iter().any(|it| it.0 <= li && li <= it.1));
+                let l = if let Some(hit) = hit {
+                    let printed = self.item_name(l).unwrap_or_default();
+                    let own = format!("fn {}{}", hit.name, hit.suffix);
+                    receiver_header(&l.replacen(&format!("fn {}", printed), &own, 1), &owner)
                 } else {
                     l.to_string()
                 };
@@ -401,4 +445,76 @@ fn rename_self(l: &str) -> String {
     }
     out.push_str(&l[copied..]);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::MethodItem;
+
+    fn prog(methods: &[(&str, &str, &str, Receiver)]) -> Program {
+        let mut p = Program::default();
+        p.methods = methods
+            .iter()
+            .map(|&(owner, name, func, recv)| MethodItem {
+                line: 1, col: 1, owner: owner.into(), name: name.into(), func: func.into(), recv, is_pub: false,
+            })
+            .collect();
+        p
+    }
+
+    #[test]
+    fn items_and_calls() {
+        let p = prog(&[("C", "new", "C__new", Receiver::None), ("C", "get", "C__get", Receiver::Read),
+            ("C", "bump", "C__bump", Receiver::Inout)]);
+        let text = "fn C__new(k: i64) -> C {\n    C { n: k }\n}\nfn C__get(self: C) -> i64 {\n    self.n\n}\n\
+fn C__bump(self: &mut C) {\n    (*self).n += 1;\n    C__get((*self));\n}\nfn f(k: i64) -> i64 {\n    let mut c: C = C__new(k);\n\
+    C__bump(&mut c);\n    C__get(C__new(k)) + C__get(c)\n}";
+        let out = impl_shape(text.to_string(), &p);
+        assert!(out.contains("impl C {"), "{}", out);
+        assert!(out.contains("fn new(k: i64) -> C {"), "{}", out);
+        assert!(out.contains("fn get(self) -> i64 {"), "{}", out);
+        assert!(out.contains("fn bump(&mut self) {"), "{}", out);
+        assert!(out.contains("    self.get();"), "{}", out); // `(*self).get()` prints as hand Rust writes it
+        assert!(out.contains("c.bump();"), "{}", out);
+        assert!(out.contains("C::new(k).get() + c.get()"), "{}", out);
+        assert!(!out.contains("C__"), "{}", out);
+    }
+
+    #[test]
+    fn prelude_trait_names_keep_the_path_form() {
+        // `self.eq(o)` on `self: &mut C` would pick `<&mut C as PartialEq>::eq` before the inherent `C::eq`
+        let p = prog(&[("C", "eq", "C__eq", Receiver::Read), ("C", "same", "C__same", Receiver::Inout)]);
+        let text = "fn C__eq(self: C, o: C) -> bool {\n    self.n == o.n\n}\n\
+fn C__same(self: &mut C, o: C) -> bool {\n    C__eq((*self), o)\n}\nfn f(mut c: C) -> bool {\n    C__same(&mut c, c)\n}";
+        let out = impl_shape(text.to_string(), &p);
+        assert!(out.contains("fn eq(self, o: C) -> bool {"), "{}", out);
+        assert!(out.contains("C::eq((*self), o)"), "{}", out);
+        assert!(out.contains("c.same(c)"), "{}", out);
+    }
+
+    #[test]
+    fn stems_and_suffixes() {
+        // a program with modules: the printed names are stems, looked up per function
+        let p = prog(&[("pruv_m_t_1_T", "area", "pruv_m_f_1_area", Receiver::Read)]);
+        let text = "fn pruv_m_f_1_area__pruv_body(self: pruv_m_t_1_T) -> i64 {\n    1\n}\n\
+fn g(t: pruv_m_t_1_T) -> i64 {\n    pruv_m_f_1_area__pruv_body(t) + 0\n}\nfn h() { let s = \"pruv_m_f_1_area(\"; }";
+        let out = impl_shape(text.to_string(), &p);
+        assert!(out.contains("impl pruv_m_t_1_T {"), "{}", out);
+        assert!(out.contains("fn area__pruv_body(self) -> i64 {"), "{}", out);
+        assert!(out.contains("t.area__pruv_body() + 0"), "{}", out);
+        assert!(out.contains("\"pruv_m_f_1_area(\""), "literals are kept: {}", out);
+    }
+
+    #[test]
+    fn receivers() {
+        assert!(simple_receiver("c"));
+        assert!(simple_receiver("c.f.g"));
+        assert!(simple_receiver("C::new(k)"));
+        assert!(simple_receiver("b.twice().get()"));
+        assert!(simple_receiver("(a + b)"));
+        assert!(!simple_receiver("a + b"));
+        assert!(!simple_receiver("C { n: k }"));
+        assert!(!simple_receiver("*p"));
+    }
 }

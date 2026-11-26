@@ -1,0 +1,22 @@
+// spec: R-6x-3 accept
+// Receivers of known static type that are not typed places: call results, chains, struct literals, match binders.
+struct C { n: i64 }
+enum Sh { Sq(c: C), No }
+impl C {
+  fn new(k: i64) -> C ensures result.n == k { return C { n: k }; }
+  fn get(self) -> i64 ensures result == self.n { return self.n; }
+  fn twice(self) -> C requires -1000 <= self.n && self.n <= 1000 ensures result.n == self.n * 2 { return C { n: self.n * 2 }; }
+  fn bump(inout self) -> () requires self.n < 1000 ensures self.n == old(self).n + 1 { self.n = self.n + 1; }
+}
+fn f(k: i64, s: Sh) -> i64 requires 0 <= k && k <= 10 {
+  let a: i64 = C::new(k).get();
+  let b: C = C::new(k);
+  let c: i64 = b.twice().get();
+  let d: i64 = C { n: k }.get();
+  let mut t: i64 = a + c + d;
+  match s {
+    Sh::Sq(x) => { t = t + x.get() * 0; }
+    Sh::No => { }
+  }
+  return t + b.get();
+}

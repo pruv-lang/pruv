@@ -702,6 +702,16 @@ fn load_source_full(
     let mut ty_meta: Vec<ItemMeta> = Vec::new();
     for (mi, pf) in parsed.into_iter().enumerate() {
         let crate::parser::ParsedFile { prog: pp, items, fn_pub, ty_pub, .. } = pf;
+        // P9b-2: impl blocks and their functions by identity (`crate::m::Owner`, `crate::m::Owner__name`)
+        let (mpath, mpkg) = (modules[mi].path.clone(), modules[mi].pkg.clone());
+        for mut m in pp.methods {
+            m.owner = ident_in(&mpath, &m.owner, mpkg.as_deref());
+            m.func = ident_in(&mpath, &m.func, mpkg.as_deref());
+            prog.methods.push(m);
+        }
+        for (owner, l, c) in pp.impls {
+            prog.impls.push((ident_in(&mpath, &owner, mpkg.as_deref()), l, c));
+        }
         let mut fns: Vec<Option<Function>> = pp.functions.into_iter().map(Some).collect();
         let mut tys: Vec<Option<TypeDecl>> = pp.types.into_iter().map(Some).collect();
         let mut mitems: Vec<Item> = Vec::new();
@@ -780,6 +790,11 @@ fn run(prog: &mut Program, g4: &mut G4) -> Res<()> {
             if let Item::Fn(fi) = *it {
                 let f = &prog.functions[fi];
                 if g4.modules[mi].funcs.contains_key(&f.name) {
+                    // P9b-2: user names cannot contain `__`, so `T__f` is the impl function `f` of `T` (R-6x-1)
+                    if let Some((owner, name)) = f.name.rsplit_once("__") {
+                        return Err(err(f.line, f.col, "dup_method",
+                            format!("{} has two impl functions named {}", crate::pyrepr::repr_str(owner), crate::pyrepr::repr_str(name)), "rename one of them"));
+                    }
                     return Err(err(f.line, f.col, "dup_fn", format!("function {} defined twice", ident_in(&path, &f.name, pk)), ""));
                 }
                 if BUILTIN_FNS.contains(&f.name.as_str()) || crate::check::contract_only(&f.name).is_some() || is_catalog(&f.name) {
@@ -1341,6 +1356,25 @@ impl<'a> Rs<'a> {
                 return call.args.iter_mut().try_for_each(|arg| self.rexpr(arg));
             }
         }
+        // P9b-2: `crate::m::Owner::f(args)` calls the impl function `Owner__f` of module m (the type and the function
+        // must both be visible here)
+        if let Expr::Call(c) = &mut *e {
+            if c.name.starts_with("crate::") {
+                let (m, rem) = self.walk(&c.name);
+                let md = self.module(m);
+                let lowered = rem.get(1).map(|f| format!("{}__{}", rem[0], f));
+                if let (2, Some(&ti), Some(&fi)) =
+                    (rem.len(), md.types.get(&rem[0]), lowered.as_ref().and_then(|l| md.funcs.get(l)))
+                {
+                    let owner = format!("{}::{}", disp_pkg(&md.path, md.pkg.as_deref()), rem[0]);
+                    self.access(self.g4.ty_meta[ti].is_pub, m, c.line, c.col, &owner)?;
+                    self.access(self.g4.fn_meta[fi].is_pub, m, c.line, c.col, &c.name)?;
+                    c.name = ident_in(&md.path, lowered.as_deref().unwrap_or_default(), md.pkg.as_deref());
+                    self.targs(&mut c.targs, c.line, c.col)?;
+                    return c.args.iter_mut().try_for_each(|a| self.rexpr(a));
+                }
+            }
+        }
         // `crate::m::Enum::Variant(args)` parses as a Call: a variant constructor replaces the node
         let mut replace: Option<Expr> = None;
         if let Expr::Call(c) = &mut *e {
@@ -1628,6 +1662,40 @@ fn iface_fn(types: &HashMap<String, TyIface>, fns: &HashMap<String, bool>, f: &F
     Ok(())
 }
 
+/// P06 for dot calls (P9b-2): `c.m(..)` in a contract is still `@method|m` when `iface_fn` runs, so after
+/// `methods::resolve` a public function's contract must not call a method without `pub` (R-6x-5).
+pub fn contract_methods(prog: &Program, g4: &G4) -> Res<()> {
+    let private: HashSet<&str> = prog.methods.iter().filter(|m| !m.is_pub).map(|m| m.func.as_str()).collect();
+    if private.is_empty() {
+        return Ok(());
+    }
+    for (i, f) in prog.functions.iter().enumerate() {
+        if !g4.fn_meta.get(i).is_some_and(|m| m.is_pub) {
+            continue;
+        }
+        let mut hit: Option<(i64, i64, String)> = None;
+        for e in f.requires.iter().chain(f.ensures.iter()).chain(f.decreases.iter()).chain(f.cost.iter()) {
+            crate::foreign_shim::walk_expr(e, &mut |n| {
+                if let crate::foreign_shim::Node::Expr(Expr::Call(x)) = n {
+                    if hit.is_none() && private.contains(x.name.as_str()) {
+                        hit = Some((x.line, x.col, x.name.clone()));
+                    }
+                }
+            });
+        }
+        if let Some((line, col, name)) = hit {
+            return Err(err(
+                line,
+                col,
+                "public_interface",
+                format!("public function {} exposes the private function {} in its contract", f.name, name),
+                format!("make {} `pub`, or keep {} private", name, f.name),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn iface_ty(types: &HashMap<String, TyIface>, d: &TypeDecl, seen: &mut HashSet<String>) -> Res<()> {
     for fd in decl_fields(d) {
         iface_type(types, &GType::from_key(&fd.ty), fd.line, fd.col, false, d.name(), &format!("field {}", fd.name), seen)?;
@@ -1641,6 +1709,7 @@ fn iface_ty(types: &HashMap<String, TyIface>, d: &TypeDecl, seen: &mut HashSet<S
 
 fn entries(prog: &Program, g4: &mut G4) -> Res<()> {
     let mut out: Vec<String> = Vec::new();
+    let impl_fns: HashSet<&str> = prog.methods.iter().map(|m| m.func.as_str()).collect();
     for (i, f) in prog.functions.iter().enumerate() {
         let meta_module = g4.fn_meta[i].module;
         if !g4.modules[meta_module].path.is_empty() || g4.fn_meta[i].pkg.is_some() {
@@ -1667,8 +1736,10 @@ fn entries(prog: &Program, g4: &mut G4) -> Res<()> {
             }
             g4.main = Some(f.name.clone());
         }
-        // R03L: a pred is never a host entry
-        if g4.fn_meta[i].is_pub && f.tparams.is_empty() && f.foreign.is_none() && !f.pred {
+        // R03L: a pred is never a host entry; P9b-2: nor is an impl function (`pub fn` in an impl block)
+        if g4.fn_meta[i].is_pub && f.tparams.is_empty() && f.foreign.is_none() && !f.pred
+            && !impl_fns.contains(f.name.as_str())
+        {
             g4.fn_meta[i].host_entry = true;
             out.push(f.name.clone());
         }

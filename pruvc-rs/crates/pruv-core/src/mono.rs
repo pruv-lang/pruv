@@ -1028,7 +1028,12 @@ impl<'a> Mono<'a> {
         let mark_fn = |g: &G4, i: usize, private: bool| FnMark {
             is_pub: g.fn_meta[i].is_pub,
             host_entry: g.fn_meta[i].host_entry && !private,
-            disp: prog.functions[i].name.clone(),
+            // P9b-2: a method shows as `crate::m::T::f` in messages, not as its lowered name `crate::m::T__f`
+            disp: prog
+                .methods
+                .iter()
+                .find(|m| m.func == prog.functions[i].name)
+                .map_or_else(|| prog.functions[i].name.clone(), |m| format!("{}::{}", m.owner, m.name)),
         };
         for (i, f) in prog.functions.iter().enumerate() {
             if self.findex.get(&f.name) != Some(&i) {
@@ -1103,8 +1108,14 @@ impl<'a> Mono<'a> {
             // P7: module-level constants (evaluated at parse time)
             consts: prog.consts.clone(),
             aliases: prog.aliases.clone(),
-            methods: prog.methods.clone(),
-            impls: prog.impls.clone(),
+            // P9b-2: impl functions and owners by their Rust stems (identities in explicit mode)
+            methods: prog.methods.iter().map(|m| {
+                let mut m = m.clone();
+                if let Some(s) = self.rfns.get(&m.func) { m.func = s.clone(); }
+                if let Some(s) = self.rtypes.get(&m.owner) { m.owner = s.clone(); }
+                m
+            }).collect(),
+            impls: prog.impls.iter().map(|(o, l, c)| (self.rtypes.get(o).cloned().unwrap_or_else(|| o.clone()), *l, *c)).collect(),
         };
         let args = self.types.into_iter().map(|spec| (spec.stem, spec.args))
             .chain(self.fns.into_iter().map(|spec| (spec.stem, spec.args)))

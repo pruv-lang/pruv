@@ -1,0 +1,1 @@
+{"gen_contains": ["pub fn new(x: i64) -> P {", "pub fn same(self, o: P) -> bool {", "P::new(self.x)"]}

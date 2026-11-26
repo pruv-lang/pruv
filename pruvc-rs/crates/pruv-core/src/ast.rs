@@ -816,7 +816,9 @@ pub struct Program {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Receiver { None, Read, Inout, Take }
 
-/// P9b: one function of an `impl Owner { .. }` block; `func` is its lowered name `Owner__name`.
+/// P9b: one function of an `impl Owner { .. }` block; `func` is its lowered name `Owner__name`. In explicit mode
+/// the loader replaces `owner` and `func` by their identities (`crate::m::Owner`, `crate::m::Owner__name`), and the
+/// concrete program of mono by their Rust stems.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MethodItem {
     pub line: i64,
@@ -825,6 +827,8 @@ pub struct MethodItem {
     pub name: String,
     pub func: String,
     pub recv: Receiver,
+    /// P9b-2: `pub fn` in the impl block (visible outside its module; never a host entry, so no `--proven-entries` twin)
+    pub is_pub: bool,
 }
 
 /// P9: `type name<params> = rhs;` with `rhs` a type key whose parameters are plain names.

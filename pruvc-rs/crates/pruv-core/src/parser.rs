@@ -56,7 +56,6 @@ pub fn parse_file(src: &str, tag: usize) -> R<ParsedFile> {
         alias_generic: Vec::new(),
         impl_owner: None,
         impl_fns: std::collections::HashSet::new(),
-        impl_tok: None,
         last_recv: Receiver::None,
     };
     p.impl_collect();
@@ -95,14 +94,6 @@ pub fn parse_file(src: &str, tag: usize) -> R<ParsedFile> {
         }
     }
     prog.consts = consts;
-    if let Some(it) = &p.impl_tok {
-        if tag != 0 || p.has_pub || !p.mods.is_empty() {
-            // P9b-2: methods in module programs (`pub` methods, `m::T::f` paths) are not designed yet.
-            return Err(PruvError::new("parse", it.line, it.col, "impl_module",
-                "impl blocks are available only in a single-file program without `pub` or `mod` items (parity row P9b-2)",
-                "write free functions, or keep the program in one file"));
-        }
-    }
     if let Some(first) = p.tuples.first() {
         if tag != 0 || p.has_pub || !p.mods.is_empty() {
             // P6 row P6-2: module identities of the synthetic tuple structs are not designed yet.
@@ -397,8 +388,6 @@ struct Parser {
     impl_owner: Option<String>,
     /// (owner, function name) of every impl function of the file (pre-pass), so `Owner::f(..)` parses as a call
     impl_fns: std::collections::HashSet<(String, String)>,
-    /// the first `impl` token (parse/impl_module)
-    impl_tok: Option<Tok>,
     /// receiver of the impl function `function` just parsed
     last_recv: Receiver,
 }
@@ -1134,12 +1123,9 @@ impl Parser {
     /// P9b: `impl Owner { fn .. }`; every function becomes the free function `Owner__name` (recorded in `methods`).
     fn impl_block(&mut self, p: &mut Program) -> R<()> {
         let it = self.next();
-        if self.impl_tok.is_none() {
-            self.impl_tok = Some(it.clone());
-        }
         if self.at("<", 0) {
             let t = self.peek(0).clone();
-            return Err(self.impl_syntax(&t, "generic impl blocks are not available yet (parity row P9b-2)", "write the impl for a non-generic struct or enum"));
+            return Err(self.impl_syntax(&t, "generic impl blocks are not available yet (parity row P9b-3)", "write the impl for a non-generic struct or enum"));
         }
         let ot = self.peek(0).clone();
         if ot.kind != Kind::Id {
@@ -1148,7 +1134,7 @@ impl Parser {
         self.bump();
         if self.at("<", 0) || self.at("::", 0) {
             let t = self.peek(0).clone();
-            return Err(self.impl_syntax(&t, "impl blocks of generic or path types are not available yet (parity row P9b-2)", "write `impl Name { fn .. }` for a struct or enum of this file"));
+            return Err(self.impl_syntax(&t, "impl blocks of generic or path types are not available yet (parity row P9b-3)", "write `impl Name { fn .. }` for a struct or enum of this file"));
         }
         if self.at_ident("for", 0) || self.at("for", 0) {
             let t = self.peek(0).clone();
@@ -1159,15 +1145,40 @@ impl Parser {
             return Err(self.impl_syntax(&t, "expected `{` after the impl type", "write `impl Name { fn .. }`"));
         }
         self.bump();
+        // P9b-2: `Self` inside the block names the owner type (in types, struct literals and paths `Self::f`)
+        let mut depth = 1usize;
+        for k in self.i..self.t.len() {
+            let tk = &mut self.t[k];
+            match (tk.kind, tk.val.as_str()) {
+                (Kind::Op, "{") => depth += 1,
+                (Kind::Op, "}") => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                (Kind::Id, "Self") => {
+                    tk.kind = Kind::Id;
+                    tk.val = ot.val.clone();
+                }
+                (Kind::Eof, _) => break,
+                _ => {}
+            }
+        }
         p.impls.push((ot.val.clone(), it.line, it.col));
         while !self.at("}", 0) {
             let t = self.peek(0).clone();
             if t.kind == Kind::Eof {
                 return Err(self.impl_syntax(&it, "unclosed impl block", "close it with `}`"));
             }
-            if self.at("pub", 0) {
-                return Err(PruvError::new("parse", t.line, t.col, "impl_module",
-                    "`pub` methods are not available yet (parity row P9b-2)", "drop `pub`; impl blocks live in single-file programs"));
+            // P9b-2: `pub fn` is visible outside the module of the type (a method is never a host entry)
+            let is_pub = self.at("pub", 0);
+            if is_pub {
+                self.bump();
+                if self.at("pub", 0) {
+                    let t2 = self.peek(0).clone();
+                    return Err(self.visibility_syntax(&t2, "`pub` is written once", "remove the second `pub`"));
+                }
             }
             if !self.at("fn", 0) {
                 return Err(self.impl_syntax(&t, "an impl block holds only `fn` items", "move the item out of the impl block"));
@@ -1178,16 +1189,16 @@ impl Parser {
             let mut f = r?;
             let recv = std::mem::replace(&mut self.last_recv, Receiver::None);
             if !f.tparams.is_empty() {
-                return Err(self.impl_syntax(&t, "generic methods are not available yet (parity row P9b-2)", "write a free generic function"));
+                return Err(self.impl_syntax(&t, "generic methods are not available yet (parity row P9b-3)", "write a free generic function"));
             }
             if f.name.starts_with('_') {
                 // `Owner__name` must name one (owner, function) pair: `A` + `_b` and `A_` + `b` would both be `A___b`
                 return Err(self.impl_syntax(&t, "an impl function name must not start with `_`", "rename the function"));
             }
             let func = format!("{}__{}", ot.val, f.name);
-            p.methods.push(MethodItem { line: f.line, col: f.col, owner: ot.val.clone(), name: f.name.clone(), func: func.clone(), recv });
+            p.methods.push(MethodItem { line: f.line, col: f.col, owner: ot.val.clone(), name: f.name.clone(), func: func.clone(), recv, is_pub });
             f.name = func;
-            self.fn_pub.push(false);
+            self.fn_pub.push(is_pub);
             p.functions.push(f);
             self.items.push(Item::Fn(p.functions.len() - 1));
         }
@@ -1267,8 +1278,7 @@ impl Parser {
             }
             if self.at("impl", 0) {
                 if let Some(pt) = &pub_tok {
-                    return Err(PruvError::new("parse", pt.line, pt.col, "impl_module",
-                        "an impl block has no visibility, and `pub` methods are not available yet (parity row P9b-2)", "drop `pub`"));
+                    return Err(self.visibility_syntax(pt, "an impl block has no visibility", "drop `pub`; write `pub fn` for the methods to export"));
                 }
                 self.impl_block(&mut p)?;
                 continue;
