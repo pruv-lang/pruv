@@ -1223,3 +1223,47 @@ All after the last code change (F1 / F4 from the structure comparison).
      4.3e-S, then 4.3e-F (touches `lib/access`; run all consumers).
   5. Codex bench rows 4.3f-A, 4.3f-O, 4.3f-N, 4.3f-K, 4.3f-L, 4.3f-T, 4.3f-P, 4.3f-R, 4.3f-D (`codex/` only), then
      4.3f-B, 4.3f-E, 4.3f-F (shared modules; run all consumers).
+
+## Step 4.4: Entry / req
+
+- P10H gate (synchronous host facts; req fresh-query / order and timing contract): **not met**, so `req` stays
+  blocked and its decisions were not ported. Evidence: `docs/L3_RESTRUCTURE_SPEC.md:232`, `:378` (P10H row), `:485`
+  (req row 11), `:493` (grid), `:529` (R11), `:1245`, `:333` (LLVM pending P17b/P17c), `:1690` (verdict "blocked on
+  the LLVM backend", `rq_find` rs/llvm 1.193x); `bench/l3/hostfact/README.md:41-44` ("The full request engine is not
+  built"); `req/root.pruv:2-3`, `:54-58` (world / packet bundles, world seal on every bundle). `git log` has
+  P16 / P17a (a7f7e68b) only.
+- Entry recheck (fragment code outside `lib/ent_*`): `entry/root.pruv` (`entry_begin`, `entry_step`, `index_begin`,
+  `index_step`) matches `lib/hand/entry_root.rs` function by function (same forwarders, same wire-in / poison check
+  order). `entry/hand.rs` is the R02 serde_json workload lane, not a per-function counterpart (row ENT). No change, so
+  no entry tests or `entry/integrate.py` run.
+- `req`: new hand baseline `req/hand/req.rs` in the synchronous-fact shape (trait `Host`, `Requests { opening }` with
+  `sources` / `list` / `open`, fresh `session_list` per lookup; `rustc --edition 2021 --test`, 19 tests pass, no warnings; `// Pruv:` names on every function) and
+  `req/RESHAPE.md` with the per-function structure table (hand vs Pruv), the port left as rows. One Codex structure
+  comparison (gpt-6.2-astra, high): five hand-side behavior differences fixed (Grok verify as the copy side's
+  callback, no `rm` of an empty path, truthy seed account, missing vs null fields, `lastPlan` object), the rest kept as
+  rows (`req/RESHAPE.md` §3b). No Pruv code changed.
+- No module moved to `lib` / `pkgs`; no shared module changed, so no consumer runs were needed.
+- Tests: `req/RESHAPE.md` §4 (Pruv unchanged; baseline run).
+
+### Rows open after 4.4
+
+- New (gate): P10H, req waits for (1) the LLVM G6 host-call boundary, P17b / P17c (`rq_find` rs/llvm 1.193x, needs
+  <=1.0); (2) a natural hand request engine (`req/hand/req.rs` is the shape; it needs a perf lane) and the complete
+  list / open x none / first / last match x S=1000/5000/20000, M=1/10/50 grid on both backends; (3) a synchronous-fact
+  `RequestStore` in Pruv (G6 facts in place of the world / packet bundles) with the Q3 / Q7 fresh-observation controls
+  and the 420k-call overhead check. Then the req port follows `req/RESHAPE.md` §1.
+- New (bench, `req/RESHAPE.md` §3): REQ-PORT (the port itself, every row of §1), REQ-W (world / packet / adapter
+  functions with no hand counterpart, removed by the port), REQ-K (Pruv releases the opening key before cleanup),
+  REQ-D (`"default"` literal), and hand-model rows REQ-B, REQ-T, REQ-X, REQ-O, REQ-S, REQ-L.
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB, TH, FO, FV, UL, VP,
+  IW, VL, 4.3d-M, 4.3d-H, 4.3f-S, 4.3f-E, 4.3g-SQ, and the 4.3g / 4.3h bench rows above.
+- Next:
+  1. OpenCode bench rows 4.3g-P, 4.3g-R, 4.3g-Q, 4.3g-K, 4.3g-D, 4.3g-N, 4.3g-A, 4.3g-X, 4.3g-F, 4.3g-E (`opencode/`
+     only; 4.3g-P first).
+  2. Claude bench rows 4.3h-T, 4.3h-R, 4.3h-W, 4.3h-Z, 4.3h-P, 4.3h-V, 4.3h-L, 4.3h-A (`claude/` only), then 4.3h-O
+     (shared packages; run all consumers) and 4.3h-Q (move `framing` to `pkgs` with the Qwen consumer).
+  3. Grok bench rows 4.3c-T, 4.3c-B, 4.3c-G and `pkgs/turns` dead code; Qwen bench rows 4.3e-D, 4.3e-L, 4.3e-J,
+     4.3e-S, then 4.3e-F (touches `lib/access`; run all consumers).
+  4. Codex bench rows 4.3f-A, 4.3f-O, 4.3f-N, 4.3f-K, 4.3f-L, 4.3f-T, 4.3f-P, 4.3f-R, 4.3f-D (`codex/` only), then
+     4.3f-B, 4.3f-E, 4.3f-F (shared modules; run all consumers).
+  5. req port (REQ-PORT) once P10H passes on both backends.
