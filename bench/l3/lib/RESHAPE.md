@@ -1303,3 +1303,41 @@ All after the last code change (F1 / F4 from the structure comparison).
   4. Codex bench rows 4.3f-A, 4.3f-O, 4.3f-N, 4.3f-K, 4.3f-L, 4.3f-T, 4.3f-P, 4.3f-R, 4.3f-D (`codex/` only), then
      4.3f-B, 4.3f-E, 4.3f-F (shared modules; run all consumers).
   5. req port (REQ-PORT) once P10H passes on both backends.
+
+## Step 4.4b: OpenCode bench rows (4.3g-R, K2, F2, N, X, T)
+
+- `opencode/RESHAPE.md` §6. `opencode/` only (and its `test_impl.py` scope C now loads `path`); no `lib` / `pkgs`
+  module changed, so no consumer runs were needed.
+- Closed: 4.3g-R (`rows::decode` pushes into empty `rows` / `pool`, refs are text-bank offsets, `relocate` and the
+  `p208` `lit` copy removed), 4.3g-K2 (`clean_title` / `updated_number` pass checked `subview`s to `str` parameters),
+  4.3g-N (`path::normalize` in the hand shape: piece list, one result buffer), 4.3g-X (`export::join_prefix` removed,
+  `start_export` calls `path::normalize`; `spawn_pool` reserve + append with `str` literals).
+- Partly closed: 4.3g-F2 (`format_ext` reserve + push; civil repeat stays), 4.3g-T (dead `path::dirname` / `to_str`
+  removed, `iso_str` moves its text).
+- One Codex structure comparison (gpt-6.2-astra, high; Codex 2 account): path edge cases equal, no code change; findings
+  kept as rows 4.4b-NV, 4.4b-NC, 4.4b-P208 and the check 4.4b-SP (spawn cwd / argv thread source vs the hand).
+- Tests: `opencode/RESHAPE.md` §4 (verify A-D on both pairs, 199/199, `q.py` 499 cases with 0 unexplained, 16/16
+  mutants present, hand 0 warnings).
+
+### Rows open after 4.4b
+
+- New (language): 4.4b-NV, a list of borrowed views (`Vec<ref [u8]>` / `Vec<&str>`) is a type error, so
+  `path::normalize` keeps (start, end) offset pairs and pushes the root `/` first; a byte buffer built from `str`
+  pieces loses the UTF-8 fact, so `path::join` checks `utf8_valid` before `str_from_utf8`.
+- New (pkgs): 4.4b-CV, `pkgs/time` has no public `civil`, so `rows::format_ext` repeats the date arithmetic.
+- New (bench): 4.3g-T2 (`entry::Attach` tape ids vs the hand's two owned strings per assistant message), 4.4b-NC
+  (`normalize` reserves `n + 2`, hand sizes from the pieces), 4.4b-P208 (absent counts pushed after the move), 4.4b-SP
+  (check spawn cwd / last argv source against the TypeScript reference; Pruv and hand read different fields).
+- Still open from 4.3g / 4.4a: 4.3g-A2, 4.3g-A3, 4.3g-K3, 4.3g-M07, 4.3g-BS, 4.3g-SQ.
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB, TH, FO, FV, UL, VP,
+  IW, VL, 4.3d-M, 4.3d-H, 4.3f-S, 4.3f-E, the 4.3h bench rows and the 4.4 rows (P10H, REQ-*).
+- Next:
+  1. Claude bench rows 4.3h-T, 4.3h-R, 4.3h-W, 4.3h-Z, 4.3h-P, 4.3h-V, 4.3h-L, 4.3h-A (`claude/` only), then 4.3h-O
+     (shared packages; run all consumers) and 4.3h-Q (move `framing` to `pkgs` with the Qwen consumer).
+  2. Grok bench rows 4.3c-T, 4.3c-B, 4.3c-G and `pkgs/turns` dead code; Qwen bench rows 4.3e-D, 4.3e-L, 4.3e-J,
+     4.3e-S, then 4.3e-F (touches `lib/access`; run all consumers).
+  3. Codex bench rows 4.3f-A, 4.3f-O, 4.3f-N, 4.3f-K, 4.3f-L, 4.3f-T, 4.3f-P, 4.3f-R, 4.3f-D (`codex/` only), then
+     4.3f-B, 4.3f-E, 4.3f-F (shared modules; run all consumers).
+  4. OpenCode leftovers 4.4b-SP (check first), 4.3g-T2, 4.4b-NC, 4.3g-A2 / A3, 4.3g-K3 (`opencode/` only), and
+     4.4b-CV with a `pkgs/time` `civil`.
+  5. req port (REQ-PORT) once P10H passes on both backends.

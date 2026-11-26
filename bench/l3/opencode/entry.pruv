@@ -102,7 +102,7 @@ fn iso_str(d: crate::json::JsonDocument, id: i64) -> str ! alloc
   if len(b) != 24 { return copy(flag); }
   let s: str = crate::jstr::owned_text(move b);
   if len(s) != 24 { return copy(flag); }
-  return copy(s);
+  return move s;
 }
 
 // Tape id of info.time.<key> when info.time is an object and the key exists, else -1 (record(info.time)?.key).

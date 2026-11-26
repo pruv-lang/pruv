@@ -291,24 +291,24 @@ fn p208(ctl: [i64], query_words: [i64], query_bytes: [u8], text: [u8]) -> [i64] 
   ensures len(result) >= 76
 {
   if ctl[6] != 0 { return crate::packet::done_internal(ctl, 28); }
-  let d: crate::rows::Decoded = crate::rows::decode(query_words, query_bytes);
+  let cur: i64 = len(text);
+  let d: crate::rows::Decoded = crate::rows::decode(query_words, query_bytes, cur);
   if d.status == 1 { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 7)); }
   if d.status != 0 { return crate::path::fail_with(ctl, crate::path::toobig_at(ctl, 7)); }
   let n: i64 = d.count;
-  let cur: i64 = len(text);
   let pn: i64 = len(d.pool);
   if n < 0 || n > 100000000 || pn > 1000000000 || !crate::util::bank_fits(cur, pn) {
     return crate::path::fail_with(ctl, crate::path::toobig_at(ctl, 7));
   }
-  let rel: [i64] = crate::rows::relocate(d.rows, cur);
-  if len(rel) != 7 * n { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 7)); }
-  let mut lit: [i64] = alloc(8 * n, -1);
+  // the message count of each row is absent (-1) until list fills it (hand `Row.messages: None`)
+  let mut rows: [i64] = move d.rows;
+  arr_reserve(inout rows, n);
   let mut j: i64 = 0;
-  while j < 7 * n
-    invariant 0 <= j && j <= 7 * n && n <= 100000000 && len(lit) == 8 * n && len(rel) == 7 * n
-    decreases 7 * n - j
+  while j < n
+    invariant 0 <= j && j <= n && n <= 100000000 && len(rows) == 7 * n + j
+    decreases n - j
   {
-    lit[j] = rel[j];
+    arr_push(inout rows, -1);
     j = j + 1;
   }
   let p2: [i64] = crate::path::append_patch(2, 0, 8 * n, 3, 0);
@@ -319,7 +319,7 @@ fn p208(ctl: [i64], query_words: [i64], query_bytes: [u8], text: [u8]) -> [i64] 
   c[21] = n;
   let c2: [i64] = crate::packet::ctl_next(c, 300);
   let ep: [i64] = alloc(0, 0);
-  return crate::packet::step_packet(c2, patches, ep, lit, d.pool, ep, 2);
+  return crate::packet::step_packet(c2, patches, ep, rows, d.pool, ep, 2);
 }
 
 pub fn advance(cfg: [i64], cfg_text: [u8], ctl: [i64], query_words: [i64], query_bytes: [u8], rows: [i64], text: [u8],

@@ -1,7 +1,7 @@
 // OpenCode row module (package B): follows DESIGN.md/IMPL_NOTES.md; written without a shell (not compiled).
 // decode(queryWords, queryBytes): the select result payload (banks 0/1: [C=4, R, 8 column-ref words, R*16 typed values]) becomes
-// validated seven-word rows [idStart, idLen, dirStart, dirLen, titleStart, titleLen, updatedMs] (refs relative to a pool that holds
-// id ++ directory ++ cleaned title per kept row, in SQL order), plus updated_number (P9), clean_title, db_iso (with the extended
+// validated seven-word rows [idStart, idLen, dirStart, dirLen, titleStart, titleLen, updatedMs] (refs into the text bank, where the
+// returned pool of id ++ directory ++ cleaned title per kept row, in SQL order, is appended), plus updated_number (P9), clean_title, db_iso (with the extended
 // years of JS TimeClip). Nothing here sorts, caps or backfills rows.
 
 pub struct Decoded { status: i64, count: i64, rows: [i64], pool: [u8] }
@@ -11,7 +11,7 @@ fn bad(status: i64) -> Decoded ! alloc
 {
   let er: [i64] = alloc(0, 0);
   let eb: [u8] = alloc(0, 0);
-  return Decoded { status: status, count: 0, rows: copy(er), pool: copy(eb) };
+  return Decoded { status: status, count: 0, rows: move er, pool: move eb };
 }
 
 fn alnum(x: i64) -> bool
@@ -38,16 +38,15 @@ pub fn valid_id(t: [u8], s: i64, l: i64) -> bool
   return true;
 }
 
-fn has_prefix(t: [u8], s: i64, l: i64, lit: str) -> bool
-  requires 0 <= s && 0 <= l && l <= len(t) - s
+fn has_prefix(s: str, lit: str) -> bool
 {
-  if len(lit) > l { return false; }
+  if len(lit) > len(s) { return false; }
   let mut k: i64 = 0;
   while k < len(lit)
-    invariant 0 <= k && k <= len(lit) && len(lit) <= l && 0 <= s && l <= len(t) - s
+    invariant 0 <= k && k <= len(lit) && len(lit) <= len(s)
     decreases len(lit) - k
   {
-    let x: i64 = t[s + k];
+    let x: i64 = s[k];
     let y: i64 = lit[k];
     if x != y { return false; }
     k = k + 1;
@@ -57,21 +56,20 @@ fn has_prefix(t: [u8], s: i64, l: i64, lit: str) -> bool
 
 // cleanTitle: only a TEXT value counts; empty, or a raw start "New session - " / "Child session - " (tested before trimming),
 // gives ""; otherwise whitespace collapsed, trimmed, cut to 120 UTF-16 units (P2: a split astral scalar is dropped).
-pub fn clean_title(kind: i64, a: i64, b: i64, qb: [u8]) -> [u8] ! alloc
-  ensures len(result) <= 100000000
+// The cell is read as a borrowed str of qb[a..a+b] (hand `cell_text`); bytes that are not UTF-8 give "".
+pub fn clean_title(kind: i64, a: i64, b: i64, qb: [u8]) -> str ! alloc
+  requires len(qb) <= 2147483647
+  ensures len(result) <= len(qb)
 {
-  let empty: [u8] = alloc(0, 0);
-  if kind != 3 { return empty; }
-  if !crate::packet::ref_ok(a, b, len(qb)) || a < 0 || b < 1 { return empty; }
-  if has_prefix(qb, a, b, "New session - ") { return empty; }
-  if has_prefix(qb, a, b, "Child session - ") { return empty; }
-  let raw: [u8] = crate::util::span_bytes(qb, a, b);
-  let s: str = crate::jstr::owned_text(move raw);
-  if len(s) > 100000000000 { return empty; }
-  let t: str = crate::text::one_line(s, 120);
-  let out: [u8] = crate::util::to_bytes(t);
-  if len(out) > 100000000 { return empty; }
-  return out;
+  let empty: str = "";
+  if kind != 3 { return copy(empty); }
+  if !crate::packet::ref_ok(a, b, len(qb)) || a < 0 { return copy(empty); }
+  let v: ref [u8] = subview(qb, a, a + b);
+  if !utf8_valid(v) { return copy(empty); }
+  if b < 1 { return copy(empty); }
+  if has_prefix(subview(qb, a, a + b), "New session - ") { return copy(empty); }
+  if has_prefix(subview(qb, a, a + b), "Child session - ") { return copy(empty); }
+  return crate::text::one_line(subview(qb, a, a + b), 120);
 }
 
 // trimmed [+-]?[0-9]+ within +-(2^53-1) (checked accumulation); blank, other text, or beyond the range => 0 (P9)
@@ -123,9 +121,9 @@ pub fn updated_number(kind: i64, a: i64, b: i64, qb: [u8]) -> i64 ! alloc
   }
   if kind == 3 {
     if !crate::packet::ref_ok(a, b, len(qb)) || a < 0 { return 0; }
-    let raw: [u8] = crate::util::span_bytes(qb, a, b);
-    let s: str = crate::jstr::owned_text(move raw);
-    return text_number(s);
+    let v: ref [u8] = subview(qb, a, a + b);
+    if !utf8_valid(v) { return 0; }
+    return text_number(subview(qb, a, a + b));
   }
   return 0;
 }
@@ -158,34 +156,35 @@ fn format_ext(ms: i64) -> [u8] ! alloc
     let none: [u8] = alloc(0, 0);
     return none;
   }
-  let mut out: [u8] = alloc(27, 0);
-  out[0] = 43;
-  out[1] = 48 + (y / 100000) % 10;
-  out[2] = 48 + (y / 10000) % 10;
-  out[3] = 48 + (y / 1000) % 10;
-  out[4] = 48 + (y / 100) % 10;
-  out[5] = 48 + (y / 10) % 10;
-  out[6] = 48 + y % 10;
-  out[7] = 45;
-  out[8] = 48 + (m / 10) % 10;
-  out[9] = 48 + m % 10;
-  out[10] = 45;
-  out[11] = 48 + (d / 10) % 10;
-  out[12] = 48 + d % 10;
-  out[13] = 84;
-  out[14] = 48 + (h / 10) % 10;
-  out[15] = 48 + h % 10;
-  out[16] = 58;
-  out[17] = 48 + (mi / 10) % 10;
-  out[18] = 48 + mi % 10;
-  out[19] = 58;
-  out[20] = 48 + (sec / 10) % 10;
-  out[21] = 48 + sec % 10;
-  out[22] = 46;
-  out[23] = 48 + (f / 100) % 10;
-  out[24] = 48 + (f / 10) % 10;
-  out[25] = 48 + f % 10;
-  out[26] = 90;
+  let mut out: [u8] = alloc(0, 0);
+  arr_reserve(inout out, 27);
+  arr_push(inout out, 43);
+  arr_push(inout out, 48 + (y / 100000) % 10);
+  arr_push(inout out, 48 + (y / 10000) % 10);
+  arr_push(inout out, 48 + (y / 1000) % 10);
+  arr_push(inout out, 48 + (y / 100) % 10);
+  arr_push(inout out, 48 + (y / 10) % 10);
+  arr_push(inout out, 48 + y % 10);
+  arr_push(inout out, 45);
+  arr_push(inout out, 48 + (m / 10) % 10);
+  arr_push(inout out, 48 + m % 10);
+  arr_push(inout out, 45);
+  arr_push(inout out, 48 + (d / 10) % 10);
+  arr_push(inout out, 48 + d % 10);
+  arr_push(inout out, 84);
+  arr_push(inout out, 48 + (h / 10) % 10);
+  arr_push(inout out, 48 + h % 10);
+  arr_push(inout out, 58);
+  arr_push(inout out, 48 + (mi / 10) % 10);
+  arr_push(inout out, 48 + mi % 10);
+  arr_push(inout out, 58);
+  arr_push(inout out, 48 + (sec / 10) % 10);
+  arr_push(inout out, 48 + sec % 10);
+  arr_push(inout out, 46);
+  arr_push(inout out, 48 + (f / 100) % 10);
+  arr_push(inout out, 48 + (f / 10) % 10);
+  arr_push(inout out, 48 + f % 10);
+  arr_push(inout out, 90);
   return out;
 }
 
@@ -203,52 +202,11 @@ pub fn db_iso(v: i64) -> [u8] ! alloc
   return format_ext(v);
 }
 
-// add base to the three ref starts of every 7-word row
-pub fn relocate(rows: [i64], base: i64) -> [i64] ! alloc
-  requires 0 <= base && base <= 2147483647
-  ensures len(result) == len(rows)
-{
-  let n: i64 = len(rows);
-  let mut o: [i64] = alloc(n, 0);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(rows) && len(o) == n
-    decreases n - i
-  {
-    o[i] = rows[i];
-    i = i + 1;
-  }
-  let cnt: i64 = n / 7;
-  let mut r: i64 = 0;
-  while r < cnt
-    invariant 0 <= r && r <= cnt && cnt == n / 7 && 7 * cnt <= n && n == len(rows) && len(o) == n
-    decreases cnt - r
-  {
-    let b: i64 = 7 * r;
-    // refs are pool offsets (0..2^31-1); anything else is left as is and fails the later shape check
-    if 0 <= rows[b] && rows[b] <= 2147483647 { o[b] = rows[b] + base; }
-    if 0 <= rows[b + 2] && rows[b + 2] <= 2147483647 { o[b + 2] = rows[b + 2] + base; }
-    if 0 <= rows[b + 4] && rows[b + 4] <= 2147483647 { o[b + 4] = rows[b + 4] + base; }
-    r = r + 1;
-  }
-  return o;
-}
-
-fn grow(b: [u8], used: i64, need: i64) -> [u8] ! alloc
-  requires 0 <= used && used <= len(b) && used <= 1000000000 && 0 <= need && need <= 1000000000 - used
-  ensures len(result) >= used + need && len(result) <= 2000000000
-{
-  let mut want: i64 = 2 * (used + need);
-  if want < 256 { want = 256; }
-  let mut o: [u8] = alloc(want, 0);
-  crate::bytes::copy_span(inout o, 0, b, 0, used);
-  return o;
-}
-
 // status 0 ok; 1 malformed payload (not 4 columns, bad length); 2 pool over 1e9 bytes. A row is kept when id is a TEXT thread name and
-// directory a nonempty TEXT; every other row is dropped (it keeps its place in SQLite's limit but not in the output).
-pub fn decode(query_words: [i64], query_bytes: [u8]) -> Decoded ! alloc
-  requires len(query_words) <= 2147483647 && len(query_bytes) <= 2147483647
+// directory a nonempty TEXT; every other row is dropped (it keeps its place in SQLite's limit but not in the output). The three
+// ref starts of a row are offsets in the text bank the pool is appended to (`base` is its current length).
+pub fn decode(query_words: [i64], query_bytes: [u8], base: i64) -> Decoded ! alloc
+  requires len(query_words) <= 2147483647 && len(query_bytes) <= 2147483647 && 0 <= base && base <= 2147483647
   ensures result.status == 0 ==> (0 <= result.count && len(result.rows) == 7 * result.count)
   ensures result.status != 0 ==> (result.count == 0 && len(result.rows) == 0 && len(result.pool) == 0)
 {
@@ -259,15 +217,13 @@ pub fn decode(query_words: [i64], query_bytes: [u8]) -> Decoded ! alloc
   if cc != 4 || nr < 0 || nr > 100000000 { return bad(1); }
   if nw != 10 + 16 * nr { return bad(1); }
   let nq: i64 = len(query_bytes);
-  let mut rows: [i64] = alloc(7 * nr, 0);
-  let mut pool: [u8] = alloc(256, 0);
-  let mut used: i64 = 0;
+  let mut rows: [i64] = alloc(0, 0);
+  let mut pool: [u8] = alloc(0, 0);
   let mut cnt: i64 = 0;
   let mut i: i64 = 0;
   while i < nr
     invariant 0 <= i && i <= nr && nr <= 100000000 && nw == 10 + 16 * nr && nw == len(query_words) && nq == len(query_bytes)
-    invariant 0 <= cnt && cnt <= i && len(rows) == 7 * nr
-    invariant 0 <= used && used <= len(pool) && used <= 1000000000 && len(pool) <= 2000000000
+    invariant 0 <= cnt && cnt <= i && len(rows) == 7 * cnt && len(pool) <= 1000000000
     decreases nr - i
   {
     let b: i64 = 10 + 16 * i;
@@ -277,44 +233,24 @@ pub fn decode(query_words: [i64], query_bytes: [u8]) -> Decoded ! alloc
     let kdir: i64 = query_words[b + 4];
     let da: i64 = query_words[b + 5];
     let dl: i64 = query_words[b + 6];
-    let ktit: i64 = query_words[b + 8];
-    let ta: i64 = query_words[b + 9];
-    let tl: i64 = query_words[b + 10];
-    let kupd: i64 = query_words[b + 12];
-    let ua: i64 = query_words[b + 13];
-    let ub: i64 = query_words[b + 14];
     if kid == 3 && kdir == 3 && valid_id(query_bytes, ia, il) && crate::packet::ref_ok(da, dl, nq) && da >= 0 && dl >= 1 {
-      let title: [u8] = clean_title(ktit, ta, tl, query_bytes);
+      let title: str = clean_title(query_words[b + 8], query_words[b + 9], query_words[b + 10], query_bytes);
       let tn: i64 = len(title);
-      let need: i64 = il + dl + tn;
-      if need > 1000000000 - used { return bad(2); }
-      if len(pool) - used < need { pool = grow(pool, used, need); }
-      crate::bytes::copy_span(inout pool, used, query_bytes, ia, ia + il);
-      crate::bytes::copy_span(inout pool, used + il, query_bytes, da, da + dl);
-      crate::bytes::copy_span(inout pool, used + il + dl, title, 0, tn);
-      let o: i64 = 7 * cnt;
-      rows[o] = used;
-      rows[o + 1] = il;
-      rows[o + 2] = used + il;
-      rows[o + 3] = dl;
-      rows[o + 4] = used + il + dl;
-      rows[o + 5] = tn;
-      rows[o + 6] = updated_number(kupd, ua, ub, query_bytes);
-      used = used + need;
+      if il + dl + tn > 1000000000 - len(pool) { return bad(2); }
+      let at: i64 = base + len(pool);
+      arr_append(inout pool, query_bytes, ia, il);
+      arr_append(inout pool, query_bytes, da, dl);
+      arr_append(inout pool, title, 0, tn);
+      arr_push(inout rows, at);
+      arr_push(inout rows, il);
+      arr_push(inout rows, at + il);
+      arr_push(inout rows, dl);
+      arr_push(inout rows, at + il + dl);
+      arr_push(inout rows, tn);
+      arr_push(inout rows, updated_number(query_words[b + 12], query_words[b + 13], query_words[b + 14], query_bytes));
       cnt = cnt + 1;
     }
     i = i + 1;
   }
-  let mut fr: [i64] = alloc(7 * cnt, 0);
-  let mut j: i64 = 0;
-  while j < 7 * cnt
-    invariant 0 <= j && j <= 7 * cnt && len(fr) == 7 * cnt && 7 * cnt <= len(rows)
-    decreases 7 * cnt - j
-  {
-    fr[j] = rows[j];
-    j = j + 1;
-  }
-  let mut fp: [u8] = alloc(used, 0);
-  crate::bytes::copy_span(inout fp, 0, pool, 0, used);
-  return Decoded { status: 0, count: cnt, rows: copy(fr), pool: copy(fp) };
+  return Decoded { status: 0, count: cnt, rows: move rows, pool: move pool };
 }

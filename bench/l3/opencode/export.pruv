@@ -189,76 +189,6 @@ fn path_step(c: [i64], text: [u8], phase: i64, op: i64, stage: i64, patches: [i6
   return await_req(c, phase, op, stage, 0, -1, 0, patches, w, 0, 2, pb);
 }
 
-// ---- POSIX join(tempRoot, "opencode-") ----
-// `full` = tempRoot ++ "/opencode-" normalized like Node's path.join (empty/'.' segments dropped, '..' pops, above-root '..' kept
-// only for a relative path, repeated '/' collapsed). The last segment is never '.'/'..', so the result is nonempty.
-fn join_prefix(full: [u8]) -> [u8] ! alloc
-  requires len(full) >= 1 && len(full) <= 2000000
-  ensures len(result) <= len(full) + 1
-{
-  let m: i64 = len(full);
-  let absolute: bool = full[0] == 47;
-  let mut ss: [i64] = alloc(m + 1, 0);
-  let mut sl: [i64] = alloc(m + 1, 0);
-  let mut sp: i64 = 0;
-  let mut dd: i64 = 0;
-  let mut i: i64 = 0;
-  while i <= m
-    invariant 0 <= dd && dd <= sp && sp <= i && i <= m + 1 && m == len(full) && len(ss) == m + 1 && len(sl) == m + 1
-    decreases m + 1 - i
-  {
-    let mut e: i64 = i;
-    while e < m && full[e] != 47
-      invariant 0 <= i && i <= e && e <= m && m == len(full)
-      decreases m - e
-    { e = e + 1; }
-    let l: i64 = e - i;
-    if l == 0 {
-    } else if l == 1 && full[i] == 46 {
-    } else if l == 2 && full[i] == 46 && full[i + 1] == 46 {
-      if sp > dd {
-        sp = sp - 1;
-      } else if !absolute {
-        ss[sp] = i;
-        sl[sp] = l;
-        sp = sp + 1;
-        dd = dd + 1;
-      }
-    } else {
-      ss[sp] = i;
-      sl[sp] = l;
-      sp = sp + 1;
-    }
-    i = e + 1;
-  }
-  let mut out: [u8] = alloc(m + 1, 0);
-  let mut at: i64 = 0;
-  if absolute {
-    out[0] = 47;
-    at = 1;
-  }
-  let mut k: i64 = 0;
-  while k < sp
-    invariant 0 <= k && k <= sp && sp <= m + 1 && 0 <= at && at <= m + 1 && len(out) == m + 1 && len(ss) == m + 1 && len(sl) == m + 1 && m == len(full)
-    decreases sp - k
-  {
-    if k > 0 {
-      if at >= m + 1 { return copy(full); }
-      out[at] = 47;
-      at = at + 1;
-    }
-    let s: i64 = ss[k];
-    let l2: i64 = sl[k];
-    if s < 0 || l2 < 0 || s > m || l2 > m - s || l2 > m + 1 - at { return copy(full); }
-    crate::bytes::copy_span(inout out, at, full, s, s + l2);
-    at = at + l2;
-    k = k + 1;
-  }
-  let mut res: [u8] = alloc(at, 0);
-  crate::bytes::copy_span(inout res, 0, out, 0, at);
-  return res;
-}
-
 // ---- spawn arguments (DESIGN 3): 18 + 4n words, strings in the returned byte pool ----
 // w[7] != 0 on return means failure (a bad ref or a pool over 1073741823 bytes); success sets w[7] = 0.
 // The pool size is summed first and the pool allocated once (no per-entry copy of the growing pool).
@@ -298,18 +228,19 @@ fn spawn_pool(cfg: [i64], t: [u8], n: i64, inout w: [i64]) -> [u8] ! alloc
     total = total + vl;
     i = i + 1;
   }
-  let mut pool: [u8] = alloc(total, 0);
-  let pure: [u8] = crate::util::to_bytes("--pure");
-  let exp: [u8] = crate::util::to_bytes("export");
+  let mut pool: [u8] = alloc(0, 0);
+  arr_reserve(inout pool, total);
+  let pure: str = "--pure";
+  let exp: str = "export";
   let mut at: i64 = 0;
   if bl > total - at { return none; }
-  crate::bytes::copy_span(inout pool, at, t, bs, bs + bl);
+  arr_append(inout pool, t, bs, bl);
   w[0] = at;
   w[1] = bl;
   at = at + bl;
   if hs >= 0 {
     if hl > total - at { return none; }
-    crate::bytes::copy_span(inout pool, at, t, hs, hs + hl);
+    arr_append(inout pool, t, hs, hl);
     w[2] = at;
     w[3] = hl;
     at = at + hl;
@@ -318,23 +249,23 @@ fn spawn_pool(cfg: [i64], t: [u8], n: i64, inout w: [i64]) -> [u8] ! alloc
     w[3] = 0;
   }
   if len(pure) > total - at { return none; }
-  crate::bytes::copy_span(inout pool, at, pure, 0, len(pure));
+  arr_append(inout pool, pure, 0, len(pure));
   w[12] = at;
   w[13] = 6;
   at = at + len(pure);
   if len(exp) > total - at { return none; }
-  crate::bytes::copy_span(inout pool, at, exp, 0, len(exp));
+  arr_append(inout pool, exp, 0, len(exp));
   w[14] = at;
   w[15] = 6;
   at = at + len(exp);
   if tl > total - at { return none; }
-  crate::bytes::copy_span(inout pool, at, t, ts, ts + tl);
+  arr_append(inout pool, t, ts, tl);
   w[16] = at;
   w[17] = tl;
   at = at + tl;
   let mut e: i64 = 0;
   while e < n
-    invariant 0 <= e && e <= n && n <= 536870903 && len(cfg) == 32 + 4 * n && len(w) == 18 + 4 * n && len(pool) == total && total <= 1073741823 && 0 <= at && at <= total && len(t) <= 2147483647
+    invariant 0 <= e && e <= n && n <= 536870903 && len(cfg) == 32 + 4 * n && len(w) == 18 + 4 * n && len(pool) == at && total <= 1073741823 && 0 <= at && at <= total && len(t) <= 2147483647
     decreases n - e
   {
     let b: i64 = 32 + 4 * e;
@@ -344,11 +275,11 @@ fn spawn_pool(cfg: [i64], t: [u8], n: i64, inout w: [i64]) -> [u8] ! alloc
     let vl: i64 = cfg[b + 3];
     if ks < 0 || vs < 0 || !crate::packet::ref_ok(ks, kl, len(t)) || !crate::packet::ref_ok(vs, vl, len(t)) { return none; }
     if kl > total - at { return none; }
-    crate::bytes::copy_span(inout pool, at, t, ks, ks + kl);
+    arr_append(inout pool, t, ks, kl);
     let kp: i64 = at;
     at = at + kl;
     if vl > total - at { return none; }
-    crate::bytes::copy_span(inout pool, at, t, vs, vs + vl);
+    arr_append(inout pool, t, vs, vl);
     let vp: i64 = at;
     at = at + vl;
     let o: i64 = 18 + 4 * e;
@@ -383,15 +314,14 @@ fn start_export(cfg: [i64], cfg_text: [u8], ctl: [i64]) -> [i64] ! alloc
   if ts < 0 || tl < 1 || tl > 1073741000 || !crate::packet::ref_ok(ts, tl, len(cfg_text)) || cfg[12] < 0 || cfg[13] < 1 {
     return crate::packet::done_simple(ctl, 0, 1, 3);
   }
+  // hand `join(root, "opencode-")` = `normalize(&format!("{root}/opencode-"))`; the root stays bytes of the config text
   let sep: str = "/opencode-";
   let ns: i64 = len(sep);
-  if tl > 2000000 - ns { return crate::packet::done_internal(ctl, 28); }
   let mut full: [u8] = alloc(0, 0);
   arr_reserve(inout full, tl + ns);
   arr_append(inout full, cfg_text, ts, tl);
   arr_append(inout full, sep, 0, ns);
-  let prefix: [u8] = join_prefix(full);
-  if len(prefix) < 1 { return crate::packet::done_internal(ctl, 28); }
+  let prefix: [u8] = crate::path::normalize(full);
   let mut w: [i64] = alloc(2, 0);
   w[1] = len(prefix);
   let ep: [i64] = alloc(0, 0);

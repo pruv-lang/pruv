@@ -55,7 +55,7 @@ FIXTURES = HERE / 'fixtures'
 # ALL_PAIRS keeps the py pairs selectable with --pairs py/rust,... as the frozen reference (not used by CI).
 ALL_PAIRS = [(c, b) for c in ('py', 'rs') for b in ('rust', 'llvm')]
 PAIRS = [(c, b) for c in ('rs',) for b in ('rust', 'llvm')]
-SCOPES = {'A': ['util', 'packet'], 'B': ['util', 'packet', 'path', 'admit', 'sql', 'rows', 'list'], 'C': ['util', 'packet', 'export'],
+SCOPES = {'A': ['util', 'packet'], 'B': ['util', 'packet', 'path', 'admit', 'sql', 'rows', 'list'], 'C': ['util', 'packet', 'path', 'export'],
           'D': ['util', 'packet', 'entry', 'convert', 'plan']}
 UNIT_SELECT = {'packet': ['F16-data-dir', 'F16-folder', 'F16-plan', 'F01-xdg'],
                'export': ['F07', 'F08', 'F09-nonzero-oversized'],

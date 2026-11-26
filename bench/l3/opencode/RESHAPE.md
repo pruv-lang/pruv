@@ -39,15 +39,16 @@ What went:
 |---|---|---|---|---|
 | database / exporter / files | host step machine, `ctl: [i64]` 64 words | same | rusqlite, `std::process`, `std::fs` | row 4.3g-SQ |
 | path join | two byte loops into `alloc(n+1)`, `truncate` | `arr_reserve` + `arr_append` + `arr_push(47)` | `format!` / `push_str` | 1 vs 1 |
+| path normalize | `2n + 4` scratch + push/pop helpers, second result buffer | (start, end) pairs of the pieces in one `[i64]` (push / `truncate` pop), one reserved result (4.4b) | `Vec<&str>` + `join("/")` | 1 + 1 vs 1 + 1; row 4.4b-NV |
 | path compare | byte loops in `contained`, `same_key` | `eq_range` on `[u8]` | slice `==`, `starts_with` | 0 vs 0 |
 | `key_eq`, `has_prefix`, `lit_eq` | byte loops on `str` | same | `==`, `starts_with` | row 4.3f-S |
 | folder key / dirname / spans | `alloc` + `copy_span` | `copy(subview(..))` | `to_owned()` of a slice | 1 vs 1 |
-| dirname of a `str` | `to_bytes` / `to_str` round trip | same | `rsplit_once('/')` | row 4.3g-T |
+| dirname of a `str` | `to_bytes` / `to_str` round trip | removed (no caller; 4.4b), `dirname_bytes` stays for `p100` | `rsplit_once('/')` | row 4.3g-K3 (`p100`) |
 | pool append (`cat_bytes`, `append_str`, `pool_*`) | zero-filled `alloc(a+b)` + two loops | one pool grown `inout` (`arr_reserve` + `arr_append`); helpers removed (4.3g rows step) | `extend_from_slice` on one `Vec` | 0 vs 0 |
 | column check (`has_name`) | full scan with `found` | return at first match | `iter().any` | 0 vs 0 |
-| rows decode | zero-filled `rows` / `pool`, own `grow`, `fr` / `fp` copies | same | `Vec<Row>` push | row 4.3g-R |
+| rows decode | zero-filled `rows` / `pool`, own `grow`, `fr` / `fp` copies | `arr_push` / `arr_append` into `rows` / `pool`, refs already in text-bank offsets, `p208` moves `d.rows` and pushes the absent counts (4.4b) | `Vec<Row>` push | 0 extra vs 0 |
 | select SQL / pool | `pool_str` chain, 4 buffers in mode 0 | one SQL buffer, `match mode`; mode 0 one pool from a borrowed `folder_key` (rows step) | one `String`, `format!` | 1 vs 1 |
-| export temp prefix / spawn args | second normalizer, zero-filled `out`, `to_bytes` of literals | same; `with_span` now reserve + append | `join(root, "opencode-")`, `&str` args | row 4.3g-X |
+| export temp prefix / spawn args | second normalizer, zero-filled `out`, `to_bytes` of literals | `path::normalize(root ++ "/opencode-")`; `spawn_pool` reserve + `arr_append`, literals as `str` (4.4b) | `join(root, "opencode-")`, `&str` args | 1 vs 1 |
 | message attach state | `mt: [i64]` 4 slots | `Attach { open, pid, mid }` inout | `Option<(String, String)>` + `bool` | tape ids vs owned strings (row 4.3g-T) |
 | message text | `out` + `total` + `first` | `out` + `first`, `continue` exits | `String` + `first` | 0 extra vs 0 |
 | turns store | `st` / `sl` / `buf` flat arrays, `feed` returns 1 to grow | same | `Vec<Turn>` | row VL |
@@ -100,14 +101,14 @@ Not applied (rows). Each needs more than the time cap allowed or an API change a
 
 ## 4. Results
 
-After the last code change of the rows step (§5), `rs/rust` and `rs/llvm`:
+After the last code change of step 4.4b (§6), `rs/rust` and `rs/llvm`:
 
 | check | rs/rust | rs/llvm |
 |---|---|---|
-| scope verify A-D (`--verify-only --scope`, 300 s each) | A, B, C, D VERIFIED | A, B, C, D VERIFIED |
+| scope verify A-D (`--verify-only --scope`, 300 s each; scope C now also loads `path`) | A, B, C, D VERIFIED | A, B, C, D VERIFIED |
 | `opencode/test_impl.py` (verifier + fixtures) | PASS, 199/199 | PASS, 199/199 |
-| `q.py` 300 random + 199 fixed | exact 406, P1 6, P2 5, P3 1, P4 6, P5 2, P8 5, P9 29, P2+P9 37, P3+P4+P8 1, P2+P4+P8 1, unexplained 0 | same |
-| `q_mutants.py --check` | 16 / 16 present exactly once (M01, M05, M08 follow the new text) | - |
+| `q.py` 300 random (seed 20261117) + 199 fixed | exact 406, P1 6, P2 5, P3 1, P4 6, P5 2, P8 5, P9 29, P2+P9 37, P3+P4+P8 1, P2+P4+P8 1, unexplained 0 | same |
+| `q_mutants.py --check` | 16 / 16 present exactly once (no marked text changed) | - |
 | hand `opencode.rs` | `cargo build --release`, 0 warnings | - |
 
 No case needed a rerun. No perf timing was run.
@@ -159,3 +160,38 @@ Not applied (rows):
 
 Observation (hand, not changed): `hand::dirname("//a")` returns `""` (`t[..1]` trimmed), Node `path.posix.dirname`
 returns `"//"`; no fixture reaches it (the DB path comes from `join(home, ..)`).
+
+## 6. Step 4.4b (rows R, K2, F2, N, X, part of T)
+
+| row | status | what changed |
+|---|---|---|
+| 4.3g-R | closed | `rows::decode(query_words, query_bytes, base)` starts `rows` / `pool` empty and grows them with `arr_push` / `arr_append` (no zero fill, no own `grow`, no `fr` / `fp` copies); the refs it pushes are already text-bank offsets (`base + len(pool)`), so `relocate` is gone; `sql::p208` moves `d.rows`, reserves `n` and pushes `-1` for each absent message count (hand `Row.messages: None`) instead of copying into a `lit` array |
+| 4.3g-K2 | closed | `rows::clean_title` / `updated_number` check the span with `utf8_valid` on a `ref [u8]` view and pass `subview(qb, a, a + b)` to the `str` parameter (R-6g-10, no copy); `span_bytes` / `owned_text` are gone from both |
+| 4.3g-F2 | partly closed | `format_ext` reserves 27 bytes and pushes (no zero fill + index writes); the civil-date arithmetic is still repeated because `pkgs/time` has no public `civil` (row 4.4b-CV) |
+| 4.3g-N | closed (language row) | `path::normalize` follows the hand: empty input gives `"."`, the pieces of `p` between `/` (empty and `.` dropped, `..` pops a non-`..` piece, is dropped when rooted, else kept) go into one list, then one result buffer joins them with `/`, adds `.` when empty and relative, `/` for a trailing slash. The list holds (start, end) pairs in an `[i64]` (pop is an in-place `truncate`) and the root `/` is pushed before the join instead of inserted at 0 (row 4.4b-NV). `push_seg` / `append_seg` / `pop_pos` / `last_dotdot` are gone. `join` returns `str_from_utf8` of the moved buffer (no `to_str` copy) after a `utf8_valid` check the byte buffer forces (row 4.4b-NV) |
+| 4.3g-X | closed | `export::join_prefix` (second normalizer, two zero-filled `[i64]` arrays, `out` / `res` copies, internal error 28 over 2 MB) is gone: `start_export` builds `root ++ "/opencode-"` once (hand `format!` inside `join`) and calls `path::normalize`. `spawn_pool` reserves the summed total and appends (no zero fill, `--pure` / `export` appended as `str` literals, no `to_bytes`). `on_mkdtemp` keeps one pool; its two patches are the step wire (4.3g-SQ) |
+| 4.3g-T | partly closed | `path::dirname(str)` and `to_str` had no caller and are removed; `entry::iso_str` moves the checked text out (no final `copy`) |
+
+Left as rows:
+
+| row | what stays | why |
+|---|---|---|
+| 4.4b-NV (language, new) | `normalize` keeps (start, end) offsets instead of `Vec<&str>`; root `/` pushed first; `join` re-checks UTF-8 on the normalized bytes | `Vec` / `Option` of `ref` types is a type error (borrow signature); a byte buffer built from `str` pieces does not carry the UTF-8 fact |
+| 4.4b-CV (pkgs, new) | `rows::format_ext` repeats the civil-date arithmetic | `pkgs/time` exposes no `civil`; adding it touches a shared package (run all consumers) |
+| 4.3g-T2 | `entry::Attach` holds the tape ids of providerID / modelID, the hand clones two `String`s per assistant message | needs an `Option` pair of owned `str` in `Attach` and a `convert::model_bytes` rewrite; not done in the cap. `iso_bytes` keeps `copy(iso.text)`: `Iso` is a `pkgs/time` struct and `move iso.text` is `type/foreign_move` (4.3d-M) |
+| 4.3g-A2, 4.3g-A3, 4.3g-K3 | as in §5 | not started (time cap); `p100` still copies the DB path and the parent (`dirname_bytes`) |
+| 4.3g-SQ, 4.3g-BS, 4.3g-M07 | as in §5 | unchanged |
+
+Codex structure comparison (gpt-6.2-astra, high; Codex 2 account, the default was at its limit), read-only over the
+changed functions. Path edge cases traced equal on both sides (`""`, `"/"`, `"//"`, `"a/.."`, `"../.."`, `"/.."`,
+`"./"`, `"a/./b/"`, `"/a/../../b/"`). No code change came out of it; the findings went to rows:
+
+| row | finding | why not applied |
+|---|---|---|
+| 4.4b-NV | `clean_title` writes the same `subview` four times; `join` copies a lone non-empty side into `jb` before `normalize` (hand normalizes it directly) | a `ref [u8]` local cannot be passed as `str`, and a `str` is not a `[u8]` argument; language |
+| 4.4b-NC | `normalize` reserves `n + 2`; the hand's `join("/")` sizes the result from the surviving pieces | needs a sizing loop over the pairs and new length invariants; next OpenCode step |
+| 4.4b-P208 | `p208` pushes the `-1` counts after the move; the hand sets `messages: None` per row | the counts are a separate bank section after the `7 n` row words (step wire, 4.3g-SQ) |
+| 4.4b-SP (check) | Codex reads `spawn_pool`'s cwd as `cfg[6..7]` and the last argv as the requested thread, where the hand uses the selected row's directory / id (differs for `COLLATE NOCASE` ids) | not in this step's change; F07 (`argv-cwd`, fake exporter checks cwd and argv) and `q.py` pass against the TypeScript reference; to be checked against the reference before changing either side |
+| 4.3g-K3 / pre-existing | `start_export` re-checks binary / tempRoot already checked by `read_handoff`; `updated_number` REAL checks twice and returns 0 for an out-of-range INTEGER on a direct call (unreachable: the host answers `binding-range` first); `iso_bytes` 1-byte flag array | unchanged code; with K3 / 4.3d-M |
+
+Tests: §4. `test_impl.py` scope C now lists `path` (export calls `path::normalize`).
