@@ -159,40 +159,16 @@ pub fn check_output(packet: [i64], nt: i64, n: i64) -> bool
   return true;
 }
 
-// Allocate the exact packet and initialize its header and absent metadata refs.
-pub fn new_packet(mode: i64, nt: i64, nx: i64) -> [i64] ! alloc
+// Reserve the whole packet and push its first four words (hand Vec::with_capacity + extend).
+// Callers push the rest of the header, then the turn records and the widened text.
+pub fn new_packet(nt: i64, nx: i64) -> [i64] ! alloc
   requires 0 <= nt && nt <= 2000 && 0 <= nx && nx <= 5646080
-  ensures len(result) == 18 + nt + nx
+  ensures len(result) == 4
 {
-  let mut out: [i64] = alloc(18 + nt + nx, 0);
-  out[1] = 14;
-  out[2] = nt;
-  out[3] = nx;
-  out[4] = 1;
-  out[5] = mode;
-  out[8] = -1;
-  out[10] = -1;
-  out[12] = -1;
-  out[14] = -1;
-  out[16] = -1;
+  let mut out: [i64] = alloc(0, 0);
+  arr_reserve(inout out, 18 + nt + nx);
+  arr_push(inout out, 0, 14, nt, nx);
   return out;
-}
-
-// Widen only while writing bytes into the final packet.
-pub fn write_bytes(inout out: [i64], at: i64, src: [u8], lo: i64, n: i64) -> ()
-  requires 0 <= lo && lo <= len(src) && 0 <= n && n <= len(src) - lo
-  requires 0 <= at && at <= len(out) && n <= len(out) - at
-  ensures len(out) == len(old(out))
-  ensures forall k in 0..n: out[at + k] == src[lo + k]
-  ensures forall k in 0..len(out): (k < at || k >= at + n) ==> out[k] == old(out)[k]
-{
-  let mut k: i64 = 0;
-  while k < n
-    invariant 0 <= k && k <= n && 0 <= lo && n <= len(src) - lo && 0 <= at && n <= len(out) - at && len(out) == len(old(out))
-    invariant forall j in 0..k: out[at + j] == src[lo + j]
-    invariant forall j in 0..len(out): (j < at || j >= at + k) ==> out[j] == old(out)[j]
-    decreases n - k
-  { out[at + k] = src[lo + k]; k = k + 1; }
 }
 
 pub fn pair(a: i64, b: i64) -> [i64] ! alloc

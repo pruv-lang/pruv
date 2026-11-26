@@ -90,10 +90,10 @@ pub fn packet(meta: [i64], turns: [i64], text: [u8]) -> [i64] ! alloc
   if len(meta) != 14 || len(turns) > 2000 || len(text) > 5646080 { return crate::boundary::pair(2, 0); }
   let nt: i64 = len(turns);
   let nx: i64 = len(text);
-  let mut out: [i64] = crate::boundary::new_packet(0, nt, nx);
-  copy_range(inout out, 4, meta, 0, 14);
-  copy_range(inout out, 18, turns, 0, nt);
-  crate::boundary::write_bytes(inout out, 18 + nt, text, 0, nx);
+  let mut out: [i64] = crate::boundary::new_packet(nt, nx);
+  arr_append(inout out, meta, 0, 14);
+  arr_append(inout out, turns, 0, nt);
+  arr_append(inout out, text, 0, nx);
   if !crate::boundary::check_output(out, nt, nx) { return crate::boundary::pair(2, 0); }
   return out;
 }

@@ -97,7 +97,7 @@ pub fn canonical_w(data: [u8]) -> [i64] ! alloc
 {
   let s: str = crate::jstr::adapter_probe(data);
   if len(s) != len(data) { return lead1(-1); }
-  if crate::time::canonical_iso(s) { return lead1(1); }
+  if len(data) == 24 && crate::time::canonical_at(data, 0) { return lead1(1); }
   return lead1(0);
 }
 

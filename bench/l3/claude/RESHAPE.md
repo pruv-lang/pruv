@@ -69,8 +69,8 @@ What went:
 | `trim_span` | `lo = i; i = n`, `hi = k; k = lo` exits | `break` | `trim_matches` | same |
 | `Iso` build (`time`) | `copy` of the local array, 24-byte loops | `move`, `copy_range` | owned `[u8; 24]`, `copy_from_slice` | 0 extra vs 0 |
 | JSON | `pkgs/parse` tape + `access` readers | same | `Parser` → `Value` tree | accepted representation |
-| packet out | `new_packet` zero fill, `write_bytes` widens each byte to `i64`, `check_output` | same | `Vec::with_capacity` + `extend(map(b as i64))` | D-R08-3 same as hand; zero fill row 4.3h-A; CK |
-| `one_line` | `substr` push per char, `p = 0; i = n` exit | `substr` push per char, `break` | `push(c)` | row 4.3h-L |
+| packet out | `new_packet` zero fill, `write_bytes` widens each byte to `i64`, `check_output` | 4.4c: `text` `[u8]` and `turns` `[i64]` built apart, `out` reserved and extended (`arr_push` / `arr_append`) | `Vec::with_capacity` + `extend(map(b as i64))` | D-R08-3 same as hand; CK |
+| `one_line` | `substr` push per char, `p = 0; i = n` exit | 4.4c: pending space, `subview` push per char, width budget | `push(c)` | row 4.4c-OL |
 
 ## 2. Differences that remain
 
@@ -81,7 +81,7 @@ What went:
 - 4.3d-M (language): `last = copy(iso.text)` in `tail_info` / `read_window`; a struct array field cannot be moved.
 - CK (bench): `boundary::check_output` re-checks the packet at run time; the hand has no such pass.
 - JSON tape (accepted): Pruv reads `pkgs/parse` tapes, the hand builds a `Value` tree.
-- 4.3h-R, 4.3h-W, 4.3h-O, 4.3h-Z, 4.3h-T, 4.3h-P, 4.3h-V, 4.3h-L, 4.3h-D, 4.3h-A, 4.3h-Q (bench, §3).
+- 4.3h-P (part), 4.3h-O, 4.3h-D, 4.3h-Q (bench, §3) and the 4.4c rows (§5).
 
 ## 3. Structure review (hand vs Pruv, per function) and what was applied
 
@@ -136,3 +136,67 @@ After the last code change, `rs/rust` and `rs/llvm`:
 
 No case needed a rerun. The frozen py pairs were not built; `q.py` ran on the two rs pairs only. No perf timing was
 run.
+
+## 5. Step 4.4c: bench rows T, R, W, Z, V, L, A (and part of P)
+
+Closed, in the hand shape (`handrust/src/lib.rs`):
+
+- 4.3h-T: `turns::answer` returns at once without an open turn, writes `completedAt` first (`complete`: in place when
+  a stamp exists, else reserve + append), then returns on empty text or a full budget before any reserve or copy.
+- 4.3h-R: `entry::root_of` / `user_text_of` are gone. `import::consume_entry(doc, ty, ..)` reads each key where the hand
+  `consume` does (`timestamp` before begin and before content, `isApiErrorMessage` only in the synthetic branch);
+  `read_window` reads `type` with `entry::string_id`.
+- 4.3h-W: `entry::is_human_text` trims once (`trim_span`), then `text::interrupt_line`, `text::task_tags`, and reads
+  `task_origin` only when both tags match. `engine_line` stays only for the A1 probe.
+- 4.3h-Z: turn stamps cross as borrowed bytes (`begin(.., created: [u8])`, `answer(.., at: [u8])`); `stamp_from`
+  returns the `time::Iso` (no `adapter_probe`, no second length check); `enum Stamp` removed.
+- 4.3h-V: one byte check `time::canonical_at` (first mismatch returns, then `num` per field); `canonical_iso`, `dig`,
+  `dig_at` removed; `format_iso` copies the template and writes with `put_digits`, the unreachable empty return is gone.
+- 4.3h-L: `text::one_line` keeps a pending space and a UTF-16 width budget like the hand loop; `tail_info` /
+  `read_window` call it only when a title was ranked (the hand `then` closure).
+- 4.3h-A: `boundary::new_packet(nt, nx)` reserves `18 + nt + nx` and pushes the first 4 words; callers push the rest of
+  the header in one `arr_push`, then `arr_append` the turns and the widened text. `head_result` / `tail_result` build a
+  `[u8]` text first (`put` / `put_optional` order); `read_window` builds `text` (title, model, turns) and `turns` apart
+  with `turns::put_turns` (replaces `write_turns`, oldest first). `import::put_str` and `boundary::write_bytes` are gone.
+- 4.3h-P, part: `turns::plan` counts like `Collector::kept` and no longer stores planned ends in `sl[1600..]`
+  (`plan_end`, `planned_end`, `planned_spans*` removed); `plan` takes `sl` read-only.
+
+One Codex structure comparison (gpt-6.2-astra, high; the default account was at its limit, so the Codex 2 account),
+read-only, of the diff against the hand. Applied: `tail_result` reserves the 24 stamp bytes only when a stamp is
+present; the A3 fixture reserves its whole packet once. Not a packet bug: the A2 probe `canonical_w` returns `[-1]` for
+non-UTF-8 bytes where the hand `canon` gives false (probe only, row 4.4c-SV). The other findings predate this step and
+are kept as rows below.
+
+Rows still open (claude):
+
+| row | kind | finding | what the hand does |
+|---|---|---|---|
+| 4.3h-P (rest) | bench | `new_slots` fills 200 ordinals with -1 and `begin` writes one; every import contract carries the ordinal invariant and the A3 snapshot exports it | `VecDeque` order |
+| 4.4c-SV | language | a non-literal `str` cannot be lent as `[u8]`, so `time::from_string` copies the 24 bytes (`bytes24`) before `canonical_at` and the A2 probe keeps the `adapter_probe` length check | `s.as_bytes()` |
+| 4.4c-IS | language | `time::Iso` holds a heap `[u8]` (24 bytes per stamp, `copy(iso.text)` for `lastAt`, 4.3d-M); no fixed-size array value | `[u8; 24]` by value, `Option` |
+| 4.4c-TS | bench (with VL) | `completedAt` lives after the reply in the arena; each later answer moves it 24 bytes (`copy_within`) | two fixed fields in `Draft` |
+| 4.4c-DC | bench | `stamp_from` reports every non-absent timestamp defect as -4 (the packet only sees the failure) | `None` |
+| 4.4c-TR | bench | `time::from_string` owns the trimmed `substr` before the digit check | borrowed `es_trim` |
+| 4.4c-MB | bench | the model and title buffers are replaced by a new owned string (`move`) instead of reused | `clear` + `extend_from_slice` |
+| 4.4c-OL | bench | `one_line` finds the next UTF-8 boundary, then reads the first byte again for the space test | one `chars()` step |
+
+Also still open: 4.3h-O, 4.3h-D (hand candidate), 4.3h-Q, CK, D-R08-2 / VL, 4.3d-M.
+
+Results after the last code change (rs pairs only; no perf timing):
+
+| check | rs/rust | rs/llvm |
+|---|---|---|
+| root verify (300 s cap) | a0 6 s, a1 29 s, a3 11 s alone; a2, a4, q_root, root 30 s each with five roots at once; all VERIFIED | - |
+| `test_a0.py` | 272/272 | 272/272 |
+| `test_a1.py` | 2884/2884 | 2884/2884 |
+| `test_a2.py` | 2443/2443 | 2443/2443 |
+| `test_a3.py` | 134/134 | 134/134 |
+| `test_a4.py` | 270/270 | 270/270 |
+| `q.py --count 300` (seed 20261114) | 570/570, agrees with the oracle | 570/570, agrees with the oracle |
+| `q_mutants.py` (rust backend by design) | 18 / 18 present once; 9 detected, 9 proof-rejected, 0 survived | - |
+
+`q_mutants.py`: mutants 2, 11, 12, 14, 16 and 18 pointed at removed or rewritten code and were retargeted to the same
+fault in the new code (2: veto block ignored; 11 / 18: early return before `complete`; 12: newest-first slot in
+`put_turns`; 14: the window `flag`; 16: `tiled` reads one record too far). In `handrust` only the `// Pruv:` mapping
+comments changed; `cargo build --release`, 0 warnings.
+

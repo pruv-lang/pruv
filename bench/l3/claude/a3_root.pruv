@@ -126,14 +126,12 @@ fn step(prog: [i64], pos: i64, inout st: [i64], inout sl: [i64], inout buf: [u8]
     if b.next < 0 { return Step { next: -1 }; }
     let s: str = crate::jstr::adapter_probe(a.bytes);
     if len(s) != len(a.bytes) { return Step { next: -1 }; }
-    let ts: str = crate::jstr::adapter_probe(b.bytes);
-    if len(ts) != len(b.bytes) { return Step { next: -1 }; }
-    if len(ts) != 0 && len(ts) != 24 { return Step { next: -1 }; }
+    if len(b.bytes) != 0 && len(b.bytes) != 24 { return Step { next: -1 }; }
     if op == 1 {
-      crate::turns::begin(inout st, inout sl, inout buf, s, ts);
+      crate::turns::begin(inout st, inout sl, inout buf, s, b.bytes);
     } else {
       let limit: i64 = st[4] + 32792;
-      crate::turns::answer(inout st, inout sl, inout buf, s, ts, limit);
+      crate::turns::answer(inout st, inout sl, inout buf, s, b.bytes, limit);
     }
     return Step { next: b.next };
   }
@@ -164,16 +162,22 @@ pub fn run(prog: [i64]) -> [i64] ! alloc
     if step_result.next < 0 { return pair(1, pos); }
     pos = step_result.next;
   }
-  let plan: crate::turns::Plan = crate::turns::plan(st, inout sl, len(buf));
+  let plan: crate::turns::Plan = crate::turns::plan(st, sl, len(buf));
   let ns: i64 = snaps[0];
   let head: i64 = 5 + 12 * ns;
   // A3 refs include base, but the fixture packet omits the base bytes.
-  let mut out: [i64] = alloc(head + 10 * plan.kept + plan.bytes, 0);
-  out[1] = ns;
-  out[2] = plan.kept;
-  if plan.kept < st[0] { out[3] = 1; }
-  out[4] = plan.total;
-  copy_range(inout out, 5, snaps, 1, 12 * ns);
-  crate::turns::write_turns(inout out, head, 0, base, st, sl, buf, plan);
+  let mut text: [u8] = alloc(0, 0);
+  arr_reserve(inout text, plan.bytes);
+  let mut turns: [i64] = alloc(0, 0);
+  arr_reserve(inout turns, 10 * plan.kept);
+  crate::turns::put_turns(inout turns, inout text, base, st, sl, buf, plan.kept);
+  let mut flag: i64 = 0;
+  if plan.kept < st[0] { flag = 1; }
+  let mut out: [i64] = alloc(0, 0);
+  arr_reserve(inout out, head + len(turns) + len(text));
+  arr_push(inout out, 0, ns, plan.kept, flag, plan.total);
+  arr_append(inout out, snaps, 1, 12 * ns);
+  arr_append(inout out, turns, 0, len(turns));
+  arr_append(inout out, text, 0, len(text));
   return out;
 }
