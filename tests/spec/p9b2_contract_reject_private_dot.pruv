@@ -1,0 +1,5 @@
+// spec: R-6x-5 reject
+// A public contract may not call a method without `pub` by a dot call either (P06).
+pub struct C { n: i64 }
+impl C { fn secret(self) -> i64 { return self.n; } }
+pub fn f(c: C) -> i64 ensures result == c.secret() { return c.n; }

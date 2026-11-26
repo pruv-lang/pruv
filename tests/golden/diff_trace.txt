@@ -1499,8 +1499,8 @@ must_reject|tests/must_reject/p9_pattern_unreachable_wild.pruv	1 case: obl=0 1	d
 must_reject|tests/must_reject/p9_pattern_variant_type.pruv	1 case: obl=0 1	default=7e770aae97ec
 must_reject|tests/must_reject/p9_pattern_wild_requires.pruv	1 case: obl=1 1	default=8bbf74bf5bf7
 must_reject|tests/must_reject/p9_value_match_empty.pruv	1 case: obl=0 1	default=2f257fa1b184
-must_reject|tests/must_reject/p9b_call_requires.pruv	1 case: obl=2 1	default=af6f7caa95a4
-must_reject|tests/must_reject/p9b_false_ensures.pruv	1 case: obl=2 1	default=8eb1466d5c19
+must_reject|tests/must_reject/p9b_call_requires.pruv	1 case: obl=2 1	default=1aed4ed32d41
+must_reject|tests/must_reject/p9b_false_ensures.pruv	1 case: obl=2 1	default=e207d84fdd8d
 must_reject|tests/must_reject/p9b_take_use.pruv	1 case: obl=0 1	default=27172f1f4ca2
 must_reject|tests/must_reject/p9b_unknown_method.pruv	1 case: obl=0 1	default=0b5bc8a87de4
 must_reject|tests/must_reject/refine_alloc_len.pruv	1 case: obl=4 1	default=14a4c91b9d32
@@ -2058,6 +2058,8 @@ runtime|tests/runtime/p9_rt_pattern_names.pruv	1 case: obl=1 1	default=a122c74f4
 runtime|tests/runtime/p9_rt_pattern_order.pruv	1 case: obl=31 1	default=a19dbbd6d894
 runtime|tests/runtime/p9_rt_pattern_owned.pruv	1 case: obl=16 1	default=75148ac98a8a
 runtime|tests/runtime/p9_rt_pattern_wild.pruv	1 case: obl=9 1	default=4b17ba4c4fc8
+runtime|tests/runtime/p9b2_rt_panic_name.pruv	1 case: obl=2 1	default=32a97dfbccee
+runtime|tests/runtime/p9b2_rt_trait_names.pruv	1 case: obl=12 1	default=82bffe9507c5
 runtime|tests/runtime/p9b_rt_counter.pruv	1 case: obl=10 1	default=3c324917b935
 runtime|tests/runtime/p9b_rt_enum_field.pruv	1 case: obl=16 1	default=14138fb8ad3c
 runtime|tests/runtime/p9b_rt_names.pruv	1 case: obl=12 1	default=859a92b0ee45

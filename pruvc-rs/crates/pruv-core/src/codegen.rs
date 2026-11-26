@@ -2425,7 +2425,11 @@ impl<'a> Gen<'a> {
     fn disp_of(&self, name: &str) -> String {
         match self.fmarks.get(name) {
             Some(m) => m.disp.clone(),
-            None => name.to_string(),
+            // P9b-2: a method of a single-file program shows as `T::f`, not as its lowered name `T__f`
+            None => match self.prog.methods.iter().find(|m| m.func == name) {
+                Some(m) => format!("{}::{}", m.owner, m.name),
+                None => name.to_string(),
+            },
         }
     }
 
@@ -2552,7 +2556,7 @@ impl<'a> Gen<'a> {
             }
         });
         self.emit(1, &format!("{}({})", body_name, args));
-        // P9b: impl functions are not host entries (no `pub` methods yet), so they get no proven twin
+        // P9b: impl functions are not host entries (even `pub` ones, R-6x-5), so they get no proven twin
         if self.proven_entries && !guard.is_empty() && !self.prog.methods.iter().any(|m| m.func == f.name) {
             if let Some(mut twin) = ProvenEntry::new(f, param_types, vis, name, ret, header, host_entry) {
                 twin.body.extend_from_slice(&self.out[body_start..]);
@@ -6533,9 +6537,12 @@ fn gen_rust_concrete_core(
     }
     // Built only when a host-facing function exists (the generator builds its own table later).
     let mut tt0 = None;
+    // P9b-2: a method is never a host entry (R-6x-5), so its signature is not a host boundary
+    let methods: std::collections::HashSet<&str> = prog.methods.iter().map(|m| m.func.as_str()).collect();
     for (i, f) in prog.functions.iter().enumerate() {
         let public = prog.explicit.as_ref().and_then(|meta| meta.fns.get(i))
-            .is_some_and(|mark| mark.is_pub || mark.host_entry);
+            .is_some_and(|mark| mark.is_pub || mark.host_entry)
+            && !methods.contains(f.name.as_str());
         if (public || f.foreign.is_some())
             && crate::emit_common::has_narrow_scalar_sig(f, tt0.get_or_insert_with(|| make_type_table(prog)))
         {

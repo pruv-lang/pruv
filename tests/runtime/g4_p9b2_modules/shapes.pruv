@@ -1,0 +1,8 @@
+// companion module of p9b2_rt_modules: the impl block lives with its type; `tick` is private to this module
+pub struct Rect { w: i64, h: i64 }
+impl Rect {
+  pub fn new(w: i64, h: i64) -> Rect ensures result.w == w && result.h == h { return Rect { w: w, h: h }; }
+  pub fn area(self) -> i64 requires 0 <= self.w && self.w <= 2000 requires 0 <= self.h && self.h <= 2000 ensures result == self.w * self.h { return self.w * self.h; }
+  pub fn grow(inout self, d: i64) -> () requires 0 <= d && d <= 1 requires 0 <= self.w && self.w <= 1000 requires 0 <= self.h && self.h <= 1000 ensures self.w == old(self).w + d && self.h == old(self).h + d { self.w = self.w + d; self.h = self.h + d; self.tick(); }
+  fn tick(self) -> () { }
+}

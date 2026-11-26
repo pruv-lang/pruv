@@ -416,16 +416,16 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
                 continue;
             }
             // P9b: `impl` at the top level starts an impl block; inside one `self` is an identifier token (the method
-            // receiver; the parser reserves it as any other binding name). Outside an impl block it stays reserved.
+            // receiver; the parser reserves it as any other binding name). P9b-2: `Self` inside one is an identifier token
+            // too (the parser renames it to the owner type). Outside an impl block both stay reserved.
             // `for` after `impl Name` and `const` / `type` items in the block are keyword tokens so the parser reports
-            // parse/impl_syntax for them; `pub` on an item of the block is a keyword so the parser reports
-            // parse/impl_module.
-            if (v == "impl" && brace_depth == 0) || (v == "self" && in_impl) || (v == "for" && impl_kw)
+            // parse/impl_syntax for them; `pub` on an item of the block is a keyword (P9b-2: `pub fn` methods).
+            if (v == "impl" && brace_depth == 0) || (matches!(v.as_str(), "self" | "Self") && in_impl) || (v == "for" && impl_kw)
                 || (matches!(v.as_str(), "const" | "type" | "pub") && in_impl && brace_depth == 1)
             {
                 impl_kw |= v == "impl";
                 let end = col + (pos - start) as i64;
-                let kind = if v == "self" { Kind::Id } else { Kind::Kw };
+                let kind = if v == "self" || v == "Self" { Kind::Id } else { Kind::Kw };
                 toks.push(Tok { kind, val: v, line, col, end });
                 continue;
             }

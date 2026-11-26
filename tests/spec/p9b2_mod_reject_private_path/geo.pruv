@@ -1,0 +1,7 @@
+pub struct Pt { x: i64, y: i64 }
+impl Pt {
+  pub fn at(a: i64) -> Pt ensures result.x == a && result.y == a { return Pt { x: a, y: a }; }
+  pub fn sum(self) -> i64 requires 0 <= self.x && self.x <= 1000 requires 0 <= self.y && self.y <= 1000 ensures result == self.x + self.y { return self.x + self.y; }
+  pub fn bump(inout self) -> () requires 0 <= self.x && self.x <= 100 ensures self.x == old(self).x + 1 && self.y == old(self).y { self.x = self.x + 1; self.check(); }
+  fn check(self) -> () { }
+}

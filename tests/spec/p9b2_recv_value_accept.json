@@ -1,0 +1,1 @@
+{"gen_contains": ["C::new(k).get()", "b.twice__pruv_body().get()", "(C { n: k }).get()", "x.get()"]}

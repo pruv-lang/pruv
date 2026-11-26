@@ -9479,9 +9479,12 @@ pub fn gen_llvm_with_specializations(
     }
     // Built only when a host-facing function exists (the generator builds its own table later).
     let mut tt0 = None;
+    // P9b-2: a method is never a host entry (R-6x-5), so its signature is not a host boundary
+    let methods: std::collections::HashSet<&str> = prog.methods.iter().map(|m| m.func.as_str()).collect();
     for (i, f) in prog.functions.iter().enumerate() {
         let public = prog.explicit.as_ref().and_then(|meta| meta.fns.get(i))
-            .is_some_and(|mark| mark.is_pub || mark.host_entry);
+            .is_some_and(|mark| mark.is_pub || mark.host_entry)
+            && !methods.contains(f.name.as_str());
         if (public || f.foreign.is_some())
             && crate::emit_common::has_narrow_scalar_sig(f, tt0.get_or_insert_with(|| crate::emit_common::make_type_table(prog)))
         {
@@ -9652,6 +9655,10 @@ fn gen_llvm_body(
         for (f, mk) in prog.functions.iter().zip(x.fns.iter()) {
             m.fn_disp.entry(f.name.clone()).or_insert_with(|| mk.disp.clone());
         }
+    }
+    // P9b-2: a method of a single-file program shows as `T::f`, not as its lowered name `T__f`
+    for mi in &prog.methods {
+        m.fn_disp.entry(mi.func.clone()).or_insert_with(|| format!("{}::{}", mi.owner, mi.name));
     }
     let mut funcs: HashMap<String, &Function> = HashMap::new();
     for f in &prog.functions {

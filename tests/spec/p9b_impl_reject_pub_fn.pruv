@@ -1,4 +1,0 @@
-// spec: R-6x-1 reject
-// `pub` on a method is parse/impl_module (pub methods are parity row P9b-2).
-struct C { n: i64 }
-impl C { pub fn get(self) -> i64 { return self.n; } }

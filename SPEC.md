@@ -3001,13 +3001,15 @@ fn run(k: i64) -> i64 requires k >= 0 && k <= 50 { let mut c: Counter = Counter:
 ```
 - R-6x-1 **Impl blocks.** `impl Name { fn .. }` at the top level declares functions of the struct or enum `Name` of the
   same file. Several blocks of one type are allowed and may come before the type. A block holds only `fn` items
-  (private, no attributes, not generic, named without a leading `_`); `impl<T>`, `impl Name<T>`, a path type,
+  (`fn` or `pub fn`, no attributes, not generic, named without a leading `_`); `impl<T>`, `impl Name<T>`, a path type,
   `impl Trait for Name`, a missing type or `{`, any other item, a function name starting with `_` and an unclosed block
   are `parse/impl_syntax` (an attribute on a method is `parse/attribute_position`). A name that is not a struct or
   enum of the program, or a generic type, is `type/impl_type`, also for an empty block. Two functions of one type with one name (also across blocks) are
   `type/dup_method`; a function named like a variant of its enum is `type/method_name_clash`. A method may share its
-  name with a field (`c.n` and `c.n()` are different). Impl blocks exist only in a single-file program without `pub`
-  or `mod` items; `pub` on a block or a method is `parse/impl_module` there too (parity row P9b-2).
+  name with a field (`c.n` and `c.n()` are different). `pub` on a block is `parse/visibility_syntax` (the methods
+  carry the visibility, R-6x-5). Inside a block `Self` names `Name` everywhere a type name may stand (parameter and
+  result types, struct literals `Self { .. }`, paths `Self::f(..)`, contracts); outside an impl block `Self` stays
+  `parse/reserved_name` (tests/spec/p9b2_self_accept.pruv, tests/spec/p9b2_self_reject.pruv).
 - R-6x-2 **Receivers.** The first parameter of an impl function may be the receiver `self` (read), `inout self` or
   `take self`, without a type: its type is `Name`, and it follows the rules of a parameter of that mode (R-6g, the
   owned-value rules), including `old(self)` in `ensures` of `inout self`. A function without a receiver is an
@@ -3016,25 +3018,47 @@ fn run(k: i64) -> i64 requires k >= 0 && k <= 50 { let mut c: Counter = Counter:
   contracts (`requires`, `ensures`, `decreases`, `cost`) of impl functions are proved exactly as those of free
   functions, at the definition and at every call.
 - R-6x-3 **Static calls.** `Name::f(args)` calls the impl function `f` of `Name` (with a receiver too: `Name::get(c)`,
-  `Name::bump(inout c)`). `x.m(args)` is a method call: `x` is a variable, a parameter, `self` or a field path of one,
-  whose declared type is the struct or enum `Name` (not generic), and the call is `Name::m(x, args)` with the
-  receiver passed in the method's mode (read: `x`, inout: `inout x`, take: `move x`). Resolution is static; there are
-  no traits and no dynamic dispatch. A type without method `m`, a non-user type, or a function without a receiver
-  called with a dot is `type/unknown_method`; a receiver whose type is not declared (a call result, an untyped match
-  or `for` binder, a quantifier variable) is `type/method_receiver` (parity row P9b-2). The receiver's mode is then
+  `Name::bump(inout c)`). `x.m(args)` is a method call on a receiver `x` whose static type is the struct or enum `Name`
+  (not generic), and the call is `Name::m(x, args)` with the receiver passed in the method's mode (read: `x`, inout:
+  `inout x`, take: `move x`). The static type of `x` is known for a variable, parameter or `self` (its declared
+  type), a field or array element of a known type, the result of a call of a non-generic function (also a method
+  call, so chains `Name::new(k).get()` resolve left to right), a struct literal, a variant of a non-generic enum, and
+  a binder of a `match` statement arm on a non-generic enum (its payload field's type) and the binder of `for x in v`
+  over a slice of a known element type. Resolution is static; there are no
+  traits and no dynamic dispatch. A type without method `m`, a non-user type, or a function without a receiver
+  called with a dot is `type/unknown_method`; a receiver of unknown static type (a quantifier variable, a binder of a
+  generic or tuple pattern or of a value `match`, a call of a generic function, an element or `for` binder of a
+  `Vec`) is `type/method_receiver`, and so is a receiver of an
+  `inout self` method that is not a variable or field path of one. A `take self` method takes a non-place receiver as
+  its value (a struct literal or a call result; other values follow the take argument rules of R-6g). The receiver's mode is then
   checked as an argument: an inout method on an immutable binding is `type/inout_argument`, a use after a take
   method is a use after move.
 - R-6x-4 **Code.** The Rust back end prints the functions of `Name` in `impl Name { .. }` blocks under their own names
   (receivers `self`, `&mut self`), method calls as `x.m(args)` and other uses as `Name::f`; the generated checked
   bodies and entry checks of a method are methods of the block too. The LLVM back end emits the functions as free
-  symbols `Name__f`; its Rust bindings print the same `impl Name { .. }` wrappers. Panic texts name the function
-  `Name__f` on both back ends. A generated helper that takes the receiver after other parameters (the small-result
+  symbols `Name__f`; its Rust bindings print the same `impl Name { .. }` wrappers. Panic texts and diagnostics name
+  the function `Name::f` (`crate::m::Name::f` in a program with modules) on both back ends. A method named like a
+  prelude trait method that derived or blanket impls give the type or a reference to it (`eq`, `ne`, `cmp`, `clone`,
+  `into`, `try_into`, `fmt`, ..) is called in the path form `Name::eq(x, ..)`, so Rust's method probe cannot pick the
+  trait method. A generated helper that takes the receiver after other parameters (the small-result
   variant) stays a free function; impl functions get no `--proven-entries` twin (they are not host entries).
   Tests: [runtime](tests/runtime/p9b_rt_counter.pruv), [enum and field receivers](tests/runtime/p9b_rt_enum_field.pruv),
   [small result](tests/runtime/p9b_rt_small.pruv), [owner names](tests/runtime/p9b_rt_names.pruv),
-  [proven entries](tests/runtime/p9b_rt_proven.pruv),
+  [proven entries](tests/runtime/p9b_rt_proven.pruv), [trait method names](tests/runtime/p9b2_rt_trait_names.pruv),
+  [panic text](tests/runtime/p9b2_rt_panic_name.pruv),
   [unknown method](tests/must_reject/p9b_unknown_method.pruv), [false ensures](tests/must_reject/p9b_false_ensures.pruv),
   [violated requires](tests/must_reject/p9b_call_requires.pruv), [take then use](tests/must_reject/p9b_take_use.pruv).
+- R-6x-5 **Methods and modules.** An impl block may be in any module of a program with modules (G4), next to its
+  type. `pub fn` in an impl block exports the method beyond its module; without `pub` it is private to the module of
+  the type (as a free function in explicit mode). From another module the associated functions are called by the type's path
+  `crate::m::Name::f(args)`, and methods of a value of type `crate::m::Name` with a dot; a call of a method without
+  `pub` from another module (by path or dot) is `type/private_item`. A method never is a host entry, even `pub` in the
+  root, so it has no `--proven-entries` twin (exporting methods to the host is parity row P9b-3), and its signature
+  is no host boundary (narrow integers are allowed). A `pub` method's signature follows the public interface rule
+  (a private type in it is `type/public_interface`), and a public contract may call only `pub` methods, by path or
+  dot (P06, `type/public_interface`). Two methods of one type with one name are `type/dup_method` here too. The Rust code is
+  that of R-6x-4 with the owner's Rust type name: `impl <type stem> { .. }`, `x.m(..)` and `<type stem>::f(..)`.
+  Tests: [runtime](tests/runtime/g4_p9b2_modules/root.pruv).
 
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
@@ -3478,7 +3502,6 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/for_iterable` | parse | a `for` head other than `a..b` or a slice/Vec place, such as `a..=b` or `a.iter()` (R-6q-3) |
 | `parse/foreign_syntax` | parse | a malformed `trusted rust fn` declaration |
 | `parse/generic_syntax` | parse | a malformed type parameter list or type argument list |
-| `parse/impl_module` | parse | an impl block in a program with `pub` or `mod` items, or `pub` in an impl block (R-6x-1) |
 | `parse/impl_syntax` | parse | a malformed or unsupported impl block (generic, trait or path impl, a non-`fn` item, a function name starting with `_`, an unclosed block) or a typed receiver (R-6x-1, R-6x-2) |
 | `parse/inout_syntax` | parse | a malformed `inout` parameter or argument |
 | `parse/let_else_syntax` | parse | a constructor pattern after `let` followed by `;` instead of `else { .. }` (R-6u-3) |
@@ -3594,7 +3617,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/match_arms` | type | match arms that are missing or repeated; a slice length no arm takes or a slice arm earlier arms cover (R-6u-4); a case no pattern arm takes (R-6u-6) |
 | `type/match_type` | type | a match on a value that is not Option, Result or an enum (or an array place with slice arms); slice arms on a target that is not an array place, or mixed with other arms (R-6u-4) |
 | `type/method_name_clash` | type | an impl function named like a variant of its enum (R-6x-1) |
-| `type/method_receiver` | type | a method call whose receiver is not a place of declared type (R-6x-3) |
+| `type/method_receiver` | type | a method call whose receiver has no known static type, or an `inout self` method on a receiver that is not a place (R-6x-3) |
 | `type/missing_return` | type | a function may reach its end without returning |
 | `type/name_collision` | type | one name is both a type and a function |
 | `type/net_unconsumed` | type | a temporary `Socket` or `Listener` is never consumed |
@@ -3613,7 +3636,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/pred_in_code` | type | code calls a `pred fn` (R-6-2) |
 | `type/pred_signature` | type | a `pred fn` that is not one pure bool contract expression (R-6-2) |
 | `type/print_type` | type | `print` of a value that is not i64 or bool |
-| `type/private_item` | type | a path names a private item of another module |
+| `type/private_item` | type | a path names a private item of another module, or a dot call names a method without `pub` of another module (R-6x-5) |
 | `type/proc_unconsumed` | type | a temporary `Process` is never consumed |
 | `type/public_interface` | type | a public item exposes a private type or function |
 | `type/recursive_borrow` | type | a value is assigned or passed `inout` while a match on it is active |

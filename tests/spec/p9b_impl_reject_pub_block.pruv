@@ -1,4 +1,4 @@
 // spec: R-6x-1 reject
-// `pub` on an impl block is parse/impl_module.
+// `pub` on an impl block is parse/visibility_syntax: the methods carry the visibility (`pub fn`).
 struct C { n: i64 }
 pub impl C { fn get(self) -> i64 { return self.n; } }

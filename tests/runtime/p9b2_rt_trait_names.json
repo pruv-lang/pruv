@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["100", "106", "120"], "gen_contains": ["C::eq((*self), o)", "C::into((*self))", "C::new(k).consume()", "c.same((C { n: k }))", "C::eq(c, "]}

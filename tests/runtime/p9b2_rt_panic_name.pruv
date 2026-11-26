@@ -1,0 +1,9 @@
+// P9b-2 (R-6x-4): a contract violation of a method found at run time names it `C::get` (with --no-verify).
+struct C { n: i64 }
+impl C {
+  fn get(self) -> i64 requires self.n >= 0 ensures result == self.n { return self.n; }
+}
+fn run(k: i64) -> i64 {
+  let c: C = C { n: k };
+  return c.get();
+}

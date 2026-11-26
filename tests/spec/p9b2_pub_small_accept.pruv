@@ -1,0 +1,5 @@
+// spec: R-6x-5 accept
+// A `pub` method is no host entry, so narrow integers in its signature are allowed (the host boundary rule does not apply).
+pub struct C { n: i64 }
+impl C { pub fn add(self, b: u8) -> i64 requires 0 <= self.n && self.n <= 1000 { return self.n + i64(b); } }
+pub fn f(k: i64) -> i64 { let c: C = C { n: k }; return c.n; }

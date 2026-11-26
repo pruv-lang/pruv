@@ -1,0 +1,6 @@
+// spec: R-6x-1 reject
+// Two methods of one type with one name are type/dup_method in a program with `pub` items too.
+pub struct P { x: i64 }
+impl P { pub fn get(self) -> i64 { return self.x; } }
+impl P { fn get(self) -> i64 { return 0; } }
+pub fn f(k: i64) -> i64 { return k; }
