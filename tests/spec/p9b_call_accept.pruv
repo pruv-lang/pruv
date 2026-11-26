@@ -1,0 +1,17 @@
+// spec: R-6x-3 accept
+// Path calls (also of methods), dot calls on parameters, locals, self and field paths.
+struct C { n: i64 }
+struct W { c: C }
+impl C {
+  fn make(n: i64) -> C ensures result.n == n { return C { n: n }; }
+  fn get(self) -> i64 ensures result == self.n { return self.n; }
+  fn inc(inout self) -> () requires self.n >= 0 && self.n < 100 ensures self.n == old(self).n + 1 { self.n = self.n + 1; }
+  fn inc2(inout self) -> () requires self.n >= 0 && self.n < 50 ensures self.n == old(self).n + 2 { self.inc(); self.inc(); }
+}
+fn f(w: W, k: i64) -> i64 requires k >= 0 && k < 10 && w.c.n >= 0 && w.c.n < 10 ensures result == 2 * k + 6 + w.c.n * 0 {
+  let mut v: W = W { c: C::make(k) };
+  v.c.inc2();
+  C::inc(inout v.c);
+  let z: i64 = w.c.get();
+  return C::get(v.c) + v.c.get() + z * 0;
+}

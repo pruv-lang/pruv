@@ -1,0 +1,5 @@
+// spec: R-6x-1 reject
+// An impl function named like a variant of its enum.
+enum E { A, B }
+impl E { fn A() -> E { return E::B; } }
+fn f(k: i64) -> i64 { return k; }

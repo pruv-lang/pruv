@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["12", "12", "12"], "gen_contains": ["impl Bag {", "fn count(&self) -> i64", "fn add(&mut self, v: i64)", "self.fact", "b.add(2);"]}

@@ -1,0 +1,7 @@
+// spec: R-6x-2 reject
+// A method ensures is proved like a free function ensures.
+struct C { n: i64 }
+impl C {
+  fn inc(inout self) -> () requires self.n >= 0 && self.n < 100 ensures self.n == old(self).n + 2 { self.n = self.n + 1; }
+}
+fn f(k: i64) -> i64 { return k; }

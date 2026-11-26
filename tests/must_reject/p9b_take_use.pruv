@@ -1,0 +1,4 @@
+// P9b R-6x-3: a take method moves the receiver.
+struct C { n: i64 }
+impl C { fn eat(take self) -> i64 { return self.n; } }
+fn f(k: i64) -> i64 { let c: C = C { n: k }; let a: i64 = c.eat(); return c.n; }

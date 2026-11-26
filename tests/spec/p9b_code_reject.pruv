@@ -1,0 +1,5 @@
+// spec: R-6x-4 reject
+// The generated name Owner__f is not a source name (`__` is reserved).
+struct C { n: i64 }
+impl C { fn get(self) -> i64 { return self.n; } }
+fn f(c: C) -> i64 { return C__get(c); }

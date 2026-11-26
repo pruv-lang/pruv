@@ -1290,7 +1290,7 @@ must_reject|tests/must_reject/p3_pub_u64.pruv	1 case: obl=0 1	default=1fbe619466
 must_reject|tests/must_reject/p3_sub_i16.pruv	1 case: obl=1 1	default=e159d559d42a
 must_reject|tests/must_reject/p3_sub_u64.pruv	1 case: obl=1 1	default=807cede67b11
 must_reject|tests/must_reject/p3_vec_idx.pruv	1 case: obl=0 1	default=4457a1c832df
-must_reject|tests/must_reject/p4_for_adapter.pruv	1 case: obl=0 1	default=9bf6092f96ff
+must_reject|tests/must_reject/p4_for_adapter.pruv	1 case: obl=0 1	default=4f51de2dae6b
 must_reject|tests/must_reject/p4_for_bool_range.pruv	1 case: obl=0 1	default=01b6a2bf2750
 must_reject|tests/must_reject/p4_for_decreases.pruv	1 case: obl=0 1	default=d68b38732668
 must_reject|tests/must_reject/p4_for_inclusive.pruv	1 case: obl=0 1	default=91fc3d851951
@@ -1499,6 +1499,10 @@ must_reject|tests/must_reject/p9_pattern_unreachable_wild.pruv	1 case: obl=0 1	d
 must_reject|tests/must_reject/p9_pattern_variant_type.pruv	1 case: obl=0 1	default=7e770aae97ec
 must_reject|tests/must_reject/p9_pattern_wild_requires.pruv	1 case: obl=1 1	default=8bbf74bf5bf7
 must_reject|tests/must_reject/p9_value_match_empty.pruv	1 case: obl=0 1	default=2f257fa1b184
+must_reject|tests/must_reject/p9b_call_requires.pruv	1 case: obl=2 1	default=af6f7caa95a4
+must_reject|tests/must_reject/p9b_false_ensures.pruv	1 case: obl=2 1	default=8eb1466d5c19
+must_reject|tests/must_reject/p9b_take_use.pruv	1 case: obl=0 1	default=27172f1f4ca2
+must_reject|tests/must_reject/p9b_unknown_method.pruv	1 case: obl=0 1	default=0b5bc8a87de4
 must_reject|tests/must_reject/refine_alloc_len.pruv	1 case: obl=4 1	default=14a4c91b9d32
 must_reject|tests/must_reject/refine_base_bool.pruv	1 case: obl=0 1	default=ee830c6079aa
 must_reject|tests/must_reject/refine_bounds_i64.pruv	1 case: obl=0 1	default=d4b00a9eb36d
@@ -2054,6 +2058,12 @@ runtime|tests/runtime/p9_rt_pattern_names.pruv	1 case: obl=1 1	default=a122c74f4
 runtime|tests/runtime/p9_rt_pattern_order.pruv	1 case: obl=31 1	default=a19dbbd6d894
 runtime|tests/runtime/p9_rt_pattern_owned.pruv	1 case: obl=16 1	default=75148ac98a8a
 runtime|tests/runtime/p9_rt_pattern_wild.pruv	1 case: obl=9 1	default=4b17ba4c4fc8
+runtime|tests/runtime/p9b_rt_counter.pruv	1 case: obl=10 1	default=3c324917b935
+runtime|tests/runtime/p9b_rt_enum_field.pruv	1 case: obl=16 1	default=14138fb8ad3c
+runtime|tests/runtime/p9b_rt_names.pruv	1 case: obl=12 1	default=859a92b0ee45
+runtime|tests/runtime/p9b_rt_proven.pruv	1 case: obl=11 1	default=f9dc86b301ea
+runtime|tests/runtime/p9b_rt_small.pruv	1 case: obl=15 1	default=504d4b7c4408
+runtime|tests/runtime/p9b_rt_vec_rec.pruv	1 case: obl=28 1	default=152a12710db3
 runtime|tests/runtime/qb_across_requires.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 runtime|tests/runtime/qb_budget_edge.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 runtime|tests/runtime/qb_nested_budget.pruv	1 case: obl=0 1	default=c0f6163aeb7a

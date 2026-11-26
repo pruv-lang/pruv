@@ -1,0 +1,1 @@
+{"flags_matrix": [[]], "exit": 0, "stdout_lines": ["1", "5", "8"], "gen_contains": ["fn Gen__mk__pruv_small(pruv_sb: &mut [i64; 8], pruv_self: Gen, n: i64) -> usize {", "Gen__mk__pruv_small(&mut pruv_sb_r, g, k)", "impl Gen {"]}

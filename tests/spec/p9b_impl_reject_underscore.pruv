@@ -1,0 +1,6 @@
+// spec: R-6x-1 reject
+// An impl function name must not start with `_`: `A` + `_b` and `A_` + `b` would lower to one name.
+struct A { n: i64 }
+struct A_ { n: i64 }
+impl A { fn _b() -> i64 { return 1; } }
+impl A_ { fn b() -> i64 { return 2; } }

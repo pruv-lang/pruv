@@ -188,7 +188,7 @@ fn g4_token(word: &str, src: &[char], end: usize, toks: &[Tok], depth: usize) ->
     if word == "extern" {
         return w == "fn";
     }
-    matches!(w.as_str(), "fn" | "struct" | "enum" | "mod" | "pub" | "const" | "trusted" | "rust" | "opaque" | "pred" | "extern" | "type")
+    matches!(w.as_str(), "fn" | "struct" | "enum" | "mod" | "pub" | "const" | "trusted" | "rust" | "opaque" | "pred" | "extern" | "type" | "impl")
 }
 
 /// The operator token starting at pos (regex order: 3 characters, 2 characters, 1 character).
@@ -302,6 +302,8 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
     let n = src.len();
     let (mut pos, mut line, mut lstart) = (0usize, 1i64 + ((tag as i64) << 32), 0usize);
     let mut brace_depth: usize = 0; // G4: brace depth
+    // P9b: `impl` seen at the top level (its `{` opens an impl block) / inside an impl block
+    let (mut impl_kw, mut in_impl) = (false, false);
     while pos < n {
         let c = src[pos];
         let col = (pos - lstart + 1) as i64;
@@ -413,6 +415,20 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
                 toks.push(Tok { kind: Kind::Move, val: v, line, col, end });
                 continue;
             }
+            // P9b: `impl` at the top level starts an impl block; inside one `self` is an identifier token (the method
+            // receiver; the parser reserves it as any other binding name). Outside an impl block it stays reserved.
+            // `for` after `impl Name` and `const` / `type` items in the block are keyword tokens so the parser reports
+            // parse/impl_syntax for them; `pub` on an item of the block is a keyword so the parser reports
+            // parse/impl_module.
+            if (v == "impl" && brace_depth == 0) || (v == "self" && in_impl) || (v == "for" && impl_kw)
+                || (matches!(v.as_str(), "const" | "type" | "pub") && in_impl && brace_depth == 1)
+            {
+                impl_kw |= v == "impl";
+                let end = col + (pos - start) as i64;
+                let kind = if v == "self" { Kind::Id } else { Kind::Kw };
+                toks.push(Tok { kind, val: v, line, col, end });
+                continue;
+            }
             // P7: `const` at item start (top level, after `}`, `;` or `pub`) is a keyword
             if v == "const" && brace_depth == 0
                 && toks.last().map_or(true, |t| (t.kind == Kind::Op && matches!(t.val.as_str(), "}" | ";"))
@@ -502,9 +518,16 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
             }
             pos += op.len();
             if op == "{" {
+                if brace_depth == 0 {
+                    in_impl = impl_kw;
+                    impl_kw = false;
+                }
                 brace_depth += 1;
             } else if op == "}" && brace_depth > 0 {
                 brace_depth -= 1;
+                if brace_depth == 0 {
+                    in_impl = false;
+                }
             }
             toks.push(Tok { kind: Kind::Op, val: op.to_string(), line, col, end: col + op.len() as i64 });
         } else {

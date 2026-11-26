@@ -1,0 +1,5 @@
+// spec: R-6x-3 reject
+// The receiver must be a place of declared type, not a call result (parity row P9b-2).
+struct C { n: i64 }
+impl C { fn make(n: i64) -> C { return C { n: n }; } fn get(self) -> i64 { return self.n; } }
+fn f(k: i64) -> i64 { return C::make(k).get(); }

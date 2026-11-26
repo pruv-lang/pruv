@@ -1,0 +1,13 @@
+// spec: R-6x-1 accept
+// Two impl blocks of one struct (one before the type), an enum impl, and a method sharing a field name.
+impl P { fn origin() -> P ensures result.x == 0 { return P { x: 0, y: 0 }; } }
+struct P { x: i64, y: i64 }
+enum Dir { North, South }
+impl P { fn x(self) -> i64 ensures result == self.x { return self.x; } }
+impl Dir { fn flip(self) -> Dir { match self { Dir::North => { return Dir::South; } Dir::South => { return Dir::North; } } } }
+fn f(p: P, d: Dir) -> i64 { let q: P = P::origin(); let e: Dir = d.flip(); return q.x() + q.x; }
+// An owner ending in `_` next to a same-stem owner, and an empty block of a declared type.
+struct P_ { x: i64 }
+impl P_ { fn x(self) -> i64 ensures result == self.x { return self.x; } }
+impl P_ { }
+fn g(a: P_) -> i64 ensures result == a.x { return a.x(); }

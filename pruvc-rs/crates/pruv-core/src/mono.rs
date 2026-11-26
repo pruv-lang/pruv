@@ -1103,6 +1103,8 @@ impl<'a> Mono<'a> {
             // P7: module-level constants (evaluated at parse time)
             consts: prog.consts.clone(),
             aliases: prog.aliases.clone(),
+            methods: prog.methods.clone(),
+            impls: prog.impls.clone(),
         };
         let args = self.types.into_iter().map(|spec| (spec.stem, spec.args))
             .chain(self.fns.into_iter().map(|spec| (spec.stem, spec.args)))

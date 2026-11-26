@@ -1,0 +1,38 @@
+// P9b (R-6x-*): impl blocks on an enum (match on self) and a struct; receivers through field paths; a method
+// calling another method on its inout self.
+enum Shape {
+  Square(side: i64),
+  Rect(w: i64, h: i64),
+}
+
+struct Counter { n: i64 }
+
+struct Board { shape: Shape, hits: Counter }
+
+impl Shape {
+  fn area(self) -> i64 ensures result >= 0 && result <= 1000000 requires is_variant(self, Shape::Square) ==> (variant_field(self, Shape::Square, side) >= 0 && variant_field(self, Shape::Square, side) <= 1000) {
+    match self {
+      Shape::Square(s) => { return s * s; }
+      Shape::Rect(w, h) => { if w >= 0 && w <= 1000 && h >= 0 && h <= 1000 { return w * h; } return 0; }
+    }
+  }
+  fn square(side: i64) -> Shape ensures is_variant(result, Shape::Square) && variant_field(result, Shape::Square, side) == side { return Shape::Square(side); }
+}
+
+impl Counter {
+  fn tick(inout self) -> () requires self.n >= 0 && self.n <= 1000 ensures self.n == old(self).n + 1 {
+    self.n = self.n + 1;
+  }
+  fn twice(inout self) -> () requires self.n >= 0 && self.n <= 100 ensures self.n == old(self).n + 2 {
+    self.tick();
+    self.tick();
+  }
+}
+
+fn run(k: i64) -> i64 requires k >= 0 && k <= 10 {
+  let mut b: Board = Board { shape: Shape::square(k), hits: Counter { n: 0 } };
+  b.hits.twice();
+  b.hits.tick();
+  let a: i64 = b.shape.area();
+  return a + b.hits.n;
+}

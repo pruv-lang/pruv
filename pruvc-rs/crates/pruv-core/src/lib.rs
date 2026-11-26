@@ -38,6 +38,8 @@ pub mod lexer;
 pub mod llvmgen;
 pub mod manifest;
 pub mod modules;
+pub mod impl_shape;
+pub mod methods;
 pub mod mono;
 pub mod parser;
 pub mod parallel_shim;

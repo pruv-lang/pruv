@@ -1,0 +1,26 @@
+// P9b (R-6x-4) with --proven-entries: impl functions get no proven twin; the twin of `run` calls them by their
+// Rust names
+struct Counter { n: i64, step: i64 }
+
+impl Counter {
+  fn first(a: [i64]) -> i64 requires len(a) >= 1 { return a[0]; }
+  fn pick(self, a: [i64]) -> i64 requires len(a) >= 2 { return a[1]; }
+}
+
+fn total(a: [i64]) -> i64
+  requires len(a) >= 2
+{
+  let c: Counter = Counter { n: 1, step: 2 };
+  if Counter::first(a) != a[0] { return 0; }
+  return c.pick(a);
+}
+
+fn run(k: i64) -> i64 ! alloc
+  requires k >= 0 && k <= 10
+{
+  let a: [i64] = alloc(3, k);
+  let c: Counter = Counter { n: 1, step: 2 };
+  let x: i64 = Counter::first(a);
+  if x != k { return 0; }
+  return c.pick(a) + 0 * total(a);
+}
