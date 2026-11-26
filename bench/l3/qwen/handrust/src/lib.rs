@@ -4,6 +4,8 @@ use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
+pub mod edge;
+
 pub const WINDOW_BYTES: usize = 8 * 1024 * 1024;
 const LINE_BYTES: usize = 1024 * 1024;
 const DROP_HEAD_BYTES: usize = 8192;

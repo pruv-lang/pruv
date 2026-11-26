@@ -33,22 +33,6 @@ fn bucket(arena: [u8], off: i64, n: i64, mask: i64) -> i64
   return band(h, mask);
 }
 
-fn put(inout arena: [u8], at: i64, s: str) -> ()
-  requires 0 <= at && at <= len(arena) && len(s) <= len(arena) - at
-  ensures len(arena) == len(old(arena))
-{
-  let n: i64 = len(s);
-  let mut j: i64 = 0;
-  while j < n
-    invariant 0 <= j && j <= n && n == len(s) && 0 <= at && at <= len(arena) && n <= len(arena) - at && len(arena) == len(old(arena))
-    decreases n - j
-  {
-    let b: i64 = s[j];
-    arena[at + j] = b;
-    j = j + 1;
-  }
-}
-
 // DB23 (G-R05-5): string_field's outcome for doc[id].key written straight into arena[at..], with no copy into a
 // fresh str. Result: decoded length >= 0 (written), -1 Missing, -2 Defect (string_field's Field::Defect), -3 no room.
 fn put_field(doc: crate::json::JsonDocument, id: i64, key: str, inout arena: [u8], at: i64) -> i64 ! alloc
@@ -68,26 +52,10 @@ fn put_field(doc: crate::json::JsonDocument, id: i64, key: str, inout arena: [u8
     crate::jstr::Text::Decoded(v) => {
       if len(v) > 50331648 { return -2; }
       if len(v) > len(arena) - at { return -3; }
-      put(inout arena, at, v);
+      copy_range(inout arena, at, v, 0, len(v));
       return len(v);
     }
   }
-}
-
-// Same bytes at two arena spans.
-fn same_span(arena: [u8], a: i64, an: i64, b: i64, bn: i64) -> bool
-  requires 0 <= a && 0 <= an && a + an <= len(arena) && 0 <= b && 0 <= bn && b + bn <= len(arena)
-{
-  if an != bn { return false; }
-  let mut i: i64 = 0;
-  while i < an
-    invariant 0 <= i && i <= an && an == bn && a + an <= len(arena) && b + bn <= len(arena) && 0 <= a && 0 <= b
-    decreases an - i
-  {
-    if arena[a + i] != arena[b + i] { return false; }
-    i = i + 1;
-  }
-  return true;
 }
 
 // The caller frames and parses each line and feeds Object frames into this index.
@@ -184,7 +152,8 @@ fn lookup(arena: [u8], koff: i64, klen: i64, heads: [i64], slots: [i64], inout m
     let uo: i64 = slots[at + 2];
     let ul: i64 = slots[at + 3];
     if s < 0 || s >= len(marks) || uo < 0 || ul < 0 || ul > len(arena) - uo { return Hit { poff: 0, plen: 0, found: false, changed: false, bad: true }; }
-    if same_span(arena, uo, ul, koff, klen) {
+    // hand: entry.uuid == key (one slice compare)
+    if ul == klen && eq_range(arena, uo, arena, koff, klen) {
       if marks[s] == 0 { changed = true; }
       marks[s] = 1;
       let pl: i64 = slots[at + 5];
@@ -205,6 +174,7 @@ pub fn capacity(data: [u8]) -> i64
   requires len(data) <= 8388608
   ensures 1 <= result && result <= len(data) + 1
 {
+  // hand: memchr over the LFs (one find_byte per line)
   let mut c: i64 = 1;
   let mut i: i64 = 0;
   while i < len(data)
@@ -212,8 +182,10 @@ pub fn capacity(data: [u8]) -> i64
     invariant 1 <= c && c <= i + 1
     decreases len(data) - i
   {
-    if data[i] == 10 { c = c + 1; }
-    i = i + 1;
+    let k: i64 = find_byte(data, 10, i, len(data));
+    if k == len(data) { return c; }
+    c = c + 1;
+    i = k + 1;
   }
   return c;
 }

@@ -50,11 +50,9 @@ pub fn title_bytes(data: [u8]) -> [u8] ! alloc {
   let s: str = crate::jstr::adapter_probe(data);
   if len(s) > 100000000000 { return alloc(0, 0); }
   let t: str = crate::text::one_line(s, 120);
-  let mut out: [u8] = alloc(len(t), 0);
-  let mut i: i64 = 0;
-  while i < len(t)
-    invariant 0 <= i && i <= len(t) && len(out) == len(t)
-    decreases len(t) - i
-  { out[i] = t[i]; i = i + 1; }
+  // hand: t.as_bytes().to_vec()
+  let mut out: [u8] = alloc(0, 0);
+  arr_reserve(inout out, len(t));
+  arr_append(inout out, t, 0, len(t));
   return out;
 }
