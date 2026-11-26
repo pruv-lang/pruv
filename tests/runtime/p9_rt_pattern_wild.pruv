@@ -1,6 +1,6 @@
 // P9a-6 audit: a lone `_` arm still evaluates the scrutinee once (side effects kept); a `_` arm next to an owned
-// field binder keeps the binder a move (no copy, balanced allocations); a field binder never captures an outer name
-// a `_` arm refers to; the i64 minimum is a literal pattern.
+// field binder keeps the binder a move (no copy, balanced allocations); a `_` arm next to a binder still sees the
+// outer names it refers to; the i64 minimum is a literal pattern.
 enum Got { Good(xs: [i64]), Fail(code: i64) }
 
 fn tick(n: i64) -> Option<i64> ! io {
@@ -25,10 +25,10 @@ fn count(r: Got) -> i64 {
   return out;
 }
 
-fn shadow(r: Option<i64>, x: i64) -> i64
-  requires x < 100
+fn shadow(r: Option<i64>, n: i64) -> i64
+  requires n < 100
 {
-  return match r { Some(0) => 100, Some(x) => x, _ => x + 1 };
+  return match r { Some(0) => 100, Some(x) => x, _ => n + 1 };
 }
 
 fn low(o: Option<i64>) -> i64 {

@@ -2844,7 +2844,8 @@ variants (R-6u-5).
   lowered tree, parity row P9a-7). The scrutinee is evaluated once, also under a lone `_` arm (its calls, effects
   and proof obligations stay); a value `match` whose only arm is `_` needs an `Option`, `Result` or enum scrutinee
   (`type/match_type`). A payload binder is the payload itself (an owned payload is moved or borrowed as in a plain
-  match, never copied), and it is not visible in another arm. These patterns are not accepted in `if let`, `let else` or `while let`
+  match, never copied), and it is not visible in another arm; like a plain match binder it may not shadow an outer
+  name (`type/shadow`). A lone `_` arm on a place keeps the place assignable in the arm body. These patterns are not accepted in `if let`, `let else` or `while let`
   (`parse/let_pattern`, parity row P9a-7), and there are no or-patterns, guards or `@` bindings yet. Tests:
   [accept](tests/spec/p9_pattern_accept.pruv), [missing case](tests/spec/p9_pattern_reject.pruv),
   [false contract](tests/spec/p9_pattern_reject_contract.pruv), [let else](tests/spec/p9_pattern_let.pruv),
@@ -2857,7 +2858,8 @@ variants (R-6u-5).
   [index in a general arm](tests/must_reject/p9_pattern_arm_index.pruv), [if let](tests/must_reject/p9_pattern_if_let.pruv),
   [lone `_` and owned binders](tests/runtime/p9_rt_pattern_wild.pruv),
   [lone `_` precondition](tests/must_reject/p9_pattern_wild_requires.pruv),
-  [constructor on a scalar](tests/must_reject/p9_pattern_ctor_scalar.pruv).
+  [constructor on a scalar](tests/must_reject/p9_pattern_ctor_scalar.pruv),
+  [binder names](tests/runtime/p9_rt_pattern_names.pruv), [shadow](tests/must_reject/p9_pattern_shadow_value.pruv).
 - R-6u-7 **Arm order and unreachable arms (P9a-6).** In a match with a pattern of R-6u-6, arms are tried in source
   order and the first arm that matches runs, as in Rust (a specific arm before a general one takes its values first).
   An arm that no value can reach because the arms above it take every value it matches (`Some(0)` after `Some(x)`,

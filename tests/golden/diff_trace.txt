@@ -1493,6 +1493,7 @@ must_reject|tests/must_reject/p9_pattern_if_let.pruv	1 case: obl=0 1	default=b75
 must_reject|tests/must_reject/p9_pattern_lit_type.pruv	1 case: obl=0 1	default=b82b56114a80
 must_reject|tests/must_reject/p9_pattern_missing.pruv	1 case: obl=0 1	default=a2102d47904a
 must_reject|tests/must_reject/p9_pattern_missing_lit.pruv	1 case: obl=0 1	default=9bb746e275b2
+must_reject|tests/must_reject/p9_pattern_shadow_value.pruv	1 case: obl=0 1	default=a832996008e7
 must_reject|tests/must_reject/p9_pattern_unreachable.pruv	1 case: obl=0 1	default=dca9e3d8c4b6
 must_reject|tests/must_reject/p9_pattern_unreachable_wild.pruv	1 case: obl=0 1	default=48b79bafb436
 must_reject|tests/must_reject/p9_pattern_variant_type.pruv	1 case: obl=0 1	default=7e770aae97ec
@@ -2049,9 +2050,10 @@ runtime|tests/runtime/p9_rt_match_take.pruv	1 case: obl=26 1	default=f8c8a4a9e70
 runtime|tests/runtime/p9_rt_match_unchecked.pruv	1 case: obl=2 1	default=3ec6dbafda66
 runtime|tests/runtime/p9_rt_match_value.pruv	1 case: obl=25 1	default=add1f56b1ee0
 runtime|tests/runtime/p9_rt_owned_arm.pruv	1 case: obl=24 1	default=9b31c83dc85a
+runtime|tests/runtime/p9_rt_pattern_names.pruv	1 case: obl=1 1	default=a122c74f4a4f
 runtime|tests/runtime/p9_rt_pattern_order.pruv	1 case: obl=31 1	default=a19dbbd6d894
 runtime|tests/runtime/p9_rt_pattern_owned.pruv	1 case: obl=16 1	default=75148ac98a8a
-runtime|tests/runtime/p9_rt_pattern_wild.pruv	1 case: obl=9 1	default=f9fdf9ec4152
+runtime|tests/runtime/p9_rt_pattern_wild.pruv	1 case: obl=9 1	default=4b17ba4c4fc8
 runtime|tests/runtime/qb_across_requires.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 runtime|tests/runtime/qb_budget_edge.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 runtime|tests/runtime/qb_nested_budget.pruv	1 case: obl=0 1	default=c0f6163aeb7a

@@ -5064,9 +5064,16 @@ impl Checker {
     /// arm patterns (ctor `_` for a wildcard arm), `tuple` the P8 tuple patterns of plain binders; `scrut` the
     /// scrutinee and `t` its type. Returns the tree; leaves name their arm and the lets that bind its names.
     fn lower_patterns(&mut self, arms: &[(i64, i64, Option<String>, String, Vec<String>)], uses: &[HashSet<String>],
-        t: &GType, line: i64, col: i64) -> Res<PNode>
+        split_lone: bool, t: &GType, line: i64, col: i64) -> Res<PNode>
     {
         use crate::ast::SubPat;
+        // an arm's own pattern names count as mentioned (two fields of one case never share a kept name)
+        let uses: Vec<HashSet<String>> = uses.iter().zip(arms).map(|(u, a)| {
+            let mut u = u.clone();
+            a.4.iter().for_each(|b| pat_slot_names(b, &mut u));
+            u
+        }).collect();
+        let uses = &uses[..];
         let mut rows = Vec::new();
         for (k, (_, _, en, ctor, bs)) in arms.iter().enumerate() {
             let top = if ctor == "_" { SubPat::Wild } else {
@@ -5084,9 +5091,10 @@ impl Checker {
             return Err(terr(l, c, "unreachable_arm", "this arm can never match: the arms above take every value it matches",
                 "remove the arm or move it above the arm that covers it"));
         }
-        if let PNode::Leaf(k, binds) = &node {
+        if let (true, PNode::Leaf(k, binds)) = (split_lone, &node) {
             // a lone `_` arm on an Option/Result/enum still matches the scrutinee (evaluated once, as in Rust): one
-            // case per constructor, payloads bound to fresh names
+            // case per constructor, payloads bound to fresh names (a place scrutinee has nothing to evaluate, so the
+            // statement form keeps the bare arm and the place stays assignable)
             if let Ok(ctors) = self.pat_ctors(t, line, col) {
                 let mut out = Vec::new();
                 for (cen, ctor, fs) in ctors {
@@ -5267,8 +5275,13 @@ impl Checker {
         let mut probe = m.scrutinee.clone();
         let t = self.match_scrutinee(&mut probe, scope)?;
         let arms: Vec<_> = m.arms.iter().map(|a| (a.line, a.col, a.enum_name.clone(), a.ctor.clone(), a.binders.clone())).collect();
-        let uses: Vec<HashSet<String>> = m.arms.iter().map(|a| { let mut u = HashSet::new(); pat_names_stmts(&a.body, &mut u); u }).collect();
-        let node = self.lower_patterns(&arms, &uses, &t, m.line, m.col)?;
+        let uses: Vec<HashSet<String>> = m.arms.iter().map(|a| {
+            let mut u = HashSet::new();
+            pat_names_stmts(&a.body, &mut u);
+            a.pats.iter().flatten().for_each(|p| pat_tuple_names(p, &mut u));
+            u
+        }).collect();
+        let node = self.lower_patterns(&arms, &uses, place_root(&m.scrutinee).is_none(), &t, m.line, m.col)?;
         let bodies: Vec<Vec<Stmt>> = m.arms.iter().map(|a| a.body.clone()).collect();
         let tuples: Vec<Vec<(String, TuplePat)>> = m.arms.iter().map(|a| a.binders.iter().zip(a.pats.iter())
             .filter_map(|(b, p)| p.clone().map(|p| (b.clone(), p))).collect()).collect();
@@ -6863,7 +6876,15 @@ impl Checker {
             let arms: Vec<_> = varms.iter().zip(call.args[1..].iter())
                 .map(|(a, v)| (v.line(), v.col(), a.enum_name.clone(), a.ctor.clone(), a.binders.clone())).collect();
             let uses: Vec<HashSet<String>> = call.args[1..].iter().map(|v| { let mut u = HashSet::new(); pat_names_expr(v, &mut u); u }).collect();
-            let node = self.lower_patterns(&arms, &uses, &t, line, col)?;
+            // binders are renamed into the arm values below, so check them against the scope here, as a plain match does
+            for (l, c, _, _, bs) in &arms {
+                let mut names = HashSet::new();
+                bs.iter().for_each(|b| pat_slot_names(b, &mut names));
+                if let Some(b) = names.iter().find(|b| scope.contains_key(*b)) {
+                    return Err(terr(*l, *c, "shadow", format!("{} is already defined", b), "use a new name"));
+                }
+            }
+            let node = self.lower_patterns(&arms, &uses, true, &t, line, col)?;
             if let PNode::Leaf(..) = node {
                 // a lone `_` arm over a scalar: there is no case to test, and the scrutinee must still be evaluated
                 return Err(terr(line, col, "match_type", format!("a value `match` needs an Option, Result or enum, got {}", tn(&t)),
@@ -9203,8 +9224,9 @@ fn pat_var(line: i64, col: i64, name: &str) -> Expr {
     Expr::Var(Var { line, col, name: name.to_string(), ty: None })
 }
 
-/// P9a-6: every name an arm body reads, moves or assigns (a field keeps its source name in a decision-tree case only
-/// when no arm that reaches the case without binding the field refers to that name).
+/// P9a-6: every name an arm body reads, moves, assigns or declares (a field keeps its source name in a decision-tree
+/// case only when no arm that reaches the case without binding the field mentions that name). Over-approximating is
+/// safe: a mentioned name only makes the field fresh.
 fn pat_names_stmts(stmts: &[Stmt], out: &mut HashSet<String>) {
     crate::foreign_shim::walk_stmts(stmts, &mut |n| pat_names_node(n, out));
     pat_targets(stmts, out);
@@ -9215,13 +9237,43 @@ fn pat_names_expr(e: &Expr, out: &mut HashSet<String>) {
 }
 
 fn pat_names_node(n: crate::foreign_shim::Node<'_>, out: &mut HashSet<String>) {
-    if let crate::foreign_shim::Node::Expr(Expr::Var(x)) = n {
-        out.insert(x.name.clone());
-    } else if let crate::foreign_shim::Node::Expr(Expr::Move(x)) = n {
-        out.insert(x.name.clone());
+    use crate::foreign_shim::Node;
+    match n {
+        Node::Expr(Expr::Var(x)) => { out.insert(x.name.clone()); }
+        Node::Expr(Expr::Move(x)) => { out.insert(x.name.clone()); }
+        Node::Expr(Expr::Quant(x)) => { out.insert(x.var.clone()); }
+        // a value match spells its arm patterns (binder names) in the call name
+        Node::Expr(Expr::Call(c)) if ValueMatch::matches(c) => {
+            out.extend(c.name.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')).filter(|s| !s.is_empty()).map(String::from));
+        }
+        Node::Let(l) => { out.insert(l.name.clone()); }
+        Node::ForMap(f) => { out.insert(f.key.clone()); out.insert(f.val.clone()); }
+        _ => {}
     }
 }
 
+/// The names a match sub-pattern slot binds (nested variants included).
+fn pat_slot_names(slot: &str, out: &mut HashSet<String>) {
+    fn go(p: &crate::ast::SubPat, out: &mut HashSet<String>) {
+        match p {
+            crate::ast::SubPat::Bind(n) => { out.insert(n.clone()); }
+            crate::ast::SubPat::Variant(_, _, subs) => subs.iter().for_each(|s| go(s, out)),
+            _ => {}
+        }
+    }
+    go(&crate::ast::SubPat::decode(slot), out);
+}
+
+fn pat_tuple_names(p: &TuplePat, out: &mut HashSet<String>) {
+    match p {
+        TuplePat::Bind(_, _, n, _) => { out.insert(n.clone()); }
+        TuplePat::Tuple(_, _, ps) => ps.iter().for_each(|q| pat_tuple_names(q, out)),
+        TuplePat::Wild => {}
+    }
+}
+
+/// Assignment targets and the names nested matches declare (binders, tuple patterns) or use in an `else` block,
+/// which the shared walker does not report.
 fn pat_targets(stmts: &[Stmt], out: &mut HashSet<String>) {
     for s in stmts {
         match s {
@@ -9231,7 +9283,14 @@ fn pat_targets(stmts: &[Stmt], out: &mut HashSet<String>) {
             Stmt::If(x) => { pat_targets(&x.then, out); pat_targets(&x.els, out); }
             Stmt::While(x) => pat_targets(&x.body, out),
             Stmt::ForMap(x) => pat_targets(&x.body, out),
-            Stmt::Match(m) => for a in &m.arms { pat_targets(&a.body, out); },
+            Stmt::Match(m) => {
+                for a in &m.arms {
+                    a.binders.iter().for_each(|b| pat_slot_names(b, out));
+                    a.pats.iter().flatten().for_each(|p| pat_tuple_names(p, out));
+                    pat_targets(&a.body, out);
+                }
+                pat_names_stmts(&m.els, out);
+            }
             _ => {}
         }
     }
