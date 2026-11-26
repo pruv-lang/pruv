@@ -1,0 +1,21 @@
+// spec: R-6v-1 accept
+// A transparent alias (plain, generic, chained) is the type it names, in signatures, locals and contracts.
+type Code = i64;
+type Res<T> = Result<T, Code>;
+type Big = Wide;
+type Wide = i64;
+
+fn parse(x: Code) -> Res<i64>
+  requires -1000 < x && x < 1000
+  ensures result == Ok(x * 2) || result == Err(x)
+{
+  if x < 0 { return Err(x); }
+  return Ok(x * 2);
+}
+
+fn widen(x: Big) -> i64
+  ensures result == x
+{
+  let y: Wide = x;
+  return y;
+}

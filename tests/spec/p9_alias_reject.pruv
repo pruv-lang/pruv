@@ -1,0 +1,5 @@
+// spec: R-6v-1 reject
+// An alias that reaches itself names no type.
+type A = B;
+type B = Option<A>;
+fn f(x: A) -> i64 { return 0; }
