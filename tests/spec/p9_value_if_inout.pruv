@@ -1,0 +1,13 @@
+// spec: R-6w-3 reject
+// An inout call in an arm is rejected.
+fn bump(inout n: i64) -> i64
+  requires n < 100
+{
+  n = n + 1;
+  return n;
+}
+
+fn f(c: bool) -> i64 {
+  let mut k: i64 = 0;
+  return if c { bump(inout k) } else { 0 };
+}

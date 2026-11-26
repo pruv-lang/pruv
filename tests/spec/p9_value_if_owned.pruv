@@ -1,0 +1,5 @@
+// spec: R-6w-2 reject
+// An arm of an owned value `if` is a new value, not a read of a borrowed array.
+fn f(c: bool, a: [i64], b: [i64]) -> [i64] ! alloc {
+  return if c { a } else { b };
+}

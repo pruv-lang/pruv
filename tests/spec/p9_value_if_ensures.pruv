@@ -1,0 +1,8 @@
+// spec: R-6w-3 reject
+// An ensures that is false on one arm only is caught.
+fn f(x: i64) -> i64
+  requires -100 < x && x < 100
+  ensures result >= x
+{
+  return if x > 0 { x + 1 } else { x - 1 };
+}
