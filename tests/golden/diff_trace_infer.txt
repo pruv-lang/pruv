@@ -1463,10 +1463,13 @@ must_reject|tests/must_reject/p9_if_arm_inout.pruv	1 case: obl=0 1	--infer=0bd41
 must_reject|tests/must_reject/p9_if_arm_move.pruv	1 case: obl=0 1	--infer=9abcacc258c8
 must_reject|tests/must_reject/p9_if_cond_type.pruv	1 case: obl=0 1	--infer=9570c97acfd9
 must_reject|tests/must_reject/p9_if_contract.pruv	1 case: obl=0 1	--infer=aa00b637b62d
+must_reject|tests/must_reject/p9_if_expand.pruv	1 case: obl=0 1	--infer=8a1043a3345c
 must_reject|tests/must_reject/p9_if_false_ensures.pruv	1 case: obl=3 1	--infer=53096d85a638
 must_reject|tests/must_reject/p9_if_generic.pruv	1 case: obl=0 1	--infer=942e4f3b5473
 must_reject|tests/must_reject/p9_if_no_else.pruv	1 case: obl=0 1	--infer=aa51430aa787
 must_reject|tests/must_reject/p9_if_owned_borrow.pruv	1 case: obl=0 1	--infer=3d9e7cf64a80
+must_reject|tests/must_reject/p9_if_ref_arm.pruv	1 case: obl=0 1	--infer=8a910142df1e
+must_reject|tests/must_reject/p9_if_ref_return.pruv	1 case: obl=0 1	--infer=bf83aa25212e
 must_reject|tests/must_reject/p9_if_two_exprs.pruv	1 case: obl=0 1	--infer=ab0a5df003a3
 must_reject|tests/must_reject/p9_if_types.pruv	1 case: obl=0 1	--infer=c66341b69629
 must_reject|tests/must_reject/refine_alloc_len.pruv	1 case: obl=4 1	--infer=cb1feac1781b
@@ -2007,6 +2010,7 @@ runtime|tests/runtime/p9_rt_alias_const.pruv	1 case: obl=2 1	--infer=9ab57d6f333
 runtime|tests/runtime/p9_rt_alias_p8.pruv	1 case: obl=8 1	--infer=4b6344307cae
 runtime|tests/runtime/p9_rt_alias_pos.pruv	1 case: obl=39 1	--infer=4b2f3d5141e2
 runtime|tests/runtime/p9_rt_branch_order.pruv	1 case: obl=18 1	--infer=6f4cbfd50496
+runtime|tests/runtime/p9_rt_if_arg.pruv	1 case: obl=12 1	--infer=f99d34640e4f
 runtime|tests/runtime/p9_rt_if_tuple.pruv	1 case: obl=3 1	--infer=d31654b12c3f
 runtime|tests/runtime/p9_rt_if_tuple_owned.pruv	1 case: obl=3 1	--infer=467b57b9c3b9
 runtime|tests/runtime/p9_rt_if_unchecked.pruv	1 case: obl=3 1	--infer=dcf3468477ba

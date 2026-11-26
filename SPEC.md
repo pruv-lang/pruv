@@ -2884,9 +2884,12 @@ let y: [i64] = if c { move x } else { mk(n) };
   type is an integer, `bool`, `char`, a non-borrowing struct or enum, an `Option`/`Result` of these, a tuple, an array,
   a `String`/`str`, a collection or an extended struct. A type parameter, a fixed array, a view, a borrowing struct,
   `unit`, a handle and a `Result` with a `String` error are `type/value_branch_type`. For an owned type (arrays,
-  strings, collections, extended structs and tuples) every arm is a new value: a call, a literal, a constructor or a
-  bare `move x` (`type/value_branch_owned`; write `move x` or `copy(x)`). A value `if` in a contract is
-  `type/value_branch_context` (write the cases with `==>`).
+  strings, collections, extended structs and tuples with an owned component) every arm is a new value: a call, a
+  literal, a constructor or a bare `move x` (`type/value_branch_owned`; write `move x` or `copy(x)`); a `move x` arm
+  stands only where the result is consumed (a `let`, a `return`, an owned argument), and a string literal arm makes a
+  `String`, so the function needs `! alloc`. A value `if` in a contract is `type/value_branch_context` (write the
+  cases with `==>`), and a function whose body uses a value `if` is not expanded in a contract
+  (`type/call_in_contract`; write the body with statement `if`s). `else if let` is not a value arm.
 - R-6w-3 **Proof and ownership.** The verifier evaluates each arm under its path condition: an arm's obligations
   (an index, a division, a callee's `requires`) and a callee's `ensures` hold only when the arm is chosen, and the
   result is `ite(c, v1, v2)`. A value moved in one arm is maybe-moved after the `if` (`type/foreign_move` on a later

@@ -1,0 +1,6 @@
+fn view(src: [i64]) -> ref [i64] from(src) {
+  return src;
+}
+pub fn g(c: bool, x: [i64]) -> [i64] ! alloc {
+  return if c { view(x) } else { alloc(2, 0) };
+}

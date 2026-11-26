@@ -1549,10 +1549,13 @@ must_reject|must_reject/p9_if_arm_inout.pruv	2 cases: exit 2	llvm=eb231d9459c6	r
 must_reject|must_reject/p9_if_arm_move.pruv	2 cases: exit 2	llvm=224db56768bb	rust=224db56768bb
 must_reject|must_reject/p9_if_cond_type.pruv	2 cases: exit 2	llvm=ba0f9a1e9330	rust=ba0f9a1e9330
 must_reject|must_reject/p9_if_contract.pruv	2 cases: exit 2	llvm=80be20711604	rust=80be20711604
+must_reject|must_reject/p9_if_expand.pruv	2 cases: exit 2	llvm=5b76860448b5	rust=5b76860448b5
 must_reject|must_reject/p9_if_false_ensures.pruv	2 cases: exit 2	llvm=bbf73ebc6f00	rust=bbf73ebc6f00
 must_reject|must_reject/p9_if_generic.pruv	2 cases: exit 2	llvm=821a3d8cb7e2	rust=821a3d8cb7e2
 must_reject|must_reject/p9_if_no_else.pruv	2 cases: exit 2	llvm=398fdb4be985	rust=398fdb4be985
 must_reject|must_reject/p9_if_owned_borrow.pruv	2 cases: exit 2	llvm=f9fa4c1bb04e	rust=f9fa4c1bb04e
+must_reject|must_reject/p9_if_ref_arm.pruv	2 cases: exit 2	llvm=8eee93aad804	rust=8eee93aad804
+must_reject|must_reject/p9_if_ref_return.pruv	2 cases: exit 2	llvm=815bf4976c46	rust=815bf4976c46
 must_reject|must_reject/p9_if_two_exprs.pruv	2 cases: exit 2	llvm=cd1f79a94b83	rust=cd1f79a94b83
 must_reject|must_reject/p9_if_types.pruv	2 cases: exit 2	llvm=1a7253de7970	rust=1a7253de7970
 must_reject|must_reject/refine_alloc_len.pruv	2 cases: exit 2	llvm=91183d4f0e90	rust=91183d4f0e90
@@ -2852,6 +2855,8 @@ runtime|runtime/p9_rt_alias_pos [--no-verify]	2 cases: exit 2	llvm=ff9b27b5479b	
 runtime|runtime/p9_rt_alias_pos [default]	2 cases: exit 2	llvm=257f2640c39b	rust=d8c75020cc3d
 runtime|runtime/p9_rt_branch_order [--no-verify]	2 cases: exit 2	llvm=ba6baedce5b0	rust=0749fbd47c14
 runtime|runtime/p9_rt_branch_order [default]	2 cases: exit 2	llvm=ae5c5baaa1ba	rust=63b2fffc41d4
+runtime|runtime/p9_rt_if_arg [--no-verify]	2 cases: exit 2	llvm=19e855d46d01	rust=b5c603a36c95
+runtime|runtime/p9_rt_if_arg [default]	2 cases: exit 2	llvm=002129344fb1	rust=89434d4eb6a0
 runtime|runtime/p9_rt_if_tuple [--no-verify]	2 cases: exit 2	llvm=0897fa4ad58f	rust=328567681664
 runtime|runtime/p9_rt_if_tuple [default]	2 cases: exit 2	llvm=a2027c1a5364	rust=0ea377037a6f
 runtime|runtime/p9_rt_if_tuple_owned [--no-verify]	2 cases: exit 2	llvm=fcde0448956c	rust=6fcdc788c752
