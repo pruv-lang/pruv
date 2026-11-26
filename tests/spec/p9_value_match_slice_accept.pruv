@@ -1,0 +1,25 @@
+// spec: R-6w-5 accept
+// Slice patterns in a value `match` on a slice, a field path and a fixed array: arms are tried in order, each index
+// is proved under its arm's length test, and a rest binder is a view whose length and elements are read.
+struct Box { v: [i64] }
+
+fn head(a: [i64]) -> i64
+  requires forall i in 0..len(a): a[i] >= 0 && a[i] <= 1000
+  ensures result >= 0
+{
+  return match a { [] => 0, [x] => x, [x, y, ..] => x + y };
+}
+
+fn second(b: Box) -> i64
+  requires forall i in 0..len(b.v): b.v[i] >= 0
+  ensures result >= -1
+{
+  return match b.v { [_, rest @ ..] => if len(rest) > 0 { rest[0] } else { 0 }, [] => -1 };
+}
+
+fn ends(a: [i64; 3]) -> i64
+  requires forall i in 0..3: a[i] >= 0 && a[i] <= 9
+  ensures result >= 0 && result <= 18
+{
+  return match a { [x, _, z] => x + z };
+}

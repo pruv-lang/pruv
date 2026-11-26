@@ -6900,20 +6900,43 @@ impl Checker {
             // P9a-6: a value match needs an arm to produce its value
             return Err(terr(line, col, "match_arms", "a value `match` has no arms", "write one arm for every case"));
         }
-        if Self::has_ext_pattern(varms.iter().map(|a| (a.ctor.as_str(), a.binders.as_slice()))) {
-            // P9a-6: lowered to nested value matches and value ifs, which are then checked as usual
+        if varms.iter().any(|a| slice_arm_shape(&a.ctor).is_some() || a.ctor == "()") {
+            // P9a-6c: slice arms and a top-level tuple arm read the scrutinee place in the arm value
+            return self.value_place_match(e, want, scope, c);
+        }
+        let tuples: Vec<Vec<(String, TuplePat)>> = varms.iter().map(|a| a.binders.iter().zip(a.pats.iter())
+            .filter_map(|(b, p)| p.clone().map(|p| (b.clone(), p))).collect()).collect();
+        if Self::has_ext_pattern(varms.iter().map(|a| (a.ctor.as_str(), a.binders.as_slice())))
+            || tuples.iter().any(|t| !t.is_empty())
+        {
+            // P9a-6: lowered to nested value matches and value ifs, which are then checked as usual (P9a-6c: a tuple
+            // pattern becomes component reads of its payload binder in the arm value)
             let mut probe = call.args[0].clone();
             let t = self.match_scrutinee(&mut probe, scope)?;
             let arms: Vec<_> = varms.iter().zip(call.args[1..].iter())
                 .map(|(a, v)| (v.line(), v.col(), a.enum_name.clone(), a.ctor.clone(), a.binders.clone())).collect();
-            let uses: Vec<HashSet<String>> = call.args[1..].iter().map(|v| { let mut u = HashSet::new(); pat_names_expr(v, &mut u); u }).collect();
+            let uses: Vec<HashSet<String>> = call.args[1..].iter().zip(&tuples).map(|(v, tp)| {
+                let mut u = HashSet::new();
+                pat_names_expr(v, &mut u);
+                tp.iter().for_each(|(_, p)| pat_tuple_names(p, &mut u));
+                u
+            }).collect();
             // binders are renamed into the arm values below, so check them against the scope here, as a plain match does
-            for (l, c, _, _, bs) in &arms {
-                let mut names = HashSet::new();
-                bs.iter().for_each(|b| pat_slot_names(b, &mut names));
-                if let Some(b) = names.iter().find(|b| scope.contains_key(*b)) {
-                    return Err(terr(*l, *c, "shadow", format!("{} is already defined", b), "use a new name"));
+            for (((l, c, _, _, bs), tp), v) in arms.iter().zip(&tuples).zip(&call.args[1..]) {
+                let mut names = Vec::new();
+                for b in bs {
+                    match tp.iter().find(|(n, _)| n == b) {
+                        Some((_, p)) => tuple_pat_names(p, &mut names),
+                        None => {
+                            let mut h = HashSet::new();
+                            pat_slot_names(b, &mut h);
+                            let mut h: Vec<String> = h.into_iter().collect();
+                            h.sort();
+                            names.extend(h);
+                        }
+                    }
                 }
+                Self::fresh_binders(&names, scope, v, *l, *c)?;
             }
             let node = self.lower_patterns(&arms, &uses, true, &t, line, col)?;
             if let PNode::Leaf(..) = node {
@@ -6922,26 +6945,27 @@ impl Checker {
                     "use the value directly"));
             }
             if matches!(&node, PNode::Test(v, ..) if v.is_empty()) && !is_plain_place(&call.args[0]) {
-                // row VP: the chain tests the scrutinee once per arm, and a value position has no `let` to hold it
-                return Err(terr(line, col, "match_type",
-                    "literal arms of a value `match` test a local, a parameter or a field path rooted at one",
-                    "bind the value with a let first, or use a `match` statement"));
+                if t != i64t() && t != boolt() {
+                    // an `Option` of a narrow integer needs P11, so these still need a place
+                    return Err(terr(line, col, "match_type",
+                        format!("literal arms of a value `match` on {} test a local, a parameter or a field path rooted at one", tn(&t)),
+                        "bind the value with a let first, or use a `match` statement"));
+                }
+                // P9a-6c: the chain tests the scrutinee once per arm and a value position has no `let`, so the scalar
+                // is evaluated once into the binder of `match Some::<T>(e) { Some(k) => chain, None => last }`; the
+                // `None` arm is unreachable and reuses the last arm value (literal arms have no binders)
+                self.pat_tmp += 1;
+                let k = format!("pruv_pat{}", self.pat_tmp);
+                let chain = pat_value(&node, &pat_var(line, col, &k), &call.args[1..], &tuples, line, col)?;
+                let none = call.args.last().expect("value match arm").clone();
+                let some = Expr::Ctor(Ctor { line, col, name: "Some".to_string(), arg: Some(Box::new(call.args[0].clone())),
+                    ty: None, targs: Some(vec![t.clone()]), inst: None });
+                let arm = |c: &str, bs: Vec<String>| crate::ast::ValueArm { enum_name: None, ctor: c.to_string(), binders: bs, pats: Vec::new() };
+                *e = crate::ast::ValueMatch::expr(line, col, some, vec![(arm("Some", vec![k]), chain), (arm("None", Vec::new()), none)]);
+                return self.value_relowered(e, want, scope, c);
             }
-            *e = pat_value(&node, &call.args[0], &call.args[1..], line, col);
-            return match e {
-                Expr::Call(x) if crate::ast::ValueMatch::matches(x) => self.value_match(e, want, scope, c),
-                Expr::Call(x) if ValueIf::matches(x) => self.value_if(e, want, scope, c),
-                _ => match want {
-                    Some(w) => {
-                        let w = w.clone();
-                        self.static_lit = false;
-                        self.want_alloc(e, &w);
-                        self.expect(e, &w, scope, c, None)?;
-                        Ok(w)
-                    }
-                    None => self.expr(e, scope, c),
-                },
-            };
+            *e = pat_value(&node, &call.args[0], &call.args[1..], &tuples, line, col)?;
+            return self.value_relowered(e, want, scope, c);
         }
         self.static_lit = false;
         let mut m = crate::ast::ValueMatch::as_match(call);
@@ -7003,6 +7027,137 @@ impl Checker {
         }
         call.ty = Some(t.to_key());
         Ok(t)
+    }
+
+    /// P9a-6: the value a lowered value `match` became (a value `match`, a value `if` or an arm value), checked
+    /// as written there.
+    fn value_relowered(&mut self, e: &mut Expr, want: Option<&GType>, scope: &Scope, c: bool) -> Res<GType> {
+        match e {
+            Expr::Call(x) if crate::ast::ValueMatch::matches(x) => self.value_match(e, want, scope, c),
+            Expr::Call(x) if ValueIf::matches(x) => self.value_if(e, want, scope, c),
+            _ => match want {
+                Some(w) => {
+                    let w = w.clone();
+                    self.static_lit = false;
+                    self.want_alloc(e, &w);
+                    self.expect(e, &w, scope, c, None)?;
+                    Ok(w)
+                }
+                None => self.expr(e, scope, c),
+            },
+        }
+    }
+
+    /// P9a-6c: the names one arm of a value `match` binds are new (type/shadow on an outer name or a name bound
+    /// twice in the arm, as the lets of a statement arm would be).
+    fn fresh_binders(names: &[String], scope: &Scope, value: &Expr, line: i64, col: i64) -> Res<()> {
+        let mut seen = HashSet::new();
+        // the binders are substituted into the arm value before it is checked, so a nested value `match` that binds
+        // the same name would otherwise read the outer binder: it is a shadow, as in the statement form
+        let inner = nested_binders(value);
+        for b in names {
+            if scope.contains_key(b) || !seen.insert(b.as_str()) || inner.contains(b) {
+                return Err(terr(line, col, "shadow", format!("{} is already defined", b), "use a new name"));
+            }
+        }
+        Ok(())
+    }
+
+    /// P9a-6c: a value `match` of slice arms (R-6u-4) or of one top-level tuple arm (R-6u-1) over a place. A slice
+    /// match is the value `if` chain on `len(s)` of the statement form, each arm value reading its binders as
+    /// `s[i]` and its rest as `subview(s, k, len(s))`; a tuple arm reads its binders as component paths `t.0.1`.
+    fn value_place_match(&mut self, e: &mut Expr, want: Option<&GType>, scope: &Scope, c: bool) -> Res<GType> {
+        let Expr::Call(call) = e else { unreachable!("value match") };
+        let (line, col) = (call.line, call.col);
+        let varms = crate::ast::ValueMatch::arms(call);
+        let vals: Vec<Expr> = call.args[1..].to_vec();
+        let s = call.args[0].clone();
+        let tuple = varms.iter().any(|a| a.ctor == "()");
+        if tuple && varms.len() != 1 {
+            return Err(terr(line, col, "match_arms", "a tuple has one shape, so its match has exactly one arm",
+                "write one `(a, b) =>` arm"));
+        }
+        if let Some(k) = varms.iter().position(|a| slice_arm_shape(&a.ctor).is_none() && !tuple) {
+            return Err(terr(vals[k].line(), vals[k].col(), "match_type", "a match mixes slice patterns with other patterns",
+                "write every arm as a slice pattern"));
+        }
+        if !is_plain_place(&s) {
+            return Err(terr(line, col, "match_type",
+                format!("a {} pattern in a value `match` matches a local, a parameter or a field path rooted at one",
+                    if tuple { "tuple" } else { "slice" }),
+                "bind the value with a let first, or use a `match` statement"));
+        }
+        let mut probe = s.clone();
+        let t = self.match_scrutinee(&mut probe, scope)?;
+        let int = |v: usize| Expr::IntLit(IntLit { line, col, value: v.to_string(), ty: None, kind: LitKind::Int });
+        let call_of = |name: &str, args: Vec<Expr>| Expr::Call(Call { line, col, name: name.into(), args, ty: None,
+            targs: None, inst: None, old: None, opaque_c: false });
+        if tuple {
+            let a = &varms[0];
+            let Some(Some(TuplePat::Tuple(_, _, ps))) = a.pats.first() else {
+                return Err(terr(line, col, "match_arms", "a tuple arm is written (a, b) =>", ""));
+            };
+            let mut names = Vec::new();
+            ps.iter().for_each(|p| tuple_pat_names(p, &mut names));
+            Self::fresh_binders(&names, scope, &vals[0], vals[0].line(), vals[0].col())?;
+            let mut reads = Vec::new();
+            tuple_reads(&s, ps, &t, vals[0].line(), vals[0].col(), &mut reads)?;
+            let mut v = vals[0].clone();
+            reads.iter().for_each(|(n, r)| subst_var(&mut v, n, r));
+            *e = v;
+            return self.value_relowered(e, want, scope, c);
+        }
+        let fixed = t.fixed_parts().map(|(el, n)| (el.clone(), n));
+        // the coverage rules are those of the statement form: check them on the equivalent statement match
+        let m = Match { line, col, scrutinee: s.clone(), form: MatchForm::Match, els: Vec::new(),
+            arms: varms.iter().zip(&vals).map(|(a, v)| MatchArm { line: v.line(), col: v.col(), enum_name: None,
+                ctor: a.ctor.clone(), binders: a.binders.clone(), body: Vec::new(), pats: Vec::new(), pat_lets: 0 }).collect() };
+        match &fixed {
+            Some((el, n)) => { self.fixed_slice_match(&m, el.clone(), *n)?; }
+            None => { self.slice_match(&m, scope)?; }
+        }
+        let len = || call_of("len", vec![s.clone()]);
+        let arm_value = |a: &crate::ast::ValueArm, v: &Expr| -> Res<Expr> {
+            let mut names: Vec<String> = a.binders.iter().filter(|b| *b != "_").cloned().collect();
+            if let Some(Some(r)) = slice_arm_shape(&a.ctor).filter(|r| r.is_some_and(|n| !n.is_empty())) {
+                names.push(r.to_string());
+            }
+            Self::fresh_binders(&names, scope, v, v.line(), v.col())?;
+            let mut out = v.clone();
+            for (i, b) in a.binders.iter().enumerate() {
+                if b != "_" {
+                    let read = Expr::Index(Index { line: v.line(), col: v.col(), array: Box::new(s.clone()),
+                        index: Box::new(int(i)), ty: None });
+                    subst_var(&mut out, b, &read);
+                }
+            }
+            if let Some(Some(r)) = slice_arm_shape(&a.ctor).filter(|r| r.is_some_and(|n| !n.is_empty())) {
+                if let Some((l, c)) = rest_index_effect(&out, r) {
+                    return Err(terr(l, c, "match_type",
+                        format!("an index of the rest binder {} in a value `match` is read twice (bounds test and read), so it calls no function", r),
+                        "bind the index with a let first, or use a `match` statement"));
+                }
+                // the rest view: `len(rest)` and `rest[i]` read the place (as the statement form's `ref` local
+                // does), any other use is the view itself, a call argument (R-6g-11)
+                subst_rest(&mut out, r, &s, a.binders.len());
+                subst_var(&mut out, r, &call_of("subview", vec![s.clone(), int(a.binders.len()), len()]));
+            }
+            Ok(out)
+        };
+        if fixed.is_some() || varms.len() == 1 {
+            *e = arm_value(&varms[0], &vals[0])?;
+            return self.value_relowered(e, want, scope, c);
+        }
+        let last = varms.len() - 1;
+        let mut out = arm_value(&varms[last], &vals[last])?;
+        for (a, v) in varms[..last].iter().zip(&vals[..last]).rev() {
+            let op = if slice_arm_shape(&a.ctor).is_some_and(|r| r.is_some()) { ">=" } else { "==" };
+            let cond = Expr::Binary(Binary { line: v.line(), col: v.col(), op: op.into(), left: Box::new(len()),
+                right: Box::new(int(a.binders.len())), ty: None });
+            out = ValueIf::expr(line, col, cond, arm_value(a, v)?, out);
+        }
+        *e = out;
+        self.value_relowered(e, want, scope, c)
     }
 
     /// P9a-5: one arm value of the innermost value `match`, in the arm's scope.
@@ -9393,12 +9548,19 @@ fn pat_stmts(node: &PNode, scrut: &Expr, bodies: &[Vec<Stmt>], tuples: &[Vec<(St
 
 /// P9a-6: the value of a lowered value `match`: nested value matches and value `if`s; a leaf is its arm value
 /// with each renamed binder replaced by the value it names.
-fn pat_value(node: &PNode, scrut: &Expr, vals: &[Expr], line: i64, col: i64) -> Expr {
-    match node {
+fn pat_value(node: &PNode, scrut: &Expr, vals: &[Expr], tuples: &[Vec<(String, TuplePat)>], line: i64, col: i64)
+    -> Result<Expr, PruvError>
+{
+    Ok(match node {
         PNode::Leaf(k, binds) => {
             let mut e = vals[*k].clone();
-            for (n, v, _) in binds {
-                if n != v {
+            for (n, v, ty) in binds {
+                if let Some((_, TuplePat::Tuple(_, _, ps))) = tuples[*k].iter().find(|(t, _)| t == n) {
+                    // P9a-6c: a tuple pattern reads its components from the payload binder (scalars only)
+                    let mut reads = Vec::new();
+                    tuple_reads(&pat_var(e.line(), e.col(), v), ps, ty, e.line(), e.col(), &mut reads)?;
+                    reads.iter().for_each(|(n, r)| subst_var(&mut e, n, r));
+                } else if n != v {
                     rename_var(&mut e, n, v);
                 }
             }
@@ -9406,17 +9568,205 @@ fn pat_value(node: &PNode, scrut: &Expr, vals: &[Expr], line: i64, col: i64) -> 
         }
         PNode::Match(v, arms) => {
             let scrutinee = if v.is_empty() { scrut.clone() } else { pat_var(line, col, v) };
-            let arms = arms.iter().map(|(en, ctor, names, child)| (crate::ast::ValueArm {
-                enum_name: en.clone(), ctor: ctor.clone(), binders: names.clone() }, pat_value(child, scrut, vals, line, col))).collect();
-            crate::ast::ValueMatch::expr(line, col, scrutinee, arms)
+            let mut out = Vec::new();
+            for (en, ctor, names, child) in arms {
+                out.push((crate::ast::ValueArm { enum_name: en.clone(), ctor: ctor.clone(), binders: names.clone(), pats: Vec::new() },
+                    pat_value(child, scrut, vals, tuples, line, col)?));
+            }
+            crate::ast::ValueMatch::expr(line, col, scrutinee, out)
         }
         PNode::Test(v, lit, a, b) => {
             let tested = if v.is_empty() { scrut.clone() } else { pat_var(line, col, v) };
             let (cond, swap) = pat_cond(line, col, tested, lit);
-            let (a, b) = (pat_value(a, scrut, vals, line, col), pat_value(b, scrut, vals, line, col));
+            let (a, b) = (pat_value(a, scrut, vals, tuples, line, col)?, pat_value(b, scrut, vals, tuples, line, col)?);
             let (then, els) = if swap { (b, a) } else { (a, b) };
             ValueIf::expr(line, col, cond, then, els)
         }
+    })
+}
+
+/// P9a-6c: the names the nested value matches of an arm value bind (variant slots, tuple patterns, slice binders).
+fn nested_binders(e: &Expr) -> HashSet<String> {
+    let mut out = HashSet::new();
+    crate::foreign_shim::walk_expr(e, &mut |n| {
+        if let crate::foreign_shim::Node::Expr(Expr::Call(c)) = n {
+            if ValueMatch::matches(c) {
+                for a in ValueMatch::arms(c) {
+                    for (k, b) in a.binders.iter().enumerate() {
+                        match a.pats.get(k).and_then(|p| p.as_ref()) {
+                            Some(p) => pat_tuple_names(p, &mut out),
+                            None => pat_slot_names(b, &mut out),
+                        }
+                    }
+                    if let Some(Some(r)) = slice_arm_shape(&a.ctor) {
+                        if !r.is_empty() {
+                            out.insert(r.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    });
+    out
+}
+
+/// P9a-6c: the position of an index of `rest` that calls a function (it would run twice once guarded).
+fn rest_index_effect(e: &Expr, rest: &str) -> Option<(i64, i64)> {
+    let mut found = None;
+    crate::foreign_shim::walk_expr(e, &mut |n| {
+        if let crate::foreign_shim::Node::Expr(Expr::Index(x)) = n {
+            if found.is_none() && matches!(&*x.array, Expr::Var(v) if v.name == rest) {
+                crate::foreign_shim::walk_expr(&x.index, &mut |m| {
+                    if let crate::foreign_shim::Node::Expr(Expr::Call(c)) = m {
+                        // value `if`/`match` nodes are calls named `@..`; their own calls are visited as well
+                        if found.is_none() && c.name != "len" && !c.name.starts_with('@') {
+                            found = Some((c.line, c.col));
+                        }
+                    }
+                });
+            }
+        }
+    });
+    found
+}
+
+/// P9a-6c: the names a tuple pattern binds, in source order (repeats kept, so a caller can report them).
+fn tuple_pat_names(p: &TuplePat, out: &mut Vec<String>) {
+    match p {
+        TuplePat::Bind(_, _, n, _) => out.push(n.clone()),
+        TuplePat::Tuple(_, _, ps) => ps.iter().for_each(|q| tuple_pat_names(q, out)),
+        TuplePat::Wild => {}
+    }
+}
+
+/// P9a-6c: the component reads `base.i.j` a tuple pattern of a value `match` arm binds, with the checks of the
+/// statement form's `lower_arm_pat` (a tuple payload with as many components; scalar binders only).
+fn tuple_reads(base: &Expr, ps: &[TuplePat], g: &GType, line: i64, col: i64, out: &mut Vec<(String, Expr)>)
+    -> Result<(), PruvError>
+{
+    let comps = if g.args.is_empty() { crate::gtype::tuple_components(&g.name) } else { None };
+    let Some(comps) = comps else {
+        return Err(terr(line, col, "tuple_pattern_type", format!("a tuple pattern needs a tuple payload, found {}", tn(g)),
+            "bind the payload with a name"));
+    };
+    if comps.len() != ps.len() {
+        return Err(terr(line, col, "tuple_pattern_type",
+            format!("the pattern has {} components but {} has {}", ps.len(), tn(g), comps.len()),
+            "write one binder or `_` per component"));
+    }
+    for (i, (p, k)) in ps.iter().zip(comps.iter()).enumerate() {
+        let read = Expr::FieldAccess(FieldAccess { line, col, ty: None, field: i.to_string(), base: Box::new(base.clone()) });
+        let kg = GType::from_key(k);
+        let scalar = kg.args.is_empty() && (crate::intwidth::of(&kg.name).is_some() || kg.name == "bool");
+        match p {
+            TuplePat::Wild => {}
+            TuplePat::Bind(_, _, name, _) => {
+                if !scalar {
+                    return Err(terr(line, col, "tuple_pattern_owned",
+                        format!("the tuple pattern component {} has type {}; a match pattern binds only integer, bool \
+                                 and char components", name, tn(&kg)),
+                        "bind the whole tuple and destructure it with a let"));
+                }
+                out.push((name.clone(), read));
+            }
+            TuplePat::Tuple(_, _, inner) => tuple_reads(&read, inner, &kg, line, col, out)?,
+        }
+    }
+    Ok(())
+}
+
+/// P9a-6c: in a value slice arm, `len(rest)` is `len(s) - k` and `rest[i]` is `s[k + i]` for the rest view
+/// `rest @ ..` after `k` prefix elements of the place `s`.
+fn subst_rest(e: &mut Expr, rest: &str, s: &Expr, k: usize) {
+    let is_rest = |x: &Expr| matches!(x, Expr::Var(v) if v.name == rest);
+    let (line, col) = (e.line(), e.col());
+    let int = || Expr::IntLit(IntLit { line, col, value: k.to_string(), ty: None, kind: LitKind::Int });
+    match e {
+        Expr::Call(c) if c.name == "len" && c.args.len() == 1 && is_rest(&c.args[0]) => {
+            c.args[0] = s.clone();
+            let l = std::mem::replace(e, int());
+            *e = Expr::Binary(Binary { line, col, op: "-".into(), left: Box::new(l), right: Box::new(int()), ty: None });
+            return;
+        }
+        Expr::Index(x) if is_rest(&x.array) => {
+            // `rest[i]` is `if 0 <= i && i < len(s) - k { s[k + i] } else { s[len(s)] }`: the read is proved against
+            // the view's bounds (the else read is out of bounds, so it is proved unreachable or reported, and it
+            // stops at run time with --no-verify)
+            subst_rest(&mut x.index, rest, s, k);
+            let i = (*x.index).clone();
+            let bin = |op: &str, l: Expr, r: Expr| Expr::Binary(Binary { line, col, op: op.into(), left: Box::new(l), right: Box::new(r), ty: None });
+            let len = || Expr::Call(Call { line, col, name: "len".into(), args: vec![s.clone()], ty: None, targs: None,
+                inst: None, old: None, opaque_c: false });
+            let zero = Expr::IntLit(IntLit { line, col, value: "0".into(), ty: None, kind: LitKind::Int });
+            let cond = bin("&&", bin("<=", zero, i.clone()), bin("<", i.clone(), bin("-", len(), int())));
+            let read = Expr::Index(Index { line, col, array: Box::new(s.clone()), index: Box::new(bin("+", int(), i)), ty: None });
+            let oob = Expr::Index(Index { line, col, array: Box::new(s.clone()), index: Box::new(len()), ty: None });
+            *e = ValueIf::expr(line, col, cond, read, oob);
+            return;
+        }
+        _ => {}
+    }
+    match e {
+        Expr::InoutArg(x) => subst_rest(&mut x.expr, rest, s, k),
+        Expr::Unary(x) => subst_rest(&mut x.operand, rest, s, k),
+        Expr::Binary(x) => {
+            subst_rest(&mut x.left, rest, s, k);
+            subst_rest(&mut x.right, rest, s, k);
+        }
+        Expr::Index(x) => {
+            subst_rest(&mut x.array, rest, s, k);
+            subst_rest(&mut x.index, rest, s, k);
+        }
+        Expr::Ctor(x) => x.arg.iter_mut().for_each(|a| subst_rest(a, rest, s, k)),
+        Expr::Quant(x) => {
+            for q in [&mut x.lo, &mut x.hi, &mut x.body] {
+                subst_rest(q, rest, s, k);
+            }
+            x.triggers.iter_mut().for_each(|a| subst_rest(a, rest, s, k));
+        }
+        Expr::Call(x) => x.args.iter_mut().for_each(|a| subst_rest(a, rest, s, k)),
+        Expr::StructLit(x) => x.fields.iter_mut().for_each(|f| subst_rest(&mut f.value, rest, s, k)),
+        Expr::EnumCtor(x) => x.args.iter_mut().for_each(|a| subst_rest(a, rest, s, k)),
+        Expr::FieldAccess(x) => subst_rest(&mut x.base, rest, s, k),
+        Expr::IsVariant(x) => subst_rest(&mut x.value, rest, s, k),
+        Expr::VariantField(x) => subst_rest(&mut x.value, rest, s, k),
+        _ => {}
+    }
+}
+
+/// P9a-6c: replaces the variable `from` (a read or a bare `move`) by the expression `to` (binder names are never
+/// shadowed: type/shadow).
+fn subst_var(e: &mut Expr, from: &str, to: &Expr) {
+    match e {
+        Expr::Var(x) if x.name == from => { *e = to.clone(); return; }
+        Expr::Move(x) if x.name == from && x.fields.is_empty() => { *e = to.clone(); return; }
+        _ => {}
+    }
+    match e {
+        Expr::InoutArg(x) => subst_var(&mut x.expr, from, to),
+        Expr::Unary(x) => subst_var(&mut x.operand, from, to),
+        Expr::Binary(x) => {
+            subst_var(&mut x.left, from, to);
+            subst_var(&mut x.right, from, to);
+        }
+        Expr::Index(x) => {
+            subst_var(&mut x.array, from, to);
+            subst_var(&mut x.index, from, to);
+        }
+        Expr::Ctor(x) => x.arg.iter_mut().for_each(|a| subst_var(a, from, to)),
+        Expr::Quant(x) => {
+            for k in [&mut x.lo, &mut x.hi, &mut x.body] {
+                subst_var(k, from, to);
+            }
+            x.triggers.iter_mut().for_each(|a| subst_var(a, from, to));
+        }
+        Expr::Call(x) => x.args.iter_mut().for_each(|a| subst_var(a, from, to)),
+        Expr::StructLit(x) => x.fields.iter_mut().for_each(|f| subst_var(&mut f.value, from, to)),
+        Expr::EnumCtor(x) => x.args.iter_mut().for_each(|a| subst_var(a, from, to)),
+        Expr::FieldAccess(x) => subst_var(&mut x.base, from, to),
+        Expr::IsVariant(x) => subst_var(&mut x.value, from, to),
+        Expr::VariantField(x) => subst_var(&mut x.value, from, to),
+        _ => {}
     }
 }
 

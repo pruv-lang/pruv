@@ -3414,8 +3414,8 @@ impl Parser {
         Ok(crate::ast::ValueIf::expr(t.line, t.col, cond, then, els))
     }
 
-    /// P9a-5: `match v { P => e, P => { e } .. }` as a value; the patterns are variants and `Some`/`None`/`Ok`/`Err`
-    /// with plain binders (a tuple or slice pattern is `parse/value_match_pattern`, queued as P9a-6).
+    /// P9a-5: `match v { P => e, P => { e } .. }` as a value; the patterns are those of a statement `match`
+    /// (P9a-6c: tuple and slice patterns too).
     fn value_match(&mut self) -> R<Expr> {
         self.enter(1)?;
         let t = self.next();
@@ -3423,18 +3423,19 @@ impl Parser {
         self.expect("{")?;
         let mut arms = Vec::new();
         while !self.at("}", 0) {
-            let pt = self.peek(0).clone();
-            if self.at("(", 0) || self.at("[", 0) {
-                return Err(PruvError::new("parse", pt.line, pt.col, "value_match_pattern",
-                    "a tuple or slice pattern in a value `match` is not supported yet",
-                    "use a `match` statement that assigns a `let mut` local"));
-            }
-            let arm = self.arm_pattern()?;
-            if !arm.pats.is_empty() {
-                return Err(PruvError::new("parse", pt.line, pt.col, "value_match_pattern",
-                    "a tuple pattern in a value `match` arm is not supported yet",
-                    "bind the tuple to a name and read its fields"));
-            }
+            // P9a-6c: tuple arms `(a, b) =>`, slice arms `[x, rest @ ..] =>` and tuple sub-patterns `Some((a, b))`
+            // as in a statement `match`; the checker lowers them to component and element reads in the arm value
+            let arm = if self.at("(", 0) {
+                let ct = self.peek(0).clone();
+                let (mut binders, mut pats) = (Vec::new(), Vec::new());
+                self.arm_binder(&mut binders, &mut pats)?;
+                MatchArm { line: ct.line, col: ct.col, enum_name: None, ctor: "()".to_string(), binders,
+                    body: Vec::new(), pats, pat_lets: 0 }
+            } else if self.at("[", 0) {
+                self.slice_arm()?
+            } else {
+                self.arm_pattern()?
+            };
             self.expect("=>")?;
             let e = if self.at("{", 0) {
                 self.value_arm_of("match")?
@@ -3450,7 +3451,7 @@ impl Parser {
             if self.at(",", 0) {
                 self.bump();
             }
-            let va = crate::ast::ValueArm { enum_name: arm.enum_name, ctor: arm.ctor, binders: arm.binders };
+            let va = crate::ast::ValueArm { enum_name: arm.enum_name, ctor: arm.ctor, binders: arm.binders, pats: arm.pats };
             arms.push((va, e));
         }
         self.expect("}")?;

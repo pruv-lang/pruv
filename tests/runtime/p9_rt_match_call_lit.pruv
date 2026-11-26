@@ -1,0 +1,25 @@
+// P9a-6c: literal arms of a value `match` on a call result (R-6u-8): the call runs once, its value is bound through
+// `match Some::<T>(e) { Some(k) => chain, .. }`, and the arms are tried in order.
+fn g(k: i64) -> i64
+  requires k >= 0 && k <= 100
+  ensures result == k + 1
+{ return k + 1; }
+fn b(k: i64) -> bool { return k > 0; }
+fn w(k: u8) -> u8 { return k; }
+
+fn f(k: i64) -> i64
+  requires k >= 0 && k <= 10
+  ensures k == 0 ==> result == 10
+{
+  return match g(k) { 1 => 10, 2 => 20, _ => 30 };
+}
+fn h(k: i64) -> i64 {
+  return match b(k) { true => 1, false => 0 };
+}
+fn run() -> () ! io {
+  print(f(0));
+  print(f(1));
+  print(f(5));
+  print(h(3));
+  print(h(-3));
+}

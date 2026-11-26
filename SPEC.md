@@ -2875,11 +2875,14 @@ variants (R-6u-5).
   and the scrutinee). The checker lowers the match to one `if k == l1 { .. } else if k == l2 { .. } else { .. }`
   chain, so the verifier follows one path per arm (not two per arm, as separate `if` statements would) and each arm
   is proved under the failure of the arms above it. The scrutinee is evaluated once: a statement `match` over an
-  expression that is not a place binds it to a fresh local first; the literal arms of a value `match` test a local, a
-  parameter or a field path rooted at one (`type/match_type`; bind the value with `let` first). A literal top arm in
+  expression that is not a place binds it to a fresh local first; a value `match` over an `i64` or `bool` expression
+  that is not a place evaluates it once into the binder of `match Some(e) { Some(k) => <chain>, None => <last arm> }`
+  (P9a-6c; the `None` arm is unreachable), and over a narrower integer its literal arms test a local, a parameter or
+  a field path rooted at one (`type/match_type`; bind the value with `let` first, as an `Option<u8>` needs P11). A literal top arm in
   `if let`, `let else` or `while let` is `parse/let_pattern`. Tests: [accept](tests/spec/p9_int_match_accept.pruv),
   [reject](tests/spec/p9_int_match_reject.pruv), [runtime](tests/runtime/p9_rt_int_match.pruv),
-  [value call](tests/must_reject/p9_int_match_value_call.pruv), [if let](tests/must_reject/p9_int_match_if_let.pruv),
+  [value call](tests/must_reject/p9_int_match_value_call.pruv), [value call accept](tests/spec/p9_int_match_value_call_accept.pruv),
+  [value call runtime](tests/runtime/p9_rt_match_call_lit.pruv), [if let](tests/must_reject/p9_int_match_if_let.pruv),
   [let else](tests/must_reject/p9_int_match_let_else.pruv), [bool partial](tests/must_reject/p9_int_match_bool_partial.pruv),
   [on an Option](tests/must_reject/p9_int_match_option.pruv),
   [bool on an integer](tests/must_reject/p9_int_match_bool_on_int.pruv),
@@ -2970,8 +2973,16 @@ return match s { Shape::Circle(r) => { 3 * r * r }, Shape::Empty => 0 };
   `Err(e)`, `E::V(a, b)`, `E::W`, 6a, with the `_`, literal and nested patterns of R-6u-6), or a literal arm on an
   integer or `bool` (R-6u-8); the arms cover every case
   (`type/match_arms`, also for a value `match` with no arms). An arm value is a block
-  holding exactly one expression, or a bare expression followed by `,` or the closing `}` (`parse/syntax`). A tuple
-  or slice pattern in a value `match` is `parse/value_match_pattern` (parity row P9a-6; use a `match` statement).
+  holding exactly one expression, or a bare expression followed by `,` or the closing `}` (`parse/syntax`). Tuple
+  patterns (R-6u-1: `Some((a, b))`, nested `Ok((a, (c, _)))`, `E::V((_, h))`, or one top `(a, b) =>` arm over a
+  tuple) and slice arms (R-6u-4 and R-6t-4 on a fixed array) are accepted with the statement rules and codes; each
+  binder reads its component or element, a slice arm is a length test tried in order (each read is proved under its
+  arm's test), and a named rest is read by `len(rest)`, `rest[i]` (proved against the rest view, `0 <= i <
+  len(rest)`; an index that calls a function is `type/match_type`, as it is read by the test and the read) and as an
+  array argument. A binder that a nested value `match` in its arm binds again is `type/shadow`. A slice or tuple-arm
+  scrutinee is a place: a local, a parameter or a field path rooted at one (`type/match_type`; bind a call result
+  with a `let`), so a nested value `match` on a rest binder is `type/match_type` too (use a `match` statement). A
+  tuple pattern inside a nested variant pattern (`Some(Ok((a, b)))`) is `parse/value_match_pattern`, in both forms.
   A binder names the payload in its arm only (`type/unknown_name` elsewhere). Evaluation order: `v` once, then only
   the chosen arm; operands to the left run before `v`, operands to the right after the arm. A `match` at the start
   of a statement stays the statement form.
@@ -2990,7 +3001,8 @@ return match s { Shape::Circle(r) => { 3 * r * r }, Shape::Empty => 0 };
   maybe-moved after the `match` (`type/foreign_move`), and an `inout` call in an arm is `type/inout_context`.
 - R-6w-8 **Code.** Rust prints its own value `match` (`(match v { P1 => { e1 }, .. })`, patterns as the statement
   form prints them, the arm enum named as the lowered enum of a generic or module type), so a proved index in an arm
-  stays an unchecked read. LLVM lowers the statement `match` whose arms store their value into an entry-block result
+  stays an unchecked read. Tuple binders print as component reads of the payload binder (`pruv_tup_d0.1`) and slice
+  arms as a length `if` chain with unchecked element reads (parity row P9a-7). LLVM lowers the statement `match` whose arms store their value into an entry-block result
   slot; each arm's temporaries end inside the arm, an owned result read in place is a statement temporary, and no
   arm takes the buffer of an outer local at its apparent last use (the rest of the enclosing statement may still read
   it). Tests: [values](tests/runtime/p9_rt_match_value.pruv), [no take in an arm](tests/runtime/p9_rt_match_take.pruv),
@@ -3571,7 +3583,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/string_unterminated` | parse | a string literal without its closing quote |
 | `parse/syntax` | parse | any other syntax error |
 | `parse/unknown_attribute` | parse | an attribute other than `#[cold]`, `#[inline]` or `#[inline(always)]` |
-| `parse/value_match_pattern` | parse | a tuple or slice pattern in a value `match` (R-6w-5) |
+| `parse/value_match_pattern` | parse | a tuple pattern inside a nested variant pattern (`Some(Ok((a, b)))`), in a statement or value `match` (R-6w-5) |
 | `parse/tuple_arity` | parse | a tuple type with fewer than 2 or more than 8 components (R-6s-1) |
 | `parse/tuple_component` | parse | `()` as a tuple component (R-6s-1) |
 | `parse/tuple_generic` | parse | a tuple type inside a generic declaration (R-6s-5) |
@@ -3658,7 +3670,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/loop_label_unknown` | type | a `break`/`continue` label that no enclosing loop has (R-6r-2) |
 | `type/match_arity` | type | a match arm binds the wrong number of fields |
 | `type/match_arms` | type | match arms that are missing or repeated; a slice length no arm takes or a slice arm earlier arms cover (R-6u-4); a case no pattern arm takes (R-6u-6) |
-| `type/match_type` | type | a match on a value that is not Option, Result or an enum (or an array place with slice arms); slice arms on a target that is not an array place, or mixed with other arms (R-6u-4); literal arms of a value `match` on a scrutinee that is not a place (R-6u-8) |
+| `type/match_type` | type | a match on a value that is not Option, Result or an enum (or an array place with slice arms); slice arms on a target that is not an array place, or mixed with other arms (R-6u-4); literal arms of a value `match` on a narrow-integer scrutinee that is not a place (R-6u-8); slice arms or a top tuple arm of a value `match` on a scrutinee that is not a place (R-6w-5) |
 | `type/method_name_clash` | type | an impl function named like a variant of its enum (R-6x-1) |
 | `type/method_receiver` | type | a method call whose receiver has no known static type, or an `inout self` method on a receiver that is not a place (R-6x-3) |
 | `type/missing_return` | type | a function may reach its end without returning |

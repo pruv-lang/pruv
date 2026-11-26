@@ -1,0 +1,4 @@
+// P9a-6c audit: an inner arm that binds the name of an outer tuple binder is a shadow (it would read the outer value).
+fn f(t: (i64, i64), o: Option<i64>) -> i64 {
+  return match t { (a, b) => match o { Some(a) => a, None => b } };
+}

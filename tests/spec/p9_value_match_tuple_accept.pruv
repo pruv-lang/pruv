@@ -1,0 +1,29 @@
+// spec: R-6w-5 accept
+// Tuple patterns in a value `match`: a payload tuple, a nested tuple binder, a tuple in an enum field and a lone top
+// tuple arm; each binder reads its component, and the reads feed the proof (the ensures follows from the bounds).
+enum Shape { Rect(wh: (i64, i64)), Dot }
+
+fn area(o: Option<(i64, i64)>) -> i64
+  requires is_some(o) ==> (some_val(o).0 >= 0 && some_val(o).0 <= 1000 && some_val(o).1 >= 0 && some_val(o).1 <= 1000)
+  ensures result >= -1
+{
+  return match o { Some((w, h)) => w * h, None => -1 };
+}
+
+fn nested(r: Result<(i64, (bool, i64)), i64>) -> i64
+  requires is_ok(r) ==> (ok_val(r).0 >= 0 && ok_val(r).0 <= 1000 && ok_val(r).1.1 >= 0 && ok_val(r).1.1 <= 1000)
+  ensures result >= 0
+{
+  return match r { Ok((a, (c, b))) => if c { a } else { a + b }, Err(_) => 0 };
+}
+
+fn tall(s: Shape) -> i64 {
+  return match s { Shape::Rect((_, h)) => h, Shape::Dot => 0 };
+}
+
+fn pair(t: (i64, i64)) -> i64
+  requires t.0 >= 0 && t.0 <= 9 && t.1 >= 0 && t.1 <= 9
+  ensures result >= 0 && result <= 99
+{
+  return match t { (a, b) => a * 10 + b };
+}

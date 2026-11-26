@@ -1,0 +1,4 @@
+// P9a-6c audit: an inner tuple pattern that rebinds an outer payload tuple binder is a shadow.
+fn f(o: Option<(i64, i64)>, p: Option<(i64, i64)>) -> i64 {
+  return match o { Some((a, b)) => match p { Some((b, c)) => b, None => b }, None => -1 };
+}

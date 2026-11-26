@@ -1569,7 +1569,8 @@ must_reject|must_reject/p9_int_match_let_else.pruv	2 cases: exit 2	llvm=8a4e9ad6
 must_reject|must_reject/p9_int_match_option.pruv	2 cases: exit 2	llvm=bd90cff34f62	rust=bd90cff34f62
 must_reject|must_reject/p9_int_match_repeat.pruv	2 cases: exit 2	llvm=cd3d4965b3e0	rust=cd3d4965b3e0
 must_reject|must_reject/p9_int_match_u8_range.pruv	2 cases: exit 2	llvm=c209998126dc	rust=c209998126dc
-must_reject|must_reject/p9_int_match_value_call.pruv	2 cases: exit 2	llvm=50ee4d74b770	rust=50ee4d74b770
+must_reject|must_reject/p9_int_match_value_call.pruv	2 cases: exit 2	llvm=092d59485165	rust=092d59485165
+must_reject|must_reject/p9_int_match_value_call_ensures.pruv	2 cases: exit 2	llvm=ce320182be3f	rust=ce320182be3f
 must_reject|must_reject/p9_match_arm_comma.pruv	2 cases: exit 2	llvm=daa6bc67aead	rust=daa6bc67aead
 must_reject|must_reject/p9_match_arm_index.pruv	2 cases: exit 2	llvm=11421075346c	rust=11421075346c
 must_reject|must_reject/p9_match_arm_inout.pruv	2 cases: exit 2	llvm=ed8542bd6547	rust=ed8542bd6547
@@ -1580,7 +1581,7 @@ must_reject|must_reject/p9_match_duplicate.pruv	2 cases: exit 2	llvm=3d9bff1617e
 must_reject|must_reject/p9_match_false_ensures.pruv	2 cases: exit 2	llvm=bbf73ebc6f00	rust=bbf73ebc6f00
 must_reject|must_reject/p9_match_missing.pruv	2 cases: exit 2	llvm=2389936674f8	rust=2389936674f8
 must_reject|must_reject/p9_match_owned_borrow.pruv	2 cases: exit 2	llvm=f1894cca8979	rust=f1894cca8979
-must_reject|must_reject/p9_match_pattern.pruv	2 cases: exit 2	llvm=fe69e1921022	rust=fe69e1921022
+must_reject|must_reject/p9_match_pattern.pruv	2 cases: exit 2	llvm=bc7affdade2b	rust=bc7affdade2b
 must_reject|must_reject/p9_match_types.pruv	2 cases: exit 2	llvm=6a6cc0b3d26b	rust=6a6cc0b3d26b
 must_reject|must_reject/p9_pattern_arity.pruv	2 cases: exit 2	llvm=0584de8b8383	rust=0584de8b8383
 must_reject|must_reject/p9_pattern_arm_index.pruv	2 cases: exit 2	llvm=16f9c3151984	rust=16f9c3151984
@@ -1596,6 +1597,24 @@ must_reject|must_reject/p9_pattern_unreachable_wild.pruv	2 cases: exit 2	llvm=65
 must_reject|must_reject/p9_pattern_variant_type.pruv	2 cases: exit 2	llvm=f94502a08672	rust=f94502a08672
 must_reject|must_reject/p9_pattern_wild_requires.pruv	2 cases: exit 2	llvm=1bc1fb656f55	rust=1bc1fb656f55
 must_reject|must_reject/p9_value_match_empty.pruv	2 cases: exit 2	llvm=b9082d9e1005	rust=b9082d9e1005
+must_reject|must_reject/p9_vmatch_fixed_ensures.pruv	2 cases: exit 2	llvm=bbf73ebc6f00	rust=bbf73ebc6f00
+must_reject|must_reject/p9_vmatch_nested_shadow_payload.pruv	2 cases: exit 2	llvm=a098054ac44c	rust=a098054ac44c
+must_reject|must_reject/p9_vmatch_nested_shadow_rest.pruv	2 cases: exit 2	llvm=b1b1a0399f58	rust=b1b1a0399f58
+must_reject|must_reject/p9_vmatch_nested_shadow_slice.pruv	2 cases: exit 2	llvm=43861c073be1	rust=43861c073be1
+must_reject|must_reject/p9_vmatch_nested_shadow_tuple.pruv	2 cases: exit 2	llvm=fa1411c50723	rust=fa1411c50723
+must_reject|must_reject/p9_vmatch_rest_index_call.pruv	2 cases: exit 2	llvm=271ed1c11324	rust=271ed1c11324
+must_reject|must_reject/p9_vmatch_rest_negative.pruv	2 cases: exit 2	llvm=fa49eabe26a5	rust=fa49eabe26a5
+must_reject|must_reject/p9_vmatch_rest_oob.pruv	2 cases: exit 2	llvm=9ad06a6580b7	rust=9ad06a6580b7
+must_reject|must_reject/p9_vmatch_slice_cover.pruv	2 cases: exit 2	llvm=815d7150da0a	rust=815d7150da0a
+must_reject|must_reject/p9_vmatch_slice_ensures.pruv	2 cases: exit 2	llvm=021b02c9399b	rust=021b02c9399b
+must_reject|must_reject/p9_vmatch_slice_mixed.pruv	2 cases: exit 2	llvm=9c27c5b2c84d	rust=9c27c5b2c84d
+must_reject|must_reject/p9_vmatch_slice_oob.pruv	2 cases: exit 2	llvm=bd3b50a0dd36	rust=bd3b50a0dd36
+must_reject|must_reject/p9_vmatch_slice_place.pruv	2 cases: exit 2	llvm=1faa5eb43604	rust=1faa5eb43604
+must_reject|must_reject/p9_vmatch_tuple_arity.pruv	2 cases: exit 2	llvm=817634894ef8	rust=817634894ef8
+must_reject|must_reject/p9_vmatch_tuple_arms.pruv	2 cases: exit 2	llvm=769847b7bd5a	rust=769847b7bd5a
+must_reject|must_reject/p9_vmatch_tuple_owned.pruv	2 cases: exit 2	llvm=ffa07a6ad338	rust=ffa07a6ad338
+must_reject|must_reject/p9_vmatch_tuple_repeat.pruv	2 cases: exit 2	llvm=a6b925a0940a	rust=a6b925a0940a
+must_reject|must_reject/p9_vmatch_tuple_shadow.pruv	2 cases: exit 2	llvm=54dac2af7452	rust=54dac2af7452
 must_reject|must_reject/p9b_call_requires.pruv	2 cases: exit 2	llvm=9a6d17225d72	rust=9a6d17225d72
 must_reject|must_reject/p9b_false_ensures.pruv	2 cases: exit 2	llvm=93d55cbda7f8	rust=93d55cbda7f8
 must_reject|must_reject/p9b_take_use.pruv	2 cases: exit 2	llvm=47303e2e629b	rust=47303e2e629b
@@ -2910,6 +2929,8 @@ runtime|runtime/p9_rt_int_match [--no-verify]	2 cases: exit 2	llvm=33e3221824b1	
 runtime|runtime/p9_rt_int_match [default]	2 cases: exit 2	llvm=d3e5cb3deffd	rust=2a7c967e6c49
 runtime|runtime/p9_rt_match_bare [--no-verify]	2 cases: exit 2	llvm=8f444533f45d	rust=e51a40220cf8
 runtime|runtime/p9_rt_match_bare [default]	2 cases: exit 2	llvm=81ae9a44133d	rust=d40ef3e5e4fa
+runtime|runtime/p9_rt_match_call_lit [--no-verify]	2 cases: exit 2	llvm=def18e5e651e	rust=dde95743a350
+runtime|runtime/p9_rt_match_call_lit [default]	2 cases: exit 2	llvm=7047f473d52a	rust=c4b708f39565
 runtime|runtime/p9_rt_match_generic [--no-verify]	2 cases: exit 2	llvm=2b1045bc51bf	rust=a6e3075bbf09
 runtime|runtime/p9_rt_match_generic [default]	2 cases: exit 2	llvm=de726140ee85	rust=a4fc02040952
 runtime|runtime/p9_rt_match_order [--no-verify]	2 cases: exit 2	llvm=7c3a8e12b8bc	rust=ac79985b0c3b
@@ -2918,6 +2939,8 @@ runtime|runtime/p9_rt_match_owned [--no-verify]	2 cases: exit 2	llvm=e5eea318cbb
 runtime|runtime/p9_rt_match_owned [default]	2 cases: exit 2	llvm=cb3afd82e988	rust=495f59a9b995
 runtime|runtime/p9_rt_match_take [--no-verify]	2 cases: exit 2	llvm=e1aeb78d37cd	rust=69e01962cdbc
 runtime|runtime/p9_rt_match_take [default]	2 cases: exit 2	llvm=6703e438c4aa	rust=a3384d89d482
+runtime|runtime/p9_rt_match_tuple_slice [--no-verify]	2 cases: exit 2	llvm=ea8ad0128e80	rust=f34b2d35ad28
+runtime|runtime/p9_rt_match_tuple_slice [default]	2 cases: exit 2	llvm=1071424b300e	rust=9558a3575df5
 runtime|runtime/p9_rt_match_unchecked [default]	2 cases: exit 2	llvm=e5b2c25010a1	rust=9b9b4bbfacb4
 runtime|runtime/p9_rt_match_value [--no-verify]	2 cases: exit 2	llvm=6c442e0ba031	rust=f362b942a3c5
 runtime|runtime/p9_rt_match_value [default]	2 cases: exit 2	llvm=2c99b34c459a	rust=26395e2a772f

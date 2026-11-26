@@ -1,0 +1,5 @@
+enum E { A(p: (i64, String)), B }
+
+fn f(e: E) -> i64 ! alloc {
+  return match e { E::A((a, s)) => a, E::B => 0 };
+}

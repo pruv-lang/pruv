@@ -1,5 +1,6 @@
-// P9a-6 (R-6u-8): literal arms of a value `match` test a place; a call scrutinee is bound with `let` first.
-fn g(k: i64) -> i64 { return k; }
-fn f(k: i64) -> i64 {
+// P9a-6 (R-6u-8): literal arms of a value `match` on a narrow integer test a place (an `Option<u8>` needs P11); a
+// call scrutinee is bound with `let` first. An `i64` or `bool` call scrutinee is accepted (P9a-6c).
+fn g(k: u8) -> u8 { return k; }
+fn f(k: u8) -> i64 {
   return match g(k) { 0 => 1, _ => 2 };
 }
