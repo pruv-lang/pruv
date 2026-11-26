@@ -43,26 +43,20 @@ pub fn item_text(d: crate::json::JsonDocument, it: i64) -> str ! alloc
   if crate::access::kind(d, c) != 5 { return copy(none); }
   let ids: [i64] = crate::util::elements(d, c);
   let n: i64 = len(ids);
+  // the joined parts; a part that is not an object has no `text` field. The length guard only bounds the proof.
   let mut out: String = string_new();
-  let mut first: bool = true;
-  let mut total: i64 = 0;
   let mut k: i64 = 0;
-  while k < n && total <= 60000000
-    invariant 0 <= k && k <= n && n == len(ids) && 0 <= total && total <= 120000000 && len(out) <= total
+  while k < n && len(out) <= 60000000
+    invariant 0 <= k && k <= n && n == len(ids) && len(out) <= 120000000
     decreases n - k
   {
-    let part: i64 = ids[k];
+    let pt: i64 = crate::util::field(d, ids[k], "text");
     k = k + 1;
-    if crate::access::kind(d, part) == 6 {
-      let pt: i64 = crate::util::field(d, part, "text");
-      if crate::access::kind(d, pt) == 4 {
-        let x: str = crate::util::str_at(d, pt);
-        if len(x) > 0 {
-          if !first { out = string_push_str(move out, "\n\n"); }
-          out = string_push_str(move out, x);
-          first = false;
-          total = total + len(x) + 2;
-        }
+    if crate::access::kind(d, pt) == 4 {
+      let x: str = crate::util::str_at(d, pt);
+      if len(x) > 0 {
+        if len(out) > 0 { out = string_push_str(move out, "\n\n"); }
+        out = string_push_str(move out, x);
       }
     }
   }

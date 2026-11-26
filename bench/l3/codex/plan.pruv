@@ -42,14 +42,14 @@ fn clip_units(s: str, max: i64) -> i64
   return n;
 }
 
-// Index just after a leading list marker ("-", "*" or digits followed by ".") that is followed by whitespace, else -1.
+// Index just after a leading list marker ("-", "*" or digits followed by ".") that is followed by whitespace, else 0.
 fn marker_end(t: str) -> i64
-  ensures result == -1 || (1 <= result && result <= len(t))
+  ensures 0 <= result && result <= len(t)
 {
   let n: i64 = len(t);
-  if n == 0 { return -1; }
+  if n == 0 { return 0; }
   let c: i64 = t[0];
-  let mut m: i64 = -1;
+  let mut m: i64 = 0;
   if c == 45 || c == 42 { m = 1; }
   else if c >= 48 && c <= 57 {
     let mut j: i64 = 1;
@@ -61,9 +61,7 @@ fn marker_end(t: str) -> i64
     }
     if j < n && t[j] == 46 { m = j + 1; }
   }
-  if m < 0 { return -1; }
-  if m > n { return -1; }
-  if crate::text::space_len(t, m) == 0 { return -1; }
+  if m == 0 || crate::text::space_len(t, m) == 0 { return 0; }
   return m;
 }
 
@@ -80,11 +78,7 @@ fn take_segment(text: str, lo: i64, hi: i64, inout pl: [i64], inout pb: [u8]) ->
   let t: ref str = crate::text::trim(subview(text, lo, hi));
   let m: i64 = marker_end(t);
   let mut start: i64 = 0;
-  if m >= 0 {
-    if is_char_boundary(t, m) && is_char_boundary(t, len(t)) {
-      start = m;
-    }
-  }
+  if is_char_boundary(t, m) && is_char_boundary(t, len(t)) { start = m; }
   let u: ref str = crate::text::trim(subview(t, start, len(t)));
   if len(u) == 0 { return; }
   let k: i64 = clip_units(u, 200);

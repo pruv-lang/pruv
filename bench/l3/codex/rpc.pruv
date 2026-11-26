@@ -27,8 +27,7 @@ fn child_args(argv: str, sp: [i64]) -> ProcessArgs ! alloc
     let lo: i64 = sp[2 + 2 * k];
     let hi: i64 = sp[3 + 2 * k];
     if lo < 0 || hi < lo || hi > len(argv) || !is_char_boundary(argv, lo) || !is_char_boundary(argv, hi) { return move a; }
-    let piece: str = substr(argv, lo, hi);
-    a = proc_args_push(move a, piece);
+    a = proc_args_push(move a, subview(argv, lo, hi));
     k = k + 1;
   }
   return move a;
@@ -72,17 +71,15 @@ pub fn start(binary: str, argv: str, cwd: str, timeout_ms: i64, inout ctl: Ctl) 
   return move l;
 }
 
-// trim the line, parse it as JSON (P1: invalid UTF-8 is a parse failure and the line is skipped).
-// DB59 (G-DB58-1): line.data stays with the caller and is reused for the next line (its size stays at the longest
-// line so far, as hand's cleared `self.line`); the document copies out only the trimmed line, once.
-pub fn parse_line(inout line: crate::util::ByteBuffer, n: i64, st: crate::transport::Reader) -> crate::json::JsonParse ! alloc
-  requires 0 <= n && n <= len(line.data) && len(line.data) <= 8388608
-  requires 0 <= st.filled && st.filled <= len(line.data)
-  ensures len(line.data) <= 8388608 && st.filled <= len(line.data)
+// trim the line line[0..n), parse it as JSON (P1: invalid UTF-8 is a parse failure and the line is skipped).
+// DB59 (G-DB58-1): the line buffer stays with the caller and is reused for the next line (its size stays at the
+// longest line so far, as hand's cleared `self.line`); the document copies out only the trimmed line, once.
+pub fn parse_line(line: [u8], n: i64) -> crate::json::JsonParse ! alloc
+  requires 0 <= n && n <= len(line)
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
 {
-  let t: crate::util::Bounds = crate::util::trim_span(line.data, n);
-  return crate::lines::parse_copy(line.data, t.lo, t.hi);
+  let t: crate::util::Bounds = crate::util::trim_span(line, n);
+  return crate::lines::parse_copy(line, t.lo, t.hi);
 }
 
 // The shared transport requires a full-sized line buffer. Keep its polling and event order
@@ -182,21 +179,33 @@ pub fn step(take l: Loop, slot: i64, overall: i64, inout ctl: Ctl, inout st: cra
   return move q;
 }
 
-// What a parsed line is to a caller waiting for request `id`: 1 a server request (answer it with not_handled), 2 the
-// response to `id`, 0 anything to ignore (notifications, garbage, other ids, id tokens that are not exactly the decimal id).
-pub fn kind_of(d: crate::json::JsonDocument, id: i64) -> i64 ! alloc
+// hand Rpc::send on a closed stdin: the request fails at once (timeout past the deadline, else read-failed) and is
+// neither built nor sent. Otherwise the loop is returned untouched.
+pub fn closed(take l: Loop, slot: i64, overall: i64, inout ctl: Ctl, inout st: crate::transport::Reader) -> Loop ! async, alloc
+  ensures ctl.n == old(ctl).n
+  ensures st.filled == old(st).filled && st.at == old(st).at && st.end == old(st).end
+{
+  if !crate::transport::stdin_closed(l, slot) { return move l; }
+  let q: Loop = crate::transport::expired(move l, overall, inout st);
+  if st.status == -1 { ctl.fail = 5; } else { ctl.fail = 6; }
+  return move q;
+}
+
+// What a parsed line is to a caller waiting for request `id`: Server a server request (answer it with not_handled),
+// Response the response to `id`, Ignore anything else (notifications, garbage, other ids, id tokens that are not
+// exactly the decimal id).
+pub enum Kind { Ignore, Server, Response }
+
+pub fn kind_of(d: crate::json::JsonDocument, id: i64) -> Kind ! alloc
   requires 1 <= id && id <= 99
 {
-  if crate::access::kind(d, 0) != 6 { return 0; }
+  if crate::access::kind(d, 0) != 6 { return Kind::Ignore; }
   let mid: i64 = crate::util::field(d, 0, "id");
-  let method: i64 = crate::util::field(d, 0, "method");
-  if mid >= 0 && crate::access::kind(d, method) == 4 { return 1; }
-  if mid >= 0 {
-    let number: crate::access::Number = crate::access::number(d, mid);
-    let sp: crate::access::Span = crate::access::raw_span(d, mid);
-    if number.status == 0 && sp.status == 0 && crate::util::id_is(d.source, sp.start, sp.end, id) { return 2; }
-  }
-  return 0;
+  if mid < 0 { return Kind::Ignore; }
+  if crate::access::kind(d, crate::util::field(d, 0, "method")) == 4 { return Kind::Server; }
+  let number: crate::access::Number = crate::access::number(d, mid);
+  if number.status == 0 && crate::util::id_is(d.source, number.start, number.end, id) { return Kind::Response; }
+  return Kind::Ignore;
 }
 
 // the -32601 "not handled" reply to a server request
@@ -248,22 +257,23 @@ pub fn open(take l: Loop, inout ctl: Ctl, inout st: crate::transport::Reader, in
     events = events + 1;
     q = step(move q, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tl);
     if ctl.fail == 0 && ctl.got {
-      let parsed: crate::json::JsonParse = parse_line(inout line, ctl.n, st);
-      ctl.n = 0;
+      let parsed: crate::json::JsonParse = parse_line(line.data, ctl.n);
       match parsed {
         crate::json::JsonParse::Failed(e) => { }
         crate::json::JsonParse::Parsed(d) => {
-          let k: i64 = kind_of(d, 1);
-          if k == 1 { q = crate::transport::send(move q, slot, not_handled(d), ms); }
-          else if k == 2 {
-            done = true;
-            let error: i64 = crate::util::field(d, 0, "error");
-            if crate::access::kind(d, error) == 6 { ctl.fail = 6; }
-            else if crate::transport::stdin_closed(q, slot) {
-              q = crate::transport::expired(move q, overall, inout st);
-              if st.status == -1 { ctl.fail = 5; } else { ctl.fail = 6; }
+          match kind_of(d, 1) {
+            Kind::Server => { q = crate::transport::send(move q, slot, not_handled(d), ms); }
+            Kind::Response => {
+              done = true;
+              let error: i64 = crate::util::field(d, 0, "error");
+              if crate::access::kind(d, error) == 6 { ctl.fail = 6; }
+              else if crate::transport::stdin_closed(q, slot) {
+                q = crate::transport::expired(move q, overall, inout st);
+                if st.status == -1 { ctl.fail = 5; } else { ctl.fail = 6; }
+              }
+              else { q = crate::transport::send(move q, slot, crate::util::to_bytes("{\"method\":\"initialized\",\"params\":{}}\n"), ms); }
             }
-            else { q = crate::transport::send(move q, slot, crate::util::to_bytes("{\"method\":\"initialized\",\"params\":{}}\n"), ms); }
+            Kind::Ignore => { }
           }
         }
       }
@@ -332,45 +342,73 @@ pub fn req_turns(id: i64, thread: str, cursor: [u8]) -> [u8] ! alloc
 
 // ---- error responses ----
 
-fn lower(x: i64) -> i64
+// The first 300 UTF-16 units of the string value m, walked in place (hand `encode_utf16().take(300).map(..)`):
+// with `lower`, an ASCII unit lowercased and any other unit 255 (has_phrase's haystack); without, a printable ASCII
+// unit kept and any other unit '?' (error_detail). The rest of the string is not decoded.
+fn head(d: crate::json::JsonDocument, m: i64, lower: bool) -> [u8] ! alloc
+  ensures len(result) <= 300
 {
-  if x >= 65 && x <= 90 { return x + 32; }
-  return x;
+  let mut out: [u8] = alloc(0, 0);
+  let s: crate::access::Span = crate::access::raw_span(d, m);
+  if s.status != 0 || s.end - s.start < 2 { return out; }
+  let mut other: i64 = 63;
+  if lower { other = 255; }
+  arr_reserve(inout out, 300);
+  let stop: i64 = s.end - 1;
+  let mut p: i64 = s.start + 1;
+  while p < stop && len(out) < 300
+    invariant s.start + 1 <= p && p <= stop && stop <= len(d.source) && stop <= 16777216 && len(out) <= 300
+    decreases stop - p
+  {
+    let st: crate::jstr::Step = crate::jstr::step(d.source, p, stop);
+    let u: i64 = st.value;
+    let mut c: i64 = other;
+    if lower {
+      if u >= 65 && u <= 90 { c = u + 32; } else if u >= 0 && u < 128 { c = u; }
+    } else if u >= 32 && u < 127 { c = u; }
+    arr_push(inout out, c);
+    // a scalar past the BMP is two units, both non-ASCII
+    if u > 65535 && len(out) < 300 { arr_push(inout out, other); }
+    p = st.next;
+  }
+  return out;
 }
 
-// ASCII-case-insensitive literal at unit position i of u[0..n) (JS /i never matches a non-ASCII unit to an ASCII letter)
-fn lit_at(u: [i64], n: i64, i: i64, lit: str) -> bool
-  requires 0 <= n && n <= len(u) && 0 <= i
+// lit occurs in hay at i
+fn lit_at(hay: [u8], i: i64, lit: str) -> bool
+  requires 0 <= i && i <= len(hay) && len(lit) <= len(hay) - i
 {
-  if len(lit) > n - i { return false; }
   let mut k: i64 = 0;
   while k < len(lit)
-    invariant 0 <= k && k <= len(lit) && len(lit) <= n - i && 0 <= i && n <= len(u)
+    invariant 0 <= k && k <= len(lit)
     decreases len(lit) - k
   {
-    let x: i64 = u[i + k];
+    let x: i64 = hay[i + k];
     let y: i64 = lit[k];
-    if lower(x) != y { return false; }
+    if x != y { return false; }
     k = k + 1;
   }
   return true;
 }
 
-// /not found|no rollout|unknown thread/i over the first n units
-fn has_phrase(u: [i64], n: i64) -> bool ! alloc
-  requires 0 <= n && n <= len(u)
+// hay.windows(len(lit)).any(|w| w == lit)
+fn contains(hay: [u8], lit: str) -> bool
 {
   let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n <= len(u)
-    decreases n - i
+  while i <= len(hay) - len(lit)
+    invariant 0 <= i
+    decreases len(hay) - i
   {
-    if lit_at(u, n, i, "not found") { return true; }
-    if lit_at(u, n, i, "no rollout") { return true; }
-    if lit_at(u, n, i, "unknown thread") { return true; }
+    if lit_at(hay, i, lit) { return true; }
     i = i + 1;
   }
   return false;
+}
+
+// /not found|no rollout|unknown thread/i over the lowercased haystack (a non-ASCII unit never matches an ASCII letter)
+fn has_phrase(hay: [u8]) -> bool
+{
+  return contains(hay, "not found") || contains(hay, "no rollout") || contains(hay, "unknown thread");
 }
 
 // the expected significant digit at position p of 32601
@@ -441,31 +479,16 @@ pub fn error_class(d: crate::json::JsonDocument, e: i64) -> i64 ! alloc
 {
   let c: crate::access::Number = crate::access::number(d, crate::util::field(d, e, "code"));
   if c.status == 0 && is_minus_32601(d.source, c.start, c.end) { return 1; }
-  let u: crate::access::Units = crate::access::string_units(d, crate::util::field(d, e, "message"));
-  if u.status == 0 {
-    let mut m: i64 = len(u.units);
-    if m > 300 { m = 300; }
-    if has_phrase(u.units, m) { return 2; }
-  }
+  let m: i64 = crate::util::field(d, e, "message");
+  if crate::access::kind(d, m) == 4 && has_phrase(head(d, m, true)) { return 2; }
   return 3;
 }
 
 // diagnostic detail: the message (cut to 300 units) with non-ASCII units shown as '?', "rejected" when it has none
 pub fn error_detail(d: crate::json::JsonDocument, e: i64) -> [u8] ! alloc
+  ensures len(result) <= 300
 {
-  let u: crate::access::Units = crate::access::string_units(d, crate::util::field(d, e, "message"));
-  if u.status != 0 { return crate::util::to_bytes("rejected"); }
-  let mut m: i64 = len(u.units);
-  if m > 300 { m = 300; }
-  let mut out: [u8] = alloc(m, 0);
-  let mut i: i64 = 0;
-  while i < m
-    invariant 0 <= i && i <= m && m <= len(u.units) && len(out) == m
-    decreases m - i
-  {
-    let x: i64 = u.units[i];
-    if x >= 32 && x < 127 { out[i] = x; } else { out[i] = 63; }
-    i = i + 1;
-  }
-  return out;
+  let m: i64 = crate::util::field(d, e, "message");
+  if crate::access::kind(d, m) != 4 { return crate::util::to_bytes("rejected"); }
+  return head(d, m, false);
 }
