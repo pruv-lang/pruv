@@ -1,0 +1,12 @@
+// spec: R-6g9-10 reject
+// Writing a source while the list is still read is a borrow conflict, as for one view.
+fn f(p: str) -> i64 ! alloc
+  requires len(p) >= 2
+{
+  let mut s: str = substr(p, 0, 2);
+  let mut parts: Vec<ref str> = vec_new::<ref str>();
+  vec_push::<ref str>(inout parts, subview(s, 0, 1));
+  s = substr(p, 0, 1);
+  return len(vec_get::<ref str>(parts, 0));
+}
+fn main() -> i64 ! alloc { if f("ab") == 1 { return 0; } return 1; }

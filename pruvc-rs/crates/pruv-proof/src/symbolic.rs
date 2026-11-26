@@ -2681,13 +2681,17 @@ impl<'a> FnVerifier<'a> {
 
     /// G2 B1: is `i` a UTF-8 character boundary of the byte array `arr` (total function, no domain)?
     /// `Or(i == 0, i == n, And(i > 0, i < n, Or(b < 128, b >= 192)))`, `b = Select(arr.a, i)`.
+    /// R-6b-5 (4.4d-CB): every caller passes a `str` (valid UTF-8 at run time) or conjoins `utf8_valid` of the
+    /// base, so the position after an ASCII byte is also a boundary: in valid UTF-8 a continuation byte follows only
+    /// a byte `>= 128`. On valid bytes the extra disjunct implies the byte formula, so the meaning is unchanged.
     pub fn str_boundary(&self, arr: &Arr, i: &Ast) -> Ast {
         let z = &self.z;
         let b = arr.a.select(i);
+        let prev = arr.a.select(&i.sub(&z.int(1)));
         z.or(&[
             i.raw_eq(&z.int(0)),
             i.eq(&arr.n),
-            z.and(&[i.gt_i(0), i.lt(&arr.n), z.or(&[b.lt_i(128), b.ge_i(192)])]),
+            z.and(&[i.gt_i(0), i.lt(&arr.n), z.or(&[b.lt_i(128), b.ge_i(192), prev.lt_i(128)])]),
         ])
     }
 
@@ -5131,6 +5135,12 @@ impl<'a> FnVerifier<'a> {
                     self.prove_core(&st, g, &ob, pos(e), "call_requires", &what, None);
                 }
                 let pushed = v.like(v.a.store(&v.n, &xv), v.n.add_i(1), n);
+                if let Expr::InoutArg(place) = &x.args[0] {
+                    // R-6g9-10: `vec_push::<ref str>(inout parts, v)` on a view list writes the list in place
+                    // (view lists carry no element sums: their elements are borrowed strings)
+                    self.store_collection_place(&place.expr, st, Val::Arr(pushed), g)?;
+                    return Ok(Val::Unit);
+                }
                 if !self.model.has_vec_sums() {
                     return Ok(Val::Arr(pushed));
                 }

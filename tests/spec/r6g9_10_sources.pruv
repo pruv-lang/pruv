@@ -1,0 +1,20 @@
+// spec: R-6g9-10 accept
+// The pushed value may be a str parameter (`&str` already), a field of an owned struct (`&r.name`) or a literal.
+// The proof knows the length and the element bytes after each push.
+struct Rec { name: str }
+fn g(w: str, r: Rec, x: str) -> i64 ! alloc
+  ensures result == 3
+{
+  let mut parts: Vec<ref str> = vec_new::<ref str>();
+  vec_push::<ref str>(inout parts, w);
+  vec_push::<ref str>(inout parts, r.name);
+  vec_push::<ref str>(inout parts, x);
+  let last: ref str = vec_get::<ref str>(parts, 2);
+  assert len(last) == len(x);
+  return len(parts);
+}
+fn checksum() -> i64 ! alloc {
+  let w: str = substr("abc", 0, 2);
+  let r: Rec = Rec { name: substr("xyz", 0, 1) };
+  return g(w, r, "q");
+}

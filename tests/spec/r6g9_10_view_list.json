@@ -1,0 +1,20 @@
+{
+  "gen_contains": [
+    "let mut parts: ::std::vec::Vec<&str> = ::std::vec::Vec::new();",
+    "parts.reserve((4i64) as usize);",
+    "parts.push(&head);",
+    "parts.push(unsafe { (p).get_unchecked(((start) as usize)..((i) as usize)) });",
+    "parts.push(\"end\");",
+    "let piece: &str = (*unsafe { parts.get_unchecked((k) as usize) });",
+    "parts.clear();"
+  ],
+  "gen_absent": ["pruv_g6_vec_push", "pruv_g6_vec_get", ".as_str())"],
+  "gen_regex_absent": ["^\\s+[^f].*(pruv_str_boundary|pruv_cboundary|is_char_boundary)\\("],
+  "run": {
+    "backends": ["rust"],
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["1005"],
+    "alloc_balance": true
+  }
+}

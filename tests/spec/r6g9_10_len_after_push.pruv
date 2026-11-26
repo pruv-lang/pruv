@@ -1,0 +1,9 @@
+// spec: R-6g9-10 reject
+// The proof sees each push: after one push the list is not empty (a model that kept the old list would accept this).
+fn f(p: str) -> i64 ! alloc {
+  let mut parts: Vec<ref str> = vec_new::<ref str>();
+  vec_push::<ref str>(inout parts, p);
+  assert len(parts) == 0;
+  return len(parts);
+}
+fn main() -> i64 ! alloc { if f("ab") == 1 { return 0; } return 1; }
