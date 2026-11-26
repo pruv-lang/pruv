@@ -1,0 +1,1 @@
+{"gen_contains": ["(\"lair\").as_bytes()", "let pruv_ea = a.as_bytes();", ".get_unchecked("], "gen_absent": ["to_string", ".clone()", "let pruv_ea = pruv_ea", "to_owned"]}

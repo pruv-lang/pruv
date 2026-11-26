@@ -1,0 +1,17 @@
+// spec: R-6w-7 reject
+// An arm value cannot `move` a payload binder (the value form views the scrutinee); use `copy(b)` or a statement.
+enum Msg { Data(b: [u8]), Code(c: i64), Empty }
+
+fn eatb(take b: [u8]) -> i64 { return len(b) & 255; }
+
+fn mk(n: i64) -> Msg ! alloc
+  requires 0 <= n && n <= 10
+{
+  if n > 0 { let d: [u8] = alloc(n, 7); return Msg::Data(move d); }
+  return Msg::Empty;
+}
+
+fn f() -> i64 ! alloc {
+  let m: Msg = mk(3);
+  return match m { Msg::Data(b) => eatb(move b), Msg::Code(c) => 0, Msg::Empty => 0 };
+}

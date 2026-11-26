@@ -158,7 +158,8 @@ it can never be silently dropped.
   `type/inout_alias`. No struct invariant is checked at the store (invariants are checked at handoffs).
 - `load_le(a, i, n)` and `store_le(inout a, i, w, n);` follow the same rules as `load_be` and `store_be`,
   respectively, using little-endian byte order (byte `a[i+k]` has weight `256^k`). Both names are reserved.
-- `eq_range(a, i, b, j, n)`: `a` and `b` of one type, `[i64]`, `[u8]` or `[u16]` (R-6p-4) (else `type_mismatch`); `i, j, n: i64`; a
+- `eq_range(a, i, b, j, n)`: `a` and `b` of one type, `[i64]`, `[u8]` or `[u16]` (R-6p-4), or each a byte operand, `[u8]`,
+  `str` or a string literal, mixed freely (R-6b-4) (else `type_mismatch`); `i, j, n: i64`; a
   `bool`, true iff `a[i+k] == b[j+k]` for every `k` in `0..n` (true for `n == 0`). Code only (`effect_in_contract` in a
   contract), name reserved. The verifier must prove, in this order, `0 <= i`, `0 <= j`, `0 <= n`, `i + n <= len(a)`,
   `j + n <= len(b)` (`verify` error `index_oob`). It then knows the result exactly: `r == forall k in 0..n: a[i+k] ==
@@ -478,7 +479,20 @@ return a parameter with `copy`). Refinements: `[u8 | L..=U; <=N]` with `0 <= L <
 - `str_from_utf8(b: [u8]) -> str` (R-6b-1, needs `alloc`, code only) copies the bytes into a fresh string. The verifier
   proves `utf8_valid(b)` (`utf8_invalid`), then knows `len(result) == len(b)` and `result[k] == b[k]` for
   `0 <= k < len(b)`. `utf8_valid`, `utf8_valid_span` and `str_from_utf8` are reserved.
-- Not available: `==`/`!=` on whole strings (compare `len` and bytes with `forall`), `print` of a string, `str` in
+- R-6b-4 **Byte ranges of `str` (4.3f-S).** `eq_range(a, i, b, j, n)` takes `str` operands with the meaning it has on
+  `[u8]`: each of `a` and `b` is a `[u8]`, a `str` or a string literal (any mix), and the call compares the UTF-8 bytes
+  `a[i..i+n]` and `b[j..j+n]`. A string literal operand is borrowed as its static bytes (no `alloc`, as for
+  `find_byte`). Indices are byte offsets and need not be char boundaries (the bytes are compared, nothing is sliced as
+  text). The bounds obligations and the exact result fact are those of `eq_range` over the byte lengths, so a proof
+  can use `a[i + k] == b[j + k]` after a true result. A `[u16]` or `[i64]` operand against a byte operand is
+  `type/type_mismatch`. Hand Rust `a.as_bytes()[i..i + 4] == b"lair"` is `eq_range(a, i, "lair", 0, 4)`,
+  `s.starts_with(p)` is `len(p) <= len(s) && eq_range(s, 0, p, 0, len(p))`, and `a == b` on whole strings is
+  `string_eq(a, b)` (R-6e-11, which already takes `str`). Rust compares `as_bytes()` slices; LLVM is unchanged
+  (a `str` is stored as bytes). Tests: [accept](tests/spec/r6b_4_eq_range_str.pruv),
+  [element type](tests/spec/r6b_4_eq_range_str_type.pruv), [literal against `[i64]`](tests/spec/r6b_4_eq_range_str_lit.pruv),
+  [bounds](tests/spec/r6b_4_eq_range_str_oob.pruv), runtime on both backends
+  `tests/runtime/r6b_4_rt_eq_range_str.pruv`.
+- Not available: `==`/`!=` on whole strings (use `string_eq`, R-6e-11), `print` of a string, `str` in
   `Option`/`Result`/struct fields, char/code-point indexing. Character counts are written with boundaries, e.g.
   `count(t in 0..len(s): is_char_boundary(s, t))` counts the characters of `s`.
 - The verifier models a `str` as bytes `0..=255`. Outside functions that use UTF-8 facts (above) it does **not**
@@ -3035,16 +3049,31 @@ return match s { Shape::Circle(r) => { 3 * r * r }, Shape::Empty => 0 };
 - R-6w-6 **Types.** The arms are typed as the arms of a value `if` (R-6w-2): the expected type types every arm,
   otherwise the first arm that is not a bare literal fixes the type (`type/type_mismatch`); the same result types
   are supported (`type/value_branch_type`), an owned result needs a new value in every arm
-  (`type/value_branch_owned`), and a value `match` in a contract is `type/value_branch_context`. The scrutinee is a
-  copied value: an `Option`/`Result`/enum whose payloads are scalars, unit (`Ok(())`) or other copied values. A
-  scrutinee that holds owned or borrowed data (a string or array payload, an extended enum, a `String` error), a
-  payload of a type parameter (`Option<T>` in a generic function) and a direct
-  `map_get`/`map_get_mut`/`map_take`/`vec_get`/`vec_at_mut` scrutinee are `type/value_branch_type` (parity row
-  P9a-6; bind the scrutinee with `let` or use a `match` statement).
+  (`type/value_branch_owned`), and a value `match` in a contract is `type/value_branch_context`. The scrutinee is
+  any statement `match` scrutinee with the statement form's ownership (P9a-6 remaining): a scrutinee that holds
+  owned or borrowed data (an array or string payload, an extended enum) is read in place, so a read parameter is
+  matched by reference and a local stays readable after the match (also in the rest of the statement), with each
+  binder a view of its payload, except that the whole value of a `return` consumes a dead owned local as the
+  statement form does (its binders are owned, so `copy(b)` is the payload itself); a `Result<_, String>` is consumed as in the statement form (R-6w-7); a direct
+  `map_get`, `vec_get` or `map_take` call (R-6e-14, `map_take` on the Rust backend only) is matched as is. A
+  mutable accessor (`map_get_mut`, `vec_at_mut`) is `type/value_branch_type` (read with `map_get`/`vec_get`, or use
+  a `match` statement), as is a payload of a type parameter (`Option<T>` in a generic function) when it is the
+  result type (a generic payload whose arms yield another type is accepted). Tests:
+  [owned scrutinee](tests/spec/p9_value_match_owned_scrutinee.pruv),
+  [mutable accessor](tests/spec/p9_value_match_scrutinee.pruv),
+  [generic result](tests/spec/p9_value_match_generic_result.pruv),
+  [map_take on LLVM](tests/spec/p9_value_match_take_llvm.pruv).
 - R-6w-7 **Proof and ownership.** The verifier evaluates each arm under its pattern's test with the binder facts of
   that payload (its range, its well-formedness), so an arm's obligations and a callee's `ensures` hold only when
   that arm is chosen; the result is the nested choice `ite(t1, v1, ite(t2, v2, .. vn))`. A value moved in one arm is
-  maybe-moved after the `match` (`type/foreign_move`), and an `inout` call in an arm is `type/inout_context`.
+  maybe-moved after the `match` (`type/foreign_move`), and an `inout` call in an arm is `type/inout_context`. A
+  `Result<_, String>` scrutinee is consumed (a read parameter or a second read is `type/foreign_move`, as for the
+  statement form), and an arm reading a borrowed array payload is proved against that payload. An arm value cannot
+  `move` a binder (`type/foreign_move`; use `copy(b)` or a `match` statement). Tests:
+  [String parameter](tests/spec/p9_value_match_string_param.pruv),
+  [String reuse](tests/spec/p9_value_match_string_reuse.pruv),
+  [payload bounds](tests/spec/p9_value_match_payload_oob.pruv),
+  [moved binder](tests/spec/p9_value_match_move_binder.pruv).
 - R-6w-8 **Code.** Rust prints its own value `match` (`(match v { P1 => { e1 }, .. })`, patterns as the statement
   form prints them, the arm enum named as the lowered enum of a generic or module type), so a proved index in an arm
   stays an unchecked read. Tuple binders print as component reads of the payload binder (`pruv_tup_d0.1`) and slice
@@ -3055,7 +3084,10 @@ return match s { Shape::Circle(r) => { 3 * r * r }, Shape::Empty => 0 };
   [generic enum and unit payload](tests/runtime/p9_rt_match_generic.pruv),
   [module enums](tests/runtime/g4_r16_value_match/root.pruv),
   [unchecked index](tests/runtime/p9_rt_match_unchecked.pruv), [call order](tests/runtime/p9_rt_match_order.pruv),
-  [owned arms](tests/runtime/p9_rt_match_owned.pruv), [missing arm](tests/must_reject/p9_match_missing.pruv),
+  [owned arms](tests/runtime/p9_rt_match_owned.pruv),
+  [owned and borrowed scrutinees, accessor calls](tests/runtime/p9_rt_match_scrutinee.pruv) (printed as the
+  statement `match`, binders viewed by a prelude `let c: i64 = *c;`, arm values as tail expressions; never matched
+  by value unless the statement form would consume it), [missing arm](tests/must_reject/p9_match_missing.pruv),
   [duplicate arm](tests/must_reject/p9_match_duplicate.pruv), [arm types](tests/must_reject/p9_match_types.pruv),
   [arm move](tests/must_reject/p9_match_arm_move.pruv), [arm inout](tests/must_reject/p9_match_arm_inout.pruv),
   [false contract](tests/must_reject/p9_match_false_ensures.pruv),

@@ -1,0 +1,26 @@
+// spec: R-6w-6 accept
+// P9a-6 remaining: a value `match` on an extended enum read parameter (matched by reference, each binder viewed
+// as the statement form does), on a direct `map_take` call (Rust backend) and on a generic `Option<T>` whose
+// arms do not yield a `T`.
+enum Msg { Data(b: [u8]), Code(c: i64), Empty }
+
+fn msize(m: Msg) -> i64 {
+  return match m { Msg::Data(b) => len(b) & 255, Msg::Code(c) => c & 255, Msg::Empty => -1 };
+}
+
+fn take_one(k: i64) -> i64 ! alloc {
+  let mut m: HashMap<i64, i64> = map_new::<i64, i64>();
+  m = map_insert::<i64, i64>(move m, 1, 5);
+  return match map_take::<i64, i64>(inout m, k) { Some(x) => x & 255, None => 0 };
+}
+
+fn has<T>(o: Option<T>) -> i64 {
+  return match o { Some(x) => 1, None => 0 };
+}
+
+// the whole value of a `return` consumes a dead owned local as the statement form (the binder is owned, no copy)
+fn own_bytes(k: i64) -> [u8] ! alloc {
+  let d: [u8] = alloc(k & 7, 2);
+  let m: Msg = Msg::Data(move d);
+  return match m { Msg::Data(b) => copy(b), Msg::Code(c) => alloc(1, 0), Msg::Empty => alloc(0, 0) };
+}

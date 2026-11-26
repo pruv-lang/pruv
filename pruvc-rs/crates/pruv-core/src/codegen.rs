@@ -1442,6 +1442,11 @@ struct Gen<'a> {
     stack: crate::emit_common::BufferStackPlan,
     function_name: String,
     view_wrappers: bool,
+    /// P9a-6 remaining: a value `match` printed through the statement form never consumes its scrutinee (the
+    /// rest of the enclosing statement may still read it; a value-match arm cannot move a binder)
+    value_view: bool,
+    /// the value `match` being printed is the whole value of a `return` (P9a-6 remaining; its dead local may move)
+    value_sole: bool,
     budget: u64,
     verified: bool,
     /// LG35: the str_from_utf8 call whose bytes the enclosing `if` checked (utf8_checked)
@@ -1634,6 +1639,8 @@ impl<'a> Gen<'a> {
             fp: HashMap::new(),
             function_name: String::new(),
             view_wrappers: false,
+            value_view: false,
+            value_sole: false,
             prog,
             explicit,
             raw: if explicit { prog.raw_entries.clone() } else { None },
@@ -4179,6 +4186,24 @@ pruv_hi <= (pruv_b.len() as i128) && \
 
     /// match on an extended enum: the scrutinee is borrowed (a view, never cloned) and every payload binder is an
     /// arm-local view, unless the match consumes the scrutinee (below).
+    /// P9a-6 remaining: a value `match` whose scrutinee holds owned or borrowed data (an extended enum, an
+    /// Option/Result with a non-scalar payload) or is a direct map/vec accessor call prints through the statement form.
+    fn value_match_stmt(&self, s: &Expr) -> bool {
+        if let Expr::Call(call) = s {
+            if !self.fmap.contains_key(&call.name)
+                && matches!(call.name.as_str(), "map_get" | "map_get_mut" | "map_take" | "vec_at_mut" | "vec_get") {
+                return true;
+            }
+        }
+        let Some(ty) = expr_ty(s) else { return false };
+        if self.is_ext(Some(ty.as_str())) {
+            return true;
+        }
+        let t = GType::from_key(&ty);
+        matches!(t.name.as_str(), "option" | "result")
+            && t.args.iter().any(|a| a.int_width().is_none() && a.name != "bool" && a.name != "unit")
+    }
+
     fn map_match_call<'b>(&self, stmt: &'b Match) -> Option<&'b Call> {
         let Expr::Call(call) = &stmt.scrutinee else { return None };
         if self.fmap.contains_key(&call.name) {
@@ -4319,7 +4344,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
         // that local's last use, so it is matched by value and payloads bind as owned values a return or copy moves.
         let mut consume = match &x.scrutinee {
             // G-DB16-1: an arm that moves an array binder consumes the scrutinee, also under cost metering
-            Expr::Var(v) => match_moves_binder(x) || (!self.cost && !self.view_wrappers && self.dead_after(&v.name)),
+            Expr::Var(v) => match_moves_binder(x) || (!self.cost && !self.view_wrappers && !self.value_view && self.dead_after(&v.name)),
             _ => false,
         };
         if consume {
@@ -4844,13 +4869,21 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 None => self.emit(ind, "return;"),
                 Some(v) => {
                     self.moving = self.return_movable(Some(v));
-                    let t = if self.returns_view() { self.borrowed_value(v)? } else { self.own_e(v)? };
+                    self.value_sole = !self.returns_view() && matches!(v, Expr::Call(c) if crate::ast::ValueMatch::matches(c));
+                    let t = if self.returns_view() { self.borrowed_value(v) } else { self.own_e(v) };
+                    self.value_sole = false;
+                    let t = t?;
                     self.moving.clear();
                     self.emit(ind, &format!("return {};", t));
                 }
             },
             Stmt::Assert(_) => {}
             Stmt::Par(p) => self.parallel(p, ind)?,
+            Stmt::ExprStmt(ExprStmt { expr: Expr::Call(c), .. }) if crate::ast::ValueMatch::is_yield(c) => {
+                // P9a-6 remaining: the arm value of a value `match` printed through the statement form (tail expression)
+                let t = self.e(&c.args[0])?;
+                self.emit(ind, &t);
+            }
             Stmt::ExprStmt(x) => {
                 let t = self.e(&x.expr)?;
                 self.emit(ind, &format!("{};", t));
@@ -5101,8 +5134,18 @@ pruv_hi <= (pruv_b.len() as i128) && \
     /// LB6 SB (R-6g5-1): the source of a [u8] copy; a str is borrowed as its bytes.
     /// A str is bound first (so a temporary String lives to the end of the block), then shadowed by its bytes.
     fn byte_bind(&mut self, name: &str, e: &Expr) -> R<String> {
+        // a read-only compare borrows the source of a `copy(x)` operand (hand Rust compares `x`, no clone)
+        if let Expr::Call(c) = e {
+            if c.name == "copy" && c.args.len() == 1 && matches!(c.args[0], Expr::Var(_) | Expr::FieldAccess(_)) {
+                return self.byte_bind(name, &c.args[0]);
+            }
+        }
         let r = self.arr_ref(e)?;
         if !matches!(e, Expr::StrLit(_)) && crate::check::expr_ty(e).as_deref() == Some("str") {
+            // a plain path borrows in place (hand `a.as_bytes()`); a temporary is bound first so it lives
+            if r.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '&') {
+                return Ok(format!("let {name} = {r}.as_bytes(); "));
+            }
             return Ok(format!("let {name} = {r}; let {name} = {name}.as_bytes(); "));
         }
         Ok(format!("let {name} = {r}; "))
@@ -5510,7 +5553,25 @@ pruv_hi <= (pruv_b.len() as i128) && \
             Expr::Call(c) if crate::ast::ValueIf::matches(c) => Ok(format!("(if {} {{ {} }} else {{ {} }})",
                 self.e(&c.args[0])?, self.e(&c.args[1])?, self.e(&c.args[2])?)),
             Expr::Call(c) if crate::ast::ValueMatch::matches(c) => {
-                // P9a-5: Rust's own value `match`; only the chosen arm runs
+                // P9a-5: Rust's own value `match`; only the chosen arm runs. The `return` flag belongs to this match
+                // only (a nested match in its scrutinee or arms is not the whole value)
+                let sole_flag = std::mem::take(&mut self.value_sole);
+                if self.value_match_stmt(&c.args[0]) {
+                    // P9a-6 remaining: a scrutinee holding owned or borrowed data, or a map/vec accessor call, prints
+                    // as the statement `match` (consume vs view, binder preludes, accessor shapes) whose arm bodies
+                    // end in the arm value as their tail expression
+                    let saved = std::mem::take(&mut self.out);
+                    // the whole value of a `return`: a dead owned local is consumed as by the statement form (no other
+                    // operand of the statement reads it); elsewhere the scrutinee is viewed
+                    let sole = sole_flag && matches!(&c.args[0], Expr::Var(v)
+                        if c.args[1..].iter().all(|a| { let mut n = HashSet::new(); crate::refine::expr_names(a, &mut n); !n.contains(&v.name) }));
+                    let view = std::mem::replace(&mut self.value_view, !sole);
+                    let r = self.stmt(&Stmt::Match(crate::ast::ValueMatch::as_match(c)), 0);
+                    self.value_view = view;
+                    let body = std::mem::replace(&mut self.out, saved);
+                    r?;
+                    return Ok(format!("({})", body.iter().map(|l| l.trim_start()).collect::<Vec<_>>().join(" ")));
+                }
                 let mut out = format!("(match {} {{", self.e(&c.args[0])?);
                 for (a, v) in crate::ast::ValueMatch::arms(c).iter().zip(c.args[1..].iter()) {
                     out.push_str(&format!(" {} => {{ {} }},", value_arm_pattern(a), self.e(v)?));
@@ -5775,7 +5836,8 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     // copy of an owned local that the enclosing return moves: the local itself is the copy.
                     if !self.cost {
                         if let a0 @ Expr::Var(v) = arg(a, 0)? {
-                            if self.moving.contains(&v.name) {
+                            // a borrowed binder (a viewing match arm) is not the copy (P9a-6 remaining)
+                            if self.moving.contains(&v.name) && !self.refs.contains(&v.name) {
                                 return self.e(a0);
                             }
                         }
@@ -5858,13 +5920,14 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 if n == "eq_range" {
                     // L3-10: eq_range: slice equality of a[i..i+n] and b[j..j+n]; unchecked slices when verified
                     // the five arguments are bound once each, in source order a, i, b, j, n (SPEC.md eq_range)
-                    let a0 = self.arr_ref(arg(a, 0)?)?;
+                    // 4.3f-S (R-6b-4): a `str` operand compares its bytes (`as_bytes()`)
+                    let a0 = self.byte_bind("pruv_ea", arg(a, 0)?)?;
                     let i0 = self.e(arg(a, 1)?)?;
-                    let b0 = self.arr_ref(arg(a, 2)?)?;
+                    let b0 = self.byte_bind("pruv_eb", arg(a, 2)?)?;
                     let j0 = self.e(arg(a, 3)?)?;
                     let n0 = self.e(arg(a, 4)?)?;
                     let head = format!(
-                        "{{ let pruv_ea = {}; let pruv_i: i64 = {}; let pruv_eb = {}; let pruv_j: i64 = {}; let pruv_n: i64 = {}; ",
+                        "{{ {}let pruv_i: i64 = {}; {}let pruv_j: i64 = {}; let pruv_n: i64 = {}; ",
                         a0, i0, b0, j0, n0
                     );
                     if self.verified {

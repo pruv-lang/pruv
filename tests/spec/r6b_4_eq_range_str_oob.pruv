@@ -1,0 +1,7 @@
+// spec: R-6b-4 reject
+// The bounds are proof obligations over the byte length: "lair" has 4 bytes, so n == 5 is index_oob.
+fn f(a: str) -> bool
+  requires len(a) >= 8
+{
+  return eq_range(a, 0, "lair", 0, 5);
+}

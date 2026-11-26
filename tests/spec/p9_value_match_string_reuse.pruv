@@ -1,0 +1,13 @@
+// spec: R-6w-7 reject
+// An owned `Result<_, String>` local is consumed by its value `match`; reading it again is a use after move.
+fn mk(k: i64) -> Result<i64, String> ! alloc {
+  if k > 0 { return Ok::<i64, String>(k & 255); }
+  return Err::<i64, String>(string_push_str(string_new(), "bad"));
+}
+
+fn f() -> i64 ! alloc {
+  let o: Result<i64, String> = mk(1);
+  let a: i64 = match o { Ok(x) => x & 255, Err(e) => 0 };
+  let b: i64 = match o { Ok(x) => x & 255, Err(e) => 0 };
+  return a + b;
+}

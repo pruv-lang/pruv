@@ -1,0 +1,7 @@
+// spec: R-6b-4 reject
+// A str operand compares bytes only with a str or [u8] operand; [u16] / [i64] elements are not bytes.
+fn f(a: str, b: [u16]) -> bool
+  requires len(a) >= 1 && len(b) >= 1
+{
+  return eq_range(a, 0, b, 0, 1);
+}

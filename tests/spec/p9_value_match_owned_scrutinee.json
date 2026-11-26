@@ -1,0 +1,1 @@
+{"gen_contains": ["(match m { Msg::Data(b) => { let b: &[u8] = b;", "let c: i64 = *c;", "(match m.remove(&k) {", "(match m { Msg::Data(b) => { let b: ::std::vec::Vec<u8> = b; b }"], "gen_absent": [".clone()", "to_vec()"]}

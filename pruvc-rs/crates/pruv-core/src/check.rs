@@ -6978,24 +6978,17 @@ impl Checker {
         self.static_lit = false;
         let mut m = crate::ast::ValueMatch::as_match(call);
         if let Expr::Call(sc) = &m.scrutinee {
-            if !self.funcs.contains_key(&sc.name) && matches!(sc.name.as_str(), "map_get" | "map_get_mut" | "map_take" | "vec_at_mut" | "vec_get") {
+            // P9a-6 remaining: `map_get`, `vec_get` and `map_take` (Rust backend, as the statement form) are matched
+            // directly; the mutable accessors are statement scrutinees only
+            if !self.funcs.contains_key(&sc.name) && matches!(sc.name.as_str(), "map_get_mut" | "vec_at_mut") {
                 return Err(terr(sc.line, sc.col, "value_branch_type",
                     format!("a value `match` on `{}` is not supported yet", sc.name),
-                    "bind the result with `let` first, or use a `match` statement"));
+                    "use `map_get`/`vec_get` to read, or a `match` statement"));
             }
         }
+        // P9a-6 remaining: an owned or borrowed scrutinee is matched with the statement form's ownership (the
+        // ownership pass consumes a `Result<_, String>` as the statement form does; other payloads are borrowed)
         let st = self.match_scrutinee(&mut m.scrutinee, scope)?;
-        // a unit payload (`Ok(())`) is copied like a scalar
-        let copied = if matches!(st.name.as_str(), "option" | "result") {
-            st.args.iter().all(|a| *a == unitt() || self.value_branch_kind(a) == Some(false))
-        } else {
-            self.value_branch_kind(&st) == Some(false)
-        };
-        if !copied || self.is_extended(&st) {
-            return Err(terr(line, col, "value_branch_type",
-                format!("a value `match` on {} is not supported yet (a payload is owned, borrowed or a type parameter)", tn(&st)),
-                "use a `match` statement that assigns a `let mut` local"));
-        }
         self.value_arms.push((want.cloned(), Vec::new(), 0));
         let mut sc = scope.clone();
         let r = self.match_arms(&mut m, &mut sc, st);
@@ -8417,7 +8410,43 @@ impl Checker {
                     return Err(terr(line, col, "effect_in_contract", "eq_range is not allowed in contracts", ""));
                 }
                 arity(5)?;
+                // 4.3f-S (R-6b-4): byte operands, each `[u8]` or `str` (UTF-8 bytes, hand Rust `as_bytes()`),
+                // may mix; a string literal is borrowed as its static bytes (no alloc), as in find_byte.
+                let is_bytes_op = |t: &GType| *t == GType::array_u8() || *t == strt();
+                let lit0 = matches!(e.args[0], Expr::StrLit(_));
+                let lit2 = matches!(e.args[2], Expr::StrLit(_));
+                if lit0 || lit2 {
+                    for k in [0usize, 2] {
+                        let t = if let Expr::StrLit(lit) = &mut e.args[k] {
+                            lit.ty = Some(GType::array_u8().to_key());
+                            GType::array_u8()
+                        } else {
+                            self.expr(&mut e.args[k], scope, c)?
+                        };
+                        if !is_bytes_op(&t) {
+                            let (l0, c0) = (e.args[k].line(), e.args[k].col());
+                            return Err(terr(l0, c0, "type_mismatch", format!("expected [u8] or str, found {}", tn(&t)), ""));
+                        }
+                        if k == 0 {
+                            self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
+                        }
+                    }
+                    self.expect(&mut e.args[3], &i64t(), scope, c, None)?;
+                    self.expect(&mut e.args[4], &i64t(), scope, c, None)?;
+                    return Ok(boolt());
+                }
                 let at = self.expect_array(&mut e.args[0], scope, c, false)?;
+                if is_bytes_op(&at) {
+                    self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
+                    let bt = self.expr(&mut e.args[2], scope, c)?;
+                    if !is_bytes_op(&bt) {
+                        let (l0, c0) = (e.args[2].line(), e.args[2].col());
+                        return Err(terr(l0, c0, "type_mismatch", format!("expected [u8] or str, found {}", tn(&bt)), ""));
+                    }
+                    self.expect(&mut e.args[3], &i64t(), scope, c, None)?;
+                    self.expect(&mut e.args[4], &i64t(), scope, c, None)?;
+                    return Ok(boolt());
+                }
                 // Both operands must have the same concrete integer buffer type.
                 if !is_concrete_int_buffer(&at) {
                     let (l0, c0) = (e.args[0].line(), e.args[0].col());
