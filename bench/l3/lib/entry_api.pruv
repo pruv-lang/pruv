@@ -154,7 +154,7 @@ fn index_begin_checked(inout progress: [i64], blob: [i64], raw: i64) -> [i64] ! 
       j = j + 3;
     }
     strings = crate::ent_value::pool_finish(compact, 0);
-  } else { strings = crate::ent_dispatch::blob_pool(blob); }
+  } else { strings = copy(crate::ent_value::blob_pool(blob)); }
   let mut st: [i64] = alloc(14, 0);
   st[0] = crate::ent_state::magic();
   st[1] = 9;

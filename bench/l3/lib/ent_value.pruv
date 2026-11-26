@@ -645,6 +645,15 @@ pub fn logical_pool_words(w: [i64]) -> i64
   return crate::ent_u16::clamp(crate::ent_u16::rd(w, crate::ent_packet::sec_start(w, 0)), 16777216);
 }
 
+// The input pool prefix that a request's string slots refer to (moved from ent_dispatch in step 3.4).
+pub fn blob_pool(blob: [i64]) -> ref [i64] from(blob)
+{
+  let n: i64 = len(blob);
+  let s: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(blob, 0), n);
+  let size: i64 = crate::ent_u16::clamp(pool_capacity(pool_bytes(blob, s)), crate::ent_packet::sec_len(blob, 0));
+  return subview(blob, s, crate::ent_u16::clamp(s + size, n));
+}
+
 pub fn pkt_size(w: [i64]) -> i64
   ensures 0 <= result
 {
