@@ -2060,6 +2060,9 @@ runtime|tests/runtime/p9_rt_pattern_owned.pruv	1 case: obl=16 1	default=75148ac9
 runtime|tests/runtime/p9_rt_pattern_wild.pruv	1 case: obl=9 1	default=4b17ba4c4fc8
 runtime|tests/runtime/p9b2_rt_panic_name.pruv	1 case: obl=2 1	default=32a97dfbccee
 runtime|tests/runtime/p9b2_rt_trait_names.pruv	1 case: obl=12 1	default=82bffe9507c5
+runtime|tests/runtime/p9b3_rt_generic.pruv	1 case: obl=45 1	default=0dd40a18bdbc
+runtime|tests/runtime/p9b3_rt_panic_free.pruv	1 case: obl=1 1	default=7f6a69afbab2
+runtime|tests/runtime/p9b3_rt_panic_name.pruv	1 case: obl=2 1	default=e001b8bddec2
 runtime|tests/runtime/p9b_rt_counter.pruv	1 case: obl=10 1	default=3c324917b935
 runtime|tests/runtime/p9b_rt_enum_field.pruv	1 case: obl=16 1	default=14138fb8ad3c
 runtime|tests/runtime/p9b_rt_names.pruv	1 case: obl=12 1	default=859a92b0ee45

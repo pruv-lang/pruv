@@ -1,0 +1,5 @@
+// spec: R-6x-1 reject
+// A generic impl of a non-generic type names a type parameter the type does not have.
+struct S { v: i64 }
+impl<T> S<T> { fn z(self) -> i64 { return self.v; } }
+fn f(k: i64) -> i64 { return k; }

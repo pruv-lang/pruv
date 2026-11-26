@@ -1,0 +1,13 @@
+// spec: R-6x-1 accept
+// In a generic impl, `Self::V` is a variant pattern (match arm, `if let`) and a variant reference (`is_variant`) as well
+// as a constructor `Self::V(..)`.
+enum Sh<T> { One(x: T), No }
+impl<T> Sh<T> {
+  fn is_one(self) -> bool ensures result == is_variant(self, Self::One) {
+    if let Self::One(x) = self { return true; }
+    return false;
+  }
+  fn mk(v: T) -> Self { return Self::One(v); }
+  fn two(self) -> i64 { match self { Self::One(x) => { return 1; } Self::No => { return 2; } } }
+}
+fn f(k: i64) -> i64 { let s: Sh<i64> = Sh::<i64>::mk(k); if s.is_one() { return s.two(); } return 0; }

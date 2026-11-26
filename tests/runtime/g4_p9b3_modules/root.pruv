@@ -1,0 +1,7 @@
+// P9b-3 (R-6x-1, R-6x-5): pub methods of a generic impl in a child module, called by path and with dot calls
+mod boxes;
+pub fn total(k: i64) -> i64 requires 0 <= k && k <= 1000 {
+  let b: crate::boxes::Pair<i64> = crate::boxes::Pair::<i64>::new(k, 2);
+  let c: crate::boxes::Pair<bool> = b.relabel::<bool>(true);
+  return b.first() + c.n + crate::boxes::Pair::<i64>::first(b);
+}

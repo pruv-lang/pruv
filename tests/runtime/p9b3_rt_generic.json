@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["28", "31", "78"], "gen_contains": ["fn count(self) -> i64", "y.get().get()", "c.get()", "p.get()", "q.get()", "b.count()", "fn pruv_g3_f_10_Box2__with_2_n1_C_0_b(self, u: bool) -> pruv_g3_t_4_Box2_1_b", "b.pruv_g3_f_10_Box2__with_2_n1_C_0_b(true)", "b.pruv_g3_f_10_Box2__with_2_n1_C_0_i(4i64)"]}

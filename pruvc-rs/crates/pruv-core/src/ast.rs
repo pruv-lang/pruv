@@ -808,8 +808,9 @@ pub struct Program {
     pub aliases: Vec<AliasItem>,
     /// P9b: the functions of `impl` blocks (lowered to free functions named `Owner__name`), in source order
     pub methods: Vec<MethodItem>,
-    /// P9b: the owner type, line and column of every `impl` block (an empty block is checked like any other)
-    pub impls: Vec<(String, i64, i64)>,
+    /// P9b: the owner type, line and column of every `impl` block (an empty block is checked like any other);
+    /// P9b-3: and the number of its type parameters
+    pub impls: Vec<(String, i64, i64, usize)>,
 }
 
 /// P9b: how a method takes its receiver (`self`, `inout self`, `take self`), or none (an associated function).
@@ -829,6 +830,12 @@ pub struct MethodItem {
     pub recv: Receiver,
     /// P9b-2: `pub fn` in the impl block (visible outside its module; never a host entry, so no `--proven-entries` twin)
     pub is_pub: bool,
+    /// P9b-3: the number of type parameters of the impl block (`impl<T> S<T>`: 1); they are the first type
+    /// parameters of `func`
+    pub impl_params: usize,
+    /// P9b-3: the owner as written in the impl block (`Box2`); messages of a single-file program name the method
+    /// `shown::name` whatever stem `owner` becomes
+    pub shown: String,
 }
 
 /// P9: `type name<params> = rhs;` with `rhs` a type key whose parameters are plain names.

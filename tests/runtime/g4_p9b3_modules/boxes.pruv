@@ -1,0 +1,8 @@
+// companion module of g4_p9b3_modules: a generic impl block; `peek` is private to this module
+pub struct Pair<T> { v: T, n: i64 }
+impl<T> Pair<T> {
+  pub fn new(v: T, n: i64) -> Self ensures result.v == v && result.n == n { return Self { v: v, n: n }; }
+  pub fn first(self) -> T ensures result == self.v { return self.peek(); }
+  pub fn relabel<U>(self, u: U) -> Pair<U> ensures result.n == self.n { return Pair::<U> { v: u, n: self.n }; }
+  fn peek(self) -> T ensures result == self.v { return self.v; }
+}

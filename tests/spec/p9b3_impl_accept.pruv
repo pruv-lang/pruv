@@ -1,0 +1,17 @@
+// spec: R-6x-1 accept
+// A generic impl block `impl<A, B> P<A, B>`: `Self` is `P<A, B>`, a method with its own type parameter, a path call
+// `P::<A, B>::f(..)` and `P::<A, B>::f::<U>(..)`, and contracts proved per specialization.
+struct P<A, B> { a: A, b: B, n: i64 }
+impl<A, B> P<A, B> {
+  fn make(a: A, b: B, n: i64) -> Self ensures result.n == n { return Self { a: a, b: b, n: n }; }
+  fn n(self) -> i64 ensures result == self.n { return self.n; }
+  fn swap(self) -> P<B, A> ensures result.n == self.n { return P::<B, A> { a: self.b, b: self.a, n: self.n }; }
+  fn put<U>(self, u: U) -> P<U, B> ensures result.n == self.n { return P::<U, B> { a: u, b: self.b, n: self.n }; }
+  fn same(self) -> i64 ensures result == self.n { return Self::n(self); }
+}
+fn f(k: i64) -> i64 requires 0 <= k && k <= 100 ensures result == 3 * k {
+  let p: P<i64, bool> = P::<i64, bool>::make(1, true, k);
+  let q: P<bool, i64> = p.swap();
+  let r: P<i64, i64> = P::<bool, i64>::put::<i64>(q, 5);
+  return p.n() + r.same() + q.n();
+}

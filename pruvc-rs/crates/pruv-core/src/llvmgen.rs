@@ -9658,7 +9658,7 @@ fn gen_llvm_body(
     }
     // P9b-2: a method of a single-file program shows as `T::f`, not as its lowered name `T__f`
     for mi in &prog.methods {
-        m.fn_disp.entry(mi.func.clone()).or_insert_with(|| format!("{}::{}", mi.owner, mi.name));
+        m.fn_disp.entry(mi.func.clone()).or_insert_with(|| format!("{}::{}", mi.shown, mi.name));
     }
     let mut funcs: HashMap<String, &Function> = HashMap::new();
     for f in &prog.functions {

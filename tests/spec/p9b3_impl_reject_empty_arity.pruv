@@ -1,0 +1,5 @@
+// spec: R-6x-1 reject
+// An empty impl block is checked too: `impl G` of a generic `G` does not name its type parameter.
+struct G<T> { v: T }
+impl G { }
+fn f(k: i64) -> i64 { return k; }

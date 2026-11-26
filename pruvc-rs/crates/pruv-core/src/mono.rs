@@ -1091,6 +1091,45 @@ impl<'a> Mono<'a> {
             }
             Explicit { fns: fmarks, type_pub: keyed.iter().map(|k| k.2).collect(), tdisp }
         });
+        // P9b-2: impl functions and owners by their Rust stems (identities in explicit mode); P9b-3: a method of a
+        // generic impl gives one entry per specialization, owned by the application of its owner at the impl's type
+        // arguments (the leading ones of the specialization); without that application it stays a free function
+        // (owner "")
+        let mut methods = Vec::new();
+        for m in &prog.methods {
+            let generic = self.findex.get(&m.func).map_or(false, |i| !prog.functions[*i].tparams.is_empty());
+            if !generic {
+                let mut m = m.clone();
+                if let Some(s) = self.rfns.get(&m.func) {
+                    m.func = s.clone();
+                }
+                if let Some(s) = self.rtypes.get(&m.owner) {
+                    m.owner = s.clone();
+                }
+                methods.push(m);
+                continue;
+            }
+            for spec in self.fns.iter().filter(|s| s.name == m.func) {
+                if spec.args.len() < m.impl_params {
+                    continue;
+                }
+                let tstem = if m.impl_params == 0 {
+                    self.rtypes.get(&m.owner).cloned().unwrap_or_else(|| m.owner.clone())
+                } else {
+                    let targs = &spec.args[..m.impl_params];
+                    // P9b-3 audit: without that application the entry keeps an empty owner, so messages still name
+                    // the method `Name::f` (codegen disp_of, llvmgen fn_disp) while impl_shape prints a free function
+                    match spec_type_stem(&self.gname(&m.owner), &self.safe_args(targs)) {
+                        Ok(t) if self.ty_idx.contains_key(&t) => t,
+                        _ => String::new(),
+                    }
+                };
+                let mut mm = m.clone();
+                mm.func = spec.stem.clone();
+                mm.owner = tstem;
+                methods.push(mm);
+            }
+        }
         let program = Program {
             functions,
             types: keyed.into_iter().map(|(_, d, _)| d).collect(),
@@ -1108,14 +1147,8 @@ impl<'a> Mono<'a> {
             // P7: module-level constants (evaluated at parse time)
             consts: prog.consts.clone(),
             aliases: prog.aliases.clone(),
-            // P9b-2: impl functions and owners by their Rust stems (identities in explicit mode)
-            methods: prog.methods.iter().map(|m| {
-                let mut m = m.clone();
-                if let Some(s) = self.rfns.get(&m.func) { m.func = s.clone(); }
-                if let Some(s) = self.rtypes.get(&m.owner) { m.owner = s.clone(); }
-                m
-            }).collect(),
-            impls: prog.impls.iter().map(|(o, l, c)| (self.rtypes.get(o).cloned().unwrap_or_else(|| o.clone()), *l, *c)).collect(),
+            methods,
+            impls: prog.impls.iter().map(|(o, l, c, n)| (self.rtypes.get(o).cloned().unwrap_or_else(|| o.clone()), *l, *c, *n)).collect(),
         };
         let args = self.types.into_iter().map(|spec| (spec.stem, spec.args))
             .chain(self.fns.into_iter().map(|spec| (spec.stem, spec.args)))
