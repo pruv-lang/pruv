@@ -51,9 +51,36 @@ pub fn parse_file(src: &str, tag: usize) -> R<ParsedFile> {
         pending: Vec::new(),
         consts: HashMap::new(),
         fixed_ok: false,
+        aliases: HashMap::new(),
+        alias_busy: Vec::new(),
+        alias_generic: Vec::new(),
     };
+    let alias_order = p.alias_collect()?;
     let consts = p.const_prepass()?;
+    p.alias_validate(alias_order)?;
     let mut prog = p.program()?;
+    if !p.aliases.is_empty() {
+        let mut al: Vec<&AliasDef> = p.aliases.values().collect();
+        al.sort_by_key(|a| a.rhs);
+        if tag != 0 || p.has_pub || !p.mods.is_empty() {
+            // P9 row P9a-1: aliases in module programs (paths, `pub type`) are not designed yet.
+            return Err(PruvError::new("parse", al[0].tok.line, al[0].tok.col, "alias_module",
+                "type aliases are available only in a single-file program without `pub` or `mod` items (parity row P9a-1)",
+                "write the type out, or keep the program in one file"));
+        }
+        for t in &prog.types {
+            let (n, l, c) = match t { TypeDecl::Struct(d) => (&d.name, d.line, d.col), TypeDecl::Enum(d) => (&d.name, d.line, d.col) };
+            if p.aliases.contains_key(n) {
+                return Err(PruvError::new("type", l, c, "dup_type",
+                    format!("type {} is declared twice (a struct or enum and a type alias)", repr_str(n)), "rename one of them"));
+            }
+        }
+        for a in al {
+            if a.used.get() {
+                prog.aliases.push(AliasItem { name: a.tok.val.clone(), params: a.params.clone(), rhs: a.key.borrow().clone() });
+            }
+        }
+    }
     if let Some(first) = consts.first() {
         if tag != 0 || p.has_pub || !p.mods.is_empty() {
             // P7 row P7-3: constants in module programs (paths, `pub const`) are not designed yet.
@@ -345,6 +372,25 @@ struct Parser {
     consts: HashMap<String, (String, i128)>,
     /// P7-1: the next `type_g` may read a fixed-length array (only a local `let` annotation for now, P7-1 A)
     fixed_ok: bool,
+    // ---- P9 type aliases ----
+    /// `type Name<P..> = T;` by name; a use in a type position parses the right side again with the arguments bound
+    aliases: HashMap<String, AliasDef>,
+    /// aliases being expanded (a re-entry is a cycle, also one whose arguments only grow)
+    alias_busy: Vec<String>,
+    /// P9: per alias expansion in progress, whether it sits in a generic declaration (for parse/tuple_generic)
+    alias_generic: Vec<bool>,
+}
+
+/// P9: one transparent type alias of the file.
+#[derive(Debug, Clone)]
+struct AliasDef {
+    tok: Tok,
+    params: Vec<String>,
+    /// token index of the right side
+    rhs: usize,
+    /// the right side's type key with the parameters as plain names (for the Rust `type` item)
+    key: std::cell::RefCell<String>,
+    used: std::cell::Cell<bool>,
 }
 
 
@@ -465,7 +511,12 @@ impl Parser {
                     "rename it with capital letters, digits and _"));
             }
             self.expect(":")?;
-            let tt = self.next();
+            let mut tt = self.next();
+            if tt.kind == Kind::Id && self.aliases.contains_key(&tt.val) && !self.at("::", 0) {
+                // P9: a constant typed with an alias: the alias's expansion (marks it used; reports alias cycles)
+                let g = self.alias_use(&tt, false)?;
+                tt.val = g.to_key();
+            }
             let w = match intwidth::of(&tt.val) {
                 Some(w) if tt.kind == Kind::Id => w,
                 _ => {
@@ -496,6 +547,154 @@ impl Parser {
             self.consts.insert(c.name.clone(), (c.ty.clone(), c.value));
         }
         Ok(out)
+    }
+
+    /// P9: collects every `[pub] type Name<P..> = T;` item (forward uses are allowed) before the constants are read,
+    /// so a constant's type can be an alias; returns the aliases in file order for alias_validate.
+    fn alias_collect(&mut self) -> R<Vec<String>> {
+        let mut order = Vec::new();
+        // the struct, enum and alias names of the file: an alias parameter must not shadow one
+        let mut decl_names: Vec<String> = Vec::new();
+        for k in 0..self.t.len().saturating_sub(1) {
+            if self.t[k].kind == Kind::Kw && matches!(self.t[k].val.as_str(), "struct" | "enum" | "type") && self.t[k + 1].kind == Kind::Id {
+                decl_names.push(self.t[k + 1].val.clone());
+            }
+        }
+        let mut j = 0;
+        while j < self.t.len() {
+            if !(self.t[j].kind == Kind::Kw && self.t[j].val == "type") {
+                j += 1;
+                continue;
+            }
+            self.i = j + 1;
+            let n = self.ident()?;
+            if !is_upper(&n.val) {
+                return Err(self.err("a type alias name starts with a capital letter", "rename it, e.g. ParseResult", Some(&n)));
+            }
+            if crate::check::RESERVED_TYPE_NAMES.contains(&n.val.as_str()) {
+                return Err(PruvError::new("type", n.line, n.col, "reserved", format!("{} is a builtin name", n.val), "rename the alias"));
+            }
+            let mut params: Vec<String> = Vec::new();
+            if self.at("<", 0) {
+                self.bump();
+                loop {
+                    let p = self.ident()?;
+                    if !is_upper(&p.val) {
+                        return Err(PruvError::new("type", p.line, p.col, "type_parameter",
+                            format!("type parameter {} must start with an upper-case letter", p.val), "rename it, e.g. T"));
+                    }
+                    if crate::check::RESERVED_TYPE_NAMES.contains(&p.val.as_str()) || decl_names.contains(&p.val) {
+                        return Err(PruvError::new("type", p.line, p.col, "type_parameter",
+                            format!("type parameter {} shadows a declared or built-in type", p.val), "rename the parameter"));
+                    }
+                    if params.contains(&p.val) {
+                        return Err(self.err(format!("type parameter {} is declared twice", repr_str(&p.val)), "rename one", Some(&p)));
+                    }
+                    params.push(p.val);
+                    if self.at(",", 0) {
+                        self.bump();
+                        continue;
+                    }
+                    break;
+                }
+                self.expect(">")?;
+            }
+            self.expect("=")?;
+            let rhs = self.i;
+            if self.aliases.contains_key(&n.val) {
+                return Err(PruvError::new("type", n.line, n.col, "dup_type",
+                    format!("type alias {} is declared twice", repr_str(&n.val)), "remove one declaration"));
+            }
+            order.push(n.val.clone());
+            self.aliases.insert(n.val.clone(), AliasDef { tok: n, params, rhs, key: Default::default(), used: Default::default() });
+            // skip to the closing `;` (a `;` inside `[T; N]` is nested)
+            let mut depth = 0i64;
+            let mut k = rhs;
+            while k < self.t.len() && self.t[k].kind != Kind::Eof && !(depth == 0 && self.t[k].kind == Kind::Op && self.t[k].val == ";") {
+                if self.t[k].kind == Kind::Op && self.t[k].val == "[" { depth += 1; }
+                if self.t[k].kind == Kind::Op && self.t[k].val == "]" { depth -= 1; }
+                k += 1;
+            }
+            j = k + 1;
+        }
+        self.i = 0;
+        Ok(order)
+    }
+
+    /// P9: parses each alias right side once with its parameters bound to themselves (after the constants, which a
+    /// fixed length may name), which reports bad types and alias cycles even for unused aliases.
+    fn alias_validate(&mut self, order: Vec<String>) -> R<()> {
+        // only uses from the program mark an alias used (for the Rust item): keep the constants' uses, drop the validation's
+        let used_before: Vec<String> = self.aliases.iter().filter(|(_, a)| a.used.get()).map(|(k, _)| k.clone()).collect();
+        for name in order {
+            let a = self.aliases[&name].clone();
+            let scope: HashMap<String, GType> = a.params.iter().enumerate()
+                .map(|(i, p)| (p.clone(), mk_param(&format!("@alias {}", name), i, p))).collect();
+            let saved = std::mem::replace(&mut self.scope, scope);
+            self.alias_busy.push(name.clone());
+            self.alias_generic.push(!a.params.is_empty());
+            self.i = a.rhs;
+            self.fixed_ok = true;
+            let (g, _) = self.type_g(false)?; // a refinement here is parse/refinement_position
+            self.expect(";")?;
+            self.alias_busy.pop();
+            self.alias_generic.pop();
+            self.scope = saved;
+            *self.aliases[&name].key.borrow_mut() = g.to_key();
+        }
+        for (k, a) in self.aliases.iter() {
+            a.used.set(used_before.contains(k));
+        }
+        self.i = 0;
+        self.fixed_ok = false;
+        Ok(())
+    }
+
+    /// P9: whether the token at offset k names a type alias (not shadowed by a type parameter).
+    fn at_alias(&self, k: usize) -> bool {
+        let t = self.peek(k);
+        t.kind == Kind::Id && self.aliases.contains_key(&t.val) && !self.scope.contains_key(&t.val)
+    }
+
+    /// P9: a use of alias `n` (the name is read; optional `<args>` follow): the right side with the arguments bound.
+    fn alias_use(&mut self, n: &Tok, fixed_ok: bool) -> R<GType> {
+        let a = self.aliases[&n.val].clone();
+        self.aliases[&n.val].used.set(true);
+        let args = if self.at("<", 0) {
+            self.bump();
+            self.type_arg_list(false)?
+        } else {
+            Vec::new()
+        };
+        if args.len() != a.params.len() {
+            return Err(PruvError::new("type", n.line, n.col, "type_arity",
+                format!("type alias {} takes {} type argument(s), found {}", repr_str(&n.val), a.params.len(), args.len()),
+                "pass one type argument per alias parameter"));
+        }
+        if self.alias_busy.contains(&n.val) {
+            let mut path = self.alias_busy.clone();
+            path.push(n.val.clone());
+            return Err(PruvError::new("type", a.tok.line, a.tok.col, "alias_cycle",
+                format!("type alias {} refers to itself ({})", repr_str(&n.val), path.join(" -> ")),
+                "a type alias names an existing type; use a struct or enum for a recursive type"));
+        }
+        let scope: HashMap<String, GType> = a.params.iter().cloned().zip(args).collect();
+        let saved = std::mem::replace(&mut self.scope, scope);
+        let save_i = self.i;
+        let generic = match self.alias_generic.last() {
+            Some(g) if !self.alias_busy.is_empty() => *g,
+            _ => !saved.is_empty(),
+        };
+        self.alias_busy.push(n.val.clone());
+        self.alias_generic.push(generic);
+        self.i = a.rhs;
+        self.fixed_ok = fixed_ok;
+        let (g, _) = self.type_g(false)?;
+        self.alias_busy.pop();
+        self.alias_generic.pop();
+        self.i = save_i;
+        self.scope = saved;
+        Ok(g)
     }
 
     /// P7-1: the length of `[T; N]` / `[x; N]` after the `;`: a closed constant expression, computed in its own
@@ -699,7 +898,9 @@ impl Parser {
                 format!("a tuple type has 2 to {} components, found {}", crate::gtype::TUPLE_MAX_ARITY, comps.len()),
                 "write (A, B) up to 8 components; a single type needs no parentheses"));
         }
-        if !self.scope.is_empty() {
+        // P9: inside an alias right side the scope holds the alias arguments; only a type parameter among them counts
+        let generic = if self.alias_busy.is_empty() { !self.scope.is_empty() } else { self.alias_generic.last() == Some(&true) };
+        if generic {
             return Err(PruvError::new("parse", open.line, open.col, "tuple_generic",
                 "tuple types are not available inside a generic declaration",
                 "declare a named generic struct, or use the tuple in a non-generic function"));
@@ -860,6 +1061,21 @@ impl Parser {
                     self.bump();
                 }
                 self.bump();
+                continue;
+            }
+            if self.at("type", 0) {
+                // P9: already read by alias_prepass: skip to the closing `;` (a `;` inside `[T; N]` is nested)
+                let mut depth = 0i64;
+                self.bump();
+                while !(depth == 0 && self.at(";", 0)) && self.peek(0).kind != Kind::Eof {
+                    if self.at("[", 0) { depth += 1; }
+                    if self.at("]", 0) { depth -= 1; }
+                    self.bump();
+                }
+                self.expect(";")?;
+                if is_pub {
+                    self.has_pub = true;
+                }
                 continue;
             }
             if self.at("mod", 0) {
@@ -1562,9 +1778,12 @@ impl Parser {
     /// The structured form of `type_r`.
     fn type_g(&mut self, allow: bool) -> R<(GType, Option<Refinement>)> {
         let fixed_ok = std::mem::replace(&mut self.fixed_ok, false);
-        if self.at_ident(crate::lexer::REF_IDENT, 0) && (self.at("[", 1) || self.at_ident("str", 1)) {
-            self.bump();
+        if self.at_ident(crate::lexer::REF_IDENT, 0) && (self.at("[", 1) || self.at_ident("str", 1) || self.at_alias(1)) {
+            let rt = self.next();
             let (base, refinement) = self.type_g(allow)?;
+            if !(base.is_array() || base == GType::str()) {
+                return Err(self.err("`ref` takes an array or str type", "write ref [T] or ref str", Some(&rt)));
+            }
             return Ok((GType::new("@ref", vec![base]), refinement));
         }
         let t = self.peek(0).clone();
@@ -1607,14 +1826,29 @@ impl Parser {
                 }
                 return Err(self.err("only [i64], [u8], [u16] and [bool] arrays exist", "use [i64], [u8], [u16] or [bool]", Some(&inner)));
             }
-            let e = if self.at("crate", 0) { self.type_path()? } else { self.ident()? }; // G4: a qualified element type
+            let mut e = if self.at("crate", 0) { self.type_path()? } else { self.ident()? }; // G4: a qualified element type
+            let mut alias_elem: Option<GType> = None;
+            if self.aliases.contains_key(&e.val) && !self.scope.contains_key(&e.val) {
+                // P9: an alias element: a scalar continues as its spelled name, any other type is the element itself
+                let g = self.alias_use(&e, false)?;
+                if g.args.is_empty() && g.owner.is_none() && (g.name == "bool" || intwidth::of(&g.name).is_some()) {
+                    e.val = g.name;
+                } else {
+                    if self.at(";", 0) && !self.at("<=", 1) {
+                        return Err(fixed_element(e.line, e.col, &e.val));
+                    }
+                    alias_elem = Some(g);
+                }
+            }
             if self.at(";", 0) && !self.at("<=", 1) {
                 return Ok((self.fixed_array_type(&open, &e, fixed_ok)?, None));
             }
             if intwidth::PENDING_INTS.contains(&e.val.as_str()) {
                 return Err(self.small_int_unsupported(&e, "this integer type requires P3"));
             }
-            let elem: GType = if e.val == "i64" {
+            let elem: GType = if let Some(g) = alias_elem {
+                g
+            } else if e.val == "i64" {
                 GType::i64()
             } else if e.val == "u8" {
                 GType::u8()
@@ -1669,9 +1903,12 @@ impl Parser {
                 Some(Refinement { line: t.line, col: t.col, shape: "array".to_string(), base: e.val.clone(), lo, hi, maxlen }),
             ));
         }
-        let n = if self.at("crate", 0) { self.type_path()? } else { self.ident()? }; // G4: a qualified type path
+        let mut n = if self.at("crate", 0) { self.type_path()? } else { self.ident()? }; // G4: a qualified type path
         let ty: GType;
-        if intwidth::PENDING_INTS.contains(&n.val.as_str()) {
+        if self.aliases.contains_key(&n.val) && !self.scope.contains_key(&n.val) {
+            ty = self.alias_use(&n, fixed_ok)?;
+            n.val = ty.to_key(); // a use-site refinement applies to the expanded type
+        } else if intwidth::PENDING_INTS.contains(&n.val.as_str()) {
             return Err(self.small_int_unsupported(&n, "this integer type requires P3"));
         } else if intwidth::of(&n.val).is_some() {
             ty = GType::new(&n.val, Vec::new());

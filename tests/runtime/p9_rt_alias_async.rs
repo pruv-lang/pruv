@@ -1,0 +1,1 @@
+fn main(){let t=std::time::Instant::now();assert_eq!(sol::timer(),0);assert!(t.elapsed()>=std::time::Duration::from_millis(50));assert_eq!(sol::PRUV_ASYNC_THREADS.load(std::sync::atomic::Ordering::SeqCst), 0); println!("async runtime ok");}

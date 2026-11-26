@@ -1,0 +1,4 @@
+type A = B;
+type B = A;
+const N: A = 1;
+fn f() -> i64 { return 0; }

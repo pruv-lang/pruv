@@ -1,0 +1,38 @@
+// P9a: aliases with P8 patterns (if let, let else, slice arms) and a P7 fixed-array alias in a field, an inout
+// parameter and a generic call's type argument
+type Row = [i64; 3];
+type Code = i64;
+type Res<T> = Result<T, Code>;
+type Maybe<T> = Option<T>;
+
+struct Grid { r: Row, tag: Code }
+
+fn bump(inout r: Row) -> ()
+  requires r[0] < 1000 && r[0] > -1000
+  ensures r[0] == old(r)[0] + 1 && r[1] == old(r)[1] && r[2] == old(r)[2]
+{
+  r[0] = r[0] + 1;
+}
+
+fn first<T: Element>(x: Maybe<T>, d: T) -> T {
+  if let Some(v) = x { return v; }
+  return d;
+}
+
+fn head(r: Row) -> Res<Code>
+  requires r[0] < 1000 && r[0] > -1000
+{
+  match r {
+    [a, ..] => { if a < 0 { return Err(a); } return Ok(a * 10); }
+  }
+}
+
+fn run(i: i64) -> i64
+  requires -10 < i && i < 10
+{
+  let mut g: Grid = Grid { r: [i, 2, 3], tag: 7 };
+  bump(inout g.r);
+  let Ok(h) = head(g.r) else { return first::<Code>(None, g.tag); };
+  let m: Maybe<Code> = Some(h);
+  return first::<Code>(m, 0);
+}

@@ -1,0 +1,3 @@
+// P9a: `ref` of an alias needs an array or str behind it
+type Code = i64;
+fn f(x: [i64]) -> ref Code from(x) { return x; }

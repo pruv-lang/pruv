@@ -1,0 +1,34 @@
+// P9: constants typed with aliases (a generic instance, a 17-step chain, an alias used only by a constant)
+type Id<T> = T;
+type Code = Id<i64>;
+type Byte = u8;
+type A0 = A1;
+type A1 = A2;
+type A2 = A3;
+type A3 = A4;
+type A4 = A5;
+type A5 = A6;
+type A6 = A7;
+type A7 = A8;
+type A8 = A9;
+type A9 = A10;
+type A10 = A11;
+type A11 = A12;
+type A12 = A13;
+type A13 = A14;
+type A14 = A15;
+type A15 = A16;
+type A16 = i64;
+const BASE: Code = 40;
+const DEEP: A0 = 2;
+const TOP: Byte = 255;
+
+fn run(i: i64) -> i64
+  requires -10 < i && i < 10
+{
+  return BASE + DEEP + i;
+}
+
+fn top() -> u8 {
+  return TOP;
+}

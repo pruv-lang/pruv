@@ -1,0 +1,2 @@
+type R<T> = Result<T, i64>;
+fn f(x: i64) -> R<i64, i64> { return Ok(x); }

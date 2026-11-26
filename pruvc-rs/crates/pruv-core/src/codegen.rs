@@ -6566,6 +6566,12 @@ fn gen_rust_concrete_core(
             let v = if c.ty == "char" { rust_char_lit(&c.value.to_string(), false) } else { c.value.to_string() };
             g.out.push(format!("#[allow(dead_code)]\nconst {}: {} = {};", c.name, c.ty, v));
         }
+        // P9: the used non-generic aliases of scalar, fixed-array and tuple types (uses print expanded, row P9a-2)
+        for a in &prog.aliases {
+            if a.params.is_empty() && alias_name_free(&a.name) && alias_printable(&GType::from_key(&a.rhs)) {
+                g.out.push(format!("#[allow(dead_code)]\ntype {} = {};", a.name, rty(&a.rhs, false)));
+            }
+        }
         for f in &prog.functions {
             g.func(f)?;
         }
@@ -7247,7 +7253,7 @@ mod tests {
             foreign: None,
             cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
         };
-        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new() }
+        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new(), aliases: Vec::new() }
     }
 
     #[test]
@@ -7298,7 +7304,7 @@ mod tests {
             foreign: None,
             cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
         };
-        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new() }
+        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new(), aliases: Vec::new() }
     }
 
     // L3-10: eq_range
@@ -7670,7 +7676,7 @@ mod tests {
                 Stmt::Return(Return { line: 1, col: 1, value: Some(call("len", vec![var("r", "array")], "i64")) }),
             ],
         );
-        Program { functions: vec![mk, g], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new() }
+        Program { functions: vec![mk, g], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new(), aliases: Vec::new() }
     }
 
     #[test]
@@ -8418,3 +8424,32 @@ pub fn async_filter(src:&str, hook:&str, prefix:&str)->String {
 }
 pub fn async_prelude(hook:&str)->String {async_filter(ASYNC_PRELUDE,hook,"//@hook")}
 pub fn async_proc_prelude(proc_hook:&str, hook:&str)->String {async_filter(&async_filter(ASYNC_PROC_PRELUDE,proc_hook,"//@hook"),hook,"//@async_hook")}
+
+/// P9: a type alias right side the Rust module can name as written: no user type with type arguments or parameters.
+fn alias_printable(g: &GType) -> bool {
+    // scalars, fixed arrays of scalars and tuples of these: their Rust spelling is the same at every use and
+    // carries no lifetime; buffers, str, views, Option/Result and user types print only expanded (row P9a-2)
+    if let Some((e, _)) = g.fixed_parts() {
+        return alias_printable(e);
+    }
+    if let Some(cs) = crate::gtype::tuple_components(&g.name) {
+        return cs.iter().all(|c| alias_printable(&GType::from_key(c)));
+    }
+    g.owner.is_none() && g.args.is_empty() && (g.name == "bool" || crate::intwidth::of(&g.name).is_some())
+}
+
+/// P9: an alias item lives in `mod pruv_impl` next to the runtime prelude, which spells std prelude names unqualified
+/// (`impl Drop`, `F: FnOnce() + Send`, `Default::default()`) and has no `use` items, so an item must not take a name
+/// of the Rust 2021 prelude, a common std type, or a generated `Pruv..` name.
+fn alias_name_free(name: &str) -> bool {
+    const STD_NAMES: &[&str] = &[
+        // the Rust 2021 prelude (types and traits)
+        "Copy", "Send", "Sized", "Sync", "Unpin", "Drop", "Fn", "FnMut", "FnOnce", "Box", "ToOwned", "Clone",
+        "PartialEq", "PartialOrd", "Eq", "Ord", "AsRef", "AsMut", "Into", "From", "Default", "Iterator", "Extend",
+        "IntoIterator", "DoubleEndedIterator", "ExactSizeIterator", "Option", "Result", "String", "ToString", "Vec",
+        "TryFrom", "TryInto", "FromIterator",
+        // std names the generated code may spell, and `Self`
+        "HashMap", "HashSet", "BTreeMap", "Rc", "Arc", "Cell", "RefCell", "Ordering", "Self",
+    ];
+    !name.starts_with("Pruv") && !STD_NAMES.contains(&name)
+}
