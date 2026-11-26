@@ -1,0 +1,34 @@
+// spec: R-6u-6 accept
+// `_` arms and `_`, literal and nested variant sub-patterns in a statement and a value `match`; every arm is proved
+// under its full pattern, so the `Some(d)` arm after `Some(0)` knows `d != 0`.
+enum Halt { Done, Stalled, Bad(c: i64) }
+
+fn code(r: Result<bool, Halt>) -> i64
+  ensures (is_ok(r) && !ok_val(r)) ==> result == 0
+{
+  match r {
+    Ok(false) => { return 0; }
+    Ok(true) => { return 1; }
+    Err(Halt::Done) => { return 2; }
+    Err(Halt::Bad(-1)) => { return 3; }
+    Err(_) => { return 4; }
+  }
+}
+
+fn nested(o: Option<Result<i64, bool>>) -> i64
+  ensures !is_some(o) ==> result == 9
+{
+  return match o {
+    Some(Ok(0)) => 0,
+    Some(Ok(x)) => x,
+    Some(Err(true)) => 1,
+    Some(Err(false)) => 2,
+    None => 9,
+  };
+}
+
+fn div(o: Option<i64>) -> i64
+  requires !is_some(o) || some_val(o) >= 0
+{
+  return match o { Some(0) => 0, Some(d) => 100 / d, _ => -1 };
+}

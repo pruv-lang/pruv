@@ -1485,6 +1485,16 @@ must_reject|tests/must_reject/p9_match_missing.pruv	1 case: obl=0 1	default=fe62
 must_reject|tests/must_reject/p9_match_owned_borrow.pruv	1 case: obl=0 1	default=33c82e063560
 must_reject|tests/must_reject/p9_match_pattern.pruv	1 case: obl=0 1	default=d447b5a06b24
 must_reject|tests/must_reject/p9_match_types.pruv	1 case: obl=0 1	default=d12537c0c5db
+must_reject|tests/must_reject/p9_pattern_arity.pruv	1 case: obl=0 1	default=f4e81cd03d78
+must_reject|tests/must_reject/p9_pattern_arm_index.pruv	1 case: obl=3 1	default=49dae644c14a
+must_reject|tests/must_reject/p9_pattern_false_ensures.pruv	1 case: obl=1 1	default=0cd72f9c4c7d
+must_reject|tests/must_reject/p9_pattern_if_let.pruv	1 case: obl=0 1	default=b75bd64d7498
+must_reject|tests/must_reject/p9_pattern_lit_type.pruv	1 case: obl=0 1	default=b82b56114a80
+must_reject|tests/must_reject/p9_pattern_missing.pruv	1 case: obl=0 1	default=a2102d47904a
+must_reject|tests/must_reject/p9_pattern_missing_lit.pruv	1 case: obl=0 1	default=9bb746e275b2
+must_reject|tests/must_reject/p9_pattern_unreachable.pruv	1 case: obl=0 1	default=dca9e3d8c4b6
+must_reject|tests/must_reject/p9_pattern_unreachable_wild.pruv	1 case: obl=0 1	default=48b79bafb436
+must_reject|tests/must_reject/p9_pattern_variant_type.pruv	1 case: obl=0 1	default=7e770aae97ec
 must_reject|tests/must_reject/refine_alloc_len.pruv	1 case: obl=4 1	default=14a4c91b9d32
 must_reject|tests/must_reject/refine_base_bool.pruv	1 case: obl=0 1	default=ee830c6079aa
 must_reject|tests/must_reject/refine_bounds_i64.pruv	1 case: obl=0 1	default=d4b00a9eb36d
@@ -2035,6 +2045,8 @@ runtime|tests/runtime/p9_rt_match_take.pruv	1 case: obl=26 1	default=f8c8a4a9e70
 runtime|tests/runtime/p9_rt_match_unchecked.pruv	1 case: obl=2 1	default=3ec6dbafda66
 runtime|tests/runtime/p9_rt_match_value.pruv	1 case: obl=25 1	default=add1f56b1ee0
 runtime|tests/runtime/p9_rt_owned_arm.pruv	1 case: obl=24 1	default=9b31c83dc85a
+runtime|tests/runtime/p9_rt_pattern_order.pruv	1 case: obl=32 1	default=e5f3374148a3
+runtime|tests/runtime/p9_rt_pattern_owned.pruv	1 case: obl=16 1	default=75148ac98a8a
 runtime|tests/runtime/qb_across_requires.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 runtime|tests/runtime/qb_budget_edge.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 runtime|tests/runtime/qb_nested_budget.pruv	1 case: obl=0 1	default=c0f6163aeb7a

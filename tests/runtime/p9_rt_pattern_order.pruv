@@ -1,0 +1,90 @@
+// P9a-6: `_`, literal and nested variant patterns in a `match` statement and a value `match`. Arms are tried in
+// source order and the first arm that matches wins; each arm is proved under its full pattern (the earlier arms
+// failed), so the index in the `None` arm is safe only because that arm is taken only when `len(xs) > 5`.
+enum Halt { Done, Stalled, Bad(c: i64) }
+
+fn probe(n: i64) -> Result<bool, Halt>
+  requires 0 <= n && n < 10
+  ensures n == 0 ==> (is_ok(result) && !ok_val(result))
+{
+  if n == 0 { return Ok::<bool, Halt>(false); }
+  if n == 1 { return Ok::<bool, Halt>(true); }
+  if n == 2 { return Err::<bool, Halt>(Halt::Done); }
+  if n == 3 { return Err::<bool, Halt>(Halt::Stalled); }
+  return Err::<bool, Halt>(Halt::Bad(n));
+}
+
+fn code(n: i64) -> i64
+  requires 0 <= n && n < 10
+  ensures n == 0 ==> result == 10
+{
+  let r: Result<bool, Halt> = probe(n);
+  match r {
+    Ok(false) => { return 10; }
+    Ok(true) => { return 11; }
+    Err(Halt::Done) => { return 12; }
+    Err(Halt::Bad(7)) => { return 17; }
+    Err(h) => { return 20; }
+  }
+}
+
+fn vcode(o: Option<Option<i64>>) -> i64
+  ensures !is_some(o) ==> result == 5
+{
+  return match o {
+    Some(Some(0)) => 1,
+    Some(Some(x)) => if x > 0 { 2 } else { 3 },
+    Some(None) => 4,
+    _ => 5,
+  };
+}
+
+fn lit(o: Option<i64>) -> i64
+  ensures (is_some(o) && some_val(o) == -1) ==> result == 101
+  ensures !is_some(o) ==> result == 0
+{
+  let mut out: i64 = 0;
+  match o {
+    Some(0) => { out = 100; }
+    Some(-1) => { out = 101; }
+    Some(_) => { out = 102; }
+    None => {}
+  }
+  return out;
+}
+
+fn at(xs: [i64], o: Option<i64>) -> i64
+  requires is_some(o) || len(xs) > 5
+{
+  return match o {
+    Some(0) => 0,
+    None => xs[5],
+    Some(k) => k,
+  };
+}
+
+fn run() -> () ! io {
+  let mut i: i64 = 0;
+  while i < 9
+    invariant 0 <= i && i <= 9
+    decreases 9 - i
+  {
+    print(code(i));
+    i = i + 1;
+  }
+  let a: Option<i64> = Some(0);
+  let b: Option<i64> = Some(-4);
+  let c: Option<i64> = Some(4);
+  print(vcode(Some::<Option<i64>>(a)));
+  print(vcode(Some::<Option<i64>>(b)));
+  print(vcode(Some::<Option<i64>>(c)));
+  print(vcode(Some::<Option<i64>>(None::<i64>)));
+  print(vcode(None::<Option<i64>>));
+  print(lit(Some(0)));
+  print(lit(Some(-1)));
+  print(lit(Some(9)));
+  print(lit(None::<i64>));
+  print(at([1, 2], Some(8)));
+  print(at([1, 2], Some(0)));
+  print(at([1, 2, 3, 4, 5, 66], None::<i64>));
+}

@@ -659,7 +659,7 @@ directly, so the by-value adapters it alone used are gone.
 - **CK** used: `advance` writes checkpoint words 0..2 and clears 3..8 with `put_ck` in a `for` loop (hand
   `cx.ck = [ph, idx, cnt, 0, 0, 0, 0, 0]`); `import_step` seeds the checkpoint with `set_ck_arr0(s.ck)`.
 - **OA** used: the per-item output is `Rows` threaded through `inout rows` rather than an `Option<Rows>` return.
-- **MP** (new, language gap): `codex_acct` matches the `is_codex_home` result as `Ok(host)` then `Err(h)` with an
+- **MP** (closed by parity bundle P9a-6: `_` arms, literal and nested variant patterns; or-patterns are P9a-7) (new, language gap): `codex_acct` matches the `is_codex_home` result as `Ok(host)` then `Err(h)` with an
   inner `match h` listing `Done`, `Stalled`, `Bad`; the hand writes `Ok(false)`, `Ok(true) | Err(Halt::Done)`,
   `Err(h) => return Err(h)`. Checked with pruvc: `Ok(false)` is `parse/syntax` (no literal pattern),
   `Err(H::A)` is `parse/syntax` (no nested variant pattern) and a `_` arm is `parse/reserved_name`, so the inner

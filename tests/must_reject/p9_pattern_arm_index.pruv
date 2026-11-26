@@ -1,0 +1,9 @@
+// P9a-6: the index is safe only under `Some(0)`, but the `_` arm also reads it.
+fn f(xs: [i64], o: Option<i64>) -> i64
+  requires !is_some(o) || some_val(o) != 0 || len(xs) > 3
+{
+  match o {
+    Some(0) => { return xs[3]; }
+    _ => { return xs[3]; }
+  }
+}

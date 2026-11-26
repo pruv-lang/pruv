@@ -1,0 +1,4 @@
+// P9a-6: an arm after a `_` arm can never match.
+fn f(o: Option<bool>) -> i64 {
+  return match o { _ => 1, None => 0 };
+}

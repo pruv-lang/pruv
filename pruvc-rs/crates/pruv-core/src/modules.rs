@@ -1310,6 +1310,8 @@ impl<'a> Rs<'a> {
                             let n = self.local_or_path_type(en, a.line, a.col)?;
                             a.enum_name = Some(n);
                         }
+                        let (l, c) = (a.line, a.col);
+                        crate::ast::SubPat::map_slots(&mut a.binders, &mut |en| self.local_or_path_type(en, l, c))?;
                         self.rstmts(&mut a.body)?;
                     }
                     self.rstmts(&mut m.els)?; // P8: the else block of `if let` / `let ... else`
@@ -1332,6 +1334,8 @@ impl<'a> Rs<'a> {
                     if let Some(en) = &a.enum_name {
                         a.enum_name = Some(self.local_or_path_type(en, call.line, call.col)?);
                     }
+                    let (l, c) = (call.line, call.col);
+                    crate::ast::SubPat::map_slots(&mut a.binders, &mut |en| self.local_or_path_type(en, l, c))?;
                 }
                 call.name = crate::ast::ValueMatch::rename(&arms);
                 return call.args.iter_mut().try_for_each(|arg| self.rexpr(arg));

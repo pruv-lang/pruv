@@ -1,0 +1,54 @@
+// P9a-6: literal and nested patterns over owned results. Only the chosen arm allocates; a binder taken from an
+// owned payload (`Ok(s)`) moves the payload once, and every arm's result is freed exactly once.
+enum Got { Good(xs: [i64]), Fail(code: i64) }
+
+fn mk(n: i64) -> [i64] ! alloc
+  requires 0 <= n && n <= 10
+  ensures len(result) == n
+{
+  return alloc(n, 7);
+}
+
+fn label(o: Option<Option<bool>>) -> String ! alloc
+  ensures len(result) <= 5
+{
+  return match o {
+    Some(Some(true)) => string_from("yes"),
+    Some(Some(false)) => string_from("no"),
+    Some(None) => string_from("empty"),
+    _ => string_from(""),
+  };
+}
+
+fn count(r: Got) -> i64 ! alloc {
+  let mut out: i64 = 0;
+  match r {
+    Got::Fail(0) => { out = -1; }
+    Got::Good(xs) => { out = len(xs); }
+    Got::Fail(_) => { out = -2; }
+  }
+  return out;
+}
+
+fn pick(r: Result<i64, bool>) -> [i64] ! alloc {
+  return match r {
+    Ok(3) => mk(3),
+    Ok(_) => mk(1),
+    Err(true) => mk(2),
+    Err(false) => mk(0),
+  };
+}
+
+fn run() -> () ! io, alloc {
+  let a: Option<bool> = Some::<bool>(true);
+  let b: Option<bool> = Some::<bool>(false);
+  print(len(label(Some::<Option<bool>>(a))));
+  print(len(label(Some::<Option<bool>>(b))));
+  print(len(label(Some::<Option<bool>>(None::<bool>))));
+  print(len(label(None::<Option<bool>>)));
+  print(count(Got::Good(mk(4))));
+  print(count(Got::Fail(0)));
+  print(count(Got::Fail(5)));
+  print(len(pick(Ok::<i64, bool>(3))) * 10 + len(pick(Ok::<i64, bool>(9))));
+  print(len(pick(Err::<i64, bool>(true))) * 10 + len(pick(Err::<i64, bool>(false))));
+}

@@ -2830,6 +2830,34 @@ variants (R-6u-5).
   [borrowed target](tests/must_reject/p8_borrow_target_while.pruv),
   [mutable None](tests/must_reject/p8_while_let_mut_none.pruv).
 
+- R-6u-6 **Wildcard, literal and nested patterns (P9a-6).** In a `match` statement and a value `match` (R-6w-5) an
+  arm may be `_ =>` (every value), and a payload position may hold, besides a binder or a tuple pattern (R-6u-1), `_`,
+  an integer literal (`Some(0)`, `Ok(-1)`, on an integer payload of any width), `true`/`false` (on a `bool` payload)
+  or a nested constructor pattern (`Err(Halt::Done)`, `Some(Ok(x))`, `E::V(F::W(0), _)`) on an `Option`, `Result` or
+  enum payload, to any depth. A literal on a payload of another type and a constructor of another type are
+  `type/type_mismatch` and `type/match_type` (`type/unknown_variant` for a variant the enum does not have); arity is
+  `type/match_arity`. Every value must reach an arm: a missing case is `type/match_arms`, whose message names it
+  (`(Err, Halt::Stalled)`); literal arms over an integer need a binder or `_` arm for the rest. The checker lowers
+  such a match to a decision tree of plain matches and `if v == lit` tests, so the verifier proves each arm under
+  its full pattern and the failure of the arms above it, and both backends run the tree (the Rust backend prints the
+  lowered tree, parity row P9a-7). These patterns are not accepted in `if let`, `let else` or `while let`
+  (`parse/let_pattern`, parity row P9a-7), and there are no or-patterns, guards or `@` bindings yet. Tests:
+  [accept](tests/spec/p9_pattern_accept.pruv), [missing case](tests/spec/p9_pattern_reject.pruv),
+  [false contract](tests/spec/p9_pattern_reject_contract.pruv), [let else](tests/spec/p9_pattern_let.pruv),
+  [runtime](tests/runtime/p9_rt_pattern_order.pruv), [owned](tests/runtime/p9_rt_pattern_owned.pruv),
+  [nested missing](tests/must_reject/p9_pattern_missing.pruv),
+  [literal missing](tests/must_reject/p9_pattern_missing_lit.pruv),
+  [literal type](tests/must_reject/p9_pattern_lit_type.pruv),
+  [variant type](tests/must_reject/p9_pattern_variant_type.pruv), [arity](tests/must_reject/p9_pattern_arity.pruv),
+  [false contract on one arm](tests/must_reject/p9_pattern_false_ensures.pruv),
+  [index in a general arm](tests/must_reject/p9_pattern_arm_index.pruv), [if let](tests/must_reject/p9_pattern_if_let.pruv).
+- R-6u-7 **Arm order and unreachable arms (P9a-6).** In a match with a pattern of R-6u-6, arms are tried in source
+  order and the first arm that matches runs, as in Rust (a specific arm before a general one takes its values first).
+  An arm that no value can reach because the arms above it take every value it matches (`Some(0)` after `Some(x)`,
+  any arm after `_`) is `type/unreachable_arm`. A match with only plain patterns keeps the one-arm-per-variant rule
+  (a repeated variant is `type/match_arms`). Tests: [accept](tests/spec/p9_pattern_order_accept.pruv),
+  [reject](tests/spec/p9_pattern_order_reject.pruv), [after a binder](tests/must_reject/p9_pattern_unreachable.pruv),
+  [after `_`](tests/must_reject/p9_pattern_unreachable_wild.pruv).
 ## 6v. Type aliases (P9a)
 ```
 type Code = i64;
@@ -2910,7 +2938,8 @@ return match s { Shape::Circle(r) => { 3 * r * r }, Shape::Empty => 0 };
   [type parameter](tests/must_reject/p9_if_generic.pruv).
 - R-6w-5 **Value `match`.** `match v { P1 => { e1 }, P2 => e2, .. }` is an expression wherever a value is read, as
   for R-6w-1. An arm pattern is a statement `match` pattern on an `Option`, a `Result` or a user enum (`Some(x)`,
-  `Err(e)`, `E::V(a, b)`, `E::W`, 6a); the arms cover every case once (`type/match_arms`). An arm value is a block
+  `Err(e)`, `E::V(a, b)`, `E::W`, 6a, with the `_`, literal and nested patterns of R-6u-6); the arms cover every case
+  (`type/match_arms`). An arm value is a block
   holding exactly one expression, or a bare expression followed by `,` or the closing `}` (`parse/syntax`). A tuple
   or slice pattern in a value `match` is `parse/value_match_pattern` (parity row P9a-6; use a `match` statement).
   A binder names the payload in its arm only (`type/unknown_name` elsewhere). Evaluation order: `v` once, then only
@@ -3391,6 +3420,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/generic_syntax` | parse | a malformed type parameter list or type argument list |
 | `parse/inout_syntax` | parse | a malformed `inout` parameter or argument |
 | `parse/let_else_syntax` | parse | a constructor pattern after `let` followed by `;` instead of `else { .. }` (R-6u-3) |
+| `parse/let_pattern` | parse | a `_`, literal or nested pattern in `if let`, `let else` or `while let` (R-6u-6) |
 | `parse/slice_pattern_rest` | parse | a slice pattern with a rest `..` that is not its last element, or more than one rest (R-6u-4) |
 | `parse/lib_module_conflict` | parse | a module is found both in the program and in a library path |
 | `parse/loop_jump_syntax` | parse | a `continue` followed by anything but an optional label and `;`, or a `break` whose `;` is missing before `}` (R-6r-3) |
@@ -3497,7 +3527,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/loop_label_duplicate` | type | a loop label already used by an enclosing loop (R-6r-2) |
 | `type/loop_label_unknown` | type | a `break`/`continue` label that no enclosing loop has (R-6r-2) |
 | `type/match_arity` | type | a match arm binds the wrong number of fields |
-| `type/match_arms` | type | match arms that are missing or repeated; a slice length no arm takes or a slice arm earlier arms cover (R-6u-4) |
+| `type/match_arms` | type | match arms that are missing or repeated; a slice length no arm takes or a slice arm earlier arms cover (R-6u-4); a case no pattern arm takes (R-6u-6) |
 | `type/match_type` | type | a match on a value that is not Option, Result or an enum (or an array place with slice arms); slice arms on a target that is not an array place, or mixed with other arms (R-6u-4) |
 | `type/missing_return` | type | a function may reach its end without returning |
 | `type/name_collision` | type | one name is both a type and a function |
@@ -3555,6 +3585,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/unknown_name` | type | an unknown variable |
 | `type/unknown_type` | type | an unknown type name |
 | `type/unknown_variant` | type | a variant the enum does not have |
+| `type/unreachable_arm` | type | a match arm that the arms above it already cover (R-6u-7) |
 | `type/unused_value` | type | a non-unit value is dropped |
 | `type/useless_expr` | type | an expression statement that is not a call |
 | `type/value_branch_context` | type | a value `if` or `match` in a contract (R-6w-2, R-6w-6) |
