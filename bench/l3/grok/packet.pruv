@@ -416,10 +416,6 @@ fn result_ok_n(meta: [i64], rows: [i64], n: i64) -> bool
   }
   return false;
 }
-// result_ok_n for callers that write the packet themselves (read::assemble_store, DB51)
-pub fn rows_ok(meta: [i64], rows: [i64], n: i64) -> bool
-  requires len(meta) == 24 && len(rows) <= 100000000 && 0 <= n && n <= 100000000
-{ return result_ok_n(meta, rows, n); }
 // DESIGN 3: success result. A failed shape check gives the InternalInvariant error packet (stage 30).
 pub fn result(meta: [i64], rows: [i64], text: [u8]) -> [i64] ! alloc
   requires len(meta) == 24 && len(rows) <= 100000000 && len(text) <= 100000000

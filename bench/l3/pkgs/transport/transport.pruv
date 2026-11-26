@@ -71,16 +71,16 @@ pub fn grow_line(take line: [u8], cap: i64) -> [u8] ! alloc
  b = resize(b, n, 0);
  return move b;
 }
-// receive with a growing line buffer: the same framing, Reader protocol and -3 at cap, but `line` may start short (1 <= len(line) <= cap)
-// and grows in place as needed. st.filled is the number of bytes filled; bytes of line past st.filled are stale. A read that adds
+// receive with a growing line buffer: the same framing, Reader protocol and -3 at cap, but `line` may start short (even empty, len(line) <= cap;
+// hand `Vec::with_capacity`) and grows in place as needed. st.filled is the number of bytes filled; bytes of line past st.filled are stale. A read that adds
 // bytes leaves len(line) == st.filled (the hand's cleared-and-extended read_line String).
 pub fn receive_grow(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool, cap: i64,
  inout st: Reader, inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
  requires 0 <= st.filled && st.filled <= len(line) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
- requires 1 <= cap && cap <= 8388608 && 1 <= len(line) && len(line) <= cap
+ requires 1 <= cap && cap <= 8388608 && len(line) <= cap
  requires crate::tail::tail_ok(tl) && tl.limit == 1024
  ensures 0 <= st.filled && st.filled <= len(line) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
- ensures 1 <= len(line) && len(line) <= cap
+ ensures len(line) <= cap
  ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
  st.status=-6;

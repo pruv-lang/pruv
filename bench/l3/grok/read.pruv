@@ -329,6 +329,7 @@ pub fn advance(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], rows: [
 // One line span (hand history_window loop body): a line that is not UTF-8 or not JSON is skipped; otherwise the reused
 // Entry is reset, scanned and fed. Returns feed's code: 0 handled, -1 a timestamp defect.
 fn line_step(line: [u8], inout e: crate::line::Entry, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
+  requires len(line) <= 1048576
   requires len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
@@ -337,7 +338,6 @@ fn line_step(line: [u8], inout e: crate::line::Entry, inout st: [i64], inout sl:
   ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
 {
-  if len(line) > 16777216 { return 0; }
   if !utf8_valid(line) { return 0; }
   crate::line::reset(inout e);
   let mut i: i64 = 0;
@@ -347,38 +347,37 @@ fn line_step(line: [u8], inout e: crate::line::Entry, inout st: [i64], inout sl:
   }
 }
 
-// p[at..at+n) = src[lo..lo+n), each byte widened to a word.
-fn widen(inout p: [i64], at: i64, src: [u8], lo: i64, n: i64) -> ()
-  requires 0 <= at && 0 <= n && n <= len(p) - at && 0 <= lo && n <= len(src) - lo
-  ensures len(p) == len(old(p))
+// p ++= src[lo..lo+n), each byte widened to a word (hand `p.extend(s.iter().map(|&b| b as i64))`).
+fn widen(inout p: [i64], src: [u8], lo: i64, n: i64) -> () ! alloc
+  requires 0 <= n && 0 <= lo && n <= len(src) - lo && len(p) + n <= 1000000000
+  ensures len(p) == len(old(p)) + n
 {
   let mut k: i64 = 0;
   while k < n
-    invariant 0 <= k && k <= n && n <= len(p) - at && 0 <= at && 0 <= lo && n <= len(src) - lo && len(p) == len(old(p))
+    invariant 0 <= k && k <= n && 0 <= lo && n <= len(src) - lo && len(p) == len(old(p)) + k && len(old(p)) + n <= 1000000000
     decreases n - k
-  { p[at + k] = src[lo + k]; k = k + 1; }
+  { arr_push(inout p, src[lo + k]); k = k + 1; }
 }
 
-// p[at..at+len(s)) = the bytes of s, each widened to a word.
-fn widen_str(inout p: [i64], at: i64, s: str) -> ()
-  requires 0 <= at && len(s) <= len(p) - at
-  ensures len(p) == len(old(p))
+// p ++= the bytes of s, each widened to a word (hand `p.extend(s.bytes().map(|b| b as i64))`).
+fn widen_str(inout p: [i64], s: str) -> () ! alloc
+  requires len(p) + len(s) <= 1000000000
+  ensures len(p) == len(old(p)) + len(s)
 {
   let n: i64 = len(s);
   let mut k: i64 = 0;
   while k < n
-    invariant 0 <= k && k <= n && n == len(s) && n <= len(p) - at && 0 <= at && len(p) == len(old(p))
+    invariant 0 <= k && k <= n && n == len(s) && len(p) == len(old(p)) + k && len(old(p)) + n <= 1000000000
     decreases n - k
-  { let v: i64 = s[k]; p[at + k] = v; k = k + 1; }
+  { let v: i64 = s[k]; arr_push(inout p, v); k = k + 1; }
 }
 
-// The packet of the finished Store (DB51, G-DB48-1 / G-DB48-3). Same selection, layout, run-time checks and words as
-// turns::finish2(st, sl, bk, 0) followed by packet::result3(meta, turns, text, title, model): turn text first (base 0),
-// then the title, then the model. The turn text is widened from bk.data and bk.stamp straight into the packet, so the
-// separate text buffer of finish2 (up to 2106752 bytes, zero-filled, then copied once more) is never built.
-// Draft j (j = 0 the newest) takes [tl - e, tl - acc) with acc the bytes of the j newer drafts and e = acc + its own
-// bytes, as turns::plan lays it out; text_layout gives kept and tl. A failed span or record-offset check stops the
-// walk at that draft and leaves its row and every older one (and their text) zero, as finish2 does.
+// The read packet of the finished Store (hand `Collector::packet`): text_layout picks the newest suffix (kept turns,
+// tl text bytes), the packet is reserved once at its final size, 28 header words go first, then the 10-word rows
+// oldest turn first, then the turn text (prompt, reply, created, completed per turn), the title and the model, and
+// last the header and meta words in place. The ring itself is the turns Store (row VL: no `Vec<Slot>` on LLVM), so
+// a draft whose Store offset is out of range, or a text length that does not add up to tl, gives the
+// InternalInvariant packet instead (hand: cannot happen).
 fn assemble_store(st: [i64], sl: [i64], bk: crate::turns::Store, title: str, model: str, omitted: bool) -> [i64] ! alloc
   requires len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600
   requires 0 <= st[0] && st[0] <= 1000000000000
@@ -391,119 +390,83 @@ fn assemble_store(st: [i64], sl: [i64], bk: crate::turns::Store, title: str, mod
   let tl: i64 = lay.text_len;
   let b: i64 = st[0];
   let dl: i64 = len(bk.data);
-  let mut rows: [i64] = alloc(10 * kept, 0);
-  let mut stop: i64 = kept;
-  let mut acc: i64 = 0;
-  let mut j: i64 = 0;
-  while j < stop
-    invariant 0 <= j && j <= stop && stop <= kept && 0 <= kept && kept <= 200 && kept <= b && b <= 1000000000000
-    invariant 0 <= acc && acc <= tl && tl <= 2106752 && len(rows) == 10 * kept && len(sl) == 1600 && len(bk.off) == 200
-    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-    decreases stop - j
-  {
-    let w: i64 = (b - 1 - j) % 200;
-    let plen: i64 = sl[8 * w];
-    let rlen: i64 = sl[8 * w + 1];
-    let cp: i64 = sl[8 * w + 5];
-    let dp: i64 = sl[8 * w + 6];
-    let o: i64 = bk.off[w];
-    let e: i64 = acc + plen + rlen + 24 * cp + 24 * dp;
-    if e > tl || o < 0 || o > dl - plen - rlen {
-      stop = j;
-    } else {
-      let lo: i64 = tl - e;
-      let t: i64 = kept - 1 - j;
-      rows[10 * t] = lo;
-      rows[10 * t + 1] = plen;
-      rows[10 * t + 2] = lo + plen;
-      rows[10 * t + 3] = rlen;
-      if cp == 1 {
-        rows[10 * t + 4] = lo + plen + rlen;
-        rows[10 * t + 5] = 24;
-      } else {
-        rows[10 * t + 4] = -1;
-        rows[10 * t + 5] = 0;
-      }
-      if dp == 1 {
-        rows[10 * t + 6] = lo + plen + rlen + 24 * cp;
-        rows[10 * t + 7] = 24;
-      } else {
-        rows[10 * t + 6] = -1;
-        rows[10 * t + 7] = 0;
-      }
-      rows[10 * t + 8] = sl[8 * w + 3];
-      rows[10 * t + 9] = sl[8 * w + 4];
-      acc = e;
-      j = j + 1;
-    }
-  }
   let tn: i64 = len(title);
   let mn: i64 = len(model);
-  let nx: i64 = tl + tn + mn;
   let nr: i64 = 10 * kept;
-  let mut m: [i64] = crate::packet::meta_new(1);
-  if omitted || kept < b { m[2] = 1; }  // MUT:M12 => if omitted { m[2] = 1; }
-  m[3] = kept;
-  m[10] = 10;
-  if tn > 0 {
-    m[4] = tl;
-    m[5] = tn;
+  let nx: i64 = tl + tn + mn;
+  let mut p: [i64] = alloc(0, 0);
+  arr_reserve(inout p, 28 + nr + nx);
+  arr_push(inout p, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+  arr_push(inout p, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+  let mut lo: i64 = 0;
+  let mut j: i64 = kept;
+  while j > 0
+    invariant 0 <= j && j <= kept && 0 <= kept && kept <= 200 && kept <= b && b <= 1000000000000 && len(sl) == 1600
+    invariant 0 <= lo && lo <= (kept - j) * 65584 && len(p) == 28 + 10 * (kept - j)
+    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+    decreases j
+  {
+    j = j - 1;
+    let w: i64 = (b - 1 - j) % 200;
+    let pl: i64 = sl[8 * w];
+    let rl: i64 = sl[8 * w + 1];
+    let cp: i64 = sl[8 * w + 5];
+    let dp: i64 = sl[8 * w + 6];
+    let c0: i64 = lo + pl + rl;
+    let d0: i64 = c0 + 24 * cp;
+    let mut cs: i64 = -1;
+    if cp == 1 { cs = c0; }
+    let mut ds: i64 = -1;
+    if dp == 1 { ds = d0; }
+    arr_push(inout p, lo, pl, lo + pl, rl, cs, 24 * cp, ds, 24 * dp, sl[8 * w + 3], sl[8 * w + 4]);
+    lo = d0 + 24 * dp;
   }
-  if mn > 0 {
-    m[6] = tl + tn;
-    m[7] = mn;
+  let mut q: i64 = kept;
+  while q > 0
+    invariant 0 <= q && q <= kept && 0 <= kept && kept <= 200 && kept <= b && b <= 1000000000000 && len(sl) == 1600
+    invariant len(bk.off) == 200 && len(bk.stamp) == 9600 && len(bk.data) == dl && nr == 10 * kept
+    invariant 28 + nr <= len(p) && len(p) <= 28 + nr + (kept - q) * 65584
+    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+    decreases q
+  {
+    q = q - 1;
+    let w: i64 = (b - 1 - q) % 200;
+    let pl: i64 = sl[8 * w];
+    let rl: i64 = sl[8 * w + 1];
+    let o: i64 = bk.off[w];
+    if o < 0 || o > dl - pl - rl { return crate::packet::internal_packet(1); }
+    widen(inout p, bk.data, o, pl + rl);
+    if sl[8 * w + 5] == 1 { widen(inout p, bk.stamp, 48 * w, 24); }
+    if sl[8 * w + 6] == 1 { widen(inout p, bk.stamp, 48 * w + 24, 24); }
   }
-  if !crate::packet::rows_ok(m, rows, nx) { return crate::packet::internal_packet(1); }
-  let base: i64 = 28 + nr;
-  let mut p: [i64] = alloc(base + nx, 0);
+  widen_str(inout p, title);
+  widen_str(inout p, model);
+  if len(p) != 28 + nr + nx { return crate::packet::internal_packet(1); }
   p[0] = 0;
   p[1] = 24;
   p[2] = nr;
   p[3] = nx;
-  let mut i: i64 = 0;
-  while i < 24
-    invariant 0 <= i && i <= 24 && len(m) == 24 && len(p) == base + nx && base == 28 + nr && 0 <= nr && 0 <= nx
-    decreases 24 - i
-  { p[4 + i] = m[i]; i = i + 1; }
-  let mut r: i64 = 0;
-  while r < nr
-    invariant 0 <= r && r <= nr && nr == len(rows) && len(p) == base + nx && base == 28 + nr && 0 <= nx
-    decreases nr - r
-  { p[28 + r] = rows[r]; r = r + 1; }
-  let mut acc2: i64 = 0;
-  let mut q: i64 = 0;
-  while q < stop
-    invariant 0 <= q && q <= stop && stop <= kept && 0 <= kept && kept <= 200 && kept <= b && b <= 1000000000000
-    invariant 0 <= acc2 && acc2 <= tl && 0 <= tn && 0 <= mn && nx == tl + tn + mn && len(p) == base + nx && 0 <= base
-    invariant len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && len(bk.data) == dl
-    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-    decreases stop - q
-  {
-    let w: i64 = (b - 1 - q) % 200;
-    let plen: i64 = sl[8 * w];
-    let rlen: i64 = sl[8 * w + 1];
-    let cp: i64 = sl[8 * w + 5];
-    let dp: i64 = sl[8 * w + 6];
-    let o: i64 = bk.off[w];
-    let e: i64 = acc2 + plen + rlen + 24 * cp + 24 * dp;
-    if e > tl || o < 0 || o > dl - plen - rlen {
-      q = stop;
-    } else {
-      let at: i64 = base + tl - e;
-      widen(inout p, at, bk.data, o, plen + rlen);
-      if cp == 1 { widen(inout p, at + plen + rlen, bk.stamp, 48 * w, 24); }
-      if dp == 1 { widen(inout p, at + plen + rlen + 24 * cp, bk.stamp, 48 * w + 24, 24); }
-      acc2 = e;
-      q = q + 1;
-    }
+  // meta = p[4..28] (packet::meta_new(1) and the history edits)
+  p[4 + 0] = 2;
+  p[4 + 1] = 1;
+  p[4 + 4] = -1; p[4 + 6] = -1; p[4 + 8] = -1; p[4 + 18] = -1; p[4 + 20] = -1; p[4 + 22] = -1;
+  if omitted || kept < b { p[4 + 2] = 1; }  // MUT:M12 => if omitted { p[4 + 2] = 1; }
+  p[4 + 3] = kept;
+  p[4 + 10] = 10;
+  if tn > 0 {
+    p[4 + 4] = tl;
+    p[4 + 5] = tn;
   }
-  widen_str(inout p, base + tl, title);
-  widen_str(inout p, base + tl + tn, model);
+  if mn > 0 {
+    p[4 + 6] = tl + tn;
+    p[4 + 7] = mn;
+  }
   return p;
 }
 
-// One framing event: 0 = consumed, 1 = corrupt event or a failed line (the caller reports InternalInvariant).
+// One framing event: 0 = consumed, 1 = a failed line (the caller reports InternalInvariant).
 fn event_step(win: [u8], kd: i64, lo: i64, hi: i64, inout e: crate::line::Entry, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
+  requires (kd == 0 || kd == 1) && 0 <= lo && lo <= hi && hi <= len(win) && hi - lo <= 1048576
   requires len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
@@ -512,7 +475,6 @@ fn event_step(win: [u8], kd: i64, lo: i64, hi: i64, inout e: crate::line::Entry,
   ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
 {
-  if (kd != 0 && kd != 1) || lo < 0 || hi < lo || hi > len(win) { return 1; }
   if kd == 1 {
     // a dropped over-long line: a user line there detaches the draft and marks the next one clipped
     // (hand `dropped_user(&win[p..p + DROP_HEAD])`: the head is borrowed from the window, not copied)
@@ -542,12 +504,10 @@ pub fn window(win: [u8], omitted: bool, title: str, model: str) -> [i64] ! alloc
   let mut bk: crate::turns::Store = crate::turns::new_store_hint(n);
   // One Entry reused for every line (hand `let mut entry = Entry::new()`).
   let mut entry: crate::line::Entry = crate::line::new_entry();
-  let mut bad: i64 = 0;
-  let mut j: i64 = 0;
   let mut p: i64 = crate::framing::scan_start(win, omitted);
-  while p < n && bad == 0
-    invariant 0 <= p && p <= n && n == len(win) && n <= 8388608 && 0 <= j && j <= p && 0 <= bad && bad <= 1
-    invariant len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] <= 2 * j && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  while p < n
+    invariant 0 <= p && p <= n && n == len(win) && n <= 8388608
+    invariant len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] <= p && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
     decreases n - p
@@ -570,13 +530,9 @@ pub fn window(win: [u8], omitted: bool, title: str, model: str) -> [i64] ! alloc
       }
       p = q + 1;
     }
-    let mut r: i64 = 0;
     if kd >= 0 {
-      r = event_step(win, kd, lo, hi, inout entry, inout st, inout sl, inout bk);
-      j = j + 1;
+      if event_step(win, kd, lo, hi, inout entry, inout st, inout sl, inout bk) != 0 { return crate::packet::simple_error(1, 12, 6, 2); }
     }
-    if r != 0 { bad = 1; }
   }
-  if bad != 0 { return crate::packet::simple_error(1, 12, 6, 2); }
   return assemble_store(st, sl, bk, title, model, omitted);
 }

@@ -102,7 +102,7 @@ pub fn mcp_check(command: str, argv: str, cwd: str, timeout_ms: i64) -> [i64] ! 
     invariant 0 <= objects && objects <= 500 && 0 <= count && count <= 500
     invariant 5010 <= len(p) && len(p) <= 100000000 + 200*count
     invariant 0 <= st.filled && st.filled <= len(line) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-    invariant 1 <= len(line) && len(line) <= 4194304
+    invariant len(line) <= 4194304
     invariant crate::tail::tail_ok(tl) && tl.limit == 1024
     decreases 1000000-events
   {

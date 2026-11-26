@@ -1032,3 +1032,30 @@ All after the last code change (F1 / F4 from the structure comparison).
      4.3b-R (`pkgs/transport` `receive_grow` from length 0) can go with it if transport consumers are run anyway.
   2. Qwen, then Codex, then OpenCode together with Claude R08.
   3. Step 4.4 (`docs/RUST_SHAPE_RESET.md` §6).
+
+## Step 4.3c: Grok history packet and bench row 4.3b-R
+
+- `grok/RESHAPE.md` §3d. `read::assemble_store` has the shape of the hand `Collector::packet`: one `arr_reserve` of the
+  final size on an empty array, rows pushed oldest turn first, text pushed, header and meta written in place (was
+  `rows` + `meta` + a zero-filled packet, three allocations). `packet::rows_ok` removed (no caller). `event_step` /
+  `window` take the event ranges as preconditions (no `j`, no `bad` flag) and `line_step` drops its unreachable 16 MiB
+  check (Codex review).
+- Bench row 4.3b-R closed: `pkgs/transport::receive_grow` accepts and keeps `len(line) <= cap` (was `1 <= len(line)`),
+  grok `load_check` reserves 4096 on an empty buffer like the hand; `mcp/root.pruv` relaxes its loop invariant only.
+- Collector store: VL (`../pkgs/RESHAPE.md` step 2.12) re-probed with this `pruvc-rs`, still rejected on LLVM (a
+  `Vec<Slot>` field or `inout Vec<Slot>` parameter of a struct with `[u8]` fields). `pkgs/turns` unchanged, so its
+  consumers other than grok were not run; transport consumers (grok, codex, mcp) were.
+- Tests: `grok/RESHAPE.md` §4.
+
+### Rows open after 4.3c
+
+- New: none (language). Bench rows: 4.3b-R closed; 4.3c-T, 4.3c-B, 4.3c-G opened in `grok/RESHAPE.md` §3d.
+  VL (pkgs) reconfirmed.
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB, TH, FO, FV, UL, VP,
+  IW, VL.
+- Next:
+  1. Qwen, then Codex, then OpenCode together with Claude R08.
+  2. Step 4.4 (`docs/RUST_SHAPE_RESET.md` §6).
+  3. Grok bench rows 4.3c-T and 4.3c-B (`entry.pruv` only) and 4.3c-G (`pkgs/transport`, all transport consumers);
+     `pkgs/turns` dead code (`begin3`, `answer3`, `clip_span`, `put_nl_span`, `put_pad`, `write_span`) with all turns
+     consumers run.
