@@ -22,8 +22,8 @@
 // The answer of the last observation is the packet cx.ent (kind 2); ent_r(cx, k) / ent_p(cx, k) address its record.
 // A throw answer has record word 0 == 1 (and E at record offset 1) for codes 1, 4, 5, 6, 7, 9.
 // Output: put_done(...) fixes the done record; finish(cx, aseq, dseq) builds the packet to return to the host.
-// The by-value functions (ctx_accounts, ctx_account_at, with_prev, set_ck, set_done, fail, st_*) are thin adapters for
-// the modules not reshaped yet (ent_sources, entry_api); RESHAPE.md row AD lists them.
+// The by-value functions (with_prev, fail, st_*) are thin adapters for entry_api, which is not reshaped yet; RESHAPE.md
+// row AD lists them.
 //
 // State (section 2 of an await), all words range-checked on decode:
 //   [0] magic 1162761298   [1] op   [2] outstanding request code 1..9   [3] aux   [4..11] checkpoint words 0..2^32
@@ -301,6 +301,26 @@ pub fn use_prev(inout cx: Ctx, prev: [i64], exact: bool) -> () ! alloc
   }
 }
 
+// The next item of the same step: an empty log and no answer, prev request or output (blob and ck stay).
+pub fn next_item(inout cx: Ctx) -> () ! alloc
+{
+  cx.pos = 0;
+  cx.lg = alloc(0, 0);
+  cx.ent = alloc(0, 0);
+  cx.qon = 0;
+  cx.qexact = 0;
+  cx.qns = 0;
+  cx.qpool = alloc(0, 0);
+  cx.qrec = alloc(0, 0);
+  cx.qtab = alloc(0, 0);
+  cx.done = 0;
+  cx.opool = alloc(0, 0);
+  cx.orec = alloc(0, 0);
+  cx.otab = alloc(0, 0);
+  cx.ontab = 0;
+  cx.ncan = 0;
+}
+
 pub fn with_prev(cx0: Ctx, prev: [i64], exact: bool) -> Ctx ! alloc
 {
   let mut cx: Ctx = cx0;
@@ -488,8 +508,6 @@ pub fn realpath(inout cx: Ctx, path: [i64]) -> Result<(), Halt> ! alloc { return
 pub fn stat(inout cx: Ctx, path: [i64]) -> Result<(), Halt> ! alloc { return path_req(inout cx, 7, path); }
 
 // by-value observation adapters (row AD)
-pub fn ctx_accounts(cx0: Ctx, eng: i64) -> Ctx ! alloc { let mut cx: Ctx = cx0; let r: Result<(), Halt> = accounts(inout cx, eng); return cx; }
-pub fn ctx_account_at(cx0: Ctx, eng: i64, idx: i64) -> Ctx ! alloc { let mut cx: Ctx = cx0; let r: Result<(), Halt> = account_at(inout cx, eng, idx); return cx; }
 
 // answer packet addressing: record word k, physical pool word k, word k of section s
 pub fn ent_r(cx: Ctx, k: i64) -> i64 { return crate::ent_u16::rd(cx.ent, crate::ent_packet::sec_start(cx.ent, 1) + crate::ent_u16::clamp(k, 4294967296)); }
@@ -523,19 +541,7 @@ pub fn stop_fail(inout cx: Ctx) -> Result<(), Halt>
   return Err::<(), Halt>(Halt::Bad);
 }
 
-// by-value adapters (row AD)
-pub fn set_ck(cx0: Ctx, i: i64, v: i64) -> Ctx ! alloc
-{
-  let mut cx: Ctx = cx0;
-  put_ck(inout cx, i, v);
-  return cx;
-}
-pub fn set_done(cx0: Ctx, pool: [i64], rec: [i64], tab: [i64], ntab: i64) -> Ctx ! alloc
-{
-  let mut cx: Ctx = cx0;
-  put_done(inout cx, pool, rec, tab, ntab);
-  return cx;
-}
+// by-value adapter for entry_api (row AD)
 pub fn fail(cx0: Ctx) -> Ctx ! alloc { let mut cx: Ctx = cx0; let r: Result<(), Halt> = stop_fail(inout cx); return cx; }
 
 // Count the embedded blob and log pools towards the same output limit as the request pool.

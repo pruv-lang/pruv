@@ -28,23 +28,24 @@ MUTANTS = {
             ('ent_u16.pruv', "  if u == 5760 || u == 65279 { return true; }\n", ""),
             ('ent_u16.pruv', "  if u >= 8192 && u <= 8202 { return true; }\n", ""),
             ('ent_u16.pruv', "  if u == 8232 || u == 8233 || u == 8239 || u == 8287 || u == 12288 { return true; }\n", "")],
-    'M02': [('ent_sources.pruv', '  let cx: crate::ent_state::Ctx = crate::ent_canon::host_home(cx0);\n  if crate::ent_canon::early(cx) { return cx; }\n  return adv(home_row(cx, "codex:home"', '  let cx: crate::ent_state::Ctx = env_or_home(cx0, 6, ".codex");\n  if crate::ent_canon::early(cx) { return cx; }\n  return adv(home_row(cx, "codex:home"')],
+    'M02': [('ent_sources.pruv', '  crate::ent_canon::codex_home(inout cx)?;\n  home_row(inout rows, "codex:home"', '  env_or_home(inout cx, 6, ".codex")?;\n  home_row(inout rows, "codex:home"')],
     'M03': [('ent_sources.pruv', "  if len(xdg) > 0 && crate::ent_u16::rd(xdg, 0) == 47 {", "  if len(xdg) > 0 {")],
     'M04': [('ent_state.pruv', "  if crate::ent_u16::rd(ck, 6) != 0 { return false; }\n", ""),
-            ('ent_sources.pruv', '  return adv(emit_row(cy, crate::ent_u16::cat(crate::ent_u16::lit("codex:"), id),',
+            ('ent_sources.pruv', '  account_row(inout rows, crate::ent_u16::cat(crate::ent_u16::lit("codex:"), a.id), "codex", a, expected);\n  advance(inout cx, 5, idx + 1, cnt);\n',
              '  let mut hh: i64 = 1;\n'
              '  let mut hi: i64 = 0;\n'
-             '  while hi < len(id) && hi < 64\n'
+             '  while hi < len(a.id) && hi < 64\n'
              '    invariant 0 <= hi && hi <= 64 && 1 <= hh && hh <= 16777213\n'
              '    decreases 64 - hi\n'
              '  {\n'
-             '    hh = (hh * 31 + crate::ent_u16::clamp(crate::ent_u16::rd(id, hi), 65536)) % 16777212 + 1;\n'
+             '    hh = (hh * 31 + crate::ent_u16::clamp(crate::ent_u16::rd(a.id, hi), 65536)) % 16777212 + 1;\n'
              '    hi = hi + 1;\n'
              '  }\n'
-             '  if hh == crate::ent_state::get_ck(cy, 6) { return crate::ent_state::set_ck(skip(cy, 5, idx + 1, cnt), 6, hh); }\n'
-             '  return crate::ent_state::set_ck(adv(emit_row(cy, crate::ent_u16::cat(crate::ent_u16::lit("codex:"), id),'),
-            ('ent_sources.pruv', 'nu, expected), 5, idx + 1, cnt);', 'nu, expected), 5, idx + 1, cnt), 6, hh);')],
-    'M05': [('ent_sources.pruv', '!crate::ent_accounts::valid_account_id(cx.ent, rp + 2) { return skip(cx, 2, idx + 1, cnt); }', '!crate::ent_accounts::valid_account_id(cx.ent, rp + 2) { return crate::ent_state::fail(cx); }')],
+             '  if hh == crate::ent_state::get_ck(cx, 6) { advance(inout cx, 5, idx + 1, cnt); crate::ent_state::put_ck(inout cx, 6, hh); return Ok::<(), crate::ent_state::Halt>(()); }\n'
+             '  account_row(inout rows, crate::ent_u16::cat(crate::ent_u16::lit("codex:"), a.id), "codex", a, expected);\n'
+             '  advance(inout cx, 5, idx + 1, cnt);\n'
+             '  crate::ent_state::put_ck(inout cx, 6, hh);\n')],
+    'M05': [('ent_sources.pruv', '  if !account_ok(cx) { advance(inout cx, 2, idx + 1, cnt); return Ok::<(), crate::ent_state::Halt>(()); }', '  if !account_ok(cx) { return crate::ent_state::stop_fail(inout cx); }')],
     'M06': [('ent_canon.pruv', '    if !crate::ent_value::str_eq_lit(cx.ent, rp + 16, "ENOENT") {', '    if true {')],
     'M07': [('ent_canon.pruv', "  if crate::ent_u16::eq(target, dot) { return Ok::<bool, crate::ent_state::Halt>(true); }\n", "")],
     'M08': [('ent_dispatch.pruv', "      if found < 0 { found = i; }", "      found = i;")],

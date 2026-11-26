@@ -614,3 +614,114 @@ Budget m11 / m12 import only `ent_u16` (grep), none of the changed modules, so t
   `ent_state` change for its other users (`entry_api`), left for 3.7 with row OA.
 - Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, AD (3.6 / 3.7 adapters above).
 - Next (3.6): `ent_sources` to `inout cx`, removing the `ent_canon` and `ent_state` adapters it still uses.
+
+## Step 3.6: `ent_sources`
+
+`ent_sources` (import of the source list: home rows, per-engine account rows, codex home, opencode, qwen) now follows
+the hand shape in `hand/ent_sources.rs`: every item takes `inout cx: Ctx` (and `inout rows: Rows` where it emits),
+returns `Result<(), Halt>` and propagates with `?`. It calls `put_done`, `put_ck`, `accounts`, `account_at`,
+`stop_fail`, `use_prev`, `state_view`, `rethrow_answer`, `home_dir`, `home_join`, `codex_home` and `is_codex_home`
+directly, so the by-value adapters it alone used are gone.
+
+### What changed
+
+- `hand/ent_sources.rs` (new): the baseline, with `rustc --test` tests (begin emits the home row then stalls on the
+  accounts observation; accounts and the next item run in one step; claude account rows skip an invalid id; rows
+  are placed after the front pool; the last phase is done). It includes `ent_canon.rs` (which includes
+  `ent_state.rs` and the rest), so the included modules' tests run too.
+- `hand/ent_state.rs`: `Ctx::next_item` (reset per-item observation state between items). `hand/ent_canon.rs`: the
+  helpers `ent_sources` calls are `pub`.
+- `ent_sources.pruv` rewritten function by function against the hand file: same names, same split
+  (`advance`, `ck_word`, `rec0`, `env_trim`, `row_head`, `push_row`, `home_row`, `account_row`, `env_or_home`,
+  `home_item`, `accounts_item`, `account_ok`, `account_of`, `claude_acct`, `codex_acct`, `codex_home_item`,
+  `opencode_item`, `qwen_item`, `phase_item`, `rebase`, `place_rows`, `drive`, `import_begin`, `import_step`).
+  Types match: `struct Rows { pool, rec }`, `enum Name { Str(units), Raw(tag, a, b) }`, `struct Account { id, name }`.
+  `drive` loops over items with `let Ok(()) = r else { break; }` and matches the stop (`Halt::Stalled` -> replay
+  await, `Halt::Done` -> done packet, bad -> boundary), as the hand `match`.
+- `ent_state.pruv`: `next_item` added (`inout cx`); `ctx_accounts`, `ctx_account_at`, `set_ck`, `set_done` removed.
+- `ent_canon.pruv`: `early`, `with_pool`, `throw_existing`, `homedir_units`, `home_sub`, `host_home`,
+  `is_host_codex_home` removed (grep: no other users).
+- `q_mutants.py`: M02 (`env_or_home(inout cx, 6, ".codex")?` before the codex home row), M04 (the `ent_sources` half
+  now matches the `a.id` hash, the checkpoint-6 skip and the row/advance/`put_ck` lines) and M05 (`stop_fail` on an
+  out-of-range account index) follow the new text; M03 is unchanged. Every mutant original occurs exactly once
+  (checked by script). M02, M03, M04, M05 are killed (S08, E02, A07, A08).
+- `entry/IMPL_NOTES.md`: the Ctx API line names the `inout` functions.
+- Fix from the structure comparison (F1): `rebase` clamps byte offsets to 2^30 instead of 2^24, in both files.
+
+### Rows
+
+- **LB** (new, language gap): `arr_append(inout a, b, s, n)` requires `len(a) + n <= 2^40`. Neither the length of
+  `rows.rec` nor that of `rows.pool` is bounded by a type, so `push_row` checks
+  `len(rows.rec) > 2^40 - len(rec)` and returns; hand `extend_from_slice` (a `Vec` cannot reach that length before
+  allocation fails). The guard is dead on every real input (packets are at most 16,777,216 words).
+- **RA** used: `env_or_home` and `codex_home` leave the path in `cx.opool` and return `Result<(), Halt>`
+  (hand `Result<Vec<u16>, Halt>`); `home_item` passes `cx.opool` to `home_row`, `codex_home_item` likewise.
+- **CK** used: `advance` writes checkpoint words 0..2 and clears 3..8 with `put_ck` in a `for` loop (hand
+  `cx.ck = [ph, idx, cnt, 0, 0, 0, 0, 0]`); `import_step` seeds the checkpoint with `set_ck_arr0(s.ck)`.
+- **OA** used: the per-item output is `Rows` threaded through `inout rows` rather than an `Option<Rows>` return.
+- **MP** (new, language gap): `codex_acct` matches the `is_codex_home` result as `Ok(host)` then `Err(h)` with an
+  inner `match h` listing `Done`, `Stalled`, `Bad`; the hand writes `Ok(false)`, `Ok(true) | Err(Halt::Done)`,
+  `Err(h) => return Err(h)`. Checked with pruvc: `Ok(false)` is `parse/syntax` (no literal pattern),
+  `Err(H::A)` is `parse/syntax` (no nested variant pattern) and a `_` arm is `parse/reserved_name`, so the inner
+  match spells out every variant and rebuilds the `Err`.
+- **place_rows**: both rebase `rows.rec` in place (Pruv `rebase` has `ensures len(rec) == len(old(rec))`). The hand
+  builds the pool with two `PoolBuf::append_span` calls and a `view_words` copy of `rows.pool`; Pruv calls
+  `pool_base` and `pool_cat` (row U: pools are `[i64]` words), one copy fewer.
+- **AD** after 3.6:
+
+| Adapter (by value) | `inout` function | Users | Removed in |
+|---|---|---|---|
+| `set_done`, `set_ck`, `ctx_accounts`, `ctx_account_at` | `put_done`, `put_ck`, `accounts`, `account_at` | none | 3.6 (removed) |
+| `ent_canon::early`, `with_pool`, `throw_existing`, `homedir_units`, `home_sub`, `host_home`, `is_host_codex_home` | `rethrow_answer`, `home_dir`, `home_join`, `codex_home`, `is_codex_home` | none | 3.6 (removed) |
+| `fail`, `with_prev`, `st_code`, `st_aux`, `st_ck`, `st_blob`, `st_log` | `stop_fail`, `use_prev`, `state_view` | `entry_api` | 3.7 |
+| `ent_bound::threads_item`, `excluded_item` | `session_threads`, `excluded_from_bound` | `entry_api` | 3.7 |
+| `find_item`, `list_item`, `read_item` | `find_source`, `list_external`, `read_external` | `entry_api` | 3.7 |
+
+### Structure comparison
+
+One read-only comparison by Codex (gpt-6.2-astra, effort high; engine, model and account named by the user): hand
+`.rs` against `.pruv`, function by function, for `ent_sources`. It found one behaviour bug common to both (F1);
+the other findings and what was done:
+
+| Finding | Done |
+|---|---|
+| F1 `rebase` clamped the old offset and `add` to 2^24, but offsets are bytes (7 per pool word), so a string past byte 2^24 (a few million three-byte units, inside the packet limit) was mis-placed | both clamp to 2^30 (the `pool_base` bound); hand test `rebase_keeps_offsets_past_2_pow_24` |
+| F4 hand `env_trim` went through `str_at` + `trim` for a non-string slot; Pruv checks the tag first | hand checks the tag first (and clamps `k` to 16 as Pruv) |
+| F5 Pruv `account_ok` computed `sec_start` before the nullish test | the nullish test comes first (`&&` as the hand) |
+| F5 rest: `valid_account_id` decodes before / after the length check | kept: `ent_accounts` has no hand baseline yet (3.7) |
+| F2 `pool_put` encodes each string into a temporary pool and copies the whole pool | kept: row U / PB (pools are `[i64]` words; no `PoolBuf` with reserve) |
+| F3 `place_rows`: hand has an extra `view_words` copy, Pruv decides the join boundary twice (`pool_base`, `pool_cat`) | kept: row U / PB |
+| F6 path pieces: hand `join` over a slice, Pruv `join2` / `join4` | kept: no array of arrays (row SA), `ent_path` is outside this step |
+| F7, F8, F10 request, replayed answer, `put_done` record and `ctx_new` buffers are copied where the hand moves them | kept: `ent_state` ownership, with `entry_api` in 3.7 (rows OA, AD) |
+| F9 hand `drive` takes `cx.req` before the size check, Pruv leaves it | kept: the `Ctx` is dropped right after, not observable |
+| F11 `import_step` parses the state three times | kept: F10 rest from 3.5 (`st_replay_ok` on `State`, 3.7) |
+| F12 hand defines `rd` and `pool_put` locally | kept: hand `put_vs` lives in `ent_packet`, which depends on `ent_value`, so `pool_put` cannot move there; `rd` is the `i64` word reader (row U) |
+| F13 tests only in the hand file | kept: the Pruv side is covered by `test_impl` / Q on both pairs |
+
+### Tests
+
+All after the last code change (the F1 / F4 / F5 fixes).
+
+| Test | Pairs | Result |
+|---|---|---|
+| `rustc --test hand/ent_sources.rs` (includes `ent_canon`, `ent_state`, `ent_bound` and the rest) | hand | 23 passed |
+| `entry/dev_build.sh --no-link` | rs | verified, `{"ok": true}` |
+| `entry/q_mutants.py --only M02,M03,M04,M05` | rs/rust | 4/4 killed (S08, E02, A07, A08), 0 verification-rejected |
+| `entry/test_impl.py` | rs/rust, rs/llvm | 296 variants x 2 = 592 runs, unexplained 0 |
+| `entry/judge_test.py` | rs/rust, rs/llvm | failures 0 |
+| `entry/q.py --count 400` | rs/rust, rs/llvm | 399 exact, 1 excluded-domain, unexplained 0 |
+| `req/test_impl.py` | rs/rust, rs/llvm | 160 variants x 2 = 320 runs, unexplained 0 |
+| `req/q.py` (q_gen, 2000 cases) | rs/rust, rs/llvm | 2000/2000 equal on each pair |
+| `qwen/test_impl.py` | rs/rust, rs/llvm | 26/26 each, verifier PASS |
+| `codex/test_impl.py` | rs/rust, rs/llvm | 136/136 each |
+| `opencode/test_impl.py --pairs rs/rust`, `grok/test_impl.py --no-ts --pairs rs/rust` | rs/rust | all fixtures passed |
+| `entry/integrate.py` | rs/rust | 10 integration cases, 18 checks PASS, 2 integration limits (I01/I02 claude, known; exit 2 as in 3.1 to 3.5) |
+
+### Rows open after 3.6
+
+- Closed: **AD** rows for `set_done`, `set_ck`, `ctx_accounts`, `ctx_account_at` and the seven `ent_canon`
+  adapters (removed).
+- New: **LB**, **MP** (language gaps).
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, AD (3.7 adapters above).
+- Next (3.7): `entry_api` to `inout cx`, removing the last adapters (`fail`, `with_prev`, `st_*`, `find_item`,
+  `list_item`, `read_item`, `threads_item`, `excluded_item`); fold `st_replay_ok` onto `State` (F10 rest from 3.5).

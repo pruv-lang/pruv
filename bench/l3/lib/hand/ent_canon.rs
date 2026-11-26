@@ -1,10 +1,10 @@
-// Hand Rust baseline for `bench/l3/lib/ent_canon.pruv` (Rust-shape reset step 3.5).
+// Hand Rust baseline for `bench/l3/lib/ent_canon.pruv` (Rust-shape reset steps 3.5, 3.6).
 // canonicalPath / isHostCodexHome / codexAccountFolder (reference/backend-codex-home.ts) and op 6. Every step takes the
 // replay context `&mut Ctx` and returns `Result<T, Halt>`: an observation that stalls or breaks the replay returns
 // through `?`, and a thrown homedir / cwd answer is rethrown as the item result (`Err(Halt::Done)`, output set).
 // String results are returned as `Vec<u16>`, 0/1 results as `bool`.
-// The account helpers (`valid_account_id`, `account_home`, `io_check`) belong to `ent_accounts` (step 3.6); they are
-// written here as the private stand-ins this module needs.
+// The account helpers (`valid_account_id`, `account_home`, `io_check`) belong to `ent_accounts`, which has no hand
+// baseline yet; they are written here as stand-ins for this module and `ent_sources`.
 // Check: rustc --edition 2021 --test ent_canon.rs -o /tmp/ent_canon_hand && /tmp/ent_canon_hand
 
 #![allow(dead_code)]
@@ -30,16 +30,16 @@ fn rd(w: &[i64], i: usize) -> i64 {
     w.get(i).copied().unwrap_or(0)
 }
 
-fn lit(s: &str) -> Vec<u16> {
+pub fn lit(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
-fn value(w: &[i64], p: usize) -> Value {
+pub fn value(w: &[i64], p: usize) -> Value {
     Value::parse([rd(w, p), rd(w, p + 1), rd(w, p + 2)])
 }
 
 /// units of the string slot at word p of packet w (empty for any other value)
-fn str_at(w: &[i64], p: usize) -> Vec<u16> {
+pub fn str_at(w: &[i64], p: usize) -> Vec<u16> {
     match value(w, p) {
         Value::Str(s) => decode_span(Pool::at(w, sec_start(w, 0)), s.off, s.len),
         _ => Vec::new(),
@@ -47,7 +47,7 @@ fn str_at(w: &[i64], p: usize) -> Vec<u16> {
 }
 
 /// units of the string slot at record offset k of the last answer
-fn ent_str(cx: &Ctx, k: usize) -> Vec<u16> {
+pub fn ent_str(cx: &Ctx, k: usize) -> Vec<u16> {
     let e = cx.ent();
     str_at(e, sec_start(e, 1) + k)
 }
@@ -281,7 +281,7 @@ fn pair_ie(op: i64, code: i64, aux: i64) -> bool {
 }
 
 /// ent_accounts: input check for ops 1, 5, 6; the pool prefix length the record references
-fn io_check(w: &[i64]) -> Option<i64> {
+pub fn io_check(w: &[i64]) -> Option<i64> {
     let mut c = Check::new(w);
     let r0 = c.start(1);
     let masks: &[i64] = match (rd(w, 5), sec_len(w, 1)) {
@@ -297,14 +297,14 @@ fn io_check(w: &[i64]) -> Option<i64> {
 }
 
 /// ent_accounts: /^acc_[a-f0-9]{16}$/
-fn valid_account_id(w: &[i64], p: usize) -> bool {
+pub fn valid_account_id(w: &[i64], p: usize) -> bool {
     let Value::Str(_) = value(w, p) else { return false };
     let id = str_at(w, p);
     id.len() == 20 && id.starts_with(&lit("acc_")) && id[4..].iter().all(|&u| matches!(u, 48..=57 | 97..=102))
 }
 
 /// ent_accounts: join(dataDir, 'engine-homes', engine, id)
-fn account_home(data_dir: &[u16], engine: &str, id: &[u16]) -> Vec<u16> {
+pub fn account_home(data_dir: &[u16], engine: &str, id: &[u16]) -> Vec<u16> {
     join(&[data_dir, &lit("engine-homes"), &lit(engine), id])
 }
 
