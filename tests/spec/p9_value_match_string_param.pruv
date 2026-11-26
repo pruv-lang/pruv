@@ -1,0 +1,6 @@
+// spec: R-6w-7 reject
+// A value `match` consumes a `Result<_, String>` scrutinee as the statement form does, so a read parameter is
+// not matched (declare it `take`).
+fn f(r: Result<i64, String>) -> i64 {
+  return match r { Ok(x) => x & 255, Err(e) => len(e) & 255 };
+}

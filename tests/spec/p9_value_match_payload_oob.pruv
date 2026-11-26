@@ -1,0 +1,7 @@
+// spec: R-6w-7 reject
+// The arm of a borrowed array payload is proved against that payload: b[3] needs len(b) > 3.
+enum Msg { Data(b: [u8]), Code(c: i64), Empty }
+
+fn f(m: Msg) -> i64 {
+  return match m { Msg::Data(b) => b[3], Msg::Code(c) => 0, Msg::Empty => 0 };
+}

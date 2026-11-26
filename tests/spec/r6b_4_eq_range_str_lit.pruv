@@ -1,0 +1,7 @@
+// spec: R-6b-4 reject
+// A literal operand is a byte operand: a literal against [i64] is type_mismatch.
+fn f(a: [i64]) -> bool
+  requires len(a) >= 4
+{
+  return eq_range(a, 0, "lair", 0, 4);
+}

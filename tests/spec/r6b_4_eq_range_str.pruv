@@ -1,0 +1,22 @@
+// spec: R-6b-4 accept
+// 4.3f-S: `folder::same` / `convert::has_prefix` shape -- hand `a.as_bytes()[i..i + 4] == b"lair"` and
+// `s.starts_with(p)` are one eq_range on the str bytes; the result is exact, so the ensures need no loop.
+fn has_lair(a: str, i: i64) -> bool
+  requires 0 <= i && i + 4 <= len(a)
+  ensures result ==> a[i] == 108 && a[i + 3] == 114
+{
+  return eq_range(a, i, "lair", 0, 4);
+}
+
+fn has_prefix(s: str, p: [u8]) -> bool
+  ensures result ==> len(p) <= len(s) && (forall k in 0..len(p): s[k] == p[k])
+{
+  return len(p) <= len(s) && eq_range(s, 0, p, 0, len(p));
+}
+
+// a `copy(x)` operand is only read: the compare borrows `x` (no `to_owned`)
+fn same_copy(a: str, b: str) -> bool ! alloc
+  requires len(a) >= 2 && len(b) >= 2
+{
+  return eq_range(copy(a), 0, b, 0, 2);
+}

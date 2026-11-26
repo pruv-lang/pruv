@@ -2080,6 +2080,7 @@ runtime|tests/runtime/p9_rt_match_call_lit.pruv	1 case: obl=7 1	--infer=f7ae7908
 runtime|tests/runtime/p9_rt_match_generic.pruv	1 case: obl=1 1	--infer=16e4373099b8
 runtime|tests/runtime/p9_rt_match_order.pruv	1 case: obl=19 1	--infer=a60cc8cbcc68
 runtime|tests/runtime/p9_rt_match_owned.pruv	1 case: obl=26 1	--infer=e801ceaaa2e8
+runtime|tests/runtime/p9_rt_match_scrutinee.pruv	1 case: obl=69 1	--infer=bc43809ed54d
 runtime|tests/runtime/p9_rt_match_take.pruv	1 case: obl=26 1	--infer=5c01334bbbb9
 runtime|tests/runtime/p9_rt_match_tuple_slice.pruv	1 case: obl=51 1	--infer=ba1cf71ef99c
 runtime|tests/runtime/p9_rt_match_unchecked.pruv	1 case: obl=2 1	--infer=d432d4238edd
@@ -2142,6 +2143,7 @@ runtime|tests/runtime/r31.pruv	1 case: obl=31 1	--infer=871943483c7c
 runtime|tests/runtime/r32.pruv	1 case: obl=12 1	--infer=064c9b1d3319
 runtime|tests/runtime/r33.pruv	1 case: obl=9 1	--infer=c2d0ccc7e7d6
 runtime|tests/runtime/r34_eval_order.pruv	1 case: obl=19 1	--infer=1871b145b50e
+runtime|tests/runtime/r6b_4_rt_eq_range_str.pruv	1 case: obl=29 1	--infer=852cee5cfb09
 runtime|tests/runtime/refine_array_edges.pruv	1 case: obl=1 1	--infer=112702481462
 runtime|tests/runtime/refine_edges.pruv	1 case: obl=1 1	--infer=ab57851dbdc5
 runtime|tests/runtime/refine_elem_high.pruv	1 case: obl=1 1	--infer=112702481462

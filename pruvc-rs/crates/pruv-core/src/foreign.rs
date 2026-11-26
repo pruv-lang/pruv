@@ -931,6 +931,8 @@ struct Ownership<'a> {
     bor: HashSet<String>,
     /// binders of the user-enum match arms being checked (payload views; only owned collection fields are collections)
     arm_bor: Vec<String>,
+    /// binders of the value `match` arms being walked (they view the scrutinee; only the move hint reads this)
+    value_bor: Vec<String>,
     string_error_binders: HashSet<String>,
     /// LB9 (R-6g8-4): record binders of a consuming match (field moves only)
     field_only: HashSet<String>,
@@ -1609,7 +1611,12 @@ impl<'a> Ownership<'a> {
                 col,
                 code,
                 "moving a borrowed parameter",
-                format!("{} is a read parameter; declare it `take {}: ...` to consume it", n, n),
+                if self.value_bor.iter().any(|b| b == n) {
+                    // P9a-6 remaining (R-6w-7): an arm value cannot move a value `match` binder
+                    format!("{} is a binder of a value `match`, which cannot be moved; use `copy({})` or a `match` statement", n, n)
+                } else {
+                    format!("{} is a read parameter; declare it `take {}: ...` to consume it", n, n)
+                },
             ));
         }
         st.set(n, V::Dead);
@@ -1720,14 +1727,26 @@ impl<'a> Ownership<'a> {
                 Ok(())
             }
             Expr::Call(c) if crate::ast::ValueMatch::matches(c) => {
-                // P9a-5: only one arm runs; the scrutinee is a copied value, and a value moved on one arm is
-                // maybe-moved after the join
-                self.expr(&c.args[0], st)?;
+                // P9a-5: only one arm runs, and a value moved on one arm is maybe-moved after the join. P9a-6
+                // remaining: a `Result<_, String>` scrutinee is consumed as by the statement form (a read parameter
+                // is `type/foreign_move`)
+                let owned_result = crate::llvmgen::expr_ty(&c.args[0]).as_deref()
+                    .is_some_and(|t| GType::from_key(t).has_string_error());
+                if owned_result {
+                    self.consume_payload(&c.args[0], st)?;
+                } else {
+                    self.expr(&c.args[0], st)?;
+                }
                 let base = st.clone();
                 let mut joined: Option<St> = None;
-                for arm in &c.args[1..] {
+                for (arm, va) in c.args[1..].iter().zip(crate::ast::ValueMatch::arms(c)) {
                     let mut s = base.clone();
-                    if owned { self.consume(arm, &mut s, "field")? } else { self.expr_o(arm, &mut s, false)? }
+                    // binders view the scrutinee: they are borrowed (moving one names the binder in the hint)
+                    let n = va.binders.len();
+                    self.value_bor.extend(va.binders.iter().cloned());
+                    let r = if owned { self.consume(arm, &mut s, "field") } else { self.expr_o(arm, &mut s, false) };
+                    self.value_bor.truncate(self.value_bor.len() - n);
+                    r?;
                     joined = join(joined, Some(s));
                 }
                 *st = joined.unwrap_or(base);
@@ -1935,7 +1954,7 @@ fn ctor_moves<'e>(e: &'e Expr, out: &mut Vec<&'e Move>) {
 pub fn check_ownership(f: &Function, funcs: &Takes, aggregates: &HashSet<String>, enums: &HashSet<String>,
                        variants: &HashMap<(String, String), Vec<String>>) -> Res<()> {
     Ownership {
-        funcs, aggregates, enums, variants, map_binders: Vec::new(), bor: HashSet::new(), arm_bor: Vec::new(),
+        funcs, aggregates, enums, variants, map_binders: Vec::new(), bor: HashSet::new(), arm_bor: Vec::new(), value_bor: Vec::new(),
         string_error_binders: HashSet::new(), field_only: HashSet::new(), track: None,
         proc: HashMap::new(), borrowed_handles: HashMap::new(), decl: HashMap::new(), consumed_field: None, partial: false,
         loops: Vec::new(),

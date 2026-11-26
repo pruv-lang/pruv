@@ -1,0 +1,106 @@
+// P9a-6 remaining (R-6w-6): a value `match` on a scrutinee that holds owned or borrowed data, with Rust's
+// ownership meaning: a read parameter is matched by reference, an enum local stays readable after the match (the
+// rest of the statement and later statements may read it), an owned `Result<_, String>` local is consumed as in the
+// statement form, and a direct `map_get`/`vec_get` call is matched as is.
+enum Msg { Data(b: [u8]), Code(c: i64), Empty }
+enum Tag { A(k: i64), B }
+
+fn msz(m: Msg) -> i64
+  ensures -1 <= result && result <= 255
+{
+  return match m { Msg::Data(b) => len(b) & 255, Msg::Code(c) => c & 255, Msg::Empty => -1 };
+}
+
+fn first(m: Msg) -> i64 {
+  return match m { Msg::Data(b) => if len(b) > 0 { b[0] } else { 0 }, Msg::Code(c) => 0, Msg::Empty => 0 };
+}
+
+fn bytes(m: Msg) -> [u8] ! alloc {
+  return match m { Msg::Data(b) => copy(b), Msg::Code(c) => alloc(c & 7, 0), Msg::Empty => alloc(0, 0) };
+}
+
+fn mk(k: i64) -> Result<i64, String> ! alloc {
+  if k > 0 { return Ok::<i64, String>(k & 255); }
+  return Err::<i64, String>(string_push_str(string_new(), "bad"));
+}
+
+fn get_v(m: HashMap<i64, i64>, k: i64) -> i64 {
+  return match map_get::<i64, i64>(m, k) { Some(x) => x & 255, None => 0 };
+}
+
+fn at(v: Vec<Tag>, i: i64) -> i64
+  requires 0 <= i && i < len(v)
+{
+  return match vec_get::<Tag>(v, i) { Tag::A(k) => k & 255, Tag::B => -1 };
+}
+
+// the whole value of a `return` consumes a dead owned local (hand `match m { Msg::Data(b) => b, .. }`, no copy)
+fn own_bytes(k: i64) -> [u8] ! alloc {
+  let d: [u8] = alloc(k & 7, 2);
+  let m: Msg = Msg::Data(move d);
+  return match m { Msg::Data(b) => copy(b), Msg::Code(c) => alloc(1, 0), Msg::Empty => alloc(0, 0) };
+}
+
+// nested value matches inside a loop, each viewing a local that stays live
+fn loop_sum(n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 10
+{
+  let d: [u8] = alloc(2, 3);
+  let a: Msg = Msg::Data(move d);
+  let mut s: i64 = 0;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && 0 <= s && s <= i * 300
+    decreases n - i
+  {
+    s = s + match a { Msg::Data(b) => match Msg::Code(i) { Msg::Code(c) => (len(b) & 255) + c, Msg::Data(x) => 0, Msg::Empty => 0 }, Msg::Code(c) => 0, Msg::Empty => 0 };
+    i = i + 1;
+  }
+  return s + msz(a);
+}
+
+// a value match nested in the arm or scrutinee of a returned value match is not the whole value: it views `m`,
+// which a later operand reads again
+fn nest_arm(o: Option<i64>) -> i64 ! alloc {
+  let d: [u8] = alloc(3, 2);
+  let m: Msg = Msg::Data(move d);
+  return match o { Some(x) => (match m { Msg::Data(b) => len(b) & 255, Msg::Code(c) => 0, Msg::Empty => 0 }) + (msz(m) & 255), None => 0 };
+}
+
+fn nest_scrut() -> i64 ! alloc {
+  let d: [u8] = alloc(3, 2);
+  let m: Msg = Msg::Data(move d);
+  return match (match m { Msg::Data(b) => Some::<i64>(len(b) & 255), Msg::Code(c) => None::<i64>, Msg::Empty => None::<i64> }) { Some(x) => x + (msz(m) & 255), None => 0 };
+}
+
+fn run() -> () ! io, alloc {
+  let d: [u8] = alloc(3, 1);
+  let a: Msg = Msg::Data(move d);
+  print(msz(a));
+  print(first(a));
+  print(msz(Msg::Code(7)));
+  let k: i64 = match a { Msg::Data(b) => (len(b) & 255) + 100, Msg::Code(c) => c & 7, Msg::Empty => 0 } + msz(a);
+  print(k);
+  print(len(bytes(a)));
+  print(len(bytes(Msg::Code(2))));
+  let o: Result<i64, String> = mk(-1);
+  let n: i64 = match o { Ok(x) => x & 255, Err(e) => (len(e) & 255) + 10 } + 1;
+  print(n);
+  let o2: Result<i64, String> = mk(-2);
+  let n2: i64 = match o2 { Ok(x) => x, Err(e) => (len(e) & 255) * 2 };
+  print(n2);
+  print(match mk(4) { Ok(x) => x, Err(e) => len(e) });
+  let mut m: HashMap<i64, i64> = map_new::<i64, i64>();
+  m = map_insert::<i64, i64>(move m, 1, 5);
+  print(get_v(m, 1));
+  print(get_v(m, 2));
+  let mut v: Vec<Tag> = vec_new::<Tag>();
+  v = vec_push::<Tag>(move v, Tag::A(9));
+  v = vec_push::<Tag>(move v, Tag::B);
+  print(at(v, 0));
+  print(at(v, 1));
+  print(len(own_bytes(4)));
+  print(loop_sum(3));
+  print(nest_arm(Some::<i64>(1)));
+  print(nest_scrut());
+}

@@ -1,0 +1,7 @@
+// spec: R-6w-6 reject
+// A value `match` on a direct `map_take` call needs the Rust backend, as the statement form (R-6e-14).
+fn bad(k: i64) -> i64 ! alloc {
+  let mut m: HashMap<i64, i64> = map_new::<i64, i64>();
+  m = map_insert::<i64, i64>(move m, 1, 5);
+  return match map_take::<i64, i64>(inout m, k) { Some(x) => x & 255, None => 0 };
+}
