@@ -1,1 +1,1 @@
-{"name": "l3_supervisor_core_root", "version": "0.1.0", "root": "core_root.pruv", "dependencies": {}}
+{"name": "l3_supervisor_core_root", "version": "0.1.0", "root": "core_root.pruv", "dependencies": {"tail": {"path": "../pkgs/tail", "version": "0.1"}}}

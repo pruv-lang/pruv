@@ -11,7 +11,8 @@ Pruv root on pairs py/rs x rust/llvm and build a harness with `@SOL@` replaced b
 `measure.py` is the old measurement (read it; reuse `line()`/`timed()` ideas). Packet layout and semantics: read
 `supervise.pruv`, `capfile.pruv`, `packet.pruv`, `args.pruv` and `docs/COMMAND_SUPERVISOR_SPEC.md`.
 
-The tail is being changed (by the main session, file `bench/l3/supervisor/btail.pruv`, not yours) to this byte
+The tail is being changed (by the main session, file `bench/l3/supervisor/btail.pruv`, not yours; since step 4.2 the
+Pruv side uses `bench/l3/pkgs/tail` instead, see `../RESHAPE.md`) to this byte
 algorithm; your hand Rust must implement exactly the same algorithm in natural safe Rust:
 - Two WHATWG UTF-8 decoders (stream 1 = stdout, stream 2 = stderr), maximal-subpart U+FFFD replacement, exactly as
   `bench/l3/pkgs/tail/tail.pruv` `dec_byte` (needed/seen/cp/lower/upper; on a bad continuation emit U+FFFD and

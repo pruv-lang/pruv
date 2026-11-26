@@ -2,7 +2,7 @@
 import random
 import sys
 
-from common import EXPAND, HERE, enc, run_lines
+from common import EXPAND, HERE, enc, manifest_flags, run_lines
 from checker import Bad, parse_packet
 
 HARNESS = r'''
@@ -85,7 +85,7 @@ def main():
     except Bad:
         pass
     print(f'{len(cases)} fixtures', flush=True)
-    return run_lines('a0', HERE / 'a0_root.pruv', HARNESS, cases)
+    return run_lines("a0", HERE / "a0_root.pruv", HARNESS, cases, flags=manifest_flags(HERE / "a0_root.pruv"))
 
 
 if __name__ == '__main__':

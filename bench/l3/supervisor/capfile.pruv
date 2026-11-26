@@ -1,75 +1,48 @@
-// L3-2 capped output file (TS `take`, file half).
-// cw = [written, truncated, error, limit, total]; error 0 none, 1 create, 2 write.
-
-pub fn cap_state(limit: i64, create_failed: bool) -> [i64] ! alloc
-  requires 0 <= limit && limit <= 1099511627776
-  ensures len(result) == 5
-  ensures result[0] == 0 && result[3] == limit && result[4] == 0
-  ensures 0 <= result[1] && result[1] <= 1
-  ensures 0 <= result[2] && result[2] <= 2
-{
-  let mut cw: [i64] = alloc(5, 0);
-  cw[3] = limit;
-  if create_failed { cw[2] = 1; }
-  return cw;
-}
+// L3-2 capped output file (hand `supervise_hand.rs::write` and `close`). The state lives in the result packet as in
+// the hand: p[6] truncated, p[7] file error (0 none, 1 create, 2 write), p[10] bytes written. The hand keeps
+// `Option<File>`; a File cannot sit in an Option or an inout parameter (gap FO), so the handle is threaded through
+// `take` and "Some" is `file_writable`.
 
 // One chunk: write the prefix that fits with one write; count it only if the write succeeded.
-pub fn cap_take(take f: File, inout cw: [i64], data: [u8]) -> File ! fs, alloc
-  requires len(cw) == 5
-  requires 0 <= cw[3] && cw[3] <= 1099511627776
-  requires 0 <= cw[0] && cw[0] <= cw[3]
-  requires 0 <= cw[4] && cw[4] <= 4611686018427387904
-  requires len(data) <= 1048576
-  requires 0 <= cw[1] && cw[1] <= 1
-  requires 0 <= cw[2] && cw[2] <= 2
-  ensures len(cw) == 5
-  ensures cw[3] == old(cw)[3]
-  ensures old(cw)[0] <= cw[0] && cw[0] <= cw[3]
-  ensures cw[4] == old(cw)[4] + len(data)
-  ensures old(cw)[1] <= cw[1] && cw[1] <= 1
-  ensures 0 <= cw[2] && cw[2] <= 2
-  ensures old(cw)[2] != 0 ==> cw[2] == old(cw)[2]
-  ensures cw[2] != 0 || old(cw)[1] != 0 ==> cw[0] == old(cw)[0]
+pub fn write(take f: File, inout p: [i64], file_limit: i64, bytes: [u8]) -> File ! fs
+  requires len(p) >= 12
+  requires 0 <= file_limit && file_limit <= 1099511627776
+  requires 0 <= p[10] && p[10] <= file_limit
+  requires 0 <= p[6] && p[6] <= 1
+  requires 0 <= p[7] && p[7] <= 2
+  ensures len(p) == len(old(p))
+  ensures old(p)[10] <= p[10] && p[10] <= file_limit
+  ensures 0 <= p[6] && p[6] <= 1
+  ensures 0 <= p[7] && p[7] <= 2
+  ensures p[9] == old(p)[9]
 {
-  cw[4] = cw[4] + len(data);
-  if cw[2] != 0 || cw[1] != 0 { return move f; }
-  if !file_writable(f) {
-    cw[2] = 2;
-    return move f;
-  }
-  let room: i64 = cw[3] - cw[0];
-  let mut n: i64 = len(data);
-  if n > room {
-    n = room;
-    cw[1] = 1;
-  }
+  if !file_writable(f) { return move f; }
+  let mut n: i64 = file_limit - p[10];
+  if len(bytes) < n { n = len(bytes); }
+  if n < len(bytes) { p[6] = 1; }
   if n == 0 { return move f; }
-  let mut g: File = move f;
-  if n == len(data) {
-    g = file_write_bytes(move g, data);
-  } else {
-    let part: [u8] = truncate(copy(data), n);
-    g = file_write_bytes(move g, part);
-  }
-  if file_writable(g) {
-    cw[0] = cw[0] + n;
-  } else {
-    cw[2] = 2;
-  }
+  let g: File = write_all(move f, subview(bytes, 0, n));
+  if file_writable(g) { p[10] = p[10] + n; } else { p[7] = 2; }
   return move g;
 }
 
-// Close the file; a failed close is a write error unless an error is already set (P4).
-pub fn cap_finish(take f: File, inout cw: [i64]) -> () ! fs, alloc
-  requires len(cw) == 5
-  requires 0 <= cw[2] && cw[2] <= 2
-  ensures len(cw) == 5
-  ensures cw[0] == old(cw)[0] && cw[1] == old(cw)[1] && cw[3] == old(cw)[3] && cw[4] == old(cw)[4]
-  ensures 0 <= cw[2] && cw[2] <= 2
-  ensures old(cw)[2] != 0 ==> cw[2] == old(cw)[2]
+// hand `output.write_all(&bytes[..n])`. A builtin argument cannot be a `subview` (view_context, gap FV), so the
+// prefix view goes through this one-line Pruv call; no copy, as the hand.
+fn write_all(take f: File, part: [u8]) -> File ! fs
+  requires file_writable(f)
+{
+  return file_write_bytes(move f, part);
+}
+
+// Close the file; a failed close is a write error unless an error is already set (P4). The hand drops the File.
+pub fn close(take f: File, inout p: [i64]) -> () ! fs
+  requires len(p) >= 12
+  requires 0 <= p[7] && p[7] <= 2
+  ensures len(p) == len(old(p))
+  ensures 0 <= p[7] && p[7] <= 2
+  ensures p[6] == old(p)[6] && p[9] == old(p)[9] && p[10] == old(p)[10]
 {
   let ok: bool = file_close(move f);
-  if !ok && cw[2] == 0 { cw[2] = 2; }
+  if !ok && p[7] == 0 { p[7] = 2; }
   return;
 }
