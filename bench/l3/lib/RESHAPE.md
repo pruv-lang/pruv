@@ -1086,3 +1086,32 @@ All after the last code change (F1 / F4 from the structure comparison).
   3. Grok bench rows 4.3c-T, 4.3c-B, 4.3c-G and `pkgs/turns` dead code (as listed after 4.3c).
   4. Qwen bench rows 4.3d-C, 4.3d-T, 4.3d-O, 4.3d-P, 4.3d-W (`qwen/` only; 4.3d-T must keep the `last-title` mutant
      in `q_mutants.py` meaningful or move it).
+
+## Step 4.3e: Qwen bench rows C, P, W, O, T
+
+- `qwen/RESHAPE.md` §1-§3. 4.3d-C (uuid index, `selected` and `Events` grow per object, no LF pre-count),
+  4.3d-P (`{` prefilter in `entry::parse_line`), 4.3d-W (`store_le` / `load_le` wire words), 4.3d-O
+  (`publish` / `make_output` take and move), 4.3d-T (`entry::role_of` / `custom_title`: role, title and stamp
+  decided in the scan) are done. A second Codex review led to three more changes: `human_text` stops before
+  provenance on a non-user type; only parsed objects are entries; `resolve` returns early without a leaf.
+- 4.3d-H is now a language row: Pruv maps (R-6e-5) take owned `String` keys only, so the hand's
+  `HashMap<&str, &Entry>` with borrowed slice keys cannot be written.
+- No `lib` / `pkgs` module changed, so no consumer runs were needed. Tests: `qwen/RESHAPE.md` §4 (verifier PASS and
+  26/26 on `rs/rust` and `rs/llvm`; q 300 cases, unexplained 0 on both).
+
+### Rows open after 4.3e
+
+- Language: 4.3d-M (`move s.f` of a `[u8]` field of a `let`-bound struct), 4.3d-H (map keys must be owned `String`).
+- New (bench, `qwen/RESHAPE.md` §3): 4.3e-D (prompt / stamp / parts computed before selection and turn linkage),
+  4.3e-L (leaf candidate kept during the scan; role decided before uuid / parent), 4.3e-F (`put_field` decodes then
+  copies; needs a `lib/access` decode-into-buffer form), 4.3e-J (`array_content` owns each part; `title_key` owns
+  blank titles), 4.3e-S (`write_stamp` str round trip).
+- Closed: 4.3d-C, 4.3d-P, 4.3d-W, 4.3d-O, 4.3d-T.
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB, TH, FO, FV, UL, VP,
+  IW, VL.
+- Next:
+  1. Codex, then OpenCode together with Claude R08.
+  2. Step 4.4 (`docs/RUST_SHAPE_RESET.md` §6).
+  3. Grok bench rows 4.3c-T, 4.3c-B, 4.3c-G and `pkgs/turns` dead code (as listed after 4.3c).
+  4. Qwen bench rows 4.3e-D, 4.3e-L, 4.3e-J, 4.3e-S (`qwen/` only), then 4.3e-F (touches `lib/access`; run all
+     consumers).

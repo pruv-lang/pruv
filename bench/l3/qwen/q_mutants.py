@@ -6,8 +6,8 @@ from pathlib import Path
 import test_impl as t
 
 MUTANTS=[
- ('human-role','entry.pruv','"type", "user"','"type", "assistant"'),
- ('provenance','entry.pruv','"provenance", "real_user"','"provenance", "tool"'),
+ ('human-role','entry.pruv','string_is(doc, ty, "user") != 1','string_is(doc, ty, "assistant") != 1'),
+ ('provenance','entry.pruv','string_is(doc, provenance, "real_user")','string_is(doc, provenance, "tool")'),
  ('human-thought','entry.pruv','if thought == 1 { return Block::Ignore; }','if thought == 0 { return Block::Ignore; }'),
  ('custom-title','entry.pruv','"subtype", "custom_title"','"subtype", "other"'),
  ('assistant-thought','import.pruv','if thought != 1 {','if thought == 1 {'),
@@ -16,7 +16,7 @@ MUTANTS=[
  ('chain-cut','chain.pruv','lost = true; done = true;','lost = false; done = true;'),
  ('chain-filter','chain.pruv','active: leaf.found, cut: lost, bad: leaf.bad','active: false, cut: lost, bad: leaf.bad'),
  ('leaf-parent','chain.pruv','if count > 0 { poff = f.poff; plen = f.plen; }','if count >= 0 { poff = f.poff; plen = f.plen; }'),
- ('last-title','import.pruv','return rank >= best;','return rank > best;'),
+ ('last-title','import.pruv','best = move text; has_title = true;','if !has_title { best = move text; } has_title = true;'),
  ('turn-cap','pkgs/turns/turns.pruv','if avail > 200 { avail = 200; }','if avail > 199 { avail = 199; }'),
 ]
 
