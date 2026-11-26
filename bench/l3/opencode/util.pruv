@@ -20,6 +20,14 @@ pub fn span_bytes(t: [u8], s: i64, l: i64) -> [u8] ! alloc
   return copy(subview(t, s, s + l));
 }
 
+// The bytes t[s..s+l] borrowed; empty for an absent or invalid ref.
+pub fn span_view(t: [u8], s: i64, l: i64) -> ref [u8] from(t)
+  ensures len(result) <= len(t)
+{
+  if !crate::packet::ref_ok(s, l, len(t)) || s < 0 { return subview(t, 0, 0); }
+  return subview(t, s, s + l);
+}
+
 // cfg_text[s..s+l] as text ("" for an absent/invalid ref or invalid UTF-8). Begin refuses a configuration text over
 // 1000000000 bytes with InputTooLarge, so the length guard below never changes a value of an admitted case.
 pub fn cfg_str(t: [u8], s: i64, l: i64) -> str ! alloc
@@ -50,63 +58,6 @@ pub fn bank_fits(cur: i64, add: i64) -> bool
   ensures result ==> (0 <= cur && 0 <= add && cur <= 2147483647 && add <= 2147483647 - cur)
 {
   return fits(cur, add, 2147483647);
-}
-
-// pool ++ add (new bytes start at len(pool))
-pub fn pool_bytes(pool: [u8], add: [u8]) -> [u8] ! alloc
-  requires len(pool) <= 1073741823 && len(add) <= 1073741823
-  ensures len(result) == len(pool) + len(add)
-{ return crate::packet::cat_bytes(pool, add); }
-
-pub fn pool_str(pool: [u8], s: str) -> [u8] ! alloc
-  requires len(pool) <= 1073741823 && len(s) <= 1073741823
-  ensures len(result) == len(pool) + len(s)
-{ return crate::packet::append_str(pool, s); }
-
-// pool ++ decimal(n)
-pub fn pool_dec(pool: [u8], n: i64) -> [u8] ! alloc
-  requires len(pool) <= 1073741823 && -9223372036854775807 <= n
-  ensures len(result) >= len(pool) + 1 && len(result) <= len(pool) + 20
-{
-  let d: [u8] = format_i64(n);
-  return crate::packet::cat_bytes(pool, d);
-}
-
-// ---- bounded decimal ----
-// Decimal text of n: optional '-' then digits without leading zeros ("0" for zero); 1..20 bytes.
-// The most negative i64 is excluded (its negation overflows); callers hold safe-integer values.
-pub fn format_i64(n: i64) -> [u8] ! alloc
-  requires -9223372036854775807 <= n
-  ensures 1 <= len(result) && len(result) <= 20
-{
-  let neg: bool = n < 0;
-  let mut v: i64 = n;
-  if neg { v = 0 - n; }
-  let mut out: [u8] = alloc(19, 0);
-  let mut k: i64 = 0;
-  while k < 19
-    invariant 0 <= k && k <= 19 && len(out) == 19 && 0 <= v
-    decreases 19 - k
-  {
-    out[18 - k] = 48 + v % 10;
-    v = v / 10;
-    k = k + 1;
-  }
-  let mut s: i64 = 0;
-  while s < 18 && out[s] == 48
-    invariant 0 <= s && s <= 18 && len(out) == 19
-    decreases 18 - s
-  { s = s + 1; }
-  let digits: i64 = 19 - s;
-  if neg {
-    let mut r1: [u8] = alloc(digits + 1, 0);
-    r1[0] = 45;
-    crate::bytes::copy_span(inout r1, 1, out, s, 19);
-    return r1;
-  }
-  let mut r2: [u8] = alloc(digits, 0);
-  crate::bytes::copy_span(inout r2, 0, out, s, 19);
-  return r2;
 }
 
 // ---- IEEE-754 binary64 from unsigned 32-bit limbs (typed SQL REAL: a = high32, b = low32) ----

@@ -20,15 +20,14 @@ fn select_sql(mode: i64, archived: bool) -> [u8] ! alloc
   let s1: str = " AND s.time_archived IS NULL";
   let s2: str = " AND EXISTS (SELECT 1 FROM message m WHERE m.session_id = s.id)";  // MUT:M04 => let s2: str = "";
   let s3: str = " AND s.id = ?";
-  let s4: str = " AND s.directory IN (?, ?)";  // MUT:M05 => let s4: str = " AND RTRIM(s.directory, '/') IN (?, ?)";
-  let s5: str = " ORDER BY s.time_updated DESC LIMIT ?";
+  let s4: str = " AND s.directory IN (?, ?) ORDER BY s.time_updated DESC LIMIT ?";  // MUT:M05 => let s4: str = " AND RTRIM(s.directory, '/') IN (?, ?) ORDER BY s.time_updated DESC LIMIT ?";
   let mut b: [u8] = crate::util::to_bytes(s0);
-  if archived { b = crate::util::pool_str(b, s1); }
-  b = crate::util::pool_str(b, s2);
-  if mode == 1 { b = crate::util::pool_str(b, s3); }
-  if mode == 0 {
-    b = crate::util::pool_str(b, s4);
-    b = crate::util::pool_str(b, s5);
+  if archived { arr_append(inout b, s1, 0, len(s1)); }
+  arr_append(inout b, s2, 0, len(s2));
+  match mode {
+    1 => { arr_append(inout b, s3, 0, len(s3)); }
+    0 => { arr_append(inout b, s4, 0, len(s4)); }
+    _ => {}
   }
   return b;
 }
@@ -41,16 +40,19 @@ fn select_pool(cfg: [i64], cfg_text: [u8], mode: i64) -> [u8] ! alloc
 {
   let empty: [u8] = alloc(0, 0);
   if mode == 0 {
-    let folder: [u8] = crate::util::span_bytes(cfg_text, cfg[8], cfg[9]);
-    let base: [u8] = crate::path::folder_key(folder);
+    let folder: ref [u8] = crate::util::span_view(cfg_text, cfg[8], cfg[9]);
+    let base: ref [u8] = crate::path::folder_key(folder);
     if len(base) > 100000000 { return empty; }
-    let sl: str = "/";
-    let slash: [u8] = crate::util::to_bytes(sl);
-    let two: [u8] = crate::packet::cat_bytes(base, base);
-    return crate::packet::cat_bytes(two, slash);
+    let nb: i64 = len(base);
+    let mut two: [u8] = alloc(0, 0);
+    arr_reserve(inout two, 2 * nb + 1);
+    arr_append(inout two, base, 0, nb);
+    arr_append(inout two, base, 0, nb);
+    arr_push(inout two, 47);
+    return two;
   }
   if mode == 1 {
-    let thread: [u8] = crate::util::span_bytes(cfg_text, cfg[10], cfg[11]);
+    let thread: ref [u8] = crate::util::span_view(cfg_text, cfg[10], cfg[11]);
     if len(thread) > 100000000 { return empty; }
     return copy(thread);
   }
@@ -157,7 +159,7 @@ fn p200(ctl: [i64], text: [u8]) -> [i64] ! alloc
   ensures len(result) >= 76
 {
   if ctl[6] != 0 || ctl[1] < 0 || ctl[1] > 2 { return crate::packet::done_internal(ctl, 28); }
-  let dbp: [u8] = crate::util::span_bytes(text, ctl[24], ctl[25]);
+  let dbp: ref [u8] = crate::util::span_view(text, ctl[24], ctl[25]);
   if len(dbp) == 0 { return crate::packet::done_internal(ctl, 4); }
   let ep: [i64] = alloc(0, 0);
   return crate::path::ask(ctl, 201, 3, 4, 0, -1, ep, path_words(len(dbp)), 2, dbp);

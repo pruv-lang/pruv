@@ -1267,3 +1267,39 @@ All after the last code change (F1 / F4 from the structure comparison).
   4. Codex bench rows 4.3f-A, 4.3f-O, 4.3f-N, 4.3f-K, 4.3f-L, 4.3f-T, 4.3f-P, 4.3f-R, 4.3f-D (`codex/` only), then
      4.3f-B, 4.3f-E, 4.3f-F (shared modules; run all consumers).
   5. req port (REQ-PORT) once P10H passes on both backends.
+
+## Step 4.4a: OpenCode bench rows (4.3g)
+
+- `opencode/RESHAPE.md` §5. `opencode/` only; no `lib` / `pkgs` module changed, so no consumer runs were needed.
+- Closed: 4.3g-P (every pool is one buffer grown `inout`; `cat_bytes`, `append_str`, `put_bytes`, `pool_*` removed),
+  4.3g-Q (one SQL buffer, borrowed folder key), 4.3g-D (`enum DbPath`, `OPENCODE_DB` read once), 4.3g-A (result /
+  error / step packets reserve + append), 4.3g-E (hand exec failure carries native / raw / name like the TS-judged
+  Pruv form).
+- Partly closed: 4.3g-K (`util::span_view -> ref [u8] from(t)` in `read_handoff`, `utility`, `select_pool`, `admit`,
+  `p200`), 4.3g-F (`format_i64` / `pool_dec` removed, `items_at` / `rows_result` push).
+- One Codex structure comparison (gpt-6.2-astra, high): hand raw code is now the errno symbol and a missing /
+  unexecutable program fails at stage 16; `code_bytes`, `rm_step`, `path_step` borrow, `on_mkdtemp` writes the path
+  once, `select_pool` mode 1 copies once. Rest kept as rows (4.3g-A3, K3, M07).
+- Tests: `opencode/RESHAPE.md` §4 (verify A-D, 199/199 on both pairs, `q.py` 499 cases with 0 unexplained, 16/16
+  mutants present, hand 0 warnings).
+
+### Rows open after 4.4a
+
+- New (language): 4.3g-BS, `arr_append` of a `str` into `[i64]` is a type error, so `packet::build_error` takes the
+  name / detail as `[u8]` (literals pass as static views).
+- New (bench, `opencode/RESHAPE.md` §5): 4.3g-A2 (`result_shape` twice), 4.3g-K2 (`rows::clean_title` /
+  `updated_number` copies), 4.3g-F2 (`rows::format_ext` civil repeat), 4.3g-A3 (error / step packet header grown
+  after a fixed buffer), 4.3g-K3 (`p100` / `db_path` / `utility` owned copies), 4.3g-M07 (identity order array kept as
+  the mutant hook).
+- Still open from 4.3g: 4.3g-R, 4.3g-N, 4.3g-X, 4.3g-T, 4.3g-SQ.
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB, TH, FO, FV, UL, VP,
+  IW, VL, 4.3d-M, 4.3d-H, 4.3f-S, 4.3f-E, the 4.3h bench rows and the 4.4 rows (P10H, REQ-*).
+- Next:
+  1. OpenCode bench rows 4.3g-R (with K2, F2), 4.3g-N, then 4.3g-X, 4.3g-T (`opencode/` only).
+  2. Claude bench rows 4.3h-T, 4.3h-R, 4.3h-W, 4.3h-Z, 4.3h-P, 4.3h-V, 4.3h-L, 4.3h-A (`claude/` only), then 4.3h-O
+     (shared packages; run all consumers) and 4.3h-Q (move `framing` to `pkgs` with the Qwen consumer).
+  3. Grok bench rows 4.3c-T, 4.3c-B, 4.3c-G and `pkgs/turns` dead code; Qwen bench rows 4.3e-D, 4.3e-L, 4.3e-J,
+     4.3e-S, then 4.3e-F (touches `lib/access`; run all consumers).
+  4. Codex bench rows 4.3f-A, 4.3f-O, 4.3f-N, 4.3f-K, 4.3f-L, 4.3f-T, 4.3f-P, 4.3f-R, 4.3f-D (`codex/` only), then
+     4.3f-B, 4.3f-E, 4.3f-F (shared modules; run all consumers).
+  5. req port (REQ-PORT) once P10H passes on both backends.

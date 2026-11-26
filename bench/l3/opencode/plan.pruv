@@ -235,7 +235,7 @@ pub fn select(doc: crate::json::JsonDocument, arr: i64, input_kind: i64) -> Plan
 
 // ---- result packet (mode 5) for the direct plan input ----
 
-fn err5(stage: i64, detail: str) -> [i64] ! alloc
+fn err5(stage: i64, detail: [u8]) -> [i64] ! alloc
   requires 0 <= stage && stage <= 28
   ensures len(result) >= 40
 {
@@ -243,33 +243,24 @@ fn err5(stage: i64, detail: str) -> [i64] ! alloc
   return crate::packet::error(5, stage, 1, 2, 0, eb, "", detail);
 }
 
-// at ++ text: the plan's part of a result byte pool
-pub fn pool_of(v: PlanValue) -> [u8] ! alloc
-  requires len(v.at) <= 50331648 && len(v.text) <= 24000
-  ensures len(result) == len(v.at) + len(v.text)
-{
-  return crate::packet::cat_bytes(v.at, v.text);
-}
-
 // The plan item words with every textStart moved into a pool where the plan's `at ++ text` begins at `base`.
 pub fn items_at(v: PlanValue, base: i64) -> [i64] ! alloc
   requires len(v.items) <= 90 && len(v.at) <= 50331648 && 0 <= base && base <= 1000000000
-  ensures len(result) == len(v.items)
+  ensures len(result) <= len(v.items)
 {
   let n: i64 = len(v.items);
   let shift: i64 = base + len(v.at);
   let cnt: i64 = n / 3;
-  let mut o: [i64] = alloc(n, 0);
+  let mut o: [i64] = alloc(0, 0);
+  arr_reserve(inout o, n);
   let mut k: i64 = 0;
   while k < cnt
-    invariant 0 <= k && k <= cnt && cnt == n / 3 && 3 * cnt <= n && n == len(v.items) && len(o) == n && 0 <= shift && shift <= 1050331648
+    invariant 0 <= k && k <= cnt && cnt == n / 3 && 3 * cnt <= n && n == len(v.items) && len(o) == 3 * k && 0 <= shift && shift <= 1050331648
     decreases cnt - k
   {
     let mut s: i64 = v.items[3 * k];
     if s < 0 || s > 24000 { s = 0; }
-    o[3 * k] = shift + s;
-    o[3 * k + 1] = v.items[3 * k + 1];
-    o[3 * k + 2] = v.items[3 * k + 2];
+    arr_push(inout o, shift + s, v.items[3 * k + 1], v.items[3 * k + 2]);
     k = k + 1;
   }
   return o;
@@ -289,7 +280,12 @@ fn plan_result(v: PlanValue) -> [i64] ! alloc
   }
   let rows: [i64] = alloc(0, 0);
   let items: [i64] = items_at(v, 0);
-  let pool: [u8] = pool_of(v);
+  let la: i64 = len(v.at);
+  let lt: i64 = len(v.text);
+  let mut pool: [u8] = alloc(0, 0);
+  arr_reserve(inout pool, la + lt);
+  arr_append(inout pool, v.at, 0, la);
+  arr_append(inout pool, v.text, 0, lt);
   return crate::packet::ok_result(m, rows, items, pool);
 }
 

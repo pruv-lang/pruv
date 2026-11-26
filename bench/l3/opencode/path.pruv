@@ -220,11 +220,11 @@ pub fn key_len(b: [u8]) -> i64
   return n;
 }
 
-pub fn folder_key(b: [u8]) -> [u8] ! alloc
+pub fn folder_key(b: [u8]) -> ref [u8] from(b)
   ensures len(result) <= len(b)
 {
   let k: i64 = key_len(b);
-  return copy(subview(b, 0, k));
+  return subview(b, 0, k);
 }
 
 pub fn same_key(a: [u8], b: [u8]) -> bool
@@ -288,26 +288,20 @@ pub fn data_dir(cfg: [i64], cfg_text: [u8]) -> str ! alloc
   return join(home, ".local/share/opencode");
 }
 
-// OPENCODE_DB (trimmed) is exactly ":memory:" => no database
-pub fn db_none(cfg: [i64], cfg_text: [u8]) -> bool ! alloc
-  requires len(cfg) >= 32 && len(cfg) <= 2147483647
-{
-  let gv: str = env_value(cfg, cfg_text, "OPENCODE_DB");
-  let given: ref str = crate::text::trim(gv);
-  return crate::text::same(given, ":memory:");  // MUT:M01 => return false;
-}
+// The database named by OPENCODE_DB (trimmed): exactly ":memory:" => none; empty => join(home, "opencode.db"); absolute => as
+// given; relative => join(home, given). home = source.home (words 6,7). Read once.
+pub enum DbPath { Memory, File(path: str) }
 
-// DB path: empty => join(home, "opencode.db"); absolute => as given; relative => join(home, given). home = source.home (words 6,7).
-pub fn db_path(cfg: [i64], cfg_text: [u8]) -> str ! alloc
+pub fn db_path(cfg: [i64], cfg_text: [u8]) -> DbPath ! alloc
   requires len(cfg) >= 32 && len(cfg) <= 2147483647
-  ensures len(result) <= 2000000100
 {
   let gv: str = env_value(cfg, cfg_text, "OPENCODE_DB");
   let given: ref str = crate::text::trim(gv);
+  if crate::text::same(given, ":memory:") { return DbPath::Memory; }  // MUT:M01 => if false { return DbPath::Memory; }
   let home: str = crate::util::cfg_str(cfg_text, cfg[6], cfg[7]);
-  if len(given) == 0 { return join(home, "opencode.db"); }
-  if given[0] == 47 { return copy(given); }
-  return join(home, given);
+  if len(given) == 0 { return DbPath::File(join(home, "opencode.db")); }
+  if given[0] == 47 { return DbPath::File(copy(given)); }
+  return DbPath::File(join(home, given));
 }
 
 // result packet for mode 3 (dataDir) or 4 (folderKey of the folder ref, words 8,9); no I/O
@@ -321,8 +315,8 @@ pub fn utility(cfg: [i64], cfg_text: [u8], mode: i64) -> [i64] ! alloc
     if len(b) > 1073741823 { return crate::packet::simple_error(3, 0, 3, 5); }
     return crate::packet::ok_value(3, b);
   }
-  let folder: [u8] = crate::util::span_bytes(cfg_text, cfg[8], cfg[9]);
-  let k: [u8] = folder_key(folder);
+  let folder: ref [u8] = crate::util::span_view(cfg_text, cfg[8], cfg[9]);
+  let k: ref [u8] = folder_key(folder);
   if len(k) > 1073741823 { return crate::packet::simple_error(4, 0, 3, 5); }
   return crate::packet::ok_value(4, k);
 }
@@ -387,15 +381,14 @@ pub fn db_error(ctl: [i64], stage: i64, event: [i64], completion: [u8]) -> [i64]
   ensures len(result) >= 40
 {
   let mode: i64 = ctl[1];
-  let none: str = "";
   let raw0: [u8] = alloc(0, 0);
   let cls: i64 = event[4];
-  if cls == 4 { return crate::packet::error(mode, stage, 3, 5, 0, raw0, none, none); }
-  if cls == 5 { return crate::packet::error(mode, stage, 3, 6, 0, raw0, none, none); }
+  if cls == 4 { return crate::packet::error(mode, stage, 3, 5, 0, raw0, "", ""); }
+  if cls == 5 { return crate::packet::error(mode, stage, 3, 6, 0, raw0, "", ""); }
   let mut native: i64 = event[5];
   if native < 0 { native = 0; }
   let raw: [u8] = crate::util::span_bytes(completion, event[8], event[9]);
-  return crate::packet::error(mode, stage, 1, 2, native, raw, none, none);
+  return crate::packet::error(mode, stage, 1, 2, native, raw, "", "");
 }
 
 // error results without a completion: InternalInvariant / InputTooLarge / read-failed detail `columns`, at `stage`
@@ -403,28 +396,24 @@ pub fn internal_at(ctl: [i64], stage: i64) -> [i64] ! alloc
   requires len(ctl) == 64
   ensures len(result) >= 40
 {
-  let none: str = "";
   let raw0: [u8] = alloc(0, 0);
-  return crate::packet::error(ctl[1], stage, 3, 6, 0, raw0, none, none);
+  return crate::packet::error(ctl[1], stage, 3, 6, 0, raw0, "", "");
 }
 
 pub fn toobig_at(ctl: [i64], stage: i64) -> [i64] ! alloc
   requires len(ctl) == 64
   ensures len(result) >= 40
 {
-  let none: str = "";
   let raw0: [u8] = alloc(0, 0);
-  return crate::packet::error(ctl[1], stage, 3, 5, 0, raw0, none, none);
+  return crate::packet::error(ctl[1], stage, 3, 5, 0, raw0, "", "");
 }
 
 pub fn columns_at(ctl: [i64], stage: i64) -> [i64] ! alloc
   requires len(ctl) == 64
   ensures len(result) >= 40
 {
-  let none: str = "";
-  let det: str = "columns";
   let raw0: [u8] = alloc(0, 0);
-  return crate::packet::error(ctl[1], stage, 1, 2, 0, raw0, none, det);
+  return crate::packet::error(ctl[1], stage, 1, 2, 0, raw0, "", "columns");
 }
 
 // DB failure: save the error result in bank 5 (ctl[38] = 1) and close the connection (phase 390 consumes the close); no

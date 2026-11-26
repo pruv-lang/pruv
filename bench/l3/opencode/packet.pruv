@@ -39,17 +39,6 @@ fn put_words(inout dst: [i64], at: i64, src: [i64]) -> ()
     decreases n - i
   { dst[at + i] = src[i]; i = i + 1; }
 }
-fn put_bytes(inout dst: [i64], at: i64, src: [u8]) -> ()
-  requires 0 <= at && at <= len(dst) && len(src) <= len(dst) - at
-  ensures len(dst) == len(old(dst))
-{
-  let n: i64 = len(src);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(src) && 0 <= at && at <= len(dst) && n <= len(dst) - at && len(dst) == len(old(dst))
-    decreases n - i
-  { dst[at + i] = src[i]; i = i + 1; }
-}
 pub fn cat_words(a: [i64], b: [i64]) -> [i64] ! alloc
   requires len(a) <= 1073741823 && len(b) <= 1073741823
   ensures len(result) == len(a) + len(b)
@@ -58,31 +47,6 @@ pub fn cat_words(a: [i64], b: [i64]) -> [i64] ! alloc
   arr_reserve(inout o, len(a) + len(b));
   arr_append(inout o, a, 0, len(a));
   arr_append(inout o, b, 0, len(b));
-  return o;
-}
-pub fn cat_bytes(a: [u8], b: [u8]) -> [u8] ! alloc
-  requires len(a) <= 1073741823 && len(b) <= 1073741823
-  ensures len(result) == len(a) + len(b)
-{
-  let na: i64 = len(a);
-  let nb: i64 = len(b);
-  let mut o: [u8] = alloc(0, 0);
-  arr_reserve(inout o, na + nb);
-  arr_append(inout o, a, 0, na);
-  arr_append(inout o, b, 0, nb);
-  return o;
-}
-// a followed by the UTF-8 bytes of s; the new bytes start at len(a)
-pub fn append_str(a: [u8], s: str) -> [u8] ! alloc
-  requires len(a) <= 1073741823 && len(s) <= 1073741823
-  ensures len(result) == len(a) + len(s)
-{
-  let na: i64 = len(a);
-  let ns: i64 = len(s);
-  let mut o: [u8] = alloc(0, 0);
-  arr_reserve(inout o, na + ns);
-  arr_append(inout o, a, 0, na);
-  arr_append(inout o, s, 0, ns);
   return o;
 }
 
@@ -250,14 +214,15 @@ fn assemble_result(meta: [i64], rows: [i64], items: [i64], pool: [u8]) -> [i64] 
   let nr: i64 = len(rows);
   let ni: i64 = len(items);
   let nb: i64 = len(pool);
-  let mut p: [i64] = alloc(40 + nr + ni + nb, 0);
-  put_words(inout p, 0, meta);
+  let mut p: [i64] = alloc(0, 0);
+  arr_reserve(inout p, 40 + nr + ni + nb);
+  arr_append(inout p, meta, 0, 40);
   p[2] = 0;
   p[6] = ni / 3;
   p[7] = nb;
-  put_words(inout p, 40, rows);
-  put_words(inout p, 40 + nr, items);
-  put_bytes(inout p, 40 + nr + ni, pool);
+  arr_append(inout p, rows, 0, nr);
+  arr_append(inout p, items, 0, ni);
+  arr_append(inout p, pool, 0, nb);
   return p;
 }
 // Error header only (no refs), status 1.
@@ -278,7 +243,7 @@ pub fn internal_packet(mode: i64) -> [i64] ! alloc
   ensures len(result) == 40
 { return simple_error(mode, 28, 3, 6); }
 
-fn build_error(mode: i64, stage: i64, cls: i64, code: i64, native: i64, raw_code: [u8], name: str, detail: str) -> [i64] ! alloc
+fn build_error(mode: i64, stage: i64, cls: i64, code: i64, native: i64, raw_code: [u8], name: [u8], detail: [u8]) -> [i64] ! alloc
   requires 0 <= mode && mode <= 5 && 0 <= stage && stage <= 28 && 1 <= cls && cls <= 4 && 0 <= code && code <= 6 && 0 <= native
   requires len(raw_code) <= 10000000 && len(name) <= 10000000 && len(detail) <= 10000000
   ensures len(result) == 40 + len(raw_code) + len(name) + len(detail)
@@ -287,34 +252,21 @@ fn build_error(mode: i64, stage: i64, cls: i64, code: i64, native: i64, raw_code
   let ln: i64 = len(name);
   let ld: i64 = len(detail);
   let nx: i64 = lr + ln + ld;
-  let mut p: [i64] = alloc(40 + nx, 0);
-  p[0] = 1329812017; p[1] = 1; p[2] = 1; p[3] = mode; p[7] = nx;
-  p[10] = -1; p[12] = -1; p[14] = -1; p[16] = -1;
+  let mut p: [i64] = meta_new(mode);
+  arr_reserve(inout p, nx);
+  p[2] = 1; p[7] = nx;
   p[19] = stage; p[20] = cls; p[21] = code; p[22] = native;
-  p[23] = -1; p[25] = -1; p[27] = -1;
   if lr > 0 { p[23] = 0; p[24] = lr; }
   if ln > 0 { p[25] = lr; p[26] = ln; }
   if ld > 0 { p[27] = lr + ln; p[28] = ld; }
-  let mut i: i64 = 0;
-  while i < lr
-    invariant 0 <= i && i <= lr && lr == len(raw_code) && ln == len(name) && ld == len(detail) && nx == lr + ln + ld && len(p) == 40 + nx
-    decreases lr - i
-  { p[40 + i] = raw_code[i]; i = i + 1; }
-  let mut j: i64 = 0;
-  while j < ln
-    invariant 0 <= j && j <= ln && lr == len(raw_code) && ln == len(name) && ld == len(detail) && nx == lr + ln + ld && len(p) == 40 + nx
-    decreases ln - j
-  { p[40 + lr + j] = name[j]; j = j + 1; }
-  let mut k: i64 = 0;
-  while k < ld
-    invariant 0 <= k && k <= ld && lr == len(raw_code) && ln == len(name) && ld == len(detail) && nx == lr + ln + ld && len(p) == 40 + nx
-    decreases ld - k
-  { p[40 + lr + ln + k] = detail[k]; k = k + 1; }
+  arr_append(inout p, raw_code, 0, lr);
+  arr_append(inout p, name, 0, ln);
+  arr_append(inout p, detail, 0, ld);
   return p;
 }
 // DESIGN 5 error(mode, stage, cls, code, native, raw error code, name, detail). Bytes = raw ++ name ++ detail; an empty
 // string is an absent ref. Out-of-range enums or strings over 10 MB give the InternalInvariant packet.
-pub fn error(mode: i64, stage: i64, cls: i64, code: i64, native: i64, raw_code: [u8], name: str, detail: str) -> [i64] ! alloc
+pub fn error(mode: i64, stage: i64, cls: i64, code: i64, native: i64, raw_code: [u8], name: [u8], detail: [u8]) -> [i64] ! alloc
   ensures len(result) >= 40
 {
   let m: i64 = mode_of(mode);
@@ -712,7 +664,8 @@ fn assemble_step(ctl: [i64], patches: [i64], requests: [i64], words: [i64], byte
   let lb: i64 = len(bytes);
   let lr: i64 = len(res);
   let total: i64 = 76 + lp + lq + lw + lb + lr;
-  let mut p: [i64] = alloc(total, 0);
+  let mut p: [i64] = alloc(12, 0);
+  arr_reserve(inout p, total - 12);
   p[0] = 1329812273;
   p[1] = 1;
   p[2] = action;
@@ -722,17 +675,12 @@ fn assemble_step(ctl: [i64], patches: [i64], requests: [i64], words: [i64], byte
   p[6] = lw;
   p[7] = lb;
   p[8] = lr;
-  let a1: i64 = 76;
-  let a2: i64 = a1 + lp;
-  let a3: i64 = a2 + lq;
-  let a4: i64 = a3 + lw;
-  let a5: i64 = a4 + lb;
-  put_words(inout p, 12, ctl);
-  put_words(inout p, a1, patches);
-  put_words(inout p, a2, requests);
-  put_words(inout p, a3, words);
-  put_bytes(inout p, a4, bytes);
-  put_words(inout p, a5, res);
+  arr_append(inout p, ctl, 0, 64);
+  arr_append(inout p, patches, 0, lp);
+  arr_append(inout p, requests, 0, lq);
+  arr_append(inout p, words, 0, lw);
+  arr_append(inout p, bytes, 0, lb);
+  arr_append(inout p, res, 0, lr);
   return p;
 }
 // Done packet carrying the InternalInvariant result: used whenever a step packet fails its own shape check.
@@ -769,7 +717,7 @@ pub fn done_wrap(ctl: [i64], res: [i64]) -> [i64] ! alloc
   return step_packet(c, ep, ep, ep, eb, res, 1);
 }
 // done packet with an error result; the mode word comes from ctl[1]
-pub fn done_error(ctl: [i64], stage: i64, cls: i64, code: i64, native: i64, raw_code: [u8], name: str, detail: str) -> [i64] ! alloc
+pub fn done_error(ctl: [i64], stage: i64, cls: i64, code: i64, native: i64, raw_code: [u8], name: [u8], detail: [u8]) -> [i64] ! alloc
   requires len(ctl) == 64
   ensures len(result) >= 76
 {

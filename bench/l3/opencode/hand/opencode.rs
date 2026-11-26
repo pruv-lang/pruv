@@ -6,7 +6,7 @@
 //   host step wire, no hand counterpart (row SQ: no SQLite/fs host API in Pruv): packet::step_packet, ctl_*, patch_*, request,
 //     event_*, root::out_ok/ctl_ok_at/route/opencode_step -> direct calls into rusqlite, std::fs and std::process
 //   packet::ok_result/assemble_result/meta_new/error/build_error/simple_error/ok_value/ok_plan_absent -> encode_result
-//   util::to_bytes/span_bytes/cfg_str/str_at/raw/elements/bank_*/fits/pool_*/format_i64/real_* -> Vec, String, serde_json::Value,
+//   util::to_bytes/span_bytes/cfg_str/str_at/raw/elements/span_view/bank_*/fits/real_* -> Vec, String, serde_json::Value,
 //     rusqlite typed parameters and ValueRef (a REAL parameter is f64, an integer cell is i64)
 //   root::cfg_ok/cfg_head_ok/env_ok/keys_unique/str_clean/key_same -> Config::decode (HashSet for key uniqueness)
 //   sql::p200..p208, list::p300.., export::p400.. phase functions -> select_rows, list, read_handoff, export (straight line code)
@@ -43,7 +43,8 @@ const MAGIC: i64 = 1_329_812_017;
 const SELECT_BASE: &str = "SELECT s.id AS id, s.directory AS directory, s.title AS title, s.time_updated AS updated FROM session s WHERE s.parent_id IS NULL";
 
 /// A failed request: the stage, the error class (1 engine, 2 raw os, 3 core, 4 other), the code (1 not-found, 2 read-failed,
-/// 3 engine-missing, 4 timeout, 5 input-too-large, 6 internal), the native number, the raw code text and the detail text.
+/// 3 engine-missing, 4 timeout, 5 input-too-large, 6 internal), the native number, the raw code text, the error name and the
+/// detail text.
 #[derive(Clone, Debug)]
 struct Fail {
     stage: i64,
@@ -51,6 +52,7 @@ struct Fail {
     code: i64,
     native: i64,
     raw_code: String,
+    name: &'static str,
     detail: &'static str,
 }
 
@@ -142,7 +144,7 @@ enum Output {
 
 // Pruv: packet::simple_error / path::internal_at / path::toobig_at / path::columns_at
 fn fail(stage: i64, class: i64, code: i64) -> Fail {
-    Fail { stage, class, code, native: 0, raw_code: String::new(), detail: "" }
+    Fail { stage, class, code, native: 0, raw_code: String::new(), name: "", detail: "" }
 }
 
 fn with_detail(mut f: Fail, detail: &'static str) -> Fail {
@@ -150,9 +152,41 @@ fn with_detail(mut f: Fail, detail: &'static str) -> Fail {
     f
 }
 
+// The host's errno symbol (Node `err.code`) for an io error; "UNKNOWN" for kinds without one.
+fn errno_code(e: &io::Error) -> String {
+    use io::ErrorKind as K;
+    let name = match e.kind() {
+        K::NotFound => "ENOENT",
+        K::PermissionDenied => "EACCES",
+        K::AlreadyExists => "EEXIST",
+        K::Interrupted => "EINTR",
+        K::InvalidInput => "EINVAL",
+        K::WouldBlock => "EAGAIN",
+        K::OutOfMemory => "ENOMEM",
+        K::BrokenPipe => "EPIPE",
+        K::NotADirectory => "ENOTDIR",
+        K::IsADirectory => "EISDIR",
+        K::DirectoryNotEmpty => "ENOTEMPTY",
+        K::ReadOnlyFilesystem => "EROFS",
+        K::StorageFull => "ENOSPC",
+        K::CrossesDevices => "EXDEV",
+        K::InvalidFilename => "ENAMETOOLONG",
+        K::FileTooLarge => "EFBIG",
+        K::ResourceBusy => "EBUSY",
+        K::ArgumentListTooLong => "E2BIG",
+        _ => "UNKNOWN",
+    };
+    name.to_owned()
+}
+
 // Pruv: export::raw_error (a failed fs or process call: raw os error)
 fn raw_error(stage: i64, e: &io::Error) -> Fail {
-    Fail { native: i64::from(e.raw_os_error().unwrap_or(0)), raw_code: e.kind().to_string(), ..fail(stage, 2, 0) }
+    Fail { native: i64::from(e.raw_os_error().unwrap_or(0)), raw_code: errno_code(e), ..fail(stage, 2, 0) }
+}
+
+// Pruv: export::engine_err (spawn or child failure: engine-missing keeping the raw cause facts and the error name)
+fn engine_error(stage: i64, e: &io::Error) -> Fail {
+    Fail { class: 1, code: 3, name: "EngineImportError", ..raw_error(stage, e) }
 }
 
 // Pruv: path::db_error (class 4 -> InputTooLarge, 5 -> InternalInvariant, else read-failed with the native code kept)
@@ -372,7 +406,7 @@ fn data_dir(conf: &Config) -> String {
     join(conf.os_home.as_deref().unwrap_or(""), ".local/share/opencode")
 }
 
-// Pruv: path::db_path (also path::db_none: OPENCODE_DB trimmed is ":memory:")
+// Pruv: path::db_path (DbPath::Memory when OPENCODE_DB trimmed is ":memory:")
 fn db_path(conf: &Config) -> Option<String> {
     let given = trim(env_value(conf, "OPENCODE_DB"));
     if given == ":memory:" {
@@ -670,13 +704,17 @@ fn run_child(conf: &Config, handoff: &Handoff, out: &File) -> Result<(), Fail> {
         cmd.env_clear();
     }
     cmd.envs(conf.env.iter().map(|(k, v)| (k, v)));
-    let mut child = cmd.spawn().map_err(|_| fail(15, 1, 3))?;
+    // Node reports a missing or unexecutable program on the child's error event (stage 16), other spawn failures at once
+    let mut child = cmd.spawn().map_err(|e| match e.kind() {
+        io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied => engine_error(16, &e),
+        _ => engine_error(15, &e),
+    })?;
     let pid = child.id();
     let mut deadline = Instant::now() + Duration::from_millis(conf.export_ms);
     let mut expired = 0;
     loop {
         match child.try_wait() {
-            Err(_) => return Err(fail(16, 1, 3)),
+            Err(e) => return Err(engine_error(16, &e)),
             Ok(Some(status)) => {
                 if expired > 0 {
                     return Err(fail(16, 1, 4));
@@ -1094,10 +1132,10 @@ fn encode_read(w: &Window, p: &mut Packet) -> Vec<i64> {
 fn encode_error(mode: i64, f: &Fail) -> Vec<i64> {
     let bad = !(0..=28).contains(&f.stage) || !(1..=4).contains(&f.class) || !(0..=6).contains(&f.code) || f.native < 0 || f.raw_code.len() > 10_000_000;
     let (stage, class, code) = if bad { (28, 3, 6) } else { (f.stage, f.class, f.code) };
-    let (raw, detail) = if bad { ("", "") } else { (f.raw_code.as_str(), f.detail) };
+    let (raw, name, detail) = if bad { ("", "", "") } else { (f.raw_code.as_str(), f.name, f.detail) };
     let mut h = meta_new(mode);
     h[2] = 1;
-    h[7] = (raw.len() + detail.len()) as i64;
+    h[7] = (raw.len() + name.len() + detail.len()) as i64;
     h[19] = stage;
     h[20] = class;
     h[21] = code;
@@ -1105,12 +1143,15 @@ fn encode_error(mode: i64, f: &Fail) -> Vec<i64> {
     if !raw.is_empty() {
         (h[23], h[24]) = (0, raw.len() as i64);
     }
-    if !detail.is_empty() {
-        (h[27], h[28]) = (raw.len() as i64, detail.len() as i64);
+    if !name.is_empty() {
+        (h[25], h[26]) = (raw.len() as i64, name.len() as i64);
     }
-    let mut out = Vec::with_capacity(40 + raw.len() + detail.len());
+    if !detail.is_empty() {
+        (h[27], h[28]) = ((raw.len() + name.len()) as i64, detail.len() as i64);
+    }
+    let mut out = Vec::with_capacity(40 + raw.len() + name.len() + detail.len());
     out.extend_from_slice(&h);
-    out.extend(raw.bytes().chain(detail.bytes()).map(i64::from));
+    out.extend(raw.bytes().chain(name.bytes()).chain(detail.bytes()).map(i64::from));
     out
 }
 
