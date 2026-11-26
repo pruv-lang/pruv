@@ -23,6 +23,8 @@ Gap ids refer to `docs/RUST_SHAPE_RESET.md` §4. This file is the step 3 RESHAPE
 | `ent_canon` | `hand/ent_canon.rs` (new in 3.5) | RA, O, OA, OR, TM; AD closed in 3.6 / 3.7 |
 | `ent_sources` | `hand/ent_sources.rs` (new in 3.6) | LB, MP, CK, RA, OA, OR, TM, U, PB |
 | `entry_api` | `hand/entry_api.rs` (new in 3.7) | OR, TM, VB, CK, O, PB, VE |
+| `ent_accounts` | `hand/ent_accounts.rs` (new in 3.8) | MP, O, U, PB, VE |
+| `entry/root` | `hand/entry_root.rs` (new in 3.8) | none (the shared hand crate root moved here from `entry_api.rs`) |
 
 ## Step 3.1: `ent_u16` and `ent_path`
 
@@ -690,7 +692,7 @@ the other findings and what was done:
 | F1 `rebase` clamped the old offset and `add` to 2^24, but offsets are bytes (7 per pool word), so a string past byte 2^24 (a few million three-byte units, inside the packet limit) was mis-placed | both clamp to 2^30 (the `pool_base` bound); hand test `rebase_keeps_offsets_past_2_pow_24` |
 | F4 hand `env_trim` went through `str_at` + `trim` for a non-string slot; Pruv checks the tag first | hand checks the tag first (and clamps `k` to 16 as Pruv) |
 | F5 Pruv `account_ok` computed `sec_start` before the nullish test | the nullish test comes first (`&&` as the hand) |
-| F5 rest: `valid_account_id` decodes before / after the length check | kept: `ent_accounts` has no hand baseline yet (3.7) |
+| F5 rest: `valid_account_id` decodes before / after the length check | done in 3.8: both check the length (20 units) before decoding |
 | F2 `pool_put` encodes each string into a temporary pool and copies the whole pool | kept: row U / PB (pools are `[i64]` words; no `PoolBuf` with reserve) |
 | F3 `place_rows`: hand has an extra `view_words` copy, Pruv decides the join boundary twice (`pool_base`, `pool_cat`) | kept: row U / PB |
 | F6 path pieces: hand `join` over a slice, Pruv `join2` / `join4` | kept: no array of arrays (row SA), `ent_path` is outside this step |
@@ -827,3 +829,85 @@ All after the last code change (the empty begin checkpoint from the structure co
 - Next (3.8, `docs/RUST_SHAPE_RESET.md` §6, step 3 item 8): `entry/root`, then `req`. Still missing from step 3: a hand
   baseline for `ent_accounts` (step 3.4 listed it with `ent_dispatch`; `hand/entry_api.rs` only has an
   `account_home_begin` stand-in, and 3.6 F5 rest waits on it). The `req` port waits for the P10H experiment.
+
+## Step 3.8: `ent_accounts` and `entry/root`
+
+`hand/ent_accounts.rs` is new (step 3.4 listed `ent_accounts` with `ent_dispatch`; until now only stand-ins existed in
+`hand/ent_canon.rs` and `hand/entry_api.rs`). It declares `ent_state`, `ent_path`, `ent_u16` with the `shared_ctx`
+pattern and is used by `ent_canon` (op 6), `ent_sources` (op 1) and `entry_api` (op 5); the stand-ins are removed.
+Check: `rustc --edition 2021 --test ent_accounts.rs` (15 tests, 4 of them new). `hand/entry_root.rs` is new and is
+now the crate root of the shared build, as `entry/root.pruv` is for the Pruv build: it declares every hand module
+once and the four host functions; `hand/entry_api.rs` takes its modules from `crate::`. Check:
+`rustc --edition 2021 --cfg shared_ctx --test entry_root.rs -o /tmp/entry_root_hand && /tmp/entry_root_hand`
+(44 tests, 3 of them new: begin forwards, begin rejects a bad wire pool, index_step reads the poison).
+
+### What changed
+
+- `ent_accounts.pruv` `valid_account_id`: tag test, then the pool view and the slot span once, the unit count
+  (20) before decoding (3.6 F5 rest), then the prefix test and a `for i in 4..20` loop; the hand
+  `Value::parse` / `units_in` / `decode_span` order. `ent_value.pruv` makes `units_in`, `decode_span` and `slot_off`
+  `pub` for it (structure comparison F1).
+- `io_check`: the checker and the record start first, then the hand `match (op, record length)` as an if-chain
+  (row MP); op 1's seven env slots are a `for k in 1..8` loop (it was a mask table).
+- `account_home_begin`: the invalid-id record is the literal `[3, 0]` (it was `zeros(2)` plus writes; 3.7 finding),
+  empty sections are one `let e: ref [i64] = []`, the done record is `zeros(4)` without the redundant write.
+- `ent_canon.pruv` `state_ok_ie`: `hi != pool_bytes(..)` alone, as the hand compares `io_check(..) != Some(nbytes)`
+  (the `hi < 0 ||` short circuit is gone; `pool_bytes >= 0`, so `-1` is still rejected; F4).
+- Hand: `account_home(data_dir, engine, id)` takes `engine: &[u16]` (callers pass `&lit("codex")` /
+  `&lit("claude")`), as the Pruv `[i64]` argument.
+- `entry/root.pruv` already had the hand shape; header note only.
+- `q_mutants.py`: no original text changed; all 23 originals occur exactly once (checked by script).
+
+### Rows
+
+No new row. Used:
+
+- **MP**: `io_check` if-chain for `match (op, rl)` (the MP row itself is left to the P9a-6 bundle).
+- **U / PB**: `account_home_begin` hand `encode_pool(&home)` then `pool.view_words()` (one copy into words); Pruv
+  pools are words already (`pool_new` / `pool_put`).
+- **VE**: `str_units(w, p)` is the `(w, p)` wrapper in `ent_value` and decodes without a tag test; the hand's local
+  `str_units` returns empty for a non-string. Only called after `io_check` proved the three slots strings.
+- **J**: `account_home` calls `join4`, which unrolls the four `push_part`s (hand loops over `&[&[u16]]`); `ent_path`
+  row, not changed here.
+- **O**: `io_check` returns `-1` for the hand `None`.
+
+### Structure comparison
+
+One read-only comparison by Codex (gpt-6.2-astra, effort high; engine, model and account named by the user): hand
+`.rs` against `.pruv` for the 6 `ent_accounts` functions, the 4 root functions and the 12 callers of `ent_accounts`
+(22 functions). Both already checked the id length before decoding. Findings and what was done:
+
+| Finding | Done |
+|---|---|
+| F1 `valid_account_id`: Pruv resolved the pool and the span twice (`str_len`, `str_units`); hand once. Codex: a direct call with slot `[6, -1, 20]` differs (unreachable: `io_check` checks every slot span first) | one pool view and span, `units_in` then `decode_span` (as hand) |
+| F2 `account_home` → `join4` unrolled, an over-long part drops the rest (hand loops) | kept: row J (`ent_path`, unreachable on checked packets) |
+| F3 `str_units` decodes without a tag test (hand: empty for non-string) | kept: row VE (only after `io_check`) |
+| F4 `state_ok_ie`: Pruv `hi < 0 ||` short circuit, hand compares the `Option` | removed, plain compare |
+| root `entry_begin` / `entry_step` / `index_begin` / `index_step`, `io_check`, `account_home_begin`, other callers | same |
+
+### Tests
+
+All after the last code change (F1 / F4 from the structure comparison).
+
+| Test | Pairs | Result |
+|---|---|---|
+| `rustc --cfg shared_ctx --test hand/entry_root.rs` (all hand modules in one crate) | hand | 44 passed; each hand module alone passes (`ent_accounts` 15) |
+| `entry/dev_build.sh --no-link` | rs | verified, `{"ok": true}` |
+| `entry/q_mutants.py` originals | - | all 23 occur exactly once (script; no mutant text changed) |
+| `entry/test_impl.py` | rs/rust, rs/llvm | 296 variants x 2 = 592 runs, unexplained 0 |
+| `entry/judge_test.py` | rs/rust, rs/llvm | failures 0 |
+| `entry/q.py --count 400` | rs/rust, rs/llvm | 399 exact, 1 excluded-domain, unexplained 0 |
+| `req/test_impl.py` | rs/rust, rs/llvm | 160 variants x 2 = 320 runs, unexplained 0 |
+| `req/q.py` (q_gen, 2000 cases) | rs/rust, rs/llvm | 2000/2000 equal on each pair |
+| `qwen/test_impl.py` | rs/rust, rs/llvm | 26/26 each, verifier PASS |
+| `codex/test_impl.py` | rs/rust, rs/llvm | 136/136 each |
+| `opencode/test_impl.py`, `grok/test_impl.py --no-ts` | rs/rust, rs/llvm | all fixtures passed on 2 pairs each |
+| `entry/integrate.py` | rs/rust | 10 integration cases, 18 checks PASS, 2 integration limits (I01/I02 claude, known; exit 2 as before) |
+
+### Rows open after 3.8
+
+- New: none. Closed: none (MP is left to the P9a-6 bundle).
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB.
+- Next: step 3 is done except `req` (`docs/RUST_SHAPE_RESET.md` §6 step 3 item 8), which waits for the P10H
+  experiment. Step 4 (fragments) starts with the MCP stdio check (§6 step 4 item 1): it is the first product
+  candidate and its `R` modules make it the smallest port; then the supervisor, Grok RPC and history.

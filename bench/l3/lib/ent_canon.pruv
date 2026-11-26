@@ -358,7 +358,7 @@ pub fn state_ok_ie(st: [i64], s: crate::ent_state::State, op: i64, op_id: i64) -
   if crate::ent_u16::rd(blob, 1) != 0 || crate::ent_u16::rd(blob, 3) != 0 { return false; }
   if crate::ent_u16::rd(blob, 5) != op || crate::ent_u16::rd(blob, 2) != op_id { return false; }
   let hi: i64 = crate::ent_accounts::io_check(blob);
-  if hi < 0 || hi != crate::ent_value::pool_bytes(blob, crate::ent_packet::sec_start(blob, 0)) { return false; }
+  if hi != crate::ent_value::pool_bytes(blob, crate::ent_packet::sec_start(blob, 0)) { return false; }
   return crate::ent_state::log_ok(s.log, op_id);
 }
 

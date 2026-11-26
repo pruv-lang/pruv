@@ -20,7 +20,8 @@ use ent_canon::ent_path::join;
 use ent_canon::ent_state::ent_packet::{boundary, comp_check, mk_packet, put_vs, sec_len, sec_start};
 use ent_canon::ent_state::ent_value::{Pool, PoolBuf};
 use ent_canon::ent_state::{ck_phase_only, log_append, log_words, repack, s0_of, Ctx, Fault, Halt, Output};
-use ent_canon::{account_home, codex_home, home_dir, home_join, io_check, is_codex_home, lit, rethrow_answer, state_ok_ie, str_at, valid_account_id};
+use ent_canon::ent_accounts::{account_home, io_check, valid_account_id};
+use ent_canon::{codex_home, home_dir, home_join, is_codex_home, lit, rethrow_answer, state_ok_ie, str_at};
 
 const SLASH: u16 = b'/' as u16;
 const MAX_WORDS: usize = 1 << 24;
@@ -166,7 +167,7 @@ fn claude_acct(cx: &mut Ctx, rows: &mut Rows) -> Result<(), Halt> {
         return Ok(());
     }
     let a = account_of(cx);
-    let home = account_home(&str_at(&cx.blob, rec0(cx)), "claude", &a.id);
+    let home = account_home(&str_at(&cx.blob, rec0(cx)), &lit("claude"), &a.id);
     account_row(rows, &[&lit("claude:")[..], &a.id].concat(), "claude", &a, &home);
     advance(cx, 2, idx + 1, cnt);
     Ok(())
@@ -186,7 +187,7 @@ fn codex_acct(cx: &mut Ctx, rows: &mut Rows) -> Result<(), Halt> {
     }
     // everything needed from the account_at answer is taken before the body observes again
     let a = account_of(cx);
-    let expected = account_home(&str_at(&cx.blob, rec0(cx)), "codex", &a.id);
+    let expected = account_home(&str_at(&cx.blob, rec0(cx)), &lit("codex"), &a.id);
     match is_codex_home(cx, &expected) {
         Ok(false) => {}
         // a host home, or a throw in the body (rethrown as a result that this item drops)

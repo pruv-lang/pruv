@@ -3,8 +3,7 @@
 // replay context `&mut Ctx` and returns `Result<T, Halt>`: an observation that stalls or breaks the replay returns
 // through `?`, and a thrown homedir / cwd answer is rethrown as the item result (`Err(Halt::Done)`, output set).
 // String results are returned as `Vec<u16>`, 0/1 results as `bool`.
-// The account helpers (`valid_account_id`, `account_home`, `io_check`) belong to `ent_accounts`, which has no hand
-// baseline yet; they are written here as stand-ins for this module and `ent_sources`.
+// The account helpers (`valid_account_id`, `account_home`, `io_check`) come from `ent_accounts` (step 3.8).
 // Check: rustc --edition 2021 --test ent_canon.rs -o /tmp/ent_canon_hand && /tmp/ent_canon_hand
 
 #![allow(dead_code)]
@@ -24,16 +23,20 @@ pub use crate::ent_path;
 pub mod ent_u16;
 #[cfg(shared_ctx)]
 pub use crate::ent_u16;
+#[cfg(not(shared_ctx))]
+#[path = "ent_accounts.rs"]
+pub mod ent_accounts;
+#[cfg(shared_ctx)]
+pub use crate::ent_accounts;
 
 use ent_path::{basename, dirname, join, resolve_finish, resolve_need};
-use ent_state::ent_packet::{boundary, comp_check, put_vs, sec_len, sec_start, Check, ANY, STR};
+use ent_accounts::{account_home, io_check, valid_account_id};
+use ent_state::ent_packet::{boundary, comp_check, put_vs, sec_len, sec_start};
 use ent_state::ent_value::{decode_span, encode_pool, str_eq_lit, Pool, Value};
 use ent_state::{log_append, log_ok, log_words, repack, Ctx, Halt, Output, State, MAGIC};
 
 const SLASH: u16 = b'/' as u16;
 const MAX_WORDS: usize = 1 << 24;
-/// tag mask of an env slot: undefined, null, string, absent
-const ENV: i64 = 1091;
 
 fn rd(w: &[i64], i: usize) -> i64 {
     w.get(i).copied().unwrap_or(0)
@@ -289,34 +292,6 @@ fn pair_ie(op: i64, code: i64, aux: i64) -> bool {
         }
 }
 
-/// ent_accounts: input check for ops 1, 5, 6; the pool prefix length the record references
-pub fn io_check(w: &[i64]) -> Option<i64> {
-    let mut c = Check::new(w);
-    let r0 = c.start(1);
-    let masks: &[i64] = match (rd(w, 5), sec_len(w, 1)) {
-        (1, 24) => &[STR, ENV, ENV, ENV, ENV, ENV, ENV, ENV],
-        (5, 9) => &[STR, STR, ANY],
-        (6, 9) => &[STR, ANY, ANY],
-        _ => return None,
-    };
-    for (k, &m) in masks.iter().enumerate() {
-        c.slot(r0 + 3 * k, m, 0);
-    }
-    c.finish()
-}
-
-/// ent_accounts: /^acc_[a-f0-9]{16}$/
-pub fn valid_account_id(w: &[i64], p: usize) -> bool {
-    let Value::Str(_) = value(w, p) else { return false };
-    let id = str_at(w, p);
-    id.len() == 20 && id.starts_with(&lit("acc_")) && id[4..].iter().all(|&u| matches!(u, 48..=57 | 97..=102))
-}
-
-/// ent_accounts: join(dataDir, 'engine-homes', engine, id)
-pub fn account_home(data_dir: &[u16], engine: &str, id: &[u16]) -> Vec<u16> {
-    join(&[data_dir, &lit("engine-homes"), &lit(engine), id])
-}
-
 /// The state of an op 1 / op 6 await, parsed once, or None (an InvalidPacket for the caller).
 pub fn state_ok_ie(st: &[i64], op: i64, op_id: i64) -> Option<State<'_>> {
     let n = st.len();
@@ -352,7 +327,7 @@ fn folder_item(cx: &mut Ctx) -> Result<(), Halt> {
         wire_done(cx, 0);
         return Ok(());
     }
-    let expected = account_home(&str_at(b, r0), "codex", &str_at(b, r0 + 3));
+    let expected = account_home(&str_at(b, r0), &lit("codex"), &str_at(b, r0 + 3));
     if !matches!(value(b, r0 + 6), Value::Str(_)) || str_at(b, r0 + 6) != expected {
         plain_done(cx);
         return Ok(());
@@ -481,13 +456,5 @@ mod tests {
         assert_eq!(same_file(&mut cx, &u("/a"), &u("/b")), Ok(true));
         let mut cx = ctx(log_of(&[(7, st()), (7, answer(1, &[], 4))]), &[0; 8]);
         assert_eq!(same_file(&mut cx, &u("/a"), &u("/b")), Ok(false));
-    }
-
-    #[test]
-    fn account_helpers() {
-        let pool = encode_pool(&u("acc_0123456789abcdef")).view_words();
-        let w = mk_packet(0, 7, 0, 6, &pool, &[6, 0, 20], &[], &[], &[], 0);
-        assert!(valid_account_id(&w, sec_start(&w, 1)));
-        assert_eq!(account_home(&u("/d"), "codex", &u("acc_1")), u("/d/engine-homes/codex/acc_1"));
     }
 }

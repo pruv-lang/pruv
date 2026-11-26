@@ -1,21 +1,20 @@
 // L3-8 entry: account ids, accountHome and op 5 account_home (reference/backend-accounts.ts).
 // Also the input check for ops 1, 5 and 6, which packet::input_check does not cover.
+// Rust-shape reset step 3.8: same structure as lib/hand/ent_accounts.rs, function by function.
 
 // /^acc_[a-f0-9]{16}$/ : exactly 20 units, so a trailing line terminator is rejected by the length
 pub fn valid_account_id(w: [i64], p: i64) -> bool ! alloc
 {
-  if crate::ent_u16::rd(w, p) != 6 { return false; }
-  if crate::ent_value::str_len(w, p) != 20 { return false; }
-  let units: [i64] = crate::ent_value::str_units(w, p);
-  if crate::ent_u16::rd(units, 0) != 97 || crate::ent_u16::rd(units, 1) != 99 || crate::ent_u16::rd(units, 2) != 99 || crate::ent_u16::rd(units, 3) != 95 { return false; }
-  let mut i: i64 = 4;
-  while i < 20
-    invariant 4 <= i && i <= 20
-    decreases 20 - i
-  {
-    let u: i64 = crate::ent_u16::rd(units, i);
+  if crate::ent_value::tag_at(w, p) != 6 { return false; }
+  let pool: ref [i64] = crate::ent_value::pool_at(w, crate::ent_packet::sec_start(w, 0));
+  let off: i64 = crate::ent_value::slot_off(w, p);
+  let nb: i64 = crate::ent_value::slot_bytes(w, p);
+  if crate::ent_value::units_in(pool, off, nb) != 20 { return false; }
+  let id: [i64] = crate::ent_value::decode_span(pool, off, nb);
+  if crate::ent_u16::rd(id, 0) != 97 || crate::ent_u16::rd(id, 1) != 99 || crate::ent_u16::rd(id, 2) != 99 || crate::ent_u16::rd(id, 3) != 95 { return false; }
+  for i in 4..20 {
+    let u: i64 = crate::ent_u16::rd(id, i);
     if !((u >= 48 && u <= 57) || (u >= 97 && u <= 102)) { return false; }
-    i = i + 1;
   }
   return true;
 }
@@ -31,30 +30,23 @@ pub fn account_home(data_dir: [i64], engine: [i64], id: [i64]) -> [i64] ! alloc
 pub fn m_env() -> i64 ensures result == 1091 { return 1091; }
 
 // Input check for ops 1, 5, 6 (kind 0, envelope already ok). Returns the pool prefix length the record references, or -1.
+// The if-chain is the hand `match (op, record length)` (no literal patterns, row MP).
 pub fn io_check(w: [i64]) -> i64 ! alloc
 {
-  let op: i64 = crate::ent_u16::rd(w, 5);
   let mut c: crate::ent_packet::Check = crate::ent_packet::checker(w);
   let r0: i64 = crate::ent_packet::start_in(c.starts, 1);
+  let op: i64 = crate::ent_u16::rd(w, 5);
   let rl: i64 = crate::ent_packet::sec_len(w, 1);
-  if op == 1 {
-    if rl != 24 { return -1; }
+  if op == 1 && rl == 24 {
     crate::ent_packet::vs(inout c, r0, crate::ent_packet::m_str(), 0);
-    let mut k: i64 = 1;
-    while k < 8
-      invariant 1 <= k && k <= 8 && 0 <= r0 && r0 <= 33554432
-      decreases 8 - k
-    {
+    for k in 1..8 {
       crate::ent_packet::vs(inout c, r0 + 3 * k, m_env(), 0);
-      k = k + 1;
     }
-  } else if op == 5 {
-    if rl != 9 { return -1; }
+  } else if op == 5 && rl == 9 {
     crate::ent_packet::vs(inout c, r0, crate::ent_packet::m_str(), 0);
     crate::ent_packet::vs(inout c, r0 + 3, crate::ent_packet::m_str(), 0);
     crate::ent_packet::vs(inout c, r0 + 6, crate::ent_packet::m_any(), 0);
-  } else if op == 6 {
-    if rl != 9 { return -1; }
+  } else if op == 6 && rl == 9 {
     crate::ent_packet::vs(inout c, r0, crate::ent_packet::m_str(), 0);
     crate::ent_packet::vs(inout c, r0 + 3, crate::ent_packet::m_any(), 0);
     crate::ent_packet::vs(inout c, r0 + 6, crate::ent_packet::m_any(), 0);
@@ -68,19 +60,14 @@ pub fn io_check(w: [i64]) -> i64 ! alloc
 pub fn account_home_begin(input: [i64]) -> [i64] ! alloc
 {
   let id: i64 = crate::ent_u16::rd(input, 2);
-  let hi: i64 = io_check(input);
-  if hi < 0 { return crate::ent_packet::boundary(5, id, 0); }
+  if io_check(input) < 0 { return crate::ent_packet::boundary(5, id, 0); }
   let r0: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(input, 1), 33554432);
-  let e: [i64] = crate::ent_u16::empty();
+  let e: ref [i64] = [];
   if !valid_account_id(input, r0 + 6) {
-    let mut rec: [i64] = crate::ent_u16::zeros(2);
-    crate::ent_u16::wr(inout rec, 0, 3);
-    crate::ent_u16::wr(inout rec, 1, 0);
-    return crate::ent_packet::mk_packet(3, id, 0, 5, e, rec, e, e, e, 0);
+    return crate::ent_packet::mk_packet(3, id, 0, 5, e, [3, 0], e, e, e, 0);
   }
   let home: [i64] = account_home(crate::ent_value::str_units(input, r0), crate::ent_value::str_units(input, r0 + 3), crate::ent_value::str_units(input, r0 + 6));
   let mut rec: [i64] = crate::ent_u16::zeros(4);
-  crate::ent_u16::wr(inout rec, 0, 0);
   let mut pool: [i64] = crate::ent_value::pool_new();
   crate::ent_value::pool_put(inout pool, inout rec, 1, home);
   return crate::ent_packet::mk_packet(3, id, 0, 5, pool, rec, e, e, e, 0);

@@ -1,4 +1,5 @@
 // L3-8 entry root: thin forwarder. DB8: section 0 crosses the boundary as the packed WTF-8 pool (ent_wire). The verified code lives in bench/l3/lib (ent_* modules and entry_api); compile with --lib bench/l3/lib.
+// Rust-shape reset step 3.8: same structure as lib/hand/entry_root.rs, function by function.
 mod ent_u16;
 mod ent_packet;
 mod ent_value;

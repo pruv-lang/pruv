@@ -4,30 +4,17 @@
 // checks prev and the completion, parses prev's state words once (`State::parse`, `replay_ok`), appends the completion
 // to the log and re-runs the item. Every item is `fn(&mut Ctx) -> Result<(), Halt>`; the packet comes from
 // `Ctx::finish`. Ops 1 and 6 have their own begin / step (ent_sources, ent_canon); op 5 never awaits.
-// This file is the crate root of the shared build: the item modules use this crate's single `ent_state` (cfg
-// `shared_ctx`), so one `Ctx` type runs every item. Each module still checks alone without the cfg.
-// `account_home_begin` belongs to `ent_accounts`, which has no hand baseline; it is written here as a stand-in.
-// Check: rustc --edition 2021 --cfg shared_ctx --test entry_api.rs -o /tmp/entry_api_hand && /tmp/entry_api_hand
+// The crate root of the shared build is `entry_root.rs` (step 3.8): the item modules use its single `ent_state` (cfg
+// `shared_ctx`), so one `Ctx` type runs every item. Each item module still checks alone without the cfg.
+// Check (from entry_root.rs): rustc --edition 2021 --cfg shared_ctx --test entry_root.rs -o /tmp/entry_root_hand
 
 #![allow(dead_code)]
 
-#[path = "ent_state.rs"]
-pub mod ent_state;
-#[path = "ent_path.rs"]
-pub mod ent_path;
-#[path = "ent_u16.rs"]
-pub mod ent_u16;
-#[path = "ent_dispatch.rs"]
-pub mod ent_dispatch;
-#[path = "ent_bound.rs"]
-pub mod ent_bound;
-#[path = "ent_canon.rs"]
-pub mod ent_canon;
-#[path = "ent_sources.rs"]
-pub mod ent_sources;
+use crate::{ent_accounts, ent_bound, ent_canon, ent_dispatch, ent_sources, ent_state};
 
 use ent_bound::{excluded_from_bound, index_collect, index_complete, index_progress_ok, index_request, session_threads};
-use ent_canon::{codex_folder_begin, codex_folder_step, io_check, lit, str_at, valid_account_id};
+use ent_accounts::account_home_begin;
+use ent_canon::{codex_folder_begin, codex_folder_step};
 use ent_dispatch::{find_source, list_external, read_external};
 use ent_sources::{import_begin, import_step};
 use ent_state::ent_packet::ent_wire::same_packet;
@@ -142,23 +129,6 @@ pub fn entry_step_at(prev: &[i64], completion: &[i64], wire: bool) -> Vec<i64> {
     cx.with_prev(prev, true);
     let _ = run_item(&mut cx);
     cx.finish(seq + 1, seq)
-}
-
-/// ent_accounts stand-in: op 5 accountHome(dataDir, engine, id). Done [0, home] or the wire error invalidId [3, 0].
-fn account_home_begin(input: &[i64]) -> Vec<i64> {
-    let id = rd(input, 2);
-    if io_check(input).is_none() {
-        return boundary(5, id, 0);
-    }
-    let r0 = sec_start(input, 1);
-    if !valid_account_id(input, r0 + 6) {
-        return mk_packet(3, id, 0, 5, &[], &[3, 0], &[], &[], &[], 0);
-    }
-    let home = ent_path::join(&[&str_at(input, r0), &lit("engine-homes"), &str_at(input, r0 + 3), &str_at(input, r0 + 6)]);
-    let pool = encode_pool(&home);
-    let mut rec = vec![0; 4];
-    put_vs(&mut rec, 1, 6, 0, pool.nbytes as i64);
-    mk_packet(3, id, 0, 5, &pool.view_words(), &rec, &[], &[], &[], 0)
 }
 
 // ---- op 9: one await (the excluded_from_bound request); the state section keeps the v1 wire format ----
