@@ -6,6 +6,8 @@ pub type Type = String;
 pub type Ty = Option<String>;
 /// P7-1: a fixed-length array literal `[a, b, c]` is a `Call` of this name with the elements as arguments.
 pub const ARRAY_LIST: &str = "@array";
+/// P9b: the unresolved method call `recv.m(args)` is the call `@method|m(recv, args)` until the checker resolves it
+pub const METHOD_CALL: &str = "@method|";
 /// P7-1: `[x; N]` is a `Call` named `@repeat:<N>` with the one argument `x`.
 pub const ARRAY_REPEAT: &str = "@repeat:";
 
@@ -804,6 +806,25 @@ pub struct Program {
     pub consts: Vec<ConstItem>,
     /// P9: the used type aliases of a single-file program (uses are already expanded); only the Rust output prints them
     pub aliases: Vec<AliasItem>,
+    /// P9b: the functions of `impl` blocks (lowered to free functions named `Owner__name`), in source order
+    pub methods: Vec<MethodItem>,
+    /// P9b: the owner type, line and column of every `impl` block (an empty block is checked like any other)
+    pub impls: Vec<(String, i64, i64)>,
+}
+
+/// P9b: how a method takes its receiver (`self`, `inout self`, `take self`), or none (an associated function).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Receiver { None, Read, Inout, Take }
+
+/// P9b: one function of an `impl Owner { .. }` block; `func` is its lowered name `Owner__name`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MethodItem {
+    pub line: i64,
+    pub col: i64,
+    pub owner: String,
+    pub name: String,
+    pub func: String,
+    pub recv: Receiver,
 }
 
 /// P9: `type name<params> = rhs;` with `rhs` a type key whose parameters are plain names.

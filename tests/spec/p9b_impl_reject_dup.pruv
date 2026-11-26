@@ -1,0 +1,6 @@
+// spec: R-6x-1 reject
+// Two impl functions of one type with one name, across blocks.
+struct P { x: i64 }
+impl P { fn get(self) -> i64 { return self.x; } }
+impl P { fn get(self) -> i64 { return 0; } }
+fn f(k: i64) -> i64 { return k; }

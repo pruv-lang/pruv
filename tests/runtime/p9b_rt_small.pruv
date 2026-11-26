@@ -1,0 +1,39 @@
+// P9b (R-6x-4, verified mode only: the small-result helper needs the proven length bound): a method whose array result fits the small-result buffer: the generated helper takes the receiver
+// after the buffer, so it stays a free function called by its own name
+fn fill_up(inout o: [i64], v: i64) -> ()
+  requires 0 <= v && v <= 1000
+  requires len(o) <= 100
+  ensures len(o) == len(old(o))
+{
+  let mut i: i64 = 0;
+  while i < len(o)
+    invariant 0 <= i && i <= len(o) && len(o) == len(old(o)) && len(o) <= 100 && 0 <= v && v <= 1000
+    decreases len(o) - i
+  {
+    o[i] = v + i;
+    i = i + 1;
+  }
+}
+
+struct Gen { v: i64 }
+
+impl Gen {
+  fn mk(self, n: i64) -> [i64] ! alloc
+    requires 1 <= n && n <= 8
+    requires 0 <= self.v && self.v <= 1000
+    ensures len(result) == n
+    ensures len(result) <= 8
+  {
+    let mut o: [i64] = alloc(n, 0);
+    fill_up(inout o, self.v);
+    return o;
+  }
+}
+
+fn run(k: i64) -> i64 ! alloc
+  requires k >= 1 && k <= 8
+{
+  let g: Gen = Gen { v: 10 };
+  let r: [i64] = g.mk(k);
+  return len(r);
+}

@@ -9938,7 +9938,7 @@ mod tests {
             uses_inout: None, contract_vec_slice: None,
             raw_entries: None,
             pkg_name: None,
-            consts: Vec::new(), aliases: Vec::new(),
+            consts: Vec::new(), aliases: Vec::new(), methods: Vec::new(), impls: Vec::new(),
         }
     }
 

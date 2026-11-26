@@ -1,0 +1,14 @@
+// spec: R-6x-2 accept
+// Read, inout and take receivers with contracts; old(self) in ensures of inout self; the proof uses the method contracts.
+struct C { n: i64 }
+impl C {
+  fn get(self) -> i64 ensures result == self.n { return self.n; }
+  fn inc(inout self) -> () requires self.n >= 0 && self.n < 100 ensures self.n == old(self).n + 1 { self.n = self.n + 1; }
+  fn eat(take self) -> i64 ensures result == self.n { return self.n; }
+}
+fn f(k: i64) -> i64 requires k >= 0 && k < 50 ensures result == 2 * k + 2 {
+  let mut c: C = C { n: k };
+  c.inc();
+  let g: i64 = c.get();
+  return g + c.eat();
+}

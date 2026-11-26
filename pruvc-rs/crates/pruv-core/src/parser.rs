@@ -54,7 +54,12 @@ pub fn parse_file(src: &str, tag: usize) -> R<ParsedFile> {
         aliases: HashMap::new(),
         alias_busy: Vec::new(),
         alias_generic: Vec::new(),
+        impl_owner: None,
+        impl_fns: std::collections::HashSet::new(),
+        impl_tok: None,
+        last_recv: Receiver::None,
     };
+    p.impl_collect();
     let alias_order = p.alias_collect()?;
     let consts = p.const_prepass()?;
     p.alias_validate(alias_order)?;
@@ -90,6 +95,14 @@ pub fn parse_file(src: &str, tag: usize) -> R<ParsedFile> {
         }
     }
     prog.consts = consts;
+    if let Some(it) = &p.impl_tok {
+        if tag != 0 || p.has_pub || !p.mods.is_empty() {
+            // P9b-2: methods in module programs (`pub` methods, `m::T::f` paths) are not designed yet.
+            return Err(PruvError::new("parse", it.line, it.col, "impl_module",
+                "impl blocks are available only in a single-file program without `pub` or `mod` items (parity row P9b-2)",
+                "write free functions, or keep the program in one file"));
+        }
+    }
     if let Some(first) = p.tuples.first() {
         if tag != 0 || p.has_pub || !p.mods.is_empty() {
             // P6 row P6-2: module identities of the synthetic tuple structs are not designed yet.
@@ -379,6 +392,15 @@ struct Parser {
     alias_busy: Vec<String>,
     /// P9: per alias expansion in progress, whether it sits in a generic declaration (for parse/tuple_generic)
     alias_generic: Vec<bool>,
+    // ---- P9b impl blocks ----
+    /// owner type of the impl block being parsed
+    impl_owner: Option<String>,
+    /// (owner, function name) of every impl function of the file (pre-pass), so `Owner::f(..)` parses as a call
+    impl_fns: std::collections::HashSet<(String, String)>,
+    /// the first `impl` token (parse/impl_module)
+    impl_tok: Option<Tok>,
+    /// receiver of the impl function `function` just parsed
+    last_recv: Receiver,
 }
 
 /// P9: one transparent type alias of the file.
@@ -482,6 +504,10 @@ impl Parser {
         }
         if t.kind != Kind::Id {
             return Err(self.err(format!("expected identifier, found {}", t.repr()), "", None));
+        }
+        if t.val == "self" {
+            // P9b: `self` (an identifier token only inside impl blocks) names the receiver, never a declared binding
+            return Err(self.reserved_name(&t.clone()));
         }
         if self.consts.contains_key(&t.val) {
             // P7: Rust reads a binder named like a constant as a pattern; a declared name never reuses a constant's.
@@ -1071,6 +1097,104 @@ impl Parser {
     }
 
     // ---- program ----
+    /// P9b pre-pass: (owner, fn name) of every `impl Owner { fn name .. }` of the file.
+    fn impl_collect(&mut self) {
+        let t = &self.t;
+        let mut i = 0;
+        while i < t.len() {
+            if t[i].kind == Kind::Kw && t[i].val == "impl" && i + 2 < t.len() && t[i + 1].kind == Kind::Id
+                && t[i + 2].kind == Kind::Op && t[i + 2].val == "{"
+            {
+                let owner = t[i + 1].val.clone();
+                let mut depth = 0i64;
+                let mut j = i + 2;
+                while j < t.len() {
+                    if t[j].kind == Kind::Op && t[j].val == "{" {
+                        depth += 1;
+                    } else if t[j].kind == Kind::Op && t[j].val == "}" {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else if depth == 1 && t[j].kind == Kind::Kw && t[j].val == "fn" && j + 1 < t.len() && t[j + 1].kind == Kind::Id {
+                        self.impl_fns.insert((owner.clone(), t[j + 1].val.clone()));
+                    }
+                    j += 1;
+                }
+                i = j;
+            }
+            i += 1;
+        }
+    }
+
+    fn impl_syntax(&self, tok: &Tok, msg: &str, fix: &str) -> PruvError {
+        PruvError::new("parse", tok.line, tok.col, "impl_syntax", msg, fix)
+    }
+
+    /// P9b: `impl Owner { fn .. }`; every function becomes the free function `Owner__name` (recorded in `methods`).
+    fn impl_block(&mut self, p: &mut Program) -> R<()> {
+        let it = self.next();
+        if self.impl_tok.is_none() {
+            self.impl_tok = Some(it.clone());
+        }
+        if self.at("<", 0) {
+            let t = self.peek(0).clone();
+            return Err(self.impl_syntax(&t, "generic impl blocks are not available yet (parity row P9b-2)", "write the impl for a non-generic struct or enum"));
+        }
+        let ot = self.peek(0).clone();
+        if ot.kind != Kind::Id {
+            return Err(self.impl_syntax(&ot, "expected the type name after `impl`", "write `impl Name { fn .. }`"));
+        }
+        self.bump();
+        if self.at("<", 0) || self.at("::", 0) {
+            let t = self.peek(0).clone();
+            return Err(self.impl_syntax(&t, "impl blocks of generic or path types are not available yet (parity row P9b-2)", "write `impl Name { fn .. }` for a struct or enum of this file"));
+        }
+        if self.at_ident("for", 0) || self.at("for", 0) {
+            let t = self.peek(0).clone();
+            return Err(self.impl_syntax(&t, "trait impls are not available (Pruv has no traits)", "write an inherent `impl Name { fn .. }`"));
+        }
+        if !self.at("{", 0) {
+            let t = self.peek(0).clone();
+            return Err(self.impl_syntax(&t, "expected `{` after the impl type", "write `impl Name { fn .. }`"));
+        }
+        self.bump();
+        p.impls.push((ot.val.clone(), it.line, it.col));
+        while !self.at("}", 0) {
+            let t = self.peek(0).clone();
+            if t.kind == Kind::Eof {
+                return Err(self.impl_syntax(&it, "unclosed impl block", "close it with `}`"));
+            }
+            if self.at("pub", 0) {
+                return Err(PruvError::new("parse", t.line, t.col, "impl_module",
+                    "`pub` methods are not available yet (parity row P9b-2)", "drop `pub`; impl blocks live in single-file programs"));
+            }
+            if !self.at("fn", 0) {
+                return Err(self.impl_syntax(&t, "an impl block holds only `fn` items", "move the item out of the impl block"));
+            }
+            self.impl_owner = Some(ot.val.clone());
+            let r = self.function(None, false);
+            self.impl_owner = None;
+            let mut f = r?;
+            let recv = std::mem::replace(&mut self.last_recv, Receiver::None);
+            if !f.tparams.is_empty() {
+                return Err(self.impl_syntax(&t, "generic methods are not available yet (parity row P9b-2)", "write a free generic function"));
+            }
+            if f.name.starts_with('_') {
+                // `Owner__name` must name one (owner, function) pair: `A` + `_b` and `A_` + `b` would both be `A___b`
+                return Err(self.impl_syntax(&t, "an impl function name must not start with `_`", "rename the function"));
+            }
+            let func = format!("{}__{}", ot.val, f.name);
+            p.methods.push(MethodItem { line: f.line, col: f.col, owner: ot.val.clone(), name: f.name.clone(), func: func.clone(), recv });
+            f.name = func;
+            self.fn_pub.push(false);
+            p.functions.push(f);
+            self.items.push(Item::Fn(p.functions.len() - 1));
+        }
+        self.bump();
+        Ok(())
+    }
+
     fn program(&mut self) -> R<Program> {
         let mut p = Program::default();
         while self.peek(0).kind != Kind::Eof {
@@ -1139,6 +1263,14 @@ impl Parser {
                 if is_pub {
                     self.has_pub = true;
                 }
+                continue;
+            }
+            if self.at("impl", 0) {
+                if let Some(pt) = &pub_tok {
+                    return Err(PruvError::new("parse", pt.line, pt.col, "impl_module",
+                        "an impl block has no visibility, and `pub` methods are not available yet (parity row P9b-2)", "drop `pub`"));
+                }
+                self.impl_block(&mut p)?;
                 continue;
             }
             if self.at("mod", 0) {
@@ -2021,6 +2153,28 @@ impl Parser {
         let tparams = if self.at("<", 0) { self.type_params(&fn_owner(&name))? } else { Vec::new() };
         self.expect("(")?;
         let mut params = Vec::new();
+        if let Some(owner) = self.impl_owner.clone() {
+            // P9b: the receiver `self` / `inout self` / `take self` is the first parameter, typed by the impl owner
+            let t0 = self.peek(0).clone();
+            let moded = t0.kind == Kind::Id && (t0.val == "inout" || t0.val == "take") && self.peek(1).kind == Kind::Id && self.peek(1).val == "self";
+            if moded || (t0.kind == Kind::Id && t0.val == "self") {
+                let st = if moded { self.peek(1).clone() } else { t0.clone() };
+                self.i += if moded { 2 } else { 1 };
+                if self.at(":", 0) {
+                    return Err(self.impl_syntax(&st, "the receiver has no type annotation (its type is the impl type)",
+                        "write `self`, `inout self` or `take self`"));
+                }
+                let recv = if !moded { Receiver::Read } else if t0.val == "inout" { Receiver::Inout } else { Receiver::Take };
+                self.last_recv = recv;
+                params.push(Param { name: "self".to_string(), ty: owner, refine: None, take: recv == Receiver::Take,
+                    mode_pos: if recv == Receiver::Inout { Some((t0.line, t0.col)) } else { None } });
+                if !self.at(")", 0) {
+                    self.expect(",")?;
+                }
+            } else {
+                self.last_recv = Receiver::None;
+            }
+        }
         while !self.at(")", 0) {
             let mut take = false;
             let mut mode_tok: Option<Tok> = None;
@@ -3191,6 +3345,17 @@ impl Parser {
             } else if self.at(".", 0) {
                 self.bump();
                 let f = self.field_ident()?;
+                if f.kind == Kind::Id && self.at("(", 0) {
+                    // P9b: `recv.m(args)` is the reserved call `@method|m(recv, args)`; the checker resolves it from
+                    // the receiver's type
+                    let mut args = vec![e];
+                    args.extend(self.call_args()?);
+                    e = Expr::Call(Call { line: f.line, col: f.col, name: format!("{}{}", METHOD_CALL, f.val), args, ty: None,
+                        targs: None, inst: None, old: None, opaque_c: false });
+                    self.enter(1)?;
+                    chain += 1;
+                    continue;
+                }
                 e = Expr::FieldAccess(FieldAccess { line: e.line(), col: e.col(), base: Box::new(e), field: f.val, ty: None });
             } else {
                 break;
@@ -3442,6 +3607,16 @@ impl Parser {
                         "write f::<T>(x), Pair::<A, B> { .. } or Choice::<A, B>::Left(x)",
                     ));
                 }
+            }
+            if targs.is_none() && self.at("::", 0) && self.at("(", 2)
+                && self.impl_fns.contains(&(t.val.clone(), self.peek(1).val.clone()))
+            {
+                // P9b: `Owner::f(args)` calls the impl function `Owner__f` (arguments written with their modes)
+                self.bump();
+                let ft = self.next();
+                let args = self.call_args()?;
+                return Ok(Expr::Call(Call { line, col, name: format!("{}__{}", t.val, ft.val), args, ty: None, targs: None,
+                    inst: None, old: None, opaque_c: false }));
             }
             if self.at("::", 0) {
                 self.bump();

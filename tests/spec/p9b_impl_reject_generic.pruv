@@ -1,0 +1,5 @@
+// spec: R-6x-1 reject
+// An impl block of a generic type (parity row P9b-2).
+struct G<T> { v: T }
+impl G { fn z() -> i64 { return 0; } }
+fn f(k: i64) -> i64 { return k; }

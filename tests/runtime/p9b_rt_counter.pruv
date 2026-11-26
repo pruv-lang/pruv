@@ -1,0 +1,29 @@
+// P9b (R-6x-*): impl block on a struct with read, inout and take receivers, an associated constructor, contracts
+// with old(self); Rust prints `impl Counter { .. }` and dot calls.
+struct Counter { n: i64, step: i64 }
+
+impl Counter {
+    fn new(step: i64) -> Counter requires step >= 0 && step <= 100 ensures result.n == 0 && result.step == step {
+        return Counter { n: 0, step: step };
+    }
+    fn get(self) -> i64 ensures result == self.n {
+        return self.n;
+    }
+    fn bump(inout self) -> () requires self.n >= 0 && self.n <= 1000000 && self.step >= 0 && self.step <= 100
+        ensures self.n == old(self).n + old(self).step && self.step == old(self).step {
+        self.n = self.n + self.step;
+    }
+    fn into_n(take self) -> i64 ensures result == self.n {
+        return self.n;
+    }
+}
+
+fn run(k: i64) -> i64 requires k >= 0 && k <= 50 {
+    let mut c: Counter = Counter::new(k);
+    c.bump();
+    c.bump();
+    let g: i64 = c.get();
+    assert g == 2 * k;
+    let n: i64 = c.into_n();
+    return n + g;
+}

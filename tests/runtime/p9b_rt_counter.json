@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["0", "12", "200"], "gen_contains": ["impl Counter {", "fn bump(&mut self)", "pub fn get(self) -> i64", "pub fn into_n(self) -> i64", "c.bump();", "c.get()", "c.into_n()"]}

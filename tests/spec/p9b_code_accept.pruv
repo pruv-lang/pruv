@@ -1,0 +1,9 @@
+// spec: R-6x-4 accept
+// The Rust back end prints impl blocks, receivers and dot calls.
+struct C { n: i64 }
+impl C {
+  fn make(n: i64) -> C ensures result.n == n { return C { n: n }; }
+  fn get(self) -> i64 { return self.n; }
+  fn inc(inout self) -> () requires self.n >= 0 && self.n < 100 { self.n = self.n + 1; }
+}
+fn f(k: i64) -> i64 requires k >= 0 && k < 10 { let mut c: C = C::make(k); c.inc(); return c.get(); }

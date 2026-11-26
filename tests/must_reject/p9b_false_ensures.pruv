@@ -1,0 +1,4 @@
+// P9b R-6x-2: a false ensures of an inout method with old(self).
+struct C { n: i64 }
+impl C { fn inc(inout self) -> () requires self.n >= 0 && self.n < 100 ensures self.n == old(self).n { self.n = self.n + 1; } }
+fn f(k: i64) -> i64 { return k; }

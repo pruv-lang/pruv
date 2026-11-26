@@ -2985,6 +2985,57 @@ return match s { Shape::Circle(r) => { 3 * r * r }, Shape::Empty => 0 };
   [contract](tests/must_reject/p9_match_contract.pruv), [tuple pattern](tests/must_reject/p9_match_pattern.pruv),
   [binder scope](tests/must_reject/p9_match_binder_scope.pruv), [arm comma](tests/must_reject/p9_match_arm_comma.pruv).
 
+## 6x. Methods (P9b)
+```
+struct Counter { n: i64, step: i64 }
+
+impl Counter {
+    fn new(step: i64) -> Counter requires step >= 0 { return Counter { n: 0, step: step }; }
+    fn get(self) -> i64 { return self.n; }
+    fn bump(inout self) -> () requires self.n >= 0 && self.n <= 1000 && self.step >= 0 && self.step <= 100
+        ensures self.n == old(self).n + old(self).step { self.n = self.n + self.step; }
+    fn into_n(take self) -> i64 { return self.n; }
+}
+
+fn run(k: i64) -> i64 requires k >= 0 && k <= 50 { let mut c: Counter = Counter::new(k); c.bump(); return c.get(); }
+```
+- R-6x-1 **Impl blocks.** `impl Name { fn .. }` at the top level declares functions of the struct or enum `Name` of the
+  same file. Several blocks of one type are allowed and may come before the type. A block holds only `fn` items
+  (private, no attributes, not generic, named without a leading `_`); `impl<T>`, `impl Name<T>`, a path type,
+  `impl Trait for Name`, a missing type or `{`, any other item, a function name starting with `_` and an unclosed block
+  are `parse/impl_syntax` (an attribute on a method is `parse/attribute_position`). A name that is not a struct or
+  enum of the program, or a generic type, is `type/impl_type`, also for an empty block. Two functions of one type with one name (also across blocks) are
+  `type/dup_method`; a function named like a variant of its enum is `type/method_name_clash`. A method may share its
+  name with a field (`c.n` and `c.n()` are different). Impl blocks exist only in a single-file program without `pub`
+  or `mod` items; `pub` on a block or a method is `parse/impl_module` there too (parity row P9b-2).
+- R-6x-2 **Receivers.** The first parameter of an impl function may be the receiver `self` (read), `inout self` or
+  `take self`, without a type: its type is `Name`, and it follows the rules of a parameter of that mode (R-6g, the
+  owned-value rules), including `old(self)` in `ensures` of `inout self`. A function without a receiver is an
+  associated function. `self` is reserved everywhere else (as a binding, parameter or field name, after another
+  parameter, outside an impl block: `parse/reserved_name`); a receiver with a type is `parse/impl_syntax`. The
+  contracts (`requires`, `ensures`, `decreases`, `cost`) of impl functions are proved exactly as those of free
+  functions, at the definition and at every call.
+- R-6x-3 **Static calls.** `Name::f(args)` calls the impl function `f` of `Name` (with a receiver too: `Name::get(c)`,
+  `Name::bump(inout c)`). `x.m(args)` is a method call: `x` is a variable, a parameter, `self` or a field path of one,
+  whose declared type is the struct or enum `Name` (not generic), and the call is `Name::m(x, args)` with the
+  receiver passed in the method's mode (read: `x`, inout: `inout x`, take: `move x`). Resolution is static; there are
+  no traits and no dynamic dispatch. A type without method `m`, a non-user type, or a function without a receiver
+  called with a dot is `type/unknown_method`; a receiver whose type is not declared (a call result, an untyped match
+  or `for` binder, a quantifier variable) is `type/method_receiver` (parity row P9b-2). The receiver's mode is then
+  checked as an argument: an inout method on an immutable binding is `type/inout_argument`, a use after a take
+  method is a use after move.
+- R-6x-4 **Code.** The Rust back end prints the functions of `Name` in `impl Name { .. }` blocks under their own names
+  (receivers `self`, `&mut self`), method calls as `x.m(args)` and other uses as `Name::f`; the generated checked
+  bodies and entry checks of a method are methods of the block too. The LLVM back end emits the functions as free
+  symbols `Name__f`; its Rust bindings print the same `impl Name { .. }` wrappers. Panic texts name the function
+  `Name__f` on both back ends. A generated helper that takes the receiver after other parameters (the small-result
+  variant) stays a free function; impl functions get no `--proven-entries` twin (they are not host entries).
+  Tests: [runtime](tests/runtime/p9b_rt_counter.pruv), [enum and field receivers](tests/runtime/p9b_rt_enum_field.pruv),
+  [small result](tests/runtime/p9b_rt_small.pruv), [owner names](tests/runtime/p9b_rt_names.pruv),
+  [proven entries](tests/runtime/p9b_rt_proven.pruv),
+  [unknown method](tests/must_reject/p9b_unknown_method.pruv), [false ensures](tests/must_reject/p9b_false_ensures.pruv),
+  [violated requires](tests/must_reject/p9b_call_requires.pruv), [take then use](tests/must_reject/p9b_take_use.pruv).
+
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
 2. Every `+ - * unary-` in code: result within i64 range.
@@ -3427,6 +3478,8 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/for_iterable` | parse | a `for` head other than `a..b` or a slice/Vec place, such as `a..=b` or `a.iter()` (R-6q-3) |
 | `parse/foreign_syntax` | parse | a malformed `trusted rust fn` declaration |
 | `parse/generic_syntax` | parse | a malformed type parameter list or type argument list |
+| `parse/impl_module` | parse | an impl block in a program with `pub` or `mod` items, or `pub` in an impl block (R-6x-1) |
+| `parse/impl_syntax` | parse | a malformed or unsupported impl block (generic, trait or path impl, a non-`fn` item, a function name starting with `_`, an unclosed block) or a typed receiver (R-6x-1, R-6x-2) |
 | `parse/inout_syntax` | parse | a malformed `inout` parameter or argument |
 | `parse/let_else_syntax` | parse | a constructor pattern after `let` followed by `;` instead of `else { .. }` (R-6u-3) |
 | `parse/let_pattern` | parse | a `_`, literal or nested pattern in `if let`, `let else` or `while let` (R-6u-6) |
@@ -3492,6 +3545,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/cost_type` | type | a `cost` expression is not `i64` |
 | `type/dup_field` | type | a struct or variant declares a field twice |
 | `type/dup_fn` | type | a function is defined twice |
+| `type/dup_method` | type | two impl functions of one type with one name (R-6x-1) |
 | `type/dup_param` | type | a function declares a parameter twice |
 | `type/dup_type` | type | a type is declared twice |
 | `type/dup_variant` | type | an enum declares a variant twice |
@@ -3520,6 +3574,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/generic_bound` | type | an unknown bound, or a missing `Element` bound |
 | `type/generic_main` | type | `main` declares type parameters |
 | `type/generic_operation` | type | a field, variant or other concrete operation on an abstract type parameter |
+| `type/impl_type` | type | an impl block of a name that is not a struct or enum of the program, or of a generic type (R-6x-1) |
 | `type/immutable` | type | an assignment to a binding that is not mutable |
 | `type/immutable_string` | type | a byte store into a `str` |
 | `type/inout_alias` | type | an `inout` argument also used elsewhere in the same call |
@@ -3538,6 +3593,8 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/match_arity` | type | a match arm binds the wrong number of fields |
 | `type/match_arms` | type | match arms that are missing or repeated; a slice length no arm takes or a slice arm earlier arms cover (R-6u-4); a case no pattern arm takes (R-6u-6) |
 | `type/match_type` | type | a match on a value that is not Option, Result or an enum (or an array place with slice arms); slice arms on a target that is not an array place, or mixed with other arms (R-6u-4) |
+| `type/method_name_clash` | type | an impl function named like a variant of its enum (R-6x-1) |
+| `type/method_receiver` | type | a method call whose receiver is not a place of declared type (R-6x-3) |
 | `type/missing_return` | type | a function may reach its end without returning |
 | `type/name_collision` | type | one name is both a type and a function |
 | `type/net_unconsumed` | type | a temporary `Socket` or `Listener` is never consumed |
@@ -3590,6 +3647,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/unit_param` | type | a parameter of type `()` |
 | `type/unknown_field` | type | a field the type does not have |
 | `type/unknown_fn` | type | a call to an unknown function |
+| `type/unknown_method` | type | a method call of a name the receiver's type has no method of, or a dot call of a function without a receiver (R-6x-3) |
 | `type/unknown_module` | type | a path through a module that is not declared |
 | `type/unknown_name` | type | an unknown variable |
 | `type/unknown_type` | type | an unknown type name |

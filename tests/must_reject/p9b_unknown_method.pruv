@@ -1,0 +1,4 @@
+// P9b R-6x-3: a method the receiver type does not have.
+struct C { n: i64 }
+impl C { fn get(self) -> i64 { return self.n; } }
+fn f(c: C) -> i64 { return c.len(); }

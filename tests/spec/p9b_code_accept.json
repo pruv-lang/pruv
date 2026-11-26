@@ -1,0 +1,1 @@
+{"gen_contains": ["impl C {", "pub fn get(self) -> i64", "fn inc(&mut self)", "c.inc();", "c.get()", "C::make"], "gen_absent": ["fn C__", " C__get("]}

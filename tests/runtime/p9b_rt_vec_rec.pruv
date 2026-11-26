@@ -1,0 +1,36 @@
+// P9b (R-6x-*): methods on a struct with a Vec field (&self / &mut self receivers), a loop method and a
+// recursive method calling itself through self.
+struct Bag { items: Vec<i64>, cap: i64 }
+
+impl Bag {
+  fn make(cap: i64) -> Bag ! alloc requires cap >= 0 && cap <= 100 ensures result.cap == cap && len(result.items) == 0 {
+    return Bag { items: vec_new::<i64>(), cap: cap };
+  }
+  fn count(self) -> i64 ensures result == len(self.items) {
+    return len(self.items);
+  }
+  fn add(inout self, v: i64) -> () ! alloc requires len(self.items) < 1000 ensures len(self.items) == len(old(self).items) + 1 {
+    self.items = vec_push::<i64>(move self.items, v);
+  }
+  fn tri(self, n: i64) -> i64 requires n >= 0 && n <= 1000 ensures result >= 0 && result <= 1000000 {
+    let mut s: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n invariant i >= 0 && i <= n && s >= 0 && s <= i * 1000 && s <= 1000000 decreases n - i {
+      s = s + i;
+      i = i + 1;
+    }
+    return s + self.cap * 0;
+  }
+  fn fact(self, n: i64) -> i64 requires n >= 0 && n <= 10 ensures result == n + 1 decreases n {
+    if n == 0 { return 1; }
+    return 1 + self.fact(n - 1);
+  }
+}
+
+fn run(k: i64) -> i64 ! alloc requires k >= 0 && k <= 50 {
+  let mut b: Bag = Bag::make(k);
+  b.add(k);
+  b.add(2);
+  let c: i64 = b.count();
+  return c + b.fact(3) + b.tri(4);
+}

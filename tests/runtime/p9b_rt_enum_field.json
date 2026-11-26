@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["3", "12", "103"], "gen_contains": ["impl Shape {", "impl Counter {", "b.hits.twice();", "self.tick();", "Shape::square(k)"]}

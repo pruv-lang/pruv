@@ -1,0 +1,5 @@
+// spec: R-6x-1 reject
+// A trait impl: Pruv has no traits.
+struct P { x: i64 }
+impl Clone for P { fn z() -> i64 { return 0; } }
+fn f(k: i64) -> i64 { return k; }

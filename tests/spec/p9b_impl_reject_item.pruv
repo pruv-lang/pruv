@@ -1,0 +1,5 @@
+// spec: R-6x-1 reject
+// An impl block holds only fn items.
+struct P { x: i64 }
+impl P { const X: i64 = 1; }
+fn f(k: i64) -> i64 { return k; }

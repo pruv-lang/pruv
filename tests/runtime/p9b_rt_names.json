@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["3", "15", "43"], "gen_contains": ["impl Foo {", "impl Foo_ {", "impl Pruv {", "b.get()", "c.get()", "pub fn get_(self) -> i64 {"], "gen_absent": ["Foo___get", "fn _get", "fn Foo__get"]}

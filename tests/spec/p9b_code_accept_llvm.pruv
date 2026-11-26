@@ -1,0 +1,5 @@
+// spec: R-6x-4 accept
+// The LLVM back end emits the impl functions as free symbols.
+struct C { n: i64 }
+impl C { fn get(self) -> i64 { return self.n; } }
+fn f(k: i64) -> i64 { let c: C = C { n: k }; return c.get(); }

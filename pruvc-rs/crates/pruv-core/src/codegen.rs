@@ -2552,7 +2552,8 @@ impl<'a> Gen<'a> {
             }
         });
         self.emit(1, &format!("{}({})", body_name, args));
-        if self.proven_entries && !guard.is_empty() {
+        // P9b: impl functions are not host entries (no `pub` methods yet), so they get no proven twin
+        if self.proven_entries && !guard.is_empty() && !self.prog.methods.iter().any(|m| m.func == f.name) {
             if let Some(mut twin) = ProvenEntry::new(f, param_types, vis, name, ret, header, host_entry) {
                 twin.body.extend_from_slice(&self.out[body_start..]);
                 self.proven_items.push(twin);
@@ -6713,6 +6714,8 @@ fn gen_rust_concrete_core(
     if !g.proven_items.is_empty() {
         text.push_str(&proven_module(&text, &g.proven_items, g.allow));
     }
+    // P9b: last, so the modules above (which find items by their generated headers and copy bodies) are shaped too
+    let text = crate::impl_shape::impl_shape(text, prog);
     let text = hide_bodies(text);
     Ok((text, manifest, trust))
 }
@@ -7283,7 +7286,7 @@ mod tests {
             foreign: None,
             cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
         };
-        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new(), aliases: Vec::new() }
+        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new(), aliases: Vec::new(), methods: Vec::new(), impls: Vec::new() }
     }
 
     #[test]
@@ -7334,7 +7337,7 @@ mod tests {
             foreign: None,
             cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
         };
-        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new(), aliases: Vec::new() }
+        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new(), aliases: Vec::new(), methods: Vec::new(), impls: Vec::new() }
     }
 
     // L3-10: eq_range
@@ -7706,7 +7709,7 @@ mod tests {
                 Stmt::Return(Return { line: 1, col: 1, value: Some(call("len", vec![var("r", "array")], "i64")) }),
             ],
         );
-        Program { functions: vec![mk, g], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new(), aliases: Vec::new() }
+        Program { functions: vec![mk, g], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None, consts: Vec::new(), aliases: Vec::new(), methods: Vec::new(), impls: Vec::new() }
     }
 
     #[test]

@@ -1,0 +1,1 @@
+{"backends": ["rust"], "flags_matrix": [["--proven-entries"]], "exit": 0, "stdout_lines": ["0", "3", "10"], "gen_contains": ["pub mod pruv_proven {", "pub fn total(a: &PruvArr<i64>) -> i64 {", "c.pick__pruv_body(a)", "Counter::first__pruv_body(a)"], "gen_absent": ["pub fn Counter__", "fn first(a: &PruvArr"]}
