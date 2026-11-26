@@ -1,44 +1,37 @@
 // Codex import helpers (mirror of bench/l3/mcp/util.pruv plus request building and tape iteration).
 pub fn field(d: crate::json::JsonDocument, id: i64, key: str) -> i64 ! alloc { return crate::access::field(d,id,key); }
-pub fn raw(d: crate::json::JsonDocument, id: i64) -> [u8] ! alloc {
+// The raw JSON token of value id (its source bytes), empty for a bad id: one copy of the source range.
+pub fn raw(d: crate::json::JsonDocument, id: i64) -> [u8] ! alloc
+  ensures len(result) <= 16777216
+{
   let s: crate::access::Span = crate::access::raw_span(d,id);
   if s.status != 0 { let e: [u8] = alloc(0,0); return e; }
-  let mut b: [u8] = alloc(s.end-s.start,0); let mut i: i64 = 0;
-  while i < len(b) invariant 0 <= i && i <= len(b) && len(b) == s.end-s.start decreases len(b)-i
-  { b[i]=d.source[s.start+i]; i=i+1; } return b;
+  return copy(subview(d.source, s.start, s.end));
 }
+// s.as_bytes().to_vec()
 pub fn to_bytes(s: str) -> [u8] ! alloc
+  requires len(s) <= 100000000
   ensures len(result) == len(s)
 {
-  let mut b: [u8] = alloc(len(s),0); let mut i: i64 = 0;
-  while i < len(s) invariant 0 <= i && i <= len(s) && len(b) == len(s) decreases len(s)-i
-  { b[i]=s[i]; i=i+1; }
+  let mut b: [u8] = alloc(0,0);
+  arr_reserve(inout b, len(s));
+  arr_append(inout b, s, 0, len(s));
   return b;
 }
-pub fn join(a: [u8], b: [u8]) -> [u8] ! alloc {
-  if len(a) > 20000000 || len(b) > 20000000 { let e: [u8] = alloc(0,0); return e; }
-  let mut out: [u8] = alloc(len(a)+len(b),0); let mut i: i64 = 0;
-  while i < len(out) invariant 0 <= i && i <= len(out) && len(out) == len(a)+len(b) decreases len(out)-i
-  { if i < len(a) { out[i]=a[i]; } else { out[i]=b[i-len(a)]; } i=i+1; } return out;
-}
-// P6: a response id matches only when its JSON token is exactly the decimal text of the request id.
-pub fn id_is(b: [u8], id: i64) -> bool
-  requires 1 <= id && id <= 99
+// P6: a response id matches only when its JSON token src[s..e) is exactly the decimal text of the request id (no copy).
+pub fn id_is(src: [u8], s: i64, e: i64, id: i64) -> bool
+  requires 1 <= id && id <= 99 && 0 <= s && s <= e && e <= len(src)
 {
-  if id < 10 {
-    if len(b) != 1 { return false; }
-    let c: i64 = b[0];
-    return c == 48 + id;
-  }
-  if len(b) != 2 { return false; }
-  let c0: i64 = b[0]; let c1: i64 = b[1];
-  return c0 == 48 + id / 10 && c1 == 48 + id % 10;
+  if id < 10 { return e - s == 1 && src[s] == 48 + id; }
+  return e - s == 2 && src[s] == 48 + id / 10 && src[s + 1] == 48 + id % 10;
 }
-pub fn int_bytes(n: i64) -> [u8] ! alloc
-  requires 1 <= n && n <= 99
+// write!(out, "{}", n) for a request id
+pub fn push_int(inout out: [u8], n: i64) -> () ! alloc
+  requires 1 <= n && n <= 99 && len(out) <= 100000000
+  ensures len(out) <= len(old(out)) + 2
 {
-  if n < 10 { let mut a: [u8] = alloc(1,0); a[0]=48+n; return a; }
-  let mut c: [u8] = alloc(2,0); c[0]=48+n/10; c[1]=48+n%10; return c;
+  if n < 10 { arr_push(inout out, 48 + n); }
+  else { arr_push(inout out, 48 + n / 10, 48 + n % 10); }
 }
 fn hex(d: i64) -> i64
   requires 0 <= d && d <= 15
@@ -47,26 +40,23 @@ fn hex(d: i64) -> i64
   if d < 10 { return 48 + d; }
   return 87 + d;
 }
-// JSON string content of s (no surrounding quotes): quote, backslash and C0 controls escaped.
-pub fn escaped(s: str) -> [u8] ! alloc
-  requires len(s) <= 100000000
+// JSON string content of s (no surrounding quotes) appended to out: quote, backslash and C0 controls escaped.
+pub fn push_escaped(inout out: [u8], s: str) -> () ! alloc
+  requires len(out) + 6 * len(s) <= 100000000
+  ensures len(out) <= len(old(out)) + 6 * len(s)
 {
-  let mut out: [u8] = alloc(6*len(s),0); let mut i: i64 = 0; let mut n: i64 = 0;
+  let mut i: i64 = 0;
   while i < len(s)
-    invariant 0 <= i && i <= len(s) && 0 <= n && n <= 6*i && len(out) == 6*len(s)
-    decreases len(s)-i
+    invariant 0 <= i && i <= len(s) && len(out) <= len(old(out)) + 6 * i
+    decreases len(s) - i
   {
     let c: i64 = s[i];
-    if c == 34 { out[n]=92; out[n+1]=34; n=n+2; }
-    else if c == 92 { out[n]=92; out[n+1]=92; n=n+2; }
-    else if c < 32 { out[n]=92; out[n+1]=117; out[n+2]=48; out[n+3]=48; out[n+4]=hex(c/16); out[n+5]=hex(c%16); n=n+6; }
-    else { out[n]=c; n=n+1; }
-    i=i+1;
+    if c == 34 { arr_push(inout out, 92, 34); }
+    else if c == 92 { arr_push(inout out, 92, 92); }
+    else if c < 32 { arr_push(inout out, 92, 117, 48, 48, hex(c / 16), hex(c % 16)); }
+    else { arr_push(inout out, c); }
+    i = i + 1;
   }
-  let mut r: [u8] = alloc(n,0); let mut j: i64 = 0;
-  while j < n invariant 0 <= j && j <= n && n <= len(out) && len(r) == n decreases n-j
-  { r[j]=out[j]; j=j+1; }
-  return r;
 }
 // ECMAScript trim whitespace, encoded as UTF-8 (mcp util).
 // ECMAScript whitespace at b[i..n) as a UTF-8 sequence: its length (1..3), else 0. Bounded by n, not len(b),
@@ -87,14 +77,15 @@ fn space_in(b: [u8], i: i64, n: i64) -> i64
  }
  return 0;
 }
-// String.prototype.trim of b[0..n) as a span: r[0] start, r[1] end (no copy).
-pub fn trim_span(b: [u8], n: i64, inout r: [i64]) -> ()
- requires 0 <= n && n <= len(b) && len(r) == 2
- ensures len(r) == 2 && 0 <= r[0] && r[0] <= r[1] && r[1] <= n
+pub struct Bounds { lo: i64, hi: i64 }
+// String.prototype.trim of b[0..n) as a span (no copy).
+pub fn trim_span(b: [u8], n: i64) -> Bounds
+ requires 0 <= n && n <= len(b)
+ ensures 0 <= result.lo && result.lo <= result.hi && result.hi <= n
 {
  let mut lo: i64 = 0; let mut hi: i64 = 0; let mut i: i64 = 0;
  while i < n
- invariant 0 <= lo && lo <= i && 0 <= hi && hi <= i && i <= n && n <= len(b) && len(r) == 2
+ invariant 0 <= lo && lo <= i && 0 <= hi && hi <= i && i <= n && n <= len(b)
  decreases n-i
  {
  let k: i64 = space_in(b,i,n);
@@ -102,7 +93,7 @@ pub fn trim_span(b: [u8], n: i64, inout r: [i64]) -> ()
  else { i=i+1; hi=i; }
  }
  if hi < lo { hi=lo; }
- r[0] = lo; r[1] = hi;
+ return Bounds { lo: lo, hi: hi };
 }
 // The decoded text of string value id (lone surrogates became U+FFFD in the decoder, policy P2); "" for anything else.
 pub fn str_at(d: crate::json::JsonDocument, id: i64) -> str ! alloc

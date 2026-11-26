@@ -1115,3 +1115,38 @@ All after the last code change (F1 / F4 from the structure comparison).
   3. Grok bench rows 4.3c-T, 4.3c-B, 4.3c-G and `pkgs/turns` dead code (as listed after 4.3c).
   4. Qwen bench rows 4.3e-D, 4.3e-L, 4.3e-J, 4.3e-S (`qwen/` only), then 4.3e-F (touches `lib/access`; run all
      consumers).
+
+## Step 4.3f: Codex list and read import
+
+- `codex/RESHAPE.md`. New hand baseline `codex/hand/codex.rs` (the whole import, one function per Pruv function; the
+  older `reader.rs` / `replay.rs` cover only the R09 perf lanes), built with `rustc -O` against `host/` serde_json, no
+  warnings. `ctl: [i64]` became `rpc::Ctl` (two write-only slots dropped) and the error class a `match`; request
+  builders reserve once and append (`push_int`, `push_escaped`; `join` / `int_bytes` / `escaped` removed); `kind_of`
+  and `not_handled` read the id token in place (`id_is` on the span); the reply folds into the turn's own `[u8]`
+  (`fs` / `fb` scratch, `put_piece`, `head` removed); `receive` and the plan line split use `find_byte`; `take_segment`
+  trims a borrowed `subview`; `list` appends into one `[u8]` (no `String` + `adapter_probe` + `to_bytes`); `finish`
+  copies title / model with `copy_range`; `trim_span` returns `Bounds`. One Codex review: `not_handled` writes `null`
+  for an absent id (bug), `np` / `off` parallel state and dead `packet::wire_read` removed.
+- No module moved to `lib` / `pkgs`; no shared module changed, so no consumer runs were needed.
+- Tests: `codex/RESHAPE.md` §4.
+
+### Rows open after 4.3f
+
+- New (language): 4.3f-S, `eq_range` rejects `str` operands (`folder::same`, the `"lair"` originator prefix keep byte
+  loops).
+- New (bench, `codex/RESHAPE.md` §3): 4.3f-A (failure-path allocations and checks), 4.3f-O (`absorb` full signal and
+  cursor order), 4.3f-N (`ctl.n` dead writes, `parse_line` inout), 4.3f-K (`kind_of` early return), 4.3f-L (phrase
+  lowercase and 300-unit decode), 4.3f-T (`item_text` state), 4.3f-P (plan `pl` / `pb` store, `marker_end` -1),
+  4.3f-R (`child_args` copies), 4.3f-D (`str_at` decoder).
+- New (pkgs): 4.3f-B (zero-filled receive buffer and unread stderr tail, also `pkgs/transport`), 4.3f-E (element
+  cursor in `pkgs/access` instead of `util::elements`), 4.3f-F (double reply clip, replay re-fold, double layout in
+  `pkgs/turns`; with VL).
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB, TH, FO, FV, UL, VP,
+  IW, VL, 4.3d-M, 4.3d-H.
+- Next:
+  1. OpenCode together with Claude R08.
+  2. Step 4.4 (`docs/RUST_SHAPE_RESET.md` §6).
+  3. Grok bench rows 4.3c-T, 4.3c-B, 4.3c-G and `pkgs/turns` dead code; Qwen bench rows 4.3e-D, 4.3e-L, 4.3e-J,
+     4.3e-S, then 4.3e-F (touches `lib/access`; run all consumers).
+  4. Codex bench rows 4.3f-A, 4.3f-O, 4.3f-N, 4.3f-K, 4.3f-L, 4.3f-T, 4.3f-P, 4.3f-R, 4.3f-D (`codex/` only), then
+     4.3f-B, 4.3f-E, 4.3f-F (shared modules; run all consumers).

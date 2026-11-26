@@ -24,46 +24,39 @@ pub fn build(d: crate::json::JsonDocument, rid: i64) -> [i64] ! alloc
   let mut lim: i64 = len(ids);
   if lim > 50 { lim = 50; }
   let mut rows: [i64] = alloc(450, 0);
-  let mut tx: String = string_new();
-  let mut off: i64 = 0;
+  let mut tx: [u8] = alloc(0, 0);
   let mut count: i64 = 0;
   let mut k: i64 = 0;
   while k < lim
-    invariant 0 <= k && k <= lim && lim <= 50 && lim <= len(ids) && 0 <= count && count <= k && len(rows) == 450 && 0 <= off
-    invariant off <= 100000000 && len(tx) == off
+    invariant 0 <= k && k <= lim && lim <= 50 && lim <= len(ids) && 0 <= count && count <= k && len(rows) == 450
+    invariant len(tx) <= 100000000
     decreases lim - k
   {
     let t: i64 = ids[k];
     k = k + 1;
     if crate::access::kind(d, t) == 6 {
       let idv: str = crate::util::str_at(d, crate::util::field(d, t, "id"));
-      if len(idv) > 0 && crate::names::valid_thread(idv) {
+      if crate::names::valid_thread(idv) {
         let b: i64 = 9 * count;
-        rows[b] = off;
+        rows[b] = len(tx);
         rows[b + 1] = len(idv);
-        if len(idv) > 100000000 - off { return crate::packet::fail(2, 6, empty); }
-        tx = string_push_str(move tx, idv);
-        off = off + len(idv);
+        if len(idv) > 100000000 - len(tx) { return crate::packet::fail(2, 6, empty); }
+        arr_append(inout tx, idv, 0, len(idv));
         let one: str = title(d, t);
-        rows[b + 2] = off;
+        rows[b + 2] = len(tx);
         rows[b + 3] = len(one);
-        if len(one) > 100000000 - off { return crate::packet::fail(2, 6, empty); }
-        tx = string_push_str(move tx, one);
-        off = off + len(one);
+        if len(one) > 100000000 - len(tx) { return crate::packet::fail(2, 6, empty); }
+        arr_append(inout tx, one, 0, len(one));
         rows[b + 4] = -1;
         rows[b + 5] = 0;
         let uf: i64 = crate::util::field(d, t, "updatedAt");
         if uf >= 0 {
           let iso: crate::time::Iso = crate::time::iso_of(d, uf);
           if iso.status == 0 && len(iso.text) == 24 {
-            let s: str = crate::jstr::adapter_probe(iso.text);
-            if len(s) == 24 {
-              rows[b + 4] = off;
-              rows[b + 5] = 24;
-              if 24 > 100000000 - off { return crate::packet::fail(2, 6, empty); }
-              tx = string_push_str(move tx, s);
-              off = off + 24;
-            }
+            rows[b + 4] = len(tx);
+            rows[b + 5] = 24;
+            if 24 > 100000000 - len(tx) { return crate::packet::fail(2, 6, empty); }
+            arr_append(inout tx, iso.text, 0, 24);
           }
         }
         rows[b + 6] = -1;
@@ -72,11 +65,10 @@ pub fn build(d: crate::json::JsonDocument, rid: i64) -> [i64] ! alloc
         if crate::access::kind(d, pf) == 4 {
           let ps: str = crate::util::str_at(d, pf);
           if len(ps) > 0 {
-            rows[b + 6] = off;
+            rows[b + 6] = len(tx);
             rows[b + 7] = len(ps);
-            if len(ps) > 100000000 - off { return crate::packet::fail(2, 6, empty); }
-            tx = string_push_str(move tx, ps);
-            off = off + len(ps);
+            if len(ps) > 100000000 - len(tx) { return crate::packet::fail(2, 6, empty); }
+            arr_append(inout tx, ps, 0, len(ps));
           }
         }
         rows[b + 8] = -1;
@@ -93,8 +85,5 @@ pub fn build(d: crate::json::JsonDocument, rid: i64) -> [i64] ! alloc
       }
     }
   }
-  let all: str = string_to_str(tx);
-  if len(all) > 100000000 { return crate::packet::fail(2, 6, empty); }
-  let text: [u8] = crate::util::to_bytes(all);
-  return crate::packet::list_ok(rows, count, text);
+  return crate::packet::list_ok(rows, count, tx);
 }

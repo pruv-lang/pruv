@@ -13,11 +13,11 @@ import shutil
 from common import HERE, WORK, fake_binary, request_for, read_log, run_lines, check_case, load_cases
 
 MUTANTS = [
-    ('wrong-id-accepted', 'rpc.pruv', 'number.status == 0 && crate::util::id_is(crate::util::raw(d, mid), id)', 'number.status == 0'),
+    ('wrong-id-accepted', 'rpc.pruv', 'sp.status == 0 && crate::util::id_is(d.source, sp.start, sp.end, id)', 'sp.status == 0'),
     ('initialized-omitted', 'rpc.pruv', 'else { q = crate::transport::send(move q, slot, crate::util::to_bytes("{\\"method\\":\\"initialized\\",\\"params\\":{}}\\n"), ms); }', 'else { }'),
-    ('unsupported-mapping-lost', 'root.pruv', 'if cls == 1 { ctl[0] = 4; }', 'if cls == 1 { ctl[0] = 6; }'),
+    ('unsupported-mapping-lost', 'root.pruv', '1 => { ctl.fail = 4; }', '1 => { ctl.fail = 6; }'),
     ('not-found-alternative-dropped', 'rpc.pruv', 'if lit_at(u, n, i, "no rollout") { return true; }', 'if lit_at(u, n, i, "no rollout!") { return true; }'),
-    ('list-admission-bypassed', 'list.pruv', 'if len(idv) > 0 && crate::names::valid_thread(idv) {', 'if len(idv) > 0 {'),
+    ('list-admission-bypassed', 'list.pruv', 'if crate::names::valid_thread(idv) {', 'if len(idv) > 0 {'),
     ('stop-after-first-page', 'root.pruv', 'else if cu.status != 0 || len(cu.units) == 0 || dn <= 0 { fin = true; }', 'else if cu.status != 0 || len(cu.units) == 0 || dn <= 0 || page >= 1 { fin = true; }'),
     ('newest-first-feeding', 'read.pruv', '    j = j - 1;\n    let b: i64 = 10 * j;', '    let b: i64 = 10 * (count - j);\n    j = j - 1;'),
     ('commentary-admitted', 'item.pruv', 'if crate::access::string_is(d, crate::util::field(d, it, "phase"), "commentary") != 1 { x = item_text(d, it); }', 'if true { x = item_text(d, it); }'),

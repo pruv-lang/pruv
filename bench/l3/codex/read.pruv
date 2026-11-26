@@ -12,31 +12,28 @@
 
 // One page of thread/turns/list: classify every object of result.data newest first, keep the last-plan, apply the
 // budgets. Returns 0, or -4 when a bound that cannot happen was exceeded.
-pub fn absorb(d: crate::json::JsonDocument, rid: i64, inout hs: [i64], inout ht: [i64], inout hb: crate::util::ByteBuffer, inout pl: [i64], inout pb: [u8], inout fs: [i64], inout fb: [u8]) -> i64 ! alloc
-  requires len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024 && len(fs) == 3 && len(fb) == 32768
+pub fn absorb(d: crate::json::JsonDocument, rid: i64, inout hs: [i64], inout ht: [i64], inout hb: crate::util::ByteBuffer, inout pl: [i64], inout pb: [u8]) -> i64 ! alloc
+  requires len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024
   requires 0 <= hs[0] && hs[0] <= 200 && 0 <= hs[1] && hs[1] <= len(hb.data) && 0 <= hs[2] && hs[2] <= 2097152
   requires -1 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000 && (pl[63] == 0 || pl[63] == 1)
-  requires 0 <= fs[0] && fs[0] <= fs[1] && fs[1] <= 32768 && (fs[2] == 0 || fs[2] == 1)
-  ensures len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024 && len(fs) == 3 && len(fb) == 32768
+  ensures len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024
   ensures 0 <= hs[0] && hs[0] <= 200 && 0 <= hs[1] && hs[1] <= len(hb.data) && 0 <= hs[2] && hs[2] <= 2097152
   ensures -1 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000 && (pl[63] == 0 || pl[63] == 1)
-  ensures 0 <= fs[0] && fs[0] <= fs[1] && fs[1] <= 32768 && (fs[2] == 0 || fs[2] == 1)
 {
   let ids: [i64] = crate::util::elements(d, crate::util::field(d, rid, "data"));
   let n: i64 = len(ids);
   let mut k: i64 = 0;
   while k < n && hs[4] == 0
     invariant 0 <= k && k <= n && n == len(ids)
-    invariant len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024 && len(fs) == 3 && len(fb) == 32768
+    invariant len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024
     invariant 0 <= hs[0] && hs[0] <= 200 && 0 <= hs[1] && hs[1] <= len(hb.data) && 0 <= hs[2] && hs[2] <= 2097152
     invariant -1 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000 && (pl[63] == 0 || pl[63] == 1)
-    invariant 0 <= fs[0] && fs[0] <= fs[1] && fs[1] <= 32768 && (fs[2] == 0 || fs[2] == 1)
     decreases n - k
   {
     let t: i64 = ids[k];
     k = k + 1;
     if crate::access::kind(d, t) == 6 {
-      let raw: crate::item::RawTurn = crate::item::read_turn(d, t, inout fs, inout fb);
+      let raw: crate::item::RawTurn = crate::item::read_turn(d, t);
       // the first plan met (newest first) is the last plan; later turns never replace it, even when it yields none
       if hs[3] == 0 && raw.has_plan {
         hs[3] = 1;
@@ -59,7 +56,7 @@ pub fn absorb(d: crate::json::JsonDocument, rid: i64, inout hs: [i64], inout ht:
         } else {
           let needed: i64 = hs[1] + plen + rlen + 48;
           if needed > 8700000 { return -4; }
-          if rlen > 32768 || raw.tools < 0 || raw.nreply < 0 || raw.rclipped < 0 || raw.rclipped > 1 { return -4; }
+          if rlen > 32768 || raw.tools < 0 || raw.nreply < 0 { return -4; }
           if needed > len(hb.data) { crate::util::grow_bytes(inout hb.data, needed, 8700000); }
           let h: i64 = hs[0];
           let b: i64 = 10 * h;
@@ -73,7 +70,8 @@ pub fn absorb(d: crate::json::JsonDocument, rid: i64, inout hs: [i64], inout ht:
           crate::bytes::copy_span(inout hb.data, u, raw.reply, 0, rlen);
           u = u + rlen;
           ht[b + 4] = raw.nreply;
-          ht[b + 5] = raw.rclipped;
+          ht[b + 5] = 0;
+          if raw.rclipped { ht[b + 5] = 1; }
           ht[b + 6] = raw.tools;
           ht[b + 7] = -1;
           if len(raw.created) == 24 {
@@ -98,17 +96,11 @@ pub fn absorb(d: crate::json::JsonDocument, rid: i64, inout hs: [i64], inout ht:
   return 0;
 }
 
-// 24-byte stamp of the arena at o as a str ("" when absent or malformed)
-fn stamp_str(hb: [u8], o: i64) -> str ! alloc
-  ensures len(result) == 0 || len(result) == 24
+// A 24-byte stamp of the arena is present at o and valid UTF-8 (no copy).
+fn stamp_ok(hb: [u8], o: i64) -> bool
 {
-  let none: str = "";
-  if o < 0 || o > len(hb) - 24 { return copy(none); }
-  let mut cb: [u8] = alloc(24, 0);
-  crate::bytes::copy_span(inout cb, 0, hb, o, o + 24);
-  let s: str = crate::jstr::owned_text(move cb);
-  if len(s) != 24 { return copy(none); }
-  return move s;
+  if o < 0 || o > len(hb) - 24 { return false; }
+  return span_ok(subview(hb, o, o + 24));
 }
 
 // One held turn into the collector: begin, the folded reply when present, then its tool items.
@@ -208,9 +200,9 @@ pub fn replay(ht: [i64], take held: [u8], used: i64, count: i64, base: i64, item
         }
       }
       let mut created: i64 = -1;
-      if len(stamp_str(hb, co)) == 24 { created = co; }
+      if stamp_ok(hb, co) { created = co; }
       let mut completed: i64 = -1;
-      if len(stamp_str(hb, dof)) == 24 { completed = dof; }
+      if stamp_ok(hb, dof) { completed = dof; }
       if !feed(inout st, inout sl, inout rf, hb, po, pl, created, nrep > 0, ro, rl, pd, completed, tools) {
         bad[0] = 1;
       }
@@ -232,22 +224,6 @@ pub fn replay(ht: [i64], take held: [u8], used: i64, count: i64, base: i64, item
   }
   wire = truncate(hb, mv + col.text_len);
   return col;
-}
-
-fn put_str(inout dst: [u8], at: i64, s: str) -> ()
-  requires 0 <= at && at <= len(dst) && len(s) <= len(dst) - at
-  ensures len(dst) == len(old(dst))
-{
-  let n: i64 = len(s);
-  let mut j: i64 = 0;
-  while j < n
-    invariant 0 <= j && j <= n && n == len(s) && 0 <= at && at <= len(dst) && n <= len(dst) - at && len(dst) == len(old(dst))
-    decreases n - j
-  {
-    let b: i64 = s[j];
-    dst[at + j] = b;
-    j = j + 1;
-  }
 }
 
 // The result packet of a finished read. Text layout: title, model, lastPlan at (24), plan item blob, then the turn texts.
@@ -313,8 +289,8 @@ pub fn finish(hs: [i64], ht: [i64], take hb: [u8], pl: [i64], pb: [u8], title: s
   let header: i64 = 8 * (20 + rl);
   if len(wire) != header + total { return crate::packet::wire_fail(2, 6, empty); }
   if !crate::packet::read_header(m, rows, total, inout wire) { return crate::packet::wire_fail(2, 6, empty); }
-  put_str(inout wire, header, title);
-  put_str(inout wire, header + tl, model);
+  copy_range(inout wire, header, title, 0, tl);
+  copy_range(inout wire, header + tl, model, 0, ml);
   if alen == 24 { crate::bytes::copy_span(inout wire, header + tl + ml, pb, 18000, 18024); }
   if blob > 0 { crate::bytes::copy_span(inout wire, header + tl + ml + alen, pb, 0, blob); }
   return wire;

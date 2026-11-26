@@ -27,32 +27,31 @@ pub fn codex_list(binary: str, argv: str, cwd: str, folder: str, timeout_ms: i64
 {
   let empty: [u8] = alloc(0, 0);
   if len(folder) > 1000000 { return crate::packet::fail(1, 0, empty); }
-  let mut ctl: [i64] = alloc(8, 0);
+  let mut ctl: crate::rpc::Ctl = crate::rpc::ctl_new();
   let mut l: Loop = crate::rpc::start(binary, argv, cwd, timeout_ms, inout ctl);
-  let slot: i64 = ctl[2];
-  let overall: i64 = ctl[3];
+  let slot: i64 = ctl.slot;
+  let overall: i64 = ctl.overall;
   let mut st: crate::transport::Reader = crate::transport::reader_new();
   let mut line: crate::util::ByteBuffer = crate::util::byte_buffer(4096);
   let mut chunk: [u8] = alloc(65536, 0);
   let mut tl: crate::tail::Tail = crate::tail::new(1024);
   let mut detail: [u8] = alloc(0, 0);
   let mut p: [i64] = crate::packet::fail(2, 6, empty);
-  if ctl[0] == 0 {
+  if ctl.fail == 0 {
     l = crate::rpc::open(move l, inout ctl, inout st, inout line, inout chunk, inout tl, timeout_ms);
   }
-  if ctl[0] == 0 {
-    ctl[1] = 3;
-    ctl[4] = 2;
+  if ctl.fail == 0 {
+    ctl.stage = 3;
     if crate::transport::stdin_closed(l, slot) {
       l = crate::transport::expired(move l, overall, inout st);
-      if st.status == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
+      if st.status == -1 { ctl.fail = 5; } else { ctl.fail = 6; }
     }
     l = crate::transport::send(move l, slot, crate::rpc::req_list(2, folder), timeout_ms);
     let mut done: bool = false;
     let mut events: i64 = 0;
-    while ctl[0] == 0 && !done && events < 1000000
+    while ctl.fail == 0 && !done && events < 1000000
       invariant 0 <= events && events <= 1000000 && len(p) >= 3
-      invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
+      invariant 0 <= ctl.n && ctl.n <= len(line.data)
       invariant 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
       invariant len(line.data) <= 8388608
       invariant crate::tail::tail_ok(tl) && tl.limit == 1024
@@ -60,23 +59,23 @@ pub fn codex_list(binary: str, argv: str, cwd: str, folder: str, timeout_ms: i64
     {
       events = events + 1;
       l = crate::rpc::step(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tl);
-      if ctl[0] == 0 && ctl[5] == 1 {
-        let parsed: crate::json::JsonParse = crate::rpc::parse_line(inout line, ctl[6], st);
-        ctl[6] = 0;
+      if ctl.fail == 0 && ctl.got {
+        let parsed: crate::json::JsonParse = crate::rpc::parse_line(inout line, ctl.n, st);
+        ctl.n = 0;
         match parsed {
           crate::json::JsonParse::Failed(e) => { }
           crate::json::JsonParse::Parsed(d) => {
             let k: i64 = crate::rpc::kind_of(d, 2);
             if k == 1 { l = crate::transport::send(move l, slot, crate::rpc::not_handled(d), timeout_ms); }
-            if k == 2 {
+            else if k == 2 {
               done = true;
               let error: i64 = crate::util::field(d, 0, "error");
               if crate::access::kind(d, error) == 6 {
                 // any error response to thread/list is codex-unsupported
-                ctl[0] = 4;
+                ctl.fail = 4;
                 detail = crate::rpc::error_detail(d, error);
               } else {
-                ctl[1] = 6;
+                ctl.stage = 6;
                 p = crate::list::build(d, crate::util::field(d, 0, "result"));
               }
             }
@@ -84,10 +83,10 @@ pub fn codex_list(binary: str, argv: str, cwd: str, folder: str, timeout_ms: i64
         }
       }
     }
-    if ctl[0] == 0 && !done { ctl[0] = 6; }
+    if ctl.fail == 0 && !done { ctl.fail = 6; }
   }
-  let code: i64 = ctl[0];
-  let stage: i64 = ctl[1];
+  let code: i64 = ctl.fail;
+  let stage: i64 = ctl.stage;
   crate::transport::close(move l, slot);
   if code != 0 && len(detail) <= 100000000 { return crate::packet::fail(code, stage, detail); }
   if code != 0 { return crate::packet::fail(code, stage, empty); }
@@ -109,10 +108,10 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
   if len(thread) > 1000000 { return crate::packet::wire_fail(3, 0, empty); }
   if !crate::names::valid_thread(thread) { return crate::packet::wire_fail(3, 0, empty); }
   if len(folder) > 1000000 { return crate::packet::wire_fail(1, 0, empty); }
-  let mut ctl: [i64] = alloc(8, 0);
+  let mut ctl: crate::rpc::Ctl = crate::rpc::ctl_new();
   let mut l: Loop = crate::rpc::start(binary, argv, cwd, timeout_ms, inout ctl);
-  let slot: i64 = ctl[2];
-  let overall: i64 = ctl[3];
+  let slot: i64 = ctl.slot;
+  let overall: i64 = ctl.overall;
   let mut st: crate::transport::Reader = crate::transport::reader_new();
   let mut line: crate::util::ByteBuffer = crate::util::byte_buffer(4096);
   let mut chunk: [u8] = alloc(65536, 0);
@@ -124,29 +123,26 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
   let mut pl: [i64] = alloc(64, 0);
   pl[0] = -1;
   let mut pb: [u8] = alloc(18024, 0);
-  let mut fs: [i64] = alloc(3, 0);
-  let mut fb: [u8] = alloc(32768, 0);
   let mut detail: [u8] = alloc(0, 0);
   let mut title: str = "";
   let mut model: str = "";
   let mut more: bool = false;
-  if ctl[0] == 0 {
+  if ctl.fail == 0 {
     l = crate::rpc::open(move l, inout ctl, inout st, inout line, inout chunk, inout tl, timeout_ms);
   }
   // thread/read: any error response is not-found; the conversation's cwd must be the chosen folder
-  if ctl[0] == 0 {
-    ctl[1] = 4;
-    ctl[4] = 2;
+  if ctl.fail == 0 {
+    ctl.stage = 4;
     if crate::transport::stdin_closed(l, slot) {
       l = crate::transport::expired(move l, overall, inout st);
-      if st.status == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
+      if st.status == -1 { ctl.fail = 5; } else { ctl.fail = 6; }
     }
     l = crate::transport::send(move l, slot, crate::rpc::req_read(2, thread), timeout_ms);
     let mut done: bool = false;
     let mut events: i64 = 0;
-    while ctl[0] == 0 && !done && events < 1000000
+    while ctl.fail == 0 && !done && events < 1000000
       invariant 0 <= events && events <= 1000000
-      invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
+      invariant 0 <= ctl.n && ctl.n <= len(line.data)
       invariant 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
       invariant len(line.data) <= 8388608
       invariant crate::tail::tail_ok(tl) && tl.limit == 1024
@@ -154,19 +150,19 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
     {
       events = events + 1;
       l = crate::rpc::step(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tl);
-      if ctl[0] == 0 && ctl[5] == 1 {
-        let parsed: crate::json::JsonParse = crate::rpc::parse_line(inout line, ctl[6], st);
-        ctl[6] = 0;
+      if ctl.fail == 0 && ctl.got {
+        let parsed: crate::json::JsonParse = crate::rpc::parse_line(inout line, ctl.n, st);
+        ctl.n = 0;
         match parsed {
           crate::json::JsonParse::Failed(e) => { }
           crate::json::JsonParse::Parsed(d) => {
             let k: i64 = crate::rpc::kind_of(d, 2);
             if k == 1 { l = crate::transport::send(move l, slot, crate::rpc::not_handled(d), timeout_ms); }
-            if k == 2 {
+            else if k == 2 {
               done = true;
               let error: i64 = crate::util::field(d, 0, "error");
               if crate::access::kind(d, error) == 6 {
-                ctl[0] = 3;
+                ctl.fail = 3;
                 detail = crate::rpc::error_detail(d, error);
               } else {
                 let res: i64 = crate::util::field(d, 0, "result");
@@ -194,7 +190,7 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
                     }
                   }
                 } else {
-                  ctl[0] = 3;
+                  ctl.fail = 3;
                 }
               }
             }
@@ -202,73 +198,73 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
         }
       }
     }
-    if ctl[0] == 0 && !done { ctl[0] = 6; }
+    if ctl.fail == 0 && !done { ctl.fail = 6; }
   }
   // thread/turns/list: newest first, at most 40 pages
   let mut id: i64 = 2;
   let mut page: i64 = 0;
   let mut cursor: [u8] = alloc(0, 0);
   let mut fin: bool = false;
-  while ctl[0] == 0 && !fin && page < 40
+  while ctl.fail == 0 && !fin && page < 40
     invariant id == 2 + page && 0 <= page && page <= 40
-    invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
+    invariant len(cursor) <= 16777216
+    invariant 0 <= ctl.n && ctl.n <= len(line.data)
     invariant 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
     invariant len(line.data) <= 8388608
     invariant crate::tail::tail_ok(tl) && tl.limit == 1024
-    invariant len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024 && len(fs) == 3 && len(fb) == 32768
+    invariant len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024
     invariant 0 <= hs[0] && hs[0] <= 200 && 0 <= hs[1] && hs[1] <= len(hb.data) && 0 <= hs[2] && hs[2] <= 2097152
     invariant -1 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000 && (pl[63] == 0 || pl[63] == 1)
-    invariant 0 <= fs[0] && fs[0] <= fs[1] && fs[1] <= 32768 && (fs[2] == 0 || fs[2] == 1)
     decreases 40 - page
   {
     id = id + 1;
     page = page + 1;
-    ctl[1] = 5;
-    ctl[4] = id;
+    ctl.stage = 5;
     if crate::transport::stdin_closed(l, slot) {
       l = crate::transport::expired(move l, overall, inout st);
-      if st.status == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
+      if st.status == -1 { ctl.fail = 5; } else { ctl.fail = 6; }
     }
     l = crate::transport::send(move l, slot, crate::rpc::req_turns(id, thread, cursor), timeout_ms);
     let mut done: bool = false;
     let mut events: i64 = 0;
-    while ctl[0] == 0 && !done && events < 1000000
+    while ctl.fail == 0 && !done && events < 1000000
       invariant 0 <= events && events <= 1000000
-      invariant len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
+      invariant 0 <= ctl.n && ctl.n <= len(line.data)
       invariant 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
       invariant len(line.data) <= 8388608
       invariant crate::tail::tail_ok(tl) && tl.limit == 1024
       invariant id == 2 + page && 0 <= page && page <= 40
-      invariant len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024 && len(fs) == 3 && len(fb) == 32768
+      invariant len(cursor) <= 16777216
+      invariant len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024
       invariant 0 <= hs[0] && hs[0] <= 200 && 0 <= hs[1] && hs[1] <= len(hb.data) && 0 <= hs[2] && hs[2] <= 2097152
       invariant -1 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000 && (pl[63] == 0 || pl[63] == 1)
-      invariant 0 <= fs[0] && fs[0] <= fs[1] && fs[1] <= 32768 && (fs[2] == 0 || fs[2] == 1)
       decreases 1000000 - events
     {
       events = events + 1;
       l = crate::rpc::step(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tl);
-      if ctl[0] == 0 && ctl[5] == 1 {
-        let parsed: crate::json::JsonParse = crate::rpc::parse_line(inout line, ctl[6], st);
-        ctl[6] = 0;
+      if ctl.fail == 0 && ctl.got {
+        let parsed: crate::json::JsonParse = crate::rpc::parse_line(inout line, ctl.n, st);
+        ctl.n = 0;
         match parsed {
           crate::json::JsonParse::Failed(e) => { }
           crate::json::JsonParse::Parsed(d) => {
             let k: i64 = crate::rpc::kind_of(d, id);
             if k == 1 { l = crate::transport::send(move l, slot, crate::rpc::not_handled(d), timeout_ms); }
-            if k == 2 {
+            else if k == 2 {
               done = true;
               let error: i64 = crate::util::field(d, 0, "error");
               if crate::access::kind(d, error) == 6 {
                 // -32601 codex-unsupported; not found / no rollout / unknown thread not-found; else read-failed
-                let cls: i64 = crate::rpc::error_class(d, error);
-                ctl[0] = 6;
-                if cls == 1 { ctl[0] = 4; }
-                if cls == 2 { ctl[0] = 3; }
+                match crate::rpc::error_class(d, error) {
+                  1 => { ctl.fail = 4; }
+                  2 => { ctl.fail = 3; }
+                  _ => { ctl.fail = 6; }
+                }
                 detail = crate::rpc::error_detail(d, error);
               } else {
                 let res: i64 = crate::util::field(d, 0, "result");
-                let r: i64 = crate::read::absorb(d, res, inout hs, inout ht, inout hb, inout pl, inout pb, inout fs, inout fb);
-                if r < 0 { ctl[0] = 2; }
+                let r: i64 = crate::read::absorb(d, res, inout hs, inout ht, inout hb, inout pl, inout pb);
+                if r < 0 { ctl.fail = 2; }
                 else {
                   let dn: i64 = crate::access::array_length(d, crate::util::field(d, res, "data"));
                   let nxt: i64 = crate::util::field(d, res, "nextCursor");
@@ -286,10 +282,10 @@ pub fn codex_read_wire(binary: str, argv: str, cwd: str, folder: str, thread: st
         }
       }
     }
-    if ctl[0] == 0 && !done { ctl[0] = 6; }
+    if ctl.fail == 0 && !done { ctl.fail = 6; }
   }
-  let code: i64 = ctl[0];
-  let stage: i64 = ctl[1];
+  let code: i64 = ctl.fail;
+  let stage: i64 = ctl.stage;
   if code == 0 {
     let wire: [u8] = crate::read::finish(hs, ht, move hb.data, pl, pb, title, model, more);
     crate::transport::close(move l, slot);

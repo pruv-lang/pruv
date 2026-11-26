@@ -67,20 +67,17 @@ fn marker_end(t: str) -> i64
   return m;
 }
 
-// One raw line b[lo..hi): trim, strip one marker, trim, drop when empty, slice to 200 units.
-fn take_segment(b: [u8], lo: i64, hi: i64, inout pl: [i64], inout pb: [u8]) -> () ! alloc
-  requires 0 <= lo && lo <= hi && hi <= len(b) && len(pl) == 64 && len(pb) == 18024
+// One raw line text[lo..hi) (borrowed, no copy): trim, strip one marker, trim, drop when empty, slice to 200 units.
+fn take_segment(text: str, lo: i64, hi: i64, inout pl: [i64], inout pb: [u8]) -> ()
+  requires 0 <= lo && lo <= hi && hi <= len(text) && len(pl) == 64 && len(pb) == 18024
   requires 0 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000
   requires pl[63] == 0 || pl[63] == 1
   ensures len(pl) == 64 && len(pb) == 18024
   ensures 0 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000
   ensures pl[63] == 0 || pl[63] == 1
 {
-  let mut seg: [u8] = alloc(hi - lo, 0);
-  crate::bytes::copy_span(inout seg, 0, b, lo, hi);
-  let s: str = crate::jstr::owned_text(move seg);
-  if len(s) != hi - lo { return; }
-  let t: ref str = crate::text::trim(s);
+  if !is_char_boundary(text, lo) || !is_char_boundary(text, hi) { return; }
+  let t: ref str = crate::text::trim(subview(text, lo, hi));
   let m: i64 = marker_end(t);
   let mut start: i64 = 0;
   if m >= 0 {
@@ -95,14 +92,7 @@ fn take_segment(b: [u8], lo: i64, hi: i64, inout pl: [i64], inout pb: [u8]) -> (
     let used: i64 = pl[62];
     let c: i64 = pl[0];
     if used + k <= 18000 {
-      let mut j: i64 = 0;
-      while j < k
-        invariant 0 <= j && j <= k && k <= len(u) && 0 <= used && used + k <= 18000 && len(pb) == 18024
-        decreases k - j
-      {
-        pb[used + j] = u[j];
-        j = j + 1;
-      }
+      copy_range(inout pb, used, u, 0, k);
       pl[2 + 2 * c] = used;
       pl[3 + 2 * c] = k;
       pl[0] = c + 1;
@@ -113,7 +103,7 @@ fn take_segment(b: [u8], lo: i64, hi: i64, inout pl: [i64], inout pb: [u8]) -> (
   }
 }
 
-pub fn codex_plan(text: [u8], at: [u8], inout pl: [i64], inout pb: [u8]) -> () ! alloc
+pub fn codex_plan(text: str, at: [u8], inout pl: [i64], inout pb: [u8]) -> ()
   requires len(pl) == 64 && len(pb) == 18024 && len(text) <= 100000000 && (len(at) == 0 || len(at) == 24)
   ensures len(pl) == 64 && len(pb) == 18024
   ensures -1 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000
@@ -124,27 +114,23 @@ pub fn codex_plan(text: [u8], at: [u8], inout pl: [i64], inout pb: [u8]) -> () !
   pl[62] = 0;
   pl[63] = 0;
   if len(at) == 24 {
-    crate::bytes::copy_span(inout pb, 18000, at, 0, 24);
+    copy_range(inout pb, 18000, at, 0, 24);
     pl[63] = 1;
   }
+  // text.split('\n')
   let n: i64 = len(text);
   let mut start: i64 = 0;
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= start && start <= i && i <= n && n == len(text)
+  while start <= n
+    invariant 0 <= start && start <= n + 1 && n == len(text)
     invariant len(pl) == 64 && len(pb) == 18024
     invariant 0 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000
     invariant pl[63] == 0 || pl[63] == 1
-    decreases n - i
+    decreases n + 1 - start
   {
-    let c: i64 = text[i];
-    if c == 10 {
-      take_segment(text, start, i, inout pl, inout pb);
-      start = i + 1;
-    }
-    i = i + 1;
+    let i: i64 = find_byte(text, 10, start, n);
+    take_segment(text, start, i, inout pl, inout pb);
+    start = i + 1;
   }
-  take_segment(text, start, n, inout pl, inout pb);
   if pl[0] == 0 {
     pl[0] = -1;
     pl[1] = 0;
