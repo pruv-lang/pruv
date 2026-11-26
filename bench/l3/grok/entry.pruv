@@ -26,19 +26,13 @@ fn has_at(s: str, at: i64, lit: str) -> bool
   return true;
 }
 
-// trimmed = s[lo..hi). When it starts <user_query>, ends </user_query> and is at least 25 bytes (the tags may not overlap), the inner
-// bounds after removing exactly one leading \r?\n and then one trailing \r?\n; else [-1,-1].
-fn query_range(s: str, lo: i64, hi: i64) -> [i64] ! alloc
+// hand query_range: trimmed = s[lo..hi). When it starts <user_query>, ends </user_query> and is at least 25 bytes (the tags may not
+// overlap), the inner bounds after removing exactly one leading \r?\n and then one trailing \r?\n; else lo == -1 (the hand None).
+fn query_range(s: str, lo: i64, hi: i64) -> crate::text::Span
   requires 0 <= lo && lo <= hi && hi <= len(s)
-  ensures len(result) == 2
-  ensures result[0] == -1 || (lo + 12 <= result[0] && result[0] <= result[1] && result[1] <= hi - 13)
+  ensures result.lo == -1 || (lo + 12 <= result.lo && result.lo <= result.hi && result.hi <= hi - 13)
 {
-  let mut r: [i64] = alloc(2, 0);
-  r[0] = -1;
-  r[1] = -1;
-  if hi - lo < 25 { return r; }
-  if !has_at(s, lo, "<user_query>") { return r; }
-  if !has_at(s, hi - 13, "</user_query>") { return r; }
+  if hi - lo < 25 || !has_at(s, lo, "<user_query>") || !has_at(s, hi - 13, "</user_query>") { return crate::text::Span { lo: -1, hi: -1 }; }
   let mut a: i64 = lo + 12;
   let mut b: i64 = hi - 13;
   if a < b {
@@ -60,9 +54,7 @@ fn query_range(s: str, lo: i64, hi: i64) -> [i64] ! alloc
       }
     }
   }
-  r[0] = a;
-  r[1] = b;
-  return r;
+  return crate::text::Span { lo: a, hi: b };
 }
 
 
@@ -161,11 +153,11 @@ pub fn user_view(prompt: str, at: str, skip: bool, nopi: bool, inout st: [i64], 
   if skip { return 0; }
   if len(prompt) > 100000000 { return -1; }
   let tr: crate::text::Span = crate::text::trim_span(prompt);
-  let q: [i64] = query_range(prompt, tr.lo, tr.hi);
-  if q[0] >= 0 {
+  let q: crate::text::Span = query_range(prompt, tr.lo, tr.hi);
+  if q.lo >= 0 {
     // user_query wins over everything: only the inner text, borrowed (the tags are ASCII, so the cut points are boundaries)
-    let a: i64 = q[0];
-    let b: i64 = q[1];
+    let a: i64 = q.lo;
+    let b: i64 = q.hi;
     if !is_char_boundary(prompt, a) || !is_char_boundary(prompt, b) { return -1; }
     if crate::text::is_blank(subview(prompt, a, b)) { return 0; }
     crate::turns::begin2(inout st, inout sl, inout bk, subview(prompt, a, b), at);  // MUT:M08 => crate::turns::begin2(inout st, inout sl, inout bk, crate::text::trim(subview(prompt, a, b)), at);

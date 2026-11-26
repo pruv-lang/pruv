@@ -998,3 +998,37 @@ All after the last code change (F1 / F4 from the structure comparison).
   numeric stamps; keep that behaviour). The collector half sits in `pkgs/turns` (`new_state`, `new_slots`,
   `new_store_hint`, `begin2`, `skip_user`, `answer2`, `tool`, `text_layout`), so its consumers must be run.
 
+## Step 4.3b: Grok RPC rows U, V, C, D and `entry::query_range`
+
+- `grok/RESHAPE.md` §3c. The four rpc structure rows are closed: UTF-8 is checked per sequence inside strings (U, hand
+  `utf8_width`); `array` and `object` are separate loops under `value` (V); `Cap` holds only the members and the callers
+  trim and pass the view (C); `dec` appends plain runs found with `find_byte` and `text_of` returns
+  `ref [u8] from(t, buf)` (D, the two-source borrow; the tagged `text_span` and the `resize` zero fill are gone).
+- `entry::query_range` returns a `text::Span` instead of a 2-word `[i64]` (history item 3). `Canon` (item 4) already
+  borrows an offset where the hand copies 24 bytes: no change.
+- Codex structure review (one, per function): five findings applied, one of them an output difference in the perf lane
+  (a `code` token over 8 MiB was not compacted); one left as bench row 4.3b-R (the `load_check` line buffer is
+  zero-filled because `pkgs/transport::receive_grow` needs length >= 1).
+- **IW** (new, language gap): an `inout` struct parameter cannot be assigned a fresh value as a whole
+  (`c = cap_new()` on `inout c: Cap` is `type/immutable`, "inout parameter c cannot be reassigned as a whole"). The
+  hand's `scan` returns a fresh `Cap`; Pruv resets its 22 fields one by one (the closest form; same cost, no
+  allocation). Same family as the array/map cases G-R06-1 and D63 (`docs/L3_RESTRUCTURE_SPEC.md`), but those block a
+  grow or a put-back; this one only costs text. Minimal change: allow whole assignment of an `inout` struct (the
+  storage is the caller's, as for a field).
+- Length contracts changed for verification only: `compact` `e - s <= 16777216` (was 8388608), `dec`
+  `len(out) + (e - s) <= 100000000`, `push_cp` `len(o) <= 100000000`, `text_of` `len(t) <= 16777216`.
+- Tests: `grok/RESHAPE.md` §4. `bench/l3/lib` and `bench/l3/pkgs` unchanged (no consumer runs).
+
+### Rows open after 4.3b
+
+- New: IW. Closed: none (bench rows 4.3b-U, -V, -C, -D closed in `grok/RESHAPE.md`; 4.3b-R opened there).
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB, TH, FO, FV, UL, VP,
+  IW.
+- Next:
+  1. Grok history path against `grok/perf/hand_history.rs` (items 1-2 of the 4.3 list): the collector store in
+     `pkgs/turns` (`new_state`, `new_slots`, `new_store_hint`, `begin2`, `skip_user`, `answer2`, `tool`,
+     `text_layout`) and `read::assemble_store` (hand reserves the final packet once, Pruv builds `rows`, `meta` and the
+     packet). Write the missing hand Rust first; run every `pkgs/turns` consumer on rs/rust and rs/llvm. Bench row
+     4.3b-R (`pkgs/transport` `receive_grow` from length 0) can go with it if transport consumers are run anyway.
+  2. Qwen, then Codex, then OpenCode together with Claude R08.
+  3. Step 4.4 (`docs/RUST_SHAPE_RESET.md` §6).
