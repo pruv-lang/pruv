@@ -437,7 +437,15 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
             let is_kw = stmt_for || stmt_jump || KEYWORDS.contains(&v.as_str());
             // P6: `_` right after `(`, `[` or `,` is a wildcard token for tuple and slice patterns
             // (`let (_, b) = e;`, `[_, b] =>`); the parser reports reserved_name for it anywhere else.
-            if v == "_" && toks.last().is_some_and(|t| t.kind == Kind::Op && matches!(t.val.as_str(), "(" | "[" | ",")) {
+            // P9a-6: `_` followed by `=>` is the wildcard arm of a `match`.
+            let arrow = {
+                let mut q = pos;
+                while q < n && src[q].is_whitespace() {
+                    q += 1;
+                }
+                q + 1 < n && src[q] == '=' && src[q + 1] == '>'
+            };
+            if v == "_" && (arrow || toks.last().is_some_and(|t| t.kind == Kind::Op && matches!(t.val.as_str(), "(" | "[" | ","))) {
                 toks.push(Tok { kind: Kind::Op, val: v, line, col, end: col + 1 });
                 continue;
             }

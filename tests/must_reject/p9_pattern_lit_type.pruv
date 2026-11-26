@@ -1,0 +1,4 @@
+// P9a-6: a bool literal pattern on an i64 payload.
+fn f(o: Option<i64>) -> i64 {
+  return match o { Some(true) => 1, _ => 0 };
+}

@@ -190,6 +190,103 @@ impl ValueIf {
 /// and need no new node. The reserved name cannot be written in source and is never resolved as a function.
 pub struct ValueMatch;
 
+/// P9a-6: a pattern below the top constructor of a match arm. It is spelled in a binder slot of
+/// `MatchArm::binders` / `ValueArm::binders` so every pass before the checker carries it as is: a name, `_`, an
+/// integer literal `#-3`, a `bool` literal `#true`, or a nested variant `{enum;ctor;p1,p2}` (an empty enum for
+/// `Some`/`None`/`Ok`/`Err`). The checker lowers a match holding such a slot, or a top-level `_` arm (ctor `_`), to
+/// nested plain matches and `if`s (`check::Checker::lower_patterns`), so later passes never see one.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SubPat {
+    Bind(String),
+    Wild,
+    Int(String),
+    Bool(bool),
+    Variant(Option<String>, String, Vec<SubPat>),
+}
+
+impl SubPat {
+    /// Whether a binder slot is a plain name (every slot before P9a-6).
+    pub fn is_plain(slot: &str) -> bool {
+        !(slot == "_" || slot.starts_with('#') || slot.starts_with('{'))
+    }
+
+    pub fn decode(slot: &str) -> SubPat {
+        if slot == "_" {
+            return SubPat::Wild;
+        }
+        if let Some(l) = slot.strip_prefix('#') {
+            return match l {
+                "true" => SubPat::Bool(true),
+                "false" => SubPat::Bool(false),
+                _ => SubPat::Int(l.to_string()),
+            };
+        }
+        if let Some(inner) = slot.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+            let mut it = inner.splitn(3, ';');
+            let en = it.next().unwrap_or("");
+            let ctor = it.next().unwrap_or("").to_string();
+            let subs = Self::split(it.next().unwrap_or("")).iter().map(|s| Self::decode(s)).collect();
+            return SubPat::Variant((!en.is_empty()).then(|| en.to_string()), ctor, subs);
+        }
+        SubPat::Bind(slot.to_string())
+    }
+
+    pub fn encode(&self) -> String {
+        match self {
+            SubPat::Bind(n) => n.clone(),
+            SubPat::Wild => "_".into(),
+            SubPat::Int(v) => format!("#{v}"),
+            SubPat::Bool(b) => format!("#{b}"),
+            SubPat::Variant(en, ctor, subs) => format!("{{{};{};{}}}", en.as_deref().unwrap_or(""), ctor,
+                subs.iter().map(SubPat::encode).collect::<Vec<_>>().join(",")),
+        }
+    }
+
+    /// The binder slots of a list written `p1,p2` (commas inside a nested `{..}` do not split).
+    pub fn split(list: &str) -> Vec<String> {
+        let (mut out, mut cur, mut depth) = (Vec::new(), String::new(), 0i32);
+        for ch in list.chars() {
+            match ch {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                ',' if depth == 0 => {
+                    out.push(std::mem::take(&mut cur));
+                    continue;
+                }
+                _ => {}
+            }
+            cur.push(ch);
+        }
+        if !cur.is_empty() || !out.is_empty() {
+            out.push(cur);
+        }
+        out
+    }
+
+    /// Rewrites every nested variant's enum name with `f` (module resolution of `m::E::V` sub-patterns).
+    pub fn map_enums<E>(&mut self, f: &mut dyn FnMut(&str) -> Result<String, E>) -> Result<(), E> {
+        if let SubPat::Variant(en, _, subs) = self {
+            if let Some(n) = en {
+                *n = f(n)?;
+            }
+            for s in subs {
+                s.map_enums(f)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `map_enums` over the encoded binder slots of one arm.
+    pub fn map_slots<E>(slots: &mut [String], f: &mut dyn FnMut(&str) -> Result<String, E>) -> Result<(), E> {
+        for s in slots.iter_mut().filter(|s| s.starts_with('{')) {
+            let mut p = Self::decode(s);
+            p.map_enums(f)?;
+            *s = p.encode();
+        }
+        Ok(())
+    }
+}
+
 /// P9a-5: an arm pattern of a value `match` (see `ValueMatch`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValueArm { pub enum_name: Option<String>, pub ctor: String, pub binders: Vec<String> }
@@ -216,7 +313,8 @@ impl ValueMatch {
     }
 
     pub fn matches(call: &Call) -> bool {
-        call.name.starts_with("@value_match|")
+        // an empty value match (`match e {}`) carries no `|`; it is still a value match (rejected as type/match_arms)
+        call.name == Self::NAME || call.name.starts_with("@value_match|")
     }
 
     /// The call name for these arms (after the arm enum names were resolved).
@@ -238,7 +336,7 @@ impl ValueMatch {
             ValueArm {
                 enum_name: (!en.is_empty()).then(|| en.to_string()),
                 ctor,
-                binders: if bs.is_empty() { Vec::new() } else { bs.split(',').map(str::to_string).collect() },
+                binders: SubPat::split(bs),
             }
         }).collect()
     }

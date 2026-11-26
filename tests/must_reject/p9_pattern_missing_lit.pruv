@@ -1,0 +1,4 @@
+// P9a-6: literal payload patterns cover only some integers; a value `match` needs a binder or `_` for the rest.
+fn f(o: Option<i64>) -> i64 {
+  return match o { Some(0) => 1, Some(1) => 2, None => 0 };
+}

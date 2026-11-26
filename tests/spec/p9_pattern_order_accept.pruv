@@ -1,0 +1,8 @@
+// spec: R-6u-7 accept
+// Arms are tried in order: a specific arm before a general one is taken first, and the general arm takes the rest.
+fn f(o: Option<i64>) -> i64
+  ensures (is_some(o) && some_val(o) == 5) ==> result == 50
+  ensures (is_some(o) && some_val(o) != 5) ==> result == 1
+{
+  return match o { Some(5) => 50, Some(_) => 1, _ => 0 };
+}

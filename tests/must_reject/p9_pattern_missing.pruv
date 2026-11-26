@@ -1,0 +1,10 @@
+// P9a-6: a nested pattern leaves `Err(Halt::Stalled)` uncovered.
+enum Halt { Done, Stalled }
+
+fn f(r: Result<bool, Halt>) -> i64 {
+  match r {
+    Ok(false) => { return 0; }
+    Ok(true) => { return 1; }
+    Err(Halt::Done) => { return 2; }
+  }
+}

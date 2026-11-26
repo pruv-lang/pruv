@@ -1,0 +1,5 @@
+// P9a-6: a value match with no arms has no value to produce (type/match_arms).
+enum E { A, B }
+fn f(e: E) -> i64 {
+  return match e {};
+}

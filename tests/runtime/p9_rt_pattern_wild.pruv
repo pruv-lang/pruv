@@ -1,0 +1,48 @@
+// P9a-6 audit: a lone `_` arm still evaluates the scrutinee once (side effects kept); a `_` arm next to an owned
+// field binder keeps the binder a move (no copy, balanced allocations); a `_` arm next to a binder still sees the
+// outer names it refers to; the i64 minimum is a literal pattern.
+enum Got { Good(xs: [i64]), Fail(code: i64) }
+
+fn tick(n: i64) -> Option<i64> ! io {
+  print(n);
+  return Some(n);
+}
+
+fn mk(n: i64) -> [i64] ! alloc
+  requires 0 <= n && n <= 10
+  ensures len(result) == n
+{
+  return alloc(n, 1);
+}
+
+fn count(r: Got) -> i64 {
+  let mut out: i64 = 0;
+  match r {
+    Got::Fail(0) => { out = -1; }
+    Got::Good(xs) => { out = len(xs); }
+    _ => { out = -2; }
+  }
+  return out;
+}
+
+fn shadow(r: Option<i64>, n: i64) -> i64
+  requires n < 100
+{
+  return match r { Some(0) => 100, Some(x) => x, _ => n + 1 };
+}
+
+fn low(o: Option<i64>) -> i64 {
+  return match o { Some(-9223372036854775808) => 1, Some(_) => 2, None => 3 };
+}
+
+fn run() -> () ! io, alloc {
+  print(match tick(7) { _ => 1 });
+  match tick(8) { _ => { print(2); } }
+  print(count(Got::Good(mk(4))));
+  print(count(Got::Fail(0)));
+  print(count(Got::Fail(3)));
+  print(shadow(Some(5), 40));
+  print(shadow(None::<i64>, 40));
+  print(low(Some(-9223372036854775808)));
+  print(low(Some(1)));
+}

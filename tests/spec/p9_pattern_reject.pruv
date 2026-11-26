@@ -1,0 +1,7 @@
+// spec: R-6u-6 reject
+// The nested patterns leave `Err(Halt::Stalled)` uncovered.
+enum Halt { Done, Stalled }
+
+fn f(r: Result<bool, Halt>) -> i64 {
+  return match r { Ok(false) => 0, Ok(true) => 1, Err(Halt::Done) => 2 };
+}

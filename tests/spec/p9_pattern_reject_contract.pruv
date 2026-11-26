@@ -1,0 +1,11 @@
+// spec: R-6u-6 reject
+// The arm `Some(1)` breaks the ensures; the other arms keep it.
+fn f(o: Option<i64>) -> i64
+  ensures result != 1
+{
+  match o {
+    Some(1) => { return 1; }
+    Some(_) => { return 2; }
+    None => { return 0; }
+  }
+}

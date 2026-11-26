@@ -1,0 +1,6 @@
+// P9a-6: a nested pattern with the wrong number of fields.
+enum E { A(x: i64, y: i64), B }
+
+fn f(o: Option<E>) -> i64 {
+  return match o { Some(E::A(0)) => 1, _ => 0 };
+}

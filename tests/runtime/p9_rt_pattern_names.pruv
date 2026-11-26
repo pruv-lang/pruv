@@ -1,0 +1,60 @@
+// P9a-6 confirm audit: a field binder keeps its source name only when no other arm reaching the case mentions it;
+// names other arms declare (`if let` binders, lets, else blocks, value match binders) or bind at another field force
+// a fresh name. A lone `_` arm on an owned enum place keeps the place assignable.
+enum E { P(a: i64, b: i64), Q }
+enum Got { Good(xs: [i64]), Fail(code: i64) }
+
+fn decl(o: Option<i64>, q: Option<i64>) -> i64 ! io {
+  match o {
+    Some(0) => { if let Some(y) = q { print(100); print(y); } }
+    Some(y) => { print(y); }
+    None => { print(-1); }
+  }
+  return 0;
+}
+
+fn els(o: Option<i64>, q: Option<i64>) -> i64 {
+  let mut out: i64 = 0;
+  match o {
+    Some(0) => { if let Some(z) = q { out = z; } else { let y: i64 = 9; out = y; } }
+    Some(y) => { out = y; }
+    None => { out = -1; }
+  }
+  return out;
+}
+
+fn value_decl(o: Option<i64>, q: Option<i64>) -> i64 {
+  return match o { Some(0) => match q { Some(y) => y, None => 7 }, Some(y) => y, None => -1 };
+}
+
+fn two(e: E) -> i64 {
+  return match e { E::P(x, 0) => x, E::P(0, x) => x, _ => 3 };
+}
+
+fn place() -> i64 ! alloc {
+  let mut g: Got = Got::Good(alloc(2, 1));
+  match g { _ => { g = Got::Fail(2); } }
+  let mut out: i64 = 0;
+  match g { Got::Fail(c) => { out = c; } Got::Good(xs) => { out = len(xs); } }
+  return out;
+}
+
+fn run() -> () ! io, alloc {
+  print(decl(Some(0), Some(4)));
+  print(decl(Some(6), Some(4)));
+  print(els(Some(0), None::<i64>));
+  print(els(Some(0), Some(3)));
+  print(els(Some(5), None::<i64>));
+  print(value_decl(Some(0), Some(1)));
+  print(value_decl(Some(8), None::<i64>));
+  print(two(E::P(5, 0)));
+  print(two(E::P(0, 6)));
+  print(two(E::P(1, 1)));
+  print(two(E::Q));
+  print(place());
+}
+
+fn main() -> i64 ! io, alloc {
+  run();
+  return 0;
+}

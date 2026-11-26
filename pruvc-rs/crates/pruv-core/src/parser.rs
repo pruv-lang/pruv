@@ -755,6 +755,11 @@ impl Parser {
     /// A variant binder of a pattern: a name, or (P8) a tuple pattern bound to a fresh `pruv_tup_d<N>` temporary
     /// the checker destructures.
     fn arm_binder(&mut self, binders: &mut Vec<String>, pats: &mut Vec<Option<TuplePat>>) -> R<()> {
+        if let Some(p) = self.sub_pattern()? {
+            binders.push(p.encode());
+            pats.push(None);
+            return Ok(());
+        }
         if self.at("(", 0) {
             let pat = self.tuple_pat()?;
             binders.push(format!("pruv_tup_d{}", self.tup_tmp));
@@ -794,6 +799,59 @@ impl Parser {
         Ok((binders, pats))
     }
 
+    /// P9a-6: a binder slot that is not a name or a tuple pattern: `_`, an integer or `bool` literal, or a nested
+    /// variant pattern (`Halt::Done`, `Some(0)`, `Ok(x)`), encoded as a `SubPat` slot. `None` for a name or tuple.
+    fn sub_pattern(&mut self) -> R<Option<crate::ast::SubPat>> {
+        use crate::ast::SubPat;
+        let t = self.peek(0).clone();
+        if t.kind == Kind::Op && t.val == "_" {
+            self.bump();
+            return Ok(Some(SubPat::Wild));
+        }
+        if t.kind == Kind::Int {
+            self.bump();
+            return Ok(Some(SubPat::Int(t.val.clone())));
+        }
+        if t.kind == Kind::Op && t.val == "-" && self.peek(1).kind == Kind::Int {
+            self.bump();
+            let n = self.next();
+            return Ok(Some(SubPat::Int(format!("-{}", n.val))));
+        }
+        if self.at("true", 0) || self.at("false", 0) {
+            self.bump();
+            return Ok(Some(SubPat::Bool(t.val == "true")));
+        }
+        let nested = self.at("crate", 0)
+            || (t.kind == Kind::Id && self.at("::", 1))
+            || (t.kind != Kind::Int && matches!(t.val.as_str(), "Some" | "None" | "Ok" | "Err"));
+        if !nested {
+            return Ok(None);
+        }
+        let arm = self.arm_pattern()?;
+        if !arm.pats.is_empty() {
+            return Err(PruvError::new("parse", t.line, t.col, "value_match_pattern",
+                "a tuple pattern inside a nested variant pattern is not supported yet",
+                "bind the payload to a name and destructure it in the arm"));
+        }
+        if arm.ctor == "_" {
+            return Ok(Some(SubPat::Wild));
+        }
+        Ok(Some(SubPat::Variant(arm.enum_name, arm.ctor, arm.binders.iter().map(|b| SubPat::decode(b)).collect())))
+    }
+
+    /// P9a-6: the pattern of `if let`, `let else` or `while let`: a `_`, literal or nested sub-pattern there is
+    /// `parse/let_pattern` (parity row P9a-7; use a `match`).
+    fn let_arm_pattern(&mut self) -> R<MatchArm> {
+        let t = self.peek(0).clone();
+        let arm = self.arm_pattern()?;
+        if arm.ctor == "_" || !arm.binders.iter().all(|b| crate::ast::SubPat::is_plain(b)) {
+            return Err(PruvError::new("parse", t.line, t.col, "let_pattern",
+                "a `_`, literal or nested pattern in `if let`, `let else` or `while let` is not supported yet",
+                "use a `match` statement with a `_` arm"));
+        }
+        Ok(arm)
+    }
+
     /// One variant pattern of a match arm, `if let` or `let else`, without its body: `crate::m::E::V(..)`,
     /// `E::V(..)`, `Some(x)`, `None`, `Ok(x)`, `Ok(())` or `Err(e)`; a binder may be a tuple pattern (P8).
     fn arm_pattern(&mut self) -> R<MatchArm> {
@@ -809,6 +867,11 @@ impl Parser {
             let variant = segs[segs.len() - 1].clone();
             let bs = self.arm_binders(&format!("{}::{}", enum_path, variant))?;
             return Ok(arm(&ct, Some(enum_path), variant, bs));
+        }
+        if self.at("_", 0) && self.peek(0).kind == Kind::Op {
+            // P9a-6: the wildcard arm `_ =>`
+            let ct = self.next();
+            return Ok(arm(&ct, None, "_".to_string(), (Vec::new(), Vec::new())));
         }
         let ct = self.next();
         if ct.kind == Kind::Id && self.at("::", 0) {
@@ -2241,7 +2304,7 @@ impl Parser {
     fn if_let(&mut self) -> R<Stmt> {
         let t = self.expect_tok("if")?;
         self.expect("let")?;
-        let mut arm = self.arm_pattern()?;
+        let mut arm = self.let_arm_pattern()?;
         self.expect("=")?;
         let scr = self.expr()?;
         arm.body = self.block()?;
@@ -2317,7 +2380,7 @@ impl Parser {
         if self.at("let", 0) && self.at_let_else() {
             // P8: `let P = e else { .. };`; block_rest moves the following statements into the pattern arm
             self.bump();
-            let arm = self.arm_pattern()?;
+            let arm = self.let_arm_pattern()?;
             self.expect("=")?;
             let scr = self.expr()?;
             if !self.at("else", 0) {
@@ -2477,7 +2540,7 @@ impl Parser {
             // P8b: `while let P = e` is the loop `while true` whose body is the head match (MatchForm::WhileLet)
             let head = if self.at("let", 0) {
                 self.bump();
-                let arm = self.arm_pattern()?;
+                let arm = self.let_arm_pattern()?;
                 self.expect("=")?;
                 Some((arm, self.expr()?))
             } else {

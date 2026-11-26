@@ -360,6 +360,8 @@ struct Checker {
     /// P9a-5: per open value `match`: the arm type (fixed by `want` or the first arm that is not a bare literal),
     /// the arms whose bare literal waits for it, and the number of arms checked so far.
     value_arms: Vec<(Option<GType>, Vec<usize>, usize)>,
+    /// P9a-6: counter for the fresh field names of a lowered pattern match
+    pat_tmp: usize,
     collection_records: std::cell::RefCell<HashSet<String>>,
     nested_records: HashSet<String>,
     holder_records: HashSet<String>,
@@ -1393,6 +1395,7 @@ impl Checker {
             match_movable: HashSet::new(),
             arm_binders: HashSet::new(),
             value_arms: Vec::new(),
+            pat_tmp: 0,
             collection_records: Default::default(),
             nested_records: HashSet::new(),
             holder_records: HashSet::new(),
@@ -3557,6 +3560,11 @@ impl Checker {
                     }
                     continue;
                 }
+                if Self::has_ext_pattern(m.arms.iter().map(|a| (a.ctor.as_str(), a.binders.as_slice()))) {
+                    let st = self.pattern_match(m, scope)?;
+                    stmts[i] = st;
+                    continue;
+                }
                 if m.arms.iter().any(|a| a.ctor == "()") {
                     let st = self.tuple_match(m, scope)?;
                     if i + 1 == stmts.len() {
@@ -5012,6 +5020,284 @@ impl Checker {
             }
         }
         Ok(())
+    }
+
+    /// P9a-6: whether a match needs `lower_patterns` (a `_` arm, or a `_`, literal or nested sub-pattern).
+    fn has_ext_pattern<'a>(mut arms: impl Iterator<Item = (&'a str, &'a [String])>) -> bool {
+        arms.any(|(ctor, bs)| ctor == "_" || !bs.iter().all(|b| crate::ast::SubPat::is_plain(b)))
+    }
+
+    /// P9a-6: the constructors of a matched type with their payload types: `Some`/`None`, `Ok`/`Err` (a unit `Ok`
+    /// binds nothing) or the variants of a user enum. Anything else is type/match_type.
+    fn pat_ctors(&self, t: &GType, line: i64, col: i64) -> Res<Vec<(Option<String>, String, Vec<GType>)>> {
+        if t.owner.is_some() {
+            return Err(terr(line, col, "generic_operation", format!("cannot match a value of the abstract type {}", t.name),
+                "a type parameter has no variants; match on an Option, Result or enum that contains it"));
+        }
+        if t.name == "option" {
+            let p = t.view_payload().or_else(|| t.args.first()).cloned().unwrap_or_else(i64t);
+            return Ok(vec![(None, "Some".into(), vec![p]), (None, "None".into(), Vec::new())]);
+        }
+        if t.name == "result" {
+            let p = t.view_payload().or_else(|| t.args.first()).cloned().unwrap_or_else(i64t);
+            let e = t.result_error().cloned().unwrap_or_else(i64t);
+            let ok = if p == unitt() { Vec::new() } else { vec![p] };
+            return Ok(vec![(None, "Ok".into(), ok), (None, "Err".into(), vec![e])]);
+        }
+        if self.is_enum(t) {
+            if let Some(TypeDecl::Enum(e)) = self.tt.decl(&t.name) {
+                let names: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
+                let mut out = Vec::new();
+                for v in names {
+                    let fs = self.fields_of(t, Some(v.as_str()))?.into_iter().map(|(_, ft)| ft).collect();
+                    out.push((Some(t.name.clone()), v, fs));
+                }
+                return Ok(out);
+            }
+        }
+        Err(terr(line, col, "match_type", format!("a variant pattern cannot match a value of type {}", tn(t)), ""))
+    }
+
+    /// P9a-6: lowers a match whose arms use `_`, literal or nested patterns to a decision tree of plain matches and
+    /// `if`s, tried in arm order (the first arm that matches wins, as in Rust). Every value must reach an arm
+    /// (type/match_arms names a missing case) and every arm must be reachable (type/unreachable_arm). `arms` are the
+    /// arm patterns (ctor `_` for a wildcard arm), `tuple` the P8 tuple patterns of plain binders; `scrut` the
+    /// scrutinee and `t` its type. Returns the tree; leaves name their arm and the lets that bind its names.
+    fn lower_patterns(&mut self, arms: &[(i64, i64, Option<String>, String, Vec<String>)], uses: &[HashSet<String>],
+        split_lone: bool, t: &GType, line: i64, col: i64) -> Res<PNode>
+    {
+        use crate::ast::SubPat;
+        // an arm's own pattern names count as mentioned (two fields of one case never share a kept name)
+        let uses: Vec<HashSet<String>> = uses.iter().zip(arms).map(|(u, a)| {
+            let mut u = u.clone();
+            a.4.iter().for_each(|b| pat_slot_names(b, &mut u));
+            u
+        }).collect();
+        let uses = &uses[..];
+        let mut rows = Vec::new();
+        for (k, (_, _, en, ctor, bs)) in arms.iter().enumerate() {
+            let top = if ctor == "_" { SubPat::Wild } else {
+                SubPat::Variant(en.clone(), ctor.clone(), bs.iter().map(|b| SubPat::decode(b)).collect())
+            };
+            let mut row = PRow { tests: Vec::new(), binds: Vec::new(), arm: k };
+            row.add(String::new(), t.clone(), top);
+            rows.push(row);
+        }
+        let mut used = vec![false; arms.len()];
+        let mut budget = 4096usize;
+        let mut node = self.pat_compile(rows, &mut used, &mut budget, &mut Vec::new(), arms, uses, line, col)?;
+        if let Some(k) = used.iter().position(|u| !u) {
+            let (l, c) = (arms[k].0, arms[k].1);
+            return Err(terr(l, c, "unreachable_arm", "this arm can never match: the arms above take every value it matches",
+                "remove the arm or move it above the arm that covers it"));
+        }
+        if let (true, PNode::Leaf(k, binds)) = (split_lone, &node) {
+            // a lone `_` arm on an Option/Result/enum still matches the scrutinee (evaluated once, as in Rust): one
+            // case per constructor, payloads bound to fresh names (a place scrutinee has nothing to evaluate, so the
+            // statement form keeps the bare arm and the place stays assignable)
+            if let Ok(ctors) = self.pat_ctors(t, line, col) {
+                let mut out = Vec::new();
+                for (cen, ctor, fs) in ctors {
+                    let names = fs.iter().map(|_| { self.pat_tmp += 1; format!("pruv_pat{}", self.pat_tmp) }).collect();
+                    out.push((cen, ctor, names, PNode::Leaf(*k, binds.clone())));
+                }
+                node = PNode::Match(String::new(), out);
+            }
+        }
+        Ok(node)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pat_compile(&mut self, rows: Vec<PRow>, used: &mut [bool], budget: &mut usize, path: &mut Vec<String>,
+        arms: &[(i64, i64, Option<String>, String, Vec<String>)], uses: &[HashSet<String>], line: i64, col: i64)
+        -> Res<PNode>
+    {
+        use crate::ast::SubPat;
+        if *budget == 0 {
+            return Err(terr(line, col, "match_arms", "the patterns of this match need too many cases",
+                "split the match into nested matches"));
+        }
+        *budget -= 1;
+        let Some(r0) = rows.first() else {
+            let at = if path.is_empty() { String::new() } else { format!(" ({})", path.join(", ")) };
+            return Err(terr(line, col, "match_arms", format!("match does not cover every value{}", at),
+                "add the missing case or a `_` arm"));
+        };
+        let Some((v, ty, pat)) = r0.tests.first().cloned() else {
+            used[r0.arm] = true;
+            return Ok(PNode::Leaf(r0.arm, r0.binds.clone()));
+        };
+        let test_of = |r: &PRow| r.tests.iter().position(|(x, _, _)| *x == v);
+        let (al, ac) = (arms[r0.arm].0, arms[r0.arm].1);
+        let label = |v: &str| if v.is_empty() { "the value".to_string() } else { "a payload".to_string() };
+        match pat {
+            SubPat::Variant(..) => {
+                let ctors = self.pat_ctors(&ty, al, ac)?;
+                // every pattern on `v` names one of these constructors with its arity
+                for r in &rows {
+                    let Some(i) = test_of(r) else { continue };
+                    let (l, c) = (arms[r.arm].0, arms[r.arm].1);
+                    match &r.tests[i].2 {
+                        SubPat::Variant(en, ctor, subs) => {
+                            let Some((cen, _, fs)) = ctors.iter().find(|(_, n, _)| n == ctor) else {
+                                return Err(terr(l, c, if ctors[0].0.is_some() { "unknown_variant" } else { "match_arms" },
+                                    format!("{} has no variant {}", tn(&ty), ctor), ""));
+                            };
+                            if en != cen {
+                                let what = match en { Some(e) => format!("{}::{}", e, ctor), None => ctor.clone() };
+                                return Err(terr(l, c, "match_arms", format!("arm {} does not belong to {}", what, tn(&ty)),
+                                    match cen { Some(e) => format!("write {}::Variant", e), None => String::new() }));
+                            }
+                            if subs.len() != fs.len() {
+                                return Err(terr(l, c, "match_arity",
+                                    format!("{} has {} field(s), the pattern binds {}", ctor, fs.len(), subs.len()),
+                                    "bind every field, in declaration order (`Ok(())` for a unit result)"));
+                            }
+                        }
+                        _ => return Err(terr(l, c, "type_mismatch",
+                            format!("a literal pattern cannot match {} of type {}", label(&v), tn(&ty)), "")),
+                    }
+                }
+                let mut out = Vec::new();
+                for (cen, ctor, fs) in ctors {
+                    // a field keeps its source name when the rows that reach this case and bind it all use that
+                    // name and no row that reaches it without binding the field refers to the name (so no other
+                    // arm body sees it); otherwise it gets a fresh name and the arms bind their own names with lets
+                    let mut names = Vec::new();
+                    for j in 0..fs.len() {
+                        let mut named: Option<String> = None;
+                        let mut ok = true;
+                        let mut others = Vec::new();
+                        for r in &rows {
+                            match test_of(r).map(|i| &r.tests[i].2) {
+                                Some(SubPat::Variant(_, c, _)) if *c != ctor => {}
+                                Some(SubPat::Variant(_, _, subs)) => match (&subs[j], &named) {
+                                    (SubPat::Bind(n), None) => named = Some(n.clone()),
+                                    (SubPat::Bind(n), Some(m)) if n == m => {}
+                                    (SubPat::Bind(_), Some(_)) => ok = false,
+                                    _ => others.push(r.arm),
+                                },
+                                _ => others.push(r.arm),
+                            }
+                        }
+                        if let Some(n) = &named {
+                            ok &= others.iter().all(|k| !uses[*k].contains(n));
+                        }
+                        names.push(match named {
+                            Some(n) if ok => n,
+                            _ => {
+                                self.pat_tmp += 1;
+                                format!("pruv_pat{}", self.pat_tmp)
+                            }
+                        });
+                    }
+                    let mut spec = Vec::new();
+                    for r in &rows {
+                        match test_of(r) {
+                            None => spec.push(r.clone()),
+                            Some(i) => {
+                                let SubPat::Variant(_, c, subs) = &r.tests[i].2 else { unreachable!("checked above") };
+                                if *c != ctor {
+                                    continue;
+                                }
+                                let mut r2 = r.clone();
+                                r2.tests.remove(i);
+                                for (j, s) in subs.iter().enumerate() {
+                                    r2.add(names[j].clone(), fs[j].clone(), s.clone());
+                                }
+                                spec.push(r2);
+                            }
+                        }
+                    }
+                    path.push(match &cen { Some(e) => format!("{}::{}", e, ctor), None => ctor.clone() });
+                    let child = self.pat_compile(spec, used, budget, path, arms, uses, line, col)?;
+                    path.pop();
+                    out.push((cen, ctor, names, child));
+                }
+                Ok(PNode::Match(v, out))
+            }
+            SubPat::Bool(_) | SubPat::Int(_) => {
+                let is_bool = ty == boolt();
+                let int = ty.int_width().is_some();
+                if !is_bool && !int {
+                    return Err(terr(al, ac, "type_mismatch",
+                        format!("a literal pattern cannot match {} of type {}", label(&v), tn(&ty)), ""));
+                }
+                // the literal of the first row decides the split; a pattern of the other kind is a type error
+                let key = pat.clone();
+                let (mut yes, mut no) = (Vec::new(), Vec::new());
+                for r in &rows {
+                    let Some(i) = test_of(r) else {
+                        yes.push(r.clone());
+                        no.push(r.clone());
+                        continue;
+                    };
+                    let p = &r.tests[i].2;
+                    let ok_kind = if is_bool { matches!(p, SubPat::Bool(_)) } else { matches!(p, SubPat::Int(_)) };
+                    if !ok_kind {
+                        let (l, c) = (arms[r.arm].0, arms[r.arm].1);
+                        // a constructor on a scalar is a match on a non-enum (as for the first arm); a literal of the
+                        // other kind is a type mismatch
+                        let code = if matches!(p, SubPat::Variant(..)) { "match_type" } else { "type_mismatch" };
+                        return Err(terr(l, c, code,
+                            format!("this pattern cannot match {} of type {}", label(&v), tn(&ty)), ""));
+                    }
+                    let same = match (p, &key) {
+                        (SubPat::Int(a), SubPat::Int(b)) => a.parse::<i128>().ok() == b.parse::<i128>().ok(),
+                        _ => *p == key,
+                    };
+                    let mut r2 = r.clone();
+                    r2.tests.remove(i);
+                    if same {
+                        yes.push(r2);
+                    } else if is_bool {
+                        no.push(r2); // the other bool literal
+                    } else {
+                        no.push(r.clone());
+                    }
+                }
+                let lit = match &key { SubPat::Int(x) => x.clone(), SubPat::Bool(b) => b.to_string(), _ => unreachable!() };
+                path.push(format!("{} == {}", label(&v), lit));
+                let a = self.pat_compile(yes, used, budget, path, arms, uses, line, col)?;
+                path.pop();
+                path.push(format!("{} != {}", label(&v), lit));
+                let b = self.pat_compile(no, used, budget, path, arms, uses, line, col)?;
+                path.pop();
+                Ok(PNode::Test(v, key, Box::new(a), Box::new(b)))
+            }
+            SubPat::Bind(_) | SubPat::Wild => unreachable!("PRow::add keeps no binder tests"),
+        }
+    }
+
+    /// P9a-6: a `match` statement with `_`, literal or nested patterns, lowered by `lower_patterns`. A tree that is a
+    /// single leaf (a lone `_` arm) is wrapped in `if true { .. }` so its lets stay in the arm.
+    fn pattern_match(&mut self, m: &Match, scope: &Scope) -> Res<Stmt> {
+        let mut probe = m.scrutinee.clone();
+        let t = self.match_scrutinee(&mut probe, scope)?;
+        let arms: Vec<_> = m.arms.iter().map(|a| (a.line, a.col, a.enum_name.clone(), a.ctor.clone(), a.binders.clone())).collect();
+        let uses: Vec<HashSet<String>> = m.arms.iter().map(|a| {
+            let mut u = HashSet::new();
+            pat_names_stmts(&a.body, &mut u);
+            a.pats.iter().flatten().for_each(|p| pat_tuple_names(p, &mut u));
+            u
+        }).collect();
+        let node = self.lower_patterns(&arms, &uses, place_root(&m.scrutinee).is_none(), &t, m.line, m.col)?;
+        let bodies: Vec<Vec<Stmt>> = m.arms.iter().map(|a| a.body.clone()).collect();
+        let tuples: Vec<Vec<(String, TuplePat)>> = m.arms.iter().map(|a| a.binders.iter().zip(a.pats.iter())
+            .filter_map(|(b, p)| p.clone().map(|p| (b.clone(), p))).collect()).collect();
+        let mut out = pat_stmts(&node, &m.scrutinee, &bodies, &tuples, m.line, m.col)?;
+        if let PNode::Leaf(..) = node {
+            if place_root(&m.scrutinee).is_none() {
+                // the scrutinee is still evaluated, as in Rust
+                self.pat_tmp += 1;
+                out.insert(0, Stmt::Let(Let { borrowed: false, line: m.line, col: m.col, name: format!("pruv_pat{}", self.pat_tmp),
+                    mutable: false, ty: t.to_key(), value: m.scrutinee.clone(), refine: None }));
+            }
+            return Ok(Stmt::If(If { line: m.line, col: m.col,
+                cond: Expr::BoolLit(BoolLit { line: m.line, col: m.col, value: true, ty: None }), then: out, els: Vec::new() }));
+        }
+        let Some(st) = out.pop() else { unreachable!("a lowered match") };
+        Ok(st)
     }
 
     fn match_scrutinee(&mut self, e: &mut Expr, scope: &Scope) -> Res<GType> {
@@ -6577,6 +6863,48 @@ impl Checker {
         if c {
             return Err(terr(line, col, "value_branch_context", "a value `match` is not allowed in a contract",
                 "write the cases with `is` tests and `==>`"));
+        }
+        let varms = crate::ast::ValueMatch::arms(call);
+        if varms.is_empty() {
+            // P9a-6: a value match needs an arm to produce its value
+            return Err(terr(line, col, "match_arms", "a value `match` has no arms", "write one arm for every case"));
+        }
+        if Self::has_ext_pattern(varms.iter().map(|a| (a.ctor.as_str(), a.binders.as_slice()))) {
+            // P9a-6: lowered to nested value matches and value ifs, which are then checked as usual
+            let mut probe = call.args[0].clone();
+            let t = self.match_scrutinee(&mut probe, scope)?;
+            let arms: Vec<_> = varms.iter().zip(call.args[1..].iter())
+                .map(|(a, v)| (v.line(), v.col(), a.enum_name.clone(), a.ctor.clone(), a.binders.clone())).collect();
+            let uses: Vec<HashSet<String>> = call.args[1..].iter().map(|v| { let mut u = HashSet::new(); pat_names_expr(v, &mut u); u }).collect();
+            // binders are renamed into the arm values below, so check them against the scope here, as a plain match does
+            for (l, c, _, _, bs) in &arms {
+                let mut names = HashSet::new();
+                bs.iter().for_each(|b| pat_slot_names(b, &mut names));
+                if let Some(b) = names.iter().find(|b| scope.contains_key(*b)) {
+                    return Err(terr(*l, *c, "shadow", format!("{} is already defined", b), "use a new name"));
+                }
+            }
+            let node = self.lower_patterns(&arms, &uses, true, &t, line, col)?;
+            if let PNode::Leaf(..) = node {
+                // a lone `_` arm over a scalar: there is no case to test, and the scrutinee must still be evaluated
+                return Err(terr(line, col, "match_type", format!("a value `match` needs an Option, Result or enum, got {}", tn(&t)),
+                    "use the value directly"));
+            }
+            *e = pat_value(&node, &call.args[0], &call.args[1..], line, col);
+            return match e {
+                Expr::Call(x) if crate::ast::ValueMatch::matches(x) => self.value_match(e, want, scope, c),
+                Expr::Call(x) if ValueIf::matches(x) => self.value_if(e, want, scope, c),
+                _ => match want {
+                    Some(w) => {
+                        let w = w.clone();
+                        self.static_lit = false;
+                        self.want_alloc(e, &w);
+                        self.expect(e, &w, scope, c, None)?;
+                        Ok(w)
+                    }
+                    None => self.expr(e, scope, c),
+                },
+            };
         }
         self.static_lit = false;
         let mut m = crate::ast::ValueMatch::as_match(call);
@@ -8859,6 +9187,226 @@ fn resolve_tuple_lit(e: &mut Expr, ty: &GType) {
     lit.name = ty.name.clone();
     for (f, k) in lit.fields.iter_mut().zip(comps.iter()) {
         resolve_tuple_lit(&mut f.value, &GType::from_key(k));
+    }
+}
+
+/// P9a-6: one arm while a pattern match is lowered: the tests still open on named values (`""` is the scrutinee)
+/// and the names it binds (`(name, value, type)`).
+#[derive(Clone)]
+struct PRow {
+    tests: Vec<(String, GType, crate::ast::SubPat)>,
+    binds: Vec<(String, String, GType)>,
+    arm: usize,
+}
+
+impl PRow {
+    fn add(&mut self, var: String, ty: GType, p: crate::ast::SubPat) {
+        use crate::ast::SubPat;
+        match p {
+            SubPat::Wild => {}
+            SubPat::Bind(n) => self.binds.push((n, var, ty)),
+            p => self.tests.push((var, ty, p)),
+        }
+    }
+}
+
+/// P9a-6: the decision tree of a lowered pattern match.
+enum PNode {
+    /// arm index and its bindings `(name, value, type)`
+    Leaf(usize, Vec<(String, String, GType)>),
+    /// a plain match on a named value (`""`: the scrutinee) with every constructor once: (enum, ctor, binders, tree)
+    Match(String, Vec<(Option<String>, String, Vec<String>, PNode)>),
+    /// `if v == lit { a } else { b }` (`if v { a } else { b }` for `bool`; `#false` swaps the branches)
+    Test(String, crate::ast::SubPat, Box<PNode>, Box<PNode>),
+}
+
+fn pat_var(line: i64, col: i64, name: &str) -> Expr {
+    Expr::Var(Var { line, col, name: name.to_string(), ty: None })
+}
+
+/// P9a-6: every name an arm body reads, moves, assigns or declares (a field keeps its source name in a decision-tree
+/// case only when no arm that reaches the case without binding the field mentions that name). Over-approximating is
+/// safe: a mentioned name only makes the field fresh.
+fn pat_names_stmts(stmts: &[Stmt], out: &mut HashSet<String>) {
+    crate::foreign_shim::walk_stmts(stmts, &mut |n| pat_names_node(n, out));
+    pat_targets(stmts, out);
+}
+
+fn pat_names_expr(e: &Expr, out: &mut HashSet<String>) {
+    crate::foreign_shim::walk_expr(e, &mut |n| pat_names_node(n, out));
+}
+
+fn pat_names_node(n: crate::foreign_shim::Node<'_>, out: &mut HashSet<String>) {
+    use crate::foreign_shim::Node;
+    match n {
+        Node::Expr(Expr::Var(x)) => { out.insert(x.name.clone()); }
+        Node::Expr(Expr::Move(x)) => { out.insert(x.name.clone()); }
+        Node::Expr(Expr::Quant(x)) => { out.insert(x.var.clone()); }
+        // a value match spells its arm patterns (binder names) in the call name
+        Node::Expr(Expr::Call(c)) if ValueMatch::matches(c) => {
+            out.extend(c.name.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')).filter(|s| !s.is_empty()).map(String::from));
+        }
+        Node::Let(l) => { out.insert(l.name.clone()); }
+        Node::ForMap(f) => { out.insert(f.key.clone()); out.insert(f.val.clone()); }
+        _ => {}
+    }
+}
+
+/// The names a match sub-pattern slot binds (nested variants included).
+fn pat_slot_names(slot: &str, out: &mut HashSet<String>) {
+    fn go(p: &crate::ast::SubPat, out: &mut HashSet<String>) {
+        match p {
+            crate::ast::SubPat::Bind(n) => { out.insert(n.clone()); }
+            crate::ast::SubPat::Variant(_, _, subs) => subs.iter().for_each(|s| go(s, out)),
+            _ => {}
+        }
+    }
+    go(&crate::ast::SubPat::decode(slot), out);
+}
+
+fn pat_tuple_names(p: &TuplePat, out: &mut HashSet<String>) {
+    match p {
+        TuplePat::Bind(_, _, n, _) => { out.insert(n.clone()); }
+        TuplePat::Tuple(_, _, ps) => ps.iter().for_each(|q| pat_tuple_names(q, out)),
+        TuplePat::Wild => {}
+    }
+}
+
+/// Assignment targets and the names nested matches declare (binders, tuple patterns) or use in an `else` block,
+/// which the shared walker does not report.
+fn pat_targets(stmts: &[Stmt], out: &mut HashSet<String>) {
+    for s in stmts {
+        match s {
+            Stmt::Assign(a) => { out.insert(a.name.clone()); }
+            Stmt::FieldAssign(a) => { out.insert(a.name.clone()); }
+            Stmt::IndexAssign(a) => { out.insert(a.name.clone()); }
+            Stmt::If(x) => { pat_targets(&x.then, out); pat_targets(&x.els, out); }
+            Stmt::While(x) => pat_targets(&x.body, out),
+            Stmt::ForMap(x) => pat_targets(&x.body, out),
+            Stmt::Match(m) => {
+                for a in &m.arms {
+                    a.binders.iter().for_each(|b| pat_slot_names(b, out));
+                    a.pats.iter().flatten().for_each(|p| pat_tuple_names(p, out));
+                    pat_targets(&a.body, out);
+                }
+                pat_names_stmts(&m.els, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn pat_cond(line: i64, col: i64, v: &str, lit: &crate::ast::SubPat) -> (Expr, bool) {
+    use crate::ast::SubPat;
+    match lit {
+        SubPat::Bool(b) => (pat_var(line, col, v), !*b),
+        SubPat::Int(x) => {
+            // a signed literal, as the parser folds `-N` (so `-9223372036854775808` stays in range)
+            let lit = Expr::IntLit(IntLit { line, col, value: x.clone(), ty: None, kind: Default::default() });
+            (Expr::Binary(Binary { line, col, op: "==".into(), left: Box::new(pat_var(line, col, v)), right: Box::new(lit), ty: None }), false)
+        }
+        _ => unreachable!("a literal test"),
+    }
+}
+
+/// P9a-6: the statements of a lowered pattern match; `bodies[k]` is arm k's body (its P8 tuple lets come from
+/// `tuples[k]`).
+fn pat_stmts(node: &PNode, scrut: &Expr, bodies: &[Vec<Stmt>], tuples: &[Vec<(String, TuplePat)>], line: i64, col: i64)
+    -> Result<Vec<Stmt>, PruvError>
+{
+    Ok(match node {
+        PNode::Leaf(k, binds) => {
+            let mut out = Vec::new();
+            for (n, v, ty) in binds {
+                if n != v {
+                    out.push(Stmt::Let(Let { borrowed: false, line, col, name: n.clone(), mutable: false, ty: ty.to_key(),
+                        value: pat_var(line, col, v), refine: None }));
+                }
+                if let Some((_, TuplePat::Tuple(l, c, ps))) = tuples[*k].iter().find(|(t, _)| t == n) {
+                    lower_arm_pat(n, ps, ty, *l, *c, &mut out)?;
+                }
+            }
+            out.extend(bodies[*k].iter().cloned());
+            out
+        }
+        PNode::Match(v, arms) => {
+            let mut ms = Vec::new();
+            for (en, ctor, names, child) in arms {
+                ms.push(MatchArm { line, col, enum_name: en.clone(), ctor: ctor.clone(), binders: names.clone(),
+                    body: pat_stmts(child, scrut, bodies, tuples, line, col)?, pats: Vec::new(), pat_lets: 0 });
+            }
+            let scrutinee = if v.is_empty() { scrut.clone() } else { pat_var(line, col, v) };
+            vec![Stmt::Match(Match { line, col, scrutinee, arms: ms, form: MatchForm::Match, els: Vec::new() })]
+        }
+        PNode::Test(v, lit, a, b) => {
+            let (cond, swap) = pat_cond(line, col, v, lit);
+            let (a, b) = (pat_stmts(a, scrut, bodies, tuples, line, col)?, pat_stmts(b, scrut, bodies, tuples, line, col)?);
+            let (then, els) = if swap { (b, a) } else { (a, b) };
+            vec![Stmt::If(If { line, col, cond, then, els })]
+        }
+    })
+}
+
+/// P9a-6: the value of a lowered value `match`: nested value matches and value `if`s; a leaf is its arm value
+/// with each renamed binder replaced by the value it names.
+fn pat_value(node: &PNode, scrut: &Expr, vals: &[Expr], line: i64, col: i64) -> Expr {
+    match node {
+        PNode::Leaf(k, binds) => {
+            let mut e = vals[*k].clone();
+            for (n, v, _) in binds {
+                if n != v {
+                    rename_var(&mut e, n, v);
+                }
+            }
+            e
+        }
+        PNode::Match(v, arms) => {
+            let scrutinee = if v.is_empty() { scrut.clone() } else { pat_var(line, col, v) };
+            let arms = arms.iter().map(|(en, ctor, names, child)| (crate::ast::ValueArm {
+                enum_name: en.clone(), ctor: ctor.clone(), binders: names.clone() }, pat_value(child, scrut, vals, line, col))).collect();
+            crate::ast::ValueMatch::expr(line, col, scrutinee, arms)
+        }
+        PNode::Test(v, lit, a, b) => {
+            let (cond, swap) = pat_cond(line, col, v, lit);
+            let (a, b) = (pat_value(a, scrut, vals, line, col), pat_value(b, scrut, vals, line, col));
+            let (then, els) = if swap { (b, a) } else { (a, b) };
+            ValueIf::expr(line, col, cond, then, els)
+        }
+    }
+}
+
+/// P9a-6: replaces the variable `from` by `to` in an expression (binder names are never shadowed: type/shadow).
+fn rename_var(e: &mut Expr, from: &str, to: &str) {
+    match e {
+        Expr::Var(x) if x.name == from => x.name = to.to_string(),
+        Expr::Move(x) if x.name == from => x.name = to.to_string(),
+        _ => {}
+    }
+    match e {
+        Expr::InoutArg(x) => rename_var(&mut x.expr, from, to),
+        Expr::Unary(x) => rename_var(&mut x.operand, from, to),
+        Expr::Binary(x) => {
+            rename_var(&mut x.left, from, to);
+            rename_var(&mut x.right, from, to);
+        }
+        Expr::Index(x) => {
+            rename_var(&mut x.array, from, to);
+            rename_var(&mut x.index, from, to);
+        }
+        Expr::Ctor(x) => x.arg.iter_mut().for_each(|a| rename_var(a, from, to)),
+        Expr::Quant(x) => {
+            for k in [&mut x.lo, &mut x.hi, &mut x.body] {
+                rename_var(k, from, to);
+            }
+            x.triggers.iter_mut().for_each(|a| rename_var(a, from, to));
+        }
+        Expr::Call(x) => x.args.iter_mut().for_each(|a| rename_var(a, from, to)),
+        Expr::StructLit(x) => x.fields.iter_mut().for_each(|f| rename_var(&mut f.value, from, to)),
+        Expr::EnumCtor(x) => x.args.iter_mut().for_each(|a| rename_var(a, from, to)),
+        Expr::FieldAccess(x) => rename_var(&mut x.base, from, to),
+        Expr::IsVariant(x) => rename_var(&mut x.value, from, to),
+        Expr::VariantField(x) => rename_var(&mut x.value, from, to),
+        _ => {}
     }
 }
 

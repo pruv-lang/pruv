@@ -1,0 +1,6 @@
+// P9a-6: the ensures is wrong on one arm only: `Some(1)` returns 1, not 0.
+fn f(o: Option<i64>) -> i64
+  ensures result == 0 || result == 2
+{
+  return match o { Some(0) => 0, Some(1) => 1, Some(_) => 2, None => 0 };
+}

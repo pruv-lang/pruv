@@ -1,0 +1,5 @@
+// spec: R-6u-7 reject
+// `Some(5)` after `Some(_)` can never match.
+fn f(o: Option<i64>) -> i64 {
+  return match o { Some(_) => 1, Some(5) => 50, None => 0 };
+}

@@ -1,0 +1,4 @@
+// P9a-6: a nested variant pattern on an i64 payload.
+fn f(o: Option<i64>) -> i64 {
+  return match o { Some(Some(x)) => 1, _ => 0 };
+}

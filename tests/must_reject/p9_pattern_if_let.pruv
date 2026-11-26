@@ -1,0 +1,5 @@
+// P9a-6: nested and literal patterns are not accepted in `if let` yet (parity row P9a-7).
+fn f(o: Option<i64>) -> i64 {
+  if let Some(0) = o { return 1; }
+  return 0;
+}

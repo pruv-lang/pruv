@@ -1,0 +1,8 @@
+// P9a-6: `Some(0)` after `Some(x)` can never match (Rust: unreachable pattern).
+fn f(o: Option<i64>) -> i64 {
+  match o {
+    Some(x) => { return x; }
+    Some(0) => { return 7; }
+    None => { return 0; }
+  }
+}
