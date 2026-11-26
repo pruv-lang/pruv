@@ -418,6 +418,16 @@ impl Ctx {
         Ok(())
     }
 
+    /// The next item of the same step: an empty log and no answer, prev request or output (blob and ck stay).
+    pub fn next_item(&mut self) {
+        self.pos = 0;
+        self.lg = Vec::new();
+        self.ent = 0..0;
+        self.prev = None;
+        self.out = None;
+        self.ncan = 0;
+    }
+
     /// Remember the request recorded in prev (an await packet).
     pub fn with_prev(&mut self, prev: &[i64], exact: bool) {
         let ns = nsec(prev);

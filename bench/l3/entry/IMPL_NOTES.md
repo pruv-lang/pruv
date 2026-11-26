@@ -143,8 +143,8 @@ Packet limit 16,777,216 words; larger input/log -> InputTooLarge. Session record
 
 ### Ctx / observation API (state.pruv)
 `ctx_new(prev-derived blob, log, ck)`, `obs(cx, code, aux, pool, rec, tab, ...)` (next log entry or stall), accessors
-`ctx_accounts, ctx_account_at, ctx_ambient, ctx_homedir, ctx_cwd, ctx_realpath, ctx_stat`, `ent_r/ent_p/ent_s` (completion record/pool/state),
-`set_ck/get_ck` (8 checkpoint words), `set_done`, `too_big`, `fail` (InvalidPacket), `finish(cx, await_seq, done_seq)`.
+`accounts, account_at, ambient, homedir, cwd, realpath, stat` (inout cx, Result<(), Halt>), `ent_r/ent_p/ent_s` (completion record/pool/state),
+`put_ck/get_ck` (8 checkpoint words), `put_done`, `stop_too_big`, `stop_fail`, by-value `fail` for entry_api (InvalidPacket), `finish(cx, await_seq, done_seq)`.
 Done packet seq: begin 0 (done at seq 0 is accepted by the host), step = prev seq; await seq = last+1.
 
 ### Stubs (ops 1, 5, 6; all return boundary InternalInvariant, op echoed)
