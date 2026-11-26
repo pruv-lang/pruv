@@ -1,0 +1,5 @@
+// spec: R-6x-1 reject
+// A specialized impl (`impl<T> S<i64>`): the type arguments must be the impl's parameters, in order.
+struct S<T> { v: T }
+impl<T> S<i64> { fn z(self) -> i64 { return 0; } }
+fn f(k: i64) -> i64 { return k; }

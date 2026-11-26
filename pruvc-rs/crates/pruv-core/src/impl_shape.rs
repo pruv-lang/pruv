@@ -51,8 +51,20 @@ pub(crate) fn impl_shape(text: String, prog: &Program) -> String {
     if prog.methods.is_empty() {
         return text;
     }
+    // P9b-3 audit: two specializations of a method with its own type parameters can land on one owner
+    // (`b.with::<bool>(..)` and `b.with::<i64>(..)` on `Box2<i64>`); Rust has no overloading, so each of them prints
+    // under its unique function stem
+    let mut seen: HashMap<(&str, &str), usize> = HashMap::new();
+    for m in &prog.methods {
+        *seen.entry((m.owner.as_str(), m.name.as_str())).or_insert(0) += 1;
+    }
+    let shown = |m: &crate::ast::MethodItem| {
+        if seen[&(m.owner.as_str(), m.name.as_str())] > 1 { m.func.clone() } else { m.name.clone() }
+    };
     let mut sh = Shape {
-        funcs: prog.methods.iter().map(|m| (m.func.clone(), (m.owner.clone(), m.name.clone(), m.recv))).collect(),
+        // an empty owner (a generic impl function whose owner application no function builds, mono.rs) stays free
+        funcs: prog.methods.iter().filter(|m| !m.owner.is_empty())
+            .map(|m| (m.func.clone(), (m.owner.clone(), shown(m), m.recv))).collect(),
         free: HashSet::new(),
     };
     for l in text.split('\n') {
@@ -457,7 +469,7 @@ mod tests {
         p.methods = methods
             .iter()
             .map(|&(owner, name, func, recv)| MethodItem {
-                line: 1, col: 1, owner: owner.into(), name: name.into(), func: func.into(), recv, is_pub: false,
+                line: 1, col: 1, owner: owner.into(), name: name.into(), func: func.into(), recv, is_pub: false, impl_params: 0, shown: owner.into(),
             })
             .collect();
         p

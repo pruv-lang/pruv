@@ -2922,6 +2922,10 @@ runtime|runtime/p9_rt_pattern_wild [default]	2 cases: exit 2	llvm=b540452601fb	r
 runtime|runtime/p9b2_rt_panic_name [--no-verify]	2 cases: exit 2	llvm=dc5cd373b273	rust=d27903444d92
 runtime|runtime/p9b2_rt_trait_names [--no-verify]	2 cases: exit 2	llvm=db6d2d07e4f5	rust=0af904952aba
 runtime|runtime/p9b2_rt_trait_names [default]	2 cases: exit 2	llvm=77748a2348d1	rust=9c07b556da83
+runtime|runtime/p9b3_rt_generic [--no-verify]	2 cases: exit 2	llvm=83980ad6c0ba	rust=56fb98519590
+runtime|runtime/p9b3_rt_generic [default]	2 cases: exit 2	llvm=b1127a6c662e	rust=e9c79ae9255b
+runtime|runtime/p9b3_rt_panic_free [--no-verify]	2 cases: exit 2	llvm=38bcf757be62	rust=da4fbfda90ff
+runtime|runtime/p9b3_rt_panic_name [--no-verify]	2 cases: exit 2	llvm=a4160df086b8	rust=8eeb15a13709
 runtime|runtime/p9b_rt_counter [--no-verify]	2 cases: exit 2	llvm=dfd26bab038f	rust=890d912ac185
 runtime|runtime/p9b_rt_counter [default]	2 cases: exit 2	llvm=9e38a8400f08	rust=be2837b729d8
 runtime|runtime/p9b_rt_enum_field [--no-verify]	2 cases: exit 2	llvm=be9a721693ae	rust=cf81223817e7

@@ -6,7 +6,7 @@
 
 use crate::ast::*;
 use crate::diagnostic::PruvError;
-use crate::gtype::GType;
+use crate::gtype::{bind_args, decl_owner, fn_owner, substitute, tuple_components, GType};
 use crate::pyrepr::repr_str;
 use std::collections::HashMap;
 
@@ -22,12 +22,15 @@ type Scopes = Vec<HashMap<String, Option<String>>>;
 struct Resolver<'a> {
     /// (owner, method name) -> (function, receiver, `pub`)
     methods: HashMap<(String, String), (String, Receiver, bool)>,
-    /// struct name -> field name -> field type key (non-generic structs only)
+    /// struct name -> field name -> field type key (P9b-3: also of generic structs, written with the declaration's
+    /// parameters and substituted by the receiver's type arguments)
     fields: HashMap<String, HashMap<String, String>>,
+    /// P9b-3: number of type parameters of each struct or enum
+    arity: HashMap<String, usize>,
+    /// P9b-3: (number of type parameters, result type key) of each function
     types: &'a HashMap<String, bool>,
-    /// P9b-2: return type key of each non-generic function (types call results and chains `C::new(k).get()`)
-    fn_ret: HashMap<String, String>,
-    /// P9b-2: (enum, variant) -> payload field type keys (non-generic enums only; types match binders)
+    fn_ret: HashMap<String, (usize, String)>,
+    /// P9b-2: (enum, variant) -> payload field type keys (types match binders; P9b-3: also of generic enums)
     variant_fields: HashMap<(String, String), Vec<String>>,
     /// P9b-2: module of the function being resolved (`crate::a` of `crate::a::f`; empty in a single-file program)
     cur_mod: String,
@@ -47,38 +50,37 @@ pub fn resolve(prog: &mut Program) -> Result<(), PruvError> {
     let mut fields: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut variants: HashMap<String, Vec<String>> = HashMap::new();
     let mut variant_fields: HashMap<(String, String), Vec<String>> = HashMap::new();
+    let mut arity: HashMap<String, usize> = HashMap::new();
     for d in &prog.types {
         match d {
             TypeDecl::Struct(s) => {
                 types.insert(s.name.clone(), !s.tparams.is_empty());
-                if s.tparams.is_empty() {
-                    fields.insert(s.name.clone(), s.fields.iter().map(|f| (f.name.clone(), f.ty.clone())).collect());
-                }
+                arity.insert(s.name.clone(), s.tparams.len());
+                fields.insert(s.name.clone(), s.fields.iter().map(|f| (f.name.clone(), f.ty.clone())).collect());
             }
             TypeDecl::Enum(e) => {
                 types.insert(e.name.clone(), !e.tparams.is_empty());
+                arity.insert(e.name.clone(), e.tparams.len());
                 variants.insert(e.name.clone(), e.variants.iter().map(|v| v.name.clone()).collect());
-                if e.tparams.is_empty() {
-                    for v in &e.variants {
-                        variant_fields.insert((e.name.clone(), v.name.clone()), v.fields.iter().map(|f| f.ty.clone()).collect());
-                    }
+                for v in &e.variants {
+                    variant_fields.insert((e.name.clone(), v.name.clone()), v.fields.iter().map(|f| f.ty.clone()).collect());
                 }
             }
         }
     }
-    for (owner, line, col) in &prog.impls {
-        match types.get(owner) {
-            None => {
-                return Err(terr(*line, *col, "impl_type",
-                    format!("impl of {}, which is not a struct or enum of this program", repr_str(owner)),
-                    "write the impl block for a struct or enum declared in this file"));
-            }
-            Some(true) => {
-                return Err(terr(*line, *col, "impl_type",
-                    format!("impl blocks of the generic type {} are not available yet (parity row P9b-3)", repr_str(owner)),
-                    "write free generic functions for this type"));
-            }
-            Some(false) => {}
+    for (owner, line, col, n) in &prog.impls {
+        if !types.contains_key(owner) {
+            return Err(terr(*line, *col, "impl_type",
+                format!("impl of {}, which is not a struct or enum of this program", repr_str(owner)),
+                "write the impl block for a struct or enum declared in this file"));
+        }
+        // P9b-3: a generic impl block names every parameter of its type (`impl<T> Pair<T>` of `Pair<A, B>` is
+        // wrong), also when the block is empty
+        let want = arity.get(owner).copied().unwrap_or(0);
+        if *n != want {
+            return Err(terr(*line, *col, "impl_type",
+                format!("the impl block of {} must name its {} type parameter(s)", repr_str(owner), want),
+                "write `impl<T, ..> Name<T, ..> { .. }` with one parameter per type parameter of Name"));
         }
     }
     let mut methods: HashMap<(String, String), (String, Receiver, bool)> = HashMap::new();
@@ -94,9 +96,9 @@ pub fn resolve(prog: &mut Program) -> Result<(), PruvError> {
                 "rename one of them"));
         }
     }
-    let fn_ret: HashMap<String, String> =
-        prog.functions.iter().filter(|f| f.tparams.is_empty()).map(|f| (f.name.clone(), f.ret.clone())).collect();
-    let mut r = Resolver { methods, fields, types: &types, fn_ret, variant_fields, cur_mod: String::new() };
+    let fn_ret: HashMap<String, (usize, String)> =
+        prog.functions.iter().map(|f| (f.name.clone(), (f.tparams.len(), f.ret.clone()))).collect();
+    let mut r = Resolver { methods, fields, arity, types: &types, fn_ret, variant_fields, cur_mod: String::new() };
     for f in prog.functions.iter_mut() {
         r.cur_mod = module_of(&f.name).to_string();
         let mut scopes: Scopes = vec![f.params.iter().map(|p| (p.name.clone(), Some(p.ty.clone()))).collect()];
@@ -188,12 +190,11 @@ impl Resolver<'_> {
                 self.expr(&mut m.scrutinee, scopes)?;
                 let scrut = self.value_type(&m.scrutinee, scopes);
                 for arm in m.arms.iter_mut() {
-                    // P9b-2: a binder of a variant of a non-generic enum has the payload field's type
-                    let payload = scrut.as_ref().and_then(|t| self.variant_fields.get(&(t.clone(), arm.ctor.clone())));
-                    let plain = arm.pats.iter().all(Option::is_none);
-                    scopes.push(arm.binders.iter().enumerate()
-                        .map(|(k, b)| (b.clone(), payload.filter(|p| plain && p.len() == arm.binders.len()).map(|p| p[k].clone())))
-                        .collect());
+                    // P9b-2: a binder of a variant has the payload field's type; P9b-3: also of a generic enum, of
+                    // `Option`/`Result`, and the names of nested and tuple patterns
+                    let mut sc = HashMap::new();
+                    self.bind_arm(scrut.as_deref(), &arm.ctor, &arm.binders, &arm.pats, &mut sc);
+                    scopes.push(sc);
                     self.block(&mut arm.body, scopes)?;
                     scopes.pop();
                 }
@@ -209,6 +210,74 @@ impl Resolver<'_> {
         Ok(())
     }
 
+    /// P9b-3: the payload field type keys of variant `ctor` of a value of type `scrut` (a user enum, also generic,
+    /// `Option` or `Result`).
+    fn payload(&self, scrut: &str, ctor: &str) -> Option<Vec<String>> {
+        let g = GType::from_key(scrut);
+        match (g.name.as_str(), ctor) {
+            ("option", "Some") => return Some(vec![g.args.first().map_or_else(|| "i64".to_string(), GType::to_key)]),
+            ("result", "Ok") => return Some(vec![g.args.first().map_or_else(|| "i64".to_string(), GType::to_key)]),
+            ("result", "Err") => return Some(vec![g.args.get(1).map_or_else(|| "i64".to_string(), GType::to_key)]),
+            ("option" | "result", _) => return None,
+            _ => {}
+        }
+        let fs = self.variant_fields.get(&(g.name.clone(), ctor.to_string()))?;
+        Some(fs.iter().map(|f| self.inst(&g, f)).collect())
+    }
+
+    /// P9b-3: the type key `k`, written with the parameters of declaration `g.name`, at the arguments of `g`.
+    fn inst(&self, g: &GType, k: &str) -> String {
+        if g.args.is_empty() {
+            return k.to_string();
+        }
+        match bind_args(&decl_owner(&g.name), self.arity.get(&g.name).copied().unwrap_or(0), &g.args) {
+            Ok(m) => substitute(&GType::from_key(k), &m).to_key(),
+            Err(_) => k.to_string(),
+        }
+    }
+
+    /// P9b-3: types the binder slots of one arm (`ctor` of a value of type `scrut`): plain names, nested variant
+    /// patterns (`SubPat` slots) and tuple patterns (`pats`, bound through their `pruv_tup_d<N>` temporary).
+    fn bind_arm(&self, scrut: Option<&str>, ctor: &str, slots: &[String], pats: &[Option<TuplePat>], sc: &mut HashMap<String, Option<String>>) {
+        let payload = scrut.and_then(|t| self.payload(t, ctor)).filter(|p| p.len() == slots.len());
+        for (k, slot) in slots.iter().enumerate() {
+            let ty = payload.as_ref().map(|p| p[k].clone());
+            self.bind_sub(&SubPat::decode(slot), ty.clone(), sc);
+            if let Some(Some(TuplePat::Tuple(_, _, ps))) = pats.get(k) {
+                self.bind_tuple(ps, ty, sc);
+            }
+        }
+    }
+
+    fn bind_sub(&self, p: &SubPat, ty: Option<String>, sc: &mut HashMap<String, Option<String>>) {
+        match p {
+            SubPat::Bind(n) => {
+                sc.insert(n.clone(), ty);
+            }
+            SubPat::Variant(_, ctor, subs) => {
+                let payload = ty.and_then(|t| self.payload(&t, ctor)).filter(|p| p.len() == subs.len());
+                for (k, q) in subs.iter().enumerate() {
+                    self.bind_sub(q, payload.as_ref().map(|p| p[k].clone()), sc);
+                }
+            }
+            SubPat::Wild | SubPat::Int(_) | SubPat::Bool(_) => {}
+        }
+    }
+
+    fn bind_tuple(&self, ps: &[TuplePat], ty: Option<String>, sc: &mut HashMap<String, Option<String>>) {
+        let comps = ty.and_then(|t| tuple_components(&GType::from_key(&t).name)).filter(|c| c.len() == ps.len());
+        for (k, q) in ps.iter().enumerate() {
+            let t = comps.as_ref().map(|c| c[k].clone());
+            match q {
+                TuplePat::Wild => {}
+                TuplePat::Bind(_, _, n, _) => {
+                    sc.insert(n.clone(), t);
+                }
+                TuplePat::Tuple(_, _, inner) => self.bind_tuple(inner, t, sc),
+            }
+        }
+    }
+
     fn lookup(scopes: &Scopes, name: &str) -> Option<Option<String>> {
         scopes.iter().rev().find_map(|s| s.get(name).cloned())
     }
@@ -220,13 +289,38 @@ impl Resolver<'_> {
         match e {
             Expr::Var(v) => Self::lookup(scopes, &v.name).flatten(),
             Expr::FieldAccess(fa) => {
-                let base = self.value_type(&fa.base, scopes)?;
-                self.fields.get(&base).and_then(|fs| fs.get(&fa.field)).cloned()
+                let base = GType::from_key(&self.value_type(&fa.base, scopes)?);
+                let f = self.fields.get(&base.name).and_then(|fs| fs.get(&fa.field))?;
+                Some(self.inst(&base, f))
             }
-            Expr::Index(x) => GType::from_key(&self.value_type(&x.array, scopes)?).array_elem().map(|t| t.to_key()),
-            Expr::Call(c) if c.targs.is_none() => self.fn_ret.get(&c.name).cloned(),
-            Expr::StructLit(x) if x.targs.is_none() && self.types.get(&x.name) == Some(&false) => Some(x.name.clone()),
-            Expr::EnumCtor(x) if x.targs.is_none() && self.types.get(&x.enum_name) == Some(&false) => Some(x.enum_name.clone()),
+            Expr::Index(x) => {
+                // P9b-3: also an element of a `Vec<T>` (and so the binder of `for x in v` over a Vec)
+                let a = GType::from_key(&self.value_type(&x.array, scopes)?);
+                if a.name == "vec" || a.name == "Vec" { a.args.first().map(GType::to_key) } else { a.array_elem().map(|t| t.to_key()) }
+            }
+            // P9b-3: an element read `vec_get::<T>(v, i)` (the builtin, not a user function of that name)
+            Expr::Call(c) if c.name == "vec_get" && !self.fn_ret.contains_key("vec_get") => {
+                c.targs.as_ref().and_then(|t| t.first()).map(GType::to_key)
+            }
+            Expr::Call(c) if !c.name.starts_with('@') => {
+                // P9b-3: also the result of a generic function at its written type arguments
+                let (n, ret) = self.fn_ret.get(&c.name)?;
+                if *n == 0 {
+                    return Some(ret.clone());
+                }
+                let m = bind_args(&fn_owner(&c.name), *n, c.targs.as_deref()?).ok()?;
+                Some(substitute(&GType::from_key(ret), &m).to_key())
+            }
+            Expr::StructLit(x) if self.types.contains_key(&x.name) => match (&x.targs, self.types.get(&x.name) == Some(&true)) {
+                (None, false) => Some(x.name.clone()),
+                (Some(a), true) => Some(GType::new(&x.name, a.clone()).to_key()),
+                _ => None,
+            },
+            Expr::EnumCtor(x) if self.types.contains_key(&x.enum_name) => match (&x.targs, self.types.get(&x.enum_name) == Some(&true)) {
+                (None, false) => Some(x.enum_name.clone()),
+                (Some(a), true) => Some(GType::new(&x.enum_name, a.clone()).to_key()),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -243,7 +337,9 @@ impl Resolver<'_> {
     fn expr(&self, e: &mut Expr, scopes: &mut Scopes) -> Result<(), PruvError> {
         match e {
             Expr::Call(c) => {
-                for a in c.args.iter_mut() {
+                let value_match = crate::ast::ValueMatch::matches(c) && !c.args.is_empty();
+                let n = if value_match { 1 } else { c.args.len() };
+                for a in c.args[..n].iter_mut() {
                     self.expr(a, scopes)?;
                 }
                 if let Some(m) = c.name.strip_prefix(METHOD_CALL) {
@@ -254,7 +350,7 @@ impl Resolver<'_> {
                             "bind the value with `let x: T = ..;` first"));
                     };
                     let owner = GType::from_key(&ty);
-                    let found = if owner.args.is_empty() && self.types.contains_key(&owner.name) {
+                    let found = if owner.owner.is_none() && self.types.contains_key(&owner.name) {
                         self.methods.get(&(owner.name.clone(), m.clone()))
                     } else {
                         None
@@ -298,6 +394,24 @@ impl Resolver<'_> {
                         _ => r,
                     };
                     c.name = func.clone();
+                    // P9b-3: a method of a generic type takes the receiver's type arguments first, then those written
+                    // after its name (`s.map::<U>(..)`)
+                    if !owner.args.is_empty() {
+                        let mut t = owner.args.clone();
+                        t.extend(c.targs.take().unwrap_or_default());
+                        c.targs = Some(t);
+                    }
+                } else if value_match {
+                    // P9b-3: the binders of a value `match` arm are in scope in the arm's value
+                    let scrut = self.value_type(&c.args[0], scopes);
+                    let arms = crate::ast::ValueMatch::arms(c);
+                    for (a, e) in arms.iter().zip(c.args[1..].iter_mut()) {
+                        let mut sc = HashMap::new();
+                        self.bind_arm(scrut.as_deref(), &a.ctor, &a.binders, &[], &mut sc);
+                        scopes.push(sc);
+                        self.expr(e, scopes)?;
+                        scopes.pop();
+                    }
                 }
             }
             Expr::Quant(q) => {

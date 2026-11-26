@@ -1,0 +1,1 @@
+{"flags_matrix": [["--no-verify"]], "exit": 101, "stderr_contains": "requires violated: Box2::k:", "gen_contains": ["fn pruv_g3_f_7_Box2__k_1_b(n: i64)"], "gen_absent": ["impl pruv_g3_t"]}

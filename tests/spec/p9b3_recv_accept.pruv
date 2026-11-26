@@ -1,0 +1,23 @@
+// spec: R-6x-3 accept
+// Receivers typed by P9b-3: binders of a value `match` (also of a generic enum and a nested pattern), a nested
+// binder of a `match` statement, a destructuring let, an element read `vec_get::<T>`, a field of a generic struct
+// and the result of a generic function.
+struct C { n: i64 }
+struct W<T> { v: T }
+enum Sh<T> { One(x: T), Opt(o: Option<C>), No }
+impl C { fn get(self) -> i64 ensures result == self.n { return self.n; } }
+fn mk<T>(x: T, k: i64) -> C ensures result.n == k { return C { n: k }; }
+fn f(k: i64, s: Sh<C>, cs: Vec<C>, t2: (C, C), w: W<C>) -> i64 requires 0 <= k && k <= 10 {
+  let a: i64 = mk::<bool>(true, k).get();
+  let v: i64 = match s { Sh::One(y) => y.get() * 0, Sh::Opt(Some(z)) => z.get() * 0, Sh::Opt(None) => 0, Sh::No => 0 };
+  let mut t: i64 = 0;
+  match s {
+    Sh::Opt(Some(z)) => { t = z.get() * 0; }
+    _ => { }
+  }
+  let (p, q): (C, C) = t2;
+  if len(cs) > 0 {
+    t = t + vec_get::<C>(cs, 0).get() * 0;
+  }
+  return a + v + t + p.get() * 0 + q.get() * 0 + w.v.get() * 0;
+}

@@ -1,0 +1,6 @@
+// spec: R-6x-1 reject
+// A path call writes the type arguments of a generic impl on the type and the function's own after the function
+// name; `Box2::count::<bool>(b)` puts the block's argument on a function without type parameters.
+struct Box2<T> { v: T, n: i64 }
+impl<T> Box2<T> { fn count(self) -> i64 { return self.n; } }
+fn f(k: i64) -> i64 { let b: Box2<bool> = Box2::<bool> { v: true, n: k }; return Box2::count::<bool>(b); }

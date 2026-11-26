@@ -1,0 +1,1 @@
+{"gen_contains": ["impl pruv_g3_t_1_P_2_i_b {", "fn swap(self) -> pruv_g3_t_1_P_2_b_i", "pruv_g3_t_1_P_2_i_b::make(1i64, true, k)", "p.swap()", "q.put(5i64)", "r.same()"], "gen_absent": ["self: pruv_", "P__"]}

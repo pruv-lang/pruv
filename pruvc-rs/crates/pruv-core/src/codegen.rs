@@ -2427,7 +2427,7 @@ impl<'a> Gen<'a> {
             Some(m) => m.disp.clone(),
             // P9b-2: a method of a single-file program shows as `T::f`, not as its lowered name `T__f`
             None => match self.prog.methods.iter().find(|m| m.func == name) {
-                Some(m) => format!("{}::{}", m.owner, m.name),
+                Some(m) => format!("{}::{}", m.shown, m.name),
                 None => name.to_string(),
             },
         }

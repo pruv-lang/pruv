@@ -56,7 +56,9 @@ pub fn parse_file(src: &str, tag: usize) -> R<ParsedFile> {
         alias_generic: Vec::new(),
         impl_owner: None,
         impl_fns: std::collections::HashSet::new(),
+        impl_arity: HashMap::new(),
         last_recv: Receiver::None,
+        impl_tparams: Vec::new(),
     };
     p.impl_collect();
     let alias_order = p.alias_collect()?;
@@ -350,6 +352,9 @@ fn is_upper(s: &str) -> bool {
     s.chars().next().map_or(false, |c| c.is_ascii_uppercase())
 }
 
+/// P9b-3: the `end` of the `::` that a generic impl block splices after `Self` (`Self::<T, ..>`) in an expression
+const SELF_TARGS: i64 = -2;
+
 struct Parser {
     t: Vec<Tok>,
     i: usize,
@@ -388,8 +393,13 @@ struct Parser {
     impl_owner: Option<String>,
     /// (owner, function name) of every impl function of the file (pre-pass), so `Owner::f(..)` parses as a call
     impl_fns: std::collections::HashSet<(String, String)>,
+    /// P9b-3: the number of type parameters of the impl block of each owner (`impl<T> Stack<T>`: 1), from the pre-pass
+    impl_arity: HashMap<String, usize>,
     /// receiver of the impl function `function` just parsed
     last_recv: Receiver,
+    /// P9b-3: the type parameters of the generic impl block being parsed (`impl<T> Stack<T>`), prepended to the
+    /// type parameters of each of its functions
+    impl_tparams: Vec<TParam>,
 }
 
 /// P9: one transparent type alias of the file.
@@ -889,6 +899,9 @@ impl Parser {
             return Ok(arm(&ct, None, "_".to_string(), (Vec::new(), Vec::new())));
         }
         let ct = self.next();
+        if ct.kind == Kind::Id {
+            self.skip_self_targs();
+        }
         if ct.kind == Kind::Id && self.at("::", 0) {
             self.bump();
             let vt = self.ident()?;
@@ -1091,12 +1104,36 @@ impl Parser {
         let t = &self.t;
         let mut i = 0;
         while i < t.len() {
-            if t[i].kind == Kind::Kw && t[i].val == "impl" && i + 2 < t.len() && t[i + 1].kind == Kind::Id
-                && t[i + 2].kind == Kind::Op && t[i + 2].val == "{"
-            {
-                let owner = t[i + 1].val.clone();
+            // P9b-3: also `impl<T, ..> Name<T, ..> {`
+            let skip_angles = |mut j: usize| -> usize {
+                if j < t.len() && t[j].kind == Kind::Op && t[j].val == "<" {
+                    let mut d = 0i64;
+                    while j < t.len() {
+                        match (t[j].kind, t[j].val.as_str()) {
+                            (Kind::Op, "<") => d += 1,
+                            (Kind::Op, ">") => d -= 1,
+                            (Kind::Op, ">>") => d -= 2,
+                            (Kind::Op, "{") | (Kind::Op, ";") | (Kind::Eof, _) => return j,
+                            _ => {}
+                        }
+                        j += 1;
+                        if d <= 0 {
+                            break;
+                        }
+                    }
+                }
+                j
+            };
+            let name_at = if t[i].kind == Kind::Kw && t[i].val == "impl" { skip_angles(i + 1) } else { 0 };
+            let brace_at = if name_at > 0 && name_at < t.len() && t[name_at].kind == Kind::Id { skip_angles(name_at + 1) } else { 0 };
+            if brace_at > 0 && brace_at < t.len() && t[brace_at].kind == Kind::Op && t[brace_at].val == "{" {
+                let owner = t[name_at].val.clone();
+                // the block's parameters: identifiers right after `<` or `,` of `impl<..>` (not bound names)
+                let n = (i + 2..name_at).filter(|&k| t[k].kind == Kind::Id && t[k - 1].kind == Kind::Op
+                    && (t[k - 1].val == "<" || t[k - 1].val == ",")).count();
+                self.impl_arity.insert(owner.clone(), n);
                 let mut depth = 0i64;
-                let mut j = i + 2;
+                let mut j = brace_at;
                 while j < t.len() {
                     if t[j].kind == Kind::Op && t[j].val == "{" {
                         depth += 1;
@@ -1123,18 +1160,39 @@ impl Parser {
     /// P9b: `impl Owner { fn .. }`; every function becomes the free function `Owner__name` (recorded in `methods`).
     fn impl_block(&mut self, p: &mut Program) -> R<()> {
         let it = self.next();
-        if self.at("<", 0) {
-            let t = self.peek(0).clone();
-            return Err(self.impl_syntax(&t, "generic impl blocks are not available yet (parity row P9b-3)", "write the impl for a non-generic struct or enum"));
-        }
+        // P9b-3: `impl<T, ..> Name<T, ..>`: the parameters are those of the type, in order, each written once
+        let tparams = if self.at("<", 0) { self.type_params("impl")? } else { Vec::new() };
+        self.scope = HashMap::new();
         let ot = self.peek(0).clone();
         if ot.kind != Kind::Id {
             return Err(self.impl_syntax(&ot, "expected the type name after `impl`", "write `impl Name { fn .. }`"));
         }
         self.bump();
+        if !tparams.is_empty() {
+            let want = tparams.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ");
+            let fix = format!("write `impl<{want}> {}<{want}> {{ fn .. }}`", ot.val);
+            if !self.at("<", 0) {
+                let t = self.peek(0).clone();
+                return Err(self.impl_syntax(&t, "a generic impl block names the type with its parameters", &fix));
+            }
+            self.bump();
+            for (k, tp) in tparams.iter().enumerate() {
+                let a = self.peek(0).clone();
+                if a.kind != Kind::Id || a.val != tp.name {
+                    return Err(self.impl_syntax(&a, "the type arguments of a generic impl block are its parameters, in order (no specialized impls)", &fix));
+                }
+                self.bump();
+                let sep = if k + 1 == tparams.len() { ">" } else { "," };
+                if !self.at(sep, 0) {
+                    let t = self.peek(0).clone();
+                    return Err(self.impl_syntax(&t, "the type arguments of a generic impl block are its parameters, in order (no specialized impls)", &fix));
+                }
+                self.bump();
+            }
+        }
         if self.at("<", 0) || self.at("::", 0) {
             let t = self.peek(0).clone();
-            return Err(self.impl_syntax(&t, "impl blocks of generic or path types are not available yet (parity row P9b-3)", "write `impl Name { fn .. }` for a struct or enum of this file"));
+            return Err(self.impl_syntax(&t, "impl blocks of path types or with type arguments are not available (write `impl<T> Name<T>` for a generic type)", "write `impl Name { fn .. }` or `impl<T> Name<T> { fn .. }` for a struct or enum of this file"));
         }
         if self.at_ident("for", 0) || self.at("for", 0) {
             let t = self.peek(0).clone();
@@ -1147,6 +1205,7 @@ impl Parser {
         self.bump();
         // P9b-2: `Self` inside the block names the owner type (in types, struct literals and paths `Self::f`)
         let mut depth = 1usize;
+        let mut self_at: Vec<usize> = Vec::new();
         for k in self.i..self.t.len() {
             let tk = &mut self.t[k];
             match (tk.kind, tk.val.as_str()) {
@@ -1160,12 +1219,38 @@ impl Parser {
                 (Kind::Id, "Self") => {
                     tk.kind = Kind::Id;
                     tk.val = ot.val.clone();
+                    if !tparams.is_empty() {
+                        self_at.push(k);
+                    }
                 }
                 (Kind::Eof, _) => break,
                 _ => {}
             }
         }
-        p.impls.push((ot.val.clone(), it.line, it.col));
+        // P9b-3: in a generic impl, `Self` is `Name<T, ..>` in a type and `Name::<T, ..>` in an expression path or
+        // struct literal (`Self::f(..)`, `Self { .. }`, but `-> Self {` is a result type)
+        for &k in self_at.iter().rev() {
+            let (line, col) = (self.t[k].line, self.t[k].col);
+            let tok = |kind: Kind, val: &str| Tok { kind, val: val.to_string(), line, col, ..self.t[k].clone() };
+            let next = self.t.get(k + 1).map(|t| (t.kind, t.val.clone()));
+            let prev_arrow = k > 0 && self.t[k - 1].kind == Kind::Op && self.t[k - 1].val == "->";
+            let expr = matches!(&next, Some((Kind::Op, v)) if v == "::" || (v == "{" && !prev_arrow));
+            let mut ins: Vec<Tok> = Vec::new();
+            if expr {
+                // marked, so a variant pattern or reference `Self::V` can drop the spliced arguments again
+                ins.push(Tok { end: SELF_TARGS, ..tok(Kind::Op, "::") });
+            }
+            ins.push(tok(Kind::Op, "<"));
+            for (j, tp) in tparams.iter().enumerate() {
+                if j > 0 {
+                    ins.push(tok(Kind::Op, ","));
+                }
+                ins.push(tok(Kind::Id, &tp.name));
+            }
+            ins.push(tok(Kind::Op, ">"));
+            self.t.splice(k + 1..k + 1, ins);
+        }
+        p.impls.push((ot.val.clone(), it.line, it.col, tparams.len()));
         while !self.at("}", 0) {
             let t = self.peek(0).clone();
             if t.kind == Kind::Eof {
@@ -1184,19 +1269,18 @@ impl Parser {
                 return Err(self.impl_syntax(&t, "an impl block holds only `fn` items", "move the item out of the impl block"));
             }
             self.impl_owner = Some(ot.val.clone());
+            self.impl_tparams = tparams.clone();
             let r = self.function(None, false);
             self.impl_owner = None;
+            self.impl_tparams = Vec::new();
             let mut f = r?;
             let recv = std::mem::replace(&mut self.last_recv, Receiver::None);
-            if !f.tparams.is_empty() {
-                return Err(self.impl_syntax(&t, "generic methods are not available yet (parity row P9b-3)", "write a free generic function"));
-            }
             if f.name.starts_with('_') {
                 // `Owner__name` must name one (owner, function) pair: `A` + `_b` and `A_` + `b` would both be `A___b`
                 return Err(self.impl_syntax(&t, "an impl function name must not start with `_`", "rename the function"));
             }
             let func = format!("{}__{}", ot.val, f.name);
-            p.methods.push(MethodItem { line: f.line, col: f.col, owner: ot.val.clone(), name: f.name.clone(), func: func.clone(), recv, is_pub });
+            p.methods.push(MethodItem { line: f.line, col: f.col, owner: ot.val.clone(), name: f.name.clone(), func: func.clone(), recv, is_pub, impl_params: tparams.len(), shown: ot.val.clone() });
             f.name = func;
             self.fn_pub.push(is_pub);
             p.functions.push(f);
@@ -1567,6 +1651,22 @@ impl Parser {
             if self.at("::", 0) {
                 self.bump();
                 let vt = self.ident()?;
+                if self.at("(", 0) || (self.at("::", 0) && self.at("<", 1)) {
+                    // P9b-3: `crate::m::Owner::<A>::f::<U>(args)` may name an impl function of a generic type; the
+                    // loader tells it from the variant `crate::m::Enum::<A>::V(args)` (one Call node for both)
+                    let mut targs = targs;
+                    if self.at("::", 0) {
+                        targs.extend(self.expr_targs()?);
+                        if !self.at("(", 0) {
+                            let p = self.peek(0).clone();
+                            return Err(self.generic_syntax(&p, "a type application must be followed by `(`",
+                                "write crate::m::Owner::<A>::f::<U>(x)"));
+                        }
+                    }
+                    let args = self.call_args()?;
+                    return Ok(Expr::Call(Call { line, col, name: format!("{}::{}", path, vt.val), args, ty: None,
+                        targs: Some(targs), inst: None, old: None, opaque_c: false }));
+                }
                 let mut args = Vec::new();
                 if self.at("(", 0) {
                     let lp = self.peek(0).clone();
@@ -2160,10 +2260,29 @@ impl Parser {
                 format!("{} is a builtin name", name_tok.val), "rename the function"));
         }
         let name = name_tok.val;
-        let tparams = if self.at("<", 0) { self.type_params(&fn_owner(&name))? } else { Vec::new() };
+        // P9b-3: an impl function's type parameters belong to its lowered name `Owner__name`; those of a generic
+        // impl block come first (`impl<T> S<T> { fn f<U> .. }` is `S__f<T, U>`)
+        let fowner = fn_owner(&self.impl_owner.as_ref().map_or_else(|| name.clone(), |o| format!("{}__{}", o, name)));
+        let mut tparams = if self.at("<", 0) { self.type_params(&fowner)? } else { Vec::new() };
+        if self.impl_owner.is_some() && !self.impl_tparams.is_empty() {
+            if let Some(tp) = tparams.iter().find(|tp| self.impl_tparams.iter().any(|q| q.name == tp.name)) {
+                return Err(PruvError::new("parse", tp.line, tp.col, "impl_syntax",
+                    format!("type parameter {} is already a parameter of the impl block", tp.name), "rename the parameter"));
+            }
+            let mut all = self.impl_tparams.clone();
+            all.extend(tparams);
+            tparams = all;
+            self.scope = tparams.iter().enumerate().map(|(i, tp)| (tp.name.clone(), mk_param(&fowner, i, &tp.name))).collect();
+        }
         self.expect("(")?;
         let mut params = Vec::new();
         if let Some(owner) = self.impl_owner.clone() {
+            // P9b-3: the receiver of a generic impl is `Owner<T, ..>` with the block's parameters
+            let owner = if self.impl_tparams.is_empty() {
+                owner
+            } else {
+                GType::new(&owner, (0..self.impl_tparams.len()).map(|i| mk_param(&fowner, i, &self.impl_tparams[i].name)).collect()).to_key()
+            };
             // P9b: the receiver `self` / `inout self` / `take self` is the first parameter, typed by the impl owner
             let t0 = self.peek(0).clone();
             let moded = t0.kind == Kind::Id && (t0.val == "inout" || t0.val == "take") && self.peek(1).kind == Kind::Id && self.peek(1).val == "self";
@@ -3355,13 +3474,22 @@ impl Parser {
             } else if self.at(".", 0) {
                 self.bump();
                 let f = self.field_ident()?;
+                // P9b-3: `recv.m::<U>(args)` names the type arguments of a generic method
+                let mut targs = None;
+                if f.kind == Kind::Id && self.at("::", 0) && self.at("<", 1) {
+                    targs = Some(self.expr_targs()?);
+                    if !self.at("(", 0) {
+                        let p = self.peek(0).clone();
+                        return Err(self.generic_syntax(&p, "a method's type arguments must be followed by `(`", "write recv.m::<T>(args)"));
+                    }
+                }
                 if f.kind == Kind::Id && self.at("(", 0) {
                     // P9b: `recv.m(args)` is the reserved call `@method|m(recv, args)`; the checker resolves it from
                     // the receiver's type
                     let mut args = vec![e];
                     args.extend(self.call_args()?);
                     e = Expr::Call(Call { line: f.line, col: f.col, name: format!("{}{}", METHOD_CALL, f.val), args, ty: None,
-                        targs: None, inst: None, old: None, opaque_c: false });
+                        targs, inst: None, old: None, opaque_c: false });
                     self.enter(1)?;
                     chain += 1;
                     continue;
@@ -3395,9 +3523,33 @@ impl Parser {
             return Ok((en, vt));
         }
         let en = self.ident()?;
+        self.skip_self_targs();
         self.expect("::")?;
         let vt = self.ident()?;
         Ok((en, vt))
+    }
+
+    /// P9b-3: after `Self` of a generic impl in a variant pattern or variant reference, drop the type arguments that
+    /// the impl block spliced in (`Self::<T>::V` back to `Name::V`; patterns take no type arguments)
+    fn skip_self_targs(&mut self) {
+        if !(self.at("::", 0) && self.peek(0).end == SELF_TARGS && self.at("<", 1)) {
+            return;
+        }
+        let mut depth = 0usize;
+        loop {
+            let t = self.next();
+            match (t.kind, t.val.as_str()) {
+                (Kind::Op, "<") => depth += 1,
+                (Kind::Op, ">") => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return;
+                    }
+                }
+                (Kind::Eof, _) => return,
+                _ => {}
+            }
+        }
     }
 
     fn primary(&mut self) -> R<Expr> {
@@ -3618,14 +3770,28 @@ impl Parser {
                     ));
                 }
             }
-            if targs.is_none() && self.at("::", 0) && self.at("(", 2)
+            if self.at("::", 0) && (self.at("(", 2) || (self.at("::", 2) && self.at("<", 3)))
                 && self.impl_fns.contains(&(t.val.clone(), self.peek(1).val.clone()))
             {
-                // P9b: `Owner::f(args)` calls the impl function `Owner__f` (arguments written with their modes)
+                // P9b: `Owner::f(args)` calls the impl function `Owner__f` (arguments written with their modes);
+                // P9b-3: `Owner::<A>::f::<U>(args)` passes the owner's then the function's type arguments
                 self.bump();
                 let ft = self.next();
+                let owner_n = targs.as_ref().map_or(0, |v| v.len());
+                if self.at("::", 0) {
+                    targs.get_or_insert_with(Vec::new).extend(self.expr_targs()?);
+                }
+                // P9b-3 audit: written type arguments stand where Rust wants them: the block's on the owner
+                // (`Owner::<A>::f`), the function's own after it (`::f::<U>`); the checker only sees their sum
+                let want = self.impl_arity.get(&t.val).copied().unwrap_or(0);
+                if targs.is_some() && owner_n != want {
+                    return Err(self.generic_syntax(&t,
+                        &format!("{} takes {} type argument(s) on the type (`{}::<..>::{}`), the function's own after `::{}`",
+                            t.val, want, t.val, ft.val, ft.val),
+                        &format!("write {}{}::{}::<U, ..>(..)", t.val, if want > 0 { "::<A, ..>" } else { "" }, ft.val)));
+                }
                 let args = self.call_args()?;
-                return Ok(Expr::Call(Call { line, col, name: format!("{}__{}", t.val, ft.val), args, ty: None, targs: None,
+                return Ok(Expr::Call(Call { line, col, name: format!("{}__{}", t.val, ft.val), args, ty: None, targs,
                     inst: None, old: None, opaque_c: false }));
             }
             if self.at("::", 0) {

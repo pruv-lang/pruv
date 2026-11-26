@@ -2533,7 +2533,15 @@ impl Checker {
                         col,
                         "type_arity",
                         format!("{} expects {} type argument(s)", what, tparams.len()),
-                        format!("write the type arguments explicitly, e.g. {}::<T>; they are never inferred", last),
+                        // P9b-3: a method's leading type arguments belong to its impl block and are written
+                        // after the type (`Box2::<T>::f`, R-6x-1); `Box2::f::<T>` is a parse error there
+                        match crate::diagnostic::method_text(last).rsplit_once("::").filter(|_| crate::diagnostic::method_text(last) != last) {
+                            Some((ty, f)) => format!(
+                                "write the type arguments explicitly where Rust takes them: the impl block's after the type ({}::<T>::{}), the method's own after its name; they are never inferred",
+                                ty, f
+                            ),
+                            _ => format!("write the type arguments explicitly, e.g. {}::<T>; they are never inferred", last),
+                        },
                     ));
                 }
                 return Ok(None);

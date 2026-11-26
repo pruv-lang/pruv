@@ -1,5 +1,0 @@
-// spec: R-6x-3 reject
-// The binder of `for x in v` over a Vec has no static type before type checking.
-struct C { n: i64 }
-impl C { fn get(self) -> i64 { return self.n; } }
-fn f(cs: Vec<C>) -> i64 { let mut t: i64 = 0; for c in cs { t = t + c.get(); } return t; }

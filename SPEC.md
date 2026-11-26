@@ -3001,14 +3001,26 @@ fn run(k: i64) -> i64 requires k >= 0 && k <= 50 { let mut c: Counter = Counter:
 ```
 - R-6x-1 **Impl blocks.** `impl Name { fn .. }` at the top level declares functions of the struct or enum `Name` of the
   same file. Several blocks of one type are allowed and may come before the type. A block holds only `fn` items
-  (`fn` or `pub fn`, no attributes, not generic, named without a leading `_`); `impl<T>`, `impl Name<T>`, a path type,
-  `impl Trait for Name`, a missing type or `{`, any other item, a function name starting with `_` and an unclosed block
-  are `parse/impl_syntax` (an attribute on a method is `parse/attribute_position`). A name that is not a struct or
-  enum of the program, or a generic type, is `type/impl_type`, also for an empty block. Two functions of one type with one name (also across blocks) are
+  (`fn` or `pub fn`, no attributes, named without a leading `_`, possibly generic); a path type, `impl Trait for Name`,
+  a missing type or `{`, any other item, a function name starting with `_` and an unclosed block are
+  `parse/impl_syntax` (an attribute on a method is `parse/attribute_position`). A generic type has the generic block
+  `impl<T, ..> Name<T, ..> { .. }` (P9b-3): its parameters are the type's, written once each and in order, so a
+  specialized impl (`impl<T> Name<i64>`, `impl Name<i64>`, `impl<T> Name<T, T>`) and a method type parameter that
+  repeats one of the block's are `parse/impl_syntax`. The block's parameters come first in every function of the
+  block (`Name::<A>::f::<U>(..)`, `x.f::<U>(..)` with the owner's arguments taken from the receiver's type), and the
+  functions are specialized and proved per application like generic functions (R-6r). Written type arguments of a
+  path call stand where Rust takes them: exactly the block's count on the type, the function's own after its name
+  (`Name::f::<A>(..)` for a block argument, `C::<i64>::f(..)` for a non-generic `C` are `parse/generic_syntax`,
+  tests/spec/p9b3_path_reject_targs.pruv); `inout self` follows the inout
+  rule for generic structs. A name that is not a struct or enum of the program, or a block whose parameter count
+  differs from the type's (`impl G` of a generic `G`, `impl<T> S<T>` of a non-generic `S`), is `type/impl_type`, also
+  for an empty block, at the block header (tests/spec/p9b3_impl_accept.pruv, tests/spec/p9b3_impl_reject_*.pruv). Two functions of one type with one name (also across blocks) are
   `type/dup_method`; a function named like a variant of its enum is `type/method_name_clash`. A method may share its
   name with a field (`c.n` and `c.n()` are different). `pub` on a block is `parse/visibility_syntax` (the methods
   carry the visibility, R-6x-5). Inside a block `Self` names `Name` everywhere a type name may stand (parameter and
-  result types, struct literals `Self { .. }`, paths `Self::f(..)`, contracts); outside an impl block `Self` stays
+  result types, struct literals `Self { .. }`, paths `Self::f(..)`, contracts; in a generic block `Self` is
+  `Name<T, ..>` in types and `Name::<T, ..>` in expressions, and `Self::V` is a variant pattern or reference
+  `Name::V` as in a non-generic block, tests/spec/p9b3_self_variant_accept.pruv); outside an impl block `Self` stays
   `parse/reserved_name` (tests/spec/p9b2_self_accept.pruv, tests/spec/p9b2_self_reject.pruv).
 - R-6x-2 **Receivers.** The first parameter of an impl function may be the receiver `self` (read), `inout self` or
   `take self`, without a type: its type is `Name`, and it follows the rules of a parameter of that mode (R-6g, the
@@ -3019,16 +3031,19 @@ fn run(k: i64) -> i64 requires k >= 0 && k <= 50 { let mut c: Counter = Counter:
   functions, at the definition and at every call.
 - R-6x-3 **Static calls.** `Name::f(args)` calls the impl function `f` of `Name` (with a receiver too: `Name::get(c)`,
   `Name::bump(inout c)`). `x.m(args)` is a method call on a receiver `x` whose static type is the struct or enum `Name`
-  (not generic), and the call is `Name::m(x, args)` with the receiver passed in the method's mode (read: `x`, inout:
-  `inout x`, take: `move x`). The static type of `x` is known for a variable, parameter or `self` (its declared
-  type), a field or array element of a known type, the result of a call of a non-generic function (also a method
-  call, so chains `Name::new(k).get()` resolve left to right), a struct literal, a variant of a non-generic enum, and
-  a binder of a `match` statement arm on a non-generic enum (its payload field's type) and the binder of `for x in v`
-  over a slice of a known element type. Resolution is static; there are no
+  (also a generic one, P9b-3: `Name<A>`), and the call is `Name::m(x, args)` (`Name::<A>::m(x, args)`) with the
+  receiver passed in the method's mode (read: `x`, inout: `inout x`, take: `move x`). The static type of `x` is known
+  for a variable, parameter or `self` (its declared type), a field (also of a generic struct, at its type arguments)
+  or array element of a known type, an element of a `Vec<T>` in a contract `v[i]` and in code `vec_get::<T>(v, i)`,
+  the result of a call of a function (of a generic one at its written type arguments; also a method call, so chains
+  `Name::new(k).get()` resolve left to right), a struct literal, a variant, a binder of a `match` statement or value
+  `match` arm (its payload field's type, also of a generic enum, `Option` and `Result`, and the names of nested and
+  tuple patterns), a name of a destructuring let, and the binder of `for x in v` over a slice of a known element
+  type (a `for` over a `Vec` binds only integers and bool, R-6q). Resolution is static; there are no
   traits and no dynamic dispatch. A type without method `m`, a non-user type, or a function without a receiver
-  called with a dot is `type/unknown_method`; a receiver of unknown static type (a quantifier variable, a binder of a
-  generic or tuple pattern or of a value `match`, a call of a generic function, an element or `for` binder of a
-  `Vec`) is `type/method_receiver`, and so is a receiver of an
+  called with a dot is `type/unknown_method`; a receiver of unknown static type (a value `if` or value `match`
+  result) is `type/method_receiver` (tests/spec/p9b3_recv_accept.pruv,
+  tests/spec/p9b3_recv_reject.pruv), and so is a receiver of an
   `inout self` method that is not a variable or field path of one. A `take self` method takes a non-place receiver as
   its value (a struct literal or a call result; other values follow the take argument rules of R-6g). The receiver's mode is then
   checked as an argument: an inout method on an immutable binding is `type/inout_argument`, a use after a take
@@ -3045,7 +3060,12 @@ fn run(k: i64) -> i64 requires k >= 0 && k <= 50 { let mut c: Counter = Counter:
   Tests: [runtime](tests/runtime/p9b_rt_counter.pruv), [enum and field receivers](tests/runtime/p9b_rt_enum_field.pruv),
   [small result](tests/runtime/p9b_rt_small.pruv), [owner names](tests/runtime/p9b_rt_names.pruv),
   [proven entries](tests/runtime/p9b_rt_proven.pruv), [trait method names](tests/runtime/p9b2_rt_trait_names.pruv),
-  [panic text](tests/runtime/p9b2_rt_panic_name.pruv),
+  [panic text](tests/runtime/p9b2_rt_panic_name.pruv). A generic impl block (R-6x-1) gives one `impl <type stem> { .. }`
+  per application of the type that its specialized functions need (an associated function whose owner application
+  no function builds stays a free function); its panic texts name the function `Name::f` too. Two specializations of
+  a method with its own type parameters on one owner application (`b.with::<bool>(..)` and `b.with::<i64>(..)`) are
+  both printed under their function stems (Rust has no overloading). Tests:
+  [generic impl and receivers](tests/runtime/p9b3_rt_generic.pruv), [generic panic text](tests/runtime/p9b3_rt_panic_name.pruv),
   [unknown method](tests/must_reject/p9b_unknown_method.pruv), [false ensures](tests/must_reject/p9b_false_ensures.pruv),
   [violated requires](tests/must_reject/p9b_call_requires.pruv), [take then use](tests/must_reject/p9b_take_use.pruv).
 - R-6x-5 **Methods and modules.** An impl block may be in any module of a program with modules (G4), next to its
@@ -3053,12 +3073,14 @@ fn run(k: i64) -> i64 requires k >= 0 && k <= 50 { let mut c: Counter = Counter:
   the type (as a free function in explicit mode). From another module the associated functions are called by the type's path
   `crate::m::Name::f(args)`, and methods of a value of type `crate::m::Name` with a dot; a call of a method without
   `pub` from another module (by path or dot) is `type/private_item`. A method never is a host entry, even `pub` in the
-  root, so it has no `--proven-entries` twin (exporting methods to the host is parity row P9b-3), and its signature
+  root, so it has no `--proven-entries` twin (exporting methods to the host is parity row P9b-4), and its signature
   is no host boundary (narrow integers are allowed). A `pub` method's signature follows the public interface rule
   (a private type in it is `type/public_interface`), and a public contract may call only `pub` methods, by path or
   dot (P06, `type/public_interface`). Two methods of one type with one name are `type/dup_method` here too. The Rust code is
   that of R-6x-4 with the owner's Rust type name: `impl <type stem> { .. }`, `x.m(..)` and `<type stem>::f(..)`.
-  Tests: [runtime](tests/runtime/g4_p9b2_modules/root.pruv).
+  A generic impl type of another module is called as `crate::m::Name::<A>::f::<U>(args)` (the loader tells it from a
+  variant `crate::m::Enum::<A>::V(args)`).
+  Tests: [runtime](tests/runtime/g4_p9b2_modules/root.pruv), [generic](tests/runtime/g4_p9b3_modules/root.pruv).
 
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
@@ -3501,8 +3523,8 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/for_decreases` | parse | a `for` loop with a `decreases` clause; the measure is generated (R-6q-1) |
 | `parse/for_iterable` | parse | a `for` head other than `a..b` or a slice/Vec place, such as `a..=b` or `a.iter()` (R-6q-3) |
 | `parse/foreign_syntax` | parse | a malformed `trusted rust fn` declaration |
-| `parse/generic_syntax` | parse | a malformed type parameter list or type argument list |
-| `parse/impl_syntax` | parse | a malformed or unsupported impl block (generic, trait or path impl, a non-`fn` item, a function name starting with `_`, an unclosed block) or a typed receiver (R-6x-1, R-6x-2) |
+| `parse/generic_syntax` | parse | a malformed type parameter list or type argument list, or type arguments of an impl function path in the wrong place (R-6x-1) |
+| `parse/impl_syntax` | parse | a malformed or unsupported impl block (a specialized generic impl, a repeated block type parameter, trait or path impl, a non-`fn` item, a function name starting with `_`, an unclosed block) or a typed receiver (R-6x-1, R-6x-2) |
 | `parse/inout_syntax` | parse | a malformed `inout` parameter or argument |
 | `parse/let_else_syntax` | parse | a constructor pattern after `let` followed by `;` instead of `else { .. }` (R-6u-3) |
 | `parse/let_pattern` | parse | a `_`, literal or nested pattern in `if let`, `let else` or `while let` (R-6u-6) |
@@ -3597,7 +3619,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/generic_bound` | type | an unknown bound, or a missing `Element` bound |
 | `type/generic_main` | type | `main` declares type parameters |
 | `type/generic_operation` | type | a field, variant or other concrete operation on an abstract type parameter |
-| `type/impl_type` | type | an impl block of a name that is not a struct or enum of the program, or of a generic type (R-6x-1) |
+| `type/impl_type` | type | an impl block of a name that is not a struct or enum of the program, or whose type parameter count differs from the type's (R-6x-1) |
 | `type/immutable` | type | an assignment to a binding that is not mutable |
 | `type/immutable_string` | type | a byte store into a `str` |
 | `type/inout_alias` | type | an `inout` argument also used elsewhere in the same call |

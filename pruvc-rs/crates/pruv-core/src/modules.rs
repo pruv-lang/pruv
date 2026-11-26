@@ -709,8 +709,8 @@ fn load_source_full(
             m.func = ident_in(&mpath, &m.func, mpkg.as_deref());
             prog.methods.push(m);
         }
-        for (owner, l, c) in pp.impls {
-            prog.impls.push((ident_in(&mpath, &owner, mpkg.as_deref()), l, c));
+        for (owner, l, c, n) in pp.impls {
+            prog.impls.push((ident_in(&mpath, &owner, mpkg.as_deref()), l, c, n));
         }
         let mut fns: Vec<Option<Function>> = pp.functions.into_iter().map(Some).collect();
         let mut tys: Vec<Option<TypeDecl>> = pp.types.into_iter().map(Some).collect();
@@ -1380,7 +1380,7 @@ impl<'a> Rs<'a> {
         if let Expr::Call(c) = &mut *e {
             if c.name.starts_with("crate::") {
                 let (m, rem) = self.walk(&c.name);
-                if rem.len() == 2 && c.targs.is_none() && self.module(m).types.contains_key(&rem[0]) {
+                if rem.len() == 2 && self.module(m).types.contains_key(&rem[0]) {
                     if c.args.is_empty() {
                         let prefix = match c.name.rfind("::") {
                             Some(i) => c.name[..i].to_string(),
@@ -1412,7 +1412,8 @@ impl<'a> Rs<'a> {
                         variant: rem[1].clone(),
                         args,
                         ty: None,
-                        targs: None,
+                        // P9b-3: `crate::m::Enum::<A>::V(args)` keeps its type arguments
+                        targs: c.targs.take(),
                         inst: None,
                     }));
                 }
@@ -1420,6 +1421,7 @@ impl<'a> Rs<'a> {
         }
         if let Some(mut n) = replace {
             if let Expr::EnumCtor(ec) = &mut n {
+                self.targs(&mut ec.targs, ec.line, ec.col)?;
                 for a in ec.args.iter_mut() {
                     self.rexpr(a)?;
                 }

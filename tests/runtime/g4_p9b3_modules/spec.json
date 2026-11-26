@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "llvm_exports": ["pruv_abi_total"], "exit": 0, "stdout_lines": ["2", "12", "2002"], "gen_contains": ["impl pruv_g3_t_16_2_5_boxes_4_Pair_1_i {", "fn relabel(self, u: bool) -> pruv_g3_t_16_2_5_boxes_4_Pair_1_b", "b.relabel(true)", "self.peek()"], "gen_absent": ["Pair__", "self: pruv_"]}

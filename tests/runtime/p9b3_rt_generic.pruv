@@ -1,0 +1,40 @@
+// P9b-3 (R-6x-1, R-6x-3, R-6x-4): a generic impl block (`impl<T> Box2<T>`) specialized per application, a generic
+// method with its own type parameter, `Self` in a generic impl, and method receivers typed from value-match binders
+// (also of a generic enum and a nested pattern), a destructuring let and a generic call result (a Vec element read is in tests/spec/p9b3_recv_accept: no Vec on llvm yet).
+struct Box2<T> { v: T, n: i64 }
+struct C { k: i64 }
+enum Sh<T> { One(b: T), Opt(o: Option<C>), No }
+
+impl<T> Box2<T> {
+  fn new(v: T, n: i64) -> Self requires n >= 0 && n <= 100 ensures result.n == n && result.v == v {
+    return Self { v: v, n: n };
+  }
+  fn count(self) -> i64 ensures result == self.n { return self.n; }
+  fn get(self) -> T ensures result == self.v { return self.v; }
+  fn with<U>(self, u: U) -> Box2<U> ensures result.n == self.n { return Box2::<U> { v: u, n: self.n }; }
+  fn twice(self) -> i64 requires self.n >= 0 && self.n <= 100 ensures result == 2 * self.n {
+    return self.count() + Self::count(self);
+  }
+}
+
+impl C { fn get(self) -> i64 ensures result == self.k { return self.k; } }
+
+fn mk<T>(x: T, k: i64) -> C ensures result.k == k { return C { k: k }; }
+
+fn run(k: i64) -> i64 ! alloc requires k >= 0 && k <= 50 {
+  let b: Box2<C> = Box2::<C>::new(C { k: k }, 3);
+  let w: Box2<bool> = b.with::<bool>(true);
+  // two specializations of `with` on one owner: no Rust overloading, so each prints under its function stem
+  let w2: Box2<i64> = b.with::<i64>(4);
+  let s: Sh<Box2<C>> = Sh::<Box2<C>>::One(b);
+  let o: Sh<i64> = Sh::<i64>::Opt(Some::<C>(C { k: 7 }));
+  let x: i64 = match s { Sh::One(y) => y.get().get(), Sh::Opt(_) => 0, Sh::No => 0 };
+  let mut t: i64 = 0;
+  match o {
+    Sh::Opt(Some(c)) => { t = c.get(); }
+    _ => { }
+  }
+  let pair: (C, C) = (C { k: 2 }, C { k: 3 });
+  let (p, q): (C, C) = pair;
+  return b.count() + w.count() + x + b.twice() + t + p.get() + q.get() + mk::<bool>(true, 1).get() + w2.count();
+}
