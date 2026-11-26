@@ -817,11 +817,11 @@ fn start(binary: str, home: str, folder: str, timeout_ms: i64, inout ck: Check) 
 // sets ck.fail.
 fn step(take l: Loop, inout ck: Check, inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
   requires 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-  requires 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line)
+  requires len(line) <= 8388608 && st.filled <= len(line)
   requires crate::tail::tail_ok(tl) && tl.limit == 1024
   ensures 0 <= ck.n && ck.n <= len(line)
   ensures 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-  ensures 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line)
+  ensures len(line) <= 8388608 && st.filled <= len(line)
   ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
   let mut q: Loop = crate::transport::receive_grow(move l, ck.slot, ck.timer, -1, true, 8388608, inout st, inout line, inout chunk, inout tl);
@@ -912,10 +912,10 @@ fn on_reply(t: [u8], c: Cap, id: i64, inout ck: Check, inout buf: [u8]) -> () ! 
 fn pump(take l: Loop, id: i64, inout ck: Check, inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail, inout c: Cap, inout buf: [u8]) -> Loop ! async, proc, alloc
   requires 1 <= id && id <= 2
   requires 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-  requires 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line)
+  requires len(line) <= 8388608 && st.filled <= len(line)
   requires crate::tail::tail_ok(tl) && tl.limit == 1024
   ensures 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-  ensures 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line)
+  ensures len(line) <= 8388608 && st.filled <= len(line)
   ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
   let mut q: Loop = move l;
@@ -924,7 +924,7 @@ fn pump(take l: Loop, id: i64, inout ck: Check, inout st: crate::transport::Read
   while ck.fail == 0 && !done && events < 1000000
     invariant 0 <= events && events <= 1000000
     invariant 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-    invariant 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line) && 1 <= id && id <= 2
+    invariant len(line) <= 8388608 && st.filled <= len(line) && 1 <= id && id <= 2
     invariant crate::tail::tail_ok(tl) && tl.limit == 1024
     decreases 1000000 - events
   {
@@ -949,10 +949,10 @@ fn pump(take l: Loop, id: i64, inout ck: Check, inout st: crate::transport::Read
 // (server requests answered, everything else ignored) before the next request is written. Each step eats at least one chunk byte.
 fn drain(take l: Loop, inout ck: Check, inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail, inout c: Cap) -> Loop ! async, proc, alloc
   requires 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-  requires 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line)
+  requires len(line) <= 8388608 && st.filled <= len(line)
   requires crate::tail::tail_ok(tl) && tl.limit == 1024
   ensures 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-  ensures 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line)
+  ensures len(line) <= 8388608 && st.filled <= len(line)
   ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
   let mut q: Loop = move l;
@@ -960,7 +960,7 @@ fn drain(take l: Loop, inout ck: Check, inout st: crate::transport::Reader, inou
   while ck.fail == 0 && st.at < st.end && n < 70000
     invariant 0 <= n && n <= 70000
     invariant 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-    invariant 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line)
+    invariant len(line) <= 8388608 && st.filled <= len(line)
     invariant crate::tail::tail_ok(tl) && tl.limit == 1024
     decreases 70000 - n
   {
@@ -1028,7 +1028,8 @@ pub fn load_check(binary: str, home: str, folder: str, thread: str, timeout_ms: 
     return failure(ck.fail, ck.stage, move r1, move d1);
   }
   let mut st: crate::transport::Reader = crate::transport::reader_new();
-  let mut line: [u8] = alloc(4096, 0);
+  let mut line: [u8] = alloc(0, 0);
+  arr_reserve(inout line, 4096);
   let mut chunk: [u8] = alloc(65536, 0);
   let mut tl: crate::tail::Tail = crate::tail::new(1024);
   let mut c: Cap = cap_new();

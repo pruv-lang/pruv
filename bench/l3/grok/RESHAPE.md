@@ -91,14 +91,14 @@ only. Hand lines are `perf/hand_rpc.rs`, Pruv lines `rpc.pruv` unless marked.
 | `load_check` returns the `[i64]` result packet | host boundary (§3 keep list) | — |
 | `failure` takes `ck.detail` by moving the field out and refilling it with an empty array on the next statement | no struct destructuring; a moved field must be reassigned at once (an empty Vec does not allocate) | none (same cost) |
 | `scan` resets the 22 `Cap` fields one by one where the hand returns a fresh `Cap` | `c = cap_new()` on an `inout c: Cap` is `type/immutable` ("inout parameter c cannot be reassigned as a whole"); returning a fresh `Cap` would allocate nothing either way, but callers reuse `c` through `inout` | IW (new, `../lib/RESHAPE.md` 4.3b) |
-| the line buffer of `load_check` starts as `alloc(4096, 0)` (zero-filled, once per check) where the hand reserves `Vec::with_capacity` | `transport::receive_grow` (shared `pkgs/transport`) requires `len(line) >= 1`; changing that contract means running every transport consumer | open structure row 4.3b-R (below) |
 | the slot dispatch in `object` is an `else if` chain where the hand has `match` arms | an `i64` scrutinee takes no literal arms (R-6u-6 literals are payload positions only), and sixteen separate `if slot == k` statements (the first 4.3 form) made verification of `value` run for hours | VP (new, `../lib/RESHAPE.md`) |
 
-Structure rows (not language gaps). U, V, C and D were left open by 4.3 and are **closed in 4.3b** (§3c); R is open:
+Structure rows (not language gaps). U, V, C and D were left open by 4.3 and are **closed in 4.3b** (§3c); R is
+**closed in 4.3c** (§3d):
 
 | row | Pruv | hand | change |
 |---|---|---|---|
-| 4.3b-R | `load_check` makes the line buffer with `alloc(4096, 0)` | `Vec::with_capacity(4096)` | let `receive_grow` start from length 0 (a `pkgs/transport` contract change; run all transport consumers) |
+| 4.3b-R (closed 4.3c) | `load_check` made the line buffer with `alloc(4096, 0)` | `Vec::with_capacity(4096)` | `receive_grow` starts from length 0; `load_check` reserves 4096 on an empty buffer |
 
 The 4.3 table, kept for the record (all four closed in 4.3b):
 
@@ -160,9 +160,55 @@ One review (Codex gpt-6.2-astra, high) of `perf/hand_rpc.rs` against `rpc.pruv` 
   (three allocations where the hand reserves the packet once). Both change `pkgs/turns` and need all its consumers run.
 - Verification: the scratch root with `rpc`, `line` and `entry` verifies in 97 s on a warm proof cache (191 s first).
 
+## 3d. Step 4.3c: the history packet, row 4.3b-R, review fixes
+
+Against `perf/hand_history.rs` per function:
+
+| Pruv | hand | 4.3c |
+|---|---|---|
+| `read::assemble_store` built `rows` (`10 * kept` words), `meta` (`packet::meta_new`), checked them with `packet::rows_ok` and copied both into a third, zero-filled packet | `Collector::packet`: `Vec::with_capacity(28 + nr + nx)`, `resize(28)`, rows pushed oldest turn first, text extended, header and meta written in place | same shape: `alloc(0, 0)` + one `arr_reserve(28 + nr + nx)`, 28 zero words, rows pushed oldest first (`arr_push` of 10 words), text pushed (`widen` / `widen_str` now append), header and meta (`p[4 + k]`, no mutable sub-slice) in place. One allocation, as the hand. `packet::rows_ok` is gone (no caller) |
+| `assemble_store` stops at a draft whose Store offset is out of range | (cannot happen) | kept as one check per draft, now returning the InternalInvariant packet: `widen` needs the source range, which the Store contract does not carry (row VL) |
+| `assemble_store` ends with `len(p) == 28 + nr + nx` | (by construction) | kept: `text_layout` gives `tl` but not the per-draft stamp sum the push loop would need to prove it |
+| `event_step` re-checked `kd`, `lo`, `hi` at run time; `window` carried an event count `j` and a `bad` flag | `history_window` handles the borrowed line in the LF branch and returns on failure | the ranges are `event_step` preconditions; `window` returns the error packet at once; `j` is gone (`st[0] <= p` bounds the turn count) |
+| `line_step` returned early on a line over 16 MiB | (the caller caps lines at 1 MiB) | `len(line) <= 1048576` is a precondition; the check is gone |
+| `load_check` line buffer `alloc(4096, 0)` (row 4.3b-R) | `Vec::with_capacity(4096)` | `alloc(0, 0)` + `arr_reserve(4096)`. `transport::receive_grow` now takes and keeps `len(line) <= cap` (was `1 <= len(line)`); grok `step`/`pump`/`drain` and `mcp/root.pruv` drop `1 <= len(line)`. mcp still starts from `alloc(4096, 0)` (not part of this step) |
+
+Not changed:
+
+- **Collector store** (`pkgs/turns` `st`/`sl`/`Store`): the hand `Collector { slots: Vec<Slot> }` with owned prompt and
+  reply buffers was probed again with this `pruvc-rs` (a struct with a `Vec<Slot>` field, `Slot { prompt: [u8], reply:
+  [u8], .., created: At }`, `enum At { Absent, Canon(b: [u8; 24]) }`, `vec_at_mut` + `truncate` / `arr_append` on the
+  element fields). rs/rust verifies and builds; rs/llvm rejects it ("has owned collection fields, which need the Rust
+  backend"; as an `inout Vec<Slot>` parameter, "G6 foreign calls and collections are not implemented by the llvm
+  codegen layer"). Gap VL (`../pkgs/RESHAPE.md` step 2.12) stands; `pkgs/turns` is unchanged.
+- Codex structure review (one, gpt-6.2-astra high): 12 rows, packet words, order and reservation match the hand.
+  Applied: the `event_step` / `window` and `line_step` rows above. Left open as 4.3c rows:
+
+| row | Pruv | hand | change |
+|---|---|---|---|
+| 4.3c-T | `entry::feed` resolves the timestamp (numeric stamps format 24 bytes) before the role / synthetic / blank filters | `Entry::at()` is called only for an accepted user or assistant entry | resolve the stamp right before `begin2` / `answer2` |
+| 4.3c-B | `user_view` / `assistant_view` test a 100000000-byte bound and the query char boundaries at run time; `user_view` has two `begin2` call sites | one call site after the prompt view is chosen | carry the bounds in the `query_range` / caller contracts and call `begin2` once |
+| 4.3c-G | `receive_grow` copies up to the cap and then reports -3; the line is cleared lazily (`filled = 0`, truncate on the next append) | `Rpc::step` fails before copying an over-cap piece and clears after each line | compare the LF position with the room left before `arr_append` (shared `pkgs/transport`; all transport consumers) |
+
+  Not a Pruv change: numeric timestamps (an integer or a digit string) give a 24-byte ISO stamp in Pruv (the reference
+  behaviour) and none in the hand, whose benchmark inputs carry only canonical ISO strings (`hand_history.rs` header).
+  The pump event cap counting non-line events is row UL.
+
 ## 4. Results
 
-The tables below the 4.3b table are the 4.3 results.
+The tables below the 4.3c table are the 4.3b and 4.3 results.
+
+4.3c, built from this worktree with `pruvc-rs` (`$PRUVC_RS`), verified (no `--no-verify`), after the last code change:
+
+| test (4.3c) | rs/rust | rs/llvm |
+|---|---|---|
+| grok `test_impl.py --no-ts` | 254/254 (all fixtures passed on 2 pairs) | 254/254 |
+| grok `q.py --cases 300` (554 cases with the fixtures) | 554, 0 unexplained (450 exact, rest policy) | 554, 0 unexplained (450 exact, rest policy) |
+| grok `perf/run_perf.py check` (output equality, no measurement) | 8/8 `pruv == hand` | 8/8 `pruv == hand` |
+| mcp `test_impl.py` (transport consumer) | 22/22 | 22/22 |
+| codex `test_impl.py` (transport consumer; ts/oracle 136/136) | 136/136 | 136/136 |
+
+`pkgs/turns` was not changed (gap VL), so opencode was not rerun. No q case needed a rerun. Performance was not remeasured.
 
 4.3b, built from this worktree with `pruvc-rs` (`$PRUVC_RS`), verified (no `--no-verify`):
 
