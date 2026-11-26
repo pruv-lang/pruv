@@ -5063,8 +5063,8 @@ impl Checker {
     /// (type/match_arms names a missing case) and every arm must be reachable (type/unreachable_arm). `arms` are the
     /// arm patterns (ctor `_` for a wildcard arm), `tuple` the P8 tuple patterns of plain binders; `scrut` the
     /// scrutinee and `t` its type. Returns the tree; leaves name their arm and the lets that bind its names.
-    fn lower_patterns(&mut self, arms: &[(i64, i64, Option<String>, String, Vec<String>)], t: &GType, line: i64, col: i64)
-        -> Res<PNode>
+    fn lower_patterns(&mut self, arms: &[(i64, i64, Option<String>, String, Vec<String>)], uses: &[HashSet<String>],
+        t: &GType, line: i64, col: i64) -> Res<PNode>
     {
         use crate::ast::SubPat;
         let mut rows = Vec::new();
@@ -5078,18 +5078,31 @@ impl Checker {
         }
         let mut used = vec![false; arms.len()];
         let mut budget = 4096usize;
-        let node = self.pat_compile(rows, &mut used, &mut budget, &mut Vec::new(), arms, line, col)?;
+        let mut node = self.pat_compile(rows, &mut used, &mut budget, &mut Vec::new(), arms, uses, line, col)?;
         if let Some(k) = used.iter().position(|u| !u) {
             let (l, c) = (arms[k].0, arms[k].1);
             return Err(terr(l, c, "unreachable_arm", "this arm can never match: the arms above take every value it matches",
                 "remove the arm or move it above the arm that covers it"));
+        }
+        if let PNode::Leaf(k, binds) = &node {
+            // a lone `_` arm on an Option/Result/enum still matches the scrutinee (evaluated once, as in Rust): one
+            // case per constructor, payloads bound to fresh names
+            if let Ok(ctors) = self.pat_ctors(t, line, col) {
+                let mut out = Vec::new();
+                for (cen, ctor, fs) in ctors {
+                    let names = fs.iter().map(|_| { self.pat_tmp += 1; format!("pruv_pat{}", self.pat_tmp) }).collect();
+                    out.push((cen, ctor, names, PNode::Leaf(*k, binds.clone())));
+                }
+                node = PNode::Match(String::new(), out);
+            }
         }
         Ok(node)
     }
 
     #[allow(clippy::too_many_arguments)]
     fn pat_compile(&mut self, rows: Vec<PRow>, used: &mut [bool], budget: &mut usize, path: &mut Vec<String>,
-        arms: &[(i64, i64, Option<String>, String, Vec<String>)], line: i64, col: i64) -> Res<PNode>
+        arms: &[(i64, i64, Option<String>, String, Vec<String>)], uses: &[HashSet<String>], line: i64, col: i64)
+        -> Res<PNode>
     {
         use crate::ast::SubPat;
         if *budget == 0 {
@@ -5139,23 +5152,28 @@ impl Checker {
                 }
                 let mut out = Vec::new();
                 for (cen, ctor, fs) in ctors {
-                    // a field keeps its source name only when every row that reaches this case binds it by that
-                    // name (so no other arm body sees the name); otherwise it gets a fresh name and the arms bind
-                    // their own names with lets
+                    // a field keeps its source name when the rows that reach this case and bind it all use that
+                    // name and no row that reaches it without binding the field refers to the name (so no other
+                    // arm body sees it); otherwise it gets a fresh name and the arms bind their own names with lets
                     let mut names = Vec::new();
                     for j in 0..fs.len() {
                         let mut named: Option<String> = None;
                         let mut ok = true;
+                        let mut others = Vec::new();
                         for r in &rows {
                             match test_of(r).map(|i| &r.tests[i].2) {
                                 Some(SubPat::Variant(_, c, _)) if *c != ctor => {}
                                 Some(SubPat::Variant(_, _, subs)) => match (&subs[j], &named) {
                                     (SubPat::Bind(n), None) => named = Some(n.clone()),
                                     (SubPat::Bind(n), Some(m)) if n == m => {}
-                                    _ => ok = false,
+                                    (SubPat::Bind(_), Some(_)) => ok = false,
+                                    _ => others.push(r.arm),
                                 },
-                                _ => ok = false,
+                                _ => others.push(r.arm),
                             }
+                        }
+                        if let Some(n) = &named {
+                            ok &= others.iter().all(|k| !uses[*k].contains(n));
                         }
                         names.push(match named {
                             Some(n) if ok => n,
@@ -5184,7 +5202,7 @@ impl Checker {
                         }
                     }
                     path.push(match &cen { Some(e) => format!("{}::{}", e, ctor), None => ctor.clone() });
-                    let child = self.pat_compile(spec, used, budget, path, arms, line, col)?;
+                    let child = self.pat_compile(spec, used, budget, path, arms, uses, line, col)?;
                     path.pop();
                     out.push((cen, ctor, names, child));
                 }
@@ -5210,7 +5228,10 @@ impl Checker {
                     let ok_kind = if is_bool { matches!(p, SubPat::Bool(_)) } else { matches!(p, SubPat::Int(_)) };
                     if !ok_kind {
                         let (l, c) = (arms[r.arm].0, arms[r.arm].1);
-                        return Err(terr(l, c, "type_mismatch",
+                        // a constructor on a scalar is a match on a non-enum (as for the first arm); a literal of the
+                        // other kind is a type mismatch
+                        let code = if matches!(p, SubPat::Variant(..)) { "match_type" } else { "type_mismatch" };
+                        return Err(terr(l, c, code,
                             format!("this pattern cannot match {} of type {}", label(&v), tn(&ty)), ""));
                     }
                     let same = match (p, &key) {
@@ -5229,10 +5250,10 @@ impl Checker {
                 }
                 let lit = match &key { SubPat::Int(x) => x.clone(), SubPat::Bool(b) => b.to_string(), _ => unreachable!() };
                 path.push(format!("{} == {}", label(&v), lit));
-                let a = self.pat_compile(yes, used, budget, path, arms, line, col)?;
+                let a = self.pat_compile(yes, used, budget, path, arms, uses, line, col)?;
                 path.pop();
                 path.push(format!("{} != {}", label(&v), lit));
-                let b = self.pat_compile(no, used, budget, path, arms, line, col)?;
+                let b = self.pat_compile(no, used, budget, path, arms, uses, line, col)?;
                 path.pop();
                 Ok(PNode::Test(v, key, Box::new(a), Box::new(b)))
             }
@@ -5246,7 +5267,8 @@ impl Checker {
         let mut probe = m.scrutinee.clone();
         let t = self.match_scrutinee(&mut probe, scope)?;
         let arms: Vec<_> = m.arms.iter().map(|a| (a.line, a.col, a.enum_name.clone(), a.ctor.clone(), a.binders.clone())).collect();
-        let node = self.lower_patterns(&arms, &t, m.line, m.col)?;
+        let uses: Vec<HashSet<String>> = m.arms.iter().map(|a| { let mut u = HashSet::new(); pat_names_stmts(&a.body, &mut u); u }).collect();
+        let node = self.lower_patterns(&arms, &uses, &t, m.line, m.col)?;
         let bodies: Vec<Vec<Stmt>> = m.arms.iter().map(|a| a.body.clone()).collect();
         let tuples: Vec<Vec<(String, TuplePat)>> = m.arms.iter().map(|a| a.binders.iter().zip(a.pats.iter())
             .filter_map(|(b, p)| p.clone().map(|p| (b.clone(), p))).collect()).collect();
@@ -6830,13 +6852,23 @@ impl Checker {
                 "write the cases with `is` tests and `==>`"));
         }
         let varms = crate::ast::ValueMatch::arms(call);
+        if varms.is_empty() {
+            // P9a-6: a value match needs an arm to produce its value
+            return Err(terr(line, col, "match_arms", "a value `match` has no arms", "write one arm for every case"));
+        }
         if Self::has_ext_pattern(varms.iter().map(|a| (a.ctor.as_str(), a.binders.as_slice()))) {
             // P9a-6: lowered to nested value matches and value ifs, which are then checked as usual
             let mut probe = call.args[0].clone();
             let t = self.match_scrutinee(&mut probe, scope)?;
             let arms: Vec<_> = varms.iter().zip(call.args[1..].iter())
                 .map(|(a, v)| (v.line(), v.col(), a.enum_name.clone(), a.ctor.clone(), a.binders.clone())).collect();
-            let node = self.lower_patterns(&arms, &t, line, col)?;
+            let uses: Vec<HashSet<String>> = call.args[1..].iter().map(|v| { let mut u = HashSet::new(); pat_names_expr(v, &mut u); u }).collect();
+            let node = self.lower_patterns(&arms, &uses, &t, line, col)?;
+            if let PNode::Leaf(..) = node {
+                // a lone `_` arm over a scalar: there is no case to test, and the scrutinee must still be evaluated
+                return Err(terr(line, col, "match_type", format!("a value `match` needs an Option, Result or enum, got {}", tn(&t)),
+                    "use the value directly"));
+            }
             *e = pat_value(&node, &call.args[0], &call.args[1..], line, col);
             return match e {
                 Expr::Call(x) if crate::ast::ValueMatch::matches(x) => self.value_match(e, want, scope, c),
@@ -9171,16 +9203,47 @@ fn pat_var(line: i64, col: i64, name: &str) -> Expr {
     Expr::Var(Var { line, col, name: name.to_string(), ty: None })
 }
 
+/// P9a-6: every name an arm body reads, moves or assigns (a field keeps its source name in a decision-tree case only
+/// when no arm that reaches the case without binding the field refers to that name).
+fn pat_names_stmts(stmts: &[Stmt], out: &mut HashSet<String>) {
+    crate::foreign_shim::walk_stmts(stmts, &mut |n| pat_names_node(n, out));
+    pat_targets(stmts, out);
+}
+
+fn pat_names_expr(e: &Expr, out: &mut HashSet<String>) {
+    crate::foreign_shim::walk_expr(e, &mut |n| pat_names_node(n, out));
+}
+
+fn pat_names_node(n: crate::foreign_shim::Node<'_>, out: &mut HashSet<String>) {
+    if let crate::foreign_shim::Node::Expr(Expr::Var(x)) = n {
+        out.insert(x.name.clone());
+    } else if let crate::foreign_shim::Node::Expr(Expr::Move(x)) = n {
+        out.insert(x.name.clone());
+    }
+}
+
+fn pat_targets(stmts: &[Stmt], out: &mut HashSet<String>) {
+    for s in stmts {
+        match s {
+            Stmt::Assign(a) => { out.insert(a.name.clone()); }
+            Stmt::FieldAssign(a) => { out.insert(a.name.clone()); }
+            Stmt::IndexAssign(a) => { out.insert(a.name.clone()); }
+            Stmt::If(x) => { pat_targets(&x.then, out); pat_targets(&x.els, out); }
+            Stmt::While(x) => pat_targets(&x.body, out),
+            Stmt::ForMap(x) => pat_targets(&x.body, out),
+            Stmt::Match(m) => for a in &m.arms { pat_targets(&a.body, out); },
+            _ => {}
+        }
+    }
+}
+
 fn pat_cond(line: i64, col: i64, v: &str, lit: &crate::ast::SubPat) -> (Expr, bool) {
     use crate::ast::SubPat;
     match lit {
         SubPat::Bool(b) => (pat_var(line, col, v), !*b),
         SubPat::Int(x) => {
-            let (neg, digits) = match x.strip_prefix('-') { Some(d) => (true, d), None => (false, x.as_str()) };
-            let lit = Expr::IntLit(IntLit { line, col, value: digits.to_string(), ty: None, kind: Default::default() });
-            let lit = if neg {
-                Expr::Unary(Unary { line, col, op: "-".into(), operand: Box::new(lit), ty: None })
-            } else { lit };
+            // a signed literal, as the parser folds `-N` (so `-9223372036854775808` stays in range)
+            let lit = Expr::IntLit(IntLit { line, col, value: x.clone(), ty: None, kind: Default::default() });
             (Expr::Binary(Binary { line, col, op: "==".into(), left: Box::new(pat_var(line, col, v)), right: Box::new(lit), ty: None }), false)
         }
         _ => unreachable!("a literal test"),

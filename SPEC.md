@@ -2832,7 +2832,8 @@ variants (R-6u-5).
 
 - R-6u-6 **Wildcard, literal and nested patterns (P9a-6).** In a `match` statement and a value `match` (R-6w-5) an
   arm may be `_ =>` (every value), and a payload position may hold, besides a binder or a tuple pattern (R-6u-1), `_`,
-  an integer literal (`Some(0)`, `Ok(-1)`, on an integer payload of any width), `true`/`false` (on a `bool` payload)
+  an integer literal (`Some(0)`, `Ok(-1)`, `Some(-9223372036854775808)`, on an
+  integer payload), `true`/`false` (on a `bool` payload)
   or a nested constructor pattern (`Err(Halt::Done)`, `Some(Ok(x))`, `E::V(F::W(0), _)`) on an `Option`, `Result` or
   enum payload, to any depth. A literal on a payload of another type and a constructor of another type are
   `type/type_mismatch` and `type/match_type` (`type/unknown_variant` for a variant the enum does not have); arity is
@@ -2840,7 +2841,10 @@ variants (R-6u-5).
   (`(Err, Halt::Stalled)`); literal arms over an integer need a binder or `_` arm for the rest. The checker lowers
   such a match to a decision tree of plain matches and `if v == lit` tests, so the verifier proves each arm under
   its full pattern and the failure of the arms above it, and both backends run the tree (the Rust backend prints the
-  lowered tree, parity row P9a-7). These patterns are not accepted in `if let`, `let else` or `while let`
+  lowered tree, parity row P9a-7). The scrutinee is evaluated once, also under a lone `_` arm (its calls, effects
+  and proof obligations stay); a value `match` whose only arm is `_` needs an `Option`, `Result` or enum scrutinee
+  (`type/match_type`). A payload binder is the payload itself (an owned payload is moved or borrowed as in a plain
+  match, never copied), and it is not visible in another arm. These patterns are not accepted in `if let`, `let else` or `while let`
   (`parse/let_pattern`, parity row P9a-7), and there are no or-patterns, guards or `@` bindings yet. Tests:
   [accept](tests/spec/p9_pattern_accept.pruv), [missing case](tests/spec/p9_pattern_reject.pruv),
   [false contract](tests/spec/p9_pattern_reject_contract.pruv), [let else](tests/spec/p9_pattern_let.pruv),
@@ -2850,7 +2854,10 @@ variants (R-6u-5).
   [literal type](tests/must_reject/p9_pattern_lit_type.pruv),
   [variant type](tests/must_reject/p9_pattern_variant_type.pruv), [arity](tests/must_reject/p9_pattern_arity.pruv),
   [false contract on one arm](tests/must_reject/p9_pattern_false_ensures.pruv),
-  [index in a general arm](tests/must_reject/p9_pattern_arm_index.pruv), [if let](tests/must_reject/p9_pattern_if_let.pruv).
+  [index in a general arm](tests/must_reject/p9_pattern_arm_index.pruv), [if let](tests/must_reject/p9_pattern_if_let.pruv),
+  [lone `_` and owned binders](tests/runtime/p9_rt_pattern_wild.pruv),
+  [lone `_` precondition](tests/must_reject/p9_pattern_wild_requires.pruv),
+  [constructor on a scalar](tests/must_reject/p9_pattern_ctor_scalar.pruv).
 - R-6u-7 **Arm order and unreachable arms (P9a-6).** In a match with a pattern of R-6u-6, arms are tried in source
   order and the first arm that matches runs, as in Rust (a specific arm before a general one takes its values first).
   An arm that no value can reach because the arms above it take every value it matches (`Some(0)` after `Some(x)`,
@@ -2939,7 +2946,7 @@ return match s { Shape::Circle(r) => { 3 * r * r }, Shape::Empty => 0 };
 - R-6w-5 **Value `match`.** `match v { P1 => { e1 }, P2 => e2, .. }` is an expression wherever a value is read, as
   for R-6w-1. An arm pattern is a statement `match` pattern on an `Option`, a `Result` or a user enum (`Some(x)`,
   `Err(e)`, `E::V(a, b)`, `E::W`, 6a, with the `_`, literal and nested patterns of R-6u-6); the arms cover every case
-  (`type/match_arms`). An arm value is a block
+  (`type/match_arms`, also for a value `match` with no arms). An arm value is a block
   holding exactly one expression, or a bare expression followed by `,` or the closing `}` (`parse/syntax`). A tuple
   or slice pattern in a value `match` is `parse/value_match_pattern` (parity row P9a-6; use a `match` statement).
   A binder names the payload in its arm only (`type/unknown_name` elsewhere). Evaluation order: `v` once, then only

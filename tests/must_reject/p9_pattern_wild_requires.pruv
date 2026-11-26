@@ -1,0 +1,3 @@
+// P9a-6 audit: a lone `_` arm still evaluates the scrutinee, so its call precondition must be proved.
+fn f(x: i64) -> Option<i64> requires x > 0 { return Some(x); }
+fn g() -> i64 { return match f(0) { _ => 1 }; }

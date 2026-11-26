@@ -1486,6 +1486,7 @@ must_reject|tests/must_reject/p9_match_pattern.pruv	1 case: obl=0 1	--infer=5867
 must_reject|tests/must_reject/p9_match_types.pruv	1 case: obl=0 1	--infer=1048b19968b8
 must_reject|tests/must_reject/p9_pattern_arity.pruv	1 case: obl=0 1	--infer=3b4ae3d25f3e
 must_reject|tests/must_reject/p9_pattern_arm_index.pruv	1 case: obl=3 1	--infer=af614d4a7fd1
+must_reject|tests/must_reject/p9_pattern_ctor_scalar.pruv	1 case: obl=0 1	--infer=bc47d3c00d2f
 must_reject|tests/must_reject/p9_pattern_false_ensures.pruv	1 case: obl=1 1	--infer=5cc7a3a0250c
 must_reject|tests/must_reject/p9_pattern_if_let.pruv	1 case: obl=0 1	--infer=2782c0b29f96
 must_reject|tests/must_reject/p9_pattern_lit_type.pruv	1 case: obl=0 1	--infer=3b157c2b9d29
@@ -1494,6 +1495,8 @@ must_reject|tests/must_reject/p9_pattern_missing_lit.pruv	1 case: obl=0 1	--infe
 must_reject|tests/must_reject/p9_pattern_unreachable.pruv	1 case: obl=0 1	--infer=1a0fd81ba1f6
 must_reject|tests/must_reject/p9_pattern_unreachable_wild.pruv	1 case: obl=0 1	--infer=4ae0865cb7c5
 must_reject|tests/must_reject/p9_pattern_variant_type.pruv	1 case: obl=0 1	--infer=49ded69b59ac
+must_reject|tests/must_reject/p9_pattern_wild_requires.pruv	1 case: obl=1 1	--infer=e62874e98540
+must_reject|tests/must_reject/p9_value_match_empty.pruv	1 case: obl=0 1	--infer=f580b94f282c
 must_reject|tests/must_reject/refine_alloc_len.pruv	1 case: obl=4 1	--infer=cb1feac1781b
 must_reject|tests/must_reject/refine_base_bool.pruv	1 case: obl=0 1	--infer=df4b068e07a3
 must_reject|tests/must_reject/refine_bounds_i64.pruv	1 case: obl=0 1	--infer=7c3e5998f1e1
@@ -2037,6 +2040,7 @@ runtime|tests/runtime/p9_rt_if_tuple.pruv	1 case: obl=3 1	--infer=d31654b12c3f
 runtime|tests/runtime/p9_rt_if_tuple_owned.pruv	1 case: obl=3 1	--infer=467b57b9c3b9
 runtime|tests/runtime/p9_rt_if_unchecked.pruv	1 case: obl=3 1	--infer=dcf3468477ba
 runtime|tests/runtime/p9_rt_if_value.pruv	1 case: obl=45 1	--infer=e98f6c849c92
+runtime|tests/runtime/p9_rt_match_bare.pruv	1 case: obl=4 1	--infer=fef00d03796e
 runtime|tests/runtime/p9_rt_match_generic.pruv	1 case: obl=1 1	--infer=16e4373099b8
 runtime|tests/runtime/p9_rt_match_order.pruv	1 case: obl=19 1	--infer=a60cc8cbcc68
 runtime|tests/runtime/p9_rt_match_owned.pruv	1 case: obl=26 1	--infer=e801ceaaa2e8
@@ -2044,8 +2048,9 @@ runtime|tests/runtime/p9_rt_match_take.pruv	1 case: obl=26 1	--infer=5c01334bbbb
 runtime|tests/runtime/p9_rt_match_unchecked.pruv	1 case: obl=2 1	--infer=d432d4238edd
 runtime|tests/runtime/p9_rt_match_value.pruv	1 case: obl=25 1	--infer=7186d2050c86
 runtime|tests/runtime/p9_rt_owned_arm.pruv	1 case: obl=24 1	--infer=2526dd97d752
-runtime|tests/runtime/p9_rt_pattern_order.pruv	1 case: obl=44 1	--infer=3e45aff93f21
+runtime|tests/runtime/p9_rt_pattern_order.pruv	1 case: obl=43 1	--infer=b8c12f63dd07
 runtime|tests/runtime/p9_rt_pattern_owned.pruv	1 case: obl=16 1	--infer=39b3535d33b0
+runtime|tests/runtime/p9_rt_pattern_wild.pruv	1 case: obl=9 1	--infer=ccb7bea9e473
 runtime|tests/runtime/qb_across_requires.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 runtime|tests/runtime/qb_budget_edge.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 runtime|tests/runtime/qb_nested_budget.pruv	1 case: obl=0 1	--infer=a887fdcb74d6

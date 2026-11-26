@@ -313,7 +313,8 @@ impl ValueMatch {
     }
 
     pub fn matches(call: &Call) -> bool {
-        call.name.starts_with("@value_match|")
+        // an empty value match (`match e {}`) carries no `|`; it is still a value match (rejected as type/match_arms)
+        call.name == Self::NAME || call.name.starts_with("@value_match|")
     }
 
     /// The call name for these arms (after the arm enum names were resolved).

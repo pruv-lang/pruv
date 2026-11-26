@@ -1,0 +1,2 @@
+// P9a-6 audit: a constructor pattern on a scalar payload is a match on a non-enum, also after a literal arm.
+fn f(o: Option<i64>) -> i64 { return match o { Some(0) => 1, Some(Some(x)) => 2, _ => 0 }; }

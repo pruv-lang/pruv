@@ -5619,11 +5619,18 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     let re = crate::emit_common::result_error_rty(&g);
                     return Ok(format!("{}::<{}, {}>({})", x.name, rx, re, a));
                 }
+                // P9a-6: the legacy `option` / `result` keys are Option<i64> / Result<i64, i64>; spell the type so a
+                // bare `None` / `Err(e)` (for example a match scrutinee) is never left to Rust inference (E0282)
+                let legacy = match x.ty.as_deref() {
+                    Some("option") => "::<i64>",
+                    Some("result") => "::<i64, i64>",
+                    _ => "",
+                };
                 if x.name == "None" {
-                    return Ok("None".to_string());
+                    return Ok(format!("None{legacy}"));
                 }
                 match &x.arg {
-                    Some(a) => Ok(format!("{}({})", x.name, self.e(a)?)),
+                    Some(a) => Ok(format!("{}{}({})", x.name, legacy, self.e(a)?)),
                     None => Err("codegen: contract-only expression in code: None".to_string()),
                 }
             }

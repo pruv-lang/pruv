@@ -1,0 +1,13 @@
+// P9a-6: a bare `None` / `Ok(..)` / `Err(..)` literal as a match scrutinee (statement and value form) has its
+// payload type spelled on the Rust backend, so Rust never has to infer it.
+fn run() -> () ! io {
+  match None { Some(v) => { print(v); } None => { print(0); } }
+  match Some(4) { Some(v) => { print(v); } None => { print(0); } }
+  match Err(3) { Ok(v) => { print(v); } Err(e) => { print(e + 10); } }
+  print(match Err(3) { Ok(v) => 1, Err(e) => e });
+  print(match Ok(8) { Ok(v) => v, Err(e) => e });
+  print(match None { Some(v) => v, None => 7 });
+  print(match None { Some(0) => 1, _ => 2 });
+  match None { Some(_) => { print(1); } None => { print(9); } }
+  print(match Err(5) { Ok(_) => 1, Err(e) => e });
+}
