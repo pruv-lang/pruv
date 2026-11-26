@@ -1,5 +1,6 @@
-// P9a-6: nested and literal patterns are not accepted in `if let` yet (parity row P9a-7).
+// P9a-7 (R-6u-9): a failed `if let Some(1)` leaves `Some(0)` possible, so the division after it is rejected.
 fn f(o: Option<i64>) -> i64 {
-  if let Some(0) = o { return 1; }
-  return 0;
+  if let Some(1) = o { return 1; }
+  let Some(d) = o else { return 0; };
+  return 100 / d;
 }

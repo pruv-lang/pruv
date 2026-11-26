@@ -1,0 +1,6 @@
+// P9a-7 (R-6u-10): every alternative of an or-pattern binds the same names.
+fn f(o: Option<i64>) -> i64 {
+  match o {
+    Some(x) | None => { return 0; }
+  }
+}

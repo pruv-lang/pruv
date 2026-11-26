@@ -1,0 +1,11 @@
+// R-6u-11: a guard cannot pass an argument inout, so the arms below always test the matched value (as in Rust).
+fn bump(inout c: i64) -> bool requires c < 100 ensures c == old(c) + 1 && !result { c = c + 1; return false; }
+fn f(k0: i64) -> i64 requires k0 == 2 ensures result == 7 {
+  let mut k: i64 = k0;
+  match k {
+    _ if bump(inout k) => { return 1; }
+    3 => { return 7; }
+    _ => { return 9; }
+  }
+}
+fn run() -> () ! io { print(f(2)); }

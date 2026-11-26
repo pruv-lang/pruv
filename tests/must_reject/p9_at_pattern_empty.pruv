@@ -1,0 +1,7 @@
+// P9a-7 (R-6u-12): `name @` needs a sub-pattern after it.
+fn f(o: Option<i64>) -> i64 {
+  match o {
+    Some(x @ ) => { return 0; }
+    None => { return 1; }
+  }
+}

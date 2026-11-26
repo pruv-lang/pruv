@@ -1,0 +1,8 @@
+// P9a-7 (R-6u-11): the arm after a guarded arm is reached when the guard fails, so `x` may be zero there.
+fn f(o: Option<i64>) -> i64 {
+  match o {
+    Some(x) if x > 0 => { return 100 / x; }
+    Some(x) if x >= 0 => { return 100 / x; }
+    _ => { return 0; }
+  }
+}

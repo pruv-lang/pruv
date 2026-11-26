@@ -1,0 +1,7 @@
+// P9a-7 (R-6u-12): `name @` binds a payload sub-pattern; the whole scrutinee is bound with a `let`.
+fn f(o: Option<i64>) -> i64 {
+  match o {
+    v @ Some(_) => { return 0; }
+    None => { return 1; }
+  }
+}

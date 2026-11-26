@@ -1,5 +1,6 @@
-// P9a-6 (R-6u-8): a literal top pattern is not accepted in `if let`.
+// P9a-7 (R-6u-9): a literal `if let` pattern is proved like a match arm: inside the arm `k == 0`, so the division
+// by `k` is rejected.
 fn f(k: i64) -> i64 {
-  if let 0 = k { return 1; }
+  if let 0 = k { return 100 / k; }
   return 2;
 }

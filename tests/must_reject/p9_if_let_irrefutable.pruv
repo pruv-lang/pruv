@@ -1,0 +1,4 @@
+// P9a-7 (R-6u-9): a `_` pattern in `if let` matches every value, so its else block never runs.
+fn f(o: Option<i64>) -> i64 {
+  if let _ = o { return 1; } else { return 2; }
+}

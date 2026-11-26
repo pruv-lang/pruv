@@ -1,0 +1,10 @@
+// P9a-7: a constructor of another enum in a payload pattern is type/match_type (as a literal of another type is).
+enum A { X, Y }
+enum B { P, Q }
+
+fn f(o: Option<A>) -> i64 {
+  match o {
+    Some(B::P) => { return 0; }
+    _ => { return 1; }
+  }
+}

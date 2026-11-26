@@ -1,0 +1,7 @@
+// P9a-7 (R-6u-11): a guard follows a variant, literal or `_` pattern; a slice pattern has no guard.
+fn f(xs: [i64]) -> i64 {
+  match xs {
+    [a] if a > 0 => { return 1; }
+    _ => { return 0; }
+  }
+}

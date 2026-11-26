@@ -260,6 +260,10 @@ impl Resolver<'_> {
                     self.bind_sub(q, payload.as_ref().map(|p| p[k].clone()), sc);
                 }
             }
+            SubPat::At(n, q) => {
+                sc.insert(n.clone(), ty.clone());
+                self.bind_sub(q, ty, sc);
+            }
             SubPat::Wild | SubPat::Int(_) | SubPat::Bool(_) => {}
         }
     }
