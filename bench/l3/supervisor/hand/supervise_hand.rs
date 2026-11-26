@@ -43,6 +43,23 @@ fn stopped(socket: &mut TcpStream) -> i64 {
     }
 }
 
+// One chunk into the capped file: the prefix that fits, counted only when the write succeeds (Pruv
+// `capfile::write`; split out of the receive loop in step 4.2 so the two sides compare per function).
+fn write(file: &mut Option<File>, packet: &mut [i64], file_limit: i64, bytes: &[u8]) {
+    if let Some(output) = file {
+        let n = (file_limit - packet[10]).min(bytes.len() as i64);
+        packet[6] |= i64::from(n < bytes.len() as i64);
+        if n != 0 {
+            if output.write_all(&bytes[..n as usize]).is_ok() {
+                packet[10] += n;
+            } else {
+                packet[7] = 2;
+                *file = None;
+            }
+        }
+    }
+}
+
 pub fn supervise(
     shell: &str, argv: &str, cwd: &str, out: &str,
     file_limit: i64, tail_chars: i64, ctl: i64,
@@ -111,18 +128,7 @@ pub fn supervise(
             match receiver.recv_timeout(interval) {
                 Ok(Ok((stream, bytes))) => {
                     packet[9] += bytes.len() as i64;
-                    if let Some(output) = &mut file {
-                        let n = (file_limit - packet[10]).min(bytes.len() as i64);
-                        packet[6] |= i64::from(n < bytes.len() as i64);
-                        if n != 0 {
-                            if output.write_all(&bytes[..n as usize]).is_ok() {
-                                packet[10] += n;
-                            } else {
-                                packet[7] = 2;
-                                file = None;
-                            }
-                        }
-                    }
+                    write(&mut file, &mut packet, file_limit, &bytes);
                     tail.push(stream, &bytes);
                 }
                 Ok(Err(_)) => {

@@ -1,0 +1,1 @@
+{"name": "l3_supervisor_a0_root", "version": "0.1.0", "root": "a0_root.pruv", "dependencies": {"args": {"path": "../pkgs/args", "version": "0.1"}}}

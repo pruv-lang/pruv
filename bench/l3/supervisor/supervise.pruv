@@ -1,9 +1,11 @@
 // L3-2 A3: the supervisor entry (TS `run`, `stop`, `report`). One Loop with the shell and the control socket.
 // See docs/COMMAND_SUPERVISOR_SPEC.md for the order of operations, the packet and the policies P1-P8.
+// Hand baseline: hand/supervise_hand.rs. The result packet p is the state from the start, as the hand's `packet`;
+// the tail and the arguments are the shared packages (pkgs/tail, pkgs/args). The hand reads the pipes on two threads
+// and a channel; Pruv waits on one Loop (gap TH in RESHAPE.md).
 mod args;
+mod tail;
 mod capfile;
-mod btail;
-mod packet;
 
 fn close_sock(take s: Socket) -> () ! net, alloc
 {
@@ -54,189 +56,220 @@ fn proc_state(l: Loop, p: i64) -> i64
   return 1;
 }
 
-// One chunk into the file and the tail. A chunk longer than one read or a total near 2^62 cannot occur with
-// reads of at most 1048576 bytes inside the event bounds; it is skipped so the counters stay in range.
-fn take(take f: File, inout cw: [i64], inout buf: [u8], inout ts: crate::btail::Tail, s: i64, data: [u8]) -> File ! fs, alloc
-  requires len(cw) == 5
-  requires 0 <= cw[3] && cw[3] <= 1099511627776
-  requires 0 <= cw[0] && cw[0] <= cw[3]
-  requires 0 <= cw[4] && cw[4] <= 4611686018427387904
-  requires 0 <= cw[1] && cw[1] <= 1
-  requires 0 <= cw[2] && cw[2] <= 2
-  requires 1 <= ts.acc.t && ts.acc.t <= 65536
-  requires len(buf) == 6 * ts.acc.t + 4
-  requires 0 <= ts.acc.n && ts.acc.n <= 6 * ts.acc.t && 0 <= ts.acc.u && ts.acc.u <= 2 * ts.acc.t
-  requires s == 1 || s == 2
-  ensures len(cw) == 5 && cw[3] == old(cw)[3]
-  ensures 0 <= cw[0] && cw[0] <= cw[3]
-  ensures 0 <= cw[4] && cw[4] <= 4611686018427387904
-  ensures 0 <= cw[1] && cw[1] <= 1
-  ensures 0 <= cw[2] && cw[2] <= 2
-  ensures len(buf) == 6 * ts.acc.t + 4
-  ensures 0 <= ts.acc.n && ts.acc.n <= 6 * ts.acc.t && 0 <= ts.acc.u && ts.acc.u <= 2 * ts.acc.t
+// The chunk arm of the hand's receive loop: count, write the prefix that fits, push into the tail. A chunk longer
+// than one read or a total near 2^62 cannot occur with reads of at most 1048576 bytes; it is skipped so the
+// counters stay in range (proof bound, no hand counterpart).
+fn take(take f: File, inout p: [i64], file_limit: i64, inout tl: crate::tail::Tail, stream: i64, bytes: [u8]) -> File
+  ! fs, alloc
+  requires len(p) == 12
+  requires 0 <= file_limit && file_limit <= 1099511627776
+  requires 0 <= p[10] && p[10] <= file_limit
+  requires 0 <= p[9] && p[9] <= 4611686018427387904
+  requires 0 <= p[6] && p[6] <= 1
+  requires 0 <= p[7] && p[7] <= 2
+  requires crate::tail::tail_ok(tl)
+  requires stream == 0 || stream == 1
+  ensures len(p) == 12
+  ensures 0 <= p[10] && p[10] <= file_limit
+  ensures 0 <= p[9] && p[9] <= 4611686018427387904
+  ensures 0 <= p[6] && p[6] <= 1
+  ensures 0 <= p[7] && p[7] <= 2
+  ensures crate::tail::tail_ok(tl) && tl.limit == old(tl.limit)
 {
-  if len(data) > 1048576 || cw[4] > 4611686018427387904 - 1048576 { return move f; }
-  let g: File = crate::capfile::cap_take(move f, inout cw, data);
-  crate::btail::tail_push(inout buf, inout ts, s, data);
+  if len(bytes) > 1048576 || p[9] > 4611686018427387904 - 1048576 { return move f; }
+  p[9] = p[9] + len(bytes);
+  let g: File = crate::capfile::write(move f, inout p, file_limit, bytes);
+  crate::tail::push(inout tl, stream, bytes);
   return move g;
 }
 
-// Close the file, flush the decoders and build the packet. Kind 3 carries the file fields only.
-fn report(take f: File, inout cw: [i64], inout buf: [u8], inout ts: crate::btail::Tail, opened: bool,
-          kind: i64, exit: i64, known: i64, stopped: i64, reaped: i64) -> [i64] ! fs, alloc
-  requires len(cw) == 5
-  requires 0 <= cw[2] && cw[2] <= 2
-  requires 1 <= ts.acc.t && ts.acc.t <= 65536
-  requires len(buf) == 6 * ts.acc.t + 4
-  requires 0 <= ts.acc.n && ts.acc.n <= 6 * ts.acc.t && 0 <= ts.acc.u && ts.acc.u <= 2 * ts.acc.t
+// hand `child.try_wait()` in the `Err(Disconnected)` arm: wait up to 2 ms (the hand's `sleep(interval)`); when the
+// slot is reaped, record the status (`Ok(Some(status))`). Split out of the loop body to keep its proof small (P).
+fn try_wait(take l: Loop, pslot: i64, inout p: [i64]) -> Loop ! async, proc, alloc
+  requires ev_ok(l)
+  requires 0 <= pslot && pslot < ev_cap(l) && ev_kind(l, pslot) == 3
+  requires len(p) == 12
+  ensures len(p) == 12
+  ensures p[6] == old(p)[6] && p[7] == old(p)[7] && p[9] == old(p)[9] && p[10] == old(p)[10]
 {
-  crate::capfile::cap_finish(move f, inout cw);
-  crate::btail::tail_flush(inout buf, inout ts);
-  let mut h: [i64] = crate::packet::header(0, kind);
-  h[2] = exit;
-  h[3] = known;
-  h[4] = stopped;
-  h[5] = reaped;
-  h[6] = cw[1];
-  h[7] = cw[2];
-  if opened { h[8] = 1; }
-  if kind == 1 {
-    h[9] = cw[4];
-    h[10] = cw[0];
-    let tb: [u8] = crate::btail::tail_bytes(buf, ts);
-    return crate::packet::packet(h, tb);
+  let m: Loop = ev_proc_wait_for(move l, pslot, 2);
+  if ev_ok(m) && proc_state(m, pslot) == 0 {
+    let x: i64 = ev_exit(m);
+    if x >= -2147483648 && x <= 2147483647 {
+      p[2] = x;
+      p[3] = 1;
+    }
+    p[5] = 1;
   }
-  let none: [u8] = alloc(0, 0);
-  return crate::packet::packet(h, none);
+  return move m;
+}
+
+// The hand's `packet[1] == 3` end: the file fields stay, the counters are cleared. Closes the file (P4).
+// The exit fields p[2], p[3], p[5] are also cleared: the hand never sets them on a kind-3 end, but here a failed
+// `ev_close` comes after the reap has recorded them (gap TH).
+fn failed(take f: File, take p0: [i64]) -> [i64] ! fs
+  requires len(p0) == 12
+  requires 0 <= p0[7] && p0[7] <= 2
+{
+  let mut p: [i64] = move p0;
+  crate::capfile::close(move f, inout p);
+  p[1] = 3;
+  p[2] = 0;
+  p[3] = 0;
+  p[4] = 0;
+  p[5] = 0;
+  p[9] = 0;
+  p[10] = 0;
+  return p;
 }
 
 pub fn supervise(shell: str, argv: str, cwd: str, out: str, file_limit: i64, tail_chars: i64, ctl: i64) -> [i64]
   ! async, net, proc, fs, alloc
 {
+  let mut p: [i64] = alloc(12, 0);
+  // hand: the range tests, then `argv.len() > 1048576` and the trailing NUL. arg_spans makes those two tests and
+  // gives the verifier the UTF-8 fact build_args needs (gap U8); it runs only after the range tests, as the hand's `||`.
   if tail_chars < 1 || tail_chars > 65536 || file_limit < 0 || file_limit > 1099511627776 || ctl < 1 || ctl > 65535 {
-    return crate::packet::bad_input();
+    p[0] = 1;
+    p[1] = 5;
+    return p;
   }
   let sp: [i64] = crate::args::arg_spans(argv);
-  if sp[0] != 0 { return crate::packet::bad_input(); }
+  if sp[0] != 0 {
+    p[0] = 1;
+    p[1] = 5;
+    return p;
+  }
 
   let cs0: Socket = net_connect("127.0.0.1", ctl);
   if !net_ok(cs0) {
     close_sock(move cs0);
-    let h4: [i64] = crate::packet::header(0, 4);
-    let none: [u8] = alloc(0, 0);
-    return crate::packet::packet(h4, none);
+    p[1] = 4;
+    return p;
   }
 
   let mut f: File = file_create(out);
-  let opened: bool = file_writable(f);
-  let mut cw: [i64] = crate::capfile::cap_state(file_limit, !opened);
-  let mut ts: crate::btail::Tail = crate::btail::tail_state(tail_chars);
-  let mut buf: [u8] = crate::btail::tail_buf(tail_chars);
+  if file_writable(f) { p[8] = 1; } else { p[7] = 1; }
 
-  let pa: ProcessArgs = crate::args::build_args(argv);
-  let p0: Process = proc_spawn(shell, pa, cwd);
+  let a: ProcessArgs = crate::args::build_args(argv);
+  let p0: Process = proc_spawn(shell, a, cwd);
   if !proc_ok(p0) {
     let mut code: i64 = proc_error(p0);
     let wr: Result<i64> = proc_wait(move p0);
     close_sock(move cs0);
     if code < 1 || code > 6 { code = 2; }
-    return report(move f, inout cw, inout buf, inout ts, opened, 2, code, 0, 0, 0);
+    p[1] = 2;
+    p[2] = code;
+    crate::capfile::close(move f, inout p);
+    return p;
   }
-  let p: Process = proc_close_stdin(move p0);
-  if !proc_ok(p) {
-    let k0: i64 = kill_proc(move p);
+  p[1] = 1;
+  // hand: `Stdio::null()` at spawn; proc_spawn gives a piped stdin, closed here.
+  let child: Process = proc_close_stdin(move p0);
+  if !proc_ok(child) {
+    let k0: i64 = kill_proc(move child);
     close_sock(move cs0);
-    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+    return failed(move f, move p);
   }
 
   let started: [u8] = alloc(1, 1);
   let cs: Socket = net_write_bytes(move cs0, started);
   if !net_ok(cs) {
     // The controller is gone before the first event: a disconnect with nothing read.
-    let k1: i64 = kill_proc(move p);
+    p[4] = 2;
+    p[5] = kill_proc(move child);
     close_sock(move cs);
-    return report(move f, inout cw, inout buf, inout ts, opened, 1, 0, 0, 2, k1);
+    crate::capfile::close(move f, inout p);
+    return p;
   }
 
+  let mut tl: crate::tail::Tail = crate::tail::new(tail_chars);
   let mut l: Loop = ev_new(2);
   if !ev_ok(l) || ev_count(l) >= ev_cap(l) {
     close_loop(move l);
-    let k2: i64 = kill_proc(move p);
+    let k2: i64 = kill_proc(move child);
     close_sock(move cs);
-    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+    return failed(move f, move p);
   }
-  l = ev_add_process(move l, move p);
+  l = ev_add_process(move l, move child);
   if !ev_ok(l) {
     close_loop(move l);
     close_sock(move cs);
-    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+    return failed(move f, move p);
   }
   let pslot: i64 = ev_last(l);
   if ev_count(l) >= ev_cap(l) {
     close_loop(move l);
     close_sock(move cs);
-    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+    return failed(move f, move p);
   }
   l = ev_add_socket(move l, move cs);
   if !ev_ok(l) {
     close_loop(move l);
-    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+    return failed(move f, move p);
   }
   let sslot: i64 = ev_last(l);
   if pslot < 0 || pslot >= 2 || sslot < 0 || sslot >= 2 {
     close_loop(move l);
-    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+    return failed(move f, move p);
   }
 
   // tag: 0 running, 1 exited, 2 stop, 3 disconnect. After the shell's end event, pump without waiting until
-  // both streams have published EOF.
+  // both streams have published EOF. Then, as the hand's `try_wait` on a disconnected channel, wait 2 ms for the
+  // exit and keep polling the control socket while the child runs (`ended`). The event count bounds the loop
+  // (gap UL: a `while` needs a `decreases` measure; the hand's `loop` has none).
   // One reused buffer per stream (DB41): reads copy straight into them, and `take` gets a view of the bytes read.
   let mut b1: [u8] = alloc(65536, 0);
   let mut b2: [u8] = alloc(65536, 0);
-  let mut bs: [u8] = alloc(4096, 0);
+  let mut bs: [u8] = alloc(1, 0);
   let mut tag: i64 = 0;
   let mut broken: bool = false;
   let mut draining: bool = false;
+  let mut ended: bool = false;
   let mut events: i64 = 0;
   while tag == 0 && !broken && events < 10000000
     invariant 0 <= events && events <= 10000000
     invariant 0 <= tag && tag <= 3
     invariant broken || ev_ok(l)
-    invariant len(cw) == 5 && cw[3] == file_limit
-    invariant 0 <= cw[0] && cw[0] <= cw[3]
-    invariant 0 <= cw[4] && cw[4] <= 4611686018427387904
-    invariant 0 <= cw[1] && cw[1] <= 1
-    invariant 0 <= cw[2] && cw[2] <= 2
-    invariant ts.acc.t == tail_chars
-    invariant len(buf) == 6 * tail_chars + 4
-    invariant 0 <= ts.acc.n && ts.acc.n <= 6 * tail_chars && 0 <= ts.acc.u && ts.acc.u <= 2 * tail_chars
+    invariant len(p) == 12
+    invariant 0 <= p[10] && p[10] <= file_limit
+    invariant 0 <= p[9] && p[9] <= 4611686018427387904
+    invariant 0 <= p[6] && p[6] <= 1
+    invariant 0 <= p[7] && p[7] <= 2
+    invariant crate::tail::tail_ok(tl) && tl.limit == tail_chars
     decreases 10000000 - events
   {
     events = events + 1;
-    let mut pump: bool = draining;
-    if !draining {
-      l = ev_wait(move l, -1);
+    let mut pump: bool = draining && !ended;
+    if !draining || ended {
+      let mut timeout: i64 = -1;
+      if ended { timeout = 0; }
+      l = ev_wait(move l, timeout);
       if ev_ok(l) {
         let ek: i64 = ev_event_kind(l);
         let es: i64 = ev_event_slot(l);
         if es == sslot && (ek == 1 || ek == 3 || ek == 5) {
           if ek == 5 {
             tag = 3;
+            p[4] = 2;
           } else if sock_state(l, sslot) != 1 {
             tag = 3;
+            p[4] = 2;
           } else {
             let mut ns: i64 = 0;
             l = ev_read_into(move l, sslot, inout bs, inout ns);
             if ev_ok(l) {
               if ns > 0 {
                 tag = 2;
+                p[4] = 1;
               } else if sock_state(l, sslot) != 1 || ek == 3 {
                 tag = 3;
+                p[4] = 2;
               }
             }
           }
         } else if es == pslot && (ek == 1 || ek == 3) {
-          pump = true;
+          pump = !ended;
           if ek == 3 { draining = true; }
         } else if es == pslot && ek == 5 {
           broken = true;
@@ -248,23 +281,31 @@ pub fn supervise(shell: str, argv: str, cwd: str, out: str, file_limit: i64, tai
         let mut n1: i64 = 0;
         l = ev_proc_read_into(move l, pslot, 1, inout b1, inout n1);
         if ev_ok(l) {
-          f = take(move f, inout cw, inout buf, inout ts, 1, subview(b1, 0, n1));
+          f = take(move f, inout p, file_limit, inout tl, 0, subview(b1, 0, n1));
         }
       }
       if ev_ok(l) && proc_state(l, pslot) == 1 {
         let mut n2: i64 = 0;
         l = ev_proc_read_into(move l, pslot, 2, inout b2, inout n2);
         if ev_ok(l) {
-          f = take(move f, inout cw, inout buf, inout ts, 2, subview(b2, 0, n2));
+          f = take(move f, inout p, file_limit, inout tl, 1, subview(b2, 0, n2));
         }
       }
       if ev_ok(l) {
         let ps: i64 = proc_state(l, pslot);
         if ps == 2 {
-          tag = 1;
+          ended = true;
         } else if ps == 0 {
           broken = true;
         }
+      }
+    } else if ended && !broken && tag == 0 && ev_ok(l) {
+      // hand `Err(Disconnected)`: both pipes closed, `child.try_wait()`; reaped ends the loop, running polls again.
+      if proc_state(l, pslot) == 2 {
+        l = try_wait(move l, pslot, inout p);
+        if ev_ok(l) && p[5] == 1 { tag = 1; }
+      } else {
+        broken = true;
       }
     }
     if !ev_ok(l) { broken = true; }
@@ -272,28 +313,14 @@ pub fn supervise(shell: str, argv: str, cwd: str, out: str, file_limit: i64, tai
 
   if broken || tag == 0 {
     close_loop(move l);
-    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+    return failed(move f, move p);
   }
 
-  let mut exit: i64 = 0;
-  let mut known: i64 = 0;
-  let mut reaped: i64 = 0;
   if tag == 1 {
-    if proc_state(l, pslot) != 0 {
-      l = ev_proc_wait(move l, pslot);
-      if ev_ok(l) {
-        let x: i64 = ev_exit(l);
-        if x >= -2147483648 && x <= 2147483647 {
-          exit = x;
-          known = 1;
-        }
-        reaped = 1;
-      }
-    }
-    // A normal end without a status (a reap failure is caught at close) cannot be reported as kind 1.
-    if known == 0 {
+    // A normal end without a status cannot be reported as kind 1.
+    if p[3] == 0 {
       close_loop(move l);
-      return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+      return failed(move f, move p);
     }
   } else {
     // Stop or disconnect: take what is already queued (until a pump step reads nothing), then kill and reap.
@@ -301,14 +328,12 @@ pub fn supervise(shell: str, argv: str, cwd: str, out: str, file_limit: i64, tai
     let mut n: i64 = 0;
     while more && ev_ok(l) && n < 10000000 && proc_state(l, pslot) == 1
       invariant 0 <= n && n <= 10000000
-      invariant len(cw) == 5 && cw[3] == file_limit
-      invariant 0 <= cw[0] && cw[0] <= cw[3]
-      invariant 0 <= cw[4] && cw[4] <= 4611686018427387904
-      invariant 0 <= cw[1] && cw[1] <= 1
-      invariant 0 <= cw[2] && cw[2] <= 2
-      invariant ts.acc.t == tail_chars
-      invariant len(buf) == 6 * tail_chars + 4
-      invariant 0 <= ts.acc.n && ts.acc.n <= 6 * tail_chars && 0 <= ts.acc.u && ts.acc.u <= 2 * tail_chars
+      invariant len(p) == 12
+      invariant 0 <= p[10] && p[10] <= file_limit
+      invariant 0 <= p[9] && p[9] <= 4611686018427387904
+      invariant 0 <= p[6] && p[6] <= 1
+      invariant 0 <= p[7] && p[7] <= 2
+      invariant crate::tail::tail_ok(tl) && tl.limit == tail_chars
       decreases 10000000 - n
     {
       n = n + 1;
@@ -317,14 +342,14 @@ pub fn supervise(shell: str, argv: str, cwd: str, out: str, file_limit: i64, tai
       l = ev_proc_read_into(move l, pslot, 1, inout b1, inout m1);
       if ev_ok(l) {
         got = m1;
-        f = take(move f, inout cw, inout buf, inout ts, 1, subview(b1, 0, m1));
+        f = take(move f, inout p, file_limit, inout tl, 0, subview(b1, 0, m1));
       }
       if ev_ok(l) && proc_state(l, pslot) == 1 {
         let mut m2: i64 = 0;
         l = ev_proc_read_into(move l, pslot, 2, inout b2, inout m2);
         if ev_ok(l) {
           got = got + m2;
-          f = take(move f, inout cw, inout buf, inout ts, 2, subview(b2, 0, m2));
+          f = take(move f, inout p, file_limit, inout tl, 1, subview(b2, 0, m2));
         }
       }
       if got == 0 { more = false; }
@@ -333,12 +358,12 @@ pub fn supervise(shell: str, argv: str, cwd: str, out: str, file_limit: i64, tai
       if proc_state(l, pslot) != 0 {
         l = ev_remove(move l, pslot);
       }
-      if ev_ok(l) { reaped = 1; }
+      if ev_ok(l) { p[5] = 1; }
     }
   }
   if !ev_ok(l) {
     close_loop(move l);
-    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+    return failed(move f, move p);
   }
 
   // Close ends the socket. Err(3) is a control socket read failure (a reset); Err(8) is a reap failure.
@@ -348,17 +373,18 @@ pub fn supervise(shell: str, argv: str, cwd: str, out: str, file_limit: i64, tai
     Ok(c) => { }
     Err(e) => {
       if e == 8 && tag != 1 {
-        reaped = 0;
+        p[5] = 0;
       } else if e != 3 {
         failed = true;
       }
     }
   }
   if failed {
-    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+    return failed(move f, move p);
   }
-  let mut stopped: i64 = 0;
-  if tag == 2 { stopped = 1; }
-  if tag == 3 { stopped = 2; }
-  return report(move f, inout cw, inout buf, inout ts, opened, 1, exit, known, stopped, reaped);
+  crate::capfile::close(move f, inout p);
+  let bytes: [u8] = crate::tail::finish(move tl);
+  p[11] = len(bytes);
+  arr_append(inout p, bytes, 0, len(bytes));
+  return p;
 }

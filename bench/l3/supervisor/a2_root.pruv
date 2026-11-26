@@ -1,22 +1,22 @@
 // L3-2 A2 root. script = repeated [n, n bytes]; returns [written, truncated, error, limit, total, file_open],
-// or [-1] on a malformed script or limit.
+// or [-1] on a malformed script or limit. The file state lives in the packet slots the supervisor uses.
 mod capfile;
 
 pub fn run(path: str, limit: i64, script: [i64]) -> [i64] ! fs, alloc
 {
   let bad: [i64] = alloc(1, -1);
   if limit < 0 || limit > 1099511627776 { return bad; }
+  let mut p: [i64] = alloc(12, 0);
   let mut f: File = file_create(path);
-  let failed: bool = !file_writable(f);
-  let mut cw: [i64] = crate::capfile::cap_state(limit, failed);
+  if file_writable(f) { p[8] = 1; } else { p[7] = 1; }
   let mut i: i64 = 0;
   while i < len(script)
     invariant 0 <= i && i <= len(script)
-    invariant len(cw) == 5 && cw[3] == limit
-    invariant 0 <= cw[0] && cw[0] <= cw[3]
-    invariant 0 <= cw[4] && cw[4] <= i
-    invariant 0 <= cw[1] && cw[1] <= 1
-    invariant 0 <= cw[2] && cw[2] <= 2
+    invariant len(p) == 12
+    invariant 0 <= p[10] && p[10] <= limit
+    invariant 0 <= p[9] && p[9] <= i
+    invariant 0 <= p[6] && p[6] <= 1
+    invariant 0 <= p[7] && p[7] <= 2
     decreases len(script) - i
   {
     let n: i64 = script[i];
@@ -33,20 +33,17 @@ pub fn run(path: str, limit: i64, script: [i64]) -> [i64] ! fs, alloc
       chunk[k] = v;
       k = k + 1;
     }
-    f = crate::capfile::cap_take(move f, inout cw, chunk);
+    p[9] = p[9] + n;
+    f = crate::capfile::write(move f, inout p, limit, chunk);
     i = i + 1 + n;
   }
-  crate::capfile::cap_finish(move f, inout cw);
+  crate::capfile::close(move f, inout p);
   let mut out: [i64] = alloc(6, 0);
-  let mut j: i64 = 0;
-  while j < 5
-    invariant 0 <= j && j <= 5
-    invariant len(out) == 6 && len(cw) == 5
-    decreases 5 - j
-  {
-    out[j] = cw[j];
-    j = j + 1;
-  }
-  if !failed { out[5] = 1; }
+  out[0] = p[10];
+  out[1] = p[6];
+  out[2] = p[7];
+  out[3] = limit;
+  out[4] = p[9];
+  out[5] = p[8];
   return out;
 }

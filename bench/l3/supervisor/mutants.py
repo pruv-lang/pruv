@@ -17,19 +17,18 @@ HERE = common.HERE
 WORK = HERE / 'work' / 'mut'
 
 MUTANTS = [
-    ('stopped swapped', 'if tag == 2 { stopped = 1; }', 'if tag == 2 { stopped = 2; }'),
+    ('stopped swapped', '                tag = 2;\n                p[4] = 1;', '                tag = 2;\n                p[4] = 2;'),
     ('stop byte as disconnect', '                tag = 2;', '                tag = 3;'),
     ('no draining after end', 'if ek == 3 { draining = true; }', 'if ek == 3 { draining = false; }'),
     ('no drain on stop', 'let mut more: bool = true;', 'let mut more: bool = false;'),
     ('signal status dropped', 'if x >= -2147483648 && x <= 2147483647 {', 'if x >= 0 && x <= 2147483647 {'),
-    ('spawn failure as exit', 'opened, 2, code, 0, 0, 0);', 'opened, 1, code, 0, 0, 0);'),
-    ('reaped not set', '        reaped = 1;\n      }\n    }\n    // A normal',
-     '        reaped = 0;\n      }\n    }\n    // A normal'),
-    ('stream 2 dropped', 'f = take(move f, inout cw, inout buf, inout ts, 2, d2);', ''),
-    ('stream index swapped', 'ts, 1, d1);', 'ts, 2, d1);'),
-    ('file_open inverted', 'if opened { h[8] = 1; }', 'if !opened { h[8] = 1; }'),
-    ('stdin kept open', 'let p: Process = proc_close_stdin(move p0);\n  if !proc_ok(p) {',
-     'let p: Process = move p0;\n  if !proc_ok(p) {'),
+    ('spawn failure as exit', '    p[1] = 2;\n    p[2] = code;', '    p[1] = 1;\n    p[2] = code;'),
+    ('reaped not set', '    p[5] = 1;\n  }\n  return move m;', '    p[5] = 0;\n  }\n  return move m;'),
+    ('stream 2 dropped', 'f = take(move f, inout p, file_limit, inout tl, 1, subview(b2, 0, n2));', ''),
+    ('stream index swapped', 'inout tl, 0, subview(b1, 0, n1));', 'inout tl, 1, subview(b1, 0, n1));'),
+    ('file_open dropped', 'if file_writable(f) { p[8] = 1; }', 'if file_writable(f) { p[8] = 0; }'),
+    ('stdin kept open', 'let child: Process = proc_close_stdin(move p0);\n  if !proc_ok(child) {',
+     'let child: Process = move p0;\n  if !proc_ok(child) {'),
     ('slot check dropped', 'if s < 0 || s >= ev_cap(l) { return 0; }', ''),
 ]
 
@@ -47,7 +46,7 @@ def main():
         d = WORK / name.replace(' ', '_')
         shutil.rmtree(d, ignore_errors=True)
         d.mkdir(parents=True)
-        for m in ('args', 'capfile', 'packet'):  # tail comes from the shared package (--manifest)
+        for m in ('capfile',):  # tail and args come from the shared packages (--manifest)
             shutil.copy(HERE / f'{m}.pruv', d / f'{m}.pruv')
         (d / 'supervise.pruv').write_text(src.replace(old, new))
         common.copy_manifest(HERE / 'supervise.pruv', d)

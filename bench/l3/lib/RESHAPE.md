@@ -911,3 +911,46 @@ All after the last code change (F1 / F4 from the structure comparison).
 - Next: step 3 is done except `req` (`docs/RUST_SHAPE_RESET.md` §6 step 3 item 8), which waits for the P10H
   experiment. Step 4 (fragments) starts with the MCP stdio check (§6 step 4 item 1): it is the first product
   candidate and its `R` modules make it the smallest port; then the supervisor, Grok RPC and history.
+
+## Step 4.1-4.2: MCP recheck and the command supervisor
+
+- 4.1 (MCP stdio check): `mcp/RESHAPE.md` "4.1 recheck". The product path uses `pkgs/*` only (no `lib/` JSON copy);
+  rows R, T and L of that file are closed by `arr_reserve`/`arr_append`, in-place `truncate` and literal `[u8]`
+  arguments; B (one copy per trimmed line) stays: the language side exists (borrowing structs on LLVM, R-6g9-2),
+  the change is a borrowed document in `pkgs/json`/`pkgs/lines` with all their consumers. `test_impl.py` 22/22 on
+  rs/rust and rs/llvm. No code changed.
+- 4.2 (supervisor): `supervisor/RESHAPE.md`. The supervisor now uses `pkgs/tail` and `pkgs/args` (its private
+  `btail.pruv`, `args.pruv` and `packet.pruv` are gone), the result packet is the state from the start as the hand's
+  `packet`, the file half of the chunk arm is `capfile::write` (hand `write`, split out of the hand loop for the
+  table), and the prefix is written from a view instead of a copy. New rows:
+- **TH** (new, language/host gap): no threads or channels; a child's pipes are read through the host event `Loop`
+  (`ev_wait`, `ev_proc_read_into`, slot observers, fallible `ev_new`/`ev_add_*` with kind-3 early returns) where the
+  hand runs two reader threads with `sync_channel` + `recv_timeout`. Same family as pkgs X1/X2 (**W-c**). Minimal
+  change: a scoped-thread + bounded-channel API over owned pipe halves, or accept the event model as the host shape.
+- **FO** (new, language gap): `File` cannot be in an `Option` or an `inout` parameter (SPEC §6h placement), so the
+  hand's `&mut Option<File>` is a handle threaded through `take f -> File` with `file_writable` as "Some"
+  (`capfile::write`, `supervise::take`). Minimal change: `inout f: File` and `Option<File>` with must-consume on both
+  arms. Not worked around.
+- **FV** (new, language gap): a builtin's array argument cannot be a `subview` (`type/view_context` covers Pruv calls
+  only), so `file_write_bytes(f, &bytes[..n])` goes through the one-line Pruv wrapper `capfile::write_all` (no copy;
+  before 4.2 the prefix was `truncate(copy(data), n)`). Minimal change: allow views for builtin read-only `[u8]`
+  parameters (`file_write_bytes`, `net_write_bytes`).
+- **UL** (new, language gap): no unbounded loop. `while` needs a `decreases` measure and `loop { }` is
+  `parse/loop_unsupported`, so the supervisor's main loop (hand `loop`, ends when the child ends or the controller
+  stops it) carries an `events < 10000000` cap and the drain loop an `n < 10000000` cap; reaching the event cap
+  ends as kind 3. Minimal change: a `while`/`loop` without `decreases` in a function marked possibly non-terminating
+  (an effect such as `! diverge`), with partial-correctness proofs of its invariants. Not worked around.
+- Codex structure review (hand vs Pruv) fixes, in `supervisor/RESHAPE.md` §1: after both pipes close the socket is
+  still polled and the exit is taken by a 2 ms `ev_proc_wait_for` (`try_wait`), as the hand's `try_wait` arm (before,
+  a blocking `ev_proc_wait` missed a stop request sent after the pipes closed); exit fields are written into the
+  packet where decided; `arg_spans` runs after the range tests; the control read is 1 byte; `core_root::core` takes
+  the hand's assert as `requires`.
+- SPEC R-7-7 still names `bench/l3/supervisor/btail.pruv` (`put_cp`) as its example; the file is gone. SPEC is not
+  edited in bench steps; the example should move to `pkgs/tail` when R-7-7 is next touched.
+
+### Rows open after 4.2
+
+- New: TH, FO, FV, UL. Closed: none here (MCP R, T, L were already closed in that bench's own table; recorded in 4.1).
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB, TH, FO, FV, UL.
+- Next: step 4.3, Grok RPC and history (`docs/RUST_SHAPE_RESET.md` §6 step 4). Separately: MCP gap B (borrowed
+  document in `pkgs/json`/`pkgs/lines`, all consumers) and the supervisor performance remeasure on the new shape.

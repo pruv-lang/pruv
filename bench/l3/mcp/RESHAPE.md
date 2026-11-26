@@ -136,6 +136,20 @@ Output is unchanged (same oracle counts, `run_perf.py check` 0 mismatches). Kind
 Pruv-only differences left: E1 (an explicit range / malformed-tape test where hand would panic or loop) and P (proof
 text). Unexplained differences: 0. No language gap was needed (no RUST_SHAPE_RESET §4 row).
 
+### 4.1 recheck (2026-11-26, RUST_SHAPE_RESET §6 step 4.1)
+
+On today's main (after 3.8 and P9a-5) the LB5c line table still holds; no code changed in this recheck.
+
+| check | result |
+| --- | --- |
+| package sources | `root.pruv` imports `json`, `access`, `lines`, `tail`, `jstr`, `args`, `transport` through `pruv.json` (all `../pkgs/*`); no `lib/` JSON copy is used. `packet.pruv` and `util.pruv` are local |
+| gap R (fill before write) | closed by `arr_reserve`/`arr_append`: `page` (LB5b) and `put_message` reserve exactly and push; no `resize` left on the product path |
+| gap T (truncate-assign copies) | closed: `out = truncate(out, ..)` on a local or inout is in place (R-6g4-3); `put_name`, `put_field`, `put_units` use it. `shorten` stays only for the perf harness (`perf_root`) |
+| gap L (literal as `[u8]`) | closed: `transport::send(.., "{...initialized...}\n", ..)` passes the literal; there is no `lit` copy left |
+| gap B (one copy per trimmed line) | still open in this bench. The language side exists now (borrowing structs on LLVM, R-6g9-2), but closing it needs a borrowed document in `pkgs/json`/`pkgs/lines` (`parse_view`), a shared-package change with all its consumers; left for its own step (lib/RESHAPE.md Next) |
+| `0 <= j`, `obj` range, `stop <= len/6`, `v >= stop`, `next <= j`, `kind` range | E1, unchanged: these are the proof-only bounds the LB5c table lists; P9a value `if`/`match` does not remove them |
+| `test_impl.py`, rs/rust and rs/llvm | verified, 22/22 each |
+
 ## 2. Language gaps hit
 
 LB5 closed gaps R, T, G and L (SPEC §6g4: R-6g4-1 `arr_reserve`, R-6g4-2 `arr_push`, R-6g4-3 in-place truncate,

@@ -1,6 +1,6 @@
-// L3-2 A0 root: host wrappers for argument spans and packets (root pub fns return [i64] only).
+// L3-2 A0 root: host wrappers for argument spans and packets (root pub fns return [i64] only). The arguments are the
+// shared package; the packet is built as the supervisor and the hand build it (12 words, then the widened tail).
 mod args;
-mod packet;
 
 pub fn spans(argv: str) -> [i64] ! alloc
 {
@@ -10,10 +10,11 @@ pub fn spans(argv: str) -> [i64] ! alloc
 // Builds the arguments and reports their count; -1 when the blob is malformed.
 pub fn arg_count(argv: str) -> [i64] ! alloc
 {
-  let sp: [i64] = crate::args::arg_spans(argv);
-  let a: ProcessArgs = crate::args::build_args(argv);
   let mut out: [i64] = alloc(1, -1);
-  if sp[0] == 0 { out[0] = proc_args_len(a); }
+  let sp: [i64] = crate::args::arg_spans(argv);
+  if sp[0] != 0 { return out; }
+  let a: ProcessArgs = crate::args::build_args(argv);
+  out[0] = proc_args_len(a);
   return out;
 }
 
@@ -23,10 +24,21 @@ pub fn pack(h: [i64], tail: [u8]) -> [i64] ! alloc
     let mut e: [i64] = alloc(1, -1);
     return e;
   }
-  return crate::packet::packet(h, tail);
+  let mut p: [i64] = alloc(12, 0);
+  for k in 0..11
+    invariant len(p) == 12
+  {
+    p[k] = h[k];
+  }
+  p[11] = len(tail);
+  arr_append(inout p, tail, 0, len(tail));
+  return p;
 }
 
 pub fn bad() -> [i64] ! alloc
 {
-  return crate::packet::bad_input();
+  let mut p: [i64] = alloc(12, 0);
+  p[0] = 1;
+  p[1] = 5;
+  return p;
 }

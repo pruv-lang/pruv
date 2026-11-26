@@ -1,29 +1,26 @@
-// R10 core lane root: data split into consecutive chunk-byte pieces, piece k to stream 1 (k even) or 2 (k odd),
-// each pushed as a range (no copy), then flushed; returns the tail bytes. Empty result when t or chunk is invalid.
-mod btail;
+// R10 core lane root (hand `core_hand::core`): data split into consecutive chunk-byte pieces, piece k to stream
+// k % 2, each pushed as a view (no copy), then finished; returns the tail bytes. The hand's `assert!(t > 0 && chunk
+// > 0)` is the precondition; `t <= 65536` is the pkgs/tail `new` contract (the hand's Tail takes any usize).
+mod tail;
 
 pub fn core(t: i64, data: [u8], chunk: i64) -> [u8] ! alloc
+  requires 1 <= t && t <= 65536 && chunk >= 1
 {
-  if t < 1 || t > 65536 || chunk < 1 { let e: [u8] = alloc(0, 0); return e; }
-  let mut ts: crate::btail::Tail = crate::btail::tail_state(t);
-  let mut buf: [u8] = crate::btail::tail_buf(t);
+  let mut tl: crate::tail::Tail = crate::tail::new(t);
   let n: i64 = len(data);
   let mut lo: i64 = 0;
-  let mut s: i64 = 1;
+  let mut index: i64 = 0;
   while lo < n
     invariant 0 <= lo && lo <= n
-    invariant s == 1 || s == 2
-    invariant ts.acc.t == t
-    invariant len(buf) == 6 * t + 4
-    invariant 0 <= ts.acc.n && ts.acc.n <= 6 * t && 0 <= ts.acc.u && ts.acc.u <= 2 * t
+    invariant 0 <= index && index <= lo
+    invariant crate::tail::tail_ok(tl) && tl.limit == t
     decreases n - lo
   {
     let mut hi: i64 = n;
     if n - lo > chunk { hi = lo + chunk; }
-    crate::btail::tail_push_range(inout buf, inout ts, s, data, lo, hi);
-    s = 3 - s;
+    crate::tail::push(inout tl, index % 2, subview(data, lo, hi));
+    index = index + 1;
     lo = hi;
   }
-  crate::btail::tail_flush(inout buf, inout ts);
-  return crate::btail::tail_bytes(buf, ts);
+  return crate::tail::finish(move tl);
 }

@@ -491,7 +491,7 @@ is outside this bundle; `docs/RUST_SHAPE_RESET.md` §4 has no U8 row yet.
 
 Behaviour on a malformed blob changes: `build_args` used to return no arguments when `arg_spans` failed; now it pushes
 the `split_terminator` pieces, as the hand loop would. Its only caller (mcp `root.pruv`) returns before the call on a
-malformed blob; supervisor keeps its own `supervisor/args.pruv`.
+malformed blob; the supervisor (since step 4.2) validates with `arg_spans` before the call as well.
 
 Root `parse_tape` against `Ok(doc) => doc.tape`:
 
@@ -708,8 +708,8 @@ no difference beyond the tables above. Points it raised and where they stand:
   number passed to `push` moved from 2 to 1.
 - mcp `finish` versus the old `tail_flush` + `tail_bytes`: same final `last_line` bytes for the same stderr input
   (decoder output keeps bytes at most 3 x units, so only the unit bound cuts).
-- `supervisor/core_root.pruv`, `supervise.pruv` and `a1_root.pruv` use their own `supervisor/btail.pruv`, and
-  `lib/tail.pruv` is the old library copy; neither is the `pkgs/tail` package, so they were not touched here.
+- `supervisor/core_root.pruv`, `supervise.pruv` and `a1_root.pruv` used their own `supervisor/btail.pruv` until
+  step 4.2 moved them onto this package (`supervisor/RESHAPE.md`); `lib/tail.pruv` is the old library copy.
 
 ### Rows still open after step 2.10
 
