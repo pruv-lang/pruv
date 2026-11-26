@@ -1,0 +1,7 @@
+// P9a-6 (R-6u-8): a literal top arm needs an integer or `bool` scrutinee.
+fn f(o: Option<i64>) -> i64 {
+  match o {
+    0 => { return 1; }
+    _ => { return 2; }
+  }
+}

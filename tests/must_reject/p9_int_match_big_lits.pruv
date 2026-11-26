@@ -1,0 +1,8 @@
+// P9a-6 (R-6u-8): two different literals beyond every integer type are out of range, not one repeated arm.
+fn f(k: i64) -> i64 {
+  match k {
+    99999999999999999999999999999999999999999 => { return 1; }
+    88888888888888888888888888888888888888888 => { return 2; }
+    _ => { return 4; }
+  }
+}

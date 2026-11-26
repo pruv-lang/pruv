@@ -1,0 +1,8 @@
+// P9a-6 (R-6u-7, R-6u-8): a repeated literal arm can never match.
+fn f(k: i64) -> i64 {
+  match k {
+    0 => { return 1; }
+    0 => { return 3; }
+    _ => { return 2; }
+  }
+}

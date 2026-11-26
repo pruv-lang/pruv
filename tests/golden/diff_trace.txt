@@ -1473,6 +1473,16 @@ must_reject|tests/must_reject/p9_if_ref_arm.pruv	1 case: obl=0 1	default=157f9c6
 must_reject|tests/must_reject/p9_if_ref_return.pruv	1 case: obl=0 1	default=4832f234c8c1
 must_reject|tests/must_reject/p9_if_two_exprs.pruv	1 case: obl=0 1	default=b72e9c11f408
 must_reject|tests/must_reject/p9_if_types.pruv	1 case: obl=0 1	default=786b302aa155
+must_reject|tests/must_reject/p9_int_match_big_lits.pruv	1 case: obl=0 1	default=9baba4b22e47
+must_reject|tests/must_reject/p9_int_match_bool_on_int.pruv	1 case: obl=0 1	default=bbae5b32d37f
+must_reject|tests/must_reject/p9_int_match_bool_partial.pruv	1 case: obl=0 1	default=f487a533f8ea
+must_reject|tests/must_reject/p9_int_match_false_ensures.pruv	1 case: obl=3 1	default=7603790f381d
+must_reject|tests/must_reject/p9_int_match_if_let.pruv	1 case: obl=0 1	default=b75bd64d7498
+must_reject|tests/must_reject/p9_int_match_let_else.pruv	1 case: obl=0 1	default=19775578c72c
+must_reject|tests/must_reject/p9_int_match_option.pruv	1 case: obl=0 1	default=fe37f00fbb11
+must_reject|tests/must_reject/p9_int_match_repeat.pruv	1 case: obl=0 1	default=dca9e3d8c4b6
+must_reject|tests/must_reject/p9_int_match_u8_range.pruv	1 case: obl=0 1	default=96c97ceb0828
+must_reject|tests/must_reject/p9_int_match_value_call.pruv	1 case: obl=0 1	default=431aa1bbb0fa
 must_reject|tests/must_reject/p9_match_arm_comma.pruv	1 case: obl=0 1	default=fa3872c96956
 must_reject|tests/must_reject/p9_match_arm_index.pruv	1 case: obl=1 1	default=265d10137594
 must_reject|tests/must_reject/p9_match_arm_inout.pruv	1 case: obl=0 1	default=89b31e9f6286
@@ -2046,6 +2056,7 @@ runtime|tests/runtime/p9_rt_if_tuple.pruv	1 case: obl=3 1	default=fd985281a7db
 runtime|tests/runtime/p9_rt_if_tuple_owned.pruv	1 case: obl=3 1	default=0b0ae2c834f3
 runtime|tests/runtime/p9_rt_if_unchecked.pruv	1 case: obl=3 1	default=0304756911b0
 runtime|tests/runtime/p9_rt_if_value.pruv	1 case: obl=45 1	default=8c507eafb966
+runtime|tests/runtime/p9_rt_int_match.pruv	1 case: obl=38 1	default=345f6da291ff
 runtime|tests/runtime/p9_rt_match_bare.pruv	1 case: obl=4 1	default=e652f382c3c0
 runtime|tests/runtime/p9_rt_match_generic.pruv	1 case: obl=1 1	default=0703f901fbd4
 runtime|tests/runtime/p9_rt_match_order.pruv	1 case: obl=19 1	default=7300e08f6003

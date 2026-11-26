@@ -840,7 +840,8 @@ impl Parser {
         if t.kind == Kind::Op && t.val == "-" && self.peek(1).kind == Kind::Int {
             self.bump();
             let n = self.next();
-            return Ok(Some(SubPat::Int(format!("-{}", n.val))));
+            // folded like a negative expression literal, so `-0` is `0` (Rust has no `-0u8`)
+            return Ok(Some(SubPat::Int(negate(&n.val))));
         }
         if self.at("true", 0) || self.at("false", 0) {
             self.bump();
@@ -869,7 +870,7 @@ impl Parser {
     fn let_arm_pattern(&mut self) -> R<MatchArm> {
         let t = self.peek(0).clone();
         let arm = self.arm_pattern()?;
-        if arm.ctor == "_" || !arm.binders.iter().all(|b| crate::ast::SubPat::is_plain(b)) {
+        if !crate::ast::SubPat::is_plain(&arm.ctor) || !arm.binders.iter().all(|b| crate::ast::SubPat::is_plain(b)) {
             return Err(PruvError::new("parse", t.line, t.col, "let_pattern",
                 "a `_`, literal or nested pattern in `if let`, `let else` or `while let` is not supported yet",
                 "use a `match` statement with a `_` arm"));
@@ -897,6 +898,15 @@ impl Parser {
             // P9a-6: the wildcard arm `_ =>`
             let ct = self.next();
             return Ok(arm(&ct, None, "_".to_string(), (Vec::new(), Vec::new())));
+        }
+        let lt = self.peek(0).clone();
+        if lt.kind == Kind::Int || (lt.kind == Kind::Op && lt.val == "-" && self.peek(1).kind == Kind::Int)
+            || self.at("true", 0) || self.at("false", 0)
+        {
+            // P9a-6 (row VP): a literal arm `0 =>`, `-1 =>`, `true =>` over an integer or `bool` scrutinee; the ctor
+            // holds the encoded literal (`#0`) and the checker lowers the match to one `if` chain
+            let lit = self.sub_pattern()?.expect("a literal sub-pattern");
+            return Ok(arm(&lt, None, lit.encode(), (Vec::new(), Vec::new())));
         }
         let ct = self.next();
         if ct.kind == Kind::Id {
@@ -2611,6 +2621,11 @@ impl Parser {
         let p = self.peek(1);
         (p.kind == Kind::Kw && matches!(p.val.as_str(), "Some" | "None" | "Ok" | "Err" | "crate"))
             || (p.kind == Kind::Id && (self.at("(", 2) || self.at("::", 2)))
+            // a literal pattern (R-6u-8) reaches `let_arm_pattern`, which rejects it with `parse/let_pattern`
+            || p.kind == Kind::Int
+            || (p.kind == Kind::Op && p.val == "-" && self.peek(2).kind == Kind::Int)
+            || self.at("true", 1)
+            || self.at("false", 1)
     }
 
     /// Contextual `par {`: members must be semicolon-terminated calls, with no trailing semicolon.

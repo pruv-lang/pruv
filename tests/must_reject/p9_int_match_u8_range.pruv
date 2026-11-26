@@ -1,0 +1,7 @@
+// P9a-6 (R-6u-8): a literal arm must fit the scrutinee's integer type.
+fn f(k: u8) -> i64 {
+  match k {
+    300 => { return 3; }
+    _ => { return 2; }
+  }
+}

@@ -1,0 +1,4 @@
+// P9a-6 (R-6u-8): `true` alone does not cover a `bool`.
+fn f(b: bool) -> i64 {
+  return match b { true => 1 };
+}
