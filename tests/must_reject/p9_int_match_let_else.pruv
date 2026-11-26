@@ -1,5 +1,5 @@
-// P9a-6 (R-6u-8): a literal top pattern is not accepted in `let else`.
+// P9a-7 (R-6u-9): after `let -1 = k else { .. };` the rest of the block knows `k == -1`, so `k + 1` is zero.
 fn f(k: i64) -> i64 {
   let -1 = k else { return 0; };
-  return 1;
+  return 10 / (k + 1);
 }

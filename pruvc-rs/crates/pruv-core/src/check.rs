@@ -599,6 +599,12 @@ pub(crate) fn slice_arm_shape(ctor: &str) -> Option<Option<&str>> {
     }
 }
 
+/// P9a-7: whether `a` is the else arm `expand_forms_block` added to an `if let`, `let else` or `while let` of extended
+/// patterns: a `_` or `[..]` arm at the statement's position (a written arm starts after the keyword).
+fn is_else_arm(m: &Match, a: &MatchArm) -> bool {
+    m.form != MatchForm::Match && (a.ctor == "_" || a.ctor == "[..]") && a.binders.is_empty() && (a.line, a.col) == (m.line, m.col)
+}
+
 /// Whether control never leaves the end of the block (P8 `let ... else`).
 fn diverges(stmts: &[Stmt]) -> bool {
     match stmts.last() {
@@ -629,7 +635,7 @@ fn expand_forms_block(
                     expand_forms_block(&mut a.body, variants, n)?;
                 }
                 expand_forms_block(&mut m.els, variants, n)?;
-                if m.form == MatchForm::Match || m.arms.len() != 1 {
+                if m.form == MatchForm::Match || m.arms.last().is_some_and(|a| is_else_arm(m, a)) {
                     continue;
                 }
                 if m.form == MatchForm::LetElse && !diverges(&m.els) {
@@ -637,6 +643,29 @@ fn expand_forms_block(
                     return Err(terr(l, c, "let_else_fallthrough",
                         "the else block of `let ... else` must not reach its end",
                         "end the else block with return, break or continue"));
+                }
+                let ext = m.arms.len() != 1
+                    || Checker::has_ext_pattern(m.arms.iter().map(|a| (a.ctor.as_str(), a.binders.as_slice())))
+                    || m.arms.iter().any(|a| slice_arm_shape(&a.ctor).is_some() || a.ctor == "()");
+                if m.arms.len() == 1 && m.arms[0].ctor == "()" && m.arms[0].binders.iter().all(|b| crate::ast::SubPat::is_plain(b)) {
+                    // a tuple of names matches every value: the else block never runs (as for a one-variant enum)
+                    if !m.els.is_empty() {
+                        let (l, c) = m.els[0].position();
+                        return Err(terr(l, c, "irrefutable_pattern", "the pattern matches every value, so the else block never runs",
+                            "bind the tuple with `let` or drop the else block"));
+                    }
+                    continue;
+                }
+                if ext {
+                    // P9a-7 (R-6u-9): an or-pattern, a `_`/literal/nested pattern or a slice pattern takes the else block
+                    // as one last `_` arm (`[..]` for slice patterns) at the statement's own position (`is_else_arm`);
+                    // the checker lowers the match like any `match` of such patterns
+                    let slice = m.arms.iter().any(|a| slice_arm_shape(&a.ctor).is_some());
+                    let els = std::mem::take(&mut m.els);
+                    m.arms.push(MatchArm { line: m.line, col: m.col, enum_name: None,
+                        ctor: if slice { "[..]".into() } else { "_".into() }, binders: Vec::new(), body: els,
+                        pats: Vec::new(), pat_lets: 0 });
+                    continue;
                 }
                 let a0 = &m.arms[0];
                 let others: Vec<(String, usize)> = match (&a0.enum_name, a0.ctor.as_str()) {
@@ -1230,6 +1259,20 @@ enum InoutContext<'a> {
     Assign(&'a str),
     WhileCondition,
     PlaceAssignment(&'a str, &'a [String]),
+}
+
+/// P9a-7 (R-6u-11): as in Rust a match guard cannot change a place, so the arms below a failed guard test the
+/// value that was matched; an `inout` argument in a guard is `type/inout_context`.
+fn guards_without_inout(guards: &[Option<Expr>]) -> Res<()> {
+    for g in guards.iter().flatten() {
+        let mut calls = Vec::new();
+        inout_statement_calls(g, false, &mut calls);
+        if let Some((c, _)) = calls.iter().find(|(c, _)| c.args.iter().any(|a| matches!(a, Expr::InoutArg(_)))) {
+            return Err(terr(c.line, c.col, "inout_context", "a match guard cannot pass an argument inout",
+                "make the inout call before the match"));
+        }
+    }
+    Ok(())
 }
 
 /// Visit calls in evaluation order (arguments first).
@@ -3564,6 +3607,17 @@ impl Checker {
         let mut i = 0;
         while i < stmts.len() {
             if let Stmt::Match(m) = &stmts[i] {
+                if m.arms.iter().any(|a| arm_guard_of(&a.body).is_some()) {
+                    // P9a-7: a guard is a test of the decision tree; slice and tuple arms have no tree
+                    if let Some(a) = m.arms.iter().find(|a| slice_arm_shape(&a.ctor).is_some() || a.ctor == "()") {
+                        return Err(terr(a.line, a.col, "match_guard",
+                            "a match guard follows a variant, literal or `_` pattern; a slice or tuple pattern has none",
+                            "test the condition with an if inside the arm"));
+                    }
+                    let sts = self.pattern_match(m, scope)?;
+                    stmts.splice(i..i + 1, sts);
+                    continue;
+                }
                 if m.arms.iter().any(|a| slice_arm_shape(&a.ctor).is_some()) {
                     let one = m.arms.len() == 1;
                     let st = self.slice_match(m, scope)?;
@@ -5089,7 +5143,7 @@ impl Checker {
     /// arm patterns (ctor `_` for a wildcard arm), `tuple` the P8 tuple patterns of plain binders; `scrut` the
     /// scrutinee and `t` its type. Returns the tree; leaves name their arm and the lets that bind its names.
     fn lower_patterns(&mut self, arms: &[(i64, i64, Option<String>, String, Vec<String>)], uses: &[HashSet<String>],
-        split_lone: bool, t: &GType, line: i64, col: i64) -> Res<PNode>
+        guarded: &[bool], split_lone: bool, t: &GType, line: i64, col: i64) -> Res<PNode>
     {
         use crate::ast::SubPat;
         // an arm's own pattern names count as mentioned (two fields of one case never share a kept name)
@@ -5111,7 +5165,7 @@ impl Checker {
         }
         let mut used = vec![false; arms.len()];
         let mut budget = 4096usize;
-        let mut node = self.pat_compile(rows, &mut used, &mut budget, &mut Vec::new(), arms, uses, line, col)?;
+        let mut node = self.pat_compile(rows, &mut used, &mut budget, &mut Vec::new(), arms, uses, guarded, line, col)?;
         if let Some(k) = used.iter().position(|u| !u) {
             let (l, c) = (arms[k].0, arms[k].1);
             return Err(terr(l, c, "unreachable_arm", "this arm can never match: the arms above take every value it matches",
@@ -5134,8 +5188,8 @@ impl Checker {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn pat_compile(&mut self, rows: Vec<PRow>, used: &mut [bool], budget: &mut usize, path: &mut Vec<String>,
-        arms: &[(i64, i64, Option<String>, String, Vec<String>)], uses: &[HashSet<String>], line: i64, col: i64)
+    fn pat_compile(&mut self, mut rows: Vec<PRow>, used: &mut [bool], budget: &mut usize, path: &mut Vec<String>,
+        arms: &[(i64, i64, Option<String>, String, Vec<String>)], uses: &[HashSet<String>], guarded: &[bool], line: i64, col: i64)
         -> Res<PNode>
     {
         use crate::ast::SubPat;
@@ -5151,6 +5205,12 @@ impl Checker {
         };
         let Some((v, ty, pat)) = r0.tests.first().cloned() else {
             used[r0.arm] = true;
+            if guarded[r0.arm] {
+                // P9a-7: a guarded arm runs when its guard holds; otherwise the rows below it decide
+                let (k, binds) = (r0.arm, r0.binds.clone());
+                let rest = self.pat_compile(rows[1..].to_vec(), used, budget, path, arms, uses, guarded, line, col)?;
+                return Ok(PNode::Guard(k, binds, Box::new(rest)));
+            }
             return Ok(PNode::Leaf(r0.arm, r0.binds.clone()));
         };
         let test_of = |r: &PRow| r.tests.iter().position(|(x, _, _)| *x == v);
@@ -5159,15 +5219,33 @@ impl Checker {
         match pat {
             SubPat::Variant(..) => {
                 let ctors = self.pat_ctors(&ty, al, ac)?;
+                // P9a-7: `Ok(_)` on a `Result<(), E>` is `Ok(())` (the unit payload has no field to bind)
+                for r in rows.iter_mut() {
+                    let Some(i) = r.tests.iter().position(|(x, _, _)| *x == v) else { continue };
+                    if let SubPat::Variant(None, ctor, subs) = &mut r.tests[i].2 {
+                        if ctor == "Ok" && subs.len() == 1 && subs[0] == SubPat::Wild
+                            && ctors.iter().any(|(e, n, fs)| e.is_none() && n == "Ok" && fs.is_empty())
+                        {
+                            subs.clear();
+                        }
+                    }
+                }
                 // every pattern on `v` names one of these constructors with its arity
                 for r in &rows {
                     let Some(i) = test_of(r) else { continue };
                     let (l, c) = (arms[r.arm].0, arms[r.arm].1);
                     match &r.tests[i].2 {
                         SubPat::Variant(en, ctor, subs) => {
+                            if !v.is_empty() && *en != ctors[0].0 {
+                                // P9a-7: a nested constructor of another type (a foreign enum, or `Ok` on an `Option`
+                                // payload) is one code, as a literal of another type is one code
+                                let what = match en { Some(e) => format!("{}::{}", e, ctor), None => ctor.clone() };
+                                return Err(terr(l, c, "match_type",
+                                    format!("the pattern {} cannot match a payload of type {}", what, tn(&ty)), ""));
+                            }
                             let Some((cen, _, fs)) = ctors.iter().find(|(_, n, _)| n == ctor) else {
-                                return Err(terr(l, c, if ctors[0].0.is_some() { "unknown_variant" } else { "match_arms" },
-                                    format!("{} has no variant {}", tn(&ty), ctor), ""));
+                                let code = if ctors[0].0.is_some() { "unknown_variant" } else if v.is_empty() { "match_arms" } else { "match_type" };
+                                return Err(terr(l, c, code, format!("{} has no variant {}", tn(&ty), ctor), ""));
                             };
                             if en != cen {
                                 let what = match en { Some(e) => format!("{}::{}", e, ctor), None => ctor.clone() };
@@ -5198,9 +5276,10 @@ impl Checker {
                             match test_of(r).map(|i| &r.tests[i].2) {
                                 Some(SubPat::Variant(_, c, _)) if *c != ctor => {}
                                 Some(SubPat::Variant(_, _, subs)) => match (&subs[j], &named) {
-                                    (SubPat::Bind(n), None) => named = Some(n.clone()),
-                                    (SubPat::Bind(n), Some(m)) if n == m => {}
-                                    (SubPat::Bind(_), Some(_)) => ok = false,
+                                    // (P9a-7: a `name @ p` binder names the field too, so it is not a copy)
+                                    (SubPat::Bind(n) | SubPat::At(n, _), None) => named = Some(n.clone()),
+                                    (SubPat::Bind(n) | SubPat::At(n, _), Some(m)) if n == m => {}
+                                    (SubPat::Bind(_) | SubPat::At(..), Some(_)) => ok = false,
                                     _ => others.push(r.arm),
                                 },
                                 _ => others.push(r.arm),
@@ -5236,7 +5315,7 @@ impl Checker {
                         }
                     }
                     path.push(match &cen { Some(e) => format!("{}::{}", e, ctor), None => ctor.clone() });
-                    let child = self.pat_compile(spec, used, budget, path, arms, uses, line, col)?;
+                    let child = self.pat_compile(spec, used, budget, path, arms, uses, guarded, line, col)?;
                     path.pop();
                     out.push((cen, ctor, names, child));
                 }
@@ -5287,14 +5366,14 @@ impl Checker {
                 }
                 let lit = match &key { SubPat::Int(x) => x.clone(), SubPat::Bool(b) => b.to_string(), _ => unreachable!() };
                 path.push(format!("{} == {}", label(&v), lit));
-                let a = self.pat_compile(yes, used, budget, path, arms, uses, line, col)?;
+                let a = self.pat_compile(yes, used, budget, path, arms, uses, guarded, line, col)?;
                 path.pop();
                 path.push(format!("{} != {}", label(&v), lit));
-                let b = self.pat_compile(no, used, budget, path, arms, uses, line, col)?;
+                let b = self.pat_compile(no, used, budget, path, arms, uses, guarded, line, col)?;
                 path.pop();
                 Ok(PNode::Test(v, key, Box::new(a), Box::new(b)))
             }
-            SubPat::Bind(_) | SubPat::Wild => unreachable!("PRow::add keeps no binder tests"),
+            SubPat::Bind(_) | SubPat::Wild | SubPat::At(..) => unreachable!("PRow::add keeps no binder tests"),
         }
     }
 
@@ -5303,6 +5382,20 @@ impl Checker {
     fn pattern_match(&mut self, m: &Match, scope: &Scope) -> Res<Vec<Stmt>> {
         let mut probe = m.scrutinee.clone();
         let t = self.match_scrutinee(&mut probe, scope)?;
+        // P9a-7: a guarded arm's body starts with its guard marker; the guard becomes an `if` of the tree
+        let guards: Vec<Option<Expr>> = m.arms.iter().map(|a| arm_guard_of(&a.body).cloned()).collect();
+        let guarded: Vec<bool> = guards.iter().map(Option::is_some).collect();
+        guards_without_inout(&guards)?;
+        let mut m = std::borrow::Cow::Borrowed(m);
+        if guarded.iter().any(|g| *g) {
+            let mm = m.to_mut();
+            for (a, g) in mm.arms.iter_mut().zip(&guarded) {
+                if *g {
+                    a.body.remove(0);
+                }
+            }
+        }
+        let m: &Match = &m;
         let arms: Vec<_> = m.arms.iter().map(|a| (a.line, a.col, a.enum_name.clone(), a.ctor.clone(), a.binders.clone())).collect();
         let uses: Vec<HashSet<String>> = m.arms.iter().map(|a| {
             let mut u = HashSet::new();
@@ -5310,21 +5403,46 @@ impl Checker {
             a.pats.iter().flatten().for_each(|p| pat_tuple_names(p, &mut u));
             u
         }).collect();
-        let node = self.lower_patterns(&arms, &uses, place_root(&m.scrutinee).is_none(), &t, m.line, m.col)?;
+        let uses: Vec<HashSet<String>> = uses.into_iter().zip(&guards).map(|(mut u, g)| {
+            if let Some(g) = g { pat_names_expr(g, &mut u); }
+            u
+        }).collect();
+        let node = match self.lower_patterns(&arms, &uses, &guarded, place_root(&m.scrutinee).is_none(), &t, m.line, m.col) {
+            Err(e) if e.code == "unreachable_arm" && (e.line, e.col) == (m.line, m.col)
+                && m.arms.last().is_some_and(|a| is_else_arm(m, a)) =>
+            {
+                // P9a-7: the pattern of an `if let`/`let else`/`while let` matches every value
+                let a = m.arms.last().expect("the else arm");
+                if !a.body.is_empty() {
+                    let (l, c) = a.body.first().map(Stmt::position).unwrap_or((m.line, m.col));
+                    let msg = if m.form == MatchForm::WhileLet {
+                        "the `while let` pattern matches every value, so the loop never ends by a failed match"
+                    } else {
+                        "the pattern matches every value, so the else block never runs"
+                    };
+                    return Err(terr(l, c, "irrefutable_pattern", msg, "bind the value with `match` or a `let`"));
+                }
+                let mut m2 = m.clone();
+                m2.arms.pop();
+                m2.form = MatchForm::Match;
+                return self.pattern_match(&m2, scope);
+            }
+            r => r?,
+        };
         let bodies: Vec<Vec<Stmt>> = m.arms.iter().map(|a| a.body.clone()).collect();
         let tuples: Vec<Vec<(String, TuplePat)>> = m.arms.iter().map(|a| a.binders.iter().zip(a.pats.iter())
             .filter_map(|(b, p)| p.clone().map(|p| (b.clone(), p))).collect()).collect();
-        if matches!(&node, PNode::Test(v, ..) if v.is_empty()) && !is_plain_place(&m.scrutinee) {
+        if (matches!(&node, PNode::Test(v, ..) if v.is_empty()) || matches!(&node, PNode::Guard(..))) && !is_plain_place(&m.scrutinee) {
             // row VP: literal arms over a computed integer or `bool` test one local, so the scrutinee is evaluated once
             self.pat_tmp += 1;
             let tmp = format!("pruv_pat{}", self.pat_tmp);
             // (the fresh local is spliced before the chain, so a chain that returns on every path still ends the block)
             let mut out = vec![Stmt::Let(Let { borrowed: false, line: m.line, col: m.col, name: tmp.clone(),
                 mutable: false, ty: t.to_key(), value: m.scrutinee.clone(), refine: None })];
-            out.extend(pat_stmts(&node, &pat_var(m.line, m.col, &tmp), &bodies, &tuples, m.line, m.col)?);
+            out.extend(pat_stmts(&node, &pat_var(m.line, m.col, &tmp), &bodies, &tuples, &guards, m.line, m.col)?);
             return Ok(out);
         }
-        let mut out = pat_stmts(&node, &m.scrutinee, &bodies, &tuples, m.line, m.col)?;
+        let mut out = pat_stmts(&node, &m.scrutinee, &bodies, &tuples, &guards, m.line, m.col)?;
         if let PNode::Leaf(..) = node {
             if place_root(&m.scrutinee).is_none() {
                 // the scrutinee is still evaluated, as in Rust
@@ -6908,29 +7026,43 @@ impl Checker {
             // P9a-6: a value match needs an arm to produce its value
             return Err(terr(line, col, "match_arms", "a value `match` has no arms", "write one arm for every case"));
         }
+        // P9a-7: a guarded arm value is `@arm_guard(g, e)`
+        let vguards: Vec<Option<Expr>> = call.args[1..].iter().map(|v| value_guard_of(v).0.cloned()).collect();
+        let vals: Vec<Expr> = call.args[1..].iter().map(|v| value_guard_of(v).1.clone()).collect();
+        let guarded: Vec<bool> = vguards.iter().map(Option::is_some).collect();
+        guards_without_inout(&vguards)?;
+        let any_guard = guarded.iter().any(|g| *g);
+        if any_guard {
+            if let Some(k) = varms.iter().position(|a| slice_arm_shape(&a.ctor).is_some() || a.ctor == "()") {
+                return Err(terr(vals[k].line(), vals[k].col(), "match_guard",
+                    "a match guard follows a variant, literal or `_` pattern; a slice or tuple pattern has none",
+                    "test the condition with a value `if` in the arm"));
+            }
+        }
         if varms.iter().any(|a| slice_arm_shape(&a.ctor).is_some() || a.ctor == "()") {
             // P9a-6c: slice arms and a top-level tuple arm read the scrutinee place in the arm value
             return self.value_place_match(e, want, scope, c);
         }
         let tuples: Vec<Vec<(String, TuplePat)>> = varms.iter().map(|a| a.binders.iter().zip(a.pats.iter())
             .filter_map(|(b, p)| p.clone().map(|p| (b.clone(), p))).collect()).collect();
-        if Self::has_ext_pattern(varms.iter().map(|a| (a.ctor.as_str(), a.binders.as_slice())))
+        if any_guard || Self::has_ext_pattern(varms.iter().map(|a| (a.ctor.as_str(), a.binders.as_slice())))
             || tuples.iter().any(|t| !t.is_empty())
         {
             // P9a-6: lowered to nested value matches and value ifs, which are then checked as usual (P9a-6c: a tuple
             // pattern becomes component reads of its payload binder in the arm value)
             let mut probe = call.args[0].clone();
             let t = self.match_scrutinee(&mut probe, scope)?;
-            let arms: Vec<_> = varms.iter().zip(call.args[1..].iter())
+            let arms: Vec<_> = varms.iter().zip(vals.iter())
                 .map(|(a, v)| (v.line(), v.col(), a.enum_name.clone(), a.ctor.clone(), a.binders.clone())).collect();
-            let uses: Vec<HashSet<String>> = call.args[1..].iter().zip(&tuples).map(|(v, tp)| {
+            let uses: Vec<HashSet<String>> = vals.iter().zip(&tuples).zip(&vguards).map(|((v, tp), g)| {
                 let mut u = HashSet::new();
                 pat_names_expr(v, &mut u);
+                if let Some(g) = g { pat_names_expr(g, &mut u); }
                 tp.iter().for_each(|(_, p)| pat_tuple_names(p, &mut u));
                 u
             }).collect();
             // binders are renamed into the arm values below, so check them against the scope here, as a plain match does
-            for (((l, c, _, _, bs), tp), v) in arms.iter().zip(&tuples).zip(&call.args[1..]) {
+            for (((l, c, _, _, bs), tp), v) in arms.iter().zip(&tuples).zip(&vals) {
                 let mut names = Vec::new();
                 for b in bs {
                     match tp.iter().find(|(n, _)| n == b) {
@@ -6946,7 +7078,13 @@ impl Checker {
                 }
                 Self::fresh_binders(&names, scope, v, *l, *c)?;
             }
-            let node = self.lower_patterns(&arms, &uses, true, &t, line, col)?;
+            let node = self.lower_patterns(&arms, &uses, &guarded, true, &t, line, col)?;
+            if matches!(node, PNode::Guard(..)) && !is_plain_place(&call.args[0]) {
+                // a value position has no `let`: a guard on a computed scrutinee would evaluate it twice
+                return Err(terr(line, col, "match_type",
+                    "a value `match` whose first arm is a guarded `_` tests a local, a parameter or a field path rooted at one",
+                    "bind the value with a let first, or use a `match` statement"));
+            }
             if let PNode::Leaf(..) = node {
                 // a lone `_` arm over a scalar: there is no case to test, and the scrutinee must still be evaluated
                 return Err(terr(line, col, "match_type", format!("a value `match` needs an Option, Result or enum, got {}", tn(&t)),
@@ -6964,15 +7102,15 @@ impl Checker {
                 // `None` arm is unreachable and reuses the last arm value (literal arms have no binders)
                 self.pat_tmp += 1;
                 let k = format!("pruv_pat{}", self.pat_tmp);
-                let chain = pat_value(&node, &pat_var(line, col, &k), &call.args[1..], &tuples, line, col)?;
-                let none = call.args.last().expect("value match arm").clone();
+                let chain = pat_value(&node, &pat_var(line, col, &k), &vals, &tuples, &vguards, line, col)?;
+                let none = vals.last().expect("value match arm").clone();
                 let some = Expr::Ctor(Ctor { line, col, name: "Some".to_string(), arg: Some(Box::new(call.args[0].clone())),
                     ty: None, targs: Some(vec![t.clone()]), inst: None });
                 let arm = |c: &str, bs: Vec<String>| crate::ast::ValueArm { enum_name: None, ctor: c.to_string(), binders: bs, pats: Vec::new() };
                 *e = crate::ast::ValueMatch::expr(line, col, some, vec![(arm("Some", vec![k]), chain), (arm("None", Vec::new()), none)]);
                 return self.value_relowered(e, want, scope, c);
             }
-            *e = pat_value(&node, &call.args[0], &call.args[1..], &tuples, line, col)?;
+            *e = pat_value(&node, &call.args[0], &vals, &tuples, &vguards, line, col)?;
             return self.value_relowered(e, want, scope, c);
         }
         self.static_lit = false;
@@ -9434,6 +9572,11 @@ impl PRow {
         match p {
             SubPat::Wild => {}
             SubPat::Bind(n) => self.binds.push((n, var, ty)),
+            SubPat::At(n, p) => {
+                // P9a-7: `n @ p` binds the value and tests it
+                self.binds.push((n, var.clone(), ty.clone()));
+                self.add(var, ty, *p);
+            }
             p => self.tests.push((var, ty, p)),
         }
     }
@@ -9447,6 +9590,8 @@ enum PNode {
     Match(String, Vec<(Option<String>, String, Vec<String>, PNode)>),
     /// `if v == lit { a } else { b }` (`if v { a } else { b }` for `bool`; `#false` swaps the branches)
     Test(String, crate::ast::SubPat, Box<PNode>, Box<PNode>),
+    /// P9a-7: a guarded leaf: `if guard { arm } else { rest }` (the guard reads the arm's bindings)
+    Guard(usize, Vec<(String, String, GType)>, Box<PNode>),
 }
 
 /// A local, a parameter or a field path rooted at one: reading it again has no effect and gives the same value.
@@ -9491,6 +9636,7 @@ fn pat_slot_names(slot: &str, out: &mut HashSet<String>) {
     fn go(p: &crate::ast::SubPat, out: &mut HashSet<String>) {
         match p {
             crate::ast::SubPat::Bind(n) => { out.insert(n.clone()); }
+            crate::ast::SubPat::At(n, q) => { out.insert(n.clone()); go(q, out); }
             crate::ast::SubPat::Variant(_, _, subs) => subs.iter().for_each(|s| go(s, out)),
             _ => {}
         }
@@ -9545,8 +9691,8 @@ fn pat_cond(line: i64, col: i64, v: Expr, lit: &crate::ast::SubPat) -> (Expr, bo
 
 /// P9a-6: the statements of a lowered pattern match; `bodies[k]` is arm k's body (its P8 tuple lets come from
 /// `tuples[k]`).
-fn pat_stmts(node: &PNode, scrut: &Expr, bodies: &[Vec<Stmt>], tuples: &[Vec<(String, TuplePat)>], line: i64, col: i64)
-    -> Result<Vec<Stmt>, PruvError>
+fn pat_stmts(node: &PNode, scrut: &Expr, bodies: &[Vec<Stmt>], tuples: &[Vec<(String, TuplePat)>], guards: &[Option<Expr>],
+    line: i64, col: i64) -> Result<Vec<Stmt>, PruvError>
 {
     Ok(match node {
         PNode::Leaf(k, binds) => {
@@ -9567,7 +9713,7 @@ fn pat_stmts(node: &PNode, scrut: &Expr, bodies: &[Vec<Stmt>], tuples: &[Vec<(St
             let mut ms = Vec::new();
             for (en, ctor, names, child) in arms {
                 ms.push(MatchArm { line, col, enum_name: en.clone(), ctor: ctor.clone(), binders: names.clone(),
-                    body: pat_stmts(child, scrut, bodies, tuples, line, col)?, pats: Vec::new(), pat_lets: 0 });
+                    body: pat_stmts(child, scrut, bodies, tuples, guards, line, col)?, pats: Vec::new(), pat_lets: 0 });
             }
             let scrutinee = if v.is_empty() { scrut.clone() } else { pat_var(line, col, v) };
             vec![Stmt::Match(Match { line, col, scrutinee, arms: ms, form: MatchForm::Match, els: Vec::new() })]
@@ -9576,50 +9722,89 @@ fn pat_stmts(node: &PNode, scrut: &Expr, bodies: &[Vec<Stmt>], tuples: &[Vec<(St
             // `""` is the scrutinee itself (row VP: a literal arm over an integer or `bool`)
             let tested = if v.is_empty() { scrut.clone() } else { pat_var(line, col, v) };
             let (cond, swap) = pat_cond(line, col, tested, lit);
-            let (a, b) = (pat_stmts(a, scrut, bodies, tuples, line, col)?, pat_stmts(b, scrut, bodies, tuples, line, col)?);
+            let (a, b) = (pat_stmts(a, scrut, bodies, tuples, guards, line, col)?, pat_stmts(b, scrut, bodies, tuples, guards, line, col)?);
             let (then, els) = if swap { (b, a) } else { (a, b) };
             vec![Stmt::If(If { line, col, cond, then, els })]
+        }
+        PNode::Guard(k, binds, rest) => {
+            let mut cond = guards[*k].clone().expect("a guarded arm");
+            subst_binds(&mut cond, binds, &tuples[*k])?;
+            let then = pat_stmts(&PNode::Leaf(*k, binds.clone()), scrut, bodies, tuples, guards, line, col)?;
+            let els = pat_stmts(rest, scrut, bodies, tuples, guards, line, col)?;
+            vec![Stmt::If(If { line: cond.line(), col: cond.col(), cond, then, els })]
         }
     })
 }
 
 /// P9a-6: the value of a lowered value `match`: nested value matches and value `if`s; a leaf is its arm value
 /// with each renamed binder replaced by the value it names.
-fn pat_value(node: &PNode, scrut: &Expr, vals: &[Expr], tuples: &[Vec<(String, TuplePat)>], line: i64, col: i64)
-    -> Result<Expr, PruvError>
+fn pat_value(node: &PNode, scrut: &Expr, vals: &[Expr], tuples: &[Vec<(String, TuplePat)>], guards: &[Option<Expr>],
+    line: i64, col: i64) -> Result<Expr, PruvError>
 {
     Ok(match node {
         PNode::Leaf(k, binds) => {
             let mut e = vals[*k].clone();
-            for (n, v, ty) in binds {
-                if let Some((_, TuplePat::Tuple(_, _, ps))) = tuples[*k].iter().find(|(t, _)| t == n) {
-                    // P9a-6c: a tuple pattern reads its components from the payload binder (scalars only)
-                    let mut reads = Vec::new();
-                    tuple_reads(&pat_var(e.line(), e.col(), v), ps, ty, e.line(), e.col(), &mut reads)?;
-                    reads.iter().for_each(|(n, r)| subst_var(&mut e, n, r));
-                } else if n != v {
-                    rename_var(&mut e, n, v);
-                }
-            }
+            subst_binds(&mut e, binds, &tuples[*k])?;
             e
+        }
+        PNode::Guard(k, binds, rest) => {
+            let mut cond = guards[*k].clone().expect("a guarded arm");
+            subst_binds(&mut cond, binds, &tuples[*k])?;
+            let then = pat_value(&PNode::Leaf(*k, binds.clone()), scrut, vals, tuples, guards, line, col)?;
+            let els = pat_value(rest, scrut, vals, tuples, guards, line, col)?;
+            ValueIf::expr(cond.line(), cond.col(), cond, then, els)
         }
         PNode::Match(v, arms) => {
             let scrutinee = if v.is_empty() { scrut.clone() } else { pat_var(line, col, v) };
             let mut out = Vec::new();
             for (en, ctor, names, child) in arms {
                 out.push((crate::ast::ValueArm { enum_name: en.clone(), ctor: ctor.clone(), binders: names.clone(), pats: Vec::new() },
-                    pat_value(child, scrut, vals, tuples, line, col)?));
+                    pat_value(child, scrut, vals, tuples, guards, line, col)?));
             }
             crate::ast::ValueMatch::expr(line, col, scrutinee, out)
         }
         PNode::Test(v, lit, a, b) => {
             let tested = if v.is_empty() { scrut.clone() } else { pat_var(line, col, v) };
             let (cond, swap) = pat_cond(line, col, tested, lit);
-            let (a, b) = (pat_value(a, scrut, vals, tuples, line, col)?, pat_value(b, scrut, vals, tuples, line, col)?);
+            let (a, b) = (pat_value(a, scrut, vals, tuples, guards, line, col)?, pat_value(b, scrut, vals, tuples, guards, line, col)?);
             let (then, els) = if swap { (b, a) } else { (a, b) };
             ValueIf::expr(line, col, cond, then, els)
         }
     })
+}
+
+/// P9a-6/P9a-7: replaces an arm's bound names in `e` (its value or guard) by the values they name: a renamed binder
+/// by its field, a tuple pattern by component reads of its payload binder (scalars only, P9a-6c).
+fn subst_binds(e: &mut Expr, binds: &[(String, String, GType)], tuples: &[(String, TuplePat)]) -> Result<(), PruvError> {
+    for (n, v, ty) in binds {
+        if let Some((_, TuplePat::Tuple(_, _, ps))) = tuples.iter().find(|(t, _)| t == n) {
+            let mut reads = Vec::new();
+            tuple_reads(&pat_var(e.line(), e.col(), v), ps, ty, e.line(), e.col(), &mut reads)?;
+            reads.iter().for_each(|(n, r)| subst_var(e, n, r));
+        } else if n != v {
+            rename_var(e, n, v);
+        }
+    }
+    Ok(())
+}
+
+/// P9a-7: the guard of a match arm (the marker `@arm_guard(g);` the parser puts in front of the body).
+fn arm_guard_of(body: &[Stmt]) -> Option<&Expr> {
+    match body.first() {
+        Some(Stmt::ExprStmt(x)) => match &x.expr {
+            Expr::Call(c) if c.name == crate::ast::ARM_GUARD => c.args.first(),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// P9a-7: a guarded value-match arm `@arm_guard(g, e)` as `(Some(g), e)`.
+fn value_guard_of(v: &Expr) -> (Option<&Expr>, &Expr) {
+    match v {
+        Expr::Call(c) if c.name == crate::ast::ARM_GUARD && c.args.len() == 2 => (Some(&c.args[0]), &c.args[1]),
+        _ => (None, v),
+    }
 }
 
 /// P9a-6c: the names the nested value matches of an arm value bind (variant slots, tuple patterns, slice binders).

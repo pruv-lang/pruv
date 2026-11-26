@@ -1,0 +1,24 @@
+// spec: R-6u-10 R-6u-11 R-6u-12 accept
+// Match guards and `@` bindings: a guarded arm is proved under its guard and the arms after it under its negation,
+// so the second `Some(x)` arm knows `x <= 0`; `n @ Halt::Bad(_)` binds the payload it tests.
+enum Halt { Done, Stalled, Bad(c: i64) }
+
+fn sign(o: Option<i64>) -> i64
+  ensures !is_some(o) ==> result == 0
+{
+  return match o {
+    Some(x) if x > 0 => 1,
+    Some(0) => 0,
+    Some(x) => if x <= 0 { -1 } else { 5 / 0 },
+    None => 0,
+  };
+}
+
+fn guarded(r: Result<(), Halt>) -> i64 {
+  match r {
+    Ok(_) => { return 0; }
+    Err(h @ Halt::Bad(c)) if c > 0 => { return 100 / c; }
+    Err(Halt::Done) | Err(Halt::Stalled) => { return 1; }
+    Err(_) => { return 2; }
+  }
+}

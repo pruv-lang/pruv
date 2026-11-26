@@ -461,7 +461,21 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
                 }
                 q + 1 < n && src[q] == '=' && src[q + 1] == '>'
             };
-            if v == "_" && (arrow || toks.last().is_some_and(|t| t.kind == Kind::Op && matches!(t.val.as_str(), "(" | "[" | ","))) {
+            // P9a-7: also before a guard (`_ if c =>`) or an alternative (`_ | ..`), after `|` or `@`, and as the
+            // pattern of `if let _ =`/`while let _ =` (reported there as an irrefutable pattern)
+            let next_pat = {
+                let mut q = pos;
+                while q < n && src[q].is_whitespace() {
+                    q += 1;
+                }
+                (q < n && src[q] == '|' && src.get(q + 1) != Some(&'|'))
+                    || (q + 2 < n && src[q] == 'i' && src[q + 1] == 'f' && !(src[q + 2].is_alphanumeric() || src[q + 2] == '_'))
+            };
+            let prev_pat = toks.last().is_some_and(|t| t.kind == Kind::Op && matches!(t.val.as_str(), "|" | "@"))
+                || (toks.len() >= 2 && toks[toks.len() - 1].val == "let"
+                    && matches!(toks[toks.len() - 2].val.as_str(), "if" | "while"));
+            if v == "_" && (arrow || next_pat || prev_pat
+                || toks.last().is_some_and(|t| t.kind == Kind::Op && matches!(t.val.as_str(), "(" | "[" | ","))) {
                 toks.push(Tok { kind: Kind::Op, val: v, line, col, end: col + 1 });
                 continue;
             }

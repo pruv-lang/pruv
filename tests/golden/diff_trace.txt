@@ -1460,6 +1460,13 @@ must_reject|tests/must_reject/p9_alias_ref_scalar.pruv	1 case: obl=0 1	default=7
 must_reject|tests/must_reject/p9_alias_refine_false.pruv	1 case: obl=1 1	default=6fde44be4e0f
 must_reject|tests/must_reject/p9_alias_reserved.pruv	1 case: obl=0 1	default=3c917a9879bf
 must_reject|tests/must_reject/p9_alias_tuple_generic.pruv	1 case: obl=0 1	default=c340f498db8e
+must_reject|tests/must_reject/p9_at_pattern_empty.pruv	1 case: obl=0 1	default=a91bf66d00b6
+must_reject|tests/must_reject/p9_at_pattern_top.pruv	1 case: obl=0 1	default=140d1bf5045a
+must_reject|tests/must_reject/p9_guard_inout.pruv	1 case: obl=0 1	default=da854ddf0ca1
+must_reject|tests/must_reject/p9_guard_missing.pruv	1 case: obl=0 1	default=3f0df10041af
+must_reject|tests/must_reject/p9_guard_proof.pruv	1 case: obl=2 1	default=40215ae04425
+must_reject|tests/must_reject/p9_guard_slice.pruv	1 case: obl=0 1	default=2544f05d5983
+must_reject|tests/must_reject/p9_guard_value_computed.pruv	1 case: obl=0 1	default=30443a264556
 must_reject|tests/must_reject/p9_if_arm_inout.pruv	1 case: obl=0 1	default=22b8860450f7
 must_reject|tests/must_reject/p9_if_arm_move.pruv	1 case: obl=0 1	default=92f0c5e984ea
 must_reject|tests/must_reject/p9_if_cond_type.pruv	1 case: obl=0 1	default=1d51db4486ca
@@ -1467,6 +1474,7 @@ must_reject|tests/must_reject/p9_if_contract.pruv	1 case: obl=0 1	default=9d7ac0
 must_reject|tests/must_reject/p9_if_expand.pruv	1 case: obl=0 1	default=53e1a2ab3df7
 must_reject|tests/must_reject/p9_if_false_ensures.pruv	1 case: obl=3 1	default=c2f13e907c78
 must_reject|tests/must_reject/p9_if_generic.pruv	1 case: obl=0 1	default=bb04e2b46c6a
+must_reject|tests/must_reject/p9_if_let_irrefutable.pruv	1 case: obl=0 1	default=8ed7bd7d89bb
 must_reject|tests/must_reject/p9_if_no_else.pruv	1 case: obl=0 1	default=02e80b46e26c
 must_reject|tests/must_reject/p9_if_owned_borrow.pruv	1 case: obl=0 1	default=c37c6e9aa62d
 must_reject|tests/must_reject/p9_if_ref_arm.pruv	1 case: obl=0 1	default=157f9c6e7d4c
@@ -1477,8 +1485,8 @@ must_reject|tests/must_reject/p9_int_match_big_lits.pruv	1 case: obl=0 1	default
 must_reject|tests/must_reject/p9_int_match_bool_on_int.pruv	1 case: obl=0 1	default=bbae5b32d37f
 must_reject|tests/must_reject/p9_int_match_bool_partial.pruv	1 case: obl=0 1	default=f487a533f8ea
 must_reject|tests/must_reject/p9_int_match_false_ensures.pruv	1 case: obl=3 1	default=7603790f381d
-must_reject|tests/must_reject/p9_int_match_if_let.pruv	1 case: obl=0 1	default=b75bd64d7498
-must_reject|tests/must_reject/p9_int_match_let_else.pruv	1 case: obl=0 1	default=19775578c72c
+must_reject|tests/must_reject/p9_int_match_if_let.pruv	1 case: obl=1 1	default=9b7720bd2fe6
+must_reject|tests/must_reject/p9_int_match_let_else.pruv	1 case: obl=2 1	default=9d971ef25ccb
 must_reject|tests/must_reject/p9_int_match_option.pruv	1 case: obl=0 1	default=fe37f00fbb11
 must_reject|tests/must_reject/p9_int_match_repeat.pruv	1 case: obl=0 1	default=dca9e3d8c4b6
 must_reject|tests/must_reject/p9_int_match_u8_range.pruv	1 case: obl=0 1	default=96c97ceb0828
@@ -1496,11 +1504,14 @@ must_reject|tests/must_reject/p9_match_missing.pruv	1 case: obl=0 1	default=fe62
 must_reject|tests/must_reject/p9_match_owned_borrow.pruv	1 case: obl=0 1	default=33c82e063560
 must_reject|tests/must_reject/p9_match_pattern.pruv	1 case: obl=0 1	default=0253f40cf35f
 must_reject|tests/must_reject/p9_match_types.pruv	1 case: obl=0 1	default=d12537c0c5db
+must_reject|tests/must_reject/p9_or_pattern_names.pruv	1 case: obl=0 1	default=3ef9bb82a2c4
 must_reject|tests/must_reject/p9_pattern_arity.pruv	1 case: obl=0 1	default=f4e81cd03d78
 must_reject|tests/must_reject/p9_pattern_arm_index.pruv	1 case: obl=3 1	default=49dae644c14a
 must_reject|tests/must_reject/p9_pattern_ctor_scalar.pruv	1 case: obl=0 1	default=52d4d458cad4
 must_reject|tests/must_reject/p9_pattern_false_ensures.pruv	1 case: obl=1 1	default=0cd72f9c4c7d
-must_reject|tests/must_reject/p9_pattern_if_let.pruv	1 case: obl=0 1	default=b75bd64d7498
+must_reject|tests/must_reject/p9_pattern_foreign_builtin.pruv	1 case: obl=0 1	default=22cd08f135a3
+must_reject|tests/must_reject/p9_pattern_foreign_ctor.pruv	1 case: obl=0 1	default=8092b275e5b1
+must_reject|tests/must_reject/p9_pattern_if_let.pruv	1 case: obl=2 1	default=60cb5649c2c7
 must_reject|tests/must_reject/p9_pattern_lit_type.pruv	1 case: obl=0 1	default=b82b56114a80
 must_reject|tests/must_reject/p9_pattern_missing.pruv	1 case: obl=0 1	default=a2102d47904a
 must_reject|tests/must_reject/p9_pattern_missing_lit.pruv	1 case: obl=0 1	default=9bb746e275b2
@@ -2087,6 +2098,7 @@ runtime|tests/runtime/p9_rt_match_tuple_slice.pruv	1 case: obl=51 1	default=0404
 runtime|tests/runtime/p9_rt_match_unchecked.pruv	1 case: obl=2 1	default=3ec6dbafda66
 runtime|tests/runtime/p9_rt_match_value.pruv	1 case: obl=25 1	default=add1f56b1ee0
 runtime|tests/runtime/p9_rt_owned_arm.pruv	1 case: obl=24 1	default=9b31c83dc85a
+runtime|tests/runtime/p9_rt_pattern_let.pruv	1 case: obl=24 1	default=f2234b130a06
 runtime|tests/runtime/p9_rt_pattern_names.pruv	1 case: obl=1 1	default=a122c74f4a4f
 runtime|tests/runtime/p9_rt_pattern_order.pruv	1 case: obl=31 1	default=a19dbbd6d894
 runtime|tests/runtime/p9_rt_pattern_owned.pruv	1 case: obl=16 1	default=75148ac98a8a

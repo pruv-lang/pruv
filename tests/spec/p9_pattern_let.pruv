@@ -1,6 +1,6 @@
-// spec: R-6u-6 reject
-// `let else` takes only a plain pattern for now (parity row P9a-7).
+// spec: R-6u-10 reject
+// An or-pattern of `let else` binds the same names in every alternative.
 fn f(o: Option<Option<i64>>) -> i64 {
-  let Some(Some(x)) = o else { return 0; };
+  let Some(Some(x)) | Some(None) = o else { return 0; };
   return x;
 }

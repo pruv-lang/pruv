@@ -1,0 +1,101 @@
+// P9a-7: `if let`, `let else` and `while let` with match patterns, or-patterns, match guards and `@` bindings, in
+// statement and value position. Arms are tried in source order; a failed guard falls through to the next arm.
+enum Halt { Done, Stalled, Bad(c: i64) }
+
+fn a(o: Option<Option<i64>>) -> i64 {
+  if let Some(Some(x)) = o { return x; }
+  return 0;
+}
+
+fn b(o: Option<Option<i64>>) -> i64 {
+  let Some(Some(_)) | Some(None) = o else { return -1; };
+  return 7;
+}
+
+fn c(r: Result<bool, Halt>) -> i64 {
+  match r {
+    Ok(true) | Err(Halt::Done) => { return 1; }
+    Ok(false) => { return 2; }
+    Err(Halt::Bad(n)) if n > 3 => { return n; }
+    Err(_) => { return 4; }
+  }
+}
+
+fn d(o: Option<i64>) -> i64 {
+  return match o {
+    Some(n) if n > 10 && n < 1000 => n,
+    Some(1) | Some(2) => 7,
+    Some(v @ 5) => v + 3,
+    Some(_) => 9,
+    None => 0,
+  };
+}
+
+fn e(xs: [i64]) -> i64 {
+  if let [_, _] | [_, _, _] = xs { return 2; }
+  return 0;
+}
+
+fn f(n: i64) -> i64 {
+  if let 3 = n { return 1; } else if let -1 | 0 = n { return 2; }
+  return 0;
+}
+
+fn g(k0: i64) -> i64
+  requires 0 <= k0 && k0 < 100
+{
+  let mut k: i64 = k0;
+  let mut s: i64 = 0;
+  while let Some(1) | Some(2) | Some(3) = if k > 0 { Some::<i64>(k) } else { None::<i64> }
+    invariant 0 <= k && k <= k0 && 0 <= s && s <= k0 - k
+    decreases k
+  {
+    s = s + 1;
+    k = k - 1;
+  }
+  return s * 10 + k;
+}
+
+fn h(r: Result<(), i64>) -> i64 {
+  match r {
+    Ok(_) => { return 0; }
+    Err(e) => { return e; }
+  }
+}
+
+fn at(o: Option<Option<i64>>) -> i64 {
+  match o {
+    Some(i @ Some(x)) if x > 0 && x < 1000 => { if let Some(y) = i { return y + 100; } return -5; }
+    Some(_) => { return 1; }
+    None => { return 2; }
+  }
+}
+
+fn run() -> () ! io {
+  print(a(Some::<Option<i64>>(Some::<i64>(4))));
+  print(a(Some::<Option<i64>>(None::<i64>)));
+  print(b(None::<Option<i64>>));
+  print(b(Some::<Option<i64>>(None::<i64>)));
+  print(c(Err::<bool, Halt>(Halt::Bad(9))));
+  print(c(Err::<bool, Halt>(Halt::Bad(2))));
+  print(c(Ok::<bool, Halt>(true)));
+  print(c(Err::<bool, Halt>(Halt::Done)));
+  print(c(Ok::<bool, Halt>(false)));
+  print(d(Some::<i64>(20)));
+  print(d(Some::<i64>(2)));
+  print(d(Some::<i64>(5)));
+  print(d(Some::<i64>(6)));
+  print(d(None::<i64>));
+  print(e([1, 2, 3]));
+  print(e([1]));
+  print(f(3));
+  print(f(0));
+  print(f(9));
+  print(g(2));
+  print(g(5));
+  print(h(Err::<(), i64>(5)));
+  print(h(Ok::<(), i64>(())));
+  print(at(Some::<Option<i64>>(Some::<i64>(8))));
+  print(at(Some::<Option<i64>>(Some::<i64>(-8))));
+  print(at(None::<Option<i64>>));
+}

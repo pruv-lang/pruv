@@ -192,6 +192,11 @@ impl ValueIf {
 /// and need no new node. The reserved name cannot be written in source and is never resolved as a function.
 pub struct ValueMatch;
 
+/// P9a-7: the reserved call of a match guard: the statement `@arm_guard(g);` in front of an arm body, or the arm value
+/// `@arm_guard(g, e)` of a value match. The checker lowers every guarded match (`Checker::pattern_match`), so later
+/// passes never see one.
+pub const ARM_GUARD: &str = "@arm_guard";
+
 /// P9a-6: a pattern below the top constructor of a match arm. It is spelled in a binder slot of
 /// `MatchArm::binders` / `ValueArm::binders` so every pass before the checker carries it as is: a name, `_`, an
 /// integer literal `#-3`, a `bool` literal `#true`, or a nested variant `{enum;ctor;p1,p2}` (an empty enum for
@@ -204,6 +209,8 @@ pub enum SubPat {
     Int(String),
     Bool(bool),
     Variant(Option<String>, String, Vec<SubPat>),
+    /// P9a-7: `name @ p`: binds the matched value to `name` and tests it against `p` (encoded `{@name;p}`).
+    At(String, Box<SubPat>),
 }
 
 impl SubPat {
@@ -224,6 +231,10 @@ impl SubPat {
             };
         }
         if let Some(inner) = slot.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+            if let Some(at) = inner.strip_prefix('@') {
+                let (name, sub) = at.split_once(';').unwrap_or((at, "_"));
+                return SubPat::At(name.to_string(), Box::new(Self::decode(sub)));
+            }
             let mut it = inner.splitn(3, ';');
             let en = it.next().unwrap_or("");
             let ctor = it.next().unwrap_or("").to_string();
@@ -241,6 +252,7 @@ impl SubPat {
             SubPat::Bool(b) => format!("#{b}"),
             SubPat::Variant(en, ctor, subs) => format!("{{{};{};{}}}", en.as_deref().unwrap_or(""), ctor,
                 subs.iter().map(SubPat::encode).collect::<Vec<_>>().join(",")),
+            SubPat::At(n, p) => format!("{{@{};{}}}", n, p.encode()),
         }
     }
 
@@ -267,13 +279,17 @@ impl SubPat {
 
     /// Rewrites every nested variant's enum name with `f` (module resolution of `m::E::V` sub-patterns).
     pub fn map_enums<E>(&mut self, f: &mut dyn FnMut(&str) -> Result<String, E>) -> Result<(), E> {
-        if let SubPat::Variant(en, _, subs) = self {
-            if let Some(n) = en {
-                *n = f(n)?;
+        match self {
+            SubPat::Variant(en, _, subs) => {
+                if let Some(n) = en {
+                    *n = f(n)?;
+                }
+                for s in subs {
+                    s.map_enums(f)?;
+                }
             }
-            for s in subs {
-                s.map_enums(f)?;
-            }
+            SubPat::At(_, p) => p.map_enums(f)?,
+            _ => {}
         }
         Ok(())
     }

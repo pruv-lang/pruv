@@ -171,6 +171,39 @@ fn decode_str_lit(raw: &str) -> Vec<u8> {
 }
 
 /// Sign negation of a decimal string for negative folding ("0" stays as is).
+/// P9a-7: the names one arm pattern binds (sub-pattern slots, tuple patterns, a slice rest), for or-patterns.
+fn arm_names(a: &MatchArm) -> std::collections::BTreeSet<String> {
+    use crate::ast::SubPat;
+    fn sub(p: &SubPat, out: &mut std::collections::BTreeSet<String>) {
+        match p {
+            SubPat::Bind(n) => { out.insert(n.clone()); }
+            SubPat::At(n, q) => { out.insert(n.clone()); sub(q, out); }
+            SubPat::Variant(_, _, subs) => subs.iter().for_each(|q| sub(q, out)),
+            SubPat::Wild | SubPat::Int(_) | SubPat::Bool(_) => {}
+        }
+    }
+    fn tup(p: &TuplePat, out: &mut std::collections::BTreeSet<String>) {
+        match p {
+            TuplePat::Bind(_, _, n, _) => { out.insert(n.clone()); }
+            TuplePat::Tuple(_, _, ps) => ps.iter().for_each(|q| tup(q, out)),
+            TuplePat::Wild => {}
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for (k, b) in a.binders.iter().enumerate() {
+        match a.pats.get(k).and_then(|p| p.as_ref()) {
+            Some(p) => tup(p, &mut out),
+            None => sub(&SubPat::decode(b), &mut out),
+        }
+    }
+    if let Some(Some(r)) = crate::check::slice_arm_shape(&a.ctor) {
+        if !r.is_empty() {
+            out.insert(r.to_string());
+        }
+    }
+    out
+}
+
 fn negate(v: &str) -> String {
     if v == "0" {
         "0".to_string()
@@ -829,6 +862,18 @@ impl Parser {
     fn sub_pattern(&mut self) -> R<Option<crate::ast::SubPat>> {
         use crate::ast::SubPat;
         let t = self.peek(0).clone();
+        if t.kind == Kind::Id && self.at("@", 1) {
+            // P9a-7: `name @ p` binds the payload and tests it against the sub-pattern `p`
+            self.bump();
+            self.bump();
+            let Some(p) = self.sub_pattern()? else {
+                let n = self.peek(0).clone();
+                return Err(PruvError::new("parse", n.line, n.col, "at_pattern",
+                    "`name @` is followed by a `_`, literal or variant pattern",
+                    "write `x @ Some(_)`, `x @ 0` or just the name"));
+            };
+            return Ok(Some(SubPat::At(t.val.clone(), Box::new(p))));
+        }
         if t.kind == Kind::Op && t.val == "_" {
             self.bump();
             return Ok(Some(SubPat::Wild));
@@ -865,17 +910,60 @@ impl Parser {
         Ok(Some(SubPat::Variant(arm.enum_name, arm.ctor, arm.binders.iter().map(|b| SubPat::decode(b)).collect())))
     }
 
-    /// P9a-6: the pattern of `if let`, `let else` or `while let`: a `_`, literal or nested sub-pattern there is
-    /// `parse/let_pattern` (parity row P9a-7; use a `match`).
-    fn let_arm_pattern(&mut self) -> R<MatchArm> {
-        let t = self.peek(0).clone();
-        let arm = self.arm_pattern()?;
-        if !crate::ast::SubPat::is_plain(&arm.ctor) || !arm.binders.iter().all(|b| crate::ast::SubPat::is_plain(b)) {
-            return Err(PruvError::new("parse", t.line, t.col, "let_pattern",
-                "a `_`, literal or nested pattern in `if let`, `let else` or `while let` is not supported yet",
-                "use a `match` statement with a `_` arm"));
+    /// P9a-7: the pattern of `if let`, `let else` or `while let`: the patterns of a `match` arm (variant, `_`,
+    /// literal, nested, slice), with `|` alternatives; each alternative is one arm of the expanded match.
+    fn let_arms(&mut self) -> R<Vec<MatchArm>> {
+        self.arm_alts()
+    }
+
+    /// One pattern of a match arm: a top-level tuple `(a, b)`, a slice pattern or a variant/`_`/literal pattern.
+    fn one_arm_pat(&mut self) -> R<MatchArm> {
+        if self.at("(", 0) {
+            // P8: `(a, b) =>` destructures a tuple scrutinee; the checker (Checker::block) turns the single-arm match
+            // into the destructuring lets
+            let ct = self.peek(0).clone();
+            let (mut binders, mut pats) = (Vec::new(), Vec::new());
+            self.arm_binder(&mut binders, &mut pats)?;
+            return Ok(MatchArm { line: ct.line, col: ct.col, enum_name: None, ctor: "()".to_string(), binders,
+                body: Vec::new(), pats, pat_lets: 0 });
         }
-        Ok(arm)
+        if self.at("[", 0) {
+            return self.slice_arm();
+        }
+        if self.peek(0).kind == Kind::Id && self.at("@", 1) && !self.at("..", 2) {
+            // P9a-7: `@` binds a payload; the whole scrutinee is already a name or is bound with a `let`
+            let t = self.peek(0).clone();
+            return Err(PruvError::new("parse", t.line, t.col, "at_pattern",
+                "a `name @` binding applies to a payload sub-pattern, not to the whole matched value",
+                "bind the matched value with a let and match the name"));
+        }
+        self.arm_pattern()
+    }
+
+    /// P9a-7: an optional match guard `if cond` between the patterns and `=>`.
+    fn arm_guard(&mut self) -> R<Option<Expr>> {
+        if !self.at("if", 0) {
+            return Ok(None);
+        }
+        self.bump();
+        Ok(Some(self.expr()?))
+    }
+
+    /// P9a-7: `P1 | P2 | ..`: the alternatives of one arm, each an arm of its own that gets a copy of the body.
+    /// Every alternative binds the same names (`parse/or_pattern`).
+    fn arm_alts(&mut self) -> R<Vec<MatchArm>> {
+        let mut alts = vec![self.one_arm_pat()?];
+        while self.at("|", 0) {
+            let bar = self.next();
+            let a = self.one_arm_pat()?;
+            if arm_names(&a) != arm_names(&alts[0]) {
+                return Err(PruvError::new("parse", bar.line, bar.col, "or_pattern",
+                    "every alternative of an or-pattern binds the same names",
+                    "bind the same names in each alternative, or write separate arms"));
+            }
+            alts.push(a);
+        }
+        Ok(alts)
     }
 
     /// One variant pattern of a match arm, `if let` or `let else`, without its body: `crate::m::E::V(..)`,
@@ -2586,7 +2674,11 @@ impl Parser {
                 let rest = self.block_rest();
                 self.leave(1);
                 let Some(Stmt::Match(m)) = out.last_mut() else { unreachable!("pushed above") };
-                m.arms[0].body = rest?;
+                let rest = rest?;
+                // P9a-7: each `|` alternative is an arm with the rest of the block as its body
+                for a in m.arms.iter_mut() {
+                    a.body = rest.clone();
+                }
                 break;
             }
         }
@@ -2597,10 +2689,11 @@ impl Parser {
     fn if_let(&mut self) -> R<Stmt> {
         let t = self.expect_tok("if")?;
         self.expect("let")?;
-        let mut arm = self.let_arm_pattern()?;
+        let mut arms = self.let_arms()?;
         self.expect("=")?;
         let scr = self.expr()?;
-        arm.body = self.block()?;
+        let body = self.block()?;
+        arms.iter_mut().for_each(|a| a.body = body.clone());
         let mut els = Vec::new();
         if self.at("else", 0) {
             self.bump();
@@ -2613,7 +2706,7 @@ impl Parser {
                 els = self.block()?;
             }
         }
-        Ok(Stmt::Match(Match { line: t.line, col: t.col, scrutinee: scr, arms: vec![arm], form: MatchForm::IfLet, els }))
+        Ok(Stmt::Match(Match { line: t.line, col: t.col, scrutinee: scr, arms, form: MatchForm::IfLet, els }))
     }
 
     /// P8: whether `let` at 0 starts `let P = e else { .. };` (a variant pattern, not a binding name).
@@ -2621,8 +2714,9 @@ impl Parser {
         let p = self.peek(1);
         (p.kind == Kind::Kw && matches!(p.val.as_str(), "Some" | "None" | "Ok" | "Err" | "crate"))
             || (p.kind == Kind::Id && (self.at("(", 2) || self.at("::", 2)))
-            // a literal pattern (R-6u-8) reaches `let_arm_pattern`, which rejects it with `parse/let_pattern`
+            // P9a-7: a literal, slice or nested pattern (R-6u-8, R-6u-9)
             || p.kind == Kind::Int
+            || (p.kind == Kind::Op && p.val == "[")
             || (p.kind == Kind::Op && p.val == "-" && self.peek(2).kind == Kind::Int)
             || self.at("true", 1)
             || self.at("false", 1)
@@ -2678,7 +2772,7 @@ impl Parser {
         if self.at("let", 0) && self.at_let_else() {
             // P8: `let P = e else { .. };`; block_rest moves the following statements into the pattern arm
             self.bump();
-            let arm = self.let_arm_pattern()?;
+            let arms = self.let_arms()?;
             self.expect("=")?;
             let scr = self.expr()?;
             if !self.at("else", 0) {
@@ -2689,7 +2783,7 @@ impl Parser {
             self.bump();
             let els = self.block()?;
             self.expect(";")?;
-            return Ok(Stmt::Match(Match { line: l, col: c, scrutinee: scr, arms: vec![arm], form: MatchForm::LetElse, els }));
+            return Ok(Stmt::Match(Match { line: l, col: c, scrutinee: scr, arms, form: MatchForm::LetElse, els }));
         }
         if self.at("if", 0) && self.at("let", 1) {
             return self.if_let();
@@ -2838,9 +2932,9 @@ impl Parser {
             // P8b: `while let P = e` is the loop `while true` whose body is the head match (MatchForm::WhileLet)
             let head = if self.at("let", 0) {
                 self.bump();
-                let arm = self.let_arm_pattern()?;
+                let arms = self.let_arms()?;
                 self.expect("=")?;
-                Some((arm, self.expr()?))
+                Some((arms, self.expr()?))
             } else {
                 None
             };
@@ -2872,9 +2966,9 @@ impl Parser {
                 }
             };
             let mut body = self.block()?;
-            if let Some((mut arm, scrutinee)) = head {
-                arm.body = body;
-                body = vec![Stmt::Match(Match { line: l, col: c, scrutinee, arms: vec![arm], form: MatchForm::WhileLet,
+            if let Some((mut arms, scrutinee)) = head {
+                arms.iter_mut().for_each(|a| a.body = body.clone());
+                body = vec![Stmt::Match(Match { line: l, col: c, scrutinee, arms, form: MatchForm::WhileLet,
                     els: vec![Stmt::Break(Jump { line: l, col: c, label: None })] })];
             }
             return Ok(Stmt::While(While { line: l, col: c, cond, invariants: invs, decreases: dec, body, for_head: None, label: None }));
@@ -2950,22 +3044,21 @@ impl Parser {
             self.expect("{")?;
             let mut arms = Vec::new();
             while !self.at("}", 0) {
-                let mut arm = if self.at("(", 0) {
-                    // P8: `(a, b) =>` destructures a tuple scrutinee; the checker (Checker::block) turns the
-                    // single-arm match into the destructuring lets
-                    let ct = self.peek(0).clone();
-                    let (mut binders, mut pats) = (Vec::new(), Vec::new());
-                    self.arm_binder(&mut binders, &mut pats)?;
-                    MatchArm { line: ct.line, col: ct.col, enum_name: None, ctor: "()".to_string(), binders,
-                        body: Vec::new(), pats, pat_lets: 0 }
-                } else if self.at("[", 0) {
-                    self.slice_arm()?
-                } else {
-                    self.arm_pattern()?
-                };
+                let alts = self.arm_alts()?;
+                let guard = self.arm_guard()?;
                 self.expect("=>")?;
-                arm.body = self.block()?;
-                arms.push(arm);
+                let mut body = self.block()?;
+                if let Some(g) = guard {
+                    // P9a-7: a guard is the marker statement `@arm_guard(g);` in front of the body (Checker::pattern_match)
+                    let (gl, gc) = (g.line(), g.col());
+                    body.insert(0, Stmt::ExprStmt(ExprStmt { line: gl, col: gc, expr: Expr::Call(Call { line: gl, col: gc,
+                        name: crate::ast::ARM_GUARD.into(), args: vec![g], ty: None, targs: None, inst: None, old: None,
+                        opaque_c: false }) }));
+                }
+                for mut arm in alts {
+                    arm.body = body.clone();
+                    arms.push(arm);
+                }
                 if self.at(",", 0) {
                     self.bump();
                 }
@@ -3425,17 +3518,8 @@ impl Parser {
         while !self.at("}", 0) {
             // P9a-6c: tuple arms `(a, b) =>`, slice arms `[x, rest @ ..] =>` and tuple sub-patterns `Some((a, b))`
             // as in a statement `match`; the checker lowers them to component and element reads in the arm value
-            let arm = if self.at("(", 0) {
-                let ct = self.peek(0).clone();
-                let (mut binders, mut pats) = (Vec::new(), Vec::new());
-                self.arm_binder(&mut binders, &mut pats)?;
-                MatchArm { line: ct.line, col: ct.col, enum_name: None, ctor: "()".to_string(), binders,
-                    body: Vec::new(), pats, pat_lets: 0 }
-            } else if self.at("[", 0) {
-                self.slice_arm()?
-            } else {
-                self.arm_pattern()?
-            };
+            let alts = self.arm_alts()?;
+            let guard = self.arm_guard()?;
             self.expect("=>")?;
             let e = if self.at("{", 0) {
                 self.value_arm_of("match")?
@@ -3451,8 +3535,16 @@ impl Parser {
             if self.at(",", 0) {
                 self.bump();
             }
-            let va = crate::ast::ValueArm { enum_name: arm.enum_name, ctor: arm.ctor, binders: arm.binders, pats: arm.pats };
-            arms.push((va, e));
+            // P9a-7: a guarded arm value is `@arm_guard(g, e)`
+            let e = match guard {
+                Some(g) => Expr::Call(Call { line: g.line(), col: g.col(), name: crate::ast::ARM_GUARD.into(),
+                    args: vec![g, e], ty: None, targs: None, inst: None, old: None, opaque_c: false }),
+                None => e,
+            };
+            for arm in alts {
+                let va = crate::ast::ValueArm { enum_name: arm.enum_name, ctor: arm.ctor, binders: arm.binders, pats: arm.pats };
+                arms.push((va, e.clone()));
+            }
         }
         self.expect("}")?;
         self.leave(1);
