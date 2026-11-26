@@ -64,69 +64,6 @@ fn fold_bytes(s0: i64, b: [u8]) -> i64
   return s;
 }
 
-fn fold_str(s0: i64, t: str) -> i64
-  requires 0 <= s0 && s0 < 1000000007
-  ensures 0 <= result && result < 1000000007
-{
-  let mut s: i64 = s0;
-  let mut i: i64 = 0;
-  while i < len(t)
-    invariant 0 <= i && i <= len(t) && 0 <= s && s < 1000000007
-    decreases len(t) - i
-  {
-    let c: i64 = t[i];
-    s = (s * 31 + c) % 1000000007;
-    i = i + 1;
-  }
-  return s;
-}
-
-// the old tape path for one line (DB65: only the lines rpc::scan hands back, see bench/l3/grok/RESHAPE_LINE.md)
-fn rpc_line_tape(line: [u8], inout acc: [i64]) -> () ! alloc
-  requires len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
-  ensures len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
-{
-  let parsed: crate::json::JsonParse = crate::rpc::parse_line(line, len(line));
-  match parsed {
-    crate::json::JsonParse::Failed(e) => { acc[1] = bump(acc[1], 1); }
-    crate::json::JsonParse::Parsed(d) => {
-      let k: i64 = crate::rpc::kind_of(d, 2);
-      if k == 1 {
-        acc[3] = bump(acc[3], 1);
-        let nh: [u8] = crate::rpc::not_handled(d);
-        acc[7] = bump(acc[7], len(nh));
-        acc[8] = fold_bytes(acc[8], nh);
-      } else if k == 2 {
-        acc[4] = bump(acc[4], 1);
-        let e: i64 = crate::access::field(d, 0, "error");
-        if crate::access::kind(d, e) == 6 {
-          let dt: [u8] = crate::rpc::error_detail(d, e);
-          let detail: str = crate::jstr::owned_text(move dt);
-          acc[9] = bump(acc[9], len(detail));
-          acc[10] = fold_str(acc[10], detail);
-          let c: i64 = crate::access::field(d, e, "code");
-          if c >= 0 {
-            let raw: [u8] = crate::util::json_value(d, c);
-            acc[11] = bump(acc[11], len(raw));
-            acc[12] = fold_bytes(acc[12], raw);
-          }
-        }
-      } else {
-        acc[2] = bump(acc[2], 1);
-        let m: str = crate::util::str_at(d, crate::access::field(d, 0, "method"));
-        acc[13] = bump(acc[13], len(m));
-        acc[14] = fold_str(acc[14], m);
-        let p: i64 = crate::access::field(d, 0, "params");
-        let u: i64 = crate::access::field(d, p, "update");
-        let c2: i64 = crate::access::field(d, u, "content");
-        let t: str = crate::util::str_at(d, crate::access::field(d, c2, "text"));
-        acc[5] = bump(acc[5], len(t));
-        acc[6] = fold_str(acc[6], t);
-      }
-    }
-  }
-}
-
 // hand text_of(): fold a member borrowed from the line, or decoded into the reused scratch buf
 fn fold_text(line: [u8], c: crate::rpc::Cap, which: i64, inout buf: [u8], inout acc: [i64], ln: i64, fo: i64) -> () ! alloc
   requires len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007) && 0 <= ln && ln < 15 && 0 <= fo && fo < 15
@@ -142,15 +79,15 @@ fn fold_text(line: [u8], c: crate::rpc::Cap, which: i64, inout buf: [u8], inout 
   }
 }
 
-// DB65: the hand_rpc.rs line() shape. One span scan of the trimmed line (no copy, no tape); c and buf are reused across lines.
-fn rpc_line(line: [u8], inout acc: [i64], inout c: crate::rpc::Cap, inout buf: [u8]) -> () ! alloc
+// DB65 / reset 4.3: the hand_rpc.rs line() shape. One span scan of the trimmed line (no copy, no tape, an object error included);
+// c, buf and out are reused across lines.
+fn rpc_line(line: [u8], inout acc: [i64], inout c: crate::rpc::Cap, inout buf: [u8], inout out: [u8]) -> () ! alloc
   requires len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
   ensures len(acc) == 15 && forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
 {
   acc[0] = bump(acc[0], 1);
   let r: i64 = crate::rpc::scan(line, len(line), inout c);
   if r == 0 { acc[1] = bump(acc[1], 1); return; }
-  if r == 2 { rpc_line_tape(line, inout acc); return; }
   let k: i64 = crate::rpc::line_kind(line, c, 2);
   if k == 1 {
     acc[3] = bump(acc[3], 1);
@@ -158,8 +95,17 @@ fn rpc_line(line: [u8], inout acc: [i64], inout c: crate::rpc::Cap, inout buf: [
     acc[7] = bump(acc[7], len(nh));
     acc[8] = fold_bytes(acc[8], nh);
   } else if k == 2 {
-    if c.err == 6 { rpc_line_tape(line, inout acc); return; }
     acc[4] = bump(acc[4], 1);
+    if c.err == 6 && 0 <= c.lo && c.lo <= c.hi && c.hi <= len(line) {
+      crate::rpc::detail(subview(line, c.lo, c.hi), c, inout out);
+      acc[9] = bump(acc[9], len(out));
+      acc[10] = fold_bytes(acc[10], out);
+      if c.c_k != -1 && 0 <= c.c_s && c.c_s <= c.c_e && c.c_e <= c.hi - c.lo && c.c_e - c.c_s <= 8388608 {
+        crate::rpc::compact(subview(line, c.lo, c.hi), c.c_s, c.c_e, inout out, inout buf);
+        acc[11] = bump(acc[11], len(out));
+        acc[12] = fold_bytes(acc[12], out);
+      }
+    }
   } else {
     acc[2] = bump(acc[2], 1);
     fold_text(line, c, 0, inout buf, inout acc, 13, 14);
@@ -167,25 +113,23 @@ fn rpc_line(line: [u8], inout acc: [i64], inout c: crate::rpc::Cap, inout buf: [
   }
 }
 
+// hand rpc_lines(): split at each LF with find_byte (memchr), the last unterminated piece too
 pub fn grok_rpc_lines(win: [u8]) -> [i64] ! alloc
   ensures len(result) == 15
 {
   let mut acc: [i64] = alloc(15, 0);
   let mut c: crate::rpc::Cap = crate::rpc::cap_new();
   let mut buf: [u8] = alloc(0, 0);
+  let mut out: [u8] = alloc(0, 0);
   let mut start: i64 = 0;
-  let mut i: i64 = 0;
-  while i < len(win)
-    invariant 0 <= start && start <= i && i <= len(win) && len(acc) == 15
+  while start < len(win)
+    invariant 0 <= start && start <= len(win) && len(acc) == 15
     invariant forall q in 0..15: (0 <= acc[q] && acc[q] < 1000000007)
-    decreases len(win) - i
+    decreases len(win) - start
   {
-    if win[i] == 10 {
-      rpc_line(subview(win, start, i), inout acc, inout c, inout buf);
-      start = i + 1;
-    }
-    i = i + 1;
+    let k: i64 = find_byte(win, 10, start, len(win));
+    rpc_line(subview(win, start, k), inout acc, inout c, inout buf, inout out);
+    if k < len(win) { start = k + 1; } else { start = len(win); }
   }
-  if start < len(win) { rpc_line(subview(win, start, len(win)), inout acc, inout c, inout buf); }
   return acc;
 }

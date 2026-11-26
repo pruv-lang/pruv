@@ -1,13 +1,14 @@
-// Grok ACP load check (grokLoadCheck on withRpcChild, jsonrpc true) on the G10 event loop. Package E, written WITHOUT a shell:
-// nothing here was compiled or verified. Style and proofs follow bench/l3/codex/rpc.pruv (same transport, same loop invariants).
+// Grok ACP load check (grokLoadCheck on withRpcChild, jsonrpc true) on the G10 event loop (same transport as bench/l3/codex/rpc.pruv).
 //
-// NOTES / THINGS I WAS UNSURE ABOUT  (spec P11 is resolved: a failed stdin write half-closes stdin and stdout is still read, as TS does)
-//  1. Local helpers: grok util.pruv has no `field`, `join`, `id_is`, `int_bytes`, `trim` (the Codex util has them), so this file has
-//     private copies (`field`, `id_is`, `trim_bounds`); joins use packet::cat_bytes.
-//  2. `inout` arrays are only written element by element (never replaced): the RpcResponseError detail text and raw `error.code` JSON
-//     travel in the caller-owned buffer `aux` (detail at 0..300, raw code from 512, at most 8388608 bytes; longer => internal invariant).
-//  3. kind 0 null/1 false/2 true/3 number/4 string/5 array/6 object are taken from access::kind (as the Codex rpc does).
-//     "loadSession === true" is access::boolean(..) == 1 on an object agentCapabilities of an object-or-not result.
+// Reset 4.3 (bench/l3/grok/RESHAPE.md): the whole module is in the hand_rpc.rs shape. No JSON tape: every line goes through one span
+// scan (scan/value), the state is the typed struct Check (no word packets); only load_check's result packet (host boundary) stays.
+//
+// NOTES  (spec P11 is resolved: a failed stdin write half-closes stdin and stdout is still read, as TS does)
+//  1. Local helpers: grok util.pruv has no `id_is` or `trim`, so this file has private copies (`id_is`, `trim_bounds`).
+//  2. The RpcResponseError detail (300 units) and the compact error.code JSON live in Check (detail, raw); a code over 8388608 bytes
+//     is an internal invariant.
+//  3. Kinds -1 absent, 0 null, 1 bool, 3 number, 4 string, 5 array, 6 object. "loadSession === true" is the literal `true` as the
+//     value of loadSession in an object agentCapabilities of an object result (Cap.ls 1).
 //  4. A non-object `error` (string, number, ...) does NOT reject (TS: record(error) is undefined => resolve(result)); the line is
 //     then a normal response whose result is `result` (missing/null allowed for session/load, not enough for initialize).
 //  5. `timeout_ms == 0` means the host default 20000 (IMPL_NOTES leaves the meaning of 0 to load_check). Capped at 86400000 like Codex.
@@ -22,14 +23,8 @@
 //       error response: stage 25/26 class 3 code 0 with raw error.code JSON (absent if no code), name RpcResponseError,
 //       detail = message cut to 300 units with non-ASCII as '?' or "rejected";   internal: stage 30 class 6 code 2.
 //  9. The `args` package is not used (the argv is the fixed three words agent --no-leader stdio).
-// ctl (16 words): 0 failure (0 none, 2 internal, 3 rpc error response, 4 no loadSession, 5 timeout, 6 read-failed, 7 engine-missing)
-//   1 stage (24 spawn, 25 initialize, 26 session/load)  2 process slot (-1 none)  3 timer slot  4 last request id
-//   5 1 when step left a line  6 length of that line in `line`  7 exit code of a closed child  8 raw code length in aux  9 detail length in aux
-//   10 overall budget in ms (transport::send deadline)
 
 // ---- private helpers ----
-
-fn field(d: crate::json::JsonDocument, id: i64, key: str) -> i64 ! alloc { return crate::access::field(d, id, key); }
 
 // P6: a response id matches only when its JSON token is exactly the decimal text of the request id.
 fn id_is(b: [u8], id: i64) -> bool
@@ -53,6 +48,7 @@ fn space(b: [u8], i: i64) -> i64
 {
   let c: i64 = b[i];
   if c == 32 || (9 <= c && c <= 13) { return 1; }
+  if c < 194 { return 0; }
   if i + 1 < len(b) && c == 194 && b[i + 1] == 160 { return 2; }
   if i + 2 < len(b) {
     if c == 225 && b[i + 1] == 154 && b[i + 2] == 128 { return 3; }
@@ -90,7 +86,7 @@ fn trim_bounds(b: [u8]) -> Bounds
     decreases len(b) - i
   {
     let n: i64 = space(b, i);
-    if n > 0 { if lo == i { lo = lo + n; } i = i + n; }
+    if n > 0 { i = i + n; }
     else { i = i + 1; hi = i; }
   }
   if hi < lo { hi = lo; }
@@ -101,14 +97,16 @@ fn trim_bounds(b: [u8]) -> Bounds
 // One pass over the trimmed line view t = line[lo..hi) (a borrowed subview, nothing copied) records the spans the loop needs, the
 // way hand_rpc.rs line()/member() does. Spans are positions in t. Kinds are the access kinds (-1 absent, 0 null, 1 bool, 3 number,
 // 4 string, 5 array, 6 object). Duplicate keys: the last one wins (access::field), so a tracked key resets what it owns.
-// Two shapes go to the old tape path (parse_line) instead (fb): an escaped key inside a tracked object (access::field compares
-// decoded keys) and, at the use site, an object `error` (detail and the json_value of the code are taken from the tape there).
+// Escaped keys are compared decoded (key_is, as access::field compares decoded keys); an object `error` records its message and code
+// spans (hand member() T_ERROR), so no line goes back to a JSON tape.
 pub struct Cap {
   lo: i64, hi: i64, root: i64,
   id_s: i64, id_e: i64, id_k: i64,
   m_s: i64, m_e: i64, m_k: i64, m_p: i64,
   x_s: i64, x_e: i64, x_k: i64, x_p: i64,
-  err: i64, res: i64, caps: i64, ls: i64, rec: i64, fb: i64
+  e_s: i64, e_e: i64, e_k: i64, e_p: i64,
+  c_s: i64, c_e: i64, c_k: i64,
+  err: i64, res: i64, caps: i64, ls: i64, rec: i64
 }
 
 // a scanned value: start s (first byte), end e (one past, -1 on a parse failure), kind k, p = 1 when a string has no escape
@@ -116,7 +114,8 @@ struct Val { s: i64, e: i64, k: i64, p: i64 }
 
 pub fn cap_new() -> Cap
 {
-  return Cap { lo: 0, hi: 0, root: -1, id_s: 0, id_e: 0, id_k: -1, m_s: 0, m_e: 0, m_k: -1, m_p: 1, x_s: 0, x_e: 0, x_k: -1, x_p: 1, err: -1, res: -1, caps: -1, ls: 0, rec: 0, fb: 0 };
+  return Cap { lo: 0, hi: 0, root: -1, id_s: 0, id_e: 0, id_k: -1, m_s: 0, m_e: 0, m_k: -1, m_p: 1, x_s: 0, x_e: 0, x_k: -1, x_p: 1,
+               e_s: 0, e_e: 0, e_k: -1, e_p: 1, c_s: 0, c_e: 0, c_k: -1, err: -1, res: -1, caps: -1, ls: 0, rec: 0 };
 }
 
 fn bad() -> Val
@@ -297,25 +296,70 @@ fn lit_end(b: [u8], p: i64, lit: str) -> i64
   return p + len(lit);
 }
 
-// Tracks (hand member()): 0 none, 1 root, 2 params, 3 update, 4 content, 6 result, 7 agentCapabilities.
-// Slot of the plain key b[lo..hi) under track: 1 id, 2 method, 3 params, 4 error, 5 result, 6 update, 7 content, 8 text,
-// 9 agentCapabilities, 10 loadSession, 0 none.
-fn key_slot(b: [u8], lo: i64, hi: i64, track: i64) -> i64 ! alloc
+// The key body b[lo..hi) (plain: no escape) equals the ASCII literal lit after JSON unescaping (access::field compares decoded keys;
+// hand key_is). A \u escape is one code unit; a surrogate never equals an ASCII byte.
+fn key_is(b: [u8], lo: i64, hi: i64, plain: i64, lit: str) -> bool
+  requires 0 <= lo && lo <= hi && hi <= len(b)
+{
+  if plain == 1 { return bytes_are(b, lo, hi, lit); }
+  let mut q: i64 = lo;
+  let mut k: i64 = 0;
+  while q < hi
+    invariant lo <= q && q <= hi && hi <= len(b) && 0 <= k && k <= len(lit)
+    decreases hi - q
+  {
+    if k >= len(lit) { return false; }
+    let c: i64 = b[q];
+    let mut u: i64 = c;
+    let mut n: i64 = 1;
+    if c == 92 {
+      if q + 1 >= hi { return false; }
+      let x: i64 = b[q + 1];
+      n = 2;
+      u = x;
+      if x == 117 {
+        if q + 6 > hi { return false; }
+        u = hex4(b, q + 2);
+        n = 6;
+      }
+      if x == 98 { u = 8; }
+      if x == 102 { u = 12; }
+      if x == 110 { u = 10; }
+      if x == 114 { u = 13; }
+      if x == 116 { u = 9; }
+    }
+    let y: i64 = lit[k];
+    if u != y { return false; }
+    k = k + 1;
+    q = q + n;
+  }
+  return k == len(lit);
+}
+
+// Tracks (hand member()): 0 none, 1 root, 2 params, 3 update, 4 content, 5 error, 6 result, 7 agentCapabilities.
+// Slot of the key b[lo..hi) under track: 1 id, 2 method, 3 params, 4 error, 5 result, 6 update, 7 content, 8 text,
+// 9 agentCapabilities, 10 loadSession, 11 message, 12 code, 0 none.
+fn key_slot(b: [u8], lo: i64, hi: i64, plain: i64, track: i64) -> i64
   requires 0 <= lo && lo <= hi && hi <= len(b)
 {
   if track == 1 {
-    if bytes_are(b, lo, hi, "id") { return 1; }
-    if bytes_are(b, lo, hi, "method") { return 2; }
-    if bytes_are(b, lo, hi, "params") { return 3; }
-    if bytes_are(b, lo, hi, "error") { return 4; }
-    if bytes_are(b, lo, hi, "result") { return 5; }
+    if key_is(b, lo, hi, plain, "id") { return 1; }
+    if key_is(b, lo, hi, plain, "method") { return 2; }
+    if key_is(b, lo, hi, plain, "params") { return 3; }
+    if key_is(b, lo, hi, plain, "error") { return 4; }
+    if key_is(b, lo, hi, plain, "result") { return 5; }
     return 0;
   }
-  if track == 2 && bytes_are(b, lo, hi, "update") { return 6; }
-  if track == 3 && bytes_are(b, lo, hi, "content") { return 7; }
-  if track == 4 && bytes_are(b, lo, hi, "text") { return 8; }
-  if track == 6 && bytes_are(b, lo, hi, "agentCapabilities") { return 9; }
-  if track == 7 && bytes_are(b, lo, hi, "loadSession") { return 10; }
+  if track == 2 && key_is(b, lo, hi, plain, "update") { return 6; }
+  if track == 3 && key_is(b, lo, hi, plain, "content") { return 7; }
+  if track == 4 && key_is(b, lo, hi, plain, "text") { return 8; }
+  if track == 5 {
+    if key_is(b, lo, hi, plain, "message") { return 11; }
+    if key_is(b, lo, hi, plain, "code") { return 12; }
+    return 0;
+  }
+  if track == 6 && key_is(b, lo, hi, plain, "agentCapabilities") { return 9; }
+  if track == 7 && key_is(b, lo, hi, plain, "loadSession") { return 10; }
   return 0;
 }
 
@@ -366,16 +410,14 @@ fn value(b: [u8], p: i64, d: i64, track: i64, inout c: Cap) -> Val ! alloc
       let k: Val = sstr(b, q + 1);
       if k.e < 0 { return bad(); }
       if track != 0 {
-        if k.p == 0 { c.fb = 1; }
-        else {
-          slot = key_slot(b, q + 1, k.e, track);
-          // hand member(): a tracked key resets what it owns before its value is read
-          if slot == 3 { sub = 2; c.x_k = -1; }
-          if slot == 6 { sub = 3; c.x_k = -1; }
-          if slot == 7 { sub = 4; c.x_k = -1; }
-          if slot == 5 { sub = 6; c.caps = -1; c.ls = 0; }
-          if slot == 9 { sub = 7; c.ls = 0; }
-        }
+        slot = key_slot(b, q + 1, k.e, k.p, track);
+        // hand member(): a tracked key resets what it owns before its value is read
+        if slot == 3 { sub = 2; c.x_k = -1; }
+        else if slot == 6 { sub = 3; c.x_k = -1; }
+        else if slot == 7 { sub = 4; c.x_k = -1; }
+        else if slot == 4 { sub = 5; c.e_k = -1; c.c_k = -1; }
+        else if slot == 5 { sub = 6; c.caps = -1; c.ls = 0; }
+        else if slot == 9 { sub = 7; c.ls = 0; }
       }
       q = ws(b, k.e + 1);
       if q >= len(b) { return bad(); }
@@ -385,12 +427,14 @@ fn value(b: [u8], p: i64, d: i64, track: i64, inout c: Cap) -> Val ! alloc
     let v: Val = value(b, q, d - 1, sub, inout c);
     if v.e < 0 { return bad(); }
     if slot == 1 { c.id_s = v.s; c.id_e = v.e; c.id_k = v.k; }
-    if slot == 2 { c.m_s = v.s + 1; c.m_e = v.e - 1; c.m_k = v.k; c.m_p = v.p; }
-    if slot == 4 { c.err = v.k; }
-    if slot == 5 { c.res = v.k; }
-    if slot == 8 { c.x_s = v.s + 1; c.x_e = v.e - 1; c.x_k = v.k; c.x_p = v.p; }
-    if slot == 9 { c.caps = v.k; }
-    if slot == 10 { c.ls = 0; if v.k == 1 && b[v.s] == 116 { c.ls = 1; } }
+    else if slot == 2 { c.m_s = v.s + 1; c.m_e = v.e - 1; c.m_k = v.k; c.m_p = v.p; }
+    else if slot == 4 { c.err = v.k; }
+    else if slot == 5 { c.res = v.k; }
+    else if slot == 8 { c.x_s = v.s + 1; c.x_e = v.e - 1; c.x_k = v.k; c.x_p = v.p; }
+    else if slot == 9 { c.caps = v.k; }
+    else if slot == 10 { c.ls = 2; if v.k == 1 && b[v.s] == 116 { c.ls = 1; } }
+    else if slot == 11 { c.e_s = v.s + 1; c.e_e = v.e - 1; c.e_k = v.k; c.e_p = v.p; }
+    else if slot == 12 { c.c_s = v.s; c.c_e = v.e; c.c_k = v.k; }
     q = ws(b, v.e);
     if q >= len(b) { return bad(); }
     let t: i64 = b[q];
@@ -403,14 +447,14 @@ fn value(b: [u8], p: i64, d: i64, track: i64, inout c: Cap) -> Val ! alloc
 
 fn valid(b: [u8]) -> bool { return utf8_valid(b); }
 
-// Scan line[0..n) trimmed (P1: invalid UTF-8 is a parse failure): 0 parse failure (parse_line would fail), 1 scanned into c,
-// 2 the tape path decides this line (fb). c.lo/c.hi are the trimmed bounds in line; the other spans are relative to c.lo.
+// Scan line[0..n) trimmed (P1: invalid UTF-8 is a parse failure): 0 parse failure, 1 scanned into c. c.lo/c.hi are the trimmed bounds in line; the other spans are relative to c.lo.
 pub fn scan(line: [u8], n: i64, inout c: Cap) -> i64 ! alloc
   requires 0 <= n && n <= len(line)
   ensures result == 1 ==> (0 <= c.lo && c.lo <= c.hi && c.hi <= len(line))
 {
   c.root = -1; c.id_s = 0; c.id_e = 0; c.id_k = -1; c.m_s = 0; c.m_e = 0; c.m_k = -1; c.m_p = 1;
-  c.x_s = 0; c.x_e = 0; c.x_k = -1; c.x_p = 1; c.err = -1; c.res = -1; c.caps = -1; c.ls = 0; c.rec = 0; c.fb = 0;
+  c.x_s = 0; c.x_e = 0; c.x_k = -1; c.x_p = 1; c.e_s = 0; c.e_e = 0; c.e_k = -1; c.e_p = 1; c.c_s = 0; c.c_e = 0; c.c_k = -1;
+  c.err = -1; c.res = -1; c.caps = -1; c.ls = 0; c.rec = 0;
   let tb: Bounds = trim_bounds(subview(line, 0, n));
   c.lo = tb.lo;
   c.hi = tb.hi;
@@ -423,7 +467,6 @@ pub fn scan(line: [u8], n: i64, inout c: Cap) -> i64 ! alloc
   c.lo = tb.lo;
   c.hi = tb.hi;
   c.root = v.k;
-  if c.fb != 0 { return 2; }
   return 1;
 }
 
@@ -441,23 +484,8 @@ pub fn line_kind(line: [u8], c: Cap, id: i64) -> i64
   return 0;
 }
 
-fn put_lit(inout o: [u8], at: i64, lit: str) -> i64
-  requires 0 <= at && at + len(lit) <= len(o)
-  ensures len(o) == len(old(o)) && result == at + len(lit)
-{
-  let mut k: i64 = 0;
-  while k < len(lit)
-    invariant 0 <= k && k <= len(lit) && at + len(lit) <= len(o) && len(o) == len(old(o)) && 0 <= at
-    decreases len(lit) - k
-  {
-    let x: i64 = lit[k];
-    o[at + k] = x;
-    k = k + 1;
-  }
-  return at + len(lit);
-}
-
-// not_handled on a scanned server request: one exact-size allocation, the raw id token copied from the line once.
+// not_handled on a scanned server request (hand NH_HEAD, id, NH_TAIL): one exact-size reservation, three appends, the raw id token
+// copied from the line once.
 pub fn not_handled_line(line: [u8], c: Cap) -> [u8] ! alloc
 {
   let head: str = "{\"jsonrpc\":\"2.0\",\"id\":";
@@ -466,10 +494,11 @@ pub fn not_handled_line(line: [u8], c: Cap) -> [u8] ! alloc
   let s: i64 = c.lo + c.id_s;
   let e: i64 = c.lo + c.id_e;
   if e > len(line) || e - s > 20000000 { let z: [u8] = alloc(0, 0); return z; }
-  let mut o: [u8] = alloc(len(head) + (e - s) + len(tail), 0);
-  let a: i64 = put_lit(inout o, 0, head);
-  copy_range(inout o, a, line, s, e - s);
-  let f: i64 = put_lit(inout o, a + (e - s), tail);
+  let mut o: [u8] = alloc(0, 0);
+  arr_reserve(inout o, len(head) + (e - s) + len(tail));
+  arr_append(inout o, head, 0, len(head));
+  arr_append(inout o, line, s, e - s);
+  arr_append(inout o, tail, 0, len(tail));
   return o;
 }
 
@@ -491,7 +520,7 @@ fn put_cp(inout o: [u8], at: i64, cp: i64) -> i64
 // combined, a lone surrogate as U+FFFD. Each escape writes no more bytes than it reads, so buf needs only e - s bytes.
 fn dec(b: [u8], s: i64, e: i64, inout buf: [u8]) -> i64
   requires 0 <= s && s <= e && e <= len(b) && e - s <= len(buf)
-  ensures len(buf) == len(old(buf)) && 0 <= result && result <= len(buf)
+  ensures len(buf) == len(old(buf)) && 0 <= result && result <= len(buf) && result <= e - s
 {
   let mut o: i64 = 0;
   let mut q: i64 = s;
@@ -552,17 +581,125 @@ pub fn text_span(line: [u8], c: Cap, which: i64, inout buf: [u8]) -> Span ! allo
   return Span { s: 0, e: n, inbuf: 1 };
 }
 
-// What pump/drain do with line[0..n) waiting for `id`: 0 ignore (a parse failure too), 1 server request, 2 the response to
-// `id` with no object error, 3 run the old tape path on this line (fb, or a response carrying an object error).
+// hand detail(): the error message folded from its source span t[e_s..e_e) into out (cleared first): the first 300 UTF-16 units,
+// 32..126 as themselves, every other unit '?', "rejected" when the message is missing or not a string. A \u escape is one unit (a
+// surrogate pair two, as the decoded string has), a 2 or 3 byte UTF-8 sequence one, a 4 byte one two; none of those is printable ASCII.
+pub fn detail(t: [u8], c: Cap, inout out: [u8]) -> () ! alloc
+  ensures len(out) <= 300
+{
+  out = truncate(out, 0);
+  if c.e_k != 4 || c.e_s < 0 || c.e_s > c.e_e || c.e_e > len(t) {
+    arr_append(inout out, "rejected", 0, 8);
+    return;
+  }
+  let e: i64 = c.e_e;
+  let mut i: i64 = c.e_s;
+  while i < e && len(out) < 300
+    invariant 0 <= i && e <= len(t) && len(out) <= 300
+    decreases e - i
+  {
+    let x: i64 = t[i];
+    let mut u: i64 = x;
+    let mut n: i64 = 1;
+    let mut two: bool = false;
+    if x == 92 && i + 1 < e {
+      let y: i64 = t[i + 1];
+      n = 2;
+      u = y;
+      if y == 117 && i + 6 <= e { u = hex4(t, i + 2); n = 6; }
+      if y == 98 || y == 102 || y == 110 || y == 114 || y == 116 { u = 8; }
+    } else if x >= 128 {
+      u = 128;
+      n = 2;
+      if x >= 224 { n = 3; }
+      if x >= 240 { n = 4; two = true; }
+    }
+    if u >= 32 && u <= 126 { arr_push(inout out, u); } else { arr_push(inout out, 63); }
+    if two && len(out) < 300 { arr_push(inout out, 63); }
+    i = i + n;
+  }
+}
+
+fn hexd(d: i64) -> i64
+  requires 0 <= d && d <= 15
+  ensures 48 <= result && result <= 102
+{
+  if d < 10 { return 48 + d; }
+  return 87 + d;
+}
+
+// util::json_value of the scanned value t[s..e) without a tape (hand compact()), into out (cleared first): whitespace dropped,
+// numbers, literals and keys (their raw escaped spelling with quotes) copied, string values decoded (dec: lone surrogate U+FFFD) and
+// re-escaped like util::escaped (quote, backslash, C0 as \u00xx). A plain string value is its own re-escaping. buf is the reused scratch.
+pub fn compact(t: [u8], s: i64, e: i64, inout out: [u8], inout buf: [u8]) -> () ! alloc
+  requires 0 <= s && s <= e && e <= len(t) && e - s <= 8388608
+  ensures len(out) <= 6 * (e - s)
+{
+  out = truncate(out, 0);
+  let mut q: i64 = s;
+  while q < e
+    invariant s <= q && q <= e && e <= len(t) && len(out) <= 6 * (q - s)
+    decreases e - q
+  {
+    let x: i64 = t[q];
+    if x == 34 {
+      // the closing quote: the first '"' not escaped by a backslash (the scan already validated the string)
+      let mut r: i64 = q + 1;
+      let mut plain: bool = true;
+      while r < e && t[r] != 34
+        invariant q + 1 <= r && r <= e + 1 && e <= len(t)
+        decreases e + 1 - r
+      {
+        if t[r] == 92 { plain = false; r = r + 1; }
+        r = r + 1;
+      }
+      if r >= e { return; }
+      let mut w: i64 = r + 1;
+      while w < e && (t[w] == 32 || t[w] == 9 || t[w] == 10 || t[w] == 13)
+        invariant r + 1 <= w && w <= e
+        decreases e - w
+      {
+        w = w + 1;
+      }
+      let mut key: bool = false;
+      if w < e { if t[w] == 58 { key = true; } }
+      if key || plain {
+        arr_append(inout out, t, q, r + 1 - q);
+      } else {
+        let m: i64 = r - q - 1;
+        if len(buf) < m { buf = resize(buf, m, 0); }
+        if len(buf) < m { return; }
+        let n: i64 = dec(t, q + 1, r, inout buf);
+        arr_push(inout out, 34);
+        let mut j: i64 = 0;
+        while j < n
+          invariant 0 <= j && j <= n && n <= len(buf) && n <= r - q - 1 && len(out) <= 6 * (q - s) + 1 + 6 * j
+          decreases n - j
+        {
+          let y: i64 = buf[j];
+          if y == 34 { arr_push(inout out, 92, 34); }
+          else if y == 92 { arr_push(inout out, 92, 92); }
+          else if y < 32 { arr_push(inout out, 92, 117, 48, 48, hexd(y / 16), hexd(y % 16)); }
+          else { arr_push(inout out, y); }
+          j = j + 1;
+        }
+        arr_push(inout out, 34);
+      }
+      q = r + 1;
+    } else {
+      if x != 32 && x != 9 && x != 10 && x != 13 { arr_push(inout out, x); }
+      q = q + 1;
+    }
+  }
+}
+
+// What pump/drain do with line[0..n) waiting for `id`: 0 ignore (a parse failure too), 1 server request, 2 the response to `id`.
 fn fast_kind(line: [u8], n: i64, id: i64, inout c: Cap) -> i64 ! alloc
   requires 0 <= n && n <= len(line) && 1 <= id && id <= 99
 {
   let r: i64 = scan(line, n, inout c);
   if r == 0 { return 0; }
-  if r == 2 { return 3; }
-  let k: i64 = line_kind(line, c, id);
-  if k == 2 && c.err == 6 { return 3; }
-  return k;
+  return line_kind(line, c, id);
 }
 
 // ---- process start ----
@@ -577,13 +714,18 @@ fn child_args() -> ProcessArgs ! alloc
   return move a;
 }
 
+// The load check state (hand_rpc.rs Check): one typed struct instead of the old 16-word ctl and the aux byte buffer.
+// fail: 0 none, 2 internal, 3 rpc error response, 4 no loadSession, 5 timeout, 6 read-failed, 7 engine-missing.
+// stage: 24 spawn, 25 initialize, 26 session/load. slot/timer: loop slots (-1 none). budget: overall ms (transport::send deadline).
+// ready/n: step left a line of n bytes in `line`. detail/raw: the RpcResponseError parts.
+pub struct Check { fail: i64, stage: i64, slot: i64, timer: i64, budget: i64, ready: bool, n: i64, detail: [u8], raw: [u8] }
+
 // Spawn the child with GROK_HOME=home (inherit the parent environment, then set the pair) in cwd=folder and register it with one
-// overall timer. On failure ctl[0] is set and the returned loop is only to be closed.
-pub fn start(binary: str, home: str, folder: str, timeout_ms: i64, inout ctl: [i64]) -> Loop ! async, net, proc, alloc
-  requires len(ctl) == 16
-  ensures len(ctl) == 16 && ctl[6] == 0
+// overall timer. On failure ck.fail is set and the returned loop is only to be closed.
+fn start(binary: str, home: str, folder: str, timeout_ms: i64, inout ck: Check) -> Loop ! async, net, proc, alloc
+  ensures ck.n == 0
 {
-  ctl[0] = 0; ctl[1] = 24; ctl[2] = -1; ctl[3] = -1; ctl[4] = 0; ctl[5] = 0; ctl[6] = 0; ctl[7] = 0; ctl[8] = 0; ctl[9] = 0;
+  ck.n = 0;
   let args: ProcessArgs = child_args();
   let mut names: ProcessArgs = proc_args_new();
   names = proc_args_push(move names, "GROK_HOME");
@@ -592,92 +734,52 @@ pub fn start(binary: str, home: str, folder: str, timeout_ms: i64, inout ctl: [i
   let child: Process = proc_spawn_env(binary, args, folder, names, values);
   if !proc_ok(child) {
     let r: Result<i64> = proc_wait(move child);
-    ctl[0] = 7;
+    ck.fail = 7;
     let l1: Loop = ev_new(3);
     return move l1;
   }
   let mut l: Loop = ev_new(3);
   if !ev_ok(l) || ev_count(l) >= ev_cap(l) {
     let k: Result<i64> = proc_kill(move child);
-    ctl[0] = 6;
+    ck.fail = 6;
     return move l;
   }
   l = ev_add_process(move l, move child);
-  ctl[2] = ev_last(l);
-  if !ev_ok(l) || ev_count(l) >= ev_cap(l) { ctl[0] = 6; return move l; }
+  ck.slot = ev_last(l);
+  if !ev_ok(l) || ev_count(l) >= ev_cap(l) { ck.fail = 6; return move l; }
   let mut ms: i64 = timeout_ms;
   if ms <= 0 { ms = 20000; }
   if ms > 86400000 { ms = 86400000; }
-  ctl[10] = ms;
+  ck.budget = ms;
   l = ev_add_timer(move l, ms);
-  ctl[3] = ev_last(l);
-  if !ev_ok(l) || ev_count(l) >= ev_cap(l) { ctl[0] = 6; return move l; }
+  ck.timer = ev_last(l);
+  if !ev_ok(l) || ev_count(l) >= ev_cap(l) { ck.fail = 6; return move l; }
   return move l;
 }
 
-// trim the line, parse it as JSON (P1: invalid UTF-8 is a parse failure and the line is skipped)
-pub fn parse_line(line: [u8], n: i64) -> crate::json::JsonParse ! alloc
-  requires 0 <= n && n <= len(line)
-  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
-{
-  // DB56 (G-DB55-5): trim to bounds on the line itself, then copy only the trimmed bytes once and give them up.
-  let tb: Bounds = trim_bounds(subview(line, 0, n));
-  let tn: i64 = tb.hi - tb.lo;
-  let mut b: [u8] = alloc(tn, 0);
-  copy_range(inout b, 0, line, tb.lo, tn);
-  return crate::lines::parse_owned(move b, tn);
-}
-
-// One receive step of the pump (same contract as the Codex rpc::step with a 16-word ctl). ctl[5] = 1 when a line of ctl[6] bytes is
-// in `line`, 0 when nothing usable arrived; a closed child, a timeout or a transport failure sets ctl[0].
-pub fn step(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
-  requires len(ctl) == 16
+// One receive step of the pump. ck.ready when a line of ck.n bytes is in `line`; a closed child, a timeout or a transport failure
+// sets ck.fail.
+fn step(take l: Loop, inout ck: Check, inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
   requires 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
   requires 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line)
   requires crate::tail::tail_ok(tl) && tl.limit == 1024
-  ensures len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
+  ensures 0 <= ck.n && ck.n <= len(line)
   ensures 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-  ensures 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line) && ctl[6] <= len(line)
+  ensures 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line)
   ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
-  let mut q: Loop = crate::transport::receive_grow(move l, slot, overall, -1, true, 8388608, inout st, inout line, inout chunk, inout tl);
+  let mut q: Loop = crate::transport::receive_grow(move l, ck.slot, ck.timer, -1, true, 8388608, inout st, inout line, inout chunk, inout tl);
   let n: i64 = st.status;
-  ctl[5] = 0;
-  ctl[6] = 0;
+  ck.ready = false;
+  ck.n = 0;
   if n < 0 && n != -6 {
-    ctl[0] = 6;
-    if n == -1 { ctl[0] = 5; }
-    if n == -4 { ctl[7] = st.exit; }
+    ck.fail = 6;
+    if n == -1 { ck.fail = 5; }
   } else if n >= 0 && n <= len(line) {
-    ctl[5] = 1;
-    ctl[6] = n;
+    ck.ready = true;
+    ck.n = n;
   }
   return move q;
-}
-
-// What a parsed line is to a caller waiting for request `id`: 1 a server request (a string `method` with any id, null included:
-// answer it with not_handled), 2 the response to `id` (numeric id whose token is exactly the decimal id), 0 anything to ignore.
-pub fn kind_of(d: crate::json::JsonDocument, id: i64) -> i64 ! alloc
-  requires 1 <= id && id <= 99
-{
-  if crate::access::kind(d, 0) != 6 { return 0; }
-  let mid: i64 = field(d, 0, "id");
-  let method: i64 = field(d, 0, "method");
-  if mid >= 0 && crate::access::kind(d, method) == 4 { return 1; }
-  if mid >= 0 {
-    let number: crate::access::Number = crate::access::number(d, mid);
-    if number.status == 0 && id_is(crate::util::raw(d, mid), id) { return 2; }
-  }
-  return 0;
-}
-
-// the -32601 "not handled" reply to a server request: same raw id token, jsonrpc 2.0, LF. Empty only on an absurd id token.
-pub fn not_handled(d: crate::json::JsonDocument) -> [u8] ! alloc
-{
-  let idr: [u8] = crate::util::raw(d, field(d, 0, "id"));
-  if len(idr) > 20000000 { let e: [u8] = alloc(0, 0); return e; }
-  let head: [u8] = crate::packet::cat_bytes(crate::util::to_bytes("{\"jsonrpc\":\"2.0\",\"id\":"), idr);
-  return crate::packet::cat_bytes(head, crate::util::to_bytes(",\"error\":{\"code\":-32601,\"message\":\"not handled\"}}\n"));
 }
 
 // ---- requests ----
@@ -687,206 +789,156 @@ pub fn req_init() -> [u8] ! alloc
   return crate::util::to_bytes("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":1,\"clientCapabilities\":{\"fs\":{\"readTextFile\":false,\"writeTextFile\":false},\"terminal\":false},\"clientInfo\":{\"name\":\"lair\",\"title\":\"Lair\",\"version\":\"0.1.0\"}}}\n");
 }
 
+// util::escaped(s) appended to out (quote, backslash, C0 as \u00xx), no intermediate buffer
+fn push_escaped(inout out: [u8], s: str) -> () ! alloc
+  requires len(out) + 6 * len(s) <= 100000000
+  ensures len(out) <= len(old(out)) + 6 * len(s)
+{
+  let mut i: i64 = 0;
+  while i < len(s)
+    invariant 0 <= i && i <= len(s) && len(out) <= len(old(out)) + 6 * i
+    decreases len(s) - i
+  {
+    let c: i64 = s[i];
+    if c == 34 { arr_push(inout out, 92, 34); }
+    else if c == 92 { arr_push(inout out, 92, 92); }
+    else if c < 32 { arr_push(inout out, 92, 117, 48, 48, hexd(c / 16), hexd(c % 16)); }
+    else { arr_push(inout out, c); }
+    i = i + 1;
+  }
+}
+
+// session/load request: one buffer reserved for the worst case, the fixed parts appended, the two strings escaped into it
 pub fn req_load(thread: str, folder: str) -> [u8] ! alloc
   requires len(thread) <= 1000000 && len(folder) <= 1000000
 {
-  let a: [u8] = crate::util::to_bytes("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session/load\",\"params\":{\"sessionId\":\"");
-  let b: [u8] = crate::packet::cat_bytes(a, crate::util::escaped(thread));
-  let c: [u8] = crate::packet::cat_bytes(b, crate::util::to_bytes("\",\"cwd\":\""));
-  let d: [u8] = crate::packet::cat_bytes(c, crate::util::escaped(folder));
-  return crate::packet::cat_bytes(d, crate::util::to_bytes("\",\"mcpServers\":[]}}\n"));
+  let a: str = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session/load\",\"params\":{\"sessionId\":\"";
+  let b: str = "\",\"cwd\":\"";
+  let z: str = "\",\"mcpServers\":[]}}\n";
+  let mut out: [u8] = alloc(0, 0);
+  arr_reserve(inout out, len(a) + len(b) + len(z) + 6 * len(thread) + 6 * len(folder));
+  arr_append(inout out, a, 0, len(a));
+  push_escaped(inout out, thread);
+  arr_append(inout out, b, 0, len(b));
+  push_escaped(inout out, folder);
+  arr_append(inout out, z, 0, len(z));
+  return out;
 }
 
 // ---- response handling ----
 
-// diagnostic detail: the message (cut to 300 units) with non-ASCII units shown as '?', "rejected" when it has none
-pub fn error_detail(d: crate::json::JsonDocument, e: i64) -> [u8] ! alloc
-  ensures len(result) <= 300
+// The response to the outstanding request arrived (scanned into c): an object error rejects (fail 3, detail and the compact
+// error.code into ck); otherwise the initialize response must carry an object agentCapabilities whose loadSession is exactly true
+// (else fail 4). c.ls: 0 absent, 1 the literal true, 2 anything else.
+fn on_reply(line: [u8], c: Cap, id: i64, inout ck: Check, inout buf: [u8]) -> () ! alloc
+  requires len(line) <= 8388608
 {
-  let u: crate::access::Units = crate::access::string_units(d, field(d, e, "message"));
-  if u.status != 0 { return crate::util::to_bytes("rejected"); }
-  let mut m: i64 = len(u.units);
-  if m > 300 { m = 300; }
-  let mut out: [u8] = alloc(m, 0);
-  let mut i: i64 = 0;
-  while i < m
-    invariant 0 <= i && i <= m && m <= len(u.units) && m <= 300 && len(out) == m
-    decreases m - i
-  {
-    let x: i64 = u.units[i];
-    if x >= 32 && x < 127 { out[i] = x; } else { out[i] = 63; }
-    i = i + 1;
-  }
-  return out;
-}
-
-// the response to request `id` arrived (d is its document): an object error rejects (ctl[0] = 3, detail and raw code into aux);
-// otherwise the initialize response must carry an object agentCapabilities whose loadSession is exactly true (else ctl[0] = 4).
-fn on_reply(d: crate::json::JsonDocument, id: i64, inout ctl: [i64], inout aux: [u8]) -> () ! alloc
-  requires len(ctl) == 16 && 512 <= len(aux) && len(aux) <= 8389120 && 1 <= id && id <= 2
-  ensures len(ctl) == 16 && 512 <= len(aux) && len(aux) <= 8389120 && ctl[6] == old(ctl)[6]
-{
-  let error: i64 = field(d, 0, "error");
-  if crate::access::kind(d, error) == 6 {
-    ctl[0] = 3;
-    let m: [u8] = error_detail(d, error);
-    let mut i: i64 = 0;
-    while i < len(m)
-      invariant 0 <= i && i <= len(m) && len(m) <= 300 && 512 <= len(aux) && len(aux) <= 8389120 && len(ctl) == 16
-      decreases len(m) - i
-    { let c: i64 = m[i]; aux[i] = c; i = i + 1; }
-    ctl[9] = len(m);
-    let code: i64 = field(d, error, "code");
-    if code >= 0 {
-      let rj: [u8] = crate::util::json_value(d, code);
-      if len(rj) == 0 || len(rj) > 8388608 {
-        ctl[0] = 2;
-      } else {
-        let mut k: i64 = 0;
-        while k < len(rj)
-          invariant 0 <= k && k <= len(rj) && len(rj) <= 8388608 && 512 + k <= len(aux) && len(aux) <= 8389120 && len(ctl) == 16
-          decreases len(rj) - k
-        {
-          if 512 + k == len(aux) { aux = crate::transport::grow_line(move aux, 8389120); }
-          let c2: i64 = rj[k];
-          aux[512 + k] = c2;
-          k = k + 1;
-        }
-        ctl[8] = len(rj);
+  if c.err == 6 {
+    ck.fail = 3;
+    if 0 <= c.lo && c.lo <= c.hi && c.hi <= len(line) {
+      detail(subview(line, c.lo, c.hi), c, inout ck.detail);
+      if c.c_k != -1 && 0 <= c.c_s && c.c_s <= c.c_e && c.c_e <= c.hi - c.lo {
+        compact(subview(line, c.lo, c.hi), c.c_s, c.c_e, inout ck.raw, inout buf);
+        if len(ck.raw) == 0 || len(ck.raw) > 8388608 { ck.fail = 2; }
       }
     }
   } else if id == 1 {
-    let res: i64 = field(d, 0, "result");
-    let caps: i64 = field(d, res, "agentCapabilities");
     let mut ok: bool = false;
-    if crate::access::kind(d, res) == 6 && crate::access::kind(d, caps) == 6 {
-      if crate::access::boolean(d, field(d, caps, "loadSession")) == 1 { ok = true; }  // MUT:M16 => if crate::access::kind(d, field(d, caps, "loadSession")) > 0 { ok = true; }
+    if c.res == 6 && c.caps == 6 {
+      if c.ls == 1 { ok = true; }  // MUT:M16 => if c.ls > 0 { ok = true; }
     }
-    if !ok { ctl[0] = 4; }
+    if !ok { ck.fail = 4; }
   }
 }
 
 // Pump until the response to request `id` arrives (at most 1000000 events, then read-failed). The first failure wins. A server
-// request in between is answered with not_handled. On return ctl[0] == 0 means the response arrived and was accepted.
-// Writes go through transport::send with the overall budget ctl[10]. Spec P11 is resolved: a failed stdin write half-closes stdin
-// and the reader keeps reading stdout (as TS does); the slot is not failed.
-
-fn pump(take l: Loop, slot: i64, overall: i64, id: i64, inout ctl: [i64], inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail, inout aux: [u8]) -> Loop ! async, proc, alloc
-  requires len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && 1 <= id && id <= 2 && 512 <= len(aux) && len(aux) <= 8389120
+// request in between is answered with the not-handled reply. On return ck.fail == 0 means the response arrived and was accepted.
+// Writes go through transport::send with the overall budget. Spec P11 is resolved: a failed stdin write half-closes stdin and the
+// reader keeps reading stdout (as TS does); the slot is not failed.
+fn pump(take l: Loop, id: i64, inout ck: Check, inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail, inout c: Cap, inout buf: [u8]) -> Loop ! async, proc, alloc
+  requires 1 <= id && id <= 2
   requires 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
   requires 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line)
   requires crate::tail::tail_ok(tl) && tl.limit == 1024
-  ensures len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && 512 <= len(aux) && len(aux) <= 8389120
   ensures 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
   ensures 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line)
   ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
   let mut q: Loop = move l;
-  let mut c: Cap = cap_new();
   let mut done: bool = false;
   let mut events: i64 = 0;
-  while ctl[0] == 0 && !done && events < 1000000
-    invariant 0 <= events && events <= 1000000 && len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && 512 <= len(aux) && len(aux) <= 8389120
+  while ck.fail == 0 && !done && events < 1000000
+    invariant 0 <= events && events <= 1000000
     invariant 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
     invariant 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line) && 1 <= id && id <= 2
     invariant crate::tail::tail_ok(tl) && tl.limit == 1024
     decreases 1000000 - events
   {
     events = events + 1;
-    q = step(move q, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tl);
-    if ctl[0] == 0 && ctl[5] == 1 {
-      // DB65: the span scan decides the line in place; the tape path only for fast_kind 3
-      let fk: i64 = fast_kind(line, ctl[6], id, inout c);
-      if fk == 1 { q = crate::transport::send(move q, slot, not_handled_line(line, c), ctl[10]); }
+    q = step(move q, inout ck, inout st, inout line, inout chunk, inout tl);
+    if ck.fail == 0 && ck.ready {
+      let fk: i64 = fast_kind(line, ck.n, id, inout c);
+      if fk == 1 { q = crate::transport::send(move q, ck.slot, not_handled_line(line, c), ck.budget); }
       if fk == 2 {
         done = true;
-        if id == 1 && !(c.res == 6 && c.caps == 6 && c.ls == 1) { ctl[0] = 4; }
-      }
-      if fk == 3 {
-        let parsed: crate::json::JsonParse = parse_line(line, ctl[6]);
-        match parsed {
-          crate::json::JsonParse::Failed(e) => { }
-          crate::json::JsonParse::Parsed(d) => {
-            let k: i64 = kind_of(d, id);
-            if k == 1 { q = crate::transport::send(move q, slot, not_handled(d), ctl[10]); }
-            if k == 2 {
-              done = true;
-              on_reply(d, id, inout ctl, inout aux);
-            }
-          }
-        }
+        on_reply(line, c, id, inout ck, inout buf);
       }
     }
   }
-  if ctl[0] == 0 && !done { ctl[0] = 6; }
+  if ck.fail == 0 && !done { ck.fail = 6; }
   return move q;
 }
 
 // After a response settled a request: the remaining complete lines of the current chunk are processed with nothing outstanding
 // (server requests answered, everything else ignored) before the next request is written. Each step eats at least one chunk byte.
-fn drain(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
-  requires len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
+fn drain(take l: Loop, inout ck: Check, inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail, inout c: Cap) -> Loop ! async, proc, alloc
   requires 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
   requires 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line)
   requires crate::tail::tail_ok(tl) && tl.limit == 1024
-  ensures len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
   ensures 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
   ensures 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line)
   ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
   let mut q: Loop = move l;
-  let mut c: Cap = cap_new();
   let mut n: i64 = 0;
-  while ctl[0] == 0 && st.at < st.end && n < 70000
-    invariant 0 <= n && n <= 70000 && len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
+  while ck.fail == 0 && st.at < st.end && n < 70000
+    invariant 0 <= n && n <= 70000
     invariant 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
     invariant 1 <= len(line) && len(line) <= 8388608 && st.filled <= len(line)
     invariant crate::tail::tail_ok(tl) && tl.limit == 1024
     decreases 70000 - n
   {
     n = n + 1;
-    q = step(move q, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tl);
-    if ctl[0] == 0 && ctl[5] == 1 {
-      // an id of 99 is never outstanding: only server requests (kind 1) matter here
-      let fk: i64 = fast_kind(line, ctl[6], 99, inout c);
-      if fk == 1 { q = crate::transport::send(move q, slot, not_handled_line(line, c), ctl[10]); }
-      if fk == 3 {
-        let parsed: crate::json::JsonParse = parse_line(line, ctl[6]);
-        match parsed {
-          crate::json::JsonParse::Failed(e) => { }
-          crate::json::JsonParse::Parsed(d) => {
-            if kind_of(d, 99) == 1 { q = crate::transport::send(move q, slot, not_handled(d), ctl[10]); }
-          }
-        }
-      }
+    q = step(move q, inout ck, inout st, inout line, inout chunk, inout tl);
+    // an id of 99 is never outstanding: only server requests (kind 1) matter here
+    if ck.fail == 0 && ck.ready {
+      if fast_kind(line, ck.n, 99, inout c) == 1 { q = crate::transport::send(move q, ck.slot, not_handled_line(line, c), ck.budget); }
     }
   }
   return move q;
 }
 
+// Before a request is written: a child whose stdin is already closed is a timeout when the overall timer fired, else read-failed.
+fn before_send(take l: Loop, inout ck: Check, inout st: crate::transport::Reader) -> Loop ! async, alloc
+  ensures st.filled == old(st).filled && st.at == old(st).at && st.end == old(st).end
+{
+  if !crate::transport::stdin_closed(l, ck.slot) { return move l; }
+  let q: Loop = crate::transport::expired(move l, ck.timer, inout st);
+  if st.status == -1 { ck.fail = 5; } else { ck.fail = 6; }
+  return move q;
+}
+
 // ---- result ----
 
-// the failure as a mode 3 result packet (see NOTE 8)
-fn failure(code: i64, stage: i64, aux: [u8], rl: i64, dl: i64) -> [i64] ! alloc
-  requires 512 <= len(aux) && len(aux) <= 8389120 && 0 <= rl && rl <= len(aux) - 512 && 0 <= dl && dl <= 300
+// the failure as a mode 3 result packet (see NOTE 8); raw and detail are given up (hand failure(f, stage, raw, detail)), the detail
+// bytes to the text
+fn failure(code: i64, stage: i64, take raw: [u8], take detail: [u8]) -> [i64] ! alloc
   ensures len(result) >= 28
 {
   let none: [u8] = alloc(0, 0);
   if code == 3 {
-    let mut raw: [u8] = alloc(rl, 0);
-    let mut i: i64 = 0;
-    while i < rl
-      invariant 0 <= i && i <= rl && len(raw) == rl && rl <= len(aux) - 512
-      decreases rl - i
-    { let c: i64 = aux[512 + i]; raw[i] = c; i = i + 1; }
-    let mut dt: [u8] = alloc(dl, 0);
-    let mut j: i64 = 0;
-    while j < dl
-      invariant 0 <= j && j <= dl && len(dt) == dl && dl <= 300 && 512 <= len(aux) && len(aux) <= 8389120
-      decreases dl - j
-    { let c2: i64 = aux[j]; dt[j] = c2; j = j + 1; }
-    let detail: str = crate::jstr::owned_text(move dt);
-    return crate::packet::error_mode(3, stage, 3, 0, 0, 0, raw, "RpcResponseError", detail);
+    let dt: str = crate::jstr::owned_text(move detail);
+    return crate::packet::error_mode(3, stage, 3, 0, 0, 0, raw, "RpcResponseError", dt);
   }
   if code == 7 { return crate::packet::error_mode(3, 24, 1, 8, 0, 0, none, "EngineImportError", ""); }
   if code == 6 { return crate::packet::error_mode(3, stage, 1, 7, 0, 0, none, "EngineImportError", ""); }
@@ -897,61 +949,62 @@ fn failure(code: i64, stage: i64, aux: [u8], rl: i64, dl: i64) -> [i64] ! alloc
 
 // The ACP load check of the copy in `home`: spawn `binary agent --no-leader stdio` (cwd folder, GROK_HOME=home), initialize (id 1),
 // require loadSession === true, then session/load (id 2); any successful reply (missing or null result included) passes.
-// Returns a RESULT packet (mode 3): status 0 on success, status 1 with the stage 24..26 error otherwise. The loop and the child are
-// closed on every path (transport::close consumes the Loop; a failed spawn is consumed by proc_wait).
+// Returns a RESULT packet (mode 3, the host boundary): status 0 on success, status 1 with the stage 24..26 error otherwise. The loop
+// and the child are closed on every path (transport::close consumes the Loop; a failed spawn is consumed by proc_wait).
 pub fn load_check(binary: str, home: str, folder: str, thread: str, timeout_ms: i64) -> [i64] ! async, net, proc, alloc
   requires len(binary) <= 1000000 && len(home) <= 1000000 && len(folder) <= 1000000 && len(thread) <= 1000000
   requires 0 <= timeout_ms && timeout_ms <= 2147483647
   ensures len(result) >= 28
 {
-  let mut ctl: [i64] = alloc(16, 0);
-  let mut l: Loop = start(binary, home, folder, timeout_ms, inout ctl);
-  let slot: i64 = ctl[2];
-  let overall: i64 = ctl[3];
+  let d0: [u8] = alloc(0, 0);
+  let r0: [u8] = alloc(0, 0);
+  let mut ck: Check = Check { fail: 0, stage: 24, slot: -1, timer: -1, budget: 0, ready: false, n: 0, detail: move d0, raw: move r0 };
+  let mut l: Loop = start(binary, home, folder, timeout_ms, inout ck);
+  if ck.fail != 0 {
+    // the hand returns at once when the spawn fails: no buffers are made
+    crate::transport::close(move l, ck.slot);
+    let r1: [u8] = move ck.raw;
+    ck.raw = alloc(0, 0);
+    let d1: [u8] = move ck.detail;
+    ck.detail = alloc(0, 0);
+    return failure(ck.fail, ck.stage, move r1, move d1);
+  }
   let mut st: crate::transport::Reader = crate::transport::reader_new();
   let mut line: [u8] = alloc(4096, 0);
   let mut chunk: [u8] = alloc(65536, 0);
   let mut tl: crate::tail::Tail = crate::tail::new(1024);
-  let mut aux: [u8] = alloc(512, 0);
-  if ctl[0] == 0 {
-    ctl[1] = 25;
-    ctl[4] = 1;
-    if crate::transport::stdin_closed(l, slot) {
-      l = crate::transport::expired(move l, overall, inout st);
-      if st.status == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
-    }
-    l = crate::transport::send(move l, slot, req_init(), ctl[10]);
-    l = pump(move l, slot, overall, 1, inout ctl, inout st, inout line, inout chunk, inout tl, inout aux);
+  let mut c: Cap = cap_new();
+  let mut buf: [u8] = alloc(0, 0);
+  ck.stage = 25;
+  l = before_send(move l, inout ck, inout st);
+  l = crate::transport::send(move l, ck.slot, req_init(), ck.budget);
+  l = pump(move l, 1, inout ck, inout st, inout line, inout chunk, inout tl, inout c, inout buf);
+  if ck.fail == 0 {
+    l = drain(move l, inout ck, inout st, inout line, inout chunk, inout tl, inout c);
   }
-  if ctl[0] == 0 {
-    l = drain(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tl);
-  }
-  if ctl[0] == 0 {
-    ctl[1] = 26;
-    ctl[4] = 2;
-    if crate::transport::stdin_closed(l, slot) {
-      l = crate::transport::expired(move l, overall, inout st);
-      if st.status == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
-    }
-    l = crate::transport::send(move l, slot, req_load(thread, folder), ctl[10]);
-    l = pump(move l, slot, overall, 2, inout ctl, inout st, inout line, inout chunk, inout tl, inout aux);
+  if ck.fail == 0 {
+    ck.stage = 26;
+    l = before_send(move l, inout ck, inout st);
+    l = crate::transport::send(move l, ck.slot, req_load(thread, folder), ck.budget);
+    l = pump(move l, 2, inout ck, inout st, inout line, inout chunk, inout tl, inout c, inout buf);
   }
   // A settling response (0 ok, 2/3 error object, 4 bad capabilities) leaves the rest of its chunk: the reference's data handler still
   // answers server requests in it before the child is closed. The outcome is already settled, so a failed write there only half-closes stdin and is ignored.
-  let settled: i64 = ctl[0];
+  let settled: i64 = ck.fail;
   if settled == 0 || settled == 2 || settled == 3 || settled == 4 {
-    ctl[0] = 0;
-    l = drain(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tl);
-    ctl[0] = settled;
+    ck.fail = 0;
+    l = drain(move l, inout ck, inout st, inout line, inout chunk, inout tl, inout c);
+    ck.fail = settled;
   }
-  let code: i64 = ctl[0];
-  let stage: i64 = ctl[1];
-  let mut rl: i64 = ctl[8];
-  let mut dl: i64 = ctl[9];
-  if rl < 0 || rl > len(aux) - 512 { rl = 0; }
-  if dl < 0 || dl > 300 { dl = 0; }
-  crate::transport::close(move l, slot);
-  if code != 0 { return failure(code, stage, aux, rl, dl); }
+  crate::transport::close(move l, ck.slot);
+  if ck.fail != 0 {
+    // a moved field must be refilled by the next statement (no struct destructuring; an empty Vec does not allocate)
+    let rw: [u8] = move ck.raw;
+    ck.raw = alloc(0, 0);
+    let dt: [u8] = move ck.detail;
+    ck.detail = alloc(0, 0);
+    return failure(ck.fail, ck.stage, move rw, move dt);
+  }
   let meta: [i64] = crate::packet::meta_new(3);
   let er: [i64] = alloc(0, 0);
   let et: [u8] = alloc(0, 0);

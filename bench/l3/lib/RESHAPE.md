@@ -954,3 +954,47 @@ All after the last code change (F1 / F4 from the structure comparison).
 - Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB, TH, FO, FV, UL.
 - Next: step 4.3, Grok RPC and history (`docs/RUST_SHAPE_RESET.md` §6 step 4). Separately: MCP gap B (borrowed
   document in `pkgs/json`/`pkgs/lines`, all consumers) and the supervisor performance remeasure on the new shape.
+
+## Step 4.3: Grok RPC (history deferred to 4.3b)
+
+- `grok/RESHAPE.md`. All of `grok/rpc.pruv` is in the `grok/perf/hand_rpc.rs` shape: no JSON tape on any line (escaped
+  keys matched while decoding, `key_is`; the object `error` read from spans, `detail` and `compact`), the 16-word `ctl`
+  and the `aux` buffer replaced by a `Check` struct, `req_load` one reservation and appends, `not_handled_line` one
+  reservation and three appends, the perf split by `find_byte`. The hand gained the load check (`Rpc`, `Check`,
+  `load_check`, `failure`) so every Pruv function has a counterpart; the only word packet left is the mode 3 result
+  packet at the host boundary.
+- Codex structure review: two behaviour differences were hand bugs (a write to a closed stdin, the 8 MiB line cap tested
+  after the append) and are fixed in the hand; six structure findings applied in Pruv; four left as open rows of that
+  bench (4.3b-U, -V, -C, -D in `grok/RESHAPE.md` §3; they are structure work, not language gaps).
+- **VP** (new, verifier gap): independent `if` statements fork the symbolic path at each one, so a run of N
+  mutually exclusive `if x == k { ... }` costs 2^N paths. `value` had sixteen after its recursive call (plus six
+  before); the whole grok root did not finish verifying in 150 minutes. The hand writes `match slot { ... }`; Pruv has
+  no literal arms on an `i64` scrutinee (R-6u-6 literals are payload positions only), so `value` uses `else if` chains,
+  which verify in seconds and keep one test per arm. Minimal reproducer (work notes `vp16_*.pruv`): a recursive
+  `walk(b, p, d, inout c)` whose loop body does `let v = walk(...)` and then sixteen `if k == i { c.f{i%4} = v + i; }`
+  verifies in 147 s; the same with `else if` in 1 s. Minimal change: literal arms on integer scrutinees (lowered to the
+  same decision tree), and/or path merging after an `if` without `else` that only assigns. Not worked around: the chain
+  is the closest form of the hand's `match`.
+- Uses of existing rows: TH (the child read on the event loop), L (`req_init` literal), UL (pump and drain caps),
+  B family (`text_span` returns a tagged span, no borrowed return).
+- Length contracts added for verification only: `compact` (`e - s <= 8388608`, `len(out) <= 6 * (e - s)`),
+  `push_escaped`, `dec` (`result <= e - s`), `hexd`, `on_reply` (`len(line) <= 8388608`); the perf root's `rpc_line`
+  tests `c_e - c_s <= 8388608` before `compact`.
+- Tests (`grok/RESHAPE.md` §4): `test_impl.py --no-ts` 254/254 on rs/rust and rs/llvm; q 300 random cases + fixtures,
+  3 load-timing differences per pair that pass when rerun alone; `run_perf.py check` 8/8 equal on both pairs.
+- `bench/l3/lib` and `bench/l3/pkgs` unchanged.
+
+### Rows open after 4.3
+
+- New: VP. Closed: none. Bench rows open in `grok/RESHAPE.md`: 4.3b-U, 4.3b-V, 4.3b-C, 4.3b-D.
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB, TH, FO, FV, UL, VP.
+- Next (4.3b): first the four rpc rows above (`grok/rpc.pruv` only). Then the history path against
+  `grok/perf/hand_history.rs`: the line scanner (`line.pruv`, `framing.pruv`) already follows the hand per function;
+  what differs is (1) the collector store: hand `Vec<Slot>` of 200 owned prompt/reply Vecs, Pruv a 4-word state, an
+  8-word-per-slot `[i64]`, offsets and a stamp array threaded through `read::{window,event_step,line_step}` and
+  `entry::{feed,user_view,assistant_view}`; (2) the success packet: hand reserves the final `Vec<i64>` once, Pruv builds
+  `rows`, `meta` and the final packet (`read::assemble_store`); (3) `entry::query_range` allocates a 2-word result where
+  the hand returns `Option<(usize, usize)>`; (4) `Canon` keeps an offset where the hand copies 24 bytes (Pruv also accepts
+  numeric stamps; keep that behaviour). The collector half sits in `pkgs/turns` (`new_state`, `new_slots`,
+  `new_store_hint`, `begin2`, `skip_user`, `answer2`, `tool`, `text_layout`), so its consumers must be run.
+
