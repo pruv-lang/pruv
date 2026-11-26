@@ -1,85 +1,78 @@
 // L3-8 entry: canonicalPath / isHostCodexHome / codexAccountFolder (reference/backend-codex-home.ts) and op 6.
-// Every function here is a replay function: crate::ent_state::Ctx in, Ctx out. After any call, if stalled, bad or done is set the
-// caller must return the Ctx unchanged (done 1 is a thrown homedir/cwd value: throw_existing). Scratch results ride on the
-// Ctx: opool = a string result, ontab = a 0/1 result. A caller that finishes an item overwrites both with set_done or clears them.
-
-pub fn early(cx: crate::ent_state::Ctx) -> bool
-{
-  return cx.stalled != 0 || cx.bad != 0 || cx.done != 0;
-}
+// Every step works on the shared replay context: `inout cx: Ctx`, and an observation that stalls or breaks the replay returns
+// through `?` (Result<.., Halt>). A thrown homedir / cwd answer is rethrown as the item result (rethrow_answer: output set,
+// Halt::Done). A 0/1 result is Result<bool, Halt>; a string result stays in cx.opool with Result<(), Halt> (hand Rust returns
+// Result<Vec<u16>, Halt>; row RA: Result<[i64], Halt> is rejected). Hand baseline: hand/ent_canon.rs.
 
 // units of the string slot at record offset k of the last answer
 pub fn ent_str(cx: crate::ent_state::Ctx, k: i64) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  return crate::ent_value::str_units(cx.ent, crate::ent_packet::sec_start(cx.ent, 1) + crate::ent_u16::clamp(k, 4294967296));
+  let p: i64 = crate::ent_packet::sec_start(cx.ent, 1) + crate::ent_u16::clamp(k, 4294967296);
+  if crate::ent_value::tag_at(cx.ent, p) != 6 { return alloc(0, 0); }
+  return crate::ent_value::str_units(cx.ent, p);
 }
 
-// the thrown value of the last (throw) answer is rethrown as it is
-pub fn throw_existing(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+// a + "/" + b in one buffer (the length guard is the bound of ent_u16::cat; a packet string is far shorter)
+fn slash_cat(a: [i64], b: [i64]) -> [i64] ! alloc
+{
+  if len(a) > 1073741823 || len(b) > 1073741823 { return alloc(0, 0); }
+  let mut o: [i64] = alloc(0, 0);
+  arr_reserve(inout o, len(a) + 1 + len(b));
+  arr_append(inout o, a, 0, len(a));
+  arr_push(inout o, 47);
+  arr_append(inout o, b, 0, len(b));
+  return o;
+}
+
+// the thrown value of the last (throw) answer is rethrown as it is: the item is done
+pub fn rethrow_answer(inout cx: crate::ent_state::Ctx) -> crate::ent_state::Halt ! alloc
 {
   let rp: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, 1), 33554432);
   let mut rec: [i64] = crate::ent_u16::zeros(4);
   crate::ent_u16::wr(inout rec, 0, 1);
   let a: i64 = crate::ent_u16::put_range(inout rec, 1, cx.ent, rp + 1, 3);
-  let e: [i64] = crate::ent_u16::empty();
-  return crate::ent_state::set_done(cx, e, rec, e, 0);
+  let e: ref [i64] = [];
+  crate::ent_state::put_done(inout cx, e, rec, e, 0);
+  return crate::ent_state::Halt::Done;
 }
 
 // wire error: key 0 invalidId, 1 codexHostExecution
-fn wire_done(cx: crate::ent_state::Ctx, key: i64) -> crate::ent_state::Ctx ! alloc
+fn wire_done(inout cx: crate::ent_state::Ctx, key: i64) -> () ! alloc
 {
-  let mut rec: [i64] = crate::ent_u16::zeros(2);
-  crate::ent_u16::wr(inout rec, 0, 3);
-  crate::ent_u16::wr(inout rec, 1, key);
-  let e: [i64] = crate::ent_u16::empty();
-  return crate::ent_state::set_done(cx, e, rec, e, 0);
+  let e: ref [i64] = [];
+  crate::ent_state::put_done(inout cx, e, [3, key], e, 0);
 }
 
-fn plain_done(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+fn plain_done(inout cx: crate::ent_state::Ctx) -> () ! alloc
 {
-  let mut rec: [i64] = crate::ent_u16::zeros(2);
-  crate::ent_u16::wr(inout rec, 0, 4);
-  crate::ent_u16::wr(inout rec, 1, 0);
-  let e: [i64] = crate::ent_u16::empty();
-  return crate::ent_state::set_done(cx, e, rec, e, 0);
+  let e: ref [i64] = [];
+  crate::ent_state::put_done(inout cx, e, [4, 0], e, 0);
 }
 
-fn flag(cx0: crate::ent_state::Ctx, v: i64) -> crate::ent_state::Ctx ! alloc
+// homedir(): opool = the string; a throw is rethrown
+pub fn home_dir(inout cx: crate::ent_state::Ctx) -> Result<(), crate::ent_state::Halt> ! alloc
 {
-  let mut cx: crate::ent_state::Ctx = cx0;
-  cx.ontab = v;
-  return cx;
+  crate::ent_state::homedir(inout cx)?;
+  if crate::ent_state::ent_r(cx, 0) == 1 {
+    let h: crate::ent_state::Halt = rethrow_answer(inout cx);
+    return Err::<(), crate::ent_state::Halt>(h);
+  }
+  cx.opool = ent_str(cx, 1);
+  return Ok::<(), crate::ent_state::Halt>(());
 }
 
-pub fn with_pool(cx0: crate::ent_state::Ctx, s: [i64]) -> crate::ent_state::Ctx ! alloc
+// join(homedir(), seg); opool = the result
+pub fn home_join(inout cx: crate::ent_state::Ctx, seg: str) -> Result<(), crate::ent_state::Halt> ! alloc
 {
-  let mut cx: crate::ent_state::Ctx = cx0;
-  cx.opool = copy(s);
-  return cx;
-}
-
-// homedir(): opool = the string; a throw gives throw_existing
-pub fn homedir_units(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
-{
-  let cx: crate::ent_state::Ctx = crate::ent_state::ctx_homedir(cx0);
-  if early(cx) { return cx; }
-  if crate::ent_state::ent_r(cx, 0) == 1 { return throw_existing(cx); }
-  return with_pool(cx, ent_str(cx, 1));
-}
-
-// join(homedir(), seg)
-pub fn home_sub(cx0: crate::ent_state::Ctx, seg: str) -> crate::ent_state::Ctx ! alloc
-{
-  let cx: crate::ent_state::Ctx = homedir_units(cx0);
-  if early(cx) { return cx; }
-  return with_pool(cx, crate::ent_path::join2(cx.opool, crate::ent_u16::lit(seg)));
+  home_dir(inout cx)?;
+  cx.opool = crate::ent_path::join2(cx.opool, crate::ent_u16::lit(seg));
+  return Ok::<(), crate::ent_state::Halt>(());
 }
 
 // path.resolve(p): process.cwd() requests as the path module asks for them; opool = the result
-pub fn resolve_cwd(cx0: crate::ent_state::Ctx, p: [i64]) -> crate::ent_state::Ctx ! alloc
+pub fn resolve_cwd(inout cx: crate::ent_state::Ctx, p: [i64]) -> Result<(), crate::ent_state::Halt> ! alloc
 {
-  let mut cx: crate::ent_state::Ctx = cx0;
   let mut ncwd: i64 = 0;
   let mut c1: [i64] = crate::ent_u16::empty();
   let mut c2: [i64] = crate::ent_u16::empty();
@@ -87,49 +80,49 @@ pub fn resolve_cwd(cx0: crate::ent_state::Ctx, p: [i64]) -> crate::ent_state::Ct
     invariant 0 <= ncwd && ncwd <= 2
     decreases 2 - ncwd
   {
-    cx = crate::ent_state::ctx_cwd(cx);
-    if early(cx) { return cx; }
-    if crate::ent_state::ent_r(cx, 0) == 1 { return throw_existing(cx); }
+    crate::ent_state::cwd(inout cx)?;
+    if crate::ent_state::ent_r(cx, 0) == 1 {
+      let h: crate::ent_state::Halt = rethrow_answer(inout cx);
+      return Err::<(), crate::ent_state::Halt>(h);
+    }
     let s: [i64] = ent_str(cx, 1);
     if ncwd == 0 { c1 = copy(s); } else { c2 = copy(s); }
     ncwd = ncwd + 1;
   }
-  return with_pool(cx, crate::ent_path::resolve_finish(p, ncwd, c1, c2));
+  cx.opool = crate::ent_path::resolve_finish(p, ncwd, c1, c2);
+  return Ok::<(), crate::ent_state::Halt>(());
 }
 
 // R3 helpers. r is a resolved path; a "normalized absolute" path starts with '/', has no "//" and no trailing '/' (except "/").
+// A normalized relative path is nonempty with no leading '/', no "//" and no trailing '/'. Its climb levels are the path with
+// its last d segments cut off for d = 1..k (k = number of '/'), then "." (d = k + 1), whose parent is itself.
+fn has_double_slash(r: [i64]) -> bool
+{
+  let n: i64 = len(r);
+  let mut i: i64 = 1;
+  while i < n
+    invariant 1 <= i && n == len(r)
+    decreases n - i
+  {
+    if crate::ent_u16::rd(r, i) == 47 && crate::ent_u16::rd(r, i - 1) == 47 { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
 fn norm_abs(r: [i64]) -> bool
 {
   let n: i64 = len(r);
   if n < 1 || crate::ent_u16::rd(r, 0) != 47 { return false; }
   if n == 1 { return true; }
-  if crate::ent_u16::rd(r, n - 1) == 47 { return false; }
-  let mut i: i64 = 1;
-  while i < n
-    invariant 1 <= i && i <= n && n == len(r)
-    decreases n - i
-  {
-    if crate::ent_u16::rd(r, i) == 47 && crate::ent_u16::rd(r, i - 1) == 47 { return false; }
-    i = i + 1;
-  }
-  return true;
+  return crate::ent_u16::rd(r, n - 1) != 47 && !has_double_slash(r);
 }
 
-// a resolved path that is relative and normalized: nonempty, no leading '/', no "//", no trailing '/'. Its climb levels are
-// the path with its last d segments cut off for d = 1..k (k = number of '/'), then "." (d = k + 1), whose parent is itself.
 fn norm_rel(r: [i64]) -> bool
 {
   let n: i64 = len(r);
   if n < 1 || crate::ent_u16::rd(r, 0) == 47 || crate::ent_u16::rd(r, n - 1) == 47 { return false; }
-  let mut i: i64 = 1;
-  while i < n
-    invariant 1 <= i && i <= n && n == len(r)
-    decreases n - i
-  {
-    if crate::ent_u16::rd(r, i) == 47 && crate::ent_u16::rd(r, i - 1) == 47 { return false; }
-    i = i + 1;
-  }
-  return true;
+  return !has_double_slash(r);
 }
 
 fn count_slash(r: [i64]) -> i64
@@ -147,7 +140,7 @@ fn count_slash(r: [i64]) -> i64
   return k;
 }
 
-// index of the d-th '/' counted from the end of r (d >= 1), or -1
+// index of the d-th '/' counted from the end of r (d >= 1), or -1 (hand: Option<usize>; row O)
 fn slash_from_end(r: [i64], d: i64) -> i64
   ensures result >= -1 && result < len(r)
 {
@@ -172,34 +165,32 @@ fn slash_from_end(r: [i64], d: i64) -> i64
 // level that fails and moves on to its parent is DROPPED from the log and counted in the checkpoint words, so a resumed step
 // continues at that level instead of replaying the whole climb: the log stays constant-size and a step costs O(path), not
 // O(levels). Checkpoint words of an item (ck0..2 belong to op 1 phases, see sources.pruv; op 6 keeps them 0):
-//   ck3, ck4, ck5 = levels already climbed (dropped) by canonical call 0, 1, 2 of the item (is_host_codex_home makes 3 calls)
+//   ck3, ck4, ck5 = levels already climbed (dropped) by canonical call 0, 1, 2 of the item (is_codex_home makes 3 calls)
 //   ck6           = reserved, must be 0
 //   ck7           = total log entries dropped in the item (1 per level, 2 when the level also issued a stat)
 // The words are cleared by sources::adv at every op 1 item boundary. Only the first 3 calls of an item compact, and only
 // when the resolved path is normalized (absolute, or relative as for a relative cwd; then level d is the path with its last d
 // segments cut off, found by scanning slashes instead of d dirname calls; a relative path ends with level k + 1 = "."); otherwise the climb is the plain full replay and the words stay 0.
 // state::log_cont and state::ck_ok validate the words and the seq gaps they imply.
-pub fn canonical(cx0: crate::ent_state::Ctx, path: [i64]) -> crate::ent_state::Ctx ! alloc
+pub fn canonical(inout cx: crate::ent_state::Ctx, path: [i64]) -> Result<(), crate::ent_state::Halt> ! alloc
 {
-  let ci: i64 = crate::ent_u16::clamp(cx0.ncan, 1000);
-  let mut cx: crate::ent_state::Ctx = cx0;
+  let ci: i64 = crate::ent_u16::clamp(cx.ncan, 1000);
   cx.ncan = ci + 1;
-  cx = resolve_cwd(cx, path);
-  if early(cx) { return cx; }
+  resolve_cwd(inout cx, path)?;
   let r: [i64] = copy(cx.opool);
   let slot: i64 = 3 + ci;
   let isabs: bool = norm_abs(r);
   let cmp: bool = ci < 3 && (isabs || norm_rel(r));
   let mut d: i64 = 0;
-  if ci < 3 { d = crate::ent_u16::clamp(crate::ent_state::get_ck(cx, slot), 33554432); }
-  if d > 0 && (!cmp || len(r) < 2 || d > len(r) + 1) { return crate::ent_state::fail(cx); }
+  if ci < 3 { d = crate::ent_u16::clamp(crate::ent_u16::rd(cx.ck, slot), 33554432); }
+  if d > 0 && (!cmp || len(r) < 2 || d > len(r) + 1) { return crate::ent_state::stop_fail(inout cx); }
   let mut current: [i64] = copy(r);
   let mut raw: [i64] = crate::ent_u16::empty();
   let mut jn: [i64] = crate::ent_u16::empty();
   if d > 0 {
     if isabs {
       let q: i64 = slash_from_end(r, d);
-      if q < 0 { return crate::ent_state::fail(cx); }
+      if q < 0 { return crate::ent_state::stop_fail(inout cx); }
       let mut cp: i64 = q;
       if q == 0 { cp = 1; }
       current = crate::ent_u16::slice(r, 0, cp);
@@ -208,14 +199,14 @@ pub fn canonical(cx0: crate::ent_state::Ctx, path: [i64]) -> crate::ent_state::C
     } else {
       // relative: levels 1..k cut at a slash, level k + 1 is "." with every segment still missing
       let k: i64 = count_slash(r);
-      if d > k + 1 { return crate::ent_state::fail(cx); }
+      if d > k + 1 { return crate::ent_state::stop_fail(inout cx); }
       if d == k + 1 {
         current = crate::ent_u16::lit(".");
         raw = copy(r);
         jn = copy(r);
       } else {
         let q: i64 = slash_from_end(r, d);
-        if q < 0 { return crate::ent_state::fail(cx); }
+        if q < 0 { return crate::ent_state::stop_fail(inout cx); }
         current = crate::ent_u16::slice(r, 0, q);
         raw = crate::ent_u16::slice(r, q + 1, len(r));
         jn = copy(raw);
@@ -224,111 +215,175 @@ pub fn canonical(cx0: crate::ent_state::Ctx, path: [i64]) -> crate::ent_state::C
   }
   let mut nmiss: i64 = d;
   let f0: i64 = len(r) + 3;
-  if f0 > 33554432 { return crate::ent_state::fail(cx); }
   let mut fuel: i64 = f0 - d;
   while fuel > 0
-    invariant 0 <= fuel && 0 <= nmiss && nmiss + fuel == f0 && f0 <= 33554432
+    invariant 0 <= fuel && 0 <= nmiss && nmiss + fuel == f0
     decreases fuel
   {
     let a0: i64 = cx.pos;
     let mut ne: i64 = 1;
-    cx = crate::ent_state::ctx_realpath(cx, current);
-    if early(cx) { return cx; }
+    crate::ent_state::realpath(inout cx, current)?;
     if crate::ent_state::ent_r(cx, 0) == 0 {
       let real: [i64] = ent_str(cx, 1);
-      if nmiss == 0 { return with_pool(cx, real); }
-      return with_pool(cx, crate::ent_path::join_segs(real, jn));
+      if nmiss == 0 { cx.opool = copy(real); } else { cx.opool = crate::ent_path::join_segs(real, jn); }
+      return Ok::<(), crate::ent_state::Halt>(());
     }
     let rp: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, 1), 33554432);
     // MUTANT M06: ENOENT also issues stat (the condition becomes true)
     if !crate::ent_value::str_eq_lit(cx.ent, rp + 16, "ENOENT") {
-      cx = crate::ent_state::ctx_stat(cx, current);
-      if early(cx) { return cx; }
+      crate::ent_state::stat(inout cx, current)?;
       ne = 2;
       if crate::ent_state::ent_r(cx, 0) == 0 {
-        let mut id: [i64] = crate::ent_u16::cat(crate::ent_u16::lit("dev:"), ent_str(cx, 1));
-        id = crate::ent_u16::cat(id, crate::ent_u16::lit(":ino:"));
-        id = crate::ent_u16::cat(id, ent_str(cx, 4));
-        if nmiss > 0 { id = crate::ent_u16::cat(id, crate::ent_u16::cat(crate::ent_u16::lit("/"), raw)); }
-        return with_pool(cx, id);
+        let dev: [i64] = ent_str(cx, 1);
+        let ino: [i64] = ent_str(cx, 4);
+        // proof bound only: a packet string is far shorter
+        if len(dev) > 1073741823 || len(ino) > 1073741823 || len(raw) > 1073741823 { return crate::ent_state::stop_fail(inout cx); }
+        let mut id: [i64] = alloc(0, 0);
+        arr_reserve(inout id, len(dev) + len(ino) + len(raw) + 10);
+        arr_push(inout id, 100, 101, 118, 58);
+        arr_append(inout id, dev, 0, len(dev));
+        arr_push(inout id, 58, 105, 110, 111, 58);
+        arr_append(inout id, ino, 0, len(ino));
+        if nmiss > 0 {
+          arr_push(inout id, 47);
+          arr_append(inout id, raw, 0, len(raw));
+        }
+        cx.opool = move id;
+        return Ok::<(), crate::ent_state::Halt>(());
       }
     }
     let parent: [i64] = crate::ent_path::dirname(current);
-    if crate::ent_u16::eq(parent, current) { return resolve_cwd(cx, path); }
+    if crate::ent_u16::eq(parent, current) { return resolve_cwd(inout cx, path); }
     // this level failed and the climb moves on: its entries are dropped and counted (R3)
-    if cmp { cx = crate::ent_state::drop_level(cx, a0, slot, ne); }
+    if cmp && slot < 8 { crate::ent_state::drop_entries(inout cx, a0, slot, ne); }
     let base: [i64] = crate::ent_path::basename(current);
     if nmiss == 0 {
       raw = copy(base);
       jn = copy(base);
     } else {
-      raw = crate::ent_u16::cat(base, crate::ent_u16::cat(crate::ent_u16::lit("/"), raw));
+      raw = slash_cat(base, raw);
       if len(base) > 0 {
-        if len(jn) > 0 { jn = crate::ent_u16::cat(base, crate::ent_u16::cat(crate::ent_u16::lit("/"), jn)); } else { jn = copy(base); }
+        if len(jn) > 0 { jn = slash_cat(base, jn); } else { jn = copy(base); }
       }
     }
     nmiss = nmiss + 1;
     current = copy(parent);
     fuel = fuel - 1;
   }
-  return crate::ent_state::fail(cx);
+  return crate::ent_state::stop_fail(inout cx);
 }
 
-// sameFile(left, right): ontab = 1 when both stat and dev/ino strings are equal; any throw gives 0
-fn same_file(cx0: crate::ent_state::Ctx, left: [i64], right: [i64]) -> crate::ent_state::Ctx ! alloc
+// sameFile(left, right): both stat and the dev / ino strings are equal; any throw gives false
+fn same_file(inout cx: crate::ent_state::Ctx, left: [i64], right: [i64]) -> Result<bool, crate::ent_state::Halt> ! alloc
 {
-  let mut cx: crate::ent_state::Ctx = crate::ent_state::ctx_stat(cx0, left);
-  if early(cx) { return cx; }
-  if crate::ent_state::ent_r(cx, 0) == 1 { return flag(cx, 0); }
+  crate::ent_state::stat(inout cx, left)?;
+  if crate::ent_state::ent_r(cx, 0) == 1 { return Ok::<bool, crate::ent_state::Halt>(false); }
   let dev1: [i64] = ent_str(cx, 1);
   let ino1: [i64] = ent_str(cx, 4);
-  cx = crate::ent_state::ctx_stat(cx, right);
-  if early(cx) { return cx; }
-  if crate::ent_state::ent_r(cx, 0) == 1 { return flag(cx, 0); }
-  if crate::ent_u16::eq(dev1, ent_str(cx, 1)) && crate::ent_u16::eq(ino1, ent_str(cx, 4)) { return flag(cx, 1); }
-  return flag(cx, 0);
+  crate::ent_state::stat(inout cx, right)?;
+  if crate::ent_state::ent_r(cx, 0) == 1 { return Ok::<bool, crate::ent_state::Halt>(false); }
+  return Ok::<bool, crate::ent_state::Halt>(crate::ent_u16::eq(dev1, ent_str(cx, 1)) && crate::ent_u16::eq(ino1, ent_str(cx, 4)));
 }
 
 // hostCodexHome(): the ambient CODEX_HOME (trimmed) or join(homedir(), '.codex'); opool = the result
-pub fn host_home(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+pub fn codex_home(inout cx: crate::ent_state::Ctx) -> Result<(), crate::ent_state::Halt> ! alloc
 {
-  let cx: crate::ent_state::Ctx = crate::ent_state::ctx_ambient(cx0);
-  if early(cx) { return cx; }
-  let p: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, 1), 33554432) + 1;
-  let mut t: [i64] = crate::ent_u16::empty();
-  if crate::ent_value::tag_at(cx.ent, p) == 6 { t = crate::ent_u16::trim(crate::ent_value::str_units(cx.ent, p)); }
-  if len(t) > 0 { return with_pool(cx, t); }
-  return home_sub(cx, ".codex");
+  crate::ent_state::ambient(inout cx)?;
+  let t: [i64] = crate::ent_u16::trim(ent_str(cx, 1));
+  if len(t) > 0 {
+    cx.opool = copy(t);
+    return Ok::<(), crate::ent_state::Halt>(());
+  }
+  return home_join(inout cx, ".codex");
 }
 
-// isHostCodexHome(home): ontab = 1 or 0 (every call asks the host again; nothing is cached)
+// isHostCodexHome(home): every call asks the host again; nothing is cached
+pub fn is_codex_home(inout cx: crate::ent_state::Ctx, home: [i64]) -> Result<bool, crate::ent_state::Halt> ! alloc
+{
+  canonical(inout cx, home)?;
+  let target: [i64] = copy(cx.opool);
+  codex_home(inout cx)?;
+  let h0: [i64] = copy(cx.opool);
+  canonical(inout cx, h0)?;
+  let host: [i64] = copy(cx.opool);
+  home_join(inout cx, ".codex")?;
+  let d0: [i64] = copy(cx.opool);
+  canonical(inout cx, d0)?;
+  let dot: [i64] = copy(cx.opool);
+  if crate::ent_u16::eq(target, host) { return Ok::<bool, crate::ent_state::Halt>(true); }
+  // MUTANT M07: the comparison with dot (and the second sameFile below) is omitted
+  if crate::ent_u16::eq(target, dot) { return Ok::<bool, crate::ent_state::Halt>(true); }
+  codex_home(inout cx)?;
+  let h1: [i64] = copy(cx.opool);
+  if same_file(inout cx, home, h1)? { return Ok::<bool, crate::ent_state::Halt>(true); }
+  // MUTANT M07: the second sameFile is omitted (returns false here)
+  home_join(inout cx, ".codex")?;
+  let d1: [i64] = copy(cx.opool);
+  return same_file(inout cx, home, d1);
+}
+
+// ---- by-value adapters for ent_sources (row AD, removed in step 3.6) ----
+// A caller checks early(cx) after each call: stalled, bad or done (a rethrown answer) means it returns the Ctx unchanged.
+
+// AD (3.6)
+pub fn early(cx: crate::ent_state::Ctx) -> bool
+{
+  return cx.stalled != 0 || cx.bad != 0 || cx.done != 0;
+}
+
+// AD (3.6)
+pub fn with_pool(cx0: crate::ent_state::Ctx, s: [i64]) -> crate::ent_state::Ctx ! alloc
+{
+  let mut cx: crate::ent_state::Ctx = cx0;
+  cx.opool = copy(s);
+  return cx;
+}
+
+// AD (3.6)
+pub fn throw_existing(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+{
+  let mut cx: crate::ent_state::Ctx = cx0;
+  let h: crate::ent_state::Halt = rethrow_answer(inout cx);
+  return cx;
+}
+
+// AD (3.6)
+pub fn homedir_units(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+{
+  let mut cx: crate::ent_state::Ctx = cx0;
+  let r: Result<(), crate::ent_state::Halt> = home_dir(inout cx);
+  return cx;
+}
+
+// AD (3.6)
+pub fn home_sub(cx0: crate::ent_state::Ctx, seg: str) -> crate::ent_state::Ctx ! alloc
+{
+  let mut cx: crate::ent_state::Ctx = cx0;
+  let r: Result<(), crate::ent_state::Halt> = home_join(inout cx, seg);
+  return cx;
+}
+
+// AD (3.6)
+pub fn host_home(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+{
+  let mut cx: crate::ent_state::Ctx = cx0;
+  let r: Result<(), crate::ent_state::Halt> = codex_home(inout cx);
+  return cx;
+}
+
+// AD (3.6): ontab = the 0/1 result
 pub fn is_host_codex_home(cx0: crate::ent_state::Ctx, home: [i64]) -> crate::ent_state::Ctx ! alloc
 {
-  let mut cx: crate::ent_state::Ctx = canonical(cx0, home);
-  if early(cx) { return cx; }
-  let target: [i64] = copy(cx.opool);
-  cx = host_home(cx);
-  if early(cx) { return cx; }
-  cx = canonical(cx, cx.opool);
-  if early(cx) { return cx; }
-  let host: [i64] = copy(cx.opool);
-  cx = home_sub(cx, ".codex");
-  if early(cx) { return cx; }
-  cx = canonical(cx, cx.opool);
-  if early(cx) { return cx; }
-  let dot: [i64] = copy(cx.opool);
-  if crate::ent_u16::eq(target, host) { return flag(cx, 1); }
-  // MUTANT M07: the comparison with dot (and the second sameFile below) is omitted
-  if crate::ent_u16::eq(target, dot) { return flag(cx, 1); }
-  cx = host_home(cx);
-  if early(cx) { return cx; }
-  cx = same_file(cx, home, cx.opool);
-  if early(cx) { return cx; }
-  if cx.ontab == 1 { return flag(cx, 1); }
-  // MUTANT M07: the second sameFile is omitted (returns false here)
-  cx = home_sub(cx, ".codex");
-  if early(cx) { return cx; }
-  return same_file(cx, home, cx.opool);
+  let mut cx: crate::ent_state::Ctx = cx0;
+  let r: Result<bool, crate::ent_state::Halt> = is_codex_home(inout cx, home);
+  match r {
+    Ok(b) => {
+      cx.ontab = 0;
+      if b { cx.ontab = 1; }
+    }
+    Err(h) => {}
+  }
+  return cx;
 }
 
 // ---- op 6 state check (state::state_ok covers only ops 3, 4, 8, 9) ----
@@ -342,6 +397,7 @@ fn pair_ie(op: i64, code: i64, aux: i64) -> bool
   return false;
 }
 
+// the state of an op 1 / op 6 await is well-formed (hand: Option<State>; row OA, a struct with views is no Option payload)
 pub fn state_ok_ie(st: [i64], op: i64, op_id: i64) -> bool ! alloc
 {
   let n: i64 = len(st);
@@ -360,31 +416,40 @@ pub fn state_ok_ie(st: [i64], op: i64, op_id: i64) -> bool ! alloc
   let g: i64 = st[13];
   if l < 13 || g < 0 || l > n || g > n { return false; }
   if 14 + l + g != n { return false; }
-  let blob: [i64] = crate::ent_state::st_blob(st);
+  let s: crate::ent_state::State = crate::ent_state::state_view(st);
+  let blob: ref [i64] = s.blob;
   if crate::ent_packet::env_check(blob) != 0 { return false; }
   if crate::ent_u16::rd(blob, 1) != 0 || crate::ent_u16::rd(blob, 3) != 0 { return false; }
   if crate::ent_u16::rd(blob, 5) != op || crate::ent_u16::rd(blob, 2) != op_id { return false; }
   let hi: i64 = crate::ent_accounts::io_check(blob);
   if hi < 0 || hi != crate::ent_value::pool_bytes(blob, crate::ent_packet::sec_start(blob, 0)) { return false; }
-  return crate::ent_state::log_ok(crate::ent_state::st_log(st), op_id);
+  return crate::ent_state::log_ok(s.log, op_id);
 }
 
 // ---- op 6: codexAccountFolder(dataDir, { id, home }) ----
-fn folder_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+fn folder_item(inout cx: crate::ent_state::Ctx) -> Result<(), crate::ent_state::Halt> ! alloc
 {
-  let r0: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx0.blob, 1), 33554432);
-  if !crate::ent_accounts::valid_account_id(cx0.blob, r0 + 3) { return wire_done(cx0, 0); }
-  let expected: [i64] = crate::ent_accounts::account_home(crate::ent_value::str_units(cx0.blob, r0), crate::ent_u16::lit("codex"), crate::ent_value::str_units(cx0.blob, r0 + 3));
-  if !crate::ent_value::str_eq_arr(cx0.blob, r0 + 6, expected) { return plain_done(cx0); }
-  let cx: crate::ent_state::Ctx = is_host_codex_home(cx0, expected);
-  if early(cx) { return cx; }
-  if cx.ontab == 1 { return wire_done(cx, 1); }
+  let r0: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.blob, 1), 33554432);
+  if !crate::ent_accounts::valid_account_id(cx.blob, r0 + 3) {
+    wire_done(inout cx, 0);
+    return Ok::<(), crate::ent_state::Halt>(());
+  }
+  let expected: [i64] = crate::ent_accounts::account_home(crate::ent_value::str_units(cx.blob, r0), crate::ent_u16::lit("codex"), crate::ent_value::str_units(cx.blob, r0 + 3));
+  if crate::ent_value::tag_at(cx.blob, r0 + 6) != 6 || !crate::ent_u16::eq(crate::ent_value::str_units(cx.blob, r0 + 6), expected) {
+    plain_done(inout cx);
+    return Ok::<(), crate::ent_state::Halt>(());
+  }
+  if is_codex_home(inout cx, expected)? {
+    wire_done(inout cx, 1);
+    return Ok::<(), crate::ent_state::Halt>(());
+  }
   let mut rec: [i64] = crate::ent_u16::zeros(4);
   crate::ent_u16::wr(inout rec, 0, 0);
   let mut pool: [i64] = crate::ent_value::pool_new();
   crate::ent_value::pool_put(inout pool, inout rec, 1, expected);
-  let e: [i64] = crate::ent_u16::empty();
-  return crate::ent_state::set_done(cx, pool, rec, e, 0);
+  let e: ref [i64] = [];
+  crate::ent_state::put_done(inout cx, pool, rec, e, 0);
+  return Ok::<(), crate::ent_state::Halt>(());
 }
 
 pub fn codex_folder_begin(input: [i64]) -> [i64] ! alloc
@@ -393,8 +458,8 @@ pub fn codex_folder_begin(input: [i64]) -> [i64] ! alloc
   let hi: i64 = crate::ent_accounts::io_check(input);
   if hi < 0 { return crate::ent_packet::boundary(6, id, 0); }
   let blob: [i64] = crate::ent_state::repack(input, hi);
-  let cx0: crate::ent_state::Ctx = crate::ent_state::ctx_new(6, id, blob, crate::ent_u16::empty(), crate::ent_u16::zeros(8));
-  let cx: crate::ent_state::Ctx = folder_item(cx0);
+  let mut cx: crate::ent_state::Ctx = crate::ent_state::ctx_new(6, id, blob, crate::ent_u16::empty(), crate::ent_u16::zeros(8));
+  let r: Result<(), crate::ent_state::Halt> = folder_item(inout cx);
   return crate::ent_state::finish(cx, 1, 0);
 }
 
@@ -404,16 +469,17 @@ pub fn codex_folder_step(prev: [i64], completion: [i64]) -> [i64] ! alloc
   let seq: i64 = crate::ent_u16::rd(prev, 3);
   if seq < 0 || seq >= 9007199254740992 { return crate::ent_packet::boundary(6, id, 0); }
   let s2: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(prev, 2), 33554432);
-  let st: [i64] = crate::ent_u16::slice(prev, s2, s2 + crate::ent_u16::clamp(crate::ent_packet::sec_len(prev, 2), 16777216));
+  let s3: i64 = crate::ent_u16::clamp(s2 + crate::ent_u16::clamp(crate::ent_packet::sec_len(prev, 2), 16777216), len(prev));
+  let st: ref [i64] = subview(prev, crate::ent_u16::clamp(s2, s3), s3);
   if !state_ok_ie(st, 6, id) { return crate::ent_packet::boundary(6, id, 0); }
   if !crate::ent_state::st_replay_ok(st, 6, seq) { return crate::ent_packet::boundary(6, id, 0); }
-  let code: i64 = crate::ent_state::st_code(st);
-  let aux: i64 = crate::ent_state::st_aux(st);
-  let hi: i64 = crate::ent_packet::comp_check(completion, code, aux);
+  let s: crate::ent_state::State = crate::ent_state::state_view(st);
+  let hi: i64 = crate::ent_packet::comp_check(completion, s.code, s.aux);
   if hi < 0 { return crate::ent_packet::boundary(6, id, 0); }
-  let lg: [i64] = crate::ent_state::log_append(crate::ent_state::st_log(st), code, aux, completion, hi);
+  let lg: [i64] = crate::ent_state::log_append(s.log, s.code, s.aux, completion, hi);
   if crate::ent_state::log_words(lg) > 16777216 { return crate::ent_packet::boundary(6, id, 1); }
-  let cx0: crate::ent_state::Ctx = crate::ent_state::with_prev(crate::ent_state::ctx_new(6, id, crate::ent_state::st_blob(st), lg, crate::ent_state::st_ck(st)), prev, true);
-  let cx: crate::ent_state::Ctx = folder_item(cx0);
+  let mut cx: crate::ent_state::Ctx = crate::ent_state::ctx_new(6, id, s.blob, lg, s.ck);
+  crate::ent_state::use_prev(inout cx, prev, true);
+  let r: Result<(), crate::ent_state::Halt> = folder_item(inout cx);
   return crate::ent_state::finish(cx, seq + 1, seq);
 }

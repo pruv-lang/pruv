@@ -353,11 +353,13 @@ pub enum Fault {
     TooBig,
 }
 
-/// Why an observation gave no answer: the context stalled on a new request, or the replay is broken.
+/// Why a step gave no answer: the context stalled on a new request, the replay is broken, or the item is already
+/// finished (a nested step set the output, e.g. a thrown answer rethrown as the result).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Halt {
     Stalled,
     Bad,
+    Done,
 }
 
 pub struct Ctx {

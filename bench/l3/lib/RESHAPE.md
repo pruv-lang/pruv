@@ -17,8 +17,10 @@ Gap ids refer to `docs/RUST_SHAPE_RESET.md` §4. This file is the step 3 RESHAPE
 | `ent_wire` | `hand/ent_wire.rs` (new in 3.2) | O (`sections` / `pool_start` return `-1`) |
 | `ent_packet` | `hand/ent_packet.rs` (new in 3.2) | K, E, O, S, L, P-start (V, P-hi closed in 3.3) |
 | `ent_value` | `hand/ent_value.rs` (new in 3.3) | U, O, VE, PB, CMP, API rows (`(w, start)` wrappers) |
-| `ent_state` | `hand/ent_state.rs` (new in 3.4) | OA, ENT, CK, AD (adapters), CX partly closed, DR |
-| `ent_dispatch` | `hand/ent_dispatch.rs` (new in 3.4) | OA, AD (`find_item` / `list_item` / `read_item`), LR |
+| `ent_state` | `hand/ent_state.rs` (new in 3.4) | OA, ENT, CK, AD (adapters for 3.6 / 3.7), CX partly closed, DR |
+| `ent_dispatch` | `hand/ent_dispatch.rs` (new in 3.4) | OA, AD (`find_item` / `list_item` / `read_item`), O (clip code 0); LR closed in 3.5 |
+| `ent_bound` | `hand/ent_bound.rs` (new in 3.5) | SA, HK, PB, U, J, O, AD (`threads_item` / `excluded_item`, 3.7) |
+| `ent_canon` | `hand/ent_canon.rs` (new in 3.5) | RA, O, OA, AD (by-value entry points for `ent_sources`, 3.6) |
 
 ## Step 3.1: `ent_u16` and `ent_path`
 
@@ -503,3 +505,112 @@ Budget m11 / m12 import none of `ent_state`, `ent_dispatch` or `ent_value` (grep
 - New: **OA**, **CK** (language gaps), **ENT**, **DR**, **LR**, **AD** (adapters, removed in 3.5 to 3.7).
 - Still open: U, K, L, E, O, S, P-start, VE, PB, CMP.
 - Next (3.5): `ent_bound` and `ent_canon` to `inout cx` (removes most AD rows), `list_recipe` one pass (LR).
+
+## Step 3.5: `ent_bound`, `ent_canon` and `list_recipe`
+
+Hand baselines `lib/hand/ent_bound.rs` (ops 7 / 8 / 9: `ses_pairs` into `Vec<Pair>`, `session_threads`,
+`excluded_from_bound`, `index_collect`, `index_progress_ok`, `index_request`, `index_complete` with a `HashMap` index)
+and `lib/hand/ent_canon.rs` (`home_dir` / `home_join` / `resolve_cwd` / `canonical` / `codex_home` returning
+`Result<Vec<u16>, Halt>`, `same_file` / `is_codex_home` returning `Result<bool, Halt>`, `folder_item`,
+`codex_folder_begin` / `codex_folder_step`), written first, with rustc tests (`rustc --edition 2021 --test` on
+`ent_bound.rs`: 15 tests, `ent_canon.rs`: 17, `ent_dispatch.rs`: 12, `ent_state.rs`: 9; all pass).
+
+### What changed
+
+- `Halt` gets a third variant, `Done` (hand and Pruv): a nested step already set the output, e.g. a thrown
+  `homedir` / `cwd` / `realpath` answer rethrown as the item result. It replaces the `early(cx)` check
+  (`stalled || bad || done`) after every nested call in `ent_canon`.
+- `ent_bound`: every item takes `inout cx: Ctx` and returns `Result<(), Halt>` (`observe(..)?`, `put_done`,
+  `stop_too_big`). `ses_pairs` is one pass with `arr_push` (was count, then fill into preallocated arrays);
+  `throw_at` / `throw_existing_at` (by-value `Ctx` in and out) became `throw_rec(answer, p) -> [i64]` as the hand
+  `thrown`; tables are `arr_reserve` + `arr_push` (no positional fill; `index_complete` truncates a key it just
+  pushed when the hash says it is a duplicate, as the hand skips the insert); `index_complete` builds its
+  throw packet with `mk_packet` directly instead of a throwaway `ctx_new` + `finish`. Renamed to the hand names:
+  `threads_item` body -> `session_threads`, `excluded_item` body -> `excluded_from_bound`.
+- `ent_canon`: every step takes `inout cx: Ctx` and returns `Result<(), Halt>` or `Result<bool, Halt>` with `?` on
+  `homedir`, `cwd`, `ambient`, `realpath`, `stat`; `drop_entries`, `use_prev`, `state_view`, `put_done`,
+  `stop_fail` replace the by-value adapters. Hand names: `throw_existing` -> `rethrow_answer` (returns
+  `Halt::Done`), `homedir_units` -> `home_dir`, `home_sub` -> `home_join`, `host_home` -> `codex_home`,
+  `is_host_codex_home` -> `is_codex_home`; `has_double_slash` is shared by `norm_abs` / `norm_rel` as in the hand.
+- `ent_dispatch::list_recipe` (row LR): the first loop collects the clip codes into their own array (`clips`, a
+  non-string title is not cut), a second loop counts the copies, the third builds the table in one pass with
+  `arr_reserve` + `arr_push` (was: clip code parked in `tab[7i+4]`, table allocated full and filled by position).
+- `ent_state`: adapters with no user left are removed: `obs`, `drop_level`, `too_big`, `ctx_ambient`,
+  `ctx_homedir`, `ctx_cwd`, `ctx_realpath`, `ctx_stat`.
+- `q_mutants.py`: M07 text follows the new `is_codex_home` (`return Ok::<bool, crate::ent_state::Halt>(true)`, the
+  `.` target check); M06, M10, M13, M15, M16
+  texts unchanged and still found. Every mutant original occurs exactly once in its file (checked by script).
+
+### Rows
+
+- **LR** closed.
+- **RA** (new, language gap): `Result<[i64], Halt>` is rejected (`type_argument`: an array is not a valid type
+  argument), so `home_dir`, `home_join`, `resolve_cwd`, `canonical`, `codex_home` (hand `-> Result<Vec<u16>, Halt>`)
+  leave the path in `cx.opool` and return `Result<(), Halt>`. `Result<bool, Halt>` works and is used.
+- **SA** (new, language gap): no array of structs (the llvm backend rejects `Vec<S>`), so `ses_pairs` /
+  `index_complete` keep a pair as parallel arrays (`ep`, `el`, `tp`, `sp`); hand `Vec<Pair>`.
+- **HK** (new, language gap): `index_complete` builds its first-write-wins index as a hand-written open-addressing
+  table; hand `HashMap<Vec<u16>, usize>`. Pruv maps take no array key, and `String` cannot hold lone surrogates.
+- `index_complete` keys stay in a flat buffer with `ko` / `kl` offsets (rows PB, J, O); `eng_len` / `eng_put`
+  (hand `eng_units`) rows PB, O; `slash_from_end` returns `-1` (row O); `state_ok_ie` returns `bool` (hand
+  `Option<State>`, row OA); pools stay `[i64]` words (row U).
+- **AD** after 3.5:
+
+| Adapter (by value) | `inout` function | Users | Removed in |
+|---|---|---|---|
+| `set_done`, `set_ck`, `ctx_accounts`, `ctx_account_at` | `put_done`, `put_ck`, `accounts`, `account_at` | `ent_sources` | 3.6 |
+| `fail`, `with_prev`, `st_code`, `st_aux`, `st_ck`, `st_blob`, `st_log` | `stop_fail`, `use_prev`, `state_view` | `ent_sources`, `entry_api` | 3.6, 3.7 |
+| `ent_canon::early`, `with_pool`, `throw_existing`, `homedir_units`, `home_sub`, `host_home`, `is_host_codex_home` | `rethrow_answer`, `home_dir`, `home_join`, `codex_home`, `is_codex_home` | `ent_sources` | 3.6 |
+| `ent_bound::threads_item`, `excluded_item` | `session_threads`, `excluded_from_bound` | `entry_api` | 3.7 |
+| `find_item`, `list_item`, `read_item` | `find_source`, `list_external`, `read_external` | `entry_api` | 3.7 |
+
+### Structure comparison
+
+One read-only comparison by Codex (gpt-6-astra, second account): hand `.rs` against `.pruv`, function by function,
+for `ent_bound`, `ent_canon` and `list_recipe`. It found no semantic mismatch on checked input; the structure
+findings and what was done:
+
+| Finding | Done |
+|---|---|
+| F1 `colon_at` read a non-string slot; hand returns 0 | tag check, returns 0 |
+| F2 `ses_pairs` failed inside the loop at the pair limit; hand checks the count after | count check after the loop; the in-loop `to > 16777216` guard stays as the proof bound (same failure) |
+| F3 `index_complete` ran a length pass, then a key pass, then a hash pass | one pass per candidate (support check, key push, size check, lookup; a hit truncates the key) |
+| F4 the value span check stopped at the first kept entry | span check and sum over every kept entry, `full = sum > pl` |
+| F5 `index_complete` table zero-filled and written by position; key range a failure branch | `arr_reserve` + `arr_push`, key slots in `kat` / `kb`, the range is a loop invariant |
+| F6 `ent_str` did not check the tag | tag check (hand `str_at`) |
+| F7 `canonical` had an `f0 > 2^25` failure the hand does not have | removed; the loop proves without it |
+| F8 `canonical` built the stat id and the climb paths in several copies | one reserved buffer each, `slash_cat` helper; length guards are proof-only |
+| F9 `codex_home` trimmed a copy of the slot | `trim(ent_str(cx, 1))` |
+| F10 `codex_folder_step` copied the state words and called `state_view` three times | `st` is a `ref` subview; the three `state_view` calls stay (`st_replay_ok` takes `[i64]`, see below) |
+| F11 `folder_item` compared through `str_eq_arr` | tag check, then `eq(str_units, expected)` as the hand |
+| F12 `list_recipe` cut a non-string title | only a string title (tag 6) is cut |
+| F13 `list_recipe` counted copies inside the clip loop; hand counts the `Some` clips after | separate count loop |
+| every other function: same result as the hand on checked input | = |
+
+### Tests (after the last code change)
+
+`bench/l3/lib/hand`: `rustc --edition 2021 --test` on `ent_bound.rs` (15 tests), `ent_canon.rs` (17),
+`ent_dispatch.rs` (12), `ent_state.rs` (9), pass. The rs compiler builds and verifies the entry root (rust and llvm
+backends) and the req root.
+
+| Test | Pairs | Result |
+|---|---|---|
+| `entry/test_impl.py` | rs/rust, rs/llvm | 296 variants x 2 = 592 runs, unexplained 0 |
+| `entry/judge_test.py` | rs | failures 0 |
+| `entry/q.py --count 400` | rs/rust, rs/llvm | 399 exact, 1 excluded-domain, unexplained 0 |
+| `req/test_impl.py` | rs/rust, rs/llvm | 160 variants x 2 = 320 runs, unexplained 0 |
+| `req/q.py` (q_gen, 2000 cases) | rs/rust, rs/llvm | 2000/2000 equal on each pair |
+| `entry/integrate.py` (after qwen 26/26 + codex 136/136 on both pairs, opencode and grok `--no-ts` all fixtures on rs/rust) | rs/rust | 10 integration cases, 18 checks PASS, 2 integration limits (I01/I02 claude, known; exit 2 as in 3.1 to 3.4) |
+
+Budget m11 / m12 import only `ent_u16` (grep), none of the changed modules, so they were not run.
+
+### Rows open after 3.5
+
+- Closed: **LR**; **AD** rows for `obs`, `too_big`, `drop_level`, `ctx_ambient`, `ctx_homedir`, `ctx_cwd`,
+  `ctx_realpath`, `ctx_stat` (adapters removed).
+- New: **RA**, **SA**, **HK** (language gaps).
+- Kept (F10 rest): `codex_folder_step` calls `state_view` three times because `st_replay_ok` takes the state words
+  (`[i64]`) rather than a `State`; the hand parses once and calls `replay_ok(&self)`. Changing `st_replay_ok` is an
+  `ent_state` change for its other users (`entry_api`), left for 3.7 with row OA.
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, AD (3.6 / 3.7 adapters above).
+- Next (3.6): `ent_sources` to `inout cx`, removing the `ent_canon` and `ent_state` adapters it still uses.
