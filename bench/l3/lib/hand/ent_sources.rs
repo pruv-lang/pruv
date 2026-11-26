@@ -10,8 +10,11 @@
 
 #![allow(dead_code)]
 
+#[cfg(not(shared_ctx))]
 #[path = "ent_canon.rs"]
 pub mod ent_canon;
+#[cfg(shared_ctx)]
+pub use crate::ent_canon;
 
 use ent_canon::ent_path::join;
 use ent_canon::ent_state::ent_packet::{boundary, comp_check, mk_packet, put_vs, sec_len, sec_start};

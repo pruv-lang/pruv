@@ -1,7 +1,6 @@
 // L3-8 entry: ops 2 find_source, 3 list_external, 4 read_external and the rethrow classification.
 // Each item is a replay step over the shared context: `inout cx: Ctx`, and an observation that stalls or breaks the replay
 // returns through `?` (see ent_state.pruv for the observation API; hand shape: bench/l3/lib/hand/ent_dispatch.rs).
-// find_item, list_item and read_item are by-value adapters for entry_api::run_item (RESHAPE.md row AD).
 
 // ---- op 2: first row whose source strictly equals the query ----
 pub fn find_source(inout cx: crate::ent_state::Ctx) -> () ! alloc
@@ -27,13 +26,6 @@ pub fn find_source(inout cx: crate::ent_state::Ctx) -> () ! alloc
   if found >= 0 { crate::ent_packet::put_vs(inout rec, 1, 4, found, 0); }
   let e: ref [i64] = [];
   crate::ent_state::put_done(inout cx, e, rec, e, 0);
-}
-
-pub fn find_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
-{
-  let mut cx: crate::ent_state::Ctx = cx0;
-  find_source(inout cx);
-  return cx;
 }
 
 // ---- route ----
@@ -190,13 +182,6 @@ pub fn list_external(inout cx: crate::ent_state::Ctx) -> Result<(), crate::ent_s
   return list_recipe(inout cx);
 }
 
-pub fn list_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
-{
-  let mut cx: crate::ent_state::Ctx = cx0;
-  let r: Result<(), crate::ent_state::Halt> = list_external(inout cx);
-  return cx;
-}
-
 // ---- op 4: read_external ----
 pub fn read_external(inout cx: crate::ent_state::Ctx) -> Result<(), crate::ent_state::Halt> ! alloc
 {
@@ -214,11 +199,4 @@ pub fn read_external(inout cx: crate::ent_state::Ctx) -> Result<(), crate::ent_s
   let a: i64 = crate::ent_u16::put_range(inout rec, 1, cx.ent, rp + 1, 3);
   crate::ent_state::put_done(inout cx, e, rec, e, 0);
   return Ok::<(), crate::ent_state::Halt>(());
-}
-
-pub fn read_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
-{
-  let mut cx: crate::ent_state::Ctx = cx0;
-  let r: Result<(), crate::ent_state::Halt> = read_external(inout cx);
-  return cx;
 }

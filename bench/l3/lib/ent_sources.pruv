@@ -320,7 +320,8 @@ pub fn import_begin(input: [i64]) -> [i64] ! alloc
   let hi: i64 = crate::ent_accounts::io_check(input);
   if hi < 0 { return crate::ent_packet::boundary(1, id, 0); }
   let blob: [i64] = crate::ent_state::repack(input, hi);
-  let mut cx: crate::ent_state::Ctx = crate::ent_state::ctx_new(1, id, blob, crate::ent_u16::empty(), crate::ent_u16::zeros(8));
+  let lg: [i64] = crate::ent_u16::empty();
+  let mut cx: crate::ent_state::Ctx = crate::ent_state::ctx_new(1, id, move blob, move lg, crate::ent_u16::empty());
   return drive(inout cx, 1, 0, 1);
 }
 
@@ -332,14 +333,14 @@ pub fn import_step(prev: [i64], completion: [i64]) -> [i64] ! alloc
   let s2: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(prev, 2), 33554432);
   let s3: i64 = crate::ent_u16::clamp(s2 + crate::ent_u16::clamp(crate::ent_packet::sec_len(prev, 2), 16777216), len(prev));
   let st: ref [i64] = subview(prev, crate::ent_u16::clamp(s2, s3), s3);
-  if !crate::ent_canon::state_ok_ie(st, 1, id) { return crate::ent_packet::boundary(1, id, 0); }
-  if !crate::ent_state::st_replay_ok(st, 1, seq) { return crate::ent_packet::boundary(1, id, 0); }
   let s: crate::ent_state::State = crate::ent_state::state_view(st);
+  if !crate::ent_canon::state_ok_ie(st, s, 1, id) || !crate::ent_state::replay_ok(s, 1, seq) { return crate::ent_packet::boundary(1, id, 0); }
   let hi: i64 = crate::ent_packet::comp_check(completion, s.code, s.aux);
   if hi < 0 { return crate::ent_packet::boundary(1, id, 0); }
   let lg: [i64] = crate::ent_state::log_append(s.log, s.code, s.aux, completion, hi);
   if crate::ent_state::log_words(lg) > 16777216 { return crate::ent_packet::boundary(1, id, 1); }
-  let mut cx: crate::ent_state::Ctx = crate::ent_state::ctx_new(1, id, s.blob, lg, crate::ent_state::set_ck_arr0(s.ck));
+  let blob: [i64] = copy(s.blob);
+  let mut cx: crate::ent_state::Ctx = crate::ent_state::ctx_new(1, id, move blob, move lg, crate::ent_state::set_ck_arr0(s.ck));
   crate::ent_state::use_prev(inout cx, prev, false);
   return drive(inout cx, seq + 1, seq, crate::ent_state::st_s0(1, s.ck));
 }
