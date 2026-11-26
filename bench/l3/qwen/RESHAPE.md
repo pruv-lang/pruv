@@ -1,4 +1,4 @@
-# Qwen head, tail and window import: Rust-shape reset (RUST_SHAPE_RESET §6 step 4.3d)
+# Qwen head, tail and window import: Rust-shape reset (RUST_SHAPE_RESET §6 steps 4.3d, 4.3e)
 
 Scope: every function of `root.pruv`, `import.pruv`, `chain.pruv`, `framing.pruv`, `entry.pruv` and `boundary.pruv`
 against the hand baseline `handrust/` (serde_json, the shape cited in RUST_SHAPE_RESET §4 ABI). The hand had only
@@ -33,29 +33,31 @@ What went:
 
 ## 1. Structure table (§1.5 form)
 
-| step | Pruv before (4.3c tree) | Pruv now | hand Rust | copies / allocations (now vs hand) |
+| step | Pruv before (4.3c tree) | Pruv now (4.3e) | hand Rust | copies / allocations (now vs hand) |
 |---|---|---|---|---|
 | head lines | `edge_next` (`lines::jsonl_next`, final line only when not cut) | same | `data.split(b'\n')`, `pop()` when cut, skip empty | 0 / 0; same |
 | head fields | `string_field(cwd)` then `copy(v)`; `human_text` then `copy(t)`; `idle` flag | `move v`, `move t`; no flag | `entry.get("cwd")` clone; `human_text` → `Option<String>` | 1 per field (decode) vs 1 (clone); same |
 | head result | zero-filled `alloc(total)`, three `put_str` byte loops (one always empty) | `arr_reserve(total)` + two `arr_append` | `Head { cwd, first_prompt }` | 1 alloc vs 0 (host wire, row ABI) |
 | tail lines | `skip_first` byte loop, then `edge_next` | `skip_first` = `find_byte`, then `edge_next` | `split(b'\n')`, `next()` when cut | 0; same |
 | tail fields | `iso_of` then `copy(iso.text)`; `title_of` then `copy(text)` | `copy(iso.text)` (row 4.3d-M); `move text` | `iso(timestamp)` owned; `one_line(text)` owned | +1 copy of the 24-byte stamp (4.3d-M) |
-| tail title | ranked best kept raw, `one_line` once at the end | same | `one_line` per custom title line | Pruv fewer (difference T1 below) |
+| tail title | ranked best kept raw, `one_line` once at the end | last custom title wins (`has_title`), `one_line` once | `one_line` per custom title line | Pruv fewer (difference T1 below) |
 | window lines | 16-byte min-distance pre-pass + byte loop | one `find_byte` | `split_inclusive(b'\n')` | 0; same |
-| window entries | `Vec`-free event log (`Events`: 9-byte records + text buffer) | same | `Vec<Slot>` of `Entry { uuid, parent, action }` | row VL |
-| uuid index | arena + splitmix hash buckets; `put` byte loop; `same_span` byte loop | `copy_range`; `ul == klen && eq_range` | `HashMap<&str, &Entry>`, `HashSet<&str>` | arena 1 alloc vs map; row 4.3d-H |
+| window entries | `Vec`-free event log (`Events`: 9-byte records + text buffer), sized by an LF pre-count | `Events { records: [i64] (3 words), text }` grown per object; role, title and stamp decided in the scan (`role_of`, `custom_title`) | `Vec<Slot>` of `Entry { uuid, parent, action }` | row VL |
+| uuid index | arena + splitmix hash buckets sized by an LF pre-count; `put` byte loop; `same_span` byte loop | arena / slots grown per object (`arr_append` / `arr_push`); buckets linked in `resolve` after the scan; `ul == klen && eq_range` | `HashMap<&str, &Entry>`, `HashSet<&str>` | arena 1 alloc vs map; row 4.3d-H |
 | chain walk | `resolve` / `lookup` | same | `current_chain` | same steps |
 | replay | else-if chain on `event.kind` | `match event.kind` (outer and inner) | `match &entry.action` | same |
 | collector | `pkgs/turns` st/sl/bk flat arrays | same | `Collector { VecDeque<Turn> .. }` | row VL |
-| window result | wire header by `put_word`, title/model `put_str` loops | `copy_range` for title/model | `Window { .. }` | host wire, row ABI |
+| window result | wire header by `put_word` byte loops, title/model `put_str` loops, outputs copied | `store_le` / `load_le` words; `copy_range` for title/model; `publish` / `make_output` take and move | `Window { .. }` | host wire, row ABI |
 | title bytes (root) | zero `alloc(len)` + byte loop | `arr_reserve` + `arr_append` | `to_vec()` | 1; same |
 
 ## 2. Differences that remain
 
 - VL (pkgs, open): the hand's `Vec<Slot>` and `VecDeque<Turn>` hold structs with owned strings; Pruv keeps the event
   log (`import::Events`, records + text) and the `pkgs/turns` flat store.
-- 4.3d-H (bench): the hand indexes uuids with `HashMap`/`HashSet` of borrowed `&str`. Pruv has no hash map; `chain`
-  keeps its arena + bucket index (DB6). Closest form; the compare itself is now a slice compare like the hand.
+- 4.3d-H (language since 4.3e): the hand indexes uuids with `HashMap`/`HashSet` of borrowed `&str`. Pruv maps
+  (R-6e-5) take owned `String` keys only; a `[u8]` or borrowed-slice key is rejected, so the hand's
+  `HashMap<&str, &Entry>` cannot be written. `chain` keeps its arena + bucket index (DB6), now grown per object and
+  linked after the scan like the hand's `latest` map. Closest form; no workaround.
 - 4.3d-M (language): `move iso.text` on a `let`-bound struct (`crate::time::Iso` returned by `iso_of`) is
   `type/array_alias` ("an array field cannot be moved"). TK / LB9 only covers a consuming match binder. `tail_info`
   keeps `copy(iso.text)` (24 bytes per stamped line). Closest form kept, no workaround.
@@ -95,9 +97,51 @@ Behaviour notes from the review (no Pruv change):
 - 4.3d-M: Codex pointed at `grok/rpc.pruv` (`let r1 = move ck.raw; ck.raw = alloc(0, 0);`). That moves a field of a
   `let mut` struct and refills it, an allocation in place of the copy; not the hand shape, so the copy stays.
 
+### 4.3e: bench rows C, P, W, O, T and a second Codex review
+
+Done in 4.3e (`qwen/` only):
+
+- 4.3d-C: `chain::capacity` removed. `Index` starts empty; `note` appends uuid / parent to the arena (`put_field`) and
+  pushes a 6-word slot per object; `resolve` sizes the power-of-two heads from the slot count and links buckets after
+  the scan. `selected` is `alloc(ordinal)` after the scan; `Events` starts empty and grows.
+- 4.3d-P: `entry::parse_line` skips leading whitespace and returns `Skip` unless the next byte is `{`, before parsing.
+- 4.3d-W: `boundary::put_word` / `get_word` are one `store_le` / `load_le` each.
+- 4.3d-O: `boundary::make_output` and `import::publish` take meta, turns and text and move them.
+- 4.3d-T: `entry::role_of` reads `type` once (an else-if chain over the hand's `match`), with `user_role` reading
+  `provenance` once. `window_wire` takes the title from system lines in the scan (`entry::custom_title`); stamps are
+  written for real user lines with text and assistant lines only. Removed: `replaces`, `last_max`, `first_present`,
+  `pick_title`, `ranked`, event tags 2 and 3. `tail_info` keeps the last custom title. q mutants retargeted:
+  `last-title` (`best = move text; has_title = true;`), `human-role`, `provenance`; all 12 match exactly once.
+- `Events` dropped its struct invariant (it is checked at every `inout` exit and did not hold mid-loop);
+  `replay` requires `len(log.records) <= 4294967295` and `window_wire` checks it once before `replay`.
+
+Second Codex review (gpt-6.2-astra, high), hand vs every touched function. Applied:
+
+- `human_text` stops at a non-`user` type before provenance (`edge.rs` `human_text`), sharing `user_role`.
+- `window_wire` counts only parsed objects as entries (`ordinal` grows in the `Object` arm), like the hand's
+  `Vec<Slot>`; blank and non-object lines no longer widen `selected`.
+- `resolve` returns an inactive chain before allocating buckets when no entry can be the leaf (hand `current_chain`).
+
+Open after 4.3e (bench, `qwen/` unless noted):
+
+- 4.3e-D: `record_entry` joins the user prompt, writes the stamp and walks assistant parts before the chain is chosen
+  and before turn linkage is known; `replay` reads answer text even when no turn is linked. The hand updates the
+  model after selection and handles stamp and parts only for a linked turn (`lib.rs` 270-297). Needs the log to keep
+  raw ranges and decode in `replay`.
+- 4.3e-L: the leaf candidate is kept in `Index.leaf` / `role_seen` during the scan (`note`); the hand picks it in
+  `current_chain`. `note` skips the parent when the uuid is empty, and `window_wire` decides the role before the
+  uuid / parent (hand order: uuid, parent, role).
+- 4.3e-F: `chain::put_field` decodes into an owned `str` and then appends it to the arena; the hand moves the
+  parsed string. Needs a decode-into-buffer form in `lib/access` (shared; run all consumers).
+- 4.3e-J: `entry::array_content` decodes each text part owned and appends; the hand collects `&str` and `join`s.
+  `title_key` owns a blank title before the blank check.
+- 4.3e-S: `write_stamp` turns the 24-byte `iso.text` into a `str` before the log copy (with 4.3d-M).
+- Behaviour: the escaped `$serde_json::private::Number` timestamp key (hand artefact, above) also shows in
+  `tail_info` `last_at`; not new in 4.3e.
+
 ## 4. Results
 
-After the last code change, `rs/rust` and `rs/llvm`:
+After the last 4.3e code change, `rs/rust` and `rs/llvm` (hand `edge.rs` unchanged in 4.3e; its row is from 4.3d):
 
 | check | rs/rust | rs/llvm |
 |---|---|---|

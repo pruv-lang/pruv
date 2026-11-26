@@ -26,10 +26,10 @@ pub struct ImportOutput { meta: [i64], turns: [i64], text: [u8] }
 // Dedicated non-generic result: a buffer-bearing type cannot be a Result<T> payload.
 pub enum ImportResult { Imported(output: ImportOutput), Failed(code: i64, position: i64) }
 
-// Ownership boundary: wraps copies of completed buffers (struct literals stay inside this module).
-pub fn make_output(meta: [i64], turns: [i64], text: [u8]) -> ImportOutput ! alloc
+// Ownership boundary: moves the completed buffers into the output (struct literals stay inside this module).
+pub fn make_output(take meta: [i64], take turns: [i64], take text: [u8]) -> ImportOutput
 {
-  return ImportOutput { meta: copy(meta), turns: copy(turns), text: copy(text) };
+  return ImportOutput { meta: move meta, turns: move turns, text: move text };
 }
 
 // A ref (s,l) is absent (-1,0) or present inside a text of n bytes.
@@ -226,17 +226,9 @@ pub fn put_word(inout w: [u8], at: i64, v: i64) -> bool
   ensures len(w) == len(old(w))
 {
   if v < -1 || v > 72057594037927934 { return false; }
-  let mut u: i64 = v + 1;
-  let mut i: i64 = 0;
-  while i < 8
-    invariant 0 <= i && i <= 8 && 0 <= u && 0 <= at && at <= len(w) - 8 && len(w) == len(old(w))
-    decreases 8 - i
-  {
-    w[at + i] = u % 256;
-    u = u / 256;
-    i = i + 1;
-  }
-  return u == 0;
+  // hand: w[at..at + 8].copy_from_slice(&(v + 1).to_le_bytes())
+  store_le(inout w, at, v + 1, 8);
+  return true;
 }
 
 pub fn get_word(w: [u8], at: i64) -> i64
@@ -244,14 +236,8 @@ pub fn get_word(w: [u8], at: i64) -> i64
   ensures -2 <= result
 {
   if w[at + 7] != 0 { return -2; }
-  let mut u: i64 = w[at + 6];
-  u = u * 256 + w[at + 5];
-  u = u * 256 + w[at + 4];
-  u = u * 256 + w[at + 3];
-  u = u * 256 + w[at + 2];
-  u = u * 256 + w[at + 1];
-  u = u * 256 + w[at + 0];
-  return u - 1;
+  // hand: u64::from_le_bytes(w[at..at + 8]) - 1
+  return load_le(w, at, 7) - 1;
 }
 
 pub fn wire_fail(code: i64, position: i64) -> [u8] ! alloc
