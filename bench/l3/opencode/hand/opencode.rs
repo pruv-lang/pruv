@@ -365,7 +365,7 @@ fn join(a: &str, b: &str) -> String {
     }
 }
 
-// Pruv: path::dirname / path::dirname_bytes
+// Pruv: path::dirname_bytes
 fn dirname(p: &str) -> &str {
     let t = p.trim_end_matches('/');
     match t.rfind('/') {
@@ -674,7 +674,7 @@ fn read_handoff(conf: &Config, rows: &[Row]) -> Result<Handoff, Fail> {
 
 // ---- export ----
 
-// Pruv: export::on_mkdtemp (join_prefix, then a fresh 0700 directory)
+// Pruv: export::start_export (path::normalize of root + "/opencode-") / on_mkdtemp (a fresh 0700 directory)
 fn make_temp(root: &str) -> Result<String, Fail> {
     let prefix = join(root, "opencode-");
     let seed = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());

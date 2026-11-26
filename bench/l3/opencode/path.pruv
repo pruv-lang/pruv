@@ -2,120 +2,70 @@
 // Contents: POSIX join/dirname/containment, data dir, DB path, folder key, `utility` (modes 3/4), and the step helpers that
 // admit.pruv, sql.pruv and list.pruv share (ask, proceed, append_patch, ok_event, db_error, fail_with, rows_ok).
 
-fn to_str(b: [u8], cap: i64) -> str ! alloc
-  requires 0 <= cap
-  ensures len(result) <= cap
-{
-  let none: str = "";
-  let x: str = crate::jstr::adapter_probe(b);
-  if len(x) > cap { return copy(none); }
-  return copy(x);
-}
-
-// ---- POSIX join/normalize (Node path.posix), as bench/l3/grok/path.pruv ----
-fn last_dotdot(out: [u8], u: i64) -> bool
-  requires 0 <= u && u <= len(out)
-{
-  if u < 2 { return false; }
-  if out[u - 1] != 46 || out[u - 2] != 46 { return false; }
-  return u == 2 || out[u - 3] == 47;
-}
-
-fn pop_pos(out: [u8], u: i64) -> i64
-  requires 0 <= u && u <= len(out)
-  ensures 0 <= result && result <= u
-{
-  let mut k: i64 = u;
-  while k > 0
-    invariant 0 <= k && k <= u && u <= len(out)
-    decreases k
-  {
-    if out[k - 1] == 47 { return k - 1; }
-    k = k - 1;
-  }
-  return 0;
-}
-
-fn append_seg(inout out: [u8], u: i64, p: [u8], s: i64, e: i64) -> i64
-  requires 0 <= s && s <= e && e <= len(p) && 0 <= u && u + (e - s) + 1 <= len(out)
-  ensures len(out) == len(old(out)) && 0 <= result && result <= u + (e - s) + 1
-{
-  let mut at: i64 = u;
-  if u > 0 {
-    out[u] = 47;
-    at = u + 1;
-  }
-  crate::bytes::copy_span(inout out, at, p, s, e);
-  return at + (e - s);
-}
-
-fn push_seg(inout out: [u8], u: i64, p: [u8], s: i64, e: i64, rel: bool) -> i64
-  requires 0 <= s && s <= e && e <= len(p) && 0 <= u && u + (e - s) + 3 <= len(out)
-  ensures len(out) == len(old(out)) && 0 <= result && result <= u + (e - s) + 1
-{
-  let w: i64 = e - s;
-  if w == 0 { return u; }
-  if w == 1 && p[s] == 46 { return u; }
-  if w == 2 && p[s] == 46 && p[s + 1] == 46 {
-    if u > 0 && !last_dotdot(out, u) { return pop_pos(out, u); }
-    if rel {
-      let mut at: i64 = u;
-      if u > 0 {
-        out[u] = 47;
-        at = u + 1;
-      }
-      out[at] = 46;
-      out[at + 1] = 46;
-      return at + 2;
-    }
-    return u;
-  }
-  return append_seg(inout out, u, p, s, e);
-}
-
-fn normalize(p: [u8]) -> [u8] ! alloc
-  requires 1 <= len(p) && len(p) <= 2000000002
-  ensures len(result) <= 2 * len(p) + 4
+// ---- POSIX join/normalize (Node path.posix), in the hand shape ----
+// Hand keeps `Vec<&str>` pieces of `p`; Pruv cannot hold borrowed views in a list, so `out` holds each piece's
+// (start, end) offsets into `p` (row 4.4b-NV). Hand inserts the root '/' at 0 after the join; Pruv pushes it first.
+pub fn normalize(p: [u8]) -> [u8] ! alloc
+  requires len(p) <= 2000000002
+  ensures 1 <= len(result) && len(result) <= len(p) + 1
 {
   let n: i64 = len(p);
-  let absolute: bool = p[0] == 47;
-  let trailing: bool = p[n - 1] == 47;
-  let mut out: [u8] = alloc(2 * n + 4, 0);
-  let mut u: i64 = 0;
+  if n == 0 {
+    let mut d: [u8] = alloc(0, 0);
+    arr_push(inout d, 46);
+    return d;
+  }
+  let rooted: bool = p[0] == 47;
+  let dir: bool = p[n - 1] == 47;
+  let mut out: [i64] = alloc(0, 0);
   let mut st: i64 = 0;
   let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= st && st <= i && i <= n && n == len(p) && 0 <= u && u <= 2 * st && len(out) == 2 * n + 4
-    decreases n - i
+  while i <= n
+    invariant 0 <= st && st <= i && i <= n + 1 && n == len(p) && len(out) % 2 == 0 && len(out) <= st
+    invariant (rooted && i > 0) ==> 1 <= st
+    invariant forall k in 0..len(out): 0 <= out[k] && out[k] < st && (rooted ==> 1 <= out[k])
+    invariant forall k in 1..len(out): out[k - 1] < out[k]
+    decreases n + 1 - i
   {
-    if p[i] == 47 {
-      u = push_seg(inout out, u, p, st, i, !absolute);
+    if i == n || p[i] == 47 {
+      let w: i64 = i - st;
+      if w > 0 && !(w == 1 && p[st] == 46) {
+        if w == 2 && p[st] == 46 && p[st + 1] == 46 {
+          let m: i64 = len(out);
+          if m > 0 && (out[m - 1] - out[m - 2] != 2 || p[out[m - 2]] != 46 || p[out[m - 2] + 1] != 46) {
+            out = truncate(out, m - 2);
+          } else if !rooted {
+            arr_push(inout out, st);
+            arr_push(inout out, i);
+          }
+        } else {
+          arr_push(inout out, st);
+          arr_push(inout out, i);
+        }
+      }
       st = i + 1;
     }
     i = i + 1;
   }
-  u = push_seg(inout out, u, p, st, n, !absolute);
-  if u == 0 {
-    if absolute {
-      let mut r1: [u8] = alloc(1, 0);
-      r1[0] = 47;
-      return r1;
-    }
-    if trailing {
-      let mut r2: [u8] = alloc(2, 0);
-      r2[0] = 46;
-      r2[1] = 47;
-      return r2;
-    }
-    let mut r3: [u8] = alloc(1, 0);
-    r3[0] = 46;
-    return r3;
-  }
   let mut r: [u8] = alloc(0, 0);
-  arr_reserve(inout r, u + 2);
-  if absolute { arr_push(inout r, 47); }
-  arr_append(inout r, out, 0, u);
-  if trailing { arr_push(inout r, 47); }
+  arr_reserve(inout r, n + 2);
+  if rooted { arr_push(inout r, 47); }
+  let base: i64 = len(r);
+  let mut k: i64 = 0;
+  while k < len(out)
+    invariant 0 <= k && k <= len(out) && k % 2 == 0 && 0 <= base && base <= 1 && len(out) % 2 == 0
+    invariant (k == 0 ==> len(r) == base) && (k > 0 ==> base < len(r) && len(r) <= base + out[k - 1] - out[0])
+    invariant (rooted ==> base == 1) && (!rooted ==> base == 0)
+    invariant forall t in 0..len(out): 0 <= out[t] && out[t] <= n && (rooted ==> 1 <= out[t])
+    invariant forall t in 1..len(out): out[t - 1] < out[t]
+    decreases len(out) - k
+  {
+    if k > 0 { arr_push(inout r, 47); }
+    arr_append(inout r, p, out[k], out[k + 1] - out[k]);
+    k = k + 2;
+  }
+  if len(r) == base && !rooted { arr_push(inout r, 46); }
+  if dir && len(r) > base && r[len(r) - 1] != 47 { arr_push(inout r, 47); }
   return r;
 }
 
@@ -134,7 +84,10 @@ pub fn join(a: str, b: str) -> str ! alloc
   if na > 0 && nb > 0 { arr_push(inout jb, 47); }
   arr_append(inout jb, b, 0, nb);
   let norm: [u8] = normalize(jb);
-  return to_str(norm, na + nb + 2);
+  // the pieces are whole '/'-separated runs of the UTF-8 inputs, but the byte buffer loses that fact (row 4.4b-NV)
+  if !utf8_valid(norm) { return copy(dot); }
+  let text: str = str_from_utf8(norm);
+  return move text;
 }
 
 // path.posix.dirname on bytes: "." for "", "/" or "//" for rooted inputs, else the prefix before the last non-trailing '/'
@@ -179,15 +132,6 @@ pub fn dirname_bytes(p: [u8]) -> [u8] ! alloc
     return d3;
   }
   return copy(subview(p, 0, endp));
-}
-
-pub fn dirname(p: str) -> str ! alloc
-  requires len(p) <= 1000000000
-  ensures len(result) <= len(p) + 1
-{
-  let b: [u8] = crate::util::to_bytes(p);
-  let d: [u8] = dirname_bytes(b);
-  return to_str(d, len(p) + 1);
 }
 
 // `file` starts with `parent` + '/' (just `parent` when it already ends with '/'); the prefix must be nonempty.
