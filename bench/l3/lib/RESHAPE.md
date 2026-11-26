@@ -1150,3 +1150,36 @@ All after the last code change (F1 / F4 from the structure comparison).
      4.3e-S, then 4.3e-F (touches `lib/access`; run all consumers).
   4. Codex bench rows 4.3f-A, 4.3f-O, 4.3f-N, 4.3f-K, 4.3f-L, 4.3f-T, 4.3f-P, 4.3f-R, 4.3f-D (`codex/` only), then
      4.3f-B, 4.3f-E, 4.3f-F (shared modules; run all consumers).
+
+## Step 4.3g: OpenCode import
+
+- `opencode/RESHAPE.md`. New hand baseline `opencode/hand/opencode.rs` (rusqlite, `std::process`, serde_json; one
+  function per Pruv function or step group), `cargo build --release`, no warnings. Zero-filled buffers filled by index
+  became `arr_reserve` + `arr_push` / `arr_append` (`plan::fit`, `packet::cat_*` / `append_str`, `export::with_span`,
+  `util::to_bytes`, `convert::model_bytes` / `assemble`, `path::join` / `normalize`); `path::contained` / `same_key`
+  use `eq_range`; span copies are `copy(subview(..))`; `skip` / `bad` / `found` / `total` flags became `continue` or
+  early returns; the attach slots `mt: [i64]` became `entry::Attach`. One structure review (Claude Opus fallback):
+  three hand-side behavior differences fixed (lossy UTF-8 cells, bank bound, configuration check order).
+- No module moved to `lib` / `pkgs`; no shared module changed, so no consumer runs were needed.
+- Tests: `opencode/RESHAPE.md` §4 (199/199 on both pairs, `q.py` 499 cases with 0 unexplained).
+
+### Rows open after 4.3g
+
+- New (language / host): 4.3g-SQ, no SQLite or file-system host API (the OpenCode step machine stands in for direct
+  calls).
+- New (bench, `opencode/RESHAPE.md` §3): 4.3g-P (pool append returns a new array), 4.3g-R (`rows::decode` buffers and
+  copies), 4.3g-Q (select SQL / pool chain), 4.3g-X (export prefix normalizer and spawn pool), 4.3g-K (span copies made
+  only to compare), 4.3g-D (`OPENCODE_DB` read twice), 4.3g-N (`normalize` scratch), 4.3g-A (result packet zero fill,
+  double shape check), 4.3g-F (`format_i64`, `format_ext`, zero-filled item arrays), 4.3g-T (`Attach` tape ids,
+  `dirname` / `iso_str` round trips), 4.3g-E (hand spawn failure lacks the native / raw / name words).
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB, TH, FO, FV, UL, VP,
+  IW, VL, 4.3d-M, 4.3d-H, 4.3f-S (now also `convert::has_prefix`, `path::key_eq`, `sql::lit_eq`), 4.3f-E.
+- Next:
+  1. 4.3h: Claude R08 (`bench/l3/claude`).
+  2. Step 4.4 (`docs/RUST_SHAPE_RESET.md` §6).
+  3. OpenCode bench rows 4.3g-P, 4.3g-R, 4.3g-Q, 4.3g-K, 4.3g-D, 4.3g-N, 4.3g-A, 4.3g-X, 4.3g-F, 4.3g-E (`opencode/`
+     only; 4.3g-P first, it turns most pool builders into one `inout` pool).
+  4. Grok bench rows 4.3c-T, 4.3c-B, 4.3c-G and `pkgs/turns` dead code; Qwen bench rows 4.3e-D, 4.3e-L, 4.3e-J,
+     4.3e-S, then 4.3e-F (touches `lib/access`; run all consumers).
+  5. Codex bench rows 4.3f-A, 4.3f-O, 4.3f-N, 4.3f-K, 4.3f-L, 4.3f-T, 4.3f-P, 4.3f-R, 4.3f-D (`codex/` only), then
+     4.3f-B, 4.3f-E, 4.3f-F (shared modules; run all consumers).

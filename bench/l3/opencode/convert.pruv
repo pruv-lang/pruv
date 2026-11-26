@@ -16,22 +16,6 @@
 //     result (ctl[38] == 1), in case export hands those off at phase 500 instead of finishing itself.
 //  3. error name refs are left absent (detail only); raw error code absent, native code 0.
 
-fn put_str(inout dst: [u8], at: i64, s: str) -> ()
-  requires 0 <= at && at <= len(dst) && len(s) <= len(dst) - at
-  ensures len(dst) == len(old(dst))
-{
-  let n: i64 = len(s);
-  let mut j: i64 = 0;
-  while j < n
-    invariant 0 <= j && j <= n && n == len(s) && 0 <= at && at <= len(dst) && n <= len(dst) - at && len(dst) == len(old(dst))
-    decreases n - j
-  {
-    let b: i64 = s[j];
-    dst[at + j] = b;
-    j = j + 1;
-  }
-}
-
 // lit is a prefix of s
 fn has_prefix(s: str, lit: str) -> bool
 {
@@ -57,9 +41,7 @@ fn clean_title(t: str) -> str ! alloc
 {
   let none: str = "";
   if len(t) == 0 || has_prefix(t, "New session - ") || has_prefix(t, "Child session - ") { return copy(none); }
-  let r: str = crate::text::one_line(t, 120);
-  if len(r) > 50331648 { return copy(none); }
-  return copy(r);
+  return crate::text::one_line(t, 120);
 }
 
 // cleanTitle(str(root.info.title))
@@ -84,12 +66,11 @@ fn model_bytes(doc: crate::json::JsonDocument, pid: i64, mid: i64) -> [u8] ! all
   let p: str = crate::util::str_at(doc, pid);
   let m: str = crate::util::str_at(doc, mid);
   if len(p) == 0 || len(m) == 0 { return none; }
-  let lp: i64 = len(p);
-  let lm: i64 = len(m);
-  let mut b: [u8] = alloc(lp + 1 + lm, 0);
-  put_str(inout b, 0, p);
-  b[lp] = 47;
-  put_str(inout b, lp + 1, m);
+  let mut b: [u8] = alloc(0, 0);
+  arr_reserve(inout b, len(p) + 1 + len(m));
+  arr_append(inout b, p, 0, len(p));
+  arr_push(inout b, 47);
+  arr_append(inout b, m, 0, len(m));
   return b;
 }
 
@@ -134,10 +115,11 @@ fn assemble(col: crate::turns::Collected, title: str, model: [u8], pv: crate::pl
     lt = len(pv.text);
   }
   let base: i64 = nx + tl + ml;
-  let mut pool: [u8] = alloc(base + la + lt, 0);
-  crate::bytes::copy_span(inout pool, 0, col.text, 0, nx);
-  put_str(inout pool, nx, title);
-  crate::bytes::copy_span(inout pool, nx + tl, model, 0, ml);
+  let mut pool: [u8] = alloc(0, 0);
+  arr_reserve(inout pool, base + la + lt);
+  arr_append(inout pool, col.text, 0, nx);
+  arr_append(inout pool, title, 0, tl);
+  arr_append(inout pool, model, 0, ml);
   let mut m: [i64] = crate::packet::meta_new(1);
   m[4] = col.kept;
   m[5] = 10;
@@ -152,8 +134,8 @@ fn assemble(col: crate::turns::Collected, title: str, model: [u8], pv: crate::pl
   }
   let mut items: [i64] = alloc(0, 0);
   if usep {
-    crate::bytes::copy_span(inout pool, base, pv.at, 0, la);
-    crate::bytes::copy_span(inout pool, base + la, pv.text, 0, lt);
+    arr_append(inout pool, pv.at, 0, la);
+    arr_append(inout pool, pv.text, 0, lt);
     m[9] = 1;
     m[18] = pv.more;
     if la > 0 {
@@ -180,39 +162,30 @@ fn convert_doc(doc: crate::json::JsonDocument, fallback: str) -> [i64] ! alloc
   let mut st: [i64] = crate::turns::new_state();
   let mut sl: [i64] = crate::turns::new_slots();
   let mut buf: [u8] = crate::turns::new_buffer();
-  let mut mt: [i64] = alloc(4, 0);
-  mt[1] = -1;
-  mt[2] = -1;
-  let mut bad: i64 = 0;
+  let mut mt: crate::entry::Attach = crate::entry::Attach { open: false, pid: -1, mid: -1 };
   let mut j: i64 = 0;
-  while j < n && bad == 0
-    invariant 0 <= j && j <= n && n <= 1048576 && n == len(ids) && 0 <= bad && bad <= 2
-    invariant len(st) == 4 && len(sl) == 1600 && len(mt) == 4 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= j && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
-    invariant (mt[0] == 0 || mt[0] == 1) && -1 <= mt[1] && -1 <= mt[2]
+  while j < n
+    invariant 0 <= j && j <= n && n <= 1048576 && n == len(ids)
+    invariant len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= j && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+    invariant -1 <= mt.pid && -1 <= mt.mid
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
     decreases n - j
   {
     let m: i64 = ids[j];
-    if !valid_message(doc, m) {
-      bad = 1;  // MUT:M12 => bad = 0;
-    } else {
-      let mut r: i64 = crate::entry::feed(doc, m, inout st, inout sl, inout buf, inout mt);
-      if r == 1 {
-        buf = crate::turns::grow(move buf, st[0]);
-        r = crate::entry::feed(doc, m, inout st, inout sl, inout buf, inout mt);
-      }
-      if r != 0 { bad = 2; }
-    }
     j = j + 1;
+    if !valid_message(doc, m) { return shape_error(); }  // MUT:M12 => if !valid_message(doc, m) { continue; }
+    let mut r: i64 = crate::entry::feed(doc, m, inout st, inout sl, inout buf, inout mt);
+    if r == 1 {
+      buf = crate::turns::grow(move buf, st[0]);
+      r = crate::entry::feed(doc, m, inout st, inout sl, inout buf, inout mt);
+    }
+    if r != 0 { return crate::packet::simple_error(1, 26, 3, 6); }
   }
-  if bad == 1 { return shape_error(); }
-  if bad != 0 { return crate::packet::simple_error(1, 26, 3, 6); }
   let col: crate::turns::Collected = crate::turns::finish(st, sl, buf, 0);
-  let tt: str = export_title(doc, root);
-  let mut title: str = copy(tt);
-  if len(tt) == 0 { title = copy(fallback); }
-  let model: [u8] = model_bytes(doc, mt[1], mt[2]);
+  let mut title: str = export_title(doc, root);
+  if len(title) == 0 { title = copy(fallback); }
+  let model: [u8] = model_bytes(doc, mt.pid, mt.mid);
   let pv: crate::plan::PlanValue = crate::plan::select(doc, msgs, 0);
   if pv.status != 0 { return crate::packet::simple_error(1, 27, 3, 6); }
   return assemble(col, title, model, pv);

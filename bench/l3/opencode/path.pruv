@@ -111,14 +111,11 @@ fn normalize(p: [u8]) -> [u8] ! alloc
     r3[0] = 46;
     return r3;
   }
-  let mut a: i64 = 0;
-  if absolute { a = 1; }
-  let mut t: i64 = 0;
-  if trailing { t = 1; }
-  let mut r: [u8] = alloc(a + u + t, 0);
-  if absolute { r[0] = 47; }
-  crate::bytes::copy_span(inout r, a, out, 0, u);
-  if trailing { r[a + u] = 47; }
+  let mut r: [u8] = alloc(0, 0);
+  arr_reserve(inout r, u + 2);
+  if absolute { arr_push(inout r, 47); }
+  arr_append(inout r, out, 0, u);
+  if trailing { arr_push(inout r, 47); }
   return r;
 }
 
@@ -131,32 +128,12 @@ pub fn join(a: str, b: str) -> str ! alloc
   let nb: i64 = len(b);
   let dot: str = ".";
   if na == 0 && nb == 0 { return copy(dot); }
-  let mut jb: [u8] = alloc(na + nb + 1, 0);
-  let mut i: i64 = 0;
-  while i < na
-    invariant 0 <= i && i <= na && na == len(a) && nb == len(b) && len(jb) == na + nb + 1
-    decreases na - i
-  {
-    jb[i] = a[i];
-    i = i + 1;
-  }
-  let mut at: i64 = na;
-  if na > 0 && nb > 0 {
-    jb[at] = 47;
-    at = at + 1;
-  }
-  let mut j: i64 = 0;
-  while j < nb
-    invariant 0 <= j && j <= nb && 0 <= at && at <= na + 1 && nb == len(b) && len(jb) == na + nb + 1 && at + nb <= len(jb)
-    decreases nb - j
-  {
-    jb[at + j] = b[j];
-    j = j + 1;
-  }
-  let total: i64 = at + nb;
-  if total < 1 || total > len(jb) { return copy(dot); }
-  let joined: [u8] = truncate(jb, total);
-  let norm: [u8] = normalize(joined);
+  let mut jb: [u8] = alloc(0, 0);
+  arr_reserve(inout jb, na + nb + 1);
+  arr_append(inout jb, a, 0, na);
+  if na > 0 && nb > 0 { arr_push(inout jb, 47); }
+  arr_append(inout jb, b, 0, nb);
+  let norm: [u8] = normalize(jb);
   return to_str(norm, na + nb + 2);
 }
 
@@ -201,9 +178,7 @@ pub fn dirname_bytes(p: [u8]) -> [u8] ! alloc
     d3[1] = 47;
     return d3;
   }
-  let mut r: [u8] = alloc(endp, 0);
-  crate::bytes::copy_span(inout r, 0, p, 0, endp);
-  return r;
+  return copy(subview(p, 0, endp));
 }
 
 pub fn dirname(p: str) -> str ! alloc
@@ -223,16 +198,7 @@ pub fn contained(parent: [u8], file: [u8]) -> bool
   let mut extra: i64 = 1;
   if parent[pn - 1] == 47 { extra = 0; }
   if len(file) - pn < extra { return false; }
-  let mut i: i64 = 0;
-  while i < pn
-    invariant 0 <= i && i <= pn && pn == len(parent) && pn <= len(file)
-    decreases pn - i
-  {
-    let x: i64 = parent[i];
-    let y: i64 = file[i];
-    if x != y { return false; }
-    i = i + 1;
-  }
+  if !eq_range(parent, 0, file, 0, pn) { return false; }
   if extra == 1 {
     if file[pn] != 47 { return false; }
   }
@@ -258,9 +224,7 @@ pub fn folder_key(b: [u8]) -> [u8] ! alloc
   ensures len(result) <= len(b)
 {
   let k: i64 = key_len(b);
-  let mut r: [u8] = alloc(k, 0);
-  crate::bytes::copy_span(inout r, 0, b, 0, k);
-  return r;
+  return copy(subview(b, 0, k));
 }
 
 pub fn same_key(a: [u8], b: [u8]) -> bool
@@ -268,17 +232,7 @@ pub fn same_key(a: [u8], b: [u8]) -> bool
   let na: i64 = key_len(a);
   let nb: i64 = key_len(b);
   if na != nb { return false; }
-  let mut i: i64 = 0;
-  while i < na
-    invariant 0 <= i && i <= na && na == nb && na <= len(a) && nb <= len(b)
-    decreases na - i
-  {
-    let x: i64 = a[i];
-    let y: i64 = b[i];
-    if x != y { return false; }
-    i = i + 1;
-  }
-  return true;
+  return eq_range(a, 0, b, 0, na);
 }
 
 // ---- environment, data dir, DB path ----

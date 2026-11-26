@@ -3,7 +3,7 @@
 // feed(d, msg, st, sl, buf, mt) handles ONE already-located message object (convert owns the message loop and the shape check).
 // Result: 0 = handled (also for every ignored message), 1 = "grow buf and call again" (nothing was changed; returned only when a begin
 // would not fit buf: 65584*(st[0]%200)+65584 > len(buf)), -1 = internal failure (corrupt tape, timestamp defect, unvalidated shape).
-// mt (4 words, caller owned): mt[0] attachment state `open` (0/1), mt[1] / mt[2] tape ids of the providerID / modelID strings of the last
+// mt (caller owned Attach): `open` is the attachment state, `pid` / `mid` the tape ids of the providerID / modelID strings of the last
 // eligible assistant model pair (-1 = none yet). The model text is built by the caller at the end (no copy per message).
 // open is the OpenCode attachment boolean; turns::skip_user is deliberately NOT used (it would mark the next prompt clipped).
 //
@@ -13,6 +13,9 @@
 //  2. A timestamp defect (iso_of status -4, i.e. corrupt tape) is computed only where the timestamp is used and gives -1.
 //  3. A string is a nonempty model id iff its raw span (with quotes) is longer than 2 bytes (escapes decode to at least one scalar).
 
+// The hand's Collector.open / Collector.model (tape ids instead of owned strings: the tape outlives the collector).
+pub struct Attach { open: bool, pid: i64, mid: i64 }
+
 // The joined text of the object text parts of the part ids: nonblank text keeps the original string; with skip_marked, parts with
 // synthetic === true or ignored === true are rejected; pieces are joined with two LF.
 pub fn text_of(d: crate::json::JsonDocument, ids: [i64], skip_marked: bool) -> str ! alloc
@@ -21,37 +24,28 @@ pub fn text_of(d: crate::json::JsonDocument, ids: [i64], skip_marked: bool) -> s
   let n: i64 = len(ids);
   let mut out: String = string_new();
   let mut first: bool = true;
-  let mut total: i64 = 0;
   let mut k: i64 = 0;
-  while k < n && total <= 40000000
-    invariant 0 <= k && k <= n && n == len(ids) && 0 <= total && total <= 90331650 && len(out) <= total
+  while k < n && len(out) <= 40000000
+    invariant 0 <= k && k <= n && n == len(ids) && len(out) <= 90331650
     decreases n - k
   {
     let part: i64 = ids[k];
     k = k + 1;
-    if crate::access::kind(d, part) == 6 {
-      let ty: i64 = crate::access::field(d, part, "type");
-      if crate::access::string_is(d, ty, "text") == 1 {
-        let pt: i64 = crate::access::field(d, part, "text");
-        if crate::access::kind(d, pt) == 4 {
-          let x: str = crate::util::str_at(d, pt);
-          if !crate::text::is_blank(x) {
-            let mut skip: bool = false;
-            if skip_marked {
-              let sy: i64 = crate::access::field(d, part, "synthetic");
-              let ig: i64 = crate::access::field(d, part, "ignored");
-              if crate::access::boolean(d, sy) == 1 || crate::access::boolean(d, ig) == 1 { skip = true; }
-            }
-            if !skip {
-              if !first { out = string_push_str(move out, "\n\n"); }
-              out = string_push_str(move out, x);
-              first = false;
-              total = total + len(x) + 2;
-            }
-          }
-        }
-      }
+    if crate::access::kind(d, part) != 6 { continue; }
+    let ty: i64 = crate::access::field(d, part, "type");
+    if crate::access::string_is(d, ty, "text") != 1 { continue; }
+    let pt: i64 = crate::access::field(d, part, "text");
+    if crate::access::kind(d, pt) != 4 { continue; }
+    let x: str = crate::util::str_at(d, pt);
+    if crate::text::is_blank(x) { continue; }
+    if skip_marked {
+      let sy: i64 = crate::access::field(d, part, "synthetic");
+      let ig: i64 = crate::access::field(d, part, "ignored");
+      if crate::access::boolean(d, sy) == 1 || crate::access::boolean(d, ig) == 1 { continue; }
     }
+    if !first { out = string_push_str(move out, "\n\n"); }
+    first = false;
+    out = string_push_str(move out, x);
   }
   return string_to_str(out);
 }
@@ -135,13 +129,13 @@ fn nonempty_string(d: crate::json::JsonDocument, id: i64) -> bool
 
 // role "user": open = nonblank human text (synthetic/ignored parts rejected); a nonblank one begins a turn at isoOf(created); a blank one
 // only clears open (no skip_user).
-fn feed_user(d: crate::json::JsonDocument, info: i64, parts: i64, inout st: [i64], inout sl: [i64], inout buf: [u8], inout mt: [i64]) -> i64 ! alloc
-  requires len(st) == 4 && len(sl) == 1600 && len(mt) == 4 && len(buf) <= 13116800 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
-  requires (mt[0] == 0 || mt[0] == 1) && -1 <= mt[1] && -1 <= mt[2]
+fn feed_user(d: crate::json::JsonDocument, info: i64, parts: i64, inout st: [i64], inout sl: [i64], inout buf: [u8], inout mt: Attach) -> i64 ! alloc
+  requires len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+  requires -1 <= mt.pid && -1 <= mt.mid
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-  ensures len(st) == 4 && len(sl) == 1600 && len(mt) == 4 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
-  ensures (mt[0] == 0 || mt[0] == 1) && -1 <= mt[1] && -1 <= mt[2]
+  ensures len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+  ensures -1 <= mt.pid && -1 <= mt.mid
   ensures -1 <= result && result <= 1
   ensures st[0] == old(st)[0] || st[0] == old(st)[0] + 1
   ensures result == 1 ==> st[0] == old(st)[0]
@@ -151,26 +145,26 @@ fn feed_user(d: crate::json::JsonDocument, info: i64, parts: i64, inout st: [i64
   let ids: [i64] = crate::util::elements(d, parts);
   let txt: str = text_of(d, ids, true);
   if crate::text::is_blank(txt) {
-    mt[0] = 0;  // MUT:M13 => mt[0] = mt[0];
+    mt.open = false;  // MUT:M13 => mt.open = mt.open;
     return 0;
   }
   let at: str = iso_str(d, stamp(d, info, "created"));
   if len(at) == 1 { return -1; }
   if 65584 * (st[0] % 200) + 65584 > len(buf) { return 1; }
   crate::turns::begin(inout st, inout sl, inout buf, txt, at);
-  mt[0] = 1;
+  mt.open = true;
   return 0;
 }
 
 // role "assistant": a summary assistant contributes nothing; otherwise the model pair is updated whether or not a turn is open; while
 // open, answer(textOf(parts, false), isoOf(completed)) even for empty text, then one tool call per object tool part.
-fn feed_assistant(d: crate::json::JsonDocument, info: i64, parts: i64, inout st: [i64], inout sl: [i64], inout buf: [u8], inout mt: [i64]) -> i64 ! alloc
-  requires len(st) == 4 && len(sl) == 1600 && len(mt) == 4 && len(buf) <= 13116800 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
-  requires (mt[0] == 0 || mt[0] == 1) && -1 <= mt[1] && -1 <= mt[2]
+fn feed_assistant(d: crate::json::JsonDocument, info: i64, parts: i64, inout st: [i64], inout sl: [i64], inout buf: [u8], inout mt: Attach) -> i64 ! alloc
+  requires len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+  requires -1 <= mt.pid && -1 <= mt.mid
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-  ensures len(st) == 4 && len(sl) == 1600 && len(mt) == 4 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
-  ensures (mt[0] == 0 || mt[0] == 1) && -1 <= mt[1] && -1 <= mt[2]
+  ensures len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+  ensures -1 <= mt.pid && -1 <= mt.mid
   ensures -1 <= result && result <= 1
   ensures st[0] == old(st)[0]
   ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
@@ -180,11 +174,11 @@ fn feed_assistant(d: crate::json::JsonDocument, info: i64, parts: i64, inout st:
   if crate::access::boolean(d, sm) == 1 { return 0; }
   let pm: i64 = crate::access::field(d, info, "providerID");
   let mi: i64 = crate::access::field(d, info, "modelID");
-  if nonempty_string(d, pm) && nonempty_string(d, mi) {  // MUT:M14 => if mt[0] == 1 && nonempty_string(d, pm) && nonempty_string(d, mi) {
-    mt[1] = pm;
-    mt[2] = mi;
+  if nonempty_string(d, pm) && nonempty_string(d, mi) {  // MUT:M14 => if mt.open && nonempty_string(d, pm) && nonempty_string(d, mi) {
+    mt.pid = pm;
+    mt.mid = mi;
   }
-  if mt[0] != 1 { return 0; }
+  if !mt.open { return 0; }
   let ids: [i64] = crate::util::elements(d, parts);
   let txt: str = text_of(d, ids, false);
   let at: str = iso_str(d, stamp(d, info, "completed"));
@@ -196,13 +190,13 @@ fn feed_assistant(d: crate::json::JsonDocument, info: i64, parts: i64, inout st:
 }
 
 // One validated message object of messages[]. Unknown roles change nothing.
-pub fn feed(d: crate::json::JsonDocument, msg: i64, inout st: [i64], inout sl: [i64], inout buf: [u8], inout mt: [i64]) -> i64 ! alloc
-  requires len(st) == 4 && len(sl) == 1600 && len(mt) == 4 && len(buf) <= 13116800 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
-  requires (mt[0] == 0 || mt[0] == 1) && -1 <= mt[1] && -1 <= mt[2]
+pub fn feed(d: crate::json::JsonDocument, msg: i64, inout st: [i64], inout sl: [i64], inout buf: [u8], inout mt: Attach) -> i64 ! alloc
+  requires len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+  requires -1 <= mt.pid && -1 <= mt.mid
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-  ensures len(st) == 4 && len(sl) == 1600 && len(mt) == 4 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
-  ensures (mt[0] == 0 || mt[0] == 1) && -1 <= mt[1] && -1 <= mt[2]
+  ensures len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+  ensures -1 <= mt.pid && -1 <= mt.mid
   ensures -1 <= result && result <= 1
   ensures st[0] == old(st)[0] || st[0] == old(st)[0] + 1
   ensures result == 1 ==> st[0] == old(st)[0]
