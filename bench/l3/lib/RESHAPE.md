@@ -1381,3 +1381,37 @@ All after the last code change (F1 / F4 from the structure comparison).
      (shared packages; run all consumers) and 4.3h-Q (move `framing` to `pkgs` with the Qwen consumer).
   5. req port (REQ-PORT) once P10H passes on both backends.
 
+
+## Step 4.4d: Grok rows 4.3c-T, B, G and Qwen rows 4.3e-S, L, part of D
+
+- `grok/RESHAPE.md` §3e and `qwen/RESHAPE.md` §3b. Changed: `grok/entry.pruv`, `qwen/import.pruv`,
+  `qwen/chain.pruv`, and two shared packages, `pkgs/transport` (`receive_grow`; dead `grow_line` removed) and
+  `pkgs/turns` (dead `begin3`, `answer3`, `put_nl_span`, `put_pad`, `write_span` removed after a grep of every
+  fragment). Every consumer of both packages was rerun.
+- Closed: 4.3c-T (the stamp is resolved after the user filters, `at` / `at_view` lend a canonical stamp), 4.3c-G
+  (over-cap piece fails before any copy), 4.3e-S (the ISO bytes go straight to the log), 4.3e-L (leaf chosen in
+  `resolve` as `last_role.or(last_entry)`; 7-word slots).
+- Partly closed: 4.3c-B (one `begin2` call site; rows 4.4d-CB and 4.4d-CL), 4.3e-D (answers and tools only for an
+  attached turn; the scan still decodes every entry).
+- One Codex structure comparison (gpt-6.2-astra, high; Codex 2 account, the default was at its limit). Applied: Grok
+  reads `prompt_index` only in the no-query branch. Kept as rows: 4.4d-RC, PO, T0 (Grok), 4.4d-QS, QA, QC (Qwen).
+- Tooling note: `/opt/homebrew/bin/timeout` is not installed on this machine; the 300 s cap used a perl `alarm`
+  wrapper. qwen `q_mutants.py` has no `--check` (markers counted by hand; the full run was also done), and qwen
+  `q.py` loops over the py pairs too (run with `PAIRS` set to the rs pairs).
+
+### Rows open after 4.4d
+
+- New (language): 4.4d-CB (no char-boundary fact from an adjacent ASCII byte).
+- New (bench): 4.4d-CL (Grok content bound), 4.4d-LC (lazy line clear in `pkgs/transport`), 4.4d-TD (`turns`
+  `finish2` / `finish_ref` / `empty_buffer` without callers, cited by comments), 4.4d-RC, 4.4d-PO, 4.4d-T0,
+  4.4d-QS, 4.4d-QA, 4.4d-QC.
+- Still open from 4.3e: 4.3e-D (scan-time decode), 4.3e-J and 4.3e-F (need a decode-into-buffer form in
+  `pkgs/jstr` / `pkgs/access`; shared, all consumers).
+- Still open from 4.4c and before: as listed after 4.4c (minus 4.3c-T, 4.3c-G, 4.3e-S, 4.3e-L).
+- Next:
+  1. Codex bench rows 4.3f-A, 4.3f-O, 4.3f-N, 4.3f-K, 4.3f-L, 4.3f-T, 4.3f-P, 4.3f-R, 4.3f-D (`codex/` only).
+  2. 4.3f-B, 4.3f-E, 4.3f-F (shared modules; run all consumers).
+  3. OpenCode leftovers: 4.4b-SP first (spawn cwd / argv checked against the TypeScript reference), then 4.3g-T2,
+     4.4b-NC, 4.3g-A2 / A3, 4.3g-K3, 4.4b-CV.
+  4. Then Qwen 4.3e-J / 4.3e-F with one decode-into-buffer form, 4.3e-D, and the 4.4d transport rows (LC, PO, RC)
+     in one `pkgs/transport` change.

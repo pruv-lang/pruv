@@ -191,23 +191,6 @@ pub fn tail_info(data: [u8], cut_before: bool) -> crate::boundary::ImportResult 
 }
 
 
-enum Stamp { At(text: str), Bad(kind: i64) }
-
-fn stamp_of(doc: crate::json::JsonDocument) -> Stamp ! alloc
-{
-  let root: i64 = crate::access::root(doc);
-  let tf: i64 = crate::access::field(doc, root, "timestamp");
-  if tf == -1 { return Stamp::At(""); }
-  if tf < 0 { return Stamp::Bad(tf); }
-  let iso: crate::time::Iso = crate::time::iso_of(doc, tf);
-  if iso.status < 0 { return Stamp::Bad(iso.status); }
-  if iso.status != 0 { return Stamp::At(""); }
-  if len(iso.text) != 24 { return Stamp::Bad(-4); }
-  let s: str = crate::jstr::adapter_probe(iso.text);
-  if len(s) != 24 { return Stamp::Bad(-4); }
-  return Stamp::At(move s);
-}
-
 // One record per Object boundary or replay operation (hand: the slot vector). Skip frames and non-user drops
 // are no-ops. A record is three words: tag and two fields. For Object they hold ordinal/start; text operations
 // refer to a span in the separate UTF-8 buffer. Both buffers grow per entry.
@@ -285,16 +268,21 @@ fn record_answers(doc: crate::json::JsonDocument, c: i64, inout log: Events) -> 
   return true;
 }
 
+// hand iso(timestamp): the 24 formatted bytes go straight into the log (no str of their own).
 fn write_stamp(doc: crate::json::JsonDocument, inout log: Events) -> bool ! alloc
 {
-  let sv: Stamp = stamp_of(doc);
-  match sv {
-    Stamp::At(x) => {
-      if len(x) == 0 { return true; }
-      return write_text(inout log, 4, x);
-    }
-    Stamp::Bad(e) => { return false; }
-  }
+  let root: i64 = crate::access::root(doc);
+  let tf: i64 = crate::access::field(doc, root, "timestamp");
+  if tf == -1 { return true; }
+  if tf < 0 { return false; }
+  let iso: crate::time::Iso = crate::time::iso_of(doc, tf);
+  if iso.status < 0 { return false; }
+  if iso.status != 0 { return true; }
+  let start: i64 = len(log.text);
+  let n: i64 = len(iso.text);
+  if n > 4294967295 - start { return false; }
+  arr_append(inout log.text, iso.text, 0, n);
+  return write_event(inout log, Event { kind: 4, a: start, b: n });
 }
 
 // hand: the Action arms of window_import's replay, recorded per entry. A real user records its prompt and
@@ -397,10 +385,11 @@ fn replay(log: Events, chain: crate::chain::Chain, selected: [u8], inout st: [i6
         if chosen { return Replay { model: move model, defect: start }; }
       }
       8 => {
-        if chosen { crate::turns::tool(inout st, inout sl, 1); }
+        if chosen && st[1] == 1 { crate::turns::tool(inout st, inout sl, 1); }
       }
       _ => {
-        if chosen {
+        // hand: answer text and its stamp are read only for an attached turn (collector.attached)
+        if chosen && (event.kind != 7 || st[1] == 1) {
           if event.a < 0 || event.b < 0 || event.a > len(log.text) || event.b > len(log.text) - event.a {
             return Replay { model: move model, defect: 0 };
           }
@@ -448,7 +437,7 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
   while offset < len(data)
     invariant 0 <= ordinal && ordinal <= offset
     invariant 0 <= offset && offset <= len(data) && len(data) <= 8388608
-    invariant len(index.arena) <= 8388608 && len(index.slots) <= 50331654
+    invariant len(index.arena) <= 8388608 && len(index.slots) <= 50331655
     invariant len(title) <= 50331648
     decreases len(data) - offset
   {
