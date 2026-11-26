@@ -3198,6 +3198,15 @@ impl<'a> Gen<'a> {
             // P9a-3: Rust's own value `if`; only the chosen block runs
             Expr::Call(c) if crate::ast::ValueIf::matches(c) => Ok(format!("(if {} {{ {} }} else {{ {} }})",
                 self.c(&c.args[0])?, self.c(&c.args[1])?, self.c(&c.args[2])?)),
+            Expr::Call(c) if crate::ast::ValueMatch::matches(c) => {
+                // P9a-5: Rust's own value `match`; only the chosen arm runs
+                let mut out = format!("(match {} {{", self.c(&c.args[0])?);
+                for (a, v) in crate::ast::ValueMatch::arms(c).iter().zip(c.args[1..].iter()) {
+                    out.push_str(&format!(" {} => {{ {} }},", value_arm_pattern(a), self.c(v)?));
+                }
+                out.push_str(" })");
+                Ok(out)
+            }
             Expr::VariantField(x) if self.is_ext(expr_ty(&x.value).as_deref()) || self.g9_real_path(&x.value) => {
                 let fty = expr_ty(e);
                 if self.is_ext(fty.as_deref()) || fty.as_deref().map_or(false, |t| is_array_name(t) || t == "str") {
@@ -5491,6 +5500,15 @@ pruv_hi <= (pruv_b.len() as i128) && \
             Expr::InoutArg(_) => Err("G5 inout argument reached the Rust generator".to_string()),
             Expr::Call(c) if crate::ast::ValueIf::matches(c) => Ok(format!("(if {} {{ {} }} else {{ {} }})",
                 self.e(&c.args[0])?, self.e(&c.args[1])?, self.e(&c.args[2])?)),
+            Expr::Call(c) if crate::ast::ValueMatch::matches(c) => {
+                // P9a-5: Rust's own value `match`; only the chosen arm runs
+                let mut out = format!("(match {} {{", self.e(&c.args[0])?);
+                for (a, v) in crate::ast::ValueMatch::arms(c).iter().zip(c.args[1..].iter()) {
+                    out.push_str(&format!(" {} => {{ {} }},", value_arm_pattern(a), self.e(v)?));
+                }
+                out.push_str(" })");
+                Ok(out)
+            }
             Expr::IntLit(x) => {
                 // P7: char/byte literals and constant uses keep the hand-Rust spelling
                 match &x.kind {
@@ -8457,4 +8475,19 @@ fn alias_name_free(name: &str) -> bool {
         "HashMap", "HashSet", "BTreeMap", "Rc", "Arc", "Cell", "RefCell", "Ordering", "Self",
     ];
     !name.starts_with("Pruv") && !STD_NAMES.contains(&name)
+}
+
+/// P9a-5: the Rust pattern of a value `match` arm (as a statement match arm prints it).
+fn value_arm_pattern(a: &crate::ast::ValueArm) -> String {
+    let name = match &a.enum_name {
+        None => a.ctor.clone(),
+        Some(en) => format!("{}::{}", en, a.ctor),
+    };
+    if a.binders.is_empty() && a.enum_name.is_none() && a.ctor == "Ok" {
+        "Ok(())".to_string()
+    } else if a.binders.is_empty() {
+        name
+    } else {
+        format!("{}({})", name, a.binders.join(", "))
+    }
 }

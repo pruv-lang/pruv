@@ -1,0 +1,47 @@
+// P9a-5: a value `match` of an owned type (a string, an array, a collection, an extended struct). Every arm is a new
+// value (a call, a literal, a constructor or a `move`); only the chosen arm allocates, and the result is owned by a
+// binding or freed at the end of the statement when it is only read. Arm binders are in scope in their arm only.
+struct Box2 { name: [i64], xs: [i64] }
+
+fn mk(n: i64) -> [i64] ! alloc
+  requires 0 <= n && n <= 10
+  ensures len(result) == n
+{
+  return alloc(n, 7);
+}
+
+fn label(o: Option<i64>) -> String ! alloc
+  ensures len(result) <= 5
+{
+  return match o { Some(v) => string_from("yes"), None => string_from("no!no") };
+}
+
+fn pick(o: Option<i64>, n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 5
+{
+  let mut x: [i64] = mk(n);
+  let y: [i64] = match o { Some(v) => { move x }, None => mk(n + 2) };
+  return len(y) * 10 + len(label(o));
+}
+
+fn boxed(r: Result<i64, i64>) -> Box2 ! alloc {
+  return match r {
+    Ok(v) => Box2 { name: mk(2), xs: mk(2) },
+    Err(e) => { if 0 <= e && e <= 10 { Box2 { name: mk(3), xs: mk(e) } } else { Box2 { name: mk(0), xs: mk(0) } } },
+  };
+}
+
+fn vec_of(o: Option<i64>) -> Vec<i64> ! alloc {
+  let mut v: Vec<i64> = vec_new::<i64>();
+  v = vec_push::<i64>(move v, 4);
+  return match o { Some(k) => { move v }, None => vec_new::<i64>() };
+}
+
+fn run() -> () ! io, alloc {
+  print(pick(Some(1), 3));
+  print(pick(None, 3));
+  print(len(match Some(1) { Some(v) => mk(1), None => mk(9) }) + len(match None { Some(v) => label(Some(v)), None => label(None) }));
+  let b: Box2 = boxed(Err(4));
+  print(len(b.name) * 10 + len(b.xs));
+  print(len(vec_of(Some(0))) * 10 + len(vec_of(None)));
+}

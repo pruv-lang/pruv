@@ -1,0 +1,46 @@
+// P9a-5: a value `match` evaluates its scrutinee once, then only the chosen arm, in source order with the operands
+// around it: `a() + (match s() { Some(v) => b(v), None => d() })` calls a, s, then exactly one of b and d.
+fn a(n: i64) -> i64 ! io
+  requires -100 < n && n < 100
+  ensures result == n
+{
+  print(1);
+  return n;
+}
+
+fn b(n: i64) -> i64 ! io
+  requires -100 < n && n < 100
+  ensures result == n * 2
+{
+  print(2);
+  return n * 2;
+}
+
+fn d(n: i64) -> i64 ! io
+  requires -100 < n && n < 100
+  ensures result == n * 3
+{
+  print(3);
+  return n * 3;
+}
+
+fn scr(c: bool, n: i64) -> Option<i64> ! io
+  ensures c ==> result == Some(n)
+  ensures !c ==> result == None
+{
+  print(0);
+  return if c { Some(n) } else { None };
+}
+
+fn mix(c: bool, n: i64) -> i64 ! io
+  requires -40 < n && n < 40
+{
+  return a(n) + (match scr(c, n) { Some(v) => b(v), None => d(n) }) + a(n + 1);
+}
+
+fn run() -> () ! io {
+  print(mix(true, 5));
+  print(mix(false, 5));
+  let x: i64 = match scr(false, 1) { Some(v) => { b(v) }, None => match scr(true, 2) { Some(w) => d(w), None => a(3) } };
+  print(x);
+}

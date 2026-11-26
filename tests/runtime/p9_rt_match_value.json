@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["1412", "-998595", "20001900"], "alloc_balance": true, "gen_contains": ["let v: u8 = (match o { Some(x) => { 200u8 }, None => { k }, });"]}

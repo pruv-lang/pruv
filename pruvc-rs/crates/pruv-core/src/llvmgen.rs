@@ -1715,6 +1715,8 @@ pub struct FnGen<'a> {
     frames: Vec<(HashSet<String>, HashSet<String>, bool, bool)>,
     /// P3: names the copy of the let / assignment being lowered moves (move_src)
     moving: HashSet<String>,
+    /// P9a-5: the result slots of the value `match`es being lowered, with the values their arms stored
+    vmatch: Vec<(Slot, Vec<V>)>,
     /// P3 M3: String locals whose string_to_str in the return result position takes the buffer (ret_takable)
     ret_take: HashSet<String>,
     /// P3 M3: the String local the let / assignment being lowered takes (take_src)
@@ -1771,6 +1773,7 @@ impl<'a> FnGen<'a> {
             ret_moved: HashMap::new(),
             frames: Vec::new(),
             moving: HashSet::new(),
+            vmatch: Vec::new(),
             ret_take: HashSet::new(),
             take_let: HashSet::new(),
             unbox_next: false,
@@ -5353,6 +5356,48 @@ impl<'a> FnGen<'a> {
         Ok(v)
     }
 
+    /// P9a-5: `match v { P => e, .. }` as a value. It is lowered as the statement `match` whose arm k ends with the
+    /// marker `@arm_value(ek)`, which stores the owned arm value into a result slot, so only the chosen arm runs and
+    /// its temporaries end inside the arm. The joined value is handled as for a value `if`.
+    fn value_match(&mut self, x: &Call, owned: bool) -> R<V> {
+        let ty = need_ty(&x.ty)?;
+        let kind = vkind(&ty);
+        let slot = self.new_slot("vmatch", &ty)?;
+        self.vmatch.push((slot.clone(), Vec::new()));
+        let moving = std::mem::take(&mut self.moving);
+        let r = self.stmt(&Stmt::Match(crate::ast::ValueMatch::as_match(x)));
+        self.moving = moving;
+        let (slot, arms) = self.vmatch.pop().ok_or_else(|| IDX_ERR.to_string())?;
+        r?;
+        let mut v = self.load(&slot)?;
+        if kind == Kind::Arr {
+            let first = arms.first().ok_or_else(|| IDX_ERR.to_string())?;
+            if arms.iter().any(|a| a.layout != first.layout) {
+                return Err("llvmgen: value match arms with different array layouts".into());
+            }
+            v.layout = first.layout;
+            v.rng = arms.iter().map(|a| a.rng).reduce(|a, b| a.zip(b).map(|(a, b)| (a.0.min(b.0), a.1.max(b.1)))).flatten();
+            if v.ty.is_none() {
+                v.ty = first.ty.clone();
+            }
+        }
+        let drops = matches!(kind, Kind::Arr | Kind::Coll) || (kind == Kind::Agg && self.is_ext(&ty));
+        if drops && !owned {
+            self.temps.last_mut().ok_or_else(|| IDX_ERR.to_string())?.push(v.clone());
+        }
+        Ok(v)
+    }
+
+    /// P9a-5: the arm value of a value `match` goes to the innermost result slot.
+    fn arm_value(&mut self, x: &Call) -> R<V> {
+        let v = self.ev(&x.args[0], true)?;
+        let (slot, arms) = self.vmatch.last_mut().ok_or_else(|| IDX_ERR.to_string())?;
+        let slot = slot.clone();
+        arms.push(v.clone());
+        self.store(&slot, &v)?;
+        Ok(V::unit())
+    }
+
     pub fn shortcircuit(&mut self, l: &str, is_or: bool, rhs: &dyn Fn(&mut FnGen<'a>) -> R<String>) -> R<String> {
         let lcur = self.cur.clone();
         let rl = self.label("rhs");
@@ -5546,6 +5591,8 @@ impl<'a> FnGen<'a> {
                 Ok(V::with_b(Kind::Opt, if x.name == "Some" || x.name == "Ok" { "true" } else { "false" }, v.a))
             }
             Expr::Call(x) if crate::ast::ValueIf::matches(x) => self.value_if(x, owned),
+            Expr::Call(x) if crate::ast::ValueMatch::matches(x) => self.value_match(x, owned),
+            Expr::Call(x) if crate::ast::ValueMatch::is_yield(x) => self.arm_value(x),
             Expr::Call(x) => self.ev_call(x, owned, self.m.storage.layout_of(e), self.m.storage.range_of(e)),
             Expr::StructLit(x) => {
                 if self.is_ext(&x.name) {

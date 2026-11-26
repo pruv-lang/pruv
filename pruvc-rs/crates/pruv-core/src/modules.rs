@@ -1325,6 +1325,17 @@ impl<'a> Rs<'a> {
             if PlaceIf::matches(call) || crate::ast::ValueIf::matches(call) {
                 return call.args.iter_mut().try_for_each(|arg| self.rexpr(arg));
             }
+            if crate::ast::ValueMatch::matches(call) {
+                // P9a-5: an arm pattern names its enum like a statement match arm does
+                let mut arms = crate::ast::ValueMatch::arms(call);
+                for a in arms.iter_mut() {
+                    if let Some(en) = &a.enum_name {
+                        a.enum_name = Some(self.local_or_path_type(en, call.line, call.col)?);
+                    }
+                }
+                call.name = crate::ast::ValueMatch::rename(&arms);
+                return call.args.iter_mut().try_for_each(|arg| self.rexpr(arg));
+            }
         }
         // `crate::m::Enum::Variant(args)` parses as a Call: a variant constructor replaces the node
         let mut replace: Option<Expr> = None;

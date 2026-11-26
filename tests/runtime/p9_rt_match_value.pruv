@@ -1,0 +1,52 @@
+// P9a-5: `match v { P => { e } .. }` as a value. Every arm is proved under its pattern guard with its binders in
+// scope (a dangerous index in an arm needs only that arm's facts), the expected type types every arm, and a bare
+// arm value ends with `,`.
+enum Shape { Circle(r: i64), Rect(w: i64, h: i64), Empty }
+
+fn area(s: Shape) -> i64
+  requires !is_variant(s, Shape::Circle) || (0 <= variant_field(s, Shape::Circle, r) && variant_field(s, Shape::Circle, r) < 1000)
+  ensures is_variant(s, Shape::Empty) ==> result == 0
+  ensures 0 <= result && result < 3000000
+{
+  return match s {
+    Shape::Circle(r) => { 3 * r * r },
+    Shape::Rect(w, h) => { if 0 <= w && w < 1000 && 0 <= h && h < 1000 { w * h } else { 0 } },
+    Shape::Empty => 0,
+  };
+}
+
+fn at(a: [i64], o: Option<i64>) -> i64
+  requires forall j in 0..len(a): 0 <= a[j] && a[j] < 10
+  ensures o == None ==> result == -1
+  ensures -2 <= result && result < 10
+{
+  return match o {
+    Some(i) => { if 0 <= i && i < len(a) { a[i] } else { -2 } },
+    None => -1,
+  };
+}
+
+fn small(o: Option<i64>, k: u8) -> u8 {
+  let v: u8 = match o { Some(x) => 200, None => k };
+  return v;
+}
+
+fn res(r: Result<i64, i64>) -> i64
+  requires r == Ok(0) || r == Ok(1) || r == Ok(2) || r == Err(1) || r == Err(5)
+  ensures r == Ok(2) ==> result == 20
+  ensures -5 <= result && result <= 20
+{
+  return match r { Ok(v) => v * 10, Err(e) => 0 - e };
+}
+
+fn run(i: i64) -> i64 ! alloc
+  requires 0 <= i && i < 3
+{
+  let a: [i64] = alloc(3, 4);
+  let s: Shape = if i == 0 { Shape::Circle(2) } else if i == 1 { Shape::Rect(i, 5) } else { Shape::Empty };
+  let o: Option<i64> = if i < 2 { Some(i) } else { None };
+  let r: Result<i64, i64> = if i % 2 == 0 { Ok(i) } else { Err(i) };
+  let u: Option<i64> = if i == 2 { Some(9) } else { None };
+  return area(s) + at(a, o) * 100 + (if small(u, 9) == 9 { 1 } else if small(u, 9) == 200 { 2 } else { 0 }) * 1000
+    + res(r) * 1000000;
+}

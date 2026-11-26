@@ -357,6 +357,9 @@ struct Checker {
     match_movable: HashSet<String>,
     /// G-DB16-1: every binder of an enclosing match arm (a view, never an owner)
     arm_binders: HashSet<String>,
+    /// P9a-5: per open value `match`: the arm type (fixed by `want` or the first arm that is not a bare literal),
+    /// the arms whose bare literal waits for it, and the number of arms checked so far.
+    value_arms: Vec<(Option<GType>, Vec<usize>, usize)>,
     collection_records: std::cell::RefCell<HashSet<String>>,
     nested_records: HashSet<String>,
     holder_records: HashSet<String>,
@@ -1239,6 +1242,14 @@ fn inout_statement_calls<'a>(
             inout_statement_calls(&c.args[2], true, calls);
             return;
         }
+        if crate::ast::ValueMatch::matches(c) {
+            // P9a-5: only one arm runs
+            inout_statement_calls(&c.args[0], conditional, calls);
+            for arm in &c.args[1..] {
+                inout_statement_calls(arm, true, calls);
+            }
+            return;
+        }
     }
     for child in crate::refine::kids(e) {
         inout_statement_calls(child, conditional, calls);
@@ -1381,6 +1392,7 @@ impl Checker {
             array_replace: None,
             match_movable: HashSet::new(),
             arm_binders: HashSet::new(),
+            value_arms: Vec::new(),
             collection_records: Default::default(),
             nested_records: HashSet::new(),
             holder_records: HashSet::new(),
@@ -4709,6 +4721,11 @@ impl Checker {
                 self.expect(&mut s.cond, &boolt(), scope, true, None)?;
                 self.ckind = "code";
             }
+            Stmt::ExprStmt(s) if matches!(&s.expr, Expr::Call(c) if crate::ast::ValueMatch::is_yield(c)) => {
+                // P9a-5: an arm of a value `match`, checked in the arm's scope (binders in place)
+                let Expr::Call(c) = &mut s.expr else { unreachable!() };
+                self.value_match_arm(&mut c.args[0], scope)?;
+            }
             Stmt::ExprStmt(s) => {
                 if !matches!(s.expr, Expr::Call(_)) {
                     if let Some(m) = first_field_move(&s.expr) {
@@ -5751,7 +5768,7 @@ impl Checker {
             return self.expect(e, ty, scope, c, None).map(|_| false);
         }
         // R-6w-2: the parameter type is the expected type of each value `if` arm (a narrow literal, a tuple literal)
-        if (is_narrow(ty) || crate::gtype::is_tuple_name(&ty.name)) && matches!(e, Expr::Call(x) if ValueIf::matches(x)) {
+        if (is_narrow(ty) || crate::gtype::is_tuple_name(&ty.name)) && matches!(e, Expr::Call(x) if ValueIf::matches(x) || crate::ast::ValueMatch::matches(x)) {
             return self.expect(e, ty, scope, c, None).map(|_| false);
         }
         let got = if borrow_vector && self.recursive_vec_element(ty) {
@@ -5882,6 +5899,11 @@ impl Checker {
         if matches!(e, Expr::Call(call) if crate::ast::ValueIf::matches(call)) {
             // P9a-3: the expected type types every arm (a narrow literal arm takes it, not the first arm's i64)
             let t = self.value_if(e, Some(ty), scope, contract)?;
+            return self.check_expected_type(e, ty, op, t);
+        }
+        if matches!(e, Expr::Call(call) if crate::ast::ValueMatch::matches(call)) {
+            // P9a-5: the expected type types every arm
+            let t = self.value_match(e, Some(ty), scope, contract)?;
             return self.check_expected_type(e, ty, op, t);
         }
         if let (Expr::Call(call), Some((el, _))) = (&mut *e, ty.fixed_parts()) {
@@ -6493,6 +6515,9 @@ impl Checker {
                 ))
             }
             Expr::Call(x) if crate::ast::ValueIf::matches(x) => self.value_if(e, None, scope, c),
+            Expr::Call(x) if crate::ast::ValueMatch::matches(x) => self.value_match(e, None, scope, c),
+            Expr::Call(x) if crate::ast::ValueMatch::is_yield(x) => Err(terr(x.line, x.col, "syntax",
+                "an arm value outside a value `match`", "")),
             Expr::Call(x) => {
                 let t = self.call(x, scope, c)?;
                 if let Some(xe) = self.x_pending.take() {
@@ -6531,14 +6556,7 @@ impl Checker {
             "use an `if` statement that assigns a `let mut` local"))?;
         if owned {
             for arm in [&*then, &*els] {
-                let fresh = match arm {
-                    // a call result borrowed from an argument (`from`, a `ref` result) is not a new value
-                    Expr::Call(x) => !PlaceIf::matches(x) && !self.funcs.get(&x.name).is_some_and(|f| f.holds_args),
-                    Expr::Move(m) => m.fields.is_empty(),
-                    Expr::StrLit(_) | Expr::StructLit(_) | Expr::EnumCtor(_) | Expr::Ctor(_) => true,
-                    _ => false,
-                };
-                if !fresh {
+                if !self.fresh_arm(arm) {
                     return Err(terr(arm.line(), arm.col(), "value_branch_owned",
                         format!("an arm of a value `if` of type {} must be a new value", tn(&t)),
                         "write `move x` or `copy(x)`, or call a function"));
@@ -6547,6 +6565,107 @@ impl Checker {
         }
         call.ty = Some(t.to_key());
         Ok(t)
+    }
+
+    /// P9a-5: a value `match`. The scrutinee is a copied enum, `Option` or `Result` (no owned payload); the arms are
+    /// checked through the statement `match` (exhaustiveness, duplicates, binders scoped to the arm), each arm body
+    /// being the marker `@arm_value(e)`. With `want` every arm is checked against it, otherwise the first arm that is
+    /// not a bare literal fixes the type and the bare literal arms are checked against it afterwards.
+    fn value_match(&mut self, e: &mut Expr, want: Option<&GType>, scope: &Scope, c: bool) -> Res<GType> {
+        let Expr::Call(call) = e else { unreachable!("value match") };
+        let (line, col) = (call.line, call.col);
+        if c {
+            return Err(terr(line, col, "value_branch_context", "a value `match` is not allowed in a contract",
+                "write the cases with `is` tests and `==>`"));
+        }
+        self.static_lit = false;
+        let mut m = crate::ast::ValueMatch::as_match(call);
+        if let Expr::Call(sc) = &m.scrutinee {
+            if !self.funcs.contains_key(&sc.name) && matches!(sc.name.as_str(), "map_get" | "map_get_mut" | "map_take" | "vec_at_mut" | "vec_get") {
+                return Err(terr(sc.line, sc.col, "value_branch_type",
+                    format!("a value `match` on `{}` is not supported yet", sc.name),
+                    "bind the result with `let` first, or use a `match` statement"));
+            }
+        }
+        let st = self.match_scrutinee(&mut m.scrutinee, scope)?;
+        if self.value_branch_kind(&st) != Some(false) || self.is_extended(&st) {
+            return Err(terr(line, col, "value_branch_type",
+                format!("a value `match` on {} is not supported yet (the scrutinee holds owned or borrowed data)", tn(&st)),
+                "use a `match` statement that assigns a `let mut` local"));
+        }
+        self.value_arms.push((want.cloned(), Vec::new(), 0));
+        let mut sc = scope.clone();
+        let r = self.match_arms(&mut m, &mut sc, st);
+        let (t, mut deferred, _) = self.value_arms.pop().expect("value arm frame");
+        r?;
+        let Expr::Call(call) = e else { unreachable!("value match") };
+        call.args[0] = m.scrutinee;
+        for (k, a) in m.arms.into_iter().enumerate() {
+            let Some(Stmt::ExprStmt(ExprStmt { expr: Expr::Call(mut y), .. })) = a.body.into_iter().last() else {
+                unreachable!("value match arm body")
+            };
+            call.args[k + 1] = y.args.pop().expect("arm value");
+        }
+        let t = match t {
+            Some(t) => t,
+            None => {
+                // every arm is a bare literal: the first fixes the type
+                deferred.retain(|&k| k != 0);
+                self.expr(&mut call.args[1], scope, c)?
+            }
+        };
+        for k in deferred {
+            self.static_lit = false;
+            self.expect(&mut call.args[k + 1], &t, scope, c, None)?;
+        }
+        let owned = self.value_branch_kind(&t).ok_or_else(|| terr(line, col, "value_branch_type",
+            format!("a value `match` of type {} is not supported yet", tn(&t)),
+            "use a `match` statement that assigns a `let mut` local"))?;
+        if owned {
+            for arm in &call.args[1..] {
+                if !self.fresh_arm(arm) {
+                    return Err(terr(arm.line(), arm.col(), "value_branch_owned",
+                        format!("an arm of a value `match` of type {} must be a new value", tn(&t)),
+                        "write `move x` or `copy(x)`, or call a function"));
+                }
+            }
+        }
+        call.ty = Some(t.to_key());
+        Ok(t)
+    }
+
+    /// P9a-5: one arm value of the innermost value `match`, in the arm's scope.
+    fn value_match_arm(&mut self, e: &mut Expr, scope: &Scope) -> Res<()> {
+        let frame = self.value_arms.last_mut().expect("value arm frame");
+        let k = frame.2;
+        frame.2 += 1;
+        let want = frame.0.clone();
+        self.static_lit = false;
+        match want {
+            Some(t) => {
+                self.want_alloc(e, &t);
+                self.expect(e, &t, scope, false, None)?;
+            }
+            None if bare_lit(e) => {
+                self.value_arms.last_mut().expect("value arm frame").1.push(k);
+            }
+            None => {
+                let t = self.expr(e, scope, false)?;
+                self.value_arms.last_mut().expect("value arm frame").0 = Some(t);
+            }
+        }
+        Ok(())
+    }
+
+    /// P9a-3/P9a-5: an arm of an owned value branch must be a new value: a call (not one whose result borrows an
+    /// argument through `from` or a `ref` result), a literal, a constructor or a bare `move x`.
+    fn fresh_arm(&self, arm: &Expr) -> bool {
+        match arm {
+            Expr::Call(x) => !PlaceIf::matches(x) && !self.funcs.get(&x.name).is_some_and(|f| f.holds_args),
+            Expr::Move(m) => m.fields.is_empty(),
+            Expr::StrLit(_) | Expr::StructLit(_) | Expr::EnumCtor(_) | Expr::Ctor(_) => true,
+            _ => false,
+        }
     }
 
     /// P9a-3: Some(true) when a value of `t` owns storage, Some(false) when it is copied, None when a value branch of
@@ -8440,6 +8559,7 @@ fn x_scan_expr(e: &Expr, checker: &Checker) -> Option<String> {
         }
         // R-6w-2: a value `if` is not a contract expression, so a body using one is not expanded
         Expr::Call(c) if ValueIf::matches(c) => Some("it uses a value `if`".into()),
+        Expr::Call(c) if crate::ast::ValueMatch::matches(c) => Some("it uses a value `match`".into()),
         Expr::Call(c) => {
             if checker.funcs.contains_key(&c.name) || c.name == "len" || is_bit_builtin(&c.name) || matches!(c.name.as_str(), "load_be" | "load_le" | "utf8_valid" | "utf8_valid_span") {
                 c.args.iter().enumerate().find_map(|(i, a)| {

@@ -1,0 +1,7 @@
+// spec: R-6w-6 reject
+// A scrutinee that holds owned data is not supported yet.
+enum N { Named(s: String), Anon }
+
+fn f(n: N) -> i64 {
+  return match n { N::Named(s) => 1, N::Anon => 0 };
+}

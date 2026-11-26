@@ -3233,6 +3233,7 @@ impl<'a> FnVerifier<'a> {
                 let b = self.ev(els, st, &g2, code, env)?;
                 self.place_ite(&c, &a, &b)
             }
+            Expr::Call(x) if ast::ValueMatch::matches(x) => self.value_match(x, st, g, code, env),
             Expr::Call(x) => self.call(e, x, st, g, code, env),
             Expr::StructLit(x) => {
                 if model.is_g9() {
@@ -5764,6 +5765,91 @@ impl<'a> FnVerifier<'a> {
         Ok(())
     }
 
+    /// The test of a match arm on the scrutinee term `v` of type `sty`, with the payload terms and their types.
+    fn arm_test(&self, enum_name: Option<&str>, ctor: &str, v: &Ast, sty: Option<&Ty>) -> R<(Ast, Vec<Ast>, Vec<Ty>)> {
+        let model: &'a Model = self.model;
+        if let Some(en) = enum_name {
+            let ety = match sty {
+                Some(t) if t.name() == en => t.clone(),
+                _ => Ty::User(en.to_string()),
+            };
+            let vf = model.variant_fns(&ety, ctor)?;
+            let vals = vf.accs.iter().map(|acc| acc.apply1(v)).collect();
+            let ftys = model.fields_of(&ety, Some(ctor))?.into_iter().map(|(_, ft)| ft).collect();
+            return Ok((vf.rec.apply1(v), vals, ftys));
+        }
+        let (c, val) = if ctor == "Some" || ctor == "None" {
+            let o = model.opt(sty)?;
+            if ctor == "Some" {
+                (o.is_some.apply1(v), Some(o.sval.apply1(v)))
+            } else {
+                (o.is_none.apply1(v), None)
+            }
+        } else {
+            let o = model.res(sty)?;
+            if ctor == "Ok" {
+                (o.is_ok.apply1(v), o.oval.as_ref().map(|ov| ov.apply1(v)))
+            } else {
+                (o.is_err.apply1(v), Some(o.eval.apply1(v)))
+            }
+        };
+        let vals: Vec<Ast> = val.into_iter().collect();
+        let ft = payload_ty(sty, ctor == "Err");
+        let ftys = vals.iter().map(|_| ft.clone()).collect();
+        Ok((c, vals, ftys))
+    }
+
+    /// P9a-5: a value `match`. Each arm is evaluated under the guard of its pattern with its binders in place, so an
+    /// obligation of an arm that does not run is vacuous; the result is the guarded choice of the arm values.
+    fn value_match(&mut self, x: &ast::Call, st: &mut State, g: &[Ast], code: bool, env: &Env) -> R<Val> {
+        let model: &'a Model = self.model;
+        let sv = self.ev(&x.args[0], st, g, code, env)?;
+        let v = sv.try_ast()?.clone();
+        let sty: Option<Ty> = match &sv {
+            Val::Dt(_, t) => Some(t.clone()),
+            _ => None,
+        };
+        if model.is_g9() {
+            self.observe(st, &v, sty.as_ref(), false)?;
+        }
+        let mut arms: Vec<(Ast, Val)> = Vec::new();
+        for (a, e) in ast::ValueMatch::arms(x).iter().zip(x.args[1..].iter()) {
+            let (cond, vals, ftys) = self.arm_test(a.enum_name.as_deref(), &a.ctor, &v, sty.as_ref())?;
+            let mut ga: Vec<Ast> = g.to_vec();
+            ga.push(cond.clone());
+            let mut aenv = env.clone();
+            let mut saved: Vec<(String, Option<Val>)> = Vec::new();
+            for ((name, val), fty) in a.binders.iter().zip(vals.iter()).zip(ftys.iter()) {
+                let vv = self.field_val(fty, val.clone(), name)?;
+                if model.is_g9() {
+                    if let Val::Dt(da, dt) = &vv {
+                        self.observe(st, da, Some(dt), false)?;
+                    }
+                }
+                let w = if model.is_g9() { self.wf_of_val(fty, &vv)? } else { self.wf_field(fty, val)? };
+                if let Some(w) = w {
+                    st.pc.push(cond.implies(&w)); // the payload facts hold where the arm is chosen
+                }
+                saved.push((name.clone(), st.env.try_get(name).cloned()));
+                aenv.set(name, vv.clone());
+                st.env.set(name, vv);
+            }
+            let r = self.ev(e, st, &ga, code, &aenv);
+            for (name, old) in saved.into_iter().rev() {
+                match old {
+                    Some(v) => st.env.set(&name, v),
+                    None => st.env.remove(&name),
+                }
+            }
+            arms.push((cond, r?));
+        }
+        let (_, mut out) = arms.pop().ok_or("value match without arms")?;
+        while let Some((c, a)) = arms.pop() {
+            out = self.place_ite(&c, &a, &out)?;
+        }
+        Ok(out)
+    }
+
     fn place_ite(&self, cond: &Ast, a: &Val, b: &Val) -> R<Val> {
         let ite = |a: &Ast, b: &Ast| self.z.ite(cond, a, b);
         let arr = |a: &Arr, b: &Arr| a.like(ite(&a.a, &b.a), ite(&a.n, &b.n), &a.name);
@@ -6139,39 +6225,7 @@ impl<'a> FnVerifier<'a> {
                 }
                 let while_head = self.while_heads.get(&(s as *const ast::Match as usize)).cloned();
                 for (arm_no, a) in s.arms.iter().enumerate() {
-                    let cond: Ast;
-                    let vals: Vec<Ast>;
-                    let ftys: Vec<Ty>;
-                    if let Some(en) = &a.enum_name {
-                        let ety = match &sty {
-                            Some(t) if t.name() == en.as_str() => t.clone(),
-                            _ => Ty::User(en.clone()),
-                        };
-                        let vf = model.variant_fns(&ety, &a.ctor)?;
-                        cond = vf.rec.apply1(&v);
-                        vals = vf.accs.iter().map(|acc| acc.apply1(&v)).collect();
-                        ftys = model.fields_of(&ety, Some(&a.ctor))?.into_iter().map(|(_, ft)| ft).collect();
-                    } else {
-                        let (c, val) = if a.ctor == "Some" || a.ctor == "None" {
-                            let o = model.opt(sty.as_ref())?;
-                            if a.ctor == "Some" {
-                                (o.is_some.apply1(&v), Some(o.sval.apply1(&v)))
-                            } else {
-                                (o.is_none.apply1(&v), None)
-                            }
-                        } else {
-                            let o = model.res(sty.as_ref())?;
-                            if a.ctor == "Ok" {
-                                (o.is_ok.apply1(&v), o.oval.as_ref().map(|ov| ov.apply1(&v)))
-                            } else {
-                                (o.is_err.apply1(&v), Some(o.eval.apply1(&v)))
-                            }
-                        };
-                        cond = c;
-                        vals = val.into_iter().collect();
-                        let ft = payload_ty(sty.as_ref(), a.ctor == "Err");
-                        ftys = vals.iter().map(|_| ft.clone()).collect();
-                    }
+                    let (cond, vals, ftys) = self.arm_test(a.enum_name.as_deref(), &a.ctor, &v, sty.as_ref())?;
                     let mut b = st.fork(Some(cond));
                     for ((name, val), fty) in a.binders.iter().zip(vals.iter()).zip(ftys.iter()) {
                         if model.is_g9() {

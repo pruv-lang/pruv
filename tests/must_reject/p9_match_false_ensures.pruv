@@ -1,0 +1,6 @@
+// ensures that holds on the Some arm and fails on the None arm
+fn f(o: Option<i64>) -> i64
+  ensures result >= 0
+{
+  return match o { Some(v) => { if v > 0 { v } else { 0 } }, None => -1 };
+}

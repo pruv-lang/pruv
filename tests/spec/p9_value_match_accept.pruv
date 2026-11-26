@@ -1,0 +1,19 @@
+// spec: R-6w-5 R-6w-6 accept
+// A value `match` is read in a let, a return and an operand; arms are blocks or bare values ending with `,`; the
+// expected type types each arm; binders name the payload in their arm.
+enum E { A(v: i64), B(x: i64, y: i64), C }
+
+fn pick(e: E) -> i64
+  requires !is_variant(e, E::A) || (0 <= variant_field(e, E::A, v) && variant_field(e, E::A, v) < 100)
+{
+  let k: i64 = match e { E::A(v) => { v + 1 }, E::B(x, y) => 0, E::C => 2 };
+  return k + (match Some(k) { Some(w) => w, None => 0 });
+}
+
+fn small(o: Option<i64>, k: u8) -> u8 {
+  return match o { Some(x) => 200, None => k };
+}
+
+fn res(r: Result<i64, i64>) -> bool {
+  return match r { Ok(v) => { true }, Err(e) => false };
+}

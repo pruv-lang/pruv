@@ -1,0 +1,5 @@
+fn f(o: Option<i64>) -> i64
+  ensures result == match o { Some(v) => v, None => 0 }
+{
+  return 0;
+}

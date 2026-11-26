@@ -1,0 +1,13 @@
+// P9a-5: an index in a value `match` arm is proved under the arm's pattern guard and its binder facts, so the
+// verified Rust reads it unchecked (the hand shape without a second bounds check)
+fn at(a: [i64], o: Option<i64>) -> i64 {
+  return match o { Some(i) => { if 0 <= i && i < len(a) { a[i] } else { -2 } }, None => -1 };
+}
+
+fn run(i: i64) -> i64 ! alloc
+  requires 0 <= i && i < 10
+{
+  let a: [i64] = alloc(3, 4);
+  let o: Option<i64> = if i < 5 { Some(i) } else { None };
+  return at(a, o);
+}
