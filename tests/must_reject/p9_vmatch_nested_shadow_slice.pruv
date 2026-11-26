@@ -1,0 +1,4 @@
+// P9a-6c audit: an inner arm that binds the name of an outer slice binder is a shadow.
+fn f(s: [i64], o: Option<i64>) -> i64 {
+  return match s { [x, ..] => match o { Some(x) => x, None => 0 }, [] => 0 };
+}

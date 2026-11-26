@@ -1,0 +1,4 @@
+// P9a-6c audit: an inner arm that binds the name of an outer rest binder is a shadow.
+fn f(s: [i64], o: Option<i64>) -> i64 {
+  return match s { [_, rest @ ..] => match o { Some(rest) => rest, None => 3 }, [] => 3 };
+}

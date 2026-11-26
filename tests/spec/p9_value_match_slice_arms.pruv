@@ -1,0 +1,5 @@
+// spec: R-6w-5 reject
+// The slice arms of a value `match` cover every length.
+fn f(a: [i64]) -> i64 {
+  return match a { [x, ..] => x };
+}

@@ -1,0 +1,5 @@
+// P9a-6c: an index of a rest binder in a value `match` is read by the bounds test and the read, so it calls no function.
+fn k(n: i64) -> i64 { return 0; }
+fn f(a: [i64]) -> i64 {
+  return match a { [_, rest @ ..] => if len(rest) > 0 { rest[k(1)] } else { 0 }, [] => -100 };
+}

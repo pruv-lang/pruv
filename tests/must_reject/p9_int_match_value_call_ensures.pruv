@@ -1,0 +1,14 @@
+// P9a-6c (R-6u-8): a value `match` on a call result is proved per arm; the second arm makes the ensures false.
+fn g(k: i64) -> i64
+  requires k >= 0 && k <= 100
+  ensures result == k + 1
+{
+  return k + 1;
+}
+
+fn f(k: i64) -> i64
+  requires k >= 0 && k <= 10
+  ensures result != 20
+{
+  return match g(k) { 1 => 10, 2 => 20, _ => 30 };
+}

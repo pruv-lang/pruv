@@ -1,0 +1,30 @@
+// spec: R-6u-8 accept
+// Literal arms of a value `match` on an `i64` or `bool` call result: the call runs once and each arm is proved under
+// the failure of the arms above it, so the callee's ensures decides the arm.
+fn g(k: i64) -> i64
+  requires k >= 0 && k <= 100
+  ensures result == k + 1
+{
+  return k + 1;
+}
+
+fn pos(k: i64) -> bool
+  ensures result == (k > 0)
+{
+  return k > 0;
+}
+
+fn f(k: i64) -> i64
+  requires k >= 0 && k <= 10
+  ensures k == 0 ==> result == 10
+  ensures k >= 2 ==> result == 30
+{
+  return match g(k) { 1 => 10, 2 => 20, _ => 30 };
+}
+
+fn h(k: i64) -> i64
+  ensures k > 0 ==> result == 1
+  ensures k <= 0 ==> result == 0
+{
+  return match pos(k) { true => 1, false => 0 };
+}

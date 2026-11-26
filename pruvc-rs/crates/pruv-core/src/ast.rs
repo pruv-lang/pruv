@@ -291,7 +291,13 @@ impl SubPat {
 
 /// P9a-5: an arm pattern of a value `match` (see `ValueMatch`).
 #[derive(Debug, Clone, PartialEq)]
-pub struct ValueArm { pub enum_name: Option<String>, pub ctor: String, pub binders: Vec<String> }
+pub struct ValueArm {
+    pub enum_name: Option<String>, pub ctor: String, pub binders: Vec<String>,
+    /// P9a-6c: per binder, the tuple pattern it was written as (as `MatchArm::pats`; empty = none). A top-level
+    /// tuple arm `(a, b) =>` has ctor `()` and one binder; a slice arm has the slice shape as ctor (`[]`, `[..]`,
+    /// `[..rest]`) and the prefix binders.
+    pub pats: Vec<Option<TuplePat>>,
+}
 
 impl ValueMatch {
     pub const NAME: &str = "@value_match";
@@ -311,7 +317,13 @@ impl ValueMatch {
     }
 
     pub fn encode(a: &ValueArm) -> String {
-        format!("{};{};{}", a.enum_name.as_deref().unwrap_or(""), a.ctor, a.binders.join(","))
+        let mut s = format!("{};{};{}", a.enum_name.as_deref().unwrap_or(""), a.ctor, a.binders.join(","));
+        if a.pats.iter().any(Option::is_some) {
+            // after `~` (no binder or variant slot holds one): one tuple pattern or nothing per binder, `&`-separated
+            s.push('~');
+            s.push_str(&a.pats.iter().map(|p| p.as_ref().map(TuplePat::encode).unwrap_or_default()).collect::<Vec<_>>().join("&"));
+        }
+        s
     }
 
     pub fn matches(call: &Call) -> bool {
@@ -331,6 +343,9 @@ impl ValueMatch {
 
     pub fn arms(call: &Call) -> Vec<ValueArm> {
         call.name.split('|').skip(1).map(|seg| {
+            let (seg, tups) = seg.split_once('~').map_or((seg, None), |(a, b)| (a, Some(b)));
+            let pats = tups.map(|t| t.split('&').map(|p| (!p.is_empty()).then(|| TuplePat::decode(p, call.line, call.col)))
+                .collect()).unwrap_or_default();
             let mut it = seg.splitn(3, ';');
             let en = it.next().unwrap_or("");
             let ctor = it.next().unwrap_or("").to_string();
@@ -339,6 +354,7 @@ impl ValueMatch {
                 enum_name: (!en.is_empty()).then(|| en.to_string()),
                 ctor,
                 binders: SubPat::split(bs),
+                pats,
             }
         }).collect()
     }
@@ -461,6 +477,48 @@ pub enum TuplePat {
     Wild,
     Bind(i64, i64, String, bool),
     Tuple(i64, i64, Vec<TuplePat>),
+}
+
+impl TuplePat {
+    /// P9a-6c: the text form a value `match` arm carries in its call name: `_`, `name`, `!name` (`mut name`) or
+    /// `(p0,p1,..)`; positions are not kept (`decode` takes the arm's).
+    pub fn encode(&self) -> String {
+        match self {
+            TuplePat::Wild => "_".into(),
+            TuplePat::Bind(_, _, n, m) => format!("{}{}", if *m { "!" } else { "" }, n),
+            TuplePat::Tuple(_, _, ps) => format!("({})", ps.iter().map(TuplePat::encode).collect::<Vec<_>>().join(",")),
+        }
+    }
+
+    pub fn decode(s: &str, line: i64, col: i64) -> TuplePat {
+        fn go(b: &[u8], i: &mut usize, line: i64, col: i64) -> TuplePat {
+            if b[*i] == b'(' {
+                *i += 1;
+                let mut ps = Vec::new();
+                while *i < b.len() && b[*i] != b')' {
+                    ps.push(go(b, i, line, col));
+                    if *i < b.len() && b[*i] == b',' {
+                        *i += 1;
+                    }
+                }
+                *i += 1;
+                return TuplePat::Tuple(line, col, ps);
+            }
+            let start = *i;
+            while *i < b.len() && !matches!(b[*i], b',' | b')') {
+                *i += 1;
+            }
+            let t = std::str::from_utf8(&b[start..*i]).unwrap_or("_");
+            match t {
+                "_" => TuplePat::Wild,
+                _ => match t.strip_prefix('!') {
+                    Some(n) => TuplePat::Bind(line, col, n.to_string(), true),
+                    None => TuplePat::Bind(line, col, t.to_string(), false),
+                },
+            }
+        }
+        go(s.as_bytes(), &mut 0, line, col)
+    }
 }
 
 /// P8: the source form of a `Match`. `IfLet` and `LetElse` are lowered to a full match by the checker: arm 0 is the

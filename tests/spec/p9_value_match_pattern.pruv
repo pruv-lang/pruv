@@ -1,5 +1,5 @@
 // spec: R-6w-5 reject
-// A tuple pattern in a value `match` is not supported yet.
-fn f(p: (i64, i64)) -> i64 {
-  return match p { (a, b) => a + b };
+// A tuple pattern inside a nested variant pattern is not supported yet, in a value `match` as in a statement.
+fn f(o: Option<Result<(i64, i64), i64>>) -> i64 {
+  return match o { Some(Ok((a, b))) => a + b, Some(Err(e)) => e, None => 0 };
 }

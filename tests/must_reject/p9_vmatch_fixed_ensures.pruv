@@ -1,0 +1,6 @@
+fn f(a: [i64; 3]) -> i64
+  requires forall i in 0..3: a[i] >= 0 && a[i] <= 9
+  ensures result <= 10
+{
+  return match a { [x, _, z] => x + z };
+}

@@ -1,0 +1,9 @@
+// spec: R-6w-5 reject
+// A slice pattern in a value `match` matches a place; a call result is bound with a `let` first.
+fn g(a: [i64]) -> [i64] ! alloc {
+  return alloc(len(a), 0);
+}
+
+fn f(a: [i64]) -> i64 ! alloc {
+  return match g(a) { [] => 0, [x, ..] => x };
+}

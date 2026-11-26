@@ -1,0 +1,95 @@
+// P9a-6c: tuple and slice patterns in a value `match` (R-6w-5, R-6u-1, R-6u-4). A tuple pattern reads its
+// components from the payload; a slice arm tests the length and reads its prefix elements and rest view; arms are
+// tried in order and each index is proved under its arm's length test.
+enum Shape { Rect(wh: (i64, i64)), Dot }
+
+fn area(o: Option<(i64, i64)>) -> i64
+  requires is_some(o) ==> (some_val(o).0 >= 0 && some_val(o).0 <= 1000 && some_val(o).1 >= 0 && some_val(o).1 <= 1000)
+{
+  return match o { Some((w, h)) => w * h, None => -1 };
+}
+
+fn nested(r: Result<(i64, (bool, i64)), i64>) -> i64
+  requires is_ok(r) ==> (ok_val(r).0 >= -1000 && ok_val(r).0 <= 1000 && ok_val(r).1.1 >= -1000 && ok_val(r).1.1 <= 1000)
+{
+  return match r {
+    Ok((a, (c, b))) => if c { a } else { a + b },
+    Err(_) => { 0 - 1 },
+  };
+}
+
+fn shape(s: Shape) -> i64 {
+  return match s { Shape::Rect((_, h)) => h, Shape::Dot => 0 };
+}
+
+fn pair(t: (i64, i64)) -> i64
+  requires t.0 >= 0 && t.0 <= 100 && t.1 >= 0 && t.1 <= 100
+{
+  let k: i64 = match t { (a, b) => a * 100 + b };
+  return k;
+}
+
+fn head(a: [i64]) -> i64
+  requires forall i in 0..len(a): a[i] >= -1000 && a[i] <= 1000
+{
+  return match a { [] => 0, [x] => x, [x, y, ..] => x + y };
+}
+
+fn tail_len(a: [i64]) -> i64 {
+  return 10 * match a { [_, rest @ ..] => len(rest), [] => -1 };
+}
+
+fn last(a: [i64]) -> i64 {
+  return match a { [] => -1, [x] => x, [_, rest @ ..] => rest[len(rest) - 1] };
+}
+
+fn flags(a: [bool]) -> i64 {
+  return match a { [] => 0, [x] => if x { 1 } else { 4 }, [_, b, ..] => if b { 2 } else { 3 } };
+}
+
+fn first3(a: [i64; 3]) -> i64
+  requires forall i in 0..3: a[i] >= 0 && a[i] <= 9
+{
+  return match a { [x, _, z] => x * 10 + z };
+}
+
+fn run() -> () ! io, alloc {
+  let p34: (i64, i64) = (3, 4);
+  let o: Option<(i64, i64)> = Some::<(i64, i64)>(p34);
+  print(area(o));
+  print(area(None::<(i64, i64)>));
+  let q1: (i64, (bool, i64)) = (5, (true, 9));
+  let q2: (i64, (bool, i64)) = (5, (false, 9));
+  let r1: Result<(i64, (bool, i64)), i64> = Ok::<(i64, (bool, i64)), i64>(q1);
+  let r2: Result<(i64, (bool, i64)), i64> = Ok::<(i64, (bool, i64)), i64>(q2);
+  print(nested(r1));
+  print(nested(r2));
+  print(nested(Err::<(i64, (bool, i64)), i64>(3)));
+  let wh: (i64, i64) = (2, 7);
+  print(shape(Shape::Rect(wh)));
+  print(shape(Shape::Dot));
+  let t: (i64, i64) = (12, 34);
+  print(pair(t));
+  let mut v: [i64] = alloc(3, 4);
+  v[1] = 5;
+  let e0: [i64] = alloc(0, 0);
+  let e1: [i64] = alloc(1, 6);
+  print(head(e0));
+  print(head(e1));
+  print(head(v));
+  let w: [i64] = alloc(4, 1);
+  print(tail_len(w));
+  print(tail_len(e0));
+  v[2] = 8;
+  print(last(v));
+  print(last(e1));
+  print(last(e0));
+  let bs: [bool] = alloc(2, false);
+  let b1: [bool] = alloc(1, true);
+  let b0: [bool] = alloc(0, true);
+  print(flags(b1));
+  print(flags(bs));
+  print(flags(b0));
+  let f: [i64; 3] = [1, 2, 3];
+  print(first3(f));
+}

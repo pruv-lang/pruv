@@ -1,0 +1,4 @@
+// P9a-6c audit: `rest[i]` is proved against the rest view, so a negative index (which would read the prefix) fails.
+fn f(a: [i64]) -> i64 {
+  return match a { [_, rest @ ..] => rest[0 - 1], [] => -100 };
+}

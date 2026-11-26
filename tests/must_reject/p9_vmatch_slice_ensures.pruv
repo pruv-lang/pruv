@@ -1,0 +1,5 @@
+fn f(a: [i64]) -> i64
+  ensures result >= 0
+{
+  return match a { [] => 0, [x, ..] => x };
+}
