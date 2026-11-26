@@ -1583,6 +1583,20 @@ impl<'a> Ownership<'a> {
                 *st = join(Some(std::mem::take(st)), Some(other)).unwrap();
                 Ok(())
             }
+            Expr::Call(c) if crate::ast::ValueMatch::matches(c) => {
+                // P9a-5: only one arm runs; the scrutinee is a copied value, and a value moved on one arm is
+                // maybe-moved after the join
+                self.expr(&c.args[0], st)?;
+                let base = st.clone();
+                let mut joined: Option<St> = None;
+                for arm in &c.args[1..] {
+                    let mut s = base.clone();
+                    if owned { self.consume(arm, &mut s, "field")? } else { self.expr_o(arm, &mut s, false)? }
+                    joined = join(joined, Some(s));
+                }
+                *st = joined.unwrap_or(base);
+                Ok(())
+            }
             Expr::Call(c) if crate::ast::ValueIf::matches(c) => {
                 // P9a-3: only one arm runs; a value moved on one path is maybe-moved after the join
                 let [cond, then, els] = c.args.as_slice() else { unreachable!() };

@@ -166,6 +166,20 @@ pub fn expr(e: &Expr) -> Json {
                 ("cond", bx(cond)), ("then", bx(then)), ("els", bx(els)), ("ty", ty(&x.ty)),
             ])
         }
+        Expr::Call(x) if crate::ast::ValueMatch::matches(x) => {
+            let arms = crate::ast::ValueMatch::arms(x);
+            let arm_nodes: Vec<Json> = arms.iter().zip(x.args[1..].iter()).map(|(a, e)| {
+                Json::Obj(vec![
+                    ("enum".to_string(), a.enum_name.as_ref().map_or(Json::Null, |n| js(n))),
+                    ("ctor".to_string(), js(&a.ctor)),
+                    ("binders".to_string(), Json::Arr(a.binders.iter().map(|b| js(b)).collect())),
+                    ("value".to_string(), expr(e)),
+                ])
+            }).collect();
+            node("ValueMatch", Some((x.line, x.col)), vec![
+                ("scrutinee", bx(&x.args[0])), ("arms", Json::Arr(arm_nodes)), ("ty", ty(&x.ty)),
+            ])
+        }
         Expr::Call(x) if crate::ast::ValueIf::matches(x) => {
             let [cond, then, els] = x.args.as_slice() else { unreachable!() };
             node("ValueIf", Some((x.line, x.col)), vec![

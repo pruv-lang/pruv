@@ -184,6 +184,83 @@ impl ValueIf {
     }
 }
 
+/// P9a-5: the value `match v { P1 => e1, .. }`, encoded like `ValueIf` as a reserved call with the arguments
+/// `[v, e1, .., en]`. The arm patterns (variant or `Some`/`None`/`Ok`/`Err` with plain binders) are spelled in the
+/// call name after `NAME`, one `|enum;ctor;b1,b2` segment per arm, so the generic `Expr` walkers see every value
+/// and need no new node. The reserved name cannot be written in source and is never resolved as a function.
+pub struct ValueMatch;
+
+/// P9a-5: an arm pattern of a value `match` (see `ValueMatch`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValueArm { pub enum_name: Option<String>, pub ctor: String, pub binders: Vec<String> }
+
+impl ValueMatch {
+    pub const NAME: &str = "@value_match";
+    /// The marker statement `@arm_value(e)` an arm body holds when a value match is checked or lowered through the
+    /// statement `match` machinery.
+    pub const YIELD: &str = "@arm_value";
+
+    pub fn expr(line: i64, col: i64, scrutinee: Expr, arms: Vec<(ValueArm, Expr)>) -> Expr {
+        let mut name = Self::NAME.to_string();
+        let mut args = vec![scrutinee];
+        for (a, e) in arms {
+            name.push('|');
+            name.push_str(&Self::encode(&a));
+            args.push(e);
+        }
+        Expr::Call(Call { line, col, name, args, ty: None, targs: None, inst: None, old: None, opaque_c: false })
+    }
+
+    pub fn encode(a: &ValueArm) -> String {
+        format!("{};{};{}", a.enum_name.as_deref().unwrap_or(""), a.ctor, a.binders.join(","))
+    }
+
+    pub fn matches(call: &Call) -> bool {
+        call.name.starts_with("@value_match|")
+    }
+
+    /// The call name for these arms (after the arm enum names were resolved).
+    pub fn rename(arms: &[ValueArm]) -> String {
+        let mut name = Self::NAME.to_string();
+        for a in arms {
+            name.push('|');
+            name.push_str(&Self::encode(a));
+        }
+        name
+    }
+
+    pub fn arms(call: &Call) -> Vec<ValueArm> {
+        call.name.split('|').skip(1).map(|seg| {
+            let mut it = seg.splitn(3, ';');
+            let en = it.next().unwrap_or("");
+            let ctor = it.next().unwrap_or("").to_string();
+            let bs = it.next().unwrap_or("");
+            ValueArm {
+                enum_name: (!en.is_empty()).then(|| en.to_string()),
+                ctor,
+                binders: if bs.is_empty() { Vec::new() } else { bs.split(',').map(str::to_string).collect() },
+            }
+        }).collect()
+    }
+
+    /// The statement `match` with the same scrutinee and patterns whose arm `k` body is `@arm_value(ek)`.
+    pub fn as_match(call: &Call) -> Match {
+        let arms = Self::arms(call).into_iter().zip(call.args[1..].iter()).map(|(a, e)| MatchArm {
+            line: e.line(), col: e.col(), enum_name: a.enum_name, ctor: a.ctor, binders: a.binders,
+            body: vec![Stmt::ExprStmt(ExprStmt { line: e.line(), col: e.col(), expr: Expr::Call(Call {
+                line: e.line(), col: e.col(), name: Self::YIELD.into(), args: vec![e.clone()], ty: None, targs: None,
+                inst: None, old: None, opaque_c: false,
+            }) })],
+            pats: Vec::new(), pat_lets: 0,
+        }).collect();
+        Match { line: call.line, col: call.col, scrutinee: call.args[0].clone(), arms, form: MatchForm::Match, els: Vec::new() }
+    }
+
+    pub fn is_yield(call: &Call) -> bool {
+        call.name == Self::YIELD
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Spent(Spent),

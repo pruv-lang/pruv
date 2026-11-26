@@ -3053,13 +3053,61 @@ impl Parser {
         Ok(crate::ast::ValueIf::expr(t.line, t.col, cond, then, els))
     }
 
+    /// P9a-5: `match v { P => e, P => { e } .. }` as a value; the patterns are variants and `Some`/`None`/`Ok`/`Err`
+    /// with plain binders (a tuple or slice pattern is `parse/value_match_pattern`, queued as P9a-6).
+    fn value_match(&mut self) -> R<Expr> {
+        self.enter(1)?;
+        let t = self.next();
+        let scr = self.expr()?;
+        self.expect("{")?;
+        let mut arms = Vec::new();
+        while !self.at("}", 0) {
+            let pt = self.peek(0).clone();
+            if self.at("(", 0) || self.at("[", 0) {
+                return Err(PruvError::new("parse", pt.line, pt.col, "value_match_pattern",
+                    "a tuple or slice pattern in a value `match` is not supported yet",
+                    "use a `match` statement that assigns a `let mut` local"));
+            }
+            let arm = self.arm_pattern()?;
+            if !arm.pats.is_empty() {
+                return Err(PruvError::new("parse", pt.line, pt.col, "value_match_pattern",
+                    "a tuple pattern in a value `match` arm is not supported yet",
+                    "bind the tuple to a name and read its fields"));
+            }
+            self.expect("=>")?;
+            let e = if self.at("{", 0) {
+                self.value_arm_of("match")?
+            } else {
+                let e = self.expr()?;
+                if !self.at("}", 0) && !self.at(",", 0) {
+                    let p = self.peek(0).clone();
+                    return Err(PruvError::new("parse", p.line, p.col, "syntax",
+                        "an arm of a value `match` ends with `,`", "add `,` after the arm value"));
+                }
+                e
+            };
+            if self.at(",", 0) {
+                self.bump();
+            }
+            let va = crate::ast::ValueArm { enum_name: arm.enum_name, ctor: arm.ctor, binders: arm.binders };
+            arms.push((va, e));
+        }
+        self.expect("}")?;
+        self.leave(1);
+        Ok(crate::ast::ValueMatch::expr(t.line, t.col, scr, arms))
+    }
+
     fn value_arm(&mut self) -> R<Expr> {
+        self.value_arm_of("if")
+    }
+
+    fn value_arm_of(&mut self, what: &str) -> R<Expr> {
         self.expect("{")?;
         let e = self.expr()?;
         if !self.at("}", 0) {
             let p = self.peek(0).clone();
             return Err(PruvError::new("parse", p.line, p.col, "syntax",
-                "an arm of a value `if` holds one expression", "move statements before the `if`"));
+                format!("an arm of a value `{what}` holds one expression"), format!("move statements before the `{what}`")));
         }
         self.bump();
         Ok(e)
@@ -3125,6 +3173,9 @@ impl Parser {
         }
         if t.kind == Kind::Kw && t.val == "if" && !self.at("let", 1) {
             return self.value_if();
+        }
+        if t.kind == Kind::Kw && t.val == "match" {
+            return self.value_match();
         }
         if t.kind == Kind::Int {
             self.bump();

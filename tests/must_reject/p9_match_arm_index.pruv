@@ -1,0 +1,4 @@
+// the index is in the Some arm, whose guard says nothing about i
+fn f(a: [i64], o: Option<i64>) -> i64 {
+  return match o { Some(i) => a[i], None => 0 };
+}

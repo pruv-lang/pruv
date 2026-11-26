@@ -1,0 +1,21 @@
+// P9a-5 audit: value match arms on a generic user enum name the lowered enum on the Rust backend; a Result<(), E>
+// scrutinee with a unit Ok arm is copied.
+enum Maybe<T> { Has(v: T), No }
+
+fn get(m: Maybe<i64>) -> i64 {
+  return match m { Maybe::Has(v) => v, Maybe::No => -1 };
+}
+
+fn code(r: Result<(), i64>) -> i64
+  ensures result >= 0
+{
+  return match r { Ok(()) => 0, Err(e) => { if e > 0 { e } else { 0 } } };
+}
+
+fn run() -> () ! io {
+  print(get(Maybe::<i64>::Has(5)));
+  print(get(Maybe::<i64>::No));
+  print(code(Ok::<(), i64>(())));
+  print(code(Err::<(), i64>(9)));
+  print(code(Err::<(), i64>(-4)));
+}

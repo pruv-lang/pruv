@@ -605,7 +605,23 @@ impl<'a> Mono<'a> {
                 }
                 let mut name = x.name.clone();
                 let mut new_inst: Option<Inst> = None;
-                if is_catalog(&x.name) {
+                if crate::ast::ValueMatch::matches(x) {
+                    // P9a-5: the arms name the scrutinee's (lowered) enum, as in Stmt::Match
+                    let mut arms = crate::ast::ValueMatch::arms(x);
+                    let low = args.first().and_then(|s| expr_ty_of(s).clone()).map(|t| t.split('<').next().unwrap_or("").to_string());
+                    for a in arms.iter_mut() {
+                        let Some(en) = &a.enum_name else { continue };
+                        let r = match &low {
+                            Some(l) => Some(l.clone()),
+                            None if self.g4.is_some() => self.rtypes.get(en).cloned(),
+                            None => None,
+                        };
+                        if let Some(r) = r {
+                            a.enum_name = Some(r);
+                        }
+                    }
+                    name = crate::ast::ValueMatch::rename(&arms);
+                } else if is_catalog(&x.name) {
                     // G6: the name stays; `args` = lowered concrete type arguments, `src_args` = concrete but not
                     // lowered (source-level spelling and the structural encoding of helper names)
                     if let Some(inst) = &x.inst {

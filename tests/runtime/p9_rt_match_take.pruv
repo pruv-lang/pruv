@@ -1,0 +1,42 @@
+// P9a-5 audit: an arm at what looks like a last use of a local must not take its buffer while the same statement
+// still reads the local after the value match (LLVM lowers each arm as its own statement).
+fn mk(n: i64) -> [i64] ! alloc
+  requires 0 <= n && n <= 10
+  ensures len(result) == n
+  ensures forall j in 0..len(result): result[j] == 7
+{
+  return alloc(n, 7);
+}
+
+fn bytes(n: i64) -> [u8] ! alloc
+  requires 0 <= n && n <= 10
+  ensures len(result) == n
+  ensures forall j in 0..len(result): result[j] == 65
+{
+  return alloc(n, 65);
+}
+
+fn f(o: Option<i64>) -> i64 ! alloc {
+  let x: [i64] = mk(3);
+  return len(match o { Some(v) => resize(x, 5, 0), None => mk(1) }) * 10 + len(x);
+}
+
+fn g(o: Option<i64>) -> i64 ! alloc {
+  let x: [i64] = mk(3);
+  let n: i64 = len(match o { Some(v) => resize(x, 6, 0), None => mk(1) }) * 10 + x[2];
+  return n;
+}
+
+fn s(o: Option<i64>) -> i64 ! alloc {
+  let b: [u8] = bytes(4);
+  return len(match o { Some(v) => str_from_utf8(b), None => str_from_utf8(bytes(1)) }) * 10 + len(b);
+}
+
+fn run() -> () ! io, alloc {
+  print(f(Some(1)));
+  print(f(None));
+  print(g(Some(1)));
+  print(g(None));
+  print(s(Some(1)));
+  print(s(None));
+}

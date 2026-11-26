@@ -1,0 +1,5 @@
+enum E { A(v: i64), B, C }
+
+fn f(e: E) -> i64 {
+  return match e { E::A(v) => v, E::B => 0 };
+}

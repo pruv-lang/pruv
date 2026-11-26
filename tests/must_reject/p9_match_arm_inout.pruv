@@ -1,0 +1,11 @@
+fn bump(inout n: i64) -> i64
+  requires n < 100
+{
+  n = n + 1;
+  return n;
+}
+
+fn f(o: Option<i64>) -> i64 {
+  let mut k: i64 = 0;
+  return match o { Some(v) => bump(inout k), None => 0 };
+}

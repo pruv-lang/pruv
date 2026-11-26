@@ -1,0 +1,7 @@
+// spec: R-6w-7 R-6w-8 accept
+// Each arm is proved under its pattern test and binder facts, so the guarded index proves and Rust reads it unchecked.
+fn at(a: [i64], o: Option<i64>) -> i64
+  ensures o == None ==> result == -1
+{
+  return match o { Some(i) => { if 0 <= i && i < len(a) { a[i] } else { -2 } }, None => -1 };
+}

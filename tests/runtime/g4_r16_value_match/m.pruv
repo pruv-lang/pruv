@@ -1,0 +1,22 @@
+pub struct Rect { w: i64, h: i64 }
+
+pub enum Kind { Square, Wide(extra: i64), Tall(extra: i64) }
+
+pub fn classify(w: i64, h: i64) -> Kind
+  requires 0 <= w && w <= 1000
+  requires 0 <= h && h <= 1000
+{
+  if w == h { return Kind::Square; }
+  if h < w { return Kind::Wide(w - h); }
+  return Kind::Tall(h - w);
+}
+
+pub fn code(k: Kind) -> i64
+  ensures 0 <= result && result <= 2
+{
+  return match k { Kind::Square => 0, Kind::Wide(e) => 1, Kind::Tall(e) => 2 };
+}
+
+pub fn wrap(k: Kind) -> Option<Kind> {
+  return match k { Kind::Square => None::<Kind>, Kind::Wide(e) => Some::<Kind>(Kind::Tall(e)), Kind::Tall(e) => Some::<Kind>(k) };
+}

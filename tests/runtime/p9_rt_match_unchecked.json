@@ -1,0 +1,1 @@
+{"flags_matrix": [[]], "exit": 0, "stdout_lines": ["4", "4", "-2", "-1"], "alloc_balance": true, "gen_contains": ["return (match o { Some(i) => { (if ((0i64 <= i) && (i < (a.len() as i64))) { (unsafe { *a.get_unchecked((i) as usize) }) } else { (-2i64) }) }, None => { (-1i64) }, });"]}

@@ -1,0 +1,7 @@
+fn mk() -> [i64] ! alloc { return alloc(2, 0); }
+
+fn f(o: Option<i64>) -> i64 ! alloc {
+  let mut x: [i64] = mk();
+  let y: [i64] = match o { Some(v) => { move x }, None => mk() };
+  return len(x) + len(y);
+}

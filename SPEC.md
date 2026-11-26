@@ -84,6 +84,7 @@ match e {                        // e: Option<i64>, Result<i64> or a user enum (
 match r { Ok(v) => { ... } Err(c) => { ... } }
 if let Some(v) = e { ... } else { ... }   // else optional (R-6u-2)
 let v: i64 = if c { a } else { b };    // value if: else required, one expression per arm (R-6w-1)
+let v: i64 = match o { Some(x) => { x }, None => 0 };   // value match: all arms, one expression per arm (R-6w-5)
 let Some(v) = e else { return ..; };     // else block must not reach its end (R-6u-3)
 while let Some(v) = e invariant .. decreases .. { ... }   // e re-evaluated per iteration (R-6u-5)
 match a { [] => { .. } [x, rest @ ..] => { .. } }       // slice patterns on arrays and views (R-6u-4)
@@ -2866,11 +2867,12 @@ fn head(r: Row) -> Res<i64> { if r[0] < 0 { return Err(r[0]); } return Ok(r[0]);
   [ref of a scalar](tests/must_reject/p9_alias_ref_scalar.pruv), [refined use](tests/must_reject/p9_alias_refine_false.pruv),
   [prelude names in async code](tests/runtime/p9_rt_alias_async.pruv).
 
-## 6w. Value `if` (P9a-3)
+## 6w. Value `if` (P9a-3) and value `match` (P9a-5)
 ```
 let v: u8 = if b { 200 } else { k };
 return if i < len(a) { a[i] } else { -1 };
 let y: [i64] = if c { move x } else { mk(n) };
+return match s { Shape::Circle(r) => { 3 * r * r }, Shape::Empty => 0 };
 ```
 - R-6w-1 **Value `if`.** `if c { e1 } else { e2 }` is an expression wherever a value is read (a `let` initializer,
   an assignment, a `return`, an operand, a call argument). `c` is `bool`; `else` is required (`parse/syntax`), and
@@ -2897,7 +2899,7 @@ let y: [i64] = if c { move x } else { mk(n) };
 - R-6w-4 **Code.** Rust prints its own value `if` (`(if c { e1 } else { e2 })`), so a proved index in an arm stays an
   unchecked read. LLVM branches to the chosen arm, joins a scalar with `phi` and any other value through an
   entry-block slot; each arm's temporaries end inside the arm, and an owned result read in place is a statement
-  temporary. Value `match` is parity row P9a-5. Tests: [values](tests/runtime/p9_rt_if_value.pruv),
+  temporary. Tests: [values](tests/runtime/p9_rt_if_value.pruv),
   [unchecked index](tests/runtime/p9_rt_if_unchecked.pruv), [call order](tests/runtime/p9_rt_branch_order.pruv),
   [owned arms](tests/runtime/p9_rt_owned_arm.pruv), [tuples](tests/runtime/p9_rt_if_tuple.pruv),
   [owned tuple](tests/runtime/p9_rt_if_tuple_owned.pruv), [no else](tests/must_reject/p9_if_no_else.pruv),
@@ -2906,6 +2908,44 @@ let y: [i64] = if c { move x } else { mk(n) };
   [arm inout](tests/must_reject/p9_if_arm_inout.pruv), [false contract](tests/must_reject/p9_if_false_ensures.pruv),
   [borrowed owned arm](tests/must_reject/p9_if_owned_borrow.pruv), [contract](tests/must_reject/p9_if_contract.pruv),
   [type parameter](tests/must_reject/p9_if_generic.pruv).
+- R-6w-5 **Value `match`.** `match v { P1 => { e1 }, P2 => e2, .. }` is an expression wherever a value is read, as
+  for R-6w-1. An arm pattern is a statement `match` pattern on an `Option`, a `Result` or a user enum (`Some(x)`,
+  `Err(e)`, `E::V(a, b)`, `E::W`, 6a); the arms cover every case once (`type/match_arms`). An arm value is a block
+  holding exactly one expression, or a bare expression followed by `,` or the closing `}` (`parse/syntax`). A tuple
+  or slice pattern in a value `match` is `parse/value_match_pattern` (parity row P9a-6; use a `match` statement).
+  A binder names the payload in its arm only (`type/unknown_name` elsewhere). Evaluation order: `v` once, then only
+  the chosen arm; operands to the left run before `v`, operands to the right after the arm. A `match` at the start
+  of a statement stays the statement form.
+- R-6w-6 **Types.** The arms are typed as the arms of a value `if` (R-6w-2): the expected type types every arm,
+  otherwise the first arm that is not a bare literal fixes the type (`type/type_mismatch`); the same result types
+  are supported (`type/value_branch_type`), an owned result needs a new value in every arm
+  (`type/value_branch_owned`), and a value `match` in a contract is `type/value_branch_context`. The scrutinee is a
+  copied value: an `Option`/`Result`/enum whose payloads are scalars, unit (`Ok(())`) or other copied values. A
+  scrutinee that holds owned or borrowed data (a string or array payload, an extended enum, a `String` error), a
+  payload of a type parameter (`Option<T>` in a generic function) and a direct
+  `map_get`/`map_get_mut`/`map_take`/`vec_get`/`vec_at_mut` scrutinee are `type/value_branch_type` (parity row
+  P9a-6; bind the scrutinee with `let` or use a `match` statement).
+- R-6w-7 **Proof and ownership.** The verifier evaluates each arm under its pattern's test with the binder facts of
+  that payload (its range, its well-formedness), so an arm's obligations and a callee's `ensures` hold only when
+  that arm is chosen; the result is the nested choice `ite(t1, v1, ite(t2, v2, .. vn))`. A value moved in one arm is
+  maybe-moved after the `match` (`type/foreign_move`), and an `inout` call in an arm is `type/inout_context`.
+- R-6w-8 **Code.** Rust prints its own value `match` (`(match v { P1 => { e1 }, .. })`, patterns as the statement
+  form prints them, the arm enum named as the lowered enum of a generic or module type), so a proved index in an arm
+  stays an unchecked read. LLVM lowers the statement `match` whose arms store their value into an entry-block result
+  slot; each arm's temporaries end inside the arm, an owned result read in place is a statement temporary, and no
+  arm takes the buffer of an outer local at its apparent last use (the rest of the enclosing statement may still read
+  it). Tests: [values](tests/runtime/p9_rt_match_value.pruv), [no take in an arm](tests/runtime/p9_rt_match_take.pruv),
+  [generic enum and unit payload](tests/runtime/p9_rt_match_generic.pruv),
+  [module enums](tests/runtime/g4_r16_value_match/root.pruv),
+  [unchecked index](tests/runtime/p9_rt_match_unchecked.pruv), [call order](tests/runtime/p9_rt_match_order.pruv),
+  [owned arms](tests/runtime/p9_rt_match_owned.pruv), [missing arm](tests/must_reject/p9_match_missing.pruv),
+  [duplicate arm](tests/must_reject/p9_match_duplicate.pruv), [arm types](tests/must_reject/p9_match_types.pruv),
+  [arm move](tests/must_reject/p9_match_arm_move.pruv), [arm inout](tests/must_reject/p9_match_arm_inout.pruv),
+  [false contract](tests/must_reject/p9_match_false_ensures.pruv),
+  [unguarded index](tests/must_reject/p9_match_arm_index.pruv),
+  [borrowed owned arm](tests/must_reject/p9_match_owned_borrow.pruv),
+  [contract](tests/must_reject/p9_match_contract.pruv), [tuple pattern](tests/must_reject/p9_match_pattern.pruv),
+  [binder scope](tests/must_reject/p9_match_binder_scope.pruv), [arm comma](tests/must_reject/p9_match_arm_comma.pruv).
 
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
@@ -3373,6 +3413,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/string_unterminated` | parse | a string literal without its closing quote |
 | `parse/syntax` | parse | any other syntax error |
 | `parse/unknown_attribute` | parse | an attribute other than `#[cold]`, `#[inline]` or `#[inline(always)]` |
+| `parse/value_match_pattern` | parse | a tuple or slice pattern in a value `match` (R-6w-5) |
 | `parse/tuple_arity` | parse | a tuple type with fewer than 2 or more than 8 components (R-6s-1) |
 | `parse/tuple_component` | parse | `()` as a tuple component (R-6s-1) |
 | `parse/tuple_generic` | parse | a tuple type inside a generic declaration (R-6s-5) |
@@ -3516,9 +3557,9 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/unknown_variant` | type | a variant the enum does not have |
 | `type/unused_value` | type | a non-unit value is dropped |
 | `type/useless_expr` | type | an expression statement that is not a call |
-| `type/value_branch_context` | type | a value `if` in a contract (R-6w-2) |
-| `type/value_branch_owned` | type | an arm of a value `if` of an owned type that is not a new value (R-6w-2) |
-| `type/value_branch_type` | type | a value `if` whose type is not supported (R-6w-2) |
+| `type/value_branch_context` | type | a value `if` or `match` in a contract (R-6w-2, R-6w-6) |
+| `type/value_branch_owned` | type | an arm of a value `if` or `match` of an owned type that is not a new value (R-6w-2, R-6w-6) |
+| `type/value_branch_type` | type | a value `if` or `match` whose type or scrutinee is not supported (R-6w-2, R-6w-6) |
 | `type/tuple_needs_type` | type | a tuple literal where no tuple type is expected; bind it with a typed `let` (R-6s-1) |
 | `type/tuple_pattern_type` | type | a tuple pattern in a match arm whose payload is not a tuple or has another component count (R-6u-1) |
 | `type/tuple_pattern_owned` | type | a tuple pattern in a match arm that binds a component other than an integer, `bool` or `char` (R-6u-1) |

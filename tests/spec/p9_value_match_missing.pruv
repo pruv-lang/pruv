@@ -1,0 +1,5 @@
+// spec: R-6w-5 reject
+// A value `match` covers every case.
+fn f(o: Option<i64>) -> i64 {
+  return match o { Some(v) => v };
+}
