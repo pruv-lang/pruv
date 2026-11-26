@@ -13,20 +13,20 @@ import shutil
 from common import HERE, WORK, fake_binary, request_for, read_log, run_lines, check_case, load_cases
 
 MUTANTS = [
-    ('wrong-id-accepted', 'rpc.pruv', 'sp.status == 0 && crate::util::id_is(d.source, sp.start, sp.end, id)', 'sp.status == 0'),
+    ('wrong-id-accepted', 'rpc.pruv', 'if number.status == 0 && crate::util::id_is(d.source, number.start, number.end, id) {', 'if number.status == 0 {'),
     ('initialized-omitted', 'rpc.pruv', 'else { q = crate::transport::send(move q, slot, crate::util::to_bytes("{\\"method\\":\\"initialized\\",\\"params\\":{}}\\n"), ms); }', 'else { }'),
-    ('unsupported-mapping-lost', 'root.pruv', '1 => { ctl.fail = 4; }', '1 => { ctl.fail = 6; }'),
-    ('not-found-alternative-dropped', 'rpc.pruv', 'if lit_at(u, n, i, "no rollout") { return true; }', 'if lit_at(u, n, i, "no rollout!") { return true; }'),
+    ('unsupported-mapping-lost', 'root.pruv', '1 => { code = 4; }', '1 => { code = 6; }'),
+    ('not-found-alternative-dropped', 'rpc.pruv', 'contains(hay, "no rollout")', 'contains(hay, "no rollout!")'),
     ('list-admission-bypassed', 'list.pruv', 'if crate::names::valid_thread(idv) {', 'if len(idv) > 0 {'),
-    ('stop-after-first-page', 'root.pruv', 'else if cu.status != 0 || len(cu.units) == 0 || dn <= 0 { fin = true; }', 'else if cu.status != 0 || len(cu.units) == 0 || dn <= 0 || page >= 1 { fin = true; }'),
+    ('stop-after-first-page', 'root.pruv', 'more = page + 1 == 40;\n', 'more = page + 1 == 40;\n                      if page >= 0 { fin = true; }\n'),
     ('newest-first-feeding', 'read.pruv', '    j = j - 1;\n    let b: i64 = 10 * j;', '    let b: i64 = 10 * (count - j);\n    j = j - 1;'),
     ('commentary-admitted', 'item.pruv', 'if crate::access::string_is(d, crate::util::field(d, it, "phase"), "commentary") != 1 { x = item_text(d, it); }', 'if true { x = item_text(d, it); }'),
     ('plan-counted-as-tool', 'item.pruv', '} else if crate::access::string_is(d, ty, "plan") == 1 {', '} else if crate::access::string_is(d, ty, "planx") == 1 {'),
     ('generic-tool-not-counted', 'item.pruv', '        tools = tools + 1;', '        tools = tools + 0;'),
-    ('budget-omission-removed', 'root.pruv', 'if hs[4] == 1 { more = true; fin = true; }', 'if hs[4] == 1 { fin = true; }'),
+    ('budget-omission-removed', 'root.pruv', 'crate::read::Absorbed::Full => { more = true; fin = true; }', 'crate::read::Absorbed::Full => { fin = true; }'),
     ('reply-bytes-cap-off-by-one', 'item.pruv', 'if rbytes > 32768 { rbytes = 32768; }', 'if rbytes > 32767 { rbytes = 32767; }'),
     ('later-plan-replaces-first', 'read.pruv', 'if hs[3] == 0 && raw.has_plan {', 'if raw.has_plan {'),
-    ('lone-cwd-accepted', 'root.pruv', '!crate::folder::lone(crate::access::string_units(d, cw).units) && ', ''),
+    ('lone-cwd-accepted', 'root.pruv', ' || crate::folder::lone_at(d, cw)', ''),
     ('code-rounding-lost', 'rpc.pruv', 'let hi: str = "32601000000000001818989403545856475830078125";', 'let hi: str = "32601";'),
     ('code-low-prefix-accepted', 'rpc.pruv', 'if sig < 5 || (on_lo && sig < len(lo)) { return false; }', 'if sig < 5 { return false; }'),
 ]

@@ -85,7 +85,8 @@ ABI packet words, `fold_reply`, `push_escaped`, `trim_span`, `id_is`, `start`, `
 Tried and reverted: `folder::same` and the `"lair"` originator prefix as one `eq_range` (hand slice compare / `starts_with`);
 `eq_range` takes `[i64]` / `[u8]` / `[u16]` only and rejects `str` (`type_mismatch`). Row 4.3f-S.
 
-Not applied (rows). Each needs more than the time cap allowed, a shared module change, or touches VL:
+Not applied (rows). Each needs more than the time cap allowed, a shared module change, or touches VL. Step 4.4e
+(§3b) closed A, O, N, K, L, T, R and part of P and D; B, E, F, S and the `Option<Plan>` part of P stay open:
 
 | row | finding | where | what the hand does |
 |---|---|---|---|
@@ -107,16 +108,60 @@ Accepted as is: request ids are written digit by digit into the request buffer (
 `to_string()` temporary, so Pruv allocates less. The turns cursor is resent as the raw token (`README.md` policy),
 where the hand re-escapes the decoded string.
 
+## 3b. Step 4.4e (Codex rows of 4.3f)
+
+Changed `root`, `rpc`, `read`, `item`, `plan`, `folder`, `util` (`codex/` only; no shared module touched).
+
+- 4.3f-A closed (one part kept): `start` runs before any receive buffer; the read stores (`hs` / `ht` / `hb` / `pl` /
+  `pb`) are allocated only after the thread result passed the cwd / folder check; no provisional fail packet; every
+  request is built after `rpc::closed` saw stdin open; cwd is checked by `folder::lone_at` on the raw span (one
+  decode); the trimmed model is moved when trimming keeps it whole. Kept: the `InputTooLarge` folder bound, which
+  carries `len(req) <= 6 * len(folder)` for `req_list` (row 4.4e-FB).
+- 4.3f-O closed: `read::absorb` returns `enum Absorbed { Open, Full, Broken }`; `Full` stops before the cursor is
+  read, `hs[4]` is gone, the request id is `page + 3` like the hand.
+- 4.3f-N closed: `parse_line(line: [u8], n)` (no `inout`, no `st`); the dead `ctl.n = 0` after each parse is gone.
+- 4.3f-K closed: `kind_of` returns `enum Kind { Ignore, Server, Response }`, returns at once with no `id`, and reads
+  the number from the tape span (no `raw_span`). The pumps `match` on it.
+- 4.3f-L closed: `rpc::head` walks the message once with `jstr::step` and stops at 300 units, lowering ASCII on the
+  way for `has_phrase`; `error_detail` takes the same 300 units without decoding the rest.
+- 4.3f-T closed: `item_text` keeps only `out`; the separator test is `len(out) > 0`.
+- 4.3f-R closed: `child_args` passes `subview(argv, lo, hi)`.
+- 4.3f-P partly: `marker_end` returns 0 for "no marker" and the `m > n` test is gone. The `Option<Plan>` state stays
+  `pl` / `pb` (row 4.3f-P kept, with VL).
+- 4.3f-D partly: `str_at` uses `access::string_text_scanned_owned`. The 50331648 length test stays: `doc_local`
+  gives no bound on the source length the decoder requires (row 4.4e-DL).
+
+Codex structure comparison (gpt-6.2-astra, high; Codex 2 account): the 4.4e changes match the hand. Not applied, all
+older than 4.4e or open shared rows:
+
+| row | finding | where | what the hand does |
+|---|---|---|---|
+| 4.4e-LP | a lone surrogate or `1e400` in a member Pruv never reads is accepted | `rpc::parse_line` (`pkgs/json`) | serde rejects the line, waits for the next |
+| 4.4e-EC | the 1000000 pump cap counts `step` calls (an empty poll counts) | `root` pumps | counts complete lines; Pruv's cap is the `decreases` measure |
+| 4.4e-NU | an argument with an inner NUL is split into two by the host | `rpc::child_args`, `harness.rs` | keeps it; spawn fails `engine-missing` |
+| 4.4e-FB | a folder over 1000000 bytes fails code 1 before spawn | `root` | spawns; `engine-missing` when the binary is absent |
+
+Also repeated: held stores allocated for an empty page (4.3f-P / VL), element arrays (4.3f-E), owned decoding (4.3f-D),
+stderr tail (4.3f-B).
+
+New rows: 4.4e-LP, 4.4e-EC, 4.4e-NU, 4.4e-FB (folder bound kept for the request size proof), 4.4e-DL (`doc_local` source bound),
+4.4e-VT (the whole-root verify exceeds 300 s on this machine even at the unchanged baseline, load about 10).
+Not started: 4.3f-B, 4.3f-E, 4.3f-F (shared modules), 4.3f-S (language).
+
 ## 4. Results
 
-After the last code change (review fixes applied, whole root re-verified), `rs/rust` and `rs/llvm`:
+Step 4.4e, after the last code change (`root` verified in 285 s with a warm proof cache), `rs/rust` and `rs/llvm`:
 
 | check | rs/rust | rs/llvm |
 |---|---|---|
 | `codex/test_impl.py` (verifier + fixtures) | PASS, 136/136 | PASS, 136/136 |
 | `q.py` 300 random + 20 probes + 3 heavy | exact 262, P1 1, P2 2, P3 2, P4 53, P6 2, P8 1, unexplained 0 | same |
-| `q_mutants.py` originals | 16 / 16 match exactly once | - |
+| `q_mutants.py` originals (6 retargeted to the 4.4e code) | 16 / 16 match exactly once | - |
+| `q_mutants.py` full run (stopped at the time cap) | `wrong-id-accepted` killed by fixtures; `initialized-omitted`, `unsupported-mapping-lost`, `not-found-alternative-dropped` hit the 600 s compile wall (reported as `verifier-rejected` with detail `timeout`, so not a kill); 12 not run | - |
 | hand `codex.rs` | builds with `rustc -O --edition 2021` + `host/` serde_json, 0 warnings | - |
 
 The TS oracle passed 136/136 in every run. P1-P8 are the classes `q.py` already explains; no case needed a rerun. The
-frozen py pairs were not built (PF); `q.py` was driven on the two rs pairs only. No perf timing was run.
+frozen py pairs were not built (PF); `q.py` was driven on the two rs pairs only. No perf timing was run. The 4.4e
+`q.py` classes equal the 4.3f ones. `q_mutants.py` builds each mutant without a proof cache under the 600 s
+`compile_pruv` wall, which the codex root exceeds on this machine (row 4.4e-VT); the mutant run needs a larger wall
+or a cache before it can be read.

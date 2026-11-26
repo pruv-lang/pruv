@@ -1415,3 +1415,41 @@ All after the last code change (F1 / F4 from the structure comparison).
      4.4b-NC, 4.3g-A2 / A3, 4.3g-K3, 4.4b-CV.
   4. Then Qwen 4.3e-J / 4.3e-F with one decode-into-buffer form, 4.3e-D, and the 4.4d transport rows (LC, PO, RC)
      in one `pkgs/transport` change.
+
+
+## Step 4.4e: Codex rows 4.3f-A, O, N, K, L, T, P, R, D
+
+- `codex/RESHAPE.md` §3b. Changed: `codex/root.pruv`, `rpc.pruv`, `read.pruv`, `item.pruv`, `plan.pruv`,
+  `folder.pruv`, `util.pruv` only; no `lib/` or `pkgs/` module changed, so no other fragment was rerun. The codex
+  `q_mutants.py` targets that matched rewritten code were moved to the new lines (same faults).
+- Closed: 4.3f-A (allocation after `start` and after the cwd check; one cwd decode; no request after stdin closed),
+  4.3f-O (`read::absorb` returns `enum Absorbed`), 4.3f-N (`parse_line(&[u8])`), 4.3f-K (`kind_of` returns
+  `enum Kind`, early on no `id`), 4.3f-L (one 300-unit walk for `has_phrase` and `error_detail`), 4.3f-T, 4.3f-R.
+- Partly closed: 4.3f-P (`marker_end` returns 0; plan state still `pl` / `pb`), 4.3f-D (`str_at` uses
+  `string_text_scanned_owned`; the length test stays, row 4.4e-DL).
+- One Codex structure comparison (gpt-6.2-astra, high; Codex 2 account). It confirmed the 4.4e changes (`head` cut and
+  case fold, phrase order, `kind_of`, `lone_at`, `marker_end`, page ids, `Full` before the cursor, `more` at 40). Its
+  other findings are behavior that predates 4.4e or open shared rows; none was applied: 4.4e-LP (a lone surrogate or
+  `1e400` in an unread member is accepted; the hand's serde rejects the line), 4.4e-EC (the pump cap counts `step`
+  calls, the hand counts lines; the cap is also the `decreases` measure), 4.4e-NU (an argument with an inner NUL is
+  split by the host), and 4.3f-B / E / F / P / D again.
+- Tooling note: the whole codex root verify takes 285-330 s on this machine at load about 10 (the unchanged
+  baseline also passed 300 s); the 300 s cap was met only with a warm proof cache (row 4.4e-VT).
+- Results: codex `test_impl.py` 136/136 on `rs/rust` and `rs/llvm`; `q.py` (300 random + probes, rs pairs) same
+  classes as 4.3f, unexplained 0; `q_mutants.py` 16/16 originals match once, the full run was stopped at the time
+  cap (1 killed, 3 compile-wall timeouts, 12 not run; see `codex/RESHAPE.md` §4).
+
+### Rows open after 4.4e
+
+- New (bench): 4.4e-LP, 4.4e-EC, 4.4e-NU, 4.4e-FB (the `InputTooLarge` folder bound stays for the `req_list` size proof), 4.4e-DL (`doc_local`
+  gives no source length bound, so `str_at` keeps its test), 4.4e-VT (codex verify time).
+- Still open from 4.3f: 4.3f-P (`Option<Plan>`), 4.3f-B, 4.3f-E, 4.3f-F (shared modules), 4.3f-S (language).
+- Still open from 4.4d and before: as listed after 4.4d (minus the closed 4.3f rows above).
+- Next:
+  1. OpenCode leftovers: 4.4b-SP first (spawn cwd / argv checked against the TypeScript reference), then 4.3g-T2,
+     4.4b-NC, 4.3g-A2 / A3, 4.3g-K3, 4.4b-CV.
+  2. Claude leftovers: 4.3h-P (ordinal column, with the A3 snapshot), 4.4c-TS / 4.4c-MB / 4.4c-TR / 4.4c-OL, then
+     4.3h-O (shared packages; run all consumers) and 4.3h-Q.
+  3. req port (REQ-PORT) once P10H passes on both backends.
+  4. Then Codex 4.3f-B, 4.3f-E, 4.3f-F and Qwen 4.3e-J / 4.3e-F / 4.3e-D with the 4.4d transport rows (shared
+     modules; run all consumers).

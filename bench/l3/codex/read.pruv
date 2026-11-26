@@ -11,8 +11,11 @@
 // clipped turn are at least 32765 bytes long, so the 4-byte padding scalar always overflows and is cut off again.
 
 // One page of thread/turns/list: classify every object of result.data newest first, keep the last-plan, apply the
-// budgets. Returns 0, or -4 when a bound that cannot happen was exceeded.
-pub fn absorb(d: crate::json::JsonDocument, rid: i64, inout hs: [i64], inout ht: [i64], inout hb: crate::util::ByteBuffer, inout pl: [i64], inout pb: [u8]) -> i64 ! alloc
+// budgets. Open when the page fit, Full when the turn or byte budget is full (hand `absorb` returns true), Broken
+// when a bound that cannot happen was exceeded.
+pub enum Absorbed { Open, Full, Broken }
+
+pub fn absorb(d: crate::json::JsonDocument, rid: i64, inout hs: [i64], inout ht: [i64], inout hb: crate::util::ByteBuffer, inout pl: [i64], inout pb: [u8]) -> Absorbed ! alloc
   requires len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024
   requires 0 <= hs[0] && hs[0] <= 200 && 0 <= hs[1] && hs[1] <= len(hb.data) && 0 <= hs[2] && hs[2] <= 2097152
   requires -1 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000 && (pl[63] == 0 || pl[63] == 1)
@@ -23,7 +26,7 @@ pub fn absorb(d: crate::json::JsonDocument, rid: i64, inout hs: [i64], inout ht:
   let ids: [i64] = crate::util::elements(d, crate::util::field(d, rid, "data"));
   let n: i64 = len(ids);
   let mut k: i64 = 0;
-  while k < n && hs[4] == 0
+  while k < n
     invariant 0 <= k && k <= n && n == len(ids)
     invariant len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024
     invariant 0 <= hs[0] && hs[0] <= 200 && 0 <= hs[1] && hs[1] <= len(hb.data) && 0 <= hs[2] && hs[2] <= 2097152
@@ -46,54 +49,51 @@ pub fn absorb(d: crate::json::JsonDocument, rid: i64, inout hs: [i64], inout ht:
       }
       let plen: i64 = len(raw.prompt);
       let rlen: i64 = len(raw.reply);
-      if raw.rbytes < 0 { return -4; }
+      if raw.rbytes < 0 { return Absorbed::Broken; }
       if plen > 0 || raw.nreply > 0 {
         let mut rb: i64 = raw.rbytes;
         if rb > 32768 { rb = 32768; }
         let size: i64 = plen + rb;
-        if hs[0] >= 200 || hs[2] + size > 2097152 {
-          hs[4] = 1;
-        } else {
-          let needed: i64 = hs[1] + plen + rlen + 48;
-          if needed > 8700000 { return -4; }
-          if rlen > 32768 || raw.tools < 0 || raw.nreply < 0 { return -4; }
-          if needed > len(hb.data) { crate::util::grow_bytes(inout hb.data, needed, 8700000); }
-          let h: i64 = hs[0];
-          let b: i64 = 10 * h;
-          let mut u: i64 = hs[1];
-          ht[b] = u;
-          ht[b + 1] = plen;
-          crate::bytes::copy_span(inout hb.data, u, raw.prompt, 0, plen);
-          u = u + plen;
-          ht[b + 2] = u;
-          ht[b + 3] = rlen;
-          crate::bytes::copy_span(inout hb.data, u, raw.reply, 0, rlen);
-          u = u + rlen;
-          ht[b + 4] = raw.nreply;
-          ht[b + 5] = 0;
-          if raw.rclipped { ht[b + 5] = 1; }
-          ht[b + 6] = raw.tools;
-          ht[b + 7] = -1;
-          if len(raw.created) == 24 {
-            ht[b + 7] = u;
-            crate::bytes::copy_span(inout hb.data, u, raw.created, 0, 24);
-            u = u + 24;
-          }
-          ht[b + 8] = -1;
-          if len(raw.completed) == 24 {
-            ht[b + 8] = u;
-            crate::bytes::copy_span(inout hb.data, u, raw.completed, 0, 24);
-            u = u + 24;
-          }
-          ht[b + 9] = 0;
-          hs[0] = h + 1;
-          hs[1] = u;
-          hs[2] = hs[2] + size;
+        if hs[0] >= 200 || hs[2] + size > 2097152 { return Absorbed::Full; }
+        let needed: i64 = hs[1] + plen + rlen + 48;
+        if needed > 8700000 { return Absorbed::Broken; }
+        if rlen > 32768 || raw.tools < 0 || raw.nreply < 0 { return Absorbed::Broken; }
+        if needed > len(hb.data) { crate::util::grow_bytes(inout hb.data, needed, 8700000); }
+        let h: i64 = hs[0];
+        let b: i64 = 10 * h;
+        let mut u: i64 = hs[1];
+        ht[b] = u;
+        ht[b + 1] = plen;
+        crate::bytes::copy_span(inout hb.data, u, raw.prompt, 0, plen);
+        u = u + plen;
+        ht[b + 2] = u;
+        ht[b + 3] = rlen;
+        crate::bytes::copy_span(inout hb.data, u, raw.reply, 0, rlen);
+        u = u + rlen;
+        ht[b + 4] = raw.nreply;
+        ht[b + 5] = 0;
+        if raw.rclipped { ht[b + 5] = 1; }
+        ht[b + 6] = raw.tools;
+        ht[b + 7] = -1;
+        if len(raw.created) == 24 {
+          ht[b + 7] = u;
+          crate::bytes::copy_span(inout hb.data, u, raw.created, 0, 24);
+          u = u + 24;
         }
+        ht[b + 8] = -1;
+        if len(raw.completed) == 24 {
+          ht[b + 8] = u;
+          crate::bytes::copy_span(inout hb.data, u, raw.completed, 0, 24);
+          u = u + 24;
+        }
+        ht[b + 9] = 0;
+        hs[0] = h + 1;
+        hs[1] = u;
+        hs[2] = hs[2] + size;
       }
     }
   }
-  return 0;
+  return Absorbed::Open;
 }
 
 // A 24-byte stamp of the arena is present at o and valid UTF-8 (no copy).

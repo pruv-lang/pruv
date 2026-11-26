@@ -33,18 +33,29 @@ pub fn same(a: str, b: str) -> bool
   return true;
 }
 
-// true when the UTF-16 units hold a surrogate that is not part of a high-low pair
-pub fn lone(u: [i64]) -> bool
+// true when string value id holds a surrogate that is not part of a high-low pair, walked in place over its raw
+// span (only a \u escape yields a surrogate unit; a literal four-byte scalar is a valid pair)
+pub fn lone_at(d: crate::json::JsonDocument, id: i64) -> bool
 {
-  let mut i: i64 = 0;
-  while i < len(u)
-    invariant 0 <= i && i <= len(u)
-    decreases len(u) - i
+  let s: crate::access::Span = crate::access::raw_span(d, id);
+  if s.status != 0 || s.end - s.start < 2 { return false; }
+  let stop: i64 = s.end - 1;
+  let mut high: bool = false;
+  let mut p: i64 = s.start + 1;
+  while p < stop
+    invariant s.start + 1 <= p && p <= stop && stop <= len(d.source) && stop <= 16777216
+    decreases stop - p
   {
-    let x: i64 = u[i];
-    if x >= 55296 && x <= 56319 && i + 1 < len(u) && u[i + 1] >= 56320 && u[i + 1] <= 57343 { i = i + 2; }
-    else if x >= 55296 && x <= 57343 { return true; }
-    else { i = i + 1; }
+    let st: crate::jstr::Step = crate::jstr::step(d.source, p, stop);
+    let u: i64 = st.value;
+    if u >= 56320 && u <= 57343 {
+      if !high { return true; }
+      high = false;
+    } else {
+      if high { return true; }
+      high = u >= 55296 && u <= 56319;
+    }
+    p = st.next;
   }
-  return false;
+  return high;
 }
