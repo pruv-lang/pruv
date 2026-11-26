@@ -89,26 +89,6 @@ fn meta_new(mode: i64) -> [i64] ! alloc
   return m;
 }
 
-fn put_str(inout dst: [u8], at: i64, s: str) -> ()
-  requires 0 <= at && at <= len(dst) && len(s) <= len(dst) - at
-  ensures len(dst) == len(old(dst))
-  ensures forall k in 0..len(s): dst[at + k] == s[k]
-  ensures forall k in 0..len(dst): ((k < at || k >= at + len(s)) ==> dst[k] == old(dst)[k])
-{
-  let n: i64 = len(s);
-  let mut j: i64 = 0;
-  while j < n
-    invariant 0 <= j && j <= n && n == len(s) && 0 <= at && at <= len(dst) && n <= len(dst) - at && len(dst) == len(old(dst))
-    invariant forall k in 0..j: dst[at + k] == s[k]
-    invariant forall k in 0..len(dst): ((k < at || k >= at + j) ==> dst[k] == old(dst)[k])
-    decreases n - j
-  {
-    let b: i64 = s[j];
-    dst[at + j] = b;
-    j = j + 1;
-  }
-}
-
 fn publish(meta: [i64], text: [u8]) -> crate::boundary::ImportResult ! alloc
 {
   let turns: [i64] = alloc(0, 0);
@@ -117,22 +97,20 @@ fn publish(meta: [i64], text: [u8]) -> crate::boundary::ImportResult ! alloc
   return crate::boundary::ImportResult::Imported(o);
 }
 
-fn head_result(title: str, has_title: bool, cwd: str, has_cwd: bool, ep: str, has_ep: bool) -> crate::boundary::ImportResult ! alloc
+fn head_result(title: str, has_title: bool, cwd: str, has_cwd: bool) -> crate::boundary::ImportResult ! alloc
 {
   let tl: i64 = len(title);
   let cl: i64 = len(cwd);
-  let el: i64 = len(ep);
-  if tl > 5646080 || cl > 5646080 || el > 5646080 { return fail_zero(); }
-  let total: i64 = tl + cl + el;
+  if tl > 5646080 || cl > 5646080 { return fail_zero(); }
+  let total: i64 = tl + cl;
   if total > 5646080 { return fail_zero(); }
-  let mut text: [u8] = alloc(total, 0);
-  put_str(inout text, 0, title);
-  put_str(inout text, tl, cwd);
-  put_str(inout text, tl + cl, ep);
+  let mut text: [u8] = alloc(0, 0);
+  arr_reserve(inout text, total);
+  arr_append(inout text, title, 0, tl);
+  arr_append(inout text, cwd, 0, cl);
   let mut m: [i64] = meta_new(0);
   if has_title { m[4] = 0; m[5] = tl; }
   if has_cwd { m[6] = tl; m[7] = cl; }
-  if has_ep { m[8] = tl + cl; m[9] = el; }
   return publish(m, text);
 }
 
@@ -146,12 +124,13 @@ fn tail_result(title: str, has_title: bool, last: [u8], has_at: bool) -> crate::
     extra = 24;
   }
   let total: i64 = tl + extra;
-  let mut text: [u8] = alloc(total, 0);
-  put_str(inout text, 0, title);
+  let mut text: [u8] = alloc(0, 0);
+  arr_reserve(inout text, total);
+  arr_append(inout text, title, 0, tl);
   let mut m: [i64] = meta_new(1);
   if has_title { m[4] = 0; m[5] = tl; }
   if has_at {
-    crate::bytes::copy_span(inout text, tl, last, 0, 24);
+    arr_append(inout text, last, 0, 24);
     m[10] = tl;
     m[11] = 24;
   }
@@ -165,12 +144,9 @@ pub fn read_head(data: [u8], cut_after: bool) -> crate::boundary::ImportResult !
     return crate::boundary::ImportResult::Failed(crate::boundary::code_input_too_large(), 0);
   }
   let mut cwd: str = "";
-  let mut ep: str = "";
   let mut title: str = "";
   let mut has_cwd: bool = false;
-  let mut has_ep: bool = false;
   let mut has_title: bool = false;
-  let mut idle: bool = false;
   let mut offset: i64 = 0;
   while offset < len(data)
     invariant 0 <= offset && offset <= len(data)
@@ -186,8 +162,8 @@ pub fn read_head(data: [u8], cut_after: bool) -> crate::boundary::ImportResult !
             if !has_cwd {
               let f: crate::entry::Field = crate::entry::string_field(d, root, "cwd");
               match f {
-                crate::entry::Field::Value(v) => { cwd = copy(v); has_cwd = true; }
-                crate::entry::Field::Missing => { idle = true; }
+                crate::entry::Field::Value(v) => { cwd = move v; has_cwd = true; }
+                crate::entry::Field::Missing => {}
                 crate::entry::Field::Defect(e) => { return fail_at(start, end, 0); }
               }
             }
@@ -196,15 +172,15 @@ pub fn read_head(data: [u8], cut_after: bool) -> crate::boundary::ImportResult !
               match h {
                 crate::entry::Field::Value(t) => {
                   if len(t) > 50331648 { return fail_at(start, end, 0); }
-                  title = copy(t);
+                  title = move t;
                   has_title = true;
                 }
-                crate::entry::Field::Missing => { idle = true; }
+                crate::entry::Field::Missing => {}
                 crate::entry::Field::Defect(e) => { return fail_at(start, end, 0); }
               }
             }
           }
-          crate::entry::Line::Skip => { idle = true; }
+          crate::entry::Line::Skip => {}
           crate::entry::Line::Defect(p) => { return fail_at(start, end, p); }
         }
         offset = next;
@@ -214,7 +190,7 @@ pub fn read_head(data: [u8], cut_after: bool) -> crate::boundary::ImportResult !
       crate::framing::Frame::Done => { offset = len(data); }
     }
   }
-  return head_result(title, has_title, cwd, has_cwd, ep, has_ep);
+  return head_result(title, has_title, cwd, has_cwd);
 }
 
 
@@ -227,7 +203,6 @@ pub fn tail_info(data: [u8], cut_before: bool) -> crate::boundary::ImportResult 
   let mut best_rank: i64 = 0;
   let mut last: [u8] = alloc(0, 0);
   let mut has_at: bool = false;
-  let mut idle: bool = false;
   let mut offset: i64 = crate::framing::skip_first(data, cut_before);
   while offset < len(data)
     invariant 0 <= offset && offset <= len(data)
@@ -258,14 +233,14 @@ pub fn tail_info(data: [u8], cut_before: bool) -> crate::boundary::ImportResult 
                 if len(text) > 50331648 { return fail_at(start, end, 0); }
                 if replaces(best_rank, rank) {
                   best_rank = rank;
-                  best = copy(text);
+                  best = move text;
                 }
               }
-              crate::entry::Title::NoTitle => { idle = true; }
+              crate::entry::Title::NoTitle => {}
               crate::entry::Title::Defect(e) => { return fail_at(start, end, 0); }
             }
           }
-          crate::entry::Line::Skip => { idle = true; }
+          crate::entry::Line::Skip => {}
           crate::entry::Line::Defect(p) => { return fail_at(start, end, p); }
         }
         offset = next;
@@ -285,17 +260,16 @@ enum Stamp { At(text: str), Bad(kind: i64) }
 fn stamp_of(doc: crate::json::JsonDocument) -> Stamp ! alloc
 {
   let root: i64 = crate::access::root(doc);
-  let none: str = "";
   let tf: i64 = crate::access::field(doc, root, "timestamp");
-  if tf == -1 { return Stamp::At(copy(none)); }
+  if tf == -1 { return Stamp::At(""); }
   if tf < 0 { return Stamp::Bad(tf); }
   let iso: crate::time::Iso = crate::time::iso_of(doc, tf);
   if iso.status < 0 { return Stamp::Bad(iso.status); }
-  if iso.status != 0 { return Stamp::At(copy(none)); }
+  if iso.status != 0 { return Stamp::At(""); }
   if len(iso.text) != 24 { return Stamp::Bad(-4); }
   let s: str = crate::jstr::adapter_probe(iso.text);
   if len(s) != 24 { return Stamp::Bad(-4); }
-  return Stamp::At(copy(s));
+  return Stamp::At(move s);
 }
 
 // One record per Object boundary or replay operation. Skip frames and non-user drops are no-ops.
@@ -339,7 +313,7 @@ fn write_text(inout log: Events, kind: i64, text: str) -> bool ! alloc
   let n: i64 = len(text);
   if n > 4294967295 - start { return false; }
   reserve_bytes(inout log.text, start + n);
-  put_str(inout log.text, start, text);
+  copy_range(inout log.text, start, text, 0, n);
   log.end = start + n;
   return write_event(inout log, Event { kind: kind, a: start, b: n });
 }
@@ -498,43 +472,51 @@ fn replay(log: Events, chain: crate::chain::Chain, selected: [u8], inout st: [i6
     decreases log.used - pos
   {
     let event: Event = read_event(log.records, pos);
-    if event.kind == 0 {
-      if event.a >= len(selected) { return Replay { title: move best, model: move model, defect: 0 }; }
-      chosen = !chain.active || selected[event.a] == 1;
-      start = event.b;
-      at = "";
-      if chosen {
-        if !started && pending { crate::turns::skip_user(inout st); }
-        started = true;
+    match event.kind {
+      0 => {
+        if event.a >= len(selected) { return Replay { title: move best, model: move model, defect: 0 }; }
+        chosen = !chain.active || selected[event.a] == 1;
+        start = event.b;
+        at = "";
+        if chosen {
+          if !started && pending { crate::turns::skip_user(inout st); }
+          started = true;
+        }
+        pending = false;
       }
-      pending = false;
-    } else if event.kind == 1 {
-      pending = true;
-      if started { crate::turns::skip_user(inout st); }
-    } else if event.kind == 3 {
-      return Replay { title: move best, model: move model, defect: 0 };
-    } else if event.kind == 9 {
-      if chosen { return Replay { title: move best, model: move model, defect: start }; }
-    } else if event.kind == 8 {
-      if chosen { crate::turns::tool(inout st, inout sl, 1); }
-    } else if event.kind == 2 || chosen {
-      if event.a > log.end || event.b > log.end - event.a {
-        return Replay { title: move best, model: move model, defect: 0 };
+      1 => {
+        pending = true;
+        if started { crate::turns::skip_user(inout st); }
       }
-      let text: str = read_text(log.text, event.a, event.b);
-      if event.kind == 2 {
-        best = move text;
-      } else if event.kind == 4 {
-        if len(text) != 24 { return Replay { title: move best, model: move model, defect: start }; }
-        at = move text;
-      } else if event.kind == 6 {
-        model = move text;
-      } else {
-        if len(text) > 50331648 { return Replay { title: move best, model: move model, defect: start }; }
-        if event.kind == 5 {
-          crate::turns::begin2(inout st, inout sl, inout bk, text, at);
-        } else {
-          crate::turns::answer2(inout st, inout sl, inout bk, text, at);
+      3 => { return Replay { title: move best, model: move model, defect: 0 }; }
+      9 => {
+        if chosen { return Replay { title: move best, model: move model, defect: start }; }
+      }
+      8 => {
+        if chosen { crate::turns::tool(inout st, inout sl, 1); }
+      }
+      _ => {
+        if event.kind == 2 || chosen {
+          if event.a > log.end || event.b > log.end - event.a {
+            return Replay { title: move best, model: move model, defect: 0 };
+          }
+          let text: str = read_text(log.text, event.a, event.b);
+          match event.kind {
+            2 => { best = move text; }
+            4 => {
+              if len(text) != 24 { return Replay { title: move best, model: move model, defect: start }; }
+              at = move text;
+            }
+            6 => { model = move text; }
+            _ => {
+              if len(text) > 50331648 { return Replay { title: move best, model: move model, defect: start }; }
+              if event.kind == 5 {
+                crate::turns::begin2(inout st, inout sl, inout bk, text, at);
+              } else {
+                crate::turns::answer2(inout st, inout sl, inout bk, text, at);
+              }
+            }
+          }
         }
       }
     }
@@ -647,7 +629,7 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
     j = j + 1;
   }
   if !ok { return wfail_zero(); }
-  put_str(inout w, hl, title);
-  put_str(inout w, hl + tl, result.model);
+  copy_range(inout w, hl, title, 0, tl);
+  copy_range(inout w, hl + tl, result.model, 0, ml);
   return w;
 }

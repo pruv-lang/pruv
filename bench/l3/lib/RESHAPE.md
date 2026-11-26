@@ -1059,3 +1059,30 @@ All after the last code change (F1 / F4 from the structure comparison).
   3. Grok bench rows 4.3c-T and 4.3c-B (`entry.pruv` only) and 4.3c-G (`pkgs/transport`, all transport consumers);
      `pkgs/turns` dead code (`begin3`, `answer3`, `clip_span`, `put_nl_span`, `put_pad`, `write_span`) with all turns
      consumers run.
+
+## Step 4.3d: Qwen head, tail and window import
+
+- `qwen/RESHAPE.md`. New hand baseline `qwen/handrust/src/edge.rs` (`head_import`, `tail_import`; the hand had only
+  `window_import`), checked against the 21 qwen fixtures (0 differences). Byte loops the hand does not write became
+  `find_byte` (`framing::skip_first`, `window_next` without its 16-byte pre-pass, `chain::capacity`) and `eq_range`
+  (`chain::same_span` removed); `put_str` / `chain::put` became `copy_range`; zero-filled exact-size results became
+  `arr_reserve` + `arr_append`; eight `copy(v)` of owned match binders in `entry` became `move`; `replay` is a
+  literal `match` on `event.kind` (R-6u-8); dead `idle`, `ep`, `seen` and `Block::Veto` removed.
+- No module moved to `lib` / `pkgs`; no shared module changed, so no consumer runs were needed.
+- Tests: `qwen/RESHAPE.md` §4.
+
+### Rows open after 4.3d
+
+- New (language): 4.3d-M, `move s.f` of a `[u8]` field of a `let`-bound struct returned by value is `type/array_alias`;
+  TK / LB9 cover a consuming match binder only (`qwen/import.pruv` `tail_info` keeps `copy(iso.text)`).
+- New (bench, `qwen/RESHAPE.md` §2-§3): 4.3d-H (no hash map, arena + bucket index kept), 4.3d-C (LF pre-pass sizing),
+  4.3d-T (title / stamp decided in the scan), 4.3d-O (`publish` / `make_output` take ownership), 4.3d-P (`{` prefilter
+  before parse), 4.3d-W (`store_le` / `load_le` wire words).
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB, TH, FO, FV, UL, VP,
+  IW, VL.
+- Next:
+  1. Codex, then OpenCode together with Claude R08.
+  2. Step 4.4 (`docs/RUST_SHAPE_RESET.md` §6).
+  3. Grok bench rows 4.3c-T, 4.3c-B, 4.3c-G and `pkgs/turns` dead code (as listed after 4.3c).
+  4. Qwen bench rows 4.3d-C, 4.3d-T, 4.3d-O, 4.3d-P, 4.3d-W (`qwen/` only; 4.3d-T must keep the `last-title` mutant
+     in `q_mutants.py` meaningful or move it).
