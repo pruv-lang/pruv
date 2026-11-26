@@ -198,8 +198,8 @@ pub fn wire_fail(code: i64, stage: i64, detail: [u8]) -> [u8] ! alloc
   return wire;
 }
 
-// wire_read on a wire that is already sized (the turn texts are written first, by turns::finish_into):
-// validate the read shape and write the words; false means the caller fails as wire_read would.
+// The read header on a wire that is already sized (the turn texts are written first, by turns::finish_into):
+// validate the read shape and write the words; false means the caller fails the read.
 pub fn read_header(meta: [i64], rows: [i64], n: i64, inout wire: [u8]) -> bool
   requires len(meta) == 16 && len(rows) <= 2060 && 0 <= n && n <= 100000000
   requires len(wire) == 8 * (20 + len(rows)) + n
@@ -228,38 +228,6 @@ pub fn read_header(meta: [i64], rows: [i64], n: i64, inout wire: [u8]) -> bool
     j = j + 1;
   }
   return true;
-}
-
-// Validate the read shape, then write the words and leave the text area for finish().
-pub fn wire_read(meta: [i64], rows: [i64], n: i64) -> [u8] ! alloc
-  requires len(meta) == 16 && len(rows) <= 2060 && 0 <= n && n <= 100000000
-  ensures len(result) == 24 || len(result) == 8 * (20 + len(rows)) + n
-{
-  let empty: [u8] = alloc(0, 0);
-  if !check_read(meta, rows, n) { return wire_fail(2, 6, empty); }
-  let rw: i64 = len(rows);
-  let mut wire: [u8] = alloc(8 * (20 + rw) + n, 0);
-  let a: bool = put_word(inout wire, 0, 0);
-  let b: bool = put_word(inout wire, 8, 16);
-  let c: bool = put_word(inout wire, 16, rw);
-  let d: bool = put_word(inout wire, 24, n);
-  let mut i: i64 = 0;
-  while i < 16
-    invariant 0 <= i && i <= 16 && len(meta) == 16 && len(wire) == 8 * (20 + rw) + n && 0 <= rw && 0 <= n
-    decreases 16 - i
-  {
-    if !put_word(inout wire, 8 * (4 + i), meta[i]) { return wire_fail(2, 6, empty); }
-    i = i + 1;
-  }
-  let mut j: i64 = 0;
-  while j < rw
-    invariant 0 <= j && j <= rw && rw == len(rows) && len(wire) == 8 * (20 + rw) + n && 0 <= n
-    decreases rw - j
-  {
-    if !put_word(inout wire, 8 * (20 + j), rows[j]) { return wire_fail(2, 6, empty); }
-    j = j + 1;
-  }
-  return wire;
 }
 
 // Only the legacy codex_read entry widens the text bytes into [i64].

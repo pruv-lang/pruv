@@ -1,13 +1,14 @@
 // Codex app-server conversation (withRpcChild with jsonrpc false, withCodex) on the G10 event loop.
 // The caller owns the receive state: st [5], line (up to 8388608 bytes), chunk [65536], tl (the stderr tail, limit 1024) (see receive below)
-// and the control array ctl [8]:
-//   ctl[0] failure code (0 none; 2 internal, 3 not-found, 4 codex-unsupported, 5 timeout, 6 read-failed, 7 engine-missing)
-//   ctl[1] stage (0 pre-spawn, 1 spawn, 2 initialize, 3 thread/list, 4 thread/read, 5 thread/turns/list, 6 result)
-//   ctl[2] process slot (-1 none)   ctl[3] overall timer slot   ctl[4] last request id
-//   ctl[5] 1 when step left a line  ctl[6] length of that line in `line`
-//   ctl[7] exit code of a closed child (diagnostic)
+// and the control state Ctl:
+//   fail   failure code (0 none; 2 internal, 3 not-found, 4 codex-unsupported, 5 timeout, 6 read-failed, 7 engine-missing)
+//   stage  (0 pre-spawn, 1 spawn, 2 initialize, 3 thread/list, 4 thread/read, 5 thread/turns/list, 6 result)
+//   slot   process slot (-1 none)   overall  overall timer slot
+//   got    step left a line         n        length of that line in `line`
 // Callers pump with step until kind_of says the response arrived (at most 1,000,000 events, then read-failed); the
 // first failure wins.
+
+pub struct Ctl { fail: i64, stage: i64, slot: i64, overall: i64, got: bool, n: i64 }
 
 // child arguments: app-server --stdio, then the host's extra arguments
 fn child_args(argv: str, sp: [i64]) -> ProcessArgs ! alloc
@@ -33,38 +34,41 @@ fn child_args(argv: str, sp: [i64]) -> ProcessArgs ! alloc
   return move a;
 }
 
-// Spawn the child and register it with one overall timer. On failure ctl[0] is set and the returned loop is only to be closed.
-pub fn start(binary: str, argv: str, cwd: str, timeout_ms: i64, inout ctl: [i64]) -> Loop ! async, net, proc, alloc
-  requires len(ctl) == 8
-  ensures len(ctl) == 8 && ctl[6] == 0
+// Spawn the child and register it with one overall timer. On failure ctl.fail is set and the returned loop is only to be closed.
+pub fn ctl_new() -> Ctl
+  ensures result.fail == 0 && result.n == 0
+{ return Ctl { fail: 0, stage: 0, slot: -1, overall: -1, got: false, n: 0 }; }
+
+pub fn start(binary: str, argv: str, cwd: str, timeout_ms: i64, inout ctl: Ctl) -> Loop ! async, net, proc, alloc
+  requires ctl.fail == 0 && ctl.n == 0
+  ensures ctl.n == 0
 {
-  ctl[0] = 0; ctl[1] = 0; ctl[2] = -1; ctl[3] = -1; ctl[4] = 0; ctl[6] = 0;
   let sp: [i64] = crate::args::arg_spans(argv);
-  if sp[0] != 0 { ctl[0] = 2; let l0: Loop = ev_new(3); return move l0; }
+  if sp[0] != 0 { ctl.fail = 2; let l0: Loop = ev_new(3); return move l0; }
   let args: ProcessArgs = child_args(argv, sp);
-  ctl[1] = 1;
+  ctl.stage = 1;
   let child: Process = proc_spawn(binary, args, cwd);
   if !proc_ok(child) {
     let r: Result<i64> = proc_wait(move child);
-    ctl[0] = 7;
+    ctl.fail = 7;
     let l1: Loop = ev_new(3);
     return move l1;
   }
   let mut l: Loop = ev_new(3);
   if !ev_ok(l) || ev_count(l) >= ev_cap(l) {
     let k: Result<i64> = proc_kill(move child);
-    ctl[0] = 6;
+    ctl.fail = 6;
     return move l;
   }
   l = ev_add_process(move l, move child);
-  ctl[2] = ev_last(l);
-  if !ev_ok(l) || ev_count(l) >= ev_cap(l) { ctl[0] = 6; return move l; }
+  ctl.slot = ev_last(l);
+  if !ev_ok(l) || ev_count(l) >= ev_cap(l) { ctl.fail = 6; return move l; }
   let mut ms: i64 = timeout_ms;
   if ms < 0 { ms = 0; }
   if ms > 86400000 { ms = 86400000; }
   l = ev_add_timer(move l, ms);
-  ctl[3] = ev_last(l);
-  if !ev_ok(l) || ev_count(l) >= ev_cap(l) { ctl[0] = 6; return move l; }
+  ctl.overall = ev_last(l);
+  if !ev_ok(l) || ev_count(l) >= ev_cap(l) { ctl.fail = 6; return move l; }
   return move l;
 }
 
@@ -77,9 +81,8 @@ pub fn parse_line(inout line: crate::util::ByteBuffer, n: i64, st: crate::transp
   ensures len(line.data) <= 8388608 && st.filled <= len(line.data)
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
 {
-  let mut r: [i64] = alloc(2, 0);
-  crate::util::trim_span(line.data, n, inout r);
-  return crate::lines::parse_copy(line.data, r[0], r[1]);
+  let t: crate::util::Bounds = crate::util::trim_span(line.data, n);
+  return crate::lines::parse_copy(line.data, t.lo, t.hi);
 }
 
 // The shared transport requires a full-sized line buffer. Keep its polling and event order
@@ -115,14 +118,10 @@ fn receive(take l: Loop, slot: i64, overall: i64,
   }
   let begin: i64 = st.at;
   let filled: i64 = st.filled;
-  let mut i: i64 = begin;
-  while i < st.end && i - begin < 8388608 - filled && chunk[i] != 10
-    invariant 0 <= begin && begin <= i && i <= st.end && st.end <= 65536 && len(chunk) == 65536
-    invariant i - begin <= 8388608 - filled
-    decreases st.end - i
-  {
-    i = i + 1;
-  }
+  // memchr for the newline within the line limit
+  let mut lim: i64 = st.end;
+  if lim - begin > 8388608 - filled { lim = begin + 8388608 - filled; }
+  let mut i: i64 = find_byte(chunk, 10, begin, lim);
   let needed: i64 = filled + (i - begin);
   if needed > len(line.data) { crate::util::grow_bytes(inout line.data, needed, 8388608); }
   crate::bytes::copy_span(inout line.data, filled, chunk, begin, i);
@@ -159,29 +158,26 @@ fn receive(take l: Loop, slot: i64, overall: i64,
 }
 
 // One receive step of a caller's pump loop (the caller parses each line once and keeps the document; a document cannot
-// travel back with the loop). ctl[5] = 1 when a line of ctl[6] bytes is in `line`, 0 when nothing usable arrived.
-// An oversized line, a closed child, a timeout or a transport failure sets ctl[0].
-pub fn step(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: crate::transport::Reader, inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
-  requires len(ctl) == 8
+// travel back with the loop). ctl.got when a line of ctl.n bytes is in `line`, false when nothing usable arrived.
+// An oversized line, a closed child, a timeout or a transport failure sets ctl.fail.
+pub fn step(take l: Loop, slot: i64, overall: i64, inout ctl: Ctl, inout st: crate::transport::Reader, inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
   requires 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
   requires len(line.data) <= 8388608
   requires crate::tail::tail_ok(tl) && tl.limit == 1024
-  ensures len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
+  ensures 0 <= ctl.n && ctl.n <= len(line.data)
   ensures 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
   ensures len(line.data) <= 8388608
   ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
   let mut q: Loop = receive(move l, slot, overall, inout st, inout line, inout chunk, inout tl);
   let n: i64 = st.status;
-  ctl[5] = 0;
-  ctl[6] = 0;
-  if n < 0 && n != -6 {
-    ctl[0] = 6;
-    if n == -1 { ctl[0] = 5; }
-    if n == -4 { ctl[7] = st.exit; }
-  } else if n >= 0 && n <= len(line.data) {
-    ctl[5] = 1;
-    ctl[6] = n;
+  ctl.got = false;
+  ctl.n = 0;
+  if n == -1 { ctl.fail = 5; }
+  else if n < 0 && n != -6 { ctl.fail = 6; }
+  else if n >= 0 && n <= len(line.data) {
+    ctl.got = true;
+    ctl.n = n;
   }
   return move q;
 }
@@ -197,7 +193,8 @@ pub fn kind_of(d: crate::json::JsonDocument, id: i64) -> i64 ! alloc
   if mid >= 0 && crate::access::kind(d, method) == 4 { return 1; }
   if mid >= 0 {
     let number: crate::access::Number = crate::access::number(d, mid);
-    if number.status == 0 && crate::util::id_is(crate::util::raw(d, mid), id) { return 2; }
+    let sp: crate::access::Span = crate::access::raw_span(d, mid);
+    if number.status == 0 && sp.status == 0 && crate::util::id_is(d.source, sp.start, sp.end, id) { return 2; }
   }
   return 0;
 }
@@ -205,33 +202,44 @@ pub fn kind_of(d: crate::json::JsonDocument, id: i64) -> i64 ! alloc
 // the -32601 "not handled" reply to a server request
 pub fn not_handled(d: crate::json::JsonDocument) -> [u8] ! alloc
 {
-  let head: [u8] = crate::util::join(crate::util::to_bytes("{\"id\":"), crate::util::raw(d, crate::util::field(d, 0, "id")));
-  return crate::util::join(head, crate::util::to_bytes(",\"error\":{\"code\":-32601,\"message\":\"not handled\"}}\n"));
+  let a: str = "{\"id\":";
+  let z: str = ",\"error\":{\"code\":-32601,\"message\":\"not handled\"}}\n";
+  let sp: crate::access::Span = crate::access::raw_span(d, crate::util::field(d, 0, "id"));
+  let mut out: [u8] = alloc(0, 0);
+  if sp.status != 0 {
+    arr_reserve(inout out, len(a) + 4 + len(z));
+    arr_append(inout out, a, 0, len(a));
+    arr_append(inout out, "null", 0, 4);
+  } else {
+    arr_reserve(inout out, len(a) + sp.end - sp.start + len(z));
+    arr_append(inout out, a, 0, len(a));
+    arr_append(inout out, d.source, sp.start, sp.end - sp.start);
+  }
+  arr_append(inout out, z, 0, len(z));
+  return out;
 }
 
 // initialize (id 1), then the initialized notification. An error response to initialize is read-failed at stage 2.
-pub fn open(take l: Loop, inout ctl: [i64], inout st: crate::transport::Reader, inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tl: crate::tail::Tail, ms: i64) -> Loop ! async, proc, alloc
-  requires len(ctl) == 8
+pub fn open(take l: Loop, inout ctl: Ctl, inout st: crate::transport::Reader, inout line: crate::util::ByteBuffer, inout chunk: [u8], inout tl: crate::tail::Tail, ms: i64) -> Loop ! async, proc, alloc
   requires 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
   requires len(line.data) <= 8388608
   requires crate::tail::tail_ok(tl) && tl.limit == 1024
-  ensures len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
+  ensures 0 <= ctl.n && ctl.n <= len(line.data)
   ensures 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
   ensures len(line.data) <= 8388608
   ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
-  let slot: i64 = ctl[2];
-  let overall: i64 = ctl[3];
-  ctl[1] = 2;
-  ctl[4] = 1;
-  ctl[5] = 0;
-  ctl[6] = 0;
+  let slot: i64 = ctl.slot;
+  let overall: i64 = ctl.overall;
+  ctl.stage = 2;
+  ctl.got = false;
+  ctl.n = 0;
   let req: [u8] = crate::util::to_bytes("{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"lair\",\"title\":\"Lair\",\"version\":\"0.0.1\"},\"capabilities\":{\"experimentalApi\":true,\"requestAttestation\":false}}}\n");
   let mut q: Loop = crate::transport::send(move l, slot, req, ms);
   let mut done: bool = false;
   let mut events: i64 = 0;
-  while ctl[0] == 0 && !done && events < 1000000
-    invariant 0 <= events && events <= 1000000 && len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= len(line.data)
+  while ctl.fail == 0 && !done && events < 1000000
+    invariant 0 <= events && events <= 1000000 && 0 <= ctl.n && ctl.n <= len(line.data)
     invariant 0 <= st.filled && st.filled <= len(line.data) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
     invariant len(line.data) <= 8388608
     invariant crate::tail::tail_ok(tl) && tl.limit == 1024
@@ -239,21 +247,21 @@ pub fn open(take l: Loop, inout ctl: [i64], inout st: crate::transport::Reader, 
   {
     events = events + 1;
     q = step(move q, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tl);
-    if ctl[0] == 0 && ctl[5] == 1 {
-      let parsed: crate::json::JsonParse = parse_line(inout line, ctl[6], st);
-      ctl[6] = 0;
+    if ctl.fail == 0 && ctl.got {
+      let parsed: crate::json::JsonParse = parse_line(inout line, ctl.n, st);
+      ctl.n = 0;
       match parsed {
         crate::json::JsonParse::Failed(e) => { }
         crate::json::JsonParse::Parsed(d) => {
           let k: i64 = kind_of(d, 1);
           if k == 1 { q = crate::transport::send(move q, slot, not_handled(d), ms); }
-          if k == 2 {
+          else if k == 2 {
             done = true;
             let error: i64 = crate::util::field(d, 0, "error");
-            if crate::access::kind(d, error) == 6 { ctl[0] = 6; }
+            if crate::access::kind(d, error) == 6 { ctl.fail = 6; }
             else if crate::transport::stdin_closed(q, slot) {
               q = crate::transport::expired(move q, overall, inout st);
-              if st.status == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
+              if st.status == -1 { ctl.fail = 5; } else { ctl.fail = 6; }
             }
             else { q = crate::transport::send(move q, slot, crate::util::to_bytes("{\"method\":\"initialized\",\"params\":{}}\n"), ms); }
           }
@@ -261,47 +269,65 @@ pub fn open(take l: Loop, inout ctl: [i64], inout st: crate::transport::Reader, 
       }
     }
   }
-  if ctl[0] == 0 && !done { ctl[0] = 6; }
+  if ctl.fail == 0 && !done { ctl.fail = 6; }
   return move q;
 }
 
+// thread/list request: one buffer reserved for the worst case, the fixed parts appended, the folder escaped into it
 pub fn req_list(id: i64, folder: str) -> [u8] ! alloc
   requires 1 <= id && id <= 99 && len(folder) <= 1000000
 {
-  let mut b: [u8] = crate::util::to_bytes("{\"id\":");
-  b = crate::util::join(b, crate::util::int_bytes(id));
-  b = crate::util::join(b, crate::util::to_bytes(",\"method\":\"thread/list\",\"params\":{\"cwd\":[\""));
-  b = crate::util::join(b, crate::util::escaped(folder));
-  b = crate::util::join(b, crate::util::to_bytes("\"],\"limit\":50,\"sortKey\":\"updated_at\",\"useStateDbOnly\":true,\"sourceKinds\":[\"cli\",\"vscode\",\"exec\",\"appServer\"]}}\n"));
-  return b;
+  let a: str = "{\"id\":";
+  let b: str = ",\"method\":\"thread/list\",\"params\":{\"cwd\":[\"";
+  let z: str = "\"],\"limit\":50,\"sortKey\":\"updated_at\",\"useStateDbOnly\":true,\"sourceKinds\":[\"cli\",\"vscode\",\"exec\",\"appServer\"]}}\n";
+  let mut out: [u8] = alloc(0, 0);
+  arr_reserve(inout out, len(a) + 2 + len(b) + 6 * len(folder) + len(z));
+  arr_append(inout out, a, 0, len(a));
+  crate::util::push_int(inout out, id);
+  arr_append(inout out, b, 0, len(b));
+  crate::util::push_escaped(inout out, folder);
+  arr_append(inout out, z, 0, len(z));
+  return out;
 }
 
 pub fn req_read(id: i64, thread: str) -> [u8] ! alloc
   requires 1 <= id && id <= 99 && len(thread) <= 1000000
 {
-  let mut b: [u8] = crate::util::to_bytes("{\"id\":");
-  b = crate::util::join(b, crate::util::int_bytes(id));
-  b = crate::util::join(b, crate::util::to_bytes(",\"method\":\"thread/read\",\"params\":{\"threadId\":\""));
-  b = crate::util::join(b, crate::util::escaped(thread));
-  b = crate::util::join(b, crate::util::to_bytes("\",\"includeTurns\":false}}\n"));
-  return b;
+  let a: str = "{\"id\":";
+  let b: str = ",\"method\":\"thread/read\",\"params\":{\"threadId\":\"";
+  let z: str = "\",\"includeTurns\":false}}\n";
+  let mut out: [u8] = alloc(0, 0);
+  arr_reserve(inout out, len(a) + 2 + len(b) + 6 * len(thread) + len(z));
+  arr_append(inout out, a, 0, len(a));
+  crate::util::push_int(inout out, id);
+  arr_append(inout out, b, 0, len(b));
+  crate::util::push_escaped(inout out, thread);
+  arr_append(inout out, z, 0, len(z));
+  return out;
 }
 
 // cursor is the raw JSON token (with its quotes) received as nextCursor, or empty for the first page
 pub fn req_turns(id: i64, thread: str, cursor: [u8]) -> [u8] ! alloc
-  requires 1 <= id && id <= 99 && len(thread) <= 1000000
+  requires 1 <= id && id <= 99 && len(thread) <= 1000000 && len(cursor) <= 16777216
 {
-  let mut b: [u8] = crate::util::to_bytes("{\"id\":");
-  b = crate::util::join(b, crate::util::int_bytes(id));
-  b = crate::util::join(b, crate::util::to_bytes(",\"method\":\"thread/turns/list\",\"params\":{\"threadId\":\""));
-  b = crate::util::join(b, crate::util::escaped(thread));
-  b = crate::util::join(b, crate::util::to_bytes("\",\"limit\":20,\"sortDirection\":\"desc\",\"itemsView\":\"summary\""));
+  let a: str = "{\"id\":";
+  let b: str = ",\"method\":\"thread/turns/list\",\"params\":{\"threadId\":\"";
+  let c: str = "\",\"limit\":20,\"sortDirection\":\"desc\",\"itemsView\":\"summary\"";
+  let k: str = ",\"cursor\":";
+  let z: str = "}}\n";
+  let mut out: [u8] = alloc(0, 0);
+  arr_reserve(inout out, len(a) + 2 + len(b) + 6 * len(thread) + len(c) + len(k) + len(cursor) + len(z));
+  arr_append(inout out, a, 0, len(a));
+  crate::util::push_int(inout out, id);
+  arr_append(inout out, b, 0, len(b));
+  crate::util::push_escaped(inout out, thread);
+  arr_append(inout out, c, 0, len(c));
   if len(cursor) > 0 {
-    b = crate::util::join(b, crate::util::to_bytes(",\"cursor\":"));
-    b = crate::util::join(b, cursor);
+    arr_append(inout out, k, 0, len(k));
+    arr_append(inout out, cursor, 0, len(cursor));
   }
-  b = crate::util::join(b, crate::util::to_bytes("}}\n"));
-  return b;
+  arr_append(inout out, z, 0, len(z));
+  return out;
 }
 
 // ---- error responses ----
