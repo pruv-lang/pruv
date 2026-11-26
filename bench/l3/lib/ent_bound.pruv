@@ -123,7 +123,7 @@ pub fn threads_item(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
   let mut el2: [i64] = alloc(n, 0);
   let mut tp2: [i64] = alloc(n, 0);
   let n2: i64 = ses_pairs(cx.blob, starts, r0, inout ep2, inout el2, inout tp2, 0, 1);
-  let mut pool: [i64] = crate::ent_dispatch::blob_pool(cx.blob);
+  let mut pool: [i64] = copy(crate::ent_value::blob_pool(cx.blob));
   let codex: [i64] = crate::ent_u16::lit("codex");
   let codex_off: i64 = crate::ent_value::pool_add(inout pool, codex);
   let codex_len: i64 = crate::ent_value::slot_len_of(codex);
@@ -167,7 +167,7 @@ pub fn excluded_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! allo
   let mut rq: [i64] = crate::ent_u16::zeros(4);
   crate::ent_u16::wr(inout rq, 0, 8);
   crate::ent_packet::put_vs(inout rq, 1, 7, 4, 1);
-  let cx: crate::ent_state::Ctx = crate::ent_state::obs(cx0, 8, 1, crate::ent_dispatch::blob_pool(cx0.blob), rq, tab, 1);
+  let cx: crate::ent_state::Ctx = crate::ent_state::obs(cx0, 8, 1, crate::ent_value::blob_pool(cx0.blob), rq, tab, 1);
   if cx.stalled != 0 || cx.bad != 0 { return cx; }
   let rp: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, 1), 33554432);
   if crate::ent_u16::rd(cx.ent, rp + 4) == 1 { return throw_existing_at(cx, rp + 5); }
@@ -175,7 +175,7 @@ pub fn excluded_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! allo
   let base: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, sec), 33554432);
   let mut rec: [i64] = crate::ent_u16::zeros(4);
   let a: i64 = crate::ent_u16::put_range(inout rec, 1, cx.ent, base, 3);
-  let pool: [i64] = crate::ent_dispatch::blob_pool(cx.ent);
+  let pool: ref [i64] = crate::ent_value::blob_pool(cx.ent);
   return crate::ent_state::set_done(cx, pool, rec, e, 0);
 }
 

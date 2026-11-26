@@ -1,8 +1,10 @@
 // L3-8 entry: ops 2 find_source, 3 list_external, 4 read_external and the rethrow classification.
-// Each item is a replay function: crate::ent_state::Ctx in, Ctx out (see state.pruv for the observation API).
+// Each item is a replay step over the shared context: `inout cx: Ctx`, and an observation that stalls or breaks the replay
+// returns through `?` (see ent_state.pruv for the observation API; hand shape: bench/l3/lib/hand/ent_dispatch.rs).
+// find_item, list_item and read_item are by-value adapters for entry_api::run_item (RESHAPE.md row AD).
 
 // ---- op 2: first row whose source strictly equals the query ----
-pub fn find_item(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+pub fn find_source(inout cx: crate::ent_state::Ctx) -> () ! alloc
 {
   let r0: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.blob, 1), 33554432);
   let sec: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(cx.blob, r0 + 4), 8);
@@ -23,8 +25,15 @@ pub fn find_item(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
   let mut rec: [i64] = crate::ent_u16::zeros(4);
   crate::ent_u16::wr(inout rec, 0, 0);
   if found >= 0 { crate::ent_packet::put_vs(inout rec, 1, 4, found, 0); }
-  let e: [i64] = crate::ent_u16::empty();
-  return crate::ent_state::set_done(cx, e, rec, e, 0);
+  let e: ref [i64] = [];
+  crate::ent_state::put_done(inout cx, e, rec, e, 0);
+}
+
+pub fn find_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+{
+  let mut cx: crate::ent_state::Ctx = cx0;
+  find_source(inout cx);
+  return cx;
 }
 
 // ---- route ----
@@ -40,49 +49,42 @@ pub fn route(w: [i64], p: i64) -> i64 ! alloc
   return 4;
 }
 
-// invoke_engine request record: [9, route, opKind, source, folder, thread, options]; tp < 0 means thread absent (tag 10)
-fn req9(blob: [i64], rt: i64, opk: i64, sp: i64, fp: i64, tp: i64, op: i64) -> [i64] ! alloc
+// invoke_engine request record: [9, route, opKind, source, folder, thread, options]; list has no thread (tag 10)
+fn invoke(blob: [i64], read: bool) -> [i64] ! alloc
   ensures len(result) >= 0
 {
+  let r0: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(blob, 1), 33554432);
   let mut o: [i64] = crate::ent_u16::zeros(15);
   crate::ent_u16::wr(inout o, 0, 9);
-  crate::ent_u16::wr(inout o, 1, rt);
-  crate::ent_u16::wr(inout o, 2, opk);
-  let a: i64 = crate::ent_u16::put_range(inout o, 3, blob, crate::ent_u16::clamp(sp, 4294967296), 3);
-  let b: i64 = crate::ent_u16::put_range(inout o, 6, blob, crate::ent_u16::clamp(fp, 4294967296), 3);
-  if tp < 0 {
-    crate::ent_packet::put_vs(inout o, 9, 10, 0, 0);
+  crate::ent_u16::wr(inout o, 1, route(blob, r0));
+  let a: i64 = crate::ent_u16::put_range(inout o, 3, blob, r0 + 3, 3);
+  let b: i64 = crate::ent_u16::put_range(inout o, 6, blob, r0 + 6, 3);
+  if read {
+    crate::ent_u16::wr(inout o, 2, 1);
+    let c: i64 = crate::ent_u16::put_range(inout o, 9, blob, r0 + 9, 3);
+    let d: i64 = crate::ent_u16::put_range(inout o, 12, blob, r0 + 12, 3);
   } else {
-    let c: i64 = crate::ent_u16::put_range(inout o, 9, blob, crate::ent_u16::clamp(tp, 4294967296), 3);
+    crate::ent_packet::put_vs(inout o, 9, 10, 0, 0);
+    let d: i64 = crate::ent_u16::put_range(inout o, 12, blob, r0 + 9, 3);
   }
-  let d: i64 = crate::ent_u16::put_range(inout o, 12, blob, crate::ent_u16::clamp(op, 4294967296), 3);
   return o;
 }
 
-// the input pool prefix (what the request's string slots refer to)
-pub fn blob_pool(blob: [i64]) -> [i64] ! alloc
-  ensures len(result) >= 0
-{
-  let s: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(blob, 0), 33554432);
-  let physical: i64 = crate::ent_packet::sec_len(blob, 0);
-  let size: i64 = crate::ent_value::pool_capacity(crate::ent_value::pool_bytes(blob, s));
-  return crate::ent_u16::slice(blob, s, s + crate::ent_u16::clamp(size, physical));
-}
-
 // ---- rethrow: classification of the thrown value (E at record offset 1 of a throw answer) ----
-pub fn rethrow(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+pub fn rethrow(inout cx: crate::ent_state::Ctx) -> () ! alloc
 {
   let rp: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, 1), 33554432);
   let is_eie: bool = crate::ent_value::tag_at(cx.ent, rp + 4) == 3;
   let is_err: bool = crate::ent_value::tag_at(cx.ent, rp + 7) == 3;
   // MUTANT M11: AbortError passes through on name === 'AbortError' only; the mutant also requires is_err
   let is_abort: bool = crate::ent_value::str_eq_lit(cx.ent, rp + 10, "AbortError");
-  let e: [i64] = crate::ent_u16::empty();
+  let e: ref [i64] = [];
   if is_eie || is_abort {
     let mut rec: [i64] = crate::ent_u16::zeros(4);
     crate::ent_u16::wr(inout rec, 0, 1);
     let a: i64 = crate::ent_u16::put_range(inout rec, 1, cx.ent, rp + 1, 3);
-    return crate::ent_state::set_done(cx, e, rec, e, 0);
+    crate::ent_state::put_done(inout cx, e, rec, e, 0);
+    return;
   }
   // MUTANT M12: has_detail is true (a non-Error detail is the stringified value "undefined")
   let has_detail: bool = is_err;
@@ -100,16 +102,16 @@ pub fn rethrow(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
     crate::ent_packet::put_vs(inout rec, 4, 0, 0, 0);
   }
   let c: i64 = crate::ent_u16::put_range(inout rec, 7, cx.ent, rp + 1, 3);
-  return crate::ent_state::set_done(cx, pool, rec, e, 0);
+  crate::ent_state::put_done(inout cx, pool, rec, e, 0);
 }
 
 // ---- op 3: list_external ----
-fn list_recipe(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+fn list_recipe(inout cx: crate::ent_state::Ctx) -> Result<(), crate::ent_state::Halt> ! alloc
 {
   let rp: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, 1), 33554432);
   let sec: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(cx.ent, rp + 2), 8);
   let cnt: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(cx.ent, rp + 3), 16777216);
-  if cnt > 2396745 || 16 + 7 * cnt > 16777216 { return crate::ent_state::too_big(cx); }
+  if cnt > 2396745 || 16 + 7 * cnt > 16777216 { return crate::ent_state::stop_too_big(inout cx); }
   let base: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, sec), 33554432);
   let ps: i64 = crate::ent_packet::sec_start(cx.ent, 0);
   let cut: i64 = 200;
@@ -127,7 +129,7 @@ fn list_recipe(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
     }
     i = i + 1;
   }
-  if copies > 83886 || 16 + 7 * cnt + 200 * copies > 16777216 { return crate::ent_state::too_big(cx); }
+  if copies > 83886 || 16 + 7 * cnt + 200 * copies > 16777216 { return crate::ent_state::stop_too_big(inout cx); }
   let nu: i64 = crate::ent_value::logical_pool_words(cx.ent);
   let reuse: bool = copies > 0 && 16 + 7 * cnt + nu + 201 * copies <= 16777216;
   let mut nb: i64 = 0;
@@ -160,33 +162,53 @@ fn list_recipe(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
   let mut rec: [i64] = crate::ent_u16::zeros(4);
   crate::ent_u16::wr(inout rec, 0, 0);
   crate::ent_packet::put_vs(inout rec, 1, 7, 4, cnt);
-  let e: [i64] = crate::ent_u16::empty();
-  return crate::ent_state::set_done(cx, crate::ent_value::pool_finish(pool, 0), rec, tab, 1);
+  let out: [i64] = crate::ent_value::pool_finish(pool, 0);
+  crate::ent_state::put_done(inout cx, out, rec, tab, 1);
+  return Ok::<(), crate::ent_state::Halt>(());
+}
+
+pub fn list_external(inout cx: crate::ent_state::Ctx) -> Result<(), crate::ent_state::Halt> ! alloc
+{
+  let rq: [i64] = invoke(cx.blob, false);
+  let pool: [i64] = copy(crate::ent_value::blob_pool(cx.blob));
+  let e: ref [i64] = [];
+  crate::ent_state::observe(inout cx, 9, 0, pool, rq, e, 0)?;
+  if crate::ent_state::ent_r(cx, 0) == 1 {
+    rethrow(inout cx);
+    return Ok::<(), crate::ent_state::Halt>(());
+  }
+  return list_recipe(inout cx);
 }
 
 pub fn list_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
 {
-  let r0: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx0.blob, 1), 33554432);
-  let rq: [i64] = req9(cx0.blob, route(cx0.blob, r0), 0, r0 + 3, r0 + 6, 0 - 1, r0 + 9);
-  let e: [i64] = crate::ent_u16::empty();
-  let cx: crate::ent_state::Ctx = crate::ent_state::obs(cx0, 9, 0, blob_pool(cx0.blob), rq, e, 0);
-  if cx.stalled != 0 || cx.bad != 0 { return cx; }
-  if crate::ent_state::ent_r(cx, 0) == 1 { return rethrow(cx); }
-  return list_recipe(cx);
+  let mut cx: crate::ent_state::Ctx = cx0;
+  let r: Result<(), crate::ent_state::Halt> = list_external(inout cx);
+  return cx;
 }
 
 // ---- op 4: read_external ----
-pub fn read_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+pub fn read_external(inout cx: crate::ent_state::Ctx) -> Result<(), crate::ent_state::Halt> ! alloc
 {
-  let r0: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx0.blob, 1), 33554432);
-  let rq: [i64] = req9(cx0.blob, route(cx0.blob, r0), 1, r0 + 3, r0 + 6, r0 + 9, r0 + 12);
-  let e: [i64] = crate::ent_u16::empty();
-  let cx: crate::ent_state::Ctx = crate::ent_state::obs(cx0, 9, 1, blob_pool(cx0.blob), rq, e, 0);
-  if cx.stalled != 0 || cx.bad != 0 { return cx; }
-  if crate::ent_state::ent_r(cx, 0) == 1 { return rethrow(cx); }
+  let rq: [i64] = invoke(cx.blob, true);
+  let pool: [i64] = copy(crate::ent_value::blob_pool(cx.blob));
+  let e: ref [i64] = [];
+  crate::ent_state::observe(inout cx, 9, 1, pool, rq, e, 0)?;
+  if crate::ent_state::ent_r(cx, 0) == 1 {
+    rethrow(inout cx);
+    return Ok::<(), crate::ent_state::Halt>(());
+  }
   let mut rec: [i64] = crate::ent_u16::zeros(4);
   crate::ent_u16::wr(inout rec, 0, 0);
   let rp: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, 1), 33554432);
   let a: i64 = crate::ent_u16::put_range(inout rec, 1, cx.ent, rp + 1, 3);
-  return crate::ent_state::set_done(cx, e, rec, e, 0);
+  crate::ent_state::put_done(inout cx, e, rec, e, 0);
+  return Ok::<(), crate::ent_state::Halt>(());
+}
+
+pub fn read_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+{
+  let mut cx: crate::ent_state::Ctx = cx0;
+  let r: Result<(), crate::ent_state::Halt> = read_external(inout cx);
+  return cx;
 }

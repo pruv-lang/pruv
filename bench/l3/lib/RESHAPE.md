@@ -17,7 +17,8 @@ Gap ids refer to `docs/RUST_SHAPE_RESET.md` §4. This file is the step 3 RESHAPE
 | `ent_wire` | `hand/ent_wire.rs` (new in 3.2) | O (`sections` / `pool_start` return `-1`) |
 | `ent_packet` | `hand/ent_packet.rs` (new in 3.2) | K, E, O, S, L, P-start (V, P-hi closed in 3.3) |
 | `ent_value` | `hand/ent_value.rs` (new in 3.3) | U, O, VE, PB, CMP, API rows (`(w, start)` wrappers) |
-| `ent_state` | none yet (deferred, see step 3.3) | whole module: CX |
+| `ent_state` | `hand/ent_state.rs` (new in 3.4) | OA, ENT, CK, AD (adapters), CX partly closed, DR |
+| `ent_dispatch` | `hand/ent_dispatch.rs` (new in 3.4) | OA, AD (`find_item` / `list_item` / `read_item`), LR |
 
 ## Step 3.1: `ent_u16` and `ent_path`
 
@@ -399,3 +400,106 @@ built different trees, before any implementation result is compared); run alone 
 - New: **VE**, **PB** (API rows, owned by the consumer steps), **CMP** (row I, no iterator adaptors), **CX**
   (`ent_state`, 3.4 with `ent_dispatch`).
 - Still open: U, K, L (language / API gaps), E, O (API rows), S (consumer rows), P-start (proof-only).
+
+## Step 3.4: `ent_state` and `ent_dispatch`
+
+Hand baselines `lib/hand/ent_state.rs` (`Ctx` with `&mut self` methods, `State` view parsed once, `Request` / `Prev` /
+`Output`, `Halt { Stalled, Bad }`, `obs(..) -> Result<(), Halt>`) and `lib/hand/ent_dispatch.rs` (`find_source`,
+`route`, `invoke`, `rethrow`, `list_recipe`, `list_external`, `read_external`, each `fn(cx: &mut Ctx)`), written first,
+with rustc tests (9 in `ent_state.rs`, 3 more in `ent_dispatch.rs`; `rustc --edition 2021 --test ent_dispatch.rs`
+runs all 12, pass).
+
+### What changed
+
+- `blob_pool` moved from `ent_dispatch` to `ent_value` (next to the pool readers); `ent_state::use_prev`, `ent_bound`
+  (3 sites) and `entry_api` (1 site) call `ent_value::blob_pool`. `ent_state` no longer calls `ent_dispatch`.
+- `ent_state`: `pub struct State { code, aux, ck, blob, log }` of `ref` views, built once by `state_view(st)`;
+  `state_ok` and `st_replay_ok` read it. `pub enum Halt { Stalled, Bad }`. New `inout cx: Ctx` functions with the hand
+  shape: `observe(..) -> Result<(), Halt>` (hand `Ctx::obs`), `use_prev` (`with_prev`), `drop_entries` (`drop_level`),
+  `accounts`, `account_at`, `nullary`, `ambient`, `homedir`, `cwd`, `path_req` (`path`), `realpath`, `stat`,
+  `put_ck`, `put_done` (`set_done`), `stop_too_big` / `stop_fail` (`too_big` / `fail`, return `Err(Halt::Bad)`).
+- `ent_dispatch`: `find_source`, `rethrow` take `inout cx`; `list_recipe`, `list_external`, `read_external` return
+  `Result<(), Halt>` and observe with `observe(..)?` (no `stalled` / `bad` check after the call); `req9` (7 positional
+  arguments, two call sites working out `r0` and `route`) became `invoke(blob, read: bool)` as in the hand.
+- `q_mutants.py`: M11 text follows the new `rethrow` (`let e: ref [i64]` after the abort check); every mutant text
+  occurs exactly once (checked by script).
+
+### Rows
+
+- **CX** partly closed: observation is a `Result` with `?`, `inout cx` in `ent_state` / `ent_dispatch`, state words
+  parsed once (`State`). Left: rows OA, ENT, CK, AD below.
+- **OA** (new, language gap): `Option<T>` with a struct payload that holds arrays is rejected (`type_argument`), so the
+  request (`rcode`, `raux`, `rpool`, `rrec`, `rtab`, `rntab`), the prev request (`qon`, `qexact`, `qns`, `qpool`,
+  `qrec`, `qtab`), the output (`opool`, `orec`, `otab`, `ontab`) and the fault (`bad` = 1 protocol / 2 too big, hand
+  `Option<Fault>`) stay loose `Ctx` fields. Not worked around.
+- **ENT** (new): `Ctx.ent` is a copy of the current log entry (hand: a `Range` into `lg`). Needs a stored range or a
+  view field with a lifetime tied to `cx.lg`; left for the language.
+- **CK** (new, language gap): a fixed array (`ck: [i64; 8]`) cannot appear in a type used in a `pub` signature
+  (`fixed_array_position`), so `ck` stays `[i64]` padded to 8 words.
+- **DR** (new): `drop_entries` rebuilds `lg` with `cat(slice, slice)`; the hand uses `Vec::drain`. No in-place range
+  removal in Pruv (row P-cat family).
+- **LR** (new, structural): `list_recipe` stores the clip code in `tab[7i+4]` and reads it back; the hand keeps a
+  `Vec<Option<Clip>>` and writes the table in one pass. Fixable in Pruv without a gap; left for the `ent_dispatch`
+  pass of 3.5 (time cap).
+- **AD** (new, adapters): by-value wrappers kept so that the other `Ctx` users compile unchanged. Each is
+  `let mut cx = cx0; f(inout cx, ..); return cx;`:
+
+| Adapter (by value) | `inout` function | Users | Removed in |
+|---|---|---|---|
+| `obs` | `observe` | `ent_bound` | 3.5 |
+| `too_big` | `stop_too_big` | `ent_bound` | 3.5 |
+| `set_done` | `put_done` | `ent_bound`, `ent_canon`, `ent_sources` | 3.5, 3.6 |
+| `fail` | `stop_fail` | `ent_canon`, `ent_sources`, `entry_api` | 3.5, 3.6, 3.7 |
+| `with_prev` | `use_prev` | `ent_canon`, `ent_sources`, `entry_api` | 3.5, 3.6, 3.7 |
+| `drop_level`, `ctx_ambient`, `ctx_homedir`, `ctx_cwd`, `ctx_realpath`, `ctx_stat` | `drop_entries`, `ambient` .. `stat` | `ent_canon` | 3.5 |
+| `ctx_accounts`, `ctx_account_at`, `set_ck` | `accounts`, `account_at`, `put_ck` | `ent_sources` | 3.6 |
+| `st_ck`, `st_blob`, `st_log` (copy of a `State` field) | `state_view` | `ent_canon`, `ent_sources`, `entry_api` | 3.5, 3.6, 3.7 |
+| `find_item`, `list_item`, `read_item` | `find_source`, `list_external`, `read_external` | `entry_api` | 3.7 |
+
+### Structure comparison
+
+Two read-only comparisons (hand `.rs` against `.pruv`, function by function). The default Codex account was at its
+usage limit, so the first was done by a fresh Claude agent that had not seen the conversion, and the second (Codex
+gpt-6-astra high, second account) after its fixes. Neither found a semantic mismatch in the Pruv. Findings and what
+was done:
+
+| Finding | Done |
+|---|---|
+| hand `repack` set the units word of a cut pool with `prefix_in(.., usize::MAX)` (a byte count); Pruv `prefix_pool_units` counts units | hand fixed (`units_in`); the Pruv was right |
+| `req9` took 7 positional arguments; both callers worked out `r0` and `route` | Pruv `invoke(blob, read: bool)` as in the hand |
+| `log_ok` / `log_cont` copied each entry with `slice` | `subview` |
+| `canon_ck_ok` had a dead `d > 2^32` test after the clamp | removed |
+| `path_req` walked the path twice (`slot_len_of` before `encode_pool`) | `pool_bytes(pool, 0)` after encoding, as the hand |
+| `repack` guard `pkt_size > 2^24` (hand none; `env_check` rejects that input first) | kept (proof domain) |
+| `log_*` / `observe` repeat the entry parse (`n < 12 or n > g - pos`) four times; hand has `entry_at` | kept: needs an iterator / `Option<Entry>` (rows CMP, OA) |
+| `state_ok` returns `bool` and `st_replay_ok` re-views the words (hand `State::parse` / `replay_ok(&self)`) | kept: callers in `ent_canon` / `entry_api` use the bool form (AD, 3.5 / 3.7) |
+| `ck_phase_only` / `s0_of` are named `set_ck_arr0` / `st_s0` | kept: names used by `ent_canon` (3.5) |
+| `rethrow` `has_detail` branch is mutant M12 scaffolding | kept (M12 site) |
+| `list_recipe` clip codes stored in `tab` | row LR |
+| (Codex) `log_append`, `encode_state`, `repack` zero-fill a buffer and write by position; the hand reserves and appends | `arr_reserve` / `arr_push` / `arr_append` as the hand (`encode_state` pads `ck` to 8 words, row CK; `repack` clamps the pool word range and returns empty past `2^25` words, proof-only) |
+| (Codex) `blob_pool` copied the pool (`slice`); the hand borrows | returns `ref [i64] from(blob)`; callers that need an owned pool copy it (`ent_dispatch` before `observe`, as the hand `to_vec`) |
+| (Codex) `find_source` scans every row; hand `position` stops at the first match | kept: mutant M08 (last match wins) needs the full scan to be observable |
+| every other function: same result as the hand on checked input | = |
+
+### Tests (after the last code change)
+
+`bench/l3/lib/hand`: `rustc --edition 2021 --test ent_dispatch.rs` (12 tests: 9 from `ent_state.rs`, 3 dispatch), pass.
+The rs compiler builds and verifies the entry root (rust and llvm backends) and the req root.
+
+| Test | Pairs | Result |
+|---|---|---|
+| `entry/test_impl.py` | rs/rust, rs/llvm | 296 variants x 2 = 592 runs, unexplained 0 |
+| `entry/judge_test.py` | rs | failures 0 |
+| `entry/q.py --count 400` | rs/rust, rs/llvm | 399 exact, 1 excluded-domain, unexplained 0 |
+| `req/test_impl.py` | rs/rust, rs/llvm | 160 variants x 2 = 320 runs, unexplained 0 |
+| `req/q.py` (q_gen, 2000 cases) | rs/rust, rs/llvm | 2000/2000 equal on each pair |
+| `entry/integrate.py` (after qwen 26/26 + codex 136/136 on both pairs, opencode and grok `--no-ts` all fixtures on rs/rust) | rs/rust | 10 integration cases, 18 checks PASS, 2 integration limits (I01/I02 claude, known; exit 2 as in 3.1 to 3.3) |
+
+Budget m11 / m12 import none of `ent_state`, `ent_dispatch` or `ent_value` (grep), so they were not run.
+
+### Rows open after 3.4
+
+- Closed: none fully; **CX** partly (rest is OA, ENT, CK, AD).
+- New: **OA**, **CK** (language gaps), **ENT**, **DR**, **LR**, **AD** (adapters, removed in 3.5 to 3.7).
+- Still open: U, K, L, E, O, S, P-start, VE, PB, CMP.
+- Next (3.5): `ent_bound` and `ent_canon` to `inout cx` (removes most AD rows), `list_recipe` one pass (LR).

@@ -56,7 +56,7 @@ MUTANTS = {
              '      if u199 >= 55296 && u199 <= 56319 { limit = 199; }\n'
              '      let adjusted: i64 = crate::ent_value::title_cut(cx.ent, ps, rb + 3, limit);\n'
              '      crate::ent_value::put_title_prefix(inout pool, inout tab, tb + 4, cx.ent, rb + 3, adjusted, limit, reuse);')],
-    'M11': [('ent_dispatch.pruv', '"AbortError");\n  let e: [i64]', '"AbortError") && is_err;\n  let e: [i64]')],
+    'M11': [('ent_dispatch.pruv', '"AbortError");\n  let e: ref [i64]', '"AbortError") && is_err;\n  let e: ref [i64]')],
     'M12': [('ent_dispatch.pruv', "  let has_detail: bool = is_err;", "  let has_detail: bool = true;")],
     'M13': [('ent_bound.pruv', "    if crate::ent_value::nullish(w, p + 6) {", "    if !crate::ent_value::truthy(w, p + 6) {")],
     'M14': [('ent_value.pruv', "  let mut i: i64 = 0;\n  // MUTANT M14",
