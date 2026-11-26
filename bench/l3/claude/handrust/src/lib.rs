@@ -1,4 +1,7 @@
 //! Safe hand-written Claude JSONL packet baseline for head, tail, and window.
+//! Each function is marked `// Pruv: module::fn` with its Pruv counterpart (RUST_SHAPE_RESET §6 step 4.3h).
+//! No hand counterpart: boundary::check_output (packet self-check), boundary::copy_span and the a0-a4 probe
+//! roots, import::last_max / first_present / replaces (A2 selection probes).
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, VecDeque};
@@ -19,6 +22,7 @@ const MAX_MS: i64 = 253_402_300_799_999;
 type Stamp = Option<[u8; 24]>;
 
 // ---------------- ECMAScript whitespace and text helpers ----------------
+// Pruv: text::space_len
 fn is_es_ws(c: char) -> bool {
     matches!(
         c,
@@ -27,11 +31,13 @@ fn is_es_ws(c: char) -> bool {
     )
 }
 
+// Pruv: text::trim_span, text::trim
 fn es_trim(s: &str) -> &str {
     s.trim_matches(is_es_ws)
 }
 
 /// Whitespace runs -> one space, trim, then cut to `mx` UTF-16 units on a scalar boundary.
+// Pruv: text::one_line
 fn one_line(s: &str, mx: usize) -> String {
     let mut out = String::new();
     let mut pending = false;
@@ -60,6 +66,7 @@ fn one_line(s: &str, mx: usize) -> String {
 }
 
 /// Longest prefix length <= mx that ends on a scalar boundary of valid UTF-8 `raw`.
+// Pruv: text::clip_len (text::clip_bytes is the A1 probe)
 fn clip_len(raw: &[u8], mx: usize) -> usize {
     if raw.len() <= mx {
         return raw.len();
@@ -72,6 +79,7 @@ fn clip_len(raw: &[u8], mx: usize) -> usize {
 }
 
 // ---------------- timestamps ----------------
+// Pruv: time (civil date helpers)
 fn is_leap(y: u32) -> bool {
     y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
 }
@@ -90,6 +98,7 @@ fn mdays(y: u32, m: u32) -> u32 {
     }
 }
 
+// Pruv: time::canon
 fn canon(s: &[u8]) -> bool {
     if s.len() != 24 {
         return false;
@@ -120,6 +129,7 @@ fn put_digits(o: &mut [u8; 24], at: usize, n: usize, mut v: i64) {
 }
 
 /// `ms` within [MIN_MS, MAX_MS] -> "YYYY-MM-DDTHH:MM:SS.mmmZ".
+// Pruv: time::format_iso
 fn format_iso(ms: i64) -> [u8; 24] {
     let days = ms.div_euclid(86_400_000);
     let rem = ms.rem_euclid(86_400_000);
@@ -144,6 +154,7 @@ fn format_iso(ms: i64) -> [u8; 24] {
     o
 }
 
+// Pruv: time::iso_of_int
 fn iso_of_int(v: i64) -> Stamp {
     let ms = if v < 100_000_000_000 { v * 1000 } else { v };
     if (MIN_MS..=MAX_MS).contains(&ms) {
@@ -153,6 +164,7 @@ fn iso_of_int(v: i64) -> Stamp {
     }
 }
 
+// Pruv: time::iso_of (number branch)
 fn iso_number(text: &str) -> Stamp {
     if text.bytes().any(|c| matches!(c, b'.' | b'e' | b'E')) {
         return None;
@@ -167,6 +179,7 @@ fn iso_number(text: &str) -> Stamp {
     iso_of_int(n)
 }
 
+// Pruv: time::iso_of (string branch)
 fn iso_str(s: &str) -> Stamp {
     let t = es_trim(s);
     if !t.is_empty() && t.bytes().all(|c| c.is_ascii_digit()) {
@@ -188,6 +201,7 @@ fn iso_str(s: &str) -> Stamp {
     None
 }
 
+// Pruv: time::iso_of; import::stamp_from adds the jstr adapter check
 fn iso(v: Option<&Value<'_>>) -> Stamp {
     match v? {
         Value::Number(n) => iso_number(n),
@@ -198,6 +212,7 @@ fn iso(v: Option<&Value<'_>>) -> Stamp {
 
 // ---------------- oversized-line probe (the oracle's o_dropped regexes) ----------------
 /// Byte length of the ECMAScript whitespace character at `i` (0 if none).
+// Pruv: text::ws_at
 fn ws_len(b: &[u8], i: usize) -> usize {
     match b.get(i) {
         Some(0x09..=0x0D) | Some(0x20) => 1,
@@ -214,6 +229,7 @@ fn ws_len(b: &[u8], i: usize) -> usize {
     }
 }
 
+// Pruv: text::skip_ws
 fn skip_ws(b: &[u8], mut i: usize) -> usize {
     loop {
         let n = ws_len(b, i);
@@ -224,6 +240,7 @@ fn skip_ws(b: &[u8], mut i: usize) -> usize {
     }
 }
 
+// Pruv: text::dropped_user (one forward scan; row 4.3h-D)
 fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     if from >= hay.len() {
         return None;
@@ -246,6 +263,7 @@ fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 }
 
 /// key WS* ':' WS* val, anywhere.
+// Pruv: text::kv, text::colon_value
 fn key_colon_val(b: &[u8], key: &[u8], val: &[u8]) -> bool {
     let mut from = 0;
     while let Some(p) = find(b, key, from) {
@@ -262,6 +280,7 @@ fn key_colon_val(b: &[u8], key: &[u8], val: &[u8]) -> bool {
 }
 
 /// "content" WS* : WS* [ WS* { [^{}]* "type" WS* : WS* "tool_result"
+// Pruv: text::content_hit, text::tool_result_after
 fn has_tool_result(b: &[u8]) -> bool {
     let key = b"\"content\"";
     let mut from = 0;
@@ -288,6 +307,7 @@ fn has_tool_result(b: &[u8]) -> bool {
     false
 }
 
+// Pruv: text::dropped_user
 fn dropped_user(head: &[u8]) -> bool {
     let s = String::from_utf8_lossy(head);
     let b = s.as_bytes();
@@ -310,6 +330,7 @@ enum Value<'a> {
     Object(Object<'a>),
 }
 
+// Pruv: pkgs parse::parse / lex (JSON tape, not a Value tree; accepted representation)
 struct Parser<'a>(&'a str);
 
 impl<'a> Parser<'a> {
@@ -495,6 +516,7 @@ impl<'a> Parser<'a> {
     }
 }
 
+// Pruv: entry::parse_line
 fn parse_line(line: &[u8]) -> Option<Object<'_>> {
     let mut parser = Parser(str::from_utf8(line).ok()?);
     parser.ws();
@@ -504,6 +526,7 @@ fn parse_line(line: &[u8]) -> Option<Object<'_>> {
 }
 
 // ---------------- entry classification ----------------
+// Pruv: entry::string_field, entry::string_id, access::string_is
 fn get_str<'a>(m: &'a Object<'_>, k: &str) -> Option<&'a str> {
     match m.get(k.as_bytes()) {
         Some(Value::String(s)) => Some(s.as_ref()),
@@ -511,14 +534,17 @@ fn get_str<'a>(m: &'a Object<'_>, k: &str) -> Option<&'a str> {
     }
 }
 
+// Pruv: entry::is_true, entry::true_of
 fn is_true(m: &Object<'_>, k: &str) -> bool {
     matches!(m.get(k.as_bytes()), Some(Value::Bool(true)))
 }
 
+// Pruv: entry::task_origin, entry::task_origin_of
 fn task_origin(e: &Object<'_>) -> bool {
     matches!(e.get(b"origin".as_slice()), Some(Value::Object(o)) if get_str(o, "kind") == Some("task-notification"))
 }
 
+// Pruv: entry::string_content, text::engine_line
 fn is_human_text(e: &Object<'_>, text: &str) -> bool {
     let t = es_trim(text);
     if t.is_empty() {
@@ -533,6 +559,7 @@ fn is_human_text(e: &Object<'_>, text: &str) -> bool {
         && task_origin(e))
 }
 
+// Pruv: entry::human_text, entry::user_text, entry::user_text_of, entry::array_content, entry::block_of
 fn human_text<'a>(e: &'a Object<'_>) -> Option<Cow<'a, str>> {
     if get_str(e, "type") != Some("user") || is_true(e, "isMeta") || is_true(e, "isSidechain") {
         return None;
@@ -593,6 +620,7 @@ fn human_text<'a>(e: &'a Object<'_>) -> Option<Cow<'a, str>> {
 }
 
 /// First of `keys` holding a string that is not blank.
+// Pruv: entry::pick_title, entry::title_key
 fn pick<'a>(e: &'a Object<'_>, k1: &str, k2: &str) -> Option<&'a str> {
     for k in [k1, k2] {
         if let Some(s) = get_str(e, k) {
@@ -605,6 +633,7 @@ fn pick<'a>(e: &'a Object<'_>, k1: &str, k2: &str) -> Option<&'a str> {
 }
 
 // ---------------- turn collector ----------------
+// Pruv: turns slot table sl[8*s .. 8*s+7] + arena buf (row VL)
 struct Draft {
     prompt: Vec<u8>,
     reply: Vec<u8>,
@@ -615,6 +644,7 @@ struct Draft {
     clipped: bool,
 }
 
+// Pruv: turns::new_state / new_slots / new_buffer (st, sl, buf; row VL)
 struct Collector {
     drafts: VecDeque<Draft>, // only the newest MAXTURNS can ever be kept
     begun: usize,
@@ -627,6 +657,7 @@ impl Collector {
         Collector { drafts: VecDeque::new(), begun: 0, active: false, lost: false }
     }
 
+    // Pruv: turns::begin, turns::write_begin
     fn begin(&mut self, prompt: &str, created: Stamp) {
         let raw = prompt.as_bytes();
         let mut d = if self.drafts.len() >= MAXTURNS {
@@ -657,11 +688,13 @@ impl Collector {
         self.drafts.push_back(d);
     }
 
+    // Pruv: turns::skip_user
     fn skip_user(&mut self) {
         self.active = false;
         self.lost = true;
     }
 
+    // Pruv: turns::answer, turns::write_answer, turns::write_piece
     fn answer(&mut self, text: &str, at: Stamp) {
         if !self.active {
             return;
@@ -693,6 +726,7 @@ impl Collector {
         }
     }
 
+    // Pruv: turns::tool
     fn tool(&mut self) {
         if self.active {
             if let Some(d) = self.drafts.back_mut() {
@@ -702,6 +736,7 @@ impl Collector {
     }
 
     /// Number of newest drafts kept (<= MAXTURNS, <= TOTAL bytes).
+    // Pruv: turns::plan, turns::plan_end
     fn kept(&self) -> usize {
         let (mut n, mut total) = (0usize, 0usize);
         for d in self.drafts.iter().rev() {
@@ -720,12 +755,14 @@ impl Collector {
 }
 
 #[derive(Default)]
+// Pruv: import best / best_rank locals
 struct RankedTitle {
     rank: u8,
     text: String,
 }
 
 impl RankedTitle {
+    // Pruv: entry::title_of, entry::title_for_type, entry::ranked (rank check before pick)
     fn update(&mut self, e: &Object<'_>) {
         let (rank, key) = match get_str(e, "type") {
             Some("custom-title") => (3, "customTitle"),
@@ -742,6 +779,7 @@ impl RankedTitle {
         }
     }
 
+    // Pruv: text::one_line(best, 120) in import::tail_info / read_window
     fn finish(&self) -> Option<String> {
         (self.rank > 0).then(|| one_line(&self.text, 120))
     }
@@ -753,6 +791,7 @@ struct State {
     model: Vec<u8>,
 }
 
+// Pruv: import::consume_entry, import::answer_blocks
 fn consume(e: &Object<'_>, col: &mut Collector, st: &mut State) {
     let ty = get_str(e, "type");
     st.title.update(e);
@@ -799,6 +838,7 @@ fn consume(e: &Object<'_>, col: &mut Collector, st: &mut State) {
 }
 
 // ---------------- packet ----------------
+// Pruv: boundary::write_bytes, import::put_str
 fn put(text: &mut Vec<u8>, b: &[u8]) -> [i64; 2] {
     let start = text.len() as i64;
     text.extend_from_slice(b);
@@ -809,6 +849,7 @@ fn put_optional(text: &mut Vec<u8>, value: Option<&[u8]>) -> [i64; 2] {
     value.map_or([-1, 0], |b| put(text, b))
 }
 
+// Pruv: import::head_result, import::tail_result, boundary::new_packet
 fn edge_packet(mode: i64, fields: [Option<&[u8]>; 4]) -> Vec<i64> {
     let mut text = Vec::new();
     let refs = fields.map(|field| put_optional(&mut text, field));
@@ -820,6 +861,7 @@ fn edge_packet(mode: i64, fields: [Option<&[u8]>; 4]) -> Vec<i64> {
     out
 }
 
+// Pruv: framing::edge_next (pkgs lines::jsonl_next)
 fn edge_lines(data: &[u8], include_final: bool) -> impl Iterator<Item = Object<'_>> {
     data.split_inclusive(|&b| b == b'\n').filter_map(move |line| {
         if let Some(raw) = line.strip_suffix(b"\n") {
@@ -832,6 +874,7 @@ fn edge_lines(data: &[u8], include_final: bool) -> impl Iterator<Item = Object<'
     })
 }
 
+// Pruv: framing::skip_first
 fn skip_first(data: &[u8], cut_before: bool) -> &[u8] {
     if cut_before {
         data.iter().position(|&b| b == b'\n').map_or(&[], |i| &data[i + 1..])
@@ -840,6 +883,7 @@ fn skip_first(data: &[u8], cut_before: bool) -> &[u8] {
     }
 }
 
+// Pruv: import::read_head
 pub fn head_packet(data: &[u8], cut_after: i64) -> Vec<i64> {
     if data.len() > EDGE {
         return vec![1, 0];
@@ -862,6 +906,7 @@ pub fn head_packet(data: &[u8], cut_after: i64) -> Vec<i64> {
     edge_packet(0, [title, cwd, entrypoint, None].each_ref().map(|s| s.as_deref().map(str::as_bytes)))
 }
 
+// Pruv: import::tail_info
 pub fn tail_packet(data: &[u8], cut_before: i64) -> Vec<i64> {
     if data.len() > EDGE {
         return vec![1, 0];
@@ -878,6 +923,7 @@ pub fn tail_packet(data: &[u8], cut_before: i64) -> Vec<i64> {
     edge_packet(1, [title.as_deref().map(str::as_bytes), None, None, last.as_ref().map(|s| s.as_slice())])
 }
 
+// Pruv: import::read_window, framing::window_next, turns::write_turns
 pub fn window_packet(data: &[u8], cut_before: i64) -> Vec<i64> {
     if data.len() > WINDOW {
         return vec![1, 0];

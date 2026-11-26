@@ -228,23 +228,14 @@ fn absent() -> Iso ! alloc
   ensures result.status == 1 && len(result.text) == 0
 {
   let e: [u8] = alloc(0, 0);
-  return Iso { status: 1, text: copy(e) };
+  return Iso { status: 1, text: move e };
 }
 
 fn defect() -> Iso ! alloc
   ensures result.status == -4 && len(result.text) == 0
 {
   let e: [u8] = alloc(0, 0);
-  return Iso { status: -4, text: copy(e) };
-}
-
-fn present(t: [u8]) -> Iso ! alloc
-  requires len(t) == 24 && t[4] == 45 && t[7] == 45 && t[10] == 84 && t[13] == 58 && t[16] == 58 && t[19] == 46 && t[23] == 90
-  requires forall i in 0..24: (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19 || i == 23 || (48 <= t[i] && t[i] <= 57))
-  ensures result.status == 0 && len(result.text) == 24 && result.text[4] == 45 && result.text[7] == 45 && result.text[10] == 84 && result.text[13] == 58 && result.text[16] == 58 && result.text[19] == 46 && result.text[23] == 90
-  ensures forall i in 0..24: (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19 || i == 23 || (48 <= result.text[i] && result.text[i] <= 57))
-{
-  return Iso { status: 0, text: copy(t) };
+  return Iso { status: -4, text: move e };
 }
 
 fn bytes24(s: str) -> [u8] ! alloc
@@ -253,16 +244,7 @@ fn bytes24(s: str) -> [u8] ! alloc
   ensures forall k in 0..24: result[k] == s[k]
 {
   let mut out: [u8] = alloc(24, 0);
-  let mut j: i64 = 0;
-  while j < 24
-    invariant 0 <= j && j <= 24 && len(out) == 24 && len(s) == 24
-    invariant forall k in 0..j: out[k] == s[k]
-    decreases 24 - j
-  {
-    let b: i64 = s[j];
-    out[j] = b;
-    j = j + 1;
-  }
+  copy_range(inout out, 0, s, 0, 24);
   return out;
 }
 
@@ -276,16 +258,17 @@ fn from_integer(v: i64) -> Iso ! alloc
   if ms == 9223372036854775807 { return absent(); }
   let f: [u8] = format_iso(ms);
   if len(f) != 24 { return defect(); }
-  return Iso { status: 0, text: copy(f) };
+  return Iso { status: 0, text: move f };
 }
 
-// All of t is ASCII digits (and t is nonempty): the value; -1 otherwise; -2 when digit-only but above 2^53-1.
+// All of t is ASCII digits (and t is nonempty): the value; -1 for a non-digit before the value passes 2^53-1;
+// -2 as soon as the digits read so far pass 2^53-1 (such a prefix is never a canonical ISO year, so from_string
+// answers absent either way).
 fn digit_value(t: str) -> i64
   ensures -2 <= result && result <= 9007199254740991
 {
   if len(t) == 0 { return -1; }
   let mut v: i64 = 0;
-  let mut over: bool = false;
   let mut i: i64 = 0;
   while i < len(t)
     invariant 0 <= i && i <= len(t)
@@ -295,11 +278,10 @@ fn digit_value(t: str) -> i64
     let c: i64 = t[i];
     if c < 48 || c > 57 { return -1; }
     let d: i64 = c - 48;
-    if v > (9007199254740991 - d) / 10 { over = true; }
-    else { v = v * 10 + d; }
+    if v > (9007199254740991 - d) / 10 { return -2; }
+    v = v * 10 + d;
     i = i + 1;
   }
-  if over { return -2; }
   return v;
 }
 
@@ -314,7 +296,7 @@ fn from_string(v: str) -> Iso ! alloc
   if n == -2 { return absent(); }
   if canonical_iso(v) {
     let b: [u8] = bytes24(v);
-    return Iso { status: 0, text: copy(b) };
+    return Iso { status: 0, text: move b };
   }
   return absent();
 }
@@ -328,14 +310,8 @@ fn canonical_copy(b: [u8], p: i64) -> Iso ! alloc
   ensures forall i in 0..24: (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19 || i == 23 || (48 <= result.text[i] && result.text[i] <= 57))
 {
   let mut out: [u8] = alloc(24, 0);
-  let mut j: i64 = 0;
-  while j < 24
-    invariant 0 <= j && j <= 24 && len(out) == 24
-    invariant forall q in 0..j: out[q] == b[p + q]
-    invariant forall q in 0..j: (q == 4 || q == 7 || q == 10 || q == 13 || q == 16 || q == 19 || q == 23 || (48 <= out[q] && out[q] <= 57))
-    decreases 24 - j
-  { out[j] = b[p + j]; j = j + 1; }
-  return Iso { status: 0, text: copy(out) };
+  copy_range(inout out, 0, b, p, 24);
+  return Iso { status: 0, text: move out };
 }
 
 // tail.ts isoOf for the value with tape id `id` of doc.
