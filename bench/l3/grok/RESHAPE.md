@@ -194,9 +194,64 @@ Not changed:
   behaviour) and none in the hand, whose benchmark inputs carry only canonical ISO strings (`hand_history.rs` header).
   The pump event cap counting non-line events is row UL.
 
+## 3e. Step 4.4d: rows 4.3c-T, 4.3c-B, 4.3c-G and dead code
+
+- 4.3c-T closed. `entry::at` is the hand `Entry::at` (timestamp, then `created_at` when the timestamp is missing or
+  null): a canonical stamp returns its offset in the line, a numeric one formats 24 bytes into the caller's `iso`
+  buffer, absent is -3, a defect -1. `feed` calls it only after the role, synthetic and blank filters (`user`) and
+  for an assistant right before `answer2`. `at_view` lends the stamp (`ref str from(line, iso)`), so the canonical
+  case copies nothing until `begin2` / `answer2` store it. `user_view` / `assistant_view` are gone.
+- 4.3c-B partly closed. `user` picks the prompt span (query range or trimmed text), filters `<user_info>` and blank,
+  then calls `begin2` once. Two run-time checks stay and are rows: 4.4d-CL (`feed` tests `len(e.content) <= 1e8`:
+  `line::entry` does not ensure the content is bounded by the line) and 4.4d-CB (the query cut tests
+  `is_char_boundary` on both ends: the verifier cannot derive a char boundary from the ASCII `<`/`>` byte next to
+  it; `query_range` with that `ensures` fails).
+- 4.3c-G closed in `pkgs/transport` `receive_grow`: when the LF is not in the chunk and the piece would pass the cap,
+  the step fails (-3, the byte at the cap consumed) before any copy, as `Rpc::step` checks `LINE_CAP` before
+  `extend`. Consumers (grok rpc, mcp, codex) stop on -3 as before. The dead `grow_line` is removed. The lazy line
+  clear (`filled = 0`, truncate on the next append; the hand clears after `on_line`) stays: row 4.4d-LC.
+- `pkgs/turns` dead code removed after a grep of every fragment: `begin3`, `answer3`, `put_nl_span`, `put_pad`,
+  `write_span`. `finish2`, `finish_ref` and `empty_buffer` also have no caller, but comments and
+  `../pkgs/RESHAPE.md` cite them as the reference forms; they stay as row 4.4d-TD.
+- q mutants retargeted: M09 (`Kind::Other => { return 0; }`), M11 (tool count) and M08 (query trim) on the new code;
+  every marker matches exactly once.
+
+| row | Pruv | hand | change |
+|---|---|---|---|
+| 4.4d-CB | `user` checks `is_char_boundary` at `q.lo` / `q.hi` at run time | `&text[range]` on a range found at ASCII bytes | language: a char-boundary fact from an adjacent ASCII byte |
+| 4.4d-CL | `feed` checks `len(e.content) <= 100000000` | no bound | `line::entry` ensures the content is a span of the line |
+| 4.4d-LC | `receive_grow` clears a finished line lazily | `on_line` then `line.clear()` | clear at the line end (shared `pkgs/transport`) |
+| 4.4d-TD | `turns::finish2`, `finish_ref`, `empty_buffer` kept without callers | - | remove with the comments that cite them |
+| 4.4d-RC | on -3 `receive_grow` leaves `st.at` past the cap byte | `Rpc::step` leaves the cursor at the piece start | unobservable today (every consumer stops on -3); set `at = begin` with the next transport change |
+| 4.4d-PO | `receive_grow` polls before it scans the bytes already in `chunk` (an expiry returns first) | `Rpc::step` consumes the buffer, waits only when no line is complete | scan first, poll only on the need-more path (shared `pkgs/transport`) |
+| 4.4d-T0 | `feed` calls `turns::tool` only for `n > 0` | `self.tool(n)` for any `Some(n)` | same output (adds 0); needs `line::entry` to ensure `n >= 0` |
+
+Codex structure comparison (one, gpt-6.2-astra high, Codex 2 account; the default account was at its limit). Applied:
+`prompt_index` is read only in the no-query branch of `user` (hand `None =>` arm). Rows: 4.4d-RC, 4.4d-PO, 4.4d-T0 above.
+Not changed: numeric timestamps (finding 1) are the reference behaviour, as in 3d.
+
+Next (order kept in `../lib/RESHAPE.md` "Rows open after 4.4d"): Codex rows 4.3f-A, O, N, K, L, T, P, R, D, then
+4.3f-B, E, F; then the OpenCode leftovers, 4.4b-SP first (checked against the TypeScript reference).
+
 ## 4. Results
 
-The tables below the 4.3c table are the 4.3b and 4.3 results.
+The tables below the 4.4d table are the 4.3c, 4.3b and 4.3 results.
+
+4.4d, built from this worktree with `pruvc-rs` (`$PRUVC_RS`), verified (no `--no-verify`, 300 s cap per module),
+after the last code change. `pkgs/transport` and `pkgs/turns` changed, so every consumer was rerun:
+
+| test (4.4d) | rs/rust | rs/llvm |
+|---|---|---|
+| grok `test_impl.py --no-ts` | 254/254 | 254/254 |
+| grok `q.py --cases 300` (554 cases with the fixtures) | 554, 0 unexplained (450 exact, rest policy) | 554, 0 unexplained (450 exact, rest policy) |
+| grok `q_mutants.py --check` | 16/16 markers match | - |
+| grok `perf/run_perf.py check` (output equality, no measurement) | 8/8 `pruv == hand` | 8/8 `pruv == hand` |
+| mcp `test_impl.py` (transport) | 22/22 | 22/22 |
+| codex `test_impl.py` (transport) | 136/136 | 136/136 |
+| opencode `test_impl.py` (turns) | 199/199 | 199/199 |
+| claude `test_impl.py` a0 / a1 / a2 / a3 / a4 (turns) | 272 / 2884 / 2443 / 134 / 270, all pass | same |
+
+Performance was not remeasured.
 
 4.3c, built from this worktree with `pruvc-rs` (`$PRUVC_RS`), verified (no `--no-verify`), after the last code change:
 

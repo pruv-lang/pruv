@@ -139,7 +139,49 @@ Open after 4.3e (bench, `qwen/` unless noted):
 - Behaviour: the escaped `$serde_json::private::Number` timestamp key (hand artefact, above) also shows in
   `tail_info` `last_at`; not new in 4.3e.
 
+## 3b. Step 4.4d: rows 4.3e-S, 4.3e-L, part of 4.3e-D
+
+- 4.3e-S closed. `write_stamp` appends the 24 bytes of `time::iso_of` straight to the log text; `stamp_of`, the
+  `Stamp` enum and its `adapter_probe` copy are gone.
+- 4.3e-L closed. The leaf is chosen in `chain::resolve`, in the pass that links the buckets (the hand `latest` loop):
+  `last_role.or(last_entry)` over the entries with a uuid. A slot is now 7 words (the 7th is the role bit); `Index`
+  lost `leaf` / `role_seen`. The leaf's `parentUuid` defect is checked when the leaf is read, not in `note`. `note`
+  still takes the role from `window_wire`, which computes it before the uuid (argument order only: both defects end
+  in the same internal-invariant packet). `note` still skips `parentUuid` when the uuid is empty (the hand removes it
+  from the map without decoding; nothing reads it).
+- 4.3e-D partly closed. `replay` reads answer text (tag 7) and counts tools (tag 8) only for an attached turn
+  (`st[1] == 1`), as the hand `if collector.attached`; the model was already updated only for a selected entry. Still
+  open: `record_entry` decodes the prompt, stamps and answer parts of every entry during the scan, before the chain
+  is known (the hand keeps the parsed objects and reads them only for selected entries). Needs the log to keep raw
+  string ranges of `data` and decode in `replay`, or a parsed-document vector (gap VL).
+- 4.3e-J and 4.3e-F stay open, one cause: there is no decode-into-buffer form of a JSON string
+  (`pkgs/jstr` / `pkgs/access`), so `array_content` and `put_field` decode an owned `str` and then append it, and
+  `title_key` owns a title before the blank check. Both are shared packages (every consumer reruns), not done in
+  4.4d.
+
+Codex structure comparison (one, gpt-6.2-astra high, Codex 2 account): the leaf choice, the leaf parent check and the
+answer / tool gating match the hand. New rows (not changed in 4.4d):
+
+| row | Pruv | hand | change |
+|---|---|---|---|
+| 4.4d-QS | an assistant stamp (tag 4) is read into a `str` even when no turn is attached | `iso(timestamp)` only `if collector.attached` | part of 4.3e-D (decode in `replay`) |
+| 4.4d-QA | each answer is read from the log into an owned `str` (`read_text` / `adapter_probe`) before `answer2` | `collector.answer(text, ..)` borrows the part `&str` | lend the log span as `str` (gap 4.4c-SV: no `[u8]` to `str` view) |
+| 4.4d-QC | `lookup` marks every slot of a uuid and fails on a `-2` parent of any duplicate | `latest` keeps the newest entry per uuid; only the followed entry's parent is read | split marking from the parent read; owned keys vs borrowed map keys stay gap VL |
+
+Next (order kept in `../lib/RESHAPE.md` "Rows open after 4.4d"): Codex rows 4.3f-A, O, N, K, L, T, P, R, D, then
+4.3f-B, E, F; then the OpenCode leftovers, 4.4b-SP first (checked against the TypeScript reference).
+
 ## 4. Results
+
+4.4d, after the last code change (`pruvc-rs`, verified, no `--no-verify`, 300 s cap per module):
+
+| check (4.4d) | rs/rust | rs/llvm |
+|---|---|---|
+| `qwen/test_impl.py` (verifier + fixtures) | PASS, 26/26 | PASS, 26/26 |
+| `q.py` 300 cases (+21 list; `PAIRS` set to the rs pairs) | same 316, P1 1, P4 4, P5 1, unexplained 0; list same 21, P4 1 | same |
+| mutants (`q_mutants.py` has no `--check`: 12 markers found once each, then the full run) | 11 differential-killed, turn-cap verifier-rejected | - |
+
+Consumers of `pkgs/transport` and `pkgs/turns` are in the Grok table. No perf timing was run.
 
 After the last 4.3e code change, `rs/rust` and `rs/llvm` (hand `edge.rs` unchanged in 4.3e; its row is from 4.3d):
 

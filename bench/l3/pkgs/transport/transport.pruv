@@ -61,16 +61,6 @@ pub fn poll(take l: Loop, overall: i64, init: i64, ready: bool, inout st: Reader
  }
  return move q;
 }
-// Grow `line` in place for at least one more byte (hand: the reused read_line String grows): double the length, at most cap. The first len(line) bytes are kept.
-pub fn grow_line(take line: [u8], cap: i64) -> [u8] ! alloc
- requires 1 <= len(line) && len(line) < cap && cap <= 8389120
- ensures len(line) < len(result) && len(result) <= cap
-{
- let mut n: i64 = len(line) * 2; if n > cap { n = cap; }
- let mut b: [u8] = move line;
- b = resize(b, n, 0);
- return move b;
-}
 // receive with a growing line buffer: the same framing, Reader protocol and -3 at cap, but `line` may start short (even empty, len(line) <= cap;
 // hand `Vec::with_capacity`) and grows in place as needed. st.filled is the number of bytes filled; bytes of line past st.filled are stale. A read that adds
 // bytes leaves len(line) == st.filled (the hand's cleared-and-extended read_line String).
@@ -105,20 +95,22 @@ pub fn receive_grow(take l: Loop, slot: i64, overall: i64, init: i64, ready: boo
  let mut stop: i64 = st.end;
  if cap - filled < stop - begin { stop = begin + (cap - filled); }
  let mut i: i64 = find_byte(chunk, 10, begin, stop);
- let needed: i64 = filled + (i - begin);
- // Hand read_line: drop the bytes past the filled prefix, then extend_from_slice (Vec growth, no zero fill).
- if i > begin {
-  line = truncate(line, filled);
-  arr_append(inout line, chunk, begin, i - begin);
+ if i < st.end && chunk[i] != 10 {
+  // Hand Rpc::step: a piece that would take the line past cap fails before any copy (-3; the byte at cap is consumed).
+  st.status=-3;
+  st.at=i+1;
+ } else {
+  let needed: i64 = filled + (i - begin);
+  // Hand read_line: drop the bytes past the filled prefix, then extend_from_slice (Vec growth, no zero fill).
+  if i > begin {
+   line = truncate(line, filled);
+   arr_append(inout line, chunk, begin, i - begin);
+  }
+  st.filled=needed;
+  // A newline at cap completes the line.
+  if i < st.end { st.status=needed; st.filled=0; i=i+1; }
+  st.at=i;
  }
- st.filled=needed;
- // A newline at cap completes the line. Any other byte at cap is consumed and reports -3.
- if i < st.end {
-  if chunk[i] == 10 { st.status=needed; st.filled=0; }
-  else { st.status=-3; }
-  i=i+1;
- }
- st.at=i;
  if st.status == -6 && ev_ok(q) {
  if live(q,slot) && ev_eof(q,slot) && st.at == st.end {
  q=ev_proc_wait_for(move q,slot,10);

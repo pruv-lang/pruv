@@ -1,12 +1,10 @@
 // Grok history entry -> TurnCollector calls (hand bench/l3/grok/perf/hand_history.rs Collector::feed, Entry::at).
-// Step 2.11: feed takes the Entry that line::entry scanned from one line (no Document, no tape). user_view and
-// assistant_view hold the decisions of the hand user and assistant arms on borrowed strs.
+// Step 2.11: feed takes the Entry that line::entry scanned from one line (no Document, no tape). Step 4.4d: feed has the
+// hand order (filters first, the stamp only for an accepted entry, one begin / answer call); `user` is the hand user arm on
+// the borrowed content str.
 //  1. feed requires st[0] < 100000000 (a window has at most 4194304 lines) and ensures st[0] <= 100000000, so the owner can
 //     chain calls without carrying the 1e12 bound of turns::begin.
-//  2. assistant_view adds the tool calls with one turns::tool(n) (hand `tool(n)`; saturates at 1e15).
-
-// isoOf(timestamp ?? created_at) of the entry object (root id 0): "" absent, 24 bytes present, 1 byte = iso_of defect.
-// A present timestamp that is not null never falls back to created_at (an invalid one is simply absent).
+//  2. the assistant arm adds the tool calls with one turns::tool(n) (hand `tool(n)`; saturates at 1e15).
 
 // lit occurs in s at byte position at.
 fn has_at(s: str, at: i64, lit: str) -> bool
@@ -58,8 +56,55 @@ fn query_range(s: str, lo: i64, hi: i64) -> crate::text::Span
 }
 
 
+// hand Entry::at: isoOf(timestamp ?? created_at); a missing or null timestamp falls back to created_at. Called only for an
+// accepted user or assistant entry (hand order). Returns the offset of the 24 stamp bytes in line (Stamp::Canon, borrowed), -2 when
+// a numeric stamp was formatted into iso (reference behaviour; the hand inputs carry canonical strings only), -3 absent, -1 a defect.
+fn at(line: [u8], e: crate::line::Entry, inout iso: [u8]) -> i64 ! alloc
+  requires utf8_valid(line) && len(iso) == 0
+  ensures result == -1 || result == -3 || (result == -2 && len(iso) == 24 && utf8_valid(iso)) || (0 < result && result < len(line) - 24 && line[result - 1] < 128 && line[result + 24] < 128)
+{
+  let mut sp: crate::line::Stamp = e.timestamp;
+  match e.timestamp {
+    crate::line::Stamp::Missing => { sp = e.created_at; }
+    crate::line::Stamp::Null => { sp = e.created_at; }
+    crate::line::Stamp::Other => {}
+    crate::line::Stamp::Canon(p) => {}
+    crate::line::Stamp::Num(v) => {}
+  }
+  match sp {
+    crate::line::Stamp::Missing => { return -3; }
+    crate::line::Stamp::Null => { return -3; }
+    crate::line::Stamp::Other => { return -3; }
+    crate::line::Stamp::Canon(p) => {
+      // proof guard: line::stamp found the 24 bytes between ASCII quotes
+      if 0 < p && p < len(line) - 24 && line[p - 1] < 128 && line[p + 24] < 128 { return p; }
+      return -1;
+    }
+    crate::line::Stamp::Num(v) => {
+      if v < -9007199254740991 || v > 9007199254740991 { return -1; }
+      let ms: i64 = crate::time::integer_time(v);
+      if ms == 9223372036854775807 { return -3; }
+      iso = crate::time::format_iso(ms);
+      if len(iso) != 24 || !utf8_valid(iso) { return -1; }
+      return -2;
+    }
+  }
+}
+
+// The stamp chosen by `at` as one borrowed str: iso (k == -2), none (k == -3) or the 24 bytes of line at k.
+fn at_view(line: [u8], iso: [u8], k: i64) -> ref str from(line, iso)
+  requires utf8_valid(line)
+  requires (k == -2 && len(iso) == 24 && utf8_valid(iso)) || k == -3 || (0 < k && k < len(line) - 24 && line[k - 1] < 128 && line[k + 24] < 128)
+  ensures len(result) == 0 || len(result) == 24
+{
+  if k == -2 { return subview(iso, 0, 24); }
+  if k == -3 { return subview(line, 0, 0); }
+  return subview(line, k, k + 24);
+}
+
 // hand Collector::feed. A non-object line and other entry types do nothing; -1 = a timestamp defect (time::iso_of).
-// line is the scanned line: a Stamp::Canon offset borrows its 24 bytes from it.
+// line is the scanned line: a Stamp::Canon offset borrows its 24 bytes from it. The stamp is resolved only after the filters
+// (hand `e.at()` in the begin / answer call).
 pub fn feed(line: [u8], e: crate::line::Entry, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
   requires utf8_valid(line) && utf8_valid_span(e.content, 0, len(e.content))
   requires len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
@@ -71,49 +116,54 @@ pub fn feed(line: [u8], e: crate::line::Entry, inout st: [i64], inout sl: [i64],
   ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
 {
   if !e.is_obj { return 0; }
-  // hand Entry::at: timestamp, or created_at when timestamp is missing or null
-  let mut fall: bool = false;
-  match e.timestamp {
-    crate::line::Stamp::Missing => { fall = true; }
-    crate::line::Stamp::Null => { fall = true; }
-    crate::line::Stamp::Other => {}
-    crate::line::Stamp::Canon(p) => {}
-    crate::line::Stamp::Num(v) => {}
-  }
-  let mut sp: crate::line::Stamp = e.timestamp;
-  if fall { sp = e.created_at; }
-  let mut lo: i64 = 0;
-  let mut hi: i64 = 0;
-  let mut iso: [u8] = alloc(0, 0);
-  match sp {
-    crate::line::Stamp::Missing => {}
-    crate::line::Stamp::Null => {}
-    crate::line::Stamp::Other => {}
-    crate::line::Stamp::Canon(p) => {
-      // proof guard: line::stamp found the 24 bytes between ASCII quotes
-      if 0 < p && p < len(line) - 24 && line[p - 1] < 128 && line[p + 24] < 128 { lo = p; hi = p + 24; }
-      else { return -1; }
-    }
-    crate::line::Stamp::Num(v) => {
-      if v < -9007199254740991 || v > 9007199254740991 { return -1; }
-      let ms: i64 = crate::time::integer_time(v);
-      if ms != 9223372036854775807 {
-        iso = crate::time::format_iso(ms);
-        if len(iso) != 24 { return -1; }
-        if !utf8_valid(iso) { return -1; }
-      }
-    }
-  }
+  // proof guard (row 4.3c-B): line::entry does not bound the decoded content by the 1 MiB line, turns needs <= 1e8
+  if len(e.content) > 100000000 { return -1; }
   if e.ty == 1 {
-    // hand: skip = synthetic_reason present and not null; nopi = prompt_index missing or null
-    let mut skip: bool = true;
+    // hand: return unless synthetic_reason is missing or null
     match e.synthetic {
-      crate::line::Kind::Missing => { skip = false; }
-      crate::line::Kind::Null => { skip = false; }
-      crate::line::Kind::Other => {}  // MUT:M09 => crate::line::Kind::Other => { skip = false; }
-      crate::line::Kind::Str => {}
-      crate::line::Kind::Arr => {}
+      crate::line::Kind::Missing => {}
+      crate::line::Kind::Null => {}
+      crate::line::Kind::Other => { return 0; }  // MUT:M09 => crate::line::Kind::Other => {}
+      crate::line::Kind::Str => { return 0; }
+      crate::line::Kind::Arr => { return 0; }
     }
+    return user(line, e, subview(e.content, 0, len(e.content)), inout st, inout sl, inout bk);
+  }
+  if e.ty == 2 {
+    let mut iso: [u8] = alloc(0, 0);
+    let k: i64 = at(line, e, inout iso);
+    if k == -1 { return -1; }
+    crate::turns::answer2(inout st, inout sl, inout bk, subview(e.content, 0, len(e.content)), at_view(line, iso, k));
+    match e.tool_calls {
+      Some(n) => { if n > 0 { crate::turns::tool(inout st, inout sl, n); } }  // MUT:M11 => Some(n) => { if n > 0 { crate::turns::tool(inout st, inout sl, 1); } }
+      None => {}
+    }
+  }
+  return 0;
+}
+
+// The hand user arm of Collector::feed on the borrowed content str: the prompt is the <user_query> interior or the whole text
+// (the <user_info> skip only when prompt_index is missing or null), then one begin with the stamp.
+fn user(line: [u8], e: crate::line::Entry, txt: str, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
+  requires utf8_valid(line) && len(txt) <= 100000000
+  requires len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  ensures len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  ensures st[0] == old(st)[0] || st[0] == old(st)[0] + 1
+  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+{
+  let tr: crate::text::Span = crate::text::trim_span(txt);
+  let q: crate::text::Span = query_range(txt, tr.lo, tr.hi);
+  let mut a: i64 = 0;
+  let mut b: i64 = len(txt);
+  if q.lo >= 0 {
+    // proof guard (row 4.4d-CB): the cut points follow ASCII tag bytes, but the verifier cannot derive a char boundary from that
+    if !is_char_boundary(txt, q.lo) || !is_char_boundary(txt, q.hi) { return -1; }
+    a = q.lo; b = q.hi;  // MUT:M08 => let t2: crate::text::Span = crate::text::trim_span(subview(txt, q.lo, q.hi)); a = q.lo + t2.lo; b = q.lo + t2.hi;
+  } else {
+    // hand: prompt_index is read only when there is no query tag
     let mut nopi: bool = false;
     match e.prompt_index {
       crate::line::Kind::Missing => { nopi = true; }
@@ -122,67 +172,12 @@ pub fn feed(line: [u8], e: crate::line::Entry, inout st: [i64], inout sl: [i64],
       crate::line::Kind::Str => {}
       crate::line::Kind::Arr => {}
     }
-    if len(iso) == 24 { return user_view(subview(e.content, 0, len(e.content)), subview(iso, 0, 24), skip, nopi, inout st, inout sl, inout bk); }
-    return user_view(subview(e.content, 0, len(e.content)), subview(line, lo, hi), skip, nopi, inout st, inout sl, inout bk);
+    if nopi && has_at(txt, tr.lo, "<user_info>") { return 0; }
   }
-  if e.ty == 2 {
-    let mut tools: i64 = -1;
-    match e.tool_calls {
-      Some(n) => { tools = n; }
-      None => {}
-    }
-    if len(iso) == 24 { return assistant_view(subview(e.content, 0, len(e.content)), subview(iso, 0, 24), tools, inout st, inout sl, inout bk); }
-    return assistant_view(subview(e.content, 0, len(e.content)), subview(line, lo, hi), tools, inout st, inout sl, inout bk);
-  }
-  return 0;
-}
-
-// The hand user arm of Collector::feed on borrowed strs: prompt is the content text and at the stamp ("" or 24 bytes); skip =
-// synthetic_reason neither missing nor null; nopi = prompt_index missing or null.
-pub fn user_view(prompt: str, at: str, skip: bool, nopi: bool, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
-  requires len(at) == 0 || len(at) == 24
-  requires len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
-  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-  ensures result == 0 || result == -1
-  ensures len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
-  ensures st[0] == old(st)[0] || st[0] == old(st)[0] + 1
-  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-{
-  if skip { return 0; }
-  if len(prompt) > 100000000 { return -1; }
-  let tr: crate::text::Span = crate::text::trim_span(prompt);
-  let q: crate::text::Span = query_range(prompt, tr.lo, tr.hi);
-  if q.lo >= 0 {
-    // user_query wins over everything: only the inner text, borrowed (the tags are ASCII, so the cut points are boundaries)
-    let a: i64 = q.lo;
-    let b: i64 = q.hi;
-    if !is_char_boundary(prompt, a) || !is_char_boundary(prompt, b) { return -1; }
-    if crate::text::is_blank(subview(prompt, a, b)) { return 0; }
-    crate::turns::begin2(inout st, inout sl, inout bk, subview(prompt, a, b), at);  // MUT:M08 => crate::turns::begin2(inout st, inout sl, inout bk, crate::text::trim(subview(prompt, a, b)), at);
-    return 0;
-  }
-  if nopi && has_at(prompt, tr.lo, "<user_info>") { return 0; }
-  if crate::text::is_blank(prompt) { return 0; }
-  crate::turns::begin2(inout st, inout sl, inout bk, prompt, at);
-  return 0;
-}
-
-// type == "assistant": answer(contentText, at) even for empty text, then tools tool calls (tools < 0: tool_calls is not an array).
-pub fn assistant_view(text: str, at: str, tools: i64, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
-  requires len(at) == 0 || len(at) == 24
-  requires len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
-  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-  ensures result == 0 || result == -1
-  ensures len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
-  ensures st[0] == old(st)[0] || st[0] == old(st)[0] + 1
-  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
-  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-{
-  if len(text) > 100000000 { return -1; }
-  crate::turns::answer2(inout st, inout sl, inout bk, text, at);
-  if tools > 0 { crate::turns::tool(inout st, inout sl, tools); }  // MUT:M11 => if tools > 0 { crate::turns::tool(inout st, inout sl, 1); }
+  if crate::text::is_blank(subview(txt, a, b)) { return 0; }
+  let mut iso: [u8] = alloc(0, 0);
+  let k: i64 = at(line, e, inout iso);
+  if k == -1 { return -1; }
+  crate::turns::begin2(inout st, inout sl, inout bk, subview(txt, a, b), at_view(line, iso, k));
   return 0;
 }
