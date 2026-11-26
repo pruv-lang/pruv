@@ -1,0 +1,7 @@
+// spec: R-6u-10 reject
+// P9a-8: the alternatives of an or-pattern give a shared name one type.
+fn h(r: Result<i64, bool>) -> i64 {
+  match r {
+    Ok(x) | Err(x) => { return 1; }
+  }
+}

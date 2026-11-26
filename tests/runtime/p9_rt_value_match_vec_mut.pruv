@@ -1,0 +1,15 @@
+// P9a-8: a value `match` on `vec_at_mut` on both backends (the map form is Rust-only: p9_rt_value_match_mut).
+struct P { x: i64, y: i64 }
+
+fn f(inout v: Vec<P>, i: i64) -> i64 {
+  return match vec_at_mut::<P>(inout v, i) { Some(p) => (p.x & 255) + (p.y & 255), None => -1 };
+}
+
+fn run() -> () ! io, alloc {
+  let mut v: Vec<P> = vec_new::<P>();
+  v = vec_push::<P>(move v, P { x: 3, y: 4 });
+  print(f(inout v, 0));
+  print(f(inout v, 5));
+  let n: i64 = match vec_at_mut::<P>(inout v, 0) { Some(p) if p.x > 2 => p.y, _ => 0 };
+  print(n);
+}

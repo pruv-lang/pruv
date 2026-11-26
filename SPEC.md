@@ -2964,23 +2964,31 @@ variants (R-6u-5).
   else block (`let else`) or `break` (`while let`); it is checked, proved and run as that match (R-6u-6, R-6u-7), so
   the else path knows that the pattern failed. A pattern that matches every value is `type/irrefutable_pattern` when
   the else block is not empty and always for `while let` (R-6u-3, R-6u-5); an `if let` without else whose pattern
-  matches every value runs its block. A slice pattern is checked as a slice `match` (R-6u-4) instead: one that
-  matches every array is `type/match_arms` with or without an else block (P9a-7 remaining). A `while let` with such a pattern is the loop `while true` whose body starts
+  matches every value runs its block. A slice pattern follows the same rule (P9a-8): one that matches every array
+  (`[..]`, `[_, ..] | []`) with a non-empty else block is `type/irrefutable_pattern`, and without one it runs its
+  block. A `while let` with such a pattern is the loop `while true` whose body starts
   with that match: unlike the plain `while let` of R-6u-5 its head is an ordinary statement, so every iteration,
   including the one whose head fails, needs `D >= 0`, and the failing head is counted as an iteration of the loop
   (the obligation is stronger, never weaker). Tests: [accept](tests/spec/p9_pattern_let_accept.pruv),
   [runtime](tests/runtime/p9_rt_pattern_let.pruv), [literal if let](tests/must_reject/p9_int_match_if_let.pruv),
   [literal let else](tests/must_reject/p9_int_match_let_else.pruv),
   [failed pattern](tests/must_reject/p9_pattern_if_let.pruv),
-  [irrefutable](tests/must_reject/p9_if_let_irrefutable.pruv).
+  [irrefutable](tests/must_reject/p9_if_let_irrefutable.pruv),
+  [slice irrefutable](tests/spec/p9_slice_let_irrefutable.pruv), [slice let else](tests/must_reject/p9_slice_let_else_irrefutable.pruv),
+  [slice covering every array](tests/spec/p9_slice_let_all.pruv).
 - R-6u-10 **Or-patterns (P9a-7).** A `match` arm (statement or value) and the pattern of an `if let`, `let else` or
   `while let` may be `P1 | P2 | ..`, top-level alternatives that share one body (and guard): the arm is one arm per
   alternative, in order, each with a copy of the body, so arm order, coverage and unreachable alternatives follow
   R-6u-7 (`type/unreachable_arm` names the alternative). Every alternative binds the same names
-  (`parse/or_pattern`); the types of a shared name are those of each alternative's own payload, and the copied body
-  is checked once per alternative. `|` inside a payload (`Err(A | B)`) is `parse/syntax`; write the alternatives at
-  the top. Tests: [names](tests/spec/p9_pattern_let.pruv), [names in match](tests/must_reject/p9_or_pattern_names.pruv),
-  [accept](tests/spec/p9_pattern_guard_accept.pruv).
+  (`parse/or_pattern`) and gives each shared name one type, as in Rust (`type/or_pattern_type`, P9a-8; a tuple
+  binder is compared by component); the copied body is checked once per alternative. `|` inside a payload (`Err(A | B)`, `Some(Some(1 | 2) | None)`, P9a-8) is
+  distributed into top-level alternatives before the arm is parsed, the outermost `|` first (`Some(Some(1)) |
+  Some(Some(2)) | Some(None)`), so it follows the same rules (names per alternative are `parse/or_pattern` at the
+  inner `|`); an arm expands to at most 64 top-level alternatives ([limit](tests/must_reject/p9_or_payload_limit.pruv), `parse/or_pattern`), and `|` inside a slice pattern stays
+  `parse/syntax`. Tests: [names](tests/spec/p9_pattern_let.pruv), [names in match](tests/must_reject/p9_or_pattern_names.pruv),
+  [accept](tests/spec/p9_pattern_guard_accept.pruv), [shared name type](tests/spec/p9_or_pattern_type.pruv),
+  [value form](tests/must_reject/p9_or_pattern_value_type.pruv), [in a payload](tests/spec/p9_or_pattern_payload.pruv),
+  [payload runtime](tests/runtime/p9_rt_or_payload.pruv), [payload names](tests/must_reject/p9_or_payload_names.pruv).
 - R-6u-11 **Match guards (P9a-7).** A `match` arm (statement or value) of a variant, `_` or literal pattern may end
   its pattern with `if c` before `=>`. The arm runs when its pattern matches and the `bool` expression `c` (which reads
   the arm's binders) is true; otherwise the arms below are tried, as in Rust. A guarded arm does not count for
@@ -2995,9 +3003,14 @@ variants (R-6u-5).
   [computed scrutinee](tests/must_reject/p9_guard_value_computed.pruv).
 - R-6u-12 **`@` bindings (P9a-7).** In a payload position, `name @ p` binds the payload to `name` (as a binder does)
   and tests it against the sub-pattern `p` (`_`, a literal, a nested variant pattern or another `name @ p`):
-  `Some(i @ Some(x))`, `Some(v @ 5)`. The payload is not copied when the arms that reach it bind it under one
-  name; an owned payload bound under different names by different arms (`E::A(s) if .. => .., E::A(t) => ..`)
-  is still bound through a copy (`! alloc`; an array payload is `type/array_alias`; P9a-7 remaining). A missing sub-pattern is `parse/at_pattern`, as is `name @` on the whole matched value (bind it with
+  `Some(i @ Some(x))`, `Some(v @ 5)`. The payload is not copied: when different arms bind it under different
+  names (`E::A(s) if .. => .., E::A(t) => ..`, `Pair(s, 1)` then `Pair(t, n)`), each arm's binder is renamed to the
+  tree's name inside its body, in the statement form as in the value form (P9a-8), so an owned payload needs no
+  `! alloc` and an array payload is not an alias. A renamed arm whose body declares its binder again (a `let`, a
+  nested match binder, a `for` or quantifier variable, or a value match in its guard) is `type/shadow`, as for any binder. Tests: [renamed
+  binders](tests/spec/p9_pattern_rename_accept.pruv), [runtime](tests/runtime/p9_rt_pattern_rename.pruv),
+  [let](tests/must_reject/p9_rename_shadow_let.pruv), [nested match](tests/must_reject/p9_rename_shadow_match.pruv),
+  [guard](tests/must_reject/p9_rename_shadow_guard.pruv), [guard, value form](tests/must_reject/p9_rename_shadow_guard_value.pruv). A missing sub-pattern is `parse/at_pattern`, as is `name @` on the whole matched value (bind it with
   `let` first). Tests: [accept](tests/spec/p9_pattern_guard_accept.pruv), [runtime](tests/runtime/p9_rt_pattern_let.pruv),
   [top](tests/must_reject/p9_at_pattern_top.pruv), [empty](tests/must_reject/p9_at_pattern_empty.pruv).
   Foreign constructors in payloads: [enum](tests/must_reject/p9_pattern_foreign_ctor.pruv),
@@ -3056,7 +3069,8 @@ return match s { Shape::Circle(r) => { 3 * r * r }, Shape::Empty => 0 };
   (`let v: u8 = if b { 200 } else { k }`) and a tuple literal arm takes the tuple type; without one, the first arm that
   is not a bare literal fixes the type and the other arm is checked against it (`type/type_mismatch`). The result
   type is an integer, `bool`, `char`, a non-borrowing struct or enum, an `Option`/`Result` of these, a tuple, an array,
-  a `String`/`str`, a collection or an extended struct. A type parameter, a fixed array, a view, a borrowing struct,
+  a `String`/`str`, a collection, an extended struct or a type parameter (P9a-8: every type argument is a value,
+  R-6p, and each application is proved and compiled with its own type). A fixed array, a view, a borrowing struct,
   `unit`, a handle and a `Result` with a `String` error are `type/value_branch_type`. For an owned type (arrays,
   strings, collections, extended structs and tuples with an owned component) every arm is a new value: a call (not one whose
   result borrows an argument through `from` or `ref`), a literal, a constructor or a bare `move x` (`type/value_branch_owned`; write `move x` or `copy(x)`); a `move x` arm
@@ -3079,7 +3093,7 @@ return match s { Shape::Circle(r) => { 3 * r * r }, Shape::Empty => 0 };
   [condition type](tests/must_reject/p9_if_cond_type.pruv), [arm move](tests/must_reject/p9_if_arm_move.pruv),
   [arm inout](tests/must_reject/p9_if_arm_inout.pruv), [false contract](tests/must_reject/p9_if_false_ensures.pruv),
   [borrowed owned arm](tests/must_reject/p9_if_owned_borrow.pruv), [contract](tests/must_reject/p9_if_contract.pruv),
-  [type parameter](tests/must_reject/p9_if_generic.pruv).
+  [type parameter](tests/spec/p9_value_if_generic.pruv).
 - R-6w-5 **Value `match`.** `match v { P1 => { e1 }, P2 => e2, .. }` is an expression wherever a value is read, as
   for R-6w-1. An arm pattern is a statement `match` pattern on an `Option`, a `Result` or a user enum (`Some(x)`,
   `Err(e)`, `E::V(a, b)`, `E::W`, 6a, with the `_`, literal and nested patterns of R-6u-6), or a literal arm on an
@@ -3108,12 +3122,14 @@ return match s { Shape::Circle(r) => { 3 * r * r }, Shape::Empty => 0 };
   binder a view of its payload, except that the whole value of a `return` consumes a dead owned local as the
   statement form does (its binders are owned, so `copy(b)` is the payload itself); a `Result<_, String>` is consumed as in the statement form (R-6w-7); a direct
   `map_get`, `vec_get` or `map_take` call (R-6e-14, `map_take` on the Rust backend only) is matched as is. A
-  mutable accessor (`map_get_mut`, `vec_at_mut`) is `type/value_branch_type` (read with `map_get`/`vec_get`, or use
-  a `match` statement), as is a payload of a type parameter (`Option<T>` in a generic function) when it is the
-  result type (a generic payload whose arms yield another type is accepted). Tests:
+  mutable accessor (`map_get_mut`, `vec_at_mut`, P9a-8) is matched as is too: the arms read the element the
+  accessor found (proved as the statement form's `Some` payload, `0 <= i < len` for `vec_at_mut`) and nothing is
+  written back, as an arm value cannot change it. A payload of a type parameter (`Option<T>` in a generic function)
+  may be the result type (P9a-8, as for R-6w-2). Tests:
   [owned scrutinee](tests/spec/p9_value_match_owned_scrutinee.pruv),
   [mutable accessor](tests/spec/p9_value_match_scrutinee.pruv),
   [generic result](tests/spec/p9_value_match_generic_result.pruv),
+  [runtime](tests/runtime/p9_rt_value_match_mut.pruv),
   [map_take on LLVM](tests/spec/p9_value_match_take_llvm.pruv).
 - R-6w-7 **Proof and ownership.** The verifier evaluates each arm under its pattern's test with the binder facts of
   that payload (its range, its well-formedness), so an arm's obligations and a callee's `ensures` hold only when
@@ -3814,6 +3830,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/old_argument` | type | `old` applied to anything but one `inout` parameter |
 | `type/old_context` | type | `old` outside `ensures`, invariants and asserts |
 | `type/opaque_signature` | type | an `opaque fn` that is not a bool-valued function (R-6o-1) |
+| `type/or_pattern_type` | type | alternatives of an or-pattern that give a shared name different types (R-6u-10) |
 | `type/parallel_alias` | type | one `par` branch writes a binding that another reads or writes |
 | `type/parallel_argument` | type | a `par` branch argument of a form or type that cannot cross the branch |
 | `type/parallel_arity` | type | a `par` group with fewer than two calls |

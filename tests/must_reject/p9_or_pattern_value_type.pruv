@@ -1,0 +1,6 @@
+fn h(o: Option<Result<i64, bool>>) -> i64 {
+  return match o {
+    Some(Ok(x)) | Some(Err(x)) => 1,
+    None => 0,
+  };
+}

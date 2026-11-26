@@ -1,0 +1,40 @@
+// P9a-8: or-patterns inside payloads, distributed into top-level alternatives (R-6u-10).
+enum Halt { Done, Stalled, Bad(c: i64) }
+
+fn a(r: Result<i64, Halt>) -> i64 {
+  match r {
+    Err(Halt::Done | Halt::Stalled) => { return 1; }
+    Err(Halt::Bad(n)) => { return n & 255; }
+    Ok(1 | 2 | 3) => { return 2; }
+    Ok(_) => { return 3; }
+  }
+}
+
+fn b(o: Option<Option<i64>>) -> i64 {
+  return match o {
+    Some(Some(1 | 2) | None) => 10,
+    Some(Some(x)) if x > 5 => x & 255,
+    _ => 0,
+  };
+}
+
+fn c(o: Option<i64>) -> i64 {
+  if let Some(4 | 5) = o { return 1; }
+  let Some(7 | 8) | None = o else { return 2; };
+  return 3;
+}
+
+fn run() -> () ! io {
+  print(a(Err::<i64, Halt>(Halt::Stalled)));
+  print(a(Err::<i64, Halt>(Halt::Bad(9))));
+  print(a(Ok::<i64, Halt>(3)));
+  print(a(Ok::<i64, Halt>(4)));
+  print(b(Some::<Option<i64>>(Some::<i64>(2))));
+  print(b(Some::<Option<i64>>(None::<i64>)));
+  print(b(Some::<Option<i64>>(Some::<i64>(8))));
+  print(b(None::<Option<i64>>));
+  print(c(Some::<i64>(5)));
+  print(c(Some::<i64>(6)));
+  print(c(Some::<i64>(8)));
+  print(c(None::<i64>));
+}

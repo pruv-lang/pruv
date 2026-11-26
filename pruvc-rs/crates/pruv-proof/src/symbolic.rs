@@ -5799,11 +5799,40 @@ impl<'a> FnVerifier<'a> {
         Ok((c, vals, ftys))
     }
 
+    /// R-6e-4/R-6e-7 (P9a-8: shared by the statement and the value `match`): the collection, the key and the
+    /// `Option` value of `map_get_mut::<K, V>(inout P, k)` or `vec_at_mut::<T>(inout P, i)`.
+    fn mut_accessor(&mut self, call: &ast::Call, st: &mut State, g: &[Ast], code: bool, env: &Env) -> R<(Val, Ast, Val)> {
+        let Expr::InoutArg(arg) = &call.args[0] else { return Err("missing inout place".into()) };
+        let collection = self.ev(&arg.expr, st, g, code, env)?;
+        let index = self.ev(&call.args[1], st, g, code, env)?;
+        let ty = Ty::from_name(call.ty.as_deref().ok_or("missing match result type")?);
+        let (key, value) = if call.name == "vec_at_mut" {
+            let v = collection.try_arr()?;
+            let i = index.try_ast()?;
+            self.observe_vec_element(st, g, v, i)?;
+            let opt = self.model.opt(Some(&ty))?;
+            let has = self.z.and(&[i.ge_i(0), i.lt(&v.n)]);
+            (i.clone(), Val::Dt(self.z.ite(&has, &opt.some.apply1(&v.a.select(i)), &opt.none), ty))
+        } else {
+            let m = collection.try_map()?;
+            let k = self.map_key(&m.kty, &index)?;
+            let value = self.map_lookup(m, &k, Some(&ty))?;
+            (k, value)
+        };
+        Ok((collection, key, value))
+    }
+
     /// P9a-5: a value `match`. Each arm is evaluated under the guard of its pattern with its binders in place, so an
     /// obligation of an arm that does not run is vacuous; the result is the guarded choice of the arm values.
     fn value_match(&mut self, x: &ast::Call, st: &mut State, g: &[Ast], code: bool, env: &Env) -> R<Val> {
         let model: &'a Model = self.model;
-        let sv = self.ev(&x.args[0], st, g, code, env)?;
+        let sv = match &x.args[0] {
+            // P9a-8: a value arm cannot change the element, so the accessor is only read (no write-back)
+            Expr::Call(call) if matches!(call.name.as_str(), "map_get_mut" | "vec_at_mut") && !self.funcs.contains_key(&call.name) => {
+                self.mut_accessor(call, st, g, code, env)?.2
+            }
+            e => self.ev(e, st, g, code, env)?,
+        };
         let v = sv.try_ast()?.clone();
         let sty: Option<Ty> = match &sv {
             Val::Dt(_, t) => Some(t.clone()),
@@ -6188,22 +6217,8 @@ impl<'a> FnVerifier<'a> {
                 let sv = if let Expr::Call(call) = &s.scrutinee {
                     if matches!(call.name.as_str(), "map_get_mut" | "vec_at_mut") && !self.funcs.contains_key(&call.name) {
                         let Expr::InoutArg(arg) = &call.args[0] else { return Err("missing inout place".into()) };
-                        let collection = self.ev0(&arg.expr, &mut st, &[], true)?;
-                        let index = self.ev0(&call.args[1], &mut st, &[], true)?;
-                        let ty = Ty::from_name(call.ty.as_deref().ok_or("missing match result type")?);
-                        let (key, value) = if call.name == "vec_at_mut" {
-                            let v = collection.try_arr()?;
-                            let i = index.try_ast()?;
-                            self.observe_vec_element(&mut st, &[], v, i)?;
-                            let opt = self.model.opt(Some(&ty))?;
-                            let has = self.z.and(&[i.ge_i(0), i.lt(&v.n)]);
-                            (i.clone(), Val::Dt(self.z.ite(&has, &opt.some.apply1(&v.a.select(i)), &opt.none), ty))
-                        } else {
-                            let m = collection.try_map()?;
-                            let k = self.map_key(&m.kty, &index)?;
-                            let value = self.map_lookup(m, &k, Some(&ty))?;
-                            (k, value)
-                        };
+                        let env = st.env.clone();
+                        let (collection, key, value) = self.mut_accessor(call, &mut st, &[], true, &env)?;
                         collection_update = Some((arg.expr.as_ref(), collection, key));
                         value
                     } else {

@@ -1,0 +1,26 @@
+// P9a-8: a value `match` on `vec_at_mut`/`map_get_mut` reads the element the accessor found (a guarded arm
+// included); the collection is unchanged.
+struct P { x: i64, y: i64 }
+
+fn f(inout v: Vec<P>, i: i64) -> i64 {
+  return match vec_at_mut::<P>(inout v, i) { Some(p) => (p.x & 255) + (p.y & 255), None => -1 };
+}
+
+fn g(inout m: HashMap<i64, P>, k: i64) -> i64 {
+  let r: i64 = match map_get_mut::<i64, P>(inout m, k) { Some(p) => p.y & 255, None => 0 } + 1;
+  return r;
+}
+
+fn run() -> () ! io, alloc {
+  let mut v: Vec<P> = vec_new::<P>();
+  v = vec_push::<P>(move v, P { x: 3, y: 4 });
+  print(f(inout v, 0));
+  print(f(inout v, 5));
+  let mut m: HashMap<i64, P> = map_new::<i64, P>();
+  m = map_insert::<i64, P>(move m, 7, P { x: 1, y: 9 });
+  print(g(inout m, 7));
+  print(g(inout m, 8));
+  let n: i64 = match vec_at_mut::<P>(inout v, 0) { Some(p) if p.x > 2 => p.y, _ => 0 };
+  print(n);
+  print(f(inout v, 0));
+}
