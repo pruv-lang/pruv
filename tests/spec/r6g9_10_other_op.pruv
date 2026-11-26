@@ -1,0 +1,9 @@
+// spec: R-6g9-10 reject
+// Only vec_push, vec_get, vec_clear, vec_reserve and len: vec_len, vec_pop and the rest are not list operations yet.
+fn f(p: str) -> i64 ! alloc {
+  let mut parts: Vec<ref str> = vec_new::<ref str>();
+  vec_push::<ref str>(inout parts, p);
+  let n: i64 = vec_len::<ref str>(parts);
+  return n;
+}
+fn main() -> i64 ! alloc { if f("ab") == 1 { return 0; } return 1; }

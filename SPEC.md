@@ -494,6 +494,16 @@ return a parameter with `copy`). Refinements: `[u8 | L..=U; <=N]` with `0 <= L <
   [element type](tests/spec/r6b_4_eq_range_str_type.pruv), [literal against `[i64]`](tests/spec/r6b_4_eq_range_str_lit.pruv),
   [bounds](tests/spec/r6b_4_eq_range_str_oob.pruv), runtime on both backends
   `tests/runtime/r6b_4_rt_eq_range_str.pruv`.
+- R-6b-5 **A position after an ASCII byte is a char boundary (4.4d-CB).** In valid UTF-8 a continuation byte
+  (`128..=191`) follows only a byte `>= 128`, so for a `str` `s` and `0 < i < len(s)`, `s[i - 1] < 128` implies
+  `is_char_boundary(s, i)`. The verifier adds this disjunct to its boundary formula (used by `is_char_boundary`,
+  `subview` of a `str` and `substr`); on valid UTF-8 it changes no value, so the formula above stays the run-time
+  meaning. A function that finds a range by ASCII delimiters can `ensures is_char_boundary(s, lo) &&
+  is_char_boundary(s, hi)` and its callers cut `subview(s, lo, hi)` / `substr(s, lo, hi)` with no run-time
+  boundary test (hand Rust `&text[range]` after `find('>')`). The fact needs a `str`: a `subview` of a `[u8]` passed
+  as a `str` still needs `utf8_valid` of the bytes or of the base (`verify/utf8_invalid`), and a position after a byte
+  `>= 128` is not a boundary by this rule (`verify/utf8_boundary`). Tests: [range by ASCII tags](tests/spec/r6b_5_ascii_boundary.pruv),
+  rejects [after a lead byte](tests/spec/r6b_5_after_lead.pruv), [bytes are not a `str`](tests/spec/r6b_5_bytes_not_str.pruv).
 - Not available: `==`/`!=` on whole strings (use `string_eq`, R-6e-11), `print` of a string, `str` in
   `Option`/`Result`/struct fields, char/code-point indexing. Character counts are written with boundaries, e.g.
   `count(t in 0..len(s): is_char_boundary(s, t))` counts the characters of `s`.
@@ -2016,6 +2026,34 @@ borrowed value is live.
     [`let mut`](tests/spec/r6g9_8_let_mut.pruv), [parameter](tests/spec/r6g9_8_param.pruv),
     [field](tests/spec/r6g9_8_field.pruv), [typed error](tests/spec/r6g9_8_typed_err.pruv),
     [nested](tests/spec/r6g9_8_nested.pruv), [inside a generic function](tests/spec/r6g9_8_generic.pruv).
+- R-6g9-10 **Local lists of `str` views (4.4b-NV).** `let mut parts: Vec<ref str> = vec_new::<ref str>();` declares a
+  list of borrowed `str` views local to its function (hand `let mut parts: Vec<&str> = Vec::new();`).
+  - *Operations.* Only `vec_push::<ref str>(inout parts, v)`, `vec_get::<ref str>(parts, i)` (a `ref str` view),
+    `vec_clear::<ref str>(inout parts)`, `vec_reserve::<ref str>(inout parts, n)` and `len(parts)`, with the usual
+    bounds and length obligations of those calls. Any other use of the list (an argument, a result, a `move`, a copy,
+    a field, an assignment to it) is `type/borrow_escape`; another `vec_*` call, an operation without the
+    `::<ref str>` type argument, a list initialised other than by `vec_new::<ref str>()`, a list named like a
+    parameter or bound twice, and a list in a generic function are `type/borrow_signature`. Not yet: `Vec<ref [u8]>`,
+    `vec_pop`, lists as parameters or results, `for` over a list.
+  - *Values.* `v` is any `str` view argument (R-6g9-1): a `str` parameter or local, a field, a `subview`, a view
+    local, a `from` call result, a string literal (static). An owned `str` local or field is borrowed, not moved.
+  - *Provenance.* The list is a borrow local (R-6g9-4) whose provenance is the union of every pushed value's
+    provenance, computed to a fixed point over the function. Each root must be a parameter or a local declared before
+    the list in the same or an enclosing block (the list is dropped after it); a push of a view of anything else is
+    `type/borrow_escape`. Writing a root while the list is live is `type/borrow_conflict`; a `vec_get` view has the
+    list's provenance and its own liveness.
+  - *Proof.* The list is modelled as a `Vec<String>` written in place: a push appends the view's bytes and a
+    clear empties it, so `len(parts)` and the bytes of `vec_get(parts, k)` are known (a source cannot change while
+    the list is live).
+  - *Code.* Rust: `Vec<&str>`, `parts.push(v)` (`&s` for an owned local), `*parts.get_unchecked(i as usize)` when the
+    bound is proven, `parts.len()`, `parts.clear()`, `parts.reserve(n)`; no `String` is made. LLVM:
+    `codegen/unsupported_type` (Rust backend only).
+  - Tests: [split at '/', read back](tests/spec/r6g9_10_view_list.pruv), [value sources](tests/spec/r6g9_10_sources.pruv);
+    rejects [local declared after the list](tests/spec/r6g9_10_late_local.pruv),
+    [list leaves its operations](tests/spec/r6g9_10_leaves_ops.pruv),
+    [write while live](tests/spec/r6g9_10_write_while_live.pruv), [missing `ref` type argument](tests/spec/r6g9_10_owned_targ.pruv),
+    [generic function](tests/spec/r6g9_10_generic.pruv), [other operation](tests/spec/r6g9_10_other_op.pruv),
+    [LLVM](tests/spec/r6g9_10_llvm.pruv), [length after a push](tests/spec/r6g9_10_len_after_push.pruv).
 
 ## 6h. Files (G10)
 

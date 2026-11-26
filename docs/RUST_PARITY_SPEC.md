@@ -235,3 +235,35 @@ Pruv cannot is fixed in the language). Bundle of 2026-11-27, capped at 2 hours.
   treated `str` as bytes. Tests: tests/spec/r6b_4_eq_range_str{,_lit,_oob,_type}, tests/runtime/r6b_4_rt_eq_range_str.
   Left: an owned `String` operand is `type/type_mismatch` (as for `find_byte`), and a `vec_get::<String>` element
   is `type/foreign_owned_type`.
+
+Bundle L-gaps 2 (2026-11-27, capped at 2 hours):
+
+- 4.4b-NV: minimal form done (R-6g9-10). A function-local `Vec<ref str>` (hand `Vec<&str>`): `vec_push`, `vec_get`
+  (a view), `vec_clear`, `vec_reserve`, `len`; its provenance is the union of the pushed views (fixed point over the
+  function), every root must be a parameter or a local declared before the list in the same or an enclosing block,
+  and a write to a root while the list is live is `type/borrow_conflict`. Rust prints `Vec<&str>`, `parts.push(v)`
+  and `*parts.get_unchecked(i)` with no `String`; LLVM is `codegen/unsupported_type`. The scope was chosen before
+  the design (a debate with the opposing view, the smallest form that closes `path::normalize`): no generic
+  allocation of view elements, only the `ref str` instance. Left: `Vec<ref [u8]>` (same rules, element type `ref
+  [u8]`); `vec_pop` and `for` over a list; a list as a parameter (`ps: [ref str]` / `&[&str]`) or a `from(..)` result
+  (`Vec<&'a str>` returned to the caller, needs the list's provenance in the signature); a list in a struct or a
+  generic; the LLVM layout (`{ptr, len, cap}` of `{ptr, len}` pairs). The proof models the list as a `Vec<String>`
+  written in place (the verifier now stores an `inout` `vec_push`), so lengths and element bytes are known.
+- 4.4b-NV (UTF-8 half): no language change. Hand `path::join` is `normalize(&format!("{a}/{b}"))`: a `String`
+  built with `push_str` stays UTF-8 by type. Pruv has the same builder (R-6e-1, R-6g6-3): `string_new`,
+  `string_push_str` (which takes `subview(t, lo, hi)` of a `str` directly) and `string_push_char`; the result is a
+  `str` with no `utf8_valid` re-check. With R-6g9-10 the pieces are `ref str` views cut at `/` (an ASCII byte, so
+  the cuts are boundaries by R-6b-5) and `normalize` can push them into a `String` instead of a `[u8]` buffer; the
+  bench `RESHAPE.md` row 4.4b-NV can be closed by that rewrite (the bench is outside this bundle).
+- 4.4d-CB: done (R-6b-5). The verifier's boundary formula also accepts `0 < i < len(s)` with `s[i - 1] < 128`;
+  every use is on a `str` or conjoined with `utf8_valid` of the base, where it implies the byte formula, so
+  run-time `is_char_boundary` is unchanged. A range finder can `ensures is_char_boundary(..)` at ASCII delimiters
+  and the receiver's `subview`/`substr` print `get_unchecked` with no boundary test. Left (completeness, not
+  soundness; audit A3): a function that only calls `is_char_boundary`/`substr` does not turn on the UTF-8 facts
+  (`uses_utf8`), so `ensures result == is_char_boundary(s, i)` over the old byte formula is no longer provable
+  for an arbitrary `str`; adding the boundary operations to `uses_utf8` would restore it.
+- 4.3g-BS: closed, no language change. `arr_append(inout a: [i64], s)` with `s: str` would be an implicit
+  byte-to-`i64` widening that hand Rust does not write either (`v.extend(s.bytes().map(i64::from))`). The case
+  is the test-harness packet builder (`packet::build_error`), which already takes `[u8]` (string literals pass as
+  static views, R-6g9-1) and appends bytes to a `[u8]` buffer, the hand shape (`Vec<u8>::extend_from_slice`). A
+  `[i64]` destination can copy with a loop over `s[k]`.

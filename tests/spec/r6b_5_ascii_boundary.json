@@ -1,0 +1,1 @@
+{"gen_contains": ["count_bytes__pruv_body(unsafe { (text).get_unchecked(((q.lo) as usize)..((q.hi) as usize)) })", "pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize))"], "gen_regex_absent": ["^\\s+[^f].*(pruv_str_boundary|pruv_cboundary|is_char_boundary)\\("]}

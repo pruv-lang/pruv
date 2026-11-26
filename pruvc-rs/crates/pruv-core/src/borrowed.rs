@@ -4,6 +4,7 @@ use crate::check::{expr_ty, field_place, mentions, paths_overlap, place_root};
 use crate::diagnostic::PruvError;
 use crate::foreign_shim::{walk_expr, Node};
 use crate::gtype::{bind_args, decl_owner, substitute, GType};
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 type Res<T> = Result<T, PruvError>;
@@ -29,6 +30,23 @@ fn contains_borrow(ty: &GType, structs: &HashSet<String>) -> bool {
 
 pub(crate) fn is_view_base(ty: &str) -> bool {
     crate::typeinfo::is_array_name(ty) || ty == "str"
+}
+
+/// R-6g9-10: the declared type `Vec<ref str>` of a view list.
+pub(crate) fn is_view_list_type(ty: &str) -> bool {
+    let parsed = GType::from_key(ty);
+    parsed.owner.is_none() && matches!(parsed.name.as_str(), "vec" | "Vec") && parsed.args.len() == 1
+        && parsed.args[0].view_base().is_some_and(|b| b.name == "str")
+}
+
+/// R-6g9-10: the element type argument `ref str` of a view-list operation.
+pub(crate) fn is_view_list_targ(targs: &Option<Vec<GType>>) -> bool {
+    matches!(targs.as_deref(), Some([t]) if t.view_base().is_some_and(|b| b.name == "str"))
+}
+
+/// R-6g9-10: a view list after `prepare` (a borrowed `let` of type `vec<string>`).
+pub(crate) fn is_view_list(s: &Let) -> bool {
+    s.borrowed && s.ty == "vec<string>"
 }
 
 pub(crate) fn is_view_wrapper(ty: &str) -> bool {
@@ -67,6 +85,12 @@ fn annotation(ty: &mut String, line: i64, col: i64, permitted: bool, wrapper: bo
 fn prepare_block(body: &mut [Stmt], permitted: bool, structs: &HashSet<String>) -> Res<()> {
     for st in body {
         match st {
+            // R-6g9-10: a local `Vec<ref str>` is a view list: `vec<string>` to the checker and the verifier (they see the
+            // text of its elements), `Vec<&str>` in Rust; `borrowed` marks it.
+            Stmt::Let(s) if permitted && !s.is_place() && is_view_list_type(&s.ty) => {
+                s.ty = "vec<string>".into();
+                s.borrowed = true;
+            }
             Stmt::Let(s) if !s.is_place() => {
                 // R-6g9-6: mutability is allowed for a borrowing struct, but not for a ref local.
                 if !(permitted && structs.contains(&s.ty)) {
@@ -509,6 +533,13 @@ enum Origin {
 }
 
 struct Analysis<'a> {
+    /// R-6g9-10: the provenance of each view list of the current function (the union over its pushes).
+    lists: RefCell<HashMap<String, Roots>>,
+    /// R-6g9-10: the names visible where each view list is declared (parameters and earlier locals of enclosing blocks).
+    list_scope: RefCell<HashMap<String, HashSet<String>>>,
+    visible: RefCell<Vec<String>>,
+    /// R-6g9-10: the fixpoint passes only grow `lists`; the final pass checks.
+    collecting: Cell<bool>,
     place_functions: &'a PlaceFunctions,
     functions: HashMap<&'a str, &'a Function>,
     records: HashMap<&'a str, &'a StructDecl>,
@@ -521,7 +552,49 @@ impl Analysis<'_> {
             .is_some_and(|s| s.fields.iter().any(|f| f.name == name && (f.borrowed || self.records.contains_key(f.ty.as_str()))))
     }
 
+    fn list_name<'e>(&self, e: &'e Expr) -> Option<&'e str> {
+        let e = match e { Expr::InoutArg(x) => &*x.expr, e => e };
+        match e {
+            Expr::Var(v) if self.lists.borrow().contains_key(&v.name) => Some(&v.name),
+            _ => None,
+        }
+    }
+
+    /// R-6g9-10: `vec_get(l, i)` of a view list `l`.
+    fn list_read(&self, e: &Expr) -> bool {
+        matches!(e, Expr::Call(x) if x.name == "vec_get" && !self.functions.contains_key("vec_get")
+            && x.args.first().is_some_and(|a| !matches!(a, Expr::InoutArg(_)) && self.list_name(a).is_some()))
+    }
+
+    /// R-6g9-10: a push adds the element's provenance to the list; every root must be visible where the list is
+    /// declared, so the list never outlives a local it borrows.
+    fn list_push(&self, list: &str, value: &Expr, locals: &HashMap<String, Origin>) -> Res<()> {
+        let roots = self.provenance(value, locals)?;
+        let scope = self.list_scope.borrow();
+        for source in roots.keys() {
+            let base = source.root.split('.').next().unwrap_or(&source.root);
+            if scope.get(list).is_some_and(|names| !names.contains(base)) {
+                return Err(PruvError::new("type", value.line(), value.col(), "borrow_escape",
+                    format!("{list} would outlive {base}, declared after the list or in an inner block"),
+                    "declare the list after the data it borrows"));
+            }
+        }
+        let mut lists = self.lists.borrow_mut();
+        let held = lists.get_mut(list).expect("view list");
+        if self.collecting.get() {
+            for (source, access) in roots {
+                merge(held, source, access);
+            }
+        } else if roots.iter().any(|(source, access)| held.get(source).is_none_or(|prev| access > prev)) {
+            return Err(error(value.line(), value.col(), "borrow_escape", "pushed view borrows outside the list"));
+        }
+        Ok(())
+    }
+
     fn is_view(&self, e: &Expr, locals: &HashMap<String, Origin>) -> bool {
+        if self.list_read(e) {
+            return true;
+        }
         match e {
             Expr::Var(x) => matches!(locals.get(&x.name), Some(Origin::View(_)))
                 && expr_ty(e).as_deref().is_some_and(is_view_base),
@@ -533,6 +606,11 @@ impl Analysis<'_> {
     }
 
     fn provenance(&self, e: &Expr, locals: &HashMap<String, Origin>) -> Res<Roots> {
+        if let Expr::Call(x) = e {
+            if self.list_read(e) {
+                return self.provenance(&x.args[0], locals);
+            }
+        }
         let mut roots = Roots::new();
         if let Some(root) = place_root(e) {
             match locals.get(root) {
@@ -647,6 +725,11 @@ impl Analysis<'_> {
                 let Node::Expr(e) = node else { return };
                 if failure.is_some() { return; }
                 let result = match e {
+                    Expr::Call(c) if c.name == "vec_push" && !self.functions.contains_key("vec_push")
+                        && c.args.len() == 2 && self.list_name(&c.args[0]).is_some() =>
+                    {
+                        self.list_push(self.list_name(&c.args[0]).unwrap(), &c.args[1], locals)
+                    }
                     Expr::Call(c) => {
                         if let Some(callee) = self.functions.get(c.name.as_str()) {
                             if callee.borrow_from.is_some() {
@@ -685,6 +768,12 @@ impl Analysis<'_> {
         }
         match st {
             Stmt::Let(s) if s.is_place() => {}
+            Stmt::Let(s) if is_view_list(s) => {
+                let names = self.visible.borrow().iter().cloned().collect();
+                self.list_scope.borrow_mut().insert(s.name.clone(), names);
+                let roots = self.lists.borrow().get(&s.name).cloned().unwrap_or_default();
+                undo.push((s.name.clone(), locals.insert(s.name.clone(), Origin::View(roots))));
+            }
             Stmt::Let(s) if self.borrow_let(s) => {
                 let roots = self.provenance(&s.value, locals)?;
                 undo.push((s.name.clone(), locals.insert(s.name.clone(), Origin::View(roots))));
@@ -756,6 +845,7 @@ impl Analysis<'_> {
     ) -> Vec<usize> {
         let mut locals_undo: Vec<(String, Option<Origin>)> = Vec::new();
         let mut scope_undo: Vec<(&'a str, Option<usize>)> = Vec::new();
+        let visible = self.visible.borrow().len();
         for st in body {
             let n = graph.points.len();
             for p in incoming {
@@ -806,6 +896,9 @@ impl Analysis<'_> {
                 }
             }
             graph.points.push(point);
+            if let Stmt::Let(s) = st {
+                self.visible.borrow_mut().push(s.name.clone());
+            }
             incoming = match st {
                 Stmt::If(s) => {
                     let mut out = self.build(f, &s.then, vec![n], locals, scope, graph);
@@ -873,6 +966,7 @@ impl Analysis<'_> {
                 _ => vec![n],
             };
         }
+        self.visible.borrow_mut().truncate(visible);
         for (name, old) in scope_undo.into_iter().rev() {
             match old {
                 Some(bit) => { scope.insert(name, bit); }
@@ -893,6 +987,10 @@ pub(crate) fn check(prog: &Program, place_functions: &PlaceFunctions) -> Res<()>
     let has_views = first_borrow(prog).is_some();
     if !has_views && place_functions.is_empty() { return Ok(()); }
     let analysis = Analysis {
+        lists: RefCell::default(),
+        list_scope: RefCell::default(),
+        visible: RefCell::default(),
+        collecting: Cell::new(false),
         place_functions,
         functions: prog.functions.iter().map(|f| (f.name.as_str(), f)).collect(),
         records: prog.types.iter().filter_map(|d| match d {
@@ -908,14 +1006,88 @@ pub(crate) fn check(prog: &Program, place_functions: &PlaceFunctions) -> Res<()>
         if !has_views && !place_functions.contains_key(&f.name) { continue; }
         let mut graph = Graph::default();
         // R-6g9-6: parameters hold provenance, but have no local liveness bit.
-        let mut locals = f.params.iter().filter_map(|p| {
+        let mut locals: HashMap<String, Origin> = f.params.iter().filter_map(|p| {
             let read = !p.take && p.mode_pos.is_none();
             let ty = GType::from_key(&p.ty);
             (analysis.records.contains_key(ty.name.as_str()) || (read && analysis.structs.contains(ty.name.as_str())))
                 .then(|| (p.name.clone(), Origin::Param))
         }).collect();
+        let lists = view_lists(f)?;
+        *analysis.lists.borrow_mut() = lists.iter().map(|name| (name.clone(), Roots::new())).collect();
+        analysis.list_scope.borrow_mut().clear();
+        let params = || f.params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        if !lists.is_empty() {
+            // R-6g9-10: an element read carries the list's provenance, which a later push can grow: repeat until the
+            // union of the pushes is stable (each pass only adds sources; at most one pass per list plus one).
+            analysis.collecting.set(true);
+            for _ in 0..=lists.len() {
+                let before = analysis.lists.borrow().clone();
+                *analysis.visible.borrow_mut() = params();
+                let mut scratch_locals = locals.iter().map(|(k, _)| (k.clone(), Origin::Param)).collect();
+                analysis.build(f, &f.body, Vec::new(), &mut scratch_locals, &mut HashMap::new(), &mut Graph::default());
+                if *analysis.lists.borrow() == before { break; }
+            }
+            analysis.collecting.set(false);
+        }
+        *analysis.visible.borrow_mut() = params();
         analysis.build(f, &f.body, Vec::new(), &mut locals, &mut HashMap::new(), &mut graph);
         graph.conflicts()?;
     }
     Ok(())
+}
+
+/// R-6g9-10: the view lists of `f`. A list is a local: it may only be pushed to (`vec_push(inout l, v)`), read
+/// (`vec_get(l, i)`, `len(l)`), cleared or reserved; any other use of its name (a move, an argument, a return, a
+/// store) would let it escape. Each list name is bound once in the function.
+fn view_lists(f: &Function) -> Res<Vec<String>> {
+    let mut lists = Vec::new();
+    let mut names: Vec<(String, i64, i64)> = Vec::new();
+    crate::foreign_shim::walk_stmts(&f.body, &mut |node| {
+        if let Node::Let(s) = node {
+            if is_view_list(s) { lists.push(s.name.clone()); }
+            names.push((s.name.clone(), s.line, s.col));
+        }
+    });
+    if lists.is_empty() { return Ok(lists); }
+    for list in &lists {
+        if let Some((_, line, col)) = names.iter().filter(|(n, _, _)| n == list).nth(1) {
+            return Err(signature(*line, *col));
+        }
+        if f.params.iter().any(|p| &p.name == list) {
+            return Err(signature(f.line, f.col));
+        }
+    }
+    let set: HashSet<&str> = lists.iter().map(String::as_str).collect();
+    fn uses(e: &Expr, set: &HashSet<&str>) -> Res<()> {
+        let escape = |line, col| error(line, col, "borrow_escape", "a Vec<ref str> list cannot leave its function's operations");
+        let list = |a: &Expr, inout: bool| match (a, inout) {
+            (Expr::InoutArg(x), true) => matches!(&*x.expr, Expr::Var(v) if set.contains(v.name.as_str())),
+            (Expr::Var(v), false) => set.contains(v.name.as_str()),
+            _ => false,
+        };
+        match e {
+            Expr::Call(c) if matches!(c.name.as_str(), "vec_push" | "vec_clear" | "vec_reserve")
+                && c.args.first().is_some_and(|a| list(a, true)) => c.args[1..].iter().try_for_each(|a| uses(a, set)),
+            Expr::Call(c) if matches!(c.name.as_str(), "vec_get" | "len")
+                && c.args.first().is_some_and(|a| list(a, false)) => c.args[1..].iter().try_for_each(|a| uses(a, set)),
+            Expr::Var(v) if set.contains(v.name.as_str()) => Err(escape(v.line, v.col)),
+            Expr::Move(m) if set.contains(m.name.as_str()) => Err(escape(m.line, m.col)),
+            _ => crate::refine::kids(e).into_iter().try_for_each(|k| uses(k, set)),
+        }
+    }
+    fn block(body: &[Stmt], set: &HashSet<&str>) -> Res<()> {
+        for st in body {
+            let (mut exprs, mut writes, mut blocks) = (Vec::new(), Vec::new(), Vec::new());
+            walk_statement(st, &mut |e| exprs.push(e), &mut |name, _, line, col| writes.push((name, line, col)),
+                &mut |b| blocks.push(b));
+            if let Some((_, line, col)) = writes.into_iter().find(|(name, _, _)| set.contains(name)) {
+                return Err(error(line, col, "borrow_escape", "a Vec<ref str> list cannot be reassigned"));
+            }
+            exprs.into_iter().try_for_each(|e| uses(e, set))?;
+            blocks.into_iter().try_for_each(|b| block(b, set))?;
+        }
+        Ok(())
+    }
+    block(&f.body, &set)?;
+    Ok(lists)
 }

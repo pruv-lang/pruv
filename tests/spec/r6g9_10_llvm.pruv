@@ -1,0 +1,8 @@
+// spec: R-6g9-10 reject
+// The LLVM backend has no list of views yet.
+fn f(p: str) -> i64 ! alloc {
+  let mut parts: Vec<ref str> = vec_new::<ref str>();
+  vec_push::<ref str>(inout parts, p);
+  return len(parts);
+}
+fn main() -> i64 ! alloc { if f("ab") == 1 { return 0; } return 1; }

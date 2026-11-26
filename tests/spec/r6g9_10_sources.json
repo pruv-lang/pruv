@@ -1,0 +1,10 @@
+{
+  "gen_contains": ["parts.push(w);", "parts.push(&r.name);", "parts.push(x);"],
+  "run": {
+    "backends": ["rust"],
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["3"],
+    "alloc_balance": true
+  }
+}

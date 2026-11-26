@@ -1519,6 +1519,8 @@ struct Gen<'a> {
     owned_binders: HashSet<String>,
     map_views: HashSet<String>,
     string_error_binders: HashSet<String>,
+    /// R-6g9-10 (4.4b-NV): locals bound as `Vec<ref str>`, emitted as the hand `Vec<&str>`
+    view_lists: HashSet<String>,
     /// `e?` Ok binder -> `e?` text, for the statement that takes the value (try_match)
     try_values: HashMap<String, String>,
     /// owned extended locals the current return statement may move (return_movable)
@@ -1703,6 +1705,7 @@ impl<'a> Gen<'a> {
             owned_binders: HashSet::new(),
             map_views: HashSet::new(),
             string_error_binders: HashSet::new(),
+            view_lists: HashSet::new(),
             try_values: HashMap::new(),
             moving: HashSet::new(),
             pinned: HashSet::new(),
@@ -2146,6 +2149,7 @@ impl<'a> Gen<'a> {
 
     fn func(&mut self, f: &Function) -> R<()> {
         self.function_name = f.name.clone();
+        self.view_lists.clear();
         self.view_wrappers = crate::borrowed::uses_view_wrappers(f);
         // G4b-2: the package of the function being emitted (identity `@NAME::...` = package NAME, else the program package)
         if let Some(fg) = self.fg.as_mut() {
@@ -4546,6 +4550,13 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 self.vars.insert(x.name.clone(), x.ty.clone());
                 self.refs.insert(x.name.clone());
             }
+            Stmt::Let(x) if crate::borrowed::is_view_list(x) => {
+                // R-6g9-10 (4.4b-NV): a local list of borrowed str views is the hand `Vec<&str>`
+                self.emit(ind, &format!("let mut {}: ::std::vec::Vec<&str> = ::std::vec::Vec::new();", x.name));
+                self.vars.insert(x.name.clone(), x.ty.clone());
+                self.refs.remove(&x.name);
+                self.view_lists.insert(x.name.clone());
+            }
             Stmt::Let(x) => {
                 self.moving = self.last_copy(&x.name, &x.value);
                 let v = if x.borrowed && !crate::borrowed::is_view_wrapper(&x.ty) {
@@ -5106,6 +5117,18 @@ pruv_hi <= (pruv_b.len() as i128) && \
         }
     }
 
+    /// R-6g9-10: the `Vec<ref str>` local a catalog call works on, if any
+    fn view_list_arg(&self, x: &Call) -> Option<String> {
+        let first = match x.args.first()? {
+            Expr::InoutArg(a) => a.expr.as_ref(),
+            other => other,
+        };
+        match first {
+            Expr::Var(v) if self.view_lists.contains(&v.name) => Some(v.name.clone()),
+            _ => None,
+        }
+    }
+
     fn borrowed_value(&mut self, e: &Expr) -> R<String> {
         if let Expr::StrLit(x) = e {
             if x.empty {
@@ -5240,6 +5263,38 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     format!("&{}", self.e(&x.args[1])?)
                 };
                 return Ok(format!("{}.remove({}).is_some()", self.e(&place.expr)?, key));
+            }
+        }
+        if let Some(list) = self.view_list_arg(x) {
+            // R-6g9-10 (4.4b-NV): push a view, read a view back (`Vec<&str>`, no String)
+            self.fg_mut()?.record_inline_catalog(&x.name, &src);
+            if x.name == "vec_push" {
+                let v = match arg(&x.args, 1)? {
+                    Expr::StrLit(l) => lit_str(&l.value),
+                    // a `str` parameter or a view local is already `&str` (an `inout` `str` is rejected earlier)
+                    Expr::Var(v) if self.refs.contains(&v.name) || self.params.contains(&v.name) => v.name.clone(),
+                    // an owned `String` local or field is borrowed, as hand `parts.push(&head)`
+                    a @ Expr::Var(_) => format!("&{}", self.e(a)?),
+                    a @ Expr::FieldAccess(_) if !self.is_ref_value(a) => format!("&{}", self.e(a)?),
+                    other => self.e(other)?,
+                };
+                if self.unchecked_collections() {
+                    return Ok(format!("{list}.push({v})"));
+                }
+                return Ok(format!(
+                    "{{ let pruv_v: &str = {v}; if ({list}.len() as u64) >= (1u64 << 40) {{ pruv_g6_req(\"vec_push\", \"len(v) < 2^40\"); }} {list}.push(pruv_v) }}"
+                ));
+            }
+            if x.name == "vec_get" {
+                let i = self.e(arg(&x.args, 1)?)?;
+                if self.unchecked_collections() {
+                    return Ok(format!("(*unsafe {{ {list}.get_unchecked(({i}) as usize) }})"));
+                }
+                let index = format!("<usize as ::std::convert::TryFrom<i64>>::try_from({i}).unwrap_or(usize::MAX)");
+                if self.verified {
+                    return Ok(format!("{list}[{index}]"));
+                }
+                return Ok(format!(r#"(*{list}.get({index}).unwrap_or_else(|| pruv_g6_req("vec_get", "0 <= i && i < len(v)")))"#));
             }
         }
         if x.name == "vec_clear" {

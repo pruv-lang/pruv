@@ -1,0 +1,51 @@
+// spec: R-6g9-10 accept
+// 4.4b-NV: hand `let mut parts: Vec<&str> = Vec::new(); parts.push(&p[start..i]);` - a local list of borrowed str
+// views. The pieces are cut right after a '/' byte (R-6b-5), so the cuts need no run-time boundary test, and nothing
+// is copied into a String.
+fn count(t: str) -> i64
+  ensures 0 <= result && result <= 1099511627776
+{ return len(t); }
+
+// pieces of p between '/' bytes (plus an owned prefix and a literal), then their total length
+fn pieces(p: str) -> i64 ! alloc
+  requires len(p) <= 1000000 && len(p) >= 1 && p[0] < 128
+{
+  let head: str = substr(p, 0, 1);
+  let mut parts: Vec<ref str> = vec_new::<ref str>();
+  vec_reserve::<ref str>(inout parts, 4);
+  vec_push::<ref str>(inout parts, head);
+  let n: i64 = len(p);
+  let mut start: i64 = 0;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= start && start <= i && i <= n && n == len(p) && len(parts) <= i + 1
+    invariant start == 0 || p[start - 1] == 47
+    decreases n - i
+  {
+    if p[i] == 47 {
+      if i > start { vec_push::<ref str>(inout parts, subview(p, start, i)); }
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  if n > start { vec_push::<ref str>(inout parts, subview(p, start, n)); }
+  vec_push::<ref str>(inout parts, "end");
+  let mut total: i64 = 0;
+  let mut k: i64 = 0;
+  while k < len(parts)
+    invariant 0 <= k && k <= len(parts) && 0 <= total && total <= 3000000000000
+    decreases len(parts) - k
+  {
+    let piece: ref str = vec_get::<ref str>(parts, k);
+    if total <= 1000000000000 { total = total + count(piece); }
+    k = k + 1;
+  }
+  let pieces_seen: i64 = len(parts);
+  vec_clear::<ref str>(inout parts);
+  if len(parts) != 0 { return 0 - 1; }
+  return total * 100 + pieces_seen;
+}
+
+fn checksum() -> i64 ! alloc {
+  return pieces("ab/cé//d");
+}
