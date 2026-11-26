@@ -1,0 +1,7 @@
+// P9a-6 (R-6u-8): `true` cannot match an integer scrutinee.
+fn f(k: i64) -> i64 {
+  match k {
+    true => { return 1; }
+    _ => { return 2; }
+  }
+}

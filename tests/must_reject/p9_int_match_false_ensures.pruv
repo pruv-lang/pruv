@@ -1,0 +1,10 @@
+// P9a-6 (R-6u-8): each literal arm is proved on its own path; the `1` arm breaks the contract.
+fn f(k: i64) -> i64
+  ensures k == 1 ==> result == 5
+{
+  match k {
+    0 => { return 1; }
+    1 => { return 2; }
+    _ => { return 5; }
+  }
+}

@@ -1,0 +1,8 @@
+// spec: R-6u-8 reject
+// Literal arms over an integer cover only the listed values; the rest needs a `_` arm.
+fn f(k: i64) -> i64 {
+  match k {
+    0 => { return 1; }
+    1 => { return 2; }
+  }
+}

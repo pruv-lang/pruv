@@ -1,0 +1,21 @@
+// spec: R-6u-8 accept
+// Integer and `bool` literal arms on a scalar scrutinee, in a statement and a value `match`; each arm is proved under
+// the failure of the arms above it, so the `_` arm knows `k != 0 && k != 1`.
+fn f(k: i64) -> i64
+  ensures k == 0 ==> result == 10
+  ensures k == -1 ==> result == 11
+  ensures (k != 0 && k != -1) ==> result == k
+{
+  match k {
+    0 => { return 10; }
+    -1 => { return 11; }
+    _ => { return k; }
+  }
+}
+
+fn g(k: i64, b: bool) -> i64
+  ensures (k == 2 && b) ==> result == 21
+{
+  let s: i64 = match k { 1 => 10, 2 => 20, _ => 0 };
+  return s + match b { true => 1, false => 0 };
+}

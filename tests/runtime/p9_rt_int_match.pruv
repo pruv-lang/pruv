@@ -1,0 +1,84 @@
+struct C { f0: i64, f1: i64, f2: i64, f3: i64 }
+
+fn code(slot: i64) -> i64
+  ensures slot == 3 ==> result == 30
+  ensures slot < 0 && slot != -5 ==> result == -1
+{
+  match slot {
+    0 => { return 0; }
+    1 => { return 10; }
+    -5 => { return 55; }
+    3 => { return 30; }
+    _ => { if slot < 0 { return -1; } return 99; }
+  }
+}
+
+fn vcode(slot: i64) -> i64
+  ensures slot == 2 ==> result == 20
+{
+  return match slot { 0 => 0, 1 => 10, 2 => { 20 }, _ => -1 };
+}
+
+fn bcode(b: bool) -> i64 {
+  let v: i64 = match b { true => 1, false => 2 };
+  match b { false => { return v + 10; } true => { return v; } }
+}
+
+fn calls(n: i64) -> i64 requires n >= 0 { return n % 4; }
+
+fn ccode(n: i64) -> i64
+  requires 0 <= n && n < 100
+{
+  match calls(n) { 0 => { return 100; } 2 => { return 102; } _ => { return 7; } }
+}
+
+fn fcode(c: C) -> i64
+  ensures c.f1 == -9223372036854775808 ==> result == 1
+{
+  return match c.f1 { -9223372036854775808 => 1, 9223372036854775807 => 2, _ => 3 };
+}
+
+fn small(k: u8, w: u16, x: i32) -> i64 {
+  let a: i64 = match k { -0 => 1, 255 => 2, _ => 3 };
+  let b: i64 = match w { 65535 => 10, _ => 20 };
+  match x { -2147483648 => { return a + b + 100; } -7 => { return a + b + 200; } _ => { return a + b; } }
+}
+
+fn tick(n: i64) -> i64 ! io {
+  print(n);
+  return n;
+}
+
+fn once(n: i64) -> i64 ! io {
+  match tick(n) { 1 => { return 10; } 2 => { return 20; } _ => { return 30; } }
+}
+
+fn walk() -> i64 {
+  let mut i: i64 = 0;
+  let mut acc: i64 = 0;
+  while i < 20
+    invariant 0 <= i && i <= 20 && 0 <= acc && acc <= 100 * i
+    decreases 20 - i
+  {
+    i = i + 1;
+    match i % 4 {
+      0 => { continue; }
+      3 => { if i > 10 { break; } acc = acc + 100; }
+      _ => { acc = acc + 1; }
+    }
+  }
+  return acc;
+}
+
+fn run() -> () ! io {
+  print(code(3)); print(code(-5)); print(code(-9)); print(code(42));
+  print(vcode(2)); print(vcode(7));
+  print(bcode(true)); print(bcode(false));
+  print(ccode(4)); print(ccode(6)); print(ccode(7));
+  let lo: C = C { f0: 0, f1: -9223372036854775807 - 1, f2: 0, f3: 0 };
+  let hi: C = C { f0: 0, f1: 9223372036854775807, f2: 0, f3: 0 };
+  print(fcode(lo)); print(fcode(hi)); print(fcode(C { f0: 0, f1: 5, f2: 0, f3: 0 }));
+  print(small(0, 65535, -2147483648)); print(small(255, 1, -7)); print(small(9, 2, 5));
+  print(once(2)); print(once(9));
+  print(walk());
+}

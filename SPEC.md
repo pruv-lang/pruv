@@ -2867,6 +2867,26 @@ variants (R-6u-5).
   (a repeated variant is `type/match_arms`). Tests: [accept](tests/spec/p9_pattern_order_accept.pruv),
   [reject](tests/spec/p9_pattern_order_reject.pruv), [after a binder](tests/must_reject/p9_pattern_unreachable.pruv),
   [after `_`](tests/must_reject/p9_pattern_unreachable_wild.pruv).
+- R-6u-8 **Literal arms on a scalar (P9a-6).** A `match` statement or value `match` over an integer or `bool`
+  scrutinee may have literal arms (`0 =>`, `-1 =>`, `true =>`) followed by a `_` arm; integer literals need a `_` arm
+  for the rest (`type/match_arms`), `true` and `false` together cover a `bool`. A literal that does not fit the
+  scrutinee's type is `type/int_range`; a literal on another type, or `true` on an integer, is `type/type_mismatch`;
+  a repeated literal is `type/unreachable_arm` (R-6u-7). There is no binder arm at the top (`parse/syntax`; use `_`
+  and the scrutinee). The checker lowers the match to one `if k == l1 { .. } else if k == l2 { .. } else { .. }`
+  chain, so the verifier follows one path per arm (not two per arm, as separate `if` statements would) and each arm
+  is proved under the failure of the arms above it. The scrutinee is evaluated once: a statement `match` over an
+  expression that is not a place binds it to a fresh local first; the literal arms of a value `match` test a local, a
+  parameter or a field path rooted at one (`type/match_type`; bind the value with `let` first). A literal top arm in
+  `if let`, `let else` or `while let` is `parse/let_pattern`. Tests: [accept](tests/spec/p9_int_match_accept.pruv),
+  [reject](tests/spec/p9_int_match_reject.pruv), [runtime](tests/runtime/p9_rt_int_match.pruv),
+  [value call](tests/must_reject/p9_int_match_value_call.pruv), [if let](tests/must_reject/p9_int_match_if_let.pruv),
+  [let else](tests/must_reject/p9_int_match_let_else.pruv), [bool partial](tests/must_reject/p9_int_match_bool_partial.pruv),
+  [on an Option](tests/must_reject/p9_int_match_option.pruv),
+  [bool on an integer](tests/must_reject/p9_int_match_bool_on_int.pruv),
+  [repeated](tests/must_reject/p9_int_match_repeat.pruv), [range](tests/must_reject/p9_int_match_u8_range.pruv),
+  [beyond every type](tests/must_reject/p9_int_match_big_lits.pruv),
+  [false contract](tests/must_reject/p9_int_match_false_ensures.pruv); the verifier's path count is pinned by
+  `pruvc-rs/crates/pruv-proof/tests/int_match_paths.rs` (24 arms).
 ## 6v. Type aliases (P9a)
 ```
 type Code = i64;
@@ -2947,7 +2967,8 @@ return match s { Shape::Circle(r) => { 3 * r * r }, Shape::Empty => 0 };
   [type parameter](tests/must_reject/p9_if_generic.pruv).
 - R-6w-5 **Value `match`.** `match v { P1 => { e1 }, P2 => e2, .. }` is an expression wherever a value is read, as
   for R-6w-1. An arm pattern is a statement `match` pattern on an `Option`, a `Result` or a user enum (`Some(x)`,
-  `Err(e)`, `E::V(a, b)`, `E::W`, 6a, with the `_`, literal and nested patterns of R-6u-6); the arms cover every case
+  `Err(e)`, `E::V(a, b)`, `E::W`, 6a, with the `_`, literal and nested patterns of R-6u-6), or a literal arm on an
+  integer or `bool` (R-6u-8); the arms cover every case
   (`type/match_arms`, also for a value `match` with no arms). An arm value is a block
   holding exactly one expression, or a bare expression followed by `,` or the closing `}` (`parse/syntax`). A tuple
   or slice pattern in a value `match` is `parse/value_match_pattern` (parity row P9a-6; use a `match` statement).
@@ -3527,7 +3548,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/impl_syntax` | parse | a malformed or unsupported impl block (a specialized generic impl, a repeated block type parameter, trait or path impl, a non-`fn` item, a function name starting with `_`, an unclosed block) or a typed receiver (R-6x-1, R-6x-2) |
 | `parse/inout_syntax` | parse | a malformed `inout` parameter or argument |
 | `parse/let_else_syntax` | parse | a constructor pattern after `let` followed by `;` instead of `else { .. }` (R-6u-3) |
-| `parse/let_pattern` | parse | a `_`, literal or nested pattern in `if let`, `let else` or `while let` (R-6u-6) |
+| `parse/let_pattern` | parse | a `_`, literal or nested pattern in `if let`, `let else` or `while let` (R-6u-6, R-6u-8) |
 | `parse/slice_pattern_rest` | parse | a slice pattern with a rest `..` that is not its last element, or more than one rest (R-6u-4) |
 | `parse/lib_module_conflict` | parse | a module is found both in the program and in a library path |
 | `parse/loop_jump_syntax` | parse | a `continue` followed by anything but an optional label and `;`, or a `break` whose `;` is missing before `}` (R-6r-3) |
@@ -3637,7 +3658,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/loop_label_unknown` | type | a `break`/`continue` label that no enclosing loop has (R-6r-2) |
 | `type/match_arity` | type | a match arm binds the wrong number of fields |
 | `type/match_arms` | type | match arms that are missing or repeated; a slice length no arm takes or a slice arm earlier arms cover (R-6u-4); a case no pattern arm takes (R-6u-6) |
-| `type/match_type` | type | a match on a value that is not Option, Result or an enum (or an array place with slice arms); slice arms on a target that is not an array place, or mixed with other arms (R-6u-4) |
+| `type/match_type` | type | a match on a value that is not Option, Result or an enum (or an array place with slice arms); slice arms on a target that is not an array place, or mixed with other arms (R-6u-4); literal arms of a value `match` on a scrutinee that is not a place (R-6u-8) |
 | `type/method_name_clash` | type | an impl function named like a variant of its enum (R-6x-1) |
 | `type/method_receiver` | type | a method call whose receiver has no known static type, or an `inout self` method on a receiver that is not a place (R-6x-3) |
 | `type/missing_return` | type | a function may reach its end without returning |

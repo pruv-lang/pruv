@@ -1,0 +1,5 @@
+// P9a-6 (R-6u-8): literal arms of a value `match` test a place; a call scrutinee is bound with `let` first.
+fn g(k: i64) -> i64 { return k; }
+fn f(k: i64) -> i64 {
+  return match g(k) { 0 => 1, _ => 2 };
+}

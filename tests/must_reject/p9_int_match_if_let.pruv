@@ -1,0 +1,5 @@
+// P9a-6 (R-6u-8): a literal top pattern is not accepted in `if let`.
+fn f(k: i64) -> i64 {
+  if let 0 = k { return 1; }
+  return 2;
+}

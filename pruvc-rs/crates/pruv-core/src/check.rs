@@ -3578,8 +3578,8 @@ impl Checker {
                     continue;
                 }
                 if Self::has_ext_pattern(m.arms.iter().map(|a| (a.ctor.as_str(), a.binders.as_slice()))) {
-                    let st = self.pattern_match(m, scope)?;
-                    stmts[i] = st;
+                    let sts = self.pattern_match(m, scope)?;
+                    stmts.splice(i..i + 1, sts);
                     continue;
                 }
                 if m.arms.iter().any(|a| a.ctor == "()") {
@@ -5041,7 +5041,7 @@ impl Checker {
 
     /// P9a-6: whether a match needs `lower_patterns` (a `_` arm, or a `_`, literal or nested sub-pattern).
     fn has_ext_pattern<'a>(mut arms: impl Iterator<Item = (&'a str, &'a [String])>) -> bool {
-        arms.any(|(ctor, bs)| ctor == "_" || !bs.iter().all(|b| crate::ast::SubPat::is_plain(b)))
+        arms.any(|(ctor, bs)| !crate::ast::SubPat::is_plain(ctor) || !bs.iter().all(|b| crate::ast::SubPat::is_plain(b)))
     }
 
     /// P9a-6: the constructors of a matched type with their payload types: `Some`/`None`, `Ok`/`Err` (a unit `Ok`
@@ -5093,7 +5093,8 @@ impl Checker {
         let uses = &uses[..];
         let mut rows = Vec::new();
         for (k, (_, _, en, ctor, bs)) in arms.iter().enumerate() {
-            let top = if ctor == "_" { SubPat::Wild } else {
+            // `_` and (row VP) a literal arm `#0` over an integer or `bool` scrutinee are top-level sub-patterns
+            let top = if !SubPat::is_plain(ctor) { SubPat::decode(ctor) } else {
                 SubPat::Variant(en.clone(), ctor.clone(), bs.iter().map(|b| SubPat::decode(b)).collect())
             };
             let mut row = PRow { tests: Vec::new(), binds: Vec::new(), arm: k };
@@ -5260,7 +5261,10 @@ impl Checker {
                             format!("this pattern cannot match {} of type {}", label(&v), tn(&ty)), ""));
                     }
                     let same = match (p, &key) {
-                        (SubPat::Int(a), SubPat::Int(b)) => a.parse::<i128>().ok() == b.parse::<i128>().ok(),
+                        (SubPat::Int(a), SubPat::Int(b)) => match (a.parse::<i128>(), b.parse::<i128>()) {
+                            (Ok(x), Ok(y)) => x == y,
+                            _ => a == b, // out of every integer range: the range check names it
+                        },
                         _ => *p == key,
                     };
                     let mut r2 = r.clone();
@@ -5288,7 +5292,7 @@ impl Checker {
 
     /// P9a-6: a `match` statement with `_`, literal or nested patterns, lowered by `lower_patterns`. A tree that is a
     /// single leaf (a lone `_` arm) is wrapped in `if true { .. }` so its lets stay in the arm.
-    fn pattern_match(&mut self, m: &Match, scope: &Scope) -> Res<Stmt> {
+    fn pattern_match(&mut self, m: &Match, scope: &Scope) -> Res<Vec<Stmt>> {
         let mut probe = m.scrutinee.clone();
         let t = self.match_scrutinee(&mut probe, scope)?;
         let arms: Vec<_> = m.arms.iter().map(|a| (a.line, a.col, a.enum_name.clone(), a.ctor.clone(), a.binders.clone())).collect();
@@ -5302,6 +5306,16 @@ impl Checker {
         let bodies: Vec<Vec<Stmt>> = m.arms.iter().map(|a| a.body.clone()).collect();
         let tuples: Vec<Vec<(String, TuplePat)>> = m.arms.iter().map(|a| a.binders.iter().zip(a.pats.iter())
             .filter_map(|(b, p)| p.clone().map(|p| (b.clone(), p))).collect()).collect();
+        if matches!(&node, PNode::Test(v, ..) if v.is_empty()) && !is_plain_place(&m.scrutinee) {
+            // row VP: literal arms over a computed integer or `bool` test one local, so the scrutinee is evaluated once
+            self.pat_tmp += 1;
+            let tmp = format!("pruv_pat{}", self.pat_tmp);
+            // (the fresh local is spliced before the chain, so a chain that returns on every path still ends the block)
+            let mut out = vec![Stmt::Let(Let { borrowed: false, line: m.line, col: m.col, name: tmp.clone(),
+                mutable: false, ty: t.to_key(), value: m.scrutinee.clone(), refine: None })];
+            out.extend(pat_stmts(&node, &pat_var(m.line, m.col, &tmp), &bodies, &tuples, m.line, m.col)?);
+            return Ok(out);
+        }
         let mut out = pat_stmts(&node, &m.scrutinee, &bodies, &tuples, m.line, m.col)?;
         if let PNode::Leaf(..) = node {
             if place_root(&m.scrutinee).is_none() {
@@ -5310,11 +5324,11 @@ impl Checker {
                 out.insert(0, Stmt::Let(Let { borrowed: false, line: m.line, col: m.col, name: format!("pruv_pat{}", self.pat_tmp),
                     mutable: false, ty: t.to_key(), value: m.scrutinee.clone(), refine: None }));
             }
-            return Ok(Stmt::If(If { line: m.line, col: m.col,
-                cond: Expr::BoolLit(BoolLit { line: m.line, col: m.col, value: true, ty: None }), then: out, els: Vec::new() }));
+            return Ok(vec![Stmt::If(If { line: m.line, col: m.col,
+                cond: Expr::BoolLit(BoolLit { line: m.line, col: m.col, value: true, ty: None }), then: out, els: Vec::new() })]);
         }
         let Some(st) = out.pop() else { unreachable!("a lowered match") };
-        Ok(st)
+        Ok(vec![st])
     }
 
     fn match_scrutinee(&mut self, e: &mut Expr, scope: &Scope) -> Res<GType> {
@@ -6906,6 +6920,12 @@ impl Checker {
                 // a lone `_` arm over a scalar: there is no case to test, and the scrutinee must still be evaluated
                 return Err(terr(line, col, "match_type", format!("a value `match` needs an Option, Result or enum, got {}", tn(&t)),
                     "use the value directly"));
+            }
+            if matches!(&node, PNode::Test(v, ..) if v.is_empty()) && !is_plain_place(&call.args[0]) {
+                // row VP: the chain tests the scrutinee once per arm, and a value position has no `let` to hold it
+                return Err(terr(line, col, "match_type",
+                    "literal arms of a value `match` test a local, a parameter or a field path rooted at one",
+                    "bind the value with a let first, or use a `match` statement"));
             }
             *e = pat_value(&node, &call.args[0], &call.args[1..], line, col);
             return match e {
@@ -9237,6 +9257,11 @@ enum PNode {
     Test(String, crate::ast::SubPat, Box<PNode>, Box<PNode>),
 }
 
+/// A local, a parameter or a field path rooted at one: reading it again has no effect and gives the same value.
+fn is_plain_place(e: &Expr) -> bool {
+    matches!(e, Expr::Var(_) | Expr::FieldAccess(_)) && place_root(e).is_some()
+}
+
 fn pat_var(line: i64, col: i64, name: &str) -> Expr {
     Expr::Var(Var { line, col, name: name.to_string(), ty: None })
 }
@@ -9313,14 +9338,14 @@ fn pat_targets(stmts: &[Stmt], out: &mut HashSet<String>) {
     }
 }
 
-fn pat_cond(line: i64, col: i64, v: &str, lit: &crate::ast::SubPat) -> (Expr, bool) {
+fn pat_cond(line: i64, col: i64, v: Expr, lit: &crate::ast::SubPat) -> (Expr, bool) {
     use crate::ast::SubPat;
     match lit {
-        SubPat::Bool(b) => (pat_var(line, col, v), !*b),
+        SubPat::Bool(b) => (v, !*b),
         SubPat::Int(x) => {
             // a signed literal, as the parser folds `-N` (so `-9223372036854775808` stays in range)
             let lit = Expr::IntLit(IntLit { line, col, value: x.clone(), ty: None, kind: Default::default() });
-            (Expr::Binary(Binary { line, col, op: "==".into(), left: Box::new(pat_var(line, col, v)), right: Box::new(lit), ty: None }), false)
+            (Expr::Binary(Binary { line, col, op: "==".into(), left: Box::new(v), right: Box::new(lit), ty: None }), false)
         }
         _ => unreachable!("a literal test"),
     }
@@ -9356,7 +9381,9 @@ fn pat_stmts(node: &PNode, scrut: &Expr, bodies: &[Vec<Stmt>], tuples: &[Vec<(St
             vec![Stmt::Match(Match { line, col, scrutinee, arms: ms, form: MatchForm::Match, els: Vec::new() })]
         }
         PNode::Test(v, lit, a, b) => {
-            let (cond, swap) = pat_cond(line, col, v, lit);
+            // `""` is the scrutinee itself (row VP: a literal arm over an integer or `bool`)
+            let tested = if v.is_empty() { scrut.clone() } else { pat_var(line, col, v) };
+            let (cond, swap) = pat_cond(line, col, tested, lit);
             let (a, b) = (pat_stmts(a, scrut, bodies, tuples, line, col)?, pat_stmts(b, scrut, bodies, tuples, line, col)?);
             let (then, els) = if swap { (b, a) } else { (a, b) };
             vec![Stmt::If(If { line, col, cond, then, els })]
@@ -9384,7 +9411,8 @@ fn pat_value(node: &PNode, scrut: &Expr, vals: &[Expr], line: i64, col: i64) -> 
             crate::ast::ValueMatch::expr(line, col, scrutinee, arms)
         }
         PNode::Test(v, lit, a, b) => {
-            let (cond, swap) = pat_cond(line, col, v, lit);
+            let tested = if v.is_empty() { scrut.clone() } else { pat_var(line, col, v) };
+            let (cond, swap) = pat_cond(line, col, tested, lit);
             let (a, b) = (pat_value(a, scrut, vals, line, col), pat_value(b, scrut, vals, line, col));
             let (then, els) = if swap { (b, a) } else { (a, b) };
             ValueIf::expr(line, col, cond, then, els)
