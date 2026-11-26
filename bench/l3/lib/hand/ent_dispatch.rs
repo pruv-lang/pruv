@@ -6,8 +6,11 @@
 
 #![allow(dead_code)]
 
+#[cfg(not(shared_ctx))]
 #[path = "ent_state.rs"]
 pub mod ent_state;
+#[cfg(shared_ctx)]
+pub use crate::ent_state;
 
 use ent_state::ent_packet::{put_vs, sec_start, MAX_WORDS};
 use ent_state::ent_value::{self, prefix_in, str_eq_lit, strict_eq, units, units_in, Pool, PoolBuf, Value};

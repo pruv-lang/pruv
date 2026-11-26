@@ -9,12 +9,21 @@
 
 #![allow(dead_code)]
 
+#[cfg(not(shared_ctx))]
 #[path = "ent_state.rs"]
 pub mod ent_state;
+#[cfg(shared_ctx)]
+pub use crate::ent_state;
+#[cfg(not(shared_ctx))]
 #[path = "ent_path.rs"]
 pub mod ent_path;
+#[cfg(shared_ctx)]
+pub use crate::ent_path;
+#[cfg(not(shared_ctx))]
 #[path = "ent_u16.rs"]
 pub mod ent_u16;
+#[cfg(shared_ctx)]
+pub use crate::ent_u16;
 
 use ent_path::{basename, dirname, join, resolve_finish, resolve_need};
 use ent_state::ent_packet::{boundary, comp_check, put_vs, sec_len, sec_start, Check, ANY, STR};

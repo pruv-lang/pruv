@@ -17,10 +17,12 @@ Gap ids refer to `docs/RUST_SHAPE_RESET.md` §4. This file is the step 3 RESHAPE
 | `ent_wire` | `hand/ent_wire.rs` (new in 3.2) | O (`sections` / `pool_start` return `-1`) |
 | `ent_packet` | `hand/ent_packet.rs` (new in 3.2) | K, E, O, S, L, P-start (V, P-hi closed in 3.3) |
 | `ent_value` | `hand/ent_value.rs` (new in 3.3) | U, O, VE, PB, CMP, API rows (`(w, start)` wrappers) |
-| `ent_state` | `hand/ent_state.rs` (new in 3.4) | OA, ENT, CK, AD (adapters for 3.6 / 3.7), CX partly closed, DR |
-| `ent_dispatch` | `hand/ent_dispatch.rs` (new in 3.4) | OA, AD (`find_item` / `list_item` / `read_item`), O (clip code 0); LR closed in 3.5 |
-| `ent_bound` | `hand/ent_bound.rs` (new in 3.5) | SA, HK, PB, U, J, O, AD (`threads_item` / `excluded_item`, 3.7) |
-| `ent_canon` | `hand/ent_canon.rs` (new in 3.5) | RA, O, OA, AD (by-value entry points for `ent_sources`, 3.6) |
+| `ent_state` | `hand/ent_state.rs` (new in 3.4) | OA, ENT, CK, OR, CX partly closed, DR; AD closed in 3.7 |
+| `ent_dispatch` | `hand/ent_dispatch.rs` (new in 3.4) | OA, O (clip code 0); LR closed in 3.5, AD closed in 3.7 |
+| `ent_bound` | `hand/ent_bound.rs` (new in 3.5) | SA, HK, PB, U, J, O; AD closed in 3.7 |
+| `ent_canon` | `hand/ent_canon.rs` (new in 3.5) | RA, O, OA, OR, TM; AD closed in 3.6 / 3.7 |
+| `ent_sources` | `hand/ent_sources.rs` (new in 3.6) | LB, MP, CK, RA, OA, OR, TM, U, PB |
+| `entry_api` | `hand/entry_api.rs` (new in 3.7) | OR, TM, VB, CK, O, PB, VE |
 
 ## Step 3.1: `ent_u16` and `ent_path`
 
@@ -725,3 +727,103 @@ All after the last code change (the F1 / F4 / F5 fixes).
 - Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, AD (3.7 adapters above).
 - Next (3.7): `entry_api` to `inout cx`, removing the last adapters (`fail`, `with_prev`, `st_*`, `find_item`,
   `list_item`, `read_item`, `threads_item`, `excluded_item`); fold `st_replay_ok` onto `State` (F10 rest from 3.5).
+
+## Step 3.7: `entry_api`
+
+`hand/entry_api.rs` is new. It is the crate root of a shared build: the hand modules `ent_dispatch`, `ent_bound`,
+`ent_canon` (and its `ent_state` / `ent_path` / `ent_u16`) and `ent_sources` now declare their dependencies as
+`#[cfg(not(shared_ctx))] #[path] mod X; #[cfg(shared_ctx)] pub use crate::X;`, so under `--cfg shared_ctx` one `Ctx`
+type runs every item, and each module still checks alone without the cfg. `ent_packet::ent_wire` and
+`ent_state::ent_value_pkt_size` became `pub` for it. `account_home_begin` belongs to `ent_accounts`, which has no hand
+baseline; `hand/entry_api.rs` carries a stand-in. Check:
+`rustc --edition 2021 --cfg shared_ctx --test entry_api.rs -o /tmp/entry_api_hand && /tmp/entry_api_hand` (38 tests,
+7 of them new: find / list / read round trips, begin rejects, account home, ops without an await, the op 9 round trip).
+
+### What changed
+
+- `entry_api.pruv`: `run_item(inout cx: Ctx) -> Result<(), Halt>` calls `find_source`, `list_external`,
+  `read_external`, `session_threads`, `excluded_from_bound` and `stop_fail` directly (an if-chain for the hand
+  `match`). `entry_begin_with_env` folds the op 9 reject into the kind / seq check and builds the `Ctx` with
+  `move blob, move lg`. `entry_step_at`: `e1` / `e2` are value `if`s; the `seq >= 2^53` test joins the completion
+  header test; `st` is a `ref` subview (it was a `slice` copy); the state is viewed once
+  (`let s = state_view(st); if !state_ok(st, s, ..) || !replay_ok(s, ..)`) and `s.code`, `s.aux`, `s.log`, `s.ck`
+  are read from the view; `ctx_new(op, id, move blob, move lg, s.ck)` with `blob = copy(s.blob)` (hand `to_vec`),
+  then `use_prev(inout cx, prev, true)`.
+- `ent_state.pruv`: `ctx_new` takes `take blob`, `take lg` and moves them into the `Ctx` (it copied both; 3.6 F7 /
+  F8 for the step paths). `state_ok(st, s: State, op, op_id)` takes the caller's view; `st_replay_ok(st, ..)` is
+  `replay_ok(s: State, op, seq)` (hand `State::replay_ok(&self)`). Removed: `fail`, `with_prev`, `st_code`, `st_aux`,
+  `st_ck`, `st_blob`, `st_log`.
+- `ent_canon.pruv` `codex_folder_step` and `ent_sources.pruv` `import_step`: one `state_view` instead of three (F10
+  rest from 3.5, F11 from 3.6); `codex_folder_begin` / `import_begin` move the repacked blob into the `Ctx`.
+- Begins pass an empty checkpoint to `ctx_new` (it zero-pads to 8 words) instead of `zeros(8)`; hand `&[0; 8]`.
+- `ent_dispatch.pruv`: `find_item`, `list_item`, `read_item` removed. `ent_bound.pruv`: `threads_item`,
+  `excluded_item` removed. Headers updated.
+- `q_mutants.py`: no original text changed; every original occurs exactly once (checked by script).
+
+### Rows
+
+- **OR** (new, language gap): hand `State::parse(st, op, id) -> Option<State>` and
+  `.filter(|s| s.replay_ok(op, seq))`. A borrowing struct (`-> State from(st)`) cannot be the payload of an
+  `Option` / `Result` (pruvc: `type/borrow_signature`), so the caller views once and checks with `state_ok(st, s, ..)`
+  returning `bool`. Used by `entry_step_at`, `codex_folder_step` (`state_ok_ie`), `import_step`.
+- **TM** (new, language gap): an argument for a `take` parameter must be a named local with `move x`
+  (`type/foreign_move` on a call result or on `copy(..)`), so `repack(..)`, `empty()` and `copy(s.blob)` are bound to
+  a local before `ctx_new`; the hand passes `repack(input, hi)`, `Vec::new()`, `s.blob.to_vec()` directly. One extra
+  `let` per argument, no extra copy.
+- **VB** (new, language gap): a value `if` arm is one expression (SPEC R-6w-1). `index_begin_checked` binds
+  `strings` with `let mut strings = empty(); if units <= pl { ..loop..; strings = pool_finish(..) } else { strings =
+  copy(blob_pool(blob)) }`; the hand writes `let strings = if .. { ..loop..; compact.view_words() } else { .. }`.
+  The `empty()` is a zero-length array (no heap block).
+- **CK** used: the begin checkpoint is an empty `[i64]` padded by `ctx_new` (hand `&[0; 8]`, no fixed-array literal);
+  `import_step` seeds `set_ck_arr0(s.ck)` as a `[i64]` (hand `[i64; 8]`).
+- **AD** closed: every by-value adapter is removed (grep: no users left).
+
+| Adapter (by value) | `inout` function | Users | Removed in |
+|---|---|---|---|
+| `fail`, `with_prev`, `st_code`, `st_aux`, `st_ck`, `st_blob`, `st_log`, `st_replay_ok` | `stop_fail`, `use_prev`, `state_view`, `replay_ok` | none | 3.7 (removed) |
+| `ent_bound::threads_item`, `excluded_item` | `session_threads`, `excluded_from_bound` | none | 3.7 (removed) |
+| `find_item`, `list_item`, `read_item` | `find_source`, `list_external`, `read_external` | none | 3.7 (removed) |
+
+### Structure comparison
+
+One read-only comparison by Codex (gpt-6.2-astra, effort high; engine, model and account named by the user): hand
+`.rs` against `.pruv`, function by function, for `entry_api` and the begin / step / `Ctx` functions touched here (20
+functions). No behaviour difference found. Findings and what was done:
+
+| Finding | Done |
+|---|---|
+| `entry_begin_with_env`, `codex_folder_begin`, `import_begin` allocate `zeros(8)` for the checkpoint, then `ctx_new` allocates its own 8 words; the hand borrows `&[0; 8]` | the begins pass `empty()` (no heap block), `ctx_new` zero-pads (row CK) |
+| `import_step` phase checkpoint is a `[i64]` temporary (hand `[i64; 8]`) | kept: row CK |
+| `ctx_new` writes zeros into the already-zero tail for a short `ck`; `Ctx` fields are flat (`qexact: i64`, `qtab` cleared first) where the hand has `[i64; 8]`, `Option<Prev>`, `bool` | kept: rows CK, CX / OA (`Ctx` layout) |
+| `stop_fail` stores `bad = 1`, hand `Some(Fault::Protocol)` | kept: row CX (`Ctx` layout) |
+| `index_begin_checked` reads the pool through `(blob, start)` helpers where the hand builds one `Pool` view | kept: row VE / API (`(w, start)` wrappers) |
+| `index_*` lengths / offsets are `i64` with range `requires` (hand `usize`) | kept: row U |
+| `account_home_begin` (`ent_accounts`) allocates the invalid-id record `[3, 0]` (stand-in borrows a literal) | kept: `ent_accounts` has no hand baseline (Next) |
+
+### Tests
+
+All after the last code change (the empty begin checkpoint from the structure comparison).
+
+| Test | Pairs | Result |
+|---|---|---|
+| `rustc --cfg shared_ctx --test hand/entry_api.rs` (all hand modules in one crate) | hand | 38 passed; each hand module alone passes as before |
+| `entry/dev_build.sh --no-link` | rs | verified, `{"ok": true}` |
+| `entry/q_mutants.py` originals | - | every original occurs exactly once (script; no mutant text changed) |
+| `entry/test_impl.py` | rs/rust, rs/llvm | 296 variants x 2 = 592 runs, unexplained 0 |
+| `entry/judge_test.py` | rs/rust, rs/llvm | failures 0 |
+| `entry/q.py --count 400` | rs/rust, rs/llvm | 399 exact, 1 excluded-domain, unexplained 0 |
+| `req/test_impl.py` | rs/rust, rs/llvm | 160 variants x 2 = 320 runs, unexplained 0 |
+| `req/q.py` (q_gen, 2000 cases) | rs/rust, rs/llvm | 2000/2000 equal on each pair |
+| `qwen/test_impl.py` | rs/rust, rs/llvm | 26/26 each, verifier PASS |
+| `codex/test_impl.py` | rs/rust, rs/llvm | 136/136 each |
+| `opencode/test_impl.py`, `grok/test_impl.py --no-ts` | rs/rust, rs/llvm | all fixtures passed on 2 pairs each |
+| `entry/integrate.py` | rs/rust | 10 integration cases, 18 checks PASS, 2 integration limits (I01/I02 claude, known; exit 2 as before) |
+
+### Rows open after 3.7
+
+- Closed: **AD** (all adapters removed).
+- New: **OR**, **TM**, **VB** (language gaps).
+- Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB.
+- Next (3.8, `docs/RUST_SHAPE_RESET.md` §6, step 3 item 8): `entry/root`, then `req`. Still missing from step 3: a hand
+  baseline for `ent_accounts` (step 3.4 listed it with `ent_dispatch`; `hand/entry_api.rs` only has an
+  `account_home_begin` stand-in, and 3.6 F5 rest waits on it). The `req` port waits for the P10H experiment.

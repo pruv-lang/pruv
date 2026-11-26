@@ -8,14 +8,17 @@ fn bad_pkt(w: [i64], code: i64) -> [i64] ! alloc
   return crate::ent_packet::boundary(crate::ent_u16::rd(w, 5), crate::ent_u16::rd(w, 2), c);
 }
 
-fn run_item(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+fn run_item(inout cx: crate::ent_state::Ctx) -> Result<(), crate::ent_state::Halt> ! alloc
 {
-  if cx.op == 2 { return crate::ent_dispatch::find_item(cx); }
-  if cx.op == 3 { return crate::ent_dispatch::list_item(cx); }
-  if cx.op == 4 { return crate::ent_dispatch::read_item(cx); }
-  if cx.op == 7 { return crate::ent_bound::threads_item(cx); }
-  if cx.op == 8 { return crate::ent_bound::excluded_item(cx); }
-  return crate::ent_state::fail(cx);
+  if cx.op == 2 {
+    crate::ent_dispatch::find_source(inout cx);
+    return Ok::<(), crate::ent_state::Halt>(());
+  }
+  if cx.op == 3 { return crate::ent_dispatch::list_external(inout cx); }
+  if cx.op == 4 { return crate::ent_dispatch::read_external(inout cx); }
+  if cx.op == 7 { return crate::ent_bound::session_threads(inout cx); }
+  if cx.op == 8 { return crate::ent_bound::excluded_from_bound(inout cx); }
+  return crate::ent_state::stop_fail(inout cx);
 }
 
 pub fn entry_begin(input: [i64]) -> [i64] ! alloc
@@ -28,16 +31,17 @@ pub fn entry_begin_with_env(input: [i64], ec: i64) -> [i64] ! alloc
   if ec != 0 { return bad_pkt(input, ec); }
   let op: i64 = crate::ent_u16::rd(input, 5);
   let id: i64 = crate::ent_u16::rd(input, 2);
-  if crate::ent_u16::rd(input, 1) != 0 || crate::ent_u16::rd(input, 3) != 0 { return bad_pkt(input, 1); }
-  if op == 9 { return bad_pkt(input, 1); }
+  if crate::ent_u16::rd(input, 1) != 0 || crate::ent_u16::rd(input, 3) != 0 || op == 9 { return bad_pkt(input, 1); }
   if op == 1 { return crate::ent_sources::import_begin(input); }
   if op == 5 { return crate::ent_accounts::account_home_begin(input); }
   if op == 6 { return crate::ent_canon::codex_folder_begin(input); }
   let hi: i64 = crate::ent_packet::input_check(input);
   if hi < 0 { return bad_pkt(input, 1); }
+  // TM: a take parameter needs a named local (`move x`); the hand passes the call results directly.
   let blob: [i64] = crate::ent_state::repack(input, hi);
-  let cx0: crate::ent_state::Ctx = crate::ent_state::ctx_new(op, id, blob, crate::ent_u16::empty(), crate::ent_u16::zeros(8));
-  let cx: crate::ent_state::Ctx = run_item(cx0);
+  let lg: [i64] = crate::ent_u16::empty();
+  let mut cx: crate::ent_state::Ctx = crate::ent_state::ctx_new(op, id, move blob, move lg, crate::ent_u16::empty());
+  let r: Result<(), crate::ent_state::Halt> = run_item(inout cx);
   return crate::ent_state::finish(cx, 1, 0);
 }
 
@@ -48,40 +52,38 @@ pub fn entry_step(prev: [i64], completion: [i64]) -> [i64] ! alloc
 
 pub fn entry_step_at(prev: [i64], completion: [i64], wire: bool) -> [i64] ! alloc
 {
-  let mut e1: i64 = 0;
-  if wire { e1 = crate::ent_packet::env_check_wire(prev); }
-  else { e1 = crate::ent_packet::env_check(prev); }
+  let e1: i64 = if wire { crate::ent_packet::env_check_wire(prev) } else { crate::ent_packet::env_check(prev) };
   if e1 != 0 { return bad_pkt(prev, e1); }
-  let mut e2: i64 = 0;
-  if wire { e2 = crate::ent_packet::env_check_wire(completion); }
-  else { e2 = crate::ent_packet::env_check(completion); }
+  let e2: i64 = if wire { crate::ent_packet::env_check_wire(completion) } else { crate::ent_packet::env_check(completion) };
   if e2 != 0 { return bad_pkt(prev, e2); }
   let op: i64 = crate::ent_u16::rd(prev, 5);
   let id: i64 = crate::ent_u16::rd(prev, 2);
   let seq: i64 = crate::ent_u16::rd(prev, 3);
   if crate::ent_u16::rd(prev, 1) != 1 || crate::ent_u16::rd(completion, 1) != 2 { return bad_pkt(prev, 1); }
-  if crate::ent_u16::rd(completion, 2) != id || crate::ent_u16::rd(completion, 3) != seq || crate::ent_u16::rd(completion, 5) != op { return bad_pkt(prev, 1); }
-  if seq >= 9007199254740992 { return bad_pkt(prev, 1); }
+  if crate::ent_u16::rd(completion, 2) != id || crate::ent_u16::rd(completion, 3) != seq || crate::ent_u16::rd(completion, 5) != op ||
+     seq >= 9007199254740992 { return bad_pkt(prev, 1); }
   if op == 1 { return crate::ent_sources::import_step(prev, completion); }
   if op == 6 { return crate::ent_canon::codex_folder_step(prev, completion); }
   if op == 2 || op == 5 || op == 7 || op == 9 { return bad_pkt(prev, 1); }
   let s2: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(prev, 2), 33554432);
-  let st: [i64] = crate::ent_u16::slice(prev, s2, s2 + crate::ent_u16::clamp(crate::ent_packet::sec_len(prev, 2), 16777216));
-  if !crate::ent_state::state_ok(st, op, id) { return bad_pkt(prev, 1); }
-  if !crate::ent_state::st_replay_ok(st, op, seq) { return bad_pkt(prev, 1); }
-  let code: i64 = crate::ent_state::st_code(st);
-  let aux: i64 = crate::ent_state::st_aux(st);
-  let hi: i64 = crate::ent_packet::comp_check(completion, code, aux);
+  let s3: i64 = crate::ent_u16::clamp(s2 + crate::ent_u16::clamp(crate::ent_packet::sec_len(prev, 2), 16777216), len(prev));
+  let st: ref [i64] = subview(prev, crate::ent_u16::clamp(s2, s3), s3);
+  // One view of the state words (hand: State::parse(..).filter(replay_ok) -> Option<State>, row OR).
+  let s: crate::ent_state::State = crate::ent_state::state_view(st);
+  if !crate::ent_state::state_ok(st, s, op, id) || !crate::ent_state::replay_ok(s, op, seq) { return bad_pkt(prev, 1); }
+  let hi: i64 = crate::ent_packet::comp_check(completion, s.code, s.aux);
   if hi < 0 { return bad_pkt(prev, 1); }
-  let lg: [i64] = crate::ent_state::log_append(crate::ent_state::st_log(st), code, aux, completion, hi);
+  let lg: [i64] = crate::ent_state::log_append(s.log, s.code, s.aux, completion, hi);
   if crate::ent_state::log_words(lg) > 16777216 { return bad_pkt(prev, 2); }
-  let cx0: crate::ent_state::Ctx = crate::ent_state::with_prev(crate::ent_state::ctx_new(op, id, crate::ent_state::st_blob(st), lg, crate::ent_state::st_ck(st)), prev, true);
-  let cx: crate::ent_state::Ctx = run_item(cx0);
+  let blob: [i64] = copy(s.blob);
+  let mut cx: crate::ent_state::Ctx = crate::ent_state::ctx_new(op, id, move blob, move lg, s.ck);
+  crate::ent_state::use_prev(inout cx, prev, true);
+  let r: Result<(), crate::ent_state::Halt> = run_item(inout cx);
   return crate::ent_state::finish(cx, seq + 1, seq);
 }
 
 // Op 9 issues at most one await. Its state section retains the v1 wire format.
-// The adapter keeps input after the call and passes it to index_step (the await does not copy it).
+// The caller keeps input after the call and passes it to index_step (the await does not copy it).
 pub fn index_begin(inout progress: [i64], input: [i64]) -> [i64] ! alloc
 {
   crate::ent_u16::wr(inout progress, 0, 0);
@@ -136,6 +138,7 @@ fn index_begin_checked(inout progress: [i64], blob: [i64], raw: i64) -> [i64] ! 
     }
     i = i + 3;
   }
+  // VB: the hand binds `strings` with a value if whose arms are blocks; a value if arm is one expression (R-6w-1).
   let mut strings: [i64] = crate::ent_u16::empty();
   // DB22 (D-DB18-3 P2): rewrite the ID table slots in place instead of cloning it (same steps as append_slot).
   if units <= pl {
@@ -167,7 +170,7 @@ fn index_begin_checked(inout progress: [i64], blob: [i64], raw: i64) -> [i64] ! 
   return crate::ent_packet::mk_packet(1, id, 1, 9, strings, crate::ent_bound::index_request(nt), st, empty, tab, 1);
 }
 
-// The adapter retains the actual emitted packet and the input given to index_begin. Read the input in place,
+// The caller keeps the actual emitted packet and the input given to index_begin. Read the input in place,
 // or its repack when begin repacked it. The caller supplies prev separately so even changes outside the state are rejected.
 pub fn index_step(inout progress: [i64], input: [i64], prev: [i64], emitted: [i64], completion: [i64]) -> [i64] ! alloc
 {

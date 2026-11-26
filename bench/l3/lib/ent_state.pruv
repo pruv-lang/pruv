@@ -22,8 +22,9 @@
 // The answer of the last observation is the packet cx.ent (kind 2); ent_r(cx, k) / ent_p(cx, k) address its record.
 // A throw answer has record word 0 == 1 (and E at record offset 1) for codes 1, 4, 5, 6, 7, 9.
 // Output: put_done(...) fixes the done record; finish(cx, aseq, dseq) builds the packet to return to the host.
-// The by-value functions (with_prev, fail, st_*) are thin adapters for entry_api, which is not reshaped yet; RESHAPE.md
-// row AD lists them.
+// Prev: the state words are viewed once (state_view), checked (state_ok, replay_ok) and the request recorded in prev is
+// remembered with use_prev. Hand `State::parse` returns `Option<State>`; a borrowing struct cannot be an Option payload
+// (RESHAPE.md row OR), so state_ok takes the view and returns bool.
 //
 // State (section 2 of an await), all words range-checked on decode:
 //   [0] magic 1162761298   [1] op   [2] outstanding request code 1..9   [3] aux   [4..11] checkpoint words 0..2^32
@@ -191,15 +192,9 @@ pub fn state_view(st: [i64]) -> State from(st)
                  blob: subview(st, crate::ent_u16::clamp(14, a), a), log: subview(st, a, b) };
 }
 
-// copies of single fields for the modules not reshaped yet (row AD)
-pub fn st_code(st: [i64]) -> i64 { return crate::ent_u16::rd(st, 2); }
-pub fn st_aux(st: [i64]) -> i64 { return crate::ent_u16::rd(st, 3); }
-pub fn st_ck(st: [i64]) -> [i64] ! alloc ensures len(result) >= 0 { let s: State = state_view(st); return copy(s.ck); }
-pub fn st_blob(st: [i64]) -> [i64] ! alloc ensures len(result) >= 0 { let s: State = state_view(st); return copy(s.blob); }
-pub fn st_log(st: [i64]) -> [i64] ! alloc ensures len(result) >= 0 { let s: State = state_view(st); return copy(s.log); }
-
-// the state of an await for (op, op_id) is well-formed; any violation is an InvalidPacket for the caller
-pub fn state_ok(st: [i64], op: i64, op_id: i64) -> bool ! alloc
+// the state of an await for (op, op_id) is well-formed; any violation is an InvalidPacket for the caller.
+// s is state_view(st), taken once by the caller (hand `State::parse`; row OR).
+pub fn state_ok(st: [i64], s: State, op: i64, op_id: i64) -> bool ! alloc
 {
   let n: i64 = len(st);
   if n < 14 || n > 16777216 { return false; }
@@ -217,7 +212,6 @@ pub fn state_ok(st: [i64], op: i64, op_id: i64) -> bool ! alloc
   let g: i64 = st[13];
   if l < 13 || g < 0 || l > n || g > n { return false; }
   if 14 + l + g != n { return false; }
-  let s: State = state_view(st);
   let blob: ref [i64] = s.blob;
   if crate::ent_packet::env_check(blob) != 0 { return false; }
   if crate::ent_u16::rd(blob, 1) != 0 || crate::ent_u16::rd(blob, 3) != 0 { return false; }
@@ -241,12 +235,13 @@ pub struct Ctx { op: i64, op_id: i64, pos: i64, stalled: i64, bad: i64, rcode: i
                  opool: [i64], orec: [i64], otab: [i64],
                  ncan: i64, qon: i64, qexact: i64, qns: i64, qpool: [i64], qrec: [i64], qtab: [i64] }
 
-pub fn ctx_new(op: i64, op_id: i64, blob: [i64], lg: [i64], ck: [i64]) -> Ctx ! alloc
+// ck is copied into 8 words, zero-padded; a begin passes an empty ck (hand `&[0; 8]`; no fixed-array literal, row CK)
+pub fn ctx_new(op: i64, op_id: i64, take blob: [i64], take lg: [i64], ck: [i64]) -> Ctx ! alloc
 {
   let mut k: [i64] = crate::ent_u16::zeros(8);
   let r: i64 = crate::ent_u16::put_range(inout k, 0, ck, 0, 8);
   return Ctx { op: op, op_id: op_id, pos: 0, stalled: 0, bad: 0, rcode: 0, raux: 0, rntab: 0, done: 0, ontab: 0,
-               blob: copy(blob), lg: copy(lg), rpool: alloc(0, 0), rrec: alloc(0, 0), rtab: alloc(0, 0), ent: alloc(0, 0), ck: move k,
+               blob: move blob, lg: move lg, rpool: alloc(0, 0), rrec: alloc(0, 0), rtab: alloc(0, 0), ent: alloc(0, 0), ck: move k,
                opool: alloc(0, 0), orec: alloc(0, 0), otab: alloc(0, 0),
                ncan: 0, qon: 0, qexact: 0, qns: 0, qpool: alloc(0, 0), qrec: alloc(0, 0), qtab: alloc(0, 0) };
 }
@@ -321,14 +316,7 @@ pub fn next_item(inout cx: Ctx) -> () ! alloc
   cx.ncan = 0;
 }
 
-pub fn with_prev(cx0: Ctx, prev: [i64], exact: bool) -> Ctx ! alloc
-{
-  let mut cx: Ctx = cx0;
-  use_prev(inout cx, prev, exact);
-  return cx;
-}
-
-// the regenerated request (rpool, rrec, rtab, rntab) equals the one recorded by with_prev
+// the regenerated request (rpool, rrec, rtab, rntab) equals the one recorded by use_prev
 fn req_same(cx: Ctx, rpool: [i64], rrec: [i64], rtab: [i64], rntab: i64) -> bool ! alloc
 {
   if !crate::ent_u16::eq(cx.qrec, rrec) { return false; }
@@ -449,9 +437,8 @@ pub fn set_ck_arr0(ck: [i64]) -> [i64] ! alloc ensures len(result) >= 0
 }
 
 // everything R1 needs from prev's state, in one call: checkpoint words and log continuity (seq = the awaiting packet's seq)
-pub fn st_replay_ok(st: [i64], op: i64, seq: i64) -> bool ! alloc
+pub fn replay_ok(s: State, op: i64, seq: i64) -> bool ! alloc
 {
-  let s: State = state_view(st);
   if !ck_ok(op, s.code, s.ck) { return false; }
   return log_cont(s.log, op, seq, crate::ent_u16::rd(s.ck, 7), st_s0(op, s.ck));
 }
@@ -507,8 +494,6 @@ fn path_req(inout cx: Ctx, code: i64, path: [i64]) -> Result<(), Halt> ! alloc
 pub fn realpath(inout cx: Ctx, path: [i64]) -> Result<(), Halt> ! alloc { return path_req(inout cx, 6, path); }
 pub fn stat(inout cx: Ctx, path: [i64]) -> Result<(), Halt> ! alloc { return path_req(inout cx, 7, path); }
 
-// by-value observation adapters (row AD)
-
 // answer packet addressing: record word k, physical pool word k, word k of section s
 pub fn ent_r(cx: Ctx, k: i64) -> i64 { return crate::ent_u16::rd(cx.ent, crate::ent_packet::sec_start(cx.ent, 1) + crate::ent_u16::clamp(k, 4294967296)); }
 pub fn ent_p(cx: Ctx, k: i64) -> i64 { return crate::ent_u16::rd(cx.ent, crate::ent_packet::sec_start(cx.ent, 0) + crate::ent_u16::clamp(k, 4294967296)); }
@@ -540,9 +525,6 @@ pub fn stop_fail(inout cx: Ctx) -> Result<(), Halt>
   cx.bad = 1;
   return Err::<(), Halt>(Halt::Bad);
 }
-
-// by-value adapter for entry_api (row AD)
-pub fn fail(cx0: Ctx) -> Ctx ! alloc { let mut cx: Ctx = cx0; let r: Result<(), Halt> = stop_fail(inout cx); return cx; }
 
 // Count the embedded blob and log pools towards the same output limit as the request pool.
 pub fn replay_await(cx: Ctx, seq: i64, pool: [i64], rows: [i64]) -> [i64] ! alloc

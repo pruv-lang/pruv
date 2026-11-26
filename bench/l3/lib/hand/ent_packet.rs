@@ -12,7 +12,7 @@
 // Check: rustc --edition 2021 --test ent_packet.rs -o /tmp/ent_packet_hand && /tmp/ent_packet_hand
 
 #[path = "ent_wire.rs"]
-mod ent_wire;
+pub mod ent_wire;
 
 pub const MAX_WORDS: i64 = 1 << 24;
 const MAX_SECTIONS: i64 = 1_000_000;

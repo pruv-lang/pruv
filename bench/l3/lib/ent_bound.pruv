@@ -1,8 +1,7 @@
 // L3-8 entry: ops 7 session_threads, 8 excluded_from_bound, 9 bound_session_index.
 // Ops 7 and 8 are replay steps over the shared context: `inout cx: Ctx`, and an observation that stalls or breaks the
-// replay returns through `?` (hand shape: bench/l3/lib/hand/ent_bound.rs). threads_item and excluded_item are by-value
-// adapters for entry_api::run_item (RESHAPE.md row AD). Op 9 is driven by entry_api (index_collect, index_request,
-// index_progress_ok, index_complete).
+// replay returns through `?` (hand shape: bench/l3/lib/hand/ent_bound.rs). Op 9 is driven by entry_api (index_collect,
+// index_request, index_progress_ok, index_complete).
 // Session record (30 words, slots of 3 at position p): id p, temporary p+3, engine p+6, externalThread p+9 (tag 11 object:
 // engine p+12, thread p+15, forks p+18), terminal p+21 (tag 11: cliSession p+24), engineThreads p+27 (rows of 9: key, bound, threadId).
 // A pair is three parallel arrays ep/el/tp (hand: Vec<Pair>): an array of structs is not supported (RESHAPE.md row SA).
@@ -147,14 +146,6 @@ pub fn session_threads(inout cx: crate::ent_state::Ctx) -> Result<(), crate::ent
   return Ok::<(), crate::ent_state::Halt>(());
 }
 
-// AD (3.7): by-value adapter for entry_api::run_item
-pub fn threads_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
-{
-  let mut cx: crate::ent_state::Ctx = cx0;
-  let r: Result<(), crate::ent_state::Halt> = session_threads(inout cx);
-  return cx;
-}
-
 // ---- op 8 ----
 pub fn excluded_from_bound(inout cx: crate::ent_state::Ctx) -> Result<(), crate::ent_state::Halt> ! alloc
 {
@@ -184,14 +175,6 @@ pub fn excluded_from_bound(inout cx: crate::ent_state::Ctx) -> Result<(), crate:
   let out: [i64] = copy(crate::ent_value::blob_pool(cx.ent));
   crate::ent_state::put_done(inout cx, out, rec, e, 0);
   return Ok::<(), crate::ent_state::Halt>(());
-}
-
-// AD (3.7): by-value adapter for entry_api::run_item
-pub fn excluded_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
-{
-  let mut cx: crate::ent_state::Ctx = cx0;
-  let r: Result<(), crate::ent_state::Halt> = excluded_from_bound(inout cx);
-  return cx;
 }
 
 // ---- op 9 ----

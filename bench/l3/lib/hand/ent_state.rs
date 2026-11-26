@@ -568,7 +568,7 @@ impl Prev {
 }
 
 /// pruv `ent_value::pkt_size`: words with the pool counted by its units.
-fn ent_value_pkt_size(w: &[i64]) -> usize {
+pub fn ent_value_pkt_size(w: &[i64]) -> usize {
     let l0 = sec_len(w, 0);
     if l0 < 2 || l0 > w.len() {
         return w.len();
