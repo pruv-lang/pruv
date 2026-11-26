@@ -6588,9 +6588,15 @@ impl Checker {
             }
         }
         let st = self.match_scrutinee(&mut m.scrutinee, scope)?;
-        if self.value_branch_kind(&st) != Some(false) || self.is_extended(&st) {
+        // a unit payload (`Ok(())`) is copied like a scalar
+        let copied = if matches!(st.name.as_str(), "option" | "result") {
+            st.args.iter().all(|a| *a == unitt() || self.value_branch_kind(a) == Some(false))
+        } else {
+            self.value_branch_kind(&st) == Some(false)
+        };
+        if !copied || self.is_extended(&st) {
             return Err(terr(line, col, "value_branch_type",
-                format!("a value `match` on {} is not supported yet (the scrutinee holds owned or borrowed data)", tn(&st)),
+                format!("a value `match` on {} is not supported yet (a payload is owned, borrowed or a type parameter)", tn(&st)),
                 "use a `match` statement that assigns a `let mut` local"));
         }
         self.value_arms.push((want.cloned(), Vec::new(), 0));

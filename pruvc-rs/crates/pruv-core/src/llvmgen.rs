@@ -5365,7 +5365,11 @@ impl<'a> FnGen<'a> {
         let slot = self.new_slot("vmatch", &ty)?;
         self.vmatch.push((slot.clone(), Vec::new()));
         let moving = std::mem::take(&mut self.moving);
+        // An arm body is lowered as its own statement, which cannot see the rest of the enclosing statement: a
+        // barrier frame (like a loop body) keeps every last-use take of an outer local off inside the arms.
+        self.frames.push((HashSet::new(), HashSet::new(), true, false));
         let r = self.stmt(&Stmt::Match(crate::ast::ValueMatch::as_match(x)));
+        self.frames.pop();
         self.moving = moving;
         let (slot, arms) = self.vmatch.pop().ok_or_else(|| IDX_ERR.to_string())?;
         r?;

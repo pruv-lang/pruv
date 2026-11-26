@@ -2920,8 +2920,9 @@ return match s { Shape::Circle(r) => { 3 * r * r }, Shape::Empty => 0 };
   otherwise the first arm that is not a bare literal fixes the type (`type/type_mismatch`); the same result types
   are supported (`type/value_branch_type`), an owned result needs a new value in every arm
   (`type/value_branch_owned`), and a value `match` in a contract is `type/value_branch_context`. The scrutinee is a
-  copied value: an `Option`/`Result`/enum whose payloads are scalars or other copied values. A scrutinee that holds
-  owned or borrowed data (a string or array payload, an extended enum, a `String` error) and a direct
+  copied value: an `Option`/`Result`/enum whose payloads are scalars, unit (`Ok(())`) or other copied values. A
+  scrutinee that holds owned or borrowed data (a string or array payload, an extended enum, a `String` error), a
+  payload of a type parameter (`Option<T>` in a generic function) and a direct
   `map_get`/`map_get_mut`/`map_take`/`vec_get`/`vec_at_mut` scrutinee are `type/value_branch_type` (parity row
   P9a-6; bind the scrutinee with `let` or use a `match` statement).
 - R-6w-7 **Proof and ownership.** The verifier evaluates each arm under its pattern's test with the binder facts of
@@ -2929,9 +2930,13 @@ return match s { Shape::Circle(r) => { 3 * r * r }, Shape::Empty => 0 };
   that arm is chosen; the result is the nested choice `ite(t1, v1, ite(t2, v2, .. vn))`. A value moved in one arm is
   maybe-moved after the `match` (`type/foreign_move`), and an `inout` call in an arm is `type/inout_context`.
 - R-6w-8 **Code.** Rust prints its own value `match` (`(match v { P1 => { e1 }, .. })`, patterns as the statement
-  form prints them), so a proved index in an arm stays an unchecked read. LLVM lowers the statement `match` whose
-  arms store their value into an entry-block result slot; each arm's temporaries end inside the arm, and an owned
-  result read in place is a statement temporary. Tests: [values](tests/runtime/p9_rt_match_value.pruv),
+  form prints them, the arm enum named as the lowered enum of a generic or module type), so a proved index in an arm
+  stays an unchecked read. LLVM lowers the statement `match` whose arms store their value into an entry-block result
+  slot; each arm's temporaries end inside the arm, an owned result read in place is a statement temporary, and no
+  arm takes the buffer of an outer local at its apparent last use (the rest of the enclosing statement may still read
+  it). Tests: [values](tests/runtime/p9_rt_match_value.pruv), [no take in an arm](tests/runtime/p9_rt_match_take.pruv),
+  [generic enum and unit payload](tests/runtime/p9_rt_match_generic.pruv),
+  [module enums](tests/runtime/g4_r16_value_match/root.pruv),
   [unchecked index](tests/runtime/p9_rt_match_unchecked.pruv), [call order](tests/runtime/p9_rt_match_order.pruv),
   [owned arms](tests/runtime/p9_rt_match_owned.pruv), [missing arm](tests/must_reject/p9_match_missing.pruv),
   [duplicate arm](tests/must_reject/p9_match_duplicate.pruv), [arm types](tests/must_reject/p9_match_types.pruv),

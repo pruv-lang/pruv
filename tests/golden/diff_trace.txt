@@ -2028,8 +2028,10 @@ runtime|tests/runtime/p9_rt_if_tuple.pruv	1 case: obl=3 1	default=fd985281a7db
 runtime|tests/runtime/p9_rt_if_tuple_owned.pruv	1 case: obl=3 1	default=0b0ae2c834f3
 runtime|tests/runtime/p9_rt_if_unchecked.pruv	1 case: obl=3 1	default=0304756911b0
 runtime|tests/runtime/p9_rt_if_value.pruv	1 case: obl=45 1	default=8c507eafb966
+runtime|tests/runtime/p9_rt_match_generic.pruv	1 case: obl=1 1	default=0703f901fbd4
 runtime|tests/runtime/p9_rt_match_order.pruv	1 case: obl=19 1	default=7300e08f6003
 runtime|tests/runtime/p9_rt_match_owned.pruv	1 case: obl=26 1	default=c1d120ff0cb0
+runtime|tests/runtime/p9_rt_match_take.pruv	1 case: obl=26 1	default=f8c8a4a9e702
 runtime|tests/runtime/p9_rt_match_unchecked.pruv	1 case: obl=2 1	default=3ec6dbafda66
 runtime|tests/runtime/p9_rt_match_value.pruv	1 case: obl=25 1	default=add1f56b1ee0
 runtime|tests/runtime/p9_rt_owned_arm.pruv	1 case: obl=24 1	default=9b31c83dc85a

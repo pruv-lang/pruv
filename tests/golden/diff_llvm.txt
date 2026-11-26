@@ -274,6 +274,7 @@ g4|tests/runtime/g4_r11_entry_type_closure/root.pruv	4 cases: ok 4	VT=a4b20fa146
 g4|tests/runtime/g4_r12_raw_validation/root.pruv	4 cases: ok 4	VT=983d2c5b038d	Vt=3eccc66b77a6	vT=9aa0424ed027	vt=8e085a796773
 g4|tests/runtime/g4_r13_same_spelled_layouts/root.pruv	4 cases: ok 4	VT=ee30301f10d4	Vt=a069583650f5	vT=c1fbe4d61877	vt=58ecbe32490a
 g4|tests/runtime/g4_r14_child_main/root.pruv	4 cases: ok 4	VT=5b26777b9cf6	Vt=5b26777b9cf6	vT=2471eb605f4b	vt=2471eb605f4b
+g4|tests/runtime/g4_r16_value_match/root.pruv	4 cases: ok 4	VT=f48fc7fbb4f6	Vt=74c07f1dfc6c	vT=8fc60ebeb17d	vt=c35aea410c3a
 g9|tests/g9/frontend/a01_list_enum.pruv	4 cases: ok 4	VT=f20ab1a90573	Vt=f20ab1a90573	vT=5d347f766c13	vt=5d347f766c13
 g9|tests/g9/frontend/a02_tree_contains.pruv	4 cases: ok 4	VT=42500f31c524	Vt=42500f31c524	vT=42f7170b2b83	vt=42f7170b2b83
 g9|tests/g9/frontend/a03_list_builder.pruv	4 cases: ok 4	VT=94656fc52d31	Vt=453c724c38fc	vT=0cc533b387fb	vt=459c5bf53d5f
@@ -3494,8 +3495,10 @@ mutate|tests/runtime/p9_rt_if_tuple.pruv	12 cases: error parse/syntax 12	0/VT=59
 mutate|tests/runtime/p9_rt_if_tuple_owned.pruv	12 cases: error parse/syntax 8, error codegen/tuple_llvm_owned 4	0/VT=fadc3c0fc0c0	0/Vt=fadc3c0fc0c0	0/vT=fadc3c0fc0c0	0/vt=fadc3c0fc0c0	1/VT=e8fa846ca18b	1/Vt=e8fa846ca18b	1/vT=e8fa846ca18b	1/vt=e8fa846ca18b	2/VT=d069ed37bae5	2/Vt=d069ed37bae5	2/vT=d069ed37bae5	2/vt=d069ed37bae5
 mutate|tests/runtime/p9_rt_if_unchecked.pruv	12 cases: error parse/syntax 8, error parse/bad_char 4	0/VT=ba8a3458beb8	0/Vt=ba8a3458beb8	0/vT=ba8a3458beb8	0/vt=ba8a3458beb8	1/VT=9e26253f25be	1/Vt=9e26253f25be	1/vT=9e26253f25be	1/vt=9e26253f25be	2/VT=50bec5817aa4	2/Vt=50bec5817aa4	2/vT=50bec5817aa4	2/vt=50bec5817aa4
 mutate|tests/runtime/p9_rt_if_value.pruv	12 cases: error parse/syntax 12	0/VT=b97b05d48e95	0/Vt=b97b05d48e95	0/vT=b97b05d48e95	0/vt=b97b05d48e95	1/VT=40c0345d8013	1/Vt=40c0345d8013	1/vT=40c0345d8013	1/vt=40c0345d8013	2/VT=66cd98b88846	2/Vt=66cd98b88846	2/vT=66cd98b88846	2/vt=66cd98b88846
+mutate|tests/runtime/p9_rt_match_generic.pruv	12 cases: error parse/syntax 8, ok 4	0/VT=c9d1476533fd	0/Vt=c9d1476533fd	0/vT=49ba30a55559	0/vt=49ba30a55559	1/VT=3db08b274459	1/Vt=3db08b274459	1/vT=3db08b274459	1/vt=3db08b274459	2/VT=6f21ddf909a3	2/Vt=6f21ddf909a3	2/vT=6f21ddf909a3	2/vt=6f21ddf909a3
 mutate|tests/runtime/p9_rt_match_order.pruv	12 cases: error parse/syntax 12	0/VT=fe8a80d147f7	0/Vt=fe8a80d147f7	0/vT=fe8a80d147f7	0/vt=fe8a80d147f7	1/VT=098f20910ef3	1/Vt=098f20910ef3	1/vT=098f20910ef3	1/vt=098f20910ef3	2/VT=1684338e9129	2/Vt=1684338e9129	2/vT=1684338e9129	2/vt=1684338e9129
 mutate|tests/runtime/p9_rt_match_owned.pruv	12 cases: error parse/syntax 12	0/VT=715e7b66bd6d	0/Vt=715e7b66bd6d	0/vT=715e7b66bd6d	0/vt=715e7b66bd6d	1/VT=e3b1f08c4bdb	1/Vt=e3b1f08c4bdb	1/vT=e3b1f08c4bdb	1/vt=e3b1f08c4bdb	2/VT=59117bbeae71	2/Vt=59117bbeae71	2/vT=59117bbeae71	2/vt=59117bbeae71
+mutate|tests/runtime/p9_rt_match_take.pruv	12 cases: error parse/syntax 12	0/VT=fb2dca6a62cb	0/Vt=fb2dca6a62cb	0/vT=fb2dca6a62cb	0/vt=fb2dca6a62cb	1/VT=019b9770e9a8	1/Vt=019b9770e9a8	1/vT=019b9770e9a8	1/vt=019b9770e9a8	2/VT=483abc498beb	2/Vt=483abc498beb	2/vT=483abc498beb	2/vt=483abc498beb
 mutate|tests/runtime/p9_rt_match_unchecked.pruv	12 cases: error parse/syntax 8, ok 4	0/VT=9f59e08b8492	0/Vt=fb9d19ee4720	0/vT=aa0d536ebb64	0/vt=e5b4393cc1dd	1/VT=7b53b8a52012	1/Vt=7b53b8a52012	1/vT=7b53b8a52012	1/vt=7b53b8a52012	2/VT=f5474991edf0	2/Vt=f5474991edf0	2/vT=f5474991edf0	2/vt=f5474991edf0
 mutate|tests/runtime/p9_rt_match_value.pruv	12 cases: ok 8, error parse/syntax 4	0/VT=7fb8c5551997	0/Vt=aa67880bf1f1	0/vT=610a6676d137	0/vt=afd1e5341432	1/VT=c10d452e6a77	1/Vt=c10d452e6a77	1/vT=c10d452e6a77	1/vt=c10d452e6a77	2/VT=7fb8c5551997	2/Vt=aa67880bf1f1	2/vT=610a6676d137	2/vt=afd1e5341432
 mutate|tests/runtime/p9_rt_owned_arm.pruv	12 cases: ok 8, error parse/syntax 4	0/VT=ce4041d7f638	0/Vt=5fcaa41521c5	0/vT=111a36890ab2	0/vt=66dbde5c48df	1/VT=43eaa685066c	1/Vt=43eaa685066c	1/vT=43eaa685066c	1/vt=43eaa685066c	2/VT=ce4041d7f638	2/Vt=5fcaa41521c5	2/vT=111a36890ab2	2/vt=66dbde5c48df
@@ -4038,8 +4041,10 @@ runtime|tests/runtime/p9_rt_if_tuple.pruv	4 cases: ok 4	VT=5ca90b7f8f04	Vt=5ca90
 runtime|tests/runtime/p9_rt_if_tuple_owned.pruv	4 cases: error codegen/tuple_llvm_owned 4	VT=e8fa846ca18b	Vt=e8fa846ca18b	vT=e8fa846ca18b	vt=e8fa846ca18b
 runtime|tests/runtime/p9_rt_if_unchecked.pruv	4 cases: ok 4	VT=b225823b4dd9	Vt=624d15a89a8c	vT=569802d9518e	vt=a079e93561a6
 runtime|tests/runtime/p9_rt_if_value.pruv	4 cases: ok 4	VT=4123e22fc1b7	Vt=8e52101b37a3	vT=8eea301ff7bb	vt=26ae6a04ff2c
+runtime|tests/runtime/p9_rt_match_generic.pruv	4 cases: ok 4	VT=c9d1476533fd	Vt=c9d1476533fd	vT=49ba30a55559	vt=49ba30a55559
 runtime|tests/runtime/p9_rt_match_order.pruv	4 cases: ok 4	VT=c8f6969857bb	Vt=80a2a2e20dad	vT=542853f4ddd7	vt=d36d85bcb59e
 runtime|tests/runtime/p9_rt_match_owned.pruv	4 cases: ok 4	VT=9b0e1feccec9	Vt=f6f68d6c963e	vT=9326c8f5a81a	vt=25d56af29f9c
+runtime|tests/runtime/p9_rt_match_take.pruv	4 cases: ok 4	VT=fb88ef26384e	Vt=65695144d0a5	vT=ced6b113e78b	vt=45b5ae14747a
 runtime|tests/runtime/p9_rt_match_unchecked.pruv	4 cases: ok 4	VT=9f59e08b8492	Vt=fb9d19ee4720	vT=aa0d536ebb64	vt=e5b4393cc1dd
 runtime|tests/runtime/p9_rt_match_value.pruv	4 cases: ok 4	VT=7fb8c5551997	Vt=aa67880bf1f1	vT=610a6676d137	vt=afd1e5341432
 runtime|tests/runtime/p9_rt_owned_arm.pruv	4 cases: ok 4	VT=ce4041d7f638	Vt=5fcaa41521c5	vT=111a36890ab2	vt=66dbde5c48df
