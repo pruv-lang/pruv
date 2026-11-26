@@ -115,19 +115,27 @@ fn list_recipe(inout cx: crate::ent_state::Ctx) -> Result<(), crate::ent_state::
   let base: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, sec), 33554432);
   let ps: i64 = crate::ent_packet::sec_start(cx.ent, 0);
   let cut: i64 = 200;
-  let mut tab: [i64] = alloc(7 * cnt, 0);
-  let mut copies: i64 = 0;
+  // the cut of each title (0: kept whole), collected before the table is built
+  let mut clips: [i64] = alloc(0, 0);
+  arr_reserve(inout clips, cnt);
   let mut i: i64 = 0;
   while i < cnt
-    invariant 0 <= i && i <= cnt && cnt <= 2396745 && 0 <= copies && copies <= i && 0 <= base && base <= 33554432 && len(tab) == 7 * cnt
+    invariant 0 <= i && i <= cnt && cnt <= 2396745 && 0 <= base && base <= 33554432 && len(clips) == i
     decreases cnt - i
   {
-    let clip: i64 = crate::ent_value::title_cut(cx.ent, ps, base + 6 * i + 3, cut);
-    if clip != 0 {
-      tab[7 * i + 4] = clip;
-      copies = copies + 1;
-    }
+    let mut clip: i64 = 0;
+    if crate::ent_value::tag_at(cx.ent, base + 6 * i + 3) == 6 { clip = crate::ent_value::title_cut(cx.ent, ps, base + 6 * i + 3, cut); }
+    arr_push(inout clips, clip);
     i = i + 1;
+  }
+  let mut copies: i64 = 0;
+  let mut k: i64 = 0;
+  while k < cnt
+    invariant 0 <= k && k <= cnt && cnt <= 2396745 && 0 <= copies && copies <= k && len(clips) == cnt
+    decreases cnt - k
+  {
+    if clips[k] != 0 { copies = copies + 1; }
+    k = k + 1;
   }
   if copies > 83886 || 16 + 7 * cnt + 200 * copies > 16777216 { return crate::ent_state::stop_too_big(inout cx); }
   let nu: i64 = crate::ent_value::logical_pool_words(cx.ent);
@@ -141,21 +149,23 @@ fn list_recipe(inout cx: crate::ent_state::Ctx) -> Result<(), crate::ent_state::
     // as an append into the empty pool: nb bytes, clamp(nu, nb) units, cleared padding).
     crate::ent_value::copy_pool_prefix(inout pool, 0, cx.ent, ps, nb, crate::ent_u16::clamp(nu, nb));
   }
+  // rows [clipped, rowRef {3}, title {3}] in one pass; an unclipped row keeps the source title (title slot zero)
+  let mut tab: [i64] = alloc(0, 0);
+  arr_reserve(inout tab, 7 * cnt);
   let mut j: i64 = 0;
   while j < cnt
-    invariant 0 <= j && j <= cnt && cnt <= 2396745 && copies <= 83886 && 0 <= base && base <= 33554432 && len(tab) == 7 * cnt
+    invariant 0 <= j && j <= cnt && cnt <= 2396745 && copies <= 83886 && 0 <= base && base <= 33554432 && len(clips) == cnt && len(tab) == 7 * j
     decreases cnt - j
   {
     let rb: i64 = base + 6 * j;
     let tb: i64 = 7 * j;
-    let a: i64 = crate::ent_u16::put_range(inout tab, tb + 1, cx.ent, rb, 3);
-    let clip: i64 = tab[tb + 4];
+    let clip: i64 = clips[j];
+    let mut clipped: i64 = 0;
+    if clip != 0 { clipped = 1; }
+    arr_push(inout tab, clipped, crate::ent_u16::rd(cx.ent, rb), crate::ent_u16::rd(cx.ent, rb + 1), crate::ent_u16::rd(cx.ent, rb + 2), 0, 0, 0);
     if clip != 0 {
-      crate::ent_u16::wr(inout tab, tb, 1);
       // MUTANT M10: the cut backs off a trailing high surrogate.
       crate::ent_value::put_title_prefix(inout pool, inout tab, tb + 4, cx.ent, rb + 3, clip, cut, reuse);
-    } else {
-      crate::ent_u16::wr(inout tab, tb, 0);
     }
     j = j + 1;
   }

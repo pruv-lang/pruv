@@ -46,7 +46,7 @@ MUTANTS = {
             ('ent_sources.pruv', 'nu, expected), 5, idx + 1, cnt);', 'nu, expected), 5, idx + 1, cnt), 6, hh);')],
     'M05': [('ent_sources.pruv', '!crate::ent_accounts::valid_account_id(cx.ent, rp + 2) { return skip(cx, 2, idx + 1, cnt); }', '!crate::ent_accounts::valid_account_id(cx.ent, rp + 2) { return crate::ent_state::fail(cx); }')],
     'M06': [('ent_canon.pruv', '    if !crate::ent_value::str_eq_lit(cx.ent, rp + 16, "ENOENT") {', '    if true {')],
-    'M07': [('ent_canon.pruv', "  if crate::ent_u16::eq(target, dot) { return flag(cx, 1); }\n", "")],
+    'M07': [('ent_canon.pruv', "  if crate::ent_u16::eq(target, dot) { return Ok::<bool, crate::ent_state::Halt>(true); }\n", "")],
     'M08': [('ent_dispatch.pruv', "      if found < 0 { found = i; }", "      found = i;")],
     'M09': [('ent_dispatch.pruv', "  return 4;\n", "  return 1;\n")],
     'M10': [('ent_dispatch.pruv',

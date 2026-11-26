@@ -22,8 +22,8 @@
 // The answer of the last observation is the packet cx.ent (kind 2); ent_r(cx, k) / ent_p(cx, k) address its record.
 // A throw answer has record word 0 == 1 (and E at record offset 1) for codes 1, 4, 5, 6, 7, 9.
 // Output: put_done(...) fixes the done record; finish(cx, aseq, dseq) builds the packet to return to the host.
-// The by-value functions (obs, ctx_*, with_prev, drop_level, set_ck, set_done, too_big, fail) are thin adapters for the
-// modules not reshaped yet (ent_bound, ent_canon, ent_sources, entry_api); RESHAPE.md row AD lists them.
+// The by-value functions (ctx_accounts, ctx_account_at, with_prev, set_ck, set_done, fail, st_*) are thin adapters for
+// the modules not reshaped yet (ent_sources, entry_api); RESHAPE.md row AD lists them.
 //
 // State (section 2 of an await), all words range-checked on decode:
 //   [0] magic 1162761298   [1] op   [2] outstanding request code 1..9   [3] aux   [4..11] checkpoint words 0..2^32
@@ -229,8 +229,9 @@ pub fn state_ok(st: [i64], op: i64, op_id: i64) -> bool ! alloc
 
 // ---- replay context ----
 
-// Why an observation gave no answer: the context stalled on a new request, or the replay is broken (cx.bad says how).
-pub enum Halt { Stalled, Bad }
+// Why a step gave no answer: the context stalled on a new request, the replay is broken (cx.bad says how), or the
+// item is already finished (cx.done: a nested step set the output, e.g. a thrown answer rethrown as the result).
+pub enum Halt { Stalled, Bad, Done }
 
 // The outstanding request (rcode .. rntab, valid when stalled) and the request recorded in prev (qon .. qtab) stay loose
 // fields: hand Rust has `req: Option<Request>` / `prev: Option<Prev>`, but a struct holding arrays cannot be an Option
@@ -276,13 +277,6 @@ pub fn observe(inout cx: Ctx, code: i64, aux: i64, rpool: [i64], rrec: [i64], rt
   cx.ent = crate::ent_u16::slice(cx.lg, pos + 3, pos + n);
   cx.pos = pos + n;
   return Ok::<(), Halt>(());
-}
-
-pub fn obs(cx0: Ctx, code: i64, aux: i64, rpool: [i64], rrec: [i64], rtab: [i64], rntab: i64) -> Ctx ! alloc
-{
-  let mut cx: Ctx = cx0;
-  let r: Result<(), Halt> = observe(inout cx, code, aux, rpool, rrec, rtab, rntab);
-  return cx;
 }
 
 // ---- R1: replay validation of prev (request, log continuity, checkpoint words) ----
@@ -458,13 +452,6 @@ pub fn drop_entries(inout cx: Ctx, a: i64, slot: i64, ne: i64) -> () ! alloc
   crate::ent_u16::wr(inout cx.ck, 7, entries);
 }
 
-pub fn drop_level(cx0: Ctx, a: i64, slot: i64, ne: i64) -> Ctx ! alloc
-{
-  let mut cx: Ctx = cx0;
-  if slot >= 0 && slot < 8 { drop_entries(inout cx, a, slot, ne); }
-  return cx;
-}
-
 pub fn accounts(inout cx: Ctx, eng: i64) -> Result<(), Halt> ! alloc
 {
   let e: ref [i64] = [];
@@ -503,11 +490,6 @@ pub fn stat(inout cx: Ctx, path: [i64]) -> Result<(), Halt> ! alloc { return pat
 // by-value observation adapters (row AD)
 pub fn ctx_accounts(cx0: Ctx, eng: i64) -> Ctx ! alloc { let mut cx: Ctx = cx0; let r: Result<(), Halt> = accounts(inout cx, eng); return cx; }
 pub fn ctx_account_at(cx0: Ctx, eng: i64, idx: i64) -> Ctx ! alloc { let mut cx: Ctx = cx0; let r: Result<(), Halt> = account_at(inout cx, eng, idx); return cx; }
-pub fn ctx_ambient(cx0: Ctx) -> Ctx ! alloc { let mut cx: Ctx = cx0; let r: Result<(), Halt> = ambient(inout cx); return cx; }
-pub fn ctx_homedir(cx0: Ctx) -> Ctx ! alloc { let mut cx: Ctx = cx0; let r: Result<(), Halt> = homedir(inout cx); return cx; }
-pub fn ctx_cwd(cx0: Ctx) -> Ctx ! alloc { let mut cx: Ctx = cx0; let r: Result<(), Halt> = cwd(inout cx); return cx; }
-pub fn ctx_realpath(cx0: Ctx, path: [i64]) -> Ctx ! alloc { let mut cx: Ctx = cx0; let r: Result<(), Halt> = realpath(inout cx, path); return cx; }
-pub fn ctx_stat(cx0: Ctx, path: [i64]) -> Ctx ! alloc { let mut cx: Ctx = cx0; let r: Result<(), Halt> = stat(inout cx, path); return cx; }
 
 // answer packet addressing: record word k, physical pool word k, word k of section s
 pub fn ent_r(cx: Ctx, k: i64) -> i64 { return crate::ent_u16::rd(cx.ent, crate::ent_packet::sec_start(cx.ent, 1) + crate::ent_u16::clamp(k, 4294967296)); }
@@ -554,7 +536,6 @@ pub fn set_done(cx0: Ctx, pool: [i64], rec: [i64], tab: [i64], ntab: i64) -> Ctx
   put_done(inout cx, pool, rec, tab, ntab);
   return cx;
 }
-pub fn too_big(cx0: Ctx) -> Ctx ! alloc { let mut cx: Ctx = cx0; let r: Result<(), Halt> = stop_too_big(inout cx); return cx; }
 pub fn fail(cx0: Ctx) -> Ctx ! alloc { let mut cx: Ctx = cx0; let r: Result<(), Halt> = stop_fail(inout cx); return cx; }
 
 // Count the embedded blob and log pools towards the same output limit as the request pool.
