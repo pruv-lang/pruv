@@ -1553,6 +1553,7 @@ pub struct Mod {
     vec_elems: BTreeSet<String>,
     foreign_requires: bool,
     vec_get_checked: bool,
+    verified: bool,
     vec_get_used: bool,
     pub(crate) storage: StoragePlan, // pub(crate): abi.rs reads the return layout for the shrink size
     strs: HashMap<String, String>,
@@ -1625,6 +1626,7 @@ impl Mod {
             vec_elems: BTreeSet::new(),
             foreign_requires: false,
             vec_get_checked: false,
+            verified: false,
             vec_get_used: false,
             storage: StoragePlan::default(),
             strs: HashMap::new(),
@@ -6981,7 +6983,8 @@ impl<'a> FnGen<'a> {
             "vec_get" => {
                 let v = self.ev(arg(&e.args, 0)?, false)?;
                 let i = self.ev(arg(&e.args, 1)?, false)?;
-                if self.m.vec_get_checked {
+                // LG7-B4: view-list checks key on `!verified` only
+                if !self.verified {
                     let len = self.op(format!("extractvalue {ARR} {}, 1", v.a))?;
                     let ok = self.op(format!("icmp ult i64 {}, {len}", i.a))?;
                     self.guard(&ok, Fail::VecGet, false)?;
@@ -7002,7 +7005,8 @@ impl<'a> FnGen<'a> {
                 let p = self.inout_place_ptr(&place(e)?)?;
                 let value = self.op(format!("load {ARR}, ptr {p}"))?;
                 let len = self.op(format!("extractvalue {ARR} {value}, 1"))?;
-                if self.m.vec_get_checked {
+                if !self.verified {
+                    // LG7-B4: checked exactly when unverified
                     let ok = self.op(format!("icmp sgt i64 {len}, 0"))?;
                     let msg_fn = self.m.string("vec_pop");
                     let msg_ex = self.m.string("len(v) >= 1");
@@ -9219,7 +9223,8 @@ fn g9_vec_texts(m: &mut Mod, tt: &TypeTable, elem: &str, budget: Option<u64>) ->
         let (data, len, cap) = g9_vec_parts(&mut g, "%v")?;
         let fail = |panic, drop_element| Fail::VecPush { elem: elem.to_string(), drop_element, panic };
         const BUDGET_PANIC: &str = "call void @pruv_panic_vec_push_v1(i64 1)";
-        if g.m.foreign_requires {
+        // 4.4o-VP / LG7-B4: a view list's push guard is emitted only when unverified (the verifier proves it)
+        if g.m.foreign_requires && (elem != VIEW_ELEM || !g.m.verified) {
             let bounded = g.op(format!("icmp ult i64 {len}, {}", 1u64 << 40))?;
             g.guard(&bounded, fail("call void @pruv_panic_vec_push_v1(i64 0)", extended), false)?;
         }
@@ -10261,6 +10266,7 @@ fn gen_llvm_body(
     });
     m.foreign_requires = foreign_checks != "off";
     m.vec_get_checked = !verified || foreign_checks == "all" || prog.functions.iter().any(|f| f.foreign.is_some());
+    m.verified = verified;
     m.sym_pre = sym_prefix(prog.pkg_name.as_deref());
     m.resize_params = crate::check::resize_params(prog);
     m.storage = plan_storage(prog, verified);

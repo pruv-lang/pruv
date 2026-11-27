@@ -5534,10 +5534,11 @@ impl<'a> FnVerifier<'a> {
         self.view_sum_of(&v.a, k)
     }
 
-    /// `S(list, k)`: an `Int -> Int` function per closed list term (LG7-SR); a list term under a quantifier (it can
-    /// mention a bound variable) keeps the array-keyed `S(a, k)`
+    /// `S(list, k)`: an `Int -> Int` function per closed list term (LG7-SR), also inside a quantifier when the list
+    /// term mentions no bound variable (LG11-QS: the same function as outside, so the push facts reach it and z3
+    /// finds a counterexample); a list term that mentions a bound variable keeps the array-keyed `S(a, k)`
     fn view_sum_of(&mut self, list: &Ast, k: &Ast) -> R<Ast> {
-        if self.qstack.is_empty() {
+        if !self.qstack.iter().any(|c| list.occurs(c)) {
             let id = list.id();
             if !self.view_term_sums.contains_key(&id) {
                 let name = format!("vsum!{}", self.view_term_sums.len());
@@ -5572,7 +5573,28 @@ impl<'a> FnVerifier<'a> {
         let (s0, sk, sn) = (self.view_sum(v, &zero)?, self.view_sum(v, k)?, self.view_sum(v, &v.n)?);
         let (k1, km) = (k.add(&one), k.sub(&one));
         let (sk1, skm) = (self.view_sum(v, &k1)?, self.view_sum(v, &km)?);
-        let (wk, wkm) = (self.view_elem_len(v, k)?, self.view_elem_len(v, &km)?);
+        // LG11-QS: inside a quantifier, a closed list of constant length (0..=64) gets the ground steps and its view
+        // lengths as an `ite` over the ground lengths, so no `a[k]` select (`subview` lambdas) sits under the forall;
+        // z3 answered `unknown` (incomplete array theory) or ran past the timeout on false claims
+        let closed = !self.qstack.is_empty() && !self.qstack.iter().any(|c| v.a.occurs(c));
+        let const_n = if closed {
+            v.n.simplify().numeral_string().and_then(|t| t.parse::<i64>().ok()).filter(|cn| (0..=Self::JOIN_GROUND_MAX).contains(cn))
+        } else {
+            None
+        };
+        let (wk, wkm) = if let Some(cn) = const_n {
+            let mut ws = Vec::new();
+            for j in 0..cn {
+                let (kj, kj1) = (z.int(j), z.int(j + 1));
+                let (sj, sj1, wj) = (self.view_sum(v, &kj)?, self.view_sum(v, &kj1)?, self.view_elem_len(v, &kj)?);
+                self.assume(st, g, z.and(&[wj.ge_i(0), sj1.eq(&sj.add(&wj))]));
+                ws.push(wj);
+            }
+            let pick = |x: &Ast| ws.iter().enumerate().rev().fold(zero.clone(), |acc, (j, w)| z.ite(&x.eq(&z.int(j as i64)), w, &acc));
+            (pick(k), pick(&km))
+        } else {
+            (self.view_elem_len(v, k)?, self.view_elem_len(v, &km)?)
+        };
         let in_range = z.and(&[k.ge_i(0), k.le(&v.n)]);
         let facts = vec![
             s0.eq(&zero),

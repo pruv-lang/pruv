@@ -431,7 +431,9 @@ def must_reject_jobs():
 
         def fn(f=f, flags=flags):
             stem = os.path.splitext(os.path.basename(f))[0]
+            t0 = time.monotonic()
             c = pruvc(f, os.path.join(WORK, "mr_%s.rs" % stem), flags)
+            secs = time.monotonic() - t0
             ok = c.returncode == 1
             detail = "exit %d (expected 1) %s" % (c.returncode, c.stdout + c.stderr)
             jf = os.path.splitext(f)[0] + ".json"
@@ -457,6 +459,10 @@ def must_reject_jobs():
                     if missing:
                         ok = False
                         detail = "cex_contains missing %s in %s" % (missing, text[-600:])
+                lim = want.get("max_seconds")  # LG11-QS (L-gaps 12): optional time bound on the rejection
+                if ok and isinstance(lim, (int, float)) and secs > lim:
+                    ok = False
+                    detail = "rejected in %.1f s (max_seconds %s)" % (secs, lim)
             return ok, detail
         jobs.append(safe(name, fn, {"sample": rel_sample(f), "backend": None, "flags": list(flags), "mode": None,
                                      "group": "must_reject"}))
