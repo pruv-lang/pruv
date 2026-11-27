@@ -265,3 +265,50 @@ order (summary skipped first, model replaced before the `open` check). Differenc
 - Convert loop: message id vector + index loop, the flat turns store zero-filled up front and the grow-and-retry
   return `1`: row VL and the existing loop shape, outside this step. No `Attach` / model copy per message.
 No new row from the comparison.
+
+## 9. Step 4.4k (row 4.4b-NV, attempted; blocked by a proof gap)
+
+The hand-shaped rewrite was written and run through the verifier (`pruvc-rs` main release binary), but it does not
+verify, and the only ways to make it verify are a run-time length guard or a narrower `requires`, neither of which
+the hand has. Following the reset rule (no approximations), `path.pruv` is unchanged and the gap is a row. The draft,
+its verifier output and its `--no-verify` `rs/rust` output are kept in `work/reset4_4k/` (not committed).
+
+Per-function structure (committed Pruv, the draft, hand `hand/opencode.rs`):
+
+| function | committed Pruv (generated Rust) | draft `normalize_text` (generated Rust, `--no-verify`) | hand Rust | difference that stays |
+|---|---|---|---|---|
+| types | `normalize(p: [u8]) -> [u8]` | `normalize_text(p: &str) -> String` | `normalize(p: &str) -> String` | draft equal; committed is bytes |
+| piece list | `[i64]` of (start, end) pairs, `truncate(out, m - 2)` pops | `Vec<&str>`, `out.push(&p[st..i])`, `out.pop()` | `Vec<&str>`, `push(seg)`, `pop()` | draft equal |
+| split loop | one byte loop over `0..=n`, cut at `/` | same | `p.split('/').filter(..)` | iterator vs index loop (same pieces, same order) |
+| `..` rule | last pair is not `..` ⇒ pop; else rooted ⇒ skip; else push | `vec_get(out, m - 1)` not `..` ⇒ pop; else rooted ⇒ skip; else push | `match out.last()` with the same three arms | draft equal |
+| join of pieces | sizing loop over the pairs, one `reserve(size)`, `extend_from_slice` per piece | `String::new()` + `push('/')` / `push_str(piece)`, no reserve (grows) | `out.join("/")` (std sizes the total, one allocation) | draft: no `String` reserve (4.4k-SR); both: an explicit loop for the std `join` |
+| root `/` | pushed first, `base = 1` | pushed first, `base = 1` | `s.insert(0, '/')` at the end | no insert at 0 for a `String` (4.4k-SR); pushing first moves no bytes |
+| `.` / trailing `/` | `len(r) == base && !rooted` ⇒ `.`; `dir && len > base && last != '/'` ⇒ `/` | same over `s` | same over `s` | equal |
+| result | the `[u8]` buffer | `string_into_str(move s)` (no copy, R-6e-23) | `s` | draft equal |
+| verification | verified | fails: 3 `verify/call_requires` on `string_push_char` / `string_push_str` (`len(s) + w <= 2^40`) | - | 4.4k-VS |
+
+| function | committed Pruv | hand | difference |
+|---|---|---|---|
+| `join(a, b)` | both empty ⇒ `"."`; else one `[u8]` buffer `a ++ "/" ++ b` (reserve `na + nb + 1`), `normalize`, `utf8_valid` scan, `str_from_utf8` of the moved buffer | `(true, true)` ⇒ `"."`; one side empty ⇒ `normalize(other)` directly; else `normalize(&format!("{a}/{b}"))` | a lone side is copied into the buffer; the UTF-8 scan. Both need `normalize_text` (`str` in, `str` out), blocked by 4.4k-VS |
+| `export::start_export` (caller) | `normalize(root ++ "/opencode-")` on config bytes | `join(root, "opencode-")` | the byte root stays (L3-VB allows a `Vec<ref [u8]>` port, but the output buffer has the same unprovable size; not tried) |
+
+Why the draft cannot verify. The obligations are the length bounds of the builder pushes inside and after the join
+loop (`string_push_char` requires `len(s) + 4 <= 2^40`, R-6g8-2; `string_push_str` the same kind of bound). The true
+bound is `len(s) <= 1 + sum of the piece lengths + pieces <= len(p) + 1`, which needs the sum of the list's element
+lengths. No contract can state it: `vec_get` of a view list in an invariant is `type/foreign_contract`
+(`work/reset4_4k/contract_vec_get.log`), lists cannot be parameters (R-6g9-10, so no helper function over the list),
+and the per-piece bound alone (`len(piece) <= n`, `len(out) <= n`) gives `n * n`, above `2^40` for the callers'
+`1e9`-byte arguments. The committed offset form avoids this because the pairs are positions in `p`. The ways out
+that the reset rule forbids: a per-push `if len(s) + len(piece) + 1 > LIMIT` guard (the hand has none), or
+`requires len(p) <= 2^20` (changes `join` / `data_dir` / `db_path` callers, which accept `1e9`-byte values).
+
+Rows:
+
+| row | state | note |
+|---|---|---|
+| 4.4b-NV | open (blocked by 4.4k-VS) | the shape is available (draft above); `normalize`, `join` and the `export` caller unchanged |
+| 4.4k-VS (language / proof, new) | open | a list of views has no length sum in proofs: `vec_get` cannot appear in a contract and a list cannot be a parameter. Needs either `len(vec_get::<ref T>(l, k))` and a sum in contracts, or a catalog join over a view list (hand `out.join(sep)`) whose `ensures` gives the total |
+| 4.4k-SR (language, new) | open | no `String` reserve / with-capacity (hand `join` allocates once) and no insert at 0 (hand `s.insert(0, '/')`); the draft grows the `String` and pushes the root first |
+
+Tests: no `.pruv` file of `opencode/` changed, so `test_impl.py`, the scope verifies, `q.py` and `q_mutants.py` were
+not rerun; the 4.4j results (§8) stand for the unchanged code. No measurement.
