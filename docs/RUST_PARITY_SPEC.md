@@ -248,7 +248,7 @@ Bundle L-gaps 2 (2026-11-27, capped at 2 hours):
   allocation of view elements, only the `ref str` instance. Left: `Vec<ref [u8]>` (same rules, element type `ref
   [u8]`); `vec_pop` and `for` over a list; a list as a parameter (`ps: [ref str]` / `&[&str]`) or a `from(..)` result
   (`Vec<&'a str>` returned to the caller, needs the list's provenance in the signature); a list in a struct or a
-  generic; the LLVM layout (`{ptr, len, cap}` of `{ptr, len}` pairs). The proof models the list as a `Vec<String>`
+  generic. L-gaps 3: the LLVM layout is done (a native vector of `{ptr, len, 0}` views, R-6g9-10). The proof models the list as a `Vec<String>`
   written in place (the verifier now stores an `inout` `vec_push`), so lengths and element bytes are known.
 - 4.4b-NV (UTF-8 half): no language change. Hand `path::join` is `normalize(&format!("{a}/{b}"))`: a `String`
   built with `push_str` stays UTF-8 by type. Pruv has the same builder (R-6e-1, R-6g6-3): `string_new`,
@@ -256,6 +256,9 @@ Bundle L-gaps 2 (2026-11-27, capped at 2 hours):
   `str` with no `utf8_valid` re-check. With R-6g9-10 the pieces are `ref str` views cut at `/` (an ASCII byte, so
   the cuts are boundaries by R-6b-5) and `normalize` can push them into a `String` instead of a `[u8]` buffer; the
   bench `RESHAPE.md` row 4.4b-NV can be closed by that rewrite (the bench is outside this bundle).
+  L-gaps 3 (2026-11-27): the result needs no copy now (`string_into_str(move s)`, R-6e-23). The rewrite also needs
+  either `vec_pop` on the list or a right-to-left pass (the `..` rule), and the byte caller in `export.pruv` needs
+  `Vec<ref [u8]>` or a `str` root; bench row 4.4b-NV stays open.
 - 4.4d-CB: done (R-6b-5). The verifier's boundary formula also accepts `0 < i < len(s)` with `s[i - 1] < 128`;
   every use is on a `str` or conjoined with `utf8_valid` of the base, where it implies the byte formula, so
   run-time `is_char_boundary` is unchanged. A range finder can `ensures is_char_boundary(..)` at ASCII delimiters
@@ -268,3 +271,17 @@ Bundle L-gaps 2 (2026-11-27, capped at 2 hours):
   is the test-harness packet builder (`packet::build_error`), which already takes `[u8]` (string literals pass as
   static views, R-6g9-1) and appends bytes to a `[u8]` buffer, the hand shape (`Vec<u8>::extend_from_slice`). A
   `[i64]` destination can copy with a loop over `s[k]`.
+
+Bundle L-gaps 3 (2026-11-27, capped at 1 hour):
+
+- 4.4f-NVL: done (R-6g9-10). LLVM lowers a view list to the native vector with element `str`: `vec_push` stores a
+  `{ptr, len, 0}` view (capacity 0, so the list's drop frees only its buffer), `vec_get` loads a view, `vec_clear`
+  sets the length to 0, `vec_reserve` grows the buffer with the `0 <= n <= 2^40` check. An owned `Vec<String>`
+  stays `codegen/unsupported_type`. Left: `Vec<ref [u8]>` (both backends), `vec_pop`.
+- 4.4f-SS: done (R-6e-23). `string_into_str(move s) -> str` consumes the `String` (a `take` argument) and needs no
+  `! alloc`; Rust passes the `String` itself, LLVM moves an unboxed local's buffer or takes the boxed buffer with
+  its capacity through `pruv_g6_v1_string_take`. One way per cost: `string_to_str(s)` borrows and copies,
+  `string_into_str(move s)` consumes and does not.
+- 4.3f-S: recorded as done above (R-6b-4).
+- VL: SPEC.md line 393 now says the LLVM backend runs a `Vec` of a plain struct (R-6e-22), after a both-backend
+  runtime test (`tests/spec/lg3_vec_struct.pruv`).

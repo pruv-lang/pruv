@@ -1018,7 +1018,7 @@ pub fn build_shim(
     let mut adapters: Vec<String> = Vec::new();
     for (name, text) in &items {
         if let Some((op, _)) = cats.get(name) {
-            if op == "string_to_str" {
+            if op == "string_to_str" || op == "string_into_str" {
                 continue; // replaced by the borrowed view pruv_g6_v1_string_bytes
             }
         }
@@ -1039,9 +1039,9 @@ pub fn build_shim(
     }
     if cats.values().any(|(op, _)| op == "string_to_str") {
         adapters.push(string_bytes_adapter());
-        if take {
-            adapters.push(string_take_adapter());
-        }
+    }
+    if take && cats.values().any(|(op, _)| op == "string_to_str" || op == "string_into_str") {
+        adapters.push(string_take_adapter());
     }
     for name in unbox {
         if let Some(f) = trusted.get(name) {

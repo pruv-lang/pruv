@@ -11,7 +11,7 @@
   "gen_absent": ["pruv_g6_vec_push", "pruv_g6_vec_get", ".as_str())"],
   "gen_regex_absent": ["^\\s+[^f].*(pruv_str_boundary|pruv_cboundary|is_char_boundary)\\("],
   "run": {
-    "backends": ["rust"],
+    "backends": ["rust", "llvm"],
     "exit": 0,
     "flags_matrix": [[], ["--no-verify"]],
     "stdout_lines": ["1005"],

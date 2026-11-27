@@ -1513,3 +1513,28 @@ All after the last code change (F1 / F4 from the structure comparison).
   3. OpenCode: 4.3g-T2, 4.4b-CV with a `pkgs/time` `civil`.
   4. req port (REQ-PORT) once P10H passes on both backends.
   5. Then Codex 4.3f-B, 4.3f-E, 4.3f-F and Qwen 4.3e-J / 4.3e-F / 4.3e-D (shared modules; run all consumers).
+
+## Step L-gaps 3: language rows 4.4f-NVL, 4.4f-SS, 4.3f-S, VL
+
+- Compiler only (`pruvc-rs/`), SPEC.md and tests; no bench fragment changed, so no fragment was rerun.
+- Closed: 4.4f-NVL (R-6g9-10: the local `Vec<ref str>` is a native LLVM vector of `(ptr, len, 0)` views; output and
+  allocation balance match the Rust backend), 4.4f-SS (R-6e-23: `string_into_str(move s)` consumes the `String` and
+  hands its buffer over with no copy and no `! alloc`; `string_to_str(s)` stays the borrowing copy), 4.3f-S (already
+  done as R-6b-4, recorded), VL (SPEC.md line 393 fixed after a both-backend runtime test of a `Vec` of a plain struct
+  taken read-only and returned, `tests/spec/lg3_vec_struct.pruv`).
+- 4.4b-NV stays open (bench). The `path::normalize` rewrite to a view list was not made: the list has no `vec_pop`
+  (the `..` rule pops), and `export.pruv` calls `normalize` on unvalidated config bytes, which a `Vec<ref str>`
+  cannot hold (`Vec<ref [u8]>` is still "not yet"). A right-to-left pass with a pending-`..` counter needs no pop;
+  `join` can then build a `String` from the views and end with `string_into_str` (no `utf8_valid` scan).
+
+### Rows open after L-gaps 3
+
+- New (language): L3-VB (`Vec<ref [u8]>` local view lists, both backends), L3-VP (`vec_pop` on a view list; optional
+  once `normalize` scans right to left).
+- Still open in OpenCode: 4.4b-NV and the rows listed after 4.4f.
+- Still open from 4.4g and before: as listed after 4.4g (minus VL and the 4.4f language rows closed above).
+- Next:
+  1. OpenCode 4.4b-NV: `normalize_text(p: str) -> str` over a `Vec<ref str>` (right to left, pending-`..` count,
+     pieces read back in reverse), `join` without `utf8_valid`; keep or port the byte caller in `export.pruv`
+     (L3-VB); then `test_impl.py` on `rs/rust` and `rs/llvm` and `q.py`.
+  2. Then the Next list after 4.4g (items 2-5).

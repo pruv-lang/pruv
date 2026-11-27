@@ -41,7 +41,7 @@ pub struct CatFn {
 }
 
 /// CATALOG_NAMES of foreign.py (insertion order).
-pub const CATALOG_NAMES: [&str; 107] = [
+pub const CATALOG_NAMES: [&str; 108] = [
     "vec_new",
     "vec_push",
     "vec_get",
@@ -62,6 +62,7 @@ pub const CATALOG_NAMES: [&str; 107] = [
     "string_push_char",
     "string_byte",
     "string_to_str",
+    "string_into_str",
     "file_open_read",
     "file_create",
     "file_read_all",
@@ -348,6 +349,13 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
             params: vec![p("s", string_t(), false)],
             ret: GType::str(),
             effects: alloc(),
+            tparams: vec![],
+        },
+        // L-gaps 3: consume the String and hand its buffer over as the str (no copy)
+        "string_into_str" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("s", string_t(), true)],
+            ret: GType::str(),
+            effects: vec![],
             tparams: vec![],
         },
         // G10 A0: signatures/effects; typed A1 contracts are defined below.
@@ -2519,7 +2527,7 @@ mod tests {
 
     #[test]
     fn catalog_shapes() {
-        assert_eq!(CATALOG_NAMES.len(), 107);
+        assert_eq!(CATALOG_NAMES.len(), 108);
         for n in CATALOG_NAMES.iter() {
             assert!(catalog_fn(n).is_some());
         }

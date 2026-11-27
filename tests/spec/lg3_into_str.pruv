@@ -1,0 +1,35 @@
+// spec: R-6e-23 accept
+// L-gaps 3: string_into_str consumes the String and its buffer becomes the str (no copy)
+fn build(n: i64) -> str ! alloc
+  requires 0 <= n && n <= 100
+  ensures len(result) == n + 1
+{
+  let mut s: String = string_new();
+  s = string_push_str(move s, "a");
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && len(s) == i + 1
+    decreases n - i
+  {
+    s = string_push_char(move s, 98);
+    i = i + 1;
+  }
+  return string_into_str(move s);
+}
+
+fn keep(take s: String) -> str
+  ensures len(result) == len(s)
+{
+  return string_into_str(move s);
+}
+
+fn checksum() -> i64 ! alloc {
+  let t: str = build(4);
+  let u: str = keep(string_from("xyz"));
+  let e: str = keep(string_new());
+  let mut ok: i64 = 0;
+  if len(t) == 5 && len(u) == 3 && len(e) == 0 {
+    if t[0] == 97 && t[4] == 98 && u[2] == 122 { ok = 1; }
+  }
+  return len(t) * 100 + len(u) * 10 + ok;
+}

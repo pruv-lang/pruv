@@ -1,0 +1,38 @@
+{
+  "gen_contains": [
+    "fn pruv_g6_string_into_str("
+  ],
+  "run": {
+    "backends": [
+      "rust",
+      "llvm"
+    ],
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "531"
+    ],
+    "g6_drop_balance": true,
+    "llvm_fn_contains": {
+      "build": [
+        "@pruv_g6_v1_string_take"
+      ],
+      "keep": [
+        "@pruv_g6_v1_string_take"
+      ]
+    },
+    "llvm_fn_absent": {
+      "build": [
+        "@pruv_copy_v2"
+      ],
+      "keep": [
+        "@pruv_copy_v2"
+      ]
+    }
+  }
+}
