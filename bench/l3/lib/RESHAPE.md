@@ -1636,3 +1636,34 @@ All after the last code change (F1 / F4 from the structure comparison).
   does not have. Details and the per-function table: `opencode/RESHAPE.md` §8.
 - Consumers of `pkgs/time` (codex, grok, opencode, qwen) rerun on `rs/rust` and `rs/llvm`; results in
   `opencode/RESHAPE.md` §8. `qwen/q.py` hardwires the frozen py pairs and was not run (as in earlier steps).
+
+## Step 4.4k: OpenCode row 4.4b-NV (attempted; blocked by a proof gap)
+
+- `opencode/RESHAPE.md` §9. No `.pruv` file changed (`opencode/RESHAPE.md` and this file only); no `lib/` or `pkgs/`
+  module changed, so no consumer was rerun.
+- The hand-shaped `normalize_text(p: str) -> str` (local `Vec<ref str>`, `vec_pop` for `..`, a `String` builder,
+  `string_into_str(move s)`) was written and fails verification only on the builder's length bounds
+  (`string_push_char` / `string_push_str`, `len(s) + w <= 2^40`). The bound needs the sum of the list's element
+  lengths, which no contract can state. A run-time guard or a narrower `requires` would verify it; both are
+  approximations the hand does not have, so `path::normalize` / `join` and the `export` caller stay as they are.
+  Draft and verifier output: `work/reset4_4k/` (not committed).
+- Closed: none.
+
+### Rows open after 4.4k
+
+- New (language / proof): 4.4k-VS, no length sum over a view list (`vec_get` in a contract is
+  `type/foreign_contract`; a list cannot be a parameter). Either `len(vec_get::<ref T>(l, k))` plus a sum in
+  contracts, or a catalog join over a view list (hand `out.join(sep)`) with the total in its `ensures`.
+- New (language): 4.4k-SR, no `String` reserve / with-capacity and no `String` insert at 0 (hand `join` allocates
+  once and inserts the root `/`).
+- Independent review (Codex `gpt-6.2-astra`): draft and hand agree on nine edge inputs; no SPEC feature proves the
+  bounds, so 4.4k-VS stands. Option on 4.4k-VS (unverified): keep the offsets but build a `String` with
+  `string_push_str(subview(..))` and `string_into_str`; drops `join`'s `utf8_valid` scan but still differs from the
+  hand's piece list. See `opencode/RESHAPE.md` §9.
+- Still open in OpenCode: 4.4b-NV (now blocked by 4.4k-VS), 4.4b-P208, 4.3g-A2, 4.3g-K3, 4.3g-M07, 4.3g-BS,
+  4.3g-SQ, 4.4f-CW, 4.4j-TU, 4.4j-ME.
+- Still open from 4.4j and before: as listed there.
+- Next:
+  1. Language: 4.4k-VS (view-list join or element lengths in contracts) and 4.4k-SR (`String` reserve), then 4.4b-NV
+     with the draft in `opencode/RESHAPE.md` §9 and 4.3g-K3.
+  2. Then the Next list after 4.4g (items 2-5).
