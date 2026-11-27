@@ -1,0 +1,8 @@
+// spec: R-6g9-11 reject
+// vec_clear changes the list like vec_push and vec_pop: it needs a `let mut` list.
+fn f() -> i64 ! alloc {
+  let parts: Vec<ref [u8]> = vec_new::<ref [u8]>();
+  vec_clear::<ref [u8]>(inout parts);
+  return len(parts);
+}
+fn main() -> i64 ! alloc { if f() == 0 { return 0; } return 1; }

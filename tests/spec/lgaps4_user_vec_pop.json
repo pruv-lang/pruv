@@ -1,0 +1,11 @@
+{
+  "gen_contains": ["pub fn vec_pop(x: i64) -> i64 {"],
+  "gen_absent": [".pop()"],
+  "run": {
+    "backends": ["rust", "llvm"],
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["423"],
+    "alloc_balance": true
+  }
+}

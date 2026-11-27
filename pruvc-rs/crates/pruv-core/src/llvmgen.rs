@@ -6083,6 +6083,9 @@ impl<'a> FnGen<'a> {
             // G6 A3: reserved names
             return self.catalog_call(e, owned);
         }
+        if n == "vec_pop" && !self.funcs.contains_key(n) && native_vec_call_elem(e) == Some(VIEW_ELEM) {
+            return self.catalog_call(e, owned); // L3-VP: pop a view list
+        }
         if n == "alloc" {
             let cnt = self.ev(arg(a, 0)?, false)?; // source order in all modes: n, then v
             let v = self.ev(arg(a, 1)?, false)?;
@@ -6866,8 +6869,25 @@ impl<'a> FnGen<'a> {
                 let len = self.op(format!("extractvalue {ARR} {value}, 1"))?;
                 let mut out = V::with_b(Kind::Arr, ptr, len);
                 out.layout = "i8";
-                out.ty = Some(VIEW_ELEM.to_string());
+                // L3-VB: a `[u8]` list gives back a `[u8]` view (the call's checked type), a `str` list a `str`
+                out.ty = Some(e.ty.clone().unwrap_or_else(|| VIEW_ELEM.to_string()));
                 Ok(Some(out))
+            }
+            "vec_pop" => {
+                // L3-VP: drop the last view (it owns nothing): the length goes down by one
+                let p = self.inout_place_ptr(&place(e)?)?;
+                let value = self.op(format!("load {ARR}, ptr {p}"))?;
+                let len = self.op(format!("extractvalue {ARR} {value}, 1"))?;
+                if self.m.vec_get_checked {
+                    let ok = self.op(format!("icmp sgt i64 {len}, 0"))?;
+                    let msg_fn = self.m.string("vec_pop");
+                    let msg_ex = self.m.string("len(v) >= 1");
+                    self.guard(&ok, Fail::Requires(msg_fn, msg_ex), false)?;
+                }
+                let less = self.op(format!("sub i64 {len}, 1"))?;
+                let popped = self.op(format!("insertvalue {ARR} {value}, i64 {less}, 1"))?;
+                self.ins(format!("store {ARR} {popped}, ptr {p}"))?;
+                Ok(Some(V::unit()))
             }
             "vec_clear" => {
                 let p = self.inout_place_ptr(&place(e)?)?;
@@ -6952,10 +6972,10 @@ impl<'a> FnGen<'a> {
 
     fn catalog_call(&mut self, e: &Call, owned: bool) -> R<V> {
         let n = e.name.as_str();
-        let cat = crate::foreign::catalog_fn(n).ok_or_else(|| format!("'{}'", n))?;
         if let Some(elem) = native_vec_call_elem(e) {
             return self.native_vec_call(e, elem, owned);
         }
+        let cat = crate::foreign::catalog_fn(n).ok_or_else(|| format!("'{}'", n))?;
         let (_low, src) = crate::foreign_shim::inst_types(e);
         let sym = crate::foreign_shim::adapter_sym(&crate::foreign_shim::helper_name(n, &src)?);
         let mut args: Vec<(String, String)> = Vec::new();
@@ -9396,7 +9416,7 @@ pub fn gen_llvm(prog: &Program, verified: bool, trust_callers: bool, budget: u64
 const WIN_X64_HEADER: &str = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\ntarget triple = \"x86_64-pc-windows-msvc\"\n\n";
 
 pub(crate) fn native_vec_call_elem(c: &Call) -> Option<&str> {
-    let view_only = matches!(c.name.as_str(), "vec_clear" | "vec_reserve");
+    let view_only = matches!(c.name.as_str(), "vec_clear" | "vec_reserve" | "vec_pop");
     if !view_only && !matches!(c.name.as_str(), "vec_new" | "vec_push" | "vec_get" | "vec_at_mut") {
         return None;
     }

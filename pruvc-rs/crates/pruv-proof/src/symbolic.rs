@@ -3935,6 +3935,10 @@ impl<'a> FnVerifier<'a> {
             _ if pruv_core::foreign::is_catalog(n) && !self.funcs.contains_key(n) => {
                 return self.catalog_call(e, x, &args, st, g, code);
             }
+            // L3-VP: `vec_pop` exists only on a view list (the checker admits no other use)
+            "vec_pop" if !self.funcs.contains_key(n) && matches!(x.args.first(), Some(Expr::InoutArg(_))) => {
+                return self.catalog_call(e, x, &args, st, g, code);
+            }
             "print" => return Ok(Val::Unit),
             // G3: the datatype of the argument's own type (the legacy one for Option<i64> / Result<i64>)
             "is_some" | "some_val" => {
@@ -5126,6 +5130,18 @@ impl<'a> FnVerifier<'a> {
                     self.assume(st, g, sum.eq(&z.int(0)));
                 }
                 Ok(Val::Arr(empty))
+            }
+            "vec_pop" if matches!(x.args.first(), Some(Expr::InoutArg(_))) => {
+                // L3-VP: `vec_pop::<ref T>(inout parts)` on a view list drops the last element in place
+                let v = argv(0)?.try_arr()?.clone();
+                if code {
+                    let ob = v.n.ge_i(1);
+                    self.prove_core(&st, g, &ob, pos(e), "call_requires", "vec_pop: len(v) >= 1", None);
+                }
+                let popped = v.like(v.a.clone(), v.n.sub(&z.int(1)), n);
+                let Expr::InoutArg(place) = &x.args[0] else { unreachable!() };
+                self.store_collection_place(&place.expr, st, Val::Arr(popped), g)?;
+                return Ok(Val::Unit);
             }
             "vec_push" => {
                 let v = argv(0)?.try_arr()?.clone();

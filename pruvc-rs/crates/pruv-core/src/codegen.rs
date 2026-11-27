@@ -1521,6 +1521,8 @@ struct Gen<'a> {
     string_error_binders: HashSet<String>,
     /// R-6g9-10 (4.4b-NV): locals bound as `Vec<ref str>`, emitted as the hand `Vec<&str>`
     view_lists: HashSet<String>,
+    /// L3-VB: the view lists of `[u8]` views (`Vec<&[u8]>`)
+    byte_view_lists: HashSet<String>,
     /// `e?` Ok binder -> `e?` text, for the statement that takes the value (try_match)
     try_values: HashMap<String, String>,
     /// owned extended locals the current return statement may move (return_movable)
@@ -1708,6 +1710,7 @@ impl<'a> Gen<'a> {
             map_views: HashSet::new(),
             string_error_binders: HashSet::new(),
             view_lists: HashSet::new(),
+            byte_view_lists: HashSet::new(),
             try_values: HashMap::new(),
             moving: HashSet::new(),
             pinned: HashSet::new(),
@@ -2153,6 +2156,7 @@ impl<'a> Gen<'a> {
     fn func(&mut self, f: &Function) -> R<()> {
         self.function_name = f.name.clone();
         self.view_lists.clear();
+        self.byte_view_lists.clear();
         self.view_wrappers = crate::borrowed::uses_view_wrappers(f);
         // G4b-2: the package of the function being emitted (identity `@NAME::...` = package NAME, else the program package)
         if let Some(fg) = self.fg.as_mut() {
@@ -4556,10 +4560,14 @@ pruv_hi <= (pruv_b.len() as i128) && \
             }
             Stmt::Let(x) if crate::borrowed::is_view_list(x) => {
                 // R-6g9-10 (4.4b-NV): a local list of borrowed str views is the hand `Vec<&str>`
-                self.emit(ind, &format!("let mut {}: ::std::vec::Vec<&str> = ::std::vec::Vec::new();", x.name));
+                let elem = if crate::borrowed::is_byte_view_list(x) { "[u8]" } else { "str" };
+                self.emit(ind, &format!("let mut {}: ::std::vec::Vec<&{elem}> = ::std::vec::Vec::new();", x.name));
                 self.vars.insert(x.name.clone(), x.ty.clone());
                 self.refs.remove(&x.name);
                 self.view_lists.insert(x.name.clone());
+                if elem == "[u8]" {
+                    self.byte_view_lists.insert(x.name.clone());
+                }
             }
             Stmt::Let(x) => {
                 self.moving = self.last_copy(&x.name, &x.value);
@@ -5256,6 +5264,15 @@ pruv_hi <= (pruv_b.len() as i128) && \
 
     /// executable catalog operation -> call of its private boundary helper
     fn catalog_call(&mut self, x: &Call) -> R<String> {
+        if x.name == "vec_pop" {
+            if let Some(list) = self.view_list_arg(x) {
+                // L3-VP: hand `parts.pop();` (the verifier proves `len(parts) >= 1`); not a catalog helper
+                if self.verified {
+                    return Ok(format!("{{ {list}.pop(); }}"));
+                }
+                return Ok(format!(r#"{{ if {list}.pop().is_none() {{ pruv_g6_req("vec_pop", "len(v) >= 1"); }} }}"#));
+            }
+        }
         let cat = catalog_fn(&x.name).ok_or_else(|| repr_str(&x.name))?;
         let (low, src) = crate::foreign_shim::inst_types(x);
         if x.name == "map_remove" {
@@ -5271,9 +5288,11 @@ pruv_hi <= (pruv_b.len() as i128) && \
         }
         if let Some(list) = self.view_list_arg(x) {
             // R-6g9-10 (4.4b-NV): push a view, read a view back (`Vec<&str>`, no String)
+            let elem = if self.byte_view_lists.contains(&list) { "[u8]" } else { "str" };
             self.fg_mut()?.record_inline_catalog(&x.name, &src);
             if x.name == "vec_push" {
                 let v = match arg(&x.args, 1)? {
+                    Expr::StrLit(l) if l.empty => "&[]".to_string(),
                     Expr::StrLit(l) => lit_str(&l.value),
                     // a `str` parameter or a view local is already `&str` (an `inout` `str` is rejected earlier)
                     Expr::Var(v) if self.refs.contains(&v.name) || self.params.contains(&v.name) => v.name.clone(),
@@ -5286,7 +5305,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     return Ok(format!("{list}.push({v})"));
                 }
                 return Ok(format!(
-                    "{{ let pruv_v: &str = {v}; if ({list}.len() as u64) >= (1u64 << 40) {{ pruv_g6_req(\"vec_push\", \"len(v) < 2^40\"); }} {list}.push(pruv_v) }}"
+                    "{{ let pruv_v: &{elem} = {v}; if ({list}.len() as u64) >= (1u64 << 40) {{ pruv_g6_req(\"vec_push\", \"len(v) < 2^40\"); }} {list}.push(pruv_v) }}"
                 ));
             }
             if x.name == "vec_get" {
@@ -6315,6 +6334,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 }
                 if self.g6 && is_catalog(n) && !self.fmap.contains_key(n) {
                     return self.catalog_call(x); // G6: executable catalog operation
+                }
+                if n == "vec_pop" && !self.fmap.contains_key(n) && self.view_list_arg(x).is_some() {
+                    return self.catalog_call(x); // L3-VP: pop a view list
                 }
                 let callee: Option<&'a Function> = if self.g6 { self.fmap.get(n).copied() } else { None };
                 if let Some(cf) = callee {

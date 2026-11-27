@@ -32,21 +32,47 @@ pub(crate) fn is_view_base(ty: &str) -> bool {
     crate::typeinfo::is_array_name(ty) || ty == "str"
 }
 
-/// R-6g9-10: the declared type `Vec<ref str>` of a view list.
-pub(crate) fn is_view_list_type(ty: &str) -> bool {
-    let parsed = GType::from_key(ty);
-    parsed.owner.is_none() && matches!(parsed.name.as_str(), "vec" | "Vec") && parsed.args.len() == 1
-        && parsed.args[0].view_base().is_some_and(|b| b.name == "str")
+/// R-6g9-10: the element base of a view list, `str` or (L3-VB) `array_u8`.
+fn view_list_base(t: &GType) -> Option<&'static str> {
+    match t.view_base()?.name.as_str() {
+        "str" => Some("str"),
+        "array_u8" => Some("array_u8"),
+        _ => None,
+    }
 }
 
-/// R-6g9-10: the element type argument `ref str` of a view-list operation.
+/// R-6g9-10: the declared element base of a view list type `Vec<ref str>` / `Vec<ref [u8]>`.
+fn view_list_type_base(ty: &str) -> Option<&'static str> {
+    let parsed = GType::from_key(ty);
+    if parsed.owner.is_none() && matches!(parsed.name.as_str(), "vec" | "Vec") && parsed.args.len() == 1 {
+        view_list_base(&parsed.args[0])
+    } else {
+        None
+    }
+}
+
+/// R-6g9-10: the element base (`str` or `array_u8`) of a view-list operation's type argument `ref str` / `ref [u8]`.
+pub(crate) fn view_list_targ(targs: &Option<Vec<GType>>) -> Option<&'static str> {
+    match targs.as_deref() {
+        Some([t]) => view_list_base(t),
+        _ => None,
+    }
+}
+
+/// R-6g9-10: the element type argument `ref str` or `ref [u8]` of a view-list operation.
 pub(crate) fn is_view_list_targ(targs: &Option<Vec<GType>>) -> bool {
-    matches!(targs.as_deref(), Some([t]) if t.view_base().is_some_and(|b| b.name == "str"))
+    view_list_targ(targs).is_some()
 }
 
 /// R-6g9-10: a view list after `prepare` (a borrowed `let` of type `vec<string>`).
 pub(crate) fn is_view_list(s: &Let) -> bool {
     s.borrowed && s.ty == "vec<string>"
+}
+
+/// L3-VB: a view list of `[u8]` views. Its `vec_new::<ref [u8]>()` keeps the element type argument (the checker
+/// models both lists as `vec<string>`, whose element bytes carry no UTF-8 fact).
+pub(crate) fn is_byte_view_list(s: &Let) -> bool {
+    is_view_list(s) && matches!(&s.value, Expr::Call(c) if view_list_targ(&c.targs) == Some("array_u8"))
 }
 
 pub(crate) fn is_view_wrapper(ty: &str) -> bool {
@@ -87,7 +113,14 @@ fn prepare_block(body: &mut [Stmt], permitted: bool, structs: &HashSet<String>) 
         match st {
             // R-6g9-10: a local `Vec<ref str>` is a view list: `vec<string>` to the checker and the verifier (they see the
             // text of its elements), `Vec<&str>` in Rust; `borrowed` marks it.
-            Stmt::Let(s) if permitted && !s.is_place() && is_view_list_type(&s.ty) => {
+            Stmt::Let(s) if permitted && !s.is_place() && view_list_type_base(&s.ty).is_some() => {
+                // L3-VB: the `vec_new` type argument names the same element as the declaration
+                let base = view_list_type_base(&s.ty);
+                if let Expr::Call(c) = &s.value {
+                    if c.name == "vec_new" && view_list_targ(&c.targs).is_some_and(|b| Some(b) != base) {
+                        return Err(signature(c.line, c.col));
+                    }
+                }
                 s.ty = "vec<string>".into();
                 s.borrowed = true;
             }
@@ -1099,7 +1132,7 @@ fn view_lists(f: &Function) -> Res<Vec<String>> {
             _ => false,
         };
         match e {
-            Expr::Call(c) if matches!(c.name.as_str(), "vec_push" | "vec_clear" | "vec_reserve")
+            Expr::Call(c) if matches!(c.name.as_str(), "vec_push" | "vec_clear" | "vec_reserve" | "vec_pop")
                 && c.args.first().is_some_and(|a| list(a, true)) => c.args[1..].iter().try_for_each(|a| uses(a, set)),
             Expr::Call(c) if matches!(c.name.as_str(), "vec_get" | "len")
                 && c.args.first().is_some_and(|a| list(a, false)) => c.args[1..].iter().try_for_each(|a| uses(a, set)),
