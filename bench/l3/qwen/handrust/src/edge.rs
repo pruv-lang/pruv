@@ -79,6 +79,7 @@ pub fn tail_import(data: &[u8], cut_before: bool) -> Result<Tail, TooLarge> {
         lines.next();
     }
     let mut tail = Tail { title: None, last_at: None };
+    let mut best = None;
     let mut scratch = Vec::new();
     for line in lines.filter(|l| !l.is_empty()) {
         let Some(entry) = parse_line(line, &mut scratch) else { continue };
@@ -93,9 +94,11 @@ pub fn tail_import(data: &[u8], cut_before: bool) -> Result<Tail, TooLarge> {
                 .and_then(Value::as_str)
                 .filter(|text| !es_trim(text).is_empty())
             {
-                tail.title = Some(one_line(text, 120));
+                best = Some(text.to_owned());
             }
         }
     }
+    // Pruv: one_line once on the last raw title (row T1)
+    tail.title = best.map(|t| one_line(&t, 120));
     Ok(tail)
 }

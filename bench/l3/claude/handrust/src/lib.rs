@@ -240,81 +240,78 @@ fn skip_ws(b: &[u8], mut i: usize) -> usize {
     }
 }
 
-// Pruv: text::dropped_user (one forward scan; row 4.3h-D)
-fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
-    if from >= hay.len() {
+/// End of the literal `lit` at `p`, or None.
+// Pruv: text::lit_end
+fn lit_end(b: &[u8], p: usize, lit: &[u8]) -> Option<usize> {
+    b.get(p..)?.starts_with(lit).then_some(p + lit.len())
+}
+
+/// End of `"word"` (with its quotes) at `p`, or None.
+// Pruv: text::quoted_end
+fn quoted_end(b: &[u8], p: usize, word: &[u8]) -> Option<usize> {
+    if b.get(p) != Some(&b'"') {
         return None;
     }
-    let first = needle[0];
-    let mut i = from;
-    while i + needle.len() <= hay.len() {
-        match hay[i..hay.len() - needle.len() + 1].iter().position(|&c| c == first) {
-            None => return None,
-            Some(p) => {
-                i += p;
-                if &hay[i..i + needle.len()] == needle {
-                    return Some(i);
-                }
-                i += 1;
-            }
-        }
-    }
-    None
+    let e = lit_end(b, p + 1, word)?;
+    (b.get(e) == Some(&b'"')).then_some(e + 1)
 }
 
-/// key WS* ':' WS* val, anywhere.
-// Pruv: text::kv, text::colon_value
-fn key_colon_val(b: &[u8], key: &[u8], val: &[u8]) -> bool {
-    let mut from = 0;
-    while let Some(p) = find(b, key, from) {
-        let mut i = skip_ws(b, p + key.len());
-        if b.get(i) == Some(&b':') {
-            i = skip_ws(b, i + 1);
-            if b[i..].starts_with(val) {
-                return true;
-            }
-        }
-        from = p + 1;
-    }
-    false
+/// After a key ending at `e`: WS* ':' WS*; the value start.
+// Pruv: text::colon_value
+fn colon_value(b: &[u8], e: usize) -> Option<usize> {
+    let a = skip_ws(b, e);
+    (b.get(a) == Some(&b':')).then(|| skip_ws(b, a + 1))
 }
 
-/// "content" WS* : WS* [ WS* { [^{}]* "type" WS* : WS* "tool_result"
-// Pruv: text::content_hit, text::tool_result_after
-fn has_tool_result(b: &[u8]) -> bool {
-    let key = b"\"content\"";
-    let mut from = 0;
-    while let Some(p) = find(b, key, from) {
-        from = p + 1;
-        let mut i = skip_ws(b, p + key.len());
-        if b.get(i) != Some(&b':') {
-            continue;
-        }
-        i = skip_ws(b, i + 1);
-        if b.get(i) != Some(&b'[') {
-            continue;
-        }
-        i = skip_ws(b, i + 1);
-        if b.get(i) != Some(&b'{') {
-            continue;
-        }
-        i += 1;
-        let end = b[i..].iter().position(|&c| c == b'{' || c == b'}').map_or(b.len(), |x| i + x);
-        if key_colon_val(&b[i..end], b"\"type\"", b"\"tool_result\"") {
-            return true;
+/// `"key" WS* : WS* value` at `p` (value quoted or bare).
+// Pruv: text::kv
+fn kv(b: &[u8], p: usize, key: &[u8], val: &[u8], quote_val: bool) -> bool {
+    let Some(v) = quoted_end(b, p, key).and_then(|e| colon_value(b, e)) else { return false };
+    if quote_val { quoted_end(b, v, val).is_some() } else { lit_end(b, v, val).is_some() }
+}
+
+/// `[^{}]*` from `r`, then `"type" WS* : WS* "tool_result"`; a brace ends the search.
+// Pruv: text::tool_result_after
+fn tool_result_after(b: &[u8], r: usize) -> bool {
+    for t in r..b.len() {
+        match b[t] {
+            b'{' | b'}' => return false,
+            b'"' if kv(b, t, b"type", b"tool_result", true) => return true,
+            _ => {}
         }
     }
     false
 }
 
+/// `"content" WS* : WS* [ WS* {` at `p`, then a brace-free span up to a tool_result type.
+// Pruv: text::content_hit
+fn content_hit(b: &[u8], p: usize) -> bool {
+    let Some(v) = quoted_end(b, p, b"content").and_then(|e| colon_value(b, e)) else { return false };
+    if b.get(v) != Some(&b'[') {
+        return false;
+    }
+    let w = skip_ws(b, v + 1);
+    b.get(w) == Some(&b'{') && tool_result_after(b, w + 1)
+}
+
+/// One forward scan over the raw prefix (invalid UTF-8 bytes are non-whitespace, non-brace; row 4.3h-D).
 // Pruv: text::dropped_user
 fn dropped_user(head: &[u8]) -> bool {
-    let s = String::from_utf8_lossy(head);
-    let b = s.as_bytes();
-    key_colon_val(b, b"\"type\"", b"\"user\"")
-        && !(has_tool_result(b)
-            || key_colon_val(b, b"\"isMeta\"", b"true")
-            || key_colon_val(b, b"\"isSidechain\"", b"true"))
+    let mut user = false;
+    for p in 0..head.len() {
+        if head[p] == b'"' {
+            if kv(head, p, b"type", b"user", true) {
+                user = true;
+            }
+            if kv(head, p, b"isMeta", b"true", false)
+                || kv(head, p, b"isSidechain", b"true", false)
+                || content_hit(head, p)
+            {
+                return false;
+            }
+        }
+    }
+    user
 }
 
 // Objects and raw number tokens are distinct even for serde_json's private
@@ -735,23 +732,30 @@ impl Collector {
         }
     }
 
-    /// Number of newest drafts kept (<= MAXTURNS, <= TOTAL bytes).
+    /// Newest drafts kept (<= MAXTURNS, <= TOTAL prompt + reply bytes) and the text bytes they take.
     // Pruv: turns::plan
-    fn kept(&self) -> usize {
-        let (mut n, mut total) = (0usize, 0usize);
+    fn plan(&self) -> Plan {
+        let (mut kept, mut total, mut bytes) = (0usize, 0usize, 0usize);
         for d in self.drafts.iter().rev() {
-            if n >= MAXTURNS {
+            if kept >= MAXTURNS {
                 break;
             }
             let size = d.prompt.len() + d.reply.len();
             if total + size > TOTAL {
                 break;
             }
+            bytes += size + d.created.map_or(0, |s| s.len()) + d.completed.map_or(0, |s| s.len());
             total += size;
-            n += 1;
+            kept += 1;
         }
-        n
+        Plan { kept, bytes }
     }
+}
+
+// Pruv: turns::Plan (total is the proof-side trim sum; the hand needs only kept and bytes)
+struct Plan {
+    kept: usize,
+    bytes: usize,
 }
 
 #[derive(Default)]
@@ -960,11 +964,13 @@ pub fn window_packet(data: &[u8], cut_before: i64) -> Vec<i64> {
         }
     }
 
-    let n = col.kept();
+    let plan = col.plan();
+    let n = plan.kept;
     let trimmed = n < col.begun;
     let title = st.title.finish();
 
-    let mut text: Vec<u8> = Vec::new();
+    let base = title.as_ref().map_or(0, String::len) + st.model.len();
+    let mut text: Vec<u8> = Vec::with_capacity(base + plan.bytes);
     let title_ref = put_optional(&mut text, title.as_deref().map(str::as_bytes));
     let model_ref = if st.model.is_empty() { [-1, 0] } else { put(&mut text, &st.model) };
     let mut turns: Vec<i64> = Vec::with_capacity(n * 10);

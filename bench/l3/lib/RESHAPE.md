@@ -2500,3 +2500,21 @@ Changes `bench/l3/qwen/import.pruv` only (no compiler or package change). Detail
   `q_mutants.py --check` 16/16; codex `test_impl.py` 136/136, `q.py 300` 323 cases 0 unexplained, mutant markers
   16/16 (full mutant run not done, 4.4e-VT).
 - Still open: 4.4d-T0, 4.4d-CB, 4.3f-D (owned decode), 4.4e-VT.
+
+### Rows after 4.4zb
+
+- Closed 4.3h-D (Claude, hand side): the hand `dropped_user` is the Pruv one-pass byte scan over the raw prefix.
+- 4.4h-AE (Claude), shape part closed: Pruv `answer` has the hand's three append branches on `d.reply` in place.
+  The early return stays an `if`: new language row LG-4zb-RA, `return` inside a `vec_at_mut` `Some` arm is
+  `type/foreign_contract`.
+- Closed 4.4h-PL (Claude, hand side): hand `Collector::plan` returns `Plan { kept, bytes }` and `window_packet`
+  reserves `title + model + plan.bytes`, like the Pruv `arr_reserve`.
+- Closed T1 (Qwen): the hand keeps the raw last custom title and calls `one_line` once; Pruv calls it only when a
+  title was found.
+- One Codex structure comparison (default account). Remaining differences are listed in the claude and qwen
+  sections; structure is not zero, so performance was not measured.
+- Results on `rs/rust` and `rs/llvm`: claude test_a0..a4 272/2897/2443/134/270 all passed, `q.py --count 2000`
+  2270/2270, `q_measure.py --quick` hand check 36 hand/oracle and 36 Pruv/hand/oracle exact matches; qwen
+  `test_impl.py` 27/27, `q.py 300` 0 unexplained (317 same, P1 1, P4 4, P5 1), `q_grid.py --check` 34/34. Both hand
+  crates build.
+- Open: LG-4zb-RA; claude 4.4h-VD, 4.4c-IS, 4.4h-ST.

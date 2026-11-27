@@ -58,17 +58,6 @@ fn refill_text(take b: [u8], t: str, n: i64) -> [u8] ! alloc
   return move x;
 }
 
-// sep LF bytes and then text[0..n) appended to b (hand: extend "\n\n"[..sep], then text[..n]).
-fn piece(take b: [u8], sep: i64, text: str, n: i64) -> [u8] ! alloc
-  requires 0 <= sep && sep <= 2 && 0 <= n && n <= len(text) && len(b) <= 32768 && n <= 32768
-  ensures len(result) == len(b) + sep + n
-{
-  let mut x: [u8] = move b;
-  arr_append(inout x, "\n\n", 0, sep);
-  arr_append(inout x, text, 0, n);
-  return move x;
-}
-
 // begin: new current draft (evicting the oldest once 200 exist), prompt clipped to 32768 bytes (longest
 // whole-scalar prefix), clipped set when the original exceeded the cap or lost was set, lost cleared,
 // reply/budget/tools/completedAt reset, optional createdAt stored.
@@ -149,7 +138,7 @@ pub fn tool(inout c: Collector) -> ()
 }
 
 // answer: no current draft => nothing. Otherwise completedAt is updated first (even for empty text or a full
-// reply); empty text or budget >= 32768 stops there; else piece = text (empty reply) or "\n\n"+text, appended
+// reply); empty text or budget >= 32768 stops there; else the piece text (empty reply) or "\n\n"+text is appended
 // when it fits the remaining budget, else its longest whole-scalar prefix is appended, the budget counter
 // saturates at 32768 and clipped is set. The counter is separate from the actual reply length (a multibyte cut
 // leaves unused bytes that later calls must not fill).
@@ -173,28 +162,27 @@ pub fn answer(inout c: Collector, text: str, at: [u8]) -> () ! alloc
         let q: [u8] = move d.completed;
         d.completed = refill(move q, at, 24);
       }
-      let rl: i64 = len(d.reply);
-      let used: i64 = d.used;
-      if len(text) > 0 && used < 32768 {
-        let room: i64 = 32768 - used;
+      // hand returns here for empty text or a full budget; a `return` inside this mutable `Some` arm is
+      // type/foreign_contract (row LG-4zb-RA), so the rest sits in an `if`
+      if len(text) > 0 && d.used < 32768 {
         let mut sep: i64 = 0;
-        let mut take: i64 = 0;
-        let mut budget: i64 = 32768;
-        if rl > 0 { sep = 2; }
+        if len(d.reply) > 0 { sep = 2; }
+        let room: i64 = 32768 - d.used;
         if sep + len(text) <= room {
-          take = len(text);
-          budget = used + sep + take;
+          arr_append(inout d.reply, "\n\n", 0, sep);
+          arr_append(inout d.reply, text, 0, len(text));
+          d.used = d.used + sep + len(text);
         } else {
-          if sep > room {
-            sep = room;
+          if room <= sep {
+            arr_append(inout d.reply, "\n\n", 0, room);
           } else {
-            take = crate::text::clip_len(text, room - sep);
+            let cut: i64 = crate::text::clip_len(text, room - sep);
+            arr_append(inout d.reply, "\n\n", 0, sep);
+            arr_append(inout d.reply, text, 0, cut);
           }
+          d.used = 32768;
           d.clipped = true;
         }
-        let r: [u8] = move d.reply;
-        d.reply = piece(move r, sep, text, take);
-        d.used = budget;
       }
     }
     None => {}
