@@ -1731,3 +1731,20 @@ All after the last code change (F1 / F4 from the structure comparison).
     SR test inlines the reserve/prepend steps to check bytes.
 - Still open: P10-M1 (a Vec element `v[i]` as a `swap`/`replace` place) was not reached within the cap.
 - Next: P10-M1, LG6-VJ.
+- Audit (A: Codex gpt-6.2-astra high, spec and tests; B: Claude opus high, codegen and LLVM). Fixed: the
+  `catalog_shapes` unit test count (108 to 111); R-6g9-13's recurrence now says `0 <= k < len(parts)`, and a `k`
+  outside `0..=len(parts)` is unspecified (after `vec_pop` the verifier still relates it to the popped views, so
+  "unconstrained" overstated it); the `lgaps6_pop_free` comment no longer claims a stack array is freed.
+  No wrong code or proof gap was found in the new string ops, `Fail::RequiresFreed` or the view sums. Advisory rows:
+  - LG6-T1: `lgaps6_field_append` reads only lengths and the last pushed byte; check the appended bytes and the
+    untouched elements' bytes.
+  - LG6-T2: R-6g9-14 rejects: capacity above `2^40`, both `string_reserve` bounds, an invalid scalar and
+    a too-long result for `string_prepend_char`, a wrong tail-shift claim; runs of 3/4-byte prepends and
+    `--no-verify` run-time requires failures (exit 101) on both backends.
+  - LG6-T3: `lgaps6_pop_free` exercises only the list buffer; add a heap temporary / scope owner and the
+    view-list `vec_reserve` failure path, and the verified `--foreign-checks all` pop check.
+  - LG6-T4: `vec_views_len` prefix sums at a middle `k` across `vec_push` are not related (only the total is).
+  - LG6-B1: `--foreign-checks all` run-time ensures of `string_prepend_char` (and `string_push_char`) check the
+    length and the tail, not the encoded prefix bytes.
+  - LG6-B2 (unverified guess): `string_with_capacity(2^40)` passes the proof but the allocation would abort rather
+    than fail with exit 101 (same as `vec_reserve`).

@@ -2138,9 +2138,10 @@ borrowed value is live.
   `S(parts, k) = len(parts[0]) + ... + len(parts[k-1])`. It is allowed only in contracts (asserts, invariants);
   in code it is `type/contract_only`, and another element type is `type/borrow_signature`. Reading it does not
   count as a use of the list. *Proof.* `S(parts, 0) == 0`; for `0 <= k <= len(parts)`,
-  `0 <= S(parts, k) <= S(parts, len(parts))`; for `k < len(parts)`, `S(parts, k + 1) == S(parts, k) + len(parts[k])`.
+  `0 <= S(parts, k) <= S(parts, len(parts))`; for `0 <= k < len(parts)`, `S(parts, k + 1) == S(parts, k) + len(parts[k])`.
   `vec_push` adds the pushed view's length to the total, `vec_pop` subtracts the last view's, and `vec_clear`
-  makes it 0. A `k` outside `0..=len(parts)` gives an unconstrained value. *Code.* None (contracts are not
+  makes it 0. A `k` outside `0..=len(parts)` is unspecified: programs must not rely on it (after a `vec_pop` the verifier may still
+  relate it to the views before the pop). *Code.* None (contracts are not
   emitted). This lets a builder that copies every view prove its length bound without a run-time guard, as in
   the §9 path normalizer (hand `out.join("/")`).
   - Tests: [path normalizer](tests/spec/lgaps6_views_len.pruv), [`[u8]` list](tests/spec/lgaps6_views_len_bytes.pruv);
