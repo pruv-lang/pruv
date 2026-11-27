@@ -4735,8 +4735,14 @@ impl Checker {
             Stmt::ForMap(s) => self.for_map(s, scope)?,
             Stmt::Return(s) => {
                 // LG9 (G-LG8-1): `return f(move d.a);` with a take parameter
+                let ret = self.cur_ret.clone();
                 self.field_move = match &s.value {
                     Some(Expr::Call(call)) => self.field_move_arg(call, scope, None)?,
+                    // P10 (G-B2-L1): `return move d.f;` of an owned local or take parameter moves the field out
+                    // (the rest of d drops at the return, as a Rust partial move); a consuming match binder keeps
+                    // R-6g8-4's refusal
+                    Some(v @ Expr::Move(m)) if !m.fields.is_empty() && !self.match_movable.contains(&m.name) =>
+                        self.field_move_out(v, &ret, None, scope, None)?,
                     _ => None,
                 };
                 if let Some(m) = s.value.as_ref().and_then(first_field_move).filter(|_| self.field_move.is_none()) {
@@ -4750,7 +4756,6 @@ impl Checker {
                 if !self.map_roots.is_empty() {
                     return Err(terr(s.line, s.col, "foreign_contract", "cannot return inside a mutable collection Some arm", ""));
                 }
-                let ret = self.cur_ret.clone();
                 match &mut s.value {
                     None => {
                         if ret != unitt() {

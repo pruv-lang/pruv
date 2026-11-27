@@ -3586,9 +3586,9 @@ mutate|tests/runtime/lg7_rt_read_into.pruv	12 cases: ok 8, error parse/syntax 4	
 mutate|tests/runtime/lg8_rt_copy_subview.pruv	12 cases: error parse/syntax 8, ok 4	0/VT=f3a6dd2c1744	0/Vt=f3a6dd2c1744	0/vT=f3a6dd2c1744	0/vt=f3a6dd2c1744	1/VT=c65ead4982a3	1/Vt=c65ead4982a3	1/vT=c65ead4982a3	1/vt=c65ead4982a3	2/VT=2ce119f0d860	2/Vt=2ce119f0d860	2/vT=7c8fb910296f	2/vt=7c8fb910296f
 mutate|tests/runtime/lg8_rt_inout_vec.pruv	12 cases: error parse/syntax 8, error type/unknown_fn 4	0/VT=30d13d7e3f9c	0/Vt=30d13d7e3f9c	0/vT=30d13d7e3f9c	0/vt=30d13d7e3f9c	1/VT=e5bdbfb93271	1/Vt=e5bdbfb93271	1/vT=e5bdbfb93271	1/vt=e5bdbfb93271	2/VT=03cdf82b41e2	2/Vt=03cdf82b41e2	2/vT=03cdf82b41e2	2/vt=03cdf82b41e2
 mutate|tests/runtime/lg8_rt_match_move.pruv	12 cases: error parse/syntax 4, error type/unknown_fn 4, ok 4	0/VT=f15d24d31271	0/Vt=f15d24d31271	0/vT=f15d24d31271	0/vt=f15d24d31271	1/VT=fa11b58e579f	1/Vt=fa11b58e579f	1/vT=fa11b58e579f	1/vt=fa11b58e579f	2/VT=ed51fa5bb8bc	2/Vt=ed51fa5bb8bc	2/vT=1669a5214df2	2/vt=1669a5214df2
-mutate|tests/runtime/lg8_rt_move_field_consume.pruv	12 cases: ok 8, error parse/syntax 4	0/VT=3d80175b7511	0/Vt=3d80175b7511	0/vT=5a54d1bd0502	0/vt=5a54d1bd0502	1/VT=3d80175b7511	1/Vt=3d80175b7511	1/vT=5a54d1bd0502	1/vt=5a54d1bd0502	2/VT=46077eb9d885	2/Vt=46077eb9d885	2/vT=46077eb9d885	2/vt=46077eb9d885
+mutate|tests/runtime/lg8_rt_move_field_consume.pruv	12 cases: ok 8, error parse/syntax 4	0/VT=4e64a5708825	0/Vt=4e64a5708825	0/vT=4ecaea45aff2	0/vt=4ecaea45aff2	1/VT=4e64a5708825	1/Vt=4e64a5708825	1/vT=4ecaea45aff2	1/vt=4ecaea45aff2	2/VT=46077eb9d885	2/Vt=46077eb9d885	2/vT=46077eb9d885	2/vt=46077eb9d885
 mutate|tests/runtime/lg9_rt_field_move_arg.pruv	12 cases: error parse/syntax 12	0/VT=126b99f3bd8a	0/Vt=126b99f3bd8a	0/vT=126b99f3bd8a	0/vt=126b99f3bd8a	1/VT=0ffad3383173	1/Vt=0ffad3383173	1/vT=0ffad3383173	1/vt=0ffad3383173	2/VT=e96c4311314a	2/Vt=e96c4311314a	2/vT=e96c4311314a	2/vt=e96c4311314a
-mutate|tests/runtime/lg9_rt_field_move_kinds.pruv	12 cases: error parse/syntax 8, ok 4	0/VT=01f50e7663e5	0/Vt=01f50e7663e5	0/vT=01f50e7663e5	0/vt=01f50e7663e5	1/VT=9961ee447788	1/Vt=9961ee447788	1/vT=9961ee447788	1/vt=9961ee447788	2/VT=031c5f1592b4	2/Vt=031c5f1592b4	2/vT=6225b2faea7e	2/vt=6225b2faea7e
+mutate|tests/runtime/lg9_rt_field_move_kinds.pruv	12 cases: error parse/syntax 8, ok 4	0/VT=01f50e7663e5	0/Vt=01f50e7663e5	0/vT=01f50e7663e5	0/vt=01f50e7663e5	1/VT=9961ee447788	1/Vt=9961ee447788	1/vT=9961ee447788	1/vt=9961ee447788	2/VT=60057df304c7	2/Vt=60057df304c7	2/vT=f3b6e5127578	2/vt=f3b6e5127578
 mutate|tests/runtime/lg9_rt_field_move_nested.pruv	12 cases: error parse/bad_char 4, error parse/syntax 4, error type/unknown_type 	0/VT=78cbbbdd620e	0/Vt=78cbbbdd620e	0/vT=78cbbbdd620e	0/vt=78cbbbdd620e	1/VT=f881b8e3e2ee	1/Vt=f881b8e3e2ee	1/vT=f881b8e3e2ee	1/vt=f881b8e3e2ee	2/VT=4e2a2cc6e8b8	2/Vt=4e2a2cc6e8b8	2/vT=4e2a2cc6e8b8	2/vt=4e2a2cc6e8b8
 mutate|tests/runtime/lg9_rt_match_str_return.pruv	12 cases: error parse/syntax 8, error parse/string_character 4	0/VT=f5bdf9ae229a	0/Vt=f5bdf9ae229a	0/vT=f5bdf9ae229a	0/vt=f5bdf9ae229a	1/VT=9d6e8eed0cfc	1/Vt=9d6e8eed0cfc	1/vT=9d6e8eed0cfc	1/vt=9d6e8eed0cfc	2/VT=23c1c667119d	2/Vt=23c1c667119d	2/vT=23c1c667119d	2/vt=23c1c667119d
 mutate|tests/runtime/lg9_rt_record_move.pruv	12 cases: ok 8, error parse/syntax 4	0/VT=a9b5c107d86f	0/Vt=a9b5c107d86f	0/vT=a9b5c107d86f	0/vt=a9b5c107d86f	1/VT=e845d4815109	1/Vt=e845d4815109	1/vT=3081a7bdaea5	1/vt=3081a7bdaea5	2/VT=e845d4815109	2/Vt=e845d4815109	2/vT=3081a7bdaea5	2/vt=3081a7bdaea5
@@ -4144,7 +4144,7 @@ runtime|tests/runtime/lg3_rt_take_field.pruv	4 cases: ok 4	VT=f5459a397d7f	Vt=ac
 runtime|tests/runtime/lg3_rt_vec_reserve.pruv	4 cases: ok 4	VT=fae11cbf8405	Vt=da93c3b7f48a	vT=7cc41346c159	vt=e3af9639d65a
 runtime|tests/runtime/lg4_rt_agg_frame.pruv	4 cases: ok 4	VT=bb50ec752477	Vt=bb50ec752477	vT=ebf6542e6bf4	vt=ebf6542e6bf4
 runtime|tests/runtime/lg4_rt_field_index.pruv	4 cases: ok 4	VT=664bc64aba63	Vt=664bc64aba63	vT=4c84894c5d00	vt=4c84894c5d00
-runtime|tests/runtime/lg4_rt_move_array_field.pruv	4 cases: ok 4	VT=0e41681805c0	Vt=0e41681805c0	vT=4b9299475c11	vt=4b9299475c11
+runtime|tests/runtime/lg4_rt_move_array_field.pruv	4 cases: ok 4	VT=13547ca4fb16	Vt=13547ca4fb16	vT=316d3b7c68c1	vt=316d3b7c68c1
 runtime|tests/runtime/lg5_rt_copy_range_overlap.pruv	4 cases: ok 4	VT=c7b00d1c23a4	Vt=c7b00d1c23a4	vT=7a500434c101	vt=7a500434c101
 runtime|tests/runtime/lg5_rt_field_alloc_hint.pruv	4 cases: ok 4	VT=182918c9154e	Vt=182918c9154e	vT=510173d4ce53	vt=510173d4ce53
 runtime|tests/runtime/lg5_rt_generic_resize.pruv	4 cases: ok 4	VT=62d933799655	Vt=62d933799655	vT=f34da225c566	vt=f34da225c566
@@ -4159,13 +4159,13 @@ runtime|tests/runtime/lg7_rt_read_into.pruv	4 cases: ok 4	VT=ed52335ad6c7	Vt=851
 runtime|tests/runtime/lg8_rt_copy_subview.pruv	4 cases: ok 4	VT=2ce119f0d860	Vt=2ce119f0d860	vT=7c8fb910296f	vt=7c8fb910296f
 runtime|tests/runtime/lg8_rt_inout_vec.pruv	4 cases: ok 4	VT=206c549f022b	Vt=4c3c13aac061	vT=24bee0c4454f	vt=f6e32789c4e0
 runtime|tests/runtime/lg8_rt_match_move.pruv	4 cases: ok 4	VT=2b6cfd2dd519	Vt=2b6cfd2dd519	vT=78150b33db21	vt=78150b33db21
-runtime|tests/runtime/lg8_rt_move_field_consume.pruv	4 cases: ok 4	VT=3d80175b7511	Vt=3d80175b7511	vT=5a54d1bd0502	vt=5a54d1bd0502
-runtime|tests/runtime/lg9_rt_field_move_arg.pruv	4 cases: ok 4	VT=02149a70ea2c	Vt=02149a70ea2c	vT=509a431c05f8	vt=509a431c05f8
-runtime|tests/runtime/lg9_rt_field_move_kinds.pruv	4 cases: ok 4	VT=031c5f1592b4	Vt=031c5f1592b4	vT=6225b2faea7e	vt=6225b2faea7e
-runtime|tests/runtime/lg9_rt_field_move_nested.pruv	4 cases: ok 4	VT=63458bb9948b	Vt=63458bb9948b	vT=fb0edded4b3e	vt=fb0edded4b3e
+runtime|tests/runtime/lg8_rt_move_field_consume.pruv	4 cases: ok 4	VT=4e64a5708825	Vt=4e64a5708825	vT=4ecaea45aff2	vt=4ecaea45aff2
+runtime|tests/runtime/lg9_rt_field_move_arg.pruv	4 cases: ok 4	VT=cb8cda2db3a9	Vt=cb8cda2db3a9	vT=c351d5237a34	vt=c351d5237a34
+runtime|tests/runtime/lg9_rt_field_move_kinds.pruv	4 cases: ok 4	VT=60057df304c7	Vt=60057df304c7	vT=f3b6e5127578	vt=f3b6e5127578
+runtime|tests/runtime/lg9_rt_field_move_nested.pruv	4 cases: ok 4	VT=ae2535cb4f37	Vt=ae2535cb4f37	vT=8209f62d7c3a	vt=8209f62d7c3a
 runtime|tests/runtime/lg9_rt_match_str_return.pruv	4 cases: ok 4	VT=a0f0d0c8f4a8	Vt=a0f0d0c8f4a8	vT=fc90524b078e	vt=fc90524b078e
 runtime|tests/runtime/lg9_rt_record_move.pruv	4 cases: ok 4	VT=e845d4815109	Vt=e845d4815109	vT=3081a7bdaea5	vt=3081a7bdaea5
-runtime|tests/runtime/lg9_rt_take_field_move.pruv	4 cases: ok 4	VT=4bc455fdd923	Vt=4bc455fdd923	vT=ad5f5d795f90	vt=ad5f5d795f90
+runtime|tests/runtime/lg9_rt_take_field_move.pruv	4 cases: ok 4	VT=aed7ce4352d5	Vt=aed7ce4352d5	vT=2ad1cc8467bd	vt=2ad1cc8467bd
 runtime|tests/runtime/lg9_rt_take_record.pruv	4 cases: ok 4	VT=017f65afa0f9	Vt=017f65afa0f9	vT=25651e1e51de	vt=25651e1e51de
 runtime|tests/runtime/lg9_rt_utf8_ascii.pruv	4 cases: ok 4	VT=c2f820eff1a4	Vt=c2f820eff1a4	vT=19bb39076804	vt=19bb39076804
 runtime|tests/runtime/p1_r_bounds.pruv	4 cases: ok 4	VT=88be2da4b6a8	Vt=687f03a0ce9a	vT=0c17e6815e94	vt=b9226d1e2688
@@ -4222,7 +4222,7 @@ runtime|tests/runtime/p4_rt_for_layout.pruv	4 cases: ok 4	VT=ebf27c584315	Vt=e1b
 runtime|tests/runtime/p4_rt_for_vec.pruv	4 cases: ok 4	VT=445ec6f1b87d	Vt=fa0a75b39c23	vT=cc1ba6676b48	vt=01ab8d0315a5
 runtime|tests/runtime/p5_rt_exit.pruv	4 cases: ok 4	VT=13442e95405a	Vt=7fe77857018d	vT=4db5ec3edfed	vt=cd0cf55ad4a3
 runtime|tests/runtime/p5_rt_loop.pruv	4 cases: ok 4	VT=52134f16f1f3	Vt=824e589269a9	vT=fe95446be5d6	vt=5ef1571c8e28
-runtime|tests/runtime/p6_rt_owned.pruv	4 cases: ok 4	VT=bcbcefd42f55	Vt=676f45a91b18	vT=8eccaa80f27a	vt=9c6f37a5bf4a
+runtime|tests/runtime/p6_rt_owned.pruv	4 cases: ok 4	VT=43fb553999e9	Vt=1e5d009bafc4	vT=9f5fefc689c9	vt=c9636d541a62
 runtime|tests/runtime/p6_rt_result.pruv	4 cases: ok 4	VT=fb46a49b8db6	Vt=135a6cead2e5	vT=287cc05d06ee	vt=8936118b3b61
 runtime|tests/runtime/p6_rt_scalar.pruv	4 cases: ok 4	VT=2cba810310fb	Vt=ddfbad9bbe76	vT=ed9d6127e781	vt=bf4fc29665d3
 runtime|tests/runtime/p7_rt_char.pruv	4 cases: ok 4	VT=5562e0a392e3	Vt=1f1c682d534c	vT=ffdc2f0b1e1a	vt=04c0c3516401

@@ -310,7 +310,8 @@ fn moved_root(st: &Stmt, roots: &Roots) -> Option<(i64, i64)> {
     found
 }
 
-fn own_accesses(st: &Stmt, visit: &mut impl FnMut(&str, &[String], Access)) {
+/// `writes_only`: the operands have their own earlier point (P10 read-first stores).
+fn own_accesses(st: &Stmt, writes_only: bool, visit: &mut impl FnMut(&str, &[String], Access)) {
     let mut uses = Vec::new();
     let mut writes = Vec::new();
     walk_statement(st, &mut |e| uses.push(e), &mut |n, path, _, _| writes.push((n, path)), &mut |_| {});
@@ -318,8 +319,15 @@ fn own_accesses(st: &Stmt, visit: &mut impl FnMut(&str, &[String], Access)) {
         visit(name, path, Access::Write);
     }
     for e in uses {
-        expr_accesses(e, visit);
+        if !writes_only {
+            expr_accesses(e, visit);
+        }
     }
+}
+
+/// A value whose store copies it: an integer, `bool` or `char` (no view or owned buffer survives the store).
+fn is_copy(e: &Expr) -> bool {
+    expr_ty(e).as_deref().is_some_and(|t| matches!(t, "i64" | "bool") || crate::intwidth::of(t).is_some())
 }
 
 fn expr_accesses(e: &Expr, visit: &mut impl FnMut(&str, &[String], Access)) {
@@ -847,6 +855,31 @@ impl Analysis<'_> {
         let mut scope_undo: Vec<(&'a str, Option<usize>)> = Vec::new();
         let visible = self.visible.borrow().len();
         for st in body {
+            // P10 (G-B4-Q1): a store of a copied scalar evaluates its operands (index, then value) into locals
+            // before it writes the target, so those operands are their own point: a view whose last read is in
+            // them is dead at the write, as under NLL.
+            let read_first = match st {
+                Stmt::IndexAssign(s) => is_copy(&s.value),
+                Stmt::FieldAssign(s) => !s.ref_store && is_copy(&s.value),
+                _ => false,
+            };
+            if read_first {
+                let n = graph.points.len();
+                for p in incoming {
+                    graph.points[p].succ.push(n);
+                }
+                let mut point = Point { succ: Vec::new(), gen: Vec::new(), kill: None, uses: Vec::new(), site: st.position(), own_move: None };
+                let mut operands = Vec::new();
+                walk_statement(st, &mut |e| operands.push(e), &mut |_, _, _, _| {}, &mut |_| {});
+                for e in operands {
+                    expr_accesses(e, &mut |name, path, access| {
+                        point.gen.extend(scope.get(name).copied());
+                        point.uses.push((name.to_owned(), path.to_vec(), access));
+                    });
+                }
+                graph.points.push(point);
+                incoming = vec![n];
+            }
             let n = graph.points.len();
             for p in incoming {
                 graph.points[p].succ.push(n);
@@ -858,7 +891,7 @@ impl Analysis<'_> {
                     point.kill = scope.get(s.name.as_str()).copied();
                 }
             }
-            own_accesses(st, &mut |name, path, access| {
+            own_accesses(st, read_first, &mut |name, path, access| {
                 if !(point.kill.is_some() && point.uses.is_empty()) {
                     point.gen.extend(scope.get(name).copied());
                 }

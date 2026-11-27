@@ -1,0 +1,9 @@
+{
+  "gen_contains": ["    return p.tape;"],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["7", "12"],
+    "alloc_balance": true
+  }
+}

@@ -1,0 +1,43 @@
+// spec: R-6g9-5 accept
+// P10 (G-B5-R10): `let d = inout b;` of a whole local array and `let d = inout s.a;` of an array field are place
+// bindings on both backends (LLVM names the same { data, len, cap } storage); a resize through d resizes the place.
+struct S { a: [i64], n: i64 }
+struct U { t: [u8], n: i64 }
+fn g() -> i64 ! alloc
+  ensures result == 18
+{
+  let mut b: [i64] = alloc(3, 0);
+  let d = inout b;
+  d[0] = 5;
+  d = resize(d, 4, 9);
+  return b[0] + b[3] + len(b);
+}
+fn h() -> i64 ! alloc
+  ensures result == 15
+{
+  let mut s: S = S { a: alloc(3, 0), n: 1 };
+  let d = inout s.a;
+  d[1] = 7;
+  d = resize(d, 4, 4);
+  return s.a[1] + s.a[3] + len(s.a);
+}
+fn k() -> i64 ! alloc
+  ensures result == 202
+{
+  let t0: [u8] = alloc(2, 1);
+  let mut u: U = U { t: move t0, n: 1 };
+  let d = inout u.t;
+  d[1] = 200;
+  return u.t[1] + len(u.t);
+}
+// the alias owns nothing: a last read of d does not move b's buffer out (P10 audit)
+fn m() -> i64 ! alloc
+  ensures result == 10
+{
+  let mut b: [i64] = alloc(3, 1);
+  let d = inout b;
+  d[0] = 5;
+  let y: [i64] = copy(d);
+  return b[0] + y[0];
+}
+fn run() -> () ! io, alloc { print(g()); print(h()); print(k()); print(m()); }

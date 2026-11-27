@@ -1099,24 +1099,29 @@ fn tree_count(t: Tree) -> i64
   same holds for `f(move d.f)` as a `let` initializer, a call statement or a `return` value when the field move is
   the direct argument of a `take` parameter of `f`, it is the only field move of the call, and no other argument
   names `d` (otherwise the field move keeps its non-consuming errors, e.g. `type/array_alias` for
-  `let n = f(move d.a, d.n);`, while `return f(move d.a, d.n);` gives `type/foreign_move` from the return check). The consuming form on a match binder (also a `map_take` binder) and on a plain or `inout` root stays
+  `let n = f(move d.a, d.n);`, while `return f(move d.a, d.n);` gives `type/foreign_move` from the return check).
+  P10 (G-B2-L1): `return move d.f;` is the consuming form too, under the same root rules (the rest of `d` drops at
+  the return; a consuming match binder keeps R-6g8-4's refusal). The consuming form on a match binder (also a `map_take` binder) and on a plain or `inout` root stays
   `type/foreign_move`. It moves the field out of `d` (a partial move, R-6g8-5): a later use of that field or of
   `d` whole is `type/foreign_move` "use after move" ("binding may have been moved" on some
   paths, `type/foreign_loop_move` for a loop that does not restore it), the other fields stay usable, and
   assigning the field or `d` again revives it. A restore in the
   next statement keeps the form above. `p.g = move p.f;` and moves from `inout` and plain roots keep
-  the errors below. Rust emits `::std::mem::take(&mut d.f)` (the root is declared `mut`, also for a `take`
-  parameter). LLVM lowers buffer fields at any path as above; `String`/`Vec` fields need the Rust backend.
+  the errors below. Rust emits the partial move `d.f` (P10: hand Rust; the root is declared `mut`, also for a
+  `take` parameter, so a restore can reassign the field). LLVM lowers buffer fields at any path as above; `String`/`Vec` fields need the Rust backend.
   Tests: [take field](tests/runtime/lg9_rt_take_field_move.pruv), [field kinds](tests/runtime/lg9_rt_field_move_kinds.pruv),
   [take argument](tests/runtime/lg9_rt_field_move_arg.pruv), [use after](tests/must_reject/lg9_move_field_arg_use_after.pruv),
   [other argument](tests/must_reject/lg9_move_field_arg_other_mention.pruv),
-  [borrowed root](tests/must_reject/lg9_move_field_arg_borrowed.pruv).
+  [borrowed root](tests/must_reject/lg9_move_field_arg_borrowed.pruv),
+  [return](tests/spec/p10_field_move_return.pruv), [return false contract](tests/spec/p10_field_move_return_false.pruv),
+  [return from a read parameter](tests/spec/p10_field_move_return_borrowed.pruv).
   Outside R-6e-2 and these forms, field moves are `type/foreign_move`. A missing or invalid
   restore, or a move between overlapping paths, has the same code and the message
   "a field moved out must be reassigned by the next statement". Moving a path held by an active
   match, collection borrow or map iteration is `type/recursive_borrow` under the overlap rules
   of R-6e-8 and R-6e-13.
-  Rust emits `::std::mem::take(&mut p.f)` without cloning. The verifier reads the old field into
+  Rust emits `::std::mem::take(&mut p.f)` without cloning behind an `inout` root, and the partial move `p.f` from
+  a root the function owns (a local or a `take` parameter; P10). The verifier reads the old field into
   the destination at zero cost and retains its symbolic source value until the restore.
   Owned collection fields require the Rust backend. Buffer fields also lower to LLVM: the move copies the
   field's `{ptr, len, cap}` into the destination and stores the empty array into the field without freeing,
@@ -1889,6 +1894,11 @@ borrowed value is live.
   does not borrow-check unreachable code. At a borrow `let` itself, a `move` of a root of the new borrow's own
   provenance (`Doc { src: x, scratch: move x }`) is `type/borrow_conflict`. This replaces the earlier block rule ("a loop or `if` that mentions it counts whole"); it
   accepts strictly more programs, and every R-6g-11 reject test still rejects with the same diagnostic.
+  P10 (G-B4-Q1): a store of an integer, `bool` or `char` value (`a[i] = v;`, `s.f = v;`, `s.f[i] = v;`) evaluates its
+  index and then its value into locals before it writes the target, so those operands are a point of their own
+  before the write: a view whose last read is in them is dead at the write (`b[0] = m[0] + 1;` with `m` a view of
+  `b`, hand Rust under NLL). A view read again after the store stays `type/borrow_conflict`. Tests:
+  [last read in the store](tests/spec/p10_last_read_store.pruv), [read after](tests/spec/p10_last_read_live.pruv).
   The statement graph has one join point per `if` and `match`, so each block has at most one exit; the provenance
   and scope maps are shared across blocks and restored by an undo log, not copied. Liveness is a backward
   gen/kill over bit sets (one bit per borrow) computed by reverse-order sweeps until no set changes (at most loop depth
@@ -1918,8 +1928,10 @@ borrowed value is live.
   function exit (`verify/struct_invariant`), a local's not in mid-body, as for a field assignment (this departs
   from docs/B_BUNDLE_SPEC.md §5.2, which asked for a separate check at every write-back). The checker cost is the
   R-6g9-4 bound with B counting place bindings too, so O(statements x roots) per function; verification adds one
-  copy-in and one write-back per binding exit.
-  Tests: [if field](tests/spec/r6g9_5_if_field.pruv), [index bump](tests/spec/r6g9_5_index_bump.pruv),
+  copy-in and one write-back per binding exit. LLVM lowers a whole-array place (`let d = inout b;` of a local or
+  `let d = inout s.a;` of a buffer field) to the place's own `{ data, len, cap }` storage, so a resize through `d`
+  resizes the place (P10, G-B5-R10; `String`/`Vec` places and external types need the Rust backend).
+  Tests: [whole array](tests/spec/p10_place_array.pruv), [if field](tests/spec/r6g9_5_if_field.pruv), [index bump](tests/spec/r6g9_5_index_bump.pruv),
   [vector element](tests/spec/r6g9_5_vec_elem.pruv), [loop region](tests/spec/r6g9_5_loop_region.pruv);
   rejects [two roots](tests/spec/r6g9_5_two_roots.pruv), [root read](tests/spec/r6g9_5_root_read.pruv),
   [contract mention](tests/spec/r6g9_5_contract_mention.pruv), [escape](tests/spec/r6g9_5_escape.pruv),
