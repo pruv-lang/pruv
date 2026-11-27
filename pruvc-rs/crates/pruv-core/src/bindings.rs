@@ -534,6 +534,9 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
                 && !(f.params.iter().any(|p| crate::llvmgen::is_collection(&p.ty)) || crate::llvmgen::is_collection(&f.ret))
                 && !crate::llvmgen::has_ext_sig(f, &tt)
                 && !crate::llvmgen::has_take_array(f)
+                // LG9-SB4: a borrowed result (`ref [u8]` / `ref str`) has no pruv_abi_* symbol (is_host_abi_fn), so no
+                // binding either (it used to wrap the view as an owned Vec/String and declare an undefined symbol)
+                && !f.borrowed_result
                 // an inout entry has a binding only as an explicit-mode host entry (legacy inout fns stay internal)
                 && (!crate::llvmgen::has_inout(f) || (explicit && hosts.get(*i).copied().unwrap_or(false)))
         })

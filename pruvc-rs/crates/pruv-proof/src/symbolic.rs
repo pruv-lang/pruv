@@ -5592,7 +5592,8 @@ impl<'a> FnVerifier<'a> {
         Ok(sk)
     }
 
-    /// LG7-SR: the longest constant-length view list whose join gets the ground view-sum steps
+    /// LG7-SR / LG9-SR2: the longest constant-length view list whose join gets the ground view-sum steps and the
+    /// per-view byte facts; a longer list (or one of unknown length) gets only the quantified step and `q(i)` forall
     const JOIN_GROUND_MAX: i64 = 64;
 
     /// LG6-VJ (R-6g9-16): `vec_join(parts, sep)` with `n = len(parts)`, `L = len(sep)`, `S` the view sum and the
@@ -5629,8 +5630,9 @@ impl<'a> FnVerifier<'a> {
         // LG7-SR: with a constant list length the step also holds at every index as a ground fact. The quantified
         // step fires only on a `parts[k]` term already present, so which view block holds a result position was found
         // only for some z3 seeds (lgaps7_join_bytes: 0.1 s or past the timeout)
-        if let Some(cn) = n.simplify().numeral_string().and_then(|t| t.parse::<i64>().ok()) {
-            for j in 0..cn.clamp(0, Self::JOIN_GROUND_MAX) {
+        let const_n = n.simplify().numeral_string().and_then(|t| t.parse::<i64>().ok()).filter(|cn| (0..=Self::JOIN_GROUND_MAX).contains(cn));
+        if let Some(cn) = const_n {
+            for j in 0..cn {
                 let kj = z.int(j);
                 let (sj, sj1, wj) = (self.view_sum_of(&list, &kj)?, self.view_sum_of(&list, &z.int(j + 1))?, text(self, &kj)?.n);
                 self.assume(st, g, z.and(&[wj.ge_i(0), sj1.eq(&sj.add(&wj))]));
@@ -5647,8 +5649,28 @@ impl<'a> FnVerifier<'a> {
         let res_v = self.try_fresh("vec_join", &ty)?;
         let res = res_v.try_arr()?.clone();
         self.assume(st, g, res.n.eq(&total));
-        let q = z.func_decl(&format!("vjoin!q{}", self.k), &[z.int_sort()], &z.int_sort());
         let i = z.int_const("vjoin!i");
+        // LG9-SR2: with a constant list length, one byte forall per view block (the view `parts[j]` and the separator
+        // after it) keyed on `res[i]`. The `q(i)` forall below reads `parts[q(i)]` whose elements are `subview`
+        // lambdas, and z3 gave `unknown` (incomplete array theory) on false claims about such a join
+        if let Some(cn) = const_n {
+            for j in 0..cn {
+                let kj = z.int(j);
+                let pj = self.view_sum_of(&list, &kj)?.add(&kj.mul(&l));
+                let piece = text(self, &kj)?;
+                let off = i.sub(&pj);
+                let in_view = z.and(&[pj.le(&i), i.lt(&pj.add(&piece.n))]);
+                let fact = in_view.implies(&res.a.select(&i).eq(&piece.a.select(&off)));
+                self.assume(st, g, z.forall(std::slice::from_ref(&i), &fact, &[res.a.select(&i)]));
+                if j + 1 < cn {
+                    let in_sep = z.and(&[pj.add(&piece.n).le(&i), i.lt(&pj.add(&piece.n).add(&l))]);
+                    let fact = in_sep.implies(&res.a.select(&i).eq(&sep.a.select(&off.sub(&piece.n))));
+                    self.assume(st, g, z.forall(std::slice::from_ref(&i), &fact, &[res.a.select(&i)]));
+                }
+            }
+            return Ok(res_v);
+        }
+        let q = z.func_decl(&format!("vjoin!q{}", self.k), &[z.int_sort()], &z.int_sort());
         let k = q.apply(&[i.clone()]);
         let pk = self.view_sum_of(&list, &k)?.add(&k.mul(&l));
         let piece = text(self, &k)?;

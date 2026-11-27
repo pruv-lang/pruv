@@ -2184,3 +2184,45 @@ Only `bench/l3/opencode` changes (no compiler, no `pkgs/`, so no consumer runs).
   1. 4.4o-VP in an L-gaps bundle (compiler).
   2. 4.4t-RV if `for` gets a `rev` adapter (then `dirname` takes the hand's loop).
   3. 4.4s-FK if the language gets `[str; N]` / const generics.
+
+### Bundle L-gaps 11
+
+- Closed LG9-SR2 (R-6g9-16): a `vec_join` of a list with a constant length up to 64 (`JOIN_GROUND_MAX`) now gets
+  one byte forall per view block instead of the `q(i)` forall: for view `j` at offset `P(j) = S(j) + j * len(sep)`,
+  `P(j) <= i < P(j) + len(parts[j]) => res[i] == parts[j][i - P(j)]`, and for `j < n - 1` the separator block after
+  it, each keyed on `res[i]` (so positive byte proofs still fire on the read `s[i]`). The `q(i)` forall read
+  `parts[q(i)]` whose elements were `subview` lambdas and z3 answered `unknown` (incomplete array theory). A list of
+  unknown or larger length keeps the `q(i)` forall. Timing (same machine): `work/lgaps9/sr_join_unknown.pruv`
+  refutes in about 1 s with counterexample `b = [2], m = 1` (was `verify_unknown`); `tests/spec/lgaps7_join_bytes.pruv`
+  0.10 s (0.33 s in L-gaps 10), `lgaps7_join` 0.28 s. Every `lgaps6_views*`, `lgaps7_join*`, `lgaps8_join*`,
+  `lgaps9_*` and `lgaps10_*` spec file keeps its result. New reject `lgaps11_join_subview_len` (tests/spec and
+  tests/must_reject).
+- Closed L-gaps 10 A1: the ground steps and the per-view byte facts apply only when the constant length is in
+  `0..=64` (a length of 65 used to unroll 64 steps); the comment says so.
+- Closed L-gaps 10 A2: accept `tests/spec/lgaps11_views_sum_quant` reads the prefix sums of one list outside a
+  quantifier (per-term sum) and inside one (array-keyed sum) and proves them equal and equal to the totals.
+- Closed L-gaps 10 A3: moving a `ref str` local is still `type/array_alias`, now "r is a ref str view and cannot be
+  moved" with the hint `let t: str = copy(r);` then `move t` (golden digest of `lgaps10_into_bytes_ref_local`
+  changed).
+- Closed LG7-T3: runtime `lgaps11_pop_checks_all` pops a two-view list with `--foreign-checks all` (verified; LLVM
+  keeps the `len(v) >= 1` run-time check, Rust emits the proven `pop()`) and without, on both backends with alloc
+  balance.
+- Closed LG9-SB3: runtime `lgaps11_str_bytes_paths` (both backends, verified and `--no-verify`, alloc balance):
+  `str_into_bytes` in an `if` branch return, from a consuming match payload binder, in a struct literal field, in a
+  loop with reassignment, on an empty `str` then `arr_push`, on a `str_from_utf8` result then `arr_push`; `return
+  str_bytes(s)`, `str_bytes(subview(..))`, `str_bytes` pushed to a `Vec<ref [u8]>` and read back with `vec_get`,
+  from an `inout` struct field, and `str_bytes` in an `ensures` under `--no-verify`. A value `if` expression is not
+  in the language, so the `if` path is a branch `return`.
+- Closed LG9-SB4: the `--emit ll` Rust bindings skip a function with a borrowed result (`ref [u8]` / `ref str`), as
+  `is_host_abi_fn` already did for the `.ll`; before, `bindings.rs` wrapped it as an owned `Vec`/`String` and
+  declared an undefined `pruv_abi_*` / `pruv_abi_*__typed` symbol.
+- New row LG11-QS: a false claim about a prefix sum inside a quantifier (`assert forall k in 2..3:
+  vec_views_len(out, k) == 4` on the A2 list) does not refute quickly (killed after 2 minutes); the array-keyed sum
+  has only the definition instances around `k`.
+- Still open: P10-M1, LG7-A1, LG7-B1, LG7-B4 (Rust `vec_pop` keys on `verified`, LLVM on `vec_get_checked`).
+- No audit in this bundle (cap); the SR2 encoding change is the one new verifier meaning.
+- Checks: `cargo test --release` (163 passed); `run_all --only must_reject` 1371/1371; `--only g8_frontend
+  --backend both` 39/39; `--only runtime --sample-prefix tests/runtime/lgaps11 --backend both` 8/8; `diff_rust
+  --fuzz-count 20` (golden mismatches only from the new files, the A3 message and the shifted mutant sample);
+  `m3_all --quick --update-golden` (all stages ok; llvm digests of `lgaps9_str_bytes` and `p9_rt_alias_pos` changed from LG9-SB4, their borrowed-result functions left the bindings); `--list-rows` diff (9 new rows, `tests/run_all_rows.txt` updated).
+- Next: audit of the LG9-SR2 encoding, LG11-QS, LG7-B4, P10-M1.
