@@ -3,8 +3,8 @@
 // feed(d, msg, st, sl, buf, mt) handles ONE already-located message object (convert owns the message loop and the shape check).
 // Result: 0 = handled (also for every ignored message), 1 = "grow buf and call again" (nothing was changed; returned only when a begin
 // would not fit buf: 65584*(st[0]%200)+65584 > len(buf)), -1 = internal failure (corrupt tape, timestamp defect, unvalidated shape).
-// mt (caller owned Attach): `open` is the attachment state, `pid` / `mid` the tape ids of the providerID / modelID strings of the last
-// eligible assistant model pair (-1 = none yet). The model text is built by the caller at the end (no copy per message).
+// mt (caller owned Attach): `open` is the attachment state, `model` the providerID / modelID strings of the last eligible assistant
+// model pair (`Absent` = none yet), owned like the hand's `Option<(String, String)>`; the caller joins them at the end.
 // open is the OpenCode attachment boolean; turns::skip_user is deliberately NOT used (it would mark the next prompt clipped).
 //
 // UNSURE / for the main agent:
@@ -13,8 +13,12 @@
 //  2. A timestamp defect (iso_of status -4, i.e. corrupt tape) is computed only where the timestamp is used and gives -1.
 //  3. A string is a nonempty model id iff its raw span (with quotes) is longer than 2 bytes (escapes decode to at least one scalar).
 
-// The hand's Collector.open / Collector.model (tape ids instead of owned strings: the tape outlives the collector).
-pub struct Attach { open: bool, pid: i64, mid: i64 }
+// The hand's Collector.model: `Option<(String, String)>`. An Option payload cannot hold `str` (type/type_argument), so the
+// option is a dedicated enum; the Rust backend emits `enum { Absent, Pair(String, String) }`.
+pub enum Model { Absent, Pair(p: str, m: str) }
+
+// The hand's Collector.open / Collector.model.
+pub struct Attach { open: bool, model: Model }
 
 // The joined text of the object text parts of the part ids: nonblank text keeps the original string; with skip_marked, parts with
 // synthetic === true or ignored === true are rejected; pieces are joined with two LF.
@@ -131,11 +135,11 @@ fn nonempty_string(d: crate::json::JsonDocument, id: i64) -> bool
 // only clears open (no skip_user).
 fn feed_user(d: crate::json::JsonDocument, info: i64, parts: i64, inout st: [i64], inout sl: [i64], inout buf: [u8], inout mt: Attach) -> i64 ! alloc
   requires len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
-  requires -1 <= mt.pid && -1 <= mt.mid
+  requires (is_variant(mt.model, Model::Pair) ==> (len(variant_field(mt.model, Model::Pair, p)) <= 50331648 && len(variant_field(mt.model, Model::Pair, m)) <= 50331648))
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
   ensures len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
-  ensures -1 <= mt.pid && -1 <= mt.mid
+  ensures (is_variant(mt.model, Model::Pair) ==> (len(variant_field(mt.model, Model::Pair, p)) <= 50331648 && len(variant_field(mt.model, Model::Pair, m)) <= 50331648))
   ensures -1 <= result && result <= 1
   ensures st[0] == old(st)[0] || st[0] == old(st)[0] + 1
   ensures result == 1 ==> st[0] == old(st)[0]
@@ -160,11 +164,11 @@ fn feed_user(d: crate::json::JsonDocument, info: i64, parts: i64, inout st: [i64
 // open, answer(textOf(parts, false), isoOf(completed)) even for empty text, then one tool call per object tool part.
 fn feed_assistant(d: crate::json::JsonDocument, info: i64, parts: i64, inout st: [i64], inout sl: [i64], inout buf: [u8], inout mt: Attach) -> i64 ! alloc
   requires len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
-  requires -1 <= mt.pid && -1 <= mt.mid
+  requires (is_variant(mt.model, Model::Pair) ==> (len(variant_field(mt.model, Model::Pair, p)) <= 50331648 && len(variant_field(mt.model, Model::Pair, m)) <= 50331648))
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
   ensures len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
-  ensures -1 <= mt.pid && -1 <= mt.mid
+  ensures (is_variant(mt.model, Model::Pair) ==> (len(variant_field(mt.model, Model::Pair, p)) <= 50331648 && len(variant_field(mt.model, Model::Pair, m)) <= 50331648))
   ensures -1 <= result && result <= 1
   ensures st[0] == old(st)[0]
   ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
@@ -175,8 +179,7 @@ fn feed_assistant(d: crate::json::JsonDocument, info: i64, parts: i64, inout st:
   let pm: i64 = crate::access::field(d, info, "providerID");
   let mi: i64 = crate::access::field(d, info, "modelID");
   if nonempty_string(d, pm) && nonempty_string(d, mi) {  // MUT:M14 => if mt.open && nonempty_string(d, pm) && nonempty_string(d, mi) {
-    mt.pid = pm;
-    mt.mid = mi;
+    mt.model = Model::Pair(crate::util::str_at(d, pm), crate::util::str_at(d, mi));
   }
   if !mt.open { return 0; }
   let ids: [i64] = crate::util::elements(d, parts);
@@ -192,11 +195,11 @@ fn feed_assistant(d: crate::json::JsonDocument, info: i64, parts: i64, inout st:
 // One validated message object of messages[]. Unknown roles change nothing.
 pub fn feed(d: crate::json::JsonDocument, msg: i64, inout st: [i64], inout sl: [i64], inout buf: [u8], inout mt: Attach) -> i64 ! alloc
   requires len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
-  requires -1 <= mt.pid && -1 <= mt.mid
+  requires (is_variant(mt.model, Model::Pair) ==> (len(variant_field(mt.model, Model::Pair, p)) <= 50331648 && len(variant_field(mt.model, Model::Pair, m)) <= 50331648))
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
   ensures len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
-  ensures -1 <= mt.pid && -1 <= mt.mid
+  ensures (is_variant(mt.model, Model::Pair) ==> (len(variant_field(mt.model, Model::Pair, p)) <= 50331648 && len(variant_field(mt.model, Model::Pair, m)) <= 50331648))
   ensures -1 <= result && result <= 1
   ensures st[0] == old(st)[0] || st[0] == old(st)[0] + 1
   ensures result == 1 ==> st[0] == old(st)[0]

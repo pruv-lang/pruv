@@ -1619,3 +1619,20 @@ All after the last code change (F1 / F4 from the structure comparison).
   - LG4-B4: tests not yet written: `[u8]` list allocation balance on loop early return / `break` / `?`; an
     `inout [u8]` parameter pushed, and `arr_push(inout src)` while the list is live; `vec_pop` in a contract;
     `Vec<ref str>` from `vec_new::<ref [u8]>()`; a `[u8]` list in a program where G3 mono runs.
+## Step 4.4j: OpenCode rows 4.4b-CV, 4.3g-T2 (and 4.3g-F2)
+
+- `pkgs/time`: new `pub struct Civil { year, month, day, rem }` and `pub fn civil(ms) -> Civil` (same requires as
+  `format_iso`, ensures `0 <= rem < 86400000`), the hand's `civil` walk. `format_iso` calls it; its contract and
+  digit writes are unchanged. `opencode/rows::format_ext` calls `crate::time::civil` instead of its own copy of the
+  walk (closes 4.4b-CV and 4.3g-F2).
+- `opencode/entry`: `Attach` holds `model: Model` with `enum Model { Absent, Pair(p: str, m: str) }` (rs/rust
+  `Pair(String, String)`), set once per assistant message from `util::str_at` (moved, no second copy);
+  `convert::model_bytes(model)` builds `p/m` with one reserve. Replaces the `pid`/`mid` tape indexes and the
+  re-decode per user message (closes 4.3g-T2). The bound on the two lengths moves into `is_variant` /
+  `variant_field` requires, ensures and the loop invariant.
+- New 4.4j-TU (language): `civil` returns a named struct because tuple types are single-file only (P6-2), and
+  `Option<(String, String)>` is a dedicated enum because an `Option` payload cannot be a struct holding `str`.
+  Same layout and allocations as the hand. New 4.4j-ME (bench): `model_bytes` keeps an empty-side check the hand
+  does not have. Details and the per-function table: `opencode/RESHAPE.md` §8.
+- Consumers of `pkgs/time` (codex, grok, opencode, qwen) rerun on `rs/rust` and `rs/llvm`; results in
+  `opencode/RESHAPE.md` §8. `qwen/q.py` hardwires the frozen py pairs and was not run (as in earlier steps).

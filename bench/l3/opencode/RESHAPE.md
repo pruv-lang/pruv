@@ -213,3 +213,55 @@ byte span, 4.3f-S; `p100`'s `dirname_bytes` result has no view form for the `.` 
 4.3g-M07, 4.3g-BS, 4.4b-CV.
 
 Tests: §4 (rerun after this step, same counts). Hand build: separate crate outside the repo, 0 warnings.
+
+## 8. Step 4.4j (rows 4.4b-CV, 4.3g-T2)
+
+Structure table of the changed functions (generated `rs/rust` code vs `hand/opencode.rs`):
+
+| function | Pruv now (generated Rust) | hand Rust | types / ownership | loops | allocations / copies (Pruv vs hand) |
+|---|---|---|---|---|---|
+| `time::civil` (new, `pub`) | days shifted by 5 400-year cycles, truncating `/`, year shifted back by 2000; returns `Civil { year, month, day, rem }` | `div_euclid` / `rem_euclid`, returns `(i64, i64, i64, i64)` | named struct instead of a tuple: tuple types exist only in a single-file program (`parse/tuple_module`, row P6-2) | 0 vs 0 | 0 vs 0 |
+| `time::format_iso` | `civil(ms)` + 24 digit writes into `alloc(24)`; empty result when the guarded ranges fail | `civil(ms)` + `format!` | `[u8]` vs `String` (unchanged) | 0 vs 0 | 1 vs 1 |
+| `rows::format_ext` | `civil(ms)` + reserve 27 + pushes (was a second copy of the calendar walk) | `civil(ms)` + `format!("+{year:06}..")` | `[u8]` vs `String` (unchanged) | 0 vs 0 | 1 vs 1 |
+| `entry::Attach` / `entry::Model` | `Attach { open, model: Model }`, `enum Model { Absent, Pair(String, String) }` | `Collector { open, model: Option<(String, String)> }` | owned pair; a dedicated enum because an `Option` payload cannot hold `str` (`type/type_argument`) and tuples are P6-2 | - | - |
+| `entry::feed_assistant` (model part) | both fields nonempty strings ⇒ `mt.model = Pair(str_at(pm), str_at(mi))`, old pair dropped | both `as_str()` nonempty ⇒ `c.model = Some((p.to_owned(), m.to_owned()))` | owned per message | 0 vs 0 | 2 vs 2 per eligible assistant message (`str_at` moves the decoded string out, no second copy) |
+| `convert::model_bytes` | `match model`: `Absent` ⇒ empty; `Pair(p, m)` ⇒ reserve `p + 1 + m`, append, push `/`, append | `map_or_else(String::new, format!("{p}/{m}"))` | borrows the pair | 0 vs 0 | 1 vs 1 |
+| `convert` message loop | `Attach { open: false, model: Absent }`, `model_bytes(mt.model)` after the loop | `Collector { open: false, model: None }`, `model(&c)` | same | same | 0 vs 0 |
+
+| row | state | change |
+|---|---|---|
+| 4.4b-CV | closed | `pkgs/time` exposes `pub struct Civil` and `pub fn civil(ms)` (requires `-62167219200000 <= ms <= 8640000000000000`, ensures `0 <= rem < 86400000`). `format_iso` and `rows::format_ext` both call it; the calendar arithmetic exists once, as in the hand. `format_iso`'s contract is unchanged; both callers keep their range guards (the calendar arithmetic itself is tested, not proved) |
+| 4.3g-F2 | closed | with 4.4b-CV `format_ext` is `civil` + one reserved buffer, the hand's shape |
+| 4.3g-T2 | closed | `Attach` holds the owned pair like the hand (`Model::Pair(str, str)`), set per eligible assistant message; `model_bytes` joins it at the end. Tape ids are gone. The pair lengths are carried as `is_variant` / `variant_field` facts through `feed`, `feed_user`, `feed_assistant` and the convert loop invariant |
+
+New / remaining rows:
+
+| row | what stays | why |
+|---|---|---|
+| 4.4j-TU (language, new) | `Civil` is a named struct, `Model` a dedicated enum, where the hand uses a 4-tuple and `Option<(String, String)>` | tuples are single-file only (`parse/tuple_module`, P6-2); an `Option` payload cannot hold `str` (`type/type_argument`). Same layout and allocations; the names differ |
+| 4.4j-ME (bench) | `model_bytes` returns empty when a decoded side is empty; the hand has no such check | `str_at` gives `""` for a corrupt tape (`InternalInvariant`); kept so that the corrupt-tape result stays the old one. Unreachable on a valid tape (both sides passed `nonempty_string`) |
+| 4.3g-T (iso part) | `entry::iso_bytes` keeps `copy(iso.text)` | `move iso.text` of the `pkgs/time` struct is `type/foreign_move` (4.3d-M); unchanged |
+
+Tests (`rs/rust` and `rs/llvm`, `PRUVC_RS` release binary; all consumers of `pkgs/time`):
+
+| slice | test_impl | q |
+|---|---|---|
+| opencode | 199/199 on both; `q_mutants.py --check` 16/16 markers | `--cases 300`: exact 406 on both, unexplained 0 (classes as 4.4f) |
+| codex | ts/oracle 136/136; 136/136 on both | `q.py 300`: exact 262 + policy P1/P2/P3/P4/P6/P8 on both, no differing case (exit 1 only from the absent frozen py runners) |
+| grok (`GROK_TS_TRANSPILER`) | 254/254 on both | `--cases 300` (554 cases): exact 450 + policy classes, unexplained 0 |
+| qwen | verifier PASS; 26/26 on both | not run: `qwen/q.py` hardwires the frozen py pairs |
+
+Other-model comparison (Codex gpt-6.2-astra, read-only, generated `rs/rust` vs `hand/opencode.rs`, no conclusions
+given). Equal: `civil` for every ms in the contract range (the 5-cycle shift cancels against `- 2000`, no `i64`
+overflow in range), the 24 / 27 output bytes on the plain / extended ranges, `db_iso`, and the `feed_assistant`
+order (summary skipped first, model replaced before the `open` check). Differences it reported and how they stand:
+- `Civil` struct vs 4-tuple, month / year set by a conditional overwrite vs `if` expressions: 4.4j-TU; no loop or
+  heap allocation on either side.
+- `format_iso` / `format_ext` keep their range guard returning empty and zero-fill `alloc(24)` / reserve 27 instead
+  of `format!`: unchanged (contracts allow an empty result; the bytes are tested, see 4.4b-CV).
+- `feed_assistant` filters on the raw token span (`> 2` with quotes) before `str_at`; the hand decodes and checks
+  `is_empty()`. Same set on a valid tape (a raw span longer than `""` decodes to at least one character).
+- `model_bytes(Pair("", "m"))` is empty where the hand would give `/m`: 4.4j-ME, unreachable through `feed`.
+- Convert loop: message id vector + index loop, the flat turns store zero-filled up front and the grow-and-retry
+  return `1`: row VL and the existing loop shape, outside this step. No `Attach` / model copy per message.
+No new row from the comparison.

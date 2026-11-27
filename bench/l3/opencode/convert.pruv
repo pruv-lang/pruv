@@ -57,21 +57,24 @@ fn export_title(doc: crate::json::JsonDocument, root: i64) -> str ! alloc
   return clean_title(s);
 }
 
-// providerID + "/" + modelID of the last eligible pair (tape ids), empty when there is none.
-fn model_bytes(doc: crate::json::JsonDocument, pid: i64, mid: i64) -> [u8] ! alloc
-  ensures len(result) <= 100663298
+// providerID + "/" + modelID of the last eligible pair (hand `model`), empty when there is none (or a string decoded
+// empty: `str_at` gives "" for a corrupt tape).
+fn model_bytes(model: crate::entry::Model) -> [u8] ! alloc
+  requires is_variant(model, crate::entry::Model::Pair) ==> (len(variant_field(model, crate::entry::Model::Pair, p)) <= 50331648 && len(variant_field(model, crate::entry::Model::Pair, m)) <= 50331648)
+  ensures len(result) <= 100663297
 {
-  let none: [u8] = alloc(0, 0);
-  if pid < 0 || mid < 0 { return none; }
-  let p: str = crate::util::str_at(doc, pid);
-  let m: str = crate::util::str_at(doc, mid);
-  if len(p) == 0 || len(m) == 0 { return none; }
   let mut b: [u8] = alloc(0, 0);
-  arr_reserve(inout b, len(p) + 1 + len(m));
-  arr_append(inout b, p, 0, len(p));
-  arr_push(inout b, 47);
-  arr_append(inout b, m, 0, len(m));
-  return b;
+  match model {
+    crate::entry::Model::Absent => { return b; }
+    crate::entry::Model::Pair(p, m) => {
+      if len(p) == 0 || len(m) == 0 { return b; }
+      arr_reserve(inout b, len(p) + 1 + len(m));
+      arr_append(inout b, p, 0, len(p));
+      arr_push(inout b, 47);
+      arr_append(inout b, m, 0, len(m));
+      return b;
+    }
+  }
 }
 
 fn shape_error() -> [i64] ! alloc
@@ -162,12 +165,12 @@ fn convert_doc(doc: crate::json::JsonDocument, fallback: str) -> [i64] ! alloc
   let mut st: [i64] = crate::turns::new_state();
   let mut sl: [i64] = crate::turns::new_slots();
   let mut buf: [u8] = crate::turns::new_buffer();
-  let mut mt: crate::entry::Attach = crate::entry::Attach { open: false, pid: -1, mid: -1 };
+  let mut mt: crate::entry::Attach = crate::entry::Attach { open: false, model: crate::entry::Model::Absent };
   let mut j: i64 = 0;
   while j < n
     invariant 0 <= j && j <= n && n <= 1048576 && n == len(ids)
     invariant len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= j && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
-    invariant -1 <= mt.pid && -1 <= mt.mid
+    invariant is_variant(mt.model, crate::entry::Model::Pair) ==> (len(variant_field(mt.model, crate::entry::Model::Pair, p)) <= 50331648 && len(variant_field(mt.model, crate::entry::Model::Pair, m)) <= 50331648)
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
     decreases n - j
@@ -185,7 +188,7 @@ fn convert_doc(doc: crate::json::JsonDocument, fallback: str) -> [i64] ! alloc
   let col: crate::turns::Collected = crate::turns::finish(st, sl, buf, 0);
   let mut title: str = export_title(doc, root);
   if len(title) == 0 { title = copy(fallback); }
-  let model: [u8] = model_bytes(doc, mt.pid, mt.mid);
+  let model: [u8] = model_bytes(mt.model);
   let pv: crate::plan::PlanValue = crate::plan::select(doc, msgs, 0);
   if pv.status != 0 { return crate::packet::simple_error(1, 27, 3, 6); }
   return assemble(col, title, model, pv);
