@@ -2728,3 +2728,18 @@ Changes `bench/l3/pkgs/transport`, `codex/rpc.pruv` and a comment in `grok/rpc.p
   json a0-a5 (37 / 351 / 114 / 454 / 6344 / 83), supervisor a0-a3 (522 / 410 / 78 / 35), grok 254, qwen 27, mcp 22,
   codex 136, opencode `--jobs 2` 199.
 - Not measured (4.4l-VU still differs on alignment, 4.4zc-PA).
+
+## L-gaps 19: G-DB33-1/2 proof attempt (kept on a side branch), LGAPS16-DC closed
+
+| Row | Kind | Change | Tests |
+|---|---|---|---|
+| G-DB33-1/2 (4.4l-CT) | proof, left (time cap) | Not merged here. Work kept on branch `lair/pruv-l-gaps-19-row1-wip` (`fa5c2a7f`). Verifier: a `forall` over a one-element range `lo..lo + 1` without triggers becomes its body at `lo` (equivalent, and the counts in the body become ground terms the frame and split lemmas match), and a nonzero `count` gets a witness `F(x, y) != 0 ==> x <= W < y && body(W)` in the split stage. `pkgs/parse`: `record`, `open_container`, `container` and `scan_records` carry `contained`/`linked`/`starts_from`/`tree_ok` (the five `check_tape` subtree facts) and per-record child counts and key/value parity; `scan` and `scan_document` ensure `doc_parents` and `tree_ok`; `json::check_subtrees` and its call in `lines::parse_owned` are removed. Blocker: `@parse::container` proves only with the witness lemma in the split stage, and several asserts after the value record sit at the 10 s per-query limit: one run passed (127 s), the same source later hit `canceled` at the parity assert after the key record under load (147 s), and an added branch-end count assert made `forall t in vb + 1..H: P != id` unprovable. `a5_root` verify goes from 7.2 s to 127-155 s. Moving the witness lemma to stage 1 breaks four other obligations. Next: split `container`'s per-record bookkeeping into a lemma-style helper (`record` ensures the count step itself) so no obligation needs stage 2 | — |
+| 4.4c-IS | language, left (time cap) | not started | — |
+| 4.4h-ST | left | depends on 4.4c-IS | — |
+| 4.4h-VD | left (time cap) | not started | — |
+| LGAPS16-DC | closed, no change | The L-gaps 16 review named dead code after a `return` in the new arm move path but its location was never recorded (`work/lgaps16` lists only the fixes), and the paths L-gaps 18 read (llvmgen aggregate move, check.rs record binder, foreign.rs move arms) have none. Closed as unlocatable; a new review that finds it opens a new row | — |
+
+4.4zc-PA stays open and is not taken (no byte-array address without unsafe).
+
+- No compiler or bench change on this branch, so no checks were run here; the side branch was verified only by the
+  `a5_root` compile runs above. No review (nothing to review on this branch). Not measured.
