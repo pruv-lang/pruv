@@ -1,0 +1,9 @@
+// spec: R-6g9-12 reject
+// after swap the old values are exchanged: claiming the first place kept its value is not proved
+fn f() -> i64 {
+  let mut a: i64 = 3;
+  let mut b: i64 = 4;
+  swap(inout a, inout b);
+  assert a == 3;
+  return a;
+}

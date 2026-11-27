@@ -1,0 +1,11 @@
+{
+  "gen_contains": ["fn swap(a: &mut i64, b: &mut i64)", "pub fn replace(x: i64, y: i64) -> i64"],
+  "gen_absent": ["::std::mem::swap", "::std::mem::replace"],
+  "run": {
+    "backends": ["rust", "llvm"],
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["730"],
+    "alloc_balance": true
+  }
+}

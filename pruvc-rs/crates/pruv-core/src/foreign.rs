@@ -1819,6 +1819,9 @@ impl<'a> Ownership<'a> {
     }
 
     fn takes(&self, e: &Call) -> Vec<bool> {
+        if e.name == "replace" && !self.funcs.contains_key(&e.name) && matches!(e.args.first(), Some(Expr::InoutArg(_))) {
+            return vec![false, true]; // R-6g9-12: `replace(inout P, e)` consumes e into P
+        }
         match if self.funcs.contains_key(&e.name) { None } else { catalog_fn(&e.name) } {
             Some(f) => f.params.iter().enumerate().map(|(i, p)| {
                 p.take || (e.name == "map_insert" && i == 1 && crate::llvmgen::expr_ty(&e.args[i]).as_deref() == Some("string")) || (i + 1 == e.args.len() && matches!(e.name.as_str(), "vec_push" | "map_insert")

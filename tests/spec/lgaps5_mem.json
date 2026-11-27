@@ -1,0 +1,10 @@
+{
+  "gen_contains": ["::std::mem::swap(&mut a, &mut b)", "::std::mem::replace(", "::std::mem::swap(&mut s.data, &mut t.data)"],
+  "run": {
+    "backends": ["rust", "llvm"],
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["50157769"],
+    "alloc_balance": true
+  }
+}

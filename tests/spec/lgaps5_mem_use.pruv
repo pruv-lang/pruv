@@ -1,0 +1,22 @@
+// spec: R-6g9-12 accept
+// P10 audit: the old value of `replace` read in place (a borrowed argument, `len`) and an old struct passed on;
+// the old value is dropped once on both backends and is the old value, not the new one.
+struct Buf { data: [u8], tag: i64 }
+
+fn tag_of(b: Buf) -> i64 ensures result == b.tag { return b.tag; }
+
+fn first(b: [u8]) -> i64 requires len(b) >= 1 ensures result >= 0 && result <= 2 { if b[0] == 2 { return 2; } return 0; }
+
+fn checksum() -> i64 ! alloc {
+  let mut x: [u8] = alloc(3, 7);
+  let z: [u8] = alloc(1, 2);
+  let n: i64 = len(replace(inout x, move z));
+  let w: [u8] = alloc(2, 5);
+  let f: i64 = first(replace(inout x, move w));
+  let d1: [u8] = alloc(1, 1);
+  let d2: [u8] = alloc(1, 1);
+  let mut s: Buf = Buf { data: move d1, tag: 4 };
+  let t: Buf = Buf { data: move d2, tag: 9 };
+  let g: i64 = tag_of(replace(inout s, move t));
+  return n * 1000 + f * 100 + g * 10 + s.tag - 9 + len(x);
+}

@@ -1924,7 +1924,7 @@ impl<'a> FnGen<'a> {
         f: &'a Function,
         verified: bool,
     ) -> FnGen<'a> {
-        let resize_slots = crate::check::resize_slot_names(f, &m.resize_params);
+        let resize_slots = crate::check::resize_slot_names_mem(f, &m.resize_params, &|n| !funcs.contains_key(n));
         let static_strs = crate::codegen::static_str_locals(f, funcs);
         FnGen {
             m,
@@ -2941,6 +2941,55 @@ impl<'a> FnGen<'a> {
     }
 
     /// Address of a mutable place in caller storage.
+    /// R-6g9-12: read the value at an inout place (a local / inout slot, or a field path in its storage form)
+    fn mem_read(&mut self, place: &Expr) -> R<V> {
+        if let Expr::Var(x) = place {
+            if let Bind::Slot(s) = self.lookup(&x.name)? {
+                return self.load(&s);
+            }
+        }
+        let ty = need_ty(expr_ty(place))?.to_string();
+        let p = self.inout_place_ptr(place)?;
+        let raw = self.op(format!("load {}, ptr {}", st(&ty, false), p))?;
+        self.unpack(&raw, &ty, false)
+    }
+
+    fn mem_write(&mut self, place: &Expr, v: &V) -> R<()> {
+        if let Expr::Var(x) = place {
+            if let Bind::Slot(s) = self.lookup(&x.name)? {
+                return self.store(&s, v);
+            }
+        }
+        let ty = need_ty(expr_ty(place))?.to_string();
+        let p = self.inout_place_ptr(place)?;
+        let raw = self.pack(v, &ty, false)?;
+        self.ins(format!("store {} {}, ptr {}", st(&ty, false), raw, p))
+    }
+
+    /// `swap(inout P, inout Q)`: read both, write crossed; `replace(inout P, e)`: read P, evaluate e as an owned
+    /// value, write it, and return the old value (an owned result, Rust `std::mem::replace`)
+    fn mem_call(&mut self, e: &Call, owned: bool) -> R<V> {
+        let place = |i: usize| -> R<&Expr> {
+            match e.args.get(i) {
+                Some(Expr::InoutArg(x)) => Ok(&*x.expr),
+                _ => Err(format!("llvmgen: {} expects an inout place", e.name)),
+            }
+        };
+        let p = place(0)?;
+        let mut old = self.mem_read(p)?;
+        old.p = None; // the value, not the place's storage (the place is overwritten below)
+        if e.name == "swap" {
+            let q = place(1)?;
+            let other = self.mem_read(q)?;
+            self.mem_write(p, &other)?;
+            self.mem_write(q, &old)?;
+            return Ok(V::unit());
+        }
+        let new = self.ev(arg(&e.args, 1)?, true)?;
+        self.mem_write(p, &new)?;
+        self.fresh(old, owned) // a borrowed use drops the old value with the statement's temporaries
+    }
+
     fn inout_place_ptr(&mut self, e: &Expr) -> R<String> {
         match e {
             Expr::Var(x) => match self.lookup(&x.name)? {
@@ -6085,6 +6134,9 @@ impl<'a> FnGen<'a> {
         }
         if n == "vec_pop" && !self.funcs.contains_key(n) && native_vec_call_elem(e) == Some(VIEW_ELEM) {
             return self.catalog_call(e, owned); // L3-VP: pop a view list
+        }
+        if matches!(n, "swap" | "replace") && !self.funcs.contains_key(n) && matches!(a.first(), Some(Expr::InoutArg(_))) {
+            return self.mem_call(e, owned); // R-6g9-12: std::mem::swap / std::mem::replace
         }
         if n == "alloc" {
             let cnt = self.ev(arg(a, 0)?, false)?; // source order in all modes: n, then v

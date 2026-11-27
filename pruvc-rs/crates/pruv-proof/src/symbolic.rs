@@ -3939,6 +3939,25 @@ impl<'a> FnVerifier<'a> {
             "vec_pop" if !self.funcs.contains_key(n) && matches!(x.args.first(), Some(Expr::InoutArg(_))) => {
                 return self.catalog_call(e, x, &args, st, g, code);
             }
+            // R-6g9-12 (P10): `swap(inout P, inout Q)` / `replace(inout P, e)` write the places in order
+            // (the checker rejects overlapping places), `replace` returns `old(P)`
+            "swap" | "replace" if !self.funcs.contains_key(n) && matches!(x.args.first(), Some(Expr::InoutArg(_))) => {
+                let fresh = |v: &Val| match v {
+                    Val::Arr(a) => Val::Arr(a.like(a.a.clone(), a.n.clone(), n)),
+                    v => v.clone(),
+                };
+                let (old, new) = (fresh(arg(0)?), fresh(arg(1)?));
+                let Expr::InoutArg(p) = &x.args[0] else { unreachable!() };
+                self.store_collection_place(&p.expr, st, new, g)?;
+                if n == "replace" {
+                    self.post_refine(e, &[0], st, g)?;
+                    return Ok(old);
+                }
+                let Expr::InoutArg(q) = &x.args[1] else { return Err("swap: second argument is not inout".into()) };
+                self.store_collection_place(&q.expr, st, old, g)?;
+                self.post_refine(e, &[0, 1], st, g)?;
+                return Ok(Val::Unit);
+            }
             "print" => return Ok(Val::Unit),
             // G3: the datatype of the argument's own type (the legacy one for Option<i64> / Result<i64>)
             "is_some" | "some_val" => {

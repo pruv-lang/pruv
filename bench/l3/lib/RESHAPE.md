@@ -1619,6 +1619,7 @@ All after the last code change (F1 / F4 from the structure comparison).
   - LG4-B4: tests not yet written: `[u8]` list allocation balance on loop early return / `break` / `?`; an
     `inout [u8]` parameter pushed, and `arr_push(inout src)` while the list is live; `vec_pop` in a contract;
     `Vec<ref str>` from `vec_new::<ref [u8]>()`; a `[u8]` list in a program where G3 mono runs.
+
 ## Step 4.4j: OpenCode rows 4.4b-CV, 4.3g-T2 (and 4.3g-F2)
 
 - `pkgs/time`: new `pub struct Civil { year, month, day, rem }` and `pub fn civil(ms) -> Civil` (same requires as
@@ -1667,3 +1668,39 @@ All after the last code change (F1 / F4 from the structure comparison).
   1. Language: 4.4k-VS (view-list join or element lengths in contracts) and 4.4k-SR (`String` reserve), then 4.4b-NV
      with the draft in `opencode/RESHAPE.md` §9 and 4.3g-K3.
   2. Then the Next list after 4.4g (items 2-5).
+
+
+### Bundle L-gaps 5 (2026-11-27, capped at 1 hour)
+
+- P10 `replace`/`swap`: done (R-6g9-12). `swap(inout P, inout Q)` and `replace(inout P, e) -> T` on owned values
+  and scalars; places are locals, field paths and `inout` parameters. Rust `::std::mem::swap` /
+  `::std::mem::replace`, LLVM loads and stores (slots for locals and parameters, the storage form through the place
+  pointer for fields). Proof: after `replace`, the result is `old(P)` and `P == e`; after `swap` the two values are
+  exchanged. Overlapping places are `type/inout_alias`. The names are contextual: a user function named `swap` or
+  `replace` is called as before (tests/spec/lgaps5_user_mem.pruv). An `inout` array parameter passed to either is a
+  resizable parameter (`&mut Vec`). Tests tests/spec/lgaps5_*.pruv, allocation balance on both backends.
+- Still open (not reached within the cap): 4.4h-FA (in-place append to a `[u8]` field of a local, `inout` or Vec
+  element struct), LG4-B1 (vec_pop check wording vs. LLVM), LG4-B2 (LLVM `--no-verify` pop failure does not free the
+  list buffer). P10-M1: a Vec element (`v[i]`) is not accepted as a `swap`/`replace` place.
+- Audit (A: Codex gpt-6.2-astra high, spec and tests). Fixed: the verifier's `swap`/`replace` branch skipped the
+  post-call range check of a refined local place (tests `lgaps5_swap_refine`, `lgaps5_replace_refine`); SPEC named
+  `swap(inout s.f, inout s)` as an alias case (it is `type/inout_argument`, the types differ) and linked the
+  same-field test as "a field and its struct"; added the `replace` value-reads-place reject (`lgaps5_replace_alias`).
+  Advisory rows:
+  - LG5-T1: reject tests for contract use, a type argument, a wrong arity, a non-place, a missing `inout`, a
+    read-only parameter, `inout` on the `replace` value, a `replace` value type mismatch, `borrow_signature`, an owned
+    local without `move` / reused after it.
+  - LG5-T2: accept tests for a field of an `inout` struct parameter, nested fields, two fields of one struct, `[i64]`
+    and `Vec<T>` places, and the bytes (not only lengths) after a swap.
+- Audit (B: Claude opus high, codegen and LLVM; it could not build or run, findings from code reading). Reproduced
+  and fixed on LLVM: the old value of `replace` used in place (`len(replace(..))`, a borrowed argument) was never
+  freed, and an old struct still pointed at the overwritten place, so a callee read the new value (Rust `3242`,
+  LLVM `3292`, 5 allocations / 2 frees; test `lgaps5_mem_use`). The old value is now detached from the place and
+  dropped with the statement's temporaries. Now rejected by the checker (LLVM emitted wrong IR or failed inside):
+  a fixed-length array place (`lgaps5_replace_fixed`), an `inout` `Vec` / `HashMap` parameter or a map binder as a
+  place (`lgaps5_swap_vec_param`). Advisory rows:
+  - LG5-B1: a fixed-length array place (Rust could take it; LLVM needs the storage form for `[T; N]` slots).
+  - LG5-B2: handle types (`Process`, `Socket`, `File`, `Loop`) and `Option<Struct>` as places are not tested.
+  - LG5-B3: tests for a boxed field path, cost mode, and a user `fn swap(inout a: [i64], i: i64, j: i64)`.
+  - LG5-B4: `mem_builtin` reads `prog.functions` while the backends read `fmap`/`funcs`; not shown to differ.
+

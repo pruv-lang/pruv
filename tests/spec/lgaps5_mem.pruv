@@ -1,0 +1,73 @@
+// spec: R-6g9-12 accept
+// P10: `swap(inout P, inout Q)` / `replace(inout P, e)` (hand Rust `std::mem::swap(&mut a, &mut b)` /
+// `std::mem::replace(&mut s.buf, Vec::new())`) on scalars, byte arrays, Strings and struct fields; the verifier
+// knows the swapped values and that `replace` returns old(P) and leaves P == e.
+struct Buf { data: [u8], tag: i64 }
+
+fn ints() -> i64
+  ensures result == 50
+{
+  let mut a: i64 = 3;
+  let mut b: i64 = 40;
+  swap(inout a, inout b);
+  assert a == 40 && b == 3;
+  let old: i64 = replace(inout a, 7);
+  assert old == 40 && a == 7;
+  return a + b + old;
+}
+
+fn bytes() -> i64 ! alloc
+  ensures result == 125
+{
+  let mut x: [u8] = alloc(2, 1);
+  let mut y: [u8] = alloc(5, 2);
+  swap(inout x, inout y);
+  assert len(x) == 5 && len(y) == 2;
+  let z: [u8] = alloc(1, 9);
+  let prev: [u8] = replace(inout x, move z);
+  assert len(prev) == 5 && len(x) == 1 && x[0] == 9;
+  return len(x) * 100 + len(y) * 10 + len(prev);
+}
+
+fn grow(inout d: [u8], inout e: [u8]) -> () ! alloc
+  ensures len(d) == old(len(e)) && len(e) == old(len(d))
+{
+  swap(inout d, inout e);
+}
+
+fn take_tag(inout k: i64) -> i64
+  ensures result == old(k) && k == 0
+{
+  return replace(inout k, 0);
+}
+
+fn fields() -> i64 ! alloc
+  ensures result == 32117
+{
+  let d1: [u8] = alloc(3, 4);
+  let d2: [u8] = alloc(1, 6);
+  let mut s: Buf = Buf { data: move d1, tag: 5 };
+  let mut t: Buf = Buf { data: move d2, tag: 8 };
+  swap(inout s.data, inout t.data);
+  assert len(s.data) == 1 && len(t.data) == 3;
+  swap(inout s.tag, inout t.tag);
+  assert s.tag == 8 && t.tag == 5;
+  let fresh: [u8] = alloc(2, 1);
+  let was: [u8] = replace(inout s.data, move fresh);
+  swap(inout s, inout t);
+  assert len(t.data) == 2 && s.tag == 5 && len(s.data) == 3;
+  let mut n1: String = string_from("ab");
+  let mut n2: String = string_from("xyz");
+  swap(inout n1, inout n2);
+  let n3: String = replace(inout n1, string_from("q"));
+  return len(was) * 10 + len(t.data) + s.tag + len(n1) * 100 + len(n2) * 1000 + len(n3) * 10000;
+}
+
+fn checksum() -> i64 ! alloc {
+  let mut p: [u8] = alloc(4, 0);
+  let mut q: [u8] = alloc(6, 0);
+  grow(inout p, inout q);
+  let mut k: i64 = 12;
+  let r: i64 = take_tag(inout k);
+  return ints() * 1000000 + bytes() * 1000 + len(p) * 100 + len(q) * 10 + r + k + fields();
+}

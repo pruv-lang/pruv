@@ -2188,7 +2188,8 @@ impl<'a> Gen<'a> {
         self.resizable_inouts = f.params.iter().enumerate()
             .filter(|(i, p)| is_array_name(&p.ty) && self.resize_params.contains(&(f.name.clone(), *i)))
             .map(|(_, p)| p.name.clone()).collect();
-        self.resize_slots = crate::check::resize_slot_names(f, &self.resize_params);
+        let fmap = &self.fmap;
+        self.resize_slots = crate::check::resize_slot_names_mem(f, &self.resize_params, &|n| !fmap.contains_key(n));
         self.pinned.clear();
         crate::foreign_shim::walk_stmts(&f.body, &mut |node| {
             if let crate::foreign_shim::Node::Let(s) = node {
@@ -5111,6 +5112,33 @@ pruv_hi <= (pruv_b.len() as i128) && \
         Ok(())
     }
 
+    /// R-6g9-12: `swap(inout P, inout Q)` -> `::std::mem::swap(&mut P, &mut Q)`, `replace(inout P, e)` ->
+    /// `::std::mem::replace(&mut P, e)` (an array place is a whole `&mut Vec<T>`)
+    fn mem_call(&mut self, n: &str, a: &[Expr]) -> R<String> {
+        let mut place = |this: &mut Self, e: &Expr| -> R<String> {
+            let Expr::InoutArg(ia) = e else { return Err(format!("codegen: {n} expects an inout place")) };
+            let (root, path) = field_place(&ia.expr);
+            let Expr::Var(v) = root else { return Err(format!("codegen: inout operand is not a place: {:?}", ia.expr)) };
+            let ty = v.ty.as_deref().unwrap_or("");
+            Ok(if !path.is_empty() {
+                format!("&mut {}.{}", v.name, path.join("."))
+            } else if is_array_name(ty) {
+                this.array_mut_arg(&v.name, true)
+            } else if !this.cost && this.inouts.contains(&v.name) {
+                v.name.clone()
+            } else {
+                this.mut_ref(&v.name)
+            })
+        };
+        let p = place(self, arg(a, 0)?)?;
+        if n == "swap" {
+            let q = place(self, arg(a, 1)?)?;
+            return Ok(format!("::std::mem::swap({p}, {q})"));
+        }
+        let v = self.own_e(arg(a, 1)?)?;
+        Ok(format!("::std::mem::replace({p}, {v})"))
+    }
+
     fn mut_ref(&self, name: &str) -> String {
         if self.inouts.contains(name) { format!("&mut *{}", name) } else { format!("&mut {}", name) }
     }
@@ -6337,6 +6365,10 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 }
                 if n == "vec_pop" && !self.fmap.contains_key(n) && self.view_list_arg(x).is_some() {
                     return self.catalog_call(x); // L3-VP: pop a view list
+                }
+                if matches!(n, "swap" | "replace") && !self.fmap.contains_key(n)
+                    && matches!(a.first(), Some(Expr::InoutArg(_))) {
+                    return self.mem_call(n, a); // R-6g9-12: std::mem::swap / std::mem::replace
                 }
                 let callee: Option<&'a Function> = if self.g6 { self.fmap.get(n).copied() } else { None };
                 if let Some(cf) = callee {

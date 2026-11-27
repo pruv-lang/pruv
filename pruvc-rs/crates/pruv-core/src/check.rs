@@ -1161,7 +1161,8 @@ fn resizing_params(prog: &Program, length_only: bool) -> HashSet<(String, usize)
             match call {
                 None => { resizes.insert(source); }
                 Some((call, i)) => {
-                    if vec_resize_builtin(&call.name) || (array_grow_builtin(&call.name) && (call.name != "arr_reserve" || !length_only)) {
+                    if vec_resize_builtin(&call.name) || (array_grow_builtin(&call.name) && (call.name != "arr_reserve" || !length_only))
+                        || mem_builtin(prog, &call.name) {
                         resizes.insert(source);
                     } else {
                         forwarded.entry((call.name.clone(), i)).or_default().push(source);
@@ -1181,14 +1182,27 @@ fn resizing_params(prog: &Program, length_only: bool) -> HashSet<(String, usize)
     resizes
 }
 
+/// R-6g9-12: `swap` / `replace` with no user function of that name replace a whole place (`std::mem`), so an
+/// array place behind them is a resizable `&mut Vec<T>`.
+pub(crate) fn mem_builtin(prog: &Program, name: &str) -> bool {
+    matches!(name, "swap" | "replace") && !prog.functions.iter().any(|f| f.name == name)
+}
+
 /// Bare array arguments to resizing functions need owned, addressable storage.
+/// A `swap` / `replace` place (`mem`) is a resizing use as well.
 pub(crate) fn resize_slot_names(f: &Function, resizes: &HashSet<(String, usize)>) -> HashSet<String> {
+    resize_slot_names_mem(f, resizes, &|_| false)
+}
+
+/// `mem(name)`: `name` is the `swap` / `replace` builtin (no user function of that name).
+pub(crate) fn resize_slot_names_mem(f: &Function, resizes: &HashSet<(String, usize)>, mem: &dyn Fn(&str) -> bool) -> HashSet<String> {
     let mut resize_slots = HashSet::new();
     walk_resize_uses(&f.body, &HashMap::new(), &mut |name, root, call| {
         let Some((call, i)) = call else { return; };
         let Expr::InoutArg(arg) = &call.args[i] else { unreachable!() };
         if arg.ty.as_deref().is_some_and(crate::typeinfo::is_array_name)
-            && (array_grow_builtin(&call.name) || resizes.contains(&(call.name.clone(), i)))
+            && (array_grow_builtin(&call.name) || resizes.contains(&(call.name.clone(), i))
+                || matches!(call.name.as_str(), "swap" | "replace") && mem(&call.name))
         {
             resize_slots.insert(name.to_owned());
             resize_slots.extend(root.map(str::to_owned));
@@ -4244,7 +4258,7 @@ impl Checker {
         for (call, conditional) in calls {
             let f = self.funcs.get(&call.name);
             if f.is_some() || array_grow_builtin(&call.name)
-                || matches!(call.name.as_str(), "map_remove" | "map_take" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice" | "ev_read_into" | "ev_proc_read_into") {
+                || matches!(call.name.as_str(), "map_remove" | "map_take" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice" | "ev_read_into" | "ev_proc_read_into" | "swap" | "replace") {
                 let marked: Vec<&crate::ast::InoutArg> = call
                     .args
                     .iter()
@@ -7737,7 +7751,7 @@ impl Checker {
     /// whole argument list.
     fn inout_args(&mut self, e: &mut Call, f: &FuncInfo, m: &Mapping, scope: &Scope, c: bool) -> Res<()> {
         let n = e.name.clone();
-        let user_call = self.funcs.contains_key(&n);
+        let user_call = self.funcs.contains_key(&n) || f.src_name == "pruv::mem";
         let collection_place = !user_call && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "map_take" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice");
         let mut marked = Vec::new();
         for i in 0..e.args.len().min(f.params.len()) {
@@ -7892,6 +7906,84 @@ impl Checker {
             ));
         }
         Ok(())
+    }
+
+    /// R-6g9-12 (P10): `swap(inout P, inout Q)` and `replace(inout P, e) -> T` (Rust `std::mem::swap` /
+    /// `std::mem::replace`). Contextual: a user function of the same name wins (see `call`).
+    fn mem_call(&mut self, e: &mut Call, scope: &Scope, c: bool) -> Res<GType> {
+        let n = e.name.clone();
+        let (line, col) = (e.line, e.col);
+        if c {
+            return Err(terr(line, col, "effect_in_contract", format!("{n} is not allowed in contracts"), ""));
+        }
+        if e.targs.is_some() {
+            return Err(terr(line, col, "type_arity", format!("{n} takes no type arguments"), ""));
+        }
+        if e.args.len() != 2 {
+            return Err(terr(line, col, "arity", format!("{} takes 2 argument(s), got {}", n, e.args.len()), ""));
+        }
+        let Expr::InoutArg(a) = &mut e.args[0] else { unreachable!() };
+        let ty = match &*a.expr {
+            Expr::Var(v) => self.lookup(v.line, v.col, &v.name, scope, &[])?.ty,
+            Expr::FieldAccess(_) => self.expr(&mut a.expr, scope, c)?,
+            other => return Err(terr(other.line(), other.col(), "inout_argument",
+                format!("the first argument of {n} must be a local, a field path or an inout parameter"), "")),
+        };
+        if self.borrowed_type_argument(&ty) {
+            return Err(terr(line, col, "borrow_signature", format!("{n} takes owned values, not {}", tn(&ty)), ""));
+        }
+        if ty.is_fixed() {
+            return Err(terr(line, col, "inout_argument", format!("{n} does not take a fixed-length array place"),
+                "swap or replace the elements, or use a resizable array"));
+        }
+        // the places an assignment may replace whole: an inout parameter (or a map binder) only when it is a scalar,
+        // a resizable array or a struct (an inout String / Vec / HashMap parameter is a handle, not storage)
+        let swap = n == "swap";
+        for i in 0..(if swap { 2 } else { 1 }) {
+            if let Expr::InoutArg(a) = &e.args[i] {
+                if let Expr::Var(v) = &*a.expr {
+                    let entry = self.lookup(v.line, v.col, &v.name, scope, &[])?;
+                    let whole = entry.ty.int_width().is_some() || entry.ty == boolt() || entry.ty.is_array()
+                        || self.is_struct(&entry.ty);
+                    if entry.kind == "map_inout" || (entry.kind == "inout" && !whole) {
+                        return Err(terr(v.line, v.col, "immutable",
+                            format!("inout parameter {} cannot be replaced as a whole by {n}", v.name),
+                            "copy it into a `let mut` local, or change it through its own operations"));
+                    }
+                }
+            }
+        }
+        let f = FuncInfo {
+            src_name: "pruv::mem".into(),
+            line: 0,
+            col: 0,
+            params: if swap { vec![ty.clone(), ty.clone()] } else { vec![ty.clone()] },
+            pnames: if swap { vec!["a".into(), "b".into()] } else { vec!["dest".into()] },
+            inout: if swap { vec![true, true] } else { vec![true] },
+            ret: if swap { unitt() } else { ty.clone() },
+            effects: Vec::new(),
+            tparams: Vec::new(),
+            foreign: false,
+            opaque: false,
+            pred: false,
+            holds_args: true,
+        };
+        self.inout_args(e, &f, &Mapping::default(), scope, c)?;
+        if !swap {
+            let value = &mut e.args[1];
+            if matches!(value, Expr::InoutArg(_)) {
+                return Err(terr(value.line(), value.col(), "inout_argument",
+                    "the value argument of replace is not inout", "remove `inout`"));
+            }
+            self.want_alloc(value, &ty);
+            self.expect(value, &ty, scope, false, None)?;
+            if ty.is_array() || ty == strt() {
+                self.array_source(value.line(), value.col(), value, scope, false, &ty)?;
+            }
+            self.own(value, scope)?;
+        }
+        e.ty = Some(f.ret.to_key());
+        Ok(f.ret)
     }
 
     /// P2 batch 4: load_be(a: [u8], i, n) -> i64 (code and contracts) and the statement-only store_be(inout a, i, w, n);
@@ -8515,6 +8607,10 @@ impl Checker {
         };
         if crate::borrowed::is_view_list_targ(&targs) && !self.funcs.contains_key(&n) {
             return self.view_list_call(e, scope, c);
+        }
+        if matches!(n.as_str(), "swap" | "replace") && !self.funcs.contains_key(&n)
+            && matches!(e.args.first(), Some(Expr::InoutArg(_))) {
+            return self.mem_call(e, scope, c);
         }
         if n.starts_with("vec_") && !self.funcs.contains_key(&n) {
             // R-6g9-10: a view list takes only the `ref str` operations
