@@ -7,7 +7,7 @@
 // Result: [0, nsnap, kept, trimmed, total, ...12*nsnap snapshot words, ...10*kept turn words, ...text bytes]
 //         [1, position] for a malformed program.
 // A snapshot is [begun, current, lost, slot, plen, rlen, budget, tools, clipped, created, completed, ordinal]
-// of the state slot st[3] (the newest begun draft, or slot 0 before any begin); its ordinal is begun - 1 (-1 before any begin).
+// of the current draft index (begun - 1) % 200 (slot 0 and zero fields before any begin); its ordinal is begun - 1 (-1 before any begin).
 mod json;
 mod jstr;
 mod text;
@@ -73,47 +73,54 @@ fn read_text(prog: [i64], pos: i64) -> Txt ! alloc
 struct Step { next: i64 }
 
 // One op at pos; the new position, or -1 for a malformed op (state untouched on every -1).
-fn step(prog: [i64], pos: i64, inout st: [i64], inout sl: [i64], inout buf: [u8], inout snaps: [i64]) -> Step ! alloc
+fn step(prog: [i64], pos: i64, inout col: crate::turns::Collector, inout snaps: [i64]) -> Step ! alloc
   requires 0 <= pos && pos < len(prog) && len(prog) <= 100000000
-  requires crate::turns::spans(st, sl, len(buf)) && len(snaps) == 769
-  requires 0 <= st[0] && st[0] <= pos && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
-  requires st[4] <= 32792 * (pos / 5)
+  requires crate::turns::ok(col) && col.begun <= pos && len(snaps) == 769
   requires 0 <= snaps[0] && snaps[0] <= 64
-  requires crate::turns::fields(sl)
-  ensures len(old(buf)) <= len(buf) && len(snaps) == 769
-  ensures crate::turns::spans(st, sl, len(buf))
+  ensures crate::turns::ok(col) && len(snaps) == 769
   ensures result.next == -1 || (pos < result.next && result.next <= len(prog))
-  ensures 0 <= st[0] && (result.next == -1 || st[0] <= result.next) && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
-  ensures result.next != -1 ==> st[4] <= 32792 * (result.next / 5)
+  ensures result.next == -1 || col.begun <= result.next
   ensures 0 <= snaps[0] && snaps[0] <= 64
-  ensures crate::turns::fields(sl)
 {
   let op: i64 = prog[pos];
   if op == 2 {
-    crate::turns::skip_user(inout st);
+    crate::turns::skip_user(inout col);
     return Step { next: pos + 1 };
   }
   if op == 4 {
-    crate::turns::tool(inout st, inout sl);
+    crate::turns::tool(inout col);
     return Step { next: pos + 1 };
   }
   if op == 5 {
     let nsn: i64 = snaps[0];
     if nsn >= 64 { return Step { next: -1 }; }
-    let c: i64 = st[3];
     let at: i64 = 1 + 12 * nsn;
-    snaps[at] = st[0];
-    snaps[at + 1] = st[1];
-    snaps[at + 2] = st[2];
-    snaps[at + 3] = st[3];
-    snaps[at + 4] = sl[8 * c];
-    snaps[at + 5] = sl[8 * c + 1];
-    snaps[at + 6] = sl[8 * c + 2];
-    snaps[at + 7] = sl[8 * c + 3];
-    snaps[at + 8] = sl[8 * c + 4];
-    snaps[at + 9] = sl[8 * c + 5];
-    snaps[at + 10] = sl[8 * c + 6];
-    snaps[at + 11] = st[0] - 1;
+    snaps[at] = col.begun;
+    snaps[at + 1] = 0;
+    if col.active { snaps[at + 1] = 1; }
+    snaps[at + 2] = 0;
+    if col.lost { snaps[at + 2] = 1; }
+    let mut k: i64 = 0;
+    let mut f: [i64] = alloc(7, 0);
+    if col.begun >= 1 {
+      k = crate::turns::current(col);
+      f[0] = len(vec_get::<crate::turns::Draft>(col.drafts, k).prompt);
+      f[1] = len(vec_get::<crate::turns::Draft>(col.drafts, k).reply);
+      f[2] = vec_get::<crate::turns::Draft>(col.drafts, k).used;
+      f[3] = vec_get::<crate::turns::Draft>(col.drafts, k).tools;
+      if vec_get::<crate::turns::Draft>(col.drafts, k).clipped { f[4] = 1; }
+      f[5] = len(vec_get::<crate::turns::Draft>(col.drafts, k).created) / 24;
+      f[6] = len(vec_get::<crate::turns::Draft>(col.drafts, k).completed) / 24;
+    }
+    snaps[at + 3] = k;
+    snaps[at + 4] = f[0];
+    snaps[at + 5] = f[1];
+    snaps[at + 6] = f[2];
+    snaps[at + 7] = f[3];
+    snaps[at + 8] = f[4];
+    snaps[at + 9] = f[5];
+    snaps[at + 10] = f[6];
+    snaps[at + 11] = col.begun - 1;
     snaps[0] = nsn + 1;
     return Step { next: pos + 1 };
   }
@@ -126,10 +133,9 @@ fn step(prog: [i64], pos: i64, inout st: [i64], inout sl: [i64], inout buf: [u8]
     if len(s) != len(a.bytes) { return Step { next: -1 }; }
     if len(b.bytes) != 0 && len(b.bytes) != 24 { return Step { next: -1 }; }
     if op == 1 {
-      crate::turns::begin(inout st, inout sl, inout buf, s, b.bytes);
+      crate::turns::begin(inout col, s, b.bytes);
     } else {
-      let limit: i64 = st[4] + 32792;
-      crate::turns::answer(inout st, inout sl, inout buf, s, b.bytes, limit);
+      crate::turns::answer(inout col, s, b.bytes);
     }
     return Step { next: b.next };
   }
@@ -141,25 +147,20 @@ pub fn run(prog: [i64]) -> [i64] ! alloc
   if len(prog) < 1 || len(prog) > 100000000 { return pair(1, 0); }
   let base: i64 = prog[0];
   if base < 0 || base > 3500000 { return pair(1, 0); }
-  let mut st: [i64] = crate::turns::new_state();
-  let mut sl: [i64] = crate::turns::new_slots();
-  let mut buf: [u8] = crate::turns::new_buffer();
+  let mut col: crate::turns::Collector = crate::turns::new_collector();
   let mut snaps: [i64] = alloc(769, 0);
   let mut pos: i64 = 1;
   while pos < len(prog)
     invariant 1 <= pos && pos <= len(prog) && len(prog) <= 100000000 && 0 <= base && base <= 3500000
-    invariant crate::turns::spans(st, sl, len(buf)) && len(snaps) == 769
-    invariant 0 <= st[0] && st[0] <= pos && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
-    invariant st[4] <= 32792 * (pos / 5)
+    invariant crate::turns::ok(col) && col.begun <= pos && len(snaps) == 769
     invariant 0 <= snaps[0] && snaps[0] <= 64
-    invariant crate::turns::fields(sl)
     decreases len(prog) - pos
   {
-    let step_result: Step = step(prog, pos, inout st, inout sl, inout buf, inout snaps);
+    let step_result: Step = step(prog, pos, inout col, inout snaps);
     if step_result.next < 0 { return pair(1, pos); }
     pos = step_result.next;
   }
-  let plan: crate::turns::Plan = crate::turns::plan(st, sl, len(buf));
+  let plan: crate::turns::Plan = crate::turns::plan(col);
   let ns: i64 = snaps[0];
   let head: i64 = 5 + 12 * ns;
   // A3 refs include base, but the fixture packet omits the base bytes.
@@ -167,9 +168,9 @@ pub fn run(prog: [i64]) -> [i64] ! alloc
   arr_reserve(inout text, plan.bytes);
   let mut turns: [i64] = alloc(0, 0);
   arr_reserve(inout turns, 10 * plan.kept);
-  crate::turns::put_turns(inout turns, inout text, base, st, sl, buf, plan.kept);
+  crate::turns::put_turns(inout turns, inout text, base, col, plan.kept);
   let mut flag: i64 = 0;
-  if plan.kept < st[0] { flag = 1; }
+  if plan.kept < col.begun { flag = 1; }
   let mut out: [i64] = alloc(0, 0);
   arr_reserve(inout out, head + len(turns) + len(text));
   arr_push(inout out, 0, ns, plan.kept, flag, plan.total);

@@ -334,8 +334,10 @@ def main():
                         report['cells'].extend(cells)
                         report['samples'][cells[0]['name']] = samples
                         t, r = cells
-                        print(f'| {name} | {op} | {pair} | {t["hand"]:.6f} | {t["pruv"]:.6f} | {t["ratio"]:.3f} | '
-                              f'{r["hand"] / 1048576:.3f} | {r["pruv"] / 1048576:.3f} | {r["ratio"]:.3f} |', flush=True)
+                        num = lambda v, spec: '—' if v is None else format(v, spec)
+                        print(f'| {name} | {op} | {pair} | {num(t["hand"], ".6f")} | {num(t["pruv"], ".6f")} | '
+                              f'{num(t["ratio"], ".3f")} | {r["hand"] / 1048576:.3f} | {r["pruv"] / 1048576:.3f} | '
+                              f'{num(r["ratio"], ".3f")} |', flush=True)
             fixtures.write('\n]\n')
         report['packet_checks'] = dict(hand_vs_oracle=hand_checks, pruv_vs_hand_vs_oracle=pair_checks)
         args.out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
