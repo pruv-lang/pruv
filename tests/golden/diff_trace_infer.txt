@@ -2014,7 +2014,7 @@ runtime|tests/runtime/lg5_rt_scalar_inout.pruv	1 case: obl=7 1	--infer=bc1f2dadc
 runtime|tests/runtime/lg5_rt_struct_len_frame.pruv	1 case: obl=37 1	--infer=309cf4de77db
 runtime|tests/runtime/lg6_rt_field_inout.pruv	1 case: obl=17 1	--infer=874ad3f8c3f9
 runtime|tests/runtime/lg6_rt_view.pruv	1 case: obl=53 1	--infer=8e3f0277d8b7
-runtime|tests/runtime/lg7_rt_bitops.pruv	1 case: obl=14 1	--infer=308c5ca28c3e
+runtime|tests/runtime/lg7_rt_bitops.pruv	1 case: obl=14 1	--infer=9b3be93b2cf4
 runtime|tests/runtime/lg7_rt_field_gep.pruv	1 case: obl=47 1	--infer=d3496cf26dd3
 runtime|tests/runtime/lg7_rt_read_into.pruv	1 case: obl=786 1	--infer=ae858f528810
 runtime|tests/runtime/lg8_rt_copy_subview.pruv	1 case: obl=24 1	--infer=db988ac8d074
@@ -2053,11 +2053,11 @@ runtime|tests/runtime/p2_r_u16_paths.pruv	1 case: obl=26 1	--infer=2ddade2318a5
 runtime|tests/runtime/p2_r_u16_push_oor.pruv	1 case: obl=5 1	--infer=954f2960cd5b
 runtime|tests/runtime/p2_rt_bits.pruv	1 case: obl=16 1	--infer=b3bdea7ca77d
 runtime|tests/runtime/p2_rt_contract_guard.pruv	1 case: obl=1 1	--infer=0ee76cd2ff0e
-runtime|tests/runtime/p2_rt_kernels.pruv	1 case: obl=288 1	--infer=78af47c14227
+runtime|tests/runtime/p2_rt_kernels.pruv	1 case: obl=288 1	--infer=bce7c4505994
 runtime|tests/runtime/p2_rt_shift_guard.pruv	1 case: obl=1 1	--infer=f4ac37ce5fc5
 runtime|tests/runtime/p2_rt_shifts.pruv	1 case: obl=50 1	--infer=2db2d01c974d
 runtime|tests/runtime/p2_rt_words.pruv	1 case: obl=115 1	--infer=7fd6674e4b32
-runtime|tests/runtime/p2_rt_wrap.pruv	1 case: obl=20 1	--infer=d5503b04f4f7
+runtime|tests/runtime/p2_rt_wrap.pruv	1 case: obl=20 1	--infer=4d29244f561e
 runtime|tests/runtime/p31f_inout_field.pruv	1 case: obl=2 1	--infer=24ee3c64bcda
 runtime|tests/runtime/p31f_map_iter.pruv	1 case: obl=14 1	--infer=cd5a5c340f79
 runtime|tests/runtime/p31f_nested_record_map.pruv	1 case: obl=11 1	--infer=d73eecd39656

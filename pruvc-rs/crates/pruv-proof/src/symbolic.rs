@@ -2388,15 +2388,17 @@ impl<'a> FnVerifier<'a> {
     /// `assume(st, g, fact)` (line 340).
     /// L-gaps 18 (4.4zc-WL): the 64-bit pattern of a bit builtin operand: its recorded pattern (a loaded word or a bit
     /// builtin result, assuming the byte facts of a loaded word) in code, else `Int2BV(v, 64)`.
-    fn bit_operand(&self, v: &Ast, st: &mut State, g: &[Ast], code: bool) -> Ast {
+    /// The flag says whether the operand had a recorded pattern; only then is the result recorded, so bit builtins
+    /// over plain values keep the `Int2BV` encoding that contracts (evaluated outside code) also use.
+    fn bit_operand(&self, v: &Ast, st: &mut State, g: &[Ast], code: bool) -> (Ast, bool) {
         match self.bv_shadow.get(&v.id()) {
             Some((_, pat, links)) if code => {
                 for l in links {
                     self.assume(st, g, l.clone());
                 }
-                pat.clone()
+                (pat.clone(), true)
             }
-            _ => v.int2bv(64),
+            _ => (v.int2bv(64), false),
         }
     }
 
@@ -3068,8 +3070,8 @@ impl<'a> FnVerifier<'a> {
                         return Ok(Val::Int(value));
                     }
                     // L-gaps 18 (4.4zc-WL): an operand that is a loaded word or a bit result keeps its pattern.
-                    let a = self.bit_operand(&l, st, g, code);
-                    let k = self.bit_operand(&r, st, g, code);
+                    let (a, sa) = self.bit_operand(&l, st, g, code);
+                    let (k, sk) = self.bit_operand(&r, st, g, code);
                     let word = match op {
                         "&" => a.bvand(&k),
                         "|" => a.bvor(&k),
@@ -3086,7 +3088,7 @@ impl<'a> FnVerifier<'a> {
                         &u.raw_lt(&self.z.int_str("9223372036854775808")),
                         &u, &u.sub(&self.z.int_str("18446744073709551616")),
                     );
-                    if code && !self.bv_shadow.contains_key(&value.id()) {
+                    if code && (sa || sk) && !self.bv_shadow.contains_key(&value.id()) {
                         self.bv_shadow.insert(value.id(), (value.clone(), word.clone(), Vec::new()));
                     }
                     if code {
@@ -3830,8 +3832,8 @@ impl<'a> FnVerifier<'a> {
                 let x0 = arg(0)?.try_ast()?.clone();
                 let y0 = arg(1)?.try_ast()?.clone();
                 // L-gaps 18 (4.4zc-WL): an operand that is a loaded word or a bit builtin result keeps its pattern.
-                let bx = self.bit_operand(&x0, st, g, code);
-                let by = self.bit_operand(&y0, st, g, code);
+                let (bx, sx) = self.bit_operand(&x0, st, g, code);
+                let (by, sy) = self.bit_operand(&y0, st, g, code);
                 let u = match n {
                     "band" => bx.bvand(&by),
                     "bor" => bx.bvor(&by),
@@ -3849,7 +3851,7 @@ impl<'a> FnVerifier<'a> {
                     &u,
                     &u.sub(&self.z.int_str("18446744073709551616")),
                 );
-                if code && !self.bv_shadow.contains_key(&r.id()) {
+                if code && (sx || sy) && !self.bv_shadow.contains_key(&r.id()) {
                     self.bv_shadow.insert(r.id(), (r.clone(), ubv, Vec::new()));
                 }
                 if code && (n == "wrapping_shl" || n == "ushr") {
