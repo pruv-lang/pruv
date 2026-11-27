@@ -1069,6 +1069,8 @@ pub struct FnVerifier<'a> {
     pub qstack: Vec<Ast>,
     /// P13o: opaque function name -> its uninterpreted symbol `opq!F`.
     pub(crate) opq_fns: HashMap<String, FuncDecl>,
+    /// 4.4k-VS (R-6g9-13): array sort -> `S(a, k)`, the length sum of the first `k` views of a view list
+    view_sums: HashMap<String, FuncDecl>,
     /// `s.aggs`: (kind, Tc.sexpr(), len(outer)) → F. Insertion order preserved (`len(aggs)` goes into the F name).
     pub(crate) aggs: Vec<((String, String, usize), FuncDecl)>,
     /// LG4 `s.agg_shapes`: (kind, F, body, shape, arity) for the aggregate frame lemma.
@@ -1612,6 +1614,7 @@ impl<'a> FnVerifier<'a> {
             seen: HashSet::new(),
             qstack: Vec::new(),
             opq_fns: HashMap::new(),
+            view_sums: HashMap::new(),
             aggs: Vec::new(),
             agg_shapes: Vec::new(),
             lemmas: Vec::new(),
@@ -3935,6 +3938,13 @@ impl<'a> FnVerifier<'a> {
             _ if pruv_core::foreign::is_catalog(n) && !self.funcs.contains_key(n) => {
                 return self.catalog_call(e, x, &args, st, g, code);
             }
+            // 4.4k-VS (R-6g9-13): `vec_views_len::<ref T>(parts, k)` (contracts only)
+            "vec_views_len" if !self.funcs.contains_key(n) => {
+                let v = arg(0)?.try_arr()?.clone();
+                let k = arg(1)?.try_ast()?.clone();
+                let r = self.view_sum_at(&v, &k, st, g)?;
+                return Ok(Val::Int(r));
+            }
             // L3-VP: `vec_pop` exists only on a view list (the checker admits no other use)
             "vec_pop" if !self.funcs.contains_key(n) && matches!(x.args.first(), Some(Expr::InoutArg(_))) => {
                 return self.catalog_call(e, x, &args, st, g, code);
@@ -5158,6 +5168,10 @@ impl<'a> FnVerifier<'a> {
                     self.prove_core(&st, g, &ob, pos(e), "call_requires", "vec_pop: len(v) >= 1", None);
                 }
                 let popped = v.like(v.a.clone(), v.n.sub(&z.int(1)), n);
+                // 4.4k-VS: S(a, n) == S(a, n - 1) + len(a[n - 1])
+                let last = v.n.sub(&z.int(1));
+                let (s_n, s_m, w) = (self.view_sum(&v, &v.n)?, self.view_sum(&v, &last)?, self.view_elem_len(&v, &last)?);
+                self.assume(st, g, v.n.ge_i(1).implies(&s_n.eq(&s_m.add(&w))));
                 let Expr::InoutArg(place) = &x.args[0] else { unreachable!() };
                 self.store_collection_place(&place.expr, st, Val::Arr(popped), g)?;
                 return Ok(Val::Unit);
@@ -5173,6 +5187,11 @@ impl<'a> FnVerifier<'a> {
                 if let Expr::InoutArg(place) = &x.args[0] {
                     // R-6g9-10: `vec_push::<ref str>(inout parts, v)` on a view list writes the list in place
                     // (view lists carry no element sums: their elements are borrowed strings)
+                    // 4.4k-VS: S(a', n + 1) == S(a, n) + len(x) for a' = a[n := x]
+                    let (s_old, s_new) = (self.view_sum(&v, &v.n)?, self.view_sum(&pushed, &pushed.n)?);
+                    let w = self.view_elem_len(&pushed, &v.n)?;
+                    let s_zero = self.view_sum(&v, &z.int(0))?;
+                    self.assume(st, g, z.and(&[s_zero.eq(&z.int(0)), w.ge_i(0), s_new.eq(&s_old.add(&w))]));
                     self.store_collection_place(&place.expr, st, Val::Arr(pushed), g)?;
                     return Ok(Val::Unit);
                 }
@@ -5375,7 +5394,29 @@ impl<'a> FnVerifier<'a> {
                 self.assume(st, g, f2);
                 Ok(Val::Arr(res))
             }
-            "string_push_char" => {
+            "string_with_capacity" => {
+                // 4.4k-SR (R-6g9-14): an empty String with room reserved; capacity is not modelled
+                let nv = argv(0)?.try_ast()?.clone();
+                if code {
+                    let ob = z.and(&[nv.ge_i(0), nv.le_i(MAX_LEN)]);
+                    self.prove_core(&st, g, &ob, pos(e), "call_requires", &what, None);
+                }
+                let res_v = self.try_fresh(n, &Ty::User("string".to_string()))?;
+                let res = res_v.try_arr()?.clone();
+                self.assume(st, g, res.n.eq(&z.int(0)));
+                Ok(Val::Arr(res))
+            }
+            "string_reserve" => {
+                // 4.4k-SR (R-6g9-14): reserving room keeps the bytes
+                let sv = argv(0)?.try_arr()?.clone();
+                let nv = argv(1)?.try_ast()?.clone();
+                if code {
+                    let ob = z.and(&[nv.ge_i(0), nv.le_i(MAX_LEN)]);
+                    self.prove_core(&st, g, &ob, pos(e), "call_requires", &what, None);
+                }
+                Ok(Val::Arr(sv.like(sv.a.clone(), sv.n.clone(), n)))
+            }
+            "string_push_char" | "string_prepend_char" => {
                 // LB9 (R-6g8-2): append the UTF-8 encoding of one Unicode scalar value
                 let sv = argv(0)?.try_arr()?.clone();
                 let c = argv(1)?.try_ast()?.clone();
@@ -5395,9 +5436,12 @@ impl<'a> FnVerifier<'a> {
                 self.assume(st, g, res.n.eq(&sv.n.add(&w)));
                 let k = z.int_const("str!k");
                 let rng = z.and(&[k.ge_i(0), k.lt(&sv.n)]);
-                let keep = res.a.select(&k).eq(&sv.a.select(&k));
+                // 4.4k-SR (R-6g9-14): string_prepend_char puts the encoding at 0 and shifts s by w
+                let front = n == "string_prepend_char";
+                let (kept, base) = if front { (res.a.select(&w.add(&k)), z.int(0)) } else { (res.a.select(&k), sv.n.clone()) };
+                let keep = kept.eq(&sv.a.select(&k));
                 self.assume(st, g, z.forall(std::slice::from_ref(&k), &rng.implies(&keep), &[]));
-                let b: Vec<Ast> = (0..4).map(|i| res.a.select(&sv.n.add_i(i))).collect();
+                let b: Vec<Ast> = (0..4).map(|i| res.a.select(&base.add_i(i))).collect();
                 let dv = |d: i64| c.div(&z.int(d));
                 let lead = |base: i64, d: i64| z.int(base).add(&dv(d));
                 let cont = |d: i64| z.int(128).add(&dv(d).modulo(&z.int(64)));
@@ -5430,6 +5474,54 @@ impl<'a> FnVerifier<'a> {
             }
             other => Err(format!("catalog: {}", other)),
         }
+    }
+
+    /// 4.4k-VS (R-6g9-13): `S(a, k)` of a view list (an uninterpreted sum, one per array sort)
+    fn view_sum(&mut self, v: &Arr, k: &Ast) -> R<Ast> {
+        let sort = v.a.sort();
+        let key = sort.name();
+        if !self.view_sums.contains_key(&key) {
+            let name = format!("vviews!{}", self.view_sums.len());
+            let d = self.z.func_decl(&name, &[sort, self.z.int_sort()], &self.z.int_sort());
+            self.view_sums.insert(key.clone(), d);
+        }
+        Ok(self.view_sums[&key].apply(&[v.a.clone(), k.clone()]))
+    }
+
+    /// the length of the view `a[j]` of a view list
+    fn view_elem_len(&self, v: &Arr, j: &Ast) -> R<Ast> {
+        let text = self.field_val(&v.elem_ty(), v.a.select(j), "vec_views_len")?;
+        Ok(text.try_arr()?.n.clone())
+    }
+
+    /// 4.4k-VS (R-6g9-13): `vec_views_len(parts, k)` with the definition instances around `k` (all sound: a sum of
+    /// non-negative lengths): S(a, 0) == 0, 0 <= S(a, k) <= S(a, n) for 0 <= k <= n, and the steps
+    /// S(a, k + 1) == S(a, k) + len(a[k]) (k < n) and S(a, k) == S(a, k - 1) + len(a[k - 1]) (1 <= k <= n)
+    fn view_sum_at(&mut self, v: &Arr, k: &Ast, st: &mut State, g: &[Ast]) -> R<Ast> {
+        let z = self.z.clone();
+        let zero = z.int(0);
+        let one = z.int(1);
+        let (s0, sk, sn) = (self.view_sum(v, &zero)?, self.view_sum(v, k)?, self.view_sum(v, &v.n)?);
+        let (k1, km) = (k.add(&one), k.sub(&one));
+        let (sk1, skm) = (self.view_sum(v, &k1)?, self.view_sum(v, &km)?);
+        let (wk, wkm) = (self.view_elem_len(v, k)?, self.view_elem_len(v, &km)?);
+        let in_range = z.and(&[k.ge_i(0), k.le(&v.n)]);
+        let facts = vec![
+            s0.eq(&zero),
+            sn.ge_i(0),
+            in_range.implies(&z.and(&[sk.ge_i(0), sk.le(&sn)])),
+            z.and(&[k.ge_i(0), k.lt(&v.n)]).implies(&z.and(&[wk.ge_i(0), sk1.eq(&sk.add(&wk)), sk1.le(&sn)])),
+            z.and(&[k.ge_i(1), k.le(&v.n)]).implies(&z.and(&[wkm.ge_i(0), sk.eq(&skm.add(&wkm))])),
+        ];
+        for fact in facts {
+            if self.qstack.is_empty() {
+                self.assume(st, g, fact);
+            } else {
+                let guarded = z.and(g).implies(&fact);
+                st.pc.push(z.forall(&self.qstack, &guarded, &[]));
+            }
+        }
+        Ok(sk)
     }
 
     fn observe_vec_element(&self, st: &mut State, g: &[Ast], v: &Arr, i: &Ast) -> R<bool> {

@@ -1,0 +1,48 @@
+// spec: R-6g9-15 accept
+struct Draft { reply: [u8], n: i64 }
+struct Coll { drafts: Vec<Draft>, total: i64 }
+
+fn grow_at(inout c: Coll, i: i64, src: str) -> () ! alloc
+  requires 0 <= i && i < len(c.drafts) && len(c.drafts[i].reply) + len(src) < 1000
+  ensures len(c.drafts) == len(old(c).drafts)
+  ensures len(c.drafts[i].reply) == len(old(c).drafts[i].reply) + len(src) + 1
+  ensures c.drafts[i].reply[len(c.drafts[i].reply) - 1] == 33
+  ensures c.drafts[i].n == old(c).drafts[i].n
+  ensures forall k in 0..len(c.drafts): k != i ==> len(c.drafts[k].reply) == len(old(c).drafts[k].reply)
+  ensures forall k in 0..len(c.drafts): k != i ==> c.drafts[k].n == old(c).drafts[k].n
+{
+  match vec_at_mut::<Draft>(inout c.drafts, i) {
+    Some(d) => {
+      arr_append(inout d.reply, src, 0, len(src));
+      arr_push(inout d.reply, 33);
+    }
+    None => {}
+  }
+}
+
+fn digest(inout c: Coll) -> i64
+  requires len(c.drafts) == 2 && len(c.drafts[0].reply) <= 9 && 1 <= len(c.drafts[1].reply) && len(c.drafts[1].reply) <= 9 && 0 <= c.drafts[0].n && c.drafts[0].n <= 9
+{
+  let mut a: i64 = 0;
+  match vec_at_mut::<Draft>(inout c.drafts, 1) {
+    Some(d) => { a = len(d.reply) * 1000 + d.reply[len(d.reply) - 1]; }
+    None => {}
+  }
+  match vec_at_mut::<Draft>(inout c.drafts, 0) {
+    Some(d) => { a = a + len(d.reply) * 100 + d.n; }
+    None => {}
+  }
+  return a;
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let r: [u8] = alloc(0, 0);
+  let q: [u8] = alloc(1, 7);
+  let v0: Vec<Draft> = vec_push::<Draft>(vec_new::<Draft>(), Draft { reply: move r, n: 4 });
+  let mut c: Coll = Coll { drafts: vec_push::<Draft>(move v0, Draft { reply: move q, n: 5 }), total: 0 };
+  grow_at(inout c, 1, "ab");
+  grow_at(inout c, 1, "xyz");
+  grow_at(inout c, 0, "");
+  assert len(c.drafts[1].reply) == 8 && len(c.drafts[0].reply) == 1;
+  return digest(inout c);
+}

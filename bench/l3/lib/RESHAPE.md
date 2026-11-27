@@ -1704,3 +1704,30 @@ All after the last code change (F1 / F4 from the structure comparison).
   - LG5-B3: tests for a boxed field path, cost mode, and a user `fn swap(inout a: [i64], i: i64, j: i64)`.
   - LG5-B4: `mem_builtin` reads `prog.functions` while the backends read `fmap`/`funcs`; not shown to differ.
 
+
+### Bundle L-gaps 6
+
+- Closed 4.4k-VS (R-6g9-13): `vec_views_len::<ref T>(parts, k)`, the total byte length of the first `k` views of a
+  view list, contract-only. The verifier keeps a running sum per list (`vec_push` adds, `vec_pop` subtracts,
+  `vec_clear` resets), so a builder that copies every view proves its length bound without a run-time guard. Tests
+  `lgaps6_views_len` (path normalizer), `lgaps6_views_len_bytes`; rejects `lgaps6_views_len_code`,
+  `lgaps6_views_len_wrong`, `lgaps6_views_len_targ`.
+- Closed 4.4k-SR (R-6g9-14): catalog `string_with_capacity(n)`, `string_reserve(s, n)`, `string_prepend_char(s, c)`
+  on both backends (Rust `String::with_capacity` / `reserve` / `insert(0, c)`, G6 shim adapters on LLVM). The
+  verifier proves `0 <= n <= MAX_LEN` and keeps the bytes (prepend: encoding at 0..w, old byte k at w+k). Tests
+  `lgaps6_str_reserve`; rejects `lgaps6_str_prepend_wrong`, `lgaps6_str_cap_range`.
+- Closed 4.4h-FA (R-6g9-15): `arr_append` / `arr_push` on the `inout d.f` field of a `vec_at_mut` binder already
+  worked through R-6g-3; the row documents it with frame ensures. Tests `lgaps6_field_append`; reject
+  `lgaps6_field_append_frame`.
+- Closed LG4-B1: R-6g9-11 now says the LLVM `vec_pop` check runs whenever the `vec_get` bounds check is on.
+- Closed LG4-B2: the LLVM view-list `vec_pop` and `vec_reserve` failure blocks now free live temporaries and scope
+  owners before `pruv_panic_requires` (`Fail::RequiresFreed`). Test `lgaps6_pop_free` (unverified empty pop, exit
+  101, balanced allocations).
+- New rows:
+  - LG6-VJ: no catalog join of a view list (`out.join("/")`); the normalizer still builds the result byte by byte.
+  - LG6-FR: a run-time `requires` over a Vec element field is `codegen/unsupported_type` under `--no-verify`, so
+    `lgaps6_field_append` runs verified only.
+  - LG6-SB: the bytes after a call whose `ensures` names only the length are unknown (as for any function); the
+    SR test inlines the reserve/prepend steps to check bytes.
+- Still open: P10-M1 (a Vec element `v[i]` as a `swap`/`replace` place) was not reached within the cap.
+- Next: P10-M1, LG6-VJ.

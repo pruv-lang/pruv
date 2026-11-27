@@ -1,0 +1,19 @@
+{
+  "run": {
+    "backends": [
+      "rust",
+      "llvm"
+    ],
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "2"
+    ],
+    "alloc_balance": true
+  }
+}

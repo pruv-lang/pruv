@@ -1,0 +1,8 @@
+// spec: R-6g9-14 reject
+fn front(take s: String) -> i64 ! alloc
+  requires len(s) <= 1000
+  ensures result == 233
+{
+  let t: String = string_prepend_char(move s, 233);
+  return string_byte(t, 0);
+}

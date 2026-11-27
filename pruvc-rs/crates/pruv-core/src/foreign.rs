@@ -41,7 +41,7 @@ pub struct CatFn {
 }
 
 /// CATALOG_NAMES of foreign.py (insertion order).
-pub const CATALOG_NAMES: [&str; 108] = [
+pub const CATALOG_NAMES: [&str; 111] = [
     "vec_new",
     "vec_push",
     "vec_get",
@@ -150,6 +150,9 @@ pub const CATALOG_NAMES: [&str; 108] = [
     "net_listener_port",
     "map_lookup",
     "map_updated",
+    "string_with_capacity",
+    "string_reserve",
+    "string_prepend_char",
 ];
 
 /// CATALOG_CONTRACT_ONLY of foreign.py.
@@ -334,6 +337,24 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
             tparams: vec![],
         },
         "string_push_char" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("s", string_t(), true), p("c", GType::i64(), false)],
+            ret: string_t(),
+            effects: alloc(),
+            tparams: vec![],
+        },
+        "string_with_capacity" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("n", GType::i64(), false)],
+            ret: string_t(),
+            effects: alloc(),
+            tparams: vec![],
+        },
+        "string_reserve" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("s", string_t(), true), p("n", GType::i64(), false)],
+            ret: string_t(),
+            effects: alloc(),
+            tparams: vec![],
+        },
+        "string_prepend_char" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("s", string_t(), true), p("c", GType::i64(), false)],
             ret: string_t(),
             effects: alloc(),
@@ -2530,7 +2551,7 @@ mod tests {
 
     #[test]
     fn catalog_shapes() {
-        assert_eq!(CATALOG_NAMES.len(), 108);
+        assert_eq!(CATALOG_NAMES.len(), 111);
         for n in CATALOG_NAMES.iter() {
             assert!(catalog_fn(n).is_some());
         }

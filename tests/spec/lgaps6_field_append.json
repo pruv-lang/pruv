@@ -1,0 +1,16 @@
+{
+  "gen_contains": [
+    "d.reply.extend_from_slice(",
+    "d.reply.push(pruv_v as u8)"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      []
+    ],
+    "stdout_lines": [
+      "8137"
+    ],
+    "alloc_balance": true
+  }
+}

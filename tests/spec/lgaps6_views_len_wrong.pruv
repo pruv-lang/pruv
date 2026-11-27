@@ -1,0 +1,10 @@
+// spec: R-6g9-13 reject
+// The sum is exact: after pushing "abc" and "de" and popping, the first piece's length is 3, not 4.
+fn checksum() -> i64 ! alloc {
+  let mut out: Vec<ref str> = vec_new::<ref str>();
+  vec_push::<ref str>(inout out, "abc");
+  vec_push::<ref str>(inout out, "de");
+  vec_pop::<ref str>(inout out);
+  assert vec_views_len::<ref str>(out, len(out)) == 4;
+  return len(out);
+}
