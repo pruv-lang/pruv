@@ -187,18 +187,6 @@ fn scalar(a: [u8], p: i64, stop: i64) -> Scalar
   if 55296 <= v && v <= 57343 { v = 65533; }
   return Scalar { next: np, value: v };
 }
-fn width(v: i64) -> i64
-  ensures 1 <= result && result <= 4
-  ensures v <= 127 ==> result == 1
-  ensures (127 < v && v <= 2047) ==> result == 2
-  ensures (2047 < v && v <= 65535) ==> result == 3
-  ensures v > 65535 ==> result == 4
-{
-  if v <= 127 { return 1; }
-  if v <= 2047 { return 2; }
-  if v <= 65535 { return 3; }
-  return 4;
-}
 pub fn string_utf8(source: [u8], start: i64, end: i64) -> [u8] ! alloc
   requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
   ensures len(result) <= 3 * (end - start)
@@ -217,8 +205,8 @@ fn decode_utf8(source: [u8], start: i64, end: i64, scanned: bool) -> [u8] ! allo
   return out;
 }
 
-// Count the output bytes, reserve capacity once, then copy each escape-free run in one `arr_append` and push each
-// decoded escape scalar as UTF-8 (hand mode 6: the same segments, `extend_from_slice` per run, `encode_utf8` per escape char).
+// One pass, as the hand decodes while parsing (`decoded.get_or_insert_with(Vec::new)`, `extend_from_slice` per
+// escape-free run, the escape scalar written as UTF-8, no count pass and no reserve; 4.4i-DP).
 // Appends to the caller's buffer (4.4i, hand `buf.extend_from_slice` into an existing `Vec`).
 pub fn decode_append(inout out: [u8], source: [u8], start: i64, end: i64, scanned: bool) -> () ! alloc
   requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
@@ -229,31 +217,6 @@ pub fn decode_append(inout out: [u8], source: [u8], start: i64, end: i64, scanne
   let mut p: i64 = start;
   let mut stop: i64 = start;
   if end - start >= 2 { p = start + 1; stop = end - 1; }
-  let first: i64 = p;
-  let mut need: i64 = 0;
-  while p < stop
-    invariant start <= first && first <= p && p <= stop && stop <= end
-    invariant 0 <= need && need <= 3 * (p - start)
-    decreases stop - p
-  {
-    let c: i64 = source[p];
-    if c != 92 && (scanned || c < 128) {
-      let run: i64 = p;
-      while p < stop && source[p] != 92 && (scanned || source[p] < 128)
-        invariant run < p || p == run
-        invariant start <= first && first <= run && run <= p && p <= stop && stop <= end
-        decreases stop - p
-      { p = p + 1; }
-      need = need + (p - run);
-    } else {
-      let s: Scalar = scalar(source, p, stop);
-      need = need + width(s.value);
-      p = s.next;
-    }
-  }
-
-  arr_reserve(inout out, base + need);
-  p = first;
   while p < stop
     invariant start <= p && p <= stop && stop <= end
     invariant len(out) <= base + 3 * (p - start)

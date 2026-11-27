@@ -10,6 +10,7 @@ pub struct Fault { position: i64, kind: i64 }
 pub fn validate_utf8(input: [u8], start: i64, end: i64) -> i64
   requires 0 <= start && start <= end && end <= len(input)
   ensures result == -1 || (start <= result && result < end)
+  ensures result == -1 ==> utf8_valid_span(input, start, end)
 {
   let mut i: i64 = start;
   // Skip 16-byte all-ASCII blocks (a min reduction over 255 - byte, which the backend vectorizes).
@@ -17,12 +18,16 @@ pub fn validate_utf8(input: [u8], start: i64, end: i64) -> i64
   while ok && i + 16 <= end
     invariant start <= i && i <= end && end <= len(input)
     invariant ok || start + 16 <= i
+    invariant ok ==> utf8_valid_span(input, start, i)
+    invariant !ok ==> utf8_valid_span(input, start, i - 16)
     decreases end - i
   {
     let mut m: i64 = 255;
     let mut k: i64 = 0;
     while k < 16
       invariant 0 <= k && k <= 16 && start <= i && i + 16 <= end && end <= len(input)
+      invariant 0 <= m && m <= 255
+      invariant forall j in 0..k: m <= 255 - input[i + j]
       decreases 16 - k
     { let r: i64 = 255 - input[i + k]; if r < m { m = r; } k = k + 1; }
     ok = m >= 128;
@@ -31,6 +36,7 @@ pub fn validate_utf8(input: [u8], start: i64, end: i64) -> i64
   if !ok { i = i - 16; }
   while i < end
     invariant start <= i && i <= end
+    invariant utf8_valid_span(input, start, i)
     decreases end - i
   {
     let c: i64 = input[i];
@@ -50,6 +56,7 @@ pub fn validate_utf8(input: [u8], start: i64, end: i64) -> i64
       while j < n
         invariant 2 <= j && j <= n && 2 <= n && n <= 4 && n <= end - i
         invariant start <= i && i < end && end <= len(input)
+        invariant forall t in 2..j: (128 <= input[i + t] && input[i + t] <= 191)
         decreases n - j
       {
         let continuation: i64 = input[i + j];
@@ -162,11 +169,13 @@ pub fn scan_string(input: [u8], inout pos: i64, end: i64) -> Result<(), Fault>
   requires 0 <= pos && pos < end && end <= len(input)
   requires input[pos] == 34
   ensures old(pos) < pos && pos <= end
+  ensures is_ok(result) ==> (old(pos) + 2 <= pos && utf8_valid_span(input, old(pos) + 1, pos - 1))
   ensures !is_ok(result) ==> (err_val(result).position == pos && 0 < err_val(result).kind && err_val(result).kind <= 17)
 {
   pos = pos + 1;
   while pos < end
     invariant old(pos) < pos && pos <= end && end <= len(input)
+    invariant utf8_valid_span(input, old(pos) + 1, pos)
     decreases end - pos
   {
     let c: i64 = input[pos];
@@ -189,6 +198,7 @@ pub fn scan_string(input: [u8], inout pos: i64, end: i64) -> Result<(), Fault>
           for k in 0..4
             invariant old(pos) < pos && pos <= end && end <= len(input)
             invariant pos >= hex_start
+            invariant utf8_valid_span(input, old(pos) + 1, pos)
           {
             if pos == end { return Err::<(), Fault>(Fault { position: pos, kind: 5 }); }
             let h: i64 = input[pos];

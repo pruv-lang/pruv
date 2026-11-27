@@ -88,6 +88,15 @@ pub pred fn doc_array_counts(d: JsonDocument) -> bool {
   return forall t in 0..len(d.tape) / 6: (d.tape[6 * t] == 5 ==> d.tape[6 * t + 5] == count(k in t + 1..d.tape[6 * t + 3]: d.tape[6 * k + 4] == t));
 }
 
+// 4.4i-UF: the bytes between the quotes of every string and key record are valid UTF-8 (the hand validates the line
+// once and borrows plain chunks as `&str`). Ensured by `parse::parse` and the `lines` builders for a Parsed document;
+// a caller that requires it views a plain span as `str` with no run-time scan (R-6g-10). A predicate, not a
+// JsonDocument invariant: as an invariant every call that passes a document in a loop re-proves the quantified
+// UTF-8 fact, and `access::find_ascii` times out on it (4.4l).
+pub pred fn doc_strings(d: JsonDocument) -> bool {
+  return forall t in 0..len(d.tape) / 6: ((d.tape[6 * t] == 4 || d.tape[6 * t] == 7) ==> utf8_valid_span(d.source, d.tape[6 * t + 1] + 1, d.tape[6 * t + 2] - 1));
+}
+
 pub fn make_error(position: i64, kind: i64) -> JsonError
   ensures result.position == position && result.kind == kind
 {
