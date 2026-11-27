@@ -2366,3 +2366,36 @@ Changes `bench/l3/pkgs/transport`, `pkgs/turns`, `mcp`, `grok`, `codex` (no comp
 - Next:
   1. 4.4v-SN once the language has a spawn option with a null stderr.
   2. 4.4v-RT with function parameters or a stderr sink type.
+
+### Rows after L-gaps 13
+
+- Closed 4.4w-VD (R-6e-3): the cause was the field set, not the module owner: an `[i64]` buffer field did not make
+  an owned aggregate (a local struct was rejected too). `[i64]` now counts like `[u8]`/`[u16]` (Rust `Vec<i64>`,
+  LLVM element drop of R-6e-22), so `Vec<json::JsonDocument>` compiles on both backends; a struct with an `[i64]`
+  field also moves under R-6e-12 and is a host-entry parameter under R-6f-6. `vec_get::<S>(v, i)` of an owned
+  aggregate is also a read-only call argument (Rust `&(*v.get_unchecked(i))`); a let copy, an owned argument and an
+  inout alias of the same Vec stay rejected. There is no move out: `vec_pop` is a view-list operation and there is
+  no `vec_remove`. `[bool]` and `str` fields stay out (no LLVM element-drop or field-borrow path); the four reject
+  tests that used `[i64]` as the "not owned" example now use `[bool]`, and the `[i64]` forms are accept tests.
+- Closed LG12-RS (R-6d-2, R-6g9-11): view-list `vec_reserve` checks `0 <= n && n <= 2^40` exactly when unverified
+  on both backends, like the other LG7-B4 operations; verified code proves it (`verify/call_requires`).
+- Closed LG12-QK (R-6g9-13): quantified rejects at `k == -1` and `k == n + 1`, and the in-range accept.
+- Still open: P10-M1, narrowed: `[T]` element places were closed in L-gaps 8 (the later "still open" lines were
+  stale); a `Vec<T>` collection element (`swap(inout v[i], ...)` with `v: Vec<i64>`) is still
+  `type/inout_argument` and needs the checker, the Vec verifier model and both backends. Not reached in the cap.
+  Also 4.4t-RV, 4.4s-FK.
+- Checks: `cargo test --release` ok; `run_all --only must_reject` 1378/1378; `spec_trace --only-rs` 2353/2353;
+  `--only g8_frontend --backend both` 39/39; `--only runtime --backend both` 3521/3521; `diff_rust --fuzz-count 20`
+  success after `m3_all --quick --update-golden` (all stages ok; digests of `g9_ext_in_vec`, the
+  `lgaps12_view_checks*` programs and mutants shifted by the new must_reject files changed); `--list-rows` diff
+  (14 new rows, `tests/run_all_rows.txt` updated); `bench/l3/qwen/test_impl.py` 27/27 rs/rust and rs/llvm.
+- Audit: one review round (Codex 2 account; the default account was at its limit). Fixed in a follow-up commit:
+  a nested holder-record field of a Vec element as a read-only argument moved out of the vector in Rust (now a
+  place borrow; test `lgaps13_vec_nested_field`); on LLVM a range-check failure
+  in a later argument leaked an owned value already moved into an earlier `take` argument (now dropped on that
+  path, 3/3 allocations against 3/2 before; test `lgaps13_take_then_fail`);
+  R-6e-3, R-6e-6 and R-6e-22 text (read-only argument context, `vec_clear`, the `[bool]`/`str` reason, buffer
+  field lists). Not taken: an upper-bound-only `vec_reserve` reject and a same-Vec `inout` alias test (optional).
+  Confirm review (same account): all three fixed, no new findings.
+- Next: P10-M1 for `Vec<T>` elements, then the hand's parsed-entry vector on top of 4.4w-VD (bench rows 4.3e-D /
+  4.4d-QS).

@@ -1,3 +1,3 @@
 // spec: R-6f-6 reject
-pub struct Raw { xs: [i64], k: i64 }
+pub struct Raw { xs: [bool], k: i64 }
 pub fn count(r: Raw) -> i64 { return len(r.xs); }

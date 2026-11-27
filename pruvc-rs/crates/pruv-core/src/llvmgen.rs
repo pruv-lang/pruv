@@ -6732,6 +6732,7 @@ impl<'a> FnGen<'a> {
             return self.trusted_call(f, e, owned);
         }
         let mut args: Vec<String> = Vec::new();
+        let mut pending: Vec<usize> = Vec::new();
         for (i, x) in a.iter().enumerate() {
             let prm = f.params.get(i).ok_or_else(|| IDX_ERR.to_string())?;
             if fixed_key(&prm.ty).is_some() {
@@ -6769,6 +6770,13 @@ impl<'a> FnGen<'a> {
                 // LG9: the callee owns (and drops) fresh storage holding an owned value
                 let v = self.ev(x, true)?;
                 let sp = self.spill(&v)?;
+                // until the call the caller still owns it, so a failure in a later argument drops it
+                let mut held = v.clone();
+                held.p = Some(sp.clone());
+                if let Some(region) = self.temps.last_mut() {
+                    pending.push(region.len());
+                    region.push(held);
+                }
                 args.push(format!("ptr {}", sp));
                 continue;
             }
@@ -6806,6 +6814,12 @@ impl<'a> FnGen<'a> {
                     args.push(format!("{} {}", lty(ty), v.a));
                 }
                 k => args.push(format!("{} {}", k.name(), v.a)),
+            }
+        }
+        for at in pending.iter().rev() {
+            // the callee owns the moved arguments from here
+            if let Some(region) = self.temps.last_mut() {
+                region.remove(*at);
             }
         }
         if self.cost { self.cost_call(&f.name, &args)?; }
@@ -7028,11 +7042,14 @@ impl<'a> FnGen<'a> {
                 let n = self.ev(arg(&e.args, 1)?, false)?;
                 let p = self.inout_place_ptr(&place(e)?)?;
                 self.m.vec_elems.insert(VIEW_ELEM.to_string());
-                // the G6 shim's vec_reserve bound, checked always: the byte count below never wraps
-                let in_range = self.op(format!("icmp ule i64 {}, {}", n.a, 1u64 << 40))?;
-                let msg_fn = self.m.string("vec_reserve");
-                let msg_ex = self.m.string("0 <= n && n <= 2^40");
-                self.guard(&in_range, Fail::RequiresFreed(msg_fn, msg_ex), false)?;
+                // the G6 shim's vec_reserve bound (the byte count below never wraps). LG12-RS (L-gaps 13): checked
+                // exactly when unverified, like the other LG7-B4 operations; verified code proves it
+                if !self.verified {
+                    let in_range = self.op(format!("icmp ule i64 {}, {}", n.a, 1u64 << 40))?;
+                    let msg_fn = self.m.string("vec_reserve");
+                    let msg_ex = self.m.string("0 <= n && n <= 2^40");
+                    self.guard(&in_range, Fail::RequiresFreed(msg_fn, msg_ex), false)?;
+                }
                 let value = self.op(format!("load {ARR}, ptr {p}"))?;
                 let data = self.op(format!("extractvalue {ARR} {value}, 0"))?;
                 let len = self.op(format!("extractvalue {ARR} {value}, 1"))?;

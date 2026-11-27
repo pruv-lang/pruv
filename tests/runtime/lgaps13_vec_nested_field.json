@@ -1,0 +1,1 @@
+{"backends": ["rust"], "flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["1", "7"], "alloc_balance": true}

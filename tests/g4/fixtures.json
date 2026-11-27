@@ -69,6 +69,7 @@
     {"name": "g4_r12_raw_validation", "root": "tests/runtime/g4_r12_raw_validation/root.pruv"},
     {"name": "g4_r13_same_spelled_layouts", "root": "tests/runtime/g4_r13_same_spelled_layouts/root.pruv"},
     {"name": "g4_r14_child_main", "root": "tests/runtime/g4_r14_child_main/root.pruv"},
-    {"name": "g4_r16_value_match", "root": "tests/runtime/g4_r16_value_match/root.pruv"}
+    {"name": "g4_r16_value_match", "root": "tests/runtime/g4_r16_value_match/root.pruv"},
+    {"name": "g4_lgaps13_vec_doc", "root": "tests/runtime/g4_lgaps13_vec_doc/root.pruv"}
   ]
 }

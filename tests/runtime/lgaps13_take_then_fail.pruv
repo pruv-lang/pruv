@@ -1,0 +1,17 @@
+// L-gaps 13 audit (R-6e-3, R-6e-22): a moved owned-aggregate argument stays owned by the caller until the call, so
+// when a later argument's vec_get range check fails (an unverified build), the failure path drops the moved buffer
+// too; the allocation balance holds at the panic.
+struct S { xs: [i64] }
+
+fn use_two(take a: S, b: S) -> i64 {
+  return len(a.xs) + len(b.xs);
+}
+
+pub fn run() -> () ! alloc, io {
+  let x: [i64] = alloc(3, 1);
+  let s: S = S { xs: move x };
+  let y: [i64] = alloc(2, 1);
+  let mut v: Vec<S> = vec_new::<S>();
+  v = vec_push::<S>(move v, S { xs: move y });
+  print(use_two(move s, vec_get::<S>(v, 5)));
+}

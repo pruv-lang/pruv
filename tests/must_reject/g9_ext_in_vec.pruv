@@ -1,5 +1,6 @@
-// type/foreign_owned_type: an extended type as a G6 Vec element
-struct Buf { items: [i64] }
+// type/foreign_owned_type: an extended type as a G6 Vec element (a `[bool]` field; `[i64]` is an owned-aggregate
+// buffer since L-gaps 13, R-6e-3)
+struct Buf { items: [bool] }
 
 fn f(v: Vec<Buf>) -> i64 {
   return 0;

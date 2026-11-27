@@ -1,0 +1,4 @@
+// spec: R-6e-3 reject
+// 4.4w-VD (L-gaps 13): a [bool] buffer field still keeps a struct out of Vec elements
+struct B { flags: [bool] }
+fn f(v: Vec<B>) -> i64 { return len(v); }

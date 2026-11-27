@@ -749,8 +749,8 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   still listed in `.foreign.json` and `--trust-report` as a `vec_get` use. This rule does not change LLVM lowering.
   Under the same conditions `vec_push::<T>(vec_new::<T>(), x)` is emitted as `::std::vec![x]` (one element at
   exact capacity, no length check, since an empty vector meets `len(v) < 2^40`); both uses stay listed.
-  View-list `vec_push`, `vec_get`, `vec_pop` and `vec_join` (R-6g9-10/11) follow R-6g9-11 instead (checked exactly when
-  unverified); view-list `vec_reserve` keeps this rule on Rust and is always checked on LLVM (LG12-RS).
+  View-list `vec_push`, `vec_get`, `vec_pop`, `vec_join` and `vec_reserve` (R-6g9-10/11) follow R-6g9-11 instead
+  (checked exactly when unverified; `vec_reserve` since L-gaps 13, LG12-RS).
 - **Collections.** `Vec<T>`, `HashMap<K, V>` (`K` is `i64`, `bool` or `String` under R-6e-5) and
   `String` hold values. Collections cannot be stored in `Option`, `Result` or arrays, except an owned `String` as the
   error of a `Result<T, String>` (LG11 E2). R-6e-1, R-6e-3 and R-6e-6
@@ -850,11 +850,27 @@ fn tree_count(t: Tree) -> i64
   Rust passes it with `::std::mem::take(&mut p.f)` without cloning. An active
   match borrow of `p` still makes the assignment `type/recursive_borrow`.
 - R-6e-3 **Collections of owned aggregates.** An owned aggregate is a non-generic, non-recursive struct whose
-  fields are scalars, plain value types, R-6e-1 owned fields or `[u8]` buffer fields. A `[u8]` field keeps the
-  §6e buffer rules (a fresh buffer or `copy(view)` to build it, reads by index and `len`, no element store) and is
-  `Vec<u8>` in Rust, so session bytes stay bytes and are not widened to `Vec<i64>`. Other buffer fields (`[i64]`,
-  `[bool]`, `str`) do not make an owned aggregate; they keep their `Vec<i64>`, `Vec<bool>` and `String` spellings.
-  A `vec_get::<S>(v, i).f` read of a collection or `[u8]` field borrows it (Rust `&v[i].f`).
+  fields are scalars, plain value types, R-6e-1 owned fields or `[u8]`, `[u16]` or `[i64]` buffer fields. A buffer
+  field keeps the §6e buffer rules (a fresh buffer or `copy(view)` to build it, reads by index and `len`, no
+  element store) and is `Vec<u8>`, `Vec<u16>` or `Vec<i64>` in Rust, so session bytes stay bytes and are not
+  widened to `Vec<i64>`. The owner may be a child or package module (4.4w-VD, L-gaps 13: a JSON document of
+  `source: [u8]` and `tape: [i64]` is a `Vec` element; on LLVM the element drop of R-6e-22 frees both buffers).
+  `[bool]` and `str` fields still do not make an owned aggregate (`type/foreign_owned_type`): L-gaps 13 widened
+  the field set only by the integer buffers a parsed document needs, and admitting the other two is a separate row.
+  A `vec_get::<S>(v, i).f` read of a collection or buffer field borrows it (Rust `&v[i].f`), and
+  `vec_get::<S>(v, i)` or a field path of it is also a read-only call argument (borrowed in place, Rust `&v[i]` or
+  `&(*v.get_unchecked(i)).f`; the R-6e-20 argument rule). In an unverified build, a range check that fails in a
+  later argument of the same call also drops an owned value already moved into an earlier `take` argument.
+  Moving an element out is not offered: `vec_pop` is a view-list operation only and there is no `vec_remove`, so
+  an owned-aggregate element leaves its Vec only when the Vec is dropped, replaced or cleared (`vec_clear`,
+  R-6e-10). Tests:
+  [Vec of a buffer struct](tests/runtime/lgaps13_vec_tape.pruv),
+  [module element as argument](tests/runtime/g4_lgaps13_vec_doc/root.pruv),
+  [nested field as argument, Rust](tests/runtime/lgaps13_vec_nested_field.pruv),
+  [moved argument dropped on a later failure](tests/runtime/lgaps13_take_then_fail.pruv),
+  [let copy rejected](tests/must_reject/lgaps13_vec_tape_copy_let.pruv),
+  [owned argument rejected](tests/must_reject/lgaps13_vec_tape_copy_push.pruv),
+  [`[bool]` field rejected](tests/must_reject/lgaps13_vec_bool_field.pruv), [map value](tests/spec/lgaps13_map_i64_buffer.pruv).
   `Vec<S>` and `HashMap<i64, S>` with an owned
   aggregate `S` are allowed wherever a collection type is allowed, including catalog type arguments. A state
   struct is a non-generic struct that may also have fields of these two types. Nesting stops there: an owned
@@ -864,7 +880,7 @@ fn tree_count(t: Tree) -> i64
   `vec_push::<S>` and `map_insert::<i64, S>` move the element in without cloning. The element must be a
   constructor, a call result or `move y`; anything else is `type/foreign_move`. When `S` has owned fields,
   `vec_get::<S>(v, i)` is allowed only as the receiver of a field access (`vec_get::<S>(v, i).f`, Rust
-  `v[i as usize].f`, or `get_unchecked` under R-6d-2), and `map_get::<i64, S>(m, k)` only as a direct `match`
+  `v[i as usize].f`, or `get_unchecked` under R-6d-2) or as a read-only call argument (above), and `map_get::<i64, S>(m, k)` only as a direct `match`
   scrutinee whose `Some(r)` binds a borrowed view (Rust `match m.get(&k)`). Other uses of those reads are
   `type/foreign_owned_type`. A plain `S` keeps the copying reads.
 - R-6e-4 **In-place map element update.** `map_get_mut::<K, V>(inout P, k)` is allowed only as the direct
@@ -900,7 +916,7 @@ fn tree_count(t: Tree) -> i64
   collection element or value in the program. Such an aggregate can be an element of
   `Vec<S>` or a value of `HashMap<i64, S>` or `HashMap<String, S>` in the positions of R-6e-3.
   A non-generic *holder record* may have direct fields of such a nested-collection record type
-  besides scalar, plain-value, R-6e-1 owned and `[u8]` fields. A holder record is itself an owned
+  besides scalar, plain-value, R-6e-1 owned and `[u8]`, `[u16]` or `[i64]` fields. A holder record is itself an owned
   aggregate with nested collections: it may be an element or value in the positions above, a
   `HashMap<String, H>` value of a root state field, a local, a `take` parameter or a result. It is
   constructed without a copy from a call result or `move x` per field (R-6e-12); a plain binding as a
@@ -998,9 +1014,10 @@ fn tree_count(t: Tree) -> i64
   parameter of an R-6e-6 record (`{ptr, i64, i64}` buffer fields) is a pointer to storage the callee owns: the
   caller passes a fresh spilled copy of the moved value, zeroes the moved source slot, and the callee drops the
   record at exit unless it moved it out (a borrowed record parameter stays a read-only view of the caller's slot).
-  Tests: [take record](tests/runtime/lg9_rt_take_record.pruv), [record move](tests/runtime/lg9_rt_record_move.pruv). A struct with an array field
-  other than `[u8]` (for example `S { xs: [i64] }`) is not an owned aggregate, so `move` of it is
-  `type/foreign_move`; a struct of scalar and value fields only is a value aggregate and may be moved.
+  Tests: [take record](tests/runtime/lg9_rt_take_record.pruv), [record move](tests/runtime/lg9_rt_record_move.pruv). A struct with a `[bool]` or `str`
+  field (for example `S { xs: [bool] }`) is not an owned aggregate, so `move` of it is
+  `type/foreign_move` (an `[i64]` field is an owned-aggregate buffer since L-gaps 13,
+  [accept](tests/spec/lgaps13_move_i64_record.pruv)); a struct of scalar and value fields only is a value aggregate and may be moved.
   Tests: [accept](tests/spec/r6e_12_take_aggregate.pruv),
   [reject](tests/spec/r6e_12_take_aggregate_after_move.pruv),
   [reject plain record](tests/spec/r6e_12_move_plain_record.pruv). Indexed elements cannot be moved; array fields move only under R-6e-16. Moving a plain or
@@ -1237,7 +1254,7 @@ fn tree_count(t: Tree) -> i64
 - R-6e-22 **Vectors of plain structs on LLVM (L-gaps VL).** The native vector of R-6e-21 also holds a declared
   non-recursive struct or enum `S`, wherever `Vec<S>` occurs: a struct field, a parameter (including `inout`), a
   result, a `let`, or a `vec_new` / `vec_push` / `vec_get` / `vec_at_mut` call, for every element type the checker
-  admits as a vector element (a plain value, or an owned aggregate with `[u8]` buffers or `Vec<i64>` / `Vec<bool>`
+  admits as a vector element (a plain value, or an owned aggregate with `[u8]`, `[u16]` or `[i64]` buffers or `Vec<i64>` / `Vec<bool>`
   handles); each element is dropped with its owned fields when the vector
   is dropped or replaced, and a field assignment through `vec_at_mut` drops the old field value. Output and the
   allocation balance match the Rust backend. An element type with a `String` field stays a Rust-backend type
@@ -1352,7 +1369,8 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   body without a copy; a `[u8]` field is `Vec<u8>`. As for R-6f-2 state, field lengths (at most 2^40, section 7
   item 6) are trusted, not checked per call, for both the borrowed and the `take` form; the host caller must keep them. `requires` on `x` are checked at entry unless `--trust-callers`.
   A `take` parameter follows R-6e-12 in the body (`type/foreign_move` after a move). A struct that is not an
-  owned aggregate (an `[i64]`, `[bool]` or `str` field, a generic struct) is not covered by this rule; it keeps
+  owned aggregate (a `[bool]` or `str` field, a generic struct) is not covered by this rule (an `[i64]` field
+  is covered since L-gaps 13, [accept](tests/spec/lgaps13_entry_i64_buffer.pruv)); it keeps
   the plain-value and R-6e-6 entry rules and is otherwise `type/entry_signature`.
   `raw_entries` "c" and the LLVM backend reject it with `codegen/unsupported_type`.
 - **Proof.** Every function is verified, including private and unused ones; a caller sees the callee's contract and,
@@ -2112,15 +2130,18 @@ borrowed value is live.
   and has result `unit` (a program's own `vec_pop` function keeps the name); it requires `len(parts) >= 1` (`verify/call_requires`), and after it `len(parts)` is one
   less. Code: Rust `{ parts.pop(); }` (with `--no-verify`, a failed pop panics with the requires message); LLVM
   stores the length less one. The run-time check of each of these view-list operations (`vec_push` `len < 2^40`, `vec_get` bounds,
-  `vec_pop` `len(parts) >= 1`, `vec_join` total `<= 2^40`) is emitted on both backends exactly when the build is unverified;
-  `--foreign-checks` and `trusted rust fn` declarations do not change them (LG7-B4, 4.4o-VP); `vec_reserve` is outside
-  this rule (LG12-RS). LLVM frees live buffers before a failed pop.
+  `vec_pop` `len(parts) >= 1`, `vec_join` total `<= 2^40`, `vec_reserve` `0 <= n && n <= 2^40`) is emitted on both
+  backends exactly when the build is unverified; `--foreign-checks` and `trusted rust fn` declarations do not change
+  them (LG7-B4, 4.4o-VP, LG12-RS in L-gaps 13: verified code proves the reserve bound, `verify/call_requires`
+  otherwise). LLVM frees live buffers before a failed pop.
   - Tests: [`[u8]` pieces with `..` popping, `str` pop](tests/spec/lgaps4_byte_list.pruv),
     [a program's own `vec_pop` wins](tests/spec/lgaps4_user_vec_pop.pruv),
     [unverified empty pop fails with balanced frees](tests/spec/lgaps6_pop_free.pruv),
     [with a heap array and an enclosing block's owner](tests/spec/lgaps7_pop_free_heap.pruv),
-    [unverified out-of-range `vec_reserve` on a `[u8]` list](tests/spec/lgaps7_reserve_free.pruv);
-    rejects [pop of a possibly empty list](tests/spec/lgaps4_pop_empty.pruv),
+    [unverified out-of-range `vec_reserve` on a `[u8]` list](tests/spec/lgaps7_reserve_free.pruv),
+    [verified reserve without its check](tests/runtime/lgaps12_view_checks.pruv);
+    rejects [unbounded verified reserve](tests/must_reject/lgaps13_view_reserve_unbounded.pruv),
+    [pop of a possibly empty list](tests/spec/lgaps4_pop_empty.pruv),
     [`str` operation on a `[u8]` list](tests/spec/lgaps4_byte_list_targ.pruv),
     [`[u8]` list from `vec_new::<ref str>`](tests/spec/lgaps4_byte_list_new.pruv),
     [source write while live](tests/spec/lgaps4_byte_list_live.pruv),
@@ -2193,7 +2214,10 @@ borrowed value is live.
   the §9 path normalizer (hand `out.join("/")`).
   - Tests: [path normalizer](tests/spec/lgaps6_views_len.pruv), [`[u8]` list](tests/spec/lgaps6_views_len_bytes.pruv);
     rejects [in code](tests/spec/lgaps6_views_len_code.pruv), [wrong total](tests/spec/lgaps6_views_len_wrong.pruv),
-    [element type](tests/spec/lgaps6_views_len_targ.pruv).
+    [element type](tests/spec/lgaps6_views_len_targ.pruv); quantified (LG12-QK, L-gaps 13):
+    [inside `0..=n`](tests/spec/lgaps13_views_len_quant_range.pruv), rejects
+    [at `k == -1`](tests/must_reject/lgaps13_views_len_below.pruv),
+    [at `k == n + 1`](tests/must_reject/lgaps13_views_len_above.pruv).
 - R-6g9-14 **String capacity and front insert (4.4k-SR, L-gaps 6).** Catalog operations with `! alloc`:
   `string_with_capacity(n) -> String` (hand `String::with_capacity(n as usize)`), `string_reserve(s, n) -> String`
   consuming `s` (hand `s.reserve(n as usize)`), and `string_prepend_char(s, c) -> String` consuming `s` (hand

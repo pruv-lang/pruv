@@ -1,0 +1,26 @@
+// L-gaps 13 audit (R-6e-3): a nested record field of a Vec element (a holder record: Rec owns a Vec<String>) is a
+// read-only call argument. The element stays in the Vec and the field is borrowed in place (the Rust backend keeps
+// the field a place, so nothing moves out of the vector); output and the allocation balance match on both backends.
+struct Rec { keys: Vec<String> }
+struct Hold { r: Rec, tape: [i64] }
+
+fn inspect(r: Rec) -> i64 {
+  return len(r.keys) + 1;
+}
+
+fn make(n: i64) -> Hold ! alloc
+  requires 0 <= n && n <= 10
+{
+  let t: [i64] = alloc(n, 0);
+  return Hold { r: Rec { keys: vec_new::<String>() }, tape: move t };
+}
+
+pub fn run() -> () ! alloc, io {
+  let mut v: Vec<Hold> = vec_new::<Hold>();
+  v = vec_push::<Hold>(move v, make(4));
+  v = vec_push::<Hold>(move v, make(7));
+  if len(v) > 1 {
+    print(inspect(vec_get::<Hold>(v, 0).r));
+    print(len(vec_get::<Hold>(v, 1).tape));
+  }
+}

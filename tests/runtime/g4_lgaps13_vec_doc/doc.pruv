@@ -1,0 +1,18 @@
+pub struct Doc {
+  source: [u8], tape: [i64],
+  invariant len(tape) % 2 == 0 && len(tape) <= 1000
+}
+pub fn make(n: i64) -> Doc ! alloc
+  requires 0 <= n && n <= 10
+{
+  let s: [u8] = alloc(n, 7);
+  let t: [i64] = alloc(2 * n, n);
+  return Doc { source: move s, tape: move t };
+}
+pub fn first(d: Doc) -> i64
+  ensures 0 <= result && result <= 1000
+{
+  if len(d.tape) == 0 { return 0; }
+  if d.tape[0] < 0 || d.tape[0] > 1000 { return 0; }
+  return d.tape[0];
+}
