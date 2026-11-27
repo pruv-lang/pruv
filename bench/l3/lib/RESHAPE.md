@@ -1781,7 +1781,7 @@ All after the last code change (F1 / F4 from the structure comparison).
   `parts.join(sep)`), result `String` / `[u8]` with `! alloc`, on both backends. The verifier gives the result
   length from the R-6g9-13 view sum plus `(n - 1) * len(sep)` and every byte (piece `k` starts at
   `S(k) + k * len(sep)`, the separator follows it when `k < n - 1`); it requires the total to be at most `2^40`.
-  A `String` result has no run-time UTF-8 scan. Rust emits `parts.join(&sep[..])`; LLVM sums the lengths, allocates
+  A `String` result has no run-time UTF-8 scan on Rust (LLVM still checks each piece, LG7-B2). Rust emits `parts.join(&sep[..])`; LLVM sums the lengths, allocates
   once (or `string_with_capacity` through the G6 shim) and copies views and separators. The path normalizer now
   builds with `vec_join::<ref str>(out, "/")` (`lgaps7_join`, emits `out.join(&("/")[..])`). Tests
   `lgaps7_join_bytes`, `lgaps7_join`; rejects `lgaps7_join_len_wrong`, `lgaps7_join_byte_wrong`.
@@ -1800,4 +1800,18 @@ All after the last code change (F1 / F4 from the structure comparison).
 - Still open: P10-M1 (a Vec element `v[i]` as a `swap`/`replace` place): it needs index places in the checker
   (with an alias rule or a proven `i != j`), element stores in the verifier, and `v.swap(i, j)` on Rust; not
   reached within the cap.
-- Next: P10-M1, LG7-SR, LG7-T3.
+- Audit (split: A = Codex gpt-6.2-astra on SPEC/encoding/tests, B = Claude opus high on codegen). Fixed the two
+  required findings: the separator was checked as a plain value, so a `subview` or `[]` separator was rejected (now
+  a view argument; `lgaps7_join_bytes` joins with both), and a program's own `vec_join` function let a view list
+  escape (now `type/borrow_escape`, reject `lgaps7_join_user`). Advisory rows:
+  - LG7-A1: no test catches a missing or off-by-one `2^40` bound (a `2^39` view joined twice with `[]` should
+    pass; a 1-byte separator should fail `call_requires` on the call line).
+  - LG7-A2: no test shows a join's bytes survive a later list change (`vec_clear`, then a push).
+  - LG7-B1: with `--no-verify` the LLVM total `S + (n - 1) * L` can wrap in `i64` before the bound check; use
+    separate checks or overflow intrinsics.
+  - LG7-B2: the LLVM `string_push_str` shim checks each `str` piece with `from_utf8`; an unchecked adapter would
+    match the Rust backend.
+  - LG7-B3: the LLVM `[u8]` result is zero-filled before the copies overwrite every byte.
+  - LG7-B4: the bound check runs on `!verified`, unlike `vec_pop` which keys on `vec_get_checked`; align them.
+  - LG7-B5: no test uses a join result without a `let` (as a call argument or in an expression).
+- Next: P10-M1, LG7-SR, LG7-T3, LG7-A1, LG7-B1.

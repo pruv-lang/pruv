@@ -2171,19 +2171,22 @@ borrowed value is live.
 - R-6g9-16 **Joining a view list (LG6-VJ, L-gaps 7).** `vec_join::<ref T>(parts, sep)` with `T` the list's own
   element joins an R-6g9-10/11 list with `sep` between views (hand `parts.join(sep)`): for `T = str`, `sep` is a
   `str` view argument and the result is an owned `String`; for `T = [u8]`, `sep` is a `[u8]` view argument and the
-  result is an owned `[u8]`. It has effect `alloc`, reads the list (not a move) and needs the list as a plain
-  name; a program's own `vec_join` function keeps the name. *Proof.* With `n = len(parts)`, `L = len(sep)` and
+  result is an owned `[u8]` (`sep` takes any view form: a literal, a `subview`, a local, `[]`). It has effect
+  `alloc`, reads the list (not a move) and needs the list as a plain name; a program's own `vec_join` function
+  keeps the name, and passing a view list to it is an escape (`type/borrow_escape`). *Proof.* With `n = len(parts)`, `L = len(sep)` and
   `S` the R-6g9-13 view sum, the result length is `0` when `n == 0` and `S(parts, n) + (n - 1) * L` otherwise, and
   every byte is known: byte `S(parts, k) + k * L + j` is `parts[k][j]` for `j < len(parts[k])`, followed by
   `sep[j]` for `j < L` when `k < n - 1`. It requires that length to be at most `2^40` (`verify/call_requires`). A
-  `String` result is valid UTF-8 because its pieces are `str` views, so no run-time UTF-8 scan is emitted. *Code.*
+  `String` result is valid UTF-8 because its pieces are `str` views, so the Rust backend emits no run-time UTF-8
+  scan (the LLVM `string_push_str` helper still checks each piece, LG7-B2). *Code.*
   Rust: `parts.join(&sep[..])` (with `--no-verify`, a result over `2^40` bytes fails with the requires message).
   LLVM: one pass sums the lengths, then the result is allocated once (`[u8]`) or made with that capacity through
   the G6 `string_with_capacity` helper (`String`) and the views and separators are copied in order; with the
   bound check on, the total is checked before allocating. Output and allocation balance match the Rust backend.
   - Tests: [`str` and `[u8]` joins, byte facts](tests/spec/lgaps7_join_bytes.pruv),
     [path normalizer with `out.join("/")`](tests/spec/lgaps7_join.pruv);
-    rejects [wrong length](tests/spec/lgaps7_join_len_wrong.pruv), [wrong byte](tests/spec/lgaps7_join_byte_wrong.pruv).
+    rejects [wrong length](tests/spec/lgaps7_join_len_wrong.pruv), [wrong byte](tests/spec/lgaps7_join_byte_wrong.pruv),
+    [list passed to a program's own `vec_join`](tests/spec/lgaps7_join_user.pruv).
 ## 6h. Files (G10)
 
 `fs` is the file-system effect, independent of `io` (stdout) and `alloc`. Direct and transitive calls

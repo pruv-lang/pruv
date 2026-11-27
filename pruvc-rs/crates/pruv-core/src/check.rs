@@ -8576,7 +8576,7 @@ impl Checker {
         if n == "vec_join" {
             // LG6-VJ (R-6g9-16): `vec_join::<ref T>(parts, sep)` copies the views with `sep` between them into one
             // new owned value (hand `parts.join(sep)`): a `String` for `str` views, a `[u8]` for `[u8]` views
-            self.expect(&mut e.args[1], &elem, scope, c, None)?;
+            self.view_value(&mut e.args[1], &elem, scope, c)?;
             self.used_effects.insert("alloc".to_string());
             let r = if bytes { GType::from_key("array_u8") } else { GType::from_key("string") };
             e.ty = Some(r.to_key());

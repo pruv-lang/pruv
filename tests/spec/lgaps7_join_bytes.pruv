@@ -1,5 +1,5 @@
 // spec: R-6g9-16 accept
-// `vec_join` of a `str` list and of a `[u8]` list (hand `parts.join(sep)`): the length is the view sum plus one
+// `vec_join` of a `str` list and of a `[u8]` list (separators: a literal, a `subview`, an owned local, `[]`) (hand `parts.join(sep)`): the length is the view sum plus one
 // separator between views, and every byte of the result is known (the views in order, the separator between them).
 fn join_str(p: str) -> i64 ! alloc
   requires len(p) == 5 && p[0] == 97 && p[1] == 98 && p[2] == 99 && p[3] == 100 && p[4] == 101
@@ -14,6 +14,8 @@ fn join_str(p: str) -> i64 ! alloc
   vec_push::<ref str>(inout out, subview(p, 2, 3));
   let s: String = vec_join::<ref str>(out, ", ");
   assert len(s) == 10;
+  let u: String = vec_join::<ref str>(out, subview(p, 1, 2));
+  assert len(u) == 7;
   let t: str = string_into_str(move s);
   assert t[0] == 97 && t[1] == 98;
   assert t[2] == 44 && t[3] == 32;
@@ -34,6 +36,8 @@ fn join_bytes(p: [u8]) -> i64 ! alloc
   let r: [u8] = vec_join::<ref [u8]>(out, none);
   assert len(r) == 4;
   assert r[3] == p[1] && r[0] == p[0] && r[2] == p[2];
+  let z: [u8] = vec_join::<ref [u8]>(out, []);
+  assert len(z) == 4 && z[3] == p[1];
   let sep: [u8] = alloc(2, 9);
   let w: [u8] = vec_join::<ref [u8]>(out, sep);
   assert len(w) == 6 && w[3] == 9 && w[4] == 9 && w[5] == p[1];
