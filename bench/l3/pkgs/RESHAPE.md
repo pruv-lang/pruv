@@ -1213,3 +1213,125 @@ was rerun, which covers `claude/entry` too.
 
 `claude/q.py` exits 1 only for the frozen py pairs (`build: 'py'`); both rs pairs pass. No runner or oracle needed a
 change. 4.4m-TB part two was not started within the cap. Nothing was measured.
+
+## Step 4.4r: one reused title buffer (4.4m-TB part two), `string_token`'s constant flag folds (4.4p-CF), key lookup design (4.4n-KL)
+
+- No compiler change and no `pkgs/` code change. Changed: `claude/entry`, `claude/import`, `claude/a1_root`.
+- `claude/entry`: the `Title` enum is gone. `pub struct RankedTitle { rank: i64, text: [u8] }` is the hand
+  `RankedTitle { rank: u8, text: String }`; `new_title()` returns rank 0 and an empty buffer (`vec![0u8; 0]`, no
+  allocation). The buffer is `[u8]` because the catalog has no `string_clear` (gap C); its UTF-8 fact is
+  `utf8_valid_span(st.text, 0, len(st.text))`, required and ensured by every function that writes it.
+  - `title_key(doc, id, key, inout buf) -> i64`: on a nonblank candidate it runs `buf = truncate(buf, 0)` and
+    `arr_append(inout buf, v, 0, len(v))` with the `str` (borrowed plain view or decoded value). Rust:
+    `buf.truncate(0); buf.extend_from_slice(v.as_bytes())`, the hand `text.clear(); text.push_str(t)`. Appending a
+    `str` to a valid prefix keeps the span fact (SPEC utf8 rules), so no run-time check is added. Returns 1 written,
+    0 missing or blank (buffer unchanged), any other value a defect kind (`Field::Defect(0|1)` maps to -1 so 0/1 stay
+    unambiguous).
+  - `pick_title(.., inout buf)`: first key, then the second only when the first gave 0 (hand `pick`).
+  - `ranked(doc, level, first, second, inout st)`: `level < st.rank` returns 0 before any lookup (hand
+    `rank >= self.rank` before `pick`); `pick_title(.., inout st.text)`; `st.rank = level` only on 1. Ensures
+    `old(st).rank <= st.rank`.
+  - `title_of` / `title_for_type(doc, ty, inout st) -> i64`: same dispatch as 4.4p, now updating `st` in place.
+- `claude/import`: `tail_info` and `read_window` keep one `RankedTitle` local across all lines (loop invariant
+  `0 <= best.rank <= 3` and the span fact). `window_object` takes `inout best` and returns `bool`. The final title is
+  `one_line(subview(best.text, 0, len(best.text)), 120)`: the `[u8]` span with the proven fact passes as a `str`
+  (R-6g-10), generated as `from_utf8_unchecked` with no run-time check.
+- Solver: with the struct in the module, two obligations came back `verify_unknown` (rlimit, "canceled"):
+  `access::plain_str`'s precondition in `consume_entry`, and `window_object`'s precondition in `read_window`.
+  Fixes: the string-content tail of `consume_entry` became the small `#[inline(always)]` function
+  `answer_string(doc, c, at, inout col) -> i64` (0 = answered, else defect kind), with three `assert`s of its
+  requires before the call; `read_window` asserts `doc_strings(d)` and `col.begun < 1000000000000` before
+  `window_object`. The asserts produce no Rust.
+- `claude/a1_root` (test wrappers): `pick_title_w` uses a local buffer and the new `pack_pick`; `title_of_w` uses
+  `new_title()` and `pack_title(code, st)`. The wire format is unchanged.
+
+### 4.4p-CF: the constant `checked` folds away
+
+`string_token` is generated `#[inline(always)]` (Rust) / `alwaysinline` (LLVM backend) and both call sites pass a
+literal: `record` `true`, `token_at` `false`. Checked on the optimized code of `record` (claude a1):
+- rs/llvm: the pruvc `.ll` through `clang -O2 -S -emit-llvm`. `string_token` has no body left (inlined). In the
+  inlined loop the only byte tests are `== 34`, `< 32`, `== 92`, the escape `switch` and the four hex tests. No
+  `>= 128` test and no `validate_utf8` / `utf8_width` code remain.
+- rs/rust: the generated Rust with `record` made public, `rustc -O --emit llvm-ir -C codegen-units=1`. Same result:
+  the inlined loop tests `34`, `< 32`, `92`, the escape `switch` and hex digits only.
+
+So the optimized `record` loop has the hand's shape (one scan over `"`, `\`, `0..=31`), and the `token_at` copy
+keeps the per-scalar check that its unchecked input needs. Two specialized scanners in source would give the same
+machine shape; the row is closed with this evidence and `pkgs/parse` is unchanged.
+
+### 4.4n-KL: key lookup design (no code)
+
+Hand: `object()` builds a `BTreeMap` per object at parse (`insert` overwrites, so the last duplicate wins), and each
+`get` / `get_str` is a map lookup (`O(log n)` byte compares). Pruv: the tape has no index; `access::field` →
+`find_ascii` walks every direct member of the object (`may_match` prefilter, then `ascii_equal`) and keeps the last
+match. `pick_title` walks again for its second key; `consume_entry` does one walk per root key it reads (`type`,
+`isSidechain`, `message`, `timestamp`, ...).
+
+Options:
+1. Map per object at parse (the hand shape). Needs a new tape side table and new `JsonDocument` invariants proved
+   by `parse`, read by every `pkgs/access` consumer. It also adds the hand's per-object allocation that the tape
+   avoids. Large; changes all consumers of `pkgs/json` / `pkgs/parse` / `pkgs/access`.
+2. "Keys unique" fact from the parse, so a lookup can stop at the first match. JSON allows duplicate keys and the
+   hand keeps the last, so the parse would have to detect duplicates (a per-object sort or hash). Not cheaper than 1.
+3. One walk per object for a fixed key set: `access::fields(doc, id, keys) -> [i64]` (or a small fixed-arity
+   struct) that walks the members once and overwrites slot k on each match of key k (last-wins as now). Contract per
+   slot: `r >= 0 ==> r < len(doc.tape) / 6 && doc.tape[6 * r + 4] == id`, the same as `find_ascii`. The claude root
+   reader would resolve its root keys in one walk per line instead of one walk per key. No tape or parse change;
+   only `pkgs/access` (new function) and `claude/entry` / `claude/import` (callers).
+
+An earlier step removed a one-pass root reader (`entry::root_of` filled by `fields_into`) in favour of one
+`field` call per key, because the hand calls `get` per key (table "lex and access" above). Option 3 brings a single
+walk back, but for the reason the hand has a map: each key costs one resolution, not one member walk.
+
+Recommendation: 3. It matches the hand's cost model (each key resolved once per object, last-wins once) without a
+parse-time map. Proof risk: the per-slot loop invariant over a key list; keep the key list a fixed small arity
+(one function per caller key set, or a struct of `i64` slots) to avoid quantified invariants over `[str]`. Measure
+only after the title path and this are both in place.
+
+### Per-function structure (generated claude a4 Rust vs `claude/handrust/src/lib.rs`)
+
+| Function | Pruv (generated Rust) | Hand (handrust/src/lib.rs) | Same? | Row |
+|---|---|---|---|---|
+| `entry::RankedTitle` / `new_title` | `{ rank: i64, text: Vec<u8> }`, created once before the line loop, empty `vec![0u8; 0]` | `#[derive(Default)] { rank: u8, text: String }` in `State` / `tail_packet` | same (one buffer, no allocation at creation; `[u8]` for `String`: gap C) | closes 4.4m-TB part two |
+| `entry::title_key` | nonblank candidate: `buf.truncate(0); buf.extend_from_slice(v.as_bytes())`; blank or missing: buffer unchanged | `pick` returns `&str`, `update` does `text.clear(); text.push_str(t)` | same copy count (one per winning title, into the reused buffer); the clear + append sits in `title_key`, not after `pick` | closes 4.4m-TB part two |
+| `entry::pick_title` | second key only when the first gave 0 | `for k in [k1, k2]`, first nonblank | same | — |
+| `entry::ranked` | `level < st.rank` returns before any lookup; `st.rank = level` after a write | `if rank >= self.rank { if let Some(t) = pick(..) { rank; clear; push_str } }` | same order (rank check before the pick); rank and text written in the other order, same final state | — |
+| `entry::title_of` / `title_for_type` | one `string_id` of `type`, then the 4.4p view compares | `match get_str(e, "type")` | same as 4.4p | — |
+| `import::tail_info` / `read_window` (title) | `rank > 0` → `one_line(from_utf8_unchecked(&best.text[..]), 120)` | `finish`: `(rank > 0).then(\|\| one_line(&self.text, 120))` | same (no copy, no run-time UTF-8 check) | — |
+| `import::window_object` | `title_for_type(d, ty, best)` in place, then `consume_entry`, then `window_model` | `consume`: `st.title.update(e)`, then the entry | same order; returns `bool` instead of the candidate | — |
+| `import::answer_string` (new, `#[inline(always)]`) | the string-content tail of `consume_entry`: borrowed view or decoded value, `answer` once | inline `Value::String(s) => col.answer(s, ..)` | same after inlining (split for the solver) | — |
+
+Independent structure comparison (Codex `gpt-6.2-astra`, review role, Codex 2 account; the default account was
+at its limit). It got the generated Rust excerpts (`a4` gen) and the hand `lib.rs` excerpts, without this table.
+Its conclusions agree on the rows above: one title buffer reused across records in both `tail_info` and
+`read_window`, the rank check before the candidate lookup, a later equal-rank nonblank title wins, and the final
+title borrowed from the buffer with no UTF-8 re-check. It found no wrong-result path: a `Field::Defect(0|1)` maps to
+-1 and the callers accept only 0 and 1; `answer_string` maps `InternalInvariant(0)` to -4 and the caller rejects any
+nonzero code. Its one open question, whether `access::string_append` can return a positive defect, is answered by
+its contract (`ensures result <= 0`). The other differences it listed are earlier rows, unchanged here: an escaped
+candidate decoded at the lookup (4.3h-T placement), the owned user prompt and the model written after the content
+(4.4c-MB), the extra frame / size / packet checks (A2 limits), and `read_window`'s `plan` / `check_output` helpers.
+
+| Row | Kind | Difference | What closes it | Where |
+|---|---|---|---|---|
+| 4.4m-TB (part two) | closed | a new `String` per winning title | done in 4.4r: `RankedTitle { rank, text: [u8] }` updated in place by truncate + `str` append | `claude/entry`, `claude/import` |
+| 4.4p-CF | closed | `string_token`'s `checked` is a run-time flag | evidence in 4.4r: the literal folds after the forced inline on both backends (section above); no code change | `pkgs/parse` |
+| 4.4n-KL | shape, open (designed) | one member walk per key lookup vs a map per object | option 3 above: one walk per object for a fixed key set in `pkgs/access` | `pkgs/access`, `claude/entry`, `claude/import` |
+
+### Consumer tests (step 4.4r)
+
+Only `claude` changed, so only the claude runners ran (`PRUVC_RS` = the existing release `pruvc`, not rebuilt).
+
+| Runner | rs/rust | rs/llvm |
+|---|---|---|
+| `claude/test_a0.py` | 272/272 | 272/272 |
+| `claude/test_a1.py` | 2897/2897 | 2897/2897 |
+| `claude/test_a2.py` | 2443/2443 | 2443/2443 |
+| `claude/test_a3.py` | 134/134 | 134/134 |
+| `claude/test_a4.py` | 270/270 | 270/270 |
+| `claude/q.py` (270 fixed + 20000 generated) | 20270/20270 | 20270/20270 |
+| `claude/q_mutants.py` (18) | 8 detected, 10 proof-rejected, 0 survived | (rust backend only) |
+
+`q.py` exits 1 only because of the frozen py pairs (`ERROR build: 'py'`). Mutant 4 (title rank `<` to `<=`) went
+stale because its old snippet named the removed `Title` enum; it now targets `if level < st.rank { return 0; }` and is
+detected by fixture 171 ("titles tie later wins").

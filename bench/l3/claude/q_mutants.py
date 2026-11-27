@@ -59,7 +59,7 @@ MUTANTS = [
  (3, 'import.pruv', 'allow synthetic non-error replies (drop the isApiErrorMessage requirement)',
   'if api != 1 {', 'if api < 0 {'),
  (4, 'entry.pruv', 'title rank comparison >= changed to > (a tie no longer lets the later one win)',
-  'if level < best { return Title::NoTitle; }', 'if level <= best { return Title::NoTitle; }'),
+  'if level < st.rank { return 0; }', 'if level <= st.rank { return 0; }'),
  (5, 'import.pruv', 'lastAt takes the maximum accepted timestamp instead of the last accepted one', M5_OLD, M5_NEW),
  (6, 'import.pruv', 'omit the skip_user call in the window loop (dropped user line)',
   'if crate::text::dropped_user(subview(data, s, e)) { crate::turns::skip_user(inout col); }',
