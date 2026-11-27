@@ -275,10 +275,22 @@ pub fn user_text(doc: crate::json::JsonDocument) -> Field ! alloc
   return Field::Missing;
 }
 
-// String value of key whose trim is nonempty.
+// String value of key whose trim is nonempty. Hand `pick`: the blank check runs on the borrowed `&str` and only
+// a nonblank candidate is copied (4.4n, 4.4m-TB part one); an escaped node is decoded first (the hand's
+// `Cow::Owned`, made while parsing).
 fn title_key(doc: crate::json::JsonDocument, id: i64, key: str) -> Field ! alloc
+  requires crate::json::doc_strings(doc)
 {
-  let f: Field = string_field(doc, id, key);
+  let i: i64 = crate::access::field(doc, id, key);
+  let pv: Option<ref str> = crate::access::plain_str(doc, i);
+  match pv {
+    Some(v) => {
+      if crate::text::is_blank(v) { return Field::Missing; }
+      return Field::Value(copy(v));
+    }
+    None => {}
+  }
+  let f: Field = string_field_of(doc, i);
   match f {
     Field::Value(v) => {
       if crate::text::is_blank(v) { return Field::Missing; }
@@ -291,6 +303,7 @@ fn title_key(doc: crate::json::JsonDocument, id: i64, key: str) -> Field ! alloc
 
 // The first of the two keys whose value is a string with nonblank trim; the untrimmed value is returned.
 pub fn pick_title(doc: crate::json::JsonDocument, id: i64, first: str, second: str) -> Field ! alloc
+  requires crate::json::doc_strings(doc)
 {
   let a: Field = title_key(doc, id, first);
   match a {
@@ -303,6 +316,7 @@ pub fn pick_title(doc: crate::json::JsonDocument, id: i64, first: str, second: s
 // hand RankedTitle::update: a rank below the held one is dropped before its text is read (ties go to the later line).
 fn ranked(doc: crate::json::JsonDocument, level: i64, first: str, second: str, best: i64) -> Title ! alloc
   requires 1 <= level && level <= 3
+  requires crate::json::doc_strings(doc)
   ensures (is_variant(result, Title::Ranked) ==> (best <= variant_field(result, Title::Ranked, rank) && 1 <= variant_field(result, Title::Ranked, rank) && variant_field(result, Title::Ranked, rank) <= 3))
 {
   if level < best { return Title::NoTitle; }
@@ -318,6 +332,7 @@ fn ranked(doc: crate::json::JsonDocument, level: i64, first: str, second: str, b
 // not passed through one_line here (tailInfo applies oneLine(text, 120) to the winner). `best` is the rank held
 // so far (0 = none); a lower-ranked candidate is NoTitle.
 pub fn title_of(doc: crate::json::JsonDocument, best: i64) -> Title ! alloc
+  requires crate::json::doc_strings(doc)
   ensures (is_variant(result, Title::Ranked) ==> (best <= variant_field(result, Title::Ranked, rank) && 1 <= variant_field(result, Title::Ranked, rank) && variant_field(result, Title::Ranked, rank) <= 3))
 {
   let ty: i64 = string_id(doc, crate::access::root(doc), "type");
@@ -325,6 +340,7 @@ pub fn title_of(doc: crate::json::JsonDocument, best: i64) -> Title ! alloc
 }
 
 pub fn title_for_type(doc: crate::json::JsonDocument, ty: i64, best: i64) -> Title ! alloc
+  requires crate::json::doc_strings(doc)
   ensures (is_variant(result, Title::Ranked) ==> (best <= variant_field(result, Title::Ranked, rank) && 1 <= variant_field(result, Title::Ranked, rank) && variant_field(result, Title::Ranked, rank) <= 3))
 {
   if ty == -1 { return Title::NoTitle; }

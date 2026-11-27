@@ -1041,3 +1041,94 @@ pruvc-rs (`PRUVC_RS=pruvc-rs/target/release/pruvc`), pairs rs/rust and rs/llvm, 
 `claude/q.py` exits 1 only for the frozen py pairs (`build: 'py'`); both rs pairs pass. These runs exercise only
 the `None` branch of `plain_str` on the Claude path (4.4m-PB); the `Some` branch is verified but not run. Nothing was
 measured.
+
+## Step 4.4n: the parse path sets the plain bit (4.4m-PB), title blank check on the borrow (4.4m-TB part one)
+
+- `parse::record` now takes the plain bit from `string_token` (one pass per string that validates in place and
+  reports "no escape"). `scan_into` already did this. It no longer calls `lex::scan_string`. Slot 5 of every string
+  and key record is 1 when the token has no backslash.
+- `string_token` ensures `utf8_valid_span(input, start + 1, pos - 1)` on `Ok`, through a loop invariant on the
+  outer and hex loops. That is what `check_tape` / `doc_strings` need for a plain node.
+- The slot-5 facts in `parse` were widened to `slot5 == 0 || (slot5 == 1 && kind in {4, 7})`, the form
+  `check_tape` already accepts. They are `local_records` (parse.pruv:195), the `scan_document` ensures (383, 386),
+  `publication_ok` (400, 406, 414) and the `parse` ensures (438). 386 is now implied by 383 and is kept.
+- `entry::title_key` first tries `access::plain_str`. On `Some(v)` it blank-checks the borrowed view and copies
+  only a nonblank `v`. `None` (escaped, non-string or missing) keeps the old `string_field_of` decode.
+  `pick_title`, `ranked`, `title_of` and `title_for_type` require `json::doc_strings(doc)`. Both callers in
+  import.pruv get `d` from `parse_line`, which ensures it.
+- `import::read_window`: with the new `doc_strings` requires on `title_for_type`, the solver gave up on
+  `consume_entry`'s `doc_strings` precondition inside the window loop (`verify_unknown`, push canceled). That
+  happened even with an `assert doc_strings(d)` right after the `Line::Object(d)` match. The loop body for one
+  parsed line moved into `window_object` (title candidate, `consume_entry`) and `window_model` (model copy). It
+  returns the `Title` for the loop to keep, since an `inout str` parameter is `type/inout_type`. The generated Rust
+  is `#[inline(always)]` with `&doc` borrowed and the `Title` moved, so the run-time structure is the same as
+  before. `tail_info` verified unchanged.
+- `json/run_a2.py`: its independent oracle now expects the plain bit, so slot 5 is 1 for a string or key with no
+  backslash. The other runners did not need a change.
+- New test: `claude/test_a1.py` `plain` cases run `parse_line` -> `field` -> `plain_str` through the wrapper
+  `a1_root.pruv::plain_w`. There are 13 hand-written cases: plain, empty, non-ASCII, escaped values, an escaped key
+  with a plain value, an escape elsewhere on the line, non-string, missing, and a duplicate key. They show `Some`
+  (with the byte length) on both backends for every unescaped string and `None` for escaped ones.
+
+| Function | Pruv (generated Rust) | Hand (handrust/src/lib.rs) | Same? | Row |
+|---|---|---|---|---|
+| `parse::string_token` / `record` | one pass per string; non-ASCII scalars checked with `validate_utf8` in place; returns the plain bit; `record` writes it to slot 5 | `Parser::string` one pass; `Cow::Borrowed` without escape; `str::from_utf8` per value chunk | pass count and plain bit: same. Granularity of the UTF-8 check (per scalar, and keys too) differs | closes 4.4m-PB; 4.4m-SS open |
+| `access::plain_str` on the Claude path | `Some(&str)` from `doc.source` for unescaped strings (it was always `None` before) | `get_str` -> `Some(&str)` (`Cow::Borrowed`) | same | 4.4m-PB |
+| `import::answer_blocks` / `consume_entry` (plain text) | `plain_str` view passed to `turns::answer`; no decode | `col.answer(&str)` on the parsed `Cow` | same for unescaped text; escaped text is decoded at the use (hand decodes during parse) | 4.4m-PB, 4.3h-T |
+| `entry::title_key` / `pick_title` | blank check on the borrowed view, then `to_owned` only for a nonblank candidate; escaped candidates are still decoded before the check | `pick`: borrow, `es_trim` check, return the borrow | check order and copy count: same for unescaped; escaped decode before the check remains | closes 4.4m-TB part one |
+| `entry::ranked` / `title_of`, `import::tail_info` / `read_window` | the winning `String` moves into `Title::Ranked`, then `best = move cand` | `RankedTitle::update`: `text.clear(); push_str(t)` into one buffer | no: a new `String` per winning title line | 4.4m-TB part two (open) |
+
+Independent structure comparison (Codex `gpt-6.2-astra`, review role, Codex 2 account). It got the generated
+`a1_root_gen.rs` and the hand `lib.rs`, without this table. Its conclusions agree with the table:
+- one forward pass per string token on both sides;
+- unescaped title candidates are blank-checked on a borrowed `&str` on both sides;
+- one copy per winning title on both sides (Pruv `to_owned` in `title_key`, hand `push_str` in `update`).
+
+The remaining difference is where the copy lands: a fresh `String` per win vs one reused buffer. That is
+4.4m-TB part two. The review found two more per-call differences. They are new rows:
+- `entry::title_for_type` calls `access::string_is` up to three times (`custom-title`, `ai-title`, `summary`). The
+  hand borrows `type` once with `get_str` and `match`es on it. Row 4.4n-TT.
+- An ASCII key lookup (`access::field`) walks every direct member of the object, so last-wins resolves at the
+  lookup, and `pick_title` walks it again for the second key. The hand resolves last-wins once at parse
+  (`BTreeMap::insert`) and each `get` is a map lookup. Row 4.4n-KL.
+
+The review also noted that `text::is_blank` stops at the first nonblank character, while the hand `es_trim`
+trims both ends. The Pruv side does no more work than the hand here, so this gets no row. An escaped candidate is
+decoded at the lookup in Pruv; the hand decodes every escaped value during the parse. That is the 4.3h-T
+placement and gets no new row.
+
+| Row | Kind | Difference | What closes it | Where |
+|---|---|---|---|---|
+| 4.4m-PB | closed | `record` wrote the plain bit 0 for every string | done in 4.4n: `record` takes it from `string_token`; `test_a1` `plain` cases show `Some` on both backends | `pkgs/parse` |
+| 4.4m-TB (part one) | closed | decode before the blank check for unescaped candidates | done in 4.4n: `title_key` checks `plain_str`'s view | `claude/entry` |
+| 4.4m-TB (part two) | shape, open | a new `String` per winning title, not one reused buffer | as stated in 4.4m: a `str` buffer that `clear` + append of a `str` keeps valid UTF-8 (the `[u8]` appends have no UTF-8 ensures) | `claude/import`, `pkgs/jstr` |
+| 4.4m-SS | shape, open | per-scalar UTF-8 checks in `string_token` (values and keys) after the line check, vs the hand's per-value `from_utf8` | unchanged by 4.4n (`record` now calls `string_token`, not `lex::scan_string`): a "line validated" fact through `record` / `container` / `scan_records` / `scan` so `string_token` skips `validate_utf8` under `parse_owned` | `pkgs/parse`, `pkgs/lex` |
+| 4.4n-TT | shape, new | `title_for_type`: up to three `string_is` scans of `type` vs one borrow + `match` | read `type` once through `plain_str` and compare the view (escaped `type` falls back to `string_is`) | `claude/entry` |
+| 4.4n-KL | shape, new | key lookup walks all members per lookup (last-wins at the lookup) vs a map built once at parse | an index or a "keys unique" fact from the parse; needs a design step | `pkgs/access`, `pkgs/parse` |
+
+### Consumer tests (step 4.4n)
+
+pruvc-rs (`PRUVC_RS=pruvc-rs/target/release/pruvc`), pairs rs/rust and rs/llvm. Every consumer of `pkgs/parse`
+was rerun, which covers `claude/entry` and `claude/import` too.
+
+| Runner | rs/rust | rs/llvm |
+|---|---|---|
+| claude `test_a0` | 272 / 272 | 272 / 272 |
+| claude `test_a1` (+13 `plain` cases) | 2897 / 2897 | 2897 / 2897 |
+| claude `test_a2` (after the `window_object` split) | 2443 / 2443 | 2443 / 2443 |
+| claude `test_a3` | 134 / 134 | 134 / 134 |
+| claude `test_a4` (after the split) | 270 / 270 | 270 / 270 |
+| claude `q.py` (after the split) | 20270 / 20270 | 20270 / 20270 |
+| claude `q_mutants.py` (after the split) | 18 mutants: 8 detected, 10 proof-rejected (mutant 3 by `verify_unknown`, not a definite rejection), none survive | (same run) |
+| json `run_a0`-`run_a5` (`run_a2` oracle updated) | 37 / 351 / 114 / 454 / 6344 / 83 | same |
+| supervisor `test_a0`-`test_a3` | 522 / 410 / 78 / 35 | same |
+| grok `test_impl --no-ts` (`GROK_COMPILE_WALL=3600`) | 254 / 254 | 254 / 254 |
+| qwen `test_impl.py` | 26 / 26 | 26 / 26 |
+| mcp `test_impl.py` | 22 / 22 | 22 / 22 |
+| codex `test_impl.py` | 136 / 136 | 136 / 136 |
+| opencode `test_impl.py` (`GROK_TS_TRANSPILER` set) | 199 / 199 | 199 / 199 |
+
+The first claude `test_a2` / `test_a4` / `q.py` / `q_mutants.py` runs failed verification at `read_window`
+(`verify_unknown`). The split above fixed that. `claude/q.py` exits 1 only for the frozen py pairs
+(`build: 'py'`); both rs pairs pass. The `Some` branch of `plain_str` runs on `parse_line` documents on both
+backends (`test_a1` `plain` cases); no separate trace of `answer_blocks` was made. Nothing was measured.

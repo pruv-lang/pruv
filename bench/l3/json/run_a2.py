@@ -67,7 +67,10 @@ def expected_tape(data):
     if text[q] == close: break
     assert text[q] == ','; q = ws(q+1)
    end = q+1; out[6*r+5] = count
-  else: _,end = decoder.raw_decode(text,p)
+  else:
+   _,end = decoder.raw_decode(text,p)
+   # 4.4n (4.4m-PB): a string or key with no backslash carries the plain bit 1 in slot 5.
+   if c == '"' and '\\' not in text[p+1:end-1]: out[6*r+5] = 1
   out[6*r+2] = byte(end); out[6*r+3] = len(out)//6
   return end
  assert ws(value(0,-1)) == len(text)

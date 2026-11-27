@@ -63,6 +63,7 @@ fn main() {
    "human" => sol::human_text_w(&w(1)),
    "pick" => sol::pick_title_w(&w(1), &w(2), &w(3)),
    "title" => sol::title_of_w(&w(1)),
+   "plain" => sol::plain_w(&w(1), &w(2)),
    _ => panic!("unknown fixture"),
   };
   println!("{}", out.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" "));
@@ -828,6 +829,18 @@ def fixtures():
         add('pick', 0, doc, b'a', b'zz')
         add('pick', 0, doc, b'zz', b'b')
         add('pick', 0, doc, b'', b'a')
+
+    # ---- 4.4n (4.4m-PB): parse_line sets the plain bit; plain_str is Some exactly for an unescaped string ----
+    # Hand-derived expectations: [1, raw content bytes] for a plain string, [0] otherwise.
+    for doc, key, want in [(b'{"a":"x"}', b'a', [1, 1]), (b'{"a":""}', b'a', [1, 0]),
+                           (b'{"a":"h\\u00e9llo"}', b'a', [0]),
+                           ('{"a":"héllo 世"}'.encode(), b'a', [1, 10]),
+                           (b'{"a":"x\\ny"}', b'a', [0]), (b'{"a":"\\u0061"}', b'a', [0]),
+                           (b'{"b":"x\\"","a":"yz"}', b'a', [1, 2]), (b'{"\\u0061":"xy"}', b'a', [1, 2]),
+                           (b'{"a":5}', b'a', [0]), (b'{"a":["x"]}', b'a', [0]), (b'{"b":"x"}', b'a', [0]),
+                           (b'{"a":"x","a":"\\t"}', b'a', [0]), (b'{"a":"\\t","a":"xyz"}', b'a', [1, 3])]:
+        ws = [doc, key, b'']
+        cases.append(('plain', 0, ws, want))
     return cases
 
 
