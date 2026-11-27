@@ -1060,6 +1060,23 @@ fn tree_count(t: Tree) -> i64
   [str binder under an enclosing arm](tests/must_reject/lg36_str_move_under_outer_arm.pruv),
   [str binder moved on one branch](tests/must_reject/lg36_str_move_branch_read.pruv),
   [str binder moved in a loop](tests/must_reject/lg36_str_move_in_loop.pruv).
+- R-6e-12b **Moving a struct binder whole (L-gaps 16, LG15-MB).** Under the scrutinee rule of R-6e-12a, `move d`
+  of a struct-typed binder `d` (for example `Parse::Parsed(doc)` pushed with `vec_push(move docs, move doc)`) hands
+  the whole payload over; the binder is then moved (a second use, a use after a field move `move d.f`, or a move in a
+  loop of the arm is `type/foreign_move` / `type/foreign_loop_move`). A struct binder of any other `match` (a borrowed
+  scrutinee, an arm or enclosing arm naming the scrutinee, a nested `match` on any enclosing arm's scrutinee), an
+  enum-typed binder and a binder whose field is boxed are not moved whole: `type/array_alias`. Rust moves the binder out of the by-value scrutinee. LLVM takes the payload value and stores
+  zero into that field of the scrutinee's slot (every owned part empty), so the scrutinee's drop frees nothing
+  twice; a struct with no owned part is copied. Tests: [runtime](tests/runtime/lgaps16_rt_binder_record.pruv),
+  [scalar struct](tests/runtime/lgaps16_rt_binder_scalar.pruv),
+  [nested match on a plain enum](tests/must_reject/lgaps16_binder_record_nested_scalar.pruv),
+  [moved in a loop](tests/must_reject/lgaps16_binder_record_loop.pruv),
+  [moved twice](tests/must_reject/lgaps16_binder_record_twice.pruv),
+  [field then whole](tests/must_reject/lgaps16_binder_record_field_then_whole.pruv),
+  [borrowed scrutinee](tests/must_reject/lgaps16_binder_record_borrowed.pruv),
+  [enclosing arm on the same owner](tests/must_reject/lgaps16_binder_record_outer_arm.pruv),
+  [scrutinee read after](tests/must_reject/lgaps16_binder_record_after_match.pruv),
+  [enum binder](tests/must_reject/lgaps16_binder_record_enum.pruv).
   LG9 (G-DB15-2): under the same conditions, `return x` of a `str` binder `x` of that arm is allowed without
   `copy(x)` and means exactly `return copy(x)`: it needs `alloc`, and the verifier and both backends treat it as that
   copy (the checker rewrites the value into the `copy(x)` call, so both backends and the cost bound count the
@@ -1875,7 +1892,7 @@ borrowed value is live.
   one field with `let t = move b.f;`. As with G-R09-4 the move is a partial move (R-6g8-5): a later use of
   `b.f` or of `b` whole in that arm is `type/foreign_move` (a move on only some paths leaves it maybe moved),
   the other fields of `b` stay readable,
-  `return move b.f` is still refused, and a whole `move b` stays refused (`type/foreign_move`). A binder of a match that is not consuming keeps the R-6e-16 rule. Rust emits the
+  `return move b.f` is still refused, and a whole `move b` follows R-6e-12b. A binder of a match that is not consuming keeps the R-6e-16 rule. Rust emits the
   partial move `let t = b.f;` with no `Clone` and no `mem::take`, as hand Rust writes `Ok(doc) => doc.tape`;
   LLVM moves the field out of the payload slot and empties it, with no `@pruv_copy`.
   Tests: [field](tests/spec/r6g8_4_binder_field.pruv), [use after](tests/spec/r6g8_4_binder_after.pruv),
@@ -2533,6 +2550,7 @@ UTF-8 arguments with the same placement rules, affine with auto-drop; an argumen
 | `proc_spawn(program: str, args: ProcessArgs, cwd: str) -> Process` | proc, alloc | no requires; ok and stdin open, or not ok with error 1 or 2. `cwd == ""` inherits |
 | `proc_spawn_env(program: str, args: ProcessArgs, cwd: str, env_names: ProcessArgs, env_values: ProcessArgs) -> Process` | proc, alloc | same contract as `proc_spawn`; the child inherits the parent environment, then the pairs are set in order (last wins, no removal); unequal counts, empty name, `=` or NUL in a name, NUL in a value: error 1 |
 | `proc_spawn_quiet(program: str, args: ProcessArgs, cwd: str) -> Process` | proc, alloc | same contract as `proc_spawn`; the child's stderr is the null device, so stream 2 holds no bytes and reaches end of file at the first read (R-6l-3) |
+| `proc_spawn_env_quiet(program: str, args: ProcessArgs, cwd: str, env_names: ProcessArgs, env_values: ProcessArgs) -> Process` | proc, alloc | same contract as `proc_spawn_env`; stderr is the null device as in `proc_spawn_quiet` (R-6l-4) |
 | `proc_write_str/write_bytes(take p, ...) -> Process` | proc, alloc | requires ok and stdin open; writes everything |
 | `proc_close_stdin(take p) -> Process` | proc, alloc | requires ok and stdin open; ensures stdin closed |
 | `proc_read(take p, stream: i64, max: i64) -> Process` | proc, alloc | requires ok, stream 1 or 2, `1 <= max <= 2^40` (R-6l-1); next chunk of at most `max` bytes; EOF iff the chunk is empty |
@@ -2559,11 +2577,24 @@ operation. Protocol deadlocks, timeouts and process trees are not handled.
   large stderr write never blocks the child. Stream 2 is an empty stream: `proc_read(p, 2, max)` adds no bytes and
   sets `proc_eof(p, 2)`, and `proc_read_all` leaves `proc_size(p, 2) == 0`. The verifier gives it the `proc_spawn`
   contract (it does not assume the empty stream), and the handle is must-consume. In an event loop
-  (`ev_add_process`) stream 2 is at end of file from the start, so the end event comes once stdout is drained.
-  Code: both backends share `pruv_proc_spawn_in` with `Stdio::null()` for stderr; LLVM
+  (`ev_add_process`) stream 2 is at end of file from the start: `ev_eof(l, slot)` turns true at the stdout read
+  that reaches end of file, with no read of stream 2 (L-gaps 16, row 4.4za-QE), and the end event comes once
+  stdout is drained, without waiting for the stream-2 reader. Code: both backends share `pruv_proc_spawn_in` with `Stdio::null()` for stderr and a `quiet`
+  flag that `pruv_ev_process` copies into the slot's stream-2 end; LLVM
   calls the shim `pruv_g6_proc_spawn_quiet`. Tests: [accept](tests/spec/r6l_3_quiet_ok.pruv), [reject](tests/spec/r6l_3_quiet_unchecked.pruv),
   [runtime](tests/runtime/g10p_r23_quiet.pruv), [event loop](tests/runtime/g10a_r23_quiet_ev.pruv),
+  [eof without a stream-2 read](tests/runtime/g10a_r23_quiet_eof.pruv),
+  [end event at once](tests/runtime/g10a_r23_quiet_exit.pruv),
   [leaked handle](tests/must_reject/g10p_quiet_unconsumed.pruv), [unchecked write](tests/must_reject/g10p_v_quiet_unchecked.pruv).
+- R-6l-4 `proc_spawn_env_quiet(program, args, cwd, env_names, env_values)` (L-gaps 16, row 4.4za-EQ) is
+  `proc_spawn_env` with stderr handed to the null device, the hand Rust `Command::env(..).stderr(Stdio::null())`:
+  the environment pairs and their error 1 cases are those of `proc_spawn_env`, and stream 2 behaves as in R-6l-3
+  (empty, at end of file from the start in an event loop). The verifier gives it the `proc_spawn` contract and
+  the handle is must-consume. Code: `pruv_proc_spawn_env_quiet` calls `pruv_proc_spawn_in` with the pairs and
+  `quiet`; LLVM calls the shim `pruv_g6_proc_spawn_env_quiet`. Tests: [accept](tests/spec/r6l_4_env_quiet_ok.pruv),
+  [reject](tests/spec/r6l_4_env_quiet_unchecked.pruv), [runtime](tests/runtime/g10p_r24_env_quiet.pruv),
+  [leaked handle](tests/must_reject/g10p_env_quiet_unconsumed.pruv),
+  [unchecked write](tests/must_reject/g10p_v_env_quiet_unchecked.pruv).
 
 ```
 pub fn version(program: str, cwd: str) -> Result<i64> ! proc, alloc

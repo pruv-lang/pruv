@@ -1,0 +1,23 @@
+// L-gaps 16 (LG15-MB): moving a struct binder consumes the scrutinee, so a read of it after the match is refused
+struct Doc { bytes: [u8], n: i64 }
+enum Parse { Parsed(doc: Doc), Bad(code: i64) }
+
+fn make() -> Parse ! alloc {
+  let b: [u8] = alloc(2, 7);
+  return Parse::Parsed(Doc { bytes: move b, n: 2 });
+}
+
+fn run() -> i64 ! alloc {
+  let mut docs: Vec<Doc> = vec_new::<Doc>();
+  let q: Parse = make();
+  match q {
+    Parse::Parsed(doc) => {
+      docs = vec_push::<Doc>(move docs, move doc);
+    }
+    Parse::Bad(code) => {}
+  }
+  match q {
+    Parse::Parsed(d) => { return d.n; }
+    Parse::Bad(code) => { return code; }
+  }
+}

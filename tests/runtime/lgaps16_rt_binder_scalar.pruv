@@ -1,0 +1,12 @@
+// L-gaps 16 review (LG15-MB): a struct binder with only scalar fields moves whole out of a consuming match;
+// LLVM copies the SSA payload.
+struct P { n: i64, m: i64 }
+enum E { A(p: P), B(code: i64) }
+fn mk(k: i64) -> E requires 0 <= k && k <= 10 { if k == 0 { return E::B(5); } return E::A(P { n: k, m: 2 }); }
+pub fn run(k: i64) -> i64 requires 0 <= k && k <= 10 {
+  let e: E = mk(k);
+  match e {
+    E::A(p) => { let q: P = move p; return q.n; }
+    E::B(code) => { return code; }
+  }
+}

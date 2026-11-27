@@ -522,6 +522,7 @@ must_reject|tests/must_reject/g10p_discard_stmt.pruv	1 case: obl=0 1	--infer=aa6
 must_reject|tests/must_reject/g10p_discard_update.pruv	1 case: obl=0 1	--infer=a714a60f2c36
 must_reject|tests/must_reject/g10p_double_end.pruv	1 case: obl=0 1	--infer=f5b6f4bff0f2
 must_reject|tests/must_reject/g10p_early_return.pruv	1 case: obl=0 1	--infer=c1c57af457b0
+must_reject|tests/must_reject/g10p_env_quiet_unconsumed.pruv	1 case: obl=0 1	--infer=6adeb2c8e4ad
 must_reject|tests/must_reject/g10p_env_unconsumed.pruv	1 case: obl=0 1	--infer=6adeb2c8e4ad
 must_reject|tests/must_reject/g10p_forgotten_take.pruv	1 case: obl=0 1	--infer=a3f0f875ebee
 must_reject|tests/must_reject/g10p_host_entry.pruv	1 case: obl=0 1	--infer=89a6f18e258c
@@ -543,6 +544,7 @@ must_reject|tests/must_reject/g10p_v_bad_stream.pruv	1 case: obl=3 1	--infer=889
 must_reject|tests/must_reject/g10p_v_domain_eof.pruv	1 case: obl=1 1	--infer=2dd0987aaf3b
 must_reject|tests/must_reject/g10p_v_domain_index.pruv	1 case: obl=1 1	--infer=d6ef378cae26
 must_reject|tests/must_reject/g10p_v_domain_stream.pruv	1 case: obl=2 1	--infer=acc34880bbf3
+must_reject|tests/must_reject/g10p_v_env_quiet_unchecked.pruv	1 case: obl=1 1	--infer=06b5e628c8fb
 must_reject|tests/must_reject/g10p_v_env_unchecked.pruv	1 case: obl=1 1	--infer=5a6dc74c86df
 must_reject|tests/must_reject/g10p_v_eof_empty.pruv	1 case: obl=2 1	--infer=054b5442d0be
 must_reject|tests/must_reject/g10p_v_exit_zero.pruv	1 case: obl=1 1	--infer=48d3ef202292
@@ -1243,6 +1245,14 @@ must_reject|tests/must_reject/lgaps13_vec_tape_copy_push.pruv	1 case: obl=0 1	--
 must_reject|tests/must_reject/lgaps13_view_reserve_unbounded.pruv	1 case: obl=1 1	--infer=92ff3e9ad72d
 must_reject|tests/must_reject/lgaps13_views_len_above.pruv	1 case: obl=7 1	--infer=1b6d48050afb
 must_reject|tests/must_reject/lgaps13_views_len_below.pruv	1 case: obl=7 1	--infer=dbc2405cbeeb
+must_reject|tests/must_reject/lgaps16_binder_record_after_match.pruv	1 case: obl=0 1	--infer=201d61dc5dd5
+must_reject|tests/must_reject/lgaps16_binder_record_borrowed.pruv	1 case: obl=0 1	--infer=21b116cd868c
+must_reject|tests/must_reject/lgaps16_binder_record_enum.pruv	1 case: obl=0 1	--infer=71334be51f7d
+must_reject|tests/must_reject/lgaps16_binder_record_field_then_whole.pruv	1 case: obl=0 1	--infer=1e3433d7e5ae
+must_reject|tests/must_reject/lgaps16_binder_record_loop.pruv	1 case: obl=0 1	--infer=1cffdc8c8690
+must_reject|tests/must_reject/lgaps16_binder_record_nested_scalar.pruv	1 case: obl=0 1	--infer=d3f830ed583a
+must_reject|tests/must_reject/lgaps16_binder_record_outer_arm.pruv	1 case: obl=0 1	--infer=4957fb9bb279
+must_reject|tests/must_reject/lgaps16_binder_record_twice.pruv	1 case: obl=0 1	--infer=0757ee742672
 must_reject|tests/must_reject/lgaps9_into_bytes_borrowed.pruv	1 case: obl=0 1	--infer=babc264f3f43
 must_reject|tests/must_reject/lgaps9_into_bytes_len.pruv	1 case: obl=1 1	--infer=342d6c1e081c
 must_reject|tests/must_reject/lgaps9_into_bytes_use_after.pruv	1 case: obl=0 1	--infer=7c8a2a64df1d
@@ -1694,7 +1704,9 @@ runtime|tests/runtime/g10a_r19_requires_exit.pruv	1 case: obl=181 1	--infer=bc8c
 runtime|tests/runtime/g10a_r20_fairness.pruv	1 case: obl=55 1	--infer=bb273ff39696
 runtime|tests/runtime/g10a_r21_backpressure.pruv	1 case: obl=207 1	--infer=4421e55a1489
 runtime|tests/runtime/g10a_r22_copy_contract.pruv	1 case: obl=44 1	--infer=4d9ccc5d6948
-runtime|tests/runtime/g10a_r23_quiet_ev.pruv	1 case: obl=67 1	--infer=2d47f8555bff
+runtime|tests/runtime/g10a_r23_quiet_eof.pruv	1 case: obl=54 1	--infer=907d7a19f7d9
+runtime|tests/runtime/g10a_r23_quiet_ev.pruv	1 case: obl=67 1	--infer=97ec9e28ef32
+runtime|tests/runtime/g10a_r23_quiet_exit.pruv	1 case: obl=33 1	--infer=08895e862510
 runtime|tests/runtime/g10a_r23_wait_for.pruv	1 case: obl=385 1	--infer=0a6d1ab0abfc
 runtime|tests/runtime/g10a_r24_write_for.pruv	1 case: obl=529 1	--infer=a3a5369365e8
 runtime|tests/runtime/g10a_r25_write_hook.pruv	1 case: obl=529 1	--infer=43aba3a32124
@@ -1739,6 +1751,7 @@ runtime|tests/runtime/g10p_r20_hook_setup_late.pruv	1 case: obl=6 1	--infer=6c9f
 runtime|tests/runtime/g10p_r21_copy_contract.pruv	1 case: obl=38 1	--infer=660833ba4155
 runtime|tests/runtime/g10p_r22_env.pruv	1 case: obl=59 1	--infer=6775fb4b0408
 runtime|tests/runtime/g10p_r23_quiet.pruv	1 case: obl=68 1	--infer=381ceba627c8
+runtime|tests/runtime/g10p_r24_env_quiet.pruv	1 case: obl=121 1	--infer=790e007d8f12
 runtime|tests/runtime/g1_r01_copy.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 runtime|tests/runtime/g1_r02_nested.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 runtime|tests/runtime/g1_r03_variants.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
@@ -2019,6 +2032,8 @@ runtime|tests/runtime/lgaps12_view_checks_trusted.pruv	1 case: obl=11 1	--infer=
 runtime|tests/runtime/lgaps13_take_then_fail.pruv	1 case: obl=5 1	--infer=43b169e41e8c
 runtime|tests/runtime/lgaps13_vec_nested_field.pruv	1 case: obl=8 1	--infer=aff016696077
 runtime|tests/runtime/lgaps13_vec_tape.pruv	1 case: obl=55 1	--infer=0e59b79918ad
+runtime|tests/runtime/lgaps16_rt_binder_record.pruv	1 case: obl=60 1	--infer=9f3bfc498413
+runtime|tests/runtime/lgaps16_rt_binder_scalar.pruv	1 case: obl=1 1	--infer=607c313105ae
 runtime|tests/runtime/lgaps9_str_bytes.pruv	1 case: obl=25 1	--infer=67352951afef
 runtime|tests/runtime/p1_r_bounds.pruv	1 case: obl=9 1	--infer=55e5c046f31d
 runtime|tests/runtime/p1_r_cast_fail.pruv	1 case: obl=1 1	--infer=d6a4ee3a0a38

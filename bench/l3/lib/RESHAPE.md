@@ -2584,3 +2584,35 @@ Changes `bench/l3/pkgs/transport`, `codex/rpc.pruv` and a comment in `grok/rpc.p
   `tests/run_all_rows.txt` updated). Fix-check review: both findings closed, no new required problem. L3 on the final
   binary: claude a0..a4, json a0..a5, supervisor a0..a3, grok, qwen, mcp, codex and opencode passed.
 - Open: LG15-MB, then the 4.4y-PW bench half; 4.4y-SB; claude 4.4h-VD, 4.4c-IS, 4.4h-ST; 4.4s-FK, 4.4v-RT.
+
+### Rows after L-gaps 16
+
+- Closed 4.4za-QE (SPEC R-6l-3): a quiet child (`proc_spawn_quiet`, `proc_spawn_env_quiet`) has its stream 2 marked
+  at end of file when it joins an event loop, in both backends, so `ev_eof` needs no stream-2 read.
+  `transport::receive` no longer reads stream 2 (its callers, codex and grok, spawn quiet children); `receive_tail`
+  still reads both streams for MCP, whose child keeps a piped stderr.
+- Closed 4.4za-EQ (SPEC R-6l-4): `proc_spawn_env_quiet(program, args, cwd, names, values)` is `proc_spawn_env` with
+  stderr set to the null device (hand `Command::env(..).stderr(Stdio::null())`); it has the same proof rules as
+  `proc_spawn_env`. Grok `rpc::start` spawns with it, so its stderr drain is gone.
+- Closed LG15-MB (SPEC R-6e-12b): in a consuming match, `move d` of a struct binder such as `Parse::Parsed(doc)`
+  hands the whole payload over (for example into `vec_push`). A second use, a whole move after a field move and a
+  move in a loop of the arm stay `type/foreign_move` / `type/foreign_loop_move`; a struct binder of a non-consuming
+  match and an enum binder are `type/array_alias`. Rust moves out of the by-value scrutinee; LLVM takes the payload
+  and stores zero into that field of the scrutinee's slot, so the scrutinee's drop frees nothing twice. R-6g8-4 now
+  points at R-6e-12b for a whole move, and `r6e_16_reject_dead_enum_binder_move` (a borrowed scrutinee) now expects
+  `type/array_alias`.
+- 4.4y-PW bench half (qwen keeps the parsed documents) is unblocked by LG15-MB but not done in this bundle.
+- Review (one Codex pass) found three required problems, all fixed in this bundle: a whole move of a struct binder
+  with no owned part gave bad LLVM IR (now a plain copy; a binder with a boxed field is refused whole, `array_alias`);
+  a nested `match` on an enclosing arm's scrutinee of a plain enum accepted a move (`array_alias` now); a quiet
+  slot's end event waited for the stream-2 reader thread (the queue's stream-2 end is now preset as well). Tests
+  `lgaps16_rt_binder_scalar`, `lgaps16_binder_record_nested_scalar`, `g10a_r23_quiet_exit`.
+- `g10a_r23_quiet_ev` and `g10a_r23_quiet_eof` wait 20 s per `ev_wait` instead of 2 s: under the parallel harness the
+  first exec of the freshly built fixture child stalled past 2 s (no bytes at all), while the whole run still ends
+  in about 6 s, so it is start-up latency and not a lost wakeup.
+- Open rows from the review (optional, not done): LGAPS16-DC dead code after `return` in the new arm move path,
+  LGAPS16-HN a test helper reuses a handle name, LGAPS16-WB `r6g8_4_binder_whole` could pin the exact error code,
+  LGAPS16-SW R-6e-12b wording for a struct holding a `str`.
+- Checks on the final compiler: must_reject 1390/1390, g8_frontend both 39/39, runtime both 3581/3581,
+  g10_proc_frontend 36/36, g10_async_frontend 44/44, g10_proc_proof 20/20, spec_trace 1/1, cargo test 163 passed,
+  diff_rust fuzz 20 and m3_all --quick ok after the intended golden update (runtime text and new samples).

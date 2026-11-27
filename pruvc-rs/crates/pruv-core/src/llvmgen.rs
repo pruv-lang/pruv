@@ -5874,6 +5874,22 @@ impl<'a> FnGen<'a> {
                             return Ok(v.clone());
                         }
                     }
+                    if v.k == Kind::Agg {
+                        if let Some(mv) = &v.mv {
+                            // L-gaps 16 (LG15-MB): moving a struct or enum binder takes the payload value and zeroes
+                            // that field of the scrutinee (every owned part empty), so the scrutinee's drop frees
+                            // nothing twice; the moved value is not backed by the emptied field
+                            let (sl, vn, k, _dead) = (**mv).clone();
+                            let g = g9_field_gep(self, need_ty(&sl.ty)?, &sl.a, Some(&vn), k)?;
+                            self.ins(format!("store {} zeroinitializer, ptr {}", lty(need_ty(&v.ty)?), g))?;
+                            return Ok(V { p: None, ..v.clone() });
+                        }
+                        if !self.is_ext_opt(&v.ty) {
+                            // L-gaps 16 review: a struct binder with no owned part is a plain value; the move is a
+                            // copy of the SSA payload (check.rs refuses a whole move of a boxed payload)
+                            return Ok(V { p: None, ..v.clone() });
+                        }
+                    }
                 }
                 let sl = bound.val().clone();
                 let mut v = self.load(&sl)?;
@@ -7324,7 +7340,7 @@ impl<'a> FnGen<'a> {
             "vec_new" | "map_new" | "string_from" | "string_new" | "vec_push" | "map_insert" | "string_push_str" | "string_push_char"
                 | "string_with_capacity" | "string_reserve" | "string_prepend_char"
                 | "file_open_read" | "file_create" | "file_read_all" | "file_write_str" | "file_write_bytes"
-                | "proc_args_new" | "proc_args_push" | "proc_spawn" | "proc_spawn_env" | "proc_spawn_quiet" | "proc_write_str" | "proc_write_bytes"
+                | "proc_args_new" | "proc_args_push" | "proc_spawn" | "proc_spawn_env" | "proc_spawn_quiet" | "proc_spawn_env_quiet" | "proc_write_str" | "proc_write_bytes"
                 | "proc_close_stdin" | "proc_read" | "proc_read_all"
                 | "net_connect" | "net_listen" | "net_accept" | "net_write_str" | "net_write_bytes"
                 | "net_shutdown_write" | "net_set_timeout" | "net_read" | "net_read_all" | "ev_new" | "ev_add_socket" | "ev_add_listener" | "ev_add_process" | "ev_add_timer" | "ev_wait" | "ev_read" | "ev_read_into" | "ev_proc_read_into" | "ev_write" | "ev_shutdown_write" | "ev_accept" | "ev_proc_read" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_wait" | "ev_proc_wait_for" | "ev_proc_write_for" | "ev_remove"

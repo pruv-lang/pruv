@@ -1,0 +1,13 @@
+{
+  "backends": ["rust", "llvm"],
+  "g6_drop_balance": true,
+  "flags_matrix": [
+    [],
+    ["--foreign-checks", "all"],
+    ["--no-verify"]
+  ],
+  "exit": 0,
+  "stdout_contains": "env quiet ok",
+  "gen_contains": ["fn pruv_proc_spawn_env_quiet", "pruv_g6_proc_spawn_env_quiet", "::std::process::Stdio::null()"],
+  "stderr_absent": "2Qp"
+}

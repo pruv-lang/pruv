@@ -316,3 +316,7 @@ changed to `else if` chains verifies in 15 s, and the whole module in 26 s. See 
 The hand `load_check` spawns with `.env("GROK_HOME", ..)` and `Stdio::null()`. Pruv has `proc_spawn_env` but no quiet
 form of it, so `start` is unchanged and `transport::receive` keeps reading and dropping stderr (row 4.4za-EQ in
 `../lib/RESHAPE.md`). The shared receive start is now `transport::begin` (no behaviour change).
+
+L-gaps 16 closed 4.4za-EQ and 4.4za-QE: `start` spawns with `proc_spawn_env_quiet` (hand `.env(..).stderr(Stdio::null())`,
+SPEC R-6l-4), and `transport::receive` no longer reads stream 2, which a quiet child has at end of file from the start.
+The stderr drain is gone; like the hand, Pruv reads stdout only.

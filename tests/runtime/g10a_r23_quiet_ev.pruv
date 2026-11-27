@@ -12,7 +12,7 @@ fn quiet_ev(child: str, nerr: str, nout: str) -> i64 ! async, net, proc, alloc {
  l = ev_proc_close_stdin(move l, 0);
  let mut done: bool = false; let mut rounds: i64 = 10000; let mut out: i64 = 0; let mut err: i64 = 0;
  while !done && rounds > 0 decreases rounds {
-  l = ev_wait(move l, 2000);
+  l = ev_wait(move l, 20000);
   if ev_event_kind(l) == 1 {
    l = ev_proc_read(move l, 0, 1, 65536);
    out = out + ev_size(l);

@@ -1,0 +1,17 @@
+// L-gaps 16 review (LG15-MB): an inner match on the same owner as an open outer arm is not consuming, also for
+// a payload type with no owned part; the inner binder cannot be moved whole.
+struct P { n: i64 }
+enum E { A(p: P), B(code: i64) }
+fn mk() -> E { return E::A(P { n: 7 }); }
+pub fn run() -> i64 {
+  let e: E = mk();
+  match e {
+    E::A(outer) => {
+      match e {
+        E::A(inner) => { let q: P = move inner; return outer.n; }
+        E::B(c) => { return c; }
+      }
+    }
+    E::B(code) => { return code; }
+  }
+}

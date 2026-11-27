@@ -1,0 +1,14 @@
+// spec: R-6l-4 accept
+fn run(program: str, home: str) -> Result<i64> ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let mut names: ProcessArgs = proc_args_new();
+  names = proc_args_push(move names, "PRUV_HOME");
+  let mut values: ProcessArgs = proc_args_new();
+  values = proc_args_push(move values, home);
+  let mut p: Process = proc_spawn_env_quiet(program, args, "", names, values);
+  if proc_ok(p) {
+    p = proc_close_stdin(move p);
+    if proc_ok(p) { p = proc_read_all(move p); }
+  }
+  return proc_wait(move p);
+}

@@ -1,0 +1,126 @@
+// L-gaps 16 (4.4za-EQ): proc_spawn_env_quiet sets the environment pairs like proc_spawn_env and hands the child's
+// stderr to the null device like proc_spawn_quiet (hand `Command::env(..).stderr(Stdio::null())`). The child sees the
+// pairs, its stderr bytes never reach the parent or the parent's own stderr, and in an event loop stdout alone reaches ev_eof.
+fn abort_with(take p: Process, base: i64) -> i64 ! proc, alloc
+  requires base >= 0 && base <= 1000000
+{
+  let e: i64 = proc_error(p);
+  let r: Result<i64> = proc_wait(move p);
+  return base + e;
+}
+
+fn bytes_eq(p: Process, expected: [u8]) -> bool ! alloc {
+  let got: [u8] = proc_bytes(p, 1);
+  if len(got) != len(expected) { return false; }
+  let mut i: i64 = 0;
+  while i < len(got)
+    invariant 0 <= i && i <= len(got)
+    decreases len(got) - i
+  {
+    if got[i] != expected[i] { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// `child env q1 q2 q3` with one pair: 0 = the child printed exactly `expected`, stream 2 stayed empty, exit 0
+fn eq_env(child: str, n: str, v: str, q1: str, q2: str, q3: str, expected: [u8]) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "env");
+  args = proc_args_push(move args, q1);
+  args = proc_args_push(move args, q2);
+  args = proc_args_push(move args, q3);
+  let mut names: ProcessArgs = proc_args_new();
+  names = proc_args_push(move names, n);
+  let mut values: ProcessArgs = proc_args_new();
+  values = proc_args_push(move values, v);
+  let mut p: Process = proc_spawn_env_quiet(child, args, "", names, values);
+  if !proc_ok(p) { return abort_with(move p, 100); }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) { return abort_with(move p, 200); }
+  p = proc_read_all(move p);
+  if !proc_ok(p) { return abort_with(move p, 300); }
+  let same: bool = bytes_eq(p, expected);
+  let quiet: bool = proc_size(p, 2) == 0 && proc_eof(p, 2);
+  let r: Result<i64> = proc_wait(move p);
+  if !same { return 1; }
+  if !quiet { return 2; }
+  match r {
+    Ok(c) => { return c; }
+    Err(c) => { return 400 + c; }
+  }
+}
+
+// `child errout nerr nout` with a pair: stdout arrives, stderr never does (more than a pipe holds cannot block)
+fn eq_err(child: str, nerr: str, nout: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "errout");
+  args = proc_args_push(move args, nerr);
+  args = proc_args_push(move args, nout);
+  let mut names: ProcessArgs = proc_args_new();
+  names = proc_args_push(move names, "PRUV_ENV_Q");
+  let mut values: ProcessArgs = proc_args_new();
+  values = proc_args_push(move values, "1");
+  let mut p: Process = proc_spawn_env_quiet(child, args, "", names, values);
+  if !proc_ok(p) { return abort_with(move p, 100); }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) { return abort_with(move p, 200); }
+  p = proc_read_all(move p);
+  if !proc_ok(p) { return abort_with(move p, 300); }
+  let out: i64 = proc_size(p, 1);
+  let quiet: bool = proc_size(p, 2) == 0;
+  let r: Result<i64> = proc_wait(move p);
+  if !quiet { return -1; }
+  match r {
+    Ok(c) => { if c != 0 { return -2; } return out; }
+    Err(c) => { return -3; }
+  }
+}
+
+// the same child in an event loop: stdout alone reaches ev_eof (stream 2 is at end of file from the start)
+fn eq_ev(child: str, nerr: str, nout: str) -> i64 ! async, net, proc, alloc {
+  let mut a: ProcessArgs = proc_args_new();
+  a = proc_args_push(move a, "errout");
+  a = proc_args_push(move a, nerr);
+  a = proc_args_push(move a, nout);
+  let mut names: ProcessArgs = proc_args_new();
+  names = proc_args_push(move names, "PRUV_ENV_Q");
+  let mut values: ProcessArgs = proc_args_new();
+  values = proc_args_push(move values, "1");
+  let p: Process = proc_spawn_env_quiet(child, a, "", names, values);
+  if !proc_ok(p) { let r: i64 = abort_with(move p, 0); return -100; }
+  let mut l: Loop = ev_new(2);
+  l = ev_add_process(move l, move p);
+  if !ev_ok(l) { let r0: Result<i64> = ev_close(move l); return -100; }
+  let mut out: i64 = 0; let mut rounds: i64 = 10000; let mut stuck: bool = false;
+  while ev_ok(l) && !ev_eof(l, 0) && !stuck && rounds > 0 && out <= 1000000000 invariant 0 <= out decreases rounds {
+    l = ev_wait(move l, 2000);
+    if !ev_ok(l) || ev_event_kind(l) == 0 || ev_kind(l, 0) != 3 { stuck = true; } else {
+      l = ev_proc_read(move l, 0, 1, 65536);
+      let got: i64 = ev_size(l);
+      if got >= 0 && got <= 65536 { out = out + got; }
+    }
+    rounds = rounds - 1;
+  }
+  if !ev_ok(l) || ev_kind(l, 0) != 3 { let r1: Result<i64> = ev_close(move l); return -100; }
+  let eof: bool = ev_eof(l, 0);
+  l = ev_proc_wait(move l, 0);
+  let code: i64 = ev_exit(l);
+  let r: Result<i64> = ev_close(move l);
+  if !eof { return -2; }
+  if code != 0 { return -300; }
+  return out;
+}
+
+// bad input and a missing program fail like proc_spawn_env (error 1, error 2)
+fn eq_bad(program: str, n: str, v: str) -> i64 ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let mut names: ProcessArgs = proc_args_new();
+  names = proc_args_push(move names, n);
+  let mut values: ProcessArgs = proc_args_new();
+  values = proc_args_push(move values, v);
+  let p: Process = proc_spawn_env_quiet(program, args, "", names, values);
+  let e: i64 = proc_error(p);
+  let r: Result<i64> = proc_wait(move p);
+  return e;
+}
