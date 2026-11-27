@@ -207,13 +207,25 @@ pub fn string_utf8(source: [u8], start: i64, end: i64) -> [u8] ! alloc
   return decode_utf8(source, start, end, false);
 }
 
-// Count the output bytes, reserve capacity once, then copy each escape-free run in one `arr_append` and push each
-// decoded escape scalar as UTF-8 (hand mode 6: the same segments, `extend_from_slice` per run, `encode_utf8` per escape char).
 fn decode_utf8(source: [u8], start: i64, end: i64, scanned: bool) -> [u8] ! alloc
   requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
   ensures len(result) <= 3 * (end - start)
   ensures forall i in 0..len(result): (0 <= result[i] && result[i] <= 255)
 {
+  let mut out: [u8] = alloc(0, 0);
+  decode_append(inout out, source, start, end, scanned);
+  return out;
+}
+
+// Count the output bytes, reserve capacity once, then copy each escape-free run in one `arr_append` and push each
+// decoded escape scalar as UTF-8 (hand mode 6: the same segments, `extend_from_slice` per run, `encode_utf8` per escape char).
+// Appends to the caller's buffer (4.4i, hand `buf.extend_from_slice` into an existing `Vec`).
+pub fn decode_append(inout out: [u8], source: [u8], start: i64, end: i64, scanned: bool) -> () ! alloc
+  requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
+  requires len(out) <= 50331648
+  ensures len(out) <= old(len(out)) + 3 * (end - start)
+{
+  let base: i64 = len(out);
   let mut p: i64 = start;
   let mut stop: i64 = start;
   if end - start >= 2 { p = start + 1; stop = end - 1; }
@@ -240,12 +252,11 @@ fn decode_utf8(source: [u8], start: i64, end: i64, scanned: bool) -> [u8] ! allo
     }
   }
 
-  let mut out: [u8] = alloc(0, 0);
-  arr_reserve(inout out, need);
+  arr_reserve(inout out, base + need);
   p = first;
   while p < stop
     invariant start <= p && p <= stop && stop <= end
-    invariant len(out) <= 3 * (p - start)
+    invariant len(out) <= base + 3 * (p - start)
     decreases stop - p
   {
     let c: i64 = source[p];
@@ -278,7 +289,6 @@ fn decode_utf8(source: [u8], start: i64, end: i64, scanned: bool) -> [u8] ! allo
       p = s.next;
     }
   }
-  return out;
 }
 
 pub enum Text { Decoded(text: str), InternalInvariant(kind: i64) }

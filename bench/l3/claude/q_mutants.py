@@ -64,10 +64,10 @@ MUTANTS = [
  (6, 'import.pruv', 'omit the skip_user call in the window loop (dropped user line)',
   'if crate::text::dropped_user(subview(data, s, e)) { crate::turns::skip_user(inout col); }',
   'if crate::text::dropped_user(subview(data, s, e)) {}'),
- (7, 'framing.pruv', 'raw line cap does not count the CR before LF',
+ (7, 'pkg_framing/framing.pruv', 'raw line cap does not count the CR before LF',
   'if i - offset > limit {',
   'let mut raw: i64 = i - offset;\n      if i > offset { if data[i - 1] == 13 { raw = raw - 1; } }\n      if raw > limit {'),
- (8, 'framing.pruv', 'accept the short incomplete tail of a window as an entry',
+ (8, 'pkg_framing/framing.pruv', 'accept the short incomplete tail of a window as an entry',
   '  }\n  return Frame::Done;\n}', '  }\n  return Frame::Entry(offset, len(data), len(data));\n}'),
  (9, 'turns.pruv', 'remove the "\\n\\n" separator between reply pieces',
   'if rl > 0 { sep = 2; }', 'if rl > 0 { sep = 0; }'),
@@ -136,6 +136,16 @@ def copy_sources(work):
     man = json.loads((HERE / 'a4_root.pruv.json').read_text(encoding='utf-8'))
     for name in man.get('dependencies', {}):
         (work / f'{name}.pruv').unlink(missing_ok=True)
+    # framing is a package shared with bench/l3/qwen (4.4i); mutants 7 and 8 edit a copy of it in work/pkg_framing.
+    pf = work / 'pkg_framing'
+    pf.mkdir(exist_ok=True)
+    for p in (HERE.parent / 'pkgs' / 'framing').iterdir():
+        shutil.copyfile(p, pf / p.name)
+    # the copy's own dependencies point back at the shared packages
+    pm = json.loads((pf / 'pruv.json').read_text(encoding='utf-8'))
+    for dep in pm.get('dependencies', {}).values():
+        dep['path'] = os.path.relpath((HERE.parent / 'pkgs' / 'framing' / dep['path']).resolve(), pf.resolve())
+    (pf / 'pruv.json').write_text(json.dumps(pm, indent=1) + '\n', encoding='utf-8')
 
 
 def write_manifest(work):
@@ -143,6 +153,7 @@ def write_manifest(work):
     man = json.loads((HERE / 'a4_root.pruv.json').read_text(encoding='utf-8'))
     for dep in man.get('dependencies', {}).values():
         dep['path'] = os.path.relpath((HERE / dep['path']).resolve(), work.resolve())
+    man['dependencies']['framing']['path'] = 'pkg_framing'
     (work / 'a4_root.pruv.json').write_text(json.dumps(man, indent=1) + '\n', encoding='utf-8')
     return ['--manifest', str(work / 'a4_root.pruv.json')]
 

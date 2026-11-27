@@ -345,3 +345,75 @@ fixture entry point.
 | 4.4h-PT | shape | `put_turns` | one flat loop with the two stamps written inline and the 10 record words in one `arr_push`, plus a `shift` argument (A3 fixture prefix); hand iterates the kept suffix with an inner loop over the two stamps and `put` / `push` per word |
 | 4.4h-CU | fixture | `current` | a Pruv helper used only by `a3_root.pruv` (the A3 step driver); hand reaches the current draft with `back_mut()` |
 | - | language (i64) | all | `begun`, `used`, lengths are `i64` (hand `usize`); the existing integer-width rows apply |
+
+## 8. Step 4.4i: 4.4c-MB (model) with 4.4g-MC, 4.3h-Q; 4.3h-O and the title buffer stay
+
+New package API (`pkgs/access` 337, `pkgs/jstr` 223): `access::string_append(doc, id, inout out: [u8]) -> i64` appends
+the string token `id` to the caller's buffer. A plain token (tape word 5 == 1, no backslash) is one `arr_append` of
+the source span; an escaped one goes through `jstr::decode_append`, the old `decode_utf8` body writing into `out`
+after `arr_reserve(out, base + need)`. `decode_utf8` is now `alloc(0, 0)` + `decode_append`, so `string_text_owned`
+and every other caller keep their code and contracts. Contract: `result <= 0`; on 0, `len(out) <= old(len(out)) + 3
+* span`; on a negative code `out` is unchanged.
+
+Structure next to `handrust/src/lib.rs` (`consume` 795-835, `window_packet` 927-993):
+
+| item | hand | Pruv now | before 4.4i |
+|---|---|---|---|
+| `model` buffer | `st.model: Vec<u8>`, `clear()` + `extend_from_slice(m.as_bytes())` from a borrowed `Cow` each time | `model: [u8]` local of `read_window`, `model = truncate(model, 0)` (R-6g4-3 in place: Rust `Vec::truncate`, block kept) + `string_append(d, model_id, inout model)`: one copy of a plain span into the reused block, decode in place when escaped | `str`, `string_is` against the held model, then `string_text_owned` + `model = move v` (a new block per changed model) |
+| model filter | `consume`: `!m.is_empty() && m != SYNTHETIC` | `consume_entry`: `string_is(doc, model_id, "<synthetic>")`, then `string_is(doc, model_id, "")` (both compare in place, no decode) | synthetic only; the empty check came after a decode in `read_window` (`string_is` vs held) |
+| model compare (4.4g-MC) | none: copies every kept model | none: copies every kept model | compared with the held model first, decoded only when different |
+| framing | one module (`LINE_BYTES`, `DROP_HEAD_BYTES` consts next to it) | `pkgs/framing` (one file, mounted by claude a0/a2/a4/q/root and qwen q_root/root); `limit_line_bytes` / `limit_drop_head` moved there from both `boundary.pruv` | two byte-identical `framing.pruv`, limits read through `crate::boundary` |
+| allocation sites (model) | one `Vec` grown once, reused | one `[u8]` grown by `arr_reserve` / `arr_append`, reused (in-place `truncate` keeps the block on both backends) | one block per changed model |
+| `turns::refill` / `refill_text` (4.4h) | `clear()` on the evicted draft's blocks | `let mut x = move b; x = truncate(x, 0)`: in place, block kept on both backends | `let x0 = move b; let x = truncate(x0, 0)`: the copy form, which on rs/rust emits `truncate` + `shrink_to_fit` when `capacity / 2 > len` (always at length 0), so every evicted prompt/reply block was freed |
+
+Not changed (the language cannot state the hand shape here without a run-time check; no workaround):
+
+| row | kind | finding | kept |
+|---|---|---|---|
+| 4.4i-UF | proof (pkgs/parse, pkgs/lex) | the tape carries no proved UTF-8 fact for a string token span: `lex::validate_utf8` and `parse::string_token` check it at run time but export only `result == -1 \|\| (start <= result && result < end)`. A borrowed `ref str` of a plain span, or a `str` view of a reused `[u8]` buffer, needs that fact (R-6g-10) or a second run-time `utf8_valid` | `entry::string_field_of` / `string_content`, `import::answer_blocks` / the `consume_entry` text answer, and the title buffer (`best` in `tail_info`, passed to `text::one_line(str)`) keep `string_text_owned` + `move` |
+
+So 4.3h-O stays open (now as 4.4i-UF) and 4.4c-MB stays open for the title buffer only. Closing them needs a
+`pkgs/parse` / `pkgs/lex` contract change (an exported per-token UTF-8 predicate) that every parse consumer (json,
+mcp, supervisor, qwen, codex, opencode, grok, claude) would retest; that is out of this bench-only step.
+
+Closed: 4.4c-MB for `model`, 4.4g-MC, 4.3h-Q, the `joined` copy of `array_content` (below), and 4.4h-TR: §7 read the `let x0 = move b; truncate(x0, 0)` form
+as keeping the block on rs/rust; the generated Rust shows it shrinks there too. A `move` into the destination local
+first and then `x = truncate(x, 0)` is the R-6g4-3 in-place form on both backends, so no language gap remains.
+
+
+Different-model structure comparison (Codex gpt-6.2-astra, research only, given the generated `a4_root_gen.rs` and
+`handrust/src/lib.rs` without these conclusions; it read the file generated before the two in-place `truncate`
+changes). Every pair was rated DIFFERENT; each difference is placed below.
+
+| finding | placed |
+|---|---|
+| model buffer: moved, `truncate(0)` then `shrink_to_fit` (hand `clear`) | fixed in this step (in-place `truncate`, the table above); the regenerated code has `model.truncate(0)` only |
+| `array_content`: the joined text is copied once more (`string_to_str(joined)` -> `clone()`); hand moves `joined` | fixed: `whole = string_into_str(move joined)` (R-6e-23) in `entry.pruv` |
+| title candidates, user single string, user text blocks, assistant `content` / text blocks, string timestamps decoded into owned `String`s before the check; hand borrows `&str` / `Cow::Borrowed` | 4.4i-UF (and 4.3h-O); timestamps also 4.4c-IS |
+| whole line copied into `JsonDocument.source` (`to_vec`) where the hand parses the borrowed line | existing `pkgs/lines` / `pkgs/json` shape (the tape document owns its source); not a 4.4i row, left as reported |
+| `decode_append` counts the output first, `reserve_exact(base + need)`, then a second pass; hand decodes once during the parse and borrows when there is no escape | new 4.4i-DP (pkgs/jstr, shape): the escaped path keeps the count-then-write form of `decode_utf8`, which gives the `3 * span` growth bound in one reserve; plain tokens take one `arr_append` |
+| `consume_entry` returns `Effect::Done(model_id)` and the caller updates the model; hand `consume` updates title and model itself | existing shape (the model buffer lives in `read_window`, `inout` of a struct-held `[u8]` is 4.4h-FA) |
+| framing returns `i64` positions / `Frame` indices, hand borrows `&[u8]` slices; limits are `i64` functions, hand `usize` consts | existing i64-position and integer-width rows; no copies on either side |
+
+Results after the last code change (rs pairs; each test verifies its root first):
+
+| check | rs/rust | rs/llvm |
+|---|---|---|
+| claude `test_a0` / `a1` / `a2` / `a3` / `a4` | 272 / 2884 / 2443 / 134 / 270, all pass | same |
+| claude `q.py` (default count, seed 20261114) | 20270/20270 | 20270/20270 |
+| claude `q_mutants.py` (all 18 in one run) | 9 detected, 9 proof-rejected, 0 survived | - |
+| qwen `test_impl.py` | 26/26 | 26/26 |
+| mcp `test_impl.py` | 22/22 | 22/22 |
+| codex `test_impl.py` | 136/136 | 136/136 |
+| opencode `test_impl.py` | 199/199 | 199/199 |
+| grok `test_impl.py` | 254/254 | 254/254 |
+| json `run_a0`-`run_a5` | 37 / 351 / 114 / 454 / 6344 / 83, all as expected | same |
+| supervisor `test_a0`-`test_a3` | 522 / 410 / 78 / 35 | same |
+
+`q_mutants.py`: mutants 7 and 8 now edit `work/qm/<id>/pkg_framing/framing.pruv`, whose `pruv.json` dependency
+paths are rewritten to the shared `pkgs`. Not measured: 4.4i-UF keeps the title and read-only paths on owned
+decodes, so the structure is not yet the hand's for every function on the window path.
+
+After the review fix in `entry.pruv` (`string_into_str(move joined)`), claude `test_a0`-`test_a4`, `q.py` and
+`q_mutants.py` were run again on both rs pairs: same counts as above, all pass (q_mutants 9 detected, 9
+proof-rejected). The fix touches only `entry.pruv`, so the other pieces were not rerun.

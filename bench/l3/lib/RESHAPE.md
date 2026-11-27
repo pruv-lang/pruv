@@ -1566,3 +1566,24 @@ All after the last code change (F1 / F4 from the structure comparison).
      stage.
   2. Language: L3-VB / L3-VP (L-gaps 4), then 4.4h-VD / 4.4h-FA / 4.4h-TR; OpenCode 4.4b-NV and 4.3g-K3.
   3. Claude: 4.3h-O and 4.4c-MB together, and 4.3h-Q; then the rest of the 4.4g list (OpenCode, req port, Codex, Qwen).
+
+## Step 4.4i: Claude 4.4c-MB (model), 4.4g-MC, 4.3h-Q, 4.4h-TR
+
+- `pkgs/framing` (new package, `framing -> lines`): the byte-identical `claude/framing.pruv` and `qwen/framing.pruv`
+  are one file; `limit_line_bytes` / `limit_drop_head` moved into it from both `boundary.pruv` (a package cannot
+  name `crate::boundary`). Claude a0/a2/a4/q/root and Qwen q_root/root mount it; `claude/q_mutants.py` copies it to
+  `work/qm/<id>/pkg_framing` for mutants 7 and 8.
+- `pkgs/jstr::decode_append(inout out, ...)` and `pkgs/access::string_append(doc, id, inout out)`: decode into the
+  caller's buffer (plain token = one `arr_append` of the span). `decode_utf8` / `string_text_owned` are now thin
+  wrappers, unchanged contracts.
+- Claude `read_window` keeps `model: [u8]` and refills it with `model = truncate(model, 0)` + `string_append` (hand
+  `clear` + `extend_from_slice`); `consume_entry` drops an empty model like the hand. Closes 4.4c-MB for `model`
+  and 4.4g-MC.
+- 4.4h-TR closed: the copy form `truncate(x0, 0)` emits `truncate` + `shrink_to_fit` on rs/rust; `claude/turns.pruv`
+  `refill` / `refill_text` now move into the local and truncate it in place (R-6g4-3).
+- New 4.4i-UF (proof, `pkgs/parse` / `pkgs/lex`): no exported UTF-8 fact for a string token span, so a borrowed
+  `ref str` / a `str` view of a reused `[u8]` cannot be formed without a run-time check. 4.3h-O and the title part of
+  4.4c-MB stay on `string_text_owned`.
+- After the Codex structure comparison: `entry::array_content` hands `joined` over with `string_into_str(move
+  joined)` (R-6e-23) instead of a copy. New 4.4i-DP (pkgs/jstr, shape): an escaped token is decoded by a count pass,
+  one reserve and a write pass; the hand decodes once while parsing.

@@ -329,3 +329,26 @@ pub fn string_text_scanned_owned(doc: crate::json::JsonDocument, id: i64) -> cra
   }
   return crate::jstr::string_text_scanned_owned(doc.source, s.start, s.end);
 }
+
+// 4.4i (4.4c-MB): the decoded text of a string node appended to the caller's buffer (hand: `buf.clear()` by the
+// caller, then `extend_from_slice` of the borrowed `Cow`). A plain node (no backslash, tape slot 5 == 1) is one
+// `arr_append` of the raw span; otherwise the escape decode appends. 0 on success, negative on a corrupt tape or
+// another kind (as string_text_owned). The document must come from a parser that validated string tokens.
+pub fn string_append(doc: crate::json::JsonDocument, id: i64, inout out: [u8]) -> i64 ! alloc
+  requires len(out) <= 50331648
+  ensures result <= 0
+  ensures result == 0 ==> (0 <= id && id < len(doc.tape) / 6 && len(out) <= old(len(out)) + 3 * (doc.tape[6 * id + 2] - doc.tape[6 * id + 1]))
+  ensures result != 0 ==> len(out) == old(len(out))
+{
+  let k: i64 = kind(doc, id);
+  if k != 4 { if k < 0 { return k; } return -2; }
+  let s: Span = raw_span(doc, id);
+  if s.status != 0 { return s.status; }
+  if s.end - s.start < 2 { return 0; }
+  if doc.tape[6 * id + 5] == 1 {
+    arr_append(inout out, doc.source, s.start + 1, s.end - s.start - 2);
+    return 0;
+  }
+  crate::jstr::decode_append(inout out, doc.source, s.start, s.end, true);
+  return 0;
+}

@@ -41,8 +41,8 @@ fn refill(take b: [u8], t: [u8], n: i64) -> [u8] ! alloc
   requires 0 <= n && n <= len(t) && n <= 32768
   ensures len(result) == n
 {
-  let x0: [u8] = move b;
-  let mut x: [u8] = truncate(x0, 0);
+  let mut x: [u8] = move b;
+  x = truncate(x, 0);
   arr_append(inout x, t, 0, n);
   return move x;
 }
@@ -52,8 +52,8 @@ fn refill_text(take b: [u8], t: str, n: i64) -> [u8] ! alloc
   requires 0 <= n && n <= len(t) && n <= 32768
   ensures len(result) == n
 {
-  let x0: [u8] = move b;
-  let mut x: [u8] = truncate(x0, 0);
+  let mut x: [u8] = move b;
+  x = truncate(x, 0);
   arr_append(inout x, t, 0, n);
   return move x;
 }
