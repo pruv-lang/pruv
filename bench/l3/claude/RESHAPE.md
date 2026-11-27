@@ -422,3 +422,22 @@ Step 4.4m (4.3h-O, consumer side): `import::answer_blocks` and `consume_entry` t
 `str` of a plain string, under `doc_strings`, which `entry::parse_line` now ensures) before the owned decode. It
 does not take effect yet: `parse::record` never sets the plain bit, so the borrow is always `None` (row 4.4m-PB).
 Title and user content rows: 4.4m-TB, 4.4m-FB. See `pkgs/RESHAPE.md` §Step 4.4m.
+
+### Rows after 4.4zb
+
+- Closed 4.3h-D (hand side): the hand `dropped_user` is now the Pruv one-pass byte scan (`lit_end`, `quoted_end`,
+  `colon_value`, `kv`, `tool_result_after`, `content_hit` over the raw prefix); `from_utf8_lossy`, `find`,
+  `key_colon_val` and `has_tool_result` are gone. Same result on every input: U+FFFD from a lossy decode is never
+  whitespace, a quote or a brace, and the lossy decode never removes a valid whitespace sequence.
+- 4.4h-AE, shape part closed: Pruv `answer` takes the hand's three branches with `arr_append` on `d.reply` in place
+  (fit: separator + text; `room <= sep`: separator bytes only; else separator + `clip_len` prefix); `piece` is
+  gone. The early return stays an `if` around the rest: new language row LG-4zb-RA, `return` inside the `Some` arm
+  of `vec_at_mut` is `type/foreign_contract` ("cannot return inside a mutable collection Some arm").
+- Closed 4.4h-PL (hand side): hand `Collector::plan` returns `Plan { kept, bytes }` (prompt + reply + stamp bytes of
+  the kept drafts) and `window_packet` creates `text` with `title + model + plan.bytes` capacity, like
+  `arr_reserve(inout text, base + plan.bytes)`. Pruv's `Plan.total` stays for the `plan` ensures (proof value).
+- Structure comparison (Codex, default account) of the changed functions: remaining differences are i64 positions
+  with -1 versus `usize` / `Option`, `while` versus range `for` and `match` guards, `ws_at` reading bytes in turn
+  versus the hand's first-byte `match`, `plan` bounding the loop by `min(begun, 200)` and returning in the loop
+  versus the hand's two `break`s, `window_packet` appending a 0-byte title/model where the hand skips `None`, and the
+  known rows 4.4h-VD, 4.4c-IS, 4.4h-ST. Not measured: the window path still has open structure rows.

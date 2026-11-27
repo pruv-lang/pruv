@@ -114,7 +114,7 @@ impl Entry {
                         .and_then(Value::as_str)
                         .filter(|text| !es_trim(text).is_empty())
                     {
-                        *title = Some(one_line(text, 120));
+                        *title = Some(text.to_owned());
                     }
                 }
                 Action::Other
@@ -303,8 +303,9 @@ pub fn window_import(data: &[u8], cut_before: bool) -> Result<Window, Fail> {
         pending_drop = false;
     }
     let (turns, trimmed) = collector.finish();
+    // Pruv: one_line once on the last raw title (row T1)
     Ok(Window {
-        title,
+        title: title.map(|t| one_line(&t, 120)),
         model,
         omitted_before: cut_before || trimmed || chain_cut,
         turns,

@@ -195,7 +195,9 @@ pub fn tail_info(data: [u8], cut_before: bool) -> crate::boundary::ImportResult 
       crate::framing::Frame::Done => { offset = len(data); }
     }
   }
-  let title: str = crate::text::one_line(best, 120);
+  // hand: one_line once on the last raw title, only when one was found (row T1)
+  let mut title: str = "";
+  if has_title { title = crate::text::one_line(best, 120); }
   return tail_result(title, has_title, last, has_at);
 }
 
@@ -556,7 +558,9 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
   if result.defect >= 0 {
     return crate::boundary::wire_fail(crate::boundary::code_internal_invariant(), result.defect);
   }
-  let shown: str = crate::text::one_line(title, 120);
+  // hand: one_line once on the last raw title; a found title is never empty (row T1)
+  let mut shown: str = "";
+  if len(title) > 0 { shown = crate::text::one_line(title, 120); }
   let tl: i64 = len(shown);
   let ml: i64 = len(result.model);
   if tl > 4096 || ml > 3145728 { return wfail_zero(); }

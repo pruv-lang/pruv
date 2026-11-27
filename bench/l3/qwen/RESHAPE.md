@@ -341,3 +341,12 @@ After the last 4.3e code change, `rs/rust` and `rs/llvm` (hand `edge.rs` unchang
 | hand `edge.rs` vs fixtures (21 files) | 0 differences | - |
 
 P1 / P4 / P5 are the classes `q.py` already explains. No perf timing was run.
+
+### Rows after 4.4zb
+
+- Closed T1: the hand keeps the last raw custom title (`Entry::new` and `edge::tail_import` store
+  `text.to_owned()`) and runs `one_line(.., 120)` once at the end, like Pruv. The structure comparison found Pruv
+  still calling `one_line("")` when no title was found; `tail_info` now calls it only under `has_title` and the
+  window only when the kept title is non-empty (a found title is never blank), matching the hand's `Option::map`.
+- Remaining title difference: the hand copies the borrowed string with `to_owned()`, Pruv copies a plain string and
+  moves an escaped one's owned decode (4.3h-O class). Not measured: other qwen structure rows are open.
