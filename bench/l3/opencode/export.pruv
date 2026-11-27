@@ -321,7 +321,7 @@ fn start_export(cfg: [i64], cfg_text: [u8], ctl: [i64]) -> [i64] ! alloc
   arr_reserve(inout full, tl + ns);
   arr_append(inout full, cfg_text, ts, tl);
   arr_append(inout full, sep, 0, ns);
-  let prefix: [u8] = crate::path::normalize(full);
+  let prefix: [u8] = crate::path::normalize_bytes(full);
   let mut w: [i64] = alloc(2, 0);
   w[1] = len(prefix);
   let ep: [i64] = alloc(0, 0);

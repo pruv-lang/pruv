@@ -1839,3 +1839,29 @@ All after the last code change (F1 / F4 from the structure comparison).
   - LG7-B4: the bound check runs on `!verified`, unlike `vec_pop` which keys on `vec_get_checked`; align them.
   - LG7-B5: no test uses a join result without a `let` (as a call argument or in an expression).
 - Next: P10-M1, LG7-SR, LG7-T3, LG7-A1, LG7-B1.
+
+## Step 4.4o
+
+- Closed 4.4b-NV (with 4.4k-VS and 4.4k-SR): OpenCode `path::normalize` is the hand shape on `str` (`Vec<ref str>`
+  pieces, `pop` on `..`, `vec_join(out, "/")`, `string_prepend_char` for the root) and proves the old contracts with
+  no run-time guard; `join` follows the hand arms (`with_capacity` + pushes for the two-sided case, no UTF-8 scan).
+  No compiler change. Details, the per-function structure table and the tests: `opencode/RESHAPE.md` §10.
+- 4.3g-K3 partly closed: `env_value`, `data_dir` / `db_path` home and the `p100` thread borrow the configuration text
+  through `util::cfg_view` (`ref str from(cfg_text)`); `cfg_str` copies once instead of twice.
+- Behaviour: `normalize("./")` is now `"./"` (hand and Node); the old byte form gave `"."`.
+- Independent structure comparison (Codex `gpt-6.2-astra`, review role, Codex 2 account): `normalize` / `join` equal
+  on 17 traced inputs; the borrowed readers differ by the per-read UTF-8 scan; `p100` path bound differs (pre-existing).
+- Tests: `test_impl.py` 199/199 and `--verify-only` VERIFIED on rs/rust and rs/llvm; `q.py --cases 300` exact 406,
+  0 unexplained on both; `q_mutants.py --check` 16/16 markers.
+- Not measured (structure not identical).
+
+### Rows after 4.4o
+
+- Closed: 4.4b-NV, 4.4k-VS, 4.4k-SR. Partly: 4.3g-K3.
+- New: 4.4o-SB (no `str` → `[u8]` move; `utility` mode 3 and `p100` copy to call `dirname_bytes`), 4.4o-EB
+  (`export` root stays bytes), 4.4o-CV (per-read UTF-8 scan of config spans), 4.4o-PL (`p100` path bound),
+  4.4o-VP (verified `vec_push` of a view keeps the `2^40` check).
+- Next:
+  1. 4.4o-CV: validate the configuration text once and keep a `ref str` of it, then drop the per-read scans.
+  2. 4.4o-SB with 4.3g-T (a `str` `dirname` returning a view, no pool copy in `p100`).
+  3. 4.4o-EB, 4.4o-PL, 4.4o-VP, then the Next list after 4.4m.
