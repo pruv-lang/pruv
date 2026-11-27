@@ -298,6 +298,7 @@ fn stamp_from(doc: crate::json::JsonDocument, tf: i64) -> crate::time::Iso ! all
 // keeps its begun count; answer/tool only update the current draft.
 fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: [u8], inout col: crate::turns::Collector) -> i64 ! alloc
   requires 0 <= c && c < len(doc.tape) / 6
+  requires crate::json::doc_strings(doc)
   requires len(at) == 0 || len(at) == 24
   requires crate::turns::ok(col)
   ensures crate::turns::ok(col) && col.begun == old(col).begun
@@ -323,14 +324,25 @@ fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: [u8], inout col: cr
         let txt: i64 = crate::access::string_is(doc, ty, "text");
         if txt < 0 { return -4; }
         if txt == 1 {
-          let tx: crate::entry::Field = crate::entry::string_field(doc, j, "text");
-          match tx {
-            crate::entry::Field::Value(x) => {
+          // hand `col.answer(t, at)` on the borrowed `&str` (4.3h-O): a plain text node is lent as a view.
+          let tf: i64 = crate::access::field(doc, j, "text");
+          let pv: Option<ref str> = crate::access::plain_str(doc, tf);
+          match pv {
+            Some(x) => {
               if len(x) > 50331648 { return -4; }
               crate::turns::answer(inout col, x, at);
             }
-            crate::entry::Field::Missing => {}
-            crate::entry::Field::Defect(e) => { return -4; }
+            None => {
+              let tx: crate::entry::Field = crate::entry::string_field_of(doc, tf);
+              match tx {
+                crate::entry::Field::Value(x) => {
+                  if len(x) > 50331648 { return -4; }
+                  crate::turns::answer(inout col, x, at);
+                }
+                crate::entry::Field::Missing => {}
+                crate::entry::Field::Defect(e) => { return -4; }
+              }
+            }
           }
         } else {
           let tu: i64 = crate::access::string_is(doc, ty, "tool_use");
@@ -355,6 +367,7 @@ fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: [u8], inout col: cr
 // call, so begun grows by at most 1.
 fn consume_entry(doc: crate::json::JsonDocument, ty: i64, inout col: crate::turns::Collector) -> Effect ! alloc
   requires crate::turns::ok(col) && col.begun < 1000000000000
+  requires crate::json::doc_strings(doc)
   ensures crate::turns::ok(col)
   ensures old(col).begun <= col.begun && col.begun <= old(col).begun + 1
 {
@@ -418,12 +431,23 @@ fn consume_entry(doc: crate::json::JsonDocument, ty: i64, inout col: crate::turn
     if code < 0 { return Effect::Defect(code); }
     return Effect::Done(model_id);
   }
-  let tx: crate::jstr::Text = crate::access::string_text_owned(doc, c);
-  match tx {
-    crate::jstr::Text::InternalInvariant(e) => { return Effect::Defect(e); }
-    crate::jstr::Text::Decoded(v) => {
+  // hand `Some(Value::String(s)) => col.answer(s, ..)` on the borrowed `&str` (4.3h-O): a plain node is lent as a
+  // view; an escaped one is decoded (the hand's `Cow::Owned`, made while parsing).
+  let pv: Option<ref str> = crate::access::plain_str(doc, c);
+  match pv {
+    Some(v) => {
       if len(v) > 50331648 { return Effect::Defect(-4); }
       crate::turns::answer(inout col, v, completed.text);
+    }
+    None => {
+      let tx: crate::jstr::Text = crate::access::string_text_owned(doc, c);
+      match tx {
+        crate::jstr::Text::InternalInvariant(e) => { return Effect::Defect(e); }
+        crate::jstr::Text::Decoded(v) => {
+          if len(v) > 50331648 { return Effect::Defect(-4); }
+          crate::turns::answer(inout col, v, completed.text);
+        }
+      }
     }
   }
   return Effect::Done(model_id);

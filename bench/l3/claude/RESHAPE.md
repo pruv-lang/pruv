@@ -417,3 +417,8 @@ decodes, so the structure is not yet the hand's for every function on the window
 After the review fix in `entry.pruv` (`string_into_str(move joined)`), claude `test_a0`-`test_a4`, `q.py` and
 `q_mutants.py` were run again on both rs pairs: same counts as above, all pass (q_mutants 9 detected, 9
 proof-rejected). The fix touches only `entry.pruv`, so the other pieces were not rerun.
+
+Step 4.4m (4.3h-O, consumer side): `import::answer_blocks` and `consume_entry` try `access::plain_str` (a borrowed
+`str` of a plain string, under `doc_strings`, which `entry::parse_line` now ensures) before the owned decode. It
+does not take effect yet: `parse::record` never sets the plain bit, so the borrow is always `None` (row 4.4m-PB).
+Title and user content rows: 4.4m-TB, 4.4m-FB. See `pkgs/RESHAPE.md` §Step 4.4m.

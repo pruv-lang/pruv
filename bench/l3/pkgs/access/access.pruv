@@ -330,6 +330,21 @@ pub fn string_text_scanned_owned(doc: crate::json::JsonDocument, id: i64) -> cra
   return crate::jstr::string_text_scanned_owned(doc.source, s.start, s.end);
 }
 
+// 4.4m (4.3h-O): hand `get_str` -> `Option<&str>`: a plain string node (no backslash, tape slot 5 == 1) as a
+// borrowed `str` view of its content, no copy and no run-time UTF-8 scan (the fact is `doc_strings`, 4.4l).
+// None for an escaped node, another kind or a corrupt tape; the caller then takes the owned decode
+// (`string_text_owned`, the hand's `Cow::Owned` made while parsing).
+pub fn plain_str(doc: crate::json::JsonDocument, id: i64) -> Option<ref str> from(doc.source)
+  requires crate::json::doc_strings(doc)
+  ensures is_some(result) ==> (0 <= id && id < len(doc.tape) / 6 && len(some_val(result)) <= doc.tape[6 * id + 2] - doc.tape[6 * id + 1])
+{
+  let s: Span = raw_span(doc, id);
+  if s.status != 0 { return None::<ref str>; }
+  if doc.tape[6 * id] != 4 || doc.tape[6 * id + 5] != 1 || s.end - s.start < 2 { return None::<ref str>; }
+  let v: ref str = subview(doc.source, s.start + 1, s.end - 1);
+  return Some::<ref str>(v);
+}
+
 // 4.4i (4.4c-MB): the decoded text of a string node appended to the caller's buffer (hand: `buf.clear()` by the
 // caller, then `extend_from_slice` of the borrowed `Cow`). A plain node (no backslash, tape slot 5 == 1) is one
 // `arr_append` of the raw span; otherwise the escape decode appends. 0 on success, negative on a corrupt tape or
