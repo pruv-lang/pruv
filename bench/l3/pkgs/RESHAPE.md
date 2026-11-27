@@ -1132,3 +1132,84 @@ The first claude `test_a2` / `test_a4` / `q.py` / `q_mutants.py` runs failed ver
 (`verify_unknown`). The split above fixed that. `claude/q.py` exits 1 only for the frozen py pairs
 (`build: 'py'`); both rs pairs pass. The `Some` branch of `plain_str` runs on `parse_line` documents on both
 backends (`test_a1` `plain` cases); no separate trace of `answer_blocks` was made. Nothing was measured.
+
+## Step 4.4p: one line check on the record path (4.4m-SS), `type` read once in the title path (4.4n-TT)
+
+- `parse::string_token` takes `checked: bool` and requires `checked ==> utf8_valid_span(input, 0, len(input))`.
+  With `checked`, a byte `>= 128` is skipped like any other non-special byte (hand
+  `position(|b| matches!(b, b'"' | b'\\' | 0..=31))`). The `Ok` ensures `utf8_valid_span(input, start + 1, pos - 1)`
+  is unchanged: under `checked` it follows from the input fact because both quotes are ASCII (SPEC LG30). The
+  outer and hex loop invariants became `!checked ==> utf8_valid_span(input, start + 1, pos)`. No split was needed.
+- `record` passes `true`; `token_at` (the `scan_into` path, grok) passes `false` and keeps the per-scalar check.
+- `record`, `container`, `scan_records`, `scan` and `scan_document` require `utf8_valid_span(input, 0, len(input))`.
+  `lines::parse_owned` already ran `validate_utf8(owned, 0, n)` before `scan`, so it was not changed.
+- `scan`: the postcondition `strings_ok(...)` came back `verify_unknown` (canceled) with the new requires, and so
+  did an `assert` of it inside the `Ok` match arm. An `assert is_ok(root) ==> strings_ok(input, tape, 0, len(tape) / 6)`
+  placed before the `match` verifies, and so does the ensures after it. The generated Rust is unchanged by the assert.
+- `parse::parse` now runs `lex::validate_utf8(input, 0, n)` first and returns `failure(invalid, 4)`, as the hand
+  `parse_line` runs `str::from_utf8(line)` first. The old D33 path (per-scalar checks during the scan, then a
+  `validate_utf8` of the rest after a grammar failure) is gone. Error results are the same: invalid UTF-8 was
+  already reported, at its first byte, ahead of any grammar error (json `run_a0`-`run_a5` unchanged).
+- `claude/entry::title_for_type` reads `type` once through `access::plain_str`. On `Some(t)` it compares the view by
+  length and `eq_range` against `custom-title` / `ai-title` / `summary` and returns `NoTitle` for any other string.
+  `None` (escaped, non-string or corrupt node) keeps the three `string_is` checks, so an escaped `type` gives the
+  same result as before.
+
+### Per-function structure (generated claude a1 Rust vs `claude/handrust/src/lib.rs`)
+
+| Function | Pruv (generated Rust) | Hand (handrust/src/lib.rs) | Same? | Row |
+|---|---|---|---|---|
+| `parse::parse` / `lines::parse_owned` | one `validate_utf8` of the line, then the scan | `parse_line`: `str::from_utf8(line)`, then the parser | same (the check routine differs: 4.4l-VU) | closes 4.4m-SS |
+| `parse::string_token` (from `record`) | one pass over `"`, `\`, `< 32`; bytes `>= 128` skipped, no per-scalar check; returns the plain bit | `Parser::string`: one `position` scan over the same bytes, `Cow::Borrowed` without escape | same pass and skip; Pruv carries a run-time `checked` parameter (constant `true` here; generated as a `&& checked` test per non-ASCII byte) | 4.4p-CF (new) |
+| `record` / `container` / `scan_records` / `scan` | no per-value UTF-8 check | `value()`: `str::from_utf8` per string value chunk | Pruv does no more work than the hand (no row, as in 4.4n) | 4.4m-SS |
+| `entry::title_for_type` | one `plain_str` read of `type`, then length + byte compares; `string_is` only for an escaped or non-plain node | `match get_str(e, "type") { Some("custom-title") .. }` | same for an unescaped `type` | closes 4.4n-TT |
+| `entry::ranked` / `title_of`, `import::tail_info` / `read_window` | a new `String` per winning title | one reused buffer (`text.clear(); push_str(t)`) | no | 4.4m-TB part two (open) |
+
+Independent structure comparison (Codex `gpt-6.2-astra`, review role, Codex 2 account; the default account was
+at its limit). It got the generated `a1_root_gen.rs` excerpts and the hand `lib.rs`, without this table. Its
+conclusions agree with the table:
+- one whole-line UTF-8 check and one grammar pass on both sides; zero per-scalar checks on the record path (the hand
+  adds a `from_utf8` per string value);
+- an unescaped `type` is borrowed once and compared at most once (the three length tests differ, so at most one byte
+  compare runs); an escaped `type` falls back to one to three `string_is` calls on the same id, with no second field
+  lookup;
+- `checked` is a constant at both call sites and the function is `#[inline(always)]`; whether the branch survives
+  optimization was not checked. That is row 4.4p-CF.
+
+It also listed differences that 4.4p did not change and that earlier rows already hold: the owned `source` copy per
+parsed line (`input.to_vec()` in `scan_document`; the B-LLVM / R-6g6-2 copy), a non-object root parsed in full
+before `entry::parse_line` rejects it, the `check_subtrees` pass in `publication_ok` (4.4l-CT), and the
+input / record limits (16777216 bytes, 1048576 records) that the hand `parse_line` does not have (the A2 limits of
+the shared parser, as in every earlier step). No wrong result on an accepted input was found.
+
+| Row | Kind | Difference | What closes it | Where |
+|---|---|---|---|---|
+| 4.4m-SS | closed | per-scalar UTF-8 checks in `string_token` after the line check | done in 4.4p: the line fact reaches `string_token` through `record` / `container` / `scan_records` / `scan`; `parse` validates first | `pkgs/parse` |
+| 4.4n-TT | closed | `title_for_type` scanned `type` up to three times | done in 4.4p: one `plain_str` read and view compares | `claude/entry` |
+| 4.4p-CF | shape, new | `string_token`'s `checked` is a run-time `bool` (constant `true` from `record`, `false` from `token_at`) instead of two specialized scanners | a `token_at` path that also carries the line fact (then drop the flag), or a separate `string_token_checked`; verify the inliner folds the constant first | `pkgs/parse` |
+| 4.4m-TB (part two) | shape, open | a new `String` per winning title, not one reused buffer | unchanged: a `str` buffer whose `clear` + append keeps valid UTF-8 | `claude/import`, `pkgs/jstr` |
+
+### Consumer tests (step 4.4p)
+
+pruvc-rs (`PRUVC_RS=pruvc-rs/target/release/pruvc`), pairs rs/rust and rs/llvm. Every consumer of `pkgs/parse`
+was rerun, which covers `claude/entry` too.
+
+| Runner | rs/rust | rs/llvm |
+|---|---|---|
+| claude `test_a0` | 272 / 272 | 272 / 272 |
+| claude `test_a1` | 2897 / 2897 | 2897 / 2897 |
+| claude `test_a2` | 2443 / 2443 | 2443 / 2443 |
+| claude `test_a3` | 134 / 134 | 134 / 134 |
+| claude `test_a4` | 270 / 270 | 270 / 270 |
+| claude `q.py` | 20270 / 20270 | 20270 / 20270 |
+| claude `q_mutants.py` | 18 mutants: 8 detected, 10 proof-rejected (mutant 3 by `verify_unknown`, as in 4.4n), none survive | (same run) |
+| json `run_a0`-`run_a5` | 37 / 351 / 114 / 454 / 6344 / 83 | same |
+| supervisor `test_a0`-`test_a3` | 522 / 410 / 78 / 35 | same |
+| grok `test_impl --no-ts` (`GROK_COMPILE_WALL=3600`) | 254 / 254 | 254 / 254 |
+| qwen `test_impl.py` | 26 / 26 | 26 / 26 |
+| mcp `test_impl.py` | 22 / 22 | 22 / 22 |
+| codex `test_impl.py` | 136 / 136 | 136 / 136 |
+| opencode `test_impl.py` (`GROK_TS_TRANSPILER` set) | 199 / 199 | 199 / 199 |
+
+`claude/q.py` exits 1 only for the frozen py pairs (`build: 'py'`); both rs pairs pass. No runner or oracle needed a
+change. 4.4m-TB part two was not started within the cap. Nothing was measured.

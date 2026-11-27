@@ -1870,3 +1870,29 @@ All after the last code change (F1 / F4 from the structure comparison).
   2. 4.4n-TT: read `type` once through `plain_str`.
   3. 4.4m-TB part two (a `str` buffer whose `clear` + append keeps valid UTF-8), then 4.4n-KL (design first),
      then 4.4l-RE / -RS / -CT / -VU.
+
+## Step 4.4p: one line check on the record path (4.4m-SS), `type` read once in the title path (4.4n-TT)
+
+- Changed: `pkgs/parse` (`string_token` takes `checked` and skips bytes `>= 128` without a per-scalar check when
+  the whole input is known valid; `record` / `container` / `scan_records` / `scan` / `scan_document` require
+  `utf8_valid_span(input, 0, len(input))`; `parse` validates the line first, like the hand `parse_line`; `scan`
+  needed an `assert` before its `match` because the solver gave up on its ensures otherwise) and `claude/entry`
+  (`title_for_type` reads `type` once through `plain_str` and compares the view; `string_is` stays only for an
+  escaped or non-plain `type`). No compiler change, no test change. Details, the structure table and the consumer
+  tests: `pkgs/RESHAPE.md` §Step 4.4p.
+- Not measured (structure not identical: 4.4m-TB part two, 4.4p-CF, 4.4n-KL).
+- Independent structure comparison (Codex `gpt-6.2-astra`, review role, Codex 2 account; the default account was
+  at its limit). It agrees with the table: one line check and zero per-scalar checks on the record path, and an
+  unescaped `type` borrowed once and compared at most once. The `checked` constant branch is row 4.4p-CF; the other
+  differences it listed (owned source copy, `check_subtrees`, A2 limits) are earlier rows.
+
+### Rows after 4.4p
+
+- Closed: 4.4m-SS, 4.4n-TT.
+- New: 4.4p-CF (`string_token`'s `checked` is a run-time flag, not two specialized scanners).
+- Still open: 4.4m-TB part two (reused title buffer), 4.4n-KL, 4.4m-FB, 4.3h-T, 4.4l-RE, 4.4l-VU, 4.4l-RS,
+  4.4l-CT, 4.4c-MB, and the rows listed after 4.4n and before.
+- Next:
+  1. 4.4m-TB part two: a `str` buffer whose `clear` + append keeps valid UTF-8, reused like the hand's one buffer.
+  2. 4.4n-KL (design first), 4.4p-CF.
+  3. 4.4l-RE / -RS / -CT / -VU.

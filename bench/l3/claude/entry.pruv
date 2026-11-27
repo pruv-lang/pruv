@@ -345,6 +345,18 @@ pub fn title_for_type(doc: crate::json::JsonDocument, ty: i64, best: i64) -> Tit
 {
   if ty == -1 { return Title::NoTitle; }
   if ty < 0 { return Title::Defect(ty); }
+  // 4.4n-TT: hand `match get_str(e, "type")` borrows `type` once and matches it; an unescaped `type` is read once
+  // through `plain_str` and its view compared. An escaped, non-string or corrupt node keeps the `string_is` checks.
+  let pv: Option<ref str> = crate::access::plain_str(doc, ty);
+  match pv {
+    Some(t) => {
+      if len(t) == 12 && eq_range(t, 0, "custom-title", 0, 12) { return ranked(doc, 3, "customTitle", "title", best); }
+      if len(t) == 8 && eq_range(t, 0, "ai-title", 0, 8) { return ranked(doc, 2, "aiTitle", "title", best); }
+      if len(t) == 7 && eq_range(t, 0, "summary", 0, 7) { return ranked(doc, 1, "summary", "title", best); }
+      return Title::NoTitle;
+    }
+    None => {}
+  }
   let a: i64 = crate::access::string_is(doc, ty, "custom-title");
   if a < 0 { return Title::Defect(a); }
   if a == 1 { return ranked(doc, 3, "customTitle", "title", best); }
