@@ -1,0 +1,5 @@
+// R-6g9-12: replace on a refined element array proves the stored element range (verify/refinement_assign).
+fn bad() -> i64 ! alloc {
+  let mut v: [i64 | 0..=1] = alloc(1, 0);
+  return replace(inout v[0], 2);
+}

@@ -4266,6 +4266,19 @@ impl Checker {
                     .collect();
                 if !marked.is_empty() {
                     for arg in &marked {
+                        // L-gaps 8 (P10-M1): an element place `v[i]` of swap/replace writes v; the element places of
+                        // this call are its only allowed mentions of v (their indexes cannot read v, see mem_index_call)
+                        if let Expr::Index(ix) = &*arg.expr {
+                            let Expr::Var(root) = &*ix.array else { continue };
+                            let own = marked.iter().filter(|m| matches!(&*m.expr,
+                                Expr::Index(j) if matches!(&*j.array, Expr::Var(w) if w.name == root.name))).count();
+                            if mentions.iter().filter(|(other, _)| *other == root.name).count() > own {
+                                return Err(terr(arg.line, arg.col, "inout_context",
+                                    format!("{} is passed inout and also mentioned elsewhere in this statement", root.name),
+                                    "use a separate statement for the inout call"));
+                            }
+                            continue;
+                        }
                         let (root, path) = field_place(&arg.expr);
                         let Expr::Var(root) = root else { continue };
                         let name = &root.name;
@@ -7922,6 +7935,10 @@ impl Checker {
         if e.args.len() != 2 {
             return Err(terr(line, col, "arity", format!("{} takes 2 argument(s), got {}", n, e.args.len()), ""));
         }
+        let element = |a: &Expr| matches!(a, Expr::InoutArg(x) if matches!(&*x.expr, Expr::Index(_)));
+        if element(&e.args[0]) || (n == "swap" && element(&e.args[1])) {
+            return self.mem_index_call(e, scope);
+        }
         let Expr::InoutArg(a) = &mut e.args[0] else { unreachable!() };
         let ty = match &*a.expr {
             Expr::Var(v) => self.lookup(v.line, v.col, &v.name, scope, &[])?.ty,
@@ -7984,6 +8001,98 @@ impl Checker {
         }
         e.ty = Some(f.ret.to_key());
         Ok(f.ret)
+    }
+
+    /// L-gaps 8 (P10-M1, R-6g9-12): `swap(inout v[i], inout v[j])` and `replace(inout v[i], x)` on an element of a
+    /// resizable scalar array `v` (a `let mut` local or an inout parameter). Rust `v.swap(i, j)` /
+    /// `std::mem::replace(&mut v[i], x)`. Both indexes carry the index range obligation in the verifier; the two
+    /// places of a swap must be on the same array and the verifier must prove `i != j` (`inout_alias`). The indexes
+    /// and the replace value may not mention `v`, and an index is a name, a literal or arithmetic of them (no call),
+    /// so each backend may evaluate it once in any order.
+    fn mem_index_call(&mut self, e: &mut Call, scope: &Scope) -> Res<GType> {
+        fn plain(e: &Expr) -> bool {
+            match e {
+                Expr::Var(_) | Expr::IntLit(_) => true,
+                Expr::Unary(u) => plain(&u.operand),
+                Expr::Binary(b) => plain(&b.left) && plain(&b.right),
+                _ => false,
+            }
+        }
+        let n = e.name.clone();
+        let swap = n == "swap";
+        let mut array: Option<String> = None;
+        let mut elem = i64t();
+        for k in 0..(if swap { 2 } else { 1 }) {
+            let (aline, acol) = (e.args[k].line(), e.args[k].col());
+            let place = match &e.args[k] {
+                Expr::InoutArg(a) => match &*a.expr {
+                    Expr::Index(ix) => match &*ix.array {
+                        Expr::Var(v) => Some(v.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            };
+            let Some(v) = place else {
+                return Err(terr(aline, acol, "inout_argument",
+                    format!("{n} of an element takes elements `inout v[i]` of an array named by a local or an inout parameter"),
+                    if swap { "swap two elements of the same array, or move the element into a local first" } else { "" }));
+            };
+            let entry = self.lookup(v.line, v.col, &v.name, scope, &[])?;
+            if !matches!(entry.kind, "local" | "inout") {
+                return Err(terr(aline, acol, "inout_argument",
+                    format!("{} is not a local array or an inout parameter", v.name), ""));
+            }
+            if entry.kind == "local" && !entry.mutable {
+                return Err(terr(aline, acol, "immutable", format!("array {} is read-only", v.name),
+                    "declare it with `let mut`"));
+            }
+            if !entry.ty.is_array() || !entry.ty.args.is_empty() {
+                return Err(terr(aline, acol, "inout_argument",
+                    format!("{n} of an element takes a resizable array of integers or bool, not {}", tn(&entry.ty)),
+                    "swap or replace the whole value, or use an element assignment"));
+            }
+            if let Some(prev) = &array {
+                if *prev != v.name {
+                    return Err(terr(aline, acol, "inout_argument",
+                        "swap of elements takes two elements of the same array", "move one element through a local"));
+                }
+            }
+            self.check_borrow(aline, acol, &v.name, &[])?;
+            let Expr::InoutArg(a) = &mut e.args[k] else { unreachable!() };
+            let Expr::Index(ix) = &mut *a.expr else { unreachable!() };
+            if mentions(&ix.index, &v.name) {
+                return Err(terr(ix.index.line(), ix.index.col(), "inout_alias",
+                    format!("the index of an element of {} may not read {}", v.name, v.name),
+                    "compute the index in a local first"));
+            }
+            if !plain(&ix.index) {
+                return Err(terr(ix.index.line(), ix.index.col(), "inout_argument",
+                    "the index of an element place is a name, a literal or arithmetic of them",
+                    "compute the index in a local first"));
+            }
+            elem = self.expr(&mut a.expr, scope, false)?;
+            a.ty = Some(elem.to_key());
+            array = Some(v.name.clone());
+        }
+        let name = array.unwrap();
+        if !swap {
+            let value = &mut e.args[1];
+            if matches!(value, Expr::InoutArg(_)) {
+                return Err(terr(value.line(), value.col(), "inout_argument",
+                    "the value argument of replace is not inout", "remove `inout`"));
+            }
+            if mentions(value, &name) {
+                return Err(terr(value.line(), value.col(), "inout_alias",
+                    format!("the value replacing an element of {name} may not read {name}"),
+                    "compute the value in a local first"));
+            }
+            self.expect(value, &elem, scope, false, None)?;
+        }
+        let ret = if swap { unitt() } else { elem };
+        e.ty = Some(ret.to_key());
+        Ok(ret)
     }
 
     /// P2 batch 4: load_be(a: [u8], i, n) -> i64 (code and contracts) and the statement-only store_be(inout a, i, w, n);

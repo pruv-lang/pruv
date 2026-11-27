@@ -1896,3 +1896,52 @@ All after the last code change (F1 / F4 from the structure comparison).
   1. 4.4o-CV: validate the configuration text once and keep a `ref str` of it, then drop the per-read scans.
   2. 4.4o-SB with 4.3g-T (a `str` `dirname` returning a view, no pool copy in `p100`).
   3. 4.4o-EB, 4.4o-PL, 4.4o-VP, then the Next list after 4.4m.
+
+### Bundle L-gaps 8
+
+- Closed P10-M1 (R-6g9-12): an element of a resizable array is a `swap` / `replace` place:
+  `swap(inout v[i], inout v[j])` and `replace(inout v[i], e)` with `v` a `let mut` local or an `inout` parameter.
+  The checker takes plain indexes that do not mention `v`, both `swap` elements from one array, no other mention of
+  `v` in the call (`type/inout_context`), and reports a live view of `v` as `type/borrow_conflict`. The verifier
+  stores into the array: each index carries the range obligation (`verify/index_oob`), the two `swap` indexes must
+  be proven different (`verify/inout_alias`), and a narrow `replace` value carries the element range
+  (`verify/elem_range`); loops havoc the array. Rust emits `v.swap(i, j)` and
+  `::std::mem::replace(unsafe { v.get_unchecked_mut(i) }, x)` when verified, index-checked helpers with
+  `--no-verify`; LLVM loads and stores the elements in their storage form. Test `lgaps8_mem_index` (`[i64]`, `[u8]`,
+  `[bool]`, an `inout` parameter in a loop) runs on both backends with and without `--no-verify`; rejects
+  `lgaps8_swap_index_alias`, `lgaps8_replace_index_oob`, `lgaps8_swap_index_oob`, `lgaps8_replace_index_elem`,
+  `lgaps8_replace_index_view`, `lgaps8_swap_index_arrays`.
+- Closed LG7-B1: with `--no-verify`, the LLVM `vec_join` running sum saturates just above `2^40` and
+  `(n - 1) * len(sep)` and the total use `llvm.smul` / `llvm.sadd.with.overflow`, so a wrapped total cannot pass the
+  bound check (verified IR unchanged).
+- Closed LG7-A1: `lgaps8_join_bound` (a `2^39` view joined twice with an empty separator is accepted) and
+  `lgaps8_join_bound_sep` (a 1-byte separator fails `verify/call_requires` on the call line).
+- LG7-SR (open, diagnosed): the slow refutation is not in `vec_join`. Two `subview`s of a parameter array pushed
+  onto a view list, then a false `assert len(out) == 3`, already end in `verify_unknown` (`incomplete (theory
+  array)` or the timeout). The view sum `S(a, k)` takes the list array, whose elements hold `subview` lambdas over
+  the parameter array, and z3 cannot complete a model; a local `alloc` base works because its lambda folds to a
+  constant array. Tried and reverted: a per-join `Int -> Int` sum, and a fresh array name per pushed view with a
+  quantified byte fact (faster, still incomplete). Next: key the view sum on something other than the list array
+  term (a per-list-version `Int` function, or a length-only ghost list). The must_reject test with `subview`
+  pieces waits for that fix.
+- New rows:
+  - LG8-B1T: no run-time test drives the `--no-verify` LLVM wrap path (it needs views whose lengths sum past
+    `2^63`); only the IR shape was checked.
+- Audit (one round, A: Codex gpt-6.2-astra on SPEC/encoding/tests; B: Claude opus high on codegen). Fixed:
+  `replace(inout v[i], x)` on a refined element array (`[i64 | lo..=hi]`) was accepted out of range; it now
+  proves the stored element's range (`verify/refinement_assign`, test `lgaps8_replace_index_refine`). SPEC now
+  names the concrete element array types (generic `[T]` is rejected), `type/immutable`, and the
+  `inout_alias` / `inout_context` split; `verify/inout_alias` was added to the code table. B found nothing required.
+- Advisory rows (from the audit):
+  - LG8-A1: no `--no-verify` run-time failure tests for element places (index out of range, `[u8]` value 256),
+    so `pruv_oob` vs `Fail::Oob` and `pruv_elem_oor` vs `Fail::Elem` output parity is unchecked.
+  - LG8-A2: no `[u16]` element place test (65535 accepted / 65536 rejected), and no `[u8]` / `[bool]` `inout`
+    parameter element place.
+  - LG8-A3: missing rejects: a wrong fact after a swap loop, equal literal indexes, an index that reads the
+    array, an index with a call, the first `swap` index out of range.
+  - LG8-A4: Rust `--no-verify` `vec_join` checks the 2^40 total after joining (pre-existing); LLVM stops before
+    allocating. Check a saturating `u64` total first in Rust too.
+  - LG8-A5: Rust verified narrow element replace relies on the storage pin, not `self.layout`; LLVM swap and
+    replace choose the element shape in different orders (same result today).
+- Not reached: LG7-T3 (verified `--foreign-checks all` pop check).
+- Next: LG7-SR, LG7-T3, LG7-A2, LG7-B2..B5.
