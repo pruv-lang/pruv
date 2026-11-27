@@ -2035,3 +2035,41 @@ All after the last code change (F1 / F4 from the structure comparison).
   1. 4.4n-KL option 3: a one-walk `access::fields` for a fixed key set, then `claude/entry` / `claude/import` on it.
   2. 4.4o-SB language side, then 4.4o-EB.
   3. 4.4q-DN reference decision, 4.4o-VP.
+
+## Step 4.4s: one walk per root object for the claude key set (4.4n-KL option 3)
+
+- `pkgs/access`: a member cursor, three new functions (no change to `field` / `find_ascii`):
+  `members_end(doc, id)` (the object's skip link, or -3 / -2 as `field`), `member_next(doc, id, j, stop)` (the
+  next member after key record `j`, with `find_ascii`'s per-member checks; -4 = corrupt tape) and `key_is(doc, j, key)`
+  (`may_match` then `ascii_equal`).
+- `claude/entry`: `RootKeys` (13 `i64` slots, returned by value) and `root_keys(doc)`: one walk over the root's
+  members, a fixed `key_is` chain per member, slot = value id, later duplicates overwrite (last wins, as `field`).
+  Missing = -1; a non-object or bad root fills every slot with `field`'s code; a corrupt tape fills -4. The readers
+  (`human_text_of`, `user_text`, `title_for_type`, `ranked`, `string_content`, `array_content`, `is_human_text`) take
+  slots; the a1/a2 wrapper functions (`human_text`, `pick_title`, `title_of`, `task_origin`, `is_true`, ...) keep
+  their signatures and resolve through `root_keys` or `field`.
+- `claude/import`: `read_head`, `tail_info` and `window_object` call `root_keys` once per line; `consume_entry`
+  takes the slots. `read_window`'s per-line parse moved to `window_line` (the solver gave up on the parsed document's
+  facts in the loop body once `RootKeys` joined the module: `verify_unknown` on `doc_strings(d)`).
+- Why the 4.3h-R reason does not come back: `root_of` allocated an 8-word array and resolved 7 keys for every
+  object, title-only and empty ones included. `root_keys` allocates nothing (a struct of `i64` in registers / on the
+  stack), walks the members once, and an empty object costs the one `members_end` read.
+- Tests: claude `test_a0`-`test_a4` (272, 2897, 2443, 134, 270), `q.py` 20270/20270 and every `pkgs/access`
+  consumer pass on rs/rust and rs/llvm (table in `pkgs/RESHAPE.md` §"Consumer tests (step 4.4s)").
+  `q_mutants.py` 18: 9 detected, 9 proof-rejected, none survive (mutant 1 retargeted to `user_text`'s `true_of` line).
+- Not measured: structure not identical (the hand builds a `BTreeMap` per object at parse; nested objects still use
+  one `field` walk per key; 4.4c-MB, 4.3h-T rows unchanged).
+- No audit: no new result meaning (same slots and codes as the per-key `field` calls; the new access functions are
+  `find_ascii`'s walk split into steps).
+
+### Rows after 4.4s
+
+- Closed: 4.4n-KL (root reader). Nested reads (`message.content`, `origin.kind`, block `type` / `text`) still call
+  `field` per key, as the hand calls `get` per key on those maps.
+- New: 4.4s-FK (language gap): a generic `access::fields(doc, id, [&str; N]) -> [i64; N]` needs `[str; N]` or const
+  generics; neither exists, so the fixed key set lives in the caller (`entry::root_keys`) on the access cursor.
+- Still open: 4.4o-SB language side, 4.4o-EB, 4.4o-VP, 4.4q-CU, 4.4q-DN, and the rows listed before.
+- Next:
+  1. 4.4o-SB language side, then 4.4o-EB.
+  2. 4.4q-DN reference decision, 4.4o-VP.
+  3. 4.4s-FK if the language gets `[str; N]` / const generics (then `root_keys` can become `access::fields`).

@@ -1335,3 +1335,55 @@ Only `claude` changed, so only the claude runners ran (`PRUVC_RS` = the existing
 `q.py` exits 1 only because of the frozen py pairs (`ERROR build: 'py'`). Mutant 4 (title rank `<` to `<=`) went
 stale because its old snippet named the removed `Title` enum; it now targets `if level < st.rank { return 0; }` and is
 detected by fixture 171 ("titles tie later wins").
+
+## Step 4.4s: `pkgs/access` member cursor, claude root keys in one walk (4.4n-KL option 3)
+
+New in `pkgs/access` (existing functions unchanged):
+
+| Function | Contract | Body |
+|---|---|---|
+| `members_end(doc, id) -> i64` | `result >= 0 ==> 0 <= id < result <= len(tape)/6` | -3 bad id, -2 not an object, else `tape[6id+3]` (the skip link) |
+| `member_next(doc, id, j, stop) -> i64` | requires `id < j < stop <= len(tape)/6`; `result >= 0 ==> j < result <= stop`, `tape[6j] == 7`, `tape[6(j+1)+4] == id` | `find_ascii`'s per-member checks (key kind, parent, value in range, value parent, skip in range); -4 = corrupt tape |
+| `key_is(doc, j, key) -> bool` | requires `0 <= j < len(tape)/6` | `may_match(source, s, e, key) && ascii_equal(source, s, e, key)` |
+
+Option 3's `access::fields(doc, id, keys)` could not be written generically: no `[str; N]` and no const generics
+(row 4.4s-FK). The fixed key set is in the caller, the Rust `for (k, v) in obj { match k { .. } }` shape:
+`entry::root_keys` walks the root once with the cursor and sets one of 13 `i64` slots of `RootKeys` per matching key.
+
+### Per-function structure (generated claude a4 Rust vs `claude/handrust/src/lib.rs`)
+
+| Function | Pruv (generated Rust) | Hand | Same? | Row |
+|---|---|---|---|---|
+| `entry::root_keys` | `members_end`, then `while j < stop { n = member_next(..); if key_is(.., "type") { k.ty = v } else if .. ; j = n }`; `RootKeys` by value, no allocation | `object()` builds a `BTreeMap` per object at parse; each `get` is a map lookup | cost model same (each root key resolved once per object, last wins); shape differs (no map) | 4.4n-KL closed for the root |
+| `import::consume_entry` / `user_text` / `title_for_type` | slot reads (`string_of(k.ty)`, `true_of(k.side)`, `object_of(k.message)`, `stamp_from(k.timestamp)`) | `get_str(e, ..)`, `is_true(e, ..)`, `e.get(..)` | same per-key reads, no member walk per key | — |
+| nested `message.content`, `origin.kind`, block keys | `access::field` per key | `get` per key on the nested map | as 4.4r | — |
+| `import::window_line` (new) | parse + `window_object` for one line; -1 accepted / skipped, else the `fail_at` position | inline in the line loop | same after inlining (split for the solver) | — |
+
+4.3h-R (the reason `root_of` was removed): `root_of` allocated an 8-word `[i64]` and did 7 `field` walks for every
+object. `root_keys` allocates nothing, walks once, and an empty object reads only the skip link.
+
+| Row | Kind | Difference | What closes it | Where |
+|---|---|---|---|---|
+| 4.4n-KL | closed (root) | one member walk per root key | done in 4.4s: `root_keys` on the access cursor | `pkgs/access`, `claude/entry`, `claude/import` |
+| 4.4s-FK | language gap, open | no generic `fields(doc, id, [&str; N]) -> [i64; N]` | `[str; N]` or const generics in the language; then move `root_keys` into `access` | compiler (not changed here) |
+
+### Consumer tests (step 4.4s)
+
+`pkgs/access` changed, so every consumer ran on both backends (`PRUVC_RS` = the existing release `pruvc`, copied
+unchanged; not rebuilt).
+
+| Runner | rs/rust | rs/llvm |
+|---|---|---|
+| claude `test_a0`-`test_a4` | 272 / 2897 / 2443 / 134 / 270 | same |
+| claude `q.py --pairs rs/rust,rs/llvm` | 20270/20270 | 20270/20270 |
+| claude `q_mutants.py` (18) | 9 detected, 9 proof-rejected, 0 survived | (rust backend only) |
+| json `run_a0`-`run_a5` | 37 / 351 / 114 / 454 / 6344 / 83 | same |
+| supervisor `test_a0`-`test_a3` | 522 / 410 / 78 / 35 | same |
+| grok `test_impl.py --no-ts` (`GROK_COMPILE_WALL=3600`) | 254 / 254 | 254 / 254 |
+| qwen `test_impl.py` | 26 / 26 | 26 / 26 |
+| mcp `test_impl.py` | 22 / 22 | 22 / 22 |
+| codex `test_impl.py` | 136 / 136 | 136 / 136 |
+| opencode `test_impl.py` (`GROK_TS_TRANSPILER` set) | 199 / 199 | 199 / 199 |
+
+Mutant 1 (isMeta filter inverted) went stale (its snippet named the removed `is_true(doc, root, "isMeta")`); it now
+targets `user_text`'s `true_of(doc, k.meta)` line and is detected by fixture 0 ("head0: basic").
