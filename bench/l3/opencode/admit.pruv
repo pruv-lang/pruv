@@ -40,7 +40,7 @@ fn p100(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8], event: [i64]) -> [i6
   let mode: i64 = ctl[1];
   if mode < 0 || mode > 2 { return crate::packet::done_internal(ctl, 28); }
   if mode == 1 {
-    let thread: str = crate::util::cfg_str(cfg_text, cfg[10], cfg[11]);
+    let thread: ref str = crate::util::cfg_view(cfg_text, cfg[10], cfg[11]);
     if !crate::names::valid_thread(thread) { return crate::packet::done_simple(ctl, 0, 1, 1); }
   }
   let db: crate::path::DbPath = crate::path::db_path(cfg, cfg_text);

@@ -325,3 +325,80 @@ with the view-list representation, so the gap stands. Its other findings:
   list would still differ from the hand's `Vec<&str>`, so it does not close 4.4b-NV; recorded as an option on 4.4k-VS.
 - No `String` reserve / with-capacity / insert builtin exists (agrees with 4.4k-SR).
 - The comment above `normalize` was stale (said Pruv has no view lists); fixed in this step.
+
+## 10. Step 4.4o (rows 4.4b-NV, part of 4.3g-K3)
+
+`normalize` is now the hand shape on `str` (a `Vec<ref str>` of pieces of `p`, `pop` on `..`, `vec_join(out, "/")`,
+then `.`, the trailing `/` and `string_prepend_char`). The 4.4k-VS gap is closed by the view sum (R-6g9-13) in the
+split-loop invariant and the catalog join (R-6g9-16), whose `ensures` gives the total; the old `ensures`
+(`1 <= len(result) <= len(p) + 1`) and `requires` (`len(p) <= 2000000002`) are proved unchanged, with no run-time
+guard. 4.4k-SR is closed by `string_with_capacity` and `string_prepend_char` (R-6g9-14). The configuration reads that
+the hand borrows (`conf.home`, `conf.os_home`, `conf.thread`, `env_value`) now return `ref str from(cfg_text)`
+through the new `util::cfg_view`. No compiler change. Evidence (not committed): `work/reset4_4o/gen_changed.rs`
+(`rs/rust` output of the changed functions), `work/reset4_4o/hand_paths.rs`.
+
+Per-function structure (generated Rust vs hand `hand/opencode.rs`):
+
+| function | before | Pruv now (generated Rust) | hand Rust | difference that stays |
+|---|---|---|---|---|
+| `normalize` | `[u8] -> [u8]`, `(start, end)` offset pairs, sizing loop + `extend_from_slice`, root pushed first | `&str -> String`; one index loop over `0..=n` cutting at `/`; `Vec<&str>` `push(&p[st..i])` / `pop()`; `out.join("/")`; `push('.')`, `push('/')`, `insert(0, '/')` | `&str -> String`; `split('/').filter(..)`; `Vec<&str>` `push` / `pop`; `out.join("/")`; same three fix-ups | index loop vs iterator (same pieces, same order); last piece read by index (`out[m - 1]`) vs `out.last()`; `vec_push` keeps its `2^40` length check (4.4o-VP) |
+| `normalize_bytes` (new name) | was `normalize` | unchanged byte normalizer | - (hand `join(root, "opencode-")`) | kept for `export::start_export` (4.4o-EB) |
+| `join` | one `[u8]` buffer for every case, `normalize`, `utf8_valid` scan, `str_from_utf8` | both empty ⇒ `"."`; `b` empty ⇒ `normalize(a)`; `a` empty ⇒ `normalize(b)`; else `String::with_capacity(na + nb + 1)` + `a` + `/` + `b`, `normalize` | same arms; `format!("{a}/{b}")` | `with_capacity` + pushes vs `format!` (one allocation each); the UTF-8 scan is gone |
+| `env_value` | owned copy through `cfg_str` (two copies), `""` copied when absent | `&'a [u8] -> &'a str` borrowed span, `""` literal | `&'a str` into `conf.env` | per-read UTF-8 check of the span (4.4o-CV) |
+| `data_dir` | owned `xv`, owned `home` | borrowed `xv`, `home`; one allocation (the join) | borrowed | equal apart from 4.4o-CV |
+| `db_path` | owned `gv`, owned `home` | borrowed `gv`, `home`; one allocation (the join or `copy(given)`) | borrowed; `g.to_owned()` | equal apart from 4.4o-CV |
+| `admit::p100` (mode 1) | owned thread id (`cfg_str`) | borrowed `cfg_view` passed to `valid_thread(&str)` | `valid_thread(conf.thread...)` borrowed | equal apart from 4.4o-CV; the DB path `to_bytes(p)` + `dirname_bytes` pool copy stays (4.3g-T, 4.4o-SB) |
+| `util::cfg_view` (new) | - | bounds / `ref_ok` / length guard, `utf8_valid` on the subview, returns the subview as `&str` (`from_utf8_unchecked`) | `Config::decode` decodes once, fields are `Option<String>` | the per-read scan (4.4o-CV) |
+| `util::cfg_str` | `span_bytes` copy, `owned_text` move, then `copy` (two copies) | `copy(cfg_view(..))` (one copy) | - | one copy, as the owned callers need |
+
+Behaviour change: the old byte normalizer gave `"."` for `"./"` (its empty check ran before the `.` push); the new
+one follows the hand and Node (`"./"`). `join` reaches it when the normalized pieces are empty and the text ends with
+`/` (for example `join("./", "")`, `join(".", "/")`); no test case hits it. `normalize_bytes` keeps the old rule, but its only input ends with
+`/opencode-`, so it never applies there.
+
+Kept, with the exact obligation:
+- `path::utility` mode 3 `to_bytes(d)` and `p100`'s `to_bytes(p)` before `dirname_bytes`: passing the `str` to a
+  `[u8]` parameter is `type/type_mismatch` ("expected [u8], found str"), and there is no `str` → `[u8]` move (row
+  4.4o-SB); `p100`'s pool copy is also the step-wire aliasing of 4.3g-T.
+- `export::start_export` keeps `normalize_bytes`: its root is a byte span of `cfg_text` that is not checked as UTF-8,
+  and the request takes a `[u8]` pool (row 4.4o-EB).
+
+Other-model comparison (Codex `gpt-6.2-astra`, review role, Codex 2 account, given `gen_changed.rs` and
+`hand_paths.rs` without this section): `normalize` and `join` agree with the hand on all 17 traced inputs (`""`,
+`"/"`, `"//"`, `"."`, `"./"`, `"a/.."`, `"../.."`, `"/.."`, `"a/./b/"`, `"/a/../../b/"`, `"a//b"`, `"../x/./y/.."`,
+`"/a/b/../"` and four joins; traced by hand, not run) and have the same structure apart from the index loop and the
+`vec_push` check (4.4o-VP). It marks `data_dir`, `db_path`, `env_value`, `cfg_view`, `cfg_str` and `p100` as not
+the same structure. Its findings, checked against the code:
+- The per-read UTF-8 scan in `cfg_view` (all the borrowed readers): row 4.4o-CV. It also notes that `env_value`
+  returns `""` for a matching key whose value is not UTF-8, where the hand's lossy decode returns the replaced text;
+  this was already the case with `cfg_str` before this step, and is part of 4.4o-CV.
+- `cfg_str` copies once; the hand has no owned read. Its remaining callers need an owned `str`; not a gap of this step.
+- `p100` copies the parent (`dirname_bytes`) into the pool and duplicates `ctl`; the hand borrows `dirname(&db)`.
+  Already rows 4.3g-T / 4.4o-SB.
+- `p100` rejects a file path with `!bank_fits(..) || np > 1073741823` where the hand rejects `db.len() > 1e9`. This
+  code is not changed by this step (the pool bound of the step wire); recorded as row 4.4o-PL.
+- `p100` has more early returns (`ctl[6] != 0`, mode range) than the hand's `admit`; these are the packet protocol
+  checks, outside the hand function.
+
+Tests (`bench/l3/opencode`, `pruvc-rs` main release binary, rs/rust and rs/llvm):
+
+| test | rs/rust | rs/llvm | before (4.4m baseline) |
+|---|---|---|---|
+| `test_impl.py --verify-only` | VERIFIED | VERIFIED | VERIFIED |
+| `test_impl.py` fixtures | 199/199 | 199/199 | 199/199 |
+| `q.py --cases 300` (499 cases) | exact 406, 0 unexplained | exact 406, 0 unexplained | exact 406, 0 unexplained |
+| `q_mutants.py --check` | all 16 markers present exactly once | | 16/16 |
+
+Rows:
+
+| row | state | note |
+|---|---|---|
+| 4.4b-NV | closed | `normalize` / `join` in the hand shape, old contracts proved |
+| 4.4k-VS | closed | by R-6g9-13 + R-6g9-16 |
+| 4.4k-SR | closed | by `string_with_capacity` + `string_prepend_char` |
+| 4.3g-K3 | partly closed | `db_path` / `data_dir` home, `env_value`, the `p100` thread are borrowed; left: 4.4o-SB |
+| 4.4o-SB (language, new) | open | no `str` → `[u8]` move or byte view of a `str` argument: `utility` mode 3 and `p100` copy (`to_bytes`) to call `dirname_bytes` |
+| 4.4o-EB (new) | open | `export` root is unvalidated config bytes and `await_req` takes `[u8]`; needs a `cfg_view` root and a `str` request field |
+| 4.4o-CV (new) | open | `cfg_view` scans the span's UTF-8 on every read; the hand decodes `Config` once. Needs a validated-once config text (a `ref str` of the whole text) |
+| 4.4o-PL (new) | open | `p100` file-path bound is the pool bound (`bank_fits`, `1073741823`) where the hand checks `len > 1e9`; values differ for a path of 1e9+1 ..= 1073741823 bytes if the bank fits (pre-existing) |
+| 4.4o-VP (compiler, new) | open | verified `vec_push` of a view still emits the `2^40` length check (`pruv_g6_req`) that the hand does not have; the invariant bounds `len(out) <= n` |

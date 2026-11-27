@@ -28,17 +28,24 @@ pub fn span_view(t: [u8], s: i64, l: i64) -> ref [u8] from(t)
   return subview(t, s, s + l);
 }
 
-// cfg_text[s..s+l] as text ("" for an absent/invalid ref or invalid UTF-8). Begin refuses a configuration text over
-// 1000000000 bytes with InputTooLarge, so the length guard below never changes a value of an admitted case.
+// cfg_text[s..s+l] borrowed as text ("" for an absent/invalid ref, over 1000000000 bytes or invalid UTF-8; hand
+// `conf.<field>.as_deref()`). Begin refuses a configuration text over 1000000000 bytes with InputTooLarge, so the
+// length guard never changes a value of an admitted case. The hand decodes the text once (lossy) and borrows; here
+// each read checks the span's UTF-8 (row 4.4o-CV).
+pub fn cfg_view(t: [u8], s: i64, l: i64) -> ref str from(t)
+  ensures len(result) <= 1000000000
+{
+  if !crate::packet::ref_ok(s, l, len(t)) || s < 0 || l > 1000000000 { return ""; }
+  let b: ref [u8] = subview(t, s, s + l);
+  if utf8_valid(b) { return subview(t, s, s + l); }
+  return "";
+}
+
+// owned copy of `cfg_view` (one copy)
 pub fn cfg_str(t: [u8], s: i64, l: i64) -> str ! alloc
   ensures len(result) <= 1000000000
 {
-  let none: str = "";
-  if !crate::packet::ref_ok(s, l, len(t)) || s < 0 || l > 1000000000 { return copy(none); }
-  let b: [u8] = span_bytes(t, s, l);
-  let x: str = crate::jstr::owned_text(move b);
-  if len(x) > 1000000000 { return copy(none); }
-  return copy(x);
+  return copy(cfg_view(t, s, l));
 }
 
 // ---- checked bank / pool arithmetic ----

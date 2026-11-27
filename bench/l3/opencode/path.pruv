@@ -3,10 +3,62 @@
 // admit.pruv, sql.pruv and list.pruv share (ask, proceed, append_patch, ok_event, db_error, fail_with, rows_ok).
 
 // ---- POSIX join/normalize (Node path.posix), in the hand shape ----
-// Hand keeps `Vec<&str>` pieces of `p`; a local view list exists (R-6g9-10/11) but its element lengths cannot be named
-// in a contract, so the output size would be unprovable (row 4.4k-VS). `out` holds each piece's (start, end) offsets
-// into `p` instead (row 4.4b-NV). Hand inserts the root '/' at 0 after the join; Pruv pushes it first (row 4.4k-SR).
-pub fn normalize(p: [u8]) -> [u8] ! alloc
+// Hand `normalize(p: &str) -> String`: `Vec<&str>` pieces of `p`, `pop` on "..", `out.join("/")`, then '.', the
+// trailing '/' and `insert(0, '/')`. The piece sum (R-6g9-13) bounds the join (R-6g9-16) with no run-time guard.
+pub fn normalize(p: str) -> str ! alloc
+  requires len(p) <= 2000000002
+  ensures 1 <= len(result) && len(result) <= len(p) + 1
+{
+  let n: i64 = len(p);
+  if n == 0 {
+    return ".";
+  }
+  let rooted: bool = p[0] == 47;
+  let dir: bool = p[n - 1] == 47;
+  let mut out: Vec<ref str> = vec_new::<ref str>();
+  let mut st: i64 = 0;
+  let mut i: i64 = 0;
+  while i <= n
+    invariant 0 <= st && st <= i && i <= n + 1 && n == len(p)
+    invariant st == 0 || st == n + 1 || (1 <= st && st <= n && p[st - 1] == 47)
+    invariant vec_views_len::<ref str>(out, len(out)) + len(out) <= st
+    invariant (dir && i >= n) ==> st >= n
+    invariant dir ==> vec_views_len::<ref str>(out, len(out)) + len(out) <= n
+    decreases n + 1 - i
+  {
+    if i == n || p[i] == 47 {
+      let w: i64 = i - st;
+      if w > 0 && !(w == 1 && p[st] == 46) {
+        if w == 2 && p[st] == 46 && p[st + 1] == 46 {
+          let m: i64 = len(out);
+          let mut back: bool = false;
+          if m > 0 {
+            let last: ref str = vec_get::<ref str>(out, m - 1);
+            back = !(len(last) == 2 && last[0] == 46 && last[1] == 46);
+          }
+          if back {
+            vec_pop::<ref str>(inout out);
+          } else if !rooted {
+            vec_push::<ref str>(inout out, subview(p, st, i));
+          }
+        } else {
+          vec_push::<ref str>(inout out, subview(p, st, i));
+        }
+      }
+      st = i + 1;
+    }
+    i = i + 1;
+  }
+  let mut s: String = vec_join::<ref str>(out, "/");
+  if len(s) == 0 && !rooted { s = string_push_char(move s, 46); }
+  if dir && len(s) > 0 && string_byte(s, len(s) - 1) != 47 { s = string_push_char(move s, 47); }
+  if rooted { s = string_prepend_char(move s, 47); }
+  return string_into_str(move s);
+}
+
+// Byte form of `normalize` for `export::start_export`, whose root is a byte span of the configuration text and whose
+// request takes a `[u8]` pool (row 4.4o-EB). `out` holds each piece's (start, end) offsets into `p`.
+pub fn normalize_bytes(p: [u8]) -> [u8] ! alloc
   requires len(p) <= 2000000002
   ensures 1 <= len(result) && len(result) <= len(p) + 1
 {
@@ -92,25 +144,22 @@ pub fn normalize(p: [u8]) -> [u8] ! alloc
   return r;
 }
 
-// path.posix.join(a, b): empty arguments are skipped, the rest joined with '/' and normalised ("." when both are empty).
+// path.posix.join(a, b) (hand `join`): both empty => "."; one empty => normalize the other; else normalize "a/b".
 pub fn join(a: str, b: str) -> str ! alloc
   requires len(a) <= 1000000000 && len(b) <= 1000000000
   ensures len(result) <= len(a) + len(b) + 2
 {
   let na: i64 = len(a);
   let nb: i64 = len(b);
-  let dot: str = ".";
-  if na == 0 && nb == 0 { return copy(dot); }
-  let mut jb: [u8] = alloc(0, 0);
-  arr_reserve(inout jb, na + nb + 1);
-  arr_append(inout jb, a, 0, na);
-  if na > 0 && nb > 0 { arr_push(inout jb, 47); }
-  arr_append(inout jb, b, 0, nb);
-  let norm: [u8] = normalize(jb);
-  // the pieces are whole '/'-separated runs of the UTF-8 inputs, but the byte buffer loses that fact (row 4.4b-NV)
-  if !utf8_valid(norm) { return copy(dot); }
-  let text: str = str_from_utf8(norm);
-  return move text;
+  if na == 0 && nb == 0 { return "."; }
+  if nb == 0 { return normalize(a); }
+  if na == 0 { return normalize(b); }
+  let mut f: String = string_with_capacity(na + nb + 1);
+  f = string_push_str(move f, a);
+  f = string_push_char(move f, 47);
+  f = string_push_str(move f, b);
+  let full: str = string_into_str(move f);
+  return normalize(full);
 }
 
 // path.posix.dirname on bytes: "." for "", "/" or "//" for rooted inputs, else the prefix before the last non-trailing '/'
@@ -221,11 +270,10 @@ fn key_eq(t: [u8], s: i64, l: i64, lit: str) -> bool
 }
 
 // value of the environment pair named `name` ("" when absent; absent and empty are the same for every caller)
-pub fn env_value(cfg: [i64], cfg_text: [u8], name: str) -> str ! alloc
+pub fn env_value(cfg: [i64], cfg_text: [u8], name: str) -> ref str from(cfg_text)
   requires len(cfg) >= 32 && len(cfg) <= 2147483647
   ensures len(result) <= 1000000000
 {
-  let none: str = "";
   let n: i64 = (len(cfg) - 32) / 4;
   let mut i: i64 = 0;
   while i < n
@@ -236,11 +284,11 @@ pub fn env_value(cfg: [i64], cfg_text: [u8], name: str) -> str ! alloc
     let ks: i64 = cfg[b];
     let kl: i64 = cfg[b + 1];
     if ks >= 0 && crate::packet::ref_ok(ks, kl, len(cfg_text)) {
-      if key_eq(cfg_text, ks, kl, name) { return crate::util::cfg_str(cfg_text, cfg[b + 2], cfg[b + 3]); }
+      if key_eq(cfg_text, ks, kl, name) { return crate::util::cfg_view(cfg_text, cfg[b + 2], cfg[b + 3]); }
     }
     i = i + 1;
   }
-  return copy(none);
+  return "";
 }
 
 // opencodeDataDir: trimmed XDG_DATA_HOME when nonempty and absolute (join with opencode), else <OS home>/.local/share/opencode
@@ -248,10 +296,10 @@ pub fn data_dir(cfg: [i64], cfg_text: [u8]) -> str ! alloc
   requires len(cfg) >= 32 && len(cfg) <= 2147483647
   ensures len(result) <= 1000000100
 {
-  let xv: str = env_value(cfg, cfg_text, "XDG_DATA_HOME");
+  let xv: ref str = env_value(cfg, cfg_text, "XDG_DATA_HOME");
   let xdg: ref str = crate::text::trim(xv);
   if len(xdg) > 0 && xdg[0] == 47 { return join(xdg, "opencode"); }
-  let home: str = crate::util::cfg_str(cfg_text, cfg[16], cfg[17]);
+  let home: ref str = crate::util::cfg_view(cfg_text, cfg[16], cfg[17]);
   return join(home, ".local/share/opencode");
 }
 
@@ -262,10 +310,10 @@ pub enum DbPath { Memory, File(path: str) }
 pub fn db_path(cfg: [i64], cfg_text: [u8]) -> DbPath ! alloc
   requires len(cfg) >= 32 && len(cfg) <= 2147483647
 {
-  let gv: str = env_value(cfg, cfg_text, "OPENCODE_DB");
+  let gv: ref str = env_value(cfg, cfg_text, "OPENCODE_DB");
   let given: ref str = crate::text::trim(gv);
   if crate::text::same(given, ":memory:") { return DbPath::Memory; }  // MUT:M01 => if false { return DbPath::Memory; }
-  let home: str = crate::util::cfg_str(cfg_text, cfg[6], cfg[7]);
+  let home: ref str = crate::util::cfg_view(cfg_text, cfg[6], cfg[7]);
   if len(given) == 0 { return DbPath::File(join(home, "opencode.db")); }
   if given[0] == 47 { return DbPath::File(copy(given)); }
   return DbPath::File(join(home, given));
