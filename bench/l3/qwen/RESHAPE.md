@@ -198,7 +198,55 @@ Structure, function by function against `handrust/src/lib.rs` `current_chain` (1
 title filter on the borrowed value match. Differences left: 4.4u-TO, the per-entry log (4.3e-D), owned arena keys
 vs borrowed map keys (gap VL).
 
+## 3d. Step 4.4w: rows 4.4d-QA, 4.4u-TO, 4.3e-D / 4.4d-QS
+
+- 4.4d-QA closed. `replay` lends the prompt (tag 5) and answer (tag 7) spans of `log.text` to `begin2` / `answer2`
+  as `str` views (R-6g-10, `subview` of a `[u8]` as a `str` argument), and the stamp (tag 4) stays a span
+  (`at_lo`, `at_n` with `at_n` 0 or 24) lent the same way; `read_text` (owned copy and UTF-8 pass in
+  `adapter_probe`) is left only for the model (tag 6), which the hand also owns (`model = Some(id.clone())`).
+  The proof: `write_event`, `write_text`, `write_stamp`, `record_answers`, `record_entry`, `record_object`,
+  `window_object` and the `window_wire` loop keep `utf8_valid(log.text)` (appending a `str`, or the 24 ASCII bytes of
+  `iso_of`, keeps a valid buffer valid), and `replay` requires it. Gap 4.4c-SV is the other direction (`str` lent
+  as `[u8]`) and stays open; it does not block this row.
+- New row 4.4w-CE: `replay` tests the byte at each end of a span (`char_edge`: the end, `< 128` or `>= 192`) so the
+  view is on char boundaries; the hand has no test (its `&str` parts come from serde). It replaces the full UTF-8 pass
+  and copy of `adapter_probe`. Closing it needs a per-record fact over `log.records` (every text record is a span
+  between two appends), a quantified invariant through the whole scan.
+- 4.4u-TO closed. `tail_info`'s per-object body moved into `import::tail_object` (requires `doc_strings`, returns the
+  `Title`), which reads the timestamp and then the custom title as the hand `tail_import` does. Kept inline, the
+  solver still gave up on `title_of`'s `doc_strings` precondition after `iso_of` (`verify_unknown`).
+- 4.3e-D / 4.4d-QS still open, the function is unchanged. The hand keeps each parsed object and runs `join`, `iso`
+  and the parts walk only for selected entries (`iso` and parts only `if collector.attached`). Both Pruv forms are
+  blocked:
+  - a vector of parsed documents: `Vec<json::JsonDocument>` is `type/foreign_owned_type` (the element holds the
+    `[i64]` tape), new gap row 4.4w-VD (and a per-element `doc_strings` fact would be needed);
+  - raw ranges of `data` decoded in `replay`: `time::iso_of` needs a document (no range form in `pkgs/time`, new
+    row 4.4w-TR) and `jstr::decode_append` ensures no UTF-8 fact on its output, so the decoded prompt or part could
+    not be lent as `str` without a run-time UTF-8 pass the hand does not make (new row 4.4w-DU). Both are package
+    changes, outside this bundle; a re-parse in `replay` would be a different shape, not done.
+  The stamp no longer becomes an owned `str` in `replay` (now a span), but it is still formatted during the scan.
+
+Structure, function by function (`handrust/src/edge.rs` `tail_import`, `lib.rs` `window_import` replay / `Collector`):
+
+| function | hand | Pruv after 4.4w | difference |
+|---|---|---|---|
+| `tail_info` + `tail_object` | per line: `parse_line`, `iso(timestamp)` then system/custom_title; `last_at = Some(at)`, `title = Some(one_line(..))` | same order; `last = copy(iso.text)`, title kept as `str`, `one_line` once at the end | `copy` of the 24 iso bytes (hand moves the new `String`); `one_line` after the loop (hand per title) as before |
+| `replay` tag 4 | `at = iso(timestamp)` (owned `Option<String>`) only when attached | span `(at_lo, 24)` of `log.text`, no copy | iso formatted at scan time (4.4d-QS); two edge byte tests (4.4w-CE) |
+| `replay` tag 5 / 7 | `begin(prompt, iso)` moves the joined `String`; `answer(text: &str, at)` borrows | `begin2` / `answer2` get `str` views of `log.text`; both copy into the turn store | prompt / parts were joined and copied into `log.text` during the scan (4.3e-D); hand `begin` moves its `String`, `begin2` copies the view (turn store layout) |
+| `replay` tag 6 | `model = Some(id.clone())` | `read_text` owned copy | same ownership; `adapter_probe` adds a UTF-8 pass |
+| `write_*`, `record_*` | none (serde values in `Entry`) | append to `log.text` with `utf8_valid` kept | the per-entry log itself (4.3e-D) |
+
 ## 4. Results
+
+4.4w, after the last code change (`pruvc-rs`, verified, no `--no-verify`):
+
+| check (4.4w) | rs/rust | rs/llvm |
+|---|---|---|
+| `qwen/test_impl.py` (verifier + fixtures) | PASS, 27/27 | PASS, 27/27 |
+| `q.py --count 300` (+21 list; `PAIRS` set to the rs pairs) | same 317, P1 1, P4 4, P5 1, unexplained 0; list same 21, P4 1 | same |
+| mutants (`q_mutants.py`, 12 markers) | 11 differential-killed, turn-cap verifier-rejected | - |
+
+No `pkgs/` change, so no consumer runs. No perf timing: the structure still differs (4.3e-D / 4.4d-QS).
 
 4.4u, after the last code change (`pruvc-rs`, verified, no `--no-verify`):
 

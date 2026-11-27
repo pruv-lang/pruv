@@ -2309,3 +2309,21 @@ Only `bench/l3/qwen` changes (no compiler, no `pkgs/`, so no consumer runs). Det
   `lgaps11_join_subview_len`, `lgaps11_pop_checks_all`, `lgaps11_str_bytes_paths` changed because their view checks
   left); `--list-rows` diff (11 new rows, `tests/run_all_rows.txt` updated).
 - Next: LG12-RS (key view `vec_reserve` on `verified` too), LG12-QK, P10-M1.
+
+### Rows after 4.4w
+
+- Closed: 4.4d-QA (Qwen `replay` lends prompt, answer and stamp spans of `log.text` as `str` views, R-6g-10, with
+  `utf8_valid(log.text)` kept through the scan), 4.4u-TO (`tail_info`'s body is `import::tail_object`, timestamp
+  then title as the hand).
+- New: 4.4w-CE (bench: two char-edge byte tests per lent span; closing needs a per-record fact over the log),
+  4.4w-VD (language: `Vec<json::JsonDocument>` is `type/foreign_owned_type`, so no parsed-document vector),
+  4.4w-TR (package: `pkgs/time` has no `iso` over a raw range of `data`), 4.4w-DU (package: `jstr::decode_append`
+  ensures no UTF-8 fact, so a decoded range cannot be lent as `str` without a run-time pass).
+- Still open: 4.3e-D / 4.4d-QS (scan-time join, iso and parts walk; blocked by 4.4w-VD, or by 4.4w-TR with 4.4w-DU),
+  4.4c-SV (`str` lent as `[u8]`, the other direction; it did not block 4.4d-QA), and the rows listed before.
+- Tests (rs/rust and rs/llvm): `test_impl.py` PASS 27/27, `q.py --count 300` (rs pairs) same 317, P1 1, P4 4, P5 1,
+  unexplained 0, list same 21, P4 1; `q_mutants.py` 11 differential-killed, turn-cap verifier-rejected. Not measured (structure still differs at 4.3e-D).
+- Next:
+  1. 4.4w-TR and 4.4w-DU in `pkgs/time` / `pkgs/jstr` (all consumers rerun), then 4.3e-D / 4.4d-QS with raw ranges.
+  2. Or 4.4w-VD in the language, then the hand's parsed-entry vector.
+  3. 4.4w-CE once a quantified record fact over `log.records` is affordable.
