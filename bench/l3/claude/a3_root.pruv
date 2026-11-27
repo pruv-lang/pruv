@@ -7,7 +7,7 @@
 // Result: [0, nsnap, kept, trimmed, total, ...12*nsnap snapshot words, ...10*kept turn words, ...text bytes]
 //         [1, position] for a malformed program.
 // A snapshot is [begun, current, lost, slot, plen, rlen, budget, tools, clipped, created, completed, ordinal]
-// of the state slot st[3] (the newest begun draft, or slot 0 before any begin).
+// of the state slot st[3] (the newest begun draft, or slot 0 before any begin); its ordinal is begun - 1 (-1 before any begin).
 mod json;
 mod jstr;
 mod text;
@@ -80,7 +80,6 @@ fn step(prog: [i64], pos: i64, inout st: [i64], inout sl: [i64], inout buf: [u8]
   requires st[4] <= 32792 * (pos / 5)
   requires 0 <= snaps[0] && snaps[0] <= 64
   requires crate::turns::fields(sl)
-  requires forall s in 0..200: ((st[0] <= s ==> sl[1600 + s] == -1) && (st[0] > s ==> (0 <= sl[1600 + s] && sl[1600 + s] < st[0] && st[0] - 200 <= sl[1600 + s] && sl[1600 + s] % 200 == s)))
   ensures len(old(buf)) <= len(buf) && len(snaps) == 769
   ensures crate::turns::spans(st, sl, len(buf))
   ensures result.next == -1 || (pos < result.next && result.next <= len(prog))
@@ -88,7 +87,6 @@ fn step(prog: [i64], pos: i64, inout st: [i64], inout sl: [i64], inout buf: [u8]
   ensures result.next != -1 ==> st[4] <= 32792 * (result.next / 5)
   ensures 0 <= snaps[0] && snaps[0] <= 64
   ensures crate::turns::fields(sl)
-  ensures forall s in 0..200: ((st[0] <= s ==> sl[1600 + s] == -1) && (st[0] > s ==> (0 <= sl[1600 + s] && sl[1600 + s] < st[0] && st[0] - 200 <= sl[1600 + s] && sl[1600 + s] % 200 == s)))
 {
   let op: i64 = prog[pos];
   if op == 2 {
@@ -115,7 +113,7 @@ fn step(prog: [i64], pos: i64, inout st: [i64], inout sl: [i64], inout buf: [u8]
     snaps[at + 8] = sl[8 * c + 4];
     snaps[at + 9] = sl[8 * c + 5];
     snaps[at + 10] = sl[8 * c + 6];
-    snaps[at + 11] = sl[1600 + c];
+    snaps[at + 11] = st[0] - 1;
     snaps[0] = nsn + 1;
     return Step { next: pos + 1 };
   }
@@ -155,7 +153,6 @@ pub fn run(prog: [i64]) -> [i64] ! alloc
     invariant st[4] <= 32792 * (pos / 5)
     invariant 0 <= snaps[0] && snaps[0] <= 64
     invariant crate::turns::fields(sl)
-    invariant forall s in 0..200: ((st[0] <= s ==> sl[1600 + s] == -1) && (st[0] > s ==> (0 <= sl[1600 + s] && sl[1600 + s] < st[0] && st[0] - 200 <= sl[1600 + s] && sl[1600 + s] % 200 == s)))
     decreases len(prog) - pos
   {
     let step_result: Step = step(prog, pos, inout st, inout sl, inout buf, inout snaps);

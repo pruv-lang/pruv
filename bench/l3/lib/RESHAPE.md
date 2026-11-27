@@ -1482,3 +1482,34 @@ All after the last code change (F1 / F4 from the structure comparison).
   3. Claude leftovers: 4.3h-P, 4.4c-TS / 4.4c-MB / 4.4c-TR / 4.4c-OL, then 4.3h-O and 4.3h-Q.
   4. req port (REQ-PORT) once P10H passes on both backends.
   5. Then Codex 4.3f-B, 4.3f-E, 4.3f-F and Qwen 4.3e-J / 4.3e-F / 4.3e-D (shared modules; run all consumers).
+
+## Step 4.4g: Claude rows 4.3h-P (rest), 4.4c-TR, 4.4c-OL
+
+- `claude/RESHAPE.md` §6. Changed: `claude/turns.pruv`, `claude/import.pruv`, `claude/a3_root.pruv`,
+  `claude/time.pruv`, `claude/text.pruv`; no `lib/` or `pkgs/` module changed, so no other fragment was rerun.
+- Closed: 4.3h-P (the `sl[1600..1800)` ordinal column and its invariant are gone; the A3 snapshot exports
+  `begun - 1`), 4.4c-TR (`from_string` borrows the trimmed span), 4.4c-OL (`one_line` takes one `char_step` per
+  character).
+- 4.4c-MB stays open as a `pkgs` row: no JSON string decode into an existing buffer or borrowed view in
+  `pkgs/access` / `pkgs/jstr`. 4.4c-TS stays open with D-R08-2; a re-probe shows `Vec` of a struct with `[u8]` fields
+  (local, struct field, `inout` + `vec_at_mut`) now compiles on LLVM, so VL looks closed and SPEC.md line 393 is stale.
+- One Codex structure comparison (Codex 2 account) confirmed the ordinal removal, TR and OL; new bench rows 4.4g-DV
+  (`digit_value` single pass vs the hand's check / strip / parse) and 4.4g-MC (model compared before decode).
+- Results: claude `test_a0`-`test_a4` on `rs/rust` and `rs/llvm` all pass (272, 2884, 2443, 134, 270); `q.py` (300
+  random + 270 fixed, rs pairs) 570/570, agrees with the oracle; `q_mutants.py` 18/18, 9 detected, 9 proof-rejected.
+
+### Rows open after 4.4g
+
+- New (bench): 4.4g-DV, 4.4g-MC.
+- Changed: 4.4c-MB is now a `pkgs` row (decode into a reused buffer / borrowed view); VL is closed as a language row
+  pending a SPEC.md fix and a runtime check, D-R08-2 / 4.4c-TS remain as the bench rewrite to `Vec<Draft>`.
+- Still open in Claude: 4.4c-SV, 4.4c-IS, 4.4c-DC, 4.4c-TS, 4.4c-MB, 4.4g-DV, 4.4g-MC, 4.3h-O, 4.3h-D, 4.3h-Q, CK, D-R08-2, 4.3d-M.
+- Still open from 4.4f and before: as listed after 4.4f (minus the Claude rows closed above).
+- Next:
+  1. Language: 4.4f-NVL / 4.4f-SS, then 4.4b-NV and 4.3g-K3; fix SPEC.md line 393 after a runtime test of `Vec` of a
+     struct on LLVM.
+  2. Claude: D-R08-2 / 4.4c-TS (`turns` as `Vec<Draft>` with a front index), then 4.3h-O and 4.4c-MB together (one
+     `pkgs/access` borrowed-or-into-buffer string API; run all consumers), and 4.3h-Q.
+  3. OpenCode: 4.3g-T2, 4.4b-CV with a `pkgs/time` `civil`.
+  4. req port (REQ-PORT) once P10H passes on both backends.
+  5. Then Codex 4.3f-B, 4.3f-E, 4.3f-F and Qwen 4.3e-J / 4.3e-F / 4.3e-D (shared modules; run all consumers).

@@ -200,3 +200,51 @@ fault in the new code (2: veto block ignored; 11 / 18: early return before `comp
 `put_turns`; 14: the window `flag`; 16: `tiled` reads one record too far). In `handrust` only the `// Pruv:` mapping
 comments changed; `cargo build --release`, 0 warnings.
 
+
+## 6. Step 4.4g: bench rows 4.3h-P (rest), 4.4c-TR, 4.4c-OL; MB and TS stay
+
+Closed, in the hand shape (`handrust/src/lib.rs`):
+
+- 4.3h-P (rest): the ordinal column is gone. `sl` is 1600 words (200 slots of 8), `new_slots` is `alloc(1600, 0)`
+  with no fill loop, `begin` writes no ordinal, and the ordinal invariant is dropped from every `turns`, `import` and
+  `a3_root` contract. The ordinal was read only by contracts and the A3 snapshot; the current slot always holds the
+  newest begun draft (`begin` is the only writer of `st[0]` and `st[3]`), so snapshot word 11 is `st[0] - 1` (-1
+  before any begin), and the A3 fixtures are unchanged (134/134).
+- 4.4c-TR: `time::from_string` borrows the trimmed text (`text::trim_span` + `subview`) for the digit check; no
+  `substr` before it (hand `es_trim`).
+- 4.4c-OL: `text::char_step` is one `chars()` step: the lead byte decides ASCII (end `i + 1`, space test on that byte),
+  otherwise `next` gives the width and the 2- or 3-byte space test reads the continuation bytes once; `one_line` calls
+  it once per character and no longer calls `next` and then `space_len` on the same bytes.
+
+Rows still open (claude), changed in this step:
+
+| row | kind | finding | what the hand does |
+|---|---|---|---|
+| 4.4c-MB | pkgs | `pkgs/access` / `pkgs/jstr` only decode into a new owned `str` (`string_text_owned`); there is no decode into an existing buffer and no borrowed view of an escape-free string, so `model` / `best` keep `move value` (a `clear` + append would add a copy and keep the allocation) | `clear` + `extend_from_slice` from a borrowed `Cow` |
+| 4.4c-TS | bench (with VL) | `completedAt` still lives after the reply in the arena (24-byte `copy_within` per later answer). Re-probe: a local `Vec<D>`, a struct field `Vec<D>` (`vec_push` with a length bound) and `vec_at_mut` on an `inout Vec<D>` where `D` has `[u8]` fields now compile on both backends, so VL looks closed on this compiler (SPEC.md line 393 still says LLVM rejects it; runtime output of the probe not compared). The `Vec<Draft>` rewrite of `turns` (D-R08-2) is a whole-module change and was not started; there is no `VecDeque` / `pop_front` | `VecDeque<Draft>`, two fixed stamp fields |
+| 4.4g-DV | bench | `digit_value` checks, accumulates and bounds the digits in one loop with early returns; the hand checks all digits, strips leading zeros, rejects more than 16, then parses | `all(is_ascii_digit)`, `trim_start_matches('0')`, `parse` |
+| 4.4g-MC | bench (with MB) | `read_window` compares the new model token with the held model (`string_is`) and decodes only when it differs; the hand clears and copies every nonempty nonsynthetic model | `clear` + `extend_from_slice` each time |
+
+Unchanged: 4.4c-SV, 4.4c-IS, 4.4c-DC, 4.3h-O, 4.3h-D, 4.3h-Q, CK, D-R08-2, 4.3d-M (4.3h-O and 4.3h-Q need `pkgs`
+or a shared module; out of this step's scope).
+
+Results after the last code change (rs pairs only; no perf timing; each test verifies its root before running):
+
+| check | rs/rust | rs/llvm |
+|---|---|---|
+| `test_a0.py` | 272/272 | 272/272 |
+| `test_a1.py` | 2884/2884 | 2884/2884 |
+| `test_a2.py` | 2443/2443 | 2443/2443 |
+| `test_a3.py` | 134/134 | 134/134 |
+| `test_a4.py` | 270/270 | 270/270 |
+| `q.py --count 300` (seed 20261114) | 570/570, agrees with the oracle | 570/570, agrees with the oracle |
+| `q_mutants.py` (rust backend by design; run as `--ids` 1-10 and 11-18) | 18 / 18 present once; 9 detected, 9 proof-rejected, 0 survived | - |
+
+One Codex structure comparison (gpt-6.2-astra; the default account was at its limit, so the Codex 2 account; the first
+attempt timed out at thread start), read-only. It confirmed that `st[0] - 1` is the ordinal of the current slot for
+every reachable state, the borrowed trim in `from_string`, and the `one_line` rules. Not applied, kept as rows:
+4.4g-DV and 4.4g-MC (new), `one_line` walking `i64` byte positions instead of `char` values (no `char` iterator in
+the language; same reads and output buffer), the `bytes24` copy before `canonical_at` (4.4c-SV, 4.4c-IS), and the
+slot ring / `reclaim` against the hand's per-draft `Vec` reuse (D-R08-2, 4.4c-TS).
+
+In `handrust` only the `one_line` `// Pruv:` comment changed; `cargo build --release`, 0 warnings.

@@ -144,10 +144,35 @@ fn eq_at(s: str, at: i64, lit: str) -> bool
   return true;
 }
 
-// Lair oneLine: text.replace(/\s+/g, ' ').trim().slice(0, max) counted in UTF-16 units. One pass: whitespace
-// runs are skipped and one space is written before the next non-whitespace character when something is
-// already written. A cut inside a surrogate pair omits the whole scalar (a Pruv str cannot hold a lone
-// surrogate); a pending separator space is kept when it fits, as slice would keep it.
+// One `chars()` step at boundary i: the end of that character and whether it is ECMAScript whitespace. Each
+// byte of the character is read once (the lead byte decides ASCII, the boundary scan gives the width).
+pub struct Char { end: i64, space: bool }
+fn char_step(s: str, i: i64) -> Char
+  requires 0 <= i && i < len(s) && is_char_boundary(s, i)
+  ensures i < result.end && result.end <= len(s)
+  ensures is_char_boundary(s, result.end)
+{
+  let b: i64 = s[i];
+  if b < 128 { return Char { end: i + 1, space: (9 <= b && b <= 13) || b == 32 }; }
+  let j: i64 = next(s, i);
+  if j - i == 2 {
+    let c: i64 = s[i + 1];
+    return Char { end: j, space: b == 194 && c == 160 };
+  }
+  if j - i != 3 { return Char { end: j, space: false }; }
+  let c: i64 = s[i + 1];
+  let d: i64 = s[i + 2];
+  let sp: bool = (b == 225 && c == 154 && d == 128) ||
+    (b == 226 && c == 128 && ((128 <= d && d <= 138) || d == 168 || d == 169 || d == 175)) ||
+    (b == 226 && c == 129 && d == 159) || (b == 227 && c == 128 && d == 128) || (b == 239 && c == 187 && d == 191);
+  return Char { end: j, space: sp };
+}
+
+// Lair oneLine: text.replace(/\s+/g, ' ').trim().slice(0, max) counted in UTF-16 units. One pass over the
+// characters (hand `for c in s.chars()`): whitespace runs are skipped and one space is written before the next
+// non-whitespace character when something is already written. A cut inside a surrogate pair omits the whole
+// scalar (a Pruv str cannot hold a lone surrogate); a pending separator space is kept when it fits, as slice
+// would keep it.
 pub fn one_line(s: str, max: i64) -> str ! alloc
   requires len(s) <= 100_000_000_000
   requires 0 <= max && max <= 100_000_000_000
@@ -165,8 +190,9 @@ pub fn one_line(s: str, max: i64) -> str ! alloc
     invariant is_char_boundary(s, i)
     decreases n - i
   {
-    let j: i64 = next(s, i);
-    if space_len(s, i) != 0 {
+    let c: Char = char_step(s, i);
+    let j: i64 = c.end;
+    if c.space {
       pending = true;
       i = j;
     } else {
