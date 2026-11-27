@@ -1329,4 +1329,9 @@ Only `claude` changed, so only the claude runners ran (`PRUVC_RS` = the existing
 | `claude/test_a2.py` | 2443/2443 | 2443/2443 |
 | `claude/test_a3.py` | 134/134 | 134/134 |
 | `claude/test_a4.py` | 270/270 | 270/270 |
-| `claude/q.py`, `claude/q_mutants.py` | running at this commit | running at this commit |
+| `claude/q.py` (270 fixed + 20000 generated) | 20270/20270 | 20270/20270 |
+| `claude/q_mutants.py` (18) | 8 detected, 10 proof-rejected, 0 survived | (rust backend only) |
+
+`q.py` exits 1 only because of the frozen py pairs (`ERROR build: 'py'`). Mutant 4 (title rank `<` to `<=`) went
+stale because its old snippet named the removed `Title` enum; it now targets `if level < st.rank { return 0; }` and is
+detected by fixture 171 ("titles tie later wins").

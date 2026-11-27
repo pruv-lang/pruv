@@ -1968,7 +1968,8 @@ All after the last code change (F1 / F4 from the structure comparison).
 - 4.4n-KL: design note only (`pkgs/RESHAPE.md` §"4.4n-KL"); recommended a one-walk fixed-key-set read in
   `pkgs/access`.
 - Tests (claude only, nothing shared changed): `test_a0`-`test_a4` all pass on rs/rust and rs/llvm (272, 2897, 2443,
-  134, 270); `q.py` / `q_mutants.py` still running at this commit (recorded in the next commit).
+  134, 270); `q.py` 20270/20270 on rs/rust and rs/llvm (exit 1 from the frozen py pairs only); `q_mutants.py` 18 mutants: 8
+  detected, 10 proof-rejected, none survive (mutant 4's snippet updated to the new `ranked` line).
 - Not measured (structure not identical: 4.4n-KL member walk per key, the owned user prompt and the model written
   after the content (4.4c-MB), the escaped candidate decoded at the lookup (4.3h-T)).
 - Independent structure comparison (Codex `gpt-6.2-astra`, review role, Codex 2 account; the default account was
