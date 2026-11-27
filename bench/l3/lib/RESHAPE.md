@@ -1953,3 +1953,35 @@ All after the last code change (F1 / F4 from the structure comparison).
      mode 3.
   2. 4.4q-DN: decide which side is the reference for the hand `dirname` (the pinned TypeScript says Node).
   3. 4.4o-VP, then the Next list after 4.4p.
+
+## Step 4.4r: one reused title buffer (4.4m-TB part two), `string_token`'s constant flag folds (4.4p-CF), key lookup design (4.4n-KL)
+
+- Changed: `claude/entry` (`RankedTitle { rank: i64, text: [u8] }` and `new_title()`; `title_key` / `pick_title` /
+  `ranked` / `title_of` / `title_for_type` write the winning title into the caller's buffer by `truncate(0)` + a `str`
+  append, return an `i64` code, and check the rank before any lookup; the `Title` enum is gone), `claude/import`
+  (`tail_info` and `read_window` hold one `RankedTitle` across records and borrow the final title as a `str` with no
+  re-check; the string tail of `consume_entry` moves to an `inline(always)` `answer_string`, split with three asserts
+  because the solver gave up on the whole body) and `claude/a1_root` (the a1 wrappers). No compiler change, no `pkgs`
+  change. Details, the structure table and the tests: `pkgs/RESHAPE.md` §"Step 4.4r".
+- 4.4p-CF: no code change. The literal `checked` argument folds after the forced inline on rs/rust and rs/llvm (IR
+  evidence in `pkgs/RESHAPE.md`).
+- 4.4n-KL: design note only (`pkgs/RESHAPE.md` §"4.4n-KL"); recommended a one-walk fixed-key-set read in
+  `pkgs/access`.
+- Tests (claude only, nothing shared changed): `test_a0`-`test_a4` all pass on rs/rust and rs/llvm (272, 2897, 2443,
+  134, 270); `q.py` / `q_mutants.py` still running at this commit (recorded in the next commit).
+- Not measured (structure not identical: 4.4n-KL member walk per key, the owned user prompt and the model written
+  after the content (4.4c-MB), the escaped candidate decoded at the lookup (4.3h-T)).
+- Independent structure comparison (Codex `gpt-6.2-astra`, review role, Codex 2 account; the default account was
+  at its limit). It agrees on one title buffer reused in both readers, the rank check before the lookup and no
+  UTF-8 re-check of the final title; it found no wrong-result path and no new row.
+
+### Rows after 4.4r
+
+- Closed: 4.4m-TB (part two), 4.4p-CF.
+- Designed, code open: 4.4n-KL.
+- New: none.
+- Still open: 4.4o-SB language side, 4.4o-EB, 4.4o-VP, 4.4q-CU, 4.4q-DN, and the rows listed before.
+- Next:
+  1. 4.4n-KL option 3: a one-walk `access::fields` for a fixed key set, then `claude/entry` / `claude/import` on it.
+  2. 4.4o-SB language side, then 4.4o-EB.
+  3. 4.4q-DN reference decision, 4.4o-VP.

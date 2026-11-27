@@ -2,7 +2,7 @@
 // and return [i64]). Byte inputs become str through the checked UTF-8 adapter; invalid UTF-8 gives [-1].
 // Text ops return [0, ...bytes] ([-2] when a bound is out of range). Entry ops take a whole line and call
 // parse_line: [9] not an object, [8, position] line defect. Field: [0,...bytes] Value, [1] Missing,
-// [2,kind] Defect. Title: [0,rank,...bytes] Ranked, [1,0] NoTitle, [2,kind] Defect.
+// [2,kind] Defect. Title: [0,rank,...bytes] Ranked, [1,0] NoTitle, [2,kind] Defect (from entry::RankedTitle, 4.4r).
 mod json;
 mod lex;
 mod parse;
@@ -53,13 +53,24 @@ fn pack_field(f: crate::entry::Field) -> [i64] ! alloc
   }
 }
 
-fn pack_title(t: crate::entry::Title) -> [i64] ! alloc
+// 4.4r: the title buffer as a packet: [0, rank, ...bytes] when `code` is 1, [1, 0] when 0, [2, code] otherwise.
+fn pack_title(code: i64, st: crate::entry::RankedTitle) -> [i64] ! alloc
+  requires utf8_valid_span(st.text, 0, len(st.text))
 {
-  match t {
-    crate::entry::Title::Ranked(level, s) => { let lead: [i64] = lead2(0, level); return widen(s, lead); }
-    crate::entry::Title::NoTitle => { return lead2(1, 0); }
-    crate::entry::Title::Defect(k) => { return lead2(2, k); }
-  }
+  if code == 0 { return lead2(1, 0); }
+  if code != 1 { return lead2(2, code); }
+  let lead: [i64] = lead2(0, st.rank);
+  return widen(subview(st.text, 0, len(st.text)), lead);
+}
+
+// pick_title's buffer as a Field packet: [0, ...bytes] written, [1] missing, [2, code] defect.
+fn pack_pick(code: i64, buf: [u8]) -> [i64] ! alloc
+  requires utf8_valid_span(buf, 0, len(buf))
+{
+  if code == 0 { return lead1(1); }
+  if code != 1 { return lead2(2, code); }
+  let lead: [i64] = lead1(0);
+  return widen(subview(buf, 0, len(buf)), lead);
 }
 
 pub fn one_line_w(data: [u8], max: i64) -> [i64] ! alloc
@@ -217,8 +228,9 @@ pub fn pick_title_w(line: [u8], first: [u8], second: [u8]) -> [i64] ! alloc
   let l: crate::entry::Line = crate::entry::parse_line(line, 0, len(line));
   match l {
     crate::entry::Line::Object(d) => {
-      let f: crate::entry::Field = crate::entry::pick_title(d, crate::access::root(d), a, b);
-      return pack_field(f);
+      let mut buf: [u8] = alloc(0, 0);
+      let f: i64 = crate::entry::pick_title(d, crate::access::root(d), a, b, inout buf);
+      return pack_pick(f, buf);
     }
     crate::entry::Line::Skip => { return lead1(9); }
     crate::entry::Line::Defect(p) => { return lead2(8, p); }
@@ -251,8 +263,9 @@ pub fn title_of_w(line: [u8]) -> [i64] ! alloc
   let l: crate::entry::Line = crate::entry::parse_line(line, 0, len(line));
   match l {
     crate::entry::Line::Object(d) => {
-      let t: crate::entry::Title = crate::entry::title_of(d, 0);
-      return pack_title(t);
+      let mut st: crate::entry::RankedTitle = crate::entry::new_title();
+      let t: i64 = crate::entry::title_of(d, inout st);
+      return pack_title(t, st);
     }
     crate::entry::Line::Skip => { return lead2(9, 0); }
     crate::entry::Line::Defect(p) => { return lead2(8, p); }
