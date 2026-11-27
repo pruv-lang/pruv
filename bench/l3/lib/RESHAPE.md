@@ -2399,3 +2399,37 @@ Changes `bench/l3/pkgs/transport`, `pkgs/turns`, `mcp`, `grok`, `codex` (no comp
   Confirm review (same account): all three fixed, no new findings.
 - Next: P10-M1 for `Vec<T>` elements, then the hand's parsed-entry vector on top of 4.4w-VD (bench rows 4.3e-D /
   4.4d-QS).
+
+## Step 4.4x: UTF-8 fact of `jstr::decode_append` (4.4w-DU), `time::iso_raw` over a raw range (4.4w-TR)
+
+Changes `bench/l3/pkgs/jstr` and `pkgs/time` (no compiler change, no consumer change).
+
+- `jstr::scalar` ensures the value is not a surrogate (`< 55296 || > 57343`; lone surrogates were already 65533).
+  `decode_append` ensures `(utf8_valid(old(out)) && !scanned) ==> utf8_valid(out)`: in the non-scanned mode a raw
+  run is ASCII only (new inner-loop invariant), and an escape or a multi-byte char pushes the encoding of a valid
+  scalar. The four pushes of one encoding are now one `arr_push(inout out, v1, .., vk)` (R-6g5-5, hand
+  `char::encode_utf8` then one append); the outer loop keeps the fact as an invariant with `old(out)`. No run-time
+  pass is added. The scanned mode (raw non-ASCII bytes copied as they are) ensures nothing new (row 4.4x-DS).
+- `time::iso_raw(b, lo, hi)` is the hand `iso(&Value)` over the raw token bytes `b[lo..hi]` of one JSON value: a
+  token starting with `"` is a string (the 26-byte canonical copy, else `jstr::string_text_owned` then
+  `from_string`, hand `iso_str`), anything else a number token parsed as `access::number` does (non-integer or
+  above 2^53-1 is absent, hand `iso_number`). The caller keeps only a byte range, no document. `iso_of` is left as
+  it is (a delegation would need `sp.end <= 16777216` on every document, which `iso_of` does not require).
+
+### Rows after 4.4x
+
+- Closed: 4.4w-DU (non-scanned mode), 4.4w-TR.
+- New: 4.4x-DS (package): `decode_append` in the scanned mode ensures no UTF-8 fact. Proving it needs every raw run
+  to start on a char boundary of a `utf8_valid_span` source, and the byte after `\` (or after `\uXXXX`) may be a
+  continuation byte in input the parser rejects; either an extra requires on the source (escapes followed by ASCII)
+  or a literal-backslash rule for that input. Non-scanned decoding gives the same bytes on valid input.
+- Still open: 4.3e-D / 4.4d-QS (Qwen scan-time join, iso and parts walk). Now unblocked by 4.4x (raw ranges decoded
+  in `replay` with `decode_append(.., false)` and `iso_raw`), not done in this bundle (time cap); the design is in
+  `qwen/RESHAPE.md` §3e. Also 4.4w-VD, 4.4w-CE, 4.4c-SV and the rows listed before.
+- Tests (rs/rust and rs/llvm): claude a0-a4, json a0-a5, supervisor a0-a3 pass; qwen 27/27, mcp 22/22, grok
+  254/254, codex 136/136, opencode 199/199 (`--jobs 2`); qwen `q.py --count 300` (rs pairs) same 317, P1 1, P4 4,
+  P5 1, unexplained 0, list same 21, P4 1; `q_mutants.py` 11 differential-killed, turn-cap verifier-rejected.
+  Not measured (Qwen structure still differs at 4.3e-D).
+- Next:
+  1. 4.3e-D / 4.4d-QS with raw ranges (qwen §3e).
+  2. 4.4x-DS if the Qwen replay needs the scanned fast path.
