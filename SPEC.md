@@ -2229,8 +2229,8 @@ borrowed value is live.
   any other operand of the same statement that mentions `v` is `type/inout_context`; a live view of `v` is
   `type/borrow_conflict`. An element of a `let mut` `Vec<i64>` / `Vec<bool>` local or `inout` parameter is a place
   the same way (L-gaps 14; hand Rust `v.swap(i, j)` / `std::mem::replace(&mut v[i], x)`) with the same index,
-  alias and same-`Vec` rules; an element of any other `Vec<T>` is `type/inout_argument` (move it out with
-  `vec_take` / `vec_at_mut` instead).
+  alias and same-`Vec` rules; an element of any other `Vec<T>` is `type/inout_argument` (change it in place
+  through a `vec_at_mut` arm instead; there is no `vec_take`).
   - *Proof.* Here `old` is the value just before the call. After `swap`, `P == old(Q)` and `Q == old(P)` (lengths and bytes of owned values included); after
     `replace`, the result is `old(P)` and `P == e`. There is no obligation of its own; a refined local passed as a place must satisfy its range after the call
     (`verify/refinement_assign`, as for any `inout` argument). An element place stores into the array: each index
