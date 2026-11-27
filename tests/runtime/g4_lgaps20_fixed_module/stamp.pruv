@@ -1,0 +1,27 @@
+// companion module of g4_lgaps20_fixed_module: a module `pub` function takes and returns `[u8; N]` by value,
+// directly and inside a struct field (only root host entries keep fixed arrays off their signature).
+pub struct Stamp { status: i64, text: [u8; 4] }
+
+pub fn make(c: i64) -> Stamp
+  requires 0 <= c && c < 10
+  ensures result.status == 0 && i64(result.text[0]) == 48 + c && result.text[1] == 45 && result.text[2] == 45 && result.text[3] == 90
+{
+  let mut a: [u8; 4] = [48, 45, 45, 90];
+  a[0] = u8(48 + c);
+  return Stamp { status: 0, text: a };
+}
+
+pub fn bump(a: [u8; 4]) -> [u8; 4]
+  requires a[1] < 200
+  ensures result[1] == a[1] + 1 && result[0] == a[0] && result[2] == a[2] && result[3] == a[3]
+{
+  let mut b: [u8; 4] = a;
+  b[1] = b[1] + 1;
+  return b;
+}
+
+pub fn sum(a: [u8; 4]) -> i64
+  ensures result == i64(a[0]) + i64(a[1]) + i64(a[2]) + i64(a[3])
+{
+  return i64(a[0]) + i64(a[1]) + i64(a[2]) + i64(a[3]);
+}

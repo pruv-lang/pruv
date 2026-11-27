@@ -1,0 +1,13 @@
+// L-gaps 20 (4.4c-IS): `[u8; N]` by value across module `pub` functions; the host entry itself takes and returns i64.
+mod stamp;
+
+pub fn run(c: i64) -> i64
+  requires 0 <= c && c < 10
+  ensures result == 48 + c + 46 + 45 + 90
+{
+  let s: crate::stamp::Stamp = crate::stamp::make(c);
+  let b: [u8; 4] = crate::stamp::bump(s.text);
+  // the caller's copy is unchanged
+  assert s.text[1] == 45;
+  return crate::stamp::sum(b);
+}

@@ -281,6 +281,8 @@ g4|g4/g4_ledger [no-verify]	2 cases: exit 2	llvm=161f59efb4c3	rust=5db67ee95812
 g4|g4/g4_ledger [trust-callers]	2 cases: exit 2	llvm=1d82b661d5ff	rust=142d3b16124a
 g4|g4/g4_lgaps13_vec_doc [--no-verify]	2 cases: exit 2	llvm=1a749fffc517	rust=d5713cd92a7b
 g4|g4/g4_lgaps13_vec_doc [default]	2 cases: exit 2	llvm=051ab31a14c4	rust=3f2ad5d3d691
+g4|g4/g4_lgaps20_fixed_module [--no-verify]	2 cases: exit 2	llvm=3ceb7d1be262	rust=31f0bca08d83
+g4|g4/g4_lgaps20_fixed_module [default]	2 cases: exit 2	llvm=130d36308c5a	rust=bac966c7309e
 g4|g4/g4_r01_host_reject [--no-verify]	2 cases: exit 2	llvm=070266972283	rust=12c16cd7fae9
 g4|g4/g4_r01_host_reject [default]	2 cases: exit 2	llvm=d4615076a063	rust=4b6c0de56039
 g4|g4/g4_r01_missing_child	2 cases: exit 2	llvm=ae21dcf8fa43	rust=ae21dcf8fa43
@@ -1348,6 +1350,21 @@ must_reject|must_reject/lgaps18_binder_record_str.pruv	2 cases: exit 2	llvm=205e
 must_reject|must_reject/lgaps18_word_mask_partial.pruv	2 cases: exit 2	llvm=47063342c656	rust=47063342c656
 must_reject|must_reject/lgaps18_word_mask_past.pruv	2 cases: exit 2	llvm=14d4b43eccb3	rust=14d4b43eccb3
 must_reject|must_reject/lgaps18_word_mask_stale.pruv	2 cases: exit 2	llvm=2e47adbd6a47	rust=2e47adbd6a47
+must_reject|must_reject/lgaps20_option_fixed_binder_write.pruv	2 cases: exit 2	llvm=e2823de9a4db	rust=e2823de9a4db
+must_reject|must_reject/lgaps20_option_fixed_eq.pruv	2 cases: exit 2	llvm=8cfe8244e214	rust=8cfe8244e214
+must_reject|must_reject/lgaps20_option_fixed_eq_field.pruv	2 cases: exit 2	llvm=2126cf3897d2	rust=2126cf3897d2
+must_reject|must_reject/lgaps20_option_fixed_generic_enum.pruv	2 cases: exit 2	llvm=126969665a6d	rust=126969665a6d
+must_reject|must_reject/lgaps20_option_fixed_generic_field.pruv	2 cases: exit 2	llvm=a55d658e982e	rust=a55d658e982e
+must_reject|must_reject/lgaps20_option_fixed_host.pruv	2 cases: exit 2	llvm=6afa5515a23b	rust=6afa5515a23b
+must_reject|must_reject/lgaps20_option_fixed_nested.pruv	2 cases: exit 2	llvm=c0115bca31b3	rust=c0115bca31b3
+must_reject|must_reject/lgaps20_option_fixed_oob.pruv	2 cases: exit 2	llvm=29825d09f1fe	rust=29825d09f1fe
+must_reject|must_reject/lgaps20_option_fixed_result_payload.pruv	2 cases: exit 2	llvm=572ec33c548a	rust=572ec33c548a
+must_reject|must_reject/lgaps20_option_fixed_some_val_oob.pruv	2 cases: exit 2	llvm=48b31e43920d	rust=48b31e43920d
+must_reject|must_reject/lgaps20_option_fixed_trusted.pruv	2 cases: exit 2	llvm=2e4d58e8fad8	rust=2e4d58e8fad8
+must_reject|must_reject/lgaps20_option_fixed_tuple.pruv	2 cases: exit 2	llvm=d887e5a6b3fe	rust=d887e5a6b3fe
+must_reject|must_reject/lgaps20_option_fixed_unguarded.pruv	2 cases: exit 2	llvm=d46c648e3466	rust=d46c648e3466
+must_reject|must_reject/lgaps20_option_fixed_user_generic.pruv	2 cases: exit 2	llvm=ba4c84ee5716	rust=ba4c84ee5716
+must_reject|must_reject/lgaps20_option_fixed_vec.pruv	2 cases: exit 2	llvm=77e242780e2f	rust=77e242780e2f
 must_reject|must_reject/lgaps9_into_bytes_borrowed.pruv	2 cases: exit 2	llvm=28a3b78c1df3	rust=28a3b78c1df3
 must_reject|must_reject/lgaps9_into_bytes_len.pruv	2 cases: exit 2	llvm=aeba54a11d5f	rust=aeba54a11d5f
 must_reject|must_reject/lgaps9_into_bytes_use_after.pruv	2 cases: exit 2	llvm=b3787ba84569	rust=b3787ba84569
@@ -1456,8 +1473,8 @@ must_reject|must_reject/p6_partial_move.pruv	2 cases: exit 2	llvm=6383c0864342	r
 must_reject|must_reject/p6_pattern_arity.pruv	2 cases: exit 2	llvm=56ade1657c01	rust=56ade1657c01
 must_reject|must_reject/p6_some_pattern.pruv	2 cases: exit 2	llvm=c2b71eb23774	rust=c2b71eb23774
 must_reject|must_reject/p6_tuple_struct.pruv	2 cases: exit 2	llvm=8f6b3bfa9b9c	rust=8f6b3bfa9b9c
-must_reject|must_reject/p7_array_char_type.pruv	2 cases: exit 2	llvm=df644c726424	rust=df644c726424
-must_reject|must_reject/p7_array_type.pruv	2 cases: exit 2	llvm=5c431887d62a	rust=5c431887d62a
+must_reject|must_reject/p7_array_char_type.pruv	2 cases: exit 2	llvm=fb339090e3c2	rust=fb339090e3c2
+must_reject|must_reject/p7_array_type.pruv	2 cases: exit 2	llvm=01473a022dd4	rust=01473a022dd4
 must_reject|must_reject/p7_char_cast_bool.pruv	2 cases: exit 2	llvm=23aa5dee70df	rust=23aa5dee70df
 must_reject|must_reject/p7_char_contract_cast.pruv	2 cases: exit 2	llvm=079016d91776	rust=079016d91776
 must_reject|must_reject/p7_char_index.pruv	2 cases: exit 2	llvm=9b9a6d7c3c2f	rust=9b9a6d7c3c2f
@@ -1501,13 +1518,13 @@ must_reject|must_reject/p7_fixed_count.pruv	2 cases: exit 2	llvm=f874588a791c	ru
 must_reject|must_reject/p7_fixed_enum_eq.pruv	2 cases: exit 2	llvm=31fecb83f765	rust=31fecb83f765
 must_reject|must_reject/p7_fixed_enum_field_eq.pruv	2 cases: exit 2	llvm=88d549e4d7e5	rust=88d549e4d7e5
 must_reject|must_reject/p7_fixed_enum_field_oob.pruv	2 cases: exit 2	llvm=ab09ba9acd76	rust=ab09ba9acd76
-must_reject|must_reject/p7_fixed_enum_field_pub.pruv	2 cases: exit 2	llvm=f9db426d4147	rust=f9db426d4147
+must_reject|must_reject/p7_fixed_enum_field_pub.pruv	2 cases: exit 2	llvm=d5789f544b8e	rust=d5789f544b8e
 must_reject|must_reject/p7_fixed_enum_field_ro.pruv	2 cases: exit 2	llvm=2ef1444e0a0b	rust=2ef1444e0a0b
 must_reject|must_reject/p7_fixed_eq.pruv	2 cases: exit 2	llvm=5d997fecbb6a	rust=5d997fecbb6a
 must_reject|must_reject/p7_fixed_field.pruv	2 cases: exit 2	llvm=d1099355fcc2	rust=d1099355fcc2
 must_reject|must_reject/p7_fixed_field_eq.pruv	2 cases: exit 2	llvm=5a4461e2d149	rust=5a4461e2d149
 must_reject|must_reject/p7_fixed_field_frame.pruv	2 cases: exit 2	llvm=fd8ba2502001	rust=fd8ba2502001
-must_reject|must_reject/p7_fixed_field_host.pruv	2 cases: exit 2	llvm=b9d218bc9034	rust=b9d218bc9034
+must_reject|must_reject/p7_fixed_field_host.pruv	2 cases: exit 2	llvm=2a003419ba0d	rust=2a003419ba0d
 must_reject|must_reject/p7_fixed_field_keyword.pruv	2 cases: exit 2	llvm=948ad109f3a0	rust=948ad109f3a0
 must_reject|must_reject/p7_fixed_field_oob.pruv	2 cases: exit 2	llvm=1c29e0f14164	rust=1c29e0f14164
 must_reject|must_reject/p7_fixed_field_owned.pruv	2 cases: exit 2	llvm=68f2eadb80a8	rust=68f2eadb80a8
@@ -1551,7 +1568,7 @@ must_reject|must_reject/p7_fixed_param_oob.pruv	2 cases: exit 2	llvm=73caa40a804
 must_reject|must_reject/p7_fixed_ref_after_str.pruv	2 cases: exit 2	llvm=45a44fc88548	rust=45a44fc88548
 must_reject|must_reject/p7_fixed_ref_after_str_fn.pruv	2 cases: exit 2	llvm=45a44fc88548	rust=45a44fc88548
 must_reject|must_reject/p7_fixed_ref_local.pruv	2 cases: exit 2	llvm=08e10fad27fa	rust=08e10fad27fa
-must_reject|must_reject/p7_fixed_result.pruv	2 cases: exit 2	llvm=51a83a2f1c24	rust=51a83a2f1c24
+must_reject|must_reject/p7_fixed_result.pruv	2 cases: exit 2	llvm=8a18404917d4	rust=8a18404917d4
 must_reject|must_reject/p7_fixed_slice_arms.pruv	2 cases: exit 2	llvm=6de2b8efcee0	rust=6de2b8efcee0
 must_reject|must_reject/p7_fixed_slice_length.pruv	2 cases: exit 2	llvm=91843a9e6b13	rust=91843a9e6b13
 must_reject|must_reject/p7_fixed_slice_pattern.pruv	2 cases: exit 2	llvm=ddfb1898d2f6	rust=ddfb1898d2f6
@@ -1702,7 +1719,7 @@ must_reject|must_reject/refine_syntax_binop.pruv	2 cases: exit 2	llvm=8d1a37d80f
 must_reject|must_reject/refine_syntax_exp.pruv	2 cases: exit 2	llvm=7144831ad046	rust=7144831ad046
 must_reject|must_reject/refine_syntax_expr_bound.pruv	2 cases: exit 2	llvm=b03aeb29c925	rust=b03aeb29c925
 must_reject|must_reject/refine_syntax_halfopen.pruv	2 cases: exit 2	llvm=bab4092f7e17	rust=bab4092f7e17
-must_reject|must_reject/refine_syntax_len_noop.pruv	2 cases: exit 2	llvm=7f33b58ca276	rust=7f33b58ca276
+must_reject|must_reject/refine_syntax_len_noop.pruv	2 cases: exit 2	llvm=b23e785baa3c	rust=b23e785baa3c
 must_reject|must_reject/refine_while_return.pruv	2 cases: exit 2	llvm=dae50f11590a	rust=dae50f11590a
 must_reject|must_reject/s5_before_decreases.pruv	2 cases: exit 2	llvm=ddb6f6f705eb	rust=ddb6f6f705eb
 must_reject|must_reject/s5_before_effects.pruv	2 cases: exit 2	llvm=ddb6f6f705eb	rust=ddb6f6f705eb
@@ -2826,6 +2843,8 @@ runtime|runtime/lgaps17_utf8_subspan [default]	2 cases: exit 2	llvm=a2ed6fb87b16
 runtime|runtime/lgaps18_word_mask [--no-verify]	2 cases: exit 2	llvm=2a454965d1d1	rust=c28369c61524
 runtime|runtime/lgaps18_word_mask [--trust-callers]	2 cases: exit 2	llvm=6c98b116b6fa	rust=29abe8d25ee4
 runtime|runtime/lgaps18_word_mask [default]	2 cases: exit 2	llvm=a337ad7e62a1	rust=8401c3f516e3
+runtime|runtime/lgaps20_option_fixed [--no-verify]	2 cases: exit 2	llvm=5d38027b3b0b	rust=daa4557495b6
+runtime|runtime/lgaps20_option_fixed [default]	2 cases: exit 2	llvm=f13e2583549a	rust=2dfc56865e69
 runtime|runtime/lgaps9_str_bytes [--no-verify]	2 cases: exit 2	llvm=f0e7668bce8d	rust=a7e9be021219
 runtime|runtime/lgaps9_str_bytes [default]	2 cases: exit 2	llvm=ccc2b143c0cd	rust=09da4e703036
 runtime|runtime/p1_r_bounds [--no-verify]	2 cases: exit 2	llvm=c701bf27929d	rust=259cf4852f8d

@@ -4,13 +4,14 @@
 //   * strings that are exactly 24 ASCII bytes of canonical UTC ISO text YYYY-MM-DDTHH:mm:ss.sssZ.
 // Integer v: ms = v * 1000 when v < 100000000000 (signed comparison), else ms = v; the result must lie in
 // -62167219200000 (0000-01-01T00:00:00.000Z) .. 253402300799999 (9999-12-31T23:59:59.999Z).
-// Everything else is absent (status 1). Decoder/tape defects are status -4, never "absent".
+// Everything else is absent (at None). Decoder/tape defects are status -4, never "absent".
 // Civil calendar: days shifted by 5 whole 400-year cycles (63113904000000 ms) so every division is on
 // nonnegative numbers, then the March-based civil-from-days walk (as bench/l0/cell_date.pruv).
 // The shape of the 24-byte text is proved; the calendar arithmetic itself is guarded and tested.
 
-// Result: status 0 present (text is the 24 timestamp bytes), 1 absent, -4 defect; text empty otherwise.
-pub struct Iso { status: i64, text: [u8] }
+// hand `Stamp` (Option<[u8; 24]>) plus the decoder status: status 0 (at is the stamp, None when absent) or -4 defect
+// (at is None). The 24 bytes are a value, copied like the hand array (4.4c-IS).
+pub struct Iso { status: i64, at: Option<[u8; 24]> }
 
 pub fn time_none() -> i64 ensures result == 9223372036854775807 { return 9223372036854775807; }
 pub fn time_min_ms() -> i64 ensures result == -62167219200000 { return -62167219200000; }
@@ -105,30 +106,28 @@ fn num(b: [u8], a: i64, n: i64) -> i64
 }
 
 // hand put_digits: v as n decimal digits ending at o[at + n - 1].
-fn put_digits(inout o: [u8], at: i64, n: i64, v0: i64) -> ()
-  requires 0 <= at && 0 <= n && at + n <= len(o) && 0 <= v0
-  ensures len(o) == len(old(o))
-  ensures forall q in 0..len(o): (q < at || q >= at + n) ==> o[q] == old(o)[q]
+fn put_digits(inout o: [u8; 24], at: i64, n: i64, v0: i64) -> ()
+  requires 0 <= at && 0 <= n && at + n <= 24 && 0 <= v0
+  ensures forall q in 0..24: (q < at || q >= at + n) ==> o[q] == old(o)[q]
   ensures forall q in at..at + n: 48 <= o[q] && o[q] <= 57
 {
   let mut v: i64 = v0;
   let mut k: i64 = n;
   while k > 0
-    invariant 0 <= k && k <= n && 0 <= v && len(o) == len(old(o))
-    invariant forall q in 0..len(o): (q < at + k || q >= at + n) ==> o[q] == old(o)[q]
+    invariant 0 <= k && k <= n && 0 <= v
+    invariant forall q in 0..24: (q < at + k || q >= at + n) ==> o[q] == old(o)[q]
     invariant forall q in at + k..at + n: 48 <= o[q] && o[q] <= 57
     decreases k
   {
     k = k - 1;
-    o[at + k] = 48 + v % 10;
+    o[at + k] = u8(48 + v % 10);
     v = v / 10;
   }
 }
 
 // 24-byte canonical text of integer milliseconds in the supported range (hand: template + put_digits).
-pub fn format_iso(ms: i64) -> [u8] ! alloc
+pub fn format_iso(ms: i64) -> [u8; 24]
   requires -62167219200000 <= ms && ms <= 253402300799999
-  ensures len(result) == 24
   ensures result[4] == 45 && result[7] == 45 && result[10] == 84 && result[13] == 58 && result[16] == 58 && result[19] == 46 && result[23] == 90
   ensures forall i in 0..24: (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19 || i == 23 || (48 <= result[i] && result[i] <= 57))
 {
@@ -149,8 +148,7 @@ pub fn format_iso(ms: i64) -> [u8] ! alloc
   let mut y: i64 = yoe + era * 400 - 2000;
   if m <= 2 { y = y + 1; }
   let secs: i64 = rem / 1000;
-  let mut o: [u8] = alloc(24, 0);
-  copy_range(inout o, 0, "0000-00-00T00:00:00.000Z", 0, 24);
+  let mut o: [u8; 24] = [48, 48, 48, 48, 45, 48, 48, 45, 48, 48, 84, 48, 48, 58, 48, 48, 58, 48, 48, 46, 48, 48, 48, 90];
   put_digits(inout o, 0, 4, y);
   put_digits(inout o, 5, 2, m);
   put_digits(inout o, 8, 2, d);
@@ -161,40 +159,44 @@ pub fn format_iso(ms: i64) -> [u8] ! alloc
   return o;
 }
 
-pub fn absent() -> Iso ! alloc
-  ensures result.status == 1 && len(result.text) == 0
+pub fn absent() -> Iso
+  ensures result.status == 0 && !is_some(result.at)
 {
-  let e: [u8] = alloc(0, 0);
-  return Iso { status: 1, text: move e };
+  return Iso { status: 0, at: None::<[u8; 24]> };
 }
 
-pub fn defect() -> Iso ! alloc
-  ensures result.status == -4 && len(result.text) == 0
+pub fn defect() -> Iso
+  ensures result.status == -4 && !is_some(result.at)
 {
-  let e: [u8] = alloc(0, 0);
-  return Iso { status: -4, text: move e };
+  return Iso { status: -4, at: None::<[u8; 24]> };
 }
 
-fn bytes24(s: str) -> [u8] ! alloc
-  requires len(s) == 24
-  ensures len(result) == 24
-  ensures forall k in 0..24: result[k] == s[k]
+// hand `o.copy_from_slice(..)`: the 24 bytes b[p..p+24].
+fn copy24(b: [u8], p: i64) -> [u8; 24]
+  requires 0 <= p && p + 24 <= len(b)
+  ensures forall k in 0..24: i64(result[k]) == b[p + k]
 {
-  let mut out: [u8] = alloc(24, 0);
-  copy_range(inout out, 0, s, 0, 24);
-  return out;
+  let mut o: [u8; 24] = [u8(0); 24];
+  let mut i: i64 = 0;
+  while i < 24
+    invariant 0 <= i && i <= 24
+    invariant forall k in 0..i: i64(o[k]) == b[p + k]
+    decreases 24 - i
+  {
+    o[i] = u8(b[p + i]);
+    i = i + 1;
+  }
+  return o;
 }
 
-fn from_integer(v: i64) -> Iso ! alloc
+// hand iso_of_int
+fn from_integer(v: i64) -> Iso
   requires -9007199254740991 <= v && v <= 9007199254740991
-  ensures result.status == 0 ==> (len(result.text) == 24 && result.text[4] == 45 && result.text[7] == 45 && result.text[10] == 84 && result.text[13] == 58 && result.text[16] == 58 && result.text[19] == 46 && result.text[23] == 90)
-  ensures result.status == 0 ==> (forall i in 0..24: (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19 || i == 23 || (48 <= result.text[i] && result.text[i] <= 57)))
-  ensures result.status != 0 ==> len(result.text) == 0
+  ensures result.status == 0
 {
   let ms: i64 = integer_time(v);
   if ms == 9223372036854775807 { return absent(); }
-  let f: [u8] = format_iso(ms);
-  return Iso { status: 0, text: move f };
+  return Iso { status: 0, at: Some::<[u8; 24]>(format_iso(ms)) };
 }
 
 // All of t is ASCII digits (and t is nonempty): the value; -1 for a non-digit before the value passes 2^53-1;
@@ -221,10 +223,9 @@ fn digit_value(t: str) -> i64
   return v;
 }
 
+// hand iso_str
 fn from_string(v: str) -> Iso ! alloc
-  ensures result.status == 0 ==> (len(result.text) == 24 && result.text[4] == 45 && result.text[7] == 45 && result.text[10] == 84 && result.text[13] == 58 && result.text[16] == 58 && result.text[19] == 46 && result.text[23] == 90)
-  ensures result.status == 0 ==> (forall i in 0..24: (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19 || i == 23 || (48 <= result.text[i] && result.text[i] <= 57)))
-  ensures result.status != 0 ==> len(result.text) == 0
+  ensures result.status == 0
 {
   let t: crate::text::Span = crate::text::trim_span(v);
   let n: i64 = digit_value(subview(v, t.lo, t.hi));
@@ -232,28 +233,22 @@ fn from_string(v: str) -> Iso ! alloc
   if n == -2 { return absent(); }
   if len(v) != 24 { return absent(); }
   let b: [u8] = bytes24(v);
-  if canonical_at(b, 0) { return Iso { status: 0, text: move b }; }
+  if canonical_at(b, 0) { return Iso { status: 0, at: Some::<[u8; 24]>(copy24(b, 0)) }; }
   return absent();
 }
 
-// DB39: the 24 canonical bytes at p, copied. Kept out of iso_of so its proof does not carry the JsonDocument invariant.
-fn canonical_copy(b: [u8], p: i64) -> Iso ! alloc
-  requires 0 <= p && p + 24 <= len(b)
-  requires b[p + 4] == 45 && b[p + 7] == 45 && b[p + 10] == 84 && b[p + 13] == 58 && b[p + 16] == 58 && b[p + 19] == 46 && b[p + 23] == 90
-  requires forall i in 0..24: (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19 || i == 23 || (48 <= b[p + i] && b[p + i] <= 57))
-  ensures result.status == 0 && len(result.text) == 24 && result.text[4] == 45 && result.text[7] == 45 && result.text[10] == 84 && result.text[13] == 58 && result.text[16] == 58 && result.text[19] == 46 && result.text[23] == 90
-  ensures forall i in 0..24: (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19 || i == 23 || (48 <= result.text[i] && result.text[i] <= 57))
+fn bytes24(s: str) -> [u8] ! alloc
+  requires len(s) == 24
+  ensures len(result) == 24
 {
   let mut out: [u8] = alloc(24, 0);
-  copy_range(inout out, 0, b, p, 24);
-  return Iso { status: 0, text: move out };
+  copy_range(inout out, 0, s, 0, 24);
+  return out;
 }
 
-// tail.ts isoOf for the value with tape id `id` of doc.
+// tail.ts isoOf for the value with tape id `id` of doc (hand iso).
 pub fn iso_of(doc: crate::json::JsonDocument, id: i64) -> Iso ! alloc
-  ensures result.status == 0 ==> (len(result.text) == 24 && result.text[4] == 45 && result.text[7] == 45 && result.text[10] == 84 && result.text[13] == 58 && result.text[16] == 58 && result.text[19] == 46 && result.text[23] == 90)
-  ensures result.status == 0 ==> (forall i in 0..24: (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19 || i == 23 || (48 <= result.text[i] && result.text[i] <= 57)))
-  ensures result.status != 0 ==> len(result.text) == 0
+  ensures result.status == 0 || (result.status == -4 && !is_some(result.at))
 {
   let k: i64 = crate::access::kind(doc, id);
   if k < 0 { return defect(); }
@@ -268,7 +263,7 @@ pub fn iso_of(doc: crate::json::JsonDocument, id: i64) -> Iso ! alloc
     // A quoted canonical timestamp has no escapes, so its value is the 24 raw bytes: no decoding needed.
     let sp: crate::access::Span = crate::access::raw_span(doc, id);
     if sp.status == 0 && sp.end - sp.start == 26 && canonical_at(doc.source, sp.start + 1) {
-      return canonical_copy(doc.source, sp.start + 1);
+      return Iso { status: 0, at: Some::<[u8; 24]>(copy24(doc.source, sp.start + 1)) };
     }
     let t: crate::jstr::Text = crate::access::string_text_owned(doc, id);
     match t {

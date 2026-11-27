@@ -1,0 +1,4 @@
+// spec: R-6t-4 reject
+// L-gaps 20: a trusted rust fn boundary cannot take [T; N]
+trusted rust fn g(a: [u8; 2]) -> i64 = "::std::cmp::min";
+fn f() -> i64 { return 0; }

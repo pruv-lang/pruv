@@ -122,6 +122,7 @@ examples|examples/sum.pruv	1 case: obl=53 1	--infer=331f1aa0af66
 fuzz|fuzz:41	40 cases: obl=5 5, obl=6 4, obl=2 3, obl=4 3, ...	0/--infer=b7ecc0d767dc	1/--infer=d76067b617d4	2/--infer=1a7702c6089d	3/--infer=b7b2ed77b6d4	4/--infer=4ca5a19eb140	5/--infer=3b1df5653376	6/--infer=be3c9a0763a3	7/--infer=664edafe8522	8/--infer=b0226a2f1478	9/--infer=c66c68c91cc4	10/--infer=6d690e2cbbdf	11/--infer=a309e2d738e9	12/--infer=780304817f05	13/--infer=190ae6125360	14/--infer=49f48fe79fcc	15/--infer=0a762a2f674d	16/--infer=23bbf368a8ec	17/--infer=f8438545a916	18/--infer=48e0000b19bb	19/--infer=817620e989e2	20/--infer=f1868846dc24	21/--infer=27e7f795cb14	22/--infer=af71d6da3f3a	23/--infer=c807e5e0b262	24/--infer=99abbdf07510	25/--infer=db578e9f0441	26/--infer=eb4117f3d43f	27/--infer=5b87ffc287d7	28/--infer=4dbc2c10bef5	29/--infer=ec3df7f09aaa	30/--infer=5c372ba4c7be	31/--infer=17f4a43f9322	32/--infer=4e767500284f	33/--infer=8652f4f2a481	34/--infer=136556002eaa	35/--infer=7e3b61596c89	36/--infer=43420592f7b5	37/--infer=7aa9651321f6	38/--infer=1c9b3a77f574	39/--infer=fb2dee7091a1
 fuzz|fuzz:56	40 cases: obl=7 4, obl=10 3, obl=13 2, obl=2 2, ...	0/--infer=a270ffa66461	1/--infer=fe3fc0703720	2/--infer=0481aba11592	3/--infer=cffdca54cc99	4/--infer=e46b6e9548b1	5/--infer=c45353c15be5	6/--infer=72cb621b877a	7/--infer=71bfb1077c5c	8/--infer=22c552dc8206	9/--infer=56a479f76892	10/--infer=a768c75a0e9e	11/--infer=4d711a871a22	12/--infer=fb3c2b62542f	13/--infer=1800a325b9fd	14/--infer=0248aedf1791	15/--infer=f8d31b057541	16/--infer=de7d4e160f42	17/--infer=960c43f5b7ff	18/--infer=a1e2dba255eb	19/--infer=56d41522378c	20/--infer=e0b948167572	21/--infer=44fb178191df	22/--infer=bacb3af9f918	23/--infer=ecf6c9d3793a	24/--infer=bbaeb95efc9d	25/--infer=2f2ee998c261	26/--infer=a68a7b3a10a0	27/--infer=797ecae95717	28/--infer=5b6875daa765	29/--infer=594ec8fe67e9	30/--infer=86a23109810f	31/--infer=dc45ca69b848	32/--infer=5833647c8dbb	33/--infer=524b3940f111	34/--infer=07cac56ca731	35/--infer=97f8ed27a7d3	36/--infer=b2ad5bbb8c53	37/--infer=b262df1a8c43	38/--infer=202a0bac601d	39/--infer=07cac56ca731
 fuzz|fuzz:57	40 cases: obl=6 6, obl=3 3, obl=7 3, obl=8 3, ...	0/--infer=d9dc6d679090	1/--infer=8824160fc3db	2/--infer=17adceace66e	3/--infer=2c457f1b211c	4/--infer=a693eab8ab58	5/--infer=89d4c4a1487d	6/--infer=9f7ed746c0fb	7/--infer=7dbd550bdbb5	8/--infer=d659954019fe	9/--infer=93307647a5da	10/--infer=358fa821a894	11/--infer=9c9e1345c884	12/--infer=8a543031bbeb	13/--infer=42325232b9b2	14/--infer=9555bd81524a	15/--infer=986d0ff95676	16/--infer=f8438545a916	17/--infer=543dbf0e8fce	18/--infer=5b92123dc530	19/--infer=037c84abace2	20/--infer=dd5feb401848	21/--infer=097355829e85	22/--infer=ef6c70a5cbf6	23/--infer=7d4ef964c6ee	24/--infer=bbc4a55e8db7	25/--infer=1187d4098dfb	26/--infer=7ef440fc1cd6	27/--infer=351dbd44a402	28/--infer=53da1c968851	29/--infer=603a2b9d33d3	30/--infer=3977aa59b7c2	31/--infer=457fe7e6ace2	32/--infer=8f30dc2f776d	33/--infer=1187d4098dfb	34/--infer=58a4b261a643	35/--infer=b683458676a2	36/--infer=61d2b2988dfc	37/--infer=5965b02c8a79	38/--infer=b7cfd85848f4	39/--infer=9699425dadab
+g4_reject|tests/must_reject/g4_lgaps20_fixed_module_oob/root.pruv	1 case: obl=3 1	--infer=94ce23575263
 g4_reject|tests/must_reject/g4_r01_missing_child/root.pruv	1 case: obl=0 1	--infer=33c3b7eb30c5
 g4_reject|tests/must_reject/g4_r02_duplicate_module/root.pruv	1 case: obl=0 1	--infer=6fd9217d21e5
 g4_reject|tests/must_reject/g4_r03_module_alias/root.pruv	1 case: obl=0 1	--infer=84316e034974
@@ -1259,6 +1260,21 @@ must_reject|tests/must_reject/lgaps18_binder_record_str.pruv	1 case: obl=0 1	--i
 must_reject|tests/must_reject/lgaps18_word_mask_partial.pruv	1 case: obl=3 1	--infer=161a6c4d6e3e
 must_reject|tests/must_reject/lgaps18_word_mask_past.pruv	1 case: obl=3 1	--infer=a52890ee50c3
 must_reject|tests/must_reject/lgaps18_word_mask_stale.pruv	1 case: obl=5 1	--infer=58c44f7d71db
+must_reject|tests/must_reject/lgaps20_option_fixed_binder_write.pruv	1 case: obl=0 1	--infer=64b5a6cc4ede
+must_reject|tests/must_reject/lgaps20_option_fixed_eq.pruv	1 case: obl=0 1	--infer=f86161135ad4
+must_reject|tests/must_reject/lgaps20_option_fixed_eq_field.pruv	1 case: obl=0 1	--infer=dcf24df9d213
+must_reject|tests/must_reject/lgaps20_option_fixed_generic_enum.pruv	1 case: obl=0 1	--infer=f66bcf69420c
+must_reject|tests/must_reject/lgaps20_option_fixed_generic_field.pruv	1 case: obl=0 1	--infer=5a9eb133851d
+must_reject|tests/must_reject/lgaps20_option_fixed_host.pruv	1 case: obl=0 1	--infer=7f228aacb127
+must_reject|tests/must_reject/lgaps20_option_fixed_nested.pruv	1 case: obl=0 1	--infer=dd04f9dad599
+must_reject|tests/must_reject/lgaps20_option_fixed_oob.pruv	1 case: obl=1 1	--infer=6b3253039ca2
+must_reject|tests/must_reject/lgaps20_option_fixed_result_payload.pruv	1 case: obl=0 1	--infer=93870f64d3fb
+must_reject|tests/must_reject/lgaps20_option_fixed_some_val_oob.pruv	1 case: obl=1 1	--infer=6b6f9ca5e91c
+must_reject|tests/must_reject/lgaps20_option_fixed_trusted.pruv	1 case: obl=0 1	--infer=f3a0c619be95
+must_reject|tests/must_reject/lgaps20_option_fixed_tuple.pruv	1 case: obl=0 1	--infer=51c9245b54ab
+must_reject|tests/must_reject/lgaps20_option_fixed_unguarded.pruv	1 case: obl=1 1	--infer=1a17d902aac0
+must_reject|tests/must_reject/lgaps20_option_fixed_user_generic.pruv	1 case: obl=0 1	--infer=685c7ff4bd3d
+must_reject|tests/must_reject/lgaps20_option_fixed_vec.pruv	1 case: obl=0 1	--infer=57af5ec8341f
 must_reject|tests/must_reject/lgaps9_into_bytes_borrowed.pruv	1 case: obl=0 1	--infer=babc264f3f43
 must_reject|tests/must_reject/lgaps9_into_bytes_len.pruv	1 case: obl=1 1	--infer=342d6c1e081c
 must_reject|tests/must_reject/lgaps9_into_bytes_use_after.pruv	1 case: obl=0 1	--infer=7c8a2a64df1d
@@ -1366,8 +1382,8 @@ must_reject|tests/must_reject/p6_partial_move.pruv	1 case: obl=0 1	--infer=ef189
 must_reject|tests/must_reject/p6_pattern_arity.pruv	1 case: obl=0 1	--infer=f7075286d346
 must_reject|tests/must_reject/p6_some_pattern.pruv	1 case: obl=0 1	--infer=b3b021ee1db8
 must_reject|tests/must_reject/p6_tuple_struct.pruv	1 case: obl=0 1	--infer=ddb2a6417715
-must_reject|tests/must_reject/p7_array_char_type.pruv	1 case: obl=0 1	--infer=029242484e4e
-must_reject|tests/must_reject/p7_array_type.pruv	1 case: obl=0 1	--infer=daff23edc6ec
+must_reject|tests/must_reject/p7_array_char_type.pruv	1 case: obl=0 1	--infer=a1532ea3b2ed
+must_reject|tests/must_reject/p7_array_type.pruv	1 case: obl=0 1	--infer=96109eb4ec06
 must_reject|tests/must_reject/p7_char_cast_bool.pruv	1 case: obl=0 1	--infer=bf933c8b4e06
 must_reject|tests/must_reject/p7_char_contract_cast.pruv	1 case: obl=0 1	--infer=64bc1f419492
 must_reject|tests/must_reject/p7_char_index.pruv	1 case: obl=0 1	--infer=cd511f7822f4
@@ -1411,13 +1427,13 @@ must_reject|tests/must_reject/p7_fixed_count.pruv	1 case: obl=0 1	--infer=9a54b0
 must_reject|tests/must_reject/p7_fixed_enum_eq.pruv	1 case: obl=0 1	--infer=3a2ee0b0ba8c
 must_reject|tests/must_reject/p7_fixed_enum_field_eq.pruv	1 case: obl=0 1	--infer=7dc81602bc74
 must_reject|tests/must_reject/p7_fixed_enum_field_oob.pruv	1 case: obl=1 1	--infer=826483343f97
-must_reject|tests/must_reject/p7_fixed_enum_field_pub.pruv	1 case: obl=0 1	--infer=6ffff02acd96
+must_reject|tests/must_reject/p7_fixed_enum_field_pub.pruv	1 case: obl=0 1	--infer=6eed2ed90026
 must_reject|tests/must_reject/p7_fixed_enum_field_ro.pruv	1 case: obl=0 1	--infer=a83cb1d9744a
 must_reject|tests/must_reject/p7_fixed_eq.pruv	1 case: obl=0 1	--infer=5ab923008844
 must_reject|tests/must_reject/p7_fixed_field.pruv	1 case: obl=0 1	--infer=a2035b69c728
 must_reject|tests/must_reject/p7_fixed_field_eq.pruv	1 case: obl=0 1	--infer=997ca0516d89
 must_reject|tests/must_reject/p7_fixed_field_frame.pruv	1 case: obl=2 1	--infer=8db4c09f35c5
-must_reject|tests/must_reject/p7_fixed_field_host.pruv	1 case: obl=0 1	--infer=3fedc1a73e5a
+must_reject|tests/must_reject/p7_fixed_field_host.pruv	1 case: obl=0 1	--infer=548283d4773b
 must_reject|tests/must_reject/p7_fixed_field_keyword.pruv	1 case: obl=0 1	--infer=e5215bb64921
 must_reject|tests/must_reject/p7_fixed_field_oob.pruv	1 case: obl=1 1	--infer=41852a3019ee
 must_reject|tests/must_reject/p7_fixed_field_owned.pruv	1 case: obl=0 1	--infer=dc279c95cf77
@@ -1461,7 +1477,7 @@ must_reject|tests/must_reject/p7_fixed_param_oob.pruv	1 case: obl=1 1	--infer=53
 must_reject|tests/must_reject/p7_fixed_ref_after_str.pruv	1 case: obl=0 1	--infer=480019b851fe
 must_reject|tests/must_reject/p7_fixed_ref_after_str_fn.pruv	1 case: obl=0 1	--infer=480019b851fe
 must_reject|tests/must_reject/p7_fixed_ref_local.pruv	1 case: obl=0 1	--infer=48c42c7d1933
-must_reject|tests/must_reject/p7_fixed_result.pruv	1 case: obl=0 1	--infer=a84e527a6220
+must_reject|tests/must_reject/p7_fixed_result.pruv	1 case: obl=0 1	--infer=b996b17a8a80
 must_reject|tests/must_reject/p7_fixed_slice_arms.pruv	1 case: obl=0 1	--infer=503faf5c6339
 must_reject|tests/must_reject/p7_fixed_slice_length.pruv	1 case: obl=0 1	--infer=7e2ea679a370
 must_reject|tests/must_reject/p7_fixed_slice_pattern.pruv	1 case: obl=0 1	--infer=f0137aac2a92
@@ -1612,7 +1628,7 @@ must_reject|tests/must_reject/refine_syntax_binop.pruv	1 case: obl=0 1	--infer=7
 must_reject|tests/must_reject/refine_syntax_exp.pruv	1 case: obl=0 1	--infer=ac916c7955ea
 must_reject|tests/must_reject/refine_syntax_expr_bound.pruv	1 case: obl=0 1	--infer=36f2a2e43295
 must_reject|tests/must_reject/refine_syntax_halfopen.pruv	1 case: obl=0 1	--infer=e91206051fb7
-must_reject|tests/must_reject/refine_syntax_len_noop.pruv	1 case: obl=0 1	--infer=31be5231ac5b
+must_reject|tests/must_reject/refine_syntax_len_noop.pruv	1 case: obl=0 1	--infer=47d2c21a93bc
 must_reject|tests/must_reject/refine_while_return.pruv	1 case: obl=9 1	--infer=04e8ef8cb21f
 must_reject|tests/must_reject/s5_before_decreases.pruv	1 case: obl=0 1	--infer=43d53d2bd09b
 must_reject|tests/must_reject/s5_before_effects.pruv	1 case: obl=0 1	--infer=43d53d2bd09b
@@ -2042,6 +2058,7 @@ runtime|tests/runtime/lgaps16_rt_binder_record.pruv	1 case: obl=60 1	--infer=9f3
 runtime|tests/runtime/lgaps16_rt_binder_scalar.pruv	1 case: obl=1 1	--infer=607c313105ae
 runtime|tests/runtime/lgaps17_utf8_subspan.pruv	1 case: obl=89 1	--infer=653c385d272c
 runtime|tests/runtime/lgaps18_word_mask.pruv	1 case: obl=78 1	--infer=58bde64c3196
+runtime|tests/runtime/lgaps20_option_fixed.pruv	1 case: obl=30 1	--infer=a84b16aa2aba
 runtime|tests/runtime/lgaps9_str_bytes.pruv	1 case: obl=25 1	--infer=67352951afef
 runtime|tests/runtime/p1_r_bounds.pruv	1 case: obl=9 1	--infer=55e5c046f31d
 runtime|tests/runtime/p1_r_cast_fail.pruv	1 case: obl=1 1	--infer=d6a4ee3a0a38

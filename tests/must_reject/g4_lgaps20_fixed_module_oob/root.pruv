@@ -1,0 +1,7 @@
+// L-gaps 20: a `[u8; 4]` returned by a module `pub` function keeps its length 4, so index 4 is out of range.
+mod stamp;
+
+pub fn run() -> i64 {
+  let a: [u8; 4] = crate::stamp::make();
+  return i64(a[4]) + crate::stamp::last(a);
+}

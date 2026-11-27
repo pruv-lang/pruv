@@ -1,0 +1,4 @@
+// spec: R-6t-4 reject
+// L-gaps 20: an Option<[T; N]> field of a generic enum is rejected like a [T; N] field
+enum E<T> { A(o: Option<[u8; 2]>), B(v: T) }
+fn f(x: E<i64>) -> i64 { return 0; }

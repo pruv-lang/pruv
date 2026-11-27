@@ -1,0 +1,4 @@
+// spec: R-6t-4 reject
+// L-gaps 20: Option<[T; N]> is not a field of a generic struct, like [T; N]
+struct G<T> { x: T, y: Option<[u8; 2]> }
+fn f() -> i64 { return 0; }

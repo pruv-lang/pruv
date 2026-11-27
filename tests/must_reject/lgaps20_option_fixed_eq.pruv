@@ -1,0 +1,5 @@
+// spec: R-6t-4 reject
+// L-gaps 20: == on Option<[T; N]> would compare the free SMT array cells past N
+fn f(a: [u8; 2], b: [u8; 2]) -> i64
+  requires !(Some::<[u8; 2]>(a) == Some::<[u8; 2]>(b))
+{ return 0; }

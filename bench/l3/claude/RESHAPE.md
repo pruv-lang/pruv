@@ -173,7 +173,7 @@ Rows still open (claude):
 |---|---|---|---|
 | 4.3h-P (rest) | bench | `new_slots` fills 200 ordinals with -1 and `begin` writes one; every import contract carries the ordinal invariant and the A3 snapshot exports it | `VecDeque` order |
 | 4.4c-SV | language | a non-literal `str` cannot be lent as `[u8]`, so `time::from_string` copies the 24 bytes (`bytes24`) before `canonical_at` and the A2 probe keeps the `adapter_probe` length check | `s.as_bytes()` |
-| 4.4c-IS | language | `time::Iso` holds a heap `[u8]` (24 bytes per stamp, `copy(iso.text)` for `lastAt`, 4.3d-M); no fixed-size array value | `[u8; 24]` by value, `Option` |
+| 4.4c-IS | language, closed in L-gaps 20 | `time::Iso` holds a heap `[u8]` (24 bytes per stamp, `copy(iso.text)` for `lastAt`, 4.3d-M); no fixed-size array value | `[u8; 24]` by value, `Option` |
 | 4.4c-TS | bench (with VL) | `completedAt` lives after the reply in the arena; each later answer moves it 24 bytes (`copy_within`) | two fixed fields in `Draft` |
 | 4.4c-DC | bench | `stamp_from` reports every non-absent timestamp defect as -4 (the packet only sees the failure) | `None` |
 | 4.4c-TR | bench | `time::from_string` owns the trimmed `substr` before the digit check | borrowed `es_trim` |
@@ -338,7 +338,7 @@ fixture entry point.
 
 | row | kind | function | difference (Pruv / hand) |
 |---|---|---|---|
-| 4.4h-ST | language (4.4c-IS) | `begin`, `answer` | stamps are `[u8]` fields, so a fresh draft allocates 4 empty arrays (hand 2 `Vec` + 2 `None`); reuse refills `created` / `completed` through `refill` (hand assigns an `Option<[u8; 24]>` value) |
+| 4.4h-ST | language (4.4c-IS), closed in L-gaps 20 | `begin`, `answer` | stamps are `[u8]` fields, so a fresh draft allocates 4 empty arrays (hand 2 `Vec` + 2 `None`); reuse refills `created` / `completed` through `refill` (hand assigns an `Option<[u8; 24]>` value) |
 | 4.4h-CT | proof | `tool` | `tools < 1e15` saturating check before `+ 1` (i64 bound for `ok(c)`); hand `usize += 1` with no cap |
 | 4.4h-AE | shape (minor) | `answer`, `piece` | empty text / full budget skip the rest through an `if` around the body, not an early `return`; `piece` always calls `arr_append` twice (the separator call may append 0 bytes), hand extends once in the `room <= sep` branch |
 | 4.4h-PL | shape | `plan` | returns `Plan { kept, total, bytes }` (`bytes` adds the stamp lengths and feeds `arr_reserve(text, base + plan.bytes)` in `import.pruv`); hand `Collector::kept` returns only the count, and `window_packet` grows `text` without a reserve |
@@ -449,3 +449,19 @@ Title and user content rows: 4.4m-TB, 4.4m-FB. See `pkgs/RESHAPE.md` §Step 4.4m
   branches follow unwrapped. The verifier writes `d` back into `c.drafts` at the `return`.
 - Tests (rs/rust and rs/llvm): test_a0..a4 272/2897/2443/134/270 passed. Remaining structure rows: 4.4h-VD,
   4.4c-IS, 4.4h-ST.
+
+### Rows after L-gaps 20
+
+- Closed 4.4c-IS: the language has `[u8; 24]` values in module `pub` signatures and `Option<[T; N]>` (SPEC R-6t-4).
+  `time::Iso` is `{ status, at: Option<[u8; 24]> }` like the hand's `Stamp`; `format_iso` returns a `[u8; 24]`
+  built from the literal template with `put_digits` writing in place (hand `format_iso` / `put_digits`), no heap
+  array per stamp. `from_string` copies the 24 checked bytes into the array (`copy24`); 4.4c-SV (the `bytes24`
+  copy before `canonical_at`) stays. `import::tail_info` keeps `last: Option<[u8; 24]>` (hand `last`), with no
+  `copy(iso.text)`.
+- Closed 4.4h-ST: `Draft.created` / `completed` are `Option<[u8; 24]>`. `begin` assigns `d.created = created;
+  d.completed = None` on reuse and builds the fresh draft with both values (no empty arrays, no `refill`); `answer`
+  assigns `d.completed = at` when `at` is `Some` (hand `if at.is_some()`). `plan` and `put_turns` read the stamp
+  length through `stamp_len` (hand `map_or(0, |s| s.len())`) and append through `put_stamp`. `ok(c)` no longer
+  carries stamp lengths.
+- 4.4h-VD stays open (see the L-gaps 20 section in `bench/l3/lib/RESHAPE.md`).
+- Tests (rs/rust and rs/llvm): test_a0..a4 272/2897/2443/134/270 passed. Not measured: 4.4h-VD is still open.

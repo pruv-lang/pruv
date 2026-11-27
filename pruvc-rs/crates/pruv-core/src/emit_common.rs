@@ -70,18 +70,46 @@ pub(crate) const SMALL_INT_HOST_ERROR: &str = "small_int_unsupported: integer ty
 /// A u8/u16 value or a fixed-length array in the signature, directly or inside a user struct/enum (P1: such functions stay off the host boundary).
 pub(crate) fn has_narrow_scalar_sig(f: &crate::ast::Function, tt: &TypeTable) -> bool {
     let mut seen = std::collections::HashSet::new();
-    has_narrow(tt, &f.ret, &mut seen) || f.params.iter().any(|p| has_narrow(tt, &p.ty, &mut seen))
+    has_narrow(tt, &f.ret, &mut seen, false) || f.params.iter().any(|p| has_narrow(tt, &p.ty, &mut seen, false))
 }
 
-/// Every type name in a key (`option<Byte>` reaches `Byte`), each user type visited once.
-fn has_narrow(tt: &TypeTable, ty: &str, seen: &mut std::collections::HashSet<String>) -> bool {
+/// L-gaps 20 (4.4c-IS): `has_narrow_scalar_sig` for a module `pub` function that is not a host entry: a `[T; N]`
+/// (with its narrow element) is passed by value between Pruv modules and is not a narrow host scalar there.
+pub(crate) fn has_narrow_scalar_sig_module(f: &crate::ast::Function, tt: &TypeTable) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    has_narrow(tt, &f.ret, &mut seen, true) || f.params.iter().any(|p| has_narrow(tt, &p.ty, &mut seen, true))
+}
+
+/// `key` without its `@fixed:N<elem>` parts (the element of a fixed array is a scalar, so `<..>` holds no `<`).
+fn strip_fixed(key: &str) -> std::borrow::Cow<'_, str> {
+    if !key.contains(crate::gtype::FIXED_PREFIX) {
+        return std::borrow::Cow::Borrowed(key);
+    }
+    let mut out = String::with_capacity(key.len());
+    let mut rest = key;
+    while let Some(at) = rest.find(crate::gtype::FIXED_PREFIX) {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        rest = match tail.find('>') {
+            Some(end) => &tail[end + 1..],
+            None => "",
+        };
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
+}
+
+/// Every type name in a key (`option<Byte>` reaches `Byte`), each user type visited once. `skip_fixed` ignores
+/// fixed-length arrays and their elements.
+fn has_narrow(tt: &TypeTable, ty: &str, seen: &mut std::collections::HashSet<String>, skip_fixed: bool) -> bool {
+    let ty = if skip_fixed { strip_fixed(ty) } else { std::borrow::Cow::Borrowed(ty) };
     ty.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.' || c == ':'))
         .filter(|n| !n.is_empty())
         .any(|n| {
             crate::intwidth::is_narrow(n)
                 || n.starts_with(&crate::gtype::FIXED_PREFIX[1..]) // P7-1: `[T; N]` stays off the host boundary too
                 || (seen.insert(n.to_string())
-                    && tt.decl(n).is_some_and(|d| d.all_fields().iter().any(|x| has_narrow(tt, &x.ty, seen))))
+                    && tt.decl(n).is_some_and(|d| d.all_fields().iter().any(|x| has_narrow(tt, &x.ty, seen, skip_fixed))))
         })
 }
 

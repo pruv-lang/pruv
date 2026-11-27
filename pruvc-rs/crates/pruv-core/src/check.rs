@@ -287,6 +287,11 @@ fn unsupported_small_int_arg(ty: &GType) -> bool {
 }
 
 fn contains_unsupported_small_int_arg(ty: &GType) -> bool {
+    // L-gaps 20: `[T; N]` reaches a type argument only as `Option<[T; N]>` (the parser
+    // gates the position), and its element is a value, not a type argument
+    if ty.is_fixed() {
+        return false;
+    }
     unsupported_small_int_arg(ty) || ty.args.iter().any(contains_unsupported_small_int_arg)
 }
 
@@ -447,8 +452,10 @@ struct Checker {
     fixed_borrow: bool,
 }
 
-/// Reject [u16] and fixed-length arrays at explicit boundaries even when a struct or enum hides them.
-fn check_u16_boundary(prog: &Program, public: impl Fn(usize) -> bool) -> Res<()> {
+/// Reject [u16] and fixed-length arrays at explicit boundaries even when a struct or enum hides them. `[u16]` is
+/// rejected in every `pub` signature (`public`); a fixed-length array only where a host or foreign ABI carries it
+/// (`host`: root host entries), so module `pub` functions pass `[T; N]` by value (L-gaps 20, 4.4c-IS).
+fn check_u16_boundary(prog: &Program, public: impl Fn(usize) -> bool, host: impl Fn(usize) -> bool) -> Res<()> {
     fn contains(ty: &GType, decls: &HashMap<&str, &TypeDecl>, seen: &mut HashSet<String>, hit: fn(&GType) -> bool) -> bool {
         hit(ty)
             || ty.args.iter().any(|arg| contains(arg, decls, seen, hit))
@@ -471,10 +478,12 @@ fn check_u16_boundary(prog: &Program, public: impl Fn(usize) -> bool) -> Res<()>
             ));
         }
         let mut seen = HashSet::new();
-        if sig().any(|ty| contains(&GType::from_key(ty), &decls, &mut seen, GType::is_fixed)) {
+        if (f.foreign.is_some() || host(i))
+            && sig().any(|ty| contains(&GType::from_key(ty), &decls, &mut seen, GType::is_fixed))
+        {
             // P7-1: no host or foreign ABI carries [T; N] (directly or inside a struct field)
             return Err(terr(f.line, f.col, "fixed_array_position",
-                format!("{} has a fixed-length array in its signature, which a pub, host entry or extern function cannot have", f.name),
+                format!("{} has a fixed-length array in its signature, which a host entry or trusted rust fn cannot have", f.name),
                 "keep the fixed-length array inside the Pruv code: pass a buffer ([T]) or its elements at the boundary"));
         }
     }
@@ -494,9 +503,12 @@ pub fn check_explicit(
     expand_match_forms(prog)?;
     // P9b-2: a method is never a host entry (R-6x-5), so its signature is not a host boundary
     let methods: HashSet<&str> = prog.methods.iter().map(|m| m.func.as_str()).collect();
-    check_u16_boundary(prog, |i| {
-        g4.fn_meta.get(i).is_some_and(|m| m.is_pub || m.host_entry) && !methods.contains(prog.functions[i].name.as_str())
-    })?;
+    let not_method = |i: usize| !methods.contains(prog.functions[i].name.as_str());
+    check_u16_boundary(
+        prog,
+        |i| g4.fn_meta.get(i).is_some_and(|m| m.is_pub || m.host_entry) && not_method(i),
+        |i| g4.fn_meta.get(i).is_some_and(|m| m.host_entry) && not_method(i),
+    )?;
     let src_names: Vec<String> = g4.fn_meta.iter().map(|m| m.src_name.clone()).collect();
     let hosts: Vec<bool> = g4.fn_meta.iter().map(|m| m.host_entry).collect();
     crate::borrowed::prepare(prog, &hosts)?;
@@ -521,10 +533,11 @@ pub fn check(prog: &mut Program) -> Result<TypeTable, PruvError> {
 pub fn check_with_externs(prog: &mut Program, externs: &[String]) -> Result<TypeTable, PruvError> {
     crate::methods::resolve(prog)?; // P9b: method calls become calls of the impl functions
     let methods: HashSet<&str> = prog.methods.iter().map(|m| m.func.as_str()).collect();
-    check_u16_boundary(prog, |i| {
+    let public = |i: usize| {
         prog.explicit.as_ref().and_then(|e| e.fns.get(i)).is_some_and(|m| m.is_pub || m.host_entry)
             && !methods.contains(prog.functions[i].name.as_str())
-    })?;
+    };
+    check_u16_boundary(prog, public, public)?;
     expand_match_forms(prog)?;
     crate::borrowed::prepare(prog, &[])?;
     let mut c = Checker::new(prog, externs, &[])?;
@@ -2541,6 +2554,9 @@ impl Checker {
         if self.borrowed_type_argument(a) {
             return Err(terr(line, col, "borrow_signature", "borrowed types cannot be generic arguments", ""));
         }
+        if a.is_fixed() && tp.is_none() {
+            return Ok(()); // L-gaps 20: `Option<[T; N]>`, the parser admitted only this position
+        }
         self.check_type_rec(line, col, a)?;
         if a.contains_collection() || self.depends_on_nested_record(a) {
             // G6: collections are never type arguments of Option/Result/user declarations
@@ -2932,7 +2948,7 @@ impl Checker {
         // struct holding one is buffered for `==` without becoming extended
         let mut buf: HashSet<String> = direct.clone();
         for d in types {
-            if decl_fields(d).iter().any(|(_, fd)| GType::from_key(&fd.ty).is_fixed()) {
+            if decl_fields(d).iter().any(|(_, fd)| { let t = GType::from_key(&fd.ty); t.is_fixed() || t.args.iter().any(|a| a.is_fixed()) }) {
                 buf.insert(d.name().to_string());
             }
         }
@@ -6775,7 +6791,9 @@ impl Checker {
                             ));
                         }
                         if lt.view_payload().is_some()
-                            || (lt.owner.is_none() && dependencies(&lt).iter().any(|n| self.buffered.contains(n))) {
+                            || (lt.owner.is_none() && dependencies(&lt).iter().any(|n| self.buffered.contains(n)))
+                            // L-gaps 20: `Option<[T; N]>`, the payload's cells past N are free too
+                            || self.holds_fixed(&lt) {
                             // G9 A0
                             return Err(terr(
                                 x.line,

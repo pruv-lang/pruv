@@ -114,14 +114,24 @@ fn head_result(title: str, has_title: bool, cwd: str, has_cwd: bool, ep: str, ha
   return out;
 }
 
+// hand `put`'s copy of a stamp: the 24 bytes appended (a `[u8; 24]` is lent as a view for the call).
+fn put_stamp(inout text: [u8], b: [u8]) -> () ! alloc
+  requires len(text) <= 100000000 && len(b) <= 24
+  ensures len(text) == len(old(text)) + len(b)
+{
+  arr_append(inout text, b, 0, len(b));
+}
+
 // Tail record: text is title, lastAt (24 bytes).
-fn tail_result(title: str, has_title: bool, last: [u8], has_at: bool) -> [i64] ! alloc
+fn tail_result(title: str, has_title: bool, last: Option<[u8; 24]>) -> [i64] ! alloc
 {
   let tl: i64 = len(title);
   if tl > 5646080 { return fail_zero(); }
-  if has_at && len(last) != 24 { return fail_zero(); }
   let mut extra: i64 = 0;
-  if has_at { extra = 24; }
+  match last {
+    Some(b) => { extra = 24; }
+    None => {}
+  }
   let mut text: [u8] = alloc(0, 0);
   arr_reserve(inout text, tl + extra);
   arr_append(inout text, title, 0, tl);
@@ -129,10 +139,13 @@ fn tail_result(title: str, has_title: bool, last: [u8], has_at: bool) -> [i64] !
   if has_title { t0 = 0; t1 = tl; }
   let mut a0: i64 = -1;
   let mut a1: i64 = 0;
-  if has_at {
-    arr_append(inout text, last, 0, 24);
-    a0 = tl;
-    a1 = 24;
+  match last {
+    Some(b) => {
+      put_stamp(inout text, b);
+      a0 = tl;
+      a1 = 24;
+    }
+    None => {}
   }
   let total: i64 = len(text);
   if total > 5646080 { return fail_zero(); }
@@ -221,8 +234,7 @@ pub fn tail_info(data: [u8], cut_before: bool) -> [i64] ! alloc
     return crate::boundary::pair(crate::boundary::code_input_too_large(), 0);
   }
   let mut best: crate::entry::RankedTitle = crate::entry::new_title();
-  let mut last: [u8] = alloc(0, 0);
-  let mut has_at: bool = false;
+  let mut last: Option<[u8; 24]> = None::<[u8; 24]>;
   let mut offset: i64 = crate::framing::skip_first(data, cut_before);
   while offset < len(data)
     invariant 0 <= offset && offset <= len(data)
@@ -241,9 +253,9 @@ pub fn tail_info(data: [u8], cut_before: bool) -> [i64] ! alloc
             if tf >= 0 {
               let iso: crate::time::Iso = crate::time::iso_of(d, tf);
               if iso.status < 0 { return fail_at(start, end, 0); }
-              if iso.status == 0 {
-                last = copy(iso.text);
-                has_at = true;
+              match iso.at {
+                Some(b) => { last = iso.at; }
+                None => {}
               }
             }
             let t: i64 = crate::entry::title_for_type(d, crate::entry::string_of(d, k.ty), k, inout best);
@@ -262,7 +274,7 @@ pub fn tail_info(data: [u8], cut_before: bool) -> [i64] ! alloc
   if len(best.text) > 100000000000 { return fail_zero(); }
   let mut title: str = "";
   if best.rank > 0 { title = crate::text::one_line(subview(best.text, 0, len(best.text)), 120); }
-  return tail_result(title, best.rank > 0, last, has_at);
+  return tail_result(title, best.rank > 0, last);
 }
 
 // ---- window (A4) ----
@@ -274,10 +286,9 @@ pub fn tail_info(data: [u8], cut_before: bool) -> [i64] ! alloc
 // An accepted entry contributes a model token (-1 for none). Defect reports an internal accessor failure.
 pub enum Effect { Done(model_id: i64), Defect(kind: i64) }
 
-// isoOf(entry.timestamp): status < 0 is a defect, otherwise text is the 24-byte canonical stamp or empty when the
-// field is missing or unsupported (hand: Option<[u8; 24]>).
+// isoOf(entry.timestamp): status < 0 is a defect, otherwise at is the stamp, None when the field is missing or
+// unsupported (hand: Option<[u8; 24]>).
 fn stamp_from(doc: crate::json::JsonDocument, tf: i64) -> crate::time::Iso ! alloc
-  ensures len(result.text) == 0 || len(result.text) == 24
 {
   if tf == -1 { return crate::time::absent(); }
   if tf < 0 { return crate::time::defect(); }
@@ -287,10 +298,9 @@ fn stamp_from(doc: crate::json::JsonDocument, tf: i64) -> crate::time::Iso ! all
 // The content blocks of an assistant message in order: string-valued text blocks call answer, tool_use blocks
 // call tool (whatever their name/id), everything else is ignored. 0 on success, -4 on a defect. The collector
 // keeps its begun count; answer/tool only update the current draft.
-fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: [u8], inout col: crate::turns::Collector) -> i64 ! alloc
+fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: Option<[u8; 24]>, inout col: crate::turns::Collector) -> i64 ! alloc
   requires 0 <= c && c < len(doc.tape) / 6
   requires crate::json::doc_strings(doc)
-  requires len(at) == 0 || len(at) == 24
   requires crate::turns::ok(col)
   ensures crate::turns::ok(col) && col.begun == old(col).begun
 {
@@ -300,7 +310,6 @@ fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: [u8], inout col: cr
   let mut j: i64 = c + 1;
   while j < stop
     invariant 0 <= c && c < j && j <= stop && stop <= len(doc.tape) / 6 && len(doc.tape) <= 6291456
-    invariant len(at) == 0 || len(at) == 24
     invariant crate::turns::ok(col) && col.begun == old(col).begun
     decreases stop - j
   {
@@ -374,7 +383,7 @@ fn consume_entry(doc: crate::json::JsonDocument, ty: i64, k: crate::entry::RootK
         if len(p) > 50331648 { return Effect::Defect(-4); }
         let created: crate::time::Iso = stamp_from(doc, k.timestamp);
         if created.status < 0 { return Effect::Defect(created.status); }
-        crate::turns::begin(inout col, p, created.text);
+        crate::turns::begin(inout col, p, created.at);
         return Effect::Done(-1);
       }
       crate::entry::Field::Missing => { return Effect::Done(-1); }
@@ -418,14 +427,13 @@ fn consume_entry(doc: crate::json::JsonDocument, ty: i64, k: crate::entry::RootK
   let completed: crate::time::Iso = stamp_from(doc, k.timestamp);
   if completed.status < 0 { return Effect::Defect(completed.status); }
   if kc == 5 {
-    let code: i64 = answer_blocks(doc, c, completed.text, inout col);
+    let code: i64 = answer_blocks(doc, c, completed.at, inout col);
     if code < 0 { return Effect::Defect(code); }
     return Effect::Done(model_id);
   }
   assert crate::json::doc_strings(doc);
-  assert len(completed.text) == 0 || len(completed.text) == 24;
   assert crate::turns::ok(col);
-  let code: i64 = answer_string(doc, c, completed.text, inout col);
+  let code: i64 = answer_string(doc, c, completed.at, inout col);
   if code != 0 { return Effect::Defect(code); }
   return Effect::Done(model_id);
 }
@@ -434,9 +442,8 @@ fn consume_entry(doc: crate::json::JsonDocument, ty: i64, k: crate::entry::RootK
 // (4.3h-O): a plain node is lent as a view; an escaped one is decoded (the hand's `Cow::Owned`, made while
 // parsing). 0 = answered, other = defect kind. Split out of consume_entry in 4.4r: with the RankedTitle struct in
 // the module the solver gave up (rlimit) on the plain_str precondition there.
-fn answer_string(doc: crate::json::JsonDocument, c: i64, at: [u8], inout col: crate::turns::Collector) -> i64 ! alloc
+fn answer_string(doc: crate::json::JsonDocument, c: i64, at: Option<[u8; 24]>, inout col: crate::turns::Collector) -> i64 ! alloc
   requires crate::json::doc_strings(doc)
-  requires len(at) == 0 || len(at) == 24
   requires crate::turns::ok(col)
   ensures crate::turns::ok(col) && col.begun == old(col).begun
 {

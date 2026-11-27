@@ -2752,6 +2752,8 @@ impl<'a> Gen<'a> {
             Expr::Call(x) if matches!(x.name.as_str(), "some_val" | "ok_val")
                 && x.args.first().and_then(|arg| expr_ty(arg).as_deref())
                     .is_some_and(crate::borrowed::is_view_wrapper) => self.c(e),
+            // R-6t-4: the payload of an `Option<[T; N]>` is a fixed-array value
+            Expr::Call(x) if x.name == "some_val" && x.ty.as_deref().is_some_and(|t| fixed_key(t).is_some()) => self.c(e),
             // G9: a buffer field of a real (extended) value
             Expr::FieldAccess(_) | Expr::VariantField(_) if self.g9 => self.cx(e),
             // P7-1 B: a fixed-array field of a contract mirror struct is already `[i128; N]`
@@ -6826,12 +6828,18 @@ fn gen_rust_concrete_core(
     // P9b-2: a method is never a host entry (R-6x-5), so its signature is not a host boundary
     let methods: std::collections::HashSet<&str> = prog.methods.iter().map(|m| m.func.as_str()).collect();
     for (i, f) in prog.functions.iter().enumerate() {
-        let public = prog.explicit.as_ref().and_then(|meta| meta.fns.get(i))
-            .is_some_and(|mark| mark.is_pub || mark.host_entry)
-            && !methods.contains(f.name.as_str());
-        if (public || f.foreign.is_some())
-            && crate::emit_common::has_narrow_scalar_sig(f, tt0.get_or_insert_with(|| make_type_table(prog)))
-        {
+        let mark = prog.explicit.as_ref().and_then(|meta| meta.fns.get(i));
+        let public = mark.is_some_and(|mark| mark.is_pub || mark.host_entry) && !methods.contains(f.name.as_str());
+        // L-gaps 20: a module `pub` function (not a host entry) may pass `[T; N]` by value
+        let host = f.foreign.is_some() || mark.is_some_and(|mark| mark.host_entry) || prog.explicit.is_none();
+        if (public || f.foreign.is_some()) && {
+            let table = tt0.get_or_insert_with(|| make_type_table(prog));
+            if host {
+                crate::emit_common::has_narrow_scalar_sig(f, table)
+            } else {
+                crate::emit_common::has_narrow_scalar_sig_module(f, table)
+            }
+        } {
             return Err(GenError::Msg(crate::emit_common::SMALL_INT_HOST_ERROR.into()));
         }
     }

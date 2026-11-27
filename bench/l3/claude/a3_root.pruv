@@ -109,8 +109,14 @@ fn step(prog: [i64], pos: i64, inout col: crate::turns::Collector, inout snaps: 
       f[2] = vec_get::<crate::turns::Draft>(col.drafts, k).used;
       f[3] = vec_get::<crate::turns::Draft>(col.drafts, k).tools;
       if vec_get::<crate::turns::Draft>(col.drafts, k).clipped { f[4] = 1; }
-      f[5] = len(vec_get::<crate::turns::Draft>(col.drafts, k).created) / 24;
-      f[6] = len(vec_get::<crate::turns::Draft>(col.drafts, k).completed) / 24;
+      match vec_get::<crate::turns::Draft>(col.drafts, k).created {
+        Some(b) => { f[5] = 1; }
+        None => {}
+      }
+      match vec_get::<crate::turns::Draft>(col.drafts, k).completed {
+        Some(b) => { f[6] = 1; }
+        None => {}
+      }
     }
     snaps[at + 3] = k;
     snaps[at + 4] = f[0];
@@ -132,14 +138,32 @@ fn step(prog: [i64], pos: i64, inout col: crate::turns::Collector, inout snaps: 
     let s: str = crate::jstr::adapter_probe(a.bytes);
     if len(s) != len(a.bytes) { return Step { next: -1 }; }
     if len(b.bytes) != 0 && len(b.bytes) != 24 { return Step { next: -1 }; }
+    let st: Option<[u8; 24]> = stamp_of(b.bytes);
     if op == 1 {
-      crate::turns::begin(inout col, s, b.bytes);
+      crate::turns::begin(inout col, s, st);
     } else {
-      crate::turns::answer(inout col, s, b.bytes);
+      crate::turns::answer(inout col, s, st);
     }
     return Step { next: b.next };
   }
   return Step { next: -1 };
+}
+
+// The fixture stamp: None for 0 bytes, else the 24 bytes as a value.
+fn stamp_of(b: [u8]) -> Option<[u8; 24]>
+  requires len(b) == 0 || len(b) == 24
+{
+  if len(b) == 0 { return None::<[u8; 24]>; }
+  let mut o: [u8; 24] = [u8(0); 24];
+  let mut i: i64 = 0;
+  while i < 24
+    invariant 0 <= i && i <= 24
+    decreases 24 - i
+  {
+    o[i] = u8(b[i]);
+    i = i + 1;
+  }
+  return Some::<[u8; 24]>(o);
 }
 
 pub fn run(prog: [i64]) -> [i64] ! alloc

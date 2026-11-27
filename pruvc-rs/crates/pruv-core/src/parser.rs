@@ -2136,11 +2136,15 @@ impl Parser {
 
     /// n: an already consumed identifier naming a type parameter, Option/Result or a user type (no refinement;
     /// type arguments are parsed here).
-    fn named_type(&mut self, n: &Tok) -> R<GType> {
+    /// fixed_ok: the type stands where `[T; N]` may (L-gaps 20: then `Option<[T; N]>` may too).
+    fn named_type(&mut self, n: &Tok, fixed_ok: bool) -> R<GType> {
         if n.val == "Option" || n.val == "Result" {
             self.expect("<")?;
             let result = n.val == "Result";
+            // L-gaps 20 (4.4c-IS): `Option<[T; N]>` holds a fixed-length array value where `[T; N]` itself may stand
+            self.fixed_ok = fixed_ok && n.val == "Option";
             let mut args = self.type_arg_list(false)?;
+            self.fixed_ok = false;
             if result && args.len() == 2 {
                 let e = args.pop().unwrap();
                 return Ok(mk_result_with_error(args.pop().unwrap(), e));
@@ -2444,7 +2448,7 @@ impl Parser {
                     "arrays of this width are not available yet (parity row P3-1); only [i64], [u8], [u16] and [bool] arrays exist"));
             } else if is_upper(&e.val) || e.val.starts_with("crate::") {
                 // G3: a type parameter (the checker: needs Element); other types: the checker rejects them
-                self.named_type(&e)?
+                self.named_type(&e, false)?
             } else {
                 return Err(self.err("only [i64], [u8], [u16] and [bool] arrays exist", "use [i64], [u8], [u16] or [bool]", Some(&e)));
             };
@@ -2508,7 +2512,7 @@ impl Parser {
                     Some(&n),
                 ));
             }
-            ty = self.named_type(&n)?;
+            ty = self.named_type(&n, fixed_ok)?;
         }
         if self.at("|", 0) {
             if !allow {
@@ -4015,14 +4019,19 @@ impl Parser {
             self.bump();
             let mut targs: Option<Vec<GType>> = None;
             if self.at("::", 0) && self.at("<", 1) {
+                self.fixed_ok = true; // L-gaps 20: None::<[T; N]>
                 targs = Some(self.expr_targs()?); // G3: None::<T>
+                self.fixed_ok = false;
             }
             return Ok(Expr::Ctor(Ctor { line, col, name: "None".to_string(), arg: None, ty: None, targs, inst: None }));
         }
         if self.at("Some", 0) || self.at("Ok", 0) || self.at("Err", 0) {
             self.bump();
             let targs = if self.at("::", 0) && self.at("<", 1) {
-                Some(self.expr_targs_for_result(t.val != "Some")?)
+                self.fixed_ok = t.val == "Some"; // L-gaps 20: Some::<[T; N]>(a)
+                let targs = self.expr_targs_for_result(t.val != "Some");
+                self.fixed_ok = false;
+                Some(targs?)
             } else {
                 None
             };

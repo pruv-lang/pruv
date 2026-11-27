@@ -1651,6 +1651,8 @@ impl Model {
             Ty::Param(g) => Ok(self.abstract_sort(g)),
             Ty::User(n) if n == "string" => self.bufsort(ty),
             Ty::User(n) => self.sorts.get(n).cloned().ok_or_else(|| nokey(n)),
+            // L-gaps 20: `[T; N]` as the payload of `Option<[T; N]>` is a buffer like a `[T; N]` field
+            Ty::Inst(g) if g.is_fixed() => self.bufsort(ty),
             Ty::Inst(g) => self.instance(g),
             Ty::Unit | Ty::GArray(_) => Err(nokey(ty.name())),
         }

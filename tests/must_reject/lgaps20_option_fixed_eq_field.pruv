@@ -1,0 +1,4 @@
+// spec: R-6t-4 reject
+// L-gaps 20: == on a struct with an Option<[T; N]> field would compare the free cells past N
+struct S { a: Option<[i64; 2]> }
+fn f(x: S, y: S) -> i64 requires x == y { return 0; }

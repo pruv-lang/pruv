@@ -1,0 +1,5 @@
+// spec: R-6t-4 reject
+// L-gaps 20: a `Some(a)` binder of Option<[u8; 4]> has length 4, a[4] is out of range
+fn first(o: Option<[u8; 4]>) -> i64 {
+  match o { Some(a) => { return i64(a[4]); } None => { return -1; } }
+}
