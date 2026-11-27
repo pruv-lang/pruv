@@ -1229,6 +1229,11 @@ must_reject|tests/must_reject/lg9_move_field_arg_borrowed.pruv	1 case: obl=0 1	-
 must_reject|tests/must_reject/lg9_move_field_arg_other_mention.pruv	1 case: obl=0 1	--infer=3713a1d47d59
 must_reject|tests/must_reject/lg9_move_field_arg_use_after.pruv	1 case: obl=0 1	--infer=4c630d7417d1
 must_reject|tests/must_reject/lg9_utf8_ascii_partial.pruv	1 case: obl=2 1	--infer=2584e09a6285
+must_reject|tests/must_reject/lgaps9_into_bytes_borrowed.pruv	1 case: obl=0 1	--infer=103148d26fcb
+must_reject|tests/must_reject/lgaps9_into_bytes_len.pruv	1 case: obl=1 1	--infer=342d6c1e081c
+must_reject|tests/must_reject/lgaps9_into_bytes_use_after.pruv	1 case: obl=0 1	--infer=7c8a2a64df1d
+must_reject|tests/must_reject/lgaps9_str_bytes_escape.pruv	1 case: obl=0 1	--infer=e2e54e77c31b
+must_reject|tests/must_reject/lgaps9_str_bytes_len.pruv	1 case: obl=1 1	--infer=11eba76955b5
 must_reject|tests/must_reject/p1_add_overflow.pruv	1 case: obl=1 1	--infer=188377af221c
 must_reject|tests/must_reject/p1_bit_and.pruv	1 case: obl=0 1	--infer=8211483d2318
 must_reject|tests/must_reject/p1_cast_in_contract.pruv	1 case: obl=0 1	--infer=1a9086e48014
@@ -1987,6 +1992,7 @@ runtime|tests/runtime/lg9_rt_record_move.pruv	1 case: obl=4 1	--infer=2567f85903
 runtime|tests/runtime/lg9_rt_take_field_move.pruv	1 case: obl=4 1	--infer=ef44fbcd71d9
 runtime|tests/runtime/lg9_rt_take_record.pruv	1 case: obl=8 1	--infer=1e06dc03094e
 runtime|tests/runtime/lg9_rt_utf8_ascii.pruv	1 case: obl=31 1	--infer=073ccd671db5
+runtime|tests/runtime/lgaps9_str_bytes.pruv	1 case: obl=25 1	--infer=67352951afef
 runtime|tests/runtime/p1_r_bounds.pruv	1 case: obl=9 1	--infer=55e5c046f31d
 runtime|tests/runtime/p1_r_cast_fail.pruv	1 case: obl=1 1	--infer=d6a4ee3a0a38
 runtime|tests/runtime/p1_r_overflow.pruv	1 case: obl=2 1	--infer=8eef1dc4b526

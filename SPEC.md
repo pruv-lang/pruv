@@ -504,6 +504,24 @@ return a parameter with `copy`). Refinements: `[u8 | L..=U; <=N]` with `0 <= L <
   as a `str` still needs `utf8_valid` of the bytes or of the base (`verify/utf8_invalid`), and a position after a byte
   `>= 128` is not a boundary by this rule (`verify/utf8_boundary`). Tests: [range by ASCII tags](tests/spec/r6b_5_ascii_boundary.pruv),
   rejects [after a lead byte](tests/spec/r6b_5_after_lead.pruv), [bytes are not a `str`](tests/spec/r6b_5_bytes_not_str.pruv).
+- R-6b-6 **Owned and borrowed bytes of a `str` (4.4o-SB, L-gaps 9).**
+  - `str_into_bytes(move t) -> [u8]` hands the buffer of an owned `str` binding to the result without copying
+    or requiring `! alloc`. A missing `move` or a later use of `t` is `type/foreign_move`. Moving a borrowed
+    `str` parameter or local is `type/array_alias`.
+  - `str_bytes(s) -> ref [u8] from(s)` views the bytes of a `str` place, `subview`, `ref str` value or string
+    literal. It makes a shared borrow with the source's provenance under R-6g-11. Pass it to a read-only `[u8]`
+    parameter, or bind it with `let b: ref [u8] = str_bytes(s);`. A returned view borrowing a
+    root outside the `from` list is `type/borrow_escape`.
+  - In both conversions the result has the input's length and the same byte at every valid index.
+    Rust emits `t.into_bytes()` and `s.as_bytes()`, respectively. LLVM transfers the pointer, length and
+    capacity and clears the moved-from slot for the owned conversion. The borrowed conversion
+    uses the same pointer and length without taking ownership of the buffer.
+  - Both names are reserved (`type/reserved`). Tests include [runtime and proof](tests/runtime/lgaps9_str_bytes.pruv),
+    [use after move](tests/must_reject/lgaps9_into_bytes_use_after.pruv),
+    [wrong owned length](tests/must_reject/lgaps9_into_bytes_len.pruv),
+    [wrong borrowed length](tests/must_reject/lgaps9_str_bytes_len.pruv),
+    [move of a parameter](tests/must_reject/lgaps9_into_bytes_borrowed.pruv) and
+    [escaping view](tests/must_reject/lgaps9_str_bytes_escape.pruv).
 - Not available: `==`/`!=` on whole strings (use `string_eq`, R-6e-11), `print` of a string, `str` in
   `Option`/`Result`/struct fields, char/code-point indexing. Character counts are written with boundaries, e.g.
   `count(t in 0..len(s): is_char_boundary(s, t))` counts the characters of `s`.
@@ -1567,8 +1585,10 @@ borrowed value is live.
     stored in a `ref` field; a call of a `ref` function; a field read of a borrowing struct; a struct literal with
     `ref` fields; a `ref` local; a string literal for `ref str` (static, no provenance). A `[u8]` / `str` variable
     in a `ref` position (field of a literal, `return` of a `ref` function) borrows it whole.
+    `str_bytes(s)` borrows the whole byte range of `s` (R-6b-6).
   - *Provenance.* The provenance of a borrow is a set of root variables, each *shared* or *exclusive*. `subview` of
-    / whole borrow of `x`: `x`, shared (an `inout` parameter of the current function counts as a variable). A call:
+    / whole borrow of `x`: `x`, shared (an `inout` parameter of the current function counts as a variable).
+    `str_bytes(s)` inherits the provenance of its source like `subview`. A call:
     for each argument at a `from` position, the provenance of that argument (a `ref` / borrowing local) or its root
     variable, shared for a read argument and exclusive for an `inout` argument. A field read of a borrowing struct,
     a copy of a `ref` local, a borrowing-struct field of a record (`d.child`): the provenance of the source. A view

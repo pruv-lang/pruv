@@ -254,6 +254,9 @@ pub(crate) fn first_borrow(prog: &Program) -> Option<(i64, i64)> {
                 Node::Let(s) if s.borrowed => {
                     position.get_or_insert((s.line, s.col));
                 }
+                Node::Expr(Expr::Call(c)) if c.name == "str_bytes" => {
+                    position.get_or_insert((c.line, c.col));
+                }
                 Node::Expr(e @ Expr::Ctor(_)) if expr_ty(e).as_deref().is_some_and(is_view_wrapper) => {
                     position.get_or_insert((e.line(), e.col()));
                 }
@@ -645,7 +648,7 @@ impl Analysis<'_> {
         match e {
             Expr::Var(x) => matches!(locals.get(&x.name), Some(Origin::View(_)))
                 && expr_ty(e).as_deref().is_some_and(is_view_base),
-            Expr::Call(x) => self.functions.get(x.name.as_str()).is_some_and(|f| f.borrowed_result),
+            Expr::Call(x) => x.name == "str_bytes" || self.functions.get(x.name.as_str()).is_some_and(|f| f.borrowed_result),
             Expr::FieldAccess(x) => self.ref_field(&x.base, &x.field)
                 && expr_ty(e).as_deref().is_some_and(is_view_base),
             _ => false,
@@ -689,7 +692,7 @@ impl Analysis<'_> {
                         return self.provenance(c.arg.as_deref().unwrap(), locals);
                     }
                 }
-                Expr::Call(c) if c.name == "subview" => return self.provenance(&c.args[0], locals),
+                Expr::Call(c) if matches!(c.name.as_str(), "subview" | "str_bytes") => return self.provenance(&c.args[0], locals),
                 Expr::Call(c) => {
                     let Some(f) = self.functions.get(c.name.as_str()) else {
                         return Err(signature(e.line(), e.col()));
@@ -777,6 +780,7 @@ impl Analysis<'_> {
                     {
                         self.list_push(self.list_name(&c.args[0]).unwrap(), &c.args[1], locals)
                     }
+                    Expr::Call(c) if c.name == "str_bytes" => self.provenance(e, locals).map(|_| ()),
                     Expr::Call(c) => {
                         if let Some(callee) = self.functions.get(c.name.as_str()) {
                             if callee.borrow_from.is_some() {

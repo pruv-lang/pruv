@@ -2002,3 +2002,47 @@ All after the last code change (F1 / F4 from the structure comparison).
     replace choose the element shape in different orders (same result today).
 - Not reached: LG7-T3 (verified `--foreign-checks all` pop check).
 - Next: LG7-SR, LG7-T3, LG7-A2, LG7-B2..B5.
+
+### Bundle L-gaps 9
+
+- Closed 4.4o-SB (R-6b-6): `str_into_bytes(move t) -> [u8]` hands the buffer of an owned `str` local to a byte
+  array without a copy (hand `String::into_bytes`), and `str_bytes(s) -> ref [u8] from(s)` views the bytes of a
+  `str` place, `subview`, `ref str` value or literal (hand `as_bytes()`). The verifier keeps the same array and
+  length with byte elements. A missing `move` or a use after the move is `type/foreign_move`, moving a borrowed
+  `str` parameter is `type/array_alias`, and a returned view of a local is `type/borrow_escape`. Rust emits
+  `.into_bytes()` / `.as_bytes()`; LLVM hands over pointer, length and capacity and clears the moved slot, and a
+  view keeps pointer and length only. Test `lgaps9_str_bytes` runs on both backends with and without
+  `--no-verify` (alloc balance); rejects `lgaps9_into_bytes_use_after`, `lgaps9_into_bytes_borrowed`,
+  `lgaps9_into_bytes_len`, `lgaps9_str_bytes_len`, `lgaps9_str_bytes_escape`. A `ref [u8]` parameter stays
+  `type/borrow_signature` (`r6g_11_ref_param`); pass the view to a plain `[u8]` parameter.
+- New rows:
+  - LG7-SR stays open (reverted in this bundle). A per-list-term `Int -> Int` view sum (keyed by the z3 term, a
+    term with a quantified variable kept the array-keyed `S(a, k)`) made a false claim about a view list of
+    `subview`s of a parameter array refute in about a second with an `assert` counterexample (was
+    `verify_unknown` after 7 s), but it slowed `tests/spec/lgaps7_join_bytes.pruv` from 3 s to about 100 s (over
+    the 300 s spec_trace limit under load). Repros `work/lgaps9/lgaps9_views_subview_len.pruv` and
+    `lgaps9_views_subview_sum.pruv`; a fix must keep `lgaps7_join_bytes` near 3 s.
+  - LG9-SR2: the same two `subview` pieces joined with `vec_join` (separator `subview(b, 0, 1)`) and a false
+    `assert len(s) == len(b)` still end in `verify_unknown` (`incomplete (theory array)`, fast). Dropping either
+    the renamed list equality (`vjoin!aN == list`) or the per-position byte forall of the join makes it refute;
+    naming the pushed views or the separator did not help. Repro `work/lgaps9/sr_join_unknown.pruv`. The
+    must_reject test with `subview` pieces joined by `vec_join` waits for this row.
+  - LG9-SB1 (audit, advisory): moving a borrowed `str` parameter into `str_into_bytes` is `type/array_alias`
+    with the hint `take s: str`, but that edit then gives `type/foreign_move`. The hint should say
+    `let t: str = copy(s);` then `move t`.
+  - LG9-SB2 (audit, advisory): pin more R-6b-6 rejects: moving a `ref str` local (`type/array_alias`), moving
+    `t` before the last use of `str_bytes(t)` (`type/borrow_conflict`), a missing `move` (`type/foreign_move`),
+    and `assert utf8_valid(a)` after `a[0] = 255` on bytes from `"a"` (counterexample `[255]`).
+  - LG9-SB3 (audit, advisory): runtime paths not in `lgaps9_str_bytes` (each checked by hand on both backends):
+    `str_into_bytes` in a value `if`, from a match payload binder, in a struct literal field, in a loop with
+    reassignment, on an empty `str` then `arr_push`, and on a `str_from_utf8` result with capacity above length;
+    `return str_bytes(s)`, `str_bytes(subview(..))`, `str_bytes` pushed to a `Vec<ref [u8]>`, from `vec_get` and
+    from an `inout` struct field, and `str_bytes` in contracts under `--no-verify`.
+  - LG9-SB4 (audit, advisory, older than this bundle): the Rust bindings written next to `--emit ll`
+    (`bindings.rs`) wrap a function that returns `ref [u8]` or `ref str` as an owned `Vec`/`String` and declare a
+    `pruv_abi_*__typed` symbol the `.ll` does not define.
+- Audit (A: SPEC, verifier and tests; B: Rust and LLVM codegen). Fixed: the R-6b-6 rule had no accept or reject
+  test under `tests/spec` (added `lgaps9_str_bytes` and `lgaps9_into_bytes_use_after` there), and the two LG7-SR
+  spec tests had no JSON (moot after the revert).
+- Not reached: LG8-A4, LG7-T3.
+- Next: LG7-SR (keep `lgaps7_join_bytes` fast), LG9-SR2, LG8-A4, LG7-T3, LG9-SB1, LG9-SB2, LG9-SB3, LG9-SB4.

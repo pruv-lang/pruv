@@ -986,7 +986,7 @@ pub(crate) fn static_str_locals(f: &Function, fmap: &HashMap<String, &Function>)
                 }
                 Expr::Call(c) => {
                     let n = c.name.as_str();
-                    let flags: Vec<bool> = if (n == "len" && c.args.len() == 1) || (matches!(n, "subview" | "substr") && !c.args.is_empty()) {
+                    let flags: Vec<bool> = if (matches!(n, "len" | "str_bytes") && c.args.len() == 1) || (matches!(n, "subview" | "substr") && !c.args.is_empty()) {
                         (0..c.args.len()).map(|i| i == 0).collect()
                     } else if let Some(g) = self.fmap.get(n) {
                         (0..c.args.len())
@@ -2736,6 +2736,7 @@ impl<'a> Gen<'a> {
                 Ok(if x.ty.as_deref() == Some("array_u8") { format!("({literal}).as_bytes()") } else { literal })
             }
             Expr::Call(x) if x.name == "err_val" && x.ty.as_deref() == Some("string") => self.c(e),
+            Expr::Call(x) if x.name == "str_bytes" => Ok(format!("({}).as_bytes()", self.carr(arg(&x.args, 0)?)?)),
             Expr::Call(x) if matches!(x.name.as_str(), "some_val" | "ok_val")
                 && x.args.first().and_then(|arg| expr_ty(arg).as_deref())
                     .is_some_and(crate::borrowed::is_view_wrapper) => self.c(e),
@@ -5230,7 +5231,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
 
     fn is_ref_value(&self, e: &Expr) -> bool {
         match e {
-            Expr::Call(x) => self.fmap.get(&x.name).is_some_and(|f| f.borrowed_result && (f.ret == "array_u16" || crate::borrowed::is_view_base(&f.ret))),
+            Expr::Call(x) => x.name == "str_bytes" || self.fmap.get(&x.name).is_some_and(|f| f.borrowed_result && (f.ret == "array_u16" || crate::borrowed::is_view_base(&f.ret))),
             Expr::FieldAccess(x) => expr_ty(&x.base).as_deref()
                 .and_then(|name| self.table.fields(name, None))
                 .is_some_and(|fields| fields.iter().any(|f| f.name == x.field && f.borrowed)),
@@ -6348,6 +6349,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
                         "Ok(pruv_s) => ::std::string::String::from(pruv_s), ",
                         "Err(_) => panic!(\"pruv: invalid UTF-8 (len {{}})\", pruv_b.len()), }} }}"
                     ), b));
+                }
+                if n == "str_into_bytes" {
+                    return Ok(format!("({}).into_bytes()", self.e(arg(a, 0)?)?));
+                }
+                if n == "str_bytes" {
+                    return Ok(format!("({}).as_bytes()", self.borrowed_value(arg(a, 0)?)?));
                 }
                 if n == "subview" {
                     let source = arg(a, 0)?;

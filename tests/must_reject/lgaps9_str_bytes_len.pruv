@@ -1,0 +1,6 @@
+// spec: R-6b-6 reject
+fn bad(s: str) -> ref [u8] from(s)
+  ensures len(result) == len(s) + 1
+{
+  return str_bytes(s);
+}
