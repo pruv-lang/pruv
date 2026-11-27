@@ -218,7 +218,7 @@ Not changed:
 
 | row | Pruv | hand | change |
 |---|---|---|---|
-| 4.4d-CB | `user` checks `is_char_boundary` at `q.lo` / `q.hi` at run time | `&text[range]` on a range found at ASCII bytes | language: a char-boundary fact from an adjacent ASCII byte |
+| 4.4d-CB | closed in 4.4zd: `query_range` ensures both bounds are char boundaries (R-6b-5); `user` borrows `subview(txt, a, b)` with no test | `&text[range]` on a range found at ASCII bytes | done |
 | 4.4d-CL | closed in 4.4z: `line::entry` ensures `len(e.content) <= len(s)`; the `feed` test is gone | no bound | done |
 | 4.4d-LC | closed in 4.4v: `Reader.filled` removed; `pump` / `drain` clear `line` after the used line | `on_line` then `line.clear()` | done |
 | 4.4d-TD | closed in 4.4v: `turns::finish2`, `finish_ref`, `empty_buffer` and the comments citing them removed | - | done |
@@ -227,7 +227,7 @@ Not changed:
 | 4.4v-DR | closed in 4.4v (review): `drain` calls `transport::scan` (buffered bytes only), so a partial line ends it without a read or a poll | `drain` calls `step(false)` | done |
 | 4.4v-PB | `pump` counts every `step` (partial chunks too) against 1000000 | `step(true)` waits inside one call | open; differs only past a million steps |
 | 4.4v-TR | a ready chunk and the overall timer: `receive` sees the timer first | `recv_timeout` can take a queued chunk | open; only the race at the deadline |
-| 4.4d-T0 | `feed` calls `turns::tool` only for `n > 0` | `self.tool(n)` for any `Some(n)` | same output (adds 0); needs `line::entry` to ensure `n >= 0` |
+| 4.4d-T0 | closed in 4.4zd: `line::entry` ensures a `Some` tool count is `>= 0`; `feed` calls `turns::tool(n)` for any `Some(n)` | `self.tool(n)` for any `Some(n)` | done |
 
 Codex structure comparison (one, gpt-6.2-astra high, Codex 2 account; the default account was at its limit). Applied:
 `prompt_index` is read only in the no-query branch of `user` (hand `None =>` arm). Rows: 4.4d-RC, 4.4d-PO, 4.4d-T0 above.
@@ -316,3 +316,13 @@ changed to `else if` chains verifies in 15 s, and the whole module in 26 s. See 
 The hand `load_check` spawns with `.env("GROK_HOME", ..)` and `Stdio::null()`. Pruv has `proc_spawn_env` but no quiet
 form of it, so `start` is unchanged and `transport::receive` keeps reading and dropping stderr (row 4.4za-EQ in
 `../lib/RESHAPE.md`). The shared receive start is now `transport::begin` (no behaviour change).
+
+### Rows after 4.4zd
+
+| row | status | change |
+|---|---|---|
+| 4.4d-CB | closed | `has_at` is one `eq_range` (hand `starts_with`) and ensures the matched bytes; `query_range` ensures `is_char_boundary` at both bounds (each bound is at or right after an ASCII tag byte, SPEC R-6b-5); `user` drops its run-time test and its `return -1`, generated Rust is `txt.get_unchecked(a..b)` (hand `&txt[a..b]`, which keeps its boundary check) |
+| 4.4d-T0 | closed | `line::new_entry` / `reset` ensure `tool_calls` is `None`; `part`, `content`, `fields` and `entry` carry `is_some(e.tool_calls) ==> some_val(e.tool_calls) >= 0` (`skip_array` already ensures a count `>= 0`); `feed` requires it and calls `turns::tool(n)` for any `Some(n)` (hand `self.tool(n)`). M11 marker moved to the new arm |
+
+No language or compiler change was needed (R-6b-5 already existed). Tests: `test_impl.py` 254/254 on rs/rust and rs/llvm; `q.py --pairs rs/rust,rs/llvm` (2254 cases, seed 20261116) rs/rust 0 unexplained, rs/llvm 1 unexplained (q01237-copy, "the fake ACP was started on one side only", load average about 10, the same flake as above); q01237 rerun alone 3 times: 3/3 exact on both pairs. Review (one structure review, Codex): no required findings; the two changed sites match the hand code and M11 hits exactly one line. Advisory only (older differences, left open): `has_at`'s explicit `at > len(s)` test, `user` builds the prompt view twice, `part` clears `scratch` on entry and rebuilds its result, loop shapes in `content`/`fields`/`entry`.
+Not measured: the grok slice still has open shape rows (4.4v-PB, 4.4v-TR, 4.4za-EQ).

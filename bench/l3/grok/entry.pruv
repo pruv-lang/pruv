@@ -4,31 +4,26 @@
 // the borrowed content str.
 //  1. feed requires st[0] < 100000000 (a window has at most 4194304 lines) and ensures st[0] <= 100000000, so the owner can
 //     chain calls without carrying the 1e12 bound of turns::begin.
-//  2. the assistant arm adds the tool calls with one turns::tool(n) (hand `tool(n)`; saturates at 1e15).
+//  2. the assistant arm adds the tool calls with one turns::tool(n) for any Some(n) (hand `tool(n)`; saturates at 1e15);
+//     line::entry ensures the count is non-negative (row 4.4d-T0).
 
-// lit occurs in s at byte position at.
+// lit occurs in s at byte position at (hand `s[at..].starts_with(lit)`).
 fn has_at(s: str, at: i64, lit: str) -> bool
   requires 0 <= at
+  ensures result ==> at + len(lit) <= len(s) && (forall k in 0..len(lit): s[at + k] == lit[k])
 {
   if at > len(s) || len(lit) > len(s) - at { return false; }
-  let mut k: i64 = 0;
-  while k < len(lit)
-    invariant 0 <= k && k <= len(lit) && 0 <= at && at <= len(s) && len(lit) <= len(s) - at
-    decreases len(lit) - k
-  {
-    let a: i64 = s[at + k];
-    let b: i64 = lit[k];
-    if a != b { return false; }
-    k = k + 1;
-  }
-  return true;
+  return eq_range(s, at, lit, 0, len(lit));
 }
 
 // hand query_range: trimmed = s[lo..hi). When it starts <user_query>, ends </user_query> and is at least 25 bytes (the tags may not
 // overlap), the inner bounds after removing exactly one leading \r?\n and then one trailing \r?\n; else lo == -1 (the hand None).
+// Both bounds follow or sit at an ASCII byte (`>`, `\n`, `<`, `\r`), so they are char boundaries (R-6b-5) and `user` borrows
+// the range with no run-time test (hand `&txt[a..b]`).
 fn query_range(s: str, lo: i64, hi: i64) -> crate::text::Span
   requires 0 <= lo && lo <= hi && hi <= len(s)
   ensures result.lo == -1 || (lo + 12 <= result.lo && result.lo <= result.hi && result.hi <= hi - 13)
+  ensures result.lo == -1 || (is_char_boundary(s, result.lo) && is_char_boundary(s, result.hi))
 {
   if hi - lo < 25 || !has_at(s, lo, "<user_query>") || !has_at(s, hi - 13, "</user_query>") { return crate::text::Span { lo: -1, hi: -1 }; }
   let mut a: i64 = lo + 12;
@@ -107,6 +102,7 @@ fn at_view(line: [u8], iso: [u8], k: i64) -> ref str from(line, iso)
 // (hand `e.at()` in the begin / answer call).
 pub fn feed(line: [u8], e: crate::line::Entry, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> i64 ! alloc
   requires utf8_valid(line) && len(line) <= 1048576 && utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= len(line)
+  requires is_some(e.tool_calls) ==> some_val(e.tool_calls) >= 0
   requires len(st) == 4 && len(sl) == 1600 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
@@ -133,7 +129,7 @@ pub fn feed(line: [u8], e: crate::line::Entry, inout st: [i64], inout sl: [i64],
     if k == -1 { return -1; }
     crate::turns::answer2(inout st, inout sl, inout bk, subview(e.content, 0, len(e.content)), at_view(line, iso, k));
     match e.tool_calls {
-      Some(n) => { if n > 0 { crate::turns::tool(inout st, inout sl, n); } }  // MUT:M11 => Some(n) => { if n > 0 { crate::turns::tool(inout st, inout sl, 1); } }
+      Some(n) => { crate::turns::tool(inout st, inout sl, n); }  // MUT:M11 => Some(n) => { crate::turns::tool(inout st, inout sl, 1); }
       None => {}
     }
   }
@@ -157,8 +153,6 @@ fn user(line: [u8], e: crate::line::Entry, txt: str, inout st: [i64], inout sl: 
   let mut a: i64 = 0;
   let mut b: i64 = len(txt);
   if q.lo >= 0 {
-    // proof guard (row 4.4d-CB): the cut points follow ASCII tag bytes, but the verifier cannot derive a char boundary from that
-    if !is_char_boundary(txt, q.lo) || !is_char_boundary(txt, q.hi) { return -1; }
     a = q.lo; b = q.hi;  // MUT:M08 => let t2: crate::text::Span = crate::text::trim_span(subview(txt, q.lo, q.hi)); a = q.lo + t2.lo; b = q.lo + t2.hi;
   } else {
     // hand: prompt_index is read only when there is no query tag
