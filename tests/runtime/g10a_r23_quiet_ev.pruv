@@ -1,0 +1,32 @@
+// L-gaps 14 (4.4v-SN): a proc_spawn_quiet process in an event loop. Stream 2 is at end of file from the start, so
+// the loop ends on the end event (not a wait timeout) once stdout is drained; the child's 4 MiB of stderr never reaches the loop or this process's stderr.
+fn quiet_ev(child: str, nerr: str, nout: str) -> i64 ! async, net, proc, alloc {
+ let mut a: ProcessArgs = proc_args_new();
+ a = proc_args_push(move a, "errout");
+ a = proc_args_push(move a, nerr);
+ a = proc_args_push(move a, nout);
+ let p: Process = proc_spawn_quiet(child, a, "");
+ let mut l: Loop = ev_new(2);
+ l = ev_add_process(move l, move p);
+ if !ev_ok(l) { let r0: Result<i64> = ev_close(move l); return 100; }
+ l = ev_proc_close_stdin(move l, 0);
+ let mut done: bool = false; let mut rounds: i64 = 10000; let mut out: i64 = 0; let mut err: i64 = 0;
+ while !done && rounds > 0 decreases rounds {
+  l = ev_wait(move l, 2000);
+  if ev_event_kind(l) == 1 {
+   l = ev_proc_read(move l, 0, 1, 65536);
+   out = out + ev_size(l);
+   l = ev_proc_read(move l, 0, 2, 65536);
+   err = err + ev_size(l);
+  } else { done = true; }
+  rounds = rounds - 1;
+ }
+ let kind: i64 = ev_event_kind(l);
+ l = ev_proc_wait(move l, 0);
+ let code: i64 = ev_exit(l);
+ let r: Result<i64> = ev_close(move l);
+ if err != 0 { return 1; }
+ if kind == 0 { return 2; }
+ if code != 0 { return 300 + code; }
+ return out;
+}

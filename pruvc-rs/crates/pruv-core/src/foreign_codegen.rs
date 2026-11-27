@@ -811,8 +811,8 @@ impl ForeignGen {
                 body.extend(self.ens_line("pruv_r >= 0 && (pruv_r as u64) <= (1u64 << 40)", "0 <= result && result <= 2^40"));
                 Ok(self.fn_text(name, &format!("a: &{}", A), Some("i64"), &with(body, "pruv_r")))
             }
-            "proc_spawn" => {
-                let mut body = vec![format!("let pruv_r: {} = pruv_proc_spawn(program, args, cwd);", P)];
+            "proc_spawn" | "proc_spawn_quiet" => {
+                let mut body = vec![format!("let pruv_r: {} = pruv_{}(program, args, cwd);", P, op)];
                 body.extend(self.ens_line(
                     "if pruv_r.error == 0 { pruv_r.stdin_open } else { (pruv_r.error == 1 || pruv_r.error == 2) && pruv_proc_wf(&pruv_r) }",
                     "ok(result) && open(result) || !ok(result) && !open(result) && (err(result) == 1 || err(result) == 2)",

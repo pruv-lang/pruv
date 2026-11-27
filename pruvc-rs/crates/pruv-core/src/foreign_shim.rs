@@ -18,7 +18,7 @@ use crate::foreign::{is_catalog, is_catalog_contract_only, FILE_OBSERVERS, NET_O
 use crate::gtype::{encode, GType};
 use crate::llvmgen::{expr_ty, is_collection, is_owned_result, native_vec_call_elem};
 use crate::typeinfo::{uses_array_type, uses_str};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 type R<T> = Result<T, String>;
 
@@ -710,7 +710,7 @@ fn proc_adapter(sym: &str, helper: &str, op: &str) -> R<String> {
             return Ok(fn_text(sym, "a: PruvH", Some("i64"),
                 &format!("pruv_g6_guard(|| {}(pruv_g6_ref::<{}>(a)))", helper, a_ty)));
         }
-        "proc_spawn" => {
+        "proc_spawn" | "proc_spawn_quiet" => {
             return Ok(fn_text(sym, "p: *const u8, n: i64, a: PruvH, q: *const u8, m: i64", Some("PruvH"), &format!(
                 "pruv_g6_guard(|| {{ let pruv_prog: &str = pruv_g6_str(p, n); let pruv_cwd: &str = pruv_g6_str(q, m); \
                  pruv_g6_new({}(pruv_prog, pruv_g6_ref::<{}>(a), pruv_cwd)) }})", helper, a_ty)));
@@ -938,6 +938,50 @@ fn coll_adapters(t: &GType) -> R<String> {
     Ok(out)
 }
 
+/// `pruv_g6_v1_vswap__<C>` / `pruv_g6_v1_vreplace__<C>` of the element type key `key` (a `Vec<i64>` / `Vec<bool>`)
+pub fn vec_elem_mem_sym(op: &str, key: &str) -> R<String> {
+    Ok(format!("{}{}__{}", PREFIX, op, cname(&parse_key(key)?)?))
+}
+
+/// L-gaps 14 (P10-M1): sorted keys of the `Vec<i64>` / `Vec<bool>` whose element is a `swap` / `replace` place
+pub fn vec_elem_mem_keys(prog: &Program) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for f in &prog.functions {
+        walk_stmts(&f.body, &mut |n| {
+            if let Node::Expr(Expr::Call(c)) = n {
+                if (c.name == "swap" || c.name == "replace") && c.inst.is_none() {
+                    if let Some(Expr::InoutArg(x)) = c.args.first() {
+                        if let Expr::Index(ix) = &*x.expr {
+                            if let Some(k) = expr_ty(&ix.array) {
+                                if crate::gtype::key_is_scalar_vec(k) {
+                                    out.insert(k.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+    out
+}
+
+fn vec_elem_mem_adapters(t: &GType) -> R<String> {
+    let c = rty_t(t);
+    let e = t.args.first().ok_or_else(|| "list index out of range".to_string())?;
+    let at = "let pruv_v: &mut ::std::vec::Vec<_> = { if h.is_null() { pruv_g6_repr(\"null handle\") } \
+              unsafe { &mut *(h as *mut CT) } }; \
+              let pruv_n: usize = pruv_v.len(); \
+              let pruv_k = |x: i64| -> usize { if x >= 0 && (x as u64) < (pruv_n as u64) { x as usize } else { pruv_g6_repr(\"index\") } };"
+        .replace("CT", &c);
+    let mut out = fn_text(&format!("{}vswap__{}", PREFIX, cname(t)?), "h: PruvH, i: i64, j: i64", None,
+        &format!("pruv_g6_guard(|| {{ {} pruv_v.swap(pruv_k(i), pruv_k(j)); }})", at));
+    out.push_str(&fn_text(&format!("{}vreplace__{}", PREFIX, cname(t)?), "h: PruvH, i: i64, x: i64", Some("i64"),
+        &format!("pruv_g6_guard(|| {{ {} let pruv_x = {}; let pruv_r = ::std::mem::replace(&mut pruv_v[pruv_k(i)], pruv_x); {} }})",
+            at, cin(e, "x"), cout(e, "pruv_r"))));
+    Ok(out)
+}
+
 fn string_bytes_adapter() -> String {
     fn_text(
         STRING_BYTES_SYM,
@@ -1080,6 +1124,10 @@ pub fn build_shim(
     }
     for t in colls.values() {
         adapters.push(coll_adapters(t)?);
+    }
+    // L-gaps 14 (P10-M1): element swap / replace of a `Vec<i64>` / `Vec<bool>`, only for the vecs the program uses so
+    for key in vec_elem_mem_keys(prog) {
+        adapters.push(vec_elem_mem_adapters(&parse_key(&key)?)?);
     }
     // Clone adapters follow all collection adapters, ordered by their symbol suffix.
     for t in colls.values() {

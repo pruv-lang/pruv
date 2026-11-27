@@ -110,6 +110,7 @@ failure state.
 |---|---|---|
 | `proc_spawn(program: str, args: ProcessArgs, cwd: str) -> Process` | `proc, alloc` | no requires. Success: `ok(result) && open(result)`. Failure: `!ok(result) && !open(result)` with error 1 or 2. Both public buffers empty, both EOFs false |
 | `proc_spawn_env(program: str, args: ProcessArgs, cwd: str, env_names: ProcessArgs, env_values: ProcessArgs) -> Process` | `proc, alloc` | same contract as `proc_spawn` (no requires; success `ok && open`, failure `!ok && !open` with error 1 or 2, buffers empty, EOFs false). All parameters borrowed. The child inherits the parent environment, then `(names[i], values[i])` are set in order; see §8b |
+| `proc_spawn_quiet(program: str, args: ProcessArgs, cwd: str) -> Process` | `proc, alloc` | same contract as `proc_spawn`; the child's stderr is the null device (`Stdio::null()`), stream 2 is empty and at end of file at the first read (L-gaps 14, SPEC R-6l-3) |
 | `proc_write_str(take p: Process, text: str) -> Process` | `proc, alloc` | requires `ok(p) && open(p)`; writes all UTF-8 bytes; on success the observed state is preserved |
 | `proc_write_bytes(take p: Process, data: [u8]) -> Process` | `proc, alloc` | same requires; writes all bytes; on success the observed state is preserved |
 | `proc_close_stdin(take p: Process) -> Process` | `proc, alloc` | requires `ok(p) && open(p)`; ensures `!open(result)`; on success buffers and EOFs are preserved |

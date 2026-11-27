@@ -1,0 +1,10 @@
+fn first_down(n: i64) -> i64
+  requires 0 <= n && n <= 100
+  ensures result == n
+{
+  let mut r: i64 = 0;
+  for i in (0..n).rev() invariant 0 <= i && i <= n {
+    r = i;
+  }
+  return r;
+}

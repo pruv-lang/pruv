@@ -1,0 +1,10 @@
+{
+  "gen_contains": ["v.swap((i) as usize, (j) as usize)", "::std::mem::replace(unsafe { v.get_unchecked_mut("],
+  "run": {
+    "backends": ["rust", "llvm"],
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["74321101"],
+    "alloc_balance": true
+  }
+}

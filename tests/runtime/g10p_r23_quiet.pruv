@@ -1,0 +1,83 @@
+// L-gaps 14 (4.4v-SN): proc_spawn_quiet hands the child's stderr to the null device. The child's stderr bytes never
+// reach the parent (stream 2 is empty and at end of file after a read or proc_read_all) and never reach the parent's
+// own stderr; stdout and the exit status are as with proc_spawn. A large stderr write cannot block the child.
+fn abort_with(take p: Process, base: i64) -> i64 ! proc, alloc
+  requires base >= 0 && base <= 1000000
+{
+  let e: i64 = proc_error(p);
+  let r: Result<i64> = proc_wait(move p);
+  return base + e;
+}
+
+fn pattern_ok(p: Process, stream: i64) -> bool
+  requires stream == 1 || stream == 2
+{
+  let n: i64 = proc_size(p, stream);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n
+    decreases n - i
+  {
+    if proc_byte(p, stream, i) != (i * 31 + stream * 7 + 5) % 251 { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// errout nerr nout with stderr to null; read stream 2 first (it ends at once), then close stdin and read the rest
+fn quiet_run(child: str, nerr: str, nout: str, want_out: i64) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "errout");
+  args = proc_args_push(move args, nerr);
+  args = proc_args_push(move args, nout);
+  let mut p: Process = proc_spawn_quiet(child, args, "");
+  if !proc_ok(p) { return abort_with(move p, 100); }
+  let mut rounds: i64 = 1000;
+  while rounds > 0 && proc_ok(p) && !proc_eof(p, 2)
+    invariant 0 <= rounds
+    decreases rounds
+  {
+    p = proc_read(move p, 2, 65536);
+    if proc_ok(p) && proc_size(p, 2) != 0 { return abort_with(move p, 900); }
+    rounds = rounds - 1;
+  }
+  if !proc_ok(p) { return abort_with(move p, 300); }
+  if !proc_eof(p, 2) { return abort_with(move p, 310); }
+  if !proc_stdin_open(p) { return abort_with(move p, 320); }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) { return abort_with(move p, 200); }
+  p = proc_read_all(move p);
+  if !proc_ok(p) { return abort_with(move p, 400); }
+  let got_out: i64 = proc_size(p, 1);
+  let good: bool = pattern_ok(p, 1) && proc_size(p, 2) == 0 && proc_eof(p, 1) && proc_eof(p, 2);
+  let r: Result<i64> = proc_wait(move p);
+  if got_out != want_out { return 1; }
+  if !good { return 3; }
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 600 + code; }
+  }
+}
+
+// the exit status comes through unchanged
+fn quiet_exit(child: str, code: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "exit");
+  args = proc_args_push(move args, code);
+  let p: Process = proc_spawn_quiet(child, args, "");
+  if !proc_ok(p) { return abort_with(move p, 100); }
+  let r: Result<i64> = proc_wait(move p);
+  match r {
+    Ok(v) => { return v; }
+    Err(c) => { return 600 + c; }
+  }
+}
+
+// a missing program fails like proc_spawn (error 2), and an empty one is input error 1
+fn quiet_bad(program: str) -> i64 ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let p: Process = proc_spawn_quiet(program, args, "");
+  let e: i64 = proc_error(p);
+  let r: Result<i64> = proc_wait(move p);
+  return e;
+}

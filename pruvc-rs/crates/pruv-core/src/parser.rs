@@ -241,6 +241,38 @@ fn for_index_rewrite(e: &mut Expr, binder: &str, counter: &str) {
     }
 }
 
+/// L-gaps 14 (4.4t-RV): in a `(a..b).rev()` invariant the binder names the hidden counter (the low end of the
+/// visited part); a quantifier that rebinds the name keeps its own.
+fn for_var_rewrite(e: &mut Expr, binder: &str, counter: &str) {
+    if let Expr::Var(v) = e {
+        if v.name == binder {
+            v.name = counter.to_string();
+        }
+        return;
+    }
+    if let Expr::Quant(q) = e {
+        if q.var == binder {
+            return;
+        }
+    }
+    let mut go = |x: &mut Expr| for_var_rewrite(x, binder, counter);
+    match e {
+        Expr::Unary(u) => go(&mut u.operand),
+        Expr::Binary(b) => { go(&mut b.left); go(&mut b.right); }
+        Expr::Call(c) => c.args.iter_mut().for_each(go),
+        Expr::Index(i) => { go(&mut i.array); go(&mut i.index); }
+        Expr::Ctor(c) => if let Some(a) = c.arg.as_mut() { go(a) },
+        Expr::Quant(q) => { go(&mut q.lo); go(&mut q.hi); go(&mut q.body); q.triggers.iter_mut().for_each(go); }
+        Expr::StructLit(l) => l.fields.iter_mut().for_each(|f| go(&mut f.value)),
+        Expr::EnumCtor(c) => c.args.iter_mut().for_each(go),
+        Expr::FieldAccess(f) => go(&mut f.base),
+        Expr::IsVariant(v) => go(&mut v.value),
+        Expr::VariantField(v) => go(&mut v.value),
+        Expr::InoutArg(a) => go(&mut a.expr),
+        _ => {}
+    }
+}
+
 /// P7: the closed evaluator of module constants.
 struct ConstEval<'a> {
     decls: &'a [(Tok, &'static intwidth::IntWidth, Expr)],
@@ -3267,6 +3299,37 @@ impl Parser {
 
     /// P4: a `for` bound or iterated place. An uppercase binding followed by the body block is a variable, not a
     /// struct literal.
+    /// L-gaps 14 (4.4t-RV): the head is `( .. ) . rev ( )` with a top-level `..` inside the parentheses.
+    fn for_rev_head(&self) -> bool {
+        if !self.at("(", 0) {
+            return false;
+        }
+        let (mut depth, mut k, mut range) = (0usize, 0usize, false);
+        loop {
+            let t = self.peek(k);
+            if t.kind == Kind::Eof {
+                return false;
+            }
+            if t.kind != Kind::Op {
+                k += 1;
+                continue;
+            }
+            match t.val.as_str() {
+                "(" | "[" | "{" => depth += 1,
+                ")" | "]" | "}" => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                ".." if depth == 1 => range = true,
+                _ => {}
+            }
+            k += 1;
+        }
+        range && self.at(".", k + 1) && self.at_ident("rev", k + 2) && self.at("(", k + 3) && self.at(")", k + 4)
+    }
+
     fn for_operand(&mut self) -> R<Expr> {
         let name = self.peek(0);
         if name.kind == Kind::Id && is_upper(&name.val) && !self.consts.contains_key(&name.val) && (self.at("{", 1) || self.at("invariant", 1)) {
@@ -3295,8 +3358,17 @@ impl Parser {
     /// bounds; the checker also makes `i` read-only in the body except for the synthesized step, holds `v` read-only,
     /// and turns a `Vec` element read into `vec_get`. The `if true` scope drops the hidden names after the loop.
     fn for_loop(&mut self, l: i64, c: i64, var: Tok) -> R<Stmt> {
+        let rev = self.for_rev_head();
+        if rev {
+            self.bump();
+        }
         let first = self.for_operand()?;
         let range = self.at("..", 0);
+        if rev && !range {
+            return Err(PruvError::new("parse", l, c, "for_iterable",
+                "`.rev()` in a for loop takes a half-open range `(a..b).rev()`",
+                "iterator adapters over slices and Vecs are not available yet (bundle P15)"));
+        }
         let end = if range {
             self.bump();
             if self.at("=", 0) {
@@ -3308,6 +3380,13 @@ impl Parser {
         } else {
             None
         };
+        if rev {
+            self.expect_tok(")")?;
+            self.expect_tok(".")?;
+            self.bump(); // `rev`, seen by for_rev_head
+            self.expect_tok("(")?;
+            self.expect_tok(")")?;
+        }
         let mut user_invs = Vec::new();
         while self.at("invariant", 0) {
             self.bump();
@@ -3336,6 +3415,17 @@ impl Parser {
         // R-6q-2: a slice loop also keeps `len(P) == E`, so a write to a sibling place (not P) cannot lose the bound
         let mut len_inv = None;
         let (counter, lower) = match end {
+            Some(end) if rev => {
+                // L-gaps 14 (4.4t-RV): `for i in (a..b).rev()` counts a hidden K down from E; the body binds
+                // `i = K - 1`, so it runs for i = b-1 .. a (the loop is entered only when S < K)
+                let start_name = format!("__pruv_for_start_{l}_{c}");
+                let counter = format!("__pruv_for_r_{l}_{c}");
+                lets.push(let_(&start_name, false, first, l, c));
+                lets.push(let_(&end_name, false, end, l, c));
+                lets.push(let_(&counter, true, var_(&end_name), l, c));
+                body.insert(0, let_(&var.val, false, bin("-", var_(&counter), lit("1")), var.line, var.col));
+                (counter, var_(&start_name))
+            }
             Some(end) => {
                 let start_name = format!("__pruv_for_start_{l}_{c}");
                 lets.push(let_(&start_name, false, first, l, c));
@@ -3369,11 +3459,13 @@ impl Parser {
             }
         };
         body.push(Stmt::Assign(Assign {
-            line: l, col: c, name: counter.clone(), value: bin("+", var_(&counter), lit("1")), deref: false,
+            line: l, col: c, name: counter.clone(), value: bin(if rev { "-" } else { "+" }, var_(&counter), lit("1")), deref: false,
         }));
         let i = || var_(&counter);
         let e = || var_(&end_name);
-        let mut invariants = vec![if range {
+        let mut invariants = vec![if rev {
+            bin("&&", bin("<=", i(), e()), bin("||", bin("<=", lower.clone(), i()), bin("==", i(), e())))
+        } else if range {
             bin("&&", bin("<=", lower.clone(), i()), bin("||", bin("<=", i(), e()), bin("==", i(), lower.clone())))
         } else {
             bin("&&", bin("<=", lower.clone(), i()), bin("<=", i(), e()))
@@ -3382,12 +3474,19 @@ impl Parser {
         for mut inv in user_invs {
             if !range {
                 for_index_rewrite(&mut inv, &var.val, &counter);
+            } else if rev {
+                for_var_rewrite(&mut inv, &var.val, &counter);
             }
             invariants.push(inv);
         }
+        let (cond, decreases) = if rev {
+            (bin("<", lower.clone(), i()), bin("-", i(), lower.clone()))
+        } else {
+            (bin("<", i(), e()), bin("-", e(), i()))
+        };
         lets.push(Stmt::While(While {
-            line: l, col: c, cond: bin("<", i(), e()), invariants, decreases: bin("-", e(), i()), body,
-            for_head: Some(ForHead { var: var.val, counter, slice: !range }), label: None,
+            line: l, col: c, cond, invariants, decreases, body,
+            for_head: Some(ForHead { var: var.val, counter, slice: !range, rev }), label: None,
         }));
         Ok(Stmt::If(If { line: l, col: c, cond: Expr::BoolLit(BoolLit { line: l, col: c, value: true, ty: None }),
             then: lets, els: Vec::new() }))

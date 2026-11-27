@@ -1,0 +1,11 @@
+{
+  "g6_drop_balance": true,
+  "flags_matrix": [
+    [],
+    ["--foreign-checks", "all"],
+    ["--no-verify"]
+  ],
+  "exit": 0,
+  "gen_contains": ["fn pruv_proc_spawn_quiet", "pruv_g6_proc_spawn_quiet", "::std::process::Stdio::null()"],
+  "stderr_absent": "2Qp"
+}

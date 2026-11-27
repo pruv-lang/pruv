@@ -535,6 +535,7 @@ must_reject|tests/must_reject/g10p_loop_outer.pruv	1 case: obl=0 1	--infer=a737e
 must_reject|tests/must_reject/g10p_main_signature.pruv	1 case: obl=0 1	--infer=ffbdb7ff0cf9
 must_reject|tests/must_reject/g10p_missing_proc_effect.pruv	1 case: obl=0 1	--infer=b8f09b395e2c
 must_reject|tests/must_reject/g10p_one_branch.pruv	1 case: obl=0 1	--infer=ef0cf2e484a9
+must_reject|tests/must_reject/g10p_quiet_unconsumed.pruv	1 case: obl=0 1	--infer=c1c57af457b0
 must_reject|tests/must_reject/g10p_use_after_move.pruv	1 case: obl=0 1	--infer=95a4de076feb
 must_reject|tests/must_reject/g10p_v_bad_index.pruv	1 case: obl=3 1	--infer=b2609fc9e548
 must_reject|tests/must_reject/g10p_v_bad_max.pruv	1 case: obl=3 1	--infer=f291a94d2d9c
@@ -551,6 +552,7 @@ must_reject|tests/must_reject/g10p_v_havoc_size.pruv	1 case: obl=31 1	--infer=4c
 must_reject|tests/must_reject/g10p_v_kill_zero.pruv	1 case: obl=1 1	--infer=5fa4dca8e2c7
 must_reject|tests/must_reject/g10p_v_loop_eof.pruv	1 case: obl=21 1	--infer=c6715da77d7e
 must_reject|tests/must_reject/g10p_v_output_content.pruv	1 case: obl=6 1	--infer=66b1448c6684
+must_reject|tests/must_reject/g10p_v_quiet_unchecked.pruv	1 case: obl=1 1	--infer=ba61a66e66fe
 must_reject|tests/must_reject/g10p_v_read_unconfirmed.pruv	1 case: obl=3 1	--infer=05dd8ac11e03
 must_reject|tests/must_reject/g10p_v_spawn_equal.pruv	1 case: obl=1 1	--infer=80c38bcfd78f
 must_reject|tests/must_reject/g10p_v_write_after_close.pruv	1 case: obl=2 1	--infer=dc7b1aaebd59
@@ -1692,6 +1694,7 @@ runtime|tests/runtime/g10a_r19_requires_exit.pruv	1 case: obl=181 1	--infer=bc8c
 runtime|tests/runtime/g10a_r20_fairness.pruv	1 case: obl=55 1	--infer=bb273ff39696
 runtime|tests/runtime/g10a_r21_backpressure.pruv	1 case: obl=207 1	--infer=4421e55a1489
 runtime|tests/runtime/g10a_r22_copy_contract.pruv	1 case: obl=44 1	--infer=4d9ccc5d6948
+runtime|tests/runtime/g10a_r23_quiet_ev.pruv	1 case: obl=67 1	--infer=2d47f8555bff
 runtime|tests/runtime/g10a_r23_wait_for.pruv	1 case: obl=385 1	--infer=0a6d1ab0abfc
 runtime|tests/runtime/g10a_r24_write_for.pruv	1 case: obl=529 1	--infer=a3a5369365e8
 runtime|tests/runtime/g10a_r25_write_hook.pruv	1 case: obl=529 1	--infer=43aba3a32124
@@ -1735,6 +1738,7 @@ runtime|tests/runtime/g10p_r19_requires_off.pruv	1 case: obl=33 1	--infer=242eb7
 runtime|tests/runtime/g10p_r20_hook_setup_late.pruv	1 case: obl=6 1	--infer=6c9f34bc1024
 runtime|tests/runtime/g10p_r21_copy_contract.pruv	1 case: obl=38 1	--infer=660833ba4155
 runtime|tests/runtime/g10p_r22_env.pruv	1 case: obl=59 1	--infer=6775fb4b0408
+runtime|tests/runtime/g10p_r23_quiet.pruv	1 case: obl=68 1	--infer=381ceba627c8
 runtime|tests/runtime/g1_r01_copy.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 runtime|tests/runtime/g1_r02_nested.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 runtime|tests/runtime/g1_r03_variants.pruv	1 case: obl=0 1	--infer=a887fdcb74d6

@@ -2164,7 +2164,10 @@ borrowed value is live.
   a literal or arithmetic on them that does not mention `v`). Both elements of a `swap` are of the same array
   (two arrays: `type/inout_argument`). An index or the `replace` value that mentions `v` is `type/inout_alias`;
   any other operand of the same statement that mentions `v` is `type/inout_context`; a live view of `v` is
-  `type/borrow_conflict`.
+  `type/borrow_conflict`. An element of a `let mut` `Vec<i64>` / `Vec<bool>` local or `inout` parameter is a place
+  the same way (L-gaps 14; hand Rust `v.swap(i, j)` / `std::mem::replace(&mut v[i], x)`) with the same index,
+  alias and same-`Vec` rules; an element of any other `Vec<T>` is `type/inout_argument` (move it out with
+  `vec_take` / `vec_at_mut` instead).
   - *Proof.* Here `old` is the value just before the call. After `swap`, `P == old(Q)` and `Q == old(P)` (lengths and bytes of owned values included); after
     `replace`, the result is `old(P)` and `P == e`. There is no obligation of its own; a refined local passed as a place must satisfy its range after the call
     (`verify/refinement_assign`, as for any `inout` argument). An element place stores into the array: each index
@@ -2175,7 +2178,9 @@ borrowed value is live.
   - *Code.* Rust: `::std::mem::swap(&mut P, &mut Q)` / `::std::mem::replace(&mut P, e)` (an array place is the whole
     `&mut Vec<T>`, so an `inout` array parameter passed to them is resizable). Element places: `v.swap(i, j)` and
     `::std::mem::replace(unsafe { v.get_unchecked_mut(i) }, e)` when verified; with `--no-verify` the indexes are
-    checked (`pruv_idx`, `pruv_get` / `pruv_set`). LLVM: the places are read and written
+    checked (`pruv_idx`, `pruv_get` / `pruv_set`; for a `Vec` element `pruv_idx` before `std::mem::replace`). LLVM: a
+    `Vec` element place calls the shim's `vswap__<C>` / `vreplace__<C>` adapters of that `Vec` (emitted only for a
+    program that uses them), after the `len` bounds guards with `--no-verify`; other places are read and written
     in their storage form (a local slot, or the field's storage), so nothing is allocated or freed (an old value used in place is dropped with the statement's temporaries); output and
     allocation balance match the Rust backend.
   - Tests: [scalars, `[u8]` locals, `inout` parameters, struct fields, whole structs, `String`](tests/spec/lgaps5_mem.pruv),
@@ -2199,7 +2204,15 @@ borrowed value is live.
     [`[u8]` element out of range](tests/spec/lgaps8_replace_index_elem.pruv),
     [a refined element out of range](tests/spec/lgaps8_replace_index_refine.pruv),
     [a live view of the array](tests/spec/lgaps8_replace_index_view.pruv) and
-    [elements of two arrays](tests/spec/lgaps8_swap_index_arrays.pruv).
+    [elements of two arrays](tests/spec/lgaps8_swap_index_arrays.pruv);
+    `Vec` element places [`Vec<i64>`, `Vec<bool>` and an `inout` parameter](tests/spec/lgaps14_vec_mem.pruv), rejects
+    [indexes not proven different](tests/spec/lgaps14_vec_swap_alias.pruv),
+    [one element twice](tests/spec/lgaps14_vec_swap_same.pruv),
+    [index out of range](tests/spec/lgaps14_vec_replace_oob.pruv),
+    [a `replace` value that reads the `Vec`](tests/spec/lgaps14_vec_replace_alias.pruv),
+    [elements of two `Vec`s](tests/spec/lgaps14_vec_swap_two.pruv),
+    [a `Vec<String>` element](tests/spec/lgaps14_vec_replace_elem.pruv) and
+    [an immutable `Vec`](tests/spec/lgaps14_vec_replace_immutable.pruv).
 
 - R-6g9-13 **Total view length of a list (4.4k-VS, L-gaps 6).** `vec_views_len::<ref T>(parts, k)` with `T` the
   list's own element (`str` or `[u8]`) and `k: i64` is the byte length of the first `k` views of an R-6g9-10/11 list,
@@ -2497,6 +2510,7 @@ UTF-8 arguments with the same placement rules, affine with auto-drop; an argumen
 | `proc_args_new() -> ProcessArgs`, `proc_args_push(take a, arg: str) -> ProcessArgs` | alloc | build the list; `proc_args_len` counts it; push requires `proc_args_len(a) < 2^40` and adds one (R-6l-2) |
 | `proc_spawn(program: str, args: ProcessArgs, cwd: str) -> Process` | proc, alloc | no requires; ok and stdin open, or not ok with error 1 or 2. `cwd == ""` inherits |
 | `proc_spawn_env(program: str, args: ProcessArgs, cwd: str, env_names: ProcessArgs, env_values: ProcessArgs) -> Process` | proc, alloc | same contract as `proc_spawn`; the child inherits the parent environment, then the pairs are set in order (last wins, no removal); unequal counts, empty name, `=` or NUL in a name, NUL in a value: error 1 |
+| `proc_spawn_quiet(program: str, args: ProcessArgs, cwd: str) -> Process` | proc, alloc | same contract as `proc_spawn`; the child's stderr is the null device, so stream 2 holds no bytes and reaches end of file at the first read (R-6l-3) |
 | `proc_write_str/write_bytes(take p, ...) -> Process` | proc, alloc | requires ok and stdin open; writes everything |
 | `proc_close_stdin(take p) -> Process` | proc, alloc | requires ok and stdin open; ensures stdin closed |
 | `proc_read(take p, stream: i64, max: i64) -> Process` | proc, alloc | requires ok, stream 1 or 2, `1 <= max <= 2^40` (R-6l-1); next chunk of at most `max` bytes; EOF iff the chunk is empty |
@@ -2518,6 +2532,16 @@ operation. Protocol deadlocks, timeouts and process trees are not handled.
 - R-6l-2 `proc_args_push(take a, arg)` requires `proc_args_len(a) < 2^40` and ensures the count is one more; a
   push whose count bound is not proved is `verify/call_requires`. Tests:
   [accept](tests/spec/r6l_2_args_push_ok.pruv), [reject](tests/spec/r6l_2_args_push_unbounded.pruv).
+- R-6l-3 `proc_spawn_quiet(program, args, cwd)` (L-gaps 14) spawns like `proc_spawn` but hands the child's stderr to
+  the null device: nothing the child writes there reaches the parent's buffers or the parent's own stderr, and a
+  large stderr write never blocks the child. Stream 2 is an empty stream: `proc_read(p, 2, max)` adds no bytes and
+  sets `proc_eof(p, 2)`, and `proc_read_all` leaves `proc_size(p, 2) == 0`. The verifier gives it the `proc_spawn`
+  contract (it does not assume the empty stream), and the handle is must-consume. In an event loop
+  (`ev_add_process`) stream 2 is at end of file from the start, so the end event comes once stdout is drained.
+  Code: both backends share `pruv_proc_spawn_in` with `Stdio::null()` for stderr; LLVM
+  calls the shim `pruv_g6_proc_spawn_quiet`. Tests: [accept](tests/spec/r6l_3_quiet_ok.pruv), [reject](tests/spec/r6l_3_quiet_unchecked.pruv),
+  [runtime](tests/runtime/g10p_r23_quiet.pruv), [event loop](tests/runtime/g10a_r23_quiet_ev.pruv),
+  [leaked handle](tests/must_reject/g10p_quiet_unconsumed.pruv), [unchecked write](tests/must_reject/g10p_v_quiet_unchecked.pruv).
 
 ```
 pub fn version(program: str, cwd: str) -> Result<i64> ! proc, alloc
@@ -2801,6 +2825,16 @@ write-back, invariants and the cost bound take the `while` path. `for` is contex
   `a[i]` in the body is an unchecked read. Tests: [accept](tests/spec/r6q_1_accept.pruv),
   [reject](tests/spec/r6q_1_reject.pruv), [false contract](tests/spec/r6q_1_reject_contract.pruv),
   [runtime](tests/runtime/p4_rt_for.pruv).
+  **Reverse ranges** (L-gaps 14): `for i in (a..b).rev() invariant <bool>* { body }` runs `body` for
+  `i = b-1, b-2, .., a` and not at all when `a >= b`; bounds, typing, evaluation order and the read-only `i` are as
+  above. In the body the verifier knows `a <= i < b`, as for a forward range. In an invariant `i` names the low end of
+  the part already visited: `b` before the first iteration, the last body value after each step, and `min(a, b)`
+  after the loop (joined with each `break`); the generated measure is `i - a`. Only a half-open range takes `.rev()`;
+  `(P).rev()` over a slice or `Vec` place and `(a..=b).rev()` are `parse/for_iterable`. Code: Rust emits
+  `for i in (a..b).rev() { .. }` and LLVM the counted `while` loop stepping down. Tests:
+  [accept and runtime](tests/spec/lgaps14_for_rev.pruv), [false contract](tests/spec/lgaps14_for_rev_contract.pruv),
+  [invariant](tests/spec/lgaps14_for_rev_invariant.pruv), [index](tests/spec/lgaps14_for_rev_oob.pruv),
+  [assignment](tests/spec/lgaps14_for_rev_assign.pruv), [slice](tests/spec/lgaps14_for_rev_slice.pruv).
 - R-6q-2 **Slice and Vec loops.** `for x in P invariant <bool>* { body }` iterates the elements of a place `P` (a
   local or parameter, or a field path of one) of type `[i64]`, `[u8]`, `[u16]`, `[bool]`, `ref [T]` of those, or
   `Vec<T>` with `T` an integer type or `bool`, or a fixed array `[T; N]` (P7-1 B, a local, parameter or struct field;
@@ -2819,8 +2853,8 @@ write-back, invariants and the cost bound take the `while` path. `for` is contex
   [Vec runtime](tests/runtime/p4_rt_for_vec.pruv), [layout and sibling runtime](tests/runtime/p4_rt_for_layout.pruv),
   [builtin write](tests/must_reject/p4_for_store_be.pruv), [place binding](tests/must_reject/p4_for_place_bind.pruv).
 - R-6q-3 **Not yet supported.** `for (i, x) in` over an array, view or `Vec` is `type/for_enumerate` (bundle P15);
-  inclusive ranges `a..=b`, iterator expressions such as `P.iter()` and adapters (`enumerate`, `zip`, `rev`, `map`,
-  `filter`) are `parse/for_iterable` (P15); non-integer range bounds and `Vec` of other element types are
+  inclusive ranges `a..=b`, iterator expressions such as `P.iter()` and adapters (`enumerate`, `zip`, `map`,
+  `filter`, and `rev` on anything but a half-open range, R-6q-1) are `parse/for_iterable` (P15); non-integer range bounds and `Vec` of other element types are
   `type/for_iterable`; `break`/`continue` are R-6r. Map iteration stays R-6e-13.
   Tests: [reject](tests/spec/r6q_3_reject.pruv), [accept](tests/spec/r6q_3_accept.pruv), [adapter](tests/must_reject/p4_for_adapter.pruv),
   [inclusive](tests/must_reject/p4_for_inclusive.pruv), [Vec of String](tests/must_reject/p4_for_vec_string.pruv).
@@ -3942,7 +3976,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/decreases_syntax` | parse | a malformed, empty or repeated `decreases` clause |
 | `parse/element_storage_type` | parse | `u8` used outside an array element type |
 | `parse/for_decreases` | parse | a `for` loop with a `decreases` clause; the measure is generated (R-6q-1) |
-| `parse/for_iterable` | parse | a `for` head other than `a..b` or a slice/Vec place, such as `a..=b` or `a.iter()` (R-6q-3) |
+| `parse/for_iterable` | parse | a `for` head other than `a..b`, `(a..b).rev()` or a slice/Vec place, such as `a..=b` or `a.iter()` (R-6q-3) |
 | `parse/foreign_syntax` | parse | a malformed `trusted rust fn` declaration |
 | `parse/generic_syntax` | parse | a malformed type parameter list or type argument list, or type arguments of an impl function path in the wrong place (R-6x-1) |
 | `parse/impl_syntax` | parse | a malformed or unsupported impl block (a specialized generic impl, a repeated block type parameter, trait or path impl, a non-`fn` item, a function name starting with `_`, an unclosed block) or a typed receiver (R-6x-1, R-6x-2) |

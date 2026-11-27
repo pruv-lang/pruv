@@ -1,0 +1,8 @@
+fn f(n: i64) -> i64
+  requires 0 <= n && n <= 100
+{
+  for i in (0..n).rev() {
+    i = 0;
+  }
+  return 0;
+}

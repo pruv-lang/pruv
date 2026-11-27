@@ -1,0 +1,6 @@
+// spec: R-6g9-12 reject
+// L-gaps 14 (P10-M1): a Vec element place needs a mutable Vec.
+fn put() -> i64 ! alloc {
+  let v: Vec<i64> = vec_push::<i64>(vec_new::<i64>(), 1);
+  return replace(inout v[0], 9);
+}

@@ -656,6 +656,9 @@ pub struct ForHead {
     pub counter: String,
     /// `for x in v` over a slice or Vec (the first body statement binds `x`); false for `for i in a..b`.
     pub slice: bool,
+    /// L-gaps 14 (4.4t-RV): `for i in (a..b).rev()`; the hidden counter runs down from `b` and the first body
+    /// statement binds `i = counter - 1`.
+    pub rev: bool,
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct ForMap {

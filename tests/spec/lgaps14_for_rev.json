@@ -1,0 +1,10 @@
+{
+  "gen_contains": ["for i in (0i64..(a.len() as i64)).rev() {", "for k in (a..b).rev() {"],
+  "run": {
+    "backends": ["rust", "llvm"],
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["304605"],
+    "alloc_balance": true
+  }
+}

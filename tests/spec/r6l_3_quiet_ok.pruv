@@ -1,0 +1,10 @@
+// spec: R-6l-3 accept
+fn run(program: str) -> Result<i64> ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let mut p: Process = proc_spawn_quiet(program, args, "");
+  if proc_ok(p) {
+    p = proc_close_stdin(move p);
+    if proc_ok(p) { p = proc_read_all(move p); }
+  }
+  return proc_wait(move p);
+}
