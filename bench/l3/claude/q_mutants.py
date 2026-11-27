@@ -51,9 +51,9 @@ M5_NEW = '''let mut keep: bool = true;
                 if keep { last = copy(iso.text); }'''
 
 MUTANTS = [
- (1, 'entry.pruv', 'invert the exact-true isMeta filter in human_text',
-  'let meta: i64 = is_true(doc, root, "isMeta");\n  if meta < 0 { return Field::Defect(meta); }\n  if meta == 1 { return Field::Missing; }',
-  'let meta: i64 = is_true(doc, root, "isMeta");\n  if meta < 0 { return Field::Defect(meta); }\n  if meta == 0 { return Field::Missing; }'),
+ (1, 'entry.pruv', 'invert the exact-true isMeta filter in user_text',
+  'let meta: i64 = true_of(doc, k.meta);\n  if meta < 0 { return Field::Defect(meta); }\n  if meta == 1 { return Field::Missing; }',
+  'let meta: i64 = true_of(doc, k.meta);\n  if meta < 0 { return Field::Defect(meta); }\n  if meta == 0 { return Field::Missing; }'),
  (2, 'entry.pruv', 'remove the any-position tool_result veto (a tool_result block is just ignored)',
   'Block::Veto => { return Field::Missing; }', 'Block::Veto => {}'),
  (3, 'import.pruv', 'allow synthetic non-error replies (drop the isApiErrorMessage requirement)',

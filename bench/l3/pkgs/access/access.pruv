@@ -109,6 +109,38 @@ fn find_ascii(doc: crate::json::JsonDocument, id: i64, key: str) -> i64
   }
   return found;
 }
+// 4.4s (4.4n-KL option 3): a member cursor for reading a fixed key set in one walk over an object (hand: the
+// object's map is built in one pass, then each key costs one resolution). The caller loops
+// `j = id + 1; while j < stop { let n = member_next(..); <key_is tests, slot = j + 1>; j = n; }`, so each key of
+// its set is matched on the same pass and the last match wins, as in `field`. The checks are find_ascii's.
+// The end of object `id`'s members (its skip link), or -3 for a bad id, -2 for another kind.
+pub fn members_end(doc: crate::json::JsonDocument, id: i64) -> i64
+  ensures result >= 0 ==> (0 <= id && id < result && result <= len(doc.tape) / 6 && len(doc.tape) <= 6291456)
+{
+  if !valid(doc, id) { return -3; } if doc.tape[6 * id] != 6 { return -2; }
+  return doc.tape[6 * id + 3];
+}
+// Checks the member whose key record is `j` and returns the next key record, or -4 on a corrupt tape. On success
+// `j` is a key record of `id` and `j + 1` its value (a valid id whose parent is `id`).
+pub fn member_next(doc: crate::json::JsonDocument, id: i64, j: i64, stop: i64) -> i64
+  requires 0 <= id && id < j && j < stop && stop <= len(doc.tape) / 6
+  ensures result >= 0 ==> (j < result && result <= stop && j + 1 < len(doc.tape) / 6)
+  ensures result >= 0 ==> (doc.tape[6 * j] == 7 && doc.tape[6 * (j + 1) + 4] == id)
+{
+  if doc.tape[6 * j] != 7 || doc.tape[6 * j + 4] != id { return -4; }
+  let v: i64 = j + 1; if v >= stop || !valid(doc, v) { return -4; }
+  let next: i64 = doc.tape[6 * v + 3];
+  if next > stop || doc.tape[6 * v + 4] != id { return -4; }
+  return next;
+}
+// The key of member record `j` equals the ASCII `key` (find_ascii's test: the length / first-byte filter, then
+// the compare, escapes included).
+pub fn key_is(doc: crate::json::JsonDocument, j: i64, key: str) -> bool
+  requires 0 <= j && j < len(doc.tape) / 6
+{
+  let s: i64 = doc.tape[6 * j + 1]; let e: i64 = doc.tape[6 * j + 2];
+  return may_match(doc.source, s, e, key) && crate::jstr::ascii_equal(doc.source, s, e, key);
+}
 fn is_ascii(key: str) -> bool
 {
   let mut i: i64 = 0;
