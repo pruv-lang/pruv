@@ -37,7 +37,7 @@ fn es_trim(s: &str) -> &str {
 }
 
 /// Whitespace runs -> one space, trim, then cut to `mx` UTF-16 units on a scalar boundary.
-// Pruv: text::one_line
+// Pruv: text::one_line (one text::char_step per character)
 fn one_line(s: &str, mx: usize) -> String {
     let mut out = String::new();
     let mut pending = false;
