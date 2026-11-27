@@ -137,6 +137,26 @@ pub fn read_head(data: [u8], cut_after: bool) -> crate::boundary::ImportResult !
 }
 
 
+// hand tail_import's loop body for one parsed object, in hand order: the timestamp, then the custom title (split
+// out of tail_info's loop so doc_strings(d) is proved in a small context). Defect when the line fails.
+fn tail_object(d: crate::json::JsonDocument, inout last: [u8], inout has_at: bool) -> crate::entry::Title ! alloc
+  requires crate::json::doc_strings(d)
+  ensures is_variant(result, crate::entry::Title::Found) ==> len(variant_field(result, crate::entry::Title::Found, text)) <= 50331648
+{
+  let root: i64 = crate::access::root(d);
+  let tf: i64 = crate::access::field(d, root, "timestamp");
+  if tf < -1 { return crate::entry::Title::Defect(-4); }
+  if tf >= 0 {
+    let iso: crate::time::Iso = crate::time::iso_of(d, tf);
+    if iso.status < 0 { return crate::entry::Title::Defect(-4); }
+    if iso.status == 0 {
+      last = copy(iso.text);
+      has_at = true;
+    }
+  }
+  return crate::entry::title_of(d);
+}
+
 pub fn tail_info(data: [u8], cut_before: bool) -> crate::boundary::ImportResult ! alloc
 {
   if len(data) > crate::boundary::limit_edge_bytes() {
@@ -158,20 +178,7 @@ pub fn tail_info(data: [u8], cut_before: bool) -> crate::boundary::ImportResult 
         let line: crate::entry::Line = crate::entry::parse_line(data, start, end);
         match line {
           crate::entry::Line::Object(d) => {
-            // The title is read before the timestamp so doc_strings(d) is proved next to parse_line; either defect
-            // fails the line alike.
-            let t: crate::entry::Title = crate::entry::title_of(d);
-            let root: i64 = crate::access::root(d);
-            let tf: i64 = crate::access::field(d, root, "timestamp");
-            if tf < -1 { return fail_at(start, end, 0); }
-            if tf >= 0 {
-              let iso: crate::time::Iso = crate::time::iso_of(d, tf);
-              if iso.status < 0 { return fail_at(start, end, 0); }
-              if iso.status == 0 {
-                last = copy(iso.text);
-                has_at = true;
-              }
-            }
+            let t: crate::entry::Title = tail_object(d, inout last, inout has_at);
             match t {
               // hand: the last custom title wins
               crate::entry::Title::Found(text) => { best = move text; has_title = true; }
@@ -200,6 +207,8 @@ struct Event { kind: i64, a: i64, b: i64 }
 struct Events { records: [i64], text: [u8] }
 
 fn write_event(inout log: Events, event: Event) -> bool ! alloc
+  requires utf8_valid(log.text)
+  ensures utf8_valid(log.text)
 {
   if len(log.records) > 4294967292 { return false; }
   arr_push(inout log.records, event.kind, event.a, event.b);
@@ -207,6 +216,8 @@ fn write_event(inout log: Events, event: Event) -> bool ! alloc
 }
 
 fn write_text(inout log: Events, kind: i64, text: str) -> bool ! alloc
+  requires utf8_valid(log.text)
+  ensures utf8_valid(log.text)
 {
   let start: i64 = len(log.text);
   let n: i64 = len(text);
@@ -221,6 +232,16 @@ fn read_event(records: [i64], pos: i64) -> Event
   return Event { kind: records[pos], a: records[pos + 1], b: records[pos + 2] };
 }
 
+// R-6g-10: a byte that starts no continuation (the end, an ASCII byte or a lead byte) is a char boundary of a
+// valid UTF-8 buffer, so a span between two such bytes is lent as str with no copy and no UTF-8 pass.
+fn char_edge(b: [u8], i: i64) -> bool
+  requires 0 <= i && i <= len(b)
+  ensures result == (i == len(b) || b[i] < 128 || b[i] >= 192)
+{
+  if i == len(b) { return true; }
+  return b[i] < 128 || b[i] >= 192;
+}
+
 fn read_text(text: [u8], start: i64, n: i64) -> str ! alloc
   requires 0 <= start && start <= len(text) && 0 <= n && n <= len(text) - start
 {
@@ -231,6 +252,8 @@ fn read_text(text: [u8], start: i64, n: i64) -> str ! alloc
 // 9 selected-entry defect.
 fn record_answers(doc: crate::json::JsonDocument, c: i64, inout log: Events) -> bool ! alloc
   requires 0 <= c && c < len(doc.tape) / 6
+  requires utf8_valid(log.text)
+  ensures utf8_valid(log.text)
 {
   if len(doc.tape) > 6291456 { return false; }
   let stop: i64 = doc.tape[6 * c + 3];
@@ -238,6 +261,7 @@ fn record_answers(doc: crate::json::JsonDocument, c: i64, inout log: Events) -> 
   let mut j: i64 = c + 1;
   while j < stop
     invariant 0 <= c && c < j && j <= stop && stop <= len(doc.tape) / 6 && len(doc.tape) <= 6291456
+    invariant utf8_valid(log.text)
     decreases stop - j
   {
     let next: i64 = doc.tape[6 * j + 3];
@@ -272,6 +296,8 @@ fn record_answers(doc: crate::json::JsonDocument, c: i64, inout log: Events) -> 
 
 // hand iso(timestamp): the 24 formatted bytes go straight into the log (no str of their own).
 fn write_stamp(doc: crate::json::JsonDocument, inout log: Events) -> bool ! alloc
+  requires utf8_valid(log.text)
+  ensures utf8_valid(log.text)
 {
   let root: i64 = crate::access::root(doc);
   let tf: i64 = crate::access::field(doc, root, "timestamp");
@@ -291,6 +317,8 @@ fn write_stamp(doc: crate::json::JsonDocument, inout log: Events) -> bool ! allo
 // timestamp when the prompt is not blank; an assistant records its timestamp, model and visible parts.
 fn record_entry(doc: crate::json::JsonDocument, role: i64, inout log: Events) -> bool ! alloc
   requires crate::json::doc_strings(doc)
+  requires utf8_valid(log.text)
+  ensures utf8_valid(log.text)
 {
   let root: i64 = crate::access::root(doc);
   match role {
@@ -335,6 +363,8 @@ fn record_entry(doc: crate::json::JsonDocument, role: i64, inout log: Events) ->
 
 fn record_object(doc: crate::json::JsonDocument, role: i64, ordinal: i64, start: i64, inout log: Events) -> bool ! alloc
   requires crate::json::doc_strings(doc)
+  requires utf8_valid(log.text)
+  ensures utf8_valid(log.text)
 {
   if !write_event(inout log, Event { kind: 0, a: ordinal, b: start }) { return false; }
   if record_entry(doc, role, inout log) { return true; }
@@ -344,7 +374,7 @@ fn record_object(doc: crate::json::JsonDocument, role: i64, ordinal: i64, start:
 struct Replay { model: str, defect: i64 }
 
 fn replay(log: Events, chain: crate::chain::Chain, selected: [u8], inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> Replay ! alloc
-  requires len(log.records) <= 4294967295
+  requires len(log.records) <= 4294967295 && utf8_valid(log.text)
   requires len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && st[0] == 0 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
@@ -359,10 +389,13 @@ fn replay(log: Events, chain: crate::chain::Chain, selected: [u8], inout st: [i6
   let mut started: bool = false;
   let mut pending: bool = false;
   let mut model: str = "";
-  let mut at: str = "";
+  // hand at: Option<&str>: the stamp stays a span of log.text (at_n is 0 or 24) and is lent to begin2/answer2
+  let mut at_lo: i64 = 0;
+  let mut at_n: i64 = 0;
   while pos + 3 <= len(log.records)
     invariant 0 <= pos && pos <= len(log.records) && len(log.records) <= 4294967295 && 0 <= start
-    invariant len(at) == 0 || len(at) == 24
+    invariant (at_n == 0 || at_n == 24) && 0 <= at_lo && at_lo + at_n <= len(log.text)
+    invariant at_n == 0 || ((log.text[at_lo] < 128 || log.text[at_lo] >= 192) && (at_lo + at_n == len(log.text) || log.text[at_lo + at_n] < 128 || log.text[at_lo + at_n] >= 192))
     invariant len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[0] && st[0] <= pos && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
@@ -374,7 +407,7 @@ fn replay(log: Events, chain: crate::chain::Chain, selected: [u8], inout st: [i6
         if event.a < 0 || event.a >= len(selected) || event.b < 0 { return Replay { model: move model, defect: 0 }; }
         chosen = !chain.active || selected[event.a] == 1;
         start = event.b;
-        at = "";
+        at_n = 0;
         if chosen {
           if !started && pending { crate::turns::skip_user(inout st); }
           started = true;
@@ -397,19 +430,25 @@ fn replay(log: Events, chain: crate::chain::Chain, selected: [u8], inout st: [i6
           if event.a < 0 || event.b < 0 || event.a > len(log.text) || event.b > len(log.text) - event.a {
             return Replay { model: move model, defect: 0 };
           }
-          let text: str = read_text(log.text, event.a, event.b);
+          let lo: i64 = event.a;
+          let hi: i64 = event.a + event.b;
           match event.kind {
             4 => {
-              if len(text) != 24 { return Replay { model: move model, defect: start }; }
-              at = move text;
+              if event.b != 24 { return Replay { model: move model, defect: start }; }
+              if !char_edge(log.text, lo) || !char_edge(log.text, hi) { return Replay { model: move model, defect: 0 }; }
+              at_lo = lo;
+              at_n = 24;
             }
-            6 => { model = move text; }
+            // hand: the reply model is an owned String
+            6 => { model = read_text(log.text, event.a, event.b); }
             _ => {
-              if len(text) > 50331648 { return Replay { model: move model, defect: start }; }
+              if event.b > 50331648 { return Replay { model: move model, defect: start }; }
+              if !char_edge(log.text, lo) || !char_edge(log.text, hi) { return Replay { model: move model, defect: 0 }; }
+              // hand begin(prompt, at) / answer(text, at) borrow the entry's strings: lent views of log.text
               if event.kind == 5 {
-                crate::turns::begin2(inout st, inout sl, inout bk, text, at);
+                crate::turns::begin2(inout st, inout sl, inout bk, subview(log.text, lo, hi), subview(log.text, at_lo, at_lo + at_n));
               } else {
-                crate::turns::answer2(inout st, inout sl, inout bk, text, at);
+                crate::turns::answer2(inout st, inout sl, inout bk, subview(log.text, lo, hi), subview(log.text, at_lo, at_lo + at_n));
               }
             }
           }
@@ -430,6 +469,8 @@ fn wfail_zero() -> [u8] ! alloc
 // doc_strings(d) is proved in a small context). Found or NoTitle when recorded; Defect when the line fails.
 fn window_object(d: crate::json::JsonDocument, role: i64, ordinal: i64, start: i64, inout log: Events) -> crate::entry::Title ! alloc
   requires crate::json::doc_strings(d)
+  requires utf8_valid(log.text)
+  ensures utf8_valid(log.text)
   ensures is_variant(result, crate::entry::Title::Found) ==> len(variant_field(result, crate::entry::Title::Found, text)) <= 50331648
 {
   if role != 4 {
@@ -467,6 +508,7 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
     invariant 0 <= offset && offset <= len(data) && len(data) <= 8388608
     invariant len(index.arena) <= 8388608 && len(index.slots) <= 50331655
     invariant len(title) <= 50331648
+    invariant utf8_valid(log.text)
     decreases len(data) - offset
   {
     let step: crate::framing::Frame = crate::framing::window_next(data, offset);
