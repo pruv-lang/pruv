@@ -2518,3 +2518,37 @@ Changes `bench/l3/qwen/import.pruv` only (no compiler or package change). Detail
   `test_impl.py` 27/27, `q.py 300` 0 unexplained (317 same, P1 1, P4 4, P5 1), `q_grid.py --check` 34/34. Both hand
   crates build.
 - Open: LG-4zb-RA; claude 4.4h-VD, 4.4c-IS, 4.4h-ST.
+
+## Step 4.4za: codex spawns with a null stderr (4.4v-SN consumer), one shared receive start (4.4v-RT part)
+
+Changes `bench/l3/pkgs/transport`, `codex/rpc.pruv` and a comment in `grok/rpc.pruv` (no compiler change).
+
+- Codex `rpc::start` spawns with `proc_spawn_quiet(binary, args, cwd)` (hand `codex.rs` / `reader.rs`
+  `.stderr(Stdio::null())`): the child's stderr no longer reaches a pipe, so a large stderr write cannot block it and
+  nothing is buffered in the parent.
+- `transport`: the start shared by `receive` and `receive_tail` (scan the buffered bytes with `take`, then `wake`) is
+  one private `begin`; the two public functions now differ only in the stderr line (drop or keep in `tl`).
+- `receive` still reads stream 2 once per need-more step. Grok spawns with `proc_spawn_env` (GROK_HOME), which has no
+  quiet form, so its stderr must be drained (4.4za-EQ). For the quiet codex child the read adds no bytes, but the
+  process slot's `ev_eof` is `ends[1] && ends[0]` and `ends[1]` is set only by an explicit read of stream 2
+  (`codegen.rs` event-loop read path), so without it `fill` never sees EOF and an early child exit turns from
+  `read-failed` into `timeout` (found by the structure review and reproduced before the fix: codex rs/rust 132/136, `list_init_exit`,
+  `list_exit_early`, `read_meta_exit`, `read_turns_exit` gave `timeout` instead of `read-failed`; 4.4za-QE).
+- MCP keeps `receive_tail` and `proc_spawn`: the TS reports the child's last stderr line, and there is no hand spawn.
+
+### Rows after 4.4za
+
+- Closed: 4.4v-SN for codex (quiet spawn). 4.4v-RT narrowed: the repeated start is one `begin`; `receive` and
+  `receive_tail` stay two functions because MCP keeps the stderr tail and the other two still read stream 2.
+- New 4.4za-EQ (gap): no spawn with both an environment and a null stderr (`proc_spawn_env` has no quiet form); the
+  grok hand `load_check` uses `.env("GROK_HOME", ..)` with `Stdio::null()`. Grok still reads and drops stderr.
+- New 4.4za-QE (gap): in an event loop a quiet child's `ev_eof` needs one `ev_proc_read` on stream 2, although
+  R-6l-3 says stream 2 is at end of file from the start. If `ev_add_process` marked a quiet slot's stream 2 as
+  observed at end of file, codex `receive` would drop the stream-2 read (hand reads stdout only).
+- Still open: 4.4v-PB, 4.4v-TR, LG14-ST and the rows listed before.
+- Tests (rs/rust and rs/llvm) on the final source: codex 136/136, grok 254/254, mcp 22/22 (the transport consumers;
+  opencode, supervisor, claude, json and qwen do not import `transport`). Not measured.
+- Review: one structure review (Codex gpt-6.2-astra) of the first form, where `receive` read stdout only. Its one
+  required finding (no EOF for the quiet codex child) is fixed above; grok and mcp paths unchanged, `begin` contract
+  sufficient. Confirm review (same engine): FIXED, no new required findings.
+- Next: 4.4za-QE and 4.4za-EQ in a language bundle, then drop the stream-2 read for quiet children.

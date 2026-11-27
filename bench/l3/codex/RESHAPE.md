@@ -179,3 +179,9 @@ frozen py pairs were not built (PF); `q.py` was driven on the two rs pairs only.
 `q.py` classes equal the 4.3f ones. `q_mutants.py` builds each mutant without a proof cache under the 600 s
 `compile_pruv` wall, which the codex root exceeds on this machine (row 4.4e-VT); the mutant run needs a larger wall
 or a cache before it can be read.
+
+## 4.4za: null stderr
+
+`rpc::start` spawns with `proc_spawn_quiet` (hand `.stderr(Stdio::null())`). `transport::receive` still reads stream 2
+once per need-more step, which adds no bytes for a quiet child but is needed for `ev_eof` (row 4.4za-QE in
+`../lib/RESHAPE.md`); the hand reads stdout only.

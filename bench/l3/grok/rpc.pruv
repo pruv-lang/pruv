@@ -17,6 +17,8 @@
 //     The pump calls transport::receive via `step`, which scans the buffered bytes before it polls (hand `Rpc::step`);
 //     the drain calls transport::scan, the buffered bytes only (hand `step(false)`).
 //  7. proc_spawn_env(binary, args, cwd, names, values): the arguments are not `move`d, as in tests/runtime/g10p_r22_env.pruv.
+//     The hand spawns with `Stdio::null()` for stderr; there is no quiet form of proc_spawn_env, so stderr is read and dropped
+//     (transport::receive, row 4.4za-EQ).
 //  8. Result mapping (all mode 3, class 1 = EngineImportError, class 3 = RpcResponseError):
 //       spawn failure: stage 24 code 8 (engine-missing); loop capacity failure: stage 24 code 7;
 //       read-failed (EOF, exit, transport failure, 1000000 pump events, oversize line): stage 25 or 26 code 7;

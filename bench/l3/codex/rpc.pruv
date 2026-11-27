@@ -46,7 +46,7 @@ pub fn start(binary: str, argv: str, cwd: str, timeout_ms: i64, inout ctl: Ctl) 
   if sp[0] != 0 { ctl.fail = 2; let l0: Loop = ev_new(3); return move l0; }
   let args: ProcessArgs = child_args(argv, sp);
   ctl.stage = 1;
-  let child: Process = proc_spawn(binary, args, cwd);
+  let child: Process = proc_spawn_quiet(binary, args, cwd);
   if !proc_ok(child) {
     let r: Result<i64> = proc_wait(move child);
     ctl.fail = 7;

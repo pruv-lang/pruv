@@ -310,3 +310,9 @@ without warnings (`rustc -O`). Performance was not remeasured.
 Verification time: the first 4.3 form of `value` (sixteen separate `if slot == k` statements after the recursive call,
 six before) did not finish in 150 minutes for the whole root (no output); the `rpc` module alone with that one function
 changed to `else if` chains verifies in 15 s, and the whole module in 26 s. See gap VP.
+
+## 4.4za: stderr
+
+The hand `load_check` spawns with `.env("GROK_HOME", ..)` and `Stdio::null()`. Pruv has `proc_spawn_env` but no quiet
+form of it, so `start` is unchanged and `transport::receive` keeps reading and dropping stderr (row 4.4za-EQ in
+`../lib/RESHAPE.md`). The shared receive start is now `transport::begin` (no behaviour change).
