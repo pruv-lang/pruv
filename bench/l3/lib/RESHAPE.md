@@ -2601,3 +2601,12 @@ Changes `bench/l3/pkgs/transport`, `codex/rpc.pruv` and a comment in `grok/rpc.p
 - Review: one Codex structure review and one confirm review; all required findings fixed. Not measured (structure
   not zero).
 - Next: 4.4zc-WL and 4.4zc-PA in a language bundle; G-DB33-1/2 proofs to drop `check_subtrees`.
+
+### Rows after 4.4zd
+
+- Closed 4.4d-CB (grok `entry`): `query_range` ensures char boundaries at both bounds (R-6b-5), so `user` borrows the
+  query range with no run-time test (hand `&txt[a..b]`).
+- Closed 4.4d-T0 (grok `line`, `entry`): the parse contracts carry a non-negative `tool_calls`, so `feed` calls
+  `turns::tool(n)` for any `Some(n)` (hand `self.tool(n)`).
+- No language change; no shared package changed. Details and tests: `../grok/RESHAPE.md` "Rows after 4.4zd".
+- Not measured (the grok slice has open shape rows).

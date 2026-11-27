@@ -37,7 +37,7 @@ pub struct Raw { lo: i64, hi: i64 }
 
 // hand Entry::new
 pub fn new_entry() -> Entry ! alloc
-  ensures len(result.content) == 0 && len(result.scratch) == 0
+  ensures len(result.content) == 0 && len(result.scratch) == 0 && !is_some(result.tool_calls)
 {
   let c: [u8] = alloc(0, 0);
   let t: [u8] = alloc(0, 0);
@@ -47,7 +47,7 @@ pub fn new_entry() -> Entry ! alloc
 
 // hand Entry::reset: everything but the scratch buffer.
 pub fn reset(inout e: Entry) -> () ! alloc
-  ensures len(e.content) == 0
+  ensures len(e.content) == 0 && !is_some(e.tool_calls)
 {
   e.is_obj = false;
   e.ty = 0;
@@ -506,10 +506,10 @@ fn part_members(s: [u8], inout i: i64, inout scratch: [u8], inout has: bool) -> 
 // hand P::part: one element of a content array, its "text" string (the last one wins) joined with a blank line.
 fn part(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
   requires utf8_valid(s) && len(s) <= 1073741824 && 0 <= i && i < len(s)
-  requires utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
+  requires utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i && (is_some(e.tool_calls) ==> some_val(e.tool_calls) >= 0)
   ensures old(i) <= i && i <= len(s)
   ensures is_ok(result) ==> old(i) < i
-  ensures utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
+  ensures utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i && (is_some(e.tool_calls) ==> some_val(e.tool_calls) >= 0)
 {
   let mut has: bool = false;
   // hand: `let mut scratch = take(&mut e.scratch)` only to satisfy the borrow checker; disjoint field borrows need no take.
@@ -531,10 +531,10 @@ fn part(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
 
 // hand P::content
 fn content(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
-  requires utf8_valid(s) && len(s) <= 1073741824 && 0 <= i && i <= len(s)
+  requires utf8_valid(s) && len(s) <= 1073741824 && 0 <= i && i <= len(s) && (is_some(e.tool_calls) ==> some_val(e.tool_calls) >= 0)
   ensures old(i) <= i && i <= len(s)
   ensures is_ok(result) ==> old(i) < i
-  ensures utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
+  ensures utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i && (is_some(e.tool_calls) ==> some_val(e.tool_calls) >= 0)
 {
   e.content = truncate(e.content, 0);
   if i >= len(s) { return Err::<(), i64>(1); }
@@ -553,6 +553,7 @@ fn content(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
     while i < len(s)
       invariant old(i) < i && i <= len(s)
       invariant utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
+      invariant is_some(e.tool_calls) ==> some_val(e.tool_calls) >= 0
       decreases len(s) - i
     {
       ws(s, inout i);
@@ -584,9 +585,9 @@ fn content(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
 // The hand `members` closure of P::entry: the top-level fields of the line.
 fn fields(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
   requires utf8_valid(s) && len(s) <= 1073741824 && 0 <= i && i < len(s)
-  requires utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
+  requires utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i && (is_some(e.tool_calls) ==> some_val(e.tool_calls) >= 0)
   ensures old(i) <= i && i <= len(s)
-  ensures utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
+  ensures utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i && (is_some(e.tool_calls) ==> some_val(e.tool_calls) >= 0)
 {
   i = i + 1;
   ws(s, inout i);
@@ -597,6 +598,7 @@ fn fields(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
   while i < len(s)
     invariant old(i) < i && i <= len(s)
     invariant utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
+    invariant is_some(e.tool_calls) ==> some_val(e.tool_calls) >= 0
     decreases len(s) - i
   {
     ws(s, inout i);
@@ -660,8 +662,8 @@ fn fields(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
 // The content is decoded from (and joined inside) the line, so it is never longer than the line.
 pub fn entry(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
   requires utf8_valid(s) && len(s) <= 1073741824 && 0 <= i && i <= len(s)
-  requires utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
-  ensures utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= len(s)
+  requires utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i && (is_some(e.tool_calls) ==> some_val(e.tool_calls) >= 0)
+  ensures utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= len(s) && (is_some(e.tool_calls) ==> some_val(e.tool_calls) >= 0)
 {
   ws(s, inout i);
   if i < len(s) && s[i] == 123 {
