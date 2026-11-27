@@ -2616,3 +2616,5 @@ Changes `bench/l3/pkgs/transport`, `codex/rpc.pruv` and a comment in `grok/rpc.p
 - Checks on the final compiler: must_reject 1390/1390, g8_frontend both 39/39, runtime both 3581/3581,
   g10_proc_frontend 36/36, g10_async_frontend 44/44, g10_proc_proof 20/20, spec_trace 1/1, cargo test 163 passed,
   diff_rust fuzz 20 and m3_all --quick ok after the intended golden update (runtime text and new samples).
+- Fix-check review: all three required findings fixed, no new required problem. L3 on the final compiler: 20 runs
+  pass (claude a0-a4, json a0-a5, supervisor a0-a3, grok, qwen, mcp, codex, opencode --jobs 2).
