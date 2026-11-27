@@ -1,5 +1,11 @@
-// L3-1 A0: byte framing of edge and window inputs (TS readEdgeLines, openLineWindow, headText).
+mod lines;
+
+// L3-1 A0 (shared by bench/l3/claude and bench/l3/qwen since 4.4i): byte framing of edge and window inputs (TS readEdgeLines, openLineWindow, headText).
 // Frames are ranges into the caller's buffer; no stream, file or parser is involved.
+// Limits (hand LINE_BYTES, DROP_HEAD_BYTES); only the framing reads them.
+pub fn limit_line_bytes() -> i64 ensures result == 1048576 { return 1048576; }
+pub fn limit_drop_head() -> i64 ensures result == 8192 { return 8192; }
+
 pub enum Frame { Entry(start: i64, end: i64, next: i64), Dropped(start: i64, prefix_end: i64, next: i64), Done }
 
 // The first range of a cut input is discarded through its first LF, even if the input starts on a line boundary.
@@ -38,7 +44,7 @@ pub fn drop_prefix(start: i64, line_end: i64) -> i64
   ensures line_end - start < 8192 ==> result == line_end
 {
   let room: i64 = line_end - start;
-  let head: i64 = crate::boundary::limit_drop_head();
+  let head: i64 = limit_drop_head();
   if room > head { return start + head; }
   return line_end;
 }
@@ -52,7 +58,7 @@ pub fn window_next(data: [u8], offset: i64) -> Frame
   ensures is_variant(result, Frame::Dropped) ==> (variant_field(result, Frame::Dropped, start) == offset && variant_field(result, Frame::Dropped, start) < variant_field(result, Frame::Dropped, prefix_end) && variant_field(result, Frame::Dropped, prefix_end) <= variant_field(result, Frame::Dropped, next) && variant_field(result, Frame::Dropped, prefix_end) - variant_field(result, Frame::Dropped, start) <= 8192 && variant_field(result, Frame::Dropped, next) > offset && variant_field(result, Frame::Dropped, next) <= len(data))
   ensures is_variant(result, Frame::Done) ==> len(data) - offset <= 1048576
 {
-  let limit: i64 = crate::boundary::limit_line_bytes();
+  let limit: i64 = limit_line_bytes();
   // hand: split_inclusive(b'\n') (memchr for the next LF)
   let i: i64 = find_byte(data, 10, offset, len(data));
   if i < len(data) {

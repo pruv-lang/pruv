@@ -5,8 +5,6 @@
 
 pub fn limit_edge_bytes() -> i64 ensures result == 65536 { return 65536; }
 pub fn limit_window_bytes() -> i64 ensures result == 8388608 { return 8388608; }
-pub fn limit_line_bytes() -> i64 ensures result == 1048576 { return 1048576; }
-pub fn limit_drop_head() -> i64 ensures result == 8192 { return 8192; }
 pub fn limit_turns() -> i64 ensures result == 200 { return 200; }
 pub fn limit_prompt_bytes() -> i64 ensures result == 32768 { return 32768; }
 pub fn limit_reply_bytes() -> i64 ensures result == 32768 { return 32768; }

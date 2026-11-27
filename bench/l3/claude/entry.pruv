@@ -234,7 +234,7 @@ fn array_content(doc: crate::json::JsonDocument, c: i64) -> Field ! alloc
     j = next;
   }
   let mut whole: str = move first;
-  if count > 1 { whole = string_to_str(joined); }
+  if count > 1 { whole = string_into_str(move joined); }
   let h: i64 = is_human_text(doc, whole);
   if h < 0 { return Field::Defect(h); }
   if h == 0 { return Field::Missing; }
