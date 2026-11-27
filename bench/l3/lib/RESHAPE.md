@@ -1922,3 +1922,34 @@ All after the last code change (F1 / F4 from the structure comparison).
   1. 4.4m-TB part two: a `str` buffer whose `clear` + append keeps valid UTF-8, reused like the hand's one buffer.
   2. 4.4n-KL (design first), 4.4p-CF.
   3. 4.4l-RE / -RS / -CT / -VU.
+
+## Step 4.4q: config text checked once (4.4o-CV), borrowed `str` dirname in `p100` (4.4o-SB part, 4.3g-T part), `p100` path bound (4.4o-PL)
+
+- Changed: `opencode/util` (`cfg_view` requires `utf8_valid(t)` and keeps two char-boundary byte tests instead of
+  the span scan; the old body is the private `span_text` behind `cfg_str`), `opencode/path` (`dirname(p: str) ->
+  ref str from(p)` replaces `dirname_bytes`; `env_value` / `data_dir` / `db_path` require `utf8_valid(cfg_text)`;
+  `utility` mode 3 checks the text once) and `opencode/admit` (`p100` checks the text once, borrows the parent of the
+  owned DB path, builds the pool with one reserve and two appends, and bounds the path by `> 1e9` first). No
+  compiler change. Details, the structure table and the tests: `opencode/RESHAPE.md` §11.
+- `Attach` already holds what the hand holds (`open: bool` + `Model::Absent | Pair(str, str)`); not changed.
+- Tests: `test_impl.py --jobs 2` 199/199 and `--verify-only` VERIFIED on rs/rust and rs/llvm; `q.py --cases 300`
+  exact 406, 0 unexplained on both; `q_mutants.py --check` 16/16 markers.
+- Not measured (structure not identical: `dirname` loop vs `trim` / `rfind`, the step-wire pool, `utility` mode 3
+  `to_bytes`).
+- Independent structure comparison (Codex `gpt-6.2-astra`, review role, Codex 2 account; the default account was
+  at its limit). It agrees on zero scans after the one check and the borrowed `dirname`; it found the value
+  differences recorded as 4.4q-CU and 4.4q-DN.
+
+### Rows after 4.4q
+
+- Closed: 4.4o-CV, 4.4o-PL. Partly: 4.4o-SB (`p100` closed; `utility` mode 3 `to_bytes` stays, language), 4.3g-T
+  (`dirname` borrowed, `Attach` matches; the request pool is the step wire), 4.3g-K3 (the `p100` copy is gone).
+- New: 4.4q-CU (a config text not valid UTF-8 as a whole is `(3,6)` where the hand decodes lossily; a span cut inside
+  a character reads `""`; unreachable from the host), 4.4q-DN (`dirname` on repeated slashes: Pruv and Node give
+  `"//"` / `"a/"` for `"//a"` / `"a//b"`, the hand gives `""` / `"a"`).
+- Still open: 4.4o-EB (blocked by 4.4o-SB), 4.4o-VP, 4.4p-CF, 4.4m-TB part two, 4.4n-KL, and the rows listed before.
+- Next:
+  1. 4.4o-SB language side: a `str` → `[u8]` move (or a byte view of a `str` argument), then 4.4o-EB and `utility`
+     mode 3.
+  2. 4.4q-DN: decide which side is the reference for the hand `dirname` (the pinned TypeScript says Node).
+  3. 4.4o-VP, then the Next list after 4.4p.

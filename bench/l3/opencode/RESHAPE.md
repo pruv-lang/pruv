@@ -402,3 +402,78 @@ Rows:
 | 4.4o-CV (new) | open | `cfg_view` scans the span's UTF-8 on every read; the hand decodes `Config` once. Needs a validated-once config text (a `ref str` of the whole text) |
 | 4.4o-PL (new) | open | `p100` file-path bound is the pool bound (`bank_fits`, `1073741823`) where the hand checks `len > 1e9`; values differ for a path of 1e9+1 ..= 1073741823 bytes if the bank fits (pre-existing) |
 | 4.4o-VP (compiler, new) | open | verified `vec_push` of a view still emits the `2^40` length check (`pruv_g6_req`) that the hand does not have; the invariant bounds `len(out) <= n` |
+
+## 11. Step 4.4q (rows 4.4o-CV, 4.4o-PL, part of 4.4o-SB and 4.3g-T)
+
+The configuration text is now checked as UTF-8 once, in the step that reads it (`admit::p100` for modes 0..2 and
+`path::utility` mode 3), like the hand's one `Config::decode` per run. `util::cfg_view`, `path::env_value`,
+`path::data_dir` and `path::db_path` `require utf8_valid(cfg_text)`, so the verified calls carry no run-time check,
+and `cfg_view` keeps only two O(1) char-boundary byte tests on the span ends (R-6g-10), with no UTF-8 scan. The old
+scanning body is the private `util::span_text`, used by `cfg_str` (its caller reads the `text` bank, which is not
+checked once). `path::dirname_bytes` is replaced by `path::dirname(p: str) -> ref str from(p)`; `p100` borrows the
+parent of the owned DB path and builds the request pool with one `reserve` and two appends (no `to_bytes` copy).
+`p100`'s file-path bound is now the hand's `len > 1e9` first, then the bank fit. `Attach { open: bool, model: Model }`
+with `enum Model { Absent, Pair(p: str, m: str) }` already holds what the hand holds (`Option<(String, String)>` and a
+bool); not changed. No compiler change. Evidence (not committed): `work/reset4_4q/gen_changed.rs`,
+`work/reset4_4q/hand_paths.rs`.
+
+Per-function structure (generated Rust vs hand `hand/opencode.rs`):
+
+| function | before | Pruv now (generated Rust) | hand Rust | difference that stays |
+|---|---|---|---|---|
+| `util::cfg_view` | `ref_ok` / length guard, `from_utf8` scan of the span, `from_utf8_unchecked` | same guards, two byte tests on `t[s]` / `t[s+l]` (continuation byte ⇒ `""`), `from_utf8_unchecked`; no scan | `Config::decode` decodes every field once (lossy), reads borrow `conf.<field>` | the two boundary tests (the host gives offsets, not fields); a field cut inside a character reads `""` where the hand gives `U+FFFD` (pre-existing, host never cuts there) |
+| `util::span_text` (new, private) | was `cfg_view` | the old scanning body | - | only for `cfg_str` |
+| `util::cfg_str` | `copy(cfg_view(..))` | `copy(span_text(..))` | - | unchanged structure |
+| `path::env_value` | borrowed, one span scan per match | borrowed, no scan; verified call to the `cfg_view` body | `iter().find()` on the decoded env | record scan on the wire vs decoded `Vec` (protocol) |
+| `path::data_dir`, `path::db_path` | borrowed, scans in each read | borrowed, no scans | borrowed | equal apart from the join shape (§10) |
+| `path::dirname` (replaces `dirname_bytes`) | `[u8] -> [u8]`, one allocation per result | `&str -> &str`, one backward index loop, `"."` / `"/"` / `"//"` literals, `get_unchecked(0..endp)` (the invariant has `p[endp] == '/'`, so the cut is a char boundary) | `&str -> &str`, `trim_end_matches('/')`, `rfind('/')`, `trim_end_matches('/')` | loop vs `trim` / `rfind`; values differ on repeated slashes (row 4.4q-DN) |
+| `path::utility` mode 3 | per-read scans | one `utf8_valid(cfg_text)` (fail ⇒ `(3,6)`), borrowed reads, `to_bytes(d)` | `decode` then `data_dir(..).into_bytes()` | the `to_bytes` copy (4.4o-SB, language); whole-text check (row 4.4q-CU) |
+| `admit::p100` | per-read scans; `to_bytes(p)` + `dirname_bytes(pool)` pool; bound `bank_fits || np > 1073741823` | one `utf8_valid(cfg_text)` (fail ⇒ `(0,3,6)`), borrowed thread / DB reads, `dirname(&p)` borrowed, `vec![]` + `reserve_exact(np + nq)` + two `extend_from_slice`; bound `np > 1e9 || !bank_fits` ⇒ `(1,3,5)` | `decode` once; `admit`: `db.len() > 1e9` ⇒ `(1,3,5)`, `canonicalize(dirname(&db))` | the request pool copy of path + parent is the step wire (the next step gets the bytes back, 4.3g-T); `ctl` copy and protocol checks (`ctl[6]`, mode range) are packet protocol |
+
+Behaviour changes:
+- A configuration text that is not valid UTF-8 as a whole is now `CoreError` / `InternalInvariant` stage 0 (`(3,6)`)
+  in `p100` and `utility` mode 3, even when the invalid bytes are not inside a field (row 4.4q-CU). Before, each field
+  read as `""`; the hand decodes lossily. The host builds `cfg_text` from Rust `String`s, so it cannot send such a
+  text; no test case reaches it.
+- `p100` with a DB path of 1e9+1 ..= 1073741823 bytes now gives `(1,3,5)` like the hand (closes 4.4o-PL).
+
+Kept, with the exact obligation:
+- `utility` mode 3 `to_bytes(d)`: `ok_value` takes `[u8]`; passing the `str` is `type/type_mismatch` ("expected [u8],
+  found str") and there is no `str` → `[u8]` move (4.4o-SB, language).
+- `export::start_export` keeps `normalize_bytes` on raw config bytes: the request field of `await_req` is a `[u8]`
+  pool, so a `str` root would need the same `str` → `[u8]` move (4.4o-EB, blocked by 4.4o-SB).
+
+Other-model comparison (Codex `gpt-6.2-astra`, review role, Codex 2 account; the default account was at its limit;
+given `gen_changed.rs` and `hand_paths.rs` without this section): it marks every pair as not the same structure. Its
+findings, checked against the code:
+- `cfg_view` body: zero UTF-8 scans, two boundary tests; `env_value` / `data_dir` / `db_path`: zero re-checks after the
+  one check in the step. Agrees with the table.
+- `dirname`: no scan and no allocation on both sides; the `get_unchecked` cut is justified by the invariant. Values
+  differ: `"//a"` (Pruv `"//"`, hand `""`) and `"a//b"` (Pruv `"a/"`, hand `"a"`); `"a//"`, `"/"` agree. Pruv follows
+  `path.posix.dirname` of the pinned TypeScript reference (checked with Node), as `dirname_bytes` did; the hand does not. Row 4.4q-DN.
+- `utility` mode 3 / `p100`: one whole-text check, and the unreferenced invalid byte case above. Row 4.4q-CU.
+- A field span cut inside a character (`cfg_text = "é"`, `os_home = (0,1)`): Pruv reads `""`, the hand `"\u{FFFD}"`.
+  Pre-existing (the old scanning `cfg_view` also gave `""`); the host never cuts a span there. Part of 4.4q-CU.
+- `utility` mode 3 copies `String` → `Vec<u8>` once more than the hand: 4.4o-SB.
+- `p100` bank-length case and the `ctl` / `cfg` index contracts: step wire and `requires`, not gaps of this step.
+
+Tests (`bench/l3/opencode`, `pruvc-rs` main release binary):
+
+| test | rs/rust | rs/llvm | before (4.4o) |
+|---|---|---|---|
+| `test_impl.py --verify-only` | VERIFIED | VERIFIED | VERIFIED |
+| `test_impl.py --jobs 2` fixtures | 199/199 | 199/199 | 199/199 |
+| `q.py --cases 300` (499 cases) | exact 406, 0 unexplained | exact 406, 0 unexplained | exact 406, 0 unexplained |
+| `q_mutants.py --check` | all 16 markers present exactly once | | 16/16 |
+
+Rows:
+
+| row | state | note |
+|---|---|---|
+| 4.4o-CV | closed | one `utf8_valid(cfg_text)` per reading step, `cfg_view` has two boundary tests and no scan |
+| 4.4o-PL | closed | `np > 1e9` first, as the hand |
+| 4.4o-SB (language) | partly closed | `p100` borrows the parent; `utility` mode 3 `to_bytes(d)` stays (no `str` → `[u8]` move) |
+| 4.3g-T | partly closed | `dirname` borrows; `Attach` already matches the hand; the request pool copy is the step wire |
+| 4.4o-EB | open | blocked by 4.4o-SB (`await_req` takes a `[u8]` pool) |
+| 4.4q-CU (new) | open | whole config text not valid UTF-8 ⇒ `(3,6)` where the hand decodes lossily; a span cut inside a character reads `""` where the hand gives `U+FFFD`; unreachable from the host |
+| 4.4q-DN (new) | open | `dirname` on repeated slashes: Pruv follows `path.posix.dirname` (`"//a"` ⇒ `"//"`, `"a//b"` ⇒ `"a/"`), the hand gives `""` (its `t[..1]` is trimmed to empty), `"a"`; the hand is the side that differs from the reference |

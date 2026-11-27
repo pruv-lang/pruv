@@ -162,22 +162,19 @@ pub fn join(a: str, b: str) -> str ! alloc
   return normalize(full);
 }
 
-// path.posix.dirname on bytes: "." for "", "/" or "//" for rooted inputs, else the prefix before the last non-trailing '/'
-pub fn dirname_bytes(p: [u8]) -> [u8] ! alloc
+// path.posix.dirname of a str, borrowed (hand `dirname(&db)` -> `&str`): "." for "", "/" or "//" for rooted inputs, else
+// the prefix before the last non-trailing '/'. The cut is at a '/' byte, so it is a char boundary (no run-time test).
+pub fn dirname(p: str) -> ref str from(p)
   ensures len(result) <= len(p) + 1
 {
   let n: i64 = len(p);
-  if n == 0 {
-    let mut d0: [u8] = alloc(1, 0);
-    d0[0] = 46;
-    return d0;
-  }
+  if n == 0 { return "."; }
   let root: bool = p[0] == 47;
   let mut endp: i64 = -1;
   let mut matched: bool = true;
   let mut i: i64 = n - 1;
   while i >= 1 && endp == -1
-    invariant 0 <= i && i <= n - 1 && n == len(p) && (endp == -1 || (1 <= endp && endp < n))
+    invariant 0 <= i && i <= n - 1 && n == len(p) && (endp == -1 || (1 <= endp && endp < n && p[endp] == 47))
     decreases i
   {
     if p[i] == 47 {
@@ -188,22 +185,11 @@ pub fn dirname_bytes(p: [u8]) -> [u8] ! alloc
     i = i - 1;
   }
   if endp == -1 {
-    if root {
-      let mut d1: [u8] = alloc(1, 0);
-      d1[0] = 47;
-      return d1;
-    }
-    let mut d2: [u8] = alloc(1, 0);
-    d2[0] = 46;
-    return d2;
+    if root { return "/"; }
+    return ".";
   }
-  if root && endp == 1 {
-    let mut d3: [u8] = alloc(2, 0);
-    d3[0] = 47;
-    d3[1] = 47;
-    return d3;
-  }
-  return copy(subview(p, 0, endp));
+  if root && endp == 1 { return "//"; }
+  return subview(p, 0, endp);
 }
 
 // `file` starts with `parent` + '/' (just `parent` when it already ends with '/'); the prefix must be nonempty.
@@ -271,7 +257,7 @@ fn key_eq(t: [u8], s: i64, l: i64, lit: str) -> bool
 
 // value of the environment pair named `name` ("" when absent; absent and empty are the same for every caller)
 pub fn env_value(cfg: [i64], cfg_text: [u8], name: str) -> ref str from(cfg_text)
-  requires len(cfg) >= 32 && len(cfg) <= 2147483647
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && utf8_valid(cfg_text)
   ensures len(result) <= 1000000000
 {
   let n: i64 = (len(cfg) - 32) / 4;
@@ -293,7 +279,7 @@ pub fn env_value(cfg: [i64], cfg_text: [u8], name: str) -> ref str from(cfg_text
 
 // opencodeDataDir: trimmed XDG_DATA_HOME when nonempty and absolute (join with opencode), else <OS home>/.local/share/opencode
 pub fn data_dir(cfg: [i64], cfg_text: [u8]) -> str ! alloc
-  requires len(cfg) >= 32 && len(cfg) <= 2147483647
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && utf8_valid(cfg_text)
   ensures len(result) <= 1000000100
 {
   let xv: ref str = env_value(cfg, cfg_text, "XDG_DATA_HOME");
@@ -308,7 +294,7 @@ pub fn data_dir(cfg: [i64], cfg_text: [u8]) -> str ! alloc
 pub enum DbPath { Memory, File(path: str) }
 
 pub fn db_path(cfg: [i64], cfg_text: [u8]) -> DbPath ! alloc
-  requires len(cfg) >= 32 && len(cfg) <= 2147483647
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && utf8_valid(cfg_text)
 {
   let gv: ref str = env_value(cfg, cfg_text, "OPENCODE_DB");
   let given: ref str = crate::text::trim(gv);
@@ -325,6 +311,8 @@ pub fn utility(cfg: [i64], cfg_text: [u8], mode: i64) -> [i64] ! alloc
   ensures len(result) >= 40
 {
   if mode == 3 {
+    // the configuration text is checked once (hand `Config::decode`); every field read below borrows it
+    if !utf8_valid(cfg_text) { return crate::packet::simple_error(3, 0, 3, 6); }
     let d: str = data_dir(cfg, cfg_text);
     let b: [u8] = crate::util::to_bytes(d);
     if len(b) > 1073741823 { return crate::packet::simple_error(3, 0, 3, 5); }
