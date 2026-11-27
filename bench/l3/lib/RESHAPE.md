@@ -2117,3 +2117,31 @@ All after the last code change (F1 / F4 from the structure comparison).
   1. 4.4o-SB language side, then 4.4o-EB.
   2. 4.4q-DN reference decision, 4.4o-VP.
   3. 4.4s-FK if the language gets `[str; N]` / const generics (then `root_keys` can become `access::fields`).
+
+## Step 4.4t: OpenCode moves strings into byte pools (4.4o-SB writing side, 4.4o-EB), hand `dirname` follows Node (4.4q-DN)
+
+Only `bench/l3/opencode` changes (no compiler, no `pkgs/`, so no consumer runs). Detail and tables in
+`bench/l3/opencode/RESHAPE.md` §12.
+
+- `path::utility` mode 3: `str_into_bytes(move d)` (hand `data_dir(&conf).into_bytes()`) instead of `to_bytes(d)`.
+  `p100` was already moved in 4.4q.
+- `export::start_export`: one `utf8_valid` on the configuration text, the root borrowed with `cfg_view` (hand
+  `conf.temp_root`), `join(root, "opencode-")` and `str_into_bytes` as the request pool (hand `make_temp`). The byte
+  pool built by hand and `path::normalize_bytes` are gone.
+- `path::dirname`: hand shape (`Option` end, `break`, `match`). The hand `dirname` was a different algorithm on repeated
+  slashes; it now equals Node `path.posix.dirname` (pinned TypeScript = reference) on 17 inputs.
+- Tests (rs/rust and rs/llvm): `--verify-only` VERIFIED, fixtures 199/199, `q.py --cases 300` exact 406 of 499 with 0
+  unexplained, `q_mutants.py --check` 16/16 markers; hand `opencode.rs` builds without warnings.
+- Not measured (structure not identical). No audit: no new result meaning on reachable inputs.
+
+### Rows after 4.4t
+
+- Closed: 4.4o-SB (writing side), 4.4o-EB, 4.4q-DN.
+- New: 4.4t-RV (language gap): `for` has no `rev` (R-6q-3), so OpenCode `dirname` keeps a counting-down `while` where
+  the hand writes `for i in (1..n).rev()`.
+- Still open: 4.4o-VP (compiler: `vec_push` of a view keeps the `2^40` length check; not touched here because
+  pruvc-rs/ was out of scope), 4.4q-CU, 4.4s-FK, and the rows listed before.
+- Next:
+  1. 4.4o-VP in an L-gaps bundle (compiler).
+  2. 4.4t-RV if `for` gets a `rev` adapter (then `dirname` takes the hand's loop).
+  3. 4.4s-FK if the language gets `[str; N]` / const generics.

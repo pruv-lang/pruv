@@ -477,3 +477,58 @@ Rows:
 | 4.4o-EB | open | blocked by 4.4o-SB (`await_req` takes a `[u8]` pool) |
 | 4.4q-CU (new) | open | whole config text not valid UTF-8 ⇒ `(3,6)` where the hand decodes lossily; a span cut inside a character reads `""` where the hand gives `U+FFFD`; unreachable from the host |
 | 4.4q-DN (new) | open | `dirname` on repeated slashes: Pruv follows `path.posix.dirname` (`"//a"` ⇒ `"//"`, `"a//b"` ⇒ `"a/"`), the hand gives `""` (its `t[..1]` is trimmed to empty), `"a"`; the hand is the side that differs from the reference |
+
+## 12. Step 4.4t (rows 4.4o-SB, 4.4o-EB, 4.4q-DN)
+
+L-gaps 9 added `str_into_bytes(move t) -> [u8]` (hand `String::into_bytes`, R-6b-6). The two places that copied a
+`String` into a `[u8]` pool now move it, and the export root is a borrowed `str` like the hand's `conf.temp_root`.
+`path::normalize_bytes` (the byte form kept only for the export root) is removed. The hand `dirname` now follows the
+pinned TypeScript reference (Node `path.posix.dirname`), and the Pruv `dirname` takes the hand's loop shape. No
+compiler, `pkgs/` or test change.
+
+Per-function structure (generated Rust `work/verify/rs_rust/root_gen.rs` vs hand `hand/opencode.rs`):
+
+| function | before | Pruv now (generated Rust) | hand Rust | difference that stays |
+|---|---|---|---|---|
+| `path::utility` mode 3 | one `utf8_valid`, `data_dir`, `to_bytes(d)` (second buffer + copy) | one `from_utf8(..).is_ok()`, `data_dir(..)`, `(d).into_bytes()` | `decode`, then `data_dir(&conf).into_bytes()` | none in the value path; the `> 1073741823` length test is the result packet protocol |
+| `export::start_export` | `Vec` with `reserve(tl + 10)`, two appends of config bytes and `"/opencode-"`, `normalize_bytes` (offset pairs, sizing loop, second buffer) | one `from_utf8(..).is_ok()` (fail ⇒ `(0,3,6)`), `root: &str = cfg_view(..)`, `join(root, "opencode-")` (the `normalize` of §10), `(joined).into_bytes()` as the request pool | `make_temp(conf.temp_root)`: `join(root, "opencode-")` | the pool goes to the host's mkdtemp request where the hand calls `DirBuilder` itself (step wire, 4.3g-SQ); the per-step UTF-8 check where the hand decodes once per run (same as `p100`, 4.4q-CU) |
+| `path::dirname` | `&str -> &str`; counting-down `while` with an `endp == -1` loop condition and an `i64` sentinel | `&str -> &str`; counting-down `while i >= 1`, `end = Some(i); break;`, `match end { None => "/" or ".", Some(e) => "//" or get_unchecked(0..e) }` | `&str -> &str`; `for i in (1..n).rev()`, `end = Some(i); break;`, `match end { None if root => "/", None => ".", Some(1) if root => "//", Some(i) => &p[..i] }` | `while` vs `for .. rev()` (row 4.4t-RV: no `rev` in `for`, R-6q-3); `i64` vs `usize` index (the language's index type); the slice is unchecked (proved from the break state), the hand's `&p[..i]` checks the char boundary |
+| `path::normalize_bytes` | byte `normalize` for the export root | removed | no counterpart | - |
+
+Behaviour:
+- `dirname` values do not change on the Pruv side. The hand changes on repeated slashes (`"//a"` ⇒ `"//"`,
+  `"a//b"` ⇒ `"a/"`, `"//a//b"` ⇒ `"//a/"`), now equal to Node on 17 inputs (`""`, `"/"`, `"//"`, `"///"`, `"a"`,
+  `"a/"`, `"a//"`, `"/a"`, `"//a"`, `"a//b"`, `"/a/b/"`, `"a/b//c//"`, `"//a//b"`, `"./x"`, `"é/ü"`, `"/é//"`,
+  `"///a"`). Reference decision for 4.4q-DN: the pinned TypeScript (Node) is the oracle (RUST_SHAPE_RESET §1 and
+  §7), so the hand follows it. The hand's only `dirname` caller is `admit` (`canonicalize(dirname(&db))`).
+- `start_export`: a temp-root span of 1000000001 ..= 1073741000 bytes is now engine-missing `(0,1,3)` (it was a
+  normalized path); Begin refuses a configuration text over 1000000000 bytes, so no admitted case reaches it. A
+  configuration text that is not valid UTF-8 as a whole is now `(0,3,6)` here too (as `p100` and `utility` mode 3,
+  row 4.4q-CU); a root span cut inside a character reads `""` (so the prefix is `"opencode-"`). The host builds
+  `cfg_text` from Rust `String`s and cuts spans at field ends, so no test case reaches either.
+
+Tests (`bench/l3/opencode`, `pruvc-rs` release binary of main `1a8f7c8d`, which includes L-gaps 9; the worktree has
+no build of its own and the compiler was not changed):
+
+| test | rs/rust | rs/llvm | before (4.4q) |
+|---|---|---|---|
+| `test_impl.py --verify-only` | VERIFIED | VERIFIED | VERIFIED |
+| `test_impl.py --jobs 2` fixtures | 199/199 | 199/199 | 199/199 |
+| `q.py --cases 300 --jobs 2` (499 cases) | exact 406, 0 unexplained | exact 406, 0 unexplained | exact 406, 0 unexplained |
+| `q_mutants.py --check` | all 16 markers present exactly once | | 16/16 |
+| hand `opencode.rs` (`cargo build --release`, serde_json + rusqlite bundled) | builds, no warnings | | builds |
+
+Not measured: structure not identical (4.4t-RV, the step wire, 4.4o-VP in `normalize`). No audit and no
+other-model comparison in this step: no new result meaning on any reachable input (the moved buffer holds the same
+bytes; the export prefix is `normalize(root + "/opencode-")` both before and after).
+
+Rows:
+
+| row | state | note |
+|---|---|---|
+| 4.4o-SB | closed | `utility` mode 3 moves the `String` (`into_bytes`); `p100` was closed in 4.4q |
+| 4.4o-EB | closed | export root borrowed as `str`, `join` + `into_bytes`; `normalize_bytes` removed |
+| 4.4q-DN | closed | reference = pinned TypeScript (Node); the hand `dirname` follows it, same loop/`break`/`Option` shape as Pruv |
+| 4.4t-RV (new, language) | open | hand `for i in (1..n).rev()`; Pruv has no `rev` adapter (R-6q-3, `parse/for_iterable`), so `dirname` keeps a counting-down `while` |
+| 4.4o-VP (compiler) | open | `vec_push` of a view in `normalize` keeps the `2^40` length check; compiler work (pruvc-rs/ is not changed in this step) |
+| 4.4q-CU | open | unchanged meaning; `start_export` now has the same whole-text check |
