@@ -255,6 +255,51 @@ Structure, function by function (`handrust/src/edge.rs` `tail_import`, `lib.rs` 
   P4 4, P5 1, unexplained 0, list same 21, P4 1; `q_mutants.py` 11 differential-killed, turn-cap
   verifier-rejected. No perf timing (structure still differs at 4.3e-D).
 
+## 3f. Step 4.4y: rows 4.3e-D / 4.4d-QS (raw ranges decoded in replay), 4.4w-CE
+
+- The scan no longer decodes, joins or formats. The log is `[i64]` triples only (`log.text` is gone): object
+  boundary (0), dropped user (1), user stamp (3, ends a user entry), assistant stamp (4), prompt part (5), model
+  (6), answer part (7), tool (8), defect (9). A token record holds the byte range of one raw JSON token in `data`
+  (line start + tape span, quotes included); a stamp record with `a < 0` means no `timestamp` field.
+- Scan functions follow the hand `Entry::new` / `take_parts` / `visible_parts`: `record_parts` (skip
+  `thought == true`; a string `text` is kept, else an assistant's `functionCall` object counts a tool),
+  `record_message`, `write_stamp`, `write_token` (`access::raw_span`), `record_entry` (user: parts then stamp;
+  assistant: model, stamp, parts).
+- `replay`, selected entries only: prompt parts are decoded with `jstr::decode_append(.., false)` into `prompt`
+  with "\n\n" between them (hand `join`); at the user stamp record the blank test runs and, when not blank, the
+  stamp is `time::iso_raw` over the raw token (`stamp`) and `begin2` gets `str` views of both. An assistant's
+  stamp is formatted only when `st[1] == 1` (hand `if collector.attached`); answer parts are decoded into `piece`
+  and lent to `answer2`. The model is decoded into an owned buffer and kept when not empty (hand
+  `take_string` drops the empty one; `model = Some(id.clone())`).
+- 4.4w-CE closed: no text spans are lent from a log any more, so `char_edge` and `read_text` are removed; the
+  views are of buffers with `utf8_valid` from the non-scanned `decode_append` (4.4w-DU) and the ASCII `iso_raw`
+  text (4.4w-TR).
+- Proof: `replay` keeps `utf8_valid(prompt) && utf8_valid(piece) && utf8_valid(at.text)`, `parts <= pos`, and
+  `at_n == 0 || (at_n == 24 && len(at.text) == 24)` (`answer2` requires a 0 or 24 byte stamp).
+- Codex structure review (one round, read-only). Applied: the assistant model record moved before the stamp (the
+  hand updates the model before `collector.attached` and `iso`; a stamp defect now stops after the model as
+  well). Remaining differences (rows in `lib/RESHAPE.md`, Rows after 4.4y):
+  - 4.4y-PW: the visibility walk of parts (`thought`, `text`, `functionCall`) runs in the scan for every object;
+    the hand walks `visible_parts` in replay, for a selected user or an attached assistant only. Only the
+    decoding moved to replay.
+  - 4.4y-SB: `prompt` and `piece` are scratch buffers reused across entries and the model is decoded from its raw
+    token; the hand allocates a `String` per part (serde), a new `String` per `join` (moved into the turn) and
+    clones the model. `begin2` / `answer2` copy into the turn store (accepted, 4.4d store layout).
+  - Unchanged from before: defects of a record are reported only when the object is selected (tag 9); `one_line`
+    of the title runs once after the loop; the chain index is built during the scan.
+
+| function | hand | Pruv after 4.4y | difference |
+|---|---|---|---|
+| `record_parts`, `record_message` | parts kept in `Action`, `visible_parts` walked in replay | walked in the scan, kept tokens recorded as ranges | 4.4y-PW |
+| `write_stamp`, `stamp` | `timestamp` kept as `Value`, `iso` in replay | raw range kept, `iso_raw` in replay | none (raw bytes instead of a `Value`) |
+| `record_entry` | user parts, timestamp; assistant parts, timestamp, model | user parts, stamp; assistant model, stamp, parts | record order only (replay order matches the hand) |
+| `replay` user | `join("\n\n")`, blank test, `begin(prompt, iso)` | decode + join into `prompt`, blank test, `iso_raw`, `begin2` | 4.4y-SB (reused buffer) |
+| `replay` assistant | model clone; if attached: `iso`, `answer` / tool per part | model decode; if attached: `iso_raw`, `answer2` / tool per part | 4.4y-SB (reused `piece`, model decoded) |
+
+- Tests after 4.4y (rs/rust and rs/llvm): `test_impl.py` PASS 27/27; `q.py --count 300` (rs pairs) same 317,
+  P1 1, P4 4, P5 1, unexplained 0, list same 21, P4 1; `q_mutants.py` 11 differential-killed, turn-cap verifier-rejected (the first mutant ran on the file before the model/stamp reorder). No perf timing (structure
+  differs at 4.4y-PW, 4.4y-SB).
+
 ## 4. Results
 
 4.4w, after the last code change (`pruvc-rs`, verified, no `--no-verify`):
