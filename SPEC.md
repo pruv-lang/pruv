@@ -390,8 +390,8 @@ match e {                                  // statement; every variant exactly o
   (R-6f-1). Child `pub` and private functions may take or return it. In legacy single-file mode there is no
   host-entry signature check and the invariant-parameter rule below does not look inside `Vec`, so any function
   except `main` may take or return it; the Rust backend emits every such function as a private item (no host
-  caller), and the LLVM backend rejects a `Vec` of a struct (`codegen/unsupported_type`; it has only `Vec<i64>`
-  and `Vec<bool>`). `main` with a collection parameter or result is `type/entry_main` in explicit mode and
+  caller), and the LLVM backend runs a `Vec` of a plain struct or enum as a native vector (R-6e-22; an element with
+  a `String` field stays `codegen/unsupported_type`). `main` with a collection parameter or result is `type/entry_main` in explicit mode and
   `type/foreign_export` in legacy mode.
   A failure is `verify/struct_invariant` ("invariant of S (line L) for parameter P of F", "... for result",
   "... for inout P at exit"); a partial operation in a clause proved at a handoff (index, `/`, `some_val`, ...) is
@@ -472,7 +472,7 @@ return a parameter with `copy`). Refinements: `[u8 | L..=U; <=N]` with `0 <= L <
   assumes `W(s, 0, len(s))` for its `str` values: `str` parameters at entry, reads of `str` variables, `str` results
   of user calls, `str` field reads (under the path condition, and for an enum variant field only when that variant is
   active; inside a quantifier, for all its indices), `str` views passed to `str` parameters, and the results of
-  `substr`, `copy`, `str_from_utf8`, `string_to_str` (LG27) and string literals. Each value is assumed once (LG27): a
+  `substr`, `copy`, `str_from_utf8`, `string_to_str` (LG27), `string_into_str` (R-6e-23) and string literals. Each value is assumed once (LG27): a
   later read of the same `str` value adds no new clause; after a loop havoc the new value is assumed again. A function uses UTF-8 facts when its body or its own
   contracts (`requires`, `ensures`, header `decreases` and `cost`, quantifier triggers included; not the contracts
   synthesized from struct invariants) call `utf8_valid`, `utf8_valid_span` or `str_from_utf8`, pass a `subview` of a
@@ -736,7 +736,7 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   error of a `Result<T, String>` (LG11 E2). R-6e-1, R-6e-3 and R-6e-6
   describe collection fields and the permitted nesting. Operations (`vec_*` and `map_*` take explicit type arguments, `string_*` and `len` take none): `vec_new`, `vec_push`,
   `vec_get`, `map_new`, `map_insert`, `map_get` (returns `Option<V>`), `string_new`, `string_push_str`, `string_push_char`, `string_byte`,
-  `string_to_str` (copies into a `str`), `string_from` (copies a `str` into a new `String`), `vec_clear`, `string_eq`, and `len`.
+  `string_to_str` (copies into a `str`), `string_into_str` (consumes the `String`; no copy, R-6e-23), `string_from` (copies a `str` into a new `String`), `vec_clear`, `string_eq`, and `len`.
   Allocating operations need `! alloc`. In contracts only: `v[i]`, `s[i]`,
   `map_lookup::<K, V>(m, k)` and `map_updated::<K, V>(after, before, k, v)` (the whole new map: k set, size, others kept).
   A map whose values grow in a loop (counters, histograms) needs either a saturating update (`if c < LIMIT { c + 1 }`)
@@ -1223,7 +1223,20 @@ fn tree_count(t: Tree) -> i64
   allocation balance match the Rust backend. An element type with a `String` field stays a Rust-backend type
   (`codegen/unsupported_type`, as in R-6e-3). Tests: [accept field, inout and vec_at_mut](tests/spec/r6e_22_vl_struct.pruv),
   [accept handle field, plain enum and copy struct](tests/spec/r6e_22_vl_plain.pruv),
-  [reject String element field](tests/spec/r6e_22_vl_string.pruv).
+  [reject String element field](tests/spec/r6e_22_vl_string.pruv),
+  [accept read-only parameter and result in legacy mode, both backends](tests/spec/lg3_vec_struct.pruv).
+- R-6e-23 **Handing a String over as a str (L-gaps 3).** `string_into_str(move s) -> str` consumes the owned
+  `String` `s` (a `take` argument: a `take` parameter, an owned local, or another `move` source) and gives its
+  buffer to the result without copying, so it needs no `! alloc` (hand `let t: String = s;`). After the call `s` is dead until reassigned. The proof
+  knows `len(result) == len(s)` and every byte (`result[i] == s[i]`), as for `string_to_str`. `string_to_str(s)`
+  stays the borrowing copy; the copy-free form is chosen by writing `move`. Moving a borrowed parameter or using
+  `s` afterwards is `type/foreign_move`. Code: Rust passes the `String` itself; LLVM takes the boxed `String`'s
+  buffer and capacity through `pruv_g6_v1_string_take` (no `pruv_copy_v2`; a moved `String` local is never
+  unboxed). An empty `String` has no buffer to hand over: the take frees the empty box and the result is the empty
+  `str` (null buffer, length 0, capacity 0), still with no copy and no allocation. Tests: [accept](tests/spec/lg3_into_str.pruv), rejects
+  [borrowed parameter](tests/spec/lg3_into_str_borrowed.pruv),
+  [use after the handover](tests/spec/lg3_into_str_use_after.pruv),
+  [wrong length postcondition](tests/spec/lg3_into_str_ens.pruv).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate (the one exception: R-6e-12a moves an array binder out of a consumed scrutinee). Putting an existing value into an owning place (`let`, assignment, constructor field,
@@ -2058,14 +2071,16 @@ borrowed value is live.
     clear empties it, so `len(parts)` and the bytes of `vec_get(parts, k)` are known (a source cannot change while
     the list is live).
   - *Code.* Rust: `Vec<&str>`, `parts.push(v)` (`&s` for an owned local), `*parts.get_unchecked(i as usize)` when the
-    bound is proven, `parts.len()`, `parts.clear()`, `parts.reserve(n)`; no `String` is made. LLVM:
-    `codegen/unsupported_type` (Rust backend only).
+    bound is proven, `parts.len()`, `parts.clear()`, `parts.reserve(n)`; no `String` is made. LLVM (L-gaps 3): a native vector of
+    `(ptr, len, 0)` views (capacity 0, so dropping the list frees only its buffer), with the same bound checks;
+    the output and allocation balance match the Rust backend. An owned `Vec<String>` on LLVM stays
+    `codegen/unsupported_type`.
   - Tests: [split at '/', read back](tests/spec/r6g9_10_view_list.pruv), [value sources](tests/spec/r6g9_10_sources.pruv);
     rejects [local declared after the list](tests/spec/r6g9_10_late_local.pruv),
     [list leaves its operations](tests/spec/r6g9_10_leaves_ops.pruv),
     [write while live](tests/spec/r6g9_10_write_while_live.pruv), [missing `ref` type argument](tests/spec/r6g9_10_owned_targ.pruv),
     [generic function](tests/spec/r6g9_10_generic.pruv), [other operation](tests/spec/r6g9_10_other_op.pruv),
-    [LLVM](tests/spec/r6g9_10_llvm.pruv), [length after a push](tests/spec/r6g9_10_len_after_push.pruv).
+    [LLVM owned `Vec<String>` beside a view list](tests/spec/r6g9_10_llvm.pruv), [length after a push](tests/spec/r6g9_10_len_after_push.pruv).
 
 ## 6h. Files (G10)
 

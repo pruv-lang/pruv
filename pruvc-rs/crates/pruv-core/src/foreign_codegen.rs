@@ -629,6 +629,10 @@ impl ForeignGen {
                 body.push("pruv_r".to_string());
                 Ok(self.fn_text(name, &format!("s: &{}, i: i64", STRING), Some("i64"), &body))
             }
+            "string_into_str" => {
+                // L-gaps 3: both String and str are a Rust String, so the handover is the value itself
+                Ok(self.fn_text(name, &format!("s: {}", STRING), Some(STRING), &["s".to_string()]))
+            }
             "string_to_str" => {
                 let mut body: Vec<String> = Vec::new();
                 if self.ens {

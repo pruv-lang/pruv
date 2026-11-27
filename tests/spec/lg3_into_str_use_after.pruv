@@ -1,0 +1,6 @@
+// spec: R-6e-23 reject
+fn bad() -> i64 ! alloc {
+  let s: String = string_from("ab");
+  let t: str = string_into_str(move s);
+  return len(t) + len(s);
+}

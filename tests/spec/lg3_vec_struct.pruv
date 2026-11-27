@@ -1,0 +1,42 @@
+// spec: R-6e-22 accept
+// L-gaps 3: in legacy single-file mode a function may take a Vec<S> of a plain struct read-only and return a fresh
+// one; the LLVM backend runs it with the Rust backend's output and allocation balance.
+struct Pt { x: i64, y: i64 }
+
+fn mk(n: i64) -> Vec<Pt> ! alloc
+  requires 0 <= n && n <= 10
+  ensures len(result) == n
+{
+  let mut v: Vec<Pt> = vec_new::<Pt>();
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && len(v) == i
+    decreases n - i
+  {
+    v = vec_push::<Pt>(move v, Pt { x: i, y: i * 2 });
+    i = i + 1;
+  }
+  return move v;
+}
+
+fn sum(v: Vec<Pt>) -> i64
+  requires len(v) <= 10
+  ensures 0 <= result && result <= 10000
+{
+  let mut t: i64 = 0;
+  let mut i: i64 = 0;
+  while i < len(v)
+    invariant 0 <= i && i <= len(v) && 0 <= t && t <= i * 1000
+    decreases len(v) - i
+  {
+    let p: Pt = vec_get::<Pt>(v, i);
+    if p.x >= 0 && p.x < 100 && p.y >= 0 && p.y < 100 { t = t + p.x + p.y; }
+    i = i + 1;
+  }
+  return t;
+}
+
+fn checksum() -> i64 ! alloc {
+  let v: Vec<Pt> = mk(4);
+  return sum(v) * 10 + len(v);
+}

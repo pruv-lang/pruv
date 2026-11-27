@@ -5386,7 +5386,7 @@ impl<'a> FnVerifier<'a> {
                 );
                 Ok(Val::Arr(res))
             }
-            "string_to_str" => {
+            "string_to_str" | "string_into_str" => {
                 let a = argv(0)?.try_arr()?;
                 let value = Val::Arr(Arr::new(a.a.clone(), a.n.clone(), n.to_string(), Elem::U8));
                 // LG27: Record UTF-8 validity for the converted str.

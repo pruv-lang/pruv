@@ -1,0 +1,6 @@
+// spec: R-6e-23 reject
+fn bad(take s: String) -> str
+  ensures len(result) != len(s)
+{
+  return string_into_str(move s);
+}

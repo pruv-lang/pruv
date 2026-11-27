@@ -80,7 +80,161 @@ fn e2_diag(line: i64, col: i64, message: &str) -> String {
 /// Pruv's checked recursive vectors use an inline LLVM vector header.
 pub(crate) fn native_vec_elem(t: &str) -> Option<&str> {
     let elem = t.strip_prefix("vec<")?.strip_suffix('>')?;
-    (crate::emit_common::is_user_key(elem) && !elem.contains('<')).then_some(elem)
+    ((crate::emit_common::is_user_key(elem) && !elem.contains('<')) || elem == VIEW_ELEM).then_some(elem)
+}
+
+/// R-6g9-10 on LLVM: the element key of a list of borrowed `str` views. The checker types a view list
+/// `vec<string>` (borrowed.rs `is_view_list`); `view_lists_to_native` renames it to `vec<str>`, a type a program
+/// cannot spell (an owned `Vec<str>` is rejected), so it is a native vector of `{ ptr, i64, i64 }` views.
+const VIEW_ELEM: &str = "str";
+const VIEW_LIST: &str = "vec<str>";
+
+/// R-6g9-10: a copy of the program where each view list (its `let`, its uses, and the `vec_new` / `vec_push`
+/// results that build it) has the type `vec<str>`. Every other `vec<string>` stays, so an owned list of strings is
+/// still rejected by `g6_llvm_error`. None when the program has no view list.
+fn view_lists_to_native(prog: &Program) -> Option<Program> {
+    fn has(stmts: &[Stmt]) -> bool {
+        let mut found = false;
+        crate::foreign_shim::walk_stmts(stmts, &mut |n| {
+            if let crate::foreign_shim::Node::Let(l) = n {
+                found |= crate::borrowed::is_view_list(l);
+            }
+        });
+        found
+    }
+    if !prog.functions.iter().any(|f| has(&f.body)) {
+        return None;
+    }
+    fn is_view(e: &Expr, names: &BTreeSet<String>) -> bool {
+        match e {
+            Expr::Var(v) => names.contains(&v.name) && v.ty.as_deref() == Some("vec<string>"),
+            Expr::InoutArg(a) => is_view(&a.expr, names),
+            _ => false,
+        }
+    }
+    fn retype(t: &mut Ty) {
+        if t.as_deref() == Some("vec<string>") {
+            *t = Some(VIEW_LIST.to_string());
+        }
+    }
+    fn expr(e: &mut Expr, names: &BTreeSet<String>) {
+        match e {
+            Expr::Var(v) => {
+                if names.contains(&v.name) {
+                    retype(&mut v.ty);
+                }
+            }
+            Expr::InoutArg(a) => {
+                let view = is_view(&a.expr, names);
+                expr(&mut a.expr, names);
+                if view {
+                    retype(&mut a.ty);
+                }
+            }
+            Expr::Unary(x) => expr(&mut x.operand, names),
+            Expr::Binary(x) => {
+                expr(&mut x.left, names);
+                expr(&mut x.right, names);
+            }
+            Expr::Call(c) => {
+                let view = c.args.first().is_some_and(|a| is_view(a, names))
+                    && matches!(c.name.as_str(), "vec_push");
+                c.args.iter_mut().for_each(|a| expr(a, names));
+                if view {
+                    retype(&mut c.ty);
+                }
+            }
+            Expr::Index(x) => {
+                expr(&mut x.array, names);
+                expr(&mut x.index, names);
+            }
+            Expr::Ctor(x) => {
+                if let Some(a) = x.arg.as_mut() {
+                    expr(a, names);
+                }
+            }
+            Expr::Quant(q) => {
+                expr(&mut q.lo, names);
+                expr(&mut q.hi, names);
+                expr(&mut q.body, names);
+            }
+            Expr::StructLit(x) => x.fields.iter_mut().for_each(|f| expr(&mut f.value, names)),
+            Expr::EnumCtor(x) => x.args.iter_mut().for_each(|a| expr(a, names)),
+            Expr::FieldAccess(x) => expr(&mut x.base, names),
+            Expr::IsVariant(x) => expr(&mut x.value, names),
+            Expr::VariantField(x) => expr(&mut x.value, names),
+            Expr::Spent(_) | Expr::Move(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StrLit(_) => {}
+        }
+    }
+    fn block(stmts: &mut [Stmt], names: &mut BTreeSet<String>) {
+        for s in stmts {
+            match s {
+                Stmt::Par(p) => p.calls.iter_mut().for_each(|c| expr(c, names)),
+                Stmt::Let(l) => {
+                    if crate::borrowed::is_view_list(l) {
+                        names.insert(l.name.clone());
+                        l.ty = VIEW_LIST.to_string();
+                        if let Expr::Call(c) = &mut l.value {
+                            if c.name == "vec_new" {
+                                retype(&mut c.ty);
+                            }
+                        }
+                    }
+                    expr(&mut l.value, names);
+                }
+                Stmt::Assign(a) => {
+                    let view = names.contains(&a.name);
+                    expr(&mut a.value, names);
+                    if view {
+                        if let Expr::Call(c) = &mut a.value {
+                            retype(&mut c.ty);
+                        }
+                    }
+                }
+                Stmt::IndexAssign(a) => {
+                    expr(&mut a.index, names);
+                    expr(&mut a.value, names);
+                }
+                Stmt::If(x) => {
+                    expr(&mut x.cond, names);
+                    block(&mut x.then, names);
+                    block(&mut x.els, names);
+                }
+                Stmt::While(w) => {
+                    expr(&mut w.cond, names);
+                    w.invariants.iter_mut().for_each(|i| expr(i, names));
+                    expr(&mut w.decreases, names);
+                    block(&mut w.body, names);
+                }
+                Stmt::ForMap(w) => {
+                    expr(&mut w.place, names);
+                    w.invariants.iter_mut().for_each(|i| expr(i, names));
+                    block(&mut w.body, names);
+                }
+                Stmt::Return(r) => {
+                    if let Some(v) = r.value.as_mut() {
+                        expr(v, names);
+                    }
+                }
+                Stmt::Assert(a) => expr(&mut a.cond, names),
+                Stmt::ExprStmt(x) => expr(&mut x.expr, names),
+                Stmt::FieldAssign(a) => expr(&mut a.value, names),
+                Stmt::Match(m) => {
+                    expr(&mut m.scrutinee, names);
+                    m.arms.iter_mut().for_each(|arm| block(&mut arm.body, names));
+                    block(&mut m.els, names);
+                }
+                Stmt::Break(_) | Stmt::Continue(_) => {}
+            }
+        }
+    }
+    let mut out = prog.clone();
+    for f in &mut out.functions {
+        if has(&f.body) {
+            block(&mut f.body, &mut BTreeSet::new());
+        }
+    }
+    Some(out)
 }
 
 pub(crate) fn recursive_vec_elements(prog: &Program) -> BTreeSet<String> {
@@ -5874,6 +6028,31 @@ impl<'a> FnGen<'a> {
             }
             return Ok(V::new(Kind::I64, x.b));
         }
+        if n == "string_into_str" && !self.funcs.contains_key(n) && a.len() == 1 {
+            // L-gaps 3: the String is consumed; its buffer becomes the str (no copy)
+            // a moved String local is never unboxed (unbox_uses), so the argument is always the boxed String
+            let v = self.ev(&a[0], true)?;
+            if v.k == Kind::Arr {
+                return Err("llvmgen: internal error: string_into_str of an unboxed String".to_string());
+            }
+            self.m.g6_v2 = true;
+            self.m.g6_take = true;
+            let d = self.g6_out("ptr");
+            let l = self.g6_out("i64");
+            let c = self.g6_out("i64");
+            let mut a2 = self.g6_arg(&v)?;
+            a2.push(("ptr".to_string(), d.clone()));
+            a2.push(("ptr".to_string(), l.clone()));
+            a2.push(("ptr".to_string(), c.clone()));
+            self.g6_call(crate::foreign_shim::STRING_TAKE_SYM, "void", &a2)?;
+            let dp = self.op(format!("load ptr, ptr {}", d))?;
+            let ln = self.op(format!("load i64, ptr {}", l))?;
+            let cp = self.op(format!("load i64, ptr {}", c))?;
+            let mut rv = V::with_b(Kind::Arr, dp, ln);
+            rv.ty = Some(STR.to_string());
+            rv.c = Some(cp);
+            return self.temp_arr(rv, owned);
+        }
         if n == "string_to_str" && !self.funcs.contains_key(n) {
             // P3 M5: string_to_str of an unboxed String local (an owned str array): move it out in a take position
             // (M3 conditions), else copy it; the other paths free the array with the scope
@@ -6594,6 +6773,11 @@ impl<'a> FnGen<'a> {
     }
 
     fn native_vec_call(&mut self, e: &Call, elem: &str, owned: bool) -> R<V> {
+        if elem == VIEW_ELEM {
+            if let Some(v) = self.view_list_call(e, owned)? {
+                return Ok(v);
+            }
+        }
         match e.name.as_str() {
             "vec_new" => Ok(V::agg("zeroinitializer", need_ty(&e.ty)?)),
             "vec_push" => {
@@ -6626,6 +6810,104 @@ impl<'a> FnGen<'a> {
                 Ok(V::agg_p(value, elem, p))
             }
             _ => Err(IDX_ERR.to_string()),
+        }
+    }
+
+    /// R-6g9-10: the calls of a view list (`vec<str>`) that differ from a vector of owned elements. An element is a
+    /// borrowed `{ ptr, len, 0 }` view (cap 0: it owns nothing, the list's drop frees only its buffer), `vec_get`
+    /// gives the view back, `vec_clear` sets the length to 0 and `vec_reserve` grows the buffer once.
+    fn view_list_call(&mut self, e: &Call, owned: bool) -> R<Option<V>> {
+        let place = |e: &Call| -> R<Expr> {
+            match arg(&e.args, 0)? {
+                Expr::InoutArg(p) => Ok((*p.expr).clone()),
+                x => Ok(x.clone()),
+            }
+        };
+        match e.name.as_str() {
+            "vec_push" if matches!(arg(&e.args, 0)?, Expr::InoutArg(_)) => {
+                // `vec_push(inout parts, x)`: push into the list's own slot
+                let p = self.inout_place_ptr(&place(e)?)?;
+                let x = self.ev(arg(&e.args, 1)?, false)?;
+                let a = self.op(format!("insertvalue {ARR} zeroinitializer, ptr {}, 0", x.a))?;
+                let view = self.op(format!("insertvalue {ARR} {a}, i64 {}, 1", x.b))?;
+                let xp = self.spill(&V::agg(view, VIEW_ELEM))?;
+                self.m.vec_elems.insert(VIEW_ELEM.to_string());
+                self.ins(format!("call void @pruv_vpush__{VIEW_ELEM}(ptr {p}, ptr {xp})"))?;
+                Ok(Some(V::unit()))
+            }
+            "vec_push" => {
+                let v = self.ev(arg(&e.args, 0)?, true)?;
+                let pending = self.temps.last().map_or(0, |t| t.len());
+                self.temps.last_mut().ok_or_else(|| IDX_ERR.to_string())?.push(v.clone());
+                let x = self.ev(arg(&e.args, 1)?, false)?;
+                self.temps.last_mut().ok_or_else(|| IDX_ERR.to_string())?.remove(pending);
+                let a = self.op(format!("insertvalue {ARR} zeroinitializer, ptr {}, 0", x.a))?;
+                let view = self.op(format!("insertvalue {ARR} {a}, i64 {}, 1", x.b))?;
+                let xp = self.spill(&V::agg(view, VIEW_ELEM))?;
+                let vp = self.spill(&v)?;
+                let ty = need_ty(&e.ty)?;
+                self.m.vec_elems.insert(VIEW_ELEM.to_string());
+                self.ins(format!("call void @pruv_vpush__{VIEW_ELEM}(ptr {vp}, ptr {xp})"))?;
+                let value = self.op(format!("load {ARR}, ptr {vp}"))?;
+                Ok(Some(self.fresh(V::agg_p(value, ty, vp), owned)?))
+            }
+            "vec_get" => {
+                let v = self.ev(arg(&e.args, 0)?, false)?;
+                let i = self.ev(arg(&e.args, 1)?, false)?;
+                if self.m.vec_get_checked {
+                    let len = self.op(format!("extractvalue {ARR} {}, 1", v.a))?;
+                    let ok = self.op(format!("icmp ult i64 {}, {len}", i.a))?;
+                    self.guard(&ok, Fail::VecGet, false)?;
+                }
+                let data = self.op(format!("extractvalue {ARR} {}, 0", v.a))?;
+                let p = self.op(format!("getelementptr inbounds {ARR}, ptr {data}, i64 {}", i.a))?;
+                let value = self.op(format!("load {ARR}, ptr {p}"))?;
+                let ptr = self.op(format!("extractvalue {ARR} {value}, 0"))?;
+                let len = self.op(format!("extractvalue {ARR} {value}, 1"))?;
+                let mut out = V::with_b(Kind::Arr, ptr, len);
+                out.layout = "i8";
+                out.ty = Some(VIEW_ELEM.to_string());
+                Ok(Some(out))
+            }
+            "vec_clear" => {
+                let p = self.inout_place_ptr(&place(e)?)?;
+                let value = self.op(format!("load {ARR}, ptr {p}"))?;
+                let cleared = self.op(format!("insertvalue {ARR} {value}, i64 0, 1"))?;
+                self.ins(format!("store {ARR} {cleared}, ptr {p}"))?;
+                Ok(Some(V::unit()))
+            }
+            "vec_reserve" => {
+                let n = self.ev(arg(&e.args, 1)?, false)?;
+                let p = self.inout_place_ptr(&place(e)?)?;
+                self.m.vec_elems.insert(VIEW_ELEM.to_string());
+                // the G6 shim's vec_reserve bound, checked always: the byte count below never wraps
+                let in_range = self.op(format!("icmp ule i64 {}, {}", n.a, 1u64 << 40))?;
+                let msg_fn = self.m.string("vec_reserve");
+                let msg_ex = self.m.string("0 <= n && n <= 2^40");
+                self.guard(&in_range, Fail::Requires(msg_fn, msg_ex), false)?;
+                let value = self.op(format!("load {ARR}, ptr {p}"))?;
+                let data = self.op(format!("extractvalue {ARR} {value}, 0"))?;
+                let len = self.op(format!("extractvalue {ARR} {value}, 1"))?;
+                let cap = self.op(format!("extractvalue {ARR} {value}, 2"))?;
+                let room = self.op(format!("sub i64 {cap}, {len}"))?;
+                let short = self.op(format!("icmp slt i64 {room}, {}", n.a))?;
+                let grow = self.label("vgrow");
+                let done = self.label("vgrown");
+                self.condbr(&short, &grow, &done)?;
+                self.place(&grow);
+                // len + n <= 2^40 + n stays far below 2^63 / 24 under the reserve contract
+                let want = self.op(format!("add i64 {len}, {}", n.a))?;
+                let old = self.op(format!("mul i64 {cap}, 24"))?;
+                let bytes = self.op(format!("mul i64 {want}, 24"))?;
+                let fresh = self.op(format!("call ptr @pruv_node_realloc_v1(ptr {data}, i64 {old}, i64 {bytes}, i64 8)"))?;
+                let a = self.op(format!("insertvalue {ARR} {value}, ptr {fresh}, 0"))?;
+                let b = self.op(format!("insertvalue {ARR} {a}, i64 {want}, 2"))?;
+                self.ins(format!("store {ARR} {b}, ptr {p}"))?;
+                self.br(&done)?;
+                self.place(&done);
+                Ok(Some(V::unit()))
+            }
+            _ => Ok(None),
         }
     }
 
@@ -9114,7 +9396,8 @@ pub fn gen_llvm(prog: &Program, verified: bool, trust_callers: bool, budget: u64
 const WIN_X64_HEADER: &str = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\ntarget triple = \"x86_64-pc-windows-msvc\"\n\n";
 
 pub(crate) fn native_vec_call_elem(c: &Call) -> Option<&str> {
-    if !matches!(c.name.as_str(), "vec_new" | "vec_push" | "vec_get" | "vec_at_mut") {
+    let view_only = matches!(c.name.as_str(), "vec_clear" | "vec_reserve");
+    if !view_only && !matches!(c.name.as_str(), "vec_new" | "vec_push" | "vec_get" | "vec_at_mut") {
         return None;
     }
     let ty = if c.name == "vec_new" {
@@ -9124,7 +9407,8 @@ pub(crate) fn native_vec_call_elem(c: &Call) -> Option<&str> {
         let place = if let Expr::InoutArg(arg) = first { &arg.expr } else { first };
         expr_ty(place).as_deref()?
     };
-    native_vec_elem(ty)
+    // R-6g9-10: a view list also clears and reserves natively
+    native_vec_elem(ty).filter(|elem| if *elem == VIEW_ELEM { c.name != "vec_at_mut" } else { !view_only })
 }
 
 fn g6_scalar(t: &str) -> bool {
@@ -9147,7 +9431,7 @@ fn g6_coll_ok(t: &str) -> bool {
 /// a type that may occur in a G6 program on LLVM: no collection, or a supported one (never nested)
 fn g6_type_ok(t: &str, vec_elems: &BTreeSet<String>) -> bool {
     if let Some(elem) = native_vec_elem(t) {
-        return vec_elems.contains(elem);
+        return elem == VIEW_ELEM || vec_elems.contains(elem);
     }
     if is_collection(t) {
         return g6_coll_ok(t);
@@ -9211,7 +9495,7 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
                 }
             }
             Node::Expr(e) => {
-                if matches!(e, Expr::Call(c) if native_vec_call_elem(c).is_some_and(|elem| vec_elems.contains(elem))
+                if matches!(e, Expr::Call(c) if native_vec_call_elem(c).is_some_and(|elem| elem == VIEW_ELEM || vec_elems.contains(elem))
                     && !funcs.contains_key(c.name.as_str())) {
                     return;
                 }
@@ -9529,6 +9813,8 @@ pub fn gen_llvm_with_specializations(
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
     }
+    let native_views = view_lists_to_native(prog);
+    let prog = native_views.as_ref().unwrap_or(prog);
     // Built only when a host-facing function exists (the generator builds its own table later).
     let mut tt0 = None;
     // P9b-2: a method is never a host entry (R-6x-5), so its signature is not a host boundary

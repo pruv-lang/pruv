@@ -1,1 +1,1 @@
-{"stage": "codegen", "code": "unsupported_type", "line": 4, "backend": "llvm"}
+{"stage": "codegen", "code": "unsupported_type", "line": 6, "backend": "llvm"}
