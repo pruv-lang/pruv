@@ -455,10 +455,11 @@ fn stamp(s: [u8], inout i: i64) -> Result<Stamp, i64> ! alloc
 // The hand `members` closure of P::part: the last "text" string is decoded into scratch.
 fn part_members(s: [u8], inout i: i64, inout scratch: [u8], inout has: bool) -> Result<(), i64> ! alloc
   requires utf8_valid(s) && len(s) <= 1073741824 && 0 <= i && i < len(s)
-  requires utf8_valid_span(scratch, 0, len(scratch))
+  requires len(scratch) == 0
   ensures old(i) <= i && i <= len(s)
   ensures is_ok(result) ==> old(i) < i
   ensures utf8_valid_span(scratch, 0, len(scratch))
+  ensures len(scratch) == 0 || len(scratch) + 2 <= i - old(i)
 {
   i = i + 1;
   ws(s, inout i);
@@ -468,6 +469,7 @@ fn part_members(s: [u8], inout i: i64, inout scratch: [u8], inout has: bool) -> 
   }
   while i < len(s)
     invariant old(i) < i && i <= len(s) && utf8_valid_span(scratch, 0, len(scratch))
+    invariant len(scratch) == 0 || len(scratch) + 2 <= i - old(i)
     decreases len(s) - i
   {
     ws(s, inout i);
@@ -504,10 +506,10 @@ fn part_members(s: [u8], inout i: i64, inout scratch: [u8], inout has: bool) -> 
 // hand P::part: one element of a content array, its "text" string (the last one wins) joined with a blank line.
 fn part(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
   requires utf8_valid(s) && len(s) <= 1073741824 && 0 <= i && i < len(s)
-  requires utf8_valid_span(e.content, 0, len(e.content))
+  requires utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
   ensures old(i) <= i && i <= len(s)
   ensures is_ok(result) ==> old(i) < i
-  ensures utf8_valid_span(e.content, 0, len(e.content))
+  ensures utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
 {
   let mut has: bool = false;
   // hand: `let mut scratch = take(&mut e.scratch)` only to satisfy the borrow checker; disjoint field borrows need no take.
@@ -519,8 +521,6 @@ fn part(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
     Ok(()) => { ok = true; }
     Err(z) => {}
   }
-  // proof guard: the joined text stays inside the array length limit (a line is at most 1 MiB)
-  if len(e.content) + len(e.scratch) + 2 > 1099511627776 { ok = false; }
   if ok && has && len(e.scratch) > 0 {
     if len(e.content) > 0 { arr_append(inout e.content, "\n\n", 0, 2); }
     arr_append(inout e.content, e.scratch, 0, len(e.scratch));
@@ -534,7 +534,7 @@ fn content(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
   requires utf8_valid(s) && len(s) <= 1073741824 && 0 <= i && i <= len(s)
   ensures old(i) <= i && i <= len(s)
   ensures is_ok(result) ==> old(i) < i
-  ensures utf8_valid_span(e.content, 0, len(e.content))
+  ensures utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
 {
   e.content = truncate(e.content, 0);
   if i >= len(s) { return Err::<(), i64>(1); }
@@ -552,7 +552,7 @@ fn content(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
     }
     while i < len(s)
       invariant old(i) < i && i <= len(s)
-      invariant utf8_valid_span(e.content, 0, len(e.content))
+      invariant utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
       decreases len(s) - i
     {
       ws(s, inout i);
@@ -584,9 +584,9 @@ fn content(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
 // The hand `members` closure of P::entry: the top-level fields of the line.
 fn fields(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
   requires utf8_valid(s) && len(s) <= 1073741824 && 0 <= i && i < len(s)
-  requires utf8_valid_span(e.content, 0, len(e.content))
+  requires utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
   ensures old(i) <= i && i <= len(s)
-  ensures utf8_valid_span(e.content, 0, len(e.content))
+  ensures utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
 {
   i = i + 1;
   ws(s, inout i);
@@ -596,7 +596,7 @@ fn fields(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
   }
   while i < len(s)
     invariant old(i) < i && i <= len(s)
-    invariant utf8_valid_span(e.content, 0, len(e.content))
+    invariant utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
     decreases len(s) - i
   {
     ws(s, inout i);
@@ -657,10 +657,11 @@ fn fields(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
 }
 
 // hand P::entry: the whole line into e; Err = the line is not valid JSON (a skipped line).
+// The content is decoded from (and joined inside) the line, so it is never longer than the line.
 pub fn entry(s: [u8], inout i: i64, inout e: Entry) -> Result<(), i64> ! alloc
   requires utf8_valid(s) && len(s) <= 1073741824 && 0 <= i && i <= len(s)
-  requires utf8_valid_span(e.content, 0, len(e.content))
-  ensures utf8_valid_span(e.content, 0, len(e.content))
+  requires utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= i
+  ensures utf8_valid_span(e.content, 0, len(e.content)) && len(e.content) <= len(s)
 {
   ws(s, inout i);
   if i < len(s) && s[i] == 123 {

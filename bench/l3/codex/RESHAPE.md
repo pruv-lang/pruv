@@ -128,8 +128,9 @@ Changed `root`, `rpc`, `read`, `item`, `plan`, `folder`, `util` (`codex/` only; 
 - 4.3f-R closed: `child_args` passes `subview(argv, lo, hi)`.
 - 4.3f-P partly: `marker_end` returns 0 for "no marker" and the `m > n` test is gone. The `Option<Plan>` state stays
   `pl` / `pb` (row 4.3f-P kept, with VL).
-- 4.3f-D partly: `str_at` uses `access::string_text_scanned_owned`. The 50331648 length test stays: `doc_local`
-  gives no bound on the source length the decoder requires (row 4.4e-DL).
+- 4.3f-D partly: `str_at` uses `access::string_text_scanned_owned`. The 50331648 length test stayed here (row
+  4.4e-DL). That reason was wrong: the `JsonDocument` invariant bounds the source by 16777216 bytes; 4.4z removes
+  the test (§3c).
 
 Codex structure comparison (gpt-6.2-astra, high; Codex 2 account): the 4.4e changes match the hand. Not applied, all
 older than 4.4e or open shared rows:
@@ -147,6 +148,19 @@ stderr tail (4.3f-B, closed in 4.4v).
 New rows: 4.4e-LP, 4.4e-EC, 4.4e-NU, 4.4e-FB (folder bound kept for the request size proof), 4.4e-DL (`doc_local` source bound),
 4.4e-VT (the whole-root verify exceeds 300 s on this machine even at the unchanged baseline, load about 10).
 Not started: 4.3f-E, 4.3f-F (shared modules), 4.3f-S (language). 4.3f-B closed in 4.4v.
+
+## 3c. Step 4.4z: row 4.4e-DL
+
+- `util::str_at` no longer tests `len(x) > 50331648`. The decoder ensures the text is at most 3 x the token span
+  (`pkgs/access`), the `JsonDocument` invariant puts the span inside the source and bounds the source by 16777216
+  (`pkgs/json`), so the result is at most 50331648. A proof-only `assert` of the span and source facts for `id`
+  links the two; it is erased, so the arm is `return move x;`. 4.3f-D stays open only for the owned decode (the hand
+  uses `as_str()`).
+- Codex structure comparison (gpt-6.2-astra, high, default account): no branch added; the test removed cannot fire.
+  Performance was not measured (older differences remain).
+- Results (`rs/rust`, `rs/llvm`): `test_impl.py` 136/136 and 136/136 (verified); `q.py 300` 323 cases, 0 unexplained
+  (262 exact, rest policy P1/P2/P3/P4/P6/P8) on both (exit 1 only for the absent `py` runners); `q_mutants.py`
+  markers 16/16 match once (none in `util.pruv`); the full mutant run was not done (4.4e-VT).
 
 ## 4. Results
 

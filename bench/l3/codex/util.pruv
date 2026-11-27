@@ -103,7 +103,9 @@ pub fn str_at(d: crate::json::JsonDocument, id: i64) -> str ! alloc
   let t: crate::jstr::Text = crate::access::string_text_scanned_owned(d, id);
   match t {
     crate::jstr::Text::Decoded(x) => {
-      if len(x) > 50331648 { return copy(none); }
+      // The decoded text is at most 3 x the token span (access), the span lies in the source and the source is at most
+      // 16777216 bytes (JsonDocument invariant), so 3 x 16777216 = 50331648.
+      assert 0 <= d.tape[6 * id + 1] && d.tape[6 * id + 1] < d.tape[6 * id + 2] && d.tape[6 * id + 2] <= len(d.source) && len(d.source) <= 16777216;
       return move x;
     }
     crate::jstr::Text::InternalInvariant(e) => { return copy(none); }
