@@ -1,0 +1,13 @@
+// spec: R-6g9-15 reject
+struct Draft { reply: [u8], n: i64 }
+struct Coll { drafts: Vec<Draft>, total: i64 }
+
+fn grow_at(inout c: Coll, i: i64, src: str) -> () ! alloc
+  requires 0 <= i && i + 1 < len(c.drafts) && len(c.drafts[i].reply) + len(src) < 1000
+  ensures len(c.drafts[i + 1].reply) == len(old(c).drafts[i + 1].reply) + len(src)
+{
+  match vec_at_mut::<Draft>(inout c.drafts, i) {
+    Some(d) => { arr_append(inout d.reply, src, 0, len(src)); }
+    None => {}
+  }
+}

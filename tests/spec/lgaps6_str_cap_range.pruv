@@ -1,0 +1,7 @@
+// spec: R-6g9-14 reject
+pub fn make(n: i64) -> i64 ! alloc
+  requires n <= 64
+{
+  let s: String = string_with_capacity(n);
+  return len(s);
+}

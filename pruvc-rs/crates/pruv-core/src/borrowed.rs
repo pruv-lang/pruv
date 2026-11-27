@@ -1134,7 +1134,7 @@ fn view_lists(f: &Function) -> Res<Vec<String>> {
         match e {
             Expr::Call(c) if matches!(c.name.as_str(), "vec_push" | "vec_clear" | "vec_reserve" | "vec_pop")
                 && c.args.first().is_some_and(|a| list(a, true)) => c.args[1..].iter().try_for_each(|a| uses(a, set)),
-            Expr::Call(c) if matches!(c.name.as_str(), "vec_get" | "len")
+            Expr::Call(c) if matches!(c.name.as_str(), "vec_get" | "len" | "vec_views_len")
                 && c.args.first().is_some_and(|a| list(a, false)) => c.args[1..].iter().try_for_each(|a| uses(a, set)),
             Expr::Var(v) if set.contains(v.name.as_str()) => Err(escape(v.line, v.col)),
             Expr::Move(m) if set.contains(m.name.as_str()) => Err(escape(m.line, m.col)),

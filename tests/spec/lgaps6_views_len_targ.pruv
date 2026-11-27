@@ -1,0 +1,8 @@
+// spec: R-6g9-13 reject
+// The type argument names the list's own element: a `str` list measured as `ref [u8]` is `type/borrow_signature`.
+fn checksum() -> i64 ! alloc {
+  let mut out: Vec<ref str> = vec_new::<ref str>();
+  vec_push::<ref str>(inout out, "ab");
+  assert vec_views_len::<ref [u8]>(out, 1) == 2;
+  return len(out);
+}

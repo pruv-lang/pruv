@@ -1,0 +1,10 @@
+// spec: R-6g9-11 accept
+// LG4-B2: under --no-verify a `vec_pop` on an empty view list fails its `len(v) >= 1` check at run time; the LLVM
+// backend frees the live heap buffers (here the list's own buffer; the small array is on the stack) before it fails.
+fn checksum() -> i64 ! alloc {
+  let bytes: [i64] = alloc(16, 7);
+  let mut names: Vec<ref str> = vec_new::<ref str>();
+  vec_reserve::<ref str>(inout names, 4);
+  vec_pop::<ref str>(inout names);
+  return len(bytes);
+}

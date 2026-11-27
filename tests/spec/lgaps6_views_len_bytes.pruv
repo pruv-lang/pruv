@@ -1,0 +1,20 @@
+// spec: R-6g9-13 accept
+// The measure on a `[u8]` list: pushes add the view length, `vec_pop` takes the last one off, the prefix sums step
+// by one element, and `vec_clear` resets it to 0.
+fn f(p: [u8]) -> i64 ! alloc
+  requires len(p) == 5
+{
+  let mut out: Vec<ref [u8]> = vec_new::<ref [u8]>();
+  vec_push::<ref [u8]>(inout out, subview(p, 0, 2));
+  vec_push::<ref [u8]>(inout out, p);
+  vec_push::<ref [u8]>(inout out, subview(p, 1, 4));
+  assert vec_views_len::<ref [u8]>(out, 3) == 10;
+  assert vec_views_len::<ref [u8]>(out, 1) == 2;
+  vec_pop::<ref [u8]>(inout out);
+  assert vec_views_len::<ref [u8]>(out, len(out)) == 7;
+  let r: i64 = len(out);
+  vec_clear::<ref [u8]>(inout out);
+  assert vec_views_len::<ref [u8]>(out, 0) == 0;
+  return r;
+}
+fn checksum() -> i64 ! alloc { let b: [u8] = alloc(5, 7); return f(b); }

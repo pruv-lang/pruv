@@ -1,0 +1,26 @@
+{
+  "gen_contains": [
+    "let mut out: ::std::vec::Vec<&str> = ::std::vec::Vec::new();",
+    "{ out.pop(); }"
+  ],
+  "gen_absent": [
+    "vec_views_len"
+  ],
+  "run": {
+    "backends": [
+      "rust",
+      "llvm"
+    ],
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "5411"
+    ],
+    "g6_drop_balance": true
+  }
+}

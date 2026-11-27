@@ -1,0 +1,23 @@
+// spec: R-6g9-14 accept
+fn rooted(take s: String) -> String ! alloc
+  requires len(s) <= 1000
+  ensures len(result) == len(s) + 1
+{
+  let mut t: String = string_reserve(move s, 1);
+  t = string_prepend_char(move t, 47);
+  return move t;
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let mut s: String = string_with_capacity(8);
+  s = string_push_char(move s, 98);
+  s = rooted(move s);
+  s = string_prepend_char(move s, 233);
+  assert len(s) == 4;
+  let b0: i64 = string_byte(s, 0);
+  let b1: i64 = string_byte(s, 1);
+  let b2: i64 = string_byte(s, 2);
+  let b3: i64 = string_byte(s, 3);
+  assert b0 == 195 && b1 == 169;
+  return len(s) * 1000 + b0 + b2 * 10 + b3;
+}

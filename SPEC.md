@@ -2054,7 +2054,7 @@ borrowed value is live.
 - R-6g9-10 **Local lists of `str` views (4.4b-NV).** `let mut parts: Vec<ref str> = vec_new::<ref str>();` declares a
   list of borrowed `str` views local to its function (hand `let mut parts: Vec<&str> = Vec::new();`).
   - *Operations.* Only `vec_push::<ref str>(inout parts, v)`, `vec_get::<ref str>(parts, i)` (a `ref str` view),
-    `vec_clear::<ref str>(inout parts)`, `vec_reserve::<ref str>(inout parts, n)`, `vec_pop::<ref str>(inout parts)` (R-6g9-11) and `len(parts)`, with the
+    `vec_clear::<ref str>(inout parts)`, `vec_reserve::<ref str>(inout parts, n)`, `vec_pop::<ref str>(inout parts)` (R-6g9-11), `len(parts)` and, in contracts only, `vec_views_len::<ref str>(parts, k)` (R-6g9-13), with the
     usual bounds and length obligations of those calls; the `inout` operations need a `let mut` list (`type/immutable`). Any other use of the list (an argument, a result, a `move`, a copy,
     a field, an assignment to it) is `type/borrow_escape`; another `vec_*` call, an operation without the
     `::<ref str>` type argument, a list initialised other than by `vec_new::<ref str>()`, a list named like a
@@ -2089,9 +2089,11 @@ borrowed value is live.
   `Vec<String>` of bytes (no UTF-8 fact is used). `vec_pop::<ref T>(inout parts)` on either list drops the last view
   and has result `unit` (a program's own `vec_pop` function keeps the name); it requires `len(parts) >= 1` (`verify/call_requires`), and after it `len(parts)` is one
   less. Code: Rust `{ parts.pop(); }` (with `--no-verify`, a failed pop panics with the requires message); LLVM
-  stores the length less one, with the same check unverified.
+  stores the length less one; it checks `len(parts) >= 1` whenever its `vec_get` bounds check is on (unverified,
+  `--foreign-checks all` or a program with foreign functions) and frees live buffers before it fails.
   - Tests: [`[u8]` pieces with `..` popping, `str` pop](tests/spec/lgaps4_byte_list.pruv),
-    [a program's own `vec_pop` wins](tests/spec/lgaps4_user_vec_pop.pruv);
+    [a program's own `vec_pop` wins](tests/spec/lgaps4_user_vec_pop.pruv),
+    [unverified empty pop fails with balanced frees](tests/spec/lgaps6_pop_free.pruv);
     rejects [pop of a possibly empty list](tests/spec/lgaps4_pop_empty.pruv),
     [`str` operation on a `[u8]` list](tests/spec/lgaps4_byte_list_targ.pruv),
     [`[u8]` list from `vec_new::<ref str>`](tests/spec/lgaps4_byte_list_new.pruv),
@@ -2131,6 +2133,39 @@ borrowed value is live.
     [a refined local out of range after `replace`](tests/spec/lgaps5_replace_refine.pruv) and
     [after `swap`](tests/spec/lgaps5_swap_refine.pruv).
 
+- R-6g9-13 **Total view length of a list (4.4k-VS, L-gaps 6).** `vec_views_len::<ref T>(parts, k)` with `T` the
+  list's own element (`str` or `[u8]`) and `k: i64` is the byte length of the first `k` views of an R-6g9-10/11 list,
+  `S(parts, k) = len(parts[0]) + ... + len(parts[k-1])`. It is allowed only in contracts (asserts, invariants);
+  in code it is `type/contract_only`, and another element type is `type/borrow_signature`. Reading it does not
+  count as a use of the list. *Proof.* `S(parts, 0) == 0`; for `0 <= k <= len(parts)`,
+  `0 <= S(parts, k) <= S(parts, len(parts))`; for `0 <= k < len(parts)`, `S(parts, k + 1) == S(parts, k) + len(parts[k])`.
+  `vec_push` adds the pushed view's length to the total, `vec_pop` subtracts the last view's, and `vec_clear`
+  makes it 0. A `k` outside `0..=len(parts)` is unspecified: programs must not rely on it (after a `vec_pop` the verifier may still
+  relate it to the views before the pop). *Code.* None (contracts are not
+  emitted). This lets a builder that copies every view prove its length bound without a run-time guard, as in
+  the §9 path normalizer (hand `out.join("/")`).
+  - Tests: [path normalizer](tests/spec/lgaps6_views_len.pruv), [`[u8]` list](tests/spec/lgaps6_views_len_bytes.pruv);
+    rejects [in code](tests/spec/lgaps6_views_len_code.pruv), [wrong total](tests/spec/lgaps6_views_len_wrong.pruv),
+    [element type](tests/spec/lgaps6_views_len_targ.pruv).
+- R-6g9-14 **String capacity and front insert (4.4k-SR, L-gaps 6).** Catalog operations with `! alloc`:
+  `string_with_capacity(n) -> String` (hand `String::with_capacity(n as usize)`), `string_reserve(s, n) -> String`
+  consuming `s` (hand `s.reserve(n as usize)`), and `string_prepend_char(s, c) -> String` consuming `s` (hand
+  `s.insert(0, c)`). *Proof.* `with_capacity` and `reserve` require `0 <= n <= 2^40` (`verify/call_requires`);
+  `with_capacity` gives length 0 and `reserve` keeps every byte (capacity is not modelled).
+  `prepend_char` requires `c` to be a Unicode scalar value and `len(s) + 4 <= 2^40` as `string_push_char`
+  (R-6g8-2); the result has length `len(s) + w` where `w` is the UTF-8 width of `c`, its first `w` bytes are the
+  encoding of `c` and `result[w + k] == s[k]`. *Code.* Rust calls the hand methods in G6 helpers with the catalog's
+  run-time `requires` checks; LLVM goes through the same helpers in the G6 shim.
+  - Tests: [capacity, reserve, front insert](tests/spec/lgaps6_str_reserve.pruv); rejects
+    [wrong first byte](tests/spec/lgaps6_str_prepend_wrong.pruv), [capacity range](tests/spec/lgaps6_str_cap_range.pruv).
+- R-6g9-15 **Appending to a `[u8]` field of a list element (4.4h-FA, L-gaps 6).** `arr_append` and `arr_push`
+  (R-6g4-6, R-6g5-2) take `inout d.f` where `d` is the mutable binder of a `vec_at_mut` `Some` arm (R-6g-3), so
+  a `[u8]` field of a `Vec` element grows in place with no move-out and restore. The verifier writes the grown
+  field back into that element only; other elements and sibling fields keep their values. Rust emits
+  `d.f.extend_from_slice(..)` / `d.f.push(..)` on the element; LLVM grows the field's block in place. Fields of
+  a `let mut` local and of an `inout` parameter were already places (R-6g5-2).
+  - Tests: [element field append](tests/spec/lgaps6_field_append.pruv); reject
+    [another element claimed to grow](tests/spec/lgaps6_field_append_frame.pruv).
 ## 6h. Files (G10)
 
 `fs` is the file-system effect, independent of `io` (stdout) and `alloc`. Direct and transitive calls

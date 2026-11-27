@@ -1812,6 +1812,8 @@ pub enum Fail {
     // LG25: re-enter pruv_substr (ptr, len, lo, hi), which panics with the matching message
     Substr(String, String, String, String),
     Requires(String, String),
+    /// LG4-B2: like Requires, but frees live temps and scope owners first (as VecGet does)
+    RequiresFreed(String, String),
     /// u8 element range violation: (value SSA, range text). The string is registered when the fail block is emitted.
     Elem(String, &'static str),
     VecGet,
@@ -2126,7 +2128,7 @@ impl<'a> FnGen<'a> {
                 }
                 self.ins((*panic).to_string())
             }
-            Fail::VecGet => {
+            Fail::VecGet | Fail::RequiresFreed(..) => {
                 for region in self.temps.clone().iter().rev() {
                     for value in region.iter().rev() {
                         self.free_val(value)?;
@@ -2135,6 +2137,9 @@ impl<'a> FnGen<'a> {
                 for i in (0..self.scopes.len()).rev() {
                     let owners = self.scopes[i].arrays.clone();
                     self.free_scope(&owners)?;
+                }
+                if let Fail::RequiresFreed(a, b) = f {
+                    return self.ins(format!("call void @pruv_panic_requires(ptr {}, ptr {})", a, b));
                 }
                 let requires = if self.m.foreign_requires { "1" } else { "0" };
                 self.m.vec_get_used = true;
@@ -6934,7 +6939,7 @@ impl<'a> FnGen<'a> {
                     let ok = self.op(format!("icmp sgt i64 {len}, 0"))?;
                     let msg_fn = self.m.string("vec_pop");
                     let msg_ex = self.m.string("len(v) >= 1");
-                    self.guard(&ok, Fail::Requires(msg_fn, msg_ex), false)?;
+                    self.guard(&ok, Fail::RequiresFreed(msg_fn, msg_ex), false)?;
                 }
                 let less = self.op(format!("sub i64 {len}, 1"))?;
                 let popped = self.op(format!("insertvalue {ARR} {value}, i64 {less}, 1"))?;
@@ -6956,7 +6961,7 @@ impl<'a> FnGen<'a> {
                 let in_range = self.op(format!("icmp ule i64 {}, {}", n.a, 1u64 << 40))?;
                 let msg_fn = self.m.string("vec_reserve");
                 let msg_ex = self.m.string("0 <= n && n <= 2^40");
-                self.guard(&in_range, Fail::Requires(msg_fn, msg_ex), false)?;
+                self.guard(&in_range, Fail::RequiresFreed(msg_fn, msg_ex), false)?;
                 let value = self.op(format!("load {ARR}, ptr {p}"))?;
                 let data = self.op(format!("extractvalue {ARR} {value}, 0"))?;
                 let len = self.op(format!("extractvalue {ARR} {value}, 1"))?;
@@ -7053,6 +7058,7 @@ impl<'a> FnGen<'a> {
         if matches!(
             n,
             "vec_new" | "map_new" | "string_from" | "string_new" | "vec_push" | "map_insert" | "string_push_str" | "string_push_char"
+                | "string_with_capacity" | "string_reserve" | "string_prepend_char"
                 | "file_open_read" | "file_create" | "file_read_all" | "file_write_str" | "file_write_bytes"
                 | "proc_args_new" | "proc_args_push" | "proc_spawn" | "proc_spawn_env" | "proc_write_str" | "proc_write_bytes"
                 | "proc_close_stdin" | "proc_read" | "proc_read_all"
