@@ -1,328 +1,218 @@
-// L3-1 turn collector. st = [begun, current present, lost_before, current slot, arena used].
-// Each of 200 slots has eight words: prompt length, reply length, reply budget, tool count,
-// clipped, created present, completed present, and arena offset.
-// Each arena span stores the prompt, created stamp, reply and completed stamp in that order.
-// Only the newest attached turn can extend the arena. Once evicted spans take
-// at least half the capacity, the window collector reuses their prefix.
+// L3-1 turn collector, hand `Collector` (VecDeque<Draft>) and `Draft` (handrust/src/lib.rs).
+// drafts holds at most 200 drafts. Draft k (k counts begins from 0) lives at index k % 200: the vector grows by
+// push while fewer than 200 drafts were begun, and afterwards the oldest draft, at the front index begun % 200,
+// is reused in place for the next begin (hand: pop_front, clear, push_back). Each draft owns its prompt, reply,
+// createdAt and completedAt bytes; completedAt is a separate field, so a later answer never moves it.
 
 pub struct Plan { kept: i64, total: i64, bytes: i64 }
 
-pub pred fn fields(sl: [i64]) -> bool {
-  return len(sl) == 1600 && forall s in 0..200: (
-    0 <= sl[8 * s] && sl[8 * s] <= 32768 &&
-    0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 &&
-    0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 &&
-    (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) &&
-    (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) &&
-    (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1));
+pub struct Draft { prompt: [u8], reply: [u8], used: i64, tools: i64, created: [u8], completed: [u8], clipped: bool }
+
+pub struct Collector { drafts: Vec<Draft>, begun: i64, active: bool, lost: bool }
+
+pub pred fn ok(c: Collector) -> bool {
+  return 0 <= c.begun && c.begun <= 1000000000000 && len(c.drafts) <= 200 &&
+    (c.begun <= 200 ==> len(c.drafts) == c.begun) && (c.begun > 200 ==> len(c.drafts) == 200) &&
+    (c.active ==> c.begun >= 1) &&
+    (forall i in 0..len(c.drafts): (
+      len(c.drafts[i].prompt) <= 32768 &&
+      0 <= c.drafts[i].used && len(c.drafts[i].reply) <= c.drafts[i].used && c.drafts[i].used <= 32768 &&
+      0 <= c.drafts[i].tools && c.drafts[i].tools <= 1000000000000000 &&
+      (len(c.drafts[i].created) == 0 || len(c.drafts[i].created) == 24) &&
+      (len(c.drafts[i].completed) == 0 || len(c.drafts[i].completed) == 24)));
 }
 
-pub pred fn spans(st: [i64], sl: [i64], cap: i64) -> bool {
-  return len(st) == 5 && len(sl) == 1600 && 0 <= st[3] && st[3] < 200 &&
-    0 <= st[4] && st[4] <= cap &&
-    (forall s in 0..200: (
-      0 <= sl[8 * s + 7] && sl[8 * s + 7] <= st[4] &&
-      sl[8 * s] + sl[8 * s + 1] + 24 * sl[8 * s + 5] + 24 * sl[8 * s + 6] <= st[4] - sl[8 * s + 7])) &&
-    (st[1] != 0 ==> (st[4] == sl[8 * st[3] + 7] + sl[8 * st[3]] +
-      24 * sl[8 * st[3] + 5] + sl[8 * st[3] + 1] + 24 * sl[8 * st[3] + 6]));
-}
-
-// Maximum extent of the current span, invariant across all answer and tool operations.
-pub pred fn reply_room(st: [i64], sl: [i64], limit: i64) -> bool {
-  return len(st) == 5 && len(sl) == 1600 && 0 <= st[3] && st[3] < 200 && st[4] <= limit &&
-    (st[1] != 0 ==> (st[4] + (32768 - sl[8 * st[3] + 1]) + 24 * (1 - sl[8 * st[3] + 6]) <= limit));
-}
-
-pub fn new_state() -> [i64] ! alloc
-  ensures len(result) == 5
-  ensures result[0] == 0 && result[1] == 0 && result[2] == 0 && result[3] == 0 && result[4] == 0
+pub fn new_collector() -> Collector ! alloc
+  ensures ok(result) && result.begun == 0 && !result.active && !result.lost
 {
-  return alloc(5, 0);
+  return Collector { drafts: vec_new::<Draft>(), begun: 0, active: false, lost: false };
 }
 
-pub fn new_slots() -> [i64] ! alloc
-  ensures len(result) == 1600
-  ensures forall k in 0..1600: result[k] == 0
+// The current draft's index (the newest begun one).
+pub fn current(c: Collector) -> i64
+  requires ok(c) && c.begun >= 1
+  ensures 0 <= result && result < len(c.drafts) && result == (c.begun - 1) % 200
 {
-  return alloc(1600, 0);
+  return (c.begun - 1) % 200;
 }
 
-pub fn new_buffer() -> [u8] ! alloc
-  ensures len(result) == 0
+// b emptied, keeping its block where the backend can (hand: clear), then t[0..n) appended (hand: extend).
+fn refill(take b: [u8], t: [u8], n: i64) -> [u8] ! alloc
+  requires 0 <= n && n <= len(t) && n <= 32768
+  ensures len(result) == n
 {
-  return alloc(0, 0);
+  let x0: [u8] = move b;
+  let mut x: [u8] = truncate(x0, 0);
+  arr_append(inout x, t, 0, n);
+  return move x;
 }
 
-// Rebase only after a wrap, and amortize the move over the reclaimed bytes.
-pub fn reclaim(inout st: [i64], inout sl: [i64], inout buf: [u8]) -> ()
-  requires spans(st, sl, len(buf)) && fields(sl) && 0 <= st[0] && st[0] <= 1000000000000
-  ensures spans(st, sl, len(buf)) && fields(sl) && st[4] <= old(st)[4]
-  ensures st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
-  ensures forall s in 0..200: (
-    sl[8 * s] == old(sl)[8 * s] && sl[8 * s + 1] == old(sl)[8 * s + 1] &&
-    sl[8 * s + 2] == old(sl)[8 * s + 2] && sl[8 * s + 3] == old(sl)[8 * s + 3] &&
-    sl[8 * s + 4] == old(sl)[8 * s + 4] && sl[8 * s + 5] == old(sl)[8 * s + 5] &&
-    sl[8 * s + 6] == old(sl)[8 * s + 6])
+// The prompt form of refill (str source).
+fn refill_text(take b: [u8], t: str, n: i64) -> [u8] ! alloc
+  requires 0 <= n && n <= len(t) && n <= 32768
+  ensures len(result) == n
 {
-  if st[0] <= 200 { return; }
-  let oldest: i64 = st[0] % 200;
-  let half: i64 = len(buf) / 2;
-  let mut drop: i64 = sl[8 * oldest + 7];
-  if drop == 0 || drop < half { return; }
-  let mut i: i64 = 0;
-  while i < 200
-    invariant 0 <= i && i <= 200 && 0 <= drop && drop <= st[4]
-    invariant forall s in 0..i: drop <= sl[8 * s + 7]
-    decreases 200 - i
-  {
-    let at: i64 = sl[8 * i + 7];
-    if at < drop { drop = at; }
-    i = i + 1;
-  }
-  if drop == 0 || drop < half { return; }
-  let used: i64 = st[4] - drop;
-  copy_within(inout buf, 0, drop, used);
-  i = 0;
-  while i < 200
-    invariant 0 <= i && i <= 200
-    invariant spans(st, old(sl), len(buf)) && fields(old(sl))
-    invariant 0 <= drop && drop <= st[4] && used == st[4] - drop
-    invariant forall s in 0..200: drop <= old(sl)[8 * s + 7]
-    invariant forall s in 0..i: sl[8 * s + 7] == old(sl)[8 * s + 7] - drop
-    invariant forall k in 0..1600: (k >= 8 * i || k % 8 != 7) ==> sl[k] == old(sl)[k]
-    decreases 200 - i
-  {
-    sl[8 * i + 7] = sl[8 * i + 7] - drop;
-    i = i + 1;
-  }
-  st[4] = used;
+  let x0: [u8] = move b;
+  let mut x: [u8] = truncate(x0, 0);
+  arr_append(inout x, t, 0, n);
+  return move x;
 }
 
-// Grow the arena only as needed, retaining all existing offsets and bytes.
-fn reserve(inout buf: [u8], need: i64) -> () ! alloc
-  requires 0 <= need && need <= 1000000000000
-  ensures need <= len(buf)
-  ensures len(old(buf)) <= len(buf)
-  ensures forall k in 0..len(old(buf)): buf[k] == old(buf)[k]
+// sep LF bytes and then text[0..n) appended to b (hand: extend "\n\n"[..sep], then text[..n]).
+fn piece(take b: [u8], sep: i64, text: str, n: i64) -> [u8] ! alloc
+  requires 0 <= sep && sep <= 2 && 0 <= n && n <= len(text) && len(b) <= 32768 && n <= 32768
+  ensures len(result) == len(b) + sep + n
 {
-  let cap: i64 = len(buf);
-  if need <= cap { return; }
-  let mut next: i64 = 2 * cap;
-  if next < need { next = need; }
-  if next > 1000000000000 { next = 1000000000000; }
-  buf = resize(buf, next, 0);
+  let mut x: [u8] = move b;
+  arr_append(inout x, "\n\n", 0, sep);
+  arr_append(inout x, text, 0, n);
+  return move x;
 }
 
-// sep LF bytes followed by text[0..n) at dst[at..] (hand: extend "\n\n"[..sep], then text[..n]).
-fn write_piece(inout dst: [u8], at: i64, sep: i64, text: str, n: i64) -> ()
-  requires 0 <= sep && sep <= 2 && 0 <= n && n <= len(text) && 0 <= at && at <= len(dst) && sep + n <= len(dst) - at
-  ensures len(dst) == len(old(dst))
-  ensures forall k in 0..sep: dst[at + k] == 10
-  ensures forall k in 0..n: dst[at + sep + k] == text[k]
-  ensures forall k in 0..len(dst): (k < at || k >= at + sep + n) ==> dst[k] == old(dst)[k]
-{
-  copy_range(inout dst, at, "\n\n", 0, sep);
-  copy_range(inout dst, at + sep, text, 0, n);
-}
-
-// begin: new current draft in slot begun % 200 (evicting the oldest), prompt clipped to 32768 bytes (longest
-// whole-scalar prefix), clipped set when the original exceeded the cap or lost_before was set, lost_before
-// cleared, reply/budget/tools/completedAt reset, optional createdAt stored.
-pub fn begin(inout st: [i64], inout sl: [i64], inout buf: [u8], prompt: str, created: [u8]) -> () ! alloc
-  requires spans(st, sl, len(buf)) && st[4] <= 1000000000000 - 32792
-  requires 0 <= st[0] && st[0] < 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
-  requires fields(sl)
+// begin: new current draft (evicting the oldest once 200 exist), prompt clipped to 32768 bytes (longest
+// whole-scalar prefix), clipped set when the original exceeded the cap or lost was set, lost cleared,
+// reply/budget/tools/completedAt reset, optional createdAt stored.
+pub fn begin(inout c: Collector, prompt: str, created: [u8]) -> () ! alloc
+  requires ok(c) && c.begun < 1000000000000
   requires len(prompt) <= 100000000
   requires len(created) == 0 || len(created) == 24
-  ensures len(old(buf)) <= len(buf)
-  ensures spans(st, sl, len(buf))
-  ensures st[0] == old(st)[0] + 1 && st[1] == 1 && st[2] == 0 && st[3] == old(st)[0] % 200
-  ensures fields(sl)
-  ensures sl[8 * st[3] + 1] == 0 && sl[8 * st[3] + 2] == 0 && sl[8 * st[3] + 3] == 0 && sl[8 * st[3] + 6] == 0
-  ensures sl[8 * st[3]] <= len(prompt)
-  ensures len(prompt) <= 32768 ==> sl[8 * st[3]] == len(prompt)
-  ensures is_char_boundary(prompt, sl[8 * st[3]])
-  ensures sl[8 * st[3]] == len(prompt) || (forall t in sl[8 * st[3]] + 1..32769: !is_char_boundary(prompt, t))
-  ensures len(created) == 24 ==> sl[8 * st[3] + 5] == 1
-  ensures len(created) == 0 ==> sl[8 * st[3] + 5] == 0
-  ensures (len(prompt) > 32768 || old(st)[2] == 1) ==> sl[8 * st[3] + 4] == 1
-  ensures (len(prompt) <= 32768 && old(st)[2] == 0) ==> sl[8 * st[3] + 4] == 0
-  ensures old(st)[4] <= st[4] && st[4] <= old(st)[4] + 32792
-  ensures forall k in 0..1600: (k < 8 * st[3] || k >= 8 * st[3] + 8) ==> sl[k] == old(sl)[k]
-
+  ensures ok(c)
+  ensures c.begun == old(c).begun + 1 && c.active && !c.lost
+  ensures len(c.drafts[(c.begun - 1) % 200].prompt) <= len(prompt) && is_char_boundary(prompt, len(c.drafts[(c.begun - 1) % 200].prompt))
+  ensures len(prompt) <= 32768 ==> len(c.drafts[(c.begun - 1) % 200].prompt) == len(prompt)
+  ensures len(c.drafts[(c.begun - 1) % 200].prompt) == len(prompt) || (forall t in len(c.drafts[(c.begun - 1) % 200].prompt) + 1..32769: !is_char_boundary(prompt, t))
+  ensures c.drafts[(c.begun - 1) % 200].clipped == (len(prompt) > 32768 || old(c).lost)
+  ensures len(c.drafts[(c.begun - 1) % 200].reply) == 0 && c.drafts[(c.begun - 1) % 200].used == 0 && c.drafts[(c.begun - 1) % 200].tools == 0 && len(c.drafts[(c.begun - 1) % 200].completed) == 0
+  ensures len(c.drafts[(c.begun - 1) % 200].created) == len(created)
 {
-  let k: i64 = st[0];
-  let w: i64 = k % 200;
   let n: i64 = crate::text::clip_len(prompt, 32768);
-  let start: i64 = st[4];
-  let end: i64 = start + n + len(created);
-  reserve(inout buf, end);
-  write_begin(inout buf, start, prompt, n, created);
-  let has: i64 = len(created) / 24;
-  let mut cl: i64 = 0;
-  if len(prompt) > 32768 || st[2] == 1 { cl = 1; }
-  sl[8 * w] = n;
-  sl[8 * w + 1] = 0;
-  sl[8 * w + 2] = 0;
-  sl[8 * w + 3] = 0;
-  sl[8 * w + 4] = cl;
-  sl[8 * w + 5] = has;
-  sl[8 * w + 6] = 0;
-  sl[8 * w + 7] = start;
-  st[4] = end;
-  st[0] = k + 1;
-  st[1] = 1;
-  st[2] = 0;
-  st[3] = w;
+  let cl: bool = len(prompt) > 32768 || c.lost;
+  if len(c.drafts) < 200 {
+    let p0: [u8] = alloc(0, 0);
+    let p: [u8] = refill_text(move p0, prompt, n);
+    let t0: [u8] = alloc(0, 0);
+    let t: [u8] = refill(move t0, created, len(created));
+    let r: [u8] = alloc(0, 0);
+    let q: [u8] = alloc(0, 0);
+    c.drafts = vec_push::<Draft>(move c.drafts, Draft { prompt: move p, reply: move r, used: 0, tools: 0, created: move t, completed: move q, clipped: cl });
+  } else {
+    let w: i64 = c.begun % 200;
+    let m: i64 = len(created);
+    match vec_at_mut::<Draft>(inout c.drafts, w) {
+      Some(d) => {
+        let p: [u8] = move d.prompt;
+        d.prompt = refill_text(move p, prompt, n);
+        let r: [u8] = move d.reply;
+        d.reply = refill(move r, created, 0);
+        let t: [u8] = move d.created;
+        d.created = refill(move t, created, m);
+        let q: [u8] = move d.completed;
+        d.completed = refill(move q, created, 0);
+        d.used = 0;
+        d.tools = 0;
+        d.clipped = cl;
+      }
+      None => {}
+    }
+  }
+  c.begun = c.begun + 1;
+  c.active = true;
+  c.lost = false;
 }
 
-fn write_begin(inout dst: [u8], start: i64, prompt: str, n: i64, created: [u8]) -> ()
-  requires 0 <= n && n <= len(prompt)
-  requires 0 <= start && start <= len(dst) && n + len(created) <= len(dst) - start
-  ensures len(dst) == len(old(dst))
+// skip_user: detach the current draft (it stays in drafts) and mark the next one clipped.
+pub fn skip_user(inout c: Collector) -> ()
+  requires ok(c)
+  ensures ok(c) && c.begun == old(c).begun && !c.active && c.lost
 {
-  copy_range(inout dst, start, prompt, 0, n);
-  copy_range(inout dst, start + n, created, 0, len(created));
-}
-
-// skip_user: detach the current draft (the earlier draft stays in the ring) and mark the next one clipped.
-pub fn skip_user(inout st: [i64]) -> ()
-  requires len(st) == 5
-  ensures len(st) == 5
-  ensures st[0] == old(st)[0] && st[1] == 0 && st[2] == 1 && st[3] == old(st)[3] && st[4] == old(st)[4]
-{
-  st[1] = 0;
-  st[2] = 1;
+  c.active = false;
+  c.lost = true;
 }
 
 // tool: one increment of the current draft's tool count (saturating); no timestamp update; nothing without a
 // current draft.
-pub fn tool(inout st: [i64], inout sl: [i64]) -> ()
-  requires len(st) == 5 && len(sl) == 1600 && 0 <= st[3] && st[3] < 200
-  requires fields(sl)
-  ensures len(st) == 5 && len(sl) == 1600
-  ensures st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3] && st[4] == old(st)[4]
-  ensures fields(sl)
-  ensures forall k in 0..1600: (k != 8 * st[3] + 3) ==> sl[k] == old(sl)[k]
-  ensures st[1] == 0 ==> (forall k in 0..1600: sl[k] == old(sl)[k])
-  ensures st[1] == 1 ==> (forall k in 0..1600: (k != 8 * st[3] + 3) ==> sl[k] == old(sl)[k])
-  ensures (st[1] == 1 && old(sl)[8 * st[3] + 3] < 1000000000000000) ==> sl[8 * st[3] + 3] == old(sl)[8 * st[3] + 3] + 1
-  ensures (st[1] == 1 && old(sl)[8 * st[3] + 3] >= 1000000000000000) ==> sl[8 * st[3] + 3] == old(sl)[8 * st[3] + 3]
+pub fn tool(inout c: Collector) -> ()
+  requires ok(c)
+  ensures ok(c) && c.begun == old(c).begun && c.active == old(c).active && c.lost == old(c).lost
+  ensures len(c.drafts) == len(old(c).drafts)
+  ensures (c.active && old(c).drafts[(c.begun - 1) % 200].tools < 1000000000000000) ==>
+    c.drafts[(c.begun - 1) % 200].tools == old(c).drafts[(c.begun - 1) % 200].tools + 1
 {
-  if st[1] == 0 { return; }
-  let c: i64 = st[3];
-  let t: i64 = sl[8 * c + 3];
-  if t < 1000000000000000 { sl[8 * c + 3] = t + 1; }
+  if !c.active { return; }
+  let k: i64 = (c.begun - 1) % 200;
+  match vec_at_mut::<Draft>(inout c.drafts, k) {
+    Some(d) => {
+      if d.tools < 1000000000000000 { d.tools = d.tools + 1; }
+    }
+    None => {}
+  }
 }
 
 // answer: no current draft => nothing. Otherwise completedAt is updated first (even for empty text or a full
-// reply); empty text or budget >= 32768 returns; else piece = text (empty reply) or "\n\n"+text, appended when
-// it fits the remaining budget, else its longest whole-scalar prefix is appended, the budget counter saturates
-// at 32768 and clipped is set. The counter is separate from the actual reply length (a multibyte cut leaves
-// unused bytes that later calls must not fill).
-pub fn answer(inout st: [i64], inout sl: [i64], inout buf: [u8], text: str, at: [u8], limit: i64) -> () ! alloc
-  requires spans(st, sl, len(buf)) && reply_room(st, sl, limit) && limit <= 1000000000000
-  requires 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
-  requires fields(sl)
+// reply); empty text or budget >= 32768 stops there; else piece = text (empty reply) or "\n\n"+text, appended
+// when it fits the remaining budget, else its longest whole-scalar prefix is appended, the budget counter
+// saturates at 32768 and clipped is set. The counter is separate from the actual reply length (a multibyte cut
+// leaves unused bytes that later calls must not fill).
+pub fn answer(inout c: Collector, text: str, at: [u8]) -> () ! alloc
+  requires ok(c)
   requires len(text) <= 100000000
   requires len(at) == 0 || len(at) == 24
-  ensures len(old(buf)) <= len(buf) && reply_room(st, sl, limit)
-  ensures spans(st, sl, len(buf))
-  ensures st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
-  ensures fields(sl)
-  ensures old(st)[4] <= st[4]
-  ensures st[1] == 0 ==> st[4] == old(st)[4]
-  ensures st[1] == 0 ==> (forall k in 0..1600: sl[k] == old(sl)[k])
-  ensures st[1] == 1 ==> (forall k in 0..1600: (k < 8 * st[3] || k >= 8 * st[3] + 8) ==> sl[k] == old(sl)[k])
-  ensures st[1] == 1 ==> (sl[8 * st[3]] == old(sl)[8 * st[3]] && sl[8 * st[3] + 3] == old(sl)[8 * st[3] + 3] && sl[8 * st[3] + 5] == old(sl)[8 * st[3] + 5] && sl[8 * st[3] + 7] == old(sl)[8 * st[3] + 7])
-  ensures st[1] == 1 && len(at) == 24 ==> sl[8 * st[3] + 6] == 1
-  ensures st[1] == 1 && len(at) == 0 ==> sl[8 * st[3] + 6] == old(sl)[8 * st[3] + 6]
-  ensures st[1] == 1 && len(text) > 0 && old(sl)[8 * st[3] + 1] > 0 && len(text) + 2 <= 32768 - old(sl)[8 * st[3] + 2] ==> sl[8 * st[3] + 1] == old(sl)[8 * st[3] + 1] + 2 + len(text)
+  ensures ok(c) && c.begun == old(c).begun && c.active == old(c).active && c.lost == old(c).lost
+  ensures len(c.drafts) == len(old(c).drafts)
+  ensures (c.active && len(at) == 24) ==> len(c.drafts[(c.begun - 1) % 200].completed) == 24
+  ensures (c.active && len(text) > 0 && len(old(c).drafts[(c.begun - 1) % 200].reply) > 0 &&
+    len(text) + 2 <= 32768 - old(c).drafts[(c.begun - 1) % 200].used) ==>
+    len(c.drafts[(c.begun - 1) % 200].reply) == len(old(c).drafts[(c.begun - 1) % 200].reply) + 2 + len(text)
 {
-  if st[1] == 0 { return; }
-  let c: i64 = st[3];
-  if len(at) == 24 { complete(inout st, inout sl, inout buf, at, limit); }
-  let rl: i64 = sl[8 * c + 1];
-  let used: i64 = sl[8 * c + 2];
-  if len(text) == 0 || used >= 32768 { return; }
-  let room: i64 = 32768 - used;
-  let mut sep: i64 = 0;
-  let mut take: i64 = 0;
-  let mut budget: i64 = 32768;
-  if rl > 0 { sep = 2; }
-  if sep + len(text) <= room {
-    take = len(text);
-    budget = used + sep + take;
-  } else {
-    if sep > room {
-      sep = room;
-    } else {
-      take = crate::text::clip_len(text, room - sep);
+  if !c.active { return; }
+  let k: i64 = (c.begun - 1) % 200;
+  let m: i64 = len(at);
+  match vec_at_mut::<Draft>(inout c.drafts, k) {
+    Some(d) => {
+      if m == 24 {
+        let q: [u8] = move d.completed;
+        d.completed = refill(move q, at, 24);
+      }
+      let rl: i64 = len(d.reply);
+      let used: i64 = d.used;
+      if len(text) > 0 && used < 32768 {
+        let room: i64 = 32768 - used;
+        let mut sep: i64 = 0;
+        let mut take: i64 = 0;
+        let mut budget: i64 = 32768;
+        if rl > 0 { sep = 2; }
+        if sep + len(text) <= room {
+          take = len(text);
+          budget = used + sep + take;
+        } else {
+          if sep > room {
+            sep = room;
+          } else {
+            take = crate::text::clip_len(text, room - sep);
+          }
+          d.clipped = true;
+        }
+        let r: [u8] = move d.reply;
+        d.reply = piece(move r, sep, text, take);
+        d.used = budget;
+      }
     }
-    sl[8 * c + 4] = 1;
+    None => {}
   }
-  let added: i64 = sep + take;
-  let has: i64 = sl[8 * c + 6];
-  let stamp: i64 = st[4] - 24 * has;
-  let end: i64 = st[4] + added;
-  reserve(inout buf, end);
-  write_answer(inout buf, stamp, sep, text, take, has);
-  sl[8 * c + 1] = rl + added;
-  sl[8 * c + 2] = budget;
-  st[4] = end;
-}
-
-// completedAt of the current draft (hand: d.completed = at): overwrite the stamp in place, or append it after
-// the reply.
-fn complete(inout st: [i64], inout sl: [i64], inout buf: [u8], at: [u8], limit: i64) -> () ! alloc
-  requires spans(st, sl, len(buf)) && reply_room(st, sl, limit) && limit <= 1000000000000
-  requires st[1] == 1 && 0 <= st[3] && st[3] < 200
-  requires fields(sl)
-  requires len(at) == 24
-  ensures len(old(buf)) <= len(buf) && reply_room(st, sl, limit)
-  ensures spans(st, sl, len(buf))
-  ensures st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
-  ensures fields(sl)
-  ensures old(st)[4] <= st[4]
-  ensures sl[8 * st[3] + 6] == 1
-  ensures forall k in 0..1600: k != 8 * st[3] + 6 ==> sl[k] == old(sl)[k]
-{
-  let c: i64 = st[3];
-  if sl[8 * c + 6] == 1 {
-    copy_range(inout buf, st[4] - 24, at, 0, 24);
-    return;
-  }
-  let end: i64 = st[4] + 24;
-  reserve(inout buf, end);
-  copy_range(inout buf, st[4], at, 0, 24);
-  sl[8 * c + 6] = 1;
-  st[4] = end;
-}
-
-// The completed stamp sits immediately after the reply: move it forward, then write the piece.
-fn write_answer(inout dst: [u8], stamp: i64, sep: i64, text: str, take: i64, has: i64) -> ()
-  requires 0 <= stamp && stamp <= len(dst) && 0 <= sep && sep <= 2 && 0 <= take && take <= len(text)
-  requires 0 <= has && has <= 1
-  requires sep + take + 24 * has <= len(dst) - stamp
-  ensures len(dst) == len(old(dst))
-{
-  if has == 1 {
-    copy_within(inout dst, stamp + sep + take, stamp, 24);
-  }
-  write_piece(inout dst, stamp, sep, text, take);
 }
 
 // Count the newest kept turns, counting only prompt and reply bytes toward the trim cap (hand
 // Collector::kept). bytes is the text those turns take, used only to reserve the text buffer.
-pub fn plan(st: [i64], sl: [i64], cap: i64) -> Plan
-  requires len(st) == 5 && 0 <= st[0] && st[0] <= 1000000000000 && fields(sl) && spans(st, sl, cap)
-  ensures 0 <= result.kept && result.kept <= 200 && result.kept <= st[0]
+pub fn plan(c: Collector) -> Plan
+  requires ok(c)
+  ensures 0 <= result.kept && result.kept <= 200 && result.kept <= c.begun
   ensures 0 <= result.total && result.total <= 2097152
-  ensures result.total == sum(j in 0..result.kept: sl[8 * ((st[0] - 1 - j) % 200)] + sl[8 * ((st[0] - 1 - j) % 200) + 1])
-  ensures (result.kept < st[0] && result.kept < 200) ==> result.total + sl[8 * ((st[0] - 1 - result.kept) % 200)] + sl[8 * ((st[0] - 1 - result.kept) % 200) + 1] > 2097152
+  ensures result.total == sum(j in 0..result.kept: len(c.drafts[(c.begun - 1 - j) % 200].prompt) + len(c.drafts[(c.begun - 1 - j) % 200].reply))
+  ensures (result.kept < c.begun && result.kept < 200) ==>
+    result.total + len(c.drafts[(c.begun - 1 - result.kept) % 200].prompt) + len(c.drafts[(c.begun - 1 - result.kept) % 200].reply) > 2097152
   ensures 0 <= result.bytes && result.bytes <= 2106752
 {
-  let b: i64 = st[0];
+  let b: i64 = c.begun;
   let mut avail: i64 = b;
   if avail > 200 { avail = 200; }
   let mut i: i64 = 0;
@@ -331,19 +221,18 @@ pub fn plan(st: [i64], sl: [i64], cap: i64) -> Plan
   while i < avail
     invariant 0 <= i && i <= avail && avail <= 200 && avail <= b && 0 <= b && b <= 1000000000000
     invariant (b <= 200 && avail == b) || (b > 200 && avail == 200)
-    invariant len(st) == 5 && st[0] == b
-    invariant fields(sl)
+    invariant c.begun == b && ok(c)
     invariant 0 <= total && total <= 2097152
-    invariant total == sum(j in 0..i: sl[8 * ((b - 1 - j) % 200)] + sl[8 * ((b - 1 - j) % 200) + 1])
+    invariant total == sum(j in 0..i: len(c.drafts[(b - 1 - j) % 200].prompt) + len(c.drafts[(b - 1 - j) % 200].reply))
     invariant 0 <= bytes && bytes <= total + 48 * i
     decreases avail - i
   {
     let w: i64 = (b - 1 - i) % 200;
-    let size: i64 = sl[8 * w] + sl[8 * w + 1];
+    let size: i64 = len(vec_get::<Draft>(c.drafts, w).prompt) + len(vec_get::<Draft>(c.drafts, w).reply);
     if total + size > 2097152 {
       return Plan { kept: i, total: total, bytes: bytes };
     }
-    bytes = bytes + size + 24 * sl[8 * w + 5] + 24 * sl[8 * w + 6];
+    bytes = bytes + size + len(vec_get::<Draft>(c.drafts, w).created) + len(vec_get::<Draft>(c.drafts, w).completed);
     total = total + size;
     i = i + 1;
   }
@@ -352,20 +241,20 @@ pub fn plan(st: [i64], sl: [i64], cap: i64) -> Plan
 
 // Append the kept records to turns and their text to text, oldest first (hand window_packet loop
 // over put). Each text ref is shift + its offset in text; the A3 fixture passes the omitted prefix.
-pub fn put_turns(inout turns: [i64], inout text: [u8], shift: i64, st: [i64], sl: [i64], buf: [u8], kept: i64) -> () ! alloc
-  requires fields(sl) && spans(st, sl, len(buf))
-  requires 0 <= kept && kept <= 200 && kept <= st[0] && st[0] <= 1000000000000
+pub fn put_turns(inout turns: [i64], inout text: [u8], shift: i64, c: Collector, kept: i64) -> () ! alloc
+  requires ok(c)
+  requires 0 <= kept && kept <= 200 && kept <= c.begun
   requires 0 <= shift && shift <= 3500000 && len(turns) <= 2000 && len(text) <= 10000000
   ensures len(turns) == len(old(turns)) + 10 * kept
   ensures len(old(text)) <= len(text) && len(text) <= len(old(text)) + 65584 * kept
 {
-  let b: i64 = st[0];
+  let b: i64 = c.begun;
   let t0: i64 = len(turns);
   let x0: i64 = len(text);
   let mut left: i64 = kept;
   while left > 0
     invariant 0 <= left && left <= kept && 0 <= kept && kept <= 200 && kept <= b && b <= 1000000000000
-    invariant fields(sl) && spans(st, sl, len(buf)) && b == st[0]
+    invariant ok(c) && b == c.begun
     invariant 0 <= shift && shift <= 3500000 && 0 <= t0 && t0 <= 2000 && 0 <= x0 && x0 <= 10000000
     invariant len(turns) == t0 + 10 * (kept - left)
     invariant x0 <= len(text) && len(text) <= x0 + 65584 * (kept - left)
@@ -373,22 +262,22 @@ pub fn put_turns(inout turns: [i64], inout text: [u8], shift: i64, st: [i64], sl
   {
     let j: i64 = left - 1;
     let w: i64 = (b - 1 - j) % 200;
-    let plen: i64 = sl[8 * w];
-    let rlen: i64 = sl[8 * w + 1];
-    let cn: i64 = 24 * sl[8 * w + 5];
-    let dn: i64 = 24 * sl[8 * w + 6];
-    let sb: i64 = sl[8 * w + 7];
-    assert 0 <= sb && sb + plen + rlen + cn + dn <= len(buf);
+    let plen: i64 = len(vec_get::<Draft>(c.drafts, w).prompt);
+    let rlen: i64 = len(vec_get::<Draft>(c.drafts, w).reply);
+    let cn: i64 = len(vec_get::<Draft>(c.drafts, w).created);
+    let dn: i64 = len(vec_get::<Draft>(c.drafts, w).completed);
     let at: i64 = shift + len(text);
-    arr_append(inout text, buf, sb, plen);
-    arr_append(inout text, buf, sb + plen + cn, rlen);
-    arr_append(inout text, buf, sb + plen, cn);
-    arr_append(inout text, buf, sb + plen + cn + rlen, dn);
+    arr_append(inout text, vec_get::<Draft>(c.drafts, w).prompt, 0, plen);
+    arr_append(inout text, vec_get::<Draft>(c.drafts, w).reply, 0, rlen);
+    arr_append(inout text, vec_get::<Draft>(c.drafts, w).created, 0, cn);
+    arr_append(inout text, vec_get::<Draft>(c.drafts, w).completed, 0, dn);
     let mut ca: i64 = -1;
     if cn > 0 { ca = at + plen + rlen; }
     let mut da: i64 = -1;
     if dn > 0 { da = at + plen + rlen + cn; }
-    arr_push(inout turns, at, plen, at + plen, rlen, ca, cn, da, dn, sl[8 * w + 3], sl[8 * w + 4]);
+    let mut cl: i64 = 0;
+    if vec_get::<Draft>(c.drafts, w).clipped { cl = 1; }
+    arr_push(inout turns, at, plen, at + plen, rlen, ca, cn, da, dn, vec_get::<Draft>(c.drafts, w).tools, cl);
     left = j;
   }
 }

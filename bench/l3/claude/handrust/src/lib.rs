@@ -633,7 +633,7 @@ fn pick<'a>(e: &'a Object<'_>, k1: &str, k2: &str) -> Option<&'a str> {
 }
 
 // ---------------- turn collector ----------------
-// Pruv: turns slot table sl[8*s .. 8*s+7] + arena buf (row VL)
+// Pruv: turns::Draft (own [u8] fields; stamps are [u8] of length 0 or 24, row 4.4c-IS)
 struct Draft {
     prompt: Vec<u8>,
     reply: Vec<u8>,
@@ -644,7 +644,7 @@ struct Draft {
     clipped: bool,
 }
 
-// Pruv: turns::new_state / new_slots / new_buffer (st, sl, buf; row VL)
+// Pruv: turns::Collector, turns::new_collector (Vec<Draft>, oldest at index begun % 200; no VecDeque)
 struct Collector {
     drafts: VecDeque<Draft>, // only the newest MAXTURNS can ever be kept
     begun: usize,
@@ -657,7 +657,7 @@ impl Collector {
         Collector { drafts: VecDeque::new(), begun: 0, active: false, lost: false }
     }
 
-    // Pruv: turns::begin, turns::write_begin
+    // Pruv: turns::begin, turns::refill_text, turns::refill
     fn begin(&mut self, prompt: &str, created: Stamp) {
         let raw = prompt.as_bytes();
         let mut d = if self.drafts.len() >= MAXTURNS {
@@ -694,7 +694,7 @@ impl Collector {
         self.lost = true;
     }
 
-    // Pruv: turns::answer, turns::write_answer, turns::write_piece
+    // Pruv: turns::answer, turns::piece, turns::refill
     fn answer(&mut self, text: &str, at: Stamp) {
         if !self.active {
             return;

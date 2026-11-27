@@ -276,10 +276,9 @@ pub fn tail_info(data: [u8], cut_before: bool) -> [i64] ! alloc
 
 // ---- window (A4) ----
 //
-// Collector state is the scalar state, slot table and byte arena described in turns.pruv.
-// The invariant repeated in every contract below (`s` ranges over the 200 slots):
-//   ranges  lengths, 0 <= st[0] <= 1e12, 0 <= st[3] < 200, st[1] and st[2] are 0/1
-//   I3(s)   0 <= prompt <= 32768, 0 <= reply <= budget <= 32768, 0 <= tools <= 1e15, flags 0/1
+// Collector state is the turns::Collector described in turns.pruv; every contract below carries turns::ok
+// (at most 200 drafts, begun <= 1e12, per draft 0 <= prompt <= 32768, 0 <= reply <= budget <= 32768,
+// 0 <= tools <= 1e15, stamps 0 or 24 bytes).
 
 // An accepted entry contributes a model token (-1 for none). Defect reports an internal accessor failure.
 pub enum Effect { Done(model_id: i64), Defect(kind: i64) }
@@ -296,18 +295,12 @@ fn stamp_from(doc: crate::json::JsonDocument, tf: i64) -> crate::time::Iso ! all
 
 // The content blocks of an assistant message in order: string-valued text blocks call answer, tool_use blocks
 // call tool (whatever their name/id), everything else is ignored. 0 on success, -4 on a defect. The collector
-// state keeps its current slot and begun count; answer/tool only update that slot and its arena extent.
-fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: [u8], inout st: [i64], inout sl: [i64], inout buf: [u8], limit: i64) -> i64 ! alloc
+// keeps its begun count; answer/tool only update the current draft.
+fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: [u8], inout col: crate::turns::Collector) -> i64 ! alloc
   requires 0 <= c && c < len(doc.tape) / 6
-  requires crate::turns::reply_room(st, sl, limit) && limit <= 1000000000000
   requires len(at) == 0 || len(at) == 24
-  requires crate::turns::spans(st, sl, len(buf)) && 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
-  requires crate::turns::fields(sl)
-  ensures len(old(buf)) <= len(buf)
-  ensures crate::turns::spans(st, sl, len(buf))
-  ensures st[4] <= limit
-  ensures st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
-  ensures crate::turns::fields(sl)
+  requires crate::turns::ok(col)
+  ensures crate::turns::ok(col) && col.begun == old(col).begun
 {
   if len(doc.tape) > 6291456 { return -4; }
   let stop: i64 = doc.tape[6 * c + 3];
@@ -315,13 +308,8 @@ fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: [u8], inout st: [i6
   let mut j: i64 = c + 1;
   while j < stop
     invariant 0 <= c && c < j && j <= stop && stop <= len(doc.tape) / 6 && len(doc.tape) <= 6291456
-    invariant crate::turns::reply_room(st, sl, limit) && limit <= 1000000000000
     invariant len(at) == 0 || len(at) == 24
-    invariant len(old(buf)) <= len(buf)
-    invariant crate::turns::spans(st, sl, len(buf))
-    invariant 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
-    invariant st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
-    invariant crate::turns::fields(sl)
+    invariant crate::turns::ok(col) && col.begun == old(col).begun
     decreases stop - j
   {
     let next: i64 = doc.tape[6 * j + 3];
@@ -339,7 +327,7 @@ fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: [u8], inout st: [i6
           match tx {
             crate::entry::Field::Value(x) => {
               if len(x) > 50331648 { return -4; }
-              crate::turns::answer(inout st, inout sl, inout buf, x, at, limit);
+              crate::turns::answer(inout col, x, at);
             }
             crate::entry::Field::Missing => {}
             crate::entry::Field::Defect(e) => { return -4; }
@@ -347,7 +335,7 @@ fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: [u8], inout st: [i6
         } else {
           let tu: i64 = crate::access::string_is(doc, ty, "tool_use");
           if tu < 0 { return -4; }
-          if tu == 1 { crate::turns::tool(inout st, inout sl); }
+          if tu == 1 { crate::turns::tool(inout col); }
         }
       } else {}
     }
@@ -364,15 +352,11 @@ fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: [u8], inout st: [i6
 //      string content calls answer once (also for ""), array content goes block by block (answer_blocks).
 // The timestamp is read only where the hand reads it: at begin, and once before string or array content.
 // Each root key is looked up in the branch that reads it (hand `get`). Collector state: at most one begin per
-// call, so st[0] grows by at most 1.
-fn consume_entry(doc: crate::json::JsonDocument, ty: i64, inout st: [i64], inout sl: [i64], inout buf: [u8]) -> Effect ! alloc
-  requires crate::turns::spans(st, sl, len(buf)) && 0 <= st[0] && st[0] < 1000000000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
-  requires crate::turns::fields(sl) && st[4] <= 1000000000000 - 32792
-  ensures len(old(buf)) <= len(buf)
-  ensures crate::turns::spans(st, sl, len(buf))
-  ensures st[4] <= old(st)[4] + 32792
-  ensures old(st)[0] <= st[0] && st[0] <= old(st)[0] + 1 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
-  ensures crate::turns::fields(sl)
+// call, so begun grows by at most 1.
+fn consume_entry(doc: crate::json::JsonDocument, ty: i64, inout col: crate::turns::Collector) -> Effect ! alloc
+  requires crate::turns::ok(col) && col.begun < 1000000000000
+  ensures crate::turns::ok(col)
+  ensures old(col).begun <= col.begun && col.begun <= old(col).begun + 1
 {
   // 1. human prompt
   if ty == -1 { return Effect::Done(-1); }
@@ -386,7 +370,7 @@ fn consume_entry(doc: crate::json::JsonDocument, ty: i64, inout st: [i64], inout
         if len(p) > 50331648 { return Effect::Defect(-4); }
         let created: crate::time::Iso = stamp_from(doc, crate::access::field(doc, 0, "timestamp"));
         if created.status < 0 { return Effect::Defect(created.status); }
-        crate::turns::begin(inout st, inout sl, inout buf, p, created.text);
+        crate::turns::begin(inout col, p, created.text);
         return Effect::Done(-1);
       }
       crate::entry::Field::Missing => { return Effect::Done(-1); }
@@ -424,9 +408,8 @@ fn consume_entry(doc: crate::json::JsonDocument, ty: i64, inout st: [i64], inout
   if k != 4 && k != 5 { return Effect::Done(model_id); }
   let completed: crate::time::Iso = stamp_from(doc, crate::access::field(doc, 0, "timestamp"));
   if completed.status < 0 { return Effect::Defect(completed.status); }
-  let limit: i64 = st[4] + 32792;
   if k == 5 {
-    let code: i64 = answer_blocks(doc, c, completed.text, inout st, inout sl, inout buf, limit);
+    let code: i64 = answer_blocks(doc, c, completed.text, inout col);
     if code < 0 { return Effect::Defect(code); }
     return Effect::Done(model_id);
   }
@@ -435,7 +418,7 @@ fn consume_entry(doc: crate::json::JsonDocument, ty: i64, inout st: [i64], inout
     crate::jstr::Text::InternalInvariant(e) => { return Effect::Defect(e); }
     crate::jstr::Text::Decoded(v) => {
       if len(v) > 50331648 { return Effect::Defect(-4); }
-      crate::turns::answer(inout st, inout sl, inout buf, v, completed.text, limit);
+      crate::turns::answer(inout col, v, completed.text);
     }
   }
   return Effect::Done(model_id);
@@ -452,19 +435,15 @@ pub fn read_window(data: [u8], cut_before: bool) -> [i64] ! alloc
   if len(data) > crate::boundary::limit_window_bytes() {
     return crate::boundary::pair(crate::boundary::code_input_too_large(), 0);
   }
-  let mut st: [i64] = crate::turns::new_state();
-  let mut sl: [i64] = crate::turns::new_slots();
-  let mut buf: [u8] = crate::turns::new_buffer();
+  let mut col: crate::turns::Collector = crate::turns::new_collector();
   let mut best: str = "";
   let mut best_rank: i64 = 0;
   let mut model: str = "";
   let mut offset: i64 = crate::framing::skip_first(data, cut_before);
   while offset < len(data)
     invariant 0 <= offset && offset <= len(data) && len(data) <= 8388608
-    invariant st[4] <= 32792 * offset
     invariant 0 <= best_rank && best_rank <= 3
-    invariant crate::turns::spans(st, sl, len(buf)) && 0 <= st[0] && st[0] <= offset && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
-    invariant crate::turns::fields(sl)
+    invariant crate::turns::ok(col) && col.begun <= offset
     decreases len(data) - offset
   {
     let step: crate::framing::Frame = crate::framing::window_next(data, offset);
@@ -485,7 +464,7 @@ pub fn read_window(data: [u8], cut_before: bool) -> [i64] ! alloc
               crate::entry::Title::NoTitle => {}
               crate::entry::Title::Defect(kind) => { return fail_at(start, end, 0); }
             }
-            let eff: Effect = consume_entry(d, ty, inout st, inout sl, inout buf);
+            let eff: Effect = consume_entry(d, ty, inout col);
             match eff {
               Effect::Done(model_id) => {
                 if model_id >= 0 {
@@ -502,7 +481,6 @@ pub fn read_window(data: [u8], cut_before: bool) -> [i64] ! alloc
                     }
                   }
                 }
-                if st[0] > 200 { crate::turns::reclaim(inout st, inout sl, inout buf); }
               }
               Effect::Defect(kind) => { return fail_at(start, end, 0); }
             }
@@ -514,7 +492,7 @@ pub fn read_window(data: [u8], cut_before: bool) -> [i64] ! alloc
       }
       crate::framing::Frame::Dropped(s, e, n) => {
         if s < 0 || s > e || e > len(data) || e - s > 8192 || n <= offset || n > len(data) { return fail_zero(); }
-        if crate::text::dropped_user(subview(data, s, e)) { crate::turns::skip_user(inout st); }
+        if crate::text::dropped_user(subview(data, s, e)) { crate::turns::skip_user(inout col); }
         offset = n;
       }
       crate::framing::Frame::Done => { break; }
@@ -528,7 +506,7 @@ pub fn read_window(data: [u8], cut_before: bool) -> [i64] ! alloc
   let ml: i64 = len(model);
   if tl > 4096 || ml > 3145728 { return fail_zero(); }
   let base: i64 = tl + ml;
-  let plan: crate::turns::Plan = crate::turns::plan(st, sl, len(buf));
+  let plan: crate::turns::Plan = crate::turns::plan(col);
   let nt: i64 = 10 * plan.kept;
   let mut text: [u8] = alloc(0, 0);
   arr_reserve(inout text, base + plan.bytes);
@@ -536,11 +514,11 @@ pub fn read_window(data: [u8], cut_before: bool) -> [i64] ! alloc
   arr_append(inout text, model, 0, ml);
   let mut turns: [i64] = alloc(0, 0);
   arr_reserve(inout turns, nt);
-  crate::turns::put_turns(inout turns, inout text, 0, st, sl, buf, plan.kept);
+  crate::turns::put_turns(inout turns, inout text, 0, col, plan.kept);
   let nx: i64 = len(text);
   if nx > 5646080 { return fail_zero(); }
   let mut flag: i64 = 0;
-  if cut_before || plan.kept < st[0] { flag = 1; }
+  if cut_before || plan.kept < col.begun { flag = 1; }
   let mut t0: i64 = -1;
   if tl > 0 { t0 = 0; }
   let mut m0: i64 = -1;

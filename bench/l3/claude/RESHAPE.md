@@ -248,3 +248,100 @@ the language; same reads and output buffer), the `bytes24` copy before `canonica
 slot ring / `reclaim` against the hand's per-draft `Vec` reuse (D-R08-2, 4.4c-TS).
 
 In `handrust` only the `one_line` `// Pruv:` comment changed; `cargo build --release`, 0 warnings.
+
+## 7. Step 4.4h: D-R08-2 / 4.4c-TS, `turns` as `Vec<Draft>`
+
+`turns.pruv` no longer has the `st` / `sl` / `buf` word ring and byte arena. The collector is now the hand's
+`Collector` / `Draft` pair. `import.pruv` and `a3_root.pruv` take one `inout col: turns::Collector`. `reclaim`,
+`reserve`, `write_begin`, `write_answer`, `complete`, `reply_room`, `spans`, `fields` and the `limit` argument are
+gone.
+
+Structure next to `handrust/src/lib.rs` (`Draft` 635-646, `Collector` 647-755, `window_packet` 926-993):
+
+| item | hand | Pruv now | before 4.4h |
+|---|---|---|---|
+| draft type | `struct Draft { prompt: Vec<u8>, reply: Vec<u8>, used, tools, created: Stamp, completed: Stamp, clipped: bool }` | `pub struct Draft { prompt: [u8], reply: [u8], used, tools, created: [u8], completed: [u8], clipped: bool }`; stamps are 0 or 24 bytes (4.4c-IS) | 8 words per slot in `sl[1600]` plus spans in `buf` |
+| collector | `Collector { drafts: VecDeque<Draft>, begun, active, lost }` | `Collector { drafts: Vec<Draft>, begun, active, lost }`; the oldest draft is at index `begun % 200` once 200 exist, the current one at `(begun - 1) % 200` | `st[5]` + `sl` + `buf` |
+| invariant | none (types) | one `pub pred ok(c)`: `len(drafts) == min(begun, 200)`, `active ==> begun >= 1`, per draft prompt <= 32768, reply <= used <= 32768, tools <= 1e15, stamps 0/24 | `spans`, `fields`, `reply_room` and `st[4] <= 32792 * pos` in every loop |
+| begin, < 200 drafts | `Draft { prompt: Vec::new(), .. }`, `extend_from_slice(&p[..n])`, `push_back` | fresh `[u8]` + `arr_append`, `vec_push::<Draft>` (moves the draft) | arena append |
+| begin, 200 drafts | `pop_front`, `clear` prompt and reply, `push_back` (blocks reused) | `vec_at_mut` on the front index, each field moved out, `truncate(x, 0)` + `arr_append`, moved back (`refill`, `refill_text`) | arena append, `reclaim` when evicted spans pass half |
+| answer | `back_mut`, `completed = Some(at)`, `reply.extend(sep)`, `reply.extend(&t[..take])` | `vec_at_mut` on the current index; `completed` refilled in place (24 bytes, no move of other data); `reply` moved out, `piece` appends sep and take, moved back | completed stamp after the reply in the arena, 24-byte `copy_within` per later answer |
+| tool | `back_mut().tools += 1` | `vec_at_mut`, `d.tools = d.tools + 1` | `sl[8 * c + 3]` |
+| plan / put | `iter().rev()` / `iter().skip(len - n)` with `put` | index loop over `(begun - 1 - j) % 200`, `vec_get::<Draft>(...).field` | same loops over `sl` and `buf` offsets |
+| allocation sites | one `Vec` per draft field, reused after eviction | same: per field, reused after eviction; no arena | one arena grown by doubling, one 1600-word table |
+
+Language gaps met (no compiler change; closest shape kept):
+
+| row | kind | finding | closest shape used |
+|---|---|---|---|
+| 4.4h-VD | language | no `VecDeque` / `pop_front` / `push_back` on `Vec<S>` | `Vec<Draft>` with a front index `begun % 200`, reuse in place |
+| 4.4h-FA | language | a `[u8]` field cannot be appended in place (`arr_append` needs a local `inout`); R-6e-16 move-out / restore with a `take` helper | `let r: [u8] = move d.reply; d.reply = piece(move r, ...)` |
+| 4.4h-TR | language | `truncate` takes no `move` argument; the clear goes through a local (`let x0 = move b; truncate(x0, 0)`). On LLVM a truncate that leaves more than half unused may shrink the block (LG33), so the reuse of evicted blocks is only certain on the Rust backend (not measured per allocation) | `refill` / `refill_text` |
+
+Closed: D-R08-2 and 4.4c-TS (the arena, `reclaim` and the `completedAt` move are gone), and 4.4h-PC: the old
+per-field ensures are restated over `c.drafts[(c.begun - 1) % 200]` (`K` below). `begin`: `len(K.prompt)` is the
+clip length (`<= len(prompt)`, equal when `len(prompt) <= 32768`, a char boundary, and no later boundary up to
+32768), `K.clipped == (len(prompt) > 32768 || old(c).lost)`, reply/used/tools/completed reset, `len(K.created) ==
+len(created)`. `answer`: `len(at) == 24 ==> len(K.completed) == 24`, and the `+ 2 + len(text)` reply growth when the
+piece fits. `tool`: the current draft's tools `+ 1` below the cap, `len(drafts)` kept. `plan`: `total` is the sum of
+prompt + reply over the kept drafts (loop invariant), and one more draft would pass 2097152. No language gap was
+met for these; `old(c).drafts[i].field` and `sum` over `c.drafts[...]` both verify.
+
+Results after the last code change (rs pairs; each test verifies its root before running; the default `q.py` run
+also lists `py/*` pairs, which fail with `build: 'py'` in this harness and are not part of the check):
+
+| check | rs/rust | rs/llvm |
+|---|---|---|
+| `test_a0.py` | 272/272 | 272/272 |
+| `test_a1.py` | 2884/2884 | 2884/2884 |
+| `test_a2.py` | 2443/2443 | 2443/2443 |
+| `test_a3.py` | 134/134 | 134/134 |
+| `test_a4.py` | 270/270 | 270/270 |
+| `q.py` (default count, seed 20261114) | 20270/20270 | 20270/20270 |
+| `q_mutants.py` (rust backend; ids 1-7, then `--ids` 8-18) | 18 / 18 present once; 9 detected, 9 proof-rejected (7, 8, 9, 11, 13, 15, 16, 17, 18), 0 survived | - |
+
+`q_mutants.py`: mutants 6, 10, 11, 14, 17 and 18 pointed at removed code and were retargeted to the same fault in the
+new code (11 and 18 now return before the `vec_at_mut` of `answer`; 17 writes the tools of index `begun % 200`).
+`q_measure.py`: the table print failed on a cell whose hand time is 0 (`ratio` None); it now prints `—` there.
+
+`q_measure.py --pairs rs/rust,rs/llvm` (7 rounds, load average 7-11; `ring_wrap` and `depth_limit` not reached
+inside the time cap). Time ratio / RSS ratio, Pruv over hand:
+
+| input (class) | op | rs/rust | rs/llvm |
+|---|---|---|---|
+| turns16 (M) | window | 1.086 / 1.047 | 0.936 / 1.028 |
+| turns16 (M) | head | 0.768 / 1.020 | 0.635 / 1.020 |
+| turns16 (M) | tail | 0.821 / 1.029 | 0.790 / 1.020 |
+| turns17 (M) | window | 1.057 / 1.028 | 0.913 / 1.018 |
+| turns17 (M) | head | 0.644 / 1.020 | 0.733 / 1.020 |
+| turns17 (M) | tail | 0.943 / 1.029 | 0.940 / 1.020 |
+| turns200 (L) | window | 1.099 / 1.023 | 0.939 / 1.000 |
+| turns200 (L) | head | 0.797 / 1.028 | 0.723 / 1.019 |
+| turns200 (L) | tail | 0.914 / 1.038 | 0.806 / 1.019 |
+| window_8MiB (L) | window | 1.228 / 1.008 | 0.985 / 1.005 |
+| long_text (L) | window | 2.106 / 1.093 | 1.834 / 1.094 |
+| block_arrays (L) | window | 0.898 / 0.768 | 0.703 / 0.756 |
+| window_8MiB, long_text, block_arrays (L) | head, tail | 0.98-1.02 / 0.998-1.000 (sub-microsecond calls) | same |
+
+Performance debt (cells above hand 1.0x): rs/rust window time on turns16/17/200 and window_8MiB (1.06-1.23x),
+long_text window time on both backends (1.83-2.11x, G-DB60-2: the long_text bytes are not in `turns`), RSS 1.02-1.09x
+on M/L window/head/tail (D-R08-5 / D-DB1-6: the fixed ring is gone, so the remaining part is elsewhere; not profiled
+in this step). No before/after pair was run under the same load, so these are not deltas against 4.4g.
+
+In `handrust` only the `// Pruv:` comments of `Draft`, `Collector`, `begin` and `answer` changed; `cargo build
+--release`, 0 warnings.
+
+Different-model structure comparison (Codex gpt-6-astra, research only, `turns` / `import` / `a3_root` against
+`handrust/src/lib.rs`, differences listed per function without verdicts). The `turns` differences not already in
+the table above are added here. No code was changed for them: each one is a language gap, a proof guard, or a
+fixture entry point.
+
+| row | kind | function | difference (Pruv / hand) |
+|---|---|---|---|
+| 4.4h-ST | language (4.4c-IS) | `begin`, `answer` | stamps are `[u8]` fields, so a fresh draft allocates 4 empty arrays (hand 2 `Vec` + 2 `None`); reuse refills `created` / `completed` through `refill` (hand assigns an `Option<[u8; 24]>` value) |
+| 4.4h-CT | proof | `tool` | `tools < 1e15` saturating check before `+ 1` (i64 bound for `ok(c)`); hand `usize += 1` with no cap |
+| 4.4h-AE | shape (minor) | `answer`, `piece` | empty text / full budget skip the rest through an `if` around the body, not an early `return`; `piece` always calls `arr_append` twice (the separator call may append 0 bytes), hand extends once in the `room <= sep` branch |
+| 4.4h-PL | shape | `plan` | returns `Plan { kept, total, bytes }` (`bytes` adds the stamp lengths and feeds `arr_reserve(text, base + plan.bytes)` in `import.pruv`); hand `Collector::kept` returns only the count, and `window_packet` grows `text` without a reserve |
+| 4.4h-PT | shape | `put_turns` | one flat loop with the two stamps written inline and the 10 record words in one `arr_push`, plus a `shift` argument (A3 fixture prefix); hand iterates the kept suffix with an inner loop over the two stamps and `put` / `push` per word |
+| 4.4h-CU | fixture | `current` | a Pruv helper used only by `a3_root.pruv` (the A3 step driver); hand reaches the current draft with `back_mut()` |
+| - | language (i64) | all | `begun`, `used`, lengths are `i64` (hand `usize`); the existing integer-width rows apply |

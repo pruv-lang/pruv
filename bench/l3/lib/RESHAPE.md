@@ -1513,3 +1513,31 @@ All after the last code change (F1 / F4 from the structure comparison).
   3. OpenCode: 4.3g-T2, 4.4b-CV with a `pkgs/time` `civil`.
   4. req port (REQ-PORT) once P10H passes on both backends.
   5. Then Codex 4.3f-B, 4.3f-E, 4.3f-F and Qwen 4.3e-J / 4.3e-F / 4.3e-D (shared modules; run all consumers).
+
+## Step 4.4h: Claude D-R08-2 / 4.4c-TS (`turns` as `Vec<Draft>`)
+
+- `claude/RESHAPE.md` §7. Changed: `claude/turns.pruv`, `claude/import.pruv`, `claude/a3_root.pruv`,
+  `claude/q_mutants.py`, `claude/q_measure.py` (print only), `claude/handrust/src/lib.rs` (comments); no `lib/` or
+  `pkgs/` module changed.
+- Closed: D-R08-2 and 4.4c-TS. The collector is `Collector { drafts: Vec<Draft>, begun, active, lost }` with
+  `Draft` owning its `[u8]` fields; `completedAt` is its own field; evicted drafts are reused in place at the front
+  index `begun % 200`. `Vec` of a struct with `[u8]` fields ran on both backends (A3 134/134, A4 270/270 on
+  `rs/llvm`), so VL is closed in practice; SPEC.md line 393 is stale.
+- Different-model structure comparison run (`claude/RESHAPE.md` §7): new rows 4.4h-ST, 4.4h-CT, 4.4h-AE,
+  4.4h-PL, 4.4h-PT, 4.4h-CU; no code change.
+- Also closed: 4.4h-PC (the `begin` / `answer` / `tool` / `plan` per-field ensures restated over `c.drafts[k]`).
+- Results: claude `test_a0`-`test_a4` on `rs/rust` and `rs/llvm` all pass; `q.py` 20270/20270 on both rs pairs;
+  `q_mutants.py` 18/18, 9 detected, 9 proof-rejected (9, 11, 13, 17 back in proof; 18 now too).
+
+### Rows open after 4.4h
+
+- New: 4.4h-VD (language: no `VecDeque`), 4.4h-FA (language: no in-place append to a `[u8]` field), 4.4h-TR
+  (language: `truncate` cannot take `move`; LLVM may shrink on truncate to 0).
+- Still open in Claude: 4.4c-SV, 4.4c-IS, 4.4c-DC, 4.4c-MB, 4.4g-DV, 4.4g-MC, 4.3h-O, 4.3h-D, 4.3h-Q, CK, 4.3d-M,
+  4.4h-VD, 4.4h-FA, 4.4h-TR, 4.4h-ST, 4.4h-CT, 4.4h-AE, 4.4h-PL, 4.4h-PT, 4.4h-CU; perf debt as in `claude/RESHAPE.md` §7.
+- Still open from 4.4f and before: as listed after 4.4g.
+- Next:
+  1. Claude: a same-load before/after `q_measure.py` incl. `ring_wrap` and `depth_limit`, at the end of a later
+     stage.
+  2. Language: 4.4h-VD / 4.4h-FA / 4.4h-TR with 4.4f-NVL / 4.4f-SS, then 4.4b-NV and 4.3g-K3; fix SPEC.md line 393.
+  3. Claude: 4.3h-O and 4.4c-MB together, and 4.3h-Q; then the rest of the 4.4g list (OpenCode, req port, Codex, Qwen).
