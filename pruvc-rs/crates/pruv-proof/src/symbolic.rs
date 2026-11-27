@@ -1073,8 +1073,14 @@ pub struct FnVerifier<'a> {
     pub qstack: Vec<Ast>,
     /// P13o: opaque function name -> its uninterpreted symbol `opq!F`.
     pub(crate) opq_fns: HashMap<String, FuncDecl>,
-    /// 4.4k-VS (R-6g9-13): array sort -> `S(a, k)`, the length sum of the first `k` views of a view list
+    /// 4.4k-VS (R-6g9-13): array sort -> `S(a, k)`, the length sum of the first `k` views of a view list (used only
+    /// for a list term under a quantifier)
     view_sums: HashMap<String, FuncDecl>,
+    /// LG7-SR: list term id -> (the term, kept alive so its id is not reused; `S_t(k)`), an `Int -> Int` view sum
+    /// per closed list term. An uninterpreted function over the list array would need z3 to build a model of a
+    /// function on arrays whose elements hold `subview` lambdas over a parameter, which ends in `incomplete (theory
+    /// array)` or the timeout instead of a counterexample.
+    view_term_sums: HashMap<u32, (Ast, FuncDecl)>,
     /// `s.aggs`: (kind, Tc.sexpr(), len(outer)) → F. Insertion order preserved (`len(aggs)` goes into the F name).
     pub(crate) aggs: Vec<((String, String, usize), FuncDecl)>,
     /// LG4 `s.agg_shapes`: (kind, F, body, shape, arity) for the aggregate frame lemma.
@@ -1619,6 +1625,7 @@ impl<'a> FnVerifier<'a> {
             qstack: Vec::new(),
             opq_fns: HashMap::new(),
             view_sums: HashMap::new(),
+            view_term_sums: HashMap::new(),
             aggs: Vec::new(),
             agg_shapes: Vec::new(),
             lemmas: Vec::new(),
@@ -5524,14 +5531,29 @@ impl<'a> FnVerifier<'a> {
 
     /// 4.4k-VS (R-6g9-13): `S(a, k)` of a view list (an uninterpreted sum, one per array sort)
     fn view_sum(&mut self, v: &Arr, k: &Ast) -> R<Ast> {
-        let sort = v.a.sort();
+        self.view_sum_of(&v.a, k)
+    }
+
+    /// `S(list, k)`: an `Int -> Int` function per closed list term (LG7-SR); a list term under a quantifier (it can
+    /// mention a bound variable) keeps the array-keyed `S(a, k)`
+    fn view_sum_of(&mut self, list: &Ast, k: &Ast) -> R<Ast> {
+        if self.qstack.is_empty() {
+            let id = list.id();
+            if !self.view_term_sums.contains_key(&id) {
+                let name = format!("vsum!{}", self.view_term_sums.len());
+                let d = self.z.func_decl(&name, &[self.z.int_sort()], &self.z.int_sort());
+                self.view_term_sums.insert(id, (list.clone(), d));
+            }
+            return Ok(self.view_term_sums[&id].1.apply(&[k.clone()]));
+        }
+        let sort = list.sort();
         let key = sort.name();
         if !self.view_sums.contains_key(&key) {
             let name = format!("vviews!{}", self.view_sums.len());
             let d = self.z.func_decl(&name, &[sort, self.z.int_sort()], &self.z.int_sort());
             self.view_sums.insert(key.clone(), d);
         }
-        Ok(self.view_sums[&key].apply(&[v.a.clone(), k.clone()]))
+        Ok(self.view_sums[&key].apply(&[list.clone(), k.clone()]))
     }
 
     /// the length of the view `a[j]` of a view list
@@ -5570,6 +5592,9 @@ impl<'a> FnVerifier<'a> {
         Ok(sk)
     }
 
+    /// LG7-SR: the longest constant-length view list whose join gets the ground view-sum steps
+    const JOIN_GROUND_MAX: i64 = 64;
+
     /// LG6-VJ (R-6g9-16): `vec_join(parts, sep)` with `n = len(parts)`, `L = len(sep)`, `S` the view sum and the
     /// offset `P(k) = S(parts, k) + k * L` of view `k`. Facts (all true of the concatenation): `S(parts, 0) == 0`
     /// and `S(parts, k + 1) == S(parts, k) + len(parts[k])` for `0 <= k < n`; the result has length
@@ -5583,6 +5608,8 @@ impl<'a> FnVerifier<'a> {
         let (zero, one) = (z.int(0), z.int(1));
         // the list array under a fresh name, so `parts[k]` is a valid trigger (a `store` term is not)
         self.k += 1;
+        // LG7-SR: the view sum stays the one of the list term (`S_t`), so the push facts reach it
+        let list = v.a.clone();
         let named = z.constant(&format!("vjoin!a{}", self.k), &v.a.sort());
         self.assume(st, g, named.eq(&v.a));
         let mut w = v.clone();
@@ -5592,14 +5619,24 @@ impl<'a> FnVerifier<'a> {
         let l = sep.n.clone();
         let text = |this: &Self, k: &Ast| -> R<Arr> { Ok(this.field_val(&v.elem_ty(), v.a.select(k), "vec_join")?.try_arr()?.clone()) };
         // the definition of S on this list, as a quantified step
-        let s0 = self.view_sum(v, &zero)?;
+        let s0 = self.view_sum_of(&list, &zero)?;
         self.assume(st, g, s0.eq(&zero));
         let kq = z.int_const("vjoin!k");
-        let (sk, sk1, wk) = (self.view_sum(v, &kq)?, self.view_sum(v, &kq.add(&one))?, text(self, &kq)?.n);
+        let (sk, sk1, wk) = (self.view_sum_of(&list, &kq)?, self.view_sum_of(&list, &kq.add(&one))?, text(self, &kq)?.n);
         let step = z.and(&[kq.ge_i(0), kq.lt(&n)]).implies(&z.and(&[wk.ge_i(0), sk1.eq(&sk.add(&wk))]));
         // triggered by `parts[k]` only: a trigger on `S(parts, k)` would make `S(parts, k + 1)` and loop
         self.assume(st, g, z.forall(std::slice::from_ref(&kq), &step, &[v.a.select(&kq)]));
-        let sn = self.view_sum(v, &n)?;
+        // LG7-SR: with a constant list length the step also holds at every index as a ground fact. The quantified
+        // step fires only on a `parts[k]` term already present, so which view block holds a result position was found
+        // only for some z3 seeds (lgaps7_join_bytes: 0.1 s or past the timeout)
+        if let Some(cn) = n.simplify().numeral_string().and_then(|t| t.parse::<i64>().ok()) {
+            for j in 0..cn.clamp(0, Self::JOIN_GROUND_MAX) {
+                let kj = z.int(j);
+                let (sj, sj1, wj) = (self.view_sum_of(&list, &kj)?, self.view_sum_of(&list, &z.int(j + 1))?, text(self, &kj)?.n);
+                self.assume(st, g, z.and(&[wj.ge_i(0), sj1.eq(&sj.add(&wj))]));
+            }
+        }
+        let sn = self.view_sum_of(&list, &n)?;
         self.assume(st, g, sn.ge_i(0));
         let total = z.ite(&n.le_i(0), &zero, &sn.add(&n.sub(&one).mul(&l)));
         if code {
@@ -5613,7 +5650,7 @@ impl<'a> FnVerifier<'a> {
         let q = z.func_decl(&format!("vjoin!q{}", self.k), &[z.int_sort()], &z.int_sort());
         let i = z.int_const("vjoin!i");
         let k = q.apply(&[i.clone()]);
-        let pk = self.view_sum(v, &k)?.add(&k.mul(&l));
+        let pk = self.view_sum_of(&list, &k)?.add(&k.mul(&l));
         let piece = text(self, &k)?;
         let tail = z.ite(&k.lt(&n.sub(&one)), &l, &zero);
         let off = i.sub(&pk);

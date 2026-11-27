@@ -1206,7 +1206,7 @@ must_reject|must_reject/lg17_inv_legacy_param.pruv	2 cases: exit 2	llvm=7dba3a0a
 must_reject|must_reject/lg17_str_move_after.pruv	2 cases: exit 2	llvm=239b09f76266	rust=239b09f76266
 must_reject|must_reject/lg17_str_move_assert.pruv	2 cases: exit 2	llvm=9afb3872637a	rust=9afb3872637a
 must_reject|must_reject/lg17_str_move_loop.pruv	2 cases: exit 2	llvm=10d49c8d214d	rust=10d49c8d214d
-must_reject|must_reject/lg17_str_move_param.pruv	2 cases: exit 2	llvm=9f2a0445e246	rust=9f2a0445e246
+must_reject|must_reject/lg17_str_move_param.pruv	2 cases: exit 2	llvm=9dfcc8c1a436	rust=9dfcc8c1a436
 must_reject|must_reject/lg18_try_inout_effect.pruv	2 cases: exit 2	llvm=9b5202173a0e	rust=9b5202173a0e
 must_reject|must_reject/lg18_try_inout_operand.pruv	2 cases: exit 2	llvm=9b5202173a0e	rust=9b5202173a0e
 must_reject|must_reject/lg18_try_inout_second_try.pruv	2 cases: exit 2	llvm=c6ef8237987d	rust=c6ef8237987d
@@ -1263,7 +1263,7 @@ must_reject|must_reject/lg31_frame_clear.pruv	2 cases: exit 2	llvm=3e5c6ae6eb41	
 must_reject|must_reject/lg36_move_under_outer_arm.pruv	2 cases: exit 2	llvm=01195a1b3cb0	rust=01195a1b3cb0
 must_reject|must_reject/lg36_str_move_branch_read.pruv	2 cases: exit 2	llvm=3e6d95c217c0	rust=3e6d95c217c0
 must_reject|must_reject/lg36_str_move_in_loop.pruv	2 cases: exit 2	llvm=57e76c498651	rust=57e76c498651
-must_reject|must_reject/lg36_str_move_under_outer_arm.pruv	2 cases: exit 2	llvm=4fe51addfb8b	rust=4fe51addfb8b
+must_reject|must_reject/lg36_str_move_under_outer_arm.pruv	2 cases: exit 2	llvm=e3548e918d9b	rust=e3548e918d9b
 must_reject|must_reject/lg4_agg_frame_changed.pruv	2 cases: exit 2	llvm=491390a0628f	rust=491390a0628f
 must_reject|must_reject/lg4_field_index_immutable.pruv	2 cases: exit 2	llvm=c87c109a3afe	rust=c87c109a3afe
 must_reject|must_reject/lg4_field_index_oob.pruv	2 cases: exit 2	llvm=ad67d3b33dac	rust=ad67d3b33dac
@@ -1316,11 +1316,17 @@ must_reject|must_reject/lg9_move_field_arg_borrowed.pruv	2 cases: exit 2	llvm=ea
 must_reject|must_reject/lg9_move_field_arg_other_mention.pruv	2 cases: exit 2	llvm=6e8fd7281beb	rust=6e8fd7281beb
 must_reject|must_reject/lg9_move_field_arg_use_after.pruv	2 cases: exit 2	llvm=af929059b4a1	rust=af929059b4a1
 must_reject|must_reject/lg9_utf8_ascii_partial.pruv	2 cases: exit 2	llvm=25668fcdaef2	rust=25668fcdaef2
-must_reject|must_reject/lgaps9_into_bytes_borrowed.pruv	2 cases: exit 2	llvm=5e7427ff88f8	rust=5e7427ff88f8
+must_reject|must_reject/lgaps10_into_bytes_borrowed.pruv	2 cases: exit 2	llvm=a25c64662793	rust=a25c64662793
+must_reject|must_reject/lgaps10_into_bytes_no_move.pruv	2 cases: exit 2	llvm=4ee534764c30	rust=4ee534764c30
+must_reject|must_reject/lgaps10_into_bytes_ref_local.pruv	2 cases: exit 2	llvm=a0d1bf72471d	rust=a0d1bf72471d
+must_reject|must_reject/lgaps10_into_bytes_utf8.pruv	2 cases: exit 2	llvm=fe8e10f3586f	rust=fe8e10f3586f
+must_reject|must_reject/lgaps9_into_bytes_borrowed.pruv	2 cases: exit 2	llvm=28a3b78c1df3	rust=28a3b78c1df3
 must_reject|must_reject/lgaps9_into_bytes_len.pruv	2 cases: exit 2	llvm=aeba54a11d5f	rust=aeba54a11d5f
 must_reject|must_reject/lgaps9_into_bytes_use_after.pruv	2 cases: exit 2	llvm=b3787ba84569	rust=b3787ba84569
 must_reject|must_reject/lgaps9_str_bytes_escape.pruv	2 cases: exit 2	llvm=386b97f7359d	rust=386b97f7359d
 must_reject|must_reject/lgaps9_str_bytes_len.pruv	2 cases: exit 2	llvm=bf5bcc882fb4	rust=bf5bcc882fb4
+must_reject|must_reject/lgaps9_views_subview_len.pruv	2 cases: exit 2	llvm=0b37769bc998	rust=0b37769bc998
+must_reject|must_reject/lgaps9_views_subview_sum.pruv	2 cases: exit 2	llvm=27d244e74916	rust=27d244e74916
 must_reject|must_reject/p1_add_overflow.pruv	2 cases: exit 2	llvm=bbdc5f856ac9	rust=bbdc5f856ac9
 must_reject|must_reject/p1_bit_and.pruv	2 cases: exit 2	llvm=1fca1e362b66	rust=1fca1e362b66
 must_reject|must_reject/p1_cast_in_contract.pruv	2 cases: exit 2	llvm=214330cefe95	rust=214330cefe95
@@ -2755,6 +2761,8 @@ runtime|runtime/lg9_rt_take_record [--no-verify]	2 cases: exit 2	llvm=930faca802
 runtime|runtime/lg9_rt_take_record [default]	2 cases: exit 2	llvm=22b8d7a8d7ed	rust=bfdabd9d95ea
 runtime|runtime/lg9_rt_utf8_ascii [--no-verify]	2 cases: exit 2	llvm=174ba0757b4f	rust=d1b5a6517e91
 runtime|runtime/lg9_rt_utf8_ascii [default]	2 cases: exit 2	llvm=ed57aa14520e	rust=24ccfa5a05d8
+runtime|runtime/lgaps10_into_bytes_param_fixed [--no-verify]	2 cases: exit 2	llvm=7623b47160da	rust=5b6aa92fb447
+runtime|runtime/lgaps10_into_bytes_param_fixed [default]	2 cases: exit 2	llvm=d3e3c84d1959	rust=83720d93664f
 runtime|runtime/lgaps9_str_bytes [--no-verify]	2 cases: exit 2	llvm=1141833f03db	rust=a7e9be021219
 runtime|runtime/lgaps9_str_bytes [default]	2 cases: exit 2	llvm=7357f3575128	rust=09da4e703036
 runtime|runtime/p1_r_bounds [--no-verify]	2 cases: exit 2	llvm=c701bf27929d	rust=259cf4852f8d

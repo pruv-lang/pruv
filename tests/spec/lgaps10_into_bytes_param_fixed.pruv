@@ -1,0 +1,13 @@
+// spec: R-6b-6 accept
+// LG9-SB1 (L-gaps 10): the fix the array_alias hint names (a local copy, then move) is accepted
+fn good(s: str) -> i64 ! alloc
+  ensures result == len(s)
+{
+  let t: str = copy(s);
+  let b: [u8] = str_into_bytes(move t);
+  return len(b);
+}
+
+fn run() -> () ! alloc, io {
+  print(good("abc"));
+}

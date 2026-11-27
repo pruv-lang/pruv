@@ -1,0 +1,11 @@
+// spec: R-6g9-13 reject
+// LG7-SR (L-gaps 9): the view sum of two subviews splitting a parameter is len(b); claiming len(b) + 1 must refute (assert)
+fn f(b: [u8], m: i64) -> i64 ! alloc
+  requires len(b) <= 1000 && 1 <= len(b) && 0 <= m && m <= len(b)
+{
+  let mut out: Vec<ref [u8]> = vec_new::<ref [u8]>();
+  vec_push::<ref [u8]>(inout out, subview(b, 0, m));
+  vec_push::<ref [u8]>(inout out, subview(b, m, len(b)));
+  assert vec_views_len::<ref [u8]>(out, len(out)) == len(b) + 1;
+  return 0;
+}

@@ -1,0 +1,8 @@
+// spec: R-6b-6 reject
+// LG9-SB2 (L-gaps 10): t is moved while the str_bytes(t) view is still used afterwards
+fn bad() -> i64 ! alloc {
+  let t: str = copy("ab");
+  let v: ref [u8] = str_bytes(t);
+  let b: [u8] = str_into_bytes(move t);
+  return len(b) + len(v);
+}

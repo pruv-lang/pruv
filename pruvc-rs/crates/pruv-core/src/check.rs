@@ -6823,6 +6823,13 @@ impl Checker {
                     && self.array_replace.as_deref() != Some(x.name.as_str())
                     && !self.match_movable.contains(&x.name) // G-DB16-1: array binder of a consuming match
                 {
+                    if matches!(entry.kind, "param" | "inout") && entry.ty == strt() {
+                        // LG9-SB1: `take s: str` is not an owned str for a move (it ends in type/foreign_move);
+                        // the owned str is a local copy
+                        return Err(terr(x.line, x.col, "array_alias",
+                            format!("parameter {} is a borrowed str and cannot be moved", x.name),
+                            format!("copy it into an owned local: `let t: str = copy({});` then pass `move t`", x.name)));
+                    }
                     if matches!(entry.kind, "param" | "inout") {
                         return Err(terr(x.line, x.col, "array_alias",
                             format!("parameter {} is a borrowed array and cannot be moved", x.name),

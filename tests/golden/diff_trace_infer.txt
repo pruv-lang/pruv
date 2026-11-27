@@ -1119,7 +1119,7 @@ must_reject|tests/must_reject/lg17_inv_legacy_param.pruv	1 case: obl=0 1	--infer
 must_reject|tests/must_reject/lg17_str_move_after.pruv	1 case: obl=0 1	--infer=7db99b714ab1
 must_reject|tests/must_reject/lg17_str_move_assert.pruv	1 case: obl=0 1	--infer=165f873b265c
 must_reject|tests/must_reject/lg17_str_move_loop.pruv	1 case: obl=0 1	--infer=dddc27d59c07
-must_reject|tests/must_reject/lg17_str_move_param.pruv	1 case: obl=0 1	--infer=ba22f795bf19
+must_reject|tests/must_reject/lg17_str_move_param.pruv	1 case: obl=0 1	--infer=7a3558c2a023
 must_reject|tests/must_reject/lg18_try_inout_effect.pruv	1 case: obl=0 1	--infer=5edda4e177ce
 must_reject|tests/must_reject/lg18_try_inout_operand.pruv	1 case: obl=0 1	--infer=5edda4e177ce
 must_reject|tests/must_reject/lg18_try_inout_second_try.pruv	1 case: obl=0 1	--infer=8e8b6b3c04b0
@@ -1176,7 +1176,7 @@ must_reject|tests/must_reject/lg31_frame_clear.pruv	1 case: obl=30 1	--infer=6f5
 must_reject|tests/must_reject/lg36_move_under_outer_arm.pruv	1 case: obl=0 1	--infer=1987714146bf
 must_reject|tests/must_reject/lg36_str_move_branch_read.pruv	1 case: obl=0 1	--infer=0fd5b4521b70
 must_reject|tests/must_reject/lg36_str_move_in_loop.pruv	1 case: obl=0 1	--infer=01718df40208
-must_reject|tests/must_reject/lg36_str_move_under_outer_arm.pruv	1 case: obl=0 1	--infer=4b175554d304
+must_reject|tests/must_reject/lg36_str_move_under_outer_arm.pruv	1 case: obl=0 1	--infer=46845d6a03e0
 must_reject|tests/must_reject/lg4_agg_frame_changed.pruv	1 case: obl=23 1	--infer=6e70035c7642
 must_reject|tests/must_reject/lg4_field_index_immutable.pruv	1 case: obl=0 1	--infer=f4784e763cd3
 must_reject|tests/must_reject/lg4_field_index_oob.pruv	1 case: obl=1 1	--infer=e9dc86f69e09
@@ -1229,11 +1229,17 @@ must_reject|tests/must_reject/lg9_move_field_arg_borrowed.pruv	1 case: obl=0 1	-
 must_reject|tests/must_reject/lg9_move_field_arg_other_mention.pruv	1 case: obl=0 1	--infer=3713a1d47d59
 must_reject|tests/must_reject/lg9_move_field_arg_use_after.pruv	1 case: obl=0 1	--infer=4c630d7417d1
 must_reject|tests/must_reject/lg9_utf8_ascii_partial.pruv	1 case: obl=2 1	--infer=2584e09a6285
-must_reject|tests/must_reject/lgaps9_into_bytes_borrowed.pruv	1 case: obl=0 1	--infer=103148d26fcb
+must_reject|tests/must_reject/lgaps10_into_bytes_borrowed.pruv	1 case: obl=0 1	--infer=b7a7c9f3429b
+must_reject|tests/must_reject/lgaps10_into_bytes_no_move.pruv	1 case: obl=0 1	--infer=5a700a951189
+must_reject|tests/must_reject/lgaps10_into_bytes_ref_local.pruv	1 case: obl=0 1	--infer=935ee5b8b8f2
+must_reject|tests/must_reject/lgaps10_into_bytes_utf8.pruv	1 case: obl=3 1	--infer=c60627faa3ab
+must_reject|tests/must_reject/lgaps9_into_bytes_borrowed.pruv	1 case: obl=0 1	--infer=babc264f3f43
 must_reject|tests/must_reject/lgaps9_into_bytes_len.pruv	1 case: obl=1 1	--infer=342d6c1e081c
 must_reject|tests/must_reject/lgaps9_into_bytes_use_after.pruv	1 case: obl=0 1	--infer=7c8a2a64df1d
 must_reject|tests/must_reject/lgaps9_str_bytes_escape.pruv	1 case: obl=0 1	--infer=e2e54e77c31b
 must_reject|tests/must_reject/lgaps9_str_bytes_len.pruv	1 case: obl=1 1	--infer=11eba76955b5
+must_reject|tests/must_reject/lgaps9_views_subview_len.pruv	1 case: obl=5 1	--infer=2045f5952500
+must_reject|tests/must_reject/lgaps9_views_subview_sum.pruv	1 case: obl=5 1	--infer=38c14c9536a5
 must_reject|tests/must_reject/p1_add_overflow.pruv	1 case: obl=1 1	--infer=188377af221c
 must_reject|tests/must_reject/p1_bit_and.pruv	1 case: obl=0 1	--infer=8211483d2318
 must_reject|tests/must_reject/p1_cast_in_contract.pruv	1 case: obl=0 1	--infer=1a9086e48014
@@ -1992,6 +1998,7 @@ runtime|tests/runtime/lg9_rt_record_move.pruv	1 case: obl=4 1	--infer=2567f85903
 runtime|tests/runtime/lg9_rt_take_field_move.pruv	1 case: obl=4 1	--infer=ef44fbcd71d9
 runtime|tests/runtime/lg9_rt_take_record.pruv	1 case: obl=8 1	--infer=1e06dc03094e
 runtime|tests/runtime/lg9_rt_utf8_ascii.pruv	1 case: obl=31 1	--infer=073ccd671db5
+runtime|tests/runtime/lgaps10_into_bytes_param_fixed.pruv	1 case: obl=1 1	--infer=bb2cb26bb2d2
 runtime|tests/runtime/lgaps9_str_bytes.pruv	1 case: obl=25 1	--infer=67352951afef
 runtime|tests/runtime/p1_r_bounds.pruv	1 case: obl=9 1	--infer=55e5c046f31d
 runtime|tests/runtime/p1_r_cast_fail.pruv	1 case: obl=1 1	--infer=d6a4ee3a0a38

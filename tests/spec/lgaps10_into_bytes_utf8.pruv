@@ -1,0 +1,9 @@
+// spec: R-6b-6 reject
+// LG9-SB2 (L-gaps 10): the bytes of "a" stop being UTF-8 after a[0] = 255, so the claim refutes with [255]
+fn bad() -> i64 ! alloc {
+  let t: str = copy("a");
+  let mut a: [u8] = str_into_bytes(move t);
+  a[0] = 255;
+  assert utf8_valid(a);
+  return len(a);
+}

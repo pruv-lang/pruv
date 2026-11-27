@@ -2117,3 +2117,42 @@ All after the last code change (F1 / F4 from the structure comparison).
   1. 4.4o-SB language side, then 4.4o-EB.
   2. 4.4q-DN reference decision, 4.4o-VP.
   3. 4.4s-FK if the language gets `[str; N]` / const generics (then `root_keys` can become `access::fields`).
+
+### Bundle L-gaps 10
+
+- Closed LG7-SR (R-6g9-13, R-6g9-16). Cause of the L-gaps 9 slowdown: the quantified join step
+  `S(k+1) = S(k) + len(parts[k])` fires only on a `parts[k]` term already in the goal, so finding the view block
+  of a result position depended on the z3 seed. The old encoding had the same sensitivity (the dumped
+  `lgaps7_join_bytes` goal timed out under some seeds); the per-term sum only moved which seeds were lucky. Fix:
+  a closed list term (no quantified variable) gets its own `Int -> Int` view sum `vsum!N`, kept per term id, and
+  `vec_join` of a list with a constant length up to 64 also asserts the step at every index as a ground fact
+  (`len(parts[j]) >= 0 && S(j+1) = S(j) + len(parts[j])`); a term under a quantifier keeps the array-keyed
+  `S(a, k)`. `vec_join` reads the sum of the list term before it renames the list, so the push facts reach it.
+  Timing on the same machine, run one after the other: `tests/spec/lgaps7_join_bytes.pruv` 0.33 s on this branch,
+  3.67 s on main (`lgaps7_join` 0.20 s / 0.19 s). The false length and sum claims about two `subview`s of a
+  parameter now refute in about 0.01 s with counterexample `b = [2], m = 0` (main: `verify_unknown`, canceled).
+  New rejects `lgaps9_views_subview_len` and `lgaps9_views_subview_sum` (tests/spec and tests/must_reject).
+- Closed LG9-SB1: moving a borrowed `str` parameter is still `type/array_alias`, now with the message
+  "parameter s is a borrowed str" and the hint `let t: str = copy(s);` then `move t` (was `take s: str`, which
+  ends in `type/foreign_move`). Accept test `lgaps10_into_bytes_param_fixed` runs the hinted form on both backends
+  with and without `--no-verify`. Golden digests of `lg17_str_move_param`, `lg36_str_move_under_outer_arm` and
+  `lgaps9_into_bytes_borrowed` changed with the message.
+- Closed LG9-SB2: rejects `lgaps10_into_bytes_ref_local` (`type/array_alias`), `lgaps10_into_bytes_borrowed`
+  (`type/borrow_conflict`), `lgaps10_into_bytes_no_move` (`type/foreign_move`) and `lgaps10_into_bytes_utf8`
+  (`assert`, counterexample `a = [255]`), in tests/spec and tests/must_reject. The borrowed-parameter case was
+  already `lgaps9_into_bytes_borrowed`.
+- Closed LG8-A4: Rust `--no-verify` `vec_join` sums a saturating u64 total (pieces plus separators) and stops with
+  `vec_join: total length <= 2^40` before joining, as LLVM does. Verified code is unchanged.
+- Still open, with a new diagnosis:
+  - LG9-SR2: `vec_join` of `subview` pieces with a false `assert len(s) == len(b)` still ends in
+    `verify_unknown` (`incomplete (theory array)`, fast). The cause is not the view sum: the goal without the
+    per-position byte forall is `sat`, and it stays `unknown` with the separator lambda replaced by a plain array
+    select. The forall reads `arr(parts[q(i)])` where the elements hold `subview` lambdas. By hand, one byte forall
+    per piece (constant length, offset `S(k) + k * len(sep)`) instead of the `q(i)` forall is `sat`, but its
+    pattern is an offset term, which may lose the positive byte proofs (`lgaps7_join_bytes`); not tried in code.
+    Repro `work/lgaps9/sr_join_unknown.pruv`.
+- Not reached: LG7-T3 (verified `--foreign-checks all` pop check), the audit.
+- Checks: `cargo test --release`; `diff_rust --fuzz-count 20`; `run_all --only must_reject` and `--only
+  g8_frontend` on both backends; `m3_all --quick` (goldens updated with `--update-golden`: the three message
+  digests, new files and the mutant sample shifted by them); `--list-rows` diff (10 new rows).
+- Next: LG9-SR2, LG7-T3, LG9-SB3, LG9-SB4.

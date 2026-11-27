@@ -6421,14 +6421,14 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 if n == "vec_join" && !self.fmap.contains_key(n) {
                     if let Some(list) = self.view_list_arg(x) {
                         // LG6-VJ (R-6g9-16): hand `parts.join(sep)` (a String for str views, a Vec<u8> for [u8]);
-                        // the verifier proves the total length <= 2^40, unverified code checks it after the join
+                        // the verifier proves the total length <= 2^40. LG8-A4: unverified code sums a saturating u64
+                        // total before joining, as LLVM does, so an oversized join stops before it allocates
                         let sep = self.arr_ref(&a[1])?;
-                        let join = format!("{list}.join(&({sep})[..])");
                         if self.verified {
-                            return Ok(join);
+                            return Ok(format!("{list}.join(&({sep})[..])"));
                         }
                         return Ok(format!(
-                            r#"{{ let pruv_j = {join}; if pruv_j.len() as u64 > (1u64 << 40) {{ pruv_g6_req("vec_join", "total length <= 2^40"); }} pruv_j }}"#
+                            r#"{{ let pruv_l = &{list}; let pruv_s = &({sep})[..]; let mut pruv_t: u64 = (pruv_s.len() as u64).saturating_mul(pruv_l.len().saturating_sub(1) as u64); for pruv_p in pruv_l.iter() {{ pruv_t = pruv_t.saturating_add(pruv_p.len() as u64); }} if pruv_t > (1u64 << 40) {{ pruv_g6_req("vec_join", "total length <= 2^40"); }} pruv_l.join(pruv_s) }}"#
                         ));
                     }
                 }
