@@ -1,0 +1,4 @@
+// spec: R-6t-4 reject
+// L-gaps 20: Option<[T; N]> stands only where [T; N] may, not as a Vec element
+struct W { v: Vec<Option<[u8; 2]>> }
+fn f() -> i64 { return 0; }

@@ -122,6 +122,7 @@ examples|examples/sum.pruv	1 case: obl=10 1	default=448a441c7fae
 fuzz|fuzz:41	40 cases: obl=5 5, obl=6 4, obl=7 4, obl=2 3, ...	0/default=4e71239df357	1/default=751807aea832	2/default=4a23d2a5e4c5	3/default=6ef9dd4e0e73	4/default=09fa52bfd934	5/default=882917db0f55	6/default=46d42aef2ac5	7/default=199fdfa13c07	8/default=22e5d388e536	9/default=43c86948a17d	10/default=1d8f80182376	11/default=85dd5138a4e6	12/default=aa59b93c5c86	13/default=7b7549571d77	14/default=ae0f6b4f7b39	15/default=d7adfe17075a	16/default=d26118f22807	17/default=a86d41cb329f	18/default=be932601f9c2	19/default=670d1701a72d	20/default=88278f0dc7b2	21/default=c7c333522bca	22/default=5c31bdf579c3	23/default=4edd51f36b2b	24/default=2bb9068d41ad	25/default=4d16a5540922	26/default=af561b0b94a4	27/default=aaee9cc54090	28/default=01210dcb968e	29/default=e8c7469e366e	30/default=9156ff8f37b1	31/default=764ed0d1dfe6	32/default=93b61cec500f	33/default=c55df823fb31	34/default=bc8b6a1d3a2d	35/default=948e1caf49ff	36/default=212f371a3cc6	37/default=2e952e296fb0	38/default=3239d44300a7	39/default=afd7fb501300
 fuzz|fuzz:56	40 cases: obl=19 4, obl=20 4, obl=7 4, obl=10 3, ...	0/default=fdc7aea38ee2	1/default=6b17267ef607	2/default=0861bbc6035b	3/default=232dfa8f5e01	4/default=e20f93ec98d5	5/default=ccf01a354222	6/default=9dd84a4d230e	7/default=5b8d79886ba8	8/default=6e3a946001c9	9/default=bdd826139d04	10/default=8a0b81cab725	11/default=d49e8264f7fd	12/default=a266e336ada9	13/default=3dde5306d451	14/default=8301a2ba0e2e	15/default=8201a9fa36a2	16/default=b885f4dfd0af	17/default=626fe955b30c	18/default=87a6a0911611	19/default=d0c007c9655f	20/default=0b033d9c21ed	21/default=ffa1a6d8ac95	22/default=8375910fc6a3	23/default=53c614cd8d43	24/default=fdcaac17c255	25/default=d852b12fec0d	26/default=815897c19b72	27/default=1ee5fa4d7846	28/default=d18ffdc986aa	29/default=6434dfb4504d	30/default=95fbe34a5e68	31/default=a5f78c14c994	32/default=ab35abb303a8	33/default=f73cba398033	34/default=63738497fa11	35/default=b7f8e857598b	36/default=58ce2e78e096	37/default=fc1d27ca9e51	38/default=6345ef3b35af	39/default=63738497fa11
 fuzz|fuzz:57	40 cases: obl=6 6, obl=15 3, obl=19 3, obl=3 3, ...	0/default=002912c0dc61	1/default=3a1d24845003	2/default=ed96b8a73ad1	3/default=63738d64a34f	4/default=9a8a09c354f4	5/default=df0cdccf6a35	6/default=69211ebb771f	7/default=1fb49a106c51	8/default=f881f8433278	9/default=fce50ed475d3	10/default=bfd59692602f	11/default=77de4c9ef6a0	12/default=ea2ebd1eec76	13/default=b3529716c9a2	14/default=69a2fab4742a	15/default=8970a7eb8f1d	16/default=a86d41cb329f	17/default=fb48e158c36a	18/default=f1bee202df11	19/default=3dc57f8c24c6	20/default=ecb1846df4b1	21/default=9d7badc5e885	22/default=e52f0fae43a6	23/default=07a5ea0bf72b	24/default=d6748a998366	25/default=3eb182daf0ad	26/default=ed0d81fa15fc	27/default=7a5244f54046	28/default=f8850d326656	29/default=3ac94d0e0705	30/default=a7a4dbe5b690	31/default=39a8a2b8711f	32/default=d6d4c62801a1	33/default=3eb182daf0ad	34/default=1f1de5a6fe8f	35/default=773d61a7e79a	36/default=0589f8bcca1d	37/default=bab52588299b	38/default=a42101a2a8ef	39/default=c66c72655e76
+g4_reject|tests/must_reject/g4_lgaps20_fixed_module_oob/root.pruv	1 case: obl=3 1	default=54f640ced6e0
 g4_reject|tests/must_reject/g4_r01_missing_child/root.pruv	1 case: obl=0 1	default=d80c3151039c
 g4_reject|tests/must_reject/g4_r02_duplicate_module/root.pruv	1 case: obl=0 1	default=413332d85e13
 g4_reject|tests/must_reject/g4_r03_module_alias/root.pruv	1 case: obl=0 1	default=6f9bd4ff0163
@@ -1259,6 +1260,21 @@ must_reject|tests/must_reject/lgaps18_binder_record_str.pruv	1 case: obl=0 1	def
 must_reject|tests/must_reject/lgaps18_word_mask_partial.pruv	1 case: obl=3 1	default=04bbb5c700d2
 must_reject|tests/must_reject/lgaps18_word_mask_past.pruv	1 case: obl=3 1	default=073fdd3d0d3d
 must_reject|tests/must_reject/lgaps18_word_mask_stale.pruv	1 case: obl=5 1	default=293644041a5c
+must_reject|tests/must_reject/lgaps20_option_fixed_binder_write.pruv	1 case: obl=0 1	default=37619a4f34ca
+must_reject|tests/must_reject/lgaps20_option_fixed_eq.pruv	1 case: obl=0 1	default=1c86915efbf0
+must_reject|tests/must_reject/lgaps20_option_fixed_eq_field.pruv	1 case: obl=0 1	default=1e134c2049dd
+must_reject|tests/must_reject/lgaps20_option_fixed_generic_enum.pruv	1 case: obl=0 1	default=22b844ec13f7
+must_reject|tests/must_reject/lgaps20_option_fixed_generic_field.pruv	1 case: obl=0 1	default=ac0264d6c134
+must_reject|tests/must_reject/lgaps20_option_fixed_host.pruv	1 case: obl=0 1	default=0c30949c16bd
+must_reject|tests/must_reject/lgaps20_option_fixed_nested.pruv	1 case: obl=0 1	default=e65618af394d
+must_reject|tests/must_reject/lgaps20_option_fixed_oob.pruv	1 case: obl=1 1	default=1fdca4af6ecb
+must_reject|tests/must_reject/lgaps20_option_fixed_result_payload.pruv	1 case: obl=0 1	default=7acdcd68945a
+must_reject|tests/must_reject/lgaps20_option_fixed_some_val_oob.pruv	1 case: obl=1 1	default=12e599d4d0ac
+must_reject|tests/must_reject/lgaps20_option_fixed_trusted.pruv	1 case: obl=0 1	default=8508ec601e87
+must_reject|tests/must_reject/lgaps20_option_fixed_tuple.pruv	1 case: obl=0 1	default=e8bc98bc72d3
+must_reject|tests/must_reject/lgaps20_option_fixed_unguarded.pruv	1 case: obl=1 1	default=6657de93c5e0
+must_reject|tests/must_reject/lgaps20_option_fixed_user_generic.pruv	1 case: obl=0 1	default=8e2e1546799b
+must_reject|tests/must_reject/lgaps20_option_fixed_vec.pruv	1 case: obl=0 1	default=5a199efa7b8e
 must_reject|tests/must_reject/lgaps9_into_bytes_borrowed.pruv	1 case: obl=0 1	default=5023034d1a39
 must_reject|tests/must_reject/lgaps9_into_bytes_len.pruv	1 case: obl=1 1	default=9c849a7c9750
 must_reject|tests/must_reject/lgaps9_into_bytes_use_after.pruv	1 case: obl=0 1	default=de6490a8eecb
@@ -1367,8 +1383,8 @@ must_reject|tests/must_reject/p6_partial_move.pruv	1 case: obl=0 1	default=54e95
 must_reject|tests/must_reject/p6_pattern_arity.pruv	1 case: obl=0 1	default=15d305c57d34
 must_reject|tests/must_reject/p6_some_pattern.pruv	1 case: obl=0 1	default=f2b8e477e0a6
 must_reject|tests/must_reject/p6_tuple_struct.pruv	1 case: obl=0 1	default=e6fce23e6fbf
-must_reject|tests/must_reject/p7_array_char_type.pruv	1 case: obl=0 1	default=ca082b02cbb6
-must_reject|tests/must_reject/p7_array_type.pruv	1 case: obl=0 1	default=56b270b7c34e
+must_reject|tests/must_reject/p7_array_char_type.pruv	1 case: obl=0 1	default=438e6e43a820
+must_reject|tests/must_reject/p7_array_type.pruv	1 case: obl=0 1	default=a6a0f187cdef
 must_reject|tests/must_reject/p7_char_cast_bool.pruv	1 case: obl=0 1	default=52df34e771b1
 must_reject|tests/must_reject/p7_char_contract_cast.pruv	1 case: obl=0 1	default=67592bc66df0
 must_reject|tests/must_reject/p7_char_index.pruv	1 case: obl=0 1	default=5e669b97dfb4
@@ -1412,13 +1428,13 @@ must_reject|tests/must_reject/p7_fixed_count.pruv	1 case: obl=0 1	default=eac4e4
 must_reject|tests/must_reject/p7_fixed_enum_eq.pruv	1 case: obl=0 1	default=c9d0249740dc
 must_reject|tests/must_reject/p7_fixed_enum_field_eq.pruv	1 case: obl=0 1	default=85c2c00fb446
 must_reject|tests/must_reject/p7_fixed_enum_field_oob.pruv	1 case: obl=1 1	default=9bbd3fcaeb6b
-must_reject|tests/must_reject/p7_fixed_enum_field_pub.pruv	1 case: obl=0 1	default=f0612a7addce
+must_reject|tests/must_reject/p7_fixed_enum_field_pub.pruv	1 case: obl=0 1	default=e9349decee89
 must_reject|tests/must_reject/p7_fixed_enum_field_ro.pruv	1 case: obl=0 1	default=1eb2b79144c2
 must_reject|tests/must_reject/p7_fixed_eq.pruv	1 case: obl=0 1	default=d9d0fa53e3fa
 must_reject|tests/must_reject/p7_fixed_field.pruv	1 case: obl=0 1	default=2c2eeb80fd71
 must_reject|tests/must_reject/p7_fixed_field_eq.pruv	1 case: obl=0 1	default=be1e628ccb40
 must_reject|tests/must_reject/p7_fixed_field_frame.pruv	1 case: obl=2 1	default=d23f53fd9a68
-must_reject|tests/must_reject/p7_fixed_field_host.pruv	1 case: obl=0 1	default=1b55091af91f
+must_reject|tests/must_reject/p7_fixed_field_host.pruv	1 case: obl=0 1	default=b17e2e346c9c
 must_reject|tests/must_reject/p7_fixed_field_keyword.pruv	1 case: obl=0 1	default=f875a7719088
 must_reject|tests/must_reject/p7_fixed_field_oob.pruv	1 case: obl=1 1	default=1a7d6d498527
 must_reject|tests/must_reject/p7_fixed_field_owned.pruv	1 case: obl=0 1	default=86ed9b494c97
@@ -1462,7 +1478,7 @@ must_reject|tests/must_reject/p7_fixed_param_oob.pruv	1 case: obl=1 1	default=05
 must_reject|tests/must_reject/p7_fixed_ref_after_str.pruv	1 case: obl=0 1	default=e2f9ed096a15
 must_reject|tests/must_reject/p7_fixed_ref_after_str_fn.pruv	1 case: obl=0 1	default=e2f9ed096a15
 must_reject|tests/must_reject/p7_fixed_ref_local.pruv	1 case: obl=0 1	default=343f3dba4a48
-must_reject|tests/must_reject/p7_fixed_result.pruv	1 case: obl=0 1	default=24dec80fb7ec
+must_reject|tests/must_reject/p7_fixed_result.pruv	1 case: obl=0 1	default=d6bd1c2968e8
 must_reject|tests/must_reject/p7_fixed_slice_arms.pruv	1 case: obl=0 1	default=097752fe566c
 must_reject|tests/must_reject/p7_fixed_slice_length.pruv	1 case: obl=0 1	default=8ae6079f061b
 must_reject|tests/must_reject/p7_fixed_slice_pattern.pruv	1 case: obl=0 1	default=3fb6ce32f2f6
@@ -1613,7 +1629,7 @@ must_reject|tests/must_reject/refine_syntax_binop.pruv	1 case: obl=0 1	default=1
 must_reject|tests/must_reject/refine_syntax_exp.pruv	1 case: obl=0 1	default=8dcf6e7990c1
 must_reject|tests/must_reject/refine_syntax_expr_bound.pruv	1 case: obl=0 1	default=e8425bde79c4
 must_reject|tests/must_reject/refine_syntax_halfopen.pruv	1 case: obl=0 1	default=fe401abdd538
-must_reject|tests/must_reject/refine_syntax_len_noop.pruv	1 case: obl=0 1	default=46938a59e090
+must_reject|tests/must_reject/refine_syntax_len_noop.pruv	1 case: obl=0 1	default=390fd4e8318f
 must_reject|tests/must_reject/refine_while_return.pruv	1 case: obl=5 1	default=9ce1ff79dfc3
 must_reject|tests/must_reject/s5_before_decreases.pruv	1 case: obl=0 1	default=a3eca6f64405
 must_reject|tests/must_reject/s5_before_effects.pruv	1 case: obl=0 1	default=a3eca6f64405
@@ -2043,6 +2059,7 @@ runtime|tests/runtime/lgaps16_rt_binder_record.pruv	1 case: obl=34 1	default=e0c
 runtime|tests/runtime/lgaps16_rt_binder_scalar.pruv	1 case: obl=1 1	default=e50e03f1a427
 runtime|tests/runtime/lgaps17_utf8_subspan.pruv	1 case: obl=77 1	default=fc9dc2b93c1a
 runtime|tests/runtime/lgaps18_word_mask.pruv	1 case: obl=78 1	default=588c0c04e59d
+runtime|tests/runtime/lgaps20_option_fixed.pruv	1 case: obl=30 1	default=1170d27bc048
 runtime|tests/runtime/lgaps9_str_bytes.pruv	1 case: obl=25 1	default=9714b8db38d7
 runtime|tests/runtime/p1_r_bounds.pruv	1 case: obl=9 1	default=755fd0bbf8f5
 runtime|tests/runtime/p1_r_cast_fail.pruv	1 case: obl=1 1	default=13a323fd211c

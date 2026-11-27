@@ -70,9 +70,11 @@ pub fn iso_w(line: [u8], key: [u8]) -> [i64] ! alloc
       if f == -1 { return lead1(1); }
       if f < 0 { return lead2(2, f); }
       let r: crate::time::Iso = crate::time::iso_of(d, f);
-      if r.status == 0 { return widen_bytes(r.text); }
-      if r.status == 1 { return lead1(1); }
-      return lead2(2, r.status);
+      if r.status != 0 { return lead2(2, r.status); }
+      match r.at {
+        Some(a) => { return widen_bytes(a); }
+        None => { return lead1(1); }
+      }
     }
     crate::entry::Line::Skip => { return lead1(9); }
     crate::entry::Line::Defect(p) => { return lead2(8, p); }
@@ -88,8 +90,7 @@ pub fn integer_time_w(v: i64) -> [i64] ! alloc
 pub fn format_iso_w(ms: i64) -> [i64] ! alloc
 {
   if ms < -62167219200000 || ms > 253402300799999 { return lead1(-2); }
-  let t: [u8] = crate::time::format_iso(ms);
-  if len(t) != 24 { return lead1(-3); }
+  let t: [u8; 24] = crate::time::format_iso(ms);
   return widen_bytes(t);
 }
 

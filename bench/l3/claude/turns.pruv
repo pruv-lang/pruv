@@ -1,12 +1,12 @@
 // L3-1 turn collector, hand `Collector` (VecDeque<Draft>) and `Draft` (handrust/src/lib.rs).
 // drafts holds at most 200 drafts. Draft k (k counts begins from 0) lives at index k % 200: the vector grows by
 // push while fewer than 200 drafts were begun, and afterwards the oldest draft, at the front index begun % 200,
-// is reused in place for the next begin (hand: pop_front, clear, push_back). Each draft owns its prompt, reply,
-// createdAt and completedAt bytes; completedAt is a separate field, so a later answer never moves it.
+// is reused in place for the next begin (hand: pop_front, clear, push_back). Each draft owns its prompt and reply
+// bytes; createdAt and completedAt are hand `Stamp` values (Option<[u8; 24]>, 4.4h-ST), assigned whole.
 
 pub struct Plan { kept: i64, total: i64, bytes: i64 }
 
-pub struct Draft { prompt: [u8], reply: [u8], used: i64, tools: i64, created: [u8], completed: [u8], clipped: bool }
+pub struct Draft { prompt: [u8], reply: [u8], used: i64, tools: i64, created: Option<[u8; 24]>, completed: Option<[u8; 24]>, clipped: bool }
 
 pub struct Collector { drafts: Vec<Draft>, begun: i64, active: bool, lost: bool }
 
@@ -17,9 +17,7 @@ pub pred fn ok(c: Collector) -> bool {
     (forall i in 0..len(c.drafts): (
       len(c.drafts[i].prompt) <= 32768 &&
       0 <= c.drafts[i].used && len(c.drafts[i].reply) <= c.drafts[i].used && c.drafts[i].used <= 32768 &&
-      0 <= c.drafts[i].tools && c.drafts[i].tools <= 1000000000000000 &&
-      (len(c.drafts[i].created) == 0 || len(c.drafts[i].created) == 24) &&
-      (len(c.drafts[i].completed) == 0 || len(c.drafts[i].completed) == 24)));
+      0 <= c.drafts[i].tools && c.drafts[i].tools <= 1000000000000000));
 }
 
 pub fn new_collector() -> Collector ! alloc
@@ -37,17 +35,6 @@ pub fn current(c: Collector) -> i64
 }
 
 // b emptied, keeping its block where the backend can (hand: clear), then t[0..n) appended (hand: extend).
-fn refill(take b: [u8], t: [u8], n: i64) -> [u8] ! alloc
-  requires 0 <= n && n <= len(t) && n <= 32768
-  ensures len(result) == n
-{
-  let mut x: [u8] = move b;
-  x = truncate(x, 0);
-  arr_append(inout x, t, 0, n);
-  return move x;
-}
-
-// The prompt form of refill (str source).
 fn refill_text(take b: [u8], t: str, n: i64) -> [u8] ! alloc
   requires 0 <= n && n <= len(t) && n <= 32768
   ensures len(result) == n
@@ -61,42 +48,35 @@ fn refill_text(take b: [u8], t: str, n: i64) -> [u8] ! alloc
 // begin: new current draft (evicting the oldest once 200 exist), prompt clipped to 32768 bytes (longest
 // whole-scalar prefix), clipped set when the original exceeded the cap or lost was set, lost cleared,
 // reply/budget/tools/completedAt reset, optional createdAt stored.
-pub fn begin(inout c: Collector, prompt: str, created: [u8]) -> () ! alloc
+pub fn begin(inout c: Collector, prompt: str, created: Option<[u8; 24]>) -> () ! alloc
   requires ok(c) && c.begun < 1000000000000
   requires len(prompt) <= 100000000
-  requires len(created) == 0 || len(created) == 24
   ensures ok(c)
   ensures c.begun == old(c).begun + 1 && c.active && !c.lost
   ensures len(c.drafts[(c.begun - 1) % 200].prompt) <= len(prompt) && is_char_boundary(prompt, len(c.drafts[(c.begun - 1) % 200].prompt))
   ensures len(prompt) <= 32768 ==> len(c.drafts[(c.begun - 1) % 200].prompt) == len(prompt)
   ensures len(c.drafts[(c.begun - 1) % 200].prompt) == len(prompt) || (forall t in len(c.drafts[(c.begun - 1) % 200].prompt) + 1..32769: !is_char_boundary(prompt, t))
   ensures c.drafts[(c.begun - 1) % 200].clipped == (len(prompt) > 32768 || old(c).lost)
-  ensures len(c.drafts[(c.begun - 1) % 200].reply) == 0 && c.drafts[(c.begun - 1) % 200].used == 0 && c.drafts[(c.begun - 1) % 200].tools == 0 && len(c.drafts[(c.begun - 1) % 200].completed) == 0
-  ensures len(c.drafts[(c.begun - 1) % 200].created) == len(created)
+  ensures len(c.drafts[(c.begun - 1) % 200].reply) == 0 && c.drafts[(c.begun - 1) % 200].used == 0 && c.drafts[(c.begun - 1) % 200].tools == 0 && !is_some(c.drafts[(c.begun - 1) % 200].completed)
+  ensures is_some(c.drafts[(c.begun - 1) % 200].created) == is_some(created)
 {
   let n: i64 = crate::text::clip_len(prompt, 32768);
   let cl: bool = len(prompt) > 32768 || c.lost;
   if len(c.drafts) < 200 {
     let p0: [u8] = alloc(0, 0);
     let p: [u8] = refill_text(move p0, prompt, n);
-    let t0: [u8] = alloc(0, 0);
-    let t: [u8] = refill(move t0, created, len(created));
     let r: [u8] = alloc(0, 0);
-    let q: [u8] = alloc(0, 0);
-    c.drafts = vec_push::<Draft>(move c.drafts, Draft { prompt: move p, reply: move r, used: 0, tools: 0, created: move t, completed: move q, clipped: cl });
+    c.drafts = vec_push::<Draft>(move c.drafts, Draft { prompt: move p, reply: move r, used: 0, tools: 0, created: created, completed: None::<[u8; 24]>, clipped: cl });
   } else {
     let w: i64 = c.begun % 200;
-    let m: i64 = len(created);
     match vec_at_mut::<Draft>(inout c.drafts, w) {
       Some(d) => {
         let p: [u8] = move d.prompt;
         d.prompt = refill_text(move p, prompt, n);
         let r: [u8] = move d.reply;
-        d.reply = refill(move r, created, 0);
-        let t: [u8] = move d.created;
-        d.created = refill(move t, created, m);
-        let q: [u8] = move d.completed;
-        d.completed = refill(move q, created, 0);
+        d.reply = truncate(r, 0);
+        d.created = created;
+        d.completed = None::<[u8; 24]>;
         d.used = 0;
         d.tools = 0;
         d.clipped = cl;
@@ -142,25 +122,23 @@ pub fn tool(inout c: Collector) -> ()
 // when it fits the remaining budget, else its longest whole-scalar prefix is appended, the budget counter
 // saturates at 32768 and clipped is set. The counter is separate from the actual reply length (a multibyte cut
 // leaves unused bytes that later calls must not fill).
-pub fn answer(inout c: Collector, text: str, at: [u8]) -> () ! alloc
+pub fn answer(inout c: Collector, text: str, at: Option<[u8; 24]>) -> () ! alloc
   requires ok(c)
   requires len(text) <= 100000000
-  requires len(at) == 0 || len(at) == 24
   ensures ok(c) && c.begun == old(c).begun && c.active == old(c).active && c.lost == old(c).lost
   ensures len(c.drafts) == len(old(c).drafts)
-  ensures (c.active && len(at) == 24) ==> len(c.drafts[(c.begun - 1) % 200].completed) == 24
+  ensures (c.active && is_some(at)) ==> is_some(c.drafts[(c.begun - 1) % 200].completed)
   ensures (c.active && len(text) > 0 && len(old(c).drafts[(c.begun - 1) % 200].reply) > 0 &&
     len(text) + 2 <= 32768 - old(c).drafts[(c.begun - 1) % 200].used) ==>
     len(c.drafts[(c.begun - 1) % 200].reply) == len(old(c).drafts[(c.begun - 1) % 200].reply) + 2 + len(text)
 {
   if !c.active { return; }
   let k: i64 = (c.begun - 1) % 200;
-  let m: i64 = len(at);
   match vec_at_mut::<Draft>(inout c.drafts, k) {
     Some(d) => {
-      if m == 24 {
-        let q: [u8] = move d.completed;
-        d.completed = refill(move q, at, 24);
+      match at {
+        Some(x) => { d.completed = at; }
+        None => {}
       }
       if len(text) == 0 || d.used >= 32768 { return; }
       let mut sep: i64 = 0;
@@ -184,6 +162,36 @@ pub fn answer(inout c: Collector, text: str, at: [u8]) -> () ! alloc
     }
     None => {}
   }
+}
+
+// hand `s.map_or(0, |s| s.len())`
+fn stamp_len(s: Option<[u8; 24]>) -> i64
+  ensures result == 0 || result == 24
+  ensures is_some(s) == (result == 24)
+{
+  match s {
+    Some(a) => { return len(a); }
+    None => { return 0; }
+  }
+}
+
+// The stamp's bytes appended when present (hand `put` on `Some(b)`).
+fn put_stamp(inout text: [u8], s: Option<[u8; 24]>) -> () ! alloc
+  requires len(text) <= 100000000
+  ensures is_some(s) ==> len(text) == len(old(text)) + 24
+  ensures !is_some(s) ==> len(text) == len(old(text))
+{
+  match s {
+    Some(a) => { put24(inout text, a); }
+    None => {}
+  }
+}
+
+fn put24(inout text: [u8], b: [u8]) -> () ! alloc
+  requires len(text) <= 100000000 && len(b) <= 24
+  ensures len(text) == len(old(text)) + len(b)
+{
+  arr_append(inout text, b, 0, len(b));
 }
 
 // Count the newest kept turns, counting only prompt and reply bytes toward the trim cap (hand
@@ -217,7 +225,7 @@ pub fn plan(c: Collector) -> Plan
     if total + size > 2097152 {
       return Plan { kept: i, total: total, bytes: bytes };
     }
-    bytes = bytes + size + len(vec_get::<Draft>(c.drafts, w).created) + len(vec_get::<Draft>(c.drafts, w).completed);
+    bytes = bytes + size + stamp_len(vec_get::<Draft>(c.drafts, w).created) + stamp_len(vec_get::<Draft>(c.drafts, w).completed);
     total = total + size;
     i = i + 1;
   }
@@ -249,13 +257,13 @@ pub fn put_turns(inout turns: [i64], inout text: [u8], shift: i64, c: Collector,
     let w: i64 = (b - 1 - j) % 200;
     let plen: i64 = len(vec_get::<Draft>(c.drafts, w).prompt);
     let rlen: i64 = len(vec_get::<Draft>(c.drafts, w).reply);
-    let cn: i64 = len(vec_get::<Draft>(c.drafts, w).created);
-    let dn: i64 = len(vec_get::<Draft>(c.drafts, w).completed);
+    let cn: i64 = stamp_len(vec_get::<Draft>(c.drafts, w).created);
+    let dn: i64 = stamp_len(vec_get::<Draft>(c.drafts, w).completed);
     let at: i64 = shift + len(text);
     arr_append(inout text, vec_get::<Draft>(c.drafts, w).prompt, 0, plen);
     arr_append(inout text, vec_get::<Draft>(c.drafts, w).reply, 0, rlen);
-    arr_append(inout text, vec_get::<Draft>(c.drafts, w).created, 0, cn);
-    arr_append(inout text, vec_get::<Draft>(c.drafts, w).completed, 0, dn);
+    put_stamp(inout text, vec_get::<Draft>(c.drafts, w).created);
+    put_stamp(inout text, vec_get::<Draft>(c.drafts, w).completed);
     let mut ca: i64 = -1;
     if cn > 0 { ca = at + plen + rlen; }
     let mut da: i64 = -1;

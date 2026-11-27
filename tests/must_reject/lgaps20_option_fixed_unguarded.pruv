@@ -1,0 +1,3 @@
+// spec: R-6t-4 reject
+// L-gaps 20: some_val(o)[i] in requires needs is_some(o) first
+fn f(o: Option<[u8; 2]>) -> i64 requires i64(some_val(o)[0]) == 1 { return 0; }

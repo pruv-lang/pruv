@@ -2743,3 +2743,30 @@ Changes `bench/l3/pkgs/transport`, `codex/rpc.pruv` and a comment in `grok/rpc.p
 
 - No compiler or bench change on this branch, so no checks were run here; the side branch was verified only by the
   `a5_root` compile runs above. No review (nothing to review on this branch). Not measured.
+
+## L-gaps 20: fixed-size array values (4.4c-IS), claude Draft stamps (4.4h-ST)
+
+| Row | Kind | Change | Tests |
+|---|---|---|---|
+| 4.4c-IS | language, closed | A child-module `pub` function is not a host boundary: it takes and returns `[T; N]` by value (also inside struct fields, narrow elements included); a host entry (non-generic root `pub`, not `pred` or `impl`) and `trusted rust fn` stay `type/fixed_array_position`. `Option<[T; N]>` stands where `[T; N]` may (local, parameter, result, field of a non-generic struct or enum) and is rejected as a `Vec` element, generic field, tuple component, `Result` payload, user generic argument or nested `Option`. Proof: the payload is a buffer sort with `len == N`; `==` is `type/eq_type`. Rust emits `Option<[T; N]>`; LLVM stores `{ i1, [N x E] }`, builds `Some(a)` from the storage of `a` and copies the payload for the binder; an executed `requires` reads `some_val(o)[i]` after the tag check on both backends. Claude `time::Iso` is `{ status, at: Option<[u8; 24]> }` and `format_iso` returns `[u8; 24]` (template + `put_digits`), like the hand | runtime `lgaps20_option_fixed`, `g4_lgaps20_fixed_module` (both backends); must_reject `g4_lgaps20_fixed_module_oob`, `lgaps20_option_fixed_{eq,eq_field,generic_field,generic_enum,host,nested,oob,result_payload,some_val_oob,trusted,tuple,unguarded,user_generic,vec,binder_write}` |
+| 4.4h-ST | bench, closed | Claude `Draft.created` / `completed` are `Option<[u8; 24]>`; `begin` assigns `created` and `None`, `answer` assigns `at` when it is `Some`; `refill` is gone | claude test_a0..a4 |
+| 4.4h-VD | left (time cap) | not started: needs `pop_front` / `push_back` (or a matching shape) on `Vec<S>` in both backends and the proof model | — |
+
+4.4zc-PA stays open and is not taken. G-DB33-1/2 is the next bundle.
+
+- Checks on the final compiler: `cargo test --release` passed; `--only must_reject` 1412/1412; `--only l3_frontend`
+  96/96; `--only g8_frontend --backend both` 39/39; `--only g4_frontend` 13/13 and `g4_proof` 10/10 (both);
+  `--only runtime --backend both` 3601/3601 before the review fixes, then the changed `lgaps20_option_fixed` 4/4; `diff_rust --fuzz-count 20` and `m3_all --quick` ok after the
+  golden update (new lgaps20 keys; mutate samples shifted by the new must_reject and runtime files: main's
+  `pruv-rust-dump` on this tree gives the same 198 mismatches per mode; the host message now names "host entry or trusted rust fn", which changes the five older fixed-array host keys); `--list-rows` diff (24 new rows,
+  `tests/run_all_rows.txt` updated).
+- L3: claude a0-a4 (272 / 2897 / 2443 / 134 / 270) on rs/rust and rs/llvm. No lib/pkgs module changed.
+- Review: Codex gpt-6.2-astra (spec) found 8 required items, all fixed: contract `some_val` of a fixed option failed
+  to compile under `--no-verify` on both backends; a struct with an `Option<[T; N]>` field took `==`; SPEC host entry,
+  `trusted rust fn` and `Option` payload wording; eight missing must_reject cases and an enum-field positive case.
+  Claude opus (codegen) found no required item; its optional gaps (a module-boundary `Option<[T; N]>` test, copy vs
+  alias, the `g9_real` Some path, drop of an extended struct with an `Option<[T; N]>` field) are left as follow-ups.
+  Fix-check (Codex gpt-6.2-astra, static): all 8 items fixed, no new required item. A separate package-
+  dependency `pub` test is still missing (the child-module boundary is covered by `g4_lgaps20_fixed_module`).
+- Not measured (4.4h-VD is still open).
+

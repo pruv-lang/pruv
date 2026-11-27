@@ -3512,7 +3512,11 @@ impl<'a> FnGen<'a> {
             return Ok(V::agg(r, &ty));
         }
         let a = e.arg.as_ref().ok_or_else(|| "llvmgen: constructor without argument".to_string())?;
-        let x = self.evf(a, c, false)?;
+        let x = match expr_ty(a).as_deref().filter(|t| fixed_key(t).is_some()) {
+            // L-gaps 20: an `Option<[T; N]>` payload copies from the array's storage (as a fixed variant field)
+            Some(t) => V::agg(if c { self.cfixed_ptr(a)? } else { self.fixed_ptr(a)? }, t),
+            None => self.evf(a, c, false)?,
+        };
         if e.name == "Some" || e.name == "Ok" {
             let acc = self.op(format!("insertvalue {} zeroinitializer, i1 true, 0", st(&ty, c)))?;
             let r = self.put(&acc, &ty, 1, &x, g_arg(&ty), c)?;
@@ -3549,7 +3553,8 @@ impl<'a> FnGen<'a> {
             if let Some(b0) = arm.binders.first() {
                 if arm.ctor == "Some" || arm.ctor == "Ok" {
                     let v = self.get(sv, &ty, 1, &x, false)?;
-                    bind.push((b0.clone(), Bind::Ssa(v)));
+                    // L-gaps 20: an `Option<[T; N]>` payload is unpacked into fresh storage the binder owns
+                    bind.push((b0.clone(), if fixed_key(&x).is_some() { Bind::Slot(v) } else { Bind::Ssa(v) }));
                 } else {
                     let v = self.get(sv, &ty, 2, g_error(&ty), false)?;
                     bind.push((b0.clone(), Bind::Ssa(v)));
@@ -5331,6 +5336,24 @@ impl<'a> FnGen<'a> {
     fn cfixed_ptr(&mut self, e: &Expr) -> R<String> {
         match e {
             Expr::FieldAccess(_) | Expr::VariantField(_) => Ok(self.cev(e)?.a),
+            // R-6t-4: the payload of an `Option<[T; N]>` is checked for Some and spilled into fresh storage
+            Expr::Call(c) if c.name == "some_val" && expr_ty(e).as_deref().and_then(fixed_key).is_some() => {
+                let o = self.cev(arg(&c.args, 0)?)?;
+                if o.k != Kind::Agg {
+                    return Err("llvmgen: some_val of a fixed array needs an Option value".to_string());
+                }
+                let oty = need_ty(&o.ty)?.to_string();
+                let tc = st(&oty, true);
+                let tag = self.op(format!("extractvalue {} {}, 0", tc, o.a))?;
+                self.guard(&tag, Fail::Panic1("pruv_panic_undefined", "some_val of None".to_string()), false)?;
+                let pv = self.op(format!("extractvalue {} {}, 1", tc, o.a))?;
+                let ty = expr_ty(e).clone().unwrap_or_default();
+                let tmp = format!("%fx{}", self.nslot);
+                self.nslot += 1;
+                self.allocas.push(format!("{} = alloca {}", tmp, lty(&ty)));
+                self.ins(format!("store {} {}, ptr {}", lty(&ty), pv, tmp))?;
+                Ok(tmp)
+            }
             _ => self.fixed_ptr(e),
         }
     }
@@ -10186,12 +10209,18 @@ pub fn gen_llvm_with_specializations(
     // P9b-2: a method is never a host entry (R-6x-5), so its signature is not a host boundary
     let methods: std::collections::HashSet<&str> = prog.methods.iter().map(|m| m.func.as_str()).collect();
     for (i, f) in prog.functions.iter().enumerate() {
-        let public = prog.explicit.as_ref().and_then(|meta| meta.fns.get(i))
-            .is_some_and(|mark| mark.is_pub || mark.host_entry)
-            && !methods.contains(f.name.as_str());
-        if (public || f.foreign.is_some())
-            && crate::emit_common::has_narrow_scalar_sig(f, tt0.get_or_insert_with(|| crate::emit_common::make_type_table(prog)))
-        {
+        let mark = prog.explicit.as_ref().and_then(|meta| meta.fns.get(i));
+        let public = mark.is_some_and(|mark| mark.is_pub || mark.host_entry) && !methods.contains(f.name.as_str());
+        // L-gaps 20: a module `pub` function (not a host entry) may pass `[T; N]` by value
+        let host = f.foreign.is_some() || mark.is_some_and(|mark| mark.host_entry) || prog.explicit.is_none();
+        if (public || f.foreign.is_some()) && {
+            let table = tt0.get_or_insert_with(|| crate::emit_common::make_type_table(prog));
+            if host {
+                crate::emit_common::has_narrow_scalar_sig(f, table)
+            } else {
+                crate::emit_common::has_narrow_scalar_sig_module(f, table)
+            }
+        } {
             return Err(GenError::Msg(crate::emit_common::SMALL_INT_HOST_ERROR.into()));
         }
     }

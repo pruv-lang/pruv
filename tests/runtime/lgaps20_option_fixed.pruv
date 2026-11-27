@@ -1,0 +1,71 @@
+// spec: R-6t-4 accept
+// L-gaps 20 (4.4c-IS): `Option<[T; N]>` holds a fixed-length array by value: a struct field, a result, a
+// parameter, `Some::<[T; N]>(a)` / `None::<[T; N]>`, a `Some(a)` binder (element range and length from the type)
+// and `some_val(o)[i]` in contracts.
+struct Draft { n: i64, created: Option<[u8; 4]>, completed: Option<[u8; 4]> }
+
+enum Mark { At(o: Option<[u8; 4]>), Off(n: i64) }
+
+fn mark_byte(m: Mark) -> i64
+  ensures 0 <= result && result <= 255
+{
+  match m {
+    Mark::At(o) => { match o { Some(a) => { return i64(a[2]); } None => { return 0; } } }
+    Mark::Off(n) => { return 0; }
+  }
+}
+
+fn stamp(c: i64) -> Option<[u8; 4]>
+  requires 0 <= c && c < 10
+  ensures c == 0 ==> !is_some(result)
+  ensures c != 0 ==> is_some(result) && i64(some_val(result)[0]) == 48 + c && i64(some_val(result)[3]) == 90
+{
+  if c == 0 { return None::<[u8; 4]>; }
+  let mut a: [u8; 4] = [48, 45, 45, 90];
+  a[0] = u8(48 + c);
+  return Some::<[u8; 4]>(a);
+}
+
+fn first(o: Option<[u8; 4]>) -> i64
+  ensures -1 <= result && result <= 259
+{
+  match o {
+    Some(a) => { return i64(a[0]) + len(a); }
+    None => { return -1; }
+  }
+}
+
+// an executed requires reads the payload after its is_some guard (both backends, also under --no-verify)
+fn second(o: Option<[u8; 4]>) -> i64
+  requires is_some(o) && i64(some_val(o)[0]) == 53
+  ensures 0 <= result && result <= 255
+{
+  match o {
+    Some(a) => { return i64(a[1]); }
+    None => { return 0; }
+  }
+}
+
+fn answer(inout d: Draft, c: i64) -> ()
+  requires 0 <= c && c < 10
+  ensures d.n == old(d.n)
+{
+  d.completed = stamp(c);
+}
+
+fn run() -> () ! io {
+  let mut d: Draft = Draft { n: 1, created: stamp(3), completed: None::<[u8; 4]> };
+  print(first(d.created));
+  print(first(d.completed));
+  answer(inout d, 7);
+  print(first(d.completed) + d.n);
+  answer(inout d, 0);
+  print(first(d.completed));
+  let o: Option<[u8; 4]> = stamp(5);
+  match o {
+    Some(a) => { assert i64(a[0]) == 53; print(i64(a[3])); }
+    None => { assert false; }
+  }
+  print(second(o));
+  print(mark_byte(Mark::At(o)));
+}

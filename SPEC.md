@@ -3127,15 +3127,40 @@ fn is_digit(c: char) -> bool
   `len(a) == N`. A place binding `let d = inout a` (also `inout if c { a } else { a }` or a choice between fixed
   fields of one struct) names the same storage and can be passed on as `inout d`. Code: Rust passes `[T; N]` by value and lends `&a[..]`; LLVM passes a
   pointer to a fresh caller copy (by value), to the caller's slot (`inout`) or to caller storage for the result,
-  and lends the slot address with the constant length. A `pub`, host entry or extern function with a fixed-length
-  array anywhere in its signature is `type/fixed_array_position`, and in the legacy (no `pub`) mode such a function
-  is internal only. Fields (P7-1 B): a non-generic struct may hold `[T; N]` fields by value; the struct stays a plain
+  and lends the slot address with the constant length. A host entry (a non-generic `pub` function of the program
+  root that is not a `pred` or an `impl` function) or a `trusted rust fn` with a fixed-length array anywhere in its
+  signature is `type/fixed_array_position` (an `extern fn` is `parse/reserved_name` before that), and in the
+  legacy (no `pub`) mode such a function is internal only. A `pub` function of a child module or a dependency is not
+  a host boundary: it takes and returns `[T; N]` (also inside struct fields, narrow elements included) by value like
+  a private function (L-gaps 20, 4.4c-IS). Tests: [module](tests/runtime/g4_lgaps20_fixed_module/root.pruv),
+  [module index](tests/must_reject/g4_lgaps20_fixed_module_oob/root.pruv). `Option<[T; N]>` (L-gaps 20) stands
+  wherever `[T; N]` itself may (local, parameter, result, field of a non-generic struct or enum) and nowhere else (a
+  `Vec` element, generic field, tuple component, other type argument or `Result` payload is
+  `type/fixed_array_position`, `Option<Option<[T; N]>>` `type/type_argument`); it is a plain value written `Some::<[T; N]>(a)` /
+  `None::<[T; N]>`. A `Some(a)` binder is a read-only `[T; N]` with `len(a) == N` and the element range, a contract
+  reads `some_val(o)[i]` under the partial-operation rule, and `==` on it is `type/eq_type` (the payload cells past N
+  are free in the proof). Rust emits `Option<[T; N]>`; LLVM stores `{ i1, [N x E] }`, builds `Some::<[T; N]>(a)` by
+  copying from the storage of `a`, and copies the payload into fresh storage for the binder. Tests: [option](tests/runtime/lgaps20_option_fixed.pruv),
+  [binder index](tests/must_reject/lgaps20_option_fixed_oob.pruv),
+  [some_val index](tests/must_reject/lgaps20_option_fixed_some_val_oob.pruv),
+  [eq](tests/must_reject/lgaps20_option_fixed_eq.pruv), [Vec](tests/must_reject/lgaps20_option_fixed_vec.pruv),
+  [generic field](tests/must_reject/lgaps20_option_fixed_generic_field.pruv),
+  [tuple](tests/must_reject/lgaps20_option_fixed_tuple.pruv), [host](tests/must_reject/lgaps20_option_fixed_host.pruv),
+  [field eq](tests/must_reject/lgaps20_option_fixed_eq_field.pruv),
+  [Result payload](tests/must_reject/lgaps20_option_fixed_result_payload.pruv),
+  [nested](tests/must_reject/lgaps20_option_fixed_nested.pruv),
+  [user generic](tests/must_reject/lgaps20_option_fixed_user_generic.pruv),
+  [generic enum](tests/must_reject/lgaps20_option_fixed_generic_enum.pruv),
+  [binder write](tests/must_reject/lgaps20_option_fixed_binder_write.pruv),
+  [unguarded some_val](tests/must_reject/lgaps20_option_fixed_unguarded.pruv),
+  [trusted](tests/must_reject/lgaps20_option_fixed_trusted.pruv).
+  Fields (P7-1 B): a non-generic struct may hold `[T; N]` fields by value; the struct stays a plain
   value (copy on assignment), `s.f[i]`, `s.f[i] = v` (also through `inout` and nested struct paths) and
   `s.f = <array>` work like a local array, a contract sees `len(s.f) == N` and the element range, and `old(s).f[i]`
-  names the entry value. The `pub`/host/extern signature check looks through struct fields, so such a struct cannot
+  names the entry value. The host entry / `trusted rust fn` signature check looks through struct fields, so such a struct cannot
   cross that boundary either. Code: Rust a `[T; N]` struct field; LLVM `[N x E]` inline in the struct. A variant
   of a non-generic enum may hold `[T; N]` fields the same way (`E::A(a)` copies `a` in, a `match` binder is a
-  read-only copy with length `N` and the element range); `==` on such an enum is `type/eq_type`, and the `pub`
+  read-only copy with length `N` and the element range); `==` on such an enum is `type/eq_type`, and the host entry
   signature check looks through variant fields too. Code: Rust a `[T; N]` variant field; LLVM `[N x E]` in the payload.
   Contracts (P7-1 B): a literal `[a, b]` / `[x; N]` may appear in `requires`, `ensures`, `assert`, `invariant`,
   `decreases` and quantifier bodies; its index must be proven in range like any contract index (`contract_domain` in
@@ -3147,7 +3172,8 @@ fn is_digit(c: char) -> bool
   (`S { a: p }`, `E::A(s.a)`), and `variant_field(e, E::A, a)` reads a fixed field; a literal or call there is
   `type/fixed_array_operation` (bind it with a `let` first). Such a constructor also works where the contract builds a real value
   (`size(S { a: p })`, `variant_field` in a program with recursive types); the array adds nothing to `size`.
-  Rejected: `[T; N]` as a field of a generic struct or enum, a tuple component or type argument, and
+  Rejected: `[T; N]` as a field of a generic struct or enum, a tuple component or type argument (other than the
+  direct payload of `Option`), and
   nested fixed arrays, are `type/fixed_array_position`; an element type other than a scalar (a view `[T]` too) is
   `type/fixed_array_element`; a negative or oversized length is `type/fixed_array_length`; a non-constant length is
   `type/const_expr` and a `bool` (a literal, `!`, a comparison, `&&`/`||`) or `char` length `type/const_type`; whole-array `==`/`!=`, use as a view `[T]`
@@ -4141,7 +4167,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/fixed_array_element` | type | a fixed-length array element that is not a scalar integer, `char` or `bool` (R-6t-4) |
 | `type/fixed_array_length` | type | a negative fixed-length array length, or an array larger than 65536 bytes (R-6t-4) |
 | `type/fixed_array_operation` | type | `==`/`!=` on fixed-length arrays, a fixed-length array used as a view `[T]` outside a call-duration lend, a literal or call as a `[T; N]` field of a constructor inside a contract (R-6t-4) |
-| `type/fixed_array_position` | type | `[T; N]` as a field of a generic struct or enum, tuple component, type argument or nested array, or in the signature (struct fields included) of a `pub`, host entry or extern function (R-6t-4) |
+| `type/fixed_array_position` | type | `[T; N]` as a field of a generic struct or enum, tuple component, type argument other than the direct payload of `Option`, or nested array, or in the signature (struct fields included) of a host entry (non-generic root `pub` function, not `pred` or `impl`) or `trusted rust fn` (R-6t-4) |
 | `type/for_enumerate` | type | `for (i, x) in` over an array, view or `Vec`; enumeration is bundle P15 (R-6q-3) |
 | `type/for_iterable` | type | a `for` range with non-integer bounds, or a `for` over a value that is not a slice or a `Vec` of integer/bool elements (R-6q-3) |
 | `type/foreign_borrow` | type | one value is borrowed and moved in the same call |

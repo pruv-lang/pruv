@@ -1,0 +1,4 @@
+// spec: R-6t-4 reject
+// L-gaps 20: [T; N] is not a type argument of a user generic type
+struct B<T> { v: T }
+fn f(x: B<[u8; 2]>) -> i64 { return 0; }

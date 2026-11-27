@@ -1,0 +1,8 @@
+// spec: R-6t-4 reject
+// L-gaps 20: the Some(a) binder is read-only
+fn f(o: Option<[u8; 2]>) -> i64 {
+  match o {
+    Some(a) => { a[0] = 1; return i64(a[0]); }
+    None => { return 0; }
+  }
+}
