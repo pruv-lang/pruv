@@ -236,6 +236,25 @@ Structure, function by function (`handrust/src/edge.rs` `tail_import`, `lib.rs` 
 | `replay` tag 6 | `model = Some(id.clone())` | `read_text` owned copy | same ownership; `adapter_probe` adds a UTF-8 pass |
 | `write_*`, `record_*` | none (serde values in `Entry`) | append to `log.text` with `utf8_valid` kept | the per-entry log itself (4.3e-D) |
 
+## 3e. Step 4.4x: package rows 4.4w-TR, 4.4w-DU; 4.3e-D / 4.4d-QS still open
+
+- `pkgs/time` has `iso_raw(b, lo, hi)` (hand `iso(&Value)` over raw token bytes) and `jstr::decode_append` in the
+  non-scanned mode ensures `utf8_valid(out)` when `out` was valid (see `lib/RESHAPE.md`, Step 4.4x). The Qwen
+  sources are unchanged; this step reruns the Qwen tests against the new packages.
+- 4.3e-D / 4.4d-QS are no longer blocked by a package row but were not done here (bundle time cap). Design for the
+  next step, matching the hand's scan / replay split:
+  - scan (`record_entry`, `record_answers`): keep the visibility decisions read from the tape (`thought`, `text`,
+    `functionCall`) and record raw ranges instead of decoded text. `doc.source` is a per-line copy with no proof
+    link to `data`, so each kept raw string token (escapes intact) and the raw `timestamp` token are appended to
+    `log.text`; `doc_strings` keeps `utf8_valid(log.text)` (comparable to serde allocating each string at parse);
+  - replay, chosen entries only: a plain span (tape slot 5) is lent as a view; an escaped span is decoded with
+    `decode_append(.., false)` into a scratch buffer lent as `str`; user parts are joined with "\n\n" and the
+    blank test runs here; the stamp is `iso_raw` over the raw token, for an assistant only when `st[1] == 1`
+    (hand `collector.attached`).
+- Tests after 4.4x (rs/rust and rs/llvm): `test_impl.py` PASS 27/27; `q.py --count 300` (rs pairs) same 317, P1 1,
+  P4 4, P5 1, unexplained 0, list same 21, P4 1; `q_mutants.py` 11 differential-killed, turn-cap
+  verifier-rejected. No perf timing (structure still differs at 4.3e-D).
+
 ## 4. Results
 
 4.4w, after the last code change (`pruvc-rs`, verified, no `--no-verify`):

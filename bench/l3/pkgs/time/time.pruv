@@ -389,3 +389,48 @@ pub fn iso_of(doc: crate::json::JsonDocument, id: i64) -> Iso ! alloc
   }
   return absent();
 }
+
+// Hand `iso(&Value)` over the raw token bytes b[lo..hi] of one JSON value (4.4w-TR): a quoted token is a string
+// (hand `iso_str`), anything else a number token (hand `iso_number`). The caller keeps only the byte range, not a document.
+pub fn iso_raw(b: [u8], lo: i64, hi: i64) -> Iso ! alloc
+  requires 0 <= lo && lo <= hi && hi <= len(b) && hi <= 16777216
+  ensures result.status == 0 ==> (len(result.text) == 24 && result.text[4] == 45 && result.text[7] == 45 && result.text[10] == 84 && result.text[13] == 58 && result.text[16] == 58 && result.text[19] == 46 && result.text[23] == 90)
+  ensures result.status == 0 ==> (forall i in 0..24: (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19 || i == 23 || (48 <= result.text[i] && result.text[i] <= 57)))
+  ensures result.status != 0 ==> len(result.text) == 0
+{
+  if lo < hi && b[lo] == 34 {
+    // A quoted canonical timestamp has no escapes, so its value is the 24 raw bytes: no decoding needed.
+    if hi - lo == 26 {
+      let c: [u8] = copy_canonical(b, lo + 1);
+      if len(c) == 24 { return Iso { status: 0, text: move c }; }
+    }
+    let t: crate::jstr::Text = crate::jstr::string_text_owned(b, lo, hi);
+    match t {
+      crate::jstr::Text::InternalInvariant(e) => { return defect(); }
+      crate::jstr::Text::Decoded(v) => { return from_string(v); }
+    }
+  }
+  let mut p: i64 = lo;
+  let mut neg: bool = false;
+  if p < hi && b[p] == 45 { neg = true; p = p + 1; }
+  let digits: i64 = p;
+  let mut v: i64 = 0;
+  let mut exact: bool = true;
+  while p < hi
+    invariant lo <= p && p <= hi && hi <= len(b)
+    invariant 0 <= v && v <= 9007199254740991
+    decreases hi - p
+  {
+    let c: i64 = b[p];
+    if c < 48 || c > 57 { exact = false; } else {
+      let d: i64 = c - 48;
+      if v > (9007199254740991 - d) / 10 { exact = false; }
+      else { v = v * 10 + d; }
+    }
+    p = p + 1;
+  }
+  if digits == hi { exact = false; }
+  if !exact { return absent(); }
+  if neg { v = -v; }
+  return from_integer(v);
+}

@@ -174,6 +174,7 @@ fn scalar(a: [u8], p: i64, stop: i64) -> Scalar
   ensures p < result.next && result.next <= stop
   ensures 0 <= result.value && result.value <= 1114111
   ensures result.value > 65535 ==> result.next >= p + 2
+  ensures result.value < 55296 || result.value > 57343
 {
   let s: Step = step(a, p, stop);
   let mut v: i64 = s.value;
@@ -212,6 +213,7 @@ pub fn decode_append(inout out: [u8], source: [u8], start: i64, end: i64, scanne
   requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
   requires len(out) <= 50331648
   ensures len(out) <= old(len(out)) + 3 * (end - start)
+  ensures (utf8_valid(old(out)) && !scanned) ==> utf8_valid(out)
 {
   let base: i64 = len(out);
   let mut p: i64 = start;
@@ -220,6 +222,7 @@ pub fn decode_append(inout out: [u8], source: [u8], start: i64, end: i64, scanne
   while p < stop
     invariant start <= p && p <= stop && stop <= end
     invariant len(out) <= base + 3 * (p - start)
+    invariant (utf8_valid(old(out)) && !scanned) ==> utf8_valid(out)
     decreases stop - p
   {
     let c: i64 = source[p];
@@ -228,6 +231,7 @@ pub fn decode_append(inout out: [u8], source: [u8], start: i64, end: i64, scanne
       let run: i64 = p;
       while p < stop && source[p] != 92 && (scanned || source[p] < 128)
         invariant start <= run && run <= p && p <= stop && stop <= end
+        invariant !scanned ==> (forall q in run..p: source[q] < 128)
         decreases stop - p
       { p = p + 1; }
       arr_append(inout out, source, run, p - run);
@@ -237,17 +241,11 @@ pub fn decode_append(inout out: [u8], source: [u8], start: i64, end: i64, scanne
       if v <= 127 {
         arr_push(inout out, v);
       } else if v <= 2047 {
-        arr_push(inout out, 192 + v / 64);
-        arr_push(inout out, 128 + v % 64);
+        arr_push(inout out, 192 + v / 64, 128 + v % 64);
       } else if v <= 65535 {
-        arr_push(inout out, 224 + v / 4096);
-        arr_push(inout out, 128 + (v / 64) % 64);
-        arr_push(inout out, 128 + v % 64);
+        arr_push(inout out, 224 + v / 4096, 128 + (v / 64) % 64, 128 + v % 64);
       } else {
-        arr_push(inout out, 240 + v / 262144);
-        arr_push(inout out, 128 + (v / 4096) % 64);
-        arr_push(inout out, 128 + (v / 64) % 64);
-        arr_push(inout out, 128 + v % 64);
+        arr_push(inout out, 240 + v / 262144, 128 + (v / 4096) % 64, 128 + (v / 64) % 64, 128 + v % 64);
       }
       p = s.next;
     }
