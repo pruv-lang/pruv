@@ -134,20 +134,11 @@ fn format_ext(ms: i64) -> [u8] ! alloc
   requires 253402300800000 <= ms && ms <= 8640000000000000
   ensures len(result) == 0 || len(result) == 27
 {
-  let day: i64 = 86400000;
-  let days: i64 = ms / day;
-  let rem: i64 = ms - days * day;
-  let z: i64 = days + 719468;
-  let era: i64 = z / 146097;
-  let doe: i64 = z - era * 146097;
-  let yoe: i64 = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-  let doy: i64 = doe - (365 * yoe + yoe / 4 - yoe / 100);
-  let mp: i64 = (5 * doy + 2) / 153;
-  let d: i64 = doy - (153 * mp + 2) / 5 + 1;
-  let mut m: i64 = mp + 3;
-  if mp >= 10 { m = mp - 9; }
-  let mut y: i64 = yoe + era * 400;
-  if m <= 2 { y = y + 1; }
+  let c: crate::time::Civil = crate::time::civil(ms);
+  let y: i64 = c.year;
+  let m: i64 = c.month;
+  let d: i64 = c.day;
+  let rem: i64 = c.rem;
   let h: i64 = rem / 3600000;
   let mi: i64 = (rem / 60000) % 60;
   let sec: i64 = (rem / 1000) % 60;

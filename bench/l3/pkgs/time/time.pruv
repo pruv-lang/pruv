@@ -168,13 +168,14 @@ fn canonical_at(b: [u8], p: i64) -> bool
   return true;
 }
 
-// 24-byte canonical text of integer milliseconds in the supported range. An empty array is returned only if
-// the (tested) calendar arithmetic left its guarded ranges; callers treat that as a defect.
-pub fn format_iso(ms: i64) -> [u8] ! alloc
-  requires -62167219200000 <= ms && ms <= 253402300799999
-  ensures len(result) == 24 || len(result) == 0
-  ensures len(result) == 24 ==> (result[4] == 45 && result[7] == 45 && result[10] == 84 && result[13] == 58 && result[16] == 58 && result[19] == 46 && result[23] == 90)
-  ensures len(result) == 24 ==> (forall i in 0..24: (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19 || i == 23 || (48 <= result[i] && result[i] <= 57)))
+// Civil date of integer milliseconds (hand `civil`): year, month, day and the milliseconds into the day. The days
+// are shifted by 5 whole 400-year cycles (63113904000000 ms) so every division is on nonnegative numbers; the year
+// is shifted back at the end, so the result equals the floor (Euclidean) walk of the hand.
+pub struct Civil { year: i64, month: i64, day: i64, rem: i64 }
+
+pub fn civil(ms: i64) -> Civil
+  requires -62167219200000 <= ms && ms <= 8640000000000000
+  ensures 0 <= result.rem && result.rem < 86400000
 {
   let day: i64 = 86400000;
   // 5 cycles of 146097 days: 730485 days = 63113904000000 ms.
@@ -192,6 +193,22 @@ pub fn format_iso(ms: i64) -> [u8] ! alloc
   if mp >= 10 { m = mp - 9; }
   let mut y: i64 = yoe + era * 400 - 2000;
   if m <= 2 { y = y + 1; }
+  return Civil { year: y, month: m, day: d, rem: rem };
+}
+
+// 24-byte canonical text of integer milliseconds in the supported range. An empty array is returned only if
+// the (tested) calendar arithmetic left its guarded ranges; callers treat that as a defect.
+pub fn format_iso(ms: i64) -> [u8] ! alloc
+  requires -62167219200000 <= ms && ms <= 253402300799999
+  ensures len(result) == 24 || len(result) == 0
+  ensures len(result) == 24 ==> (result[4] == 45 && result[7] == 45 && result[10] == 84 && result[13] == 58 && result[16] == 58 && result[19] == 46 && result[23] == 90)
+  ensures len(result) == 24 ==> (forall i in 0..24: (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19 || i == 23 || (48 <= result[i] && result[i] <= 57)))
+{
+  let c: Civil = civil(ms);
+  let y: i64 = c.year;
+  let m: i64 = c.month;
+  let d: i64 = c.day;
+  let rem: i64 = c.rem;
   let h: i64 = rem / 3600000;
   let mi: i64 = (rem / 60000) % 60;
   let sec: i64 = (rem / 1000) % 60;
