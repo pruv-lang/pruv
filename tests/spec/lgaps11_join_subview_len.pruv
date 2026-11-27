@@ -1,0 +1,12 @@
+// spec: R-6g9-16 reject
+// LG9-SR2 (L-gaps 11): a false length claim about a vec_join of two subview pieces (subview separator) is refuted
+fn f(b: [u8], m: i64) -> i64 ! alloc
+  requires len(b) <= 1000 && 1 <= len(b) && 0 <= m && m <= len(b)
+{
+  let mut out: Vec<ref [u8]> = vec_new::<ref [u8]>();
+  vec_push::<ref [u8]>(inout out, subview(b, 0, m));
+  vec_push::<ref [u8]>(inout out, subview(b, m, len(b)));
+  let s: [u8] = vec_join::<ref [u8]>(out, subview(b, 0, 1));
+  assert len(s) == len(b);
+  return len(s);
+}

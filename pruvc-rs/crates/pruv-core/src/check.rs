@@ -6835,6 +6835,12 @@ impl Checker {
                             format!("parameter {} is a borrowed array and cannot be moved", x.name),
                             format!("declare `take {}: {}` or use copy({})", x.name, tn(&entry.ty), x.name)));
                     }
+                    if entry.kind == "ref_local" && entry.ty == strt() {
+                        // L-gaps 10 A3: a `ref str` local is a view; the owned str is a copy of it
+                        return Err(terr(x.line, x.col, "array_alias",
+                            format!("{} is a ref str view and cannot be moved", x.name),
+                            format!("copy it into an owned local: `let t: str = copy({});` then pass `move t`", x.name)));
+                    }
                     return Err(terr(x.line, x.col, "array_alias", "only an owned array binding can be moved",
                         "use copy() to make an independent array"));
                 }

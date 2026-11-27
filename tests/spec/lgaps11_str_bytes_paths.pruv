@@ -1,0 +1,84 @@
+// spec: R-6b-6 accept
+// LG9-SB3 (L-gaps 11): the run-time paths of `str_into_bytes` / `str_bytes` not covered by lgaps9_str_bytes.
+struct Text { value: str }
+struct Blob { bytes: [u8] }
+enum Item { Name(t: str), Empty }
+
+fn tail(s: str) -> ref [u8] from(s)
+  ensures len(result) == len(s)
+{
+  return str_bytes(s);
+}
+
+fn lead(inout d: Text) -> i64
+  requires len(d.value) > 0
+{
+  let b: ref [u8] = str_bytes(d.value);
+  return b[0];
+}
+
+fn width(s: str) -> i64
+  ensures result == len(str_bytes(s))
+{
+  return len(s);
+}
+
+fn pick(c: bool) -> [u8] ! alloc {
+  let t: str = copy("xy");
+  if c {
+    return str_into_bytes(move t);
+  }
+  return alloc(0, 0);
+}
+
+fn payload() -> i64 ! alloc {
+  let it: Item = Item::Name(copy("abc"));
+  match it {
+    Item::Name(t) => {
+      let a: [u8] = str_into_bytes(move t);
+      return len(a);
+    }
+    Item::Empty => { return 0; }
+  }
+}
+
+fn run() -> () ! alloc, io {
+  print(len(pick(true)));
+  print(len(pick(false)));
+  print(payload());
+  let t: str = copy("q");
+  let blob: Blob = Blob { bytes: str_into_bytes(move t) };
+  print(blob.bytes[0]);
+  let mut a: [u8] = alloc(0, 0);
+  let mut i: i64 = 0;
+  while i < 3
+    invariant 0 <= i && i <= 3
+    decreases 3 - i
+  {
+    let u: str = copy("abcd");
+    a = str_into_bytes(move u);
+    i = i + 1;
+  }
+  print(len(a));
+  let e: str = copy("");
+  let mut z: [u8] = str_into_bytes(move e);
+  arr_push(inout z, 65);
+  print(len(z));
+  print(z[0]);
+  let raw: [u8] = alloc(5, 66);
+  let s8: str = str_from_utf8(raw);
+  let mut w: [u8] = str_into_bytes(move s8);
+  arr_push(inout w, 67);
+  print(len(w));
+  print(w[5]);
+  let s: str = "hé";
+  print(len(tail(s)));
+  print(str_bytes(subview(s, 1, len(s)))[0]);
+  let mut l: Vec<ref [u8]> = vec_new::<ref [u8]>();
+  vec_push::<ref [u8]>(inout l, str_bytes(s));
+  let g: ref [u8] = vec_get::<ref [u8]>(l, 0);
+  print(g[0]);
+  let mut d: Text = Text { value: copy("Z") };
+  print(lead(inout d));
+  print(width(s));
+}

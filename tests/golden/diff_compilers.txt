@@ -1318,8 +1318,9 @@ must_reject|must_reject/lg9_move_field_arg_use_after.pruv	2 cases: exit 2	llvm=a
 must_reject|must_reject/lg9_utf8_ascii_partial.pruv	2 cases: exit 2	llvm=25668fcdaef2	rust=25668fcdaef2
 must_reject|must_reject/lgaps10_into_bytes_borrowed.pruv	2 cases: exit 2	llvm=a25c64662793	rust=a25c64662793
 must_reject|must_reject/lgaps10_into_bytes_no_move.pruv	2 cases: exit 2	llvm=4ee534764c30	rust=4ee534764c30
-must_reject|must_reject/lgaps10_into_bytes_ref_local.pruv	2 cases: exit 2	llvm=a0d1bf72471d	rust=a0d1bf72471d
+must_reject|must_reject/lgaps10_into_bytes_ref_local.pruv	2 cases: exit 2	llvm=76e2b2defbbe	rust=76e2b2defbbe
 must_reject|must_reject/lgaps10_into_bytes_utf8.pruv	2 cases: exit 2	llvm=fe8e10f3586f	rust=fe8e10f3586f
+must_reject|must_reject/lgaps11_join_subview_len.pruv	2 cases: exit 2	llvm=0b37769bc998	rust=0b37769bc998
 must_reject|must_reject/lgaps9_into_bytes_borrowed.pruv	2 cases: exit 2	llvm=28a3b78c1df3	rust=28a3b78c1df3
 must_reject|must_reject/lgaps9_into_bytes_len.pruv	2 cases: exit 2	llvm=aeba54a11d5f	rust=aeba54a11d5f
 must_reject|must_reject/lgaps9_into_bytes_use_after.pruv	2 cases: exit 2	llvm=b3787ba84569	rust=b3787ba84569
@@ -2763,8 +2764,12 @@ runtime|runtime/lg9_rt_utf8_ascii [--no-verify]	2 cases: exit 2	llvm=174ba0757b4
 runtime|runtime/lg9_rt_utf8_ascii [default]	2 cases: exit 2	llvm=ed57aa14520e	rust=24ccfa5a05d8
 runtime|runtime/lgaps10_into_bytes_param_fixed [--no-verify]	2 cases: exit 2	llvm=7623b47160da	rust=5b6aa92fb447
 runtime|runtime/lgaps10_into_bytes_param_fixed [default]	2 cases: exit 2	llvm=d3e3c84d1959	rust=83720d93664f
-runtime|runtime/lgaps9_str_bytes [--no-verify]	2 cases: exit 2	llvm=1141833f03db	rust=a7e9be021219
-runtime|runtime/lgaps9_str_bytes [default]	2 cases: exit 2	llvm=7357f3575128	rust=09da4e703036
+runtime|runtime/lgaps11_pop_checks_all [--foreign-checks all]	2 cases: exit 2	llvm=01eb1063cfb6	rust=cedcd308ccf4
+runtime|runtime/lgaps11_pop_checks_all [default]	2 cases: exit 2	llvm=122b37551a3e	rust=6e19197cac2c
+runtime|runtime/lgaps11_str_bytes_paths [--no-verify]	2 cases: exit 2	llvm=830dd065bb61	rust=8caea7b20430
+runtime|runtime/lgaps11_str_bytes_paths [default]	2 cases: exit 2	llvm=1cc03501b008	rust=673890f6c76f
+runtime|runtime/lgaps9_str_bytes [--no-verify]	2 cases: exit 2	llvm=f0e7668bce8d	rust=a7e9be021219
+runtime|runtime/lgaps9_str_bytes [default]	2 cases: exit 2	llvm=ccc2b143c0cd	rust=09da4e703036
 runtime|runtime/p1_r_bounds [--no-verify]	2 cases: exit 2	llvm=c701bf27929d	rust=259cf4852f8d
 runtime|runtime/p1_r_bounds [default]	2 cases: exit 2	llvm=9b7802cfa6cc	rust=6bfc2760a495
 runtime|runtime/p1_r_cast_fail [--no-verify --trust-callers]	2 cases: exit 2	llvm=30dd66ad8b04	rust=614f4c66a11b
@@ -2946,8 +2951,8 @@ runtime|runtime/p9_rt_alias_const [--no-verify]	2 cases: exit 2	llvm=59aa5a267df
 runtime|runtime/p9_rt_alias_const [default]	2 cases: exit 2	llvm=9e567291ceb3	rust=36f37ac9eef2
 runtime|runtime/p9_rt_alias_p8 [--no-verify]	2 cases: exit 2	llvm=746f0d03e0ef	rust=79a9bd9cd426
 runtime|runtime/p9_rt_alias_p8 [default]	2 cases: exit 2	llvm=55ab582bb994	rust=4213fe3e9d4f
-runtime|runtime/p9_rt_alias_pos [--no-verify]	2 cases: exit 2	llvm=ff9b27b5479b	rust=905634baed7a
-runtime|runtime/p9_rt_alias_pos [default]	2 cases: exit 2	llvm=257f2640c39b	rust=d8c75020cc3d
+runtime|runtime/p9_rt_alias_pos [--no-verify]	2 cases: exit 2	llvm=25d0e3636885	rust=905634baed7a
+runtime|runtime/p9_rt_alias_pos [default]	2 cases: exit 2	llvm=53590d738050	rust=d8c75020cc3d
 runtime|runtime/p9_rt_branch_order [--no-verify]	2 cases: exit 2	llvm=ba6baedce5b0	rust=0749fbd47c14
 runtime|runtime/p9_rt_branch_order [default]	2 cases: exit 2	llvm=ae5c5baaa1ba	rust=63b2fffc41d4
 runtime|runtime/p9_rt_if_arg [--no-verify]	2 cases: exit 2	llvm=19e855d46d01	rust=b5c603a36c95
