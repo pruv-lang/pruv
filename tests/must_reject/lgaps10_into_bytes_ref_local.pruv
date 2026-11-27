@@ -1,0 +1,7 @@
+// spec: R-6b-6 reject
+// LG9-SB2 (L-gaps 10): a `ref str` local is a view, not an owned str, so it cannot be moved into str_into_bytes
+fn bad(s: str) -> i64 ! alloc {
+  let r: ref str = subview(s, 0, len(s));
+  let b: [u8] = str_into_bytes(move r);
+  return len(b);
+}

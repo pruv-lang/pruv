@@ -1119,7 +1119,7 @@ must_reject|tests/must_reject/lg17_inv_legacy_param.pruv	1 case: obl=0 1	default
 must_reject|tests/must_reject/lg17_str_move_after.pruv	1 case: obl=0 1	default=91c71d76f869
 must_reject|tests/must_reject/lg17_str_move_assert.pruv	1 case: obl=0 1	default=97c84d84e156
 must_reject|tests/must_reject/lg17_str_move_loop.pruv	1 case: obl=0 1	default=3c70c64fd8d6
-must_reject|tests/must_reject/lg17_str_move_param.pruv	1 case: obl=0 1	default=afc6ef92c2b6
+must_reject|tests/must_reject/lg17_str_move_param.pruv	1 case: obl=0 1	default=1d3082c487a0
 must_reject|tests/must_reject/lg18_try_inout_effect.pruv	1 case: obl=0 1	default=bdad72c2554b
 must_reject|tests/must_reject/lg18_try_inout_operand.pruv	1 case: obl=0 1	default=bdad72c2554b
 must_reject|tests/must_reject/lg18_try_inout_second_try.pruv	1 case: obl=0 1	default=f305060554e7
@@ -1176,7 +1176,7 @@ must_reject|tests/must_reject/lg31_frame_clear.pruv	1 case: obl=12 1	default=cf1
 must_reject|tests/must_reject/lg36_move_under_outer_arm.pruv	1 case: obl=0 1	default=2d7b51109f35
 must_reject|tests/must_reject/lg36_str_move_branch_read.pruv	1 case: obl=0 1	default=bae0b56a6036
 must_reject|tests/must_reject/lg36_str_move_in_loop.pruv	1 case: obl=0 1	default=709a588de845
-must_reject|tests/must_reject/lg36_str_move_under_outer_arm.pruv	1 case: obl=0 1	default=94780fec45ff
+must_reject|tests/must_reject/lg36_str_move_under_outer_arm.pruv	1 case: obl=0 1	default=4e474e006bc5
 must_reject|tests/must_reject/lg4_agg_frame_changed.pruv	1 case: obl=23 1	default=567bc65ab999
 must_reject|tests/must_reject/lg4_field_index_immutable.pruv	1 case: obl=0 1	default=fa67285648a9
 must_reject|tests/must_reject/lg4_field_index_oob.pruv	1 case: obl=1 1	default=258f6e14f611
@@ -1229,11 +1229,17 @@ must_reject|tests/must_reject/lg9_move_field_arg_borrowed.pruv	1 case: obl=0 1	d
 must_reject|tests/must_reject/lg9_move_field_arg_other_mention.pruv	1 case: obl=0 1	default=f6152ef126d1
 must_reject|tests/must_reject/lg9_move_field_arg_use_after.pruv	1 case: obl=0 1	default=48c387534635
 must_reject|tests/must_reject/lg9_utf8_ascii_partial.pruv	1 case: obl=2 1	default=3c6cceee039b
-must_reject|tests/must_reject/lgaps9_into_bytes_borrowed.pruv	1 case: obl=0 1	default=2e29dca49a9d
+must_reject|tests/must_reject/lgaps10_into_bytes_borrowed.pruv	1 case: obl=0 1	default=bc40360d2d58
+must_reject|tests/must_reject/lgaps10_into_bytes_no_move.pruv	1 case: obl=0 1	default=6fcfb66107d2
+must_reject|tests/must_reject/lgaps10_into_bytes_ref_local.pruv	1 case: obl=0 1	default=4e62c4ba59ef
+must_reject|tests/must_reject/lgaps10_into_bytes_utf8.pruv	1 case: obl=3 1	default=4db343c98cae
+must_reject|tests/must_reject/lgaps9_into_bytes_borrowed.pruv	1 case: obl=0 1	default=5023034d1a39
 must_reject|tests/must_reject/lgaps9_into_bytes_len.pruv	1 case: obl=1 1	default=9c849a7c9750
 must_reject|tests/must_reject/lgaps9_into_bytes_use_after.pruv	1 case: obl=0 1	default=de6490a8eecb
 must_reject|tests/must_reject/lgaps9_str_bytes_escape.pruv	1 case: obl=0 1	default=f34513b8a199
 must_reject|tests/must_reject/lgaps9_str_bytes_len.pruv	1 case: obl=1 1	default=c1c8253b5814
+must_reject|tests/must_reject/lgaps9_views_subview_len.pruv	1 case: obl=5 1	default=b664f1052678
+must_reject|tests/must_reject/lgaps9_views_subview_sum.pruv	1 case: obl=5 1	default=520fbd25b7f7
 must_reject|tests/must_reject/p1_add_overflow.pruv	1 case: obl=1 1	default=e1d17f5d2eac
 must_reject|tests/must_reject/p1_bit_and.pruv	1 case: obl=0 1	default=ce42aa03fda7
 must_reject|tests/must_reject/p1_cast_in_contract.pruv	1 case: obl=0 1	default=0403482cabf8
@@ -1993,6 +1999,7 @@ runtime|tests/runtime/lg9_rt_record_move.pruv	1 case: obl=4 1	default=1b7ba7e027
 runtime|tests/runtime/lg9_rt_take_field_move.pruv	1 case: obl=4 1	default=23fe9c85d7e4
 runtime|tests/runtime/lg9_rt_take_record.pruv	1 case: obl=8 1	default=ad771e5d1be5
 runtime|tests/runtime/lg9_rt_utf8_ascii.pruv	1 case: obl=19 1	default=a5e286fabd87
+runtime|tests/runtime/lgaps10_into_bytes_param_fixed.pruv	1 case: obl=1 1	default=05a59a003f4f
 runtime|tests/runtime/lgaps9_str_bytes.pruv	1 case: obl=25 1	default=9714b8db38d7
 runtime|tests/runtime/p1_r_bounds.pruv	1 case: obl=9 1	default=755fd0bbf8f5
 runtime|tests/runtime/p1_r_cast_fail.pruv	1 case: obl=1 1	default=13a323fd211c

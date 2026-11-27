@@ -1,0 +1,7 @@
+// spec: R-6b-6 reject
+// LG9-SB2 (L-gaps 10): str_into_bytes consumes its str, so the argument must be written with move
+fn bad() -> i64 ! alloc {
+  let t: str = copy("ab");
+  let b: [u8] = str_into_bytes(t);
+  return len(b);
+}
