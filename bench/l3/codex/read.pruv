@@ -15,12 +15,12 @@
 // when a bound that cannot happen was exceeded.
 pub enum Absorbed { Open, Full, Broken }
 
-pub fn absorb(d: crate::json::JsonDocument, rid: i64, inout hs: [i64], inout ht: [i64], inout hb: crate::util::ByteBuffer, inout pl: [i64], inout pb: [u8]) -> Absorbed ! alloc
-  requires len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024
-  requires 0 <= hs[0] && hs[0] <= 200 && 0 <= hs[1] && hs[1] <= len(hb.data) && 0 <= hs[2] && hs[2] <= 2097152
+pub fn absorb(d: crate::json::JsonDocument, rid: i64, inout hs: [i64], inout ht: [i64], inout hb: [u8], inout pl: [i64], inout pb: [u8]) -> Absorbed ! alloc
+  requires len(hs) == 8 && len(ht) == 2000 && len(hb) <= 8700000 && len(pl) == 64 && len(pb) == 18024
+  requires 0 <= hs[0] && hs[0] <= 200 && hs[1] == len(hb) && 0 <= hs[2] && hs[2] <= 2097152
   requires -1 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000 && (pl[63] == 0 || pl[63] == 1)
-  ensures len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024
-  ensures 0 <= hs[0] && hs[0] <= 200 && 0 <= hs[1] && hs[1] <= len(hb.data) && 0 <= hs[2] && hs[2] <= 2097152
+  ensures len(hs) == 8 && len(ht) == 2000 && len(hb) <= 8700000 && len(pl) == 64 && len(pb) == 18024
+  ensures 0 <= hs[0] && hs[0] <= 200 && hs[1] == len(hb) && 0 <= hs[2] && hs[2] <= 2097152
   ensures -1 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000 && (pl[63] == 0 || pl[63] == 1)
 {
   let ids: [i64] = crate::util::elements(d, crate::util::field(d, rid, "data"));
@@ -28,8 +28,8 @@ pub fn absorb(d: crate::json::JsonDocument, rid: i64, inout hs: [i64], inout ht:
   let mut k: i64 = 0;
   while k < n
     invariant 0 <= k && k <= n && n == len(ids)
-    invariant len(hs) == 8 && len(ht) == 2000 && len(hb.data) <= 8700000 && len(pl) == 64 && len(pb) == 18024
-    invariant 0 <= hs[0] && hs[0] <= 200 && 0 <= hs[1] && hs[1] <= len(hb.data) && 0 <= hs[2] && hs[2] <= 2097152
+    invariant len(hs) == 8 && len(ht) == 2000 && len(hb) <= 8700000 && len(pl) == 64 && len(pb) == 18024
+    invariant 0 <= hs[0] && hs[0] <= 200 && hs[1] == len(hb) && 0 <= hs[2] && hs[2] <= 2097152
     invariant -1 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000 && (pl[63] == 0 || pl[63] == 1)
     decreases n - k
   {
@@ -58,17 +58,16 @@ pub fn absorb(d: crate::json::JsonDocument, rid: i64, inout hs: [i64], inout ht:
         let needed: i64 = hs[1] + plen + rlen + 48;
         if needed > 8700000 { return Absorbed::Broken; }
         if rlen > 32768 || raw.tools < 0 || raw.nreply < 0 { return Absorbed::Broken; }
-        if needed > len(hb.data) { crate::util::grow_bytes(inout hb.data, needed, 8700000); }
         let h: i64 = hs[0];
         let b: i64 = 10 * h;
         let mut u: i64 = hs[1];
         ht[b] = u;
         ht[b + 1] = plen;
-        crate::bytes::copy_span(inout hb.data, u, raw.prompt, 0, plen);
+        arr_append(inout hb, raw.prompt, 0, plen);
         u = u + plen;
         ht[b + 2] = u;
         ht[b + 3] = rlen;
-        crate::bytes::copy_span(inout hb.data, u, raw.reply, 0, rlen);
+        arr_append(inout hb, raw.reply, 0, rlen);
         u = u + rlen;
         ht[b + 4] = raw.nreply;
         ht[b + 5] = 0;
@@ -77,13 +76,13 @@ pub fn absorb(d: crate::json::JsonDocument, rid: i64, inout hs: [i64], inout ht:
         ht[b + 7] = -1;
         if len(raw.created) == 24 {
           ht[b + 7] = u;
-          crate::bytes::copy_span(inout hb.data, u, raw.created, 0, 24);
+          arr_append(inout hb, raw.created, 0, 24);
           u = u + 24;
         }
         ht[b + 8] = -1;
         if len(raw.completed) == 24 {
           ht[b + 8] = u;
-          crate::bytes::copy_span(inout hb.data, u, raw.completed, 0, 24);
+          arr_append(inout hb, raw.completed, 0, 24);
           u = u + 24;
         }
         ht[b + 9] = 0;
@@ -217,6 +216,8 @@ pub fn replay(ht: [i64], take held: [u8], used: i64, count: i64, base: i64, item
   // after at; if it does not, mv = -1 makes finish_inplace fail without moving.
   let mut mv: i64 = at;
   if count > 0 && ht[0] + sh < at { mv = -1; }
+  // hb starts empty (4.3f-B); with no held turn it is still shorter than the header + base, so it grows to it here
+  if mv > len(hb) { hb = resize(hb, mv, 0); }
   let col: crate::turns::Placed = crate::turns::finish_inplace(st, sl, rf, inout hb, base, mv);
   if !col.ok || col.kept != layout.kept || col.text_len != layout.text_len {
     bad[0] = 1;

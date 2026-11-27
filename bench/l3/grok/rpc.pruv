@@ -14,7 +14,8 @@
 //  5. `timeout_ms == 0` means the host default 20000 (IMPL_NOTES leaves the meaning of 0 to load_check). Capped at 86400000 like Codex.
 //  6. Drain: after the initialize reply settles, the remaining COMPLETE lines of the same chunk (st.at < st.end) are processed with an
 //     empty outstanding set (server requests get -32601, everything else is ignored) BEFORE request 2 is written (P6 chunk ordering).
-//     The drain calls transport::receive_grow via `step`, which also polls once with wait 0 (a timeout could fire there; acceptable).
+//     The pump calls transport::receive via `step`, which scans the buffered bytes before it polls (hand `Rpc::step`);
+//     the drain calls transport::scan, the buffered bytes only (hand `step(false)`).
 //  7. proc_spawn_env(binary, args, cwd, names, values): the arguments are not `move`d, as in tests/runtime/g10p_r22_env.pruv.
 //  8. Result mapping (all mode 3, class 1 = EngineImportError, class 3 = RpcResponseError):
 //       spawn failure: stage 24 code 8 (engine-missing); loop capacity failure: stage 24 code 7;
@@ -815,16 +816,14 @@ fn start(binary: str, home: str, folder: str, timeout_ms: i64, inout ck: Check) 
 
 // One receive step of the pump. ck.ready when a line of ck.n bytes is in `line`; a closed child, a timeout or a transport failure
 // sets ck.fail.
-fn step(take l: Loop, inout ck: Check, inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
-  requires 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-  requires len(line) <= 8388608 && st.filled <= len(line)
-  requires crate::tail::tail_ok(tl) && tl.limit == 1024
+fn step(take l: Loop, inout ck: Check, inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8]) -> Loop ! async, proc, alloc
+  requires 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+  requires len(line) <= 8388608
   ensures 0 <= ck.n && ck.n <= len(line)
-  ensures 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-  ensures len(line) <= 8388608 && st.filled <= len(line)
-  ensures crate::tail::tail_ok(tl) && tl.limit == 1024
+  ensures 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+  ensures len(line) <= 8388608
 {
-  let mut q: Loop = crate::transport::receive_grow(move l, ck.slot, ck.timer, -1, true, 8388608, inout st, inout line, inout chunk, inout tl);
+  let mut q: Loop = crate::transport::receive(move l, ck.slot, ck.timer, -1, true, 8388608, inout st, inout line, inout chunk);
   let n: i64 = st.status;
   ck.ready = false;
   ck.n = 0;
@@ -909,27 +908,24 @@ fn on_reply(t: [u8], c: Cap, id: i64, inout ck: Check, inout buf: [u8]) -> () ! 
 // request in between is answered with the not-handled reply. On return ck.fail == 0 means the response arrived and was accepted.
 // Writes go through transport::send with the overall budget. Spec P11 is resolved: a failed stdin write half-closes stdin and the
 // reader keeps reading stdout (as TS does); the slot is not failed.
-fn pump(take l: Loop, id: i64, inout ck: Check, inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail, inout c: Cap, inout buf: [u8]) -> Loop ! async, proc, alloc
+fn pump(take l: Loop, id: i64, inout ck: Check, inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8], inout c: Cap, inout buf: [u8]) -> Loop ! async, proc, alloc
   requires 1 <= id && id <= 2
-  requires 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-  requires len(line) <= 8388608 && st.filled <= len(line)
-  requires crate::tail::tail_ok(tl) && tl.limit == 1024
-  ensures 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-  ensures len(line) <= 8388608 && st.filled <= len(line)
-  ensures crate::tail::tail_ok(tl) && tl.limit == 1024
+  requires 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+  requires len(line) <= 8388608
+  ensures 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+  ensures len(line) <= 8388608
 {
   let mut q: Loop = move l;
   let mut done: bool = false;
   let mut events: i64 = 0;
   while ck.fail == 0 && !done && events < 1000000
     invariant 0 <= events && events <= 1000000
-    invariant 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-    invariant len(line) <= 8388608 && st.filled <= len(line) && 1 <= id && id <= 2
-    invariant crate::tail::tail_ok(tl) && tl.limit == 1024
+    invariant 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+    invariant len(line) <= 8388608 && 1 <= id && id <= 2
     decreases 1000000 - events
   {
     events = events + 1;
-    q = step(move q, inout ck, inout st, inout line, inout chunk, inout tl);
+    q = step(move q, inout ck, inout st, inout line, inout chunk);
     if ck.fail == 0 && ck.ready {
       let tb: Bounds = trim_bounds(subview(line, 0, ck.n));
       let t: ref [u8] = subview(line, tb.lo, tb.hi);
@@ -939,6 +935,8 @@ fn pump(take l: Loop, id: i64, inout ck: Check, inout st: crate::transport::Read
         done = true;
         on_reply(t, c, id, inout ck, inout buf);
       }
+      // hand on_line: the line is cleared once used
+      line = truncate(line, 0);
     }
   }
   if ck.fail == 0 && !done { ck.fail = 6; }
@@ -947,30 +945,31 @@ fn pump(take l: Loop, id: i64, inout ck: Check, inout st: crate::transport::Read
 
 // After a response settled a request: the remaining complete lines of the current chunk are processed with nothing outstanding
 // (server requests answered, everything else ignored) before the next request is written. Each step eats at least one chunk byte.
-fn drain(take l: Loop, inout ck: Check, inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail, inout c: Cap) -> Loop ! async, proc, alloc
-  requires 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-  requires len(line) <= 8388608 && st.filled <= len(line)
-  requires crate::tail::tail_ok(tl) && tl.limit == 1024
-  ensures 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-  ensures len(line) <= 8388608 && st.filled <= len(line)
-  ensures crate::tail::tail_ok(tl) && tl.limit == 1024
+fn drain(take l: Loop, inout ck: Check, inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8], inout c: Cap) -> Loop ! async, proc, alloc
+  requires 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+  requires len(line) <= 8388608
+  ensures 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+  ensures len(line) <= 8388608
 {
   let mut q: Loop = move l;
   let mut n: i64 = 0;
   while ck.fail == 0 && st.at < st.end && n < 70000
     invariant 0 <= n && n <= 70000
-    invariant 0 <= st.filled && st.filled <= 8388608 && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
-    invariant len(line) <= 8388608 && st.filled <= len(line)
-    invariant crate::tail::tail_ok(tl) && tl.limit == 1024
+    invariant 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+    invariant len(line) <= 8388608
     decreases 70000 - n
   {
     n = n + 1;
-    q = step(move q, inout ck, inout st, inout line, inout chunk, inout tl);
+    // hand `step(false)`: the buffered bytes only; a partial line stays in `line` and the drain ends (no read, no poll)
+    crate::transport::scan(inout st, inout line, chunk, 8388608);
+    let k: i64 = st.status;
+    if k == -3 { ck.fail = 6; }
     // an id of 99 is never outstanding: only server requests (kind 1) matter here
-    if ck.fail == 0 && ck.ready {
-      let tb: Bounds = trim_bounds(subview(line, 0, ck.n));
+    if k >= 0 && k <= len(line) {
+      let tb: Bounds = trim_bounds(subview(line, 0, k));
       let t: ref [u8] = subview(line, tb.lo, tb.hi);
       if fast_kind(t, 99, inout c) == 1 { q = crate::transport::send(move q, ck.slot, not_handled_line(t, c), ck.budget); }
+      line = truncate(line, 0);
     }
   }
   return move q;
@@ -978,7 +977,7 @@ fn drain(take l: Loop, inout ck: Check, inout st: crate::transport::Reader, inou
 
 // Before a request is written: a child whose stdin is already closed is a timeout when the overall timer fired, else read-failed.
 fn before_send(take l: Loop, inout ck: Check, inout st: crate::transport::Reader) -> Loop ! async, alloc
-  ensures st.filled == old(st).filled && st.at == old(st).at && st.end == old(st).end
+  ensures st.at == old(st).at && st.end == old(st).end
 {
   if !crate::transport::stdin_closed(l, ck.slot) { return move l; }
   let q: Loop = crate::transport::expired(move l, ck.timer, inout st);
@@ -1031,28 +1030,27 @@ pub fn load_check(binary: str, home: str, folder: str, thread: str, timeout_ms: 
   let mut line: [u8] = alloc(0, 0);
   arr_reserve(inout line, 4096);
   let mut chunk: [u8] = alloc(65536, 0);
-  let mut tl: crate::tail::Tail = crate::tail::new(1024);
   let mut c: Cap = cap_new();
   let mut buf: [u8] = alloc(0, 0);
   ck.stage = 25;
   l = before_send(move l, inout ck, inout st);
   l = crate::transport::send(move l, ck.slot, req_init(), ck.budget);
-  l = pump(move l, 1, inout ck, inout st, inout line, inout chunk, inout tl, inout c, inout buf);
+  l = pump(move l, 1, inout ck, inout st, inout line, inout chunk, inout c, inout buf);
   if ck.fail == 0 {
-    l = drain(move l, inout ck, inout st, inout line, inout chunk, inout tl, inout c);
+    l = drain(move l, inout ck, inout st, inout line, inout chunk, inout c);
   }
   if ck.fail == 0 {
     ck.stage = 26;
     l = before_send(move l, inout ck, inout st);
     l = crate::transport::send(move l, ck.slot, req_load(thread, folder), ck.budget);
-    l = pump(move l, 2, inout ck, inout st, inout line, inout chunk, inout tl, inout c, inout buf);
+    l = pump(move l, 2, inout ck, inout st, inout line, inout chunk, inout c, inout buf);
   }
   // A settling response (0 ok, 2/3 error object, 4 bad capabilities) leaves the rest of its chunk: the reference's data handler still
   // answers server requests in it before the child is closed. The outcome is already settled, so a failed write there only half-closes stdin and is ignored.
   let settled: i64 = ck.fail;
   if settled == 0 || settled == 2 || settled == 3 || settled == 4 {
     ck.fail = 0;
-    l = drain(move l, inout ck, inout st, inout line, inout chunk, inout tl, inout c);
+    l = drain(move l, inout ck, inout st, inout line, inout chunk, inout c);
     ck.fail = settled;
   }
   crate::transport::close(move l, ck.slot);

@@ -2260,3 +2260,42 @@ Only `bench/l3/qwen` changes (no compiler, no `pkgs/`, so no consumer runs). Det
      and attached entries only.
   2. 4.4d-QA with gap 4.4c-SV (a `[u8]` span lent as `str`).
   3. 4.4u-TO back to hand order once the solver keeps `doc_strings` through the loop body.
+
+## Step 4.4v: buffered bytes before polling (4.4d-PO), line cleared after use (4.4d-LC), cursor kept on -3 (4.4d-RC), empty growable buffers (4.3f-B), dead turns helpers removed (4.4d-TD)
+
+Changes `bench/l3/pkgs/transport`, `pkgs/turns`, `mcp`, `grok`, `codex` (no compiler change).
+
+- `transport::receive_grow` is split into `take` (scan the buffered bytes for LF), `wake` (poll 0 and liveness),
+  `fill` (read stdout into the chunk, `take`, then wait 10 ms) and `receive` / `receive_tail` (MCP keeps the stderr
+  tail). Buffered bytes are scanned before any poll (hand `Rpc::step`); `scan` runs only the scan block, and the grok
+  drain uses it (hand `step(false)`: a partial line ends the drain without a read or a poll). `Reader.filled` is gone: the partial line is
+  `len(line)`. Over the cap, `-3` leaves `at` at the piece start (hand: cursor unchanged).
+- Consumers clear the line with `truncate(line, 0)` after the line is used (hand `line.clear()` after `on_line`):
+  grok pump and drain, mcp after `parse_copy`, codex `open` and the three root loops.
+- Codex: the private `rpc::receive` is gone, `step` calls `transport::receive`. The line and the `hb` arena start as
+  an empty `[u8]` with a reserve and grow by `arr_append`; `ByteBuffer`, `byte_buffer`, `grow_bytes` and the `tail`
+  dependency are removed. `read::replay` grows `hb` to the header + base when no turn is held.
+- mcp: the line starts empty with a 4096-byte reserve.
+- `turns`: `empty_buffer`, `finish2` and `finish_ref` are removed with the comments that cite them.
+
+### Rows after 4.4v
+
+- Closed: 4.4d-PO, 4.4d-LC, 4.4d-RC, 4.3f-B, 4.4d-TD.
+- New: 4.4v-SN (gap): stderr is still read and dropped (`ev_proc_read` on fd 2) because Pruv has no spawn with a
+  null stderr and `ev_eof` is true only when both streams are drained; the hand uses `Stdio::null()`.
+- New: 4.4v-LC (contract): the line clear is a consumer convention; `receive` does not require an empty line on a
+  fresh read (the requirement puts a proof burden on every pump invariant).
+- New: 4.4v-RT (shape): `receive` and `receive_tail` repeat the same 8 lines (no function parameters to pass the
+  stderr action).
+- New: 4.4v-PB (shape, from the review): the pump and codex loops count every `step` against the 1,000,000 bound,
+  partial chunks included; the hand `step(true)` waits inside one call. Output differs only past a million steps.
+- New: 4.4v-TR (order, from the review): when a chunk and the overall timer are ready together, `receive` checks the
+  timer first; the hand `recv_timeout` can take a chunk already queued. Only the race at the deadline differs.
+- Still open: the rows listed before 4.4v.
+- Review: one structure review (Codex gpt-6.2-astra, generated vs hand Rust only). Its one in-scope output difference,
+  the grok drain reading a next chunk after a partial line, is fixed here; the rest are the rows above or cost-only.
+- Tests (rs/rust and rs/llvm): claude a0-a4, json a0-a5, supervisor a0-a3, qwen 27/27, mcp 22/22, grok 254/254,
+  codex 136/136, opencode 199/199. Not measured.
+- Next:
+  1. 4.4v-SN once the language has a spawn option with a null stderr.
+  2. 4.4v-RT with function parameters or a stderr sink type.

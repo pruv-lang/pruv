@@ -220,10 +220,13 @@ Not changed:
 |---|---|---|---|
 | 4.4d-CB | `user` checks `is_char_boundary` at `q.lo` / `q.hi` at run time | `&text[range]` on a range found at ASCII bytes | language: a char-boundary fact from an adjacent ASCII byte |
 | 4.4d-CL | `feed` checks `len(e.content) <= 100000000` | no bound | `line::entry` ensures the content is a span of the line |
-| 4.4d-LC | `receive_grow` clears a finished line lazily | `on_line` then `line.clear()` | clear at the line end (shared `pkgs/transport`) |
-| 4.4d-TD | `turns::finish2`, `finish_ref`, `empty_buffer` kept without callers | - | remove with the comments that cite them |
-| 4.4d-RC | on -3 `receive_grow` leaves `st.at` past the cap byte | `Rpc::step` leaves the cursor at the piece start | unobservable today (every consumer stops on -3); set `at = begin` with the next transport change |
-| 4.4d-PO | `receive_grow` polls before it scans the bytes already in `chunk` (an expiry returns first) | `Rpc::step` consumes the buffer, waits only when no line is complete | scan first, poll only on the need-more path (shared `pkgs/transport`) |
+| 4.4d-LC | closed in 4.4v: `Reader.filled` removed; `pump` / `drain` clear `line` after the used line | `on_line` then `line.clear()` | done |
+| 4.4d-TD | closed in 4.4v: `turns::finish2`, `finish_ref`, `empty_buffer` and the comments citing them removed | - | done |
+| 4.4d-RC | closed in 4.4v: on -3 `transport::take` leaves `st.at` at the piece start | `Rpc::step` leaves the cursor at the piece start | done |
+| 4.4d-PO | closed in 4.4v: `transport::receive` scans `chunk[at..end)` first and polls only when no line is complete; a fresh chunk is scanned in the same call | `Rpc::step` consumes the buffer, waits only when no line is complete | done |
+| 4.4v-DR | closed in 4.4v (review): `drain` calls `transport::scan` (buffered bytes only), so a partial line ends it without a read or a poll | `drain` calls `step(false)` | done |
+| 4.4v-PB | `pump` counts every `step` (partial chunks too) against 1000000 | `step(true)` waits inside one call | open; differs only past a million steps |
+| 4.4v-TR | a ready chunk and the overall timer: `receive` sees the timer first | `recv_timeout` can take a queued chunk | open; only the race at the deadline |
 | 4.4d-T0 | `feed` calls `turns::tool` only for `n > 0` | `self.tool(n)` for any `Some(n)` | same output (adds 0); needs `line::entry` to ensure `n >= 0` |
 
 Codex structure comparison (one, gpt-6.2-astra high, Codex 2 account; the default account was at its limit). Applied:

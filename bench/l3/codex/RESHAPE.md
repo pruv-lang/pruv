@@ -93,7 +93,7 @@ Not applied (rows). Each needs more than the time cap allowed, a shared module c
 | 4.3f-A | failure paths allocate and build requests before returning: receive buffers before `start` succeeds, read stores before the folder check, a provisional list fail packet, requests built after stdin closed; `InputTooLarge` folder check the hand lacks; cwd decoded twice; trimmed model copied | `root` | allocates after spawn and folder check; returns at once |
 | 4.3f-O | `absorb` reports "budget full" through `hs[4]` and returns 0; `root` reads `data` and decodes the cursor before testing it; the request id is a second counter | `read::absorb`, `root` | `absorb` returns `true`; the caller stops before the cursor |
 | 4.3f-N | `ctl.n = 0` after each parse is overwritten by the next `step`; `parse_line` takes `inout line` and an unread `st` | `rpc`, `root` | `parse_line(&[u8])` |
-| 4.3f-B | the receive buffer is zero-filled and grown by `resize`, then overwritten; the stderr tail is kept but never read | `util::byte_buffer` / `grow_bytes`, `rpc::receive`; same in `pkgs/transport` | empty `Vec` + `extend_from_slice`; stderr discarded |
+| 4.3f-B | closed in 4.4v: the private `rpc::receive` copy is gone (`step` calls `transport::receive`); `line` and the held arena `hb` start empty with a reserve and grow by `arr_append` (`extend_from_slice`); `ByteBuffer` / `byte_buffer` / `grow_bytes` and the unread stderr tail removed (stderr is still read and dropped: row 4.4v-SN in `../lib/RESHAPE.md`) | `util`, `rpc`, `root`, `read::absorb`; `pkgs/transport` | empty `Vec` + `extend_from_slice`; stderr discarded |
 | 4.3f-K | `kind_of` looks up `method` when there is no `id`, and re-reads the number span with `raw_span` | `rpc::kind_of` | returns early on no `id` |
 | 4.3f-E | `util::elements` builds the whole id array, then consumers walk it again | `util`, `list`, `item`, `read` | iterates; stops at 50 / at the budget (needs a `pkgs/access` element cursor; run all consumers) |
 | 4.3f-L | `has_phrase` lowercases per comparison; `error_class` / `error_detail` decode the whole message before taking 300 units | `rpc` | lowercases 300 units once; `take(300)` on the iterator |
@@ -142,11 +142,11 @@ older than 4.4e or open shared rows:
 | 4.4e-FB | a folder over 1000000 bytes fails code 1 before spawn | `root` | spawns; `engine-missing` when the binary is absent |
 
 Also repeated: held stores allocated for an empty page (4.3f-P / VL), element arrays (4.3f-E), owned decoding (4.3f-D),
-stderr tail (4.3f-B).
+stderr tail (4.3f-B, closed in 4.4v).
 
 New rows: 4.4e-LP, 4.4e-EC, 4.4e-NU, 4.4e-FB (folder bound kept for the request size proof), 4.4e-DL (`doc_local` source bound),
 4.4e-VT (the whole-root verify exceeds 300 s on this machine even at the unchanged baseline, load about 10).
-Not started: 4.3f-B, 4.3f-E, 4.3f-F (shared modules), 4.3f-S (language).
+Not started: 4.3f-E, 4.3f-F (shared modules), 4.3f-S (language). 4.3f-B closed in 4.4v.
 
 ## 4. Results
 

@@ -1,12 +1,13 @@
 mod tail;
 // G10 transport (moved from bench/l3/mcp; cap is the maximum line length: mcp 4194304, codex 8388608). receive waits for the child's exit in 10 ms slices bounded by the overall timer (slot kept and st.status stays -6 until it exits, so the caller's pump loops and calls receive again).
-// Reader: the receive state, named fields (hand: the reader thread's locals; X6). status: -6 pending, -1 overall timeout,
-// -2 initialize timeout, -3 line over cap, -4 child exited, -5 failed, >= 0 a complete line of that length. filled: bytes of
-// the partial line. at..end: the unread bytes of the current chunk. exit: the exit code after -4.
-pub struct Reader { status: i64, filled: i64, at: i64, exit: i64, end: i64 }
+// Reader: the receive state, named fields (hand `Rpc`: `chunk` cursor; X6). status: -6 pending, -1 overall timeout,
+// -2 initialize timeout, -3 line over cap, -4 child exited, -5 failed, >= 0 a complete line of that length (the
+// partial line is the caller's `line`, as hand `self.line`). at..end: the unread bytes of the current chunk. exit: the
+// exit code after -4.
+pub struct Reader { status: i64, at: i64, exit: i64, end: i64 }
 pub fn reader_new() -> Reader
- ensures result.filled == 0 && result.at == 0 && result.end == 0
-{ return Reader { status: -6, filled: 0, at: 0, exit: 0, end: 0 }; }
+ ensures result.status == -6 && result.at == 0 && result.end == 0
+{ return Reader { status: -6, at: 0, exit: 0, end: 0 }; }
 pub fn live(l: Loop, slot: i64) -> bool
  requires ev_ok(l)
  ensures result ==> 0 <= slot && slot < ev_cap(l) && ev_kind(l,slot) == 3
@@ -32,14 +33,14 @@ pub fn close(take l: Loop, slot: i64) -> () ! async, net, proc, alloc {
 // overall timer has expired and TS (whose write only queues) would end in timeout: st.status becomes -1 then. Polls without blocking
 // until the timer, no event, or 8 events (the round-robin scan reaches every slot of these 2-3 slot loops); otherwise st.status stays -6.
 pub fn expired(take l: Loop, overall: i64, inout st: Reader) -> Loop ! async, alloc
- ensures st.filled == old(st).filled && st.at == old(st).at && st.exit == old(st).exit && st.end == old(st).end
+ ensures st.at == old(st).at && st.exit == old(st).exit && st.end == old(st).end
 {
- let a1: i64 = st.filled; let a2: i64 = st.at; let a3: i64 = st.exit; let a4: i64 = st.end;
+ let a2: i64 = st.at; let a3: i64 = st.exit; let a4: i64 = st.end;
  st.status=-6;
  let mut q: Loop = move l; let mut k: i64 = 0; let mut more: bool = true;
  while k < 8 && more && st.status == -6
   invariant 0 <= k && k <= 8
-  invariant st.filled == a1 && st.at == a2 && st.exit == a3 && st.end == a4
+  invariant st.at == a2 && st.exit == a3 && st.end == a4
   decreases 8-k
  {
   k=k+1; q=poll(move q,overall,-1,true,inout st,0);
@@ -49,7 +50,7 @@ pub fn expired(take l: Loop, overall: i64, inout st: Reader) -> Loop ! async, al
 }
 pub fn poll(take l: Loop, overall: i64, init: i64, ready: bool, inout st: Reader, wait: i64) -> Loop ! async, alloc
  requires 0 <= wait && wait <= 10
- ensures st.filled == old(st).filled && st.at == old(st).at && st.exit == old(st).exit && st.end == old(st).end
+ ensures st.at == old(st).at && st.exit == old(st).exit && st.end == old(st).end
 {
  let mut q: Loop = move l;
  if ev_ok(q) {
@@ -61,55 +62,62 @@ pub fn poll(take l: Loop, overall: i64, init: i64, ready: bool, inout st: Reader
  }
  return move q;
 }
-// receive with a growing line buffer: the same framing, Reader protocol and -3 at cap, but `line` may start short (even empty, len(line) <= cap;
-// hand `Vec::with_capacity`) and grows in place as needed. st.filled is the number of bytes filled; bytes of line past st.filled are stale. A read that adds
-// bytes leaves len(line) == st.filled (the hand's cleared-and-extended read_line String).
-pub fn receive_grow(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool, cap: i64,
- inout st: Reader, inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
- requires 0 <= st.filled && st.filled <= len(line) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
- requires 1 <= cap && cap <= 8388608 && len(line) <= cap
- requires crate::tail::tail_ok(tl) && tl.limit == 1024
- ensures 0 <= st.filled && st.filled <= len(line) && 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+// The scan block of hand `Rpc::step`: the newline in chunk[at..end) completes `line` (status = len(line), the cursor
+// past it); without one the rest is appended and the cursor reaches end. A piece that would take the line past cap
+// fails before any copy (-3, the cursor stays at the piece start, hand `LINE_CAP` check before `extend`).
+fn take(inout st: Reader, inout line: [u8], chunk: [u8], cap: i64) -> () ! alloc
+ requires 0 <= st.at && st.at <= st.end && st.end <= 65536 && len(chunk) == 65536
+ requires 1 <= cap && cap <= 8388608 && len(line) <= cap && st.status == -6
+ ensures 0 <= st.at && st.at <= st.end && st.end == old(st).end && st.exit == old(st).exit && len(chunk) == 65536
  ensures len(line) <= cap
- ensures crate::tail::tail_ok(tl) && tl.limit == 1024
+ ensures st.status == -6 || st.status == -3 || st.status == len(line)
+{
+ let begin: i64 = st.at;
+ // Hand: memchr for the newline in the buffered bytes, bounded by the room left under cap.
+ let mut stop: i64 = st.end;
+ if cap - len(line) < stop - begin { stop = begin + (cap - len(line)); }
+ let i: i64 = find_byte(chunk, 10, begin, stop);
+ if i < st.end && chunk[i] != 10 { st.status=-3; return; }
+ if i > begin { arr_append(inout line, chunk, begin, i - begin); }
+ if i < st.end { st.status=len(line); st.at=i+1; } else { st.at=i; }
+}
+// Hand `Rpc::step(false)`: only the buffered bytes are scanned, nothing is read or polled.
+pub fn scan(inout st: Reader, inout line: [u8], chunk: [u8], cap: i64) -> () ! alloc
+ requires 0 <= st.at && st.at <= st.end && st.end <= 65536 && len(chunk) == 65536
+ requires 1 <= cap && cap <= 8388608 && len(line) <= cap
+ ensures 0 <= st.at && st.at <= st.end && st.end == old(st).end && st.exit == old(st).exit && len(chunk) == 65536
+ ensures len(line) <= cap
+ ensures st.status == -6 || st.status == -3 || st.status == len(line)
 {
  st.status=-6;
- let mut q: Loop = poll(move l,overall,init,ready,inout st,0);
+ if st.at < st.end { take(inout st, inout line, chunk, cap); }
+}
+// The need-more path of hand `Rpc::step` (`recv_timeout`): the overall and init timers, then one stdout chunk
+// (scanned at once), then a 10 ms wait or the child's exit.
+fn wake(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool, inout st: Reader) -> Loop ! async, alloc
+ ensures st.at == old(st).at && st.exit == old(st).exit && st.end == old(st).end
+ ensures st.status == -6 ==> ev_ok(result) && 0 <= slot && slot < ev_cap(result) && ev_kind(result,slot) == 3
+{
+ let q: Loop = poll(move l,overall,init,ready,inout st,0);
  if st.status != -6 { return move q; }
  if !ev_ok(q) { st.status=-5; return move q; }
  if !live(q,slot) { st.status=-5; return move q; }
- if !ev_eof(q,slot) {
- q=ev_proc_read(move q,slot,2,65536);
- if ev_ok(q) { let err: [u8] = ev_bytes(q); crate::tail::push(inout tl,1,err); }
- }
+ return move q;
+}
+fn fill(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool, cap: i64,
+ inout st: Reader, inout line: [u8], inout chunk: [u8]) -> Loop ! async, proc, alloc
+ requires 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+ requires 1 <= cap && cap <= 8388608 && len(line) <= cap && st.status == -6
+ ensures 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+ ensures len(line) <= cap
+{
+ let mut q: Loop = move l;
  if st.at == st.end && ev_ok(q) {
  if live(q,slot) && !ev_eof(q,slot) {
  let mut got: i64 = 0;
  q=ev_proc_read_into(move q,slot,1,inout chunk,inout got);
- if ev_ok(q) { st.end=got; st.at=0; }
+ if ev_ok(q) { st.end=got; st.at=0; if got > 0 { take(inout st, inout line, chunk, cap); } }
  }
- }
- let begin: i64 = st.at;
- let filled: i64 = st.filled;
- // Hand read_line: memchr for the newline in the buffered bytes, bounded by the room left under cap.
- let mut stop: i64 = st.end;
- if cap - filled < stop - begin { stop = begin + (cap - filled); }
- let mut i: i64 = find_byte(chunk, 10, begin, stop);
- if i < st.end && chunk[i] != 10 {
-  // Hand Rpc::step: a piece that would take the line past cap fails before any copy (-3; the byte at cap is consumed).
-  st.status=-3;
-  st.at=i+1;
- } else {
-  let needed: i64 = filled + (i - begin);
-  // Hand read_line: drop the bytes past the filled prefix, then extend_from_slice (Vec growth, no zero fill).
-  if i > begin {
-   line = truncate(line, filled);
-   arr_append(inout line, chunk, begin, i - begin);
-  }
-  st.filled=needed;
-  // A newline at cap completes the line.
-  if i < st.end { st.status=needed; st.filled=0; i=i+1; }
-  st.at=i;
  }
  if st.status == -6 && ev_ok(q) {
  if live(q,slot) && ev_eof(q,slot) && st.at == st.end {
@@ -125,4 +133,43 @@ pub fn receive_grow(take l: Loop, slot: i64, overall: i64, init: i64, ready: boo
  }
  if !ev_ok(q) { st.status=-5; }
  return move q;
+}
+// One receive step with a growing line buffer (hand `Rpc::step` with `line: Vec<u8>`): `line` holds the partial line and
+// grows by extend; a complete line of len(line) bytes sets st.status = len(line), and the caller clears `line` after
+// using it (hand `on_line` then `line.clear()`). The buffered bytes are scanned first; the loop is polled only when no
+// line is complete. The child's stderr is read so that EOF (both streams drained) is published, and dropped (hand
+// `Stdio::null()`).
+pub fn receive(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool, cap: i64,
+ inout st: Reader, inout line: [u8], inout chunk: [u8]) -> Loop ! async, proc, alloc
+ requires 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+ requires 1 <= cap && cap <= 8388608 && len(line) <= cap
+ ensures 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+ ensures len(line) <= cap
+{
+ st.status=-6;
+ if st.at < st.end { take(inout st, inout line, chunk, cap); if st.status != -6 { return move l; } }
+ let mut q: Loop = wake(move l,slot,overall,init,ready,inout st);
+ if st.status != -6 { return move q; }
+ if !ev_eof(q,slot) { q=ev_proc_read(move q,slot,2,65536); }
+ return fill(move q,slot,overall,init,ready,cap,inout st,inout line,inout chunk);
+}
+// `receive` that keeps the child's stderr in `tl` (MCP reports the last stderr line).
+pub fn receive_tail(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool, cap: i64,
+ inout st: Reader, inout line: [u8], inout chunk: [u8], inout tl: crate::tail::Tail) -> Loop ! async, proc, alloc
+ requires 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+ requires 1 <= cap && cap <= 8388608 && len(line) <= cap
+ requires crate::tail::tail_ok(tl) && tl.limit == 1024
+ ensures 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+ ensures len(line) <= cap
+ ensures crate::tail::tail_ok(tl) && tl.limit == 1024
+{
+ st.status=-6;
+ if st.at < st.end { take(inout st, inout line, chunk, cap); if st.status != -6 { return move l; } }
+ let mut q: Loop = wake(move l,slot,overall,init,ready,inout st);
+ if st.status != -6 { return move q; }
+ if !ev_eof(q,slot) {
+ q=ev_proc_read(move q,slot,2,65536);
+ if ev_ok(q) { let err: [u8] = ev_bytes(q); crate::tail::push(inout tl,1,err); }
+ }
+ return fill(move q,slot,overall,init,ready,cap,inout st,inout line,inout chunk);
 }
