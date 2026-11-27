@@ -715,7 +715,7 @@ fn proc_adapter(sym: &str, helper: &str, op: &str) -> R<String> {
                 "pruv_g6_guard(|| {{ let pruv_prog: &str = pruv_g6_str(p, n); let pruv_cwd: &str = pruv_g6_str(q, m); \
                  pruv_g6_new({}(pruv_prog, pruv_g6_ref::<{}>(a), pruv_cwd)) }})", helper, a_ty)));
         }
-        "proc_spawn_env" => {
+        "proc_spawn_env" | "proc_spawn_env_quiet" => {
             return Ok(fn_text(sym, "p: *const u8, n: i64, a: PruvH, q: *const u8, m: i64, en: PruvH, ev: PruvH", Some("PruvH"), &format!(
                 "pruv_g6_guard(|| {{ let pruv_prog: &str = pruv_g6_str(p, n); let pruv_cwd: &str = pruv_g6_str(q, m); \
                  pruv_g6_new({}(pruv_prog, pruv_g6_ref::<{}>(a), pruv_cwd, pruv_g6_ref::<{}>(en), pruv_g6_ref::<{}>(ev))) }})",

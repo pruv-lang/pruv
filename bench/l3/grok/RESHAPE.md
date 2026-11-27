@@ -326,3 +326,7 @@ form of it, so `start` is unchanged and `transport::receive` keeps reading and d
 
 No language or compiler change was needed (R-6b-5 already existed). Tests: `test_impl.py` 254/254 on rs/rust and rs/llvm; `q.py --pairs rs/rust,rs/llvm` (2254 cases, seed 20261116) rs/rust 0 unexplained, rs/llvm 1 unexplained (q01237-copy, "the fake ACP was started on one side only", load average about 10, the same flake as above); q01237 rerun alone 3 times: 3/3 exact on both pairs. Review (one structure review, Codex): no required findings; the two changed sites match the hand code and M11 hits exactly one line. Advisory only (older differences, left open): `has_at`'s explicit `at > len(s)` test, `user` builds the prompt view twice, `part` clears `scratch` on entry and rebuilds its result, loop shapes in `content`/`fields`/`entry`.
 Not measured: the grok slice still has open shape rows (4.4v-PB, 4.4v-TR, 4.4za-EQ).
+
+L-gaps 16 closed 4.4za-EQ and 4.4za-QE: `start` spawns with `proc_spawn_env_quiet` (hand `.env(..).stderr(Stdio::null())`,
+SPEC R-6l-4), and `transport::receive` no longer reads stream 2, which a quiet child has at end of file from the start.
+The stderr drain is gone; like the hand, Pruv reads stdout only.

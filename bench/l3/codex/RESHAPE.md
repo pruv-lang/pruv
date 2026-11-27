@@ -185,3 +185,6 @@ or a cache before it can be read.
 `rpc::start` spawns with `proc_spawn_quiet` (hand `.stderr(Stdio::null())`). `transport::receive` still reads stream 2
 once per need-more step, which adds no bytes for a quiet child but is needed for `ev_eof` (row 4.4za-QE in
 `../lib/RESHAPE.md`); the hand reads stdout only.
+
+L-gaps 16 closed 4.4za-QE: a quiet child's stream 2 is at end of file from the start (SPEC R-6l-3), so
+`transport::receive` dropped the stream-2 read and reads stdout only, like the hand.

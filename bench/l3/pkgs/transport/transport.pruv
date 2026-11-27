@@ -152,9 +152,8 @@ fn begin(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool, cap: i64
 // One receive step with a growing line buffer (hand `Rpc::step` with `line: Vec<u8>`): `line` holds the partial line and
 // grows by extend; a complete line of len(line) bytes sets st.status = len(line), and the caller clears `line` after
 // using it (hand `on_line` then `line.clear()`). The buffered bytes are scanned first; the loop is polled only when no
-// line is complete. Stream 2 is read and dropped: for a grok child (`proc_spawn_env`, no quiet form, row 4.4za-EQ) so
-// that its stderr never fills the pipe, and for a quiet codex child (`proc_spawn_quiet`, hand `Stdio::null()`) because
-// `ev_eof` turns true only after both streams were observed at end of file (the read adds no bytes; row 4.4za-QE).
+// line is complete. Stream 2 is not read: the callers spawn quiet children (codex `proc_spawn_quiet`, grok
+// `proc_spawn_env_quiet`, hand `Stdio::null()`), whose stream 2 is at end of file from the start (SPEC R-6l-3/4).
 pub fn receive(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool, cap: i64,
  inout st: Reader, inout line: [u8], inout chunk: [u8]) -> Loop ! async, proc, alloc
  requires 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
@@ -164,7 +163,6 @@ pub fn receive(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool, ca
 {
  let mut q: Loop = begin(move l,slot,overall,init,ready,cap,inout st,inout line,chunk);
  if st.status != -6 { return move q; }
- if !ev_eof(q,slot) { q=ev_proc_read(move q,slot,2,65536); }
  return fill(move q,slot,overall,init,ready,cap,inout st,inout line,inout chunk);
 }
 // `receive` that keeps the child's stderr in `tl` (MCP reports the last stderr line).

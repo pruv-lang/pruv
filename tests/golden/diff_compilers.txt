@@ -611,6 +611,7 @@ must_reject|must_reject/g10p_discard_stmt.pruv	2 cases: exit 2	llvm=baee9af693b7
 must_reject|must_reject/g10p_discard_update.pruv	2 cases: exit 2	llvm=034584fc0045	rust=034584fc0045
 must_reject|must_reject/g10p_double_end.pruv	2 cases: exit 2	llvm=a7bee998fead	rust=a7bee998fead
 must_reject|must_reject/g10p_early_return.pruv	2 cases: exit 2	llvm=2e813b8dae73	rust=2e813b8dae73
+must_reject|must_reject/g10p_env_quiet_unconsumed.pruv	2 cases: exit 2	llvm=ff0cc86766e5	rust=ff0cc86766e5
 must_reject|must_reject/g10p_env_unconsumed.pruv	2 cases: exit 2	llvm=ff0cc86766e5	rust=ff0cc86766e5
 must_reject|must_reject/g10p_forgotten_take.pruv	2 cases: exit 2	llvm=ba339bf11389	rust=ba339bf11389
 must_reject|must_reject/g10p_host_entry.pruv	2 cases: exit 2	llvm=b988df306271	rust=b988df306271
@@ -632,6 +633,7 @@ must_reject|must_reject/g10p_v_bad_stream.pruv	2 cases: exit 2	llvm=2e6cba8fc46e
 must_reject|must_reject/g10p_v_domain_eof.pruv	2 cases: exit 2	llvm=97c7d283b53e	rust=97c7d283b53e
 must_reject|must_reject/g10p_v_domain_index.pruv	2 cases: exit 2	llvm=5f5431e08a72	rust=5f5431e08a72
 must_reject|must_reject/g10p_v_domain_stream.pruv	2 cases: exit 2	llvm=abc43a1fbe62	rust=abc43a1fbe62
+must_reject|must_reject/g10p_v_env_quiet_unchecked.pruv	2 cases: exit 2	llvm=9fa7b7764054	rust=9fa7b7764054
 must_reject|must_reject/g10p_v_env_unchecked.pruv	2 cases: exit 2	llvm=9fa7b7764054	rust=9fa7b7764054
 must_reject|must_reject/g10p_v_eof_empty.pruv	2 cases: exit 2	llvm=0c1b8a0eb2fd	rust=0c1b8a0eb2fd
 must_reject|must_reject/g10p_v_exit_zero.pruv	2 cases: exit 2	llvm=d0889f422a3b	rust=d0889f422a3b
@@ -1332,6 +1334,14 @@ must_reject|must_reject/lgaps13_vec_tape_copy_push.pruv	2 cases: exit 2	llvm=573
 must_reject|must_reject/lgaps13_view_reserve_unbounded.pruv	2 cases: exit 2	llvm=463966ee762b	rust=463966ee762b
 must_reject|must_reject/lgaps13_views_len_above.pruv	2 cases: exit 2	llvm=0b37769bc998	rust=0b37769bc998
 must_reject|must_reject/lgaps13_views_len_below.pruv	2 cases: exit 2	llvm=0b37769bc998	rust=0b37769bc998
+must_reject|must_reject/lgaps16_binder_record_after_match.pruv	2 cases: exit 2	llvm=1054ec60dbba	rust=1054ec60dbba
+must_reject|must_reject/lgaps16_binder_record_borrowed.pruv	2 cases: exit 2	llvm=d39f29d35e4f	rust=d39f29d35e4f
+must_reject|must_reject/lgaps16_binder_record_enum.pruv	2 cases: exit 2	llvm=9773c8a5b7ca	rust=9773c8a5b7ca
+must_reject|must_reject/lgaps16_binder_record_field_then_whole.pruv	2 cases: exit 2	llvm=93ff0d996633	rust=93ff0d996633
+must_reject|must_reject/lgaps16_binder_record_loop.pruv	2 cases: exit 2	llvm=3fd37ab4fce5	rust=3fd37ab4fce5
+must_reject|must_reject/lgaps16_binder_record_nested_scalar.pruv	2 cases: exit 2	llvm=66c83b938f6f	rust=66c83b938f6f
+must_reject|must_reject/lgaps16_binder_record_outer_arm.pruv	2 cases: exit 2	llvm=4cd34f907240	rust=4cd34f907240
+must_reject|must_reject/lgaps16_binder_record_twice.pruv	2 cases: exit 2	llvm=b3fa95686985	rust=b3fa95686985
 must_reject|must_reject/lgaps9_into_bytes_borrowed.pruv	2 cases: exit 2	llvm=28a3b78c1df3	rust=28a3b78c1df3
 must_reject|must_reject/lgaps9_into_bytes_len.pruv	2 cases: exit 2	llvm=aeba54a11d5f	rust=aeba54a11d5f
 must_reject|must_reject/lgaps9_into_bytes_use_after.pruv	2 cases: exit 2	llvm=b3787ba84569	rust=b3787ba84569
@@ -1801,60 +1811,63 @@ runtime|runtime/g10_r07_io_failure [--trust-callers]	2 cases: exit 2	llvm=0ddd6c
 runtime|runtime/g10_r07_io_failure [default]	2 cases: exit 2	llvm=0ddd6cd6e02b	rust=5eafc291cd77
 runtime|runtime/g10_r08_byte_bounds [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=4ce37bf394f1	rust=b137b6ca015e
 runtime|runtime/g10_r08_byte_bounds [--no-verify]	2 cases: exit 2	llvm=1abb6b71b590	rust=247c534245ba
-runtime|runtime/g10a_r01_timer [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=555b383666a1	rust=723b950601c6
-runtime|runtime/g10a_r01_timer [--no-verify]	2 cases: exit 2	llvm=0dfcff16cfa0	rust=fcaa56b98036
-runtime|runtime/g10a_r02_echo [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=555b383666a1	rust=723b950601c6
-runtime|runtime/g10a_r02_echo [--no-verify]	2 cases: exit 2	llvm=0dfcff16cfa0	rust=fcaa56b98036
-runtime|runtime/g10a_r03_cancel [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=555b383666a1	rust=723b950601c6
-runtime|runtime/g10a_r03_cancel [--no-verify]	2 cases: exit 2	llvm=0dfcff16cfa0	rust=fcaa56b98036
-runtime|runtime/g10a_r04_listener [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=555b383666a1	rust=723b950601c6
-runtime|runtime/g10a_r04_listener [--no-verify]	2 cases: exit 2	llvm=0dfcff16cfa0	rust=fcaa56b98036
-runtime|runtime/g10a_r05_spawn [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=555b383666a1	rust=723b950601c6
-runtime|runtime/g10a_r05_spawn [--no-verify]	2 cases: exit 2	llvm=0dfcff16cfa0	rust=fcaa56b98036
-runtime|runtime/g10a_r06_read [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=555b383666a1	rust=723b950601c6
-runtime|runtime/g10a_r06_read [--no-verify]	2 cases: exit 2	llvm=0dfcff16cfa0	rust=fcaa56b98036
-runtime|runtime/g10a_r07_write [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=555b383666a1	rust=723b950601c6
-runtime|runtime/g10a_r07_write [--no-verify]	2 cases: exit 2	llvm=0dfcff16cfa0	rust=fcaa56b98036
-runtime|runtime/g10a_r08_write_timeout [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=555b383666a1	rust=723b950601c6
-runtime|runtime/g10a_r08_write_timeout [--no-verify]	2 cases: exit 2	llvm=0dfcff16cfa0	rust=fcaa56b98036
-runtime|runtime/g10a_r09_requires [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=555b383666a1	rust=723b950601c6
-runtime|runtime/g10a_r09_requires [--no-verify]	2 cases: exit 2	llvm=0dfcff16cfa0	rust=fcaa56b98036
-runtime|runtime/g10a_r10_proc_drain [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=02f812e62e86	rust=bb5f12365031
-runtime|runtime/g10a_r10_proc_drain [--no-verify]	2 cases: exit 2	llvm=43ea6603f5a9	rust=248d2bc2909d
-runtime|runtime/g10a_r11_proc_cancel [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=555b383666a1	rust=723b950601c6
-runtime|runtime/g10a_r11_proc_cancel [--no-verify]	2 cases: exit 2	llvm=0dfcff16cfa0	rust=fcaa56b98036
-runtime|runtime/g10a_r12_proc_proc_io [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=555b383666a1	rust=723b950601c6
-runtime|runtime/g10a_r12_proc_proc_io [--no-verify]	2 cases: exit 2	llvm=0dfcff16cfa0	rust=fcaa56b98036
-runtime|runtime/g10a_r13_proc_reap [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=555b383666a1	rust=723b950601c6
-runtime|runtime/g10a_r13_proc_reap [--no-verify]	2 cases: exit 2	llvm=0dfcff16cfa0	rust=fcaa56b98036
-runtime|runtime/g10a_r14_proc_spawn [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=555b383666a1	rust=723b950601c6
-runtime|runtime/g10a_r14_proc_spawn [--no-verify]	2 cases: exit 2	llvm=0dfcff16cfa0	rust=fcaa56b98036
-runtime|runtime/g10a_r15_two_clients [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=eacf5663736b	rust=9ef3e1f127cd
-runtime|runtime/g10a_r15_two_clients [--no-verify]	2 cases: exit 2	llvm=8f4f37c6ec38	rust=959e98b420f7
-runtime|runtime/g10a_r16_relay [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=f80cdbc20c7f	rust=0f749eb2f194
-runtime|runtime/g10a_r16_relay [--no-verify]	2 cases: exit 2	llvm=8ecd09742915	rust=8bb0f7b98140
-runtime|runtime/g10a_r17_deadline [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=2badcd9f29d5	rust=9f80500b8ebb
-runtime|runtime/g10a_r17_deadline [--no-verify]	2 cases: exit 2	llvm=202d92bd6a00	rust=2ecaf34cbf51
-runtime|runtime/g10a_r18_accept_error [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=9259ccd998a8	rust=d8919df974ff
-runtime|runtime/g10a_r18_accept_error [--no-verify]	2 cases: exit 2	llvm=7fb1b9565b2e	rust=9801dacb7ca0
-runtime|runtime/g10a_r19_requires_exit [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=555b383666a1	rust=723b950601c6
-runtime|runtime/g10a_r19_requires_exit [--no-verify]	2 cases: exit 2	llvm=0dfcff16cfa0	rust=fcaa56b98036
-runtime|runtime/g10a_r20_fairness [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=a1d1a798662b	rust=f1c46f557cfd
-runtime|runtime/g10a_r20_fairness [--no-verify]	2 cases: exit 2	llvm=be4ed3a63879	rust=8c5665fd1f54
-runtime|runtime/g10a_r21_backpressure [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=60af1391e36f	rust=353957a6ea45
-runtime|runtime/g10a_r21_backpressure [--no-verify]	2 cases: exit 2	llvm=13493c20fc91	rust=e56c76b27f55
-runtime|runtime/g10a_r22_copy_contract [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=5d252e3721c1	rust=a0863398dfc1
-runtime|runtime/g10a_r22_copy_contract [--no-verify]	2 cases: exit 2	llvm=1f7f4f90ca78	rust=3ffe7369f24c
-runtime|runtime/g10a_r23_quiet_ev [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=5f698adf7b39	rust=96fe63314ab4
-runtime|runtime/g10a_r23_quiet_ev [--no-verify]	2 cases: exit 2	llvm=45a623bd0fac	rust=dfbf6b86d547
-runtime|runtime/g10a_r23_wait_for [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=f68625f6845e	rust=0921138b8a5c
-runtime|runtime/g10a_r23_wait_for [--no-verify]	2 cases: exit 2	llvm=6b52ead48677	rust=62d38877eb4d
-runtime|runtime/g10a_r24_write_for [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=cc53e43250c4	rust=fe69e2653567
-runtime|runtime/g10a_r24_write_for [--no-verify]	2 cases: exit 2	llvm=b7f36b190dc5	rust=790d634fbb15
-runtime|runtime/g10a_r25_write_hook [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=cc53e43250c4	rust=fe69e2653567
-runtime|runtime/g10a_r25_write_hook [--no-verify]	2 cases: exit 2	llvm=b7f36b190dc5	rust=790d634fbb15
-runtime|runtime/g10a_r26_writer_panic [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=cc53e43250c4	rust=fe69e2653567
-runtime|runtime/g10a_r26_writer_panic [--no-verify]	2 cases: exit 2	llvm=b7f36b190dc5	rust=790d634fbb15
+runtime|runtime/g10a_r01_timer [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=9591bf6d205a	rust=bbbe0284578c
+runtime|runtime/g10a_r01_timer [--no-verify]	2 cases: exit 2	llvm=54ff5b086d59	rust=0c154b21f850
+runtime|runtime/g10a_r02_echo [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=9591bf6d205a	rust=bbbe0284578c
+runtime|runtime/g10a_r02_echo [--no-verify]	2 cases: exit 2	llvm=54ff5b086d59	rust=0c154b21f850
+runtime|runtime/g10a_r03_cancel [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=9591bf6d205a	rust=bbbe0284578c
+runtime|runtime/g10a_r03_cancel [--no-verify]	2 cases: exit 2	llvm=54ff5b086d59	rust=0c154b21f850
+runtime|runtime/g10a_r04_listener [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=9591bf6d205a	rust=bbbe0284578c
+runtime|runtime/g10a_r04_listener [--no-verify]	2 cases: exit 2	llvm=54ff5b086d59	rust=0c154b21f850
+runtime|runtime/g10a_r05_spawn [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=9591bf6d205a	rust=bbbe0284578c
+runtime|runtime/g10a_r05_spawn [--no-verify]	2 cases: exit 2	llvm=54ff5b086d59	rust=0c154b21f850
+runtime|runtime/g10a_r06_read [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=9591bf6d205a	rust=bbbe0284578c
+runtime|runtime/g10a_r06_read [--no-verify]	2 cases: exit 2	llvm=54ff5b086d59	rust=0c154b21f850
+runtime|runtime/g10a_r07_write [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=9591bf6d205a	rust=bbbe0284578c
+runtime|runtime/g10a_r07_write [--no-verify]	2 cases: exit 2	llvm=54ff5b086d59	rust=0c154b21f850
+runtime|runtime/g10a_r08_write_timeout [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=9591bf6d205a	rust=bbbe0284578c
+runtime|runtime/g10a_r08_write_timeout [--no-verify]	2 cases: exit 2	llvm=54ff5b086d59	rust=0c154b21f850
+runtime|runtime/g10a_r09_requires [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=9591bf6d205a	rust=bbbe0284578c
+runtime|runtime/g10a_r09_requires [--no-verify]	2 cases: exit 2	llvm=54ff5b086d59	rust=0c154b21f850
+runtime|runtime/g10a_r10_proc_drain [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=e53fd643c6be	rust=cc98768a0cc8
+runtime|runtime/g10a_r10_proc_drain [--no-verify]	2 cases: exit 2	llvm=fb540d2b040a	rust=b0f12f070431
+runtime|runtime/g10a_r11_proc_cancel [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=9591bf6d205a	rust=bbbe0284578c
+runtime|runtime/g10a_r11_proc_cancel [--no-verify]	2 cases: exit 2	llvm=54ff5b086d59	rust=0c154b21f850
+runtime|runtime/g10a_r12_proc_proc_io [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=9591bf6d205a	rust=bbbe0284578c
+runtime|runtime/g10a_r12_proc_proc_io [--no-verify]	2 cases: exit 2	llvm=54ff5b086d59	rust=0c154b21f850
+runtime|runtime/g10a_r13_proc_reap [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=9591bf6d205a	rust=bbbe0284578c
+runtime|runtime/g10a_r13_proc_reap [--no-verify]	2 cases: exit 2	llvm=54ff5b086d59	rust=0c154b21f850
+runtime|runtime/g10a_r14_proc_spawn [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=9591bf6d205a	rust=bbbe0284578c
+runtime|runtime/g10a_r14_proc_spawn [--no-verify]	2 cases: exit 2	llvm=54ff5b086d59	rust=0c154b21f850
+runtime|runtime/g10a_r15_two_clients [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=3ad2d68baf39	rust=12ca4f084780
+runtime|runtime/g10a_r15_two_clients [--no-verify]	2 cases: exit 2	llvm=f50931dbafa0	rust=a1902398ad55
+runtime|runtime/g10a_r16_relay [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=6f1733bf58c5	rust=fd776a28b539
+runtime|runtime/g10a_r16_relay [--no-verify]	2 cases: exit 2	llvm=581ce8643244	rust=d24550d3ada4
+runtime|runtime/g10a_r17_deadline [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=252ba2693a0c	rust=4b3760e2624c
+runtime|runtime/g10a_r17_deadline [--no-verify]	2 cases: exit 2	llvm=a3859fc4f277	rust=dab8e3a19bf3
+runtime|runtime/g10a_r18_accept_error [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=f8ed85362cb1	rust=bf8e7d05682a
+runtime|runtime/g10a_r18_accept_error [--no-verify]	2 cases: exit 2	llvm=2652c8b37f58	rust=7649addb8178
+runtime|runtime/g10a_r19_requires_exit [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=9591bf6d205a	rust=bbbe0284578c
+runtime|runtime/g10a_r19_requires_exit [--no-verify]	2 cases: exit 2	llvm=54ff5b086d59	rust=0c154b21f850
+runtime|runtime/g10a_r20_fairness [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=a87cf7efac4b	rust=7c4bfacd3012
+runtime|runtime/g10a_r20_fairness [--no-verify]	2 cases: exit 2	llvm=f431d3a8fed7	rust=7f721cee44fc
+runtime|runtime/g10a_r21_backpressure [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=cb001af6469a	rust=e68419f2a9df
+runtime|runtime/g10a_r21_backpressure [--no-verify]	2 cases: exit 2	llvm=3b81a8180c7e	rust=be842eac0e61
+runtime|runtime/g10a_r22_copy_contract [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=8528525c822d	rust=3eb3d71fac2a
+runtime|runtime/g10a_r22_copy_contract [--no-verify]	2 cases: exit 2	llvm=207be5eda560	rust=89fa46959f47
+runtime|runtime/g10a_r23_quiet_eof [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=8eb7a43ecaee	rust=c50fbffcbf03
+runtime|runtime/g10a_r23_quiet_eof [--no-verify]	2 cases: exit 2	llvm=cb10777530d9	rust=ea7638d4522f
+runtime|runtime/g10a_r23_quiet_ev [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=70f267a4e598	rust=3f44e9f6dd78
+runtime|runtime/g10a_r23_quiet_ev [--no-verify]	2 cases: exit 2	llvm=7a9305fff85f	rust=7a39a6f57641
+runtime|runtime/g10a_r23_quiet_exit [--no-verify]	2 cases: exit 2	llvm=5b6ce4064336	rust=c7276ac21101
+runtime|runtime/g10a_r23_wait_for [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=0baf639f7242	rust=244c409523bf
+runtime|runtime/g10a_r23_wait_for [--no-verify]	2 cases: exit 2	llvm=45ce8f467fe7	rust=8cc2c649acb9
+runtime|runtime/g10a_r24_write_for [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=bcbe303655e6	rust=c438d0a9af70
+runtime|runtime/g10a_r24_write_for [--no-verify]	2 cases: exit 2	llvm=30060c3bd08a	rust=0c53aabfd4ec
+runtime|runtime/g10a_r25_write_hook [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=bcbe303655e6	rust=c438d0a9af70
+runtime|runtime/g10a_r25_write_hook [--no-verify]	2 cases: exit 2	llvm=30060c3bd08a	rust=0c53aabfd4ec
+runtime|runtime/g10a_r26_writer_panic [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=bcbe303655e6	rust=c438d0a9af70
+runtime|runtime/g10a_r26_writer_panic [--no-verify]	2 cases: exit 2	llvm=30060c3bd08a	rust=0c53aabfd4ec
 runtime|runtime/g10n_r01_echo_bytes [--foreign-checks all]	2 cases: exit 2	llvm=c539305cf408	rust=72e3195a1133
 runtime|runtime/g10n_r01_echo_bytes [--foreign-checks off]	2 cases: exit 2	llvm=f90d8a34d420	rust=fea7251c0258
 runtime|runtime/g10n_r01_echo_bytes [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=f6be45a25811	rust=cc8881543b57
@@ -1929,91 +1942,94 @@ runtime|runtime/g10n_r17_copy_contract [--no-verify --foreign-checks all]	2 case
 runtime|runtime/g10n_r17_copy_contract [--no-verify]	2 cases: exit 2	llvm=d0d86cfe273a	rust=41fc15a7bc33
 runtime|runtime/g10n_r17_copy_contract [--trust-callers]	2 cases: exit 2	llvm=c648f486d03a	rust=820eff34c4bb
 runtime|runtime/g10n_r17_copy_contract [default]	2 cases: exit 2	llvm=ccd97bccce8e	rust=93ec4b17e599
-runtime|runtime/g10p_r01_args [--foreign-checks all]	2 cases: exit 2	llvm=17026f6939e7	rust=040cb408919f
-runtime|runtime/g10p_r01_args [--foreign-checks off]	2 cases: exit 2	llvm=8916e227b795	rust=bdf4b3ab6c19
-runtime|runtime/g10p_r01_args [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=61178b035791	rust=fe42423d12e5
-runtime|runtime/g10p_r01_args [--no-verify]	2 cases: exit 2	llvm=56c7c68110e9	rust=35d79ec28a1c
-runtime|runtime/g10p_r01_args [--trust-callers]	2 cases: exit 2	llvm=859925772992	rust=0375fcb5ccb4
-runtime|runtime/g10p_r01_args [default]	2 cases: exit 2	llvm=8b1b07d976ff	rust=dfabfc55b416
-runtime|runtime/g10p_r02_cwd [--foreign-checks all]	2 cases: exit 2	llvm=a44fb17992b6	rust=d92016c010f0
-runtime|runtime/g10p_r02_cwd [--foreign-checks off]	2 cases: exit 2	llvm=2d370ab5b07d	rust=bec77af9615c
-runtime|runtime/g10p_r02_cwd [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=d52d08f6f699	rust=764446329ac8
-runtime|runtime/g10p_r02_cwd [--no-verify]	2 cases: exit 2	llvm=9d12efca2019	rust=c8e55d6094b6
-runtime|runtime/g10p_r02_cwd [--trust-callers]	2 cases: exit 2	llvm=5c5e5ad8c81f	rust=6d3521098d73
-runtime|runtime/g10p_r02_cwd [default]	2 cases: exit 2	llvm=2372d978bce4	rust=56cb50a10199
-runtime|runtime/g10p_r03_spawn_errors [--foreign-checks all]	2 cases: exit 2	llvm=30037bbac526	rust=89db2454f16d
-runtime|runtime/g10p_r03_spawn_errors [--foreign-checks off]	2 cases: exit 2	llvm=70a7fe143f67	rust=5478e0a17fad
-runtime|runtime/g10p_r03_spawn_errors [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=4ae511532705	rust=6bcfe4c0de87
-runtime|runtime/g10p_r03_spawn_errors [--no-verify]	2 cases: exit 2	llvm=be248915b8b0	rust=3aa7beaecd11
-runtime|runtime/g10p_r03_spawn_errors [--trust-callers]	2 cases: exit 2	llvm=ebea963c36a4	rust=fb3501c392f4
-runtime|runtime/g10p_r03_spawn_errors [default]	2 cases: exit 2	llvm=ebea963c36a4	rust=fb3501c392f4
-runtime|runtime/g10p_r04_stdin_echo [--foreign-checks all]	2 cases: exit 2	llvm=3cc3ba7c1545	rust=ca8ed51b1ad1
-runtime|runtime/g10p_r04_stdin_echo [--foreign-checks off]	2 cases: exit 2	llvm=6b7d6a9cd58c	rust=ec7044503d6d
-runtime|runtime/g10p_r04_stdin_echo [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=56456da233c7	rust=fd4c5c8704f8
-runtime|runtime/g10p_r04_stdin_echo [--no-verify]	2 cases: exit 2	llvm=f71fd98df69c	rust=4698fa191db5
-runtime|runtime/g10p_r04_stdin_echo [--trust-callers]	2 cases: exit 2	llvm=b3a9888893a0	rust=2754ffe83040
-runtime|runtime/g10p_r04_stdin_echo [default]	2 cases: exit 2	llvm=f677433867d5	rust=f9be0989f8e9
-runtime|runtime/g10p_r05_broken_pipe [--foreign-checks all]	2 cases: exit 2	llvm=3aedfa4dc1e2	rust=f8884c0f7aa8
-runtime|runtime/g10p_r05_broken_pipe [--foreign-checks off]	2 cases: exit 2	llvm=0bd0d4b38a8a	rust=bac76b631b56
-runtime|runtime/g10p_r05_broken_pipe [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=e1560c69c323	rust=c4deb81e7cfa
-runtime|runtime/g10p_r05_broken_pipe [--no-verify]	2 cases: exit 2	llvm=e0628dfc5126	rust=62775b3ea27f
-runtime|runtime/g10p_r05_broken_pipe [--trust-callers]	2 cases: exit 2	llvm=bcb771779312	rust=0058c1fa149b
-runtime|runtime/g10p_r05_broken_pipe [default]	2 cases: exit 2	llvm=bcb771779312	rust=0058c1fa149b
-runtime|runtime/g10p_r06_chunks [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=7ff73e668064	rust=f972afdaf137
-runtime|runtime/g10p_r06_chunks [--no-verify]	2 cases: exit 2	llvm=883cb198aef4	rust=dec56d214a0c
-runtime|runtime/g10p_r07_stderr_flood [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=eaf1b190db82	rust=3c347417423e
-runtime|runtime/g10p_r07_stderr_flood [--no-verify]	2 cases: exit 2	llvm=065344315b69	rust=ecd4240a252e
-runtime|runtime/g10p_r08_flood_both [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=6ee7c759fb37	rust=b7864649a1ed
-runtime|runtime/g10p_r08_flood_both [--no-verify]	2 cases: exit 2	llvm=8983212cf96e	rust=4deea6e35a2c
-runtime|runtime/g10p_r09_read_all_nodup [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=003fdc8de9c8	rust=b3691f8a507c
-runtime|runtime/g10p_r09_read_all_nodup [--no-verify]	2 cases: exit 2	llvm=d4c7b56fcdb1	rust=009e81253fdc
-runtime|runtime/g10p_r10_exit_kill [--foreign-checks all]	2 cases: exit 2	llvm=83d714f97ceb	rust=8a2caa16c6d7
-runtime|runtime/g10p_r10_exit_kill [--foreign-checks off]	2 cases: exit 2	llvm=b9a33c2cdbee	rust=afd4b3ec986f
-runtime|runtime/g10p_r10_exit_kill [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=d25bf42cfa37	rust=929e41324b74
-runtime|runtime/g10p_r10_exit_kill [--no-verify]	2 cases: exit 2	llvm=d4973be30b02	rust=a02af052ffcc
-runtime|runtime/g10p_r10_exit_kill [--trust-callers]	2 cases: exit 2	llvm=767f98ccd675	rust=62d9271a8f5d
-runtime|runtime/g10p_r10_exit_kill [default]	2 cases: exit 2	llvm=767f98ccd675	rust=62d9271a8f5d
-runtime|runtime/g10p_r11_hook_setup [--foreign-checks all]	2 cases: exit 2	llvm=dc91f7ff7233	rust=b3a85e0fea9b
-runtime|runtime/g10p_r11_hook_setup [--no-verify]	2 cases: exit 2	llvm=801735169041	rust=6c7c1aef7850
-runtime|runtime/g10p_r11_hook_setup [default]	2 cases: exit 2	llvm=801735169041	rust=0389d0ca8a03
-runtime|runtime/g10p_r12_hook_read1 [--foreign-checks all]	2 cases: exit 2	llvm=fecc02b240ba	rust=737fb64bc935
-runtime|runtime/g10p_r12_hook_read1 [--no-verify]	2 cases: exit 2	llvm=d695f2f34240	rust=44e910e47bdf
-runtime|runtime/g10p_r12_hook_read1 [default]	2 cases: exit 2	llvm=d695f2f34240	rust=9ff6f796eaaa
-runtime|runtime/g10p_r13_hook_read2 [--foreign-checks all]	2 cases: exit 2	llvm=3b24cd7800e4	rust=3a25c70518da
-runtime|runtime/g10p_r13_hook_read2 [--no-verify]	2 cases: exit 2	llvm=0e4141f0b30f	rust=40b3d8c490b2
-runtime|runtime/g10p_r13_hook_read2 [default]	2 cases: exit 2	llvm=0e4141f0b30f	rust=b440d6193e01
-runtime|runtime/g10p_r14_hook_close [--foreign-checks all]	2 cases: exit 2	llvm=161c7f49a177	rust=ce660e19dd2c
-runtime|runtime/g10p_r14_hook_close [--no-verify]	2 cases: exit 2	llvm=fbd0a789b904	rust=71c2cd6c945c
-runtime|runtime/g10p_r14_hook_close [default]	2 cases: exit 2	llvm=fbd0a789b904	rust=9d85936eacad
-runtime|runtime/g10p_r15_hook_wait [--foreign-checks all]	2 cases: exit 2	llvm=abb4a99b4846	rust=214ae1aec9fe
-runtime|runtime/g10p_r15_hook_wait [--no-verify]	2 cases: exit 2	llvm=4227eca72bb5	rust=a336e71aee26
-runtime|runtime/g10p_r15_hook_wait [default]	2 cases: exit 2	llvm=4227eca72bb5	rust=fa80976085f0
-runtime|runtime/g10p_r16_hook_kill [--foreign-checks all]	2 cases: exit 2	llvm=d1c0a163b5c5	rust=e39889715620
-runtime|runtime/g10p_r16_hook_kill [--no-verify]	2 cases: exit 2	llvm=3a48ff7ba74b	rust=60ead125ddb6
-runtime|runtime/g10p_r16_hook_kill [default]	2 cases: exit 2	llvm=3a48ff7ba74b	rust=07afdad0c506
-runtime|runtime/g10p_r17_requires_catch [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=cd301e0ceeaa	rust=87e3ff4be155
-runtime|runtime/g10p_r17_requires_catch [--no-verify]	2 cases: exit 2	llvm=680c1cbbc7b6	rust=822cdb881b15
-runtime|runtime/g10p_r18_requires_exit [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=beabd5254343	rust=9cf66a01bb96
-runtime|runtime/g10p_r18_requires_exit [--no-verify]	2 cases: exit 2	llvm=6c93a7c0d0b6	rust=d0ce879ebfd8
-runtime|runtime/g10p_r19_requires_off [--trust-callers --foreign-checks off]	2 cases: exit 2	llvm=225181cf4d3f	rust=19350a8e285c
-runtime|runtime/g10p_r20_hook_setup_late [--foreign-checks all]	2 cases: exit 2	llvm=720b14a19e4c	rust=a39c9da133c3
-runtime|runtime/g10p_r20_hook_setup_late [--no-verify]	2 cases: exit 2	llvm=4ba48650a328	rust=dfd3adae9f38
-runtime|runtime/g10p_r20_hook_setup_late [default]	2 cases: exit 2	llvm=4ba48650a328	rust=11473877080a
-runtime|runtime/g10p_r21_copy_contract [--foreign-checks all]	2 cases: exit 2	llvm=592033cf65c4	rust=59fa3aad8955
-runtime|runtime/g10p_r21_copy_contract [--foreign-checks off]	2 cases: exit 2	llvm=f058283c924a	rust=c59713ca69f2
-runtime|runtime/g10p_r21_copy_contract [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=3dc5ce6fd22f	rust=fafaa375f7cf
-runtime|runtime/g10p_r21_copy_contract [--no-verify]	2 cases: exit 2	llvm=37a8e984f48b	rust=f42ce5b6cc7e
-runtime|runtime/g10p_r21_copy_contract [--trust-callers]	2 cases: exit 2	llvm=0d1f6a8dc023	rust=7b4c7e1c160a
-runtime|runtime/g10p_r21_copy_contract [default]	2 cases: exit 2	llvm=79746ad9e18e	rust=f11a0b1ba830
-runtime|runtime/g10p_r22_env [--foreign-checks all]	2 cases: exit 2	llvm=709f00291e1a	rust=ce8c18f42051
-runtime|runtime/g10p_r22_env [--foreign-checks off]	2 cases: exit 2	llvm=7865abbaa2d9	rust=a28012d0aeb8
-runtime|runtime/g10p_r22_env [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=1683ecb69f4a	rust=f3742399b179
-runtime|runtime/g10p_r22_env [--no-verify]	2 cases: exit 2	llvm=5457b9251c12	rust=0f87e85f25c4
-runtime|runtime/g10p_r22_env [--trust-callers]	2 cases: exit 2	llvm=ff4fef28d177	rust=dc3bbf448e6b
-runtime|runtime/g10p_r22_env [default]	2 cases: exit 2	llvm=45220027f6e7	rust=fb6f32ec964d
-runtime|runtime/g10p_r23_quiet [--foreign-checks all]	2 cases: exit 2	llvm=38e16ecdd0cd	rust=ef93fcb6fb90
-runtime|runtime/g10p_r23_quiet [--no-verify]	2 cases: exit 2	llvm=1ed9a3b105af	rust=f384fbdbde43
-runtime|runtime/g10p_r23_quiet [default]	2 cases: exit 2	llvm=8861307b1f47	rust=214cf7915237
+runtime|runtime/g10p_r01_args [--foreign-checks all]	2 cases: exit 2	llvm=5ab097861ccb	rust=a15440751265
+runtime|runtime/g10p_r01_args [--foreign-checks off]	2 cases: exit 2	llvm=316c8031a502	rust=d760f887bd08
+runtime|runtime/g10p_r01_args [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=5a57c336c6dc	rust=f744568df3de
+runtime|runtime/g10p_r01_args [--no-verify]	2 cases: exit 2	llvm=65ca896d425b	rust=38fe7170e2ed
+runtime|runtime/g10p_r01_args [--trust-callers]	2 cases: exit 2	llvm=21e1e158b959	rust=e29d8971dfbe
+runtime|runtime/g10p_r01_args [default]	2 cases: exit 2	llvm=ff777bcb0ec8	rust=24ec4606b7c6
+runtime|runtime/g10p_r02_cwd [--foreign-checks all]	2 cases: exit 2	llvm=be0ac7ef3edd	rust=3344d6103483
+runtime|runtime/g10p_r02_cwd [--foreign-checks off]	2 cases: exit 2	llvm=96cdfd66d6b4	rust=87baa1bbffc1
+runtime|runtime/g10p_r02_cwd [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=1cc91ed679f6	rust=e112ad46f074
+runtime|runtime/g10p_r02_cwd [--no-verify]	2 cases: exit 2	llvm=81e606dace45	rust=1c1c394c48e2
+runtime|runtime/g10p_r02_cwd [--trust-callers]	2 cases: exit 2	llvm=2cc269b1cc09	rust=201e550f7ce7
+runtime|runtime/g10p_r02_cwd [default]	2 cases: exit 2	llvm=77e3466fded9	rust=7661c2f26230
+runtime|runtime/g10p_r03_spawn_errors [--foreign-checks all]	2 cases: exit 2	llvm=a0b2eb0af49e	rust=f3a8d0c29148
+runtime|runtime/g10p_r03_spawn_errors [--foreign-checks off]	2 cases: exit 2	llvm=41aee576f50f	rust=ca21a158e6cd
+runtime|runtime/g10p_r03_spawn_errors [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=a1adbd306280	rust=03ae62fb2753
+runtime|runtime/g10p_r03_spawn_errors [--no-verify]	2 cases: exit 2	llvm=c57aa53f67f5	rust=a516075f5b7b
+runtime|runtime/g10p_r03_spawn_errors [--trust-callers]	2 cases: exit 2	llvm=bd00e951405e	rust=44ba6b545cc9
+runtime|runtime/g10p_r03_spawn_errors [default]	2 cases: exit 2	llvm=bd00e951405e	rust=44ba6b545cc9
+runtime|runtime/g10p_r04_stdin_echo [--foreign-checks all]	2 cases: exit 2	llvm=f762ee0fdbf1	rust=972389687d1b
+runtime|runtime/g10p_r04_stdin_echo [--foreign-checks off]	2 cases: exit 2	llvm=d1ed4be377c4	rust=4daad029208f
+runtime|runtime/g10p_r04_stdin_echo [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=47683d777b30	rust=316a35af84ae
+runtime|runtime/g10p_r04_stdin_echo [--no-verify]	2 cases: exit 2	llvm=9a22c1aa2277	rust=20e9b795c602
+runtime|runtime/g10p_r04_stdin_echo [--trust-callers]	2 cases: exit 2	llvm=c06be3433348	rust=c60af058fe38
+runtime|runtime/g10p_r04_stdin_echo [default]	2 cases: exit 2	llvm=8ae99ad76190	rust=d61f11159f9f
+runtime|runtime/g10p_r05_broken_pipe [--foreign-checks all]	2 cases: exit 2	llvm=591e4e202587	rust=4bab571d2bcf
+runtime|runtime/g10p_r05_broken_pipe [--foreign-checks off]	2 cases: exit 2	llvm=f6c30650c79f	rust=96f456170426
+runtime|runtime/g10p_r05_broken_pipe [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=222717f7229d	rust=2021c5bc7dfa
+runtime|runtime/g10p_r05_broken_pipe [--no-verify]	2 cases: exit 2	llvm=b69a8d701469	rust=5507f429bae9
+runtime|runtime/g10p_r05_broken_pipe [--trust-callers]	2 cases: exit 2	llvm=37d2d683934a	rust=fc1361a82eb7
+runtime|runtime/g10p_r05_broken_pipe [default]	2 cases: exit 2	llvm=37d2d683934a	rust=fc1361a82eb7
+runtime|runtime/g10p_r06_chunks [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=2db1b23b5395	rust=aa50b25d0f9b
+runtime|runtime/g10p_r06_chunks [--no-verify]	2 cases: exit 2	llvm=8bb53cddaf0f	rust=0674746a1c82
+runtime|runtime/g10p_r07_stderr_flood [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=86c033f3458c	rust=a91ec417b952
+runtime|runtime/g10p_r07_stderr_flood [--no-verify]	2 cases: exit 2	llvm=95201daaf395	rust=fff2731d2c1c
+runtime|runtime/g10p_r08_flood_both [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=208f9b1de4bc	rust=463426976fd7
+runtime|runtime/g10p_r08_flood_both [--no-verify]	2 cases: exit 2	llvm=62f911ae6f31	rust=6710ab394325
+runtime|runtime/g10p_r09_read_all_nodup [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=17e5d06e8a24	rust=41f3ef33f3a0
+runtime|runtime/g10p_r09_read_all_nodup [--no-verify]	2 cases: exit 2	llvm=c47a6b59374d	rust=1118d161d984
+runtime|runtime/g10p_r10_exit_kill [--foreign-checks all]	2 cases: exit 2	llvm=12671dd34972	rust=5b5b2efac886
+runtime|runtime/g10p_r10_exit_kill [--foreign-checks off]	2 cases: exit 2	llvm=3dbcf2ec1cab	rust=83e41ff17b77
+runtime|runtime/g10p_r10_exit_kill [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=66b39980fbdf	rust=dc7f6e0feae6
+runtime|runtime/g10p_r10_exit_kill [--no-verify]	2 cases: exit 2	llvm=acf439351ff9	rust=9c3d20e4b8e7
+runtime|runtime/g10p_r10_exit_kill [--trust-callers]	2 cases: exit 2	llvm=7ec32a99e997	rust=e1cbcca42d77
+runtime|runtime/g10p_r10_exit_kill [default]	2 cases: exit 2	llvm=7ec32a99e997	rust=e1cbcca42d77
+runtime|runtime/g10p_r11_hook_setup [--foreign-checks all]	2 cases: exit 2	llvm=e50b81421f50	rust=2a42c494d13d
+runtime|runtime/g10p_r11_hook_setup [--no-verify]	2 cases: exit 2	llvm=1a4c40298eef	rust=444360a1ab85
+runtime|runtime/g10p_r11_hook_setup [default]	2 cases: exit 2	llvm=1a4c40298eef	rust=89d9843873d7
+runtime|runtime/g10p_r12_hook_read1 [--foreign-checks all]	2 cases: exit 2	llvm=2b251bfcc054	rust=adc7c45fb4b5
+runtime|runtime/g10p_r12_hook_read1 [--no-verify]	2 cases: exit 2	llvm=b54076847691	rust=d0f267c9f9cf
+runtime|runtime/g10p_r12_hook_read1 [default]	2 cases: exit 2	llvm=b54076847691	rust=8465a6c4d816
+runtime|runtime/g10p_r13_hook_read2 [--foreign-checks all]	2 cases: exit 2	llvm=47ecb17f6f4c	rust=38e0aecbfcc3
+runtime|runtime/g10p_r13_hook_read2 [--no-verify]	2 cases: exit 2	llvm=e1f6f6e8b69e	rust=8eeeb145746f
+runtime|runtime/g10p_r13_hook_read2 [default]	2 cases: exit 2	llvm=e1f6f6e8b69e	rust=57dd209425f8
+runtime|runtime/g10p_r14_hook_close [--foreign-checks all]	2 cases: exit 2	llvm=36ec4971d6d0	rust=e81df7edb109
+runtime|runtime/g10p_r14_hook_close [--no-verify]	2 cases: exit 2	llvm=d4a1e392a25d	rust=2da92a6fc786
+runtime|runtime/g10p_r14_hook_close [default]	2 cases: exit 2	llvm=d4a1e392a25d	rust=a493100e2386
+runtime|runtime/g10p_r15_hook_wait [--foreign-checks all]	2 cases: exit 2	llvm=5c4555e38eaa	rust=c3481f3e80c6
+runtime|runtime/g10p_r15_hook_wait [--no-verify]	2 cases: exit 2	llvm=35adcc95d539	rust=1223f8f53c87
+runtime|runtime/g10p_r15_hook_wait [default]	2 cases: exit 2	llvm=35adcc95d539	rust=2e0c2f80ad72
+runtime|runtime/g10p_r16_hook_kill [--foreign-checks all]	2 cases: exit 2	llvm=f8040220dd5b	rust=c35f8a652437
+runtime|runtime/g10p_r16_hook_kill [--no-verify]	2 cases: exit 2	llvm=27cdb7144401	rust=5379c352c6e8
+runtime|runtime/g10p_r16_hook_kill [default]	2 cases: exit 2	llvm=27cdb7144401	rust=70b918b24b3f
+runtime|runtime/g10p_r17_requires_catch [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=ca4578f54977	rust=fe0c8e31f4fe
+runtime|runtime/g10p_r17_requires_catch [--no-verify]	2 cases: exit 2	llvm=9bef98d28481	rust=5765fc3654fc
+runtime|runtime/g10p_r18_requires_exit [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=bc027bf049b0	rust=0fbe275c6775
+runtime|runtime/g10p_r18_requires_exit [--no-verify]	2 cases: exit 2	llvm=af18bbcbd8f0	rust=abcd5acf53c6
+runtime|runtime/g10p_r19_requires_off [--trust-callers --foreign-checks off]	2 cases: exit 2	llvm=db27039dfa5b	rust=f51803d6c53d
+runtime|runtime/g10p_r20_hook_setup_late [--foreign-checks all]	2 cases: exit 2	llvm=61040a567f00	rust=75b7dee254bc
+runtime|runtime/g10p_r20_hook_setup_late [--no-verify]	2 cases: exit 2	llvm=3167eb10fb87	rust=6f67b14f5b63
+runtime|runtime/g10p_r20_hook_setup_late [default]	2 cases: exit 2	llvm=3167eb10fb87	rust=2b102b43af1b
+runtime|runtime/g10p_r21_copy_contract [--foreign-checks all]	2 cases: exit 2	llvm=acce35d1abb2	rust=4c2257eeb025
+runtime|runtime/g10p_r21_copy_contract [--foreign-checks off]	2 cases: exit 2	llvm=fede94c606f5	rust=c173ae2a1788
+runtime|runtime/g10p_r21_copy_contract [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=47988dd0ae2e	rust=af10f1e120e8
+runtime|runtime/g10p_r21_copy_contract [--no-verify]	2 cases: exit 2	llvm=a78d0ab80f65	rust=dde004200844
+runtime|runtime/g10p_r21_copy_contract [--trust-callers]	2 cases: exit 2	llvm=5deb6836b082	rust=c1ee3e3c175b
+runtime|runtime/g10p_r21_copy_contract [default]	2 cases: exit 2	llvm=46ef6d07c7b5	rust=33e0d01ee569
+runtime|runtime/g10p_r22_env [--foreign-checks all]	2 cases: exit 2	llvm=6ccd3f40cc43	rust=5edceb4ea14a
+runtime|runtime/g10p_r22_env [--foreign-checks off]	2 cases: exit 2	llvm=8f82e679b52f	rust=a3d0324312ee
+runtime|runtime/g10p_r22_env [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=6bca54e764c1	rust=de257ced8c39
+runtime|runtime/g10p_r22_env [--no-verify]	2 cases: exit 2	llvm=ac4a2e1d3842	rust=1edfd7038a35
+runtime|runtime/g10p_r22_env [--trust-callers]	2 cases: exit 2	llvm=f73cbc5d5de5	rust=1cb599054180
+runtime|runtime/g10p_r22_env [default]	2 cases: exit 2	llvm=6c8f7f5da2c3	rust=6fb719b362ea
+runtime|runtime/g10p_r23_quiet [--foreign-checks all]	2 cases: exit 2	llvm=8e7814a46b69	rust=9b3be2d6c5d3
+runtime|runtime/g10p_r23_quiet [--no-verify]	2 cases: exit 2	llvm=308fdd8385dc	rust=8a4dbd3c701c
+runtime|runtime/g10p_r23_quiet [default]	2 cases: exit 2	llvm=af3090e29655	rust=19d3f5042352
+runtime|runtime/g10p_r24_env_quiet [--foreign-checks all]	2 cases: exit 2	llvm=d077f53331a4	rust=7e2dbcacff64
+runtime|runtime/g10p_r24_env_quiet [--no-verify]	2 cases: exit 2	llvm=efb340037d17	rust=9b9ad44fb624
+runtime|runtime/g10p_r24_env_quiet [default]	2 cases: exit 2	llvm=72f620368bc5	rust=fd5e282bdfb2
 runtime|runtime/g1_r01_copy [--no-verify --trust-callers]	2 cases: exit 2	llvm=f739c990cec5	rust=35e6db3da260
 runtime|runtime/g1_r01_copy [--no-verify]	2 cases: exit 2	llvm=f739c990cec5	rust=35e6db3da260
 runtime|runtime/g1_r01_copy [--trust-callers]	2 cases: exit 2	llvm=f739c990cec5	rust=f6bfa2583dce
@@ -2751,9 +2767,9 @@ runtime|runtime/lg7_rt_bitops [--no-verify]	2 cases: exit 2	llvm=0e49e234f709	ru
 runtime|runtime/lg7_rt_bitops [default]	2 cases: exit 2	llvm=02c95144c071	rust=5aaa35c8a4fa
 runtime|runtime/lg7_rt_field_gep [--no-verify]	2 cases: exit 2	llvm=70f5f81217a3	rust=77421147fc51
 runtime|runtime/lg7_rt_field_gep [default]	2 cases: exit 2	llvm=1d6b97200fd0	rust=d462cd5f24b5
-runtime|runtime/lg7_rt_read_into [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=d437a2119087	rust=40827e2b4863
-runtime|runtime/lg7_rt_read_into [--no-verify]	2 cases: exit 2	llvm=4905fe840f5e	rust=4f92009f87d4
-runtime|runtime/lg7_rt_read_into [default]	2 cases: exit 2	llvm=fc4568466383	rust=45e14cfa66d9
+runtime|runtime/lg7_rt_read_into [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=7da73f5d15df	rust=a289a7aabfff
+runtime|runtime/lg7_rt_read_into [--no-verify]	2 cases: exit 2	llvm=55becec4e276	rust=18edfabb86c7
+runtime|runtime/lg7_rt_read_into [default]	2 cases: exit 2	llvm=adb46cc321e4	rust=d3916fd3b50f
 runtime|runtime/lg8_rt_copy_subview [--no-verify]	2 cases: exit 2	llvm=11e6fe63b5db	rust=1d99a8fe6599
 runtime|runtime/lg8_rt_copy_subview [default]	2 cases: exit 2	llvm=0508f2a15a5b	rust=6cffb78f1bd6
 runtime|runtime/lg8_rt_inout_vec [--no-verify]	2 cases: exit 2	llvm=5bd9aacc1462	rust=a330393b9750
@@ -2794,6 +2810,10 @@ runtime|runtime/lgaps13_vec_nested_field [--no-verify]	2 cases: exit 2	llvm=199f
 runtime|runtime/lgaps13_vec_nested_field [default]	2 cases: exit 2	llvm=199f4947cce1	rust=eb3fd9f97a12
 runtime|runtime/lgaps13_vec_tape [--no-verify]	2 cases: exit 2	llvm=83640051be8c	rust=af0058816139
 runtime|runtime/lgaps13_vec_tape [default]	2 cases: exit 2	llvm=b083e42c9ba1	rust=6687f184de9d
+runtime|runtime/lgaps16_rt_binder_record [--no-verify]	2 cases: exit 2	llvm=ff92c4a0da5b	rust=48bd017eb318
+runtime|runtime/lgaps16_rt_binder_record [default]	2 cases: exit 2	llvm=8cb32ed13e05	rust=c2861f0082ab
+runtime|runtime/lgaps16_rt_binder_scalar [--no-verify]	2 cases: exit 2	llvm=029489b2eb30	rust=49eea16aa03e
+runtime|runtime/lgaps16_rt_binder_scalar [default]	2 cases: exit 2	llvm=c5e1c946059d	rust=2c8fe084d478
 runtime|runtime/lgaps9_str_bytes [--no-verify]	2 cases: exit 2	llvm=f0e7668bce8d	rust=a7e9be021219
 runtime|runtime/lgaps9_str_bytes [default]	2 cases: exit 2	llvm=ccc2b143c0cd	rust=09da4e703036
 runtime|runtime/p1_r_bounds [--no-verify]	2 cases: exit 2	llvm=c701bf27929d	rust=259cf4852f8d
@@ -2971,8 +2991,8 @@ runtime|runtime/p8_rt_while_let_cost [--no-verify]	2 cases: exit 2	llvm=0b292d7d
 runtime|runtime/p8_rt_while_let_cost [default]	2 cases: exit 2	llvm=853f480ecb84	rust=224544702ddf
 runtime|runtime/p9_rt_alias [--no-verify]	2 cases: exit 2	llvm=81560451379c	rust=6676e2f42a98
 runtime|runtime/p9_rt_alias [default]	2 cases: exit 2	llvm=3d166844e1a9	rust=45370970cd24
-runtime|runtime/p9_rt_alias_async [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=300f2d18b871	rust=cc8bb52480de
-runtime|runtime/p9_rt_alias_async [--no-verify]	2 cases: exit 2	llvm=56c7a3e83f97	rust=f2a227975e92
+runtime|runtime/p9_rt_alias_async [--no-verify --foreign-checks all]	2 cases: exit 2	llvm=8a556039ee19	rust=cd8b6fb60264
+runtime|runtime/p9_rt_alias_async [--no-verify]	2 cases: exit 2	llvm=4b0f0cb6e343	rust=09651bcbbba7
 runtime|runtime/p9_rt_alias_const [--no-verify]	2 cases: exit 2	llvm=59aa5a267df7	rust=667663c12b7d
 runtime|runtime/p9_rt_alias_const [default]	2 cases: exit 2	llvm=9e567291ceb3	rust=36f37ac9eef2
 runtime|runtime/p9_rt_alias_p8 [--no-verify]	2 cases: exit 2	llvm=746f0d03e0ef	rust=79a9bd9cd426

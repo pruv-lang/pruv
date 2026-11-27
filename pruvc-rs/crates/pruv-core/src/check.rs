@@ -357,6 +357,14 @@ struct Checker {
     match_movable: HashSet<String>,
     /// G-DB16-1: every binder of an enclosing match arm (a view, never an owner)
     arm_binders: HashSet<String>,
+    /// L-gaps 16 (LG15-MB): struct and enum binders of the enclosing user-enum match arms; moving one whole needs
+    /// match_movable (a consuming match on an owned local)
+    record_binders: HashSet<String>,
+    /// L-gaps 16 review: the variable scrutinees of every enclosing user-enum match arm (also of types that are not
+    /// extended, which active_roots leaves out); a match on one of them is not consuming
+    open_scruts: Vec<String>,
+    /// L-gaps 16 review: binders of a boxed (recursive SCC) payload field; never moved whole
+    boxed_binders: HashSet<String>,
     /// P9a-5: per open value `match`: the arm type (fixed by `want` or the first arm that is not a bare literal),
     /// the arms whose bare literal waits for it, and the number of arms checked so far.
     value_arms: Vec<(Option<GType>, Vec<usize>, usize)>,
@@ -1460,6 +1468,9 @@ impl Checker {
             array_replace: None,
             match_movable: HashSet::new(),
             arm_binders: HashSet::new(),
+            record_binders: HashSet::new(),
+            open_scruts: Vec::new(),
+            boxed_binders: HashSet::new(),
             value_arms: Vec::new(),
             pat_tmp: 0,
             collection_records: Default::default(),
@@ -5805,6 +5816,7 @@ impl Checker {
             if let Expr::Var(v) = &m.scrutinee {
                 if !self.arm_binders.contains(&v.name)
                     && !self.active_roots.iter().any(|(r, _)| *r == v.name)
+                    && !self.open_scruts.contains(&v.name)
                     && scope.get(&v.name).is_some_and(|e| e.kind == "local")
                 {
                     let mut named: HashSet<String> = HashSet::new();
@@ -5822,6 +5834,8 @@ impl Checker {
             let (nl, nc) = if user { (a.line, a.col) } else { (line, col) };
             let saved_movable = self.match_movable.clone();
             let saved_binders = self.arm_binders.clone();
+            let saved_records = self.record_binders.clone();
+            let saved_boxed = self.boxed_binders.clone();
             self.arm_binders.extend(a.binders.iter().cloned());
             let ftypes: Vec<GType> = if user {
                 let v: Vec<GType> = self.fields_of(&t, Some(a.ctor.as_str()))?.into_iter().map(|(_, ft)| ft).collect();
@@ -5882,6 +5896,24 @@ impl Checker {
                     else if bt.is_array() || *bt == strt() { "param" } else { "local" };
                 sc.insert(b.clone(), Entry { ty: bt.clone(), mutable: map_take, kind });
             }
+            let open_scrut = match &m.scrutinee {
+                Expr::Var(v) if user => Some(v.name.clone()),
+                _ => None,
+            };
+            if user {
+                let fnames: Vec<String> = self.fields_of(&t, Some(a.ctor.as_str()))?.into_iter().map(|(n, _)| n).collect();
+                for ((b, bt), fname) in a.binders.iter().zip(ftypes.iter()).zip(fnames.iter()) {
+                    if self.is_struct(bt) || self.is_enum(bt) {
+                        self.record_binders.insert(b.clone());
+                        if self.boxed.contains(&field_label(&t.name, Some(a.ctor.as_str()), fname)) {
+                            self.boxed_binders.insert(b.clone());
+                        }
+                    }
+                }
+            }
+            if let Some(r) = &open_scrut {
+                self.open_scruts.push(r.clone());
+            }
             if movable_scrut {
                 for (b, bt) in a.binders.iter().zip(ftypes.iter()) {
                     // LG9 (G-DB15-2): a str binder too, for `return x` (see Return)
@@ -5920,8 +5952,13 @@ impl Checker {
             if active.is_some() {
                 self.active_roots.pop();
             }
+            if open_scrut.is_some() {
+                self.open_scruts.pop();
+            }
             self.match_movable = saved_movable;
             self.arm_binders = saved_binders;
+            self.record_binders = saved_records;
+            self.boxed_binders = saved_boxed;
         }
         Ok(())
     }
@@ -6825,6 +6862,14 @@ impl Checker {
                     ));
                 }
                 let entry = self.lookup(x.line, x.col, &x.name, scope, &[])?;
+                if self.record_binders.contains(&x.name)
+                    && (!self.match_movable.contains(&x.name) || self.boxed_binders.contains(&x.name)) {
+                    // L-gaps 16 (LG15-MB): a struct or enum binder is moved whole only out of a consuming match on an
+                    // owned local that no arm and no enclosing arm names (the payload is then handed over)
+                    return Err(terr(x.line, x.col, "array_alias",
+                        format!("binder {} views the scrutinee's payload and cannot be moved", x.name),
+                        "match on an owned local that no arm and no enclosing arm names, or copy the fields you need"));
+                }
                 if (entry.ty.is_array() || entry.ty == strt()) && !matches!(entry.kind, "local" | "take")
                     && self.array_replace.as_deref() != Some(x.name.as_str())
                     && !self.match_movable.contains(&x.name) // G-DB16-1: array binder of a consuming match

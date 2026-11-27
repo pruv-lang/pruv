@@ -1,0 +1,38 @@
+// L-gaps 16 (LG15-MB): `move doc` of a struct binder of a consuming match hands the payload over whole (a Vec push).
+// A binder that is not moved is dropped with the scrutinee.
+struct Doc { bytes: [u8], n: i64, invariant len(bytes) <= 100 && 0 <= n }
+enum Parse { Parsed(doc: Doc), Bad(code: i64) }
+
+fn make(k: i64) -> Parse ! alloc
+  requires 0 <= k && k <= 10
+{
+  if k == 0 { return Parse::Bad(3); }
+  let mut b: [u8] = alloc(k, 7);
+  b[0] = 40 + k;
+  return Parse::Parsed(Doc { bytes: move b, n: k });
+}
+
+fn run() -> () ! io, alloc {
+  let mut docs: Vec<Doc> = vec_new::<Doc>();
+  let mut i: i64 = 0;
+  while i < 3 invariant 0 <= i && i <= 3 && len(docs) <= i decreases 3 - i {
+    let r: Parse = make(i);
+    match r {
+      Parse::Parsed(doc) => { docs = vec_push::<Doc>(move docs, move doc); }
+      Parse::Bad(code) => { print(code); }
+    }
+    i = i + 1;
+  }
+  print(len(docs));
+  let mut j: i64 = 0;
+  while j < len(docs) invariant 0 <= j decreases len(docs) - j {
+    match vec_at_mut::<Doc>(inout docs, j) {
+      Some(d) => {
+        print(d.n);
+        if len(d.bytes) > 0 { print(d.bytes[0]); }
+      }
+      None => {}
+    }
+    j = j + 1;
+  }
+}

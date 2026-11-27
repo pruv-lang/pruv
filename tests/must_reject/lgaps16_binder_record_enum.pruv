@@ -1,0 +1,23 @@
+// L-gaps 16 (LG15-MB): an enum binder is not moved whole (only struct binders are); the move stays array_alias
+struct Doc { bytes: [u8], n: i64 }
+enum Parse { Parsed(doc: Doc), Bad(code: i64) }
+enum Outer { Wrap(p: Parse), Nil }
+
+fn make() -> Parse ! alloc {
+  let b: [u8] = alloc(2, 7);
+  return Parse::Parsed(Doc { bytes: move b, n: 2 });
+}
+
+fn run() -> i64 ! alloc {
+  let o: Outer = Outer::Wrap(make());
+  match o {
+    Outer::Wrap(p) => {
+      let q: Parse = move p;
+      match q {
+        Parse::Parsed(d) => { return d.n; }
+        Parse::Bad(code) => { return code; }
+      }
+    }
+    Outer::Nil => { return 0; }
+  }
+}

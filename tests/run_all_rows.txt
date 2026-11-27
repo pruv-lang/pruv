@@ -42,6 +42,7 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r21_copy_contract.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r22_env.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r23_quiet.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r24_env_quiet.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g4_r08_foreign/root.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a01_min_max.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a02_option_find.pruv"}
@@ -176,6 +177,7 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r20_fairness.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r21_backpressure.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r22_copy_contract.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_quiet_eof.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_quiet_ev.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_wait_for.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r24_write_for.pruv"}
@@ -478,7 +480,9 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r20_fairness.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r21_backpressure.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r22_copy_contract.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_quiet_eof.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_quiet_ev.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_quiet_exit.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_wait_for.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r24_write_for.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r25_write_hook.pruv"}
@@ -520,6 +524,7 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r21_copy_contract.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r22_env.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r23_quiet.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r24_env_quiet.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r01_copy.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r02_nested.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r03_variants.pruv"}
@@ -833,6 +838,8 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps12_view_checks_nv.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps13_take_then_fail.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps13_vec_tape.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps16_rt_binder_record.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps16_rt_binder_scalar.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps9_str_bytes.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p1_r_bounds.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p1_r_cast_fail.pruv"}
@@ -1502,6 +1509,7 @@
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r21_copy_contract.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r22_env.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r23_quiet.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r24_env_quiet.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r01_copy.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r02_nested.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r03_variants.pruv"}
@@ -1784,6 +1792,8 @@
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps12_view_checks.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps12_view_checks_trusted.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps13_vec_tape.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps16_rt_binder_record.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps16_rt_binder_scalar.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps9_str_bytes.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p1_r_bounds.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_r_u16_buf.pruv"}
@@ -2066,6 +2076,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r21_copy_contract.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r22_env.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r23_quiet.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r24_env_quiet.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g4_r08_foreign/root.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a01_min_max.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a02_option_find.pruv"}
@@ -2203,6 +2214,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r20_fairness.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r21_backpressure.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r22_copy_contract.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_quiet_eof.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_quiet_ev.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_wait_for.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r24_write_for.pruv"}
@@ -2507,7 +2519,9 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r20_fairness.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r21_backpressure.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r22_copy_contract.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_quiet_eof.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_quiet_ev.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_quiet_exit.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_wait_for.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r24_write_for.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r25_write_hook.pruv"}
@@ -2551,6 +2565,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r21_copy_contract.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r22_env.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r23_quiet.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r24_env_quiet.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r01_copy.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r02_nested.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r03_variants.pruv"}
@@ -2869,6 +2884,8 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps13_take_then_fail.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps13_vec_nested_field.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps13_vec_tape.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps16_rt_binder_record.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps16_rt_binder_scalar.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps9_str_bytes.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p1_r_bounds.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p1_r_cast_fail.pruv"}
@@ -3550,6 +3567,7 @@
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r21_copy_contract.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r22_env.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r23_quiet.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r24_env_quiet.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r01_copy.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r02_nested.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g1_r03_variants.pruv"}
@@ -3840,6 +3858,8 @@
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps12_view_checks_trusted.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps13_vec_nested_field.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps13_vec_tape.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps16_rt_binder_record.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps16_rt_binder_scalar.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/lgaps9_str_bytes.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p1_r_bounds.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_r_u16_buf.pruv"}
@@ -5153,6 +5173,7 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10p_discard_update.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10p_double_end.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10p_early_return.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10p_env_quiet_unconsumed.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10p_env_unconsumed.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10p_forgotten_take.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10p_host_entry.pruv"}
@@ -5174,6 +5195,7 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10p_v_domain_eof.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10p_v_domain_index.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10p_v_domain_stream.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10p_v_env_quiet_unchecked.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10p_v_env_unchecked.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10p_v_eof_empty.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10p_v_exit_zero.pruv"}
@@ -5918,6 +5940,14 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps13_view_reserve_unbounded.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps13_views_len_above.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps13_views_len_below.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps16_binder_record_after_match.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps16_binder_record_borrowed.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps16_binder_record_enum.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps16_binder_record_field_then_whole.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps16_binder_record_loop.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps16_binder_record_nested_scalar.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps16_binder_record_outer_arm.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps16_binder_record_twice.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps9_into_bytes_borrowed.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps9_into_bytes_len.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps9_into_bytes_use_after.pruv"}

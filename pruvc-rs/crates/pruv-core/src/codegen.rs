@@ -107,6 +107,8 @@ struct pruv_Process {
     stderr_eof: bool,
     stdout_buf: ::std::vec::Vec<u8>,
     stderr_buf: ::std::vec::Vec<u8>,
+    // L-gaps 16 (4.4za-QE): spawned by proc_spawn_quiet, so stream 2 is the null device
+    quiet: bool,
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 impl ::std::ops::Drop for pruv_Process {
@@ -155,7 +157,7 @@ fn pruv_proc_status(st: ::std::process::ExitStatus) -> i64 {
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 fn pruv_proc_failed(code: i64) -> pruv_Process {
-    pruv_Process { child: None, stdin: None, outq: None, errq: None, error: code, stdin_open: false, stdout_eof: false, stderr_eof: false, stdout_buf: ::std::vec::Vec::new(), stderr_buf: ::std::vec::Vec::new() }
+    pruv_Process { child: None, stdin: None, outq: None, errq: None, error: code, stdin_open: false, stdout_eof: false, stderr_eof: false, stdout_buf: ::std::vec::Vec::new(), stderr_buf: ::std::vec::Vec::new(), quiet: false }
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 fn pruv_proc_fail(p: &mut pruv_Process, code: i64) {
@@ -213,6 +215,10 @@ fn pruv_proc_spawn_env(program: &str, args: &pruv_ProcessArgs, cwd: &str, names:
     pruv_proc_spawn_in(program, args, cwd, &names.args, &values.args, false)
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_spawn_env_quiet(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: &pruv_ProcessArgs, values: &pruv_ProcessArgs) -> pruv_Process {
+    pruv_proc_spawn_in(program, args, cwd, &names.args, &values.args, true)
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 fn pruv_proc_spawn_in(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: &[::std::string::String], values: &[::std::string::String], quiet: bool) -> pruv_Process {
     pruv_proc_sigpipe();
     if program.is_empty() || program.contains('\0') || cwd.contains('\0') || args.args.iter().any(|a| a.contains('\0')) {
@@ -263,7 +269,7 @@ fn pruv_proc_spawn_in(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: 
         if let Some(q) = errq.take() { pruv_proc_discard(&q); let _ = pruv_proc_finish_stream(q); }
         return pruv_proc_failed(2);
     }
-    pruv_Process { child: Some(child), stdin, outq, errq, error: 0, stdin_open: true, stdout_eof: false, stderr_eof: false, stdout_buf: ::std::vec::Vec::new(), stderr_buf: ::std::vec::Vec::new() }
+    pruv_Process { child: Some(child), stdin, outq, errq, error: 0, stdin_open: true, stdout_eof: false, stderr_eof: false, stdout_buf: ::std::vec::Vec::new(), stderr_buf: ::std::vec::Vec::new(), quiet }
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 fn pruv_proc_take(q: &mut PruvProcStream, max: usize) -> ::std::option::Option<::std::vec::Vec<u8>> {
@@ -8162,7 +8168,10 @@ fn pruv_ev_process(mut l: pruv_Loop, mut p: pruv_Process) -> pruv_Loop {
     if forced {let _=pruv_proc_finish(p,true);pruv_ev_fail(&mut l,2);return l;}
     l.shared.state.lock().unwrap()[i]=PruvEvQueue::default();
     for (k,q) in [&mut p.outq,&mut p.errq].into_iter().enumerate() { if let Some(q)=q { q.rx.attach(l.shared.clone(),i,k); if q.off<q.rest.len(){let mut state=l.shared.state.lock().unwrap(); let mut front: ::std::collections::VecDeque<u8>=q.rest[q.off..].iter().copied().collect(); front.append(&mut state[i].bytes[k]);state[i].bytes[k]=front;q.rest.clear();q.off=0;} } }
-    l.public[i]=PruvEvPublic{kind:3,open:p.stdin_open,..Default::default()};l.slots[i]=PruvEvResource::Process(p);l.last=i as i64;l
+    // a quiet child's stream 2 is the null device: it counts as observed at end of file from the start (R-6l-3),
+    // in the queue too, so the exit event does not wait for the stderr reader thread to run
+    if p.quiet {l.shared.state.lock().unwrap()[i].ended[1]=true;}
+    l.public[i]=PruvEvPublic{kind:3,open:p.stdin_open,ends:[false,p.quiet],..Default::default()};l.slots[i]=PruvEvResource::Process(p);l.last=i as i64;l
 }
 fn pruv_ev_wait(mut l: pruv_Loop, ms: i64) -> pruv_Loop {
     l.last=-1; if l.error!=0 || !(-1..=86400000).contains(&ms){pruv_ev_fail(&mut l,1);return l;}
@@ -8392,6 +8401,8 @@ struct pruv_Process {
     stderr_eof: bool,
     stdout_buf: ::std::vec::Vec<u8>,
     stderr_buf: ::std::vec::Vec<u8>,
+    // L-gaps 16 (4.4za-QE): spawned by proc_spawn_quiet, so stream 2 is the null device
+    quiet: bool,
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 impl ::std::ops::Drop for pruv_Process {
@@ -8440,7 +8451,7 @@ fn pruv_proc_status(st: ::std::process::ExitStatus) -> i64 {
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 fn pruv_proc_failed(code: i64) -> pruv_Process {
-    pruv_Process { child: None, stdin: None, outq: None, errq: None, error: code, stdin_open: false, stdout_eof: false, stderr_eof: false, stdout_buf: ::std::vec::Vec::new(), stderr_buf: ::std::vec::Vec::new() }
+    pruv_Process { child: None, stdin: None, outq: None, errq: None, error: code, stdin_open: false, stdout_eof: false, stderr_eof: false, stdout_buf: ::std::vec::Vec::new(), stderr_buf: ::std::vec::Vec::new(), quiet: false }
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 fn pruv_proc_fail(p: &mut pruv_Process, code: i64) {
@@ -8497,6 +8508,10 @@ fn pruv_proc_spawn_env(program: &str, args: &pruv_ProcessArgs, cwd: &str, names:
     pruv_proc_spawn_in(program, args, cwd, &names.args, &values.args, false)
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_spawn_env_quiet(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: &pruv_ProcessArgs, values: &pruv_ProcessArgs) -> pruv_Process {
+    pruv_proc_spawn_in(program, args, cwd, &names.args, &values.args, true)
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 fn pruv_proc_spawn_in(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: &[::std::string::String], values: &[::std::string::String], quiet: bool) -> pruv_Process {
     pruv_proc_sigpipe();
     if program.is_empty() || program.contains('\0') || cwd.contains('\0') || args.args.iter().any(|a| a.contains('\0')) {
@@ -8547,7 +8562,7 @@ fn pruv_proc_spawn_in(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: 
         if let Some(q) = errq.take() { pruv_proc_discard(&q); let _ = pruv_proc_finish_stream(q); }
         return pruv_proc_failed(2);
     }
-    pruv_Process { child: Some(child), stdin, outq, errq, error: 0, stdin_open: true, stdout_eof: false, stderr_eof: false, stdout_buf: ::std::vec::Vec::new(), stderr_buf: ::std::vec::Vec::new() }
+    pruv_Process { child: Some(child), stdin, outq, errq, error: 0, stdin_open: true, stdout_eof: false, stderr_eof: false, stdout_buf: ::std::vec::Vec::new(), stderr_buf: ::std::vec::Vec::new(), quiet }
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 fn pruv_proc_take(q: &mut PruvProcStream, max: usize) -> ::std::option::Option<::std::vec::Vec<u8>> {

@@ -1,1 +1,1 @@
-{"stage": "type", "code": "foreign_move", "out_contains": ["move of a non-collection value"]}
+{"stage": "type", "code": "array_alias", "out_contains": ["cannot be moved"]}

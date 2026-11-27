@@ -1,0 +1,25 @@
+// L-gaps 16 (LG15-MB): an enclosing arm on the same owner is open, so its binder views the payload a move would take
+struct Doc { bytes: [u8], n: i64 }
+enum Parse { Parsed(doc: Doc), Bad(code: i64) }
+
+fn make() -> Parse ! alloc {
+  let b: [u8] = alloc(2, 7);
+  return Parse::Parsed(Doc { bytes: move b, n: 2 });
+}
+
+fn run() -> i64 ! alloc {
+  let mut docs: Vec<Doc> = vec_new::<Doc>();
+  let q: Parse = make();
+  match q {
+    Parse::Parsed(outer) => {
+      match q {
+        Parse::Parsed(doc) => {
+          docs = vec_push::<Doc>(move docs, move doc);
+          return len(docs) + outer.n;
+        }
+        Parse::Bad(code) => { return 0; }
+      }
+    }
+    Parse::Bad(code) => { return 1; }
+  }
+}

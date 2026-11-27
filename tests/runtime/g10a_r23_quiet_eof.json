@@ -1,0 +1,8 @@
+{
+  "backends": ["rust", "llvm"],
+  "flags_matrix": [["--no-verify"], ["--no-verify", "--foreign-checks", "all"]],
+  "exit": 0,
+  "stdout_contains": "quiet eof ok",
+  "stderr_absent": "2Qp",
+  "g6_drop_balance": true
+}

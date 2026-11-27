@@ -1,0 +1,14 @@
+// L-gaps 16 (LG15-MB): the scrutinee is a plain parameter (a borrowed view), so its struct binder cannot be moved
+struct Doc { bytes: [u8], n: i64 }
+enum Parse { Parsed(doc: Doc), Bad(code: i64) }
+
+fn run(r: Parse) -> i64 ! alloc {
+  let mut docs: Vec<Doc> = vec_new::<Doc>();
+  match r {
+    Parse::Parsed(doc) => {
+      docs = vec_push::<Doc>(move docs, move doc);
+    }
+    Parse::Bad(code) => {}
+  }
+  return len(docs);
+}

@@ -1,0 +1,7 @@
+{
+  "backends": ["rust", "llvm"],
+  "flags_matrix": [["--no-verify"]],
+  "exit": 0,
+  "stdout_contains": "quiet exit ok",
+  "g6_drop_balance": true
+}

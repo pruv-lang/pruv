@@ -1,0 +1,23 @@
+// L-gaps 16 review (4.4za-QE): a quiet child whose stdout already reached end of file before it joins the loop
+// gives the exit event (3) on the first ev_wait, without waiting for the stderr reader thread to run.
+fn quiet_exit(child: str) -> i64 ! async, net, proc, alloc {
+ let mut a: ProcessArgs = proc_args_new();
+ a = proc_args_push(move a, "errout");
+ a = proc_args_push(move a, "0");
+ a = proc_args_push(move a, "0");
+ let mut p: Process = proc_spawn_quiet(child, a, "");
+ p = proc_close_stdin(move p);
+ let mut n: i64 = 0;
+ while !proc_eof(p, 1) && n < 1000 decreases 1000 - n {
+  p = proc_read(move p, 1, 65536);
+  n = n + 1;
+ }
+ let mut l: Loop = ev_new(2);
+ l = ev_add_process(move l, move p);
+ if !ev_ok(l) { let r0: Result<i64> = ev_close(move l); return 100; }
+ l = ev_wait(move l, 0);
+ let kind: i64 = ev_event_kind(l);
+ l = ev_proc_wait(move l, 0);
+ let r: Result<i64> = ev_close(move l);
+ return kind;
+}

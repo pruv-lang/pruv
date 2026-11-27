@@ -356,3 +356,9 @@ P1 / P4 / P5 are the classes `q.py` already explains. No perf timing was run.
 - 4.4y-PW: the language half is closed (per-element `p(docs[k])` facts reach a `vec_get` call argument, R-6e-3).
   The parts walk still runs in the scan: keeping the parsed documents needs moving the matched
   `JsonParse::Parsed(doc)` binder into a `Vec`, which is new language row LG15-MB. No qwen code changed.
+
+### Rows after L-gaps 16
+
+- LG15-MB is closed (SPEC R-6e-12b): a struct binder of a consuming match such as `JsonParse::Parsed(doc)` can be
+  moved whole into a `Vec`. The 4.4y-PW bench half (keep the parsed documents instead of walking parts in the scan)
+  is unblocked but not done; no qwen code changed.

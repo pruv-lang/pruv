@@ -1,0 +1,9 @@
+// spec: R-6l-4 reject
+fn bad(program: str) -> Result<i64> ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let names: ProcessArgs = proc_args_new();
+  let values: ProcessArgs = proc_args_new();
+  let p: Process = proc_spawn_env_quiet(program, args, "", names, values);
+  let q: Process = proc_close_stdin(move p);
+  return proc_wait(move q);
+}

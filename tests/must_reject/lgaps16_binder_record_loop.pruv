@@ -1,0 +1,24 @@
+// L-gaps 16 (LG15-MB): a struct binder moved inside a loop of its arm would be moved again on the next round
+struct Doc { bytes: [u8], n: i64 }
+enum Parse { Parsed(doc: Doc), Bad(code: i64) }
+
+fn make() -> Parse ! alloc {
+  let b: [u8] = alloc(2, 7);
+  return Parse::Parsed(Doc { bytes: move b, n: 2 });
+}
+
+fn run() -> i64 ! alloc {
+  let mut docs: Vec<Doc> = vec_new::<Doc>();
+  let q: Parse = make();
+  match q {
+    Parse::Parsed(doc) => {
+      let mut i: i64 = 0;
+      while i < 2 invariant 0 <= i && i <= 2 && len(docs) <= i decreases 2 - i {
+        docs = vec_push::<Doc>(move docs, move doc);
+        i = i + 1;
+      }
+    }
+    Parse::Bad(code) => {}
+  }
+  return len(docs);
+}
