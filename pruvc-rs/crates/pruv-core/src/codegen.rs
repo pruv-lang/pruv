@@ -1531,6 +1531,8 @@ struct Gen<'a> {
     frames: Vec<(HashSet<String>, HashSet<String>, bool, bool)>,
     take_arrays: HashSet<String>,
     take_ext: HashSet<String>,
+    /// P10 (G-B2-L1): take parameters of the function being generated (owned roots a field moves out of)
+    take_params: HashSet<String>,
     /// G9 A2: types whose runtime contract helpers (size / equality) are needed
     need_size: HashSet<String>,
     need_eq: HashSet<String>,
@@ -1712,6 +1714,7 @@ impl<'a> Gen<'a> {
             frames: Vec::new(),
             take_arrays: HashSet::new(),
             take_ext: HashSet::new(),
+            take_params: HashSet::new(),
             need_size: HashSet::new(),
             need_eq: HashSet::new(),
             need_bits: HashSet::new(),
@@ -2170,6 +2173,7 @@ impl<'a> Gen<'a> {
         self.params = f.params.iter().map(|p| p.name.clone()).collect();
         self.take_arrays = f.params.iter().filter(|p| p.take && is_array_name(&p.ty)).map(|p| p.name.clone()).collect();
         self.take_ext = f.params.iter().filter(|p| p.take && self.is_ext(Some(&p.ty))).map(|p| p.name.clone()).collect();
+        self.take_params = f.params.iter().filter(|p| p.take).map(|p| p.name.clone()).collect();
         if self.g5 {
             self.inouts = f.params.iter().filter(|p| p.mode_pos.is_some()).map(|p| p.name.clone()).collect();
         }
@@ -5601,6 +5605,11 @@ pruv_hi <= (pruv_b.len() as i128) && \
             // (`mem::take` would need `Default`, which a tuple holding a struct or an enum lacks)
             Expr::Move(x) if x.name.starts_with("pruv_tup_d")
                 || (x.ty.as_deref().is_some_and(crate::gtype::is_tuple_name) && !self.inouts.contains(&x.name)) =>
+                Ok(format!("{}.{}", x.name, x.fields.join("."))),
+            // P10 (G-B2-L1): a field of an owned root (a take parameter or a local, not a place or a view) moves out
+            // by a partial move, as hand Rust writes it; Rust allows the restore that reassigns it
+            Expr::Move(x) if !self.inouts.contains(&x.name) && !self.refs.contains(&x.name)
+                && (self.take_params.contains(&x.name) || !self.params.contains(&x.name)) =>
                 Ok(format!("{}.{}", x.name, x.fields.join("."))),
             Expr::Move(x) => Ok(format!("::std::mem::take(&mut {}.{})", x.name, x.fields.join("."))),
             // G5 A0: never reaches the generator (the driver's A0 guard stops the program earlier)

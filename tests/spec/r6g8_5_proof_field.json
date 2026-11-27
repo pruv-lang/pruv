@@ -1,1 +1,1 @@
-{"gen_contains": ["::std::mem::take(&mut s.text)"]}
+{"gen_contains": ["let t = s.text;"]}

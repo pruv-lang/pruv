@@ -4394,6 +4394,23 @@ impl<'a> FnGen<'a> {
                                 .names.insert(x.name.clone(), binding);
                             return Ok(());
                         }
+                        // P10 (G-B5-R10): a whole local array names the same data/length/cap slot (no copy)
+                        if let Bind::Slot(slot) = self.lookup(&place.name)? {
+                            // the alias owns nothing: no last-use move may take the slot through it (as a `ref` local)
+                            self.views = true;
+                            self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?
+                                .names.insert(x.name.clone(), Bind::Slot(slot));
+                            return Ok(());
+                        }
+                    } else if !self.is_ext(&x.ty) && !matches!(&*arg.expr, Expr::Index(_) | Expr::Call(_)) {
+                        // P10 (G-B5-R10): an array field is its `{ data, len, cap }` storage inside the record
+                        self.begin_temps();
+                        let ptr = self.place_ptr(&arg.expr)?;
+                        let slot = self.array_slot(ptr, &x.ty)?;
+                        self.end_temps()?;
+                        self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?
+                            .names.insert(x.name.clone(), Bind::Slot(slot));
+                        return Ok(());
                     }
                 }
                 if !matches!(kind, Kind::I64 | Kind::Narrow(_) | Kind::I1 | Kind::Agg) || self.is_ext(&x.ty) {

@@ -1,0 +1,9 @@
+{
+  "gen_contains": ["let pruv_x: i64 = ((unsafe { *m.get_unchecked((0i64) as usize) }) + 1i64); unsafe { *b.get_unchecked_mut(pruv_i as usize) = pruv_x; }"],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["9", "14"],
+    "alloc_balance": true
+  }
+}

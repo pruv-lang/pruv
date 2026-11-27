@@ -1,1 +1,1 @@
-{"gen_contains":["let t = ::std::mem::take(&mut p.text.first);","let t = ::std::mem::take(&mut p.first);"],"gen_absent":[".clone()"]}
+{"gen_contains":["let t = p.text.first;","let t = p.first;"],"gen_absent":[".clone()"]}

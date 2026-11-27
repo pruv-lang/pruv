@@ -1,0 +1,26 @@
+// spec: R-6e-16 accept
+// P10 (G-B2-L1): `return move d.f;` of a take parameter or an owned local moves the field out (hand Rust
+// `return d.f;`, a partial move; the rest of d drops at the return).
+struct Tape { tape: [u8], n: i64 }
+fn give(take p: Tape) -> [u8]
+  requires len(p.tape) == 3
+  ensures len(result) == 3
+{
+  return move p.tape;
+}
+fn local_tape(k: i64) -> [u8] ! alloc
+  requires k >= 0 && k <= 8
+  ensures len(result) == k
+{
+  let t: [u8] = alloc(k, 7);
+  let p: Tape = Tape { tape: move t, n: 3 };
+  return move p.tape;
+}
+fn run() -> () ! io, alloc {
+  let t: [u8] = alloc(3, 5);
+  let p: Tape = Tape { tape: move t, n: 1 };
+  let a: [u8] = give(move p);
+  let b: [u8] = local_tape(4);
+  print(len(a) + len(b));
+  print(a[0] + b[3]);
+}
