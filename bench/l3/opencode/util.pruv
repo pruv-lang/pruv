@@ -28,11 +28,25 @@ pub fn span_view(t: [u8], s: i64, l: i64) -> ref [u8] from(t)
   return subview(t, s, s + l);
 }
 
-// cfg_text[s..s+l] borrowed as text ("" for an absent/invalid ref, over 1000000000 bytes or invalid UTF-8; hand
-// `conf.<field>.as_deref()`). Begin refuses a configuration text over 1000000000 bytes with InputTooLarge, so the
-// length guard never changes a value of an admitted case. The hand decodes the text once (lossy) and borrows; here
-// each read checks the span's UTF-8 (row 4.4o-CV).
+// cfg_text[s..s+l] borrowed as text ("" for an absent/invalid ref, over 1000000000 bytes or a span cut inside a
+// character; hand `conf.<field>.as_deref()`). The caller checked the whole configuration text once (`utf8_valid`, the
+// hand's one `Config::decode`), so a span is valid text iff both ends are char boundaries: two byte tests, no scan.
+// Begin refuses a configuration text over 1000000000 bytes with InputTooLarge, so the length guard never changes a
+// value of an admitted case.
 pub fn cfg_view(t: [u8], s: i64, l: i64) -> ref str from(t)
+  requires utf8_valid(t)
+  ensures len(result) <= 1000000000
+{
+  if !crate::packet::ref_ok(s, l, len(t)) || s < 0 || l > 1000000000 { return ""; }
+  let e: i64 = s + l;
+  if s < len(t) && t[s] >= 128 && t[s] < 192 { return ""; }
+  if e < len(t) && t[e] >= 128 && t[e] < 192 { return ""; }
+  return subview(t, s, e);
+}
+
+// t[s..s+l] borrowed as text with its own UTF-8 check ("" for an absent/invalid ref, over 1000000000 bytes or invalid
+// UTF-8): for a bank whose bytes are not known valid as a whole (convert's fallback title in the text bank).
+fn span_text(t: [u8], s: i64, l: i64) -> ref str from(t)
   ensures len(result) <= 1000000000
 {
   if !crate::packet::ref_ok(s, l, len(t)) || s < 0 || l > 1000000000 { return ""; }
@@ -41,11 +55,11 @@ pub fn cfg_view(t: [u8], s: i64, l: i64) -> ref str from(t)
   return "";
 }
 
-// owned copy of `cfg_view` (one copy)
+// owned copy of `span_text` (one copy)
 pub fn cfg_str(t: [u8], s: i64, l: i64) -> str ! alloc
   ensures len(result) <= 1000000000
 {
-  return copy(cfg_view(t, s, l));
+  return copy(span_text(t, s, l));
 }
 
 // ---- checked bank / pool arithmetic ----

@@ -39,6 +39,8 @@ fn p100(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8], event: [i64]) -> [i6
   if ctl[6] != 0 { return crate::packet::done_internal(ctl, 28); }
   let mode: i64 = ctl[1];
   if mode < 0 || mode > 2 { return crate::packet::done_internal(ctl, 28); }
+  // the configuration text is checked once (hand `Config::decode`); the thread, OPENCODE_DB and home reads borrow it
+  if !utf8_valid(cfg_text) { return crate::packet::done_simple(ctl, 0, 3, 6); }
   if mode == 1 {
     let thread: ref str = crate::util::cfg_view(cfg_text, cfg[10], cfg[11]);
     if !crate::names::valid_thread(thread) { return crate::packet::done_simple(ctl, 0, 1, 1); }
@@ -49,10 +51,14 @@ fn p100(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8], event: [i64]) -> [i6
     crate::path::DbPath::File(p) => {
       let np: i64 = len(p);
       let cur: i64 = len(text);
-      if !crate::util::bank_fits(cur, np) || np > 1073741823 { return crate::packet::done_simple(ctl, 1, 3, 5); }
-      let mut pool: [u8] = crate::util::to_bytes(p);
-      let parent: [u8] = crate::path::dirname_bytes(pool);
+      // hand `db.len() > 1_000_000_000` => InputTooLarge; the text bank must also take the path (step wire)
+      if np > 1000000000 || !crate::util::bank_fits(cur, np) { return crate::packet::done_simple(ctl, 1, 3, 5); }
+      // the parent is borrowed from the owned path (hand `dirname(&db)`); the request pool holds both, one allocation
+      let parent: ref str = crate::path::dirname(p);
       let nq: i64 = len(parent);
+      let mut pool: [u8] = alloc(0, 0);
+      arr_reserve(inout pool, np + nq);
+      arr_append(inout pool, p, 0, np);
       arr_append(inout pool, parent, 0, nq);
       let patches: [i64] = crate::path::append_patch(3, cur, np, 4, 0);
       let mut c: [i64] = copy(ctl);
