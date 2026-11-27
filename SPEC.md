@@ -855,13 +855,19 @@ fn tree_count(t: Tree) -> i64
   element store) and is `Vec<u8>`, `Vec<u16>` or `Vec<i64>` in Rust, so session bytes stay bytes and are not
   widened to `Vec<i64>`. The owner may be a child or package module (4.4w-VD, L-gaps 13: a JSON document of
   `source: [u8]` and `tape: [i64]` is a `Vec` element; on LLVM the element drop of R-6e-22 frees both buffers).
-  `[bool]` and `str` fields still do not make an owned aggregate (`type/foreign_owned_type`): neither has an
-  element-drop or field-borrow path on LLVM yet. A `vec_get::<S>(v, i).f` read of a collection or buffer field
-  borrows it (Rust `&v[i].f`), and `vec_get::<S>(v, i)` is also a read-only call argument (borrowed, Rust
-  `&v[i]`; the R-6e-20 argument rule). Moving an element out is not offered: `vec_pop` is a
-  view-list operation only and there is no `vec_remove`, so an owned-aggregate element leaves its Vec only when the Vec is dropped. Tests:
+  `[bool]` and `str` fields still do not make an owned aggregate (`type/foreign_owned_type`): L-gaps 13 widened
+  the field set only by the integer buffers a parsed document needs, and admitting the other two is a separate row.
+  A `vec_get::<S>(v, i).f` read of a collection or buffer field borrows it (Rust `&v[i].f`), and
+  `vec_get::<S>(v, i)` or a field path of it is also a read-only call argument (borrowed in place, Rust `&v[i]` or
+  `&(*v.get_unchecked(i)).f`; the R-6e-20 argument rule). In an unverified build, a range check that fails in a
+  later argument of the same call also drops an owned value already moved into an earlier `take` argument.
+  Moving an element out is not offered: `vec_pop` is a view-list operation only and there is no `vec_remove`, so
+  an owned-aggregate element leaves its Vec only when the Vec is dropped, replaced or cleared (`vec_clear`,
+  R-6e-10). Tests:
   [Vec of a buffer struct](tests/runtime/lgaps13_vec_tape.pruv),
   [module element as argument](tests/runtime/g4_lgaps13_vec_doc/root.pruv),
+  [nested field as argument, Rust](tests/runtime/lgaps13_vec_nested_field.pruv),
+  [moved argument dropped on a later failure](tests/runtime/lgaps13_take_then_fail.pruv),
   [let copy rejected](tests/must_reject/lgaps13_vec_tape_copy_let.pruv),
   [owned argument rejected](tests/must_reject/lgaps13_vec_tape_copy_push.pruv),
   [`[bool]` field rejected](tests/must_reject/lgaps13_vec_bool_field.pruv), [map value](tests/spec/lgaps13_map_i64_buffer.pruv).
@@ -874,7 +880,7 @@ fn tree_count(t: Tree) -> i64
   `vec_push::<S>` and `map_insert::<i64, S>` move the element in without cloning. The element must be a
   constructor, a call result or `move y`; anything else is `type/foreign_move`. When `S` has owned fields,
   `vec_get::<S>(v, i)` is allowed only as the receiver of a field access (`vec_get::<S>(v, i).f`, Rust
-  `v[i as usize].f`, or `get_unchecked` under R-6d-2), and `map_get::<i64, S>(m, k)` only as a direct `match`
+  `v[i as usize].f`, or `get_unchecked` under R-6d-2) or as a read-only call argument (above), and `map_get::<i64, S>(m, k)` only as a direct `match`
   scrutinee whose `Some(r)` binds a borrowed view (Rust `match m.get(&k)`). Other uses of those reads are
   `type/foreign_owned_type`. A plain `S` keeps the copying reads.
 - R-6e-4 **In-place map element update.** `map_get_mut::<K, V>(inout P, k)` is allowed only as the direct
@@ -910,7 +916,7 @@ fn tree_count(t: Tree) -> i64
   collection element or value in the program. Such an aggregate can be an element of
   `Vec<S>` or a value of `HashMap<i64, S>` or `HashMap<String, S>` in the positions of R-6e-3.
   A non-generic *holder record* may have direct fields of such a nested-collection record type
-  besides scalar, plain-value, R-6e-1 owned and `[u8]` fields. A holder record is itself an owned
+  besides scalar, plain-value, R-6e-1 owned and `[u8]`, `[u16]` or `[i64]` fields. A holder record is itself an owned
   aggregate with nested collections: it may be an element or value in the positions above, a
   `HashMap<String, H>` value of a root state field, a local, a `take` parameter or a result. It is
   constructed without a copy from a call result or `move x` per field (R-6e-12); a plain binding as a
@@ -1248,7 +1254,7 @@ fn tree_count(t: Tree) -> i64
 - R-6e-22 **Vectors of plain structs on LLVM (L-gaps VL).** The native vector of R-6e-21 also holds a declared
   non-recursive struct or enum `S`, wherever `Vec<S>` occurs: a struct field, a parameter (including `inout`), a
   result, a `let`, or a `vec_new` / `vec_push` / `vec_get` / `vec_at_mut` call, for every element type the checker
-  admits as a vector element (a plain value, or an owned aggregate with `[u8]` buffers or `Vec<i64>` / `Vec<bool>`
+  admits as a vector element (a plain value, or an owned aggregate with `[u8]`, `[u16]` or `[i64]` buffers or `Vec<i64>` / `Vec<bool>`
   handles); each element is dropped with its owned fields when the vector
   is dropped or replaced, and a field assignment through `vec_at_mut` drops the old field value. Output and the
   allocation balance match the Rust backend. An element type with a `String` field stays a Rust-backend type

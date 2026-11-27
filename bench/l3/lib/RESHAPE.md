@@ -2350,6 +2350,13 @@ Only `bench/l3/qwen` changes (no compiler, no `pkgs/`, so no consumer runs). Det
   success after `m3_all --quick --update-golden` (all stages ok; digests of `g9_ext_in_vec`, the
   `lgaps12_view_checks*` programs and mutants shifted by the new must_reject files changed); `--list-rows` diff
   (14 new rows, `tests/run_all_rows.txt` updated); `bench/l3/qwen/test_impl.py` 27/27 rs/rust and rs/llvm.
-- Audit: one review round (Codex 2 account; the default account was at its limit).
+- Audit: one review round (Codex 2 account; the default account was at its limit). Fixed in a follow-up commit:
+  a nested holder-record field of a Vec element as a read-only argument moved out of the vector in Rust (now a
+  place borrow; test `lgaps13_vec_nested_field`); on LLVM a range-check failure
+  in a later argument leaked an owned value already moved into an earlier `take` argument (now dropped on that
+  path, 3/3 allocations against 3/2 before; test `lgaps13_take_then_fail`);
+  R-6e-3, R-6e-6 and R-6e-22 text (read-only argument context, `vec_clear`, the `[bool]`/`str` reason, buffer
+  field lists). Not taken: an upper-bound-only `vec_reserve` reject and a same-Vec `inout` alias test (optional).
+  Confirm review (same account): all three fixed, no new findings.
 - Next: P10-M1 for `Vec<T>` elements, then the hand's parsed-entry vector on top of 4.4w-VD (bench rows 4.3e-D /
   4.4d-QS).

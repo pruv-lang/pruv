@@ -2012,6 +2012,8 @@ runtime|tests/runtime/lgaps11_str_bytes_paths.pruv	1 case: obl=41 1	--infer=6d85
 runtime|tests/runtime/lgaps12_view_checks.pruv	1 case: obl=11 1	--infer=896f47cb8903
 runtime|tests/runtime/lgaps12_view_checks_nv.pruv	1 case: obl=11 1	--infer=896f47cb8903
 runtime|tests/runtime/lgaps12_view_checks_trusted.pruv	1 case: obl=11 1	--infer=55d53d34c096
+runtime|tests/runtime/lgaps13_take_then_fail.pruv	1 case: obl=5 1	--infer=43b169e41e8c
+runtime|tests/runtime/lgaps13_vec_nested_field.pruv	1 case: obl=8 1	--infer=aff016696077
 runtime|tests/runtime/lgaps13_vec_tape.pruv	1 case: obl=55 1	--infer=0e59b79918ad
 runtime|tests/runtime/lgaps9_str_bytes.pruv	1 case: obl=25 1	--infer=67352951afef
 runtime|tests/runtime/p1_r_bounds.pruv	1 case: obl=9 1	--infer=55e5c046f31d

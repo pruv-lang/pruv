@@ -2782,6 +2782,9 @@ runtime|runtime/lgaps12_view_checks [default]	2 cases: exit 2	llvm=ba3f98b4bb27	
 runtime|runtime/lgaps12_view_checks_nv [--no-verify]	2 cases: exit 2	llvm=e693710eea3f	rust=71d515d35ffa
 runtime|runtime/lgaps12_view_checks_trusted [--foreign-checks all]	2 cases: exit 2	llvm=c08069301e1d	rust=1b70fc975b81
 runtime|runtime/lgaps12_view_checks_trusted [default]	2 cases: exit 2	llvm=5496ce1897d6	rust=0b02b3896ae8
+runtime|runtime/lgaps13_take_then_fail [--no-verify]	2 cases: exit 2	llvm=44c6b3badec9	rust=ac4f51767747
+runtime|runtime/lgaps13_vec_nested_field [--no-verify]	2 cases: exit 2	llvm=199f4947cce1	rust=8c6b8c279963
+runtime|runtime/lgaps13_vec_nested_field [default]	2 cases: exit 2	llvm=199f4947cce1	rust=eb3fd9f97a12
 runtime|runtime/lgaps13_vec_tape [--no-verify]	2 cases: exit 2	llvm=83640051be8c	rust=af0058816139
 runtime|runtime/lgaps13_vec_tape [default]	2 cases: exit 2	llvm=b083e42c9ba1	rust=6687f184de9d
 runtime|runtime/lgaps9_str_bytes [--no-verify]	2 cases: exit 2	llvm=f0e7668bce8d	rust=a7e9be021219

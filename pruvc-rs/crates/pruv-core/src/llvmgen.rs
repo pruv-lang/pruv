@@ -6732,6 +6732,7 @@ impl<'a> FnGen<'a> {
             return self.trusted_call(f, e, owned);
         }
         let mut args: Vec<String> = Vec::new();
+        let mut pending: Vec<usize> = Vec::new();
         for (i, x) in a.iter().enumerate() {
             let prm = f.params.get(i).ok_or_else(|| IDX_ERR.to_string())?;
             if fixed_key(&prm.ty).is_some() {
@@ -6769,6 +6770,13 @@ impl<'a> FnGen<'a> {
                 // LG9: the callee owns (and drops) fresh storage holding an owned value
                 let v = self.ev(x, true)?;
                 let sp = self.spill(&v)?;
+                // until the call the caller still owns it, so a failure in a later argument drops it
+                let mut held = v.clone();
+                held.p = Some(sp.clone());
+                if let Some(region) = self.temps.last_mut() {
+                    pending.push(region.len());
+                    region.push(held);
+                }
                 args.push(format!("ptr {}", sp));
                 continue;
             }
@@ -6806,6 +6814,12 @@ impl<'a> FnGen<'a> {
                     args.push(format!("{} {}", lty(ty), v.a));
                 }
                 k => args.push(format!("{} {}", k.name(), v.a)),
+            }
+        }
+        for at in pending.iter().rev() {
+            // the callee owns the moved arguments from here
+            if let Some(region) = self.temps.last_mut() {
+                region.remove(*at);
             }
         }
         if self.cost { self.cost_call(&f.name, &args)?; }

@@ -5935,6 +5935,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
                             key_is_collection(ty) || GType::from_key(ty).is_array()
                         }) {
                             format!("(unsafe {{ &{} }})", field)
+                        } else if self.is_ext(expr_ty(e).as_deref()) {
+                            // an extended field stays a place so a read view borrows it in place (no move out of the Vec)
+                            format!("(*unsafe {{ ({}).get_unchecked(({}) as usize) }}).{}", v, i, path.join("."))
                         } else {
                             format!("(unsafe {{ {} }})", field)
                         });
