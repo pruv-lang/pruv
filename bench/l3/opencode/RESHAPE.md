@@ -311,4 +311,17 @@ Rows:
 | 4.4k-SR (language, new) | open | no `String` reserve / with-capacity (hand `join` allocates once) and no insert at 0 (hand `s.insert(0, '/')`); the draft grows the `String` and pushes the root first |
 
 Tests: no `.pruv` file of `opencode/` changed, so `test_impl.py`, the scope verifies, `q.py` and `q_mutants.py` were
-not rerun; the 4.4j results (§8) stand for the unchanged code. No measurement.
+not rerun; the 4.4j results (§8) stand for the unchanged code. Only the comment above `normalize` in `path.pruv`
+changed (it now names 4.4k-VS and 4.4k-SR); `q_mutants.py --check` after it: all 16 markers present exactly once.
+No measurement.
+
+Other-model comparison (Codex `gpt-6.2-astra`, review role, given the generated Rust of the draft and the hand Rust
+without this section): the draft and the hand agree on the nine edge inputs it traced (`""`, `"/"`, `"//"`, `"a/.."`,
+`"../.."`, `"/.."`, `"./"`, `"a/./b/"`, `"/a/../../b/"`; traced by hand, not run); it found no SPEC feature that proves the three push bounds
+with the view-list representation, so the gap stands. Its other findings:
+- The draft's empty-input branch copies twice (`String::from(".")` then `to_owned()`); fix when 4.4b-NV reopens.
+- A hybrid that keeps the `(start, end)` offsets but builds a `String` with `string_push_str(subview(p, lo, hi))` and
+  ends with `string_into_str(move s)` could prove the bound and drop `join`'s `utf8_valid` scan. Not done: the piece
+  list would still differ from the hand's `Vec<&str>`, so it does not close 4.4b-NV; recorded as an option on 4.4k-VS.
+- No `String` reserve / with-capacity / insert builtin exists (agrees with 4.4k-SR).
+- The comment above `normalize` was stale (said Pruv has no view lists); fixed in this step.

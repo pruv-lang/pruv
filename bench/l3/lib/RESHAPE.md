@@ -1656,6 +1656,10 @@ All after the last code change (F1 / F4 from the structure comparison).
   contracts, or a catalog join over a view list (hand `out.join(sep)`) with the total in its `ensures`.
 - New (language): 4.4k-SR, no `String` reserve / with-capacity and no `String` insert at 0 (hand `join` allocates
   once and inserts the root `/`).
+- Independent review (Codex `gpt-6.2-astra`): draft and hand agree on nine edge inputs; no SPEC feature proves the
+  bounds, so 4.4k-VS stands. Option on 4.4k-VS (unverified): keep the offsets but build a `String` with
+  `string_push_str(subview(..))` and `string_into_str`; drops `join`'s `utf8_valid` scan but still differs from the
+  hand's piece list. See `opencode/RESHAPE.md` §9.
 - Still open in OpenCode: 4.4b-NV (now blocked by 4.4k-VS), 4.4b-P208, 4.3g-A2, 4.3g-K3, 4.3g-M07, 4.3g-BS,
   4.3g-SQ, 4.4f-CW, 4.4j-TU, 4.4j-ME.
 - Still open from 4.4j and before: as listed there.

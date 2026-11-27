@@ -3,8 +3,9 @@
 // admit.pruv, sql.pruv and list.pruv share (ask, proceed, append_patch, ok_event, db_error, fail_with, rows_ok).
 
 // ---- POSIX join/normalize (Node path.posix), in the hand shape ----
-// Hand keeps `Vec<&str>` pieces of `p`; Pruv cannot hold borrowed views in a list, so `out` holds each piece's
-// (start, end) offsets into `p` (row 4.4b-NV). Hand inserts the root '/' at 0 after the join; Pruv pushes it first.
+// Hand keeps `Vec<&str>` pieces of `p`; a local view list exists (R-6g9-10/11) but its element lengths cannot be named
+// in a contract, so the output size would be unprovable (row 4.4k-VS). `out` holds each piece's (start, end) offsets
+// into `p` instead (row 4.4b-NV). Hand inserts the root '/' at 0 after the join; Pruv pushes it first (row 4.4k-SR).
 pub fn normalize(p: [u8]) -> [u8] ! alloc
   requires len(p) <= 2000000002
   ensures 1 <= len(result) && len(result) <= len(p) + 1
