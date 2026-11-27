@@ -1,0 +1,64 @@
+// spec: R-6g9-16 accept
+// The normalizer of lgaps6_views_len with the builder loop replaced by hand `out.join("/")`: the join length is
+// the view sum plus one separator between pieces, so every bound (the join's 2^40, the pushes after it) and the
+// result length ensures follow from the split loop's invariant with no run-time guard.
+pub fn normalize_text(p: str) -> str ! alloc
+  requires len(p) <= 2000000002
+  ensures len(result) >= 1 && len(result) <= len(p) + 2
+{
+  let n: i64 = len(p);
+  if n == 0 {
+    return ".";
+  }
+  let rooted: bool = p[0] == 47;
+  let dir: bool = p[n - 1] == 47;
+  let mut out: Vec<ref str> = vec_new::<ref str>();
+  let mut st: i64 = 0;
+  let mut i: i64 = 0;
+  while i <= n
+    invariant 0 <= st && st <= i && i <= n + 1 && n == len(p)
+    invariant st == 0 || st == n + 1 || (1 <= st && st <= n && p[st - 1] == 47)
+    invariant vec_views_len::<ref str>(out, len(out)) + len(out) <= st
+    decreases n + 1 - i
+  {
+    if i == n || p[i] == 47 {
+      let w: i64 = i - st;
+      if w > 0 && !(w == 1 && p[st] == 46) {
+        if w == 2 && p[st] == 46 && p[st + 1] == 46 {
+          let m: i64 = len(out);
+          let mut back: bool = false;
+          if m > 0 {
+            let last: ref str = vec_get::<ref str>(out, m - 1);
+            back = !(len(last) == 2 && last[0] == 46 && last[1] == 46);
+          }
+          if back {
+            vec_pop::<ref str>(inout out);
+          } else if !rooted {
+            vec_push::<ref str>(inout out, subview(p, st, i));
+          }
+        } else {
+          vec_push::<ref str>(inout out, subview(p, st, i));
+        }
+      }
+      st = i + 1;
+    }
+    i = i + 1;
+  }
+  let mut s: String = vec_join::<ref str>(out, "/");
+  let empty: bool = len(s) == 0;
+  if rooted {
+    s = string_prepend_char(move s, 47);
+  } else if empty {
+    s = string_push_char(move s, 46);
+  }
+  if dir && !empty && string_byte(s, len(s) - 1) != 47 { s = string_push_char(move s, 47); }
+  return string_into_str(move s);
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let a: str = normalize_text("/a/../../b/./c//");
+  let b: str = normalize_text("../x/./y/..");
+  let c: str = normalize_text("a/..");
+  let d: str = normalize_text("/");
+  return len(a) * 1000 + len(b) * 100 + len(c) * 10 + len(d);
+}

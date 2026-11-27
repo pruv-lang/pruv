@@ -318,6 +318,24 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
                                 }
                             }
                         }
+                    } else if c.name == "vec_join" && !fmap.contains_key("vec_join") && c.ty.as_deref() == Some("string") {
+                        // LG6-VJ (R-6g9-16): the LLVM join of a str view list builds its String with these adapters
+                        for op in ["string_with_capacity", "string_push_str"] {
+                            let h = format!("pruv_g6_{}", op);
+                            if !cats.contains_key(&h) {
+                                observers.push((op.to_string(), vec![])); // no call names the helper: request it
+                            }
+                            cats.entry(h).or_insert((op.to_string(), vec![]));
+                            for (caller, bound) in crate::shared_tables::shim_edges::SHIM_EDGES {
+                                if op == *caller {
+                                    let bh = format!("pruv_g6_{}", bound);
+                                    if !cats.contains_key(&bh) {
+                                        observers.push((bound.to_string(), vec![]));
+                                    }
+                                    cats.entry(bh).or_insert((bound.to_string(), vec![]));
+                                }
+                            }
+                        }
                     } else if let Some(tf) = fmap.get(c.name.as_str()) {
                         if tf.foreign.is_some() {
                             trusted.entry(c.name.clone()).or_insert(*tf);

@@ -6366,6 +6366,20 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 if n == "vec_pop" && !self.fmap.contains_key(n) && self.view_list_arg(x).is_some() {
                     return self.catalog_call(x); // L3-VP: pop a view list
                 }
+                if n == "vec_join" && !self.fmap.contains_key(n) {
+                    if let Some(list) = self.view_list_arg(x) {
+                        // LG6-VJ (R-6g9-16): hand `parts.join(sep)` (a String for str views, a Vec<u8> for [u8]);
+                        // the verifier proves the total length <= 2^40, unverified code checks it after the join
+                        let sep = self.arr_ref(&a[1])?;
+                        let join = format!("{list}.join(&({sep})[..])");
+                        if self.verified {
+                            return Ok(join);
+                        }
+                        return Ok(format!(
+                            r#"{{ let pruv_j = {join}; if pruv_j.len() as u64 > (1u64 << 40) {{ pruv_g6_req("vec_join", "total length <= 2^40"); }} pruv_j }}"#
+                        ));
+                    }
+                }
                 if matches!(n, "swap" | "replace") && !self.fmap.contains_key(n)
                     && matches!(a.first(), Some(Expr::InoutArg(_))) {
                     return self.mem_call(n, a); // R-6g9-12: std::mem::swap / std::mem::replace

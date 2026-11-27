@@ -1,0 +1,22 @@
+{
+  "gen_absent": [
+    "from_utf8"
+  ],
+  "run": {
+    "backends": [
+      "rust",
+      "llvm"
+    ],
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "1000069"
+    ],
+    "g6_drop_balance": true
+  }
+}

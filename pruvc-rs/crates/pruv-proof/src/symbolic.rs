@@ -3945,6 +3945,13 @@ impl<'a> FnVerifier<'a> {
                 let r = self.view_sum_at(&v, &k, st, g)?;
                 return Ok(Val::Int(r));
             }
+            // LG6-VJ (R-6g9-16): `vec_join::<ref T>(parts, sep)` (the checker admits it only on a view list)
+            "vec_join" if !self.funcs.contains_key(n) && matches!(x.args.first(), Some(Expr::Var(_))) => {
+                let v = arg(0)?.try_arr()?.clone();
+                let sep = arg(1)?.try_arr()?.clone();
+                let bytes = x.ty.as_deref() == Some("array_u8");
+                return self.view_join(e, &v, &sep, bytes, st, g, code);
+            }
             // L3-VP: `vec_pop` exists only on a view list (the checker admits no other use)
             "vec_pop" if !self.funcs.contains_key(n) && matches!(x.args.first(), Some(Expr::InoutArg(_))) => {
                 return self.catalog_call(e, x, &args, st, g, code);
@@ -5522,6 +5529,69 @@ impl<'a> FnVerifier<'a> {
             }
         }
         Ok(sk)
+    }
+
+    /// LG6-VJ (R-6g9-16): `vec_join(parts, sep)` with `n = len(parts)`, `L = len(sep)`, `S` the view sum and the
+    /// offset `P(k) = S(parts, k) + k * L` of view `k`. Facts (all true of the concatenation): `S(parts, 0) == 0`
+    /// and `S(parts, k + 1) == S(parts, k) + len(parts[k])` for `0 <= k < n`; the result has length
+    /// `n == 0 ? 0 : S(parts, n) + (n - 1) * L`; every result position `i` lies in the block of one view
+    /// `k = q(i)` (a fresh function per call): `P(k) <= i < P(k) + len(parts[k]) + (k < n - 1 ? L : 0)`, and its
+    /// byte is `parts[k][i - P(k)]` inside the view and `sep[i - P(k) - len(parts[k])]` after it. In code the
+    /// length must be at most `2^40` (`verify/call_requires`). A `str` result is a `String` (no UTF-8 scan).
+    #[allow(clippy::too_many_arguments)]
+    fn view_join(&mut self, e: &Expr, v: &Arr, sep: &Arr, bytes: bool, st: &mut State, g: &[Ast], code: bool) -> R<Val> {
+        let z = self.z.clone();
+        let (zero, one) = (z.int(0), z.int(1));
+        // the list array under a fresh name, so `parts[k]` is a valid trigger (a `store` term is not)
+        self.k += 1;
+        let named = z.constant(&format!("vjoin!a{}", self.k), &v.a.sort());
+        self.assume(st, g, named.eq(&v.a));
+        let mut w = v.clone();
+        w.a = named;
+        let v = &w;
+        let n = v.n.clone();
+        let l = sep.n.clone();
+        let text = |this: &Self, k: &Ast| -> R<Arr> { Ok(this.field_val(&v.elem_ty(), v.a.select(k), "vec_join")?.try_arr()?.clone()) };
+        // the definition of S on this list, as a quantified step
+        let s0 = self.view_sum(v, &zero)?;
+        self.assume(st, g, s0.eq(&zero));
+        let kq = z.int_const("vjoin!k");
+        let (sk, sk1, wk) = (self.view_sum(v, &kq)?, self.view_sum(v, &kq.add(&one))?, text(self, &kq)?.n);
+        let step = z.and(&[kq.ge_i(0), kq.lt(&n)]).implies(&z.and(&[wk.ge_i(0), sk1.eq(&sk.add(&wk))]));
+        // triggered by `parts[k]` only: a trigger on `S(parts, k)` would make `S(parts, k + 1)` and loop
+        self.assume(st, g, z.forall(std::slice::from_ref(&kq), &step, &[v.a.select(&kq)]));
+        let sn = self.view_sum(v, &n)?;
+        self.assume(st, g, sn.ge_i(0));
+        let total = z.ite(&n.le_i(0), &zero, &sn.add(&n.sub(&one).mul(&l)));
+        if code {
+            let ob = total.le_i(MAX_LEN);
+            self.prove_core(st, g, &ob, pos(e), "call_requires", "vec_join: total length <= 2^40", None);
+        }
+        let ty = if bytes { Ty::Array(Elem::U8) } else { Ty::User("string".to_string()) };
+        let res_v = self.try_fresh("vec_join", &ty)?;
+        let res = res_v.try_arr()?.clone();
+        self.assume(st, g, res.n.eq(&total));
+        let q = z.func_decl(&format!("vjoin!q{}", self.k), &[z.int_sort()], &z.int_sort());
+        let i = z.int_const("vjoin!i");
+        let k = q.apply(&[i.clone()]);
+        let pk = self.view_sum(v, &k)?.add(&k.mul(&l));
+        let piece = text(self, &k)?;
+        let tail = z.ite(&k.lt(&n.sub(&one)), &l, &zero);
+        let off = i.sub(&pk);
+        let body = z.and(&[
+            k.ge_i(0),
+            k.lt(&n),
+            pk.le(&i),
+            i.lt(&pk.add(&piece.n).add(&tail)),
+            z.ite(
+                &off.lt(&piece.n),
+                &res.a.select(&i).eq(&piece.a.select(&off)),
+                &res.a.select(&i).eq(&sep.a.select(&off.sub(&piece.n))),
+            ),
+        ]);
+        let rng = z.and(&[i.ge_i(0), i.lt(&res.n)]);
+        self.assume(st, g, z.forall(std::slice::from_ref(&i), &rng.implies(&body), &[res.a.select(&i)]));
+        Ok(res_v)
     }
 
     fn observe_vec_element(&self, st: &mut State, g: &[Ast], v: &Arr, i: &Ast) -> R<bool> {

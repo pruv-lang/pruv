@@ -1078,7 +1078,7 @@ pub(crate) fn check(prog: &Program, place_functions: &PlaceFunctions) -> Res<()>
             (analysis.records.contains_key(ty.name.as_str()) || (read && analysis.structs.contains(ty.name.as_str())))
                 .then(|| (p.name.clone(), Origin::Param))
         }).collect();
-        let lists = view_lists(f)?;
+        let lists = view_lists(f, analysis.functions.contains_key("vec_join"))?;
         *analysis.lists.borrow_mut() = lists.iter().map(|name| (name.clone(), Roots::new())).collect();
         analysis.list_scope.borrow_mut().clear();
         let params = || f.params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
@@ -1105,7 +1105,7 @@ pub(crate) fn check(prog: &Program, place_functions: &PlaceFunctions) -> Res<()>
 /// R-6g9-10: the view lists of `f`. A list is a local: it may only be pushed to (`vec_push(inout l, v)`), read
 /// (`vec_get(l, i)`, `len(l)`), cleared or reserved; any other use of its name (a move, an argument, a return, a
 /// store) would let it escape. Each list name is bound once in the function.
-fn view_lists(f: &Function) -> Res<Vec<String>> {
+fn view_lists(f: &Function, user_join: bool) -> Res<Vec<String>> {
     let mut lists = Vec::new();
     let mut names: Vec<(String, i64, i64)> = Vec::new();
     crate::foreign_shim::walk_stmts(&f.body, &mut |node| {
@@ -1124,7 +1124,8 @@ fn view_lists(f: &Function) -> Res<Vec<String>> {
         }
     }
     let set: HashSet<&str> = lists.iter().map(String::as_str).collect();
-    fn uses(e: &Expr, set: &HashSet<&str>) -> Res<()> {
+    // a program's own `vec_join` keeps the name (R-6g9-16), so passing the list to it is an escape
+    fn uses(e: &Expr, set: &HashSet<&str>, uj: bool) -> Res<()> {
         let escape = |line, col| error(line, col, "borrow_escape", "a Vec<ref str> list cannot leave its function's operations");
         let list = |a: &Expr, inout: bool| match (a, inout) {
             (Expr::InoutArg(x), true) => matches!(&*x.expr, Expr::Var(v) if set.contains(v.name.as_str())),
@@ -1133,15 +1134,15 @@ fn view_lists(f: &Function) -> Res<Vec<String>> {
         };
         match e {
             Expr::Call(c) if matches!(c.name.as_str(), "vec_push" | "vec_clear" | "vec_reserve" | "vec_pop")
-                && c.args.first().is_some_and(|a| list(a, true)) => c.args[1..].iter().try_for_each(|a| uses(a, set)),
-            Expr::Call(c) if matches!(c.name.as_str(), "vec_get" | "len" | "vec_views_len")
-                && c.args.first().is_some_and(|a| list(a, false)) => c.args[1..].iter().try_for_each(|a| uses(a, set)),
+                && c.args.first().is_some_and(|a| list(a, true)) => c.args[1..].iter().try_for_each(|a| uses(a, set, uj)),
+            Expr::Call(c) if (matches!(c.name.as_str(), "vec_get" | "len" | "vec_views_len") || c.name == "vec_join" && !uj)
+                && c.args.first().is_some_and(|a| list(a, false)) => c.args[1..].iter().try_for_each(|a| uses(a, set, uj)),
             Expr::Var(v) if set.contains(v.name.as_str()) => Err(escape(v.line, v.col)),
             Expr::Move(m) if set.contains(m.name.as_str()) => Err(escape(m.line, m.col)),
-            _ => crate::refine::kids(e).into_iter().try_for_each(|k| uses(k, set)),
+            _ => crate::refine::kids(e).into_iter().try_for_each(|k| uses(k, set, uj)),
         }
     }
-    fn block(body: &[Stmt], set: &HashSet<&str>) -> Res<()> {
+    fn block(body: &[Stmt], set: &HashSet<&str>, uj: bool) -> Res<()> {
         for st in body {
             let (mut exprs, mut writes, mut blocks) = (Vec::new(), Vec::new(), Vec::new());
             walk_statement(st, &mut |e| exprs.push(e), &mut |name, _, line, col| writes.push((name, line, col)),
@@ -1149,11 +1150,11 @@ fn view_lists(f: &Function) -> Res<Vec<String>> {
             if let Some((_, line, col)) = writes.into_iter().find(|(name, _, _)| set.contains(name)) {
                 return Err(error(line, col, "borrow_escape", "a Vec<ref str> list cannot be reassigned"));
             }
-            exprs.into_iter().try_for_each(|e| uses(e, set))?;
-            blocks.into_iter().try_for_each(|b| block(b, set))?;
+            exprs.into_iter().try_for_each(|e| uses(e, set, uj))?;
+            blocks.into_iter().try_for_each(|b| block(b, set, uj))?;
         }
         Ok(())
     }
-    block(&f.body, &set)?;
+    block(&f.body, &set, user_join)?;
     Ok(lists)
 }

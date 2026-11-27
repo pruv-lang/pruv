@@ -2054,7 +2054,7 @@ borrowed value is live.
 - R-6g9-10 **Local lists of `str` views (4.4b-NV).** `let mut parts: Vec<ref str> = vec_new::<ref str>();` declares a
   list of borrowed `str` views local to its function (hand `let mut parts: Vec<&str> = Vec::new();`).
   - *Operations.* Only `vec_push::<ref str>(inout parts, v)`, `vec_get::<ref str>(parts, i)` (a `ref str` view),
-    `vec_clear::<ref str>(inout parts)`, `vec_reserve::<ref str>(inout parts, n)`, `vec_pop::<ref str>(inout parts)` (R-6g9-11), `len(parts)` and, in contracts only, `vec_views_len::<ref str>(parts, k)` (R-6g9-13), with the
+    `vec_clear::<ref str>(inout parts)`, `vec_reserve::<ref str>(inout parts, n)`, `vec_pop::<ref str>(inout parts)` (R-6g9-11), `len(parts)`, `vec_join::<ref str>(parts, sep)` (R-6g9-16) and, in contracts only, `vec_views_len::<ref str>(parts, k)` (R-6g9-13), with the
     usual bounds and length obligations of those calls; the `inout` operations need a `let mut` list (`type/immutable`). Any other use of the list (an argument, a result, a `move`, a copy,
     a field, an assignment to it) is `type/borrow_escape`; another `vec_*` call, an operation without the
     `::<ref str>` type argument, a list initialised other than by `vec_new::<ref str>()`, a list named like a
@@ -2093,7 +2093,9 @@ borrowed value is live.
   `--foreign-checks all` or a program with foreign functions) and frees live buffers before it fails.
   - Tests: [`[u8]` pieces with `..` popping, `str` pop](tests/spec/lgaps4_byte_list.pruv),
     [a program's own `vec_pop` wins](tests/spec/lgaps4_user_vec_pop.pruv),
-    [unverified empty pop fails with balanced frees](tests/spec/lgaps6_pop_free.pruv);
+    [unverified empty pop fails with balanced frees](tests/spec/lgaps6_pop_free.pruv),
+    [with a heap array and an enclosing block's owner](tests/spec/lgaps7_pop_free_heap.pruv),
+    [unverified out-of-range `vec_reserve` on a `[u8]` list](tests/spec/lgaps7_reserve_free.pruv);
     rejects [pop of a possibly empty list](tests/spec/lgaps4_pop_empty.pruv),
     [`str` operation on a `[u8]` list](tests/spec/lgaps4_byte_list_targ.pruv),
     [`[u8]` list from `vec_new::<ref str>`](tests/spec/lgaps4_byte_list_new.pruv),
@@ -2166,6 +2168,25 @@ borrowed value is live.
   a `let mut` local and of an `inout` parameter were already places (R-6g5-2).
   - Tests: [element field append](tests/spec/lgaps6_field_append.pruv); reject
     [another element claimed to grow](tests/spec/lgaps6_field_append_frame.pruv).
+- R-6g9-16 **Joining a view list (LG6-VJ, L-gaps 7).** `vec_join::<ref T>(parts, sep)` with `T` the list's own
+  element joins an R-6g9-10/11 list with `sep` between views (hand `parts.join(sep)`): for `T = str`, `sep` is a
+  `str` view argument and the result is an owned `String`; for `T = [u8]`, `sep` is a `[u8]` view argument and the
+  result is an owned `[u8]` (`sep` takes any view form: a literal, a `subview`, a local, `[]`). It has effect
+  `alloc`, reads the list (not a move) and needs the list as a plain name; a program's own `vec_join` function
+  keeps the name, and passing a view list to it is an escape (`type/borrow_escape`). *Proof.* With `n = len(parts)`, `L = len(sep)` and
+  `S` the R-6g9-13 view sum, the result length is `0` when `n == 0` and `S(parts, n) + (n - 1) * L` otherwise, and
+  every byte is known: byte `S(parts, k) + k * L + j` is `parts[k][j]` for `j < len(parts[k])`, followed by
+  `sep[j]` for `j < L` when `k < n - 1`. It requires that length to be at most `2^40` (`verify/call_requires`). A
+  `String` result is valid UTF-8 because its pieces are `str` views, so the Rust backend emits no run-time UTF-8
+  scan (the LLVM `string_push_str` helper still checks each piece, LG7-B2). *Code.*
+  Rust: `parts.join(&sep[..])` (with `--no-verify`, a result over `2^40` bytes fails with the requires message).
+  LLVM: one pass sums the lengths, then the result is allocated once (`[u8]`) or made with that capacity through
+  the G6 `string_with_capacity` helper (`String`) and the views and separators are copied in order; with the
+  bound check on, the total is checked before allocating. Output and allocation balance match the Rust backend.
+  - Tests: [`str` and `[u8]` joins, byte facts](tests/spec/lgaps7_join_bytes.pruv),
+    [path normalizer with `out.join("/")`](tests/spec/lgaps7_join.pruv);
+    rejects [wrong length](tests/spec/lgaps7_join_len_wrong.pruv), [wrong byte](tests/spec/lgaps7_join_byte_wrong.pruv),
+    [list passed to a program's own `vec_join`](tests/spec/lgaps7_join_user.pruv).
 ## 6h. Files (G10)
 
 `fs` is the file-system effect, independent of `io` (stdout) and `alloc`. Direct and transitive calls

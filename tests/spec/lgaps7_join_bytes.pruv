@@ -1,0 +1,50 @@
+// spec: R-6g9-16 accept
+// `vec_join` of a `str` list and of a `[u8]` list (separators: a literal, a `subview`, an owned local, `[]`) (hand `parts.join(sep)`): the length is the view sum plus one
+// separator between views, and every byte of the result is known (the views in order, the separator between them).
+fn join_str(p: str) -> i64 ! alloc
+  requires len(p) == 5 && p[0] == 97 && p[1] == 98 && p[2] == 99 && p[3] == 100 && p[4] == 101
+  ensures result == 1000
+{
+  let mut out: Vec<ref str> = vec_new::<ref str>();
+  let e: String = vec_join::<ref str>(out, "/");
+  assert len(e) == 0;
+  vec_push::<ref str>(inout out, subview(p, 0, 2));
+  vec_push::<ref str>(inout out, subview(p, 4, 5));
+  vec_push::<ref str>(inout out, "");
+  vec_push::<ref str>(inout out, subview(p, 2, 3));
+  let s: String = vec_join::<ref str>(out, ", ");
+  assert len(s) == 10;
+  let u: String = vec_join::<ref str>(out, subview(p, 1, 2));
+  assert len(u) == 7;
+  let t: str = string_into_str(move s);
+  assert t[0] == 97 && t[1] == 98;
+  assert t[2] == 44 && t[3] == 32;
+  assert t[4] == 101;
+  assert t[5] == 44 && t[6] == 32 && t[7] == 44;
+  assert t[9] == 99;
+  return len(t) * 100 + len(e) * 10 + t[9] - 99;
+}
+
+fn join_bytes(p: [u8]) -> i64 ! alloc
+  requires len(p) == 4
+  ensures result == 69
+{
+  let mut out: Vec<ref [u8]> = vec_new::<ref [u8]>();
+  vec_push::<ref [u8]>(inout out, subview(p, 0, 3));
+  vec_push::<ref [u8]>(inout out, subview(p, 1, 2));
+  let none: [u8] = alloc(0, 0);
+  let r: [u8] = vec_join::<ref [u8]>(out, none);
+  assert len(r) == 4;
+  assert r[3] == p[1] && r[0] == p[0] && r[2] == p[2];
+  let z: [u8] = vec_join::<ref [u8]>(out, []);
+  assert len(z) == 4 && z[3] == p[1];
+  let sep: [u8] = alloc(2, 9);
+  let w: [u8] = vec_join::<ref [u8]>(out, sep);
+  assert len(w) == 6 && w[3] == 9 && w[4] == 9 && w[5] == p[1];
+  return len(w) * 10 + w[4];
+}
+
+fn checksum() -> i64 ! alloc {
+  let b: [u8] = alloc(4, 7);
+  return join_str("abcde") * 1000 + join_bytes(b);
+}

@@ -1,4 +1,5 @@
 {
+  "flags": ["--no-verify"],
   "run": {
     "backends": ["rust", "llvm"],
     "exit": 101,

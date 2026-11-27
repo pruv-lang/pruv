@@ -6137,8 +6137,8 @@ impl<'a> FnGen<'a> {
             // G6 A3: reserved names
             return self.catalog_call(e, owned);
         }
-        if n == "vec_pop" && !self.funcs.contains_key(n) && native_vec_call_elem(e) == Some(VIEW_ELEM) {
-            return self.catalog_call(e, owned); // L3-VP: pop a view list
+        if matches!(n, "vec_pop" | "vec_join") && !self.funcs.contains_key(n) && native_vec_call_elem(e) == Some(VIEW_ELEM) {
+            return self.catalog_call(e, owned); // L3-VP / LG6-VJ: pop or join a view list
         }
         if matches!(n, "swap" | "replace") && !self.funcs.contains_key(n) && matches!(a.first(), Some(Expr::InoutArg(_))) {
             return self.mem_call(e, owned); // R-6g9-12: std::mem::swap / std::mem::replace
@@ -6983,6 +6983,107 @@ impl<'a> FnGen<'a> {
                 self.br(&done)?;
                 self.place(&done);
                 Ok(Some(V::unit()))
+            }
+            "vec_join" => {
+                // LG6-VJ (R-6g9-16): hand `parts.join(sep)`. Pass 1 sums the view lengths; the total is
+                // sum + (n - 1) * len(sep) (0 for an empty list). Pass 2 appends each view, with the separator
+                // before every view but the first, into a String box of that capacity (str) or a fresh [u8].
+                let v = self.ev(arg(&e.args, 0)?, false)?;
+                let sep = self.ev(arg(&e.args, 1)?, false)?;
+                let bytes = e.ty.as_deref() == Some(ARRAY_U8);
+                let data = self.op(format!("extractvalue {ARR} {}, 0", v.a))?;
+                let n = self.op(format!("extractvalue {ARR} {}, 1", v.a))?;
+                let ks = self.g6_out("i64");
+                let ts = self.g6_out("i64");
+                self.ins(format!("store i64 0, ptr {ks}"))?;
+                self.ins(format!("store i64 0, ptr {ts}"))?;
+                let (head, body, done) = (self.label("vjsum"), self.label("vjsumb"), self.label("vjsumd"));
+                self.br(&head)?;
+                self.place(&head);
+                let k = self.op(format!("load i64, ptr {ks}"))?;
+                let more = self.op(format!("icmp slt i64 {k}, {n}"))?;
+                self.condbr(&more, &body, &done)?;
+                self.place(&body);
+                let p = self.op(format!("getelementptr inbounds {ARR}, ptr {data}, i64 {k}"))?;
+                let w = self.op(format!("load {ARR}, ptr {p}"))?;
+                let wl = self.op(format!("extractvalue {ARR} {w}, 1"))?;
+                let t = self.op(format!("load i64, ptr {ts}"))?;
+                let t2 = self.op(format!("add i64 {t}, {wl}"))?;
+                self.ins(format!("store i64 {t2}, ptr {ts}"))?;
+                let k1 = self.op(format!("add i64 {k}, 1"))?;
+                self.ins(format!("store i64 {k1}, ptr {ks}"))?;
+                self.br(&head)?;
+                self.place(&done);
+                let sum = self.op(format!("load i64, ptr {ts}"))?;
+                let some = self.op(format!("icmp sgt i64 {n}, 0"))?;
+                let gaps = self.op(format!("sub i64 {n}, 1"))?;
+                let seps = self.op(format!("mul i64 {gaps}, {}", sep.b))?;
+                let seps = self.op(format!("select i1 {some}, i64 {seps}, i64 0"))?;
+                let total = self.op(format!("add i64 {sum}, {seps}"))?;
+                if !self.verified {
+                    let ok = self.op(format!("icmp ule i64 {total}, {}", 1u64 << 40))?;
+                    let msg_fn = self.m.string("vec_join");
+                    let msg_ex = self.m.string("total length <= 2^40");
+                    self.guard(&ok, Fail::RequiresFreed(msg_fn, msg_ex), false)?;
+                }
+                let push = crate::foreign_shim::adapter_sym(&crate::foreign_shim::helper_name("string_push_str", &[])?);
+                let out = self.g6_out(if bytes { "i64" } else { "ptr" });
+                let dst = if bytes {
+                    self.ins(format!("store i64 0, ptr {out}"))?;
+                    self.op(format!("call ptr @pruv_alloc_u8(i64 {total}, i64 0)"))?
+                } else {
+                    let cap = crate::foreign_shim::adapter_sym(&crate::foreign_shim::helper_name("string_with_capacity", &[])?);
+                    let s = self.g6_call(&cap, "ptr", &[("i64".to_string(), total.clone())])?;
+                    self.ins(format!("store ptr {s}, ptr {out}"))?;
+                    s
+                };
+                let mut append = |this: &mut Self, src: &str, len: &str| -> R<()> {
+                    if bytes {
+                        let o = this.op(format!("load i64, ptr {out}"))?;
+                        let q = this.op(format!("getelementptr inbounds i8, ptr {dst}, i64 {o}"))?;
+                        this.ins(format!("call void @llvm.memcpy.p0.p0.i64(ptr {q}, ptr {src}, i64 {len}, i1 false)"))?;
+                        let o2 = this.op(format!("add i64 {o}, {len}"))?;
+                        this.ins(format!("store i64 {o2}, ptr {out}"))
+                    } else {
+                        let s = this.op(format!("load ptr, ptr {out}"))?;
+                        let args = [("ptr".to_string(), s), ("ptr".to_string(), src.to_string()), ("i64".to_string(), len.to_string())];
+                        let s2 = this.g6_call(&push, "ptr", &args)?;
+                        this.ins(format!("store ptr {s2}, ptr {out}"))
+                    }
+                };
+                self.ins(format!("store i64 0, ptr {ks}"))?;
+                let (head, body, gap, piece, done) =
+                    (self.label("vjcat"), self.label("vjcatb"), self.label("vjsep"), self.label("vjpiece"), self.label("vjcatd"));
+                self.br(&head)?;
+                self.place(&head);
+                let k = self.op(format!("load i64, ptr {ks}"))?;
+                let more = self.op(format!("icmp slt i64 {k}, {n}"))?;
+                self.condbr(&more, &body, &done)?;
+                self.place(&body);
+                let later = self.op(format!("icmp sgt i64 {k}, 0"))?;
+                self.condbr(&later, &gap, &piece)?;
+                self.place(&gap);
+                append(self, &sep.a, &sep.b)?;
+                self.br(&piece)?;
+                self.place(&piece);
+                let k = self.op(format!("load i64, ptr {ks}"))?;
+                let p = self.op(format!("getelementptr inbounds {ARR}, ptr {data}, i64 {k}"))?;
+                let w = self.op(format!("load {ARR}, ptr {p}"))?;
+                let wp = self.op(format!("extractvalue {ARR} {w}, 0"))?;
+                let wl = self.op(format!("extractvalue {ARR} {w}, 1"))?;
+                append(self, &wp, &wl)?;
+                let k1 = self.op(format!("add i64 {k}, 1"))?;
+                self.ins(format!("store i64 {k1}, ptr {ks}"))?;
+                self.br(&head)?;
+                self.place(&done);
+                if bytes {
+                    let mut rv = V::with_b(Kind::Arr, dst, total);
+                    rv.ty = Some(ARRAY_U8.to_string());
+                    return Ok(Some(self.temp_arr(rv, owned)?));
+                }
+                let r = self.op(format!("load ptr, ptr {out}"))?;
+                let rv = V { layout: "i64", rng: None, k: Kind::Coll, a: r, b: "None".to_string(), ty: e.ty.clone(), p: None, mv: None, c: None };
+                Ok(Some(self.temp_arr(rv, owned)?))
             }
             _ => Ok(None),
         }
@@ -9474,7 +9575,7 @@ pub fn gen_llvm(prog: &Program, verified: bool, trust_callers: bool, budget: u64
 const WIN_X64_HEADER: &str = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\ntarget triple = \"x86_64-pc-windows-msvc\"\n\n";
 
 pub(crate) fn native_vec_call_elem(c: &Call) -> Option<&str> {
-    let view_only = matches!(c.name.as_str(), "vec_clear" | "vec_reserve" | "vec_pop");
+    let view_only = matches!(c.name.as_str(), "vec_clear" | "vec_reserve" | "vec_pop" | "vec_join");
     if !view_only && !matches!(c.name.as_str(), "vec_new" | "vec_push" | "vec_get" | "vec_at_mut") {
         return None;
     }
