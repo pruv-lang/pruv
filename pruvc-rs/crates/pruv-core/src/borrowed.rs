@@ -371,6 +371,12 @@ fn expr_accesses(e: &Expr, visit: &mut impl FnMut(&str, &[String], Access)) {
             if let Expr::Var(v) = root {
                 visit(&v.name, &path, Access::Write);
             }
+            // L-gaps 8 (P10-M1): `inout v[i]` (swap/replace of an element) writes the array v
+            if let Expr::Index(ix) = &*arg.expr {
+                if let Expr::Var(v) = &*ix.array {
+                    visit(&v.name, &[], Access::Write);
+                }
+            }
             expr_accesses(&arg.expr, visit);
         }
         _ => {

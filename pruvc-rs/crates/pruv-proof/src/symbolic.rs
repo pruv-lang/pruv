@@ -490,6 +490,10 @@ fn inout_ops(e: &Expr, out: &mut BTreeSet<String>, select: &impl Fn(&ast::Call, 
             if !select(c, i) { continue; }
             if let Expr::InoutArg(ia) = a {
                 let mut place = ia.expr.as_ref();
+                // L-gaps 8 (P10-M1): `inout v[i]` of swap/replace writes the array v
+                if let Expr::Index(ix) = place {
+                    place = &ix.array;
+                }
                 while let Expr::FieldAccess(f) = place {
                     place = &f.base;
                 }
@@ -3963,6 +3967,37 @@ impl<'a> FnVerifier<'a> {
                     Val::Arr(a) => Val::Arr(a.like(a.a.clone(), a.n.clone(), n)),
                     v => v.clone(),
                 };
+                // L-gaps 8 (P10-M1): element places `v[i]` (the checker keeps both on one array, their indexes pure
+                // and free of v). Reading each place proves its index range; a swap proves the two indexes differ.
+                if let Expr::InoutArg(p) = &x.args[0] {
+                    if let Expr::Index(pi) = p.expr.as_ref() {
+                        let Expr::Var(root) = pi.array.as_ref() else { return Err("element place root".into()) };
+                        let old = arg(0)?.try_ast()?.clone();
+                        let i = self.ev_ast(&pi.index, st, g, code, env)?;
+                        let arr = st.env.try_get(&root.name).ok_or_else(|| format!("'{}'", root.name))?.try_arr()?.clone();
+                        if n == "replace" {
+                            let new = arg(1)?.try_ast()?.clone();
+                            if code && arr.elem.narrow_width().is_some() {
+                                self.prove_elem_range(st, g, pos(e), arr.elem, &new, &format!("for replace(inout {}[...], ...)", root.name));
+                            }
+                            self.store(st, &root.name, Val::Arr(arr.like(arr.a.store(&i, &new), arr.n.clone(), &root.name)), g)?;
+                            self.post_refine(e, &[0], st, g)?;
+                            return Ok(if arr.elem == Elem::Bool { Val::Bool(old) } else { Val::Int(old) });
+                        }
+                        let Expr::InoutArg(q) = &x.args[1] else { return Err("swap: second argument is not inout".into()) };
+                        let Expr::Index(qi) = q.expr.as_ref() else { return Err("swap: element and whole place".into()) };
+                        let other = arg(1)?.try_ast()?.clone();
+                        let j = self.ev_ast(&qi.index, st, g, code, env)?;
+                        if code {
+                            let ob = i.eq(&j).not();
+                            self.prove_core(st, g, &ob, pos(e), "inout_alias",
+                                &format!("the two elements of swap(inout {0}[...], inout {0}[...]) differ", root.name), None);
+                        }
+                        let a = arr.a.store(&i, &other).store(&j, &old);
+                        self.store(st, &root.name, Val::Arr(arr.like(a, arr.n.clone(), &root.name)), g)?;
+                        return Ok(Val::Unit);
+                    }
+                }
                 let (old, new) = (fresh(arg(0)?), fresh(arg(1)?));
                 let Expr::InoutArg(p) = &x.args[0] else { unreachable!() };
                 self.store_collection_place(&p.expr, st, new, g)?;

@@ -1,0 +1,8 @@
+// spec: R-6g9-12 reject
+// L-gaps 8 (P10-M1): a swap of elements takes two elements of the same array.
+fn mix() -> i64 ! alloc {
+  let mut v: [i64] = alloc(4, 1);
+  let mut w: [i64] = alloc(4, 2);
+  swap(inout v[0], inout w[0]);
+  return v[0];
+}

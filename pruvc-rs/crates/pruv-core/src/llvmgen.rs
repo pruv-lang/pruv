@@ -2981,6 +2981,60 @@ impl<'a> FnGen<'a> {
             }
         };
         let p = place(0)?;
+        if let Expr::Index(px) = p {
+            // L-gaps 8 (P10-M1): element places of one array (the checker keeps the indexes pure and free of the
+            // array). Indexes first, then the replace value, then the bounds guards (the Rust order of
+            // `pruv_idx` / `pruv_get_*` / `pruv_set_*`), then the raw element moves.
+            let a = self.ev(&px.array, false)?;
+            let i = self.ev(&px.index, false)?;
+            if e.name == "swap" {
+                let Expr::Index(qx) = place(1)? else { return Err("llvmgen: swap expects two element places".into()) };
+                let j = self.ev(&qx.index, false)?;
+                let gi = self.index_ptr(&a, &i)?;
+                let gj = self.index_ptr(&a, &j)?;
+                let t = if buffer_layout(&a) != "i64" {
+                    elem_ir(&a).to_string()
+                } else if a.ty.as_deref() == Some(ARRAY_BOOL) || is_u8_ty(&a.ty) {
+                    "i8".to_string()
+                } else {
+                    "i64".to_string()
+                };
+                let xi = self.op(format!("load {t}, ptr {gi}"))?;
+                let xj = self.op(format!("load {t}, ptr {gj}"))?;
+                self.ins(format!("store {t} {xj}, ptr {gi}"))?;
+                self.ins(format!("store {t} {xi}, ptr {gj}"))?;
+                return Ok(V::unit());
+            }
+            let v = self.ev(arg(&e.args, 1)?, false)?;
+            let g = self.index_ptr(&a, &i)?;
+            let old = if a.ty.as_deref() == Some(ARRAY_BOOL) {
+                let x8 = self.op(format!("load i8, ptr {}", g))?;
+                V::new(Kind::I1, self.op(format!("icmp ne i8 {}, 0", x8))?)
+            } else if buffer_layout(&a) != "i64" {
+                V::new(Kind::I64, self.narrow_load(&a, &g, "i64")?)
+            } else if is_u8_ty(&a.ty) {
+                let x8 = self.op(format!("load i8, ptr {}", g))?;
+                V::new(Kind::I64, self.op(format!("zext i8 {} to i64", x8))?)
+            } else {
+                V::new(Kind::I64, self.op(format!("load i64, ptr {}", g))?)
+            };
+            if buffer_layout(&a) != "i64" {
+                self.guard_buffer_elem(a.ty.as_deref(), &v.a)?;
+                let ty = elem_ir(&a);
+                let z = self.op(format!("trunc i64 {} to {}", v.a, ty))?;
+                self.ins(format!("store {} {}, ptr {}", ty, z, g))?;
+            } else if a.ty.as_deref() == Some(ARRAY_BOOL) {
+                let z = self.op(format!("zext i1 {} to i8", v.a))?;
+                self.ins(format!("store i8 {}, ptr {}", z, g))?;
+            } else if is_u8_ty(&a.ty) {
+                self.guard_buffer_elem(a.ty.as_deref(), &v.a)?;
+                let b = self.op(format!("trunc i64 {} to i8", v.a))?;
+                self.ins(format!("store i8 {}, ptr {}", b, g))?;
+            } else {
+                self.ins(format!("store i64 {}, ptr {}", v.a, g))?;
+            }
+            return Ok(old);
+        }
         let mut old = self.mem_read(p)?;
         old.p = None; // the value, not the place's storage (the place is overwritten below)
         if e.name == "swap" {
@@ -7009,6 +7063,14 @@ impl<'a> FnGen<'a> {
                 let wl = self.op(format!("extractvalue {ARR} {w}, 1"))?;
                 let t = self.op(format!("load i64, ptr {ts}"))?;
                 let t2 = self.op(format!("add i64 {t}, {wl}"))?;
+                // LG7-B1: unverified, the running sum saturates just above the 2^40 bound, so it cannot wrap in
+                // i64 before the bound check (each view length is non-negative and at most 2^40)
+                let t2 = if self.verified {
+                    t2
+                } else {
+                    let big = self.op(format!("icmp ugt i64 {t2}, {}", (1u64 << 40) + 1))?;
+                    self.op(format!("select i1 {big}, i64 {}, i64 {t2}", (1u64 << 40) + 1))?
+                };
                 self.ins(format!("store i64 {t2}, ptr {ts}"))?;
                 let k1 = self.op(format!("add i64 {k}, 1"))?;
                 self.ins(format!("store i64 {k1}, ptr {ks}"))?;
@@ -7017,11 +7079,34 @@ impl<'a> FnGen<'a> {
                 let sum = self.op(format!("load i64, ptr {ts}"))?;
                 let some = self.op(format!("icmp sgt i64 {n}, 0"))?;
                 let gaps = self.op(format!("sub i64 {n}, 1"))?;
-                let seps = self.op(format!("mul i64 {gaps}, {}", sep.b))?;
-                let seps = self.op(format!("select i1 {some}, i64 {seps}, i64 0"))?;
-                let total = self.op(format!("add i64 {sum}, {seps}"))?;
+                let (seps, total);
+                let mut wrapped = None;
+                if self.verified {
+                    let m = self.op(format!("mul i64 {gaps}, {}", sep.b))?;
+                    seps = self.op(format!("select i1 {some}, i64 {m}, i64 0"))?;
+                    total = self.op(format!("add i64 {sum}, {seps}"))?;
+                } else {
+                    // LG7-B1: `(n - 1) * len(sep)` and the total use overflow intrinsics, so a wrapped
+                    // total cannot pass the 2^40 bound check
+                    let mo = self.op(format!("call {{ i64, i1 }} @llvm.smul.with.overflow.i64(i64 {gaps}, i64 {})", sep.b))?;
+                    let m = self.op(format!("extractvalue {{ i64, i1 }} {mo}, 0"))?;
+                    let mov = self.op(format!("extractvalue {{ i64, i1 }} {mo}, 1"))?;
+                    let mov = self.op(format!("and i1 {some}, {mov}"))?;
+                    seps = self.op(format!("select i1 {some}, i64 {m}, i64 0"))?;
+                    let ao = self.op(format!("call {{ i64, i1 }} @llvm.sadd.with.overflow.i64(i64 {sum}, i64 {seps})"))?;
+                    total = self.op(format!("extractvalue {{ i64, i1 }} {ao}, 0"))?;
+                    let aov = self.op(format!("extractvalue {{ i64, i1 }} {ao}, 1"))?;
+                    wrapped = Some(self.op(format!("or i1 {mov}, {aov}"))?);
+                }
                 if !self.verified {
                     let ok = self.op(format!("icmp ule i64 {total}, {}", 1u64 << 40))?;
+                    let ok = match &wrapped {
+                        Some(w) => {
+                            let nw = self.op(format!("xor i1 {w}, true"))?;
+                            self.op(format!("and i1 {ok}, {nw}"))?
+                        }
+                        None => ok,
+                    };
                     let msg_fn = self.m.string("vec_join");
                     let msg_ex = self.m.string("total length <= 2^40");
                     self.guard(&ok, Fail::RequiresFreed(msg_fn, msg_ex), false)?;

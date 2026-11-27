@@ -5115,7 +5115,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
     /// R-6g9-12: `swap(inout P, inout Q)` -> `::std::mem::swap(&mut P, &mut Q)`, `replace(inout P, e)` ->
     /// `::std::mem::replace(&mut P, e)` (an array place is a whole `&mut Vec<T>`)
     fn mem_call(&mut self, n: &str, a: &[Expr]) -> R<String> {
-        let mut place = |this: &mut Self, e: &Expr| -> R<String> {
+        if let Some(Expr::InoutArg(ia)) = a.first() {
+            if let Expr::Index(p) = ia.expr.as_ref() {
+                return self.mem_index_call(n, p, a);
+            }
+        }
+        let place = |this: &mut Self, e: &Expr| -> R<String> {
             let Expr::InoutArg(ia) = e else { return Err(format!("codegen: {n} expects an inout place")) };
             let (root, path) = field_place(&ia.expr);
             let Expr::Var(v) = root else { return Err(format!("codegen: inout operand is not a place: {:?}", ia.expr)) };
@@ -5137,6 +5142,46 @@ pruv_hi <= (pruv_b.len() as i128) && \
         }
         let v = self.own_e(arg(a, 1)?)?;
         Ok(format!("::std::mem::replace({p}, {v})"))
+    }
+
+    /// L-gaps 8 (P10-M1): `swap(inout v[i], inout v[j])` -> `v.swap(i, j)`, `replace(inout v[i], x)` ->
+    /// `::std::mem::replace(&mut v[i], x)` (unchecked when verified). The checker keeps the indexes pure and free of
+    /// v; under --no-verify the index and element range checks are the shared `pruv_idx` / `pruv_set_*` helpers.
+    fn mem_index_call(&mut self, n: &str, p: &Index, a: &[Expr]) -> R<String> {
+        let elem = elem_of(&p.array);
+        let arr = self.e(&p.array)?;
+        if n == "swap" {
+            let Some(Expr::InoutArg(qa)) = a.get(1) else { return Err("codegen: swap expects two element places".into()) };
+            let Expr::Index(q) = qa.expr.as_ref() else { return Err("codegen: swap expects two element places".into()) };
+            if self.verified {
+                let (i, j) = (self.idx_usize(&p.index)?, self.idx_usize(&q.index)?);
+                return Ok(format!("{arr}.swap({i}, {j})"));
+            }
+            let (i, j) = (self.idx_i64(&p.index)?, self.idx_i64(&q.index)?);
+            return Ok(format!(
+                "{{ let pruv_i: i64 = {i}; let pruv_j: i64 = {j}; let pruv_n = {arr}.len(); {arr}.swap(pruv_idx(pruv_i, pruv_n), pruv_idx(pruv_j, pruv_n)); }}"
+            ));
+        }
+        let x = self.e(arg(a, 1)?)?;
+        let narrow = matches!(elem, "u8" | "u16");
+        if self.verified {
+            let i = self.idx_usize(&p.index)?;
+            let r = format!("::std::mem::replace(unsafe {{ {arr}.get_unchecked_mut({i}) }}, {})",
+                if narrow { format!("({x}) as {elem}") } else { x });
+            return Ok(if narrow { format!("({r} as i64)") } else { r });
+        }
+        let i = self.idx_i64(&p.index)?;
+        let (xt, get, set) = match elem {
+            "bool" => ("bool", "pruv_get_bool".to_string(), "pruv_set_bool".to_string()),
+            "i64" => ("i64", "pruv_get".to_string(), "pruv_set".to_string()),
+            e => ("i64", format!("pruv_get_{e}"), format!("pruv_set_{e}")),
+        };
+        let name = match p.array.as_ref() { Expr::Var(v) => v.name.clone(), _ => return Err("codegen: element place root".into()) };
+        let r = self.arr_ref(&p.array)?;
+        Ok(format!(
+            "{{ let pruv_i: i64 = {i}; let pruv_x: {xt} = {x}; let pruv_o = {get}({r}, pruv_i); {set}({}, pruv_i, pruv_x); pruv_o }}",
+            self.mut_ref(&name)
+        ))
     }
 
     fn mut_ref(&self, name: &str) -> String {

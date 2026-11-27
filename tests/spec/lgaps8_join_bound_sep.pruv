@@ -1,0 +1,11 @@
+// spec: R-6g9-16 reject
+// L-gaps 8 (LG7-A1): with a 1-byte separator the join of two 2^39-byte views is 2^40 + 1 bytes, over the bound.
+fn twice(b: [u8]) -> i64 ! alloc
+  requires len(b) == 549755813888
+{
+  let mut out: Vec<ref [u8]> = vec_new::<ref [u8]>();
+  vec_push::<ref [u8]>(inout out, subview(b, 0, len(b)));
+  vec_push::<ref [u8]>(inout out, subview(b, 0, len(b)));
+  let s: [u8] = vec_join::<ref [u8]>(out, subview(b, 0, 1));
+  return len(s);
+}

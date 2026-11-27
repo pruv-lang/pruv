@@ -391,6 +391,12 @@ fn expr_inout(e: &Expr, out: &mut BTreeSet<String>) {
                 if let Expr::Var(v) = &*ia.expr {
                     out.insert(v.name.clone());
                 }
+                // L-gaps 8 (P10-M1): `inout v[i]` of swap/replace writes the array v
+                if let Expr::Index(ix) = &*ia.expr {
+                    if let Expr::Var(v) = &*ix.array {
+                        out.insert(v.name.clone());
+                    }
+                }
             }
         }
     }

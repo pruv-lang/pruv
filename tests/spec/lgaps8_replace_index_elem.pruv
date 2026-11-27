@@ -1,0 +1,8 @@
+// spec: R-6g9-12 reject
+// L-gaps 8 (P10-M1): a replaced [u8] element carries the element range obligation.
+fn put(x: i64) -> i64 ! alloc
+  requires 0 <= x && x <= 256
+{
+  let mut v: [u8] = alloc(4, 1);
+  return replace(inout v[1], x);
+}

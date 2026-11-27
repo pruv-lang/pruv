@@ -515,8 +515,38 @@ impl Expander {
         }
         if let Expr::Call(c) = e {
             let call_line = c.line;
+            let is_replace = c.name == "replace";
             for a in c.args.iter_mut() {
                 if let Expr::InoutArg(ia) = a {
+                    // L-gaps 8: `replace(inout v[i], x)` on a refined element array proves the stored element's range,
+                    // as `v[i] = x` does (refinement_assign). A swap only permutes elements and needs no check.
+                    if let Expr::Index(ix) = &*ia.expr {
+                        if let (true, Expr::Var(root)) = (is_replace, &*ix.array) {
+                            if let Some(r) = scope_get(scope, &root.name) {
+                                if r.shape == "array" && r.lo.is_some() {
+                                    let at = At::new(r);
+                                    let cond = at.within(
+                                        &|| Expr::Index(Index { line: at.line, col: at.col, array: Box::new(at.var(&root.name)), index: ix.index.clone(), ty: None }),
+                                        r,
+                                    );
+                                    let what = format!(
+                                        "the element range of local {} after the replace on line {}",
+                                        root.name,
+                                        crate::diagnostic::plain_line(call_line)
+                                    );
+                                    ia.post_refine = vec![Assert {
+                                        line: r.line,
+                                        col: r.col,
+                                        cond,
+                                        origin_code: Some("refinement_assign".to_string()),
+                                        origin_what: Some(what),
+                                        reveal: None,
+                                    }];
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     let name: Option<String> = match &*ia.expr {
                         Expr::Var(v) => Some(v.name.clone()),
                         _ => None,

@@ -2113,11 +2113,24 @@ borrowed value is live.
   `swap(inout s.f, inout s)` is `type/inout_argument`); both are code-only (`type/effect_in_contract`) and
   take no type argument. The value of `replace` is consumed like an assignment (`move` for an owned local). The
   names are contextual: a program's own `swap` / `replace` function keeps the name and is called as usual.
+  An element of a resizable array is also a place (P10-M1, L-gaps 8): `swap(inout v[i], inout v[j])` and
+  `replace(inout v[i], e)` with `v` a `let mut` local or an `inout` parameter of a concrete element array type
+  (`[i64]`, `[u8]`, `[u16]`, `[bool]`; an immutable local is `type/immutable`) and a plain index (a name,
+  a literal or arithmetic on them that does not mention `v`). Both elements of a `swap` are of the same array
+  (two arrays: `type/inout_argument`). An index or the `replace` value that mentions `v` is `type/inout_alias`;
+  any other operand of the same statement that mentions `v` is `type/inout_context`; a live view of `v` is
+  `type/borrow_conflict`.
   - *Proof.* Here `old` is the value just before the call. After `swap`, `P == old(Q)` and `Q == old(P)` (lengths and bytes of owned values included); after
     `replace`, the result is `old(P)` and `P == e`. There is no obligation of its own; a refined local passed as a place must satisfy its range after the call
-    (`verify/refinement_assign`, as for any `inout` argument).
+    (`verify/refinement_assign`, as for any `inout` argument). An element place stores into the array: each index
+    carries the range obligation `0 <= i < len(v)` (`verify/index_oob`), the two indexes of a `swap` must be proven
+    different (`verify/inout_alias`), a `replace` value in a `[u8]` / `[u16]` array carries the element range
+    (`verify/elem_range`), and a `replace` into a refined element array (`[i64 | lo..=hi]`) proves the stored
+    element's range (`verify/refinement_assign`, as `v[i] = e` does; a `swap` only permutes and has no such check).
   - *Code.* Rust: `::std::mem::swap(&mut P, &mut Q)` / `::std::mem::replace(&mut P, e)` (an array place is the whole
-    `&mut Vec<T>`, so an `inout` array parameter passed to them is resizable). LLVM: the places are read and written
+    `&mut Vec<T>`, so an `inout` array parameter passed to them is resizable). Element places: `v.swap(i, j)` and
+    `::std::mem::replace(unsafe { v.get_unchecked_mut(i) }, e)` when verified; with `--no-verify` the indexes are
+    checked (`pruv_idx`, `pruv_get` / `pruv_set`). LLVM: the places are read and written
     in their storage form (a local slot, or the field's storage), so nothing is allocated or freed (an old value used in place is dropped with the statement's temporaries); output and
     allocation balance match the Rust backend.
   - Tests: [scalars, `[u8]` locals, `inout` parameters, struct fields, whole structs, `String`](tests/spec/lgaps5_mem.pruv),
@@ -2133,7 +2146,15 @@ borrowed value is live.
     [a wrong fact about the `replace` result](tests/spec/lgaps5_replace_fact.pruv),
     [a wrong fact after `swap`](tests/spec/lgaps5_swap_fact.pruv),
     [a refined local out of range after `replace`](tests/spec/lgaps5_replace_refine.pruv) and
-    [after `swap`](tests/spec/lgaps5_swap_refine.pruv).
+    [after `swap`](tests/spec/lgaps5_swap_refine.pruv);
+    element places [`[i64]`, `[u8]`, `[bool]` and an `inout` parameter](tests/spec/lgaps8_mem_index.pruv), rejects
+    [indexes not proven different](tests/spec/lgaps8_swap_index_alias.pruv),
+    [`replace` index out of range](tests/spec/lgaps8_replace_index_oob.pruv),
+    [`swap` index out of range](tests/spec/lgaps8_swap_index_oob.pruv),
+    [`[u8]` element out of range](tests/spec/lgaps8_replace_index_elem.pruv),
+    [a refined element out of range](tests/spec/lgaps8_replace_index_refine.pruv),
+    [a live view of the array](tests/spec/lgaps8_replace_index_view.pruv) and
+    [elements of two arrays](tests/spec/lgaps8_swap_index_arrays.pruv).
 
 - R-6g9-13 **Total view length of a list (4.4k-VS, L-gaps 6).** `vec_views_len::<ref T>(parts, k)` with `T` the
   list's own element (`str` or `[u8]`) and `k: i64` is the byte length of the first `k` views of an R-6g9-10/11 list,
@@ -2186,7 +2207,10 @@ borrowed value is live.
   - Tests: [`str` and `[u8]` joins, byte facts](tests/spec/lgaps7_join_bytes.pruv),
     [path normalizer with `out.join("/")`](tests/spec/lgaps7_join.pruv);
     rejects [wrong length](tests/spec/lgaps7_join_len_wrong.pruv), [wrong byte](tests/spec/lgaps7_join_byte_wrong.pruv),
-    [list passed to a program's own `vec_join`](tests/spec/lgaps7_join_user.pruv).
+    [list passed to a program's own `vec_join`](tests/spec/lgaps7_join_user.pruv); the bound is inclusive
+    ([`2^40` bytes accepted](tests/spec/lgaps8_join_bound.pruv), [one byte over](tests/spec/lgaps8_join_bound_sep.pruv)).
+    With `--no-verify`, LLVM saturates the running sum and computes `(n - 1) * L` and the total with overflow
+    intrinsics, so a wrapped total cannot pass the bound check (LG7-B1).
 ## 6h. Files (G10)
 
 `fs` is the file-system effect, independent of `io` (stdout) and `alloc`. Direct and transitive calls
@@ -4078,6 +4102,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `verify/ensures` | verify | an `ensures` not proved |
 | `verify/index_oob` | verify | an index not proved in range |
 | `verify/inference_timeout` | verify | `--infer` hit its time limit for a function |
+| `verify/inout_alias` | verify | the two element places of a `swap(inout v[i], inout v[j])` not proved different |
 | `verify/invariant_entry` | verify | a loop invariant not proved before the first iteration |
 | `verify/invariant_preserved` | verify | a loop invariant not proved after one iteration |
 | `verify/opaque_total` | verify | an `opaque fn` body not proved defined everywhere (R-6o-4) |
