@@ -24,8 +24,9 @@ fn utf8_width(byte: i64) -> i64
 // Like the hand `Parser::string`, an error is returned once as `Fault { position, kind }` at the cursor.
 // The Ok value is the plain bit (no escape), which feeds `string_utf8_plain`.
 // start lets the contract relate the final cursor to its entry position.
-fn string_token(input: [u8], start: i64, end: i64, inout pos: i64) -> Result<bool, crate::lex::Fault>
-  requires 0 <= start && start < end && end <= len(input) && pos == start
+fn string_token(input: [u8], start: i64, end: i64, checked: bool, inout pos: i64) -> Result<bool, crate::lex::Fault>
+  requires 0 <= start && start < end && end <= len(input) && pos == start && input[start] == 34
+  requires checked ==> utf8_valid_span(input, 0, len(input))
   ensures start <= pos && pos <= end
   ensures is_ok(result) ==> (start + 2 <= pos && utf8_valid_span(input, start + 1, pos - 1))
   ensures !is_ok(result) ==> (err_val(result).position == pos && 0 < err_val(result).kind && err_val(result).kind <= 17)
@@ -34,13 +35,18 @@ fn string_token(input: [u8], start: i64, end: i64, inout pos: i64) -> Result<boo
   let mut plain: bool = true;
   while pos < end
     invariant start < pos && pos <= end && end <= len(input)
-    invariant utf8_valid_span(input, start + 1, pos)
+    invariant !checked ==> utf8_valid_span(input, start + 1, pos)
     decreases end - pos
   {
     let c: i64 = input[pos];
     if c == 34 { pos = pos + 1; return Ok::<bool, crate::lex::Fault>(plain); }
     if c < 32 { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 16 }); }
-    if c >= 128 {
+    if c >= 128 && checked {
+      // 4.4m-SS: the caller validated the whole input (hand `str::from_utf8(line)`), so a raw byte is skipped like
+      // the hand's `position(|b| matches!(b, b'"' | b'\\' | 0..=31))`; the span fact follows from the line fact
+      // because both quotes are ASCII (SPEC LG30).
+      pos = pos + 1;
+    } else if c >= 128 {
       let scalar_end: i64 = pos + utf8_width(c);
       if scalar_end > end { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 4 }); }
       if crate::lex::validate_utf8(input, pos, scalar_end) >= 0 { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 4 }); }
@@ -58,7 +64,7 @@ fn string_token(input: [u8], start: i64, end: i64, inout pos: i64) -> Result<boo
           while k < 4
             invariant 0 <= k && k <= 4 && start < pos && pos <= end && end <= len(input)
             invariant pos >= hex_start
-            invariant utf8_valid_span(input, start + 1, pos)
+            invariant !checked ==> utf8_valid_span(input, start + 1, pos)
             decreases 4 - k
           {
             if pos == end { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 5 }); }
@@ -93,7 +99,7 @@ fn token_at(input: [u8], start: i64, end: i64, key: bool, inout pos: i64) -> Lex
   let c: i64 = input[pos];
   if key && c != 34 { return Lexed::Error(7); }
   if c == 34 {
-    let text: Result<bool, crate::lex::Fault> = string_token(input, start, end, inout pos);
+    let text: Result<bool, crate::lex::Fault> = string_token(input, start, end, false, inout pos);
     match text {
       Err(fault) => { return Lexed::Error(fault.kind); }
       Ok(plain) => {
@@ -213,7 +219,7 @@ pub pred fn strings_ok(input: [u8], tape: [i64], lo: i64, hi: i64) -> bool {
 
 // Hand `Parser::record` / `Parser::container`: one recursion, errors passed up with `?`.
 fn record(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, depth: i64, key: bool) -> Result<(), crate::lex::Fault> ! alloc
-  requires 0 <= pos && pos <= len(input) && len(input) <= 16777216
+  requires 0 <= pos && pos <= len(input) && len(input) <= 16777216 && utf8_valid_span(input, 0, len(input))
   requires 0 <= depth && depth <= 128 && len(tape) % 6 == 0 && len(tape) <= 6291456
   requires len(tape) > 0 ==> (0 <= parent && 6 * parent < len(tape) && (tape[6 * parent] == 5 || tape[6 * parent] == 6) && tape[6 * parent + 1] < pos)
   ensures old(pos) <= pos && pos <= len(input)
@@ -236,7 +242,7 @@ fn record(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, depth: i6
   let mut kind: i64 = 0;
   let mut plain: i64 = 0;
   if byte == 34 {
-    let simple: bool = string_token(input, start, end, inout pos)?;
+    let simple: bool = string_token(input, start, end, true, inout pos)?;
     if simple { plain = 1; }
     kind = 4;
     if key { kind = 7; }
@@ -275,7 +281,7 @@ fn record(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, depth: i6
 }
 
 fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64, object: bool) -> Result<i64, crate::lex::Fault> ! alloc
-  requires 0 <= pos && pos <= len(input) && len(input) <= 16777216
+  requires 0 <= pos && pos <= len(input) && len(input) <= 16777216 && utf8_valid_span(input, 0, len(input))
   requires 1 <= depth && depth <= 128 && len(tape) % 6 == 0 && len(tape) <= 6291456
   requires 0 <= id && 6 * id < len(tape) && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < pos
   ensures old(pos) <= pos && pos <= len(input)
@@ -332,7 +338,7 @@ fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64
 }
 // Parse one root and consume its trailing whitespace (hand `parse`).
 fn scan_records(input: [u8], inout tape: [i64]) -> Result<(), crate::lex::Fault> ! alloc
-  requires len(input) <= 16777216 && len(tape) == 0
+  requires len(input) <= 16777216 && len(tape) == 0 && utf8_valid_span(input, 0, len(input))
   ensures !is_ok(result) ==> (0 <= err_val(result).position && err_val(result).position <= len(input))
   ensures is_ok(result) ==> (len(input) >= 1 && len(tape) % 6 == 0 && len(tape) >= 6 && len(tape) <= 6291456)
   ensures is_ok(result) ==> local_records(tape, 0, len(tape) / 6, len(input))
@@ -352,15 +358,18 @@ fn scan_records(input: [u8], inout tape: [i64]) -> Result<(), crate::lex::Fault>
 // The scan outcome owns its tape so callers can move it into a document.
 pub enum Checked { Tape(tape: [i64]), Rejected(position: i64, kind: i64) }
 pub fn scan(input: [u8]) -> Checked ! alloc
-  requires len(input) <= 16777216
+  requires len(input) <= 16777216 && utf8_valid_span(input, 0, len(input))
   ensures is_variant(result, Checked::Rejected) ==> (0 <= variant_field(result, Checked::Rejected, position) && variant_field(result, Checked::Rejected, position) <= len(input))
   ensures is_variant(result, Checked::Tape) ==> strings_ok(input, variant_field(result, Checked::Tape, tape), 0, len(variant_field(result, Checked::Tape, tape)) / 6)
 {
   let mut tape: [i64] = alloc(0, 0);
   let root: Result<(), crate::lex::Fault> = scan_records(input, inout tape);
+  assert is_ok(root) ==> strings_ok(input, tape, 0, len(tape) / 6);
   match root {
     Err(fault) => { return Checked::Rejected(fault.position, fault.kind); }
-    Ok(()) => { return Checked::Tape(move tape); }
+    Ok(()) => {
+      return Checked::Tape(move tape);
+    }
   }
 }
 
@@ -371,7 +380,7 @@ fn failure(p: i64, k: i64) -> crate::json::JsonParse
 
 // Publish the completed tape with an owned source.
 fn scan_document(input: [u8]) -> crate::json::JsonParse ! alloc
-  requires len(input) <= 16777216
+  requires len(input) <= 16777216 && utf8_valid_span(input, 0, len(input))
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_strings(variant_field(result, crate::json::JsonParse::Parsed, document))
   ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= len(input))
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> len(variant_field(result, crate::json::JsonParse::Parsed, document).source) == len(input)
@@ -446,20 +455,14 @@ pub fn parse(input: [u8]) -> crate::json::JsonParse ! alloc
 {
   let n: i64 = len(input);
   if n > 16777216 { return failure(0, 1); }
-  // D33: string tokens validate UTF-8 as they scan and every other accepted byte is ASCII,
-  // so a parsed document is valid UTF-8 and the bytes before a failure position are valid.
-  // As in the hand parser, a grammar failure rereads only the rest of the input, which keeps
-  // invalid UTF-8 (kind 4, at its first byte) ahead of any grammar error.
+  // 4.4m-SS: as the hand `parse_line` (`str::from_utf8(line)` first), the whole input is validated once, which keeps
+  // invalid UTF-8 (kind 4, at its first byte) ahead of any grammar error; the scan then skips raw non-ASCII bytes.
+  let invalid: i64 = crate::lex::validate_utf8(input, 0, n);
+  if invalid >= 0 { return failure(invalid, 4); }
   let wrapped: crate::json::JsonParse = scan_document(input);
   if publication_ok(wrapped, n) { return wrapped; }
   match wrapped {
-    crate::json::JsonParse::Failed(error) => {
-      if error.kind != 4 {
-        let invalid: i64 = crate::lex::validate_utf8(input, error.position, n);
-        if invalid >= 0 { return failure(invalid, 4); }
-      }
-      return failure(error.position, error.kind);
-    }
+    crate::json::JsonParse::Failed(error) => { return failure(error.position, error.kind); }
     crate::json::JsonParse::Parsed(document) => { return failure(0, 18); }
   }
 }
