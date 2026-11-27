@@ -219,7 +219,7 @@ Not changed:
 | row | Pruv | hand | change |
 |---|---|---|---|
 | 4.4d-CB | `user` checks `is_char_boundary` at `q.lo` / `q.hi` at run time | `&text[range]` on a range found at ASCII bytes | language: a char-boundary fact from an adjacent ASCII byte |
-| 4.4d-CL | `feed` checks `len(e.content) <= 100000000` | no bound | `line::entry` ensures the content is a span of the line |
+| 4.4d-CL | closed in 4.4z: `line::entry` ensures `len(e.content) <= len(s)`; the `feed` test is gone | no bound | done |
 | 4.4d-LC | closed in 4.4v: `Reader.filled` removed; `pump` / `drain` clear `line` after the used line | `on_line` then `line.clear()` | done |
 | 4.4d-TD | closed in 4.4v: `turns::finish2`, `finish_ref`, `empty_buffer` and the comments citing them removed | - | done |
 | 4.4d-RC | closed in 4.4v: on -3 `transport::take` leaves `st.at` at the piece start | `Rpc::step` leaves the cursor at the piece start | done |
@@ -235,6 +235,21 @@ Not changed: numeric timestamps (finding 1) are the reference behaviour, as in 3
 
 Next (order kept in `../lib/RESHAPE.md` "Rows open after 4.4d"): Codex rows 4.3f-A, O, N, K, L, T, P, R, D, then
 4.3f-B, E, F; then the OpenCode leftovers, 4.4b-SP first (checked against the TypeScript reference).
+
+## 3f. Step 4.4z: row 4.4d-CL
+
+- `line::entry` ensures `len(e.content) <= len(s)`: the content is decoded from the line (`decode_string` ensures
+  the output grows by at most the bytes consumed) and joined inside it. `content`, `fields` and `part` carry
+  `len(e.content) <= i` for the cursor `i`; `part_members` ensures its scratch is empty or `len(scratch) + 2 <= i - old(i)`,
+  so the `"\n\n"` join is paid by the `{"k":` bytes before the text value.
+- `entry::feed` requires `len(line) <= 1048576 && len(e.content) <= len(line)` (`read::line_step` already has both) and the
+  `len(e.content) > 100000000` test is gone. The `part` proof guard (`len(e.content) + len(e.scratch) + 2 > 2^40`
+  sets `ok = false`) is gone with it. No run-time branch was added.
+- Codex structure comparison (gpt-6.2-astra, high, default account): the patch adds no branch; the three removed tests
+  cannot fire on a line the scanner accepts. Older differences remain (members closure written as loops, the `ok`
+  rebuild in `part`, 4.4d-T0, 4.4d-CB), so the structure difference is not zero and performance was not measured.
+- Results (`rs/rust`, `rs/llvm`): `test_impl.py` 254/254 and 254/254 (verified, TypeScript reference); `q.py --cases 300`
+  554 cases, 0 unexplained (450 exact, rest policy) on both; `q_mutants.py --check` 16/16 markers match.
 
 ## 4. Results
 

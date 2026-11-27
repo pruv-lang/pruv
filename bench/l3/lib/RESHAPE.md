@@ -1441,8 +1441,8 @@ All after the last code change (F1 / F4 from the structure comparison).
 
 ### Rows open after 4.4e
 
-- New (bench): 4.4e-LP, 4.4e-EC, 4.4e-NU, 4.4e-FB (the `InputTooLarge` folder bound stays for the `req_list` size proof), 4.4e-DL (`doc_local`
-  gives no source length bound, so `str_at` keeps its test), 4.4e-VT (codex verify time).
+- New (bench): 4.4e-LP, 4.4e-EC, 4.4e-NU, 4.4e-FB (the `InputTooLarge` folder bound stays for the `req_list` size proof), 4.4e-DL (`str_at` keeps its test; the
+  stated reason, no source bound, was wrong: closed in 4.4z), 4.4e-VT (codex verify time).
 - Still open from 4.3f: 4.3f-P (`Option<Plan>`), 4.3f-B, 4.3f-E, 4.3f-F (shared modules), 4.3f-S (language).
 - Still open from 4.4d and before: as listed after 4.4d (minus the closed 4.3f rows above).
 - Next:
@@ -2486,3 +2486,17 @@ Changes `bench/l3/qwen/import.pruv` only (no compiler or package change). Detail
   `lgaps14_for_rev_trigger`). No findings on `proc_spawn_quiet`. The confirm round
   marked both fixes FIXED with no new required findings.
 - Next: switch the mcp/grok/codex/qwen stderr readers to `proc_spawn_quiet`, then 4.4v-RT and LG14-ST.
+
+### Rows after 4.4z
+
+- Closed 4.4d-CL (Grok): `line::entry` ensures `len(e.content) <= len(s)` (carried as `len(e.content) <= i` through
+  `content` / `fields` / `part`, the join paid by the key bytes in `part_members`); `feed`'s 100000000 test and the
+  `part` 2^40 guard are gone.
+- Closed 4.4e-DL (Codex): `str_at`'s 50331648 test is replaced by an erased `assert` linking the `JsonDocument`
+  source bound (16777216) to the decoder's 3 x span bound. The 4.4e text saying there is no source bound was wrong.
+- No run-time branch added (one Codex structure comparison, default account). Older structure differences remain
+  (4.4d-T0, 4.4d-CB, 4.3f-D owned decode, the members loops), so performance was not measured.
+- Results on `rs/rust` and `rs/llvm`: grok `test_impl.py` 254/254, `q.py --cases 300` 554 cases 0 unexplained,
+  `q_mutants.py --check` 16/16; codex `test_impl.py` 136/136, `q.py 300` 323 cases 0 unexplained, mutant markers
+  16/16 (full mutant run not done, 4.4e-VT).
+- Still open: 4.4d-T0, 4.4d-CB, 4.3f-D (owned decode), 4.4e-VT.
