@@ -12,35 +12,34 @@ pub fn validate_utf8(input: [u8], start: i64, end: i64) -> i64
   ensures result == -1 || (start <= result && result < end)
   ensures result == -1 ==> utf8_valid_span(input, start, end)
 {
+  // 4.4zc (4.4l-VU): the shape of std `run_utf8_validation`: one loop; an ASCII byte at an 8-aligned offset starts
+  // the skip of all-ASCII 16-byte blocks (a min reduction over 255 - byte, which the backend vectorizes) and then
+  // steps over the ASCII bytes after the last block; any other ASCII byte is one step; a lead byte is checked in place.
+  // No block is read twice. std tests the pointer's alignment; the offset is its counterpart here.
   let mut i: i64 = start;
-  // Skip 16-byte all-ASCII blocks (a min reduction over 255 - byte, which the backend vectorizes).
-  let mut ok: bool = true;
-  while ok && i + 16 <= end
-    invariant start <= i && i <= end && end <= len(input)
-    invariant ok || start + 16 <= i
-    invariant ok ==> utf8_valid_span(input, start, i)
-    invariant !ok ==> utf8_valid_span(input, start, i - 16)
-    decreases end - i
-  {
-    let mut m: i64 = 255;
-    let mut k: i64 = 0;
-    while k < 16
-      invariant 0 <= k && k <= 16 && start <= i && i + 16 <= end && end <= len(input)
-      invariant 0 <= m && m <= 255
-      invariant forall j in 0..k: m <= 255 - input[i + j]
-      decreases 16 - k
-    { let r: i64 = 255 - input[i + k]; if r < m { m = r; } k = k + 1; }
-    ok = m >= 128;
-    i = i + 16;
-  }
-  if !ok { i = i - 16; }
   while i < end
     invariant start <= i && i <= end
     invariant utf8_valid_span(input, start, i)
     decreases end - i
   {
     let c: i64 = input[i];
-    if c < 128 { i = i + 1; } else {
+    if c < 128 {
+      if i % 8 == 0 {
+        let first: i64 = i;
+        while i + 16 <= end && ascii_block(input, i)
+          invariant first <= i && i <= end && end <= len(input) && start <= first
+          invariant utf8_valid_span(input, start, i)
+          invariant i == first ==> (i < end && input[i] < 128)
+          decreases end - i
+        { i = i + 16; }
+        while i < end && input[i] < 128
+          invariant first <= i && i <= end
+          invariant utf8_valid_span(input, start, i)
+          invariant i == first ==> (i < end && input[i] < 128)
+          decreases end - i
+        { i = i + 1; }
+      } else { i = i + 1; }
+    } else {
       let mut n: i64 = 0;
       if c >= 194 && c <= 223 { n = 2; }
       if c >= 224 && c <= 239 { n = 3; }
@@ -52,21 +51,30 @@ pub fn validate_utf8(input: [u8], start: i64, end: i64) -> i64
       if c == 237 && b >= 160 { return i; }
       if c == 240 && b < 144 { return i; }
       if c == 244 && b > 143 { return i; }
-      let mut j: i64 = 2;
-      while j < n
-        invariant 2 <= j && j <= n && 2 <= n && n <= 4 && n <= end - i
-        invariant start <= i && i < end && end <= len(input)
-        invariant forall t in 2..j: (128 <= input[i + t] && input[i + t] <= 191)
-        decreases n - j
-      {
-        let continuation: i64 = input[i + j];
-        if continuation < 128 || continuation > 191 { return i; }
-        j = j + 1;
-      }
+      // std checks each continuation byte of the width in turn (no loop).
+      if n >= 3 { let b2: i64 = input[i + 2]; if b2 < 128 || b2 > 191 { return i; } }
+      if n == 4 { let b3: i64 = input[i + 3]; if b3 < 128 || b3 > 191 { return i; } }
       i = i + n;
     }
   }
   return -1;
+}
+
+// std's two-word test `(block | block2) & NONASCII_MASK == 0`: bytes i..i+16 are all ASCII (a min reduction over
+// 255 - byte, which the backend vectorizes).
+fn ascii_block(input: [u8], i: i64) -> bool
+  requires 0 <= i && i + 16 <= len(input)
+  ensures result ==> (forall j in 0..16: input[i + j] < 128)
+{
+  let mut m: i64 = 255;
+  let mut k: i64 = 0;
+  while k < 16
+    invariant 0 <= k && k <= 16 && 0 <= i && i + 16 <= len(input)
+    invariant 0 <= m && m <= 255
+    invariant forall j in 0..k: m <= 255 - input[i + j]
+    decreases 16 - k
+  { let r: i64 = 255 - input[i + k]; if r < m { m = r; } k = k + 1; }
+  return m >= 128;
 }
 
 // The hand `whitespace(&mut self)`.

@@ -184,7 +184,7 @@ fn field_units(doc: crate::json::JsonDocument, id: i64, key: [i64]) -> i64
 // Modes: kind, raw bytes, length, boolean, number, units, text UTF-8 bytes.
 pub fn query(input: [u8], ops: [i64], key: [i64], text: str, mode: i64) -> [i64] ! alloc
 {
-  let parsed: crate::json::JsonParse = crate::parse::parse(input);
+  let parsed: crate::json::JsonParse = crate::parse::parse(input, false);
   match parsed {
     crate::json::JsonParse::Failed(error) => { return one(-10); }
     crate::json::JsonParse::Parsed(d) => {

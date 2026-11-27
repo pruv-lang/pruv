@@ -19,14 +19,15 @@ pub fn parse_line(data: [u8], start: i64, end: i64) -> Line ! alloc
   // Every non-InternalInvariant failure maps to Skip (invalid UTF-8 included), as before.
   let n: i64 = end - start;
   if n > crate::json::limit_input_bytes() { return Line::Skip; }
-  let parsed: crate::json::JsonParse = crate::parse::parse(subview(data, start, end));
+  // 4.4zc (4.4l-RS): `object` takes only an object root, as the hand `parser.object(1)?`: another root fails at its
+  // first byte, before any record, and the root kind check after the parse is proved away.
+  let parsed: crate::json::JsonParse = crate::parse::parse(subview(data, start, end), true);
   match parsed {
     crate::json::JsonParse::Failed(error) => {
       if error.kind == crate::json::err_internal_invariant() { return Line::Defect(error.position); }
       return Line::Skip;
     }
     crate::json::JsonParse::Parsed(document) => {
-      if document.tape[0] != 6 { return Line::Skip; }
       return Line::Object(document);
     }
   }

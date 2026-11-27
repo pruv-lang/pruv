@@ -67,7 +67,9 @@ pub fn parse_owned(take data: [u8], hi: i64) -> crate::json::JsonParse ! alloc
       return crate::json::JsonParse::Failed(crate::json::make_error(position, kind));
     }
     crate::parse::Checked::Tape(tape) => {
-      if !crate::json::check_tape(tape, n) { return crate::json::JsonParse::Failed(crate::json::make_error(0, 18)); }
+      // 4.4zc (4.4l-CT): scan proves the record-local facts (check_tape's first pass), so only check_subtrees runs:
+      // its parent loop and subtree pass are the D32 proof gaps G-DB33-2 and G-DB33-1, not hand checks.
+      if !crate::json::check_subtrees(tape, n) { return crate::json::JsonParse::Failed(crate::json::make_error(0, 18)); }
       return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: truncate(owned, n), tape: move tape });
     }
   }

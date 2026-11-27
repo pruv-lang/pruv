@@ -4,7 +4,7 @@ mod parse;
 
 pub fn parse_tape(input: [u8]) -> [i64] ! alloc
 {
-  let parsed: crate::json::JsonParse = crate::parse::parse(input);
+  let parsed: crate::json::JsonParse = crate::parse::parse(input, false);
   match parsed {
     crate::json::JsonParse::Parsed(document) => { let tape: [i64] = move document.tape; return tape; }
     crate::json::JsonParse::Failed(error) => {

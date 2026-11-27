@@ -179,10 +179,12 @@ fn scalar(a: [u8], p: i64, stop: i64) -> Scalar
   let s: Step = step(a, p, stop);
   let mut v: i64 = s.value;
   let mut np: i64 = s.next;
-  if 55296 <= v && v <= 56319 && np < stop {
-    let s2: Step = step(a, np, stop);
-    if 56320 <= s2.value && s2.value <= 57343 {
-      v = 65536 + (v - 55296) * 1024 + s2.value - 56320; np = s2.next;
+  // 4.4zc (4.4l-RE): the low half is read only after a `\u`, and its four hex digits directly (hand `escape`:
+  // `if self.eat("\\u") { let low = self.hex4()?; .. }`).
+  if 55296 <= v && v <= 56319 && np + 6 <= stop && a[np] == 92 && a[np + 1] == 117 {
+    let low: i64 = 4096 * hex(a[np + 2]) + 256 * hex(a[np + 3]) + 16 * hex(a[np + 4]) + hex(a[np + 5]);
+    if 56320 <= low && low <= 57343 {
+      v = 65536 + (v - 55296) * 1024 + low - 56320; np = np + 6;
     }
   }
   if 55296 <= v && v <= 57343 { v = 65533; }
@@ -193,7 +195,10 @@ pub fn string_utf8(source: [u8], start: i64, end: i64) -> [u8] ! alloc
   ensures len(result) <= 3 * (end - start)
   ensures forall i in 0..len(result): (0 <= result[i] && result[i] <= 255)
 {
-  return decode_utf8(source, start, end, false);
+  // 4.4zc (4.4l-RE): a document's string spans were validated by its parser (the hand validates the line once), so
+  // the raw bytes of each escape-free chunk are copied as they are, non-ASCII included (hand `extend_from_slice(chunk)`);
+  // only escapes are decoded. string_text_owned tests the result as the hand `String::from_utf8(bytes).ok()?` does.
+  return decode_utf8(source, start, end, true);
 }
 
 fn decode_utf8(source: [u8], start: i64, end: i64, scanned: bool) -> [u8] ! alloc
@@ -209,6 +214,8 @@ fn decode_utf8(source: [u8], start: i64, end: i64, scanned: bool) -> [u8] ! allo
 // One pass, as the hand decodes while parsing (`decoded.get_or_insert_with(Vec::new)`, `extend_from_slice` per
 // escape-free run, the escape scalar written as UTF-8, no count pass and no reserve; 4.4i-DP).
 // Appends to the caller's buffer (4.4i, hand `buf.extend_from_slice` into an existing `Vec`).
+// `scanned` (every caller of a parsed document since 4.4zc) copies non-ASCII bytes with the run; `!scanned` decodes
+// them to valid UTF-8 for a source with no validity fact (qwen's replay events), which then needs no run-time test.
 pub fn decode_append(inout out: [u8], source: [u8], start: i64, end: i64, scanned: bool) -> () ! alloc
   requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
   requires len(out) <= 50331648

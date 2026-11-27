@@ -94,7 +94,7 @@ fn canonical(d: crate::json::JsonDocument) -> [i64] ! alloc {
  { out[i] = a[i]; i = i+1; } return out;
 }
 pub fn dump(input: [u8]) -> [i64] ! alloc {
- let parsed: crate::json::JsonParse = crate::parse::parse(input);
+ let parsed: crate::json::JsonParse = crate::parse::parse(input, false);
  match parsed {
   crate::json::JsonParse::Failed(error) => { return fail(error.position,error.kind); }
   crate::json::JsonParse::Parsed(d) => { return canonical(d); }

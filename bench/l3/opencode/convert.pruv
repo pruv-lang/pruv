@@ -200,7 +200,7 @@ pub fn decode(doc_bytes: [u8], fallback: str) -> [i64] ! alloc
   ensures len(result) >= 40
 {
   if len(doc_bytes) > 16777216 { return crate::packet::simple_error(1, 24, 3, 5); }
-  let parsed: crate::json::JsonParse = crate::parse::parse(doc_bytes);
+  let parsed: crate::json::JsonParse = crate::parse::parse(doc_bytes, false);
   match parsed {
     crate::json::JsonParse::Failed(e) => {
       if e.kind == 1 { return crate::packet::simple_error(1, 24, 3, 5); }

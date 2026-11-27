@@ -309,7 +309,7 @@ pub fn direct(cfg: [i64], cfg_text: [u8]) -> [i64] ! alloc
 {
   let jb: [u8] = crate::util::span_bytes(cfg_text, cfg[19], cfg[20]);
   if len(jb) > 16777216 { return crate::packet::simple_error(5, 24, 3, 5); }
-  let parsed: crate::json::JsonParse = crate::parse::parse(jb);
+  let parsed: crate::json::JsonParse = crate::parse::parse(jb, false);
   match parsed {
     crate::json::JsonParse::Failed(e) => {
       if e.kind == 1 { return crate::packet::simple_error(5, 24, 3, 5); }
