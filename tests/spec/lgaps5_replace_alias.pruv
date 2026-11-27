@@ -1,0 +1,6 @@
+// spec: R-6g9-12 reject
+fn bump() -> i64 {
+  let mut x: i64 = 1;
+  let old: i64 = replace(inout x, x + 1);
+  return old;
+}

@@ -2097,6 +2097,39 @@ borrowed value is live.
     [`[u8]` list from `vec_new::<ref str>`](tests/spec/lgaps4_byte_list_new.pruv),
     [source write while live](tests/spec/lgaps4_byte_list_live.pruv),
     [`vec_clear` on an immutable list](tests/spec/lgaps4_immutable_clear.pruv).
+- R-6g9-12 **`swap` and `replace` (P10, L-gaps 5).** `swap(inout P, inout Q)` exchanges two places and has result
+  `unit`; `replace(inout P, e)` stores `e` in `P` and returns the old value (type `T`), with no copy. A place is a
+  `let mut` local, an `inout` parameter or a field path rooted at one (`s.data`, `d.a.b`); both places of `swap` and the
+  value of `replace` have the place's type `T`, which is a scalar or an owned value (`[u8]`, `[T]`, `String`, a struct;
+  not a view or a borrowing struct, `type/borrow_signature`; not a fixed-length array `[T; N]`, `type/inout_argument`).
+  An `inout` parameter or a map binder is a place only when an assignment could replace it whole (a scalar, a
+  resizable array or a struct); an `inout` `Vec` / `HashMap` parameter or a map binder is `type/immutable`. A non-place argument, a missing `inout` or an immutable
+  local is `type/inout_argument`; overlapping places (`swap(inout x, inout x)`, `swap(inout s.f, inout s.f)`) or a
+  `replace` value that mentions the place is `type/inout_alias` (a field and its own struct never have one type, so
+  `swap(inout s.f, inout s)` is `type/inout_argument`); both are code-only (`type/effect_in_contract`) and
+  take no type argument. The value of `replace` is consumed like an assignment (`move` for an owned local). The
+  names are contextual: a program's own `swap` / `replace` function keeps the name and is called as usual.
+  - *Proof.* Here `old` is the value just before the call. After `swap`, `P == old(Q)` and `Q == old(P)` (lengths and bytes of owned values included); after
+    `replace`, the result is `old(P)` and `P == e`. There is no obligation of its own; a refined local passed as a place must satisfy its range after the call
+    (`verify/refinement_assign`, as for any `inout` argument).
+  - *Code.* Rust: `::std::mem::swap(&mut P, &mut Q)` / `::std::mem::replace(&mut P, e)` (an array place is the whole
+    `&mut Vec<T>`, so an `inout` array parameter passed to them is resizable). LLVM: the places are read and written
+    in their storage form (a local slot, or the field's storage), so nothing is allocated or freed (an old value used in place is dropped with the statement's temporaries); output and
+    allocation balance match the Rust backend.
+  - Tests: [scalars, `[u8]` locals, `inout` parameters, struct fields, whole structs, `String`](tests/spec/lgaps5_mem.pruv),
+    [a program's own `swap` / `replace` win](tests/spec/lgaps5_user_mem.pruv),
+    [the old value read in place, an old struct passed on](tests/spec/lgaps5_mem_use.pruv);
+    rejects [a place swapped with itself](tests/spec/lgaps5_swap_alias.pruv),
+    [the same field twice](tests/spec/lgaps5_swap_overlap.pruv),
+    [a `replace` value that reads the place](tests/spec/lgaps5_replace_alias.pruv),
+    [an immutable local](tests/spec/lgaps5_swap_immutable.pruv),
+    [places of two types](tests/spec/lgaps5_swap_types.pruv),
+    [a fixed-length array](tests/spec/lgaps5_replace_fixed.pruv),
+    [an `inout` `Vec` parameter](tests/spec/lgaps5_swap_vec_param.pruv),
+    [a wrong fact about the `replace` result](tests/spec/lgaps5_replace_fact.pruv),
+    [a wrong fact after `swap`](tests/spec/lgaps5_swap_fact.pruv),
+    [a refined local out of range after `replace`](tests/spec/lgaps5_replace_refine.pruv) and
+    [after `swap`](tests/spec/lgaps5_swap_refine.pruv).
 
 ## 6h. Files (G10)
 

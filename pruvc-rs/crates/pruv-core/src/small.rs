@@ -413,7 +413,7 @@ pub fn plan_small(
     // The resizable-slot filter runs before the site walk so ineligible candidates take no budget.
     // The slice-backed result cannot be passed to a helper that needs a Vec slot.
     plan.fns.retain(|name, (_, buffer, _)| {
-        !crate::check::resize_slot_names(fmap[name], resizes).contains(buffer)
+        !crate::check::resize_slot_names_mem(fmap[name], resizes, &|n| !fmap.contains_key(n)).contains(buffer)
     });
     if plan.fns.is_empty() {
         return plan;
