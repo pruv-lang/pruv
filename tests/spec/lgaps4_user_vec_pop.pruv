@@ -1,0 +1,14 @@
+// spec: R-6g9-11 accept
+// `vec_pop` is a contextual name: a program that defines its own `vec_pop` calls its own function, and a view list
+// beside it keeps its other operations.
+fn vec_pop(x: i64) -> i64
+  requires 0 <= x && x <= 1000
+  ensures result == x * 2
+{ return x * 2; }
+
+fn checksum() -> i64 ! alloc {
+  let mut names: Vec<ref str> = vec_new::<ref str>();
+  vec_push::<ref str>(inout names, "abc");
+  let k: i64 = len(vec_get::<ref str>(names, 0));
+  return vec_pop(21) * 10 + k;
+}

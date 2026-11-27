@@ -1,5 +1,5 @@
 // spec: R-6g9-10 reject
-// Only vec_push, vec_get, vec_clear, vec_reserve and len: vec_len, vec_pop and the rest are not list operations yet.
+// Only vec_push, vec_get, vec_pop, vec_clear, vec_reserve and len: vec_len and the rest are not list operations.
 fn f(p: str) -> i64 ! alloc {
   let mut parts: Vec<ref str> = vec_new::<ref str>();
   vec_push::<ref str>(inout parts, p);

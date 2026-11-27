@@ -2054,12 +2054,12 @@ borrowed value is live.
 - R-6g9-10 **Local lists of `str` views (4.4b-NV).** `let mut parts: Vec<ref str> = vec_new::<ref str>();` declares a
   list of borrowed `str` views local to its function (hand `let mut parts: Vec<&str> = Vec::new();`).
   - *Operations.* Only `vec_push::<ref str>(inout parts, v)`, `vec_get::<ref str>(parts, i)` (a `ref str` view),
-    `vec_clear::<ref str>(inout parts)`, `vec_reserve::<ref str>(inout parts, n)` and `len(parts)`, with the usual
-    bounds and length obligations of those calls. Any other use of the list (an argument, a result, a `move`, a copy,
+    `vec_clear::<ref str>(inout parts)`, `vec_reserve::<ref str>(inout parts, n)`, `vec_pop::<ref str>(inout parts)` (R-6g9-11) and `len(parts)`, with the
+    usual bounds and length obligations of those calls; the `inout` operations need a `let mut` list (`type/immutable`). Any other use of the list (an argument, a result, a `move`, a copy,
     a field, an assignment to it) is `type/borrow_escape`; another `vec_*` call, an operation without the
     `::<ref str>` type argument, a list initialised other than by `vec_new::<ref str>()`, a list named like a
-    parameter or bound twice, and a list in a generic function are `type/borrow_signature`. Not yet: `Vec<ref [u8]>`,
-    `vec_pop`, lists as parameters or results, `for` over a list.
+    parameter or bound twice, and a list in a generic function are `type/borrow_signature`. `Vec<ref [u8]>` and `vec_pop` are R-6g9-11. Not yet: lists as parameters or
+    results, `for` over a list.
   - *Values.* `v` is any `str` view argument (R-6g9-1): a `str` parameter or local, a field, a `subview`, a view
     local, a `from` call result, a string literal (static). An owned `str` local or field is borrowed, not moved.
   - *Provenance.* The list is a borrow local (R-6g9-4) whose provenance is the union of every pushed value's
@@ -2081,6 +2081,22 @@ borrowed value is live.
     [write while live](tests/spec/r6g9_10_write_while_live.pruv), [missing `ref` type argument](tests/spec/r6g9_10_owned_targ.pruv),
     [generic function](tests/spec/r6g9_10_generic.pruv), [other operation](tests/spec/r6g9_10_other_op.pruv),
     [LLVM owned `Vec<String>` beside a view list](tests/spec/r6g9_10_llvm.pruv), [length after a push](tests/spec/r6g9_10_len_after_push.pruv).
+- R-6g9-11 **Lists of `[u8]` views and `vec_pop` (L-gaps 4).** `let mut parts: Vec<ref [u8]> = vec_new::<ref [u8]>();`
+  is the R-6g9-10 list with `[u8]` views (hand `Vec<&[u8]>`): the same operations, values (any `[u8]` view argument,
+  an owned `[u8]` local is borrowed, `[]` is the static empty view), provenance, liveness and code rules. Every
+  `vec_*` operation's type argument must name the list's own element (`vec_push::<ref str>` on a `Vec<ref [u8]>`, or a
+  `Vec<ref [u8]>` initialised by `vec_new::<ref str>()`, is `type/borrow_signature`). The proof model is the same
+  `Vec<String>` of bytes (no UTF-8 fact is used). `vec_pop::<ref T>(inout parts)` on either list drops the last view
+  and has result `unit` (a program's own `vec_pop` function keeps the name); it requires `len(parts) >= 1` (`verify/call_requires`), and after it `len(parts)` is one
+  less. Code: Rust `{ parts.pop(); }` (with `--no-verify`, a failed pop panics with the requires message); LLVM
+  stores the length less one, with the same check unverified.
+  - Tests: [`[u8]` pieces with `..` popping, `str` pop](tests/spec/lgaps4_byte_list.pruv),
+    [a program's own `vec_pop` wins](tests/spec/lgaps4_user_vec_pop.pruv);
+    rejects [pop of a possibly empty list](tests/spec/lgaps4_pop_empty.pruv),
+    [`str` operation on a `[u8]` list](tests/spec/lgaps4_byte_list_targ.pruv),
+    [`[u8]` list from `vec_new::<ref str>`](tests/spec/lgaps4_byte_list_new.pruv),
+    [source write while live](tests/spec/lgaps4_byte_list_live.pruv),
+    [`vec_clear` on an immutable list](tests/spec/lgaps4_immutable_clear.pruv).
 
 ## 6h. Files (G10)
 

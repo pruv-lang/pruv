@@ -1,0 +1,18 @@
+{
+  "gen_contains": [
+    "let mut parts: ::std::vec::Vec<&[u8]> = ::std::vec::Vec::new();",
+    "parts.push(&head);",
+    "parts.push(&[]);",
+    "{ parts.pop(); }",
+    "let mut names: ::std::vec::Vec<&str> = ::std::vec::Vec::new();",
+    "{ names.pop(); }"
+  ],
+  "gen_absent": ["pruv_g6_vec_push", "pruv_g6_vec_get"],
+  "run": {
+    "backends": ["rust", "llvm"],
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["5043"],
+    "alloc_balance": true
+  }
+}

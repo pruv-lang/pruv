@@ -1538,3 +1538,35 @@ All after the last code change (F1 / F4 from the structure comparison).
      pieces read back in reverse), `join` without `utf8_valid`; keep or port the byte caller in `export.pruv`
      (L3-VB); then `test_impl.py` on `rs/rust` and `rs/llvm` and `q.py`.
   2. Then the Next list after 4.4g (items 2-5).
+
+### Bundle L-gaps 4 (2026-11-27, capped at 1 hour)
+
+- L3-VB: done (R-6g9-11). `let mut parts: Vec<ref [u8]> = vec_new::<ref [u8]>();` is the view list with `[u8]`
+  views on both backends (Rust `Vec<&[u8]>`, LLVM the same native `{ptr, len, 0}` vector); the borrow rules are
+  R-6g9-10's, each operation's type argument must match the list's element, and the allocation balance matches Rust.
+- L3-VP: done (R-6g9-11). `vec_pop::<ref T>(inout parts)` on a `str` or `[u8]` list drops the last view, requires
+  `len(parts) >= 1`; Rust `{ parts.pop(); }`, LLVM stores the length less one.
+- Still open: P10 `replace`/`swap` (not reached within the cap); 4.4b-NV (the `normalize` rewrite can now pop, and
+  the byte caller in `export.pruv` can keep a `Vec<ref [u8]>`); the rows listed above.
+- Audit (A: Codex gpt-6.2-astra high, spec and tests). Fixed: `vec_clear`/`vec_reserve` on an immutable view list
+  were accepted (now `type/immutable`, test `lgaps4_immutable_clear`); the "other operation" message on a `[u8]` list
+  named `ref str`; R-6g9-10's operation list lacked `vec_pop`. Advisory rows, tests not yet written:
+  - LG4-T1: `[u8]` list `vec_clear`, `vec_get` out of range, `vec_reserve` with a negative size.
+  - LG4-T2: `[u8]` pushes of a field, a view local and a `from` result; `borrow_escape` of a `[u8]` list.
+  - LG4-T3: a `vec_get` view of a `[u8]` list live after the list's last use.
+  - LG4-T4: `[u8]` list rejects: missing type argument, other `vec_*` op, other initialiser, parameter name, generic.
+  - LG4-T5: `vec_pop` arity and a non-list argument; the exact length after a `[u8]` pop as an assert.
+  - LG4-T6: an empty pop under `--no-verify` at runtime (the panic message on Rust, the check on LLVM).
+  - LG4-D1: README does not document the `line` reject field.
+- Audit (B: Claude opus high, codegen and LLVM): no required finding (length store, cap kept, verified pop unguarded,
+  user `vec_pop` dispatch checked by reading code and IR). Advisory rows:
+  - LG4-B1: the LLVM pop check follows `vec_get_checked` (also on with foreign functions or `--foreign-checks all`),
+    Rust's follows `--no-verify` only; no wrong result (a verified pop never sees an empty list), but SPEC's "the
+    same check unverified" is narrower than LLVM.
+  - LG4-B2: an LLVM `--no-verify` pop failure calls `pruv_panic_requires` without freeing the list buffer (the
+    `vec_get` failure path frees first; `vec_reserve` behaves like pop).
+  - LG4-B3: mono.rs keeps targs for any call with a view targ; only `vec_new` in a `[u8]` Let reaches it, so it
+    could test `x.name == "vec_new"`.
+  - LG4-B4: tests not yet written: `[u8]` list allocation balance on loop early return / `break` / `?`; an
+    `inout [u8]` parameter pushed, and `arr_push(inout src)` while the list is live; `vec_pop` in a contract;
+    `Vec<ref str>` from `vec_new::<ref [u8]>()`; a `[u8]` list in a program where G3 mono runs.

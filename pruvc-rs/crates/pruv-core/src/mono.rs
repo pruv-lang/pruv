@@ -643,7 +643,9 @@ impl<'a> Mono<'a> {
                 } else if let Some(r) = self.rfns.get(&x.name) {
                     name = r.clone(); // G4 A2: a nongeneric user function -> its Rust stem
                 }
-                Expr::Call(Call { line: x.line, col: x.col, name, args, ty, targs: None, inst: new_inst, old: x.old.clone(), opaque_c: x.opaque_c })
+                // L3-VB: a `[u8]` view list's `vec_new::<ref [u8]>()` keeps its element type argument for the code generators
+                let targs = if crate::borrowed::view_list_targ(&x.targs).is_some() { x.targs.clone() } else { None };
+                Expr::Call(Call { line: x.line, col: x.col, name, args, ty, targs, inst: new_inst, old: x.old.clone(), opaque_c: x.opaque_c })
             }
             Expr::Index(x) => {
                 let array = self.bx(&x.array)?;

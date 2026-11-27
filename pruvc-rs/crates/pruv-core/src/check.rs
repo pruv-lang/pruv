@@ -4438,14 +4438,20 @@ impl Checker {
                     v => self.field_move_out(v, &sty, None, scope, next)?,
                 };
                 let list = crate::borrowed::is_view_list(s);
+                let bytes = crate::borrowed::is_byte_view_list(s);
                 let checked = if list {
                     // R-6g9-10: a view list starts empty.
                     match &mut s.value {
                         Expr::Call(x) if x.name == "vec_new" && x.args.is_empty() && !self.funcs.contains_key("vec_new")
                             && crate::borrowed::is_view_list_targ(&x.targs) =>
                         {
-                            x.targs = Some(vec![GType::from_key("string")]);
-                            self.expect(&mut s.value, &sty, scope, false, None).map(|_| ())
+                            let written = x.targs.replace(vec![GType::from_key("string")]);
+                            let r = self.expect(&mut s.value, &sty, scope, false, None).map(|_| ());
+                            if bytes {
+                                // L3-VB: the code generators read the element kind back from `vec_new::<ref [u8]>`
+                                if let Expr::Call(x) = &mut s.value { x.targs = written; }
+                            }
+                            r
                         }
                         v => Err(terr(v.line(), v.col(), "borrow_signature",
                             "a Vec<ref str> local starts as vec_new::<ref str>()", "")),
@@ -4468,7 +4474,7 @@ impl Checker {
                 if !s.borrowed {
                     self.own(&s.value, scope)?;
                 }
-                let kind = if list { "view_list" } else if s.borrowed { "ref_local" } else { "local" };
+                let kind = if bytes { "view_list_u8" } else if list { "view_list" } else if s.borrowed { "ref_local" } else { "local" };
                 scope.insert(s.name.clone(), Entry { ty: sty, mutable: s.mutable, kind });
             }
             Stmt::Assign(s) => {
@@ -8426,9 +8432,12 @@ impl Checker {
     fn view_list_call(&mut self, e: &mut Call, scope: &Scope, c: bool) -> Res<GType> {
         let (line, col, n) = (e.line, e.col, e.name.clone());
         let bad = |line, col, msg: &str| terr(line, col, "borrow_signature", msg.to_string(), "");
-        if !matches!(n.as_str(), "vec_push" | "vec_get" | "vec_clear" | "vec_reserve") {
-            return Err(bad(line, col, "a Vec<ref str> supports vec_new, vec_push, vec_get, vec_clear, vec_reserve and len"));
+        if !matches!(n.as_str(), "vec_push" | "vec_get" | "vec_clear" | "vec_reserve" | "vec_pop") {
+            return Err(bad(line, col, "a Vec<ref str> supports vec_new, vec_push, vec_get, vec_pop, vec_clear, vec_reserve and len"));
         }
+        // L3-VB: the element is a `str` or a `[u8]` view; the type argument names the list's own element
+        let bytes = crate::borrowed::view_list_targ(&e.targs) == Some("array_u8");
+        let (elem, kind) = if bytes { (GType::from_key("array_u8"), "view_list_u8") } else { (strt(), "view_list") };
         let want = if n == "vec_reserve" || n == "vec_push" { 2 } else if n == "vec_get" { 2 } else { 1 };
         if e.args.len() != want {
             return Err(terr(line, col, "arity", format!("{} takes {} argument(s), got {}", n, want, e.args.len()), ""));
@@ -8441,17 +8450,17 @@ impl Checker {
             }
         }
         let target = match (&mut e.args[0], n.as_str()) {
-            (Expr::InoutArg(a), "vec_push" | "vec_clear" | "vec_reserve") => &mut *a.expr,
+            (Expr::InoutArg(a), "vec_push" | "vec_clear" | "vec_reserve" | "vec_pop") => &mut *a.expr,
             (v @ Expr::Var(_), "vec_get") => v,
             (v, _) => return Err(bad(v.line(), v.col(), "a view list operation needs the list local itself")),
         };
         let Expr::Var(var) = &*target else {
             return Err(bad(target.line(), target.col(), "a view list operation needs the list local itself"));
         };
-        let Some(entry) = scope.get(&var.name).filter(|entry| entry.kind == "view_list") else {
-            return Err(bad(var.line, var.col, "vec_*::<ref str> needs a local declared Vec<ref str>"));
+        let Some(entry) = scope.get(&var.name).filter(|entry| entry.kind == kind) else {
+            return Err(bad(var.line, var.col, "vec_*::<ref T> needs a local declared Vec<ref T> of the same T"));
         };
-        if n == "vec_push" && !entry.mutable {
+        if matches!(n.as_str(), "vec_push" | "vec_pop" | "vec_clear" | "vec_reserve") && !entry.mutable {
             return Err(terr(var.line, var.col, "immutable", format!("cannot pass immutable {} as inout", var.name), ""));
         }
         set_ty(target, &list);
@@ -8460,6 +8469,12 @@ impl Checker {
         }
         if c && n == "vec_get" {
             return Err(terr(line, col, "foreign_contract", "vec_get cannot be called in a contract", ""));
+        }
+        if n == "vec_pop" {
+            // L3-VP: `vec_pop::<ref T>(inout parts)` drops the last view (hand `parts.pop();`); `len(parts) >= 1`
+            // is the obligation, checked by the verifier
+            e.ty = Some(unitt().to_key());
+            return Ok(unitt());
         }
         let cf = catalog_fn(&n).ok_or_else(|| bad(line, col, "unknown view list operation"))?;
         if let Some(m) = self.instantiate(line, col, &format!("function {}", n), &fn_owner(&n), &cf.tparams, &e.targs.clone())? {
@@ -8474,14 +8489,14 @@ impl Checker {
             return Ok(unitt());
         }
         if n == "vec_push" {
-            self.view_value(&mut e.args[1], &strt(), scope, c)?;
+            self.view_value(&mut e.args[1], &elem, scope, c)?;
             self.used_effects.insert("alloc".to_string());
             e.ty = Some(unitt().to_key());
             return Ok(unitt());
         }
         self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
-        e.ty = Some("str".into());
-        Ok(strt())
+        e.ty = Some(elem.to_key());
+        Ok(elem)
     }
 
     fn call(&mut self, e: &mut Call, scope: &Scope, c: bool) -> Res<GType> {
@@ -8505,9 +8520,10 @@ impl Checker {
             // R-6g9-10: a view list takes only the `ref str` operations
             let list = e.args.first().map(|a| match a { Expr::InoutArg(x) => &*x.expr, a => a });
             if let Some(Expr::Var(v)) = list {
-                if scope.get(&v.name).is_some_and(|entry| entry.kind == "view_list") {
+                if let Some(entry) = scope.get(&v.name).filter(|entry| matches!(entry.kind, "view_list" | "view_list_u8")) {
+                    let t = if entry.kind == "view_list_u8" { "ref [u8]" } else { "ref str" };
                     return Err(terr(v.line, v.col, "borrow_signature",
-                        format!("{} is a Vec<ref str>: use {}::<ref str>", v.name, n), ""));
+                        format!("{} is a Vec<{}>: use {}::<{}>", v.name, t, n, t), ""));
                 }
             }
         }
