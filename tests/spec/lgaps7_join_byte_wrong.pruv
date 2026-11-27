@@ -1,0 +1,11 @@
+// spec: R-6g9-16 reject
+// The byte after the first view is the separator, not the first byte of the next view.
+fn checksum() -> i64 ! alloc {
+  let mut out: Vec<ref str> = vec_new::<ref str>();
+  vec_push::<ref str>(inout out, "ab");
+  vec_push::<ref str>(inout out, "xd");
+  let s: String = vec_join::<ref str>(out, "/");
+  let t: str = string_into_str(move s);
+  assert len(t) == 5 && t[2] == 120;
+  return len(t);
+}

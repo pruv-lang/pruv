@@ -1,0 +1,26 @@
+{
+  "gen_contains": [
+    "out.join(&(\"/\")[..])"
+  ],
+  "gen_absent": [
+    "vec_views_len",
+    "from_utf8"
+  ],
+  "run": {
+    "backends": [
+      "rust",
+      "llvm"
+    ],
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "5411"
+    ],
+    "g6_drop_balance": true
+  }
+}

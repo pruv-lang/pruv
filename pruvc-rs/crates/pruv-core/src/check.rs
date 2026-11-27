@@ -8524,13 +8524,13 @@ impl Checker {
     fn view_list_call(&mut self, e: &mut Call, scope: &Scope, c: bool) -> Res<GType> {
         let (line, col, n) = (e.line, e.col, e.name.clone());
         let bad = |line, col, msg: &str| terr(line, col, "borrow_signature", msg.to_string(), "");
-        if !matches!(n.as_str(), "vec_push" | "vec_get" | "vec_clear" | "vec_reserve" | "vec_pop" | "vec_views_len") {
-            return Err(bad(line, col, "a Vec<ref str> supports vec_new, vec_push, vec_get, vec_pop, vec_clear, vec_reserve, vec_views_len and len"));
+        if !matches!(n.as_str(), "vec_push" | "vec_get" | "vec_clear" | "vec_reserve" | "vec_pop" | "vec_views_len" | "vec_join") {
+            return Err(bad(line, col, "a Vec<ref str> supports vec_new, vec_push, vec_get, vec_pop, vec_clear, vec_reserve, vec_join, vec_views_len and len"));
         }
         // L3-VB: the element is a `str` or a `[u8]` view; the type argument names the list's own element
         let bytes = crate::borrowed::view_list_targ(&e.targs) == Some("array_u8");
         let (elem, kind) = if bytes { (GType::from_key("array_u8"), "view_list_u8") } else { (strt(), "view_list") };
-        let want = if matches!(n.as_str(), "vec_reserve" | "vec_push" | "vec_get" | "vec_views_len") { 2 } else { 1 };
+        let want = if matches!(n.as_str(), "vec_reserve" | "vec_push" | "vec_get" | "vec_views_len" | "vec_join") { 2 } else { 1 };
         if e.args.len() != want {
             return Err(terr(line, col, "arity", format!("{} takes {} argument(s), got {}", n, want, e.args.len()), ""));
         }
@@ -8548,7 +8548,7 @@ impl Checker {
         }
         let target = match (&mut e.args[0], n.as_str()) {
             (Expr::InoutArg(a), "vec_push" | "vec_clear" | "vec_reserve" | "vec_pop") => &mut *a.expr,
-            (v @ Expr::Var(_), "vec_get" | "vec_views_len") => v,
+            (v @ Expr::Var(_), "vec_get" | "vec_views_len" | "vec_join") => v,
             (v, _) => return Err(bad(v.line(), v.col(), "a view list operation needs the list local itself")),
         };
         let Expr::Var(var) = &*target else {
@@ -8572,6 +8572,15 @@ impl Checker {
             self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
             e.ty = Some(i64t().to_key());
             return Ok(i64t());
+        }
+        if n == "vec_join" {
+            // LG6-VJ (R-6g9-16): `vec_join::<ref T>(parts, sep)` copies the views with `sep` between them into one
+            // new owned value (hand `parts.join(sep)`): a `String` for `str` views, a `[u8]` for `[u8]` views
+            self.expect(&mut e.args[1], &elem, scope, c, None)?;
+            self.used_effects.insert("alloc".to_string());
+            let r = if bytes { GType::from_key("array_u8") } else { GType::from_key("string") };
+            e.ty = Some(r.to_key());
+            return Ok(r);
         }
         if n == "vec_pop" {
             // L3-VP: `vec_pop::<ref T>(inout parts)` drops the last view (hand `parts.pop();`); `len(parts) >= 1`

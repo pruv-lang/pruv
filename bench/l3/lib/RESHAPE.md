@@ -1774,3 +1774,24 @@ All after the last code change (F1 / F4 from the structure comparison).
     length and the tail, not the encoded prefix bytes.
   - LG6-B2 (unverified guess): `string_with_capacity(2^40)` passes the proof but the allocation would abort rather
     than fail with exit 101 (same as `vec_reserve`).
+
+### Bundle L-gaps 7
+
+- Closed LG6-VJ (R-6g9-16): catalog `vec_join::<ref T>(parts, sep)` on a `str` / `[u8]` view list (hand
+  `parts.join(sep)`), result `String` / `[u8]` with `! alloc`, on both backends. The verifier gives the result
+  length from the R-6g9-13 view sum plus `(n - 1) * len(sep)` and every byte (piece `k` starts at
+  `S(k) + k * len(sep)`, the separator follows it when `k < n - 1`); it requires the total to be at most `2^40`.
+  A `String` result has no run-time UTF-8 scan. Rust emits `parts.join(&sep[..])`; LLVM sums the lengths, allocates
+  once (or `string_with_capacity` through the G6 shim) and copies views and separators. The path normalizer now
+  builds with `vec_join::<ref str>(out, "/")` (`lgaps7_join`, emits `out.join(&("/")[..])`). Tests
+  `lgaps7_join_bytes`, `lgaps7_join`; rejects `lgaps7_join_len_wrong`, `lgaps7_join_byte_wrong`.
+- Fixed: `lgaps6_pop_free` failed `spec_trace` (an `accept` test that only compiles unverified); its JSON now has
+  top-level `"flags": ["--no-verify"]`.
+- New rows:
+  - LG7-SR: a wrong length or byte claim about a join of `subview` pieces is refuted only after the verifier
+    timeout (about 120 s, `verify_unknown`) instead of a quick `assert` counterexample; the reject tests use string
+    literal pieces. The recursive view sum with symbolic piece lengths is the likely cause.
+  - LG7-AB: the LLVM `alloc_balance` counter does not see buffers that the G6 shim allocates and the module frees
+    (`string_into_str`), so `lgaps7_join_bytes` checks `g6_drop_balance` instead of `alloc_balance`.
+- Still open: P10-M1 (a Vec element `v[i]` as a `swap`/`replace` place) and LG6-T3 (extend `lgaps6_pop_free`).
+- Next: P10-M1, LG6-T3, LG7-SR.

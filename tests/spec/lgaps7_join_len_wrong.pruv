@@ -1,0 +1,11 @@
+// spec: R-6g9-16 reject
+// The join length counts one separator between views, not one per view: "ab" and "cd" joined with "/" is
+// 5 bytes, so claiming 6 (a separator after the last view) is a wrong accepted program.
+fn checksum() -> i64 ! alloc {
+  let mut out: Vec<ref str> = vec_new::<ref str>();
+  vec_push::<ref str>(inout out, "ab");
+  vec_push::<ref str>(inout out, "cd");
+  let s: String = vec_join::<ref str>(out, "/");
+  assert len(s) == 6;
+  return len(s);
+}
