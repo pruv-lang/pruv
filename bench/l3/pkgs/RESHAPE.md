@@ -1439,3 +1439,13 @@ Review: one Codex structure review (default account) found RE, VU and RS not equ
 `\u`, the continuation loop, the duplicate root dispatch in `record`); CT is the recorded gap. All three were fixed.
 The confirm review gave all fixed and one new RE item (`\u` tested in `scalar` and again in the step); fixed by the
 direct hex read above. Structure is not zero (gaps above), so performance was not measured.
+
+### Rows after 4.4ze
+
+- 4.4x-DS (`jstr` `decode_append`, scanned mode ensures no UTF-8 fact) stays open, blocked by the new verifier gap
+  4.4ze-UW: the sub-window `utf8_valid_span(b, q, e)` after an ASCII byte is not derived from
+  `utf8_valid_span(b, lo, hi)` when `lo` is symbolic (window encoded over `select(lo + i)`).
+- Design chosen for after the gap: the literal-backslash rule in `step`/`scalar` (an escape is decoded only if it
+  ends on an ASCII byte; `ensures a[p] == 92 ==> a[result.next - 1] < 128`). The source-requires option is rejected
+  (false on valid input `"\\é"`). Full rows: `../lib/RESHAPE.md` "Rows after 4.4ze".
+- No package source changed, so no consumer run. Not measured.

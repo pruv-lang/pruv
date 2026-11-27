@@ -2644,3 +2644,24 @@ Changes `bench/l3/pkgs/transport`, `codex/rpc.pruv` and a comment in `grok/rpc.p
   diff_rust fuzz 20 and m3_all --quick ok after the intended golden update (runtime text and new samples).
 - Fix-check review: all three required findings fixed, no new required problem. L3 on the final compiler: 20 runs
   pass (claude a0-a4, json a0-a5, supervisor a0-a3, grok, qwen, mcp, codex, opencode --jobs 2).
+
+### Rows after 4.4ze
+
+- 4.4x-DS (`jstr`) stays open, now blocked by the new verifier gap 4.4ze-UW. `decode_append` is unchanged.
+- Chosen design for when the gap is fixed: option (b), a literal-backslash rule. `step` and `scalar` decode an escape
+  only if it ends on an ASCII byte (`\` then ASCII, `\u` with four ASCII hex digits, the low surrogate likewise) and
+  ensure `a[p] == 92 ==> a[result.next - 1] < 128`; otherwise `\` is one literal byte. In the scanned mode every raw
+  run then starts at `start + 1` or after an ASCII byte, so with `utf8_valid_span(source, start + 1, end - 1)` each
+  run is a valid sub-window (LG30) and `decode_append` can ensure `utf8_valid(out)`. Valid JSON gives the same bytes
+  (the hand `escape` also needs ASCII after `\`).
+- Option (a) (requires "every `\` is followed by ASCII") is rejected: it is false on valid input such as `"\\é"`;
+  escape starts depend on backslash-run parity, which needs a recursive pred.
+- New 4.4ze-UW (language, both verifiers): `utf8_valid_span(b, lo, hi)` is encoded as a window over `select(lo + i)`,
+  so the sub-window `utf8_valid_span(b, q, e)` with `lo < q`, `b[q - 1] < 128` (and `e == hi` or `b[e] < 128`) is not
+  derived when `lo` is symbolic (the solver gives up). It is derived for `q == lo` (prefixes) and for `lo == 0`.
+  Fix: encode the window over absolute indices `t in lo..hi` with `select(b, t)`, or add an explicit sub-window rule
+  next to LG30; with tests.
+- Callers: `access::string_append` callers (claude `window_model`, qwen `put_field`) do not re-check.
+  `string_text_owned` and `string_text_scanned_owned` keep their run-time `utf8_valid` test (hand `from_utf8`).
+- No language change; no package source changed; no consumer tests needed. Not measured.
+- Next: 4.4ze-UW in a language bundle, then 4.4x-DS with the design above.
