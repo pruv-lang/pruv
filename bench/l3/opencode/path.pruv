@@ -47,8 +47,30 @@ pub fn normalize(p: [u8]) -> [u8] ! alloc
     }
     i = i + 1;
   }
+  // size from the surviving pieces as the hand's `join("/")` does: each piece plus one separator
+  let mut need: i64 = 0;
+  let mut q: i64 = 0;
+  while q < len(out)
+    invariant 0 <= q && q <= len(out) && q % 2 == 0 && len(out) % 2 == 0
+    invariant (q == 0 ==> need == 0) && (q > 0 ==> 0 < need && need <= out[q - 1] + 1)
+    invariant forall t in 0..len(out): 0 <= out[t] && out[t] <= n
+    invariant forall t in 1..len(out): out[t - 1] < out[t]
+    decreases len(out) - q
+  {
+    need = need + out[q + 1] - out[q] + 1;
+    q = q + 2;
+  }
+  // exact output length: pieces and separators, plus the leading '/' and the trailing '/'; with no piece, "/", "." or "./"
+  let mut size: i64 = 1;
+  if need > 0 {
+    size = need - 1;
+    if rooted { size = size + 1; }
+    if dir { size = size + 1; }
+  } else if dir && !rooted {
+    size = 2;
+  }
   let mut r: [u8] = alloc(0, 0);
-  arr_reserve(inout r, n + 2);
+  arr_reserve(inout r, size);
   if rooted { arr_push(inout r, 47); }
   let base: i64 = len(r);
   let mut k: i64 = 0;

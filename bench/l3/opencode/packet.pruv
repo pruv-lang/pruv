@@ -198,8 +198,16 @@ pub fn event_shape(event: [i64], clen: i64) -> bool
 pub fn meta_new(mode: i64) -> [i64] ! alloc
   requires 0 <= mode && mode <= 5
   ensures len(result) == 40 && result[3] == mode
+{ return meta_cap(mode, 0); }
+// meta_new with room for `extra` more words reserved up front (one allocation for header plus payload, like the hand's
+// `Vec::with_capacity`)
+fn meta_cap(mode: i64, extra: i64) -> [i64] ! alloc
+  requires 0 <= mode && mode <= 5 && 0 <= extra && extra <= 1000000000
+  ensures len(result) == 40 && result[3] == mode
 {
-  let mut m: [i64] = alloc(40, 0);
+  let mut m: [i64] = alloc(0, 0);
+  arr_reserve(inout m, 40 + extra);
+  m = resize(m, 40, 0);
   m[0] = 1329812017;
   m[1] = 1;
   m[3] = mode;
@@ -252,8 +260,7 @@ fn build_error(mode: i64, stage: i64, cls: i64, code: i64, native: i64, raw_code
   let ln: i64 = len(name);
   let ld: i64 = len(detail);
   let nx: i64 = lr + ln + ld;
-  let mut p: [i64] = meta_new(mode);
-  arr_reserve(inout p, nx);
+  let mut p: [i64] = meta_cap(mode, nx);
   p[2] = 1; p[7] = nx;
   p[19] = stage; p[20] = cls; p[21] = code; p[22] = native;
   if lr > 0 { p[23] = 0; p[24] = lr; }
@@ -664,8 +671,9 @@ fn assemble_step(ctl: [i64], patches: [i64], requests: [i64], words: [i64], byte
   let lb: i64 = len(bytes);
   let lr: i64 = len(res);
   let total: i64 = 76 + lp + lq + lw + lb + lr;
-  let mut p: [i64] = alloc(12, 0);
-  arr_reserve(inout p, total - 12);
+  let mut p: [i64] = alloc(0, 0);
+  arr_reserve(inout p, total);
+  p = resize(p, 12, 0);
   p[0] = 1329812273;
   p[1] = 1;
   p[2] = action;

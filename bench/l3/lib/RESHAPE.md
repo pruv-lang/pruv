@@ -1453,3 +1453,32 @@ All after the last code change (F1 / F4 from the structure comparison).
   3. req port (REQ-PORT) once P10H passes on both backends.
   4. Then Codex 4.3f-B, 4.3f-E, 4.3f-F and Qwen 4.3e-J / 4.3e-F / 4.3e-D with the 4.4d transport rows (shared
      modules; run all consumers).
+
+## Step 4.4f: OpenCode rows 4.4b-SP, 4.4b-NC, 4.3g-A3; 4.4b-NV after L-gaps 2
+
+- `opencode/RESHAPE.md` §7. Changed: `opencode/path.pruv` (`normalize`), `opencode/packet.pruv` (`meta_cap`,
+  `build_error`, `assemble_step`), `opencode/hand/opencode.rs`; no `lib/` or `pkgs/` module changed, so no other
+  fragment was rerun.
+- Closed: 4.4b-SP (the TypeScript spawns the export with `cwd: home` and the requested thread; Pruv already did, the
+  hand used the selected row's directory / id and was fixed), 4.4b-NC (`normalize` sizes from the kept pieces),
+  4.3g-A3 (error and step packets reserve the total on an empty array, then resize to the header).
+- 4.4b-NV stays open as language rows: the L-gaps 2 local `Vec<ref str>` is LLVM `codegen/unsupported_type`
+  (4.4f-NVL), and a `String` builder reaches `str` only through the copying `string_to_str` (4.4f-SS), so
+  dropping `join`'s `utf8_valid` scan would cost a copy of the result. `RUST_PARITY_SPEC.md` §8's 4.4b-NV entry
+  assumes a copy-free handover; not edited here.
+- Results: opencode `test_impl.py` 199/199 on `rs/rust` and `rs/llvm`; scopes A-D VERIFIED; `q.py` (300 random +
+  199 fixed, rs pairs) exact 406, unexplained 0, same classes as 4.4b; `q_mutants.py --check` 16/16. Hand
+  `cargo build --release` 0 warnings.
+
+### Rows open after 4.4f
+
+- New (language): 4.4f-NVL (`[ref str]` locals on LLVM), 4.4f-SS (no copy-free `String` to `str` handover).
+- New (bench): 4.4f-CW (`ctl[34..37]` written, no longer read; DESIGN wire words, with 4.3g-SQ).
+- Still open in OpenCode: 4.4b-NV, 4.4b-P208, 4.4b-CV, 4.3g-T2, 4.3g-A2, 4.3g-K3, 4.3g-M07, 4.3g-BS, 4.3g-SQ.
+- Still open from 4.4e and before: as listed after 4.4e.
+- Next:
+  1. Language: 4.4f-NVL / 4.4f-SS (or a `ref str` view of a checked byte span, 4.3f-S), then 4.4b-NV and 4.3g-K3.
+  2. OpenCode: 4.3g-T2 (decide against the hand's per-message clones), 4.4b-CV with a `pkgs/time` `civil`.
+  3. Claude leftovers: 4.3h-P, 4.4c-TS / 4.4c-MB / 4.4c-TR / 4.4c-OL, then 4.3h-O and 4.3h-Q.
+  4. req port (REQ-PORT) once P10H passes on both backends.
+  5. Then Codex 4.3f-B, 4.3f-E, 4.3f-F and Qwen 4.3e-J / 4.3e-F / 4.3e-D (shared modules; run all consumers).
