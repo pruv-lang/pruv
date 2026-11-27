@@ -365,14 +365,31 @@ fn join(a: &str, b: &str) -> String {
     }
 }
 
-// Pruv: path::dirname_bytes
+// Pruv: path::dirname (Node path.posix.dirname, the pinned TypeScript reference: one backward scan for the last '/'
+// that follows a non-'/' byte; "//" for a root of two slashes, repeated slashes before the cut are kept)
 fn dirname(p: &str) -> &str {
-    let t = p.trim_end_matches('/');
-    match t.rfind('/') {
-        Some(0) => "/",
-        Some(i) => t[..i].trim_end_matches('/'),
-        None if p.starts_with('/') => "/",
+    let b = p.as_bytes();
+    if b.is_empty() {
+        return ".";
+    }
+    let root = b[0] == b'/';
+    let mut end = None;
+    let mut matched = true;
+    for i in (1..b.len()).rev() {
+        if b[i] == b'/' {
+            if !matched {
+                end = Some(i);
+                break;
+            }
+        } else {
+            matched = false;
+        }
+    }
+    match end {
+        None if root => "/",
         None => ".",
+        Some(1) if root => "//",
+        Some(i) => &p[..i],
     }
 }
 
@@ -674,7 +691,7 @@ fn read_handoff(conf: &Config, rows: &[Row]) -> Result<Handoff, Fail> {
 
 // ---- export ----
 
-// Pruv: export::start_export (path::normalize of root + "/opencode-") / on_mkdtemp (a fresh 0700 directory)
+// Pruv: export::start_export (path::join(root, "opencode-"), moved into the request pool) / on_mkdtemp (a fresh 0700 directory)
 fn make_temp(root: &str) -> Result<String, Fail> {
     let prefix = join(root, "opencode-");
     let seed = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());

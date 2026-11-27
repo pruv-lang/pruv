@@ -311,17 +311,15 @@ fn start_export(cfg: [i64], cfg_text: [u8], ctl: [i64]) -> [i64] ! alloc
   let ts: i64 = cfg[14];
   let tl: i64 = cfg[15];
   // admission already refused a missing binary/tempRoot; defensive engine-missing
-  if ts < 0 || tl < 1 || tl > 1073741000 || !crate::packet::ref_ok(ts, tl, len(cfg_text)) || cfg[12] < 0 || cfg[13] < 1 {
+  if ts < 0 || tl < 1 || tl > 1000000000 || !crate::packet::ref_ok(ts, tl, len(cfg_text)) || cfg[12] < 0 || cfg[13] < 1 {
     return crate::packet::done_simple(ctl, 0, 1, 3);
   }
-  // hand `join(root, "opencode-")` = `normalize(&format!("{root}/opencode-"))`; the root stays bytes of the config text
-  let sep: str = "/opencode-";
-  let ns: i64 = len(sep);
-  let mut full: [u8] = alloc(0, 0);
-  arr_reserve(inout full, tl + ns);
-  arr_append(inout full, cfg_text, ts, tl);
-  arr_append(inout full, sep, 0, ns);
-  let prefix: [u8] = crate::path::normalize_bytes(full);
+  // the configuration text is checked once (hand `Config::decode`); the root borrows it (hand `conf.temp_root`)
+  if !utf8_valid(cfg_text) { return crate::packet::done_simple(ctl, 0, 3, 6); }
+  let root: ref str = crate::util::cfg_view(cfg_text, ts, tl);
+  // hand `make_temp`: `join(root, "opencode-")`; the String's buffer becomes the request pool (`into_bytes`, no copy)
+  let joined: str = crate::path::join(root, "opencode-");
+  let prefix: [u8] = str_into_bytes(move joined);
   let mut w: [i64] = alloc(2, 0);
   w[1] = len(prefix);
   let ep: [i64] = alloc(0, 0);
