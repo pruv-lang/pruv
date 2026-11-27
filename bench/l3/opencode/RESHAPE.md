@@ -101,11 +101,11 @@ Not applied (rows). Each needs more than the time cap allowed or an API change a
 
 ## 4. Results
 
-After the last code change of step 4.4b (§6), `rs/rust` and `rs/llvm`:
+After the last code change of step 4.4f (§7), `rs/rust` and `rs/llvm`:
 
 | check | rs/rust | rs/llvm |
 |---|---|---|
-| scope verify A-D (`--verify-only --scope`, 300 s each; scope C now also loads `path`) | A, B, C, D VERIFIED | A, B, C, D VERIFIED |
+| scope verify A-D (`--verify-only --scope`, 300 s each; scope C also loads `path`) | A, B, C, D VERIFIED | verified by the `test_impl.py` build |
 | `opencode/test_impl.py` (verifier + fixtures) | PASS, 199/199 | PASS, 199/199 |
 | `q.py` 300 random (seed 20261117) + 199 fixed | exact 406, P1 6, P2 5, P3 1, P4 6, P5 2, P8 5, P9 29, P2+P9 37, P3+P4+P8 1, P2+P4+P8 1, unexplained 0 | same |
 | `q_mutants.py --check` | 16 / 16 present exactly once (no marked text changed) | - |
@@ -195,3 +195,21 @@ changed functions. Path edge cases traced equal on both sides (`""`, `"/"`, `"//
 | 4.3g-K3 / pre-existing | `start_export` re-checks binary / tempRoot already checked by `read_handoff`; `updated_number` REAL checks twice and returns 0 for an out-of-range INTEGER on a direct call (unreachable: the host answers `binding-range` first); `iso_bytes` 1-byte flag array | unchanged code; with K3 / 4.3d-M |
 
 Tests: §4. `test_impl.py` scope C now lists `path` (export calls `path::normalize`).
+
+## 7. Step 4.4f (rows 4.4b-SP, 4.4b-NC, 4.3g-A3; 4.4b-NV checked against L-gaps 2)
+
+| row | state | change |
+|---|---|---|
+| 4.4b-SP | closed (hand fixed) | the TypeScript `runExport(binary, tempRoot, thread, source.home, ..)` spawns `--pure export <thread>` with `cwd: home` (the comment says the export deliberately runs in the data folder). Pruv `spawn_pool` already did this (cwd `cfg[6..7]`, thread `cfg[10..11]`). The hand used the selected row's directory as cwd and the row id as the thread; it now uses `conf.home` / `conf.thread`, and `Handoff` keeps only the fallback title |
+| 4.4b-NC | closed | `normalize` sums the kept pieces (`width + 1` each) in a loop over the pairs before allocating and reserves `need + 1` (leading `/`, trailing `/` or the lone `.`), the bound the hand's `join("/")` + push / insert reaches; was `n + 2` |
+| 4.3g-A3 | closed | `packet::meta_cap(mode, extra)` reserves `40 + extra` on an empty array and resizes to 40 (one allocation); `build_error` uses it for the header plus the three byte strings. `assemble_step` reserves `total` on an empty array and resizes to the 12 header words (was `alloc(12)` then a second reserve) |
+| 4.4b-NV | open (language) | L-gaps 2 added a function-local `Vec<ref str>` (R-6g9-10) and the ASCII-adjacent boundary (R-6b-5), but the rewrite still cannot drop the `utf8_valid` scan without a workaround: (a) a local `[ref str]` is `codegen/unsupported_type` on LLVM, and the fragment must build on both backends (row 4.4f-NVL); (b) a `String` builder becomes `str` only through `string_to_str`, which copies, where Pruv `str` is already a Rust `String` (row 4.4f-SS). Either form would add a copy of the result, which costs more than the current scan. `normalize` / `join` are unchanged |
+| 4.4f-CW | new (bench, step wire) | `list::read_handoff` still writes the first row's directory and id to `ctl[34..37]`; nothing reads them after 4.4b-SP (only the title, `ctl[32..33]`). They are part of the DESIGN ctl layout (words 34 / 36), so removing them is a wire change; kept with 4.3g-SQ |
+
+Not changed (time cap or reason unchanged): 4.3g-T2 (the hand clones two `String`s per assistant message, Pruv keeps
+tape ids and copies once at the end, fewer allocations; matching would add copies), 4.3g-A2 (`result_shape` twice,
+step wire), 4.3g-K3 (`valid_thread` takes `str` and the thread is a `cfg_text` byte span: needs a `ref str` view of a
+byte span, 4.3f-S; `p100`'s `dirname_bytes` result has no view form for the `.` / `/` cases), 4.4b-P208, 4.3g-SQ,
+4.3g-M07, 4.3g-BS, 4.4b-CV.
+
+Tests: §4 (rerun after this step, same counts). Hand build: separate crate outside the repo, 0 warnings.

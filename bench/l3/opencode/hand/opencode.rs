@@ -105,10 +105,10 @@ struct Row {
     messages: Option<i64>,
 }
 
+// the export runs in the source home with the requested thread (TypeScript `runExport(binary, tempRoot, thread,
+// source.home, ..)`), not the selected row's directory / id; only the row title is carried on
 struct Handoff {
     fallback: String,
-    dir: String,
-    thread: String,
 }
 
 struct Config {
@@ -669,7 +669,7 @@ fn read_handoff(conf: &Config, rows: &[Row]) -> Result<Handoff, Fail> {
     if conf.binary.as_deref().map_or(true, str::is_empty) || conf.temp_root.as_deref().map_or(true, str::is_empty) {
         return Err(fail(11, 1, 3));
     }
-    Ok(Handoff { fallback: first.title.clone(), dir: first.directory.clone(), thread: first.id.clone() })
+    Ok(Handoff { fallback: first.title.clone() })
 }
 
 // ---- export ----
@@ -696,10 +696,13 @@ fn signal(pid: u32, name: &str) {
 }
 
 // Pruv: export::on_spawn / on_clock / on_deadline / on_close / on_error (the budget is never restarted; TERM, then KILL, then give up)
-fn run_child(conf: &Config, handoff: &Handoff, out: &File) -> Result<(), Fail> {
+fn run_child(conf: &Config, out: &File) -> Result<(), Fail> {
     let stdout = out.try_clone().map_err(|e| raw_error(15, &e))?;
     let mut cmd = Command::new(conf.binary.as_deref().unwrap_or(""));
-    cmd.args(["--pure", "export", &handoff.thread]).current_dir(&handoff.dir).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::null()).process_group(0);
+    cmd.args(["--pure", "export", conf.thread.as_deref().unwrap_or("")]).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::null()).process_group(0);
+    if let Some(home) = conf.home.as_deref() {
+        cmd.current_dir(home);
+    }
     if conf.env_replace {
         cmd.env_clear();
     }
@@ -745,12 +748,12 @@ fn run_child(conf: &Config, handoff: &Handoff, out: &File) -> Result<(), Fail> {
 }
 
 // Pruv: export::p400..p423 + on_output / on_stat / on_read / on_cleanup (None is the oversized export, no read)
-fn export(conf: &Config, handoff: &Handoff) -> Result<Option<Vec<u8>>, Fail> {
+fn export(conf: &Config) -> Result<Option<Vec<u8>>, Fail> {
     let dir = make_temp(conf.temp_root.as_deref().unwrap_or(""))?;
     let path = Path::new(&dir).join("export.json");
     let result = (|| {
         let out = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).map_err(|e| raw_error(14, &e))?;
-        let ran = run_child(conf, handoff, &out);
+        let ran = run_child(conf, &out);
         // the output close: a failure replaces the pending result
         out.sync_all().map_err(|e| raw_error(20, &e))?;
         drop(out);
@@ -1219,7 +1222,7 @@ fn import(conf: &Config) -> Result<Output, Fail> {
         2 => Ok(Output::Rows(rows)),
         _ => {
             let handoff = read_handoff(conf, &rows)?;
-            match export(conf, &handoff)? {
+            match export(conf)? {
                 Some(doc) => convert(&doc, &handoff.fallback).map(Output::Read),
                 None => Ok(Output::Oversized(handoff.fallback)),
             }
