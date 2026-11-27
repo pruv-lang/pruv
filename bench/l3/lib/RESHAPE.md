@@ -2552,3 +2552,20 @@ Changes `bench/l3/pkgs/transport`, `codex/rpc.pruv` and a comment in `grok/rpc.p
   required finding (no EOF for the quiet codex child) is fixed above; grok and mcp paths unchanged, `begin` contract
   sufficient. Confirm review (same engine): FIXED, no new required findings.
 - Next: 4.4za-QE and 4.4za-EQ in a language bundle, then drop the stream-2 read for quiet children.
+
+### Rows after 4.4zc
+
+- Closed 4.4l-RE (`jstr`): owned strings decode the scanner-validated bytes once (`decode_utf8(.., true)`), and the
+  low surrogate is read only after `\u` with its hex digits directly (hand `escape`).
+- Closed 4.4l-RS (`parse`): `parse(input, object)`; the object root tests its first byte and calls the new
+  `open_container` (shared with `record`'s `[`/`{` arms), no tape reserve; claude `parse_line` drops its root-kind
+  test (`parse` ensures `tape[0] == 6`).
+- 4.4l-VU (`lex`), shape part closed: `validate_utf8` is one std-shaped loop with in-turn continuation checks.
+  New gaps 4.4zc-WL (no word load from `[u8]`: the 16-byte ASCII test is a min reduction) and 4.4zc-PA (no pointer
+  address: alignment is tested on the offset).
+- 4.4l-CT (`lines`), narrowed: `scan` proves the record-local facts, so `parse_owned` runs only `check_subtrees`;
+  what is left is the proof gaps G-DB33-2 and G-DB33-1 (D32). `build_span` still uses `check_tape`.
+- Tests: see the 4.4zc consumer table in `pkgs/RESHAPE.md`.
+- Review: one Codex structure review and one confirm review; all required findings fixed. Not measured (structure
+  not zero).
+- Next: 4.4zc-WL and 4.4zc-PA in a language bundle; G-DB33-1/2 proofs to drop `check_subtrees`.

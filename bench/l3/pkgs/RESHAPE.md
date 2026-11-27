@@ -1387,3 +1387,55 @@ unchanged; not rebuilt).
 
 Mutant 1 (isMeta filter inverted) went stale (its snippet named the removed `is_true(doc, root, "isMeta")`); it now
 targets `user_text`'s `true_of(doc, k.meta)` line and is detected by fixture 0 ("head0: basic").
+
+## Step 4.4zc: rows 4.4l-RE, 4.4l-VU, 4.4l-RS, 4.4l-CT
+
+Changes `pkgs/jstr`, `pkgs/lex`, `pkgs/parse`, `pkgs/lines`, `claude/entry.pruv` and the `parse::parse` callers
+(grok `summary`, json `a2`/`a3`/`a4`/`b`/`q` roots, opencode `convert`/`plan`). No compiler or hand change.
+Hand reference: `claude/handrust/src/lib.rs` (`Parser::escape`, `object`, `value`, `parse_line`) and std
+`core::str::validations::run_utf8_validation`.
+
+| Row | Function | Pruv now | Hand / std | Same? |
+|---|---|---|---|---|
+| 4.4l-RE | `jstr::string_utf8`, `jstr::scalar` | `string_utf8` decodes with `decode_utf8(.., true)` (bytes already validated by the scanner, no second UTF-8 pass); `scalar` reads the low surrogate only after `a[np] == '\\' && a[np+1] == 'u'`, its four hex digits directly | `String::from_utf8(bytes)` once; `escape`: `if self.eat("\\u") { let low = self.hex4()?; .. }` | yes |
+| 4.4l-VU | `lex::validate_utf8` | one loop: an ASCII byte at `i % 8 == 0` starts the skip of all-ASCII 16-byte blocks (`ascii_block`), then single ASCII steps; a lead byte checks its width's continuation bytes in turn (no inner loop) | `run_utf8_validation`: pointer-aligned two-word `NONASCII_MASK` test, per-width continuation checks | loop shape yes; block test and alignment differ (gaps below) |
+| 4.4l-RS | `parse::scan_records`, `parse::open_container`, `parse::parse(input, object)` | object root: skip whitespace, EOF = kind 5, first byte not `{` = kind 6, then `open_container(.., 6)`; else `record`. `record`'s `[`/`{` arms call `open_container`. No tape reserve. `parse` ensures `object && ok ==> tape[0] == 6`; claude `entry::parse_line` drops its root-kind test | `parse_line`: `ws(); object(1)?; ws(); is_empty`; `object` starts with `eat("{")` | yes |
+| 4.4l-CT | `lines::parse_owned` | `parse::scan` ensures the record-local facts (`rec_ok`, check_tape's first pass), so `parse_owned` runs only `json::check_subtrees` | no publication check | no: `check_subtrees` is the D32 proof gaps G-DB33-2 (parent loop) and G-DB33-1 (subtree pass) |
+
+`lines::build_span` (grok `scan_into`) still calls `check_tape`; it is not in these rows.
+
+| Row | Kind | Difference | What closes it |
+|---|---|---|---|
+| 4.4zc-WL | language gap, open | no word (`u64`) load from `[u8]`, so `ascii_block` is a 16-byte min reduction instead of std's `(block \| block2) & NONASCII_MASK == 0` | an unaligned word read of `[u8]` |
+| 4.4zc-PA | language gap, open | no pointer address, so the block skip starts at `i % 8 == 0` (offset) instead of std's pointer alignment `align_offset` | a byte-array base address or `align_offset` |
+| 4.4l-CT | proof gap, open | `check_subtrees` still runs at publication | G-DB33-2 and G-DB33-1 (D32): prove parent containment and the subtree facts in `scan` |
+
+### Consumer tests (step 4.4zc)
+
+`PRUVC_RS` = `/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc` (not rebuilt). Final source, both
+backends.
+
+| Runner | rs/rust | rs/llvm |
+|---|---|---|
+| json `run_a0`-`run_a5` | 37 / 351 / 114 / 454 / 6344 / 83 | same |
+| claude `test_a0`-`test_a4` | 272 / 2897 / 2443 / 134 / 270 | same |
+| claude `q.py` | 20270/20270 | 20270/20270 |
+| qwen `test_impl.py` | 27 / 27 | 27 / 27 |
+| grok `test_impl.py` (`GROK_TS_TRANSPILER` set) | 254 / 254 | 254 / 254 |
+| grok `q.py` | 0 unexplained | 0 unexplained |
+| codex `test_impl.py` | 136 / 136 | 136 / 136 |
+| codex `q.py` (2023 cases) | 0 unexplained (1633 exact, rest P1-P8) | same |
+| mcp `test_impl.py` | 22 / 22 | 22 / 22 |
+| opencode `test_impl.py --jobs 2` | 199 / 199 | 199 / 199 |
+| opencode `q.py` | 0 unexplained | 0 unexplained |
+| qwen `q.py` (rs pairs) | 0 unexplained (19757 same, P1 64, P4 201, P5 1; lists 21 same, P4 1) | same |
+| mcp `q.py` (rs pairs, 2040 requests) | rc 0 (2027 exact, rest named classes) | same |
+
+The py pairs in the q.py scripts have no runners in this worktree (only the rs compiler is built), so claude and
+codex `q.py` exit 1 on them; qwen and mcp `q.py` ran on the rs pairs through a wrapper that drops the py pairs from
+the pair list in memory (`q.py` unchanged).
+
+Review: one Codex structure review (default account) found RE, VU and RS not equal (the low-surrogate read before
+`\u`, the continuation loop, the duplicate root dispatch in `record`); CT is the recorded gap. All three were fixed.
+The confirm review gave all fixed and one new RE item (`\u` tested in `scalar` and again in the step); fixed by the
+direct hex read above. Structure is not zero (gaps above), so performance was not measured.
