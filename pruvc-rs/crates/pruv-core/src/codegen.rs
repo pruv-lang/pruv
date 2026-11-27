@@ -5375,7 +5375,8 @@ pruv_hi <= (pruv_b.len() as i128) && \
                     a @ Expr::FieldAccess(_) if !self.is_ref_value(a) => format!("&{}", self.e(a)?),
                     other => self.e(other)?,
                 };
-                if self.unchecked_collections() {
+                // LG7-B4: a view list never crosses a function or foreign boundary, so its checks key on `verified` only
+                if self.verified {
                     return Ok(format!("{list}.push({v})"));
                 }
                 return Ok(format!(
@@ -5384,7 +5385,8 @@ pruv_hi <= (pruv_b.len() as i128) && \
             }
             if x.name == "vec_get" {
                 let i = self.e(arg(&x.args, 1)?)?;
-                if self.unchecked_collections() {
+                // LG7-B4: view-list checks key on `verified` (not `--foreign-checks` / `trusted rust fn`)
+                if self.verified {
                     return Ok(format!("(*unsafe {{ {list}.get_unchecked(({i}) as usize) }})"));
                 }
                 let index = format!("<usize as ::std::convert::TryFrom<i64>>::try_from({i}).unwrap_or(usize::MAX)");

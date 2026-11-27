@@ -1234,6 +1234,7 @@ must_reject|tests/must_reject/lgaps10_into_bytes_no_move.pruv	1 case: obl=0 1	de
 must_reject|tests/must_reject/lgaps10_into_bytes_ref_local.pruv	1 case: obl=0 1	default=7e5b4c399034
 must_reject|tests/must_reject/lgaps10_into_bytes_utf8.pruv	1 case: obl=3 1	default=4db343c98cae
 must_reject|tests/must_reject/lgaps11_join_subview_len.pruv	1 case: obl=7 1	default=c2411341e279
+must_reject|tests/must_reject/lgaps12_views_sum_quant_false.pruv	1 case: obl=7 1	default=d6483a1ef3b8
 must_reject|tests/must_reject/lgaps9_into_bytes_borrowed.pruv	1 case: obl=0 1	default=5023034d1a39
 must_reject|tests/must_reject/lgaps9_into_bytes_len.pruv	1 case: obl=1 1	default=9c849a7c9750
 must_reject|tests/must_reject/lgaps9_into_bytes_use_after.pruv	1 case: obl=0 1	default=de6490a8eecb
@@ -2003,6 +2004,9 @@ runtime|tests/runtime/lg9_rt_utf8_ascii.pruv	1 case: obl=19 1	default=a5e286fabd
 runtime|tests/runtime/lgaps10_into_bytes_param_fixed.pruv	1 case: obl=1 1	default=05a59a003f4f
 runtime|tests/runtime/lgaps11_pop_checks_all.pruv	1 case: obl=9 1	default=97b4e3106029
 runtime|tests/runtime/lgaps11_str_bytes_paths.pruv	1 case: obl=29 1	default=415e16c7cee9
+runtime|tests/runtime/lgaps12_view_checks.pruv	1 case: obl=11 1	default=00a56d8461b3
+runtime|tests/runtime/lgaps12_view_checks_nv.pruv	1 case: obl=11 1	default=00a56d8461b3
+runtime|tests/runtime/lgaps12_view_checks_trusted.pruv	1 case: obl=11 1	default=262ea959f5ba
 runtime|tests/runtime/lgaps9_str_bytes.pruv	1 case: obl=25 1	default=9714b8db38d7
 runtime|tests/runtime/p1_r_bounds.pruv	1 case: obl=9 1	default=755fd0bbf8f5
 runtime|tests/runtime/p1_r_cast_fail.pruv	1 case: obl=1 1	default=13a323fd211c

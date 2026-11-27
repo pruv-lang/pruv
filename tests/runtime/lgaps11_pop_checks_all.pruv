@@ -1,6 +1,6 @@
 // spec: R-6g9-11 accept
-// LG7-T3 (L-gaps 11): verified `vec_pop` built with `--foreign-checks all` (LLVM keeps the run-time `len(v) >= 1`
-// check, Rust the proven `pop()`) pops a non-empty view list and keeps the rest.
+// LG7-T3 (L-gaps 11): verified `vec_pop` built with `--foreign-checks all` (since L-gaps 12 both backends emit the
+// proven pop with no run-time check, LG7-B4) pops a non-empty view list and keeps the rest.
 fn run() -> () ! alloc, io {
   let s: str = "abc";
   let mut names: Vec<ref str> = vec_new::<ref str>();

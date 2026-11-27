@@ -2260,3 +2260,52 @@ Only `bench/l3/qwen` changes (no compiler, no `pkgs/`, so no consumer runs). Det
      and attached entries only.
   2. 4.4d-QA with gap 4.4c-SV (a `[u8]` span lent as `str`).
   3. 4.4u-TO back to hand order once the solver keeps `doc_strings` through the loop body.
+
+### Bundle L-gaps 12
+
+- Closed LG11-QS (R-6g9-13): inside a quantifier, a list term that mentions no bound variable now uses the same
+  per-term sum function `vsum!N` as outside (so the push facts reach it), and a closed list of constant length in
+  `0..=64` gets the ground sum steps with its view lengths as an `ite` over the ground lengths, so no `a[k]` select
+  of `subview` lambdas sits under the forall. The A2 false claim `assert forall k in 2..3: vec_views_len(out, k) ==
+  4` refutes in about 1.2 s with counterexample `p = [11, 11, 29]` (killed after 2 minutes before; the first step
+  alone gave `verify_unknown`); the accept `lgaps11_views_sum_quant` stays at 0.04 s. New reject
+  `lgaps12_views_sum_quant_false` (tests/spec and tests/must_reject) with `max_seconds: 30`; `run_all.py`
+  must_reject jobs now honor `max_seconds` (spec_trace already did).
+- Closed LG7-B4 (R-6g9-10, R-6g9-11, R-6d-2): view-list (`Vec<ref str>` / `Vec<ref [u8]>`) run-time checks for
+  `vec_push`, `vec_get`, `vec_pop` and `vec_join` are emitted exactly when the build is unverified, on both backends;
+  `--foreign-checks` and `trusted rust fn` no longer change them, since a view list never crosses a function or
+  foreign boundary. Rust view push/get keyed on `unchecked_collections()`, LLVM view get/pop on `vec_get_checked`;
+  both now key on `verified`. Runtime `lgaps12_view_checks` (verified, default and `--foreign-checks all`, both
+  backends: the check strings are absent) and `lgaps12_view_checks_nv` (`--no-verify`, both backends: the
+  `vec_push`/`vec_pop`/`vec_get`/`vec_join` messages, the `len(v) >= 1` pop check and the push panic are present),
+  with alloc balance. `lgaps11_pop_checks_all` now runs with no pop check on LLVM under `all` (comment updated).
+- Closed 4.4o-VP: the LLVM view push shim drops its `2^40` guard in a verified build (`Mod.verified`), and the Rust
+  view `vec_push` is `parts.push(v)` even when the program has a `trusted rust fn` (OpenCode imports `jstr`, whose
+  `utf8_to_string` is trusted, so every view push kept the check). Runtime `lgaps12_view_checks_trusted` (both
+  backends, with a trusted `::std::cmp::min`; the view checks are absent).
+- Closed LG7-A1 and LG7-B1 in L-gaps 8 already (5e898eff: `tests/spec/lgaps8_join_bound*.pruv`; the LLVM
+  no-verify join total uses a saturating running sum with `llvm.smul/sadd.with.overflow`); the L-gaps 11 "Still
+  open" line was stale. Both spec files still pass.
+- New row LG12-RS: `vec_reserve` on a view list is outside the LG7-B4 rule: LLVM always checks `0 <= n && n <=
+  2^40`, Rust keys it on `unchecked_collections()` (checked with a trusted fn or `--foreign-checks all`).
+  SPEC R-6d-2 and R-6g9-11 name the four operations and point `vec_reserve` here (audit A).
+- New row LG12-QK: no quantified reject reads a prefix sum outside `0..=n` (`k == -1` or `k == n + 1`); audit A
+  found the encoding sound there (the ground steps are guarded by `0 <= k < n` / `1 <= k <= n`), only the test is
+  missing.
+- Audit (one round, at once): A Codex gpt-6.2-astra high (Codex 2 account; the default account was at its limit),
+  spec only: no wrong accepted program in LG11-QS, no wrongly closed list term; findings were the `vec_reserve`
+  wording (fixed in SPEC and the test comment), the trusted test being Rust-only (now both backends) and LG12-QK.
+  B Claude opus high, codegen (static, its runs were blocked): no elided check in a build where the obligation is not
+  proven; the vpush shim is only used by view lists. Its one finding, LLVM dropping the view push guard with
+  `--no-verify --foreign-checks off`, cannot happen: pruvc rejects that flag pair ("--foreign-checks off requires
+  verification"), so unverified always has `foreign_requires`. Its note on the unreachable `list[index]` branch in
+  the Rust view `vec_get` (codegen.rs) is left as is.
+- Still open: P10-M1, LG12-RS, LG12-QK, 4.4t-RV, 4.4s-FK.
+- Checks: `cargo test --release` (163 passed); `run_all --only must_reject` 1372/1372 (the new reject about 1.2 s);
+  `--only spec_trace` ok (`lgaps8_join_bound*` still pass); `--only g8_frontend --backend both` 39/39; `--only
+  runtime --sample-prefix tests/runtime/lgaps12 --backend both` 10/10; `--only runtime --backend both` 3511/3511 (before the two LLVM rows of the trusted test, which pass in the 10/10);
+  `diff_rust --fuzz-count 20 --update-golden` (new files and the shifted mutant sample); `m3_all --quick
+  --update-golden` (all stages ok; llvm digests of the verified view programs `lgaps9_views_subview_*`,
+  `lgaps11_join_subview_len`, `lgaps11_pop_checks_all`, `lgaps11_str_bytes_paths` changed because their view checks
+  left); `--list-rows` diff (11 new rows, `tests/run_all_rows.txt` updated).
+- Next: LG12-RS (key view `vec_reserve` on `verified` too), LG12-QK, P10-M1.

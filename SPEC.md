@@ -749,6 +749,8 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   still listed in `.foreign.json` and `--trust-report` as a `vec_get` use. This rule does not change LLVM lowering.
   Under the same conditions `vec_push::<T>(vec_new::<T>(), x)` is emitted as `::std::vec![x]` (one element at
   exact capacity, no length check, since an empty vector meets `len(v) < 2^40`); both uses stay listed.
+  View-list `vec_push`, `vec_get`, `vec_pop` and `vec_join` (R-6g9-10/11) follow R-6g9-11 instead (checked exactly when
+  unverified); view-list `vec_reserve` keeps this rule on Rust and is always checked on LLVM (LG12-RS).
 - **Collections.** `Vec<T>`, `HashMap<K, V>` (`K` is `i64`, `bool` or `String` under R-6e-5) and
   `String` hold values. Collections cannot be stored in `Option`, `Result` or arrays, except an owned `String` as the
   error of a `Result<T, String>` (LG11 E2). R-6e-1, R-6e-3 and R-6e-6
@@ -2091,7 +2093,7 @@ borrowed value is live.
     clear empties it, so `len(parts)` and the bytes of `vec_get(parts, k)` are known (a source cannot change while
     the list is live).
   - *Code.* Rust: `Vec<&str>`, `parts.push(v)` (`&s` for an owned local), `*parts.get_unchecked(i as usize)` when the
-    bound is proven, `parts.len()`, `parts.clear()`, `parts.reserve(n)`; no `String` is made. LLVM (L-gaps 3): a native vector of
+    bound is proven (verified build; `parts.push(v)` then has no length check; LG7-B4, R-6g9-11), `parts.len()`, `parts.clear()`, `parts.reserve(n)`; no `String` is made. LLVM (L-gaps 3): a native vector of
     `(ptr, len, 0)` views (capacity 0, so dropping the list frees only its buffer), with the same bound checks;
     the output and allocation balance match the Rust backend. An owned `Vec<String>` on LLVM stays
     `codegen/unsupported_type`.
@@ -2109,8 +2111,10 @@ borrowed value is live.
   `Vec<String>` of bytes (no UTF-8 fact is used). `vec_pop::<ref T>(inout parts)` on either list drops the last view
   and has result `unit` (a program's own `vec_pop` function keeps the name); it requires `len(parts) >= 1` (`verify/call_requires`), and after it `len(parts)` is one
   less. Code: Rust `{ parts.pop(); }` (with `--no-verify`, a failed pop panics with the requires message); LLVM
-  stores the length less one; it checks `len(parts) >= 1` whenever its `vec_get` bounds check is on (unverified,
-  `--foreign-checks all` or a program with foreign functions) and frees live buffers before it fails.
+  stores the length less one. The run-time check of each of these view-list operations (`vec_push` `len < 2^40`, `vec_get` bounds,
+  `vec_pop` `len(parts) >= 1`, `vec_join` total `<= 2^40`) is emitted on both backends exactly when the build is unverified;
+  `--foreign-checks` and `trusted rust fn` declarations do not change them (LG7-B4, 4.4o-VP); `vec_reserve` is outside
+  this rule (LG12-RS). LLVM frees live buffers before a failed pop.
   - Tests: [`[u8]` pieces with `..` popping, `str` pop](tests/spec/lgaps4_byte_list.pruv),
     [a program's own `vec_pop` wins](tests/spec/lgaps4_user_vec_pop.pruv),
     [unverified empty pop fails with balanced frees](tests/spec/lgaps6_pop_free.pruv),

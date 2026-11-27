@@ -1,0 +1,25 @@
+// spec: R-6g9-11 accept
+// 4.4o-VP (L-gaps 12): a verified view-list `vec_push` has no `2^40` length check also in a program with a
+// `trusted rust fn` (which keeps the checks of catalog `Vec<T>` operations, R-6d-2).
+trusted rust fn rust_min(a: i64, b: i64) -> i64
+  ensures result <= a && result <= b
+  ensures result == a || result == b
+  = "::std::cmp::min";
+
+fn run() -> () ! alloc, io {
+  let s: str = "abc";
+  let mut names: Vec<ref str> = vec_new::<ref str>();
+  vec_reserve::<ref str>(inout names, 4);
+  vec_push::<ref str>(inout names, subview(s, 0, 1));
+  vec_push::<ref str>(inout names, subview(s, 1, 3));
+  vec_pop::<ref str>(inout names);
+  let g: ref str = vec_get::<ref str>(names, 0);
+  print(len(g));
+  let j: String = vec_join::<ref str>(names, "/");
+  print(len(j));
+  vec_pop::<ref str>(inout names);
+  print(len(names));
+}
+fn run2() -> () ! io {
+  print(rust_min(3, 1));
+}
