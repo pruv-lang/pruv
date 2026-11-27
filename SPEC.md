@@ -2093,7 +2093,9 @@ borrowed value is live.
   `--foreign-checks all` or a program with foreign functions) and frees live buffers before it fails.
   - Tests: [`[u8]` pieces with `..` popping, `str` pop](tests/spec/lgaps4_byte_list.pruv),
     [a program's own `vec_pop` wins](tests/spec/lgaps4_user_vec_pop.pruv),
-    [unverified empty pop fails with balanced frees](tests/spec/lgaps6_pop_free.pruv);
+    [unverified empty pop fails with balanced frees](tests/spec/lgaps6_pop_free.pruv),
+    [with a heap array and an enclosing block's owner](tests/spec/lgaps7_pop_free_heap.pruv),
+    [unverified out-of-range `vec_reserve` on a `[u8]` list](tests/spec/lgaps7_reserve_free.pruv);
     rejects [pop of a possibly empty list](tests/spec/lgaps4_pop_empty.pruv),
     [`str` operation on a `[u8]` list](tests/spec/lgaps4_byte_list_targ.pruv),
     [`[u8]` list from `vec_new::<ref str>`](tests/spec/lgaps4_byte_list_new.pruv),

@@ -1,0 +1,10 @@
+{
+  "flags": ["--no-verify"],
+  "run": {
+    "backends": ["rust", "llvm"],
+    "exit": 101,
+    "flags_matrix": [["--no-verify"]],
+    "stderr_contains": "vec_pop",
+    "alloc_balance": true
+  }
+}

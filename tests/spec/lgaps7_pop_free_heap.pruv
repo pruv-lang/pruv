@@ -1,0 +1,16 @@
+// spec: R-6g9-11 accept
+// LG6-T3: under --no-verify a failed `vec_pop` frees every live heap value before it fails: a heap array, an
+// owned `[u8]` local of an enclosing block and the list's own buffer.
+fn checksum() -> i64 ! alloc {
+  let n: i64 = 3;
+  let big: [i64] = alloc(100000, 7);
+  let mut total: i64 = 0;
+  if n > 0 {
+    let own: [u8] = alloc(n, 3);
+    let mut names: Vec<ref str> = vec_new::<ref str>();
+    vec_reserve::<ref str>(inout names, 4);
+    vec_pop::<ref str>(inout names);
+    total = len(own);
+  }
+  return len(big) + total;
+}

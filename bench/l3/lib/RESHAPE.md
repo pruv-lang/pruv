@@ -1793,5 +1793,11 @@ All after the last code change (F1 / F4 from the structure comparison).
     literal pieces. The recursive view sum with symbolic piece lengths is the likely cause.
   - LG7-AB: the LLVM `alloc_balance` counter does not see buffers that the G6 shim allocates and the module frees
     (`string_into_str`), so `lgaps7_join_bytes` checks `g6_drop_balance` instead of `alloc_balance`.
-- Still open: P10-M1 (a Vec element `v[i]` as a `swap`/`replace` place) and LG6-T3 (extend `lgaps6_pop_free`).
-- Next: P10-M1, LG6-T3, LG7-SR.
+- Closed LG6-T3 (most of it): `lgaps7_pop_free_heap` (unverified empty `vec_pop` with a heap array and an owned
+  `[u8]` of an enclosing block live) and `lgaps7_reserve_free` (unverified `vec_reserve` with `n < 0` on a `[u8]`
+  list) exit 101 with balanced allocations on both backends. Left as LG7-T3: the verified `--foreign-checks all`
+  pop check.
+- Still open: P10-M1 (a Vec element `v[i]` as a `swap`/`replace` place): it needs index places in the checker
+  (with an alias rule or a proven `i != j`), element stores in the verifier, and `v.swap(i, j)` on Rust; not
+  reached within the cap.
+- Next: P10-M1, LG7-SR, LG7-T3.
