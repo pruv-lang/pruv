@@ -468,6 +468,17 @@ return a parameter with `copy`). Refinements: `[u8 | L..=U; <=N]` with `0 <= L <
   not hold. Tests: [after an ASCII byte](tests/runtime/lg30_utf8_after_ascii.pruv),
   [after a lead byte](tests/must_reject/lg30_after_lead.pruv),
   [outside the span](tests/must_reject/lg30_outside_span.pruv).
+  The Rust verifier states `utf8_valid_span(b, lo, hi)` over absolute indices (L-gaps 17, 4.4ze-UW): the window
+  quantifies `t` in `lo..hi` and reads `b[t]` (the lead and continuation conditions use `t + k < hi` and `t >= lo + k`),
+  which is the same set of facts as `W(b, lo, hi - lo)`. So the sub-window rule above also holds for a symbolic `lo`:
+  from `utf8_valid_span(b, lo, hi)`, `lo < q <= e <= hi`, `b[q - 1] < 128` and `e == hi || b[e] < 128` the solver
+  derives `utf8_valid_span(b, q, e)`, and from `b[e] < 128` alone the prefix `utf8_valid_span(b, lo, e)`. Before, the
+  window read `b[lo + i]` and the solver could not match those terms to the bytes of a sub-window unless `lo` was `0`
+  or `q == lo`. `utf8_valid(b)` and the `str` assumption are unchanged (`lo` is `0`). The frozen Python verifier keeps
+  the old encoding (it does not derive these sub-windows). Tests:
+  [symbolic start](tests/runtime/lgaps17_utf8_subspan.pruv),
+  [after a lead byte](tests/must_reject/lgaps17_subspan_after_lead.pruv),
+  [cut at the end](tests/must_reject/lgaps17_subspan_cut_end.pruv).
 - Valid `str` values (R-6b-3). A `str` is valid UTF-8 at run time, and in a function that uses UTF-8 facts the verifier
   assumes `W(s, 0, len(s))` for its `str` values: `str` parameters at entry, reads of `str` variables, `str` results
   of user calls, `str` field reads (under the path condition, and for an enum variant field only when that variant is

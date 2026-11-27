@@ -1,0 +1,14 @@
+// L-gaps 17 (4.4ze-UW, R-6b-3): with a symbolic lo, a run that ends before a byte that is not ASCII (and not at the
+// end of the span) may cut a character, so it is not a valid span
+fn mid(b: [u8], lo: i64, hi: i64, q: i64, e: i64) -> bool
+  requires utf8_valid_span(b, lo, hi)
+  requires lo < q && q <= e && e < hi && b[q - 1] < 128
+  ensures result && utf8_valid_span(b, q, e)
+{
+  return true;
+}
+
+pub fn run(n: i64) -> i64
+{
+  return n;
+}

@@ -1552,14 +1552,21 @@ impl Model {
     }
 
     pub fn utf8_valid(&self, len: &Ast, bytes: &Ast) -> Ast {
-        self.utf8_window(len, |i| bytes.select(i))
+        self.utf8_window(None, len, |i| bytes.select(i))
     }
 
     // LG26 (R-6b-3, G-LG25-1): each byte must start a complete UTF-8 sequence
     // or be a continuation at the proper distance from its leading byte.
-    pub(crate) fn utf8_window(&self, len: &Ast, byte: impl Fn(&Ast) -> Ast) -> Ast {
+    // `lo` None: the window is `0..end` (`utf8_valid`). L-gaps 17 (4.4ze-UW): `Some(lo)` quantifies over absolute
+    // indices `t in lo..end` and reads `byte(t)`, so a sub-window `q..e` of `lo..hi` matches the same `select(b, t)`
+    // terms (with `select(b, lo + i)` the solver could not relate the two windows for a symbolic `lo`).
+    pub(crate) fn utf8_window(&self, lo: Option<&Ast>, len: &Ast, byte: impl Fn(&Ast) -> Ast) -> Ast {
         let z = &self.z;
         let i = z.int_const("utf8!i");
+        let after = |k: i64| match lo {
+            None => i.ge_i(k),
+            Some(lo) => i.ge(&lo.add_i(k)),
+        };
         let c = byte(&i);
         let i1 = i.add_i(1);
         let i2 = i.add_i(2);
@@ -1588,13 +1595,13 @@ impl Model {
             z.and(&[
                 cont(&c),
                 z.or(&[
-                    z.and(&[i.ge_i(1), between(&prev1, 194, 244)]),
-                    z.and(&[i.ge_i(2), between(&prev2, 224, 244), cont(&prev1)]),
-                    z.and(&[i.ge_i(3), between(&prev3, 240, 244), cont(&prev2), cont(&prev1)]),
+                    z.and(&[after(1), between(&prev1, 194, 244)]),
+                    z.and(&[after(2), between(&prev2, 224, 244), cont(&prev1)]),
+                    z.and(&[after(3), between(&prev3, 240, 244), cont(&prev2), cont(&prev1)]),
                 ]),
             ]),
         ]);
-        let in_range = z.and(&[i.ge_i(0), i.lt(len)]);
+        let in_range = z.and(&[after(0), i.lt(len)]);
         z.forall(std::slice::from_ref(&i), &in_range.implies(&p), &[])
     }
 

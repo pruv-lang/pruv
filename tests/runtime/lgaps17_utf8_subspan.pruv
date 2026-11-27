@@ -1,0 +1,87 @@
+// L-gaps 17 (4.4ze-UW, R-6b-3): utf8_valid_span(b, lo, hi) quantifies over absolute indices t in lo..hi, so a run
+// b[q..e) inside the span that starts after an ASCII byte (and ends at hi or before an ASCII byte) is itself a valid
+// span when lo is symbolic.
+fn put(inout d: [u8], k: i64, s: str) -> i64
+  requires 0 <= k && k + len(s) <= len(d) && utf8_valid_span(d, 0, k)
+  ensures len(d) == len(old(d)) && result == k + len(s)
+  ensures utf8_valid_span(d, 0, k + len(s))
+{
+  let mut j: i64 = 0;
+  while j < len(s)
+    invariant 0 <= j && j <= len(s) && len(d) == len(old(d))
+    invariant utf8_valid_span(d, 0, k)
+    invariant forall t in k..k + j: d[t] == s[t - k]
+    decreases len(s) - j
+  {
+    d[k + j] = s[j];
+    j = j + 1;
+  }
+  return k + len(s);
+}
+
+// run in the middle: b[q - 1] and b[e] are ASCII
+fn mid(b: [u8], lo: i64, hi: i64, q: i64, e: i64) -> bool
+  requires utf8_valid_span(b, lo, hi)
+  requires lo < q && q <= e && e < hi && b[q - 1] < 128 && b[e] < 128
+  ensures result && utf8_valid_span(b, q, e)
+{
+  return true;
+}
+
+// run to the end of the span
+fn tail(b: [u8], lo: i64, hi: i64, q: i64) -> bool
+  requires utf8_valid_span(b, lo, hi) && lo < q && q <= hi && b[q - 1] < 128
+  ensures result && utf8_valid_span(b, q, hi)
+{
+  return true;
+}
+
+// a prefix up to an ASCII byte
+fn head(b: [u8], lo: i64, hi: i64, e: i64) -> bool
+  requires utf8_valid_span(b, lo, hi) && lo <= e && e < hi && b[e] < 128
+  ensures result && utf8_valid_span(b, lo, e)
+{
+  return true;
+}
+
+fn width(t: str) -> i64
+  ensures result == len(t)
+{
+  return len(t);
+}
+
+// copies the run b[q..e) and reads it as a str
+fn cp(b: [u8], lo: i64, hi: i64, q: i64, e: i64, inout d: [u8]) -> i64 ! alloc
+  requires utf8_valid_span(b, lo, hi) && lo < q && q <= e && e <= hi && b[q - 1] < 128
+  requires e == hi || b[e] < 128
+  requires e - q <= len(d)
+  ensures len(d) == len(old(d)) && result == e - q && utf8_valid_span(d, 0, result)
+{
+  copy_range(inout d, 0, b, q, e - q);
+  return e - q;
+}
+
+pub fn run(n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 2
+{
+  let mut b: [u8] = alloc(10, 0);
+  let mut k: i64 = put(inout b, 0, "€");
+  k = put(inout b, k, "a");
+  k = put(inout b, k, "é");
+  k = put(inout b, k, "\"");
+  k = put(inout b, k, "ü");
+  k = put(inout b, k, "x");
+  // b = € (0..3) a (3) é (4..6) " (6) ü (7..9) x (9); `mid`, `tail`, `head` and `cp` prove with a symbolic lo
+  let lo: i64 = 0;
+  let mut d: [u8] = alloc(10, 0);
+  let mut q: i64 = 4;
+  let mut e: i64 = 6;
+  if n == 1 { q = 7; e = 9; }
+  if n == 2 { q = 7; e = 10; }
+  let mut w: i64 = 0;
+  if b[q - 1] < 128 && (e == k || b[e] < 128) {
+    let r: i64 = cp(b, lo, k, q, e, inout d);
+    w = width(subview(d, 0, r));
+  }
+  return w;
+}

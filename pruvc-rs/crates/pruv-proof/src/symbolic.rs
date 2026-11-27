@@ -3858,7 +3858,7 @@ impl<'a> FnVerifier<'a> {
                 let b = arg(0)?.try_arr()?;
                 let lo = arg(1)?.try_ast()?;
                 let hi = arg(2)?.try_ast()?;
-                let valid = self.model.utf8_window(&hi.sub(lo), |i| b.a.select(&lo.add(i)));
+                let valid = self.model.utf8_window(Some(lo), hi, |t| b.a.select(t));
                 return Ok(Val::Bool(self.z.and(&[lo.ge_i(0), lo.le(hi), hi.le(&b.n), valid])));
             }
             "str_from_utf8" => {
