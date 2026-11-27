@@ -2917,6 +2917,26 @@ impl<'a> FnVerifier<'a> {
                     &body,
                     &[vec![&fxm, &fmy], vec![&fxy, &fxm], vec![&fxy, &fmy]],
                 ));
+                // L-gaps 19 (G-DB33-1): a nonzero count has a witness, count(lo, hi) != 0 ==> lo <= W < hi && body(W).
+                // True of any count (the unrolling sum has a 1 term). The instance adds only W and one body, which holds
+                // no term of this F, so there is no matching loop. Third attempt only, with the split.
+                let x = z.int_const("agg!x");
+                let y = z.int_const("agg!y");
+                let os: Vec<Ast> = (0..outer.len()).map(|i| z.int_const(&format!("agg!o{}", i))).collect();
+                let mut args = vec![x.clone(), y.clone()];
+                args.extend(os.iter().cloned());
+                let fapp = f.apply(&args);
+                let int = z.int_sort();
+                let dom: Vec<Sort> = (0..args.len()).map(|_| int.clone()).collect();
+                let wf = FuncDecl::new(&z, &format!("agg!wit{}", f.name()), &dom, &int);
+                let w = wf.apply(&args);
+                let mut from = vec![k0.clone()];
+                let mut to = vec![w.clone()];
+                from.extend(ps.iter().cloned());
+                to.extend(os.iter().cloned());
+                let bw = tc.substitute(&from, &to);
+                let body = fapp.ne(&z.int(0)).implies(&z.and(&[x.le(&w), w.lt(&y), bw]));
+                self.split_lemmas.push(z.forall(&args, &body, std::slice::from_ref(&fapp)));
             }
         }
 
@@ -3249,6 +3269,11 @@ impl<'a> FnVerifier<'a> {
                 }
                 if matches!(x.kind.as_str(), "sum" | "count" | "max" | "min") {
                     return Ok(Val::Int(self.aggregate(&x.kind, &k, &lo, &hi, &body)));
+                }
+                // L-gaps 19 (G-DB33-2): a forall over a one-element range `lo..lo+1` without triggers is its body at lo.
+                // Equivalent, and the aggregates in the body become ground terms that frame and split lemmas can match.
+                if x.kind == "forall" && trig.is_empty() && hi.sub(&lo).simplify().sexpr() == "1" {
+                    return Ok(Val::Bool(body.substitute(std::slice::from_ref(&k), std::slice::from_ref(&lo))));
                 }
                 let rng = self.z.and(&[k.ge(&lo), k.lt(&hi)]);
                 if x.kind == "forall" {

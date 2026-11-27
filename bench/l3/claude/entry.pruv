@@ -15,7 +15,8 @@ pub fn parse_line(data: [u8], start: i64, end: i64) -> Line ! alloc
 {
   // DB39: parse::parse over a borrowed view (R-6g-5). The scan reads data[start..end) in place and
   // validates UTF-8 inside string tokens (D33); the record-local tape facts are scan_document ensures
-  // (DB33), so only check_subtrees runs after the scan. Only an accepted line copies its bytes, once.
+  // (DB33) and the parent and subtree facts are proved too (L-gaps 19), so nothing is checked after the scan.
+  // Only an accepted line copies its bytes, once.
   // Every non-InternalInvariant failure maps to Skip (invalid UTF-8 included), as before.
   let n: i64 = end - start;
   if n > crate::json::limit_input_bytes() { return Line::Skip; }

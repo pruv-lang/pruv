@@ -311,6 +311,7 @@ impl<'a> FnVerifier<'a> {
         }
         // First without the aggregate lemmas: assumptions are few, so unsat here is a sound proof,
         // and it drops the quantified lemmas for the many obligations that do not need them
+        if std::env::var("LG19_TIME").is_ok() { eprintln!("LG19 ob line {} {} {}", crate::symbolic::pos_line(node), code, what); }
         let (mut sol, mut r) = self.run_attempt(&st.pc, g, ob, 0, idx);
         if r == Sat::Unsat {
             return;
@@ -521,7 +522,11 @@ impl<'a> FnVerifier<'a> {
             }
             c.count_miss();
         }
+        let lg19_t = std::time::Instant::now();
         let result = sol.check();
+        if std::env::var("LG19_TIME").is_ok() && lg19_t.elapsed().as_millis() > 500 {
+            eprintln!("LG19 {} stage{} {:?} {}ms idx={:?}", self.fname, stage, result, lg19_t.elapsed().as_millis(), idx);
+        }
         let reason = if result == Sat::Unknown { Some(sol.reason_unknown()) } else { None };
         let status = query_status(result, reason.as_deref()).to_string();
         if result == Sat::Unsat {
