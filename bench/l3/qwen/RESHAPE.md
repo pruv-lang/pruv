@@ -362,3 +362,34 @@ P1 / P4 / P5 are the classes `q.py` already explains. No perf timing was run.
 - LG15-MB is closed (SPEC R-6e-12b): a struct binder of a consuming match such as `JsonParse::Parsed(doc)` can be
   moved whole into a `Vec`. The 4.4y-PW bench half (keep the parsed documents instead of walking parts in the scan)
   is unblocked but not done; no qwen code changed.
+
+### Rows after 4.4zf
+
+- 4.4y-PW bench half is done in `import.pruv`. The scan keeps each real user and assistant document whole
+  (`vec_push(move docs, move d)`, R-6e-12b) and logs one 4-word `Event` (tag, ordinal, line start, document index)
+  per object or dropped user. `replay` walks `parts` only for the selected user (`user_entry`: visible text parts
+  joined with `"\n\n"`, blank test, then `begin2`) and for an assistant while a turn is attached (`answer_parts`:
+  text → `answer2`, otherwise an object `functionCall` → `tool`). This matches the hand's `take_parts` /
+  `visible_parts` in replay. `write_token`, `record_parts`, `record_message`, `write_stamp`, `record_entry`,
+  `record_object`, `stamp` and `window_object` are removed. The generated Rust moves the document into the `Vec`
+  (no clone) and passes `&docs[c]` to the calls. Both verifiers pass. No language gap was found.
+- Accepted differences after the structure review:
+  - The `[i64]` event log stands in for the hand's `Vec<Slot>`. `event.a` and `event.c` keep their run-time range
+    checks.
+  - The kept value is the whole parsed line (source bytes and tape), not the extracted fields. The tape has no
+    owned tree that unused fields could be dropped from.
+  - `model`, `timestamp` and `message` are looked up in replay instead of in the scan. For a tool part, `thought`,
+    `text` and `functionCall` are looked up one by one (linear tape member scans against the hand's `Map::get`;
+    access class). The assistant arm calls `vec_get` several times.
+  - The model is copied out with `string_field` when selected (run-time UTF-8 check, 4.4ze class). The hand moves
+    a `String` in the scan and clones it when selected.
+  - Text parts are decoded with `decode_append` into the reused `prompt` / `piece` buffers instead of borrowed
+    `&str` values (4.3e-D / 4.4y class, buffers 4.4y-SB).
+  - Defects are now found only on the walked path (selected user, attached assistant).
+  - Existing rows that this change does not touch: `iso_raw` scans a whole array or object `timestamp` token
+    before it gives "unset" (time package). An escaped custom title is made owned before its blank test
+    (4.3h-O class). The escaped serde private-number key is the known hand-baseline artefact (section 3,
+    behaviour notes).
+- Checks after the change (L-gaps 16 compiler): `qwen/test_impl.py` PASS 27/27 on `rs/rust` and `rs/llvm`; `q.py`
+  300 cases on both: same 317, P1 1, P4 4, P5 1, unexplained 0; list same 21, P4 1 (unchanged).
+- Not measured: the structure difference is not zero (4.4y-SB and the rows above are still open).

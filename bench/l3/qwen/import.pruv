@@ -202,71 +202,101 @@ pub fn tail_info(data: [u8], cut_before: bool) -> crate::boundary::ImportResult 
 }
 
 
-// One record per Object boundary or replay operation (hand: the slot vector). Skip frames and non-user drops
-// are no-ops. A record is three words: tag and two fields. For Object they hold ordinal/start; a token record
-// holds the byte range [a, b) of one raw JSON token in data (hand: the parsed value kept in the Entry), decoded
-// only in replay for a selected entry. The log grows per entry.
-struct Event { kind: i64, a: i64, b: i64 }
+// One record per slot (hand: the slot vector). Skip frames and non-user drops are no-ops. A record is four words:
+// tag, ordinal, line start and document index. Tags: 0 an object without an action, 1 a dropped real user, 2 a real
+// user, 3 an assistant, 9 a defect of the object before it. A user or assistant record names its parsed document
+// in `docs` (hand Action::User / Action::Assistant keep the parts, timestamp and model); the rest is -1.
+struct Event { kind: i64, a: i64, b: i64, c: i64 }
 
 fn write_event(inout log: [i64], event: Event) -> bool ! alloc
 {
-  if len(log) > 4294967292 { return false; }
-  arr_push(inout log, event.kind, event.a, event.b);
+  if len(log) > 4294967291 { return false; }
+  arr_push(inout log, event.kind, event.a, event.b, event.c);
   return true;
 }
 
-// The raw token of node id, as a range of data (the line's document source is data[start..end]).
-fn write_token(inout log: [i64], kind: i64, doc: crate::json::JsonDocument, id: i64, start: i64) -> bool ! alloc
-  requires 0 <= start && start <= 8388608
-{
-  let s: crate::access::Span = crate::access::raw_span(doc, id);
-  if s.status != 0 { return false; }
-  return write_event(inout log, Event { kind: kind, a: start + s.start, b: start + s.end });
-}
-
 fn read_event(records: [i64], pos: i64) -> Event
-  requires 0 <= pos && pos + 3 <= len(records)
+  requires 0 <= pos && pos + 4 <= len(records)
 {
-  return Event { kind: records[pos], a: records[pos + 1], b: records[pos + 2] };
+  return Event { kind: records[pos], a: records[pos + 1], b: records[pos + 2], c: records[pos + 3] };
 }
 
-// Replay tags: 0 Object, 1 dropped real user, 3 user stamp (ends a user entry), 4 assistant stamp, 5 prompt part,
-// 6 model, 7 answer part, 8 tool, 9 selected-entry defect. A stamp record with a < 0 has no timestamp field.
-// hand visible_parts: the object parts that are not thoughts; a text string is kept (tag 5 for a user, 7 for an
-// assistant), else an assistant's functionCall object counts a tool (tag 8).
-fn record_parts(doc: crate::json::JsonDocument, c: i64, user: bool, start: i64, inout log: [i64]) -> bool ! alloc
+// hand take_parts: message.parts when it is an array. -1 when there are none, -2 for a defect.
+fn parts_of(doc: crate::json::JsonDocument) -> i64 ! alloc
+  ensures result == -1 || result == -2 || (0 <= result && result < len(doc.tape) / 6)
+{
+  let root: i64 = crate::access::root(doc);
+  let msg: i64 = crate::entry::object_field(doc, root, "message");
+  if msg == -1 { return -1; }
+  if msg < 0 { return -2; }
+  let c: i64 = crate::access::field(doc, msg, "parts");
+  if c == -1 || c == -2 { return -1; }
+  if c < 0 { return -2; }
+  let k: i64 = crate::access::kind(doc, c);
+  if k < 0 { return -2; }
+  if k != 5 { return -1; }
+  return c;
+}
+
+// hand visible_parts' filter: an object part that is not a thought (1); 0 when filtered out, -1 for a defect.
+fn visible(doc: crate::json::JsonDocument, j: i64) -> i64 ! alloc
+  ensures result == -1 || result == 0 || result == 1
+{
+  let k: i64 = crate::access::kind(doc, j);
+  if k < 0 { return -1; }
+  if k != 6 { return 0; }
+  let thought: i64 = crate::entry::is_true(doc, j, "thought");
+  if thought < 0 { return -1; }
+  if thought == 1 { return 0; }
+  return 1;
+}
+
+// hand iso(timestamp): a missing field is Value::Null (status 1), the raw token is formatted by iso_raw.
+fn doc_stamp(doc: crate::json::JsonDocument) -> crate::time::Iso ! alloc
+  ensures utf8_valid(result.text)
+  ensures result.status == 0 ==> len(result.text) == 24
+{
+  let root: i64 = crate::access::root(doc);
+  let tf: i64 = crate::access::field(doc, root, "timestamp");
+  let mut status: i64 = 1;
+  if tf != -1 {
+    let s: crate::access::Span = crate::access::raw_span(doc, tf);
+    if tf >= 0 && s.status == 0 { return crate::time::iso_raw(doc.source, s.start, s.end); }
+    status = -4;
+  }
+  let e: [u8] = alloc(0, 0);
+  return crate::time::Iso { status: status, text: move e };
+}
+
+// hand visible_parts(parts).filter_map(text).join("\n\n"): the text of each visible part, decoded into prompt.
+fn join_text(doc: crate::json::JsonDocument, c: i64, inout prompt: [u8]) -> bool ! alloc
   requires 0 <= c && c < len(doc.tape) / 6
-  requires 0 <= start && start <= 8388608
+  requires utf8_valid(prompt)
+  ensures utf8_valid(prompt)
 {
   if len(doc.tape) > 6291456 { return false; }
   let stop: i64 = doc.tape[6 * c + 3];
   if stop <= c || stop > len(doc.tape) / 6 { return false; }
-  let mut tag: i64 = 7;
-  if user { tag = 5; }
+  let mut parts: i64 = 0;
   let mut j: i64 = c + 1;
   while j < stop
     invariant 0 <= c && c < j && j <= stop && stop <= len(doc.tape) / 6 && len(doc.tape) <= 6291456
+    invariant 0 <= parts && parts <= j && utf8_valid(prompt)
     decreases stop - j
   {
     let next: i64 = doc.tape[6 * j + 3];
     if next <= j || next > stop || doc.tape[6 * j + 4] != c { return false; }
-    let bkind: i64 = crate::access::kind(doc, j);
-    if bkind < 0 { return false; }
-    if bkind == 6 {
-      let thought: i64 = crate::entry::is_true(doc, j, "thought");
-      if thought < 0 { return false; }
-      if thought != 1 {
-        let tx: i64 = crate::entry::string_id(doc, j, "text");
-        if tx < -1 { return false; }
-        if tx >= 0 {
-          if !write_token(inout log, tag, doc, tx, start) { return false; }
-        } else if !user {
-          let call: i64 = crate::entry::object_field(doc, j, "functionCall");
-          if call < -1 { return false; }
-          if call >= 0 {
-            if !write_event(inout log, Event { kind: 8, a: 0, b: 0 }) { return false; }
-          }
-        }
+    let v: i64 = visible(doc, j);
+    if v < 0 { return false; }
+    if v == 1 {
+      let tx: i64 = crate::entry::string_id(doc, j, "text");
+      if tx < -1 { return false; }
+      if tx >= 0 {
+        let s: crate::access::Span = crate::access::raw_span(doc, tx);
+        if s.status != 0 || len(prompt) > 50331646 { return false; }
+        if parts > 0 { arr_append(inout prompt, "\n\n", 0, 2); }
+        crate::jstr::decode_append(inout prompt, doc.source, s.start, s.end, false);
+        parts = parts + 1;
       }
     }
     j = next;
@@ -274,86 +304,91 @@ fn record_parts(doc: crate::json::JsonDocument, c: i64, user: bool, start: i64, 
   return true;
 }
 
-// hand take_parts: message.parts when it is an array, else no parts.
-fn record_message(doc: crate::json::JsonDocument, user: bool, start: i64, inout log: [i64]) -> bool ! alloc
-  requires 0 <= start && start <= 8388608
+// hand Action::User: the joined prompt starts a turn when it is not blank, with iso(timestamp).
+fn user_entry(doc: crate::json::JsonDocument, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store, inout prompt: [u8]) -> bool ! alloc
+  requires len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[0] && st[0] <= 4294967295 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  requires utf8_valid(prompt)
+  ensures len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && old(st)[0] <= st[0] && st[0] <= old(st)[0] + 1 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
+  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  ensures utf8_valid(prompt)
 {
-  let root: i64 = crate::access::root(doc);
-  let msg: i64 = crate::entry::object_field(doc, root, "message");
-  if msg == -1 { return true; }
-  if msg < 0 { return false; }
-  let c: i64 = crate::access::field(doc, msg, "parts");
-  if c == -1 || c == -2 { return true; }
-  if c < 0 { return false; }
-  let k: i64 = crate::access::kind(doc, c);
-  if k < 0 { return false; }
-  if k != 5 { return true; }
-  return record_parts(doc, c, user, start, inout log);
+  prompt = truncate(prompt, 0);
+  let c: i64 = parts_of(doc);
+  if c < -1 { return false; }
+  if c >= 0 {
+    if !join_text(doc, c, inout prompt) { return false; }
+  }
+  if len(prompt) > 100000000 { return false; }
+  if crate::text::is_blank(subview(prompt, 0, len(prompt))) { return true; }
+  let created: crate::time::Iso = doc_stamp(doc);
+  if created.status < 0 { return false; }
+  let mut cn: i64 = 0;
+  if created.status == 0 { cn = 24; }
+  crate::turns::begin2(inout st, inout sl, inout bk, subview(prompt, 0, len(prompt)), subview(created.text, 0, cn));
+  return true;
 }
 
-// hand object.remove("timestamp"): the raw token, formatted by iso in replay.
-fn write_stamp(doc: crate::json::JsonDocument, kind: i64, start: i64, inout log: [i64]) -> bool ! alloc
-  requires 0 <= start && start <= 8388608
+// hand Action::Assistant, attached turn: for each visible part, answer(text, at) or a functionCall tool.
+fn answer_parts(doc: crate::json::JsonDocument, c: i64, at: str, inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store, inout piece: [u8]) -> bool ! alloc
+  requires 0 <= c && c < len(doc.tape) / 6
+  requires len(at) == 0 || len(at) == 24
+  requires len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[0] && st[0] <= 4294967295 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  requires utf8_valid(piece)
+  ensures len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+  ensures st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
+  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  ensures utf8_valid(piece)
 {
-  let root: i64 = crate::access::root(doc);
-  let tf: i64 = crate::access::field(doc, root, "timestamp");
-  if tf == -1 { return write_event(inout log, Event { kind: kind, a: -1, b: -1 }); }
-  if tf < 0 { return false; }
-  return write_token(inout log, kind, doc, tf, start);
-}
-
-// hand Entry::new's Action: a real user keeps its parts and timestamp; an assistant its timestamp, model and parts.
-fn record_entry(doc: crate::json::JsonDocument, role: i64, start: i64, inout log: [i64]) -> bool ! alloc
-  requires 0 <= start && start <= 8388608
-{
-  let root: i64 = crate::access::root(doc);
-  match role {
-    1 => {
-      if !record_message(doc, true, start, inout log) { return false; }
-      return write_stamp(doc, 3, start, inout log);
-    }
-    2 => {
-      // hand take_string(model): a string token; the empty one is dropped in replay (model before the stamp, as
-      // the hand updates the model before it tests collector.attached and formats the stamp)
-      let mf: i64 = crate::entry::string_id(doc, root, "model");
-      if mf < -1 { return false; }
-      if mf >= 0 {
-        if !write_token(inout log, 6, doc, mf, start) { return false; }
+  if len(doc.tape) > 6291456 { return false; }
+  let stop: i64 = doc.tape[6 * c + 3];
+  if stop <= c || stop > len(doc.tape) / 6 { return false; }
+  let mut j: i64 = c + 1;
+  while j < stop
+    invariant 0 <= c && c < j && j <= stop && stop <= len(doc.tape) / 6 && len(doc.tape) <= 6291456
+    invariant utf8_valid(piece)
+    invariant len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data)
+    invariant st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
+    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+    invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+    decreases stop - j
+  {
+    let next: i64 = doc.tape[6 * j + 3];
+    if next <= j || next > stop || doc.tape[6 * j + 4] != c { return false; }
+    let v: i64 = visible(doc, j);
+    if v < 0 { return false; }
+    if v == 1 {
+      let tx: i64 = crate::entry::string_id(doc, j, "text");
+      if tx < -1 { return false; }
+      if tx >= 0 {
+        // hand answer(text, at) borrows the part's text: its decode, lent as str
+        let s: crate::access::Span = crate::access::raw_span(doc, tx);
+        if s.status != 0 { return false; }
+        piece = truncate(piece, 0);
+        crate::jstr::decode_append(inout piece, doc.source, s.start, s.end, false);
+        if len(piece) > 100000000 { return false; }
+        crate::turns::answer2(inout st, inout sl, inout bk, subview(piece, 0, len(piece)), at);
+      } else {
+        let call: i64 = crate::entry::object_field(doc, j, "functionCall");
+        if call < -1 { return false; }
+        if call >= 0 { crate::turns::tool(inout st, inout sl, 1); }
       }
-      if !write_stamp(doc, 4, start, inout log) { return false; }
-      return record_message(doc, false, start, inout log);
     }
-    _ => { return role >= 0; }
+    j = next;
   }
-}
-
-fn record_object(doc: crate::json::JsonDocument, role: i64, ordinal: i64, start: i64, inout log: [i64]) -> bool ! alloc
-  requires 0 <= start && start <= 8388608
-{
-  if !write_event(inout log, Event { kind: 0, a: ordinal, b: start }) { return false; }
-  if record_entry(doc, role, start, inout log) { return true; }
-  return write_event(inout log, Event { kind: 9, a: 0, b: 0 });
-}
-
-// hand iso(timestamp) over the raw token data[a..b]; a < 0 is a missing field (hand Value::Null).
-fn stamp(data: [u8], a: i64, b: i64) -> crate::time::Iso ! alloc
-  requires len(data) <= 8388608
-  ensures utf8_valid(result.text)
-  ensures result.status == 0 ==> len(result.text) == 24
-{
-  if a < 0 || a > b || b > len(data) {
-    let e: [u8] = alloc(0, 0);
-    let mut status: i64 = 1;
-    if a >= 0 { status = -4; }
-    return crate::time::Iso { status: status, text: move e };
-  }
-  return crate::time::iso_raw(data, a, b);
+  return true;
 }
 
 struct Replay { model: str, defect: i64 }
 
-fn replay(data: [u8], log: [i64], chain: crate::chain::Chain, selected: [u8], inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> Replay ! alloc
-  requires len(log) <= 4294967295 && len(data) <= 8388608
+// hand: the replay loop over the slots, with the selected entries' actions matched on the kept documents.
+fn replay(log: [i64], docs: Vec<crate::json::JsonDocument>, chain: crate::chain::Chain, selected: [u8], inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> Replay ! alloc
+  requires len(log) <= 4294967295
   requires len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && st[0] == 0 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
@@ -370,15 +405,10 @@ fn replay(data: [u8], log: [i64], chain: crate::chain::Chain, selected: [u8], in
   let mut model: str = "";
   // hand prompt (the join of a selected user's parts) and the decoded text of one answer part
   let mut prompt: [u8] = alloc(0, 0);
-  let mut parts: i64 = 0;
   let mut piece: [u8] = alloc(0, 0);
-  // hand at = iso(timestamp) of an attached assistant: at_n is 24 when at.text holds the stamp, else 0
-  let none: [u8] = alloc(0, 0);
-  let mut at: crate::time::Iso = crate::time::Iso { status: 1, text: move none };
-  let mut at_n: i64 = 0;
-  while pos + 3 <= len(log)
-    invariant 0 <= pos && pos <= len(log) && len(log) <= 4294967295 && 0 <= start && 0 <= parts && parts <= pos
-    invariant utf8_valid(prompt) && utf8_valid(piece) && utf8_valid(at.text) && (at_n == 0 || (at_n == 24 && len(at.text) == 24))
+  while pos + 4 <= len(log)
+    invariant 0 <= pos && pos <= len(log) && len(log) <= 4294967295 && 0 <= start
+    invariant utf8_valid(prompt) && utf8_valid(piece)
     invariant len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[0] && st[0] <= pos && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
@@ -386,17 +416,6 @@ fn replay(data: [u8], log: [i64], chain: crate::chain::Chain, selected: [u8], in
   {
     let event: Event = read_event(log, pos);
     match event.kind {
-      0 => {
-        if event.a < 0 || event.a >= len(selected) || event.b < 0 { return Replay { model: move model, defect: 0 }; }
-        chosen = !chain.active || selected[event.a] == 1;
-        start = event.b;
-        at_n = 0;
-        if chosen {
-          if !started && pending { crate::turns::skip_user(inout st); }
-          started = true;
-        }
-        pending = false;
-      }
       1 => {
         pending = true;
         if started { crate::turns::skip_user(inout st); }
@@ -404,65 +423,52 @@ fn replay(data: [u8], log: [i64], chain: crate::chain::Chain, selected: [u8], in
       9 => {
         if chosen { return Replay { model: move model, defect: start }; }
       }
-      8 => {
-        if chosen && st[1] == 1 { crate::turns::tool(inout st, inout sl, 1); }
-      }
-      3 => {
-        // hand: the joined prompt starts a turn when it is not blank, with iso(timestamp)
-        if chosen {
-          if len(prompt) > 100000000 { return Replay { model: move model, defect: start }; }
-          if !crate::text::is_blank(subview(prompt, 0, len(prompt))) {
-            let created: crate::time::Iso = stamp(data, event.a, event.b);
-            if created.status < 0 { return Replay { model: move model, defect: start }; }
-            let mut cn: i64 = 0;
-            if created.status == 0 { cn = 24; }
-            crate::turns::begin2(inout st, inout sl, inout bk, subview(prompt, 0, len(prompt)), subview(created.text, 0, cn));
-          }
-        }
-        prompt = truncate(prompt, 0);
-        parts = 0;
-      }
-      4 => {
-        // hand: if collector.attached { let at = iso(timestamp); .. }
-        if chosen && st[1] == 1 {
-          at = stamp(data, event.a, event.b);
-          if at.status < 0 { return Replay { model: move model, defect: start }; }
-          at_n = 0;
-          if at.status == 0 { at_n = 24; }
-        }
-      }
       _ => {
-        // hand: the model and the prompt parts of a selected entry; answer parts only for an attached turn
-        if chosen && (event.kind != 7 || st[1] == 1) {
-          if event.a < 0 || event.a > event.b || event.b > len(data) {
-            return Replay { model: move model, defect: 0 };
+        if event.a < 0 || event.a >= len(selected) || event.b < 0 { return Replay { model: move model, defect: 0 }; }
+        chosen = !chain.active || selected[event.a] == 1;
+        start = event.b;
+        if chosen {
+          if !started && pending { crate::turns::skip_user(inout st); }
+          started = true;
+          if event.kind == 2 || event.kind == 3 {
+            if event.c < 0 || event.c >= len(docs) { return Replay { model: move model, defect: 0 }; }
           }
           match event.kind {
-            5 => {
-              // hand join("\n\n") over the parts' text
-              if len(prompt) > 50331646 { return Replay { model: move model, defect: start }; }
-              if parts > 0 { arr_append(inout prompt, "\n\n", 0, 2); }
-              crate::jstr::decode_append(inout prompt, data, event.a, event.b, false);
-              parts = parts + 1;
+            2 => {
+              if !user_entry(vec_get::<crate::json::JsonDocument>(docs, event.c), inout st, inout sl, inout bk, inout prompt) {
+                return Replay { model: move model, defect: start };
+              }
             }
-            // hand: the reply model is an owned String (take_string drops the empty one)
-            6 => {
-              let mut m: [u8] = alloc(0, 0);
-              crate::jstr::decode_append(inout m, data, event.a, event.b, false);
-              if len(m) > 0 { model = str_from_utf8(m); }
-            }
-            7 => {
-              // hand answer(text, at) borrows the part's text: its decode, lent as str
-              piece = truncate(piece, 0);
-              crate::jstr::decode_append(inout piece, data, event.a, event.b, false);
-              crate::turns::answer2(inout st, inout sl, inout bk, subview(piece, 0, len(piece)), subview(at.text, 0, at_n));
+            3 => {
+              // hand: the reply model is an owned String (take_string drops the empty one)
+              let mf: crate::entry::Field = crate::entry::string_field(vec_get::<crate::json::JsonDocument>(docs, event.c), 0, "model");
+              match mf {
+                crate::entry::Field::Value(v) => { if len(v) > 0 { model = move v; } }
+                crate::entry::Field::Missing => {}
+                crate::entry::Field::Defect(e) => { return Replay { model: move model, defect: start }; }
+              }
+              // hand: if collector.attached { let at = iso(timestamp); for part in visible_parts(parts) { .. } }
+              if st[1] == 1 {
+                let at: crate::time::Iso = doc_stamp(vec_get::<crate::json::JsonDocument>(docs, event.c));
+                if at.status < 0 { return Replay { model: move model, defect: start }; }
+                let mut an: i64 = 0;
+                if at.status == 0 { an = 24; }
+                let c: i64 = parts_of(vec_get::<crate::json::JsonDocument>(docs, event.c));
+                if c < -1 { return Replay { model: move model, defect: start }; }
+                if c >= 0 {
+                  if !answer_parts(vec_get::<crate::json::JsonDocument>(docs, event.c), c, subview(at.text, 0, an), inout st, inout sl, inout bk, inout piece) {
+                    return Replay { model: move model, defect: start };
+                  }
+                }
+              }
             }
             _ => {}
           }
         }
+        pending = false;
       }
     }
-    pos = pos + 3;
+    pos = pos + 4;
   }
   return Replay { model: move model, defect: -1 };
 }
@@ -472,29 +478,14 @@ fn wfail_zero() -> [u8] ! alloc
   return crate::boundary::wire_fail(crate::boundary::code_internal_invariant(), 0);
 }
 
-// hand Entry::new's title and the replay actions of one parsed object (split out of window_wire's loop so
-// doc_strings(d) is proved in a small context). Found or NoTitle when recorded; Defect when the line fails.
-fn window_object(d: crate::json::JsonDocument, role: i64, ordinal: i64, start: i64, inout log: [i64]) -> crate::entry::Title ! alloc
+// hand Entry::new's title of one parsed object (split out of window_wire's loop so doc_strings(d) is proved in a
+// small context). Found or NoTitle; Defect when the title fails.
+fn window_title(d: crate::json::JsonDocument, role: i64) -> crate::entry::Title ! alloc
   requires crate::json::doc_strings(d)
-  requires 0 <= start && start <= 8388608
   ensures is_variant(result, crate::entry::Title::Found) ==> len(variant_field(result, crate::entry::Title::Found, text)) <= 50331648
 {
-  if role != 4 {
-    if !record_object(d, role, ordinal, start, inout log) { return crate::entry::Title::Defect(-4); }
-    return crate::entry::Title::NoTitle;
-  }
-  let t: crate::entry::Title = crate::entry::custom_title(d);
-  match t {
-    crate::entry::Title::Found(x) => {
-      if !record_object(d, role, ordinal, start, inout log) { return crate::entry::Title::Defect(-4); }
-      return crate::entry::Title::Found(move x);
-    }
-    crate::entry::Title::NoTitle => {
-      if !record_object(d, role, ordinal, start, inout log) { return crate::entry::Title::Defect(-4); }
-      return crate::entry::Title::NoTitle;
-    }
-    crate::entry::Title::Defect(e) => { return crate::entry::Title::Defect(e); }
-  }
+  if role != 4 { return crate::entry::Title::NoTitle; }
+  return crate::entry::custom_title(d);
 }
 
 pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
@@ -504,11 +495,12 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
   }
   let mut index: crate::chain::Index = crate::chain::new_index();
   let mut log: [i64] = alloc(0, 0);
+  let mut docs: Vec<crate::json::JsonDocument> = vec_new::<crate::json::JsonDocument>();
   let mut title: str = "";
   let mut ordinal: i64 = 0;
   let mut offset: i64 = crate::framing::skip_first(data, cut_before);
   while offset < len(data)
-    invariant 0 <= ordinal && ordinal <= offset
+    invariant 0 <= ordinal && ordinal <= offset && len(docs) <= ordinal
     invariant 0 <= offset && offset <= len(data) && len(data) <= 8388608
     invariant len(index.arena) <= 8388608 && len(index.slots) <= 50331655
     invariant len(title) <= 50331648
@@ -523,12 +515,22 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
             // hand: Entry::new(object, &mut title) decides the role, the index keys and the title
             let role: i64 = crate::entry::role_of(d);
             if !crate::chain::note(inout index, d, ordinal, role >= 1 && role <= 3) { return wfail_zero(); }
-            let t: crate::entry::Title = window_object(d, role, ordinal, start, inout log);
+            let t: crate::entry::Title = window_title(d, role);
             match t {
               crate::entry::Title::Found(x) => { title = move x; }
               crate::entry::Title::NoTitle => {}
               crate::entry::Title::Defect(e) => { return wfail_zero(); }
             }
+            // hand slots.push(Slot::Entry(..)): a real user or an assistant keeps its parsed document (the hand's
+            // parts, timestamp and model) and its record names it; a failed role is a defect record after it
+            let mut kind: i64 = 0;
+            let mut di: i64 = -1;
+            if role == 1 || role == 2 { kind = role + 1; di = len(docs); }
+            if !write_event(inout log, Event { kind: kind, a: ordinal, b: start, c: di }) { return wfail_zero(); }
+            if role < 0 {
+              if !write_event(inout log, Event { kind: 9, a: 0, b: 0, c: -1 }) { return wfail_zero(); }
+            }
+            if role == 1 || role == 2 { docs = vec_push::<crate::json::JsonDocument>(move docs, move d); }
             // hand: only parsed objects become entries
             ordinal = ordinal + 1;
           }
@@ -540,7 +542,7 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
       }
       crate::framing::Frame::Dropped(s, e, n) => {
         if crate::text::dropped_user(subview(data, s, e)) {
-          if !write_event(inout log, Event { kind: 1, a: 0, b: 0 }) { return wfail_zero(); }
+          if !write_event(inout log, Event { kind: 1, a: 0, b: 0, c: -1 }) { return wfail_zero(); }
         }
         offset = n;
       }
@@ -554,7 +556,7 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
   let mut sl: [i64] = crate::turns::new_slots();
   let mut bk: crate::turns::Store = crate::turns::new_store();
   if len(log) > 4294967295 { return wfail_zero(); }
-  let result: Replay = replay(data, log, chain, selected, inout st, inout sl, inout bk);
+  let result: Replay = replay(log, docs, chain, selected, inout st, inout sl, inout bk);
   if result.defect >= 0 {
     return crate::boundary::wire_fail(crate::boundary::code_internal_invariant(), result.defect);
   }

@@ -2665,3 +2665,10 @@ Changes `bench/l3/pkgs/transport`, `codex/rpc.pruv` and a comment in `grok/rpc.p
   `string_text_owned` and `string_text_scanned_owned` keep their run-time `utf8_valid` test (hand `from_utf8`).
 - No language change; no package source changed; no consumer tests needed. Not measured.
 - Next: 4.4ze-UW in a language bundle, then 4.4x-DS with the design above.
+
+### Rows after 4.4zf
+
+- 4.4y-PW is closed in qwen (`bench/l3/qwen/RESHAPE.md`, "Rows after 4.4zf"). The scan moves each parsed user and
+  assistant `JsonDocument` into a `Vec` (R-6e-12b), and replay walks `parts` only on the selected or attached
+  path, using per-element `docs[k]` facts at `vec_get` call arguments (R-6e-3, LG27/LG31). No package or language
+  change. No new gap. Not measured.
