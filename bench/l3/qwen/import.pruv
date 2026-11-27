@@ -158,6 +158,9 @@ pub fn tail_info(data: [u8], cut_before: bool) -> crate::boundary::ImportResult 
         let line: crate::entry::Line = crate::entry::parse_line(data, start, end);
         match line {
           crate::entry::Line::Object(d) => {
+            // The title is read before the timestamp so doc_strings(d) is proved next to parse_line; either defect
+            // fails the line alike.
+            let t: crate::entry::Title = crate::entry::title_of(d);
             let root: i64 = crate::access::root(d);
             let tf: i64 = crate::access::field(d, root, "timestamp");
             if tf < -1 { return fail_at(start, end, 0); }
@@ -169,7 +172,6 @@ pub fn tail_info(data: [u8], cut_before: bool) -> crate::boundary::ImportResult 
                 has_at = true;
               }
             }
-            let t: crate::entry::Title = crate::entry::title_of(d);
             match t {
               // hand: the last custom title wins
               crate::entry::Title::Found(text) => { best = move text; has_title = true; }
@@ -288,6 +290,7 @@ fn write_stamp(doc: crate::json::JsonDocument, inout log: Events) -> bool ! allo
 // hand: the Action arms of window_import's replay, recorded per entry. A real user records its prompt and
 // timestamp when the prompt is not blank; an assistant records its timestamp, model and visible parts.
 fn record_entry(doc: crate::json::JsonDocument, role: i64, inout log: Events) -> bool ! alloc
+  requires crate::json::doc_strings(doc)
 {
   let root: i64 = crate::access::root(doc);
   match role {
@@ -331,6 +334,7 @@ fn record_entry(doc: crate::json::JsonDocument, role: i64, inout log: Events) ->
 }
 
 fn record_object(doc: crate::json::JsonDocument, role: i64, ordinal: i64, start: i64, inout log: Events) -> bool ! alloc
+  requires crate::json::doc_strings(doc)
 {
   if !write_event(inout log, Event { kind: 0, a: ordinal, b: start }) { return false; }
   if record_entry(doc, role, inout log) { return true; }
@@ -422,6 +426,30 @@ fn wfail_zero() -> [u8] ! alloc
   return crate::boundary::wire_fail(crate::boundary::code_internal_invariant(), 0);
 }
 
+// hand Entry::new's title and the replay actions of one parsed object (split out of window_wire's loop so
+// doc_strings(d) is proved in a small context). Found or NoTitle when recorded; Defect when the line fails.
+fn window_object(d: crate::json::JsonDocument, role: i64, ordinal: i64, start: i64, inout log: Events) -> crate::entry::Title ! alloc
+  requires crate::json::doc_strings(d)
+  ensures is_variant(result, crate::entry::Title::Found) ==> len(variant_field(result, crate::entry::Title::Found, text)) <= 50331648
+{
+  if role != 4 {
+    if !record_object(d, role, ordinal, start, inout log) { return crate::entry::Title::Defect(-4); }
+    return crate::entry::Title::NoTitle;
+  }
+  let t: crate::entry::Title = crate::entry::custom_title(d);
+  match t {
+    crate::entry::Title::Found(x) => {
+      if !record_object(d, role, ordinal, start, inout log) { return crate::entry::Title::Defect(-4); }
+      return crate::entry::Title::Found(move x);
+    }
+    crate::entry::Title::NoTitle => {
+      if !record_object(d, role, ordinal, start, inout log) { return crate::entry::Title::Defect(-4); }
+      return crate::entry::Title::NoTitle;
+    }
+    crate::entry::Title::Defect(e) => { return crate::entry::Title::Defect(e); }
+  }
+}
+
 pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
 {
   if len(data) > crate::boundary::limit_window_bytes() {
@@ -450,15 +478,12 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
             // hand: Entry::new(object, &mut title) decides the role, the index keys and the title
             let role: i64 = crate::entry::role_of(d);
             if !crate::chain::note(inout index, d, ordinal, role >= 1 && role <= 3) { return wfail_zero(); }
-            if role == 4 {
-              let t: crate::entry::Title = crate::entry::custom_title(d);
-              match t {
-                crate::entry::Title::Found(x) => { title = move x; }
-                crate::entry::Title::NoTitle => {}
-                crate::entry::Title::Defect(e) => { return wfail_zero(); }
-              }
+            let t: crate::entry::Title = window_object(d, role, ordinal, start, inout log);
+            match t {
+              crate::entry::Title::Found(x) => { title = move x; }
+              crate::entry::Title::NoTitle => {}
+              crate::entry::Title::Defect(e) => { return wfail_zero(); }
             }
-            if !record_object(d, role, ordinal, start, inout log) { return wfail_zero(); }
             // hand: only parsed objects become entries
             ordinal = ordinal + 1;
           }

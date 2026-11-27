@@ -3,11 +3,13 @@
 pub enum Line { Object(doc: crate::json::JsonDocument), Skip, Defect(position: i64) }
 pub enum Field { Value(text: str), Missing, Defect(kind: i64) }
 pub enum Title { Found(text: str), NoTitle, Defect(kind: i64) }
-enum Block { Piece(text: str), Ignore, Broken(kind: i64) }
+// 4.3e-J: Piece carries the text string node; array_content appends its borrowed view (hand `&str` parts).
+enum Block { Piece(node: i64), Ignore, Broken(kind: i64) }
 
 pub fn parse_line(data: [u8], start: i64, end: i64) -> Line ! alloc
   requires 0 <= start && start <= end && end <= len(data)
   ensures is_variant(result, Line::Object) ==> crate::json::doc_local(variant_field(result, Line::Object, doc))
+  ensures is_variant(result, Line::Object) ==> crate::json::doc_strings(variant_field(result, Line::Object, doc))
 {
   // hand: skip the line unless its first non-blank byte is `{`
   let mut i: i64 = start;
@@ -110,12 +112,10 @@ fn block_of(doc: crate::json::JsonDocument, j: i64) -> Block ! alloc
   let thought: i64 = is_true(doc, j, "thought");
   if thought < 0 { return Block::Broken(thought); }
   if thought == 1 { return Block::Ignore; }
-  let tx: Field = string_field(doc, j, "text");
-  match tx {
-    Field::Value(x) => { return Block::Piece(move x); }
-    Field::Missing => { return Block::Ignore; }
-    Field::Defect(e) => { return Block::Broken(e); }
-  }
+  let tx: i64 = string_id(doc, j, "text");
+  if tx == -1 { return Block::Ignore; }
+  if tx < 0 { return Block::Broken(tx); }
+  return Block::Piece(tx);
 }
 
 fn string_content(doc: crate::json::JsonDocument, c: i64) -> Field ! alloc
@@ -136,6 +136,7 @@ fn string_content(doc: crate::json::JsonDocument, c: i64) -> Field ! alloc
 
 fn array_content(doc: crate::json::JsonDocument, c: i64) -> Field ! alloc
   requires 0 <= c && c < len(doc.tape) / 6
+  requires crate::json::doc_strings(doc)
 {
   if len(doc.tape) > 6291456 { return Field::Defect(-4); }
   let stop: i64 = doc.tape[6 * c + 3];
@@ -153,11 +154,28 @@ fn array_content(doc: crate::json::JsonDocument, c: i64) -> Field ! alloc
     if next <= j || next > stop || doc.tape[6 * j + 4] != c { return Field::Defect(-4); }
     let b: Block = block_of(doc, j);
     match b {
-      Block::Piece(x) => {
+      Block::Piece(n) => {
+        // hand: a plain part is pushed from its borrowed view; an escaped one from its decode
         let room: i64 = 1000000000 - len(joined);
-        if len(x) > room - 2 { return Field::Defect(-4); }
-        if count > 0 { joined = string_push_str(move joined, "\n\n"); }
-        joined = string_push_str(move joined, x);
+        let pv: Option<ref str> = crate::access::plain_str(doc, n);
+        match pv {
+          Some(x) => {
+            if len(x) > 50331648 || len(x) > room - 2 { return Field::Defect(-4); }
+            if count > 0 { joined = string_push_str(move joined, "\n\n"); }
+            joined = string_push_str(move joined, x);
+          }
+          None => {
+            let t: crate::jstr::Text = crate::access::string_text_owned(doc, n);
+            match t {
+              crate::jstr::Text::InternalInvariant(e) => { return Field::Defect(e); }
+              crate::jstr::Text::Decoded(x) => {
+                if len(x) > 50331648 || len(x) > room - 2 { return Field::Defect(-4); }
+                if count > 0 { joined = string_push_str(move joined, "\n\n"); }
+                joined = string_push_str(move joined, x);
+              }
+            }
+          }
+        }
         count = count + 1;
       }
       Block::Ignore => {}
@@ -206,6 +224,7 @@ pub fn role_of(doc: crate::json::JsonDocument) -> i64 ! alloc
 
 // hand: the non-thought text parts of message.parts joined with a blank line, kept when not blank.
 pub fn user_text(doc: crate::json::JsonDocument) -> Field ! alloc
+  requires crate::json::doc_strings(doc)
 {
   let root: i64 = crate::access::root(doc);
   let msg: i64 = object_field(doc, root, "message");
@@ -222,6 +241,7 @@ pub fn user_text(doc: crate::json::JsonDocument) -> Field ! alloc
 
 // hand edge.rs human_text: a real user line, then its parts text.
 pub fn human_text(doc: crate::json::JsonDocument) -> Field ! alloc
+  requires crate::json::doc_strings(doc)
 {
   // hand: any type but "user" ends here, before provenance
   let root: i64 = crate::access::root(doc);
@@ -235,9 +255,24 @@ pub fn human_text(doc: crate::json::JsonDocument) -> Field ! alloc
   return user_text(doc);
 }
 
+// 4.3e-J: the blank check runs on the borrowed view and only a nonblank title is copied (hand `take_string`
+// borrows the value); an escaped node is decoded first.
 fn title_key(doc: crate::json::JsonDocument, id: i64, key: str) -> Field ! alloc
+  requires crate::json::doc_strings(doc)
   ensures is_variant(result, Field::Value) ==> len(variant_field(result, Field::Value, text)) <= 50331648
 {
+  let n: i64 = string_id(doc, id, key);
+  if n == -1 { return Field::Missing; }
+  if n < 0 { return Field::Defect(n); }
+  let pv: Option<ref str> = crate::access::plain_str(doc, n);
+  match pv {
+    Some(v) => {
+      if len(v) > 50331648 { return Field::Defect(-4); }
+      if crate::text::is_blank(v) { return Field::Missing; }
+      return Field::Value(copy(v));
+    }
+    None => {}
+  }
   let f: Field = string_field(doc, id, key);
   match f {
     Field::Value(v) => {
@@ -251,6 +286,7 @@ fn title_key(doc: crate::json::JsonDocument, id: i64, key: str) -> Field ! alloc
 
 // hand: a system line's custom title (the caller matched type "system").
 pub fn custom_title(doc: crate::json::JsonDocument) -> Title ! alloc
+  requires crate::json::doc_strings(doc)
   ensures is_variant(result, Title::Found) ==> len(variant_field(result, Title::Found, text)) <= 50331648
 {
   let root: i64 = crate::access::root(doc);
@@ -270,6 +306,7 @@ pub fn custom_title(doc: crate::json::JsonDocument) -> Title ! alloc
 
 // hand edge.rs tail_import: type "system", then the custom title.
 pub fn title_of(doc: crate::json::JsonDocument) -> Title ! alloc
+  requires crate::json::doc_strings(doc)
   ensures is_variant(result, Title::Found) ==> len(variant_field(result, Title::Found, text)) <= 50331648
 {
   let ty: i64 = field_is(doc, crate::access::root(doc), "type", "system");

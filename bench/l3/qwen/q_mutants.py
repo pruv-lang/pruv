@@ -14,8 +14,8 @@ MUTANTS=[
  ('function-call','import.pruv','"functionCall"','"absentCall"'),
  ('model','import.pruv','root, "model"','root, "absentModel"'),
  ('chain-cut','chain.pruv','lost = true; done = true;','lost = false; done = true;'),
- ('chain-filter','chain.pruv','active: leaf.found, cut: lost, bad: leaf.bad','active: false, cut: lost, bad: leaf.bad'),
- ('leaf-parent','chain.pruv','if count > 0 { poff = f.poff; plen = f.plen; }','if count >= 0 { poff = f.poff; plen = f.plen; }'),
+ ('chain-filter','chain.pruv','return Chain { active: active, cut: lost, bad: false };','return Chain { active: false, cut: lost, bad: false };'),
+ ('leaf-parent','chain.pruv','let active: bool = at >= 0;','if at >= 0 && index.slots[at + 2] >= 0 && index.slots[at + 3] >= 0 && index.slots[at + 3] <= len(index.arena) - index.slots[at + 2] { let w: i64 = newest(index.arena, index.slots[at + 2], index.slots[at + 3], index.heads, index.slots); if w >= 0 { at = w; } } let active: bool = at >= 0;'),
  ('last-title','import.pruv','best = move text; has_title = true;','if !has_title { best = move text; } has_title = true;'),
  ('turn-cap','pkgs/turns/turns.pruv','if avail > 200 { avail = 200; }','if avail > 199 { avail = 199; }'),
 ]

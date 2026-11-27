@@ -2226,3 +2226,37 @@ Only `bench/l3/opencode` changes (no compiler, no `pkgs/`, so no consumer runs).
   --fuzz-count 20` (golden mismatches only from the new files, the A3 message and the shifted mutant sample);
   `m3_all --quick --update-golden` (all stages ok; llvm digests of `lgaps9_str_bytes` and `p9_rt_alias_pos` changed from LG9-SB4, their borrowed-result functions left the bindings); `--list-rows` diff (9 new rows, `tests/run_all_rows.txt` updated).
 - Next: audit of the LG9-SR2 encoding, LG11-QS, LG7-B4, P10-M1.
+
+## Step 4.4u: Qwen chain walk marks and follows separately (4.4d-QC), arena and title without owned copies (4.3e-F, 4.3e-J)
+
+Only `bench/l3/qwen` changes (no compiler, no `pkgs/`, so no consumer runs). Detail in `bench/l3/qwen/RESHAPE.md` §3c.
+
+- `chain::resolve` follows the hand `current_chain`: `select` marks every entry with the current uuid (hand
+  `selected.insert`) and only the reached entry's parent is read; `newest` returns the newest entry of the parent uuid
+  (hand `latest.get`). A `-2` parent defect on an unfollowed duplicate no longer fails the chain. The `Leaf` struct and
+  `lookup` / `Hit` are gone. New fixture `duplicate-bad-parent` (two `u` entries, the older with a lone-surrogate
+  parent). It is a regression guard only: the JSON decoder maps a lone surrogate to U+FFFD, so `-2` cannot come from
+  input (the old code also passed it).
+- `chain::put_field` decodes straight onto the arena with `access::string_append` (4.3e-F; no owned `str` first).
+- `entry::array_content` pushes each part from its `plain_str` view, falling back to the owned decode only for an
+  escaped node; `title_key` checks blankness on the view and copies only a nonblank title (4.3e-J). This needs
+  `doc_strings` from `parse_line` down the call chain; `window_wire`'s per-object title and replay records moved into
+  `import::window_object` and `tail_info` reads the title before the timestamp, so the solver proves it near
+  `parse_line` (both defects fail the line alike).
+- Tests (rs/rust and rs/llvm): `test_impl.py` PASS 27/27, `q.py --count 300` (rs pairs) same 317, P1 1, P4 4, P5 1,
+  unexplained 0, list same 21, P4 1; `q_mutants.py` 11 differential-killed, turn-cap verifier-rejected.
+- Not measured. No audit: no new result meaning on reachable inputs.
+
+### Rows after 4.4u
+
+- Closed: 4.4d-QC, 4.3e-F, 4.3e-J.
+- New: 4.4u-TO (order): `tail_info` reads the custom title before the timestamp (hand: timestamp first) so
+  `doc_strings` is proved in a small context; output is the same because either defect fails the line.
+- Still open: 4.3e-D / 4.4d-QS (the scan still records prompt, stamp and parts of every entry before the chain is
+  chosen; needs raw string ranges in the log decoded in `replay`, or a parsed-document vector, gap VL), 4.4d-QA, and
+  the rows listed before.
+- Next:
+  1. 4.3e-D / 4.4d-QS: log raw ranges of `data` for prompt, stamp and parts and decode them in `replay` for selected
+     and attached entries only.
+  2. 4.4d-QA with gap 4.4c-SV (a `[u8]` span lent as `str`).
+  3. 4.4u-TO back to hand order once the solver keeps `doc_strings` through the loop body.
