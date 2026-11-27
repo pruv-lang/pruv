@@ -1255,6 +1255,10 @@ must_reject|tests/must_reject/lgaps16_binder_record_outer_arm.pruv	1 case: obl=0
 must_reject|tests/must_reject/lgaps16_binder_record_twice.pruv	1 case: obl=0 1	default=89890dcc72ce
 must_reject|tests/must_reject/lgaps17_subspan_after_lead.pruv	1 case: obl=2 1	default=22742c4d5247
 must_reject|tests/must_reject/lgaps17_subspan_cut_end.pruv	1 case: obl=2 1	default=eaedf54f5b7a
+must_reject|tests/must_reject/lgaps18_binder_record_str.pruv	1 case: obl=0 1	default=ac250a20034e
+must_reject|tests/must_reject/lgaps18_word_mask_partial.pruv	1 case: obl=3 1	default=04bbb5c700d2
+must_reject|tests/must_reject/lgaps18_word_mask_past.pruv	1 case: obl=3 1	default=073fdd3d0d3d
+must_reject|tests/must_reject/lgaps18_word_mask_stale.pruv	1 case: obl=5 1	default=293644041a5c
 must_reject|tests/must_reject/lgaps9_into_bytes_borrowed.pruv	1 case: obl=0 1	default=5023034d1a39
 must_reject|tests/must_reject/lgaps9_into_bytes_len.pruv	1 case: obl=1 1	default=9c849a7c9750
 must_reject|tests/must_reject/lgaps9_into_bytes_use_after.pruv	1 case: obl=0 1	default=de6490a8eecb
@@ -1754,7 +1758,7 @@ runtime|tests/runtime/g10p_r20_hook_setup_late.pruv	1 case: obl=6 1	default=6e56
 runtime|tests/runtime/g10p_r21_copy_contract.pruv	1 case: obl=20 1	default=05ca3b7f077e
 runtime|tests/runtime/g10p_r22_env.pruv	1 case: obl=41 1	default=f11f83db7890
 runtime|tests/runtime/g10p_r23_quiet.pruv	1 case: obl=48 1	default=860782dde563
-runtime|tests/runtime/g10p_r24_env_quiet.pruv	1 case: obl=74 1	default=ceb9110dd94c
+runtime|tests/runtime/g10p_r24_env_quiet.pruv	1 case: obl=74 1	default=1980c7cf2fcf
 runtime|tests/runtime/g1_r01_copy.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 runtime|tests/runtime/g1_r02_nested.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 runtime|tests/runtime/g1_r03_variants.pruv	1 case: obl=0 1	default=c0f6163aeb7a
@@ -2011,7 +2015,7 @@ runtime|tests/runtime/lg5_rt_scalar_inout.pruv	1 case: obl=7 1	default=339a0f247
 runtime|tests/runtime/lg5_rt_struct_len_frame.pruv	1 case: obl=37 1	default=e4cd378859a0
 runtime|tests/runtime/lg6_rt_field_inout.pruv	1 case: obl=17 1	default=660f62a76e4e
 runtime|tests/runtime/lg6_rt_view.pruv	1 case: obl=31 1	default=ea76addbbfc0
-runtime|tests/runtime/lg7_rt_bitops.pruv	1 case: obl=14 1	default=0dab8b16eba6
+runtime|tests/runtime/lg7_rt_bitops.pruv	1 case: obl=14 1	default=1c87a31c1cd8
 runtime|tests/runtime/lg7_rt_field_gep.pruv	1 case: obl=29 1	default=a825fd10fde2
 runtime|tests/runtime/lg7_rt_read_into.pruv	1 case: obl=586 1	default=676eba09f4ef
 runtime|tests/runtime/lg8_rt_copy_subview.pruv	1 case: obl=24 1	default=654c61375845
@@ -2038,6 +2042,7 @@ runtime|tests/runtime/lgaps13_vec_tape.pruv	1 case: obl=41 1	default=be4e8be6f90
 runtime|tests/runtime/lgaps16_rt_binder_record.pruv	1 case: obl=34 1	default=e0c4610202ac
 runtime|tests/runtime/lgaps16_rt_binder_scalar.pruv	1 case: obl=1 1	default=e50e03f1a427
 runtime|tests/runtime/lgaps17_utf8_subspan.pruv	1 case: obl=77 1	default=fc9dc2b93c1a
+runtime|tests/runtime/lgaps18_word_mask.pruv	1 case: obl=78 1	default=588c0c04e59d
 runtime|tests/runtime/lgaps9_str_bytes.pruv	1 case: obl=25 1	default=9714b8db38d7
 runtime|tests/runtime/p1_r_bounds.pruv	1 case: obl=9 1	default=755fd0bbf8f5
 runtime|tests/runtime/p1_r_cast_fail.pruv	1 case: obl=1 1	default=13a323fd211c
@@ -2049,11 +2054,11 @@ runtime|tests/runtime/p2_r_u16_paths.pruv	1 case: obl=26 1	default=e2818135db13
 runtime|tests/runtime/p2_r_u16_push_oor.pruv	1 case: obl=5 1	default=6a054600c61a
 runtime|tests/runtime/p2_rt_bits.pruv	1 case: obl=16 1	default=12d3bd711c12
 runtime|tests/runtime/p2_rt_contract_guard.pruv	1 case: obl=1 1	default=bf3632d22f87
-runtime|tests/runtime/p2_rt_kernels.pruv	1 case: obl=190 1	default=cd0206bfc05f
+runtime|tests/runtime/p2_rt_kernels.pruv	1 case: obl=190 1	default=abd1ce62965d
 runtime|tests/runtime/p2_rt_shift_guard.pruv	1 case: obl=1 1	default=b57de226dba6
 runtime|tests/runtime/p2_rt_shifts.pruv	1 case: obl=50 1	default=42af4831a097
 runtime|tests/runtime/p2_rt_words.pruv	1 case: obl=103 1	default=c3acbfadc65c
-runtime|tests/runtime/p2_rt_wrap.pruv	1 case: obl=20 1	default=2db0205c13ec
+runtime|tests/runtime/p2_rt_wrap.pruv	1 case: obl=20 1	default=046e29061425
 runtime|tests/runtime/p31f_inout_field.pruv	1 case: obl=2 1	default=9115b8a430dd
 runtime|tests/runtime/p31f_map_iter.pruv	1 case: obl=14 1	default=6d37880aff76
 runtime|tests/runtime/p31f_nested_record_map.pruv	1 case: obl=11 1	default=8389362846be

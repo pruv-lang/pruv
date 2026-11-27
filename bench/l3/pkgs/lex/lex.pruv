@@ -13,7 +13,7 @@ pub fn validate_utf8(input: [u8], start: i64, end: i64) -> i64
   ensures result == -1 ==> utf8_valid_span(input, start, end)
 {
   // 4.4zc (4.4l-VU): the shape of std `run_utf8_validation`: one loop; an ASCII byte at an 8-aligned offset starts
-  // the skip of all-ASCII 16-byte blocks (a min reduction over 255 - byte, which the backend vectorizes) and then
+  // the skip of all-ASCII 16-byte blocks (two word loads and a mask test) and then
   // steps over the ASCII bytes after the last block; any other ASCII byte is one step; a lead byte is checked in place.
   // No block is read twice. std tests the pointer's alignment; the offset is its counterpart here.
   let mut i: i64 = start;
@@ -60,21 +60,15 @@ pub fn validate_utf8(input: [u8], start: i64, end: i64) -> i64
   return -1;
 }
 
-// std's two-word test `(block | block2) & NONASCII_MASK == 0`: bytes i..i+16 are all ASCII (a min reduction over
-// 255 - byte, which the backend vectorizes).
+// std's two-word test `(block | block2) & NONASCII_MASK == 0`: bytes i..i+16 are all ASCII (two unaligned
+// little-endian word loads, `u64::from_le_bytes`).
 fn ascii_block(input: [u8], i: i64) -> bool
   requires 0 <= i && i + 16 <= len(input)
   ensures result ==> (forall j in 0..16: input[i + j] < 128)
 {
-  let mut m: i64 = 255;
-  let mut k: i64 = 0;
-  while k < 16
-    invariant 0 <= k && k <= 16 && 0 <= i && i + 16 <= len(input)
-    invariant 0 <= m && m <= 255
-    invariant forall j in 0..k: m <= 255 - input[i + j]
-    decreases 16 - k
-  { let r: i64 = 255 - input[i + k]; if r < m { m = r; } k = k + 1; }
-  return m >= 128;
+  let w0: i64 = load_le(input, i, 8);
+  let w1: i64 = load_le(input, i + 8, 8);
+  return band(bor(w0, w1), -9187201950435737472) == 0;
 }
 
 // The hand `whitespace(&mut self)`.

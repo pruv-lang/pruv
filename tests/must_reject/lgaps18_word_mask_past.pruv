@@ -1,0 +1,13 @@
+// L-gaps 18 (4.4zc-WL): the mask test covers the 8 loaded bytes only, not the byte after the word
+fn past(a: [u8], i: i64) -> bool
+  requires 0 <= i && i + 9 <= len(a)
+  ensures result ==> (forall j in 0..9: a[i + j] < 128)
+{
+  let w: i64 = load_le(a, i, 8);
+  return band(w, -9187201950435737472) == 0;
+}
+
+pub fn run(n: i64) -> i64
+{
+  return n;
+}

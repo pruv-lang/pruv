@@ -1,0 +1,41 @@
+// L-gaps 18 (4.4zc-WL): a mask test over little/big-endian word loads (`load_le`, `load_be`) and the bit builtins is
+// decided on the bytes: std's `(block | block2) & NONASCII_MASK == 0` proves every byte of both words is ASCII.
+fn ascii16(a: [u8], i: i64) -> bool
+  requires 0 <= i && i + 16 <= len(a)
+  ensures result ==> (forall j in 0..16: a[i + j] < 128)
+{
+  let w0: i64 = load_le(a, i, 8);
+  let w1: i64 = load_le(a, i + 8, 8);
+  return band(bor(w0, w1), -9187201950435737472) == 0;
+}
+
+// a narrow big-endian word: the top byte of the 4-byte pattern is a[i]
+fn high_clear4(a: [u8], i: i64) -> bool
+  requires 0 <= i && i + 4 <= len(a)
+  ensures result ==> a[i] < 128
+{
+  let w: i64 = load_be(a, i, 4);
+  return (w & 2147483648) == 0;
+}
+
+// xor of two words is zero only when the bytes are equal
+fn same8(a: [u8], i: i64, j: i64) -> bool
+  requires 0 <= i && i + 8 <= len(a) && 0 <= j && j + 8 <= len(a)
+  ensures result ==> (forall k in 0..8: a[i + k] == a[j + k])
+{
+  return bxor(load_le(a, i, 8), load_le(a, j, 8)) == 0;
+}
+
+pub fn run(n: i64) -> i64 ! alloc
+  requires 0 <= n && n < 16
+{
+  let mut a: [u8] = alloc(32, 65);
+  a[n] = 200;
+  let mut r: i64 = 0;
+  if ascii16(a, 0) { r = r + 1; }
+  if ascii16(a, 16) { r = r + 10; }
+  if high_clear4(a, 0) { r = r + 100; }
+  if same8(a, 16, 24) { r = r + 1000; }
+  if same8(a, 0, 8) { r = r + 10000; }
+  return r;
+}

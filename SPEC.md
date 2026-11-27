@@ -160,6 +160,16 @@ it can never be silently dropped.
   `type/inout_alias`. No struct invariant is checked at the store (invariants are checked at handoffs).
 - `load_le(a, i, n)` and `store_le(inout a, i, w, n);` follow the same rules as `load_be` and `store_be`,
   respectively, using little-endian byte order (byte `a[i+k]` has weight `256^k`). Both names are reserved.
+- Bit tests over loaded words (L-gaps 18, 4.4zc-WL). In code, the verifier keeps the 64-bit pattern of each
+  `load_be`/`load_le` result as its bytes (the array values at the load; later writes do not change it), and of each
+  bit builtin (`band`, `bor`, `bxor`, `wrapping_shl`, `ushr`, `wrapping_add`, `wrapping_mul`) and `&`/`|`/`^`/`<<`/`>>`
+  result; a `<<`/`>>` by a literal count `0..63` is the product or quotient by `2^k` and keeps no pattern (use
+  `wrapping_shl`/`ushr` on a word). A bit operation on such a value works on that pattern, so a
+  mask test over a word decides facts about the bytes: `band(bor(load_le(a, i, 8), load_le(a, i + 8, 8)),
+  -9187201950435737472) == 0 ==> forall j in 0..16: a[i + j] < 128` (std's ASCII block test) and
+  `bxor(load_le(a, i, 8), load_le(a, j, 8)) == 0 ==> a[i..i+8] == a[j..j+8]` are proved. Contracts are unchanged.
+  Tests: `tests/runtime/lgaps18_word_mask.pruv`; must_reject `lgaps18_word_mask_past` (a byte outside the word),
+  `lgaps18_word_mask_partial` (a mask without one high bit), `lgaps18_word_mask_stale` (a write after the load).
 - `eq_range(a, i, b, j, n)`: `a` and `b` of one type, `[i64]`, `[u8]` or `[u16]` (R-6p-4), or each a byte operand, `[u8]`,
   `str` or a string literal, mixed freely (R-6b-4) (else `type_mismatch`); `i, j, n: i64`; a
   `bool`, true iff `a[i+k] == b[j+k]` for every `k` in `0..n` (true for `n == 0`). Code only (`effect_in_contract` in a
@@ -1078,7 +1088,10 @@ fn tree_count(t: Tree) -> i64
   scrutinee, an arm or enclosing arm naming the scrutinee, a nested `match` on any enclosing arm's scrutinee), an
   enum-typed binder and a binder whose field is boxed are not moved whole: `type/array_alias`. Rust moves the binder out of the by-value scrutinee. LLVM takes the payload value and stores
   zero into that field of the scrutinee's slot (every owned part empty), so the scrutinee's drop frees nothing
-  twice; a struct with no owned part is copied. Tests: [runtime](tests/runtime/lgaps16_rt_binder_record.pruv),
+  twice; a struct with no owned part is copied. A struct with a `str` field is not an owned aggregate (its fields are
+  read in place, as for any `str` record): `move d` of its binder is `type/foreign_move` ("move of a non-collection
+  value"), even when another field is an array; copy the fields you need. The one exception is a struct that is the element type `S` of a `Vec<S>` inside its own
+  recursion group (R-6e-20): it moves whole ([str field](tests/must_reject/lgaps18_binder_record_str.pruv)). Tests: [runtime](tests/runtime/lgaps16_rt_binder_record.pruv),
   [scalar struct](tests/runtime/lgaps16_rt_binder_scalar.pruv),
   [nested match on a plain enum](tests/must_reject/lgaps16_binder_record_nested_scalar.pruv),
   [moved in a loop](tests/must_reject/lgaps16_binder_record_loop.pruv),

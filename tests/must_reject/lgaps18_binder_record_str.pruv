@@ -1,0 +1,12 @@
+// L-gaps 18 (LGAPS16-SW, R-6e-12b): a struct with a `str` field is not an owned aggregate, so its binder is not moved whole.
+struct Doc { s: str, n: i64 }
+enum E { One(d: Doc), Empty }
+fn make() -> E ! alloc { return E::One(Doc { s: "abc", n: 1 }); }
+fn keep(q: Doc) -> i64 { return len(q.s) + q.n; }
+pub fn f() -> i64 ! alloc {
+  let e: E = make();
+  match e {
+    E::One(d) => { let q: Doc = move d; return keep(q); }
+    E::Empty => { return 0; }
+  }
+}

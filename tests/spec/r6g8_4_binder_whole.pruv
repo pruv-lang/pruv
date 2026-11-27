@@ -1,18 +1,21 @@
-// LB9 (R-6g8-4): a whole move of a match binder record is still refused (field moves only).
-struct Doc { tape: [u8] }
+// spec: R-6g8-4 reject
+// R-6e-12b: the whole move of the binder.
+// LB9, LGAPS16-WB: after a field move out of a consuming match binder, a whole move of that binder is refused.
+struct Doc { tape: [u8], n: i64 }
 enum E { One(d: Doc), Empty }
 
 fn make() -> E ! alloc {
   let t: [u8] = alloc(1, 65);
-  return E::One(Doc { tape: move t });
+  return E::One(Doc { tape: move t, n: 1 });
 }
 
 pub fn f() -> i64 ! alloc {
   let e: E = make();
   match e {
     E::One(d) => {
+      let t: [u8] = move d.tape;
       let q: Doc = move d;
-      return len(q.tape);
+      return len(t) + q.n;
     }
     E::Empty => { return 0; }
   }

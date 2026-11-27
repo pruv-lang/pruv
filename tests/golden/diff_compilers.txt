@@ -1344,6 +1344,10 @@ must_reject|must_reject/lgaps16_binder_record_outer_arm.pruv	2 cases: exit 2	llv
 must_reject|must_reject/lgaps16_binder_record_twice.pruv	2 cases: exit 2	llvm=b3fa95686985	rust=b3fa95686985
 must_reject|must_reject/lgaps17_subspan_after_lead.pruv	2 cases: exit 2	llvm=f2b35436059b	rust=f2b35436059b
 must_reject|must_reject/lgaps17_subspan_cut_end.pruv	2 cases: exit 2	llvm=6c05b1441133	rust=6c05b1441133
+must_reject|must_reject/lgaps18_binder_record_str.pruv	2 cases: exit 2	llvm=205ede6efbaa	rust=205ede6efbaa
+must_reject|must_reject/lgaps18_word_mask_partial.pruv	2 cases: exit 2	llvm=47063342c656	rust=47063342c656
+must_reject|must_reject/lgaps18_word_mask_past.pruv	2 cases: exit 2	llvm=14d4b43eccb3	rust=14d4b43eccb3
+must_reject|must_reject/lgaps18_word_mask_stale.pruv	2 cases: exit 2	llvm=2e47adbd6a47	rust=2e47adbd6a47
 must_reject|must_reject/lgaps9_into_bytes_borrowed.pruv	2 cases: exit 2	llvm=28a3b78c1df3	rust=28a3b78c1df3
 must_reject|must_reject/lgaps9_into_bytes_len.pruv	2 cases: exit 2	llvm=aeba54a11d5f	rust=aeba54a11d5f
 must_reject|must_reject/lgaps9_into_bytes_use_after.pruv	2 cases: exit 2	llvm=b3787ba84569	rust=b3787ba84569
@@ -2029,9 +2033,9 @@ runtime|runtime/g10p_r22_env [default]	2 cases: exit 2	llvm=6c8f7f5da2c3	rust=6f
 runtime|runtime/g10p_r23_quiet [--foreign-checks all]	2 cases: exit 2	llvm=8e7814a46b69	rust=9b3be2d6c5d3
 runtime|runtime/g10p_r23_quiet [--no-verify]	2 cases: exit 2	llvm=308fdd8385dc	rust=8a4dbd3c701c
 runtime|runtime/g10p_r23_quiet [default]	2 cases: exit 2	llvm=af3090e29655	rust=19d3f5042352
-runtime|runtime/g10p_r24_env_quiet [--foreign-checks all]	2 cases: exit 2	llvm=d077f53331a4	rust=7e2dbcacff64
-runtime|runtime/g10p_r24_env_quiet [--no-verify]	2 cases: exit 2	llvm=efb340037d17	rust=9b9ad44fb624
-runtime|runtime/g10p_r24_env_quiet [default]	2 cases: exit 2	llvm=72f620368bc5	rust=fd5e282bdfb2
+runtime|runtime/g10p_r24_env_quiet [--foreign-checks all]	2 cases: exit 2	llvm=1027e109e530	rust=023f5eb45b24
+runtime|runtime/g10p_r24_env_quiet [--no-verify]	2 cases: exit 2	llvm=2681a12d8927	rust=57ef972939c9
+runtime|runtime/g10p_r24_env_quiet [default]	2 cases: exit 2	llvm=f5737d7ac99d	rust=bbc72dc21f2f
 runtime|runtime/g1_r01_copy [--no-verify --trust-callers]	2 cases: exit 2	llvm=f739c990cec5	rust=35e6db3da260
 runtime|runtime/g1_r01_copy [--no-verify]	2 cases: exit 2	llvm=f739c990cec5	rust=35e6db3da260
 runtime|runtime/g1_r01_copy [--trust-callers]	2 cases: exit 2	llvm=f739c990cec5	rust=f6bfa2583dce
@@ -2819,6 +2823,9 @@ runtime|runtime/lgaps16_rt_binder_scalar [default]	2 cases: exit 2	llvm=c5e1c946
 runtime|runtime/lgaps17_utf8_subspan [--no-verify]	2 cases: exit 2	llvm=edf79ad21b11	rust=c2fbce386d1d
 runtime|runtime/lgaps17_utf8_subspan [--trust-callers]	2 cases: exit 2	llvm=87ee21ecfb9e	rust=825ee418fba3
 runtime|runtime/lgaps17_utf8_subspan [default]	2 cases: exit 2	llvm=a2ed6fb87b16	rust=7254c5143aa7
+runtime|runtime/lgaps18_word_mask [--no-verify]	2 cases: exit 2	llvm=2a454965d1d1	rust=c28369c61524
+runtime|runtime/lgaps18_word_mask [--trust-callers]	2 cases: exit 2	llvm=6c98b116b6fa	rust=29abe8d25ee4
+runtime|runtime/lgaps18_word_mask [default]	2 cases: exit 2	llvm=a337ad7e62a1	rust=8401c3f516e3
 runtime|runtime/lgaps9_str_bytes [--no-verify]	2 cases: exit 2	llvm=f0e7668bce8d	rust=a7e9be021219
 runtime|runtime/lgaps9_str_bytes [default]	2 cases: exit 2	llvm=ccc2b143c0cd	rust=09da4e703036
 runtime|runtime/p1_r_bounds [--no-verify]	2 cases: exit 2	llvm=c701bf27929d	rust=259cf4852f8d

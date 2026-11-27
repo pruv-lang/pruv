@@ -1406,7 +1406,7 @@ Hand reference: `claude/handrust/src/lib.rs` (`Parser::escape`, `object`, `value
 
 | Row | Kind | Difference | What closes it |
 |---|---|---|---|
-| 4.4zc-WL | language gap, open | no word (`u64`) load from `[u8]`, so `ascii_block` is a 16-byte min reduction instead of std's `(block \| block2) & NONASCII_MASK == 0` | an unaligned word read of `[u8]` |
+| 4.4zc-WL | language gap, closed (L-gaps 18) | no word (`u64`) load from `[u8]`, so `ascii_block` is a 16-byte min reduction instead of std's `(block \| block2) & NONASCII_MASK == 0` | an unaligned word read of `[u8]`: `load_le` already reads it; L-gaps 18 lets the verifier prove bit tests over it |
 | 4.4zc-PA | language gap, open | no pointer address, so the block skip starts at `i % 8 == 0` (offset) instead of std's pointer alignment `align_offset` | a byte-array base address or `align_offset` |
 | 4.4l-CT | proof gap, open | `check_subtrees` still runs at publication | G-DB33-2 and G-DB33-1 (D32): prove parent containment and the subtree facts in `scan` |
 
@@ -1458,3 +1458,12 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
   non-ASCII digit included, pinned by an ensures).
   `decode_append` ensures `(utf8_valid(old(out)) && utf8_valid_span(source, start + 1, end - 1)) ==> utf8_valid(out)`.
   Valid JSON gives the same bytes. Full rows: `../lib/RESHAPE.md` "Rows after L-gaps 17".
+
+### Rows after L-gaps 18
+
+- 4.4zc-WL closed (`lex`): `ascii_block` is std's two-word test, `let w0 = load_le(input, i, 8); let w1 =
+  load_le(input, i + 8, 8); return band(bor(w0, w1), NONASCII_MASK) == 0;` (`-9187201950435737472` is
+  `0x8080808080808080`). The verifier now proves `result ==> forall j in 0..16: input[i + j] < 128` over the loaded
+  words; contracts unchanged. Full rows: `../lib/RESHAPE.md` "Rows after L-gaps 18".
+- 4.4l-VU now differs from `run_utf8_validation` only in the alignment (4.4zc-PA, still open: offset `i % 8 == 0`
+  instead of the pointer's `align_offset`).

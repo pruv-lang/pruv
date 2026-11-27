@@ -1,0 +1,13 @@
+// L-gaps 18 (4.4zc-WL): a mask without the high bit of the top byte says nothing about a[i + 7]
+fn partial(a: [u8], i: i64) -> bool
+  requires 0 <= i && i + 8 <= len(a)
+  ensures result ==> (forall j in 0..8: a[i + j] < 128)
+{
+  let w: i64 = load_le(a, i, 8);
+  return band(w, 36170086419038336) == 0;
+}
+
+pub fn run(n: i64) -> i64
+{
+  return n;
+}

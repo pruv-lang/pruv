@@ -260,6 +260,11 @@ impl Z3 {
         // SAFETY: S1 S2 — the symbol was made in this context.
         Sort { z: self.clone(), raw: unsafe { nn(z::Z3_mk_uninterpreted_sort(self.raw(), s)) } }
     }
+    /// L-gaps 18 (4.4zc-WL): z3py `BitVecSort(bits)`.
+    pub fn bv_sort(&self, bits: u32) -> Sort {
+        // SAFETY: S1 S2.
+        Sort { z: self.clone(), raw: unsafe { nn(z::Z3_mk_bv_sort(self.raw(), bits as c_uint)) } }
+    }
     pub fn array_sort(&self, dom: &Sort, range: &Sort) -> Sort {
         // SAFETY: S1 S2 — dom/range are sorts of the same context.
         Sort { z: self.clone(), raw: unsafe { nn(z::Z3_mk_array_sort(self.raw(), dom.raw, range.raw)) } }
