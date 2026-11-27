@@ -1158,7 +1158,7 @@ must_reject|tests/must_reject/lg25_str_view_source.pruv	1 case: obl=0 1	default=
 must_reject|tests/must_reject/lg25_str_view_split.pruv	1 case: obl=2 1	default=c6743da58d8f
 must_reject|tests/must_reject/lg25_str_view_to_bytes.pruv	1 case: obl=0 1	default=fceac855897b
 must_reject|tests/must_reject/lg26_partial_char_copy.pruv	1 case: obl=15 1	default=41659d0c391f
-must_reject|tests/must_reject/lg26_prefix_boundary.pruv	1 case: obl=2 1	default=81265899a33d
+must_reject|tests/must_reject/lg26_prefix_boundary.pruv	1 case: obl=2 1	default=aaac57bda14d
 must_reject|tests/must_reject/lg26_span_in_code.pruv	1 case: obl=0 1	default=a5c49631af0e
 must_reject|tests/must_reject/lg26_span_of_str.pruv	1 case: obl=0 1	default=34f881178804
 must_reject|tests/must_reject/lg27_elem_inv_bound_name.pruv	1 case: obl=5 1	default=1d68441555b3
@@ -1174,8 +1174,8 @@ must_reject|tests/must_reject/lg2_utf8_contract.pruv	1 case: obl=0 1	default=30d
 must_reject|tests/must_reject/lg2_utf8_no_alloc.pruv	1 case: obl=0 1	default=e30bc3ab9e83
 must_reject|tests/must_reject/lg2_utf8_type.pruv	1 case: obl=0 1	default=dae5fbec34b4
 must_reject|tests/must_reject/lg2_utf8_unguarded.pruv	1 case: obl=1 1	default=603ca769c48d
-must_reject|tests/must_reject/lg30_after_lead.pruv	1 case: obl=9 1	default=fef8f59b57b3
-must_reject|tests/must_reject/lg30_outside_span.pruv	1 case: obl=9 1	default=d911f2c6e699
+must_reject|tests/must_reject/lg30_after_lead.pruv	1 case: obl=9 1	default=389d343faed9
+must_reject|tests/must_reject/lg30_outside_span.pruv	1 case: obl=9 1	default=54f33eb49b5a
 must_reject|tests/must_reject/lg31_frame_clear.pruv	1 case: obl=12 1	default=cf144308fba1
 must_reject|tests/must_reject/lg36_move_under_outer_arm.pruv	1 case: obl=0 1	default=2d7b51109f35
 must_reject|tests/must_reject/lg36_str_move_branch_read.pruv	1 case: obl=0 1	default=bae0b56a6036
@@ -1253,6 +1253,8 @@ must_reject|tests/must_reject/lgaps16_binder_record_loop.pruv	1 case: obl=0 1	de
 must_reject|tests/must_reject/lgaps16_binder_record_nested_scalar.pruv	1 case: obl=0 1	default=7c031f2bbdae
 must_reject|tests/must_reject/lgaps16_binder_record_outer_arm.pruv	1 case: obl=0 1	default=0530e2c1131a
 must_reject|tests/must_reject/lgaps16_binder_record_twice.pruv	1 case: obl=0 1	default=89890dcc72ce
+must_reject|tests/must_reject/lgaps17_subspan_after_lead.pruv	1 case: obl=2 1	default=22742c4d5247
+must_reject|tests/must_reject/lgaps17_subspan_cut_end.pruv	1 case: obl=2 1	default=eaedf54f5b7a
 must_reject|tests/must_reject/lgaps9_into_bytes_borrowed.pruv	1 case: obl=0 1	default=5023034d1a39
 must_reject|tests/must_reject/lgaps9_into_bytes_len.pruv	1 case: obl=1 1	default=9c849a7c9750
 must_reject|tests/must_reject/lgaps9_into_bytes_use_after.pruv	1 case: obl=0 1	default=de6490a8eecb
@@ -1977,15 +1979,15 @@ runtime|tests/runtime/lg23_old_elem.pruv	1 case: obl=24 1	default=9b918991fc68
 runtime|tests/runtime/lg23_payload_invariant.pruv	1 case: obl=32 1	default=183016f13560
 runtime|tests/runtime/lg24_generic_invariant.pruv	1 case: obl=39 1	default=655cd31a1acb
 runtime|tests/runtime/lg25_str_view.pruv	1 case: obl=297 1	default=b9128bbc604f
-runtime|tests/runtime/lg26_utf8_span.pruv	1 case: obl=42 1	default=269e847f1c4e
+runtime|tests/runtime/lg26_utf8_span.pruv	1 case: obl=42 1	default=3b3a2a9a3eb8
 runtime|tests/runtime/lg27_elem_inv.pruv	1 case: obl=67 1	default=da31240d9739
-runtime|tests/runtime/lg27_string_to_str_w.pruv	1 case: obl=36 1	default=131a0d8b2bd8
+runtime|tests/runtime/lg27_string_to_str_w.pruv	1 case: obl=36 1	default=e9660954c30b
 runtime|tests/runtime/lg2_rt_u8_field_move.pruv	1 case: obl=22 1	default=95913c5c14f9
 runtime|tests/runtime/lg2_rt_utf8.pruv	1 case: obl=53 1	default=762848315eb9
 runtime|tests/runtime/lg2_rt_utf8_panic.pruv	1 case: obl=3 1	default=7fcfd6c6f001
 runtime|tests/runtime/lg2_rt_words_le.pruv	1 case: obl=41 1	default=430885cf70b4
-runtime|tests/runtime/lg30_opq_guard.pruv	1 case: obl=29 1	default=ff892d7972c9
-runtime|tests/runtime/lg30_utf8_after_ascii.pruv	1 case: obl=72 1	default=56b2b7584acf
+runtime|tests/runtime/lg30_opq_guard.pruv	1 case: obl=29 1	default=9a681673f440
+runtime|tests/runtime/lg30_utf8_after_ascii.pruv	1 case: obl=72 1	default=1f0a1004ae26
 runtime|tests/runtime/lg31_push_frame.pruv	1 case: obl=110 1	default=8591235f904e
 runtime|tests/runtime/lg33_rt_move.pruv	1 case: obl=47 1	default=b01dfd2e82d1
 runtime|tests/runtime/lg34_rt_field_regrow.pruv	1 case: obl=64 1	default=2c8bc9806420
@@ -2035,6 +2037,7 @@ runtime|tests/runtime/lgaps13_vec_nested_field.pruv	1 case: obl=8 1	default=6b2e
 runtime|tests/runtime/lgaps13_vec_tape.pruv	1 case: obl=41 1	default=be4e8be6f902
 runtime|tests/runtime/lgaps16_rt_binder_record.pruv	1 case: obl=34 1	default=e0c4610202ac
 runtime|tests/runtime/lgaps16_rt_binder_scalar.pruv	1 case: obl=1 1	default=e50e03f1a427
+runtime|tests/runtime/lgaps17_utf8_subspan.pruv	1 case: obl=77 1	default=fc9dc2b93c1a
 runtime|tests/runtime/lgaps9_str_bytes.pruv	1 case: obl=25 1	default=9714b8db38d7
 runtime|tests/runtime/p1_r_bounds.pruv	1 case: obl=9 1	default=755fd0bbf8f5
 runtime|tests/runtime/p1_r_cast_fail.pruv	1 case: obl=1 1	default=13a323fd211c

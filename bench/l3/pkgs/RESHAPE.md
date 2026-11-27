@@ -1449,3 +1449,12 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
   ends on an ASCII byte; `ensures a[p] == 92 ==> a[result.next - 1] < 128`). The source-requires option is rejected
   (false on valid input `"\\é"`). Full rows: `../lib/RESHAPE.md` "Rows after 4.4ze".
 - No package source changed, so no consumer run. Not measured.
+
+### Rows after L-gaps 17
+
+- 4.4x-DS closed (`jstr`): the verifier gap 4.4ze-UW is fixed, and design (b) is in. `step` and `scalar` decode an
+  escape only if it ends on an ASCII byte (`\` then ASCII, `\u` with four ASCII hex digits, the low surrogate
+  likewise) and ensure `a[p] == 92 ==> a[result.next - 1] < 128`; otherwise `\` is one literal byte (a `\u` with a
+  non-ASCII digit included, pinned by an ensures).
+  `decode_append` ensures `(utf8_valid(old(out)) && utf8_valid_span(source, start + 1, end - 1)) ==> utf8_valid(out)`.
+  Valid JSON gives the same bytes. Full rows: `../lib/RESHAPE.md` "Rows after L-gaps 17".

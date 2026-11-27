@@ -20,11 +20,19 @@ pub fn step(a: [u8], p: i64, end: i64) -> Step
   ensures p < result.next && result.next <= end
   ensures 0 <= result.value && result.value <= 1114111
   ensures result.value > 65535 ==> result.next >= p + 2
+  ensures a[p] == 92 ==> a[result.next - 1] < 128
+  ensures (a[p] == 92 && end - p >= 6 && a[p + 1] == 117 && a[p + 4] >= 128)
+    ==> (result.next == p + 1 && result.value == 92)
 {
+  // L-gaps 17 (4.4x-DS): an escape is decoded only if it ends on an ASCII byte (hand `escape` needs ASCII after
+  // `\`, and `\u` needs four ASCII digits); otherwise the `\` is one literal byte. Valid JSON gives the same bytes.
   let c: i64 = a[p];
-  if c == 92 && end - p >= 2 {
+  if c == 92 && end - p >= 2 && a[p + 1] < 128 {
     let e: i64 = a[p + 1];
     if e == 117 && end - p >= 6 {
+      if a[p + 2] >= 128 || a[p + 3] >= 128 || a[p + 4] >= 128 || a[p + 5] >= 128 {
+        return Step { next: p + 1, value: 92 };
+      }
       let v: i64 = 4096 * hex(a[p + 2]) + 256 * hex(a[p + 3]) + 16 * hex(a[p + 4]) + hex(a[p + 5]);
       return Step { next: p + 6, value: v };
     }
@@ -175,13 +183,15 @@ fn scalar(a: [u8], p: i64, stop: i64) -> Scalar
   ensures 0 <= result.value && result.value <= 1114111
   ensures result.value > 65535 ==> result.next >= p + 2
   ensures result.value < 55296 || result.value > 57343
+  ensures a[p] == 92 ==> a[result.next - 1] < 128
 {
   let s: Step = step(a, p, stop);
   let mut v: i64 = s.value;
   let mut np: i64 = s.next;
   // 4.4zc (4.4l-RE): the low half is read only after a `\u`, and its four hex digits directly (hand `escape`:
   // `if self.eat("\\u") { let low = self.hex4()?; .. }`).
-  if 55296 <= v && v <= 56319 && np + 6 <= stop && a[np] == 92 && a[np + 1] == 117 {
+  if 55296 <= v && v <= 56319 && np + 6 <= stop && a[np] == 92 && a[np + 1] == 117
+    && a[np + 2] < 128 && a[np + 3] < 128 && a[np + 4] < 128 && a[np + 5] < 128 {
     let low: i64 = 4096 * hex(a[np + 2]) + 256 * hex(a[np + 3]) + 16 * hex(a[np + 4]) + hex(a[np + 5]);
     if 56320 <= low && low <= 57343 {
       v = 65536 + (v - 55296) * 1024 + low - 56320; np = np + 6;
@@ -216,11 +226,15 @@ fn decode_utf8(source: [u8], start: i64, end: i64, scanned: bool) -> [u8] ! allo
 // Appends to the caller's buffer (4.4i, hand `buf.extend_from_slice` into an existing `Vec`).
 // `scanned` (every caller of a parsed document since 4.4zc) copies non-ASCII bytes with the run; `!scanned` decodes
 // them to valid UTF-8 for a source with no validity fact (qwen's replay events), which then needs no run-time test.
+// L-gaps 17 (4.4x-DS): in the scanned mode a source whose content `start + 1..end - 1` is a valid span also keeps
+// `out` valid: every raw run starts at `start + 1` or after an ASCII byte (`scalar` ends an escape on ASCII) and ends
+// at `end - 1` or before `\`, so it is a valid sub-window.
 pub fn decode_append(inout out: [u8], source: [u8], start: i64, end: i64, scanned: bool) -> () ! alloc
   requires 0 <= start && start <= end && end <= len(source) && end <= 16777216
   requires len(out) <= 50331648
   ensures len(out) <= old(len(out)) + 3 * (end - start)
   ensures (utf8_valid(old(out)) && !scanned) ==> utf8_valid(out)
+  ensures (utf8_valid(old(out)) && utf8_valid_span(source, start + 1, end - 1)) ==> utf8_valid(out)
 {
   let base: i64 = len(out);
   let mut p: i64 = start;
@@ -230,6 +244,9 @@ pub fn decode_append(inout out: [u8], source: [u8], start: i64, end: i64, scanne
     invariant start <= p && p <= stop && stop <= end
     invariant len(out) <= base + 3 * (p - start)
     invariant (utf8_valid(old(out)) && !scanned) ==> utf8_valid(out)
+    invariant (utf8_valid(old(out)) && utf8_valid_span(source, start + 1, end - 1)) ==> utf8_valid(out)
+    invariant stop == start || (stop == end - 1 && start + 1 <= p)
+    invariant scanned ==> (p == start + 1 || p == stop || source[p - 1] < 128 || source[p] == 92)
     decreases stop - p
   {
     let c: i64 = source[p];

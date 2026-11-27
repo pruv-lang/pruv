@@ -2665,3 +2665,30 @@ Changes `bench/l3/pkgs/transport`, `codex/rpc.pruv` and a comment in `grok/rpc.p
   `string_text_owned` and `string_text_scanned_owned` keep their run-time `utf8_valid` test (hand `from_utf8`).
 - No language change; no package source changed; no consumer tests needed. Not measured.
 - Next: 4.4ze-UW in a language bundle, then 4.4x-DS with the design above.
+
+### Rows after L-gaps 17
+
+- 4.4ze-UW closed (language, Rust verifier): `utf8_valid_span(b, lo, hi)` is now stated over absolute indices
+  `t in lo..hi` with `select(b, t)` (`model.rs` `utf8_window(Some(lo), ..)`), so a sub-window after an ASCII byte
+  (`utf8_valid_span(b, q, e)` with `lo < q`, `b[q - 1] < 128`, and `e == hi` or `b[e] < 128`) and a prefix are derived
+  for a symbolic `lo`. `utf8_valid` and the `str` assumption keep their encoding. The frozen Python verifier keeps the
+  old encoding. Tests: `runtime/lgaps17_utf8_subspan` (both backends), `must_reject/lgaps17_subspan_after_lead`,
+  `must_reject/lgaps17_subspan_cut_end`. SPEC: the `utf8_valid_span` paragraph after the LG30 tests.
+- 4.4x-DS closed (`jstr`): design (b) from "Rows after 4.4ze". `step` and `scalar` decode an escape only if it ends on
+  an ASCII byte (a `\u` with a non-ASCII digit is a literal `\`, pinned by an ensures) and ensure
+  `a[p] == 92 ==> a[result.next - 1] < 128`; `decode_append` ensures
+  `(utf8_valid(old(out)) && utf8_valid_span(source, start + 1, end - 1)) ==> utf8_valid(out)`, which holds in the
+  scanned mode. Valid JSON gives the same bytes. Row in `../pkgs/RESHAPE.md` "Rows after L-gaps 17".
+- 4.4zc-WL left (time cap). Sketch: builtin `load_u64_le(a: [u8], i: i64) -> u64`, verifier requires
+  `0 <= i && i + 8 <= len(a)` and states the result as `sum a[i + k] * 256^k`; Rust `u64::from_le_bytes` on
+  `a[i..i + 8]`, LLVM an unaligned 8-byte load. Wiring: the builtin lists in `check.rs`, `modules.rs`, both backends,
+  `symbolic.rs`. Using it in `lex` `validate_utf8` needs `band` with `0x8080808080808080`. 4.4zc-PA stays out.
+- LGAPS16-DC, LGAPS16-HN, LGAPS16-WB, LGAPS16-SW left (time cap).
+- Checks on the final compiler: must_reject 1392/1392, runtime both 3587/3587, g8_frontend both 39/39, cargo test
+  passed, diff_rust fuzz 20 and m3_all --quick ok after the intended golden update (new lgaps17 keys, new trace
+  hashes of the `utf8_valid_span` tests with the same obligation and error counts, shifted mutate keys of later
+  must_reject files); run_all_rows.txt gets the 8 new rows.
+- Review: two required findings (a `\u` with a non-ASCII digit consumed `\u`; the new tests were missing from the
+  rows file and goldens), both fixed; the fix-check review passed.
+- L3 on the final compiler (after the `jstr` fix): 20 runs pass (claude a0-a4, json a0-a5, supervisor a0-a3, grok,
+  qwen, mcp, codex, opencode --jobs 2). Not measured.

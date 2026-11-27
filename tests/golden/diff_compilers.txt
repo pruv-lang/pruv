@@ -1342,6 +1342,8 @@ must_reject|must_reject/lgaps16_binder_record_loop.pruv	2 cases: exit 2	llvm=3fd
 must_reject|must_reject/lgaps16_binder_record_nested_scalar.pruv	2 cases: exit 2	llvm=66c83b938f6f	rust=66c83b938f6f
 must_reject|must_reject/lgaps16_binder_record_outer_arm.pruv	2 cases: exit 2	llvm=4cd34f907240	rust=4cd34f907240
 must_reject|must_reject/lgaps16_binder_record_twice.pruv	2 cases: exit 2	llvm=b3fa95686985	rust=b3fa95686985
+must_reject|must_reject/lgaps17_subspan_after_lead.pruv	2 cases: exit 2	llvm=f2b35436059b	rust=f2b35436059b
+must_reject|must_reject/lgaps17_subspan_cut_end.pruv	2 cases: exit 2	llvm=6c05b1441133	rust=6c05b1441133
 must_reject|must_reject/lgaps9_into_bytes_borrowed.pruv	2 cases: exit 2	llvm=28a3b78c1df3	rust=28a3b78c1df3
 must_reject|must_reject/lgaps9_into_bytes_len.pruv	2 cases: exit 2	llvm=aeba54a11d5f	rust=aeba54a11d5f
 must_reject|must_reject/lgaps9_into_bytes_use_after.pruv	2 cases: exit 2	llvm=b3787ba84569	rust=b3787ba84569
@@ -2814,6 +2816,9 @@ runtime|runtime/lgaps16_rt_binder_record [--no-verify]	2 cases: exit 2	llvm=ff92
 runtime|runtime/lgaps16_rt_binder_record [default]	2 cases: exit 2	llvm=8cb32ed13e05	rust=c2861f0082ab
 runtime|runtime/lgaps16_rt_binder_scalar [--no-verify]	2 cases: exit 2	llvm=029489b2eb30	rust=49eea16aa03e
 runtime|runtime/lgaps16_rt_binder_scalar [default]	2 cases: exit 2	llvm=c5e1c946059d	rust=2c8fe084d478
+runtime|runtime/lgaps17_utf8_subspan [--no-verify]	2 cases: exit 2	llvm=edf79ad21b11	rust=c2fbce386d1d
+runtime|runtime/lgaps17_utf8_subspan [--trust-callers]	2 cases: exit 2	llvm=87ee21ecfb9e	rust=825ee418fba3
+runtime|runtime/lgaps17_utf8_subspan [default]	2 cases: exit 2	llvm=a2ed6fb87b16	rust=7254c5143aa7
 runtime|runtime/lgaps9_str_bytes [--no-verify]	2 cases: exit 2	llvm=f0e7668bce8d	rust=a7e9be021219
 runtime|runtime/lgaps9_str_bytes [default]	2 cases: exit 2	llvm=ccc2b143c0cd	rust=09da4e703036
 runtime|runtime/p1_r_bounds [--no-verify]	2 cases: exit 2	llvm=c701bf27929d	rust=259cf4852f8d
