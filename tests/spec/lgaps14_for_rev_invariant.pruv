@@ -1,0 +1,9 @@
+fn f(n: i64) -> i64
+  requires 0 <= n && n <= 100
+{
+  let mut r: i64 = 0;
+  for i in (0..n).rev() invariant i == n {
+    r = 0;
+  }
+  return r;
+}

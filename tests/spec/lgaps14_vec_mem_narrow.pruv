@@ -1,0 +1,19 @@
+// spec: R-6g9-12 accept
+// L-gaps 14 audit: a narrow unsigned index of a Vec element place is widened like an array index (LLVM `zext`).
+fn pick(inout v: Vec<i64>, i: u8, j: u16) -> i64
+  requires len(v) == 3 && i64(i) < 3 && i64(j) < 3 && i64(i) != i64(j)
+  ensures len(v) == 3
+{
+  swap(inout v[i], inout v[j]);
+  return replace(inout v[i], 9);
+}
+
+fn checksum() -> i64 ! alloc {
+  let mut w: Vec<i64> = vec_new::<i64>();
+  w = vec_push::<i64>(move w, 5);
+  w = vec_push::<i64>(move w, 0);
+  w = vec_push::<i64>(move w, 8);
+  let old: i64 = pick(inout w, u8(2), u16(0));
+  if old == 5 && vec_get::<i64>(w, 0) == 8 && vec_get::<i64>(w, 1) == 0 && vec_get::<i64>(w, 2) == 9 { return 5809; }
+  return 0;
+}

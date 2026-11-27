@@ -1,0 +1,13 @@
+// spec: R-6g9-12 reject
+// L-gaps 14 (P10-M1): the two element places of a Vec swap must be proven distinct; i == j is possible here.
+fn mix(i: i64, j: i64) -> i64 ! alloc
+  requires 0 <= i && i < 4 && 0 <= j && j < 4
+{
+  let mut v: Vec<i64> = vec_new::<i64>();
+  v = vec_push::<i64>(move v, 1);
+  v = vec_push::<i64>(move v, 2);
+  v = vec_push::<i64>(move v, 3);
+  v = vec_push::<i64>(move v, 4);
+  swap(inout v[i], inout v[j]);
+  return vec_get::<i64>(v, 0);
+}

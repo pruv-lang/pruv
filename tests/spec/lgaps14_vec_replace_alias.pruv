@@ -1,0 +1,8 @@
+// spec: R-6g9-12 reject
+// L-gaps 14 (P10-M1): a `replace` value that reads the same Vec aliases the element place.
+fn put() -> i64 ! alloc {
+  let mut v: Vec<i64> = vec_new::<i64>();
+  v = vec_push::<i64>(move v, 1);
+  v = vec_push::<i64>(move v, 2);
+  return replace(inout v[0], vec_get::<i64>(v, 1));
+}

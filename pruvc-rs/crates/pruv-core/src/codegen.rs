@@ -202,14 +202,18 @@ fn pruv_proc_collector<R: ::std::io::Read + Send + 'static>(r: R, stream: i64) -
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 fn pruv_proc_spawn(program: &str, args: &pruv_ProcessArgs, cwd: &str) -> pruv_Process {
-    pruv_proc_spawn_in(program, args, cwd, &[], &[])
+    pruv_proc_spawn_in(program, args, cwd, &[], &[], false)
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_spawn_quiet(program: &str, args: &pruv_ProcessArgs, cwd: &str) -> pruv_Process {
+    pruv_proc_spawn_in(program, args, cwd, &[], &[], true)
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 fn pruv_proc_spawn_env(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: &pruv_ProcessArgs, values: &pruv_ProcessArgs) -> pruv_Process {
-    pruv_proc_spawn_in(program, args, cwd, &names.args, &values.args)
+    pruv_proc_spawn_in(program, args, cwd, &names.args, &values.args, false)
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
-fn pruv_proc_spawn_in(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: &[::std::string::String], values: &[::std::string::String]) -> pruv_Process {
+fn pruv_proc_spawn_in(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: &[::std::string::String], values: &[::std::string::String], quiet: bool) -> pruv_Process {
     pruv_proc_sigpipe();
     if program.is_empty() || program.contains('\0') || cwd.contains('\0') || args.args.iter().any(|a| a.contains('\0')) {
         return pruv_proc_failed(1);
@@ -230,7 +234,8 @@ fn pruv_proc_spawn_in(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: 
     }
     cmd.stdin(::std::process::Stdio::piped());
     cmd.stdout(::std::process::Stdio::piped());
-    cmd.stderr(::std::process::Stdio::piped());
+    // L-gaps 14 (4.4v-SN): a quiet spawn hands the child's stderr to the null device
+    cmd.stderr(if quiet { ::std::process::Stdio::null() } else { ::std::process::Stdio::piped() });
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(_) => return pruv_proc_failed(2),
@@ -240,11 +245,12 @@ fn pruv_proc_spawn_in(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: 
     let stderr = child.stderr.take();
     let mut outq: ::std::option::Option<PruvProcStream> = None;
     let mut errq: ::std::option::Option<PruvProcStream> = None;
-    let mut bad: bool = stdin.is_none() || stdout.is_none() || stderr.is_none();
+    let mut bad: bool = stdin.is_none() || stdout.is_none() || (stderr.is_none() && !quiet);
     //@hook setup bad = true;
     if !bad {
         outq = match stdout { Some(r) => pruv_proc_collector(r, 1), None => None };
-        errq = match stderr { Some(r) => pruv_proc_collector(r, 2), None => None };
+        // a quiet child has no stderr pipe: stream 2 reads an empty source, so it is at end of file at once
+        errq = match stderr { Some(r) => pruv_proc_collector(r, 2), None if quiet => pruv_proc_collector(::std::io::empty(), 2), None => None };
         bad = outq.is_none() || errq.is_none();
         //@hook setup_late bad = true;
     }
@@ -4060,7 +4066,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
             let a = self.e(&start.value)?;
             let b = self.e(&end.value)?;
             self.vars.insert(head.var.clone(), start.ty.clone());
-            (format!("for {} in {}..{} {{", head.var, a, b), &w.body[..w.body.len() - 1], None)
+            if head.rev {
+                // L-gaps 14 (4.4t-RV): the body binder `i = K - 1` and the step only feed the proof
+                (format!("for {} in ({}..{}).rev() {{", head.var, a, b), &w.body[1..w.body.len() - 1], None)
+            } else {
+                (format!("for {} in {}..{} {{", head.var, a, b), &w.body[..w.body.len() - 1], None)
+            }
         };
         self.emit(ind, &format!("{}{}", loop_label(&w.label), header));
         if self.cost {
@@ -5172,6 +5183,13 @@ pruv_hi <= (pruv_b.len() as i128) && \
             return Ok(if narrow { format!("({r} as i64)") } else { r });
         }
         let i = self.idx_i64(&p.index)?;
+        if let Some(t) = expr_ty(&p.array).as_deref().filter(|k| crate::gtype::key_is_scalar_vec(k)) {
+            // L-gaps 14 (P10-M1): a `Vec<i64>` / `Vec<bool>` element, checked like `pruv_idx` before the move
+            let xt = if t == "vec<bool>" { "bool" } else { "i64" };
+            return Ok(format!(
+                "{{ let pruv_i: i64 = {i}; let pruv_x: {xt} = {x}; let pruv_k = pruv_idx(pruv_i, {arr}.len()); ::std::mem::replace(&mut {arr}[pruv_k], pruv_x) }}"
+            ));
+        }
         let (xt, get, set) = match elem {
             "bool" => ("bool", "pruv_get_bool".to_string(), "pruv_set_bool".to_string()),
             "i64" => ("i64", "pruv_get".to_string(), "pruv_set".to_string()),
@@ -8468,14 +8486,18 @@ fn pruv_proc_collector<R: ::std::io::Read + Send + 'static>(r: R, stream: i64) -
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 fn pruv_proc_spawn(program: &str, args: &pruv_ProcessArgs, cwd: &str) -> pruv_Process {
-    pruv_proc_spawn_in(program, args, cwd, &[], &[])
+    pruv_proc_spawn_in(program, args, cwd, &[], &[], false)
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_spawn_quiet(program: &str, args: &pruv_ProcessArgs, cwd: &str) -> pruv_Process {
+    pruv_proc_spawn_in(program, args, cwd, &[], &[], true)
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 fn pruv_proc_spawn_env(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: &pruv_ProcessArgs, values: &pruv_ProcessArgs) -> pruv_Process {
-    pruv_proc_spawn_in(program, args, cwd, &names.args, &values.args)
+    pruv_proc_spawn_in(program, args, cwd, &names.args, &values.args, false)
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
-fn pruv_proc_spawn_in(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: &[::std::string::String], values: &[::std::string::String]) -> pruv_Process {
+fn pruv_proc_spawn_in(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: &[::std::string::String], values: &[::std::string::String], quiet: bool) -> pruv_Process {
     pruv_proc_sigpipe();
     if program.is_empty() || program.contains('\0') || cwd.contains('\0') || args.args.iter().any(|a| a.contains('\0')) {
         return pruv_proc_failed(1);
@@ -8496,7 +8518,8 @@ fn pruv_proc_spawn_in(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: 
     }
     cmd.stdin(::std::process::Stdio::piped());
     cmd.stdout(::std::process::Stdio::piped());
-    cmd.stderr(::std::process::Stdio::piped());
+    // L-gaps 14 (4.4v-SN): a quiet spawn hands the child's stderr to the null device
+    cmd.stderr(if quiet { ::std::process::Stdio::null() } else { ::std::process::Stdio::piped() });
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(_) => return pruv_proc_failed(2),
@@ -8506,11 +8529,12 @@ fn pruv_proc_spawn_in(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: 
     let stderr = child.stderr.take();
     let mut outq: ::std::option::Option<PruvProcStream> = None;
     let mut errq: ::std::option::Option<PruvProcStream> = None;
-    let mut bad: bool = stdin.is_none() || stdout.is_none() || stderr.is_none();
+    let mut bad: bool = stdin.is_none() || stdout.is_none() || (stderr.is_none() && !quiet);
     //@hook setup bad = true;
     if !bad {
         outq = match stdout { Some(r) => pruv_proc_collector(r, 1), None => None };
-        errq = match stderr { Some(r) => pruv_proc_collector(r, 2), None => None };
+        // a quiet child has no stderr pipe: stream 2 reads an empty source, so it is at end of file at once
+        errq = match stderr { Some(r) => pruv_proc_collector(r, 2), None if quiet => pruv_proc_collector(::std::io::empty(), 2), None => None };
         bad = outq.is_none() || errq.is_none();
         //@hook setup_late bad = true;
     }

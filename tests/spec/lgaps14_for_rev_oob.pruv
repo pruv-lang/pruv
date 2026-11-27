@@ -1,0 +1,9 @@
+fn sum(a: [i64]) -> i64
+  requires len(a) <= 100
+{
+  let mut t: i64 = 0;
+  for i in (0..len(a) + 1).rev() invariant 0 <= t {
+    t = t + a[i] * 0;
+  }
+  return t;
+}

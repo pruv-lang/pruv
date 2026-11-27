@@ -2975,6 +2975,47 @@ impl<'a> FnGen<'a> {
 
     /// `swap(inout P, inout Q)`: read both, write crossed; `replace(inout P, e)`: read P, evaluate e as an owned
     /// value, write it, and return the old value (an owned result, Rust `std::mem::replace`)
+    /// L-gaps 14 (P10-M1): element places of one `Vec<i64>` / `Vec<bool>` shim handle: indexes, then the replace
+    /// value, then (unverified) the bounds guards of the Rust `pruv_idx` order, then the shim's `swap` / `replace`.
+    fn vec_elem_mem(&mut self, e: &Call, a: &V, i: &V) -> R<V> {
+        let key = need_ty(&a.ty)?.to_string();
+        let is_bool = key == "vec<bool>";
+        // an unsigned index narrower than 64 bits is zero-extended to i64, as in `index_ptr`
+        let wide = |this: &mut Self, v: &V| -> R<String> {
+            match v.k {
+                Kind::Narrow(w) if w.bits < 64 => this.op(format!("zext {} {} to i64", w.llvm(), v.a)),
+                _ => Ok(v.a.clone()),
+            }
+        };
+        let mut ix = vec![wide(self, i)?];
+        if e.name == "swap" {
+            let Some(Expr::InoutArg(q)) = e.args.get(1) else { return Err("llvmgen: swap expects two element places".into()) };
+            let Expr::Index(qx) = &*q.expr else { return Err("llvmgen: swap expects two element places".into()) };
+            let j = self.ev(&qx.index, false)?;
+            ix.push(wide(self, &j)?);
+        }
+        let x = if e.name == "replace" { Some(self.ev(arg(&e.args, 1)?, false)?) } else { None };
+        if !self.verified {
+            let n = self.g6_call(&crate::foreign_shim::len_sym(&key)?, "i64", &[("ptr".to_string(), a.a.clone())])?;
+            for k in &ix {
+                let ok = self.op(format!("icmp ult i64 {}, {}", k, n))?;
+                self.guard(&ok, Fail::Oob(k.clone(), n.clone()), false)?;
+            }
+        }
+        if let Some(x) = x {
+            let xa = if is_bool { self.op(format!("zext i1 {} to i64", x.a))? } else { x.a };
+            let sym = crate::foreign_shim::vec_elem_mem_sym("vreplace", &key)?;
+            let r = self.g6_call(&sym, "i64", &[("ptr".to_string(), a.a.clone()), ("i64".to_string(), ix[0].clone()), ("i64".to_string(), xa)])?;
+            if is_bool {
+                return Ok(V::new(Kind::I1, self.op(format!("icmp ne i64 {}, 0", r))?));
+            }
+            return Ok(V::new(Kind::I64, r));
+        }
+        let sym = crate::foreign_shim::vec_elem_mem_sym("vswap", &key)?;
+        self.g6_call(&sym, "void", &[("ptr".to_string(), a.a.clone()), ("i64".to_string(), ix[0].clone()), ("i64".to_string(), ix[1].clone())])?;
+        Ok(V::unit())
+    }
+
     fn mem_call(&mut self, e: &Call, owned: bool) -> R<V> {
         let place = |i: usize| -> R<&Expr> {
             match e.args.get(i) {
@@ -2989,6 +3030,9 @@ impl<'a> FnGen<'a> {
             // `pruv_idx` / `pruv_get_*` / `pruv_set_*`), then the raw element moves.
             let a = self.ev(&px.array, false)?;
             let i = self.ev(&px.index, false)?;
+            if a.k == Kind::Coll {
+                return self.vec_elem_mem(e, &a, &i);
+            }
             if e.name == "swap" {
                 let Expr::Index(qx) = place(1)? else { return Err("llvmgen: swap expects two element places".into()) };
                 let j = self.ev(&qx.index, false)?;
@@ -7280,7 +7324,7 @@ impl<'a> FnGen<'a> {
             "vec_new" | "map_new" | "string_from" | "string_new" | "vec_push" | "map_insert" | "string_push_str" | "string_push_char"
                 | "string_with_capacity" | "string_reserve" | "string_prepend_char"
                 | "file_open_read" | "file_create" | "file_read_all" | "file_write_str" | "file_write_bytes"
-                | "proc_args_new" | "proc_args_push" | "proc_spawn" | "proc_spawn_env" | "proc_write_str" | "proc_write_bytes"
+                | "proc_args_new" | "proc_args_push" | "proc_spawn" | "proc_spawn_env" | "proc_spawn_quiet" | "proc_write_str" | "proc_write_bytes"
                 | "proc_close_stdin" | "proc_read" | "proc_read_all"
                 | "net_connect" | "net_listen" | "net_accept" | "net_write_str" | "net_write_bytes"
                 | "net_shutdown_write" | "net_set_timeout" | "net_read" | "net_read_all" | "ev_new" | "ev_add_socket" | "ev_add_listener" | "ev_add_process" | "ev_add_timer" | "ev_wait" | "ev_read" | "ev_read_into" | "ev_proc_read_into" | "ev_write" | "ev_shutdown_write" | "ev_accept" | "ev_proc_read" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_wait" | "ev_proc_wait_for" | "ev_proc_write_for" | "ev_remove"

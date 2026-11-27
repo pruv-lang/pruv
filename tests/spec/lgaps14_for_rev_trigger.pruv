@@ -1,0 +1,19 @@
+// spec: R-6q-1 accept
+// L-gaps 14 audit: the loop variable in a quantifier trigger of a reverse-range invariant is renamed like the rest.
+fn all_pos(a: [i64]) -> bool
+  ensures result ==> forall k in 0..len(a): a[k] > 0
+{
+  for i in (0..len(a)).rev()
+    invariant forall k in i..len(a) trigger a[k + i - i]: a[k] > 0
+  {
+    if a[i] <= 0 { return false; }
+  }
+  return true;
+}
+
+fn checksum() -> i64 ! alloc {
+  let mut r: i64 = 0;
+  if all_pos([3, 1, 2]) { r = r + 10; }
+  if !all_pos([3, 0, 2]) { r = r + 1; }
+  return r;
+}

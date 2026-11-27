@@ -1,0 +1,7 @@
+fn f(a: [i64]) -> i64 {
+  let mut t: i64 = 0;
+  for x in (a).rev() {
+    t = x;
+  }
+  return t;
+}

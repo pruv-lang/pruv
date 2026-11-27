@@ -1,0 +1,39 @@
+fn last_neg(a: [i64]) -> i64
+  ensures result == -1 || (0 <= result && result < len(a))
+{
+  let mut r: i64 = -1;
+  for i in (0..len(a)).rev() invariant r == -1 {
+    if a[i] < 0 { r = i; break; }
+  }
+  return r;
+}
+
+fn squares(n: i64) -> i64
+  requires 0 <= n && n <= 9
+  ensures 0 <= result && result <= 729
+{
+  let mut t: i64 = 0;
+  for i in (0..n).rev() invariant 0 <= i && i <= n && 0 <= t && t <= 81 * (n - i) {
+    if i == 3 { continue; }
+    t = t + i * i;
+  }
+  return t;
+}
+
+fn count_down(a: u8, b: u8) -> i64
+  ensures 0 <= result && result <= 255
+{
+  let mut c: i64 = 0;
+  for k in (a..b).rev() invariant 0 <= c && c + i64(k) <= 255 && (a >= b || c == i64(b) - i64(k)) {
+    c = c + 1;
+  }
+  return c;
+}
+
+pub fn checksum() -> i64 {
+  let a: [i64; 5] = [3, -1, 4, -5, 9];
+  let d: i64 = squares(6);
+  let e: i64 = count_down(7, 2);
+  let f: i64 = count_down(2, 7);
+  return last_neg(a) * 100000 + d * 100 + e * 10 + f;
+}

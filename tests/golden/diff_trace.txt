@@ -535,6 +535,7 @@ must_reject|tests/must_reject/g10p_loop_outer.pruv	1 case: obl=0 1	default=f9832
 must_reject|tests/must_reject/g10p_main_signature.pruv	1 case: obl=0 1	default=6b41a5e15365
 must_reject|tests/must_reject/g10p_missing_proc_effect.pruv	1 case: obl=0 1	default=eed926376a3d
 must_reject|tests/must_reject/g10p_one_branch.pruv	1 case: obl=0 1	default=d4a9a86aa3d1
+must_reject|tests/must_reject/g10p_quiet_unconsumed.pruv	1 case: obl=0 1	default=b4aab5ae5154
 must_reject|tests/must_reject/g10p_use_after_move.pruv	1 case: obl=0 1	default=57468a7bb3df
 must_reject|tests/must_reject/g10p_v_bad_index.pruv	1 case: obl=3 1	default=c6f48209629d
 must_reject|tests/must_reject/g10p_v_bad_max.pruv	1 case: obl=3 1	default=d08ac33dadfe
@@ -551,6 +552,7 @@ must_reject|tests/must_reject/g10p_v_havoc_size.pruv	1 case: obl=13 1	default=0f
 must_reject|tests/must_reject/g10p_v_kill_zero.pruv	1 case: obl=1 1	default=5c42c253b6cd
 must_reject|tests/must_reject/g10p_v_loop_eof.pruv	1 case: obl=10 1	default=217268ce3694
 must_reject|tests/must_reject/g10p_v_output_content.pruv	1 case: obl=6 1	default=fd3c7b57a454
+must_reject|tests/must_reject/g10p_v_quiet_unchecked.pruv	1 case: obl=1 1	default=a00cde403d42
 must_reject|tests/must_reject/g10p_v_read_unconfirmed.pruv	1 case: obl=3 1	default=ed20949f56be
 must_reject|tests/must_reject/g10p_v_spawn_equal.pruv	1 case: obl=1 1	default=492541b50eb1
 must_reject|tests/must_reject/g10p_v_write_after_close.pruv	1 case: obl=2 1	default=905714288077
@@ -1693,6 +1695,7 @@ runtime|tests/runtime/g10a_r19_requires_exit.pruv	1 case: obl=142 1	default=2c5a
 runtime|tests/runtime/g10a_r20_fairness.pruv	1 case: obl=29 1	default=aaa2b7234308
 runtime|tests/runtime/g10a_r21_backpressure.pruv	1 case: obl=160 1	default=a5013f37f796
 runtime|tests/runtime/g10a_r22_copy_contract.pruv	1 case: obl=26 1	default=cd1618439e9f
+runtime|tests/runtime/g10a_r23_quiet_ev.pruv	1 case: obl=34 1	default=202308669f7e
 runtime|tests/runtime/g10a_r23_wait_for.pruv	1 case: obl=377 1	default=5f2229a07069
 runtime|tests/runtime/g10a_r24_write_for.pruv	1 case: obl=269 1	default=eebfaefd0780
 runtime|tests/runtime/g10a_r25_write_hook.pruv	1 case: obl=269 1	default=132b599a153f
@@ -1736,6 +1739,7 @@ runtime|tests/runtime/g10p_r19_requires_off.pruv	1 case: obl=33 1	default=f47c61
 runtime|tests/runtime/g10p_r20_hook_setup_late.pruv	1 case: obl=6 1	default=6e56afa6d8ac
 runtime|tests/runtime/g10p_r21_copy_contract.pruv	1 case: obl=20 1	default=05ca3b7f077e
 runtime|tests/runtime/g10p_r22_env.pruv	1 case: obl=41 1	default=f11f83db7890
+runtime|tests/runtime/g10p_r23_quiet.pruv	1 case: obl=48 1	default=860782dde563
 runtime|tests/runtime/g1_r01_copy.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 runtime|tests/runtime/g1_r02_nested.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 runtime|tests/runtime/g1_r03_variants.pruv	1 case: obl=0 1	default=c0f6163aeb7a

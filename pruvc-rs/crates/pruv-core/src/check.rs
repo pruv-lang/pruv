@@ -4345,7 +4345,7 @@ impl Checker {
                 if let Some(e) = sc.get_mut(&head.var) {
                     e.mutable = false;
                 }
-                self.for_steps.push((s.line, s.col, head.var));
+                self.for_steps.push((s.line, s.col, head.counter));
                 let r = self.block(&mut s.body, &mut sc);
                 self.for_steps.pop();
                 r?;
@@ -6093,6 +6093,13 @@ impl Checker {
             for k in 0..3 {
                 let Stmt::Let(l) = &mut s.then[k] else { unreachable!() };
                 l.ty = ty.to_key();
+            }
+            if let Some(Stmt::While(w)) = s.then.last_mut() {
+                if w.for_head.as_ref().is_some_and(|h| h.rev) {
+                    // L-gaps 14 (4.4t-RV): the body binder `i = K - 1` has the bound type too
+                    let Some(Stmt::Let(l)) = w.body.first_mut() else { unreachable!() };
+                    l.ty = ty.to_key();
+                }
             }
             return Ok(());
         }
@@ -8062,9 +8069,14 @@ impl Checker {
                 return Err(terr(aline, acol, "immutable", format!("array {} is read-only", v.name),
                     "declare it with `let mut`"));
             }
-            if !entry.ty.is_array() || !entry.ty.args.is_empty() {
+            // L-gaps 14 (P10-M1): also an element of a `Vec<i64>` / `Vec<bool>` (Rust `v.swap(i, j)` /
+            // `mem::replace(&mut v[i], x)`)
+            let vec_elem = (entry.ty.name == "vec" && entry.ty.owner.is_none() && entry.ty.args.len() == 1
+                && (entry.ty.args[0] == i64t() || entry.ty.args[0] == boolt()))
+                .then(|| entry.ty.args[0].clone());
+            if vec_elem.is_none() && (!entry.ty.is_array() || !entry.ty.args.is_empty()) {
                 return Err(terr(aline, acol, "inout_argument",
-                    format!("{n} of an element takes a resizable array of integers or bool, not {}", tn(&entry.ty)),
+                    format!("{n} of an element takes a resizable array of integers or bool, or a Vec<i64> / Vec<bool>, not {}", tn(&entry.ty)),
                     "swap or replace the whole value, or use an element assignment"));
             }
             if let Some(prev) = &array {
@@ -8086,7 +8098,16 @@ impl Checker {
                     "the index of an element place is a name, a literal or arithmetic of them",
                     "compute the index in a local first"));
             }
-            elem = self.expr(&mut a.expr, scope, false)?;
+            elem = match vec_elem {
+                // a Vec element is otherwise a contract-only read (`v[i]`); here it is the place itself
+                Some(t) => {
+                    self.expr(&mut ix.array, scope, false)?;
+                    self.expect_index(&mut ix.index, scope, false)?;
+                    ix.ty = Some(t.to_key());
+                    t
+                }
+                None => self.expr(&mut a.expr, scope, false)?,
+            };
             a.ty = Some(elem.to_key());
             array = Some(v.name.clone());
         }

@@ -1,0 +1,7 @@
+// spec: R-6g9-12 reject
+// L-gaps 14 (P10-M1): only a Vec<i64> / Vec<bool> element is a replace place; a Vec<String> element is not.
+fn put(s: String) -> String ! alloc {
+  let mut v: Vec<String> = vec_new::<String>();
+  v = vec_push::<String>(move v, string_new());
+  return replace(inout v[0], move s);
+}
