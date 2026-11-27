@@ -441,3 +441,11 @@ Title and user content rows: 4.4m-TB, 4.4m-FB. See `pkgs/RESHAPE.md` §Step 4.4m
   versus the hand's first-byte `match`, `plan` bounding the loop by `min(begun, 200)` and returning in the loop
   versus the hand's two `break`s, `window_packet` appending a 0-byte title/model where the hand skips `None`, and the
   known rows 4.4h-VD, 4.4c-IS, 4.4h-ST. Not measured: the window path still has open structure rows.
+
+### Rows after L-gaps 15
+
+- Closed 4.4h-AE: with LG-4zb-RA closed in the language (R-6e-24), Pruv `answer` returns early inside the
+  `vec_at_mut` `Some` arm like the hand (`if len(text) == 0 || d.used >= 32768 { return; }`) and the three append
+  branches follow unwrapped. The verifier writes `d` back into `c.drafts` at the `return`.
+- Tests (rs/rust and rs/llvm): test_a0..a4 272/2897/2443/134/270 passed. Remaining structure rows: 4.4h-VD,
+  4.4c-IS, 4.4h-ST.

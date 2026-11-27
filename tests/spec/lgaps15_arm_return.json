@@ -1,0 +1,10 @@
+{
+  "gen_contains": ["Some(d) => {"],
+  "run": {
+    "backends": ["rust", "llvm"],
+    "exit": 0,
+    "flags_matrix": [[]],
+    "stdout_lines": ["27522"],
+    "alloc_balance": true
+  }
+}

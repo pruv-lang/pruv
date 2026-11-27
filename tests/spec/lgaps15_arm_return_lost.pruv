@@ -1,0 +1,19 @@
+// spec: R-6e-24 reject
+// L-gaps 15 (LG-4zb-RA): the element change made before a `return` inside a `vec_at_mut` `Some` arm is written back,
+// so a postcondition that the element is unchanged on that path fails.
+struct Draft { reply: [u8], n: i64 }
+struct Coll { v: Vec<Draft> }
+
+fn bump(inout c: Coll, i: i64) -> ()
+  requires 0 <= i && i < len(c.v) && 0 <= c.v[i].n && c.v[i].n < 1000
+  ensures len(c.v) == len(old(c).v)
+  ensures c.v[i].n == old(c).v[i].n
+{
+  match vec_at_mut::<Draft>(inout c.v, i) {
+    Some(d) => {
+      d.n = d.n + 1;
+      return;
+    }
+    None => {}
+  }
+}

@@ -4786,9 +4786,8 @@ impl Checker {
                 if !self.map_iterations.is_empty() {
                     return Err(terr(s.line, s.col, "foreign_contract", "cannot return inside a map iteration", ""));
                 }
-                if !self.map_roots.is_empty() {
-                    return Err(terr(s.line, s.col, "foreign_contract", "cannot return inside a mutable collection Some arm", ""));
-                }
+                // LG15 (LG-4zb-RA): a `return` inside a mutable collection `Some` arm ends the borrow (Rust `return`
+                // inside `if let Some(d) = v.get_mut(i)`); the verifier writes the binders back before the ensures
                 match &mut s.value {
                     None => {
                         if ret != unitt() {

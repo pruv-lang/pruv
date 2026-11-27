@@ -1,0 +1,20 @@
+// spec: R-6e-24 accept
+// L-gaps 15 review: a mutable arm opened through a place alias writes its binder back onto the target's
+// current value, so a sibling field written through the target inside the arm survives on both exits.
+struct D { bytes: [u8], n: i64 }
+struct C { docs: Vec<D>, flag: i64 }
+
+fn mark(inout c: C, early: bool) -> ()
+  requires len(c.docs) == 1 && c.flag == 0
+  ensures c.flag == 1
+{
+  let a = inout c;
+  match vec_at_mut::<D>(inout a.docs, 0) {
+    Some(d) => {
+      d.n = 7;
+      c.flag = 1;
+      if early { return; }
+    }
+    None => { c.flag = 1; }
+  }
+}

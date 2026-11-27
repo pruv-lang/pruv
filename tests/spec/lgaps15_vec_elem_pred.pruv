@@ -1,0 +1,55 @@
+// spec: R-6e-3 accept
+// L-gaps 15 (4.4y-PW): a quantified per-element predicate over a Vec of owned documents is kept by `vec_push`
+// and instantiated at a `vec_get` call argument, so a callee that requires the predicate of one document accepts
+// `vec_get::<Doc>(docs, k)`.
+struct Doc { source: [u8], tape: [i64] }
+
+pred fn strings(d: Doc) -> bool {
+  return forall t in 0..len(d.tape) / 2: (d.tape[2 * t] == 4 ==> utf8_valid_span(d.source, d.tape[2 * t + 1], d.tape[2 * t + 1]));
+}
+
+fn make(n: i64) -> Doc ! alloc
+  requires 0 <= n && n < 100
+  ensures strings(result) && len(result.tape) == 2 * n
+{
+  let s: [u8] = alloc(n, 65);
+  let t: [i64] = alloc(2 * n, 0);
+  return Doc { source: move s, tape: move t };
+}
+
+fn count(d: Doc) -> i64
+  requires strings(d)
+  ensures 0 <= result && result <= len(d.tape)
+{
+  let mut c: i64 = 0;
+  for t in 0..len(d.tape) / 2
+    invariant 0 <= c && c <= t
+  {
+    if d.tape[2 * t] == 0 { c = c + 1; }
+  }
+  return c;
+}
+
+fn total(docs: Vec<Doc>) -> i64
+  requires forall k in 0..len(docs): strings(docs[k])
+  ensures 0 <= result && result < 2000000
+{
+  let mut s: i64 = 0;
+  for k in 0..len(docs)
+    invariant 0 <= s && s < 2000000
+  {
+    let c: i64 = count(vec_get::<Doc>(docs, k));
+    if s < 1000000 && c < 1000000 { s = s + c; }
+  }
+  return s;
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let mut docs: Vec<Doc> = vec_new::<Doc>();
+  for j in 0..5
+    invariant len(docs) == j && forall k in 0..len(docs): strings(docs[k])
+  {
+    docs = vec_push::<Doc>(move docs, make(j));
+  }
+  return total(docs) + len(docs);
+}

@@ -863,7 +863,12 @@ fn tree_count(t: Tree) -> i64
   later argument of the same call also drops an owned value already moved into an earlier `take` argument.
   Moving an element out is not offered: `vec_pop` is a view-list operation only and there is no `vec_remove`, so
   an owned-aggregate element leaves its Vec only when the Vec is dropped, replaced or cleared (`vec_clear`,
-  R-6e-10). Tests:
+  R-6e-10). Per-element facts (L-gaps 15, 4.4y-PW): in a contract, `docs[k]` of a `Vec<S>` is the element, so a
+  quantified predicate such as `forall k in 0..len(docs): p(docs[k])` is kept by `vec_push` (the new last element
+  is the pushed value) and instantiated at a `vec_get::<S>(docs, k)` call argument, so a callee that requires
+  `p(d)` accepts the borrowed element; without the quantified fact the call is `verify/call_requires`. Tests:
+  [per-element predicate](tests/spec/lgaps15_vec_elem_pred.pruv),
+  [fact missing](tests/spec/lgaps15_vec_elem_pred_lost.pruv). Tests:
   [Vec of a buffer struct](tests/runtime/lgaps13_vec_tape.pruv),
   [module element as argument](tests/runtime/g4_lgaps13_vec_doc/root.pruv),
   [nested field as argument, Rust](tests/runtime/lgaps13_vec_nested_field.pruv),
@@ -892,7 +897,7 @@ fn tree_count(t: Tree) -> i64
   replace the whole record and emit `*r = e;` in Rust; the right-hand side must be a constructor,
   call result or move of an owned binding (`type/foreign_move`) and may not mention `r` or the root
   of `P` (`type/recursive_borrow`). The root of `P` may not be mentioned in the arm
-  (`type/recursive_borrow`), except through a field path disjoint from `P` (R-6e-8). The arm may not contain `return`, `break` or `continue` (`type/foreign_contract`).
+  (`type/recursive_borrow`), except through a field path disjoint from `P` (R-6e-8). A `break` or `continue` out of the arm is `type/loop_jump_map`; a `return` in it writes `r` back first (R-6e-24).
   The `None` arm is unrestricted. Rust emits `match P.get_mut(&k)` with one lookup. The verifier gives `r`
   the stored element when `k` is present and writes the final `r` back at arm exit. The `None` arm leaves `P`
   unchanged. When the R-6d-2 condition holds (verified build, foreign checks not `all`, no trusted Rust
@@ -1274,6 +1279,23 @@ fn tree_count(t: Tree) -> i64
   [borrowed parameter](tests/spec/lg3_into_str_borrowed.pruv),
   [use after the handover](tests/spec/lg3_into_str_use_after.pruv),
   [wrong length postcondition](tests/spec/lg3_into_str_ens.pruv).
+- R-6e-24 **Return inside a mutable element arm (L-gaps 15).** A `return` (with or without a value) may stand inside
+  the `Some` arm of `map_get_mut` or `vec_at_mut` (R-6e-4, R-6e-7), also inside arms nested on disjoint fields
+  (R-6e-8); it ends the borrow like hand Rust `return` inside `if let Some(d) = v.get_mut(i)`. The verifier first
+  evaluates the returned value, then writes every enclosing arm's binder back into its collection, innermost first
+  (the same write-back, element-size sum included, as at the end of the arm), and proves the postcondition on that
+  state. The returned value cannot move a field out of the binder (R-6g8 field moves still need the restoring next
+  statement, `type/foreign_move`); `break` / `continue` out of the arm stay `type/loop_jump_map` and a `return`
+  inside a map iteration stays `type/foreign_contract`. Code: Rust emits the `return` inside the `get_mut` match;
+  LLVM's `vec_at_mut` binder is the element's slot, so the change is already in place. Tests:
+  [accept vec](tests/spec/lgaps15_arm_return.pruv), [accept map](tests/spec/lgaps15_arm_return_map.pruv), rejects
+  [change before the return is kept](tests/spec/lgaps15_arm_return_lost.pruv),
+  [nested arm writes both back](tests/spec/lgaps15_arm_return_nested_lost.pruv),
+  [moving a field out at the return](tests/spec/lgaps15_arm_return_move.pruv). When the collection path starts at
+  a place alias (`let a = inout c; .. vec_at_mut(inout a.docs, i)`), the write-back, at the arm's end or at the
+  `return`, rebuilds the path on the alias target's current value, so a sibling field written through the target
+  inside the arm is kept ([accept](tests/spec/lgaps15_arm_return_alias.pruv),
+  [reject](tests/spec/lgaps15_arm_return_alias_lost.pruv)).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate (the one exception: R-6e-12a moves an array binder out of a consumed scrutinee). Putting an existing value into an owning place (`let`, assignment, constructor field,
@@ -2841,7 +2863,10 @@ write-back, invariants and the cost bound take the `while` path. `for` is contex
   its `N` elements, typed as `a[k]` is), in index order. `x` is a read-only copy of the element, typed as the
   index read `P[k]` is (`i64` for `[u8]`/`[u16]`, with its range known). In an invariant, `index(x)` is the number of
   elements already visited (the position of `x` in the body, `len(P)` after the loop); `index` is only defined
-  there. The body holds `P` read-only: assigning, storing into, moving, place-binding (`let d = inout ..`) or passing `inout` an overlapping path,
+  there, and also names the counter in a quantifier `trigger` of such an invariant (L-gaps 15; tests:
+  [trigger](tests/spec/lgaps15_for_slice_trigger.pruv), [lost fact](tests/spec/lgaps15_for_slice_trigger_lost.pruv)); a
+  quantifier that binds the loop's own name shadows it, and `index(x)` there is the ordinary call
+  ([shadow](tests/spec/lgaps15_for_slice_trigger_shadow.pruv)). The body holds `P` read-only: assigning, storing into, moving, place-binding (`let d = inout ..`) or passing `inout` an overlapping path,
   including the whole root, is `type/recursive_borrow`; disjoint sibling paths stay usable. The verifier treats the
   loop as `while k < len(P)` with `x == P[k]` and the invariants `0 <= k <= len(P)` and `len(P)` unchanged. Whole-name
   builtins that write `P` (`store_be`, `copy_within`, `arr_push` and the like) are `type/recursive_borrow` too. Code:

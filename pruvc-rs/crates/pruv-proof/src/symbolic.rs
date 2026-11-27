@@ -1137,6 +1137,10 @@ pub struct FnVerifier<'a> {
     /// environment. Empty for a function without inout parameters.
     pub(crate) snap: Env,
     iter_places: Vec<Expr>,
+    /// LG15 (LG-4zb-RA): the enclosing `map_get_mut` / `vec_at_mut` `Some` arms (place, collection before the arm,
+    /// key, binder), outermost first; a `return` inside them writes the binders back, innermost first, before the
+    /// postcondition is proved (the Rust `&mut` borrow ends at the return).
+    mut_arms: Vec<(Expr, Val, Ast, String)>,
     /// P5: one frame per enclosing while loop: (label, break states, continue states).
     jumps: Vec<(Option<String>, Vec<State>, Vec<State>)>,
     /// G4b-3 (verify.py `s._kmemo`): AST id -> key piece of that assertion (digest, fresh names; obligation.rs
@@ -1654,6 +1658,7 @@ impl<'a> FnVerifier<'a> {
             fn_tag: 0,
             snap: Env::default(),
             iter_places: Vec::new(),
+            mut_arms: Vec::new(),
             jumps: Vec::new(),
             kmemo: HashMap::new(),
             inv_decls: HashMap::new(),
@@ -5736,6 +5741,38 @@ impl<'a> FnVerifier<'a> {
         Ok(true)
     }
 
+    /// R-6e-4/R-6e-7: the write-back of a mutable collection `Some` arm's binder `name` into `place` (whose value
+    /// before the arm is `before`) at `key`, at the end of the arm or (LG15) at a `return` inside it.
+    fn write_back(&mut self, end: &mut State, place: &Expr, before: &Val, key: &Ast, name: &str) -> R<()> {
+        let model: &'a Model = self.model;
+        let value = end.env.get(name).try_ast()?.clone();
+        let after = match before {
+            Val::Map(m) => {
+                let mut m = m.clone();
+                m.a = m.a.store(key, &value);
+                Val::Map(m)
+            }
+            Val::Arr(v) => {
+                let updated = v.like(v.a.store(key, &value), v.n.clone(), &v.name);
+                let elem = v.elem_ty();
+                if let (Some(old_sum), Some(sum)) = (
+                    model.vec_sum(&elem, &v.a, &v.n),
+                    model.vec_sum(&elem, &updated.a, &updated.n),
+                ) {
+                    self.observe(end, &value, Some(&elem), false)?;
+                    let size = model.size_fn(elem.name())?;
+                    let old_size = size.apply1(&v.a.select(key));
+                    let new_size = size.apply1(&value);
+                    end.pc.push(sum.ge_i(0));
+                    end.pc.push(sum.eq(&old_sum.sub(&old_size).add(&new_size)));
+                }
+                Val::Arr(updated)
+            }
+            _ => return Err("invalid mutable collection".into()),
+        };
+        self.store_collection_place(place, end, after, &[])
+    }
+
     fn store_collection_place(&mut self, mut place: &Expr, st: &mut State, value: Val, guard: &[Ast]) -> R<()> {
         let mut path = Vec::new();
         while let Expr::FieldAccess(f) = place {
@@ -5747,7 +5784,13 @@ impl<'a> FnVerifier<'a> {
             value
         } else {
             path.reverse();
-            let Val::Dt(term, ty) = st.env.get(&root.name) else { return Err("invalid collection root".into()) };
+            // LG15: a place alias's own binding can be stale after a write through its target inside the
+            // arm, so rebuild from the target's current value and keep the sibling fields written there.
+            let current = match st.places.get(&root.name).cloned() {
+                Some(binding) => self.place_read(&binding.place, st)?,
+                None => st.env.get(&root.name).clone(),
+            };
+            let Val::Dt(term, ty) = &current else { return Err("invalid collection root".into()) };
             let rebuilt = self.try_rebuild_v(ty, term, &path, &value, &mut st.pc)?;
             Val::Dt(rebuilt, ty.clone())
         };
@@ -6592,34 +6635,19 @@ impl<'a> FnVerifier<'a> {
                         self.prove_core(&b, &[], &d0.ge_i(0), *dpos, "decreases_nonneg", "decreases >= 0", None);
                         self.spend(&mut b, &[], self.z.int(1));
                     }
-                    for mut end in self.exec_block(&a.body, b)? {
-                        if let (Some((place, before, key)), Some(name)) = (&collection_update, a.binders.first()) {
-                            let value = end.env.get(name).try_ast()?.clone();
-                            let after = match before {
-                                Val::Map(m) => {
-                                    let mut m = m.clone();
-                                    m.a = m.a.store(key, &value);
-                                    Val::Map(m)
-                                }
-                                Val::Arr(v) => {
-                                    let updated = v.like(v.a.store(key, &value), v.n.clone(), &v.name);
-                                    let elem = v.elem_ty();
-                                    if let (Some(old_sum), Some(sum)) = (
-                                        model.vec_sum(&elem, &v.a, &v.n),
-                                        model.vec_sum(&elem, &updated.a, &updated.n),
-                                    ) {
-                                        self.observe(&mut end, &value, Some(&elem), false)?;
-                                        let size = model.size_fn(elem.name())?;
-                                        let old_size = size.apply1(&v.a.select(key));
-                                        let new_size = size.apply1(&value);
-                                        end.pc.push(sum.ge_i(0));
-                                        end.pc.push(sum.eq(&old_sum.sub(&old_size).add(&new_size)));
-                                    }
-                                    Val::Arr(updated)
-                                }
-                                _ => return Err("invalid mutable collection".into()),
-                            };
-                            self.store_collection_place(place, &mut end, after, &[])?;
+                    let arm_update = match (&collection_update, a.binders.first()) {
+                        (Some((place, before, key)), Some(name)) => Some(((*place).clone(), before.clone(), key.clone(), name.clone())),
+                        _ => None,
+                    };
+                    let pushed = arm_update.is_some();
+                    if let Some(u) = arm_update {
+                        self.mut_arms.push(u);
+                    }
+                    let ends = self.exec_block(&a.body, b);
+                    let arm_update = if pushed { self.mut_arms.pop() } else { None };
+                    for mut end in ends? {
+                        if let Some((place, before, key, name)) = &arm_update {
+                            self.write_back(&mut end, place, before, key, name)?;
                         }
                         // The binder and the arm's local variables end with the arm; only updates to outer variables remain
                         let drop_keys: Vec<String> =
@@ -6651,6 +6679,11 @@ impl<'a> FnVerifier<'a> {
                     Some(e) => Some(self.ev0(e, &mut st, &[], true)?),
                     None => None,
                 };
+                // LG15 (LG-4zb-RA): the borrowed elements go back into their collections before the caller sees them
+                let arms = self.mut_arms.clone();
+                for (place, before, key, name) in arms.iter().rev() {
+                    self.write_back(&mut st, place, before, key, name)?;
+                }
                 self.ensures_ok(&mut st, v, spos)?;
                 Ok(Vec::new())
             }

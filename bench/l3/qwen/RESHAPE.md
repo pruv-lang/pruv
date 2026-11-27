@@ -350,3 +350,9 @@ P1 / P4 / P5 are the classes `q.py` already explains. No perf timing was run.
   window only when the kept title is non-empty (a found title is never blank), matching the hand's `Option::map`.
 - Remaining title difference: the hand copies the borrowed string with `to_owned()`, Pruv copies a plain string and
   moves an escaped one's owned decode (4.3h-O class). Not measured: other qwen structure rows are open.
+
+### Rows after L-gaps 15
+
+- 4.4y-PW: the language half is closed (per-element `p(docs[k])` facts reach a `vec_get` call argument, R-6e-3).
+  The parts walk still runs in the scan: keeping the parsed documents needs moving the matched
+  `JsonParse::Parsed(doc)` binder into a `Vec`, which is new language row LG15-MB. No qwen code changed.

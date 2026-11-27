@@ -1,0 +1,9 @@
+{
+  "run": {
+    "backends": ["rust", "llvm"],
+    "exit": 0,
+    "flags_matrix": [[]],
+    "stdout_lines": ["15"],
+    "alloc_balance": true
+  }
+}

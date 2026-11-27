@@ -1,0 +1,25 @@
+// spec: R-6e-24 reject
+// L-gaps 15 (LG-4zb-RA): a `return` inside an arm nested on a disjoint field writes both borrowed elements back,
+// innermost first, so a postcondition that the outer element is unchanged fails.
+struct Draft { reply: [u8], n: i64 }
+struct Coll { drafts: Vec<Draft>, spare: Vec<Draft> }
+
+fn put(inout c: Coll, i: i64) -> ()
+  requires 0 <= i && i < len(c.drafts) && len(c.spare) == 1 && c.drafts[i].n < 1000
+  ensures len(c.drafts) == len(old(c).drafts)
+  ensures c.drafts[i].n == old(c).drafts[i].n
+{
+  match vec_at_mut::<Draft>(inout c.drafts, i) {
+    Some(d) => {
+      match vec_at_mut::<Draft>(inout c.spare, 0) {
+        Some(x) => {
+          d.n = d.n + 1;
+          x.n = 0;
+          return;
+        }
+        None => {}
+      }
+    }
+    None => {}
+  }
+}

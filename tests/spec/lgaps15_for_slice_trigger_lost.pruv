@@ -1,0 +1,13 @@
+// spec: R-6q-2 reject
+// L-gaps 15 (LG14-ST): `index(x)` in a quantifier trigger of a slice-for invariant is renamed like the rest.
+fn all_pos(a: [i64]) -> bool
+  ensures result ==> forall k in 0..len(a): a[k] > 0
+{
+  for x in a
+    invariant forall k in 0..index(x) trigger a[k + index(x) - index(x)]: a[k] > 0
+  {
+    if x < 0 { return false; }
+  }
+  return true;
+}
+

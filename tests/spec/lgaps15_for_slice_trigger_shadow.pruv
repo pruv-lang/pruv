@@ -1,0 +1,11 @@
+// spec: R-6q-2 accept
+// L-gaps 15 review: a quantifier that binds the slice-for's own name keeps its `index(x)` in the body and
+// triggers, so a user `index` function stays a legal trigger there.
+fn index(i: i64) -> i64 { return i; }
+
+pub fn visit(a: [i64]) -> ()
+{
+  for x in a
+    invariant forall x in 0..len(a) trigger a[index(x)]: a[x] == a[x]
+  {}
+}

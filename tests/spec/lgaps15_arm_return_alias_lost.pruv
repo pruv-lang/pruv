@@ -1,0 +1,16 @@
+// spec: R-6e-24 reject
+// L-gaps 15 review: the sibling field written through the target inside an alias arm is not reset by the
+// write-back, so a postcondition that it is unchanged fails.
+struct D { bytes: [u8], n: i64 }
+struct C { docs: Vec<D>, flag: i64 }
+
+fn mark(inout c: C) -> ()
+  requires len(c.docs) == 1 && c.flag == 0
+  ensures c.flag == 0
+{
+  let a = inout c;
+  match vec_at_mut::<D>(inout a.docs, 0) {
+    Some(d) => { d.n = 7; c.flag = 1; return; }
+    None => {}
+  }
+}

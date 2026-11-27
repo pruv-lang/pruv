@@ -1,0 +1,37 @@
+// spec: R-6e-24 accept
+// L-gaps 15 (LG-4zb-RA): a `return` inside the `Some` arm of `map_get_mut` ends the entry borrow like the `vec_at_mut`
+// arm: the entry keeps the change made before the return.
+struct P { x: i64, y: i64 }
+
+fn hit(inout m: HashMap<i64, P>, k: i64, stop: bool) -> i64
+  ensures 0 <= result && result <= 1
+{
+  match map_get_mut::<i64, P>(inout m, k) {
+    Some(p) => {
+      p.x = 7;
+      if stop { return 1; }
+      p.y = 9;
+    }
+    None => {}
+  }
+  return 0;
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let mut m: HashMap<i64, P> = map_new::<i64, P>();
+  m = map_insert::<i64, P>(move m, 1, P { x: 1, y: 2 });
+  m = map_insert::<i64, P>(move m, 2, P { x: 3, y: 4 });
+  let a: i64 = hit(inout m, 1, true);
+  let b: i64 = hit(inout m, 2, false);
+  let c: i64 = hit(inout m, 5, true);
+  let mut s: i64 = a * 100000 + b * 10000 + c * 1000;
+  match map_get::<i64, P>(m, 1) {
+    Some(p) => { s = s + (p.x & 7) * 10 + (p.y & 7); }
+    None => {}
+  }
+  match map_get::<i64, P>(m, 2) {
+    Some(p) => { s = s + (p.x & 7) * 100 + (p.y & 15) * 10000000; }
+    None => {}
+  }
+  return s;
+}

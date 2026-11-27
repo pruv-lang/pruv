@@ -1,4 +1,5 @@
-// spec: R-6e-4 reject
+// spec: R-6e-4 accept
+// Since L-gaps 15 (R-6e-24) a `return` inside the arm is allowed; the element is written back first.
 struct Record { hits: i64, log: Vec<i64> }
 struct St { count: i64, recs: HashMap<i64, Record> }
 
