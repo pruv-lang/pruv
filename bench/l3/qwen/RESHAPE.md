@@ -171,7 +171,44 @@ answer / tool gating match the hand. New rows (not changed in 4.4d):
 Next (order kept in `../lib/RESHAPE.md` "Rows open after 4.4d"): Codex rows 4.3f-A, O, N, K, L, T, P, R, D, then
 4.3f-B, E, F; then the OpenCode leftovers, 4.4b-SP first (checked against the TypeScript reference).
 
+## 3c. Step 4.4u: rows 4.4d-QC, 4.3e-F, 4.3e-J
+
+- 4.4d-QC closed. `chain::resolve` walks like the hand `current_chain`: the leaf is `last_role.or(last_entry)`, then
+  `while selected.insert(uuid)` is `select` (marks every slot with this uuid, `changed` when one was new), the parent
+  is read from the reached slot only, and `latest.get(parent)` is `newest` (first match in the newest-first bucket).
+  `lookup`, `Hit` and `Leaf` are gone. A `-2` parent on an unfollowed duplicate no longer fails. Fixture
+  `duplicate-bad-parent`: two `u` entries, the older with parent `"\ud800"`, plus a `system` entry `a` with a
+  `"\udc00"` parent. Both decoders turn a lone surrogate into U+FFFD (`jstr.pruv`), so `-2` is not reachable from
+  input; the fixture is a guard (the old code passed it too). Mutants `chain-filter` and `leaf-parent` were rewritten
+  for the new text.
+- 4.3e-F closed. `put_field` decodes with `access::string_append` straight onto the arena and truncates back on the
+  8 MiB cap; `note` takes the lengths from the arena. No `pkgs/` change.
+- 4.3e-J closed. `Block::Piece` carries the text node; `array_content` pushes the `plain_str` view (owned decode only
+  for an escaped node), as the hand collects `&str` parts and `join`s. `title_key` checks blankness on the view and
+  copies only a nonblank title (hand `as_str().filter(..)`, then `one_line`). `parse_line` now ensures `doc_strings`;
+  `user_text`, `human_text`, `title_key`, `custom_title`, `title_of`, `record_entry`, `record_object` require it.
+  The solver gave up on it inside the `tail_info` and `window_wire` loops, so `window_wire`'s custom title and
+  `record_object` moved into `import::window_object` (returns the `Title`; `Defect` when the line fails), and
+  `tail_info` reads the title before the timestamp (new row 4.4u-TO; same output, both defects fail the line).
+- Still open: 4.3e-D / 4.4d-QS (scan-time decode of prompt, stamp and parts; needs raw ranges in the log or gap VL),
+  4.4d-QA.
+
+Structure, function by function against `handrust/src/lib.rs` `current_chain` (128-) and `edge.rs` `human_text` /
+`tail`: leaf choice, insert-then-follow loop, cut on a missing parent, parts join over borrowed text and the blank
+title filter on the borrowed value match. Differences left: 4.4u-TO, the per-entry log (4.3e-D), owned arena keys
+vs borrowed map keys (gap VL).
+
 ## 4. Results
+
+4.4u, after the last code change (`pruvc-rs`, verified, no `--no-verify`):
+
+| check (4.4u) | rs/rust | rs/llvm |
+|---|---|---|
+| `qwen/test_impl.py` (verifier + fixtures) | PASS, 27/27 | PASS, 27/27 |
+| `q.py --count 300` (+21 list; `PAIRS` set to the rs pairs) | same 317, P1 1, P4 4, P5 1, unexplained 0; list same 21, P4 1 | same |
+| mutants (`q_mutants.py`, 12 markers) | 11 differential-killed, turn-cap verifier-rejected | - |
+
+No `pkgs/` change, so no consumer runs. No perf timing was run.
 
 4.4d, after the last code change (`pruvc-rs`, verified, no `--no-verify`, 300 s cap per module):
 

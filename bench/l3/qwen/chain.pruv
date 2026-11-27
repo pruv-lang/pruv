@@ -2,7 +2,7 @@
 // The index decodes each uuid and parentUuid once into a byte arena; the chain walk compares
 // arena bytes and never re-parses a line. Newest-first hash buckets; exact UUID comparison resolves collisions.
 // Slot layout, 7 per uuid entry: parsed object ordinal, next slot (newest-first), uuid offset, uuid length,
-// parent offset, parent length (-1 missing, -2 parentUuid defect: bad only when the entry is reached),
+// parent offset, parent length (-1 missing, -2 parentUuid defect: bad only when that entry's parent is followed),
 // role (1 when the action is not Action::Other).
 // DB6: a mixed 64-bit hash (8-byte words, splitmix64 finalizer) masked into a power-of-two table. The old
 // h * 257 % size hash let a crafted file put every uuid in 8 buckets (D-R05-1). The hash is fixed, not keyed (G-DB6-1).
@@ -34,13 +34,13 @@ fn bucket(arena: [u8], off: i64, n: i64, mask: i64) -> i64
   return band(h, mask);
 }
 
-// DB23 (G-R05-5): string_field's outcome for doc[id].key appended straight to the arena, with no copy into a
-// fresh str. Result: decoded length >= 0 (appended), -1 Missing, -2 Defect (string_field's Field::Defect), -3 no room.
+// DB23 (G-R05-5), 4.3e-F: string_field's outcome for doc[id].key decoded straight onto the end of the arena
+// (hand: the parsed string moved into the entry; no owned copy first). The caller takes the length from the arena.
+// Result: 0 appended, -1 Missing, -2 Defect (string_field's Field::Defect), -3 no room (arena unchanged).
 fn put_field(doc: crate::json::JsonDocument, id: i64, key: str, inout arena: [u8]) -> i64 ! alloc
   requires len(arena) <= 8388608
   ensures len(arena) <= 8388608
-  ensures result >= -3
-  ensures result >= 0 ==> len(arena) == len(old(arena)) + result
+  ensures -3 <= result && result <= 0
   ensures result < 0 ==> len(arena) == len(old(arena))
 {
   let f: i64 = crate::access::field(doc, id, key);
@@ -49,15 +49,13 @@ fn put_field(doc: crate::json::JsonDocument, id: i64, key: str, inout arena: [u8
   let k: i64 = crate::access::kind(doc, f);
   if k < 0 { return -2; }
   if k != 4 { return -1; }
-  let t: crate::jstr::Text = crate::access::string_text_owned(doc, f);
-  match t {
-    crate::jstr::Text::InternalInvariant(e) => { return -2; }
-    crate::jstr::Text::Decoded(v) => {
-      if len(v) > 8388608 - len(arena) { return -3; }
-      arr_append(inout arena, v, 0, len(v));
-      return len(v);
-    }
+  let base: i64 = len(arena);
+  if crate::access::string_append(doc, f, inout arena) != 0 { return -2; }
+  if len(arena) > 8388608 {
+    arena = truncate(arena, base);
+    return -3;
   }
+  return 0;
 }
 
 // The caller frames and parses each line and feeds Object frames into this index. The arena and slots grow
@@ -78,15 +76,18 @@ pub fn note(inout index: Index, doc: crate::json::JsonDocument, ordinal: i64, ro
   requires len(index.arena) <= 8388608 && len(index.slots) <= 50331655
   ensures len(index.arena) <= 8388608 && len(index.slots) <= 50331655
 {
-  // DB23: uuid decoded straight into the arena (no string_field copy); a zero-length uuid adds no slot.
+  // DB23: uuid decoded straight into the arena (no string_field copy); a missing or empty uuid adds no slot.
   let uo: i64 = len(index.arena);
-  let ul: i64 = put_field(doc, 0, "uuid", inout index.arena);
-  if ul == -2 || ul == -3 { return false; }
-  if ul > 0 {
+  let uf: i64 = put_field(doc, 0, "uuid", inout index.arena);
+  if uf == -2 || uf == -3 { return false; }
+  let ul: i64 = len(index.arena) - uo;
+  if uf == 0 && ul > 0 {
     if len(index.slots) > 50331648 { return false; }
     let po: i64 = len(index.arena);
-    let pl: i64 = put_field(doc, 0, "parentUuid", inout index.arena);
-    if pl == -3 { return false; }
+    let pf: i64 = put_field(doc, 0, "parentUuid", inout index.arena);
+    if pf == -3 { return false; }
+    let mut pl: i64 = pf;
+    if pf == 0 { pl = len(index.arena) - po; }
     let mut r: i64 = 0;
     if role { r = 1; }
     // hand: slots.push(Slot::Entry(entry)); the bucket link (slot + 1) is set in resolve
@@ -95,50 +96,69 @@ pub fn note(inout index: Index, doc: crate::json::JsonDocument, ordinal: i64, ro
   return true;
 }
 
-// First match supplies the last-write parent; mark all duplicates.
-// Existing marks detect cycles without copying or comparing the whole bitmap.
-pub struct Hit { poff: i64, plen: i64, found: bool, changed: bool, bad: bool }
-fn lookup(arena: [u8], koff: i64, klen: i64, heads: [i64], slots: [i64], inout marks: [u8]) -> Hit
+// hand: selected.insert(uuid). Marks every entry with this uuid; `changed` when one was not marked yet.
+// Existing marks detect cycles without copying or comparing the whole bitmap. No parentUuid is read here.
+struct Mark { changed: bool, bad: bool }
+fn select(arena: [u8], koff: i64, klen: i64, heads: [i64], slots: [i64], inout marks: [u8]) -> Mark
   requires 0 <= koff && 0 <= klen && koff + klen <= len(arena)
   requires 0 < len(heads) && len(heads) <= 33554440 && len(slots) <= 50331655
   ensures len(marks) == len(old(marks))
 {
   let mut at: i64 = heads[bucket(arena, koff, klen, len(heads) - 1)];
   let mut left: i64 = len(slots);
-  let mut found: bool = false;
   let mut changed: bool = false;
-  let mut poff: i64 = 0;
-  let mut plen: i64 = 0;
   while at >= 0 && left > 0
     invariant 0 <= left && left <= len(slots) && len(slots) <= 50331655
     invariant len(marks) == len(old(marks))
     decreases left
   {
-    if at > len(slots) - 7 { return Hit { poff: 0, plen: 0, found: false, changed: false, bad: true }; }
+    if at > len(slots) - 7 { return Mark { changed: false, bad: true }; }
     let s: i64 = slots[at];
     let uo: i64 = slots[at + 2];
     let ul: i64 = slots[at + 3];
-    if s < 0 || s >= len(marks) || uo < 0 || ul < 0 || ul > len(arena) - uo { return Hit { poff: 0, plen: 0, found: false, changed: false, bad: true }; }
+    if s < 0 || s >= len(marks) || uo < 0 || ul < 0 || ul > len(arena) - uo { return Mark { changed: false, bad: true }; }
     // hand: entry.uuid == key (one slice compare)
     if ul == klen && eq_range(arena, uo, arena, koff, klen) {
       if marks[s] == 0 { changed = true; }
       marks[s] = 1;
-      let pl: i64 = slots[at + 5];
-      if pl == -2 { return Hit { poff: 0, plen: 0, found: false, changed: false, bad: true }; }
-      if !found && pl >= 0 { poff = slots[at + 4]; plen = pl; }
-      found = true;
     }
     let next: i64 = slots[at + 1];
-    if next >= at { return Hit { poff: 0, plen: 0, found: false, changed: false, bad: true }; }
+    if next >= at { return Mark { changed: false, bad: true }; }
     at = next;
     left = left - 1;
   }
-  return Hit { poff: poff, plen: plen, found: found, changed: changed, bad: false };
+  return Mark { changed: changed, bad: false };
+}
+
+// hand: latest.get(parent). Buckets are newest-first, so the first match is the newest entry with this uuid,
+// the one whose parentUuid the walk follows. Result: its slot, -1 none, -2 corrupt slot.
+fn newest(arena: [u8], koff: i64, klen: i64, heads: [i64], slots: [i64]) -> i64
+  requires 0 <= koff && 0 <= klen && koff + klen <= len(arena)
+  requires 0 < len(heads) && len(heads) <= 33554440 && len(slots) <= 50331655
+  ensures result >= -2
+  ensures result >= 0 ==> result <= len(slots) - 7
+{
+  let mut at: i64 = heads[bucket(arena, koff, klen, len(heads) - 1)];
+  let mut left: i64 = len(slots);
+  while at >= 0 && left > 0
+    invariant 0 <= left && left <= len(slots) && len(slots) <= 50331655
+    decreases left
+  {
+    if at > len(slots) - 7 { return -2; }
+    let uo: i64 = slots[at + 2];
+    let ul: i64 = slots[at + 3];
+    if uo < 0 || ul < 0 || ul > len(arena) - uo { return -2; }
+    if ul == klen && eq_range(arena, uo, arena, koff, klen) { return at; }
+    let next: i64 = slots[at + 1];
+    if next >= at { return -2; }
+    at = next;
+    left = left - 1;
+  }
+  return -1;
 }
 
 // marks is caller-owned, zero, one byte per parsed object ordinal (DB6: was one per input byte).
 pub struct Chain { active: bool, cut: bool, bad: bool }
-struct Leaf { slot: i64, found: bool, bad: bool }
 pub fn resolve(inout index: Index, inout marks: [u8]) -> Chain ! alloc
   requires len(index.arena) <= 8388608 && len(index.slots) <= 50331655
   ensures len(marks) == len(old(marks))
@@ -163,8 +183,8 @@ pub fn resolve(inout index: Index, inout marks: [u8]) -> Chain ! alloc
   while k + 7 <= len(index.slots)
     invariant 0 <= k && k <= len(index.slots) && len(index.heads) == size && 1 <= size && size <= 33554440
     invariant len(index.arena) <= 8388608 && len(index.slots) <= 50331655 && len(marks) == len(old(marks))
-    invariant -1 <= last_entry && last_entry < k && -1 <= last_role && last_role < k
-    invariant last_entry >= 0 || k == 0
+    invariant last_entry == -1 || (0 <= last_entry && last_entry + 7 <= k)
+    invariant last_role == -1 || (0 <= last_role && last_role + 7 <= k)
     decreases len(index.slots) - k
   {
     let uo: i64 = index.slots[k + 2];
@@ -177,40 +197,43 @@ pub fn resolve(inout index: Index, inout marks: [u8]) -> Chain ! alloc
     if index.slots[k + 6] == 1 { last_role = k; }
     k = k + 7;
   }
-  // hand: last_role.or(last_entry); the leaf reads its parent strictly.
-  let mut pick: i64 = last_entry;
-  if last_role >= 0 { pick = last_role; }
-  let leaf: Leaf = Leaf { slot: pick, found: pick >= 0, bad: false };
-  let mut koff: i64 = 0;
-  let mut klen: i64 = 0;
-  let mut poff: i64 = 0;
-  let mut plen: i64 = 0;
-  if leaf.found {
-    let at: i64 = leaf.slot;
-    if at < 0 || at > len(index.slots) - 7 { return Chain { active: leaf.found, cut: false, bad: true }; }
-    if index.slots[at + 5] == -2 { return Chain { active: leaf.found, cut: false, bad: true }; }
-    koff = index.slots[at + 2];
-    klen = index.slots[at + 3];
-    if index.slots[at + 5] >= 0 { poff = index.slots[at + 4]; plen = index.slots[at + 5]; }
-  }
+  // hand: `let Some(mut entry) = last_role.or(last_entry)`; last_entry is set whenever a slot exists.
+  let mut at: i64 = last_entry;
+  if last_role >= 0 { at = last_role; }
+  let active: bool = at >= 0;
   let mut lost: bool = false;
   let mut count: i64 = 0;
-  let mut done: bool = !leaf.found;
+  let mut done: bool = !active;
+  // hand: `while selected.insert(entry.uuid) { parent of entry; latest.get(parent) }`. The first entry is the
+  // leaf itself; later ones are the newest entry per uuid. Only the followed entry's parentUuid is read.
   while !done && count < len(index.arena)
     invariant len(marks) == len(old(marks)) && len(index.arena) <= 8388608 && 0 <= count && count <= len(index.arena)
     invariant 0 < len(index.heads) && len(index.heads) <= 33554440 && len(index.slots) <= 50331655
+    invariant done || (0 <= at && at <= len(index.slots) - 7)
     decreases len(index.arena) - count
   {
-    if koff < 0 || klen < 0 || klen > len(index.arena) - koff { return Chain { active: leaf.found, cut: lost, bad: true }; }
-    let f: Hit = lookup(index.arena, koff, klen, index.heads, index.slots, inout marks);
-    if f.bad { return Chain { active: leaf.found, cut: lost, bad: true }; }
-    // The initial parent belongs to the leaf entry itself, not the last duplicate UUID.
-    if count > 0 { poff = f.poff; plen = f.plen; }
-    if !f.found { lost = true; done = true; }
-    if !f.changed || plen == 0 { done = true; }
-    koff = poff;
-    klen = plen;
+    let koff: i64 = index.slots[at + 2];
+    let klen: i64 = index.slots[at + 3];
+    if koff < 0 || klen < 0 || klen > len(index.arena) - koff { return Chain { active: active, cut: lost, bad: true }; }
+    let m: Mark = select(index.arena, koff, klen, index.heads, index.slots, inout marks);
+    if m.bad { return Chain { active: active, cut: lost, bad: true }; }
     count = count + 1;
+    if !m.changed {
+      done = true;
+    } else {
+      let poff: i64 = index.slots[at + 4];
+      let plen: i64 = index.slots[at + 5];
+      if plen == -2 { return Chain { active: active, cut: lost, bad: true }; }
+      // hand: take_string drops a missing or empty parentUuid
+      if plen <= 0 {
+        done = true;
+      } else {
+        if poff < 0 || plen > len(index.arena) - poff { return Chain { active: active, cut: lost, bad: true }; }
+        let next: i64 = newest(index.arena, poff, plen, index.heads, index.slots);
+        if next == -2 { return Chain { active: active, cut: lost, bad: true }; }
+        if next == -1 { lost = true; done = true; } else { at = next; }
+      }
+    }
   }
-  return Chain { active: leaf.found, cut: lost, bad: leaf.bad };
+  return Chain { active: active, cut: lost, bad: false };
 }

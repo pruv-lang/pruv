@@ -1,0 +1,5 @@
+{"type": "user", "uuid": "root", "message": {"parts": [{"text": "root"}]}}
+{"type": "user", "uuid": "u", "parentUuid": "\ud800", "message": {"parts": [{"text": "older"}]}}
+{"type": "user", "uuid": "u", "parentUuid": "root", "message": {"parts": [{"text": "newer"}]}}
+{"type": "assistant", "uuid": "a", "parentUuid": "u", "message": {"parts": [{"text": "reply"}]}}
+{"type": "system", "uuid": "a", "parentUuid": "\udc00"}
