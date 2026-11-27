@@ -2399,3 +2399,34 @@ Changes `bench/l3/pkgs/transport`, `pkgs/turns`, `mcp`, `grok`, `codex` (no comp
   Confirm review (same account): all three fixed, no new findings.
 - Next: P10-M1 for `Vec<T>` elements, then the hand's parsed-entry vector on top of 4.4w-VD (bench rows 4.3e-D /
   4.4d-QS).
+
+### Rows after L-gaps 14
+
+- Closed P10-M1 (R-6g9-12): an element `v[i]` of a `Vec<i64>` / `Vec<bool>` is a `swap` / `replace` place (hand
+  Rust `v.swap(i, j)` / `std::mem::replace(&mut v[i], x)`). Each index carries the range obligation, the two places
+  of a swap are proven distinct, and an immutable Vec, an out-of-range index and a same-Vec alias stay rejected.
+  LLVM calls the shim adapters `vswap` / `vreplace`; a narrow unsigned index is widened as for arrays.
+- Closed 4.4t-RV (R-6q-1): `for i in (a..b).rev()` visits `b - 1` down to `a` (Rust `for i in (a..b).rev()`). In an
+  invariant `i` is the low end of the visited part (`b` before the first pass, `min(a, b)` after the loop) and the
+  measure is `i - a`; quantifier triggers are renamed like the rest of the invariant. `(P).rev()` over a slice and
+  `(a..=b).rev()` stay `parse/for_iterable`. OpenCode `dirname` can now take the hand's loop.
+- Closed 4.4v-SN (R-6l-3): `proc_spawn_quiet(program, args, cwd)` spawns with the child's stderr on the null device
+  (Rust `Stdio::null()`); stream 2 is empty and at end of file from the start, also inside an event loop
+  (`ev_add_process`), and a large stderr write cannot block the child. Same contract and must-consume handle as
+  `proc_spawn`. Consumers to switch (left to the bench owner; bench/l3/pkgs is not touched here): the fd-2 readers
+  that read and drop stderr with `ev_proc_read(l, slot, 2, ...)` in mcp, grok, codex and qwen; after the switch
+  their stderr branch and the 4.4v-RT duplicate in `receive` / `receive_tail` go away.
+- Still open: 4.4s-FK, 4.4v-RT (the stderr half goes away with 4.4v-SN). New LG14-ST: the slice-for rewrite
+  (`for x in P` with `index(x)`) also skips quantifier triggers (`for_index_rewrite`); not reached in the cap.
+- Checks: `cargo test --release` ok; `run_all --only must_reject` 1380/1380; `--only g8_frontend --backend both`
+  39/39; `spec_trace --only-rs` 2381/2381; runtime `--backend both`: tests/spec 374/374, g10p_r23 6/6, g10a_r23_quiet_ev 4/4,
+  p4_rt_for 10/10; `diff_rust --fuzz-count 20` and `m3_all --quick` success after `--update-golden` (the proc
+  prelude's `pruv_proc_spawn_in` gained a `quiet` flag, so every process and event-loop program's Rust output
+  changed; mutant digests after the new test files shifted with their numbering); `--list-rows` diff (28 new rows,
+  `tests/run_all_rows.txt` updated).
+- Audit: one review round (Codex 2 account; the default account was at its limit). Fixed: an LLVM Vec element
+  index of type `u8`/`u16`/`u32` was passed unwidened to the i64 shim argument (test `lgaps14_vec_mem_narrow`);
+  a trigger in a reverse-range invariant kept the loop variable and failed `type/unknown_name` (test
+  `lgaps14_for_rev_trigger`). No findings on `proc_spawn_quiet`. The confirm round
+  marked both fixes FIXED with no new required findings.
+- Next: switch the mcp/grok/codex/qwen stderr readers to `proc_spawn_quiet`, then 4.4v-RT and LG14-ST.
