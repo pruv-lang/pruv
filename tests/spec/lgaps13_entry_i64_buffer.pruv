@@ -1,0 +1,4 @@
+// spec: R-6f-6 accept
+// L-gaps 13 (4.4w-VD): a host entry may take an owned aggregate with an [i64] buffer field
+pub struct Raw { xs: [i64], k: i64 }
+pub fn count(r: Raw) -> i64 { return len(r.xs); }

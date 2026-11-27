@@ -1,0 +1,11 @@
+// L-gaps 13 (4.4w-VD, R-6e-3): a Vec of a child-module struct holding [u8] and [i64] buffers; an element is passed by
+// borrow to a read-only parameter and its buffer field is read in place
+mod doc;
+pub fn run(n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 9
+{
+  let mut v: Vec<crate::doc::Doc> = vec_new::<crate::doc::Doc>();
+  v = vec_push::<crate::doc::Doc>(move v, crate::doc::make(n));
+  v = vec_push::<crate::doc::Doc>(move v, crate::doc::make(n + 1));
+  return crate::doc::first(vec_get::<crate::doc::Doc>(v, 1)) + len(vec_get::<crate::doc::Doc>(v, 0).tape);
+}

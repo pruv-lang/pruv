@@ -1,0 +1,55 @@
+// L-gaps 13 (4.4w-VD, R-6e-3): a struct with an owned [i64] field (the shape of json::JsonDocument: a [u8] source,
+// an [i64] tape and an invariant over the tape) is an owned aggregate, so Vec<Doc> holds parsed documents. Elements
+// move in by vec_push, their buffer fields are read in place through vec_get (a borrow, no copy) and replaced
+// through vec_at_mut (the old buffer is dropped), and the vector drops every element's buffers. Output and the
+// allocation balance match on both backends.
+struct Doc {
+  source: [u8], tape: [i64],
+  invariant len(tape) % 2 == 0 && len(tape) <= 40 && len(source) <= 20
+}
+
+fn make(n: i64) -> Doc ! alloc
+  requires 0 <= n && n <= 10
+{
+  let s: [u8] = alloc(n, 7);
+  let t: [i64] = alloc(2 * n, n);
+  return Doc { source: move s, tape: move t };
+}
+
+fn total(v: Vec<Doc>) -> i64
+  requires len(v) <= 20
+{
+  let mut i: i64 = 0;
+  let mut s: i64 = 0;
+  while i < len(v)
+    invariant 0 <= i && i <= len(v)
+    invariant 0 <= s && s <= 60 * i
+    decreases len(v) - i
+  {
+    s = s + len(vec_get::<Doc>(v, i).tape) + len(vec_get::<Doc>(v, i).source);
+    i = i + 1;
+  }
+  return s;
+}
+
+fn regrow(inout v: Vec<Doc>) -> () ! alloc {
+  match vec_at_mut::<Doc>(inout v, 0) {
+    Some(d) => {
+      let t: [i64] = alloc(4, 9);
+      d.tape = move t;
+    }
+    None => { }
+  }
+}
+
+pub fn run() -> () ! alloc, io {
+  let mut v: Vec<Doc> = vec_new::<Doc>();
+  v = vec_push::<Doc>(move v, make(3));
+  v = vec_push::<Doc>(move v, make(5));
+  v = vec_push::<Doc>(move v, make(0));
+  print(total(v));
+  print(len(vec_get::<Doc>(v, 1).tape));
+  regrow(inout v);
+  print(total(v));
+  if len(v) >= 1 && len(vec_get::<Doc>(v, 0).tape) >= 4 { print(vec_get::<Doc>(v, 0).tape[3]); }
+}

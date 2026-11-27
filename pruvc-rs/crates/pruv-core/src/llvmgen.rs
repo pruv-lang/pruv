@@ -7028,11 +7028,14 @@ impl<'a> FnGen<'a> {
                 let n = self.ev(arg(&e.args, 1)?, false)?;
                 let p = self.inout_place_ptr(&place(e)?)?;
                 self.m.vec_elems.insert(VIEW_ELEM.to_string());
-                // the G6 shim's vec_reserve bound, checked always: the byte count below never wraps
-                let in_range = self.op(format!("icmp ule i64 {}, {}", n.a, 1u64 << 40))?;
-                let msg_fn = self.m.string("vec_reserve");
-                let msg_ex = self.m.string("0 <= n && n <= 2^40");
-                self.guard(&in_range, Fail::RequiresFreed(msg_fn, msg_ex), false)?;
+                // the G6 shim's vec_reserve bound (the byte count below never wraps). LG12-RS (L-gaps 13): checked
+                // exactly when unverified, like the other LG7-B4 operations; verified code proves it
+                if !self.verified {
+                    let in_range = self.op(format!("icmp ule i64 {}, {}", n.a, 1u64 << 40))?;
+                    let msg_fn = self.m.string("vec_reserve");
+                    let msg_ex = self.m.string("0 <= n && n <= 2^40");
+                    self.guard(&in_range, Fail::RequiresFreed(msg_fn, msg_ex), false)?;
+                }
                 let value = self.op(format!("load {ARR}, ptr {p}"))?;
                 let data = self.op(format!("extractvalue {ARR} {value}, 0"))?;
                 let len = self.op(format!("extractvalue {ARR} {value}, 1"))?;

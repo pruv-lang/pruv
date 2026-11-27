@@ -2364,11 +2364,11 @@ impl Checker {
                 if !text_key && *k != i64t() && v.owner.is_none() {
                     if let Some(TypeDecl::Struct(d)) = self.decls.get(&v.name) {
                         if d.tparams.is_empty()
-                            && d.fields.iter().any(|f| crate::gtype::key_is_collection(&f.ty) || matches!(f.ty.as_str(), "array_u8" | "array_u16"))
+                            && d.fields.iter().any(|f| crate::gtype::key_is_collection(&f.ty) || matches!(f.ty.as_str(), "array" | "array_u8" | "array_u16"))
                             && d.fields.iter().all(|f| {
                                 let ft = GType::from_key(&f.ty);
                                 crate::gtype::key_is_owned_field(&f.ty)
-                                    || matches!(f.ty.as_str(), "array_u8" | "array_u16")
+                                    || matches!(f.ty.as_str(), "array" | "array_u8" | "array_u16")
                                     || self.record_map_field(&ft)
                                     || is_value(&ft, &|n| self.value_decl(n))
                             })
@@ -2965,7 +2965,7 @@ impl Checker {
                     && d.fields.iter().all(|f| {
                         let t = GType::from_key(&f.ty);
                         crate::gtype::key_is_owned_field(&f.ty)
-                            || matches!(f.ty.as_str(), "array_u8" | "array_u16")
+                            || matches!(f.ty.as_str(), "array" | "array_u8" | "array_u16")
                             || self.collection_records.borrow().contains(&ty.name) && self.record_map_field(&t)
                             || (!t.contains_collection() && !t.is_array() && t != strt()
                                 && dependencies(&t).iter().all(|n| !self.extended.contains(n)))
@@ -2996,7 +2996,7 @@ impl Checker {
                     let ty = GType::from_key(&f.ty);
                     self.nested_child_type(&ty)
                         || crate::gtype::key_is_owned_field(&f.ty)
-                        || matches!(f.ty.as_str(), "array_u8" | "array_u16")
+                        || matches!(f.ty.as_str(), "array" | "array_u8" | "array_u16")
                         || is_value(&ty, &|n| self.value_decl(n))
                 })).then(|| name.clone())
         }).collect();
@@ -3009,7 +3009,7 @@ impl Checker {
                 if d.tparams.is_empty() && d.fields.iter().all(|f| {
                     let ft = GType::from_key(&f.ty);
                     crate::gtype::key_is_owned_field(&f.ty)
-                        || matches!(f.ty.as_str(), "array_u8" | "array_u16")
+                        || matches!(f.ty.as_str(), "array" | "array_u8" | "array_u16")
                         || self.collection_records.borrow().contains(&ty.name) && self.record_map_field(&ft)
                         || is_value(&ft, &|n| self.value_decl(n))
                 }))
@@ -6296,7 +6296,7 @@ impl Checker {
         if (is_narrow(ty) || crate::gtype::is_tuple_name(&ty.name)) && matches!(e, Expr::Call(x) if ValueIf::matches(x) || crate::ast::ValueMatch::matches(x)) {
             return self.expect(e, ty, scope, c, None).map(|_| false);
         }
-        let got = if borrow_vector && self.recursive_vec_element(ty) {
+        let got = if borrow_vector && (self.recursive_vec_element(ty) || self.owned_aggregate(ty)) {
             self.read_expr(e, scope, c, &["vec_get"])?
         } else {
             self.expr(e, scope, c)?

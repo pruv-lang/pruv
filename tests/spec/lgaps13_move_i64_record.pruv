@@ -1,0 +1,9 @@
+// spec: R-6e-12 accept
+// L-gaps 13 (4.4w-VD): a struct with an [i64] buffer field is an owned aggregate and moves into a parent
+struct S { xs: [i64] }
+struct H { s: S }
+
+fn wrap(xs: [i64]) -> H ! alloc {
+  let s: S = S { xs: copy(xs) };
+  return H { s: move s };
+}

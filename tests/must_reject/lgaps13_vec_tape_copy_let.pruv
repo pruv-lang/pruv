@@ -1,0 +1,4 @@
+// spec: R-6e-3 reject
+// 4.4w-VD (L-gaps 13): an element of a Vec of a struct holding an [i64] buffer is not copied out by a let
+struct Doc { source: [u8], tape: [i64] }
+fn f(v: Vec<Doc>) -> i64 requires len(v) > 0 { let d: Doc = vec_get::<Doc>(v, 0); return len(d.tape); }

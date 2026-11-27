@@ -1,5 +1,5 @@
 // spec: R-6e-3 reject
-struct Sess { vals: [i64], n: i64 }
+struct Sess { vals: [bool], n: i64 }
 struct St { sessions: HashMap<String, Sess> }
 
 fn count(st: St) -> i64 {

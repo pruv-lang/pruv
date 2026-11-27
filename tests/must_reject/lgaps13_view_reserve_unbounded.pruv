@@ -1,0 +1,8 @@
+// spec: R-6g9-11 reject
+// LG12-RS (L-gaps 13): verified code drops the view-list `vec_reserve` bound check, so the verifier must prove
+// `0 <= n && n <= 2^40`; an unbounded count is refuted
+fn grow(n: i64) -> i64 ! alloc {
+  let mut names: Vec<ref str> = vec_new::<ref str>();
+  vec_reserve::<ref str>(inout names, n);
+  return len(names);
+}

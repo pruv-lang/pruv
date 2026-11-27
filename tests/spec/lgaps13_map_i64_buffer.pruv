@@ -1,0 +1,8 @@
+// spec: R-6e-3 accept
+// L-gaps 13 (4.4w-VD): an [i64] buffer field keeps a String-keyed map value an owned aggregate (Rust backend)
+struct Sess { vals: [i64], n: i64 }
+struct St { sessions: HashMap<String, Sess> }
+
+fn count(st: St) -> i64 {
+  return len(st.sessions);
+}

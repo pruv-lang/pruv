@@ -5406,7 +5406,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
             self.fg_mut()?.record_inline_catalog(&x.name, &src);
             if let Expr::InoutArg(place) = &x.args[0] {
                 let (p, count) = (self.e(&place.expr)?, self.e(&x.args[1])?);
-                if self.unchecked_collections() {
+                // LG12-RS (L-gaps 13): a view list's reserve bound keys on `verified` only, like LG7-B4
+                let unchecked = if self.view_list_arg(x).is_some() { self.verified } else { self.unchecked_collections() };
+                if unchecked {
                     return Ok(format!("{}.reserve(({}) as usize)", p, count));
                 }
                 return Ok(format!(
@@ -5465,6 +5467,10 @@ pruv_hi <= (pruv_b.len() as i128) && \
             self.fg_mut()?.record_inline_catalog(&x.name, &src);
             let v = self.e(arg(&x.args, 0)?)?;
             let i = self.e(arg(&x.args, 1)?)?;
+            if low.first().is_some_and(|t| self.is_ext(Some(&t.to_key()))) {
+                // L-gaps 13 (R-6e-3): an owned aggregate element is a place, borrowed by `&` at a read-only argument
+                return Ok(format!("(*unsafe {{ ({v}).get_unchecked(({i}) as usize) }})"));
+            }
             return Ok(format!("(unsafe {{ *({}).get_unchecked(({}) as usize) }})", v, i));
         }
         if x.name == "vec_get" && low.first().is_some_and(|t| self.is_ext(Some(&t.to_key()))) {
