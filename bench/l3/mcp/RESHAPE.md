@@ -319,3 +319,8 @@ LB5 (buffer growth): main conversation Claude Opus 5.5 (spec rules, packet.pruv/
 Compiler work on both implementations: Codex gpt-6.2-sol (high), two write delegations (R-6g4-1..5, then R-6g4-6
 `arr_append` and the audit fixes). Audit and confirm review: Codex gpt-6.2-astra (ultra). Gate runs: command
 delegations.
+
+## 4.4za: stderr
+
+MCP keeps `proc_spawn` and `transport::receive_tail`: the child's last stderr line is part of the result (TS), and there is
+no hand spawn to follow. `receive_tail` now starts with the shared `transport::begin` (no behaviour change).

@@ -134,11 +134,27 @@ fn fill(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool, cap: i64,
  if !ev_ok(q) { st.status=-5; }
  return move q;
 }
+// The common start of every receive step: the buffered bytes are scanned first (a complete line or -3 returns at once),
+// then the timers and the child's liveness (hand `Rpc::step` before `recv_timeout`). st.status stays -6 when more bytes
+// are needed.
+fn begin(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool, cap: i64,
+ inout st: Reader, inout line: [u8], chunk: [u8]) -> Loop ! async, alloc
+ requires 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
+ requires 1 <= cap && cap <= 8388608 && len(line) <= cap
+ ensures 0 <= st.at && st.at <= st.end && st.end == old(st).end && st.exit == old(st).exit
+ ensures len(line) <= cap
+ ensures st.status == -6 ==> ev_ok(result) && 0 <= slot && slot < ev_cap(result) && ev_kind(result,slot) == 3
+{
+ st.status=-6;
+ if st.at < st.end { take(inout st, inout line, chunk, cap); if st.status != -6 { return move l; } }
+ return wake(move l,slot,overall,init,ready,inout st);
+}
 // One receive step with a growing line buffer (hand `Rpc::step` with `line: Vec<u8>`): `line` holds the partial line and
 // grows by extend; a complete line of len(line) bytes sets st.status = len(line), and the caller clears `line` after
 // using it (hand `on_line` then `line.clear()`). The buffered bytes are scanned first; the loop is polled only when no
-// line is complete. The child's stderr is read so that EOF (both streams drained) is published, and dropped (hand
-// `Stdio::null()`).
+// line is complete. Stream 2 is read and dropped: for a grok child (`proc_spawn_env`, no quiet form, row 4.4za-EQ) so
+// that its stderr never fills the pipe, and for a quiet codex child (`proc_spawn_quiet`, hand `Stdio::null()`) because
+// `ev_eof` turns true only after both streams were observed at end of file (the read adds no bytes; row 4.4za-QE).
 pub fn receive(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool, cap: i64,
  inout st: Reader, inout line: [u8], inout chunk: [u8]) -> Loop ! async, proc, alloc
  requires 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
@@ -146,9 +162,7 @@ pub fn receive(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool, ca
  ensures 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
  ensures len(line) <= cap
 {
- st.status=-6;
- if st.at < st.end { take(inout st, inout line, chunk, cap); if st.status != -6 { return move l; } }
- let mut q: Loop = wake(move l,slot,overall,init,ready,inout st);
+ let mut q: Loop = begin(move l,slot,overall,init,ready,cap,inout st,inout line,chunk);
  if st.status != -6 { return move q; }
  if !ev_eof(q,slot) { q=ev_proc_read(move q,slot,2,65536); }
  return fill(move q,slot,overall,init,ready,cap,inout st,inout line,inout chunk);
@@ -163,9 +177,7 @@ pub fn receive_tail(take l: Loop, slot: i64, overall: i64, init: i64, ready: boo
  ensures len(line) <= cap
  ensures crate::tail::tail_ok(tl) && tl.limit == 1024
 {
- st.status=-6;
- if st.at < st.end { take(inout st, inout line, chunk, cap); if st.status != -6 { return move l; } }
- let mut q: Loop = wake(move l,slot,overall,init,ready,inout st);
+ let mut q: Loop = begin(move l,slot,overall,init,ready,cap,inout st,inout line,chunk);
  if st.status != -6 { return move q; }
  if !ev_eof(q,slot) {
  q=ev_proc_read(move q,slot,2,65536);
