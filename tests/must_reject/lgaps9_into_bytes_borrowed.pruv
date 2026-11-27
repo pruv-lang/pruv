@@ -1,0 +1,4 @@
+// spec: R-6b-6 reject
+fn bad(s: str) -> [u8] {
+  return str_into_bytes(move s);
+}

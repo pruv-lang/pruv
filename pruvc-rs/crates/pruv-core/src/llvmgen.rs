@@ -6644,6 +6644,19 @@ impl<'a> FnGen<'a> {
             rv.ty = Some(STR.to_string());
             return self.temp_arr(rv, owned);
         }
+        if n == "str_into_bytes" {
+            // Move evaluation clears the source slot. The descriptor keeps its capacity.
+            let mut bytes = self.ev(arg(a, 0)?, true)?;
+            bytes.ty = Some("array_u8".to_string());
+            return self.temp_arr(bytes, owned);
+        }
+        if n == "str_bytes" {
+            let mut bytes = self.ev(arg(a, 0)?, false)?;
+            bytes.ty = Some("array_u8".to_string());
+            bytes.p = None;
+            bytes.c = None;
+            return Ok(bytes);
+        }
         if n == "subview" {
             let source = arg(a, 0)?;
             let mut base = self.ev(source, false)?;
@@ -8104,6 +8117,13 @@ impl<'a> FnGen<'a> {
                         .ok_or_else(|| "'FnGen' object has no attribute 'budget'".to_string())?;
                     let r = self.op(format!("call i128 @pruv_csize__{}(ptr {}, ptr {})", aty, p, bud))?;
                     return Ok(V::new(Kind::I128, r));
+                }
+                if n == "str_bytes" {
+                    let mut bytes = self.cev(arg(a, 0)?)?;
+                    bytes.ty = Some("array_u8".to_string());
+                    bytes.p = None;
+                    bytes.c = None;
+                    return Ok(bytes);
                 }
                 if n == "len" && expr_ty(arg(a, 0)?).as_deref().and_then(fixed_key).is_some() {
                     let f = expr_ty(arg(a, 0)?).as_deref().and_then(fixed_key).unwrap();

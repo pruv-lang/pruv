@@ -1,0 +1,6 @@
+// spec: R-6b-6 reject
+fn bad() -> i64 ! alloc {
+  let t: str = copy("ab");
+  let b: [u8] = str_into_bytes(move t);
+  return len(b) + len(t);
+}

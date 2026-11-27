@@ -1400,7 +1400,7 @@ impl Checker {
             if funcs.contains_key(&name) {
                 return Err(terr(f.line, f.col, "dup_fn", format!("function {} defined twice", name), ""));
             }
-            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "utf8_valid_span" | "str_from_utf8" | "truncate" | "eq_range" | "find_byte" | "resize" | "copy_range" | "copy_within" | "arr_reserve" | "arr_push" | "arr_append" | "subview")
+            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "utf8_valid_span" | "str_from_utf8" | "truncate" | "eq_range" | "find_byte" | "resize" | "copy_range" | "copy_within" | "arr_reserve" | "arr_push" | "arr_append" | "subview" | "str_into_bytes" | "str_bytes")
                 || intwidth::of(src_names.get(fi).map_or(name.as_str(), String::as_str)).is_some()
                 || is_bit_builtin(&name)
                 || is_word_builtin(&name)
@@ -4991,7 +4991,7 @@ impl Checker {
                     format!("{} returns {}: a par branch must return ()", n, tn(&f.ret)),
                     "call a unit Pruv helper and pass results back through whole inout arrays"));
             }
-        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "utf8_valid_span", "str_from_utf8", "truncate", "eq_range", "find_byte", "resize", "copy_range", "copy_within", "arr_reserve", "arr_push", "arr_append", "subview"].contains(&n.as_str())
+        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "utf8_valid", "utf8_valid_span", "str_from_utf8", "truncate", "eq_range", "find_byte", "resize", "copy_range", "copy_within", "arr_reserve", "arr_push", "arr_append", "subview", "str_into_bytes", "str_bytes"].contains(&n.as_str())
             || is_bit_builtin(n)
             || is_word_builtin(n)
             || crate::intwidth::of(n).is_some()
@@ -7403,7 +7403,8 @@ impl Checker {
     /// argument through `from` or a `ref` result), a literal, a constructor or a bare `move x`.
     fn fresh_arm(&self, arm: &Expr) -> bool {
         match arm {
-            Expr::Call(x) => !PlaceIf::matches(x) && !self.funcs.get(&x.name).is_some_and(|f| f.holds_args),
+            Expr::Call(x) => x.name != "str_bytes" && !PlaceIf::matches(x)
+                && !self.funcs.get(&x.name).is_some_and(|f| f.holds_args),
             Expr::Move(m) => m.fields.is_empty(),
             Expr::StrLit(_) | Expr::StructLit(_) | Expr::EnumCtor(_) | Expr::Ctor(_) => true,
             _ => false,
@@ -8794,6 +8795,9 @@ impl Checker {
                     if n == "copy" && alen == 1 && !c && !self.in_view && !self.funcs.contains_key(&n) {
                         continue;
                     }
+                    if n == "str_bytes" && alen == 1 {
+                        continue; // The str source is checked in a view position.
+                    }
                     // LB7 (R-6g6-3): string_push_str(move s, subview(t, lo, hi)), string_from(subview(t, lo, hi))
                     if is_text_view_op(&n) && std::ptr::eq(arg, e.args.last().unwrap()) && !c && !self.in_view && !self.funcs.contains_key(&n) {
                         continue;
@@ -8802,7 +8806,7 @@ impl Checker {
                 }
             }
         }
-        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "utf8_valid_span" | "str_from_utf8" | "truncate" | "eq_range" | "find_byte" | "resize" | "copy_range" | "copy_within" | "arr_reserve" | "arr_push" | "arr_append" | "subview")
+        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "utf8_valid" | "utf8_valid_span" | "str_from_utf8" | "truncate" | "eq_range" | "find_byte" | "resize" | "copy_range" | "copy_within" | "arr_reserve" | "arr_push" | "arr_append" | "subview" | "str_into_bytes" | "str_bytes")
             || is_bit_builtin(&n)
             || is_word_builtin(&n);
         let is_old = n == "old" && self.uses_inout && !self.funcs.contains_key(&n); // G5 A0: contextual builtin
@@ -8821,6 +8825,27 @@ impl Checker {
                 }
                 self.check_array_type(&e.args[0], true, ty)?;
                 return Ok(i64t());
+            }
+            "str_into_bytes" => {
+                arity(1)?;
+                let arg = &mut e.args[0];
+                if !matches!(arg, Expr::Move(_)) {
+                    return Err(terr(arg.line(), arg.col(), "foreign_move",
+                        "str_into_bytes needs an owned str passed with move", "write move before the owned str binding"));
+                }
+                self.expect(arg, &strt(), scope, c, None)?;
+                return Ok(GType::array_u8());
+            }
+            "str_bytes" => {
+                arity(1)?;
+                let arg = &mut e.args[0];
+                if matches!(arg, Expr::StrLit(_)) || matches!(arg, Expr::Call(x) if x.name == "subview") {
+                    self.view_value(arg, &strt(), scope, c)?;
+                } else {
+                    let source = self.text_expr(arg, scope, c)?;
+                    self.check_expected_type(arg, &strt(), None, source)?;
+                }
+                return Ok(GType::array_u8());
             }
             "alloc" => {
                 let want = self.alloc_want.take();

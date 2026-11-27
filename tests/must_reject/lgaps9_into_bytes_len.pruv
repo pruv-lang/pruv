@@ -1,0 +1,8 @@
+// spec: R-6b-6 reject
+fn bad() -> [u8] ! alloc {
+  let t: str = copy("ab");
+  let n: i64 = len(t);
+  let b: [u8] = str_into_bytes(move t);
+  assert len(b) == n + 1;
+  return b;
+}

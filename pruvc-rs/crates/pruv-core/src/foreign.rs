@@ -1840,6 +1840,9 @@ impl<'a> Ownership<'a> {
     }
 
     fn takes(&self, e: &Call) -> Vec<bool> {
+        if e.name == "str_into_bytes" {
+            return vec![true];
+        }
         if e.name == "replace" && !self.funcs.contains_key(&e.name) && matches!(e.args.first(), Some(Expr::InoutArg(_))) {
             return vec![false, true]; // R-6g9-12: `replace(inout P, e)` consumes e into P
         }
@@ -1946,10 +1949,11 @@ impl<'a> Ownership<'a> {
                             t.entry(v.name.clone()).or_insert("borrow");
                         }
                     }
-                    // R-6e-11: a field or a vec_get element of a place borrows the place's root
-                    Expr::FieldAccess(_) | Expr::Call(_) if e.name == "string_eq" => {
+                    // A field, element or subview of a place borrows the place's root.
+                    Expr::FieldAccess(_) | Expr::Call(_) if matches!(e.name.as_str(), "string_eq" | "str_bytes") => {
                         let root = match arg {
                             Expr::Call(c) if c.name == "vec_get" && !c.args.is_empty() => crate::check::place_root(&c.args[0]),
+                            Expr::Call(c) if c.name == "subview" => crate::check::place_root(&c.args[0]),
                             Expr::Call(_) => None,
                             _ => crate::check::place_root(arg),
                         };

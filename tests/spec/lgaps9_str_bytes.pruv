@@ -1,0 +1,57 @@
+// spec: R-6b-6 accept
+struct Text { value: str }
+
+fn first(a: [u8]) -> i64
+  requires len(a) > 0
+  ensures result == a[0]
+{
+  return a[0];
+}
+
+fn width(a: [u8]) -> i64
+  ensures result == len(a)
+{
+  return len(a);
+}
+
+fn lend(s: str) -> ref str from(s)
+  ensures len(result) == len(s)
+  ensures forall k in 0..len(s): result[k] == s[k]
+{
+  return s;
+}
+
+fn view(s: str) -> ref [u8] from(s)
+  ensures len(result) == len(str_bytes(s))
+  ensures forall k in 0..len(s): result[k] == s[k]
+{
+  return str_bytes(lend(s));
+}
+
+fn run() -> () ! alloc, io {
+  let t: str = copy("Aé");
+  let n: i64 = len(t);
+  let byte: i64 = t[1];
+  let mut a: [u8] = str_into_bytes(move t);
+  assert len(a) == n;
+  assert a[1] == byte;
+  print(len(a));
+  print(a[1]);
+  arr_push(inout a, 33);
+  print(len(a));
+  print(a[3]);
+
+  let s: str = "Aé";
+  let b: ref [u8] = str_bytes(s);
+  assert len(b) == len(s);
+  assert b[2] == s[2];
+  print(first(str_bytes(s)));
+  print(b[2]);
+  print(width(str_bytes(subview(s, 1, len(s)))));
+
+  let d: Text = Text { value: copy(s) };
+  print(first(str_bytes(d.value)));
+  let r: ref str = lend(s);
+  let v: ref [u8] = view(r);
+  print(v[1]);
+}

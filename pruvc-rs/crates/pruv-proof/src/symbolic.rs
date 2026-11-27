@@ -3865,6 +3865,10 @@ impl<'a> FnVerifier<'a> {
                 self.assume_str_utf8(st, g, &Ty::Str, &res_v);
                 return Ok(res_v);
             }
+            "str_into_bytes" | "str_bytes" => {
+                let bytes = arg(0)?.try_arr()?;
+                return Ok(Val::Arr(Arr::new(bytes.a.clone(), bytes.n.clone(), n.to_string(), Elem::U8)));
+            }
             "subview" => {
                 let base = arg(0)?.try_arr()?;
                 let lo = arg(1)?.try_ast()?;
