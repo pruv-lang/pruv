@@ -889,3 +889,85 @@ kept. `reader_new` starts `status` at -6 instead of 0; every reader writes -6 be
 - `turns` T7, T9, T10 (**VL**, **ABI / V**).
 - `transport` X1, X2, X3 (**W-c**, no hand counterpart for the event loop).
 - Gap rows B, B-LLVM, V, ABI, U, U8, S, P7-1, CW, BV, R, CL, T, CH, KQ and the new VL: open.
+
+## Step 4.4l: UTF-8 fact for string spans (4.4i-UF), one-pass `decode_append` (4.4i-DP)
+
+- `lex::validate_utf8` ensures `result == -1 ==> utf8_valid_span(input, start, end)`; `lex::scan_string` ensures the
+  content between the quotes is valid UTF-8 (`utf8_valid_span(input, old(pos) + 1, pos - 1)`). Contracts and loop
+  invariants only; the code is unchanged.
+- `parse::strings_ok(input, tape, lo, hi)` (new pred): every string (kind 4) and key (kind 7) record in `lo..hi` has
+  valid UTF-8 content. `record`, `container`, `scan_records` and `scan` carry it; `scan_document` and `parse` ensure
+  `json::doc_strings(document)` for `Parsed`.
+- `json::doc_strings(d)` (new pred) states the same fact over `d.source` / `d.tape`. `lines::parse_owned`,
+  `parse_copy`, `parse_range` and `build_span` ensure it for `Parsed` (`build_span` also requires it of its input
+  tape). A consumer that requires `doc_strings(doc)` can view a plain span as `str` with no run-time scan (R-6g-10).
+- First tried as a `JsonDocument` invariant: the three construction sites verify, but every call that passes the
+  document inside a loop re-proves the quantified fact, and `access::find_ascii` (`valid(doc, v)`, access.pruv:104)
+  times out (`struct_invariant`, counterexample `canceled`) in claude a1/a2, json a4, qwen and grok. As a pred
+  the fact is carried only where it is required.
+- Negative check (temp copy): widening the span by one byte (`tape[6 * t + 1]` in place of `+ 1`) is rejected in
+  `parse::scan_document` (line 371) and `lines::parse_owned` (line 54).
+- `jstr::decode_append` is one pass: the count loop, `width` and `arr_reserve` are gone; plain runs are appended with
+  `extend_from_slice` and each escape is written as UTF-8, like the hand's `decoded.get_or_insert_with(Vec::new)`
+  (closes 4.4i-DP).
+- The consumer moves (4.3h-O, the title of 4.4c-MB) are not done in this step (cap); they are now unblocked.
+
+### Per-function structure (generated Rust vs `claude/handrust/src/lib.rs`)
+
+Independent static comparison by Codex `gpt-6.2-astra` (review role), given the generated Rust of the probe root and
+the hand Rust only. Every function is still structurally different; each difference has a row.
+
+| Function | Pruv (generated Rust) | Hand | Same? | Row |
+|---|---|---|---|---|
+| `jstr::decode_append` | one pass, no reserve, decodes into the caller's buffer | decodes while parsing, `Cow::Borrowed` for a plain chunk | no: a plain token is copied into `out`; with `scanned = false` non-ASCII is decoded and re-encoded | 4.3h-O (borrow at the consumer); new 4.4l-RE |
+| `jstr::decode_utf8` | always returns owned bytes | borrows a plain token | no | 4.3h-O |
+| `lex::validate_utf8` | 16-byte ASCII block, then scalar walk with a block revisit | `str::from_utf8` once per line | no | new 4.4l-VU |
+| `lex::scan_string` | revalidates each raw non-ASCII scalar after the line check | no per-scalar check after `from_utf8` | no | new 4.4l-SS |
+| `parse::record` | flat 6-word tape, record limit 1048577, duplicate keys kept as separate records | `Value` tree, `BTreeMap::insert` (last duplicate wins), no record limit, depth 128 | no | existing tape-vs-tree rows (unchanged) |
+| `parse::scan_records` | `reserve_exact(192)` up front, accepts a non-object root | `parse_line` requires an object root (`object(1)`), no up-front reserve | no | new 4.4l-RS |
+| `parse::scan_document` | `to_vec` copy of the source into `JsonDocument` | borrows the line | no | existing owned-source row (U) |
+| `lines::parse_owned` | `check_tape` makes 2 extra passes over the tape, possible `shrink_to_fit` | no tape re-check | no | new 4.4l-CT |
+| `lines::parse_range` / `parse_copy` | extra `to_vec` copy of the range | parses the borrowed line | no | existing owned-source row (U) |
+
+### New rows (4.4l)
+
+| Id | Kind | Difference | Where |
+|---|---|---|---|
+| 4.4l-RE | shape | `decode_append` with `scanned = false` decodes and re-encodes raw non-ASCII; the hand copies the validated bytes | `pkgs/jstr` |
+| 4.4l-VU | shape | `validate_utf8` revisits a 16-byte block on the first non-ASCII byte; the hand calls `from_utf8` | `pkgs/lex` |
+| 4.4l-SS | shape | `scan_string` checks each raw non-ASCII scalar again after the whole-line check; could follow from `validate_utf8`'s ensures where the caller validated the line first; not tried | `pkgs/lex` |
+| 4.4l-RS | shape | `scan_records` reserves 192 words up front and accepts a non-object root; the hand `parse_line` takes only an object | `pkgs/parse` |
+| 4.4l-CT | shape | `parse_owned` re-walks the tape twice in `check_tape` | `pkgs/lines` |
+
+### Consumer tests (step 4.4l)
+
+pruvc-rs, pairs rs/rust and rs/llvm, with `doc_strings` as a pred (the invariant run is not counted).
+
+| Runner | rs/rust | rs/llvm |
+|---|---|---|
+| json `run_a0` | 37 / 37 | 37 / 37 |
+| json `run_a1` | 351 / 351 | 351 / 351 |
+| json `run_a2` | (llvm only) | 114 / 114 |
+| json `run_a3` | 454 / 454 | 454 / 454 |
+| json `run_a4` | 6344 / 6344 | 6344 / 6344 |
+| json `run_a5` | 83 / 83 | 83 / 83 |
+| supervisor `test_a0` | 522 / 522 | 522 / 522 |
+| supervisor `test_a1` | 410 / 410 | 410 / 410 |
+| supervisor `test_a2` | 78 / 78 | 78 / 78 |
+| supervisor `test_a3` | 35 / 35 | 35 / 35 |
+| grok `test_impl --no-ts` (`GROK_COMPILE_WALL=3600`) | 254 / 254 | 254 / 254 |
+| claude `test_a0` | 272 / 272 | 272 / 272 |
+| claude `test_a1` | 2884 / 2884 | 2884 / 2884 |
+| claude `test_a2` | 2443 / 2443 | 2443 / 2443 |
+| claude `test_a3` | 134 / 134 | 134 / 134 |
+| claude `test_a4` | 270 / 270 | 270 / 270 |
+| claude `q.py` | 20270 / 20270 | 20270 / 20270 |
+| claude `q_mutants.py` | 18 / 18 caught (9 detected, 9 proof-rejected) | (same run) |
+| qwen `test_impl.py` | 26 / 26 | 26 / 26 |
+| mcp `test_impl.py` | 22 / 22 | 22 / 22 |
+| codex `test_impl.py` | 136 / 136 | 136 / 136 |
+| opencode `test_impl.py` | 199 / 199 | 199 / 199 |
+
+`claude/q.py` exits 1 only because it also lists the frozen py pairs (`build: 'py'`, not part of the check); both rs
+pairs pass. opencode ran with `GROK_TS_TRANSPILER` set (the first run without it stopped before building). Nothing
+was measured.

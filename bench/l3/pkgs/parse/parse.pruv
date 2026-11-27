@@ -201,6 +201,14 @@ pred fn parents_ok(tape: [i64], lo: i64, hi: i64) -> bool {
         tape[6 * tape[6 * t + 4] + 1] < tape[6 * t + 1])));
 }
 
+// 4.4i-UF: the content of every string and key record (between its quotes) is valid UTF-8, proved from
+// `lex::scan_string`'s ensures. Consumers borrow a plain span as a `str` view with no run-time scan.
+pub pred fn strings_ok(input: [u8], tape: [i64], lo: i64, hi: i64) -> bool {
+  return 0 <= lo && lo <= hi && 6 * hi <= len(tape) &&
+    (forall t in lo..hi: ((tape[6 * t] == 4 || tape[6 * t] == 7) ==>
+      utf8_valid_span(input, tape[6 * t + 1] + 1, tape[6 * t + 2] - 1)));
+}
+
 // Hand `Parser::record` / `Parser::container`: one recursion, errors passed up with `?`.
 fn record(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, depth: i64, key: bool) -> Result<(), crate::lex::Fault> ! alloc
   requires 0 <= pos && pos <= len(input) && len(input) <= 16777216
@@ -212,6 +220,7 @@ fn record(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, depth: i6
   ensures forall i in 0..len(old(tape)): tape[i] == old(tape)[i]
   ensures is_ok(result) ==> local_records(tape, len(old(tape)) / 6, len(tape) / 6, pos)
   ensures is_ok(result) ==> parents_ok(tape, len(old(tape)) / 6, len(tape) / 6)
+  ensures is_ok(result) ==> strings_ok(input, tape, len(old(tape)) / 6, len(tape) / 6)
   ensures !is_ok(result) ==> (0 <= err_val(result).position && err_val(result).position <= len(input))
   ensures is_ok(result) ==> (tape[len(old(tape)) + 3] == len(tape) / 6 && tape[len(old(tape)) + 4] == parent && ((tape[len(old(tape))] == 7) == key))
   decreases 2 * (129 - depth)
@@ -270,6 +279,7 @@ fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64
   ensures forall i in 0..len(old(tape)): tape[i] == old(tape)[i]
   ensures is_ok(result) ==> local_records(tape, len(old(tape)) / 6, len(tape) / 6, pos)
   ensures is_ok(result) ==> parents_ok(tape, len(old(tape)) / 6, len(tape) / 6)
+  ensures is_ok(result) ==> strings_ok(input, tape, len(old(tape)) / 6, len(tape) / 6)
   ensures !is_ok(result) ==> (0 <= err_val(result).position && err_val(result).position <= len(input))
   decreases 2 * (129 - depth) + 1
 {
@@ -288,6 +298,7 @@ fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64
     invariant forall i in 0..len(old(tape)): tape[i] == old(tape)[i]
     invariant local_records(tape, len(old(tape)) / 6, len(tape) / 6, pos)
     invariant parents_ok(tape, len(old(tape)) / 6, len(tape) / 6)
+    invariant strings_ok(input, tape, len(old(tape)) / 6, len(tape) / 6)
     invariant 0 <= id && 6 * id < len(old(tape)) && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < old(pos)
     invariant 0 <= children && children <= pos
     decreases end - pos + 1
@@ -322,6 +333,7 @@ fn scan_records(input: [u8], inout tape: [i64]) -> Result<(), crate::lex::Fault>
   ensures is_ok(result) ==> (len(input) >= 1 && len(tape) % 6 == 0 && len(tape) >= 6 && len(tape) <= 6291456)
   ensures is_ok(result) ==> local_records(tape, 0, len(tape) / 6, len(input))
   ensures is_ok(result) ==> parents_ok(tape, 0, len(tape) / 6)
+  ensures is_ok(result) ==> strings_ok(input, tape, 0, len(tape) / 6)
   ensures is_ok(result) ==> (tape[4] == -1 && tape[3] == len(tape) / 6 && tape[0] != 7)
 {
   let n: i64 = len(input);
@@ -338,6 +350,7 @@ pub enum Checked { Tape(tape: [i64]), Rejected(position: i64, kind: i64) }
 pub fn scan(input: [u8]) -> Checked ! alloc
   requires len(input) <= 16777216
   ensures is_variant(result, Checked::Rejected) ==> (0 <= variant_field(result, Checked::Rejected, position) && variant_field(result, Checked::Rejected, position) <= len(input))
+  ensures is_variant(result, Checked::Tape) ==> strings_ok(input, variant_field(result, Checked::Tape, tape), 0, len(variant_field(result, Checked::Tape, tape)) / 6)
 {
   let mut tape: [i64] = alloc(0, 0);
   let root: Result<(), crate::lex::Fault> = scan_records(input, inout tape);
@@ -355,6 +368,7 @@ fn failure(p: i64, k: i64) -> crate::json::JsonParse
 // Publish the completed tape with an owned source.
 fn scan_document(input: [u8]) -> crate::json::JsonParse ! alloc
   requires len(input) <= 16777216
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_strings(variant_field(result, crate::json::JsonParse::Parsed, document))
   ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= len(input))
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> len(variant_field(result, crate::json::JsonParse::Parsed, document).source) == len(input)
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) % 6 == 0 && len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) >= 6 && len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) <= 6291456)
@@ -409,6 +423,7 @@ fn publication_ok(parsed: crate::json::JsonParse, n: i64) -> bool
 }
 
 pub fn parse(input: [u8]) -> crate::json::JsonParse ! alloc
+  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_strings(variant_field(result, crate::json::JsonParse::Parsed, document))
   ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= len(input))
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) % 6 == 0 && len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) >= 6 && len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) <= 6291456)
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (len(input) >= 1 && len(input) <= 16777216)

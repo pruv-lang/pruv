@@ -1704,3 +1704,29 @@ All after the last code change (F1 / F4 from the structure comparison).
   - LG5-B3: tests for a boxed field path, cost mode, and a user `fn swap(inout a: [i64], i: i64, j: i64)`.
   - LG5-B4: `mem_builtin` reads `prog.functions` while the backends read `fmap`/`funcs`; not shown to differ.
 
+## Step 4.4l: 4.4i-UF (UTF-8 fact for string spans), 4.4i-DP (one-pass decode)
+
+- Changed packages: `pkgs/lex`, `pkgs/parse`, `pkgs/json`, `pkgs/lines` (contracts and two new preds) and
+  `pkgs/jstr` (code). Details, the per-function structure table and the consumer tests: `pkgs/RESHAPE.md` §Step 4.4l.
+- 4.4i-UF closed: `lex::scan_string` ensures its content span is valid UTF-8, `parse` carries it as
+  `parse::strings_ok`, and `parse::parse` / `lines::parse_owned` / `parse_copy` / `parse_range` / `build_span` ensure
+  `json::doc_strings(document)` for `Parsed`. A `JsonDocument` invariant was tried first and dropped: re-proving the
+  quantified fact at each call in a loop times out in `access::find_ascii` (access.pruv:104).
+- 4.4i-DP closed: `jstr::decode_append` decodes in one pass with no count pass and no reserve.
+- Independent structure comparison (Codex `gpt-6.2-astra`, review role): every changed function still differs from
+  the hand; new shape rows 4.4l-RE, 4.4l-VU, 4.4l-SS, 4.4l-RS, 4.4l-CT (`pkgs/RESHAPE.md`).
+- Not done (cap): 4.3h-O and the title part of 4.4c-MB. Both are unblocked: a consumer that requires
+  `doc_strings(doc)` can take a `str` view of a plain span.
+
+### Rows open after 4.4l
+
+- New (shape, `pkgs`): 4.4l-RE, 4.4l-VU, 4.4l-SS, 4.4l-RS, 4.4l-CT.
+- Still open in Claude: 4.3h-O, 4.4c-MB (title), and the rest as listed after 4.4i.
+- Still open from 4.4k and before: as listed there.
+- Next:
+  1. Claude 4.3h-O and the 4.4c-MB title on `doc_strings` (`pkgs/access` / `pkgs/jstr` borrow a plain span; rerun
+     every consumer of the changed packages).
+  2. 4.4l-SS (drop the per-scalar recheck in `scan_string` where the line was validated first), then 4.4l-RE / -RS /
+     -CT / -VU.
+  3. Then the Next list after 4.4k.
+
