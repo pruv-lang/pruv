@@ -1730,3 +1730,27 @@ All after the last code change (F1 / F4 from the structure comparison).
      -CT / -VU.
   3. Then the Next list after 4.4k.
 
+
+## Step 4.4m: borrowed plain strings for Claude replies (4.3h-O, part), 4.4l-SS restated
+
+- Changed: `pkgs/access` (new `plain_str`, a borrowed `Option<ref str>` of a plain string node under
+  `json::doc_strings`), `claude/entry` (`parse_line` ensures `doc_strings`), `claude/import` (`answer_blocks` and
+  `consume_entry` pass `plain_str`'s view to `turns::answer`, owned decode otherwise). No compiler change. Details,
+  the per-function structure table and the consumer tests: `pkgs/RESHAPE.md` §Step 4.4m.
+- Independent structure comparison (Codex `gpt-6.2-astra`, review role, Codex 2 account) found that the change does
+  not take effect: `parse::record` writes the plain bit 0 for every string, so `plain_str` is always `None` on the
+  Claude path. Confirmed in parse.pruv:263. Row 4.4m-PB.
+- 4.4l-SS restated as 4.4m-SS: the hand also runs `str::from_utf8` on every value chunk (handrust lib.rs:507-508);
+  the difference is per-scalar checks (values and keys) vs per-value checks, not an extra pass.
+- Not measured (structure not identical).
+
+### Rows after 4.4m
+
+- Closed: 4.4l-SS (replaced by 4.4m-SS). 4.3h-O stays open: its consumer side is in place, its producer is 4.4m-PB.
+- New: 4.4m-PB (producer), 4.4m-TB (title), 4.4m-FB (`ref str` enum payload, R-6g-11), 4.4m-SS.
+- Still open: 4.4l-RE, 4.4l-VU, 4.4l-RS, 4.4l-CT, 4.4c-MB (title), and the rows listed after 4.4l and before.
+- Next:
+  1. 4.4m-PB: `record` sets the plain bit (via `string_token`), widen the slot-5 facts in `parse` to the form
+     `check_tape` accepts, rerun every consumer of `pkgs/parse`; then check that the Claude reply path is `Some`.
+  2. 4.4m-TB part one (blank check on the borrowed view, copy only the winner).
+  3. 4.4m-SS, then 4.4l-RE / -RS / -CT / -VU, then the Next list after 4.4k.

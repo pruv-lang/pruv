@@ -971,3 +971,73 @@ pruvc-rs, pairs rs/rust and rs/llvm, with `doc_strings` as a pred (the invariant
 `claude/q.py` exits 1 only because it also lists the frozen py pairs (`build: 'py'`, not part of the check); both rs
 pairs pass. opencode ran with `GROK_TS_TRANSPILER` set (the first run without it stopped before building). Nothing
 was measured.
+
+## Step 4.4m: borrowed plain strings for Claude replies (4.3h-O, part), 4.4l-SS corrected
+
+- `access::plain_str(doc, id) -> Option<ref str> from(doc.source)` (new), `requires json::doc_strings(doc)`: a plain
+  string node (kind 4, tape slot 5 == 1, no backslash) as a borrowed `str` view of its content (`subview` of
+  `doc.source`, R-6g-10 / R-6g9-7 / R-6g9-8). No copy, no allocation, no run-time UTF-8 scan: the generated Rust is
+  `Option<&'a str>` built with `from_utf8_unchecked`. `None` for an escaped node, another kind or a corrupt tape.
+- Claude: `entry::parse_line` ensures `doc_strings` of the `Line::Object` document. `import::answer_blocks` (text
+  blocks) and `import::consume_entry` (string content) require it and pass the borrowed view to `turns::answer`, as
+  the hand `col.answer(s, ..)` does, when `plain_str` is `Some`; otherwise the owned decode (`string_text_owned`).
+- **Not effective yet (found by the structure comparison, confirmed):** the document `parse_line` gets comes from
+  `parse::parse` → `scan_document` → `scan_records` → `record`, and `record` writes slot 5 = `0` for every string
+  (parse.pruv:263, `append_record(.., 0)`). Only `scan_into` (grok, parse.pruv:536-550) sets the plain bit. So on
+  the Claude path `plain_str` is always `None` and every reply still takes the owned decode; the consumer shape is
+  in place, the producer is not. Row 4.4m-PB.
+- 4.4l-SS corrected: the hand is not free of a second check either. `value()` (handrust/src/lib.rs:507-508) runs
+  `str::from_utf8` again on every string value after `parse_line`'s line check (keys are not rechecked). Pruv's
+  `scan_string` checks each raw non-ASCII scalar of values and keys. The difference is the granularity and keys, not
+  an extra pass; dropping the Pruv check needs a "line validated" flag through `record` / `container` /
+  `scan_records` / `scan` and is not done (row 4.4m-SS replaces 4.4l-SS).
+
+### Per-function structure (generated claude a4 Rust vs `claude/handrust/src/lib.rs`)
+
+Independent static comparison by Codex `gpt-6.2-astra` (review role, Codex 2 account; the default account was at its
+limit), given `claude/work/a4/rs_rust/a4_root_gen.rs` and the hand Rust only. Its main finding (the plain bit is never
+set on this path) was confirmed in `parse.pruv`. No function on the reply or title path is the hand's shape yet.
+
+| Function | Pruv (generated Rust) | Hand | Same? | Row |
+|---|---|---|---|---|
+| `access::plain_str` | `Option<&'a str>` from `doc.source`, `from_utf8_unchecked`, no allocation, no scan | `get_str` -> `Option<&'a str>` | type same; never `Some` on the Claude path (slot 5 is always 0) | new 4.4m-PB |
+| `import::answer_blocks` (text block) | tries `plain_str`, then `string_field_of` -> owned `String` decode, then `answer(&str)` | `col.answer(t, at)` on the parsed `Cow` (no decode at the use) | no: an owned decode per plain text block | 4.4m-PB |
+| `import::consume_entry` (string content) | tries `plain_str`, then `string_text_owned`, decode before the collector's early return | `col.answer(s, ..)` | no | 4.4m-PB, 4.3h-T |
+| `entry::title_key` / `pick_title` / `ranked` | owned decode of each candidate before the blank check; the winner `String` moves into `Title::Ranked` | `pick` borrows and blank-checks; copies only the winner | no | new 4.4m-TB |
+| `import::tail_info` / `read_window` (title) | `best = move cand`; the old buffer is dropped, not reused | one `String`, `clear` + `push_str` | no | 4.4m-TB |
+| `entry::string_content` / `block_of` / `array_content` | owned decode of every piece (`Field::Value(String)`, `Block::Piece(String)`), even when the filter then rejects it | `Cow::Borrowed`; one `joined` only for 2+ pieces | no | new 4.4m-FB |
+| `lex::scan_string` | per raw non-ASCII scalar check of values and keys, after the line check on `parse_owned` | `str::from_utf8` per value chunk after the line check (lib.rs:507-508) | no: granularity and keys | 4.4m-SS (replaces 4.4l-SS) |
+
+### New rows (4.4m)
+
+| Id | Kind | Difference | Exact obligation to close | Where |
+|---|---|---|---|---|
+| 4.4m-PB | producer | `record` writes plain bit 0 for every string, so `plain_str` is `None` on the `parse` path | `record` takes the plain bit from `string_token` instead of `lex::scan_string`; `local_records` (parse.pruv:193), the `scan_document` / `parse` ensures (382, 434) and `publication_ok` (394-417) allow `tape[6t+5] == 1` for kinds 4/7 (the form `check_tape` already accepts, 402); rerun every consumer of `pkgs/parse`. Not a SPEC gap; not done (cap, the reruns were in flight) | `pkgs/parse` |
+| 4.4m-TB | shape | title: decode before the blank check, and a new `String` per winner instead of one reused buffer | after 4.4m-PB: `title_key` blank-checks `plain_str`'s view and copies only a nonblank one. Buffer reuse needs a `str` buffer that `clear` + append of a `str` keeps valid; `string_append` / `decode_append` on `[u8]` have no UTF-8 ensures, so a `[u8]` buffer cannot be lent to `text::one_line(str)` | `claude/entry`, `claude/import`, `pkgs/jstr` |
+| 4.4m-FB | language | user content pieces are owned (`Field::Value(text: str)`, `Block::Piece(text: str)`) | an enum payload of `ref str` is `type/borrow_signature` (R-6g-11); keeping the functions, the borrowed form would need a view payload in a user enum | `claude/entry` |
+| 4.4m-SS | shape | 4.4l-SS restated: the hand rechecks each value chunk too; Pruv checks per scalar and also keys | a "line validated" flag through `record` / `container` / `scan_records` / `scan` so `scan_string` skips the scalar check under `parse_owned` | `pkgs/lex`, `pkgs/parse` |
+
+### Consumer tests (step 4.4m)
+
+pruvc-rs (`PRUVC_RS=pruvc-rs/target/release/pruvc`), pairs rs/rust and rs/llvm, every consumer of `pkgs/access`.
+
+| Runner | rs/rust | rs/llvm |
+|---|---|---|
+| claude `test_a0` | 272 / 272 | 272 / 272 |
+| claude `test_a1` | 2884 / 2884 | 2884 / 2884 |
+| claude `test_a2` | 2443 / 2443 | 2443 / 2443 |
+| claude `test_a3` | 134 / 134 | 134 / 134 |
+| claude `test_a4` | 270 / 270 | 270 / 270 |
+| claude `q.py` | 20270 / 20270 | 20270 / 20270 |
+| claude `q_mutants.py` | 18 mutants: 8 detected, 10 proof-rejected, none survive | (same run) |
+| json `run_a0`-`run_a5` | 37 / 351 / 114 / 454 / 6344 / 83 | same |
+| supervisor `test_a0`-`test_a3` | 522 / 410 / 78 / 35 | same |
+| grok `test_impl --no-ts` (`GROK_COMPILE_WALL=3600`) | 254 / 254 | 254 / 254 |
+| qwen `test_impl.py` | 26 / 26 | 26 / 26 |
+| mcp `test_impl.py` | 22 / 22 | 22 / 22 |
+| codex `test_impl.py` | 136 / 136 | 136 / 136 |
+| opencode `test_impl.py` (`GROK_TS_TRANSPILER` set) | 199 / 199 | 199 / 199 |
+
+`claude/q.py` exits 1 only for the frozen py pairs (`build: 'py'`); both rs pairs pass. These runs exercise only
+the `None` branch of `plain_str` on the Claude path (4.4m-PB); the `Some` branch is verified but not run. Nothing was
+measured.
