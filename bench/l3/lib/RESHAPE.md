@@ -2433,3 +2433,25 @@ Changes `bench/l3/pkgs/jstr` and `pkgs/time` (no compiler change, no consumer ch
 - Next:
   1. 4.3e-D / 4.4d-QS with raw ranges (qwen §3e).
   2. 4.4x-DS if the Qwen replay needs the scanned fast path.
+
+## Step 4.4y: Qwen scan records raw ranges, replay decodes selected entries (4.3e-D / 4.4d-QS)
+
+Changes `bench/l3/qwen/import.pruv` only (no compiler or package change). Details in `qwen/RESHAPE.md` §3f.
+
+### Rows after 4.4y
+
+- Closed: 4.3e-D / 4.4d-QS (the scan-time join, decode and iso): the scan records raw token ranges of `data`;
+  `replay` decodes the selected entries with `jstr::decode_append(.., false)`, joins the prompt, and formats the
+  stamp with `time::iso_raw`, an assistant's only when a turn is attached. 4.4w-CE closed (no log spans, no
+  `char_edge`).
+- New 4.4y-PW: the parts visibility walk (`thought` / `text` / `functionCall`) still runs in the scan for every
+  object; the hand walks `visible_parts` in replay for a selected user or an attached assistant. Moving it needs
+  the parsed documents in replay (`Vec<json::JsonDocument>` compiles after 4.4w-VD, but replay would also need
+  `doc_strings` for each element, which `vec_get` does not carry); not tried in this bundle.
+- New 4.4y-SB: `prompt` / `piece` scratch buffers reused across entries and the model decoded from its raw token;
+  the hand allocates a `String` per part (serde) and per `join`, and clones the model.
+- Still open: 4.4x-DS, 4.4c-SV, P10-M1 and the rows listed before.
+- Tests (rs/rust and rs/llvm): qwen `test_impl.py` 27/27; `q.py --count 300` (rs pairs) same 317, P1 1, P4 4,
+  P5 1, unexplained 0, list same 21, P4 1; `q_mutants.py` 11 differential-killed, turn-cap verifier-rejected (the first mutant ran on the file before the model/stamp reorder). Not measured (structure differs at
+  4.4y-PW, 4.4y-SB).
+- Next: 4.4y-PW (per-element facts for a Vec of parsed documents), then 4.4y-SB.

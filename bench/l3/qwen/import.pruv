@@ -201,29 +201,25 @@ pub fn tail_info(data: [u8], cut_before: bool) -> crate::boundary::ImportResult 
 
 
 // One record per Object boundary or replay operation (hand: the slot vector). Skip frames and non-user drops
-// are no-ops. A record is three words: tag and two fields. For Object they hold ordinal/start; text operations
-// refer to a span in the separate UTF-8 buffer. Both buffers grow per entry.
+// are no-ops. A record is three words: tag and two fields. For Object they hold ordinal/start; a token record
+// holds the byte range [a, b) of one raw JSON token in data (hand: the parsed value kept in the Entry), decoded
+// only in replay for a selected entry. The log grows per entry.
 struct Event { kind: i64, a: i64, b: i64 }
-struct Events { records: [i64], text: [u8] }
 
-fn write_event(inout log: Events, event: Event) -> bool ! alloc
-  requires utf8_valid(log.text)
-  ensures utf8_valid(log.text)
+fn write_event(inout log: [i64], event: Event) -> bool ! alloc
 {
-  if len(log.records) > 4294967292 { return false; }
-  arr_push(inout log.records, event.kind, event.a, event.b);
+  if len(log) > 4294967292 { return false; }
+  arr_push(inout log, event.kind, event.a, event.b);
   return true;
 }
 
-fn write_text(inout log: Events, kind: i64, text: str) -> bool ! alloc
-  requires utf8_valid(log.text)
-  ensures utf8_valid(log.text)
+// The raw token of node id, as a range of data (the line's document source is data[start..end]).
+fn write_token(inout log: [i64], kind: i64, doc: crate::json::JsonDocument, id: i64, start: i64) -> bool ! alloc
+  requires 0 <= start && start <= 8388608
 {
-  let start: i64 = len(log.text);
-  let n: i64 = len(text);
-  if n > 4294967295 - start { return false; }
-  arr_append(inout log.text, text, 0, n);
-  return write_event(inout log, Event { kind: kind, a: start, b: n });
+  let s: crate::access::Span = crate::access::raw_span(doc, id);
+  if s.status != 0 { return false; }
+  return write_event(inout log, Event { kind: kind, a: start + s.start, b: start + s.end });
 }
 
 fn read_event(records: [i64], pos: i64) -> Event
@@ -232,36 +228,22 @@ fn read_event(records: [i64], pos: i64) -> Event
   return Event { kind: records[pos], a: records[pos + 1], b: records[pos + 2] };
 }
 
-// R-6g-10: a byte that starts no continuation (the end, an ASCII byte or a lead byte) is a char boundary of a
-// valid UTF-8 buffer, so a span between two such bytes is lent as str with no copy and no UTF-8 pass.
-fn char_edge(b: [u8], i: i64) -> bool
-  requires 0 <= i && i <= len(b)
-  ensures result == (i == len(b) || b[i] < 128 || b[i] >= 192)
-{
-  if i == len(b) { return true; }
-  return b[i] < 128 || b[i] >= 192;
-}
-
-fn read_text(text: [u8], start: i64, n: i64) -> str ! alloc
-  requires 0 <= start && start <= len(text) && 0 <= n && n <= len(text) - start
-{
-  return crate::jstr::adapter_probe(subview(text, start, start + n));
-}
-
-// Replay tags: 0 Object, 1 dropped real user, 4 stamp, 5 prompt, 6 model, 7 answer, 8 tool,
-// 9 selected-entry defect.
-fn record_answers(doc: crate::json::JsonDocument, c: i64, inout log: Events) -> bool ! alloc
+// Replay tags: 0 Object, 1 dropped real user, 3 user stamp (ends a user entry), 4 assistant stamp, 5 prompt part,
+// 6 model, 7 answer part, 8 tool, 9 selected-entry defect. A stamp record with a < 0 has no timestamp field.
+// hand visible_parts: the object parts that are not thoughts; a text string is kept (tag 5 for a user, 7 for an
+// assistant), else an assistant's functionCall object counts a tool (tag 8).
+fn record_parts(doc: crate::json::JsonDocument, c: i64, user: bool, start: i64, inout log: [i64]) -> bool ! alloc
   requires 0 <= c && c < len(doc.tape) / 6
-  requires utf8_valid(log.text)
-  ensures utf8_valid(log.text)
+  requires 0 <= start && start <= 8388608
 {
   if len(doc.tape) > 6291456 { return false; }
   let stop: i64 = doc.tape[6 * c + 3];
   if stop <= c || stop > len(doc.tape) / 6 { return false; }
+  let mut tag: i64 = 7;
+  if user { tag = 5; }
   let mut j: i64 = c + 1;
   while j < stop
     invariant 0 <= c && c < j && j <= stop && stop <= len(doc.tape) / 6 && len(doc.tape) <= 6291456
-    invariant utf8_valid(log.text)
     decreases stop - j
   {
     let next: i64 = doc.tape[6 * j + 3];
@@ -272,20 +254,16 @@ fn record_answers(doc: crate::json::JsonDocument, c: i64, inout log: Events) -> 
       let thought: i64 = crate::entry::is_true(doc, j, "thought");
       if thought < 0 { return false; }
       if thought != 1 {
-        let tx: crate::entry::Field = crate::entry::string_field(doc, j, "text");
-        match tx {
-          crate::entry::Field::Value(x) => {
-            if len(x) > 50331648 { return false; }
-            if !write_text(inout log, 7, x) { return false; }
+        let tx: i64 = crate::entry::string_id(doc, j, "text");
+        if tx < -1 { return false; }
+        if tx >= 0 {
+          if !write_token(inout log, tag, doc, tx, start) { return false; }
+        } else if !user {
+          let call: i64 = crate::entry::object_field(doc, j, "functionCall");
+          if call < -1 { return false; }
+          if call >= 0 {
+            if !write_event(inout log, Event { kind: 8, a: 0, b: 0 }) { return false; }
           }
-          crate::entry::Field::Missing => {
-            let call: i64 = crate::entry::object_field(doc, j, "functionCall");
-            if call < -1 { return false; }
-            if call >= 0 {
-              if !write_event(inout log, Event { kind: 8, a: 0, b: 0 }) { return false; }
-            }
-          }
-          crate::entry::Field::Defect(e) => { return false; }
         }
       }
     }
@@ -294,87 +272,86 @@ fn record_answers(doc: crate::json::JsonDocument, c: i64, inout log: Events) -> 
   return true;
 }
 
-// hand iso(timestamp): the 24 formatted bytes go straight into the log (no str of their own).
-fn write_stamp(doc: crate::json::JsonDocument, inout log: Events) -> bool ! alloc
-  requires utf8_valid(log.text)
-  ensures utf8_valid(log.text)
+// hand take_parts: message.parts when it is an array, else no parts.
+fn record_message(doc: crate::json::JsonDocument, user: bool, start: i64, inout log: [i64]) -> bool ! alloc
+  requires 0 <= start && start <= 8388608
+{
+  let root: i64 = crate::access::root(doc);
+  let msg: i64 = crate::entry::object_field(doc, root, "message");
+  if msg == -1 { return true; }
+  if msg < 0 { return false; }
+  let c: i64 = crate::access::field(doc, msg, "parts");
+  if c == -1 || c == -2 { return true; }
+  if c < 0 { return false; }
+  let k: i64 = crate::access::kind(doc, c);
+  if k < 0 { return false; }
+  if k != 5 { return true; }
+  return record_parts(doc, c, user, start, inout log);
+}
+
+// hand object.remove("timestamp"): the raw token, formatted by iso in replay.
+fn write_stamp(doc: crate::json::JsonDocument, kind: i64, start: i64, inout log: [i64]) -> bool ! alloc
+  requires 0 <= start && start <= 8388608
 {
   let root: i64 = crate::access::root(doc);
   let tf: i64 = crate::access::field(doc, root, "timestamp");
-  if tf == -1 { return true; }
+  if tf == -1 { return write_event(inout log, Event { kind: kind, a: -1, b: -1 }); }
   if tf < 0 { return false; }
-  let iso: crate::time::Iso = crate::time::iso_of(doc, tf);
-  if iso.status < 0 { return false; }
-  if iso.status != 0 { return true; }
-  let start: i64 = len(log.text);
-  let n: i64 = len(iso.text);
-  if n > 4294967295 - start { return false; }
-  arr_append(inout log.text, iso.text, 0, n);
-  return write_event(inout log, Event { kind: 4, a: start, b: n });
+  return write_token(inout log, kind, doc, tf, start);
 }
 
-// hand: the Action arms of window_import's replay, recorded per entry. A real user records its prompt and
-// timestamp when the prompt is not blank; an assistant records its timestamp, model and visible parts.
-fn record_entry(doc: crate::json::JsonDocument, role: i64, inout log: Events) -> bool ! alloc
-  requires crate::json::doc_strings(doc)
-  requires utf8_valid(log.text)
-  ensures utf8_valid(log.text)
+// hand Entry::new's Action: a real user keeps its parts and timestamp; an assistant its timestamp, model and parts.
+fn record_entry(doc: crate::json::JsonDocument, role: i64, start: i64, inout log: [i64]) -> bool ! alloc
+  requires 0 <= start && start <= 8388608
 {
   let root: i64 = crate::access::root(doc);
   match role {
     1 => {
-      let h: crate::entry::Field = crate::entry::user_text(doc);
-      match h {
-        crate::entry::Field::Value(p) => {
-          if len(p) > 50331648 { return false; }
-          if !write_stamp(doc, inout log) { return false; }
-          return write_text(inout log, 5, p);
-        }
-        crate::entry::Field::Missing => { return true; }
-        crate::entry::Field::Defect(e) => { return false; }
-      }
+      if !record_message(doc, true, start, inout log) { return false; }
+      return write_stamp(doc, 3, start, inout log);
     }
     2 => {
-      if !write_stamp(doc, inout log) { return false; }
-      let mf: crate::entry::Field = crate::entry::string_field(doc, root, "model");
-      match mf {
-        crate::entry::Field::Value(m) => {
-          if len(m) > 0 {
-            if !write_text(inout log, 6, m) { return false; }
-          }
-        }
-        crate::entry::Field::Missing => {}
-        crate::entry::Field::Defect(e) => { return false; }
+      // hand take_string(model): a string token; the empty one is dropped in replay (model before the stamp, as
+      // the hand updates the model before it tests collector.attached and formats the stamp)
+      let mf: i64 = crate::entry::string_id(doc, root, "model");
+      if mf < -1 { return false; }
+      if mf >= 0 {
+        if !write_token(inout log, 6, doc, mf, start) { return false; }
       }
-      let msg: i64 = crate::entry::object_field(doc, root, "message");
-      if msg == -1 { return true; }
-      if msg < 0 { return false; }
-      let c: i64 = crate::access::field(doc, msg, "parts");
-      if c == -1 || c == -2 { return true; }
-      if c < 0 { return false; }
-      let k: i64 = crate::access::kind(doc, c);
-      if k < 0 { return false; }
-      if k != 5 { return true; }
-      return record_answers(doc, c, inout log);
+      if !write_stamp(doc, 4, start, inout log) { return false; }
+      return record_message(doc, false, start, inout log);
     }
     _ => { return role >= 0; }
   }
 }
 
-fn record_object(doc: crate::json::JsonDocument, role: i64, ordinal: i64, start: i64, inout log: Events) -> bool ! alloc
-  requires crate::json::doc_strings(doc)
-  requires utf8_valid(log.text)
-  ensures utf8_valid(log.text)
+fn record_object(doc: crate::json::JsonDocument, role: i64, ordinal: i64, start: i64, inout log: [i64]) -> bool ! alloc
+  requires 0 <= start && start <= 8388608
 {
   if !write_event(inout log, Event { kind: 0, a: ordinal, b: start }) { return false; }
-  if record_entry(doc, role, inout log) { return true; }
+  if record_entry(doc, role, start, inout log) { return true; }
   return write_event(inout log, Event { kind: 9, a: 0, b: 0 });
+}
+
+// hand iso(timestamp) over the raw token data[a..b]; a < 0 is a missing field (hand Value::Null).
+fn stamp(data: [u8], a: i64, b: i64) -> crate::time::Iso ! alloc
+  requires len(data) <= 8388608
+  ensures utf8_valid(result.text)
+  ensures result.status == 0 ==> len(result.text) == 24
+{
+  if a < 0 || a > b || b > len(data) {
+    let e: [u8] = alloc(0, 0);
+    let mut status: i64 = 1;
+    if a >= 0 { status = -4; }
+    return crate::time::Iso { status: status, text: move e };
+  }
+  return crate::time::iso_raw(data, a, b);
 }
 
 struct Replay { model: str, defect: i64 }
 
-fn replay(log: Events, chain: crate::chain::Chain, selected: [u8], inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> Replay ! alloc
-  requires len(log.records) <= 4294967295 && utf8_valid(log.text)
+fn replay(data: [u8], log: [i64], chain: crate::chain::Chain, selected: [u8], inout st: [i64], inout sl: [i64], inout bk: crate::turns::Store) -> Replay ! alloc
+  requires len(log) <= 4294967295 && len(data) <= 8388608
   requires len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && st[0] == 0 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
   requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
   requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
@@ -389,19 +366,23 @@ fn replay(log: Events, chain: crate::chain::Chain, selected: [u8], inout st: [i6
   let mut started: bool = false;
   let mut pending: bool = false;
   let mut model: str = "";
-  // hand at: Option<&str>: the stamp stays a span of log.text (at_n is 0 or 24) and is lent to begin2/answer2
-  let mut at_lo: i64 = 0;
+  // hand prompt (the join of a selected user's parts) and the decoded text of one answer part
+  let mut prompt: [u8] = alloc(0, 0);
+  let mut parts: i64 = 0;
+  let mut piece: [u8] = alloc(0, 0);
+  // hand at = iso(timestamp) of an attached assistant: at_n is 24 when at.text holds the stamp, else 0
+  let none: [u8] = alloc(0, 0);
+  let mut at: crate::time::Iso = crate::time::Iso { status: 1, text: move none };
   let mut at_n: i64 = 0;
-  while pos + 3 <= len(log.records)
-    invariant 0 <= pos && pos <= len(log.records) && len(log.records) <= 4294967295 && 0 <= start
-    invariant (at_n == 0 || at_n == 24) && 0 <= at_lo && at_lo + at_n <= len(log.text)
-    invariant at_n == 0 || ((log.text[at_lo] < 128 || log.text[at_lo] >= 192) && (at_lo + at_n == len(log.text) || log.text[at_lo + at_n] < 128 || log.text[at_lo + at_n] >= 192))
+  while pos + 3 <= len(log)
+    invariant 0 <= pos && pos <= len(log) && len(log) <= 4294967295 && 0 <= start && 0 <= parts && parts <= pos
+    invariant utf8_valid(prompt) && utf8_valid(piece) && utf8_valid(at.text) && (at_n == 0 || (at_n == 24 && len(at.text) == 24))
     invariant len(st) == 4 && len(sl) == 1600 && len(bk.off) == 200 && len(bk.stamp) == 9600 && 0 <= bk.end && bk.end <= len(bk.data) && 0 <= st[0] && st[0] <= pos && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1)
     invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
     invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
-    decreases len(log.records) - pos
+    decreases len(log) - pos
   {
-    let event: Event = read_event(log.records, pos);
+    let event: Event = read_event(log, pos);
     match event.kind {
       0 => {
         if event.a < 0 || event.a >= len(selected) || event.b < 0 { return Replay { model: move model, defect: 0 }; }
@@ -424,33 +405,57 @@ fn replay(log: Events, chain: crate::chain::Chain, selected: [u8], inout st: [i6
       8 => {
         if chosen && st[1] == 1 { crate::turns::tool(inout st, inout sl, 1); }
       }
+      3 => {
+        // hand: the joined prompt starts a turn when it is not blank, with iso(timestamp)
+        if chosen {
+          if len(prompt) > 100000000 { return Replay { model: move model, defect: start }; }
+          if !crate::text::is_blank(subview(prompt, 0, len(prompt))) {
+            let created: crate::time::Iso = stamp(data, event.a, event.b);
+            if created.status < 0 { return Replay { model: move model, defect: start }; }
+            let mut cn: i64 = 0;
+            if created.status == 0 { cn = 24; }
+            crate::turns::begin2(inout st, inout sl, inout bk, subview(prompt, 0, len(prompt)), subview(created.text, 0, cn));
+          }
+        }
+        prompt = truncate(prompt, 0);
+        parts = 0;
+      }
+      4 => {
+        // hand: if collector.attached { let at = iso(timestamp); .. }
+        if chosen && st[1] == 1 {
+          at = stamp(data, event.a, event.b);
+          if at.status < 0 { return Replay { model: move model, defect: start }; }
+          at_n = 0;
+          if at.status == 0 { at_n = 24; }
+        }
+      }
       _ => {
-        // hand: answer text and its stamp are read only for an attached turn (collector.attached)
+        // hand: the model and the prompt parts of a selected entry; answer parts only for an attached turn
         if chosen && (event.kind != 7 || st[1] == 1) {
-          if event.a < 0 || event.b < 0 || event.a > len(log.text) || event.b > len(log.text) - event.a {
+          if event.a < 0 || event.a > event.b || event.b > len(data) {
             return Replay { model: move model, defect: 0 };
           }
-          let lo: i64 = event.a;
-          let hi: i64 = event.a + event.b;
           match event.kind {
-            4 => {
-              if event.b != 24 { return Replay { model: move model, defect: start }; }
-              if !char_edge(log.text, lo) || !char_edge(log.text, hi) { return Replay { model: move model, defect: 0 }; }
-              at_lo = lo;
-              at_n = 24;
+            5 => {
+              // hand join("\n\n") over the parts' text
+              if len(prompt) > 50331646 { return Replay { model: move model, defect: start }; }
+              if parts > 0 { arr_append(inout prompt, "\n\n", 0, 2); }
+              crate::jstr::decode_append(inout prompt, data, event.a, event.b, false);
+              parts = parts + 1;
             }
-            // hand: the reply model is an owned String
-            6 => { model = read_text(log.text, event.a, event.b); }
-            _ => {
-              if event.b > 50331648 { return Replay { model: move model, defect: start }; }
-              if !char_edge(log.text, lo) || !char_edge(log.text, hi) { return Replay { model: move model, defect: 0 }; }
-              // hand begin(prompt, at) / answer(text, at) borrow the entry's strings: lent views of log.text
-              if event.kind == 5 {
-                crate::turns::begin2(inout st, inout sl, inout bk, subview(log.text, lo, hi), subview(log.text, at_lo, at_lo + at_n));
-              } else {
-                crate::turns::answer2(inout st, inout sl, inout bk, subview(log.text, lo, hi), subview(log.text, at_lo, at_lo + at_n));
-              }
+            // hand: the reply model is an owned String (take_string drops the empty one)
+            6 => {
+              let mut m: [u8] = alloc(0, 0);
+              crate::jstr::decode_append(inout m, data, event.a, event.b, false);
+              if len(m) > 0 { model = str_from_utf8(m); }
             }
+            7 => {
+              // hand answer(text, at) borrows the part's text: its decode, lent as str
+              piece = truncate(piece, 0);
+              crate::jstr::decode_append(inout piece, data, event.a, event.b, false);
+              crate::turns::answer2(inout st, inout sl, inout bk, subview(piece, 0, len(piece)), subview(at.text, 0, at_n));
+            }
+            _ => {}
           }
         }
       }
@@ -467,10 +472,9 @@ fn wfail_zero() -> [u8] ! alloc
 
 // hand Entry::new's title and the replay actions of one parsed object (split out of window_wire's loop so
 // doc_strings(d) is proved in a small context). Found or NoTitle when recorded; Defect when the line fails.
-fn window_object(d: crate::json::JsonDocument, role: i64, ordinal: i64, start: i64, inout log: Events) -> crate::entry::Title ! alloc
+fn window_object(d: crate::json::JsonDocument, role: i64, ordinal: i64, start: i64, inout log: [i64]) -> crate::entry::Title ! alloc
   requires crate::json::doc_strings(d)
-  requires utf8_valid(log.text)
-  ensures utf8_valid(log.text)
+  requires 0 <= start && start <= 8388608
   ensures is_variant(result, crate::entry::Title::Found) ==> len(variant_field(result, crate::entry::Title::Found, text)) <= 50331648
 {
   if role != 4 {
@@ -497,9 +501,7 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
     return crate::boundary::wire_fail(crate::boundary::code_input_too_large(), 0);
   }
   let mut index: crate::chain::Index = crate::chain::new_index();
-  let records: [i64] = alloc(0, 0);
-  let text: [u8] = alloc(0, 0);
-  let mut log: Events = Events { records: move records, text: move text };
+  let mut log: [i64] = alloc(0, 0);
   let mut title: str = "";
   let mut ordinal: i64 = 0;
   let mut offset: i64 = crate::framing::skip_first(data, cut_before);
@@ -508,7 +510,6 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
     invariant 0 <= offset && offset <= len(data) && len(data) <= 8388608
     invariant len(index.arena) <= 8388608 && len(index.slots) <= 50331655
     invariant len(title) <= 50331648
-    invariant utf8_valid(log.text)
     decreases len(data) - offset
   {
     let step: crate::framing::Frame = crate::framing::window_next(data, offset);
@@ -550,8 +551,8 @@ pub fn window_wire(data: [u8], cut_before: bool) -> [u8] ! alloc
   let mut st: [i64] = crate::turns::new_state();
   let mut sl: [i64] = crate::turns::new_slots();
   let mut bk: crate::turns::Store = crate::turns::new_store();
-  if len(log.records) > 4294967295 { return wfail_zero(); }
-  let result: Replay = replay(log, chain, selected, inout st, inout sl, inout bk);
+  if len(log) > 4294967295 { return wfail_zero(); }
+  let result: Replay = replay(data, log, chain, selected, inout st, inout sl, inout bk);
   if result.defect >= 0 {
     return crate::boundary::wire_fail(crate::boundary::code_internal_invariant(), result.defect);
   }
