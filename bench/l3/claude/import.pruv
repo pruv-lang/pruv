@@ -453,6 +453,53 @@ fn consume_entry(doc: crate::json::JsonDocument, ty: i64, inout col: crate::turn
   return Effect::Done(model_id);
 }
 
+// One parsed window line (4.4n): the title candidate, then the entry and the model. Split out of read_window so
+// its loop does not carry these obligations (the solver gave up on the doc_strings precondition there). Returns
+// the candidate for read_window to keep; Defect(0) = the caller reports the line as malformed (fail_at(start, end, 0)).
+fn window_object(d: crate::json::JsonDocument, best_rank: i64, inout model: [u8], inout col: crate::turns::Collector) -> crate::entry::Title ! alloc
+  requires crate::json::doc_strings(d)
+  requires 0 <= best_rank && best_rank <= 3
+  requires crate::turns::ok(col) && col.begun < 1000000000000
+  ensures is_variant(result, crate::entry::Title::Ranked) ==> (1 <= variant_field(result, crate::entry::Title::Ranked, rank) && variant_field(result, crate::entry::Title::Ranked, rank) <= 3)
+  ensures crate::turns::ok(col)
+  ensures old(col).begun <= col.begun && col.begun <= old(col).begun + 1
+{
+  let ty: i64 = crate::entry::string_id(d, 0, "type");
+  let candidate: crate::entry::Title = crate::entry::title_for_type(d, ty, best_rank);
+  match candidate {
+    crate::entry::Title::Ranked(rank, cand) => {
+      if rank < 1 || rank > 3 || len(cand) > 50331648 { return crate::entry::Title::Defect(0); }
+      let eff: Effect = consume_entry(d, ty, inout col);
+      if !window_model(d, eff, inout model) { return crate::entry::Title::Defect(0); }
+      return crate::entry::Title::Ranked(rank, move cand);
+    }
+    crate::entry::Title::NoTitle => {
+      let eff: Effect = consume_entry(d, ty, inout col);
+      if !window_model(d, eff, inout model) { return crate::entry::Title::Defect(0); }
+      return crate::entry::Title::NoTitle;
+    }
+    crate::entry::Title::Defect(kind) => { return crate::entry::Title::Defect(0); }
+  }
+}
+
+// The model of an entry (hand `st.model.clear(); st.model.extend_from_slice(m.as_bytes())`, 4.4c-MB, 4.4g-MC).
+// false = malformed line.
+fn window_model(d: crate::json::JsonDocument, eff: Effect, inout model: [u8]) -> bool ! alloc
+{
+  match eff {
+    Effect::Done(model_id) => {
+      if model_id >= 0 {
+        model = truncate(model, 0);
+        let mc: i64 = crate::access::string_append(d, model_id, inout model);
+        if mc < 0 { return false; }
+        if len(model) > 50331648 { return false; }
+      }
+    }
+    Effect::Defect(kind) => { return false; }
+  }
+  return true;
+}
+
 // claude.ts readClaude over at most 8388608 bytes of the file end; cut_before: the window starts after offset 0.
 // The first range through its first LF is then discarded; only LF-terminated lines are processed (a short
 // unterminated tail is ignored); a line over 1048576 raw bytes is never parsed: one Dropped event, and when its
@@ -482,29 +529,14 @@ pub fn read_window(data: [u8], cut_before: bool) -> [i64] ! alloc
         let line: crate::entry::Line = crate::entry::parse_line(data, start, end);
         match line {
           crate::entry::Line::Object(d) => {
-            let ty: i64 = crate::entry::string_id(d, 0, "type");
-            let candidate: crate::entry::Title = crate::entry::title_for_type(d, ty, best_rank);
+            let candidate: crate::entry::Title = window_object(d, best_rank, inout model, inout col);
             match candidate {
               crate::entry::Title::Ranked(rank, cand) => {
-                if rank < 1 || rank > 3 || len(cand) > 50331648 { return fail_at(start, end, 0); }
                 best_rank = rank;
                 best = move cand;
               }
               crate::entry::Title::NoTitle => {}
               crate::entry::Title::Defect(kind) => { return fail_at(start, end, 0); }
-            }
-            let eff: Effect = consume_entry(d, ty, inout col);
-            match eff {
-              Effect::Done(model_id) => {
-                if model_id >= 0 {
-                  // hand `st.model.clear(); st.model.extend_from_slice(m.as_bytes())` (4.4c-MB, 4.4g-MC)
-                  model = truncate(model, 0);
-                  let mc: i64 = crate::access::string_append(d, model_id, inout model);
-                  if mc < 0 { return fail_at(start, end, 0); }
-                  if len(model) > 50331648 { return fail_at(start, end, 0); }
-                }
-              }
-              Effect::Defect(kind) => { return fail_at(start, end, 0); }
             }
           }
           crate::entry::Line::Skip => {}

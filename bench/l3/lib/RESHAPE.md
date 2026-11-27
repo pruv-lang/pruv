@@ -1798,3 +1798,34 @@ All after the last code change (F1 / F4 from the structure comparison).
      `check_tape` accepts, rerun every consumer of `pkgs/parse`; then check that the Claude reply path is `Some`.
   2. 4.4m-TB part one (blank check on the borrowed view, copy only the winner).
   3. 4.4m-SS, then 4.4l-RE / -RS / -CT / -VU, then the Next list after 4.4k.
+
+## Step 4.4n: plain bit on the parse path (4.4m-PB), title blank check on the borrow (4.4m-TB part one)
+
+- Changed: `pkgs/parse` (`record` takes the plain bit from `string_token`; `string_token` ensures
+  `utf8_valid_span` of the token body; the slot-5 facts widened to the form `check_tape` accepts) and
+  `claude/entry` (`title_key` blank-checks `plain_str`'s borrowed view and copies only a nonblank candidate;
+  `pick_title` / `ranked` / `title_of` / `title_for_type` require `json::doc_strings`), `claude/import`
+  (`read_window`'s per-line body split into `window_object` / `window_model`, both `#[inline(always)]`, because the
+  solver gave up on the `doc_strings` precondition inside the loop). Test changes: the
+  `json/run_a2.py` oracle expects the plain bit; `claude/test_a1.py` adds 13 `plain` cases through
+  `a1_root.pruv::plain_w`. No compiler change. Details, the structure table and the consumer tests:
+  `pkgs/RESHAPE.md` §Step 4.4n.
+- `plain_str` is now `Some` for every unescaped string on `parse_line` documents, on both backends (`test_a1`
+  `plain` cases). So the 4.4m consumer side (`answer_blocks`, `consume_entry`) takes the borrowed branch.
+- Not measured (structure not identical: 4.4m-TB part two, 4.4m-SS, 4.4m-FB).
+- Independent structure comparison (Codex `gpt-6.2-astra`, review role, Codex 2 account; the default account was
+  at its limit). It agrees with the table: one pass per string token, and a borrowed blank check with one copy
+  per winning title on both sides. It found two more per-call differences: rows 4.4n-TT and 4.4n-KL.
+
+### Rows after 4.4n
+
+- Closed: 4.4m-PB, 4.4m-TB part one.
+- New: 4.4n-TT (`title_for_type` reads `type` up to three times), 4.4n-KL (each key lookup walks all members).
+- Still open: 4.4m-TB part two (reused title buffer), 4.4m-SS, 4.4m-FB, 4.3h-T, 4.4l-RE, 4.4l-VU, 4.4l-RS,
+  4.4l-CT, 4.4c-MB, and the rows listed after 4.4l and before.
+- Next:
+  1. 4.4m-SS: a "line validated" fact through `record` / `container` / `scan_records` / `scan`, so that
+     `string_token` skips `validate_utf8` under `parse_owned`.
+  2. 4.4n-TT: read `type` once through `plain_str`.
+  3. 4.4m-TB part two (a `str` buffer whose `clear` + append keeps valid UTF-8), then 4.4n-KL (design first),
+     then 4.4l-RE / -RS / -CT / -VU.
