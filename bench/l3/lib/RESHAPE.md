@@ -2552,3 +2552,35 @@ Changes `bench/l3/pkgs/transport`, `codex/rpc.pruv` and a comment in `grok/rpc.p
   required finding (no EOF for the quiet codex child) is fixed above; grok and mcp paths unchanged, `begin` contract
   sufficient. Confirm review (same engine): FIXED, no new required findings.
 - Next: 4.4za-QE and 4.4za-EQ in a language bundle, then drop the stream-2 read for quiet children.
+
+### Rows after L-gaps 15
+
+- Closed LG-4zb-RA (R-6e-24): a `return` inside a `map_get_mut` / `vec_at_mut` `Some` arm is legal. The verifier
+  writes every enclosing arm binder back into its collection, innermost first, before it proves the `ensures`
+  (the Rust `&mut` borrow ends at the `return`). `return move d.f` stays `type/foreign_move`, `break` / `continue`
+  out of the arm stay `type/loop_jump_map` and a `return` inside a map iteration stays `type/foreign_contract`.
+  Rust and LLVM code is unchanged (`get_mut` match, in-place element slot). The old reject test
+  `r6e_4_return_in_arm` is now an accept test. Claude `answer` takes the hand's early return
+  (`if len(text) == 0 || d.used >= 32768 { return; }`), which closes 4.4h-AE.
+- Closed LG14-ST (R-6q-2): `index(x)` in a quantifier `trigger` of a slice-for invariant names the hidden counter,
+  like the rest of the invariant (`for_index_rewrite` now walks triggers; before, it was `type/unknown_fn index`).
+- 4.4y-PW, language half closed (R-6e-3): no compiler change was needed. In a contract `docs[k]` of a `Vec<S>` is
+  the element, so `forall k in 0..len(docs): p(docs[k])` survives `vec_push` and is instantiated at a
+  `vec_get::<S>(docs, k)` call argument (tests `lgaps15_vec_elem_pred`, `_lost`). The bench half (qwen parts walk
+  in replay) is still open. New row LG15-MB: a matched `JsonParse::Parsed(doc)` binder cannot go into the Vec,
+  because `move d` of an owned-aggregate struct binder is `type/foreign_move` ("move of a non-collection value";
+  R-6e-12a moves only array and `str` binders) and a plain binder payload is "an aggregate collection payload needs
+  a constructor, call result or move". The qwen move needs LG15-MB first.
+- Review (one round, Codex) found two required problems, both fixed with tests. (1) A mutable arm opened through
+  a place alias (`let a = inout c; match vec_at_mut(inout a.docs, i)`) wrote its binder back onto the alias's
+  stale value, which reset a sibling field written through `c` inside the arm, so a wrong `ensures` was accepted.
+  The bug was older than the return change and was there at the arm's end too. Now `store_collection_place`
+  rebuilds the path on the alias target's current value (`lgaps15_arm_return_alias`, `_alias_lost`). (2) A
+  quantifier that binds the loop's own name had its `index(x)` renamed too; its body and triggers are now left
+  alone (`lgaps15_for_slice_trigger_shadow`).
+- Checks after the fixes: `cargo test --release` 163 passed; `run_all --only must_reject` 1380/1380; `--only g8_frontend
+  --backend both` 39/39; `spec_trace --only-rs` 2407/2407; runtime `--backend both` tests/spec 384/384;
+  `diff_rust --fuzz-count 20` and `m3_all --quick` match golden (no golden update); `--list-rows` diff (10 new rows,
+  `tests/run_all_rows.txt` updated). Fix-check review: both findings closed, no new required problem. L3 on the final
+  binary: claude a0..a4, json a0..a5, supervisor a0..a3, grok, qwen, mcp, codex and opencode passed.
+- Open: LG15-MB, then the 4.4y-PW bench half; 4.4y-SB; claude 4.4h-VD, 4.4c-IS, 4.4h-ST; 4.4s-FK, 4.4v-RT.

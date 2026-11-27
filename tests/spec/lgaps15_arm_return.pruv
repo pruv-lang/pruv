@@ -1,0 +1,91 @@
+// spec: R-6e-24 accept
+// L-gaps 15 (LG-4zb-RA): a `return` inside the `Some` arm of `vec_at_mut` ends the element borrow (hand Rust
+// `return` inside `if let Some(d) = v.get_mut(i)`): the changes made to the element before the return are written
+// back and the postcondition is proved on that state, also from an arm nested on a disjoint field (R-6e-8).
+struct Draft { reply: [u8], n: i64 }
+struct Coll { drafts: Vec<Draft>, spare: Vec<Draft>, total: i64 }
+
+fn bump(inout c: Coll, i: i64, stop: bool) -> () ! alloc
+  requires 0 <= i && i < len(c.drafts) && len(c.drafts[i].reply) < 1000 && 0 <= c.drafts[i].n && c.drafts[i].n < 1000
+  ensures len(c.drafts) == len(old(c).drafts)
+  ensures c.drafts[i].n == old(c).drafts[i].n + 1
+  ensures stop ==> len(c.drafts[i].reply) == len(old(c).drafts[i].reply)
+  ensures !stop ==> len(c.drafts[i].reply) == len(old(c).drafts[i].reply) + 1
+  ensures forall k in 0..len(c.drafts): k != i ==> c.drafts[k].n == old(c).drafts[k].n
+  ensures forall k in 0..len(c.drafts): k != i ==> len(c.drafts[k].reply) == len(old(c).drafts[k].reply)
+  ensures len(c.spare) == len(old(c).spare) && forall k in 0..len(c.spare): c.spare[k].n == old(c).spare[k].n
+{
+  match vec_at_mut::<Draft>(inout c.drafts, i) {
+    Some(d) => {
+      d.n = d.n + 1;
+      if stop { return; }
+      arr_push(inout d.reply, 33);
+    }
+    None => {}
+  }
+}
+
+fn swap_n(inout c: Coll, i: i64, j: i64) -> i64
+  requires 0 <= i && i < len(c.drafts)
+  ensures len(c.drafts) == len(old(c).drafts) && len(c.spare) == len(old(c).spare)
+  ensures (0 <= j && j < len(old(c).spare)) ==> result == old(c).spare[j].n
+  ensures (0 <= j && j < len(old(c).spare)) ==> c.spare[j].n == old(c).drafts[i].n && c.drafts[i].n == old(c).spare[j].n
+  ensures !(0 <= j && j < len(old(c).spare)) ==> result == 0 - 1 && c.drafts[i].n == old(c).drafts[i].n
+  ensures forall k in 0..len(c.drafts): k != i ==> c.drafts[k].n == old(c).drafts[k].n
+  ensures forall k in 0..len(c.drafts): len(c.drafts[k].reply) == len(old(c).drafts[k].reply)
+  ensures forall k in 0..len(c.spare): k != j ==> c.spare[k].n == old(c).spare[k].n
+{
+  match vec_at_mut::<Draft>(inout c.drafts, i) {
+    Some(d) => {
+      match vec_at_mut::<Draft>(inout c.spare, j) {
+        Some(x) => {
+          let was: i64 = x.n;
+          x.n = d.n;
+          d.n = was;
+          return was;
+        }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  return 0 - 1;
+}
+
+fn digest(inout c: Coll) -> i64
+  requires len(c.drafts) == 2 && len(c.spare) == 1 && 0 <= c.drafts[1].n && c.drafts[1].n <= 9 && 0 <= c.drafts[0].n
+    && c.drafts[0].n <= 9 && 0 <= c.spare[0].n && c.spare[0].n <= 9 && len(c.drafts[1].reply) <= 9
+  ensures 0 <= result && result <= 9999
+{
+  let mut a: i64 = 0;
+  match vec_at_mut::<Draft>(inout c.drafts, 1) {
+    Some(d) => { a = len(d.reply) * 10 + d.n; }
+    None => {}
+  }
+  match vec_at_mut::<Draft>(inout c.drafts, 0) {
+    Some(d) => { a = a + d.n * 100; }
+    None => {}
+  }
+  match vec_at_mut::<Draft>(inout c.spare, 0) {
+    Some(d) => { a = a + d.n * 1000; }
+    None => {}
+  }
+  return a;
+}
+
+pub fn checksum() -> i64 ! alloc {
+  let r: [u8] = alloc(0, 0);
+  let q: [u8] = alloc(1, 7);
+  let s: [u8] = alloc(0, 0);
+  let v0: Vec<Draft> = vec_push::<Draft>(vec_new::<Draft>(), Draft { reply: move r, n: 4 });
+  let w: Vec<Draft> = vec_push::<Draft>(vec_new::<Draft>(), Draft { reply: move s, n: 2 });
+  let mut c: Coll = Coll { drafts: vec_push::<Draft>(move v0, Draft { reply: move q, n: 5 }), spare: move w, total: 0 };
+  bump(inout c, 1, true);
+  bump(inout c, 1, false);
+  bump(inout c, 0, true);
+  assert c.drafts[1].n == 7 && len(c.drafts[1].reply) == 2 && c.drafts[0].n == 5 && len(c.drafts[0].reply) == 0;
+  let a: i64 = swap_n(inout c, 1, 0);
+  let b: i64 = swap_n(inout c, 0, 3);
+  assert a == 2 && b == 0 - 1 && c.spare[0].n == 7 && c.drafts[1].n == 2;
+  return a * 10000 + digest(inout c);
+}

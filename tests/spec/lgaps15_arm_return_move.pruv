@@ -1,0 +1,15 @@
+// spec: R-6e-24 reject
+// L-gaps 15 (LG-4zb-RA): a `return` inside a mutable `Some` arm cannot move a field out of the borrowed element.
+struct Draft { reply: [u8], n: i64 }
+struct Coll { v: Vec<Draft> }
+
+fn steal(inout c: Coll, i: i64) -> [u8] ! alloc
+{
+  match vec_at_mut::<Draft>(inout c.v, i) {
+    Some(d) => {
+      return move d.reply;
+    }
+    None => {}
+  }
+  return alloc(0, 0);
+}

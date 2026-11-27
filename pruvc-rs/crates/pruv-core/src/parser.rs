@@ -230,7 +230,17 @@ fn for_index_rewrite(e: &mut Expr, binder: &str, counter: &str) {
         Expr::Call(c) => c.args.iter_mut().for_each(go),
         Expr::Index(i) => { go(&mut i.array); go(&mut i.index); }
         Expr::Ctor(c) => if let Some(a) = c.arg.as_mut() { go(a) },
-        Expr::Quant(q) => { go(&mut q.lo); go(&mut q.hi); go(&mut q.body); }
+        // L-gaps 15 (LG14-ST): triggers are renamed like the body, so a fact proven through the slice-for
+        // rewrite triggers as in the indexed loop. A quantifier that binds the loop's own name shadows it, so its
+        // body and triggers keep their `index(x)`.
+        Expr::Quant(q) => {
+            go(&mut q.lo);
+            go(&mut q.hi);
+            if q.var != binder {
+                go(&mut q.body);
+                q.triggers.iter_mut().for_each(go);
+            }
+        }
         Expr::StructLit(l) => l.fields.iter_mut().for_each(|f| go(&mut f.value)),
         Expr::EnumCtor(c) => c.args.iter_mut().for_each(go),
         Expr::FieldAccess(f) => go(&mut f.base),

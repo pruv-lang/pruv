@@ -162,27 +162,24 @@ pub fn answer(inout c: Collector, text: str, at: [u8]) -> () ! alloc
         let q: [u8] = move d.completed;
         d.completed = refill(move q, at, 24);
       }
-      // hand returns here for empty text or a full budget; a `return` inside this mutable `Some` arm is
-      // type/foreign_contract (row LG-4zb-RA), so the rest sits in an `if`
-      if len(text) > 0 && d.used < 32768 {
-        let mut sep: i64 = 0;
-        if len(d.reply) > 0 { sep = 2; }
-        let room: i64 = 32768 - d.used;
-        if sep + len(text) <= room {
-          arr_append(inout d.reply, "\n\n", 0, sep);
-          arr_append(inout d.reply, text, 0, len(text));
-          d.used = d.used + sep + len(text);
+      if len(text) == 0 || d.used >= 32768 { return; }
+      let mut sep: i64 = 0;
+      if len(d.reply) > 0 { sep = 2; }
+      let room: i64 = 32768 - d.used;
+      if sep + len(text) <= room {
+        arr_append(inout d.reply, "\n\n", 0, sep);
+        arr_append(inout d.reply, text, 0, len(text));
+        d.used = d.used + sep + len(text);
+      } else {
+        if room <= sep {
+          arr_append(inout d.reply, "\n\n", 0, room);
         } else {
-          if room <= sep {
-            arr_append(inout d.reply, "\n\n", 0, room);
-          } else {
-            let cut: i64 = crate::text::clip_len(text, room - sep);
-            arr_append(inout d.reply, "\n\n", 0, sep);
-            arr_append(inout d.reply, text, 0, cut);
-          }
-          d.used = 32768;
-          d.clipped = true;
+          let cut: i64 = crate::text::clip_len(text, room - sep);
+          arr_append(inout d.reply, "\n\n", 0, sep);
+          arr_append(inout d.reply, text, 0, cut);
         }
+        d.used = 32768;
+        d.clipped = true;
       }
     }
     None => {}

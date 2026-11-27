@@ -1,0 +1,10 @@
+{
+  "gen_contains": ["match m.get_mut(&k) {", "return 1i64;"],
+  "run": {
+    "backends": ["rust"],
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["90100772"],
+    "alloc_balance": true
+  }
+}
