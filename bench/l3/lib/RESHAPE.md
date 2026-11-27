@@ -2699,3 +2699,32 @@ Changes `bench/l3/pkgs/transport`, `codex/rpc.pruv` and a comment in `grok/rpc.p
   rows file and goldens), both fixed; the fix-check review passed.
 - L3 on the final compiler (after the `jstr` fix): 20 runs pass (claude a0-a4, json a0-a5, supervisor a0-a3, grok,
   qwen, mcp, codex, opencode --jobs 2). Not measured.
+
+### Rows after L-gaps 18
+
+| Row | Kind | Change | Tests |
+|---|---|---|---|
+| 4.4zc-WL | language gap, closed | No new builtin: `load_le`/`load_be(a, i, n)` already read an unaligned word (`from_le_bytes`, LLVM `load i64 align 1`). The gap was the verifier: a loaded word was an opaque `Int`, so a mask test on it could not reach the bytes. The verifier now keeps a 64-bit pattern for each loaded word (fresh bytes linked to `a[i + k]`) and for the results of `band`/`bor`/`bxor`/`wrapping_shl`/`ushr`/`wrapping_add`/`wrapping_mul` and `& \| ^ << >>` on such words, so `band(bor(w0, w1), 0x8080..80) == 0 ==> forall j in 0..16: a[i + j] < 128` is proved. Contracts and code are unchanged. `pkgs/lex` `ascii_block` is now std's `(block \| block2) & NONASCII_MASK == 0` | `tests/runtime/lgaps18_word_mask` (both backends); must_reject `lgaps18_word_mask_past` (claim past the loaded bytes), `_partial` (mask of 7 bytes claims 8), `_stale` (claim after the array changed) |
+| LGAPS16-WB | test, closed | `tests/spec/r6g8_4_binder_whole.pruv` had no `// spec:` header, so spec_trace never ran it, and the current compiler accepts it. Rewritten: a field move `move d.tape` then the whole move `move d` of the binder; pins `type/foreign_move` at 16:20 | spec_trace |
+| LGAPS16-SW | SPEC wording, closed | R-6e-12b: a struct with a `str` field is not an owned aggregate, so `move d` of its binder is `type/foreign_move` even when another field is an array | must_reject `lgaps18_binder_record_str` |
+| LGAPS16-HN | test hygiene, closed | `tests/runtime/g10p_r24_env_quiet.pruv` reused `r` (`abort_with` result, then `ev_close`); the first is `r_abort` | runtime |
+| LGAPS16-DC | left | the review's dead-code-after-`return` location was not kept (`work/lgaps16` notes list only the fixes); the llvmgen aggregate move path, the check.rs record binder path and foreign.rs move arms have none | — |
+| G-DB33-1/2 (4.4l-CT) | left | time cap | — |
+
+4.4zc-PA (pointer alignment) stays open: no byte-array address.
+
+- Checks on the final compiler: `cargo test --release` 163 passed; `--only must_reject` 1396/1396; `--only
+  g8_frontend --backend both` 39/39; spec_trace 2415/2415 (now runs `r6g8_4_binder_whole`); `--only runtime
+  --backend both` 3593/3593; `diff_rust --fuzz-count 20` and `m3_all --quick` ok after the intended golden update
+  (new lgaps18 keys; mutate samples shifted by the four new must_reject files; `g10p_r24_env_quiet` rename; trace text
+  of `p2_rt_wrap`, `p2_rt_kernels`, `lg7_rt_bitops` from the bit patterns); `--list-rows` diff (10 new rows,
+  `tests/run_all_rows.txt` updated).
+- Review: one Codex review found no soundness defect in the bit patterns and three required items (the spec header
+  `R-6e-12b` did not match the spec_trace rule pattern, so the test was still skipped; the SPEC said every `<<`/`>>`
+  keeps a pattern, but a literal count is a product or quotient; the R-6e-12b sentence missed the R-6e-20 element
+  exception). All fixed; the fix-check review confirmed the first two and narrowed the third to the element type
+  `S` of a `Vec<S>` in its own recursion group, which the SPEC now says.
+- L3 on the final compiler: 20 runs pass on rs/rust and rs/llvm: claude a0-a4 (272 / 2897 / 2443 / 134 / 270),
+  json a0-a5 (37 / 351 / 114 / 454 / 6344 / 83), supervisor a0-a3 (522 / 410 / 78 / 35), grok 254, qwen 27, mcp 22,
+  codex 136, opencode `--jobs 2` 199.
+- Not measured (4.4l-VU still differs on alignment, 4.4zc-PA).

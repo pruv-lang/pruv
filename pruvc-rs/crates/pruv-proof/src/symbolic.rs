@@ -1081,6 +1081,11 @@ pub struct FnVerifier<'a> {
     /// function on arrays whose elements hold `subview` lambdas over a parameter, which ends in `incomplete (theory
     /// array)` or the timeout instead of a counterexample.
     view_term_sums: HashMap<u32, (Ast, FuncDecl)>,
+    /// L-gaps 18 (4.4zc-WL): Int term id of a `load_le`/`load_be` or bit builtin result in code -> (the term, kept
+    /// alive so its id is not reused; its 64-bit pattern as a bit-vector; the facts that tie fresh byte bit-vectors to
+    /// the loaded array elements). A bit builtin takes the pattern of such an operand directly, so a mask test over
+    /// loaded words stays in bit-vectors instead of an Int2BV of a BV2Int (which the solver gives up on).
+    bv_shadow: HashMap<u32, (Ast, Ast, Vec<Ast>)>,
     /// `s.aggs`: (kind, Tc.sexpr(), len(outer)) → F. Insertion order preserved (`len(aggs)` goes into the F name).
     pub(crate) aggs: Vec<((String, String, usize), FuncDecl)>,
     /// LG4 `s.agg_shapes`: (kind, F, body, shape, arity) for the aggregate frame lemma.
@@ -1630,6 +1635,7 @@ impl<'a> FnVerifier<'a> {
             opq_fns: HashMap::new(),
             view_sums: HashMap::new(),
             view_term_sums: HashMap::new(),
+            bv_shadow: HashMap::new(),
             aggs: Vec::new(),
             agg_shapes: Vec::new(),
             lemmas: Vec::new(),
@@ -2380,6 +2386,20 @@ impl<'a> FnVerifier<'a> {
 
     // ---------- ev pieces (for the prototype) ----------
     /// `assume(st, g, fact)` (line 340).
+    /// L-gaps 18 (4.4zc-WL): the 64-bit pattern of a bit builtin operand: its recorded pattern (a loaded word or a bit
+    /// builtin result, assuming the byte facts of a loaded word) in code, else `Int2BV(v, 64)`.
+    fn bit_operand(&self, v: &Ast, st: &mut State, g: &[Ast], code: bool) -> Ast {
+        match self.bv_shadow.get(&v.id()) {
+            Some((_, pat, links)) if code => {
+                for l in links {
+                    self.assume(st, g, l.clone());
+                }
+                pat.clone()
+            }
+            _ => v.int2bv(64),
+        }
+    }
+
     pub fn assume(&self, st: &mut State, g: &[Ast], fact: Ast) {
         if g.is_empty() {
             st.pc.push(fact);
@@ -3047,8 +3067,9 @@ impl<'a> FnVerifier<'a> {
                         }
                         return Ok(Val::Int(value));
                     }
-                    let a = l.int2bv(64);
-                    let k = r.int2bv(64);
+                    // L-gaps 18 (4.4zc-WL): an operand that is a loaded word or a bit result keeps its pattern.
+                    let a = self.bit_operand(&l, st, g, code);
+                    let k = self.bit_operand(&r, st, g, code);
                     let word = match op {
                         "&" => a.bvand(&k),
                         "|" => a.bvor(&k),
@@ -3065,6 +3086,9 @@ impl<'a> FnVerifier<'a> {
                         &u.raw_lt(&self.z.int_str("9223372036854775808")),
                         &u, &u.sub(&self.z.int_str("18446744073709551616")),
                     );
+                    if code && !self.bv_shadow.contains_key(&value.id()) {
+                        self.bv_shadow.insert(value.id(), (value.clone(), word.clone(), Vec::new()));
+                    }
                     if code {
                         self.assume(st, g, in_range(&self.z, &value));
                         let nonnegative = self.z.and(&[value.ge_i(0), value.le(&l)]);
@@ -3747,6 +3771,24 @@ impl<'a> FnVerifier<'a> {
                 } else {
                     u
                 };
+                if code && !self.bv_shadow.contains_key(&r.id()) {
+                    // L-gaps 18 (4.4zc-WL): the word as fresh byte bit-vectors b_k with a[i+k] == BV2Int(b_k) (the
+                    // elements are bytes); the facts are assumed only where a bit builtin uses this word.
+                    let bv8 = self.z.bv_sort(8);
+                    let id = self.bv_shadow.len();
+                    let bytes: Vec<Ast> = (0..nb).map(|k| self.z.constant(&format!("wb!{}!{}", id, k), &bv8)).collect();
+                    let links: Vec<Ast> =
+                        (0..nb).map(|k| av.a.select(&i.add_i(k)).raw_eq(&bytes[k as usize].bv2int(false))).collect();
+                    let mut pat = bytes[offset(0) as usize].clone();
+                    for k in 1..nb {
+                        pat = pat.concat(&bytes[offset(k) as usize]);
+                    }
+                    if nb < 8 {
+                        let zero = self.z.int(0).int2bv((64 - 8 * nb) as u32);
+                        pat = zero.concat(&pat);
+                    }
+                    self.bv_shadow.insert(r.id(), (r.clone(), pat, links));
+                }
                 return Ok(Val::Int(r));
             }
             "store_be" | "store_le" => {
@@ -3787,8 +3829,9 @@ impl<'a> FnVerifier<'a> {
                 // P2: exact 64-bit two's-complement result as a signed Int (Python BIT_Z3)
                 let x0 = arg(0)?.try_ast()?.clone();
                 let y0 = arg(1)?.try_ast()?.clone();
-                let bx = x0.int2bv(64);
-                let by = y0.int2bv(64);
+                // L-gaps 18 (4.4zc-WL): an operand that is a loaded word or a bit builtin result keeps its pattern.
+                let bx = self.bit_operand(&x0, st, g, code);
+                let by = self.bit_operand(&y0, st, g, code);
                 let u = match n {
                     "band" => bx.bvand(&by),
                     "bor" => bx.bvor(&by),
@@ -3798,12 +3841,17 @@ impl<'a> FnVerifier<'a> {
                     "wrapping_mul" => bx.bvmul(&by),
                     _ => bx.bvxor(&by),
                 }
-                .bv2int(false);
+                ;
+                let ubv = u.clone();
+                let u = u.bv2int(false);
                 let r = self.z.ite(
                     &u.raw_lt(&self.z.int_str("9223372036854775808")),
                     &u,
                     &u.sub(&self.z.int_str("18446744073709551616")),
                 );
+                if code && !self.bv_shadow.contains_key(&r.id()) {
+                    self.bv_shadow.insert(r.id(), (r.clone(), ubv, Vec::new()));
+                }
                 if code && (n == "wrapping_shl" || n == "ushr") {
                     // shift count must be in 0..64
                     let ob = self.z.and(&[y0.ge_i(0), y0.lt_i(64)]);

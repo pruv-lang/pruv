@@ -1,0 +1,17 @@
+// L-gaps 18 (4.4zc-WL): a loaded word keeps the bytes it read; a later write to the array is not in it
+fn stale(a: [u8]) -> bool ! alloc
+  requires len(a) == 8
+{
+  let mut b: [u8] = copy(a);
+  let w: i64 = load_le(b, 0, 8);
+  b[0] = 200;
+  if band(w, -9187201950435737472) == 0 {
+    assert b[0] < 128;
+  }
+  return true;
+}
+
+pub fn run(n: i64) -> i64
+{
+  return n;
+}

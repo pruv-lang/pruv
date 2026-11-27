@@ -1255,6 +1255,10 @@ must_reject|tests/must_reject/lgaps16_binder_record_outer_arm.pruv	1 case: obl=0
 must_reject|tests/must_reject/lgaps16_binder_record_twice.pruv	1 case: obl=0 1	--infer=0757ee742672
 must_reject|tests/must_reject/lgaps17_subspan_after_lead.pruv	1 case: obl=2 1	--infer=1148f91abb45
 must_reject|tests/must_reject/lgaps17_subspan_cut_end.pruv	1 case: obl=2 1	--infer=ff5fde51f698
+must_reject|tests/must_reject/lgaps18_binder_record_str.pruv	1 case: obl=0 1	--infer=f5b59d8920aa
+must_reject|tests/must_reject/lgaps18_word_mask_partial.pruv	1 case: obl=3 1	--infer=161a6c4d6e3e
+must_reject|tests/must_reject/lgaps18_word_mask_past.pruv	1 case: obl=3 1	--infer=a52890ee50c3
+must_reject|tests/must_reject/lgaps18_word_mask_stale.pruv	1 case: obl=5 1	--infer=58c44f7d71db
 must_reject|tests/must_reject/lgaps9_into_bytes_borrowed.pruv	1 case: obl=0 1	--infer=babc264f3f43
 must_reject|tests/must_reject/lgaps9_into_bytes_len.pruv	1 case: obl=1 1	--infer=342d6c1e081c
 must_reject|tests/must_reject/lgaps9_into_bytes_use_after.pruv	1 case: obl=0 1	--infer=7c8a2a64df1d
@@ -1753,7 +1757,7 @@ runtime|tests/runtime/g10p_r20_hook_setup_late.pruv	1 case: obl=6 1	--infer=6c9f
 runtime|tests/runtime/g10p_r21_copy_contract.pruv	1 case: obl=38 1	--infer=660833ba4155
 runtime|tests/runtime/g10p_r22_env.pruv	1 case: obl=59 1	--infer=6775fb4b0408
 runtime|tests/runtime/g10p_r23_quiet.pruv	1 case: obl=68 1	--infer=381ceba627c8
-runtime|tests/runtime/g10p_r24_env_quiet.pruv	1 case: obl=121 1	--infer=790e007d8f12
+runtime|tests/runtime/g10p_r24_env_quiet.pruv	1 case: obl=121 1	--infer=64ed30f5d3ec
 runtime|tests/runtime/g1_r01_copy.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 runtime|tests/runtime/g1_r02_nested.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 runtime|tests/runtime/g1_r03_variants.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
@@ -2010,7 +2014,7 @@ runtime|tests/runtime/lg5_rt_scalar_inout.pruv	1 case: obl=7 1	--infer=bc1f2dadc
 runtime|tests/runtime/lg5_rt_struct_len_frame.pruv	1 case: obl=37 1	--infer=309cf4de77db
 runtime|tests/runtime/lg6_rt_field_inout.pruv	1 case: obl=17 1	--infer=874ad3f8c3f9
 runtime|tests/runtime/lg6_rt_view.pruv	1 case: obl=53 1	--infer=8e3f0277d8b7
-runtime|tests/runtime/lg7_rt_bitops.pruv	1 case: obl=14 1	--infer=9b3be93b2cf4
+runtime|tests/runtime/lg7_rt_bitops.pruv	1 case: obl=14 1	--infer=308c5ca28c3e
 runtime|tests/runtime/lg7_rt_field_gep.pruv	1 case: obl=47 1	--infer=d3496cf26dd3
 runtime|tests/runtime/lg7_rt_read_into.pruv	1 case: obl=786 1	--infer=ae858f528810
 runtime|tests/runtime/lg8_rt_copy_subview.pruv	1 case: obl=24 1	--infer=db988ac8d074
@@ -2037,6 +2041,7 @@ runtime|tests/runtime/lgaps13_vec_tape.pruv	1 case: obl=55 1	--infer=0e59b79918a
 runtime|tests/runtime/lgaps16_rt_binder_record.pruv	1 case: obl=60 1	--infer=9f3bfc498413
 runtime|tests/runtime/lgaps16_rt_binder_scalar.pruv	1 case: obl=1 1	--infer=607c313105ae
 runtime|tests/runtime/lgaps17_utf8_subspan.pruv	1 case: obl=89 1	--infer=653c385d272c
+runtime|tests/runtime/lgaps18_word_mask.pruv	1 case: obl=78 1	--infer=58bde64c3196
 runtime|tests/runtime/lgaps9_str_bytes.pruv	1 case: obl=25 1	--infer=67352951afef
 runtime|tests/runtime/p1_r_bounds.pruv	1 case: obl=9 1	--infer=55e5c046f31d
 runtime|tests/runtime/p1_r_cast_fail.pruv	1 case: obl=1 1	--infer=d6a4ee3a0a38
@@ -2048,11 +2053,11 @@ runtime|tests/runtime/p2_r_u16_paths.pruv	1 case: obl=26 1	--infer=2ddade2318a5
 runtime|tests/runtime/p2_r_u16_push_oor.pruv	1 case: obl=5 1	--infer=954f2960cd5b
 runtime|tests/runtime/p2_rt_bits.pruv	1 case: obl=16 1	--infer=b3bdea7ca77d
 runtime|tests/runtime/p2_rt_contract_guard.pruv	1 case: obl=1 1	--infer=0ee76cd2ff0e
-runtime|tests/runtime/p2_rt_kernels.pruv	1 case: obl=288 1	--infer=bce7c4505994
+runtime|tests/runtime/p2_rt_kernels.pruv	1 case: obl=288 1	--infer=78af47c14227
 runtime|tests/runtime/p2_rt_shift_guard.pruv	1 case: obl=1 1	--infer=f4ac37ce5fc5
 runtime|tests/runtime/p2_rt_shifts.pruv	1 case: obl=50 1	--infer=2db2d01c974d
 runtime|tests/runtime/p2_rt_words.pruv	1 case: obl=115 1	--infer=7fd6674e4b32
-runtime|tests/runtime/p2_rt_wrap.pruv	1 case: obl=20 1	--infer=4d29244f561e
+runtime|tests/runtime/p2_rt_wrap.pruv	1 case: obl=20 1	--infer=d5503b04f4f7
 runtime|tests/runtime/p31f_inout_field.pruv	1 case: obl=2 1	--infer=24ee3c64bcda
 runtime|tests/runtime/p31f_map_iter.pruv	1 case: obl=14 1	--infer=cd5a5c340f79
 runtime|tests/runtime/p31f_nested_record_map.pruv	1 case: obl=11 1	--infer=d73eecd39656

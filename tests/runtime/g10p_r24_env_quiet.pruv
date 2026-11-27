@@ -88,7 +88,7 @@ fn eq_ev(child: str, nerr: str, nout: str) -> i64 ! async, net, proc, alloc {
   let mut values: ProcessArgs = proc_args_new();
   values = proc_args_push(move values, "1");
   let p: Process = proc_spawn_env_quiet(child, a, "", names, values);
-  if !proc_ok(p) { let r: i64 = abort_with(move p, 0); return -100; }
+  if !proc_ok(p) { let r_abort: i64 = abort_with(move p, 0); return -100; }
   let mut l: Loop = ev_new(2);
   l = ev_add_process(move l, move p);
   if !ev_ok(l) { let r0: Result<i64> = ev_close(move l); return -100; }
