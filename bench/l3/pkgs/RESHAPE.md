@@ -1492,3 +1492,16 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
   with an argument length is `type/fixed_array_length`. `for` over `[str; N]` and array patterns over a
   length-parameter array are unsupported in SPEC R-6t-5 (index loop and `len` tests instead). The fixes touch the
   checker and verifier only, so the measured code is unchanged.
+
+### Rows after L-gaps 26
+
+- 4.4zf-KE open. Tried in `jstr::ascii_equal`: compare the plain prefix (bytes below 128, not a backslash) byte by
+  byte against the key and decode with `step` only from the first escape or high byte, in place of the
+  `stop - p == klen` plain fast path. Measured (claude `q_measure.py --pairs rs/rust,rs/llvm`, 7 rounds, new and base
+  0e77a02b back to back with the main compiler under the perf lock, load under 3; local `work/lgaps26/perf_cells.json`
+  and `perf_cells_base.json`): (Pruv/hand new) over (Pruv/hand base) geometric mean 1.02, turns10-200 cells within
+  noise (window 1.17-1.33x hand on both), so the change was reverted. The base fast path already handles plain keys
+  with one length check and a byte loop; `key_is` is not where the 1.2-1.4x on turns and window_8MiB comes from.
+  Next: profile the generated a4 `window` path (q_measure deletes its build directory, so the profile needs a kept
+  build) before touching shared code again. Pruv still has no `str` / `[u8]` slice `==`, so the key compare stays a
+  byte loop either way.
