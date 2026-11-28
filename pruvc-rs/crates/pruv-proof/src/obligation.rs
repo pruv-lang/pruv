@@ -318,11 +318,21 @@ impl<'a> FnVerifier<'a> {
             // its unsat is still a proof and its model is the relaxed counterexample, so the verdict, the error and
             // the reported reason (from the last lemma stage) are those of the 0, 1, 2 order. After a lemma stage
             // model stage 0 is not run: it asserts a subset, so it has that model too and is not unsat.
-            (sol, r) = self.run_attempt(&st.pc, g, ob, 1, idx);
+            // L-gaps 26: a goal that reads one count at two ranges, or equates a count with a literal, is what the
+            // range split and the count witness are for, so it starts at stage 2 (stage 1 asserts a subset, so it is
+            // not run after a stage-2 model; after a stage-2 unknown it runs, as it may finish where 2 did not).
+            let split_first = !self.split_lemmas.is_empty() && self.split_goal(ob);
+            (sol, r) = self.run_attempt(&st.pc, g, ob, if split_first { 2 } else { 1 }, idx);
             if r == Sat::Unsat {
                 return;
             }
-            if !self.split_lemmas.is_empty() {
+            if split_first && r != Sat::Sat {
+                (sol, r) = self.run_attempt(&st.pc, g, ob, 1, idx);
+                if r == Sat::Unsat {
+                    return;
+                }
+            }
+            if !split_first && !self.split_lemmas.is_empty() {
                 (sol, r) = self.run_attempt(&st.pc, g, ob, 2, idx);
                 if r == Sat::Unsat {
                     return;
@@ -486,6 +496,27 @@ impl<'a> FnVerifier<'a> {
         // an opaque symbol may take no argument (a constant `opq!F`)
         let opq: Vec<String> = self.opq_agg.iter().filter(|n| st.rev.contains(*n)).map(|n| format!("opq!{}", n)).collect();
         !opq.is_empty() && ob.applies_any(&opq.iter().map(|s| s.as_str()).collect(), 0)
+    }
+
+    /// L-gaps 26 (R-6-4): an aggregate goal that starts at the split stage: it applies one `count` function at two
+    /// argument tuples (a range split), or it is `count(..) == n` for a literal `n` (a zero count needs the witness).
+    fn split_goal(&self, ob: &Ast) -> bool {
+        let names: HashSet<&str> =
+            self.lemma_fn_keys.iter().filter(|(k, _)| k == "count").map(|(_, n)| n.as_str()).collect();
+        if names.is_empty() {
+            return false;
+        }
+        let apps = ob.apps_of(&names);
+        if names.iter().any(|n| apps.iter().filter(|(d, _)| d == n).count() >= 2) {
+            return true;
+        }
+        let ch = ob.children();
+        if ob.decl_name().as_deref() == Some("=") && ch.len() == 2 {
+            let (a, b) = (&ch[0], &ch[1]);
+            let is_count = |t: &Ast| t.decl_name().map_or(false, |d| names.contains(d.as_str()));
+            return (is_count(a) && b.is_numeral()) || (is_count(b) && a.is_numeral());
+        }
+        false
     }
 
     /// verify.py inner `run(with_lemmas)` (lines 258-269): (solver, verdict).

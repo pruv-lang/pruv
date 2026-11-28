@@ -913,6 +913,35 @@ impl Ast {
         }
         false
     }
+
+    /// The distinct applications (by AST id; terms are hash-consed, so one id per argument tuple) of functions named in
+    /// `names`, with that name, in no fixed order.
+    pub fn apps_of(&self, names: &HashSet<&str>) -> Vec<(String, u32)> {
+        let mut seen: HashSet<u32> = HashSet::new();
+        let mut out = Vec::new();
+        let mut todo: Vec<Ast> = vec![self.clone()];
+        while let Some(n) = todo.pop() {
+            if !seen.insert(n.id()) {
+                continue;
+            }
+            match n.kind() {
+                K_APP => {
+                    if let Some(d) = n.decl_name().filter(|d| names.contains(d.as_str())) {
+                        out.push((d, n.id()));
+                    }
+                    for i in 0..n.num_args() {
+                        todo.push(n.arg(i));
+                    }
+                }
+                K_QUANTIFIER => {
+                    todo.push(n.body());
+                    todo.extend(n.pattern_terms());
+                }
+                _ => {}
+            }
+        }
+        out
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
