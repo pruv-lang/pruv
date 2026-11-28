@@ -1,0 +1,100 @@
+struct Draft { id: i64, notes: Vec<i64> }
+struct Window { drafts: VecDeque<Draft>, items: Vec<Draft>, ids: Vec<i64> }
+struct Outer { tag: i64, w: Window }
+
+fn make(id: i64) -> Draft ! alloc {
+  return Draft { id: id, notes: vec_push::<i64>(vec_new::<i64>(), id) };
+}
+
+fn fresh() -> Outer ! alloc
+  ensures len(result.w.drafts) == 0 && len(result.w.items) == 0 && len(result.w.ids) == 0
+{
+  return Outer { tag: 0, w: Window { drafts: vec_new::<Draft>(), items: vec_new::<Draft>(), ids: vec_new::<i64>() } };
+}
+
+fn pop_nested(inout o: Outer) -> i64 ! alloc
+  ensures len(old(o.w.drafts)) > 0 ==> len(o.w.drafts) == len(old(o.w.drafts)) - 1
+  ensures len(old(o.w.drafts)) == 0 ==> len(o.w.drafts) == 0
+{
+  match vec_pop_front::<Draft>(inout o.w.drafts) {
+    Some(d) => { return d.id; }
+    None => { return -1; }
+  }
+}
+
+fn rotate_nested(inout o: Outer, id: i64) -> i64 ! alloc
+  requires len(o.w.drafts) > 0
+  ensures len(o.w.drafts) == len(old(o.w.drafts))
+{
+  match vec_pop_front::<Draft>(inout o.w.drafts) {
+    Some(d) => {
+      let prior: i64 = d.id;
+      d.id = id;
+      o.w.drafts = vec_push::<Draft>(move o.w.drafts, move d);
+      return prior;
+    }
+    None => { return -1; }
+  }
+}
+
+pub fn nested_pop() -> i64 ! alloc {
+  let mut o: Outer = fresh();
+  o.w.drafts = vec_push::<Draft>(move o.w.drafts, make(1));
+  o.w.drafts = vec_push::<Draft>(move o.w.drafts, make(2));
+  o.w.drafts = vec_push::<Draft>(move o.w.drafts, make(3));
+  o.w.drafts = vec_push::<Draft>(move o.w.drafts, make(4));
+  match vec_pop_front::<Draft>(inout o.w.drafts) {
+    Some(d) => { if d.id != 1 { return -1; } }
+    None => { return -2; }
+  }
+  if len(o.w.drafts) != 3 { return -3; }
+  if vec_get::<Draft>(o.w.drafts, 0).id != 2 { return -4; }
+  let a: i64 = pop_nested(inout o);
+  if a != 2 { return -5; }
+  if len(o.w.drafts) != 2 { return -6; }
+  if vec_get::<Draft>(o.w.drafts, 0).id != 3 { return -7; }
+  let b: i64 = rotate_nested(inout o, 5);
+  if b != 3 { return -8; }
+  if len(o.w.drafts) != 2 { return -9; }
+  if vec_get::<Draft>(o.w.drafts, 0).id != 4 { return -10; }
+  if vec_get::<Draft>(o.w.drafts, 1).id != 5 { return -11; }
+  o.w.drafts = vec_push::<Draft>(move o.w.drafts, make(6));
+  o.w.drafts = vec_push::<Draft>(move o.w.drafts, make(7));
+  match vec_at_mut::<Draft>(inout o.w.drafts, 0) {
+    Some(d) => { d.id = 40; }
+    None => { return -12; }
+  }
+  if vec_get::<Draft>(o.w.drafts, 0).id != 40 { return -13; }
+  // a deep copy of the holder keeps the ring order and owns its own elements
+  let mut c: Outer = Outer { tag: 1, w: o.w };
+  let x: i64 = pop_nested(inout c);
+  if x != 40 { return -14; }
+  if len(o.w.drafts) != 4 { return -15; }
+  if len(c.w.drafts) != 3 { return -16; }
+  if vec_get::<Draft>(o.w.drafts, 0).id != 40 { return -17; }
+  if vec_get::<Draft>(c.w.drafts, 0).id != 5 { return -18; }
+  if vec_get::<Draft>(c.w.drafts, 2).id != 7 { return -19; }
+  vec_clear::<Draft>(inout o.w.drafts);
+  if len(o.w.drafts) != 0 { return -20; }
+  if pop_nested(inout o) != -1 { return -21; }
+  if vec_get::<Draft>(c.w.drafts, 1).id != 6 { return -22; }
+  return 60 + len(c.w.drafts);
+}
+
+pub fn nested_vec() -> i64 ! alloc {
+  let mut o: Outer = fresh();
+  o.w.items = vec_push::<Draft>(move o.w.items, make(1));
+  o.w.items = vec_push::<Draft>(move o.w.items, make(2));
+  o.w.ids = vec_push::<i64>(move o.w.ids, 8);
+  o.w.ids = vec_push::<i64>(move o.w.ids, 9);
+  match vec_at_mut::<Draft>(inout o.w.items, 1) {
+    Some(d) => {
+      d.id = 20;
+    }
+    None => { return -1; }
+  }
+  if len(o.w.items) != 2 { return -2; }
+  if vec_get::<Draft>(o.w.items, 1).id != 20 { return -3; }
+  if len(o.w.ids) != 2 { return -5; }
+  return vec_get::<Draft>(o.w.items, 1).id + vec_get::<i64>(o.w.ids, 1);
+}

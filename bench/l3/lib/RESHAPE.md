@@ -2770,3 +2770,64 @@ Changes `bench/l3/pkgs/transport`, `codex/rpc.pruv` and a comment in `grok/rpc.p
   dependency `pub` test is still missing (the child-module boundary is covered by `g4_lgaps20_fixed_module`).
 - Not measured (4.4h-VD is still open).
 
+
+## L-gaps 21: VecDeque (4.4h-VD), package fixed-array test, G-DB33-1/2 attempt (4.4l-CT)
+
+| Row | Kind | Change | Tests |
+|---|---|---|---|
+| 4.4h-VD | language, closed | `VecDeque<S>` (SPEC R-6e-25) holds the owned aggregate structs a `Vec<S>` holds, with the same `vec_new` / `vec_push` (back) / `vec_get` / `vec_at_mut` / `vec_clear` / `len` rules; `vec_pop_front::<S>(inout P) -> Option<S>` moves the first element out, only as the direct scrutinee of a `match` (`type/foreign_contract` elsewhere), and `Some(d)` binds an owned mutable local that can be changed and pushed back. Proof: an empty deque gives `None` and is unchanged; otherwise `Some(old(P)[0])`, `len - 1` and `P[i] == old(P)[i + 1]`. Rust emits `std::collections::VecDeque` (`push_back` / `pop_front`); LLVM adds a head index to the native vector header (ring order, re-pack on growth, constant-time pop, clear and drop visit the live elements). Claude `Collector.drafts` is a `VecDeque<Draft>`: `begin` at 200 drafts pops the front, refills it and pushes it back (hand `pop_front` / `push_back`), and the current draft is `len(drafts) - 1` | runtime `r6e_25_deque_window`, spec `r6e_25_deque_pop`, `r6e_25_deque_borrow` (both backends); must_reject `r6e_25_deque_{ensures,index,let,vec}`; claude test_a0..a4 |
+| follow-up | spec, test | SPEC R-6e (place arguments) no longer points at a `vec_take` builtin (there is none; an element changes in place through a `vec_at_mut` arm). A separate package dependency's `pub fn bump(a: [u8; 4]) -> [u8; 4]` takes and returns a fixed array by value across the package boundary | `g4b_frontend/pkg` (both backends) |
+| 4.4l-CT (G-DB33-1/2) | proof gap, open (time cap) | Attempt on side branch `lair/pruv-l-gaps-21-row3-wip` (820edda0), not merged; `lines::parse_owned` still runs `json::check_subtrees`. Direction taken: no split lemma; `record` / `open_container` ensure `contained`, `tree_ok` (the exact `check_subtrees` shapes), `starts_from` and the per-record child-count step (`count(k in q+1..new: parent == q) == count(old) + count(k in r..r+1: parent == q)`, a value `if` is not allowed in a contract); `container` (now `requires len(tape) == 6 * id + 6`) carries linkage, the subtree facts, its child count (x2 for objects), no key child in arrays and key parity as loop invariants; `scan_records` / `scan` ensure `contained(tape, 1, m, 0)` and `tree_ok(tape, 0, m)`. The single-append count step alone proves in 0.1 s. Result on a5_root (one run, 288 s, machine load 25-60): `open_container`'s `tree_ok` postcondition fails (likely cause: the three field stores after `container` rewrite the array that `tree_ok`'s `count` aggregates read, so the aggregates over the stored array are new terms with no frame fact); four `container` facts give up (resource limit on the `q < id` count postcondition, time limit on the count, parity and no-key invariants) | — |
+
+Next direction for 4.4l-CT: state `tree_ok` for the container record `id` separately from `tree_ok(id + 1..)`, and
+write the three header fields before `container` returns (pass `pos` / `len` / `children` back and store them in
+`container`'s caller only through one `set_header` helper whose ensures give the `count` frame over
+`6 * id + 2..6 * id + 6`), so no aggregate is read across a store; in `container`, prove the loop step through a
+helper `fn` per appended child (key, value) whose ensures are the invariant step, so each obligation sees one
+`record` call. Stability (three runs) and the 7.06 s a5_root time were not reached.
+
+4.4zc-PA stays out (no-unsafe).
+
+Review (bundle, once each). A (spec, Codex gpt-6.2-astra high): an `if let` or guarded `match` on
+`vec_pop_front` was rejected but SPEC only said "direct scrutinee"; R-6e-25 now names both (`?` is
+`type/try_operand`), and the missing tests were added in a7b64cf8: spec `r6e_25_deque_empty` (None, length
+kept, both backends), must_reject `r6e_25_deque_{empty_some,shift_index,second,scalar,readonly,iflet,guard}`.
+B (codegen, Claude opus high), required and open (bundle time cap reached, no fix-check run):
+- LLVM `vec_pop_front` on a place two or more fields deep (`inout o.w.q`, local or inout parameter) writes the
+  new head and length into a spill slot, not the real place (`llvmgen.rs` `native_vec_match`, ~7327 and
+  ~7349-7354: `self.ev(&place.expr)` + `self.spill`). Verified mode gives a wrong result (Rust 91, LLVM 12) and
+  owned elements are freed twice (`--no-verify`, 4 allocs / 5 frees); one inout parameter case traps (rc 133).
+  One field deep (`inout w.q`, the claude `inout c.drafts` use) and a local deque are right. Fix: take the
+  pointer with `inout_place_ptr(&place.expr)` as `vec_clear` does (~7046), and add a runtime test with a
+  nested-field pop (owned element, both backends) plus a deque clone.
+- Optional, not done: Rust `vec_get` on a deque indexes directly (no `pruv_ud` check under `--no-verify`, a
+  std panic instead); the deque `vec_push` checked helper skips the prefix ensures; `record_pkg_catalog` keys
+  `Vec<S>` and `VecDeque<S>` the same (effect not checked).
+B also found the plain `Vec<S>` LLVM IR byte-identical to the base commit over 72 programs.
+
+## L-gaps 22: LLVM `vec_pop_front` on a nested place (4.4h-VD review B), G-DB33-1/2 attempt (4.4l-CT)
+
+| Row | Kind | Change | Tests |
+|---|---|---|---|
+| 4.4h-VD review B | codegen, closed | LLVM `native_vec_match` takes the pop place with `inout_place_ptr(&place.expr)` (as `vec_clear` does) instead of spilling the evaluated value, so a pop on `inout o.w.q` (local or inout parameter, two or more fields deep) writes the new head and length into the real place. The `r6e_25_deque_window` LLVM output hash changes for this reason; Rust output is unchanged | runtime `r6e_25_deque_nested` (both backends, verified and `--no-verify`): pop, push back, `vec_at_mut` and `vec_clear` on `o.w.drafts`, `vec_at_mut` on `o.w.items` / `o.w.ids`, and a deep copy of the holder that pops on its own ring; claude test_a0..a4 |
+| 4.4l-CT (G-DB33-1/2) | proof gap, open (time) | Attempt on side branch `lair/pruv-l-gaps-22-row2-wip` (7df89c86), not merged; `lines::parse_owned` still runs `json::check_subtrees`. Taken from the L-gaps 21 direction: one `set_header` writes the three header fields and proves `tree_ok(id..)` (asserts give the count frame over the stores and the container-record facts); `child` wraps `record` with the count step split into `q < id` (unchanged) and `id` (+1); `member` is one `container` loop step (key, `:`, value) whose ensures are the invariant step. Cause of the L-gaps 21 `tree_ok` failure: `count(k: parent == t)` inside a `forall t` is an aggregate with one more parameter than the plain `count(k: parent == id)`, and `agg_frame` only linked aggregates of equal arity, so the instance `t = id` never met the plain term. Verifier change on the side branch: when a plain aggregate's body is a parameterized one's body at ground values `c` (no bound variable), `agg_frame` adds `forall x, y: G(x, y) == F(x, y, c)`. Result: three fresh-cache runs pass (33.6 / 34.0 / 33.9 s), and a no-op `assert` in `set_header`, `member` or `container` keeps them passing; the `set_header` asserts are needed (without them its `tree_ok` postcondition fails). Not merged because a5_root verify is 30-34 s fresh and 13.6 s warm against 7.3 s / 1.6 s on the same machine: the new obligations first run in stage 0 (no lemmas), fail at the limit, and failed attempts are not cached | — |
+
+Next direction for 4.4l-CT: cut the stage-0 time, either by fewer step obligations (fold the `member` and
+`set_header` asserts into helper ensures that already prove at stage 1) or by a verifier rule that starts an
+obligation whose goal reads an aggregate at the stage that adds the aggregate lemmas (a policy change: needs a
+decision and a spec review). The arity link in `agg_frame` is the part to keep.
+
+4.4zc-PA stays out (no-unsafe).
+
+- Checks on this branch (row 1 only; the verifier change is on the side branch, so no spec review A was run):
+  `--only runtime --backend both` 3617/3617; `--only must_reject` 1423/1423; `--only l3_frontend` 96/96;
+  `--only g8_frontend --backend both` 39/39; `cargo test --release` passed; `diff_rust --fuzz-count 20` and
+  `m3_all --quick` ok after the golden update (new `r6e_25_deque_nested` keys, the `r6e_25_deque_window` LLVM
+  hash from the fix, mutate samples shifted by the new runtime file: without the file `diff_parse` has no
+  mismatch); `--list-rows` diff (4 new rows, `tests/run_all_rows.txt` updated).
+- L3: claude a0-a4 on rs/rust and rs/llvm. No lib/pkgs module changed on this branch.
+- Review B fix-check (Claude opus high, that finding only): fixed, no required item. `inout_place_ptr` reaches the real storage for every place the checker
+  admits (local or inout `Var` slot, field chain, boxed field, `vec_at_mut` binder), and the value is read once
+  before the stores. Optional, not done: a pop rooted at a `vec_at_mut` binder and a pop through a boxed middle field
+  have no test (code path read as right).
+- Measured (row 2, side branch): `work/lgaps22/perf_cells.json`.

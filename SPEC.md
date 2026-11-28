@@ -882,9 +882,9 @@ fn tree_count(t: Tree) -> i64
   `vec_get::<S>(v, i)` or a field path of it is also a read-only call argument (borrowed in place, Rust `&v[i]` or
   `&(*v.get_unchecked(i)).f`; the R-6e-20 argument rule). In an unverified build, a range check that fails in a
   later argument of the same call also drops an owned value already moved into an earlier `take` argument.
-  Moving an element out is not offered: `vec_pop` is a view-list operation only and there is no `vec_remove`, so
-  an owned-aggregate element leaves its Vec only when the Vec is dropped, replaced or cleared (`vec_clear`,
-  R-6e-10). Per-element facts (L-gaps 15, 4.4y-PW): in a contract, `docs[k]` of a `Vec<S>` is the element, so a
+  An owned-aggregate element in a `Vec<S>` stays in place until the vector is dropped, replaced or cleared
+  (`vec_clear`, R-6e-10). A `VecDeque<S>` also permits moving out its first element with `vec_pop_front` (R-6e-25).
+  `vec_pop` is a view-list operation only. Per-element facts (L-gaps 15, 4.4y-PW): in a contract, `docs[k]` of a `Vec<S>` is the element, so a
   quantified predicate such as `forall k in 0..len(docs): p(docs[k])` is kept by `vec_push` (the new last element
   is the pushed value) and instantiated at a `vec_get::<S>(docs, k)` call argument, so a callee that requires
   `p(d)` accepts the borrowed element; without the quantified fact the call is `verify/call_requires`. Tests:
@@ -1022,8 +1022,8 @@ fn tree_count(t: Tree) -> i64
   may be an owned mutable local, an inout parameter or a mutable field, including a nested vector
   field in an arm. It follows the place and alias rules of R-6e-4 and the statement rules of R-6g-1.
   Rust emits `P.clear();`, which keeps capacity and needs no `alloc`. The verifier sets the length
-  to zero and preserves sibling fields and other elements of outer collections. It requires the
-  Rust backend. Tests:
+  to zero and preserves sibling fields and other elements of outer collections. LLVM supports clearing
+  `Vec<i64>`, `Vec<bool>` and `VecDeque<S>` (R-6e-25). Tests:
   [accept](tests/spec/r6e_10_vec_clear.pruv), [reject](tests/spec/r6e_10_clear_borrowed.pruv).
 - R-6e-11 **Text equality.** `string_eq(a, b) -> bool` is a pure operation in executable code.
   Each operand may be a borrowed `String`, a `str`, a `[u8]` or an R-6e-9 element.
@@ -1158,6 +1158,28 @@ fn tree_count(t: Tree) -> i64
   [key type](tests/spec/r6e_14_take_key.pruv), [LLVM](tests/spec/r6e_14_take_llvm.pruv),
   [other field](tests/spec/r6e_14_take_other_field.pruv), [scalar read view](tests/spec/r6e_14_take_in_scalar_get.pruv)
   and [binder name reuse](tests/spec/r6e_14_take_proc_binder.pruv).
+- R-6e-25 **Double-ended queues of owned aggregates (4.4h-VD).** `VecDeque<S>` holds the same owned aggregate
+  structs as `Vec<S>` in fields, locals, parameters and results. `vec_new::<S>()` constructs the empty collection
+  of the expected type. `vec_push::<S>` appends at the back, and `vec_get`, `vec_at_mut`, `vec_clear` and `len`
+  use the same rules as on `Vec<S>`. Contracts observe the logical sequence with `v[k]`.
+  `vec_pop_front::<S>(inout P) -> Option<S>` moves the first element out of a mutable deque place
+  under R-6e-4 and R-6e-7. An overlapping active borrow is `type/recursive_borrow`. The call needs
+  no `alloc` effect and is permitted only as the direct scrutinee of a `match` statement
+  whose arms have no guard (`type/foreign_contract` elsewhere, including `if let` and a guarded
+  `match`; `?` needs a `Result` operand and is `type/try_operand`). `Some(d)` binds an owned mutable local, which may be changed in
+  place, passed `inout` or moved back into the deque. When the pre-call length is zero, the result is
+  `None` and the deque is unchanged. Otherwise the result is `Some(old(P)[0])`, the length decreases
+  by one, and `P[i] == old(P)[i + 1]` at each index in the new range.
+  Rust emits `std::collections::VecDeque<S>` with `push_back` and `pop_front`. LLVM adds a head index
+  to the native vector header. It visits elements in ring order, moves them into contiguous order
+  when the buffer grows, and pops by advancing the head in constant time. Clearing drops the live
+  elements and resets the head. Dropping frees the live elements and the backing buffer.
+  Tests cover [window and wraparound growth](tests/runtime/r6e_25_deque_window.pruv),
+  [length, popped value and shifted elements](tests/spec/r6e_25_deque_pop.pruv),
+  [overlapping borrow](tests/spec/r6e_25_deque_borrow.pruv),
+  [standalone result](tests/must_reject/r6e_25_deque_let.pruv), [plain vector](tests/must_reject/r6e_25_deque_vec.pruv),
+  [incorrect postcondition](tests/must_reject/r6e_25_deque_ensures.pruv) and
+  [out-of-range read](tests/must_reject/r6e_25_deque_index.pruv).
 - R-6e-15 **Owned text from a borrow.** `string_from(t) -> String` needs `! alloc` and takes
   the same `str` argument as the text parameter of `string_push_str`. The verifier checks
   `len(t) <= 2^40` and establishes that the fresh result has length `len(t)` and matches every byte
@@ -2229,8 +2251,9 @@ borrowed value is live.
   any other operand of the same statement that mentions `v` is `type/inout_context`; a live view of `v` is
   `type/borrow_conflict`. An element of a `let mut` `Vec<i64>` / `Vec<bool>` local or `inout` parameter is a place
   the same way (L-gaps 14; hand Rust `v.swap(i, j)` / `std::mem::replace(&mut v[i], x)`) with the same index,
-  alias and same-`Vec` rules; an element of any other `Vec<T>` is `type/inout_argument` (move it out with
-  `vec_take` / `vec_at_mut` instead).
+  alias and same-`Vec` rules. An element of any other `Vec<T>` or of a `VecDeque<S>` is
+  `type/inout_argument`. Change an owned-aggregate element through a `vec_at_mut` arm, or move the
+  front element of a `VecDeque<S>` out with `vec_pop_front`.
   - *Proof.* Here `old` is the value just before the call. After `swap`, `P == old(Q)` and `Q == old(P)` (lengths and bytes of owned values included); after
     `replace`, the result is `old(P)` and `P == e`. There is no obligation of its own; a refined local passed as a place must satisfy its range after the call
     (`verify/refinement_assign`, as for any `inout` argument). An element place stores into the array: each index

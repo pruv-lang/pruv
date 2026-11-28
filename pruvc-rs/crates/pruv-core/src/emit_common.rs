@@ -152,6 +152,7 @@ pub fn rty_g(g: &GType, param: bool) -> String {
     // G6: owned collections; a borrowed parameter is a reference
     if g.owner.is_none() {
         let r = match (g.name.as_str(), g.args.len()) {
+            ("vecdeque", 1) => Some(format!("::std::collections::VecDeque<{}>", rty_g(&g.args[0], false))),
             ("vec", 1) => Some(format!("::std::vec::Vec<{}>", rty_g(&g.args[0], false))),
             ("hashmap", 2) => Some(format!(
                 "::std::collections::HashMap<{}, {}>",

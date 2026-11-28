@@ -41,7 +41,7 @@ pub struct CatFn {
 }
 
 /// CATALOG_NAMES of foreign.py (insertion order).
-pub const CATALOG_NAMES: [&str; 113] = [
+pub const CATALOG_NAMES: [&str; 114] = [
     "vec_new",
     "vec_push",
     "vec_get",
@@ -55,6 +55,7 @@ pub const CATALOG_NAMES: [&str; 113] = [
     "vec_extend_from_slice",
     "string_eq",
     "vec_at_mut",
+    "vec_pop_front",
     "map_insert",
     "string_new",
     "string_from",
@@ -314,6 +315,10 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
         "string_eq" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("a", GType::str(), false), p("b", GType::str(), false)],
             ret: GType::bool(), effects: vec![], tparams: vec![],
+        },
+        "vec_pop_front" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![inout("v", GType::new("vecdeque", vec![t()]))],
+            ret: mk_option(t()), effects: vec![], tparams: tp_t(),
         },
         "vec_at_mut" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("v", vec_of(t()), false), p("i", GType::i64(), false)],
@@ -1284,7 +1289,7 @@ impl<'a> Ownership<'a> {
                 let mutable_map = matches!(&m.scrutinee, Expr::Call(c)
                     if matches!(c.name.as_str(), "map_get_mut" | "vec_at_mut") && !self.funcs.contains_key(&c.name));
                 let take = matches!(&m.scrutinee, Expr::Call(c)
-                    if c.name == "map_take" && !self.funcs.contains_key(&c.name));
+                    if matches!(c.name.as_str(), "map_take" | "vec_pop_front") && !self.funcs.contains_key(&c.name));
                 let consuming = match &m.scrutinee {
                     Expr::Var(sv) if st.contains(&sv.name) && !self.bor.contains(&sv.name)
                         && crate::codegen::match_moves_binder(m) => Some(sv.name.clone()),
@@ -2561,7 +2566,7 @@ mod tests {
 
     #[test]
     fn catalog_shapes() {
-        assert_eq!(CATALOG_NAMES.len(), 113);
+        assert_eq!(CATALOG_NAMES.len(), 114);
         for n in CATALOG_NAMES.iter() {
             assert!(catalog_fn(n).is_some());
         }

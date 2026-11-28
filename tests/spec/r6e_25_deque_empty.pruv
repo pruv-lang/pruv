@@ -1,0 +1,22 @@
+// spec: R-6e-25 accept
+struct Draft { id: i64 }
+
+fn pop(inout q: VecDeque<Draft>) -> i64
+  ensures len(old(q)) == 0 ==> (len(q) == 0 && result == -1)
+  ensures len(old(q)) > 0 ==> (len(q) == len(old(q)) - 1 && result == old(q)[0].id)
+{
+  match vec_pop_front::<Draft>(inout q) {
+    Some(d) => { return d.id; }
+    None => { return -1; }
+  }
+}
+
+pub fn check() -> i64 ! alloc {
+  let mut q: VecDeque<Draft> = vec_new::<Draft>();
+  let a: i64 = pop(inout q);
+  assert a == -1 && len(q) == 0;
+  q = vec_push::<Draft>(move q, Draft { id: 3 });
+  let b: i64 = pop(inout q);
+  assert b == 3 && len(q) == 0;
+  return a + b;
+}

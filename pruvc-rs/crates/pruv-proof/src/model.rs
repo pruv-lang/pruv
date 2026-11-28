@@ -229,7 +229,7 @@ impl Ty {
     /// comes out of `from_plain` as `Ty::User("string")`.
     pub fn coll(&self) -> Option<Coll> {
         match self {
-            Ty::Inst(g) if g.owner.is_none() && g.name == "vec" && g.args.len() == 1 => Some(Coll::Vec(g.args[0].clone())),
+            Ty::Inst(g) if g.is_vector() && g.args.len() == 1 => Some(Coll::Vec(g.args[0].clone())),
             Ty::Inst(g) if g.owner.is_none() && g.name == "hashmap" && g.args.len() == 2 => {
                 Some(Coll::Map(g.args[0].clone(), g.args[1].clone()))
             }
@@ -885,7 +885,7 @@ impl Model {
         match ty {
             Ty::Array(_) | Ty::Str => true,
             Ty::User(n) => n == "string",
-            Ty::Inst(g) => g.owner.is_none() && g.name == "vec" || g.is_fixed(),
+            Ty::Inst(g) => g.is_vector() || g.is_fixed(),
             _ => false,
         }
     }
@@ -901,7 +901,7 @@ impl Model {
                 if g.fixed_parts().is_some_and(|(e, _)| *e == GType::bool()) { Elem::Bool } else { Elem::I64 }
             }
             Ty::Inst(g) if g.name == "vec" && g.args.first() == Some(&GType::bool()) => Elem::Bool,
-            Ty::Inst(g) if g.name == "vec" && g.args.first() != Some(&GType::i64()) => Elem::Abs,
+            Ty::Inst(g) if g.is_vector() && g.args.first() != Some(&GType::i64()) => Elem::Abs,
             _ => Elem::I64,
         }
     }
@@ -992,7 +992,7 @@ impl Model {
 
     fn vec_element(ty: &Ty) -> Option<&str> {
         let Ty::Inst(g) = ty else { return None };
-        let ("vec", [elem]) = (g.name.as_str(), g.args.as_slice()) else { return None };
+        let ("vec" | "vecdeque", [elem]) = (g.name.as_str(), g.args.as_slice()) else { return None };
         (g.owner.is_none() && elem.owner.is_none() && elem.args.is_empty()).then_some(elem.name.as_str())
     }
 

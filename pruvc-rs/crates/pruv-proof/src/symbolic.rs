@@ -1317,7 +1317,7 @@ pub(crate) fn inv_type_clauses(
     let base_ty = ty_g.to_key();
     // LG27: Unwrap a Vec only at the contract root.
     let elem = match (ty_g.owner.is_none(), ty_g.name.as_str(), ty_g.args.as_slice()) {
-        (true, "vec", [elem]) => Some(elem),
+        (true, "vec" | "vecdeque", [elem]) => Some(elem),
         _ => None,
     };
     let elem_ty = elem.map(GType::to_key);
@@ -5319,6 +5319,19 @@ impl<'a> FnVerifier<'a> {
                 }
                 Ok(Val::Arr(pushed))
             }
+            "vec_pop_front" => {
+                let v = argv(0)?.try_arr()?.clone();
+                let has = v.n.gt_i(0);
+                let o = self.model.opt(rty.as_ref())?;
+                let first = v.a.select(&z.int(0));
+                let result = z.ite(&has, &o.some.apply1(&first), &o.none);
+                let i = z.fresh_int_const("deque_index");
+                let shifted = z.lambda(std::slice::from_ref(&i), &v.a.select(&i.add_i(1)));
+                let rest = v.like(z.ite(&has, &shifted, &v.a), v.n.sub(&z.ite(&has, &z.int(1), &z.int(0))), n);
+                let Expr::InoutArg(place) = &x.args[0] else { return Err("missing inout place".into()); };
+                self.store_collection_place(&place.expr, st, Val::Arr(rest), g)?;
+                Ok(Val::Dt(result, rty.clone().unwrap_or(Ty::Opt)))
+            }
             "vec_clear" => {
                 let v = argv(0)?.try_arr()?;
                 let Expr::InoutArg(place) = &x.args[0] else { return Err("missing inout place".into()); };
@@ -7111,7 +7124,7 @@ impl<'a> FnVerifier<'a> {
         self.snap = Env(f
             .params
             .iter()
-            .filter(|p| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || GType::from_key(&p.ty).is_fixed() || intwidth::of(&p.ty).is_some() || p.ty == "bool" || matches!(self.inv_decls.get(&p.ty), Some(ast::TypeDecl::Struct(s)) if s.tparams.is_empty())))
+            .filter(|p| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || GType::from_key(&p.ty).is_fixed() || p.ty.starts_with("vecdeque<") || intwidth::of(&p.ty).is_some() || p.ty == "bool" || matches!(self.inv_decls.get(&p.ty), Some(ast::TypeDecl::Struct(s)) if s.tparams.is_empty())))
             .map(|p| (p.name.clone(), env.get(&p.name).clone()))
             .collect());
         let mut st = State::new(env.clone(), pc);

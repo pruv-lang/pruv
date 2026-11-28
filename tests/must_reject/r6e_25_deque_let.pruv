@@ -1,0 +1,5 @@
+struct Draft { id: i64 }
+
+fn bad(inout q: VecDeque<Draft>) -> () {
+  let d: Option<Draft> = vec_pop_front::<Draft>(inout q);
+}

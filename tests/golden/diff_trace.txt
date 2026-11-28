@@ -1604,6 +1604,17 @@ must_reject|tests/must_reject/p9b_call_requires.pruv	1 case: obl=2 1	default=1ae
 must_reject|tests/must_reject/p9b_false_ensures.pruv	1 case: obl=2 1	default=e207d84fdd8d
 must_reject|tests/must_reject/p9b_take_use.pruv	1 case: obl=0 1	default=27172f1f4ca2
 must_reject|tests/must_reject/p9b_unknown_method.pruv	1 case: obl=0 1	default=0b5bc8a87de4
+must_reject|tests/must_reject/r6e_25_deque_empty_some.pruv	1 case: obl=2 1	default=eb55cda8bc47
+must_reject|tests/must_reject/r6e_25_deque_ensures.pruv	1 case: obl=2 1	default=d76490eae4b9
+must_reject|tests/must_reject/r6e_25_deque_guard.pruv	1 case: obl=0 1	default=44e73e6fd4b6
+must_reject|tests/must_reject/r6e_25_deque_iflet.pruv	1 case: obl=0 1	default=cd5a334aa3fb
+must_reject|tests/must_reject/r6e_25_deque_index.pruv	1 case: obl=1 1	default=7a89944dfd95
+must_reject|tests/must_reject/r6e_25_deque_let.pruv	1 case: obl=0 1	default=1e4c5dbf6947
+must_reject|tests/must_reject/r6e_25_deque_readonly.pruv	1 case: obl=0 1	default=622e5a7fcb5c
+must_reject|tests/must_reject/r6e_25_deque_scalar.pruv	1 case: obl=0 1	default=7561f0b753b1
+must_reject|tests/must_reject/r6e_25_deque_second.pruv	1 case: obl=3 1	default=dfabc669d754
+must_reject|tests/must_reject/r6e_25_deque_shift_index.pruv	1 case: obl=2 1	default=e879af3ef3a9
+must_reject|tests/must_reject/r6e_25_deque_vec.pruv	1 case: obl=0 1	default=b1254d861fdc
 must_reject|tests/must_reject/refine_alloc_len.pruv	1 case: obl=4 1	default=14a4c91b9d32
 must_reject|tests/must_reject/refine_base_bool.pruv	1 case: obl=0 1	default=ee830c6079aa
 must_reject|tests/must_reject/refine_bounds_i64.pruv	1 case: obl=0 1	default=d4b00a9eb36d
@@ -2243,6 +2254,8 @@ runtime|tests/runtime/r32.pruv	1 case: obl=12 1	default=bf0c30ac1ce6
 runtime|tests/runtime/r33.pruv	1 case: obl=9 1	default=f8adb0d5293f
 runtime|tests/runtime/r34_eval_order.pruv	1 case: obl=19 1	default=741f7970893b
 runtime|tests/runtime/r6b_4_rt_eq_range_str.pruv	1 case: obl=29 1	default=dcd502eea74e
+runtime|tests/runtime/r6e_25_deque_nested.pruv	1 case: obl=34 1	default=80817c4fc477
+runtime|tests/runtime/r6e_25_deque_window.pruv	1 case: obl=37 1	default=1a57c5b7eca1
 runtime|tests/runtime/refine_array_edges.pruv	1 case: obl=1 1	default=2c2379f8d76c
 runtime|tests/runtime/refine_edges.pruv	1 case: obl=1 1	default=d2fdd45c333a
 runtime|tests/runtime/refine_elem_high.pruv	1 case: obl=1 1	default=2c2379f8d76c

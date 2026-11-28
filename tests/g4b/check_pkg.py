@@ -451,6 +451,36 @@ def main(work, binary=None, py=None):
     check("manifest without dependencies: identical Rust",
           rc1 == 0 and rc2 == 0 and o1.read_text() == o2.read_text(), t1 + t2)
 
+    # L-gaps 21 (R-6t-4): a dependency package's `pub` functions take and return `[u8; N]` by value (directly and in
+    # a struct field); only the program's own host entry keeps fixed arrays off its signature. Verified on both
+    # backends; a wrong `ensures` about an element is still a proof failure across the package boundary.
+    stamp = ("pub struct Stamp { status: i64, text: [u8; 4] }\n"
+             "pub fn make(c: i64) -> Stamp\n  requires 0 <= c && c < 10\n"
+             "  ensures result.status == 0 && i64(result.text[0]) == 48 + c && result.text[1] == 45\n"
+             "{\n  let mut a: [u8; 4] = [48, 45, 45, 90];\n  a[0] = u8(48 + c);\n"
+             "  return Stamp { status: 0, text: a };\n}\n"
+             "pub fn bump(a: [u8; 4]) -> [u8; 4]\n  requires a[1] < 200\n"
+             "  ensures result[1] == a[1] + 1 && result[0] == a[0]\n"
+             "{\n  let mut b: [u8; 4] = a;\n  b[1] = b[1] + 1;\n  return b;\n}\n")
+    app_fixed = ("mod stamp;\npub fn run(c: i64) -> i64\n  requires 0 <= c && c < 10\n  ensures result == 48 + c + 46\n"
+                 "{\n  let s: crate::stamp::Stamp = crate::stamp::make(c);\n"
+                 "  let b: [u8; 4] = crate::stamp::bump(s.text);\n  assert s.text[1] == 45;\n"
+                 "  return i64(b[0]) + i64(b[1]);\n}\n")
+    f = {"app/pruv.json": man("app", deps={"stamp": dep("../stamp")}), "app/app.pruv": app_fixed}
+    f.update(pkg_files("stamp", "stamp", stamp))
+    p = r.project(f)
+    rc, ds, txt, o = app(p, flags=())
+    check("dependency fixed array by value (rust)", rc == 0 and not ds and
+          re.search(r"fn \w*bump\w*\(a: \[u8; 4\]\) -> \[u8; 4\]", o.read_text() if o.exists() else ""), txt)
+    rc, ds, txt, _ = app(p, flags=(), extra=("--backend", "llvm", "--emit", "ll", "--rust-bindings", str(p / "b.rs")),
+                         out=p / "app.ll")
+    check("dependency fixed array by value (llvm)", rc == 0 and not ds, txt)
+    f["stamp/stamp.pruv"] = stamp.replace("result[1] == a[1] + 1", "result[1] == a[1] + 2")
+    p = r.project(f)
+    rc, ds, txt, _ = app(p, flags=())
+    check("dependency fixed array: wrong element ensures fails", rc != 0 and any(code_of(d) == "ensures" for d in ds),
+          txt)
+
     for line in fails:
         print(line)
     if fails:

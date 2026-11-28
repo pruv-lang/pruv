@@ -118,7 +118,10 @@ fn step(prog: [i64], pos: i64, inout col: crate::turns::Collector, inout snaps: 
         None => {}
       }
     }
-    snaps[at + 3] = k;
+    // the fixture reports the ring slot of the oracle (begun - 1) % 200; the deque keeps the current draft at the back
+    let mut slot: i64 = 0;
+    if col.begun >= 1 { slot = (col.begun - 1) % 200; }
+    snaps[at + 3] = slot;
     snaps[at + 4] = f[0];
     snaps[at + 5] = f[1];
     snaps[at + 6] = f[2];

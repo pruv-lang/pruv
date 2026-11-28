@@ -1,0 +1,5 @@
+struct Draft { id: i64 }
+
+fn bad(inout q: VecDeque<Draft>) -> () {
+  if let Some(d) = vec_pop_front::<Draft>(inout q) { }
+}

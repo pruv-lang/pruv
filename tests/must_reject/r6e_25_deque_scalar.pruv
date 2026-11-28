@@ -1,0 +1,1 @@
+fn bad(q: VecDeque<i64>) -> i64 { return len(q); }

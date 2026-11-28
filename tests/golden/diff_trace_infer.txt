@@ -1603,6 +1603,17 @@ must_reject|tests/must_reject/p9b_call_requires.pruv	1 case: obl=2 1	--infer=a9b
 must_reject|tests/must_reject/p9b_false_ensures.pruv	1 case: obl=2 1	--infer=3cef4b2eba03
 must_reject|tests/must_reject/p9b_take_use.pruv	1 case: obl=0 1	--infer=cfdd3e7cfc5d
 must_reject|tests/must_reject/p9b_unknown_method.pruv	1 case: obl=0 1	--infer=af13fcd98219
+must_reject|tests/must_reject/r6e_25_deque_empty_some.pruv	1 case: obl=2 1	--infer=20a5dd030912
+must_reject|tests/must_reject/r6e_25_deque_ensures.pruv	1 case: obl=2 1	--infer=0941c5e25efa
+must_reject|tests/must_reject/r6e_25_deque_guard.pruv	1 case: obl=0 1	--infer=840342c33930
+must_reject|tests/must_reject/r6e_25_deque_iflet.pruv	1 case: obl=0 1	--infer=e66a28d25fd0
+must_reject|tests/must_reject/r6e_25_deque_index.pruv	1 case: obl=1 1	--infer=d549790714db
+must_reject|tests/must_reject/r6e_25_deque_let.pruv	1 case: obl=0 1	--infer=68b7be44f182
+must_reject|tests/must_reject/r6e_25_deque_readonly.pruv	1 case: obl=0 1	--infer=4674722c0d03
+must_reject|tests/must_reject/r6e_25_deque_scalar.pruv	1 case: obl=0 1	--infer=f6786e3c2479
+must_reject|tests/must_reject/r6e_25_deque_second.pruv	1 case: obl=3 1	--infer=7951bf840bb0
+must_reject|tests/must_reject/r6e_25_deque_shift_index.pruv	1 case: obl=2 1	--infer=a1b26802a340
+must_reject|tests/must_reject/r6e_25_deque_vec.pruv	1 case: obl=0 1	--infer=3956d391ed19
 must_reject|tests/must_reject/refine_alloc_len.pruv	1 case: obl=4 1	--infer=cb1feac1781b
 must_reject|tests/must_reject/refine_base_bool.pruv	1 case: obl=0 1	--infer=df4b068e07a3
 must_reject|tests/must_reject/refine_bounds_i64.pruv	1 case: obl=0 1	--infer=7c3e5998f1e1
@@ -2242,6 +2253,8 @@ runtime|tests/runtime/r32.pruv	1 case: obl=12 1	--infer=064c9b1d3319
 runtime|tests/runtime/r33.pruv	1 case: obl=9 1	--infer=c2d0ccc7e7d6
 runtime|tests/runtime/r34_eval_order.pruv	1 case: obl=19 1	--infer=1871b145b50e
 runtime|tests/runtime/r6b_4_rt_eq_range_str.pruv	1 case: obl=29 1	--infer=852cee5cfb09
+runtime|tests/runtime/r6e_25_deque_nested.pruv	1 case: obl=34 1	--infer=092716248525
+runtime|tests/runtime/r6e_25_deque_window.pruv	1 case: obl=37 1	--infer=9a4874c654ff
 runtime|tests/runtime/refine_array_edges.pruv	1 case: obl=1 1	--infer=112702481462
 runtime|tests/runtime/refine_edges.pruv	1 case: obl=1 1	--infer=ab57851dbdc5
 runtime|tests/runtime/refine_elem_high.pruv	1 case: obl=1 1	--infer=112702481462

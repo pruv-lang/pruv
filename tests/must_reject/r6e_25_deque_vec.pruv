@@ -1,0 +1,8 @@
+struct Draft { id: i64 }
+
+fn bad(inout q: Vec<Draft>) -> () {
+  match vec_pop_front::<Draft>(inout q) {
+    Some(d) => { }
+    None => { }
+  }
+}

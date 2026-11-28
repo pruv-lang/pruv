@@ -279,8 +279,8 @@ g4|g4/g4_geometry [trust-callers]	2 cases: exit 2	llvm=a678b7c8236f	rust=cbae00d
 g4|g4/g4_ledger [default]	2 cases: exit 2	llvm=96a9a4662a47	rust=b5b1c6d95b98
 g4|g4/g4_ledger [no-verify]	2 cases: exit 2	llvm=161f59efb4c3	rust=5db67ee95812
 g4|g4/g4_ledger [trust-callers]	2 cases: exit 2	llvm=1d82b661d5ff	rust=142d3b16124a
-g4|g4/g4_lgaps13_vec_doc [--no-verify]	2 cases: exit 2	llvm=1a749fffc517	rust=d5713cd92a7b
-g4|g4/g4_lgaps13_vec_doc [default]	2 cases: exit 2	llvm=051ab31a14c4	rust=3f2ad5d3d691
+g4|g4/g4_lgaps13_vec_doc [--no-verify]	2 cases: exit 2	llvm=8a6f11b3fdb0	rust=d5713cd92a7b
+g4|g4/g4_lgaps13_vec_doc [default]	2 cases: exit 2	llvm=c565074bc1ea	rust=3f2ad5d3d691
 g4|g4/g4_lgaps20_fixed_module [--no-verify]	2 cases: exit 2	llvm=3ceb7d1be262	rust=31f0bca08d83
 g4|g4/g4_lgaps20_fixed_module [default]	2 cases: exit 2	llvm=130d36308c5a	rust=bac966c7309e
 g4|g4/g4_r01_host_reject [--no-verify]	2 cases: exit 2	llvm=070266972283	rust=12c16cd7fae9
@@ -1694,6 +1694,17 @@ must_reject|must_reject/p9b_call_requires.pruv	2 cases: exit 2	llvm=9a6d17225d72
 must_reject|must_reject/p9b_false_ensures.pruv	2 cases: exit 2	llvm=93d55cbda7f8	rust=93d55cbda7f8
 must_reject|must_reject/p9b_take_use.pruv	2 cases: exit 2	llvm=47303e2e629b	rust=47303e2e629b
 must_reject|must_reject/p9b_unknown_method.pruv	2 cases: exit 2	llvm=b7e7a6ffcfe9	rust=b7e7a6ffcfe9
+must_reject|must_reject/r6e_25_deque_empty_some.pruv	2 cases: exit 2	llvm=cb2644558b0e	rust=cb2644558b0e
+must_reject|must_reject/r6e_25_deque_ensures.pruv	2 cases: exit 2	llvm=a5f950db9b1b	rust=a5f950db9b1b
+must_reject|must_reject/r6e_25_deque_guard.pruv	2 cases: exit 2	llvm=88f1e056b0ca	rust=88f1e056b0ca
+must_reject|must_reject/r6e_25_deque_iflet.pruv	2 cases: exit 2	llvm=2ce233b14d3e	rust=2ce233b14d3e
+must_reject|must_reject/r6e_25_deque_index.pruv	2 cases: exit 2	llvm=6bf83cdddf7b	rust=6bf83cdddf7b
+must_reject|must_reject/r6e_25_deque_let.pruv	2 cases: exit 2	llvm=03e74f82e61a	rust=03e74f82e61a
+must_reject|must_reject/r6e_25_deque_readonly.pruv	2 cases: exit 2	llvm=02f089933095	rust=02f089933095
+must_reject|must_reject/r6e_25_deque_scalar.pruv	2 cases: exit 2	llvm=0b5348c71279	rust=0b5348c71279
+must_reject|must_reject/r6e_25_deque_second.pruv	2 cases: exit 2	llvm=142e92556e71	rust=142e92556e71
+must_reject|must_reject/r6e_25_deque_shift_index.pruv	2 cases: exit 2	llvm=c855f05a3a4a	rust=c855f05a3a4a
+must_reject|must_reject/r6e_25_deque_vec.pruv	2 cases: exit 2	llvm=bfd6628e757e	rust=bfd6628e757e
 must_reject|must_reject/refine_alloc_len.pruv	2 cases: exit 2	llvm=91183d4f0e90	rust=91183d4f0e90
 must_reject|must_reject/refine_base_bool.pruv	2 cases: exit 2	llvm=345aab8fdc3a	rust=345aab8fdc3a
 must_reject|must_reject/refine_bounds_i64.pruv	2 cases: exit 2	llvm=f53a5fc811dd	rust=f53a5fc811dd
@@ -2720,9 +2731,9 @@ runtime|runtime/lg25_str_view [default]	2 cases: exit 2	llvm=94ef010a7045	rust=b
 runtime|runtime/lg26_utf8_span [--no-verify]	2 cases: exit 2	llvm=c6d7caab84aa	rust=7e076ddfb22d
 runtime|runtime/lg26_utf8_span [--trust-callers]	2 cases: exit 2	llvm=dc17a7b24a87	rust=c505fc90bce5
 runtime|runtime/lg26_utf8_span [default]	2 cases: exit 2	llvm=3a1ee20f7314	rust=2ec885ce17b1
-runtime|runtime/lg27_elem_inv [--no-verify]	2 cases: exit 2	llvm=98cec94fc50e	rust=26a9014ddf97
-runtime|runtime/lg27_elem_inv [--trust-callers]	2 cases: exit 2	llvm=f54923ba9afd	rust=d93f8915828e
-runtime|runtime/lg27_elem_inv [default]	2 cases: exit 2	llvm=c5ad70dfc5c3	rust=4d624d3ee07e
+runtime|runtime/lg27_elem_inv [--no-verify]	2 cases: exit 2	llvm=264878710cca	rust=26a9014ddf97
+runtime|runtime/lg27_elem_inv [--trust-callers]	2 cases: exit 2	llvm=6460b78bacf7	rust=d93f8915828e
+runtime|runtime/lg27_elem_inv [default]	2 cases: exit 2	llvm=061738961455	rust=4d624d3ee07e
 runtime|runtime/lg27_string_to_str_w [--no-verify]	2 cases: exit 2	llvm=5fb7a42b4d80	rust=bdd3cf9beb1c
 runtime|runtime/lg27_string_to_str_w [--trust-callers]	2 cases: exit 2	llvm=10d3a68a9880	rust=6cd1fca9f7d7
 runtime|runtime/lg27_string_to_str_w [default]	2 cases: exit 2	llvm=7d876e5f36bd	rust=32f58cb71b43
@@ -2739,10 +2750,10 @@ runtime|runtime/lg30_opq_guard [default]	2 cases: exit 2	llvm=5fab217a31fe	rust=
 runtime|runtime/lg30_utf8_after_ascii [--no-verify]	2 cases: exit 2	llvm=c3478ba07e89	rust=12e0957a9e3d
 runtime|runtime/lg30_utf8_after_ascii [--trust-callers]	2 cases: exit 2	llvm=a88eeb630fff	rust=8a575910b215
 runtime|runtime/lg30_utf8_after_ascii [default]	2 cases: exit 2	llvm=9b5803574df5	rust=30f17c781ac9
-runtime|runtime/lg31_push_frame [--infer]	2 cases: exit 2	llvm=757980757c51	rust=73c69c40c657
-runtime|runtime/lg31_push_frame [--no-verify]	2 cases: exit 2	llvm=9c97375f0eab	rust=747db44efbbf
-runtime|runtime/lg31_push_frame [--trust-callers]	2 cases: exit 2	llvm=b63ac6126981	rust=cd938628657d
-runtime|runtime/lg31_push_frame [default]	2 cases: exit 2	llvm=757980757c51	rust=73c69c40c657
+runtime|runtime/lg31_push_frame [--infer]	2 cases: exit 2	llvm=65563663d330	rust=73c69c40c657
+runtime|runtime/lg31_push_frame [--no-verify]	2 cases: exit 2	llvm=fc5305311bb1	rust=747db44efbbf
+runtime|runtime/lg31_push_frame [--trust-callers]	2 cases: exit 2	llvm=39c069274d26	rust=cd938628657d
+runtime|runtime/lg31_push_frame [default]	2 cases: exit 2	llvm=65563663d330	rust=73c69c40c657
 runtime|runtime/lg33_rt_move [--no-verify]	2 cases: exit 2	llvm=d506cb916ebe	rust=175189ee3164
 runtime|runtime/lg33_rt_move [default]	2 cases: exit 2	llvm=012f0cda46f2	rust=523f2d4d749f
 runtime|runtime/lg34_rt_field_regrow [--no-verify]	2 cases: exit 2	llvm=7666eaba323e	rust=7ad276e37ca4
@@ -2828,13 +2839,13 @@ runtime|runtime/lgaps12_view_checks [default]	2 cases: exit 2	llvm=ba3f98b4bb27	
 runtime|runtime/lgaps12_view_checks_nv [--no-verify]	2 cases: exit 2	llvm=e693710eea3f	rust=71d515d35ffa
 runtime|runtime/lgaps12_view_checks_trusted [--foreign-checks all]	2 cases: exit 2	llvm=c08069301e1d	rust=1b70fc975b81
 runtime|runtime/lgaps12_view_checks_trusted [default]	2 cases: exit 2	llvm=5496ce1897d6	rust=0b02b3896ae8
-runtime|runtime/lgaps13_take_then_fail [--no-verify]	2 cases: exit 2	llvm=44c6b3badec9	rust=ac4f51767747
+runtime|runtime/lgaps13_take_then_fail [--no-verify]	2 cases: exit 2	llvm=64bd05df81e3	rust=ac4f51767747
 runtime|runtime/lgaps13_vec_nested_field [--no-verify]	2 cases: exit 2	llvm=199f4947cce1	rust=8c6b8c279963
 runtime|runtime/lgaps13_vec_nested_field [default]	2 cases: exit 2	llvm=199f4947cce1	rust=eb3fd9f97a12
-runtime|runtime/lgaps13_vec_tape [--no-verify]	2 cases: exit 2	llvm=83640051be8c	rust=af0058816139
-runtime|runtime/lgaps13_vec_tape [default]	2 cases: exit 2	llvm=b083e42c9ba1	rust=6687f184de9d
-runtime|runtime/lgaps16_rt_binder_record [--no-verify]	2 cases: exit 2	llvm=ff92c4a0da5b	rust=48bd017eb318
-runtime|runtime/lgaps16_rt_binder_record [default]	2 cases: exit 2	llvm=8cb32ed13e05	rust=c2861f0082ab
+runtime|runtime/lgaps13_vec_tape [--no-verify]	2 cases: exit 2	llvm=4f612d3c6730	rust=af0058816139
+runtime|runtime/lgaps13_vec_tape [default]	2 cases: exit 2	llvm=f679196cdef9	rust=6687f184de9d
+runtime|runtime/lgaps16_rt_binder_record [--no-verify]	2 cases: exit 2	llvm=7cd199f6d497	rust=48bd017eb318
+runtime|runtime/lgaps16_rt_binder_record [default]	2 cases: exit 2	llvm=019afbdc1434	rust=c2861f0082ab
 runtime|runtime/lgaps16_rt_binder_scalar [--no-verify]	2 cases: exit 2	llvm=029489b2eb30	rust=49eea16aa03e
 runtime|runtime/lgaps16_rt_binder_scalar [default]	2 cases: exit 2	llvm=c5e1c946059d	rust=2c8fe084d478
 runtime|runtime/lgaps17_utf8_subspan [--no-verify]	2 cases: exit 2	llvm=edf79ad21b11	rust=c2fbce386d1d
@@ -3053,8 +3064,8 @@ runtime|runtime/p9_rt_match_order [--no-verify]	2 cases: exit 2	llvm=7c3a8e12b8b
 runtime|runtime/p9_rt_match_order [default]	2 cases: exit 2	llvm=1794f2416d3f	rust=7d514edf441d
 runtime|runtime/p9_rt_match_owned [--no-verify]	2 cases: exit 2	llvm=e5eea318cbb4	rust=eef04e6445a5
 runtime|runtime/p9_rt_match_owned [default]	2 cases: exit 2	llvm=cb3afd82e988	rust=495f59a9b995
-runtime|runtime/p9_rt_match_scrutinee [--no-verify]	2 cases: exit 2	llvm=18f8352f6242	rust=9824b0851672
-runtime|runtime/p9_rt_match_scrutinee [default]	2 cases: exit 2	llvm=79cf15cdba63	rust=64d08bdbf3b2
+runtime|runtime/p9_rt_match_scrutinee [--no-verify]	2 cases: exit 2	llvm=0a063b62240d	rust=9824b0851672
+runtime|runtime/p9_rt_match_scrutinee [default]	2 cases: exit 2	llvm=aed580d697e8	rust=64d08bdbf3b2
 runtime|runtime/p9_rt_match_take [--no-verify]	2 cases: exit 2	llvm=e1aeb78d37cd	rust=69e01962cdbc
 runtime|runtime/p9_rt_match_take [default]	2 cases: exit 2	llvm=6703e438c4aa	rust=a3384d89d482
 runtime|runtime/p9_rt_match_tuple_slice [--no-verify]	2 cases: exit 2	llvm=ea8ad0128e80	rust=f37c1076c36b
@@ -3082,8 +3093,8 @@ runtime|runtime/p9_rt_value_generic [--no-verify]	2 cases: exit 2	llvm=239fe45a3
 runtime|runtime/p9_rt_value_generic [default]	2 cases: exit 2	llvm=8d32ef84c6b2	rust=1585d8104d1e
 runtime|runtime/p9_rt_value_match_mut [--no-verify]	2 cases: exit 2	llvm=e80a831d33d7	rust=2b5cc075d544
 runtime|runtime/p9_rt_value_match_mut [default]	2 cases: exit 2	llvm=e80a831d33d7	rust=2697ca27ed1e
-runtime|runtime/p9_rt_value_match_vec_mut [--no-verify]	2 cases: exit 2	llvm=aea64ea91cd8	rust=6f5e938046eb
-runtime|runtime/p9_rt_value_match_vec_mut [default]	2 cases: exit 2	llvm=59333df2f215	rust=52b3c6922cb5
+runtime|runtime/p9_rt_value_match_vec_mut [--no-verify]	2 cases: exit 2	llvm=52184b0b9415	rust=6f5e938046eb
+runtime|runtime/p9_rt_value_match_vec_mut [default]	2 cases: exit 2	llvm=1446e4994347	rust=52b3c6922cb5
 runtime|runtime/p9b2_rt_panic_name [--no-verify]	2 cases: exit 2	llvm=dc5cd373b273	rust=d27903444d92
 runtime|runtime/p9b2_rt_trait_names [--no-verify]	2 cases: exit 2	llvm=db6d2d07e4f5	rust=0af904952aba
 runtime|runtime/p9b2_rt_trait_names [default]	2 cases: exit 2	llvm=77748a2348d1	rust=9c07b556da83
@@ -3091,8 +3102,8 @@ runtime|runtime/p9b3_rt_generic [--no-verify]	2 cases: exit 2	llvm=83980ad6c0ba	
 runtime|runtime/p9b3_rt_generic [default]	2 cases: exit 2	llvm=b1127a6c662e	rust=e9c79ae9255b
 runtime|runtime/p9b3_rt_panic_free [--no-verify]	2 cases: exit 2	llvm=38bcf757be62	rust=da4fbfda90ff
 runtime|runtime/p9b3_rt_panic_name [--no-verify]	2 cases: exit 2	llvm=a4160df086b8	rust=8eeb15a13709
-runtime|runtime/p9b_rt_counter [--no-verify]	2 cases: exit 2	llvm=dfd26bab038f	rust=890d912ac185
-runtime|runtime/p9b_rt_counter [default]	2 cases: exit 2	llvm=9e38a8400f08	rust=be2837b729d8
+runtime|runtime/p9b_rt_counter [--no-verify]	2 cases: exit 2	llvm=0a3a1b9bdeb2	rust=890d912ac185
+runtime|runtime/p9b_rt_counter [default]	2 cases: exit 2	llvm=af67e3a645d0	rust=be2837b729d8
 runtime|runtime/p9b_rt_enum_field [--no-verify]	2 cases: exit 2	llvm=be9a721693ae	rust=cf81223817e7
 runtime|runtime/p9b_rt_enum_field [default]	2 cases: exit 2	llvm=25c5a910816f	rust=0127cd37e602
 runtime|runtime/p9b_rt_names [--no-verify]	2 cases: exit 2	llvm=3b598aadc76a	rust=6c8bceb00d45
@@ -3153,6 +3164,10 @@ runtime|runtime/r34_eval_order [--no-verify]	2 cases: exit 2	llvm=65b08db3642f	r
 runtime|runtime/r34_eval_order [default]	2 cases: exit 2	llvm=c346b32ecfd3	rust=8b6b282962bd
 runtime|runtime/r6b_4_rt_eq_range_str [--no-verify]	2 cases: exit 2	llvm=8523f6bc94d1	rust=0c0d784165e4
 runtime|runtime/r6b_4_rt_eq_range_str [default]	2 cases: exit 2	llvm=aa0484a440ae	rust=6288e91866e4
+runtime|runtime/r6e_25_deque_nested [--no-verify]	2 cases: exit 2	llvm=4a25a36ee83b	rust=d4b38d8c488a
+runtime|runtime/r6e_25_deque_nested [default]	2 cases: exit 2	llvm=d46994473ca8	rust=ae5ce63c7cc8
+runtime|runtime/r6e_25_deque_window [--no-verify]	2 cases: exit 2	llvm=50e1bbab3b09	rust=7b4dc7015491
+runtime|runtime/r6e_25_deque_window [default]	2 cases: exit 2	llvm=bed38e54542d	rust=b715b701be42
 runtime|runtime/refine_array_edges [--no-verify]	2 cases: exit 2	llvm=af7f0527c6a9	rust=4455053220da
 runtime|runtime/refine_array_edges [--trust-callers]	2 cases: exit 2	llvm=4624e15b6d29	rust=745f11a112f0
 runtime|runtime/refine_array_edges [default]	2 cases: exit 2	llvm=af7f0527c6a9	rust=3f8679839493
