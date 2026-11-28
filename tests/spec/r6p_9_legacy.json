@@ -1,0 +1,13 @@
+{
+  "backend": "llvm",
+  "run": {
+    "backends": [
+      "llvm"
+    ],
+    "exit": 0,
+    "stdout_lines": [],
+    "ll_contains": [
+      "define zeroext i8 @pruv_abi_byte(i8 zeroext"
+    ]
+  }
+}

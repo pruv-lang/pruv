@@ -103,24 +103,30 @@ def main():
             else:
                 rows.append((stem, "FAIL", "stdout differs - " + first_diff(got, want)))
 
-        if not a.skip_c:
-            stem = "args_0_1_5"
+        for stem, caller in (("args_0_1_5", "c_caller"), ("p12d_narrow", "c_caller_p12d")):
+            if a.skip_c or stem not in stems:
+                continue
             gen_o = work / (stem + "_gen.obj")
             rt_c = work / "runtime_c.obj"
-            exe = work / "c_caller.exe"
+            exe = work / (caller + ".exe")
             if not gen_o.exists():
-                rows.append(("c_caller", "FAIL", "args_0_1_5 object missing (earlier step failed)"))
+                rows.append((caller, "FAIL", stem + " object missing"))
             else:
                 # Link the C caller with the default runtime (no host symbols needed), not the Rust allocator variant.
                 rc, so, se = run([clang] + C_FLAGS + ["-c", str(RUNTIME_C), "-o", str(rt_c)])
                 if rc == 0:
                     rc, so, se = run([clang, "--target=" + TRIPLE, "-O1", "-fms-runtime-lib=dll", "-fuse-ld=lld",
-                                      str(HERE / "c_caller.c"), str(gen_o), str(rt_c), "-o", str(exe)])
+                                      str(HERE / (caller + ".c")), str(gen_o), str(rt_c), "-o", str(exe)])
                 if rc != 0:
-                    rows.append(("c_caller", "FAIL", "clang build/link: " + tail(so, se)))
+                    rows.append((caller, "FAIL", "clang build/link: " + tail(so, se)))
                 else:
                     rc, so, se = run([str(exe)], timeout=120)
-                    rows.append(("c_caller", "OK" if rc == 0 else "FAIL", tail(so, se, n=600).replace("\n", " | ")))
+                    rows.append((caller, "OK" if rc == 0 else "FAIL", tail(so, se, n=600).replace("\n", " | ")))
+                    if stem == "p12d_narrow":
+                        for n in (-1, 2**40 + 1):
+                            rc, so, se = run([str(exe), str(n)])
+                            ok = rc == 101 and not so and f"pruv: invalid representation: {n} (array length)" in se
+                            rows.append((f"{caller}({n})", "OK" if ok else "FAIL", tail(so, se)))
     finally:
         if not a.keep:
             shutil.rmtree(work, ignore_errors=True)

@@ -1,3 +1,4 @@
-pub fn f() -> i32 {
+// P12d: an i32 result has an LLVM host layout; a char parameter still has none
+pub fn f(x: char) -> i32 {
   return 0;
 }

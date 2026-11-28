@@ -1315,17 +1315,16 @@ pub fn has_take_array(f: &Function) -> bool {
     f.params.iter().any(|p| p.take && is_array_name(&p.ty))
 }
 
-/// Legacy functions with extended, inout, take-array or narrow scalar signatures use only internal entry points.
+/// Legacy functions with extended, inout, take-array or unsupported integer signatures use only internal entry points.
 /// R-6g9-1: a borrowed result (a { ptr, i64 } view the host would read as an owned array) is internal too
 pub fn is_internal_fn(f: &Function, tt: &TypeTable) -> bool {
     has_ext_sig(f, tt) || has_inout(f) || has_take_array(f) || f.borrowed_result
-        || crate::emit_common::has_narrow_scalar_sig(f, tt)
+        || crate::emit_common::has_llvm_unsupported_int_sig(f, tt)
 }
 
-/// A signature excluded from C ABI generation: extended aggregates or internal u16 buffers.
+/// A signature excluded from C ABI generation: extended aggregates.
 pub fn has_ext_sig(f: &Function, tt: &TypeTable) -> bool {
-    crate::emit_common::has_u16_buffer_sig(f)
-        || f.params.iter().any(|p| is_ext_t(tt, &p.ty)) || is_ext_t(tt, &f.ret)
+    f.params.iter().any(|p| is_ext_t(tt, &p.ty)) || is_ext_t(tt, &f.ret)
 }
 
 /// internal LLVM result type: an extended (G9) aggregate result goes through explicit output storage
@@ -1408,7 +1407,7 @@ fn field_index(tt: &TypeTable, ty: &str, variant: Option<&str>, i: usize, c: boo
 /// would otherwise recompute every subtree: quadratic).
 pub fn words(tt: &TypeTable, ty: &str) -> R<usize> {
     if crate::intwidth::is_narrow(ty) {
-        return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+        return Ok(1);
     }
     if let Some(&n) = tt.words_memo.borrow().get(ty) {
         return Ok(n);
@@ -10148,7 +10147,7 @@ pub fn is_host_abi_fn(f: &Function, tt: &TypeTable, explicit: bool, host: bool) 
         && !has_ext_sig(f, tt)
         && !has_take_array(f)
         && !f.borrowed_result // A borrowed result never crosses the host boundary
-        && (host || (!explicit && !crate::emit_common::has_narrow_scalar_sig(f, tt)))
+        && (host || (!explicit && !crate::emit_common::has_llvm_unsupported_int_sig(f, tt)))
         // an inout entry is exported only as an explicit-mode host entry (legacy inout fns stay internal)
         && (!has_inout(f) || (explicit && host))
 }
@@ -10416,7 +10415,11 @@ pub fn gen_llvm_with_specializations(
                     || p.mode_pos.is_some() && !crate::gtype::GType::from_key(&p.ty).is_array()));
         if (public || f.foreign.is_some()) && host && !owned_host && {
             let table = tt0.get_or_insert_with(|| crate::emit_common::make_type_table(prog));
+            let extended = prog.g9.as_ref().is_some_and(|meta|
+                std::iter::once(&f.ret).chain(f.params.iter().map(|p| &p.ty)).any(|ty| meta.extended.contains(ty)));
             crate::emit_common::has_llvm_unsupported_int_sig(f, table)
+                || (extended || prog.raw_entries.as_deref() == Some("c") || f.foreign.is_some())
+                    && crate::emit_common::has_int_sig(f, table, true)
         } {
             return Err(GenError::Diag(crate::diagnostic::PruvError::new(
                 "codegen", f.line, f.col, "small_int_unsupported",

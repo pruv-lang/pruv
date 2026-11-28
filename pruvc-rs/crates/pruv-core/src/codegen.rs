@@ -7977,7 +7977,7 @@ mod tests {
                 assert!(ir.contains(expected), "missing {expected}");
             }
             assert!(ir.contains("mul nuw nsw i64 1, 2"));
-            assert!(!bindings.contains("pruv_abi_sample"));
+            assert!(bindings.contains("fn pruv_abi_sample(p0: *const u16, p1: i64, p2: i64) -> i64"));
             assert!(!ir.contains("call ptr @pruv_alloc_u8("));
         }
     }
@@ -8097,10 +8097,9 @@ mod tests {
 
         let mut invalid = p;
         invalid.explicit.as_mut().unwrap().fns[0].host_entry = true;
-        let err = crate::emit_common::SMALL_INT_HOST_ERROR;
         assert!(gen_rust_concrete(&invalid, false, false, 100).unwrap().contains("pub fn narrow("));
-        assert_eq!(crate::llvmgen::gen_llvm_concrete(&invalid, false, false, 100, AbiTarget::SysV).unwrap_err(), err);
-        assert_eq!(crate::bindings::gen_bindings(&invalid).unwrap_err(), err);
+        assert!(crate::llvmgen::gen_llvm_concrete(&invalid, false, false, 100, AbiTarget::SysV).unwrap().0.contains("define zeroext i8 @pruv_abi_narrow(i16 zeroext"));
+        assert_eq!(crate::bindings::gen_bindings(&invalid).unwrap_err(), crate::emit_common::SMALL_INT_HOST_ERROR);
     }
 
     /// `mk(n) -> [i64] ensures len(result) <= k` building `o` with alloc, and `g(n) -> i64` binding `let r = mk(n)`

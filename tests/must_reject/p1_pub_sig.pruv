@@ -1,4 +1,5 @@
-// P12a: u8 at the host boundary runs on the Rust backend; the LLVM host boundary is a later P12 bundle
-pub fn f(x: u8) -> i64 {
-  return i64(x);
+// P12d: u8 has an LLVM host layout; a [u16] struct field at the host boundary does not
+pub struct S { a: [u16], b: u8 }
+pub fn f(s: S) -> i64 {
+  return i64(s.b);
 }

@@ -1,0 +1,20 @@
+{
+  "gen_contains": [
+    "pub fn count(st: &mut State) -> i64 {\n    if (st.items.len() as u64) > (1u64 << 40) { panic!(\"pruv: invalid representation: {} (array length)\", st.items.len()); }\n    for (pruv_key, pruv_value) in st.items.iter() { if (pruv_value.data.len() as u64) > (1u64 << 40) { panic!(\"pruv: invalid representation: {} (array length)\", pruv_value.data.len()); } }\n    count__pruv_body(st)"
+  ],
+  "run": {
+    "backends": [
+      "rust"
+    ],
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "items: 1"
+    ]
+  }
+}

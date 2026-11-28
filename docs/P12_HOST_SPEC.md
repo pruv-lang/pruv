@@ -173,7 +173,43 @@ used by its bare name.
 - Cost. Scalars, slice borrows and the result handoff are O(1); 0 input elements copied. Struct conversion is linear
   in its word count; at most one O(output) copy when the result shrink reallocates.
 
+## P12e LLVM value tuples (design)
+
+A value tuple is a tuple whose components, after alias expansion, are all scalars admitted by P12d (`i64`, `bool`, the
+fixed-width integers), eligible public structs, or value tuples. Tuple identity is the P12b rule (resolved component
+types), so the same tuple named from two modules has one layout.
+
+| Pruv position | C prototype of the LLVM host entry | Generated Rust binding |
+|---|---|---|
+| parameter `p: (A, B, ..)` | `const int64_t *p_words` | `p: (A, B, ..)` |
+| result `-> (A, B, ..)` | `void` plus a last `int64_t *out_words` | `-> (A, B, ..)` |
+| struct field `f: (A, B, ..)` | the field's words inlined in the struct words, in field order | the Rust tuple |
+| nested tuple / struct component | the component's words inlined, depth first | the Rust tuple |
+
+- Representation. A tuple uses the existing aggregate word serialization of P12d structs: components in order, one
+  64-bit word per scalar component (`bool` as 0/1, narrow integers sign- or zero-extended on write and truncated on
+  read), struct and tuple components flattened depth first. The word count is fixed by the type; the unit tuple has no
+  host form. A tuple is never passed or returned as an LLVM first-class aggregate, so no target-specific aggregate
+  classification (SysV register pairs, WinX64 by-reference rule) applies; SysV `zeroext`/`signext` stays limited to
+  direct narrow scalars of P12d.
+- Bindings. `--rust-bindings` packs and unpacks the words into the native Rust tuple in the same order; the binding
+  declares the word count as a fixed array length (`[i64; N]`) so a short buffer is a Rust type error.
+- Reading host words. A `bool` word other than 0 or 1 stops with `pruv_panic_repr(word, "bool")` (exit 101) before
+  `requires` and the body, also under `--trust-callers`; integer words are truncated as for P12d struct fields.
+- What is lifted. `codegen/tuple_host_unsupported` for value tuples in parameters, results and public struct fields of
+  root host entries (and the implicit entries of legacy files). Consts and transparent aliases do not change layout.
+- What stays rejected. A tuple with an owned component (`[u8]`, `[i64]`, `[u16]`, `String`, `Vec<T>`, owned enums)
+  keeps `codegen/tuple_llvm_owned` until P12g; a tuple holding a fixed array, `inout` tuples and tuples in trusted
+  rust/foreign signatures (P12h) keep their current codes. Standalone C bindings and `raw_entries="c"` gain the same
+  word form only if they already accept structs.
+- Acceptance tests (new SPEC row, verified and `--no-verify`, LLVM through a direct C caller and the generated
+  bindings, plus tests/abi/winci for WinX64): a cross-module tuple result `(crate::a::Pair, i64)` read in component
+  order; `(i8, u64, bool)` with min/max, negative values and the top bit set; two same-typed components that must not be
+  swapped; a nested tuple inside a struct field; a bool word of 2 from C stopping with exit 101 before the body;
+  rejections for `(String, i64)`, `([u8], i64)` and a tuple in a trusted rust fn signature. The existing
+  `p12b_host_tuple*_llvm` reject tests move to owned-component forms.
+- Cost. O(words) per crossing, O(1) for a fixed-size tuple of scalars; no allocation and no host shim per tuple type.
+
 ## Next bundle
 
-P12d (LLVM narrow ints and `[u16]`, design above), then P12e (LLVM value tuples), P12f (allocator and ownership ABI),
-P12g (LLVM owned types), then P12h.
+P12e (LLVM value tuples, design above), then P12f (allocator and ownership ABI), P12g (LLVM owned types), then P12h.

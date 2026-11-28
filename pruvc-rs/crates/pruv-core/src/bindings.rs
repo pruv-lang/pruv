@@ -2,7 +2,7 @@
 //! The output must be byte-identical to Python's.
 
 use crate::ast::*;
-use crate::emit_common::{emit_public_types, emit_public_types_with, is_spec_fn, rty};
+use crate::emit_common::{emit_public_types, emit_public_types_with, rty};
 use crate::gtype::GType;
 use crate::llvmgen::{g_arg, g_error, is_agg, is_gopt};
 use crate::typeinfo::{is_array_name, is_user_type, uses_array_type, uses_str, TypeTable};
@@ -103,7 +103,7 @@ fn rust_ty(t: &str, param: bool) -> String {
         // P6: a scalar tuple crosses the binding as a native Rust tuple
         return rty(t, false);
     }
-    if is_user_type(t) {
+    if crate::intwidth::is_narrow(t) || is_user_type(t) {
         return t.to_string();
     }
     match t {
@@ -112,6 +112,7 @@ fn rust_ty(t: &str, param: bool) -> String {
         "unit" => "()".to_string(),
         "option" => "::std::option::Option<i64>".to_string(),
         "result" => "::std::result::Result<i64, i64>".to_string(),
+        "array_u16" => (if param { "&[u16]" } else { "::std::vec::Vec<u16>" }).to_string(),
         "array_u8" => (if param { "&[u8]" } else { "::std::vec::Vec<u8>" }).to_string(),
         "array_bool" => (if param { "&[bool]" } else { "::std::vec::Vec<bool>" }).to_string(), // G2 A5
         "str" => (if param { "&str" } else { "::std::string::String" }).to_string(), // G2 B2
@@ -122,7 +123,7 @@ fn rust_ty(t: &str, param: bool) -> String {
 /// Rust statements that write the value `expr` (Copy) into the word array `arr` at `off`.
 fn rs_ser(tt: &TypeTable, ty: &str, expr: &str, arr: &str, off: i64, ctr: &mut i64) -> Result<Vec<String>, String> {
     if crate::intwidth::is_narrow(ty) {
-        return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+        return Ok(vec![format!("{}[{}] = ({}) as i64;", arr, off, expr)]);
     }
     if ty == "unit" {
         // LB8: zero words
@@ -203,7 +204,7 @@ fn rs_ser(tt: &TypeTable, ty: &str, expr: &str, arr: &str, off: i64, ctr: &mut i
 /// Rust expression that rebuilds a ty value from the word array `arr` at `off` (safe constructors only).
 fn rs_de(tt: &TypeTable, ty: &str, arr: &str, off: i64) -> Result<String, String> {
     if crate::intwidth::is_narrow(ty) {
-        return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+        return Ok(format!("{}[{}] as {}", arr, off, ty));
     }
     if ty == "unit" {
         // LB8: zero words
@@ -337,6 +338,10 @@ fn take_array_abi_error_at(
         let host = meta.is_some_and(|m| m.host_entry)
             || g4.and_then(|g| g.fn_meta.get(i)).is_some_and(|m| m.host_entry);
         if host && f.params.iter().any(|p| p.take && GType::from_key(&p.ty).is_array()) {
+            if f.params.iter().any(|p| p.take && p.ty == "array_u16") {
+                return Some((i, crate::diagnostic::PruvError::new("codegen", f.line, f.col,
+                    "small_int_unsupported", crate::emit_common::SMALL_INT_HOST_MESSAGE, "use the Rust backend")));
+            }
             // before the plan, f.name already holds the source identity (crate::m::f), as Python's disp
             let name = meta.map_or(f.name.as_str(), |m| m.disp.as_str());
             return Some((i, crate::diagnostic::PruvError::new(
@@ -446,6 +451,12 @@ pub fn owned_collection_abi_error(
 }
 
 pub fn gen_bindings(prog: &Program) -> Result<String, String> {
+    // Standalone bindings retain their original host signature allowlist.
+    let tt = crate::llvmgen::new_tt(prog);
+    if prog.explicit.as_ref().is_some_and(|meta| prog.functions.iter().zip(&meta.fns)
+        .any(|(f, mark)| mark.host_entry && crate::emit_common::has_int_sig(f, &tt, true))) {
+        return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+    }
     gen_bindings_with(prog, None, true)
 }
 
@@ -515,6 +526,10 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
     }
     o.push(ALLOW.to_string());
     o.push("#[repr(C)]\npub struct Pruv__Array { pub data: *mut i64, pub len: i64 }".to_string());
+    if prog.functions.iter().any(|f| f.ret == "array_u16") {
+        o.push(ALLOW.to_string());
+        o.push("#[repr(C)]\npub struct Pruv__ArrayU16 { pub data: *mut u16, pub len: i64 }".to_string());
+    }
     if uses_array_type(prog, "array_u8") {
         o.push(ALLOW.to_string());
         o.push("#[repr(C)]\npub struct Pruv__ArrayU8 { pub data: *mut u8, pub len: i64 }".to_string());
@@ -552,20 +567,7 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
         .functions
         .iter()
         .enumerate()
-        .filter(|(i, f)| {
-            (if explicit { hosts.get(*i).copied().unwrap_or(false) }
-             else { !crate::emit_common::has_narrow_scalar_sig(f, &tt) })
-                && !is_spec_fn(&f.name)
-                && f.foreign.is_none()
-                && !(f.params.iter().any(|p| crate::llvmgen::is_collection(&p.ty)) || crate::llvmgen::is_collection(&f.ret))
-                && !crate::llvmgen::has_ext_sig(f, &tt)
-                && !crate::llvmgen::has_take_array(f)
-                // LG9-SB4: a borrowed result (`ref [u8]` / `ref str`) has no pruv_abi_* symbol (is_host_abi_fn), so no
-                // binding either (it used to wrap the view as an owned Vec/String and declare an undefined symbol)
-                && !f.borrowed_result
-                // an inout entry has a binding only as an explicit-mode host entry (legacy inout fns stay internal)
-                && (!crate::llvmgen::has_inout(f) || (explicit && hosts.get(*i).copied().unwrap_or(false)))
-        })
+        .filter(|(i, f)| crate::llvmgen::is_host_abi_fn(f, &tt, explicit, hosts.get(*i).copied().unwrap_or(false)))
         .map(|(_, f)| f)
         .collect();
     let returns_array = pubs.iter().any(|f| is_array_name(&f.ret) || f.ret == "str"); // G2 B2: str returns are counted too
@@ -588,6 +590,10 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
             } else if p.ty == "array_u8" || p.ty == "array_bool" || p.ty == "str" {
                 // G2 A5: bool is also *const u8 (G2 B2: so is str)
                 ps.extend(["*const u8", "i64"]);
+            } else if crate::intwidth::is_narrow(&p.ty) {
+                ps.push(&p.ty);
+            } else if p.ty == "array_u16" {
+                ps.extend(["*const u16", "i64"]);
             } else if p.ty == "array" {
                 ps.extend(["*const i64", "i64"]);
             } else if p.ty == "option" || p.ty == "result" {
@@ -598,7 +604,9 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
                 ps.push("i64");
             }
         }
-        if f.ret == "array_u8" {
+        if f.ret == "array_u16" {
+            ps.push("*mut Pruv__ArrayU16");
+        } else if f.ret == "array_u8" {
             ps.push("*mut Pruv__ArrayU8");
         } else if f.ret == "array_bool" {
             ps.push("*mut Pruv__ArrayBool"); // G2 A5
@@ -609,7 +617,11 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
         } else if is_agg(&f.ret) {
             ps.push("*mut i64");
         }
-        let ret = if f.ret == "i64" || f.ret == "bool" {
+        let narrow_ret;
+        let ret = if crate::intwidth::is_narrow(&f.ret) {
+            narrow_ret = format!(" -> {}", f.ret);
+            &narrow_ret
+        } else if f.ret == "i64" || f.ret == "bool" {
             " -> i64"
         } else if f.ret == "option" || f.ret == "result" {
             " -> Pruv__Tagged"
@@ -663,7 +675,7 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
                     args.push(format!("{}.as_mut_ptr()", p.name));
                 }
                 args.push(format!("{}.len() as i64", p.name));
-            } else if p.ty == "i64" {
+            } else if crate::intwidth::of(&p.ty).is_some() {
                 args.push(p.name.clone());
             } else if p.ty == "bool" {
                 args.push(format!("{} as i64", p.name));
@@ -716,7 +728,7 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
         let callo = format!("{}pruv_abi_{}({})", sp, typed_abi_name(f), args_out.join(", "));
         if f.ret == "unit" {
             body.push(format!("{};", call));
-        } else if f.ret == "i64" {
+        } else if crate::intwidth::of(&f.ret).is_some() {
             body.push(call);
         } else if f.ret == "bool" {
             body.push(format!("{} != 0", call));
@@ -741,7 +753,7 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
                     .to_string(),
             );
         } else if is_array_name(&f.ret) {
-            let out_ty = if f.ret == "array_u8" { "Pruv__ArrayU8" } else { "Pruv__Array" };
+            let out_ty = if f.ret == "array_u8" { "Pruv__ArrayU8" } else if f.ret == "array_u16" { "Pruv__ArrayU16" } else { "Pruv__Array" };
             body.push(format!("let mut pruv__out = {} {{ data: ::std::ptr::null_mut(), len: 0 }};", out_ty));
             body.push(format!("{};", callo));
             body.push(

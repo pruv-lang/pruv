@@ -1,0 +1,20 @@
+{
+  "gen_contains": [
+    "pub fn arity(root: &mut Node) -> i64 {\n    pruv_check_len__Node(&root);\n    fn pruv_check_len__Node(pruv_node: &Node) { if (pruv_node.data.len() as u64) > (1u64 << 40) { panic!(\"pruv: invalid representation: {} (array length)\", pruv_node.data.len()); } if (pruv_node.children.len() as u64) > (1u64 << 40) { panic!(\"pruv: invalid representation: {} (array length)\", pruv_node.children.len()); } for pruv_elem in pruv_node.children.iter() { pruv_check_len__Node(&pruv_elem); } }\n    arity__pruv_body(root)"
+  ],
+  "run": {
+    "backends": [
+      "rust"
+    ],
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "children: 1"
+    ]
+  }
+}

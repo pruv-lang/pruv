@@ -70,6 +70,7 @@ STAGES = [
     ("abi_v2", "tests/abi/check_runtime_v2.py", "pruvc", "--pruvc", [], []),
     ("abi_bool", "tests/abi/check_bool_repr.py", "pruvc", "--pruvc", [], []),
     ("abi_utf8", "tests/abi/check_utf8_repr.py", "pruvc", "--pruvc", [], []),
+    ("abi_narrow", "tests/abi/check_narrow_host.py", "pruvc", "--pruvc", [], []),
 ]
 NAMES = [s[0] for s in STAGES]
 # stages that compare/check against goldens (they accept --vs-py and --update-golden)

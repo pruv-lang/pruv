@@ -1,0 +1,4 @@
+// spec: R-6p-8 accept
+pub struct Item { data: [u8] }
+pub struct State { items: HashMap<i64, Item> }
+pub fn count(inout st: State) -> i64 { return len(st.items); }
