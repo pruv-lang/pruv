@@ -437,6 +437,7 @@ by byte-identical output and run by group, with the full test suite once before 
     - HC-12 `bench/l3/claude/q_mutants.py` exits 1: mutants 1, 5, 9-12, 17 and 18 are stale (their source snippet
       no longer exists at HEAD), so they test nothing. Re-anchor each to the current source or drop it with a reason;
       a stale mutant must fail the run loudly but must not hide the others. Found in HC-11 (mutant 19 is fine).
+      Done (HC-12, 03a987b1): all eight re-anchored to the current source, none dropped; q_mutants rc=0.
       Done: all eight re-anchored, none dropped. The drafts ring (`(c.begun - 1) % 200`) became a vector whose last
       element is the current draft, and the root keys became `k[4]`; 1 (isMeta inverted, `k[4]`), 5 (lastAt
       maximum, on `Some(b) => { last = iso.at; }`), 9 (`len(d.reply) > 0` separator), 10 (`room` from
