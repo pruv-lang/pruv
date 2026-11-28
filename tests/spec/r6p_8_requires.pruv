@@ -1,0 +1,2 @@
+// spec: R-6p-8 accept
+pub fn nonempty_len(take v: Vec<i64>) -> i64 requires len(v) > 0 { return len(v); }

@@ -1,0 +1,1 @@
+{"stage":"codegen","code":"unsupported_type","flags":["--backend","llvm","--emit","ll","--rust-bindings","r6p_8_rejected_bindings.rs"]}

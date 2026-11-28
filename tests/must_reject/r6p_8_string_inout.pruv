@@ -1,0 +1,2 @@
+// spec: R-6p-8 reject
+pub fn f(inout s: String) -> i64 { return len(s); }

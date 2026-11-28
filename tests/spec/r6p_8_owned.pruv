@@ -1,0 +1,15 @@
+// spec: R-6p-8 accept
+pub struct R { data: [u8], title: String }
+pub struct State { n: i64, data: [u8], title: String }
+pub fn update(inout st: State, n: i64) -> () requires n > 0 { st.n = n; }
+pub fn read_str(s: str) -> i64 { return len(s); }
+pub fn into_text(take s: String) -> str { return string_into_str(move s); }
+pub fn consume(take s: String, ok: bool) -> i64 requires ok { return len(s); }
+pub fn read_ints(v: Vec<i64>) -> i64 { return len(v); }
+pub fn keep_ints(take v: Vec<i64>) -> Vec<i64> cost 0 { return move v; }
+pub fn read_flags(v: Vec<bool>) -> i64 { return len(v); }
+pub fn keep_flags(take v: Vec<bool>) -> Vec<bool> { return move v; }
+pub fn read_records(v: Vec<R>) -> i64 { return len(v); }
+pub fn keep_records(take v: Vec<R>) -> Vec<R> { return move v; }
+pub fn read_text(v: String) -> i64 { return len(v); }
+pub fn keep_text(take v: String) -> String { return move v; }

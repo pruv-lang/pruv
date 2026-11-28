@@ -1,0 +1,2 @@
+// spec: R-6p-8 reject
+pub fn f(v: Vec<Vec<i64>>) -> i64 { return 0; }

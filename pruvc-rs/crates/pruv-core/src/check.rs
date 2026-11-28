@@ -3418,12 +3418,18 @@ impl Checker {
                         format!("host entry {} cannot reassign inout array parameter {}", f.name, p.name), ""));
                 }
             }
-            let rust_state = f.params.first().is_some_and(|p| p.mode_pos.is_some() && rust_records.contains(&p.ty));
+            let host_vector = |key: &str| {
+                let ty = GType::from_key(key);
+                matches!((ty.name.as_str(), ty.args.as_slice()), ("vec", [elem])
+                    if (*elem == i64t() || *elem == boolt()
+                        || !crate::gtype::is_tuple_name(&elem.name) && self.owned_aggregate(elem))
+                        && self.invariant_owner(&elem.to_key()).is_none())
+            };
             let mut sig: Vec<(String, &str)> = f.params.iter().enumerate().filter(|(i, p)| {
                 !(*i == 0 && self.explicit && p.mode_pos.is_some()
                     && matches!(self.decls.get(&p.ty), Some(TypeDecl::Struct(_)))
-                    || p.take && p.ty == "string"
-                    || !p.take && p.mode_pos.is_none() && (rust_records.contains(&p.ty) || rust_state && p.ty == "string")
+                    || p.mode_pos.is_none() && (p.ty == "string" || host_vector(&p.ty))
+                    || !p.take && p.mode_pos.is_none() && rust_records.contains(&p.ty)
                     || p.mode_pos.is_none() && self.owned_aggregate(&GType::from_key(&p.ty)))
             }).map(|(_, p)| (format!("parameter {}", p.name), p.ty.as_str())).collect();
             if let Some(p) = f.params.iter().skip(if self.explicit { 1 } else { 0 })
@@ -3432,7 +3438,7 @@ impl Checker {
                 return Err(terr(f.line, f.col, "entry_signature", format!("host entry {} must take inout state {} first", f.name, p.name), ""));
             }
             let ret = GType::from_key(&f.ret);
-            if !crate::gtype::key_is_scalar_vec(&f.ret) && !self.is_result_record(&ret) && !self.is_result_enum(&ret) {
+            if f.ret != "string" && !host_vector(&f.ret) && !self.is_result_record(&ret) && !self.is_result_enum(&ret) {
                 sig.push(("the result".to_string(), f.ret.as_str()));
             }
             for (what, key) in sig {

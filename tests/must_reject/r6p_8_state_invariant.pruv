@@ -1,0 +1,3 @@
+// spec: R-6p-8 reject
+pub struct S { n: i64, invariant n > 0 }
+pub fn f(inout st: S) -> i64 { return 0; }

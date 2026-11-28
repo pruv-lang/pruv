@@ -1,0 +1,19 @@
+{
+  "gen_contains": [
+    "    if (v.len() as u64) > (1u64 << 40) { panic!(\"pruv: invalid representation: {} (array length)\", v.len()); }\n    let mut pruv_budget: i64 = 1_073_741_824;\n    if !(((v.len() as i128) > 0i128)) { panic!(\"{}\", \"pruv: requires violated: crate::nonempty_len: (len(v) > 0)\"); }\n    nonempty_len__pruv_body(v)"
+  ],
+  "run": {
+    "backends": [
+      "rust"
+    ],
+    "exit": 101,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [],
+    "stderr_contains": "pruv: requires violated: crate::nonempty_len"
+  }
+}

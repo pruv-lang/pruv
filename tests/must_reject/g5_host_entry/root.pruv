@@ -1,8 +1,8 @@
 // G5: a root `pub` nongeneric function (an explicit host entry) may have an inout parameter (mutable host entry),
-// but a collection (Vec) in its signature is still rejected as type/entry_signature
+// but an inout Vec in its signature is still rejected as type/entry_signature
 mod util;
 
-pub fn set_at(inout a: [i64], v: Vec<i64>, i: i64) -> ()
+pub fn set_at(inout a: [i64], inout v: Vec<i64>, i: i64) -> ()
   requires 0 <= i && i < len(a)
 {
   a[i] = len(v);

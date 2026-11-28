@@ -1733,6 +1733,18 @@ must_reject|must_reject/r6e_25_deque_scalar.pruv	2 cases: exit 2	llvm=0b5348c712
 must_reject|must_reject/r6e_25_deque_second.pruv	2 cases: exit 2	llvm=142e92556e71	rust=142e92556e71
 must_reject|must_reject/r6e_25_deque_shift_index.pruv	2 cases: exit 2	llvm=c855f05a3a4a	rust=c855f05a3a4a
 must_reject|must_reject/r6e_25_deque_vec.pruv	2 cases: exit 2	llvm=bfd6628e757e	rust=bfd6628e757e
+must_reject|must_reject/r6p_8_llvm.pruv	2 cases: exit 2	llvm=e23ab7f0727f	rust=50ddadaf4fd7
+must_reject|must_reject/r6p_8_raw_c.pruv	2 cases: exit 2	llvm=04d7de469bc6	rust=edbda447cf1b
+must_reject|must_reject/r6p_8_scalar_inout.pruv	2 cases: exit 2	llvm=f98f76d2da9e	rust=f98f76d2da9e
+must_reject|must_reject/r6p_8_state_invariant.pruv	2 cases: exit 2	llvm=96f7e71e3eea	rust=96f7e71e3eea
+must_reject|must_reject/r6p_8_state_position.pruv	2 cases: exit 2	llvm=a01ac2b743fe	rust=a01ac2b743fe
+must_reject|must_reject/r6p_8_str_inout.pruv	2 cases: exit 2	llvm=0b02780531a0	rust=0b02780531a0
+must_reject|must_reject/r6p_8_str_take.pruv	2 cases: exit 2	llvm=9a980d1d1cf7	rust=9a980d1d1cf7
+must_reject|must_reject/r6p_8_string_inout.pruv	2 cases: exit 2	llvm=5aee373ac70f	rust=5aee373ac70f
+must_reject|must_reject/r6p_8_vec_inout.pruv	2 cases: exit 2	llvm=4290877c8a6c	rust=4290877c8a6c
+must_reject|must_reject/r6p_8_vec_invariant.pruv	2 cases: exit 2	llvm=7b3a86a922b2	rust=7b3a86a922b2
+must_reject|must_reject/r6p_8_vec_nested.pruv	2 cases: exit 2	llvm=be65527a98ff	rust=be65527a98ff
+must_reject|must_reject/r6p_8_vec_u16.pruv	2 cases: exit 2	llvm=c2aeaf50b70b	rust=c2aeaf50b70b
 must_reject|must_reject/refine_alloc_len.pruv	2 cases: exit 2	llvm=91183d4f0e90	rust=91183d4f0e90
 must_reject|must_reject/refine_base_bool.pruv	2 cases: exit 2	llvm=345aab8fdc3a	rust=345aab8fdc3a
 must_reject|must_reject/refine_bounds_i64.pruv	2 cases: exit 2	llvm=f53a5fc811dd	rust=f53a5fc811dd
@@ -2915,10 +2927,10 @@ runtime|runtime/p2_rt_words [--no-verify]	2 cases: exit 2	llvm=23f018f5b076	rust
 runtime|runtime/p2_rt_words [default]	2 cases: exit 2	llvm=3784f4aa2380	rust=aefae9f3ae26
 runtime|runtime/p2_rt_wrap [--no-verify]	2 cases: exit 2	llvm=700526a2abb4	rust=a1b2dde9e0a5
 runtime|runtime/p2_rt_wrap [default]	2 cases: exit 2	llvm=aaa375420844	rust=ecedccd26966
-runtime|runtime/p31f_inout_field [--no-verify]	2 cases: exit 2	llvm=12b6b188ee3f	rust=1486d0e8cfa3
-runtime|runtime/p31f_inout_field [default]	2 cases: exit 2	llvm=12b6b188ee3f	rust=0c84154a732a
-runtime|runtime/p31f_map_iter [--no-verify]	2 cases: exit 2	llvm=ef857e3e03bb	rust=f9b88a79529d
-runtime|runtime/p31f_map_iter [default]	2 cases: exit 2	llvm=ef857e3e03bb	rust=7ae3823e7d62
+runtime|runtime/p31f_inout_field [--no-verify]	2 cases: exit 2	llvm=12b6b188ee3f	rust=4a50f77a1b34
+runtime|runtime/p31f_inout_field [default]	2 cases: exit 2	llvm=12b6b188ee3f	rust=0c0a2a25fb10
+runtime|runtime/p31f_map_iter [--no-verify]	2 cases: exit 2	llvm=ef857e3e03bb	rust=dac88dbfe5e4
+runtime|runtime/p31f_map_iter [default]	2 cases: exit 2	llvm=ef857e3e03bb	rust=e7ae82b6bf18
 runtime|runtime/p31f_nested_record_map [--no-verify]	2 cases: exit 2	llvm=cb1d6c009f51	rust=6b2ebbbdcb2d
 runtime|runtime/p31f_nested_record_map [default]	2 cases: exit 2	llvm=cb1d6c009f51	rust=8d7b069f1b9a
 runtime|runtime/p3_f1_budget [--no-verify]	2 cases: exit 2	llvm=ddbaaca27d81	rust=8f8e02a28a73

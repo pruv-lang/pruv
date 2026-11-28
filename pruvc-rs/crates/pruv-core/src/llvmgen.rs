@@ -10409,7 +10409,12 @@ pub fn gen_llvm_with_specializations(
         // L-gaps 20: a module `pub` function (not a host entry) may pass `[T; N]` by value
         let host = f.foreign.is_some() || mark.is_some_and(|mark| mark.host_entry) || prog.explicit.is_none();
         // P12a: only a host entry or a foreign fn is a host boundary; a module `pub` function is internal
-        if (public || f.foreign.is_some()) && host && {
+        // An owned Rust entry has no C layout even when a record also contains narrow fields.
+        let owned_host = mark.is_some_and(|m| m.host_entry)
+            && (crate::gtype::key_is_collection(&f.ret) || f.params.iter().any(|p|
+                crate::gtype::key_is_collection(&p.ty)
+                    || p.mode_pos.is_some() && !crate::gtype::GType::from_key(&p.ty).is_array()));
+        if (public || f.foreign.is_some()) && host && !owned_host && {
             let table = tt0.get_or_insert_with(|| crate::emit_common::make_type_table(prog));
             crate::emit_common::has_llvm_unsupported_int_sig(f, table)
         } {

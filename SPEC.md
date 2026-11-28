@@ -399,8 +399,7 @@ match e {                                  // statement; every variant exactly o
   Host callers never pass or receive such a `Vec` (LG28, G-LG27-6), so the entry fact rests on proved Pruv callers.
   In explicit mode a host entry (root `pub` non-generic function, section 6f) with a `Vec<S>` parameter
   (read-only, `inout` or `take`) or result is `type/entry_signature` ("host entry F cannot have the type Vec<S> in
-  parameter P" / "in the result") by the collection rule; only `Vec<i64>` and `Vec<bool>` results are allowed
-  (R-6f-1). Child `pub` and private functions may take or return it. In legacy single-file mode there is no
+  parameter P" / "in the result") when S has an effective invariant (R-6p-8). Child `pub` and private functions may take or return it. In legacy single-file mode there is no
   host-entry signature check and the invariant-parameter rule below does not look inside `Vec`, so any function
   except `main` may take or return it; the Rust backend emits every such function as a private item (no host
   caller), and the LLVM backend runs a `Vec` of a plain struct or enum as a native vector (R-6e-22; an element with
@@ -973,7 +972,7 @@ fn tree_count(t: Tree) -> i64
   A mutable scalar binder is read with `*v` or `v` and assigned with `*v = x` or `v = x`.
   The verifier stores each nested collection in its own datatype field and preserves
   sibling fields and other collection elements on write-back. A root `pub` function may borrow a
-  record with the new collection fields through the Rust ABI. Like R-6f-2 resident state, its collection
+  record with the new collection fields through the Rust ABI. Outside the R-6p-8 boundary, its collection
   lengths (at most 2^40, section 7 item 6) are not checked per call: the record must come from this
   program's entries (section 7 caller obligations). Tests:
   [accept String keys](tests/spec/r6e_6_scalar_map_field.pruv),
@@ -1416,7 +1415,7 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   end of the file, and any `#[` inside a body, is `parse/attribute_position`.
 - **Host entries.** In explicit mode only root `pub` non-generic functions are host entries. A parameter of
   collection, recursive or buffer-field type, or an `inout` parameter (section 6g, Host limits), is
-  `type/entry_signature`, subject to R-6e-5, R-6e-6, R-6f-2, R-6f-4 and R-6f-6. The same restriction applies to results, subject to R-6f-1 and R-6f-3. Ordinary entries can be
+  `type/entry_signature`, subject to R-6p-8, R-6e-5, R-6e-6, R-6f-2, R-6f-4 and R-6f-6. The same restriction applies to results, subject to R-6p-8, R-6f-1 and R-6f-3. Ordinary entries can be
   exported through `--rust-bindings` and the LLVM
   `pruv_abi_<name>` interface. Child `pub` functions are for Pruv callers only. An optional root `main`
   must be `pub fn main() -> ()`. A child `main` is an ordinary function.
@@ -1424,7 +1423,7 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   `Vec<bool>`. The generated Rust module exposes it like any other host entry (`pub fn`, or `pub(crate) fn` under
   manifest `raw_entries`, section 7 Raw entries) returning `::std::vec::Vec<i64>` or `::std::vec::Vec<bool>`.
   A vector-result entry has no C ABI. The LLVM backend and
-  `--rust-bindings` reject it with `codegen/unsupported_type` naming the entry. Other collection and
+  `--rust-bindings` reject it with `codegen/unsupported_type` naming the entry. Outside R-6p-8, other collection and
   extended-type results remain `type/entry_signature`. Legacy mode is unchanged.
 - R-6f-2 **Typed resident state entries.** In explicit mode the first parameter of a root `pub` entry may be
   `inout st: S` for a non-generic struct `S`, including a state struct (R-6e-3). Only the Rust backend emits it,
@@ -1455,7 +1454,7 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
 - R-6f-6 **Owned aggregate entry parameters.** In explicit mode a Rust host entry may take a parameter
   `x: S` or `take x: S` of an owned aggregate `S` (R-6e-3), including one with `Vec<i64>`, `Vec<bool>`,
   `String` or `[u8]` fields. A borrowed `x: S` is `x: &S` in Rust and a `take x: S` is `x: S`, moved into the
-  body without a copy; a `[u8]` field is `Vec<u8>`. As for R-6f-2 state, field lengths (at most 2^40, section 7
+  body without a copy; a `[u8]` field is `Vec<u8>`. Outside R-6p-8, field lengths (at most 2^40, section 7
   item 6) are trusted, not checked per call, for both the borrowed and the `take` form; the host caller must keep them. `requires` on `x` are checked at entry unless `--trust-callers`.
   A `take` parameter follows R-6e-12 in the body (`type/foreign_move` after a move). A struct that is not an
   owned aggregate (a `[bool]` or `str` field, a generic struct) is not covered by this rule (an `[i64]` field
@@ -3011,6 +3010,28 @@ read by the checker, the verifier and both backends.
   [signature alias](tests/must_reject/g4_p12b_signature_alias/root.pruv),
   [cycle](tests/must_reject/g4_p12b_cycle/root.pruv), [LLVM object](tests/must_reject/p12b_llvm_tuple.pruv).
 
+- R-6p-8 **Rust owned collections and mutable state (P12c).** A root host entry reads `Vec<T>` as `&Vec<T>`,
+  takes it as `Vec<T>`, and returns it as `Vec<T>`. The element is `i64`, `bool`, or an admissible public
+  non-generic record without an effective invariant, including records with owned byte arrays and strings.
+  Read, take and result positions for `String` are `&String`, `String` and `String`. Read and result positions
+  for `str` are `&str` and `String`. A first `inout` public state struct crosses as `&mut State`.
+  Before checking any `requires`, the wrapper checks host vector lengths, string byte lengths, and nested
+  buffers in vector elements and state against the inclusive 2^40 bound. Verified and unverified entries check
+  contracts on borrowed inputs. Trusting callers skips contracts and retains length checks. Ownership moves
+  once to the body on success and unwinds on failure. Descriptor handoff costs O(1) with zero copied bytes.
+  Nested validation costs O(n) in the elements visited. Vector `inout`, invariant-bearing state or vector
+  elements, scalar `inout`, and non-first state remain `type/entry_signature`; the state is a public
+  non-generic struct. `inout String` and `inout str` are `type/inout_type`, `take str` is `type/foreign_move`,
+  nested vectors (`Vec<Vec<i64>>`) are `type/foreign_owned_type`, and non-i64 integer vector elements
+  (`Vec<u16>`) are `parse/small_int_unsupported`. Newly admitted signatures have no LLVM, LLVM Rust bindings
+  or raw C ABI (`codegen/unsupported_type`).
+  Tests: [ownership and state](tests/spec/r6p_8_owned.pruv), [requires](tests/spec/r6p_8_requires.pruv),
+  [trusted callers](tests/spec/r6p_8_trust.pruv), [invariant state](tests/spec/r6p_8_reject_invariant.pruv),
+  [LLVM](tests/spec/r6p_8_reject_llvm.pruv), [bindings](tests/must_reject/r6p_8_llvm.pruv),
+  [raw C](tests/must_reject/r6p_8_raw_c.pruv), [nested](tests/must_reject/r6p_8_vec_nested.pruv),
+  [`Vec<u16>`](tests/must_reject/r6p_8_vec_u16.pruv), [`take str`](tests/must_reject/r6p_8_str_take.pruv),
+  [`inout String`](tests/must_reject/r6p_8_string_inout.pruv).
+
 ## 6q. For loops (P4)
 ```
 fn sum(a: ref [u16], n: u32) -> u64
@@ -3870,8 +3891,9 @@ It never skips the length bound below.
 The verifier assumes every array (and `Map`) parameter, every buffer field and every `str` has a length (byte length
 for `str`) in `0..=2^40` (item 6 above). Every place where a host buffer first enters proved code checks that bound
 before the representation checks, the `requires` and the body, in both compilers and in every mode, including
-`--trust-callers` and `--no-verify`. The exceptions are manifest `raw_entries = "crate"` on the Rust backend (below)
-and collection fields of a record the entry does not own (R-6f-2 resident state, an R-6e-6 borrowed record): those
+`--trust-callers` and `--no-verify`. The Rust compiler checks owned inputs and reachable buffers for R-6p-8, including mutable resident state.
+The exceptions are direct arrays and `str` under Rust manifest `raw_entries = "crate"` (below),
+and collection fields of ordinary record parameters outside R-6p-8: those
 lengths are not walked per call, so the caller keeps them at most 2^40 from the last entry call on (section 7 caller
 obligations):
 - Generated Rust (every output form): every public function that takes an array or `str` (including an `inout` array)
@@ -3967,7 +3989,7 @@ An adapter that cannot do this must not use `"crate"`; `"unsafe"`, `"c"` and def
 The generated `pruv_raw` module of a `"crate"` program repeats this obligation in its header comment.
 Caller obligations that no check can cover remain the host's: a buffer passed as a Rust slice / `&str` is a valid Rust
 value; a raw (pointer, length) pair with length > 0 names that many initialized elements in one live allocation that
-nobody else touches during the call; resident state passed to an entry, and a record borrowed under R-6e-6, came from this program's entries, and the host did not grow its collection fields past 2^40 since the last entry call. Apart from
+nobody else touches during the call; outside R-6p-8, a record borrowed under R-6e-6 came from this program's entries, and the host did not grow its collection fields past 2^40 since the last entry call. Apart from
 the `raw_entries = "crate"` adapter obligation above, no trusted path (`--trust-callers`, `raw_entries = "unsafe"` /
 `"c"`, the `pruv_raw` forwarders, the C adapter) waives the length bound.
 
@@ -4345,7 +4367,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/effect_in_contract` | type | an effectful operation (alloc, store_be, ...) in a contract |
 | `type/empty_enum` | type | an enum without variants |
 | `type/entry_main` | type | the root `main` is not `pub fn main() -> ()` |
-| `type/entry_signature` | type | a host entry has a parameter or result type the host cannot pass |
+| `type/entry_signature` | type | a host entry has a parameter or result type the host cannot pass (Rust owned collections and state follow R-6p-8) |
 | `type/eq_type` | type | `==` or `!=` on a type that does not support whole-value equality |
 | `type/field_type` | type | a field type that is not allowed (unit, an array in a generic type, ...) |
 | `type/field_name` | type | a field name does not start with a lower-case letter |
@@ -4503,7 +4525,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `codegen/target_mismatch` | codegen | the object does not match the requested target (Rust compiler) |
 | `codegen/unsupported` | codegen | a native output this build cannot produce (Rust compiler) |
 | `codegen/unsupported_target` | codegen | a target that is not one of the four public targets (Rust compiler) |
-| `codegen/unsupported_type` | codegen | a construct the chosen backend does not implement yet |
+| `codegen/unsupported_type` | codegen | a construct the chosen backend does not implement yet, including an R-6p-8 owned signature on LLVM or raw C |
 | `link/exe_entry` | link | `--emit exe` without `fn main() -> ()` |
 | `link/link_failed` | link | the linker failed; the message holds its first error line |
 | `link/linker_missing` | link | the linker could not be started |

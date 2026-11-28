@@ -1760,11 +1760,10 @@ impl<'a> Gen<'a> {
             .functions
             .iter()
             .filter(|f| {
-                // manifest raw_entries = "crate" has no length check (the same-crate adapter owns it), so no extra split
-                g.raw.as_deref() != Some("crate")
-                    && f.foreign.is_none()
+                f.foreign.is_none()
                     && f.requires.is_empty()
-                    && !len_params(f, g.entries.contains(&f.name)).is_empty()
+                    && (g.raw.as_deref() != Some("crate") && !len_params(f, g.entries.contains(&f.name)).is_empty()
+                        || g.entries.contains(&f.name) && !owned_len_guards(f, &g).is_empty())
                     && (if g.explicit { g.entries.contains(&f.name) } else { !g.legacy_private(f) })
             })
             .map(|f| f.name.clone())
@@ -2333,7 +2332,7 @@ impl<'a> Gen<'a> {
             let args = join_map(&f.params, ", ", |p| {
                 if self.take_arrays.contains(&p.name)
                     || self.take_ext.contains(&p.name)
-                    || p.take && (p.ty == "string" || GType::from_key(&p.ty).has_string_error())
+                    || p.take && (key_is_collection_owner(&p.ty) || GType::from_key(&p.ty).has_string_error())
                 {
                     format!("&{}", p.name)
                 } else {
@@ -2445,7 +2444,7 @@ impl<'a> Gen<'a> {
 
     fn cost_call(&self, name: &str, args: &[String]) -> String {
         let args: Vec<_> = self.fmap[name].params.iter().zip(args).map(|(p, arg)| {
-            if p.take && (is_array_name(&p.ty) || p.ty == "string"
+            if p.take && (is_array_name(&p.ty) || key_is_collection_owner(&p.ty)
                 || GType::from_key(&p.ty).has_string_error() || self.is_ext(Some(&p.ty)))
             {
                 format!("&{arg}")
@@ -2565,6 +2564,12 @@ impl<'a> Gen<'a> {
             self.emit(1, line);
         }
         let body_start = self.out.len();
+        // A proven slice does not establish any of the nested bounds.
+        if is_pub && host_entry {
+            for line in owned_len_guards(f, self) {
+                self.emit(1, &line);
+            }
+        }
         if checked {
             let (conversions, checks) = self.req_checks(f)?;
             for line in &conversions {
@@ -6876,11 +6881,11 @@ fn gen_rust_concrete_core(
         }
         if let Some(explicit) = &prog.explicit {
             for (f, mark) in prog.functions.iter().zip(&explicit.fns).filter(|(_, m)| m.host_entry) {
-                if f.params.iter().any(|p| key_is_collection(&p.ty)
+                if key_is_collection(&f.ret) || f.params.iter().any(|p| key_is_collection(&p.ty)
                     || prog.g9.as_ref().is_some_and(|g| g.extended.contains(&p.ty))) {
                     return Err(GenError::Diag(PruvError::new(
                         "codegen", f.line, f.col, "unsupported_type",
-                        format!("host entry {} takes a collection-bearing parameter, which has no C ABI", mark.disp),
+                        format!("host entry {} has a collection-bearing signature, which has no C ABI", mark.disp),
                         "use Rust raw_entries crate or unsafe",
                     )));
                 }
@@ -7380,6 +7385,104 @@ pub fn raw_module_with(mode: &str, items: &[(String, String, String, Vec<String>
     parts.push("    }".to_string());
     parts.push("}".to_string());
     parts.join("\n")
+}
+
+/// Validate host-built state and vectors in place. Flat elements need no loop.
+fn owned_len_guards(f: &Function, g: &Gen) -> Vec<String> {
+    fn visit(ty: &GType, path: &str, g: &Gen, helpers: &mut std::collections::BTreeMap<String, String>) -> Vec<String> {
+        let mut lines = Vec::new();
+        let kind = match ty.name.as_str() {
+            "string" | "str" => Some("str"),
+            "vec" | "vecdeque" | "hashmap" => Some("array"),
+            _ if ty.is_array() => Some("array"),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            lines.push(format!("if ({path}.len() as u64) > (1u64 << 40) {{ panic!(\"pruv: invalid representation: {{}} ({kind} length)\", {path}.len()); }}"));
+        }
+        match (ty.name.as_str(), ty.args.as_slice()) {
+            ("vec" | "vecdeque", [elem]) => {
+                let inner = visit(elem, "pruv_elem", g, helpers);
+                if !inner.is_empty() {
+                    lines.push(format!("for pruv_elem in {path}.iter() {{ {} }}", inner.join(" ")));
+                }
+            }
+            ("hashmap", [key, value]) => {
+                let mut inner = visit(key, "pruv_key", g, helpers);
+                inner.extend(visit(value, "pruv_value", g, helpers));
+                if !inner.is_empty() {
+                    lines.push(format!("for (pruv_key, pruv_value) in {path}.iter() {{ {} }}", inner.join(" ")));
+                }
+            }
+            ("option" | "result", _) => {
+                let tag = if ty.name == "option" { "Some" } else { "Ok" };
+                for (tag, elem) in [(tag, ty.args.first()), ("Err", ty.result_error())] {
+                    if let Some(elem) = elem {
+                        let inner = visit(elem, "pruv_part", g, helpers);
+                        if !inner.is_empty() {
+                            lines.push(format!("if let {tag}(pruv_part) = {path}.as_ref() {{ {} }}", inner.join(" ")));
+                        }
+                    }
+                }
+            }
+            _ => {
+                let Some(decl) = g.table.decl(&ty.name) else { return lines };
+                let recursive = g.is_recursive(&ty.name);
+                let helper = format!("pruv_check_len__{}", ty.name);
+                let base = if recursive {
+                    if !g.table.holds_buffer(&ty.name) { return lines; }
+                    lines.push(format!("{helper}(&{path});"));
+                    if helpers.contains_key(&helper) { return lines; }
+                    helpers.insert(helper.clone(), String::new());
+                    "pruv_node"
+                } else {
+                    path
+                };
+                let mut fields = Vec::new();
+                match decl {
+                    TypeDecl::Struct(s) => {
+                        for field in &s.fields {
+                            fields.extend(visit(&GType::from_key(&field.ty), &format!("{base}.{}", field.name), g, helpers));
+                        }
+                    }
+                    TypeDecl::Enum(e) => {
+                        for v in &e.variants {
+                            let mut inner = Vec::new();
+                            let mut names = Vec::new();
+                            for (i, field) in v.fields.iter().enumerate() {
+                                let name = format!("pruv_field_{i}");
+                                inner.extend(visit(&GType::from_key(&field.ty), &name, g, helpers));
+                                names.push(name);
+                            }
+                            if !inner.is_empty() {
+                                fields.push(format!("if let {}::{}({}) = &{base} {{ {} }}",
+                                    e.name, v.name, names.join(", "), inner.join(" ")));
+                            }
+                        }
+                    }
+                }
+                if recursive {
+                    helpers.insert(helper.clone(), format!("fn {helper}(pruv_node: &{}) {{ {} }}", ty.name, fields.join(" ")));
+                } else {
+                    lines.extend(fields);
+                }
+            }
+        }
+        lines
+    }
+    let owned_boundary = |key: &str| key == "string" || key.starts_with("vec<");
+    if !owned_boundary(&f.ret) && !f.params.iter().any(|p| owned_boundary(&p.ty)
+        || p.mode_pos.is_some() && g.table.decl(&p.ty).is_some()) {
+        return Vec::new();
+    }
+    let mut helpers = std::collections::BTreeMap::new();
+    // Other public entries already check direct String parameters in len_guard.
+    let mut lines: Vec<_> = f.params.iter().filter(|p| p.ty.starts_with("vec<")
+        || p.ty == "string" && g.raw.as_deref() == Some("crate")
+        || g.table.decl(&p.ty).is_some() || GType::from_key(&p.ty).has_string_error())
+        .flat_map(|p| visit(&GType::from_key(&p.ty), &p.name, g, &mut helpers)).collect();
+    lines.extend(helpers.into_values());
+    lines
 }
 
 /// T0: the parameters whose length the public entry checks against 2^40 (arrays, including inout arrays, and str)
