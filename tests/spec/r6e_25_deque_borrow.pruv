@@ -1,0 +1,15 @@
+// spec: R-6e-25 reject
+struct Draft { id: i64, text: [u8] }
+
+fn bad(inout q: VecDeque<Draft>) -> () {
+  match vec_at_mut::<Draft>(inout q, 0) {
+    Some(d) => {
+      match vec_pop_front::<Draft>(inout q) {
+        Some(p) => { }
+        None => { }
+      }
+      d.id = 1;
+    }
+    None => { }
+  }
+}

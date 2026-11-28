@@ -1050,7 +1050,7 @@ fn set_ty(e: &mut Expr, t: &GType) {
 /// G5: does the full syntax of e (every operand, reachable or not) mention the binding `name`?
 fn collection_catalog(name: &str) -> bool {
     matches!(name, "vec_new" | "vec_push" | "vec_get" | "map_new" | "map_insert"
-        | "map_get" | "map_get_mut" | "map_remove" | "map_take" | "vec_at_mut" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice")
+        | "map_get" | "map_get_mut" | "map_remove" | "map_take" | "vec_pop_front" | "vec_at_mut" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice")
 }
 
 pub(crate) fn place_root(e: &Expr) -> Option<&str> {
@@ -1100,7 +1100,7 @@ pub fn walk_assignments(stmts: &[Stmt], visit: &mut impl FnMut(&str, &[String]))
 }
 
 pub fn vec_resize_builtin(name: &str) -> bool {
-    matches!(name, "vec_push" | "vec_pop" | "vec_clear" | "vec_extend_from_slice")
+    matches!(name, "vec_push" | "vec_pop" | "vec_pop_front" | "vec_clear" | "vec_extend_from_slice")
 }
 
 pub fn array_grow_builtin(name: &str) -> bool {
@@ -1172,7 +1172,7 @@ fn resizing_params(prog: &Program, length_only: bool) -> HashSet<(String, usize)
     let mut forwarded = HashMap::<_, Vec<_>>::new();
     for f in &prog.functions {
         let params: HashMap<_, _> = f.params.iter().enumerate()
-            .filter(|(_, p)| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || GType::from_key(&p.ty).name == "vec"))
+            .filter(|(_, p)| p.mode_pos.is_some() && (GType::from_key(&p.ty).is_array() || GType::from_key(&p.ty).is_vector()))
             .map(|(i, p)| (p.name.as_str(), i))
             .collect();
         if params.is_empty() { continue; }
@@ -1714,7 +1714,7 @@ impl Checker {
                     // LG27: a top-level Vec element reaching an invariant struct counts too (check.py vec_elem)
                     let g = GType::from_key(&p.ty);
                     match (g.owner.is_none(), g.name.as_str(), g.args.as_slice()) {
-                        (true, "vec", [e]) => self.invariant_owner(&e.to_key()),
+                        (true, "vec" | "vecdeque", [e]) => self.invariant_owner(&e.to_key()),
                         _ => None,
                     }
                 }))
@@ -1878,6 +1878,7 @@ impl Checker {
         if !self.decls.contains_key(&name) {
             name = match name.as_str() {
                 "Vec" => "vec".to_string(),
+                "VecDeque" => "vecdeque".to_string(),
                 "HashMap" => "hashmap".to_string(),
                 "String" => "string".to_string(),
                 "File" => "file".to_string(), // G10 A0
@@ -1889,7 +1890,7 @@ impl Checker {
                 _ => name.clone(),
             };
         }
-        if matches!(name.as_str(), "vec" | "hashmap") {
+        if matches!(name.as_str(), "vec" | "vecdeque" | "hashmap") {
             if let Some(payload) = args.last().filter(|t| t.owner.is_none() && t.args.is_empty()) {
                 self.collection_records.borrow_mut().insert(payload.name.clone());
             }
@@ -2365,6 +2366,8 @@ impl Checker {
                 if ty.args[0].to_key() != "string" {
                     self.collection_payload(line, col, &ty.args[0], "a Vec element")?;
                 }
+            } else if ty.name == "vecdeque" && ty.args.len() == 1 {
+                self.check_deque_element(line, col, &ty.args[0])?;
             } else if ty.name == "hashmap" && ty.args.len() == 2 {
                 let k = &ty.args[0];
                 let text_key = k.to_key() == "string";
@@ -2651,7 +2654,11 @@ impl Checker {
             if name == "vec_extend_from_slice" && targs[0] != i64t() && targs[0] != boolt() {
                 return Err(terr(line, col, "foreign_owned_type", "vec_extend_from_slice requires i64 or bool elements", ""));
             }
-            let ty = if name.starts_with("vec_") { "vec" } else { "hashmap" };
+            let ty = match name {
+                "vec_pop_front" => "vecdeque",
+                n if n.starts_with("vec_") => "vec",
+                _ => "hashmap",
+            };
             self.check_type(line, col, &GType::new(ty, targs.clone()))?;
         }
         for (a, tp) in targs.iter().zip(tparams.iter()) {
@@ -2721,7 +2728,7 @@ impl Checker {
                             || matches!(d, TypeDecl::Struct(_)) && self.state_collection(&ft)
                             || self.vec_scc_edge(d.name(), &ft)))
                     {
-                        if matches!(ft.name.as_str(), "vec" | "hashmap") {
+                        if matches!(ft.name.as_str(), "vec" | "vecdeque" | "hashmap") {
                             if let Some(payload) = ft.args.last().filter(|ty| is_value(ty, &|n| self.value_decl(n))) {
                                 self.ext_misuse(f.line, f.col, payload, Some("coll"))?;
                             }
@@ -3046,8 +3053,16 @@ impl Checker {
         dependencies(ty).iter().any(|name| self.nested_records.contains(name))
     }
 
+    fn check_deque_element(&self, line: i64, col: i64, elem: &GType) -> Res<()> {
+        if !self.owned_aggregate(elem) || self.is_zero_sized_struct(elem) {
+            return Err(terr(line, col, "foreign_owned_type", "VecDeque requires an owned aggregate element with data", ""));
+        }
+        Ok(())
+    }
+
     fn state_collection(&self, ty: &GType) -> bool {
         match (ty.name.as_str(), ty.args.as_slice()) {
+            ("vecdeque", [v]) => self.owned_aggregate(v),
             ("vec", [v]) => self.owned_aggregate(v) || self.recursive_vec_element(v),
             ("hashmap", [k, v]) => (*k == i64t() || k.to_key() == "string") && self.owned_aggregate(v),
             _ => false,
@@ -3166,7 +3181,7 @@ impl Checker {
                     let aggregate_collection = pt.owner.is_none() && pt.name == "hashmap"
                         && pt.args.last().is_some_and(|payload| self.owned_aggregate(payload));
                     if pt.int_width().is_none() && pt != boolt() && !pt.is_array() && !pt.is_fixed()
-                        && !(pt.owner.is_none() && pt.name == "vec") && !aggregate_collection
+                        && !pt.is_vector() && !aggregate_collection
                         && !(pt.args.is_empty() && matches!(self.decls.get(&pt.name), Some(TypeDecl::Struct(_)))) {
                         return Err(terr(
                             ml,
@@ -3197,7 +3212,7 @@ impl Checker {
                     return true;
                 }
                 let ft = GType::from_key(&f.ty);
-                if let ("vec", [element]) = (ft.name.as_str(), ft.args.as_slice()) {
+                if let ("vec" | "vecdeque", [element]) = (ft.name.as_str(), ft.args.as_slice()) {
                     if ft.owner.is_none() {
                         return self.owned_aggregate(element)
                             && matches!(self.decls.get(&element.name), Some(TypeDecl::Struct(d))
@@ -3648,6 +3663,11 @@ impl Checker {
         let mut i = 0;
         while i < stmts.len() {
             if let Stmt::Match(m) = &stmts[i] {
+                if m.form != MatchForm::Match
+                    && matches!(&m.scrutinee, Expr::Call(c) if c.name == "vec_pop_front" && !self.funcs.contains_key(&c.name))
+                {
+                    return Err(terr(m.line, m.col, "foreign_contract", "vec_pop_front is only allowed as a direct match scrutinee", ""));
+                }
                 if m.arms.iter().any(|a| arm_guard_of(&a.body).is_some()) {
                     // P9a-7: a guard is a test of the decision tree; slice and tuple arms have no tree
                     if let Some(a) = m.arms.iter().find(|a| slice_arm_shape(&a.ctor).is_some() || a.ctor == "()") {
@@ -3933,7 +3953,7 @@ impl Checker {
                 let f = parent_name.as_ref().and_then(|n| self.funcs.get(n).map(|f| (f.clone(), self.takes.get(n).cloned())));
                 let ok = match &f {
                     Some((f, Some(takes))) if !f.foreign && j < f.params.len() && j < takes.len() && takes[j]
-                        && f.params[j] == t && t.owner.is_none() && matches!(t.name.as_str(), "vec" | "hashmap" | "string") => {
+                        && f.params[j] == t && t.owner.is_none() && matches!(t.name.as_str(), "vec" | "vecdeque" | "hashmap" | "string") => {
                         take = true;
                         match &*rhs {
                             Expr::Call(c) => c.name != "subview",
@@ -5538,7 +5558,7 @@ impl Checker {
     }
 
     fn match_scrutinee(&mut self, e: &mut Expr, scope: &Scope) -> Res<GType> {
-        self.read_expr(e, scope, false, &["map_get", "map_get_mut", "map_take", "vec_at_mut", "vec_get"])
+        self.read_expr(e, scope, false, &["map_get", "map_get_mut", "map_take", "vec_pop_front", "vec_at_mut", "vec_get"])
     }
 
     /// P8: `match t { (a, b) => { B } }` is the destructuring `if true { let tmp: T = t; let a = tmp.0; ..; B }`
@@ -5725,7 +5745,7 @@ impl Checker {
             _ => None,
         };
         let map_mut = map_call.is_some_and(|call| matches!(call.name.as_str(), "map_get_mut" | "vec_at_mut"));
-        let map_take = map_call.is_some_and(|call| call.name == "map_take");
+        let map_take = map_call.is_some_and(|call| matches!(call.name.as_str(), "map_take" | "vec_pop_front"));
         let map_read = map_call.filter(|call| call.name == "map_get");
         let map_read_path = map_read.and_then(|call| {
             let (root, path) = field_place(&call.args[0]);
@@ -6098,7 +6118,7 @@ impl Checker {
         let val = match (ty.owner.is_none(), ty.name.as_str(), ty.args.as_slice()) {
             (true, "hashmap", [k, v]) if k.to_key() == "string"
                 && (*v == i64t() || *v == boolt() || self.owned_aggregate(v)) => v.clone(),
-            _ if ty.is_array() || ty.view_base().is_some() || ty.owner.is_none() && ty.name == "vec" =>
+            _ if ty.is_array() || ty.view_base().is_some() || ty.is_vector() =>
                 return Err(terr(st.line, st.col, "for_enumerate",
                     format!("`for (i, x) in` over {} is not available yet (bundle P15)", tn(&ty)),
                     "write `for i in 0..len(v)` and read the element by index")),
@@ -6174,7 +6194,7 @@ impl Checker {
             l.value = Expr::Call(Call { line: i.line, col: i.col, name: "vec_get".into(), args: vec![*i.array, *i.index],
                 ty: None, targs: Some(vec![elem.clone()]), inst: None, old: None, opaque_c: false });
             elem
-        } else if base.name == "vec" {
+        } else if base.is_vector() {
             return Err(terr(line, col, "for_iterable",
                 format!("a for loop over {} is not available: only Vec elements of integer or bool type", tn(&ct)),
                 "iterate the indexes with `for i in 0..len(v)` and read with vec_get (owned elements: bundle P15/P16)"));
@@ -6348,11 +6368,14 @@ impl Checker {
             }
             return self.expect_str_arg(e, scope, c).map(|_| false);
         }
+        if ty.name == "vecdeque" && matches!(e, Expr::Call(x) if matches!(x.name.as_str(), "vec_new" | "vec_push")) {
+            return self.expect(e, ty, scope, c, None).map(|_| false);
+        }
         if is_narrow(ty) && matches!(e, Expr::IntLit(_)) {
             return self.expect(e, ty, scope, c, None).map(|_| false);
         }
         // R-6w-2: the parameter type is the expected type of each value `if` arm (a narrow literal, a tuple literal)
-        if (is_narrow(ty) || crate::gtype::is_tuple_name(&ty.name)) && matches!(e, Expr::Call(x) if ValueIf::matches(x) || crate::ast::ValueMatch::matches(x)) {
+        if (is_narrow(ty) || ty.name == "vecdeque" || crate::gtype::is_tuple_name(&ty.name)) && matches!(e, Expr::Call(x) if ValueIf::matches(x) || crate::ast::ValueMatch::matches(x)) {
             return self.expect(e, ty, scope, c, None).map(|_| false);
         }
         let got = if borrow_vector && (self.recursive_vec_element(ty) || self.owned_aggregate(ty)) {
@@ -6489,6 +6512,14 @@ impl Checker {
             // P9a-5: the expected type types every arm
             let t = self.value_match(e, Some(ty), scope, contract)?;
             return self.check_expected_type(e, ty, op, t);
+        }
+        if let Expr::Call(call) = e {
+            if ty.name == "vecdeque" && ty.owner.is_none() && matches!(call.name.as_str(), "vec_new" | "vec_push")
+                && !self.funcs.contains_key(&call.name) {
+                let t = self.call(call, scope, contract, true)?;
+                set_ty(e, &t);
+                return self.check_expected_type(e, ty, op, t);
+            }
         }
         if let (Expr::Call(call), Some((el, _))) = (&mut *e, ty.fixed_parts()) {
             if is_array_lit(&call.name) {
@@ -6950,13 +6981,13 @@ impl Checker {
                             x.col,
                             "contract_only",
                             format!("indexing a {} is only allowed in contracts", tn(&at)),
-                            if at.name == "vec" { "use vec_get in code" } else { "use string_byte in code" },
+                            if at.is_vector() { "use vec_get in code" } else { "use string_byte in code" },
                         ));
                     }
                     if at.name == "vec" && at.args.first().is_some_and(|a| a.to_key() == "string") {
                         return Err(terr(x.line, x.col, "foreign_owned_type", "Vec<String> elements cannot be read", ""));
                     }
-                    return Ok(if at.name == "vec" { at.args.first().cloned().unwrap_or_else(i64t) } else { i64t() });
+                    return Ok(if at.is_vector() { at.args.first().cloned().unwrap_or_else(i64t) } else { i64t() });
                 }
                 // G2 A5: a bool array reads bool; G3: [T] reads T
                 Ok(elem_type(&at))
@@ -7126,7 +7157,7 @@ impl Checker {
             Expr::Call(x) if crate::ast::ValueMatch::is_yield(x) => Err(terr(x.line, x.col, "syntax",
                 "an arm value outside a value `match`", "")),
             Expr::Call(x) => {
-                let t = self.call(x, scope, c)?;
+                let t = self.call(x, scope, c, false)?;
                 if let Some(xe) = self.x_pending.take() {
                     *e = xe; // P06: a contract call to a user function becomes its expansion, in place
                 }
@@ -7184,6 +7215,9 @@ impl Checker {
         if c {
             return Err(terr(line, col, "value_branch_context", "a value `match` is not allowed in a contract",
                 "write the cases with `is` tests and `==>`"));
+        }
+        if matches!(call.args.first(), Some(Expr::Call(x)) if x.name == "vec_pop_front" && !self.funcs.contains_key(&x.name)) {
+            return Err(terr(line, col, "foreign_contract", "vec_pop_front is only allowed as a direct match scrutinee", ""));
         }
         let varms = crate::ast::ValueMatch::arms(call);
         if varms.is_empty() {
@@ -7848,7 +7882,7 @@ impl Checker {
     fn inout_args(&mut self, e: &mut Call, f: &FuncInfo, m: &Mapping, scope: &Scope, c: bool) -> Res<()> {
         let n = e.name.clone();
         let user_call = self.funcs.contains_key(&n) || f.src_name == "pruv::mem";
-        let collection_place = !user_call && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "map_take" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice");
+        let collection_place = !user_call && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "map_take" | "vec_pop_front" | "vec_clear" | "vec_reserve" | "vec_extend_from_slice");
         let mut marked = Vec::new();
         for i in 0..e.args.len().min(f.params.len()) {
             let want = substitute(&f.params[i], m);
@@ -7938,7 +7972,9 @@ impl Checker {
             }
             let actual = if matches!(&*arg.expr, Expr::Var(_)) { v.ty } else { self.expr(&mut arg.expr, scope, c)? };
             self.check_inout_view(arg)?;
-            if actual != want {
+            let deque_arg = i == 0 && !user_call && matches!(n.as_str(), "vec_at_mut" | "vec_clear")
+                && actual.owner.is_none() && actual.name == "vecdeque" && actual.args == want.args;
+            if actual != want && !deque_arg {
                 return Err(terr(
                     aline,
                     acol,
@@ -7954,7 +7990,7 @@ impl Checker {
                     "pass an array of exactly the parameter's element type",
                 ));
             }
-            let take = !user_call && n == "map_take";
+            let take = !user_call && matches!(n.as_str(), "map_take" | "vec_pop_front");
             let root_held = self.active_roots.iter().any(|(root, map_read)| {
                 *root == name && (!take || !map_read)
             });
@@ -8581,7 +8617,8 @@ impl Checker {
         let Expr::Var(root) = base else { return Err(bad_operand()) };
         let entry = scope.get(&root.name).filter(|x| {
             // LB6 OS (R-6g5-4): a whole scalar inout also has an entry value
-            x.kind == "inout" && (!root_field && (x.ty.is_array() || x.ty.is_fixed()) || self.plain_struct(&x.ty).is_some()
+            x.kind == "inout" && (!root_field && (x.ty.is_array() || x.ty.is_fixed() || x.ty.name == "vecdeque")
+                || self.plain_struct(&x.ty).is_some()
                 || whole && (x.ty.int_width().is_some() || x.ty == boolt()))
         }).ok_or_else(bad_operand)?;
         if bad_index {
@@ -8603,7 +8640,7 @@ impl Checker {
         let checked = self.expr(&mut lowered, scope, true);
         // Ordinary len also accepts strings and collections, which are excluded here.
         if let Expr::Call(c) = &lowered {
-            if len && expr_ty(&c.args[0]).as_deref().is_some_and(|ty| { let t = GType::from_key(ty); !t.is_array() && !t.is_fixed() }) {
+            if len && expr_ty(&c.args[0]).as_deref().is_some_and(|ty| { let t = GType::from_key(ty); !t.is_array() && !t.is_fixed() && t.name != "vecdeque" }) {
                 return Err(bad_operand());
             }
         }
@@ -8817,7 +8854,7 @@ impl Checker {
         Ok(elem)
     }
 
-    fn call(&mut self, e: &mut Call, scope: &Scope, c: bool) -> Res<GType> {
+    fn call(&mut self, e: &mut Call, scope: &Scope, c: bool, want_deque: bool) -> Res<GType> {
         if is_array_lit(&e.name) {
             return self.array_lit(e, None, scope, c);
         }
@@ -9219,8 +9256,8 @@ impl Checker {
         // G6: fixed standard catalog (G6_SPEC 10.3)
         let cat: Option<CatFn> = if self.funcs.contains_key(&n) { None } else { catalog_fn(&n) };
         let call_site = Some(e as *const Call as usize);
-        if cat.is_some() && n == "map_take" && self.read_context != call_site {
-            return Err(terr(line, col, "foreign_contract", "map_take is only allowed as a direct match scrutinee", ""));
+        if cat.is_some() && matches!(n.as_str(), "map_take" | "vec_pop_front") && self.read_context != call_site {
+            return Err(terr(line, col, "foreign_contract", format!("{n} is only allowed as a direct match scrutinee"), ""));
         }
         if cat.is_some() && matches!(n.as_str(), "vec_clear" | "vec_reserve" | "vec_extend_from_slice") && !c && self.statement_call != call_site {
             return Err(terr(line, col, "inout_context", format!("{n} must be a whole expression statement"), ""));
@@ -9350,11 +9387,23 @@ impl Checker {
                         self.expect_user_arg(arg, &want, scope, c, true)?; // LB7 (R-6g6-3): a borrowed str range, no copy
                     } else if cat.is_none() {
                         self.expect_call_arg(arg, &want, scope, c, !f.foreign && !self.takes[&n][i], !f.holds_args)?;
+                    } else if i == 0 && want_deque && n == "vec_push" {
+                        self.expect(arg, &GType::new("vecdeque", want.args), scope, c, None)?;
+                    } else if i == 0 && matches!(n.as_str(), "vec_push" | "vec_get") {
+                        let got = self.expr(arg, scope, c)?;
+                        if !(got.owner.is_none() && got.name == "vecdeque" && got.args == want.args) {
+                            self.check_expected_type(arg, &want, None, got)?;
+                        }
                     } else {
                         self.expect(arg, &want, scope, c, None)?;
                     }
                 }
             }
+        }
+        let deque = cat.is_some() && (want_deque || matches!(n.as_str(), "vec_push" | "vec_get" | "vec_at_mut" | "vec_clear")
+            && e.args.first().and_then(|arg| expr_ty(arg).as_deref()).is_some_and(|ty| ty.starts_with("vecdeque<")));
+        if deque {
+            self.check_deque_element(line, col, &targs.as_ref().unwrap()[0])?;
         }
         if cat.is_some() && n == "vec_at_mut" {
             let elem = &targs.as_ref().unwrap()[0];
@@ -9404,7 +9453,11 @@ impl Checker {
         }
         if cat.is_some() {
             self.used_effects.extend(f.effects.iter().cloned());
-            return Ok(substitute(&f.ret, &m));
+            let mut ret = substitute(&f.ret, &m);
+            if deque && ret.name == "vec" {
+                ret.name = "vecdeque".into();
+            }
+            return Ok(ret);
         }
         if let Some(takes) = self.takes.get(&n) {
             for ((arg, param), take) in e.args.iter().zip(&f.params).zip(takes) {

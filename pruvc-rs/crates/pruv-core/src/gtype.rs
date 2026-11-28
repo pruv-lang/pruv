@@ -131,6 +131,10 @@ impl GType {
     }
 
     /// G6 A0: Vec / HashMap / String (internal names vec / hashmap / string), never a bound parameter.
+    pub fn is_vector(&self) -> bool {
+        self.owner.is_none() && matches!(self.name.as_str(), "vec" | "vecdeque")
+    }
+
     pub fn is_collection(&self) -> bool {
         self.owner.is_none() && collection_arity(&self.name).is_some()
     }
@@ -226,7 +230,7 @@ impl GType {
 /// G6 A0: the fixed owned collection types (G6_SPEC 10.1): internal name -> number of type arguments.
 pub fn collection_arity(name: &str) -> Option<usize> {
     match name {
-        "vec" => Some(1),
+        "vec" | "vecdeque" => Some(1),
         "hashmap" => Some(2),
         "string" => Some(0),
         "file" => Some(0), // G10 A0
@@ -240,6 +244,7 @@ pub fn collection_arity(name: &str) -> Option<usize> {
 pub fn collection_spelling(name: &str) -> Option<&'static str> {
     match name {
         "vec" => Some("Vec"),
+        "vecdeque" => Some("VecDeque"),
         "hashmap" => Some("HashMap"),
         "string" => Some("String"),
         "file" => Some("File"), // G10 A0

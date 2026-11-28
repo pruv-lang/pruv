@@ -79,8 +79,20 @@ fn e2_diag(line: i64, col: i64, message: &str) -> String {
 
 /// Pruv's checked recursive vectors use an inline LLVM vector header.
 pub(crate) fn native_vec_elem(t: &str) -> Option<&str> {
-    let elem = t.strip_prefix("vec<")?.strip_suffix('>')?;
+    let elem = t.strip_prefix("vec<").or_else(|| t.strip_prefix("vecdeque<"))?.strip_suffix('>')?;
     ((crate::emit_common::is_user_key(elem) && !elem.contains('<')) || elem == VIEW_ELEM).then_some(elem)
+}
+
+fn native_deque(t: &str) -> bool {
+    t.starts_with("vecdeque<")
+}
+
+fn native_vec_header(deque: bool) -> &'static str {
+    if deque { "{ ptr, i64, i64, i64 }" } else { ARR }
+}
+
+fn native_vec_tag(deque: bool) -> &'static str {
+    if deque { "deque" } else { "v" }
 }
 
 /// R-6g9-10 on LLVM: the element key of a list of borrowed `str` views. The checker types a view list
@@ -998,7 +1010,7 @@ pub fn lty(t: &str) -> String {
         return format!("[{} x {}]", n, fixed_elem_ir(e));
     }
     if native_vec_elem(t).is_some() {
-        return ARR.to_string();
+        return native_vec_header(native_deque(t)).to_string();
     }
     if is_collection(t) {
         // G6 A3: opaque handle
@@ -1111,7 +1123,7 @@ pub fn st(t: &str, c: bool) -> String {
         return VIEW.to_string();
     }
     if native_vec_elem(t).is_some() {
-        return ARR.to_string();
+        return native_vec_header(native_deque(t)).to_string();
     }
     if is_collection(t) {
         return "ptr".to_string();
@@ -1207,7 +1219,7 @@ fn enum_union_words(tt: &TypeTable, abi_types: &HashSet<String>) -> HashMap<Stri
         ty: &str,
     ) -> Option<(usize, usize)> {
         if native_vec_elem(ty).is_some() {
-            return Some((3, 24));
+            return Some(if native_deque(ty) { (4, 32) } else { (3, 24) });
         }
         if is_collection(ty) {
             return Some((1, 8));
@@ -1550,7 +1562,7 @@ struct Scope {
 
 pub struct Mod {
     owned_collection_fields: bool,
-    vec_elems: BTreeSet<String>,
+    vec_elems: BTreeSet<(String, bool)>,
     foreign_requires: bool,
     vec_get_checked: bool,
     verified: bool,
@@ -1819,7 +1831,7 @@ pub enum Fail {
     /// u8 element range violation: (value SSA, range text). The string is registered when the fail block is emitted.
     Elem(String, &'static str),
     VecGet,
-    VecPush { elem: String, drop_element: bool, panic: &'static str },
+    VecPush { elem: String, deque: bool, drop_element: bool, panic: &'static str },
 }
 
 pub(crate) fn expr_ty(e: &Expr) -> &Option<String> {
@@ -2123,8 +2135,9 @@ impl<'a> FnGen<'a> {
     fn run_fail(&mut self, f: &Fail) -> R<()> {
         match f {
             Fail::Cost => self.cost_fail(),
-            Fail::VecPush { elem, drop_element, panic } => {
-                self.ins(format!("call void @pruv_vdrop__{elem}(ptr %v)"))?;
+            Fail::VecPush { elem, deque, drop_element, panic } => {
+                let tag = native_vec_tag(*deque);
+                self.ins(format!("call void @pruv_{tag}drop__{elem}(ptr %v)"))?;
                 if *drop_element {
                     self.ins(format!("call void @pruv_drop__{elem}(ptr %x)"))?;
                 }
@@ -2801,8 +2814,9 @@ impl<'a> FnGen<'a> {
         let ty = need_ty(&v.ty)?.to_string();
         let dst = self.new_out(&ty);
         let sym = if let Some(elem) = native_vec_elem(&ty) {
-            self.m.vec_elems.insert(elem.to_string());
-            format!("pruv_vclone__{elem}")
+            let deque = native_deque(&ty);
+            self.m.vec_elems.insert((elem.to_string(), deque));
+            format!("pruv_{}clone__{elem}", native_vec_tag(deque))
         } else {
             format!("pruv_clone__{ty}")
         };
@@ -2824,8 +2838,9 @@ impl<'a> FnGen<'a> {
             return self.drop_handle(&handle);
         }
         if let Some(elem) = native_vec_elem(ty) {
-            self.m.vec_elems.insert(elem.to_string());
-            return self.ins(format!("call void @pruv_vdrop__{elem}(ptr {p})"));
+            let deque = native_deque(ty);
+            self.m.vec_elems.insert((elem.to_string(), deque));
+            return self.ins(format!("call void @pruv_{}drop__{elem}(ptr {p})", native_vec_tag(deque)));
         }
         self.ins(format!("call void @pruv_drop__{ty}(ptr {p})"))
     }
@@ -5141,7 +5156,8 @@ impl<'a> FnGen<'a> {
                 r?;
                 self.end_temps()
             }
-            Stmt::Match(x) if matches!(&x.scrutinee, Expr::Call(c) if c.name == "vec_at_mut" && native_vec_call_elem(c).is_some()) => {
+            Stmt::Match(x) if matches!(&x.scrutinee, Expr::Call(c) if matches!(c.name.as_str(), "vec_at_mut" | "vec_pop_front")
+                && !self.funcs.contains_key(&c.name) && native_vec_call_elem(c).is_some()) => {
                 self.native_vec_match(x)
             }
             Stmt::Match(x) if expr_ty(&x.scrutinee).as_deref().is_some_and(is_owned_result) => self.owned_match(x),
@@ -5918,11 +5934,13 @@ impl<'a> FnGen<'a> {
                 let mut v = self.load(&sl)?;
                 if x.ty.as_deref().is_some_and(|t| is_array_name(t) || t == "str") {
                     self.empty_array_slot(&sl)?;
-                } else if sl.k == Kind::Agg && self.is_ext_opt(&sl.ty) {
+                } else if sl.k == Kind::Agg {
                     // LG9 (G-LG8-5): an extended record owns every buffer field; the whole slot becomes zero (its drop
                     // then frees nothing) and the moved value is no longer backed by the emptied slot
                     let lt = lty(need_ty(&sl.ty)?);
-                    self.ins(format!("store {} zeroinitializer, ptr {}", lt, sl.a))?;
+                    if self.is_ext_opt(&sl.ty) {
+                        self.ins(format!("store {} zeroinitializer, ptr {}", lt, sl.a))?;
+                    }
                     v.p = None;
                 } else {
                     self.ins(format!("store ptr null, ptr {}", sl.a))?;
@@ -6209,7 +6227,8 @@ impl<'a> FnGen<'a> {
             }
             let x = self.ev(arg(a, 0)?, false)?;
             if x.ty.as_deref().and_then(native_vec_elem).is_some() {
-                let len = self.op(format!("extractvalue {ARR} {}, 1", x.a))?;
+                let header = native_vec_header(x.ty.as_deref().is_some_and(native_deque));
+                let len = self.op(format!("extractvalue {header} {}, 1", x.a))?;
                 return Ok(V::new(Kind::I64, len));
             }
             if x.k == Kind::Coll {
@@ -7004,6 +7023,9 @@ impl<'a> FnGen<'a> {
                 return Ok(v);
             }
         }
+        let deque = native_vec_call_ty(e).is_some_and(native_deque);
+        let header = native_vec_header(deque);
+        let tag = native_vec_tag(deque);
         match e.name.as_str() {
             "vec_new" => Ok(V::agg("zeroinitializer", need_ty(&e.ty)?)),
             "vec_push" => {
@@ -7016,22 +7038,28 @@ impl<'a> FnGen<'a> {
                 let xp = self.spill(&x)?;
                 let vp = self.spill(&v)?;
                 let ty = need_ty(&e.ty)?;
-                self.m.vec_elems.insert(elem.to_string());
-                self.ins(format!("call void @pruv_vpush__{elem}(ptr {vp}, ptr {xp})"))?;
-                let value = self.op(format!("load {ARR}, ptr {vp}"))?;
+                self.m.vec_elems.insert((elem.to_string(), deque));
+                self.ins(format!("call void @pruv_{tag}push__{elem}(ptr {vp}, ptr {xp})"))?;
+                let value = self.op(format!("load {header}, ptr {vp}"))?;
                 self.fresh(V::agg_p(value, ty, vp), owned)
+            }
+            "vec_clear" => {
+                let Expr::InoutArg(place) = arg(&e.args, 0)? else { return Err(IDX_ERR.to_string()) };
+                let ptr = self.inout_place_ptr(&place.expr)?;
+                self.m.vec_elems.insert((elem.to_string(), deque));
+                self.ins(format!("call void @pruv_{tag}clear__{elem}(ptr {ptr})"))?;
+                Ok(V::unit())
             }
             "vec_get" => {
                 let v = self.ev(arg(&e.args, 0)?, false)?;
                 let i = self.ev(arg(&e.args, 1)?, false)?;
+                let vec = NativeVec::unpack(self, &v.a, deque)?;
                 if self.m.vec_get_checked {
-                    let len = self.op(format!("extractvalue {ARR} {}, 1", v.a))?;
-                    let ok = self.op(format!("icmp ult i64 {}, {len}", i.a))?;
+                    let ok = self.op(format!("icmp ult i64 {}, {}", i.a, vec.len))?;
                     self.guard(&ok, Fail::VecGet, false)?;
                 }
-                let data = self.op(format!("extractvalue {ARR} {}, 0", v.a))?;
                 let lt = lty(elem);
-                let p = self.op(format!("getelementptr inbounds {lt}, ptr {data}, i64 {}", i.a))?;
+                let p = vec.slot(self, &lt, &i.a)?;
                 let value = self.op(format!("load {lt}, ptr {p}"))?;
                 Ok(V::agg_p(value, elem, p))
             }
@@ -7057,7 +7085,7 @@ impl<'a> FnGen<'a> {
                 let a = self.op(format!("insertvalue {ARR} zeroinitializer, ptr {}, 0", x.a))?;
                 let view = self.op(format!("insertvalue {ARR} {a}, i64 {}, 1", x.b))?;
                 let xp = self.spill(&V::agg(view, VIEW_ELEM))?;
-                self.m.vec_elems.insert(VIEW_ELEM.to_string());
+                self.m.vec_elems.insert((VIEW_ELEM.to_string(), false));
                 self.ins(format!("call void @pruv_vpush__{VIEW_ELEM}(ptr {p}, ptr {xp})"))?;
                 Ok(Some(V::unit()))
             }
@@ -7072,7 +7100,7 @@ impl<'a> FnGen<'a> {
                 let xp = self.spill(&V::agg(view, VIEW_ELEM))?;
                 let vp = self.spill(&v)?;
                 let ty = need_ty(&e.ty)?;
-                self.m.vec_elems.insert(VIEW_ELEM.to_string());
+                self.m.vec_elems.insert((VIEW_ELEM.to_string(), false));
                 self.ins(format!("call void @pruv_vpush__{VIEW_ELEM}(ptr {vp}, ptr {xp})"))?;
                 let value = self.op(format!("load {ARR}, ptr {vp}"))?;
                 Ok(Some(self.fresh(V::agg_p(value, ty, vp), owned)?))
@@ -7124,7 +7152,7 @@ impl<'a> FnGen<'a> {
             "vec_reserve" => {
                 let n = self.ev(arg(&e.args, 1)?, false)?;
                 let p = self.inout_place_ptr(&place(e)?)?;
-                self.m.vec_elems.insert(VIEW_ELEM.to_string());
+                self.m.vec_elems.insert((VIEW_ELEM.to_string(), false));
                 // the G6 shim's vec_reserve bound (the byte count below never wraps). LG12-RS (L-gaps 13): checked
                 // exactly when unverified, like the other LG7-B4 operations; verified code proves it
                 if !self.verified {
@@ -7296,11 +7324,13 @@ impl<'a> FnGen<'a> {
         let elem = native_vec_call_elem(call).ok_or_else(|| IDX_ERR.to_string())?;
         let Expr::InoutArg(place) = arg(&call.args, 0)? else { return Err(IDX_ERR.to_string()) };
         self.begin_temps();
-        let vec = self.ev(&place.expr, false)?;
-        let index = self.ev(arg(&call.args, 1)?, false)?;
+        let value = self.ev(&place.expr, false)?;
+        let pop = call.name == "vec_pop_front";
+        let deque = value.ty.as_deref().is_some_and(native_deque);
+        let index = if pop { "0".to_string() } else { self.ev(arg(&call.args, 1)?, false)?.a };
         self.end_temps()?;
-        let len = self.op(format!("extractvalue {ARR} {}, 1", vec.a))?;
-        let ok = self.op(format!("icmp ult i64 {}, {len}", index.a))?;
+        let vec = NativeVec::unpack(self, &value.a, deque)?;
+        let ok = self.op(format!("icmp ult i64 {index}, {}", vec.len))?;
         let some = self.label("armT");
         let none = self.label("armF");
         let end = self.label("endmatch");
@@ -7310,14 +7340,33 @@ impl<'a> FnGen<'a> {
             let ctor = arm.ctor.as_str();
             self.place(if ctor == "Some" { &some } else { &none });
             let mut bindings = Vec::new();
-            if ctor == "Some" {
+            let mut owner = None;
+            if ctor == "Some" && (pop || !arm.binders.is_empty()) {
+                let lt = lty(elem);
+                let p = vec.slot(self, &lt, &index)?;
+                let slot = if pop {
+                    let header = native_vec_header(deque);
+                    let vp = self.spill(&value)?;
+                    let head = vec.offset(self, "1")?;
+                    let hp = g9_gep(self, header, &vp, 3)?;
+                    self.ins(format!("store i64 {head}, ptr {hp}"))?;
+                    let len = self.op(format!("sub i64 {}, 1", vec.len))?;
+                    let lp = g9_gep(self, header, &vp, 1)?;
+                    self.ins(format!("store i64 {len}, ptr {lp}"))?;
+                    let moved = self.op(format!("load {lt}, ptr {p}"))?;
+                    let dst = self.new_out(elem);
+                    self.ins(format!("store {lt} {moved}, ptr {dst}"))?;
+                    let slot = V::agg(dst, elem);
+                    if self.is_ext(elem) { owner = Some(slot.clone()); }
+                    slot
+                } else {
+                    V::agg(p, elem)
+                };
                 if let Some(name) = arm.binders.first() {
-                    let data = self.op(format!("extractvalue {ARR} {}, 0", vec.a))?;
-                    let p = self.op(format!("getelementptr inbounds {}, ptr {data}, i64 {}", lty(elem), index.a))?;
-                    bindings.push((name.clone(), Bind::Slot(V::agg(p, elem))));
+                    bindings.push((name.clone(), Bind::Slot(slot)));
                 }
             }
-            if self.run_block(&arm.body, bindings)? {
+            if self.run_block_with_owner(&arm.body, bindings, false, owner)? {
                 self.br(&end)?;
                 reach = true;
             }
@@ -7354,7 +7403,7 @@ impl<'a> FnGen<'a> {
             let v = self.ev(x, p.take)?;
             args.extend(self.g6_arg(&v)?);
         }
-        if n == "vec_reserve" {
+        if matches!(n, "vec_reserve" | "vec_clear") {
             self.g6_call(&sym, "void", &args)?;
             return Ok(V::unit());
         }
@@ -7590,12 +7639,26 @@ impl<'a> FnGen<'a> {
                     return Err(g9_diag_err(x.line, x.col, &format!("the variable {} as an aggregate operand", x.name)));
                 }
                 let n = mangle(&x.name);
-                if self.is_ext_opt(&x.ty) || self.f.params.iter().any(|p| p.name == x.name && p.mode_pos.is_some() && is_agg(&p.ty)) {
+                if x.ty.as_deref().is_some_and(native_deque) || self.is_ext_opt(&x.ty) || self.f.params.iter().any(|p| p.name == x.name && p.mode_pos.is_some() && is_agg(&p.ty)) {
                     return Ok(format!("%p.{}", n));
                 }
                 // a non-extended parameter is an SSA value
                 let ty = need_ty(&x.ty)?.to_string();
                 self.spill(&V::agg(format!("%p.{}", n), &ty))
+            }
+            Expr::Index(x) if expr_ty(&x.array).as_deref().is_some_and(native_deque) => {
+                let ty = need_ty(expr_ty(&x.array))?;
+                let elem = native_vec_elem(ty).ok_or_else(|| IDX_ERR.to_string())?;
+                let ptr = self.cx(&x.array)?;
+                let header = native_vec_header(true);
+                let value = self.op(format!("load {header}, ptr {ptr}"))?;
+                let vec = NativeVec::unpack(self, &value, true)?;
+                let index = self.cev(&x.index)?;
+                let len = self.op(format!("zext i64 {} to i128", vec.len))?;
+                let ok = self.op(format!("icmp ult i128 {}, {len}", index.a))?;
+                self.guard(&ok, Fail::Panic1("pruv_panic_undefined", "vector index out of range".into()), false)?;
+                let i = self.op(format!("trunc i128 {} to i64", index.a))?;
+                vec.slot(self, &lty(elem), &i)
             }
             Expr::FieldAccess(x) => {
                 let bty = need_ty(expr_ty(&x.base))?.to_string();
@@ -7804,6 +7867,7 @@ impl<'a> FnGen<'a> {
         match e {
             Expr::VariantField(x) => self.is_ext_opt(expr_ty(&x.value)) || self.g9_real_path(&x.value),
             Expr::FieldAccess(x) => self.is_ext_opt(expr_ty(&x.base)) || self.g9_real_path(&x.base),
+            Expr::Index(x) => expr_ty(&x.array).as_deref().is_some_and(native_deque),
             _ => false,
         }
     }
@@ -8248,7 +8312,8 @@ impl<'a> FnGen<'a> {
                     let operand = arg(a, 0)?;
                     if expr_ty(operand).as_deref().and_then(native_vec_elem).is_some() {
                         let ptr = self.cx(operand)?;
-                        let lp = g9_gep(self, ARR, &ptr, 1)?;
+                        let header = native_vec_header(expr_ty(operand).as_deref().is_some_and(native_deque));
+                        let lp = g9_gep(self, header, &ptr, 1)?;
                         let len = self.op(format!("load i64, ptr {lp}"))?;
                         return Ok(V::new(Kind::I128, self.op(format!("zext i64 {len} to i128"))?));
                     }
@@ -9146,8 +9211,9 @@ fn g9_clone_text(m: &mut Mod, tt: &TypeTable, d: &TypeDecl) -> R<String> {
                 let a2 = g.op(format!("insertvalue {} {}, i64 {}, 2", ARR, a1, n))?; // P3: the new block holds exactly len elements
                 g.ins(format!("store {} {}, ptr {}", ARR, a2, gd))?;
             } else if let Some(elem) = native_vec_elem(ft) {
-                g.m.vec_elems.insert(elem.to_string());
-                g.ins(format!("call void @pruv_vclone__{elem}(ptr {gs}, ptr {gd})"))?;
+                let deque = native_deque(ft);
+                g.m.vec_elems.insert((elem.to_string(), deque));
+                g.ins(format!("call void @pruv_{}clone__{elem}(ptr {gs}, ptr {gd})", native_vec_tag(deque)))?;
             } else if is_collection(ft) {
                 let handle = g.op(format!("load ptr, ptr {gs}"))?;
                 let nn = g.op(format!("icmp ne ptr {handle}, null"))?;
@@ -9249,16 +9315,40 @@ fn g9_vec_each(
     Ok(())
 }
 
-fn g9_vec_parts(g: &mut FnGen, p: &str) -> R<(String, String, String)> {
-    let v = g.op(format!("load {ARR}, ptr {p}"))?;
-    let data = g.op(format!("extractvalue {ARR} {v}, 0"))?;
-    let len = g.op(format!("extractvalue {ARR} {v}, 1"))?;
-    let cap = g.op(format!("extractvalue {ARR} {v}, 2"))?;
-    Ok((data, len, cap))
+struct NativeVec {
+    data: String,
+    len: String,
+    cap: String,
+    head: Option<String>,
 }
 
-fn g9_vec_texts(m: &mut Mod, tt: &TypeTable, elem: &str, budget: Option<u64>) -> R<Vec<String>> {
+impl NativeVec {
+    fn unpack(g: &mut FnGen, v: &str, deque: bool) -> R<Self> {
+        let header = native_vec_header(deque);
+        let data = g.op(format!("extractvalue {header} {v}, 0"))?;
+        let len = g.op(format!("extractvalue {header} {v}, 1"))?;
+        let cap = g.op(format!("extractvalue {header} {v}, 2"))?;
+        let head = if deque { Some(g.op(format!("extractvalue {header} {v}, 3"))?) } else { None };
+        Ok(Self { data, len, cap, head })
+    }
+
+    fn offset(&self, g: &mut FnGen, index: &str) -> R<String> {
+        let Some(head) = &self.head else { return Ok(index.to_string()) };
+        // The ring is accessed only at valid indexes and nonzero capacity.
+        let sum = g.op(format!("add i64 {head}, {index}"))?;
+        g.op(format!("urem i64 {sum}, {}", self.cap))
+    }
+
+    fn slot(&self, g: &mut FnGen, lt: &str, index: &str) -> R<String> {
+        let offset = self.offset(g, index)?;
+        g.op(format!("getelementptr inbounds {lt}, ptr {}, i64 {offset}", self.data))
+    }
+}
+
+fn g9_vec_texts(m: &mut Mod, tt: &TypeTable, elem: &str, deque: bool, budget: Option<u64>) -> R<Vec<String>> {
     let tl = lty(elem);
+    let header = native_vec_header(deque);
+    let tag = native_vec_tag(deque);
     let extended = is_ext_t(tt, elem);
     let df = dummy_fn();
     let funcs = HashMap::new();
@@ -9266,10 +9356,14 @@ fn g9_vec_texts(m: &mut Mod, tt: &TypeTable, elem: &str, budget: Option<u64>) ->
     {
         let mut g = FnGen::new(m, tt, &funcs, &df, true);
         g.place("start");
-        let (data, len, cap) = g9_vec_parts(&mut g, "%v")?;
-        if extended {
-            g9_vec_each(&mut g, &len, &mut |g, i| {
-                let p = g.op(format!("getelementptr inbounds {tl}, ptr {data}, i64 {i}"))?;
+        let value = g.op(format!("load {header}, ptr %v"))?;
+        let vec = NativeVec::unpack(&mut g, &value, deque)?;
+        let (data, cap) = (&vec.data, &vec.cap);
+        if deque {
+            g.ins(format!("call void @pruv_{tag}clear__{elem}(ptr %v)"))?;
+        } else if extended {
+            g9_vec_each(&mut g, &vec.len, &mut |g, i| {
+                let p = vec.slot(g, &tl, i)?;
                 g.ins(format!("call void @pruv_drop__{elem}(ptr {p})"))
             })?;
         }
@@ -9284,44 +9378,71 @@ fn g9_vec_texts(m: &mut Mod, tt: &TypeTable, elem: &str, budget: Option<u64>) ->
         g.br(&done)?;
         g.place(&done);
         g.term("ret void".to_string())?;
-        out.push(g.render(&format!("define internal void @pruv_vdrop__{elem}(ptr %v)")));
+        out.push(g.render(&format!("define internal void @pruv_{tag}drop__{elem}(ptr %v)")));
+    }
+    if deque {
+        let mut g = FnGen::new(m, tt, &funcs, &df, true);
+        g.place("start");
+        let value = g.op(format!("load {header}, ptr %v"))?;
+        let vec = NativeVec::unpack(&mut g, &value, deque)?;
+        if extended {
+            g9_vec_each(&mut g, &vec.len, &mut |g, i| {
+                let p = vec.slot(g, &tl, i)?;
+                g.ins(format!("call void @pruv_drop__{elem}(ptr {p})"))
+            })?;
+        }
+        for field in [1, 3] {
+            let p = g9_gep(&mut g, header, "%v", field)?;
+            g.ins(format!("store i64 0, ptr {p}"))?;
+        }
+        g.term("ret void".to_string())?;
+        out.push(g.render(&format!("define internal void @pruv_{tag}clear__{elem}(ptr %v)")));
     }
     {
         let mut g = FnGen::new(m, tt, &funcs, &df, true);
         g.place("start");
-        let (src, len, _) = g9_vec_parts(&mut g, "%src")?;
+        let value = g.op(format!("load {header}, ptr %src"))?;
+        let vec = NativeVec::unpack(&mut g, &value, deque)?;
+        let (src, len) = (&vec.data, &vec.len);
         let empty = g.label("vempty");
         let copy = g.label("vcopy");
         let zero = g.op(format!("icmp eq i64 {len}, 0"))?;
         g.condbr(&zero, &empty, &copy)?;
         g.place(&empty);
-        g.ins(format!("store {ARR} zeroinitializer, ptr %dst"))?;
+        g.ins(format!("store {header} zeroinitializer, ptr %dst"))?;
         g.term("ret void".to_string())?;
         g.place(&copy);
         let (size, align) = g9_node_layout(&mut g, &tl)?;
         let bytes = g.op(format!("mul i64 {len}, {size}"))?;
         let dst = g.op(format!("call ptr @pruv_node_realloc_v1(ptr null, i64 0, i64 {bytes}, i64 {align})"))?;
-        if extended {
-            g9_vec_each(&mut g, &len, &mut |g, i| {
-                let sp = g.op(format!("getelementptr inbounds {tl}, ptr {src}, i64 {i}"))?;
+        if extended || deque {
+            g9_vec_each(&mut g, len, &mut |g, i| {
+                let sp = vec.slot(g, &tl, i)?;
                 let dp = g.op(format!("getelementptr inbounds {tl}, ptr {dst}, i64 {i}"))?;
-                g.ins(format!("call void @pruv_clone__{elem}(ptr {sp}, ptr {dp})"))
+                if extended {
+                    g.ins(format!("call void @pruv_clone__{elem}(ptr {sp}, ptr {dp})"))
+                } else {
+                    let value = g.op(format!("load {tl}, ptr {sp}"))?;
+                    g.ins(format!("store {tl} {value}, ptr {dp}"))
+                }
             })?;
         } else {
             g.ins(format!("call void @llvm.memcpy.p0.p0.i64(ptr {dst}, ptr {src}, i64 {bytes}, i1 false)"))?;
         }
-        let a = g.op(format!("insertvalue {ARR} zeroinitializer, ptr {dst}, 0"))?;
-        let b = g.op(format!("insertvalue {ARR} {a}, i64 {len}, 1"))?;
-        let c = g.op(format!("insertvalue {ARR} {b}, i64 {len}, 2"))?;
-        g.ins(format!("store {ARR} {c}, ptr %dst"))?;
+        let a = g.op(format!("insertvalue {header} zeroinitializer, ptr {dst}, 0"))?;
+        let b = g.op(format!("insertvalue {header} {a}, i64 {len}, 1"))?;
+        let c = g.op(format!("insertvalue {header} {b}, i64 {len}, 2"))?;
+        g.ins(format!("store {header} {c}, ptr %dst"))?;
         g.term("ret void".to_string())?;
-        out.push(g.render(&format!("define internal void @pruv_vclone__{elem}(ptr %src, ptr %dst)")));
+        out.push(g.render(&format!("define internal void @pruv_{tag}clone__{elem}(ptr %src, ptr %dst)")));
     }
     {
         let mut g = FnGen::new(m, tt, &funcs, &df, true);
         g.place("start");
-        let (data, len, cap) = g9_vec_parts(&mut g, "%v")?;
-        let fail = |panic, drop_element| Fail::VecPush { elem: elem.to_string(), drop_element, panic };
+        let value = g.op(format!("load {header}, ptr %v"))?;
+        let vec = NativeVec::unpack(&mut g, &value, deque)?;
+        let (data, len, cap) = (&vec.data, &vec.len, &vec.cap);
+        let fail = |panic, drop_element| Fail::VecPush { elem: elem.to_string(), deque, drop_element, panic };
         const BUDGET_PANIC: &str = "call void @pruv_panic_vec_push_v1(i64 1)";
         // 4.4o-VP / LG7-B4: a view list's push guard is emitted only when unverified (the verifier proves it)
         if g.m.foreign_requires && (elem != VIEW_ELEM || !g.m.verified) {
@@ -9350,20 +9471,48 @@ fn g9_vec_texts(m: &mut Mod, tt: &TypeTable, elem: &str, budget: Option<u64>) ->
         let bytes = g.op(format!("extractvalue {{ i64, i1 }} {prod}, 0"))?;
         let overflow = g.op(format!("extractvalue {{ i64, i1 }} {prod}, 1"))?;
         g.guard(&overflow, fail("call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)", extended), true)?;
-        let grown = g.cur.clone();
         let old = g.op(format!("mul i64 {cap}, {size}"))?;
-        let dst = g.op(format!("call ptr @pruv_node_realloc_v1(ptr {data}, i64 {old}, i64 {bytes}, i64 {align})"))?;
+        let dst = if deque {
+            let dst = g.op(format!("call ptr @pruv_node_realloc_v1(ptr null, i64 0, i64 {bytes}, i64 {align})"))?;
+            // Move older elements into logical order before releasing the old buffer.
+            g9_vec_each(&mut g, len, &mut |g, i| {
+                let src = vec.slot(g, &tl, i)?;
+                let dest = g.op(format!("getelementptr inbounds {tl}, ptr {dst}, i64 {i}"))?;
+                let value = g.op(format!("load {tl}, ptr {src}"))?;
+                g.ins(format!("store {tl} {value}, ptr {dest}"))
+            })?;
+            let free = g.label("vfreeold");
+            let done = g.label("vready");
+            g.condbr(&empty, &done, &free)?;
+            g.place(&free);
+            g.ins(format!("call void @pruv_node_free_v1(ptr {data}, i64 {old}, i64 {align})"))?;
+            g.br(&done)?;
+            g.place(&done);
+            let hp = g9_gep(&mut g, header, "%v", 3)?;
+            g.ins(format!("store i64 0, ptr {hp}"))?;
+            dst
+        } else {
+            g.op(format!("call ptr @pruv_node_realloc_v1(ptr {data}, i64 {old}, i64 {bytes}, i64 {align})"))?
+        };
+        let grown = g.cur.clone();
         g.ins(format!("store ptr {dst}, ptr %v"))?;
-        let cp = g9_gep(&mut g, ARR, "%v", 2)?;
+        let cp = g9_gep(&mut g, header, "%v", 2)?;
         g.ins(format!("store i64 {ncap}, ptr {cp}"))?;
         g.br(&push)?;
         g.place(&push);
         let dp = g.op(format!("phi ptr [ {data}, %{ready} ], [ {dst}, %{grown} ]"))?;
-        let slot = g.op(format!("getelementptr inbounds {tl}, ptr {dp}, i64 {len}"))?;
+        let slot = if let Some(head) = &vec.head {
+            let head = g.op(format!("phi i64 [ {head}, %{ready} ], [ 0, %{grown} ]"))?;
+            let cap = g.op(format!("phi i64 [ {cap}, %{ready} ], [ {ncap}, %{grown} ]"))?;
+            let updated = NativeVec { data: dp, len: len.clone(), cap, head: Some(head) };
+            updated.slot(&mut g, &tl, len)?
+        } else {
+            g.op(format!("getelementptr inbounds {tl}, ptr {dp}, i64 {len}"))?
+        };
         let value = g.op(format!("load {tl}, ptr %x"))?;
         g.ins(format!("store {tl} {value}, ptr {slot}"))?;
         let next = g.op(format!("add i64 {len}, 1"))?;
-        let lp = g9_gep(&mut g, ARR, "%v", 1)?;
+        let lp = g9_gep(&mut g, header, "%v", 1)?;
         g.ins(format!("store i64 {next}, ptr {lp}"))?;
         if let Some(remaining) = remaining {
             // The shim charges the prefix even for extended elements, then charges the new element.
@@ -9375,7 +9524,7 @@ fn g9_vec_texts(m: &mut Mod, tt: &TypeTable, elem: &str, budget: Option<u64>) ->
             g.guard(&enough, fail(BUDGET_PANIC, false), false)?;
         }
         g.term("ret void".to_string())?;
-        out.push(g.render(&format!("define internal void @pruv_vpush__{elem}(ptr %v, ptr %x)")));
+        out.push(g.render(&format!("define internal void @pruv_{tag}push__{elem}(ptr %v, ptr %x)")));
     }
     Ok(out)
 }
@@ -9396,12 +9545,15 @@ fn g9_walks(t: &str) -> bool {
 fn g9_weight(g: &mut FnGen, t: &str, p: &str, bud: &str) -> R<Option<String>> {
     if let Some(elem) = native_vec_elem(t) {
         g.m.need_size.insert(elem.to_string());
-        let (data, len, _) = g9_vec_parts(g, p)?;
+        let deque = native_deque(t);
+        let header = native_vec_header(deque);
+        let value = g.op(format!("load {header}, ptr {p}"))?;
+        let vec = NativeVec::unpack(g, &value, deque)?;
         let acc = g.g6_out("i128");
         g.ins(format!("store i128 0, ptr {acc}"))?;
         let tl = lty(elem);
-        g9_vec_each(g, &len, &mut |g, i| {
-            let p = g.op(format!("getelementptr inbounds {tl}, ptr {data}, i64 {i}"))?;
+        g9_vec_each(g, &vec.len, &mut |g, i| {
+            let p = vec.slot(g, &tl, i)?;
             let w = g.op(format!("call i128 @pruv_csize__{elem}(ptr {p}, ptr {bud})"))?;
             let prev = g.op(format!("load i128, ptr {acc}"))?;
             let next = g.checked("i128", "sadd", "+", &prev, &w)?;
@@ -9697,8 +9849,8 @@ fn g9_helper_chunks(m: &mut Mod, tt: &TypeTable, vec_budget: Option<u64>) -> R<V
             chunks.extend(g9_node_texts(m, tt, d)?);
         }
     }
-    for elem in m.vec_elems.clone() {
-        chunks.extend(g9_vec_texts(m, tt, &elem, vec_budget)?);
+    for (elem, deque) in m.vec_elems.clone() {
+        chunks.extend(g9_vec_texts(m, tt, &elem, deque, vec_budget)?);
     }
     let close = |seed: &BTreeSet<String>| -> BTreeSet<String> {
         let mut out: BTreeSet<String> = BTreeSet::new();
@@ -9784,20 +9936,26 @@ pub fn gen_llvm(prog: &Program, verified: bool, trust_callers: bool, budget: u64
 
 const WIN_X64_HEADER: &str = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\ntarget triple = \"x86_64-pc-windows-msvc\"\n\n";
 
-pub(crate) fn native_vec_call_elem(c: &Call) -> Option<&str> {
-    let view_only = matches!(c.name.as_str(), "vec_clear" | "vec_reserve" | "vec_pop" | "vec_join");
-    if !view_only && !matches!(c.name.as_str(), "vec_new" | "vec_push" | "vec_get" | "vec_at_mut") {
-        return None;
+fn native_vec_call_ty(c: &Call) -> Option<&str> {
+    if c.name == "vec_new" {
+        return c.ty.as_deref();
     }
-    let ty = if c.name == "vec_new" {
-        c.ty.as_deref()?
-    } else {
-        let first = c.args.first()?;
-        let place = if let Expr::InoutArg(arg) = first { &arg.expr } else { first };
-        expr_ty(place).as_deref()?
-    };
-    // R-6g9-10: a view list also clears and reserves natively
-    native_vec_elem(ty).filter(|elem| if *elem == VIEW_ELEM { c.name != "vec_at_mut" } else { !view_only })
+    let first = c.args.first()?;
+    let place = if let Expr::InoutArg(arg) = first { &arg.expr } else { first };
+    expr_ty(place).as_deref()
+}
+
+pub(crate) fn native_vec_call_elem(c: &Call) -> Option<&str> {
+    let ty = native_vec_call_ty(c)?;
+    let elem = native_vec_elem(ty)?;
+    match c.name.as_str() {
+        "vec_new" | "vec_push" | "vec_get" => Some(elem),
+        "vec_at_mut" if elem != VIEW_ELEM => Some(elem),
+        "vec_clear" if native_deque(ty) || elem == VIEW_ELEM => Some(elem),
+        "vec_pop_front" if native_deque(ty) => Some(elem),
+        "vec_reserve" | "vec_pop" | "vec_join" if elem == VIEW_ELEM => Some(elem),
+        _ => None,
+    }
 }
 
 fn g6_scalar(t: &str) -> bool {
@@ -9906,7 +10064,9 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
                         "map_remove" => rust_only.push((c.line, c.col, "map_remove")),
                         "map_take" => rust_only.push((c.line, c.col, "map_take")),
                         "vec_at_mut" => rust_only.push((c.line, c.col, "vec_at_mut")),
-                        "vec_clear" => rust_only.push((c.line, c.col, "vec_clear")),
+                        "vec_clear" if !c.inst.as_ref().and_then(|i| i.args.first()).is_some_and(|t| g6_scalar(&t.to_key())) => {
+                            rust_only.push((c.line, c.col, "vec_clear"));
+                        }
                         "vec_extend_from_slice" => rust_only.push((c.line, c.col, "vec_extend_from_slice")),
                         "string_eq" => rust_only.push((c.line, c.col, "string_eq")),
                         "map_get_mut" => bad.push((c.line, c.col)),

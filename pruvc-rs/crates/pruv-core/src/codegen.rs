@@ -2791,6 +2791,11 @@ impl<'a> Gen<'a> {
                     Ok(format!("(&{})", x.name))
                 }
             }
+            Expr::Index(x) if expr_ty(&x.array).as_deref().is_some_and(|t| t.starts_with("vecdeque<")) => {
+                let vector = self.carr(&x.array)?;
+                let index = self.c(&x.index)?;
+                Ok(format!("({vector}).get(<usize as ::std::convert::TryFrom<i128>>::try_from({index}).unwrap_or(usize::MAX)).unwrap_or_else(|| pruv_ud(\"vector index out of range\"))"))
+            }
             Expr::FieldAccess(x) => {
                 let deref = if self.field_boxed(expr_ty(&x.base), &x.field) { "*" } else { "" };
                 let base = self.cx(&x.base)?;
@@ -2999,6 +3004,7 @@ impl<'a> Gen<'a> {
         match e {
             Expr::VariantField(x) => self.is_ext(expr_ty(&x.value).as_deref()) || self.g9_real_path(&x.value),
             Expr::FieldAccess(x) => self.is_ext(expr_ty(&x.base).as_deref()) || self.g9_real_path(&x.base),
+            Expr::Index(x) => expr_ty(&x.array).as_deref().is_some_and(|t| t.starts_with("vecdeque<")),
             _ => false,
         }
     }
@@ -3103,9 +3109,14 @@ impl<'a> Gen<'a> {
                 Ok(format!("({} {} {})", l, op, r))
             }
             Expr::Index(x) => {
+                let aty = expr_ty(&x.array).as_deref();
+                if aty.is_some_and(|t| t.starts_with("vecdeque<")) {
+                    let ty = x.ty.as_deref().ok_or_else(|| "codegen: deque index without a type".to_string())?;
+                    let ptr = self.cx(e)?;
+                    return self.g9_metered(ty, &ptr);
+                }
                 let a = self.carr(&x.array)?;
                 let i = self.c(&x.index)?;
-                let aty = expr_ty(&x.array).as_deref();
                 if aty.map_or(false, |t| key_name(t) == "vec") {
                     // G6: checked read of a vector element
                     let et = x.ty.as_deref().ok_or_else(|| "codegen: vector index without a type".to_string())?;
@@ -4243,7 +4254,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
             return None;
         }
         let (types, _) = crate::foreign_shim::inst_types(call);
-        (matches!(call.name.as_str(), "map_get_mut" | "map_take" | "vec_at_mut") || (call.name == "map_get"
+        (matches!(call.name.as_str(), "map_get_mut" | "map_take" | "vec_pop_front" | "vec_at_mut") || (call.name == "map_get"
             && (types.get(1).is_some_and(|t| self.is_ext(Some(&t.to_key())))
                 || self.nested_record_map_read(&call.args[0])))).then_some(call)
     }
@@ -4262,9 +4273,10 @@ pruv_hi <= (pruv_b.len() as i128) && \
 
     fn match_map(&mut self, stmt: &Match, ind: usize) -> R<()> {
         let call = self.map_match_call(stmt).unwrap();
-        let vector = call.name == "vec_at_mut";
-        let take = call.name == "map_take";
-        let mutable = vector || call.name == "map_get_mut";
+        let pop = call.name == "vec_pop_front";
+        let vector = pop || call.name == "vec_at_mut";
+        let take = pop || call.name == "map_take";
+        let mutable = call.name == "vec_at_mut" || call.name == "map_get_mut";
         let place = match &call.args[0] {
             Expr::InoutArg(arg) => arg.expr.as_ref(),
             expr => expr,
@@ -4272,9 +4284,11 @@ pruv_hi <= (pruv_b.len() as i128) && \
         let receiver = self.e(place)?;
         let (types, src) = crate::foreign_shim::inst_types(call);
         let text_key = !vector && types[0].to_key() == "string";
-        let mut key = if text_key { self.borrowed_map_key(&call.args[1])? } else { self.e(&call.args[1])? };
+        let mut key = if pop { String::new() } else if text_key { self.borrowed_map_key(&call.args[1])? } else { self.e(&call.args[1])? };
         self.fg_mut()?.record_inline_catalog(&call.name, &src);
-        let simple = if text_key {
+        let simple = if pop {
+            true
+        } else if text_key {
             matches!(&call.args[1], Expr::Var(_) | Expr::FieldAccess(_) | Expr::StrLit(_))
         } else {
             matches!(&call.args[1], Expr::Var(_) | Expr::IntLit(_) | Expr::BoolLit(_))
@@ -4286,9 +4300,9 @@ pruv_hi <= (pruv_b.len() as i128) && \
             key = "pruv_key".to_string();
         }
         let depth = ind + usize::from(scoped);
-        let method = if take { "remove" } else if mutable { "get_mut" } else { "get" };
+        let method = if pop { "pop_front" } else if take { "remove" } else if mutable { "get_mut" } else { "get" };
         let receiver = if matches!(place, Expr::Var(_) | Expr::FieldAccess(_)) { receiver } else { format!("({})", receiver) };
-        let key = if vector { format!("<usize as ::std::convert::TryFrom<i64>>::try_from({key}).unwrap_or(usize::MAX)") } else if text_key { key } else { format!("&{key}") };
+        let key = if pop { key } else if vector { format!("<usize as ::std::convert::TryFrom<i64>>::try_from({key}).unwrap_or(usize::MAX)") } else if text_key { key } else { format!("&{key}") };
         self.emit(depth, &format!("match {}.{}({}) {{", receiver, method, key));
         let ty = types[usize::from(!vector)].to_key();
         for arm in &stmt.arms {
@@ -4662,7 +4676,12 @@ pruv_hi <= (pruv_b.len() as i128) && \
                             let payload = self.e(&call.args[2])?;
                             self.emit(ind, &format!("{}.{}.insert({}, {});", x.name, x.fields.join("."), value, payload));
                         } else {
-                            self.emit(ind, &format!("{}.{}.push({});", x.name, x.fields.join("."), value));
+                            let method = if call.ty.as_deref().is_some_and(|t| t.starts_with("vecdeque<")) {
+                                "push_back"
+                            } else {
+                                "push"
+                            };
+                            self.emit(ind, &format!("{}.{}.{method}({});", x.name, x.fields.join("."), value));
                         }
                         return Ok(());
                     }
@@ -5489,6 +5508,14 @@ pruv_hi <= (pruv_b.len() as i128) && \
             return Ok(format!("(*({v}).get({index}).unwrap_or_else(|| {fail}))"));
         }
         // A bound proof can depend on an unchecked user foreign postcondition.
+        let deque = x.ty.as_deref().is_some_and(|t| t.starts_with("vecdeque<"))
+            || x.args.first().is_some_and(|a| expr_ty(a).as_deref().is_some_and(|t| t.starts_with("vecdeque<")));
+        if x.name == "vec_get" && deque {
+            self.fg_mut()?.record_inline_catalog(&x.name, &src);
+            let v = self.e(arg(&x.args, 0)?)?;
+            let i = self.e(arg(&x.args, 1)?)?;
+            return Ok(format!("({v})[<usize as ::std::convert::TryFrom<i64>>::try_from({i}).unwrap_or(usize::MAX)]"));
+        }
         if x.name == "vec_get" && self.unchecked_collections() {
             self.fg_mut()?.record_inline_catalog(&x.name, &src);
             let v = self.e(arg(&x.args, 0)?)?;
@@ -5505,7 +5532,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
             let i = self.e(arg(&x.args, 1)?)?;
             return Ok(format!("({})[({}) as usize]", v, i));
         }
-        if x.name == "vec_push"
+        if x.name == "vec_push" && !deque
             && matches!(x.args.first(), Some(Expr::Call(call)) if call.name == "vec_new")
             && self.unchecked_collections()
         {
@@ -5514,7 +5541,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
             return Ok(format!("::std::vec![{}]", self.e(arg(&x.args, 1)?)?));
         }
         let owned_payload = low.last().is_some_and(|t| self.is_ext(Some(&t.to_key())));
-        let name = self.fg_mut()?.catalog_helper(&x.name, &low, &src, owned_payload)?;
+        let name = self.fg_mut()?.catalog_helper(&x.name, &low, &src, owned_payload, deque)?;
         // string_to_str of an owned local that the enclosing return moves: the String itself is the copy.
         if x.name == "string_to_str" && !self.cost {
             if let Some(a @ Expr::Var(v)) = x.args.first() {
@@ -5950,6 +5977,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 if let Expr::Call(call) = base {
                     if call.name == "vec_get" && !self.fmap.contains_key(&call.name)
                         && self.is_ext(expr_ty(base).as_deref()) && self.unchecked_collections()
+                        && !expr_ty(&call.args[0]).as_deref().is_some_and(|ty| ty.starts_with("vecdeque<"))
                         && !expr_ty(base).as_deref().is_some_and(|ty| self.is_recursive(ty))
                     {
                         let (_, types) = crate::foreign_shim::inst_types(call);
@@ -6586,7 +6614,7 @@ pub fn shim_helpers(
     }
     if let Some(fg) = g.fg.as_mut() {
         for (op, low) in observers {
-            fg.catalog_helper(op, low, low, false)?;
+            fg.catalog_helper(op, low, low, false, false)?;
         }
     }
     match g.fg.as_ref() {

@@ -313,9 +313,9 @@ impl ForeignGen {
         }
     }
 
-    pub fn catalog_helper(&mut self, op: &str, low: &[GType], src: &[GType], owned_payload: bool) -> R<String> {
+    pub fn catalog_helper(&mut self, op: &str, low: &[GType], src: &[GType], owned_payload: bool, deque: bool) -> R<String> {
         let src: &[GType] = if src.is_empty() && !low.is_empty() { low } else { src };
-        let mut name = format!("pruv_g6_{}", op);
+        let mut name = if deque { format!("pruv_g6_deque_{op}") } else { format!("pruv_g6_{op}") };
         for t in src {
             name.push_str("__");
             if t.to_key() == "string" {
@@ -327,7 +327,7 @@ impl ForeignGen {
         self.record_pkg_catalog(op, src.iter().map(format_type).collect());
         if !self.has_item(&name) {
             self.op = op.to_string();
-            let text = self.catalog_text(op, &name, low, owned_payload)?;
+            let text = self.catalog_text(op, &name, low, owned_payload, deque)?;
             self.items.push((name.clone(), text));
             self.catalog.push((op.to_string(), src.iter().map(format_type).collect()));
         }
@@ -390,7 +390,7 @@ impl ForeignGen {
         }
         Ok(self.fn_text(name,args,Some(ret),&body))
     }
-    fn catalog_text(&self, op: &str, name: &str, low: &[GType], owned_payload: bool) -> R<String> {
+    fn catalog_text(&self, op: &str, name: &str, low: &[GType], owned_payload: bool, deque: bool) -> R<String> {
         if op.starts_with("file_") {
             return Ok(self.file_text(op, name));
         }
@@ -403,32 +403,35 @@ impl ForeignGen {
         }
         const STRING: &str = "::std::string::String";
         let g = |i: usize| low.get(i).ok_or_else(idx_err);
+        let vector = if deque { "vecdeque" } else { "vec" };
         match op {
             "vec_new" => {
-                let t = rty_g(g(0)?, false);
-                let v = rty_g(&GType::new("vec", vec![g(0)?.clone()]), false);
-                let mut body = vec![format!("let pruv_r: {} = ::std::vec::Vec::<{}>::new();", v, t)];
+                let v = rty_g(&GType::new(vector, vec![g(0)?.clone()]), false);
+                let init = if deque { format!("<{v}>::new()") } else {
+                    format!("::std::vec::Vec::<{}>::new()", rty_g(g(0)?, false))
+                };
+                let mut body = vec![format!("let pruv_r: {v} = {init};")];
                 body.extend(self.ens_line("pruv_r.len() == 0", "len(result) == 0"));
                 body.push("pruv_r".to_string());
                 Ok(self.fn_text(name, "", Some(v.as_str()), &body))
             }
             "vec_push" => {
                 let t = rty_g(g(0)?, false);
-                let v = rty_g(&GType::new("vec", vec![g(0)?.clone()]), false);
+                let v = rty_g(&GType::new(vector, vec![g(0)?.clone()]), false);
                 let mut body = self.req_line("(v.len() as u64) < (1u64 << 40)", "len(v) < 2^40");
                 body.extend(self.snap(&v, "v"));
-                body.push("v.push(x);".to_string());
+                body.push(if deque { "v.push_back(x);" } else { "v.push(x);" }.to_string());
                 body.extend(self.ens_line("v.len() == pruv_snap.len() + 1", "len(result) == len(v) + 1"));
                 if self.ens {
                     body.push("pruv_g6_charge(&mut pruv_budget, pruv_snap.len());".to_string());
                 }
-                if !owned_payload {
+                if !owned_payload && !deque {
                     body.extend(self.ens_line("v[..pruv_snap.len()] == pruv_snap[..]", "result[..len(v)] == v"));
                 }
                 if self.ens {
                     body.push("pruv_g6_charge(&mut pruv_budget, 1);".to_string()); // one visited element (G6_SPEC 12.3)
                 }
-                if self.ens && (owned_payload || g(0)?.to_key() == "string") {
+                if self.ens && (owned_payload || deque || g(0)?.to_key() == "string") {
                     body.extend(self.ens_line("v.get(pruv_snap.len()).is_some()", "result contains the pushed value"));
                 } else {
                     body.extend(self.ens_line("v[pruv_snap.len()] == x", "result[len(v)] == x"));
@@ -438,7 +441,7 @@ impl ForeignGen {
             }
             "vec_get" => {
                 let t = rty_g(g(0)?, false);
-                let v = rty_g(&GType::new("vec", vec![g(0)?.clone()]), false);
+                let v = rty_g(&GType::new(vector, vec![g(0)?.clone()]), false);
                 let mut body = self.req_line("i >= 0 && (i as u64) < (v.len() as u64)", "0 <= i && i < len(v)");
                 body.push(
                     "let pruv_k: usize = if i >= 0 && (i as u64) < (v.len() as u64) { i as usize } else { pruv_g6_repr(\"index\") };"

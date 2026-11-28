@@ -468,7 +468,7 @@ impl<'a> Mono<'a> {
                 Ok(mk_result_with_error(x, e))
             }
             // G6: Vec<T> / HashMap<K, V> keep their name, the arguments are lowered
-            "vec" | "hashmap" => {
+            "vec" | "vecdeque" | "hashmap" => {
                 let mut args = Vec::with_capacity(c.args.len());
                 for a in &c.args {
                     args.push(self.lower(a)?);

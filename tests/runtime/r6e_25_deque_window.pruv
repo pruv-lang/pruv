@@ -1,0 +1,95 @@
+struct Draft { id: i64, notes: Vec<i64> }
+struct Window { drafts: VecDeque<Draft> }
+
+fn empty() -> VecDeque<Draft> ! alloc ensures len(result) == 0 {
+  return vec_new::<Draft>();
+}
+
+fn make(id: i64) -> Draft ! alloc {
+  return Draft { id: id, notes: vec_push::<i64>(vec_new::<i64>(), id) };
+}
+
+fn refill(inout d: Draft, id: i64) -> () ! alloc
+  ensures d.id == id && len(d.notes) == 1 && d.notes[0] == id
+{
+  vec_clear::<i64>(inout d.notes);
+  d.id = id;
+  d.notes = vec_push::<i64>(move d.notes, id);
+}
+
+fn begin(inout w: Window, id: i64) -> i64 ! alloc
+  requires len(w.drafts) <= 3
+  ensures (len(old(w.drafts)) < 3 ==> len(w.drafts) == len(old(w.drafts)) + 1)
+  ensures (len(old(w.drafts)) == 3 ==> len(w.drafts) == 3)
+{
+  if len(w.drafts) >= 3 {
+    match vec_pop_front::<Draft>(inout w.drafts) {
+      Some(d) => {
+        let prior: i64 = d.id;
+        refill(inout d, id);
+        w.drafts = vec_push::<Draft>(move w.drafts, move d);
+        return prior;
+      }
+      None => { return -1; }
+    }
+  }
+  w.drafts = vec_push::<Draft>(move w.drafts, make(id));
+  return 0;
+}
+
+fn back(inout q: VecDeque<Draft>) -> i64 ! alloc
+  requires len(q) > 0
+{
+  let last: i64 = len(q) - 1;
+  let id: i64 = vec_get::<Draft>(q, last).id;
+  match vec_at_mut::<Draft>(inout q, last) {
+    Some(d) => { refill(inout d, 42); }
+    None => { return -1; }
+  }
+  if vec_get::<Draft>(q, last).id != 42 { return -2; }
+  if len(vec_get::<Draft>(q, last).notes) != 1 { return -3; }
+  return id;
+}
+
+pub fn window() -> i64 ! alloc {
+  let mut w: Window = Window { drafts: empty() };
+  let a: i64 = begin(inout w, 1);
+  let b: i64 = begin(inout w, 2);
+  let c: i64 = begin(inout w, 3);
+  let d: i64 = begin(inout w, 4);
+  let e: i64 = begin(inout w, 5);
+  let f: i64 = begin(inout w, 6);
+  let g: i64 = begin(inout w, 7);
+  if a != 0 || b != 0 || c != 0 || d != 1 || e != 2 || f != 3 || g != 4 { return -1; }
+  return back(inout w.drafts);
+}
+
+pub fn wrapped_growth() -> i64 ! alloc {
+  let mut q: VecDeque<Draft> = empty();
+  q = vec_push::<Draft>(move q, make(1));
+  q = vec_push::<Draft>(move q, make(2));
+  q = vec_push::<Draft>(move q, make(3));
+  q = vec_push::<Draft>(move q, make(4));
+  match vec_pop_front::<Draft>(inout q) {
+    Some(d) => { if d.id != 1 { return -1; } }
+    None => { return -2; }
+  }
+  q = vec_push::<Draft>(move q, make(5));
+  q = vec_push::<Draft>(move q, make(6));
+  if vec_get::<Draft>(q, 0).id != 2 { return -3; }
+  if vec_get::<Draft>(q, 1).id != 3 { return -4; }
+  if vec_get::<Draft>(q, 2).id != 4 { return -5; }
+  if vec_get::<Draft>(q, 3).id != 5 { return -6; }
+  if vec_get::<Draft>(q, 4).id != 6 { return -7; }
+  match vec_pop_front::<Draft>(inout q) {
+    Some(d) => { if d.id != 2 { return -8; } }
+    None => { return -9; }
+  }
+  vec_clear::<Draft>(inout q);
+  match vec_pop_front::<Draft>(inout q) {
+    Some(d) => { return d.id; }
+    None => { }
+  }
+  q = vec_push::<Draft>(move q, make(7));
+  return vec_get::<Draft>(q, 0).id;
+}

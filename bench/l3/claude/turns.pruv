@@ -1,14 +1,14 @@
 // L3-1 turn collector, hand `Collector` (VecDeque<Draft>) and `Draft` (handrust/src/lib.rs).
-// drafts holds at most 200 drafts. Draft k (k counts begins from 0) lives at index k % 200: the vector grows by
-// push while fewer than 200 drafts were begun, and afterwards the oldest draft, at the front index begun % 200,
-// is reused in place for the next begin (hand: pop_front, clear, push_back). Each draft owns its prompt and reply
-// bytes; createdAt and completedAt are hand `Stamp` values (Option<[u8; 24]>, 4.4h-ST), assigned whole.
+// drafts holds at most 200 drafts, oldest at the front and the current one at the back (len - 1), as the hand
+// VecDeque (4.4h-VD): a begin with 200 drafts pops the oldest, clears it and refills it, then every begin pushes
+// its draft at the back. Each draft owns its prompt and reply bytes; createdAt and completedAt are hand `Stamp`
+// values (Option<[u8; 24]>, 4.4h-ST), assigned whole.
 
 pub struct Plan { kept: i64, total: i64, bytes: i64 }
 
 pub struct Draft { prompt: [u8], reply: [u8], used: i64, tools: i64, created: Option<[u8; 24]>, completed: Option<[u8; 24]>, clipped: bool }
 
-pub struct Collector { drafts: Vec<Draft>, begun: i64, active: bool, lost: bool }
+pub struct Collector { drafts: VecDeque<Draft>, begun: i64, active: bool, lost: bool }
 
 pub pred fn ok(c: Collector) -> bool {
   return 0 <= c.begun && c.begun <= 1000000000000 && len(c.drafts) <= 200 &&
@@ -29,9 +29,9 @@ pub fn new_collector() -> Collector ! alloc
 // The current draft's index (the newest begun one).
 pub fn current(c: Collector) -> i64
   requires ok(c) && c.begun >= 1
-  ensures 0 <= result && result < len(c.drafts) && result == (c.begun - 1) % 200
+  ensures 0 <= result && result < len(c.drafts) && result == len(c.drafts) - 1
 {
-  return (c.begun - 1) % 200;
+  return len(c.drafts) - 1;
 }
 
 // b emptied, keeping its block where the backend can (hand: clear), then t[0..n) appended (hand: extend).
@@ -53,23 +53,18 @@ pub fn begin(inout c: Collector, prompt: str, created: Option<[u8; 24]>) -> () !
   requires len(prompt) <= 100000000
   ensures ok(c)
   ensures c.begun == old(c).begun + 1 && c.active && !c.lost
-  ensures len(c.drafts[(c.begun - 1) % 200].prompt) <= len(prompt) && is_char_boundary(prompt, len(c.drafts[(c.begun - 1) % 200].prompt))
-  ensures len(prompt) <= 32768 ==> len(c.drafts[(c.begun - 1) % 200].prompt) == len(prompt)
-  ensures len(c.drafts[(c.begun - 1) % 200].prompt) == len(prompt) || (forall t in len(c.drafts[(c.begun - 1) % 200].prompt) + 1..32769: !is_char_boundary(prompt, t))
-  ensures c.drafts[(c.begun - 1) % 200].clipped == (len(prompt) > 32768 || old(c).lost)
-  ensures len(c.drafts[(c.begun - 1) % 200].reply) == 0 && c.drafts[(c.begun - 1) % 200].used == 0 && c.drafts[(c.begun - 1) % 200].tools == 0 && !is_some(c.drafts[(c.begun - 1) % 200].completed)
-  ensures is_some(c.drafts[(c.begun - 1) % 200].created) == is_some(created)
+  ensures len(c.drafts[len(c.drafts) - 1].prompt) <= len(prompt) && is_char_boundary(prompt, len(c.drafts[len(c.drafts) - 1].prompt))
+  ensures len(prompt) <= 32768 ==> len(c.drafts[len(c.drafts) - 1].prompt) == len(prompt)
+  ensures len(c.drafts[len(c.drafts) - 1].prompt) == len(prompt) || (forall t in len(c.drafts[len(c.drafts) - 1].prompt) + 1..32769: !is_char_boundary(prompt, t))
+  ensures c.drafts[len(c.drafts) - 1].clipped == (len(prompt) > 32768 || old(c).lost)
+  ensures len(c.drafts[len(c.drafts) - 1].reply) == 0 && c.drafts[len(c.drafts) - 1].used == 0 && c.drafts[len(c.drafts) - 1].tools == 0 && !is_some(c.drafts[len(c.drafts) - 1].completed)
+  ensures is_some(c.drafts[len(c.drafts) - 1].created) == is_some(created)
 {
   let n: i64 = crate::text::clip_len(prompt, 32768);
   let cl: bool = len(prompt) > 32768 || c.lost;
-  if len(c.drafts) < 200 {
-    let p0: [u8] = alloc(0, 0);
-    let p: [u8] = refill_text(move p0, prompt, n);
-    let r: [u8] = alloc(0, 0);
-    c.drafts = vec_push::<Draft>(move c.drafts, Draft { prompt: move p, reply: move r, used: 0, tools: 0, created: created, completed: None::<[u8; 24]>, clipped: cl });
-  } else {
-    let w: i64 = c.begun % 200;
-    match vec_at_mut::<Draft>(inout c.drafts, w) {
+  if len(c.drafts) >= 200 {
+    // hand: `let mut d = self.drafts.pop_front().unwrap(); d.prompt.clear(); d.reply.clear();` then refilled
+    match vec_pop_front::<Draft>(inout c.drafts) {
       Some(d) => {
         let p: [u8] = move d.prompt;
         d.prompt = refill_text(move p, prompt, n);
@@ -80,9 +75,15 @@ pub fn begin(inout c: Collector, prompt: str, created: Option<[u8; 24]>) -> () !
         d.used = 0;
         d.tools = 0;
         d.clipped = cl;
+        c.drafts = vec_push::<Draft>(move c.drafts, move d);
       }
       None => {}
     }
+  } else {
+    let p0: [u8] = alloc(0, 0);
+    let p: [u8] = refill_text(move p0, prompt, n);
+    let r: [u8] = alloc(0, 0);
+    c.drafts = vec_push::<Draft>(move c.drafts, Draft { prompt: move p, reply: move r, used: 0, tools: 0, created: created, completed: None::<[u8; 24]>, clipped: cl });
   }
   c.begun = c.begun + 1;
   c.active = true;
@@ -104,11 +105,11 @@ pub fn tool(inout c: Collector) -> ()
   requires ok(c)
   ensures ok(c) && c.begun == old(c).begun && c.active == old(c).active && c.lost == old(c).lost
   ensures len(c.drafts) == len(old(c).drafts)
-  ensures (c.active && old(c).drafts[(c.begun - 1) % 200].tools < 1000000000000000) ==>
-    c.drafts[(c.begun - 1) % 200].tools == old(c).drafts[(c.begun - 1) % 200].tools + 1
+  ensures (c.active && old(c).drafts[len(old(c).drafts) - 1].tools < 1000000000000000) ==>
+    c.drafts[len(c.drafts) - 1].tools == old(c).drafts[len(old(c).drafts) - 1].tools + 1
 {
   if !c.active { return; }
-  let k: i64 = (c.begun - 1) % 200;
+  let k: i64 = len(c.drafts) - 1;
   match vec_at_mut::<Draft>(inout c.drafts, k) {
     Some(d) => {
       if d.tools < 1000000000000000 { d.tools = d.tools + 1; }
@@ -127,13 +128,13 @@ pub fn answer(inout c: Collector, text: str, at: Option<[u8; 24]>) -> () ! alloc
   requires len(text) <= 100000000
   ensures ok(c) && c.begun == old(c).begun && c.active == old(c).active && c.lost == old(c).lost
   ensures len(c.drafts) == len(old(c).drafts)
-  ensures (c.active && is_some(at)) ==> is_some(c.drafts[(c.begun - 1) % 200].completed)
-  ensures (c.active && len(text) > 0 && len(old(c).drafts[(c.begun - 1) % 200].reply) > 0 &&
-    len(text) + 2 <= 32768 - old(c).drafts[(c.begun - 1) % 200].used) ==>
-    len(c.drafts[(c.begun - 1) % 200].reply) == len(old(c).drafts[(c.begun - 1) % 200].reply) + 2 + len(text)
+  ensures (c.active && is_some(at)) ==> is_some(c.drafts[len(c.drafts) - 1].completed)
+  ensures (c.active && len(text) > 0 && len(old(c).drafts[len(old(c).drafts) - 1].reply) > 0 &&
+    len(text) + 2 <= 32768 - old(c).drafts[len(old(c).drafts) - 1].used) ==>
+    len(c.drafts[len(c.drafts) - 1].reply) == len(old(c).drafts[len(old(c).drafts) - 1].reply) + 2 + len(text)
 {
   if !c.active { return; }
-  let k: i64 = (c.begun - 1) % 200;
+  let k: i64 = len(c.drafts) - 1;
   match vec_at_mut::<Draft>(inout c.drafts, k) {
     Some(d) => {
       match at {
@@ -200,9 +201,9 @@ pub fn plan(c: Collector) -> Plan
   requires ok(c)
   ensures 0 <= result.kept && result.kept <= 200 && result.kept <= c.begun
   ensures 0 <= result.total && result.total <= 2097152
-  ensures result.total == sum(j in 0..result.kept: len(c.drafts[(c.begun - 1 - j) % 200].prompt) + len(c.drafts[(c.begun - 1 - j) % 200].reply))
+  ensures result.total == sum(j in 0..result.kept: len(c.drafts[len(c.drafts) - 1 - j].prompt) + len(c.drafts[len(c.drafts) - 1 - j].reply))
   ensures (result.kept < c.begun && result.kept < 200) ==>
-    result.total + len(c.drafts[(c.begun - 1 - result.kept) % 200].prompt) + len(c.drafts[(c.begun - 1 - result.kept) % 200].reply) > 2097152
+    result.total + len(c.drafts[len(c.drafts) - 1 - result.kept].prompt) + len(c.drafts[len(c.drafts) - 1 - result.kept].reply) > 2097152
   ensures 0 <= result.bytes && result.bytes <= 2106752
 {
   let b: i64 = c.begun;
@@ -216,11 +217,11 @@ pub fn plan(c: Collector) -> Plan
     invariant (b <= 200 && avail == b) || (b > 200 && avail == 200)
     invariant c.begun == b && ok(c)
     invariant 0 <= total && total <= 2097152
-    invariant total == sum(j in 0..i: len(c.drafts[(b - 1 - j) % 200].prompt) + len(c.drafts[(b - 1 - j) % 200].reply))
+    invariant total == sum(j in 0..i: len(c.drafts[len(c.drafts) - 1 - j].prompt) + len(c.drafts[len(c.drafts) - 1 - j].reply))
     invariant 0 <= bytes && bytes <= total + 48 * i
     decreases avail - i
   {
-    let w: i64 = (b - 1 - i) % 200;
+    let w: i64 = len(c.drafts) - 1 - i;
     let size: i64 = len(vec_get::<Draft>(c.drafts, w).prompt) + len(vec_get::<Draft>(c.drafts, w).reply);
     if total + size > 2097152 {
       return Plan { kept: i, total: total, bytes: bytes };
@@ -254,7 +255,7 @@ pub fn put_turns(inout turns: [i64], inout text: [u8], shift: i64, c: Collector,
     decreases left
   {
     let j: i64 = left - 1;
-    let w: i64 = (b - 1 - j) % 200;
+    let w: i64 = len(c.drafts) - 1 - j;
     let plen: i64 = len(vec_get::<Draft>(c.drafts, w).prompt);
     let rlen: i64 = len(vec_get::<Draft>(c.drafts, w).reply);
     let cn: i64 = stamp_len(vec_get::<Draft>(c.drafts, w).created);

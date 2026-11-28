@@ -488,6 +488,16 @@ fn low_at(low: &[GType], i: usize) -> R<&GType> {
     low.get(i).ok_or_else(|| "tuple index out of range".to_string())
 }
 
+fn vec_clear_adapter(helper: &str, elem: &GType) -> String {
+    let vec = rty_t(&GType::new("vec", vec![elem.clone()]));
+    fn_text(
+        &adapter_sym(helper),
+        "v: PruvH",
+        None,
+        &format!("pruv_g6_guard(|| {{ if v.is_null() {{ pruv_g6_repr(\"null handle\") }} unsafe {{ (&mut *(v as *mut {vec})).clear() }} }})"),
+    )
+}
+
 fn vec_reserve_adapter(helper: &str, elem: &GType, checked: bool) -> String {
     let vec = rty_t(&GType::new("vec", vec![elem.clone()]));
     let check = if checked {
@@ -1110,6 +1120,9 @@ pub fn build_shim(
     let checked = !verified || foreign_checks == "all" || prog.functions.iter().any(|f| f.foreign.is_some());
     for (name, (_, low)) in cats.iter().filter(|(_, (op, _))| op == "vec_reserve").collect::<BTreeMap<_, _>>() {
         adapters.push(vec_reserve_adapter(name, low_at(low, 0)?, checked));
+    }
+    for (name, (_, low)) in cats.iter().filter(|(_, (op, _))| op == "vec_clear").collect::<BTreeMap<_, _>>() {
+        adapters.push(vec_clear_adapter(name, low_at(low, 0)?));
     }
     if cats.values().any(|(op, _)| op == "string_to_str") {
         adapters.push(string_bytes_adapter());

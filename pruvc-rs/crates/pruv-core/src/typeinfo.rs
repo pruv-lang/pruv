@@ -1008,7 +1008,7 @@ mod tests {
         assert_eq!(type_name("array_bool"), "[bool]");
         assert!(!is_user_type("array_u8"));
         assert!(!is_user_type("array_bool"));
-        assert_eq!(BUILTIN_TYPE_NAMES.len(), 18);
+        assert_eq!(BUILTIN_TYPE_NAMES.len(), 19);
         assert_eq!(type_name("string"), "String");
         assert_eq!(type_name("loop"), "Loop");
         assert!(!is_user_type("loop"));
