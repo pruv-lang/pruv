@@ -1505,3 +1505,38 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
   Next: profile the generated a4 `window` path (q_measure deletes its build directory, so the profile needs a kept
   build) before touching shared code again. Pruv still has no `str` / `[u8]` slice `==`, so the key compare stays a
   byte loop either way.
+
+### Rows after L-gaps 27
+
+- 4.4zf-KE: window and turns fixed in shared code. A kept a4 build was profiled on `window_8MiB` (generated Rust
+  about 40 ms, hand about 29 ms per call): about 1400 of 5000 samples sat in `malloc` / `realloc` / `free`, most of it
+  the line tape growing from capacity 0 to 96 words (about five reallocations per JSONL line). 4.4zc had removed the
+  up-front reserve that the json hand `parse` keeps (`Vec::with_capacity(32 * WIDTH)`). `parse::scan_records` now
+  reserves 192 words (32 records) before the first append. That is one place, used by every `parse::parse` /
+  `parse::scan` caller. Per-function table and probe table: local `work/lgaps27/compare.md`.
+- The L-gaps 25 turns cells (1.07-1.12x) have the same cause. Every turn line starts a new tape, and `fields` was not
+  the cost (L-gaps 26 had already shown that `key_is` is not it).
+- Measured with claude `q_measure.py --pairs rs/rust,rs/llvm`, 7 rounds, under the perf lock at load about 2 (local
+  `work/lgaps27/perf_cells.json`, 36 time cells per pair). Pruv/hand time geometric mean 0.927 on rs/rust and 0.922
+  on rs/llvm.
+  - window_8MiB: 0.95 / 0.94.
+  - turns0-200, all operations: 0.75-1.0.
+  - small: 0.70-0.80.
+  - ring_wrap: 0.89-1.02.
+- Two cells stay above hand:
+  - depth_limit window: 1.76 / 1.88. The time is in `open_container` and the inlined `call`, which is
+    `publication_ok` -> `json::check_subtrees`. That subtree walk is quadratic in depth on nested input, so this cell
+    is 4.4l-CT, not a parse shape. The 4.4l-CT side branches drop the walk only in `lines::parse_owned`; claude
+    `parse::parse` still calls it through `publication_ok`.
+  - long_text window on rs/rust: 1.20 (0.90 on rs/llvm). The hot loop is the per-byte loop of
+    `parse::string_token` (inlined in `record`, called with `checked = true`). The hand `Parser::string` scans with
+    `bytes().position(..)`, which looks only for a quote, a backslash or a control byte.
+    - Both sides validate the line's UTF-8 once, and neither makes an extra pass.
+    - The Pruv loop does more per byte: it also tests `c >= 128 && checked` and the backslash, and it moves an `i64`
+      `pos` through `inout` with `as usize` / `as i64` casts. The read uses `get_unchecked`, so no bounds check is
+      left in the loop.
+    - The extra branches come from the Pruv source: one function serves both checked and unchecked input. The casts
+      come from how the Rust backend lowers `i64` indexes.
+    - Possible shared fix, not tried in L-gaps 27 (time cap): give `pkgs/parse` a scan for checked input that only
+      advances to the first quote, backslash or control byte, and use it on the `record` string path.
+    - Open as 4.4zf-LT.
