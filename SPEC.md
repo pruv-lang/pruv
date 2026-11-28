@@ -2919,7 +2919,7 @@ read by the checker, the verifier and both backends.
 - R-6p-3 **Not yet supported.** These are rejected with `small_int_unsupported` and a message naming the later
   bundle: `u8`/`u16` as a type argument (`Option<u8>`, `Vec<u16>`, generics; P11) or an enum payload (P11), stage
   `parse` or `type`; any integer type other than `i64`, or `[u16]`, in the signature of a trusted rust (foreign)
-  function (P12, stage `parse`); and the same in a host-facing signature on the LLVM backend (R-6p-6, stage `codegen`;
+  function (P12, stage `parse`, or `type` for a `[u16]` nested in another type); and the same in a host-facing signature on the LLVM backend (R-6p-6, stage `codegen`;
   a private function or a child-module `pub` function whose signature holds such a type, directly or inside a struct,
   is never a host entry). Since P3 the integer types `u32 i32 usize isize u64 i8 i16` exist (R-6p-5), and
   indexes and `decreases` measures follow R-6p-5. Tests: [accept](tests/spec/r6p_3_accept.pruv),
@@ -2971,11 +2971,11 @@ read by the checker, the verifier and both backends.
   representation check as `&[i64]`; `requires` is checked in the wrapper as for `i64`. Nothing is converted or copied
   at the boundary. A `requires` on an integer is evaluated in `i128`, so `u64::MAX` passes `x > 0`. A struct whose
   fields have such types crosses as the Rust struct with the same field types; a narrow enum payload keeps the P11
-  rule. A `take` or `inout` `[u16]`/`[u8]` parameter follows the `[i64]` rules (`Vec<u16>`, `&mut [u16]`). A scalar
+  rule. A `take` or `inout` `[u16]`/`[u8]` parameter follows the `[i64]` rules (`Vec<T>`, `&mut [T]` for `T` = `u8` or `u16`). A scalar
   `inout` of any integer width at a host entry stays `type/entry_signature` (R-6g-4). A fixed-length array `[T; N]` at
   a host entry stays `type/fixed_array_position`. Still rejected with
   `small_int_unsupported`: such a type in a trusted rust fn signature (stage
-  `parse` or `type`) and in a host-facing signature on the LLVM backend, including its Rust bindings (stage
+  `parse`, or `type` for a nested `[u16]`) and in a host-facing signature on the LLVM backend, including its Rust bindings (stage
   `codegen`; a later P12 bundle, docs/P12_HOST_SPEC.md). A child-module `pub` function is not a host entry, so on
   LLVM it keeps such types like any internal function. Tests: [accept](tests/spec/r6p_6_host_accept.pruv),
   [requires](tests/spec/r6p_6_host_requires.pruv), [module](tests/spec/r6p_6_host_module/root.pruv),
