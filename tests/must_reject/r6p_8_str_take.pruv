@@ -1,0 +1,2 @@
+// spec: R-6p-8 reject
+pub fn f(take s: str) -> i64 { return len(s); }

@@ -1,0 +1,4 @@
+// spec: R-6p-8 reject
+// P12c: host-built state with an invariant stays rejected (no runtime invariant check)
+pub struct S { n: i64, invariant n > 0 }
+pub fn f(inout st: S) -> i64 { return 0; }

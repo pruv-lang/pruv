@@ -1,0 +1,35 @@
+{
+  "gen_contains": [
+    "pub fn update(st: &mut State, n: i64)",
+    "pub fn read_str(s: &str) -> i64",
+    "pub fn into_text(s: ::std::string::String) -> ::std::string::String",
+    "pub fn read_ints(v: &::std::vec::Vec<i64>) -> i64",
+    "pub fn keep_ints(v: ::std::vec::Vec<i64>) -> ::std::vec::Vec<i64>",
+    "pub fn read_flags(v: &::std::vec::Vec<bool>) -> i64",
+    "pub fn keep_flags(v: ::std::vec::Vec<bool>) -> ::std::vec::Vec<bool>",
+    "pub fn read_records(v: &::std::vec::Vec<R>) -> i64",
+    "pub fn keep_records(v: ::std::vec::Vec<R>) -> ::std::vec::Vec<R>",
+    "pub fn read_text(v: &::std::string::String) -> i64",
+    "pub fn keep_text(v: ::std::string::String) -> ::std::string::String",
+    "st.data.len()",
+    "st.title.len()",
+    "pruv_elem.data.len()",
+    "pruv_elem.title.len()"
+  ],
+  "gen_absent": [".clone()", ".to_vec()"],
+  "run": {
+    "backends": [
+      "rust"
+    ],
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "ok"
+    ]
+  }
+}

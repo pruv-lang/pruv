@@ -1,1 +1,1 @@
-{"stage":"type","code":"entry_signature"}
+{"gen_contains":["pub fn make() -> ::std::string::String"]}

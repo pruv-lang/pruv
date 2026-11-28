@@ -134,6 +134,46 @@ used by its bare name.
   and strings and O(n) worst case over nested elements visited for the length bound. Contracts, body work and copies the
   caller asks for are counted separately.
 
+## P12d LLVM narrow ints and buffers (design)
+
+| Pruv position | C prototype of the LLVM host entry | Generated Rust binding |
+|---|---|---|
+| parameter/result `u8`, `u16`, `u32`, `u64`, `usize` | `uint8_t`, `uint16_t`, `uint32_t`, `uint64_t`, `uint64_t` | the Rust integer of the same name |
+| parameter/result `i8`, `i16`, `i32`, `isize` | `int8_t`, `int16_t`, `int32_t`, `int64_t` | the Rust integer of the same name |
+| eligible public struct `S` with such fields | input `const int64_t *words`; result `void` plus a last `int64_t *out_words` | `s: S` / `-> S` |
+| read `sid: [u16]` | `const uint16_t *sid, int64_t sid_len` | `sid: &[u16]` |
+| owned result `-> [u16]` | `void` plus a last `PruvArrayU16 *out` (`uint16_t *data`, `int64_t len`) | `-> Vec<u16>` |
+
+- Representation. Direct parameters and results use an LLVM integer of the declared width. On x86-64 SysV the 8- and
+  16-bit values carry `zeroext` (unsigned) or `signext` (signed) on both the call and the definition, as Clang emits;
+  on WinX64 no such attribute is set and only the low bits of the declared width are used. Neither side assumes the
+  whole 64-bit register is extended.
+- What is lifted. LLVM `codegen/small_int_unsupported` is lifted for the positions of the table only. A struct keeps the
+  existing word serialization in field order, one 64-bit word per integer field: sign- or zero-extended on write,
+  truncated to the declared width on read; 64-bit fields keep all bits.
+- What stays rejected. Owned general `Vec<T>`, aggregate fields rejected today, fixed arrays `[T; N]`, scalar `inout`
+  and the foreign signature limits. `[u16]` inputs gain the read form only; `take` and `inout` `[u16]` get no new C
+  prototype.
+- Wrapper order. A non-empty `[u16]` points at 2-byte aligned readable storage; the length is the element count.
+  Every buffer length is checked before any memory read, `requires` or the body: `0` and `2^40` pass, negative and
+  larger values stop through `pruv_panic_repr(len, "array length")` (exit 101). The check stays under
+  `--trust-callers`. Next to an existing `inout` buffer the overlap check uses 2 bytes per element. Every `u16` value,
+  surrogates included, passes unchanged.
+- Ownership. A result whose capacity differs from its length is shrunk with `pruv_shrink_v2(data, cap, len, 2, 2)`
+  before the handoff. The C caller frees a non-empty result exactly once with `pruv_free_v2(data, len, 2, 2)` and does
+  not dereference an empty one.
+- Bindings. `--rust-bindings` declares `extern "C"` functions with the same widths. A read slice passes pointer and
+  length. A non-empty result is taken over with `Vec::from_raw_parts(data, len, len)` and freed by `Drop`; an empty
+  one is `Vec::new()`.
+- Acceptance tests. On x86-64 SysV and WinX64 (tests/abi/winci, new `.pruv` and `calls.json` entries, regenerated
+  `out/`), through a direct C caller and through the generated Rust bindings: min/max of each width, negative values,
+  unsigned values with the top bit set, a mixed-width struct round trip, `[0xD800, 0xFFFF]`, an empty result, a result
+  with capacity above its length (values and a single free). Direct C calls with lengths `-1` and `2^40+1` stop with
+  the representation error and exit 101 before the body, in a separate process.
+- Cost. Scalars, slice borrows and the result handoff are O(1); 0 input elements copied. Struct conversion is linear
+  in its word count; at most one O(output) copy when the result shrink reallocates.
+
 ## Next bundle
 
-P12c (Rust owned collections and state), then the LLVM families P12d to P12g, then P12h.
+P12d (LLVM narrow ints and `[u16]`, design above), then P12e (LLVM value tuples), P12f (allocator and ownership ABI),
+P12g (LLVM owned types), then P12h.

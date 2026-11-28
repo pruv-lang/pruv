@@ -1,0 +1,29 @@
+{
+  "flags": [
+    "--trust-callers"
+  ],
+  "gen_contains": [
+    "v.len() as u64"
+  ],
+  "gen_absent": [
+    "pruv: requires violated"
+  ],
+  "run": {
+    "backends": [
+      "rust"
+    ],
+    "exit": 0,
+    "flags_matrix": [
+      [
+        "--trust-callers"
+      ],
+      [
+        "--no-verify",
+        "--trust-callers"
+      ]
+    ],
+    "stdout_lines": [
+      "ok"
+    ]
+  }
+}

@@ -1,0 +1,2 @@
+// spec: R-6p-8 reject
+pub fn f(inout n: i64) -> i64 { return n; }
