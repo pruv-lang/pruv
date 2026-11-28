@@ -2951,3 +2951,13 @@ subtree property needs no count. It changes the tape layout (a seventh word or r
 the end record index for closed containers) and every `pkgs/parse` and `pkgs/access` user. Check first whether
 `skip` alone already gives `contained` as a range fact: `skip` is set on close and `json::check_tape` already checks
 it, so the count may only be needed for the child count itself, not for containment.
+
+## L-gaps 29: 4.4l-CT, range facts only, counts left to a run-time pass (ninth attempt)
+
+| Row | Kind | Change | Tests |
+|---|---|---|---|
+| 4.4l-CT (G-DB33-1/2) | proof gap, closed for `lines` and claude | No verifier change: the L-gaps 24-28 sources are merged onto main and the three count conjuncts of `tree_ok` (per-object child count, per-array child count, object key parity) are dropped, with every count `requires` / `ensures` / `assert` in `set_header`, `child`, `member` and `container`. What is left in `tree_ok` is range facts: each record in `t + 1..skip(t)` lies inside `t`'s byte span and skip range and has a parent at or after `t`, and no array child is a key. `scan_document` ensures `contained` and `tree_ok` over the whole tape. `parse::parse` now publishes the tape with `reveal contained; reveal tree_ok` and no run-time pass; the count and parity facts that only json b_root `array_length` needs stay with the new `parse::parse_counted` (the old `parse`, `publication_ok` -> `check_subtrees`), which b_root now calls. `lines::parse_owned` drops its `check_subtrees` call the same way. a5_root fresh verify under the perf lock, load about 1.8, alternating with main: main 7.05 / 7.06 / 7.14 s, this change 8.10 / 8.13 / 8.24 s (target 8.8 s), rc 0 each time. claude depth_limit window, which ran `check_subtrees` through `publication_ok`: 1.76 / 1.88 -> 0.351 / 0.486 of hand (rs/rust / rs/llvm) | all L3 fragment tests, must_reject, l3_frontend, m3 quick |
+
+The count facts were never needed by the `lines` and claude callers: they read children by skip links and keys by
+position, not by a proved child count. Moving the count proof between writers (attempts 1-8) only moved its cost;
+leaving the count to a run-time pass on the one caller that uses it removes the cost.

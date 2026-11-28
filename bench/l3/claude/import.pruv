@@ -377,6 +377,12 @@ fn consume_entry(doc: crate::json::JsonDocument, ty: i64, k: [i64; 13], inout co
   let user: i64 = crate::access::string_is(doc, ty, "user");
   if user < 0 { return Effect::Defect(user); }
   if user == 1 {
+    let sn: i64 = crate::entry::user_string_node(doc, k);
+    if sn >= 0 {
+      assert crate::json::doc_strings(doc);
+      assert crate::turns::ok(col);
+      return human_string(doc, k, sn, inout col);
+    }
     let h: crate::entry::Field = crate::entry::user_text(doc, k);
     match h {
       crate::entry::Field::Value(p) => {
@@ -436,6 +442,45 @@ fn consume_entry(doc: crate::json::JsonDocument, ty: i64, k: [i64; 13], inout co
   let code: i64 = answer_string(doc, c, completed.at, inout col);
   if code != 0 { return Effect::Defect(code); }
   return Effect::Done(model_id);
+}
+
+// String content of a user entry (hand: the prompt is a borrowed `&str`): a plain node is lent as a view to
+// turns::begin; an escaped one takes the owned path (entry::string_content), as before. Same results and defect
+// order as user_text: content defects, then the length check, then the timestamp. Split out of consume_entry
+// like answer_string (solver limits).
+fn human_string(doc: crate::json::JsonDocument, k: [i64; 13], c: i64, inout col: crate::turns::Collector) -> Effect ! alloc
+  requires crate::json::doc_strings(doc)
+  requires crate::turns::ok(col) && col.begun < 1000000000000
+  ensures crate::turns::ok(col)
+  ensures old(col).begun <= col.begun && col.begun <= old(col).begun + 1
+{
+  let pv: Option<ref str> = crate::access::plain_str(doc, c);
+  match pv {
+    Some(v) => {
+      let h: i64 = crate::entry::is_human_text(doc, k[6], v);
+      if h < 0 { return Effect::Defect(h); }
+      if h == 0 { return Effect::Done(-1); }
+      if len(v) > 50331648 { return Effect::Defect(-4); }
+      let created: crate::time::Iso = stamp_from(doc, k[1]);
+      if created.status < 0 { return Effect::Defect(created.status); }
+      crate::turns::begin(inout col, v, created.at);
+      return Effect::Done(-1);
+    }
+    None => {
+      let f: crate::entry::Field = crate::entry::string_content(doc, k[6], c);
+      match f {
+        crate::entry::Field::Value(p) => {
+          if len(p) > 50331648 { return Effect::Defect(-4); }
+          let created: crate::time::Iso = stamp_from(doc, k[1]);
+          if created.status < 0 { return Effect::Defect(created.status); }
+          crate::turns::begin(inout col, p, created.at);
+          return Effect::Done(-1);
+        }
+        crate::entry::Field::Missing => { return Effect::Done(-1); }
+        crate::entry::Field::Defect(e) => { return Effect::Defect(e); }
+      }
+    }
+  }
 }
 
 // String content of an assistant entry: hand `Some(Value::String(s)) => col.answer(s, ..)` on the borrowed `&str`
