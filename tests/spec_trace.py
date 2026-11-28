@@ -11,7 +11,9 @@ Checks (each failure prints one line; the last line is `spec_trace: N/N passed`)
   2. every rule ID a test names exists in SPEC.md;
   3. every diagnostic `stage/code` that a test expects (any JSON object with string "stage" and "code" under tests/)
      or that a compiler emitted while running tests/spec is a row of the diagnostic code table in SPEC.md section 8.
-SPEC.md sections (## headings) that name no rule ID are listed as untracked; that is information, not a failure.
+  4. every SPEC.md section (## heading) names at least one rule ID, unless its heading is in EXEMPT_SECTIONS (the
+     sections that had no rule ID when this check was added, TIDY 4.16 HC-9). An exempt section is printed as
+     `untracked (exempt)`; an exemption whose section now names an ID or no longer exists is printed as a note.
 
 Test format (tests/spec/README.md): a file `NAME.pruv` or a project `NAME/root.pruv` whose first line is
 `// spec: R-x-n [R-y-m ...] accept|reject`, with an optional `NAME.json` (`NAME/root.json`) next to it:
@@ -51,6 +53,20 @@ RULE = r"R-[0-9]+(?:[a-z][0-9]*)?-[0-9]+"
 RULE_ID = re.compile(r"\b" + RULE + r"\b")
 HEADER = re.compile(r"^//\s*spec:\s*((?:" + RULE + r"\s+)+)(accept|reject)\s*$")
 TABLE_ROW = re.compile(r"^\|\s*`([a-z_]+)/([a-z0-9_]+)`\s*\|\s*([a-z_]+)\s*\|")
+# SPEC.md sections without any rule ID at a206043a (HC-9). Give a new section rule IDs instead of adding it here;
+# drop a name once its section names an ID.
+EXEMPT_SECTIONS = (
+    "2. Types",
+    "3. Functions",
+    "6c. Generics (G3)",
+    "6h. Files (G10)",
+    "6i. Parallel calls: par (G7)",
+    "6j. Cost bounds: cost and spent (Stage 5)",
+    "6k. The standard module: std (G8)",
+    "6n. Readiness loops: async (G10)",
+    "7a. Refinement types (STAGE 1, bundle A)",
+    "9. Example",
+)
 CLASSES = ("false_reject", "false_accept", "wrong_location", "timeout", "other")
 
 
@@ -250,6 +266,11 @@ def main(argv):
     tests, errors = spec_tests()
     fails = list(errors) + table_bad
     checks = len(errors) + len(table_bad)
+    for sec in untracked:
+        checks += 1
+        if sec not in EXEMPT_SECTIONS:
+            fails.append("SPEC.md section %r names no rule ID (add R-x-n IDs and tests; EXEMPT_SECTIONS is closed)" % sec)
+    stale = [sec for sec in EXEMPT_SECTIONS if sec not in untracked]
     drivers = [CD.make_driver(k, py_path if k == "py" else rs_path) for k in kinds] if run else []
     own_work = work is None
     work = work or tempfile.mkdtemp(prefix="spec_trace_")
@@ -306,7 +327,10 @@ def main(argv):
     for f in fails:
         print("FAIL " + f)
     for s in untracked:
-        print("untracked: " + s)
+        if s in EXEMPT_SECTIONS:
+            print("untracked (exempt): " + s)
+    for s in stale:
+        print("note: EXEMPT_SECTIONS entry %r has rule IDs now or is gone; remove it" % s)
     print("rule IDs: %d, tests: %d, compilers: %s" % (len(ids), len(tests), ",".join(kinds) if run else "none"))
     for k, classes in counts.items():
         print("CLASSES %s %s" % (k, " ".join("%s=%d" % item for item in classes.items())))
