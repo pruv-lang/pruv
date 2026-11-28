@@ -2909,3 +2909,15 @@ stage 1 on goals only stage 2 can prove. Keep the witness lemma in the split sta
 range-split count (the `open_container` assert chain) start at stage 2, or give stage 1 a shorter timeout for such goals; then measure whether
 `open_container` falls to well under a second. If it does, the lemma needs SPEC R-6-4 text, spec tests (accept `count
 == 0` from a false-everywhere `forall`, reject a false `count == 0`) and the A/B review before it can merge.
+
+## L-gaps 26: 4.4l-CT, split goals start at stage 2 (sixth attempt)
+
+| Row | Kind | Change | Tests |
+|---|---|---|---|
+| 4.4l-CT (G-DB33-1/2) | proof gap, open (cost) | Side branch `lair/pruv-l-gaps-26-ct-wip` (a104b046, on 4cbbfc3e merged with main 0e77a02b). Verifier change in `prove_core_cand` (`pruv-proof/src/obligation.rs`, plus `apps_of` in `sys.rs`): an aggregate goal that reads a range-split count (one count function applied at two or more distinct ranges, or `count(..) == numeral`) runs stage 2 (split lemmas, with the L-gaps 25 witness lemma) first, then stage 1, then stage 0; other aggregate goals keep 1, 2, 0. Result under the perf lock, same load: a5_root fresh 10.20 / 9.99 / 10.03 s against main 7.50 / 7.36 / 7.26 s (target 8.8 s not met); a2_root fresh 10.18 s. Solver profile of a5 (temporary timing print, removed): `open_container` falls from 7.2 s to 0.62 s and every query now proves on its first attempt (no Unknown attempts left), but total solver time is 7.3 s against 5.0 s for the main sources (3778 queries against 3427): `record` +0.47 s, `open_container` +0.5 s, `member` 0.62 s, `set_header` 0.42 s, `child` 0.37 s | a2/a5 only; the verifier change is unaudited, no SPEC text or tests |
+
+Next direction for 4.4l-CT: the stage order is no longer the cost; the remaining 2.3-2.7 s is the price of the
+ground-count proofs themselves (more obligations and heavier ones in `record`, `member`, `set_header`, `child`,
+`open_container`). Further work has to cut obligations (fewer restated count facts, one frame lemma per writer instead
+of per-call assert chains) or reshape the proof, not the stage policy. Before any merge the stage rule and the witness
+lemma need SPEC R-6-4 text, accept/reject tests and the A/B review.
