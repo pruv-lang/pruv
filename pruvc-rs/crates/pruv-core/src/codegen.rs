@@ -1712,7 +1712,14 @@ impl<'a> Gen<'a> {
             allow: if g6 { ALLOW_G6 } else { ALLOW },
             fmap,
             borrowed: HashSet::new(),
-            fg: if g6 { Some(ForeignGen::new(foreign_checks, budget)) } else { None },
+            fg: if g6 {
+                let mut fg = ForeignGen::new(foreign_checks, budget);
+                fg.borrowing = prog.types.iter().filter(|d| crate::borrowed::borrowing_struct(d)).map(|d| match d {
+                    TypeDecl::Struct(s) => s.name.clone(),
+                    TypeDecl::Enum(e) => e.name.clone(),
+                }).collect();
+                Some(fg)
+            } else { None },
             g9: prog.g9.is_some(),
             ext: prog.g9.as_ref().map(|m| m.extended.iter().cloned().collect()).unwrap_or_default(),
             boxed: prog.g9.as_ref().map(|m| m.boxed.iter().cloned().collect()).unwrap_or_default(),

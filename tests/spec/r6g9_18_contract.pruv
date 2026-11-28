@@ -1,0 +1,19 @@
+// spec: R-6g9-18 accept
+struct Doc { source: ref [u8], n: i64 }
+fn w(d: Doc) -> i64 ensures result == d.n { return d.n; }
+pub fn checksum() -> i64 ! alloc {
+  let a: [u8] = alloc(1, 0);
+  let mut v: Vec<Doc> = vec_new::<Doc>();
+  let mut i: i64 = 0;
+  while i < 3
+    invariant 0 <= i && i <= 3 && len(v) == i
+    invariant forall k in 0..i: v[k].n == 2
+    decreases 3 - i
+  {
+    let d: Doc = Doc { source: a, n: 2 };
+    v = vec_push::<Doc>(move v, move d);
+    i = i + 1;
+  }
+  assert len(v) == 3 && v[0].n == 2;
+  return w(vec_get::<Doc>(v, 0)) + len(v);
+}

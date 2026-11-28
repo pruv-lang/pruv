@@ -1,0 +1,19 @@
+// spec: R-6g9-18 reject
+struct Doc { source: ref [u8], tape: [i64] }
+fn mk(data: [u8]) -> Doc from(data) ! alloc {
+  let tape: [i64] = alloc(1, 2);
+  let d: Doc = Doc { source: data, tape: move tape };
+  return move d;
+}
+fn weigh(d: Doc) -> i64
+  ensures 0 <= result && result <= 1000
+{
+  if len(d.tape) > 1000 { return 0; }
+  return len(d.tape);
+}
+fn bad(data: [u8]) -> Vec<Doc> from(data) ! alloc {
+  let mut v: Vec<Doc> = vec_new::<Doc>();
+  let d: Doc = mk(data);
+  v = vec_push::<Doc>(move v, move d);
+  return move v;
+}

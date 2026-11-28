@@ -55,6 +55,24 @@ fn view_list_type_base(ty: &str) -> Option<&'static str> {
     }
 }
 
+/// R-6g9-18: the element struct of a document list type `Vec<B>` (B a borrowing struct, one level).
+pub(crate) fn doc_list_elem<'a>(ty: &str, structs: &'a HashSet<String>) -> Option<&'a String> {
+    let parsed = GType::from_key(ty);
+    if parsed.owner.is_none() && matches!(parsed.name.as_str(), "vec" | "Vec") && parsed.args.len() == 1
+        && parsed.args[0].args.is_empty() && parsed.args[0].owner.is_none()
+    {
+        structs.get(&parsed.args[0].name)
+    } else {
+        None
+    }
+}
+
+/// R-6g9-18: `vec_new::<B>()` naming the declared element B.
+fn doc_list_new(e: &Expr, elem: &str) -> bool {
+    matches!(e, Expr::Call(c) if c.name == "vec_new" && c.args.is_empty()
+        && matches!(c.targs.as_deref(), Some([t]) if t.args.is_empty() && t.owner.is_none() && t.name == elem))
+}
+
 /// R-6g9-10: the element base (`str` or `array_u8`) of a view-list operation's type argument `ref str` / `ref [u8]`.
 pub(crate) fn view_list_targ(targs: &Option<Vec<GType>>) -> Option<&'static str> {
     match targs.as_deref() {
@@ -128,6 +146,9 @@ fn prepare_block(body: &mut [Stmt], permitted: bool, structs: &HashSet<String>, 
                 s.ty = "vec<string>".into();
                 s.borrowed = true;
             }
+            // R-6g9-18: `let mut v: Vec<B> = vec_new::<B>()` is a document list.
+            Stmt::Let(s) if permitted && !s.is_place() && s.mutable
+                && doc_list_elem(&s.ty, structs).is_some_and(|b| !enums.contains(b) && doc_list_new(&s.value, b)) => {}
             Stmt::Let(s) if !s.is_place() => {
                 // R-6g9-6: mutability is allowed for a borrowing struct, but not for a ref local.
                 if !(permitted && structs.contains(&s.ty) && (!s.mutable || !enums.contains(&s.ty))) {
@@ -204,7 +225,9 @@ pub(crate) fn prepare(prog: &mut Program, hosts: &[bool]) -> Res<()> {
             // A read-only ref [u16] parameter has the same lifetime as a plain read parameter.
             let read_u16_view = permitted && !p.take && p.mode_pos.is_none() && p.ty == "@ref<array_u16>";
             // R-6g9-6: borrowing structs may be inout parameters.
-            if !(permitted && borrowing.contains(&p.ty) && !p.take && (!enums.contains(&p.ty) || p.mode_pos.is_none())) {
+            // R-6g9-18: a read `Vec<B>` parameter is a document list.
+            let doc_list = permitted && !p.take && p.mode_pos.is_none() && doc_list_elem(&p.ty, &structs).is_some();
+            if !doc_list && !(permitted && borrowing.contains(&p.ty) && !p.take && (!enums.contains(&p.ty) || p.mode_pos.is_none())) {
                 annotation(&mut p.ty, f.line, f.col, read_u16_view, false, &borrowing)?;
             }
         }
@@ -602,6 +625,8 @@ struct Analysis<'a> {
     visible: RefCell<Vec<String>>,
     /// R-6g9-10: the fixpoint passes only grow `lists`; the final pass checks.
     collecting: Cell<bool>,
+    /// R-6g9-18: the document lists (`let mut v: Vec<B> = vec_new::<B>()`) of the current function; also in `lists`.
+    doc_lists: RefCell<HashSet<String>>,
     place_functions: &'a PlaceFunctions,
     functions: HashMap<&'a str, &'a Function>,
     enums: HashMap<&'a str, &'a EnumDecl>,
@@ -619,8 +644,15 @@ impl Analysis<'_> {
         let e = match e { Expr::InoutArg(x) => &*x.expr, e => e };
         match e {
             Expr::Var(v) if self.lists.borrow().contains_key(&v.name) => Some(&v.name),
+            Expr::Move(m) if m.fields.is_empty() && self.doc_lists.borrow().contains(&m.name) => Some(&m.name),
             _ => None,
         }
+    }
+
+    /// R-6g9-18: `v = vec_push::<B>(move v, x)` of a document list `v`.
+    fn doc_self_push(&self, s: &Assign) -> bool {
+        self.doc_lists.borrow().contains(&s.name) && matches!(&s.value, Expr::Call(c) if c.name == "vec_push"
+            && c.args.len() == 2 && matches!(&c.args[0], Expr::Move(m) if m.name == s.name && m.fields.is_empty()))
     }
 
     /// R-6g9-10: `vec_get(l, i)` of a view list `l`.
@@ -849,7 +881,7 @@ impl Analysis<'_> {
         }
         match st {
             Stmt::Let(s) if s.is_place() => {}
-            Stmt::Let(s) if is_view_list(s) => {
+            Stmt::Let(s) if is_view_list(s) || self.doc_lists.borrow().contains(&s.name) => {
                 let names = self.visible.borrow().iter().cloned().collect();
                 self.list_scope.borrow_mut().insert(s.name.clone(), names);
                 let roots = self.lists.borrow().get(&s.name).cloned().unwrap_or_default();
@@ -860,6 +892,8 @@ impl Analysis<'_> {
                 undo.push((s.name.clone(), locals.insert(s.name.clone(), Origin::View(roots))));
             }
             Stmt::Let(s) => self.owned(&s.value, locals)?,
+            // R-6g9-18: the push already added the element's provenance to the list.
+            Stmt::Assign(s) if self.doc_self_push(s) => {}
             Stmt::Assign(s) => return self.check_store(&s.name, &s.value, true, st.position(), locals),
             Stmt::FieldAssign(s) => { self.check_store(&s.name, &s.value, s.ref_store, st.position(), locals)?; }
             Stmt::Return(s) => if let Some(value) = &s.value {
@@ -908,6 +942,7 @@ impl Analysis<'_> {
 
     fn borrow_let(&self, s: &Let) -> bool {
         s.borrowed || self.records.contains_key(s.ty.as_str()) || self.enums.contains_key(s.ty.as_str())
+            || self.doc_lists.borrow().contains(&s.name)
     }
 
     /// Adds the statements of `body` to `graph` in pre-order; `incoming` are the points that flow into the block.
@@ -960,7 +995,8 @@ impl Analysis<'_> {
             let mut point = Point { succ: Vec::new(), gen: Vec::new(), kill: None, uses: Vec::new(), site: st.position(), own_move: None };
             // R-6g9-6: a whole rebind kills the old loan. Its target still counts as a write.
             if let Stmt::Assign(s) = st {
-                if matches!(locals.get(&s.name), Some(Origin::View(_))) {
+                // R-6g9-18: a self push keeps the list's loans (they only grow).
+                if matches!(locals.get(&s.name), Some(Origin::View(_))) && !self.doc_self_push(s) {
                     point.kill = scope.get(s.name.as_str()).copied();
                 }
             }
@@ -1105,6 +1141,7 @@ pub(crate) fn check(prog: &Program, place_functions: &PlaceFunctions) -> Res<()>
         list_scope: RefCell::default(),
         visible: RefCell::default(),
         collecting: Cell::new(false),
+        doc_lists: RefCell::default(),
         place_functions,
         functions: prog.functions.iter().map(|f| (f.name.as_str(), f)).collect(),
         enums: prog.types.iter().filter_map(|d| match d {
@@ -1127,10 +1164,15 @@ pub(crate) fn check(prog: &Program, place_functions: &PlaceFunctions) -> Res<()>
         let mut locals: HashMap<String, Origin> = f.params.iter().filter_map(|p| {
             let read = !p.take && p.mode_pos.is_none();
             let ty = GType::from_key(&p.ty);
-            (analysis.records.contains_key(ty.name.as_str()) || (read && analysis.structs.contains(ty.name.as_str())))
+            let doc_list = read && ty.name == "vec" && ty.args.len() == 1
+                && analysis.records.contains_key(ty.args[0].name.as_str());
+            (doc_list || analysis.records.contains_key(ty.name.as_str()) || (read && analysis.structs.contains(ty.name.as_str())))
                 .then(|| (p.name.clone(), Origin::Param))
         }).collect();
-        let lists = view_lists(f, analysis.functions.contains_key("vec_join"))?;
+        let mut lists = view_lists(f, analysis.functions.contains_key("vec_join"))?;
+        let docs = doc_lists(f, &analysis)?;
+        *analysis.doc_lists.borrow_mut() = docs.iter().cloned().collect();
+        lists.extend(docs);
         *analysis.lists.borrow_mut() = lists.iter().map(|name| (name.clone(), Roots::new())).collect();
         analysis.list_scope.borrow_mut().clear();
         let params = || f.params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
@@ -1152,6 +1194,121 @@ pub(crate) fn check(prog: &Program, place_functions: &PlaceFunctions) -> Res<()>
         graph.conflicts()?;
     }
     Ok(())
+}
+
+/// R-6g9-18: the document lists of `f` (`let mut v: Vec<B> = vec_new::<B>()`, B a borrowing struct) and its read
+/// `Vec<B>` parameters. Their names may only appear in a self push `v = vec_push::<B>(move v, move b)` (b a whole
+/// local or binder), in `len(v)`, as a direct argument to a read `Vec<B>` parameter, or in `vec_get::<B>(v, i)` as a
+/// direct argument to a read B parameter that is not in the callee's from-list. Returns the local lists.
+fn doc_lists(f: &Function, analysis: &Analysis) -> Res<Vec<String>> {
+    let elem = |ty: &str| {
+        let t = GType::from_key(ty);
+        (t.owner.is_none() && t.name == "vec" && t.args.len() == 1 && t.args[0].args.is_empty())
+            .then(|| t.args[0].name.clone()).filter(|b| analysis.records.contains_key(b.as_str()))
+    };
+    let mut lists = Vec::new();
+    let mut names: Vec<(String, i64, i64)> = Vec::new();
+    crate::foreign_shim::walk_stmts(&f.body, &mut |node| {
+        if let Node::Let(s) = node {
+            if !s.is_place() && elem(&s.ty).is_some() { lists.push(s.name.clone()); }
+            names.push((s.name.clone(), s.line, s.col));
+        }
+    });
+    let mut set: HashSet<String> = f.params.iter().filter(|p| elem(&p.ty).is_some()).map(|p| p.name.clone()).collect();
+    for list in &lists {
+        if let Some((_, line, col)) = names.iter().filter(|(n, _, _)| n == list).nth(1) {
+            return Err(signature(*line, *col));
+        }
+        if f.params.iter().any(|p| &p.name == list) {
+            return Err(signature(f.line, f.col));
+        }
+        set.insert(list.clone());
+    }
+    if analysis.records.is_empty() { return Ok(lists); }
+    let records: HashSet<&str> = analysis.records.keys().copied().collect();
+    struct V<'s, 'a> { set: &'s HashSet<String>, records: &'s HashSet<&'s str>, functions: &'s HashMap<&'a str, &'a Function> }
+    impl V<'_, '_> {
+        fn name<'e>(&self, e: &'e Expr) -> Option<&'e str> {
+            match e { Expr::Var(v) if self.set.contains(&v.name) => Some(&v.name), _ => None }
+        }
+        fn uses(&self, e: &Expr) -> Res<()> {
+            let escape = |line, col| error(line, col, "borrow_escape",
+                "a Vec of a borrowing struct can only be pushed to, measured, read by element into a call, or passed");
+            match e {
+                Expr::Call(c) if c.name == "len" && c.args.len() == 1 && self.name(&c.args[0]).is_some() => Ok(()),
+                // `v[i]` type-checks only in a contract (contract_only elsewhere): a proof-only read of the list
+                Expr::Index(x) if self.name(&x.array).is_some() => self.uses(&x.index),
+                // a list exists only as a declared local: `vec_new::<B>()` anywhere but its initializer would be an
+                // unnamed list the provenance analysis does not track
+                Expr::Call(c) if c.name == "vec_new" && !self.functions.contains_key("vec_new")
+                    && matches!(c.targs.as_deref(), Some([t]) if t.owner.is_none() && self.records.contains(t.name.as_str())) =>
+                    Err(escape(c.line, c.col)),
+                Expr::Call(c) if !c.name.starts_with("vec_") || self.functions.contains_key(c.name.as_str()) => {
+                    let callee = self.functions.get(c.name.as_str());
+                    for (i, a) in c.args.iter().enumerate() {
+                        let param = callee.and_then(|f| f.params.get(i).map(|p| (f, p)));
+                        let read = param.is_some_and(|(_, p)| !p.take && p.mode_pos.is_none());
+                        let lent = param.is_some_and(|(f, p)| f.borrow_from.as_ref().is_some_and(|from| from.iter()
+                            .any(|n| n == &p.name || n.strip_prefix(p.name.as_str()).is_some_and(|r| r.starts_with('.')))));
+                        if read && self.name(a).is_some() && param.is_some_and(|(_, p)| GType::from_key(&p.ty).name == "vec") {
+                            continue;
+                        }
+                        if let Expr::Call(g) = a {
+                            if g.name == "vec_get" && !self.functions.contains_key("vec_get") && g.args.len() == 2
+                                && self.name(&g.args[0]).is_some()
+                            {
+                                if !read || lent || callee.is_none() {
+                                    return Err(escape(g.line, g.col));
+                                }
+                                self.uses(&g.args[1])?;
+                                continue;
+                            }
+                        }
+                        self.uses(a)?;
+                    }
+                    Ok(())
+                }
+                Expr::Var(v) if self.set.contains(&v.name) => Err(escape(v.line, v.col)),
+                Expr::Move(m) if self.set.contains(&m.name) => Err(escape(m.line, m.col)),
+                _ => crate::refine::kids(e).into_iter().try_for_each(|k| self.uses(k)),
+            }
+        }
+        fn block(&self, body: &[Stmt]) -> Res<()> {
+            for st in body {
+                if let Stmt::Assign(s) = st {
+                    if self.set.contains(&s.name) {
+                        let Expr::Call(c) = &s.value else { return Err(error(s.line, s.col, "borrow_escape",
+                            "a Vec of a borrowing struct can only be rebound by its own push")) };
+                        let own = c.name == "vec_push" && !self.functions.contains_key("vec_push") && c.args.len() == 2
+                            && matches!(&c.args[0], Expr::Move(m) if m.name == s.name && m.fields.is_empty())
+                            && matches!(&c.args[1], Expr::Move(m) if m.fields.is_empty() && !self.set.contains(&m.name));
+                        if !own {
+                            return Err(error(s.line, s.col, "borrow_escape",
+                                "a Vec of a borrowing struct can only be rebound by its own push of a whole local"));
+                        }
+                        continue;
+                    }
+                }
+                let (mut exprs, mut writes, mut blocks) = (Vec::new(), Vec::new(), Vec::new());
+                walk_statement(st, &mut |e| exprs.push(e), &mut |name, _, line, col| writes.push((name, line, col)),
+                    &mut |b| blocks.push(b));
+                if let Some((_, line, col)) = writes.into_iter().find(|(name, _, _)| self.set.contains(*name)) {
+                    return Err(error(line, col, "borrow_escape", "a Vec of a borrowing struct cannot be written in place"));
+                }
+                if let Stmt::Let(s) = st {
+                    if self.set.contains(&s.name) && matches!(&s.value, Expr::Call(c) if c.name == "vec_new") {
+                        blocks.into_iter().try_for_each(|b| self.block(b))?;
+                        continue;
+                    }
+                }
+                exprs.into_iter().try_for_each(|e| self.uses(e))?;
+                blocks.into_iter().try_for_each(|b| self.block(b))?;
+            }
+            Ok(())
+        }
+    }
+    V { set: &set, records: &records, functions: &analysis.functions }.block(&f.body)?;
+    Ok(lists)
 }
 
 /// R-6g9-10: the view lists of `f`. A list is a local: it may only be pushed to (`vec_push(inout l, v)`), read

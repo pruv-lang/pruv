@@ -1684,7 +1684,7 @@ borrowed value is live.
     struct, and (borrowing struct only) a read parameter, a `let mut` local, an `inout` parameter (R-6g9-6) or a
     variant field of a borrowing enum (R-6g9-17).
     Anywhere else (`let mut` of a `ref` type, a parameter declared `ref`, `inout` of a `ref` type, `take`,
-    an enum payload except under R-6g9-17, a `Vec`/`Option`/map element or generic argument, a generic function, a host entry or `par` argument) is
+    an enum payload except under R-6g9-17, a `Vec`/`Option`/map element or generic argument except the `Vec<B>` positions of R-6g9-18, a generic function, a host entry or `par` argument) is
     `type/borrow_signature`.
   - *Results.* A function whose result is `ref T` or a borrowing struct writes `-> T from(p1, .., pn)` (`from` is
     contextual), naming at least one parameter, each at most once; each `pi` is a `[u8]` / `str` parameter (read or `inout`) or a
@@ -2376,6 +2376,33 @@ borrowed value is live.
   Tests: [conversion](tests/spec/r6g9_2_enum_payload.pruv), [exit paths](tests/spec/r6g9_17_exit_drop.pruv),
   [binder liveness](tests/spec/r6g9_17_binder_live.pruv), [invalid document](tests/spec/r6g9_17_bad_doc.pruv);
   rejects: [escape](tests/spec/r6g9_17_escape.pruv), [tape escape](tests/spec/r6g9_17_tape_escape.pruv), [no from](tests/spec/r6g9_17_no_from.pruv), [mut](tests/spec/r6g9_17_mut.pruv), [inout](tests/spec/r6g9_17_inout.pruv), [vec](tests/spec/r6g9_17_vec.pruv), [nested](tests/spec/r6g9_17_nested.pruv), [partial move](tests/spec/r6g9_17_partial_move.pruv), [partial source](tests/spec/r6g9_17_partial_source.pruv), [partial param](tests/spec/r6g9_17_partial_param.pruv), [read move](tests/spec/r6g9_17_read_move.pruv), [use after move](tests/spec/r6g9_17_use_after_move.pruv).
+- R-6g9-18 **Lists of borrowing structs (4.4zh-VB, P11-zh).** For a borrowing struct `B` (not a borrowing enum), a
+  non-generic function body (a host function's body too; only signatures are limited) may declare
+  `let mut v: Vec<B> = vec_new::<B>()` (exactly this initializer; `vec_new::<B>()` anywhere else is
+  `type/borrow_escape`, unless an earlier check rejects the position, e.g. a `Vec<B>` result is `type/borrow_signature`), each list name bound once in the function (a second `let` of it, even in a disjoint block,
+  is `type/borrow_signature`), and an internal non-generic function may take a read parameter `Vec<B>` (Rust `&Vec<B<'_>>`, as a read owned `Vec<S>`). Elements are added only by
+  the self-push `v = vec_push::<B>(move v, move b)`, where `b` is a whole movable `B` local or a consuming match binder
+  (R-6g9-17); the push moves `b`'s ownership and loans into `v` and keeps the earlier elements and their loans. As
+  for any `Vec` element, `B`'s invariant is not proved at the push; it is proved where an element is passed to a `B`
+  parameter (`verify/struct_invariant`). `len(v)` is allowed in code and contracts. `vec_get::<B>(v, i)` is allowed only as a
+  direct read argument of an internal function whose matching parameter is a read `B`; it proves
+  `0 <= i && i < len(v)` and reads the element at that index. `v` itself may be passed only as the argument of a read
+  `Vec<B>` parameter. A local list's provenance is the union, to a fixed point, of its pushed values' sources (a list holds only
+  shared loans: pushing a value that holds an exclusive, `inout`-lent loan is `type/borrow_conflict`: at the lend if the list is
+  live there, else at the next use of the lent root while the list is live); each root must be a parameter or a `let` local declared before the list in the same or an
+  enclosing block (a match binder is not such a root), else `type/borrow_escape`. A read `Vec<B>` parameter is its own shared root, as a read `B` parameter. While the list is
+  live (R-6g9-4), the access limits of R-6g-11 hold for its roots: writing or moving a root is
+  `type/borrow_conflict`; a call checks a list or element argument against its other arguments
+  until the call ends, even at the list's last use. Passing a `vec_get` to a parameter that is named (or whose field
+  path is named) in the callee's result `from` list and any other use of the list in a body are `type/borrow_escape`;
+  binding, assigning or returning a `vec_get` is `type/foreign_owned_type`, as for any non-copy element. Contracts are
+  proof-only and may read the list (`len(v)`, `v[i]` and its fields) like any read value. A `Vec<B>` result (with or without `from`), a field or variant of type `Vec<B>`,
+  `Vec<Vec<B>>`, other generic arguments, `take` or `inout` `Vec<B>`, host or extern signatures, `Option<B>`
+  and a `Vec` of a borrowing enum are `type/borrow_signature`; a `Vec<B>` `par` argument is `type/parallel_argument`
+  (as any `Vec`). Dropping the list drops each element's owned fields
+  once, then the buffer; borrowed fields are not dropped.
+  Tests: [qwen shape](tests/spec/r6g9_18_qwen.pruv), [last use](tests/spec/r6g9_18_last_use.pruv), [exit paths](tests/spec/r6g9_18_exit_drop.pruv), [other inout](tests/spec/r6g9_18_inout_other.pruv), [contract reads](tests/spec/r6g9_18_contract.pruv);
+  rejects: [late local](tests/spec/r6g9_18_late_local.pruv), [write live](tests/spec/r6g9_18_write_live.pruv), [exclusive loan](tests/spec/r6g9_18_exclusive_read.pruv), [exclusive loan before the list](tests/spec/r6g9_18_exclusive_late.pruv), [alias call](tests/spec/r6g9_18_alias_call.pruv), [get from](tests/spec/r6g9_18_get_from.pruv), [get let](tests/spec/r6g9_18_get_let.pruv), [no from](tests/spec/r6g9_18_no_from.pruv), [with from](tests/spec/r6g9_18_with_from.pruv), [field](tests/spec/r6g9_18_field.pruv), [inout](tests/spec/r6g9_18_inout.pruv), [nested](tests/spec/r6g9_18_nested.pruv), [option](tests/spec/r6g9_18_option.pruv), [get out of range](tests/spec/r6g9_18_get_oob.pruv), [unnamed list](tests/spec/r6g9_18_unnamed.pruv), [element invariant](tests/spec/r6g9_18_invariant.pruv).
 
 ## 6h. Files (G10)
 
@@ -3989,7 +4016,17 @@ follows this rule:
   each call to another fn that gets `#[inline(always)]`, that fn's `incl`. Calls to fns that keep `#[inline]` add
   nothing.
 - Call sites are counted textually over the whole output: a fn name followed by `(`, not after `.` and not in its own
-  `fn name(` header.
+  `fn name(` header. The by-value twin `f__pruv_fp` of the fixed-prefix form (`--proven-entries`, section 7) has one
+  textual call site, its adapter `f`; when the generated triple `f`, `f__pruv_fp`, `f__pruv_fpb` is present, the twin
+  is counted by the call sites of `f` instead (a user fn whose name merely ends in `__pruv_fp` is counted as itself).
+- The call graph has a node only for each fn whose hint the pass evaluates (an automatic `#[inline]` fn or an
+  explicit `#[inline(always)]` fn, see below). A fn emitted without a hint, an explicit `#[inline]` fn and a
+  `#[cold]` fn are not nodes: calls to
+  them add nothing, and a cycle that passes through one of them is not seen, so a fn on such a cycle is judged as
+  non-recursive and may get `#[inline(always)]` (rustc then inlines it where it can, as for any fn).
+  The pass reads a header only as `fn name(`: a fn whose header has a generic or lifetime parameter list
+  (`fn name<'a>(..)`, e.g. a fn returning a borrow) is not evaluated, keeps the hint the code generator
+  emits, and is not a node (open as 4.4zh-IL: such fns are never raised to `#[inline(always)]`).
 - A non-recursive fn gets `#[inline(always)]` when `incl <= 8` or when it has exactly one call site. A fn with two or
   more call sites and `incl > 8` keeps `#[inline]`. Why: the earlier rule also forced it when
   `incl * (call sites - 1) <= 1500` (the extra copies inlining adds); on the claude a4 runner those copies were

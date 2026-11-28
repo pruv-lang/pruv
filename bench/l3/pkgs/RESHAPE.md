@@ -1675,11 +1675,37 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
   borrowing enums under R-6g9-17) across `pkgs/parse`, `pkgs/access`, `pkgs/lines` and the benches that use them.
   Needs: `lines::parse_owned(take data)` cannot return a borrow of its own buffer; codex / mcp truncate the line
   buffer before the match; `access::plain_str` takes `from(doc)`; the `lib/` copies have their own declarations.
-- 4.4zh-VB: language gap, open. A `Vec` (or `Option`) of a borrowing struct (qwen `Vec<JsonDocument>` once the source
-  is borrowed). R-6g9-10 allows only local `Vec<ref str>`.
+  - P11-zh probe (no bench change yet): a borrowing document built as `Doc { source: subview(data, lo, hi), tape: move
+    tape }` in a `-> Parse from(data)` fn proves `len(variant_field(result, Parse::Parsed, document).source) == hi - lo`
+    and runs on the Rust backend, so `lines::parse_range` / `build_span` can borrow the range like the hand. One more
+    need found: `parse::failure(p, k)` builds a `Failed` result with no borrowed input, and a borrowing-enum result needs
+    a nonempty `from` list (`type/borrow_signature`; hand: `fn failure<'a>(..) -> JsonParse<'a>`). Open as 4.4zh-FL.
+    The switch itself is not done in P11-zh (time cap).
+- 4.4zh-VB: Vec part closed in P11-zh (SPEC R-6g9-18, tests `tests/spec/r6g9_18_*`). A local `let mut v: vec<B> =
+  vec_new::<B>()` of a borrowing struct `B` (not an enum) and a read `vec<B>` param are allowed: the list only grows by
+  `v = vec_push(move v, move b)` (b a whole borrowing binder), `len(v)`, `vec_get(v, i)` as a direct argument of a
+  read param outside the callee's `from`, and passing `v` to a read `vec<B>` param. The list keeps the union of its
+  elements' roots, so writing a root while the list is live is `type/borrow_conflict`. Generated Rust is the hand's
+  `Vec<Doc<'a>>` / `&Vec<Doc<'_>>` (the catalog vec helpers get a `<'a>` lifetime). qwen `import.pruv` is not
+  converted yet because its `JsonDocument` still owns the source (4.4zh-DB).
+- 4.4zh-VO: language gap, open, split from 4.4zh-VB. An `Option` of a borrowing struct, a `Vec` of a borrowing enum,
+  a nested `Vec<Vec<B>>`, an inout / take / field `vec<B>`, binding `vec_get(v, i)` to a let, and a `vec<B>` result
+  stay rejected (`type/borrow_signature`, `type/foreign_owned_type`, `type/borrow_escape`). No current target needs
+  them after DB.
+- 4.4zh-FL: language gap, open (found in P11-zh). A borrowing-enum result with no borrowed input (a free lifetime, hand
+  `fn failure<'a>(p: i64, k: i64) -> JsonParse<'a>`) cannot be declared: an empty or missing `from` list is
+  `type/borrow_signature`. Needed by `pkgs/parse::failure` and `json::parse_failed` for 4.4zh-DB.
+- 4.4zh-IL: open (found by the P11-zh audit). `inline_policy.rs` reads a fn header only as `fn name(`, so a fn with a
+  generic or lifetime parameter list (`fn parse<'a>(..)`, every fn that returns a borrow) is never evaluated: it keeps
+  the generator's `#[inline]` and is not a call-graph node. SPEC R-7-3 now states this; raising such fns like any
+  other changes the output of every borrowing bench (claude, qwen) and needs its own measured bundle.
 - 4.4zh-NB: language gap, open, no target needs it yet. Nested borrowing enums, borrowing enums inside structs, and
   partial moves (`move d.tape`) out of a borrowing enum binder (R-6g9-17 rejects them).
 - 4.4zh-IP: open (found by the L-gaps 30 audit, older than 4.4zg-CS). R-7-3 does not describe two parts of
   `pruvc-rs/crates/pruv-core/src/inline_policy.rs`: explicitly pinned `#[inline]` fns are left out of the call graph
   used for the recursion check (line 48), and a `__pruv_fp` twin counts its adapter's call sites (line 156). Either
   the SPEC row or the code needs to change.
+  - Closed in P11-zh by the SPEC side (no output change): R-7-3 now states that the call graph has nodes only for the
+    fns whose hint the pass evaluates (an unhinted fn, an explicit `#[inline]` fn and a `#[cold]` fn are not nodes,
+    so a cycle through one is not seen), and that a `__pruv_fp` twin of a generated triple counts its base name's
+    call sites.
