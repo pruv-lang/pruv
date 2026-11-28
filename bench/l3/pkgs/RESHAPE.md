@@ -1593,3 +1593,39 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
   - perf_gate still counts these cells as proportional failures (28 cells, 1.004-1.047, all RSS except depth_limit
     time and long_text rs/rust time). They are fixed-share debt. Which functions make up the 68 KB has not been
     broken down yet (next: symbol sizes of both runners). Open as 4.4zg-CS (generated code size).
+
+### Rows after L-gaps 29
+
+- 4.4l-CT: closed for `lines::parse_owned` and claude `parse::parse` (L-gaps 29 section in `bench/l3/lib/RESHAPE.md`).
+  `pkgs/parse` proves parent containment and the subtree span facts in `scan`, so neither path runs
+  `json::check_subtrees` any more. The child count and key parity facts are not proved; json b_root `array_length` is
+  the only user, and it calls `parse::parse_counted`, which keeps the run-time pass.
+  - Measured with claude `q_measure.py --pairs rs/rust,rs/llvm`, 7 rounds, main compiler, under the perf lock at load
+    2-3 (local `work/lgaps29/perf_cells.json`, `perf_gate.txt`): depth_limit window 1.76 / 1.88 -> 0.351 / 0.486
+    (Pruv/hand, rs/rust / rs/llvm); window_8MiB 0.843 / 0.769; long_text window 1.028 / 0.719 (unchanged).
+  - tools/perf_gate.py: 27 failing cells, against 28 after L-gaps 28: 26 RSS cells (4.4zg-CS) and long_text window
+    on rs/rust (4.4zg-LB). No other time cell is above hand.
+- 4.4zg-CS: the code-size gap is the shared inline policy, not one function. Symbol sizes of the kept a4 runners
+  (`nm -S` / `otool -tV`, local `work/lgaps29/symbols.md`): `__text` 351676 B against 282364 B for the hand, +69312 B.
+  - The harness `main::call` alone is 228 B in the hand runner and 88152 B in the generated one (+87924 B).
+  - The separate solution functions are 10296 B smaller than the hand's, and core / alloc code is 8268 B smaller.
+    std is the same, and panic and bounds sites are equal within a few.
+  - Cause: 249 of the 290 generated functions carry `#[inline(always)]`; the hand `lib.rs` has none. They come from
+    the SPEC inline policy (`pruvc-rs/crates/pruv-core/src/inline_policy.rs:1-7`, constants in `shared_tables.rs:24-26`,
+    shared with the Python compiler). A non-recursive function is forced inline when its inclusive size is at most
+    INLINE_SMALL (8), when it has exactly one call site, or when its extra copies fit INLINE_BUDGET (1500).
+  - The one-call-site rule folds each packet entry (`window_packet`, `head_packet`, `tail_packet` and their helpers,
+    about 25 KB as separate symbols in the hand) into its only caller, the harness `call`. Each inlined path keeps its
+    own copies of the Vec grow calls (110 direct calls to `do_reserve_and_handle` inside `call`).
+  - Not changed: the policy is shared by every bench and the time cells depend on it. A size-aware rule (for example, no
+    forced inline of a function above some size into an exported entry) needs its own row with a full time
+    comparison. The RSS cells at 1.004-1.047 stay fixed-share debt under this row.
+- 4.4zg-LB: language gap, open. The hand borrows the JSONL line for the document source (`Document<'a>`) and the
+  prompt / reply text. A Pruv borrowed document would be a `ref` struct holding the tape and a `ref [u8]` source. It
+  cannot be used here: `JsonParse::Parsed` and claude `Line::Object` carry the document as an enum payload
+  (`claude/entry.pruv:6`, `30-31`; qwen `entry.pruv:3`, `24`), and qwen `import.pruv:498`, `528-533` keeps a
+  `Vec<JsonDocument>`. A borrowing struct may not be an enum payload, a `Vec` / `Option` element or a generic argument
+  (SPEC R-6g-11, `SPEC.md:1685-1687`; R-6g9-8 at `SPEC.md:2156` allows only view wrappers such as `Option<ref str>`). Passing the tape and
+  status separately and building a local view in each caller would work around the gap rather than close it, so it
+  is not done. Needed: a borrowing enum payload (an enum that is itself `ref` when a payload is), or a borrowed
+  document form in `pkgs/json`.
